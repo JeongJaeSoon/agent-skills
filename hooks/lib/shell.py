@@ -258,7 +258,10 @@ def quotes_only(cmd, marks):
             if expands:
                 j = start
                 while j < body_end:
-                    if cmd.startswith("$(", j):
+                    if cmd[j] == "\\":
+                        blank(j, min(j + 2, body_end), literal=True)
+                        j += 2
+                    elif cmd.startswith("$(", j):
                         j = scan(j + 2, ")")
                     elif cmd[j] == "`":
                         j = scan(j + 1, "`")
@@ -411,6 +414,31 @@ def lift(cmd, masked):
     return [(0, cmd, masked)] + sorted(inner, key=lambda x: x[0])
 
 
+CASE = re.compile(r"(?:^|[;&|(\n]|\b(?:then|do|else)\s)\s*case\s[^\n;]*?\sin\b")
+
+
+def case_patterns(masked):
+    """`masked` with each `case` pattern (`pkill|killall` in `case $x in pkill|killall) …`) blanked: a pattern is
+    matched, not run. Its closing `)` stays, so the body after it is still read as a command."""
+    out = list(masked)
+    for m in CASE.finditer(masked):
+        i = m.end()
+        while True:
+            while i < len(masked) and masked[i] in " \t\n":
+                i += 1
+            if masked.startswith("esac", i):
+                break
+            j = masked.find(")", i)
+            if j < 0:
+                break
+            out[i:j] = " " * (j - i)
+            nxt = re.compile(r";;&?|;&").search(masked, j)
+            if not nxt:
+                break
+            i = nxt.end()
+    return "".join(out)
+
+
 def commands(cmd):
     """Each simple command `cmd` would run, the outer ones first, then `$(…)` and backtick contents. A piece this
     reader cannot split is left out: a guardrail, not a sandbox."""
@@ -422,10 +450,14 @@ def commands(cmd):
         masked = masked[:u] + quotes_only(cmd, fallback)[u:]
         marks["comment"] += [(max(s, u), e) for s, e in fallback["comment"] if e > u]
         marks["literal"] += [(max(s, u), e) for s, e in fallback["literal"] if e > u]
+    masked = case_patterns(masked)
     chars = list(cmd)
     for s, e in marks["comment"]:  # shlex is not told about comments: `x # > f` writes nothing
         chars[s:e] = " " * (e - s)
     for s, e in marks["literal"]:
+        if cmd[s:e] == "\\\n":  # a line continuation: bash joins the lines
+            chars[s:e] = "  "
+            continue
         for i in range(s, e):
             chars[i] = TEXT_DOLLAR if chars[i] == "$" else chars[i]
     for i, c in enumerate(chars):
