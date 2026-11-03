@@ -53,11 +53,14 @@ python3 "$R" reap --plan <scratchpad>/reap-plan.json    # act on that list, noth
 made, or an agent made with `orca worktree create`, with or without `--parent-worktree` (Orca records
 `cliProvenance` `created-by-cli`; a registration step skipped still leaves it). A worktree the user made in the app and the
 main checkout never show up; anything not registered shows up
-only as the unregistered-media lines of `evidence`, never as a target. `reap --plan` re-checks each
+only as the unregistered-media lines of `evidence`, never as a target. `stack-volume` is the one kind that goes by name
+instead: only stacks whose names start with a prefix the user listed in `reap.stack_volumes.prefixes` (each ends in `-`,
+at least 4 characters; `label` is the extra owner label, never a `com.docker.*` key; `protect` lists owners it never
+touches). `reap --plan` re-checks each
 target and runs its action. A file or directory goes to the trash (`/usr/bin/trash`, macOS 15+, so Finder's
 Put Back works; never another `trash` on PATH, which may read `-s` as "empty the trash"; else `~/.Trash`;
-`$AGENT_SKILLS_TRASH` replaces it with a plain folder). The tool never deletes for good and never
-empties the trash; the OS setting may (Finder's "Remove items from the Trash after 30 days"), and
+`$AGENT_SKILLS_TRASH` replaces it with a plain folder). Apart from `stack-volume`'s `docker volume rm`, the tool never
+deletes for good, and it never empties the trash; the OS setting may (Finder's "Remove items from the Trash after 30 days"), and
 scan and precheck report it under `## 경보`.
 
 ```bash
@@ -88,6 +91,7 @@ line adds to it and keeps the owner links. `--pid` is recorded, never checked: t
 | chrome-window | its link is done and its URL is recorded | an open PR, no link, no URL (Chrome reuses ids after a restart, so without the URL the agent cannot tell it is the same tab) | `reap` prints `에이전트가 처리` and retires the id in the ledger, so it is asked once; the agent closes it with its browser tools only when the URL matches, and leaves it otherwise or when it has no browser tools |
 | evidence | a file or directory of screenshots and recordings whose PR has been merged or closed for N hours (`--hours`) | an open PR, no PR link (a worktree link does not prove it was uploaded), a PR state or close time that could not be read, a directory holding anything but images and videos | the trash |
 | compose-stack | in the ledger (`orch heavy` registers a project its command left with a config file in the card's worktree); its PR merged or closed (ledger link, else the worktree branch's own PR, an open one first, counted only when it carried the worktree's HEAD) or its worktree gone; every container stopped, or none started or stopped for `--hours`; on a host port in `reap.preview_ports` (default 4500–4599, hand-served previews) only after a `--previewed` line | an open PR, no PR, a PR it could not read, a `--keep` line before its `--until`, containers created after the latest registration (a new stack under a reused name), a stack nobody registered (the `docker` kind reports those) | `docker compose -p <project> down`, never `-v`: volumes stay. The id is retired in the ledger |
+| stack-volume | a volume whose compose project or `reap.stack_volumes.label` value starts with a `reap.stack_volumes.prefixes` entry and appears in the volume's name, every owner label on it is under a prefix, no container of any state carries an owner, ≥ N hours old (stacks those prefixes declare throwaway, such as test runs; `compose-stack` brings one down, a later round takes its volumes) | a container of that owner, running or stopped; an owner in `protect`; `reap.stack_volumes` unset; any other prefix is not listed | read again first (same creation time and owners, still no container of an owner), then `docker volume rm <name>`, one exact name each; never `prune`, `down -v` or a pattern |
 | remote-branch | interface only, never a target | always | - |
 
 `evidence` also reports images and videos (png, jpg, jpeg, gif, webp, mp4, mov, webm) older than N
@@ -353,7 +357,8 @@ Paths of a particular project's test cache stay here, not in this repo:
 {"reap": {"hours": 6, "orphan_paths": ["/private/tmp/<project>-uv-cache"], "evidence_roots": ["/tmp"], "user_folder_days": 7, "user_folder_screenshot_days": 1,
           "program_days": 7, "state_days": 7, "log_max_kb": 512,
           "inbox_to": "run:<id>", "plan_repeat": 2, "idle_minutes": 30, "load_cooldown_minutes": 60,
-          "user_folders": [], "preview_ports": [4500, 4599], "alert": {"orphan_procs": 5,
+          "user_folders": [], "preview_ports": [4500, 4599],
+          "stack_volumes": {"prefixes": ["<throwaway project prefix>-"], "label": "<owner label key>", "protect": ["<project>"]}, "alert": {"orphan_procs": 5,
                     "dangling_volumes": 50, "stale_branches": 30, "stale_worktrees": 10},
           "pressure": {"interval": 180, "load_per_cpu": [1.3, 2.0], "load_idle_pct": 10, "mem_free_pct": [20, 10],
                        "vm_pressure": [2, 4], "swapout_pps": [300, 1500], "swap_gb": [16, null],
