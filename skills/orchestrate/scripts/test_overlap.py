@@ -172,6 +172,9 @@ def test_other_programs_from_their_state():
         try:
             got = prog.other_program_files("me", "acme/app", {1}, rows_, listed)
             assert got["shapeless2"] is None and got["mixed"] is None, got
+            # The open-PR list hit its limit: a ledger PR missing from it may still be open, so it is UNKNOWN.
+            full = [row(n, f"b{n}") for n in range(1000, 1000 + prog.OPEN_LIMIT)]
+            assert prog.other_program_files("me", "acme/app", {1}, full, listed)["other"] == {40: None, 99: None}
         finally:
             prog.HOME = old
 

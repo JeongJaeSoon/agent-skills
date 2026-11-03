@@ -841,8 +841,9 @@ def other_program_files(slug, repo, mine, rows, list_files=rest_files):
         except (OSError, ValueError, AttributeError, TypeError, KeyError):
             out[d.name] = None
             continue
-        out[d.name] = {n: list_files(repo, n) for n in sorted(states)
-                       if n in open_ and n not in mine and "landed" not in states[n]}
+        # open_rows stops at OPEN_LIMIT: at the limit, a PR missing from it may still be open.
+        out[d.name] = {n: list_files(repo, n) if n in open_ else None for n in sorted(states)
+                       if (n in open_ or len(rows) >= OPEN_LIMIT) and n not in mine and "landed" not in states[n]}
     return out
 
 
@@ -970,8 +971,11 @@ def base_overlap(repo, base, c):
     return sorted(mine & {f["filename"] for f in moved.get("files") or []})
 
 
+OPEN_LIMIT = 200
+
+
 def open_rows(repo):
-    return gh_json("pr", "list", "--repo", repo, "--state", "open", "--limit", "200", "--json",
+    return gh_json("pr", "list", "--repo", repo, "--state", "open", "--limit", str(OPEN_LIMIT), "--json",
                    "number,title,headRefOid,headRefName,mergeStateStatus,isDraft,statusCheckRollup,baseRefName")
 
 
