@@ -173,20 +173,34 @@ assert rc == 0 and calls == [["worktree", "rm", "--worktree", "current", "--json
 rc, err, calls = apply("keep", mode="card")
 assert rc == 0 and calls == []
 
-# End to end on a throwaway repo: a dirty card keeps, and the verdict is the printed JSON.
+# An orca.yaml that exists but cannot be read leaves the archive hook unknown, and nothing is removed.
+yml = tmp / "card-yml"
+(yml / "orca.yaml").mkdir(parents=True)  # read_text on a directory: an OSError other than not-found
+os.environ.update(FAKE_STATUS="completed", FAKE_MODE="")
+CALLS.write_text("")
+with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+    rc = end_check.apply("remove", dict(CLEAN_FACTS, path=str(yml)), "card", {}, "term_me")
+assert rc == 3 and CALLS.read_text() == "", rc
+assert end_check.archive_hook(str(tmp / "nowhere")) is False
+
+# End to end on a throwaway repo: a dirty card keeps, and the verdict is the printed JSON. The git facts come from
+# the card's path Orca names, not from the directory it ran in.
 repo = tmp / "repo"
 subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
 (repo / "a.txt").write_text("x\n")
+os.environ["FAKE_WT"] = json.dumps({"isMainWorktree": False, "path": str(repo), "linkedItems": []})
 out = io.StringIO()
-cwd = os.getcwd()
-os.chdir(repo)
-try:
-    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
-        rc = end_check.main(["--worker", "--outcome", "succeeded", "--no-keep"])
-finally:
-    os.chdir(cwd)
+with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+    rc = end_check.main(["--worker", "--outcome", "succeeded", "--no-keep", "--dispatch", "ctx_1"])
 res = json.loads(out.getvalue())
 assert rc == 0 and res["verdict"] == "keep" and any("a.txt" in r for r in res["reasons"]), res
+# No card path from Orca: every git fact is unread, so it keeps.
+os.environ["FAKE_WT"] = json.dumps({"isMainWorktree": False, "linkedItems": []})
+out = io.StringIO()
+with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+    end_check.main(["--card", "--no-keep"])
+res = json.loads(out.getvalue())
+assert res["verdict"] == "keep" and "cannot read: tracked" in res["reasons"], res
 with contextlib.redirect_stderr(io.StringIO()):
     assert end_check.main(["--worker", "--card"]) == 2
 

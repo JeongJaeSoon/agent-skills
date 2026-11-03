@@ -277,10 +277,13 @@ def dispatch_settled(dispatch_id):
 
 
 def archive_hook(path):
+    """Whether the card's orca.yaml has an archive hook; None when the file exists but cannot be read."""
     try:
         text = (pathlib.Path(path) / "orca.yaml").read_text()
-    except (OSError, TypeError):
+    except FileNotFoundError:
         return False
+    except (OSError, TypeError, UnicodeDecodeError):
+        return None
     return re.search(r"(?m)^\s*archive\s*:", text) is not None
 
 
@@ -291,6 +294,11 @@ def apply(verdict, f, mode, opts, me):
             print(f"[{ME}] not applied: {why}", file=sys.stderr)
             return 3
     if verdict == "remove":
+        hooks = archive_hook(f["path"])
+        if hooks is None:
+            print(f"[{ME}] not applied: {f['path']}/orca.yaml could not be read, so its archive hook is unknown",
+                  file=sys.stderr)
+            return 3
         if f["caches"]:
             sys.path.insert(0, str(REPO / "skills" / "reap-resources" / "scripts"))
             import reap
@@ -300,7 +308,7 @@ def apply(verdict, f, mode, opts, me):
                 print(f"[{ME}] moving build caches to the trash failed: {e}", file=sys.stderr)
                 return 4
         cmd = [ORCA, "worktree", "rm", "--worktree", "current", "--json"]
-        cmd[4:4] = ["--run-hooks"] if archive_hook(f["path"]) else []
+        cmd[4:4] = ["--run-hooks"] if hooks else []
     elif verdict == "close-terminal":
         cmd = [ORCA, "terminal", "close", "--terminal", me, "--json"]
     elif verdict == "keep" and mode == "worker" and f.get("path"):
@@ -328,7 +336,11 @@ def main(argv):
     me = os.environ.get("ORCA_TERMINAL_HANDLE")
     if mode == "worker":
         opts["--dispatch"] = own_dispatch_id(opts.get("--dispatch"))
-    facts = {**git_facts(os.getcwd()), **card_facts(me, mode, opts.get("--dispatch"))}
+    card = card_facts(me, mode, opts.get("--dispatch"))
+    # The git facts come from the card Orca would remove, not from wherever this ran.
+    git = git_facts(card["path"]) if card["path"] else dict.fromkeys(("tracked", "untracked", "caches", "on_main",
+                                                                       "open_prs", "branch"))
+    facts = {**git, **card}
     verdict, reasons = judge(facts, mode, opts.get("--outcome"), keep_row(opts), bool(opts.get("--ticket-done")))
     print(json.dumps({"verdict": verdict, "mode": mode, "reasons": reasons, "facts": facts}, ensure_ascii=False,
                      indent=1))
