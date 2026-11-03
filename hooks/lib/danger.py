@@ -41,9 +41,6 @@ SLASH = re.compile(r"^\s*/(?:reload\S*|model)\b")
 APPLY_MARK = re.compile(r"runs --apply, never the agent")
 APPLY_SCRIPTS = {"setup.py", "config_emit.py", "automode_rule.py"}
 PRUNE_OBJECTS = {"system", "volume", "image", "container", "network", "builder"}
-# `kill` in command position only: at the start, after an operator, or after a keyword or sudo.
-KILL_PGREP = re.compile(r"""(?:^|[;&|(`]|\$\(|\b(?:then|do|else|sudo)\s)\s*kill\s+(?:-\S+\s+)*["']?(?:\$\(|`)\s*pgrep\b""",
-                        re.M)
 XARGS_OPTS = {"-I", "-i", "-n", "-P", "-L", "-l", "-s", "-E", "-e", "-d", "-a", "--max-args", "--max-procs",
               "--delimiter", "--arg-file", "--max-lines", "--max-chars", "--eof", "--replace"}
 # `${VAR:?}` stops bash when VAR is empty, so it cannot widen an rm.
@@ -101,7 +98,8 @@ def verb(args, valued):
 
 def write_targets(c):
     """The files a command writes by its own argument or a redirection."""
-    out = [t for fd, op, t in c.redirects if op in (">", ">>", ">|", "&>", "&>>", "<>")]
+    out = [t for fd, op, t in c.redirects if op in (">", ">>", ">|", "&>", "&>>", "<>")
+           or op == ">&" and not re.fullmatch(r"\d*-?", t)]  # `>&file` writes a file; `>&2`, `>&-` do not
     args = [w for w in c.words[1:] if not w.startswith("-")]
     if c.name == "tee":
         out += args
@@ -136,6 +134,10 @@ def write_targets(c):
 def check_command(c, masked, cfg, cwd, session):
     """[(key, reason)] for one command."""
     out, w, name = [], c.words, c.name
+    # Before the argv check: a bare `> file` truncates it with no command at all.
+    files = user_files()
+    if any(expand(t, cwd) in files for t in write_targets(c) if t):
+        out.append(("guard.deny.user_settings", USER_SETTINGS))
     if not w:
         return out
     if name in ("pkill", "killall"):
@@ -185,9 +187,6 @@ def check_command(c, masked, cfg, cwd, session):
         out.append(("guard.deny.url_credentials", "A URL with `user:secret@` puts the credential in the command line, "
                                                   "the process list and the transcript. Use the credential helper or "
                                                   "an authenticated CLI (`gh`) instead."))
-    files = user_files()
-    if any(expand(t, cwd) in files for t in write_targets(c) if t):
-        out.append(("guard.deny.user_settings", USER_SETTINGS))
     if PYTHON.fullmatch(name) or name.endswith(".py"):
         script = name_script(w)
         if script and plugin_apply(script, w, cwd):
@@ -344,14 +343,17 @@ def check_bash(cmd, cfg, cwd=None, session=None):
     """[Finding] for a Bash command, rules turned off left out."""
     masked = shell.command_text(cmd)
     out, seen = [], set()
-    if KILL_PGREP.search(masked):
-        out.append(Finding("guard.deny.pattern_kill", level(cfg, "guard.deny.pattern_kill"),
-                           "`kill $(pgrep …)` kills every process whose name matches. Kill by PID after reading `ps`, "
-                           f"or use agent-skills:reap-resources. {KEY_SOURCE.format(key='guard.deny.pattern_kill')}"))
-        out = [f for f in out if f.level != "off"]
-    for c in shell.commands(cmd):
-        for key, reason in check_command(c, masked, cfg, cwd, session):
+    cmds = shell.commands(cmd)
+    for c in cmds:
+        found = check_command(c, masked, cfg, cwd, session)
+        # `kill $(pgrep …)`: a pgrep inside this kill command's own substitution.
+        if c.name == "kill" and any(d.name == "pgrep" and c.span[0] < d.span[0] and d.span[1] <= c.span[1]
+                                    for d in cmds):
+            found.append(("guard.deny.pattern_kill", "`kill $(pgrep …)` kills every process whose name matches. Kill "
+                                                     "by PID after reading `ps`, or use agent-skills:reap-resources."))
+        for key, reason in found:
             lvl = level(cfg, key)
+            reason = reason.replace(shell.TEXT_DOLLAR, "$").replace(shell.TEXT_TILDE, "~")
             if lvl != "off" and (key, reason) not in seen:
                 seen.add((key, reason))
                 out.append(Finding(key, lvl, f"{reason} {KEY_SOURCE.format(key=key)}"))

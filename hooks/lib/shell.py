@@ -39,6 +39,7 @@ class Command:
     piped_from: bool = False  # a pipe feeds it
     piped_to: bool = False  # it feeds a pipe
     assigns: list = dataclasses.field(default_factory=list)  # `NAME=value` words before it, `env`'s included
+    span: tuple = (0, 0)  # its offsets in the whole command line; a substitution's commands lie inside it
 
     @property
     def name(self):
@@ -218,24 +219,56 @@ def command_text(cmd, marks=None):
     return "".join(out)
 
 
-def quotes_only(cmd, literal):
-    """`cmd` with quoted and escaped text blanked by quote characters alone: the fallback past the point
-    command_text stops following, so an operator inside quotes there is not a command boundary. Single-quoted and
-    escaped runs go to `literal`."""
+def quotes_only(cmd, marks):
+    """`cmd` with quoted text, escapes and comments blanked by a plain quote scan: the fallback past the point
+    command_text stops following, so an operator inside quotes or a comment there is not a command boundary. A
+    `$(…)` or backtick substitution inside double quotes stays, since bash runs it. Single-quoted and escaped runs go
+    to marks["literal"], comments to marks["comment"]."""
     out, i, n = list(cmd), 0, len(cmd)
+
+    def blank(i, j):
+        out[i:j] = " " * (j - i)
+
+    def substitution(i):  # index after the `$(…)` or backtick substitution at i
+        if cmd[i] == "`":
+            j = cmd.find("`", i + 1)
+            return n if j < 0 else j + 1
+        depth, j = 0, i + 2
+        while j < n and (cmd[j] != ")" or depth):
+            depth += {"(": 1, ")": -1}.get(cmd[j], 0)
+            j += 1
+        return min(j + 1, n)
+
     while i < n:
         c = cmd[i]
         if c == "\\":
-            out[i:i + 2] = " " * len(cmd[i:i + 2])
-            literal.append((i, i + 2))
+            blank(i, min(i + 2, n))
+            marks["literal"].append((i, min(i + 2, n)))
             i += 2
-        elif c in "'\"":
+        elif c == "#" and (i == 0 or cmd[i - 1] in " \t\n;&|("):
+            eol = cmd.find("\n", i)
+            eol = n if eol < 0 else eol
+            blank(i, eol)
+            marks["comment"].append((i, eol))
+            i = eol
+        elif c == "'":
+            j = cmd.find("'", i + 1)
+            j = n if j < 0 else j
+            blank(i + 1, j)
+            marks["literal"].append((i + 1, j))
+            i = j + 1
+        elif c == '"':
             j = i + 1
-            while j < n and cmd[j] != c:
-                j += 2 if c == '"' and cmd[j] == "\\" else 1
-            out[i + 1:min(j, n)] = " " * (min(j, n) - i - 1)
-            if c == "'":
-                literal.append((i + 1, min(j, n)))
+            while j < n and cmd[j] != '"':
+                if cmd[j] == "\\":
+                    blank(j, min(j + 2, n))
+                    marks["literal"].append((j, min(j + 2, n)))
+                    j += 2
+                elif cmd.startswith("$(", j) or cmd[j] == "`":
+                    j = substitution(j)
+                else:
+                    blank(j, j + 1)
+                    j += 1
             i = j + 1
         else:
             i += 1
@@ -292,7 +325,7 @@ def strip_prefix(words):
 
 
 def lift(cmd, masked):
-    """[(raw, masked)]: `cmd` with each `$(…)`, `<(…)`, `>(…)` and backtick substitution replaced by a same-length
+    """[(offset, raw, masked)]: `cmd` with each `$(…)`, `<(…)`, `>(…)` and backtick substitution replaced by a same-length
     `$___` word, then each substitution's body the same way, by position. The outer command then keeps its
     arguments and redirections whole: `echo "$(cat f)" > out` still writes `out`. An opener without its close is
     left in place, for `commands` to cut at."""
@@ -300,7 +333,7 @@ def lift(cmd, masked):
 
     def put(s, e, body):
         nonlocal cmd, masked
-        inner.append((s, cmd[body[0]:body[1]], masked[body[0]:body[1]]))
+        inner.append((body[0], cmd[body[0]:body[1]], masked[body[0]:body[1]]))
         pad = "$" + "_" * (e - s - 1)
         cmd, masked = cmd[:s] + pad + cmd[e:], masked[:s] + pad + masked[e:]
 
@@ -317,7 +350,7 @@ def lift(cmd, masked):
             break
     while m := re.search(r"`([^`]*)`", masked):
         put(m.start(), m.end(), m.span(1))
-    return [(cmd, masked)] + [(r, k) for _, r, k in sorted(inner, key=lambda x: x[0])]
+    return [(0, cmd, masked)] + sorted(inner, key=lambda x: x[0])
 
 
 def commands(cmd):
@@ -327,7 +360,10 @@ def commands(cmd):
     masked = command_text(cmd, marks)
     if marks["unsure"] is not None:
         u = marks["unsure"]
-        masked = masked[:u] + quotes_only(cmd, marks["literal"])[u:]
+        fallback = {"comment": [], "literal": []}
+        masked = masked[:u] + quotes_only(cmd, fallback)[u:]
+        marks["comment"] += [(max(s, u), e) for s, e in fallback["comment"] if e > u]
+        marks["literal"] += [(max(s, u), e) for s, e in fallback["literal"] if e > u]
     chars = list(cmd)
     for s, e in marks["comment"]:  # shlex is not told about comments: `x # > f` writes nothing
         chars[s:e] = " " * (e - s)
@@ -339,7 +375,7 @@ def commands(cmd):
             chars[i] = LITERAL[c]
         elif masked[i] != c and c == "~":
             chars[i] = TEXT_TILDE
-    for text, masked in lift("".join(chars), masked):
+    for offset, text, masked in lift("".join(chars), masked):
         start, prev_op = 0, ""
         cuts = [(m.start(), m.end(), m.group()) for m in CUT.finditer(masked)] + [(len(text), len(text), "")]
         for at, end, op in cuts:
@@ -356,6 +392,7 @@ def commands(cmd):
                     redirects = [(fd, o, t.translate(UNLITERAL)) for fd, o, t in redirects]
                     if words or redirects:
                         out.append(Command(words, redirects, mask, raw.translate(UNLITERAL),
-                                           piped_from=prev_op == "|", piped_to=op == "|", assigns=assigns))
+                                           piped_from=prev_op == "|", piped_to=op == "|", assigns=assigns,
+                                           span=(offset + start, offset + at)))
             start, prev_op = end, op
     return out

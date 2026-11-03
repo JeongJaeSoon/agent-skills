@@ -151,12 +151,16 @@ def segments(cmd):
 # The pressure gate's wait, the one way it leaves an orchestrator to wait for a queued heavy run: this plugin's
 # pressure.py by real path, only these two forms, and only in the background (as every wait of a role session).
 PRESSURE = pathlib.Path(__file__).resolve().parents[1] / "skills" / "reap-resources" / "scripts" / "pressure.py"
-PRESSURE_WAIT = re.compile(r"queue wait q-[0-9a-f]{8}|turns --wait \d+")
 
 
 def pressure_wait(words, background):
-    return (background and len(words) >= 3 and words[0] in ("python3", "python")
-            and real(words[1]) == real(PRESSURE) and bool(PRESSURE_WAIT.fullmatch(" ".join(words[2:]))))
+    """The path must be absolute: a `cd` earlier in the command would move a relative one."""
+    if not (background and words[:1] == ["python3"] and len(words) == 5 and os.path.isabs(words[1])
+            and real(words[1]) == real(PRESSURE)):
+        return False
+    verb, flag, value = words[2:]
+    return ((verb, flag) == ("queue", "wait") and bool(re.fullmatch(r"q-[0-9a-f]{8}", value))
+            or (verb, flag) == ("turns", "--wait") and bool(re.fullmatch(r"\d+(\.\d+)?", value)))
 
 
 def coordination(words, piped, background=False):

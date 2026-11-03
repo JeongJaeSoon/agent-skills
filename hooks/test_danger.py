@@ -90,11 +90,12 @@ CASES = [
      ["pkill -f telegram", "killall node", "sudo pkill -9 codex", "ls && pkill x", 'echo "$(pkill x)"',
       "kill $(pgrep -f codex)", "kill -9 `pgrep node`", "pgrep -f codex | xargs kill", "/usr/bin/pkill x",
       "X=1 pkill y", "if pkill x; then echo; fi", "sudo -u root pkill -f node", "pgrep x | xargs -n1 kill",
-      "if true; then kill $(pgrep x); fi"],
+      "if true; then kill $(pgrep x); fi", "/bin/kill $(pgrep node)", "if kill $(pgrep node); then :; fi",
+      'echo "${HOME}"; echo "$(pkill node)"'],
      ["kill 1234", "kill -9 1234 5678", "pgrep -f codex", "echo pkill", "grep -rn pkill skills",
       "git commit -m 'stop using pkill'", "man killall", "echo 'kill $(pgrep x)'", "cat <<'EOF'\npkill x\nEOF",
       "echo kill $(pgrep -f node)", "pgrep -f node | xargs echo kill", "env -u pkill echo safe",
-      'echo "${x:-; pkill node;}"']),
+      'echo "${x:-; pkill node;}"', "echo sudo kill $(pgrep node)", "echo ${HOME} # example; pkill node"]),
     ("guard.deny.prune", "deny",
      ["docker system prune -af", "docker volume prune -f", "docker image prune", "podman system prune",
       "docker compose down -v", "docker compose -p x down --volumes", "docker-compose down -v",
@@ -129,12 +130,13 @@ CASES = [
       "cp /tmp/settings.json ~/.claude/", "x=`cat a` && echo \"$x\" > ~/.claude/settings.json",
       "printf 123 > ~/.claude/settings.json", "echo x 3> ~/.claude/settings.json", "cp -t ~/.claude/ /tmp/settings.json",
       "cp --target-directory ~/.claude /tmp/settings.json", 'echo x > "$HOME/.claude/settings.json"',
-      "cp x ${HOME}/.claude/settings.json"],
+      "cp x ${HOME}/.claude/settings.json", "> ~/.claude/settings.json", "echo x >& ~/.claude/settings.json"],
      ["cat ~/.claude/settings.json", "jq . ~/.claude/settings.json", "cp ~/.claude/settings.json /tmp/backup.json",
       "echo x > .claude/settings.json", "echo '> ~/.claude/settings.json'", "diff ~/.claude/settings.json x",
       'echo ">" ~/.claude/settings.json', "echo ok # > ~/.claude/settings.json", "echo \\> ~/.claude/settings.json",
       "cp ~/.claude/settings.json /tmp/", "cp -t /tmp ~/.claude/settings.json",
-      "rm -f '$HOME/.claude/settings.json'", "echo x > '~/.claude/settings.json'", "echo x > \\~/.claude/settings.json"]),
+      "rm -f '$HOME/.claude/settings.json'", "echo x > '~/.claude/settings.json'", "echo x > \\~/.claude/settings.json",
+      "echo x >&2", "echo x 2>&1 >&-"]),
     ("guard.deny.plugin_apply", "deny",
      [f"python3 {REPO}/scripts/setup.py --apply abc123", f"python3 {REPO}/scripts/bootstrap.py --write",
       f"python3 {REPO}/skills/skills-config/scripts/config_emit.py --spec s.json --apply 12ab",
@@ -202,6 +204,9 @@ for key, level, about, alike in CASES:
 # The reason names the rule's key, so the human knows what to turn off.
 reason = hook("Bash", {"command": "pkill x"})["hookSpecificOutput"]["permissionDecisionReason"]
 assert "guard.deny.pattern_kill" in reason and "kill <pid>" in reason, reason
+# A quoted `$` is read as text but shown as `$`.
+reason = hook("Bash", {"command": "docker --context '$CTX' system prune"})["hookSpecificOutput"]["permissionDecisionReason"]
+assert "$CTX" in reason and "" not in reason, reason
 
 # A warn rule can be raised to deny, and a deny rule lowered to warn.
 configure({"guard": {"warn": {"run_download": "deny"}, "deny": {"pattern_kill": "warn"}}})
