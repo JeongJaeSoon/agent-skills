@@ -941,17 +941,13 @@ def automation_workspaces(res):
 
 
 def orca_workers(state=None):
-    rows, cursor = [], None
-    for _ in range(50):
-        res = orca_json("orchestration", "worker-list", "--limit", "100",
-                        *(["--terminal-state", state] if state else []), *(["--cursor", cursor] if cursor else []))
-        if not res:
-            return None  # a partial list could miss a retained row and count a user's worktree as made
-        rows += res.get("workers") or []
-        cursor = (res.get("page") or {}).get("nextCursor")
-        if not cursor:
-            break
-    return rows
+    """worker-list as this terminal sees it, every page; None when any page fails: a partial list could miss a retained
+    row and count a user's worktree as made."""
+    import cardguard
+    try:
+        return cardguard.worker_pages(state, every_run=False)
+    except (SystemExit, Exception):
+        return None
 
 
 def worker_worktrees(workers):

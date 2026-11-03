@@ -9,7 +9,7 @@ Each card gets one verdict: 삭제 (close its listed terminals, ignored files to
 --run-hooks`), 터미널만 닫기 (an open PR: the worktree stays, its idle terminals go), 남김, or 사람 결정 (nothing is
 done; the reason says what to decide). The rules are in ../references/cards.md and in judge() below.
 `apply` reads the card again and acts only when the verdict and HEAD are what the plan says, before closing its
-terminals and again before removing it. What cannot be read keeps the card: an agent's screen, the worktree,
+terminals and again before removing it, holding the card's lock and passing cardguard.guard() each time. What cannot be read keeps the card: an agent's screen, the worktree,
 worker or automation list, process cwds.
 The janitor's `card` kind (reap.py) is this module.
 Config: ~/.claude/agent-skills.json → "reap": {"idle_minutes": 30, "cards": {"protect_prefixes": ["lead-"],
@@ -18,18 +18,14 @@ Config: ~/.claude/agent-skills.json → "reap": {"idle_minutes": 30, "cards": {"
 import json, os, pathlib, re, shlex, subprocess, sys, time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-import reap  # noqa: E402
+import cardguard, reap  # noqa: E402
 
 REMOVE, CLOSE, KEEP, ASK = "삭제", "터미널만 닫기", "남김", "사람 결정"
 ACTING = (REMOVE, CLOSE)
-# A working Claude screen redraws its spinner every second; an idle one still writes about every 30 minutes.
-AGENT_BUSY_S = 5 * 60
 SCREEN_LINES = 40
 DONE_PATTERNS = (r"닫아도\s*(된|돼|좋|괜찮)", r"종료해도\s*(된|돼|좋|괜찮)", r"(can|may) (now )?be closed",
                  r"safe to close", r"閉じて(も)?(大丈夫|よい|いい|構いません)")
-# An AskUserQuestion dialog, a permission dialog, a y/n prompt.
-QUESTION_PATTERNS = (r"Enter to select", r"Do you want to (proceed|make this edit|create|allow)", r"\(y/n\)",
-                     r"Esc to cancel")
+QUESTION_PATTERNS = cardguard.QUESTION_PATTERNS
 
 
 def sh(cmd, cwd=None, input=None, errors=None):
@@ -122,10 +118,8 @@ def processes_in(path, rows, cwd_of):
     """(claude pids, busy shells a Claude session runs, other pids): every Bash call and background shell of a session
     is its shell child; an Orca terminal's shell at its prompt counts as nothing, and so do a session's other children
     (MCP servers). Anything else (a dev server, a person's command) is "other"."""
-    inside = [p for p, c in cwd_of.items() if reap.under(reap.real(c), path) and p in rows]
-    claude = {p for p in inside if reap.is_claude(rows[p]["cmd"])}
-    busy = sorted(q for q, r in rows.items() if r["ppid"] in claude
-                  and os.path.basename((r["cmd"].split() or [""])[0]).lstrip("-") in reap.SHELLS)
+    inside, claude = cardguard.claude_in(path, rows, cwd_of)
+    busy = cardguard.busy_shells(path, rows, cwd_of)
 
     def agents_child(p):
         seen = set()
@@ -164,8 +158,7 @@ def gather(w, m, run=None):
         return {**f, "protected": m["live"][p]}
     if p in m["patrol"]:
         return {**f, "protected": "순찰 판정: 작업 중·사람 대기·Run 워커(orch patrol)"}
-    if (children := [c for c in map(lambda i: (i or "").split("::")[1] if "::" in (i or "") else "",
-                                    w.get("childWorktreeIds") or ()) if c and os.path.isdir(c)]):
+    if (children := cardguard.child_cards(w)):
         return {**f, "protected": f"하위 카드 {os.path.basename(children[0])} 가 열려 있음(리드)"}
     if (coord := reap.coordinator_in(p, m["rows"], m["cwd_of"], m["projects"])):
         return {**f, "protected": f"리드·오케스트레이터: {coord}"}
@@ -224,7 +217,7 @@ def judge(f, idle_s):
         return KEEP, f["unreadable"], []
     agents = [t for t in f["terminals"] if t["agent"]]
     shells = [t for t in f["terminals"] if not t["agent"]]
-    if f.get("busy") or any(t["silent"] < AGENT_BUSY_S for t in agents):
+    if f.get("busy") or any(t["silent"] < cardguard.AGENT_BUSY_S for t in agents):
         return KEEP, "에이전트 턴 진행 중", []
     if any(t["screen"] == "question" for t in agents):
         return ASK, "에이전트가 사람의 답을 기다림(화면)", []
@@ -279,7 +272,10 @@ def judge(f, idle_s):
 
 def read_machine(cfg, now=None):
     now = now or time.time()
-    workers = reap.orca_workers()
+    try:
+        workers = cardguard.worker_pages()  # every Run's: a list bound to this terminal's Run would miss live turns
+    except (SystemExit, Exception):
+        workers = None
     live, _, _ = reap.worker_worktrees(workers or [])
     top = sh(["git", "rev-parse", "--show-toplevel"])
     projects = pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser() / "projects"
@@ -357,7 +353,15 @@ def reread(path, cfg):
 
 
 def act(item, cfg, wait=5.0):
-    """Judge the card again and do what its plan row says. Returns what happened; raises RuntimeError on failure."""
+    """Judge the card again and do what its plan row says, holding the card's lock. Returns what happened; raises
+    RuntimeError on failure."""
+    with cardguard.card_lock(item["path"]) as mine:
+        if not mine:
+            return "건너뜀: 다른 정리가 이 카드를 처리 중"
+        return act_locked(item, cfg, wait)
+
+
+def act_locked(item, cfg, wait):
     got = reread(item["path"], cfg)
     if got is None:
         return "건너뜀: orca worktree list 에서 다시 찾지 못함"
@@ -365,6 +369,9 @@ def act(item, cfg, wait=5.0):
     if verdict != item["verdict"] or f["head"] != item["head"]:
         return f"건너뜀: 다시 보니 {verdict}({why})"
     close = [h for h in close if h in item["close"]]
+    ok, why = cardguard.guard(item["path"], item["head"], item["close"])
+    if not ok:
+        return f"건너뜀: {why}"
     for h in close:
         reap.run(["orca", "terminal", "close", "--terminal", h, "--json"])
     if verdict == CLOSE:
@@ -377,6 +384,9 @@ def act(item, cfg, wait=5.0):
         return f"터미널 {len(close)}개 닫음, 삭제는 건너뜀: {got[1] if got else '다시 찾지 못함'}"
     if got[3]["head"] != item["head"]:
         return f"터미널 {len(close)}개 닫음, 삭제는 건너뜀: 판정 뒤 HEAD 가 바뀜"
+    ok, why = cardguard.guard(item["path"], item["head"], item["close"], final=True)
+    if not ok:
+        return f"터미널 {len(close)}개 닫음, 삭제는 건너뜀: {why}"
     out = reap.act({"kind": "orca-worktree", "key": f"orca-worktree:{item['path']}", "name": item["path"],
                     "regenerated": got[3].get("regenerated")}, [])
     return (f"터미널 {len(close)}개 닫음, " if close else "") + out

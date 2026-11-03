@@ -179,10 +179,10 @@ assert rh.reap.coordinator_in("/ws/app/lead", no_claude, cwd, projects, roles) i
 busy_rows = {**lead_rows, 40: proc(40, "/bin/zsh -c source snapshot.sh && sleep 600", ppid=31),
              41: proc(41, "caffeinate -i -t 300", ppid=31), 42: proc(42, "bun run --cwd plugin start", ppid=31),
              43: proc(43, "/bin/zsh -c make", ppid=30)}
-assert rh.busy_in("/ws/app/done", busy_rows, cwd) == [40]
-assert rh.busy_in("/ws/app/done", {**busy_rows, 40: {**busy_rows[40], "ppid": 99}}, cwd) == []
-assert rh.busy_in("/ws/app/lead", busy_rows, cwd) == []  # pid 31 is another card's session
-assert rh.busy_in("/ws/app/done", {}, cwd) == []
+assert rh.cardguard.busy_shells("/ws/app/done", busy_rows, cwd) == [40]
+assert rh.cardguard.busy_shells("/ws/app/done", {**busy_rows, 40: {**busy_rows[40], "ppid": 99}}, cwd) == []
+assert rh.cardguard.busy_shells("/ws/app/lead", busy_rows, cwd) == []  # pid 31 is another card's session
+assert rh.cardguard.busy_shells("/ws/app/done", {}, cwd) == []
 
 ok, why = rh.judge_card(card, facts, merged, quiet_terms, 40 * M, NOW, 30 * M, P, [], [], [], "pid 21 --agent agent-skills:lead")
 assert ok is False and why.startswith("리드·오케스트레이터 보호: pid 21"), why
@@ -226,6 +226,38 @@ assert card_says(quiet="세션 기록 s2.jsonl 을 읽지 못함(PermissionError
 # card_dir: only <root>/<repo>/<card>.
 assert rh.card_dir("/ws/app/done/web/src", "/ws") == "/ws/app/done"
 assert rh.card_dir("/ws/app", "/ws") is None and rh.card_dir("/elsewhere/x/y", "/ws") is None
+
+# act_card: under the card's lock, judged again, guard()ed, and only the terminals seen at the scan close (never --all).
+cg = rh.cardguard
+ran, removed = [], []
+saved_ac = rh.orca, rh.card_verdict, rh.read_machine, rh.reap.run, rh.reap.act, cg.observe
+rh.orca = lambda *a: {"worktrees": [{"path": "/ws/app/done"}]}
+rh.read_machine = lambda now: {}
+rh.card_verdict = lambda w, m, cfg, protect, now: (True, "w", {"head": "abc", "regenerated": []})
+rh.reap.run = lambda cmd, **k: ran.append(cmd) or "{}"
+rh.reap.act = lambda item, notes: removed.append(item["name"]) or "worktree 제거"
+ok_facts = {"patrol": False, "head": "abc", "terminals": [{"handle": "t1"}], "waits": {}, "screens": {}}
+cg.observe = lambda path: ok_facts
+plan = {"kind": "card", "id": "/ws/app/done", "head": "abc", "handles": ["t1"]}
+assert rh.act(plan, rh.DEFAULTS, P) == "터미널 1개 닫음, worktree 제거", ran
+assert ran == [["orca", "terminal", "close", "--terminal", "t1", "--json"]] and removed == ["/ws/app/done"]
+assert not any("--all" in c for c in ran)
+ran.clear(), removed.clear()
+for facts_now, why in (({**ok_facts, "patrol": True}, "순찰"), ({**ok_facts, "terminals": [{"handle": "t1"}, {"handle": "t9"}]}, "새 터미널"),
+                       ({**ok_facts, "terminals": None}, "터미널 목록"), ({**ok_facts, "head": "zzz"}, "HEAD")):
+    cg.observe = lambda path, f=facts_now: f
+    got = rh.act(plan, rh.DEFAULTS, P)
+    assert got.startswith("건너뜀") and why in got and not ran and not removed, (why, got)
+cg.observe = lambda path: ok_facts
+assert "계획에 없음" in rh.act({k: v for k, v in plan.items() if k != "handles"}, rh.DEFAULTS, P) and not ran
+with cg.card_lock("/ws/app/done") as held:
+    assert held and rh.act(plan, rh.DEFAULTS, P) == "건너뜀: 다른 정리가 이 카드를 처리 중" and not ran
+# A terminal opened between the close and the removal stops the removal.
+looks = iter([ok_facts, {**ok_facts, "terminals": [{"handle": "t1"}, {"handle": "t9"}]}])
+cg.observe = lambda path: next(looks)
+got = rh.act(plan, rh.DEFAULTS, P)
+assert "삭제는 건너뜀" in got and "새 터미널 t9" in got and ran and not removed, got
+rh.orca, rh.card_verdict, rh.read_machine, rh.reap.run, rh.reap.act, cg.observe = saved_ac
 
 # A pass: no protect file means nothing is scanned or done, and the brief line says it stopped.
 calls = []

@@ -231,6 +231,10 @@ v = cards.judge(f, IDLE)
 assert v[0] == cards.KEEP and "PR 을 읽지 못함" in v[1], v
 
 # apply acts only when the card reads the same as in the plan: a new commit or a changed verdict skips it.
+import cardguard  # noqa: E402
+reap.STATE = pathlib.Path(tmp) / "state"  # card locks
+saved_observe = cardguard.observe
+cardguard.observe = lambda path: {"patrol": False, "head": HEAD, "terminals": [{"handle": "t1"}], "waits": {}, "screens": {}}
 saved = cards.read_machine, cards.cards_listing, cards.gather, reap.run
 closed = []
 cards.read_machine = lambda cfg: machine(prs=OPEN)
@@ -261,6 +265,21 @@ saved_act, reap.act = reap.act, lambda *a, **k: removed.append(a) or "removed"
 got = cards.act({**item, "verdict": cards.REMOVE}, {}, wait=0)
 assert "HEAD 가 바뀜" in got and not removed and closed, got
 reap.act = saved_act
+# PR 3: the guard sees what the cleaner's own rule does not, and every close holds the card's lock.
+closed.clear()
+cards.read_machine = lambda cfg: machine(prs=OPEN)
+cards.gather = lambda w, m: saved[2](w, m, fake(branch_prs=[{**PR, "state": "OPEN"}], terminals=[term("t1", True, 2 * 3600)]))
+cardguard.observe = lambda path: {"patrol": False, "head": HEAD, "terminals": [{"handle": "t1", "agentIdentity": "claude"}],
+                                  "waits": {"t1": {"evidence": "hook"}}, "screens": {"t1": ["❯"]}, "motion": {}}
+got = cards.act(item, {})
+assert got.startswith("건너뜀") and "사람의 답" in got and not closed, got
+cardguard.observe = lambda path: {"patrol": False, "head": HEAD, "terminals": [{"handle": "t1"}, {"handle": "t2"}]}
+assert "새 터미널 t2" in cards.act(item, {}) and not closed
+cardguard.observe = lambda path: {"patrol": False, "head": HEAD, "terminals": [{"handle": "t1"}]}
+with cardguard.card_lock(CARD) as held:
+    assert held and cards.act(item, {}) == "건너뜀: 다른 정리가 이 카드를 처리 중" and not closed
+assert cards.act(item, {}).startswith("터미널 1개 닫음") and closed
+cardguard.observe = saved_observe
 cards.read_machine, cards.cards_listing, cards.gather, reap.run = saved
 
 # janitor integration: card is the scheduled kind, the old card kinds are not.
