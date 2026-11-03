@@ -38,8 +38,8 @@ KEY = "guard.record_check"
 STATE_FILE = "record-check.jsonl"
 ROOT = pathlib.Path(os.environ.get("CLAUDE_PLUGIN_ROOT") or pathlib.Path(__file__).resolve().parents[1])
 RECORD_MD = ROOT / "skills" / "end-session" / "references" / "record.md"
-LINE = re.compile(r"^\s*(?:[-*]\s+)?(?:\*\*)?(?:기록\s*못\s*함|기록|not recorded|recorded)(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*\S",
-                  re.I | re.M)
+LINE = re.compile(r"^[ \t]*(?:[-*][ \t]+)?(?:\*\*)?(?:기록[ \t]*못[ \t]*함|기록|not recorded|recorded)(?:\*\*)?[ \t]*[:：]"
+                  r"[ \t]*(?:\*\*)?[ \t]*[^\s*]", re.I | re.M)
 GH_VALUE_OPTS = {"-R", "--repo", "--hostname"}
 
 
@@ -118,11 +118,25 @@ def _under(child, parent):
 
 
 def rows():
+    """Every readable row; a damaged line is skipped, not the file."""
+    out, bad = [], None
     try:
-        with open(config.state() / STATE_FILE, encoding="utf-8") as f:
-            return [r for r in (json.loads(l) for l in f if l.strip()) if isinstance(r, dict)]
-    except (OSError, ValueError):
-        return []
+        with open(config.state() / STATE_FILE, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    r = json.loads(line)
+                except ValueError as exc:
+                    bad = exc
+                    continue
+                if isinstance(r, dict):
+                    out.append(r)
+    except OSError:
+        pass
+    if bad is not None:
+        config.log_error("record_check", bad)
+    return out
 
 
 def append(row):
@@ -133,7 +147,8 @@ def append(row):
 
 
 def pending(all_rows, keep):
-    """Open obligations per (session, agent) for which keep(row) holds: the opens after that key's last close."""
+    """Open obligations per (session, agent) for which keep(row) holds: the opens at or after that key's last close
+    (a close covers only what came strictly before it)."""
     last, opens = {}, {}
     for r in all_rows:
         k = (r.get("session"), r.get("agent") or "")
@@ -141,8 +156,8 @@ def pending(all_rows, keep):
             last[k] = max(last.get(k, ""), r.get("at") or "")
         elif r.get("event") == "open" and keep(r):
             opens.setdefault(k, []).append(r)
-    return {k: [o for o in v if (o.get("at") or "") > last.get(k, "")] for k, v in opens.items()
-            if any((o.get("at") or "") > last.get(k, "") for o in v)}
+    out = {k: [o for o in v if (o.get("at") or "") >= last.get(k, "")] for k, v in opens.items()}
+    return {k: v for k, v in out.items() if v}
 
 
 def destinations(cfg):
@@ -220,7 +235,8 @@ def pre_tool(event, cfg, lvl):
         if not is_worker_done(c.words):
             continue
         body = option(c.words, "--body")
-        if body is None or "$" in body or "`" in body or not has_line(body):
+        # shell.commands leaves `$` only where bash expands (a substitution becomes `$___`); quoted `$` is a stand-in.
+        if body is None or "$" in body or not has_line(body):
             problems.append("this worker_done body has no record line it can read (`기록: …`, `기록: 없음 (<why>)` or "
                             "`기록 못 함: <reason>` at the start of a line, in a literal --body)")
         elif len(cmds) == 1 and tid:

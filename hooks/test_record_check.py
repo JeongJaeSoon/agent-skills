@@ -45,7 +45,15 @@ def stop(message, **kw):
 
 def rows():
     f = STATE / "record-check.jsonl"
-    return [json.loads(l) for l in f.read_text().splitlines()] if f.exists() else []
+    out = []
+    for l in (f.read_text().splitlines() if f.exists() else []):
+        try:
+            r = json.loads(l)
+        except ValueError:
+            continue
+        if isinstance(r, dict):
+            out.append(r)
+    return out
 
 
 def check(name, cond):
@@ -85,6 +93,10 @@ reset()
 post("gh pr create --title x --body y", tid="t3")
 check("fenced record line: still warns", "systemMessage" in stop("```\n기록: example\n```\n> 기록: quoted"))
 check("empty record line: still warns", "systemMessage" in stop("기록:   "))
+check("record label with text on the next line: still warns", "systemMessage" in stop("기록:\n다음 작업"))
+check("empty bold record line: still warns", "systemMessage" in stop("**기록:**"))
+check("bold record line with text: passes", stop("**기록:** ABC-1 completed") == {})
+post("gh pr create --title x --body y", tid="t4")
 
 # deny blocks the stop once; stop_hook_active passes and keeps the obligation.
 config({"tracker": {"adapter": "linear"}, "guard": {"record_check": "deny"}})
@@ -133,6 +145,13 @@ check("worker_done body from a variable: warn", ctx(pre(var_body), "PreToolUse")
 config({"tracker": {"adapter": "linear"}, "guard": {"record_check": "deny"}})
 check("worker_done without record line: deny", pre(bad_body)["hookSpecificOutput"].get("permissionDecision") == "deny")
 check("status send is not checked", pre("orca orchestration send --type status --body hi") == {})
+config({"tracker": {"adapter": "linear"}, "guard": {"record_check": "ask"}})
+check("worker_done without record line: ask", pre(bad_body)["hookSpecificOutput"].get("permissionDecision") == "ask")
+reset()
+tick_body = "orca orchestration send --type worker_done --body '`record_check.py` 추가.\n기록: 없음 (리드 reconcile)'"
+check("worker_done literal body with backticks: passes", pre(tick_body) == {})
+check("worker_done body with a substitution: warn",
+      ctx(pre('orca orchestration send --type worker_done --body "기록: `date`"'), "PreToolUse"))
 
 # worker_done closes as of the moment it was checked, and only when the send succeeded alone.
 reset()
@@ -145,6 +164,54 @@ post("gh pr merge 5", tid="m1")
 pre(ok_body + "; true", tid="w2")
 post(ok_body + "; true", tid="w2")
 check("worker_done in a compound call: does not close", "systemMessage" in stop("idle"))
+reset()
+post("gh pr merge 5", tid="m1")
+pre(ok_body, tid="w3")
+post(ok_body, tid="w3", failed=True)
+check("worker_done send failed: does not close", "systemMessage" in stop("idle"))
+reset()
+post("gh pr merge 5", tid="m1")
+pre(ok_body, tid="w4")
+post("gh pr merge 6", tid="m2")
+post(ok_body, tid="w4")
+check("merge after the report was checked: stays open", "systemMessage" in stop("idle"))
+
+
+def add_row(row):
+    with open(STATE / "record-check.jsonl", "a") as f:
+        f.write(json.dumps(row) + "\n")
+
+
+# A close covers only opens strictly before it: an open in the same millisecond stays.
+reset()
+post("gh pr merge 5", tid="m1")
+add_row({"at": rows()[-1]["at"], "event": "close", "session": "s1", "agent": "", "via": "worker_done"})
+check("open at the close's millisecond: stays open", "systemMessage" in stop("idle"))
+reset()
+post("gh pr merge 5", tid="m1")
+closed_at = datetime.datetime.strptime(rows()[-1]["at"], "%Y-%m-%dT%H:%M:%S.%fZ") + datetime.timedelta(seconds=1)
+add_row({"at": closed_at.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z", "event": "close", "session": "s1", "agent": ""})
+check("open before the close: closed", stop("idle") == {})
+
+# A damaged state line skips that line only, and is logged.
+reset()
+post("gh pr merge 5", tid="m1")
+(STATE / "guard-errors.jsonl").unlink(missing_ok=True)
+add_row("x")
+with open(STATE / "record-check.jsonl", "a") as f:
+    f.write("{not json\n")
+check("damaged state line: other obligations still read", "systemMessage" in stop("idle"))
+check("damaged state line: logged", (STATE / "guard-errors.jsonl").exists()
+      and "record_check" in (STATE / "guard-errors.jsonl").read_text())
+
+# A subagent's obligation is its own: SubagentStop checks it, the parent's Stop does not.
+reset()
+post("gh pr merge 5", tid="m1", agent_id="a1")
+check("subagent merge: SubagentStop warns",
+      "systemMessage" in run("SubagentStop", agent_id="a1", last_assistant_message="끝"))
+check("subagent merge: parent Stop not charged", stop("끝") == {})
+check("subagent merge: SubagentStop record line passes",
+      run("SubagentStop", agent_id="a1", last_assistant_message="기록: 없음 (리드 reconcile)") == {})
 
 # Closing a card: an open obligation with no record line this turn is flagged; a recorded one passes.
 reset()
