@@ -620,8 +620,22 @@ assert not [x for x in patrol.judge({**f, "failed": {"waits"}}, {})[0] if x["cod
     "without Orca's wait list a prompt for a human cannot be ruled out"
 for lines in (plain, hooked, notice, ["⏺ Started the review in the background."] + plain[1:],
               ["⏺ The background run completed; results applied."] + plain[1:],
-              ["⏺ 백그라운드 작업이 완료되어 결과를 반영했습니다."] + plain[1:]):
+              ["⏺ 백그라운드 작업이 완료되어 결과를 반영했습니다."] + plain[1:],
+              ["⏺ Received the background task completion notification; all results are applied."] + plain[1:],
+              ["⏺ 백그라운드 작업 완료 알림을 받았고 결과를 반영했습니다."] + plain[1:],
+              ["⏺ No need to wait on the background run any more: it is done."] + plain[1:],
+              ["⏺ 백그라운드 작업은 기다릴 필요 없이 끝났습니다."] + plain[1:],
+              ["⏺ The background task took 30 seconds to complete; results are applied."] + plain[1:],
+              ["⏺ I waited for the background task to finish, then applied the results."] + plain[1:],
+              ["⏺ 백그라운드 작업을 기다리던 중 완료 알림을 받아 결과를 반영했습니다."] + plain[1:],
+              ["⏺ I was waiting for the background review, but it finished successfully and I applied all findings.",
+               "  The task is complete."] + plain[1:]):
     assert patrol.bgwait_signal(lines) is None, lines
+for text in ("I'll continue once the background review completes.", "백그라운드 리뷰가 끝나기를 기다리는 중입니다.",
+             "백그라운드 CI 를 기다립니다.",
+             "No need to wait for CI; it has passed. Waiting on the background review to finish; its completion "
+             "notice will wake me."):
+    assert patrol.bgwait_signal([f"⏺ {text}"] + plain[1:]), text
 assert patrol.bgwait_signal(waiting).startswith("Waiting on the background Codex run to finish; its completion notice")
 assert patrol.DEPENDS["B"] == {"terminals", "waits"}
 

@@ -135,11 +135,17 @@ def background(lines):
     return bool(lines) and any(BACKGROUND.search(l) for l in lines[-6:])
 
 
-# A last message that says the session waits on a background task's completion notice (English or Korean). A launch
-# ("started it in the background") or a past one ("the background run completed") is not a wait.
+# A last message that says the session waits on a background task still to finish (English or Korean). A launch
+# ("started it in the background"), a report of one that finished ("waited for it, then applied", "기다리던 중 완료
+# 알림을 받아") or a wait denied ("no need to wait") is not one: only a present or future wait counts.
 BG_WAIT = re.compile(r"\bwait(?:ing|s)?\s+(?:on|for|until)\b.{0,60}?\bbackground\b"
-                     r"|\bbackground\b.{0,60}?\b(?:to (?:finish|complete|end)|finishes|completes|completion|notification)\b"
-                     r"|백그라운드.{0,60}?(?:기다|대기|끝나면|끝나기|완료되면|완료 알림)", re.I)
+                     r"|\b(?:until|once|when)\b.{0,20}?\bbackground\b.{0,60}?\b(?:finishes|completes|is done|ends)\b"
+                     r"|백그라운드.{0,60}?(?:기다립니다|기다리는 중|기다리고 있|기다릴게|기다린다|대기 중|끝나면|끝나기를 기다"
+                     r"|완료되면)", re.I)
+# Judged per sentence, so a denied or past wait in one sentence neither makes nor hides a wait in another.
+NO_WAIT = re.compile(r"\b(?:no need to|not|don't|do not|no longer|stopped)\s+(?:\w+\s+)?wait|\b(?:was|were|had been)\s+"
+                     r"waiting\b|\bwaited\b|기다리지 않|기다릴 필요", re.I)
+SENTENCE = re.compile(r"(?<=[.!?;。])\s+|;\s*")
 
 
 def bgwait_signal(lines):
@@ -153,7 +159,8 @@ def bgwait_signal(lines):
     if start is None:
         return None
     text = " ".join(card_watch.GLYPHS.sub("", l.strip()) for l in body[start:] if l.strip() and not set(l.strip()) <= {"─"})
-    return text[:300] if BG_WAIT.search(text) else None
+    waits = any(BG_WAIT.search(s) and not NO_WAIT.search(s) for s in SENTENCE.split(text))
+    return text[:300] if waits else None
 
 
 def screen_of(facts, handle):
