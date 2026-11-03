@@ -105,6 +105,18 @@ forms = module("fx_forms", '''
 
     def log_roll():
         roll(D / "fx-log.jsonl")
+
+    def keep(p):
+        roll(p.with_name(p.name + ".bak"))
+
+    def keep_go():
+        keep(D / "fx-keep.json")
+
+    def roll_kw(p):
+        os.rename(src=p, dst=p.with_name(f"{p.name}.2"))
+
+    def kw_go():
+        roll_kw(D / "fx-kw.log")
 ''')
 got = {(w.writer, w.targets) for w in registry.scan([forms])}
 for want in [("fx_forms:Box.go", ("d/fx-bound.json",)), ("fx_forms:call_two", ("d/fx-a.json",)),
@@ -112,8 +124,11 @@ for want in [("fx_forms:Box.go", ("d/fx-bound.json",)), ("fx_forms:call_two", ("
              ("fx_forms:again", ("d/fx-second.json",)), ("fx_forms:side", ("fx-side.json",)),
              ("fx_forms:opens", ("d/fx-kw.json",)), ("fx_forms:opens", ("d/fx-io.json",)),
              ("fx_forms:spans", ("spans/fx.json",)),  # `A, B = x, y` at module level
-             ("fx_forms:log_roll", ("d/fx-log.jsonl.1",))]:  # a sink renaming its parameter
+             ("fx_forms:log_roll", ("d/fx-log.jsonl.1",)),  # a sink renaming its parameter
+             ("fx_forms:keep_go", ("d/fx-keep.json.bak.1",)),  # renamed again through a wrapper
+             ("fx_forms:kw_go", ("d/fx-kw.log.2",))]:  # os.rename(dst=...) with an f-string suffix
     assert want in got, (want, got)
+assert not any(w[0] in ("fx_forms:keep", "fx_forms:roll_kw", "fx_forms:roll") for w in got), got
 assert ("fx_forms:log_roll", ("d/fx-log.jsonl",)) not in got, got
 
 # (1) a fact with two canonical stores

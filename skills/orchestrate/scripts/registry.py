@@ -575,6 +575,12 @@ class _Scan:
         if isinstance(expr, ast.Constant) and isinstance(expr.value, str):
             return (_tail(expr.value),)
         if isinstance(expr, ast.JoinedStr):
+            head, rest = expr.values[0], expr.values[1:]
+            if isinstance(head, ast.FormattedValue) and rest and all(isinstance(v, ast.Constant) for v in rest):
+                tail = "".join(v.value for v in rest)
+                renamed = [x for x in r(head.value) if isinstance(x, tuple)]  # f"{p.name}.1" is p.name + ".1"
+                if renamed:
+                    return tuple((i, s + tail) for i, s in renamed)
             return (_tail("".join(v.value if isinstance(v, ast.Constant) else "*" for v in expr.values)),)
         if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Div):
             right = r(expr.right)
@@ -617,7 +623,9 @@ class _Scan:
                 parent = [b.rsplit("/", 1)[0] + "/" for b in base if isinstance(b, str) and "/" in b] or [""]
                 if f.attr == "with_name":
                     # `p.with_name(p.name + ".1")` on a parameter: the caller's path with ".1" added.
-                    renamed = tuple(x for x in r(expr.args[0]) if isinstance(x, tuple) and x[0] in params and x[1]
+                    # A base already renamed in a wrapper is (index, suffix) too; its name carries that suffix on.
+                    of = {x if isinstance(x, int) else x[0] for x in base if isinstance(x, (int, tuple))}
+                    renamed = tuple(x for x in r(expr.args[0]) if isinstance(x, tuple) and x[0] in of and x[1]
                                     and not _temp("x" + x[1]))
                     if renamed:
                         return renamed
@@ -717,8 +725,9 @@ class _Scan:
             mode = arg(0, "mode")
             return [f.value] if isinstance(mode, ast.Constant) and isinstance(mode.value, str) and _writes_mode(mode.value) else []
         if name in ("replace", "rename") and isinstance(f, ast.Attribute):
-            if recv == "os" and len(call.args) == 2:
-                return [call.args[1]]
+            if recv == "os":
+                dst = arg(1, "dst")
+                return [dst] if dst is not None else [UNKNOWN]
             if len(call.args) == 1 and not call.keywords:  # Path.replace(target); str.replace takes two
                 return [call.args[0]]
         if recv == "shutil" and name in ("copy", "copy2", "copyfile", "copytree", "move"):
