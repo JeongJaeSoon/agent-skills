@@ -300,6 +300,33 @@ assert rep["higher_worse"]["mem_free_pct"] is False and rep["last"]["level"] == 
 json.dumps(rep, allow_nan=False)
 assert p.history_report(cfg, hours=999)["hours"] == 24
 
+# Turns in progress, from the shape `orca worktree ps --json` gives (names and paths replaced). Orca keeps an agent at
+# state "working" after its main turn ends while a background wait or subagent lives on: workingMode "monitoring"
+# and mainAgent.state "done" say so, and that agent runs no turn. An older Orca without either field counts as before.
+def agent(state, mode=None, main=None, subs=0):
+    a = {"paneKey": "tab-1:1", "agentType": "claude", "state": state, "prompt": "do ABC-1", "toolName": "Bash",
+         "subagents": [{"state": "working"}] * subs}
+    if mode:
+        a["workingMode"] = mode
+    if main:
+        a["mainAgent"] = {"state": main, "stateStartedAt": 1700000000000}
+    return a
+
+
+def ps(*agents):
+    return json.dumps({"id": "x", "ok": True, "result": {"worktrees": [
+        {"path": "/w/acme-app/card", "displayName": "card", "agents": list(agents)}], "totalCount": 1,
+        "truncated": False}})
+
+
+turning = [agent("working", main="working"), agent("working", main="working", subs=2)]
+waiting = [agent("working", "monitoring", "done"), agent("working", main="done", subs=1)]
+older = [agent("working"), agent("working")]  # no workingMode, no mainAgent
+assert p.active_turns(run=lambda *a, **k: ps(*turning)) == 2
+assert p.active_turns(run=lambda *a, **k: ps(*waiting)) == 0
+assert p.active_turns(run=lambda *a, **k: ps(*older)) == 2
+assert p.active_turns(run=lambda *a, **k: ps(*turning, *waiting, *older, agent("done", main="done"))) == 4
+
 # launchd spec: runs `round` from this file with a PATH that finds the tools reap calls.
 s = p.spec(180)
 assert s["ProgramArguments"][-2:] == [str(pathlib.Path(p.__file__).resolve()), "round"] and s["StartInterval"] == 180

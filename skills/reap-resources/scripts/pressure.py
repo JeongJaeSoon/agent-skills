@@ -200,9 +200,19 @@ def judge(m, cfg):
     return LEVELS[max((lvl for _, lvl, _ in found), default=0)], [why for _, _, why in found]
 
 
+def turning(a):
+    """An agent whose main turn runs. Orca keeps state "working" after the main turn ends while a background wait
+    (workingMode "monitoring") or a subagent lives on, and then mainAgent.state leaves "working"; an Orca that gives
+    neither field is read by state alone."""
+    if not isinstance(a, dict) or a.get("state") != "working" or a.get("workingMode") == "monitoring":
+        return False
+    main = a.get("mainAgent")
+    return not isinstance(main, dict) or main.get("state", "working") == "working"
+
+
 def active_turns(run=sh):
-    """Agent turns Orca shows in progress (state "working") over every card; None when Orca cannot say, a cut-short
-    list included."""
+    """Agent turns Orca shows in progress (see turning) over every card; None when Orca cannot say, a cut-short list
+    included."""
     out = run(["orca", "worktree", "ps", "--limit", "10000", "--json"], timeout=5)  # sh gives None when orca is missing
     try:
         data = json.loads(out or "")
@@ -212,8 +222,7 @@ def active_turns(run=sh):
     trees = res.get("worktrees") if isinstance(res, dict) else None
     if not isinstance(trees, list) or res.get("truncated"):
         return None
-    return sum(isinstance(a, dict) and a.get("state") == "working"
-               for w in trees if isinstance(w, dict) for a in w.get("agents") or [])
+    return sum(turning(a) for w in trees if isinstance(w, dict) for a in w.get("agents") or [])
 
 
 def turn_cap(cfg, cpus=None):
