@@ -39,7 +39,7 @@ The lane works like this:
 - Among waiting exclusive PRs, the land order decides who takes the lane next.
 - The holder keeps the lane from its first turn through the update, the restack (migrations) and CI, until it lands. Each attempt refreshes the lock. A holder idle for `exclusive_stale_minutes` (90) is presumed dead, and its lock is broken.
 - It lands only on the latest base: not behind at all.
-- A PR whose acceptance needs a proof at its exact head (live check, E2E) cannot land while other landings on its base come faster than one proof. After its first exit 3 for a moved base, stop retrying: ask the layer above to hold other landings on that base for one proof plus land, and record the hold in decisions.tsv. This is a window for one PR, not a serialized lane.
+- The lock does not stop normal-lane PRs, from this program or any other, from moving the base. So the holder, or any PR whose acceptance needs a proof at its exact head (live check, E2E), cannot land while landings on its base come faster than one CI cycle or one proof. After its first exit 3 for a moved base, stop retrying: ask the layer above to hold other landings on that base for one CI cycle or proof plus land, and record the hold in decisions.tsv. This is a window for one PR, not a serialized lane.
 
 Normal-lane PRs never wait for the exclusive lane.
 
@@ -101,7 +101,7 @@ Run it under `run_in_background` with `--wait-minutes`. It sleeps through yields
 |---|---|---|
 | 0 | Landed. It printed the merge commit and the main-CI watch command. | Watch main CI, `record main_green\|main_red --sha`, finish the ticket, `worker_done` |
 | 2 | Yield: CI still running, a dependency or the stack top first, another PR holds the exclusive lane, or GitHub did not answer (timeout, 5xx) | Nothing. Keep the `--wait-minutes` loop |
-| 3 | Act: the message says what (conflicts, failed CI, a changed patch that needs re-review, the base changed your files, missing evidence in the test-results comment, or "you hold the exclusive lane: update onto the latest base") | Do it, then `land` again |
+| 3 | Act: the message says what (conflicts, failed CI, a changed patch that needs re-review, the base changed your files, missing evidence in the test-results comment, or "you hold the exclusive lane: update onto the latest base") | Do it, then `land` again. On "update onto the latest base", also ask for a hold before that update (Exclusive lane above), so the next attempt is not overtaken again |
 | 1 | Refused: STOP line, main red (only `--class main-fix` lands), or the human gate | Report and stop |
 
 Rebase conflicts change the patch-id. That voids the verdict, so the resolution gets re-reviewed.
