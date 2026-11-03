@@ -344,7 +344,8 @@ APPROVED    The acts the human already approved for this project, with their wor
             instead). Copy the lines a worker's unit needs into its brief.
 HUMAN ONLY  Permission dialogs outside APPROVED, logins, payments, document submissions, and
             any irreversible or outward act not under APPROVED; a design or implementation choice
-            is not one, and goes to PARENT as status for PARENT to settle. Batched into one message, sent once
+            is not one: PARENT settles it, sent as status, or as a question when it blocks you.
+            The HUMAN ONLY items are batched into one message, sent once
             to PARENT, which puts it before the human, and registered with `orch decide add`. Do not repeat unchanged waiting notices;
             when the blocker or evidence changes, create a replacement with `orch decide add`
             whose body names the old decision id and changed evidence. After creation succeeds,
