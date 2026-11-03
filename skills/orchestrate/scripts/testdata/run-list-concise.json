@@ -1,4 +1,5 @@
 [
- {"runs": [{"id": "run_demo", "objective": "demo program"}], "nextCursor": "run-cursor-2"},
- {"runs": [{"id": "run_old", "objective": "an imported legacy run"}]}
+ {"runs": [{"id": "run_demo", "objective": "demo program"}, {"id": "run_old", "objective": "an imported legacy run"}],
+  "nextCursor": "run-cursor-2"},
+ {"runs": [{"id": "run_far", "objective": "an older run past the first page"}]}
 ]

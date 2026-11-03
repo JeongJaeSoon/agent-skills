@@ -170,10 +170,11 @@ def all_workers(call, *args, error=RuntimeError):
     return [w for rows, _, _ in worker_list(call, *args, error=error) for w in rows]
 
 
-def all_runs(call, error=RuntimeError):
-    """Every Run of run-list, every page. From 1.4.246 only --full carries coordinator_handle and legacy, and the
-    default page is 10 Runs."""
-    return [r for res, _ in pages(call, "run-list", "--limit", "100", error=error) for r in res.get("runs") or []]
+def run_list(call, error=RuntimeError):
+    """run-list's first page (Orca's default size, newest first) read with --full: from 1.4.246 only --full carries
+    coordinator_handle and legacy. One page, as before: every listed Run costs fleet a worker-list, task-list and
+    gate-list."""
+    return next(pages(call, "run-list", error=error))[0].get("runs") or []
 
 
 def own_dispatch(orca=None, failed=None):

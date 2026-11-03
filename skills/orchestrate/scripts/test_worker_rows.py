@@ -145,7 +145,7 @@ assert old["fleet"] == ([("ctx_lead", "run_demo", "dispatched"), ("ctx_a", "run_
                          ("ctx_b", "run_demo", "completed"), ("ctx_c", "run_demo", "completed"),
                          ("ctx_x", "run_demo", "dispatched")], False), old
 assert old["dash"] == ["ctx_a", "ctx_b", "ctx_c"], old
-# Both run-list pages are read; the legacy Run is left out and run_demo keeps its coordinator.
+# run-list's first page only, as before; the legacy Run is left out and run_demo keeps its coordinator.
 assert old["fleet_runs"] == ([("run_demo", "term_coord")], ["run_demo"]), old
 
 for version in ("old-stderr", "new"):

@@ -213,7 +213,7 @@ def settled_run(got):
 
 def fetch_runs():
     import orca_settings  # here, not at the top: the hooks that import fleet stay off sqlite3
-    listed = orca_settings.all_runs(orca, error=SourceError)
+    listed = orca_settings.run_list(orca, error=SourceError)
     runs = [r for r in listed if not r.get("legacy") and r.get("id") != "run_legacy_local"]
     live = {t.get("handle") for t in orca("terminal", "list").get("terminals", [])}
     out = {"runs": runs, "workers": [], "tasks": [], "gates": []}
