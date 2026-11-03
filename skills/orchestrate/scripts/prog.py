@@ -91,7 +91,14 @@ Usage: orch <command> <slug> [options]
                                      button that closes it with that answer, then types
                                      "decision <id>: <label>" into this terminal once it is idle. keep: you
                                      checked it and it still stands (checked_at); the brief counts one
-                                     unchecked for board.decision_stale_h hours as 오래된 결정
+                                     unchecked for board.decision_stale_h hours as 오래된 결정. Decisions
+                                     live in agent-skills.db; before `orch db import` they stop with that
+  db import [--dry-run | --apply] [--rehearsal] | export --legacy --target pre-4a DIR | dump [TABLE]
+  db backup FILE | restore FILE [--rehearsal] | cutover-plan 4a|4b
+                                     no slug: agent-skills.db (store.py). import moves decisions.json in
+                                     and leaves an empty directory in its place; --apply refuses while old
+                                     code, an unreloaded session or a loaded LaunchAgent could still write.
+                                     cutover-plan prints the commands you run around it and runs none
   stage add <id> --title T [--pr owner/repo#N] [--parent ID] [--group]
   stage set <id> --col merge|dev|prod --mark ok|fail|partial|checking|na [--evidence TEXT] [--by WHO]
   stage env [--prod V] [--dev V] | next [LINE]... | done <id> | drop <id> | show [--program P] [--all] [--md|--telegram|--json]
@@ -2963,7 +2970,7 @@ def cmd_heavy(argv):
 
 
 def cmd_decide(argv):
-    import fleet  # the store lives in the fleet state directory, beside the page that shows it
+    import fleet, store  # the decision table lives in the fleet state directory, beside the page that shows it
     sub, rest = argv[0], argv[1:]
     try:
         if sub == "add" and opt(rest, "--title"):
@@ -2991,8 +2998,15 @@ def cmd_decide(argv):
         else:
             sys.exit("usage: orch decide add --title T [--body-file F] [--option 'label::description']... [--recommend N] "
                      "[--link URL] | list | done <id> [--answer TEXT] | drop <id> | keep <id>")
+    except store.NotMigrated as e:
+        sys.exit(f"decisions are not in {store.DB_NAME} yet ({e}); orch db cutover-plan 4a lists the steps")
     except (ValueError, OSError) as e:
         sys.exit(str(e))
+
+
+def cmd_db(argv):
+    import store
+    store.main(argv)
 
 
 def cmd_stage(argv):
@@ -3251,6 +3265,7 @@ def cmd_refusal(argv):
 COMMANDS = {"init": cmd_init, "set": cmd_set, "status": cmd_status, "record": cmd_record, "verdict": cmd_verdict,
             "gate": cmd_gate, "dep": cmd_dep, "queue": cmd_queue, "overlap": cmd_overlap, "land": cmd_land, "land-check": cmd_land_check,
             "landed": cmd_landed, "heavy": cmd_heavy, "wait": cmd_wait, "inbox": cmd_inbox, "backfill": cmd_backfill, "decide": cmd_decide,
+            "db": cmd_db,
             "stage": cmd_stage, "board": cmd_board, "brief": cmd_brief, "hold": cmd_hold, "sent": cmd_sent, "refusal": cmd_refusal, "release": lambda argv: cmd_hold(argv, release=True),
             "watch-cards": lambda argv: __import__("card_watch").main(argv),
             "patrol": lambda argv: __import__("patrol").main(argv),

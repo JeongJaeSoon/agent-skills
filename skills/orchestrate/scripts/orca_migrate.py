@@ -5,7 +5,8 @@ linkedPR, its Task) is the record and the doing list keeps only waits no card co
   migrate                 dry-run. Lists the doing lines that name exactly one card (tidy.named, or an owner field that
                           is one card's whole key) and would close, the ones the next tidy tick closes anyway, the ones
                           kept for a step left after the merge, board leads, and open decisions
-  migrate --apply         backs up board.json, tidy.jsonl and decisions.json to <state>/backup-orca-v2-<ts>/
+  migrate --apply         backs up board.json, tidy.jsonl, decisions.json while it is still a file, and
+                          agent-skills.db through `orch db backup`'s copy, to <state>/backup-orca-v2-<ts>/
                           (0700 dir, 0600 files) under the board and tidy locks, then appends a tidy `done` line
                           (by "migrate", rule "moved_to_orca") per listed doing line and writes migrate.json there.
                           A second run finds nothing left and writes nothing. It also prints the same undo as an
@@ -18,6 +19,7 @@ only reported: a running lead started before this version still writes its board
 import contextlib, fcntl, json, os, pathlib, shutil, sys
 
 import board, fleet, tidy
+import store as store_db  # `store` is the board dict below
 
 FILES = ("board.json", "tidy.jsonl", "decisions.json")
 RULE = "moved_to_orca"
@@ -57,7 +59,10 @@ def plan(now=None):
     handles = {t.get("handle") for s in state.get("sessions") or [] for t in s.get("terminals") or []}
     leads = [{"name": n, "handle": l.get("handle"), "in_fleet": l.get("handle") in handles}
              for n, l in store["leads"].items() if not l.get("closed_at")]
-    decisions = [{"id": d.get("id"), "title": d.get("title")} for d in fleet.open_decisions()]
+    try:
+        decisions = [{"id": d.get("id"), "title": d.get("title")} for d in fleet.open_decisions()]
+    except store_db.NotMigrated:
+        decisions = []
     return {"close": close, "tick": tick, "steps": steps, "leads": leads, "decisions": decisions}
 
 
@@ -76,9 +81,11 @@ def backup(now):
     dest.mkdir(mode=0o700)  # applies run under the board lock, so two never take the same microsecond
     os.chmod(dest, 0o700)
     for name in FILES:
-        if (sd / name).exists():
+        if (sd / name).is_file():  # after `orch db import` decisions.json is an empty directory, its data in the DB
             shutil.copyfile(sd / name, dest / name)
             os.chmod(dest / name, 0o600)
+    if store_db.path().is_file():
+        store_db.backup(dest / store_db.DB_NAME)
     return dest
 
 
