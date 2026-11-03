@@ -10,7 +10,7 @@ recorded.
   opens an obligation for this session and agent and adds a reminder to the model's context. PostToolUseFailure opens
   one only when the call held more than one command, since the target may have run before a later one failed.
 - An obligation closes on a record line: `기록: …`, `기록 못 함: <reason>`, `Recorded: …` or `Not recorded: …` at the
-  start of a line with text after it, outside code and quotes. Read from the final reply at Stop, from the body of a
+  start of a line with text after it (emphasis marks alone are not text), outside code blocks and quotes. Read from the final reply at Stop, from the body of a
   `worker_done` sent as the only command of its call (closed when the send succeeded, as of the moment it was
   checked), and from this turn's text when a close command is checked.
 - PreToolUse (Bash) checks, at `guard.record_check`: a `worker_done` whose `--body` has no record line (a body that
@@ -38,8 +38,9 @@ KEY = "guard.record_check"
 STATE_FILE = "record-check.jsonl"
 ROOT = pathlib.Path(os.environ.get("CLAUDE_PLUGIN_ROOT") or pathlib.Path(__file__).resolve().parents[1])
 RECORD_MD = ROOT / "skills" / "end-session" / "references" / "record.md"
-LINE = re.compile(r"^[ \t]*(?:[-*][ \t]+)?(?:\*\*)?(?:기록[ \t]*못[ \t]*함|기록|not recorded|recorded)(?:\*\*)?[ \t]*[:：]"
-                  r"[ \t]*(?:\*\*)?[ \t]*[^\s*]", re.I | re.M)
+LINE = re.compile(r"^[ \t]*(?:[-*+][ \t]+)?[*_]*(?:기록[ \t]*못[ \t]*함|기록|not recorded|recorded)[*_]*[ \t]*[:：](.*)$",
+                  re.I | re.M)
+EMPHASIS = re.compile(r"[*_~\s]+")
 GH_VALUE_OPTS = {"-R", "--repo", "--hostname"}
 
 
@@ -48,7 +49,12 @@ def now():
 
 
 def has_line(text):
-    return isinstance(text, str) and bool(LINE.search(claim_check.strip(text)))
+    """A record line with content on the same line once emphasis marks are dropped. Fences and quote lines are
+    examples; inline code after the label is content (a ticket key, a note path)."""
+    if not isinstance(text, str):
+        return False
+    text = "\n".join(l for l in claim_check.FENCE.sub(" ", text).splitlines() if not l.lstrip().startswith(">"))
+    return any(EMPHASIS.sub("", m.group(1)) for m in LINE.finditer(text))
 
 
 def target(words):
@@ -117,6 +123,13 @@ def _under(child, parent):
         return False
 
 
+def valid(r):
+    text = lambda k: isinstance(r.get(k), str)
+    maybe = lambda k: r.get(k) is None or text(k)
+    return (isinstance(r, dict) and r.get("event") in ("open", "close", "report", "warn") and text("at")
+            and all(maybe(k) for k in ("session", "agent", "cwd", "kind", "id", "via", "where")))
+
+
 def rows():
     """Every readable row; a damaged line is skipped, not the file."""
     out, bad = [], None
@@ -127,11 +140,12 @@ def rows():
                     continue
                 try:
                     r = json.loads(line)
+                    if not valid(r):
+                        raise ValueError("record-check row of the wrong shape")
                 except ValueError as exc:
                     bad = exc
                     continue
-                if isinstance(r, dict):
-                    out.append(r)
+                out.append(r)
     except OSError:
         pass
     if bad is not None:
@@ -203,15 +217,18 @@ def final_text(event, path):
 
 
 def post_tool(event, cfg, failed):
-    cmds = shell.commands(str((event.get("tool_input") or {}).get("command") or ""))
+    raw = str((event.get("tool_input") or {}).get("command") or "")
+    cmds = shell.commands(raw)
     session, agent, tid = event.get("session_id"), event.get("agent_id") or "", event.get("tool_use_id") or ""
     existing = rows()
-    if not failed and len(cmds) == 1 and is_worker_done(cmds[0].words):
+    # `! cmd` inverts the exit status shell.commands drops: the call's outcome says nothing about the command's.
+    negated = bool(re.match(r"\s*!(\s|$)", raw))
+    if not failed and not negated and len(cmds) == 1 and is_worker_done(cmds[0].words):
         for r in existing:
             if r.get("event") == "report" and r.get("id") == tid and tid:
                 append({"at": r["at"], "event": "close", "session": session, "agent": agent, "via": "worker_done"})
                 break
-    if failed and len(cmds) < 2:
+    if failed and len(cmds) < 2 and not negated:
         return None
     kinds = {k for c in cmds if (k := target(c.words))}
     if not kinds:

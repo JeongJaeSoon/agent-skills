@@ -89,7 +89,7 @@ LATER and DROP one line each, and what was not recorded and why. A bare "done" f
 ## 4. The record line
 
 A report that follows a PR opened, a merge or a land, and every `worker_done` body, carries
-one line at the start of a line, outside code and quotes:
+one line at the start of a line, outside code blocks and quotes:
 
 - `기록: <ticket key and transition> · <note path>`, or `기록: 없음 (<why nothing applies>)`
 - `기록 못 함: <reason>` when a write could not happen: the notes store's tools are not

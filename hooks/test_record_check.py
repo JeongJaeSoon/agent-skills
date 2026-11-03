@@ -95,7 +95,12 @@ check("fenced record line: still warns", "systemMessage" in stop("```\n기록: e
 check("empty record line: still warns", "systemMessage" in stop("기록:   "))
 check("record label with text on the next line: still warns", "systemMessage" in stop("기록:\n다음 작업"))
 check("empty bold record line: still warns", "systemMessage" in stop("**기록:**"))
+check("emphasis-only record line: still warns", "systemMessage" in stop("기록: __"))
 check("bold record line with text: passes", stop("**기록:** ABC-1 completed") == {})
+post("gh pr create --title x --body y", tid="t5")
+check("italic record content: passes", stop("기록: *없음 (문서만 바꿈)*") == {})
+post("gh pr create --title x --body y", tid="t6")
+check("record line of inline code: passes", stop("기록: `ABC-1` · `notes/worklog.md`") == {})
 post("gh pr create --title x --body y", tid="t4")
 
 # deny blocks the stop once; stop_hook_active passes and keeps the obligation.
@@ -175,6 +180,13 @@ pre(ok_body, tid="w4")
 post("gh pr merge 6", tid="m2")
 post(ok_body, tid="w4")
 check("merge after the report was checked: stays open", "systemMessage" in stop("idle"))
+reset()
+post("gh pr merge 5", tid="m1")
+pre("! " + ok_body, tid="w5")
+post("! " + ok_body, tid="w5")
+check("negated worker_done that succeeded: does not close", "systemMessage" in stop("idle"))
+reset()
+check("negated merge that failed: opens", ctx(post("! gh pr merge 3", tid="n1", failed=True), "PostToolUseFailure"))
 
 
 def add_row(row):
@@ -200,6 +212,8 @@ post("gh pr merge 5", tid="m1")
 add_row("x")
 with open(STATE / "record-check.jsonl", "a") as f:
     f.write("{not json\n")
+add_row({"event": "close", "session": "s1", "at": 1})
+add_row({"event": "open", "session": "s1", "agent": "", "at": "2000-01-01T00:00:00.000Z", "cwd": 5})
 check("damaged state line: other obligations still read", "systemMessage" in stop("idle"))
 check("damaged state line: logged", (STATE / "guard-errors.jsonl").exists()
       and "record_check" in (STATE / "guard-errors.jsonl").read_text())
