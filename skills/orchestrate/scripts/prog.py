@@ -1154,9 +1154,9 @@ def gate_rows(events, pr, warn=True):
     return good
 
 
-def gate_resolution(cfg, events, pr):
+def gate_resolution(cfg, events, pr, warn=True):
     """The resolution of the newest landing gate opened for this PR, or None while it is pending."""
-    opened = gate_rows(events, pr)
+    opened = gate_rows(events, pr, warn)
     if not opened:
         return None
     res = orca_json("orchestration", "gate-list", "--task", opened[-1]["task"], "--run", cfg["run"])
@@ -2104,7 +2104,7 @@ def cmd_gate(argv):
         sys.exit("this lead is a dispatched worker, and Orca lets no worker create a Task or gate on the Run it works "
                  "for (worker_cannot_coordinate_own_run), so `orch land` never sees `approved`. Have the orchestrator "
                  "restart this lead as a /goal card (`skills-sync card`, its brief's MERGE line saying human-gate)")
-    if (opened := gate_rows(p.events(), pr)) and gate_resolution(p.cfg, p.events(), pr) is None:
+    if (opened := gate_rows(p.events(), pr)) and gate_resolution(p.cfg, p.events(), pr, warn=False) is None:
         gid = opened[-1]["gate"]
         sys.exit(f"a gate for #{pr} is already open; the user resolves it in Orca"
                  f" (or: orca orchestration gate-resolve --id {gid} --resolution land|hold)")
@@ -2134,9 +2134,10 @@ def cmd_gate(argv):
             sys.exit(f"orca gate-create returned no gate id: {json.dumps(gate)[:400]}")
     except SystemExit as e:
         # Unrecorded, the gate-less Task would sit in task-list --ready for good; the next `orch gate` makes a new one.
-        run(["orca", "orchestration", "task-update", "--id", task_id, "--status", "failed",
-             "--run", p.cfg["run"], "--json"], check=False)
-        sys.exit(f"{e}. No gate recorded; Task {task_id} marked failed")
+        r = run(["orca", "orchestration", "task-update", "--id", task_id, "--status", "failed",
+                 "--run", p.cfg["run"], "--json"], check=False)
+        closed = "marked failed" if r.returncode == 0 else f"left open, task-update failed ({r.returncode}); close it in Orca"
+        sys.exit(f"{e}. No gate recorded; Task {task_id} {closed}")
     print(json.dumps(p.append("gate_opened", pr=pr, task=task_id, gate=gate_id), ensure_ascii=False))
     print(f"the user resolves it in Orca (or: orca orchestration gate-resolve --id {gate_id} --resolution land)")
 

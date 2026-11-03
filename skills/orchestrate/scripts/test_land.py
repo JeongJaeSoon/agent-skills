@@ -644,7 +644,8 @@ assert code != 0 and "Traceback" not in out and not [e for e in ledger(d) if e["
 assert [c[c.index("--status") + 1] for c in orca_calls(d, "task-update")] == ["failed"], orca_calls(d, "task-update")
 d, env = gate_setup({"64": pr(64)}, orca_reply={"gate_error": {"code": "boom"}})
 code, out = prog(env, "gate", "t", "--pr", "64")
-assert code != 0 and "boom" in out and "Traceback" not in out and not [e for e in ledger(d) if e["ev"] == "gate_opened"], out
+assert code != 0 and "boom" in out and "marked failed" in out and "Traceback" not in out, out
+assert not [e for e in ledger(d) if e["ev"] == "gate_opened"]
 assert [c[c.index("--status") + 1] for c in orca_calls(d, "task-update")] == ["failed"], orca_calls(d, "task-update")
 
 # A gate_opened row naming no task or gate is no gate: land-check warns once and asks for a gate, and orch gate opens one.
@@ -659,6 +660,10 @@ code, out = prog(env, "gate", "t", "--pr", "65")
 assert code == 0 and [e for e in ledger(d) if e["ev"] == "gate_opened"][-1]["gate"] == "gate_g", out
 code, out = prog(env, "land-check", "t", "--pr", "65")
 assert "gate open in Orca, waiting for the user" in out and "Traceback" not in out, out
+assert sum(l.startswith("warning:") and "gate_opened" in l for l in out.splitlines()) == 1, out
+code, out = prog(env, "gate", "t", "--pr", "65")
+assert code != 0 and "already open" in out and "gate_g" in out, out
+assert sum(l.startswith("warning:") and "gate_opened" in l for l in out.splitlines()) == 1, out
 
 # land-check on a PR view without its state holds with one warning line, never READY and never a traceback.
 d, env = gate_setup({"66": dict(pr(66), drop=["state"])})
