@@ -25,6 +25,7 @@ import orca_settings  # noqa: E402  Orca's concise/full answers and worker rows 
 PROGRAMS = pathlib.Path(os.environ.get("PROGRAMS_HOME", "~/.claude/programs")).expanduser()
 GONE = re.compile(r"stale|not_found|not found", re.I)
 INBOX = re.compile(r"(?:\borch|prog\.py)\s+(?:wait\b|inbox\b.*--wait\b)")
+WAIT_SLUG = re.compile(r"(?:\borch|prog\.py)\s+wait\s+([^\s'\"]+)")
 CARDS = re.compile(r"(?:\borch|prog\.py)\s+watch-cards\b(?!.*--once)")
 ACTIVE_QUEUE = ("waiting", "retrying", "failed", "gave_up")
 
@@ -148,8 +149,9 @@ def check_run(role, run, handle, call):
                 mine.get("runId"), mine.get("dispatchId")
     target = run or "<the Run your briefs report to>"
     why = f"bound to Run {bound_id}, not {run}" if bound_id else "this terminal is bound to no Run"
+    # No worker check against a Run this terminal should not hold: run the check again once bound.
     return [("do", f"{why}: `orca orchestration run-use --id {target}`, then `orca orchestration run-current --json` "
-                   "to confirm")], bound_id, None
+                   "to confirm, and run this check again for the workers")], None, None
 
 
 def check_tab(role, terminal, handle):
@@ -167,13 +169,20 @@ def check_waits(role, slug, table, pid):
     inbox, cards = waits(table, root)
     out = []
     start = f"orch wait {slug}" if role == "lead" else "orch inbox --wait"
-    if len(inbox) > 1:
-        out.append(("do", f"{len(inbox)} inbox waits run where one should: stop "
-                          + ", ".join(f"pid {p}" for p, _ in inbox[1:])
+    # A lead's one wait is `orch wait <its slug>`; any other inbox watcher in its session is a wrong one.
+    wrong = [(p, c) for p, c in inbox if role == "lead" and (WAIT_SLUG.findall(c) or [None])[0] != slug]
+    right = [w for w in inbox if w not in wrong]
+    if wrong:
+        then = "" if right else f", then start `{start}` under run_in_background"
+        out.append(("do", f"an inbox wait other than `{start}` runs: stop "
+                          + ", ".join(f"pid {p}" for p, _ in wrong) + f" with TaskStop{then}"))
+    if len(right) > 1:
+        out.append(("do", f"{len(right)} inbox waits run where one should: stop "
+                          + ", ".join(f"pid {p}" for p, _ in right[1:])
                           + " with TaskStop on the background task that started it"))
-    elif inbox:
+    elif right:
         out.append(("ok", "1 inbox wait running"))
-    elif role:
+    elif role and not wrong:
         out.append(("do", f"no inbox wait runs: start `{start}` under run_in_background"))
     if len(cards) > 1:
         out.append(("do", f"{len(cards)} `orch watch-cards` run: stop all but one with TaskStop ("
@@ -191,7 +200,10 @@ def check_workers(run, call, lead_dispatch=None, me=None):
     if not run:
         return []
     out = []
-    for w in orca_settings.lead_scope(orca_settings.all_workers(call, "--run", run), lead_dispatch):
+    workers = orca_settings.lead_scope(orca_settings.all_workers(call, "--run", run), lead_dispatch)
+    by_task = {w.get("taskId"): w for w in workers if w.get("taskId")}
+    own_task = next((w.get("taskId") for w in workers if w.get("dispatchId") == lead_dispatch), None)
+    for w in workers:
         h = orca_settings.worker_terminal(w)
         if w.get("terminalState") != "active" or not h or h == me:
             continue
@@ -203,16 +215,21 @@ def check_workers(run, call, lead_dispatch=None, me=None):
                 raise
         d = w.get("dispatchId") or "<dispatch>"
         task = w.get("taskId") or "<task>"
+        parent = by_task.get(((w.get("projection") or {}).get("parent") or {}).get("taskId"))
+        if parent and parent.get("taskId") != own_task:  # a unit under another lead is that lead's to restart
+            out.append(("do", f"worker {d} (task {task}) lost its terminal {h}; it sits under {parent.get('dispatchId')}: "
+                              "send that lead this line, and it restarts its own worker"))
+            continue
         card = (w.get("resource") or {}).get("worktreeId") or "<its worktree>"
         provider = (w.get("projection") or {}).get("provider") or {}
-        agent = provider.get("id") or "<agent>"
         # A retry inherits neither placement nor model, so both are named again.
-        model = (f" --model {provider['model']}`" if provider.get("model") else
-                 "` (Orca recorded no model: add `--model <id>` when the worker ran one, from its brief or the "
-                 "program note)")
+        argv = ["orca", "orchestration", "worker-start", "--retry-of", d, "--task", task, "--worktree", f"id:{card}",
+                "--agent", provider.get("id") or "<agent>"] + (["--model", provider["model"]] if provider.get("model") else [])
+        note = "" if provider.get("model") else (" (Orca recorded no model: add `--model <id>` when the worker ran one, "
+                                                 "from its brief or the program note)")
         out.append(("do", f"worker {d} (task {task}) lost its terminal {h}: restart it on its card, "
-                          f"`orca orchestration worker-stop --dispatch {d}`, then `orca orchestration worker-start "
-                          f"--retry-of {d} --task {task} --worktree id:{card} --agent {agent}{model}"))
+                          f"`{shlex.join(['orca', 'orchestration', 'worker-stop', '--dispatch', d])}`, then "
+                          f"`{shlex.join(argv)}`{note}"))
     if not out:
         out.append(("ok", f"every active worker{' under ' + lead_dispatch if lead_dispatch else ''} of Run {run} "
                           "has a live terminal"))
@@ -232,7 +249,7 @@ def check_queue(root, read=None):
         head = f"pressure queue {e['id']} ({e['what']}) {e['state']}"
         if e["state"] == "waiting":
             out.append(("do", f"{head}: watch `python3 {shlex.quote(str(PRESSURE))} queue wait {e['id']}` with "
-                              "Monitor again, and run the same command when it exits 0"))
+                              f"Monitor again; once it exits 0, run the held command again: `{e.get('command')}`"))
         elif e["state"] == "gave_up":
             out.append(("do", f"{head}: its deadline passed before it ran; your brief's rule for a held start "
                               "decides, otherwise report it"))

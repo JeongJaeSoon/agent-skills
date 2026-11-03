@@ -41,7 +41,10 @@ class Orca:
         if argv[:2] == ("orchestration", "run-current"):
             return {"run": {"id": self.run} if self.run else None}
         if argv[:2] == ("orchestration", "worker-list"):
-            return {"workers": self.workers}
+            state = argv[argv.index("--terminal-state") + 1] if "--terminal-state" in argv else None
+            run = argv[argv.index("--run") + 1] if "--run" in argv else None
+            return {"workers": [w for w in self.workers if (not state or w.get("terminalState") == state)
+                                and (not run or w.get("runId", run) == run)]}
         raise AssertionError(f"unexpected orca call {argv}")
 
 
@@ -99,6 +102,19 @@ class Waits(unittest.TestCase):
         self.assertEqual(len(out), 1)
         self.assertIn("no `orch watch-cards`", out[0])
 
+    def test_a_lead_waiting_on_another_program_is_told_to_replace_it(self):
+        out = does(run("lead", "acme", "run_1", orca=Orca(run="run_1"), procs=wait_proc(200, "orch wait other")))
+        self.assertEqual(len(out), 1)
+        self.assertIn("stop pid 201", out[0])
+        self.assertIn("then start `orch wait acme`", out[0])
+
+    def test_a_lead_with_its_own_wait_and_a_stray_one_stops_only_the_stray(self):
+        procs = wait_proc(200, "orch wait acme") + wait_proc(300, "orch inbox --wait")
+        out = does(run("lead", "acme", "run_1", orca=Orca(run="run_1"), procs=procs))
+        self.assertEqual(len(out), 1)
+        self.assertIn("stop pid 301", out[0])
+        self.assertNotIn("then start", out[0])
+
     def test_a_worker_is_not_asked_to_wait(self):
         self.assertEqual(does(run()), [])
 
@@ -137,9 +153,14 @@ class Run(unittest.TestCase):
         self.assertEqual(len(out), 1)
         self.assertIn("run-use --id run_9", out[0])
 
-    def test_bound_to_another_run(self):
-        out = does(run("lead", "acme", "run_9", orca=Orca(run="run_1"), procs=wait_proc(200, "orch wait acme")))
+    def test_bound_to_another_run_checks_no_workers_there(self):
+        workers = [{"dispatchId": "d_other", "taskId": "t", "runId": "run_1", "terminalState": "active",
+                    "agentTerminalHandle": "term_dead"}]
+        out = does(run("lead", "acme", "run_9", orca=Orca(run="run_1", workers=workers),
+                       procs=wait_proc(200, "orch wait acme")))
+        self.assertEqual(len(out), 1)
         self.assertIn("bound to Run run_1, not run_9", out[0])
+        self.assertIn("run this check again", out[0])
 
 
 class Workers(unittest.TestCase):
@@ -155,6 +176,23 @@ class Workers(unittest.TestCase):
         self.assertIn("--retry-of d1 --task t1 --worktree id:repo::/work/card --agent claude`", out[0])
         self.assertIn("add `--model <id>`", out[0])  # a retry does not inherit the model
 
+    def test_a_card_path_with_a_space_stays_one_argument(self):
+        workers = [{"dispatchId": "d1", "taskId": "t1", "terminalState": "active", "agentTerminalHandle": "term_dead",
+                    "resource": {"worktreeId": "repo::/work/My Project"}, "projection": {"provider": {"id": "claude"}}}]
+        out = does(run("lead", "acme", "run_1", orca=Orca(run="run_1", workers=workers),
+                       procs=wait_proc(200, "orch wait acme")))
+        self.assertIn("--worktree 'id:repo::/work/My Project'", out[0])
+
+    def test_the_orchestrator_routes_a_leads_worker_to_that_lead(self):
+        workers = [{"dispatchId": "d_lead", "taskId": "t_lead", "terminalState": "active", "agentTerminalHandle": "term_lead"},
+                   {"dispatchId": "d_kid", "taskId": "t_kid", "terminalState": "active", "agentTerminalHandle": "term_dead",
+                    "projection": {"parent": {"taskId": "t_lead"}}}]
+        procs = wait_proc(200, "orch inbox --wait") + wait_proc(300, "orch watch-cards")
+        out = does(run("top", run_id="run_1", orca=Orca(live=(ME, "term_lead"), run="run_1", workers=workers), procs=procs))
+        self.assertEqual(len(out), 1)
+        self.assertIn("sits under d_lead", out[0])
+        self.assertNotIn("worker-stop", out[0])
+
     def test_the_recorded_model_is_named_again(self):
         workers = [{"dispatchId": "d1", "taskId": "t1", "terminalState": "active", "agentTerminalHandle": "term_dead",
                     "projection": {"provider": {"id": "claude", "model": "claude-opus-5-5"}}}]
@@ -166,17 +204,20 @@ class Workers(unittest.TestCase):
         def row(d, task, handle, parent):
             return {"dispatchId": d, "taskId": task, "runId": "run_p", "terminalState": "active",
                     "agentTerminalHandle": handle, "projection": {"parent": {"taskId": parent}}}
-        workers = [row("d_lead", "t_lead", ME, "t_coord"),
-                   row("d_mine", "t_mine", "term_dead1", "t_lead"),
-                   row("d_other", "t_other", "term_dead2", "t_coord")]
-        out = does(run("lead", "acme", orca=Orca(run=None, workers=workers), procs=wait_proc(200, "orch wait acme")))
-        self.assertEqual(len(out), 1)  # no run-use, and the coordinator's other worker is not this lead's
-        self.assertIn("worker d_mine", out[0])
+        for lead_state in ("active", "retained"):  # retained: a person typed into the lead's terminal
+            workers = [dict(row("d_lead", "t_lead", ME, "t_coord"), terminalState=lead_state),
+                       row("d_mine", "t_mine", "term_dead1", "t_lead"),
+                       row("d_other", "t_other", "term_dead2", "t_coord")]
+            out = does(run("lead", "acme", orca=Orca(run=None, workers=workers), procs=wait_proc(200, "orch wait acme")))
+            self.assertEqual(len(out), 1, lead_state)  # no run-use, and the coordinator's other worker is not ours
+            self.assertIn("worker d_mine", out[0])
+            self.assertIn("worker-stop", out[0])
 
 
 class Queue(unittest.TestCase):
     def test_entries_of_this_worktree_only(self):
-        q = {"q-1": {"id": "q-1", "cwd": ROOT + "/sub", "state": "waiting", "what": "orch heavy", "added": 1},
+        q = {"q-1": {"id": "q-1", "cwd": ROOT + "/sub", "state": "waiting", "what": "orch heavy", "added": 1,
+                     "command": "orch heavy acme -- make test"},
              "q-2": {"id": "q-2", "cwd": "/work/app-other", "state": "waiting", "what": "x", "added": 2},
              "q-3": {"id": "q-3", "cwd": ROOT, "state": "done", "what": "y", "added": 3},
              "q-4": {"id": "q-4", "cwd": ROOT, "state": "gave_up", "what": "docker compose up", "added": 4},
@@ -185,6 +226,7 @@ class Queue(unittest.TestCase):
         out = does(run(queue=q))
         self.assertEqual(len(out), 4)
         self.assertIn(f"python3 {reboot.PRESSURE} queue wait q-1", out[0])
+        self.assertIn("run the held command again: `orch heavy acme -- make test`", out[0])
         self.assertIn("deadline passed", out[1])
         for line in out[2:]:  # the retry was started: no wait, the result first
             self.assertNotIn("queue wait", line)
