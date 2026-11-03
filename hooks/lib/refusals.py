@@ -49,6 +49,7 @@ MISSING = "no"  # an `acts` note about the tool input itself, not a shape it can
 PR_URL = re.compile(r"https?://([^/\s]+)/([\w.-]+)/([\w.-]+)/pull/(\d+)")
 REMOTE = re.compile(r"(?:^[\w+.-]+://(?:[^@/]+@)?|^[^@/:]+@|^)([^/:]+)[:/]+([\w.-]+)/([\w.-]+?)(?:\.git)?/?$")
 API_MERGE = re.compile(r"^/?repos/([\w.-]+)/([\w.-]+)/pulls/(\d+)/merge$")
+HOME_VAR = re.compile(r"\$\{HOME\}|\$HOME(?!\w)")
 PUSH_VALUED = {"-o", "--push-option", "--repo", "--receive-pack", "--exec"}
 
 # Every lookup a hook makes shares one deadline (set_deadline), so the hook ends before Claude Code's timeout.
@@ -139,7 +140,7 @@ def remote_repo(remote, cwd, push=False):
     if "/" in remote or ":" in remote:
         url = remote
     else:
-        url = git(["remote", "get-url", *(["--push"] if push else []), remote], cwd)
+        url = git(["remote", "get-url", *(["--push", "--all"] if push else []), remote], cwd)
         if "\n" in url:
             raise Unknown("remote with several push URLs")
     key = repo_key(url)
@@ -195,7 +196,7 @@ def known(here):
 def full_path(word, here):
     """The absolute path a word names: a leading `~` and $HOME expanded, a quoted `$` or `~` kept as written. Unknown
     when bash would expand any other part (a variable, a glob)."""
-    word = word.replace("${HOME}", "~").replace("$HOME", "~")
+    word = HOME_VAR.sub("~", word)
     if "$" in word or set(word) & set("*?[") or "~" in word[1:]:
         raise Unknown("expanded path")
     word = os.path.expanduser(word).replace(shell.TEXT_DOLLAR, "$").replace(shell.TEXT_TILDE, "~")
@@ -223,10 +224,23 @@ def changed_dir(c, here):
 def deleted(word, here):
     """A deleted path's key: its real parent joined with its own name, so deleting a symlink is not deleting its
     target."""
-    p = os.path.normpath(full_path(word, here))
-    if p == "/":
-        return "/"
-    return os.path.join(os.path.realpath(os.path.dirname(p)), os.path.basename(p))
+    # No normpath first: `link/../x` goes through the link, so `..` is resolved by realpath on the real parent.
+    p = full_path(word, here).rstrip("/") or "/"
+    name = os.path.basename(p)
+    if name in ("", ".", ".."):
+        return os.path.realpath(p)
+    return os.path.join(os.path.realpath(os.path.dirname(p)), name)
+
+
+def each_deleted(words, here, unknown):
+    """[("delete", key)] for each path word; a word that cannot be read goes to `unknown` and the rest still count."""
+    out = []
+    for x in words:
+        try:
+            out.append(("delete", deleted(x, here)))
+        except Unknown as e:
+            unknown.append(f"{e}")
+    return out
 
 
 def pr_target(arg, repo, cwd):
@@ -261,10 +275,10 @@ def git_dir(w, here):
     return None, [], here
 
 
-def git_acts(w, here):
+def git_acts(w, here, unknown):
     sub, rest, here = git_dir(w, here)
     if sub == "worktree" and rest[:1] in (["remove"], ["rm"]):
-        return [("delete", deleted(x, here)) for x in operands(rest[1:])]
+        return each_deleted(operands(rest[1:]), here, unknown)
     if sub == "reset" and "--hard" in rest:
         return [("reset-hard", os.path.realpath(git(["rev-parse", "--show-toplevel"], known(here))))]
     if sub != "push" or any(x in ("-n", "--dry-run") for x in rest):
@@ -351,9 +365,9 @@ def bash_acts(cmd, cwd):
             continue
         try:
             if c.name == "rm":
-                out += [("delete", deleted(x, here)) for x in operands(w[1:])]
+                out += each_deleted(operands(w[1:]), here, unknown)
             elif c.name == "git":
-                out += git_acts(w, here)
+                out += git_acts(w, here, unknown)
             elif c.name == "gh":
                 out += gh_acts(w, here)
             elif c.name == "orca" and w[1:3] in (["worktree", "rm"], ["worktree", "remove"]):

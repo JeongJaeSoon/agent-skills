@@ -179,6 +179,15 @@ for cmd in ("rm -rf '$literal'/$DIR/x", "rm -rf '~'/*", 'git -C "$DIR" worktree 
             "echo `cd /tmp; rm a` `rm b`", "pushd /tmp && rm b"):
     assert shape(cmd)[0] == [] and shape(cmd)[1], cmd
 assert shape(f"cd '{TMP}/$literal'; rm victim")[0] == [("delete", f"{TMP}/$literal/victim")]
+# An unreadable operand leaves the readable ones in; only `$HOME` itself is the home directory.
+found, unknown = shape(f'rm {TMP}/refused "$DIR"')
+assert found == [("delete", f"{TMP}/refused")] and unknown
+assert shape("rm $HOME_BACKUP/victim")[0] == []
+assert shape("rm $HOME/victim")[0] == [("delete", os.path.join(os.path.realpath(pathlib.Path.home()), "victim"))]
+# `..` after a symlink is resolved through it, as the kernel does.
+(TMP / "physical" / "nested").mkdir(parents=True)
+(TMP / "via").symlink_to(TMP / "physical" / "nested")
+assert shape(f"rm -rf {TMP}/via/../victim")[0] == [("delete", f"{TMP}/physical/victim")]
 
 # 4b. git push follows the push URL and a remote's own push refspecs; gh api reads attached option forms.
 repo = TMP / "repo"
@@ -190,6 +199,9 @@ subprocess.run(["git", "remote", "set-url", "--push", "origin", "https://github.
 assert shape("git push --force origin topic", repo)[0] == [("force-push", "github.com/acme/fork:topic")]
 subprocess.run(["git", "config", "remote.origin.push", "HEAD:deploy"], cwd=repo, check=True)
 assert shape("git push --force", repo)[0] == [] and shape("git push --force", repo)[1]
+subprocess.run(["git", "remote", "set-url", "--add", "--push", "origin", "https://github.com/acme/app.git"], cwd=repo,
+               check=True)
+assert shape("git push --force origin topic", repo)[0] == [] and shape("git push --force origin topic", repo)[1]
 assert shape("gh api -XPUT repos/acme/app/pulls/12/merge")[0] == [("merge", "github.com/acme/app#12")]
 assert shape("gh api --input=body.json repos/acme/app/pulls/12/merge")[0] == [("merge", "github.com/acme/app#12")]
 assert shape("gh api -XGET repos/acme/app/pulls/12/merge")[0] == []
