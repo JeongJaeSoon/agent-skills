@@ -17,16 +17,18 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/reboot.py" --top           # the orchestrat
 python3 "${CLAUDE_SKILL_DIR}/scripts/reboot.py"                 # a worker or a plain session
 ```
 
+The orchestrator's own turn may not run it (the plugin's delegate gate allows only coordination commands there), so the orchestrator hands the `--top` line to a foreground subagent that returns its output unchanged; a subagent runs inside the same session process, so it counts the same waits.
+
 It only reads: Orca's terminal, Run and worker records, this session's process tree, the pressure queue. It prints one line per finding, `ok`, `info`, or `do` with the command to run. Exit 0: nothing to put back. Exit 1: run each `do` line in the order printed, each in its own call. Exit 2: Orca did not answer; once the Orca app is up, run the check again, and report a second exit 2.
 
 ## 2. What the `do` lines put back
 
 - **A stale handle.** Orca restarted under this session, so `ORCA_TERMINAL_HANDLE` names a terminal Orca no longer knows, and a message sent from it is refused. The line lists the live terminals of this worktree. Name the one this session runs in with `--from` or `--terminal` on every `orca` call, or start the session again in it with `claude --continue`. Until then the check skips the Run and worker checks.
-- **The Run binding:** `orchestrate` `references/top-level.md` "Your Run" for the orchestrator, `orchestrate` "Resume" step 2 for a lead.
+- **The Run binding:** `orchestrate` `references/top-level.md` "Your Run" for the orchestrator, `orchestrate` "Resume" step 2 for a lead. A lead started as a dispatched worker binds nothing; the check then reads its Run from its own Dispatch and checks only the workers under it.
 - **The tab title,** the orchestrator's only (`references/top-level.md`, its opening paragraph).
 - **Waits,** counted against `orchestrate` core rule 6. Start a missing one under `run_in_background`. Stop an extra one with `TaskStop` on the background task that started it; the pids in the line only tell them apart.
-- **A worker that lost its terminal.** The line prints the stop and retry pair from `orchestrate` Drain (the `outcome_unknown` line). When Orca refuses the retry, follow `orca skills get orchestration --reference recovery-and-cleanup`.
-- **A held heavy start.** A `waiting` entry needs its Monitor on `queue wait` again (`reap-resources` "Pressure"). A `failed` or `gave_up` entry never ran: its brief's rule for a held start decides, otherwise report it to whoever gave the work.
+- **A worker that lost its terminal.** The line prints the stop and retry pair from `orchestrate` Drain (the `outcome_unknown` line), with the model Orca recorded; when it recorded none, the line says where to find it. When Orca refuses the retry, follow `orca skills get orchestration --reference recovery-and-cleanup`.
+- **A held heavy start** (`reap-resources` "Pressure"). `waiting`: its Monitor on `queue wait` again. `gave_up`: it never ran, and its brief's rule for a held start decides, otherwise report it to whoever gave the work. `retrying` or `failed`: the retry was started, so find its result before running anything again.
 
 ## 3. What the check cannot see
 

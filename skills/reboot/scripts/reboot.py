@@ -13,10 +13,12 @@ Usage:
 One line per finding: `ok …`, `info …`, or `do …` with the command to run. Nothing is started, stopped or changed.
 Exit 0 when no line says `do`, 1 when one does, 2 when Orca did not answer.
 """
-import json, os, pathlib, re, subprocess, sys
+import json, os, pathlib, re, shlex, subprocess, sys
 
+sys.dont_write_bytecode = True  # read-only: importing the shared helpers must not write __pycache__ either
 HERE = pathlib.Path(__file__).resolve().parent
 SKILLS = HERE.parents[1]
+PRESSURE = SKILLS / "reap-resources" / "scripts" / "pressure.py"
 sys.path.insert(0, str(SKILLS / "orchestrate" / "scripts"))
 import orca_settings  # noqa: E402  Orca's concise/full answers and worker rows are read there, once for every script
 
@@ -129,20 +131,25 @@ def check_handle(handle, call, root):
 
 
 def check_run(role, run, handle, call):
-    """(lines, the Run this terminal is bound to or None)."""
-    if not role:
-        return [], None
-    if not handle:
-        return [], None
+    """(lines, the Run whose workers to check or None, this terminal's own Dispatch when it is a dispatched lead)."""
+    if not role or not handle:
+        return [], None, None
     bound = orca_settings.with_full(call, "orchestration", "run-current", "--from", handle).get("run")
     bound_id = bound.get("id") if isinstance(bound, dict) else bound
     if bound_id and (not run or bound_id == run):
-        return [("ok", f"bound to Run {bound_id}")], bound_id
+        return [("ok", f"bound to Run {bound_id}")], bound_id, None
+    if not bound_id and role == "lead":
+        # retained too: a dispatch whose terminal a person typed into is retained, and is still this lead's
+        mine = next((w for state in ("active", "retained")
+                     for w in orca_settings.all_workers(call, "--terminal-state", state)
+                     if orca_settings.worker_terminal(w) == handle), None)
+        if mine:  # a lead started as a dispatched worker: Orca refuses it a binding to the Run it works for
+            return [("ok", f"dispatched lead ({mine.get('dispatchId')} on Run {mine.get('runId')}): binds no Run")], \
+                mine.get("runId"), mine.get("dispatchId")
     target = run or "<the Run your briefs report to>"
     why = f"bound to Run {bound_id}, not {run}" if bound_id else "this terminal is bound to no Run"
-    hint = "" if run else "; a lead started as a dispatched worker binds nothing, and `orch doctor` names its Run"
     return [("do", f"{why}: `orca orchestration run-use --id {target}`, then `orca orchestration run-current --json` "
-                   f"to confirm{hint}")], bound_id
+                   "to confirm")], bound_id, None
 
 
 def check_tab(role, terminal, handle):
@@ -180,13 +187,13 @@ def check_waits(role, slug, table, pid):
     return out
 
 
-def check_workers(run, call):
+def check_workers(run, call, lead_dispatch=None, me=None):
     if not run:
         return []
     out = []
-    for w in orca_settings.all_workers(call, "--run", run):
+    for w in orca_settings.lead_scope(orca_settings.all_workers(call, "--run", run), lead_dispatch):
         h = orca_settings.worker_terminal(w)
-        if w.get("terminalState") != "active" or not h:
+        if w.get("terminalState") != "active" or not h or h == me:
             continue
         try:
             call("terminal", "show", "--terminal", h)
@@ -197,12 +204,18 @@ def check_workers(run, call):
         d = w.get("dispatchId") or "<dispatch>"
         task = w.get("taskId") or "<task>"
         card = (w.get("resource") or {}).get("worktreeId") or "<its worktree>"
-        agent = ((w.get("projection") or {}).get("provider") or {}).get("id") or "<agent>"
+        provider = (w.get("projection") or {}).get("provider") or {}
+        agent = provider.get("id") or "<agent>"
+        # A retry inherits neither placement nor model, so both are named again.
+        model = (f" --model {provider['model']}`" if provider.get("model") else
+                 "` (Orca recorded no model: add `--model <id>` when the worker ran one, from its brief or the "
+                 "program note)")
         out.append(("do", f"worker {d} (task {task}) lost its terminal {h}: restart it on its card, "
                           f"`orca orchestration worker-stop --dispatch {d}`, then `orca orchestration worker-start "
-                          f"--retry-of {d} --task {task} --worktree id:{card} --agent {agent}`"))
+                          f"--retry-of {d} --task {task} --worktree id:{card} --agent {agent}{model}"))
     if not out:
-        out.append(("ok", f"every active worker of Run {run} has a live terminal"))
+        out.append(("ok", f"every active worker{' under ' + lead_dispatch if lead_dispatch else ''} of Run {run} "
+                          "has a live terminal"))
     return out
 
 
@@ -216,24 +229,28 @@ def check_queue(root, read=None):
         cwd = e.get("cwd") or ""
         if e.get("state") not in ACTIVE_QUEUE or not (cwd == root or cwd.startswith(root.rstrip("/") + "/")):
             continue
-        if e["state"] in ("waiting", "retrying"):
-            out.append(("do", f"pressure queue {e['id']} ({e['what']}) {e['state']}: watch "
-                              f"`pressure.py queue wait {e['id']}` with Monitor again, and run the same command when it exits 0"))
-        else:
-            out.append(("do", f"pressure queue {e['id']} ({e['what']}) {e['state']}: that start never ran; "
-                              "follow your brief's rule for a held start, or report it"))
+        head = f"pressure queue {e['id']} ({e['what']}) {e['state']}"
+        if e["state"] == "waiting":
+            out.append(("do", f"{head}: watch `python3 {shlex.quote(str(PRESSURE))} queue wait {e['id']}` with "
+                              "Monitor again, and run the same command when it exits 0"))
+        elif e["state"] == "gave_up":
+            out.append(("do", f"{head}: its deadline passed before it ran; your brief's rule for a held start "
+                              "decides, otherwise report it"))
+        else:  # retrying or failed: the retry was started, so its result comes first
+            out.append(("do", f"{head}: its retry was started; find that command's result (its output, "
+                              f"`python3 {shlex.quote(str(PRESSURE))} queue` for the error) before running it again"))
     return out
 
 
 def run_checks(role, slug, run, handle, cwd, call=orca, table=None, pid=None, queue=None):
     root = worktree_root(cwd)
     lines, terminal, live = check_handle(handle, call, root)
-    run_lines, bound = check_run(role, run or (program_run(slug) if slug else None), live, call)
+    run_lines, bound, lead_dispatch = check_run(role, run or (program_run(slug) if slug else None), live, call)
     lines += run_lines
     lines += check_tab(role, terminal, live)
     lines += check_waits(role, slug, ps_table() if table is None else table, os.getpid() if pid is None else pid)
     if live:
-        lines += check_workers(bound, call)
+        lines += check_workers(bound, call, lead_dispatch, live)
     lines += check_queue(root, queue)
     return lines
 

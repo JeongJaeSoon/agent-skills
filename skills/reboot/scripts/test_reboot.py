@@ -152,7 +152,26 @@ class Workers(unittest.TestCase):
         out = does(run("lead", "acme", "run_1", orca=orca, procs=wait_proc(200, "orch wait acme")))
         self.assertEqual(len(out), 1)
         self.assertIn("worker d1", out[0])
-        self.assertIn("--retry-of d1 --task t1 --worktree id:repo::/work/card --agent claude", out[0])
+        self.assertIn("--retry-of d1 --task t1 --worktree id:repo::/work/card --agent claude`", out[0])
+        self.assertIn("add `--model <id>`", out[0])  # a retry does not inherit the model
+
+    def test_the_recorded_model_is_named_again(self):
+        workers = [{"dispatchId": "d1", "taskId": "t1", "terminalState": "active", "agentTerminalHandle": "term_dead",
+                    "projection": {"provider": {"id": "claude", "model": "claude-opus-5-5"}}}]
+        out = does(run("lead", "acme", "run_1", orca=Orca(run="run_1", workers=workers),
+                       procs=wait_proc(200, "orch wait acme")))
+        self.assertIn("--agent claude --model claude-opus-5-5`", out[0])
+
+    def test_dispatched_lead_binds_nothing_and_checks_only_its_own_workers(self):
+        def row(d, task, handle, parent):
+            return {"dispatchId": d, "taskId": task, "runId": "run_p", "terminalState": "active",
+                    "agentTerminalHandle": handle, "projection": {"parent": {"taskId": parent}}}
+        workers = [row("d_lead", "t_lead", ME, "t_coord"),
+                   row("d_mine", "t_mine", "term_dead1", "t_lead"),
+                   row("d_other", "t_other", "term_dead2", "t_coord")]
+        out = does(run("lead", "acme", orca=Orca(run=None, workers=workers), procs=wait_proc(200, "orch wait acme")))
+        self.assertEqual(len(out), 1)  # no run-use, and the coordinator's other worker is not this lead's
+        self.assertIn("worker d_mine", out[0])
 
 
 class Queue(unittest.TestCase):
@@ -160,12 +179,16 @@ class Queue(unittest.TestCase):
         q = {"q-1": {"id": "q-1", "cwd": ROOT + "/sub", "state": "waiting", "what": "orch heavy", "added": 1},
              "q-2": {"id": "q-2", "cwd": "/work/app-other", "state": "waiting", "what": "x", "added": 2},
              "q-3": {"id": "q-3", "cwd": ROOT, "state": "done", "what": "y", "added": 3},
-             "q-4": {"id": "q-4", "cwd": ROOT, "state": "gave_up", "what": "docker compose up", "added": 4}}
+             "q-4": {"id": "q-4", "cwd": ROOT, "state": "gave_up", "what": "docker compose up", "added": 4},
+             "q-5": {"id": "q-5", "cwd": ROOT, "state": "retrying", "what": "orch heavy", "added": 5},
+             "q-6": {"id": "q-6", "cwd": ROOT, "state": "failed", "what": "orch heavy", "added": 6}}
         out = does(run(queue=q))
-        self.assertEqual(len(out), 2)
-        self.assertIn("queue wait q-1", out[0])
-        self.assertIn("q-4", out[1])
-        self.assertIn("never ran", out[1])
+        self.assertEqual(len(out), 4)
+        self.assertIn(f"python3 {reboot.PRESSURE} queue wait q-1", out[0])
+        self.assertIn("deadline passed", out[1])
+        for line in out[2:]:  # the retry was started: no wait, the result first
+            self.assertNotIn("queue wait", line)
+            self.assertIn("result", line)
 
 
 class Cli(unittest.TestCase):
