@@ -33,7 +33,8 @@ WORST = ("blocked", "owner", "waiting", "check", "held", "moving")
 OWNER_NAMES = ("오너", "owner")
 COLS = 78
 LIMITS = {"row_min": 90, "pr_warn_min": 30, "pr_stale_min": 120, "state_min": 5, "done_fold_h": 24, "stage_idle_d": 7,
-          "decision_stale_h": 12}  # overridden by the dashboard config's "board" key
+          "decision_stale_h": 12, "subagent_stale_h": fleet.SUBAGENT_STALE_H}  # overridden by the dashboard config's "board" key
+FILLED = ("fleet:", "agent:")  # the ids of rows derived from the fleet (--fill), not written to the board
 DONE_KEEP_S = 7 * 86400  # a finished lead stays this long with its rows, then leaves the board
 HEADER = ["", "리드/Phase", "PR", "진행", "세션"]
 PR_LEGEND = (("❗", "사람이 풀 것"), ("✓", "머지 가능"), ("CI✗", "CI 실패"), ("CI…", "CI 진행"), ("?", "PR 상태 없음"))
@@ -518,13 +519,13 @@ PHASE_ROW = {"working": ("moving", "작업 중"), "idle": ("moving", "턴 종료
              "open": ("held", "에이전트 없음"), "offline": ("held", "세션 꺼짐")}
 
 
-def fleet_rows(state, leads, board_rows, details=None):
+def fleet_rows(state, leads, board_rows, details=None, now=None, stale_s=None):
     """Board rows built from the fleet collector's sessions (state.json), for what nobody wrote to the board: each lead
     session whose terminal no board lead holds, the cards under it, and the cards the orchestrator dispatched
     itself. A lead the board holds gets no row of its own, but its cards hang under its board row. Each card carries its
     current PR (fleet.current_pr; details: prs.json's); a card whose PR a board row already has is left to that row.
-    Returns (rows, order); reported_at is the session's last activity, so a quiet one shows its age like a stale board
-    row."""
+    Then each session's started subagents (subagent_rows). Returns (rows, order); reported_at is the session's last
+    activity, so a quiet one shows its age like a stale board row."""
     state = state or {}
     sessions = state.get("sessions") or []
     held = {l.get("handle"): name for name, l in leads.items()}
@@ -540,7 +541,7 @@ def fleet_rows(state, leads, board_rows, details=None):
     had_pr = {s.get("id") for s in sessions if fleet.pr_candidates(s, by_session)[0]}
     for s in sessions:
         under.setdefault(s.get("parent"), []).append(s)
-    rows, order = {}, []
+    rows, order, lead_row = {}, [], {}  # lead_row: lead session -> the row its cards hang under
 
     def add(rid, s, kind, parent=None, program=None):
         status, nxt = PHASE_ROW.get(s.get("phase"), ("held", s.get("phase") or "—"))
@@ -575,6 +576,7 @@ def fleet_rows(state, leads, board_rows, details=None):
         lid = f"fleet:{lead['id']}"
         if not board_lead:
             add(lid, lead, "lead", program=one_line(lead.get("name") or lid))  # two leads in one repo: a section each
+        lead_row[lead["id"]] = board_lead or lid
         for s in under.get(lead["id"], []):
             if shown(s):
                 add(f"{lid}/{s['id']}", s, "task", board_lead or lid)
@@ -588,7 +590,49 @@ def fleet_rows(state, leads, board_rows, details=None):
             kind.get(s.get("orca_parent")) == "orchestrator" or s.get("report") or s.get("id") in had_pr or s.get("dispatch"))
         if card and kind.get(s.get("parent")) == "orchestrator" and shown(s):
             add(f"fleet:{s['id']}", s, "task")
+    subagent_rows(sessions, {**board_rows, **rows}, rows, order, lead_row, now, stale_s)
     return rows, order
+
+
+def subagent_rows(sessions, every, rows, order, lead_row, now=None, stale_s=None):
+    """A row per started subagent of each session (fleet.attach_subagents put them on the session): under the lead
+    or phase its session's row sits under, else a top-level row of its own (the orchestrator's own subagents, a
+    top-level card's). Its session goes in `host`, never `session` or `linked`, so closing the row or a merge of the
+    session's PR touches no card, and the session's PR is not counted twice. A start with no stop seen for stale_s
+    (board.subagent_stale_h) or under an offline session is ❔, never 🔄. now/stale_s None: the collector's verdict."""
+    row_of = {sid: rid for sid, rid in lead_row.items()}
+    row_of.update({w: rid for rid, r in every.items() for w in (r.get("worktree"), r.get("linked")) if w})
+    row_of.update({r["session"]: rid for rid, r in every.items() if r.get("session")})
+    by_id = {s.get("id"): s for s in sessions}
+
+    def host_row(sid):
+        """The row of the session, else of the nearest session above it that has one (a worker left off the table)."""
+        seen = set()
+        while sid and sid not in seen:
+            if sid in row_of and row_of[sid] in every:
+                return every[row_of[sid]]
+            seen.add(sid)
+            sid = (by_id.get(sid) or {}).get("parent")
+        return None
+    for s in sessions:
+        host = host_row(s.get("id"))
+        parent = host and (host["id"] if host.get("kind") in ("lead", "phase") else host.get("parent"))
+        for a in s.get("subagents") or []:
+            stale = (fleet.subagent_stale(a, s.get("phase"), now, stale_s) if now and stale_s is not None
+                     else a.get("stale"))
+            rid = f"agent:{a.get('agent')}"
+            # The row's age (reported_at, the start) follows the line as for any quiet row, so the reason names none.
+            rows[rid] = {"id": rid, "kind": "task", "subagent": a.get("agent"), "host": s.get("id"),
+                         "title": one_line(a.get("desc") or f"{a.get('type') or ''} 서브에이전트".strip()),
+                         "status": "check" if stale else "moving",
+                         "next": "서브에이전트 작업 중" + (f" ({a['type']})" if a.get("type") else ""),
+                         "why": stale and ("세션 꺼짐, 종료 기록 없음" if s.get("phase") == "offline"
+                                           else "종료 기록 없음"),
+                         "session": None, "pr": None, "reported_at": a.get("started_at"), "parent": parent,
+                         # a row of its own takes its host row's section and program, so a program's report keeps it
+                         "repo": None if parent else (host or {}).get("repo") or s.get("gh_repo") or s.get("project") or "—",
+                         "program": None if parent else (host or {}).get("program")}
+            order.append(rid)
 
 
 def unlisted(state, sessions, rows, store, cards, shut, lead_session, now, state_min, scope="top-level"):
@@ -606,7 +650,8 @@ def unlisted(state, sessions, rows, store, cards, shut, lead_session, now, state
         return f"세션 목록 {ago((now - at).total_seconds()) if at else '시각 없음'} 기준"
     shown, row_prs = set(), {r.get("pr") for r in rows.values()} - {None}
     for r in rows.values():
-        shown |= {r.get("session"), r.get("worktree"), r.get("linked")}
+        # A subagent's row stands for its host session too: that session's work is on the report.
+        shown |= {r.get("session"), r.get("worktree"), r.get("linked"), r.get("host")}
         if r.get("kind") == "lead" and (lead := store["leads"].get(r["id"])):
             shown.add(lead_session(lead))
     shown |= {c["id"] for d in store["doing"] if tidy.item_id("doing", d) not in shut
@@ -720,7 +765,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             r["linked"] = card["id"]
             r["pr"] = fleet.current_pr(card, by_session, prs, extra=[r["pr"]] if r.get("pr") else ())
     if fill:
-        extra, extra_order = fleet_rows(state, store["leads"], store["rows"], prs)
+        extra, extra_order = fleet_rows(state, store["leads"], store["rows"], prs, now,
+                                        float(limits["subagent_stale_h"]) * 3600)
         store["rows"], store["order"] = {**extra, **store["rows"]}, store["order"] + extra_order
     rows = store["rows"]
 
@@ -743,10 +789,12 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
 
     def session_of(r):
         """The worktree a row's work runs in: a fleet row's own, one `board set --worktree` gave, the card the row
-        names, a board lead's; else its parent's, since a phase or task row with none is its lead's work."""
+        names, the session a subagent runs under, a board lead's; else its parent's, since a phase or task row with
+        none is its lead's work."""
         while r is not None:
             lead = store["leads"].get(r["id"]) if r["kind"] == "lead" else None
-            sid = r.get("session") or r.get("worktree") or r.get("linked") or (lead and lead_session(lead))
+            sid = (r.get("session") or r.get("worktree") or r.get("linked") or r.get("host")
+                   or (lead and lead_session(lead)))
             if sid:
                 return sid
             r = rows.get(r.get("parent"))
@@ -810,13 +858,16 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                 fold()
         if status == "moving" and (v := verdicts.get(tid)) and v["verdict"] == "check":
             status, waits[r["id"]] = "check", {"why": v["evidence"]}
+        if status == "check" and r["id"] not in waits:  # a ❔ the row was built with (a subagent's)
+            waits[r["id"]] = {"why": r.get("why") or "상태 모름"}
         suffix = ""
         at = fleet.parse(r.get("reported_at"))
         limit = (lead or {}).get("stale_after_min") or limits["row_min"]
-        if status != "done" and at and (now - at).total_seconds() > limit * 60:
+        # A ❔ subagent's age is the evidence for its ❔, so it shows whatever row_min says.
+        if status != "done" and at and ((now - at).total_seconds() > limit * 60 or status == "check" and r.get("subagent")):
             suffix = f" · {ago((now - at).total_seconds())}"
             stale.append(r["id"])
-            if not r["id"].startswith("fleet:"):  # a fleet row's age is its session's quiet, not a record left behind
+            if not r["id"].startswith(FILLED):  # a fleet row's age is its session's quiet, not a record left behind
                 stale_board.append((now - at).total_seconds())
         return status, nxt, suffix
 
@@ -889,7 +940,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             if t["id"] in folded:
                 continue
             tail = t["id"].rsplit("/", 1)[-1]
-            name = t["title"] if t.get("pr") or t["title"] == tail or t["id"].startswith("fleet:") else f"{tail} {t['title']}"
+            name = t["title"] if t.get("pr") or t["title"] == tail or t["id"].startswith(FILLED) else f"{tail} {t['title']}"
             line(t["id"], sec, 1, st, name, t.get("pr"), bar(t.get("progress")), nxt, suf)
         for rev, ids in by_rev.items():
             if len(ids) < 2:
@@ -1027,7 +1078,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         # A fleet row (--fill) is not in a report the board committed, so only a change to one already seen counts.
         if last_rows is None:
             continue
-        if (not l["key"].startswith("fleet:") if prev is None
+        if (not l["key"].startswith(FILLED) if prev is None
                 else any(prev.get(f) != v for f, v in snap[l["key"]].items() if f in prev)):
             changed.append(l["key"])
     if not lines:
