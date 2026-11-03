@@ -16,7 +16,7 @@ Commands (prog.py `orch db`):
   backup FILE | restore FILE [--rehearsal]     a lossless copy (Connection.backup), and putting one back
   cutover-plan 4a|4b                           the commands the owner runs around an import; runs none of them
 """
-import contextlib, copy, datetime as dt, fcntl, hashlib, json, os, pathlib, re, shutil, sqlite3, subprocess, sys
+import contextlib, copy, datetime as dt, fcntl, hashlib, json, os, pathlib, plistlib, re, shutil, sqlite3, subprocess, sys
 
 import fleet
 
@@ -295,8 +295,18 @@ def head():
 
 
 def launch_labels():
-    """The LaunchAgents whose jobs write the fleet state: the dashboard server (fleet tick, relay, tidy)."""
-    return [os.environ.get("ORCH_DASH_LABEL") or "io.github.jeongjaesoon.orch-dash"]
+    """The LaunchAgents whose jobs write the fleet state: the dashboard server (fleet tick, relay, tidy) under this
+    shell's label, and every installed agent whose program runs an entry point (one installed under another label)."""
+    out, names = [os.environ.get("ORCH_DASH_LABEL") or "io.github.jeongjaesoon.orch-dash"], _entry_names()
+    for p in sorted(pathlib.Path("~/Library/LaunchAgents").expanduser().glob("*.plist")):
+        try:
+            spec = plistlib.loads(p.read_bytes())
+        except (OSError, plistlib.InvalidFileException, ValueError):
+            continue
+        argv = " ".join(map(str, spec.get("ProgramArguments") or [spec.get("Program") or ""]))
+        if spec.get("Label") and spec["Label"] not in out and (CRON.search(argv) or next(_words(argv, names), None)):
+            out.append(spec["Label"])
+    return out
 
 
 def _ancestors(procs):
@@ -371,6 +381,30 @@ def check_processes(procs, since):
     return out
 
 
+def check_plugin_dirs(procs):
+    """Claude processes that load an agent-skills checkout other than this one with --plugin-dir: its hooks are old
+    code however late the session started."""
+    out = []
+    for pid, (_, _, cmd) in sorted(procs.items()):
+        words = cmd.split()
+        for i, w in enumerate(words):
+            d = w.split("=", 1)[1] if w.startswith("--plugin-dir=") else \
+                words[i + 1] if w == "--plugin-dir" and i + 1 < len(words) else None
+            if d is None:
+                continue
+            p = pathlib.Path(d).expanduser()
+            if not p.is_absolute():
+                cwd = _cwd(pid)
+                if cwd is None:
+                    out.append(f"pid {pid} loads --plugin-dir {d} from a directory that cannot be read")
+                    continue
+                p = cwd / p
+            p = p.resolve()
+            if p != REPO and (p / "skills" / "orchestrate").is_dir():
+                out.append(f"pid {pid} loads agent-skills from {p} with --plugin-dir, not {REPO}: end it")
+    return out
+
+
 def check_plugin_source(homes):
     out, sha = [], head()
     for home in homes:
@@ -428,7 +462,7 @@ def preflight():
         return out + [str(e)]
     if os.getpid() not in procs:  # ps failed with no output: an empty table would pass every check below
         return out + ["ps did not list this process: cannot tell which writers run"]
-    return (out + check_processes(procs, since) + check_plugin_source(fleet.claude_homes())
+    return (out + check_processes(procs, since) + check_plugin_dirs(procs) + check_plugin_source(fleet.claude_homes())
             + check_sessions(procs, since) + check_launchers())
 
 
@@ -635,6 +669,9 @@ def _raw():
 def backup(dest):
     """A lossless, consistent copy of the DB through Connection.backup, even while others write. 0600."""
     dest = pathlib.Path(dest).expanduser()
+    live = path().resolve()
+    if dest.resolve() in (live, live.with_name(live.name + "-wal"), live.with_name(live.name + "-shm")):
+        raise Refused(f"{dest} is the live DB or its sidecar: back it up to another path")
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(f".{dest.name}.{os.getpid()}.tmp")
     tmp.unlink(missing_ok=True)

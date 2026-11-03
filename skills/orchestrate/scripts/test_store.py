@@ -405,6 +405,41 @@ try:
     assert crontab(127, "", "timed out")[0].startswith("crontab -l failed (127)")
 finally:
     store._sh, store.shutil.which = real_sh, real_which
+# A session started after the update that loads another checkout with --plugin-dir runs that checkout's hooks.
+old_co = tmp / "old-checkout"
+(old_co / "skills" / "orchestrate").mkdir(parents=True)
+pd = {301: (1, "", f"claude --plugin-dir {old_co} --name x"), 302: (1, "", f"claude --plugin-dir={repo}"),
+      303: (1, "", "claude --plugin-dir old-checkout"), 304: (1, "", f"claude --plugin-dir {tmp}")}
+real_cwd, store._cwd = store._cwd, {303: tmp}.get
+try:
+    why = store.check_plugin_dirs(pd)
+finally:
+    store._cwd = real_cwd
+assert [w.split()[1] for w in why] == ["301", "303"], why
+# A dashboard installed under another label (from another shell's ORCH_DASH_LABEL) is found by what it runs.
+agents = tmp / "fakehome" / "Library" / "LaunchAgents"
+agents.mkdir(parents=True)
+import plistlib  # noqa: E402
+(agents / "example.orch-dash.plist").write_bytes(plistlib.dumps(
+    {"Label": "example.orch-dash", "ProgramArguments": ["python3", "/x/agent-skills/skills/orchestrate/scripts/dash.py", "serve"]}))
+(agents / "example.other.plist").write_bytes(plistlib.dumps({"Label": "example.other", "ProgramArguments": ["/bin/true"]}))
+(agents / "broken.plist").write_text("not a plist")
+real_home = os.environ["HOME"]
+os.environ["HOME"] = str(tmp / "fakehome")
+try:
+    assert store.launch_labels()[1:] == ["example.orch-dash"], store.launch_labels()
+finally:
+    os.environ["HOME"] = real_home
+# backup never replaces the live DB or its sidecars.
+with state("backup-live") as sd:
+    store.import_apply(checks=False)
+    for name in (store.DB_NAME, store.DB_NAME + "-wal", store.DB_NAME + "-shm"):
+        try:
+            store.backup(sd / name)
+            raise AssertionError(f"backed up over {name}")
+        except store.Refused:
+            pass
+    assert store.decisions() == [] and not list(sd.glob(f".{store.DB_NAME}*.tmp"))
 real_live = fleet.live_sessions
 fleet.live_sessions = lambda p: {"s-old": {"pids": [102, 101], "cwd": "/w/a", "home": "/h"},
                                  "s-new": {"pids": [102], "cwd": "/w/b", "home": "/h2"}}
