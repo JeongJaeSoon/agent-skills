@@ -832,10 +832,14 @@ def other_program_files(slug, repo, mine, rows, list_files=rest_files):
         if d.name == slug or d.name.startswith((".", "_")) or not (d / "program.json").is_file():
             continue
         try:
-            if json.loads((d / "program.json").read_text()).get("repo") != repo:
+            theirs_repo = json.loads((d / "program.json").read_text())["repo"]
+            if theirs_repo.lower() != repo.lower():
                 continue
             led = d / "ledger.jsonl"
-            states = pr_state([json.loads(l) for l in led.read_text().splitlines() if l.strip()] if led.exists() else [])
+            events = [json.loads(l) for l in led.read_text().splitlines() if l.strip()] if led.exists() else []
+            if not all(isinstance(e.get("ev"), str) for e in events):
+                raise TypeError("a ledger row with no event")
+            states = pr_state(events)
             if not all(type(n) is int for n in states):
                 raise TypeError("a ledger PR number that is not an integer")
         except (OSError, ValueError, AttributeError, TypeError, KeyError):

@@ -172,6 +172,14 @@ def test_other_programs_from_their_state():
         try:
             got = prog.other_program_files("me", "acme/app", {1}, rows_, listed)
             assert got["shapeless2"] is None and got["mixed"] is None, got
+            # No repo in program.json, or a ledger row with no event: unreadable state, not "another repo".
+            (home / "norepo").mkdir()
+            (home / "norepo" / "program.json").write_text("{}")
+            program("emptyrow", "acme/app", [{}])
+            # A repo name is matched case-insensitively, as GitHub does.
+            program("cased", "Acme/App", [{"ts": T, "ev": "ready", "pr": 40}])
+            got = prog.other_program_files("me", "acme/app", {1}, rows_, listed)
+            assert got["norepo"] is None and got["emptyrow"] is None and got["cased"] == {40: ["a"]}, got
             # The open-PR list hit its limit: a ledger PR missing from it may still be open, so it is UNKNOWN.
             full = [row(n, f"b{n}") for n in range(1000, 1000 + prog.OPEN_LIMIT)]
             assert prog.other_program_files("me", "acme/app", {1}, full, listed)["other"] == {40: None, 99: None}
