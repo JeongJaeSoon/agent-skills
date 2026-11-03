@@ -26,8 +26,8 @@ Two modes share these rules: **top-level** is the orchestrator's (`references/to
 
 | Name | What it is | Started with | ROLE line |
 |---|---|---|---|
-| orchestrator (오케스트레이터) | The one top-level session the human talks to, above every task session and every lead. It routes, answers and starts leads; it drives no program itself. | `claude --agent agent-skills:orchestrator --name orchestrator` | `ROLE: orchestrator` |
-| lead (리드) | A session that drives one project (one repository, one topic) to done through workers, in program mode. A session asked to run a project to done ("PM 겸 오케스트레이터로 끝까지", a program resumed) is a lead even when the human calls it 오케스트레이터. | `claude --agent agent-skills:lead --name lead:<slug>`, or `skills-sync card` with the Lead brief (`references/brief.md` "Lead"): a dispatched worker or a `/goal` card, by Orca's setting | `ROLE: lead <slug>` |
+| orchestrator (오케스트레이터) | The one top-level session the human talks to, above every task session and every lead. It routes, answers and starts leads; it drives no program itself. It owns the routing between projects and supervises the leads and the single-PR cards it started (their review, and the closing reports it checks). | `claude --agent agent-skills:orchestrator --name orchestrator` | `ROLE: orchestrator` |
+| lead (리드) | A session that drives one project (one repository, one topic) to done through workers, in program mode. A session asked to run a project to done ("PM 겸 오케스트레이터로 끝까지", a program resumed) is a lead even when the human calls it 오케스트레이터. It owns its project end to end: the split into units, who runs each and in what order, the dependencies between them, and the final check. | `claude --agent agent-skills:lead --name lead:<slug>`, or `skills-sync card` with the Lead brief (`references/brief.md` "Lead"): a dispatched worker or a `/goal` card, by Orca's setting | `ROLE: lead <slug>` |
 | worker, card | One unit (a ticket, an investigation) in its own worktree: a `worker-start` worker reports to its Run, a `/goal` card to the session that started it. | `worker-start`, `dispatch-card` | none |
 | standing role | A worker with no ticket: main guardian, QA lead, flow improver, resource steward (`references/roles.md`). "QA lead" names this worker role, not a lead. | `worker-start`, then `orch record … spawned --role` | none |
 | coordinator (Orca's word) | What Orca calls the session bound to a Run that dispatches workers: here always the orchestrator or a lead. The word stays only where Orca's own text, output or fields (`coordinator_handle`, a worker preamble's "Your coordinator") are quoted, and in code, whose identifiers and comments follow Orca's data. Orca's "sub-worker" is a worker a worker started: a helper, below. | — | — |
@@ -45,6 +45,22 @@ Where a unit runs is one of three placements, named this way everywhere:
 Which of the two takes a piece of work (one PR: the orchestrator and a card; related PRs, an order, deploy stages or a predicate: a lead) is `references/top-level.md` "Starting a lead".
 
 A session's role is declared, never guessed from its terminal: the `--agent` flags above, or, for a session already running or a lead card whose launcher cannot pass flags, a prompt line of its own, `ROLE: orchestrator` or `ROLE: lead <slug>`; `ROLE: none` silences either. The plugin's reorient hook reads the role from the session itself, so it survives compaction, resume and fork, and puts one reminder line before every prompt of a declared session. A lead card's first prompt carries its `ROLE` line (`references/brief.md` "Lead").
+
+### Who checks what
+
+An index only: each rule lives behind its link.
+
+| Check | Owner | Rule |
+|---|---|---|
+| Tests, the E2E run and VERIFY's output in the report | The worker | [deliver-ticket §5](../deliver-ticket/SKILL.md#5-ship), [brief VERIFY, REPORT](references/brief.md) |
+| The independent review and its findings | The worker | [deliver-ticket §3](../deliver-ticket/SKILL.md#3-review), [independent review](../deliver-ticket/references/independent-review.md) |
+| What a PR needs to land, and the human-approved exceptions | `orch land`; outside a program, the standalone card | Core rule 8, [Merge policy](#merge-policy), [landing](references/landing.md), [deliver-ticket §6](../deliver-ticket/SKILL.md#6-finish-the-ticket--done-means-its-acceptance-criteria-are-met) |
+| main after a landing; the ticket's remaining criteria after its merge | The lander; red main, the main guardian | Step 8, [deliver-ticket §6](../deliver-ticket/SKILL.md#6-finish-the-ticket--done-means-its-acceptance-criteria-are-met) |
+| The program's VERIFY; verifier independence on a high-blast-radius PR | The lead | Steps 2–3, [brief rules](references/brief.md#rules-for-filling-it) |
+| Landed tickets, periodic E2E on main, design against code | The QA lead (a standing worker) | Step 8, [roles](references/roles.md) |
+| The predicate's final check and its `predicate_verified` record | The lead; the QA lead or a verifier worker runs it | Step 9 Close |
+| A lead's closing report before the human hears "done"; a single-PR card's review | The orchestrator, through a background subagent | [Starting a lead](references/top-level.md#starting-a-lead) |
+| Human authorization and judgment | The owner | [brief HUMAN ONLY](references/brief.md), [deliver-ticket §6](../deliver-ticket/SKILL.md#6-finish-the-ticket--done-means-its-acceptance-criteria-are-met), [Asking the human](references/top-level.md#asking-the-human) |
 
 ## Stay answerable
 
