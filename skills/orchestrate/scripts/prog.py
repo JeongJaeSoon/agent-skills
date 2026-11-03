@@ -958,7 +958,7 @@ def local_diff(repo, pr, gh_err):
 
 def pr_view(repo, pr):
     return gh_json("pr", "view", str(pr), "--repo", repo, "--json",
-                   "state,isDraft,headRefOid,headRefName,baseRefName,mergeStateStatus,mergeable,statusCheckRollup,mergeCommit,url")
+                   "state,isDraft,headRefOid,headRefName,baseRefName,mergeStateStatus,mergeable,statusCheckRollup,mergeCommit,url,title")
 
 
 def ci_summary(rollup):
@@ -1028,7 +1028,8 @@ def gate_resolution(cfg, events, pr):
     opened = [e for e in events if e["ev"] == "gate_opened" and e.get("pr") == pr]
     if not opened:
         return None
-    res = orca_json("orchestration", "gate-list", "--task", opened[-1]["task"], "--run", cfg["run"])
+    # --full: the concise gate-list view has no `resolution`.
+    res = orca_json("orchestration", "gate-list", "--task", opened[-1]["task"], "--run", cfg["run"], "--full")
     for g in res.get("gates", res if isinstance(res, list) else []):
         if g.get("id") == opened[-1]["gate"] and g.get("status") == "resolved":
             return g.get("resolution")
@@ -1869,10 +1870,10 @@ def cmd_gate(argv):
     if opt(argv, "--parent"):
         args += ["--parent", opt(argv, "--parent")]
     task = orca_json(*args)
-    task_id = (task.get("task") or task).get("id")
+    task_id = task["taskId"]
     gate = orca_json("orchestration", "gate-create", "--task", task_id,
                      "--question", f"Land PR #{pr}: {v['title']}?", "--options", json.dumps(["land", "hold"]))
-    gate_id = (gate.get("gate") or gate).get("id")
+    gate_id = gate["gateId"]
     print(json.dumps(p.append("gate_opened", pr=pr, task=task_id, gate=gate_id), ensure_ascii=False))
     print(f"the user resolves it in Orca (or: orca orchestration gate-resolve --id {gate_id} --resolution land)")
 

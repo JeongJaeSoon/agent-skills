@@ -834,6 +834,43 @@ prog.run, prog.pr_view, prog.gate_resolution = real_run, real_view, real_res
 
 print("prog.py gate task: all pass")
 
+# --- orch gate: gh and orca replies in the shapes they really print -----------------------------
+# gh returns only the --json fields asked for; orca --json prints a concise view unless --full.
+PR21 = {"title": "Fix the thing", "url": "https://example.test/acme/app/pull/21", "state": "OPEN"}
+real_oj, real_gh, orca_calls = prog.orca_json, prog.gh_json, []
+prog.gh_json = lambda *a: {k: PR21.get(k) for k in a[a.index("--json") + 1].split(",")}
+
+
+def fake_orca(*a):
+    orca_calls.append(a)
+    if a[1] == "task-create":
+        return {"taskId": "task_n", "status": "ready"}
+    if a[1] == "gate-create":
+        return {"gateId": "gate_n", "taskId": "task_n", "status": "pending"}
+    if a[1] == "gate-list":
+        if "--full" in a:
+            return {"runId": cfg["run"], "count": 1,
+                    "gates": [{"id": "gate_n", "task_id": "task_n", "status": "resolved", "resolution": "land"}]}
+        return {"runId": cfg["run"], "gates": [{"id": "gate_n", "taskId": "task_n", "status": "resolved", "question": "q"}]}
+    raise AssertionError(a)
+
+
+prog.orca_json = fake_orca
+try:
+    with contextlib.redirect_stdout(io.StringIO()):
+        prog.cmd_gate(["gt", "--pr", "21"])
+    gc = next(c for c in orca_calls if c[1] == "gate-create")
+    assert gc[gc.index("--task") + 1] == "task_n", gc
+    assert "Fix the thing" in gc[gc.index("--question") + 1], gc
+    opened = prog.Program("gt").events()[-1]
+    assert (opened["ev"], opened["pr"], opened["task"], opened["gate"]) == ("gate_opened", 21, "task_n", "gate_n"), opened
+    p = prog.Program("gt")
+    assert prog.gate_resolution(p.cfg, p.events(), 21) == "land", "a resolved gate reads as resolved"
+finally:
+    prog.orca_json, prog.gh_json = real_oj, real_gh
+
+print("prog.py orch gate: all pass")
+
 # --- signal ---------------------------------------------------------------------------------
 with contextlib.redirect_stdout(io.StringIO()):
     prog.cmd_record(["gt", "signal", "--kind", "brief_gap", "--evidence", "msg_1", "--ticket", "T-9"])
