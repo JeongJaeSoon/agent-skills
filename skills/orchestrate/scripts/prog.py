@@ -2126,11 +2126,22 @@ def payload_of(m):
     return payload if isinstance(payload, dict) else {}
 
 
-def close_out(msgs, workers, worktrees, here=None):
+def own_worktree_id():
+    """The worktree Orca attaches this terminal to, not the cwd: a lead may run `orch wait` from another checkout."""
+    me = os.environ.get("ORCA_TERMINAL_HANDLE")
+    try:
+        wt = (orca_json("terminal", "show", "--terminal", me).get("terminal") or {}).get("worktreeId") if me else None
+    except (SystemExit, ValueError, AttributeError, OSError, subprocess.SubprocessError):
+        return None
+    return wt if isinstance(wt, str) and wt else None
+
+
+def close_out(msgs, workers, worktrees, here=""):
     """What to do with each worker_done's card, printed beside the message: after a compaction a lead kept
-    releasing workers but dropped `worktree rm`, and eight cards stayed open. `here` is the caller's own
-    worktree: a worker started with `--worktree current` reports that card, and Orca lists no worker for the
-    caller itself, so without it the line told five leads to remove the worktree they ran in."""
+    releasing workers but dropped `worktree rm`, and eight cards stayed open. `here` is the worktree id of the
+    caller's own terminal (None: it could not be read, so no rm line at all; "": not checked): a worker started
+    with `--worktree current` reports that card, and Orca lists no worker for the caller itself, so without it
+    the line told five leads to remove the worktree they ran in."""
     card = {w["dispatchId"]: (w.get("resource") or {}).get("worktreeId") for w in workers}
     task = {w["dispatchId"]: w.get("taskId") or "<task>" for w in workers}
     path = {w["id"]: w.get("path") for w in worktrees if not w.get("isMainWorktree")}
@@ -2151,9 +2162,12 @@ def close_out(msgs, workers, worktrees, here=None):
             out += [f"CLOSE OUT {d}: release it; its card is not in `orca worktree list`", release]
         elif busy:
             out += [f"CLOSE OUT {d}: release it; its card stays, {', '.join(busy)} works on it", release]
-        elif here and os.path.realpath(p) == os.path.realpath(here):
+        elif here and wt == here:
             out += [f"CLOSE OUT {d}: release it and close its terminal; its card is this session's own worktree"
                     " (`--worktree current`), so it stays", release]
+        elif here is None:
+            out += [f"CLOSE OUT {d}: release it; this session's own worktree could not be read (`orca terminal show`),"
+                    f" so remove its card ({shlex.quote(p)}) by hand only once it is not this session's", release]
         elif payload.get("outcome") != "succeeded":
             out += [f"CLOSE OUT {d} ({payload.get('outcome') or 'no outcome'}): release it, then retry on its card"
                     f" (worker-start --retry-of {d} --task {task[d]} --worktree path:{shlex.quote(p)} --agent <agent> [--model <id>])"
@@ -2542,7 +2556,7 @@ def cmd_wait(argv):
             if closed:
                 try:
                     lines = close_out(work, run_workers(run_id), orca_json("worktree", "list").get("worktrees", []),
-                                      here=own_worktree())
+                                      here=own_worktree_id())
                 except SystemExit as e:  # the batch and its ack line matter more than the hint
                     lines = [f"CLOSE OUT: could not read the cards ({e}); `orch status` lists them"]
                 print("\n".join(lines))
@@ -2689,11 +2703,6 @@ def compose_projects():
         return None
 
 
-def own_worktree():
-    top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
-    return os.path.realpath(top.stdout.strip() if top.returncode == 0 else os.getcwd())
-
-
 def register_stacks(before, owner, pr, skip=()):
     """A stack left running after verification held gigabytes until someone downed it by hand: the ones this run
     created go to the reap ledger. Only a project with a config file in this worktree: the other slot's card may
@@ -2701,7 +2710,8 @@ def register_stacks(before, owner, pr, skip=()):
     after = compose_projects()
     if before is None or after is None:
         return []
-    wt = own_worktree()
+    top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+    wt = os.path.realpath(top.stdout.strip() if top.returncode == 0 else os.getcwd())
     done = []
     for name in sorted(set(after) - set(before) - set(skip)):
         if not any(os.path.realpath(f).startswith(wt + os.sep) for f in after[name]):

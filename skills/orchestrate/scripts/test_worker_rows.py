@@ -210,6 +210,8 @@ def mailbox(version):
                                   "body": m["body"]} for m in msgs]}
         if a[:2] == ["worktree", "list"]:
             return {"worktrees": [{"id": "repo-1::/work/acme/card-b", "path": "/work/acme/card-b"}]}
+        if a[:2] == ["terminal", "show"]:
+            return {"terminal": {"worktreeId": "repo-1::/work/acme/lead"}}
         return answer("old" if version == "old" else "new", a)
     return orca_json, acks
 
