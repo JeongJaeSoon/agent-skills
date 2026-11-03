@@ -214,6 +214,10 @@ later = [{"ev": "spawned", "ticket": "A-1", "note": "ctx_a1", "ts": "2026-09-23T
          {"ev": "spawned", "ticket": "A-2", "note": "follow-up ctx_b2", "ts": "2026-09-24T01:00:00+00:00"}]
 assert prog.landed_but_open(ev + later, wk, tasks, wts) == [("A-1", "ctx_a1", False, "/w/1")], \
     prog.landed_but_open(ev + later, wk, tasks, wts)
+# A row without terminalState is neither active nor released: its card is listed with active None, never as released.
+blind = [{k: v for k, v in w.items() if k != "terminalState"} if w["dispatchId"] == "d1" else w for w in workers]
+assert prog.landed_but_open(ev, blind, tasks, wts) == [("A-1", "d1", None, "/w/1"), ("A-2", "d2", True, "/w/2")], \
+    prog.landed_but_open(ev, blind, tasks, wts)
 # orch wait says what to do with each worker_done's card; it offers removal only for a finished card nobody uses.
 def co(payload, workers=workers):
     return prog.close_out([{"type": "worker_done", "payload": payload}], workers, wts + [{"id": "wx", "path": "/w/a b"}])
@@ -521,12 +525,14 @@ assert "STALLED" not in out.getvalue() and "EMPTY x2" in out.getvalue(), out.get
 # A released card left behind (worker-stop sends no worker_done) is named once per 30 min; the wait goes on.
 (_pdir / "dashboard" / "state.json").write_text(json.dumps({"generated_at": prog.dt.datetime.now(prog.dt.timezone.utc).isoformat(),
     "landed_open": [{"ticket": "T-8", "dispatch": "a8", "active": False, "path": "/w/8"},
-                    {"ticket": "T-7", "dispatch": "a7", "active": True, "path": "/w/7"}]}))
+                    {"ticket": "T-7", "dispatch": "a7", "active": True, "path": "/w/7"},
+                    {"ticket": "T-6", "dispatch": "a6", "active": None, "path": "/w/6"}]}))
 out = io.StringIO()
 with contextlib.redirect_stdout(out):
     prog.cmd_wait(["s", "--rounds", "2"])
 assert "LANDED-BUT-OPEN T-8 (dispatch a8)" in out.getvalue() and "path:/w/8" in out.getvalue() \
     and "T-7" not in out.getvalue() and "EMPTY x2" in out.getvalue(), out.getvalue()
+assert "T-6" not in out.getvalue(), "a card whose worker state is unknown is not called released"
 assert out.getvalue().count("LANDED-BUT-OPEN") == 1, out.getvalue()
 # wait keeps the collector on the current code: STALLED lines are only as new as its server.
 saved_ensure, prog.ensure_dash = prog.ensure_dash, lambda: "dashboard started: http://127.0.0.1:4780/"

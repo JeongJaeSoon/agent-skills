@@ -189,5 +189,22 @@ assert w_scan({})[0].startswith("STUCK card-a (a select menu)"), "no verdict for
 screens["h1"] = ["Waiting for API response · will retry in 30s", "❯ "]
 assert w_scan({"h1": None})[0].startswith("STUCK card-a (an API retry loop)"), "Orca does not judge API retries"
 screens["h1"] = idle
+
+
+def unreadable(h):
+    if h == "h1":
+        raise SystemExit("orca terminal read: pane gone")
+    return screens[h]
+
+
+# A screen that cannot be read still reports the wait Orca already found; with no wait from Orca it says nothing.
+waited = {"h1": {"evidence": "prompt-text", "prompt": "Which base?"}}
+seen = {}
+lost = card_watch.scan(terms, seen, unreadable, NOW, 30, 100.0, 15, waits=waited)
+assert lost == ['STUCK card-a (waiting on a prompt (Orca agentWait, prompt-text)): "Which base?"',
+                "  orca terminal read --terminal h1 --screen"], lost
+assert card_watch.scan(terms, seen, unreadable, NOW, 30, 100.0, 15, waits=waited) == [], "reported once while it lasts"
+assert card_watch.scan(terms, {}, unreadable, NOW, 30, 100.0, 15, waits={}) == []
+assert card_watch.scan(terms, {}, unreadable, NOW, 30, 100.0, 15, waits={"h1": None}) == []
 print("ok")
 
