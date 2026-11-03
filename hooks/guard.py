@@ -15,9 +15,9 @@ and so is the lead test below; a relative path after a `cd` or `pushd`, or a che
 Only a call bash would run counts: the words inside quotes, a heredoc body or a comment are text.
 A wrapper (`env …`, `bash -c`, scripts/card.py run directly) is not seen: a guardrail, not a sandbox.
 
-Deny: a lead's card started from a session that is itself a lead, known by its `agent_type` (`claude --agent
-agent-skills:lead`), its `ROLE: lead` record from the reorient hook, or its transcript's first user prompt passing the
-same lead test. Only the human or the top-level starts a lead (orchestrate references/brief.md "Lead").
+Deny: a lead's card started from a session that is itself a lead by roles.py (its `agent_type`, its `ROLE: lead`
+record, or a first user prompt passing the same lead test; a `ROLE: none` record clears it). Only the human or the
+top-level starts a lead (orchestrate references/brief.md "Lead").
 A missing or unreadable transcript, or one restarted by /clear, gets no decision.
 
 Deny: a foreground Bash call that polls with a sleep loop (`until/while/for …; do … sleep N` with N of 5 s or a
@@ -37,12 +37,23 @@ another clone's setup.py still gets `ask`, with a sentence that promises nothing
 An allow here skips the auto mode classifier, so it covers only one simple command whose words bash passes
 as written: outside quotes, plain characters only (no operators, redirections, substitutions, expansions or
 variables other than $ORCA_TERMINAL_HANDLE), so the allowed prefix cannot carry another command or verb. Everything else gets no decision and takes the normal permission flow.
+
+Before all of that, the rules of lib/danger.py (pattern kill, prune, `compose down -v`, forced worktree removal,
+writes to the user's own settings and the rest of its RULES, on Bash and on Edit, Write and NotebookEdit) and
+lib/coordination.py (AskUserQuestion, foreground waits and a send to /dev/null from a role session, by roles.py's
+matrix). A deny there wins; a warn rides along with whatever else is decided; an ask turns an allow into a dialog.
+Each rule has a key in ~/.claude/agent-skills.json, and `false` puts back the behavior from before it.
+A check of this hook that raises lets the call through with a warning and a line in
+$AGENT_SKILLS_STATE/guard-errors.jsonl: the hook never stops a session over its own fault.
 """
-import json, os, pathlib, re, shlex, string, sys
+import functools, json, os, pathlib, re, shlex, string, sys
+
+import roles
+from lib import config, coordination, danger, shell
 
 ROOT = pathlib.Path(os.environ.get("CLAUDE_PLUGIN_ROOT") or pathlib.Path(__file__).resolve().parents[1])
-ROLES = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser() / "roles"
 PLUGIN = "agent-skills"
+WRITE_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 MAILBOX = re.compile(r"\borca\s+orchestration\s+(?:check|inbox)\b[^;&|\n]*?\s--terminal(?:\s+|=)(\S+)")
 OWN_VAR = ("$ORCA_TERMINAL_HANDLE", "${ORCA_TERMINAL_HANDLE}")
 # Only as a whole value (`--terminal $X`, `--terminal="$X"`): inside a word it could spell an excluded verb.
@@ -62,14 +73,8 @@ LEAD_FROM_LEAD = ("This session is a lead, and a lead does not start another lea
                   "without the Lead's MODE or ROLE line or `<project>: lead` head; only the human or the "
                   "top-level starts a lead.")
 CLOSE_OR_KEEP = re.compile(r"\b(?:CLOSE|KEEP)\b")
-MODE = re.compile(r"""(?m)(?:^|--prompt[\s=]+["']?)\s*MODE\b""")
-# The head is a line of its own, or opens the prompt; "take the lead" or "(lead: x)" in a worker's text is neither.
-LEAD_HEAD = re.compile(r"""(?m)(?:^|--prompt[\s=]+)\s*["']?[\w.-]+:\s*lead\s*(?:["']|$)""")
+MODE, LEAD_HEAD, LEAD_ROLE = roles.MODE, roles.LEAD_HEAD, roles.LEAD_ROLE
 LEAD_LINES = ("MODE", "DELEGATE", "PREDICATE")
-# A whole line reorient.py records, the prompt's closing quote (or a transcript's `</command-args>`) allowed after it;
-# the template's unfilled `<slug>`, `ROLE: none`, trailing words and a `\n` escape the shell passes through literally
-# do not count. It also marks a lead, like MODE: a resumed lead's prompt carries only this line.
-LEAD_ROLE = re.compile(r"""(?m)(?:^|--prompt[\s=]+["']?)[ \t]*ROLE:?[ \t]+lead[ \t]+[\w.-]+[ \t]*(?:$|["']|</command-args>)""")
 # The orchestrate refused-act rule lets a session follow only a block carrying a gate marker.
 SLEEP_MARK = "[gate:sleep-loop]"
 # The hook's name after the marker: the model sees only the reason text, not which hook wrote it.
@@ -82,8 +87,19 @@ SETUP_ASK = (f"{PLUGIN} setup: install the 15-minute sync job, turn on the defau
 
 
 def decide(decision, reason):
-    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": decision,
-                                             "permissionDecisionReason": reason}}))
+    return decision, reason
+
+
+def emit(decision, reason, warnings):
+    out = {"hookSpecificOutput": {"hookEventName": "PreToolUse"}}
+    if decision:
+        out["hookSpecificOutput"].update(permissionDecision=decision, permissionDecisionReason=reason)
+    warnings = list(dict.fromkeys(warnings))
+    if warnings:
+        out["systemMessage"] = "\n".join(warnings)
+        out["hookSpecificOutput"]["additionalContext"] = "\n".join(warnings)
+    if decision or warnings:
+        print(json.dumps(out))
 
 
 def simple_words(cmd):
@@ -109,205 +125,13 @@ def own_skills():
     return {p.parent.name for p in (ROOT / "skills").glob("*/SKILL.md")}
 
 
-def is_lead(text):
-    return bool(MODE.search(text) or LEAD_HEAD.search(text) or LEAD_ROLE.search(text))
+is_lead = roles.lead_text
+command_text = shell.command_text
 
 
-def declared_lead(session):
-    """The session took the lead role with a later `ROLE: lead <slug>` prompt, recorded by reorient.py."""
-    if not re.fullmatch(r"[\w-]{1,128}", session or ""):
-        return False
-    try:
-        return json.loads((ROLES / f"{session}.json").read_text()).get("role") == "lead"
-    except (OSError, ValueError, AttributeError):
-        return False
-
-
-def started_as_lead(transcript):
-    try:
-        with open(transcript, encoding="utf-8") as f:
-            for line in f:
-                rec = json.loads(line)
-                if rec.get("type") != "user" or rec.get("isMeta"):
-                    continue
-                content = (rec.get("message") or {}).get("content")
-                if isinstance(content, list):  # tool results carry no text block
-                    content = "\n".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
-                if content:
-                    return is_lead(content)
-    except (OSError, ValueError, TypeError, AttributeError):
-        pass
-    return False
-
-
-def lead_session(agent, session, transcript):
-    return agent == "agent-skills:lead" or declared_lead(session) or bool(transcript and started_as_lead(transcript))
-
-
-def command_text(cmd):
-    """`cmd` with what bash does not run as a command blanked, offsets kept: quoted text, heredoc bodies and
-    comments. `$(…)` and backticks inside double quotes or an unquoted heredoc body stay, since bash runs them.
-    From a construct this parser does not follow (`${…}`, whose quotes nest; arithmetic; `case` in `$(…)`; a
-    backslash in backticks; a heredoc delimiter it cannot read) on, nothing is blanked."""
-    out, n = list(cmd), len(cmd)
-    opened, closed = set(), set()  # just past an opening backtick (a word starts) and past a closing `)` or backtick
-
-    class Unsure(Exception):
-        pass
-
-    def blank(i, j):
-        out[i:j] = " " * (j - i)
-
-    def expanding(i, end, close):
-        """Double-quoted text (close='"') or an unquoted heredoc body (close=None) from i; returns the index after it."""
-        while i < end:
-            c = cmd[i]
-            if c == close:
-                return i + 1
-            if cmd.startswith(("${", "$((", "$["), i):
-                raise Unsure(i)
-            if c == "\\":
-                blank(i, min(i + 2, end))
-                i += 2
-            elif cmd.startswith("$(", i):
-                i = command(i + 2, ")")
-            elif c == "`":
-                i = command(i + 1, "`")
-            else:
-                blank(i, i + 1)
-                i += 1
-        return end
-
-    def bodies(i, pending):
-        for strip, delim, expands in pending:
-            start = i
-            while i < n:
-                eol = cmd.find("\n", i)
-                eol = n if eol < 0 else eol
-                line = cmd[i:eol]
-                if expands and line.endswith("\\"):  # bash joins the next line, which may end the body sooner
-                    return n
-                if (line.lstrip("\t") if strip else line) == delim:
-                    if expands:
-                        expanding(start, i, None)
-                    else:
-                        blank(start, i)
-                    blank(i, eol)
-                    i = eol + 1
-                    break
-                i = eol + 1
-            else:  # no terminator line: the delimiter was misread, so nothing after it is taken for a body
-                return n
-        return i
-
-    def escaped(j):  # the character at j follows an odd run of backslashes
-        return (j - len(cmd[:j].rstrip("\\"))) % 2 == 1
-
-    def starts_word(i):
-        """`#` at i opens a comment: it starts a word, line continuations (`\\<newline>`) removed."""
-        while i >= 2 and cmd[i - 1] == "\n" and escaped(i - 1):
-            i -= 2
-        # A subshell's `)` ends a word, a substitution's does not: `(x)#` is a comment, `$(x)#` and `` `x`# `` are not.
-        return i == 0 or i in opened or (cmd[i - 1] in " \t\n;&|()" and i not in closed and not escaped(i - 1))
-
-    def heredoc(i):
-        """The delimiter word after `<<` at i, quotes removed: (index after it, (strip tabs, word, expands) or None)."""
-        strip = cmd.startswith("-", i)
-        i += strip
-        while i < n and cmd[i] in " \t":
-            i += 1
-        # A delimiter with a `$` ($'…', $"…", $$) or an escape bash would rewrite ("…\…", \<newline>) is not read
-        # (None), since a misread delimiter could match a later line and blank the commands before it.
-        word, quoted, sure = "", False, True
-        while i < n and cmd[i] not in " \t\n;&|<>()":
-            c = cmd[i]
-            if c == "$":
-                sure = False
-                word += c
-                i += 1
-            elif c in "'\"":
-                j = cmd.find(c, i + 1)
-                j = n if j < 0 else j
-                part = cmd[i + 1:j]
-                sure = sure and not (c == '"' and "\\" in part)
-                word, quoted = word + part, True
-                blank(i + 1, j)
-                i = j + 1
-            elif c == "\\":
-                sure = sure and cmd[i + 1:i + 2] != "\n"
-                word, quoted = word + cmd[i + 1:i + 2], True
-                i += 2
-            else:
-                word += c
-                i += 1
-        sure = sure and "`" not in word and cmd[i:i + 1] != "("  # `<<$(x)`: bash reads the substitution as the word
-        return i, ((strip, word, not quoted) if sure and (word or quoted) else None)
-
-    def command(i, close):
-        depth, pending = 0, []
-        # Bash cuts a backtick substitution at the next backtick before parsing it: nothing in it runs past there.
-        end, prev = (cmd.find("`", i) % (n + 1) if close == "`" else n), i
-        if close == "`":
-            opened.add(i)
-        while i < n:
-            if i > end:
-                raise Unsure(prev)
-            c, prev = cmd[i], i
-            if c == close and (close != ")" or depth == 0):
-                closed.add(i + 1)
-                return i + 1
-            # Bash also rewrites backslashes inside backticks before running them, and runs a substitution inside
-            # an arithmetic expression's quotes.
-            if (cmd.startswith(("${", "$((", "((", "$["), i) or close == "`" and c == "\\"
-                    or c == "'" and cmd[i - 2:i] == "$$"
-                    or close == ")" and re.match(r"case\b", cmd[i:]) and starts_word(i)):
-                raise Unsure(i)
-            if c == "(":
-                depth += 1
-            elif c == ")" and depth:
-                depth -= 1
-            if c == "\\":
-                blank(i, min(i + 2, n))
-                i += 2
-            elif c == "'":
-                ansi = i > 0 and cmd[i - 1] == "$" and not escaped(i - 1)
-                j = i + 1
-                while j < n and cmd[j] != "'":
-                    j += 2 if ansi and cmd[j] == "\\" else 1
-                blank(i + 1, min(j, n))
-                i = j + 1
-            elif c == '"':
-                i = expanding(i + 1, n, '"')
-            elif c == "`":
-                i = command(i + 1, "`")
-            elif cmd.startswith(("$(", "<(", ">("), i):  # its `)` does not end the word
-                i = command(i + 2, ")")
-            elif c == "#" and starts_word(i):
-                eol = cmd.find("\n", i)
-                blank(i, n if eol < 0 else eol)
-                i = n if eol < 0 else eol
-            elif cmd.startswith("<<<", i):  # a here-string, whose suffix is not a heredoc
-                i += 3
-            elif cmd.startswith("<<", i):
-                at, (i, doc) = i, heredoc(i + 2)
-                # Unread, its body would be scanned as commands and a quote in it could blank what follows. A
-                # subshell's heredoc is not followed either.
-                if not doc or depth:
-                    raise Unsure(at)
-                pending.append(doc)
-            elif c == "\n" and pending:
-                i, pending = bodies(i + 1, pending), []
-            else:
-                i += 1
-        if close == "`":  # the scan ran out before the closing backtick
-            raise Unsure(prev)
-        return n
-
-    try:
-        command(0, None)
-    except Unsure as e:
-        return "".join(out[:e.args[0]]) + cmd[e.args[0]:]
-    return "".join(out)
+def lead_session(who):
+    """The calling session is a lead (roles.py): a lead does not start another lead."""
+    return who().role == "lead"
 
 
 def helper_card(brief, cwd, moves):
@@ -333,7 +157,7 @@ def helper_card(brief, cwd, moves):
         return None, f"The guard hook could not check the brief of `skills-sync card` ({type(e).__name__}: {e})."
 
 
-def bash(cmd, background=False, transcript=None, agent=None, session=None, cwd=None):
+def bash(cmd, background, who, cwd=None):
     loop = None if background else SLEEP_LOOP.search(cmd)
     # A short retry loop (sleep 1-4) is left alone; polling loops seen in practice slept 5 to 30 s.
     if loop and (loop[1] == "$" or int(loop[1]) >= 5):
@@ -363,7 +187,7 @@ def bash(cmd, background=False, transcript=None, agent=None, session=None, cwd=N
                                   "`CLOSE: 완료 기준을 채우고 결과를 적으면 end-session §8대로 같은 턴에 스스로 닫는다`, or KEEP "
                                   "when this session will reuse the card; a lead also gets its MODE, `ROLE: lead <slug>`, DELEGATE "
                                   "and PREDICATE lines, copied from orchestrate references/brief.md \"Lead\" (dispatch-card §2).")
-        if lead and lead_session(agent, session, transcript):
+        if lead and lead_session(who):
             return decide("deny", LEAD_FROM_LEAD)
     for helper in CARD_HELPER.finditer(command_text(cmd)):
         brief = re.compile(r"\S+").match(cmd, helper.start(1))[0]  # the masked text blanks a quoted path
@@ -372,19 +196,22 @@ def bash(cmd, background=False, transcript=None, agent=None, session=None, cwd=N
         prompt, refused = helper_card(brief, cwd, bool(CHDIR.search(cmd)))
         if refused:
             return decide("deny", refused)
-        if is_lead(prompt) and lead_session(agent, session, transcript):
+        if is_lead(prompt) and lead_session(who):
             return decide("deny", LEAD_FROM_LEAD)
     words = simple_words(cmd)
     if not words or REBINDS.search(cmd):
-        return
+        return None, None
     # The verb must come first: a leading flag could put an excluded verb out of sight.
     if words[:2] == ["orca", "orchestration"] and len(words) > 2 and words[2] not in ORCA_ASK and words[2][:1].isalpha():
         return decide("allow", f"{PLUGIN}: orca orchestration {words[2]}")
-    if words[0] == "orch" and len(words) > 1 and words[1] not in ORCH_ASK and words[1][:1].isalpha():
+    # `orch refusal clear` and `orch exempt` are the human's: never allowed past the classifier.
+    if (words[0] == "orch" and len(words) > 1 and words[1] not in ORCH_ASK and words[1][:1].isalpha()
+            and words[1:3] != ["refusal", "clear"]):
         return decide("allow", f"{PLUGIN}: orch {words[1]} (the program ledger and landing gate)")
     reason = setup_actions(words)
     if reason:
         return decide("ask", reason)
+    return None, None
 
 
 def setup_actions(words):
@@ -404,23 +231,71 @@ def setup_actions(words):
             "it may do anything.")
 
 
-def main():
-    try:
-        event = json.load(sys.stdin)
-    except ValueError:
-        return 0
-    tool, args = event.get("tool_name"), event.get("tool_input") or {}
+def rules(tool, args, event, who):
+    """[danger.Finding] of lib/danger.py and lib/coordination.py for this call."""
+    cfg = config.load()
     if tool == "Bash":
-        bash(args.get("command") or "", args.get("run_in_background") is True, event.get("transcript_path"),
-             event.get("agent_type"), str(event.get("session_id") or ""), event.get("cwd"))
-    elif tool == "Skill":
+        cmd = args.get("command") or ""
+        if not isinstance(cmd, str):
+            raise TypeError("Bash command is not a string")
+        return (danger.check_bash(cmd, cfg, event.get("cwd"), who())
+                + coordination.check_bash(cmd, args.get("run_in_background") is True, who(), cfg))
+    if tool in WRITE_TOOLS:
+        return danger.check_write(args.get("file_path") or args.get("notebook_path"), cfg)
+    if tool == "AskUserQuestion":
+        return coordination.check_ask(who(), cfg)
+    return []
+
+
+def decision(tool, args, event, who):
+    """This hook's own decision before lib's rules: (decision or None, reason)."""
+    if tool == "Bash":
+        return bash(args.get("command") or "", args.get("run_in_background") is True, who, event.get("cwd"))
+    if tool == "Skill":
         skill = str(args.get("skill") or "")
         name = skill.removeprefix(f"{PLUGIN}:")
         # A bare name may resolve to a user or project skill of the same name instead of this plugin's.
         shadowed = name == skill and any((pathlib.Path(d) / ".claude/skills" / name).exists()
                                          for d in (pathlib.Path.home(), event.get("cwd") or "."))
         if name in own_skills() and not shadowed:
-            decide("allow", f"{PLUGIN} skill {name}")
+            return decide("allow", f"{PLUGIN} skill {name}")
+    return None, None
+
+
+def failed(e, warnings):
+    config.log_error("guard", e)
+    warnings.append(f"agent-skills hooks/guard.py could not finish its checks ({type(e).__name__}) and let this call "
+                    "through without them; see guard-errors.jsonl in the agent-skills state directory.")
+
+
+def main():
+    try:
+        event = json.load(sys.stdin)
+    except ValueError:
+        return 0
+    if not isinstance(event, dict):
+        return 0
+    tool, args = event.get("tool_name"), event.get("tool_input") or {}
+    args = args if isinstance(args, dict) else {}
+    who = functools.cache(lambda: roles.session(event))
+    found, warnings = [], []
+    try:
+        found = rules(tool, args, event, who)
+    except Exception as e:
+        failed(e, warnings)
+    denied = [f.reason for f in found if f.level == "deny"]
+    if denied:
+        return emit("deny", "\n".join(denied), warnings)
+    warnings += [f.reason for f in found if f.level == "warn"]
+    try:
+        verdict, reason = decision(tool, args, event, who)
+    except Exception as e:
+        verdict, reason = None, None
+        failed(e, warnings)
+    asks = [f.reason for f in found if f.level == "ask"]
+    if asks and verdict != "deny":
+        verdict, reason = "ask", "\n".join(asks)
+    emit(verdict, reason, warnings)
     return 0
 
 

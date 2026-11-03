@@ -520,7 +520,7 @@ PR を受け持つスキルとマージする主体:
 ## フック
 
 ### 権限の判定
-`hooks/guard.py`（PreToolUse、`Bash|Skill`）。プラグインは権限のルールを設定として載せられないので、hook が代わりに判定します。目的は、スキルを読んだワーカーが何時間も後にコマンドを実行するとき、確認のダイアログで止まらないようにすることです。
+`hooks/guard.py`（PreToolUse、`Bash|Skill|Edit|Write|MultiEdit|NotebookEdit|AskUserQuestion`）。プラグインは権限のルールを設定として載せられないので、hook が代わりに判定します。目的は、スキルを読んだワーカーが何時間も後にコマンドを実行するとき、確認のダイアログで止まらないようにすることです。下の表より先に[危険なコマンドとロールセッションのルール](#危険なコマンドとロールセッションのルール)を見て、そこで拒否されればそれが優先します。
 
 | 判定 | 対象 |
 |---|---|
@@ -532,6 +532,45 @@ PR を受け持つスキルとマージする主体:
 | 確認 | `python3 <チェックアウトの絶対パス>/scripts/setup.py --actions-only [--orca-run]`。Claude の設定は書かず、同期ジョブと定期自動化を有効にする段階なので、auto mode でも人に権限ダイアログを出します |
 
 許可を出すのは、シェルの演算子、リダイレクト、置換、変数を含まない単一のコマンドだけです。変数は `$ORCA_TERMINAL_HANDLE` だけが例外です。コマンド名のすぐ後にサブコマンドが来る必要があり、フラグが先に来たら判定しません。判定しなかった呼び出しは、ふだんの権限の流れ（auto mode の分類器、ユーザーのルール）に乗ります。
+
+### 危険なコマンドとロールセッションのルール
+同じ `guard.py` が、先に `hooks/lib/danger.py` と `hooks/lib/coordination.py` のルールを見ます。コマンドとして読むのは bash が実際に実行する語だけで（引用符の中、heredoc の本文、コメントはテキスト）、そのコマンドの引数は元の文字列を `shlex` で分けて読みます。そのため `echo pkill`、コミットメッセージ、引用符の中のプロンプトには反応しません。`bash -c`、`eval`、スクリプトファイルの中のコマンドは見ません。ガードレールであってサンドボックスではありません。スクリプトは同じ判定関数（`danger.check_bash`、`danger.external_review`）を直接呼べます。
+
+ルールごとに `~/.claude/agent-skills.json` のキーがあります。値は `"deny"`・`"ask"`・`"warn"`・`"off"` のどれかで、`false` は `"off"`、`true` は既定値です。オフにすると、そのルールができる前の動作に戻ります。warn は止めず、人に見える通知（`systemMessage`）とモデルへの文脈として残ります。
+
+| キー | 既定 | 対象 |
+|---|---|---|
+| `guard.deny.pattern_kill` | deny | `pkill`、`killall`、`kill $(pgrep …)`、`pgrep … \| xargs kill`。PID で止めるか reap-resources を使います |
+| `guard.deny.prune` | deny | `docker`・`podman` の `system`・`volume`・`image`・`container`・`network`・`builder prune`、`compose … down -v`・`--volumes`、`git worktree prune` |
+| `guard.deny.worktree_rm` | deny | `orca worktree rm` の `--force`・`--allow-failed-archive-hook`、メイン worktree での `--worktree current`（Orca が `isMainWorktree` を返すときだけ） |
+| `guard.deny.automode_reset` | deny | `claude auto-mode reset` |
+| `guard.deny.keychain` | deny | `security find-*-password` の `-w`・`-g`、`security dump-keychain` |
+| `guard.deny.url_credentials` | deny | 引数に `scheme://user:secret@` を含む URL |
+| `guard.deny.user_settings` | deny | ユーザー自身の設定への書き込み：`~/.claude/settings.json`・`settings.local.json`（`$CLAUDE_CONFIG_DIR` も）、`~/.claude/agent-skills.json`、secure-fill の `allow.json`。Edit・Write・NotebookEdit と、Bash のリダイレクト・`tee`・`cp`・`mv`・`sed -i`・`rm` など。プロジェクトの `.claude/settings.json` は対象外です |
+| `guard.deny.plugin_apply` | deny | このプラグインの `setup.py`・`config_emit.py`・`automode_rule.py` とその書き出しコピーの `--apply`、`bootstrap.py --write`。コピーは「runs --apply, never the agent」の一文で見分けます。他のリポジトリの `setup.py` は対象外です |
+| `guard.deny.slash_send` | deny | `orca terminal send` での `/reload…`・`/model` の入力 |
+| `guard.deny.prompt_substitution` | deny | `orca worktree create --prompt` のコマンド置換（`$(…)`、バッククォート） |
+| `guard.deny.self_exempt_label` | deny | `gh` で `no-visual-change` ラベルを付けること（`pr create --label`、`pr edit --add-label`、`issue edit`、`gh api …/labels`） |
+| `guard.deny.owner_only` | deny | `orch refusal clear`、`orch exempt`。人が自分のチャットで `!` 行として打ちます。キーをオフにしても `orch refusal clear` は自動で許可しません |
+| `guard.deny.external_review` | deny | 作業フォルダ（または `-C`）の origin リポジトリが `repos.<owner/repo>.external_llm: false` の `codex` 呼び出し。このキーがなければ判定しません |
+| `guard.ask.pressure_bypass` | ask | コマンドに `AGENT_SKILLS_PRESSURE_GATE=0` |
+| `guard.warn.rm_expansion` | warn | 引用符のない glob や変数で作った `rm` のパス。`${VAR:?}` は除きます |
+| `guard.warn.reset_hard` | warn | コミットしていない変更があるリポジトリでの `git reset --hard` |
+| `guard.warn.run_download` | warn | `-D`・`--dir` のない `gh run download` |
+| `guard.warn.tailscale` | warn | ワーカーの `tailscale serve`・`funnel` |
+| `orchestrate.ask_user_question` | deny | オーケストレーター・リード・ワーカーの本会話の AskUserQuestion。サブエージェントと一般セッションは対象外です |
+| `orchestrate.wait_foreground` | deny | オーケストレーター・リードが `orch wait`、`orch inbox --wait`、`orch watch-cards`、`orca orchestration check\|inbox --wait` を `run_in_background` なしで実行すること、またはバックグラウンドの待機を `\| tail`・`\| head` で切ること。ワーカーの `check --wait` は対象外です |
+| `orchestrate.send_devnull` | deny | オーケストレーター・リード・ワーカーが `orca orchestration send\|reply` の出力を `/dev/null` に捨てること。`2>/dev/null` だけなら対象外です |
+
+hook 自身の判定が例外を出したら、その呼び出しは通し、警告とともに `$AGENT_SKILLS_STATE/guard-errors.jsonl` に時刻・hook・例外の種類・発生位置だけを残します（コマンドの原文は残しません）。設定ファイルが読めなければ既定値を使います。
+
+ロールは `hooks/roles.py` ひとつが決めます。ロールは orchestrator、lead、worker、general の四つです。
+1. `ROLE: none` の記録があれば、すべてのロールがオフになります（general）。
+2. 宣言が先です：`agent_type`、`ROLE:` の記録、（SessionStart のときだけ）セッション名、リードのブリーフの形をした最初のプロンプト。Orca が Dispatch で起動したリードも lead です。
+3. 宣言がなく、最初のプロンプトに Orca の Dispatch プリアンブルかカードの `CLOSE`・`KEEP` 行があれば worker です。Dispatch のワーカーと `/goal` カードは同じロールです。
+4. それ以外は general です。人が開いたセッションが worker になることはありません。
+
+監督の有無（プリアンブル）、CLOSE・KEEP はロールではなく属性です。Orca の実行の深さと lineage はロールの判定に使いません。サブエージェント（入力に `agent_id`）は親のロールを持ち、ルールごとの適用表（`roles.MATRIX`）がサブエージェントに及ぶかを決めます。`reorient.py`、`delegate_gate.py`、`guard.py`、ダッシュボード（`fleet.declared_roles`）、トークン集計（`token_usage.py`）がこのモジュールを使います。
 
 ### オーケストレーター・リードの再確認
 `hooks/onboard.py`（SessionStart `startup|clear`）。このプロファイルのユーザー設定（`env.CLAUDE_CODE_PLUGIN_DIRS`。Orca のプロファイルごとに別々に見ます）もセッションの同じ環境変数もチェックアウトを読み込んでいないときだけ、インストール画面の値とともに `setup-pc` を提案するよう促す段落を入れます。`-p` セッション（`CLAUDE_CODE_ENTRYPOINT` が `sdk-cli`）には入れません。Agent SDK のセッション（`sdk-ts`・`sdk-py`）は人が入力する GUI かもしれないので入れ、最初の依頼がブリーフや自動化のプロンプトなら無視するよう段落に書いてあります。URL の認証情報は消してから入れます。人が断ればエージェントが `onboard.py --decline` を実行し、そのプロファイルでは二度と尋ねません。`AGENT_SKILLS_ONBOARD=0` ですべて無効になります。

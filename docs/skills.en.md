@@ -518,7 +518,7 @@ Program state lives in `~/.claude/programs/<slug>/`: `program.json`, the append-
 ## Hooks
 
 ### Permission decisions
-`hooks/guard.py` (PreToolUse, `Bash|Skill`). A plugin can't ship permission rules as settings, so this hook makes the decision instead. The point is that a worker which read a skill hours earlier doesn't stall at a confirmation prompt when it finally runs the command.
+`hooks/guard.py` (PreToolUse, `Bash|Skill|Edit|Write|MultiEdit|NotebookEdit|AskUserQuestion`). A plugin can't ship permission rules as settings, so this hook makes the decision instead. The point is that a worker which read a skill hours earlier doesn't stall at a confirmation prompt when it finally runs the command. Before the table below, it applies the [dangerous commands and role-session rules](#dangerous-commands-and-role-session-rules); a deny there wins.
 
 | Decision | Applies to |
 |---|---|
@@ -530,6 +530,45 @@ Program state lives in `~/.claude/programs/<slug>/`: `program.json`, the append-
 | Ask | `python3 <absolute checkout path>/scripts/setup.py --actions-only [--orca-run]`. This step writes no Claude settings but turns on the sync job and scheduled automations, so it shows the human a permission dialog even in auto mode |
 
 Allow is given only to a single command with no shell operators, redirections, substitutions or variables. The one variable allowed is `$ORCA_TERMINAL_HANDLE`. The subcommand must come right after the command name; if a flag comes first, no decision is made. Calls without a decision go through the normal permission flow (the auto mode classifier and the user's own rules).
+
+### Dangerous commands and role-session rules
+The same `guard.py` first applies the rules in `hooks/lib/danger.py` and `hooks/lib/coordination.py`. Only words bash actually runs count as commands (text in quotes, heredoc bodies and comments is text), and each command's arguments are read by splitting its original text with `shlex`. So `echo pkill`, a commit message or a quoted prompt doesn't trip anything. Commands inside `bash -c`, `eval` or a script file aren't seen: this is a guardrail, not a sandbox. Scripts can call the same checks directly (`danger.check_bash`, `danger.external_review`).
+
+Every rule has a key in `~/.claude/agent-skills.json`. Its value is one of `"deny"`, `"ask"`, `"warn"` or `"off"`; `false` means `"off"` and `true` means the default. Off puts back the behavior from before the rule existed. A warn doesn't block: it shows the human a notice (`systemMessage`) and gives the model the same text as context.
+
+| Key | Default | Applies to |
+|---|---|---|
+| `guard.deny.pattern_kill` | deny | `pkill`, `killall`, `kill $(pgrep …)`, `pgrep … \| xargs kill`. Kill by PID, or use reap-resources |
+| `guard.deny.prune` | deny | `system`, `volume`, `image`, `container`, `network` and `builder prune` of `docker` or `podman`; `compose … down -v` or `--volumes`; `git worktree prune` |
+| `guard.deny.worktree_rm` | deny | `orca worktree rm` with `--force` or `--allow-failed-archive-hook`; `--worktree current` in the main worktree (only when Orca reports `isMainWorktree`) |
+| `guard.deny.automode_reset` | deny | `claude auto-mode reset` |
+| `guard.deny.keychain` | deny | `security find-*-password` with `-w` or `-g`; `security dump-keychain` |
+| `guard.deny.url_credentials` | deny | A URL with `scheme://user:secret@` in an argument |
+| `guard.deny.user_settings` | deny | Writes to the user's own settings: `~/.claude/settings.json` and `settings.local.json` (also under `$CLAUDE_CONFIG_DIR`), `~/.claude/agent-skills.json`, and secure-fill's `allow.json`. Covers Edit, Write and NotebookEdit, and Bash redirections, `tee`, `cp`, `mv`, `sed -i`, `rm` and the like. A project's `.claude/settings.json` is not covered |
+| `guard.deny.plugin_apply` | deny | `--apply` of this plugin's `setup.py`, `config_emit.py`, `automode_rule.py` and their emitted copies, and `bootstrap.py --write`. A copy is recognized by the line "runs --apply, never the agent". Another repository's `setup.py` is not covered |
+| `guard.deny.slash_send` | deny | Typing `/reload…` or `/model` with `orca terminal send` |
+| `guard.deny.prompt_substitution` | deny | A command substitution (`$(…)`, backticks) in `orca worktree create --prompt` |
+| `guard.deny.self_exempt_label` | deny | Adding the `no-visual-change` label with `gh` (`pr create --label`, `pr edit --add-label`, `issue edit`, `gh api …/labels`) |
+| `guard.deny.owner_only` | deny | `orch refusal clear` and `orch exempt`. The human types them as a `!` line in their own chat. Even with the key off, `orch refusal clear` is never auto-allowed |
+| `guard.deny.external_review` | deny | A `codex` call whose working folder (or `-C`) has an origin repository set to `repos.<owner/repo>.external_llm: false`. Without that key, no decision |
+| `guard.ask.pressure_bypass` | ask | `AGENT_SKILLS_PRESSURE_GATE=0` in the command |
+| `guard.warn.rm_expansion` | warn | An `rm` path built from an unquoted glob or variable. `${VAR:?}` is fine |
+| `guard.warn.reset_hard` | warn | `git reset --hard` in a repository with uncommitted changes |
+| `guard.warn.run_download` | warn | `gh run download` without `-D` or `--dir` |
+| `guard.warn.tailscale` | warn | `tailscale serve` or `funnel` from a worker |
+| `orchestrate.ask_user_question` | deny | AskUserQuestion in the main conversation of an orchestrator, lead or worker. Subagents and general sessions are not covered |
+| `orchestrate.wait_foreground` | deny | An orchestrator or lead running `orch wait`, `orch inbox --wait`, `orch watch-cards` or `orca orchestration check\|inbox --wait` without `run_in_background`, or cutting a background wait with `\| tail` or `\| head`. A worker's `check --wait` is not covered |
+| `orchestrate.send_devnull` | deny | An orchestrator, lead or worker sending the output of `orca orchestration send\|reply` to `/dev/null`. `2>/dev/null` alone is not covered |
+
+When the hook's own check raises, the call goes through with a warning, and `$AGENT_SKILLS_STATE/guard-errors.jsonl` gets the time, the hook, the exception type and where it was raised (never the command text). An unreadable settings file means the defaults.
+
+Roles come from one module, `hooks/roles.py`. There are four: orchestrator, lead, worker and general.
+1. A `ROLE: none` record turns every role off (general).
+2. A declaration comes first: `agent_type`, a `ROLE:` record, the session title (SessionStart only), or a first prompt shaped like a lead's brief. A lead Orca started through a Dispatch is still a lead.
+3. Undeclared, a session whose first prompt has Orca's Dispatch preamble or a card's `CLOSE` or `KEEP` row is a worker. A dispatched worker and a `/goal` card are the same role.
+4. Everything else is general. A session a human opened never becomes a worker.
+
+Supervision (the preamble), CLOSE and KEEP are attributes, not roles. Orca's execution depth and lineage play no part in the role. A subagent (an `agent_id` in the input) carries its parent's role, and the rule matrix (`roles.MATRIX`) decides whether each rule reaches it. `reorient.py`, `delegate_gate.py`, `guard.py`, the dashboard (`fleet.declared_roles`) and the token report (`token_usage.py`) use this module.
 
 ### Re-orienting the orchestrator and leads
 `hooks/onboard.py` (SessionStart `startup|clear`). Only when neither this profile's user settings (`env.CLAUDE_CODE_PLUGIN_DIRS`, checked per Orca profile) nor the session's own environment variable of that name loads the checkout, it adds a paragraph telling the agent to offer `setup-pc`, with the values from the install dialog. It adds nothing to `-p` sessions (`CLAUDE_CODE_ENTRYPOINT` is `sdk-cli`). Agent SDK sessions (`sdk-ts`, `sdk-py`) may be a GUI a person types into, so they get it, and the paragraph says to ignore it when the first request is a brief or an automation prompt. Credentials in URLs are stripped first. When the human declines, the agent runs `onboard.py --decline` and that profile is not asked again. `AGENT_SKILLS_ONBOARD=0` turns it off everywhere.

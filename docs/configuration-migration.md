@@ -12,6 +12,9 @@
 | 회고 | `reflect.ledger` 미설정을 보고하고 현재 작업에만 결과 표시 | 기존 원장의 경로를 그대로 지정. 편집할 원본 저장소는 `reflect.skill_repository` 지정 |
 | 오케스트레이터 피드백 | `false`로 본다. reorient가 오케스트레이터 transcript를 등록하지 않고, standing 회고는 오케스트레이터 대화를 읽지 않는다 | 새 기능이라 그대로 두면 기존과 같다. 켜려면 `reflect.orchestrator_feedback`를 `true`로 하고 `reflect.ledger`를 지정 |
 | 오케스트레이터 위임 강제 | 켜져 있다. 오케스트레이터 세션의 본 대화가 조정 밖의 도구를 부르면 `hooks/delegate_gate.py`가 거부한다 | 끄려면 `orchestrate.delegate_gate`를 `false`로 한다 |
+| 위험 명령·데이터 보호 | 켜져 있다. `hooks/guard.py`가 패턴 kill, prune·`down -v`, 강제 worktree 삭제, 사용자 설정 쓰기, `--apply` 실행 등을 거부하고 몇 가지는 warn으로 알린다([목록](skills.md#위험-명령과-역할-세션-규칙)) | 규칙 하나를 끄려면 그 키(`guard.deny.pattern_kill` 등)를 `false`로, 알림만 받으려면 `"warn"`으로 한다 |
+| 역할 세션 조정 규칙 | 켜져 있다. 오케스트레이터·리드·워커의 AskUserQuestion, 오케스트레이터·리드의 foreground 대기, `orca orchestration send\|reply`의 `/dev/null` 출력을 거부한다 | `orchestrate.ask_user_question`·`orchestrate.wait_foreground`·`orchestrate.send_devnull`을 `false`로 한다 |
+| 외부 LLM 리뷰 제한 | 키가 없으면 판정하지 않는다 | 코드를 외부 모델에 보내지 않을 저장소에 `repos.<owner/repo>.external_llm: false`를 둔다. 그 저장소에서의 `codex` 호출을 거부한다 |
 | 개인 폴더 정리 | `user_folders` 미설정 메모와 함께 건너뜀 | 승인한 폴더만 `reap.user_folders` 배열에 지정. 빈 배열이면 끔 |
 | 트래커·노트 쓰기 위임 | 플러그인 agent `agent-skills:task-tracker`·`agent-skills:notes-writer`가 쓴다. 트래커 사이트 고유 규칙은 `tracker.rules_file`의 Markdown에서 읽는다. 키가 없으면 넘겨받은 사실과 형제 티켓을 따르고, 키가 있는데 파일을 못 읽으면 멈춘다 | 직접 만든 agent를 계속 쓰려면 `tracker.delegate_agent`·`notes.delegate_agent`에 그 이름을, 세션에서 직접 쓰려면 `"none"`을 지정 |
 | 성과 보고 | 시간대 기본값 UTC (`+00:00`) | 이전 `+09:00` 기준의 시간 표시·집계를 유지하려면 매 실행에 `--tz +09:00` 명시 |

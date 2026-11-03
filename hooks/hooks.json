@@ -5,7 +5,7 @@
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/delegate_gate.py\"", "timeout": 5 }]
       },
       {
-        "matcher": "Bash|Skill",
+        "matcher": "Bash|Skill|Edit|Write|MultiEdit|NotebookEdit|AskUserQuestion",
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/guard.py\"", "timeout": 5 }]
       },
       {
