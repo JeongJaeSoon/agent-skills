@@ -29,7 +29,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 BRIEF = ROOT / "skills" / "orchestrate" / "references" / "brief.md"
 PARAGRAPH = re.compile(r"An act refused by a permission prompt.*?fix\s+the\s+cause\s+and\s+run\s+it\s+again\.", re.S)
 DISPATCH = re.compile(r"--dispatch-id[ =]+(ctx_\w+)\b")
-OK = re.compile(r'"ok"\s*:\s*true|\bmessageId=msg_')
+RECEIPT = re.compile(r"messageId=msg_\w+")
 SOURCE = "(agent-skills hooks/lifecycle.py, {key})"
 WARNING = re.compile(r"(\[[^\]\n]*\] )?warning: ")
 
@@ -72,7 +72,23 @@ def result_text(b):
     c = b.get("content")
     if isinstance(c, str):
         return c
-    return " ".join(str(x.get("text") or "") for x in c if isinstance(x, dict)) if isinstance(c, list) else ""
+    # Every part must be a text block; one unread part leaves the whole result unread.
+    if isinstance(c, list) and all(isinstance(x, dict) and x.get("type") == "text" and isinstance(x.get("text"), str)
+                                   for x in c):
+        return "\n".join(x["text"] for x in c)
+    return ""
+
+
+def sent(text):
+    """Whether a send's whole output is Orca's receipt: `messageId=msg_…`, or JSON whose top-level ok is true."""
+    t = (text or "").strip()
+    if RECEIPT.fullmatch(t):
+        return True
+    try:
+        res = json.loads(t)
+    except ValueError:
+        return False
+    return isinstance(res, dict) and res.get("ok") is True
 
 
 def calls(rows):
@@ -182,7 +198,7 @@ def exit_order(event, s, lvl):
     if s.supervised:
         ids = [m for e in rows if e.get("type") == "user" for m in DISPATCH.findall(text_of(e))]
         current = ids[-1] if ids else None
-        if current and any(worker_done_for(c[2], current) and OK.search(c[3]) for c in earlier):
+        if current and any(worker_done_for(c[2], current) and sent(c[3]) for c in earlier):
             return None, None
         return lvl, (f"`orca worktree rm` before this Dispatch's worker_done came back"
                      f"{f' ({current})' if current else ''}. Send worker_done as its own call, and only once its "

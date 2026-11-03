@@ -350,7 +350,8 @@ def archive_hook(path):
     try:
         text = (pathlib.Path(path) / "orca.yaml").read_text()
     except FileNotFoundError:
-        return False
+        # A dangling symlink is there but unread; only no entry at all means no hook.
+        return None if os.path.lexists(pathlib.Path(path) / "orca.yaml") else False
     except (OSError, TypeError, UnicodeDecodeError):
         return None
     return re.search(r"(?m)^\s*archive\s*:", text) is not None

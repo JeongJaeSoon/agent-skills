@@ -267,6 +267,10 @@ with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.St
     rc = end_check.apply("remove", dict(CLEAN_FACTS, path=str(yml)), "card", {}, "term_me")
 assert rc == 3 and CALLS.read_text() == "", rc
 assert end_check.archive_hook(str(tmp / "nowhere")) is False
+dangling = tmp / "card-dangling"
+dangling.mkdir()
+(dangling / "orca.yaml").symlink_to(tmp / "no-such-target.yaml")
+assert end_check.archive_hook(str(dangling)) is None, "a dangling orca.yaml link is there but unread"
 # With an archive hook, --run-hooks goes after the --worktree value.
 hooked = tmp / "card-hooked"
 hooked.mkdir()

@@ -380,9 +380,11 @@ def setup_runner(lines):
 def running(path):
     """Whether a process runs the script; a failed `ps` raises, so the terminal stays open."""
     p = subprocess.run(["ps", "-axo", "command"], capture_output=True, text=True, timeout=10)
-    if p.returncode != 0:
-        raise OSError(f"ps failed: {p.stderr.strip()[:80]}")
-    return any(path in l for l in p.stdout.splitlines()[1:])
+    lines = p.stdout.splitlines()
+    # A real listing has its header and at least `ps` itself; anything less is unread, not "nothing runs".
+    if p.returncode != 0 or len(lines) < 2 or lines[0].strip() != "COMMAND":
+        raise OSError(f"ps failed or printed no process list: {(p.stderr or p.stdout).strip()[:80]}")
+    return any(path in l for l in lines[1:])
 
 
 def start_state(handle):

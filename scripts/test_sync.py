@@ -290,6 +290,21 @@ def test_broadcast():
     shutil.rmtree(tmp)
 
 
+def test_running():
+    import unittest.mock as mock
+    for out in ("", "COMMAND\n", "garbage\nbash x\n"):
+        with mock.patch.object(sync.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=out, stderr="")):
+            try:
+                sync.running("/r/setup-runner.sh")
+                ok = False
+            except OSError:
+                ok = True
+        check(f"ps output {out!r} is unread, not 'nothing runs'", ok)
+    listing = "COMMAND\nps -axo command\nbash /r/setup-runner.sh\n"
+    with mock.patch.object(sync.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=listing, stderr="")):
+        check("a real listing finds the script", sync.running("/r/setup-runner.sh") is True)
+
+
 def test_close_setup():
     runner = "/r/.git/worktrees/card/orca/setup-runner.sh"
     done = ["$ bash " + runner, " ERR_PNPM_NO_PKG_MANIFEST  No package.json found", "  ~/w/card on  main", "$"]
@@ -377,6 +392,7 @@ if __name__ == "__main__":
     test_confirm()
     test_sync()
     test_broadcast()
+    test_running()
     test_close_setup()
     print(f"\n{len(failures)} failure(s)" if failures else "\nall passed")
     sys.exit(1 if failures else 0)

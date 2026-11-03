@@ -69,6 +69,14 @@ out = hook(later, rm_event(), DENY)
 check("rm after worker_done's ok result passes", out == {}, out)
 out = hook(later[:2] + [result("tu_done", "messageId=msg_123")] + later[3:], rm_event(), DENY)
 check("the plain `messageId=` receipt counts as ok", out == {}, out)
+# Only a whole receipt counts: an unread tail, an ok:true nested under a failure, or a list result with an unread
+# part does not.
+for text in ('{"ok": true}\n{unread tail', '{"ok": false, "result": {"ok": true}}', 'sent, messageId=msg_1 maybe',
+             [{"type": "text", "text": '{"ok": true}'}, 7]):
+    out = hook(later[:2] + [result("tu_done", text)] + later[3:], rm_event(), DENY)
+    check(f"a worker_done result {str(text)[:24]!r} is no receipt", decision(out) == "deny", out)
+out = hook(later[:2] + [result("tu_done", [{"type": "text", "text": '{"ok": true}'}])] + later[3:], rm_event(), DENY)
+check("a receipt in text blocks counts", out == {}, out)
 # A refused or failed worker_done does not count.
 out = hook(later[:2] + [result("tu_done", "Permission denied", error=True)] + later[3:], rm_event(), DENY)
 check("an errored worker_done does not open the rm", decision(out) == "deny", out)
@@ -158,7 +166,8 @@ check("a later keep takes back an earlier remove", decision(hook(later_keep, rm_
 # or a result whose content is no text at all.
 for name, text in (("a trailing unread verdict", '{"mode": "card", "verdict": "remove"}\n{unread later verdict'),
                    ("a line that is no warning", 'note\n{"mode": "card", "verdict": "remove"}'),
-                   ("a number for content", 7)):
+                   ("a number for content", 7),
+                   ("a list with an unread part", [{"type": "text", "text": '{"mode": "card", "verdict": "remove"}'}, 7])):
     out = hook(card[:2] + [result("tu_ec", text)] + card[3:], rm_event(), DENY)
     check(f"{name} in end-check's result denies the rm", decision(out) == "deny", out)
 # A broken line after an earlier remove may be a later keep, and bytes that are not UTF-8 are no transcript at all.
