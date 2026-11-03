@@ -564,6 +564,7 @@ def restart_stale(terms, dry_run=False, keep_others=False):
         # Unread, or no prompt box to read it by (a dialog): no evidence the signal went.
         if not lines or not prompt_box(norm(lines)):
             out.update({h: old} if old else {})
+            held.update({h: old["waiting"]} if "waiting" in old else {})  # still unknown: the reload waits with it
             print(f"{h}  stale check not read: {reason}")
             continue
         sig = stale_signal(lines)
@@ -691,7 +692,7 @@ def main(argv):
             only = args[i + 1] if i + 1 < len(args) else ""
             del args[i:i + 2]
         # A mistyped --dry-run, or --terminal without its handle, must not broadcast for real.
-        if only == "" or (only or "").startswith("-") or any(a not in ("--plugins", "--skills", "--dry-run") for a in args):
+        if only == "" or (only or "").startswith("-") or any(a not in ("--plugins", "--skills", "--dry-run", "--retry") for a in args):
             print(__doc__)
             return 2
         STATE.mkdir(parents=True, exist_ok=True)

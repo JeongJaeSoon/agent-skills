@@ -543,6 +543,10 @@ def test_restart_holds_reload():
         pending = json.loads((tmp / "reload-pending.json").read_text())
         check("nothing is typed, and the reload stays pending for it",
               typed == [] and "a" in pending.get("failed", {}), (typed, pending))
+        reads = [[], NOTE_BACKGROUND]
+        sync.screen = lambda h: (lambda s: (s, sync.classify(s, "✳ a")))(reads.pop(0) if len(reads) > 1 else reads[0])
+        sync.broadcast_locked("plugins")
+        check("nor when the waiting session's stale check could not be read", typed == [], typed)
     finally:
         for k, v in old_env.items():
             os.environ.pop(k) if v is None else os.environ.__setitem__(k, v)
@@ -570,6 +574,9 @@ def test_main_help():
         sync.main(["broadcast", "--terminal", "term_x", "--dry-run"])
         check("known broadcast flags still run",
               calls == [("broadcast", (None,), {"dry_run": True, "only": "term_x"})], calls)
+        check("--retry, as docs/platform.md names it, is a plain broadcast",
+              sync.main(["broadcast", "--retry"]) == 0 and calls[-1] == ("broadcast", (None,), {"dry_run": False, "only": None}),
+              calls)
     finally:
         sync.broadcast, sync.sync, sync.nudge, sync.status, sync.close_setup = real
 
