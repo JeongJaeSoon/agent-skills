@@ -414,7 +414,8 @@ def lift(cmd, masked):
     return [(0, cmd, masked)] + sorted(inner, key=lambda x: x[0])
 
 
-CASE = re.compile(r"(?:^|[;&|(\n]|\b(?:then|do|else)\s)\s*case\s[^\n;]*?\sin\b")
+CASE = re.compile(r"(?:^|[;&|()\n])\s*(?:(?:then|do|else)\s+)?case\s[^\n;]*?\sin\b")
+ESAC = re.compile(r"esac(?=$|[\s;&|)])")
 
 
 def case_patterns(masked):
@@ -426,7 +427,7 @@ def case_patterns(masked):
         while True:
             while i < len(masked) and masked[i] in " \t\n":
                 i += 1
-            if masked.startswith("esac", i):
+            if ESAC.match(masked, i):
                 break
             j = masked.find(")", i)
             if j < 0:
@@ -439,10 +440,9 @@ def case_patterns(masked):
     return "".join(out)
 
 
-def commands(cmd):
-    """Each simple command `cmd` would run, the outer ones first, then `$(…)` and backtick contents. A piece this
-    reader cannot split is left out: a guardrail, not a sandbox."""
-    marks, out = {"comment": [], "literal": [], "unsure": None}, []
+def read(cmd):
+    """(masked, marks) of cmd: command_text, and past a construct it does not follow, quotes_only."""
+    marks = {"comment": [], "literal": [], "unsure": None}
     masked = command_text(cmd, marks)
     if marks["unsure"] is not None:
         u = marks["unsure"]
@@ -450,14 +450,25 @@ def commands(cmd):
         masked = masked[:u] + quotes_only(cmd, fallback)[u:]
         marks["comment"] += [(max(s, u), e) for s, e in fallback["comment"] if e > u]
         marks["literal"] += [(max(s, u), e) for s, e in fallback["literal"] if e > u]
+    return masked, marks
+
+
+def commands(cmd):
+    """Each simple command `cmd` would run, the outer ones first, then `$(…)` and backtick contents. A piece this
+    reader cannot split is left out: a guardrail, not a sandbox."""
+    out = []
+    masked, marks = read(cmd)
+    # A line continuation outside single quotes joins the lines (`pk\<newline>ill` is `pkill`): drop each pair and
+    # read the joined text again.
+    joins = {s for s, e in marks["literal"] if e - s == 2 and cmd[s:e] == "\\\n"}
+    if joins:
+        cmd = "".join(c for i, c in enumerate(cmd) if i not in joins and i - 1 not in joins)
+        masked, marks = read(cmd)
     masked = case_patterns(masked)
     chars = list(cmd)
     for s, e in marks["comment"]:  # shlex is not told about comments: `x # > f` writes nothing
         chars[s:e] = " " * (e - s)
     for s, e in marks["literal"]:
-        if cmd[s:e] == "\\\n":  # a line continuation: bash joins the lines
-            chars[s:e] = "  "
-            continue
         for i in range(s, e):
             chars[i] = TEXT_DOLLAR if chars[i] == "$" else chars[i]
     for i, c in enumerate(chars):
