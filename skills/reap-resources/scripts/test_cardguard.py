@@ -184,6 +184,22 @@ for page in ({"hasMore": True, "nextCursor": "c2"}, {"hasMore": True}):
         pass
 pages["c2"] = {"workers": [], "page": {}}
 assert len(cardguard.worker_pages()) == 1, "no page info and no cursor is the last page"
+# Under patrol's budget the deadline bounds the read, not the page cap: a fleet past 50 pages is read whole.
+many = {None: {"workers": [{"dispatchId": "p0"}], "page": {"hasMore": True, "nextCursor": "1"}}}
+many.update({str(i): {"workers": [{"dispatchId": f"p{i}"}], "page": {"hasMore": i < 60, "nextCursor": str(i + 1)}}
+             for i in range(1, 61)})
+cardguard._orca_every_run = lambda args: many[args[args.index("--cursor") + 1] if "--cursor" in args else None]
+assert len(cardguard.worker_pages(deadline=time.time() + 120)) == 61
+try:
+    cardguard.worker_pages()
+    raise AssertionError("without a deadline the page cap stops an endless list")
+except RuntimeError:
+    pass
+try:
+    cardguard.worker_pages(deadline=time.time() + 10)
+    raise AssertionError("a spent budget is a failure")
+except TimeoutError:
+    pass
 cardguard._orca_every_run = saved_every
 saved_oj = reap.orca_json
 reap.orca_json = lambda *a: None

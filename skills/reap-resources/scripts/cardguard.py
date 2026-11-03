@@ -66,11 +66,12 @@ def _orca_every_run(args):
 
 
 def worker_pages(state=None, every_run=True, deadline=None):
-    """Every page of `orca orchestration worker-list`. Raises when a page fails, the budget (deadline) or the page cap
-    runs out, or (every_run) the list is scoped to one Run: a list cut short is a failure, not a smaller fleet.
-    every_run=False reads as the caller's terminal sees it, unchecked."""
-    rows, cursor = [], None
-    for _ in range(WORKER_PAGES):
+    """Every page of `orca orchestration worker-list`. Raises when a page fails, the budget runs out (deadline; with
+    none, the page cap), or (every_run) the list is scoped to one Run: a list cut short is a failure, not a smaller
+    fleet. every_run=False reads as the caller's terminal sees it, unchecked."""
+    rows, cursor, n = [], None, 0
+    while deadline or n < WORKER_PAGES:
+        n += 1
         if deadline and time.time() > deadline - 30:
             raise TimeoutError("worker-list pages left unread")
         args = ("orchestration", "worker-list", "--limit", "100", *(["--terminal-state", state] if state else []),
