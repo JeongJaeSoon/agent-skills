@@ -1079,6 +1079,8 @@ addEventListener("hashchange", route);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) pollState(); });
 setInterval(pollState, POLL_MS);
 setInterval(() => { if (isFleet() && BRIEF_FED.includes(S.section) && !document.hidden) pollBrief(); }, POLL_MS);
+// The fleet poll skips rendering while sessions are unchanged, so the Overview's Tickets card keeps its own clock.
+setInterval(() => { if (isFleet() && S.section === "overview" && !document.hidden) pollTickets(); }, 20e3);
 setInterval(() => { if (isFleet() && S.section === "sent" && !document.hidden) pollSent(); }, POLL_MS);
 // Its own timer: pollState skips the render when the fleet is unchanged, and the pressure round records regardless.
 setInterval(() => { if (isFleet() && S.section === "overview" && !document.hidden) pollPressure(); }, POLL_MS);

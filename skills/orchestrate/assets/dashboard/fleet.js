@@ -536,8 +536,6 @@ async function pollTickets() {
   F.ticketsAt = Date.now(); F.ticketsBusy = false;
   if (isFleet() && S.section === "overview" && JSON.stringify(F.tickets) !== was) renderView();
 }
-// The fleet poll skips rendering while sessions are unchanged, so tickets keep their own clock on the Overview.
-setInterval(() => { if (isFleet() && S.section === "overview" && !document.hidden) pollTickets(); }, 20e3);
 function ticketsCard() {
   pollTickets();
   const rep = F.tickets;
