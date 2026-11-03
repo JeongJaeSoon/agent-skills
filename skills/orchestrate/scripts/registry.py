@@ -499,6 +499,10 @@ class _Module:
                 for t in node.targets:
                     if isinstance(t, ast.Name):
                         self.consts[t.id] = node.value
+                    elif isinstance(t, ast.Tuple) and isinstance(node.value, ast.Tuple):  # A, B = x, y
+                        for e, v in zip(t.elts, node.value.elts):
+                            if isinstance(e, ast.Name):
+                                self.consts[e.id] = v
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 self.funcs[node.name] = node
             elif isinstance(node, ast.ClassDef):

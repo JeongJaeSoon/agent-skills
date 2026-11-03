@@ -32,6 +32,8 @@ report.write_text("# c\n")
 (tmp / "state" / ".stray.json").write_text("{}")  # a hidden file no writer makes is still unregistered
 (d / ".board.json.abc123").write_text("")  # a write_atomic temporary beside board.json is not
 (d / "board.json").write_text("{}")
+(d / ".prs.json.abc123").write_text("")  # a temporary of a registered name whose file is not there yet
+(d / ".leftover.json.backup").write_text("")  # named after an unregistered file: as unregistered as the file
 (tmp / "state" / "card-watch").mkdir()
 (tmp / "state" / "card-watch" / "x.json").mkdir()  # a directory where a card-watch file belongs
 
@@ -46,7 +48,8 @@ assert by["orca"]["state"] == "outside" and by["github"]["writers"] == ["outside
 assert by["progledger"]["entries"] == 1, by["progledger"]  # the */ledger.jsonl glob
 assert by["roles"]["entries"] == 1 and by["roles"]["writers"] == ["hooks"], by["roles"]
 assert by["reports"]["entries"] == 1 and by["reports"]["files"][0]["age"] is not None
-assert sorted(pathlib.Path(p).name for p in rep["unread"]) == [".stray.json", "janitor.json", "leftover.json", "stray.txt"], rep["unread"]
+assert sorted(pathlib.Path(p).name for p in rep["unread"]) == [".leftover.json.backup", ".stray.json", "janitor.json",
+                                                                "leftover.json", "stray.txt"], rep["unread"]
 assert by["cardwatch"]["state"] == "error" and "directory" in by["cardwatch"]["error"], by["cardwatch"]
 assert by["notes"]["state"] == "off", by["notes"]  # reflect.ledger is not set: an outside source switched off
 cons = {c["id"]: c for c in rep["consumers"]}
@@ -55,6 +58,22 @@ assert not cons["page"]["starved"] and not cons["brief"]["starved"], cons["brief
 assert {c["fact"] for c in rep["conflicts"]} == set(flow.registry.DUAL_CANONICAL), rep["conflicts"]
 rule = cons["brief"]["rule"]
 assert "decisions.json" in rule and "tidy.jsonl" in rule and "REPORT" in rule, rule
+
+# An unreadable directory under a glob is an error, not a store never written.
+(tmp / "state" / "roles").chmod(0)
+try:
+    roles = {s["id"]: s for s in flow.flow()["stores"]}["roles"]
+finally:
+    (tmp / "state" / "roles").chmod(0o755)
+assert roles["state"] == "error" and "roles" in roles["error"], roles
+
+# The programs home sharing the shared-state directory: the shared stores' directories are still walked.
+os.environ["PROGRAMS_HOME"] = str(tmp / "state")
+(tmp / "state" / "roles" / "stray.txt").write_text("")
+shared_unread, _ = flow.unregistered(flow.registry.STORES)
+assert any(p.endswith("roles/stray.txt") for p in shared_unread), shared_unread
+(tmp / "state" / "roles" / "stray.txt").unlink()
+os.environ["PROGRAMS_HOME"] = str(tmp / "programs")
 
 # The config key turns a feature on: its store is then not yet written, not off.
 (tmp / "home" / ".claude").mkdir(parents=True)

@@ -99,17 +99,37 @@ def last_row(p, size):
     return " · ".join(str(row[k]) for k in ("ev", "kind", "skill", "type", "action") if isinstance(row.get(k), str))[:80] or None
 
 
+def _glob(p):
+    """Path.glob without swallowing errors: (sorted matches, ["dir: reason", ...]). A missing directory is no match;
+    an unreadable one is an error."""
+    found, bad = [pathlib.Path(p.anchor)], []
+    parts = p.parts[1:]
+    for i, part in enumerate(parts):
+        last = i == len(parts) - 1
+        if not any(c in part for c in "*?["):
+            found = [f / part for f in found]
+            continue
+        nxt = []
+        for f in found:
+            try:
+                with os.scandir(f) as it:
+                    nxt += [f / e.name for e in it if fnmatch.fnmatchcase(e.name, part) and (last or e.is_dir())]
+            except (FileNotFoundError, NotADirectoryError):
+                pass
+            except OSError as e:
+                bad.append(f"{shown(f)}: {e.strerror or e}")
+        found = nxt
+    return sorted(f for f in found if os.path.lexists(f)), bad
+
+
 def stat_node(p, stale_s, now):
     """Stat only; a glob is its entry count and newest entry, a .jsonl also its line count and last row. state: present,
     error (unreadable, or a directory where a file belongs), or None when nothing is there."""
     if "*" in str(p):
-        try:
-            entries = sorted(pathlib.Path(p.anchor).glob(str(p)[len(p.anchor):]))
-        except OSError as e:
-            return {"exists": False, "state": registry.ERROR, "error": str(e)}
+        entries, bad = _glob(p)
         # A pattern with an extension names files; `dir/*` may hold directories too.
         files_only = "." in p.name.lstrip("*")
-        mt, bad = [], []
+        mt = []
         for e in entries:
             try:
                 st = e.stat()
@@ -165,24 +185,32 @@ def unregistered(stores):
     out, problems = [], []
     for top, keys in tops.items():
         others = {t for t in tops if t != top}
+        # Top-level directories a D or S pattern names when P shares their directory: walked as theirs, not as programs.
+        named = {p.split("/", 1)[0] for k, p in pats[top] if k != "P" and "/" in p}
         for dirpath, dirnames, filenames in os.walk(top, onerror=lambda e: problems.append(f"{shown(e.filename)}: {e.strerror}")):
             d = pathlib.Path(dirpath)
             rel_d = d.relative_to(top)
             depth = len(rel_d.parts)
+            first = (rel_d.parts[:1] or ("",))[0]
             if "P" in keys and depth == 0:
-                dirnames[:] = [n for n in dirnames if n.startswith("_")]
+                dirnames[:] = [n for n in dirnames if n.startswith("_") or any(fnmatch.fnmatchcase(n, x) for x in named)]
             own = [p for k, p in pats[top]
-                   # `P/*/...` names a program's files; the `_` directories beside the programs need their own pattern.
-                   if not (k == "P" and (rel_d.parts[:1] or ("",))[0].startswith("_") and p.startswith("*/"))]
+                   # `P/*/...` names a program's files; the `_` directories beside the programs, and D or S
+                   # directories sharing the programs home, need their own pattern.
+                   if not (k == "P" and p.startswith("*/") and (first.startswith("_")
+                                                                  or any(fnmatch.fnmatchcase(first, x) for x in named)))]
             # Another root is walked as itself; a directory a `dir/*` pattern names whole is not entered.
             dirnames[:] = [n for n in dirnames if os.path.realpath(d / n) not in others
                            and str(rel_d / n if depth else pathlib.Path(n)) + "/*" not in own]
             if depth >= SCAN_DEPTH and dirnames:
                 problems.append(f"{shown(d)}: deeper than {SCAN_DEPTH} levels, not walked")
                 dirnames[:] = []
+            here = str(rel_d) if depth else ""
+            names = [b for pd, _, b in (p.rpartition("/") for p in own)
+                     if (bool(pd) and fnmatch.fnmatchcase(here, pd) if depth else not pd)]
             for n in sorted(filenames):
                 rel = str(rel_d / n) if depth else n
-                if any(fnmatch.fnmatchcase(rel, p) for p in own) or _scratch(n, filenames):
+                if any(fnmatch.fnmatchcase(rel, p) for p in own) or _scratch(n, names):
                     continue
                 out.append(shown(d / n))
     return out, problems
@@ -191,11 +219,14 @@ def unregistered(stores):
 TEMP_PREFIXES = (".card-watch-", ".self-check-", ".stuck-", ".settings-")
 
 
-def _scratch(name, siblings):
-    """A writer's temporary (mkstemp names it `.<file>.` or with its own prefix), or Finder's folder file."""
+def _scratch(name, registered):
+    """A writer's temporary: mkstemp names it `.<file>.xxx` or `.<file>-xxx` after a file a store pattern in this
+    directory names, or with a writer's own prefix. Also Finder's folder file."""
     if name == ".DS_Store" or name.startswith(TEMP_PREFIXES):
         return True
-    return name.startswith(".") and any(name[1:].startswith((s + ".", s + "-")) for s in siblings if not s.startswith("."))
+    rest = name[1:]
+    return name.startswith(".") and any(c in ".-" and fnmatch.fnmatchcase(rest[:i], b)
+                                        for i, c in enumerate(rest) if i for b in registered)
 
 
 def flow(sessions=None, now=None, stores=None):

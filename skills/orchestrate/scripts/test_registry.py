@@ -94,12 +94,18 @@ forms = module("fx_forms", '''
     def opens():
         open(file=D / "fx-kw.json", mode="w").close()
         io.open(D / "fx-io.json", "a").close()
+
+    ROLES, SPANS = D / "roles", D / "spans"
+
+    def spans():
+        (SPANS / "fx.json").write_text("{}")
 ''')
 got = {(w.writer, w.targets) for w in registry.scan([forms])}
 for want in [("fx_forms:Box.go", ("d/fx-bound.json",)), ("fx_forms:call_two", ("d/fx-a.json",)),
              ("fx_forms:call_two", ("d/fx-b.json",)), ("fx_forms:again", ("d/fx-first.json",)),
              ("fx_forms:again", ("d/fx-second.json",)), ("fx_forms:side", ("fx-side.json",)),
-             ("fx_forms:opens", ("d/fx-kw.json",)), ("fx_forms:opens", ("d/fx-io.json",))]:
+             ("fx_forms:opens", ("d/fx-kw.json",)), ("fx_forms:opens", ("d/fx-io.json",)),
+             ("fx_forms:spans", ("spans/fx.json",))]:  # `A, B = x, y` at module level
     assert want in got, (want, got)
 
 # (1) a fact with two canonical stores
