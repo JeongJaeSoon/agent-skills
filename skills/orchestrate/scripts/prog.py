@@ -31,6 +31,9 @@ Usage: orch <command> <slug> [options]
   overlap <slug> [--paths P,P]       open program PRs with no land-after relation that change one file
                                      (or one exclusive_paths glob): stack the later on the earlier. With
                                      --paths, the open PRs a unit not started yet would collide with.
+                                     Also warns, one line per file, where they share a file with an open
+                                     PR another program on the same repo has in its ledger (OVERLAP
+                                     <other-slug> …, no command; UNKNOWN when unreadable).
                                      status prints the same OVERLAP lines
   land <slug> --pr N [--class main-fix|gate|urgent|normal] [--wait-minutes M] [--onto-lower]
                                      the one way a program PR reaches its base. Normal lane: lands
@@ -729,15 +732,10 @@ def program_prs(events, rows, tickets):
     return out
 
 
-def path_overlaps(slug, files, prs, cfg, rows, after, stacks=None):
-    """OVERLAP lines for two open PRs that change one file, or files under one exclusive_paths glob, with no
-    land-after relation: whichever merges first leaves the other in conflict, and the fix push dismisses its
-    approval. A is the lower PR number, which the remedy keeps as the base.
-
-    files {pr: [paths]}, prs {pr: ticket or None}, after {ticket: tickets it lands after}. PRs are related
-    through `orch dep` / Orca deps, one GitHub stack, or one PR's base being the other's head, transitively,
-    so the ends of a chain A <- B <- C are not reported, even when B is not a program PR."""
-    root = {n: n for n in [*files, *(r["number"] for r in rows), *(m for s in (stacks or {}).values() for m in s)]}
+def related(nodes, rows, stacks=None, edges=()):
+    """find(n) over PRs, equal for two PRs tied by an edge, one GitHub stack, or one PR's base being the other's
+    head, transitively."""
+    root = {n: n for n in [*nodes, *(r["number"] for r in rows), *(m for s in (stacks or {}).values() for m in s)]}
 
     def find(n):
         while root[n] != n:
@@ -747,20 +745,36 @@ def path_overlaps(slug, files, prs, cfg, rows, after, stacks=None):
     def join(a, b):
         if a in root and b in root:
             root[find(a)] = find(b)
-    by_ticket = {}
-    for n, t in prs.items():
-        by_ticket.setdefault(t, []).append(n)
-    for t, below in after.items():
-        for b in below:
-            for x in by_ticket.get(t, []):
-                for y in by_ticket.get(b, []):
-                    join(x, y)
+    for x, y in edges:
+        join(x, y)
     for members in (stacks or {}).values():
         for x, y in zip(members, members[1:]):
             join(x, y)
     head = {r.get("headRefName"): r["number"] for r in rows}
     for r in rows:
         join(r["number"], head.get(r.get("baseRefName")))
+    return find
+
+
+def path_hit(p, f):
+    """A planned path p (a file, a directory or a glob) covers changed file f."""
+    return f == p or fnmatch.fnmatch(f, p) or f.startswith(p.rstrip("/") + "/")
+
+
+def path_overlaps(slug, files, prs, cfg, rows, after, stacks=None):
+    """OVERLAP lines for two open PRs that change one file, or files under one exclusive_paths glob, with no
+    land-after relation: whichever merges first leaves the other in conflict, and the fix push dismisses its
+    approval. A is the lower PR number, which the remedy keeps as the base.
+
+    files {pr: [paths]}, prs {pr: ticket or None}, after {ticket: tickets it lands after}. PRs are related
+    through `orch dep` / Orca deps, one GitHub stack, or one PR's base being the other's head, transitively,
+    so the ends of a chain A <- B <- C are not reported, even when B is not a program PR."""
+    by_ticket = {}
+    for n, t in prs.items():
+        by_ticket.setdefault(t, []).append(n)
+    edges = [(x, y) for t, below in after.items() for b in below
+             for x in by_ticket.get(t, []) for y in by_ticket.get(b, [])]
+    find = related(files, rows, stacks, edges)
     pats = knob(cfg, "exclusive_paths")
     out = []
     for a in sorted(files):
@@ -787,12 +801,9 @@ def plan_overlaps(slug, paths, files, prs, cfg, rows):
     """OVERLAP lines for a unit not started yet: the open PRs that change one of its planned paths (a file, a
     directory or a glob), or a file under the same exclusive_paths glob. The unit is to be stacked on that PR."""
     pats = knob(cfg, "exclusive_paths")
-
-    def hit(p, f):
-        return f == p or fnmatch.fnmatch(f, p) or f.startswith(p.rstrip("/") + "/")
     out = []
     for n in sorted(files):
-        shared = sorted({p for p in paths for f in files[n] if hit(p, f)})
+        shared = sorted({p for p in paths for f in files[n] if path_hit(p, f)})
         if not shared:
             shared = [g for g in pats if any(fnmatch.fnmatch(p, g) for p in paths)
                       and any(fnmatch.fnmatch(f, g) for f in files[n])]
@@ -812,17 +823,87 @@ def program_files(cfg, events, rows, tasks):
     return prs, files
 
 
+def other_program_files(slug, repo, mine, rows, list_files=rest_files):
+    """{other program on repo: {open PR: changed files, or None when unreadable}, or None when its state is
+    unreadable}. Its PRs are the ones its own ledger names, not PRs guessed from a branch or title: short
+    predicate ids repeat across programs, and a PR in `mine` is left to this program."""
+    open_, out = {r["number"] for r in rows}, {}
+    for d in sorted(HOME.iterdir()) if HOME.is_dir() else []:
+        if d.name == slug or d.name.startswith((".", "_")) or not (d / "program.json").is_file():
+            continue
+        try:
+            theirs_repo = json.loads((d / "program.json").read_text())["repo"]
+            if theirs_repo.lower() != repo.lower():
+                continue
+            led = d / "ledger.jsonl"
+            events = [json.loads(l) for l in led.read_text().splitlines() if l.strip()] if led.exists() else []
+            if not all(isinstance(e.get("ev"), str) for e in events):
+                raise TypeError("a ledger row with no event")
+            states = pr_state(events)
+            if not all(type(n) is int for n in states):
+                raise TypeError("a ledger PR number that is not an integer")
+        except (OSError, ValueError, AttributeError, TypeError, KeyError):
+            out[d.name] = None
+            continue
+        # open_rows stops at OPEN_LIMIT: at the limit, a PR missing from it may still be open.
+        out[d.name] = {n: list_files(repo, n) if n in open_ else None for n in sorted(states)
+                       if (n in open_ or len(rows) >= OPEN_LIMIT) and n not in mine and "landed" not in states[n]}
+    return out
+
+
+def cross_inputs(slug, repo, events, rows, prs, files, list_files=rest_files):
+    """(prs, files, theirs, unread): this program's PRs less those another program's ledger names (a PR matched
+    only by a ticket in its branch or title loses to a ledger), other_program_files, and this program's PRs
+    whose file list could not be read."""
+    theirs = other_program_files(slug, repo, set(pr_state(events)), rows, list_files)
+    claimed = {n for x in theirs.values() for n in x or {}}
+    prs = {n: t for n, t in prs.items() if n not in claimed}
+    return prs, {n: f for n, f in files.items() if n in prs}, theirs, sorted(set(prs) - set(files))
+
+
+def cross_overlaps(files, theirs, rows, stacks=None, paths=None, unread=()):
+    """Warning lines for this program's open PRs (or planned paths) that change a file another program's open PR
+    changes, one per shared file. No stack or `orch dep` command: a dep names this program's tickets only, and
+    which side lands first is the two leads' call. PRs already stacked are skipped; what could not be read is
+    UNKNOWN, including this program's own PRs in unread. files {pr: [paths]}, theirs from other_program_files."""
+    out = [f"OVERLAP UNKNOWN {other} → its program state could not be read; compare it by hand"
+           for other in sorted(theirs) if theirs[other] is None]
+    out += [f"OVERLAP UNKNOWN #{n} → this program's file list for it could not be read; compare it by hand"
+            for n in unread]
+    out += [f"OVERLAP UNKNOWN {other} #{n} → its file list could not be read; compare it by hand"
+            for other in sorted(theirs) for n, changed in sorted((theirs[other] or {}).items()) if changed is None]
+    if not files and not paths:
+        return out
+    find = related([*files, *(n for prs in theirs.values() for n in prs or {})], rows, stacks)
+    warn = "→ warning: settle the landing order with the other lead through PARENT"
+    for other in sorted(o for o in theirs if theirs[o]):
+        for n, changed in sorted(theirs[other].items()):
+            if changed is None:
+                continue
+            if paths:
+                out += [f"OVERLAP {other} plan #{n} {f} {warn}"
+                        for f in sorted({f for p in paths for f in changed if path_hit(p, f)})]
+            else:
+                out += [f"OVERLAP {other} #{a} #{n} {f} {warn}" for a in sorted(files) if find(a) != find(n)
+                        for f in sorted(set(files[a]) & set(changed))]
+    return out
+
+
 def cmd_overlap(argv):
     p = Program(argv[0])
     rows, tasks = open_rows(p.cfg["repo"]), run_tasks(p.cfg["run"])
-    prs, files = program_files(p.cfg, p.events(), rows, tasks)
+    events = p.events()
+    prs, files, theirs, unread = cross_inputs(p.slug, p.cfg["repo"], events, rows,
+                                              *program_files(p.cfg, events, rows, tasks))
     paths = [x for x in (opt(argv, "--paths") or "").split(",") if x]
+    stacks = repo_stacks(p.cfg["repo"])
     if paths:
         lines = plan_overlaps(p.slug, paths, files, prs, p.cfg, rows)
     else:
-        lines = path_overlaps(p.slug, files, prs, p.cfg, rows, dep_map(p.events(), deps_from_tasks(tasks)),
-                              repo_stacks(p.cfg["repo"]))
-    print("\n".join(lines) or f"no overlap among {len(files)} open program PR(s)")
+        lines = path_overlaps(p.slug, files, prs, p.cfg, rows, dep_map(events, deps_from_tasks(tasks)), stacks)
+    lines += cross_overlaps(files, theirs, rows, stacks, paths, unread)
+    print("\n".join(lines) or f"no overlap among {len(files)} open program PR(s)"
+          f" and {sum(len(x or {}) for x in theirs.values())} open PR(s) of other programs on {p.cfg['repo']}")
 
 
 TEST_RESULTS = "<!-- test-results -->"
@@ -894,8 +975,11 @@ def base_overlap(repo, base, c):
     return sorted(mine & {f["filename"] for f in moved.get("files") or []})
 
 
+OPEN_LIMIT = 200
+
+
 def open_rows(repo):
-    return gh_json("pr", "list", "--repo", repo, "--state", "open", "--limit", "200", "--json",
+    return gh_json("pr", "list", "--repo", repo, "--state", "open", "--limit", str(OPEN_LIMIT), "--json",
                    "number,title,headRefOid,headRefName,mergeStateStatus,isDraft,statusCheckRollup,baseRefName")
 
 
@@ -1298,8 +1382,9 @@ def cmd_status(argv):
         lines.append(f"  LANDED-BUT-OPEN {tk} (dispatch {dispatch}): "
                      + (f"once its main CI is recorded, worker-release, close its terminals and {rm}" if active
                         else f"released, but its card is still there: {rm}"))
-    prs, files = program_files(cfg, events, rows, tasks)
+    prs, files, theirs, unread = cross_inputs(p.slug, cfg["repo"], events, rows, *program_files(cfg, events, rows, tasks))
     lines += [f"  {x}" for x in path_overlaps(p.slug, files, prs, cfg, rows, dep_map(events, deps), stacks)]
+    lines += [f"  {x}" for x in cross_overlaps(files, theirs, rows, stacks, unread=unread)]
 
     # 3. growth
     admitted = {e["ticket"] for e in events if e["ev"] == "admitted" and e.get("ticket")}

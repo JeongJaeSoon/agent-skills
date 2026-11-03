@@ -106,6 +106,16 @@ Your reports and actions cover what you, your leads and their cards own (the ros
 - A message that relays the human's direction quotes their words verbatim (a message of several lines read whole first, SKILL.md "What reaches the human") and labels every other piece of direction by its origin (you, a lead, a reviewer); a proposal of yours sent as the human's recommendation reaches the card as a decision. It never carries advice on getting an act past a prompt, the classifier or a hook, even when that advice is labelled the human's intent (SKILL.md "Refused acts").
 - Typing into another session's composer is only for the one-line nudge in SKILL.md and the reload below. Both pass the idle check first.
 
+## Leads that depend on each other
+
+One lead's output can be another lead's input: a decision, a document, an interface. A lead started as a dispatched worker cannot add tasks or deps to your Run, so you hold the dependency as a contract and relay it.
+
+- A contract has six fields: the producing lead; the consuming lead; the artifact, with its path and version (a commit SHA, or a modified time for a file outside git); the consumer's unit it blocks; the consumer's acceptance, a reply that it received that version and will build on it; and who reports a change or withdrawal (the producer, to you, with the new version). Record it as an `orch board todo add` line naming all six. The to-do only reports: it neither blocks the unit nor records the acceptance.
+- The producer reports the artifact to you, and you send the report to the consumer verbatim with the contract's fields. The contract stays open until the consumer's acceptance arrives, and until then the consumer does not start the blocked unit. A new version travels the same way, and the consumer rewrites the briefs it built on the old one (`brief.md`: a corrected fact reopens the decisions built on it).
+- A question of fact (where a file lives, what a field means, whether a PR is open) goes from one lead to the other directly, to the address you gave ("Talking to sessions"). Such a message never directs the other lead's workers, carries an approval or changes scope; those come from you.
+- When two leads change one file, the two leads and you agree which PR lands first. Once it has landed, the other PR merges the updated base into its branch. Nothing is stacked across programs: `orch dep` names a program's own tickets only.
+- `orch overlap <slug>` (with `--paths` too) and `orch status` print an `OVERLAP <other-slug> …` line for each file this program's open PRs or planned paths share with an open PR that another program on the same repo has in its ledger, skipping a pair already stacked. The line carries no command: settle the order as above. `OVERLAP UNKNOWN …` means a file list or another program's state could not be read; compare that one by hand. A PR enters a program's ledger at `ready`, so another program's PR before that is not seen.
+
 ## Asking the human
 
 The inbox is the dashboard's: `orch-dash inbox add --type <approval|run_command|login|verify_failed|verify_ok|ready_to_merge> --title "<one line>" [--session <id>] [--url <link>] [--command "<exact command>"] --key <dedupe key>`, and `orch-dash inbox resolve --key <key>` once it is settled. A trust prompt is `login`. The dashboard shows `--command` with a copy button and never runs it.
