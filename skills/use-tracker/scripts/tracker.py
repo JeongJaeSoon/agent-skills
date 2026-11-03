@@ -791,7 +791,8 @@ class MarkdownAdapter:
         meta = {"title": title, "state": "backlog", "labels": list(labels),
                 "parent": f"[[{parent}]]" if parent else None, "related": [f"[[{related}]]"] if related else None,
                 "created_at": stamp, "updated_at": stamp}
-        body = read_body(body_file)
+        body, umask = read_body(body_file), os.umask(0)
+        os.umask(umask)
         while True:
             taken = [int(n[len(key) + 1:-3]) for n in os.listdir(folder) if re.fullmatch(re.escape(key) + r"-\d+\.md", n)]
             issue_id = f"{key}-{max(taken, default=0) + 1}"
@@ -800,7 +801,7 @@ class MarkdownAdapter:
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as fh:
                     fh.write(render_ticket(dict(meta, id=issue_id), body))
-                os.chmod(tmp, 0o644)
+                os.chmod(tmp, 0o666 & ~umask)  # mkstemp makes 0600; a ticket gets what open() would give it
                 # link never replaces: two workers creating at once never get the same number,
                 # and the ticket appears whole or not at all.
                 os.link(tmp, os.path.join(folder, issue_id + ".md"))

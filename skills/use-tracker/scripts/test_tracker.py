@@ -730,10 +730,18 @@ class MarkdownCli(unittest.TestCase):
     def test_create_leaves_no_temp_file_and_refuses_a_shared_key(self):
         self.ok("create", "--project", "abc", "--title", "t", "--body-file", self.body)
         self.assertEqual(sorted(os.listdir(self.path("abc"))), ["ABC-1.md"])
+        adapter = tracker.MarkdownAdapter({"root": self.root})
+        for mask, mode in ((0o077, 0o600), (0o002, 0o664)):
+            old = os.umask(mask)
+            try:
+                made = adapter.create("abc", "t", self.body)["id"]
+            finally:
+                os.umask(old)
+            self.assertEqual(os.stat(self.path("abc", made + ".md")).st_mode & 0o777, mode)
         os.makedirs(self.path("ABC"), exist_ok=True)
         if len([p for p in os.listdir(self.root) if p.upper() == "ABC"]) < 2:
             # A case-insensitive disk: ABC is the abc folder, so it is the same project.
-            self.assertEqual(self.ok("create", "--project", "ABC", "--title", "t", "--body-file", self.body)["id"], "ABC-2")
+            self.assertEqual(self.ok("create", "--project", "ABC", "--title", "t", "--body-file", self.body)["id"], "ABC-4")
         # A case-sensitive disk holds abc and ABC as two folders; listdir stands in for one here.
         adapter, real = tracker.MarkdownAdapter({"root": self.root}), os.listdir
         with mock.patch.object(tracker.os, "listdir", lambda d: ["ABC", "abc"] if d == self.root else real(d)):
