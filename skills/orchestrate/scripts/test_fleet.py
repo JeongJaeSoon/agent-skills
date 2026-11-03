@@ -297,6 +297,11 @@ code, out = fleet.open_session("wt-export")
 fleet.run_json = real_run_json
 assert (out["ok"], out["navigated"], out["result"], out["copy"]) == (False, None, raw, where), out
 assert out["warning"] and "\n" not in out["warning"], out
+# A long reply reaches the page whole; the log keeps a cut copy under its 4 KiB line cap.
+big = {"ok": True, "result": {"focus": {"handle": "term_export"}, "extra": "x" * 5000}}
+code, out = fleet.open_session("wt-export", switch=lambda h: switched.append(h) or big)
+assert out["result"] == big and len(json.loads((state_dir / "sends.jsonl").read_text().splitlines()[-1])["result"]) <= 1001, out["warning"]
+switched.pop()
 code, out = fleet.open_session("wt-export", switch=lambda h: switched.append(h))
 assert (out["ok"], out["navigated"], out["result"]) == (False, None, None) and out["warning"], out
 assert fleet.open_session("wt-nowhere", switch=switched.append)[0] == 409 and switched == ["term_export"] * 4

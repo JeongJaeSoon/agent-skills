@@ -2511,7 +2511,9 @@ def open_session(session_id, switch=None):
             else:
                 out.update(result=got, reason="switch not confirmed",
                            warning="Orca's reply to terminal switch has no navigated field; passed through as it came")
-    append_line(state_dir() / "sends.jsonl", {**row, **out, "code": code})
+    # The page gets the reply whole; the log line has a 4 KiB cap, so it keeps a cut copy.
+    logged = {**out, "result": mask(json.dumps(out["result"]), 1000)} if "result" in out else out
+    append_line(state_dir() / "sends.jsonl", {**row, **logged, "code": code})
     return code, out
 
 
