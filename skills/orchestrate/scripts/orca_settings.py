@@ -11,7 +11,7 @@ The layout is orchestrator (its own Run, depth 0) → lead → the lead's worker
 as a dispatched worker is depth 1, so its helpers need Nested worker depth 3; a lead started as a `/goal` card binds
 its own Run, so the same tree needs only 2.
 """
-import json, os, pathlib, sqlite3, subprocess, sys
+import json, os, pathlib, re, sqlite3, subprocess, sys
 
 # A key the settings document lacks holds Orca's default: depth 1 refuses every worker's own worker-start.
 DEFAULTS = {"nestedWorkerMaxDepth": 1, "orchestrationHeartbeatsEnabled": True,
@@ -112,28 +112,104 @@ def worker_terminal(row):
     return None
 
 
+# Orca 1.4.246 answers worker-list, run-list and check with a concise view unless given --full; an older Orca has no --full and always
+# answers with the full record. Emptied once an Orca refuses the flag, so the rest of the process asks without it.
+FULL = ["--full"]
+
+
+def worker_row(row, run=None):
+    """A worker-list row in the full record's names (workerState, agentTerminalHandle, resource.worktreeId,
+    projection.outcome and .liveness.verdict). A full record is returned as it is. A concise row carries no
+    dispatchStatus, retainedReason, projection.parent, stage or nextAction, so those stay absent: worker_list asks
+    for --full. run: the Run the listing was scoped to, which a concise row does not name."""
+    if not isinstance(row, dict) or "workerState" in row or "projection" in row:
+        return row
+    w = dict(row)
+    for key, value in (("runId", run), ("workerState", row.get("state")),
+                       ("agentTerminalHandle", worker_terminal(row)),
+                       ("resource", {"worktreeId": row["workspace"]} if isinstance(row.get("workspace"), str) else None)):
+        if value is not None and key not in w:
+            w[key] = value
+    pj = {"outcome": row.get("outcome"),
+          "liveness": {"verdict": row["liveness"]} if isinstance(row.get("liveness"), str) else None,
+          "provider": {"id": row["agent"]} if isinstance(row.get("agent"), str) else None}
+    if pj := {k: v for k, v in pj.items() if v is not None}:
+        w["projection"] = pj
+    return w
+
+
+def with_full(call, *argv):
+    """call(*argv, "--full"): the full record. An error naming an unknown --full is an Orca from before the flag,
+    whose default answer is already the full record: asked again without it, and FULL emptied for the process."""
+    flags = tuple(FULL)  # another thread may empty FULL while this call is out
+    try:
+        return call(*argv, *flags)
+    except (Exception, SystemExit) as e:
+        if not flags or not re.search(r"[Uu]nknown (flag|option)\W+--full\b", str(e)):
+            raise
+        FULL.clear()
+        return call(*argv)
+
+
+def pages(call, command, *args, error=RuntimeError):
+    """Every page of `orca orchestration <command> <args>` read with --full, as (result, more) per page.
+    call(*argv) returns the result object of `orca <argv> --json` and raises or exits on an error (with_full). One
+    call per page either way: --full
+    makes each answer larger, not more numerous. The page is `page.nextCursor`/`hasMore`, or the concise view's
+    top-level `nextCursor`. Raises error (the caller's own failure type) when a page says more follow but gives no
+    cursor: a list cut short is not a smaller list."""
+    cursor = None
+    while True:
+        res = with_full(call, "orchestration", command, *args, *(("--cursor", cursor) if cursor else ()))
+        res = res if isinstance(res, dict) else {}
+        page = res.get("page") if isinstance(res.get("page"), dict) else {}
+        cursor = page.get("nextCursor", res.get("nextCursor"))
+        more = bool(page.get("hasMore", cursor))
+        if more and not cursor:
+            raise error(f"{command} has more pages and no cursor to them")
+        yield res, more
+        if not more:
+            return
+
+
+def worker_list(call, *args, error=RuntimeError):
+    """pages() of worker-list as (rows, result, more), the rows through worker_row."""
+    for res, more in pages(call, "worker-list", *args, error=error):
+        run = (res.get("scope") or {}).get("run")
+        yield [worker_row(w, run) for w in res.get("workers") or []], res, more
+
+
+def all_workers(call, *args, error=RuntimeError):
+    """worker_list's rows from every page."""
+    return [w for rows, _, _ in worker_list(call, *args, error=error) for w in rows]
+
+
+def run_list(call, error=RuntimeError):
+    """run-list's first page (Orca's default size, newest first) read with --full: from 1.4.246 only --full carries
+    coordinator_handle and legacy. One page, as before: every listed Run costs fleet a worker-list, task-list and
+    gate-list."""
+    return next(pages(call, "run-list", error=error))[0].get("runs") or []
+
+
 def own_dispatch(orca=None, failed=None):
     """This terminal's own active Dispatch when it is a dispatched worker (a lead started with worker-start, whose
     `run-current` is null), else None, or `failed` when worker-list did not answer. Unbound, worker-list spans every
     Run; only active terminals can be this one."""
-    me, cursor = os.environ.get("ORCA_TERMINAL_HANDLE"), None
-    while me:
-        try:
-            p = subprocess.run([orca or os.environ.get("SKILLS_SYNC_ORCA", "orca"), "orchestration", "worker-list",
-                                "--terminal-state", "active", "--limit", "100", *(["--cursor", cursor] if cursor else []),
-                                "--json"], capture_output=True, text=True, timeout=30)
-            if p.returncode:
-                return failed
-            res = json.loads(p.stdout).get("result") or {}
-            mine = next((w for w in res.get("workers") or [] if worker_terminal(w) == me), None)
-            page = res.get("page") or {}
-        except (OSError, subprocess.TimeoutExpired, ValueError, AttributeError, TypeError):
-            return failed
-        if mine:
-            return mine
-        cursor = page.get("nextCursor")
-        if not page.get("hasMore") or not cursor:
-            return None
+    me = os.environ.get("ORCA_TERMINAL_HANDLE")
+
+    def call(*argv):
+        p = subprocess.run([orca or os.environ.get("SKILLS_SYNC_ORCA", "orca"), *argv, "--json"],
+                           capture_output=True, text=True, timeout=30)
+        if p.returncode:
+            raise RuntimeError(f"{p.stdout} {p.stderr}")
+        return json.loads(p.stdout).get("result") or {}
+    try:
+        for rows, _, _ in worker_list(call, "--terminal-state", "active", "--limit", "100") if me else ():
+            mine = next((w for w in rows if worker_terminal(w) == me), None)
+            if mine:
+                return mine
+    except (OSError, subprocess.TimeoutExpired, ValueError, AttributeError, TypeError, RuntimeError):
+        return failed
     return None
 
 

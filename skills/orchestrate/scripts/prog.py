@@ -233,13 +233,8 @@ def orca_json(*args):
 def all_workers(run_id):
     """Every Dispatch of the Run. worker-list pages at 100, newest first, and a program passed 86 in two days:
     one page would drop the oldest cards from LANDED-BUT-OPEN."""
-    workers, cursor = [], None
-    while True:
-        res = orca_json("orchestration", "worker-list", "--run", run_id, "--limit", "100", *(["--cursor", cursor] if cursor else []))
-        workers += res.get("workers", [])
-        cursor = (res.get("page") or {}).get("nextCursor")
-        if not (res.get("page") or {}).get("hasMore") or not cursor:
-            return workers
+    import orca_settings
+    return orca_settings.all_workers(orca_json, "--run", run_id, "--limit", "100", error=SystemExit)
 
 
 # The program's lead Dispatch (program.json `lead_dispatch`) once a Program is loaded: set for a lead started with
@@ -2097,6 +2092,13 @@ def write_backfill(p, text, events, rows, dry_run):
     print(f"written; the old ledger is kept beside it as {p.dir.name}/ledger.jsonl.bak-*")
 
 
+def check(*args):
+    """`orca orchestration check` with the full record: Orca 1.4.246's concise view drops deliveryId, payload and
+    from_handle, and a wait that cannot tell its batch was delivered takes the next, empty one."""
+    import orca_settings
+    return orca_settings.with_full(orca_json, "orchestration", "check", *args)
+
+
 def batch(res):
     return res.get("deliveryId"), res.get("messages") or []
 
@@ -2520,12 +2522,11 @@ def cmd_wait(argv):
     if watched := watch_lines(me, False):
         print("\n".join(watched), flush=True)
     for i in range(rounds):
-        res = orca_json("orchestration", "check", *box, "--wait", "--types", ",".join(sorted(ACTIONABLE)),
-                        "--timeout-ms", timeout)
+        res = check(*box, "--wait", "--types", ",".join(sorted(ACTIONABLE)), "--timeout-ms", timeout)
         did, msgs = batch(res)
-        if not did:
+        if not did and not msgs:
             # A typed wait never wakes for heartbeats, so they pile up in the FIFO; pull that batch.
-            did, msgs = batch(orca_json("orchestration", "check", *box))
+            did, msgs = batch(check(*box))
         work = [m for m in msgs if m.get("type") != "heartbeat" and not revoked_echo(m)]
         for m in msgs:
             if revoked_echo(m):
@@ -2546,7 +2547,7 @@ def cmd_wait(argv):
                   f"orca orchestration check {' '.join(box)} --ack {did} --json")
             return
         if did:
-            orca_json("orchestration", "check", *box, "--ack", did)
+            check(*box, "--ack", did)
         print(f"wait {i + 1}/{rounds}: nothing actionable ({len(msgs)} heartbeat(s) or refusals acked)", flush=True)
         if print_stuck(p, run_id, only_new=True):
             print_sweep(run_id, p.dir / "self-check.json")
@@ -2602,12 +2603,12 @@ def cmd_inbox(argv):
     whole JSON batches, and a top-level session read each of them in full."""
     acked = opt(argv, "--ack")
     try:
-        did, msgs = batch(orca_json("orchestration", "check", *(["--ack", acked] if acked else [])))
+        did, msgs = batch(check(*(["--ack", acked] if acked else [])))
     except SystemExit as e:  # a stale delivery id must not cost the wait the caller is about to rely on
         if not acked:
             raise
         print(f"ack {acked} failed ({e}); taking the inbox without it", flush=True)
-        did, msgs = batch(orca_json("orchestration", "check"))
+        did, msgs = batch(check())
     deadline, skipped = time.monotonic() + int(opt(argv, "--timeout-ms", "3300000")) / 1000, 0
     work = [m for m in msgs if m.get("type") != "heartbeat" and not revoked_echo(m)]
     # Like orch wait: a batch of only heartbeats or refusals is acked and the wait goes on, until the deadline.
@@ -2617,10 +2618,10 @@ def cmd_inbox(argv):
             break
         if did:
             skipped += len(msgs)
-            did, msgs = batch(orca_json("orchestration", "check", "--ack", did))
+            did, msgs = batch(check("--ack", did))
         else:
-            orca_json("orchestration", "check", "--peek", "--wait", "--timeout-ms", str(left))
-            did, msgs = batch(orca_json("orchestration", "check"))
+            check("--peek", "--wait", "--timeout-ms", str(left))
+            did, msgs = batch(check())
             if not msgs:
                 break
         work = [m for m in msgs if m.get("type") != "heartbeat" and not revoked_echo(m)]

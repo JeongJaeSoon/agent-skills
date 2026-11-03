@@ -53,42 +53,51 @@ def child_cards(w):
     return sorted(c for c in ((i or "").split("::")[1] if "::" in (i or "") else "" for i in ids) if c and os.path.isdir(c))
 
 
+def _orca(args, **kw):
+    """An Orca listing's result; raises with Orca's JSON error, else its stderr (worker_list reads either)."""
+    p = subprocess.run(["orca", *args, "--json"], capture_output=True, text=True, timeout=30, **kw)
+    try:
+        out = json.loads(p.stdout or "{}")
+    except ValueError:
+        out = None
+    if p.returncode or not isinstance(out, dict) or out.get("ok") is False:
+        why = (out.get("error") if isinstance(out, dict) else None) or p.stderr.strip() or p.stdout.strip()
+        raise RuntimeError(f"orca {' '.join(args[:2])} failed: {str(why)[:200]} (exit {p.returncode})")
+    return out.get("result", out)
+
+
 def _orca_every_run(args):
     """An Orca listing over every Run: with this terminal's handle set, worker-list scopes to its bound Run. Run from
     the checkout: outside a git directory (launchd starts in /) Orca was seen binding the list to one Run anyway."""
-    p = subprocess.run(["orca", *args, "--json"], capture_output=True, text=True, timeout=30,
-                       env={**os.environ, "ORCA_TERMINAL_HANDLE": ""}, cwd=REPO)
-    out = json.loads(p.stdout or "{}")
-    if p.returncode or not isinstance(out, dict) or out.get("ok") is False:
-        raise RuntimeError(f"orca {' '.join(args[:2])} failed: {str(out.get('error') if isinstance(out, dict) else out)[:120]}"
-                           f" (exit {p.returncode})")
-    return out.get("result", out)
+    return _orca(args, env={**os.environ, "ORCA_TERMINAL_HANDLE": ""}, cwd=REPO)
+
+
+def _orca_as_seen(*args):
+    """An Orca listing as this terminal sees it."""
+    return _orca(args)
 
 
 def worker_pages(state=None, every_run=True, deadline=None):
     """Every page of `orca orchestration worker-list`. Raises when a page fails, the budget runs out (deadline; with
     none, the page cap), or (every_run) the list is scoped to one Run: a list cut short is a failure, not a smaller
     fleet. every_run=False reads as the caller's terminal sees it, unchecked."""
-    rows, cursor, n = [], None, 0
-    while deadline or n < WORKER_PAGES:
-        n += 1
-        if deadline and time.time() > deadline - 30:
-            raise TimeoutError("worker-list pages left unread")
-        args = ("orchestration", "worker-list", "--limit", "100", *(["--terminal-state", state] if state else []),
-                *(["--cursor", cursor] if cursor else []))
-        res = _orca_every_run(args) if every_run else reap.orca_json(*args)
-        if not isinstance(res, dict) or not isinstance(res.get("workers"), list):
+    if deadline and time.time() > deadline - 30:
+        raise TimeoutError("worker-list pages left unread")
+    rows, call = [], (lambda *a: _orca_every_run(a)) if every_run else _orca_as_seen
+    for n, (page, res, more) in enumerate(_orch("orca_settings").worker_list(
+            call, "--limit", "100", *(["--terminal-state", state] if state else [])), 1):
+        if not isinstance(res.get("workers"), list):
             raise RuntimeError("worker-list answered without a workers list")
         if every_run and (res.get("scope") or {}).get("source", "all") != "all":
             raise RuntimeError(f"worker-list scoped to {res['scope']}, not every Run")
-        rows += res["workers"]
-        page = res.get("page") or {}
-        cursor = page.get("nextCursor")
-        if page.get("hasMore") is False or (not cursor and not page.get("hasMore")):
+        rows += page
+        if not more:
             return rows
-        if not cursor:
-            raise RuntimeError("worker-list has more pages and no cursor to them")
-    raise RuntimeError(f"worker-list has more than {WORKER_PAGES} pages")
+        if deadline and time.time() > deadline - 30:
+            raise TimeoutError("worker-list pages left unread")
+        if not deadline and n >= WORKER_PAGES:
+            raise RuntimeError(f"worker-list has more than {WORKER_PAGES} pages")
+    return rows
 
 
 def _orch(name):
