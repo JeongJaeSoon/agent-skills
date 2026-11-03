@@ -29,6 +29,8 @@ WATCH       Every main run, read from GitHub: gh run list --repo <repo> --branch
             wake-up also carries your heartbeat and your own mail check. Never orch wait or
             `check --run`: they read the lead's Run inbox.
 ON RED      1. Flake check: re-run the failed jobs once (gh run rerun <id> --failed) and read the log.
+               Read cancelled jobs and timeouts as landing.md "Main red" says; a timeout whose
+               re-run is green goes in the digest as LATER with its trigger.
                Flake → note it in the digest (orch-dash note <slug> --kind risk --text …), freeze nothing.
             2. Defect → orch record <slug> main_red --sha <merge commit>. That freezes every lane
                except --class main-fix.
