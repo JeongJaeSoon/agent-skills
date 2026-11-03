@@ -162,6 +162,7 @@ def bgwait_signal(lines):
     if start is None:
         return None
     text = " ".join(card_watch.GLYPHS.sub("", l.strip()) for l in body[start:] if l.strip() and not set(l.strip()) <= {"─"})
+    text = text.replace("’", "'")  # a typographic apostrophe: "I’m waiting", "don’t wait"
     waits = any(BG_WAIT.search(s.strip()) and not NO_WAIT.search(s) for s in SENTENCE.split(text))
     return text[:300] if waits else None
 

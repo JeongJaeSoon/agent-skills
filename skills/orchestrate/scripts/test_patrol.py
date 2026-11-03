@@ -632,11 +632,13 @@ for lines in (plain, hooked, notice, ["⏺ Started the review in the background.
                "  The task is complete."] + plain[1:],
               ["⏺ After waiting for the background review to finish, I applied its findings. All checks pass."]
               + plain[1:],
-              ["⏺ While waiting on the background build I fixed the lint errors; the build has passed."] + plain[1:]):
+              ["⏺ While waiting on the background build I fixed the lint errors; the build has passed."] + plain[1:],
+              ["⏺ I don’t wait on the background run any more: it is done."] + plain[1:]):
     assert patrol.bgwait_signal(lines) is None, lines
 for text in ("I'll continue once the background review completes.", "백그라운드 리뷰가 끝나기를 기다리는 중입니다.",
              "백그라운드 CI 를 기다립니다.", "I'm waiting on the background Codex review; its notice will wake me.",
              "PR is up. Still waiting for the background CI run.",
+             "I’m waiting on the background Codex run to finish; its completion notice will wake me.",
              "No need to wait for CI; it has passed. Waiting on the background review to finish; its completion "
              "notice will wake me."):
     assert patrol.bgwait_signal([f"⏺ {text}"] + plain[1:]), text
