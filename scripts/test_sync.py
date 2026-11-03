@@ -28,6 +28,36 @@ RELOAD_DONE = [" ▝▝   ▝▝   ~/w", "❯ /reload-plugins",
                "❯ /reload-skills", "  ⎿  Reloaded skills: 91 skills available (no changes)", RULE, "❯", RULE,
                "  ~/w\xa0⎇\xa0main\xa0|\xa0Haiku\xa04.5", "  ⏸ manual mode on · ← for agents"]
 
+# A session whose hooks.json names a script an update removed: every tool call fails on the hook.
+HOOK_BLOCKED = ["❯ run the tests", "⏺ Bash(make test)",
+                "  ⎿  PreToolUse:Bash hook error: python3: can't open file '/w/plugin/hooks/gone.py': [Errno 2] No such file",
+                "⏺ Every tool call is blocked by a hook error, so I stop here.", RULE, "❯", RULE, "  ~/w ⎇ main"]
+RESTART_NOTE = ["⏺ Goal achieved.", RULE, "❯", RULE, "  ~/w ⎇ main", "  ✓ Update installed · /restart to apply"]
+OLD_HOOK_ERROR = ["❯ first", "  ⎿  PreToolUse:Bash hook error: can't open file x", "❯ second", "⏺ done", RULE, "❯", RULE]
+# A guard hook's deny is shown with the same words, and is no stale plugin.
+GUARD_DENY = ["❯ run the suite", "⏺ Bash(make test)", "  ⎿  PreToolUse:Bash hook error: [gate:x] run it in the slot",
+              "⏺ Blocked by the gate.", RULE, "❯", RULE]
+# Shaped like the screen that was stuck: the notice right-aligned under the turn's summary, above the box.
+STUCK_SHOT = ["● Stopped here: a hook names a file that is not there.", "", "✔ Goal achieved (8d · 1 turn · 20.5k tokens)", "",
+              "✻ Brewed for 26s · done 9:34 PM",
+              "                new task? /clear to save 121.3k tokens · ✔ Update installed · /restart to apply", RULE, "❯", RULE]
+# The words in the conversation are no notice: a reply on one line, or wrapped so its last line has no mark.
+SAID = ["❯ what does the footer say?", "⏺ It says /restart to apply the update.", RULE, "❯", RULE]
+SAID_WRAPPED = ["❯ what does the footer say?", "⏺ The footer reads: update installed, and then", "  /restart to apply it.",
+                RULE, "❯", RULE]
+SAID_AFTER_BLANK = ["❯ what changed?", "⏺ Two things:", "", "/restart to apply the update.", RULE, "❯", RULE]
+SAID_LIST = ["❯ what changed?", "⏺ Two things:", "* Update installed", "/restart to apply it.", RULE, "❯", RULE]
+SAID_LIKE_SUMMARY = ["❯ what now?", "⏺ Two steps:", "* Wait for 2s before retrying.", "/restart to apply the update.",
+                     RULE, "❯", RULE]
+# A guard's deny as the last result, then a reply about some other missing file.
+DENY_THEN_REPLY = ["❯ build", "  ⎿  PreToolUse:Bash hook error: [gate:x] run in a slot",
+                   "⏺ The build failed: No such file or directory.", RULE, "❯", RULE]
+# A hook error the session got past: a tool ran after it in the same turn.
+RECOVERED = ["❯ go", "  ⎿  PreToolUse:Bash hook error: can't open file '/w/plugin/hooks/gone.py'", "⏺ Bash(make test)",
+             "  ⎿  12 passed", "⏺ Done.", RULE, "❯", RULE]
+# The missing file wrapped onto the next line.
+WRAPPED = ["❯ go", "  ⎿  PreToolUse:Read hook error: python3:", "     can't open file '/w/plugin/hooks/gone.py'", RULE, "❯", RULE]
+
 FAKE_ORCA = r'''#!/usr/bin/env python3
 import json, os, sys
 path = os.environ["FAKE_ORCA_STATE"]
@@ -290,6 +320,143 @@ def test_broadcast():
     shutil.rmtree(tmp)
 
 
+def test_stale_signal():
+    check("a hook error in the last turn is a stale signal",
+          (sync.stale_signal(HOOK_BLOCKED) or ("",))[0] == "hook", sync.stale_signal(HOOK_BLOCKED))
+    check("the update notice is a stale signal", (sync.stale_signal(RESTART_NOTE) or ("",))[0] == "restart")
+    check("a hook error before the last prompt is not", sync.stale_signal(OLD_HOOK_ERROR) is None)
+    check("a guard's deny is not", sync.stale_signal(GUARD_DENY) is None)
+    check("the notice under the turn's summary is", (sync.stale_signal(STUCK_SHOT) or ("",))[0] == "restart")
+    check("the words in a reply are not", all(sync.stale_signal(s) is None for s in (SAID, SAID_WRAPPED, SAID_AFTER_BLANK, SAID_LIST, SAID_LIKE_SUMMARY)))
+    check("the summary shapes Claude Code writes are summaries",
+          all(sync.TURN_SUMMARY.match(s) for s in (IDLE[0], STUCK_SHOT[4], "✻ Cooked for 1h 2m 3s · done 11:02 PM")))
+    check("a missing file in the reply after a guard's deny is not", sync.stale_signal(DENY_THEN_REPLY) is None)
+    check("a hook error the session got past is not", sync.stale_signal(RECOVERED) is None)
+    check("a missing file wrapped onto the next line is", (sync.stale_signal(WRAPPED) or ("",))[0] == "hook")
+    check("a screen without the wording is not judged",
+          all(sync.stale_signal(s) is None for s in (IDLE, BUSY, FRESH, RELOAD_DONE, PRESS_ENTER, [], None)))
+    check("a restart notice does not make the session busy", sync.classify(RESTART_NOTE, "✳ a") is None)
+
+
+def test_restart():
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    fake = tmp / "orca"
+    fake.write_text(FAKE_ORCA); fake.chmod(0o755)
+    st = tmp / "orca.json"
+
+    def term(title, *screens):
+        return {"agentIdentity": "claude", "connected": True, "writable": True, "title": title, "screens": list(screens)}
+    busy_note = BUSY[:-2] + RESTART_NOTE[1:]
+    terms = {"hooked": term("✳ a", HOOK_BLOCKED), "notice": term("✳ b", RESTART_NOTE),
+             "busy": term("◑ c", busy_note), "clean": term("✳ d", IDLE), "old": term("✳ e", OLD_HOOK_ERROR)}
+    st.write_text(json.dumps({"terms": terms, "sent": []}))
+    state = tmp / "state"; state.mkdir()
+    head = subprocess.run(["git", "-C", str(HERE.parent), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    (state / "reload-pending.json").write_text(json.dumps({"kind": "skills", "done": ["notice", "busy", "old"], "head": head}))
+    env = dict(AGENT_SKILLS_STATE=str(state), SKILLS_SYNC_ORCA=str(fake), FAKE_ORCA_STATE=str(st),
+               SKILLS_SYNC_SETTLE_S="0", SKILLS_SYNC_CONFIRM_S="0")
+    old = {k: os.environ.get(k) for k in env}
+    os.environ.update(env)
+    import importlib
+    importlib.reload(sync)
+
+    def sent():
+        return json.loads(st.read_text())["sent"]
+    try:
+        sync.broadcast(None, dry_run=True)
+        dry = (sent(), (state / "restarts.json").exists())
+        first = sync.broadcast(None, dry_run=False)
+        after_first = sent()
+        restarts = json.loads((state / "restarts.json").read_text())
+        second = sync.broadcast(None, dry_run=False)
+        after_second = sent()
+        cur = json.loads(st.read_text())
+        cur["terms"]["busy"] = term("✳ c", RESTART_NOTE)
+        st.write_text(json.dumps(cur))
+        sync.broadcast(None, dry_run=False, only="busy")
+        after_idle = sent()
+        kept = json.loads((state / "restarts.json").read_text())
+        calls = []
+        real = (sync.pull_or_push, sync.broadcast_locked)
+        sync.pull_or_push, sync.broadcast_locked = (lambda: ("up to date", [])), (lambda k: calls.append(k))
+        try:
+            (state / "restarts.json").write_text(json.dumps({"x": {"waiting": "turn in progress"}}))
+            sync.sync()
+            (state / "restarts.json").write_text(json.dumps({"x": {"sent": "t"}}))
+            sync.sync()
+        finally:
+            sync.pull_or_push, sync.broadcast_locked = real
+    finally:
+        for k, v in old.items():
+            os.environ.pop(k) if v is None else os.environ.__setitem__(k, v)
+        importlib.reload(sync)
+    check("a dry run types nothing and writes nothing", dry == ([], False), dry)
+    check("an idle session with a hook error gets /reload-plugins and no second reload; the notice gets /restart",
+          first == 0 and after_first == [["hooked", "/reload-plugins"], ["notice", "/restart"], ["clean", "/reload-skills"]],
+          after_first)
+    check("a busy session waits, recorded as waiting",
+          "waiting" in restarts.get("busy", {}) and not any(h == "busy" for h, _ in after_first), restarts)
+    check("no stale signal, no entry", set(restarts) == {"hooked", "notice", "busy"}, restarts)
+    check("a session is sent the command once while its screen still shows the signal",
+          second == 0 and after_second == after_first, after_second)
+    check("the waiting session gets it once idle", after_idle[len(after_first):] == [["busy", "/restart"]], after_idle)
+    check("--terminal keeps the other sessions' entries", "notice" in kept and "sent" in kept["busy"], kept)
+    check("a sync runs the broadcast while a session waits, and not for one already sent", calls == [None], calls)
+    shutil.rmtree(tmp)
+
+
+def test_restart_entries():
+    """restarts.json across reads that fail: what was typed stays typed, and an unread screen ends nothing."""
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    keys = ("AGENT_SKILLS_STATE", "SKILLS_SYNC_SETTLE_S", "SKILLS_SYNC_CONFIRM_S")
+    old_env = {k: os.environ.get(k) for k in keys}
+    os.environ.update(AGENT_SKILLS_STATE=str(tmp), SKILLS_SYNC_SETTLE_S="0", SKILLS_SYNC_CONFIRM_S="0")
+    import importlib
+    importlib.reload(sync)
+    reads, typed = {}, []
+
+    def screen(h):
+        r = reads[h].pop(0) if len(reads[h]) > 1 else reads[h][0]
+        if isinstance(r, Exception):
+            raise r
+        return r, sync.classify(r, "✳ a")
+    try:
+        sync.screen, sync.orca = screen, lambda *a: typed.append(a[3]) if a[:2] == ("terminal", "send") else {}
+        reads["a"] = [RESTART_NOTE, RESTART_NOTE, sync.Stop("orca terminal read failed")]
+        check("a confirmation read that fails after typing is not 'never sent'",
+              sync.send_to("a", "/restart", sync.stale_cleared) == sync.UNCONFIRMED and typed == ["a"], typed)
+        reads["a"] = [RESTART_NOTE, RESTART_NOTE, RESTART_NOTE, sync.Stop("orca terminal read failed"), RESTART_NOTE]
+        sync.restart_stale(["a"])
+        sync.restart_stale(["a"])
+        entry = json.loads((tmp / "restarts.json").read_text())["a"]
+        check("so it is recorded as sent and never typed again", typed == ["a", "a"] and entry.get("unconfirmed"),
+              (typed, entry))
+        reads["a"] = [[]]
+        sync.restart_stale(["a"])
+        check("an unread screen keeps the entry", "a" in json.loads((tmp / "restarts.json").read_text()))
+        reads["a"] = [PERMISSION]
+        sync.restart_stale(["a"])
+        check("so does a dialog with no prompt box", "sent" in json.loads((tmp / "restarts.json").read_text()).get("a", {}))
+        sync.restart_stale([])
+        check("a terminal Orca does not list now keeps it a while", "a" in json.loads((tmp / "restarts.json").read_text()))
+        reads["a"] = [IDLE]
+        sync.restart_stale(["a"])
+        check("a screen without the signal ends it", json.loads((tmp / "restarts.json").read_text()) == {})
+        reads["a"] = [RESTART_NOTE, IDLE, IDLE]
+        sync.restart_stale(["a"])
+        check("a signal gone by the reads just before typing types nothing",
+              typed == ["a", "a"] and json.loads((tmp / "restarts.json").read_text()) == {}, typed)
+        (tmp / "restarts.json").write_text(json.dumps({"gone": {"sent": "2020-01-01T00:00:00+0000"},
+                                                       "waits": {"waiting": "busy", "since": "2020-01-01T00:00:00+0000"}}))
+        sync.restart_stale([])
+        check("old entries of unlisted terminals go", json.loads((tmp / "restarts.json").read_text()) == {})
+    finally:
+        for k, v in old_env.items():
+            os.environ.pop(k) if v is None else os.environ.__setitem__(k, v)
+        importlib.reload(sync)
+    shutil.rmtree(tmp)
+
+
 def test_close_setup():
     runner = "/r/.git/worktrees/card/orca/setup-runner.sh"
     done = ["$ bash " + runner, " ERR_PNPM_NO_PKG_MANIFEST  No package.json found", "  ~/w/card on  main", "$"]
@@ -328,6 +495,9 @@ if __name__ == "__main__":
     test_confirm()
     test_sync()
     test_broadcast()
+    test_stale_signal()
+    test_restart()
+    test_restart_entries()
     test_close_setup()
     print(f"\n{len(failures)} failure(s)" if failures else "\nall passed")
     sys.exit(1 if failures else 0)
