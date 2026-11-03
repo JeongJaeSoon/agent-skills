@@ -433,7 +433,8 @@ def close_setup(worktree, timeout_s=1800, grace_s=120, agent=None):
         # Only a row that says it has no agent is a shell; one with no agentIdentity field at all is left open.
         handles = [t["handle"] for t in terms if "agentIdentity" in t and t["agentIdentity"] is None]
         unknown = [t.get("handle") for t in terms
-                   if "agentIdentity" not in t or not (t["agentIdentity"] is None or isinstance(t["agentIdentity"], str))]
+                   if "agentIdentity" not in t
+                   or not (t["agentIdentity"] is None or isinstance(t["agentIdentity"], str) and t["agentIdentity"])]
         if unknown:
             print(f"warning: no agentIdentity on {', '.join(map(str, unknown))}; left open")
     except (Stop, KeyError, TypeError) as e:

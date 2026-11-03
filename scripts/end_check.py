@@ -139,7 +139,8 @@ def card_facts(me, mode="card", dispatch=None):
     rows = (terms or {}).get("terminals")
     # agentIdentity is an agent's name, or null for a shell; any other value is unread.
     if isinstance(rows, list) and me and all(isinstance(t, dict) and "agentIdentity" in t
-                                             and (t["agentIdentity"] is None or isinstance(t["agentIdentity"], str))
+                                             and (t["agentIdentity"] is None
+                                                  or isinstance(t["agentIdentity"], str) and t["agentIdentity"])
                                              for t in rows):
         f["other_agents"] = [t.get("handle") for t in rows if t.get("agentIdentity") and t.get("handle") != me]
     else:
@@ -227,11 +228,15 @@ def waiting_questions(senders, since=None):
               "questions waiting are unknown", file=sys.stderr)
         return None
 
+    def later(r, q):
+        # Within one second the order on the page decides: Orca lists newest first.
+        tr, tq = when(r["created_at"]), when(q["created_at"])
+        return tr > tq or tr == tq and msgs.index(r) < msgs.index(q)
+
     def answered(q):
         threads = {q["id"], q.get("thread_id")} - {None}
         return any(r["type"] == "status" and r.get("thread_id") in threads and r["from_handle"] not in senders
-                   and r.get("to_handle") in senders
-                   and when(r["created_at"]) > when(q["created_at"]) for r in msgs)
+                   and r.get("to_handle") in senders and later(r, q) for r in msgs)
     return [m["id"] for m in msgs if m["from_handle"] in senders and m["type"] == "question" and not answered(m)]
 
 

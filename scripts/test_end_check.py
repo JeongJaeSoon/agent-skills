@@ -107,8 +107,11 @@ os.environ["FAKE_INBOX"] = json.dumps([Q])
 assert end_check.waiting_questions(ME) == ["m1"]
 os.environ["FAKE_INBOX"] = json.dumps([Q, REPLY])
 assert end_check.waiting_questions(ME) == []
+# Within one second the newest-first order decides: listed above the question, the reply came after it.
+os.environ["FAKE_INBOX"] = json.dumps([dict(REPLY, created_at="2026-01-01 10:00:00"), Q])
+assert end_check.waiting_questions(ME) == []
 # Not an answer: addressed to someone else (a heartbeat to the run), from this card's own other handle, at the same
-# second or earlier, or an ISO time in another zone that is really earlier.
+# second but listed below the question, or an ISO time in another zone that is really earlier.
 for r in (dict(REPLY, to_handle="run:r"), dict(REPLY, type="question"), dict(REPLY, from_handle="dispatch:ctx_1", to_handle="term_me"),
           dict(REPLY, created_at="2026-01-01 10:00:00"), dict(REPLY, created_at="2026-01-01T18:30:00+09:00")):
     os.environ["FAKE_INBOX"] = json.dumps([Q, r])
@@ -201,6 +204,9 @@ with contextlib.redirect_stderr(io.StringIO()):
 os.environ["FAKE_TERMS"] = '[{"handle": "term_me", "agentIdentity": "claude"}, {"handle": "x", "agentIdentity": {}}]'
 with contextlib.redirect_stderr(io.StringIO()):
     assert end_check.card_facts("term_me")["other_agents"] is None, "an agentIdentity that is no name nor null"
+os.environ["FAKE_TERMS"] = '[{"handle": "term_me", "agentIdentity": "claude"}, {"handle": "x", "agentIdentity": ""}]'
+with contextlib.redirect_stderr(io.StringIO()):
+    assert end_check.card_facts("term_me")["other_agents"] is None, "an empty name is neither an agent nor a shell"
 os.environ["FAKE_TERMS"] = '[{"handle": "term_me", "agentIdentity": "claude"}, {"handle": "s", "agentIdentity": null}]'
 assert end_check.card_facts("term_me")["other_agents"] == []
 # A question another terminal on the same card left waiting holds the card too.

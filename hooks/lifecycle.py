@@ -224,7 +224,8 @@ def main():
         # Unread, the transcript cannot say whether this is a card that must report first: it does not pass as one
         # that need not.
         blind = (tool == "Bash" and lvl != "off" and not event.get("agent_id") and removes_own(cmd, event.get("cwd"))
-                 and entries(event.get("transcript_path")) is None)
+                 and (entries(event.get("transcript_path")) is None
+                      or not roles.first_prompt(event.get("transcript_path")).strip()))
         # A dispatched or CLOSE/KEEP card ends the same way whatever role it declared (a dispatched lead included).
         if blind or (tool == "Bash" and roles.applies("exit_order", s) and (s.supervised or s.close or s.keep)):
             decision, reason = (lvl, "`orca worktree rm` of this card while its transcript cannot be read, so whether "

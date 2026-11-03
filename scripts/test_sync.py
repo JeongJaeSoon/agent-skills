@@ -305,6 +305,7 @@ def test_close_setup():
              # No agentIdentity field: not known to be a shell. A failed `ps`: not known to be finished.
              "noid": {"screens": [done]},
              "oddid": {"agentIdentity": {}, "screens": [done]},
+             "emptyid": {"agentIdentity": "", "screens": [done]},
              "psfail": {"agentIdentity": None, "screens": [["$ bash /r/.git/worktrees/psfail/orca/setup-runner.sh"]]}}
     st.write_text(json.dumps({"terms": terms, "sent": []}))
     env = dict(SKILLS_SYNC_ORCA=str(fake), FAKE_ORCA_STATE=str(st), SKILLS_SYNC_SETUP_POLL_S="0.05")

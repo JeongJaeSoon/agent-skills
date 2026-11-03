@@ -120,6 +120,14 @@ blind = {**rm_event(), "transcript_path": str(tmp / "missing.jsonl")}
 p = subprocess.run([sys.executable, str(HERE / "lifecycle.py")], capture_output=True, text=True, env=ENV, timeout=30,
                    input=json.dumps({"hook_event_name": "PreToolUse", "session_id": "s1", **blind}))
 check("an unreadable transcript denies its own card's rm", decision(json.loads(p.stdout or "{}")) == "deny", p.stdout)
+# An empty transcript, or a broken line before the card's prompt: its first prompt is unread, so the same.
+for body in ("", "{not json\n" + json.dumps(user(CLOSE_CARD)) + "\n"):
+    (tmp / "odd.jsonl").write_text(body)
+    p = subprocess.run([sys.executable, str(HERE / "lifecycle.py")], capture_output=True, text=True, env=ENV, timeout=30,
+                       input=json.dumps({"hook_event_name": "PreToolUse", "session_id": "s1", **rm_event(),
+                                         "transcript_path": str(tmp / "odd.jsonl")}))
+    check(f"an unread first prompt denies its own card's rm ({body[:9]!r})",
+          decision(json.loads(p.stdout or "{}")) == "deny", p.stdout)
 # A dispatched lead ends like a worker.
 lead_worker = PREAMBLE + "\nMODE        Run `orchestrate` in program mode.\nROLE: lead acme\n"
 out = hook([user(lead_worker), use("m1", "tu_done", DONE), use("m1", "tu_rm", RM)], rm_event(), DENY)
