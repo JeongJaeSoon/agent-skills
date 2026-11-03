@@ -89,6 +89,22 @@ got = {(w.writer, w.targets) for w in registry.scan(twins)}
 assert got == {("fx-a/fx_twin:hold", ("s/twin.lock",)), ("hooks/fx_twin:hold", ("h/twin.lock",)),
                ("fx_user:take", ("s/u.json",))}, got
 
+# `from lib import fx_pkg` in hooks/fx_pkg.py is hooks/lib/fx_pkg.py, not the importing file itself.
+(tmp / "hooks/lib").mkdir()
+(tmp / "hooks/lib/fx_pkg.py").write_text('def put(path):\n    open(path, "w")\n')
+(tmp / "hooks/fx_pkg.py").write_text(textwrap.dedent('''
+    from lib import fx_pkg
+    import pathlib
+
+    def put(path):
+        return path
+
+    def main():
+        fx_pkg.put(pathlib.Path("/s") / "p.json")
+'''))
+got = {(w.writer, w.targets) for w in registry.scan([tmp / "hooks/fx_pkg.py", tmp / "hooks/lib/fx_pkg.py"])}
+assert got == {("hooks/fx_pkg:main", ("s/p.json",))}, got
+
 # Forms that once hid a write: a bound method's argument, a wrapper writing two paths, a reassigned path,
 # with_name on a parameter, open() with keywords or from io.
 forms = module("fx_forms", '''
