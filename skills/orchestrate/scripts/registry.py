@@ -576,7 +576,8 @@ class _Scan:
             return (_tail(expr.value),)
         if isinstance(expr, ast.JoinedStr):
             head, rest = expr.values[0], expr.values[1:]
-            if isinstance(head, ast.FormattedValue) and rest and all(isinstance(v, ast.Constant) for v in rest):
+            if isinstance(head, ast.FormattedValue) and head.conversion == -1 and head.format_spec is None and rest \
+                    and all(isinstance(v, ast.Constant) for v in rest):
                 tail = "".join(v.value for v in rest)
                 renamed = [x for x in r(head.value) if isinstance(x, tuple)]  # f"{p.name}.1" is p.name + ".1"
                 if renamed:

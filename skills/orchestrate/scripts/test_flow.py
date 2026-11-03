@@ -76,6 +76,19 @@ try:
 finally:
     (tmp / "programs" / "a").chmod(0o755)
 assert led["state"] == "error", led
+# A file its reader cannot open is an error too, one file or under a glob, and starves a consumer with only it.
+(d / "state.json").chmod(0)
+(tmp / "state" / "roles" / "s1.json").chmod(0)
+try:
+    got = {s["id"]: s for s in flow.flow()["stores"]}
+    alone = {c["id"]: c for c in flow.flow(stores=[flow.registry.Store(
+        "p", "D/state.json", {"f.p": "canonical"}, (), ("janitor",))])["consumers"]}
+finally:
+    (d / "state.json").chmod(0o644)
+    (tmp / "state" / "roles" / "s1.json").chmod(0o644)
+assert got["state"]["state"] == "error" and got["state"]["error"] == "not readable", got["state"]
+assert got["roles"]["state"] == "error" and "not readable" in got["roles"]["error"], got["roles"]
+assert alone["janitor"]["starved"] and alone["janitor"]["state"] == "error", alone
 
 # The programs home sharing the shared-state directory: the shared stores' directories are still walked.
 os.environ["PROGRAMS_HOME"] = str(tmp / "state")

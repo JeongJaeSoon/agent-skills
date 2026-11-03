@@ -117,6 +117,12 @@ forms = module("fx_forms", '''
 
     def kw_go():
         roll_kw(D / "fx-kw.log")
+
+    def padded(p):
+        p.with_name(f"{p.name:>20}.1").write_text("")  # a format spec changes the name: not read as p.name + ".1"
+
+    def pad_go():
+        padded(D / "fx-pad.json")
 ''')
 got = {(w.writer, w.targets) for w in registry.scan([forms])}
 for want in [("fx_forms:Box.go", ("d/fx-bound.json",)), ("fx_forms:call_two", ("d/fx-a.json",)),
@@ -129,6 +135,7 @@ for want in [("fx_forms:Box.go", ("d/fx-bound.json",)), ("fx_forms:call_two", ("
              ("fx_forms:kw_go", ("d/fx-kw.log.2",))]:  # os.rename(dst=...) with an f-string suffix
     assert want in got, (want, got)
 assert not any(w[0] in ("fx_forms:keep", "fx_forms:roll_kw", "fx_forms:roll") for w in got), got
+assert ("fx_forms:pad_go", ("d/fx-pad.json.1",)) not in got, got
 assert ("fx_forms:log_roll", ("d/fx-log.jsonl",)) not in got, got
 
 # (1) a fact with two canonical stores

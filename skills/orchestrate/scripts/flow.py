@@ -149,6 +149,8 @@ def stat_node(p, stale_s, now):
                 continue
             if files_only and stat.S_ISDIR(st.st_mode):
                 bad.append(f"{e.name}: a directory where a file belongs")
+            elif not stat.S_ISDIR(st.st_mode) and not os.access(e, os.R_OK):
+                bad.append(f"{e.name}: not readable")
             mt.append(st.st_mtime)
         out = {"exists": bool(entries), "entries": len(entries), "mtime": max(mt) if mt else None}
         if bad:
@@ -163,6 +165,8 @@ def stat_node(p, stale_s, now):
         if stat.S_ISDIR(st.st_mode):
             return {"exists": True, "state": registry.ERROR, "error": "a directory where a file belongs", "mtime": st.st_mtime}
         out = {"exists": True, "size": st.st_size, "mtime": st.st_mtime}
+        if not os.access(p, os.R_OK):  # its reader would fail, so it is not there for the consumer
+            return {**out, "state": registry.ERROR, "error": "not readable"}
         if p.suffix == ".jsonl":
             try:
                 out["lines"], out["last"] = line_count(p, st), last_row(p, st.st_size)
