@@ -63,9 +63,10 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent))
 sys.path.insert(1, str(pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts"))
 import card_watch, cardguard, dash, fleet, prog  # noqa: E402
 try:  # dash put the repo's scripts/ on the path
-    from sync import STALE_COMMAND, stale_signal  # noqa: E402
+    from sync import BACKGROUND, STALE_COMMAND, stale_signal  # noqa: E402
 except ImportError:  # an install without the repo's scripts/: H judges nothing
     STALE_COMMAND = {}
+    BACKGROUND = re.compile(r"\b\d+ (?:shells?|agents?|background tasks?)\b|shells? still running")  # sync.BACKGROUND
 
     def stale_signal(lines):
         return None
@@ -126,12 +127,9 @@ def card_name(path):
 transcript_tail = cardguard.transcript_tail
 
 
-# Claude Code's status line while a background shell or agent of the session still runs. A message typed in after the
-# command was armed resets the transcript's record of it, so only the screen still shows it.
-BACKGROUND = re.compile(r"\b\d+ (?:shells?|agents?|background tasks?)\b|shells? still running")
-
-
 def background(lines):
+    """Claude Code's status line shows a background shell or agent still running (BACKGROUND). A message typed in after
+    the command was armed resets the transcript's record of it, so only the screen still shows it."""
     return bool(lines) and any(BACKGROUND.search(l) for l in lines[-6:])
 
 
