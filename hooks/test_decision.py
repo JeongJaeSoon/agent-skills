@@ -21,9 +21,13 @@ def hook(prompt, handle="term_coord", raw=None):
 
 
 def status(did):
-    return json.loads((STATE / "decisions.json").read_text())["decisions"][did]
+    return {d["id"]: d for d in store.decisions()}[did]
 
 
+import store  # noqa: E402
+# Before `orch db import` the hook passes silently and creates nothing.
+assert hook("d1 CSV") is None and not store.path().exists()
+store.import_apply(checks=False)
 fmt = fleet.decision_add("Export format", options=["CSV::sheets", "JSON"], handle="term_coord")["id"]      # d1
 ship = fleet.decision_add("Ship today?", options=["Yes", "Yes, but later", "No"], handle="term_coord")["id"]  # d2
 other = fleet.decision_add("A worker's own", options=["Yes"], handle="term_worker")["id"]                 # d3

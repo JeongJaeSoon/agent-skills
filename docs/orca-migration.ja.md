@@ -39,6 +39,40 @@
 
 ## 元に戻す
 
-- **状態：** `orch migrate --restore <バックアップのディレクトリ>` は、その実行が閉じた行を開き直し、そのあとオーナーが変えたものはそのままにします。古いコードが読み込まれているときは、代わりに `--apply` が出力した `orch board reopen` の行を実行します。バックアップには実行前の `board.json`、`tidy.jsonl`、`decisions.json` が 0600 のファイルとして入っています。
+- **状態：** `orch migrate --restore <バックアップのディレクトリ>` は、その実行が閉じた行を開き直し、そのあとオーナーが変えたものはそのままにします。古いコードが読み込まれているときは、代わりに `--apply` が出力した `orch board reopen` の行を実行します。バックアップには実行前の `board.json`・`tidy.jsonl`、まだファイルのうちは `decisions.json`、決定が移ったあとは `agent-skills.db` のコピーが、どれも 0600 のファイルとして入っています。
 - **コード：** 読み込まれるチェックアウトを前のリリースのタグに戻し、もう一度 `/reload-plugins`。
 - **Orca の値：** `workspaceStatus` はカードが自分の欄にだけ書き（PR を開くと `in-review`、閉じるときに `completed`）、リンクは新しいコードが立ち上げたカードにだけ付きます。状態を戻すには `orca worktree set --worktree <sel> --workspace-status in-progress`。
+
+# 決定を agent-skills.db へ移す（2026-11-04）
+
+このリリースから、`orch decide` とダッシュボードの回答は、決定を `decisions.json` ではなく fleet の状態ディレクトリ（`$ORCH_FLEET_STATE`）にある SQLite ファイル `agent-skills.db` に置きます。board と tidy のファイルはまだそのままで、後のリリースで同じファイルへ移します。
+
+## 変わること
+
+- 閉じた決定を 7 日後に消しません。テーブルに残り、読む側が状態で絞り込みます。
+- 決定を変えるたびに、変更前と変更後の値を同じトランザクションで `event` テーブルに残します。
+- ファイルを作るのは `orch db import` だけです。それまでは `orch decide` が `orch db cutover-plan 4a` を案内して止まり、decision hook は何もせず、brief の headline に `이행 대기: 결정 DB` が出ます。
+- 表を見るときは `orch db dump [table]`（JSON 出力）を使います。ファイルを直接開くときは `sqlite3 -readonly` だけにします。
+- DB のコピーは `cp` ではなく `orch db backup <file>` で作ります。`-wal` なしでコピーしたファイルは最後の書き込みを失うことがあります。状態ディレクトリは同期フォルダではなくローカルディスクに置きます。
+
+## 切り替えの順序
+
+古いコードはまだ `decisions.json` に書くので、データを移している間は動いていてはいけません。`orch db cutover-plan 4a` が次の手順を、この PC で打つコマンドとして出力します。このコマンド自体は何も実行しません。
+
+1. ダッシュボードのサーバーを止めます（ページの回答を届けるのはここです）。macOS ではその LaunchAgent を `launchctl bootout` します。
+2. 読み込まれるメインのチェックアウトを fast-forward します。
+3. 動いている Claude セッションをすべて再起動するか `/reload-plugins` します。各セッションは自分が読み込んだ decision hook を呼ぶからです。
+4. `orch db import --dry-run` で、移る決定の数と `--apply` が拒否するかどうかを確かめます。
+5. `orch db import --apply`。別のチェックアウトや fast-forward より前からスクリプト・ラッパー・hook を動かしているプロセス、どの Claude home でもそれより前に始まった生きているセッション、別のコミットのコピーを読み込む plugin、まだ読み込まれているダッシュボードの LaunchAgent（pid がなくても）が一つでもあれば拒否します。通れば board・tidy・decision のロックを取り、`decisions.json` を sha256 と一緒に `backup-db-<時刻>/`（0700、ファイルは 0600）にコピーし、一時的な名前で DB を作って検査してから所定の場所へ rename し、`decisions.json` の場所に空のディレクトリを置いて古いコードの書き込みを失敗させます。
+6. ダッシュボードのサーバーをもう一度起動します（macOS では `orch-dash install-agent`）。
+
+`--apply` は何度実行しても安全です。import はコミットされたのに空のディレクトリをまだ置けていなければ、再実行は `decisions.json` の sha256 が import 時と同じときだけ空のディレクトリを置きます。その間にファイルが変わっていれば、衝突を示して止まり、何も置き換えません。切り替えのあと空のディレクトリの場所にファイルができると、brief に `옛 코드가 쓴 흔적` が出ます。
+
+## 元に戻す（決定）
+
+1. 切り替えの手順 1 と同じく書き手を止め、`orch db backup <file>`。古い形式に置き場のないイベント履歴まで、すべてが残ります。
+2. `orch db export --legacy --target pre-4a <dir>` が古いコードの読む `decisions.json` を書き、WAL の checkpoint が済んだかを知らせます。busy と出たらまだ開いている接続があるので、先に止めます。
+3. `agent-skills.db` を `-wal`・`-shm` と一緒に状態ディレクトリの外へ移し、空の `decisions.json` ディレクトリを消して、`<dir>/decisions.json` をその場所に置きます。
+4. 前のリリースに戻して fast-forward し、書き手をもう一度起動します。
+
+別の PC へ移すときは、元の PC で `orch db backup <file>`、新しい PC で `orch db restore <file>`。`restore` も `--apply` と同じ検査をし、新しい状態ディレクトリに `decisions.json` のファイルがあれば拒否します。
