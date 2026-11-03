@@ -92,8 +92,9 @@ def test_cross_program_overlap():
 
 def test_cross_program_plan_overlap():
     # Planned paths (--paths) against another program's open PRs, one line per planned path it touches.
-    out = prog.cross_overlaps({}, {"other": {40: ["skills/x/a.py", "skills/x/b.py"]}}, xrows, paths=["skills/x/", "c"])
-    assert out == [f"OVERLAP other plan #40 skills/x/ {WARN}"], out
+    out = prog.cross_overlaps({}, {"other": {40: ["skills/x/a.py", "skills/x/b.py", "d"]}}, xrows,
+                              paths=["skills/x/", "skills/*.py", "c"])
+    assert out == [f"OVERLAP other plan #40 skills/x/a.py {WARN}", f"OVERLAP other plan #40 skills/x/b.py {WARN}"], out
     no_command(out)
 
 
@@ -116,6 +117,10 @@ def test_cross_program_unreadable_is_unknown():
                    f"OVERLAP other #1 #41 a {WARN}"], out
     assert prog.cross_overlaps({1: ["a"]}, {"broken": None}, xrows) == [
         "OVERLAP UNKNOWN broken → its program state could not be read; compare it by hand"]
+    # This program's own PR whose file list could not be read, while another program has an open PR.
+    out = prog.cross_overlaps({}, {"other": {40: ["a"]}}, xrows, unread=[2])
+    assert out == ["OVERLAP UNKNOWN #2 → this program's file list for it could not be read; compare it by hand"], out
+    assert prog.cross_overlaps({}, {"other": {}}, xrows, unread=[2]) == []
 
 
 def test_other_programs_from_their_state():
@@ -154,6 +159,32 @@ def test_other_programs_from_their_state():
         assert got == {"broken": None, "other": {40: ["a"]}}, got
         assert calls == [("acme/app", 40)], calls
         assert mine == {"broken": None, "other": {}}, mine
+        # A ledger row without the shape the ledger has is unreadable state too, whatever its repo.
+        program("shapeless2", "acme/app", [{"pr": 40}])
+        prog.HOME = home
+        try:
+            assert prog.other_program_files("me", "acme/app", {1}, rows_, listed)["shapeless2"] is None
+        finally:
+            prog.HOME = old
+
+
+def test_other_ledger_wins_over_ticket_guess():
+    # #40's branch carries this program's ticket, but another program's ledger names it: it is theirs, compared
+    # across programs and kept out of this program's own OVERLAP lines; #3 could not be listed and is unread.
+    with tempfile.TemporaryDirectory() as d:
+        home = pathlib.Path(d)
+        (home / "other").mkdir()
+        (home / "other" / "program.json").write_text(json.dumps({"repo": "acme/app"}))
+        (home / "other" / "ledger.jsonl").write_text(json.dumps({"ts": T, "ev": "ready", "pr": 40}) + "\n")
+        old, prog.HOME = prog.HOME, home
+        try:
+            got = prog.cross_inputs("me", "acme/app", [{"ts": T, "ev": "ready", "pr": 1, "ticket": "ABC-1"}],
+                                    [row(1, "abc-1-a"), row(3, "abc-1-c"), row(40, "abc-1-b")],
+                                    {1: "ABC-1", 3: "ABC-1", 40: "ABC-1"}, {1: ["a"], 40: ["a"]},
+                                    lambda repo, n: ["a"])
+        finally:
+            prog.HOME = old
+        assert got == ({1: "ABC-1", 3: "ABC-1"}, {1: ["a"]}, {"other": {40: ["a"]}}, [3]), got
 
 
 failed = []
