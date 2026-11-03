@@ -19,9 +19,10 @@ def module(name, src):
 real = registry.scan()
 found = registry.check(writes=real)
 assert found == [], "\n".join(f"{v['kind']} {v['key']}: {v['detail']}" for v in found)
-assert len({p.stem for p in registry.sources()}) == len(registry.sources()), "two scripts share a module name"
+assert len(set(registry._names(registry.sources()).values())) == len(registry.sources()), "two modules share a name"
 writers = {w.writer for w in real}
-for must in ("fleet:Fleet.tick", "board:change", "tidy:append", "patrol:write_round", "reorient:declare"):
+for must in ("fleet:Fleet.tick", "board:change", "tidy:append", "patrol:write_round", "roles:declare",
+             "reap-resources/guard:hold"):
     assert must in writers, must  # the scan sees writes through wrappers, **kwargs and self attributes
 
 # The scan follows a wrapper to its callers, `path or DEFAULT`, a temporary renamed over the file, and **{name: text}.
@@ -61,6 +62,29 @@ assert ("fx_scan:Keeper.tick", ("fx-state.json",)) in got, got
 assert ("fx_scan:unnamed", ()) in got, got  # a sink nobody calls keeps its write, unnamed
 assert not any(w[0] == "fx_scan:write_json" for w in got), got  # the wrapper's own write is its callers'
 assert len(got) == 4, got
+
+# Two scripts sharing a stem keep their own names, and `import <stem>` reaches the one in the caller's directory.
+for d, lockname in (("skills/fx-a/scripts", "a.lock"), ("hooks", "h.lock")):
+    (tmp / d).mkdir(parents=True)
+    (tmp / d / "fx_twin.py").write_text(textwrap.dedent(f'''
+        import pathlib
+        STATE = pathlib.Path("/s")
+
+        def hold():
+            open(STATE / "{lockname}", "w")
+    '''))
+(tmp / "skills/fx-a/scripts/fx_user.py").write_text(textwrap.dedent('''
+    import fx_twin
+
+    def take():
+        fx_twin.hold()
+        open(fx_twin.STATE / "u.json", "w")
+'''))
+twins = [tmp / "skills/fx-a/scripts/fx_twin.py", tmp / "hooks/fx_twin.py", tmp / "skills/fx-a/scripts/fx_user.py"]
+assert sorted(registry._names(twins).values()) == ["fx-a/fx_twin", "fx_user", "hooks/fx_twin"]
+got = {(w.writer, w.targets) for w in registry.scan(twins)}
+assert got == {("fx-a/fx_twin:hold", ("s/a.lock",)), ("hooks/fx_twin:hold", ("s/h.lock",)),
+               ("fx_user:take", ("s/u.json",))}, got
 
 # Forms that once hid a write: a bound method's argument, a wrapper writing two paths, a reassigned path,
 # with_name on a parameter, open() with keywords or from io.

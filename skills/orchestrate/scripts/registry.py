@@ -3,7 +3,8 @@
 
 STORES is the registry. Each Store is one file pattern (or an outside source, or later a DB table) and the facts it
 holds, each with a role: exactly one store is canonical for a fact; the rest derive, cache or log it. writers name
-the functions allowed to write the store ("module:qualname", module = file stem); readers and producer are the
+the functions allowed to write the store ("module:qualname", module = file stem, `<owner>/<stem>` when two scripts
+share a stem: hooks/guard and reap-resources/guard); readers and producer are the
 Data flow screen's nodes. check() enforces the registry against the code: one canonical store per fact, no write to
 a file the registry does not name, no write from a function its store does not list (an AST scan of every script).
 
@@ -57,11 +58,12 @@ PRODUCERS = {
     "tidy": ("tidy · each tick and orch board done", ("tidy",)),
     "programs": ("program leads · orch land, wait, heavy", ("prog",)),
     "patrol": ("patrol round", ("patrol",)),
-    "janitor": ("janitor · reap precheck and reap", ("reap", "cards", "cardguard")),
+    "janitor": ("janitor · reap precheck and reap, sweep shadow", ("reap", "cards", "cardguard", "reap-resources/guard",
+                                                                    "sweep")),
     "pressure": ("pressure round · launchd", ("pressure",)),
     "reaphard": ("reap-hard · launchd", ("reap_hard",)),
     "cardwatch": ("card-watch monitor", ("card_watch",)),
-    "hooks": ("hooks · reorient, permission, onboard", ("reorient", "permission", "onboard")),
+    "hooks": ("hooks · reorient, roles, permission, onboard", ("reorient", "roles", "permission", "onboard")),
     "sync": ("skills-sync · launchd", ("sync",)),
     "preview": ("preview-watch · launchd", ("preview_watch",)),
     "share": ("share-server", ("share_server",)),
@@ -87,8 +89,8 @@ CONSUMERS = {
     "watchprs": "watch-prs round",
     "mentions": "watch-mentions round",
     "reorient": "hooks · reorient, guard, delegate_gate",
-    "patrol": "patrol round",
-    "janitor": "janitor · reap, reap-hard, cards",
+    "patrol": "patrol round · orch patrol timing",
+    "janitor": "janitor · reap, reap-hard, cards, sweep",
     "pressure": "pressure round · pressure gate hook",
     "tidy": "tidy",
     "sync": "skills-sync",
@@ -211,7 +213,7 @@ STORES = [
     Store("requests", "D/requests.jsonl", {"order.request": REMOVED}, (), ("nobody",),
           rule="the removed request ledger; nothing writes or reads it"),
     # -- S: hooks, watchers and the janitor
-    Store("roles", "S/roles/*.json", {"session.role": CANONICAL}, ("reorient:declare",), ("reorient", "fleet", "janitor"),
+    Store("roles", "S/roles/*.json", {"session.role": CANONICAL}, ("roles:declare",), ("reorient", "fleet", "janitor"),
           rule="the role a session declared with a ROLE: line"),
     Store("rolespans", "S/transcripts/*.json", {"session.transcript": DERIVED}, ("reorient:register",), ("reflect",),
           rule="where an orchestrator's transcript starts"),
@@ -220,7 +222,9 @@ STORES = [
     Store("cardwatch", "S/card-watch/*.json", {"card.watch": CANONICAL}, ("card_watch:main",),
           ("fleet", "patrol", "programview"), rule="per monitor: what it saw last on each card"),
     Store("cardwatchdown", "S/card-watch/.down-*", {"card.watch_down": CANONICAL}, ("card_watch:down_line",), ("fleet",)),
-    Store("cardlocks", "S/locks/card-*.lock", {"work.unit": LOCK}, ("cardguard:card_lock",)),
+    Store("reaplocks", "S/locks/*-*.lock", {"work.unit": LOCK, "machine.resource": LOCK}, ("reap-resources/guard:hold",),
+          rule="one lock per card, project, volume, process or port a cleaner acts on; cardguard takes the card one "
+               "through guard.hold"),
     Store("sync", "S/sync.json", {"sync.result": CANONICAL}, ("sync:sync",), ("fleet",), 3600,
           rule="last skills-sync result"),
     Store("synclock", "S/sync.lock", {"sync.result": LOCK}, ("sync:locked",)),
@@ -239,8 +243,19 @@ STORES = [
     Store("sweepstamps", "S/*-last.json", {"janitor.sweep_stamp": CANONICAL},
           ("reap:stamp_user_folder", "reap:record_reap", "reap_hard:write_last"), ("janitor", "brief"),
           rule="daily sweep stamps and the last reap-hard pass"),
-    Store("patrolverdicts", "S/patrol-verdicts.json", {"card.verdict": CANONICAL}, ("patrol:write_round",),
-          ("janitor", "pressure", "tidy", "brief"), rule="each card's keep or remove verdict, one round"),
+    Store("patrolverdicts", "S/patrol-verdicts.json", {"card.verdict": CANONICAL},
+          ("patrol:write_round", "patrol:candidates_phase", "patrol:mark_cut"), ("janitor", "pressure", "tidy", "brief"),
+          rule="each card's keep or remove verdict, one round; the cleanup v2 shadow fields (round, sources, "
+               "activity, candidates), which sweep reads"),
+    Store("patrolrounds", "S/patrol-rounds.jsonl", {"patrol.round_timing": CANONICAL}, ("patrol:log_round",),
+          ("patrol",), rule="per-source seconds per round, the last ROUNDS_KEEP; `orch patrol timing` reads it"),
+    Store("reapactions", "S/reap-actions.jsonl", {"reap.action": CANONICAL}, ("reap:log_action",), ("janitor",),
+          rule="what reap --plan and cards.py apply really did; `sweep diff` matches the shadow's plan against it"),
+    Store("sweepshadow", "S/sweep-shadow.jsonl", {"sweep.shadow": CANONICAL}, ("sweep:run_shadow",), ("janitor",),
+          rule="what sweep would act on or leave per patrol round; it acts on nothing yet"),
+    Store("sweeplock", "S/sweep.lock", {"sweep.shadow": LOCK}, ("sweep:run_lock",)),
+    Store("sweepout", "S/sweep.log", {"sweep.output": CANONICAL}, ("reap:spawn_sweep_shadow",), ("nobody",),
+          rule="the detached sweep run's stdout"),
     Store("patrollog", "S/patrol.jsonl", {"patrol.finding": CANONICAL}, ("patrol:write_round", "patrol:ack"),
           ("patrol", "programview"), rule="findings and their acks"),
     Store("patrolstate", "S/patrol-*.json", {"patrol.memo": CANONICAL}, ("patrol:round_once", "patrol:pending_lines"),
@@ -470,10 +485,23 @@ def check(stores=None, writes=None, dual=None, modules=None):
 def _defined():
     """Every module:qualname in the scripts, so a writer the scan saw no write in still counts as a function."""
     out = set()
-    for p in sources():
+    for p, name in _names(sources()).items():
         tree = ast.parse(p.read_text(), str(p))
-        out |= {f"{p.stem}:{q}" for q in _Module(p.stem, tree).funcs}
+        out |= {f"{name}:{q}" for q in _Module(name, tree).funcs}
     return out
+
+
+def _owner(p):
+    """The skill a script belongs to (skills/<skill>/scripts/x.py), else the directory it sits in."""
+    parts = p.parent.parts
+    return parts[-2] if len(parts) >= 3 and parts[-1] == "scripts" and parts[-3] == "skills" else parts[-1]
+
+
+def _names(paths):
+    """Each source's module name: its stem, or `<owner>/<stem>` for every source sharing the stem with another."""
+    paths = [pathlib.Path(p) for p in paths]
+    stems = [p.stem for p in paths]
+    return {p: p.stem if stems.count(p.stem) == 1 else f"{_owner(p)}/{p.stem}" for p in paths}
 
 
 # ------------------------------------------------------------ write scan
@@ -506,8 +534,9 @@ def _writes_mode(mode):
 class _Module:
     """One source file: its top-level constants, functions and classes, for resolving a write's target."""
 
-    def __init__(self, name, tree):
-        self.name, self.tree = name, tree
+    def __init__(self, name, tree, home=None):
+        self.name, self.tree, self.home = name, tree, home
+        self.stem = name.rsplit("/", 1)[-1]
         self.consts, self.funcs, self.attrs = {}, {}, {}
         for node in tree.body:
             if isinstance(node, ast.Assign):
@@ -564,6 +593,7 @@ def _default(fn, i):
 class _Scan:
     def __init__(self, modules):
         self.mods = modules  # name -> _Module
+        self.near = {(m.home, m.stem): m for m in modules.values()}
         self.sinks = {}      # (module, qualname) -> indexes of the parameters it writes to
         self.kw_sinks = set()  # qualnames writing each **kwargs key as a file name (Fleet.save)
 
@@ -614,8 +644,7 @@ class _Scan:
                                            else x for x in r(expr.value)))
             if isinstance(expr.value, ast.Name) and expr.value.id == "self" and expr.attr in mod.attrs:
                 return self.resolve(mod, None, mod.attrs[expr.attr], seen)
-            if isinstance(expr.value, ast.Name) and expr.value.id in self.mods:
-                other = self.mods[expr.value.id]
+            if isinstance(expr.value, ast.Name) and (other := self.imported(mod, expr.value.id)):
                 if expr.attr in other.consts:
                     return self.resolve(other, None, other.consts[expr.attr], seen)
             return ()
@@ -690,14 +719,19 @@ class _Scan:
         if isinstance(f, ast.Name) and f.id in mod.funcs:
             return mod, mod.funcs[f.id]
         if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name):
-            if f.value.id in self.mods and f.attr in self.mods[f.value.id].funcs:
-                other = self.mods[f.value.id]
+            other = self.imported(mod, f.value.id)
+            if other and f.attr in other.funcs:
                 return other, other.funcs[f.attr]
             if f.value.id == "self":
                 for q, d in mod.funcs.items():
                     if q.endswith("." + f.attr):
                         return mod, d
         return None
+
+    def imported(self, mod, name):
+        """The module `import name` reaches from mod: the one in mod's own directory first, as Python's import does,
+        else the only source with that name."""
+        return self.near.get((mod.home, name)) or self.mods.get(name)
 
     def _callee_key(self, mod, f):
         c = self._callee(mod, f)
@@ -844,9 +878,8 @@ def sources(repo=REPO):
 def scan(paths=None):
     """Every write the scripts make: one Write per call site, its target resolved where the code says it."""
     mods = {}
-    for p in paths if paths is not None else sources():
-        p = pathlib.Path(p)
-        mods[p.stem] = _Module(p.stem, ast.parse(p.read_text(), str(p)))
+    for p, name in _names(paths if paths is not None else sources()).items():
+        mods[name] = _Module(name, ast.parse(p.read_text(), str(p)), p.parent)
     return _Scan(mods).writes()
 
 
