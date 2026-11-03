@@ -749,6 +749,15 @@ class MarkdownCli(unittest.TestCase):
                 with self.assertRaisesRegex(tracker.TrackerError, "abc share the key ABC"):
                     call()
 
+    def test_link_opens_the_ticket_in_obsidian_when_configured(self):
+        self.ok("create", "--project", "abc", "--title", "t", "--body-file", self.body)
+        self.env.config({"tracker": {"adapter": "markdown", "markdown": {"root": self.root, "link": "obsidian"}}})
+        url = self.ok("get", "ABC-1")["url"]
+        self.assertTrue(url.startswith("obsidian://open?path="), url)
+        self.assertTrue(url.endswith("%2Fabc%2FABC-1.md"), url)
+        self.env.config({"tracker": {"adapter": "markdown", "markdown": {"root": self.root, "link": "web"}}})
+        self.assertIn("tracker.markdown.link", self.fail("get", "ABC-1"))
+
     def test_errors_name_the_problem(self):
         self.assertIn("../x", self.fail("create", "--project", "../x", "--title", "t", "--body-file", self.body))
         self.assertIn("../ABC-1", self.fail("get", "../ABC-1"))

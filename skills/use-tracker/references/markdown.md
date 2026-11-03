@@ -2,12 +2,15 @@
 
 A folder of Markdown files is the tracker. Each subfolder is a project and each file is one
 ticket. No server and no MCP: agents and scripts both use `tracker.py`. A human reads and edits
-the same files in any Markdown editor; in Obsidian, a Bases Kanban view grouped by `state` is the
-board.
+the same files in any Markdown editor; in Obsidian, the bundled Bases file is the board (below).
 
 ```json
-{"tracker": {"adapter": "markdown", "markdown": {"root": "~/tickets"}}}
+{"tracker": {"adapter": "markdown", "markdown": {"root": "~/tickets", "link": "obsidian"}}}
 ```
+
+`link` sets each ticket's `url`: `file` (default) gives `file://…`; `obsidian` gives
+`obsidian://open?path=…`, which opens the ticket in Obsidian. A web page such as the orchestrate
+dashboard cannot open `file://` links, so use `obsidian` when the folder is an Obsidian vault.
 
 `root` must be an existing folder. `tracker.py` never runs git: if the folder is a git repository,
 committing and pushing is the editor's or the user's job (in Obsidian, the Git plugin).
@@ -76,6 +79,41 @@ step, and a new ticket is written in full before it is linked into place, so an 
 commit never sees half a file. `transition` decides on the state it reads under that lock. Frontmatter keys the adapter does not
 know (an Obsidian property, a tag) are kept. `tracker.py` writes every value in JSON-style quotes;
 it reads what Obsidian writes back (plain words, single quotes, block lists).
+
+## Obsidian board
+
+Open `root` as an Obsidian vault (1.14 or later, for the Bases Kanban view) and copy
+[`../assets/Board.base`](../assets/Board.base) to `<root>/Board.base`. It has three views:
+
+| View | Shows |
+|---|---|
+| Board | Kanban, one column per `state`; each card is headed by the id and the title, then `labels` and `parent` |
+| By parent | Table grouped by `parent`; tickets without one sit under `(top level)` |
+| All tickets | Every ticket in one table |
+
+All three sort by project folder, then by the ticket number as a number (`ABC-2` before `ABC-10`).
+Moving a card to another column rewrites that ticket's `state`; `tracker.py` reads the change
+like any other edit. A ticket made in Obsidian needs a `<KEY>-<n>.md` name and a `state`, or
+`tracker.py` and the board skip it; asking an agent to file it avoids both.
+
+Writing tickets stays with `tracker.py`. With the Obsidian CLI turned on (Settings → General →
+Advanced), an agent checks the result without writing anything:
+
+```bash
+obsidian vault=<vault> base:query path=Board.base view=Board format=json   # what the board holds
+obsidian vault=<vault> dev:screenshot path=<file.png>                       # what the window shows
+obsidian vault=<vault> dev:errors                                           # rendering errors
+```
+
+`dev:screenshot` needs no screen-recording permission, because the app captures its own window.
+
+Change `Board.base` rarely, and not while it is open: Obsidian keeps an open board's settings in
+memory and writes them back over an outside edit. Close its tab, edit, then reopen. Two limits of
+the Bases engine (seen on 1.15.0) shaped the file:
+
+- Grouping by a property that is empty on some notes breaks the table, so `By parent` groups by
+  a formula that turns an empty `parent` into `(top level)`.
+- Only the first `sort` key takes effect, so one formula joins the folder and the number.
 
 ## Errors
 

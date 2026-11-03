@@ -1,0 +1,46 @@
+filters:
+  and:
+    - file.ext == "md"
+    - file.hasProperty("state")
+formulas:
+  card: file.basename + "  " + if(note.title, note.title, "")
+  parent_group: if(note.parent, note.parent.toString(), "(top level)")
+  order: file.folder + "/" + (1000000 + number(file.basename.replace(/.*-/, ""))).toString()
+views:
+  - type: kanban
+    name: Board
+    groupBy:
+      property: state
+      direction: ASC
+    order:
+      - formula.card
+      - labels
+      - parent
+    sort:
+      - property: formula.order
+        direction: ASC
+  - type: table
+    name: By parent
+    groupBy:
+      property: formula.parent_group
+      direction: ASC
+    order:
+      - file.name
+      - title
+      - state
+      - labels
+    sort:
+      - property: formula.order
+        direction: ASC
+  - type: table
+    name: All tickets
+    order:
+      - file.name
+      - title
+      - state
+      - labels
+      - parent
+      - updated_at
+    sort:
+      - property: formula.order
+        direction: ASC

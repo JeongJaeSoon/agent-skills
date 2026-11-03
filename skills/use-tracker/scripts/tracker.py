@@ -34,7 +34,7 @@ DEFAULT_CONFIG = {
         "linear": {"workspace": None, "review_status": None},
         "jira": {"base_url": None, "email_env": "JIRA_EMAIL", "token_env": "JIRA_API_TOKEN",
                  "issue_type": "Task", "review_status": None},
-        "markdown": {"root": None},
+        "markdown": {"root": None, "link": "file"},
     },
 }
 DEFAULT_CONFIG_PATH = "~/.claude/agent-skills.json"
@@ -702,6 +702,10 @@ class MarkdownAdapter:
         self.root = os.path.expanduser(root)
         if not os.path.isdir(self.root):
             raise TrackerError(f"markdown adapter: tracker.markdown.root is not a folder: {self.root}")
+        # "obsidian" links open the ticket in the Obsidian app; a browser will not follow file:// from a web page.
+        self.link = {"file": "file://", "obsidian": "obsidian://open?path="}.get((cfg or {}).get("link") or "file")
+        if not self.link:
+            raise TrackerError(f"markdown adapter: tracker.markdown.link must be file or obsidian, not {cfg.get('link')!r}")
 
     @staticmethod
     def _check(value, pattern, what):
@@ -741,7 +745,7 @@ class MarkdownAdapter:
         out = issue_template()
         out.update({k: meta.get(k) for k in out if meta.get(k) is not None})
         out.update({
-            "id": os.path.basename(path)[:-3], "url": "file://" + urllib.parse.quote(path),
+            "id": os.path.basename(path)[:-3], "url": self.link + urllib.parse.quote(path, safe="" if self.link.startswith("obsidian") else "/"),
             "state_type": MD_STATE_TYPE[meta["state"]], "labels": [str(l) for l in meta.get("labels") or []],
             "parent": unlink(meta.get("parent")), "description": COMMENTS_LINE.split(body)[0].strip(),
         })
