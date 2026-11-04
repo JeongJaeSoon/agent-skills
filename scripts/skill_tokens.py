@@ -42,6 +42,7 @@ HOOKS = {
     "reorient.py": "sessions with a declared orchestrator or lead role: each prompt, and session start",
     "decision.py": "Orca terminals with an open dashboard decision they registered: each prompt",
     "prose_check.py": "a commit, PR or tracker write whose text breaks write-plainly",
+    "stack_gate.py": "a `gh pr create` with an open PR it depends on, or what that needs left unread",
     "guard.py": "its reason when it denies; one line per warn rule (guard.warn.*) that matched the call",
     "lifecycle.py": "a card's worktree rm before its worker_done or end-check came back (the warning or the denial)"
                     "; a role session's Agent prompt without the refused-act paragraph (the paragraph, appended)",
