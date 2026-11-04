@@ -12,7 +12,7 @@ Only finished work folds: a ✅ row a day after its merge, a stage row finished 
 render() is the one implementation of the brief skill's report rules (sections, sub-task rows, the
 same-reviewer fold, next steps under 진행 중 and 보류, bold for changed rows); test_board.py pins its output.
 """
-import datetime as dt, difflib, fcntl, json, os, pathlib, re, shutil, sys
+import datetime as dt, difflib, fcntl, json, os, pathlib, re, shutil, sys, urllib.parse
 
 import fleet
 import acks
@@ -36,7 +36,7 @@ LIMITS = {"row_min": 90, "pr_warn_min": 30, "pr_stale_min": 120, "state_min": 5,
 FILLED = ("fleet:", "agent:")  # the ids of rows derived from the fleet (--fill), not written to the board
 DONE_KEEP_S = 7 * 86400  # a finished lead stays this long with its rows, then leaves the board
 HEADER = ["", "리드/Phase", "PR", "진행", "다음", "세션"]
-CUT = (1, 4)  # the name and the next step are cut to fit; their whole text goes in the numbered list under the table
+SESSION_NAME_W = 12  # the worktree name in a 세션 cell, whose link and Telegram line carry the whole of it
 PR_LEGEND = (("❗", "사람이 풀 것"), ("✓", "머지 가능"), ("CI✗", "CI 실패"), ("CI…", "CI 진행"), ("?", "PR 상태 없음"))
 UNNAMED = "(프로젝트 미지정)"
 SKILLS_CONFIG = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG", "~/.claude/agent-skills.json")).expanduser()
@@ -1021,11 +1021,13 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     # Such an item stays open under its own id (the row's Done closes the row only) and is placed in the row's table.
     doing, merged_doing = [], []
     for d in store["doing"]:
-        iid, card = tidy.item_id("doing", d), tidy.named(f"{d['title']} {d['next']}", cards)
-        js = rowstate.judge_item("doing", d, facts_in, iid)
+        # A doing item's owner is often the card that runs it: that also links it.
+        iid, card = tidy.item_id("doing", d), tidy.named(f"{d['title']} {d['next']}", cards) or tidy.named(d.get("owner"), cards)
+        js = rowstate.judge_item("doing", d, facts_in, iid, card and card["id"])
         if js["status"] == "done":
             continue
-        if card and (l := card_line.get(card["id"])) and js["status"] == "moving" and iid not in verdicts:
+        # The row says whether its session runs, so a doing item about it needs no ❔ of its own.
+        if card and (l := card_line.get(card["id"])) and (js["status"] == "moving" or js["why"] == "세션 없음") and iid not in verdicts:
             if l["own"] == "moving" and l["next"] in GENERIC_NEXT:
                 l["next"] = d["next"]
             merged_doing.append((iid, d, js, l))
@@ -1132,12 +1134,31 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     def mark(l, st):
         return "📅" if st == "held" and held_by.get(l["key"]) in todo_held else ICON.get(st, "—")
 
+    def bar_shown(l):
+        return l["progress"] not in ("", "—", None)
+
+    def session_text(l, width=None):
+        """The 세션 cell: the session's state, and the worktree to find it by unless the row's name already says it."""
+        s = l["session"]
+        if not s:
+            return "—"
+        name = s.get("name")
+        if not name or name.lower() in l["shown"].lower():
+            return s["word"]
+        return f"{s['word']} · {name if not width or len(name) <= width else name[:width] + '…'}"
+
+    def session_link(l, cell):
+        """Its state word as a link to the session's dashboard page while the server runs; a cut cell keeps the word."""
+        s = l["session"]
+        url = s and s.get("id") and s["state"] != "none" and stages.dash_url("session/" + urllib.parse.quote(s["id"], safe=""))
+        return cell.replace(s["word"], f"[{s['word']}]({url})", 1) if url else cell
+
     used = {l["status"] for l in lines}
     legend = ("🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류 · "
               + "".join(f"{ICON[s]} {w} · " for s, w in (("done", "완료"), ("blocked", "막힘"), ("check", "확인 필요")) if s in used)
               + ("📅 할 일로 넘김 · " if any(mark(l, l["status"]) == "📅" for l in lines) else "")
               + ("⏰ 도래 · " if arrived else "")
-              + "막대=단계(추정)")
+              + ("막대=단계(추정)" if any(bar_shown(l) for l in lines) else "")).removesuffix(" · ")
     pr_states = " ".join(l["pr_state"] for l in lines if not l["fold"])
     pr_legend = [f"{m} {w}" for m, w in PR_LEGEND if m in pr_states]
     if re.search(r"(?<![\w/])[0-9a-f]{7}(?![\w/])", pr_states):
@@ -1195,7 +1216,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
 
     # Every row shows once, in its section's table, with its next step in the 다음 column (rowstate.cell_next). A row that
     # waits on the owner, another person or a condition points down to that list, which holds one reference line per
-    # row ("what · where → name"). 표 밖 진행 lists only what has no row: doing items, flagged held items, arrived to-dos.
+    # row ("what · where → name"). 카드 없는 일 lists only what has no row: doing items, flagged held items, arrived to-dos.
     # Names are unique across the whole report (the dashboard matches buttons and list references by them): a repeat
     # takes the next ·N no other row already shows, a name that itself ends in ·N included. A lead's name over its
     # sub-tasks in another repository is that lead again, not a row, and keeps the name; a row in its table does not.
@@ -1309,21 +1330,30 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                 if l["status"] is None:  # the lead's name over its sub-tasks in another repository
                     out.append(name)
                     continue
-                out.append(("└ " if l["depth"] else "") + f"{mark(l, l['status'])} {name} — {l['progress']}"
-                           + (f" · {nc}" if (nc := next_cell(l)) != "—" else "")
-                           + (f" · {l['session']['word']}" if l["session"] else ""))
+                sess = l["session"] and session_text(l)
+                tail = [x for x in (l["progress"] if bar_shown(l) else None, next_cell(l), sess) if x and x != "—"]
+                out.append(("└ " if l["depth"] else "") + f"{mark(l, l['status'])} {name}"
+                           + (f" — {' · '.join(tail)}" if tail else ""))
                 drawn(l)
         elif mine:  # a section of folded bullets only has no table
+            # The 진행 column shows only where a row has a bar: nothing records one by itself (`--progress` only).
+            bars = any(bar_shown(l) for l in mine)
+            drop = () if bars else (HEADER.index("진행"),)
+            head = [h for c, h in enumerate(HEADER) if c not in drop]
+
             def dress(i, c, s):
                 l = mine[i - 1]
+                if c == len(head) - 1:
+                    return session_link(l, s)
                 return ("└ " if l["depth"] else "") + (f"**{s}**" if l["key"] in changed else s) if c == 1 else s
             # Only a name or a next step is cut to fit, and its whole text goes in the numbered list under the
             # table. A table the other cells alone make too wide overflows, and the render reports it.
-            table, notes = table_width.fit([HEADER] + [[mark(l, l["status"]), l["shown"], l["cell"] or "—", l["progress"],
-                                                        next_cell(l), l["session"]["word"] if l["session"] else "—"]
-                                                       for l in mine], COLS, CUT, floor=6, deco=dress)
+            body = [[mark(l, l["status"]), l["shown"], l["cell"] or "—", l["progress"], next_cell(l), session_text(l, SESSION_NAME_W)]
+                    for l in mine]
+            table, notes = table_width.fit([head] + [[x for c, x in enumerate(r) if c not in drop] for r in body], COLS,
+                                           (1, head.index("다음")), floor=6, deco=dress)
             width_ok &= table_width.table_width(table) <= COLS
-            out += ["", "| " + " | ".join(HEADER).strip() + " |", "|---" * len(HEADER) + "|"]
+            out += ["", "| " + " | ".join(head).strip() + " |", "|---" * len(head) + "|"]
             out += ["| " + " | ".join(c.replace("|", "\\|") for c in row) + " |" for row in table[1:]]
             # Placed from the rows written, by the whole name each one shows (names are unique in the report): a row the
             # table lost is missing and one it wrote twice is a duplicate, whatever the lines handed to it said.
@@ -1354,7 +1384,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     if periodic and (tokens := token_line(now)):
         out += ["", tokens]
     if moving:
-        out += ["", "🔄 표 밖 진행" if tg else "🔄 **표 밖 진행**", ""] + [it if tg else f"- {it}" for it in moving]
+        out += ["", "📌 카드 없는 일" if tg else "📌 **카드 없는 일**", ""] + [it if tg else f"- {it}" for it in moving]
     if theirs:
         out += ["", "⏳ 다른 사람 대기" if tg else "⏳ **다른 사람 대기**", ""] + [it if tg else f"- {it}" for it in theirs]
     if insight:
@@ -1379,6 +1409,15 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     # Only the ⏸️ rows: the held items are a queue the pointer line counts (todo_tables lists it).
     if held := list(dict.fromkeys(held)):
         out += ["", "⏸️ 보류" if tg else "⏸️ **보류**", ""] + [it if tg else f"- {it}" for it in held]
+    # A link to this host's 127.0.0.1 is dead on another device, and Orca has no remote link: what works there is text.
+    reach = {}
+    for l in lines:
+        s = sessions.get((l["session"] or {}).get("id")) or {}
+        if s.get("name") and (term := fleet.session_terminal(s)) and l["session"]["state"] != "none":
+            reach.setdefault(s["name"], fleet.switch_command(term["handle"]) or term["handle"])
+    if reach:
+        out += ["", "🔗 세션 찾기" if tg else "🔗 **세션 찾기**", ""]
+        out += [f"{name} — {how}" if tg else f"- {name} — `{how}`" for name, how in reach.items()]
     opened = [{"id": item_of(rows[l["key"]]), "kind": "row", "label": label(l), "status": l["own"]}
               for l in lines if l["key"] in rows and l["own"] not in (None, "done")]
     opened += [{"id": i, "kind": "doing", "label": d["title"], "status": js["status"]} for i, d, js in doing]
