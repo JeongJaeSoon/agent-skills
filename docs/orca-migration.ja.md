@@ -32,7 +32,7 @@
 
 1. 読み込まれる main のチェックアウトをリリースまで fast-forward します（[platform.md](platform.md)、韓国語）。
 2. オーケストレーター、次に各リードで、ターンの区切りに `/reload-plugins`。動いているカードは何もしなくてかまいません。
-3. オーケストレーターで `orca orchestration run-current --json`。null なら、以前のブリーフが報告していた Run で `orca orchestration run-use <id>`。Run が一つもないときだけ新しく作ります。
+3. オーケストレーターで `orch doctor`。`이 터미널은 Run에 묶여 있지 않다`(この端末はどの Run にもバインドされていない)と答えたときだけ、以前のブリーフが報告していた Run で `orca orchestration run-use --id <id>`。Run が一つもないときだけ新しく作ります。`orca orchestration run-current --json` を直接読むときは、`result.runId` か `result.run.id` があればバインド済みです。
 4. `orch migrate`（dry-run）。最初のリスト（カード一つを指す doing 行）を確認します。人を待つ行、オーナーの行、オーナーが開き直した行、カードはマージ済みでも残りの手順（リリース、デプロイ）を書いた行は入っていません。最後のものは別に一覧され、そのまま残ります。
 5. `orch migrate --apply`。表示されるバックアップのディレクトリと `orch board reopen` の行を控えておきます。
 6. ダッシュボードを確認します。Sessions 表に Orca から来た Ticket・PR の列があり、board の開いた doing リストには残った待ちだけがあります。
