@@ -98,6 +98,9 @@ never_ran = chk("tests", "CANCELLED", ZERO, 3, completed=C)
 assert prog.ci_summary([chk("tests", "SUCCESS", B, 2), never_ran])[0] == ["tests=CANCELLED"]
 replaced_in_queue = chk("tests", "CANCELLED", ZERO, 1, completed=C)
 assert prog.ci_summary([replaced_in_queue, chk("tests", "SUCCESS", B, 2)]) == ([], [], ["2"])
+# Such an entry leaves the started ones ordered by time: run 5 here is a later rerun under a lower id than run 9.
+assert prog.ci_summary([replaced_in_queue, chk("tests", "SUCCESS", A, 9), chk("tests", "CANCELLED", B, 5)])[0] == ["tests=CANCELLED"]
+assert prog.ci_summary([replaced_in_queue, chk("tests", "CANCELLED", A, 9), chk("tests", "SUCCESS", B, 5)]) == ([], [], ["5"])
 
 # The same job name in two workflows is two checks: one workflow's pass does not hide the other's failure.
 assert prog.ci_summary([chk("tests", "FAILURE", A, 1, workflow="nightly"), chk("tests", "SUCCESS", B, 2)])[0] == ["tests=FAILURE"]
