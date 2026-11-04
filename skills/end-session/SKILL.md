@@ -141,6 +141,13 @@ holds, so name that in `worker_done`. Then pick the row:
 - **A refused close.** The host's permission layer (the auto-mode classifier, a hook), not Orca,
   may refuse `orca terminal close`. A refused act is not run again,
   except once, in the same form, by the refused session (a restart that loads a new rule counts as that session), and only when the human allowed it in that session's own chat or added a rule for it, or when a classifier or hook refusal stated a reason and you added evidence that answers it, never for a human's refusal or a production sync. Report that retry as `재시도 1회: <what you added>`. A second refusal stops the act and you report it. Reaching the same result through another session, script, tool, wrapper or target stays forbidden. With nothing to add, leave it: `orca orchestration send --to run:<runId> --type status --subject "terminal left: close refused" --body "<handle>"` (the `runId` from `orca orchestration check --terminal $ORCA_TERMINAL_HANDLE --json`; after `worker_done` a send without `--to` finds no Run), then idle. The session above puts it to the human and does not close it: its own close would be the refused act run by another session.
+- **A refused card removal.** When a permission layer refuses `orca worktree rm` (a cleaner's, or the lead's after a
+  CLOSE OUT line), the same one-retry rule holds, and with nothing to add the card goes to a person: record it with
+  `python3 <reap-resources>/scripts/rm_refused.py add <card path>` (a file write under the state directory, not the
+  refused act), then report `orca orchestration send --to run:<runId> --type status --subject "card left: worktree rm
+  refused" --body "<card path>"`. A recorded card leaves every automatic cleanup: `cards.py`, `reap-hard`, the janitor's
+  guard, and `orch wait`'s CLOSE OUT, which prints a hand-off line with the one command to run instead of the cleaners'
+  line. The person runs that command; nobody else runs it, and the record ends with the card's folder.
 - **The pre-approved close.** `allowed-tools` covers only this session's own close, written exactly as above, and only in the turn that invoked this skill. In a later turn, invoke the skill again first.
 - **`KEEP`** is the brief's opt-out: the orchestrator or lead above it plans to reuse this terminal or card.
 - **An open PR** of a card whose first prompt approved the merge is the card's to land first

@@ -44,6 +44,7 @@ import cardguard  # noqa: E402
 import guard  # noqa: E402
 import preview_watch as pw  # noqa: E402
 import reap  # noqa: E402
+import rm_refused  # noqa: E402
 
 LABEL = "io.github.jeongjaesoon.reap-hard"
 PLIST = pathlib.Path(f"~/Library/LaunchAgents/{LABEL}.plist").expanduser()
@@ -327,10 +328,15 @@ def scan_cards(cfg, protect, now):
         notes.append("orca worktree list 를 읽지 못함 또는 잘림: 카드는 건너뜀")
     elif m["cwd_of"] is not None and m["listening"] is not None:
         working = reap.patrol_working(now)
+        refused = rm_refused.read(reap.STATE)
         for w in local_cards(wt, root):
             ok, why, facts = card_verdict(w, m, cfg, protect, now)
             if ok and reap.real(w["path"]) in working:
                 ok, why = False, "순찰 판정: 작업 중(orch patrol)"
+            if ok and refused is None:
+                ok, why = False, "worktree rm 거부 기록을 읽지 못함"
+            elif ok and reap.real(w["path"]) in refused:
+                ok, why = False, cardguard.handed_off(w["path"])
             item = {"kind": "card", "id": reap.real(w["path"]), "target": ok, "why": why}
             if ok:
                 item.update(head=facts["head"], regenerated=facts.get("regenerated") or [], handles=facts["handles"],
@@ -637,8 +643,11 @@ def agent_target():
 
 
 def spec(interval):
-    tools = [os.path.dirname(t) for t in map(shutil.which, ("orca", "gh", "docker", "lsof")) if t]
-    path = ":".join(dict.fromkeys(tools + ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin"]))
+    # `claude` is what patrol's `claude agents` needs; the installer's shell finds it where launchd's PATH does not.
+    tools = [os.path.dirname(t) for t in map(shutil.which, ("claude", "orca", "gh", "docker", "lsof")) if t]  # claude first: an older copy beside another tool must not win
+    home_bin = pathlib.Path.home() / ".local" / "bin"  # the standard user install dir, if the shell did not have it
+    extra = [str(home_bin)] if (home_bin / "claude").exists() else []
+    path = ":".join(dict.fromkeys(tools + extra + ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin"]))
     return {"Label": LABEL,
             "ProgramArguments": [shutil.which("python3") or sys.executable, "-I", str(pathlib.Path(__file__).resolve()), "run"],
             "StartInterval": int(interval), "RunAtLoad": True, "ProcessType": "Background", "LowPriorityIO": True,

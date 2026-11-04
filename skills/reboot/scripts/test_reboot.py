@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import pathlib, sys, tempfile, time, unittest
+import json, pathlib, sys, tempfile, time, unittest
 from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -30,8 +30,9 @@ def wait_proc(pid, cmd):
 class Orca:
     """Answers `orca <argv> --json` from a fixture: handles that are live, a Run binding, workers."""
 
-    def __init__(self, live=(ME,), run=None, workers=(), title="orchestrator", here=(), concise=False):
+    def __init__(self, live=(ME,), run=None, workers=(), title="orchestrator", here=(), concise=False, runs=()):
         self.live, self.run, self.workers, self.title, self.here = set(live), run, list(workers), title, list(here)
+        self.runs, self.runs_fail, self.list_fails, self.truncated = list(runs), False, False, False
         self.concise = concise
 
     def __call__(self, *argv):
@@ -40,13 +41,21 @@ class Orca:
             if h not in self.live:
                 raise reboot.OrcaError("terminal_handle_stale")
             return {"terminal": {"handle": h, "title": self.title, "worktreePath": ROOT}}
+        if argv[:2] == ("terminal", "list") and self.list_fails:
+            raise reboot.OrcaError("no_answer")
         if argv[:2] == ("terminal", "list"):
-            return {"terminals": self.here}
+            return {"terminals": self.here, "truncated": self.truncated}
         if argv[:2] == ("orchestration", "run-current"):
             return {"runId": self.run} if self.concise else {"run": {"id": self.run} if self.run else None}
+        if argv[:2] == ("orchestration", "run-list"):
+            if self.runs_fail:
+                raise reboot.OrcaError("no_answer")
+            first = "--cursor" not in argv  # two runs a page, so a third Run is on page two
+            chunk = self.runs[:2] if first else self.runs[2:]
+            return {"runs": [{"id": r} for r in chunk], "page": {"hasMore": first and len(self.runs) > 2, "nextCursor": "c2"}}
         if argv[:2] == ("orchestration", "worker-list"):
             state = argv[argv.index("--terminal-state") + 1] if "--terminal-state" in argv else None
-            run = argv[argv.index("--run") + 1] if "--run" in argv else None
+            run = argv[argv.index("--run") + 1] if "--run" in argv else self.run  # unscoped = this terminal's Run
             return {"workers": [w for w in self.workers if (not state or w.get("terminalState") == state)
                                 and (not run or w.get("runId", run) == run)]}
         raise AssertionError(f"unexpected orca call {argv}")
@@ -240,6 +249,231 @@ class Workers(unittest.TestCase):
             self.assertEqual(len(out), 1, lead_state)  # no run-use, and the coordinator's other worker is not ours
             self.assertIn("worker d_mine", out[0])
             self.assertIn("worker-stop", out[0])
+
+
+class Restarted(unittest.TestCase):
+    """Orca marks the Dispatches whose terminals a restart took abandoned; they are what the check must bring back."""
+
+    def row(self, d, status, state="retained", handle="term_dead", **extra):
+        return {"dispatchId": d, "taskId": "t_" + d, "terminalState": state, "dispatchStatus": status,
+                "agentTerminalHandle": handle, "resource": {"worktreeId": "repo::/work/My Card"},
+                "projection": {"provider": {"id": "claude", "model": "opus"}}, **extra}
+
+    def lines(self, *workers):
+        return run("lead", "acme", "run_1", orca=Orca(run="run_1", workers=workers), procs=wait_proc(200, "orch wait acme"))
+
+    def test_an_abandoned_worker_with_a_dead_terminal_is_a_recovery_target(self):
+        for state in ("active", "retained", "reclaimable"):
+            out = does(self.lines(self.row("d1", "abandoned", state)))
+            self.assertEqual(len(out), 1, state)
+            self.assertIn("worker d1", out[0])
+            self.assertIn("abandoned", out[0])
+            self.assertIn("orca terminal create --worktree 'id:repo::/work/My Card'", out[0])
+            self.assertIn("claude --resume <session-id> --model opus", out[0])
+            self.assertIn("worker-start --spec-file <resume instruction> --worktree 'id:repo::/work/My Card' --terminal", out[0])
+            self.assertNotIn("worker-stop", out[0])  # it is already settled: no stop, and no retry-of
+
+    def test_the_worktree_id_is_kept_whole_so_a_shared_path_picks_the_right_workspace(self):
+        w = self.row("d1", "abandoned")
+        w["resource"]["worktreeId"] = "repo::/work/card::workspace:1"
+        out = does(self.lines(w))[0]
+        self.assertEqual(out.count("--worktree id:repo::/work/card::workspace:1 "), 2)
+
+    def test_a_worktree_with_a_live_agent_terminal_is_not_resumed_again(self):
+        # Resumed from a lead on another Run: this Run keeps only the abandoned row, the worktree has the live agent.
+        live = [{"handle": "term_new", "agentIdentity": "claude", "worktreePath": "/work/My Card"}]
+        other_run = self.row("d_new", "dispatched", "active", handle="term_new", runId="run_other")
+        other_run["resource"] = {"worktreeId": "repo::/work/My Card::workspace:2"}
+        orca = Orca(run="run_1", workers=[self.row("d1", "abandoned"), other_run], here=live, runs=("run_1", "run_other"))
+        lines = run("lead", "acme", "run_1", orca=orca, procs=wait_proc(200, "orch wait acme"))
+        self.assertEqual(does(lines), [])
+        self.assertTrue([t for k, t in lines if k == "info" and "d1" in t and "live agent terminal" in t])
+
+    def test_the_dispatch_on_a_later_page_of_runs_is_found(self):
+        live = [{"handle": "term_new", "agentIdentity": "claude"}]
+        other_run = self.row("d_new", "dispatched", "active", handle="term_new", runId="run_c")
+        other_run["resource"] = {"worktreeId": "repo::/elsewhere"}
+        orca = Orca(run="run_1", workers=[self.row("d1", "abandoned"), other_run], here=live, runs=("run_1", "run_b", "run_c"))
+        self.assertEqual(does(run("lead", "acme", "run_1", orca=orca, procs=wait_proc(200, "orch wait acme"))), [])
+
+    def test_an_earlier_finished_dispatch_on_the_terminal_is_no_proof_of_a_resume(self):
+        live = [{"handle": "term_new", "agentIdentity": "claude"}]
+        done = self.row("d_done", "completed", "retained", handle="term_new")
+        done["resource"] = {"worktreeId": "repo::/elsewhere"}
+        orca = Orca(run="run_1", workers=[self.row("d1", "abandoned"), done], here=live, runs=("run_1",))
+        out = does(run("lead", "acme", "run_1", orca=orca, procs=wait_proc(200, "orch wait acme")))
+        self.assertEqual(len(out), 1)
+        self.assertIn("--terminal term_new", out[0])
+
+    def test_a_dispatch_that_reported_after_the_abandoned_one_proves_a_resume(self):
+        live = [{"handle": "term_new", "agentIdentity": "claude"}]
+        old = self.row("d1", "abandoned", projection={"evidence": {"lastObservedAt": 100}})
+        for stamp, expect in ((200, 0), (50, 1)):  # resumed and finished on another Run / an older worker of the terminal
+            done = self.row("d_done", "completed", "retained", handle="term_new", projection={"evidence": {"lastObservedAt": stamp}})
+            done["resource"] = {"worktreeId": "repo::/elsewhere"}
+            orca = Orca(run="run_1", workers=[old, done], here=live, runs=("run_1",))
+            out = does(run("lead", "acme", "run_1", orca=orca, procs=wait_proc(200, "orch wait acme")))
+            self.assertEqual(len(out), expect, stamp)
+
+    def test_a_diagnosis_terminal_beside_the_resumed_worker_does_not_hide_it(self):
+        for order in (("term_diag", "term_new"), ("term_new", "term_diag")):
+            live = [{"handle": h, "agentIdentity": "claude"} for h in order]
+            other = self.row("d_new", "dispatched", "active", handle="term_new", runId="run_other")
+            other["resource"] = {"worktreeId": "repo::/elsewhere"}
+            orca = Orca(run="run_1", workers=[self.row("d1", "abandoned"), other], here=live, runs=("run_1", "run_other"))
+            self.assertEqual(does(run("lead", "acme", "run_1", orca=orca, procs=wait_proc(200, "orch wait acme"))), [], order)
+
+    def test_a_worker_resumed_elsewhere_and_finished_with_its_terminal_closed_is_not_woken(self):
+        old = self.row("d1", "abandoned", projection={"evidence": {"lastObservedAt": 100}})
+        done = self.row("d_done", "completed", "released", handle=None, runId="run_other",
+                        projection={"evidence": {"lastObservedAt": 200}})
+        orca = Orca(run="run_1", workers=[old, done], here=[], runs=("run_1", "run_other"))
+        lines = run("lead", "acme", "run_1", orca=orca, procs=wait_proc(200, "orch wait acme"))
+        self.assertEqual(does(lines), [])
+
+    def test_two_agent_terminals_without_a_dispatch_give_one_command_with_a_placeholder(self):
+        live = [{"handle": h, "agentIdentity": "claude"} for h in ("term_diag", "term_resume")]
+        orca = Orca(run="run_1", workers=[self.row("d1", "abandoned")], here=live, runs=("run_1",))
+        out = does(run("lead", "acme", "run_1", orca=orca, procs=wait_proc(200, "orch wait acme")))
+        self.assertEqual(len(out), 1)
+        self.assertIn("--terminal <the handle of the worker's own terminal: term_diag, term_resume>", out[0])
+
+    def test_a_cut_short_terminal_list_issues_no_recovery_command(self):
+        orca = Orca(run="run_1", workers=[self.row("d1", "abandoned")], here=[])
+        orca.truncated = True
+        with self.assertRaises(reboot.OrcaError):
+            run("lead", "acme", "run_1", orca=orca, procs=wait_proc(200, "orch wait acme"))
+
+    def test_an_unreadable_terminal_or_run_list_ends_the_check_with_orca_not_answering(self):
+        live = [{"handle": "term_new", "agentIdentity": "claude"}]
+        for attr in ("list_fails", "runs_fail"):
+            orca = Orca(run="run_1", workers=[self.row("d1", "abandoned")], here=live)
+            setattr(orca, attr, True)
+            with self.assertRaises(reboot.OrcaError, msg=attr):  # main() turns it into exit 2
+                run("lead", "acme", "run_1", orca=orca, procs=wait_proc(200, "orch wait acme"))
+
+    def test_a_released_abandoned_worker_is_listed_not_hidden(self):
+        lines = self.lines(self.row("d1", "abandoned", "released"))
+        self.assertEqual(does(lines), [])
+        self.assertTrue([t for k, t in lines if k == "info" and "d1" in t and "released" in t])
+
+    def test_a_resumed_session_with_no_dispatch_yet_is_told_to_get_one(self):
+        # The run stopped between the terminal and `worker-start --terminal`: the session runs but has no mailbox.
+        live = [{"handle": "term_new", "agentIdentity": "claude", "worktreePath": "/work/My Card"}]
+        orca = Orca(run="run_1", workers=[self.row("d1", "abandoned")], here=live)
+        out = does(run("lead", "acme", "run_1", orca=orca, procs=wait_proc(200, "orch wait acme")))
+        self.assertEqual(len(out), 1)
+        self.assertIn("worker-start --spec-file <resume instruction> --worktree 'id:repo::/work/My Card' --terminal term_new", out[0])
+        self.assertNotIn("terminal create", out[0])
+
+    def test_the_resume_command_follows_the_workers_agent(self):
+        def line(agent):
+            w = self.row("d1", "abandoned")
+            w["projection"]["provider"] = {"id": agent, "model": "m1"}
+            return does(self.lines(w))[0]
+        self.assertIn('"codex resume <session-id> -m m1"', line("codex"))
+        self.assertNotIn("claude --resume", line("codex"))
+        other = line("gemini")
+        self.assertNotIn("claude --resume", other)
+        self.assertIn("gemini", other)
+
+    def test_an_abandoned_worker_with_no_terminal_on_record_is_one_too(self):
+        out = does(self.lines(self.row("d1", "abandoned", handle=None)))
+        self.assertEqual(len(out), 1)
+        self.assertIn("worker d1", out[0])
+
+    def test_an_abandoned_worker_whose_terminal_is_live_is_left_alone(self):
+        orca = Orca(live=(ME, "term_ok"), run="run_1", workers=[self.row("d1", "abandoned", handle="term_ok")])
+        out = run("lead", "acme", "run_1", orca=orca, procs=wait_proc(200, "orch wait acme"))
+        self.assertEqual(does(out), [])
+
+    def test_settled_workers_are_not_woken_and_are_told_apart(self):
+        lines = self.lines(self.row("d1", "completed", "active"), self.row("d2", "failed", "retained"),
+                           self.row("d3", "completed", "released"))
+        self.assertEqual(does(lines), [])
+        infos = [t for k, t in lines if k == "info" and "finished" in t]
+        self.assertEqual(len(infos), 1)
+        self.assertIn("2 workers", infos[0])  # the released one is gone for good and is not counted
+
+    def test_a_resumed_worker_is_not_woken_again(self):  # worker-list is newest first
+        old = self.row("d_old", "abandoned")
+        for status in ("dispatched", "completed"):
+            new = self.row("d_new", status, "active", handle="term_ok")
+            orca = Orca(live=(ME, "term_ok"), run="run_1", workers=[new, old])
+            out = run("lead", "acme", "run_1", orca=orca, procs=wait_proc(200, "orch wait acme"))
+            self.assertEqual(does(out), [], status)
+
+    def test_an_abandoned_worker_under_another_lead_goes_to_that_lead(self):
+        lead = {"dispatchId": "d_lead", "taskId": "t_lead", "terminalState": "active", "agentTerminalHandle": "term_lead"}
+        kid = self.row("d_kid", "abandoned", projection={"parent": {"taskId": "t_lead"}})
+        procs = wait_proc(200, "orch inbox --wait") + wait_proc(300, "orch watch-cards")
+        out = does(run("top", run_id="run_1", orca=Orca(live=(ME, "term_lead"), run="run_1", workers=[kid, lead]), procs=procs))
+        self.assertEqual(len(out), 1)
+        self.assertIn("sits under d_lead", out[0])
+        self.assertNotIn("terminal create", out[0])
+
+    def test_an_abandoned_worker_is_not_an_ok_line(self):
+        lines = self.lines(self.row("d1", "abandoned"))
+        self.assertFalse([t for k, t in lines if k == "ok" and "has a live terminal" in t])
+
+
+class LostDispatch(unittest.TestCase):
+    def program(self, **cfg):
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        p = pathlib.Path(d.name) / "acme"
+        p.mkdir()
+        (p / "program.json").write_text(json.dumps({"slug": "acme", "run": "run_parent", **cfg}))
+        orig, reboot.PROGRAMS = reboot.PROGRAMS, pathlib.Path(d.name)
+        self.addCleanup(setattr, reboot, "PROGRAMS", orig)
+
+    def test_a_dispatched_lead_that_lost_its_dispatch_is_not_sent_to_its_parents_run(self):
+        self.program(lead_dispatch="ctx_gone")
+        out = does(run("lead", "acme", procs=wait_proc(200, "orch wait acme")))
+        self.assertEqual(len(out), 1)
+        self.assertNotIn("run-use", out[0])
+        self.assertIn("orca orchestration run-create --objective", out[0])
+        self.assertIn("orch set acme run <the new Run>", out[0])
+        self.assertIn("ctx_gone", out[0])
+
+    def test_a_lead_already_bound_to_its_own_run_is_told_to_set_the_program_there(self):
+        self.program(lead_dispatch="ctx_gone")  # run-create done, the session ended before `orch set`
+        out = does(run("lead", "acme", orca=Orca(run="run_own"), procs=wait_proc(200, "orch wait acme")))
+        self.assertEqual(len(out), 1)
+        self.assertNotIn("run-use", out[0])
+        self.assertIn("orch set acme run run_own", out[0])
+
+    def test_a_lead_resumed_under_a_new_dispatch_is_not_ok_while_the_program_names_the_old_one(self):
+        self.program(lead_dispatch="ctx_old")
+        new = {"dispatchId": "ctx_new", "taskId": "t", "runId": "run_parent", "terminalState": "active",
+               "dispatchStatus": "dispatched", "agentTerminalHandle": ME}
+        out = does(run("lead", "acme", orca=Orca(run=None, workers=[new]), procs=wait_proc(200, "orch wait acme")))
+        self.assertEqual(len(out), 1)
+        self.assertIn("run-create", out[0])
+        self.assertIn("ctx_old", out[0])
+        # With the Dispatch the program names, the lead is fine.
+        self.program(lead_dispatch="ctx_new")
+        self.assertEqual(does(run("lead", "acme", orca=Orca(run=None, workers=[new]), procs=wait_proc(200, "orch wait acme"))), [])
+
+    def test_the_abandoned_row_of_this_terminal_is_no_dispatch(self):
+        gone = {"dispatchId": "ctx_gone", "taskId": "t", "runId": "run_parent", "terminalState": "retained",
+                "dispatchStatus": "abandoned", "agentTerminalHandle": ME}
+        self.program(lead_dispatch="ctx_gone")
+        for bound, expect in ((None, "run-create"), ("run_own", "orch set acme run run_own")):
+            out = does(run("lead", "acme", orca=Orca(run=bound, workers=[gone]), procs=wait_proc(200, "orch wait acme")))
+            self.assertEqual(len(out), 1, bound)
+            self.assertIn(expect, out[0])
+            self.assertNotIn("run-use", out[0])
+
+    def test_a_lead_that_was_never_dispatched_still_gets_run_use(self):
+        self.program()
+        out = does(run("lead", "acme", procs=wait_proc(200, "orch wait acme")))
+        self.assertIn("run-use --id run_parent", out[0])
+
+    def test_after_the_program_moved_the_lead_is_bound_and_clean(self):
+        self.program(run="run_own")
+        lines = run("lead", "acme", orca=Orca(run="run_own"), procs=wait_proc(200, "orch wait acme"))
+        self.assertEqual(does(lines), [])
 
 
 class Queue(unittest.TestCase):

@@ -1804,16 +1804,39 @@ def cmd_record(argv):
     print(json.dumps(row, ensure_ascii=False))
 
 
+def set_run(p, run_id):
+    """Move the program to the Run this terminal is bound to, for a dispatched lead whose restart cost it the Dispatch it
+    worked under: the old Run belongs to its coordinator, and `lead_dispatch` names a Dispatch that no longer answers.
+    Only the bound Run is accepted, so mail cannot be pointed at a Run nobody reads."""
+    import orca_settings
+    bound = (orca_settings.run_current(orca_json) or {}).get("id")
+    if bound != run_id:
+        sys.exit(f"this terminal is {'bound to ' + bound if bound else 'not bound to any Run'}, not {run_id}: "
+                 f"`orca orchestration run-create` (or `run-use --id {run_id}` for a Run you coordinate), then set again")
+    me = os.environ.get("ORCA_TERMINAL_HANDLE")
+    if me and own_worker(all_workers(run_id), me):
+        sys.exit(f"this terminal is a dispatched worker of {run_id}: it still works for that Run's coordinator, so the "
+                 "program stays there")
+    old = p.cfg.get("run")
+    p.update(lambda cfg: (cfg.__setitem__("run", run_id), cfg.pop("lead_dispatch", None)))
+    print(json.dumps(p.append("config", note=f"run={old}->{run_id}; lead_dispatch cleared"), ensure_ascii=False))
+    # Units started under the old Dispatch stay on the old Run, where this lead's checks no longer look.
+    print(f"units this lead started stay on {old}: list them with `orca orchestration worker-list --run {old}`; resume an "
+          "abandoned one from this terminal (reboot SKILL.md \"Resume a worker\"), which attaches it to the new Run")
+
+
 def cmd_set(argv):
     p = Program(argv[0])
     key, value = argv[1], argv[2]
+    if key == "run":
+        return set_run(p, value)
     if key == "merge_policy" and value not in ("autonomous", "human-gate"):
         sys.exit("merge_policy is autonomous or human-gate")
     split = lambda v: [x for x in v.split(",") if x]
     conv = {"ceiling": int, "predicate": split, "exclusive_paths": split, "visual_paths": split, "stages": split}.get(key, str)
     if key not in ("merge_policy", "ceiling", "deadline", "predicate", "exclusive_paths", "visual_paths", "note", "final_check",
                    "stages"):
-        sys.exit("settable: merge_policy, ceiling, deadline, predicate, exclusive_paths, visual_paths, note, final_check, stages")
+        sys.exit("settable: run, merge_policy, ceiling, deadline, predicate, exclusive_paths, visual_paths, note, final_check, stages")
     if key == "visual_paths" and not conv(value):
         sys.exit("visual_paths cannot be empty: the screenshot check has no off switch, only the no-visual-change label")
     if key in ("exclusive_paths", "visual_paths"):
@@ -2676,10 +2699,29 @@ def close_out(msgs, workers, worktrees, here=""):
         elif here is None:
             out += [f"CLOSE OUT {d}: release it; this session's own worktree could not be read (`orca terminal show`),"
                     f" so close its agent terminal only once it is not this session's", release]
+        elif handed_off(p):
+            out += [f"CLOSE OUT {d}: release it and close its agent terminal if still open; HANDED TO A PERSON: "
+                    f"`orca worktree rm` of {shlex.quote(p)} was refused, so no cleaner takes it and nothing here runs "
+                    f"it again. The person runs: {rm_refused().command(p)}", release]
         else:
             out += [f"CLOSE OUT {d}: release it and close its agent terminal if still open, unless its next task starts"
                     f" there; the cleaners take {shlex.quote(p)} ({CLEANUP})", release]
     return out
+
+
+def rm_refused():
+    """reap-resources' record of cards whose `orca worktree rm` was refused (one predicate for every reader)."""
+    scripts = str(pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    import rm_refused as mod
+    return mod
+
+
+def handed_off(path):
+    """True when the card's removal is recorded as refused. A record that cannot be read is not (the cleaners keep a
+    card then, and say why)."""
+    return bool(rm_refused().held(path))
 
 
 def taken_over(w):

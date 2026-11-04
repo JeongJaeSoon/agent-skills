@@ -792,7 +792,8 @@ def signal_round(facts, findings, verdicts, memo, memo2, notes, dry, rid):
     parts = [f"못 읽은 곳 {len(blind)}: " + ", ".join(blind)] if blind else []
     gaps = agent_signal.gaps(reads)
     if problem:
-        parts.append(f"{agent_signal.NO_SIGNAL}: claude agents failed: {problem}")
+        skipped = " · 모델 판정·자동 전환 건너뜀" if facts.get("models_skipped") else ""
+        parts.append(f"{agent_signal.NO_SIGNAL}: claude agents failed: {problem}{skipped}")
     elif gaps:
         parts.append(f"{agent_signal.NO_SIGNAL} {len(gaps)}: " + ", ".join(f"{h} ({w})" for h, w in gaps.items()))
     return "; ".join(parts)
@@ -823,6 +824,7 @@ def model_round(facts, findings, verdicts, notes, run=None, dry=False, switch=No
     models = {k: orca_settings.role_model(k) for k in ("lead", "worker")}
     if not any(models.values()):  # no model configured for any role: the feature is off, and quiet
         return
+    facts["models_skipped"] = bool(problem)  # the check was on and had no listing to judge from
     own = owners(facts["sessions"])
     try:
         drifts, more, blind = (run or model_drift.run)(terms, rows, problem, models, os.environ.get("ORCA_TERMINAL_HANDLE"))
