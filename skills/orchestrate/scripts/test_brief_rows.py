@@ -344,6 +344,15 @@ text = brief()["text"]
 assert "남은 단계" in text, text
 board.set_row("pair-open", status="done")
 st["sessions"].pop()
+# A display name is Orca's text: a line break in it must not split the table row or part it from table_rows.
+st["sessions"].append(card("s-break", "first\nsecond", "working", "acme/break"))
+fleet.write_atomic(sd / "state.json", json.dumps(st))
+board.set_row("break-row", title="제목", repo="acme/break", status="moving", worktree="s-break", next="리뷰")
+b = brief()
+assert "| 🔄 | **first second** |" in b["text"], b["text"]
+assert "first second" in [r["label"] for t in b["table_rows"] for r in t["rows"]], b["table_rows"]
+board.set_row("break-row", status="done")
+st["sessions"].pop()
 fleet.write_atomic(sd / "state.json", json.dumps(st))
 # The 진행 column shows only where a row has a bar; `--progress` on one row brings it back for that table.
 assert "| | 리드/Phase | PR | 다음 | 세션 |" in text and "막대=단계" not in text, text

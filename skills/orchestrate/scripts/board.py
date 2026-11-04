@@ -1077,7 +1077,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     # name would say the same thing twice, and the 세션 cell has it.
     on_session = collections.Counter(l["sid"] for l in lines)
     for l in lines:
-        name = l["sid"] and sessions[l["sid"]].get("name")
+        name = l["sid"] and one_line(sessions[l["sid"]].get("name") or "")
         if name and on_session[l["sid"]] == 1 and name.lower() not in l["name"].lower():
             l.update(name=name, orca_name=True)
 
