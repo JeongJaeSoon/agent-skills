@@ -686,6 +686,13 @@ dash.HEALTH.pop("ticks", None)
 assert run_loop(dash.fast_loop, 3) == 3 and collected.count(A) >= 2, collected  # survived 3 rounds, A still served
 assert run_loop(dash.slow_loop, 3) == 3 and "fast" in dash.HEALTH["ticks"] and "slow" in dash.HEALTH["ticks"]
 assert dash.loops_alive(dash.HEALTH)
+# The tick moves with each program, so a round of many slow collects is not read as a stopped loop.
+seen_ticks = []
+dash.collect = lambda slug, *a, **k: (seen_ticks.append(dash.HEALTH["ticks"]["fast"]), {"errors": []})[1]
+dash.HEALTH["ticks"]["fast"] = "2000-01-01T00:00:00Z"
+dash.fast_round(({}, {}, {}), 1)
+assert len(seen_ticks) == 1 and seen_ticks[0] > "2020", seen_ticks  # ticked after the vanished program, before A's collect
+dash.collect = lambda slug, *a, **k: collected.append(slug) or {"errors": []}
 # Any other error in one program's step stays on that program; an error from programs() itself costs one round.
 def boom(slug):
     if slug == GONE:

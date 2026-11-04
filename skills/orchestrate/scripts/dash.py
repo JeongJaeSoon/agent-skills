@@ -1400,6 +1400,8 @@ def fast_round(state, interval):
                 last_orca[slug] = now
         except Exception as e:
             log(f"{slug}: refresh failed: {e!r}")
+        finally:
+            tick("fast")  # progress, not only a finished round: many slow collects must not read as a stopped loop
 
 
 def fast_loop(interval):
@@ -1412,7 +1414,7 @@ def fast_loop(interval):
             fast_round(state, interval)
         except Exception as e:  # programs() itself failed: the loop must outlive it
             log(f"fast loop round failed: {e!r}")
-        tick("fast")  # after the round: a round that hangs stops the tick, and ensure restarts the server
+        tick("fast")  # a collect that hangs stops the tick, and ensure restarts the server
 
 
 def code_loop():
