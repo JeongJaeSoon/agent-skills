@@ -197,16 +197,15 @@ def attempt(d, handle, message):
     return route
 
 
-def wake(p, d, x, mark, n, now, r, workers):
+def wake(p, d, x, mark, n, clock, r, workers):
     ticket = x.get("ticket")
     marked = mark["at"]
     if not p.append_once("auto_wake_claimed", lambda e: e["ev"] in ROWS and e.get("dispatch") == d,
-                         dispatch=d, ticket=ticket, marked_at=marked, claimed_at=stamp(now)):
+                         dispatch=d, ticket=ticket, marked_at=marked, claimed_at=stamp(clock())):
         r.hold(d, n * 60)  # another `orch wait` took it this moment
         return
     handle = next(prog.worker_terminal(w) for w in workers if w.get("dispatchId") == d)
     message = f"Brief: {p.dir / 'briefs' / f'{ticket}.md'}. Continue with the next step from where you stopped."
-    started = time.monotonic()
     try:
         route = attempt(d, handle, message)
     except (Failed, OSError, subprocess.SubprocessError, SystemExit) as e:
@@ -216,7 +215,7 @@ def wake(p, d, x, mark, n, now, r, workers):
         r.stop = True
         return
     p.append("auto_wake", dispatch=d, ticket=ticket, reason=f"turn ended {mark.get('idle_min')} min before the mark, task open",
-             marked_at=marked, woken_at=stamp(now + dt.timedelta(seconds=time.monotonic() - started)), route=route)
+             marked_at=marked, woken_at=stamp(clock()), route=route)
     r.lines.append(f"AUTO-WAKE {d} ({ticket}): woken once ({route}); a second stop goes to the human")
     r.hold(d, n * 60)
 
@@ -240,6 +239,8 @@ def second_stop(p, d, x, done, n, now, r, facts):
 
 def sweep(p, n, now=None):
     now = now or dt.datetime.now(dt.timezone.utc)
+    began = time.monotonic()
+    clock = lambda: now + dt.timedelta(seconds=time.monotonic() - began)
     r = Round()
     state = prog.dash_state(p.dir)
     if state is None:  # a stale collector says nothing about anyone: the marks wait for a fresh one
@@ -274,7 +275,8 @@ def sweep(p, n, now=None):
                 r.lines.append(f"AUTO-WAKE {d} ({x.get('ticket')}): not woken: {why}")
             continue
         save_marks(p, marks)
-        wake(p, d, x, mark, n, now, r, facts.workers)
+        wake(p, d, x, mark, n, clock, r, facts.workers)
+        facts = Facts(p, state, p.events())  # a wake takes seconds; what it read may have changed for the next dispatch
     if marks != before:
         save_marks(p, marks)
     return r

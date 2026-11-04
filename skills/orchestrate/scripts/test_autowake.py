@@ -3,7 +3,7 @@
 
 Run: python3 test_autowake.py
 """
-import contextlib, datetime as dt, io, json, os, pathlib, sys, tempfile
+import contextlib, datetime as dt, io, json, os, pathlib, sys, tempfile, threading
 
 tmp = pathlib.Path(tempfile.mkdtemp())
 os.environ.update({"PROGRAMS_HOME": str(tmp / "programs"), "AGENT_SKILLS_CONFIG": str(tmp / "agent-skills.json"),
@@ -240,6 +240,28 @@ w.sweep(0)
 w.sweep(10)
 assert len(w.sent) == 1, "answered"
 
+# Two due in one round: what the first wake's seconds changed is read again for the second, and the row's time is real.
+stall2 = {"dispatch": "ctx_2", "ticket": "ABC-1", "kind": "idle", "minutes": 16}
+w = World(workers=[row(), row("ctx_2")])
+w.stalls.append(stall2)
+w.sweep(0)
+real_sync = w.sync
+def slow(*a):
+    if a[0] == "nudge":
+        w.workers[1]["terminalState"] = "released"
+    return real_sync(*a)
+w.sync = slow
+r = w.sweep(10)
+assert [a[a.index("--to") + 1] for a in w.sent] == ["dispatch:ctx_1"], w.sent
+assert any("ctx_2" in l and "released" in l for l in r.lines), r.lines
+now, ticks = autowake.time.monotonic, iter([0, 60, 62, 62, 62, 62])
+w = World()
+w.sweep(0)
+autowake.time.monotonic = lambda: next(ticks, 62)
+w.sweep(10)
+autowake.time.monotonic = now
+assert prog.parse_ts(w.rows("auto_wake")[0]["woken_at"]) == mins(10) + dt.timedelta(seconds=62), w.rows("auto_wake")
+
 # silent alone never starts a timer, and a dispatch in the stall list as long_tool neither.
 w = World(stalls=[{"dispatch": "ctx_1", "ticket": "ABC-1", "kind": "silent", "minutes": 21}])
 w.sweep(0)
@@ -336,8 +358,14 @@ w.sweep(21)
 assert len(w.inbox) == 1, w.inbox
 # Two rounds racing for one dispatch: the lock lets one claim through, and it does not deadlock inside append.
 w = World()
-assert w.p.append_once("auto_wake_claimed", lambda e: e.get("dispatch") == "d", dispatch="d")
-assert w.p.append_once("auto_wake_claimed", lambda e: e.get("dispatch") == "d", dispatch="d") is None
+claims = []
+threads = [threading.Thread(target=lambda: claims.append(
+    w.p.append_once("auto_wake_claimed", lambda e: e.get("dispatch") == "d", dispatch="d"))) for _ in range(8)]
+for t in threads:
+    t.start()
+for t in threads:
+    t.join(10)
+assert len(claims) == 8 and sum(c is not None for c in claims) == 1, claims
 assert len(w.rows("auto_wake_claimed")) == 1
 
 # new_stalls leaves out what auto-wake holds; next_moves says the wake is coming instead of asking for one.
@@ -394,8 +422,9 @@ assert int(waits[0]) <= 600000 and "auto-wake holds it" in text, (waits, text)
 # Actionable mail returning first does not starve the wake: it runs before each wait.
 marks = w.p.dir / "auto-wake.json"
 marks.write_text(json.dumps({"ctx_1": {"at": (dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=11)).isoformat()}}))
-text, _ = wait(w, '{"orchestrate": {"auto_wake_min": 10}}')
+text, _ = wait(w, '{"orchestrate": {"auto_wake_min": 10}}', mail=[{"id": "m8", "type": "question", "subject": "s", "body": "b"}])
 assert len(w.sent) == 1 and w.synced[-1] == NUDGED, text
+assert "INBOX id=m8" in text and "ACTIONABLE delivery=dv1" in text, text
 # A sweep that breaks does not cost the wait.
 w = World()
 saved, autowake.sweep = autowake.sweep, lambda *a: 1 / 0
