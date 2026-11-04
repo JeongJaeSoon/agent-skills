@@ -81,6 +81,9 @@ skills-sync setup disable <이름>         # 끄기
 - `--workspace-mode existing`을 쓴다. `new-per-run`은 회차마다 worktree를 만들어 치울 것을 늘린다.
 - 모델은 `--workspace` 체크아웃의 Claude Code 설정을 따른다. `reap.model`, `reflect.model`, `prs.model`,
   `mentions.model`을 넣으면 `schedule`이 `--extra-agent-args=--model <값>`을 붙인다. 이 인자는 새 세션 회차에만 붙는다.
+  이미 등록된 job(janitor, janitor-load, watch-prs, watch-mentions, reflect standing)은 `skills-sync setup apply`가 그 인자만
+  키 값에 맞춰 `orca automations edit`로 고친다(켜짐·꺼짐은 그대로). `enable`은 janitor의 다른 차이를 맞출 때와 꺼진 watch를 켤 때 같이 맞춘다.
+  키를 지운 경우에는 저장된 인자를 비우지 않는다(`prs.py schedule --edit`만 비운다). `claude`가 아닌 에이전트의 job은 건드리지 않는다.
   기준은 판단이 거의 없는 읽기 전용 회차만 haiku,
   나머지는 sonnet이다. 세션 안의 `CronCreate`·`/loop`는 그 세션의 모델로 돌고 모델을 고를 수 없으니, 반복 작업은 automation으로 옮긴다.
   설정 키를 쓰지 않을 때는 아래 runner를 쓴다. 메인 체크아웃의 `.claude/settings.local.json`에 `model`을 넣으면 그 체크아웃에서 여는 대화형 세션까지 바뀐다.

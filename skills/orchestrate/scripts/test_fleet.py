@@ -93,11 +93,14 @@ assert got == sorted([("prompt", "wt-docs"), ("question", "wt-export"), ("approv
 def badges_agree(st):
     per = {s["id"]: sum(1 for i in st["items"] if i.get("session") == s["id"]) for s in st["sessions"]}
     assert {s["id"]: s["unread"] for s in st["sessions"]} == per, per
+    owed = {s["id"]: sum(1 for i in st["items"] if i.get("session") == s["id"] and fleet.needs_rank(i) < 2) for s in st["sessions"]}
+    assert {s["id"]: s["needs_owner"] for s in st["sessions"]} == owed, owed
     assert sum(per.values()) + sum(1 for i in st["items"] if i.get("session") not in per) == len(st["items"])
 
 
 badges_agree(st)
 assert ss["wt-export"]["unread"] == 4 and ss["wt-docs"]["unread"] == 1 and ss["wt-scratch"]["unread"] == 1, ss
+assert ss["wt-export"]["needs_owner"] < ss["wt-export"]["unread"] and ss["wt-login"]["needs_owner"] >= 1, ss  # ci_failed is the agent's
 assert not (state_dir / "pr-events.jsonl").exists()  # the first snapshot is a baseline, not a change
 
 # Dismissing an item removes it from the inbox and from its session's badge alike.
@@ -978,6 +981,86 @@ process.stdout.write(briefHtml({json.dumps(text)}));"""
     assert '<td class="bmark">🔴</td><td>└ child card</td><td>턴 종료</td>' in page, page
     assert "<td>acme/app#9 머지 + 배포</td>" in page, page
     assert "❔" not in page and page.count('class="qmark"') == 2, "❔ is drawn as a toned mark, not the pale emoji"
+
+    # The pointer lines' dashboard URLs are links, to this page's own origin: 127.0.0.1 is dead from another device.
+    pointers = "\n".join(["**09:00 · x**", "", "단계표 2행 (접음 1) · http://127.0.0.1:4780/#/fleet/stages", "",
+                          "📅 할 일 1건 · ⏸️ 보류 큐 2건 · http://127.0.0.1:4780/#/fleet/todo", "",
+                          "단계표 3행 · `orch stage show`", "", "보기 http://example.test/<x>"])
+    js = f"""{helpers}
+{(assets / "fleet.js").read_text()}
+process.stdout.write(briefHtml({json.dumps(pointers)}));"""
+    page = subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout
+    assert '단계표 2행 (접음 1) · <a class="link" href="#/fleet/stages">http://127.0.0.1:4780/#/fleet/stages</a>' in page, page
+    assert '· <a class="link" href="#/fleet/todo">http://127.0.0.1:4780/#/fleet/todo</a>' in page, page
+    assert '<p>단계표 3행 · <span class="mono">orch stage show</span></p>' in page, page
+    assert 'href="http://example.test' not in page and "&lt;x&gt;" in page, page
+
+    # A lead with sessions under it folds. Open by default; the toggle is a <button> tied to the rows it hides. Folded,
+    # the rows stay in the page hidden, and the lead's row says how many and the most urgent mark, 🙋 before 🔴.
+    fold_world = {"sessions": [
+        {"id": "wt-root", "kind": "orchestrator", "name": "root", "phase": "working", "parent": None},
+        {"id": "lead:1", "kind": "orchestration", "name": "lead-one", "phase": "working", "parent": "wt-root", "subagents": [{"desc": "own helper", "started_at": ago(0.1)}]},
+        {"id": "w-a", "kind": "task", "name": "w-a", "phase": "working", "parent": "lead:1", "subagents": [{"desc": "kid helper", "started_at": ago(0.1)}]},
+        {"id": "w-b", "kind": "task", "name": "w-b", "phase": "idle", "parent": "lead:1"},
+        {"id": "w-c", "kind": "task", "name": "w-c", "phase": "waiting", "parent": "w-b"},
+        {"id": "lead-empty", "kind": "orchestration", "name": "lead-empty", "phase": "idle", "parent": "wt-root"},
+        {"id": "lead-2", "kind": "orchestration", "name": "lead-two", "phase": "idle", "parent": "wt-root"},
+        {"id": "w-d", "kind": "task", "name": "w-d", "phase": "idle", "parent": "lead-2"}], "prs": []}
+    fold_rows = [{"session": {"id": "w-a"}, "status": "🔴"}, {"session": {"id": "w-d"}, "status": "🔴"}]
+    storage_ok = "const mem = {}; globalThis.localStorage = {getItem: (k) => mem[k] ?? null, setItem: (k, v) => { mem[k] = v; }};"
+    storage_bad = "globalThis.localStorage = {getItem() { throw new Error('blocked'); }, setItem() { throw new Error('blocked'); }};"
+    def sessions_js(setup, body):
+        return f"""{helpers}
+{take("store")}
+{(assets / "fleet.js").read_text()}
+const S = {{filters: {{}}}};
+{setup}
+const st = {json.dumps(fold_world)};
+F.brief = {{table_rows: [{{rows: {json.dumps(fold_rows)}}}]}};
+{body}"""
+    def fold_run(setup, body):
+        return json.loads(subprocess.run(["node", "-e", ctx], input=sessions_js(setup, body), capture_output=True, text=True, check=True).stdout)
+    rows_of = lambda page: re.findall(r"<tr(?: [^>]*)?>.*?</tr>", page[page.index("<tbody>"):], re.S)  # noqa: E731
+    row_with = lambda page, name: next(r for r in rows_of(page) if f"<b>{name}</b>" in r or f">{name}<" in r)  # noqa: E731
+    got = fold_run(storage_ok, """const open = fleetSessions(st); foldLead("lead:1"); const shut = fleetSessions(st);
+process.stdout.write(JSON.stringify({open, shut, kept: mem[FOLD_KEY]}));""")
+    lead = row_with(got["open"], "lead-one")
+    btn = re.search(r"<button[^>]*data-fold-lead[^>]*>", lead).group(0)
+    assert 'type="button"' in btn and 'aria-expanded="true"' in btn and 'aria-controls="' in btn and "aria-label=" in btn, btn
+    assert "data-fold-lead" not in row_with(got["open"], "lead-empty") and "data-fold-lead" not in row_with(got["open"], "w-b"), got["open"]
+    assert "data-fold-lead" not in row_with(got["open"], "root"), "the orchestrator is not a lead"
+    ids = re.search(r'aria-controls="([^"]*)"', btn).group(1).split()
+    assert len(ids) == 4, ids  # three sessions and the subagent of one; the lead's own subagent is not under the fold
+    assert not any(r.startswith("<tr hidden") for r in rows_of(got["open"])) and "fold-sum" not in got["open"], got["open"]
+    shut = got["shut"]
+    btn = re.search(r"<button[^>]*data-fold-lead[^>]*>", row_with(shut, "lead-one")).group(0)
+    assert 'aria-expanded="false"' in btn, btn
+    assert all(f'id="{i}"' in shut for i in ids), "aria-controls names rows in the page"
+    for name in ("w-a", "kid helper", "w-b", "w-c"):
+        assert row_with(shut, name).startswith("<tr hidden"), (name, shut)
+    for name in ("own helper", "lead-two", "w-d", "lead-empty"):
+        assert not row_with(shut, name).startswith("<tr hidden"), (name, shut)
+    sum_html = re.search(r'<span class="fold-sum[^>]*>.*?</span>', row_with(shut, "lead-one")).group(0)
+    assert "3 sessions" in sum_html and "🙋" in sum_html and "🔴" not in sum_html, sum_html  # w-c waits, w-a is blocked
+    assert json.loads(got["kept"]) == ["lead:1"], got["kept"]
+    # A second read of the page, as after a reload, starts from what was stored; a redraw keeps it; unfolding clears it.
+    got = fold_run(storage_ok + ' mem["orch-dash:lead-fold"] = JSON.stringify(["lead-2"]);',
+                   """const shut = fleetSessions(st), again = fleetSessions(st); foldLead("lead-2"); const open = fleetSessions(st);
+process.stdout.write(JSON.stringify({shut, again, open, kept: mem[FOLD_KEY]}));""")
+    assert row_with(got["shut"], "w-d").startswith("<tr hidden") and got["shut"] == got["again"], got["shut"]
+    sum_html = re.search(r'<span class="fold-sum[^>]*>.*?</span>', row_with(got["shut"], "lead-two")).group(0)
+    assert "1 session<" in sum_html.replace(" · ", "<") and "🔴" in sum_html, sum_html  # one session, and its brief row's mark
+    assert "<tr hidden" not in got["open"] and json.loads(got["kept"]) == [], got
+    # A row a to-do holds reads 📅 in the table and ranks as held; a session with only finished rows has nothing urgent.
+    got = fold_run(storage_ok, """F.brief.table_rows[0].rows.push({session: {id: "x"}, status: "📅"}, {session: {id: "y"}, status: "📅"}, {session: {id: "y"}, status: "⏳"});
+process.stdout.write(JSON.stringify([urgentMark([{id: "x"}]), urgentMark([{id: "y"}]), urgentMark([{id: "z"}]),
+  urgentMark([{id: "z", unread: 1, needs_owner: 0}]), urgentMark([{id: "z", unread: 1, needs_owner: 1}])]));""")
+    assert got == ["📅", "⏳", "", "", "🙋"], got  # an inbox item the agent handles, like failing CI, is not the owner's turn
+    # Storage that throws, or holds junk: open, and the toggle still works for this page.
+    for setup in (storage_bad, storage_ok + ' mem["orch-dash:lead-fold"] = "{not json";', storage_ok + ' mem["orch-dash:lead-fold"] = "7";'):
+        got = fold_run(setup, """const open = fleetSessions(st); foldLead("lead:1"); const shut = fleetSessions(st);
+process.stdout.write(JSON.stringify({open, shut}));""")
+        assert "<tr hidden" not in got["open"] and row_with(got["shut"], "w-a").startswith("<tr hidden"), setup
 
     # Each repository row gets the button of the table_rows entry with its label, at the right end, whatever the order;
     # a table no entry names gets none. The Finished rows card leaves out a row whose Ack is already in the table, and
