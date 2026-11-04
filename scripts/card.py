@@ -4,8 +4,12 @@
 Usage:
   skills-sync card <brief.md> --repo <selector> --name <name> [--display-name <title>] [--comment <text>]
                    [--reference <ticket URL or Jira key>]... [--parent-worktree <selector> | --no-parent] [--card]
-                   [--role impl|verify|review] [--supersede] [--no-forbidden]
+                   [--role impl|verify|review] [--supersede] [--no-forbidden] [--agent claude|codex]
   skills-sync handoff <TICKET> ...   (handoff() below)
+
+--agent picks the card's CLI (default claude). Every brief check runs the same for either. Codex is a supervised
+worker only: its close-setup gets no agent handle, since that reads Claude's screen and worker-start's receipt says it
+is ready. A Codex /goal card, handoff or lead is refused (exit 2) with its reason, never switched to claude.
 
 Before the start: the brief file's FORBIDDEN section is set to the current paragraph of orchestrate references/brief.md
 (the worker template's FORBIDDEN through "run it again."), between `<!-- FORBIDDEN:begin -->` and
@@ -59,7 +63,8 @@ sees that `orca worktree create`: the pressure gate's decision is taken here ins
 The created output is printed with a `card` object: kind (worker | card), path, handle (launch.outcome.handle, else
 the worker's terminal field), run and parent (the `id:` selector, or None with --no-parent).
 
-Exit codes: 0 created; 2 usage, unreadable brief, a missing line, a `term_` report address or a `path:` parent;
+Exit codes: 0 created; 2 usage, unreadable brief, a missing line, a `term_` report address, a `path:` parent or a
+form --agent codex does not support;
 3 the pressure gate refused (wait as its reason says, then run this again); 4 the create or worker-start failed
 (its whole receipt, with any recovery commands and the choices for a refused parent, goes to stderr); 5 the card
 exists but linking, logging or naming it failed, or a started worker's receipt names no worktree (the create
@@ -75,6 +80,12 @@ BEGIN, END = "<!-- FORBIDDEN:begin -->", "<!-- FORBIDDEN:end -->"
 INDENT = " " * 12  # the template's column
 PARAGRAPH_END = "run it again."
 WORK_ROLES = ("impl", "verify", "review")
+AGENTS = ("claude", "codex")
+# Orca documents worker-start for Codex. A leading /goal and the start read from the screen are known only for Claude.
+CODEX_GOAL_CARD = ("--agent codex starts only a supervised worker (a brief that reports to `run:<id>`, no --card): "
+                   "a /goal card's first prompt and its start check are not proven on Codex, so nothing was created.")
+CODEX_LEAD = ("--agent codex cannot start a lead: its ROLE row works through this plugin's Claude Code hooks, "
+              "so nothing was created.")
 CLOSE_LINE = "CLOSE: 완료 기준을 채우고 결과를 적으면 end-session §8대로 같은 턴에 스스로 닫는다"
 sys.path.insert(0, str(REPO / "hooks"))
 sys.path.insert(0, str(REPO / "skills" / "orchestrate" / "scripts"))
@@ -581,7 +592,7 @@ def handle_of(res):
 def parse_args(rest):
     opts, refs = {}, []
     valued = {"--repo", "--name", "--display-name", "--comment", "--parent-worktree", "--role", "--title", "--note",
-              "--base-branch"}
+              "--base-branch", "--agent"}
     i = 0
     while i < len(rest):
         if rest[i] == "--reference" and i + 1 < len(rest):
@@ -595,6 +606,8 @@ def parse_args(rest):
             raise Refuse(2, f"unexpected argument {rest[i]!r}\n{__doc__}")
     if opts.setdefault("--role", "impl") not in WORK_ROLES:
         raise Refuse(2, f"--role is one of {', '.join(WORK_ROLES)}")
+    if opts.setdefault("--agent", "claude") not in AGENTS:
+        raise Refuse(2, f"--agent is one of {', '.join(AGENTS)}")
     return opts, refs
 
 
@@ -639,6 +652,8 @@ def create_locked(brief, opts, refs, prompt):
             print(f"[{ME}] the lead starts as a /goal card: {fix}", file=sys.stderr)
     run_id = checked if to_run else None
     worker = bool(run_id)
+    if opts["--agent"] == "codex" and (lead or not worker):
+        raise Refuse(2, f"[{ME}] {CODEX_LEAD if lead else CODEX_GOAL_CARD}")
     parent = None if opts.get("--no-parent") else (
         opts["--parent-worktree"] if opts.get("--parent-worktree") and not worker else caller_worktree())
     if worker:
@@ -647,14 +662,14 @@ def create_locked(brief, opts, refs, prompt):
         # worker-start takes no parent selector: new-child parents it to this session, --no-parent drops lineage
         cmd = [ORCA, "orchestration", "worker-start", "--spec", spec, "--worktree",
                "new-top-level" if opts.get("--no-parent") else "new-child",
-               "--repo", opts["--repo"], "--name", opts["--name"], "--agent", "claude",
+               "--repo", opts["--repo"], "--name", opts["--name"], "--agent", opts["--agent"],
                # Orca times out before this process does, so a slow start still returns its receipt
                "--timeout-ms", "840000"]
         cmd += ["--display-name", opts["--display-name"]] if opts.get("--display-name") else []
     else:
         cmd = [ORCA, "worktree", "create", "--repo", opts["--repo"], "--name", opts["--name"]]
         cmd += ["--parent-worktree", parent] if parent else ["--no-parent"]
-        cmd += ["--agent", "claude", "--prompt", prompt]
+        cmd += ["--agent", opts["--agent"], "--prompt", prompt]
         for r in refs:
             cmd += ["--reference", r]
     if opts.get("--comment"):
@@ -704,7 +719,8 @@ def create_locked(brief, opts, refs, prompt):
         raise Refuse(4, f"[{ME}] {verb} failed: {err}" + (f". {hint}" if hint else ""))
     mark("done")
     handle = handle_of(res)
-    setup = start_close_setup(path, handle, opts["--name"])
+    # close-setup judges the start from Claude's screen; worker-start's receipt already says a Codex worker is ready.
+    setup = start_close_setup(path, handle if opts["--agent"] == "claude" else None, opts["--name"])
     print(json.dumps({**res, "card": {"kind": "worker" if worker else "card", "path": path, "handle": handle,
                                       "run": run_id, "parent": parent, "forbidden": forbidden, "close_setup": setup}},
                      ensure_ascii=False, indent=1))
@@ -778,6 +794,8 @@ def handoff(argv):
             raise Refuse(2, handoff.__doc__)
         ticket = argv[0]
         opts, refs = parse_args(argv[1:])
+        if opts["--agent"] == "codex":
+            raise Refuse(2, f"[{HANDOFF}] {CODEX_GOAL_CARD}")
         # CLOSE on a line of its own: roles.py reads a CLOSE card by its row
         prompt = f"/goal {ticket}." + (f" {opts['--note']}" if opts.get("--note") else "") + f"\n{CLOSE_LINE}"
         if not guard.CLOSE_OR_KEEP.search(prompt):

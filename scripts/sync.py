@@ -14,6 +14,7 @@ Usage:
                                          with --agent, first report a trust or permission dialog, or no start
   skills-sync card <brief.md> --repo <selector> --name <name> [--display-name <title>] [--comment <text>]
                    [--parent-worktree <selector> | --no-parent] [--role impl|verify|review] [--supersede]
+                   [--agent claude|codex]
                                          create a card whose first prompt carries the brief's /goal, CLOSE/KEEP
                                          and lead lines written out, its FORBIDDEN refreshed, its setup closed in
                                          the background, and no second card on the same key (scripts/card.py)

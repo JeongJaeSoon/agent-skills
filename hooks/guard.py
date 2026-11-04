@@ -182,7 +182,8 @@ def bash(cmd, background, who, cwd=None):
                 missing.append("`ROLE: lead <slug>`")
         if missing:
             return decide("deny", f"The card's --prompt has no {' and no '.join(missing)} line. Create the card from "
-                                  "its brief file with `skills-sync card <brief>` (dispatch-card §3), which writes those lines "
+                                  "its brief file with `skills-sync card <brief>` (dispatch-card §3; `--agent codex` for a "
+                                  "supervised Codex worker), which writes those lines "
                                   "into --prompt, or write them literally in --prompt (not from a file or variable): "
                                   "`CLOSE: 완료 기준을 채우고 결과를 적으면 end-session §8대로 같은 턴에 스스로 닫는다`, or KEEP "
                                   "when this session will reuse the card; a lead also gets its MODE, `ROLE: lead <slug>`, DELEGATE "
