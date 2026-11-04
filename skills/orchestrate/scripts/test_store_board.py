@@ -211,6 +211,8 @@ with state("bans", None, None, STATE) as sd:
     board.set_row("L", worktree="wt-card")  # and naming the same card again is no change
     board.set_row("plain", repo="acme/app", pr="acme/app#9")  # a row about no card keeps its PR
     assert board.read()["rows"]["plain"]["pr"] == "acme/app#9"
+    board.set_row("plain", worktree="wt-card")  # linked to a card, the row's PR is Orca's
+    assert "pr" not in board.read()["rows"]["plain"]
     # A lead Orca knows has its row by `board set`; a lead it cannot see is added as before.
     refused(lambda: board.lead_add("M", "term_0FAKE1", "acme/app"), "Orca already knows lead wt-lead", "orch board set M")
     assert "M" not in board.read()["leads"]
@@ -291,6 +293,11 @@ with state("marks", {**BOARD, "doing": [], "later": [], "todo": [], "owner_todo"
     assert "ext:shut" not in got and "ext:back" in got and "ext:newer" in got, got
     # Closed with no resolve line to mark: no mark, and the last line decides as the file alone did.
     assert "ext:none" in got and store.ext_closures()["none"]["ext_mark"] is None
+    # A reopen is already in the file: its own date would otherwise age out the newest add.
+    assert got["ext:back"]["at"] == ADD["at"] and store.ext_closures()["back"]["ext_mark"] is None
+    # A closure that the key's newer add outlives leaves the add's PR collected.
+    fleet.inbox_add("review", "acme/app#7 다시", key="shut")
+    assert "acme/app#7" in fleet.board_prs()
 
 
 # ---- tidy judges outside the transaction and checks inside it
@@ -309,15 +316,15 @@ with state("race", None, None) as sd:
         fleet.inbox_add("review", "acme/app#1 리뷰 또", key="r")
         return got
 
-    # updated_at has one-second grain: the move below would look unchanged inside the same second.
+    # Whatever the clock did: a move inside the second of the judgment leaves updated_at equal.
+    now_at = store.now
+    store.now = lambda: "2026-01-01T00:00:00Z"
     store.change_board(lambda s: s["doing"][0].update(next="이전"), None)
-    with store.tx() as db:
-        db.execute("UPDATE item SET updated_at='2026-01-01T00:00:00Z' WHERE lane='doing'")
     tidy.assess = moved
     try:
         rows = tidy.run()
     finally:
-        tidy.assess = assess
+        tidy.assess, store.now = assess, now_at
     assert [r["id"] for r in rows] == ["ext:r"], rows  # the item changed since it was judged: left for the next tick
     assert board.read()["doing"][0]["next"] == "다시 씀"
     assert keys()["ext:r"]["title"] == "acme/app#1 리뷰 또", "the add after the judgment stays"
@@ -355,6 +362,12 @@ with state("roundtrip", fleet_=None) as sd:
     # The inbox copy says alone what the closures said: k3's resolve line, which tidy no longer writes.
     rows = [json.loads(l) for l in (d / "inbox-external.jsonl").read_text().splitlines()]
     assert rows[-1]["op"] == "resolve" and rows[-1]["key"] == "k3", rows
+    # New work with the words of a closed item that left the board would come back closed.
+    with state("orphan-words", lines=[line("done", store.legacy_id("doing", {"title": "gone work"}))]) as sd2:
+        store.import_apply(checks=False)
+        store.change_board(lambda s: s["doing"].append({"title": "gone work", "owner": "a", "next": "n"}))
+        code, _, err = orch("db", "export", "--legacy", "--target", "4a", str(tmp / "orphan-export"))
+        assert code == 1 and "left the board" in err and not (tmp / "orphan-export").exists(), err
     # Same words in two states have no legacy form: refused, and nothing half-written.
     with state("twin-export", twin, []) as sd2:
         store.import_apply(checks=False)
@@ -372,17 +385,38 @@ with state("roundtrip", fleet_=None) as sd:
     refused(lambda: store.rollback_board(d, checks=False), "the DB changed", kind=store.Refused)
     d = export("export-3")
     # A crash after the files are placed, before the step leaves, runs again.
-    real = store.tx
-    store.tx = lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt("killed before the step left"))
+    real = store._event
+    store._event = lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt("killed before the step left"))
     try:
         store.rollback_board(d, checks=False)
     except KeyboardInterrupt:
         pass
     finally:
-        store.tx = real
+        store._event = real
     assert (sd / "board.json").is_file() and "4b-board" in store.migrated_steps()
+    # An inbox line that lands while the export runs is not in its copy, so the export cannot stand for that inbox.
+    for_export = fleet.inbox_for_export
+
+    def late(*a):
+        fleet.inbox_add("review", "while exporting", key="during")
+        return for_export(*a)
+
+    fleet.inbox_for_export = late
+    try:
+        racy = store._export_board(tmp / "export-racy")[0]
+    finally:
+        fleet.inbox_for_export = for_export
+    refused(lambda: store.rollback_board(racy, checks=False), "changed after that export", kind=store.Refused)
+    d = export("export-4")
     assert "undone" in store.rollback_board(d, checks=False)
     assert "4b-board" not in store.migrated_steps() and json.loads((sd / "board.json").read_text()) == json.loads((d / "board.json").read_text())
+    # A writer that passed the gate and then waited for the lock finds the step gone.
+    opened = store.open_db
+    store.open_db = lambda timeout_ms: store._connect(store.path(), timeout_ms)
+    try:
+        refused(lambda: store.change_board(lambda s: s["doing"].pop()), "4b-board", kind=store.NotMigrated)
+    finally:
+        store.open_db = opened
     assert store.import_plan()["board"]["state"] == "not imported"
     refused(store.board, "4b-board", kind=store.NotMigrated)
     refused(lambda: store.rollback_board(d, checks=False), "nothing to undo", kind=store.Refused)
@@ -453,6 +487,8 @@ with state("before", None, None, STATE) as sd:
         refused(call, "run orch db import", kind=store.NotMigrated)
     code, _, err = orch("board", "later", "add", "x", "--trigger", "t")
     assert code == 1 and "orch db cutover-plan 4b" in err, err
+    code, _, err = orch("migrate", "--apply")
+    assert code == 1 and "orch db cutover-plan 4b" in err and "Traceback" not in err, err
     assert tidy.run() == [] and tidy.closed() == {} and tidy.timeline() == [] and fleet.board_prs() == set()
     r = board.render(fill=True, fresh=False, periodic=False)
     assert "이행 대기: 보드·결정 DB (`orch db cutover-plan 4b`)" in r["headline_facts"], r["headline_facts"]

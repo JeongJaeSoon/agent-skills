@@ -168,6 +168,8 @@ def tx(timeout_ms=BUSY_MS):
     try:
         db.execute("BEGIN IMMEDIATE")
         try:
+            if why := _missing(db):  # a rollback may have taken the step out while this waited for the lock
+                raise NotMigrated(f"{path()}: {why}: run orch db import")
             yield db
         except BaseException:
             db.execute("ROLLBACK")
@@ -475,10 +477,10 @@ def ext_closures(db=None):
         return {}
 
 
-def item_same(db, iid, updated_at):
-    """Whether an item is still open as it was when tidy judged it."""
-    r = db.execute(f"SELECT 1 FROM item WHERE id=? AND updated_at=? AND status IN {OPEN_SQL}", (iid, updated_at)).fetchone()
-    return bool(r)
+def item_same(db, seen):
+    """Whether an item is still open with every field tidy judged: updated_at alone is one second wide."""
+    r = db.execute(f"SELECT * FROM item WHERE id=? AND status IN {OPEN_SQL}", (seen["id"],)).fetchone()
+    return bool(r) and _item(r) == seen
 
 
 def _item_now(db, iid):
@@ -926,7 +928,7 @@ def _plan_board(board_, lines, state, ts, start=1):
             out["closures"].append({"unit": uid, "state": l["ev"], "ts": l.get("ts") or ts, "by": l.get("by"), "rule": l.get("rule"),
                                     "evidence": l.get("evidence") if done else None, "label": l.get("label"),
                                     "undone": None if done else l.get("evidence"), "legacy": l,
-                                    "mark": anchors.get(uid[4:], {}).get("resolve" if done else "add") if uid.startswith("ext:") else None})
+                                    "mark": anchors.get(uid[4:], {}).get("resolve") if done and uid.startswith("ext:") else None})
     cards = tidy.cards_of(state) if state else {}
     sessions = {s.get("id"): s for s in (state or {}).get("sessions") or []}
     by_handle = {t.get("handle"): sid for sid, s in sessions.items() for t in s.get("terminals") or []}
@@ -1358,6 +1360,9 @@ def _export_board(dest):
                           "evidence": r["reopen_evidence"], "label": r["title"]})
     for c in closures:
         done = c["state"] == "done"
+        if c["unit"] in state_of and state_of[c["unit"]][0][0] != done:
+            raise Refused(f"{state_of[c['unit']][1]} has the words of a closed item that left the board ({c['unit']}); the old "
+                          "format would close it too. Reword or close it, then export again")
         lines.append({"ev": c["state"], "id": c["unit"], "ts": c["ts"], "by": c["by"], "rule": c["rule"],
                       "evidence": c["evidence"] if done else c["undone_evidence"], "label": c["label"]})
     dest.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -1367,13 +1372,14 @@ def _export_board(dest):
     fleet.write_atomic(dest / "board.json", json.dumps(board_json, ensure_ascii=False, indent=1) + "\n")
     fleet.write_atomic(dest / "tidy.jsonl", "".join(json.dumps(l, ensure_ascii=False, separators=(",", ":")) + "\n" for l in lines))
     live = fleet.state_dir() / "inbox-external.jsonl"
-    extra = "".join(json.dumps(l, ensure_ascii=False, separators=(",", ":")) + "\n" for l in fleet.inbox_for_export(shut))
-    fleet.write_atomic(dest / "inbox-external.jsonl", (live.read_text() if live.is_file() else "") + extra)
+    data = live.read_bytes() if live.is_file() else None
+    extra = "".join(json.dumps(l, ensure_ascii=False, separators=(",", ":")) + "\n" for l in fleet.inbox_for_export(shut, data or b""))
+    fleet.write_atomic(dest / "inbox-external.jsonl", (data or b"").decode() + extra)
     names = ("board.json", "tidy.jsonl", "inbox-external.jsonl")
     for name in names:
         os.chmod(dest / name, 0o600)
     fleet.write_atomic(dest / "export.json", json.dumps(
-        {"target": "4a", "seq": seq, "inbox_source": sha256(live) if live.is_file() else None,
+        {"target": "4a", "seq": seq, "inbox_source": None if data is None else hashlib.sha256(data).hexdigest(),
          "files": {name: sha256(dest / name) for name in names}}, indent=1) + "\n")
     os.chmod(dest / "export.json", 0o600)
     return dest, len(items), None
@@ -1395,28 +1401,23 @@ def rollback_board(src, rehearsal=False, checks=True):
     sd = fleet.state_dir()
     names = ("board.json", "tidy.jsonl", "inbox-external.jsonl")
     with _locks():
-        db = open_db()
-        try:
-            seq = db.execute("SELECT max(seq) FROM event").fetchone()[0]
-        finally:
-            db.close()
-        if seq != manifest.get("seq"):
-            raise Refused("the DB changed after that export: export again")
-        live = sd / "inbox-external.jsonl"
-        have = sha256(live) if live.is_file() else None
-        if have not in (manifest.get("inbox_source"), manifest["files"]["inbox-external.jsonl"]):
-            raise Refused("inbox-external.jsonl changed after that export: export again")
-        for name in names:
-            if sha256(src / name) != manifest["files"][name]:
-                raise Refused(f"{src / name} is not what the export wrote")
-        for name in names:
-            p, tmp = sd / name, sd / f".{name}.rollback-{os.getpid()}.tmp"
-            shutil.copyfile(src / name, tmp)
-            os.chmod(tmp, 0o600)
-            if p.is_dir():
-                p.rmdir()  # empty, or this stops: a tombstone holds nothing
-            os.replace(tmp, p)
-        with tx() as db:
+        with tx() as db:  # the write lock from the check to the step's removal: no write slips between them
+            if db.execute("SELECT max(seq) FROM event").fetchone()[0] != manifest.get("seq"):
+                raise Refused("the DB changed after that export: export again")
+            live = sd / "inbox-external.jsonl"
+            have = sha256(live) if live.is_file() else None
+            if have not in (manifest.get("inbox_source"), manifest["files"]["inbox-external.jsonl"]):
+                raise Refused("inbox-external.jsonl changed after that export: export again")
+            for name in names:
+                if sha256(src / name) != manifest["files"][name]:
+                    raise Refused(f"{src / name} is not what the export wrote")
+            for name in names:
+                p, tmp = sd / name, sd / f".{name}.rollback-{os.getpid()}.tmp"
+                shutil.copyfile(src / name, tmp)
+                os.chmod(tmp, 0o600)
+                if p.is_dir():
+                    p.rmdir()  # empty, or this stops: a tombstone holds nothing
+                os.replace(tmp, p)
             db.execute("DELETE FROM migration WHERE step=?", (BOARD_STEP,))
             _event(db, "migration", BOARD_STEP, "rollback", "rollback", None, {"from": str(src)})
     return f"{BOARD_STEP} undone: board.json, tidy.jsonl and inbox-external.jsonl are back from {src}"

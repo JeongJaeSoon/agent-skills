@@ -1400,12 +1400,12 @@ def board_prs():
     """The PR keys the open board's rows name, and every full owner/repo#N in its doing, later, todo and owner_todo text and
     in the external inbox: a closed item no longer holds its PR in prs.json."""
     import tidy
-    b, shut = board_open(), tidy.closed()
+    b, shut = board_open(), tidy.closed()  # external_items() has already applied its own closures
     text = [f"{d.get('title')} {d.get('next')}" for d in b.get("doing") or []]
     text += [f"{l.get('title')} {l.get('trigger')}" for l in b.get("later") or []]
     text += [t["title"] for t in b.get("owner_todo") or []]
     text += [f"{t.get('title')} {t.get('after') or ''}" for t in b.get("todo") or []]
-    text += [f"{i.get('title')} {i.get('url')} {i.get('command')}" for i in external_items({}) if i["key"] not in shut]
+    text += [f"{i.get('title')} {i.get('url')} {i.get('command')}" for i in external_items({})]
     rows = {r.get("pr") for k, r in (b.get("rows") or {}).items() if f"row:{k}" not in shut}
     return (rows | set(pr_refs(" ".join(text)))) - {None}
 
@@ -2224,12 +2224,12 @@ def decision_items(by_handle, root):
 EXTERNAL_KEEP_DAYS = 7  # an added item nobody resolved leaves the inbox this long after it was added
 
 
-def inbox_lines():
-    """{key: [(row, mark)]} of the add and resolve lines in inbox-external.jsonl, in file order. mark is "<end byte
-    offset>:<sha256>" of the line: the file only grows, so a line's place says what came first, and two identical lines
-    in one second stay two. A last line with no newline is still being written."""
+def inbox_lines(data=None):
+    """{key: [(row, mark)]} of the add and resolve lines in inbox-external.jsonl (or data, its bytes), in file order. mark
+    is "<end byte offset>:<sha256>" of the line: the file only grows, so a line's place says what came first, and two
+    identical lines in one second stay two. A last line with no newline is still being written."""
     try:
-        data = (state_dir() / "inbox-external.jsonl").read_bytes()
+        data = (state_dir() / "inbox-external.jsonl").read_bytes() if data is None else data
     except OSError:
         return {}
     out, at = {}, 0
@@ -2292,11 +2292,11 @@ def external_items(now=None):
     return [{k: v for k, v in i.items() if k != "mark"} for i in external_marked(now)]
 
 
-def inbox_for_export(closures):
-    """The lines an inbox copy needs at its end so that the file alone says what the closures do: older code reads no
-    closure, only the file's last line per key."""
+def inbox_for_export(closures, data):
+    """The lines an inbox copy of data needs at its end so that the file alone says what the closures do: older code
+    reads no closure, only the file's last line per key."""
     out = []
-    for key, rows in inbox_lines().items():
+    for key, rows in inbox_lines(data).items():
         file_says, shown = ext_state(rows, None)[0], ext_state(rows, closures.get(key))[0]
         if file_says and not shown:
             out.append({"v": 1, "op": "resolve", "key": key, "at": closures[key]["ts"]})

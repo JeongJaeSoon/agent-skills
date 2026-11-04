@@ -142,13 +142,13 @@ def assess(store, state, prs, me=None, now=None):
         elif POST_MERGE.search(d.get("next") or ""):
             put(d["id"], "check", "pr_merged_steps_left", f"{ev} · 남은 단계: {d['next']}", d["title"])
         else:
-            put(d["id"], "done", "pr_merged", ev + (f" (카드 {card['name']})" if card else ""), d["title"], at=d.get("updated_at"))
+            put(d["id"], "done", "pr_merged", ev + (f" (카드 {card['name']})" if card else ""), d["title"], item=d)
     for l in store.get("later") or []:
         if ev := trigger_met(l["trigger"], cards, prs):
             put(l["id"], "check", "trigger_met", f"조건 충족: {ev}", l["title"])
     for t in store.get("owner_todo") or []:
         if ev := refs_over(fleet.pr_refs(t["title"]), prs, closed_ok=True):
-            put(t["id"], "done", "pr_over", ev, t["title"], at=t.get("updated_at"))
+            put(t["id"], "done", "pr_over", ev, t["title"], item=t)
     for rid, r in (store.get("rows") or {}).items():
         at = fleet.parse(r.get("reported_at"))
         card = cards.get(r.get("worktree")) or named(f"{rid} {r.get('title') or ''}", cards)  # `--worktree` first
@@ -276,7 +276,7 @@ def run(now=None, dry=False):
             cur = have.get(iid) or {}
             row = {"ev": "done", "id": iid, "ts": ts, "by": "auto", "rule": v["rule"], "evidence": v["evidence"], "label": v["label"]}
             if (not stands(cur, iid, v.get("mark"), closures) and not undone(cur, v) and fits(row)
-                    and (not v.get("at") or store.item_same(db, iid, v["at"]))):
+                    and (not v.get("item") or store.item_same(db, v["item"]))):
                 yield row, v.get("mark")
     if dry:
         with store.read() as db:

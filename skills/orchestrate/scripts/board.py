@@ -98,6 +98,8 @@ def check_row_write(rid, row, fields):
         raise ValueError(f"row {rid} is linked to card {(card or cards[worktree])['id']}: Orca knows its PR, so --pr is not stored")
     if worktree is not None and card and worktree != card["id"]:
         raise ValueError(f"row {rid} is linked to card {card['id']}: drop the row to link another")
+    if row and worktree in cards:
+        row.pop("pr", None)  # Orca's from now on
 
 
 def one_line(text, limit=None):

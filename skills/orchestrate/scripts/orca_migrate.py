@@ -127,6 +127,13 @@ def report(p):
 
 
 def main(argv):
+    try:
+        run(argv)
+    except store_db.NotMigrated as e:
+        sys.exit(f"the board is not in {store_db.DB_NAME} yet ({e}); orch db cutover-plan 4b lists the steps")
+
+
+def run(argv):
     if argv[:1] == ["--apply"] and len(argv) == 1:
         dest, ids = apply()
         if not ids:
