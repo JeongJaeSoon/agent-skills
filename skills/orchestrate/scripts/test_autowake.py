@@ -212,6 +212,14 @@ r = autowake.sweep(w.p, 10, mins(5))
 assert not r.lines, r.lines
 r = autowake.sweep(w.p, 10, mins(30))
 assert any("(state.json" in l and "m old)" in l for l in r.lines) and not w.sent, r.lines
+# A state with a null timestamp, or a mark with a bad time, does not fail the round.
+(w.p.dir / "dashboard" / "state.json").write_text(json.dumps({"generated_at": None}))
+r = autowake.sweep(w.p, 10, mins(30))
+assert any("state.json missing)" in l for l in r.lines), r.lines
+marks = autowake.load_marks(w.p)
+marks["ctx_bad"] = {"at": 12345}
+autowake.save_marks(w.p, marks)
+autowake.sweep(w.p, 10, mins(30))
 
 
 def excluded(name, **kw):

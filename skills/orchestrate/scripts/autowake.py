@@ -275,13 +275,17 @@ def second_stop(p, d, x, done, n, now, r, facts):
 def overdue_without_state(p, n, now, r):
     """A mark past its deadline that cannot be acted on because state.json is stale or missing. The marks stay;
     the line is what lets the lead see the wake is late and why."""
-    due = [(d, m) for d, m in load_marks(p).items()
-           if isinstance(m, dict) and m.get("at") and (prog.parse_ts(m["at"]) + dt.timedelta(minutes=n) - now).total_seconds() <= 0]
+    def overdue(m):
+        try:
+            return (prog.parse_ts(m["at"]) + dt.timedelta(minutes=n) - now).total_seconds() <= 0
+        except (KeyError, ValueError, TypeError, AttributeError):  # a hand-edited mark is not a reason to fail the round
+            return False
+    due = [(d, m) for d, m in load_marks(p).items() if isinstance(m, dict) and overdue(m)]
     if not due:
         return
     try:
         age = f"{round((now - prog.parse_ts(json.loads((p.dir / 'dashboard' / 'state.json').read_text())['generated_at'])).total_seconds() / 60)}m old"
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
         age = "missing"
     for d, m in due:
         r.lines.append(f"AUTO-WAKE {d} ({m.get('ticket') or '?'}): due, waiting for a fresh collector state (state.json {age})")

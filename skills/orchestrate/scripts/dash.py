@@ -1000,8 +1000,9 @@ def local_contains(repo_dir, older, newer):
         grafts = run("rev-parse", "--git-path", "info/grafts").stdout.strip()
         if grafts and (pathlib.Path(repo_dir) / grafts).exists():
             return None
+        shallow = run("rev-parse", "--is-shallow-repository").stdout.strip() != "false"  # read before the answer
         rc = run("merge-base", "--is-ancestor", older, newer).returncode
-        if rc == 1 and run("rev-parse", "--is-shallow-repository").stdout.strip() != "false":
+        if rc == 1 and shallow:
             return None
     except (OSError, subprocess.TimeoutExpired):
         return None
