@@ -135,7 +135,8 @@ def scan(terms, seen, read, now_ms, idle_min, free_gb, min_free_gb, goal_lost_mi
         auth = auth_line(tail) if idle >= AUTH_QUIET_MIN else None
         hit = prog.judge_wait(waited, lines)
         finding = "auth" if auth else hit[0] if hit else ""
-        states[h] = (*screen_state(tail, idle, finding), finding)
+        state, basis = screen_state(tail, idle, finding)
+        states[h] = (state, "unreadable" if lines is None else basis, finding)  # a wait Orca found stands without the pane
         goal = under_goal(t, tail)
         if goal:
             goals.add(h)
@@ -275,10 +276,12 @@ def save(path, seen):
 def missing(terms, reads, states, problem):
     """What this round could not judge, as an OK or QUIET line's tail; '' when it saw everything. Only a Claude card
     owes a screen verdict: Codex's spinner is not known here, so its unread pane alone counts."""
-    blind = [f"{card_name(t)} ({states.get(t['handle'], (None, 'unreadable'))[1]})" for t in terms
-             if states.get(t["handle"], ("unknown",))[0] == "unknown"
-             and (agent_signal.is_claude(t) or states.get(t["handle"], (None, "unreadable"))[1] == "unreadable")]
-    gaps = [f"{card_name(t)} ({reads[t['handle']]['why']})" for t in terms
+    blind = []
+    for t in terms:
+        state, basis = states.get(t["handle"], ("unknown", "unreadable", ""))[:2]
+        if basis == "unreadable" or state == "unknown" and agent_signal.is_claude(t):
+            blind.append(f"{card_name(t)} ({basis})")
+    gaps =[f"{card_name(t)} ({reads[t['handle']]['why']})" for t in terms
             if t["handle"] in agent_signal.gaps(reads)]
     parts = [f"화면 판정 없음 {len(blind)}: " + ", ".join(blind)] if blind else []
     if problem:

@@ -85,6 +85,7 @@ REAP_SCRIPTS = pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / 
 DUE_S = 25 * 60
 BUDGET_S = 120
 CANDIDATE_BUDGET_S = 240
+AGENTS_MARGIN_S = 15  # agent_signal.read's 10 s, and the round's own writes after it
 ROUNDS_KEEP = 1000
 CURRENT = {}  # the running round's timings and failed sources, read by mark_cut
 OWN_SOURCES = ("terminals", "waits", "workers", "state", "board", "sent", "consumers")
@@ -273,7 +274,7 @@ def gather(now, deadline, memo):
     facts["unread"] = {h for h, s in screens.items() if s is None}
     facts["fresh"] = set(facts["screens"])  # screens with new output; an idle candidate's read later is not
     facts["read"] = prog.read_screen
-    facts["agents_fn"] = lambda: agent_signal.read(timeout=min(10, max(1, deadline - time.time())))
+    facts["agents_fn"] = lambda: agents_read(deadline)
     facts["watchers"] = {}
     for s in facts["sessions"]:
         if s.get("kind") == "orchestrator":
@@ -629,6 +630,13 @@ def round_id(now=None):
 
 def give_up(*_):
     raise Budget()
+
+
+def agents_read(deadline, read=agent_signal.read, clock=time.time):
+    """The query, unless the round's budget could run out inside it: the alarm would cost the verdicts already judged."""
+    if deadline - clock() < AGENTS_MARGIN_S:
+        return [], "skipped: the round's budget is nearly spent", ""
+    return read()
 
 
 def signal_card(t, facts, reading):

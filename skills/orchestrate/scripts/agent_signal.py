@@ -25,6 +25,7 @@ LOCK = STATE / "agent-signal.lock"
 NO_SIGNAL = "신호 없음"
 KNOWN = {"busy", "idle", "blocked"}
 ROTATE_BYTES = 32 * 2**20
+LOCK_WAIT_S = 2
 RAW_LIMIT = 500
 
 
@@ -63,7 +64,7 @@ def reading_of(handle, rows, problem):
     if "status" not in row and "state" not in row:
         return {"agents": None, "raw": _raw(row), "why": "no status field"}
     value = state_of(row)
-    if value in KNOWN:
+    if isinstance(value, str) and value in KNOWN:
         return {"agents": value, "raw": value, "why": None}
     return {"agents": None, "raw": _raw(value), "why": f"unknown state {_raw(value)[:40]}"}
 
@@ -75,11 +76,11 @@ def is_claude(t):
 def readings(terms, rows, problem):
     """({handle: reading}, warnings) over agent terminals. A reading with applies False is a card the list never holds
     (Codex), which is screen only and no gap. One warning line per kind of format trouble, no version branch."""
-    out = {}
+    out, objects = {}, [r for r in rows if isinstance(r, dict)]
     for t in terms:
         h = t.get("handle")
         if is_claude(t):
-            out[h] = {**reading_of(h, rows, problem), "applies": True}
+            out[h] = {**reading_of(h, objects, problem), "applies": True}
         else:
             out[h] = {"agents": None, "raw": None, "why": None, "applies": False}
     return out, warnings(rows, problem, out)
@@ -133,28 +134,35 @@ def gaps(reads):
     return {h: r.get("why") for h, r in reads.items() if r.get("applies", True) and not r.get("agents")}
 
 
-def append(rows, path=None, lock=None):
-    """Append under the lock, rotating first: a rotation must not lose another watcher's line or overwrite `.1` twice.
-    Returns the file's inode, or None when this call rotated it, so the next round still writes the baseline."""
-    path, lock = pathlib.Path(path or LOG), pathlib.Path(lock or LOCK)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    rotated = False
-    with open(lock, "w") as held:
-        fcntl.flock(held, fcntl.LOCK_EX)
-        with contextlib.suppress(OSError):
-            if path.stat().st_size >= ROTATE_BYTES:
-                os.replace(path, path.with_name(path.name + ".1"))
-                rotated = True
-        with open(path, "a", encoding="utf-8") as f:
-            f.write("".join(json.dumps(r, ensure_ascii=False, separators=(",", ":")) + "\n" for r in rows))
-        return None if rotated else os.stat(path).st_ino
-
-
 def _generation(path):
     try:
         return os.stat(path).st_ino
     except OSError:
         return None
+
+
+def append(build, path=None, lock=None):
+    """Rotate, read the file's inode, build the rows from it and write them, all under the lock: rows chosen outside it
+    could land in a file another watcher just started, without their baseline. build(inode) -> rows; the inode is None
+    for a new file. Returns the written file's inode. A lock held LOCK_WAIT_S raises OSError: observing never stalls
+    a watcher."""
+    path, lock = pathlib.Path(path or LOG), pathlib.Path(lock or LOCK)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock, "w") as held:
+        for _ in range(int(LOCK_WAIT_S * 10)):
+            with contextlib.suppress(BlockingIOError):
+                fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            time.sleep(0.1)
+        else:
+            raise OSError("agent-signal lock held")
+        with contextlib.suppress(OSError):
+            if path.stat().st_size >= ROTATE_BYTES:
+                os.replace(path, path.with_name(path.name + ".1"))
+        rows = build(_generation(path))
+        with open(path, "a", encoding="utf-8") as f:
+            f.write("".join(json.dumps(r, ensure_ascii=False, separators=(",", ":")) + "\n" for r in rows))
+        return os.stat(path).st_ino
 
 
 def log_round(source, by, rid, cards, memo, problem=None, raw=None, warned=(), names=None, now=None, path=None, lock=None):
@@ -165,16 +173,19 @@ def log_round(source, by, rid, cards, memo, problem=None, raw=None, warned=(), n
     now = time.time() if now is None else now
     head = {"t": now, "round": rid, "source": source, "by": by}
     old = memo.get("cards") or {}
-    baseline = memo.get("gen") is None or memo.get("gen") != _generation(path)
-    rows = [{"kind": "round", **head, "terminals": len(cards), "problem": problem,
-             "unknown_screen": sum(1 for c in cards.values() if c["screen"] not in KNOWN),
-             "no_signal": sum(1 for c in cards.values() if c["why"]),
-             "differs": sum(1 for c in cards.values() if c["differs"]),
-             **({"raw": (raw or "")[:RAW_LIMIT], "warnings": list(warned)} if problem or warned else {})}]
-    rows += [{"kind": "card", **head, "handle": h, "card": names.get(h, h), **c}
-             for h, c in cards.items() if baseline or old.get(h) != c]
-    rows += [{"kind": "gone", **head, "handle": h} for h in old if h not in cards]
+    summary = {"kind": "round", **head, "terminals": len(cards), "problem": problem,
+               "unknown_screen": sum(1 for c in cards.values() if c["screen"] not in KNOWN),
+               "no_signal": sum(1 for c in cards.values() if c["why"]),
+               "differs": sum(1 for c in cards.values() if c["differs"]),
+               **({"raw": (raw or "")[:RAW_LIMIT], "warnings": list(warned)} if problem or warned else {})}
+
+    def build(gen):
+        baseline = gen is None or gen != memo.get("gen")
+        return [summary, *({"kind": "card", **head, "handle": h, "card": names.get(h, h), **c}
+                           for h, c in cards.items() if baseline or old.get(h) != c),
+                *({"kind": "gone", **head, "handle": h} for h in old if h not in cards)]
+
     try:
-        return {"gen": append(rows, path, lock), "cards": cards}
+        return {"gen": append(build, path, lock), "cards": cards}
     except OSError:
         return memo

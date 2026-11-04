@@ -1,5 +1,5 @@
 """agent_signal.py and what watch-cards and patrol do with it. Run: python3 test_agent_signal.py"""
-import contextlib, io, json, os, pathlib, subprocess, sys, tempfile, types
+import contextlib, fcntl, io, json, os, pathlib, subprocess, sys, tempfile
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 tmp = tempfile.TemporaryDirectory()
 os.environ["AGENT_SKILLS_STATE"] = tmp.name
@@ -72,6 +72,11 @@ assert warned2 == ["claude agents: a row has neither status nor state; passed th
 assert a.readings([], ["x", {"status": "idle"}], None)[1] == [
     "claude agents: a row is not an object; passed through", "claude agents: a row has no sessionId; passed through"]
 
+# A state of the wrong type is unknown too, and a non-object row never reaches session_for.
+for odd in (["busy"], {"a": 1}, 3, None):
+    r_, _ = a.readings([term("h1")], [row("s1", status=odd), "x"], None)
+    assert r_["h1"]["agents"] is None and r_["h1"]["why"].startswith("unknown state"), (odd, r_)
+
 # A failed query reads as no signal on every Claude card, never as a state.
 reads3, warned3 = a.readings([term("h1")], [], "not JSON")
 assert reads3["h1"]["agents"] is None and a.evidence(reads3["h1"]) == "신호 없음 (claude agents failed: not JSON)"
@@ -133,18 +138,36 @@ assert log()[-1]["raw"] == "<html>" and log()[-1]["problem"] == "not JSON" and l
 
 # Rotation: the writer that rotated, and any other, write a baseline into the new file.
 a.ROTATE_BYTES, keep = 1, a.ROTATE_BYTES
-other = a.log_round("patrol", None, "p1", c2, None, now=6)
+other = a.log_round("patrol", None, "p0", c2, None, now=6)  # keeps the memo of a writer that has seen this file
+assert pathlib.Path(f"{LOG}.1").exists() and [r["kind"] for r in log()] == ["round", "card"], "a new file opens on a baseline"
+other = a.log_round("patrol", None, "p1", c2, other, now=6)
 a.ROTATE_BYTES = keep
-assert pathlib.Path(f"{LOG}.1").exists() and other["gen"] is None, "the rotating writer owes a baseline too"
-assert [r["kind"] for r in log()] == ["round", "card"], "the first writer's rows open the new file"
+assert [r["kind"] for r in log()] == ["round", "card"], "the rotating writer writes its baseline into the new file"
 m = a.log_round("watch-cards", "me", "r6", c2, m, now=7)
 assert [r["source"] for r in log() if r["kind"] == "card"][-1] == "watch-cards", "another watcher rewrites its baseline"
 other = a.log_round("patrol", None, "p2", c2, other, now=8)
-assert log()[-1]["kind"] == "card" and log()[-1]["source"] == "patrol"
-other = a.log_round("patrol", None, "p3", c2, other, now=9)
-assert log()[-1]["kind"] == "round"
+assert log()[-1]["kind"] == "round" and log()[-1]["source"] == "patrol", "the rotating writer owes no second baseline"
 assert a.log_round("x", None, "r", {}, {"gen": 1}, path="/dev/null/nope", lock="/dev/null/nope") == {"gen": 1}, \
     "a failed write costs the rows, never the round"
+
+# The rows are chosen under the lock: a rotation by another writer just before this one still gets its baseline.
+seen_gens = []
+a.append(lambda gen: seen_gens.append(gen) or [{"kind": "round"}])
+assert seen_gens == [os.stat(LOG).st_ino]
+seen_gens.clear()
+os.replace(LOG, f"{LOG}.moved")
+a.append(lambda gen: seen_gens.append(gen) or [])
+assert seen_gens == [None], "the inode is read under the lock, after any rotation"
+os.replace(f"{LOG}.moved", LOG)
+
+# A lock another process holds costs this round's rows, never the watcher.
+a.LOCK_WAIT_S, wait = 0.2, a.LOCK_WAIT_S
+with open(LOCK, "w") as held:
+    fcntl.flock(held, fcntl.LOCK_EX)
+    before = len(log())
+    assert a.log_round("x", None, "r", c2, {"gen": 7}) == {"gen": 7}
+    assert len(log()) == before
+a.LOCK_WAIT_S = wait
 
 # watch-cards end to end: findings and outputs unchanged by the signal; evidence line and PARTIAL added.
 NOW = 10_000_000.0
@@ -191,6 +214,18 @@ last = [r for r in log() if r.get("handle") == "h1" and r["kind"] == "card"][-1]
 assert (last["screen"], last["basis"], last["finding"], last["differs"]) == ("idle", "quiet prompt", "", ["screen"]), last
 state_doc = json.loads((d / "w6.json").read_text())
 assert state_doc["signals"]["cards"]["h1"]["agents"] == "busy" and "h1" not in {k for k in state_doc if k != "signals"}
+
+# An Orca wait on a pane that cannot be read: reported, and still not a full view, also once the finding is deduped.
+listing[:] = [term("h1")]
+listing[0]["lastOutputAt"] = NOW
+def unreadable(h):
+    raise SystemExit("gone")
+prog.read_screen = unreadable
+prog.agent_waits = lambda: {"h1": {"prompt": "go?"}}
+assert watch([row("s1", status="busy")], state=d / "w7.json")[0].startswith("STUCK h1 (waiting on a prompt")
+assert watch([row("s1", status="busy")], state=d / "w7.json")[0].startswith("PARTIAL 1 agent terminals, nothing new; 화면 판정 없음 1: h1 (unreadable)")
+prog.read_screen = lambda h: screens[h]
+prog.agent_waits = lambda: {}
 
 # A STUCK card is the same with and without a signal.
 plain = card_watch.scan([term("h1")], {}, lambda h: menu, NOW, 30, 100.0, 15)
@@ -251,6 +286,10 @@ assert pround(facts(terminals=[t1]), [])[4] == "신호 없음 1: h1 (not listed)
 cx = term("cx", "codex")
 assert pround(facts(terminals=[cx], screens={"cx": ["⏺ text"]}), [])[4] == "", "Codex: screen only, and no gap"
 assert pround(facts(terminals=[t1]), [row("s1")])[3] == ["claude agents: a row has neither status nor state; passed through"]
+
+# Too little budget left: no query, so the alarm cannot cost the verdicts already judged.
+assert patrol.agents_read(100, read=lambda: 1 / 0, clock=lambda: 90)[1].startswith("skipped"), "under the margin it does not ask"
+assert patrol.agents_read(100, read=lambda: "asked", clock=lambda: 80) == "asked"
 
 # report: OK only when nothing was missed, also when there are findings to show.
 res = {"at": "t", "seconds": 1, "terminals": 1, "workers": 0, "screens": 0, "level": "ok", "findings": [], "new": [],
