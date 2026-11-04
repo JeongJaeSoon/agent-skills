@@ -1538,7 +1538,7 @@ def health_view():
 def check_loops():
     """The fast loop stopped finishing rounds (a call that never returns): under launchd, exit so it starts again,
     instead of waiting for someone to run `ensure`. Elsewhere /api/health reports stale and the banner says what to run."""
-    if not loops_alive(HEALTH) and under_agent():
+    if not loops_alive(HEALTH, RESTART_STALE) and under_agent():
         log(f"fast loop silent since {HEALTH['ticks'].get('fast')}; exiting so launchd starts it again")
         restart()
 
@@ -1921,6 +1921,9 @@ def beat():
 
 
 LOOP_STALE = dt.timedelta(minutes=5)
+# The server restarts itself later than health reports stale: a long but healthy first round (many pages, a big
+# transcript scan) must not put launchd in a restart loop. At most one self-restart per this long.
+RESTART_STALE = dt.timedelta(minutes=15)
 
 
 def tick(name):
@@ -1929,14 +1932,14 @@ def tick(name):
     HEALTH.setdefault("ticks", {})[name] = iso(utcnow())
 
 
-def loops_alive(h):
-    """False when the fast loop has not finished a round for LOOP_STALE. A server that reports no ticks (older
+def loops_alive(h, limit=LOOP_STALE):
+    """False when the fast loop has not finished a round for `limit`. A server that reports no ticks (older
     code) counts as alive; the version check restarts it anyway."""
     ticks = h.get("ticks")
     if not isinstance(ticks, dict):
         return True
     try:
-        return utcnow() - prog.parse_ts(ticks["fast"]) <= LOOP_STALE
+        return utcnow() - prog.parse_ts(ticks["fast"]) <= limit
     except (KeyError, ValueError, TypeError, AttributeError):
         return False
 

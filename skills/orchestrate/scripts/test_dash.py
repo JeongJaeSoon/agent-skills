@@ -621,7 +621,9 @@ dash.check_loops(); assert not exits
 dash.HEALTH["ticks"] = {"fast": age(4)}
 assert not dash.health_view()["stale"]; dash.check_loops(); assert not exits, "inside the 5 minutes"
 dash.HEALTH["ticks"] = {"fast": age(6)}
-assert dash.health_view()["stale"] is True; dash.check_loops(); assert exits == [1], "stopped loop restarts the server"
+assert dash.health_view()["stale"] is True; dash.check_loops(); assert not exits, "stale in health, but a slow round is not restarted yet"
+dash.HEALTH["ticks"] = {"fast": age(16)}
+dash.check_loops(); assert exits == [1], "a loop silent for 15 minutes restarts the server"
 dash.under_agent = lambda: False
 dash.check_loops(); assert exits == [1], "outside launchd it only reports"
 dash.HEALTH.clear(); dash.HEALTH.update(old_health); dash.under_agent, dash.restart = old_agent, old_restart
