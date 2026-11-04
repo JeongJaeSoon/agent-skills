@@ -5,7 +5,8 @@ Usage:
   skills-sync sync [--no-broadcast]      fetch, fast-forward or push, then broadcast a needed reload
   skills-sync broadcast [--skills|--plugins] [--dry-run] [--terminal <handle>]
                                          send the pending (or the given) reload to idle Claude sessions,
-                                         or to one of them
+                                         or to one of them; first /restart (or /reload-plugins) each idle one
+                                         whose screen shows it runs on what changed under it, once
   skills-sync nudge <terminal> <one line>
                                          type one line into a session, only if it is idle at an empty prompt
   skills-sync close-setup <worktree path> [--agent <handle>]
@@ -204,7 +205,9 @@ def sync(broadcast_after=True):
         kind = reload_kind(paths)
         if kind:
             queue_reload(kind)
-        if broadcast_after and (STATE / "reload-pending.json").exists():
+        restarts = read_json(STATE / "restarts.json", {})
+        waiting = isinstance(restarts, dict) and any(isinstance(v, dict) and "waiting" in v for v in restarts.values())
+        if broadcast_after and ((STATE / "reload-pending.json").exists() or waiting):
             broadcast_locked(None)
     return 0 if ok else 1
 
@@ -221,6 +224,24 @@ DIALOG = ("Do you want to proceed?", "Esc to cancel", "Tab to amend", "Enter to 
 CHOICE_CURSOR = re.compile(r"^❯ \d+\.")
 PLACEHOLDER = re.compile(r'^Try ".*"$')
 ORDER = [None, "skills", "plugins"]  # a plugin reload also reloads skills
+UNCONFIRMED = "sent, but the screen does not show it was taken"
+GONE = "what the command was for is no longer on the screen"
+# Claude Code's own wording, matched loosely; a screen with neither is not judged (stale_signal).
+RESTART_NOTICE = re.compile(r"(?<![\w/])/restart\b.*\bto apply\b", re.I)
+# Only Claude Code's own result line ("⎿  PreToolUse:Bash hook error: …"); a tool's output that quotes it does not count.
+HOOK_ERROR = re.compile(r"^⎿\s+\w+:\w+ hook (?:error|returned (?:a )?blocking error)\b", re.I)
+# Claude Code's status line while a background shell or agent of the session still runs (shared with patrol.py).
+BACKGROUND = re.compile(r"\b\d+ (?:shells?|agents?|background tasks?)\b|shells? still running")
+# The line under the prompt box that counts those: the permission mode, or the shortcuts hint in default mode.
+MODE_LINE = re.compile(r"\bmode on\b|\? for shortcuts")
+# A guard's deny reads "hook error" too; only a hook that could not find its own file is stale.
+MISSING_FILE = re.compile(r"can't open file|No such file or directory|\bENOENT\b|Cannot find module", re.I)
+MESSAGE_MARKS = ("⏺", "●", "❯", "⎿")  # a reply, a prompt, a tool's result
+# A finished turn's summary ("✻ Worked for 2m 7s · done 5:48 AM"): a mark, one word, "for", a duration and the
+# clock time it was done at.
+TURN_SUMMARY = re.compile(r"^[✻✶✳✢✽*] \S+ for (?:\d+(?:\.\d+)?[hms] ?)+· done \d{1,2}:\d\d\b")
+# The notice names /restart; a hook error alone names no command, and /reload-plugins re-reads hooks.json.
+STALE_COMMAND = {"restart": "/restart", "hook": RELOAD["plugins"]}
 
 
 def norm(lines):
@@ -265,6 +286,66 @@ def classify(lines, title, draft=""):
     if text and not PLACEHOLDER.match(text):
         return "the human is typing"
     return None
+
+
+def stale_signal(lines):
+    """(kind, line) when a session's screen shows it runs on what changed under it, else None.
+
+    "restart": Claude Code says an installed update waits on /restart where it writes its own notices: the line right
+    under the finished turn's summary, last above the prompt box, or a status line below the box; never the
+    conversation. "hook": the last tool result of the last turn shown (the last `⎿` line below the last `❯ <prompt>`)
+    is a hook error that says its file is missing (on that line or the two it wraps onto, short of the next message
+    or a blank line), as on every tool call of a session whose hooks.json
+    names a script an update removed; a tool that ran after it means the session got past it. Only that wording
+    counts: a screen without it, or a guard's deny, is not judged."""
+    lines = norm(lines or [])
+    box = prompt_box(lines)
+    if not box:
+        return None
+    body = lines[:box[0]]
+    notices = [l.strip() for l in lines[box[1] + 1:] if l.startswith(" ")]
+    # Above the box, only the line right under the finished turn's summary: a reply always comes before that line.
+    filled = [l.strip() for l in body if l.strip()]
+    if len(filled) >= 2 and TURN_SUMMARY.match(filled[-2]):
+        notices.append(filled[-1])
+    for l in notices:
+        if RESTART_NOTICE.search(l):
+            return "restart", l[:160]
+    start = max((i for i, l in enumerate(body) if l.strip().startswith("❯ ")), default=-1)
+    last = max((i for i in range(start + 1, len(body)) if body[i].strip().startswith("⎿")), default=None)
+    if last is None or not HOOK_ERROR.search(body[last].strip()):
+        return None
+    result = [body[last]]  # the result and the lines it wraps onto, up to the next message or blank line
+    for l in body[last + 1:last + 3]:
+        if not l.strip() or l.strip()[:1] in MESSAGE_MARKS:
+            break
+        result.append(l)
+    return ("hook", body[last].strip()[:160]) if MISSING_FILE.search(" ".join(result)) else None
+
+
+def background_running(lines):
+    """Why a /restart could end work this screen may be running, else None: a background shell or agent shown under
+    the prompt box or on the finished turn's summary, or no mode line to show them on (unknown is not none)."""
+    lines = norm(lines or [])
+    box = prompt_box(lines)
+    if not box:
+        return "no prompt box"
+    below = [l.strip() for l in lines[box[1] + 1:] if l.strip()]
+    # Above the box only the summary, which may sit under a notice: other output there counts installed agents too.
+    summary = [l for l in [l.strip() for l in lines[:box[0]] if l.strip()][-2:] if TURN_SUMMARY.match(l)]
+    if any(BACKGROUND.search(l) for l in below + summary):
+        return "background shells or agents still running"
+    if not any(MODE_LINE.search(l) for l in below):
+        return "no mode line to show background work on"
+    return None
+
+
+def stale_cleared(before, after, text):
+    """After a /restart or /reload-plugins: the screen changed and either the signal is gone or the command was
+    taken as the last message."""
+    i, inside = last_message(after)
+    taken = i is not None and norm(after)[i].strip() == f"❯ {text}" and inside != text
+    return after != before and (taken or stale_signal(after) is None)
 
 
 def last_message(lines):
@@ -324,8 +405,9 @@ def screen(handle):
     return tail, classify(tail, meta.get("title") or "", t.get("draft") or "")
 
 
-def send_to(handle, text, confirmed):
-    """Return None once `text` was typed into an idle session and the screen shows it was taken."""
+def send_to(handle, text, confirmed, still=None):
+    """Return None once `text` was typed into an idle session and the screen shows it was taken. `still(screen)`,
+    when given, runs on the last read before typing: a reason it returns is returned, with nothing typed."""
     first, reason = screen(handle)
     if reason:
         return reason
@@ -335,11 +417,17 @@ def send_to(handle, text, confirmed):
         return reason
     if second != first:
         return "screen changed between two reads (someone may be typing)"
+    reason = still and still(second)
+    if reason:
+        return reason
     orca("terminal", "send", "--terminal", handle, "--text", text, "--enter")
     time.sleep(CONFIRM_S)
-    after, _ = screen(handle)
+    try:
+        after, _ = screen(handle)
+    except Stop:  # typed already: an unread confirmation must not read as never sent
+        return UNCONFIRMED
     if not confirmed(second, after, text):
-        return "sent, but the screen does not show it was taken"
+        return UNCONFIRMED
     return None
 
 
@@ -499,6 +587,87 @@ def opened_after(since, terms):
             and created[t.get("worktreeId")] > cutoff}
 
 
+RESTART_KEEP_S, WAITING_KEEP_S = 7 * 86400, 86400
+
+
+def _now():
+    return time.strftime("%Y-%m-%dT%H:%M:%S%z")
+
+
+def _stamp(entry):
+    """When a restarts.json entry was written (sent, else since waiting), as a Unix time; 0 when unreadable."""
+    try:
+        return datetime.datetime.strptime(entry.get("sent") or entry.get("since") or "", "%Y-%m-%dT%H:%M:%S%z").timestamp()
+    except (AttributeError, ValueError):
+        return 0
+
+
+def restart_stale(terms, dry_run=False, keep_others=False):
+    """Type STALE_COMMAND into each idle session whose screen shows stale_signal, once per session while its signal
+    lasts, of each kind. A busy one, or one whose background work the command would end (background_running), waits:
+    it is written to restarts.json as waiting, and the next sync runs the broadcast again.
+    An entry goes once its screen no longer shows the signal, so a later one is new; an unreadable screen keeps it,
+    and a terminal Orca does not list now keeps it RESTART_KEEP_S (WAITING_KEEP_S when waiting). keep_others leaves
+    the entries of terminals not in `terms` as they are. Returns the handles typed into (in a dry run, those it would
+    type into) and {handle: reason} for those left waiting."""
+    path = STATE / "restarts.json"
+    seen = read_json(path, {})
+    seen = {h: v for h, v in seen.items() if isinstance(v, dict)} if isinstance(seen, dict) else {}
+    # A terminal missing from this list may be back later with the same screen: its entry stays a while, as one this
+    # pass could not read does. A waiting one stays less, since each sync reruns the broadcast for it.
+    out = {h: v for h, v in seen.items() if h not in terms and (
+        keep_others or _stamp(v) >= time.time() - (WAITING_KEEP_S if "waiting" in v else RESTART_KEEP_S))}
+    typed, held = set(), {}
+    for h in terms:
+        old = seen.get(h) or {}
+        try:
+            lines, reason = screen(h)
+        except Stop as e:
+            lines, reason = [], str(e)
+        # Unread, or no prompt box to read it by (a dialog): no evidence the signal went.
+        if not lines or not prompt_box(norm(lines)):
+            out.update({h: old} if old else {})
+            held.update({h: old["waiting"]} if "waiting" in old else {})  # still unknown: the reload waits with it
+            print(f"{h}  stale check not read: {reason}")
+            continue
+        sig = stale_signal(lines)
+        if not sig:
+            continue
+        kind, line = sig
+        cmd = STALE_COMMAND[kind]
+        if old.get("sent") and old.get("kind") == kind:
+            out[h] = old
+            print(f"{h}  {cmd} was sent at {old['sent']}; not again: {line[:60]}")
+            continue
+        # Either command restarts or reloads the session under its background shells and agents.
+        reason = reason or background_running(lines)
+        if dry_run:
+            print(f"{h}  {reason and 'waits: ' + reason or 'would send ' + cmd}: {line[:60]}")
+            typed |= set() if reason else {h}
+            held.update({h: reason} if reason else {})
+            continue
+        try:
+            reason = reason or send_to(h, cmd, stale_cleared, still=lambda s: (
+                GONE if (stale_signal(s) or ("",))[0] != kind else background_running(s)))
+        except Stop as e:
+            reason = str(e)
+        if reason == GONE:  # cleared between the reads: nothing to fix, nothing to keep
+            print(f"{h}  {reason}")
+            continue
+        if reason and reason != UNCONFIRMED:
+            out[h] = {"waiting": reason, "since": old.get("since") or _now(), "kind": kind, "line": line}
+            held[h] = reason
+            print(f"{h}  waits before {cmd}: {reason}")
+            continue
+        out[h] = {"sent": _now(), "command": cmd, "kind": kind, "line": line,
+                  **({"unconfirmed": True} if reason else {})}
+        typed.add(h)
+        print(f"{h}  {reason or 'sent ' + cmd}: {line[:60]}")
+    if not dry_run and (out or path.exists()):
+        write_json(path, out)
+    return typed, held
+
+
 def broadcast_locked(kind, dry_run=False, only=None):
     path = STATE / "reload-pending.json"
     pending = read_json(path, {})
@@ -509,35 +678,43 @@ def broadcast_locked(kind, dry_run=False, only=None):
         pending = dict(pending, done=[], failed={}, head=head, since=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
     queued = pending.get("kind")
     kind = max(kind, queued if queued in ORDER else "plugins", key=ORDER.index)  # unreadable: the safe superset
-    if not kind:
-        print("nothing to reload")
-        return 0
     try:
         listed = [t for t in orca("terminal", "list")["terminals"]
                   if t.get("agentIdentity") == "claude" and t.get("connected") and t.get("writable")]
         terms = [t["handle"] for t in listed]
     except (Stop, KeyError, TypeError) as e:
-        print(f"cannot list Orca terminals, reload stays pending: {e}")
+        print(f"cannot list Orca terminals{', reload stays pending' if kind else ''}: {e}")
         return 1
-    newer = opened_after(pending.get("since"), listed)
     if only:
         if only not in terms:
             print(f"{only}  not a connected, writable Claude terminal")
             return 1
         terms = [only]
-    done, failed = set(pending.get("done", [])), {}
+    # Both commands load the plugin afresh, so a session typed into here needs no reload after it.
+    restarted, held = restart_stale(terms, dry_run, keep_others=bool(only))
+    if not kind:
+        print("nothing to reload")
+        return 0
+    newer = opened_after(pending.get("since"), listed)
+    done, failed = set(pending.get("done", [])) | restarted, {}
     for h in terms:
         if h in done:
+            continue
+        if h in held:  # a reload now would reach the work the restart waits on; the restart reloads it anyway
+            failed[h] = {"reason": f"waits for its restart: {held[h]}"}
+            print(f"{h}  {failed[h]['reason']}")
             continue
         if h in newer:
             print(f"{h}  opened after the change, already has it")
             continue
         try:
             if dry_run:
-                reason = screen(h)[1]
+                s, reason = screen(h)
+                reason = reason or (stale_signal(s) and background_running(s))
                 print(f"{h}  {reason or 'would send ' + RELOAD[kind]}")
                 continue
-            reason = send_to(h, RELOAD[kind], reloaded)
+            # A screen still showing a stale signal is one the restart may wait on, by whatever path it got here.
+            reason = send_to(h, RELOAD[kind], reloaded, still=lambda s: stale_signal(s) and background_running(s))
         except Stop as e:
             reason = str(e)
         if reason:
@@ -568,12 +745,23 @@ def status():
 
 def main(argv):
     cmd = argv[0] if argv else ""
+    if any(a in ("-h", "--help") for a in argv):  # every subcommand acts on its own; help must never reach one
+        print(__doc__)
+        return 0
     if cmd == "sync":
         return sync(broadcast_after="--no-broadcast" not in argv)
     if cmd == "broadcast":
+        args, only = list(argv[1:]), None
+        if "--terminal" in args:
+            i = args.index("--terminal")
+            only = args[i + 1] if i + 1 < len(args) else ""
+            del args[i:i + 2]
+        # A mistyped --dry-run, or --terminal without its handle, must not broadcast for real.
+        if only == "" or (only or "").startswith("-") or any(a not in ("--plugins", "--skills", "--dry-run", "--retry") for a in args):
+            print(__doc__)
+            return 2
         STATE.mkdir(parents=True, exist_ok=True)
-        kind = "plugins" if "--plugins" in argv else "skills" if "--skills" in argv else None
-        only = argv[argv.index("--terminal") + 1] if "--terminal" in argv[:-1] else None
+        kind = "plugins" if "--plugins" in args else "skills" if "--skills" in args else None
         return broadcast(kind, dry_run="--dry-run" in argv, only=only)
     if cmd == "nudge" and len(argv) == 3:
         return nudge(argv[1], argv[2])

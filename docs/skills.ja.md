@@ -1,4 +1,4 @@
-<!-- translated-from: a7255e35ef7581db488d0b530bf22e4f89417d30 -->
+<!-- translated-from: be99b8503a539c784a7875e10107fc54b43a2c16 -->
 # スキルカタログ
 
 `agent-skills` プラグインに入っているスキル41個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック8個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
@@ -551,26 +551,20 @@ PR を受け持つスキルとマージする主体:
 | `guard.deny.slash_send` | deny | `orca terminal send` での `/reload…`・`/model` の入力 |
 | `guard.deny.prompt_substitution` | deny | `orca worktree create --prompt` のコマンド置換（`$(…)`、バッククォート） |
 | `guard.deny.self_exempt_label` | deny | `gh` で `no-visual-change` ラベルを付けること（`pr create --label`、`pr edit --add-label`、`issue edit`、`gh api …/labels`） |
-| `guard.deny.owner_only` | deny | `orch refusal clear`、`orch exempt`、拒否台帳（`refusals.jsonl`）への直接の書き込み。人が自分のチャットで `!` 行として打ちます。キーをオフにすると、ほかの `orch` コマンドと同じく許可します |
+| `guard.deny.owner_only` | deny | `orch exempt`。人が自分のチャットで `!` 行として打ちます。キーをオフにすると、ほかの `orch` コマンドと同じく許可します |
 | `guard.deny.external_review` | deny | 作業フォルダ（または `-C`）の origin リポジトリが `repos.<owner/repo>.external_llm: false` の `codex` 呼び出し。このキーがなければ判定しません |
 | `guard.ask.pressure_bypass` | ask | コマンドの前、または `env`・`export` での `AGENT_SKILLS_PRESSURE_GATE=0` の代入。その文字列を出力するだけの `echo` は対象外です |
 | `guard.warn.rm_expansion` | warn | 引用符のない glob や変数で作った `rm` のパス。`${VAR:?}` は除きます |
 | `guard.warn.reset_hard` | warn | コミットしていない変更があるリポジトリでの `git reset --hard` |
 | `guard.warn.run_download` | warn | `-D`・`--dir` のない `gh run download` |
 | `guard.warn.tailscale` | warn | ワーカーの `tailscale serve`・`funnel` |
-| `guard.refusal_registry` | deny | 拒否台帳で開いている拒否と同じ行動（下記）。`warn` なら記録して知らせるだけ、`false`・`off` なら記録もしません |
 | `orchestrate.ask_user_question` | deny | オーケストレーター・リード・ワーカーの本会話の AskUserQuestion。サブエージェントと一般セッションは対象外です |
 | `orchestrate.wait_foreground` | deny | オーケストレーター・リードが `orch wait`、`orch inbox --wait`、`orch watch-cards`、`orca orchestration check\|inbox --wait` を `run_in_background` なしで実行すること、またはバックグラウンドの待機を `\| tail`・`\| head` で切ること。ワーカーの `check --wait` は対象外です |
 | `orchestrate.send_devnull` | deny | オーケストレーター・リード・ワーカーが `orca orchestration send\|reply` の出力を `/dev/null` に捨てること。`2>/dev/null` だけなら対象外です |
 
 hook 自身の判定が例外を出したら、その呼び出しは通し、警告とともに `$AGENT_SKILLS_STATE/guard-errors.jsonl` に時刻・hook・例外の種類・発生位置だけを残します（コマンドの原文は残しません）。設定ファイルが読めなければ既定値を使います。
 
-拒否台帳（`hooks/refusals.py`、PermissionDenied・PreToolUse・Stop・SubagentStop）。自動モードの分類器が範疇（`Reason: [範疇]`）付きで拒否した呼び出しと、人が権限ダイアログで拒否した呼び出しを `$AGENT_SKILLS_STATE/refusals.jsonl` に残し、人が解除するまでどのセッションにも同じ行動を拒否します。
-- 記録: 分類器の拒否は PermissionDenied イベントでその場で残します。人の拒否と、そのイベントが来なかった拒否は、次の PreToolUse と Stop が transcript の末尾を読んで残します。どちらもツール呼び出しの id で一度だけ書きます。台帳ができる前の拒否は集めません。hook は一回 7 秒以内に終え、超えたら警告して通します。transcript から読む場合、拒否された呼び出しと同じメッセージで送った並列の呼び出しは止められません。
-- 記録しないもの: hook の拒否、`<tool_use_error>`、読み取り専用のツール、範疇のない分類器の拒否（判定なしなど。警告一行だけ）。対象を読めなかった呼び出しも記録せず、警告します。
-- 行動は動詞と対象です。削除するパスは実際の親フォルダと自分の名前（symlink はそれ自身）、書き込むファイルは実パス、PR は `host/owner/repo#n`、ブランチは `host/owner/repo:branch`。同じパスの削除はコマンドが違っても（`rm -rf`、`git worktree remove`、`orca worktree rm`）同じ行動で、そのパスを含む上位フォルダの削除も該当します。いま読む形は `rm`、`git worktree remove`、`git reset --hard`、`git push`（通常・強制・削除は別の動詞）、`gh pr merge|close`、`gh api …/pulls/N/merge`、`orca worktree rm`、Edit・Write・MultiEdit・NotebookEdit です。`--dry-run` の push と GET の API 呼び出しは行動ではありません。対象を一つに決められないもの（gh が番号にできなかった PR、`git push --all`、サブシェルの `cd` の後の相対パス、変数で作ったパス）は記録も照合もしません。
-- 台帳に書くのは時刻、呼び出し id、セッション、ターミナル、Run、動詞、対象だけです。コマンドの原文やほかの引数の値は書きません。書き込みは `fcntl` のロックの下で行います。
-- 解除は人だけが行います。`orch refusal report` が開いている拒否を見せ、人が自分のチャットで `!orch refusal clear <id>` を打ちます。エージェントの `orch refusal clear` と台帳への直接の書き込みは `guard.deny.owner_only` が拒否します。期限切れで解除されることはありません。解除から 30 日たった拒否は、次の解除のときに id だけを残した `done` の一行に縮め、transcript に残る同じ拒否を再び記録しないようにします。
+拒否された行動を hook が記録して再び止めることはありません。別の形で再試行しないという規則は、スキルの文（`orchestrate` の "Refused acts"、`tune-automode`）が守ります。以前のバージョンが残した `$AGENT_SKILLS_STATE/refusals.jsonl` はもう読まず、消しもしません。不要なら人が消します。
 
 ロールは `hooks/roles.py` ひとつが決めます。ロールは orchestrator、lead、worker、general の四つです。
 1. `ROLE: none` の記録があれば、すべてのロールがオフになります（general）。
@@ -652,7 +646,7 @@ pstack のスキル58個（原則24個と、その他34個）のうち、原則2
 - **プロジェクト運営:** `orchestrate` の `orch` 台帳、着地ゲートと専有レーン、human-gate、main ガーディアン、QA リード、`orch-dash` ダッシュボード。形は pstack のプレイブックに倣いましたが、Orca の Run と GitHub stack の上で新しく作りました。
 - **測定とアダプター:** `measure-delivery`、`use-tracker`、`use-notes`。
 - **マシンの手入れ:** `reap-resources`、`tune-automode`、`skills-config`、`setup-pc`。
-- **フック:** 権限の判定（`guard.py`）、オーケストレーター・リードの再確認（`reorient.py`）、未設定の PC での設定の提案（`onboard.py`）、ダッシュボードから答える権限ダイアログの記録（`permission.py`）、ターミナルで答えた決定のクローズ（`decision.py`）、完了主張の検査（`claim_check.py`）、重い開始の前の負荷確認（`pressure_gate.py`）、文体の検査（`prose_check.py`）、拒否された行動の繰り返し防止（`refusals.py`）。
+- **フック:** 権限の判定（`guard.py`）、オーケストレーター・リードの再確認（`reorient.py`）、未設定の PC での設定の提案（`onboard.py`）、ダッシュボードから答える権限ダイアログの記録（`permission.py`）、ターミナルで答えた決定のクローズ（`decision.py`）、完了主張の検査（`claim_check.py`）、重い開始の前の負荷確認（`pressure_gate.py`）、文体の検査（`prose_check.py`）。
 
 ### upstream との同期状況
 - **最後の同期:** 2026-10-26、`b42effe`（0.15.3）から `99b609a`（0.15.32）へ。その間に upstream は pstack に74個のコミットを積みました。

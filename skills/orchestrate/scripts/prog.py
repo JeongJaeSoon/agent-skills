@@ -188,10 +188,6 @@ Usage: orch <command> <slug> [options]
                                      holds it and refreshes your own; a hold idle past --ttl (120) is
                                      broken. WHO defaults to $ORCA_TERMINAL_HANDLE. --list shows these
                                      and the exclusive landing lanes
-  refusal report [--json] | refusal clear <id>
-                                     no slug: the refused-act ledger (hooks/refusals.py). report lists the open
-                                     refusals every session is blocked from doing again; clear is the human's,
-                                     typed as a `!` line (the guard hook refuses it from an agent)
 
 Store: ~/.claude/programs/<slug>/ (program.json holds identifiers only; ledger.jsonl is
 append-only). Events: spawned, ready, verdict, landed, main_green, main_red, land_failed,
@@ -1071,9 +1067,13 @@ def local_diff(repo, pr, gh_err):
                    "--src-prefix=a/", "--dst-prefix=b/", mb, v["headRefOid"], env=offline).stdout
 
 
+# No checks already holds (ci_summary), so statusCheckRollup is not among them.
+LAND_CHECK_FIELDS = ("state", "isDraft", "headRefOid", "mergeStateStatus", "url")
+
+
 def pr_view(repo, pr):
     return gh_json("pr", "view", str(pr), "--repo", repo, "--json",
-                   "state,isDraft,headRefOid,headRefName,baseRefName,mergeStateStatus,mergeable,statusCheckRollup,mergeCommit,url")
+                   "state,isDraft,headRefOid,headRefName,baseRefName,mergeStateStatus,mergeable,statusCheckRollup,mergeCommit,url,title")
 
 
 def ci_summary(rollup):
@@ -1138,9 +1138,21 @@ def admitted_tickets(events):
     return [t for t, ev in triage.items() if ev == "admitted"]
 
 
-def gate_resolution(cfg, events, pr):
+def gate_rows(events, pr, warn=True):
+    """The PR's gate_opened rows that name both their Task and gate. A row missing either is no gate anyone can
+    resolve, so it is skipped (with one warning line) and `orch gate` may open a new one."""
+    rows = [e for e in events if e["ev"] == "gate_opened" and e.get("pr") == pr]
+    good = [e for e in rows if e.get("task") and e.get("gate")]
+    if warn and len(good) < len(rows):
+        bad = [e for e in rows if e not in good]
+        print(f"warning: skipped {len(bad)} gate_opened row(s) for #{pr} with no task or gate: {json.dumps(bad[-1])[:300]}",
+              file=sys.stderr)
+    return good
+
+
+def gate_resolution(cfg, events, pr, warn=True):
     """The resolution of the newest landing gate opened for this PR, or None while it is pending."""
-    opened = [e for e in events if e["ev"] == "gate_opened" and e.get("pr") == pr]
+    opened = gate_rows(events, pr, warn)
     if not opened:
         return None
     res = orca_json("orchestration", "gate-list", "--task", opened[-1]["task"], "--run", cfg["run"])
@@ -1156,7 +1168,7 @@ GATE_TASK = "Land #"
 def close_gate_task(p, pr, status):
     """No worker settles the lead-owned `Land #N` Task, so it would sit in `task-list --ready` for good:
     completed when the PR lands, failed when the gate is held or the PR is closed. A new gate makes a new Task."""
-    opened = [e for e in p.events() if e["ev"] == "gate_opened" and e.get("pr") == pr]
+    opened = gate_rows(p.events(), pr, warn=False)
     if opened:
         run(["orca", "orchestration", "task-update", "--id", opened[-1]["task"], "--status", status,
              "--run", p.cfg["run"], "--json"], check=False)
@@ -1999,6 +2011,10 @@ def cmd_land_check(argv):
     events = p.events()
     st = pr_state(events).get(pr, {})
     v = pr_view(repo, pr)
+    if unread := [k for k in LAND_CHECK_FIELDS if v.get(k) is None]:
+        print(f"warning: gh returned no {','.join(unread)} for #{pr}: {json.dumps(v)[:400]}", file=sys.stderr)
+        print(f"HOLD: PR state unknown (no {','.join(unread)} from gh); run land-check again")
+        sys.exit(1)
     problems = []
     main = main_state(events)
     if main == "red" and "--main-fix" not in argv:
@@ -2027,7 +2043,7 @@ def cmd_land_check(argv):
         elif resolution:
             close_gate_task(p, pr, "failed")
             problems.append(f"human-gate: the user resolved the gate as '{resolution}'")
-        elif any(e["ev"] == "gate_opened" and e.get("pr") == pr for e in events):
+        elif gate_rows(events, pr, warn=False):
             problems.append("human-gate: gate open in Orca, waiting for the user")
         else:
             problems.append(f"human-gate: open the gate first (orch gate {p.slug} --pr {pr})")
@@ -2036,7 +2052,7 @@ def cmd_land_check(argv):
         problems.append("conflicts with base: fix task in the PR's worktree")
     elif mss == "BEHIND":
         problems.append(f"behind base: gh pr update-branch {pr} --repo {repo}, then wait for CI")
-    failed, pending, runs = ci_summary(v["statusCheckRollup"])
+    failed, pending, runs = ci_summary(v.get("statusCheckRollup"))
     if not failed and not pending:
         pending = runs_unfinished(repo, v["headRefOid"])
     if failed:
@@ -2084,21 +2100,40 @@ def cmd_gate(argv):
         sys.exit("this lead is a dispatched worker, and Orca lets no worker create a Task or gate on the Run it works "
                  "for (worker_cannot_coordinate_own_run), so `orch land` never sees `approved`. Have the orchestrator "
                  "restart this lead as a /goal card (`skills-sync card`, its brief's MERGE line saying human-gate)")
-    if any(e["ev"] == "gate_opened" and e.get("pr") == pr for e in p.events()) and gate_resolution(p.cfg, p.events(), pr) is None:
-        gid = next(e.get("gate") for e in reversed(p.events()) if e["ev"] == "gate_opened" and e.get("pr") == pr)
+    if (opened := gate_rows(p.events(), pr)) and gate_resolution(p.cfg, p.events(), pr, warn=False) is None:
+        gid = opened[-1]["gate"]
         sys.exit(f"a gate for #{pr} is already open; the user resolves it in Orca"
                  f" (or: orca orchestration gate-resolve --id {gid} --resolution land|hold)")
     v = pr_view(p.cfg["repo"], pr)
-    spec = (f"Land PR #{pr} ({v['url']}) with orch land once the user resolves the gate. "
+    if v.get("state") != "OPEN":
+        sys.exit(f"PR #{pr} is {v.get('state') or 'in an unknown state'}; a landing gate is only for an open PR")
+    url = v.get("url") or f"#{pr}"
+    if title := v.get("title"):
+        question = f"Land PR #{pr}: {title}?"
+    else:
+        print(f"warning: gh returned no title for #{pr}; the gate asks with the PR URL instead", file=sys.stderr)
+        question = f"Land PR #{pr} ({url})?"
+    spec = (f"Land PR #{pr} ({url}) with orch land once the user resolves the gate. "
             "Lead-owned; no worker is dispatched for this Task.")
     args = ["orchestration", "task-create", "--run", p.cfg["run"], "--spec", spec, "--task-title", f"{GATE_TASK}{pr}"]
     if opt(argv, "--parent"):
         args += ["--parent", opt(argv, "--parent")]
     task = orca_json(*args)
     task_id = (task.get("task") or task).get("id")
-    gate = orca_json("orchestration", "gate-create", "--task", task_id,
-                     "--question", f"Land PR #{pr}: {v['title']}?", "--options", json.dumps(["land", "hold"]))
-    gate_id = (gate.get("gate") or gate).get("id")
+    if not task_id:
+        sys.exit(f"orca task-create returned no Task id, so no gate was opened: {json.dumps(task)[:400]}")
+    try:
+        gate = orca_json("orchestration", "gate-create", "--task", task_id,
+                         "--question", question, "--options", json.dumps(["land", "hold"]))
+        gate_id = (gate.get("gate") or gate).get("id")
+        if not gate_id:
+            sys.exit(f"orca gate-create returned no gate id: {json.dumps(gate)[:400]}")
+    except SystemExit as e:
+        # Unrecorded, the gate-less Task would sit in task-list --ready for good; the next `orch gate` makes a new one.
+        r = run(["orca", "orchestration", "task-update", "--id", task_id, "--status", "failed",
+                 "--run", p.cfg["run"], "--json"], check=False)
+        closed = "marked failed" if r.returncode == 0 else f"left open, task-update failed ({r.returncode}); close it in Orca"
+        sys.exit(f"{e}. No gate recorded; Task {task_id} {closed}")
     print(json.dumps(p.append("gate_opened", pr=pr, task=task_id, gate=gate_id), ensure_ascii=False))
     print(f"the user resolves it in Orca (or: orca orchestration gate-resolve --id {gate_id} --resolution land)")
 
@@ -3237,36 +3272,11 @@ def cmd_sent(argv):
         sys.exit(f"{e}\n{usage}")
 
 
-def cmd_refusal(argv):
-    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3] / "hooks"))
-    from lib import refusals
-    usage = "usage: orch refusal report [--json] | refusal clear <id>  (no slug)"
-    if argv[:1] == ["report"]:
-        rows = refusals.open_refusals()
-        if "--json" in argv:
-            print(json.dumps(rows, ensure_ascii=False, indent=1))
-            return
-        if not rows:
-            print("no open refusals")
-        for r in rows:
-            print(f"{r['id']}  {r.get('at')}  {r.get('verb')} {r.get('target')}\n"
-                  f"    session {r.get('session') or '?'}  terminal {r.get('terminal') or '-'}  run {r.get('run') or '-'}")
-        if rows:
-            print("\nEach is blocked for every session until you clear it: !orch refusal clear <id>")
-    elif argv[:1] == ["clear"] and len(argv) == 2:
-        hit = refusals.clear(argv[1], sys.stdin.isatty())
-        if not hit:
-            sys.exit(f"{argv[1]} is not an open refusal (orch refusal report lists them)")
-        print("\n".join(f"cleared {r['id']}: {r.get('verb')} {r.get('target')}" for r in hit))
-    else:
-        sys.exit(usage)
-
-
 COMMANDS = {"init": cmd_init, "set": cmd_set, "status": cmd_status, "record": cmd_record, "verdict": cmd_verdict,
             "gate": cmd_gate, "dep": cmd_dep, "queue": cmd_queue, "overlap": cmd_overlap, "land": cmd_land, "land-check": cmd_land_check,
             "landed": cmd_landed, "heavy": cmd_heavy, "wait": cmd_wait, "inbox": cmd_inbox, "backfill": cmd_backfill, "decide": cmd_decide,
             "db": cmd_db,
-            "stage": cmd_stage, "board": cmd_board, "brief": cmd_brief, "hold": cmd_hold, "sent": cmd_sent, "refusal": cmd_refusal, "release": lambda argv: cmd_hold(argv, release=True),
+            "stage": cmd_stage, "board": cmd_board, "brief": cmd_brief, "hold": cmd_hold, "sent": cmd_sent, "release": lambda argv: cmd_hold(argv, release=True),
             "watch-cards": lambda argv: __import__("card_watch").main(argv),
             "patrol": lambda argv: __import__("patrol").main(argv),
             "migrate": lambda argv: __import__("orca_migrate").main(argv),
