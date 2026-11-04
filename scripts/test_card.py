@@ -717,11 +717,14 @@ REAL_TRY_SEND, REAL_SLEEP, SENDS, SLEPT = sync.try_send, card.time.sleep, [], []
 card.time.sleep = lambda s: SLEPT.append(s)
 
 
+REAL_TYPE = card.type_when_idle
+
+
 def run_helper(answers, timeout_s=3600):
-    """goal_after_idle with try_send answering from `answers` in turn: (ok, reason) pairs."""
+    """goal_after_idle with type_when_idle answering from `answers` in turn: None (typed) or a reason."""
     queue = list(answers)
     SENDS.clear()
-    sync.try_send = lambda handle, line: SENDS.append((handle, line)) or queue.pop(0)
+    card.type_when_idle = lambda handle, line: SENDS.append((handle, line)) or queue.pop(0)
     err = io.StringIO()
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
         rc = card.goal_after_idle("term_w", LINE, timeout_s)
@@ -731,7 +734,7 @@ def run_helper(answers, timeout_s=3600):
 BUSY_REASON = "turn in progress: ✶ Crunching… (running UserPromptSubmit hooks…)"
 # Idle only after two busy reads: nothing is typed before that, and the line goes out once.
 SLEPT.clear()
-rc, err = run_helper([(False, BUSY_REASON), (False, BUSY_REASON), (True, None)])
+rc, err = run_helper([BUSY_REASON, BUSY_REASON, None])
 assert rc == 0 and len(SENDS) == 3 and SLEPT == [card.GOAL_POLL_S] * 2 and not err, (rc, SENDS, SLEPT, err)
 assert all(s == ("term_w", LINE) for s in SENDS)
 # Past the limit: nothing more is tried, and the warning carries the manual command.
@@ -739,20 +742,55 @@ real_monotonic = card.time.monotonic
 ticks = iter([0, 1, 2, 100])
 card.time.monotonic = lambda: next(ticks)
 try:
-    rc, err = run_helper([(False, BUSY_REASON)] * 5, timeout_s=50)
+    rc, err = run_helper([BUSY_REASON] * 5, timeout_s=50)
 finally:
     card.time.monotonic = real_monotonic
 assert rc == 1 and len(SENDS) == 3 and "not typed into term_w" in err and "waited up to 50s" in err, (rc, SENDS, err)
 assert f"terminal send --terminal term_w --text '{LINE}' --enter" in err, err
 # A reason waiting will not change stops at once; a screen that never confirmed the line is not retyped.
-rc, err = run_helper([(False, "orca terminal read failed: terminal_handle_stale")] * 3)
+rc, err = run_helper(["orca terminal read failed: terminal_handle_stale"] * 3)
 assert rc == 1 and len(SENDS) == 1 and "not typed into term_w" in err, (rc, SENDS, err)
-rc, err = run_helper([(False, sync.UNCONFIRMED), (True, None)])
+rc, err = run_helper([sync.UNCONFIRMED, None])
 assert rc == 1 and len(SENDS) == 1 and "Read the screen before typing it again" in err, (rc, SENDS, err)
-sync.try_send = lambda handle, line: (True, None)
+card.type_when_idle = lambda handle, line: None
 with contextlib.redirect_stdout(io.StringIO()):
     assert card.main(["goal-after-idle", "term_w", LINE]) == 0  # the entry point start_goal_input launches
-sync.try_send = REAL_TRY_SEND
+card.type_when_idle = REAL_TYPE
+
+# type_when_idle on canned screens, through the real sync.classify. The tab title is the session's topic, not `✳`.
+RULE = "─" * 40
+STATUS = "  ⏵⏵ auto mode on (shift+tab to cycle)"
+IDLE = ["⏺ GOAL-DEMO-OK", "✻ Churned for 17s · done 12:08 AM", RULE, "❯ ", RULE, STATUS]
+RUNNING = ["⏺ Reading the brief.", "✶ Crunching… (running UserPromptSubmit hooks… 3/4 · 0s)", RULE, "❯ ", RULE, STATUS]
+TAKEN = ["❯ " + LINE, "✶ Thinking… (1s)", RULE, "❯ ", RULE, STATUS]
+SCREENS, TYPED = [], []
+
+
+def fake_orca(*args):
+    if args[:2] == ("terminal", "show"):
+        return {"terminal": {"agentIdentity": "claude", "connected": True, "writable": True,
+                             "title": "GOAL-DEMO-OK 워커 브리프 실행"}}
+    if args[:2] == ("terminal", "read"):
+        return {"terminal": {"tail": SCREENS.pop(0) if len(SCREENS) > 1 else SCREENS[0]}}
+    TYPED.append(args)
+    return {}
+
+
+real_orca = sync.orca
+sync.orca = fake_orca
+sync.SETTLE_S = sync.CONFIRM_S = 0
+try:
+    TYPED.clear(); SCREENS[:] = [RUNNING]
+    assert card.type_when_idle("term_w", LINE).startswith("turn in progress") and not TYPED, TYPED  # first turn still runs
+    SCREENS[:] = [IDLE, IDLE, TAKEN]
+    assert card.type_when_idle("term_w", LINE) is None and len(TYPED) == 1, TYPED  # the title alone does not block it
+    assert TYPED[0] == ("terminal", "send", "--terminal", "term_w", "--text", LINE, "--enter"), TYPED
+    TYPED.clear(); SCREENS[:] = [IDLE, IDLE, IDLE]
+    assert card.type_when_idle("term_w", LINE) == sync.UNCONFIRMED and len(TYPED) == 1  # typed, never shown taken
+    TYPED.clear(); SCREENS[:] = [IDLE, IDLE[:1] + ["✻ Churned for 18s · done 12:09 AM"] + IDLE[2:]]
+    assert "changed between two reads" in card.type_when_idle("term_w", LINE) and not TYPED
+finally:
+    sync.orca = real_orca
 card.time.sleep = REAL_SLEEP
 card.start_goal_input = REAL_START_GOAL_INPUT
 spawned = []

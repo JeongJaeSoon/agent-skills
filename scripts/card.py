@@ -515,19 +515,58 @@ def manual_goal_command(handle, line):
     return shlex.join([ORCA, "terminal", "send", "--terminal", handle, "--text", line, "--enter"])
 
 
+def type_when_idle(handle, line):
+    """None once `line` was typed into an idle Claude session and the screen shows it was taken, else the reason it
+    was not (sync.UNCONFIRMED when it may have been typed). This is `sync.send_to` with the tab title left out of the
+    judgement: a worker's title is the session's topic (`GOAL-DEMO-OK …`), never the `✳` that `sync.classify` wants,
+    so the title would read every worker as busy. The screen checks (spinner, dialog, empty prompt box, two equal
+    reads) stay."""
+    import sync
+
+    def look():
+        meta = sync.orca("terminal", "show", "--terminal", handle)
+        meta = meta.get("terminal", meta)
+        if meta.get("agentIdentity") != "claude" or not meta.get("connected") or not meta.get("writable"):
+            return [], "not a connected, writable Claude terminal"
+        t = sync.orca("terminal", "read", "--terminal", handle, "--screen")["terminal"]
+        if t.get("source") not in (None, "screen"):
+            return [], f"no rendered screen ({t.get('source')})"
+        tail = t.get("tail") or []
+        return tail, sync.classify(tail, "✳", t.get("draft") or "")
+
+    try:
+        first, reason = look()
+        if reason:
+            return reason
+        time.sleep(sync.SETTLE_S)
+        second, reason = look()
+        if reason:
+            return reason
+        if second != first:
+            return "screen changed between two reads (someone may be typing)"
+        sync.orca("terminal", "send", "--terminal", handle, "--text", line, "--enter")
+    except sync.Stop as e:
+        return str(e)
+    time.sleep(sync.CONFIRM_S)
+    try:
+        after, _ = look()
+    except sync.Stop:  # typed already: an unread confirmation must not read as never sent
+        return sync.UNCONFIRMED
+    return None if sync.turn_started(second, after, line) else sync.UNCONFIRMED
+
+
 def goal_after_idle(handle, line, timeout_s=GOAL_IDLE_S):
     """Types the /goal line into the worker's terminal once its first turn ended and an empty prompt is back. Orca puts
     its own preamble before a worker's spec, so the line inside the spec never runs as the slash command. The idle
-    judgement is the reload broadcast's (`sync.try_send`: two equal screen reads, no spinner, no dialog, an empty
-    prompt box), polled until the limit: `orca terminal wait --for tui-idle` is not used, since it answered during
-    UserPromptSubmit hooks (docs/platform.md). Nothing is typed while the turn runs or after the limit. 0 sent, 1 not
-    sent (the manual command is printed)."""
+    judgement is `type_when_idle`'s, polled until the limit: `orca terminal wait --for tui-idle` is not used, since it
+    answered during UserPromptSubmit hooks (docs/platform.md). Nothing is typed while the turn runs or after the
+    limit. 0 sent, 1 not sent (the manual command is printed)."""
     import sync
     manual = manual_goal_command(handle, line)
     deadline = time.monotonic() + timeout_s
     while True:
-        ok, reason = sync.try_send(handle, line)
-        if ok:
+        reason = type_when_idle(handle, line)
+        if reason is None:
             print(f"[{ME}] typed the /goal line into {handle}: {line}")
             return 0
         if reason == sync.UNCONFIRMED:  # it was typed; typing it again would set the goal twice
