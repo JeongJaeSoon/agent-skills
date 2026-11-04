@@ -637,6 +637,50 @@ dash.sh = real_sh
 dash._CONTAINS.clear()
 assert calls, "the warm-up asked nothing because of one bad ts"
 
+# Calls per collect are bounded, answers outlive a restart, and a local clone answers without GitHub.
+CP = "cap-test"
+(store / CP).mkdir()
+cfg_cp = {"repo": "acme/app", "created_at": ago(60 * 24 * 30)}
+(store / CP / "program.json").write_text(json.dumps(cfg_cp))
+rows_cp = ([{"ts": ago(600 + i), "ev": "landed", "pr": 100 + i, "sha": f"a{i}"} for i in range(30)]
+           + [{"ts": ago(100 + i), "ev": "main_green", "sha": f"g{i}"} for i in range(30)])
+(store / CP / "ledger.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows_cp))
+asked = []
+def counting_sh(cmd, timeout=45):
+    asked.append(cmd[2])
+    return {"n": 5000, "t": 0} if cmd[2] == "rate_limit" else {"s": "behind"}
+for f in (dash.cache_path(),):
+    f.unlink(missing_ok=True)
+dash._CONTAINS.clear(); dash._cache_state.update(loaded=False, dirty=False); dash._gh_down_until = dash._gh_check_at = 0.0
+dash.sh = counting_sh
+dash.warm_contains(store / CP, cfg_cp)
+first = [c for c in asked if c != "rate_limit"]
+assert 0 < len(first) <= dash.GH_COMPARES_PER_ROUND, f"900 pairs, {len(first)} asked in one collect"
+assert dash.cache_path().exists(), "the answers are on disk"
+dash._CONTAINS.clear(); dash._cache_state.update(loaded=False, dirty=False)  # a restart
+asked.clear()
+dash.warm_contains(store / CP, cfg_cp)
+again = [c for c in asked if c != "rate_limit"]
+assert set(again).isdisjoint(first), "an answer already on disk is not asked again"
+# A landing past the age limit is not a gap to chase.
+old = [{"ts": ago(60 * 24 * 15), "ev": "landed", "pr": 1, "sha": "o1"}]
+assert dash.ledger_gaps(cfg_cp, old, [], [], now, contains=lambda a, b: False)["ci"] == [], "15 days old"
+assert dash.ledger_gaps(cfg_cp, [{**old[0], "ts": ago(60 * 24 * 10)}], [], [], now, contains=lambda a, b: False)["ci"] == [1]
+dash.sh = real_sh
+# A local clone answers first: no gh call at all.
+import subprocess
+clone = pathlib.Path(tempfile.mkdtemp())
+git = lambda *a: subprocess.run(["git", "-C", str(clone), "-c", "user.name=t", "-c", "user.email=t@example.test",
+                                 "-c", "commit.gpgsign=false", *a], capture_output=True, text=True, check=True).stdout.strip()
+git("init", "-q"); git("commit", "-q", "--allow-empty", "-m", "one"); c1 = git("rev-parse", "HEAD")
+git("commit", "-q", "--allow-empty", "-m", "two"); c2 = git("rev-parse", "HEAD")
+asked.clear(); dash.sh = counting_sh
+assert dash.gh_contains("acme/local", c1, c2, clone) is True and dash.gh_contains("acme/local", c2, c1, clone) is False
+assert not asked, f"a local clone needs no gh: {asked}"
+dash.sh = real_sh
+dash._CONTAINS.clear(); dash._cache_state.update(loaded=False, dirty=False); dash._gh_down_until = dash._gh_check_at = 0.0
+dash.cache_path().unlink(missing_ok=True)
+
 mixed = [{"number": 11, "state": "merged", "merged_at": ago(100), "base": "feat/x", "branch": "a"},
          {"number": 12, "state": "merged", "merged_at": ago(90), "base": "feat/x", "branch": "b"},
          {"number": 13, "state": "merged", "merged_at": ago(80), "base": "main", "branch": "c"}]

@@ -895,13 +895,6 @@ def stalls(workers, tnow, held=frozenset()):
 
 
 _CONTAINS = {}
-# After one failed compare, gh is not called again for this long. A flat window rather than the rate-limit reset:
-# the error text carries no reset time, and reading it costs another call. It runs inside the program lock, so
-# an unbounded retry per collect stalls every program behind it.
-GH_BACKOFF_S = 300
-_gh_down_until = 0.0
-
-
 # After one failed compare gh is not called again for this long, and never while core quota is below GH_MIN_CORE
 # (until its reset). The quota is read with `gh api rate_limit`, which costs none. A flat window for plain failures,
 # since the error text carries no reset time.
@@ -923,17 +916,69 @@ def gh_quota_low():
         return 0.0
 
 
-def gh_contains(repo, older, newer):
-    """Whether commit `older` is in `newer`'s history (GitHub compare): True or False, or None when unknown.
-    Answers are cached, since commits do not change. An unknown one is not, but it stops further gh calls: for
-    GH_BACKOFF_S after a failure, until the reset when the quota is low."""
+GH_COMPARES_PER_ROUND = 40  # new compare questions one warm-up may ask; the rest wait for the next round
+_budget = [GH_COMPARES_PER_ROUND]
+_cache_state = {"loaded": False, "dirty": False}
+
+
+def cache_path():
+    return home() / ".compare-cache.json"
+
+
+def load_compare_cache():
+    """Answers survive a restart: a commit's ancestry never changes, and every restart used to ask them all again."""
+    if _cache_state["loaded"]:
+        return
+    _cache_state["loaded"] = True
+    for repo, pairs in (read_json(cache_path(), {}) or {}).items():
+        for k, v in (pairs.items() if isinstance(pairs, dict) else ()):
+            older, _, newer = k.partition("...")
+            if newer and isinstance(v, bool):
+                _CONTAINS.setdefault((repo, older, newer), v)
+
+
+def save_compare_cache():
+    if not _cache_state["dirty"]:
+        return
+    out = {}
+    for (repo, older, newer), v in _CONTAINS.items():
+        out.setdefault(repo, {})[f"{older}...{newer}"] = v
+    try:
+        write_atomic(cache_path(), json.dumps(out))
+        _cache_state["dirty"] = False
+    except OSError as e:
+        log(f"compare cache not saved: {e!r}")
+
+
+def local_contains(repo_dir, older, newer):
+    """The answer from a local clone, or None when there is none or it does not know a commit."""
+    try:
+        rc = subprocess.run(["git", "-C", str(repo_dir), "merge-base", "--is-ancestor", older, newer],
+                            capture_output=True, timeout=15).returncode
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return {0: True, 1: False}.get(rc)
+
+
+def gh_contains(repo, older, newer, repo_dir=None):
+    """Whether commit `older` is in `newer`'s history: True or False, or None when unknown. A local clone
+    (`repo_dir`) answers first at no cost to GitHub. Answers are cached on disk, since commits do not change. An
+    unknown one is not cached, but it stops further gh calls: for GH_BACKOFF_S after a failure, until the reset when
+    the quota is low, and past GH_COMPARES_PER_ROUND new questions in a warm-up round."""
     global _gh_down_until, _gh_check_at
+    load_compare_cache()
     key = (repo, older, newer)
     if key in _CONTAINS:
         return _CONTAINS[key]
+    if repo_dir and (known := local_contains(repo_dir, older, newer)) is not None:
+        _CONTAINS[key] = known
+        _cache_state["dirty"] = True
+        return known
     with _gh_lock:  # the slow and fast loops share the quota check and the backoff: one asker at a time
         if key in _CONTAINS:
             return _CONTAINS[key]
+        if _budget[0] <= 0:
+            return None
         if time.monotonic() < _gh_down_until:
             return None
         if time.monotonic() >= _gh_check_at:
@@ -942,6 +987,7 @@ def gh_contains(repo, older, newer):
             if wait:
                 _gh_down_until = time.monotonic() + wait
                 return None
+        _budget[0] -= 1
         try:
             st = sh(["gh", "api", f"repos/{repo}/compare/{older}...{newer}", "--jq", "{s: .status}"])["s"]
         except (SourceError, KeyError, TypeError):
@@ -949,7 +995,11 @@ def gh_contains(repo, older, newer):
             _gh_check_at = 0.0  # when the backoff ends the quota is read first: a limit hit then waits for the reset
             return None
         _CONTAINS[key] = st in ("ahead", "identical")
+        _cache_state["dirty"] = True
         return _CONTAINS[key]
+
+
+GAP_MAX_AGE_D = 14  # a landing still without a main CI row after this long is stale history, not a gap to chase
 
 
 def ledger_gaps(cfg, events, workers, prs, tnow, contains=None):
@@ -964,7 +1014,7 @@ def ledger_gaps(cfg, events, workers, prs, tnow, contains=None):
     heads = {x.get("branch") for x in prs} - {None}
     folded = {x["number"] for x in prs if x.get("base") in heads}
     # A branch CI started by hand runs at the branch tip, so a green there covers every earlier landing it contains.
-    contains = contains or (lambda older, newer: gh_contains(cfg["repo"], older, newer))
+    contains = contains or (lambda older, newer: gh_contains(cfg["repo"], older, newer, cfg.get("repo_dir")))
     greens = [g for g in events if g["ev"] == "main_green" and g.get("sha")]
     # An unknown answer (None) counts as covered: a gap is reported only when GitHub said the green does not contain it.
     covered = lambda e: any(g["sha"] != e["sha"] and prog.parse_ts(g["ts"]) >= prog.parse_ts(e["ts"])
@@ -981,7 +1031,8 @@ def ledger_gaps(cfg, events, workers, prs, tnow, contains=None):
                            and prog.parse_ts(p["merged_at"]) >= t0 and p["number"] not in landed
                            and (not ours or p.get("base") in ours)),
         "ci": [e.get("pr") for e in events if e["ev"] == "landed" and e.get("sha") not in decided and e.get("pr") not in folded
-               and tnow - prog.parse_ts(e["ts"]) > dt.timedelta(hours=2) and not covered(e)],
+               and dt.timedelta(hours=2) < tnow - prog.parse_ts(e["ts"]) <= dt.timedelta(days=GAP_MAX_AGE_D)
+               and not covered(e)],
     }
 
 
@@ -1150,11 +1201,14 @@ def dated(rows):
 def warm_contains(d, cfg):
     """Asks GitHub, outside the program lock, the compare questions ledger_gaps will put. _merge runs under that lock
     and the fast loop waits on it, so a gh call there stopped every collect behind it."""
+    _budget[0] = GH_COMPARES_PER_ROUND
     try:
         prev = read_json(d / "dashboard" / "state.json", {}) or {}
         ledger_gaps(cfg, dated(ledger_events(d / "ledger.jsonl")[0])[0], [], prev.get("prs") or [], utcnow())
     except Exception as e:  # a warm-up is best effort: the merge reads whatever the cache holds
         log(f"{d.name}: compare warm-up failed: {e!r}")
+    finally:
+        save_compare_cache()
 
 
 def landing_of(cfg, events, prs):
@@ -1294,6 +1348,7 @@ def _merge(slug, d, cfg, fetched, interval):
     summary = summarize(cfg, events, issues, workers, tnow, order, sum(not c["active"] for c in cards))
     summary["stalls"], summary["spare"] = stalls(workers, tnow, parked_tickets(events)), spare(summary, tasks)
     # Under the program lock: answers already fetched by warm_contains only, never a gh call.
+    load_compare_cache()
     summary["gaps"] = ledger_gaps(cfg, events, workers, prs, tnow,
                                   contains=lambda older, newer: _CONTAINS.get((cfg["repo"], older, newer)))
     open_prs = [p for p in prs if p["state"] == "open" and not p.get("draft") and p.get("created_at")]
