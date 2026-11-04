@@ -82,8 +82,9 @@ PARAGRAPH_END = "run it again."
 WORK_ROLES = ("impl", "verify", "review")
 AGENTS = ("claude", "codex")
 # Orca documents worker-start for Codex. A leading /goal and the start read from the screen are known only for Claude.
-CODEX_GOAL_CARD = ("--agent codex starts only a supervised worker (a brief that reports to `run:<id>`, no --card): "
-                   "a /goal card's first prompt and its start check are not proven on Codex, so nothing was created.")
+CODEX_GOAL_CARD = ("--agent codex starts only a supervised worker (no --card, and a REPORT or PARENT row in the form "
+                   "`orca orchestration send --to run:<id>`): a /goal card's first prompt and its start check are "
+                   "not proven on Codex, so nothing was created.")
 CODEX_LEAD = ("--agent codex cannot start a lead: its ROLE row works through this plugin's Claude Code hooks, "
               "so nothing was created.")
 CLOSE_LINE = "CLOSE: 완료 기준을 채우고 결과를 적으면 end-session §8대로 같은 턴에 스스로 닫는다"
@@ -136,19 +137,29 @@ def merge_policy(merge_row):
 
 
 SEND_TO = re.compile(r"orchestration\s+send\b(?:[^\n]|\\\n)*?--to[ =]+[`'\"]?([\w:.@<>-]+)")
+RUN_NAME = re.compile(r"\brun:\w[\w.-]*")
+
+
+def report_rows(text):
+    """The brief's REPORT and PARENT rows, each with its continuation lines."""
+    lines = text.splitlines()
+    return ["\n".join([line] + list(itertools.takewhile(lambda l: l.strip() and l[:1].isspace(), lines[i + 1:])))
+            for key in ("REPORT", "PARENT") for i, line in enumerate(lines) if starts_row(line, key)]
 
 
 def report_to(text):
     """The addresses the brief's REPORT and PARENT rows send to (`orca orchestration send --to <address>`). A row
     that names only a file has none."""
-    out = []
-    for key in ("REPORT", "PARENT"):
-        lines = text.splitlines()
-        for i, line in enumerate(lines):
-            if starts_row(line, key):
-                block = [line] + list(itertools.takewhile(lambda l: l.strip() and l[:1].isspace(), lines[i + 1:]))
-                out += SEND_TO.findall("\n".join(block))
-    return out
+    return [a for row in report_rows(text) for a in SEND_TO.findall(row)]
+
+
+def unsent_run_note(text):
+    """One sentence when those rows name a Run but none sends to it, the case report_to cannot see; else empty."""
+    if any(a.startswith("run:") for a in report_to(text)):
+        return ""
+    named = sorted({a for row in report_rows(text) for a in RUN_NAME.findall(row)})
+    return (f"The brief's REPORT or PARENT row names {', '.join(named)} but sends to no Run: only the form "
+            "`orca orchestration send --to run:<id>` counts as a report address.") if named else ""
 
 
 def compose(brief_path):
@@ -570,7 +581,7 @@ def worktree_path(res):
         # worker-start (1.4.239) names it only as an effect: {"kind": "worktree", "id": "<repo id>::<path>"}
         if res.get("kind") == "worktree" and isinstance(res.get("id"), str) and "/" in res["id"]:
             return res["id"].split("::", 1)[-1]
-        for k in ("worktreePath", "worktreeId"):
+        for k in ("worktreePath", "worktreeId", "workspace"):
             if isinstance(res.get(k), str) and "/" in res[k]:
                 return res[k].split("::", 1)[-1]
         for v in res.values():
@@ -624,8 +635,10 @@ def refuse_codex(brief, opts):
     text = FENCE.sub("", text)
     if guard.is_lead(FENCE.sub("", raw)) or guard.is_lead(text):
         raise Refuse(2, f"[{ME}] {CODEX_LEAD}")
-    if opts.get("--card") or not any(a.startswith("run:") for a in report_to(text)):
+    if opts.get("--card"):
         raise Refuse(2, f"[{ME}] {CODEX_GOAL_CARD}")
+    if not any(a.startswith("run:") for a in report_to(text)):
+        raise Refuse(2, f"[{ME}] {CODEX_GOAL_CARD} {unsent_run_note(text)}".rstrip())
 
 
 def create(argv):
@@ -651,6 +664,8 @@ def create_locked(brief, opts, refs, prompt):
     text = FENCE.sub("", pathlib.Path(brief).expanduser().read_text())
     wanted = {a[len("run:"):] for a in report_to(text) if a.startswith("run:")}
     to_run = bool(wanted)
+    if (note := unsent_run_note(text)) and not opts.get("--card"):
+        print(f"[{ME}] {note} Starting a /goal card.", file=sys.stderr)
     if (opts.get("--parent-worktree") or "").startswith("path:"):
         raise Refuse(2, f"[{ME}] --parent-worktree {opts['--parent-worktree']}: a path selector resolves to the "
                         "repo's main worktree when several Orca workspaces share that path. Pass `id:<worktree id>` "

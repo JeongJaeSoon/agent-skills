@@ -1,10 +1,12 @@
 """orca_settings against a throwaway Orca profile store. Run: python3 test_orca_settings.py"""
-import contextlib, io, json, pathlib, sqlite3, sys, tempfile
+import contextlib, io, json, os, pathlib, sqlite3, subprocess, sys, tempfile, types
+from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import orca_settings as s  # noqa: E402
 
 base = pathlib.Path(tempfile.mkdtemp(prefix="test-orca-settings-"))
+real_binding = s.binding
 
 
 def store(settings, profile="local-default", index=True):
@@ -99,4 +101,63 @@ assert s.worker_terminal({"agentTerminalHandle": "term_old", "terminal": "term_n
 assert s.worker_terminal({"agentTerminalHandle": None, "terminal": "term_new"}) == "term_new"
 assert s.worker_terminal({"dispatchId": "d1"}) is None and s.worker_terminal({}) is None
 assert s.worker_terminal({"terminal": {"worktreeId": "x"}}) is None  # `terminal show`'s object is no handle
+
+
+def answer(result):
+    return 0, json.dumps({"ok": True, "result": result}), ""
+
+
+def bound(full, plain=None):
+    """binding() against an Orca giving `full` to run-current --full and `plain` without it: (binding, calls, stderr)."""
+    calls = []
+
+    def fake(cmd, **_):
+        calls.append(cmd)
+        rc, out, err = full if "--full" in cmd else plain
+        return types.SimpleNamespace(returncode=rc, stdout=out, stderr=err)
+    s.FULL[:] = ["--full"]
+    err = io.StringIO()
+    with mock.patch.object(s.subprocess, "run", fake), contextlib.redirect_stderr(err), \
+            mock.patch.dict(os.environ, ORCA_TERMINAL_HANDLE="term_me"):
+        return real_binding(), calls, err.getvalue()
+
+
+FULL_RUN, CONCISE_RUN = {"run": {"id": "run_x", "objective": "ship"}}, {"runId": "run_x"}
+REFUSED = "error: invalid_argument: Unknown flag --full for command: orchestration run-current"
+# Both views count, and the full record comes back whole.
+got, calls, err = bound(answer(FULL_RUN))
+assert got == FULL_RUN["run"] and len(calls) == 1 and calls[0][1:] == ["orchestration", "run-current", "--full", "--json"], calls
+assert not err, err
+got, calls, err = bound(answer(CONCISE_RUN))
+assert got == {"id": "run_x"} and not err, (got, err)
+# An Orca from before --full is asked once more without it, whichever stream says why.
+for refusal in ((1, "", REFUSED), (1, json.dumps({"ok": False, "error": {"message": REFUSED}}), "")):
+    got, calls, err = bound(refusal, answer(FULL_RUN))
+    assert got == FULL_RUN["run"] and ["--full" in c for c in calls] == [True, False] and not err, (got, calls, err)
+    assert s.FULL == []
+# Null is Orca saying unbound. A result naming neither key is unbound too, with one line saying the shape was not read.
+for result in ({"run": None}, {"runId": None}):
+    got, calls, err = bound(answer(result))
+    assert got is None and len(calls) == 1 and not err, (result, got, err)
+got, calls, err = bound(answer({"bindings": []}))
+assert got is None and len(err.splitlines()) == 1 and "neither" in err and "bindings" in err, (got, err)
+# Only the refusal of --full is asked again: any other failure is "unknown", never "unbound".
+for broken in ((1, "", "connect ECONNREFUSED"), (0, "not json", ""), (0, "[]", ""),
+               (0, json.dumps({"ok": False, "error": {"code": "runtime_unavailable"}}), "")):
+    got, calls, err = bound(broken)
+    assert got == "unknown" and len(calls) == 1, (broken, got, calls)
+got, calls, _ = bound((1, "", REFUSED), (1, "", "connect ECONNREFUSED"))
+assert got == "unknown" and len(calls) == 2, (got, calls)
+with mock.patch.object(s.subprocess, "run", side_effect=subprocess.TimeoutExpired("orca", 30)), \
+        mock.patch.dict(os.environ, ORCA_TERMINAL_HANDLE="term_me"):
+    assert real_binding() == "unknown"
+with mock.patch.dict(os.environ):
+    os.environ.pop("ORCA_TERMINAL_HANDLE", None)
+    assert real_binding() == "unknown"
+assert s.run_of({"run": "run_x"}) == {"id": "run_x"}  # an id in `run`, which reboot has always read
+# run_current passes its arguments on and reads the answer the same way, through the caller's own Orca adapter.
+s.FULL[:] = ["--full"]
+seen = []
+assert s.run_current(lambda *a: seen.append(a) or CONCISE_RUN, "--from", "term_me") == {"id": "run_x"}
+assert seen == [("orchestration", "run-current", "--from", "term_me", "--full")], seen
 print("test_orca_settings: ok")

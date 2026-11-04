@@ -46,6 +46,10 @@ elif a[:2] == ["terminal", "show"]:
 elif a[:2] == ["orchestration", "run-current"]:
     if mode == "orca-down":
         print("connect ECONNREFUSED", file=sys.stderr); sys.exit(1)
+    if mode == "old-orca" and "--full" in a:
+        print("error: invalid_argument: Unknown flag --full for command: orchestration run-current", file=sys.stderr); sys.exit(1)
+    if mode == "concise-only" or (mode == "concise" and "--full" not in a):
+        print(json.dumps({"ok": True, "result": {"runId": "run_me"}})); sys.exit(0)
     print(json.dumps({"ok": True, "result": {"run": None if mode in ("no-run", "worker-lead", "worker-lead-terminal", "worker-list-down") else {"id": "run_me"}}}))
 elif a[:2] == ["orchestration", "worker-list"] and mode == "worker-list-down":
     print("connect ECONNREFUSED", file=sys.stderr); sys.exit(1)
@@ -71,6 +75,10 @@ elif a[:2] == ["orchestration", "worker-start"]:
                                                  "data": {"orchestrationRequestId": "req_1"}},
                           "result": {"failedStage": "turn_start", "recovery": ["orca orchestration worker-stop --dispatch ctx_1"]}}))
         sys.exit(1)
+    if mode == "concise-receipt":
+        print(json.dumps({"ok": True, "result": {"dispatchId": "ctx_1", "taskId": "task_1", "runId": "run_me", "state": "ready",
+                                                 "agent": "codex", "mode": "terminal", "terminal": "term_w", "keptOpen": True, "next": [],
+                                                 "workspace": "repo1::" + os.environ["FAKE_CARD_PATH"]}})); sys.exit(0)
     # Orca 1.4.239's receipt: the worktree and the agent terminal appear only as effects
     effects = [] if mode == "no-path" else [{"kind": "worktree", "action": "created_top_level",
                                              "id": "repo1::" + os.environ["FAKE_CARD_PATH"]}]
@@ -298,6 +306,11 @@ assert rc == 5 and "Do not create it again" in err and json.loads(out)["card"]["
 rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", "--reference", URL, mode="no-path")
 assert rc == 5 and "Do not create it again" in err and json.loads(out)["card"]["handle"] == "term_w", (rc, err)
 assert not any(c["argv"][:2] == ["reference", "add"] for c in calls)
+# The concise receipt names the worktree as `workspace`. worker-start stays concise: --full fails a start Orca has not
+# seen yet, which concise reports as started, and a retry would start a second worker.
+rc, out, err, calls = go(brief(SUPERVISED, "sup-concise.md"), "--repo", "r", "--name", "abc-1", "--reference", URL, mode="concise-receipt")
+assert rc == 0 and json.loads(out)["card"]["path"] == str(CARD_DIR) and json.loads(out)["card"]["handle"] == "term_w", (rc, err, out)
+assert "--full" not in creates(calls)[0] and any(c["argv"][:2] == ["reference", "add"] for c in calls), calls
 # A REPORT row continued onto a second line is read whole.
 assert card.report_to("REPORT: orca orchestration send \\\n  --to term_x --type status\n") == ["term_x"]
 # From a terminal outside a worktree Orca manages, new-child is refused before anything exists: it stops there with
@@ -396,8 +409,12 @@ assert rc == 0 and creates(calls)[0][:2] == ["orchestration", "worker-start"], (
 rc, out, err, calls = go(brief(LEAD_RUN.replace("merge_policy autonomous", "merge_policy autonomous, or merge_policy\n"
                                                 "            human-gate"), "lead-two.md"), "--repo", "r", "--name", "x")
 assert rc == 2 and "exactly one of" in err and not calls, (rc, err)
+# A bound session is bound however Orca words it: the full record, a concise runId, or an Orca without --full.
+for mode in ("concise", "concise-only", "old-orca"):
+    rc, out, err, calls = go(brief(SUPERVISED, f"sup-{mode}.md"), "--repo", "r", "--name", "abc-1", mode=mode)
+    assert rc == 0 and json.loads(out)["card"]["run"] == {"id": "run_me"}, (mode, rc, err)
 # A lead that is itself a dispatched worker (run-current null) starts its units as workers on the Run it works for.
-SUP_TOP = SUPERVISED.replace("run:run_me", "run:run_top")
+SUP_TOP =SUPERVISED.replace("run:run_me", "run:run_top")
 rc, out, err, calls = go(brief(SUP_TOP, "sup-top.md"), "--repo", "r", "--name", "abc-1", mode="worker-lead")
 assert rc == 0 and any(c["argv"][:2] == ["orchestration", "worker-start"] for c in calls), (err, calls)
 assert json.loads(out)["card"]["run"] == {"id": "run_top", "via": "own_dispatch"}, out
@@ -578,6 +595,20 @@ for why, argv in (("/goal card", (brief(WORKER, "a2.md"), "--repo", "r", "--name
     rc, out, err, calls = go(*argv, "--agent", "codex")
     assert rc == 2 and why in err and len(err.splitlines()) == 1 and not creates(calls), (why, rc, err)
     assert pathlib.Path(argv[0]).read_text() == before, argv
+# A REPORT row naming a Run without the send form is no report address: the refusal says which row form counts and
+# what it found; for Claude the /goal card still starts, with one line saying why it is not a worker.
+BARE_RUN = WORKER + "REPORT: worker_done to run:run_me\n"
+rc, out, err, calls = go(brief(BARE_RUN, "a13.md"), "--repo", "r", "--name", "a13", "--agent", "codex")
+assert rc == 2 and len(err.splitlines()) == 1 and not creates(calls), (rc, err)
+assert "`orca orchestration send --to run:<id>`" in err and "run:run_me" in err and "REPORT or PARENT" in err, err
+rc, out, err, calls = go(brief(BARE_RUN, "a17.md"), "--repo", "r", "--name", "a17", "--agent", "codex", "--card")
+assert rc == 2 and "names run:run_me" not in err, (rc, err)
+rc, out, err, calls = go(brief(BARE_RUN, "a14.md"), "--repo", "r", "--name", "a14")
+assert rc == 0 and creates(calls)[0][:2] == ["worktree", "create"] and "run:run_me" in err and "send --to" in err, (rc, err)
+rc, out, err, calls = go(brief(WORKER, "a15.md"), "--repo", "r", "--name", "a15")
+assert rc == 0 and "send --to" not in err, err
+rc, out, err, calls = go(brief(SUPERVISED, "a16.md"), "--repo", "r", "--name", "a16")
+assert rc == 0 and "send --to" not in err, err
 # A Run report only between the FORBIDDEN markers is gone once they are refreshed: still no Codex /goal card.
 MARKED = f"{WORKER}FORBIDDEN   {card.BEGIN}\n  REPORT: orca orchestration send --to run:run_me\n  {card.END}\n"
 rc, out, err, calls = go(brief(MARKED, "a10.md"), "--repo", "r", "--name", "a10", "--agent", "codex")
