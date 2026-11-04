@@ -1101,8 +1101,9 @@ print("prog.py patch-id fallback: all pass")
 state = pathlib.Path(tempfile.mkdtemp(prefix="test-wakes-"))
 wakes = state / "wakes"
 wakes.mkdir()
-(wakes / "term_a.json").write_text(json.dumps({"from": "term_me", "at": 1000}))
-(wakes / "term_b.json").write_text(json.dumps({"from": "term_other", "at": 1000}))
+wake = {"session": "s", "to": "card", "nonce": "n", "at": 1000, "offset": 0}
+(wakes / "term_a.json").write_text(json.dumps({**wake, "from": "term_me"}))
+(wakes / "term_b.json").write_text(json.dumps({**wake, "from": "term_other"}))
 (wakes / "term_a.lock").write_text("")
 old_state = os.environ.get("AGENT_SKILLS_STATE")
 os.environ["AGENT_SKILLS_STATE"] = str(state)
@@ -1110,9 +1111,32 @@ try:
     assert prog.wake_lines("term_me", now=1000 + prog.WAKE_DUE_S - 1) == [], "not due yet"
     lines = prog.wake_lines("term_me", now=1000 + prog.WAKE_DUE_S)
     assert len(lines) == 1 and lines[0].startswith("WAKE term_a:"), lines
-    (wakes / "term_c.json").write_text("{")
-    lines = prog.wake_lines("term_me", now=1001)
-    assert [l.split(":")[0] for l in lines] == ["WAKE term_c"], lines
+    for broken in ("{", '{"at": 0}', '{"at": 0, "from": "term_other"}'):
+        (wakes / "term_c.json").write_text(broken)
+        lines = prog.wake_lines("term_me", now=1001)
+        assert [l.split(":")[0] for l in lines] == ["WAKE term_c"], (broken, lines)
+    (wakes / "term_c.json").write_text(json.dumps(wake))
+    assert prog.wake_lines("term_me", now=1001) == [], "a sender-less record waits for its deadline too"
+    lines = prog.wake_lines("term_me", now=1000 + prog.WAKE_DUE_S)
+    assert [l.split(":")[0] for l in lines] == ["WAKE term_a", "WAKE term_c"], lines
+    (wakes / "term_c.json").unlink()
+
+    me_was = os.environ.get("ORCA_TERMINAL_HANDLE")
+    os.environ["ORCA_TERMINAL_HANDLE"] = "term_me"
+    real_wait = prog.orca_json, prog.Program, prog.run_workers, prog.own_worker, prog.all_workers, prog.print_stuck
+    prog.orca_json = lambda *a: {"deliveryId": "dv", "messages": [{"type": "escalation", "payload": "{}"}]} if "--wait" in a else {}
+    prog.run_workers = prog.all_workers = lambda run: []
+    prog.print_stuck = lambda *a, **k: []
+    prog.Program = lambda slug: type("P", (), {"cfg": {"run": "run_x", "repo": "o/r"}, "slug": slug, "events": lambda self: [],
+                                               "dir": pathlib.Path(tempfile.mkdtemp())})()
+    try:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            prog.cmd_wait(["s", "--rounds", "1"])
+        assert "WAKE term_a:" in out.getvalue() and "ACTIONABLE" in out.getvalue(), out.getvalue()
+    finally:
+        prog.orca_json, prog.Program, prog.run_workers, prog.own_worker, prog.all_workers, prog.print_stuck = real_wait
+        os.environ.pop("ORCA_TERMINAL_HANDLE") if me_was is None else os.environ.__setitem__("ORCA_TERMINAL_HANDLE", me_was)
 finally:
     os.environ.pop("AGENT_SKILLS_STATE") if old_state is None else os.environ.__setitem__("AGENT_SKILLS_STATE", old_state)
 print("prog.py wake lines: all pass")

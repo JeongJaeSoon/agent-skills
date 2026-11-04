@@ -2721,6 +2721,8 @@ def cmd_wait(argv):
     if watched := watch_lines(me, False):
         print("\n".join(watched), flush=True)
     for i in range(rounds):
+        if wakes := wake_lines(me):  # before the wait: a busy inbox returns early and must not hide these
+            print("\n".join(wakes), flush=True)
         res = check(*box, "--wait", "--types", ",".join(sorted(ACTIONABLE)), "--timeout-ms", timeout)
         did, msgs = batch(res)
         if not did and not msgs:
@@ -2753,7 +2755,7 @@ def cmd_wait(argv):
             print_sweep(run_id, p.dir / "self-check.json")
             print("STUCK: a worker waits on a prompt nobody sees; answer or escalate it now", flush=True)
             return
-        if leftovers := new_leftovers(p.dir) + wake_lines(me):
+        if leftovers := new_leftovers(p.dir):
             print("\n".join(leftovers), flush=True)
         if stalled := new_stalls(p.dir):
             print("\n".join(stalled), flush=True)
@@ -2773,8 +2775,8 @@ def cmd_wait(argv):
 
 def wake_lines(me, now=None):
     """Signals this session sent that stayed unconfirmed past `skills-sync wake-target`'s deadline. The background
-    recheck dies with a restart, so the wait keeps the deadline. A record nobody can read has no sender and shows to
-    every session."""
+    recheck dies with a restart, so the wait keeps the deadline. A record sync's wake_entry would refuse, or one with no
+    sender, belongs to nobody it can name and shows to every session."""
     root = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()
     now = time.time() if now is None else now
     out = []
@@ -2785,8 +2787,9 @@ def wake_lines(me, now=None):
             continue
         except (OSError, ValueError):
             entry = None
-        if isinstance(entry, dict) and isinstance(entry.get("at"), (int, float)) \
-                and (entry.get("from") != me or now - entry["at"] < WAKE_DUE_S):
+        valid = isinstance(entry, dict) and all(isinstance(entry.get(k), str) for k in ("session", "to", "nonce")) \
+            and isinstance(entry.get("at"), (int, float)) and isinstance(entry.get("offset"), int)
+        if valid and (now - entry["at"] < WAKE_DUE_S or entry.get("from") and entry["from"] != me):
             continue
         out.append(f"WAKE {f.stem}: unconfirmed past its deadline; skills-sync wake-check {f.stem}, and without "
                    "`started` follow references/waking.md (inbox item, then wake-reset once the human has answered)")
