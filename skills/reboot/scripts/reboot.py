@@ -13,7 +13,7 @@ Usage:
 One line per finding: `ok …`, `info …`, or `do …` with the command to run. Nothing is started, stopped or changed.
 Exit 0 when no line says `do`, 1 when one does, 2 when Orca did not answer.
 """
-import json, os, pathlib, re, shlex, subprocess, sys
+import datetime as dt, json, os, pathlib, re, shlex, subprocess, sys
 
 sys.dont_write_bytecode = True  # read-only: importing the shared helpers must not write __pycache__ either
 HERE = pathlib.Path(__file__).resolve().parent
@@ -21,6 +21,7 @@ SKILLS = HERE.parents[1]
 PRESSURE = SKILLS / "reap-resources" / "scripts" / "pressure.py"
 sys.path.insert(0, str(SKILLS / "orchestrate" / "scripts"))
 import orca_settings  # noqa: E402  Orca's concise/full answers and worker rows are read there, once for every script
+import rowstate  # noqa: E402  when an ended queue entry stops being listed is the row's ❔ rule, not a second one
 
 PROGRAMS = pathlib.Path(os.environ.get("PROGRAMS_HOME", "~/.claude/programs")).expanduser()
 GONE = re.compile(r"stale|not_found|not found", re.I)
@@ -248,10 +249,11 @@ def check_queue(root, read=None):
         sys.path.insert(0, str(SKILLS / "reap-resources" / "scripts"))
         import pressure
         read = pressure.queue_read
-    out = []
+    out, now = [], dt.datetime.now(dt.timezone.utc)
     for e in sorted(read().values(), key=lambda e: e.get("added") or 0):
         cwd = e.get("cwd") or ""
-        if e.get("state") not in ACTIVE_QUEUE or not (cwd == root or cwd.startswith(root.rstrip("/") + "/")):
+        if e.get("state") not in ACTIVE_QUEUE or rowstate.queue_over(e, now) \
+                or not (cwd == root or cwd.startswith(root.rstrip("/") + "/")):
             continue
         head = f"pressure queue {e['id']} ({e['what']}) {e['state']}"
         if e["state"] == "waiting":
