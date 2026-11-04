@@ -19,6 +19,8 @@ flaky = st.get("flaky", {})
 if flaky.get(" ".join(a[:2])):
     flaky[" ".join(a[:2])] -= 1; save()
     sys.exit('Post "https://api.github.com/graphql": net/http: TLS handshake timeout')
+if st.get("hard_fail") == " ".join(a[:2]):
+    sys.exit("gh: HTTP 403 forbidden")
 if a[:2] == ["pr", "list"]:
     print(json.dumps([dict(p, number=int(n)) for n, p in st["prs"].items() if p["state"] == "OPEN"]))
 elif a[:2] == ["pr", "view"] and a[-1] == "headRefName,labels,comments":
@@ -47,6 +49,15 @@ elif a[:2] == ["pr", "merge"]:
                  " For more information, see https://docs.github.com/rest/pulls/pulls#merge-a-pull-request-asynchronously"
                  " (mergePullRequest)")
     p["state"], p["merge_sha"] = "MERGED", f"m{a[2]}"; save(); st["log"] = st.get("log", []) + [a]; save()
+elif a[:2] == ["api", "graphql"]:
+    n = next(x for x in a if x.startswith("n="))[2:]
+    if st.get("threads_fail"):
+        sys.exit("gh: graphql: HTTP 403 rate limited")
+    pages = st.get("threads", {}).get(n, [[]])
+    i = int(next((x for x in a if x.startswith("after=")), "after=0")[6:])
+    print(json.dumps({"data": {"repository": {"pullRequest": {"reviewThreads": {
+        "nodes": [{"isResolved": r} for r in pages[i]],
+        "pageInfo": {"hasNextPage": i + 1 < len(pages), "endCursor": str(i + 1)}}}}}}))
 elif a[:1] == ["api"] and "/compare/" in a[1]:
     left, right = a[1].split("/compare/")[1].split("...")
     if left == "mb":
@@ -142,6 +153,12 @@ cat "$FAKE_DOCKER_STATE" 2>/dev/null || echo "[]"
 '''
 
 
+def stack_rows(stacks):
+    return [{"id": 900 + i, "number": 100 + i, "open": True, "base": {"ref": "main"},
+             "pull_requests": [{"number": n, "state": "open", "draft": False, "merged_at": None,
+                                "head": {"ref": f"b{n}", "sha": f"h{n}"}} for n in s]} for i, s in enumerate(stacks)]
+
+
 def setup(prs, stacks=()):
     d = pathlib.Path(tempfile.mkdtemp())
     (d / "bin").mkdir()
@@ -151,10 +168,7 @@ def setup(prs, stacks=()):
     (d / "bin" / "orca").chmod(0o755)
     (d / "bin" / "docker").write_text(FAKE_DOCKER)
     (d / "bin" / "docker").chmod(0o755)
-    listed = [{"id": 900 + i, "number": 100 + i, "open": True, "base": {"ref": "main"},
-               "pull_requests": [{"number": n, "state": "open", "draft": False, "merged_at": None,
-                                  "head": {"ref": f"b{n}", "sha": f"h{n}"}} for n in s]} for i, s in enumerate(stacks)]
-    (d / "state.json").write_text(json.dumps({"prs": prs, "stacks": listed}))
+    (d / "state.json").write_text(json.dumps({"prs": prs, "stacks": stack_rows(stacks)}))
     env = dict(os.environ, PATH=f"{d / 'bin'}:{os.environ['PATH']}", FAKE_GH_STATE=str(d / "state.json"),
                PROGRAMS_HOME=str(d / "programs"), ORCH_DASH="off",
                AGENT_SKILLS_LEDGER=str(d / "reap-ledger.jsonl"))
@@ -218,6 +232,198 @@ d, env = setup({"10": p0})
 verdict(d, 10, "T-10")
 code, out = prog(env, "land", "t", "--pr", "10")
 assert code == 2 and "CI pending" in out, out
+
+
+def no_ci_setup(*prs_, **state):
+    """A repo declared CI-less: an empty rollup, no run at any head, and the key on."""
+    prs = {}
+    for p_ in prs_:
+        p_["statusCheckRollup"] = []
+        prs[p_["headRefOid"][1:]] = p_
+    d, env = setup(prs)
+    st = json.loads((d / "state.json").read_text())
+    st.update(runs={p_["headRefOid"]: [] for p_ in prs_}, **state)
+    (d / "state.json").write_text(json.dumps(st))
+    (d / "cfg.json").write_text(json.dumps({"orchestrate": {"no_ci_repos": ["o/r"]}}))
+    return d, dict(env, AGENT_SKILLS_CONFIG=str(d / "cfg.json"))
+
+
+def merged(d):
+    return [a for a in json.loads((d / "state.json").read_text()).get("log", []) if a[:2] == ["pr", "merge"]]
+
+
+# 1d. The no-CI lane: with the key on, a verdict at the head, a head that contains its base and no open thread land,
+# pinned to that head, through the exclusive lane, and the message does not send anyone to a main CI that never runs.
+d, env = no_ci_setup(pr(70))
+verdict(d, 70, "T-70")
+code, out = prog(env, "land-check", "t", "--pr", "70")
+assert code == 0 and "READY" in out, out
+code, out = prog(env, "land", "t", "--pr", "70")
+assert code == 0 and "no-CI repo" in out and "VERIFY" in out and "gh run list" not in out, out
+assert merged(d) and merged(d)[0][merged(d)[0].index("--match-head-commit") + 1] == "h70", merged(d)
+evs = [e["ev"] for e in ledger(d)]
+assert "lock_acquired" in evs and evs[-2:] == ["landed", "lock_released"], evs
+
+# Without the key nothing changes: the same PR waits on CI that will never come.
+d, env = no_ci_setup(pr(70))
+verdict(d, 70, "T-70")
+(d / "cfg.json").write_text("{}")
+code, out = prog(env, "land", "t", "--pr", "70")
+assert code == 2 and "CI pending" in out and not merged(d), out
+# A rollup gh did not return is unknown, never "no checks".
+d, env = no_ci_setup(pr(70))
+verdict(d, 70, "T-70")
+st = json.loads((d / "state.json").read_text()); st["prs"]["70"]["drop"] = ["statusCheckRollup"]
+(d / "state.json").write_text(json.dumps(st))
+assert prog(env, "land-check", "t", "--pr", "70")[0] == 1 and not merged(d)
+
+# No verdict: refused.
+d, env = no_ci_setup(pr(71))
+with (d / "programs" / "t" / "ledger.jsonl").open("a") as f:
+    f.write(json.dumps({"ts": "2026-09-24T00:00:00+00:00", "ev": "ready", "pr": 71, "ticket": "T-71"}) + "\n")
+code, out = prog(env, "land", "t", "--pr", "71")
+assert code == 3 and "verdict" in out and not merged(d), out
+
+# A verdict on another head with the same patch-id passes the normal lane, not this one.
+d, env = no_ci_setup(pr(72))
+verdict(d, 72, "T-72")
+st = json.loads((d / "state.json").read_text()); st["prs"]["72"]["headRefOid"] = "h72"
+(d / "programs" / "t" / "ledger.jsonl").write_text((d / "programs" / "t" / "ledger.jsonl").read_text().replace('"sha": "h72"', '"sha": "old72"'))
+(d / "state.json").write_text(json.dumps(st))
+code, out = prog(env, "land", "t", "--pr", "72")
+assert code == 3 and "not the head" in out and not merged(d), out
+assert prog(env, "land-check", "t", "--pr", "72")[0] == 1
+
+# A head that does not contain its base.
+d, env = no_ci_setup(pr(73, behind=2))
+verdict(d, 73, "T-73")
+code, out = prog(env, "land", "t", "--pr", "73")
+assert code == 3 and "latest base" in out and "exact head" in out and not merged(d), out
+
+# A check that did report still counts: the key does not switch off a failed one.
+p_ = pr(74); d, env = no_ci_setup(p_)
+verdict(d, 74, "T-74")
+st = json.loads((d / "state.json").read_text())
+st["prs"]["74"]["statusCheckRollup"] = [{"name": "bot", "status": "COMPLETED", "conclusion": "FAILURE"}]
+(d / "state.json").write_text(json.dumps(st))
+code, out = prog(env, "land", "t", "--pr", "74")
+assert code == 3 and "CI failed" in out and not merged(d), out
+
+# A stack lands in this lane when every layer meets it; any one layer short of it holds the whole unit.
+def no_ci_stack(**lower):
+    d, env = no_ci_setup(dict(pr(75, stacked=True), **lower), pr(76, base="b75", stacked=True))
+    st = json.loads((d / "state.json").read_text()); st["stacks"] = stack_rows([[75, 76]])
+    (d / "state.json").write_text(json.dumps(st))
+    verdict(d, 75, "T-75"); verdict(d, 76, "T-76")
+    return d, env
+
+d, env = no_ci_stack()
+code, out = prog(env, "land", "t", "--pr", "76")
+assert code == 0 and "main_green" in out, out
+assert [e["pr"] for e in ledger(d) if e["ev"] == "landed"] == [75, 76], ledger(d)
+assert not list((d / "programs" / "_locks").glob("*.lock"))
+
+d, env = no_ci_stack(behind=1)
+code, out = prog(env, "land", "t", "--pr", "76")
+assert code == 3 and "#75's head does not contain its base" in out and not merged(d), out
+assert "update-branch 75 --rebase --repo o/r; gh pr update-branch 76 --rebase --repo o/r" in out, out
+
+d, env = no_ci_stack()
+ledger_file = d / "programs" / "t" / "ledger.jsonl"
+ledger_file.write_text(ledger_file.read_text().replace('"sha": "h75"', '"sha": "old75"'))
+code, out = prog(env, "land", "t", "--pr", "76")
+assert code == 3 and "#75's verdict" in out and not merged(d), out
+
+d, env = no_ci_stack()
+st = json.loads((d / "state.json").read_text()); st["threads"] = {"75": [[False]]}
+(d / "state.json").write_text(json.dumps(st))
+code, out = prog(env, "land", "t", "--pr", "76")
+assert code == 3 and "#75 has 1 unresolved" in out and not merged(d), out
+
+# 1e. Every lane reads the threads: one open thread holds a CI-green PR, all resolved past the first page does not,
+# and a thread read that fails holds it without calling it landed.
+d, env = setup({"77": pr(77)})
+verdict(d, 77, "T-77")
+st = json.loads((d / "state.json").read_text()); st["threads"] = {"77": [[True, False]]}
+(d / "state.json").write_text(json.dumps(st))
+code, out = prog(env, "land", "t", "--pr", "77")
+assert code == 3 and "1 unresolved" in out and not merged(d), out
+code, out = prog(env, "land-check", "t", "--pr", "77")
+assert code == 1 and "1 unresolved" in out, out
+st["threads"] = {"77": [[True] * 100, [True]]}
+(d / "state.json").write_text(json.dumps(st))
+code, out = prog(env, "land", "t", "--pr", "77")
+assert code == 0, "every thread resolved, past the first page: " + out
+d, env = setup({"78": pr(78)})
+verdict(d, 78, "T-78")
+st = json.loads((d / "state.json").read_text()); st["threads_fail"] = True
+(d / "state.json").write_text(json.dumps(st))
+code, out = prog(env, "land", "t", "--pr", "78")
+assert code == 2 and "unreadable" in out and not merged(d), out
+assert prog(env, "land-check", "t", "--pr", "78")[0] == 1
+
+# 1f. Any exit 1 frees the PR's own lock: main went red after the PR took the lane, and another PR's lock stays.
+d, env = setup({"79": pr(79, files=["compose.yaml"], behind=1), "80": pr(80)})
+verdict(d, 79, "T-79")
+assert prog(env, "land", "t", "--pr", "79")[0] == 3  # took the lane, told to update
+lock = d / "programs" / "_locks" / "o__r@main.lock"
+assert lock.exists()
+with (d / "programs" / "t" / "ledger.jsonl").open("a") as f:
+    f.write(json.dumps({"ts": "2026-09-24T00:00:00+00:00", "ev": "landed", "pr": 80, "sha": "m80"}) + "\n")
+    f.write(json.dumps({"ts": "2026-09-24T00:00:00+00:00", "ev": "main_red", "sha": "m80"}) + "\n")
+code, out = prog(env, "land", "t", "--pr", "79")
+assert code == 1 and "main is red" in out and not lock.exists(), out
+d, env = setup({"81": pr(81)})
+verdict(d, 81, "T-81")
+with (d / "programs" / "t" / "ledger.jsonl").open("a") as f:
+    f.write(json.dumps({"ts": "2026-09-24T00:00:00+00:00", "ev": "stop"}) + "\n")
+(d / "programs" / "_locks").mkdir()
+other = d / "programs" / "_locks" / "o__r@main.lock"
+other.write_text(json.dumps({"pr": 50, "program": "other", "ts": "2999-01-01T00:00:00+00:00"}))
+assert prog(env, "land", "t", "--pr", "81")[0] == 1 and other.exists(), "another PR's lock is not this land's to free"
+# A hard gh failure ends the land the same way, a transient one does not.
+d, env = setup({"84": pr(84, files=["compose.yaml"], behind=1)})
+verdict(d, 84, "T-84")
+assert prog(env, "land", "t", "--pr", "84")[0] == 3
+lock = d / "programs" / "_locks" / "o__r@main.lock"
+assert lock.exists()
+st = json.loads((d / "state.json").read_text()); st["hard_fail"] = "pr list"
+(d / "state.json").write_text(json.dumps(st))
+code, out = prog(env, "land", "t", "--pr", "84")
+assert code == 1 and "403" in out and not lock.exists(), out
+
+# A lock deletion rereads the lane: a holder gh called closed may have handed it to another PR during that call.
+sys.path.insert(0, str(HERE))
+import prog as prog_module
+prog_module.HOME = d / "programs"
+class Stub:
+    cfg, slug, logged = {"repo": "o/r"}, "t", []
+    def append(self, ev, **kw): self.logged.append(ev)
+lane = prog_module.ExclusiveLock(Stub(), "main")
+gone = {"pr": 84, "program": "t", "ts": "2999-01-01T00:00:00+00:00"}
+taken = {"pr": 85, "program": "t", "ts": "2999-01-01T00:00:00+00:00"}
+def handed_over(*_a, **_k):
+    lock.write_text(json.dumps(taken))
+    return subprocess.CompletedProcess([], 0, "MERGED\n", "")
+real_run, real_knob = prog_module.run, prog_module.knob
+prog_module.run, prog_module.knob = handed_over, lambda *_: 240
+lock.write_text(json.dumps(gone))
+assert lane.break_if_closed(gone) == taken and json.loads(lock.read_text()) == taken and not Stub.logged
+prog_module.run = lambda *_a, **_k: subprocess.CompletedProcess([], 0, "MERGED\n", "")
+assert lane.break_if_closed(taken) is None and not lock.exists() and Stub.logged == ["lock_released"]
+prog_module.run, prog_module.knob = real_run, real_knob
+
+# 1g. A merge GitHub refused in the exclusive lane leaves the lane free and passes the next PR through: parked.
+refused = pr(82, files=["compose.yaml"]); refused["stacked"] = True
+d, env = setup({"82": refused, "83": pr(83, files=["compose.yaml"])})
+verdict(d, 82, "T-82"); verdict(d, 83, "T-83")
+st = json.loads((d / "state.json").read_text()); st["stacks"] = []
+(d / "state.json").write_text(json.dumps(st))
+code, out = prog(env, "land", "t", "--pr", "82")
+assert code == 1 and "merge refused" in out, out
+assert not list((d / "programs" / "_locks").glob("*.lock")) and any(e["ev"] == "parked" and e["pr"] == 82 for e in ledger(d))
+code, out = prog(env, "land", "t", "--pr", "83")
+assert code == 0, "the refused PR holds neither the lock nor its turn: " + out
 
 # 2. The dependency root lands before the dependent; the dependent yields, then lands.
 d, env = setup({"2": pr(2), "3": pr(3)})
@@ -843,6 +1049,42 @@ def gate_setup(prs, orca_reply=None):
 def orca_calls(d, verb):
     return [c for c in json.loads((d / "state.json").read_text()).get("orca_log", []) if c[1:2] == [verb]]
 
+
+# land itself refuses what land-check holds: no gate yet, or a gate still open, merges nothing.
+d, env = gate_setup({"59": pr(59)})
+verdict(d, 59, "T-59")
+code, out = prog(env, "land", "t", "--pr", "59")
+assert code == 1 and "open the gate first" in out and not merged(d), out
+assert prog(env, "gate", "t", "--pr", "59")[0] == 0
+code, out = prog(env, "land", "t", "--pr", "59")
+assert code == 1 and "waiting for the user" in out and not merged(d), out
+
+# The gate guards a merge land would make: a PR a person already merged is still recorded.
+d, env = gate_setup({"58": pr(58)})
+verdict(d, 58, "T-58")
+st = json.loads((d / "state.json").read_text()); st["prs"]["58"].update(state="MERGED", merge_sha="m58")
+(d / "state.json").write_text(json.dumps(st))
+code, out = prog(env, "land", "t", "--pr", "58")
+assert code == 0 and "merged outside land" in out and any(e["ev"] == "landed" and e["pr"] == 58 for e in ledger(d)), out
+
+# Every layer a stack lands needs its own approval, and a newer gate voids an older approval.
+d, env = gate_setup({"56": pr(56, stacked=True), "57": pr(57, base="b56", stacked=True)})
+st = json.loads((d / "state.json").read_text()); st["stacks"] = stack_rows([[56, 57]])
+(d / "state.json").write_text(json.dumps(st))
+verdict(d, 56, "T-56"); verdict(d, 57, "T-57")
+def add_row(**row):
+    with (d / "programs" / "t" / "ledger.jsonl").open("a") as f:
+        f.write(json.dumps({"ts": "2026-09-24T00:00:00+00:00", **row}) + "\n")
+add_row(ev="approved", pr=57)
+code, out = prog(env, "land", "t", "--pr", "57")
+assert code == 1 and "#56: human-gate" in out and not merged(d), out
+add_row(ev="approved", pr=56)
+add_row(ev="gate_opened", pr=57, task="task_g", gate="gate_g")
+code, out = prog(env, "land", "t", "--pr", "57")
+assert code == 1 and "waiting for the user" in out and not merged(d), out
+assert prog(env, "land-check", "t", "--pr", "57")[0] == 1
+add_row(ev="approved", pr=57)
+assert prog(env, "land", "t", "--pr", "57")[0] == 0
 
 d, env = gate_setup({"60": dict(pr(60), title="Add the widget")})
 code, out = prog(env, "gate", "t", "--pr", "60")
