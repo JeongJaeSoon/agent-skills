@@ -497,10 +497,8 @@ def saved_decision(did):
     return {d["id"]: d for d in json.loads(orch("dump", "decision", cmd="db")[1])["decision"]}[did]
 
 
-# The access gate: before `orch db import` nothing reads or writes decisions, and no DB appears.
-code, _, err = orch("add", "--title", "Too early", "--option", "A")
-assert code == 1 and "orch db" in err and not (dec_state / store.DB_NAME).exists(), err
-assert orch("list")[0] == 1
+# Before `orch db import` no DB appears: test_store.py covers decisions.json standing in for it.
+assert orch("list")[0] == 0 and not (dec_state / store.DB_NAME).exists()
 assert orch("import", "--apply", "--rehearsal", cmd="db")[0] == 0
 assert (dec_state / "decisions.json").is_dir()  # the tombstone: older code's write_atomic fails on it
 assert orch("add", "--title", "Export format", "--body-file", str(body_file), "--option", "CSV::finance uses sheets",

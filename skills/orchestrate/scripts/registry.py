@@ -166,10 +166,12 @@ STORES = [
     Store("avatars", "D/avatars/*.png", {"pr.author": CACHE}, ("fleet:Fleet.fetch_avatars",), ("page",)),
     Store("prompts", "D/prompts/*.json", {"permission.prompt": CANONICAL}, ("permission:main",), ("fleet",),
           rule="one file per pending permission prompt"),
-    Store("decisions", "D/decisions.json", {"decision.item": REMOVED}, ("store:export_legacy",), ("nobody",),
-          rule="decisions before PR 4a; `orch db import` leaves an empty directory here so older code fails to write, "
-               "and `orch db export --legacy` writes one for a rollback"),
-    Store("decisionslock", "D/decisions.lock", {"decision.item": LOCK}, ("store:_locks",)),
+    Store("decisions", "D/decisions.json", {"decision.item": REMOVED}, ("store:export_legacy", "store:_change_file"),
+          ("nobody",),
+          rule="decisions before PR 4a, and while no DB file exists (`store:_change_file`, which `orch db import` picks "
+               "up); the import leaves an empty directory here so older code fails to write, and `orch db export "
+               "--legacy` writes one for a rollback"),
+    Store("decisionslock", "D/decisions.lock", {"decision.item": LOCK}, ("store:_locks", "store:_file_lock")),
     # -- D: agent-skills.db, every connection through store.py (check() refuses one anywhere else)
     Store("db", "D/agent-skills.db", {"db.file": CANONICAL}, ("store:import_apply", "store:restore"),
           ("fleet", "brief", "reorient"), rule="SQLite (WAL) holding the db: tables below; only `orch db import` "
