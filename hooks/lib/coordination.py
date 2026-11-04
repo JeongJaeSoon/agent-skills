@@ -72,9 +72,10 @@ def check_model_flag(cmds, cfg):
     want = config.get(cfg, "orchestrate.models.worker")
     for c in cmds:
         w = c.words
-        if not (c.name == "orca" and w[1:3] in LAUNCHES and flag(w, "--agent") == "claude" and flag(w, "--terminal") is None):
+        if not (c.name == "orca" and w[1:3] in LAUNCHES and option(w, "--agent") == "claude"
+                and option(w, "--terminal") is None):
             continue
-        have = model_value(w)
+        have = option(w, "--model")
         if not have:
             out += finding(cfg, "orchestrate.model_flag",
                            f"This `orca {' '.join(w[1:3])}` names no model, so the session runs on the account's default. "
@@ -93,16 +94,16 @@ def check_model_flag(cmds, cfg):
 TEXT_FLAGS = ("--spec", "--prompt", "--display-name", "--name", "--comment")
 
 
-def model_value(words):
-    """The `--model` value of a launch, or None. The value of a text flag (--spec, ...) is skipped whatever it says;
-    any other `--flag value` pair consumes its value unless that looks like another flag."""
+def option(words, name):
+    """The value of `name` in a launch's words, or None. The value of a text flag (--spec, ...) is skipped whatever
+    it says; any other `--flag value` pair consumes its value unless that looks like another flag."""
     i = 0
     while i < len(words):
         w, nxt = words[i], words[i + 1] if i + 1 < len(words) else None
-        if w == "--model":
+        if w == name:
             return "" if nxt is None or nxt.startswith("--") else nxt
-        if w.startswith("--model="):
-            return w[len("--model="):]
+        if w.startswith(name + "="):
+            return w[len(name) + 1:]
         i += 2 if w in TEXT_FLAGS or (w.startswith("--") and "=" not in w and nxt and not nxt.startswith("--")) else 1
     return None
 
