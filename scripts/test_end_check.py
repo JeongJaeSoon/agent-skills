@@ -274,6 +274,9 @@ def trash_run(**facts):
 trashed = []
 assert trash_run() == trash_run(open_prs=[{"number": 1}]) == ["/wt/card/x/__pycache__"], trashed
 assert trash_run(other_agents=["term_x"]) == trash_run(main=True) == [], trashed
+assert trash_run(other_agents=None) == trash_run(main=None) == [], trashed
+facts_once = dict(CLEAN, path="/wt/card")
+assert end_check.trash_caches(facts_once) and end_check.trash_caches(facts_once) and trashed == ["/wt/card/x/__pycache__"], trashed
 
 
 def refuse_trash(*paths):

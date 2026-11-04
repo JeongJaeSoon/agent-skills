@@ -377,6 +377,7 @@ def trash_caches(f):
         except (RuntimeError, OSError) as e:
             print(f"[{ME}] moving build caches to the trash failed: {e}", file=sys.stderr)
             return False
+        f["caches"] = []
     return True
 
 
@@ -432,7 +433,8 @@ def main(argv):
                      indent=1))
     # On every verdict, before the send, while nothing above can close this session: a card kept for its open PR
     # reaches the cleaners too once the PR merges, and they read an untracked cache as dirty for good.
-    if opts.get("--trash-caches") and not (facts.get("main") or facts.get("other_agents")) and not trash_caches(facts):
+    if opts.get("--trash-caches") and facts.get("main") is False and facts.get("other_agents") == [] \
+            and not trash_caches(facts):
         return 4
     return apply(verdict, facts, mode, opts, me) if opts.get("--apply") else 0
 
