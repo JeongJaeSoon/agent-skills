@@ -166,7 +166,7 @@ def old_acts(rule_name, own=None, now=None):
     except FileNotFoundError:
         last = None  # the sweep never had a good round
     except (OSError, ValueError, TypeError, KeyError, OverflowError):
-        return False, f"{path} 을 읽지 못해 {rule_name} 을 누가 처리할지 모름"
+        return False, f"{OWNER_UNREADABLE}: {path} 을 읽지 못해 {rule_name} 을 누가 처리할지 모름"
     if last is None or (now or time.time()) - last > FALLBACK_INTERVALS * interval:
         return True, f"sweep 회차가 {FALLBACK_INTERVALS}주기 넘게 없어 옛 주체가 {rule_name} 을 대신 처리"
     return False, f"{rule_name} 은 sweep 소유(세대 {own.get('generation')})"
@@ -178,7 +178,7 @@ def check_owner(rule_name, notes=None):
     try:
         go, why = old_acts(rule_name, ownership())
     except Unreadable as e:
-        return f"소유권 파일을 읽지 못함: {e}"
+        return f"{OWNER_UNREADABLE}: {e}"
     if go and why and notes is not None:
         notes.append(why)
     return None if go else why
@@ -301,7 +301,15 @@ def keep(i, protect, cleaner="reap", rule_name=None, notes=None):
         return check_owner(rule_name if rule_name is not None else rule(i, cleaner), notes) or \
             item(i, protect, cleaner)
     except Exception as e:
-        return f"검사를 마치지 못함({type(e).__name__}: {str(e)[:120]})"
+        return f"{CHECK_FAILED}({type(e).__name__}: {str(e)[:120]})"
+
+
+CHECK_FAILED, OWNER_UNREADABLE = "검사를 마치지 못함", "소유권 파일을 읽지 못함"
+
+
+def check_error(why):
+    """True when keep()'s reason is a check that could not run, not a guard that decided to leave the target."""
+    return bool(why) and why.startswith((CHECK_FAILED, OWNER_UNREADABLE))
 
 
 def item(i, protect, cleaner="reap"):
