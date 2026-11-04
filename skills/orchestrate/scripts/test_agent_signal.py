@@ -39,7 +39,21 @@ def slow(*x, **k):
     raise subprocess.TimeoutExpired("claude", 10)
 assert a.read(slow)[1].startswith("TimeoutExpired")
 
-# roles.session_for is the only tie; here a stand-in with its contract: (row, None) or (None, why).
+# The real roles.session_for: the SessionStart record is the only tie, and a row with the card's cwd is no match.
+import roles  # noqa: E402
+assert a.session_for is roles.session_for
+started = 1_000_000  # ms
+roles.record_terminal("term_a", "s-a", "/w/a", 2000.0)
+roles.record_terminal("term_b", "s-b", "/w/b", 2000.0)
+roles.record_terminal("term_c", "s-c", "/w/c", 1.0)
+real = [row("s-a", status="busy", startedAt=started), row("s-b", state="blocked", kind="background", startedAt=started),
+        row("s-c", status="idle", startedAt=started), {**row("s-z", status="idle"), "cwd": "/w/term_d"}, "x"]
+got, warned = a.readings([term(h) for h in ("term_a", "term_b", "term_c", "term_d", "term_f")], real, None)
+assert got["term_a"]["agents"] == "busy", got
+assert not any(got[h]["agents"] for h in ("term_b", "term_c", "term_d", "term_f")), got
+assert all(a.NO_SIGNAL in a.evidence(got[h]) for h in ("term_b", "term_c", "term_d", "term_f")), got
+
+# From here a stand-in with the same contract: (row, None) or (None, why).
 rec = {"h1": "s1", "h2": "s2", "h3": "s3", "h4": "s4", "h5": "gone"}
 
 

@@ -13,11 +13,7 @@ not prove which session a terminal runs, so a terminal with no record has no sig
 import contextlib, fcntl, json, os, pathlib, subprocess, sys, time
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[3] / "hooks"))
-try:
-    from roles import session_for
-except ImportError:  # an install without the record: every card is no signal, never a guess
-    def session_for(handle, rows):
-        return None, "no session record"
+from roles import session_for  # noqa: E402
 
 STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()
 LOG = STATE / "agent-signal.jsonl"
