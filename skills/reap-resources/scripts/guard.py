@@ -166,7 +166,7 @@ def old_acts(rule_name, own=None, now=None):
     except FileNotFoundError:
         last = None  # the sweep never had a good round
     except (OSError, ValueError, TypeError, KeyError, OverflowError):
-        return False, f"{path} 을 읽지 못해 {rule_name} 을 누가 처리할지 모름"
+        return False, f"{OWNER_UNREADABLE}: {path} 을 읽지 못해 {rule_name} 을 누가 처리할지 모름"
     if last is None or (now or time.time()) - last > FALLBACK_INTERVALS * interval:
         return True, f"sweep 회차가 {FALLBACK_INTERVALS}주기 넘게 없어 옛 주체가 {rule_name} 을 대신 처리"
     return False, f"{rule_name} 은 sweep 소유(세대 {own.get('generation')})"

@@ -318,6 +318,22 @@ guard.check_owner = lambda rule_name, notes=None: "소유권 파일을 읽지 �
 out = reap_plan([ITEM], [])
 assert "소유권 파일을 읽지 못함" in out and CODE[0] == 1 and len(acted) == before, (out, CODE[0])
 guard.check_owner = saved_check
+# (5) the real path: the sweep owns the rule and sweep-last.json cannot be read (PermissionError from read_text).
+OWN.write_text(json.dumps({"generation": 1, "rules": {"trash:tmpdir": "sweep"}}))
+before = len(acted)
+saved_read = pathlib.Path.read_text
+pathlib.Path.read_text = lambda self, *a, **k: denied() if self.name == "sweep-last.json" else saved_read(self, *a, **k)
+try:
+    out = reap_plan([ITEM], [])
+finally:
+    pathlib.Path.read_text = saved_read
+    OWN.unlink()
+assert "소유권 파일을 읽지 못함" in out and CODE[0] == 1 and len(acted) == before, (out, CODE[0])
+# (6) the protect list cannot be read: nothing acted on, exit 1.
+(tmp / "protect.txt").write_text("nonsense line\n")
+(tmp / "config.json").write_text(json.dumps({"reap-hard": {"protect_file": str(tmp / "protect.txt")}}))
+out = reap_plan([ITEM], [])
+assert "아무것도 하지 않았다" in out and CODE[0] == 1 and len(acted) == before, (out, CODE[0])
 # A guard that merely keeps a target (protect list) is not an error.
 (tmp / "protect.txt").write_text(f"path {tmp / 'x'}\n")
 (tmp / "config.json").write_text(json.dumps({"reap-hard": {"protect_file": str(tmp / "protect.txt")}}))
