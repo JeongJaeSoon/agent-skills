@@ -11,7 +11,9 @@ PROGRAM: <slug>
 GOAL        One sentence: the outcome, executable by someone with no access to this chat.
 SCOPE       Paths this unit may write and paths it may not. Its own worktree and branch.
             Scratch root: <none, or the one path outside the worktree it may write, e.g. a
-            directory a VM or container mounts>.
+            directory a VM or container mounts>. Never none when VERIFY bind-mounts host files
+            into a container or VM: name a directory the VM really shares (read its mount list),
+            since a worktree or temporary path it does not share mounts as an empty directory.
             Downloaded logs and artifacts go to <approved system temporary directory>, outside
             every git worktree. Resolve the platform temporary root (for example TMPDIR) and
             name a task-specific directory in this SCOPE; do not assume an unset variable is a path.
@@ -202,7 +204,8 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             and target only, without its command. Paste
             this paragraph, from "An act refused" through "run it again.", verbatim into every
             subagent prompt you write, including tracker and notes delegates: a summary drops
-            the forms it lists. Taking the path this
+            the forms it lists. That end is the paragraph's last sentence, the one that begins
+            "A failing check"; a copy that stops at "another way" drops half of it. Taking the path this
             brief already names for that act (`orch land` for a merge, in a worker's brief), when no
             human refused the act, is not a retry, nor is doing the act once more after the human added a rule for it or approved it in
             the refused session's own chat. Nor is the restart of a unit whose subagent's Edit or
