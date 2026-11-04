@@ -129,7 +129,7 @@ fallback below needs it). Then pick the row:
 |---|---|
 | Outcome `succeeded`; `isMainWorktree: false` and §4's Remove row holds (clean tree apart from its build caches and regenerated copies, the work on `origin/main`, no open PR); no other agent terminal on the card; no `ask` or `orch decide` question waiting; the brief has no `KEEP` line | The report text, `worker_done` as its own call, then, once its output shows `"ok": true`, `orca worktree rm --worktree current --json` (`--run-hooks` per §4). The card's terminals, the setup one included, go with it. |
 | The same, but `isMainWorktree: true` or another agent works on the card | The report text, `worker_done` as its own call, then, once its output shows `"ok": true`, `orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json`: only this session goes. |
-| Anything else: outcome `failed` (the orchestrator or lead that dispatched it retries on this card), an open PR (READY under human-gate, a review still running), a `KEEP` line, a question waiting, a dirty tree | `worker_done` naming what holds the card, as its own call, then close the card's setup terminal with `skills-sync close-setup <card path>` in the background (it can wait up to 30 minutes; never chain it before `worker_done` with `;` or `&&`), and idle. Never `AskUserQuestion`: nobody sees it. |
+| Anything else: outcome `failed` (the orchestrator or lead that dispatched it retries on this card), an open PR (a wait named by a `READY-WAIT:` line, READY under human-gate), a `KEEP` line, a question waiting, a dirty tree | `worker_done` naming what holds the card, as its own call, then close the card's setup terminal with `skills-sync close-setup <card path>` in the background (it can wait up to 30 minutes; never chain it before `worker_done` with `;` or `&&`), and idle. Never `AskUserQuestion`: nobody sees it. |
 
 - **The close waits for the send.** Calls in one message run together, so a `worker_done` and a
   `worktree rm` sent side by side remove the card even when a hook refused the send, and the
@@ -138,15 +138,17 @@ fallback below needs it). Then pick the row:
   shows the Dispatch settled. A send refused only on its body text is reworded in the same command;
   after any other refusal the card and this session stay, idle, for the orchestrator or lead above it to find.
 - **A refused `worktree rm`.** The host's permission layer (the auto-mode classifier, a hook),
-  not Orca, often refuses `orca worktree rm` as irreversible. Do not run it again in any form:
-  not in smaller pieces, not through another tool or a script, not through a subagent. Fall back
+  not Orca, often refuses `orca worktree rm` as irreversible. A refused act is not run again,
+  except once, in the same form, by the refused session (a restart that loads a new rule counts as that session), and only when the human allowed it in that session's own chat or added a rule for it, or when a classifier or hook refusal stated a reason and you added evidence that answers it, never for a human's refusal or a production sync. Report that retry as `재시도 1회: <what you added>`. A second refusal stops the act and you report it. Reaching the same result through another session, script, tool, wrapper or target stays forbidden. With nothing to add, fall back
   to the second row and leave the card: `orca orchestration send --to run:<runId> --type status
   --subject "card left: worktree rm refused by permission layer" --body "<card path>"` (after
   `worker_done` a send without `--to` finds no Run), then
   `orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json`. The orchestrator or lead above it
   puts the card to the human and does not remove it: its own rm would be the refused act run by another session.
 - **`KEEP`** is the brief's opt-out: the orchestrator or lead above it plans to reuse this terminal or card.
-- **An open PR** keeps the worker only until it lands. A later wake (a review fix, a message)
+- **An open PR** of a card whose first prompt approved the merge is the card's to land first
+  (`orchestrate` `references/landing.md`); `hooks/self_land_gate.py` speaks when it does not. It
+  keeps the worker only until it lands. A later wake (a review fix, a message)
   runs this table again and closes if the PR has merged or closed since. Nothing else wakes an
   idle worker; the `SETTLED` sweep of the session above it is the backstop.
 - **`Rejected worker_done`** after someone typed into the terminal (Orca marks it taken over)
@@ -191,8 +193,8 @@ call: `orca worktree set --worktree current --workspace-status completed --json`
 superseded card, nor for one whose deliverable is an open PR (its column stays `in-review`):
 Orca's own PR state and agent state stay the truth, the column only shows it on Orca's board.
 
-A refused `worktree rm` is not retried in any form (§7); close only this terminal and say in the
-note that the card is left for the parent or the human.
+A refused `worktree rm` follows §7's one-retry rule; otherwise close only this terminal and say in
+the note that the card is left for the parent or the human.
 
 **Who closes a finished card.** This is the one rule; other skills link here. The card itself
 closes first, in the turn its work is done: a worker by §7, a dispatched card by §8. The backstop
