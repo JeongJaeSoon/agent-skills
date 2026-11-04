@@ -30,7 +30,7 @@ class World:
     count = 0
 
     def __init__(self, stalls=None, workers=None, mail=(), gates=(), routes=("route: terminal\nreason: off",), nudge=0,
-                 refused="refused at a dialog"):
+                 refused="refused at a dialog", mail_wakes=False):
         World.count += 1
         self.slug = f"p{World.count}"
         d = prog.HOME / self.slug
@@ -43,6 +43,7 @@ class World:
         self.workers, self.mail, self.gates = [row()] if workers is None else workers, list(mail), list(gates)
         self.routes, self.nudge, self.refused = list(routes), nudge, refused
         self.sent, self.synced, self.inbox, self.fail = [], [], [], set()
+        self.mail_wakes, self.last_output = mail_wakes, 1000
         self.write_state()
 
     def write_state(self):
@@ -55,13 +56,15 @@ class World:
             raise SystemExit("orca failed")
         if a[:2] == ("orchestration", "send"):
             self.sent.append(a)
+            self.last_output += self.mail_wakes
             return {}
         if a[:2] == ("orchestration", "inbox"):
             return {"messages": self.mail}
         if a[:2] == ("orchestration", "gate-list"):
             return {"gates": self.gates}
         if a[:2] == ("orchestration", "worker-show"):  # Orca's own shape: no zone, a space, 60 minutes before T0
-            return {"dispatch": {"id": a[a.index("--dispatch") + 1], "dispatchedAt": "2026-01-01 11:00:00"}}
+            return {"dispatch": {"id": a[a.index("--dispatch") + 1], "dispatchedAt": "2026-01-01 11:00:00"},
+                    "terminal": {"lastOutputAt": self.last_output}}
         raise AssertionError(a)
 
     def sync(self, *a):
@@ -385,6 +388,26 @@ for said in ("title shows the agent is busy", "turn in progress: ✻ Thinking"):
     assert r.skip == {"ctx_1"}
     w.sweep(21)
     assert len(w.sent) == 1 and len(w.inbox) == 1 and len(w.rows("auto_wake_escalated")) == 1, "second stop"
+
+# The turn the send started may be over by the nudge, whose idle prompt would then look ready: that nudge would wake a
+# second stop unchecked. Output since before the send means the mail arrived, so no signal is typed.
+w = World(mail_wakes=True)
+w.sweep(0)
+w.sweep(10)
+assert not any(a[0] == "nudge" for a in w.synced), w.synced
+assert w.rows("auto_wake")[0]["route"] == "mail" and not w.rows("auto_wake_failed"), w.rows("auto_wake")
+w.sweep(21)
+assert len(w.rows("auto_wake_escalated")) == 1 and not any(a[0] == "nudge" for a in w.synced), "a second stop stays the human's"
+w = World(mail_wakes=True, routes=("route: sendmessage\nto: worker\nmessage: wake abc: run your orchestration check\ncheck: x",))
+w.sweep(0)
+w.sweep(10)
+assert [a[0] for a in w.synced] == ["wake-target", "wake-reset"], "the reservation goes even with no signal typed"
+# An Orca that cannot say falls back to the signal.
+w = World()
+w.sweep(0)
+real_orca, w.orca = w.orca, lambda *a: (_ for _ in ()).throw(SystemExit("no")) if a[1] == "worker-show" else real_orca(*a)
+w.sweep(10)
+assert [a[0] for a in w.synced] == ["wake-target", "nudge"] and len(w.rows("auto_wake")) == 1, w.synced
 
 # A human inbox that cannot be written leaves no row claiming it was told: the next round tells it.
 w = World()

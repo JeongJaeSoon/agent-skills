@@ -186,9 +186,19 @@ class Failed(Exception):
     pass
 
 
+def last_output(d):
+    """When the dispatch's terminal last wrote, or None when Orca cannot say."""
+    import orca_settings
+    try:
+        return orca_settings.with_full(orca, "orchestration", "worker-show", "--dispatch", d)["terminal"]["lastOutputAt"]
+    except (SystemExit, Exception):
+        return None
+
+
 def attempt(d, handle, message):
     """Content, then the signal; the route's name, or raises Failed. What waking.md asks of a session, except that
     this process has no SendMessage, which its step 3 sends to wake-reset and the typed signal."""
+    before = last_output(d)
     orca("orchestration", "send", "--to", f"dispatch:{d}", "--type", "status", "--subject", "continue", "--body", message)
     code, out = sync("wake-target", handle)
     said = dict(l.split(": ", 1) for l in out.splitlines() if ": " in l)
@@ -197,6 +207,11 @@ def attempt(d, handle, message):
         raise Failed(f"wake-target route {route}: {said.get('reason') or out[:200]}")
     if route == "sendmessage":
         sync("wake-reset", handle)
+    # The mail often starts the turn itself. If that turn is already over, the prompt reads ready and a typed signal
+    # would wake its second stop past every check; a wrong "mail" here only sends the stop to the human.
+    after = last_output(d)
+    if None not in (before, after) and after != before:
+        return "mail"
     code, out = sync("nudge", handle, SIGNAL)
     if code != 0 and out.startswith(BUSY):  # it read idle just before the send, so the mail alone started its turn
         return "mail"
