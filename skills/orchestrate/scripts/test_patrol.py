@@ -700,6 +700,17 @@ try:
     got, notes = patrol.gather(NOW, time.time() + 100, {})
     assert got["dead_handles"] == [] and {"terminals", "handles"} <= got["failed"], got["failed"]
     assert len([n for n in notes if n.startswith("config handles")]) == 1, notes
+
+    # An unreadable config is not one with no handles: the source fails, so a standing T stays. No file is fine.
+    patrol.prog.orca_json = orca_terminals(listed)
+    conf.write_text("{not json")
+    got, notes = patrol.gather(NOW, time.time() + 100, {})
+    assert got["dead_handles"] == [] and "handles" in got["failed"], got["failed"]
+    assert patrol.own_sources(got)["handles"] == "failed" and any("agent-skills.json" in n for n in notes), notes
+    conf.unlink()
+    got, notes = patrol.gather(NOW, time.time() + 100, {})
+    assert got["dead_handles"] == [] and "handles" not in got["failed"], got["failed"]
+    assert patrol.own_sources(got)["handles"] == "ok"
 finally:
     patrol.prog.orca_json, patrol.CONFIG = orca0, conf0
 

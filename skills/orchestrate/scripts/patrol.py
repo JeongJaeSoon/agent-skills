@@ -39,7 +39,7 @@ tail of each card's session transcript, the `orch sent` log and the last pressur
                collector raises it on the dashboard)
   T  dead handle  a term_ value in ~/.claude/agent-skills.json that `orca terminal list` does not show, so what is
                sent there has no reader. The finding names the key and the value's first 12 characters and goes to
-               the orchestrator; a list Orca would not give whole leaves a note line and no finding
+               the orchestrator; a config or list that could not be read whole leaves a note line and no finding
 
 Patrol records and shows; it never types into a terminal, closes one, stops a worker or removes a card. Findings
 go to <state>/patrol.jsonl with detected_at, are cleared there when a later round no longer sees them, and are acked
@@ -96,7 +96,7 @@ CANDIDATE_BUDGET_S = 240
 AGENTS_MARGIN_S = 15  # agent_signal.read's 10 s, and the round's own writes after it
 ROUNDS_KEEP = 1000
 CURRENT = {}  # the running round's timings and failed sources, read by mark_cut
-OWN_SOURCES = ("terminals", "waits", "workers", "state", "board", "sent", "consumers")
+OWN_SOURCES = ("terminals", "waits", "workers", "state", "board", "sent", "consumers", "handles")
 IDLE_MIN = dash.IDLE_MIN
 SUPERSEDE_MIN = 30
 ORPHAN_H = 24
@@ -239,6 +239,14 @@ def consumers():
             + [{"what": f"compose {g['project']}", "cpu": g.get("cpu"), "card": g.get("card")} for g in projects])
 
 
+def read_config():
+    """The config, {} when there is no file. Unreadable raises: it does not mean the config holds no handle."""
+    try:
+        return json.loads(CONFIG.read_text())
+    except FileNotFoundError:
+        return {}
+
+
 def config_handles(node, key=""):
     """(dotted key, value) for each term_ value anywhere in the config, so a key added later needs no list here."""
     if isinstance(node, dict):
@@ -304,7 +312,8 @@ def gather(now, deadline, memo):
                 timings[source] = round(timings.get(source, 0) + time.monotonic() - t0, 2)
 
     facts["terminals"] = take("orca terminal list", lambda: terminal_rows(facts), [], "terminals")
-    facts["dead_handles"], warning = dead_handles(fleet.read_json(CONFIG), facts["terminals"],
+    config = take("agent-skills.json", read_config, {}, "handles")
+    facts["dead_handles"], warning = dead_handles(config, facts["terminals"],
                                                   "terminals" not in failed and not facts.get("terminals_cut"))
     if warning:
         notes.append(warning)
