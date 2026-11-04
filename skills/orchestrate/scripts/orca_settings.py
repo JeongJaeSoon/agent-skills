@@ -90,17 +90,43 @@ def suggestions(settings):
     return out
 
 
+def orca_call(orca=None):
+    """call(*argv): the result object of `orca <argv> --json`; RuntimeError with Orca's output when it fails."""
+    def call(*argv):
+        p = subprocess.run([orca or os.environ.get("SKILLS_SYNC_ORCA", "orca"), *argv, "--json"],
+                           capture_output=True, text=True, timeout=30)
+        if p.returncode:
+            raise RuntimeError(f"{p.stdout} {p.stderr}")
+        return json.loads(p.stdout).get("result") or {}
+    return call
+
+
 def binding():
-    """This terminal's Run (`run-current`): the run dict, None when unbound, or "unknown" outside an Orca terminal or
+    """This terminal's Run (run_current): the run dict, None when unbound, or "unknown" outside an Orca terminal or
     when Orca did not answer."""
     if not os.environ.get("ORCA_TERMINAL_HANDLE"):
         return "unknown"
     try:
-        p = subprocess.run([os.environ.get("SKILLS_SYNC_ORCA", "orca"), "orchestration", "run-current", "--json"],
-                           capture_output=True, text=True, timeout=30)
-        return (json.loads(p.stdout).get("result") or {}).get("run") if not p.returncode else "unknown"
-    except (OSError, subprocess.TimeoutExpired, ValueError, AttributeError):
+        return run_current(orca_call())
+    except (OSError, subprocess.TimeoutExpired, ValueError, AttributeError, RuntimeError):
         return "unknown"
+
+
+def run_of(result):
+    """The Run in a `run-current` result as a dict, None when unbound: `run` is the full record, `runId` the concise
+    view, and either one null is Orca saying unbound. A result with neither key is read as unbound too, with one line
+    on stderr so a changed answer shows."""
+    result = result if isinstance(result, dict) else {}
+    if "run" not in result and "runId" not in result:
+        print(f"[orca_settings] run-current named neither run nor runId (keys: {sorted(result)}): read as unbound",
+              file=sys.stderr)
+    run = result.get("run") or result.get("runId")
+    return run if isinstance(run, dict) else {"id": run} if isinstance(run, str) else None
+
+
+def run_current(call, *argv):
+    """run_of(`orchestration run-current <argv>`) read with --full. call as for with_full."""
+    return run_of(with_full(call, "orchestration", "run-current", *argv))
 
 
 def worker_terminal(row):
@@ -196,15 +222,8 @@ def own_dispatch(orca=None, failed=None):
     `run-current` is null), else None, or `failed` when worker-list did not answer. Unbound, worker-list spans every
     Run; only active terminals can be this one."""
     me = os.environ.get("ORCA_TERMINAL_HANDLE")
-
-    def call(*argv):
-        p = subprocess.run([orca or os.environ.get("SKILLS_SYNC_ORCA", "orca"), *argv, "--json"],
-                           capture_output=True, text=True, timeout=30)
-        if p.returncode:
-            raise RuntimeError(f"{p.stdout} {p.stderr}")
-        return json.loads(p.stdout).get("result") or {}
     try:
-        for rows, _, _ in worker_list(call, "--terminal-state", "active", "--limit", "100") if me else ():
+        for rows, _, _ in worker_list(orca_call(orca), "--terminal-state", "active", "--limit", "100") if me else ():
             mine = next((w for w in rows if worker_terminal(w) == me), None)
             if mine:
                 return mine

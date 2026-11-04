@@ -14,6 +14,8 @@ AGENT_SKILLS_CONFIG_DIR (default ~/.config/agent-skills).
 import datetime, importlib.util, json, os, pathlib, re, shutil, subprocess, sys
 
 REPO = pathlib.Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(REPO / "skills" / "orchestrate" / "scripts"))
+import orca_settings  # noqa: E402
 UPSTREAM = "https://github.com/JeongJaeSoon/agent-skills"
 MARKET = "jeongjaesoon"
 MARKET_ID = f"agent-skills@{MARKET}"
@@ -232,11 +234,14 @@ def check_orca(settings, run=run, environ=os.environ):
                         f"update-config 로 env 의 {TITLE_OFF} 제거"))
     if not environ.get("ORCA_TERMINAL_HANDLE"):
         return rows + [row("info", "Orca Run 바인딩", "Orca 터미널 밖 (알림 없음)", "오케스트레이터는 Orca 터미널에서 띄운다")]
-    rc, out = run(["orca", "orchestration", "run-current", "--json"])
+    rc, out = run(["orca", "orchestration", "run-current", "--json"])  # only the id is read: the concise view has it
     try:
-        bound = (json.loads(out).get("result") or {}).get("run")
+        answer = json.loads(out) if not rc else None
     except ValueError:
+        answer = None
+    if not isinstance(answer, dict):
         return rows + [row("warn", "Orca Run 바인딩", f"run-current 를 읽지 못함 (rc {rc})", "! orca orchestration run-current --json")]
+    bound = orca_settings.run_of(answer.get("result"))
     if bound:
         return rows + [row("ok", "Orca Run 바인딩", f"이 터미널 → {bound.get('id')}")]
     return rows + [row("info", "Orca Run 바인딩", "이 터미널에 묶인 Run 없음 (Run 메일 알림이 안 뜬다)",
