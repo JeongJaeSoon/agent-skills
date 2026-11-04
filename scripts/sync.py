@@ -969,12 +969,17 @@ def broadcast_locked(kind, dry_run=False, only=None):
         pending = dict(pending, done=[], failed={}, head=head, since=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
     queued = pending.get("kind")
     kind = max(kind, queued if queued in ORDER else "plugins", key=ORDER.index)  # unreadable: the safe superset
+    stamp = plugins_updated()
     try:
-        updated = datetime.datetime.strptime(pending.get("since"), "%Y-%m-%dT%H:%M:%S%z").timestamp() < plugins_updated()
+        updated = datetime.datetime.strptime(pending.get("since"), "%Y-%m-%dT%H:%M:%S%z").timestamp() < stamp
     except (TypeError, ValueError):
         updated = False
-    if kind and updated:  # a plugin updated after the change needs /reload-plugins, which /reload-skills does not do
+    if kind and updated:
+        # A plugin updated after the change needs /reload-plugins, which /reload-skills does not do. Sessions marked
+        # done before that update reloaded without it, so a new update stamp clears them.
         kind = "plugins"
+        if pending.get("plugins_at") != stamp:
+            pending = dict(pending, done=[], plugins_at=stamp)
     try:
         listed = [t for t in orca("terminal", "list")["terminals"]
                   if t.get("agentIdentity") == "claude" and t.get("connected") and t.get("writable")]
@@ -1029,7 +1034,8 @@ def broadcast_locked(kind, dry_run=False, only=None):
     if only:  # the other sessions were not tried: leave their entries as they are
         if path.exists():
             rest = {h: v for h, v in pending.get("failed", {}).items() if h != only}
-            write_json(path, dict(pending, done=sorted((done | set(pending.get("done", []))) - set(failed)), failed={**rest, **failed}))
+            write_json(path, dict(pending, kind=kind, done=sorted((done | set(pending.get("done", []))) - set(failed)),
+                                  failed={**rest, **failed}))
         return 1 if failed else 0
     if failed:
         write_json(path, dict(pending, kind=kind, done=sorted(done & set(terms)), failed=failed))

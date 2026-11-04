@@ -413,8 +413,9 @@ def test_plugin_update_and_terminal():
               (code, sent, out.getvalue()))
         check("a plugin updated after the change raises the queued skills reload to plugins",
               sent == [["after", "/reload-plugins"]], sent)
-        check("the send keeps the queue's other entries",
-              kept["done"] == ["after", "gone"] and kept["failed"] == {"busy": {"reason": "typing"}}, kept)
+        check("the send saves the raised kind, clears done for the new update and keeps the failed entries",
+              kept["kind"] == "plugins" and kept["done"] == ["after"] and kept["plugins_at"] > 0
+              and kept["failed"] == {"busy": {"reason": "typing"}}, kept)
         # The named session cannot be reached: it leaves done and is recorded as failed, the rest stays.
         cur = json.loads(st.read_text())
         cur["terms"]["after"]["screens"] = [PERMISSION]
@@ -423,8 +424,8 @@ def test_plugin_update_and_terminal():
         with contextlib.redirect_stdout(io.StringIO()):
             code = sync.broadcast(None, dry_run=False, only="after")
         kept = json.loads(pending_file.read_text())
-        check("a named send that fails leaves the target pending and the other entries alone",
-              code == 1 and kept["done"] == ["gone"] and set(kept["failed"]) == {"after"}, kept)
+        check("a named send that fails leaves the target pending",
+              code == 1 and kept["done"] == [] and set(kept["failed"]) == {"after"}, kept)
         os.environ["AGENT_SKILLS_INSTALLED_PLUGINS"] = str(tmp / "missing.json")
         cur["terms"]["after"]["screens"] = [IDLE]; cur["sent"] = []
         st.write_text(json.dumps(cur))
@@ -451,6 +452,13 @@ def test_plugin_update_and_terminal():
         sent = json.loads(st.read_text())["sent"]
         check("a plugin updated after the change puts the sessions opened before it in the broadcast",
               sorted(h for h, _ in sent) == ["before", "between"], sent)
+        # A session done under a skills reload before the plugin update gets the plugins reload too.
+        st.write_text(json.dumps({"terms": terms, "worktrees": worktrees, "sent": []}))
+        pending_file.write_text(json.dumps({"kind": "skills", "since": since, "done": ["before"], "head": head}))
+        sync.broadcast(None, dry_run=False)
+        sent = json.loads(st.read_text())["sent"]
+        check("a session done before the plugin update is sent the plugins reload again",
+              sorted(sent) == [["before", "/reload-plugins"], ["between", "/reload-plugins"]], sent)
     finally:
         for k, v in old.items():
             os.environ.pop(k) if v is None else os.environ.__setitem__(k, v)
