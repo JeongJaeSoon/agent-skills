@@ -305,6 +305,16 @@ class Restarted(unittest.TestCase):
         self.assertEqual(len(out), 1)
         self.assertIn("--terminal term_new", out[0])
 
+    def test_a_dispatch_that_reported_after_the_abandoned_one_proves_a_resume(self):
+        live = [{"handle": "term_new", "agentIdentity": "claude"}]
+        old = self.row("d1", "abandoned", projection={"evidence": {"lastObservedAt": 100}})
+        for stamp, expect in ((200, 0), (50, 1)):  # resumed and finished on another Run / an older worker of the terminal
+            done = self.row("d_done", "completed", "retained", handle="term_new", projection={"evidence": {"lastObservedAt": stamp}})
+            done["resource"] = {"worktreeId": "repo::/elsewhere"}
+            orca = Orca(run="run_1", workers=[old, done], here=live, runs=("run_1",))
+            out = does(run("lead", "acme", "run_1", orca=orca, procs=wait_proc(200, "orch wait acme")))
+            self.assertEqual(len(out), expect, stamp)
+
     def test_a_cut_short_terminal_list_issues_no_recovery_command(self):
         orca = Orca(run="run_1", workers=[self.row("d1", "abandoned")], here=[])
         orca.truncated = True

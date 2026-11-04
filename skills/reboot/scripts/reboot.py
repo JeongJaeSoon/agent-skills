@@ -146,14 +146,22 @@ def card_agent(call, worktree_id):
     return next((t.get("handle") for t in terms if t.get("agentIdentity") and t.get("handle")), None)
 
 
-def has_dispatch(call, handle):
+def observed(w):
+    return ((w.get("projection") or {}).get("evidence") or {}).get("lastObservedAt") or 0
+
+
+def has_dispatch(call, handle, since=0):
     """Whether a Dispatch of any Run is on the terminal. worker-list is scoped to this terminal's Run, so every page
     of run-list is read, Run by Run: the resume may have been made from another Run. OrcaError when a read fails."""
     for res, _ in orca_settings.pages(call, "run-list", error=OrcaError):
         for r in res.get("runs") or []:
             for w in orca_settings.all_workers(call, "--run", r.get("id"), "--limit", "100", error=OrcaError):
-                if orca_settings.worker_terminal(w) == handle and w.get("dispatchStatus") not in RESTART_LOST + FINISHED \
-                        and w.get("terminalState") != "released":
+                if orca_settings.worker_terminal(w) != handle or w.get("dispatchStatus") in RESTART_LOST \
+                        or w.get("terminalState") == "released":
+                    continue
+                # A Dispatch that already reported counts only when Orca saw it after the abandoned one: rows carry no
+                # creation time, and an older finished worker of the terminal proves nothing about this resume.
+                if w.get("dispatchStatus") not in FINISHED or (since and observed(w) > since):
                     return True
     return False
 
@@ -320,7 +328,7 @@ def check_workers(run, call, lead_dispatch=None, me=None):
         if abandoned:  # Orca settled it when its terminal went: there is nothing to stop or retry, only a session to resume
             try:
                 agent = card_agent(call, wt)
-                resumed = bool(agent) and has_dispatch(call, agent)
+                resumed = bool(agent) and has_dispatch(call, agent, observed(w))
             except (OrcaError, RuntimeError, SystemExit) as e:  # unreadable is not "nothing there": no command from a guess
                 out.append(("info", f"worker {d} (task {task}) is abandoned, but Orca could not say whether its worktree "
                                     f"already runs a resumed session ({e}): run this check again"))
