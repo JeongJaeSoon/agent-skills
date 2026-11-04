@@ -284,7 +284,10 @@ br = json.loads(urllib.request.urlopen(f"{base}/api/fleet/brief").read())
 assert "리드·카드 행 없음" in br["text"].splitlines()[0], br
 dash_demo.seed_board()
 br = json.loads(urllib.request.urlopen(f"{base}/api/fleet/brief").read())
-assert "| 🔴 | 로그인 개편 | #41 ? |" in br["text"] and br["width_ok"] is True and "snapshot" not in br, br
+# The demo's PRs are not collected: a row whose PR state is unknown stops at ❔ (rowstate rule 1), before 🔴.
+assert "| ❔ | 로그인 개편 | #41 ? |" in br["text"] and br["width_ok"] is True and "snapshot" not in br, br
+# Every row and list item is placed once: the page's buttons and the report's text agree.
+assert br["duplicates"] == [] and br["missing"] == [] and br["placement"], br
 # The Brief carries the stage table, read on each poll: rows nest under their group with a depth, and a write shows
 # at once. The Work page and its endpoint are gone.
 wk = br["stages"]
