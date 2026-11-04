@@ -13,7 +13,7 @@ An entry names a card by path, folder inode and, where the filesystem has it, bi
 path is a new card, and a card whose folder is gone needs nothing. A folder that exists but cannot be read stays
 recorded. Stdlib only: orchestrate's prog.py imports it too.
 """
-import json, os, pathlib, shlex, sys, time
+import json, math, os, pathlib, shlex, sys, time
 
 NAME = "rm-refused.jsonl"
 
@@ -62,8 +62,10 @@ def read(state=None):
             continue
         try:
             e = json.loads(line)
-            num = lambda x: x is None or (isinstance(x, (int, float)) and not isinstance(x, bool))
-            if not isinstance(e["path"], str) or not num(e.get("ino")) or not num(e.get("born")):
+            ino_ok = e.get("ino") is None or (isinstance(e["ino"], int) and not isinstance(e["ino"], bool))
+            born_ok = e.get("born") is None or (isinstance(e["born"], (int, float)) and not isinstance(e["born"], bool)
+                                                and math.isfinite(e["born"]))
+            if not isinstance(e["path"], str) or not ino_ok or not born_ok:
                 return None  # a row with a field of the wrong type is no evidence the card is new
             p = real(e["path"])
         except (ValueError, KeyError, TypeError):

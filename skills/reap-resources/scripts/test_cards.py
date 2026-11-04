@@ -159,7 +159,8 @@ assert rm_refused.read(refused_state) is None
 (refused_state / rm_refused.NAME).unlink()
 (refused_state / rm_refused.NAME).write_text(json.dumps({"path": None, "ino": 1}) + "\n")
 assert rm_refused.read(refused_state) is None
-for bad in ({"ino": str(ino)}, {"ino": ino, "born": "yesterday"}, {"ino": True}):  # round 3: wrong-typed identity
+for bad in ({"ino": str(ino)}, {"ino": ino, "born": "yesterday"}, {"ino": True}, {"ino": ino + 0.5},
+            {"ino": ino, "born": float("nan")}):  # rounds 3-4: wrong-typed identity (NaN is written as a bare token)
     (refused_state / rm_refused.NAME).write_text(json.dumps({"path": CARD, **bad}) + "\n")
     assert rm_refused.read(refused_state) is None, bad
 (refused_state / rm_refused.NAME).write_text("{not json\n")
