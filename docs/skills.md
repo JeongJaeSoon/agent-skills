@@ -645,7 +645,7 @@ hook 자신의 판정이 예외를 내면 그 호출은 통과시키고, 경고�
 `hooks/decision_relay.py`(PreToolUse의 Bash). 모델을 부르지 않는다. 오케스트레이터나 리드의 본 대화가 `orca terminal send`, `orca orchestration reply`, `orca orchestration send`(`worker_done` 제외)로 보내는 본문을 본다. 본문은 리터럴 `--text`·`--body`이거나 `--body "$(cat /절대/경로)"`의 파일이다.
 
 - `오너`가 있는 줄이나 그 다음 줄에 인용(`"…"`, `“…”`, `「…」`, `>` 줄)이 있고, 그 인용이 기록되어 있지 않으면 알린다. 막지 않는다.
-- 기록됐다고 보는 경우: 본문의 `오너(dN`이 done 결정을 가리키고 저장된 답 전체가 인용과 같을 때(공백 차이는 무시), 또는 이번 턴의 앞선 호출에서 `orch decide answer`·`orch decide done`이 오류 없이 끝났을 때. 지금 호출은 증거가 아니다.
+- 기록됐다고 보는 경우: 그 줄의 `오너(dN`이 done 결정을 가리키고 저장된 답 전체가 인용과 같을 때(공백 차이는 무시), 또는 이번 턴의 앞선 호출이 `orch decide answer`·`orch decide done` 하나만 돌려 기록 줄을 출력했을 때. 지금 호출은 증거가 아니다.
 - 수준 `guard.decision_relay`: `warn`(기본), `off`. 여러 줄에 걸친 따옴표 인용은 보지 못한다. 오류는 지나가게 하고 `guard-errors.jsonl`에 남긴다.
 
 ### 권한 창 기록

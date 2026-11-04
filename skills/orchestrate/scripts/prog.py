@@ -3521,7 +3521,7 @@ def register_decisions(items):
         try:
             d, answered = fleet.decision_ensure(item, os.environ.get("ORCA_TERMINAL_HANDLE"))
             if answered:
-                print(f"--decision skipped, {d['id']} already has its answer: {fleet.decision_cite(d)}", file=sys.stderr)
+                print(f"--decision skipped: {d['id']} already has its answer (orch decide show {d['id']})", file=sys.stderr)
         except Exception as e:
             left.append(f"(미등록) {item}")
             errors.append(str(e))

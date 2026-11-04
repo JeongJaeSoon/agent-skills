@@ -2621,7 +2621,6 @@ def inbox_resolve(key):
 
 DECISION_BODY_MAX = 4000
 DECISION_ANSWER_MAX = 1900  # the page's answer box; "decision <id>: " plus this stays inside send()'s 2000
-DECISION_ITEM_MAX = 600  # a brief's --decision item shown whole, with its options, recommendation and default
 DECISION_REPEAT_H = 24
 
 
@@ -2679,7 +2678,7 @@ def decision_ensure(item, handle=None):
             at = parse(d.get("closed_at"))
             if d["status"] == "done" and d.get("answer") and at and (now - at).total_seconds() < DECISION_REPEAT_H * 3600:
                 return d, True
-        return _new_decision(store, _one_line(item, DECISION_ITEM_MAX), text, handle=handle), False
+        return _new_decision(store, text, text, handle=handle), False  # the report prints the title, so all of it
     return change_decisions(ensure)
 
 

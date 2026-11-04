@@ -21,12 +21,13 @@ FAILS = []
 def transcript(*calls):
     """A transcript of this turn: (command, is_error or None for no result yet) in order."""
     lines = [PROMPT]
-    for i, (cmd, err) in enumerate(calls):
+    for i, (cmd, err, *printed) in enumerate(calls):
         lines.append({"type": "assistant", "message": {"content": [
             {"type": "tool_use", "id": f"t{i}", "name": "Bash", "input": {"command": cmd}}]}})
         if err is not None:
             lines.append({"type": "user", "toolUseResult": {}, "message": {"content": [
-                {"type": "tool_result", "tool_use_id": f"t{i}", "is_error": err, "content": "x"}]}})
+                {"type": "tool_result", "tool_use_id": f"t{i}", "is_error": err,
+                 "content": printed[0] if printed else 'd1 2026-11-04T00:00:00Z by term_0FAKE1: "x"'}]}})
     path = TMP / f"tx-{abs(hash(calls))}.jsonl"
     path.write_text("\n".join(json.dumps(x) for x in lines))
     return str(path)
@@ -94,10 +95,18 @@ check("a part of the stored answer is not it: warns", warned(SEND + """'오너(%
 check("an id with another answer: warns", warned(SEND + """'오너(%s, 2026-11-04): "placeholder words"'""" % did))
 check("an id that is not done: warns", warned(SEND + """'오너(d999, 2026-11-04): "진행하지 마세요"'"""))
 check("a bare id elsewhere does not excuse: warns", warned(SEND + """'이전 %s 참고. 오너: "진행하지 마세요"'""" % did))
+other = fleet.decision_add("Other")["id"]
+fleet.decision_close(other, "done", "placeholder other")
+check("two citations swapped: warns", warned(SEND + """'오너(%s): "placeholder other"\n\n세부\n\n오너(%s): "진행하지 마세요"'""" % (did, other)))
+check("two citations in place: quiet", hook(SEND + """'오너(%s): "진행하지 마세요"\n\n세부\n\n오너(%s): "placeholder other"'""" % (did, other)) is None)
+check("a blockquote on the owner's line: warns", warned(SEND + "'> 오너: placeholder words'"))
+check("a relay shown inside single quotes is not read", hook(
+    f'''orca orchestration send --to dispatch:ctx_x --subject s --body "$BODY"; printf 'orca orchestration send --body "$(cat {body})"' ''') is None)
 
 ANSWER = "orch decide answer d1 --quote-file /x/q.md"
 check("recorded earlier this turn: quiet", hook(SEND + QUOTED, tx=transcript((ANSWER, False))) is None)
-check("`done` counts: quiet", hook(SEND + QUOTED, tx=transcript(("orch decide done d1 --answer x", False))) is None)
+check("`done` counts: quiet", hook(SEND + QUOTED, tx=transcript(("orch decide done d1 --answer x", False, "d1 done"))) is None)
+check("no record line printed, as after `!` or `&`: warns", warned(SEND + QUOTED, tx=transcript((f"! {ANSWER}", False, ""), (f"{ANSWER} &", False, ""))))
 check("through python: quiet", hook(SEND + QUOTED, tx=transcript(("python3 /x/prog.py decide answer d1 --quote x", False))) is None)
 check("a failed record: warns", warned(SEND + QUOTED, tx=transcript((ANSWER, True))))
 check("a record the call's result cannot vouch for: warns", warned(SEND + QUOTED, tx=transcript((f"{ANSWER} || true", False))))

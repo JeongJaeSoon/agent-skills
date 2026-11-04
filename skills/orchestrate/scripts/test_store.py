@@ -564,7 +564,7 @@ with state("before-db-fresh-roundtrip") as sd:
 
 # Corrupt, or missing its directory: never overwritten, and the callers see the same NotMigrated as before.
 with state("before-db-corrupt") as sd:
-    for bad in ("{not json", '{"decisions": [1]}'):
+    for bad in ("{not json", '{"decisions": [1]}', '{"decisions": []}', '{"decisions": false}'):
         (sd / "decisions.json").write_text(bad)
         for call in (fleet.open_decisions, lambda: fleet.decision_add("x")):
             try:
@@ -724,6 +724,15 @@ with state("register") as sd:
     assert code == 1 and err.startswith("--decision is one line") and len(store.decisions()) == before, err
     # A label is not made up, so an owner's sentence starting with the recommendation closes nothing by itself.
     assert all(not x["options"] for x in fleet.open_decisions())
+    # A long item keeps its recommendation in the report, and a skipped one's answer stays out of stderr.
+    long_item = "긴 질문 " * 200 + "→ 추천: 유지 — 끝까지 · 답이 없으면 유지"
+    code, out, _ = brief("--decision", long_item)
+    assert code == 0 and "답이 없으면 유지" in out and "끝까지" in out, out[-300:]
+    long_id = fleet.open_decisions()[-1]["id"]
+    fleet.decision_close(long_id, "done", "placeholder quiet")
+    code, _, err = brief("--decision", long_item)
+    assert code == 0 and long_id in err and "placeholder quiet" not in err, err
+    before = len(store.decisions())
     # Too long to hold whole: two items differing past the limit must not become one decision.
     code, out, err = brief("--decision", "x" * (fleet.DECISION_BODY_MAX + 1) + " → 추천: 유지")
     assert code == 1 and "(미등록)" in out and len(store.decisions()) == before, (out[:300], err)

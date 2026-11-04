@@ -596,7 +596,7 @@ def _legacy_decisions(p):
         data = json.loads(p.read_text())
     except ValueError as e:
         return [], 1, [f"{p.name}: not JSON ({e})"]
-    if not isinstance(data, dict) or not isinstance(data.get("decisions") or {}, dict):
+    if not isinstance(data, dict) or not isinstance(data.get("decisions", {}), dict):
         return [], 1, [f"{p.name}: not an object"]
     got, bad = [], []
     for key, d in (data.get("decisions") or {}).items():

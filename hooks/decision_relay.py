@@ -5,10 +5,10 @@ decision record stands behind them. The owner's answers went to leads as message
 A relay is `orca terminal send`, `orca orchestration reply` or `orca orchestration send` (not worker_done). Its body is
 the literal --text or --body, or the file of `--body "$(cat /abs/path)"`, read and never run. It warns when a line holds
 `오너` and that line or the next holds a quote ("…", “…”, 「…」, or `>` lines) that is not recorded. Recorded means:
-- `오너(dN` in the body names a done decision whose stored answer equals the quote, spaces aside. A part of the answer
+- `오너(dN` on that line names a done decision whose stored answer equals the quote, spaces aside. A part of the answer
   does not count: "go" inside "do not go". Or
-- an earlier call of this turn ran `orch decide answer` or `orch decide done` as its only command and got a result
-  without an error. The current call is no evidence: a hook before it knows neither the order inside it nor its outcome.
+- an earlier call of this turn ran `orch decide answer` or `orch decide done` as its only command and printed its
+  record line. The current call is no evidence: a hook before it knows neither the order inside it nor its outcome.
 
 It only warns (`guard.decision_relay`: warn, default, or off); it is a prompt to record, and misses a quote that spans
 lines inside quotation marks. A check that raises lets the call through and logs to guard-errors.jsonl.
@@ -27,9 +27,11 @@ BODY_MAX = 64 * 1024
 BODY_FILE = re.compile(r'--(?:body|text)(?:=|[ \t]+)"\$\(cat[ \t]+(/[^\s"\'`$()\\;&|<>*?\[\]{}~]+)\)"')
 # A relay in the raw text, up to its separator: the place to look for that form, as shell.commands gives no offsets.
 RELAY_TEXT = re.compile(r"(?<![\w/.-])orca[ \t]+(?:terminal[ \t]+send|orchestration[ \t]+(?:reply|send))(?=[ \t])[^;&|\n]*")
+SINGLE_QUOTED = re.compile(r"'[^']*'")
 QUOTE = re.compile(r'"([^"\n]{2,}?)\\?"|“([^”\n]{2,})”|「([^」\n]{2,})」')
 CITE = re.compile(r"오너\s*\(\s*(d\d+)\b")
 DECIDE = {"orch", "orch.py", "prog.py"}
+PRINTED = re.compile(r"^d\d+ (?:done$|\S+ by )", re.M)  # `decide done`'s line, or fleet.decision_cite's
 
 
 def relay_bodies(raw):
@@ -45,7 +47,7 @@ def relay_bodies(raw):
         else:
             bodies.append(body)
     if substituted:
-        for segment in RELAY_TEXT.findall(raw):
+        for segment in RELAY_TEXT.findall(SINGLE_QUOTED.sub("''", raw)):  # text in single quotes never runs
             m = BODY_FILE.search(segment)
             p = pathlib.Path(m.group(1)) if m and "worker_done" not in segment else None
             if p and p.is_file() and p.stat().st_size <= BODY_MAX:
@@ -54,29 +56,23 @@ def relay_bodies(raw):
 
 
 def quotes(body):
-    """The quotes on a line with 오너 or the line after it; consecutive `>` lines are one quote."""
+    """(cited id or None, quote) for the quotes on a line with 오너 or the line after it; consecutive `>` lines are one
+    quote, the line with 오너 included when it is one of them."""
     lines = [l for l in body.splitlines() if l.strip()]
     found = []
     for i, line in enumerate(lines):
         if "오너" not in line:
             continue
-        found += ["".join(m.groups(default="")) for part in lines[i:i + 2] for m in QUOTE.finditer(part)]
+        cited = (CITE.search(line) or [None, None])[1]
+        found += [(cited, "".join(m.groups(default=""))) for part in lines[i:i + 2] for m in QUOTE.finditer(part)]
         block = []
-        for part in lines[i + 1:]:
+        for part in lines[i + (0 if line.lstrip().startswith(">") else 1):]:
             if not part.lstrip().startswith(">"):
                 break
             block.append(part.lstrip(" >"))
         if block:
-            found.append(" ".join(block))
+            found.append((cited, " ".join(block)))
     return found
-
-
-def cited_answers(body):
-    ids = set(CITE.findall(body))
-    if not ids:
-        return set()
-    import store
-    return {" ".join((d.get("answer") or "").split()) for d in store.decisions("done") if d["id"] in ids}
 
 
 def records(command):
@@ -89,12 +85,18 @@ def records(command):
     return bool(w) and os.path.basename(w[0]) in DECIDE and w[1:3] in (["decide", "answer"], ["decide", "done"])
 
 
+def result_text(block):
+    c = block.get("content")
+    return c if isinstance(c, str) else " ".join(x.get("text") or "" for x in c or [] if isinstance(x, dict))
+
+
 def recorded_this_turn(path):
+    """Evidence is the line the command prints once it has recorded: `!` and `&` also end a call without an error."""
     if not path or not os.path.isfile(path):
         return False
     entries = claim_check.turn(path)
     results = [b for e in entries if e.get("type") == "user" for b in claim_check.blocks(e) if b.get("type") == "tool_result"]
-    ok = {b.get("tool_use_id") for b in results if not b.get("is_error")}
+    ok = {b.get("tool_use_id") for b in results if not b.get("is_error") and PRINTED.search(result_text(b))}
     return any(b.get("type") == "tool_use" and b.get("id") in ok and b.get("name") == "Bash"
                and records((b.get("input") or {}).get("command"))
                for e in entries if e.get("type") == "assistant" for b in claim_check.blocks(e))
@@ -104,8 +106,11 @@ def unrecorded(body):
     found = quotes(body)
     if not found:
         return False
-    answers = cited_answers(body)
-    return any(" ".join(q.split()) not in answers for q in found)
+    answers = {}
+    if any(i for i, _ in found):
+        import store
+        answers = {d["id"]: " ".join((d.get("answer") or "").split()) for d in store.decisions("done")}
+    return any(answers.get(i) != " ".join(q.split()) for i, q in found)
 
 
 def main():
