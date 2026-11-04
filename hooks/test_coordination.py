@@ -117,10 +117,57 @@ for role in ("lead", "general"):
     assert "orch model worker" in model_warning(f"{START} --spec 'ABC-1 fix'", role)
 assert "orch model worker" in model_warning("orca agent launch --agent claude --worktree active")
 assert "orch model worker" in model_warning("orca worktree create --repo id:r --name x --agent claude --prompt 'ABC-1 fix'")
-for cmd in (f"{START} --spec 'x' --model sonnet", f"{START} --spec 'x' --model=opus", f"{START} --terminal term_x --spec 'x'",
+for cmd in (f"{START} --spec 'x' --model sonnet", f"{START} --spec 'x' --model=Sonnet[1m]",
+            f"{START} --spec 'x' --model claude-sonnet-5-5", f"{START} --terminal term_x --spec 'x'",
             "orca orchestration worker-start --terminal term_x --worktree id:w --spec 'x'",
             "orca orchestration worker-start --worktree new-child --agent codex --spec 'x'"):
     assert model_warning(cmd) == "", cmd
+# A --model that differs from orchestrate.models.worker warns (never blocks); an unset worker key says it compared nothing.
+for cmd in (f"{START} --spec 'x' --model=opus", f"{START} --spec 'x' --model claude-opus-4-1"):
+    assert "differs from orchestrate.models.worker (sonnet)" in model_warning(cmd), cmd
+    assert bash(cmd, "lead") in ("none", "allow"), "a warning does not block: " + cmd
+CONFIG.write_text(json.dumps({"orchestrate": {"models": {"worker": "claude-sonnet-4-6"}}}))
+assert "differs" in model_warning(f"{START} --spec 'x' --model claude-sonnet-4-5"), "two ids of one family are two models"
+assert model_warning(f"{START} --spec 'x' --model claude-sonnet-4-6-20260101") == ""
+assert model_warning(f"{START} --spec 'x' --model sonnet") == "", "a bare family matches its ids"
+CONFIG.write_text(json.dumps({"orchestrate": {"models": {"worker": "sonnet"}}}))
+assert model_warning(f"{START} --model claude-3-7-sonnet-20250219") == "", "version before the family"
+CONFIG.write_text(json.dumps({"orchestrate": {"models": {"worker": "haiku"}}}))
+assert model_warning(f"{START} --model claude-3-5-haiku-20241022") == ""
+assert "differs" in model_warning(f"{START} --model claude-3-7-sonnet-20250219")
+CONFIG.write_text(json.dumps({"orchestrate": {"models": {"worker": "claude-sonnet-4-6"}}}))
+CONFIG.write_text(json.dumps({"orchestrate": {"models": {"worker": "opusplan"}}}))
+assert "differs" in model_warning(f"{START} --spec 'x' --model opus"), "opusplan is not opus"
+CONFIG.write_text(json.dumps({"orchestrate": {"models": {"lead": "opus", "worker": ""}}}))
+assert "is not set" in model_warning(f"{START} --spec 'x' --model sonnet"), "an empty worker is unset"
+CONFIG.write_text(json.dumps({"orchestrate": {"models": {"lead": "opus", "worker": "sonnet"}}}))
+assert model_warning("orca agent launch --agent claude --worktree active --model opus") == "", "not a worker start"
+assert model_warning(f"MODEL=sonnet {START} --model \"$MODEL\"") == "", "a value the shell expands is not judged"
+assert model_warning(f"{START} --model claude-sonnet-4-?") == "", "a glob the shell may expand is not judged"
+assert model_warning(f"{START} --model {{sonnet,}}") == "", "a brace expansion is not judged"
+assert model_warning(f"{START} --model opus[1m]") == "", "an unquoted bracket may be a glob, so the value is not judged"
+CONFIG.write_text(json.dumps({"orchestrate": {"models": {"worker": "sonnet"}}}))
+assert model_warning(f"{START} --spec '--model=opus' --model sonnet") == "", "text in --spec is not the flag"
+assert "orch model worker" in model_warning(f"{START} --spec '--model=sonnet'"), "and does not stand in for it"
+for cmd in (f"{START} --spec '--prompt' --model sonnet", f"{START} --display-name '--model=opus' --spec fix --model sonnet",
+            f"{START} --json --model sonnet", f"{START} --spec fix --model opus --model sonnet","orca orchestration worker-start --worktree new-child --spec '--agent=claude' --agent codex --model gpt-5",
+            f"{START} --spec '--terminal=t' --model sonnet", f"{START} --model sonnet --spec '--model=opus'"):
+    assert model_warning(cmd) == "", "the real --model is the one read: " + cmd
+for cmd in (f"{START} --model '$MODEL'", f"{START} --model \\$MODEL", f"{START} --model ~/sonnet"):
+    assert model_warning(cmd) == "", "a literal-looking $ is still not judged: " + cmd
+assert "differs" in model_warning(f"{START} --json --model opus")
+CONFIG.write_text(json.dumps({"orchestrate": {"models": {"worker": "claude-sonnet-4-6"}}}))
+# Any shell-active character skips the comparison, quoted or not: the words arrive unquoted, so the guard is unsure.
+for cmd in (f"{START} --model 'opus[1m]'", f"{START} --model=\"opus[1m]\"", f"{START} --model claude-sonnet-4-?>out",
+            f"{START} --model \"claude-sonnet-\"*", f"{START} --model opus\\[1m\\]",
+            f"{START} --spec \"Use --model x here\" --model claude-sonnet-4-*"):
+    assert model_warning(cmd) == "", "a value with a shell-active character is not judged: " + cmd
+CONFIG.write_text(json.dumps({"orchestrate": {"models": {"worker": "sonnet"}, "model_flag": "deny"}}))
+assert bash(f"{START} --spec 'x' --model opus", "lead") in ("none", "allow"), "a comparison never blocks, whatever the level"
+CONFIG.write_text(json.dumps({"orchestrate": {"models": {"lead": "opus"}}}))
+assert "is not compared: orchestrate.models.worker is not set" in model_warning(f"{START} --spec 'x' --model opus")
+assert model_warning(f"{START} --model opus; {START} --model sonnet").count("is not set") == 1, "one line per call"
+assert "orch model worker" in model_warning(f"{START} --spec 'x'"), "no --model keeps the original warning"
 CONFIG.write_text(json.dumps({"orchestrate": {"models": {"worker": "sonnet"}, "model_flag": "off"}}))
 assert model_warning(f"{START} --spec 'x'") == ""
 CONFIG.write_text("{}")
