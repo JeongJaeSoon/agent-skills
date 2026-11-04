@@ -336,6 +336,17 @@ verdict(d, 78, "T-78")
 code, out = prog(env, "land", "t", "--pr", "78")
 assert code == 3 and "CI failed: tests=CANCELLED" in out and not merged(d), out
 
+# A failure the rollup no longer counts (a newer run of that check passed) still holds land until the test-results
+# comment accounts for its run. The rollup cannot tell two workflow files with one display name apart; this gate can.
+p_ = pr(79); p_["statusCheckRollup"] = dup_rollup(79); p_["statusCheckRollup"][0]["conclusion"] = "FAILURE"
+d, env = setup({"79": p_})
+verdict(d, 79, "T-79")
+st = json.loads((d / "state.json").read_text())
+st["branch_runs"] = {"b79": [{"databaseId": 7900, "name": "CI", "conclusion": "failure", "headSha": "h79"}]}
+(d / "state.json").write_text(json.dumps(st))
+code, out = prog(env, "land", "t", "--pr", "79")
+assert code == 3 and "failed CI runs" in out and "7900" in out and not merged(d), out
+
 # A stack lands in this lane when every layer meets it; any one layer short of it holds the whole unit.
 def no_ci_stack(**lower):
     d, env = no_ci_setup(dict(pr(75, stacked=True), **lower), pr(76, base="b75", stacked=True))

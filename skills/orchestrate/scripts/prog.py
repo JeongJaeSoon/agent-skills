@@ -1165,14 +1165,24 @@ def latest_checks(rollup):
     (cancel-in-progress) stays in the rollup as CANCELLED beside the run that replaced it. The workflow is part of the
     check's identity: one workflow's pass must not hide another's failure under the same job name. A check still going
     outranks a finished one, since a queued run has no start time and an older pass must not stand in for it. Start
-    time decides before the run id: a rerun keeps its old, lower id."""
-    def order(c):
-        # gh prints the zero time for a check that never started.
-        stamps = [t for t in (c.get("startedAt"), c.get("completedAt")) if t and not t.startswith("0001-")]
-        run = check_run_id(c)
-        going = (c.get("status") or "COMPLETED").upper() != "COMPLETED"
-        return going, stamps[0] if stamps else "", int(run) if run.isdigit() else 0
-    return list({(c.get("workflowName"), c.get("name") or c.get("context")): c for c in sorted(rollup, key=order)}.values())
+    time decides before the run id, as a rerun keeps its old, lower id; a check that never started has none, and an end
+    time says nothing against another check's start, so only the run id can order that group."""
+    def started(c):
+        t = c.get("startedAt") or ""  # gh prints the zero time for a check that never started
+        return "" if t.startswith("0001-") else t
+
+    def newest(checks):
+        timed = all(started(c) for c in checks)
+
+        def order(c):
+            run = check_run_id(c)
+            going = (c.get("status") or "COMPLETED").upper() != "COMPLETED"
+            return going, started(c) if timed else "", int(run) if run.isdigit() else 0
+        return max(checks, key=order)
+    groups = {}
+    for c in rollup:
+        groups.setdefault((c.get("workflowName"), c.get("name") or c.get("context")), []).append(c)
+    return [newest(checks) for checks in groups.values()]
 
 
 def ci_summary(rollup, no_ci=False):

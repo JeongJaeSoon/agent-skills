@@ -93,9 +93,11 @@ queued = chk("tests", None, ZERO, 3, status="QUEUED", completed=ZERO)
 assert prog.ci_summary([chk("tests", "SUCCESS", B, 2), queued])[:2] == ([], ["tests"])
 running = chk("tests", None, A, 1, status="IN_PROGRESS", completed=ZERO)
 assert prog.ci_summary([running, chk("tests", "SUCCESS", B, 2)])[:2] == ([], ["tests"])
-# A run cancelled before it started has only its end time, and it is still the latest.
+# A run cancelled before it started has only an end time, which orders nothing against a start: the run id decides.
 never_ran = chk("tests", "CANCELLED", ZERO, 3, completed=C)
 assert prog.ci_summary([chk("tests", "SUCCESS", B, 2), never_ran])[0] == ["tests=CANCELLED"]
+replaced_in_queue = chk("tests", "CANCELLED", ZERO, 1, completed=C)
+assert prog.ci_summary([replaced_in_queue, chk("tests", "SUCCESS", B, 2)]) == ([], [], ["2"])
 
 # The same job name in two workflows is two checks: one workflow's pass does not hide the other's failure.
 assert prog.ci_summary([chk("tests", "FAILURE", A, 1, workflow="nightly"), chk("tests", "SUCCESS", B, 2)])[0] == ["tests=FAILURE"]
