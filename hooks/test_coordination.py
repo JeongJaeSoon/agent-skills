@@ -150,7 +150,8 @@ assert "differs" in model_warning(f"{START} --model 'opus[1m]'"), "a quoted brac
 assert "differs" in model_warning(f"{START} --model=\"opus[1m]\"")
 CONFIG.write_text(json.dumps({"orchestrate": {"models": {"worker": "claude-sonnet-4-6"}}}))
 for cmd in (f"{START} --spec \"Use --model 'opus[1m]' here\" --model claude-sonnet-4-*",
-            f"{START} --model \"claude-sonnet-\"*",f"{START} --model claude-sonnet-4-?>out"):
+            f"{START} --model claude-sonnet-4-? --spec \"Use --model 'claude-sonnet-4-?' here\"",
+            f"{START} --model \"claude-sonnet-\"*", f"{START} --model claude-sonnet-4-?>out"):
     assert model_warning(cmd) == "", "a partly quoted or redirect-glued glob is not judged: " + cmd
 CONFIG.write_text(json.dumps({"orchestrate": {"models": {"worker": "sonnet"}, "model_flag": "deny"}}))
 assert bash(f"{START} --spec 'x' --model opus", "lead") in ("none", "allow"), "a comparison never blocks, whatever the level"
