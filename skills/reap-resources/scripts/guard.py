@@ -178,7 +178,7 @@ def check_owner(rule_name, notes=None):
     try:
         go, why = old_acts(rule_name, ownership())
     except Unreadable as e:
-        return f"소유권 파일을 읽지 못함: {e}"
+        return f"{OWNER_UNREADABLE}: {e}"
     if go and why and notes is not None:
         notes.append(why)
     return None if go else why
@@ -301,7 +301,15 @@ def keep(i, protect, cleaner="reap", rule_name=None, notes=None):
         return check_owner(rule_name if rule_name is not None else rule(i, cleaner), notes) or \
             item(i, protect, cleaner)
     except Exception as e:
-        return f"검사를 마치지 못함({type(e).__name__}: {str(e)[:120]})"
+        return f"{CHECK_FAILED}({type(e).__name__}: {str(e)[:120]})"
+
+
+CHECK_FAILED, OWNER_UNREADABLE = "검사를 마치지 못함", "소유권 파일을 읽지 못함"
+
+
+def check_error(why):
+    """True when keep()'s reason is a check that could not run, not a guard that decided to leave the target."""
+    return bool(why) and why.startswith((CHECK_FAILED, OWNER_UNREADABLE))
 
 
 def item(i, protect, cleaner="reap"):

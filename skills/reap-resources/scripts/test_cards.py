@@ -1,7 +1,14 @@
 """Card verdicts of cards.py from fake git, gh and orca output. Run: python3 test_cards.py"""
-import json, pathlib, sys, tempfile
+import json, os, pathlib, sys, tempfile
+
+# reap resolves its state directory (logs, locks) when imported: point it at a throwaway one first, so no section
+# below can write the owner's real <state>/reap-actions.jsonl or sweep.log.
+_STATE = tempfile.mkdtemp(prefix="test-cards-state-")
+os.environ["AGENT_SKILLS_STATE"] = _STATE
+os.environ["AGENT_SKILLS_SWEEP"] = os.environ["AGENT_SKILLS_PATROL"] = "off"
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import cards, reap
+assert str(reap.STATE) == _STATE, reap.STATE
 
 NOW = 2_000_000_000.0
 IDLE = 30 * 60
