@@ -663,7 +663,7 @@ def unlisted(state, sessions, rows, store, cards, shut, lead_session, now, state
         if r.get("kind") == "lead" and (lead := store["leads"].get(r["id"])):
             shown.add(lead_session(lead))
     shown |= {c["id"] for d in store["doing"] if tidy.item_id("doing", d) not in shut
-              and (c := tidy.named(f"{d['title']} {d['next']}", cards))}
+              and (c := tidy.doing_card(d, cards))}
     shown |= {c["id"] for c in cards.values() if c["pr"] and c["pr"] in row_prs}
     shown |= {k.removeprefix("card:") for k in shut if k.startswith("card:")}
 
@@ -1021,8 +1021,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     # Such an item stays open under its own id (the row's Done closes the row only) and is placed in the row's table.
     doing, merged_doing = [], []
     for d in store["doing"]:
-        # A doing item's owner is often the card that runs it: that also links it.
-        iid, card = tidy.item_id("doing", d), tidy.named(f"{d['title']} {d['next']}", cards) or tidy.named(d.get("owner"), cards)
+        iid, card = tidy.item_id("doing", d), tidy.doing_card(d, cards)
         js = rowstate.judge_item("doing", d, facts_in, iid, card and card["id"])
         if js["status"] == "done":
             continue
@@ -1414,10 +1413,12 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     for l in lines:
         s = sessions.get((l["session"] or {}).get("id")) or {}
         if s.get("name") and (term := fleet.session_terminal(s)) and l["session"]["state"] != "none":
-            reach.setdefault(s["name"], fleet.switch_command(term["handle"]) or term["handle"])
+            reach.setdefault(s["id"], (s, fleet.switch_command(term["handle"]) or term["handle"]))
     if reach:
+        names = [s["name"] for s, _ in reach.values()]
+        shown_as = lambda s: f"{s['name']} ({s.get('project')})" if names.count(s["name"]) > 1 else s["name"]  # noqa: E731
         out += ["", "🔗 세션 찾기" if tg else "🔗 **세션 찾기**", ""]
-        out += [f"{name} — {how}" if tg else f"- {name} — `{how}`" for name, how in reach.items()]
+        out += [f"{shown_as(s)} — {how}" if tg else f"- {shown_as(s)} — `{how}`" for s, how in reach.values()]
     opened = [{"id": item_of(rows[l["key"]]), "kind": "row", "label": label(l), "status": l["own"]}
               for l in lines if l["key"] in rows and l["own"] not in (None, "done")]
     opened += [{"id": i, "kind": "doing", "label": d["title"], "status": js["status"]} for i, d, js in doing]

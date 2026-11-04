@@ -85,6 +85,12 @@ def named(text, cards):
     return hits[0] if len(hits) == 1 else None
 
 
+def doing_card(d, cards):
+    """The card that runs a doing item: the one its title or next step names, else the one its owner names (a doing
+    item's owner is often that card)."""
+    return named(f"{d.get('title')} {d.get('next') or ''}", cards) or named(d.get("owner"), cards)
+
+
 def merged(p):
     return p.get("state") == "MERGED" or bool(p.get("merged_at"))
 

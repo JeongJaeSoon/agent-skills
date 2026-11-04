@@ -308,6 +308,19 @@ assert "- payments-migration-worktree — `orca terminal switch --environment 'm
 tg = subprocess.run([sys.executable, str(HERE / "prog.py"), "brief", "render", "--telegram", "--no-refresh"],
                     capture_output=True, text=True, env=env).stdout
 assert "payments-migration-worktree — term_agent" in tg.splitlines(), tg
+# Two sessions under one worktree name are two lines, told apart by project.
+st = fleet.read_json(sd / "state.json")
+twin = next(s for s in st["sessions"] if s["id"] == "s-link")
+st["sessions"].append({**twin, "id": "s-twin", "project": "acme/other", "gh_repo": "acme/other",
+                       "terminals": [{"handle": "term_twin", "connected": True, "agent": True}]})
+fleet.write_atomic(sd / "state.json", json.dumps(st))
+board.set_row("twin-row", title="쌍둥이", repo="acme/links", status="moving", worktree="s-twin", next="리뷰")
+lines_now = brief()["text"].splitlines()
+assert "- payments-migration-worktree (acme/links) — `term_agent`" in lines_now, lines_now
+assert "- payments-migration-worktree (acme/other) — `term_twin`" in lines_now, lines_now
+board.set_row("twin-row", status="done")
+st["sessions"].pop()
+fleet.write_atomic(sd / "state.json", json.dumps(st))
 # The 진행 column shows only where a row has a bar; `--progress` on one row brings it back for that table.
 assert "| | 리드/Phase | PR | 다음 | 세션 |" in text and "막대=단계" not in text, text
 board.set_row("no-link", progress="1/4")
