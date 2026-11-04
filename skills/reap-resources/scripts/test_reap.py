@@ -1587,6 +1587,15 @@ with tempfile.TemporaryDirectory() as tmp:
     assert got["volume:verify-app-closed_db"]["target"] and got["volume:verify-app-closed_db"]["owners"] == ["verify-app-closed"], got
     assert not got["volume:verify-app-incident_db"]["target"] and "카드" in got["volume:verify-app-incident_db"]["why"], got
     assert not got["volume:split-owner_db"]["target"] and got["volume:split-owner_db"]["owners"] == ["verify-app-closed", "verify-app-incident"], got
+    reap.config = lambda: {"stack_volumes": {"prefixes": [], "label": OWNER}}  # the label counts with the rest of it wrong
+    got = {i["key"]: i for i in reap.docker_scan(0, [])}
+    assert not got["volume:split-owner_db"]["target"], got
+    reap.config = lambda: CFG2
+    labeled.append({**split, "Labels": {**split["Labels"], ORIGIN: "verify-example"}})
+    badspec = {**CFG2, "stack_volumes": {"prefixes": [], "label": OWNER}}
+    assert not {i["name"] for i in scanned(badspec)[0] if i["target"]} & {"split-owner_db"}
+    assert reap.owner_label({"stack_volumes": ["x"]}) is None and reap.owner_label({"stack_volumes": {"label": 1}}) is None
+    labeled.pop()
     reap.run = world
 
     # A working directory seen on a stack's containers is recorded once, so its volumes outlive the labels.

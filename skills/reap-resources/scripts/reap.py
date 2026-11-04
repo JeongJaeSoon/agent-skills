@@ -328,8 +328,7 @@ def docker_scan(hours, notes):
     for line in (run(["docker", "images", "-f", "dangling=true", "--format", "{{json .}}"]) or "").splitlines():
         i = json.loads(line)
         images.append({"id": i["ID"], "created": parse_ts(i["CreatedAt"]), "size": i.get("Size", "")})
-    stack = stack_volume_spec(config())
-    return owner_holds(judge_volumes(vols, set(states), hours, now, stack[1] if isinstance(stack, tuple) else None), notes) + \
+    return owner_holds(judge_volumes(vols, set(states), hours, now, owner_label(config())), notes) + \
         judge_images(images, used, hours, now)
 
 
@@ -1384,6 +1383,13 @@ def volume_owners(labels, spec):
     return list(dict.fromkeys(labels[k] for k in keys if labels.get(k)))
 
 
+def owner_label(cfg):
+    """reap.stack_volumes.label, whatever else in that setting is wrong: an owner it names still counts as one."""
+    spec = cfg.get("stack_volumes")
+    label = spec.get("label") if isinstance(spec, dict) else None
+    return label if isinstance(label, str) else None
+
+
 def stack_volume_recheck(item, spec):
     """Read again right before the rm: the same volume (creation time), the same owners, and still no container of any
     owner. Returns why it stays, or None."""
@@ -1645,9 +1651,7 @@ def leftovers(cfg, hours, now, notes, keep=frozenset(), ports=frozenset(), kinds
         if vols is None:
             notes.append("docker 볼륨을 읽지 못함: 라벨 볼륨은 건너뜀")
         else:
-            stack = stack_volume_spec(cfg)
-            items += owner_holds(judge_labeled_volumes(vols, rows, spec, hours, now, keep,
-                                                       stack[1] if isinstance(stack, tuple) else None), notes)
+            items += owner_holds(judge_labeled_volumes(vols, rows, spec, hours, now, keep, owner_label(cfg)), notes)
     return items
 
 
