@@ -566,6 +566,17 @@ assert any(l.startswith("STUCK a2 (a full disk)") for l in prog.stuck_sweep(live
 screens["h2"] = menu
 assert any(l.startswith("STUCK a2 (a select menu)") for l in prog.stuck_sweep(live, "s", {}, read=read, waits={}))
 screens["h2"] = idle
+# A retained worker (a terminal someone typed into, a nudge included) is still a live agent: its prompt is STUCK while
+# it has not settled. A settled one (succeeded or failed) and a released or reclaimable one are skipped.
+kept = [{"dispatchId": "r1", "terminalState": "retained", "workerState": "ready", "agentTerminalHandle": "hr1"},
+        {"dispatchId": "r2", "terminalState": "retained", "workerState": "succeeded", "agentTerminalHandle": "hr2"},
+        {"dispatchId": "r3", "terminalState": "retained", "workerState": "failed", "agentTerminalHandle": "hr3"},
+        {"dispatchId": "r4", "terminalState": "released", "workerState": "ready", "agentTerminalHandle": "hr4"},
+        {"dispatchId": "r5", "terminalState": "retained", "agentTerminalHandle": "hr5"},
+        {"dispatchId": "r6", "terminalState": "release_unknown", "workerState": "ready", "agentTerminalHandle": "hr6"}]
+screens.update({h: menu for h in ("hr1", "hr2", "hr3", "hr4", "hr5", "hr6")})
+got = prog.stuck_sweep(kept, "s", {}, read=read, waits={})
+assert [l.split()[1] for l in got if l.startswith("STUCK")] == ["r1", "r5"], got
 # The verdicts come from one `worktree ps --agent-wait`, matched to terminal handles by pane (tabId:leafId). A row
 # without the field, or a pane no terminal holds, gives no verdict.
 def fake_ps(*a):
