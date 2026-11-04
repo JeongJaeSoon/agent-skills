@@ -110,8 +110,8 @@ class Facts:
         if (pj.get("liveness") or {}).get("verdict") == "exited":
             return "its agent exited"
         # done with the outcome still in_progress is how a Claude worker that stopped early reads
-        if ((pj.get("stage") or {}).get("activity")) not in ("idle", "done"):
-            return "Orca does not show it stopped"
+        if not self.stopped_to_orca(pj):
+            return "neither Orca nor its transcript shows it stopped"
         if not prog.worker_terminal(w):
             return "no terminal"
         if (pj.get("nextAction") or {}).get("kind") not in (None, "none") or (pj.get("attention") or {}).get("requiresAction"):
@@ -127,6 +127,17 @@ class Facts:
         if not (self.p.dir / "briefs" / f"{ticket}.md").exists():
             return "no brief file to point it at"
         return None
+
+    @staticmethod
+    def stopped_to_orca(pj):
+        stage = pj.get("stage") or {}
+        if stage.get("activity") in ("idle", "done"):
+            return True
+        # Orca stops refreshing a long-idle Claude worker's status: activity unknown, liveness stale_status, worker
+        # still ready. sweep only asks about a dispatch the collector's transcript motion shows idle (not parked),
+        # so that is the evidence of a stop. A turn in progress keeps writing and never reads this way.
+        return (stage.get("activity") == "unknown" and stage.get("worker") == "ready"
+                and (pj.get("liveness") or {}).get("reason") == "stale_status")
 
     def ledger_why_not(self, ticket):
         import dash
