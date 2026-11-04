@@ -930,28 +930,49 @@ def load_compare_cache():
     """Answers survive a restart: a commit's ancestry never changes, and every restart used to ask them all again."""
     if _cache_state["loaded"]:
         return
+    for k, v in read_compare_cache().items():
+        _CONTAINS.setdefault(k, v)
+    _cache_state["loaded"] = True
+
+
+def read_compare_cache():
+    out = {}
     try:
         data = read_json(cache_path(), {})
         for repo, pairs in (data.items() if isinstance(data, dict) else ()):
             for k, v in (pairs.items() if isinstance(pairs, dict) else ()):
                 older, _, newer = k.partition("...")
                 if newer and isinstance(v, bool):
-                    _CONTAINS.setdefault((repo, older, newer), v)
+                    out[(repo, older, newer)] = v
     except Exception as e:  # a damaged cache is a cold cache, never a failed collect
         log(f"compare cache ignored: {e!r}")
-    _cache_state["loaded"] = True
+    return out
+
+
+def cached(key):
+    """The remembered answer, moved to the young end so that eviction keeps what the current ledgers still ask."""
+    v = _CONTAINS.pop(key, None)
+    if v is not None:
+        _CONTAINS[key] = v
+    return v
 
 
 def save_compare_cache():
     if not _cache_state["dirty"]:
         return
-    for k in list(_CONTAINS)[:-CACHE_MAX]:  # oldest first: the dict keeps insertion order
-        del _CONTAINS[k]
-    out = {}
-    for (repo, older, newer), v in _CONTAINS.items():
-        out.setdefault(repo, {})[f"{older}...{newer}"] = v
     try:
-        write_atomic(cache_path(), json.dumps(out))
+        with cache_path().with_suffix(".lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)  # the server and a hand `collect` both save: merge what the other wrote
+            merged = {k: v for k, v in read_compare_cache().items() if k not in _CONTAINS}  # the other's go first
+            merged.update(_CONTAINS)
+            _CONTAINS.clear()
+            _CONTAINS.update(merged)
+            for k in list(_CONTAINS)[:-CACHE_MAX]:  # oldest first: the dict keeps insertion order, cached() renews
+                del _CONTAINS[k]
+            out = {}
+            for (repo, older, newer), v in _CONTAINS.items():
+                out.setdefault(repo, {})[f"{older}...{newer}"] = v
+            write_atomic(cache_path(), json.dumps(out))
         _cache_state["dirty"] = False
     except OSError as e:
         log(f"compare cache not saved: {e!r}")
@@ -980,8 +1001,8 @@ def gh_contains(repo, older, newer, repo_dir=None):
     global _gh_down_until, _gh_check_at
     load_compare_cache()
     key = (repo, older, newer)
-    if key in _CONTAINS:
-        return _CONTAINS[key]
+    if (hit := cached(key)) is not None:
+        return hit
     if repo_dir and (known := local_contains(repo_dir, older, newer)) is not None:
         _CONTAINS[key] = known
         _cache_state["dirty"] = True
@@ -1362,7 +1383,7 @@ def _merge(slug, d, cfg, fetched, interval):
     # Under the program lock: answers already fetched by warm_contains only, never a gh call.
     load_compare_cache()
     summary["gaps"] = ledger_gaps(cfg, events, workers, prs, tnow,
-                                  contains=lambda older, newer: _CONTAINS.get((cfg["repo"], older, newer)))
+                                  contains=lambda older, newer: cached((cfg["repo"], older, newer)))
     open_prs = [p for p in prs if p["state"] == "open" and not p.get("draft") and p.get("created_at")]
     oldest = min(open_prs, key=lambda p: p["created_at"], default=None)
     summary["oldest_open_pr"] = ({"pr": oldest["number"], "since": oldest["created_at"],

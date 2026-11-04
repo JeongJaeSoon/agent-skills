@@ -680,7 +680,11 @@ assert not asked, f"a local clone needs no gh: {asked}"
 # A shallow clone's "no" may only mean cut history: it is not an answer.
 git("commit", "-q", "--allow-empty", "-m", "three"); c3 = git("rev-parse", "HEAD")
 shallow = pathlib.Path(tempfile.mkdtemp()) / "s"
+git("config", "uploadpack.allowAnySHA1InWant", "true")
 subprocess.run(["git", "clone", "-q", "--depth", "1", f"file://{clone}", str(shallow)], check=True, capture_output=True)
+subprocess.run(["git", "-C", str(shallow), "fetch", "-q", "--depth", "1", "origin", c1], check=True, capture_output=True)
+rc = subprocess.run(["git", "-C", str(shallow), "merge-base", "--is-ancestor", c1, c3], capture_output=True).returncode
+assert rc == 1, f"the fixture must make git itself answer no: {rc}"
 assert dash.local_contains(shallow, c1, c3) is None, "shallow: unknown, not False"
 # A damaged cache file is a cold cache, and the cache stays bounded.
 dash._CONTAINS.clear(); dash._cache_state.update(loaded=False, dirty=False)
@@ -698,6 +702,23 @@ dash._cache_state["dirty"] = True
 dash.save_compare_cache()
 dash.CACHE_MAX = real_max
 assert list(dash._CONTAINS) == [("acme/app", f"o{i}", "n") for i in (2, 3, 4)], list(dash._CONTAINS)
+# An answer a ledger still asks for is renewed, so eviction does not take it.
+dash.CACHE_MAX = 3
+dash.cached(("acme/app", "o2", "n"))
+dash._CONTAINS[("acme/app", "o5", "n")] = False
+dash._cache_state["dirty"] = True
+dash.save_compare_cache()
+dash.CACHE_MAX = real_max
+assert ("acme/app", "o2", "n") in dash._CONTAINS and ("acme/app", "o3", "n") not in dash._CONTAINS, list(dash._CONTAINS)
+# Another process saved meanwhile: its answers are merged in, not overwritten.
+other = json.loads(dash.cache_path().read_text())
+other.setdefault("acme/other", {})["x...y"] = True
+dash.cache_path().write_text(json.dumps(other))
+dash._CONTAINS[("acme/app", "o6", "n")] = True
+dash._cache_state["dirty"] = True
+dash.save_compare_cache()
+saved = json.loads(dash.cache_path().read_text())
+assert saved["acme/other"] == {"x...y": True} and "o6...n" in saved["acme/app"], saved
 dash.sh = real_sh
 dash._CONTAINS.clear(); dash._cache_state.update(loaded=False, dirty=False); dash._gh_down_until = dash._gh_check_at = 0.0
 dash.cache_path().unlink(missing_ok=True)
