@@ -145,8 +145,8 @@ Before pushing, run **both**:
   parallel cards do not starve the machine; the pressure hook denies a whole suite, an E2E or a
   headless browser run outside it) — CLI / `curl` for backend and APIs, browser automation for UI
   and web flows (logged-in sites included), IDE diagnostics
-  for type and lint. Once the check is done, down the compose stacks you started in the same turn,
-  with the project verify skill's own teardown when it has one (the app may start containers outside
+  for type and lint. Once the check is done, down the compose stacks you started in the same turn
+  (`end-session`, "Who cleans up"), with the project verify skill's own teardown when it has one (the app may start containers outside
   compose), else `docker compose -p <project> down`; either way keep volumes (never `-v`). Teardown runs
   bare, never through `orch heavy`, whose load gate would refuse it under load. A stack that has to stay gets its
   reason and deadline: `reap.py ledger add --kind compose-stack --id <project> --keep "<reason>" --until <ISO time>`
