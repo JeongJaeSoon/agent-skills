@@ -9,7 +9,7 @@
 
 ## これは何か
 
-agent-skills は Claude Code のプラグインで、スキル 42 個、エージェント定義 4 個、フック 10 個といくつかのコマンドでできています。扱う流れは二つあります。一つはチケット1件を最初の修正からマージ、チケットのクローズまで進める流れ。もう一つは Orca のワーカーを複数同時に動かし、1ワーカーに1チケットずつ渡して、PR を順番にマージしていく流れです。
+agent-skills は Claude Code のプラグインで、スキル 41 個、エージェント定義 4 個、フック 12 個といくつかのコマンドでできています。扱う流れは二つあります。一つはチケット1件を最初の修正からマージ、チケットのクローズまで進める流れ。もう一つは Orca のワーカーを複数同時に動かし、1ワーカーに1チケットずつ渡して、PR を順番にマージしていく流れです。
 
 GitHub リポジトリのチケット作業を Claude Code に任せたい開発者向けです。各ステップを人が承認する方式(Human-in-the-loop、HITL)と、エージェントが進めて人は見守り、例外のときだけ割って入る方式(Human-on-the-loop、HOTL)を、地点ごとに選べます。ユーザー設定への書き込みと取り消せない操作は、常に人の承認を待ちます。
 
@@ -105,7 +105,7 @@ https://github.com/JeongJaeSoon/agent-skills の Claude Code プラグインを�
 
 | グループ | スキル | 役割 |
 |---|---|---|
-| [チケット1件](docs/skills.ja.md#チケット1件) | `write-ticket`, `deliver-ticket`, `ui-review`, `handoff-ticket`, `dispatch-card`, `end-session`, `record-progress` | チケットを書き、届け、次のチケットを新しいカードに渡し、セッションを閉じ、進捗を記録する |
+| [チケット1件](docs/skills.ja.md#チケット1件) | `write-ticket`, `deliver-ticket`, `ui-review`, `handoff-ticket`, `dispatch-card`, `end-session` | チケットを書き、届け、次のチケットを新しいカードに渡し、進捗を記録してセッションを閉じる |
 | [プロジェクト1件](docs/skills.ja.md#プロジェクト1件orca-ワーカー複数) | `orchestrate`, `reboot`, `measure-delivery` | 複数のチケットを Orca のワーカーで並行してマージし、再起動で落ちた待機やバインドを戻し、終わったあと実際どうだったかを測る |
 | [マシン1台](docs/skills.ja.md#マシン1台) | `reap-resources`, `secure-fill`, `tune-automode`, `skills-config`, `setup-pc` | 残り物の片付け、エージェントが見ない秘密値の入力、autoMode ルールの下書き、設定キーの変更、インストールと更新 |
 | [チャットとレビュー](docs/skills.ja.md#チャットとレビュー) | `watch-mentions`, `watch-prs` | 自分に関係するチャットと PR を作業として集める |
