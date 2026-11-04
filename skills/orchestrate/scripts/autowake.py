@@ -135,7 +135,8 @@ class Facts:
             return True
         # Orca stops refreshing a long-idle Claude worker's status: activity unknown, liveness stale_status, worker
         # still ready. sweep only asks about a dispatch the collector's transcript motion shows idle (not parked),
-        # so that is the evidence of a stop. A turn in progress keeps writing and never reads this way.
+        # so that is the evidence of a stop. state.json can be minutes old: a turn resumed since is caught by
+        # `skills-sync nudge`'s busy check, as it is for an idle projection.
         return (stage.get("activity") == "unknown" and stage.get("worker") == "ready"
                 and (pj.get("liveness") or {}).get("reason") == "stale_status")
 

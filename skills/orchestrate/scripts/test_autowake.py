@@ -290,6 +290,12 @@ w = World(workers=[row(workerState="ready", projection=stale)])
 w.sweep(0)
 w.sweep(10)
 assert len(w.sent) == 1, "unknown/stale_status with a ready worker and an idle transcript is a stopped worker"
+# The stale projection alone wakes nobody: with no idle stall (the transcript says working) nothing is marked or sent.
+w = World(workers=[row(workerState="ready", projection=stale)],
+          stalls=[{"dispatch": "ctx_1", "ticket": "ABC-1", "kind": "silent", "minutes": 25}])
+w.sweep(0)
+w.sweep(10)
+assert not w.sent and not w.synced and not w.rows("auto_wake_claimed"), "stale projection with a non-idle transcript"
 # Every other unknown stays refused: the exception is the stale projection, not a missing one.
 excluded("unknown, no stale_status", world={"workers": [row(workerState="ready", projection={
     "stage": {"worker": "ready", "activity": "unknown"}, "liveness": {"verdict": "unverifiable", "reason": "no_signal"}})]})
