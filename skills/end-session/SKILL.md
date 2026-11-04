@@ -1,6 +1,7 @@
 ---
 name: end-session
 description: "Use when the user asks to end, close or archive this session, card or worktree — \"종료해줘\", \"세션 종료해줘\", \"현재 세션 정리해줘\", \"아카이브해줘\", \"머지하고 종료하자\", \"end this session\" — when handoff-ticket says this session should go, when an Orca worker is about to send worker_done, or when a card's brief says to close itself. Bare \"정리해줘\"/\"마무리해줘\", \"작업 기록 남겨줘\" or \"log this\" leaves the record and keeps the session (references/record.md)."
+allowed-tools: Bash(orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json)
 ---
 
 # Ending the session
@@ -130,6 +131,7 @@ holds, so name that in `worker_done`. Then pick the row:
 - **A refused close.** The host's permission layer (the auto-mode classifier, a hook), not Orca,
   may refuse `orca terminal close`. A refused act is not run again,
   except once, in the same form, by the refused session (a restart that loads a new rule counts as that session), and only when the human allowed it in that session's own chat or added a rule for it, or when a classifier or hook refusal stated a reason and you added evidence that answers it, never for a human's refusal or a production sync. Report that retry as `재시도 1회: <what you added>`. A second refusal stops the act and you report it. Reaching the same result through another session, script, tool, wrapper or target stays forbidden. With nothing to add, leave it: `orca orchestration send --to run:<runId> --type status --subject "terminal left: close refused" --body "<handle>"` (the `runId` from `orca orchestration check --terminal $ORCA_TERMINAL_HANDLE --json`; after `worker_done` a send without `--to` finds no Run), then idle. The session above puts it to the human and does not close it: its own close would be the refused act run by another session.
+- **The pre-approved close.** `allowed-tools` covers only this session's own close, written exactly as above, and only in the turn that invoked this skill. In a later turn, invoke the skill again first.
 - **`KEEP`** is the brief's opt-out: the orchestrator or lead above it plans to reuse this terminal or card.
 - **An open PR** of a card whose first prompt approved the merge is the card's to land first
   (`orchestrate` `references/landing.md`); `hooks/self_land_gate.py` speaks when it does not. It
