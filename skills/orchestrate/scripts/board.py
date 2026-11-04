@@ -12,7 +12,7 @@ Only finished work folds: a ✅ row a day after its merge, a stage row finished 
 render() is the one implementation of the brief skill's report rules (sections, sub-task rows, the
 same-reviewer fold, next steps under 진행 중 and 보류, bold for changed rows); test_board.py pins its output.
 """
-import datetime as dt, difflib, fcntl, json, os, pathlib, re, shutil, sys, urllib.parse
+import collections, datetime as dt, difflib, fcntl, json, os, pathlib, re, shutil, sys, urllib.parse
 
 import fleet
 import acks
@@ -1071,6 +1071,15 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         else:
             l["cell"] = f"{pr_text(l['pr'])} {l['pr_state']}".strip() if l["pr"] else ""
 
+    # A row alone on its session is named as Orca names the worktree, so the table's name finds it in the Cmd+J palette
+    # (prefix and substring match, so a cut name does too). Rows sharing a session keep their titles: the worktree's
+    # name would say the same thing twice, and the 세션 cell has it.
+    on_session = collections.Counter((l["session"] or {}).get("id") for l in lines)
+    for l in lines:
+        s = l["session"]
+        if s and s.get("id") and on_session[s["id"]] == 1 and s.get("name") and s["name"].lower() not in l["name"].lower():
+            l.update(name=s["name"], orca_name=True)
+
     # Bold: a row the last report did not have, or whose status, progress, next, PR state or session changed.
     snap = {}
     for l in lines:
@@ -1170,13 +1179,16 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     local = now.astimezone()
     head = f"{local:%H:%M} · " + " · ".join(([headline] if headline else []) + facts[1 if headline else 0:])
     out = [head if tg else f"**{head}**"]
+    out += [x for pointer in (stage_line, lists_line) if pointer for x in ("", pointer)]
+    if lines:
+        out += ["", legend] + (["", "PR: " + " · ".join(pr_legend)] if pr_legend else [])
     width_ok = True
     ackable, table_rows = {d["id"] for d in done if not d["acked"]}, []
 
     def label(l):
         """A phase is named with its lead outside the table, where no section heading says whose it is."""
         r = rows.get(l["key"])
-        return f"{lead_of(r)['title']} {l['name']}" if r and r["kind"] == "phase" else l["name"]
+        return f"{lead_of(r)['title']} {l['name']}" if r and r["kind"] == "phase" and not l.get("orca_name") else l["name"]
 
     def next_cell(l):
         """The 다음 cell: the row's next step, or rowstate's pointer to the list below that holds it."""
@@ -1413,20 +1425,6 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         out += ["", reaped]
     if periodic and (tokens := token_line(now)):
         out += ["", tokens]
-    # A link to this host's 127.0.0.1 is dead on another device, and Orca has no remote link: what works there is text.
-    reach = {}
-    for l in lines:
-        s = sessions.get((l["session"] or {}).get("id")) or {}
-        if s.get("name") and (term := fleet.session_terminal(s)) and l["session"]["state"] != "none":
-            reach.setdefault(s["id"], (s, fleet.switch_command(term["handle"]) or term["handle"]))
-    if reach:
-        names = [s["name"] for s, _ in reach.values()]
-        shown_as = lambda s: f"{s['name']} ({s.get('project')})" if names.count(s["name"]) > 1 else s["name"]  # noqa: E731
-        out += ["", "🔗 세션 찾기" if tg else "🔗 **세션 찾기**", ""]
-        out += [f"{shown_as(s)} — {how}" if tg else f"- {shown_as(s)} — `{how}`" for s, how in reach.values()]
-    out += [x for pointer in (stage_line, lists_line) if pointer for x in ("", pointer)]
-    if lines:
-        out += ["", legend] + (["", "PR: " + " · ".join(pr_legend)] if pr_legend else [])
     opened =[{"id": item_of(rows[l["key"]]), "kind": "row", "label": label(l), "status": l["own"]}
               for l in lines if l["key"] in rows and l["own"] not in (None, "done")]
     opened += [{"id": i, "kind": "doing", "label": d["title"], "status": js["status"]} for i, d, js in doing]
