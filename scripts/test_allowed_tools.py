@@ -115,7 +115,7 @@ def fixture(value, body="`orca thing go now`"):
 for bad in ("Bash", "Bash(*)", "Read", "Bash(orch *)", "Bash(python3:*)", "Bash(python3 *)", "Bash(bash x.sh)",
             "Bash(python3 /tmp/x.py run)", "Bash(orca worktree rm --worktree *)", "Bash(orca terminal send *)",
             "Bash(orch land *)", "Bash(gh pr merge *)", "Bash(git push *)", "Bash(orca worktree rm --force x)",
-            "Bash(orca terminal close --all)", "Bash(tool run ~/x)", "Bash(tool run /Users/x)"):
+            "Bash(orca terminal close --all)", "Bash(tool run ~/x)", "Bash(tool run /home/x)"):
     assert pattern_errors(entries(bad)[0]), bad
 for good in ('Bash(python3 "${CLAUDE_SKILL_DIR}/scripts/x.py" scan *)', "Bash(tool sub --flag *)"):
     assert not pattern_errors(entries(good)[0]), good
