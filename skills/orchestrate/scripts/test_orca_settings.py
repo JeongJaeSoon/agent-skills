@@ -182,8 +182,8 @@ def own(**states):
     return got, asked[:len(asked) // 2], doctor.getvalue()
 
 
-def row(dispatch, handle="term_me"):
-    return {"dispatchId": dispatch, "runId": "run_top", "agentTerminalHandle": handle}
+def row(dispatch, handle="term_me", status="dispatched"):
+    return {"dispatchId": dispatch, "runId": "run_top", "agentTerminalHandle": handle, "dispatchStatus": status}
 
 
 # A person typed into the lead's terminal, so its Dispatch left `active` for `retained`: still this terminal's.
@@ -197,6 +197,15 @@ got, _, _ = own(active=[], retained=[row("ctx_newest"), row("ctx_older")])  # wo
 assert got == row("ctx_newest"), got
 got, asked, doctor = own(active=[], retained=[row("ctx_other", "term_other")])
 assert got is None and asked == ["active", "retained"] and "묶여 있지 않다" in doctor, (got, asked)
+# A settled retained row is history, not this terminal's Dispatch, even when it is the newest on the terminal: a
+# finished Dispatch must not vouch for closing the terminal while an older one still runs on it.
+for status in s.SETTLED:
+    got, _, doctor = own(active=[], retained=[row("ctx_done", status=status)])
+    assert got is None and "묶여 있지 않다" in doctor, (status, got)
+    got, _, _ = own(active=[], retained=[row("ctx_done", status=status), row("ctx_older")])
+    assert got == row("ctx_older"), (status, got)
+    # A worker that just reported is still active until it is released, and has to find itself.
+    assert own(active=[row("ctx_reported", status=status)], retained=[])[0] == row("ctx_reported", status=status), status
 # Either listing failing is Orca not answering, never "no Dispatch".
 assert own(active=None, retained=[row("ctx_lead")])[:2] == ("unknown", ["active"])
 assert own(active=[], retained=None)[:2] == ("unknown", ["active", "retained"])

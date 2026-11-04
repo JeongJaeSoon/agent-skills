@@ -39,6 +39,10 @@ def answer(version, argv):
     res = copy.deepcopy(DATA["full" if full or version.startswith("old") else "concise"][1 if "--cursor" in argv else 0])
     if "--terminal-state" in argv:
         res["workers"] = [w for w in res["workers"] if w["terminalState"] == argv[argv.index("--terminal-state") + 1]]
+    if status := os.environ.get("WORKER_ROWS_RETAINED"):
+        for w in res["workers"]:
+            if w["terminalState"] == "retained":
+                w["dispatchStatus"] = status
     if "--run" not in argv:  # every Run: Orca names no Run, and the concise rows carry none
         res["scope"] = {"source": "all"}
     return res
@@ -112,11 +116,20 @@ def results(version):
     except (SystemExit, card.Refuse) as e:
         out["card_supervisor"] = f"refused: {str(e)[:80]}"
 
-    # term_c's Dispatch is retained (a person typed into that terminal): every reader still finds it.
+    # term_c's Dispatch is retained. Still running (a person typed into that terminal), every reader finds it;
+    # settled, it is history, and a card from that terminal has no Run.
     os.environ["ORCA_TERMINAL_HANDLE"] = "term_c"
+    os.environ["WORKER_ROWS_RETAINED"] = "dispatched"
     out["own_retained"] = (fresh(orca_settings.own_dispatch, str(fake_orca)) or {}).get("dispatchId")
     out["card_retained"] = fresh(card.supervisor, {"run_demo"})
     out["end_check_retained"] = fresh(end_check.own_dispatch_id, None)
+    del os.environ["WORKER_ROWS_RETAINED"]
+    out["own_settled"] = fresh(orca_settings.own_dispatch, str(fake_orca))
+    out["end_check_settled"] = fresh(end_check.own_dispatch_id, None)
+    try:
+        out["card_settled"] = fresh(card.supervisor, {"run_demo"})
+    except card.Refuse as e:
+        out["card_settled"] = "no dispatched worker" in str(e)
     os.environ["ORCA_TERMINAL_HANDLE"] = "term_lead"
 
     # patrol reads every Run through cardguard; its X rule is Orca's own exited verdict on a running worker.
@@ -154,6 +167,7 @@ assert old["init_lead"] == "ctx_lead" and old["own_dispatch"] == "run_demo", old
 assert old["card_supervisor"] == {"id": "run_demo", "via": "own_dispatch"}, old
 assert old["own_retained"] == "ctx_c" and old["end_check_retained"] == "ctx_c", old
 assert old["card_retained"] == {"id": "run_demo", "via": "own_dispatch"}, old
+assert old["own_settled"] is None and old["end_check_settled"] is None and old["card_settled"] is True, old
 assert old["patrol"] == [("X", "card-a", "term_a")], old
 assert old["reap"][0] == {"/work/acme/card-a": "살아 있는 워커 턴(ctx_a)", "/work/acme/lead": "살아 있는 워커 턴(ctx_lead)",
                           "/work/acme/other": "살아 있는 워커 턴(ctx_x)"} and old["reap"][2] == {"/work/acme/card-c"}, old
