@@ -222,8 +222,7 @@ def resume_line(w, d, task, handle):
     """The recovery of an abandoned worker (reboot SKILL.md "Resume a worker"): its Claude session resumed in a new
     terminal of its own worktree, then a new Dispatch attached to that terminal."""
     card = (w.get("resource") or {}).get("worktreeId") or ""
-    path = card.split("::")[1] if "::" in card else card or "<its worktree>"  # <repo>::<path>[::workspace:<n>]
-    sel = shlex.quote(f"path:{path}") if card else "path:<its worktree>"
+    sel = shlex.quote(f"id:{card}") if card else "id:<its worktree id>"  # the whole id: workspaces can share a path
     provider = (w.get("projection") or {}).get("provider") or {}
     model = provider.get("model") or "<alias>"
     agent = provider.get("id") or "claude"
