@@ -1490,7 +1490,8 @@ function subagentRows(s, d, hidden = false, foldStale = false) {
 
 // A ticket id is letters or digits, a dash and digits ("ABC-12", "94S-1336"), with a letter in the prefix: no
 // tracker's key format is assumed. Only upper case counts, so a branch like "feat-123" is not a ticket.
-const TICKET_RE = /\b(?=[A-Z0-9]*[A-Z])[A-Z0-9]{2,10}-\d{1,6}\b/g;
+// Not \b: an underscore is a word character there, and "feat/ABC-12_fix" still holds a ticket.
+const TICKET_RE = /(?<![A-Za-z0-9])(?=[A-Z0-9]*[A-Z])[A-Z0-9]{2,10}-\d{1,6}(?![A-Za-z0-9])/g;
 // Standards and formats that read like a ticket id ("UTF-8", "SHA-256"); a card named for one has no ticket from it.
 const NOT_TICKET = /^(UTF|SHA|MD|AES|RSA|ISO|TLS|SSL|HTTP|CRC|USB|GPT|WCAG|IPV|TCP|UDP|X)-/;
 // The card's own ticket links first, then ids in its name, its branch and the labels of its brief rows.
@@ -1501,9 +1502,10 @@ function ticketIds(s, rows = []) {
   }));
   return out;
 }
-// An offline worker whose pull request merged has nothing left to do: its row folds into the finished group.
+// An offline worker whose pull request merged has nothing left to do: its row folds into the finished group. The
+// orchestrator and the leads are not workers: sessions hang under them.
 function finished(st, s) {
-  if (s.kind === "orchestration" || s.phase !== "offline") return false;
+  if (s.kind === "orchestration" || s.kind === "orchestrator" || s.phase !== "offline") return false;
   const pr = (st.prs || []).find((p) => p.session === s.id), state = pr ? pr.state : s.linked_pr && s.linked_pr.state;
   return String(state || "").toUpperCase() === "MERGED";
 }

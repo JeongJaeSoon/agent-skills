@@ -698,6 +698,16 @@ def project_of(path, orca_repo=None, gh_repo=None):
     return (gh_repo or "").partition("/")[2] or orca_repo or (m and m.group(1)) or pathlib.Path(path or "").name or None
 
 
+def workspace_projects(sessions):
+    """workspace directory name -> the project its live sessions have now."""
+    out = {}
+    for s in sessions:
+        m = WORKSPACE_RE.search(f"{s.get('path') or ''}/")
+        if m and s.get("project"):
+            out[m.group(1)] = s["project"]
+    return out
+
+
 def repo_of(path, cache):
     """owner/name of the worktree's GitHub origin, or None."""
     if path in cache:
@@ -2075,12 +2085,17 @@ class Fleet:
         items += decision_items(by_handle, root)
         # A task's project is the worktree its latest dispatch runs in (a released one is gone from Orca's list,
         # but its worktree id still carries the path).
+        # A released worktree's origin cannot be read any more, so it takes the project the live sessions of the same
+        # workspace directory have now (a renamed repository), else its directory's name.
+        dir_project = workspace_projects(sessions.values())
         task_project = {}
         for w in sorted(self.runs["workers"], key=lambda w: w.get("dispatchId") or ""):
             wt = (w.get("resource") or {}).get("worktreeId") or ""
             ws = sessions.get(wt)
             path = wt.partition("::")[2] or None
-            task_project[w.get("taskId")] = ws["project"] if ws else project_of(path, None, self.repos.get(path))
+            m = WORKSPACE_RE.search(f"{path or ''}/")
+            task_project[w.get("taskId")] = (ws["project"] if ws else m and dir_project.get(m.group(1))
+                                             or project_of(path, None, self.repos.get(path)))
         for g in self.runs["gates"]:
             if g.get("status") not in ("resolved", "cancelled"):
                 items.append({"key": f"gate:{g['id']}", "type": "approval", "session": root, "title": mask(g.get("question"), 160),

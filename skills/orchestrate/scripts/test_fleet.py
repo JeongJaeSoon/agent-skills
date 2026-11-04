@@ -66,6 +66,9 @@ assert {t["id"]: t["project"] for t in st["tasks"]} == {"task_login": "launchpad
 assert fleet.project_of("/h/orca/workspaces/acme-api/fix-1") == "acme-api"
 assert fleet.project_of("/h/orca/workspaces/acme-api/fix-1", "acme-api", "o/renamed") == "renamed"  # the repository was renamed on GitHub
 assert fleet.project_of("/h/orca/workspaces/acme-api/fix-1", "orca-name", None) == "orca-name"
+# a released worktree's origin is unreadable: its task takes the project its workspace directory's live sessions have now
+assert fleet.workspace_projects([{"path": "/h/orca/workspaces/acme-api/fix-2", "project": "renamed"}, {"path": "/src/x", "project": "x"},
+                                 {"path": None, "project": "y"}, {"path": "/h/orca/workspaces/none/a", "project": None}]) == {"acme-api": "renamed"}
 assert fleet.project_of("/src/app-wt", None, "o/app") == "app" and fleet.project_of("/src/app-wt") == "app-wt"
 assert fleet.project_of(None) is None
 
