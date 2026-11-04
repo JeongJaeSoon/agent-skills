@@ -669,12 +669,21 @@ def precheck(home=None, collect_first=True, pr_state=gh_pr_state, orchestrator=o
 
 
 def runner_hint(checkout):
-    return ("\n모델: automation 은 --workspace 체크아웃의 Claude Code 설정을 따른다(create 에 모델 옵션이 없다). "
+    return ("\n모델: automation 은 --workspace 체크아웃의 Claude Code 설정을 따른다. reflect.model 을 넣으면 schedule 이 --extra-agent-args 로 넘긴다. 넣지 않을 때는 아래 방법을 쓴다. "
             "메인 체크아웃에 model 을 넣으면 거기서 여는 대화형 세션도 바뀌므로, 전용 runner worktree 를 한 번 만든다:\n"
             f"  orca worktree create --repo {shlex.quote('path:' + str(checkout))} --name automations-runner --no-parent --setup skip --json\n"
             '  <runner>/.claude/settings.local.json 에 {"model": "<고른 모델>"} (gitignored)\n'
             "그 뒤 schedule --workspace path:<runner> 로 다시 출력한다. 이미 있는 automation 은 "
             "orca automations edit --id <id> --workspace path:<runner>")
+
+
+def round_model():
+    """`reflect.model` of agent-skills.json, or None."""
+    try:
+        path = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-skills.json").expanduser()
+        return (json.loads(path.read_text()).get("reflect") or {}).get("model")
+    except (OSError, ValueError, AttributeError):
+        return None
 
 
 def schedule_cmd(script, workspace, provider="claude"):
@@ -685,7 +694,8 @@ def schedule_cmd(script, workspace, provider="claude"):
               "편집은 이 체크아웃이 아니라 새 worktree 브랜치에서 한다. 끝나면 cursor 를 옮기고, PR 이나 티켓을 만든 때만 보고한다.")
     return ["orca", "automations", "create", "--name", "agent-skills reflect standing", "--trigger", "40 6 * * *",
             "--provider", provider, "--workspace-mode", "existing", "--workspace", workspace,
-            "--precheck", f"python3 {shlex.quote(str(script))} precheck", "--prompt", prompt, "--json"]
+            "--precheck", f"python3 {shlex.quote(str(script))} precheck", "--prompt", prompt, "--json",
+            *([f"--extra-agent-args=--model {round_model()}"] if round_model() else [])]
 
 
 def list_misses(skill, cache_path=None, now=None):
@@ -727,7 +737,7 @@ def main(argv):
         script = top / script.relative_to(HERE.parents[1].parent) if top else script
         cmd = schedule_cmd(script, opt("--workspace") or f"path:{top}", opt("--provider", "claude"))
         print(" ".join(shlex.quote(a) for a in cmd))
-        if not opt("--workspace"):
+        if not opt("--workspace") and not round_model():
             print(runner_hint(top))
         if "--write" in argv:
             sys.exit(subprocess.run(cmd).returncode)

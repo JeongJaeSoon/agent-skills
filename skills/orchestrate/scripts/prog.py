@@ -84,6 +84,7 @@ Usage: orch <command> <slug> [options]
                                      as a dispatched worker (Nested worker depth >= 3) or a /goal card, a
                                      one-line proposal per setting to change, and this terminal's Run
                                      (orca_settings.py)
+  model lead|worker                  no slug: the role's model from orchestrate.models; prints nothing when unset
   decide add --title T [--body-file F] [--option "label::description"]... [--recommend N] [--link URL]
   decide list | done <id> [--answer TEXT] | drop <id> | keep <id>
                                      no slug: a decision you wait on the human for, shown on the fleet
@@ -2601,7 +2602,8 @@ def close_out(msgs, workers, worktrees, here=""):
                     " (`--worktree current`), so it stays", release]
         elif payload.get("outcome") != "succeeded":
             out += [f"CLOSE OUT {d} ({payload.get('outcome') or 'no outcome'}): release it, then retry on its card"
-                    f" (worker-start --retry-of {d} --task {task[d]} --worktree path:{shlex.quote(p)} --agent <agent> [--model <id>])",
+                    f" (worker-start --retry-of {d} --task {task[d]} --worktree path:{shlex.quote(p)} --agent <agent>,"
+                    " with --model from `orch model worker` for Claude when it prints one)",
                     release]
         elif here is None:
             out += [f"CLOSE OUT {d}: release it; this session's own worktree could not be read (`orca terminal show`),"
@@ -3343,6 +3345,13 @@ def cmd_decide(argv):
         sys.exit(str(e))
 
 
+def cmd_model(argv):
+    import orca_settings
+    if argv not in (["lead"], ["worker"]):
+        sys.exit("usage: orch model lead|worker")
+    print(orca_settings.role_model(argv[0]) or "")
+
+
 def cmd_db(argv):
     import store
     store.main(argv)
@@ -3587,7 +3596,7 @@ def cmd_sent(argv):
 COMMANDS = {"init": cmd_init, "set": cmd_set, "status": cmd_status, "record": cmd_record, "verdict": cmd_verdict,
             "gate": cmd_gate, "dep": cmd_dep, "queue": cmd_queue, "overlap": cmd_overlap, "land": cmd_land, "land-check": cmd_land_check,
             "landed": cmd_landed, "heavy": cmd_heavy, "wait": cmd_wait, "inbox": cmd_inbox, "backfill": cmd_backfill, "decide": cmd_decide,
-            "db": cmd_db,
+            "db": cmd_db, "model": cmd_model,
             "stage": cmd_stage, "board": cmd_board, "brief": cmd_brief, "hold": cmd_hold, "sent": cmd_sent, "release": lambda argv: cmd_hold(argv, release=True),
             "watch-cards": lambda argv: __import__("card_watch").main(argv),
             "patrol": lambda argv: __import__("patrol").main(argv),

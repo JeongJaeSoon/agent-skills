@@ -2116,7 +2116,8 @@ def schedule_cmd(script, state_dir, workspace, provider="claude", ledger=None, i
             "--provider", provider, "--workspace-mode", "existing", "--workspace", workspace,
             "--precheck", round_cmd(script, state_dir, ledger, "precheck", *(["--load"] if load else [])),
             "--precheck-timeout", str(PRECHECK_TIMEOUT),
-            "--prompt", schedule_prompt(script, state_dir, ledger, inbox), "--json"]
+            "--prompt", schedule_prompt(script, state_dir, ledger, inbox), "--json",
+            *([f"--extra-agent-args=--model {config()['model']}"] if config().get("model") else [])]
 
 
 def load_due(state_dir, cfg, now=None, load5=None, autos=None):
@@ -2159,7 +2160,7 @@ def stamp_round(state_dir, now=None):
 
 
 def runner_hint(checkout):
-    return ("\n모델: automation 은 --workspace 체크아웃의 Claude Code 설정을 따른다(create 에 모델 옵션이 없다). "
+    return ("\n모델: automation 은 --workspace 체크아웃의 Claude Code 설정을 따른다. reap.model 을 넣으면 schedule 이 --extra-agent-args 로 넘긴다. 넣지 않을 때는 아래 방법을 쓴다. "
             "메인 체크아웃에 model 을 넣으면 거기서 여는 대화형 세션도 바뀌므로, 전용 runner worktree 를 한 번 만든다:\n"
             f"  orca worktree create --repo {shlex.quote('path:' + str(checkout))} --name automations-runner --no-parent --setup skip --json\n"
             '  <runner>/.claude/settings.local.json 에 {"model": "<고른 모델>"} (gitignored)\n'
@@ -2634,7 +2635,7 @@ def main():
         argv = schedule_cmd(script, STATE, workspace, opt("--provider") or "claude", ledger_path(), cfg.get("inbox_to"),
                             load="--load" in sys.argv)
         print(" ".join(shlex.quote(a) for a in argv))
-        if not opt("--workspace"):
+        if not opt("--workspace") and not cfg.get("model"):
             print(runner_hint(top.strip()))
         if "--write" in sys.argv:
             out = run(argv)

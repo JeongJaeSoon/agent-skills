@@ -24,6 +24,17 @@ LABELS = {"nestedWorkerMaxDepth": "Nested worker depth (하위 에이전트 최�
           "orchestrationChatErrorEscalationEnabled": "Chat error escalation (채팅 오류 알림)"}
 
 
+def role_model(role):
+    """`orchestrate.models.<role>` of agent-skills.json, or None: unset, unreadable, or not one model name."""
+    try:
+        cfg = json.loads(pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-skills.json")
+                         .expanduser().read_text())
+        value = cfg["orchestrate"]["models"][role]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return value if isinstance(value, str) and re.fullmatch(r"[\w.\[\]-]+", value) else None
+
+
 def data_dir():
     if os.environ.get("AGENT_SKILLS_ORCA_DATA_DIR"):
         return pathlib.Path(os.environ["AGENT_SKILLS_ORCA_DATA_DIR"])

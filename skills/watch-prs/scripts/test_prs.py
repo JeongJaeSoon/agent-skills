@@ -560,6 +560,9 @@ finally:
 prompt = line[line.index("--prompt") + 1]
 assert line[:4] == ["orca", "automations", "edit", "auto1"] and no_env(line), line
 assert line[line.index("--precheck") + 1] == "python3 /r/prs.py precheck --state /s"
+assert not any(a.startswith("--extra-agent-args") for a in line), line
+for edit in (None, "auto1"):
+    assert "--extra-agent-args=--model sonnet" in p.schedule_cmd(pathlib.Path("/r/prs.py"), {**rcfg, "model": "sonnet"}, "path:/r", edit=edit)
 assert "--precheck-timeout" in line, "--edit rewrites the timeout too"
 assert "`python3 /r/prs.py actions --state /s`" in prompt and "`python3 /r/prs.py log --state /s --key <key>" in prompt, prompt
 # A state folder off the default goes in as a flag after the subcommand, not through the environment.

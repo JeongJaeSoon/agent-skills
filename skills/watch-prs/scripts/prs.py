@@ -1355,7 +1355,7 @@ PRE_SEND_STEP = (
 
 
 def runner_hint(checkout):
-    return ("\n모델: automation 은 --workspace 체크아웃의 Claude Code 설정을 따른다(create 에 모델 옵션이 없다). "
+    return ("\n모델: automation 은 --workspace 체크아웃의 Claude Code 설정을 따른다. prs.model 을 넣으면 schedule 이 --extra-agent-args 로 넘긴다. 넣지 않을 때는 아래 방법을 쓴다. "
             "메인 체크아웃에 model 을 넣으면 거기서 여는 대화형 세션도 바뀌므로, 전용 runner worktree 를 한 번 만든다:\n"
             f"  orca worktree create --repo {shlex.quote('path:' + str(checkout))} --name automations-runner --no-parent --setup skip --json\n"
             '  <runner>/.claude/settings.local.json 에 {"model": "<고른 모델>"} (gitignored)\n'
@@ -1404,12 +1404,13 @@ def schedule_cmd(script, cfg, workspace, provider="claude", edit=None):
               f"--body \"$(cat {shlex.quote(str(body_file))})\" --json` 로 한 통만 보낸다(N 은 본문 첫 줄의 건수). "
               + (steps + " " if steps else "")
               + f"inbox_to 전송이 성공했을 때만 마지막에 `{run('commit')}` 을 실행한다." + reads)
+    model = [f"--extra-agent-args=--model {cfg['model']}"] if cfg.get("model") else []
     if edit:
         return ["orca", "automations", "edit", edit, "--trigger", cfg["cron"], "--precheck", run("precheck"),
-                "--precheck-timeout", str(PRECHECK_TIMEOUT), "--prompt", prompt, "--json"] + (["--timezone", cfg["timezone"]] if cfg.get("timezone") else [])
+                "--precheck-timeout", str(PRECHECK_TIMEOUT), "--prompt", prompt, "--json"] + (["--timezone", cfg["timezone"]] if cfg.get("timezone") else []) + model
     cmd = ["orca", "automations", "create", "--name", "agent-skills watch-prs", "--trigger", cfg["cron"],
            "--provider", provider, "--workspace-mode", "existing", "--workspace", workspace,
-           "--precheck", run("precheck"), "--precheck-timeout", str(PRECHECK_TIMEOUT), "--prompt", prompt, "--json"]
+           "--precheck", run("precheck"), "--precheck-timeout", str(PRECHECK_TIMEOUT), "--prompt", prompt, "--json", *model]
     if cfg.get("timezone"):
         cmd[cmd.index("--provider"):cmd.index("--provider")] = ["--timezone", cfg["timezone"]]
     return cmd
@@ -1499,7 +1500,7 @@ def main():
         line = schedule_cmd(script, cfg, opt("--workspace") or f"path:{script.parents[3]}", opt("--provider", "claude"),
                             opt("--edit"))
         print(shlex.join(line))
-        if not opt("--workspace"):
+        if not opt("--workspace") and not cfg.get("model"):
             print(runner_hint(script.parents[3]))
         if "--write" in sys.argv:
             sys.exit(subprocess.run(line).returncode)

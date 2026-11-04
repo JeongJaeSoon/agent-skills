@@ -467,6 +467,15 @@ class Watch(Base):
     def watch(self, enabled=True):
         return {"id": "W1", "name": "agent-skills watch-prs", "enabled": enabled, "rrule": "*/30 * * * *"}
 
+    def test_a_model_alone_does_not_configure_the_watch(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = pathlib.Path(d) / "c.json"
+            with mock.patch.object(au, "CONFIG", path):
+                path.write_text(json.dumps({"prs": {"model": "sonnet"}}))
+                self.assertFalse(au.Watch("watch-prs", "x").configured())
+                path.write_text(json.dumps({"prs": {"model": "sonnet", "inbox_to": "run:r"}}))
+                self.assertTrue(au.Watch("watch-prs", "x").configured())
+
     def test_status(self):
         self.orca([])
         self.assertEqual(self.w.status()[0], "unconfigured")

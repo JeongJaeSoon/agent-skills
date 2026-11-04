@@ -68,7 +68,7 @@ Use this to know what to expect back and how to name a gap when a category retur
 
 ## Step 5. Synthesize
 
-Once every investigator has returned, synthesize once. Do it yourself, or hand it to one `Agent` (`subagent_type: "general-purpose"`, `model: "opus"`, told it must not write files or change external state) when the findings are too large to hold alongside the conversation.
+Once every investigator has returned, synthesize once. Do it yourself, or hand it to one `Agent` (`subagent_type: "general-purpose"`, `model: "opus"` unless your brief says subagents keep this session's model, told it must not write files or change external state) when the findings are too large to hold alongside the conversation.
 
 The synthesis works from:
 1. The investigator findings, including null results and the sources skipped with their reasons
