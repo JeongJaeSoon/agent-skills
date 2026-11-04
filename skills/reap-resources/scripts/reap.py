@@ -616,6 +616,16 @@ def dir_ino(path):
         return None
 
 
+def rm_refusal(path):
+    """Why a card must not be removed by `orca worktree rm`: its removal was refused and recorded (rm_refused.py), or the
+    record cannot be read. None when nothing stops it."""
+    import rm_refused
+    held = rm_refused.held(path, STATE)
+    if held is None:
+        return "worktree rm 거부 기록을 읽지 못함"
+    return f"사람에게 넘김: worktree rm 이 거부된 카드. 사람이 실행: {rm_refused.command(path)}" if held else None
+
+
 def acted(result):
     s = str(result or "")
     return bool(s) and not s.startswith(NOOP_PREFIX) and not NOOP_RESULT.match(s)
@@ -2512,6 +2522,10 @@ def act(item, notes, done=None):
         # `orca worktree rm` deletes ignored files (.env.local, notes, caches) for good; they go to the trash first.
         # Tracked files are in git, and anything untracked left makes the rm refuse.
         p = item["name"]
+        # The refusal record is read again here and once more right before the rm: a person may record one while the
+        # ignored files are being trashed, and a refused removal is not run again.
+        if why := rm_refusal(p):
+            return f"건너뜀: {why}"
         copies = []
         if item.get("regenerated"):
             # Judged again right here: a file written since the scan is someone's work, and goes nowhere.
@@ -2526,6 +2540,8 @@ def act(item, notes, done=None):
             trash(*ignored)
         for h in item.get("terminals") or []:
             run(["orca", "terminal", "close", "--terminal", h, "--json"])
+        if why := rm_refusal(p):
+            return f"건너뜀: {why}"
         run(["orca", "worktree", "rm", "--worktree", f"path:{p}", "--run-hooks", "--json"])
         return (f"재생성 사본 {len(copies)}개, " if copies else "") + \
             f"ignored 항목 {len(ignored)}개는 휴지통으로, " + ("셸 터미널을 닫고 " if item.get("shells") else "") + \

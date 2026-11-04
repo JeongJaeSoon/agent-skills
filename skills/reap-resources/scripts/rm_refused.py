@@ -6,10 +6,12 @@ Usage:
   python3 rm_refused.py list          the recorded cards still on disk
 
 A refused act is not run again, so a recorded card leaves every automatic cleanup: cards.py scan and apply, the
-cardguard check both cleaners pass, reap-hard, and the CLOSE OUT line of `orch wait`. The person runs the one command
-`command()` prints. The file is <state>/rm-refused.jsonl, one JSON object per line: {"path", "ino", "t"}.
-An entry names a card by path and folder inode: a card made again on that path is a new card, and a card
-whose folder is gone needs nothing. Stdlib only: orchestrate's prog.py imports it too.
+cardguard check both cleaners pass, reap.act right before `worktree rm`, reap-hard, `skills-sync end-check --apply`
+and the CLOSE OUT line of `orch wait`. The person runs the one command `command()` prints. The file is
+<state>/rm-refused.jsonl, one JSON object per line: {"path", "ino", "born", "t"}.
+An entry names a card by path, folder inode and, where the filesystem has it, birth time: a card made again on that
+path is a new card, and a card whose folder is gone needs nothing. A folder that exists but cannot be read stays
+recorded. Stdlib only: orchestrate's prog.py imports it too.
 """
 import json, os, pathlib, shlex, sys, time
 
@@ -24,11 +26,24 @@ def real(path):
     return os.path.realpath(os.path.expanduser(str(path)))
 
 
-def ino_of(path):
+def identity(path):
+    """(inode, birth time or None) of a folder; raises OSError when it cannot be read."""
+    st = os.stat(path)
+    return st.st_ino, getattr(st, "st_birthtime", None)
+
+
+def same_folder(path, entry):
+    """Whether the folder at path is the one the entry names. A folder that is gone is not; one that exists but whose
+    identity cannot be read, or an entry that recorded none, counts as the same: unreadable is no proof it is new."""
     try:
-        return os.stat(path).st_ino
-    except (OSError, ValueError):
-        return None
+        ino, born = identity(path)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    if entry.get("ino") is None:
+        return True
+    return ino == entry["ino"] and (entry.get("born") is None or born is None or born == entry["born"])
 
 
 def read(state=None):
@@ -50,7 +65,7 @@ def read(state=None):
             p = real(e["path"])
         except (ValueError, KeyError, TypeError):
             return None
-        if e.get("ino") is not None and ino_of(p) == e["ino"]:
+        if same_folder(p, e):
             out[p] = e
     return out
 
@@ -68,11 +83,13 @@ def command(path):
 
 def add(path, state=None, now=None):
     p = real(path)
-    if not os.path.isdir(p):
-        raise SystemExit(f"rm_refused: {p} is not a folder")
+    try:
+        ino, born = identity(p)
+    except OSError as e:
+        raise SystemExit(f"rm_refused: cannot read the folder {p} ({e}); nothing recorded")
     d = pathlib.Path(state or state_dir())
     d.mkdir(parents=True, exist_ok=True)
-    row = {"path": p, "ino": ino_of(p), "t": now or time.time()}
+    row = {"path": p, "ino": ino, "born": born, "t": now or time.time()}
     with open(d / NAME, "a") as f:
         f.write(json.dumps(row) + "\n")
     return row

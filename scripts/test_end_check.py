@@ -253,6 +253,24 @@ rc, err, calls = apply("remove", status="completed")
 assert rc == 0 and ["worktree", "rm", "--worktree", "current", "--json"] in calls, calls
 rc, err, calls = apply("close-terminal", status="completed")
 assert rc == 0 and ["terminal", "close", "--terminal", "term_me", "--json"] in calls, calls
+# A card whose `orca worktree rm` was refused is not removed again by `--apply` either (Codex round 1, Act-on 1).
+sys.path.insert(0, str(HERE.parent / "skills" / "reap-resources" / "scripts"))
+import rm_refused  # noqa: E402
+refused_card = tmp / "refused-card"
+refused_card.mkdir()
+refused_state = pathlib.Path(os.environ["AGENT_SKILLS_STATE"])
+CLEAN_FACTS["path"] = str(refused_card)  # restored below to CLEAN's "/wt/card"
+rm_refused.add(refused_card, refused_state)
+rc, err, calls = apply("remove", status="completed")
+assert rc == 3 and "was refused" in err and rm_refused.command(refused_card) in err \
+    and not any(c[:2] == ["worktree", "rm"] for c in calls), (rc, err, calls)
+(refused_state / rm_refused.NAME).write_text("{not json\n")
+rc, err, calls = apply("remove", status="completed")
+assert rc == 3 and "could not be read" in err and not any(c[:2] == ["worktree", "rm"] for c in calls), (rc, err, calls)
+(refused_state / rm_refused.NAME).unlink()
+CLEAN_FACTS["path"] = CLEAN["path"]
+rc, err, calls = apply("remove", status="completed")
+assert rc == 0 and ["worktree", "rm", "--worktree", "current", "--json"] in calls, calls
 # --trash-caches: the cleaners read an untracked cache as dirty, so it goes even from a card kept for its open PR.
 sys.path.insert(0, str(HERE.parent / "skills" / "reap-resources" / "scripts"))
 import reap  # noqa: E402

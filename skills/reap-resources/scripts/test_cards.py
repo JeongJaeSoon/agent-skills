@@ -112,6 +112,40 @@ assert v[0] == cards.KEEP and "거부 기록을 읽지 못함" in v[1], v
 assert rm_refused.read(refused_state) == {}
 (refused_state / rm_refused.NAME).write_text("{not json\n")
 assert rm_refused.read(refused_state) is None and rm_refused.held(CARD, refused_state) is None
+# Codex round 1: a folder that exists but whose identity cannot be read stays recorded; a recycled inode with another
+# birth time is a new card; an entry that recorded no identity is kept; the folder gone releases the record.
+(refused_state / rm_refused.NAME).unlink()
+ino, born = rm_refused.identity(CARD)
+record = lambda **kw: (refused_state / rm_refused.NAME).write_text(json.dumps({"path": CARD, "t": 0, **kw}) + "\n")
+record(ino=ino, born=(born or 0) + 5.0) if born is not None else record(ino=ino)
+assert (rm_refused.held(CARD, refused_state) is False) == (born is not None)
+record(ino=ino, born=born)
+real_identity = rm_refused.identity
+rm_refused.identity = lambda p: (_ for _ in ()).throw(PermissionError("denied"))
+assert rm_refused.held(CARD, refused_state), "an unreadable folder is not proof the card is new"
+rm_refused.identity = real_identity
+record(ino=None)
+assert rm_refused.held(CARD, refused_state)
+record(ino=ino, born=born)
+os.rename(CARD, CARD + "-moved")
+assert rm_refused.held(CARD, refused_state) is False
+os.rename(CARD + "-moved", CARD)
+try:
+    rm_refused.add(CARD + "-missing", refused_state)
+except SystemExit as e:
+    assert "nothing recorded" in str(e)
+else:
+    raise AssertionError("add must not record a folder it cannot read")
+# reap.act reads the record before it trashes anything and again right before `orca worktree rm`.
+saved_run, saved_state = reap.run, reap.STATE
+reap.STATE, ran = refused_state, []
+reap.run = lambda cmd, **k: ran.append(cmd) or ""
+out = reap.act({"kind": "orca-worktree", "key": "orca-worktree:" + CARD, "name": CARD}, [])
+assert out.startswith("건너뜀: 사람에게 넘김") and rm_refused.command(CARD) in out and not ran, (out, ran)
+(refused_state / rm_refused.NAME).write_text("{not json\n")
+out = reap.act({"kind": "orca-worktree", "key": "orca-worktree:" + CARD, "name": CARD}, [])
+assert out.startswith("건너뜀:") and "읽지 못함" in out and not ran, (out, ran)
+reap.run, reap.STATE = saved_run, saved_state
 
 # Open PR: the worktree stays, only its idle agent terminal is closed.
 OPEN = {"acme/app#7": {"state": "OPEN", "headRefOid": HEAD}}

@@ -388,6 +388,14 @@ def apply(verdict, f, mode, opts, me):
             print(f"[{ME}] not applied: {why}", file=sys.stderr)
             return 3
     if verdict == "remove":
+        sys.path.insert(0, str(REPO / "skills" / "reap-resources" / "scripts"))
+        import rm_refused
+        refused = rm_refused.held(f["path"] or ".", STATE)
+        if refused is None or refused:  # a refused removal is not run again; an unreadable record is no proof it was not
+            print(f"[{ME}] not applied: " + ("the record of refused card removals could not be read" if refused is None else
+                  f"`orca worktree rm` of this card was refused; a person runs: {rm_refused.command(f['path'])}"),
+                  file=sys.stderr)
+            return 3
         hooks = archive_hook(f["path"])
         if hooks is None:
             print(f"[{ME}] not applied: {f['path']}/orca.yaml could not be read, so its archive hook is unknown",
