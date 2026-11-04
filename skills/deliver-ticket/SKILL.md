@@ -150,7 +150,9 @@ Before pushing, run **both**:
   compose), else `docker compose -p <project> down`; either way keep volumes (never `-v`). Teardown runs
   bare, never through `orch heavy`, whose load gate would refuse it under load. A stack that has to stay gets its
   reason and deadline: `reap.py ledger add --kind compose-stack --id <project> --keep "<reason>" --until <ISO time>`
-  (reap-resources); `orch heavy` registers its stacks, so the janitor downs a forgotten one after the PR closes
+  (reap-resources); `orch heavy` registers its stacks, so the janitor downs a forgotten one after the PR closes.
+  A throwaway volume you create by hand outside the verify skill carries the label `reap.py origin-label
+  verify-<app>` prints, when it prints one; an unlabeled one can never be cleaned up (reap-resources)
 - a change with no runtime behavior (docs, comments): validate links and run documented
   commands and examples exactly as written in a safe, isolated fixture; record commands,
   outputs and fixture substitutions. If a destructive command or live external write cannot
@@ -245,7 +247,7 @@ Then land it. How depends on where you run:
   command (`orch land`), which re-checks readiness at the current head, waits for your
   dependencies, and puts migrations, CI and other shared files in the exclusive lane; other PRs
   land in parallel, behind or not.
-  Never `gh pr merge` or merge-async by hand there: that skips the order and the review gate.
+  Never `gh pr merge`, `gh stack merge` or merge-async by hand there: that skips the order and the review gate.
   Under human-gate it refuses; report READY and stop. A human review that will outlast this
   session does not hold the session open either: say in the brief's REPORT that the PR waits on a
   review, and the lead's wake lands it once it is ready. After landing, the brief's REPORT is the
@@ -272,7 +274,7 @@ Then land it. How depends on where you run:
   hand once it is ready.
 
 ```bash
-gh pr merge <n> --squash --delete-branch      # the merge method the repo allows; not for a stack, which lands with merge-async (§5)
+gh pr merge <n> --squash --delete-branch      # the merge method the repo allows; not for a stack, which lands with `gh stack merge` (§5)
 gh pr view <n> --json state,mergeCommit       # confirm MERGED and record the commit
 ```
 

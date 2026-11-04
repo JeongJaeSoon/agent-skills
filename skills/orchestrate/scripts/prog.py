@@ -1013,17 +1013,66 @@ def open_rows(repo):
                    "number,title,headRefOid,headRefName,mergeStateStatus,isDraft,statusCheckRollup,baseRefName")
 
 
-def repo_stacks(repo):
-    """{stack id: [PR numbers bottom→top]} from GitHub stacked PRs, or {} when unavailable.
-
-    This is the endpoint the gh-stack extension itself reads; it is not a documented API, so a
-    failure only turns stack-aware landing off, never landing itself.
+def read_stacks(repo):
+    """{stack number: [open PR numbers bottom→top]} of the open stacks, or None when GitHub did not answer in that
+    shape. https://docs.github.com/en/rest/pulls/stacks. A finished stack stays listed with `open` false and the
+    listing has no state filter, so all pages are read.
     """
-    r = run(["gh", "api", f"repos/{repo}/cli_internal/pulls/stacks"], check=False)
+    r = run(["gh", "api", f"repos/{repo}/stacks?per_page=100", "--paginate", "--slurp"], check=False)
     try:
-        return {s["id"]: s["pull_requests"] for s in json.loads(r.stdout)} if r.returncode == 0 else {}
+        return {s["number"]: [p["number"] for p in s["pull_requests"] if p["state"] == "open"]
+                for page in json.loads(r.stdout) for s in page if s["open"]} if r.returncode == 0 else None
     except (ValueError, KeyError, TypeError):
-        return {}
+        return None
+
+
+def repo_stacks(repo):
+    """read_stacks with an unreadable listing as no stacks: it turns stack-aware landing off, never landing itself."""
+    return read_stacks(repo) or {}
+
+
+def in_a_stack(repo, pr):
+    """The PR's own `stack` field says it is in one. False also when the field cannot be read."""
+    r = run(["gh", "api", f"repos/{repo}/pulls/{pr}", "--jq", ".stack"], check=False)
+    return r.returncode == 0 and r.stdout.strip() not in ("", "null")
+
+
+def stack_level():
+    """`orchestrate.stack_dependent` of ~/.claude/agent-skills.json, read as hooks/lib/config.level reads it, warn
+    by default. hooks/stack_gate.py reads the same key."""
+    path = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-skills.json").expanduser()
+    try:
+        value = json.loads(path.read_text())["orchestrate"]["stack_dependent"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return "warn"
+    return "off" if value is False else value if value in ("deny", "off") else "warn"
+
+
+def stack_gaps(events, rows, stacks, deps, pr):
+    """(gaps, flipped) among the land-after edges at this PR whose two PRs are both open, as (lower, upper) pairs.
+    A gap is an edge outside any stack. Flipped is an edge a stack holds upside down: the upper waits for the lower's
+    layer and the dep waits the other way, so neither ever lands."""
+    after = dep_map(events, deps)
+    prs = program_prs(events, rows, set(after) | {t for lowers in after.values() for t in lowers})
+    mine = prs.get(pr)
+    edges = [(n, pr) for n, t in prs.items() if t in after.get(mine, ())] + \
+            [(pr, n) for n, t in prs.items() if mine in after.get(t, ())] if mine else []
+    gaps, flipped = [], []
+    for low, up in edges:
+        members = next((m for m in stacks.values() if low in m and up in m), None)
+        if members is None:
+            gaps.append((low, up))
+        elif members.index(low) > members.index(up):
+            flipped.append((low, up))
+    return gaps, flipped
+
+
+def gap_text(repo, gaps, base):
+    return "; ".join(f"#{up} lands after #{low} and they are not a GitHub stack: gh stack link {low} {up} --base {base},"
+                     f" confirm with gh api repos/{repo}/pulls/{up} --jq .stack" for low, up in gaps)
+
+
+FLIPPED = "the stack has #{up} below #{low}, which it lands after, so neither can land: fix the dep or the stack's order"
 
 
 def patch_id(repo, pr):
@@ -1245,13 +1294,13 @@ def cmd_init(argv):
 
 STALL_TEXT = {
     "idle": "turn ended {minutes} min ago with its task open and no wake-up armed; an orchestration message "
-            "does not wake an idle session: send the content to dispatch:{dispatch}, then nudge its terminal with "
-            "one line (orca terminal send --text 'run your orchestration check' --enter)",
+            "does not wake an idle session: send the content to dispatch:{dispatch}, then wake it by "
+            "references/waking.md (skills-sync wake-target <terminal>)",
     "start_unconfirmed": "dispatched {minutes} min ago and its session has written nothing: check it got the brief",
     "long_tool": "one {tool} call running for {minutes} min ({detail}): still waiting on purpose?",
     "silent": "its session has written nothing for {minutes} min though its last row is input, not an ended turn "
               "(a notification that arrived after the turn ended looks like this): read its terminal, and if it sits "
-              "at the prompt, send the content to dispatch:{dispatch} and nudge its terminal as for an idle one",
+              "at the prompt, send the content to dispatch:{dispatch} and wake it as for an idle one",
 }
 
 
@@ -1799,14 +1848,47 @@ ADVICE = {
 }
 
 
-def update_advice(unit, repo):
-    """How to bring a PR, or a stack bottom-up, onto the latest base. update-branch merges a PR's own base
-    into it, so on a stack top it pulls only the layer below."""
-    if len(unit) == 1:
+def update_advice(unit, repo, stacked=False):
+    """How to bring a PR, or a stack bottom-up, onto the latest base. A stack merges only as a linear chain: a merge
+    commit, or a lower layer rebased alone, gets "Stack needs to be rebased"; every layer rebased bottom-up clears it,
+    a merge commit already in the chain included."""
+    if len(unit) == 1 and not stacked:
         return f"gh pr update-branch {unit[0]} --repo {repo}"
-    return ("update the stack bottom-up, each after the previous finishes: "
-            + "; ".join(f"gh pr update-branch {n} --repo {repo}" for n in unit)
+    return ("rebase the stack bottom-up, each after the previous finishes: "
+            + "; ".join(f"gh pr update-branch {n} --rebase --repo {repo}" for n in unit)
             + " (tell the lower layers' owners)")
+
+
+def async_answer(r):
+    """(status, details) of a merge-async response, (None, {}) when it is not one. gh prints the body on stdout on an
+    HTTP error too."""
+    try:
+        body = json.loads(r.stdout)
+        return (body.get("status"), body["details"]) if isinstance(body["details"], dict) else (None, {})
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return None, {}
+
+
+def merge_async(repo, pr, head):
+    """Request the merge and poll its uuid until it has a result: (gh result, status, details). Status is pending
+    when 15 minutes were not enough, busy on a 409 that names no request to follow, None when the response had no
+    status or uuid. https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request-asynchronously"""
+    # merge_method applies only to a direct merge; on a merge queue branch the queue picks, and `enqueued` comes back.
+    r = run(["gh", "api", "-X", "PUT", f"repos/{repo}/pulls/{pr}/merge-async",
+             "-f", "merge_method=squash", "-f", f"sha={head}"], check=False)
+    status, details = async_answer(r)
+    conflict = r.returncode != 0 and "HTTP 409" in r.stderr  # a request is running; it answers with that one's uuid
+    if not details.get("uuid"):
+        return r, "busy" if conflict else status if details else None, details
+    if status != "pending" and not conflict:
+        return r, status, details
+    for _ in range(90):
+        polled = run(["gh", "api", f"repos/{repo}/pulls/{pr}/merge-async/{details['uuid']}"], check=False)
+        got, answer = async_answer(polled)
+        if polled.returncode == 0 and got in ("merged", "enqueued", "failed"):
+            return r, got, answer
+        time.sleep(10)
+    return r, "pending", details
 
 
 def merge_unit(p, pr, unit, klass, events, onto=None, stacked=False):
@@ -1827,19 +1909,33 @@ def merge_unit(p, pr, unit, klass, events, onto=None, stacked=False):
             return 2, f"yield: CI has not finished at #{n}'s head ({', '.join(unfinished[:3])}); land again"
     head = v["headRefOid"]
     use_async = stacked or len(unit) > 1
+    status, details = None, {}
     if not use_async:
         r = run(["gh", "pr", "merge", str(pr), "--repo", repo, "--squash", "--match-head-commit", head], check=False)
     else:
-        # A stacked PR refuses `gh pr merge`; merge-async on a layer lands it and every layer below, not above.
-        r = run(["gh", "api", "-X", "PUT", f"repos/{repo}/pulls/{pr}/merge-async",
-                 "-f", "merge_method=squash", "-f", f"sha={head}"], check=False)
+        # A stacked PR refuses `gh pr merge`, also as the last open layer; merge-async on a layer lands it and every
+        # layer below, not above.
+        r, status, details = merge_async(repo, pr, head)
+        if status == "busy":
+            return 2, f"yield: a merge request for #{pr} is already running; land again"
+        if status in ("enqueued", "pending"):
+            note = (f"in the merge queue: {details.get('message') or 'enqueued'}" if status == "enqueued"
+                    else "merge request still pending after 15 minutes")
+            p.append("yield", pr=pr, note=note, unit=unit)  # the layers may close apart, hours later
+            return 2, f"yield: #{pr} {note}; land again records it once it has merged"
+        if status is None and r.returncode == 0:
+            print(f"warning: merge-async answered without a status or uuid; reading #{pr} instead: {r.stdout[:200]}", flush=True)
     merged = {}
-    for _ in range(90 if use_async else 1):
+    # `merged` is the requested PR's result and a stack's layers close seconds apart; with no result the PRs are all there is.
+    reads = 1 if not use_async else 6 if status == "merged" else 90 if status is None and r.returncode == 0 else 1
+    for i in range(reads):
         merged = {n: pr_view(repo, n) for n in unit}
-        if all(x["state"] == "MERGED" for x in merged.values()) or r.returncode != 0:
+        if all(x["state"] == "MERGED" for x in merged.values()) or i == reads - 1:
             break
         time.sleep(10)
     one_push = merged[pr]["state"] == "MERGED"  # a layer merged without its top got its own main CI run
+    if one_push:
+        record_queued(p, pr, skip=unit)
     for n, x in merged.items():
         if x["state"] == "MERGED" and "landed" not in states.get(n, {}):
             p.append("landed", pr=n, sha=(x.get("mergeCommit") or {}).get("oid"),
@@ -1847,18 +1943,38 @@ def merge_unit(p, pr, unit, klass, events, onto=None, stacked=False):
                      stack_top=pr if n != pr and one_push else None, onto=onto)
             close_gate_task(p, n, "completed")
     if merged[pr]["state"] != "MERGED":
-        why = (r.stderr or r.stdout).strip()[:300] or "merge-async did not finish in 15 minutes"
+        why = details.get("message") if status == "failed" else r.stderr or ("" if use_async else r.stdout)
+        why = (why or "").strip()[:300] or "merge-async did not finish in 15 minutes"
+        if "head branch was modified" in why:
+            return 2, f"#{pr} moved since the order was read; land again"
         if r.returncode != 0 and TRANSIENT.search(why):
             return 2, f"yield: GitHub did not answer the merge ({why[:160]}); land again"
         p.append("land_failed", pr=pr, note=why)
+        if "needs to be rebased" in why:
+            return 3, f"act: {why} {update_advice(unit, repo, True)}, then land again"
         if "not up to date" in why or "behind" in why.lower():
-            return 3, f"act: the base requires up-to-date branches: {update_advice(unit, repo)}, then land again"
+            return 3, f"act: the base requires up-to-date branches: {update_advice(unit, repo, stacked)}, then land again"
         return 1, f"merge refused: {why}"
     sha = (merged[pr].get("mergeCommit") or {}).get("oid")
     return 0, (f"landed {' '.join('#' + str(n) for n in unit)} (merge commit {sha[:8]}; CI runs {' '.join(runs) or '-'}; read their logs in the report). "
                f"Watch main: gh run list --repo {repo} --commit {sha} --json databaseId,workflowName,status, "
                f"then gh run watch <id> --repo {repo} --exit-status and orch record {p.slug} main_green|main_red --pr {pr} --sha {sha}"
                + base_ci_hint(repo, merged[pr].get("baseRefName")))
+
+
+def record_queued(p, pr, skip=()):
+    """Record the layers that earlier requests for this PR left unfinished, bottom first, and return them all."""
+    # Every request's unit: a retry after the lower layer merged names a smaller one.
+    queued = list(dict.fromkeys(n for e in p.events() if e.get("pr") == pr for n in e.get("unit") or []))
+    for n in queued:
+        if n in skip:
+            continue
+        x = pr_view(p.cfg["repo"], n)
+        if x["state"] == "MERGED" and "landed" not in pr_state(p.events()).get(n, {}):
+            # No stack_top: the queue may have put the layers in separate merge groups.
+            p.append("landed", pr=n, sha=(x.get("mergeCommit") or {}).get("oid"), note="earlier merge request")
+            close_gate_task(p, n, "completed")
+    return queued
 
 
 def base_ci_hint(repo, base):
@@ -1889,9 +2005,22 @@ def attempt(p, pr, klass, onto_lower=False):
     if main == "red" and klass != "main-fix":
         return 1, "safety stop: main is red; only the repair lands (--class main-fix)"
     rows = open_rows(repo)
-    stacks = repo_stacks(repo)
-    order = land_order(events, rows, cfg, dt.datetime.now(dt.timezone.utc), stacks, orca_deps(cfg["run"]))
+    stacks = read_stacks(repo)
+    unread = stacks is None
+    if unread:
+        print("warning: the repository's stacks could not be read; dependent PRs are not checked", flush=True)
+        if in_a_stack(repo, pr):
+            # merge-async takes every open layer below; without the listing those layers go unverified.
+            return 2, f"yield: #{pr} is in a stack and the stack listing did not answer; land again"
+        stacks = {}
+    deps = orca_deps(cfg["run"])
+    order = land_order(events, rows, cfg, dt.datetime.now(dt.timezone.utc), stacks, deps)
     stacked = any(pr in members for members in stacks.values())
+    members = next((m for m in stacks.values() if pr in m), [])
+    seen = {r["number"] for r in rows}
+    if unseen := [m for m in members[:members.index(pr)] if m not in seen] if members else []:
+        return 3, (f"act: stack layer {', '.join(f'#{m}' for m in unseen)} under #{pr} is not among the {OPEN_LIMIT} open"
+                   " PRs read, so it cannot be checked, and merge-async would take it too. Land it first")
     me = next((e for e in order if e["pr"] == pr), None)
     tracked = pr_state(events)  # an integration branch's own PR (feature → main) is never landed through orch
     below = next((r for r in rows if me and not me["stack"] and r.get("headRefName") == me.get("base")
@@ -1901,8 +2030,8 @@ def attempt(p, pr, klass, onto_lower=False):
     if lower:
         # Based on another open PR's branch without being a GitHub stack: a squash would land in that branch.
         return 3, (f"act: #{pr} is based on #{lower['number']}'s branch {me['base']}, not a GitHub stack, so a merge would"
-                   f" land in that branch. Land #{lower['number']} first, then gh pr edit {pr} --repo {repo} --base"
-                   f" {lower.get('baseRefName')} and gh pr update-branch {pr} --repo {repo}, and land again."
+                   f" land in that branch. Stack them: gh stack link {lower['number']} {pr} --base"
+                   f" {lower.get('baseRefName')}, confirm with gh api repos/{repo}/pulls/{pr} --jq .stack, and land again."
                    f" To fold it into #{lower['number']} on purpose (top-down), land again with --onto-lower")
     if me is None or me["state"] == "gone":
         v = pr_view(repo, pr)
@@ -1912,6 +2041,8 @@ def attempt(p, pr, klass, onto_lower=False):
             if "landed" in st:  # a stack layer lands with its top, whose land call recorded it
                 return 0, (f"#{pr} already landed as {(st['landed'].get('sha') or '')[:8]} ({st['landed'].get('note') or 'recorded'});"
                            " main CI ran once on the stack top's commit, and the top's owner records it")
+            if queued := record_queued(p, pr):
+                return 0, f"#{pr} was merged by an earlier request (merge queue or a slow merge); recorded {' '.join(f'#{n}' for n in queued)}"
             p.append("landed", pr=pr, sha=sha, note="merged outside land")
             close_gate_task(p, pr, "completed")
             return 0, f"#{pr} was merged outside land; recorded"
@@ -1920,6 +2051,18 @@ def attempt(p, pr, klass, onto_lower=False):
         return 1, f"#{pr} is {v['state']}"
     if on_hold(events, pr):
         return 1, f"#{pr} is on hold (record parked); `orch record {p.slug} admitted --pr {pr}` releases it"
+    # Before the waits below: a dependent PR outside a stack waits on them for as long as its lower PR takes.
+    gaps, flipped = stack_gaps(events, rows, stacks, deps, pr) if not unread else ([], [])
+    if flipped:
+        note_attempt(p, events, pr, "blocked", ["stack order flipped"])
+        return 3, "act: " + "; ".join(FLIPPED.format(low=low, up=up) for low, up in flipped)
+    level = stack_level()
+    if gaps and level != "off":
+        text = gap_text(repo, gaps, me.get("base") or "main")
+        if level == "deny" and klass != "main-fix":
+            note_attempt(p, events, pr, "blocked", ["dependent PR outside a stack"])
+            return 3, f"act: {text} (orchestrate.stack_dependent: deny)"
+        print(f"warning: {text}", flush=True)
     if me["state"] == "waiting":
         if st.get("yield", {}).get("note") != me["reasons"][0]:
             p.append("yield", pr=pr, note=me["reasons"][0])
@@ -1966,7 +2109,7 @@ def attempt(p, pr, klass, onto_lower=False):
             return 3, ("act: you hold the exclusive lane; bring the branch onto the latest base (restack migrations),"
                        f" let CI run, land again — {'; '.join(me['reasons'])}." + KEEP)
         if compare(repo, me["base"] or "main", pr_view(repo, pr)["headRefOid"]).get("behind_by"):
-            return 3, (f"act: you hold the exclusive lane and it lands on the latest base only: {update_advice(unit, repo)},"
+            return 3, (f"act: you hold the exclusive lane and it lands on the latest base only: {update_advice(unit, repo, stacked)},"
                        " let CI run, land again." + KEEP)
         code, msg = merge_unit(p, pr, unit, klass, events, onto, stacked)
         if code == 0:
@@ -1975,14 +2118,14 @@ def attempt(p, pr, klass, onto_lower=False):
     if me["state"] == "catching_up":
         note_attempt(p, events, pr, "catching_up", me["reasons"])
         if "behind base" in me["reasons"]:
-            return 3, f"act: {update_advice(unit, repo)}, then land again"
+            return 3, f"act: {update_advice(unit, repo, stacked)}, then land again"
         return 2, f"not yet: {'; '.join(me['reasons'])}"
     base = me["base"] or "main"
     overlap = base_overlap(repo, base, compare(repo, base, pr_view(repo, pr)["headRefOid"]))
     if overlap:
         note_attempt(p, events, pr, "act", [f"base changed {', '.join(overlap[:5])}"])
         return 3, (f"act: since your branch point the base changed files you also change ({', '.join(overlap[:5])}):"
-                   f" {update_advice(unit, repo)}, check your contract and test assumptions still hold,"
+                   f" {update_advice(unit, repo, stacked)}, check your contract and test assumptions still hold,"
                    " let CI run, land again." + KEEP)
     return merge_unit(p, pr, unit, klass, events, onto, stacked)
 
@@ -2052,11 +2195,28 @@ def cmd_land_check(argv):
             problems.append("human-gate: gate open in Orca, waiting for the user")
         else:
             problems.append(f"human-gate: open the gate first (orch gate {p.slug} --pr {pr})")
+    try:
+        rows = open_rows(repo)
+    except SystemExit:  # this listing serves only the check below, which passes when it cannot read
+        rows = None
+    stacks = read_stacks(repo)
+    members = next((m for m in (stacks or {}).values() if pr in m), [])
+    unread = stacks is None or rows is None
+    gaps, flipped = ([], []) if unread else stack_gaps(events, rows, stacks, orca_deps(p.cfg["run"]), pr)
+    level = stack_level()
+    if unread:
+        print("warning: the repository's stacks could not be read; dependent PRs are not checked")
+    problems += [FLIPPED.format(low=low, up=up) for low, up in flipped]
+    if gaps and level == "deny" and "--main-fix" not in argv:
+        problems.append(gap_text(repo, gaps, v.get("baseRefName") or "main"))
+    elif gaps and level != "off":
+        print(f"warning: {gap_text(repo, gaps, v.get('baseRefName') or 'main')}")
     mss = v["mergeStateStatus"]
     if mss == "DIRTY":
         problems.append("conflicts with base: fix task in the PR's worktree")
     elif mss == "BEHIND":
-        problems.append(f"behind base: gh pr update-branch {pr} --repo {repo}, then wait for CI")
+        unit = members[:members.index(pr) + 1] if members else [pr]
+        problems.append(f"behind base: {update_advice(unit, repo, bool(members))}, then wait for CI")
     failed, pending, runs = ci_summary(v.get("statusCheckRollup"))
     if not failed and not pending:
         pending = runs_unfinished(repo, v["headRefOid"])
@@ -2695,6 +2855,9 @@ def review_lines(p, workers=None, tasks=None, unknown=frozenset()):
     return lines
 
 
+WAKE_DUE_S = 1800  # sync.py's WAKE_PENDING_S
+
+
 def cmd_wait(argv):
     p = Program(argv[0])
     timeout = opt(argv, "--timeout-ms", "540000")
@@ -2723,6 +2886,8 @@ def cmd_wait(argv):
     if watched := watch_lines(me, False):
         print("\n".join(watched), flush=True)
     for i in range(rounds):
+        if wakes := wake_lines(me):  # before the wait: a busy inbox returns early and must not hide these
+            print("\n".join(wakes), flush=True)
         res = check(*box, "--wait", "--types", ",".join(sorted(ACTIONABLE)), "--timeout-ms", timeout)
         did, msgs = batch(res)
         if not did and not msgs:
@@ -2771,6 +2936,29 @@ def cmd_wait(argv):
     moves = next_moves(run_workers(run_id))
     print("\n".join([f"EMPTY x{rounds}: " + (f"{len(moves)} live worker(s), each with its move:" if moves else "no live worker")]
                     + moves))
+
+
+def wake_lines(me, now=None):
+    """Signals this session sent that stayed unconfirmed past `skills-sync wake-target`'s deadline. The background
+    recheck dies with a restart, so the wait keeps the deadline. A record sync's wake_entry would refuse, or one with no
+    sender, belongs to nobody it can name and shows to every session."""
+    root = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()
+    now = time.time() if now is None else now
+    out = []
+    for f in sorted((root / "wakes").glob("*.json")):
+        try:
+            entry = json.loads(f.read_text())
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError):
+            entry = None
+        valid = isinstance(entry, dict) and all(isinstance(entry.get(k), str) for k in ("session", "to", "nonce")) \
+            and isinstance(entry.get("at"), (int, float)) and isinstance(entry.get("offset"), int)
+        if valid and (now - entry["at"] < WAKE_DUE_S or entry.get("from") and entry["from"] != me):
+            continue
+        out.append(f"WAKE {f.stem}: unconfirmed past its deadline; skills-sync wake-check {f.stem}, and without "
+                   "`started` follow references/waking.md (inbox item, then wake-reset once the human has answered)")
+    return out
 
 
 def watch_lines(me, unowned):
@@ -2854,7 +3042,7 @@ def next_moves(workers):
         elif not h or (pj.get("liveness") or {}).get("verdict") == "exited":
             out.append(f"  {d} no terminal: worker-stop or worker-abandon (recovery-and-cleanup.md)")
         elif activity == "idle":  # the turn ended without worker_done; send alone does not wake it (SKILL.md, terminal send)
-            out.append(f"  {d} idle: orchestration send --to dispatch:{d}, then nudge {h}")
+            out.append(f"  {d} idle: orchestration send --to dispatch:{d}, then skills-sync wake-target {h}")
         elif activity == "working":
             out.append(f"  {d} working")
         else:  # waiting may be a permission prompt; unknown needs a look either way

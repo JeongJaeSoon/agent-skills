@@ -372,7 +372,7 @@ orchestrator (사용자가 말을 거는 세션 하나, orchestrate의 top-level
 
 수집과 표시는 대시보드 워커 몫이다. 스킬은 이벤트를 받은 orchestrator가 무엇을 하는지만 정한다. 전문은 `skills/orchestrate/references/top-level.md` "PR events".
 
-- 리뷰 코멘트, changes requested, PR의 CI 실패: PR을 가진 워커에게 `send --to dispatch:<id>`로 넘긴다. 워커의 턴이 끝나 있으면 `skills-sync nudge`로 한 줄 깨운다. nudge는 §4와 같은 판정(빈 입력칸, 스피너 없음, 창 없음, 두 번 읽기)을 통과할 때만 보내고, 보낸 뒤 턴이 시작됐는지 화면으로 확인한다. 거절되면 반복하지 않는다.
+- 리뷰 코멘트, changes requested, PR의 CI 실패: PR을 가진 워커에게 `send --to dispatch:<id>`로 넘긴다. 워커의 턴이 끝나 있으면 `skills/orchestrate/references/waking.md`대로 깨운다. `skills-sync wake-target`이 경로를 고르고, SendMessage로 보낸 신호는 `wake-check`가 받는 세션의 transcript에서 확인한다. 터미널 경로의 `skills-sync nudge`는 §4와 같은 판정(빈 입력칸, 스피너 없음, 창 없음, 두 번 읽기)을 통과할 때만 보내고, 보낸 뒤 턴이 시작됐는지 화면으로 확인한다. 거절되면 반복하지 않는다.
 - 이미 끝난 dispatch의 PR: 새 dispatch를 띄운다. 사용자가 직접 연 세션의 PR: 인박스에만 올린다.
 - 승인 + 체크 통과: autonomous 프로그램이면 워커의 `orch land`가 처리한다. 아니면 인박스에 "머지 준비됨". orchestrator는 머지하지 않는다.
 - main CI 실패: 해당 프로그램의 main 가디언에게 리드를 거쳐 넘긴다.

@@ -1,4 +1,4 @@
-<!-- translated-from: d54b88796f0bc76b97f6212b63cf4b79c9af4c30 -->
+<!-- translated-from: fcf9329dc2a5e4773f135579ef2f195819c9de64 -->
 # Skill catalog
 
 This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 12 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
@@ -32,7 +32,7 @@ Which skill owns a PR, and who merges it:
 
 | Skill | PRs it owns | Merge |
 |---|---|---|
-| deliver-ticket | My PR this session is working: writing, review replies, merge, release | The session, per §5 (`gh pr merge`; a stack lands with merge-async) |
+| deliver-ticket | My PR this session is working: writing, review replies, merge, release | The session, per §5 (`gh pr merge`; a stack lands with `gh stack merge`) |
 | watch-prs | Waiting PRs a scheduled round collects: review requests naming me, my PRs waiting on review (requests, reminders), my PRs ready to merge | Only my PRs that pass every `merge_repos` gate |
 | orchestrate | A program worker's PRs | `orch land`, or a plain merge the human approved |
 | handoff-ticket | Opens no PR: picks the next card | Never |
@@ -201,7 +201,8 @@ Which skill owns a PR, and who merges it:
   - **branch:** local branches whose PRs are all merged or closed, with no worktree, and whose tip matches a PR head. It prints the command to restore each one.
   - **worktree:** worktrees whose directory in a temp dir is gone (except Orca's), and clean, pushed, detached worktrees in a Claude scratchpad whose session transcript has been quiet for N hours. Both go through `git worktree remove <path>`, which drops only that entry. Orca worktrees belong to the resource steward.
   - **card:** `scripts/cards.py scan` judges every Orca card (whether the app, the CLI or a worker made it) as one of delete, close the terminal only (open PR), keep, or human decision, and prints a table. The human reads the table and runs it with `apply --plan`; the janitor round uses the same code. The rules and traps (a stale `origin/HEAD` is checked again with a GitHub compare, a pre-rebase copy is told apart by patch-id, a shell stuck at a prompt, an idle screen that says "done") live in one place, `references/cards.md`.
-  - **janitor:** only what agents registered in the ledger (`~/.local/state/agent-skills/ledger.jsonl`: temp dirs, GUI apps, browser windows) and the worktrees and settled terminals of Orca orchestration workers. `reap --plan` re-checks each target, then closes it or moves it to the trash. The tool never deletes for good or empties the trash; when the OS empties it on its own, scan raises an alert. The agent closes browser windows with its browser tools.
+  - **janitor:** only what agents registered in the ledger (`~/.local/state/agent-skills/ledger.jsonl`: temp dirs, GUI apps, browser windows) and the worktrees and settled terminals of Orca orchestration workers. `reap --plan` re-checks each target, then closes it or moves it to the trash. Apart from the `docker` removals of the container and volume kinds below, the tool never deletes for good or empties the trash; when the OS empties it on its own, scan raises an alert. The agent closes browser windows with its browser tools.
+  - **stopped-container, labeled-volume:** on only once configured, and the janitor and reap-hard apply the same rules. Stopped (exited or created) containers that compose did not make, named under `reap.stopped_containers.prefixes`; and volumes whose `<namespace>.origin` label value is in `reap.labeled_volumes.origins` and that no container references. Each goes by its exact ID or name, with a record kept. The label states the origin and also gives permission to delete. Unlabeled anonymous volumes are never removed; `reap.py inventory --unlabeled-volumes` only lists them, read-only.
   - **user-folder:** cleans only folders explicitly listed in `reap.user_folders`; disabled when unset. Age, open-file and incomplete-download checks and trash retention still apply.
   - **program:** a closed program in `~/.claude/programs` (`PROGRAMS_HOME`; its final check `predicate_verified` with no landing, predicate edit or admitted follow-up after it) whose record (ledger, decisions, reflect and the rest, not the dashboard caches) is untouched for 7 days (`reap.program_days`) moves to `_archive/`. Nothing is deleted. A program with a resume note (a name containing `resume` or `handoff`) stays, closed or not.
   - **state-file:** reorient hook session files (`<state>/reorient/*.json`) older than 7 days (`reap.state_days`) go to the trash bundled in one folder, and a `sync.log` over 512KB (`reap.log_max_kb`) is rotated to `sync.log.1` (the previous `.1` goes to the trash). Like program, the scheduled run looks at them at most once a day.
@@ -509,6 +510,7 @@ Program state lives in `~/.claude/programs/<slug>/`: `program.json`, the append-
   - `sync`: fetch, then an ff-only pull or a push of signed commits. Off main, uncommitted changes, diverged, an unsigned commit, or no credential helper: it changes nothing, stops, and leaves a macOS notification and `~/.local/state/agent-skills/sync.json`. launchd runs it every 15 minutes and at login.
   - `broadcast [--skills|--plugins] [--dry-run] [--terminal <handle>]`: `/reload-skills` when a `SKILL.md` changed, `/reload-plugins` when the hook wiring (`hooks/hooks.json`) or the plugin manifest changed. Sent only to sessions with an empty prompt, no spinner, no permission, trust or question dialog, no shell below the prompt box, and the same screen on two reads 1.5 s apart; the rest stay in `reload-pending.json` for the next try. `--terminal <handle>` sends to that one session only; the session that changed a skill aims it at its own handle after its turn ends to reload itself (`write-skill` §7).
   - `nudge <terminal> <one line>`: sends one line under the same checks and confirms the turn started.
+  - `wake-target <terminal>`, `wake-check <terminal> [--wait <seconds>]`, `wake-reset <terminal>`: pick the path for the signal that wakes a Claude card, and confirm from the receiving session's transcript that a SendMessage signal started a turn. The session itself sends it with the tool. The message path applies only when `wake.transport` in `agent-skills.json` is `sendmessage`; the default is `terminal`. The steps are in `skills/orchestrate/references/waking.md`.
   - `status`: the last sync result and the pending reload.
 
 ## Config file
@@ -572,6 +574,7 @@ Every rule has a key in `~/.claude/agent-skills.json`. Its value is one of `"den
 | `orchestrate.ask_user_question` | deny | AskUserQuestion in the main conversation of an orchestrator, lead or worker. Subagents and general sessions are not covered |
 | `orchestrate.wait_foreground` | deny | An orchestrator or lead running `orch wait`, `orch inbox --wait`, `orch watch-cards` or `orca orchestration check\|inbox --wait` without `run_in_background`, or cutting a background wait with `\| tail` or `\| head`. A worker's `check --wait` is not covered |
 | `orchestrate.send_devnull` | deny | An orchestrator, lead or worker sending the output of `orca orchestration send\|reply` to `/dev/null`. `2>/dev/null` alone is not covered |
+| `orchestrate.stack_dependent` | warn | A dependent PR that is not a stack. `hooks/stack_gate.py` reads the brief's `Lands after` and the branch's history at `gh pr create`; `orch land` and `land-check` compare land-after edges with the real stacks. `deny` makes both block. What cannot be read passes with one warning line |
 
 When the hook's own check raises, the call goes through with a warning, and `$AGENT_SKILLS_STATE/guard-errors.jsonl` gets the time, the hook, the exception type and where it was raised (never the command text). An unreadable settings file means the defaults.
 
@@ -661,7 +664,7 @@ Of pstack's 58 skills (24 principles and 34 others), we took all 24 principles a
 - **Running projects:** `orchestrate`'s `orch` ledger, the landing gate and exclusive lane, human-gate, the main guardian, the QA lead, and the `orch-dash` dashboard. The shape follows pstack's playbooks, but it was built fresh on top of Orca Runs and GitHub stacks.
 - **Measurement and adapters:** `measure-delivery`, `use-tracker`, `use-notes`.
 - **Machine upkeep:** `reap-resources`, `tune-automode`, `skills-config`, `setup-pc`.
-- **Hooks:** permission decisions (`guard.py`), re-orienting the orchestrator and leads (`reorient.py`), offering setup on a PC that was never set up (`onboard.py`), recording permission prompts for the dashboard to answer (`permission.py`), closing decisions answered in the terminal (`decision.py`), completion claim checks (`claim_check.py`), a load check before a heavy start (`pressure_gate.py`), and prose checks (`prose_check.py`).
+- **Hooks:** permission decisions (`guard.py`), re-orienting the orchestrator and leads (`reorient.py`), offering setup on a PC that was never set up (`onboard.py`), recording permission prompts for the dashboard to answer (`permission.py`), closing decisions answered in the terminal (`decision.py`), completion claim checks (`claim_check.py`), a load check before a heavy start (`pressure_gate.py`), prose checks (`prose_check.py`), and the stack check on dependent PRs (`stack_gate.py`).
 
 ### Upstream sync status
 - **Last sync:** 2026-10-26, from `b42effe` (0.15.3) to `99b609a` (0.15.32). Upstream added 74 commits to pstack in between.

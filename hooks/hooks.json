@@ -5,7 +5,7 @@
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/delegate_gate.py\"", "timeout": 5 }]
       },
       {
-        "matcher": "Bash|Skill|Edit|Write|MultiEdit|NotebookEdit|AskUserQuestion",
+        "matcher": "Bash|Monitor|Skill|Edit|Write|MultiEdit|NotebookEdit|AskUserQuestion",
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/guard.py\"", "timeout": 5 }]
       },
       {
@@ -19,6 +19,10 @@
       {
         "matcher": "Bash|mcp__.*([Ll]inear|[Jj]ira|atlassian).*",
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/prose_check.py\"", "timeout": 5 }]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/stack_gate.py\"", "timeout": 10 }]
       },
       {
         "matcher": "Bash",
