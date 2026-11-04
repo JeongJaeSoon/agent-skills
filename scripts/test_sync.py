@@ -1,5 +1,5 @@
 """`sync.py` against throwaway git repos and a fake orca. Run: python3 scripts/test_sync.py"""
-import contextlib, io, json, os, pathlib, shutil, subprocess, sys, tempfile
+import contextlib, io, json, os, pathlib, shutil, subprocess, sys, tempfile, time
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -690,35 +690,58 @@ def transcript(tmp, session, *rows):
 
 
 def wrapped(nonce):
-    return f'<cross-session-message from="uds:/x" from-name="o">\nwake {nonce}: run your orchestration check'
+    return ('<cross-session-message from="uds:/x" from-name="o" from-mode="prompting">\n'
+            f"wake {nonce}: run your orchestration check\n</cross-session-message>")
+
+
+def wake_entry(nonce="n1", session="s", at=1, offset=0, sender="term_me"):
+    return {"session": session, "to": "card", "nonce": nonce, "at": at, "offset": offset, "from": sender}
+
+
+def queued(nonce):
+    return {"type": "queue-operation", "operation": "enqueue", "content": wrapped(nonce)}
+
+
+def idle_delivery(nonce):
+    return {"type": "user", "message": {"role": "user", "content":
+            f"Another Claude session sent a message:\n{wrapped(nonce)}\n\nThis came from another Claude session."}}
 
 
 def test_wake_state():
-    enqueue = {"type": "queue-operation", "operation": "enqueue", "content": wrapped("n1")}
+    enqueue = queued("n1")
     attached = {"type": "attachment", "attachment": {"type": "queued_command", "prompt": wrapped("n1")}}
-    user = {"type": "user", "message": {"role": "user", "content": f"Another Claude session sent a message:\n{wrapped('n1')}"}}
+    user = idle_delivery("n1")
     quoted = {"type": "user", "message": {"content": [{"type": "tool_result", "content": wrapped("n1")}]}}
     assistant = {"type": "assistant", "message": {"content": []}}
     other = {"type": "attachment", "attachment": {"type": "queued_command", "prompt": wrapped("n0")}}
-    entry = {"session": "s", "nonce": "n1"}
+    pasted = {"type": "user", "message": {"content": f"what does this mean?\n{wrapped('n1')}"}}
+    bare = {"type": "user", "message": {"content": wrapped("n1")}}
+    entry = wake_entry()
     with tempfile.TemporaryDirectory() as td:
         tmp = pathlib.Path(td)
         old = sync.HOMES
         sync.HOMES = (str(tmp / "home"),)
         try:
             cases = [("a busy session took it and answered", (enqueue, attached, assistant), "started"),
-                     ("an idle session started on it", (user, assistant), "started"),
+                     ("an idle session started on it", (enqueue, user, assistant), "started"),
                      ("queued only is accepted, not started", (enqueue,), "accepted"),
                      ("an answer after a mere enqueue is not a start", (enqueue, assistant), "accepted"),
-                     ("an answer before the delivery does not count", (assistant, attached), "delivered"),
-                     ("a tool result quoting the nonce is no delivery", (quoted, assistant), None),
+                     ("an answer before the delivery does not count", (enqueue, assistant, attached), "delivered"),
+                     ("a tool result quoting the nonce is no delivery", (enqueue, quoted, assistant), "accepted"),
                      ("another wake's nonce is not this one", (other, assistant), None),
                      ("a held or refused wake leaves nothing", (assistant,), None),
-                     ("a broken line is skipped", ('{"n1', attached, assistant), "started")]
+                     ("a broken line is skipped", (enqueue, '{"n1', attached, assistant), "started"),
+                     ("a user pasting the envelope, with no enqueue, is no delivery", (bare, assistant), None),
+                     ("a user quoting it after the enqueue is no delivery", (enqueue, pasted, assistant), "accepted"),
+                     ("a delivery with no enqueue before it is unknown", (attached, assistant), None)]
             for what, rows, want in cases:
                 transcript(tmp, "s", *rows)
                 check(what, sync.wake_state(entry) == want, sync.wake_state(entry))
-            check("no transcript is unknown", sync.wake_state({"session": "none", "nonce": "n1"}) is None)
+            check("no transcript is unknown", sync.wake_state(wake_entry(session="none")) is None)
+            transcript(tmp, "s", enqueue, attached, assistant)
+            size = sync.transcript_of("s").stat().st_size
+            check("rows from before the attempt do not count", sync.wake_state(wake_entry(offset=size)) is None)
+            check("a transcript shorter than the mark is unknown", sync.wake_state(wake_entry(offset=size + 1)) is None)
         finally:
             sync.HOMES = old
 
@@ -761,11 +784,26 @@ def test_wake_target():
             check("an unknown transport warns and stays on the terminal path",
                   "route: terminal" in out and "warning" in err.getvalue(), out)
 
+            sync.CONFIG.write_text(json.dumps({"wake": "on"}))
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                code, out = run()
+            check("a wake setting that is no object warns and stays on the terminal path",
+                  "route: terminal" in out and "warning" in err.getvalue(), out)
+
             sync.CONFIG.write_text(json.dumps({"wake": {"transport": "sendmessage"}}))
             code, out = run()
-            nonce = sync.read_json(sync.wake_file("term_card"), {}).get("nonce")
+            check("a session with no transcript cannot confirm a wake", "route: terminal" in out
+                  and "transcript" in out and not sync.wake_file("term_card").exists(), out)
+
+            transcript(tmp, "s-1", {"type": "assistant"})
+            code, out = run()
+            saved = sync.read_json(sync.wake_file("term_card"), {})
+            nonce = saved.get("nonce")
             check("a Claude card gets the SendMessage route", code == 0 and "route: sendmessage" in out
                   and "to: card\n" in out, out)
+            check("the attempt keeps where the transcript ended and who sent it",
+                  saved.get("offset") == sync.transcript_of("s-1").stat().st_size and saved.get("from") == "term_me", saved)
             check("the signal is the fixed line, its nonce the only variable",
                   f"message: wake {nonce}: run your orchestration check\n" in out, out)
             check("the command takes no text, so no instruction can ride on the signal",
@@ -773,13 +811,43 @@ def test_wake_target():
 
             code, out = run()
             check("an unconfirmed wake blocks a second signal", "route: pending" in out, out)
-            sync.wake_file("term_card").write_text(json.dumps({"nonce": nonce, "session": "s-1", "at": 0}))
+            sync.wake_file("term_card").write_text(json.dumps(wake_entry(nonce, "s-1", at=0)))
             code, out = run()
             check("past the deadline it goes to a person, not to the terminal path", "route: report" in out, out)
-            transcript(tmp, "s-1", {"type": "user", "message": {"content": wrapped(nonce)}}, {"type": "assistant"})
+            transcript(tmp, "s-1", queued(nonce), idle_delivery(nonce), {"type": "assistant"})
             code, out = run()
             check("a confirmed wake clears the way for the next", "route: sendmessage" in out, out)
             transcript(tmp, "s-1", {"type": "assistant"})
+
+            for broken in ("{", '{"nonce": "n1"}', "[]"):
+                sync.wake_file("term_card").write_text(broken)
+                code, out = run()
+                check(f"a record that cannot be read goes to a person and stays: {broken}", code == 0
+                      and "route: report" in out and "check:" in out and sync.wake_file("term_card").read_text() == broken, out)
+
+            sync.wake_reset("term_card")
+            real_agent_rows = sync.agent_rows
+
+            def slow_rows():
+                time.sleep(0.2)
+                return real_agent_rows()
+
+            sync.agent_rows = slow_rows
+            pids = []
+            for i in range(2):
+                pid = os.fork()
+                if pid == 0:
+                    try:
+                        with open(tmp / f"race{i}", "w") as f, contextlib.redirect_stdout(f):
+                            sync.wake_target("term_card")
+                    finally:
+                        os._exit(0)
+                pids.append(pid)
+            for pid in pids:
+                os.waitpid(pid, 0)
+            sync.agent_rows = real_agent_rows
+            routes = sorted((tmp / f"race{i}").read_text().split("\n")[0] for i in range(2))
+            check("two callers at once get one signal", routes == ["route: pending", "route: sendmessage"], routes)
 
             sync.wake_reset("term_card")
             screens["term_card"] = ([], "not a connected, writable Claude terminal")
@@ -842,17 +910,36 @@ def test_wake_check():
 
             code, out = run()
             check("nothing recorded is not a success", code == 1 and out.startswith("unconfirmed"), out)
-            path.write_text(json.dumps({"session": "s", "nonce": "n1", "at": 1}))
+            path.write_text("{")
+            code, out = run()
+            check("an unreadable record is unconfirmed and stays", code == 1 and "cannot be read" in out
+                  and path.read_text() == "{", out)
+            path.write_text(json.dumps(wake_entry()))
             code, out = run()
             check("no sign of it stays unconfirmed and on file", code == 1 and out.startswith("unconfirmed")
                   and path.exists(), out)
-            transcript(tmp, "s", {"type": "queue-operation", "operation": "enqueue", "content": wrapped("n1")})
+            transcript(tmp, "s", queued("n1"))
             code, out = run()
             check("queued is reported as accepted, never as sent", code == 1 and out.startswith("accepted")
                   and path.exists(), out)
-            transcript(tmp, "s", {"type": "user", "message": {"content": wrapped("n1")}}, {"type": "assistant"})
+            transcript(tmp, "s", queued("n1"), idle_delivery("n1"), {"type": "assistant"})
             code, out = run()
             check("a start exits 0 and clears the record", code == 0 and out == "started\n" and not path.exists(), out)
+
+            real_state = sync.wake_state
+
+            def replaced_meanwhile(entry):
+                path.write_text(json.dumps(wake_entry("n2")))
+                return "started"
+
+            path.write_text(json.dumps(wake_entry()))
+            sync.wake_state = replaced_meanwhile
+            try:
+                code, out = run()
+            finally:
+                sync.wake_state = real_state
+            check("a checker leaves an attempt that replaced the one it watched", code == 0
+                  and json.loads(path.read_text())["nonce"] == "n2", out)
         finally:
             sync.STATE, sync.HOMES, sync.WAKE_POLL_S = real
 

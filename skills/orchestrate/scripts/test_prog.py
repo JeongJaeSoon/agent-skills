@@ -1096,3 +1096,23 @@ finally:
     prog.run, prog.pr_view = real_run, real_view
 
 print("prog.py patch-id fallback: all pass")
+
+# wake_lines: a signal nobody settled still reaches its sender after a restart
+state = pathlib.Path(tempfile.mkdtemp(prefix="test-wakes-"))
+wakes = state / "wakes"
+wakes.mkdir()
+(wakes / "term_a.json").write_text(json.dumps({"from": "term_me", "at": 1000}))
+(wakes / "term_b.json").write_text(json.dumps({"from": "term_other", "at": 1000}))
+(wakes / "term_a.lock").write_text("")
+old_state = os.environ.get("AGENT_SKILLS_STATE")
+os.environ["AGENT_SKILLS_STATE"] = str(state)
+try:
+    assert prog.wake_lines("term_me", now=1000 + prog.WAKE_DUE_S - 1) == [], "not due yet"
+    lines = prog.wake_lines("term_me", now=1000 + prog.WAKE_DUE_S)
+    assert len(lines) == 1 and lines[0].startswith("WAKE term_a:"), lines
+    (wakes / "term_c.json").write_text("{")
+    lines = prog.wake_lines("term_me", now=1001)
+    assert [l.split(":")[0] for l in lines] == ["WAKE term_c"], lines
+finally:
+    os.environ.pop("AGENT_SKILLS_STATE") if old_state is None else os.environ.__setitem__("AGENT_SKILLS_STATE", old_state)
+print("prog.py wake lines: all pass")

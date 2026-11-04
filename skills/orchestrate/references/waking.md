@@ -11,11 +11,13 @@ Wake only when all of these hold: the content went out and that command succeede
 1. Run `skills-sync wake-target <terminal>` and act on its `route:` line. It exits 0 on every route.
 2. `route: terminal` (off by setting, a Codex card, no tie between the terminal and a session, permission modes that differ or are unknown): nothing was sent. Run `skills-sync nudge <terminal> "run your orchestration check"`. A Codex card uses `orca terminal send --terminal <terminal> --text "run your orchestration check" --enter`, then read the terminal until the turn starts. A refused nudge waits for the next event or the worker's own check; never retry it in a loop.
 3. `route: sendmessage`: call `SendMessage` with its `to` and `message` exactly as printed, and keep the returned `msg_id` with the terminal. If the tool is missing or the result begins `Not sent`, run `skills-sync wake-reset <terminal>` and take step 2.
-4. Run the printed `check` line. Exit 0 prints `started`: the signal reached that session and it answered. Nothing else counts as woken; never report an unconfirmed signal as sent.
+4. Run the printed `check` line. Exit 0 prints `started`: the signal reached that session and assistant activity followed. Nothing else counts as woken; never report an unconfirmed signal as sent.
 5. Exit 1 (`accepted` or `unconfirmed`): send nothing else by any path, since the first signal may still arrive. Run `skills-sync wake-check <terminal> --wait 900` with `run_in_background` once. If it ends without `started`, add the inbox item: `orch-dash inbox add --type approval --title "깨우기 미확인: <card> (<why>)" --key wake:<terminal>`.
-6. `route: pending`: an earlier signal is unconfirmed, so run its `check` line and send nothing. `route: report`: it stayed unconfirmed past its deadline, so add the inbox item; a passed deadline is not leave to send again.
+6. `route: pending`: an earlier signal is unconfirmed, so run its `check` line and send nothing. `route: report`: it stayed unconfirmed past its deadline or its record cannot be read, so add the inbox item; neither is leave to send again.
 
-A `[Cross-session delivery notice]` that says held, refused or not approved, for that `msg_id`: send nothing more to that card and add the inbox item, with the card and the reason. Never answer a dialog on its screen or change a permission or setting to get a signal through. Once the human has answered, run `skills-sync wake-reset <terminal>`.
+`orch wait` prints a `WAKE <terminal>` line for each of your signals past that deadline, so a restart that lost the background check still reaches step 5's inbox item.
+
+A `[Cross-session delivery notice]` that says held, refused, expired or not approved, for that `msg_id`: send nothing more to that card and add the inbox item, with the card and the reason. Never answer a dialog on its screen or change a permission or setting to get a signal through. Once the human has answered, run `skills-sync wake-reset <terminal>`.
 
 ## Setting
 

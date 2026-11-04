@@ -484,10 +484,36 @@ def wake_file(handle):
     return STATE / "wakes" / f"{handle}.json"
 
 
+@contextlib.contextmanager
+def wake_lock(handle):
+    """One reservation per terminal: two callers must not both get `route: sendmessage`, and a slow checker must not
+    remove the attempt that replaced the one it watched."""
+    path = wake_file(handle).with_suffix(".lock")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        yield
+
+
+def wake_entry(path):
+    """The attempt kept at path: None when there is none, False when a file is there that cannot be trusted, which is
+    not the same thing, since a signal may have gone out."""
+    try:
+        entry = json.loads(path.read_text())
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        return False
+    valid = isinstance(entry, dict) and all(isinstance(entry.get(k), str) for k in ("session", "to", "nonce")) \
+        and isinstance(entry.get("at"), (int, float)) and isinstance(entry.get("offset"), int)
+    return entry if valid else False
+
+
 def wake_transport():
     """"sendmessage" or "terminal" from agent-skills.json; off by default until a card has run it for real."""
     cfg = read_json(CONFIG, {})
-    value = (cfg.get("wake") or {}).get("transport", "terminal") if isinstance(cfg, dict) else "terminal"
+    wake = cfg.get("wake", {}) if isinstance(cfg, dict) else {}
+    value = wake.get("transport", "terminal") if isinstance(wake, dict) else wake
     if value not in ("sendmessage", "terminal"):
         print(f"warning: unknown wake.transport {value!r}, using terminal", file=sys.stderr)
         return "terminal"
@@ -555,9 +581,21 @@ def transcript_of(session):
     return None
 
 
-def delivered(row, nonce):
-    """The row hands this wake to the receiving Claude: a user row, or the attachment a running turn takes it in. An
-    enqueue is not delivery, and a tool's result that quotes the nonce is not either."""
+def wake_envelope(nonce):
+    """The whole of this wake as Claude Code wraps it: whoever merely quotes the nonce is not delivering it. An idle
+    receiver's row carries a prefix and a trailing note, a running turn's does not."""
+    return re.compile(r'(?:Another Claude session sent a message:\n)?<cross-session-message from="[^"\n]*"[^\n]*>\n'
+                      + re.escape(WAKE_LINE.format(nonce=nonce)) + r"\n</cross-session-message>(?:\n|\Z)")
+
+
+def enqueued(row, envelope):
+    content = row.get("content")
+    return row.get("type") == "queue-operation" and row.get("operation") == "enqueue" \
+        and isinstance(content, str) and envelope.match(content) is not None
+
+
+def delivered(row, envelope):
+    """The row hands this wake to the receiving Claude: a user row, or the attachment a running turn takes it in."""
     attached = row.get("attachment") if isinstance(row.get("attachment"), dict) else {}
     if row.get("type") == "attachment" and attached.get("type") == "queued_command":
         texts = [attached.get("prompt")]
@@ -567,22 +605,25 @@ def delivered(row, nonce):
             b.get("text") for b in content or [] if isinstance(b, dict) and b.get("type") == "text"]
     else:
         return False
-    return any(isinstance(t, str) and "<cross-session-message from=" in t and nonce in t for t in texts)
+    return any(isinstance(t, str) and envelope.match(t) for t in texts)
 
 
 def wake_state(entry):
-    """"started" (delivered, then the session answered), "delivered", "accepted" (queued) or None. An unknown transcript
-    shape reads as None, never as a start."""
-    path = transcript_of(entry.get("session"))
-    nonce = entry.get("nonce")
-    if not path or not nonce:
+    """"started" (delivered, then assistant activity), "delivered", "accepted" (queued) or None, read from where the
+    transcript ended when the attempt was reserved. Only those shapes advance the state, in that order: an unknown
+    transcript reads as None, never as a start. The activity may be a turn already under way: the signal was seen,
+    which is all a wake can prove."""
+    path = transcript_of(entry["session"])
+    if not path:
         return None
+    envelope = wake_envelope(entry["nonce"])
     state = None
     try:
-        with open(path, errors="replace") as f:
+        with open(path, "rb") as f:
+            if os.fstat(f.fileno()).st_size < entry["offset"]:
+                return None
+            f.seek(entry["offset"])
             for line in f:
-                if nonce not in line and state != "delivered":
-                    continue
                 try:
                     row = json.loads(line)
                 except ValueError:
@@ -591,9 +632,9 @@ def wake_state(entry):
                     continue
                 if state == "delivered" and row.get("type") == "assistant":
                     return "started"
-                if delivered(row, nonce):
+                if state == "accepted" and delivered(row, envelope):
                     state = "delivered"
-                elif not state and row.get("type") == "queue-operation" and row.get("operation") == "enqueue":
+                elif not state and enqueued(row, envelope):
                     state = "accepted"
     except OSError:
         return None
@@ -607,43 +648,56 @@ def wake_target(handle):
         print("not a terminal handle")
         return 2
     path = wake_file(handle)
-    pending = read_json(path, None)
-    if isinstance(pending, dict):
-        if wake_state(pending) == "started":
-            path.unlink(missing_ok=True)
-        else:
-            old = time.time() - pending.get("at", 0) >= WAKE_PENDING_S
-            print(f"route: {'report' if old else 'pending'}\nreason: wake {pending.get('nonce')} is not confirmed; "
-                  "another signal could arrive beside it\n"
-                  f"check: skills-sync wake-check {handle}")
+    check = f"check: skills-sync wake-check {handle}"
+    with wake_lock(handle):
+        pending = wake_entry(path)
+        if pending is False:
+            print(f"route: report\nreason: the wake record cannot be read and a signal may have gone out\n{check}")
             return 0
-    row, why = wake_plan(handle)
-    if not row:
-        print(f"route: terminal\nreason: {why}")
-        return 0
-    nonce = secrets.token_hex(3)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    write_json(path, {"session": row["sessionId"], "to": row["name"], "nonce": nonce, "at": time.time()})
-    print(f"route: sendmessage\nto: {row['name']}\nmessage: {WAKE_LINE.format(nonce=nonce)}\n"
-          f"check: skills-sync wake-check {handle}")
+        if pending:
+            if wake_state(pending) != "started":
+                old = time.time() - pending["at"] >= WAKE_PENDING_S
+                print(f"route: {'report' if old else 'pending'}\nreason: wake {pending['nonce']} is not confirmed; "
+                      f"another signal could arrive beside it\n{check}")
+                return 0
+            path.unlink(missing_ok=True)
+        row, why = wake_plan(handle)
+        transcript = transcript_of(row["sessionId"]) if row else None
+        if row and not transcript:
+            why = "the session has no transcript to confirm a wake in"
+        try:
+            offset = transcript.stat().st_size if transcript else None
+        except OSError as e:
+            offset, why = None, f"cannot read the transcript: {e}"
+        if offset is None:
+            print(f"route: terminal\nreason: {why}")
+            return 0
+        nonce = secrets.token_hex(8)
+        write_json(path, {"session": row["sessionId"], "to": row["name"], "nonce": nonce, "at": time.time(),
+                          "offset": offset, "from": os.environ.get("ORCA_TERMINAL_HANDLE")})
+    print(f"route: sendmessage\nto: {row['name']}\nmessage: {WAKE_LINE.format(nonce=nonce)}\n{check}")
     return 0
 
 
 def wake_check(handle, wait_s):
     path = wake_file(handle) if _roles().SESSION.fullmatch(handle) else None
-    entry = read_json(path, None) if path else None
-    if not isinstance(entry, dict):
-        print("unconfirmed: no wake recorded for this terminal")
+    entry = wake_entry(path) if path else None
+    if not entry:
+        print("unconfirmed: the wake record cannot be read" if entry is False
+              else "unconfirmed: no wake recorded for this terminal")
         return 1
     deadline = time.monotonic() + wait_s
     while True:
         state = wake_state(entry)
         if state == "started":
-            path.unlink(missing_ok=True)
+            with wake_lock(handle):
+                current = wake_entry(path)
+                if current and current["nonce"] == entry["nonce"]:
+                    path.unlink(missing_ok=True)
             print("started")
             return 0
         if time.monotonic() >= deadline:
-            print(f"{'accepted' if state else 'unconfirmed'}: wake {entry.get('nonce')} "
+            print(f"{'accepted' if state else 'unconfirmed'}: wake {entry['nonce']} "
                   f"{'reached the session; no turn followed yet' if state else 'is not in the session transcript'}")
             return 1
         time.sleep(WAKE_POLL_S)
@@ -653,7 +707,8 @@ def wake_reset(handle):
     if not _roles().SESSION.fullmatch(handle):
         print("not a terminal handle")
         return 2
-    wake_file(handle).unlink(missing_ok=True)
+    with wake_lock(handle):
+        wake_file(handle).unlink(missing_ok=True)
     print("reset")
     return 0
 

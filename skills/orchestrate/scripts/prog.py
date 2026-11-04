@@ -2690,6 +2690,9 @@ def review_lines(p, workers=None, tasks=None, unknown=frozenset()):
     return lines
 
 
+WAKE_DUE_S = 1800  # sync.py's WAKE_PENDING_S
+
+
 def cmd_wait(argv):
     p = Program(argv[0])
     timeout = opt(argv, "--timeout-ms", "540000")
@@ -2750,7 +2753,7 @@ def cmd_wait(argv):
             print_sweep(run_id, p.dir / "self-check.json")
             print("STUCK: a worker waits on a prompt nobody sees; answer or escalate it now", flush=True)
             return
-        if leftovers := new_leftovers(p.dir):
+        if leftovers := new_leftovers(p.dir) + wake_lines(me):
             print("\n".join(leftovers), flush=True)
         if stalled := new_stalls(p.dir):
             print("\n".join(stalled), flush=True)
@@ -2766,6 +2769,28 @@ def cmd_wait(argv):
     moves = next_moves(run_workers(run_id))
     print("\n".join([f"EMPTY x{rounds}: " + (f"{len(moves)} live worker(s), each with its move:" if moves else "no live worker")]
                     + moves))
+
+
+def wake_lines(me, now=None):
+    """Signals this session sent that stayed unconfirmed past `skills-sync wake-target`'s deadline. The background
+    recheck dies with a restart, so the wait keeps the deadline. A record nobody can read has no sender and shows to
+    every session."""
+    root = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()
+    now = time.time() if now is None else now
+    out = []
+    for f in sorted((root / "wakes").glob("*.json")):
+        try:
+            entry = json.loads(f.read_text())
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError):
+            entry = None
+        if isinstance(entry, dict) and isinstance(entry.get("at"), (int, float)) \
+                and (entry.get("from") != me or now - entry["at"] < WAKE_DUE_S):
+            continue
+        out.append(f"WAKE {f.stem}: unconfirmed past its deadline; skills-sync wake-check {f.stem}, and without "
+                   "`started` follow references/waking.md (inbox item, then wake-reset once the human has answered)")
+    return out
 
 
 def watch_lines(me, unowned):
