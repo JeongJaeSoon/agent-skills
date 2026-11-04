@@ -25,18 +25,18 @@ FORBIDDEN = re.compile(
 
 
 def grant_value(text):
-    """(value, errors) of the `allowed-tools` key. One plain line is the only form read: YAML has others (a quoted
-    key, a folded continuation, a list) that a line parser would miss, and a missed grant still applies."""
+    """(value, errors) of the `allowed-tools` key. YAML can spell a grant in forms a line parser misses (a quoted or
+    escaped key, a continuation, a list), and a missed grant still applies, so every frontmatter line must be a plain
+    `key: value` on one line."""
     head = re.match(r"---\r?\n(.*?)\r?\n---", text, re.S)
-    lines = head.group(1).splitlines() if head else []
-    keys = [i for i, line in enumerate(lines) if re.match(r"""\W*allowed[-_]tools\W*:""", line, re.I)]
-    if not keys:
-        return "", []
-    following = lines[keys[0] + 1:keys[0] + 2]
-    m = re.fullmatch(r"allowed-tools: (Bash\(.*)", lines[keys[0]])
-    if len(keys) > 1 or not m or (following and re.match(r"\s|-", following[0])):
-        return "", ["allowed-tools must be one plain `allowed-tools: Bash(...)` line"]
-    return m.group(1), []
+    lines = head.group(1).split("\n") if head else []
+    odd = [line for line in lines if not re.fullmatch(r"[a-z][a-z-]*: \S.*", line)]
+    if odd:
+        return "", [f"frontmatter line is not a plain `key: value`: {odd[0]!r}"]
+    grants = [line[len("allowed-tools: "):] for line in lines if line.startswith("allowed-tools: ")]
+    if len(grants) > 1 or (grants and not grants[0].startswith("Bash(")):
+        return "", ["allowed-tools must be one line of Bash(...) entries"]
+    return (grants[0] if grants else ""), []
 
 
 def entries(value):
@@ -62,24 +62,45 @@ def pattern_errors(entry):
 
 
 def matches(pattern, command):
-    """Claude Code's Bash rule: literal text, `*` for any text, a trailing ` *` also matching nothing."""
-    body = re.escape(pattern).replace(r"\*", ".*")
-    if body.endswith(r"\ .*"):
-        body = body[:-len(r"\ .*")] + r"(\s.*)?"
+    """Claude Code's Bash rule: literal text and `*` for any text. A ` *` that is the only wildcard and ends the rule
+    also matches the bare command."""
+    if pattern.endswith(" *") and pattern.count("*") == 1:
+        body = re.escape(pattern[:-2]) + "( .*)?"
+    else:
+        body = re.escape(pattern).replace(r"\*", ".*")
     return re.fullmatch(body, command, re.S) is not None
 
 
+def strip_comment(line):
+    """`line` without a shell comment; a `#` inside quotes or a word stays."""
+    quote = None
+    for i, ch in enumerate(line):
+        if quote:
+            quote = None if ch == quote else quote
+        elif ch in "\"'":
+            quote = ch
+        elif ch == "#" and (i == 0 or line[i - 1].isspace()):
+            return line[:i]
+    return line
+
+
+FENCE = re.compile(r"^```[^\n]*\n(.*?)^```", re.S | re.M)
+
+
 def fenced_commands(body):
-    """Each command in the fenced blocks, continuation lines joined, comments off."""
+    """Each command in the fenced blocks, continuation lines joined, comments off, whitespace collapsed."""
     out = []
-    for block in re.findall(r"^```[^\n]*\n(.*?)^```", body, re.S | re.M):
-        joined = re.sub(r"\\\n\s*", "", block)
-        out += [line.split("  #")[0].strip() for line in joined.splitlines() if line.strip() and not line.startswith("#")]
+    for block in FENCE.findall(body):
+        for line in re.sub(r"\\\n\s*", "", block).splitlines():
+            if strip_comment(line).strip():
+                out.append(" ".join(strip_comment(line).split()))
     return out
 
 
 def inline_commands(body):
-    return re.findall(r"`([^`\n]+)`", body)
+    """Each code span outside the fenced blocks, whatever its backtick run, whitespace collapsed."""
+    spans = re.findall(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)", FENCE.sub("", body), re.S)
+    return [" ".join(span.split()) for _, span in spans]
 
 
 def body_errors(granted, body):
@@ -115,7 +136,7 @@ def fixture(value, body="`orca thing go now`"):
 for bad in ("Bash", "Bash(*)", "Read", "Bash(orch *)", "Bash(python3:*)", "Bash(python3 *)", "Bash(bash x.sh)",
             "Bash(python3 /tmp/x.py run)", "Bash(orca worktree rm --worktree *)", "Bash(orca terminal send *)",
             "Bash(orch land *)", "Bash(gh pr merge *)", "Bash(git push *)", "Bash(orca worktree rm --force x)",
-            "Bash(orca terminal close --all)", "Bash(tool run ~/x)", "Bash(tool run /home/x)"):
+            "Bash(orca terminal close --all)", "Bash(tool run ~/x)", "Bash(tool run /home/me)"):
     assert pattern_errors(entries(bad)[0]), bad
 for good in ('Bash(python3 "${CLAUDE_SKILL_DIR}/scripts/x.py" scan *)', "Bash(tool sub --flag *)"):
     assert not pattern_errors(entries(good)[0]), good
@@ -126,6 +147,9 @@ assert matches("tool ok *", "tool ok --force x") and matches("tool ok *", "tool 
 assert not matches("tool plan --plan *", "tool plan --apply --plan x")
 assert not matches('python3 "$R/x.py" ok *', "python3 $R/x.py ok")
 assert matches("tool card *", "tool card brief\n --repo x")
+# Only a lone trailing ` *` matches the bare command, and a space in a rule is a space.
+assert not matches("* --help *", "tool --help") and matches("* --help *", "tool --help x")
+assert not matches("tool ok x", "tool\tok x") and not matches("tool ok *", "tool ok\tx")
 assert matches("close --terminal $H --json", "close --terminal $H --json")
 assert not matches("close --terminal $H --json", 'close --terminal "$H" --json')
 assert not matches("close --terminal $H --json", "close --terminal t1 --json")
@@ -150,6 +174,10 @@ assert not fenced_commands("no block") and fenced_commands("```bash\na b \\\n  c
 assert body_errors(["orca thing go now"], "`orca thing go now` and `orca thing go now --all`")
 assert not body_errors(["orca thing go now"], "`orca thing go now` and `orca thing gone x`")
 assert not body_errors(["orca thing go now"], "`orca thing go now` beside `orca thing go`")
+assert fenced_commands('```bash\ntool show "  # text"  # note\n```\n') == ['tool show " # text"']
+assert inline_commands("``a ` b`` and `c\n  d`\n```\nfenced\n```\n") == ["a ` b", "c d"]
+assert body_errors(["orca thing go now"], "`orca thing go now` and `orca thing go\tlater`")
+assert body_errors(["orca thing go now"], "`orca thing go now` and `orca thing go\n  later`")
 
 # Every other YAML spelling of the key is refused, so a grant cannot sit where this file's parser misses it.
 GOOD = "Bash(orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json)"
@@ -159,7 +187,8 @@ for spelling in (f"allowed-tools: {GOOD}\n  Bash(orca terminal send *)", '"allow
                  "'allowed-tools': Bash(orca terminal send *)", "allowed-tools:\n  - Bash(orca terminal send *)",
                  f"allowed-tools:\n- {GOOD}", f"allowed-tools: [{GOOD}]", f'allowed-tools: "{GOOD}"',
                  "allowed-tools: Read", f"allowed-tools: {GOOD}\nallowed-tools: {GOOD}",
-                 "allowed-tools: >\n  Bash(orca terminal send *)"):
+                 "allowed-tools: >\n  Bash(orca terminal send *)", f"allowed-tools: {GOOD}\n\n  Bash(orca terminal send *)",
+                 '"allowed-\\u0074ools": Bash(orca terminal send *)', "? allowed-tools\n: Bash(orca terminal send *)"):
     assert grant_value(f"---\nname: a\n{spelling}\n---\n")[1], spelling
     assert skill_errors("demo", f"---\nname: a\n{spelling}\n---\n"), spelling
 
