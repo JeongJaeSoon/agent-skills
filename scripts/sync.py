@@ -6,7 +6,9 @@ Usage:
   skills-sync broadcast [--skills|--plugins] [--dry-run] [--terminal <handle>]
                                          send the pending (or the given) reload to idle Claude sessions,
                                          or to one of them; first /restart (or /reload-plugins) each idle one
-                                         whose screen shows it runs on what changed under it, once
+                                         whose screen shows it runs on what changed under it, once.
+                                         A session opened after the later of the agent-skills change and the
+                                         last plugin update is skipped, except one named with --terminal
   skills-sync nudge <terminal> <one line>
                                          type one line into a session, only if it is idle at an empty prompt
   skills-sync wake-target <terminal>     say how to wake a Claude card: the session and one-line signal for the SendMessage
@@ -842,12 +844,32 @@ def broadcast(kind, dry_run, only=None):
         return broadcast_locked(kind, only=only)
 
 
-def opened_after(since, terms):
-    """Handles of `terms` whose Orca worktree was created after `since`: their agent started after the change and
-    already loaded it. Orca keeps no terminal creation time, and a worktree predates its terminals, so this never
-    skips a session that is older than the change. Anything unreadable leaves the terminal a target."""
+def plugins_updated():
+    """The latest `lastUpdated` among the installed plugins (Claude Code's installed_plugins.json), as a Unix time,
+    or 0 when the file or a stamp is unreadable. A plugin updated after the change leaves a session that opened
+    before that update on the old code, whichever plugin it is, so no name is read."""
+    path = pathlib.Path(os.environ.get("AGENT_SKILLS_INSTALLED_PLUGINS",
+                                       "~/.claude/plugins/installed_plugins.json")).expanduser()
+    latest = 0
     try:
-        cutoff = datetime.datetime.strptime(since, "%Y-%m-%dT%H:%M:%S%z").timestamp() * 1000
+        for entries in read_json(path, {}).get("plugins", {}).values():
+            for e in entries:
+                try:
+                    latest = max(latest, datetime.datetime.fromisoformat(e["lastUpdated"].replace("Z", "+00:00")).timestamp())
+                except (KeyError, TypeError, ValueError, AttributeError):
+                    continue
+    except (AttributeError, TypeError):
+        return 0
+    return latest
+
+
+def opened_after(since, terms):
+    """Handles of `terms` whose Orca worktree was created after the later of `since` (when agent-skills changed) and
+    the last plugin update: their agent started after the change and already loaded it. Orca keeps no terminal
+    creation time, and a worktree predates its terminals, so this never skips a session that is older than the
+    change. Anything unreadable leaves the terminal a target."""
+    try:
+        cutoff = max(datetime.datetime.strptime(since, "%Y-%m-%dT%H:%M:%S%z").timestamp(), plugins_updated()) * 1000
         created = {w.get("worktreeId"): w.get("createdAt") for w in orca("worktree", "ps", "--limit", "500")["worktrees"]}
     except (Stop, KeyError, TypeError, ValueError):
         return set()
@@ -960,11 +982,14 @@ def broadcast_locked(kind, dry_run=False, only=None):
         terms = [only]
     # Both commands load the plugin afresh, so a session typed into here needs no reload after it.
     restarted, held = restart_stale(terms, dry_run, keep_others=bool(only))
+    if only and not kind:  # asked for by name with nothing pending: the superset, as for an unreadable queue
+        kind = "plugins"
     if not kind:
         print("nothing to reload")
         return 0
     newer = opened_after(pending.get("since"), listed)
-    done, failed = set(pending.get("done", [])) | restarted, {}
+    # A named terminal is sent to whatever the queue says: the caller knows it needs the reload.
+    done, failed = (restarted if only else set(pending.get("done", [])) | restarted), {}
     for h in terms:
         if h in done:
             continue
@@ -973,8 +998,10 @@ def broadcast_locked(kind, dry_run=False, only=None):
             print(f"{h}  {failed[h]['reason']}")
             continue
         if h in newer:
-            print(f"{h}  opened after the change, already has it")
-            continue
+            if not only:
+                print(f"{h}  opened after the change, already has it")
+                continue
+            print(f"{h}  warning: opened after the change, so it may already have it; sending as asked")
         try:
             if dry_run:
                 s, reason = screen(h)
@@ -995,7 +1022,7 @@ def broadcast_locked(kind, dry_run=False, only=None):
     if only:  # the other sessions were not tried: leave their entries as they are
         if path.exists():
             rest = {h: v for h, v in pending.get("failed", {}).items() if h != only}
-            write_json(path, dict(pending, done=sorted(done), failed={**rest, **failed}))
+            write_json(path, dict(pending, done=sorted((done | set(pending.get("done", []))) - set(failed)), failed={**rest, **failed}))
         return 1 if failed else 0
     if failed:
         write_json(path, dict(pending, kind=kind, done=sorted(done & set(terms)), failed=failed))
