@@ -21,6 +21,9 @@ A pass, in order (each later step sees what the earlier ones closed):
             cwd was removed or lies in a card that is gone -> SIGTERM to that pid alone, after pid and start time match.
   serve     a `tailscale serve` entry in `serve_ranges` whose same local port has refused connections two passes in a row
             -> `tailscale serve --https=<port> off` (or --tcp)
+  container a stopped container named under reap.stopped_containers.prefixes that compose did not make -> `docker rm <id>`
+  volume    a volume whose origin label is in reap.labeled_volumes.origins, referenced by no container in any state
+            -> `docker volume rm <name>`. Both off without their setting; the rules are reap.py's (reap.leftovers).
 Before any rule, the protect file is read; without it nothing runs (exit 2). It holds `port N`, `pid N`, `path P`
 (a card or any prefix) and `project NAME` lines; `#` starts a comment. Pinned cards, the main checkout, the
 compose projects in reap.pressure.always_on and anything a person's shell started are always kept.
@@ -355,6 +358,16 @@ def scan_rest(cfg, protect, dark_before, closed, m, now):
         if ok:
             downing |= st["ports"]
 
+    settings = guard.settings()
+    if settings is None:
+        notes.append("설정을 읽지 못함: 멈춘 컨테이너·라벨 볼륨은 건너뜀")
+    elif unread is None:
+        rc = settings.get("reap") or {}
+        hours = float(rc.get("hours") or 6)
+        for i in reap.leftovers(rc, hours, now, notes, protect["project"] | keep, protect["port"]):
+            kind = "container" if i["kind"] == "stopped-container" else "volume"
+            items.append({**i, "kind": kind, "id": i.get("cid") or i["name"]})
+
     alive = {reap.real(os.path.join(root, r, c)) for r in (os.listdir(root) if os.path.isdir(root) else ())
              if os.path.isdir(os.path.join(root, r)) for c in os.listdir(os.path.join(root, r))
              if os.path.isdir(os.path.join(root, r, c))} - set(closed)
@@ -462,6 +475,8 @@ def act(item, cfg, protect, done=None):
         done["identity"] = {"start": str(st.get("last"))}  # the stack really brought down, read again just now
         reap.run(["docker", "compose", "-p", item["id"], "down"])  # no -v: volumes are data
         return "docker compose down(볼륨·이미지 유지)"
+    if k in ("container", "volume"):
+        return reap.remove_leftover(item, (guard.settings() or {}).get("reap") or {})
     if k == "listener":
         rows = reap.processes()
         r = rows.get(item["pid"])
