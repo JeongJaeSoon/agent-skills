@@ -1,4 +1,4 @@
-<!-- translated-from: 325261407224cffebe312dda2bdba9cb93cfc217 -->
+<!-- translated-from: c23cc49ce4d942d7d247a76d4908f5768985d10f -->
 # Skill catalog
 
 This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 14 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
@@ -120,7 +120,7 @@ Which skill owns a PR, and who merges it:
     - Main checkout: closes only the terminal. It never uses `worktree rm`.
     - Outside Orca: uses `EndConversation`. That is permanent, so it asks for confirmation once.
   - Asks the user about uncommitted changes and never uses `--force`. An Orca worker, in a program or not, asks no one.
-  - An Orca worker closes itself when it finishes: `succeeded`, a clean tree, the work on `origin/main`, and no open PR, pending question or `KEEP` line in its brief means it closes its own terminal in the same turn, right after `worker_done`, and reap-hard and the janitor take the worktree. Otherwise it closes only the setup terminal and reports what holds the card.
+  - An Orca worker closes itself when it finishes: `succeeded`, a clean tree, the work on `origin/main`, and no open PR, pending question or `KEEP` line in its brief means it closes its own terminal in the same turn, right after `worker_done`, and reap-hard and the janitor take the worktree. Otherwise it closes only the setup terminal and reports what holds the card. Cleanup commands run alone, with no pipe or checking `ls` attached (those can keep the call from passing on its allow rule and leave it to the classifier or a prompt), and when the session lives on, the next call checks the result.
   - A card whose brief has a `CLOSE` line (`dispatch-card`, or a card an orchestrator or lead made with `worktree create`) also closes itself in the same turn once its done criteria are met. It does not leave the cleanup to the parent session.
   - Before ending, it checks the background subagents this session started, the git worktrees it made and the child cards it dispatched.
   - Writes the report first and runs the close command as its last tool call.
