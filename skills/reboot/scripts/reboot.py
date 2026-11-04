@@ -139,19 +139,20 @@ def card_agent(call, worktree_id):
     an unreadable list is not an empty one."""
     if not worktree_id:
         return None
-    terms = call("terminal", "list", "--worktree", f"id:{worktree_id}").get("terminals") or []
+    res = call("terminal", "list", "--worktree", f"id:{worktree_id}")
+    if res.get("truncated"):
+        raise OrcaError("truncated", "the terminal list is cut short")
+    terms = res.get("terminals") or []
     return next((t.get("handle") for t in terms if t.get("agentIdentity") and t.get("handle")), None)
 
 
 def has_dispatch(call, handle):
     """Whether a Dispatch of any Run is on the terminal. worker-list is scoped to this terminal's Run, so every page
     of run-list is read, Run by Run: the resume may have been made from another Run. OrcaError when a read fails."""
-    if orca_settings.terminal_dispatch(call, handle):
-        return True
     for res, _ in orca_settings.pages(call, "run-list", error=OrcaError):
         for r in res.get("runs") or []:
             for w in orca_settings.all_workers(call, "--run", r.get("id"), "--limit", "100", error=OrcaError):
-                if orca_settings.worker_terminal(w) == handle and w.get("dispatchStatus") not in RESTART_LOST \
+                if orca_settings.worker_terminal(w) == handle and w.get("dispatchStatus") not in RESTART_LOST + FINISHED \
                         and w.get("terminalState") != "released":
                     return True
     return False

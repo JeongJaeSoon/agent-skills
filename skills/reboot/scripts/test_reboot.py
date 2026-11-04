@@ -32,7 +32,7 @@ class Orca:
 
     def __init__(self, live=(ME,), run=None, workers=(), title="orchestrator", here=(), concise=False, runs=()):
         self.live, self.run, self.workers, self.title, self.here = set(live), run, list(workers), title, list(here)
-        self.runs, self.runs_fail, self.list_fails = list(runs), False, False
+        self.runs, self.runs_fail, self.list_fails, self.truncated = list(runs), False, False, False
         self.concise = concise
 
     def __call__(self, *argv):
@@ -44,7 +44,7 @@ class Orca:
         if argv[:2] == ("terminal", "list") and self.list_fails:
             raise reboot.OrcaError("no_answer")
         if argv[:2] == ("terminal", "list"):
-            return {"terminals": self.here}
+            return {"terminals": self.here, "truncated": self.truncated}
         if argv[:2] == ("orchestration", "run-current"):
             return {"runId": self.run} if self.concise else {"run": {"id": self.run} if self.run else None}
         if argv[:2] == ("orchestration", "run-list"):
@@ -295,6 +295,22 @@ class Restarted(unittest.TestCase):
         other_run["resource"] = {"worktreeId": "repo::/elsewhere"}
         orca = Orca(run="run_1", workers=[self.row("d1", "abandoned"), other_run], here=live, runs=("run_1", "run_b", "run_c"))
         self.assertEqual(does(run("lead", "acme", "run_1", orca=orca, procs=wait_proc(200, "orch wait acme"))), [])
+
+    def test_an_earlier_finished_dispatch_on_the_terminal_is_no_proof_of_a_resume(self):
+        live = [{"handle": "term_new", "agentIdentity": "claude"}]
+        done = self.row("d_done", "completed", "retained", handle="term_new")
+        done["resource"] = {"worktreeId": "repo::/elsewhere"}
+        orca = Orca(run="run_1", workers=[self.row("d1", "abandoned"), done], here=live, runs=("run_1",))
+        out = does(run("lead", "acme", "run_1", orca=orca, procs=wait_proc(200, "orch wait acme")))
+        self.assertEqual(len(out), 1)
+        self.assertIn("--terminal term_new", out[0])
+
+    def test_a_cut_short_terminal_list_issues_no_recovery_command(self):
+        orca = Orca(run="run_1", workers=[self.row("d1", "abandoned")], here=[])
+        orca.truncated = True
+        lines = run("lead", "acme", "run_1", orca=orca, procs=wait_proc(200, "orch wait acme"))
+        self.assertEqual(does(lines), [])
+        self.assertTrue([t for k, t in lines if k == "info" and "could not" in t])
 
     def test_an_unreadable_terminal_or_run_list_issues_no_recovery_command(self):
         live = [{"handle": "term_new", "agentIdentity": "claude"}]
