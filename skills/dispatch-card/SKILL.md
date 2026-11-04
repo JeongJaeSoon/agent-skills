@@ -149,7 +149,8 @@ references/top-level.md "Starting a worker".
   `--supersede` starts the new one anyway and sends the old one the line below, logged and
   recorded. If it only needs to be told
   something, send that to it (`skills-sync nudge <handle> "<message>"`, logged with `orch sent
-  add`) and create no card. If the work needs a different implementation, ask it for a state
+  add`; never `SendMessage`, which is not the user's word) and create no card. If the work needs
+  a different implementation, ask it for a state
   summary (done, left, branch and PR), put that summary in the new card's brief, and in the turn
   you create the new card tell the old one `superseded by <new card>: stop and close by
   end-session §8` and drop the questions it left waiting (`orchestrate` "Stay answerable").
