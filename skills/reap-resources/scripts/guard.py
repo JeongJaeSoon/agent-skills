@@ -313,8 +313,14 @@ def item(i, protect, cleaner="reap"):
         return project(i.get("name") or i.get("id"), protect)
     if kind in ("stopped-container", "container", "labeled-volume", "volume"):
         hit = sorted(set(i.get("ports") or ()) & protect["port"])
-        return project(i["name"], protect) or (i.get("project") and project(i["project"], protect)) or \
+        why = project(i["name"], protect) or (i.get("project") and project(i["project"], protect)) or \
             (f"보호 포트 {hit[0]}" if hit else None)
+        if why or kind in ("stopped-container", "container"):
+            return why
+    if kind in ("stack-volume", "labeled-volume", "volume") or (i.get("key") or "").startswith("volume:"):
+        owners = i.get("owners")
+        return next(filter(None, (project(o, protect) for o in owners or ())), None) or \
+            reap.owner_hold(owners, reap.owner_facts())
     if kind == "serve":
         return port(i["port"], protect) or port(i["local"], protect)
     if kind == "gui-app":

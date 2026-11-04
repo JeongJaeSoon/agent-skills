@@ -202,7 +202,7 @@ PR を受け持つスキルとマージする主体:
   - **worktree:** 一時ディレクトリにあって消えた worktree（Orca のものは除く）と、セッションの transcript が N 時間動いていない Claude scratchpad の、クリーンで push 済みの detached worktree。どちらも `git worktree remove <パス>` でその項目だけを消します。Orca の worktree は resource steward の担当です。
   - **card:** Orca のカードすべて（アプリ・CLI・ワーカーのどれが作ったかを問わず）を `scripts/cards.py scan` がカードごとに、削除・ターミナルだけ閉じる（開いた PR あり）・残す・人の判断、のどれかに判定して表にします。人が表を見て `apply --plan` で実行し、janitor の回も同じコードを使います。規則と落とし穴（古い `origin/HEAD` は GitHub の compare で確かめ直す、rebase 前の写しは patch-id で見分ける、プロンプトで止まったシェル、「終わった」と書いた idle の画面）は `references/cards.md` 一か所にあります。
   - **janitor:** エージェントが ledger（`~/.local/state/agent-skills/ledger.jsonl`）に登録した一時ディレクトリ・GUI アプリ・ブラウザウィンドウと、Orca オーケストレーションのワーカーが作った worktree・終わったワーカーのターミナルだけを見ます。`reap --plan` が対象を確かめ直してから閉じるかゴミ箱に移します。下のコンテナ・ボリューム種別の `docker` 削除を除き、ツールは完全には削除せず、ゴミ箱も空にしません。OS がゴミ箱を自動で空にする設定なら警報で知らせます。ブラウザウィンドウはエージェントがブラウザツールで閉じます。
-  - **stopped-container・labeled-volume:** 設定を書いたときだけ有効になり、janitor と reap-hard が同じルールで判定します。`reap.stopped_containers.prefixes` で始まる名前で compose が作っていない、停止中（exited・created）のコンテナと、`<namespace>.origin` ラベルの値が `reap.labeled_volumes.origins` にあり、どのコンテナからも参照されていないボリュームが対象です。ID か名前を指定して1つずつ削除し、記録を残します。このラベルは出どころの表示であり、削除の許可でもあります。ラベルのない匿名ボリュームは削除せず、`reap.py inventory --unlabeled-volumes` が読み取り専用で一覧を出すだけです。
+  - **stopped-container・labeled-volume:** 設定を書いたときだけ有効になり、janitor と reap-hard が同じルールで判定します。`reap.stopped_containers.prefixes` で始まる名前で compose が作っていない、停止中（exited・created）のコンテナと、`<namespace>.origin` ラベルの値が `reap.labeled_volumes.origins` にあり、どのコンテナからも参照されていないボリュームが対象です。ID か名前を指定して1つずつ削除し、記録を残します。ボリュームのルールはどれも、所有カードが閉じたと証明できるときだけ削除します。ledger に所有の記録がない、カードの worktree が残っている、PR が開いている、カード一覧を読めない場合は残します。このラベルは出どころの表示であり、削除の許可でもあります。ラベルのない匿名ボリュームは削除せず、`reap.py inventory --unlabeled-volumes` が読み取り専用で一覧を出すだけです。
   - **user-folder:** `reap.user_folders` に明示したフォルダーだけを整理します。未設定なら無効です。期間・開いているファイル・ダウンロード中の検査とゴミ箱への保管は維持します。
   - **program:** `~/.claude/programs`（`PROGRAMS_HOME`）のうち、閉じたプログラム（最終確認 `predicate_verified` の後に着地・predicate 変更・admitted の後続がないもの）で、記録（ダッシュボードのキャッシュを除く ledger・decisions・reflect など）が 7 日（`reap.program_days`）以上変わっていないものを `_archive/` に移します。削除はしません。名前に `resume` か `handoff` を含む再開ノートがあれば、閉じていても残します。
   - **state-file:** reorient フックのセッションファイル（`<state>/reorient/*.json`）のうち 7 日（`reap.state_days`）を過ぎたものを 1 つのフォルダにまとめてゴミ箱へ、512KB（`reap.log_max_kb`）を超えた `sync.log` は `sync.log.1` にローテーションします（前の `.1` はゴミ箱）。program とあわせて、定期実行では 1 日 1 回だけ見ます。
@@ -528,7 +528,8 @@ PR を受け持つスキルとマージする主体:
     "jira": {"base_url": "https://…", "email_env": "JIRA_EMAIL", "token_env": "JIRA_API_TOKEN", "issue_type": "Task"},
     "rules_file": "~/.config/agent-skills/tracker-rules.md"
   },
-  "notes": {"adapter": "obsidian", "obsidian": {"vault": "<vault>", "access": "mcp"}, "markdown": {"root": "~/notes"}}
+  "notes": {"adapter": "obsidian", "obsidian": {"vault": "<vault>", "access": "mcp"}, "markdown": {"root": "~/notes"}},
+  "orchestrate": {"models": {"lead": "opus", "worker": "sonnet"}}
 }
 ```
 
@@ -576,6 +577,7 @@ PR を受け持つスキルとマージする主体:
 | `orchestrate.ask_user_question` | deny | オーケストレーター・リード・ワーカーの本会話の AskUserQuestion。サブエージェントと一般セッションは対象外です |
 | `orchestrate.wait_foreground` | deny | オーケストレーター・リードが `orch wait`、`orch inbox --wait`、`orch watch-cards`、`orca orchestration check\|inbox --wait` を `run_in_background` なしで実行すること、またはバックグラウンドの待機を `\| tail`・`\| head` で切ること。ワーカーの `check --wait` は対象外です |
 | `orchestrate.send_devnull` | deny | オーケストレーター・リード・ワーカーが `orca orchestration send\|reply` の出力を `/dev/null` に捨てること。`2>/dev/null` だけなら対象外です |
+| `orchestrate.model_flag` | warn | `orchestrate.models` を設定しているのに、`orca orchestration worker-start`・`orca worktree create`・`orca agent launch` が `--model` なしで Claude を起動した。`--terminal` は対象外 |
 | `orchestrate.self_land` | warn | `hooks/self_land_gate.py`。最初のプロンプトに `PROGRAM` と `orch land` を書いた `APPROVED` があるカードが、自分の PR を開いたまま `worker_done` や `orca worktree rm` を呼ぶこと。`READY-WAIT:` の行、`--outcome failed`、human-gate のプログラムは通します。`deny` にすると止めます |
 | `orchestrate.stack_dependent` | warn | 依存する PR がスタックになっていないこと。`hooks/stack_gate.py` が `gh pr create` でブリーフの `Lands after` とブランチの履歴を見て、`orch land`・`land-check` が land-after の依存と実際のスタックを比べます。`deny` にすると両方が止めます。読めないときは警告 1 行で通します |
 

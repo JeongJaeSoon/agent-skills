@@ -309,6 +309,44 @@ st["prs"]["74"]["statusCheckRollup"] = [{"name": "bot", "status": "COMPLETED", "
 code, out = prog(env, "land", "t", "--pr", "74")
 assert code == 3 and "CI failed" in out and not merged(d), out
 
+# A PR edited while CI ran: the same head holds a cancelled run and the run that replaced it.
+def dup_rollup(n, last="SUCCESS"):
+    def c(concl, started, run):
+        return {"name": "tests", "workflowName": "CI", "status": "COMPLETED", "conclusion": concl, "startedAt": started,
+                "completedAt": started, "detailsUrl": f"https://github.com/o/r/actions/runs/{run}/job/1"}
+    return [c("CANCELLED", "2026-11-04T08:21:44Z", n * 100), c(last, "2026-11-04T08:21:50Z", n * 100 + 1)]
+
+
+p_ = pr(77); p_["statusCheckRollup"] = dup_rollup(77)
+d, env = setup({"77": p_})
+verdict(d, 77, "T-77")
+st = json.loads((d / "state.json").read_text())
+st["runs"] = {"h77": [{"name": "CI", "status": "completed", "conclusion": "cancelled"},
+                      {"name": "CI", "status": "completed", "conclusion": "success"}]}
+(d / "state.json").write_text(json.dumps(st))
+code, out = prog(env, "land-check", "t", "--pr", "77")
+assert "CI failed" not in out and "CI pending" not in out, out
+code, out = prog(env, "land", "t", "--pr", "77")
+assert code == 0 and "landed #77" in out and "CI runs 7701;" in out and merged(d), out
+
+# The run that replaced it was cancelled too: nothing proves the head, so land stops as before.
+p_ = pr(78); p_["statusCheckRollup"] = dup_rollup(78, last="CANCELLED")
+d, env = setup({"78": p_})
+verdict(d, 78, "T-78")
+code, out = prog(env, "land", "t", "--pr", "78")
+assert code == 3 and "CI failed: tests=CANCELLED" in out and not merged(d), out
+
+# A failure the rollup no longer counts (a newer run of that check passed) still holds land until the test-results
+# comment accounts for its run. The rollup cannot tell two workflow files with one display name apart; this gate can.
+p_ = pr(79); p_["statusCheckRollup"] = dup_rollup(79); p_["statusCheckRollup"][0]["conclusion"] = "FAILURE"
+d, env = setup({"79": p_})
+verdict(d, 79, "T-79")
+st = json.loads((d / "state.json").read_text())
+st["branch_runs"] = {"b79": [{"databaseId": 7900, "name": "CI", "conclusion": "failure", "headSha": "h79"}]}
+(d / "state.json").write_text(json.dumps(st))
+code, out = prog(env, "land", "t", "--pr", "79")
+assert code == 3 and "failed CI runs" in out and "7900" in out and not merged(d), out
+
 # A stack lands in this lane when every layer meets it; any one layer short of it holds the whole unit.
 def no_ci_stack(**lower):
     d, env = no_ci_setup(dict(pr(75, stacked=True), **lower), pr(76, base="b75", stacked=True))
@@ -874,9 +912,13 @@ stale = d / "programs" / "_heavy" / "slot-gone"
 stale.write_text(json.dumps({"pid": 999999}))
 code, out = prog(dict(env, ORCH_HEAVY_SLOT=str(stale)), "heavy", "t", "--wait-minutes", "0", "--", "true")
 assert code == 1 and "every slot busy" in out, out
-(d / "programs" / "_heavy" / "slot-0.stacks").write_text("123\n")  # a nested run's stack list is no holder
+# A nested run's stack list is no holder. The value parses as JSON but not as a holder dict, and it is too long
+# to turn up by chance in the real pid and time the message prints.
+stack_entry = "9876543210987"
+(d / "programs" / "_heavy" / "slot-0.stacks").write_text(f"{stack_entry}\n")
 code, out = prog(env, "heavy", "t", "--wait-minutes", "0", "--", "true")
-assert code == 1 and "every slot busy" in out and "Traceback" not in out and "123" not in out, out
+assert code == 1 and "every slot busy" in out and "Traceback" not in out, out
+assert stack_entry not in out and "slot-0.stacks" not in out, out
 code, out = prog(dict(env, ORCH_HEAVY_SLOT=str(d / "programs" / "_heavy" / "slot-0")), "heavy", "t", "--wait-minutes", "0",
                  "--", "true")  # a live slot that is not an ancestor's
 assert code == 1 and "every slot busy" in out, out
@@ -1092,7 +1134,7 @@ for body, ok in (("", False), ("<!-- test-results -->\nrun 555 failed", False),
     if ok:
         assert code == 0 and "landed #47" in out, out
     else:
-        assert code == 3 and "555 (CI failure)" in out and "557" not in out and "558" not in out, (body, out)
+        assert code == 3 and "555 (CI failure)" in out and "557 (CI" not in out and "558 (CI" not in out, (body, out)
 # A stack checks every layer it lands.
 d, env = setup({"48": dict(shown(48), stacked=True),
                 "49": dict(pr(49, base="b48", stacked=True), comments=[], labels=[])}, stacks=[[48, 49]])

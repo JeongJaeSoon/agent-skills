@@ -279,7 +279,7 @@ STORES = [
           ("nobody",), rule="merges, lands and PR opens that still owe a record line, their closes, and the warn "
                             "rows a week of observation reads before guard.record_check goes to deny"),
     Store("onboard", "S/onboard-declined.json", {"onboard.declined": CANONICAL}, ("onboard:decline",), ("reorient",)),
-    Store("ledger", "S/ledger.jsonl", {"resource.made": CANONICAL}, ("reap:act", "reap:main"), ("janitor",),
+    Store("ledger", "S/ledger.jsonl", {"resource.made": CANONICAL}, ("reap:act", "reap:main", "reap:note_stack_dirs"), ("janitor",),
           rule="what agents made, retired when reaped"),
     Store("janitorplan", "S/janitor-plan.json", {"machine.resource": DERIVED}, ("reap:main", "cards:main"), ("janitor",),
           rule="the precheck's scan; the same scanner as pressure-plan"),

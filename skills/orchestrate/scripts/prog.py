@@ -84,6 +84,7 @@ Usage: orch <command> <slug> [options]
                                      as a dispatched worker (Nested worker depth >= 3) or a /goal card, a
                                      one-line proposal per setting to change, and this terminal's Run
                                      (orca_settings.py)
+  model lead|worker                  no slug: the role's model from orchestrate.models; prints nothing when unset
   decide add --title T [--body-file F] [--option "label::description"]... [--recommend N] [--link URL]
   decide list | done <id> [--answer TEXT] | drop <id> | keep <id>
                                      no slug: a decision you wait on the human for, shown on the fleet
@@ -1155,19 +1156,60 @@ def no_ci_repo(repo):
     return isinstance(repos, list) and repo in repos
 
 
+def check_run_id(c):
+    url = c.get("detailsUrl") or c.get("targetUrl") or ""
+    return url.split("/actions/runs/")[1].split("/")[0] if "/actions/runs/" in url else ""
+
+
+def latest_checks(rollup):
+    """The newest entry of each check. A head keeps every run started at it, so a run superseded by a PR edit
+    (cancel-in-progress) stays in the rollup as CANCELLED beside the run that replaced it. The workflow is part of the
+    check's identity: one workflow's pass must not hide another's failure under the same job name. A check still going
+    outranks a finished one, since a queued run has no start time and an older pass must not stand in for it. Start
+    time decides before the run id, as a rerun keeps its old, lower id. A check that never started is older than a start
+    after its end; past that its end says nothing, so only the run id places it against the started ones."""
+    def started(c):
+        t = c.get("startedAt") or ""  # gh prints the zero time for a check that never started
+        return "" if t.startswith("0001-") else t
+
+    def going(c):
+        return (c.get("status") or "COMPLETED").upper() != "COMPLETED"
+
+    def run(c):
+        r = check_run_id(c)
+        return int(r) if r.isdigit() else 0
+
+    def newest(checks):
+        timed = [c for c in checks if started(c)]
+        # Starts in one second are unordered and the id cannot settle them, so a pass does not win that tie.
+        rank = lambda c: (going(c), started(c), (c.get("conclusion") or "").upper() not in PASSING, run(c))
+        best = [max(timed, key=rank)] if timed else []
+        rest = [c for c in checks if not started(c)
+                and not (best and not going(c) and (c.get("completedAt") or "~") < started(best[0]))]
+        return max(best + rest, key=lambda c: (going(c), run(c)))
+    groups = {}
+    for c in rollup:
+        groups.setdefault((c.get("workflowName"), c.get("name") or c.get("context")), []).append(c)
+    kept = []
+    for checks in groups.values():
+        last = newest(checks)
+        # Only another run replaces a job: two jobs of one run may share a display name.
+        kept += [c for c in checks if c is last or (run(last) and run(c) == run(last))]
+    return kept
+
+
 def ci_summary(rollup, no_ci=False):
     # No checks on a head usually means CI has not reported yet, so it never counts as green. Only a declared no-CI
     # repo reads a confirmed empty rollup as nothing to wait for; a missing one stays unknown.
     if not rollup:
         return [], [] if no_ci and rollup is not None else ["no CI checks reported yet"], []
     failed, pending, runs = [], [], set()
-    for c in rollup or []:
+    for c in latest_checks(rollup):
         name = c.get("name") or c.get("context")
         concl = (c.get("conclusion") or c.get("state") or "").upper()
         status = (c.get("status") or "COMPLETED").upper()
-        url = c.get("detailsUrl") or c.get("targetUrl") or ""
-        if "/actions/runs/" in url:
-            runs.add(url.split("/actions/runs/")[1].split("/")[0])
+        if run := check_run_id(c):
+            runs.add(run)
         if status != "COMPLETED" or concl in ("", "PENDING", "EXPECTED"):
             pending.append(name)
         elif concl not in PASSING:
@@ -3343,6 +3385,13 @@ def cmd_decide(argv):
         sys.exit(str(e))
 
 
+def cmd_model(argv):
+    import orca_settings
+    if argv not in (["lead"], ["worker"]):
+        sys.exit("usage: orch model lead|worker")
+    print(orca_settings.role_model(argv[0]) or "")
+
+
 def cmd_db(argv):
     import store
     store.main(argv)
@@ -3587,7 +3636,7 @@ def cmd_sent(argv):
 COMMANDS = {"init": cmd_init, "set": cmd_set, "status": cmd_status, "record": cmd_record, "verdict": cmd_verdict,
             "gate": cmd_gate, "dep": cmd_dep, "queue": cmd_queue, "overlap": cmd_overlap, "land": cmd_land, "land-check": cmd_land_check,
             "landed": cmd_landed, "heavy": cmd_heavy, "wait": cmd_wait, "inbox": cmd_inbox, "backfill": cmd_backfill, "decide": cmd_decide,
-            "db": cmd_db,
+            "db": cmd_db, "model": cmd_model,
             "stage": cmd_stage, "board": cmd_board, "brief": cmd_brief, "hold": cmd_hold, "sent": cmd_sent, "release": lambda argv: cmd_hold(argv, release=True),
             "watch-cards": lambda argv: __import__("card_watch").main(argv),
             "patrol": lambda argv: __import__("patrol").main(argv),

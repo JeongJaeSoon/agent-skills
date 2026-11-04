@@ -113,11 +113,14 @@ assert guard.LOCK_ORDER.index("project") < guard.LOCK_ORDER.index("container") <
 assert guard.rule({"kind": "stopped-container"}) == guard.rule({"kind": "container"}, "hard") == "container:stopped"
 assert guard.rule({"kind": "labeled-volume"}) == guard.rule({"kind": "volume"}, "hard") == "volume:labeled"
 SHUT = {"port": {4999}, "pid": set(), "path": [], "project": {"example-held"}}
+saved_owner = reap.owner_facts, reap.owner_hold
+reap.owner_facts, reap.owner_hold = dict, lambda owners, facts: None  # owner_hold is test_reap.py's
 for kind in ("stopped-container", "container", "labeled-volume", "volume"):
     assert guard.item({"kind": kind, "name": "example-verify-1", "project": "", "ports": []}, SHUT) is None
     assert guard.item({"kind": kind, "name": "example-held", "project": ""}, SHUT), kind
     assert guard.item({"kind": kind, "name": "example-verify-1", "project": "example-held"}, SHUT), kind
     assert guard.item({"kind": kind, "name": "example-verify-1", "project": "", "ports": [4999]}, SHUT) == "보호 포트 4999", kind
+reap.owner_facts, reap.owner_hold = saved_owner
 
 # ---------------------------------------------------------------- ownership
 
@@ -373,7 +376,7 @@ rh.os.stat = lambda d, *a, **k: (_ for _ in ()).throw(PermissionError(13, "denie
 (tmp / "gone").rmdir()
 assert rh.act({"kind": "stack", "id": "s1"}, {}, PROTECT).startswith("건너뜀: 다시 보니") and len(downs) == 1
 rh.os.stat = saved_stat
-assert rh.dir_gone(str(tmp / "gone")) and not rh.dir_gone(str(tmp))
+assert reap.dir_gone(str(tmp / "gone")) and not reap.dir_gone(str(tmp))
 stacks.clear()
 assert "다시 읽지 못함" in rh.act({"kind": "stack", "id": "s1"}, {}, PROTECT) and len(downs) == 1
 # An always-on list of the wrong shape keeps every stack in the scan and in the act, and the pass goes on.
