@@ -146,16 +146,12 @@ assert model_warning(f"MODEL=sonnet {START} --model \"$MODEL\"") == "", "a value
 assert model_warning(f"{START} --model claude-sonnet-4-?") == "", "a glob the shell may expand is not judged"
 assert model_warning(f"{START} --model {{sonnet,}}") == "", "a brace expansion is not judged"
 assert model_warning(f"{START} --model opus[1m]") == "", "an unquoted bracket may be a glob, so the value is not judged"
-assert "differs" in model_warning(f"{START} --model 'opus[1m]'"), "a quoted bracket is literal"
-assert "differs" in model_warning(f"{START} --model=\"opus[1m]\"")
 CONFIG.write_text(json.dumps({"orchestrate": {"models": {"worker": "claude-sonnet-4-6"}}}))
-for cmd in (f"{START} --spec \"Use --model 'opus[1m]' here\" --model claude-sonnet-4-*",
-            f"{START} --model claude-sonnet-4-? --spec \"Use --model 'claude-sonnet-4-?' here\"",
-            f"{START} --model \"claude-sonnet-\"*", f"{START} --model claude-sonnet-4-?>out"):
-    assert model_warning(cmd) == "", "a partly quoted or redirect-glued glob is not judged: " + cmd
-CONFIG.write_text(json.dumps({"orchestrate": {"models": {"worker": "sonnet"}}}))
-for cmd in (f"{START} --model opus\\[1m\\]", f"{START} --model 'opus[1m]'>out"):
-    assert "differs" in model_warning(cmd), "an escaped or quoted bracket is literal: " + cmd
+# Any shell-active character skips the comparison, quoted or not: the words arrive unquoted, so the guard is unsure.
+for cmd in (f"{START} --model 'opus[1m]'", f"{START} --model=\"opus[1m]\"", f"{START} --model claude-sonnet-4-?>out",
+            f"{START} --model \"claude-sonnet-\"*", f"{START} --model opus\\[1m\\]",
+            f"{START} --spec \"Use --model x here\" --model claude-sonnet-4-*"):
+    assert model_warning(cmd) == "", "a value with a shell-active character is not judged: " + cmd
 CONFIG.write_text(json.dumps({"orchestrate": {"models": {"worker": "sonnet"}, "model_flag": "deny"}}))
 assert bash(f"{START} --spec 'x' --model opus", "lead") in ("none", "allow"), "a comparison never blocks, whatever the level"
 CONFIG.write_text(json.dumps({"orchestrate": {"models": {"lead": "opus"}}}))

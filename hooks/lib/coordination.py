@@ -91,34 +91,9 @@ def check_model_flag(cmds, cfg):
 
 
 def expands(c, value):
-    """True when bash may rewrite `value`: a variable or substitution, or an unquoted glob or brace pattern. The
-    words are already unquoted, so the command's raw text says whether a glob character was quoted."""
-    if re.search(r"[$`]", value):
-        return True
-    if not re.search(r"[*?\[{]", value):
-        return False
-    # Every word after a `--model` in the raw text, including one quoted inside --spec text: when unsure, skip.
-    return any(bare_glob(t) for t in re.findall(r"--model(?:=|\s+)(\S+)", c.raw))
-
-
-def bare_glob(word):
-    """True when `word` has a glob or brace character outside quotes and not escaped, before any redirection."""
-    quote = ""
-    chars = iter(word)
-    for ch in chars:
-        if quote == "'":
-            quote = "" if ch == "'" else quote
-        elif ch == "\\":
-            next(chars, "")
-        elif quote:
-            quote = "" if ch == quote else quote
-        elif ch in "'\"":
-            quote = ch
-        elif ch in "<>;&|":
-            return False
-        elif ch in "*?[{":
-            return True
-    return False
+    """True when `value` holds a character bash may expand ($ ` * ? [ {). The words arrive unquoted, so a quoted one
+    cannot be told from a bare one without re-parsing the shell; the guard only warns, so it skips what it is unsure of."""
+    return re.search(r"[$`*?\[{]", value) is not None
 
 
 def warn_only(cfg, reason):
