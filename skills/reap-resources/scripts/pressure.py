@@ -13,7 +13,7 @@ Usage:
                      (its session runs the same command again), 3 when it should not run (deadline passed, or gone)
   pressure.py turns [--wait MINUTES]
                      agent turns Orca shows in progress against the new-card cap (active_turns_per_cpu); exit 1 at
-                     the cap. --wait polls until under it (0) or MINUTES pass (3)
+                     the cap or when the count is unreadable. --wait polls until under it (0) or MINUTES pass (3)
   pressure.py history [--hours H]
                      JSON for the dashboard: the last round's level and metrics, the thresholds, the queue, and one
                      point per round over the last H hours (default 6, at most 24). Reads files only, measures nothing
@@ -231,16 +231,25 @@ def turn_cap(cfg, cpus=None):
     return None if per is None else max(1, int((cpus or os.cpu_count() or 1) * float(per)))
 
 
+def turn_hold(n, cap):
+    """True when a new card must wait. The one verdict the hook, `turns` and `turns --wait` share: a turn count Orca
+    could not give (None) holds like a full one, so an unreadable Orca never reads as an empty machine."""
+    return cap is not None and (n is None or n >= cap)
+
+
 def turns_wait(cfg, minutes, poll=30.0, now_fn=time.time, sleep=time.sleep, count=active_turns, out=print):
-    """0 once fewer turns than the cap are in progress (or the cap is off, or Orca cannot say), 3 after `minutes`."""
+    """0 once turn_hold says go, 3 after `minutes` of holding (a count that stays unreadable included)."""
     cap, deadline = turn_cap(cfg), now_fn() + 60 * minutes
     while True:
         n = count()
-        if cap is None or n is None or n < cap:
+        if not turn_hold(n, cap):
             out(f"진행 중인 에이전트 턴 {'?' if n is None else n}개 / 상한 {cap or '없음'}: 새 카드를 시작해도 된다")
             return 0
         if now_fn() >= deadline:
-            out(f"진행 중인 에이전트 턴 {n}개 ≥ 상한 {cap}, {minutes:g}분 기다려도 줄지 않음 — 시작하지 않는다")
+            if n is None:
+                out(f"에이전트 턴 수를 {minutes:g}분 동안 셀 수 없음(Orca 응답 없음·목록 잘림) — 시작하지 않는다")
+            else:
+                out(f"진행 중인 에이전트 턴 {n}개 ≥ 상한 {cap}, {minutes:g}분 기다려도 줄지 않음 — 시작하지 않는다")
             return 3
         sleep(poll)
 
@@ -1068,7 +1077,7 @@ def main(argv):
             return turns_wait(cfg, float(argv[argv.index("--wait") + 1]))
         n, cap = active_turns(), turn_cap(cfg)
         print(f"진행 중인 에이전트 턴 {'?' if n is None else n}개 / 상한 {cap or '없음'}")
-        return 1 if None not in (n, cap) and n >= cap else 0
+        return 1 if turn_hold(n, cap) else 0
     if cmd == "check":
         m = snapshot(cfg, load_state(), idle_fn=live(cfg))
         level, why = judge(m, cfg)
