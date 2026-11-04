@@ -1,4 +1,4 @@
-<!-- translated-from: d54b88796f0bc76b97f6212b63cf4b79c9af4c30 -->
+<!-- translated-from: fcf9329dc2a5e4773f135579ef2f195819c9de64 -->
 # Skill catalog
 
 This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 12 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
@@ -509,6 +509,7 @@ Program state lives in `~/.claude/programs/<slug>/`: `program.json`, the append-
   - `sync`: fetch, then an ff-only pull or a push of signed commits. Off main, uncommitted changes, diverged, an unsigned commit, or no credential helper: it changes nothing, stops, and leaves a macOS notification and `~/.local/state/agent-skills/sync.json`. launchd runs it every 15 minutes and at login.
   - `broadcast [--skills|--plugins] [--dry-run] [--terminal <handle>]`: `/reload-skills` when a `SKILL.md` changed, `/reload-plugins` when the hook wiring (`hooks/hooks.json`) or the plugin manifest changed. Sent only to sessions with an empty prompt, no spinner, no permission, trust or question dialog, no shell below the prompt box, and the same screen on two reads 1.5 s apart; the rest stay in `reload-pending.json` for the next try. `--terminal <handle>` sends to that one session only; the session that changed a skill aims it at its own handle after its turn ends to reload itself (`write-skill` §7).
   - `nudge <terminal> <one line>`: sends one line under the same checks and confirms the turn started.
+  - `wake-target <terminal>`, `wake-check <terminal> [--wait <seconds>]`, `wake-reset <terminal>`: pick the path for the signal that wakes a Claude card, and confirm from the receiving session's transcript that a SendMessage signal started a turn. The session itself sends it with the tool. The message path applies only when `wake.transport` in `agent-skills.json` is `sendmessage`; the default is `terminal`. The steps are in `skills/orchestrate/references/waking.md`.
   - `status`: the last sync result and the pending reload.
 
 ## Config file
