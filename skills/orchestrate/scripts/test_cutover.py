@@ -247,6 +247,8 @@ with world() as (w, sd):
 # ---- a server that ends itself once the lock is held is still put back: it is recorded before the lock
 with world(reasons=("old code still runs",)) as (w, sd):
     def seen_up(plan):
+        if store.cutover_running():  # the real server ends itself once the lock is held: nothing to see then
+            return None
         if not any(s["do"] == "server" for s in plan):
             plan.append({"do": "server", "port": 4999})
         return {"pid": 1}
