@@ -613,12 +613,12 @@ def unblocks(ticket, after, open_tickets):
     return len(seen & open_tickets)
 
 
-def row_state(row, verdict):
+def row_state(row, verdict, no_ci=False):
     """ready, catching_up (only an update-branch or CI time stands between it and landing), or blocked."""
     if row is None:
         return "gone", ["PR is no longer open"]
     blocked, catching = [], []
-    failed, pending, _ = ci_summary(row.get("statusCheckRollup"))
+    failed, pending, _ = ci_summary(row.get("statusCheckRollup"), no_ci)
     mss = row.get("mergeStateStatus")
     if row.get("isDraft"):
         blocked.append("draft")
@@ -659,6 +659,7 @@ def land_order(events, rows, cfg, when, stacks=None, deps=None):
     below it is.
     """
     st, tickets, after = pr_state(events), pr_ticket(events), dep_map(events, deps)
+    no_ci = no_ci_repo(cfg.get("repo"))
     rows = {r["number"]: r for r in rows}
     landed_t = {tickets.get(e.get("pr")) for e in events if e["ev"] == "landed"}
     pending = ready_prs(events)
@@ -678,7 +679,7 @@ def land_order(events, rows, cfg, when, stacks=None, deps=None):
         if age_h >= knob(cfg, "aging_hours"):
             rank = min(rank, KLASS["urgent"])
         ticket = tickets.get(pr)
-        state, reasons = row_state(rows.get(pr), s.get("verdict"))
+        state, reasons = row_state(rows.get(pr), s.get("verdict"), no_ci)
         if on_hold(events, pr) and state != "gone":
             state, reasons = "blocked", ["on hold"] + reasons
         live = stack_of.get(pr, [])
@@ -686,7 +687,7 @@ def land_order(events, rows, cfg, when, stacks=None, deps=None):
         waits = sorted(b for b in after.get(ticket, ()) if b not in landed_t | below_t)
         if waits and state != "gone":
             state, reasons = "waiting", [f"lands after {', '.join(waits)}"] + reasons
-        lane = (s.get("lane") or {}).get("exclusive", False) or klass == "gate"
+        lane = (s.get("lane") or {}).get("exclusive", False) or klass == "gate" or no_ci
         out.append({"pr": pr, "ticket": ticket, "klass": klass, "rank": rank,
                     "unblocks": unblocks(ticket, after, open_t) if ticket else 0,
                     "since": first.isoformat(), "age_h": round(age_h, 2), "state": state, "reasons": reasons,
@@ -1076,11 +1077,22 @@ def pr_view(repo, pr):
                    "state,isDraft,headRefOid,headRefName,baseRefName,mergeStateStatus,mergeable,statusCheckRollup,mergeCommit,url,title")
 
 
-def ci_summary(rollup):
-    # No checks on a head usually means CI has not reported yet, so it never counts as green.
-    # A repo with no CI at all therefore cannot land; add a require_ci knob if one ever joins a program.
+def no_ci_repo(repo):
+    """The human declared this repo CI-less in agent-skills.json (orchestrate.no_ci_repos). A user file, not a program
+    key: `orch set` raises no dialog, and a worker must not be able to drop CI from its own landing. Unreadable: False."""
+    path = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-skills.json").expanduser()
+    try:
+        repos = (json.loads(path.read_text()).get("orchestrate") or {}).get("no_ci_repos")
+    except (OSError, ValueError, AttributeError):
+        return False
+    return isinstance(repos, list) and repo in repos
+
+
+def ci_summary(rollup, no_ci=False):
+    # No checks on a head usually means CI has not reported yet, so it never counts as green. Only a declared no-CI
+    # repo reads a confirmed empty rollup as nothing to wait for; a missing one stays unknown.
     if not rollup:
-        return [], ["no CI checks reported yet"], []
+        return [], [] if no_ci and rollup is not None else ["no CI checks reported yet"], []
     failed, pending, runs = [], [], set()
     for c in rollup or []:
         name = c.get("name") or c.get("context")
@@ -1096,7 +1108,7 @@ def ci_summary(rollup):
     return failed, pending, sorted(runs)
 
 
-def runs_unfinished(repo, sha):
+def runs_unfinished(repo, sha, no_ci=False):
     """Workflow runs at `sha` that have not finished. The check rollup alone is not enough: a bot's status
     (a review app) can be its only entry before Actions starts, and a job behind `needs` has no check until
     the jobs before it end, so an early all-green rollup once landed a PR before its CI ran."""
@@ -1105,7 +1117,7 @@ def runs_unfinished(repo, sha):
     except (SystemExit, Exception) as e:
         return [f"workflow runs unreadable ({type(e).__name__})"]
     if not rs:
-        return ["no workflow run at the head yet"]
+        return [] if no_ci else ["no workflow run at the head yet"]
     return [f"{r.get('name')} {r.get('status')}" for r in rs if r.get("status") != "completed"]
 
 
@@ -1725,6 +1737,11 @@ class ExclusiveLock:
         self.path = HOME / "_locks" / (f"{p.cfg['repo']}@{base}".replace("/", "__") + ".lock")
 
     def holder(self):
+        with self.serialized():
+            return self.read()
+
+    def read(self):
+        """Call with serialized() held: it can delete a stale lock. flock does not nest across descriptors."""
         try:
             held = json.loads(self.path.read_text() or "{}")
         except (OSError, ValueError):
@@ -1736,43 +1753,68 @@ class ExclusiveLock:
             return None
         return held
 
+    @contextlib.contextmanager
+    def serialized(self):
+        """Every check-then-delete of a lock excludes the others: it could otherwise delete a lock the next PR took
+        between the two. The flock is on the directory, so no sidecar file sits among the locks."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(self.path.parent, os.O_RDONLY)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            os.close(fd)
+
     def take(self, pr):
         """True if this PR now holds the lane (newly or already)."""
-        held = self.holder()
-        mine = {"pr": pr, "program": self.p.slug, "ts": now()}
-        if held:
-            if (held.get("pr"), held.get("program")) != (pr, self.p.slug):
+        with self.serialized():
+            held = self.read()
+            mine = {"pr": pr, "program": self.p.slug, "ts": now()}
+            if held:
+                if (held.get("pr"), held.get("program")) != (pr, self.p.slug):
+                    return False
+                tmp = self.path.with_suffix(".tmp")
+                tmp.write_text(json.dumps(mine))
+                os.replace(tmp, self.path)
+                return True
+            try:
+                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
                 return False
-            tmp = self.path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(mine))
-            os.replace(tmp, self.path)
+            os.write(fd, json.dumps(mine).encode())
+            os.close(fd)
+            self.p.append("lock_acquired", pr=pr, note=self.path.name)
             return True
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            return False
-        os.write(fd, json.dumps(mine).encode())
-        os.close(fd)
-        self.p.append("lock_acquired", pr=pr, note=self.path.name)
-        return True
 
     def break_if_closed(self, held):
         """A holder whose PR was closed or merged elsewhere never releases; free the lane now, not after the stale window."""
         r = run(["gh", "pr", "view", str(held.get("pr")), "--repo", self.p.cfg["repo"], "--json", "state", "--jq", ".state"],
                 check=False)
         state = r.stdout.strip()
-        if r.returncode == 0 and state in ("CLOSED", "MERGED"):
+        if r.returncode != 0 or state not in ("CLOSED", "MERGED"):
+            return held
+        with self.serialized():
+            current = self.read()
+            if current != held:  # the lane changed hands while gh answered
+                return current
             self.path.unlink(missing_ok=True)
             self.p.append("lock_released", pr=held.get("pr"), note=f"holder is {state}")
             return None
-        return held
 
     def release(self, pr):
-        held = self.holder()
-        if held and (held.get("pr"), held.get("program")) == (pr, self.p.slug):
-            self.path.unlink(missing_ok=True)
-            self.p.append("lock_released", pr=pr, note=self.path.name)
+        with self.serialized():
+            held = self.read()
+            if held and (held.get("pr"), held.get("program")) == (pr, self.p.slug):
+                self.path.unlink(missing_ok=True)
+                self.p.append("lock_released", pr=pr, note=self.path.name)
+
+
+def release_own_lanes(p, pr):
+    """A land that ended at exit 1 will not come back on its own, so it holds no lane for the stale window. Another
+    PR's lock stays: release checks the owner."""
+    prefix = f"{p.cfg['repo']}@".replace("/", "__")
+    for path in (HOME / "_locks").glob(f"{prefix}*.lock"):
+        ExclusiveLock(p, path.stem[len(prefix):]).release(pr)
 
 
 def note_attempt(p, events, pr, outcome, reasons):
@@ -1785,6 +1827,7 @@ def note_attempt(p, events, pr, outcome, reasons):
 
 
 KEEP = " A clean update keeps the verdict (same patch-id); re-review only if you resolved conflicts."
+NO_CI_KEEP = " The no-CI lane needs a verdict at the exact head: review the updated head and record it."
 
 ADVICE = {
     "conflicts with base": "rebase onto the base, resolve, re-run the review on the resolution, record a new verdict",
@@ -1796,11 +1839,12 @@ ADVICE = {
 
 def update_advice(unit, repo):
     """How to bring a PR, or a stack bottom-up, onto the latest base. update-branch merges a PR's own base
-    into it, so on a stack top it pulls only the layer below."""
+    into it, so on a stack top it pulls only the layer below, and a merge update on the lower layers alone leaves
+    a stack GitHub refuses to merge until every layer is rebased."""
     if len(unit) == 1:
         return f"gh pr update-branch {unit[0]} --repo {repo}"
     return ("update the stack bottom-up, each after the previous finishes: "
-            + "; ".join(f"gh pr update-branch {n} --repo {repo}" for n in unit)
+            + "; ".join(f"gh pr update-branch {n} --repo {repo} --rebase" for n in unit)
             + " (tell the lower layers' owners)")
 
 
@@ -1809,17 +1853,34 @@ def merge_unit(p, pr, unit, klass, events, onto=None, stacked=False):
     `onto`: the lower PR whose branch a `--onto-lower` fold merges into; its ticket has not landed yet.
     `stacked`: the PR is in a GitHub stack, also when it lands alone as a lower layer."""
     repo, states, runs = p.cfg["repo"], pr_state(events), []
+    no_ci = no_ci_repo(repo)
     for n in unit:
         v = pr_view(repo, n)
-        if patch_id(repo, n) != (states.get(n, {}).get("verdict") or {}).get("patch_id"):
+        verdict = states.get(n, {}).get("verdict") or {}
+        if patch_id(repo, n) != verdict.get("patch_id"):
             note_attempt(p, events, pr, "blocked", [f"patch of #{n} changed since its verdict"])
             return 3, f"act: the patch of #{n} changed since its verdict (conflict fix, restack or edit): re-review, then orch verdict"
-        failed, pending, r_ = ci_summary(v["statusCheckRollup"])
+        failed, pending, r_ = ci_summary(v["statusCheckRollup"], no_ci)
         runs += r_
         if failed or pending or v["mergeStateStatus"] in ("BEHIND", "DIRTY"):
             return 2, f"#{n} moved since the order was read; land again"
-        if unfinished := runs_unfinished(repo, v["headRefOid"]):
+        if unfinished := runs_unfinished(repo, v["headRefOid"], no_ci):
             return 2, f"yield: CI has not finished at #{n}'s head ({', '.join(unfinished[:3])}); land again"
+        if no_ci:
+            # No run proves this head on this base, so the review has to be of exactly what merges.
+            if verdict.get("sha") != v["headRefOid"]:
+                return 3, (f"act: no-CI lane: #{n}'s verdict is for {(verdict.get('sha') or 'nothing')[:8]}, not the head"
+                           f" {v['headRefOid'][:8]}: review that head, run the VERIFY commands, orch verdict, land again")
+            if compare(repo, v.get("baseRefName") or "main", v["headRefOid"]).get("behind_by") != 0:
+                return 3, (f"act: no-CI lane: #{n}'s head does not contain its base: {update_advice(unit, repo)},"
+                           " review the new head, orch verdict, land again")
+        try:
+            threads = unresolved_threads(repo, n)
+        except (SystemExit, Exception) as e:
+            return 2, f"yield: #{n}'s review threads are unreadable ({type(e).__name__}); land again"
+        if threads:
+            note_attempt(p, events, pr, "blocked", [f"{threads} unresolved thread(s) on #{n}"])
+            return 3, f"act: #{n} has {threads} unresolved review thread(s): answer and resolve them, then land again"
     head = v["headRefOid"]
     use_async = stacked or len(unit) > 1
     if not use_async:
@@ -1850,6 +1911,9 @@ def merge_unit(p, pr, unit, klass, events, onto=None, stacked=False):
             return 3, f"act: the base requires up-to-date branches: {update_advice(unit, repo)}, then land again"
         return 1, f"merge refused: {why}"
     sha = (merged[pr].get("mergeCommit") or {}).get("oid")
+    if no_ci:
+        return 0, (f"landed #{pr} (merge commit {sha[:8]}; no-CI repo, so no run proves main): run the brief's VERIFY"
+                   f" commands at {sha}, then orch record {p.slug} main_green|main_red --pr {pr} --sha {sha}")
     return 0, (f"landed {' '.join('#' + str(n) for n in unit)} (merge commit {sha[:8]}; CI runs {' '.join(runs) or '-'}; read their logs in the report). "
                f"Watch main: gh run list --repo {repo} --commit {sha} --json databaseId,workflowName,status, "
                f"then gh run watch <id> --repo {repo} --exit-status and orch record {p.slug} main_green|main_red --pr {pr} --sha {sha}"
@@ -1872,7 +1936,7 @@ def attempt(p, pr, klass, onto_lower=False):
         return 0, f"#{pr} already landed as {st['landed'].get('sha', '')[:8]}"
     if stopped(events):
         return 1, "STOP line active: nothing lands"
-    if cfg["merge_policy"] == "human-gate" and "approved" not in st and "gate_opened" in st:
+    if cfg["merge_policy"] == "human-gate" and "approved" not in st:
         resolution = gate_resolution(cfg, events, pr)
         if resolution == "land":
             p.append("approved", pr=pr, note="orca gate resolved: land")
@@ -1880,6 +1944,10 @@ def attempt(p, pr, klass, onto_lower=False):
         elif resolution:
             close_gate_task(p, pr, "failed")
             return 1, f"human-gate: the user resolved the gate as '{resolution}'"
+        elif gate_rows(events, pr, warn=False):
+            return 1, "human-gate: gate open in Orca, waiting for the user"
+        else:
+            return 1, f"human-gate: open the gate first (orch gate {p.slug} --pr {pr})"
     main = main_state(events)
     if main == "red" and klass != "main-fix":
         return 1, "safety stop: main is red; only the repair lands (--class main-fix)"
@@ -1933,10 +2001,12 @@ def attempt(p, pr, klass, onto_lower=False):
     if missing:
         note_attempt(p, events, pr, "blocked", missing)
         return 3, "act: " + " | ".join(missing)
+    no_ci = no_ci_repo(repo)
+    keep = NO_CI_KEEP if no_ci else KEEP
     touched = is_exclusive(cfg, [f for n in unit for f in pr_files(repo, n)])
-    if bool(touched) != bool((st.get("lane") or {}).get("exclusive")):
-        p.append("lane", pr=pr, exclusive=bool(touched), note=", ".join(touched[:5]) or None)
-        me["exclusive"] = bool(touched) or me["klass"] == "gate"
+    if (bool(touched) or no_ci) != bool((st.get("lane") or {}).get("exclusive")):
+        p.append("lane", pr=pr, exclusive=bool(touched) or no_ci, note=", ".join(touched[:5]) or ("no-CI repo" if no_ci else None))
+        me["exclusive"] = bool(touched) or no_ci or me["klass"] == "gate"
     if me["exclusive"]:
         # PRs ahead whose lane is not known yet (they have not called land) are classified now.
         for e in order[:order.index(me)]:
@@ -1959,13 +2029,15 @@ def attempt(p, pr, klass, onto_lower=False):
         if me["state"] == "catching_up":
             note_attempt(p, events, pr, "catching_up", me["reasons"])
             return 3, ("act: you hold the exclusive lane; bring the branch onto the latest base (restack migrations),"
-                       f" let CI run, land again — {'; '.join(me['reasons'])}." + KEEP)
+                       f" let CI run, land again — {'; '.join(me['reasons'])}." + keep)
         if compare(repo, me["base"] or "main", pr_view(repo, pr)["headRefOid"]).get("behind_by"):
             return 3, (f"act: you hold the exclusive lane and it lands on the latest base only: {update_advice(unit, repo)},"
-                       " let CI run, land again." + KEEP)
+                       " let CI run, land again." + keep)
         code, msg = merge_unit(p, pr, unit, klass, events, onto, stacked)
         if code == 0:
             lane.release(pr)
+        elif code == 1:  # parked, so exclusive_turn passes it over until `record admitted`
+            p.append("parked", pr=pr, note=msg[:300])
         return code, msg
     if me["state"] == "catching_up":
         note_attempt(p, events, pr, "catching_up", me["reasons"])
@@ -1997,9 +2069,12 @@ def cmd_land(argv):
             code, msg = attempt(p, pr, klass, "--onto-lower" in argv)
         except SystemExit as e:
             if not TRANSIENT.search(str(e.code)):
+                release_own_lanes(p, pr)
                 raise
             code, msg = 2, f"yield: GitHub or Orca did not answer ({str(e.code)[:160]}); land again"
         print(msg, flush=True)
+        if code == 1:
+            release_own_lanes(p, pr)
         if code != 2 or time.monotonic() >= deadline:
             sys.exit(code)
         time.sleep(60)
@@ -2027,6 +2102,7 @@ def cmd_land_check(argv):
         print("note: main CI for the last landing has not reported yet")
     if v["state"] != "OPEN" or v["isDraft"]:
         problems.append(f"PR is {v['state']}{' draft' if v['isDraft'] else ''}")
+    no_ci = no_ci_repo(repo)
     verdict = st.get("verdict")
     if not verdict or verdict.get("result") != "pass":
         problems.append("no passing verdict recorded (orch verdict)")
@@ -2034,6 +2110,8 @@ def cmd_land_check(argv):
         cur = patch_id(repo, pr)
         if cur != verdict.get("patch_id"):
             problems.append(f"patch changed since verdict ({verdict.get('patch_id', '')[:10]} -> {cur[:10]}): re-review")
+        elif no_ci and v["headRefOid"] != verdict.get("sha"):
+            problems.append(f"no-CI lane: verdict is for {verdict['sha'][:8]}, not the head {v['headRefOid'][:8]}: re-review")
         elif v["headRefOid"] != verdict.get("sha"):
             print(f"note: head moved {verdict['sha'][:8]} -> {v['headRefOid'][:8]} with the same patch-id; verdict holds, CI must pass at the new head")
     if p.cfg["merge_policy"] == "human-gate" and "approved" not in st:
@@ -2052,13 +2130,20 @@ def cmd_land_check(argv):
         problems.append("conflicts with base: fix task in the PR's worktree")
     elif mss == "BEHIND":
         problems.append(f"behind base: gh pr update-branch {pr} --repo {repo}, then wait for CI")
-    failed, pending, runs = ci_summary(v.get("statusCheckRollup"))
+    failed, pending, runs = ci_summary(v.get("statusCheckRollup"), no_ci)
     if not failed and not pending:
-        pending = runs_unfinished(repo, v["headRefOid"])
+        pending = runs_unfinished(repo, v["headRefOid"], no_ci)
     if failed:
         problems.append("CI failed: " + ", ".join(failed))
     if pending:
         problems.append("CI pending: " + ", ".join(pending[:5]))
+    if no_ci and compare(repo, v.get("baseRefName") or "main", v["headRefOid"]).get("behind_by") != 0:
+        problems.append("no-CI lane: the head does not contain its base")
+    try:
+        if threads := unresolved_threads(repo, pr):
+            problems.append(f"{threads} unresolved review thread(s)")
+    except (SystemExit, Exception) as e:
+        problems.append(f"review threads unreadable ({type(e).__name__})")
     missing, notes = evidence_problems(p.cfg, repo, pr)
     problems += missing
     for line in notes:
@@ -2595,7 +2680,7 @@ def on_hold(events, pr):
     return bool(marks) and marks[-1] == "parked"
 
 
-def review_sweep(events, view, active, unresolved, slug, gate=None, unknown=frozenset()):
+def review_sweep(events, view, active, unresolved, slug, gate=None, unknown=frozenset(), no_ci=False):
     """A review that outlasts its worker's session leaves a ready PR nobody lands. unknown: tickets whose worker row
     could not be judged ("*" for a row tied to no ticket); their PRs, or every PR with "*", are never offered to land."""
     ticket = pr_ticket(events)
@@ -2613,16 +2698,18 @@ def review_sweep(events, view, active, unresolved, slug, gate=None, unknown=froz
         if r.get("state") != "OPEN":
             waiting.append(f"{name}: {(r.get('state') or 'unknown').lower()} without merging; ask its owner or drop its ticket")
             continue
-        failed, pending, _ = ci_summary(r.get("statusCheckRollup"))
+        failed, pending, _ = ci_summary(r.get("statusCheckRollup"), no_ci)
         mss = r.get("mergeStateStatus")
         verdict = (st.get("verdict") or {}).get("result")
+        decision = r.get("reviewDecision")
         why = [w for w, bad in (
             ("worker state unknown", "*" in unknown or t in unknown),
             ("no ticket, so no worker is ruled out", not t),
             ("no passing verdict", verdict != "pass"),
             ("draft", r.get("isDraft")),
             ("on hold", on_hold(events, n) or any(HOLD.search(l.get("name") or "") for l in r.get("labels") or [])),
-            ((r.get("reviewDecision") or "no review").lower().replace("_", " "), r.get("reviewDecision") != "APPROVED"),
+            # A declared no-CI repo reviews through the ledger verdict: no GitHub decision is not a wait there.
+            ((decision or "no review").lower().replace("_", " "), decision != "APPROVED" and not (no_ci and not decision)),
             (f"merge state {mss}" + {"DIRTY": ", dispatch a fix", "BEHIND": f", gh pr update-branch {n}"}.get(mss, ""), mss != "CLEAN"),
             ("CI failed, dispatch a fix", failed), ("CI pending", pending)) if bad]
         threads = 0 if why else unresolved(n)
@@ -2652,11 +2739,16 @@ def gate_wait(st, gate, slug, n):
 
 def unresolved_threads(repo, n):
     owner, name = repo.split("/")
-    q = ("query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n)"
-         "{reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}}}}}")
-    res = gh_json("api", "graphql", "-f", f"query={q}", "-f", f"o={owner}", "-f", f"r={name}", "-F", f"n={n}")
-    threads = res["data"]["repository"]["pullRequest"]["reviewThreads"]
-    return sum(not t["isResolved"] for t in threads["nodes"]) or int(threads["pageInfo"]["hasNextPage"])
+    q = ("query($o:String!,$r:String!,$n:Int!,$after:String){repository(owner:$o,name:$r){pullRequest(number:$n)"
+         "{reviewThreads(first:100,after:$after){nodes{isResolved} pageInfo{hasNextPage endCursor}}}}}")
+    count, after = 0, []
+    while True:
+        res = gh_json("api", "graphql", "-f", f"query={q}", "-f", f"o={owner}", "-f", f"r={name}", "-F", f"n={n}", *after)
+        threads = res["data"]["repository"]["pullRequest"]["reviewThreads"]
+        count += sum(not t["isResolved"] for t in threads["nodes"])
+        if not threads["pageInfo"]["hasNextPage"]:
+            return count
+        after = ["-f", f"after={threads['pageInfo']['endCursor']}"]
 
 
 def print_reviews(p):
@@ -2684,7 +2776,7 @@ def review_lines(p, workers=None, tasks=None, unknown=frozenset()):
         lines = review_sweep(events, lambda n: gh_json("pr", "view", str(n), "--repo", repo, "--json", fields),
                              active - {None}, lambda n: unresolved_threads(repo, n), p.slug,
                              (lambda n: gate_resolution(p.cfg, events, n)) if p.cfg.get("merge_policy") == "human-gate" else None,
-                             unknown)
+                             unknown, no_ci_repo(repo))
     except (SystemExit, Exception) as e:  # the batch and its ack line matter more than the sweep
         lines = [f"REVIEWS: sweep failed ({type(e).__name__}: {e}); orch status lists the ready PRs"]
     return lines

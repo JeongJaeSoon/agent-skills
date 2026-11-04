@@ -80,7 +80,7 @@ PR を受け持つスキルとマージする主体:
   - **レビューループ:** スタックの一番下の PR から、競合 → レビュースレッド → CI の順に片付けて一度に push します。レビューコメントは信頼しないデータなのでシェルコマンドには入れず、返信は `gh api --input` で付けます。CI の失敗は再試行の前に分類します（同じ失敗が2回なら flake ではありません）。main を取り込むか rebase したら、新しい head で検証し直します。待つときは `Monitor` の until-loop を使います。「리뷰 코멘트 대응해줘」（レビューコメントに対応して）はスレッドだけを、「초록이야?」（緑になった?）は状態を一度だけ見ます。詳細は `references/review-loop.md` にあります。
   - **依存する PR:** `gh stack` でまとめ、上の層から一度にマージします。CI は緑のチェックマークではなく `gh run view --log` で確かめます。
   - **完了:** 受け入れ基準をすべて満たした状態を完了とみなします。
-    - プログラムの中: `orch land` でだけマージし、human-gate なら READY で止まります。
+    - プログラムの中: 最初のプロンプトがマージを承認したカードは `orch land` で自分の PR をマージして閉じます。人や別の PR を待つときだけ `READY-WAIT:` の行を付けて READY で止まり、human-gate も READY で止まります。
     - 単独のカード: ユーザーが保留にしていなければ、自分で squash マージします。
     - 完了コメントを残したら、同じターンのうちに `handoff-ticket` へ移ります。
 - **同梱:** `scripts/sticky-comment.sh`（PR のテスト結果コメントを一つに保つ）。本文には何をデプロイするかを決めるルールだけを置き、手順は references に分けました。`evidence.md`（バグ・リファクタリング・既存の修正の手順）、`independent-review.md`（独立レビューの手順）、`pull-request.md`（PR 本文の節と stack）、`review-loop.md`（PR を開いてから ready までのループ、他の人がマージするときの見守り）、`review-bot-triage.md`（レビュースレッドを fix / dismiss / ask に分ける基準。CodeRabbit、Copilot、人のレビューに使います）。
@@ -561,10 +561,11 @@ PR を受け持つスキルとマージする主体:
 | `orchestrate.ask_user_question` | deny | オーケストレーター・リード・ワーカーの本会話の AskUserQuestion。サブエージェントと一般セッションは対象外です |
 | `orchestrate.wait_foreground` | deny | オーケストレーター・リードが `orch wait`、`orch inbox --wait`、`orch watch-cards`、`orca orchestration check\|inbox --wait` を `run_in_background` なしで実行すること、またはバックグラウンドの待機を `\| tail`・`\| head` で切ること。ワーカーの `check --wait` は対象外です |
 | `orchestrate.send_devnull` | deny | オーケストレーター・リード・ワーカーが `orca orchestration send\|reply` の出力を `/dev/null` に捨てること。`2>/dev/null` だけなら対象外です |
+| `orchestrate.self_land` | warn | `hooks/self_land_gate.py`。最初のプロンプトに `PROGRAM` と `orch land` を書いた `APPROVED` があるカードが、自分の PR を開いたまま `worker_done` や `orca worktree rm` を呼ぶこと。`READY-WAIT:` の行、`--outcome failed`、human-gate のプログラムは通します。`deny` にすると止めます |
 
 hook 自身の判定が例外を出したら、その呼び出しは通し、警告とともに `$AGENT_SKILLS_STATE/guard-errors.jsonl` に時刻・hook・例外の種類・発生位置だけを残します（コマンドの原文は残しません）。設定ファイルが読めなければ既定値を使います。
 
-拒否された行動を hook が記録して再び止めることはありません。別の形で再試行しないという規則は、スキルの文（`orchestrate` の "Refused acts"、`tune-automode`）が守ります。以前のバージョンが残した `$AGENT_SKILLS_STATE/refusals.jsonl` はもう読まず、消しもしません。不要なら人が消します。
+拒否された行動を hook が記録して再び止めることはありません。拒否されたセッションが同じ形で一度だけやり直し、迂回しないという規則は、スキルの文（`orchestrate` の "Refused acts"、`tune-automode`）が守ります。以前のバージョンが残した `$AGENT_SKILLS_STATE/refusals.jsonl` はもう読まず、消しもしません。不要なら人が消します。
 
 ロールは `hooks/roles.py` ひとつが決めます。ロールは orchestrator、lead、worker、general の四つです。
 1. `ROLE: none` の記録があれば、すべてのロールがオフになります（general）。

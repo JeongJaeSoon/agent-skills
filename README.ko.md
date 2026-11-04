@@ -28,7 +28,7 @@ https://github.com/user-attachments/assets/4989f7f2-54d3-493a-8692-e0a4157199b0
 - **티켓 하나를 끝까지.** `deliver-ticket`이 계획, 테스트, 작성자 외 독립 리뷰, PR, CI 확인, 머지, 완료 기준별 근거를 단 티켓 닫기까지 한다.
 - **워커 여러 개로 프로젝트 하나.** `orchestrate`가 Orca 워커마다 티켓 하나를 맡기고 프로그램 원장을 둔다. PR은 `orch land` 게이트를 통과하거나 사람이 승인해야만 머지되고, 공유 파일을 고친 PR은 하나씩 머지된다.
 - **사람이 보는 곳.** `brief`가 진행 중, 다른 사람 대기, 내 결정 대기, 보류로 나눠 보고한다. 대시보드 `orch-dash`에는 열린 결정, 권한 창, 받은편지함이 뜬다.
-- **거부된 행동은 다시 하지 않는다.** 권한 창, auto mode 분류기, hook, 사람이 거부한 행동은 형태를 바꿔 재시도하지 않고 보고한다.
+- **거부된 행동의 재시도는 한 번이다.** 권한 창, auto mode 분류기, hook, 사람이 거부한 행동은 보고한다. 그 세션 채팅에서 사람이 허락하거나 규칙을 넣었을 때, 또는 에이전트가 거부 사유에 맞는 근거를 보강했을 때만 같은 형태로 한 번 다시 한다. 다시 거부되면 멈추고, 다른 세션이나 스크립트, 도구로 대신하지 않는다.
 - **설정이 없으면 추정하지 않는다.** 노트, 회고 원장, 개인 폴더, 채팅 채널은 설정에 적힌 곳만 쓴다. 키가 없으면 그 기능은 꺼지거나 스킬이 먼저 묻는다.
 - **머신 정리.** `reap-resources`가 끝난 세션이 남긴 프로세스, worktree, 컨테이너를 목록으로 뽑고, 목록에 오른 것만 치운다.
 
@@ -94,7 +94,7 @@ https://github.com/JeongJaeSoon/agent-skills 의 Claude Code 플러그인을 설
 - **내 설정.** `setup-pc`, `tune-automode`, `skills-config`는 diff와 `!` 줄만 만들고, 실행은 사람이 한다. 이 동작은 바꿀 수 없다.
 - **권한 창과 거부.** 권한 창은 사람의 응답을 기다린다. auto mode 분류기가 행동을 거부하면 에이전트는 보고하고 멈춘다. 어떤 부류의 행동을 이후 통과시키려면 사람이 `permissions.allow` 항목이나 `tune-automode`가 초안을 쓴 autoMode 규칙을 더한다.
 - **되돌릴 수 없는 행동.** 파괴적 migration, 공유 브랜치 force push, 프로덕션 배포, 바깥으로 보내기는 늘 멈추고 묻는다.
-- **머지.** `orchestrate`와 `deliver-ticket`이 준비된 PR을 스스로 머지하는 것은 그 저장소의 머지를 허용하는 autoMode 규칙이 있을 때뿐이다. 없으면 묻는다. `human-gate` 정책으로 두거나 직접 보겠다고 하면 머지마다 그 앞에서 멈춘다.
+- **머지.** `orchestrate` 카드는 첫 프롬프트가 머지를 승인했으면 `orch land`로 자기 PR을 머지하고 스스로 닫는다. CI가 없는 저장소는 먼저 `orchestrate.no_ci_repos`에 넣어야 한다. 프로그램 밖의 `deliver-ticket`이 스스로 머지하는 것은 그 저장소의 머지를 허용하는 autoMode 규칙이 있을 때뿐이고, 없으면 묻는다. `human-gate` 정책으로 두거나 직접 보겠다고 하면 머지마다 그 앞에서 멈춘다.
 - **정기 정리.** `janitor`와 `pressure-watch`가 끝난 에이전트의 잔여물을 정기적으로 치운다. 끄려면 `skills-sync setup disable <이름>`. `watch-prs`의 내 PR 자동 승인·자동 머지는 설정하기 전까지 꺼져 있다.
 
 지점마다 기본값과 바꾸는 법은 [docs/install.ko.md](docs/install.ko.md#안전-장치)에 있다.

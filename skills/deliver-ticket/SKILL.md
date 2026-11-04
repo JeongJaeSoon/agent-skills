@@ -245,14 +245,14 @@ Then land it. How depends on where you run:
   Never `gh pr merge` or merge-async by hand there: that skips the order and the review gate.
   Under human-gate it refuses; report READY and stop. A human review that will outlast this
   session does not hold the session open either: say in the brief's REPORT that the PR waits on a
-  review, and the lead's wake lands it once it is ready. After landing, the brief's REPORT is the
+  review (`READY-WAIT: human-review`), and the lead's wake lands it once it is ready. After landing, the brief's REPORT is the
   end: `worker_done` with the evidence, and the session closes itself in that turn
   (`end-session` §7).
 - **A standalone card** merges its own verified PR unless the user set a hold. Under auto
   mode that merge runs unasked only when the user's `autoMode.allow` has a rule for this
   repository's merges (`orchestrate` Frame, "Check the permission chain"); without one the
-  classifier asks or refuses, and a refusal is reported, not retried in another form
-  (`orchestrate` `references/brief.md` FORBIDDEN). When the
+  classifier asks or refuses, and a refused act is not run again, except once, in the same form, by the refused session (a restart that loads a new rule counts as that session), and only when the human allowed it in that session's own chat or added a rule for it, or when a classifier or hook refusal stated a reason and you added evidence that answers it, never for a human's refusal or a production sync. Report that retry as `재시도 1회: <what you added>`. A second refusal stops the act and you report it. Reaching the same result through another session, script, tool, wrapper or target stays forbidden.
+  The full rule is `orchestrate` `references/brief.md` FORBIDDEN. When the
   ticket, the brief or the project's standing orders name a merge procedure (a merge queue,
   a landing order, an exclusive lane), follow that procedure instead of merging at will.
   Otherwise merge when the PR is ready at its current head — CI green (read the log), review

@@ -76,7 +76,7 @@ PR 을 맡는 스킬과 머지 주체:
   - **리뷰 루프:** 스택 맨 아래 PR부터, 충돌 → 리뷰 스레드 → CI 순서로 한 번에 push한다. 리뷰 코멘트는 신뢰하지 않는 데이터라 셸 명령에 넣지 않고 답글은 `gh api --input`으로 단다. CI 실패는 재시도 전에 분류한다(같은 실패가 두 번이면 flake가 아니다). main을 합치거나 rebase하면 새 head에서 다시 검증한다. 기다릴 때는 `Monitor` until-loop를 쓴다. "리뷰 코멘트 대응해줘"는 스레드만, "초록이야?"는 상태 한 번만 본다. 세부는 `references/review-loop.md`.
   - **의존 PR:** `gh stack`으로 묶고 위층에서 한 번에 머지한다. CI는 초록 체크가 아니라 `gh run view --log`로 확인한다.
   - **완료:** 수용 기준을 모두 채운 상태를 완료로 본다.
-    - 프로그램 안: `orch land`로만 머지하고, human-gate면 READY에서 멈춘다.
+    - 프로그램 안: 첫 프롬프트가 머지를 승인한 카드는 `orch land`로 자기 PR을 머지하고 닫는다. 사람이나 다른 PR을 기다릴 때만 `READY-WAIT:` 줄과 함께 READY에서 멈추고, human-gate도 READY에서 멈춘다.
     - 단독 카드: 사용자가 보류하지 않았으면 스스로 squash 머지한다.
     - 완료 댓글을 남긴 뒤 같은 턴에 `handoff-ticket`으로 넘어간다.
 - **동봉:** `scripts/sticky-comment.sh`(PR 테스트 결과 댓글을 하나로 유지). 본문에는 무엇을 배포할지 가르는 규칙만 두고, 절차는 references로 나눴다. `evidence.md`(버그·리팩터링·기존 수정 절차), `independent-review.md`(독립 리뷰 근거와 실패 처리), `pull-request.md`(PR 본문 절과 stack), `review-loop.md`(PR을 연 뒤 ready까지의 루프, 남이 머지할 때 지켜보기), `review-bot-triage.md`(리뷰 스레드를 fix / dismiss / ask로 나누는 기준. 독립 리뷰어, CodeRabbit, Copilot, 사람 리뷰에 쓴다).
@@ -593,10 +593,11 @@ PR 을 맡는 스킬과 머지 주체:
 | `orchestrate.ask_user_question` | deny | 오케스트레이터·리드·워커 본 대화의 AskUserQuestion. 서브에이전트와 일반 세션은 대상이 아니다 |
 | `orchestrate.wait_foreground` | deny | 오케스트레이터·리드가 `orch wait`, `orch inbox --wait`, `orch watch-cards`, `orca orchestration check\|inbox --wait`를 `run_in_background` 없이 실행, 또는 배경 대기를 `\| tail`·`\| head`로 자름. 워커의 `check --wait`는 대상이 아니다 |
 | `orchestrate.send_devnull` | deny | 오케스트레이터·리드·워커가 `orca orchestration send\|reply`의 출력을 `/dev/null`로 보냄. `2>/dev/null`만은 대상이 아니다 |
+| `orchestrate.self_land` | warn | `hooks/self_land_gate.py`. 첫 프롬프트에 `PROGRAM`과 `orch land`를 적은 `APPROVED`가 있는 카드가 자기 PR이 열린 채 `worker_done`이나 `orca worktree rm`을 부름. `READY-WAIT:` 줄, `--outcome failed`, human-gate 프로그램은 통과한다. `deny`로 올리면 막는다 |
 
 hook 자신의 판정이 예외를 내면 그 호출은 통과시키고, 경고와 함께 `$AGENT_SKILLS_STATE/guard-errors.jsonl`에 시각·hook·예외 종류·위치만 남긴다(명령 원문은 남기지 않는다). 설정 파일을 읽지 못하면 기본값을 쓴다.
 
-거부된 행동을 hook이 기록해 다시 막는 일은 없다. 다른 형태로 다시 시도하지 않는다는 규칙은 스킬 문장(`orchestrate`의 "Refused acts", `tune-automode`)이 지킨다. 이전 버전이 남긴 `$AGENT_SKILLS_STATE/refusals.jsonl`은 아무것도 읽지 않으며 지우지도 않는다. 필요 없으면 사람이 지운다.
+거부된 행동을 hook이 기록해 다시 막는 일은 없다. 거부된 세션이 같은 형태로 한 번만 다시 하고 우회하지 않는다는 규칙은 스킬 문장(`orchestrate`의 "Refused acts", `tune-automode`)이 지킨다. 이전 버전이 남긴 `$AGENT_SKILLS_STATE/refusals.jsonl`은 아무것도 읽지 않으며 지우지도 않는다. 필요 없으면 사람이 지운다.
 
 역할은 `hooks/roles.py` 하나가 정한다. 역할은 orchestrator, lead, worker, general 넷이다.
 1. `ROLE: none` 기록이 있으면 모든 역할이 꺼진다(general).

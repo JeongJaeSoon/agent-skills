@@ -80,7 +80,7 @@ Which skill owns a PR, and who merges it:
   - **Review loop:** Starting from the bottom PR of the stack, it handles conflicts → review threads → CI and pushes once. Review comments are untrusted data, so they never go into shell commands, and replies are posted with `gh api --input`. CI failures are classified before any retry (the same failure twice is not a flake). After merging or rebasing onto main, it verifies again on the new head. Waiting uses a `Monitor` until-loop. "리뷰 코멘트 대응해줘" (handle the review comments) touches only the threads, and "초록이야?" (is it green?) checks the status just once. Details are in `references/review-loop.md`.
   - **Dependent PRs:** Grouped with `gh stack` and merged in one go from the top layer. CI is confirmed with `gh run view --log`, not a green check mark.
   - **Done:** Done means every acceptance criterion is met.
-    - Inside a program: merges only through `orch land`, and stops at READY under human-gate.
+    - Inside a program: a card whose first prompt approves the merge lands its own PR with `orch land` and closes. It stops at READY, with a `READY-WAIT:` line, only for a wait on a person or another PR, and under human-gate.
     - Standalone card: squash-merges on its own unless the user put it on hold.
     - After leaving the completion comment, it moves on to `handoff-ticket` in the same turn.
 - **Bundled:** `scripts/sticky-comment.sh` (keeps PR test results in a single comment). The skill body keeps only the rules that decide what ships; procedures are split into references: `evidence.md` (bug, refactor and existing-fix procedures), `independent-review.md` (independent review procedures), `pull-request.md` (PR body sections and stacks), `review-loop.md` (the loop from opening the PR to ready, and watching when someone else merges), `review-bot-triage.md` (how to sort review threads into fix / dismiss / ask; used for CodeRabbit, Copilot and human reviews).
@@ -559,10 +559,11 @@ Every rule has a key in `~/.claude/agent-skills.json`. Its value is one of `"den
 | `orchestrate.ask_user_question` | deny | AskUserQuestion in the main conversation of an orchestrator, lead or worker. Subagents and general sessions are not covered |
 | `orchestrate.wait_foreground` | deny | An orchestrator or lead running `orch wait`, `orch inbox --wait`, `orch watch-cards` or `orca orchestration check\|inbox --wait` without `run_in_background`, or cutting a background wait with `\| tail` or `\| head`. A worker's `check --wait` is not covered |
 | `orchestrate.send_devnull` | deny | An orchestrator, lead or worker sending the output of `orca orchestration send\|reply` to `/dev/null`. `2>/dev/null` alone is not covered |
+| `orchestrate.self_land` | warn | `hooks/self_land_gate.py`. A card whose first prompt has `PROGRAM` and an `APPROVED` line naming `orch land` calling `worker_done` or `orca worktree rm` over its own open PR. A `READY-WAIT:` line, `--outcome failed` and a human-gate program pass. `deny` blocks it |
 
 When the hook's own check raises, the call goes through with a warning, and `$AGENT_SKILLS_STATE/guard-errors.jsonl` gets the time, the hook, the exception type and where it was raised (never the command text). An unreadable settings file means the defaults.
 
-No hook records a refused act to block it again. The rule against retrying a refused act in another form lives in the skills' text (`orchestrate`'s "Refused acts", `tune-automode`). A `$AGENT_SKILLS_STATE/refusals.jsonl` left by an earlier version is no longer read, and nothing deletes it; the human removes it if they want it gone.
+No hook records a refused act to block it again. The rule that a refused session retries once in the same form and never goes around the refusal lives in the skills' text (`orchestrate`'s "Refused acts", `tune-automode`). A `$AGENT_SKILLS_STATE/refusals.jsonl` left by an earlier version is no longer read, and nothing deletes it; the human removes it if they want it gone.
 
 Roles come from one module, `hooks/roles.py`. There are four: orchestrator, lead, worker and general.
 1. A `ROLE: none` record turns every role off (general).

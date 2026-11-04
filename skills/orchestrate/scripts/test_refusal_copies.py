@@ -62,4 +62,26 @@ for in_skill, in_brief in (("the brief's own path", "Taking the path this brief 
     assert in_skill in full[1], f"SKILL.md not-a-retry list lost: {in_skill}"
     assert in_brief in brief, f"refused-act paragraph lost: {in_brief}"
 
+# One retry rule: every place states it in one sentence set, and the old "never, in any form" wording is gone.
+repo = refs.parents[2]
+CORE = ("is not run again, except once, in the same form, by the refused session (a restart that loads a new rule counts "
+        "as that session), and only when the human allowed it in that session's own chat or added a rule for it, or when "
+        "a classifier or hook refusal stated a reason and you added evidence that answers it, never for a human's refusal "
+        "or a production sync. Report that retry as `재시도 1회: <what you added>`. A second refusal stops the act and you "
+        "report it. Reaching the same result through another session, script, tool, wrapper or target stays forbidden.")
+KO_CORE = ("거부된 행동은 다시 하지 않는다. 예외는 한 번뿐이고, 거부된 세션(새 규칙을 읽으려고 다시 시작한 경우 포함)이 같은 형태로 하며, "
+           "사람이 그 세션 채팅에서 허락했거나 규칙을 넣었을 때, 또는 분류기나 hook이 사유를 말했고 그 사유에 맞는 근거를 보강했을 때만이다.")
+COPIES = ("skills/orchestrate/SKILL.md", "skills/orchestrate/references/brief.md", "skills/orchestrate/references/roles.md",
+          "skills/orchestrate/references/top-level.md", "skills/deliver-ticket/SKILL.md",
+          "skills/deliver-ticket/references/post-merge-release.md", "skills/end-session/SKILL.md",
+          "skills/setup-pc/SKILL.md", "skills/skills-config/SKILL.md")
+OLD = re.compile(r"in any form|in another form|다른 형태로|어떤 형태로도|別の形で再試行")
+for name in (*COPIES, "skills/tune-automode/SKILL.md", "README.md", "README.ko.md", "README.ja.md", "docs/skills.md",
+             "docs/skills.en.md", "docs/skills.ja.md", "docs/operations.md"):
+    assert not OLD.search((repo / name).read_text()), f"{name} still words the old rule"
+for name in COPIES:
+    assert CORE in " ".join((repo / name).read_text().split()), f"{name} lost the one-retry rule's text"
+assert KO_CORE in (repo / "skills/tune-automode/SKILL.md").read_text(), "tune-automode lost the Korean rule"
+assert "[gate:self-land]" in brief and "uses up no retry" in brief, "the self-land block no longer says it is no refused report"
+
 print("test_refusal_copies: ok")

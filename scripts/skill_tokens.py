@@ -45,6 +45,7 @@ HOOKS = {
     "guard.py": "its reason when it denies; one line per warn rule (guard.warn.*) that matched the call",
     "delegate_gate.py": REFUSAL_ONLY,
     "pressure_gate.py": REFUSAL_ONLY,
+    "self_land_gate.py": "a program card's worker_done or worktree rm over its own open PR: its reason, or one warning line",
     "permission.py": REFUSAL_ONLY,
     "claim_check.py": REFUSAL_ONLY,
     "subagent_log.py": REFUSAL_ONLY,
