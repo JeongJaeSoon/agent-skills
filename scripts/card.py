@@ -35,8 +35,11 @@ itself a dispatched worker on it (a lead started with worker-start, whose `run-c
 worker (`orca orchestration worker-start --worktree new-child`, so Orca records this session's worktree as its
 parent; `new-top-level` with --no-parent; any other --parent-worktree is ignored, since worker-start takes none): a
 Dispatch, so the card's worker_done, escalation and ask reach this session and Orca watches it for prompts. Its spec
-is the prompt below, `/goal` line included. Orca puts its own preamble before a spec, so that line is not the first
-thing the session reads there and may not run as the slash command; it still states the goal. When this session is bound to no Run, works for another Run than the
+is the prompt below, `/goal` line included. Orca puts its own preamble before a spec, so that line never runs as the
+slash command there: for a Claude worker a detached helper (`card.py goal-after-idle`, log in
+$AGENT_SKILLS_STATE/goal-input/<name>.log, its path in the `card` object's goal_input) waits with `orca terminal wait
+--for tui-idle` (at most GOAL_IDLE_S) until the first turn ends, then types that one line with `orca terminal send
+--enter`. Past the limit it types nothing and logs a warning with the manual command. When this session is bound to no Run, works for another Run than the
 brief names, or Orca does not answer, nothing is created (exit 6): the lines printed say how to bind it
 (`orca orchestration run-use`) or to make a /goal card on purpose (--card). A refused new-child is not retried as
 new-top-level.
@@ -102,6 +105,7 @@ import orca_settings  # noqa: E402
 ORCA = os.environ.get("SKILLS_SYNC_ORCA", "orca")
 ORCH = os.environ.get("SKILLS_SYNC_ORCH", str(REPO / "bin" / "orch"))
 GOAL = re.compile(r"(?m)^/goal[ \t]+\S.*$")
+GOAL_IDLE_S = 3600  # how long the detached helper waits for a worker's first turn to end
 LEAD_ROWS = ("MODE", "ROLE", "INBOX", "DELEGATE", "PREDICATE", "MERGE", "TASKS", "GATE")
 MERGE_VALUE = re.compile(r"\bmerge_policy (autonomous|human-gate)\b")
 ROWS = ("PROGRAM", "APPROVED", *LEAD_ROWS, "CLOSE", "KEEP", "FORBIDDEN", "REPORT")
@@ -488,6 +492,50 @@ def start_close_setup(path, handle, name):
         return {"error": str(e)}
 
 
+def start_goal_input(handle, line, name):
+    """Starts `card.py goal-after-idle <handle> <line>` detached: the worker's first turn can last the whole task, and
+    this command must not wait for it. Returns {log, pid} or {error}; a failure to start is printed, never fatal."""
+    log = STATE / "goal-input" / f"{name}.log"
+    try:
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with open(log, "a") as out:
+            p = subprocess.Popen([sys.executable, str(pathlib.Path(__file__).resolve()), "goal-after-idle", handle, line],
+                                 stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
+        return {"log": str(log), "pid": p.pid}
+    except OSError as e:
+        print(f"[{ME}] warning: the /goal input did not start ({e}); once the worker is idle, run: "
+              f"{manual_goal_command(handle, line)}", file=sys.stderr)
+        return {"error": str(e)}
+
+
+def manual_goal_command(handle, line):
+    return shlex.join([ORCA, "terminal", "send", "--terminal", handle, "--text", line, "--enter"])
+
+
+def goal_after_idle(handle, line, timeout_s=GOAL_IDLE_S):
+    """Types the /goal line into the worker's terminal once its TUI is idle, i.e. its first turn ended and the prompt
+    is back. Orca puts its own preamble before a worker's spec, so the line inside the spec never runs as the slash
+    command. Nothing is typed while the first turn runs, or after the wait times out or fails: a line typed into a
+    running turn would queue behind it or be read as plain text. 0 sent, 1 not sent (the manual command is printed)."""
+    p, err = run([ORCA, "terminal", "wait", "--terminal", handle, "--for", "tui-idle",
+                  "--timeout-ms", str(timeout_s * 1000), "--json"], timeout=timeout_s + 60)
+    try:
+        idle = bool(p and not p.returncode and json.loads(p.stdout).get("ok") is not False)
+    except ValueError:
+        idle = False
+    manual = manual_goal_command(handle, line)
+    if not idle:
+        print(f"[{ME}] warning: {handle} was not idle within {timeout_s}s ({err or 'no answer'}); the /goal line was "
+              f"not typed. Once the worker is idle, run: {manual}", file=sys.stderr)
+        return 1
+    p, err = run([ORCA, "terminal", "send", "--terminal", handle, "--text", line, "--enter", "--json"])
+    if not p or p.returncode:
+        print(f"[{ME}] warning: typing the /goal line into {handle} failed ({err}); run: {manual}", file=sys.stderr)
+        return 1
+    print(f"[{ME}] typed the /goal line into {handle}: {line}")
+    return 0
+
+
 def pressure_check(cmd):
     """(the pressure gate's deny reason or None, a function recording this start's outcome in the gate's queue).
     The hook's own steps for a command it sees: a danger deny queues it, a pass marks that entry's retry. Running the
@@ -804,9 +852,12 @@ def create_locked(brief, opts, refs, prompt):
     handle = handle_of(res)
     # close-setup judges the start from Claude's screen; worker-start's receipt already says a Codex worker is ready.
     setup = start_close_setup(path, handle if opts["--agent"] == "claude" else None, opts["--name"])
+    # A worker's /goal line is typed by a detached helper once the first turn ends; a card gets it as its prompt.
+    goal_input = (start_goal_input(handle, prompt.splitlines()[0], opts["--name"])
+                  if worker and handle and opts["--agent"] == "claude" else None)  # /goal is Claude Code's command
     print(json.dumps({**res, "card": {"kind": "worker" if worker else "card", "path": path, "handle": handle,
                                       "run": run_id, "parent": parent, "forbidden": forbidden, "close_setup": setup,
-                                      "model": model}},
+                                      "model": model, **({"goal_input": goal_input} if goal_input else {})}},
                      ensure_ascii=False, indent=1))
     failed = []
     if refs:
@@ -949,6 +1000,8 @@ def handoff_locked(ticket, opts, refs, prompt):
 
 
 def main(argv):
+    if argv[:1] == ["goal-after-idle"] and len(argv) == 3:  # the detached helper start_goal_input starts
+        return goal_after_idle(argv[1], argv[2])
     try:
         return create(argv)
     except Refuse as e:

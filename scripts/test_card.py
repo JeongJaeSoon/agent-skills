@@ -23,6 +23,12 @@ if a[:2] == ["worktree", "ps"]:
 if a[:2] == ["terminal", "list"]:
     print(json.dumps({"ok": True, "result": {"terminals": [{"handle": "term_old", "agentIdentity": "claude"}]}})); sys.exit(0)
 if a[:2] == ["terminal", "wait"]:
+    if mode == "wait-timeout":  # Orca 1.4: exit 1, ok false, code timeout
+        print(json.dumps({"ok": False, "error": {"code": "timeout", "message": "timeout"}})); sys.exit(1)
+    print(json.dumps({"ok": True, "result": {}})); sys.exit(0)
+if a[:2] == ["terminal", "send"]:
+    if mode == "send-fails":
+        print("terminal_handle_stale", file=sys.stderr); sys.exit(1)
     print(json.dumps({"ok": True, "result": {}})); sys.exit(0)
 if a[:2] == ["terminal", "show"] and a[a.index("--terminal") + 1] == "term_new":
     print(json.dumps({"ok": True, "result": {"terminal": {"title": "✳ Claude"}}})); sys.exit(0)
@@ -116,6 +122,11 @@ import sqlite3  # noqa: E402
 SETUPS = []
 REAL_START_CLOSE_SETUP = card.start_close_setup
 card.start_close_setup = lambda path, handle, name: SETUPS.append((path, handle, name)) or {"log": f"{name}.log"}
+
+# The detached /goal helper would outlive the test: recorded instead, and run in-process by the tests of goal_after_idle.
+GOALS = []
+REAL_START_GOAL_INPUT = card.start_goal_input
+card.start_goal_input = lambda handle, line, name: GOALS.append((handle, line, name)) or {"log": f"{name}.goal.log"}
 
 ORCA_DATA = tmp / "orca-data"  # never the real Orca profile store
 os.environ["AGENT_SKILLS_ORCA_DATA_DIR"] = str(ORCA_DATA)
@@ -298,7 +309,10 @@ assert [c["argv"] for c in calls if c["argv"][:2] == ["reference", "add"]] == [[
 assert not any(c["bin"] == "orch" for c in calls) and not any(c["argv"][:2] == ["worktree", "create"] for c in calls)
 assert json.loads(out)["card"] == {"kind": "worker", "path": str(CARD_DIR), "handle": "term_w", "run": {"id": "run_me"},
                                    "parent": "id:repo1::/wt/me", "forbidden": "inserted",
-                                   "close_setup": {"log": "abc-1.log"}, "model": None}, out
+                                   "close_setup": {"log": "abc-1.log"}, "model": None,
+                                   "goal_input": {"log": "abc-1.goal.log"}}, out
+# The worker's /goal line is not left to the spec: a detached helper types it once the first turn ends.
+assert GOALS == [("term_w", f"/goal ship the helper and open its PR 브리프: {tmp / 'sup.md'}", "abc-1")], GOALS
 # Regression (a): a brief whose REPORT is `run:` goes out as a worker, and the spec it hands worker-start keeps the
 # /goal line as its first line. (b): the FORBIDDEN section (markers included, a stale copy replaced by the current
 # paragraph, a line after a blank line too) and every REPORT row reach the prompt, on both paths.
@@ -691,5 +705,61 @@ assert rc == 0 and model_of(calls) is None and "is not set" not in err, (rc, err
 rc, out, err, calls = handoff("ABC-8", "--title", "next", "--note", "x")
 assert model_of(calls) == "sonnet", calls
 os.environ["AGENT_SKILLS_CONFIG"] = str(tmp / "none.json")
+
+# ---- the worker's /goal line: typed after the first turn ends, never before, never after a timed-out wait.
+GOALS.clear()
+rc, out, err, calls = go(worker_brief, "--repo", "r", "--name", "g1", "--agent", "codex")
+assert rc == 0 and not GOALS, ("a Codex worker has no /goal command", GOALS)
+rc, out, err, calls = go(brief(WORKER, "g2.md"), "--repo", "r", "--name", "g2", "--card")
+assert rc == 0 and not GOALS and "goal_input" not in json.loads(out)["card"], ("a /goal card gets it as its prompt", GOALS)
+rc, out, err, calls = go(worker_brief, "--repo", "r", "--name", "g3")
+assert rc == 0 and len(GOALS) == 1 and GOALS[0][0] == "term_w" and GOALS[0][1].startswith("/goal "), GOALS
+assert not any(c["argv"][:2] in (["terminal", "wait"], ["terminal", "send"]) for c in calls), \
+    ("card itself neither waits nor types: the helper is detached", calls)
+
+LINE = "/goal ship the helper and open its PR 브리프: /b.md"
+
+
+def goal_calls(calls):
+    return [c["argv"] for c in calls if c["argv"][0] == "terminal"]
+
+
+def run_helper(mode, timeout_s=7):
+    os.environ["FAKE_CARD_MODE"] = mode
+    CALLS.write_text("")
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        rc = card.goal_after_idle("term_w", LINE, timeout_s)
+    return rc, out.getvalue(), err.getvalue(), [json.loads(l) for l in CALLS.read_text().splitlines()]
+
+
+rc, out, err, calls = run_helper("")
+waits, sends = goal_calls(calls)  # the wait comes first, and is the only thing before the send
+assert rc == 0 and waits[:2] == ["terminal", "wait"] and "tui-idle" in waits and waits[waits.index("--timeout-ms") + 1] == "7000", calls
+assert sends == ["terminal", "send", "--terminal", "term_w", "--text", LINE, "--enter", "--json"], sends
+rc, out, err, calls = run_helper("wait-timeout")
+assert rc == 1 and [a[1] for a in goal_calls(calls)] == ["wait"], ("a timed-out wait types nothing", calls)
+assert "not idle within 7s" in err and f"terminal send --terminal term_w --text '{LINE}' --enter" in err, err
+rc, out, err, calls = run_helper("send-fails")
+assert rc == 1 and "typing the /goal line into term_w failed" in err and "terminal send" in err, (rc, err)
+assert card.main(["goal-after-idle", "term_w", LINE]) in (0, 1)  # the entry point start_goal_input launches
+card.start_goal_input = REAL_START_GOAL_INPUT
+spawned = []
+
+
+class FakePopen:
+    def __init__(self, cmd, **kw):
+        spawned.append((cmd, kw))
+        self.pid = 4242
+
+
+real_popen, card.subprocess.Popen = card.subprocess.Popen, FakePopen
+try:
+    log = card.start_goal_input("term_w", LINE, "g4")
+finally:
+    card.subprocess.Popen = real_popen
+cmd, kw = spawned[0]
+assert cmd[1:] == [str(HERE / "card.py"), "goal-after-idle", "term_w", LINE] and kw["start_new_session"], spawned
+assert pathlib.Path(log["log"]).parent.name == "goal-input" and log["pid"] == 4242, log
 
 print("ok")

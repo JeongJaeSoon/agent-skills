@@ -171,7 +171,10 @@ references/top-level.md "Starting a worker".
   its escalation, `ask` and `worker_done` reach your Run, and Orca watches it for a prompt only a
   human can answer. Its spec is the composed prompt, `/goal` line included (Orca delivers a
   spec as the task after its own preamble, so the line is not the first thing the session reads and
-  may not run as the slash command; it still states the goal). Everything else is a `/goal` card from `orca
+  never runs as the slash command; it still states the goal). So for a Claude worker the card then
+  starts a detached helper that waits (`orca terminal wait --for tui-idle`, an hour at most) until the first
+  turn ends and types that one `/goal` line (`orca terminal send --enter`); past the limit it types nothing and
+  logs the manual command (the `card` object's `goal_input.log`). Everything else is a `/goal` card from `orca
   worktree create`: a brief with no Run report (fire-and-forget), a lead's brief while Orca's
   Nested worker depth is below 3 (the lead's workers' helpers would not fit; the helper prints the
   setting to change), or `--card`. A Run brief from a session bound to no Run, or to another Run
