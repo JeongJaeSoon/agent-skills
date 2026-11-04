@@ -1,6 +1,6 @@
 ---
 name: use-notes
-description: "Use whenever working docs are read or written — \"노트에 기록해줘\", \"설계안을 노트에\", design docs, worklogs, program notes, \"정본\", a project note path, or showing such a doc to the user. Routes to the configured notes store (Obsidian vault or plain Markdown). What to record, and when, is record-progress's."
+description: "Use whenever working docs are read or written — \"노트에 기록해줘\", \"노트에 남겨줘\", \"KB에 정리해줘\", \"설계안을 노트에\", design docs, worklogs, program notes, \"정본\", a project note path, or showing such a doc to the user. Routes to the configured notes store (Obsidian vault or plain Markdown)."
 ---
 
 # Working notes
@@ -58,5 +58,8 @@ goes stale.
   `program-<slug>` (`orchestrate`).
 - A note is the source of truth; anything shown to the user (an Artifact page, a chat summary)
   is a view re-read from the store at that moment, never from an older copy.
+- What to record, and when, is `end-session` [references/record.md](../end-session/references/record.md):
+  read it when an investigation or design concludes (the note gets what was chosen, what was
+  ruled out and why, the trap; the ticket gets a link to the note) or when the user asks for a note.
 - Prose follows the user's language rule in CLAUDE.md; identifiers stay as they are.
 - Write the prose per `write-plainly`.

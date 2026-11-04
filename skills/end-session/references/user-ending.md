@@ -10,7 +10,8 @@ the ending is `EndConversation`, which has its own rule (§5).
 
 | What the user said | What they mean | Do |
 |---|---|---|
-| "정리해줘", "마무리해줘" (no object) | leave the record, keep talking | `record-progress`, then report. **Do not end, do not ask to end.** |
+| "정리해줘", "마무리해줘" (no object), "작업 기록 남겨줘" | leave the record, keep talking | [`record.md`](record.md) only, then report with its record line. **Do not end, do not ask to end**, and skip §3's ending steps. |
+| "X 정리해줘" where X is not this session (other cards or worktrees, a design, a diff) | tidy or summarize X | Not a record request and not an ending: do what X asks. |
 | "종료하면 돼?", "종료해도 될까?" | is anything left undone? | Answer that. No prompt, no command. |
 | "세션 정리", "카드 정리", "종료해줘" | end this session | Continue to §2. |
 

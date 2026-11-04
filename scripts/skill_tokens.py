@@ -51,6 +51,8 @@ HOOKS = {
     "permission.py": REFUSAL_ONLY,
     "claim_check.py": REFUSAL_ONLY,
     "subagent_log.py": REFUSAL_ONLY,
+    "record_check.py": "a PR opened, merged or landed (a reminder); a worker_done, card close or turn end that owes a "
+                       "record line (the warning or the denial)",
 }
 
 

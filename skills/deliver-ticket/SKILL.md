@@ -13,7 +13,10 @@ for approval.** Write the plan where it stays readable — a comment on the tick
 the worklog — and start. The ticket, or the `/goal` that opened the card, is the approval for
 exactly what it says. On the ticket that is one plan comment, edited if the plan changes, and
 the move to `started`. Past that the ticket gets only the milestone lines (`use-tracker`,
-"Milestones") and the completion comment (§6); progress goes to the worklog.
+"Milestones") and the completion comment (§6); progress goes to the worklog. At each milestone
+(PR opened or updated, review requested or answered, merged, released and verified), read
+`end-session` [references/record.md](../end-session/references/record.md) and record by its
+table, then give its record line in the report.
 
 Reading the repo can change the picture. If the scope turns out to be materially different from
 the ticket, do not stop: either it still fits one reviewable PR, or you split the ticket (§5) and

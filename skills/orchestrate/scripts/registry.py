@@ -63,8 +63,8 @@ PRODUCERS = {
     "pressure": ("pressure round · launchd", ("pressure",)),
     "reaphard": ("reap-hard · launchd", ("reap_hard",)),
     "cardwatch": ("card-watch monitor", ("card_watch",)),
-    "hooks": ("hooks · reorient, roles, permission, onboard", (
-        "reorient", "roles", "config", "permission", "onboard")),
+    "hooks": ("hooks · reorient, roles, permission, onboard, record_check", (
+        "reorient", "roles", "config", "permission", "onboard", "record_check")),
     "sync": ("skills-sync · launchd, card, handoff, end-check", ("sync", "card", "end_check")),
     "preview": ("preview-watch · launchd", ("preview_watch",)),
     "share": ("share-server", ("share_server",)),
@@ -265,6 +265,9 @@ STORES = [
           rule="launchd stdout; the janitor rotates it"),
     Store("guarderrors", "S/guard-errors.jsonl", {"hook.error": CANONICAL}, ("config:log_error",), ("nobody",),
           rule="a hook's own exception, let through; read by a person"),
+    Store("recordcheck", "S/record-check.jsonl", {"record.obligation": CANONICAL}, ("record_check:append",),
+          ("nobody",), rule="merges, lands and PR opens that still owe a record line, their closes, and the warn "
+                            "rows a week of observation reads before guard.record_check goes to deny"),
     Store("onboard", "S/onboard-declined.json", {"onboard.declined": CANONICAL}, ("onboard:decline",), ("reorient",)),
     Store("ledger", "S/ledger.jsonl", {"resource.made": CANONICAL}, ("reap:act", "reap:main"), ("janitor",),
           rule="what agents made, retired when reaped"),

@@ -1,6 +1,6 @@
 ---
 name: end-session
-description: "Use when the user asks to end, close or archive this session, card or worktree — \"종료해줘\", \"세션 종료해줘\", \"현재 세션 정리해줘\", \"아카이브해줘\", \"머지하고 종료하자\", \"end this session\" — when handoff-ticket says this session should go, when an Orca worker is about to send worker_done, or when a card's brief says to close itself. Not bare \"정리해줘\"/\"마무리해줘\": that is record-progress."
+description: "Use when the user asks to end, close or archive this session, card or worktree — \"종료해줘\", \"세션 종료해줘\", \"현재 세션 정리해줘\", \"아카이브해줘\", \"머지하고 종료하자\", \"end this session\" — when handoff-ticket says this session should go, when an Orca worker is about to send worker_done, or when a card's brief says to close itself. Bare \"정리해줘\"/\"마무리해줘\", \"작업 기록 남겨줘\" or \"log this\" leaves the record and keeps the session (references/record.md)."
 ---
 
 # Ending the session
@@ -18,7 +18,9 @@ is the fallback for what Orca cannot reach, not the default.
 ## 3. Leave the record before anything dies
 
 Orca metadata and this transcript die with the session. Before the command runs, the record must
-already exist where it survives (`record-progress` decides what goes where):
+already exist where it survives: read [`references/record.md`](references/record.md) now and
+record by it (what goes to the tracker, what to the notes store, what not at all), and end the
+report with its §4 record line:
 
 - Every ticket this session touched → `use-tracker` "Reconcile", so none is left behind its PR
   or deploy. The ticket linked to this card → final state (moved to completed, or left
@@ -144,7 +146,9 @@ fallback below needs it). Then pick the row:
   still settles the task: write the report as text on screen and close by the table. A refusal
   for a missing capability does not: the session above it never got the report, so keep the card.
 - Inside a program the lead reconciles the tickets on `worker_done`, so §3's tracker
-  and worklog steps are its, not the worker's. §6's order holds.
+  and worklog steps are its, not the worker's. §6's order holds. The `worker_done` body still
+  carries the record line ([`references/record.md`](references/record.md) §4): what this worker
+  wrote, `기록: 없음 (리드 reconcile)`, or `기록 못 함: <reason>`.
 
 ## 8. A dispatched card closes itself when its brief is done
 
