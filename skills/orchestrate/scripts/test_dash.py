@@ -677,6 +677,27 @@ git("commit", "-q", "--allow-empty", "-m", "two"); c2 = git("rev-parse", "HEAD")
 asked.clear(); dash.sh = counting_sh
 assert dash.gh_contains("acme/local", c1, c2, clone) is True and dash.gh_contains("acme/local", c2, c1, clone) is False
 assert not asked, f"a local clone needs no gh: {asked}"
+# A shallow clone's "no" may only mean cut history: it is not an answer.
+git("commit", "-q", "--allow-empty", "-m", "three"); c3 = git("rev-parse", "HEAD")
+shallow = pathlib.Path(tempfile.mkdtemp()) / "s"
+subprocess.run(["git", "clone", "-q", "--depth", "1", f"file://{clone}", str(shallow)], check=True, capture_output=True)
+assert dash.local_contains(shallow, c1, c3) is None, "shallow: unknown, not False"
+# A damaged cache file is a cold cache, and the cache stays bounded.
+dash._CONTAINS.clear(); dash._cache_state.update(loaded=False, dirty=False)
+dash.cache_path().write_text('["not", "a", "dict"]')
+dash.load_compare_cache()
+assert dash._cache_state["loaded"] and not dash._CONTAINS
+dash.cache_path().write_text('{"acme/app": ["x"]}')
+dash._cache_state["loaded"] = False
+dash.load_compare_cache()
+assert not dash._CONTAINS
+real_max, dash.CACHE_MAX = dash.CACHE_MAX, 3
+for i in range(5):
+    dash._CONTAINS[("acme/app", f"o{i}", "n")] = True
+dash._cache_state["dirty"] = True
+dash.save_compare_cache()
+dash.CACHE_MAX = real_max
+assert list(dash._CONTAINS) == [("acme/app", f"o{i}", "n") for i in (2, 3, 4)], list(dash._CONTAINS)
 dash.sh = real_sh
 dash._CONTAINS.clear(); dash._cache_state.update(loaded=False, dirty=False); dash._gh_down_until = dash._gh_check_at = 0.0
 dash.cache_path().unlink(missing_ok=True)

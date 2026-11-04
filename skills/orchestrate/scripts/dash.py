@@ -919,6 +919,7 @@ def gh_quota_low():
 GH_COMPARES_PER_ROUND = 40  # new compare questions one warm-up may ask; the rest wait for the next round
 _budget = [GH_COMPARES_PER_ROUND]
 _cache_state = {"loaded": False, "dirty": False}
+CACHE_MAX = 20000  # answers kept; the oldest go first
 
 
 def cache_path():
@@ -929,17 +930,23 @@ def load_compare_cache():
     """Answers survive a restart: a commit's ancestry never changes, and every restart used to ask them all again."""
     if _cache_state["loaded"]:
         return
+    try:
+        data = read_json(cache_path(), {})
+        for repo, pairs in (data.items() if isinstance(data, dict) else ()):
+            for k, v in (pairs.items() if isinstance(pairs, dict) else ()):
+                older, _, newer = k.partition("...")
+                if newer and isinstance(v, bool):
+                    _CONTAINS.setdefault((repo, older, newer), v)
+    except Exception as e:  # a damaged cache is a cold cache, never a failed collect
+        log(f"compare cache ignored: {e!r}")
     _cache_state["loaded"] = True
-    for repo, pairs in (read_json(cache_path(), {}) or {}).items():
-        for k, v in (pairs.items() if isinstance(pairs, dict) else ()):
-            older, _, newer = k.partition("...")
-            if newer and isinstance(v, bool):
-                _CONTAINS.setdefault((repo, older, newer), v)
 
 
 def save_compare_cache():
     if not _cache_state["dirty"]:
         return
+    for k in list(_CONTAINS)[:-CACHE_MAX]:  # oldest first: the dict keeps insertion order
+        del _CONTAINS[k]
     out = {}
     for (repo, older, newer), v in _CONTAINS.items():
         out.setdefault(repo, {})[f"{older}...{newer}"] = v
@@ -952,9 +959,14 @@ def save_compare_cache():
 
 def local_contains(repo_dir, older, newer):
     """The answer from a local clone, or None when there is none or it does not know a commit."""
+    git = ["git", "-C", str(repo_dir)]
     try:
-        rc = subprocess.run(["git", "-C", str(repo_dir), "merge-base", "--is-ancestor", older, newer],
-                            capture_output=True, timeout=15).returncode
+        rc = subprocess.run(git + ["merge-base", "--is-ancestor", older, newer], capture_output=True, timeout=15).returncode
+        if rc == 1:  # in a shallow clone "no" may only mean the history was cut: GitHub decides that one
+            shallow = subprocess.run(git + ["rev-parse", "--is-shallow-repository"], capture_output=True, text=True,
+                                     timeout=15).stdout.strip()
+            if shallow != "false":
+                return None
     except (OSError, subprocess.TimeoutExpired):
         return None
     return {0: True, 1: False}.get(rc)
