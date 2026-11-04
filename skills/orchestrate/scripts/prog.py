@@ -1815,6 +1815,9 @@ def set_run(p, run_id):
     old = p.cfg.get("run")
     p.update(lambda cfg: (cfg.__setitem__("run", run_id), cfg.pop("lead_dispatch", None)))
     print(json.dumps(p.append("config", note=f"run={old}->{run_id}; lead_dispatch cleared"), ensure_ascii=False))
+    # Units started under the old Dispatch stay on the old Run, where this lead's checks no longer look.
+    print(f"units this lead started stay on {old}: list them with `orca orchestration worker-list --run {old}`; resume an "
+          "abandoned one from this terminal (reboot SKILL.md \"Resume a worker\"), which attaches it to the new Run")
 
 
 def cmd_set(argv):

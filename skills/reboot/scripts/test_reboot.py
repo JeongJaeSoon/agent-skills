@@ -264,6 +264,17 @@ class Restarted(unittest.TestCase):
             self.assertIn("worker-start --spec-file <resume instruction> --worktree 'path:/work/My Card' --terminal", out[0])
             self.assertNotIn("worker-stop", out[0])  # it is already settled: no stop, and no retry-of
 
+    def test_the_resume_command_follows_the_workers_agent(self):
+        def line(agent):
+            w = self.row("d1", "abandoned")
+            w["projection"]["provider"] = {"id": agent, "model": "m1"}
+            return does(self.lines(w))[0]
+        self.assertIn('"codex resume <session-id> -m m1"', line("codex"))
+        self.assertNotIn("claude --resume", line("codex"))
+        other = line("gemini")
+        self.assertNotIn("claude --resume", other)
+        self.assertIn("gemini", other)
+
     def test_an_abandoned_worker_with_no_terminal_on_record_is_one_too(self):
         out = does(self.lines(self.row("d1", "abandoned", handle=None)))
         self.assertEqual(len(out), 1)

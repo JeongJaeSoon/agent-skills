@@ -224,10 +224,18 @@ def resume_line(w, d, task, handle):
     card = (w.get("resource") or {}).get("worktreeId") or ""
     path = card.split("::", 1)[-1] if card else "<its worktree>"
     sel = shlex.quote(f"path:{path}") if card else "path:<its worktree>"
-    model = ((w.get("projection") or {}).get("provider") or {}).get("model") or "<alias>"
+    provider = (w.get("projection") or {}).get("provider") or {}
+    model = provider.get("model") or "<alias>"
+    agent = provider.get("id") or "claude"
+    if agent == "claude":
+        resume = f"claude --resume <session-id> --model {model}"
+    elif agent == "codex":
+        resume = f"codex resume <session-id> -m {model}"
+    else:
+        resume = f"<{agent}'s own command that resumes session <session-id>>"
     gone = f"its terminal {handle} is gone" if handle else "it has no terminal"
     return (f"worker {d} (task {task}) was abandoned and {gone}: resume it, `orca terminal create --worktree {sel} "
-            f"--command \"claude --resume <session-id> --model {model}\"`, then `orca orchestration worker-start "
+            f"--command \"{resume}\"`, then `orca orchestration worker-start "
             f"--spec-file <resume instruction> --worktree {sel} --terminal <the new handle>` "
             "(reboot SKILL.md \"Resume a worker\"; if you ended it on purpose, leave it)")
 
