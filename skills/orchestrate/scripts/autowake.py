@@ -99,7 +99,8 @@ class Facts:
         if self.workers is None:
             self.workers = prog.all_workers(self.p.cfg["run"])
         w = next((x for x in self.workers if x.get("dispatchId") == d), None)
-        if not w or w.get("terminalState") != "active":
+        # retained: a kept-open worker, still dispatched and in progress, as most live workers of a real Run are
+        if not w or w.get("terminalState") not in ("active", "retained"):
             return "released"
         pj = w.get("projection") or {}
         if pj.get("outcome") != "in_progress":

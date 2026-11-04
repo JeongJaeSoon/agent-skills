@@ -180,7 +180,13 @@ def excluded(name, **kw):
 # The five the brief names.
 excluded("worker_done", world={"workers": [row(projection={"outcome": "succeeded"})]})
 excluded("released", world={"workers": [row(terminalState="released")]})
+excluded("release pending", world={"workers": [row(terminalState="release_pending")]})
 excluded("no row", world={"workers": []})
+# A kept-open worker is Orca's `retained` and still in progress: it is woken like an active one.
+w = World(workers=[row(terminalState="retained")])
+w.sweep(0)
+w.sweep(10)
+assert len(w.sent) == 1, "retained"
 ask = {"id": "m1", "type": "question", "from_handle": "dispatch:ctx_1", "subject": "which?", "body": "?",
        "created_at": mins(-5).isoformat(), "payload": None}
 excluded("ask mail", world={"mail": [ask]})
