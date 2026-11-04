@@ -17,7 +17,7 @@ guard() keeps the card whenever it cannot see what it checks.
 import json, os, pathlib, re, subprocess, sys, time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-import reap  # noqa: E402
+import reap, rm_refused  # noqa: E402
 
 ORCH_SCRIPTS = pathlib.Path(__file__).resolve().parents[2] / "orchestrate" / "scripts"
 REPO = pathlib.Path(__file__).resolve().parents[3]
@@ -166,6 +166,7 @@ def observe(path):
             return None
     kept = reap.patrol_states(activity=True)
     f = {"patrol": None if kept is None else kept.get(reap.real(path), False),
+         "refused": rm_refused.held(path, reap.STATE),
          "head": attempt(lambda: reap.run(["git", "-C", path, "rev-parse", "HEAD"]).strip() or None),
          "ino": reap.dir_ino(path)}
     res = reap.orca_json("terminal", "list", "--worktree", f"path:{path}")
@@ -185,10 +186,20 @@ def observe(path):
 QUESTION = [re.compile(p) for p in QUESTION_PATTERNS]
 
 
+def handed_off(path):
+    """The line for a card whose `orca worktree rm` was refused: what was refused, and the one command for a person."""
+    return f"사람에게 넘김: worktree rm 이 거부된 카드, 자동 정리 대상 아님. 사람이 실행: {rm_refused.command(path)}"
+
+
 def check(f, head, handles, final=False, ino=None):
     """(ok, why) for closing what was judged at HEAD head with its terminals handles, from observe()'s facts. final:
     after those terminals were closed, before `worktree rm`: their sessions are gone, so only patrol, HEAD and new
     terminals are looked at."""
+    refused = f.get("refused", False)  # observe() always sets it; None is an unreadable record
+    if refused is None:
+        return False, "worktree rm 거부 기록을 읽지 못함"
+    if refused:
+        return False, handed_off(refused["path"])
     if f.get("patrol") is None:
         return False, "순찰 판정 파일을 읽지 못함"
     if f["patrol"]:

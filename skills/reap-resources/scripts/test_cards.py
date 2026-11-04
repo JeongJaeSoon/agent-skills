@@ -22,7 +22,7 @@ def row(pid, cmd, ppid=1):
 
 
 def machine(rows=None, cwd_of=None, quiet=3 * 3600, prs=None, **kw):
-    return {"now": NOW, "st": cards.settings({}), "rows": rows or {}, "cwd_of": cwd_of or {}, "live": {}, "patrol": {}, "workers_unread": False,
+    return {"now": NOW, "st": cards.settings({}), "rows": rows or {}, "cwd_of": cwd_of or {}, "live": {}, "patrol": {}, "refused": {}, "workers_unread": False,
             "runners": set(), "self": None, "projects": pathlib.Path(tmp) / "projects",
             "pr_state": (prs or {}).get, "quiet": lambda p: quiet, **kw}
 
@@ -96,6 +96,22 @@ MERGED = {"acme/app#7": {"state": "MERGED", "headRefOid": HEAD}}
 
 # The plain case: merged PR that carried HEAD, clean, nothing running → removed.
 assert verdict(machine(prs=MERGED), branch_prs=[PR])[0] == cards.REMOVE
+
+# A card whose `orca worktree rm` was refused is not removed again: the verdict is a hand-off to a person with the one
+# command to run. Before rm_refused existed this same card read 삭제.
+import rm_refused  # noqa: E402
+refused_state = pathlib.Path(tempfile.mkdtemp())
+rm_refused.add(CARD, refused_state)
+v = verdict(machine(prs=MERGED, refused=rm_refused.read(refused_state)), branch_prs=[PR])
+assert v[0] == cards.ASK and v[2] == [] and "사람에게 넘김" in v[1] and "worktree rm 이 거부" in v[1], v
+assert rm_refused.command(CARD) in v[1] and "orca worktree rm --worktree path:" in v[1] and "--run-hooks" in v[1], v
+# An unreadable record keeps the card; a card made again on that path (another inode) is not the refused one.
+v = verdict(machine(prs=MERGED, refused=None), branch_prs=[PR])
+assert v[0] == cards.KEEP and "거부 기록을 읽지 못함" in v[1], v
+(refused_state / rm_refused.NAME).write_text(json.dumps({"path": CARD, "ino": 1, "t": 0}) + "\n")
+assert rm_refused.read(refused_state) == {}
+(refused_state / rm_refused.NAME).write_text("{not json\n")
+assert rm_refused.read(refused_state) is None and rm_refused.held(CARD, refused_state) is None
 
 # Open PR: the worktree stays, only its idle agent terminal is closed.
 OPEN = {"acme/app#7": {"state": "OPEN", "headRefOid": HEAD}}

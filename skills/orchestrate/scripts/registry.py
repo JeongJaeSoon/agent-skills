@@ -296,6 +296,10 @@ STORES = [
           ("janitor", "pressure", "tidy", "brief", "patrol"),
           rule="each card's keep or remove verdict, one round; the cleanup v2 shadow fields (round, sources, "
                "activity, candidates), which sweep reads"),
+    Store("rmrefused", "S/rm-refused.jsonl", {"card.rm_refused": CANONICAL}, ("rm_refused:add",),
+          ("janitor", "programview"),
+          rule="cards whose `orca worktree rm` a permission layer refused, by path and folder inode: cards.py, "
+               "reap-hard and the card guard skip them, and `orch wait`'s CLOSE OUT names a person"),
     Store("patrolrounds", "S/patrol-rounds.jsonl", {"patrol.round_timing": CANONICAL}, ("patrol:log_round",),
           ("patrol",), rule="per-source seconds per round, the last ROUNDS_KEEP; `orch patrol timing` reads it"),
     Store("reapactions", "S/reap-actions.jsonl", {"reap.action": CANONICAL}, ("reap:log_action",), ("janitor",),

@@ -205,6 +205,24 @@ assert "종료하지 않았다" in sent[0][2]
 assert run_round(DANGER, [], consumers=(procs, projects), now=5600.0) == 2 and len(sent) == 1
 assert run_round(DANGER, [], consumers=(procs, projects), now=5000.0 + 31 * 60) == 2 and len(sent) == 2
 
+# #368: reap's exit code and its "did nothing" lines. A non-zero exit counts nothing as cleaned (its other lines may
+# be real acts, but the round cannot tell which); "- 아무것도 하지 않았다" and a close-only card with no terminal are
+# not cleanups either. Before this, all of them were counted and a message said "정리함".
+DID = "- card app/x: PR 7 merged: worktree 는 orca worktree rm 으로 제거"
+NOTHING = ["- 아무것도 하지 않았다: 보호 목록을 읽지 못함", "- card app/y: 터미널 0개 닫음, worktree 는 남김"]
+assert p.reaped_lines([DID] + NOTHING) == [DID], p.reaped_lines([DID] + NOTHING)
+assert p.reaped_lines([f"{p.REAP_FAILED} 1", DID]) == []
+class Done:
+    def __init__(self, code, out):
+        self.returncode, self.stdout, self.stderr = code, out, ""
+assert p.reap_plan("plan.json", run=lambda *a, **k: Done(0, DID + "\n")) == [DID]
+bad = p.reap_plan("plan.json", run=lambda *a, **k: Done(1, "- 아무것도 하지 않았다: x\n"))
+assert bad[0] == f"{p.REAP_FAILED} 1" and p.reaped_lines(bad) == [], bad
+sent.clear()
+assert run_round(WARN, [target], reaped=[f"{p.REAP_FAILED} 1", DID], now=9000.0) == 1 and not sent, sent
+assert any(line.startswith(p.REAP_FAILED) for line in lines), lines
+assert run_round(WARN, [target], reaped=NOTHING, now=9000.0 + 11 * 60) == 1 and not sent, sent
+
 # Danger where reap skipped every target still reports the consumers.
 sent.clear()
 run_round(OK, [])

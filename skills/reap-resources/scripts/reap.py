@@ -543,10 +543,11 @@ PATROL_KEEP = ("working", "waiting", "run")  # a session moving, at a prompt for
 
 
 def patrol_working(now=None):
-    """Card paths `orch patrol` judged working (PATROL_KEEP) in a round under an hour old. Read only to keep a card: a patrol
-    verdict never makes anything a target, and a path missing here (a round with `failed` sources above all) is not
-    evidence the card is safe to close."""
-    return patrol_read(now) or set()
+    """Card paths `orch patrol` keeps (PATROL_KEEP, and the round's `activity` parked or unknown) in a round under an
+    hour old: the same set cards.py's scan and the guard read. Read only to keep a card: a patrol verdict never makes
+    anything a target, and a path missing here (a round with `failed` sources above all) is not evidence the card is
+    safe to close."""
+    return patrol_read(now, activity=True) or set()
 
 
 PATROL_KEEP_ACTIVITY = ("parked", "unknown")  # v2 `activity`: a session that wakes itself, or one patrol could not tell

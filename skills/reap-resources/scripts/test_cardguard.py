@@ -77,6 +77,18 @@ reap.patrol_states = lambda now=None, activity=False: {reap.real("/w/x"): "parke
 assert "순찰 판정:" in cardguard.guard("/w/x", H, ["t1", "s1"])[1] and "parked" in cardguard.guard("/w/x", H, ["t1", "s1"])[1]
 reap.patrol_states = lambda now=None, activity=False: None
 assert "순찰 판정 파일을 읽지 못함" in cardguard.guard("/w/x", H, ["t1", "s1"])[1]
+reap.patrol_states = lambda now=None, activity=False: {}
+import rm_refused  # noqa: E402
+saved_state, reap.STATE = reap.STATE, pathlib.Path(tempfile.mkdtemp())
+assert cardguard.guard("/w/x", H, ["t1", "s1"])[0]  # no record: the card passes
+rm_refused.add(tempfile.gettempdir(), reap.STATE)  # any folder: the record names it by path and inode
+ok, got = cardguard.guard(tempfile.gettempdir(), H, ["t1", "s1"])
+assert not ok and "사람에게 넘김" in got and rm_refused.command(tempfile.gettempdir()) in got, got
+ok, got = cardguard.guard(tempfile.gettempdir(), H, ["t1", "s1"], final=True)
+assert not ok and "사람에게 넘김" in got, "the check before `worktree rm` reads it too"
+(reap.STATE / rm_refused.NAME).write_text("{not json\n")
+assert "거부 기록을 읽지 못함" in cardguard.guard("/w/x", H, ["t1", "s1"])[1]
+reap.STATE = saved_state
 reap.patrol_states, reap.run, reap.orca_json, cardguard._orch, cardguard.parked = saved
 
 # reap.patrol_read: no file or a stale one is no protection; one that exists and cannot be read is None.
@@ -93,6 +105,8 @@ vf.write_text(json.dumps({"t": time.time(), "cards": {"/w/x": "idle"},
                           "activity": {"/w/p": {"state": "parked"}, "/w/u": {"state": "unknown"}, "/w/i": {"state": "idle"}}}))
 assert reap.patrol_read() == set(), "activity is read only by the guard before a close"
 assert reap.patrol_read(activity=True) == {reap.real("/w/p"), reap.real("/w/u")}
+# pressure's keep_live and reap-hard's scan read patrol_working: it keeps what the guard keeps, parked included.
+assert reap.patrol_working() == {reap.real("/w/p"), reap.real("/w/u")}
 assert reap.patrol_states(activity=True) == {reap.real("/w/p"): "parked", reap.real("/w/u"): "unknown"}
 assert "parked" in reap.patrol_hold("parked") and "Run 워커" in reap.patrol_hold("run") and "Run 워커" in reap.patrol_hold(True)
 for bad in ({"/w/x": "parked"}, {"/w/x": {}}, ["parked"], False, 0, "", []):
