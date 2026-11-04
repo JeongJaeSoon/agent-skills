@@ -150,7 +150,9 @@ Before pushing, run **both**:
   compose), else `docker compose -p <project> down`; either way keep volumes (never `-v`). Teardown runs
   bare, never through `orch heavy`, whose load gate would refuse it under load. A stack that has to stay gets its
   reason and deadline: `reap.py ledger add --kind compose-stack --id <project> --keep "<reason>" --until <ISO time>`
-  (reap-resources); `orch heavy` registers its stacks, so the janitor downs a forgotten one after the PR closes
+  (reap-resources); `orch heavy` registers its stacks, so the janitor downs a forgotten one after the PR closes.
+  A throwaway volume you create by hand outside the verify skill carries the label `reap.py origin-label
+  verify-<app>` prints, when it prints one; an unlabeled one can never be cleaned up (reap-resources)
 - a change with no runtime behavior (docs, comments): validate links and run documented
   commands and examples exactly as written in a safe, isolated fixture; record commands,
   outputs and fixture substitutions. If a destructive command or live external write cannot

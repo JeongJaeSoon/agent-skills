@@ -11,6 +11,8 @@ Usage:
   python3 reap.py ledger list [--json]
   python3 reap.py precheck [--kinds ...] [--load]
   python3 reap.py schedule [--load] [--workspace SELECTOR] [--provider claude] [--write]
+  python3 reap.py inventory --unlabeled-volumes [--json]
+  python3 reap.py origin-label verify-<app>
 
 scan only reads. reap re-scans and acts only on the plan's targets that are still targets with the
 same identity (pid and start time, branch tip), so nothing outside the list is touched. On a plan named janitor-plan.json
@@ -22,10 +24,13 @@ the repo of the current directory.
 Config: ~/.claude/agent-skills.json → "reap": {"hours": 6, "orphan_paths": [...], "alert": {...},
 "load_limit": <5-minute load; default the CPU count>, "load_cooldown_minutes": 60, "idle_minutes": 30, "evidence_roots": [...], "user_folders": [], "user_folder_days": 7,
 "user_folder_screenshot_days": 1, "program_days": 7, "state_days": 7, "log_max_kb": 512, "inbox_to": "run:<id>", "plan_repeat": 2,
-"preview_ports": [4500, 4599], "stack_volumes": {"prefixes": [...], "label": "...", "protect": [...]}}.
-Janitor kinds (card, orca-worker, tmpdir, gui-app, chrome-window, evidence, remote-branch, compose-stack, stack-volume;
-`--kinds janitor`): card is every Orca card, judged by cards.py; stack-volume only volumes of stacks under
-reap.stack_volumes.prefixes; the rest cover only what the ledger lists or an Orca orchestration worker made. user-folder covers only top-level entries of explicitly configured reap.user_folders
+"preview_ports": [4500, 4599], "stack_volumes": {"prefixes": [...], "label": "...", "protect": [...]},
+"stopped_containers": {"prefixes": [...], "protect": [...]}, "labeled_volumes": {"namespace": "...", "origins": [...], "protect": [...]}}.
+Janitor kinds (card, orca-worker, tmpdir, gui-app, chrome-window, evidence, remote-branch, compose-stack, stack-volume,
+stopped-container, labeled-volume; `--kinds janitor`): card is every Orca card, judged by cards.py; stack-volume only
+volumes of stacks under reap.stack_volumes.prefixes; stopped-container only containers named under
+reap.stopped_containers.prefixes that compose did not make; labeled-volume only volumes whose <namespace>.origin label is
+in reap.labeled_volumes.origins; the rest cover only what the ledger lists or an Orca orchestration worker made. user-folder covers only top-level entries of explicitly configured reap.user_folders
 untouched for reap.user_folder_days (default 7; screenshots and screen recordings reap.user_folder_screenshot_days,
 default 1), and keeps them all while Finder empties the trash on its own, unless $AGENT_SKILLS_TRASH is set.
 orca-worktree and done-card, the card kinds before card, are gone: --kinds or a plan naming them is refused. reap moves files to the trash and never empties it (the OS may: scan
@@ -517,14 +522,14 @@ def trash_auto_empty():
 # Janitor kinds: every Orca card (card, judged by cards.py), and of the rest only what an agent created (the ledger, or
 # an Orca orchestration worker).
 JANITOR = ("card", "orca-worker", "tmpdir", "gui-app", "chrome-window", "evidence", "remote-branch",
-           "compose-stack", "stack-volume")
+           "compose-stack", "stack-volume", "stopped-container", "labeled-volume")
 # What the scheduled run covers: the janitor kinds, the user's download and desktop folders, closed programs and hook state.
 SCHEDULED = JANITOR + ("user-folder", "program", "state-file")
 # The card kinds before `card`, no longer scanned. A plan or --kinds naming them is refused rather than run as nothing.
 # reap.act's "orca-worktree" removal stays: cards.py and reap_hard.py call it.
 RETIRED_KINDS = ("orca-worktree", "done-card")
 # What `ledger add` accepts: the kinds whose scan reads the ledger. `card` reads Orca instead.
-LEDGER_KINDS = tuple(k for k in JANITOR if k not in ("card", "stack-volume"))
+LEDGER_KINDS = tuple(k for k in JANITOR if k not in ("card", "stack-volume", "stopped-container", "labeled-volume"))
 # Kinds that would find something new every round; the precheck looks at them once a day.
 DAILY = ("user-folder", "program", "state-file")
 MEDIA = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".mp4", ".mov", ".webm")
@@ -1092,28 +1097,45 @@ def worker_worktrees(workers):
     return live, made, users
 
 
+COMPOSE_PROJECT = "com.docker.compose.project"
+STOPPED_STATES = ("exited", "created")
+ORIGIN_RESERVED = ("com.docker.", "io.docker.", "org.dockerproject.")  # Docker keeps these label namespaces for itself
+ANON_VOLUME = re.compile(r"[0-9a-f]{64}")
+CONTAINER_SHAPE = {"Name": str, "State": dict, "Config": dict, "HostConfig": dict, "Mounts": list}
+
+
 def docker_ts(s):
     """Docker's RFC 3339 with nanoseconds; Python before 3.11 reads at most microseconds."""
     return dt.datetime.fromisoformat(re.sub(r"\.\d+", "", s).replace("Z", "+00:00")).timestamp()
 
 
-def compose_stacks():
-    """{project: {running, stopped, first (oldest container created), last (newest start or stop), ports, dirs (compose
-    working directories), nodir (containers without one)}}; None when docker cannot be read."""
+def docker_containers():
+    """`docker inspect` of every container in any state: [] without docker or with none, None when it cannot be read."""
     if not shutil.which("docker"):
-        return {}
+        return []
     ids = run(["docker", "ps", "-aq", "--no-trunc"], check=False)
     if ids is None:
         return None
     if not ids.split():
-        return {}
+        return []
     out = run(["docker", "inspect", *ids.split()], check=False)
-    if out is None:
+    try:
+        found = None if out is None else json.loads(out)
+        return found if {c["Id"] for c in found or ()} == set(ids.split()) else None
+    except (ValueError, TypeError, KeyError):
+        return None
+
+
+def compose_stacks():
+    """{project: {running, stopped, first (oldest container created), last (newest start or stop), ports, dirs (compose
+    working directories), nodir (containers without one)}}; None when docker cannot be read."""
+    found = docker_containers()
+    if found is None:
         return None
     stacks = {}
-    for c in json.loads(out):
+    for c in found:
         labels = (c.get("Config") or {}).get("Labels") or {}
-        proj = labels.get("com.docker.compose.project")
+        proj = labels.get(COMPOSE_PROJECT)
         # An app can copy the project and service labels onto containers it starts; `compose down` matches only the
         # ones compose created, which carry the oneoff label, and leaves the rest.
         if not proj or "com.docker.compose.oneoff" not in labels:
@@ -1307,6 +1329,263 @@ def stack_volume_scan(spec, hours, notes, now=None):
     return judge_stack_volumes(vols, owners, spec, hours, now or time.time())
 
 
+def stopped_container_spec(cfg):
+    """reap.stopped_containers → (prefixes, protect); None when unset (the kind is off); a string when malformed."""
+    spec = cfg.get("stopped_containers")
+    if not spec:
+        return None
+    if not isinstance(spec, dict):
+        return "reap.stopped_containers 는 객체여야 함, 건너뜀"
+    prefixes, protect = spec.get("prefixes"), spec.get("protect", [])
+    if not isinstance(prefixes, list) or not prefixes or \
+            not all(isinstance(p, str) and len(p) >= 4 and p.endswith("-") for p in prefixes):
+        return "reap.stopped_containers.prefixes 는 '-' 로 끝나는 4자 이상 문자열 목록이어야 함, 건너뜀"
+    if not isinstance(protect, list) or not all(isinstance(p, str) for p in protect):
+        return "reap.stopped_containers.protect 는 문자열 목록이어야 함, 건너뜀"
+    return tuple(prefixes), frozenset(protect)
+
+
+def origin_key(cfg):
+    """`<reap.labeled_volumes.namespace>.origin`, the provenance label key; None when the namespace is unset or invalid."""
+    spec = cfg.get("labeled_volumes")
+    ns = spec.get("namespace") if isinstance(spec, dict) else None
+    if not isinstance(ns, str) or not re.fullmatch(r"[a-z0-9]+([.-][a-z0-9]+)*", ns) or \
+            f"{ns}.".startswith(ORIGIN_RESERVED):
+        return None
+    return f"{ns}.origin"
+
+
+def labeled_volume_spec(cfg):
+    """reap.labeled_volumes → (label key, origins, protect); None when unset (the kind is off); a string when malformed."""
+    spec = cfg.get("labeled_volumes")
+    if not spec:
+        return None
+    key = origin_key(cfg)
+    if not key:
+        return "reap.labeled_volumes.namespace 가 올바르지 않음(소문자·숫자·점·하이픈, Docker 예약 이름 제외), 건너뜀"
+    origins, protect = spec.get("origins"), spec.get("protect", [])
+    if not isinstance(origins, list) or not origins or not all(isinstance(o, str) and o for o in origins):
+        return "reap.labeled_volumes.origins 는 문자열 목록이어야 함, 건너뜀"
+    if not isinstance(protect, list) or not all(isinstance(p, str) for p in protect):
+        return "reap.labeled_volumes.protect 는 문자열 목록이어야 함, 건너뜀"
+    return key, frozenset(origins), frozenset(protect)
+
+
+def container_row(c):
+    """One `docker inspect` object in the fields the leftover kinds judge."""
+    labels = (c.get("Config") or {}).get("Labels") or {}
+    st = c.get("State") or {}
+    bound = ((c.get("HostConfig") or {}).get("PortBindings") or {}).values()
+    return {"id": c.get("Id") or "", "name": (c.get("Name") or "").lstrip("/"), "status": st.get("Status"),
+            "labels": labels, "project": labels.get(COMPOSE_PROJECT) or "", "created": c.get("Created"),
+            "finished": st.get("FinishedAt"),
+            "ports": sorted({int(b["HostPort"]) for binds in bound for b in binds or ()
+                             if str(b.get("HostPort", "")).isdigit()}),
+            "volumes": [m["Name"] for m in c.get("Mounts") or () if m.get("Type") == "volume" and m.get("Name")]}
+
+
+def container_rows():
+    """container_row of every container, None unless each came back whole: Mounts, Labels or PortBindings missing from
+    what Docker answered would read as no reference, no stack and no protected port."""
+    found = docker_containers()
+    if found is None:
+        return None
+    try:
+        if all(isinstance(c.get(k), t) for c in found for k, t in CONTAINER_SHAPE.items()) and \
+                all("Labels" in c["Config"] and "PortBindings" in c["HostConfig"] and all("Type" in m for m in c["Mounts"])
+                    for c in found):
+            return [container_row(c) for c in found]
+    except (ValueError, TypeError, KeyError, AttributeError):
+        pass
+    return None
+
+
+def stopped_at(r):
+    """When a stopped container stopped (a `created` one never ran: when it was made). None when Docker's time cannot
+    be read, its zero time included."""
+    try:
+        t = docker_ts(r["created"] if r["status"] == "created" else r["finished"])
+    except (ValueError, TypeError, AttributeError, OverflowError):
+        return None
+    return t if t > 0 else None
+
+
+def judge_stopped_containers(rows, spec, hours, now, keep=frozenset(), ports=frozenset()):
+    """rows: container_row of every container. Only names under a configured prefix are listed. keep: compose projects
+    and names that stay (the protect file, always-on services); ports: protected host ports."""
+    prefixes, protect = spec
+    live = {r["project"] for r in rows if r["project"] and r["status"] not in STOPPED_STATES}
+    held = protect | keep
+    out = []
+    for r in rows:
+        if not r["name"].startswith(prefixes):
+            continue
+        since = stopped_at(r) if r["status"] in STOPPED_STATES else None
+        item = {"kind": "stopped-container", "key": f"stopped-container:{r['id']}", "name": r["name"], "cid": r["id"],
+                "project": r["project"], "ports": r["ports"], "created": r["created"], "start": str(r["finished"]),
+                "age": now - since if since else None, "target": False, "how": [f"docker rm {r['id']}"]}
+        out.append(item)
+        if "com.docker.compose.oneoff" in r["labels"]:
+            item["why"] = "compose 가 만든 컨테이너(스택 정리 몫)"
+        elif r["status"] not in STOPPED_STATES:
+            item["why"] = f"멈추지 않음({r['status']})"
+        elif held & {r["name"], r["project"]}:
+            item["why"] = "보호 목록·상시 서비스"
+        elif hit := sorted(set(r["ports"]) & ports):
+            item["why"] = f"보호 포트 {hit[0]}"
+        elif r["project"] in live:
+            item["why"] = f"스택 {r['project']} 이 아직 돎"
+        elif since is None:
+            item["why"] = "멈춘 시각을 읽지 못함"
+        elif now - since < hours * 3600:
+            item["why"] = f"멈춘 지 {hours:g}시간 미만"
+        else:
+            item.update(target=True, why=f"{r['status']}, 멈춘 지 {hours:g}시간 넘음: {r['name']}")
+    return out
+
+
+def judge_labeled_volumes(vols, rows, spec, hours, now, keep=frozenset()):
+    """vols: [{name, labels, created}]; rows: container_row of every container. The origin label is the proof a
+    verification stack made the volume, so a volume without it is never listed: that no container uses a volume, or that
+    one mounted it once, says nothing about who made it."""
+    key, origins, protect = spec
+    used = {n for r in rows for n in r["volumes"]}
+    stacks = {r["project"] for r in rows if r["project"]}
+    held = protect | keep
+    out = []
+    for v in vols:
+        origin = v["labels"].get(key)
+        if origin is None:
+            continue
+        project = v["labels"].get(COMPOSE_PROJECT) or ""
+        age = now - v["created"]
+        item = {"kind": "labeled-volume", "key": f"labeled-volume:{v['name']}", "name": v["name"], "origin": origin,
+                "project": project, "created": v["created"], "age": age, "target": False,
+                "how": [f"docker volume rm {shlex.quote(v['name'])}"]}
+        out.append(item)
+        if origin not in origins:
+            item["why"] = f"목록에 없는 출처 {origin}(보고만)"
+        elif v["name"] in used:
+            item["why"] = "컨테이너가 참조함(멈춘 것 포함)"
+        elif held & {v["name"], project}:
+            item["why"] = "보호 목록·상시 서비스"
+        elif project in stacks:
+            item["why"] = f"컨테이너가 남은 스택 {project}"
+        elif age < hours * 3600:
+            item["why"] = f"{hours:g}시간 미만"
+        else:
+            item.update(target=True, why=f"출처 {origin}, 참조하는 컨테이너 없음")
+    return out
+
+
+def labeled_volumes_read(key):
+    """[{name, labels, created}] of volumes carrying the label key, None when docker cannot be read."""
+    names = run(["docker", "volume", "ls", "-q", "--filter", f"label={key}"], check=False)
+    if names is None:
+        return None
+    return volumes_read(sorted(names.split())) if names.split() else []
+
+
+def volumes_read(names):
+    """[{name, labels, created}] of exactly these volumes, None unless each came back whole."""
+    out = run(["docker", "volume", "inspect", *names], check=False)
+    try:
+        vols = [{"name": v["Name"], "labels": v.get("Labels") or {}, "created": parse_ts(v["CreatedAt"])}
+                for v in json.loads(out)]
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return None
+    return vols if {v["name"] for v in vols} == set(names) else None
+
+
+def leftovers(cfg, hours, now, notes, keep=frozenset(), ports=frozenset(), kinds=("stopped-container", "labeled-volume")):
+    """The stopped-container and labeled-volume items, for reap.py's and reap-hard's scans alike. Without docker, or with
+    what it reads unreadable, a kind lists nothing: a reference it could not read may be the one that keeps a volume."""
+    want = {"stopped-container": stopped_container_spec(cfg) if "stopped-container" in kinds else None,
+            "labeled-volume": labeled_volume_spec(cfg) if "labeled-volume" in kinds else None}
+    notes += [f"{k}: {s}" for k, s in want.items() if isinstance(s, str)]
+    if not any(isinstance(s, tuple) for s in want.values()) or not shutil.which("docker"):
+        return []
+    rows = container_rows()
+    if rows is None:
+        notes.append("docker 를 읽지 못함: 멈춘 컨테이너·라벨 볼륨은 건너뜀")
+        return []
+    items = []
+    if isinstance(want["stopped-container"], tuple):
+        items += judge_stopped_containers(rows, want["stopped-container"], hours, now, keep, ports)
+    if isinstance(spec := want["labeled-volume"], tuple):
+        vols = labeled_volumes_read(spec[0])
+        if vols is None:
+            notes.append("docker 볼륨을 읽지 못함: 라벨 볼륨은 건너뜀")
+        else:
+            items += judge_labeled_volumes(vols, rows, spec, hours, now, keep)
+    return items
+
+
+def leftover_recheck(item, cfg, protect_path=None):
+    """Judged again from a fresh read, right before the rm, with no age left to wait: why it stays, or None. A container
+    run again, a volume a container took up since the scan, or a protect line added since keeps it. protect_path: the
+    file a cleaner requires; without it, the shared file, which may be missing."""
+    import guard
+    try:
+        protect = guard.read_protect(protect_path or guard.protect_file(), missing_ok=protect_path is None)
+        keep = protect["project"] | guard.always_on()
+    except (guard.NoProtect, ValueError) as e:
+        return f"보호 목록을 다시 읽지 못함({e})"
+    rows = container_rows()
+    if rows is None:
+        return "컨테이너를 다시 읽지 못함"
+    if "cid" in item:
+        spec = stopped_container_spec(cfg)
+        if not isinstance(spec, tuple):
+            return "reap.stopped_containers 를 읽지 못함"
+        judged = judge_stopped_containers(rows, spec, 0, time.time(), keep, protect["port"])
+        same = next((i for i in judged if i["cid"] == item["cid"]), None)
+        if same is None or same["name"] != item["name"] or same["start"] != item["start"]:
+            return "사라졌거나 다시 시작된 컨테이너"
+        return None if same["target"] else same["why"]
+    spec = labeled_volume_spec(cfg)
+    if not isinstance(spec, tuple):
+        return "reap.labeled_volumes 를 읽지 못함"
+    vols = volumes_read([item["name"]])
+    if vols is None:
+        return "볼륨을 다시 읽지 못함"
+    (same,) = judge_labeled_volumes(vols, rows, spec, 0, time.time(), keep) or (None,)
+    if same is None or same["created"] != item["created"] or same["origin"] != item["origin"]:
+        return "다시 만들어졌거나 출처가 바뀐 볼륨"
+    return None if same["target"] else same["why"]
+
+
+def remove_leftover(item, cfg, protect_path=None):
+    """One container or volume, by its exact id or name, never -f or -v: Docker itself refuses a running container and a
+    volume any container references, so what starts between the recheck and the rm still stays."""
+    if why := leftover_recheck(item, cfg, protect_path):
+        return f"건너뜀: {why}"
+    if "cid" in item:
+        run(["docker", "rm", item["cid"]])
+        return f"docker rm {item['cid']} ({item['name']})"
+    run(["docker", "volume", "rm", item["name"]])
+    return f"docker volume rm {item['name']}"
+
+
+def unlabeled_volumes():
+    """Read only: anonymous volumes with no label of their own, for the owner to look at. {total, referenced, volumes:
+    the unreferenced ones}, None when docker cannot be read. Never a target: nothing proves who made them."""
+    if not shutil.which("docker"):
+        return None
+    names, rows = run(["docker", "volume", "ls", "-q"], check=False), container_rows()
+    if names is None or rows is None:
+        return None
+    anon = [n for n in names.split() if ANON_VOLUME.fullmatch(n)]
+    vols = volumes_read(anon) if anon else []
+    if vols is None:
+        return None
+    bare = [v for v in vols if not set(v["labels"]) - {"com.docker.volume.anonymous"}]
+    used = {n for r in rows for n in r["volumes"]}
+    free = [{"name": v["name"], "created": dt.datetime.fromtimestamp(v["created"]).isoformat(timespec="seconds")}
+            for v in bare if v["name"] not in used]
+    return {"total": len(bare), "referenced": len(bare) - len(free), "volumes": free}
+
+
 def janitor_scan(kinds, repo_list, entries, notes, pr_state=None, hours=6.0, now=None, evidence_roots=None,
                  preview=(4500, 4599), cfg=None):
     pr_state = pr_state or pr_reader()
@@ -1330,6 +1609,14 @@ def janitor_scan(kinds, repo_list, entries, notes, pr_state=None, hours=6.0, now
             notes.append(f"stack-volume: {spec}")
         else:
             items += stack_volume_scan(spec, hours, notes, now)
+    if want := {"stopped-container", "labeled-volume"} & kinds:
+        import guard
+        try:
+            protect, always = guard.read_protect(guard.protect_file(), missing_ok=True), guard.always_on()
+        except (guard.NoProtect, ValueError) as e:
+            notes.append(f"보호 목록을 읽지 못함, 멈춘 컨테이너·라벨 볼륨은 건너뜀: {e}")
+        else:
+            items += leftovers(cfg or {}, hours, now or time.time(), notes, protect["project"] | always, protect["port"], want)
     rows = processes() if {"gui-app", "tmpdir"} & kinds else {}
     cwd_of = cwds() if "tmpdir" in kinds else {}
     if "tmpdir" in kinds:
@@ -2044,6 +2331,8 @@ def act(item, notes, done=None):
             return f"건너뜀: {why}"
         run(["docker", "volume", "rm", item["name"]])
         return "docker volume rm"
+    if kind in ("stopped-container", "labeled-volume"):
+        return remove_leftover(item, config())
     if kind == "orca-worker":
         run(["orca", "orchestration", "worker-release", "--dispatch", k.split(":", 1)[1], "--json"])
         return "터미널 회수"
@@ -2218,6 +2507,28 @@ def main():
             print(out)
         else:
             print("\n(출력만 했다. 실제로 만들려면 --write)")
+        return
+    if cmd == "origin-label":
+        origin, key = (sys.argv[2:3] or [""])[0], origin_key(cfg)
+        if not re.fullmatch(r"[\w.-]+", origin):
+            sys.exit("usage: reap.py origin-label verify-<app>")
+        if not key:
+            sys.exit("reap.labeled_volumes.namespace is unset or invalid: no provenance label")
+        print(f"{key}={origin}")
+        return
+    if cmd == "inventory":
+        if "--unlabeled-volumes" not in sys.argv:
+            sys.exit(__doc__)
+        data = unlabeled_volumes()
+        if data is None:
+            sys.exit("docker 를 읽지 못함")
+        if "--json" in sys.argv:
+            print(json.dumps(data, ensure_ascii=False, indent=1))
+            return
+        print(f"라벨 없는 익명 볼륨 {data['total']}개: 컨테이너 참조 없음 {len(data['volumes'])}개, 참조 있음 {data['referenced']}개. "
+              "출처를 모르므로 어떤 정리도 지우지 않는다")
+        for v in data["volumes"]:
+            print(f"{v['name']}\t{v['created']}")
         return
     if cmd not in ("scan", "precheck"):
         sys.exit(__doc__)

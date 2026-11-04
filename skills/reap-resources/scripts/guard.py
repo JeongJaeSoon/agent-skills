@@ -3,7 +3,7 @@
 guards that only ever keep.
 
 Locks: <state>/locks/<kind>-<hash>.lock, taken without waiting and always in LOCK_ORDER (card, compose project,
-volume, process, serve port, the rest), once at the top of a cleaner. An inner call in the same thread that asks for
+container, volume, process, serve port, the rest), once at the top of a cleaner. An inner call in the same thread that asks for
 a lock already held goes on without taking it again. A lock another process holds means that process is acting on
 the target; the caller leaves it. Locks only keep two cleaners from acting at the same moment: the recheck each one
 does inside its lock is what keeps a target already handled from being handled twice.
@@ -22,7 +22,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import reap  # noqa: E402
 
-LOCK_ORDER = ("card", "project", "volume", "proc", "serve", "other")
+LOCK_ORDER = ("card", "project", "container", "volume", "proc", "serve", "other")
 _LOCAL = threading.local()  # .held: (kind, key) -> open lock file, in this thread's call chain
 
 
@@ -33,12 +33,14 @@ def held():
     return _LOCAL.held
 
 # The rule each cleaner's target is acted on under. A card's rule follows its cards.py verdict.
-RULE_OF = {"compose-stack": "stack:registered", "stack-volume": "volume:prefixed", "tmpdir": "trash:tmpdir",
+RULE_OF = {"compose-stack": "stack:registered", "stack-volume": "volume:prefixed", "stopped-container": "container:stopped",
+           "labeled-volume": "volume:labeled", "tmpdir": "trash:tmpdir",
            "evidence": "trash:evidence", "gui-app": "gui:registered", "orca-worker": "worker:reclaimable",
            "program": "program:archive", "state-file": "state:rotate", "user-folder": "user-folder:trash",
            "orphan": "proc:orphan", "chrome-window": "browser:chrome"}
 CARD_RULE = {"삭제": "card:landed", "터미널만 닫기": "card:close-idle"}
-HARD_RULE = {"card": "card:strict", "stack": "stack:gone", "listener": "proc:listener", "serve": "serve:dark"}
+HARD_RULE = {"card": "card:strict", "stack": "stack:gone", "listener": "proc:listener", "serve": "serve:dark",
+             "container": "container:stopped", "volume": "volume:labeled"}
 FALLBACK_INTERVALS = 3
 DEFAULT_INTERVAL = 1800
 
@@ -91,8 +93,10 @@ def targets(item):
         return [("card", reap.real(item.get("name") or item.get("id") or item.get("path")))]
     if kind in ("compose-stack", "stack"):
         return [("project", item.get("name") or item.get("id"))]
-    if kind == "stack-volume":
+    if kind in ("stack-volume", "labeled-volume", "volume"):
         return [("volume", item["name"])]
+    if kind in ("stopped-container", "container"):
+        return [("container", item["cid"])]
     if kind == "docker" and key.startswith("volume:"):  # the same volume, whichever kind names it
         return [("volume", key.partition(":")[2])]
     if kind == "serve":
@@ -307,6 +311,10 @@ def item(i, protect, cleaner="reap"):
         return None
     if kind in ("compose-stack", "stack"):
         return project(i.get("name") or i.get("id"), protect)
+    if kind in ("stopped-container", "container", "labeled-volume", "volume"):
+        hit = sorted(set(i.get("ports") or ()) & protect["port"])
+        return project(i["name"], protect) or (i.get("project") and project(i["project"], protect)) or \
+            (f"보호 포트 {hit[0]}" if hit else None)
     if kind == "serve":
         return port(i["port"], protect) or port(i["local"], protect)
     if kind == "gui-app":
