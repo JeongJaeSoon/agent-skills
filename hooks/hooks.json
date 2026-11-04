@@ -13,6 +13,10 @@
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/pressure_gate.py\"", "timeout": 20 }]
       },
       {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/self_land_gate.py\"", "timeout": 10 }]
+      },
+      {
         "matcher": "Bash|Agent|Task",
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/lifecycle.py\"", "timeout": 5 }]
       },
