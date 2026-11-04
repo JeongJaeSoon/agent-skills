@@ -8,7 +8,8 @@ worktree create`, an orchestration worker. The first row that matches decides.
 
 | # | When | Verdict |
 |---|---|---|
-| 1 | Protected: pinned; its directory or display name starts with a `reap.cards.protect_prefixes` entry (default `lead-`); the card this scan runs in; an Orca automation's `--workspace`; a worker turn `in_progress`; a child card still open; a Claude session in it started as a lead or the orchestrator, or that declared that `ROLE`; `orch patrol` judged it working, waiting on a human or a Run worker, or kept it as parked or unknown, in a round under an hour old (the scan reads the verdicts file the way the guard does, and the reason names patrol's word for it); the verdicts file exists but cannot be read | 남김 |
+| 0 | `orca worktree rm` of this card was refused and recorded (`scripts/rm_refused.py add <path>`, kept in `<state>/rm-refused.jsonl` by path and folder inode); the record exists and cannot be read keeps it too | 사람 결정: the reason is `사람에게 넘김` and the one `orca worktree rm` line a person runs; nothing is acted on, and `apply`, reap-hard and the guard skip it |
+| 1 | Protected: pinned; its directory or display name starts with a `reap.cards.protect_prefixes` entry (default `lead-`); the card this scan runs in; an Orca automation's `--workspace`; a worker turn `in_progress`; a child card still open; a Claude session in it started as a lead or the orchestrator, or that declared that `ROLE`; `orch patrol` judged it working, waiting on a human or a Run worker, or kept it as parked or unknown, in a round under an hour old (the scan reads the verdicts file the way the guard does, and the reason names patrol's word for it); the verdicts file exists but cannot be read; its newest worker Dispatch is `abandoned` or `interrupted` (a restart cut the worker off and a resume is due, `reboot`) and the card has any change in `git status` (untracked and regenerated copies included) or an open PR | 남김 |
 | 2 | git status, the terminal list or a transcript could not be read | 남김 |
 | 3 | An agent turn is running: a Claude session in the card runs a shell (a Bash call, a background shell, a Monitor), or its agent terminal wrote output in the last 5 minutes | 남김 |
 | 4 | The agent's screen waits on a person (a question or permission dialog) | 사람 결정 |
@@ -62,6 +63,11 @@ the cleaner never releases one.
   no agent terminal and no shell child, so neither rule 3 nor rule 5 sees it. Its process is an agent for rules 8
   and 12, released once its transcript has been quiet for `reap.idle_minutes`; with no PR (rule 13) it keeps the
   card, since it has no screen to say it is done.
+
+- **A worker cut off by a restart.** Its terminals are gone, so rules 3 and 5 see nothing, and the resumed session
+  waits idle for its instruction: rule 8 would close that terminal and rule 9 ignores the regenerated copies. Rule 1
+  keeps the card while the newest Dispatch on it is `abandoned` or `interrupted` and it holds changes or an open PR; a
+  resume (a newer `dispatched` row) or a clean merged card ends the hold.
 
 ## Config
 

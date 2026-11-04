@@ -44,6 +44,7 @@ import cardguard  # noqa: E402
 import guard  # noqa: E402
 import preview_watch as pw  # noqa: E402
 import reap  # noqa: E402
+import rm_refused  # noqa: E402
 
 LABEL = "io.github.jeongjaesoon.reap-hard"
 PLIST = pathlib.Path(f"~/Library/LaunchAgents/{LABEL}.plist").expanduser()
@@ -327,10 +328,15 @@ def scan_cards(cfg, protect, now):
         notes.append("orca worktree list 를 읽지 못함 또는 잘림: 카드는 건너뜀")
     elif m["cwd_of"] is not None and m["listening"] is not None:
         working = reap.patrol_working(now)
+        refused = rm_refused.read(reap.STATE)
         for w in local_cards(wt, root):
             ok, why, facts = card_verdict(w, m, cfg, protect, now)
             if ok and reap.real(w["path"]) in working:
                 ok, why = False, "순찰 판정: 작업 중(orch patrol)"
+            if ok and refused is None:
+                ok, why = False, "worktree rm 거부 기록을 읽지 못함"
+            elif ok and reap.real(w["path"]) in refused:
+                ok, why = False, cardguard.handed_off(w["path"])
             item = {"kind": "card", "id": reap.real(w["path"]), "target": ok, "why": why}
             if ok:
                 item.update(head=facts["head"], regenerated=facts.get("regenerated") or [], handles=facts["handles"],

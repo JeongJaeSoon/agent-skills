@@ -22,7 +22,7 @@ def row(pid, cmd, ppid=1):
 
 
 def machine(rows=None, cwd_of=None, quiet=3 * 3600, prs=None, **kw):
-    return {"now": NOW, "st": cards.settings({}), "rows": rows or {}, "cwd_of": cwd_of or {}, "live": {}, "patrol": {}, "workers_unread": False,
+    return {"now": NOW, "st": cards.settings({}), "rows": rows or {}, "cwd_of": cwd_of or {}, "live": {}, "patrol": {}, "refused": {}, "workers_unread": False,
             "runners": set(), "self": None, "projects": pathlib.Path(tmp) / "projects",
             "pr_state": (prs or {}).get, "quiet": lambda p: quiet, **kw}
 
@@ -96,6 +96,80 @@ MERGED = {"acme/app#7": {"state": "MERGED", "headRefOid": HEAD}}
 
 # The plain case: merged PR that carried HEAD, clean, nothing running → removed.
 assert verdict(machine(prs=MERGED), branch_prs=[PR])[0] == cards.REMOVE
+
+# A card whose `orca worktree rm` was refused is not removed again: the verdict is a hand-off to a person with the one
+# command to run. Before rm_refused existed this same card read 삭제.
+import rm_refused  # noqa: E402
+refused_state = pathlib.Path(tempfile.mkdtemp())
+rm_refused.add(CARD, refused_state)
+v = verdict(machine(prs=MERGED, refused=rm_refused.read(refused_state)), branch_prs=[PR])
+assert v[0] == cards.ASK and v[2] == [] and "사람에게 넘김" in v[1] and "worktree rm 이 거부" in v[1], v
+assert rm_refused.command(CARD) in v[1] and "orca worktree rm --worktree path:" in v[1] and "--run-hooks" in v[1], v
+# An unreadable record keeps the card; a card made again on that path (another inode) is not the refused one.
+v = verdict(machine(prs=MERGED, refused=None), branch_prs=[PR])
+assert v[0] == cards.KEEP and "거부 기록을 읽지 못함" in v[1], v
+(refused_state / rm_refused.NAME).write_text(json.dumps({"path": CARD, "ino": 1, "t": 0}) + "\n")
+assert rm_refused.read(refused_state) == {}
+(refused_state / rm_refused.NAME).write_text("{not json\n")
+assert rm_refused.read(refused_state) is None and rm_refused.held(CARD, refused_state) is None
+# Codex round 1: a folder that exists but whose identity cannot be read stays recorded; a recycled inode with another
+# birth time is a new card; an entry that recorded no identity is kept; the folder gone releases the record.
+(refused_state / rm_refused.NAME).unlink()
+ino, born = rm_refused.identity(CARD)
+record = lambda **kw: (refused_state / rm_refused.NAME).write_text(json.dumps({"path": CARD, "t": 0, **kw}) + "\n")
+record(ino=ino, born=(born or 0) + 5.0) if born is not None else record(ino=ino)
+assert (rm_refused.held(CARD, refused_state) is False) == (born is not None)
+record(ino=ino, born=born)
+real_identity = rm_refused.identity
+rm_refused.identity = lambda p: (_ for _ in ()).throw(PermissionError("denied"))
+assert rm_refused.held(CARD, refused_state), "an unreadable folder is not proof the card is new"
+rm_refused.identity = real_identity
+record(ino=None)
+assert rm_refused.held(CARD, refused_state)
+record(ino=ino, born=born)
+os.rename(CARD, CARD + "-moved")
+assert rm_refused.held(CARD, refused_state) is False
+os.rename(CARD + "-moved", CARD)
+try:
+    rm_refused.add(CARD + "-missing", refused_state)
+except SystemExit as e:
+    assert "nothing recorded" in str(e)
+else:
+    raise AssertionError("add must not record a folder it cannot read")
+# reap.act reads the record before it trashes anything and again right before `orca worktree rm`.
+saved_run, saved_state = reap.run, reap.STATE
+reap.STATE, ran = refused_state, []
+reap.run = lambda cmd, **k: ran.append(cmd) or ""
+out = reap.act({"kind": "orca-worktree", "key": "orca-worktree:" + CARD, "name": CARD}, [])
+assert out.startswith("건너뜀: 사람에게 넘김") and rm_refused.command(CARD) in out and not ran, (out, ran)
+# Codex round 2: a record that arrives while the ignored files go to the trash stops the rm (the second read).
+(refused_state / rm_refused.NAME).unlink()
+subprocess_ran = []
+saved_trash, saved_ls = reap.trash, reap.run
+reap.run = lambda cmd, **k: subprocess_ran.append(cmd) or ("a\0" if "ls-files" in cmd else "")
+reap.trash = lambda *paths: rm_refused.add(CARD, refused_state)
+out = reap.act({"kind": "orca-worktree", "key": "orca-worktree:" + CARD, "name": CARD}, [])
+assert out.startswith("건너뜀: 사람에게 넘김") and not any(c[:3] == ["orca", "worktree", "rm"] for c in subprocess_ran), (out, subprocess_ran)
+reap.trash, reap.run = saved_trash, saved_ls
+reap.run = lambda cmd, **k: ran.append(cmd) or ""
+# A record that is a link to nothing, or a row with a path that is not text, cannot be read.
+(refused_state / rm_refused.NAME).unlink()
+os.symlink(refused_state / "nowhere", refused_state / rm_refused.NAME)
+assert rm_refused.read(refused_state) is None
+(refused_state / rm_refused.NAME).unlink()
+(refused_state / rm_refused.NAME).write_text(json.dumps({"path": None, "ino": 1}) + "\n")
+assert rm_refused.read(refused_state) is None
+for bad in ({"ino": str(ino)}, {"ino": ino, "born": "yesterday"}, {"ino": True}, {"ino": ino + 0.5},
+            {"ino": ino, "born": float("nan")}):  # rounds 3-4: wrong-typed identity (NaN is written as a bare token)
+    (refused_state / rm_refused.NAME).write_text(json.dumps({"path": CARD, **bad}) + "\n")
+    assert rm_refused.read(refused_state) is None, bad
+for raw in ("[]", "null", '{"path": "' + CARD + '", "ino": 1, "born": ' + "9" * 400 + "}"):  # round 5: no crash either
+    (refused_state / rm_refused.NAME).write_text(raw + "\n")
+    assert rm_refused.read(refused_state) is None, raw
+(refused_state / rm_refused.NAME).write_text("{not json\n")
+out = reap.act({"kind": "orca-worktree", "key": "orca-worktree:" + CARD, "name": CARD}, [])
+assert out.startswith("건너뜀:") and "읽지 못함" in out and not ran, (out, ran)
+reap.run, reap.STATE = saved_run, saved_state
 
 # Open PR: the worktree stays, only its idle agent terminal is closed.
 OPEN = {"acme/app#7": {"state": "OPEN", "headRefOid": HEAD}}
@@ -381,6 +455,35 @@ for why, code in (("검사를 마치지 못함(PermissionError: x)", 1), ("보�
     else:
         raise AssertionError("apply must exit")
 guard.keep, guard.ownership, cards.act, sys.argv = saved_keep, saved_own, saved_act, saved_argv
+
+# A restart abandons the Dispatches whose terminals it took; their cards wait for a resume, so the janitor must not
+# act on them: the resumed session's terminal looks idle (it waits for its instruction), and closing it or reading
+# its state as finished is what the recovery needs undone.
+def dispatch(d, status, wt=CARD, **kw):
+    return {"dispatchId": d, "runId": "run_a", "dispatchStatus": status, "terminalState": "retained",
+            "resource": {"worktreeId": "w::" + wt}, "projection": {"outcome": "failed" if status == "abandoned" else "succeeded"}, **kw}
+
+
+assert reap.recovering_worktrees([dispatch("d_new", "abandoned")]) == {CARD: "d_new"}
+assert reap.recovering_worktrees([dispatch("d_int", "interrupted")]) == {CARD: "d_int"}
+assert reap.recovering_worktrees([dispatch("d_ok", "completed")]) == {}
+# worker-list is newest first: a later Dispatch on the card (the resume, or finished work) ends the wait.
+assert reap.recovering_worktrees([dispatch("d_resume", "dispatched"), dispatch("d_old", "abandoned")]) == {}
+assert reap.recovering_worktrees([dispatch("d_done", "completed"), dispatch("d_old", "abandoned")]) == {}
+assert reap.recovering_worktrees([dispatch("d_other", "abandoned", wt="/other-card"), dispatch("d_ok", "completed")]) == \
+    {reap.real("/other-card"): "d_other"}
+# Orca may suffix the worktree id (`<repo>::<path>::workspace:<n>`): the card is the path alone.
+assert reap.recovering_worktrees([dispatch("d_ws", "abandoned", wt=CARD + "::workspace:1")]) == {CARD: "d_ws"}
+recovering = {"recovering": {CARD: "d_old"}}
+v = verdict(machine(prs=OPEN, **recovering), branch_prs=[{**PR, "state": "OPEN"}], terminals=[term("t1", True, 2 * 3600)])
+assert v[0] == cards.KEEP and v[2] == [] and "d_old" in v[1], v  # an open PR: without the guard this closes t1
+v = verdict(machine(prs=MERGED, **recovering), branch_prs=[PR], status=" M a.py\n")
+assert v[0] == cards.KEEP and "d_old" in v[1], v
+# Nothing left to lose once the PR merged and the tree is clean: the card is cleaned as before.
+assert verdict(machine(prs=MERGED, **recovering), branch_prs=[PR])[0] == cards.REMOVE
+# A card whose Dispatch is not waiting for a resume keeps the old verdict.
+v = verdict(machine(prs=OPEN, recovering={}), branch_prs=[{**PR, "state": "OPEN"}], terminals=[term("t1", True, 2 * 3600)])
+assert v[0] == cards.CLOSE, v
 
 # janitor integration: card is the scheduled kind, the old card kinds are not.
 assert "card" in reap.SCHEDULED and "orca-worktree" not in reap.SCHEDULED and "done-card" not in reap.SCHEDULED
