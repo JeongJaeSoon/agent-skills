@@ -330,6 +330,16 @@ class LostDispatch(unittest.TestCase):
         self.assertNotIn("run-use", out[0])
         self.assertIn("orch set acme run run_own", out[0])
 
+    def test_the_abandoned_row_of_this_terminal_is_no_dispatch(self):
+        gone = {"dispatchId": "ctx_gone", "taskId": "t", "runId": "run_parent", "terminalState": "retained",
+                "dispatchStatus": "abandoned", "agentTerminalHandle": ME}
+        self.program(lead_dispatch="ctx_gone")
+        for bound, expect in ((None, "run-create"), ("run_own", "orch set acme run run_own")):
+            out = does(run("lead", "acme", orca=Orca(run=bound, workers=[gone]), procs=wait_proc(200, "orch wait acme")))
+            self.assertEqual(len(out), 1, bound)
+            self.assertIn(expect, out[0])
+            self.assertNotIn("run-use", out[0])
+
     def test_a_lead_that_was_never_dispatched_still_gets_run_use(self):
         self.program()
         out = does(run("lead", "acme", procs=wait_proc(200, "orch wait acme")))

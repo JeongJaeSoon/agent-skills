@@ -134,6 +134,13 @@ def check_handle(handle, call, root):
                    "so the variable is renewed")], None, None
 
 
+def own_dispatch(call, handle):
+    """This terminal's Dispatch while it still works for a Run. An abandoned one is the Dispatch the restart took: Orca
+    keeps its row on the terminal, but the lead has lost it."""
+    mine = orca_settings.terminal_dispatch(call, handle, settled=True)
+    return None if mine and mine.get("dispatchStatus") in RESTART_LOST else mine
+
+
 def check_run(role, run, handle, call, lead_dispatch=None, slug=None):
     """(lines, the Run whose workers to check or None, this terminal's own Dispatch when it is a dispatched lead).
     lead_dispatch: the Dispatch program.json says this lead worked under."""
@@ -141,7 +148,7 @@ def check_run(role, run, handle, call, lead_dispatch=None, slug=None):
         return [], None, None
     bound_id = (orca_settings.run_current(call, "--from", handle) or {}).get("id")
     if bound_id and role == "lead" and lead_dispatch and run and bound_id != run \
-            and not orca_settings.terminal_dispatch(call, handle, settled=True):
+            and not own_dispatch(call, handle):
         # run-create was done and the session ended before `orch set`: the program still names its coordinator's Run.
         return [("do", f"this dispatched lead lost its Dispatch ({lead_dispatch}) and is bound to its own Run {bound_id}, "
                        f"but the program still names {run}: `orch set {slug or '<slug>'} run {bound_id}` (it also drops "
@@ -149,7 +156,7 @@ def check_run(role, run, handle, call, lead_dispatch=None, slug=None):
     if bound_id and (not run or bound_id == run):
         return [("ok", f"bound to Run {bound_id}")], bound_id, None
     if not bound_id and role == "lead":
-        mine = orca_settings.terminal_dispatch(call, handle, settled=True)
+        mine = own_dispatch(call, handle)
         if mine:  # a lead started as a dispatched worker: Orca refuses it a binding to the Run it works for
             return [("ok", f"dispatched lead ({mine.get('dispatchId')} on Run {mine.get('runId')}): binds no Run")], \
                 mine.get("runId"), mine.get("dispatchId")

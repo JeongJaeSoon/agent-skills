@@ -36,7 +36,7 @@ It only reads: Orca's terminal, Run and worker records, this session's process t
 
 For a worker the check printed as abandoned, in this order, each in its own call:
 
-1. Find its session id: the newest transcript under `~/.claude/projects/<the worktree path, / as ->/`, the file name without `.jsonl`. Its model alias is the one the line prints (`--model`), else the one in its brief.
+1. Find its session id: the newest transcript under `~/.claude/projects/<the worktree path with every character other than a letter or digit written as ->/` (`/work/my_app` is `-work-my-app`), the file name without `.jsonl`. Its model alias is the one the line prints (`--model`), else the one in its brief.
 2. Open a terminal in its worktree that resumes that session: `orca terminal create --worktree path:<worktree> --command "claude --resume <session-id> --model <alias>"`. It prints the new terminal's handle.
 3. Write what the worker should do next to a file (read what it was doing from its brief and its last turns; a restart is no reason to restate the whole brief), then attach a new Dispatch to that terminal: `orca orchestration worker-start --spec-file <that file> --worktree path:<worktree> --terminal <the new handle>`. That, not the terminal alone, gives the worker its mailbox and `worker_done` back.
 4. Run the check again: the worker's newest Dispatch is now `dispatched`, so the line is gone.

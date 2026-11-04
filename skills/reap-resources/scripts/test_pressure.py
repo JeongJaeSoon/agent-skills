@@ -335,7 +335,7 @@ assert "/usr/bin" in s["EnvironmentVariables"]["PATH"]
 
 # `turns --wait` without a usable minute count is an error: it used to skip the wait and end 0 as if the cap had cleared.
 import contextlib, io
-for bad in (["turns", "--wait"], ["turns", "--wait", "soon"], ["turns", "--wait", "-3"], ["turns", "--wait", "nan"],
+for bad in (["turns", "--wait"], ["turns", "--wait", "soon"], ["turns", "--wait", "-3"], ["turns", "--wait", "nan"], ["turns", "--wait", "inf"], ["turns", "--wait", "1e999"],
             ["turns", "--set", "active_turns_per_cpu=0.5", "--wait"]):
     err = io.StringIO()
     with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):

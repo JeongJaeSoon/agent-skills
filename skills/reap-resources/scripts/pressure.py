@@ -1079,7 +1079,7 @@ def main(argv):
                 minutes = float(argv[i]) if i < len(argv) else None
             except ValueError:
                 minutes = None
-            if minutes is None or not minutes >= 0:  # nan and negatives fail the comparison
+            if minutes is None or not 0 <= minutes < math.inf:  # nan, negatives and inf (a wait with no end) fail
                 print("--wait needs the minutes to wait, e.g. `turns --wait 3`", file=sys.stderr)
                 return 2
             return turns_wait(cfg, minutes)
