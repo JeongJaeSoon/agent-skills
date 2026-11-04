@@ -138,6 +138,7 @@ CONFIG.write_text(json.dumps({"orchestrate": {"models": {"lead": "opus", "worker
 assert model_warning("orca agent launch --agent claude --worktree active --model opus") == "", "not a worker start"
 assert model_warning(f"MODEL=sonnet {START} --model \"$MODEL\"") == "", "a value the shell expands is not judged"
 assert model_warning(f"{START} --model claude-sonnet-4-?") == "", "a glob the shell may expand is not judged"
+assert model_warning(f"{START} --model {{sonnet,}}") == "", "a brace expansion is not judged"
 CONFIG.write_text(json.dumps({"orchestrate": {"models": {"worker": "sonnet"}, "model_flag": "deny"}}))
 assert bash(f"{START} --spec 'x' --model opus", "lead") in ("none", "allow"), "a comparison never blocks, whatever the level"
 CONFIG.write_text(json.dumps({"orchestrate": {"models": {"lead": "opus"}}}))
