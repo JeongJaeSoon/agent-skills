@@ -201,7 +201,7 @@ The collector runs `tidy.run()` after each tick, so nobody has to ask. It closes
 | A doing item | every PR it names, or its card's PR, merged | the card still works, or its next step has a step after the merge (a release, a deploy, an apply) |
 | A card row (no agent, or its session off) | its PR closed unmerged | — |
 | A line of the owner's now-list (`orch board now`) | every PR it names merged or closed | — |
-| A pressure queue entry that ended `gave_up` or `failed` | its row's ❔ only, 3 hours after it ended (`rowstate.QUEUE_ENDED_H`): a retry under other text is another entry, so nothing else closes it. `pressure.py queue` keeps it 7 days | — |
+| A pressure queue entry that ended `gave_up` or `failed` | its row's ❔ and its line in the `reboot` check, 3 hours after it ended (`rowstate.queue_over`, with `rowstate.QUEUE_ENDED_H`, decides both): a retry under other text is another entry, so nothing else closes it. `pressure.py queue` keeps it 7 days | — |
 | A to-do (`orch board todo`) | never: when its date or condition comes it moves to 지금 오너가 할 일 or 카드 없는 일 and waits for Done | — |
 | An inbox item from `orch-dash inbox add`, of a type the owner does not act on | every PR it names merged or closed, or its session is gone from Orca's list | — |
 | A held item | never: a fired trigger means the work is due | its trigger says merge and every PR or card it names merged; it moves from 보류 to 카드 없는 일 |
