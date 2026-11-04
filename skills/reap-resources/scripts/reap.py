@@ -2543,10 +2543,11 @@ def main():
             protect = guard.read_protect(guard.protect_file(), missing_ok=True)
         except (guard.Unreadable, guard.NoProtect) as e:
             print(f"- 아무것도 하지 않았다: {e}")
-            return
+            sys.exit(1)  # a check that could not run is not a clean round: the caller must see it
         kinds = {i["kind"] for i in wanted.values()}
         fresh, notes = scan(kinds, plan["hours"], cfg, plan["repos"])
         failed = []
+        unchecked = False
         now = {i["key"]: i for i in fresh if i["target"]}
         for key, old in wanted.items():
             new = now.get(key)
@@ -2561,6 +2562,9 @@ def main():
                 why = guard.keep(new, protect, notes=notes) if got else guard.LOCK_BUSY
                 if why:
                     print(f"- 건너뜀 {label(new)}: {why}")
+                    if guard.check_error(why):  # left, but not decided: the round ends non-zero after the others run
+                        failed.append(key)
+                        unchecked = True
                     continue
                 done = {}
                 try:
@@ -2580,6 +2584,8 @@ def main():
             stamp_user_folder(STATE, kind=k)
         for n in notes:
             print(f"- 메모: {n}")
+        if unchecked:
+            sys.exit(1)
         return
     if cmd == "load":
         data = load_report(cfg, int(opt("--top") or 10))
