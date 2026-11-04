@@ -258,9 +258,12 @@ ACT = ("owner", "held", "check", "blocked")  # a 지금 with work left keeps its
 
 
 def with_now(t, by_pr):
-    """t with each work row's `now`: the brief's status of the one board row its PR links (rowstate.by_pr), or None."""
+    """t with each work row's `now`: the brief's status of the one board row its PR links (rowstate.by_pr), or None;
+    its rows in the brief's order (rowstate.order_tree)."""
+    import rowstate
     by_pr = by_pr or {}
-    return {**t, "rows": [r if r.get("group") else {**r, "now": by_pr.get(r.get("pr"))} for r in t["rows"]]}
+    rows = [r if r.get("group") else {**r, "now": by_pr.get(r.get("pr"))} for r in t["rows"]]
+    return {**t, "rows": rowstate.order_tree(rows)}
 
 
 def current(t, now, idle_s, state=None, by_pr=None, now_known=True):
