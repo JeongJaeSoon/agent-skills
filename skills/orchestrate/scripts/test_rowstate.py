@@ -179,6 +179,11 @@ assert rowstate.judge(held_row, facts({"octo/app#1": no_revs}))["status"] == "he
 no_draft = {k: v for k, v in READY.items() if k != "draft"}
 assert rowstate.judge(held_row, facts({"octo/app#1": no_draft}))["status"] == "held"
 assert rowstate.judge({**row, "owner": "rev-b"}, facts({"octo/app#1": no_ci}))["status"] == "waiting"
+# Reviewers known and the owner not among them: no draft flag is needed to pass rule 2, for a person or a team asked.
+for who in ("rev-a", "team:dev"):
+    other_asked = {k: v for k, v in READY.items() if k != "draft"} | {"reviewers": [{"login": who, "requested": True}]}
+    assert rowstate.judge(held_row, facts({"octo/app#1": other_asked}))["status"] == "held", who
+    assert rowstate.judge({**row, "owner": "rev-b"}, facts({"octo/app#1": other_asked}))["status"] == "waiting", who
 # A team asked needs no owner login to be another's wait; a person asked does.
 assert rowstate.judge(row, facts({"octo/app#1": team}, me=None))["status"] == "waiting"
 # A stale session list is no evidence an agent works on the draft.

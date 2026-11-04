@@ -326,15 +326,18 @@ def judge(r, f, lead=None, sid=None):
         return gap("오너 login 모름")  # --owner may name the owner by login
     if r.get("owner") and is_owner(r["owner"], me) or status == "owner" and not r.get("owner"):
         hit("owner", nxt, what=nxt or "응답")
-    # A missing detail stops a rule only while the rule may still apply: a draft, or a PR known to ask nobody, cannot.
-    review_off = is_open and (p.get("draft") is True or "reviewers" in p and not asked(p))
-    if not review_off and lacks("draft", "reviewers"):
-        return gap("PR 상세 모름")
-    if is_open and not review_off:
+    # A missing detail stops a rule only while the rule may still apply: a draft asks no review, and a PR whose
+    # requested reviewers are known not to include the owner needs no draft flag to say the owner is not asked.
+    draft_on = is_open and p.get("draft") is True
+    if is_open and not draft_on:
+        if lacks("reviewers"):
+            return gap("PR 상세 모름")
         people = asked(p)
         if not me and any(not is_team(a) for a in people):  # a team is never the owner; a person may be
             return gap("오너 login 모름")
         if any(is_owner(a, me) for a in people):
+            if lacks("draft"):
+                return gap("PR 상세 모름")
             hit("owner", nxt, what="리뷰")
 
     # 3 ⏸️ a condition holds it
@@ -362,11 +365,11 @@ def judge(r, f, lead=None, sid=None):
 
     # 4 ⏳ another person
     named = r.get("owner") and not is_owner(r["owner"], me)  # ⏳ already, whatever the review says
-    others = [a for a in asked(p) if not is_owner(a, me)] if is_open and not review_off else []
-    off = review_off or not others or p.get("ci") == "failure" or p.get("decision") == "CHANGES_REQUESTED"
-    if not off and not named and lacks("ci", "decision"):
+    others = [a for a in asked(p) if not is_owner(a, me)] if is_open and not draft_on else []
+    off = draft_on or not others or p.get("ci") == "failure" or p.get("decision") == "CHANGES_REQUESTED"
+    if not off and not named and lacks("draft", "ci", "decision"):
         return gap("PR 상세 모름")
-    if not off and not lacks("ci", "decision") and reviewable(p):
+    if not off and not lacks("draft", "ci", "decision") and reviewable(p):
         hit("waiting", "" if nxt in GENERIC_NEXT else nxt, who=", ".join(others), what="리뷰")
     if named:
         hit("waiting", nxt, who=r["owner"])
