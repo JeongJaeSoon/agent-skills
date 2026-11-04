@@ -49,7 +49,8 @@ board_store = {"v": 1, "rows": {}, "order": [], "doing": doing, "later": [], "to
                                                                    "created_at": "2026-01-01T00:00:00Z"}}}))
 import store  # noqa: E402
 store.import_apply(checks=False)  # decisions.json is now an empty directory and the decision is in agent-skills.db
-first, owned = tidy.item_id("doing", doing[0]), tidy.item_id("doing", doing[5])
+ids = [d["id"] for d in store.board()["doing"]]
+first, owned = ids[0], ids[5]
 
 
 def run(*args):
@@ -68,30 +69,26 @@ assert code == 0, err
 assert snapshot() == before, "dry-run wrote a file"
 p = orca_migrate.plan()
 assert [c["id"] for c in p["close"]] == [first, owned], p
-assert [c["id"] for c in p["tick"]] == [tidy.item_id("doing", doing[1])], p
-assert [c["id"] for c in p["steps"]] == [tidy.item_id("doing", d) for d in doing[6:9]], p
+assert [c["id"] for c in p["tick"]] == [ids[1]], p
+assert [c["id"] for c in p["steps"]] == ids[6:9], p
 assert [l["name"] for l in p["leads"]] == ["lead:x"] and p["leads"][0]["in_fleet"], p
 assert [d["id"] for d in p["decisions"]] == ["d1"], p
 assert "Orca 카드 ABC-1 로그인 (working)" in out and "dry-run" in out, out
 
-# Apply: backup first, then one done line by migrate; board.json untouched.
+# Apply: backup first, then one close by migrate per line; the backup is the DB from before them.
 code, out, err = run("--apply")
 assert code == 0, err
 backups = [d for d in sd.iterdir() if d.name.startswith("backup-orca-v2-")]
 assert len(backups) == 1, backups
 bk = backups[0]
 assert stat.S_IMODE(bk.stat().st_mode) == 0o700
-for name in ("board.json", store.DB_NAME):
-    assert stat.S_IMODE((bk / name).stat().st_mode) == 0o600
-assert (bk / "board.json").read_bytes() == before["board.json"]
-assert not (bk / "tidy.jsonl").exists()  # there was none before
-assert not (bk / "decisions.json").exists()  # the tombstone directory is not copied; the DB copy holds the decision
+assert stat.S_IMODE((bk / store.DB_NAME).stat().st_mode) == 0o600
 was = os.environ["ORCH_FLEET_STATE"]
 os.environ["ORCH_FLEET_STATE"] = str(bk)
 assert [d["id"] for d in store.decisions()] == ["d1"]  # the backup is a whole, readable DB
+assert [d["id"] for d in store.board()["doing"]] == ids
 os.environ["ORCH_FLEET_STATE"] = was
 assert json.loads((bk / "migrate.json").read_text())["closed"] == [first, owned]
-assert (sd / "board.json").read_bytes() == before["board.json"]
 cur = tidy.latest()[first]
 assert cur["ev"] == "done" and cur["by"] == "migrate" and cur["rule"] == "moved_to_orca", cur
 assert f"--restore {bk}" in out and f"orch board reopen {first} {owned}" in out, out
@@ -111,10 +108,10 @@ code, out, err = run("--restore", str(bk))
 assert code == 0 and "reopened 0" in out and f"already reopened: {first} {owned}" in out, out
 
 # A close the owner made after migrate is not undone by restore.
-tidy.append([{"ev": "done", "id": first, "ts": fleet.iso(fleet.utcnow()), "by": "owner", "rule": "manual",
-              "evidence": "오너", "label": "x"}], tidy.latest())
-ids, again, skipped = orca_migrate.restore(bk)
-assert ids == [] and again == [owned] and skipped == [first]
+with store.tx() as db:
+    store.close_unit(db, {"id": first, "ts": fleet.iso(fleet.utcnow()), "by": "owner", "rule": "manual", "evidence": "오너", "label": "x"})
+opened, again, skipped = orca_migrate.restore(bk)
+assert opened == [] and again == [owned] and skipped == [first]
 
 # Bad input.
 code, out, err = run("--restore", str(tmp))

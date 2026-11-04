@@ -1,6 +1,6 @@
 """Offline tests for store.py (agent-skills.db): import and its tombstone, re-runs and conflicts, crashes at each step,
-legacy export, backup and restore, the guard older board and tidy writes pass, WAL, locks and transaction bounds,
-cutover-plan and the preflight. Everything runs in temporary state directories with invented data.
+legacy export, backup and restore, WAL, locks and transaction bounds, cutover-plan and the preflight. The board's step
+is test_store_board.py's. Everything runs in temporary state directories with invented data.
 
 Run: python3 test_store.py
 """
@@ -65,14 +65,14 @@ with state("import") as sd:
     assert (sd / "decisions.json").is_dir() and not any((sd / "decisions.json").iterdir())
     assert stat.S_IMODE(store.path().stat().st_mode) == 0o600
     db = raw()
-    row = dict(db.execute("SELECT * FROM migration").fetchone())
+    row = dict(db.execute("SELECT * FROM migration WHERE step='4a-decisions'").fetchone())
     backup = pathlib.Path(row["backup"])
     assert row["step"] == "4a-decisions" and row["stage"] == "tombstoned", row
     assert stat.S_IMODE(backup.stat().st_mode) == 0o700 and stat.S_IMODE((backup / "decisions.json").stat().st_mode) == 0o600
     assert (backup / "decisions.json").read_bytes() == original
     assert json.loads(row["sources"]) == {"decisions.json": store.sha256(backup / "decisions.json")}
-    assert db.execute("PRAGMA journal_mode").fetchone()[0] == "wal" and db.execute("PRAGMA user_version").fetchone()[0] == 1
-    ev = [dict(r) for r in db.execute("SELECT entity, id, ev, after FROM event ORDER BY seq")]
+    assert db.execute("PRAGMA journal_mode").fetchone()[0] == "wal" and db.execute("PRAGMA user_version").fetchone()[0] == 2
+    ev = [dict(r) for r in db.execute("SELECT entity, id, ev, after FROM event WHERE id != '4b-board' ORDER BY seq")]
     assert [(e["entity"], e["id"], e["ev"]) for e in ev] == [
         ("decision", "d1", "import"), ("decision", "d2", "import"), ("decision", "d3", "import"),
         ("migration", "4a-decisions", "imported"), ("migration", "4a-decisions", "tombstoned")], ev
@@ -96,13 +96,9 @@ with state("import") as sd:
     assert {d["id"] for d in store.decisions()} == {"d1", "d2", "d3", "d4"}
     assert [r["ev"] for r in raw().execute("SELECT ev FROM event WHERE id='d4' ORDER BY seq")] == ["add", "keep", "done"]
 
-    # export --legacy --target pre-4a: the decisions.json the code before 4a reads, d4 included.
-    code, out, err = orch("db", "export", "--legacy", "--target", "pre-4a", str(tmp / "export"))
-    assert code == 0 and "4 decisions" in out and "wal checkpoint: done" in out, (out, err)
-    exported = json.loads((tmp / "export" / "decisions.json").read_text())
-    assert exported["next"] == 5 and {k: v for k, v in exported["decisions"].items() if k != "d4"} == LEGACY["decisions"]
-    assert stat.S_IMODE((tmp / "export" / "decisions.json").stat().st_mode) == 0o600
-    assert orch("db", "export", "--legacy", "--target", "4a", str(tmp / "x"))[0] == 1  # 4a code has no 4b to undo
+    # export --legacy --target pre-4a waits for 4b to be undone: code before 4a would have no board at all.
+    code, _, err = orch("db", "export", "--legacy", "--target", "pre-4a", str(tmp / "early"))
+    assert code == 1 and "rollback 4b" in err and not (tmp / "early").exists(), err
 
     # backup -> restore elsewhere: a lossless round trip of every table.
     before = store.dump()
@@ -112,6 +108,14 @@ with state("restored") as sd2:
     assert store.restore(tmp / "copy.db", checks=False) == store.path()
     assert store.dump() == before and (sd2 / "decisions.json").is_dir()
     assert raw(sd2).execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+with state("pre-4a") as sd:  # with 4b not in, the decisions.json the code before 4a reads, what came after included
+    legacy(sd)
+    store.import_apply(checks=False, upto=store.DECISION_STEP)
+    code, out, err = orch("db", "export", "--legacy", "--target", "pre-4a", str(tmp / "export"))
+    assert code == 0 and "3 decisions" in out and "wal checkpoint: done" in out, (out, err)
+    exported = json.loads((tmp / "export" / "decisions.json").read_text())
+    assert exported["next"] == 4 and exported["decisions"] == LEGACY["decisions"]
+    assert stat.S_IMODE((tmp / "export" / "decisions.json").stat().st_mode) == 0o600
 with state("restore-onto-legacy") as sd3:
     legacy(sd3)
     try:
@@ -130,11 +134,11 @@ with state("gate") as sd:
             pass
     assert fleet.relay_decisions() == [] and fleet.decision_items({}, None) == [] and not store.path().exists()
     code, _, err = orch("decide", "add", "--title", "x")
-    assert code == 1 and "orch db cutover-plan 4a" in err and not store.path().exists(), err
+    assert code == 1 and "orch db cutover-plan 4b" in err and not store.path().exists(), err
     # A DB with the schema but without this code's data step is refused too.
     db = sqlite3.connect(str(store.path()))
     db.executescript(store.SCHEMA)
-    db.execute("PRAGMA user_version=1")
+    db.execute(f"PRAGMA user_version={store.SCHEMA_VERSION}")
     db.close()
     try:
         store.open_db()
@@ -205,9 +209,9 @@ for name, touch in (("crash-after-commit", False), ("crash-then-write", True)):
                 assert "conflict: decisions.json changed after the import" in str(e), e
             assert (sd / "decisions.json").is_file() and store.migrated_steps() == {"4a-decisions": "imported"}
         else:  # same sha256: the re-run only lays the tombstone
-            assert store.import_apply(checks=False) == "tombstoned decisions.json"
+            assert store.import_apply(checks=False, upto=store.DECISION_STEP) == "tombstoned decisions.json"
             assert (sd / "decisions.json").is_dir() and store.migrated_steps() == {"4a-decisions": "tombstoned"}
-            assert len([d for d in store.decisions()]) == 3  # imported once, not twice
+            assert raw().execute("SELECT count(*) FROM decision").fetchone()[0] == 3  # imported once, not twice
             # Old code writing after the cutover is shown, and a re-run refuses to paper over it.
             (sd / "decisions.json").rmdir()
             (sd / "decisions.json").write_text("{}")
@@ -221,72 +225,14 @@ for name, touch in (("crash-after-commit", False), ("crash-then-write", True)):
 # ---- the tombstone fails older code's writes, and leaves no temporary file
 with state("tombstone") as sd:
     store.import_apply(checks=False)
-    for write in (lambda: fleet.write_atomic(sd / "decisions.json", "{}"), lambda: fleet.append_line(sd / "decisions.json", {})):
-        try:
-            write()
-            raise AssertionError("wrote through the tombstone")
-        except IsADirectoryError:
-            pass
+    for name in ("decisions.json", "board.json", "tidy.jsonl"):
+        for write in (lambda: fleet.write_atomic(sd / name, "{}"), lambda: fleet.append_line(sd / name, {})):
+            try:
+                write()
+                raise AssertionError("wrote through the tombstone")
+            except IsADirectoryError:
+                pass
     assert sorted(p.name for p in sd.iterdir() if p.name.startswith(".")) == []
-
-# ---- the guard: once 4b-board is in, this (4a) code's board and tidy writes stop before any side effect
-with state("guard") as sd:
-    import board, tidy
-    store.import_apply(checks=False)
-    board.change(lambda b: b["todo"].append({"title": "before 4b"}))
-    (sd / "inbox-external.jsonl").write_text(json.dumps({"v": 1, "op": "add", "key": "k1", "type": "question",
-                                                         "title": "x", "at": fleet.iso(fleet.utcnow())}) + "\n")
-    tidy.write(["ext:k1"], can={"ext:k1": "x"})
-    snap = {p: p.read_bytes() for p in sd.iterdir() if p.is_file() and not p.name.startswith(store.DB_NAME)}
-    # A writer already waiting on its lock while 4b records its row under that lock still stops: the guard runs
-    # after the lock is taken.
-    import fcntl, time  # noqa: E401
-    held = [(sd / "board.lock").open("a"), (sd / "tidy.lock").open("a")]
-    for f in held:
-        fcntl.flock(f, fcntl.LOCK_EX)
-    stopped = []
-
-    def waiting(write):
-        try:
-            write()
-        except store.LegacyStopped:
-            stopped.append(True)
-    waiters = [threading.Thread(target=waiting, args=(w,)) for w in (
-        lambda: board.change(lambda b: b["todo"].append({"title": "raced 4b"})),
-        lambda: tidy.write(["ext:k1"], undo=True))]
-    for t in waiters:
-        t.start()
-    time.sleep(0.5)
-    db = raw()
-    db.execute("INSERT INTO migration VALUES ('4b-board', 't', 'b', '{}', 'imported')")
-    db.commit()
-    db.close()
-    for f in held:
-        f.close()
-    for t in waiters:
-        t.join(10)
-    assert stopped == [True, True], stopped
-    assert {p: p.read_bytes() for p in sd.iterdir() if p.is_file() and not p.name.startswith(store.DB_NAME)} == snap
-    for write in (lambda: board.change(lambda b: b["todo"].append({"title": "after 4b"})),
-                  lambda: tidy.write(["ext:k1"], undo=True),           # a Reopen would add the inbox item again
-                  lambda: tidy.append([{"ev": "done", "id": "x"}], {})):
-        try:
-            write()
-            raise AssertionError("an old write went through")
-        except store.LegacyStopped:
-            pass
-    assert {p: p.read_bytes() for p in sd.iterdir() if p.is_file() and not p.name.startswith(store.DB_NAME)} == snap  # board, tidy and inbox lines untouched
-    # A decision write still works: 4a's own table is not the board.
-    assert fleet.decision_add("still fine")["id"] == "d1"
-# A DB that is there but cannot be read could hold 4b-board: the guard stops rather than guess.
-with state("guard-unreadable") as sd:
-    store.path().write_bytes(b"not a database, but the size of a header..." * 4)
-    try:
-        board.change(lambda b: b["todo"].append({"title": "x"}))
-        raise AssertionError("wrote past an unreadable DB")
-    except store.LegacyStopped as e:
-        assert "cannot tell" in str(e), e
-    assert not (sd / "board.json").exists()
 
 # ---- WAL, the write lock and transaction bounds
 with state("tx") as sd:

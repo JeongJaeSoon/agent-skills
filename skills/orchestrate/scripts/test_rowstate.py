@@ -50,7 +50,9 @@ state.mkdir(parents=True, exist_ok=True)
 (state / "state.json").write_text(json.dumps({"generated_at": NOW, "sessions": [
     {"id": "wt-lead", "kind": "orchestration", "phase": "working", "name": "lead",
      "terminals": [{"handle": "term_0FAKEL", "agent": "claude", "connected": True, "writable": True}]}]}))
-ok("board", "lead", "add", "L", "--handle", "term_0FAKEL", "--repo", "octo/app", "--worktree", "wt-lead")
+code, _, err = orch("board", "lead", "add", "L", "--handle", "term_0FAKEL", "--repo", "octo/app", "--worktree", "wt-lead")
+assert code != 0 and "Orca already knows lead wt-lead" in err, err  # the row links the lead Orca lists instead
+ok("board", "set", "L", "--kind", "lead", "--repo", "octo/app", "--worktree", "wt-lead")
 ok("board", "set", "L/merge", "--title", "머지 대기", "--pr", "octo/app#1", "--status", "waiting", "--next", "머지 대기")
 ok("board", "set", "L/dec", "--title", "결정 대기", "--pr", "octo/app#2", "--next", "구현")
 ok("decide", "add", "--title", "캐시 정책", "--option", "TTL 1h", "--option", "TTL 1d", "--recommend", "1", "--link", "octo/app#2")
@@ -87,7 +89,7 @@ for name in ("머지 대기", "결정 대기", "거부된 머지", "남 리뷰",
     assert sum(1 for l in text.splitlines() if l.startswith("| ") and f"└ {name} |" in l) == 1, (name, text)
 assert "🔄 **진행 중**" not in text and "| ↓ 오너 |" in text and "| ↓ 대기 |" in text and "| ↓ 보류 |" in text, text
 ok("board", "set", "L/after", "--after", "-")  # the record path takes the wait back
-assert "after" not in json.loads((state / "board.json").read_text())["rows"]["L/after"]
+assert "after" not in json.loads(ok("board", "show"))["rows"]["L/after"]
 
 # ---------------------------------------------------------------- the rules, on facts
 import rowstate  # noqa: E402

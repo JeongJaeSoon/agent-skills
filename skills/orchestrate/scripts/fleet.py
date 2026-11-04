@@ -1387,17 +1387,26 @@ def held_refs(text, prs):
     return sorted(set(pr_refs(text)) | bare)
 
 
+def board_open():
+    """The open board (store.board), or {} before `orch db import`: the collector goes on without it."""
+    import store as db_store
+    try:
+        return db_store.board()
+    except db_store.NotMigrated:
+        return {}
+
+
 def board_prs():
-    """The PR keys board.json's rows name, and every full owner/repo#N in its doing, later, todo and owner_todo text and in
-    the external inbox, from the items tidy.jsonl has not closed: a closed item no longer holds its PR in prs.json."""
+    """The PR keys the open board's rows name, and every full owner/repo#N in its doing, later, todo and owner_todo text and
+    in the external inbox: a closed item no longer holds its PR in prs.json."""
     import tidy
-    b, shut = read_json(state_dir() / "board.json", {}) or {}, tidy.closed()
-    open_ = lambda kind, items: [x for x in items or [] if tidy.item_id(kind, x) not in shut]  # noqa: E731
-    text = [f"{d.get('title')} {d.get('next')}" for d in open_("doing", b.get("doing"))]
-    text += [f"{l.get('title')} {l.get('trigger')}" for l in open_("later", b.get("later"))] + open_("todo", b.get("owner_todo"))
-    text += [f"{t.get('title')} {t.get('after') or ''}" for t in open_("do", b.get("todo"))]
+    b, shut = board_open(), tidy.closed()
+    text = [f"{d.get('title')} {d.get('next')}" for d in b.get("doing") or []]
+    text += [f"{l.get('title')} {l.get('trigger')}" for l in b.get("later") or []]
+    text += [t["title"] for t in b.get("owner_todo") or []]
+    text += [f"{t.get('title')} {t.get('after') or ''}" for t in b.get("todo") or []]
     text += [f"{i.get('title')} {i.get('url')} {i.get('command')}" for i in external_items({}) if i["key"] not in shut]
-    rows = {r.get("pr") for k, r in (b.get("rows") or {}).items() if isinstance(r, dict) and f"row:{k}" not in shut}
+    rows = {r.get("pr") for k, r in (b.get("rows") or {}).items() if f"row:{k}" not in shut}
     return (rows | set(pr_refs(" ".join(text)))) - {None}
 
 
@@ -2108,7 +2117,7 @@ class Fleet:
                  for it in items if it["key"] not in dismissed]
         import tidy
         details = {k: e["detail"] for k, e in self.prs.items() if e.get("detail")}
-        held = held_prs(read_json(state_dir() / "board.json", {}) or {}, tidy.closed(), details, now,
+        held = held_prs(board_open(), tidy.closed(), details, now,
                         tidy.cards_of(read_json(state_dir() / "state.json", {}), details), why := {})
         for i in items:
             if i.get("source") == "github" and i.get("pr") in held:
@@ -2215,20 +2224,85 @@ def decision_items(by_handle, root):
 EXTERNAL_KEEP_DAYS = 7  # an added item nobody resolved leaves the inbox this long after it was added
 
 
-def external_items(now=None):
-    """Items the orchestrator skill added with `orch-dash inbox add` (or by appending the same line), less resolved
-    ones and, given now, those added more than EXTERNAL_KEEP_DAYS before it."""
-    items = {}
-    for row in read_lines(state_dir() / "inbox-external.jsonl"):
-        key = f"ext:{row.get('key')}"
-        if row.get("op") == "resolve":
-            items.pop(key, None)
-        elif row.get("op") == "add" and row.get("type"):
-            items[key] = {"key": key, "type": row["type"], "session": row.get("session"), "title": mask(row.get("title"), 200),
+def inbox_lines():
+    """{key: [(row, mark)]} of the add and resolve lines in inbox-external.jsonl, in file order. mark is "<end byte
+    offset>:<sha256>" of the line: the file only grows, so a line's place says what came first, and two identical lines
+    in one second stay two. A last line with no newline is still being written."""
+    try:
+        data = (state_dir() / "inbox-external.jsonl").read_bytes()
+    except OSError:
+        return {}
+    out, at = {}, 0
+    while (end := data.find(b"\n", at)) >= 0:
+        line, at = data[at:end + 1], end + 1
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and (row.get("op") == "resolve" or row.get("op") == "add" and row.get("type")):
+            out.setdefault(row.get("key"), []).append((row, f"{at}:{hashlib.sha256(line).hexdigest()}"))
+    return out
+
+
+def inbox_anchors():
+    """{key: {"add": mark, "resolve": mark}} of each key's last add and resolve line: where a tidy line from before
+    closures lands, since that tidy wrote the resolve before its done and the add before its reopen."""
+    return {key: {row["op"]: mark for row, mark in rows} for key, rows in inbox_lines().items()}
+
+
+def ext_state(rows, closure):
+    """(the add line a key shows, or None; whether the closure's mark was lost), from its lines and its closure row.
+    With no closure or no mark the last line decides. Lines after the mark are a writer's news after the close or reopen,
+    and the last of them decides. With none, the closure does: done hides, reopen shows the last add from the reopen's
+    time. A mark no line matches means the file was rewritten: the last line decides, and the caller warns."""
+    last_is_add = rows[-1][0] if rows[-1][0].get("op") == "add" else None
+    if not closure or not closure.get("ext_mark"):
+        return last_is_add, False
+    i = next((n for n, (_, mark) in enumerate(rows) if mark == closure["ext_mark"]), None)
+    if i is None:
+        return last_is_add, True
+    if i < len(rows) - 1:
+        return last_is_add, False
+    if closure["state"] == "done":
+        return None, False
+    add = next((row for row, _ in reversed(rows) if row.get("op") == "add"), None)
+    return add and {**add, "at": closure["ts"]}, False
+
+
+def external_marked(now=None, lost=None):
+    """external_items(), each with "mark", the last line of its key in this same read of the file. lost, a list, gets the
+    keys whose closure mark no line matches."""
+    import store as db_store
+    closures, items = db_store.ext_closures(), []
+    for key, rows in inbox_lines().items():
+        row, gone = ext_state(rows, closures.get(key))
+        if gone and lost is not None:
+            lost.append(key)
+        if row:
+            items.append({"key": f"ext:{key}", "type": row["type"], "session": row.get("session"), "title": mask(row.get("title"), 200),
                           "url": row.get("url"), "command": mask(row.get("command"), 500), "at": row.get("at"),
-                          "source": row.get("source") or "skill"}
+                          "source": row.get("source") or "skill", "mark": rows[-1][1]})
     cutoff = iso(now - dt.timedelta(days=EXTERNAL_KEEP_DAYS)) if now else ""
-    return [i for i in items.values() if (i["at"] or "") >= cutoff]
+    return [i for i in items if (i["at"] or "") >= cutoff]
+
+
+def external_items(now=None):
+    """Items the orchestrator skill added with `orch-dash inbox add` (or by appending the same line), as the file and the
+    closures together leave them, less, given now, those added more than EXTERNAL_KEEP_DAYS before it."""
+    return [{k: v for k, v in i.items() if k != "mark"} for i in external_marked(now)]
+
+
+def inbox_for_export(closures):
+    """The lines an inbox copy needs at its end so that the file alone says what the closures do: older code reads no
+    closure, only the file's last line per key."""
+    out = []
+    for key, rows in inbox_lines().items():
+        file_says, shown = ext_state(rows, None)[0], ext_state(rows, closures.get(key))[0]
+        if file_says and not shown:
+            out.append({"v": 1, "op": "resolve", "key": key, "at": closures[key]["ts"]})
+        elif shown and (not file_says or shown.get("at") != file_says.get("at")):
+            out.append(shown)
+    return out
 
 
 def sync_items(now, terms=None):
@@ -2394,7 +2468,7 @@ def held_prs(store, shut, prs, now, cards=None, why=None):
     items = [("later", l, l["trigger"]) for l in store.get("later") or []]
     items += [("do", t, t.get("after") or "") for t in store.get("todo") or []]
     for kind, l, trigger in items:
-        if tidy.item_id(kind, l) in shut:
+        if l["id"] in shut:
             continue
         if kind == "do":
             if todo_come(l, now, prs, cards):

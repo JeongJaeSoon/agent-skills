@@ -57,7 +57,7 @@ import contextlib, datetime as dt, fcntl, hashlib, json, os, pathlib, re, secret
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 sys.path.insert(1, str(pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts"))
-import card_watch, cardguard, dash, fleet, prog  # noqa: E402
+import card_watch, cardguard, dash, fleet, prog, store  # noqa: E402
 try:  # dash put the repo's scripts/ on the path
     from sync import BACKGROUND, STALE_COMMAND, stale_signal  # noqa: E402
 except ImportError:  # an install without the repo's scripts/: H judges nothing
@@ -190,15 +190,8 @@ def consumers():
 
 
 def read_board():
-    """board.json, {} when there is none; an unreadable one raises, so D keeps its findings and clocks."""
-    try:
-        text = (fleet.state_dir() / "board.json").read_text()
-    except FileNotFoundError:
-        return {}
-    board = json.loads(text)
-    if not isinstance(board, dict):
-        raise ValueError("board.json is not an object")
-    return board
+    """The open board. Unreadable or not imported yet raises, so D keeps its findings and clocks."""
+    return store.board()
 
 
 def gather(now, deadline, memo):
@@ -239,7 +232,7 @@ def gather(now, deadline, memo):
         st = {}
     facts["sessions"] = st.get("sessions") or []
     facts["prs"] = {p.get("key"): p for p in st.get("prs") or [] if p.get("key")}
-    facts["board"] = take("board.json", read_board, {}, "board") if st else {}
+    facts["board"] = take("board", read_board, {}, "board") if st else {}
     facts["state"] = st
     facts["supersedes"] = take("orch sent log", lambda: sent_supersedes(fleet.utcnow()), [], "sent")
     facts["level"], _ = pressure_level()
@@ -431,7 +424,7 @@ def judge(facts, memo):
         text = f"{d.get('title')} {d.get('next') or ''}"
         if d.get("waiting") or fleet.pr_refs(text) or tidy.named(text, cards):
             continue
-        iid = tidy.item_id("doing", d)
+        iid = d["id"]
         if iid in shut:
             continue
         if first_seen(f"D:{iid}") >= NOREF_H:

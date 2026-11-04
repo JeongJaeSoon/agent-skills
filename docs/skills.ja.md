@@ -292,7 +292,7 @@ PR を受け持つスキルとマージする主体:
 - **いつ:** 「할 일 보여줘」（予定を見せて）、「보류 큐 보여줘」（保留キューを見せて）、`/agent-skills:todo`。`brief` は予定と保留キューを1行で数えるだけなので、一覧が必要なときに呼びます。
 - **内容:**
   - `orch board todo list [--telegram]` の出力をそのまま送ります。表は二つです。予定の表（状態 ⏰ 到来 / 📅 待ち · いつ · やること · 担当）は到来したものが先、次に日付順、日付のないものは入れた順です。保留キューの表（# · やること · 次に着手する条件 · 担当）は順番どおりで、先頭に ▶（次に着手）が付きます。番号は閉じた項目を除いた1からの順番で、`later move`・`later drop`・`todo from-later` が受け取る番号と同じです。表の見出しの件数は brief の1行と同じ基準です。78列に収めるために長い欄だけを `…[n]` で切り、原文を表の下に置きます。Telegram では表を使わず行で書きます。
-  - 追加と完了: 予定は `orch board todo add <作業> (--due D | --after C) --who W`、閉じるのは `orch board done do:<k>`、保留の項目を予定に変えるのは `todo from-later <n> --who W` です。保留は `orch board later add <作業> --trigger <次に着手する条件> [--who W] [--at N]`、順番の移動は `later move <n> --to N` です。
+  - 追加と完了: 予定は `orch board todo add <作業> (--due D | --after C) --who W`、閉じるのは `orch board done <id>`、保留の項目を予定に変えるのは `todo from-later <n> --who W` です。保留は `orch board later add <作業> --trigger <次に着手する条件> [--who W] [--at N]`、順番の移動は `later move <n> --to N` です。
 - **関係:** `brief` の予定・保留キューの行が指す先です。ダッシュボードでは To-do ページです。
 
 ### map-features

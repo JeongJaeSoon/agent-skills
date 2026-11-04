@@ -36,8 +36,8 @@ BRIEF_RULE = ("rows = sessions in state.json (orchestrator → lead → card), a
               "and no stop in subagents.jsonl (❔ when the start is older than board.subagent_stale_h or its session "
               "is offline); a card's progress is its own report "
               "(the file its brief's REPORT line names, else its newest milestone message to its Run) and its PR the "
-              "current-PR rule over prs.json; board.json adds rows' phase and progress, leads Orca cannot see, "
-              "to-dos, held items and doing lines; decisions come from agent-skills.db, closures from tidy.jsonl, "
+              "current-PR rule over prs.json; agent-skills.db adds rows' phase and progress, leads Orca cannot see, "
+              "to-dos, held items and doing lines (board_row, lead, item), decisions and closures, "
               "bold from brief-last")
 SCAN_DEPTH = 4       # directories below a state root the unregistered-file walk enters
 # Roles drawn as boxes in the map; locks, backups and removed stores are listed in the table only.

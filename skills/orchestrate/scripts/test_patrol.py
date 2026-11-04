@@ -122,13 +122,13 @@ found, _, memo2 = patrol.judge({**f, "prs": {**prs, "acme/app#1": {**prs["acme/a
 assert found == [] and list(memo2["first_seen"]) == ["O:/w/r:acme/app#3"], "a PR that moved on forgets its first sighting"
 
 # D: a doing item that names no PR or card, a day on; one naming a PR is tidy's to judge.
-board = {"doing": [{"title": "follow up with infra", "owner": "someone", "next": "ask"},
-                   {"title": "land acme/app#3", "owner": "someone", "next": "merge"}]}
+board = {"doing": [{"id": "b1", "title": "follow up with infra", "owner": "someone", "next": "ask"},
+                   {"id": "b2", "title": "land acme/app#3", "owner": "someone", "next": "merge"}]}
 f = facts(board=board, state={"sessions": []})
 _, v, memo = patrol.judge(f, {})
 assert v["doing_noref"] == []
 found, v, _ = patrol.judge({**f, "now": NOW + 25 * 3600}, memo)
-assert codes(found) == [("D", tidy.item_id("doing", board["doing"][0]))] and v["doing_noref"] == [found[0]["card"]]
+assert codes(found) == [("D", "b1")] and v["doing_noref"] == [found[0]["card"]]
 
 # E: one error line in three rounds in a row with new output; timings in it do not make it new, other lines do.
 scr = lambda t: ["⏺ Running the suite", f"  ⎿  Error: hook pre-tool failed after {t}s at 12:0{t}", "❯ "]
@@ -241,15 +241,13 @@ patrol.subprocess.run = lambda *a, **k: P('{"ok": true, "result": {"workers": [{
 assert patrol.all_workers(time.time() + 120) == [{"dispatchId": "d"}]
 patrol.subprocess.run = run0
 
-# An unreadable board.json fails the board source: D is kept and its clocks keep running.
-(tmp / "dashboard" / "board.json").write_text("{not json")
+# A board that cannot be read, the DB not imported yet among them, fails the board source: D is kept and its clocks
+# keep running.
 try:
     patrol.read_board()
     raise AssertionError("bad board read")
-except ValueError:
+except patrol.store.NotMigrated:
     pass
-(tmp / "dashboard" / "board.json").unlink()
-assert patrol.read_board() == {}
 memo0 = {"first_seen": {"D:item": NOW - 3600}}
 _, _, m = patrol.judge(facts(failed={"board"}), memo0)
 assert m["first_seen"] == memo0["first_seen"]
@@ -402,11 +400,11 @@ assert reap.patrol_working() == set()
 assert reap.spawn_patrol("test") is False, "AGENT_SKILLS_PATROL=off starts nothing"
 
 # tidy shows patrol's D as ❔ and never closes on it.
-d = {"title": "follow up with infra", "owner": "someone", "next": "ask"}
-(tmp / "patrol-verdicts.json").write_text(json.dumps({"doing_noref": [tidy.item_id("doing", d)]}))
+d = {"id": "b1", "title": "follow up with infra", "owner": "someone", "next": "ask"}
+(tmp / "patrol-verdicts.json").write_text(json.dumps({"doing_noref": ["b1"]}))
 got = tidy.assess({"doing": [d]}, {"sessions": []}, {}, now=T)
-assert got == {tidy.item_id("doing", d): {"verdict": "check", "rule": "no_ref",
-                                           "evidence": "PR·카드 참조 없이 24h+ · 참조를 달거나 닫기", "label": d["title"]}}, got
+assert got == {"b1": {"verdict": "check", "rule": "no_ref",
+                      "evidence": "PR·카드 참조 없이 24h+ · 참조를 달거나 닫기", "label": d["title"]}}, got
 
 # sent: supersede is a kind.
 assert sent.add("h1", "replaced by the new card", kind="supersede", now=T)["kind"] == "supersede"

@@ -10,16 +10,16 @@ Nothing the owner or another person acts on is closed by the tick: a doing item 
 a decision, an inbox item of a type the owner acts on (OWNER_TYPES: a command to run, a decision, a login...), a row
 the report lists as the owner's turn or another person's wait.
 
-One append-only file, <fleet state>/tidy.jsonl (0600), one JSON object a line:
-  {"ev": "done" | "reopen", "id", "ts", "by": "auto" | "owner", "rule", "evidence", "label"}
-ids: doing:<k> later:<k> do:<k> (a to-do) todo:<k> (the owner's now-list) (k: a digest of the item's words, so rewording it makes a new item), row:<board row
-id>, card:<session id> (a fleet row), ext:<inbox key>, and req:<request id> from the removed owner-request ledger
-(still in old files, never reopened). The state of an id is its last line. A
-reopen keeps the evidence it undid, and the tick does not close that id again on the same evidence. Reopening an
-ext: id adds the inbox item again. Past fleet.ROTATE_BYTES the file moves to .1
-and each id's last line is carried into the new one ("carried": true), so no close or reopen is forgotten.
+Closes live in agent-skills.db (store.py), in one transaction with their event: a board item's in its `item` row (b<N>,
+which rewording keeps), row:<board row id>, card:<session id> (a fleet row) and ext:<inbox key> in `closure`, as do old
+ids that had no item left at the import (doing:<k> and the like, req:<id> from the removed owner-request ledger; never
+reopened). An old doing:/later:/do:/todo:<k> id still finds its item through `alias`. A reopen keeps the evidence it
+undid, and the tick does not close that id again on the same evidence. Judging happens outside the transaction; inside
+it each close checks that the item is still as judged, and that nothing reopened it. tidy does not write
+inbox-external.jsonl: fleet.external_items reads the file and `closure` together, with `ext_mark` saying which lines came
+before the close or reopen.
 """
-import contextlib, fcntl, json, pathlib, re
+import json, pathlib, re
 
 import fleet
 import store
@@ -33,23 +33,12 @@ OWNER_TYPES = fleet.STICKY_TYPES + ("decision",)
 STALE_H = 8  # a moving board row this long without a word, and nothing live to vouch for it, is 확인 필요
 
 
-def path():
-    return fleet.state_dir() / "tidy.jsonl"
-
-
-def item_id(kind, item):
-    parts = ((item["title"], item["trigger"]) if kind == "later" else (item["title"], item.get("due") or "", item.get("after") or "")
-             if kind == "do" else (item["title"],) if kind == "doing" else (item,))
-    return f"{kind}:{fleet.digest(*parts)[:8]}"
-
-
 def latest():
-    """id -> its last line."""
-    out = {}
-    for r in fleet.read_lines(path()):
-        if isinstance(r, dict) and isinstance(r.get("id"), str) and r.get("ev") in ("done", "reopen"):
-            out[r["id"]] = r
-    return out
+    """id -> its last close or reopen ({ev, id, ts, by, rule, evidence, label}); {} before `orch db import`."""
+    try:
+        return store.latest()
+    except store.NotMigrated:
+        return {}
 
 
 def closed():
@@ -122,8 +111,9 @@ def trigger_met(text, cards, prs):
 
 
 def assess(store, state, prs, me=None, now=None):
-    """id -> {verdict: done | check, rule, evidence, label} for what the evidence settles now. state.json's sessions
-    and PR list, prs.json's details (key -> detail), board.json's store."""
+    """id -> {verdict: done | check, rule, evidence, label, and what write() checks again: the item's `at` (updated_at),
+    an ext: item's `mark`} for what the evidence settles now. state.json's sessions and PR list, prs.json's details
+    (key -> detail), the open board."""
     import board  # imports this module, so not at the top
     now = now or fleet.utcnow()
     cards = cards_of(state, prs)
@@ -133,8 +123,8 @@ def assess(store, state, prs, me=None, now=None):
     noref = set((fleet.read_json(fleet.state_dir().parent / "patrol-verdicts.json", {}) or {}).get("doing_noref") or ())
     out = {}
 
-    def put(iid, verdict, rule, evidence, label):
-        out[iid] = {"verdict": verdict, "rule": rule, "evidence": fleet.mask(evidence), "label": fleet.mask(label)}
+    def put(iid, verdict, rule, evidence, label, **seen):
+        out[iid] = {"verdict": verdict, "rule": rule, "evidence": fleet.mask(evidence), "label": fleet.mask(label), **seen}
 
     for d in store.get("doing") or []:
         if d.get("waiting") or board.is_owner(d.get("owner"), me):
@@ -144,21 +134,21 @@ def assess(store, state, prs, me=None, now=None):
         # A busy card's merged PR is not its current PR, but a line about the card may still be about that PR: ❔.
         ev = refs_over(fleet.pr_refs(text) + [card and (card["pr"] or card["newest_pr"])], prs)
         if not ev:
-            if item_id("doing", d) in noref:
-                put(item_id("doing", d), "check", "no_ref", "PR·카드 참조 없이 24h+ · 참조를 달거나 닫기", d["title"])
+            if d["id"] in noref:
+                put(d["id"], "check", "no_ref", "PR·카드 참조 없이 24h+ · 참조를 달거나 닫기", d["title"])
             continue
         if card and card["id"] in live:
-            put(item_id("doing", d), "check", "pr_merged_card_busy", f"{ev} · 카드 {card['name']} 작업 중", d["title"])
+            put(d["id"], "check", "pr_merged_card_busy", f"{ev} · 카드 {card['name']} 작업 중", d["title"])
         elif POST_MERGE.search(d.get("next") or ""):
-            put(item_id("doing", d), "check", "pr_merged_steps_left", f"{ev} · 남은 단계: {d['next']}", d["title"])
+            put(d["id"], "check", "pr_merged_steps_left", f"{ev} · 남은 단계: {d['next']}", d["title"])
         else:
-            put(item_id("doing", d), "done", "pr_merged", ev + (f" (카드 {card['name']})" if card else ""), d["title"])
+            put(d["id"], "done", "pr_merged", ev + (f" (카드 {card['name']})" if card else ""), d["title"], at=d.get("updated_at"))
     for l in store.get("later") or []:
         if ev := trigger_met(l["trigger"], cards, prs):
-            put(item_id("later", l), "check", "trigger_met", f"조건 충족: {ev}", l["title"])
+            put(l["id"], "check", "trigger_met", f"조건 충족: {ev}", l["title"])
     for t in store.get("owner_todo") or []:
-        if ev := refs_over(fleet.pr_refs(t), prs, closed_ok=True):
-            put(item_id("todo", t), "done", "pr_over", ev, t)
+        if ev := refs_over(fleet.pr_refs(t["title"]), prs, closed_ok=True):
+            put(t["id"], "done", "pr_over", ev, t["title"], at=t.get("updated_at"))
     for rid, r in (store.get("rows") or {}).items():
         at = fleet.parse(r.get("reported_at"))
         card = cards.get(r.get("worktree")) or named(f"{rid} {r.get('title') or ''}", cards)  # `--worktree` first
@@ -172,71 +162,54 @@ def assess(store, state, prs, me=None, now=None):
             put(f"card:{c['id']}", "done", "pr_closed", f"{pr_line(c['pr'], p)} · 세션 {c.get('phase')}",
                 c.get("task_title") or c.get("name") or c["id"])
     names = {c["id"] for c in cards.values()} | {s["id"] for s in (state or {}).get("sessions") or []}
-    for it in fleet.external_items({}):
+    for it in fleet.external_marked():
         if it["type"] in OWNER_TYPES:
             continue
         ev = refs_over(fleet.pr_refs(" ".join(filter(None, (it.get("title"), it.get("url"), it.get("command"))))), prs, closed_ok=True)
         if ev:
-            put(it["key"], "done", "pr_over", ev, it["title"])
+            put(it["key"], "done", "pr_over", ev, it["title"], mark=it["mark"])
         elif it.get("session") and names and it["session"] not in names:
-            put(it["key"], "done", "session_gone", f"세션 {it['session']} 이 Orca 목록에 없음", it["title"])
+            put(it["key"], "done", "session_gone", f"세션 {it['session']} 이 Orca 목록에 없음", it["title"], mark=it["mark"])
     return out
 
 
 # ---------------------------------------------------------------- writes
 
-@contextlib.contextmanager
-def locked():
-    """The ledger's lock, yielding latest() as it stands under it. Every tidy write and its side effects (the inbox
-    resolve and revive) run under it, so the guard here stops them all before the first."""
-    path().parent.mkdir(parents=True, exist_ok=True)
-    with (path().parent / "tidy.lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        store.guard_legacy_write("tidy write")  # under the lock: the 4b import holds it while it records 4b-board
-        yield latest()
-
-
 def fits(row):
-    """Whether row stays under fleet.append_line's 4 KiB, with room for "carried" when the file rotates. One that does
-    not is left unwritten, never cut short."""
+    """Whether a close stays under 4 KiB as a tidy line: `orch db export --legacy` must be able to write it for older
+    code, whose fleet.append_line refuses more when its file rotates. One that does not is left unwritten, never cut."""
     return len(json.dumps(row, ensure_ascii=False, separators=(",", ":")).encode()) < 4064
 
 
-def append(rows, have):
-    """Append rows; have is latest() under the lock, carried into the new file when this one rotates."""
-    store.guard_legacy_write("tidy append")
-    was = path().exists()
-    fleet.rotate(path())
-    if was and not path().exists():
-        for r in have.values():
-            fleet.append_line(path(), {**r, "carried": True})
-    for r in rows:
-        fleet.append_line(path(), r)
+def last_mark(key):
+    """The mark of the last inbox line of key (without its ext: prefix), or None."""
+    rows = fleet.inbox_lines().get(key) or []
+    return rows[-1][1] if rows else None
 
 
 def last_add(key):
     """The inbox line that added key (without its ext: prefix), or None."""
-    return next((r for r in reversed(fleet.read_lines(fleet.state_dir() / "inbox-external.jsonl"))
-                 if r.get("op") == "add" and r.get("key") == key), None)
+    return next((row for row, _ in reversed(fleet.inbox_lines().get(key) or []) if row.get("op") == "add"), None)
+
+
+def no_reopen(iid):
+    """Why iid cannot be reopened, or None."""
+    if iid.startswith("req:"):
+        return "the owner-request ledger was removed"
+    if iid.startswith(store.ORPHAN):
+        return "its board item left the board before stable ids"
+    if iid.startswith("ext:") and not last_add(iid[4:]):
+        return "its inbox line is gone"
+    return None
 
 
 def can_reopen(iid):
-    if iid.startswith("ext:"):
-        return bool(last_add(iid[4:]))
-    return not iid.startswith("req:")
+    return no_reopen(iid) is None
 
 
-def revive(iid):
-    """Undo what closing iid did outside this ledger: the inbox item added again. Returns the reason it cannot, or
-    None."""
-    if iid.startswith("req:"):
-        return "the owner-request ledger was removed"
-    if iid.startswith("ext:") and not any(i["key"] == iid for i in fleet.external_items({})):
-        if not (a := last_add(iid[4:])):
-            return "its inbox line is gone"
-        fleet.inbox_add(a["type"], a.get("title") or "", a.get("session"), a.get("url"), a.get("command"), key=a["key"],
-                        source=a.get("source") or "skill")
-    return None
+def stands(cur, iid, mark, closures):
+    """Whether cur is a close that still holds: an inbox key added again after it, at another mark, is open again."""
+    return cur.get("ev") == "done" and not (iid.startswith("ext:") and (closures.get(iid[4:]) or {}).get("ext_mark") != mark)
 
 
 def undone(cur, v):
@@ -245,65 +218,81 @@ def undone(cur, v):
 
 
 def write(ids, undo=False, why=None, can=None, now=None, by="owner"):
-    """Close (or, with undo, reopen) each id. Returns (written, [(id, reason)]). can: id -> label of what may be
-    closed now (board.render()'s open list); an id not in it, or already in the asked state, is not written."""
+    """Close (or, with undo, reopen) each id, in one transaction. Returns (written, [(id, reason)]). can: id -> label of what
+    may be closed now (board.render()'s open list); an id not in it, or already in the asked state, is not written. An
+    old content-hash id means its item."""
     ts, written, refused = fleet.iso(now or fleet.utcnow()), [], []
-    with locked() as have:
-        rows = []
-        for iid in dict.fromkeys(ids):
+    with store.tx() as db:
+        have, closures = store.latest(db), store.ext_closures(db)
+        for asked in dict.fromkeys(ids):
+            iid = store.resolve(db, asked)
             cur = have.get(iid) or {}
+            mark = last_mark(iid[4:]) if iid.startswith("ext:") else None
             if undo and cur.get("ev") != "done":
-                refused.append((iid, "not closed"))
-            elif not undo and cur.get("ev") == "done":
-                refused.append((iid, "already closed"))
+                refused.append((asked, "not closed"))
+            elif not undo and stands(cur, iid, mark, closures):
+                refused.append((asked, "already closed"))
             elif not undo and iid not in (can or {}):
-                refused.append((iid, "no open board item, row or card by that id"))
-            else:
-                row = {"ev": "reopen" if undo else "done", "id": iid, "ts": ts, "by": by,
-                       "rule": "manual", "evidence": cur.get("evidence") if undo else fleet.mask(why or "오너가 완료 처리"),
-                       "label": cur.get("label") if undo else fleet.mask((can or {}).get(iid))}
-                if not fits(row):
-                    refused.append((iid, "line over 4 KiB: shorten --why"))
-                elif undo and (why_not := revive(iid)):
-                    refused.append((iid, why_not))
+                refused.append((asked, "no open board item, row or card by that id"))
+            elif undo:
+                if why_not := no_reopen(iid):
+                    refused.append((asked, why_not))
                 else:
-                    rows.append(row)
+                    store.reopen_unit(db, iid, ts, by, mark=mark)
+                    have[iid] = {**cur, "ev": "reopen"}
                     written.append(iid)
-        append(rows, have)
+            else:
+                row = {"ev": "done", "id": iid, "ts": ts, "by": by, "rule": "manual",
+                       "evidence": fleet.mask(why or "오너가 완료 처리"), "label": fleet.mask((can or {}).get(iid))}
+                if fits(row):
+                    store.close_unit(db, row, mark)
+                    have[iid] = row
+                    written.append(iid)
+                else:
+                    refused.append((asked, "line over 4 KiB: shorten --why"))
     return written, refused
 
 
 def run(now=None, dry=False):
-    """One tidy pass over the files the collector just wrote. Returns the lines it wrote (dry: would write)."""
+    """One tidy pass over the files the collector just wrote. Returns the closes it made (dry: would make)."""
     now = now or fleet.utcnow()
     sd = fleet.state_dir()
     state = fleet.read_json(sd / "state.json", None)
     if not state or not state.get("sessions"):  # an empty list is more likely a bad read than every session gone
         return []
-    store = fleet.read_json(sd / "board.json", {}) or {}
+    try:
+        board_now = store.board()
+    except store.NotMigrated:
+        return []
     prs_file = fleet.read_json(sd / "prs.json", {}) or {}
     prs = {k: v["detail"] for k, v in (prs_file.get("prs") or {}).items() if v.get("detail")}
-    found = {k: v for k, v in assess(store, state, prs, prs_file.get("me"), now).items() if v["verdict"] == "done"}
-    with locked() as have:
-        found = {k: v for k, v in found.items() if not undone(have.get(k), v)}
-        ts, rows = fleet.iso(now), []
+    found = {k: v for k, v in assess(board_now, state, prs, prs_file.get("me"), now).items() if v["verdict"] == "done"}
+    ts, rows = fleet.iso(now), []
+
+    def wanted(db):
+        """The closes that still stand in this transaction: nothing reopened or closed the id, or changed the item."""
+        have, closures = store.latest(db), store.ext_closures(db)
         for iid, v in found.items():
-            row = {"ev": "done", "id": iid, "ts": ts, "by": "auto", "rule": v["rule"], "evidence": v["evidence"],
-                   "label": v["label"]}
-            if (have.get(iid) or {}).get("ev") != "done" and fits(row):
-                rows.append(row)
-        if dry:
-            return rows
-        for r in rows:
-            if r["id"].startswith("ext:"):
-                fleet.inbox_resolve(r["id"][4:])
-        append(rows, have)
+            cur = have.get(iid) or {}
+            row = {"ev": "done", "id": iid, "ts": ts, "by": "auto", "rule": v["rule"], "evidence": v["evidence"], "label": v["label"]}
+            if (not stands(cur, iid, v.get("mark"), closures) and not undone(cur, v) and fits(row)
+                    and (not v.get("at") or store.item_same(db, iid, v["at"]))):
+                yield row, v.get("mark")
+    if dry:
+        with store.read() as db:
+            return [row for row, _ in wanted(db)]
+    with store.tx() as db:
+        for row, mark in wanted(db):
+            store.close_unit(db, row, mark)
+            rows.append(row)
     return rows
 
 
 def timeline(keep=200):
-    """The tidy lines as timeline events, newest last."""
-    return [{"at": r.get("ts"), "kind": f"tidy_{r['ev']}" + ("_auto" if r.get("by") == "auto" else ""),
-             "text": f"{r.get('label') or r['id']} · {r.get('rule')}: {r.get('evidence') or ''}".strip(" :")}
-            for r in fleet.read_lines(path(), keep) if isinstance(r, dict) and r.get("ev") in ("done", "reopen")
-            and not r.get("carried")]
+    """Closes and reopens as timeline events, newest last."""
+    try:
+        got = store.closing_events(keep)
+    except store.NotMigrated:
+        return []
+    return [{"at": r["at"], "kind": f"tidy_{r['ev']}" + ("_auto" if r["by"] == "auto" else ""),
+             "text": f"{r['label'] or r['id']} · {r['rule']}: {r['evidence'] or ''}".strip(" :")} for r in got]

@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """agent-skills.db: the one SQLite file (WAL) that holds the facts agent-skills decides and changes itself.
 
-PR 4a moves decisions (`orch decide`, the page's answers) here from decisions.json. Every connection to this file
-goes through this module; the registry checks that no other script opens it and that each writer here touches only
-the tables the registry lists for it.
+PR 4a moved decisions (`orch decide`, the page's answers) here from decisions.json. PR 4b moved the board and tidy:
+item (to-dos, held items, doing lines, the owner's now-list, open and closed in one row), board_row, lead (only leads
+Orca cannot see), closure (what tidy closed outside item: card:, row:, ext:). Every connection to this file goes
+through this module; the registry checks that no other script opens it and that each writer here touches only the
+tables the registry lists for it.
 
 Access gate: only `orch db import` (import_apply) creates the file, sets the schema version and moves data in. Any
 other open needs SCHEMA_VERSION and every step in NEEDS recorded in `migration`, else NotMigrated: the CLI stops with
 "orch db import", a hook passes silently, the brief shows 이행 대기. Nothing reads or writes an empty DB as canonical.
 
 Commands (prog.py `orch db`):
-  import [--dry-run | --apply] [--rehearsal]   decisions.json -> decision table, then a tombstone in its place
-  export --legacy --target pre-4a DIR          the decisions.json the code before 4a reads
+  import [--dry-run | --apply] [--rehearsal]   decisions.json, board.json, tidy.jsonl -> tables, tombstones in their place
+  export --legacy --target 4a|pre-4a DIR       the files older code reads (4a: board, tidy, an inbox copy; pre-4a: decisions)
+  rollback 4b DIR [--rehearsal]                put an export --target 4a back and take the 4b step out of the DB
   dump [TABLE]                                 read-only JSON of the tables
   backup FILE | restore FILE [--rehearsal]     a lossless copy (Connection.backup), and putting one back
   cutover-plan 4a|4b                           the commands the owner runs around an import; runs none of them
@@ -21,11 +24,12 @@ import contextlib, copy, datetime as dt, fcntl, hashlib, json, os, pathlib, plis
 import fleet
 
 DB_NAME = "agent-skills.db"
-SCHEMA_VERSION = 1
-NEEDS = ("4a-decisions",)        # the data steps this code reads; 4b code adds "4b-board"
-LEGACY_STOP = "4b-board"         # once this step is in, the board and tidy writers below it must not write files
+SCHEMA_VERSION = 2
+DECISION_STEP, BOARD_STEP = "4a-decisions", "4b-board"
+NEEDS = (DECISION_STEP, BOARD_STEP)   # the data steps this code reads
 BUSY_MS = 5000
-LEGACY = {"4a-decisions": ("decisions.json",)}
+LEGACY = {DECISION_STEP: ("decisions.json",), BOARD_STEP: ("board.json", "tidy.jsonl")}
+RETIRED = ("board.prev.json", "tidy.jsonl.1")  # no reader left: they move into the backup with the step's files
 LOCKS = ("board.lock", "tidy.lock", "decisions.lock")
 SCRIPTS = "skills/orchestrate/scripts"
 BINS = ("orch", "orch-dash", "skills-sync")
@@ -47,6 +51,43 @@ CREATE TABLE decision (
   delivered_at TEXT
 );
 """
+SCHEMA_V2 = (
+    """CREATE TABLE item (
+  id TEXT PRIMARY KEY,
+  status TEXT NOT NULL CHECK (status IN ('todo','doing','held','done','dropped')),
+  lane TEXT NOT NULL CHECK (lane IN ('todo','later','doing','owner_todo')),
+  pos INTEGER NOT NULL,
+  who TEXT,
+  title TEXT NOT NULL,
+  next TEXT,
+  waiting INTEGER NOT NULL DEFAULT 0 CHECK (waiting IN (0,1)), waiting_since TEXT,
+  trig TEXT,
+  due TEXT, after_ref TEXT,
+  program TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  closed_at TEXT, close_by TEXT, close_rule TEXT, close_evidence TEXT,
+  reopen_evidence TEXT,
+  CHECK ((status IN ('done','dropped')) = (closed_at IS NOT NULL))
+)""",
+    "CREATE INDEX item_lane ON item(lane, pos) WHERE status IN ('todo','doing','held')",
+    "CREATE TABLE alias (old TEXT PRIMARY KEY, id TEXT NOT NULL REFERENCES item(id))",
+    "CREATE TABLE board_row (id TEXT PRIMARY KEY, parent TEXT, pos INTEGER NOT NULL, data TEXT NOT NULL, done_at TEXT)",
+    "CREATE TABLE lead (name TEXT PRIMARY KEY, data TEXT NOT NULL, closed_at TEXT)",
+    """CREATE TABLE closure (
+  unit TEXT PRIMARY KEY,
+  state TEXT NOT NULL CHECK (state IN ('done','reopen')),
+  ts TEXT NOT NULL, by TEXT, rule TEXT, evidence TEXT, label TEXT,
+  undone_evidence TEXT,
+  ext_mark TEXT
+)""")
+TABLES_V2 = ("alias", "closure", "lead", "board_row", "item")  # dropped in this order: alias points at item
+# lane -> (its open status, the prefix tidy's content hash used before stable ids)
+LANES = {"todo": ("todo", "do"), "later": ("held", "later"), "doing": ("doing", "doing"), "owner_todo": ("todo", "todo")}
+OPEN = ("todo", "doing", "held")
+OPEN_SQL = "('todo','doing','held')"
+ITEM_COLS = ("who", "title", "next", "waiting", "waiting_since", "trig", "due", "after_ref")
+ORPHAN = tuple(f"{prefix}:" for _, prefix in LANES.values())  # a tidy id from before stable ids whose item left the board
 DECISION_COLS = ("id", "status", "title", "body", "options", "recommend", "link", "handle", "created_at", "checked_at",
                  "answer", "closed_at", "delivered", "delivered_at")
 DECISION_ALWAYS = ("id", "title", "body", "options", "recommend", "link", "handle", "created_at", "status")
@@ -54,10 +95,6 @@ DECISION_ALWAYS = ("id", "title", "body", "options", "recommend", "link", "handl
 
 class NotMigrated(Exception):
     pass
-
-
-class LegacyStopped(Exception):
-    """A board or tidy write from code older than the step that moved those files into the DB."""
 
 
 class Refused(Exception):
@@ -140,10 +177,10 @@ def tx(timeout_ms=BUSY_MS):
         db.close()
 
 
-def _event(db, entity, iid, ev, by=None, before=None, after=None):
+def _event(db, entity, iid, ev, by=None, before=None, after=None, ts=None):
     js = lambda v: None if v is None else json.dumps(v, ensure_ascii=False, sort_keys=True)  # noqa: E731
     db.execute("INSERT INTO event (ts, entity, id, ev, by, before, after) VALUES (?,?,?,?,?,?,?)",
-               (now(), entity, iid, ev, by, js(before), js(after)))
+               (ts or now(), entity, iid, ev, by, js(before), js(after)))
 
 
 # ---------------------------------------------------------------- decisions
@@ -226,37 +263,300 @@ def decisions(status=None, db=None):
         return run(c)
 
 
-# ---------------------------------------------------------------- the guard older board and tidy writes pass
+# ---------------------------------------------------------------- the board: items, rows, leads
 
-def migrated_steps(strict=False):
-    """Data steps recorded in the DB, read without creating it; empty when there is no DB yet. A DB that is there but
-    cannot be read is empty too, or with strict the error."""
+def legacy_id(lane, item):
+    """The content hash tidy named an item by before stable ids. item as board.json held it (owner_todo: its text)."""
+    kind = LANES[lane][1]
+    parts = ((item["title"], item["trigger"]) if lane == "later" else (item["title"], item.get("due") or "", item.get("after") or "")
+             if lane == "todo" else (item["title"],) if lane == "doing" else (item,))
+    return f"{kind}:{fleet.digest(*parts)[:8]}"
+
+
+def _item(r):
+    """An item row as the dict its lane held in board.json, with its id; owner_todo items are {id, title}."""
+    d, lane = {"id": r["id"], "title": r["title"], "updated_at": r["updated_at"]}, r["lane"]
+    opt = lambda **kw: d.update({k: v for k, v in kw.items() if v})  # noqa: E731
+    if lane == "doing":
+        d.update(owner=r["who"], next=r["next"] or "")
+        opt(waiting=bool(r["waiting"]), since=r["waiting_since"])
+    elif lane == "later":
+        d["trigger"] = r["trig"]
+        opt(due=r["due"], who=r["who"])
+    elif lane == "todo":
+        d["who"] = r["who"]
+        opt(due=r["due"], after=r["after_ref"])
+        d["added"] = r["created_at"]
+    return d
+
+
+def _item_cols(lane, d):
+    """ITEM_COLS' values for a dict as _item gives it."""
+    return (d.get("owner") if lane == "doing" else "owner" if lane == "owner_todo" else d.get("who"), d["title"], d.get("next"),
+            int(bool(d.get("waiting"))), d.get("since"), d.get("trigger"), d.get("due"), d.get("after"))
+
+
+def _insert_item(db, iid, lane, status, pos, cols, created, updated, close=(None, None, None, None), reopen=None):
+    db.execute(f"INSERT INTO item (id, status, lane, pos, {', '.join(ITEM_COLS)}, created_at, updated_at, closed_at, "
+               "close_by, close_rule, close_evidence, reopen_evidence) VALUES "
+               f"({', '.join('?' * (4 + len(ITEM_COLS) + 7))})",
+               (iid, status, lane, pos, *cols, created, updated, *close, reopen))
+
+
+def _next_b(db):
+    n = _counter(db, "b")
+    db.execute("INSERT INTO counter (name, next) VALUES ('b', ?) ON CONFLICT(name) DO UPDATE SET next=excluded.next", (n + 1,))
+    return f"b{n}"
+
+
+def _row_out(r):
+    row = {**json.loads(r["data"]), "id": r["id"], "parent": r["parent"]}
+    if r["done_at"]:
+        row["done_at"] = r["done_at"]
+    return row
+
+
+def _row_data(row):
+    return json.dumps({k: v for k, v in row.items() if k not in ("id", "parent", "done_at")}, ensure_ascii=False, sort_keys=True)
+
+
+def _insert_row(db, row, pos):
+    db.execute("INSERT INTO board_row (id, parent, pos, data, done_at) VALUES (?,?,?,?,?)",
+               (row["id"], row.get("parent"), pos, _row_data(row), row.get("done_at")))
+
+
+def _lead_data(lead):
+    return json.dumps({k: v for k, v in lead.items() if k not in ("name", "closed_at")}, ensure_ascii=False, sort_keys=True)
+
+
+def _insert_lead(db, name, lead):
+    db.execute("INSERT INTO lead (name, data, closed_at) VALUES (?,?,?)", (name, _lead_data(lead), lead.get("closed_at")))
+
+
+def _board(db):
+    """The open board in the shape board.json had: rows, order, leads and the four lanes, each item with its id."""
+    out = {"v": 1, "rows": {}, "order": [], "leads": {}, **{lane: [] for lane in LANES}}
+    for r in db.execute(f"SELECT * FROM item WHERE status IN {OPEN_SQL} ORDER BY lane, pos, CAST(substr(id, 2) AS INTEGER)"):
+        out[r["lane"]].append(_item(r))
+    for r in db.execute("SELECT * FROM board_row ORDER BY pos, id"):
+        out["rows"][r["id"]] = _row_out(r)
+        out["order"].append(r["id"])
+    for r in db.execute("SELECT * FROM lead ORDER BY name"):
+        out["leads"][r["name"]] = {**json.loads(r["data"]), "name": r["name"],
+                                   **({"closed_at": r["closed_at"]} if r["closed_at"] else {})}
+    return out
+
+
+def board(db=None):
+    if db is not None:
+        return _board(db)
+    with read() as c:
+        return _board(c)
+
+
+def _put_items(db, old, new, by, ts):
+    known = {d["id"]: (lane, d) for lane in LANES for d in old[lane]}
+    seen = set()
+    for lane in LANES:
+        kept = []
+        for pos, d in enumerate(new[lane]):
+            forced = d.pop("forced", None)
+            iid = d.get("id")
+            if iid in seen or iid and iid not in known:
+                raise ValueError(f"{iid} is listed twice or is not an open item")
+            if not iid:
+                iid = d["id"] = _next_b(db)
+                cols = _item_cols(lane, d)
+                _insert_item(db, iid, lane, LANES[lane][0], pos, cols, d.get("added") or ts, ts)
+                _event(db, "item", iid, "add", by, None, {**d, "lane": lane, **({"forced": forced} if forced else {})})
+                continue
+            seen.add(iid)
+            kept.append(iid)
+            was_lane, was = known[iid]
+            cols = _item_cols(lane, d)
+            if was_lane != lane or cols != _item_cols(was_lane, was):
+                db.execute(f"UPDATE item SET status=?, lane=?, pos=?, updated_at=?, {', '.join(f'{c}=?' for c in ITEM_COLS)} "
+                           "WHERE id=?", (LANES[lane][0], lane, pos, ts, *cols, iid))
+                _event(db, "item", iid, "update", by, {**was, "lane": was_lane}, {**d, "lane": lane})
+            else:
+                db.execute("UPDATE item SET pos=? WHERE id=?", (pos, iid))
+        before = [d["id"] for d in old[lane] if d["id"] in set(kept)]
+        if before != kept:
+            _event(db, "lane", lane, "move", by, before, kept)
+    for iid in set(known) - seen:
+        lane, was = known[iid]
+        db.execute("UPDATE item SET status='dropped', closed_at=?, close_by=?, close_rule='dropped', updated_at=? WHERE id=?",
+                   (ts, by or "board", ts, iid))
+        _event(db, "item", iid, "drop", by, {**was, "lane": lane})
+
+
+def _put_rows(db, old, new, by):
+    order = [k for k in new["order"] if k in new["rows"]] + [k for k in new["rows"] if k not in new["order"]]
+    for pos, rid in enumerate(order):
+        row = new["rows"][rid]
+        if rid not in old["rows"]:
+            _insert_row(db, row, pos)
+            _event(db, "board_row", rid, "add", by, None, row)
+            continue
+        if row != old["rows"][rid]:
+            db.execute("UPDATE board_row SET parent=?, data=?, done_at=? WHERE id=?",
+                       (row.get("parent"), _row_data(row), row.get("done_at"), rid))
+            _event(db, "board_row", rid, "update", by, old["rows"][rid], row)
+        db.execute("UPDATE board_row SET pos=? WHERE id=?", (pos, rid))
+    for rid in set(old["rows"]) - set(new["rows"]):
+        db.execute("DELETE FROM board_row WHERE id=?", (rid,))
+        _event(db, "board_row", rid, "drop", by, old["rows"][rid])
+
+
+def _put_leads(db, old, new, by):
+    for name, lead in new["leads"].items():
+        if name not in old["leads"]:
+            _insert_lead(db, name, lead)
+            _event(db, "lead", name, "add", by, None, lead)
+        elif lead != old["leads"][name]:
+            db.execute("UPDATE lead SET data=?, closed_at=? WHERE name=?", (_lead_data(lead), lead.get("closed_at"), name))
+            _event(db, "lead", name, "update", by, old["leads"][name], lead)
+
+
+def change_board(fn, by=None):
+    """Run fn(store) on the open board in one write transaction and write what changed, each change with its event: an
+    item with no id gets the next b<N>, an open item no longer in any lane becomes dropped (its row stays), a row gone
+    from store["rows"] is deleted with its last value in the event. Rewording or moving an item keeps its dict's id."""
+    with tx() as db:
+        old = _board(db)
+        new = copy.deepcopy(old)
+        out = fn(new)
+        ts = now()
+        _put_items(db, old, new, by, ts)
+        _put_rows(db, old, new, by)
+        _put_leads(db, old, new, by)
+        return out
+
+
+# ---------------------------------------------------------------- closing: an item's row, or a closure row
+
+def resolve(db, iid):
+    """The stable id of an id from before stable ids (alias); any other id as it is."""
+    r = db.execute("SELECT id FROM alias WHERE old=?", (iid,)).fetchone()
+    return r[0] if r else iid
+
+
+def latest(db=None):
+    """id -> what tidy.jsonl's last line held: {ev: done | reopen, id, ts, by, rule, evidence, label}. A reopen's evidence
+    is the one it undid. Dropped items are not here: a drop is not a close."""
+    def run(c):
+        out = {}
+        for r in c.execute("SELECT * FROM item WHERE status='done' OR reopen_evidence IS NOT NULL"):
+            done = r["status"] == "done"
+            out[r["id"]] = {"ev": "done" if done else "reopen", "id": r["id"], "ts": r["closed_at"] if done else r["updated_at"],
+                            "by": r["close_by"], "rule": r["close_rule"], "label": r["title"],
+                            "evidence": r["close_evidence"] if done else r["reopen_evidence"]}
+        for r in c.execute("SELECT * FROM closure"):
+            done = r["state"] == "done"
+            out[r["unit"]] = {"ev": r["state"], "id": r["unit"], "ts": r["ts"], "by": r["by"], "rule": r["rule"],
+                              "label": r["label"], "evidence": r["evidence"] if done else r["undone_evidence"]}
+        return out
+    if db is not None:
+        return run(db)
+    with read() as c:
+        return run(c)
+
+
+def ext_closures(db=None):
+    """{inbox key: closure row} for fleet.external_items; {} before the board is in the DB (tidy wrote resolve lines)."""
+    def run(c):
+        return {r["unit"][4:]: dict(r) for r in c.execute("SELECT * FROM closure WHERE unit LIKE 'ext:%'")}
+    if db is not None:
+        return run(db)
+    try:
+        with read(1000) as c:
+            return run(c)
+    except NotMigrated:
+        return {}
+
+
+def item_same(db, iid, updated_at):
+    """Whether an item is still open as it was when tidy judged it."""
+    r = db.execute(f"SELECT 1 FROM item WHERE id=? AND updated_at=? AND status IN {OPEN_SQL}", (iid, updated_at)).fetchone()
+    return bool(r)
+
+
+def _item_now(db, iid):
+    return db.execute("SELECT * FROM item WHERE id=?", (iid,)).fetchone()
+
+
+def close_unit(db, line, mark=None):
+    """Close line["id"] ({id, ts, by, rule, evidence, label}): its item, else a closure row. mark: an ext: unit's ext_mark."""
+    iid = line["id"]
+    before = _item_now(db, iid)
+    if before:
+        db.execute("UPDATE item SET status='done', closed_at=?, close_by=?, close_rule=?, close_evidence=?, reopen_evidence=NULL, "
+                   "updated_at=? WHERE id=?", (line["ts"], line.get("by"), line.get("rule"), line.get("evidence"), line["ts"], iid))
+        _event(db, "item", iid, "done", line.get("by"), dict(before), dict(_item_now(db, iid)), line["ts"])
+        return
+    was = db.execute("SELECT * FROM closure WHERE unit=?", (iid,)).fetchone()
+    db.execute("INSERT INTO closure (unit, state, ts, by, rule, evidence, label, ext_mark) VALUES (?, 'done', ?,?,?,?,?,?) "
+               "ON CONFLICT(unit) DO UPDATE SET state='done', ts=excluded.ts, by=excluded.by, rule=excluded.rule, "
+               "evidence=excluded.evidence, label=excluded.label, undone_evidence=NULL, ext_mark=excluded.ext_mark",
+               (iid, line["ts"], line.get("by"), line.get("rule"), line.get("evidence"), line.get("label"), mark))
+    _event(db, "closure", iid, "done", line.get("by"), dict(was) if was else None,
+           dict(db.execute("SELECT * FROM closure WHERE unit=?", (iid,)).fetchone()), line["ts"])
+
+
+def reopen_unit(db, iid, ts, by, rule="manual", mark=None):
+    """Undo a close in one transaction: status back to what the lane has open, or the closure row marked reopen, with the
+    evidence it undid (tidy does not close again on it) and, for ext:, a new ext_mark."""
+    before = _item_now(db, iid)
+    if before:
+        db.execute("UPDATE item SET status=?, closed_at=NULL, close_by=?, close_rule=?, close_evidence=NULL, reopen_evidence=?, "
+                   "updated_at=? WHERE id=?", (LANES[before["lane"]][0], by, rule, before["close_evidence"] or "", ts, iid))
+        _event(db, "item", iid, "reopen", by, dict(before), dict(_item_now(db, iid)), ts)
+        return
+    was = db.execute("SELECT * FROM closure WHERE unit=?", (iid,)).fetchone()
+    db.execute("UPDATE closure SET state='reopen', ts=?, by=?, rule=?, evidence=NULL, undone_evidence=?, ext_mark=? WHERE unit=?",
+               (ts, by, rule, was["evidence"], mark, iid))
+    _event(db, "closure", iid, "reopen", by, dict(was), dict(db.execute("SELECT * FROM closure WHERE unit=?", (iid,)).fetchone()), ts)
+
+
+def closing_events(keep=200):
+    """The last closes and reopens as {at, ev, id, by, rule, evidence, label}, oldest first, for the Timeline."""
+    out = []
+    with read() as c:
+        rows = c.execute("SELECT * FROM event WHERE entity IN ('item','closure','tidy') AND ev IN ('done','reopen') "
+                         "ORDER BY seq DESC LIMIT ?", (keep,)).fetchall()
+    for r in reversed(rows):
+        a, done = json.loads(r["after"] or "{}"), r["ev"] == "done"
+        if r["entity"] == "item":
+            a = {"label": a.get("title"), "rule": a.get("close_rule"),
+                 "evidence": a.get("close_evidence") if done else a.get("reopen_evidence")}
+        elif r["entity"] == "closure":
+            a = {**a, "evidence": a.get("evidence") if done else a.get("undone_evidence")}
+        out.append({"at": r["ts"], "ev": r["ev"], "id": r["id"], "by": r["by"], "rule": a.get("rule"), "label": a.get("label"),
+                    "evidence": a.get("evidence")})
+    return out
+
+
+def view():
+    """The board, every close and the open decisions from one read snapshot: what one render reads."""
+    with read() as db:
+        return {"board": _board(db), "latest": latest(db), "decisions": decisions("open", db)}
+
+
+# ---------------------------------------------------------------- what older code left
+
+def migrated_steps():
+    """Data steps recorded in the DB, read without creating it; empty when there is no DB yet or it cannot be read."""
     p = path()
     if not p.is_file():
         return {}
     try:
-        db = _connect(p, BUSY_MS if strict else 1000)
+        db = _connect(p, 1000)
         try:
             return {r["step"]: r["stage"] for r in db.execute("SELECT step, stage FROM migration")}
         finally:
             db.close()
     except sqlite3.DatabaseError:
-        if strict:
-            raise
         return {}
-
-
-def guard_legacy_write(what):
-    """Board and tidy still write files in 4a. Once 4b moved them into the DB, this (4a) code is the old code: stop
-    before any side effect (a file write, an inbox resolve or revive). A DB that cannot be read stops it too."""
-    try:
-        steps = migrated_steps(strict=True)
-    except sqlite3.DatabaseError as e:
-        raise LegacyStopped(f"{what}: cannot tell from {DB_NAME} whether {LEGACY_STOP} is in ({e}), so it writes "
-                            "nothing") from e
-    if LEGACY_STOP in steps:
-        raise LegacyStopped(f"{what}: the board and tidy moved into {DB_NAME} ({LEGACY_STOP}); this code is older "
-                            f"than that, so it writes nothing. Update the checkout and restart.")
 
 
 def legacy_traces():
@@ -541,17 +841,194 @@ def _legacy_decisions(p):
     return got, max(nxt if isinstance(nxt, int) else 1, top), bad
 
 
+BOARD_FIELDS = {"doing": ("title", "owner", "next", "waiting", "since"), "later": ("title", "trigger", "due", "who"),
+                "todo": ("title", "who", "due", "after", "added")}
+
+
+def _legacy_board(p):
+    """(board, problems, extra) from a board.json. problems stop the import; extra names fields no column holds, which
+    stay in the backup and in each item's import event."""
+    out, bad, extra = {"rows": {}, "order": [], "leads": {}, **{lane: [] for lane in LANES}}, [], set()
+    if p.is_dir():
+        return out, [f"{p.name} is a directory but the step that left it is not recorded: put the file back first"], extra
+    if not p.is_file():
+        return out, [], extra
+    try:
+        data = json.loads(p.read_text())
+    except ValueError as e:
+        return out, [f"{p.name}: not JSON ({e})"], extra
+    if not isinstance(data, dict):
+        return out, [f"{p.name}: not an object"], extra
+    for key, kind in (("rows", dict), ("order", list), ("leads", dict), *((lane, list) for lane in LANES)):
+        if isinstance(data.get(key) or kind(), kind):
+            out[key] = data.get(key) or kind()
+        else:
+            bad.append(f"{key}: not a {kind.__name__}")
+    for lane in LANES:
+        for i, it in enumerate(out[lane]):
+            if lane == "owner_todo":
+                if not isinstance(it, str) or not it.strip():
+                    bad.append(f"owner_todo {i + 1}: not a line of text")
+            elif not isinstance(it, dict) or not isinstance(it.get("title"), str) or not it["title"]:
+                bad.append(f"{lane} {i + 1}: no title")
+            elif lane == "later" and not isinstance(it.get("trigger"), str):
+                bad.append(f"later {i + 1}: no trigger")
+            elif any(not isinstance(it.get(k) or "", str) for k in BOARD_FIELDS[lane] if k != "waiting"):
+                bad.append(f"{lane} {i + 1}: a field of the wrong type")
+            else:
+                extra |= {f"{lane}.{k}" for k in set(it) - set(BOARD_FIELDS[lane])}
+    for rid, r in out["rows"].items():
+        if not isinstance(r, dict) or r.get("id") != rid or not r.get("kind"):
+            bad.append(f"row {rid}: id does not match its key, or no kind")
+    for name, l in out["leads"].items():
+        if not isinstance(l, dict):
+            bad.append(f"lead {name}: not an object")
+    return out, bad, extra
+
+
+def _legacy_tidy(p):
+    """(the done and reopen lines of a tidy.jsonl, how many lines were neither, problems)."""
+    if p.is_dir():
+        return [], 0, [f"{p.name} is a directory but the step that left it is not recorded: put the file back first"]
+    lines = fleet.read_lines(p) if p.is_file() else []
+    good = [l for l in lines if isinstance(l, dict) and isinstance(l.get("id"), str) and l.get("ev") in ("done", "reopen")]
+    return good, (len(p.read_text().splitlines()) if p.is_file() else 0) - len(good), []
+
+
+def _plan_board(board_, lines, state, ts, start=1):
+    """What the 4b step writes: every item with its stable id, the alias from its content hash and the state its tidy
+    line left, a closure per other tidy id, rows and leads less what is Orca's. state None: Orca's view is not known, so
+    rows and leads stay as they are. Nothing is written here; --dry-run shows it and import fills from it."""
+    import tidy  # imports this module
+    last, n = {l["id"]: l for l in lines}, start
+    out = {"items": [], "alias": {}, "same_hash": [], "closures": [], "rows": [], "leads": [], "leads_known": [], "rows_cut": 0}
+    anchors = fleet.inbox_anchors()
+    for lane in LANES:
+        for pos, raw in enumerate(board_[lane]):
+            h, iid = legacy_id(lane, raw), f"b{n}"
+            n += 1
+            d = {"title": raw} if lane == "owner_todo" else raw
+            cur, status, close, reopen = last.get(h) or {}, LANES[lane][0], (None, None, None, None), None
+            if cur.get("ev") == "done":
+                status, close = "done", (cur.get("ts") or ts, cur.get("by"), cur.get("rule"), cur.get("evidence"))
+            elif cur.get("ev") == "reopen":
+                close, reopen = (None, cur.get("by"), cur.get("rule"), None), cur.get("evidence") or ""
+            if h in out["alias"]:
+                out["same_hash"].append(h)
+            else:
+                out["alias"][h] = iid
+            out["items"].append({"id": iid, "lane": lane, "pos": pos, "status": status, "cols": _item_cols(lane, d), "legacy": raw,
+                                 "created": d.get("added") or ts, "close": close, "reopen": reopen})
+    hashes = {legacy_id(lane, raw) for lane in LANES for raw in board_[lane]}
+    for uid, l in last.items():
+        if uid not in hashes:
+            done = l["ev"] == "done"
+            out["closures"].append({"unit": uid, "state": l["ev"], "ts": l.get("ts") or ts, "by": l.get("by"), "rule": l.get("rule"),
+                                    "evidence": l.get("evidence") if done else None, "label": l.get("label"),
+                                    "undone": None if done else l.get("evidence"), "legacy": l,
+                                    "mark": anchors.get(uid[4:], {}).get("resolve" if done else "add") if uid.startswith("ext:") else None})
+    cards = tidy.cards_of(state) if state else {}
+    sessions = {s.get("id"): s for s in (state or {}).get("sessions") or []}
+    by_handle = {t.get("handle"): sid for sid, s in sessions.items() for t in s.get("terminals") or []}
+    rows = {rid: dict(r) for rid, r in board_["rows"].items()}
+    for name, l in board_["leads"].items():
+        sid = l.get("worktree") if l.get("worktree") in sessions else by_handle.get(l.get("handle"))
+        if not l.get("closed_at") and (sessions.get(sid) or {}).get("kind") == "orchestration":
+            out["leads_known"].append((name, l))
+            if name in rows and rows[name].get("kind") == "lead":  # the row keeps its link to the session the lead was
+                rows[name].setdefault("worktree", sid)
+        else:
+            out["leads"].append((name, l))
+    order = [k for k in board_["order"] if k in rows] + [k for k in rows if k not in board_["order"]]
+    for pos, rid in enumerate(order):
+        r = rows[rid]
+        if r.get("pr") and (cards.get(r.get("worktree")) or tidy.named(f"{rid} {r.get('title') or ''}", cards)):
+            del r["pr"]  # the card's PR is Orca's; `worktree` stays as the row's link to the card
+            out["rows_cut"] += 1
+        out["rows"].append((pos, r, board_["rows"][rid]))
+    out["next"] = n
+    return out
+
+
+def _fill_board(db, plan, lines, by="import"):
+    for it in plan["items"]:
+        _insert_item(db, it["id"], it["lane"], it["status"], it["pos"], it["cols"], it["created"],
+                     it["close"][0] or it["created"], it["close"], it["reopen"])
+        _event(db, "item", it["id"], "import", by, it["legacy"], {"lane": it["lane"], "status": it["status"]})
+    for old, iid in plan["alias"].items():
+        db.execute("INSERT INTO alias (old, id) VALUES (?,?)", (old, iid))
+    for c in plan["closures"]:
+        db.execute("INSERT INTO closure (unit, state, ts, by, rule, evidence, label, undone_evidence, ext_mark) "
+                   "VALUES (?,?,?,?,?,?,?,?,?)", (c["unit"], c["state"], c["ts"], c["by"], c["rule"], c["evidence"], c["label"],
+                                                 c["undone"], c["mark"]))
+        _event(db, "closure", c["unit"], "import", by, c["legacy"])
+    for pos, r, legacy in plan["rows"]:
+        _insert_row(db, r, pos)
+        _event(db, "board_row", r["id"], "import", by, legacy)
+    for name, l in plan["leads"]:
+        _insert_lead(db, name, l)
+        _event(db, "lead", name, "import", by, l)
+    for name, l in plan["leads_known"]:
+        _event(db, "lead", name, "import_orca_knows", by, l)
+    for l in lines:
+        if not l.get("carried"):
+            _event(db, "tidy", l["id"], l["ev"], l.get("by"), None, l, l.get("ts"))
+    db.execute("INSERT INTO counter (name, next) VALUES ('b', ?) ON CONFLICT(name) DO UPDATE SET next=excluded.next", (plan["next"],))
+
+
+def _reset_v2(db):
+    for t in TABLES_V2:
+        db.execute(f"DROP TABLE IF EXISTS {t}")
+    for s in SCHEMA_V2:
+        db.execute(s)
+
+
+def load_board(board_=None, lines=(), state=None):
+    """Replace the board tables with board_ (board.json's shape) and lines (tidy.jsonl's), as the import fills them. For
+    tests and the demo, whose worlds are written in the old shape."""
+    source = {"rows": {}, "order": [], "leads": {}, **{lane: [] for lane in LANES}, **(board_ or {})}
+    with tx() as db:
+        plan = _plan_board(source, list(lines), state, now(), _counter(db, "b"))
+        _reset_v2(db)
+        _fill_board(db, plan, list(lines), "load")
+        return {o: i for o, i in plan["alias"].items()}
+
+
+def _board_sources(sd):
+    """(board, tidy lines, problems, unread lines, extra fields) from the files the 4b step moves."""
+    b, bad, extra = _legacy_board(sd / "board.json")
+    lines, unread, bad_t = _legacy_tidy(sd / "tidy.jsonl")
+    return b, lines, bad + bad_t, unread, extra
+
+
 def import_plan():
-    """What `orch db import` would do now: {step, state, decisions, open, next, problems}."""
+    """What `orch db import` would do now: the 4a step's {step, state, decisions, open, next, problems} and, in "board",
+    the 4b step's counts, the ids it would give, and what it finds wrong."""
     sd, steps = fleet.state_dir(), migrated_steps()
     src = sd / "decisions.json"
     got, nxt, bad = _legacy_decisions(src)
-    stage = steps.get("4a-decisions")
+    stage = steps.get(DECISION_STEP)
     state = ("tombstoned" if stage == "tombstoned" else "imported, tombstone pending" if stage == "imported"
              else "unexpected DB without the 4a step" if path().exists() else "not imported")
-    return {"step": "4a-decisions", "state": state, "decisions": len(got), "open": sum(d["status"] == "open" for d in got),
-            "next": nxt, "problems": bad, "source": str(src), "source_kind": "dir" if src.is_dir() else
-            "file" if src.is_file() else "absent"}
+    out = {"step": DECISION_STEP, "state": state, "decisions": len(got), "open": sum(d["status"] == "open" for d in got),
+           "next": nxt, "problems": bad, "source": str(src), "source_kind": "dir" if src.is_dir() else
+           "file" if src.is_file() else "absent"}
+    stage = steps.get(BOARD_STEP)
+    if stage:
+        out["board"] = {"step": BOARD_STEP, "state": "tombstoned" if stage == "tombstoned" else "imported, tombstone pending"}
+        return out
+    b, lines, bad, unread, extra = _board_sources(sd)
+    state_ = fleet.read_json(sd / "state.json", None)
+    p = _plan_board(b, lines, state_ if isinstance(state_, dict) else None, now())
+    by_lane = {lane: sum(i["lane"] == lane for i in p["items"]) for lane in LANES}
+    out["board"] = {"step": BOARD_STEP, "state": "not imported", "items": by_lane, "open": sum(i["status"] in OPEN for i in p["items"]),
+                    "closed": sum(i["status"] == "done" for i in p["items"]), "ids": f"b1..b{p['next'] - 1}" if p["items"] else "none",
+                    "aliases": len(p["alias"]), "same_hash": sorted(set(p["same_hash"])), "closures": len(p["closures"]),
+                    "rows": len(p["rows"]), "rows_pr_cut": p["rows_cut"], "leads": len(p["leads"]),
+                    "leads_orca_knows": [n for n, _ in p["leads_known"]], "tidy_lines": len(lines), "tidy_unread_lines": unread,
+                    "unknown_fields": sorted(extra), "orca_view": "state.json" if isinstance(state_, dict) else "none: rows and leads kept",
+                    "problems": bad}
+    return out
 
 
 def _tombstone(sd, names):
@@ -587,82 +1064,151 @@ def _finish(step, row):
         raise Refused(f"conflict: {', '.join(changed)} changed after the import into the DB (sha256 differs from "
                       f"{row['backup']}). Nothing was tombstoned; compare the file with the backup and the DB by hand")
     _tombstone(sd, sources)
+    if step == BOARD_STEP:  # before the stage, so a crash here runs again; a file already moved is simply not there
+        for name in RETIRED:
+            if (sd / name).is_file():
+                os.replace(sd / name, pathlib.Path(row["backup"]) / name)
     _set_stage(step, "tombstoned")
     return "tombstoned " + ", ".join(sources)
 
 
-def import_apply(rehearsal=False, checks=True):
-    """`orch db import --apply` for 4a. Returns a line of what it did. checks=False is for tests only."""
+def _backup_files(sd, step, ts):
+    """Copy the step's files (0700 directory, 0600 files). Returns (directory, {name: sha256 or None})."""
+    backup = sd / f"backup-db-{ts.strftime('%Y%m%dT%H%M%S%fZ')}"
+    backup.mkdir(mode=0o700)
+    os.chmod(backup, 0o700)
+    sources = {}
+    for name in LEGACY[step]:
+        if (sd / name).is_file():
+            shutil.copyfile(sd / name, backup / name)
+            os.chmod(backup / name, 0o600)
+            sources[name] = sha256(sd / name)
+        else:
+            sources[name] = None
+    return backup, sources
+
+
+def _step_row(step):
+    """The migration row of step, or None; the table missing is None too."""
+    db = _connect(path())
+    try:
+        return db.execute("SELECT * FROM migration WHERE step=?", (step,)).fetchone() if db.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='migration'").fetchone() else None
+    finally:
+        db.close()
+
+
+def _fill_decisions(db, got, nxt, ts, backup, sources):
+    db.execute("PRAGMA journal_mode=WAL")
+    db.executescript(SCHEMA)
+    db.execute("BEGIN IMMEDIATE")
+    for d in got:
+        _insert_decision(db, d)
+        _event(db, "decision", d["id"], "import", "import", None, d)
+    db.execute("INSERT INTO counter (name, next) VALUES ('d', ?)", (nxt,))
+    db.execute("INSERT INTO migration (step, ts, backup, sources, stage) VALUES (?,?,?,?, 'imported')",
+               (DECISION_STEP, ts, str(backup), json.dumps(sources)))
+    _event(db, "migration", DECISION_STEP, "imported", "import", None, {"backup": str(backup), "sources": sources})
+    db.execute("PRAGMA user_version=1")
+    db.execute("COMMIT")
+    ok = db.execute("PRAGMA integrity_check").fetchone()[0]
+    if ok != "ok":
+        raise Refused(f"integrity_check: {ok}")
+
+
+def _import_decisions(sd):
+    """The 4a step: a new DB holding decisions.json, made under a temporary name and renamed in."""
+    step = DECISION_STEP
+    if path().exists():
+        row = _step_row(step)
+        if not row:
+            raise Refused(f"{path()} exists without the {step} step: move it aside by hand, or restore a backup")
+        return _finish(step, row)
+    got, nxt, _ = _legacy_decisions(sd / "decisions.json")
+    ts = fleet.utcnow()
+    backup, sources = _backup_files(sd, step, ts)
+    tmp = sd / f".{DB_NAME}.import-{os.getpid()}.tmp"
+    tmp.unlink(missing_ok=True)
+    old_mask = os.umask(0o077)
+    try:
+        db = _connect(tmp, mode="rwc")
+        try:
+            _fill_decisions(db, got, nxt, fleet.iso(ts), backup, sources)
+        finally:
+            db.close()
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path())
+    except BaseException:
+        for p in (tmp, tmp.with_name(tmp.name + "-wal"), tmp.with_name(tmp.name + "-shm")):
+            p.unlink(missing_ok=True)
+        raise
+    finally:
+        os.umask(old_mask)
+    done = _finish(step, _step_row(step))
+    return f"imported {len(got)} decisions (next d{nxt}); backup {backup}; {done}"
+
+
+def _import_board(sd):
+    """The 4b step, in the live DB: one transaction raises the schema, fills the tables and records the step. A table left
+    by an undone 4b is dropped and filled again; counter b stays, so a b<N> is never given twice."""
+    step = BOARD_STEP
+    row = _step_row(step)
+    if row:
+        return _finish(step, row)
+    b, lines, _, _, _ = _board_sources(sd)
+    state = fleet.read_json(sd / "state.json", None)
+    ts = fleet.utcnow()
+    backup, sources = _backup_files(sd, step, ts)
+    db = _connect(path())
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            plan = _plan_board(b, lines, state if isinstance(state, dict) else None, fleet.iso(ts), _counter(db, "b"))
+            _reset_v2(db)
+            _fill_board(db, plan, lines)
+            db.execute("INSERT INTO migration (step, ts, backup, sources, stage) VALUES (?,?,?,?, 'imported')",
+                       (step, fleet.iso(ts), str(backup), json.dumps(sources)))
+            _event(db, "migration", step, "imported", "import", None, {"backup": str(backup), "sources": sources})
+            db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+            ok = db.execute("PRAGMA integrity_check").fetchone()[0]
+            if ok != "ok":
+                raise Refused(f"integrity_check: {ok}")
+            db.execute("COMMIT")
+        except BaseException:
+            db.execute("ROLLBACK")
+            raise
+    finally:
+        db.close()
+    done = _finish(step, _step_row(step))
+    return f"imported {len(plan['items'])} board items, {len(plan['closures'])} closures, {len(plan['rows'])} rows, " \
+           f"{len(plan['leads'])} leads ({len(plan['leads_known'])} Orca knows, kept in events; {plan['rows_cut']} rows' " \
+           f"--pr dropped); backup {backup}; {done}"
+
+
+def _check_sources(sd, upto):
+    """Every reason the pending steps would stop, before either touches anything."""
+    bad, steps = [], migrated_steps()
+    if not path().exists() and DECISION_STEP not in steps:
+        bad += _legacy_decisions(sd / "decisions.json")[2]
+    if upto == BOARD_STEP and BOARD_STEP not in steps:
+        bad += _board_sources(sd)[2]
+    if bad:
+        raise Refused("the files hold entries the tables cannot; fix them by hand first:\n" + "\n".join(f"  - {b}" for b in bad))
+
+
+def import_apply(rehearsal=False, checks=True, upto=BOARD_STEP):
+    """`orch db import --apply`: each step not yet in, 4a then 4b. Returns a line of what it did. checks=False is for
+    tests only; upto=DECISION_STEP stops after 4a, for a rehearsal of 4b on a live 4a DB."""
     if checks:
         gate(rehearsal)
     sd = fleet.state_dir()
     sd.mkdir(parents=True, exist_ok=True)
-    step = "4a-decisions"
     with _locks():
-        if path().exists():
-            db = _connect(path())
-            try:
-                row = db.execute("SELECT * FROM migration WHERE step=?", (step,)).fetchone() if db.execute(
-                    "SELECT 1 FROM sqlite_master WHERE name='migration'").fetchone() else None
-            finally:
-                db.close()
-            if not row:
-                raise Refused(f"{path()} exists without the {step} step: move it aside by hand, or restore a backup")
-            return _finish(step, row)
-        got, nxt, bad = _legacy_decisions(sd / "decisions.json")
-        if bad:
-            raise Refused("decisions.json has entries the table cannot hold; fix them by hand first:\n"
-                          + "\n".join(f"  - {b}" for b in bad))
-        ts = fleet.utcnow()
-        backup = sd / f"backup-db-{ts.strftime('%Y%m%dT%H%M%S%fZ')}"
-        backup.mkdir(mode=0o700)
-        os.chmod(backup, 0o700)
-        sources = {}
-        for name in LEGACY[step]:
-            if (sd / name).is_file():
-                shutil.copyfile(sd / name, backup / name)
-                os.chmod(backup / name, 0o600)
-                sources[name] = sha256(sd / name)
-            else:
-                sources[name] = None
-        tmp = sd / f".{DB_NAME}.import-{os.getpid()}.tmp"
-        tmp.unlink(missing_ok=True)
-        old_mask = os.umask(0o077)
-        try:
-            db = _connect(tmp, mode="rwc")
-            try:
-                db.execute("PRAGMA journal_mode=WAL")
-                db.executescript(SCHEMA)
-                db.execute("BEGIN IMMEDIATE")
-                for d in got:
-                    _insert_decision(db, d)
-                    _event(db, "decision", d["id"], "import", "import", None, d)
-                db.execute("INSERT INTO counter (name, next) VALUES ('d', ?)", (nxt,))
-                db.execute("INSERT INTO migration (step, ts, backup, sources, stage) VALUES (?,?,?,?, 'imported')",
-                           (step, fleet.iso(ts), str(backup), json.dumps(sources)))
-                _event(db, "migration", step, "imported", "import", None, {"backup": str(backup), "sources": sources})
-                db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
-                db.execute("COMMIT")
-                ok = db.execute("PRAGMA integrity_check").fetchone()[0]
-                if ok != "ok":
-                    raise Refused(f"integrity_check: {ok}")
-            finally:
-                db.close()
-            os.chmod(tmp, 0o600)
-            os.replace(tmp, path())
-        except BaseException:
-            for p in (tmp, tmp.with_name(tmp.name + "-wal"), tmp.with_name(tmp.name + "-shm")):
-                p.unlink(missing_ok=True)
-            raise
-        finally:
-            os.umask(old_mask)
-        db = _connect(path())
-        try:
-            row = db.execute("SELECT * FROM migration WHERE step=?", (step,)).fetchone()
-        finally:
-            db.close()
-        done = _finish(step, row)
-    return f"imported {len(got)} decisions (next d{nxt}); backup {backup}; {done}"
+        _check_sources(sd, upto)
+        done = [_import_decisions(sd)]
+        if upto == BOARD_STEP:
+            done.append(_import_board(sd))
+    return "; ".join(dict.fromkeys(done))
 
 
 # ---------------------------------------------------------------- backup, restore, export, dump
@@ -744,12 +1290,19 @@ def restore(src, rehearsal=False, checks=True):
 
 
 def export_legacy(dest, target):
-    """The files the code before `target` reads. 4a code holds only decisions, so only pre-4a is possible here."""
-    if target != "pre-4a":
-        raise Refused("this code has only the 4a step: --target pre-4a. Undoing 4b alone is 4b code's export")
-    if LEGACY_STOP in migrated_steps():
-        raise Refused(f"{LEGACY_STOP} is imported: undo 4b first with the 4b code's export --target 4a")
-    db = open_db()  # a DB without the decisions step would export an empty file that old code takes as canonical
+    """The files the code of `target` reads. 4a: board.json, tidy.jsonl and a copy of inbox-external.jsonl, with
+    export.json for `orch db rollback 4b`. pre-4a: decisions.json, once 4b is undone. Keeping 4b and undoing 4a alone is
+    not supported. Returns (what was written, how many, whether the WAL checkpoint finished; None when none is needed)."""
+    if target not in ("4a", "pre-4a"):
+        raise Refused("--target is 4a (board and tidy, decisions stay in the DB) or pre-4a (decisions, after 4b is undone)")
+    steps = migrated_steps()
+    if target == "4a":
+        return _export_board(pathlib.Path(dest).expanduser())
+    if BOARD_STEP in steps:
+        raise Refused(f"{BOARD_STEP} is imported: undo 4b first (export --legacy --target 4a, then rollback 4b)")
+    if DECISION_STEP not in steps:  # a DB without the decisions step would export an empty file old code takes as canonical
+        raise NotMigrated(f"{DECISION_STEP} is not in {DB_NAME}: there is nothing to export")
+    db = _raw()
     try:
         db.execute("BEGIN")
         rows = decisions(db=db)
@@ -765,6 +1318,108 @@ def export_legacy(dest, target):
                                        indent=1) + "\n")
     os.chmod(out, 0o600)
     return out, len(rows), not busy
+
+
+def _legacy_item(r):
+    """An item row as board.json held it: (the entry, the id tidy knew it by)."""
+    d = _item(r)
+    if r["lane"] == "owner_todo":
+        return d["title"], legacy_id("owner_todo", d["title"])
+    legacy = {k: v for k, v in d.items() if k not in ("id", "updated_at")}
+    return legacy, legacy_id(r["lane"], legacy)
+
+
+def _export_board(dest):
+    db = open_db()
+    try:
+        db.execute("BEGIN")
+        items = db.execute("SELECT * FROM item WHERE status<>'dropped' ORDER BY lane, pos, CAST(substr(id, 2) AS INTEGER)").fetchall()
+        b = _board(db)
+        closures = db.execute("SELECT * FROM closure ORDER BY ts, unit").fetchall()
+        shut = ext_closures(db)
+        seq = db.execute("SELECT max(seq) FROM event").fetchone()[0]
+    finally:
+        db.close()
+    lanes, lines, state_of = {lane: [] for lane in LANES}, [], {}
+    for r in items:
+        legacy, h = _legacy_item(r)
+        lanes[r["lane"]].append(legacy)
+        state = (r["status"] == "done", r["reopen_evidence"])
+        if state_of.setdefault(h, (state, r["id"]))[0] != state:
+            raise Refused(f"{state_of[h][1]} and {r['id']} have the same words ({h}) in different states; the old format "
+                          "keeps one state per hash. Close or reword one, then export again")
+        if h in {l["id"] for l in lines}:
+            continue
+        if r["status"] == "done":
+            lines.append({"ev": "done", "id": h, "ts": r["closed_at"], "by": r["close_by"], "rule": r["close_rule"],
+                          "evidence": r["close_evidence"], "label": r["title"]})
+        elif r["reopen_evidence"] is not None:
+            lines.append({"ev": "reopen", "id": h, "ts": r["updated_at"], "by": r["close_by"], "rule": r["close_rule"],
+                          "evidence": r["reopen_evidence"], "label": r["title"]})
+    for c in closures:
+        done = c["state"] == "done"
+        lines.append({"ev": c["state"], "id": c["unit"], "ts": c["ts"], "by": c["by"], "rule": c["rule"],
+                      "evidence": c["evidence"] if done else c["undone_evidence"], "label": c["label"]})
+    dest.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(dest, 0o700)
+    drop = lambda row: {k: v for k, v in row.items() if k != "done_at" or v}  # noqa: E731
+    board_json = {"v": 1, "rows": {k: drop(r) for k, r in b["rows"].items()}, "order": b["order"], "leads": b["leads"], **lanes}
+    fleet.write_atomic(dest / "board.json", json.dumps(board_json, ensure_ascii=False, indent=1) + "\n")
+    fleet.write_atomic(dest / "tidy.jsonl", "".join(json.dumps(l, ensure_ascii=False, separators=(",", ":")) + "\n" for l in lines))
+    live = fleet.state_dir() / "inbox-external.jsonl"
+    extra = "".join(json.dumps(l, ensure_ascii=False, separators=(",", ":")) + "\n" for l in fleet.inbox_for_export(shut))
+    fleet.write_atomic(dest / "inbox-external.jsonl", (live.read_text() if live.is_file() else "") + extra)
+    names = ("board.json", "tidy.jsonl", "inbox-external.jsonl")
+    for name in names:
+        os.chmod(dest / name, 0o600)
+    fleet.write_atomic(dest / "export.json", json.dumps(
+        {"target": "4a", "seq": seq, "inbox_source": sha256(live) if live.is_file() else None,
+         "files": {name: sha256(dest / name) for name in names}}, indent=1) + "\n")
+    os.chmod(dest / "export.json", 0o600)
+    return dest, len(items), None
+
+
+def rollback_board(src, rehearsal=False, checks=True):
+    """`orch db rollback 4b DIR`: put an `export --legacy --target 4a` back and take the 4b step out, so the 4a code runs on
+    the files again. The same preflight as import. The export must be of this DB as it stands (no event since) and of this
+    inbox (or the copy a crashed run already placed). The step goes last, so a crash leaves it to run again; its tables
+    stay for a later import to replace."""
+    src = pathlib.Path(src).expanduser()
+    manifest = fleet.read_json(src / "export.json", None)
+    if not isinstance(manifest, dict) or manifest.get("target") != "4a":
+        raise Refused(f"{src}: no export.json from `orch db export --legacy --target 4a`")
+    if checks:
+        gate(rehearsal)
+    if BOARD_STEP not in migrated_steps():
+        raise Refused(f"{BOARD_STEP} is not in {DB_NAME}: nothing to undo")
+    sd = fleet.state_dir()
+    names = ("board.json", "tidy.jsonl", "inbox-external.jsonl")
+    with _locks():
+        db = open_db()
+        try:
+            seq = db.execute("SELECT max(seq) FROM event").fetchone()[0]
+        finally:
+            db.close()
+        if seq != manifest.get("seq"):
+            raise Refused("the DB changed after that export: export again")
+        live = sd / "inbox-external.jsonl"
+        have = sha256(live) if live.is_file() else None
+        if have not in (manifest.get("inbox_source"), manifest["files"]["inbox-external.jsonl"]):
+            raise Refused("inbox-external.jsonl changed after that export: export again")
+        for name in names:
+            if sha256(src / name) != manifest["files"][name]:
+                raise Refused(f"{src / name} is not what the export wrote")
+        for name in names:
+            p, tmp = sd / name, sd / f".{name}.rollback-{os.getpid()}.tmp"
+            shutil.copyfile(src / name, tmp)
+            os.chmod(tmp, 0o600)
+            if p.is_dir():
+                p.rmdir()  # empty, or this stops: a tombstone holds nothing
+            os.replace(tmp, p)
+        with tx() as db:
+            db.execute("DELETE FROM migration WHERE step=?", (BOARD_STEP,))
+            _event(db, "migration", BOARD_STEP, "rollback", "rollback", None, {"from": str(src)})
+    return f"{BOARD_STEP} undone: board.json, tidy.jsonl and inbox-external.jsonl are back from {src}"
 
 
 def dump(table=None):
@@ -800,6 +1455,15 @@ def cutover_plan(step):
     if step not in ("4a", "4b"):
         raise ValueError("cutover-plan 4a|4b")
     stop, start = _stop_start(step)
+    undo = (["orch db backup <file>", "orch db export --legacy --target 4a <dir>", "orch db rollback 4b <dir>",
+             "# revert the PR, fast-forward, start the writers. To go back before 4a too, then:",
+             "# orch db export --legacy --target pre-4a <dir2>",
+             f"# move {DB_NAME} with its -wal and -shm out of the state directory, remove the empty decisions.json",
+             "# directory there, put <dir2>/decisions.json in its place, revert the 4a PR, fast-forward, start the writers"]
+            if step == "4b" else
+            ["orch db backup <file>", "orch db export --legacy --target pre-4a <dir>",
+             f"# move {DB_NAME} with its -wal and -shm out of the state directory, remove the empty decisions.json",
+             "# directory there, put <dir>/decisions.json in its place, revert the PR, fast-forward, start the writers"])
     lines = [f"# cutover {step}: run these yourself, in order. This command ran none of them.",
              "# 1. stop every long-running writer of the state (the dashboard server runs the fleet tick, relay, tidy)",
              *stop,
@@ -812,11 +1476,8 @@ def cutover_plan(step):
              "# 5. start the writers again",
              *start,
              "",
-             f"# undo {step} (pre-4a): stop the writers as in 1, then",
-             "orch db backup <file>",
-             "orch db export --legacy --target pre-4a <dir>",
-             f"# move {DB_NAME} with its -wal and -shm out of the state directory, remove the empty decisions.json",
-             "# directory there, put <dir>/decisions.json in its place, revert the PR, fast-forward, start the writers"]
+             f"# undo {step}: stop the writers as in 1, then",
+             *undo]
     return "\n".join(lines)
 
 
@@ -826,7 +1487,7 @@ def main(argv):
     try:
         if sub == "import" and "--apply" in rest:
             print(import_apply(rehearsal))
-            print("start the writers again (run these yourself):\n" + "\n".join(_stop_start("4a")[1]))
+            print("start the writers again (run these yourself):\n" + "\n".join(_stop_start("4b")[1]))
         elif sub == "import":
             p = import_plan()
             print(json.dumps(p, ensure_ascii=False, indent=1))
@@ -838,9 +1499,12 @@ def main(argv):
             target = rest[rest.index("--target") + 1] if "--target" in rest else ""
             dest = [a for a in rest if not a.startswith("--") and a != target][-1]
             out, n, truncated = export_legacy(dest, target)
-            print(f"wrote {out} ({n} decisions)")
-            print("wal checkpoint: done, the DB can be moved" if truncated else
-                  "wal checkpoint: busy, another connection is open; stop it before moving the DB")
+            print(f"wrote {out} ({n} {'decisions' if target == 'pre-4a' else 'board items'})")
+            if truncated is not None:
+                print("wal checkpoint: done, the DB can be moved" if truncated else
+                      "wal checkpoint: busy, another connection is open; stop it before moving the DB")
+        elif sub == "rollback" and rest[:1] == ["4b"] and [a for a in rest[1:] if not a.startswith("--")]:
+            print(rollback_board([a for a in rest[1:] if not a.startswith("--")][0], rehearsal))
         elif sub == "dump":
             print(json.dumps(dump(rest[0] if rest else None), ensure_ascii=False, indent=1))
         elif sub == "backup" and rest:

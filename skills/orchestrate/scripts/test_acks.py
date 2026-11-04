@@ -11,7 +11,9 @@ env = {**os.environ, "ORCH_FLEET_STATE": str(tmp / "dashboard"), "ORCH_BRIEF_LAS
        "AGENT_SKILLS_CONFIG": str(tmp / "none.json")}
 os.environ.update(env)
 sys.path.insert(0, str(HERE))
-import acks, board, fleet, stages  # noqa: E402
+import acks, board, fleet, stages, store  # noqa: E402
+
+store.import_apply(checks=False)
 
 
 def run(script, *args):

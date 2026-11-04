@@ -6,10 +6,11 @@ the agent fills, 🔴 its lead session is gone, ✅ done. Rules run top to botto
 a later rule never rewrites an earlier one's result, and what later rules also found stays in `also`. A fact a rule
 needs and cannot read is unknown, not false: the rule stops there with ❔ and names what is missing.
 
-gather() is the one adapter that reads the facts (board, tidy, state, prs, decisions, the external inbox, the pressure
-queue, program files and ledgers). PR 4b-1 swaps it for one that reads agent-skills.db; judge(), roll_up() and the
-placement helpers below do not change. brief render, the dashboard's Brief and Stages and `orch stage show` all read
-states through snapshot() or judge(); none of them decides a status of its own.
+gather() is the one adapter that reads the facts (agent-skills.db's board, closes and decisions as the render passes them,
+state, prs, the external inbox, the pressure queue, program files and ledgers). brief render, the dashboard's Brief and
+Stages and `orch stage show` all read states through snapshot() or judged(); none of them decides a status of its own.
+judged() is judge(), except that before `orch db import` it says the closes and decisions are unknown, which judge's facts
+cannot tell it.
 """
 import fnmatch, json, os, pathlib, re
 
@@ -183,10 +184,10 @@ def agent_merges(cfg=None):
 
 
 def gather(*, now, prs, me, shut, verdicts, holds, hold_why, leads, state, decisions, owner_items=None,
-           programs=None, pressure=None, merges=None, state_min=5, programs_unread=None, stalled=None):
+           programs=None, pressure=None, merges=None, state_min=5, programs_unread=None, stalled=None, db_unknown=False):
     """The facts judge() reads, from what the render already holds plus the program, pressure and config files.
     stalled: session id, and that session's current PR -> patrol's reason, for a card patrol found stalled and that has
-    not moved since."""
+    not moved since. db_unknown: the board, closes and decisions could not be read (NotMigrated)."""
     unread = set(programs_unread or ())
     sessions = {s.get("id"): s for s in (state or {}).get("sessions") or []}
     src = (state or {}).get("sources") or {}
@@ -204,7 +205,7 @@ def gather(*, now, prs, me, shut, verdicts, holds, hold_why, leads, state, decis
             "owner_items": owner_items if owner_items is not None else
             [i for i in fleet.external_items(now) if i["type"] in OWNER_TYPES and i.get("session")],
             "programs": programs if programs is not None else program_facts(open_gates, unread=unread),
-            "programs_unread": unread, "stalled": stalled or {},
+            "programs_unread": unread, "stalled": stalled or {}, "db_unknown": db_unknown,
             "pressure": pressure or {}, "pressure_known": pressure is not None,
             "agent_merges": merges if merges is not None else agent_merges()}
 
@@ -435,6 +436,14 @@ def judge(r, f, lead=None, sid=None):
     # 7 🔄
     hit("moving", left or nxt)
     return _first(found)
+
+
+def judged(r, f, lead=None, sid=None):
+    """judge(), or ❔ for every row while the DB holding its closes and decisions cannot be read."""
+    if f.get("db_unknown"):
+        gap = "결정·닫힘 DB 이행 대기"
+        return RowState("check", f"{AGENT_ACTION}: {gap}", gap, unknown=[gap])
+    return judge(r, f, lead, sid)
 
 
 def judge_item(kind, item, f, iid):
