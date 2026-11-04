@@ -62,7 +62,7 @@ PRODUCERS = {
                                                                     "sweep")),
     "pressure": ("pressure round · launchd", ("pressure",)),
     "reaphard": ("reap-hard · launchd", ("reap_hard",)),
-    "cardwatch": ("card-watch monitor", ("card_watch",)),
+    "cardwatch": ("card-watch monitor", ("card_watch", "agent_signal")),
     "hooks": ("hooks · reorient, roles, permission, onboard", (
         "reorient", "roles", "config", "permission", "onboard")),
     "sync": ("skills-sync · launchd", ("sync",)),
@@ -244,6 +244,10 @@ STORES = [
     Store("cardwatch", "S/card-watch/*.json", {"card.watch": CANONICAL}, ("card_watch:main",),
           ("fleet", "patrol", "programview"), rule="per monitor: what it saw last on each card"),
     Store("cardwatchdown", "S/card-watch/.down-*", {"card.watch_down": CANONICAL}, ("card_watch:down_line",), ("fleet",)),
+    Store("agentsignal", "S/agent-signal.jsonl*", {"card.agent_signal": CANONICAL},
+          ("agent_signal:append", "agent_signal:log_round"), ("nobody",),
+          rule="both signals per card, `claude agents` beside the screen, to compare misses; one rotated generation kept"),
+    Store("agentsignallock", "S/agent-signal.lock", {"card.agent_signal": LOCK}, ("agent_signal:append",)),
     Store("reaplocks", "S/locks/*-*.lock", {"work.unit": LOCK, "machine.resource": LOCK}, ("reap-resources/guard:hold",),
           rule="one lock per card, project, volume, process or port a cleaner acts on; cardguard takes the card one "
                "through guard.hold"),

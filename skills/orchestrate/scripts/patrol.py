@@ -45,6 +45,12 @@ idle, exited, stalled), `check` the cards H and R found, each with the reason th
 `cards`. reap-hard, the pressure round and the janitor read `cards` only to keep a card judged working; no verdict
 makes anything a target, and a card missing from it, in a failed round above all, is not evidence it is safe.
 
+After judging, a round asks `claude agents --json` (agent_signal.py) and writes `signals` to that file and both
+signals to <state>/agent-signal.jsonl. It only observes: nothing in `cards`, `failed`, `sources` or any rule reads it.
+A finding's title ends in what the signal said. A screen is compared only where this round read one; the transcript
+goes beside it as its own field. "OK nothing found" means the round missed nothing: every source and screen read,
+every Claude card with a signal. Otherwise the line opens PARTIAL and names what is missing ("신호 없음" for the signal).
+
 --if-due runs only when the last round is 25+ minutes old or the pressure level rose to warn or danger since it
 (reap-hard calls this every pass, the pressure round when its level changes). The round gives up at 120 seconds.
 
@@ -57,7 +63,7 @@ import contextlib, datetime as dt, fcntl, hashlib, json, os, pathlib, re, secret
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 sys.path.insert(1, str(pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts"))
-import card_watch, cardguard, dash, fleet, prog  # noqa: E402
+import agent_signal, card_watch, cardguard, dash, fleet, prog  # noqa: E402
 try:  # dash put the repo's scripts/ on the path
     from sync import BACKGROUND, STALE_COMMAND, stale_signal  # noqa: E402
 except ImportError:  # an install without the repo's scripts/: H judges nothing
@@ -134,6 +140,7 @@ def screen_of(facts, handle):
         try:
             facts["screens"][handle] = facts["read"](handle)
         except (SystemExit, Exception):
+            facts.setdefault("unread", set()).add(handle)
             return None
     return facts["screens"].get(handle)
 
@@ -258,12 +265,15 @@ def gather(now, deadline, memo):
             continue
         if len(screens) >= SCREEN_READS or time.time() > deadline - 20:
             notes.append("screen reads cut short by the round's budget")
+            facts["cut_short"] = True
             break
         screens[h] = take(f"screen {h}", lambda: prog.read_screen(h), None)
     timings["screens"] = round(time.monotonic() - t0, 2)
     facts["screens"] = {h: s for h, s in screens.items() if s is not None}
+    facts["unread"] = {h for h, s in screens.items() if s is None}
     facts["fresh"] = set(facts["screens"])  # screens with new output; an idle candidate's read later is not
     facts["read"] = prog.read_screen
+    facts["agents_fn"] = lambda: agent_signal.read(timeout=min(10, max(1, deadline - time.time())))
     facts["watchers"] = {}
     for s in facts["sessions"]:
         if s.get("kind") == "orchestrator":
@@ -621,6 +631,51 @@ def give_up(*_):
     raise Budget()
 
 
+def signal_card(t, facts, reading):
+    """One card's row for the comparison: the screen only where this round read one or Orca found a wait, the transcript
+    as its own side, and whether Orca looked at all (a handle missing from its list was not looked at)."""
+    h, waits = t.get("handle"), facts["waits"]
+    waited = waits.get(h, prog.NOT_LOOKED)
+    wait = "failed" if "waits" in (facts.get("failed") or ()) else "found" if isinstance(waited, dict) \
+        else "none" if h in waits else "not looked"
+    lines = facts["screens"].get(h)
+    if lines is not None or isinstance(waited, dict):
+        screen, basis, finding = card_watch.screen_view(t, lines, waited, facts["now"] * 1000)
+    else:
+        screen, basis, finding = "unknown", "unreadable" if h in (facts.get("unread") or ()) else "not read", ""
+    motion = (facts["tails"].get(t.get("worktreePath")) or (None, None))[0] if agent_signal.is_claude(t) else None
+    return agent_signal.compare(reading, screen, finding, basis, (motion or {}).get("state"), wait)
+
+
+def signal_round(facts, findings, verdicts, memo, memo2, notes, dry, rid):
+    """Ask `claude agents` once the round's screens are all read, so the query costs them none of the budget. Changes
+    no judgement; a finding's title only gains what the signal said. Returns what the round missed, '' when nothing."""
+    t0 = time.monotonic()
+    rows, problem, raw = facts["agents_fn"]()
+    facts["timings"]["agents"] = round(time.monotonic() - t0, 2)
+    terms = [t for t in facts["terminals"] if t.get("agentIdentity") and t.get("connected", True) and t.get("handle")]
+    reads, warned = agent_signal.readings(terms, rows, problem)
+    cards = {t["handle"]: signal_card(t, facts, reads[t["handle"]]) for t in terms}
+    for f in findings:
+        if text := agent_signal.evidence(reads.get(f.get("handle")), cards.get(f.get("handle"), {}).get("screen")):
+            f["title"] += f" · agents: {text}"
+    notes += warned
+    verdicts["signals"] = {"problem": problem, "cards": cards}
+    if not dry:
+        memo2["signals"] = agent_signal.log_round("patrol", None, rid, cards, memo.get("signals"), problem, raw, warned,
+                                                  {t["handle"]: card_name(t.get("worktreePath")) or t["handle"] for t in terms})
+    blind = sorted(facts.get("failed") or ()) + sorted(facts.get("unread") or ())
+    blind += ["screens cut short"] if facts.get("cut_short") else []
+    blind += [t["handle"] for t in terms if agent_signal.is_claude(t) and cards[t["handle"]]["basis"] == "no evidence"]
+    parts = [f"못 읽은 곳 {len(blind)}: " + ", ".join(blind)] if blind else []
+    gaps = agent_signal.gaps(reads)
+    if problem:
+        parts.append(f"{agent_signal.NO_SIGNAL}: claude agents failed: {problem}")
+    elif gaps:
+        parts.append(f"{agent_signal.NO_SIGNAL} {len(gaps)}: " + ", ".join(f"{h} ({w})" for h, w in gaps.items()))
+    return "; ".join(parts)
+
+
 def round_once(dry=False, if_due=False, now=None, gather_fn=gather, rid=None):
     now = now or time.time()
     memo = fleet.read_json(MEMO, {}) or {}
@@ -630,7 +685,9 @@ def round_once(dry=False, if_due=False, now=None, gather_fn=gather, rid=None):
     t0 = time.monotonic()
     facts, notes = gather_fn(now, time.time() + BUDGET_S, memo)
     findings, verdicts, memo2 = judge(facts, memo)
-    verdicts.update(schema=2, round=rid or round_id(now), complete=False,
+    rid = rid or round_id(now)
+    partial = signal_round(facts, findings, verdicts, memo, memo2, notes, dry, rid) if facts.get("agents_fn") else ""
+    verdicts.update(schema=2, round=rid, complete=False,
                     sources=own_sources(facts), timings=dict(facts.get("timings") or {}),
                     candidates=[], reports=[], alerts=[])
     new, gone = write_round(findings, verdicts, dry, now, facts.get("failed") or ())
@@ -640,7 +697,7 @@ def round_once(dry=False, if_due=False, now=None, gather_fn=gather, rid=None):
     return {"at": fleet.iso(dt.datetime.fromtimestamp(now, dt.timezone.utc)), "seconds": round(time.monotonic() - t0, 1),
             "terminals": len(agents), "workers": len(facts["workers"]), "screens": len(facts["screens"]),
             "level": facts["level"], "findings": findings, "new": [f["id"] for f in new],
-            "cleared": [r["id"] for r in gone], "verdicts": verdicts, "notes": notes, "dry_run": dry,
+            "cleared": [r["id"] for r in gone], "verdicts": verdicts, "notes": notes, "dry_run": dry, "partial": partial,
             "owners": {p: o for p, (_, o) in owners(facts["sessions"]).items() if p and o}}
 
 
@@ -758,8 +815,11 @@ def report(res):
     if res["cleared"]:
         out.append(f"cleared: {' '.join(res['cleared'])}")
     out += [f"note: {n}" for n in res["notes"]]
+    missed = res.get("partial")
     if not res["findings"]:
-        out.append("OK nothing found")
+        out.append(f"PARTIAL nothing found; {missed}" if missed else "OK nothing found")
+    elif missed:
+        out.append(f"PARTIAL {missed}")
     return out
 
 
