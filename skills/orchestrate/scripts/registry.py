@@ -63,8 +63,8 @@ PRODUCERS = {
     "pressure": ("pressure round · launchd", ("pressure",)),
     "reaphard": ("reap-hard · launchd", ("reap_hard",)),
     "cardwatch": ("card-watch monitor", ("card_watch",)),
-    "hooks": ("hooks · reorient, roles, permission, onboard", (
-        "reorient", "roles", "config", "permission", "onboard")),
+    "hooks": ("hooks · reorient, roles, permission, onboard, record_check", (
+        "reorient", "roles", "config", "permission", "onboard", "record_check")),
     "sync": ("skills-sync · launchd", ("sync",)),
     "preview": ("preview-watch · launchd", ("preview_watch",)),
     "share": ("share-server", ("share_server",)),
