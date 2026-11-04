@@ -134,16 +134,16 @@ def check_handle(handle, call, root):
                    "so the variable is renewed")], None, None
 
 
-def card_agent(call, worktree_id):
-    """The handle of an agent terminal open in the worktree, else None. Raises OrcaError when the list cannot be read:
+def card_agents(call, worktree_id):
+    """The handles of the agent terminals open in the worktree. Raises OrcaError when the list cannot be read:
     an unreadable list is not an empty one."""
     if not worktree_id:
-        return None
+        return []
     res = call("terminal", "list", "--worktree", f"id:{worktree_id}")
     if res.get("truncated"):
         raise OrcaError("truncated", "the terminal list is cut short")
     terms = res.get("terminals") or []
-    return next((t.get("handle") for t in terms if t.get("agentIdentity") and t.get("handle")), None)
+    return [t["handle"] for t in terms if t.get("agentIdentity") and t.get("handle")]
 
 
 def observed(w):
@@ -327,16 +327,17 @@ def check_workers(run, call, lead_dispatch=None, me=None):
             continue
         if abandoned:  # Orca settled it when its terminal went: there is nothing to stop or retry, only a session to resume
             try:
-                agent = card_agent(call, wt)
-                resumed = bool(agent) and has_dispatch(call, agent, observed(w))
+                agents = card_agents(call, wt)
+                resumed = any(has_dispatch(call, a, observed(w)) for a in agents)
             except (OrcaError, RuntimeError, SystemExit) as e:  # unreadable is not "nothing there": no command from a guess
                 out.append(("info", f"worker {d} (task {task}) is abandoned, but Orca could not say whether its worktree "
                                     f"already runs a resumed session ({e}): run this check again"))
                 continue
-            if agent:  # a session runs there: resumed, maybe from another Run
+            if agents:  # a session runs there: resumed, maybe from another Run
+                agent = " or ".join(agents)  # which one is the worker's is for the reader to tell
                 if resumed:
                     out.append(("info", f"worker {d} (task {task}) is abandoned here, but its worktree has a live agent "
-                                        f"terminal {agent} with a Dispatch: it was resumed (perhaps on another Run)"))
+                                        f"terminal ({agent}) with a Dispatch: it was resumed (perhaps on another Run)"))
                 else:  # stopped between `terminal create` and `worker-start`: the session has no mailbox
                     out.append(("do", resume_line(w, d, task, h, agent)))
                 continue

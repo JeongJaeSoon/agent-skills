@@ -315,6 +315,14 @@ class Restarted(unittest.TestCase):
             out = does(run("lead", "acme", "run_1", orca=orca, procs=wait_proc(200, "orch wait acme")))
             self.assertEqual(len(out), expect, stamp)
 
+    def test_a_diagnosis_terminal_beside_the_resumed_worker_does_not_hide_it(self):
+        for order in (("term_diag", "term_new"), ("term_new", "term_diag")):
+            live = [{"handle": h, "agentIdentity": "claude"} for h in order]
+            other = self.row("d_new", "dispatched", "active", handle="term_new", runId="run_other")
+            other["resource"] = {"worktreeId": "repo::/elsewhere"}
+            orca = Orca(run="run_1", workers=[self.row("d1", "abandoned"), other], here=live, runs=("run_1", "run_other"))
+            self.assertEqual(does(run("lead", "acme", "run_1", orca=orca, procs=wait_proc(200, "orch wait acme"))), [], order)
+
     def test_a_cut_short_terminal_list_issues_no_recovery_command(self):
         orca = Orca(run="run_1", workers=[self.row("d1", "abandoned")], here=[])
         orca.truncated = True
