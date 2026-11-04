@@ -61,7 +61,7 @@
 
 1. ダッシュボードのサーバーを止めます（ページの回答を届けるのはここです）。macOS ではその LaunchAgent を `launchctl bootout` します。
 2. 読み込まれるメインのチェックアウトを fast-forward します。
-3. 動いている Claude セッションをすべて再起動するか `/reload-plugins` します。各セッションは自分が読み込んだ decision hook を呼ぶからです。
+3. 動いている Claude セッションをすべて再起動します（`/reload-plugins` では通りません）。各セッションは自分が読み込んだ decision hook を呼ぶからです。
 4. `orch db import --dry-run` で、移る決定の数と `--apply` が拒否するかどうかを確かめます。
 5. `orch db import --apply`。次のどれか一つでもあれば拒否します。別のチェックアウトのスクリプト・ラッパー・hook を実行しているプロセス、または fast-forward 前からそれらを実行し続けているプロセス、どの Claude home でもそれより前に始まった生きているセッション、別のコミットのコピーを読み込む plugin や `--plugin-dir` で別のチェックアウトを読み込んだセッション、まだ読み込まれている LaunchAgent（pid がなくても）のうち、このシェルの label のダッシュボードか、`~/Library/LaunchAgents` で agent-skills のスクリプト・ラッパー・hook を実行するもの、それらを実行するコメントアウトされていない crontab の行（更新したチェックアウトを指していても該当するので、切り替えの間はコメントアウトします）。確かめられないときも拒否します。`ps` や `crontab -l` が失敗したとき（crontab のないユーザーや `crontab` コマンドがない場合は問題ありません）、プロセスのディレクトリやチェックアウトの更新時刻を読めないときです。通れば board・tidy・decision のロックを取り、`decisions.json` を sha256 と一緒に `backup-db-<時刻>/`（0700、ファイルは 0600）にコピーし、一時的な名前で DB を作って検査してから所定の場所へ rename し、`decisions.json` の場所に空のディレクトリを置いて古いコードの書き込みを失敗させます。
 6. ダッシュボードのサーバーをもう一度起動します（macOS では `orch-dash install-agent`）。
@@ -90,15 +90,28 @@
 - カードにつながった行への `orch board set --pr` と、別のカードを指す `--worktree` は拒否します。行はつながりを保ち、Orca の PR を表示します。つながっていない行は `--worktree` で一度だけつなげます。
 - Orca が知っているリードへの `orch board lead add` は拒否します。行をつなぐには `orch board set <lead> --kind lead --repo <repo> --worktree <worktree>` を使います。Orca から見えないリードには、これまでどおり `lead add` を使います。
 - 受信箱の項目を閉じても `inbox-external.jsonl` には書きません。閉じた記録が見ていた行を覚えているので、そのキーの新しい行ができればその行が決め、開き直すのに新しい行は要りません。ファイルが書き直されてその行がなくなると、最後の行が決め、ブリーフの headline に `인박스 기록 어긋남` が出ます。
-- `orch db import` の前は、board のコマンドが `orch db cutover-plan 4b` を案内して止まり、ブリーフの headline に `이행 대기: 보드·결정 DB` が出て、行はすべて ❔ になります。
+- `orch db import` の前は、board のコマンドが `orch db migrate`（メインチェックアウトの絶対パス）を案内して止まり、`orch board open` も同じ行を stderr に出し、ブリーフの headline に `이행 대기: 보드·결정 DB` が出て、行はすべて ❔ になります。
 
-## 切り替えの手順
+## 1 本のコマンドで切り替える（`orch db migrate`）
 
-`orch db cutover-plan 4b` が、以下の手順をこの PC で打つコマンドとして出力します。このコマンド自体は何も実行しません。
+オーナーが普通のターミナルで、メインチェックアウトの `bin/orch db migrate` を打ちます（絶対パスは board のコマンドと `orch db cutover-plan 4b` の案内に出ます）。Claude セッションの中では拒否します。サービスを止めて戻すのはオーナーの仕事だからです。流れは次のとおりです。
+
+1. すでに移行済みなら「already migrated」と言って何も変えません。何度実行しても同じです。移行後に古いコードがレガシーファイルを置き直していれば、そう伝えて止まります。
+2. 状態を書くものを止めます。dashboard の LaunchAgent、agent-skills-sync、`ensure` で起動した dashboard サーバー、janitor と watch-prs の automation です。最初に止める前に、戻す手順を `cutover-recover.json` に書きます。LaunchAgent の plist にある `ORCH_*` と `PROGRAMS_HOME` は読むだけで（シェルに無いときだけ実行中の環境変数として使い、plist は書き換えません）、シェルの値と違えば拒否します。
+3. 拒否の理由が残っていれば（古いコードで動くセッション・プロセス・cron の行）、表にして示し、何も移行せずに止めたサービスを戻します。セッションは `/reload-plugins` では通りません。終了して新しく始めたものだけが通ります。
+4. `orch db import` と同じ移行を行い、`migration` の各ステップと `orch board show` で確かめます（`orch board open` は移行前でも正常終了するので確認になりません）。
+5. 終わっても、失敗しても、途中で強制終了されても、止めたものを戻します。LaunchAgent は `install-agent` で plist を書き直さず、既存の plist をそのまま `launchctl bootstrap` します。止まっていた automation は起動しません。戻せなかったものは `cutover-recover.json` に残り、次の実行が先に戻します。
+6. 実行中は `cutover.lock` を握っているので、再起動したセッションの `orch wait` や `ensure` が dashboard サーバーを戻すことはできません。
+
+`orch db migrate --check` は、何を止めるかと何が妨げているかを示し、何も書きません。ほかの PC は main を取り込むと（agent-skills-sync が 15 分以内に取り込みます）、board のコマンドとブリーフがこの 1 行を案内します。新しい PC は `skills-sync setup` が `orch db init` を実行して空の DB を作るので、移行は要りません。すでに状態のある PC では何もしません。
+
+## 手で切り替える順序
+
+`orch db cutover-plan 4b` が、以下の手順をこの PC で打つコマンドとして出力します。このコマンド自体は何も実行しません。上の 1 本のコマンドがこの順序の代わりをします。
 
 1. ダッシュボードのサーバーを止め、janitor を切ります。macOS では LaunchAgent を `launchctl bootout` し、`skills-sync setup disable janitor` を実行します。
 2. 読み込まれるメインのチェックアウトを fast-forward します。
-3. 動いている Claude セッションをすべて再起動するか、`/reload-plugins` します。
+3. 動いている Claude セッションをすべて再起動します（`/reload-plugins` では通りません）。
 4. `orch db import --dry-run` で移す内容を確認します。リストごとの項目数、閉じた記録、行とリード、Orca が持っているので外れるリードと行の PR、そして `--apply` が拒否するかどうかです。
 5. `orch db import --apply`。決定の段階と同じ検査をします。board のバックアップは `backup-db-*` に入り、ファイルごとの sha256 は `migration` テーブルに残ります。`board.json`・`tidy.jsonl` の場所には空のディレクトリを置き、決定のリリースより古いコードの書き込みを失敗させます。決定のリリースのコードは `4b-board` の行を見て止まります。
 6. ダッシュボードのサーバーと janitor をもう一度起動します。

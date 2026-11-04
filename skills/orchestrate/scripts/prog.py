@@ -103,6 +103,8 @@ Usage: orch <command> <slug> [options]
                                      decisions.json while no DB file exists; a DB not imported yet stops with that
   db import [--dry-run | --apply] [--rehearsal] | export --legacy --target 4a|pre-4a DIR | dump [TABLE]
   db backup FILE | restore FILE [--rehearsal] | rollback 4b DIR [--rehearsal] | cutover-plan 4a|4b
+  db migrate [--check] | init        migrate is the whole cutover in one rerunnable command, run by the owner from a
+                                     plain terminal (cutover.py); init is for a PC with no state (setup runs it)
                                      no slug: agent-skills.db (store.py). import moves decisions.json,
                                      board.json and tidy.jsonl in and leaves an empty directory in each
                                      place; --apply refuses while old code, an unreloaded session or a
@@ -3501,7 +3503,7 @@ def cmd_decide(argv):
                      "[--link URL] | list | show <id> | answer <id>|--title T --quote TEXT|--quote-file F [--by SESSION] | "
                      "done <id> [--answer TEXT] | drop <id> | keep <id>")
     except store.NotMigrated as e:
-        sys.exit(f"decisions are not in {store.DB_NAME} yet ({e}); orch db cutover-plan 4b lists the steps")
+        sys.exit(f"decisions are not in {store.DB_NAME} yet ({e})")
     except (ValueError, OSError) as e:
         sys.exit(str(e))
 
@@ -3624,6 +3626,10 @@ def cmd_board(argv):
             sys.exit(1 if refused else 0)
         elif sub == "open":
             items = board.render(fill=True)["open"]
+            try:  # a list without the board's items before the cutover is not the whole board: say what is missing
+                store.open_db().close()
+            except store.NotMigrated:
+                print(f"이행 대기: 보드를 읽을 수 없어 목록에 보드 항목이 없다. 한 줄로 끝낸다: {store.migrate_command()}", file=sys.stderr)
             if "--json" in rest:
                 return print(json.dumps(items, ensure_ascii=False, indent=1))
             for o in items:
@@ -3646,7 +3652,7 @@ def cmd_board(argv):
                      "now [LINE]... | show | open [--json] | done <id>... [--why T] [--json] | reopen <id>... [--json] | "
                      "tidy [--dry-run] [--json] | closed")
     except store.NotMigrated as e:
-        sys.exit(f"the board is not in {store.DB_NAME} yet ({e}); orch db cutover-plan 4b lists the steps")
+        sys.exit(f"the board is not in {store.DB_NAME} yet ({e})")
     except (ValueError, OSError) as e:
         sys.exit(str(e))
     if sub in ("lead", "set") and (warning := board.unnamed_warning()):

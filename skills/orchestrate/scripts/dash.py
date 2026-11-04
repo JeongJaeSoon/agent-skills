@@ -53,6 +53,7 @@ import stages  # noqa: E402
 import flow  # noqa: E402
 import acks  # noqa: E402
 import tidy  # noqa: E402
+import store as store_db  # noqa: E402
 import board  # noqa: E402
 import jobs  # noqa: E402
 sys.path.append(str(HERE.parents[2] / "scripts"))
@@ -2114,6 +2115,8 @@ def cmd_collect(argv):
 
 
 def cmd_serve(argv):
+    if store_db.cutover_running():  # a server that wins the race with `ensure`'s check still ends here
+        sys.exit(MIGRATING)
     serve(prog.opt(argv, "--host", "127.0.0.1"), int(prog.opt(argv, "--port") or default_port()),
           int(prog.opt(argv, "--interval", "60")))
 
@@ -2221,6 +2224,9 @@ def stop(h, port):
 
 # ---------------------------------------------------------------- launchd
 
+MIGRATING = "orch db migrate is running: the dashboard server starts again when it ends"
+
+
 def agent_label():
     return os.environ.get("ORCH_DASH_LABEL") or "io.github.jeongjaesoon.orch-dash"
 
@@ -2307,6 +2313,8 @@ def agent_spec(port):
 
 
 def install_agent(port):
+    if store_db.cutover_running():
+        return False, MIGRATING
     if sys.platform != "darwin":
         return False, "no launchd on this OS; `orch init` and `orch status` keep the dashboard up with `ensure`"
     if not (HERE.parents[2] / ".git").is_dir():  # a worktree or the plugin cache goes away under launchd
@@ -2338,6 +2346,8 @@ def uninstall_agent():
 
 def ensure(port):
     """(ok, message). Starts, restarts or moves only a server it can identify as this store's."""
+    if store_db.cutover_running():  # a restarted session's `orch wait` must not bring the server back mid-import
+        return False, MIGRATING
     if a := agent_status():
         return ensure_agent(a)
     last = (read_json(home() / ".dash.json") or {}).get("port")
