@@ -10,7 +10,8 @@ servers reparented to pid 1, the volumes and images of finished compose stacks, 
 of merged PRs, git worktrees in the scratchpad of a finished session.
 
 This skill needs no program. Its janitor and reap-hard remove finished Orca cards with `orca worktree rm`, after moving
-the worktree's ignored files to the trash; sessions leave that to them (`end-session`, "Who cleans up").
+the worktree's ignored files to the trash; sessions leave that to them (`end-session`, "Who cleans up"). A cleanup
+command you run by hand runs alone (`end-session` §4).
 
 ## Cards: take stock of every Orca card
 

@@ -34,7 +34,7 @@ is no card here" is almost never true, and cwd never proves it. Run the command.
 | `isMainWorktree: true` | the repo's own checkout, or a folder context (memo, scratch) | `orca terminal close --worktree current --all --json`. **Never `worktree rm`** — that selector points at the checkout itself. |
 | errors, or Orca is not running | not under Orca | `EndConversation` (§5) |
 
-`orca terminal close --worktree current --all` stops every terminal process the workspace owns
+Run the ending command alone (`SKILL.md` §4). `orca terminal close --worktree current --all` stops every terminal process the workspace owns
 and **durably removes its tabs, layouts and resume records**. That kills this process and the
 session does not come back. Orca's Sleep is the resumable one, and it is a UI action with no CLI
 equivalent — `orca --help` has no `sleep`. So when the session has to resume later, run nothing
