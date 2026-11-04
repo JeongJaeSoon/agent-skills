@@ -53,7 +53,7 @@ HOOKS = {
     "permission.py": REFUSAL_ONLY,
     "claim_check.py": REFUSAL_ONLY,
     "subagent_log.py": REFUSAL_ONLY,
-    "owner_check.py": "a final reply with owner items and no record call: one warning line, or the block at `deny`",
+    "owner_check.py": "no additionalContext; only its reason when `guard.owner_check` is `deny` and it blocks",
     "record_check.py": "a PR opened, merged or landed (a reminder); a worker_done, card close or turn end that owes a "
                        "record line (the warning or the denial)",
 }

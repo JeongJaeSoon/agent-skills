@@ -61,7 +61,8 @@ assert hook([prompt("go"), say(CAUGHT)], level="ask")[0] == out  # ask acts as w
 
 # Other phrasings count.
 for text in ("이건 오너에게 물어봐야 합니다.", "오너 결정 필요: 범위를 줄일지.", "We should ask the owner about this.",
-             "Owner approval needed before the merge."):
+             "Owner approval needed before the merge.", "오너에게 승인을 요청해야 합니다.",
+             "🙋 승인 필요 · 대안 없음", "🙋 배포 승인 필요; 🔄 테스트 진행 중"):
     out, r = hook([prompt("go"), say(text)])
     assert out and "기록 안 된 오너 항목 1" in out["systemMessage"] and r, text
 
@@ -69,12 +70,14 @@ for text in ("이건 오너에게 물어봐야 합니다.", "오너 결정 필�
 for cmd in ('orch decide add --title "범위" --options a,b', 'orch board now "승인 · 대시보드 → 릴리즈"',
             "orch board set d3 --owner 오너", "orch board set d3 --owner=오너", "orch gate acme/app#1",
             "orch-dash inbox add --type approval --title x --key k", "python3 skills/orchestrate/scripts/prog.py decide add --title x",
-            "cd /r && orca orchestration gate-create --task t1"):
+            "cd /r && orca orchestration gate-create --task t1",
+            "python3 -B skills/orchestrate/scripts/prog.py decide add --title x"):
     assert hook([prompt("go"), *bash(cmd), say(CAUGHT)]) == (None, []), cmd
 
 # A call that does not store an item, or that was refused, covers nothing.
 for cmd in ("orch board show", "orch board set d3 --after acme/app#1", "orch decide list", "echo orch decide add",
-            "orch-dash inbox list", "ls"):
+            "orch-dash inbox list", "ls", "orca terminal rename gate-create", "orch decide add --help",
+            "orch-dash inbox add --dry-run"):
     assert hook([prompt("go"), *bash(cmd), say(CAUGHT)])[0], cmd
 assert hook([prompt("go"), *bash("orch decide add --title x", error="The user doesn't want to proceed with this tool use."),
              say(CAUGHT)])[0]
@@ -120,6 +123,9 @@ os.environ["AGENT_SKILLS_CONFIG"] = str(CFG)
 sub_event = {"hook_event_name": "SubagentStop", "agent_transcript_path": str(sub)}
 CFG.write_text(json.dumps({"guard": {"owner_check": "deny"}}))
 assert subagent_log.stop_passes(sub_event) is False
+os.environ["AGENT_SKILLS_CLAIM_CHECK"] = "0"  # turning claim_check off leaves owner_check's block in force
+assert subagent_log.stop_passes(sub_event) is False
+del os.environ["AGENT_SKILLS_CLAIM_CHECK"]
 CFG.write_text("{}")
 assert subagent_log.stop_passes(sub_event) is True
 print("ok")

@@ -34,12 +34,12 @@ STATE_FILE = "owner-check.jsonl"
 
 OWNER = re.compile(
     r"🙋|오너\s*할\s*일"
-    r"|오너(?:에게|께|한테)\s*(?:묻|물어|여쭤|확인|질문)"
+    r"|오너(?:에게|께|한테)\s*(?:\S{0,6}\s*)?(?:묻|물어|여쭤|확인|질문|요청|문의)"
     r"|오너\s*(?:결정|승인|확인|답변|판단)\s*(?:이\s*|가\s*)?(?:필요|대기|요청)"
     r"|\bask(?:ing)?\s+the\s+owner\b|\bowner\s+(?:decision|approval|action|input)\s+(?:is\s+)?(?:needed|required)\b",
     re.I)
-NONE = re.compile(r"(?:[—–:：-]|\s)\s*(?:없음|없습니다|none|n/a)\s*[.。]?\s*$", re.I)
-STATUS_LEGEND = re.compile(r"🔄")
+NONE = re.compile(r"(?:[—–:：-]\s*|할\s*일\s*)(?:없음|없습니다|none|n/a)\s*[.。]?\s*$", re.I)
+STATUS_LEGEND = re.compile(r"🔄.*⏳|⏳.*🔄")
 UNWRAP = {"orch.py": "orch", "prog.py": "orch", "dash.py": "orch-dash", "orch_dash.py": "orch-dash"}
 
 
@@ -58,18 +58,21 @@ def owner_items(text):
 
 def records(words):
     """True for a command that stores an owner item: a decision, a board owner line, a gate or an inbox item."""
-    if not words:
+    if not words or any(w in ("--help", "-h", "--dry-run") for w in words[1:]):
         return False
     head, args = os.path.basename(words[0]), words[1:]
-    if head.startswith("python") and args:
-        head, args = os.path.basename(args[0]), args[1:]
+    if head.startswith("python"):
+        while args and args[0].startswith("-"):
+            args = args[1:]
+        if args:
+            head, args = os.path.basename(args[0]), args[1:]
     head = UNWRAP.get(head, head)
     if head == "orch":
         return (args[:2] in (["decide", "add"], ["board", "now"]) or args[:1] == ["gate"]
                 or (args[:2] == ["board", "set"] and any(a == "--owner" or a.startswith("--owner=") for a in args)))
     if head == "orch-dash":
         return args[:2] == ["inbox", "add"]
-    return head == "orca" and "gate-create" in args[:3]
+    return head == "orca" and args[:2] == ["orchestration", "gate-create"]
 
 
 def judge(entries, last_message=None):

@@ -22,15 +22,17 @@ sys.path.insert(0, str(HERE))
 
 
 def stop_passes(event):
-    """False when claim_check.py would block this stop: the same guards as its main(), then its judge."""
+    """False when claim_check.py or owner_check.py (at `deny`) would block this stop: the same guards as their main()
+    functions, then their judges. Turning one check off does not turn the other off."""
     import claim_check
-    if os.environ.get("AGENT_SKILLS_CLAIM_CHECK", "1") == "0" or event.get("stop_hook_active"):
+    if event.get("stop_hook_active"):
         return True
     path = event.get("agent_transcript_path") or event.get("transcript_path")
     if not isinstance(path, str) or not os.path.isfile(path):
         return True
     entries = claim_check.turn(path)
-    if claim_check.judge(entries, event.get("last_assistant_message")) is not None:
+    claim_on = os.environ.get("AGENT_SKILLS_CLAIM_CHECK", "1") != "0"
+    if claim_on and claim_check.judge(entries, event.get("last_assistant_message")) is not None:
         return False
     return not owner_blocks(entries, event)
 
