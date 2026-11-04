@@ -142,6 +142,14 @@ assert got["sources"]["reap_hard_cards"] == "failed" and not any(c["rule"] == "c
 got = collect(hard=lambda t: {**HARD, "reap_hard_cards": "failed"})
 assert {c["rule"] for c in got["candidates"]} & set(candidates.HARD_RULE.values()) == {"stack:gone"}, \
     "a listener leans on the card scan's machine read"
+# reap-hard kinds with no shadow rule: reported, and the other kinds' candidates still come through.
+leftover = [{"kind": "container", "id": "example-cid", "target": True, "why": "멈춤"},
+            {"kind": "volume", "id": "example-verify-data", "target": True, "why": "라벨"}]
+got = collect(hard=lambda t: {**HARD, "reap_hard_rest_items": HARD["reap_hard_rest_items"] + leftover})
+assert "stack:gone" in {c["rule"] for c in got["candidates"]}, got["candidates"]
+assert not {c["kind"] for c in got["candidates"]} & {"container", "volume"}, got["candidates"]
+assert {r["key"] for r in got["reports"] if "규칙 없음" in r["why"]} >= {
+    "container:example-cid", "volume:example-verify-data"}, got["reports"]
 # Progress: what was read is there even if the round is cut before collect returns.
 prog = {}
 try:
