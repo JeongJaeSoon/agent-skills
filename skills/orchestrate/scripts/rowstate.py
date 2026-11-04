@@ -183,8 +183,9 @@ def agent_merges(cfg=None):
 
 
 def gather(*, now, prs, me, shut, verdicts, holds, hold_why, leads, state, decisions, owner_items=None,
-           programs=None, pressure=None, merges=None, state_min=5, programs_unread=None):
-    """The facts judge() reads, from what the render already holds plus the program, pressure and config files."""
+           programs=None, pressure=None, merges=None, state_min=5, programs_unread=None, stalled=None):
+    """The facts judge() reads, from what the render already holds plus the program, pressure and config files.
+    stalled: session id -> patrol's reason, for a card patrol found stalled and that has not moved since."""
     unread = set(programs_unread or ())
     sessions = {s.get("id"): s for s in (state or {}).get("sessions") or []}
     src = (state or {}).get("sources") or {}
@@ -202,7 +203,7 @@ def gather(*, now, prs, me, shut, verdicts, holds, hold_why, leads, state, decis
             "owner_items": owner_items if owner_items is not None else
             [i for i in fleet.external_items(now) if i["type"] in OWNER_TYPES and i.get("session")],
             "programs": programs if programs is not None else program_facts(open_gates, unread=unread),
-            "programs_unread": unread,
+            "programs_unread": unread, "stalled": stalled or {},
             "pressure": pressure or {}, "pressure_known": pressure is not None,
             "agent_merges": merges if merges is not None else agent_merges()}
 
@@ -294,7 +295,7 @@ def judge(r, f, lead=None, sid=None):
     # marked done whose PR closed unmerged is not: GitHub outranks the board, and rule 3 holds it as PR 닫힘.
     if tid in f["shut"] or status == "done" and not (p and p.get("state") == "CLOSED" and not merged(p)):
         return RowState("done")
-    if key and p is None:
+    if key and (p is None or not merged(p) and p.get("state") not in ("OPEN", "CLOSED")):
         return stop_unknown("PR 상태 모름")
 
     def lacks(*fields):
@@ -390,6 +391,8 @@ def judge(r, f, lead=None, sid=None):
         hit("check", f"{AGENT_ACTION}: {v['evidence']}", v["evidence"])
     if status == "check":
         hit("check", f"{AGENT_ACTION}: {r.get('why') or '상태 모름'}", r.get("why") or "상태 모름")
+    elif why := f["stalled"].get(r.get("session") or r.get("linked") or r.get("worktree")):  # the row's own card, not sid's
+        hit("check", f"{AGENT_ACTION}: {why}", why)
     for e in queue:
         if e.get("state") in ("gave_up", "failed"):
             hit("check", f"{AGENT_ACTION}: pressure {e['state']} {e.get('what')}", f"pressure {e['state']}")

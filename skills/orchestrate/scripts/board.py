@@ -515,6 +515,14 @@ def patrol_checks(now):
     return {k: (str(w), at) for k, w in check.items() if k}
 
 
+def stalled_why(s, checks):
+    """Patrol's reason for this session, only while the turn patrol saw is still the last: a session at work again, or
+    active since, got past it."""
+    why, judged = checks.get(s.get("path")) or (None, None)
+    active = fleet.parse(s.get("last_activity")) if s.get("last_activity") else None
+    return None if s.get("phase") != "idle" or active and judged and active > judged else why
+
+
 def fleet_rows(state, leads, board_rows, details=None, now=None, stale_s=None, checks=None):
     """Board rows built from the fleet collector's sessions (state.json), for what nobody wrote to the board: each lead
     session whose terminal no board lead holds, the cards under it, and the cards the orchestrator dispatched
@@ -546,11 +554,7 @@ def fleet_rows(state, leads, board_rows, details=None, now=None, stale_s=None, c
         rep = s.get("report") or {}
         if rep.get("next") and s.get("phase") != "offline":
             nxt = rep["next"]  # the card's own last milestone says more than "작업 중"
-        # Only while the turn patrol saw is still the last: a session at work again, or active since, got past it.
-        why, judged = checks.get(s.get("path")) or (None, None)
-        active = fleet.parse(s.get("last_activity")) if s.get("last_activity") else None
-        if s.get("phase") != "idle" or active and judged and active > judged:
-            why = None
+        why = stalled_why(s, checks)
         # A lead reads as its session name (as in the sidebar), a card as the task it was dispatched with.
         title = s.get("name") if kind == "lead" else card_title(s)
         rows[rid] = {"id": rid, "kind": kind, "title": one_line(title or rid), "status": "check" if why else status,
@@ -768,9 +772,10 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         if card := cards.get(r.get("worktree")) or tidy.named(f"{rid} {r.get('title') or ''}", cards):
             r["linked"] = card["id"]
             r["pr"] = fleet.current_pr(card, by_session, prs, extra=[r["pr"]] if r.get("pr") else ())
+    checks = patrol_checks(now)
     if fill:
         extra, extra_order = fleet_rows(state, store["leads"], store["rows"], prs, now,
-                                        float(limits["subagent_stale_h"]) * 3600, patrol_checks(now))
+                                        float(limits["subagent_stale_h"]) * 3600, checks)
         store["rows"], store["order"] = {**extra, **store["rows"]}, store["order"] + extra_order
     rows = store["rows"]
 
@@ -816,7 +821,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     except store_db.NotMigrated:
         open_dec, dec_known = [], False
     facts_in = rowstate.gather(now=now, prs=prs, me=me, shut=shut, verdicts=verdicts, holds=holds, hold_why=hold_why,
-                               leads=store["leads"], state=state, decisions=open_dec, state_min=limits["state_min"])
+                               leads=store["leads"], state=state, decisions=open_dec, state_min=limits["state_min"],
+                               stalled={i: one_line(w) for i, s in sessions.items() if (w := stalled_why(s, checks))})
     states = {}  # row id -> RowState: every status shown below is rowstate.judge()'s, never decided here
 
     def judged(r):

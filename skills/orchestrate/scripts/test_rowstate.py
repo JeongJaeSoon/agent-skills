@@ -152,6 +152,15 @@ stale["sessions_known"] = False
 assert rowstate.judge(row, stale, lead=lead)["unknown"] == ["세션 목록 모름"]
 assert rowstate.judge(row, facts({"octo/app#1": READY}, sessions=sess) | {"pressure_known": False}, sid="wt")["unknown"] == ["pressure 대기열 모름"]
 assert rowstate.judge(row, facts({"octo/app#1": {"key": "octo/app#1", "state": "OPEN"}}))["unknown"] == ["PR 상세 모름"]
+# A PR whose state the collector did not write is neither open nor closed: never 🔄 past every PR rule.
+for no_state in ({k: v for k, v in READY.items() if k != "state"}, {**READY, "state": None}):
+    assert rowstate.judge(row, facts({"octo/app#1": no_state}))["unknown"] == ["PR 상태 모름"]
+assert rowstate.judge({**row, "next": "x"}, facts({"octo/app#1": {**READY, "state": None, "merged_at": "2026-10-13T11:00:00Z"}}))["status"] == "done"
+# Patrol's verdict on the card a row links: that row's ❔, not a row under the same lead.
+stalled = facts({"octo/app#1": READY}) | {"stalled": {"wt": "hook 오류"}}
+for link in ({"worktree": "wt"}, {"linked": "wt"}, {"session": "wt"}):
+    assert rowstate.judge({**row, **link}, stalled, sid="wt")["why"] == "hook 오류", link
+assert rowstate.judge(row, stalled, sid="wt")["status"] == "moving"
 assert rowstate.judge({**row, "owner": "someone"}, facts({"octo/app#1": READY}, me=None))["unknown"] == ["오너 login 모름"]
 # A draft nobody works on, by a session list that can be trusted, is the agent's to resume or hold.
 draft = {**READY, "draft": True}
