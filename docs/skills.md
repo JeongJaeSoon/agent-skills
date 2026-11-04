@@ -557,7 +557,8 @@ PR 을 맡는 스킬과 머지 주체:
     "jira": {"base_url": "https://…", "email_env": "JIRA_EMAIL", "token_env": "JIRA_API_TOKEN", "issue_type": "Task"},
     "rules_file": "~/.config/agent-skills/tracker-rules.md"
   },
-  "notes": {"adapter": "obsidian", "obsidian": {"vault": "<vault>", "access": "mcp"}, "markdown": {"root": "~/notes"}}
+  "notes": {"adapter": "obsidian", "obsidian": {"vault": "<vault>", "access": "mcp"}, "markdown": {"root": "~/notes"}},
+  "orchestrate": {"models": {"lead": "opus", "worker": "sonnet"}}
 }
 ```
 
@@ -605,6 +606,7 @@ PR 을 맡는 스킬과 머지 주체:
 | `orchestrate.ask_user_question` | deny | 오케스트레이터·리드·워커 본 대화의 AskUserQuestion. 서브에이전트와 일반 세션은 대상이 아니다 |
 | `orchestrate.wait_foreground` | deny | 오케스트레이터·리드가 `orch wait`, `orch inbox --wait`, `orch watch-cards`, `orca orchestration check\|inbox --wait`를 `run_in_background` 없이 실행, 또는 배경 대기를 `\| tail`·`\| head`로 자름. 워커의 `check --wait`는 대상이 아니다 |
 | `orchestrate.send_devnull` | deny | 오케스트레이터·리드·워커가 `orca orchestration send\|reply`의 출력을 `/dev/null`로 보냄. `2>/dev/null`만은 대상이 아니다 |
+| `orchestrate.model_flag` | warn | `orchestrate.models`가 설정돼 있는데 `orca orchestration worker-start`·`orca worktree create`·`orca agent launch`가 `--model` 없이 Claude를 띄움. `--terminal`은 대상이 아니다 |
 | `orchestrate.self_land` | warn | `hooks/self_land_gate.py`. 첫 프롬프트에 `PROGRAM`과 `orch land`를 적은 `APPROVED`가 있는 카드가 자기 PR이 열린 채 `worker_done`이나 `orca worktree rm`을 부름. `READY-WAIT:` 줄, `--outcome failed`, human-gate 프로그램은 통과한다. `deny`로 올리면 막는다 |
 | `orchestrate.stack_dependent` | warn | 의존 PR이 스택이 아니다. `hooks/stack_gate.py`가 `gh pr create`에서 브리프의 `Lands after`와 브랜치 이력을 보고, `orch land`·`land-check`가 land-after 간선과 실제 스택을 비교한다. `deny`로 올리면 둘 다 막는다. 못 읽으면 통과 + 경고 한 줄 |
 

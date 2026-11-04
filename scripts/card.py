@@ -4,8 +4,12 @@
 Usage:
   skills-sync card <brief.md> --repo <selector> --name <name> [--display-name <title>] [--comment <text>]
                    [--reference <ticket URL or Jira key>]... [--parent-worktree <selector> | --no-parent] [--card]
-                   [--role impl|verify|review] [--supersede] [--no-forbidden] [--agent claude|codex]
+                   [--role impl|verify|review] [--supersede] [--no-forbidden] [--agent claude|codex] [--model <id>]
   skills-sync handoff <TICKET> ...   (handoff() below)
+
+The session's model: --model when the human named one, else `orchestrate.models.lead` for a lead's brief and
+`orchestrate.models.worker` for anything else (agent-skills.json). With neither, no flag goes out, the card runs on the
+account's default and one warning line says so. A Codex card takes only --model: those keys name Claude models.
 
 --agent picks the card's CLI (default claude). Every brief check runs the same for either. Codex is a supervised
 worker only: its close-setup gets no agent handle, since that reads Claude's screen and worker-start's receipt says it
@@ -603,7 +607,7 @@ def handle_of(res):
 def parse_args(rest):
     opts, refs = {}, []
     valued = {"--repo", "--name", "--display-name", "--comment", "--parent-worktree", "--role", "--title", "--note",
-              "--base-branch", "--agent"}
+              "--base-branch", "--agent", "--model"}
     i = 0
     while i < len(rest):
         if rest[i] == "--reference" and i + 1 < len(rest):
@@ -620,6 +624,20 @@ def parse_args(rest):
     if opts.setdefault("--agent", "claude") not in AGENTS:
         raise Refuse(2, f"--agent is one of {', '.join(AGENTS)}")
     return opts, refs
+
+
+def session_model(opts, lead, name):
+    """The model this start names, or None after a warning line. See the module docstring."""
+    if opts.get("--model"):
+        return opts["--model"]
+    if opts["--agent"] != "claude":
+        return None
+    role = "lead" if lead else "worker"
+    model = orca_settings.role_model(role)
+    if not model:
+        print(f"[{name}] orchestrate.models.{role} is not set: this card runs on the account's default model",
+              file=sys.stderr)
+    return model
 
 
 def refuse_codex(brief, opts):
@@ -690,6 +708,7 @@ def create_locked(brief, opts, refs, prompt):
         raise Refuse(2, f"[{ME}] {CODEX_GOAL_CARD}")
     parent = None if opts.get("--no-parent") else (
         opts["--parent-worktree"] if opts.get("--parent-worktree") and not worker else caller_worktree())
+    model = session_model(opts, lead, ME)
     if worker:
         # Orca delivers a worker's spec as its task, after its own preamble: a leading /goal would not run there.
         spec = re.sub(r"^/goal[ \t]+", "", prompt, count=1)
@@ -708,6 +727,7 @@ def create_locked(brief, opts, refs, prompt):
             cmd += ["--reference", r]
     if opts.get("--comment"):
         cmd += ["--comment", opts["--comment"]]
+    cmd += ["--model", model] if model else []
     cmd.append("--json")
     reason, mark = pressure_check(shlex.join(["orca", *cmd[1:]]))
     if reason:
@@ -756,7 +776,8 @@ def create_locked(brief, opts, refs, prompt):
     # close-setup judges the start from Claude's screen; worker-start's receipt already says a Codex worker is ready.
     setup = start_close_setup(path, handle if opts["--agent"] == "claude" else None, opts["--name"])
     print(json.dumps({**res, "card": {"kind": "worker" if worker else "card", "path": path, "handle": handle,
-                                      "run": run_id, "parent": parent, "forbidden": forbidden, "close_setup": setup}},
+                                      "run": run_id, "parent": parent, "forbidden": forbidden, "close_setup": setup,
+                                      "model": model}},
                      ensure_ascii=False, indent=1))
     failed = []
     if refs:
@@ -850,6 +871,8 @@ def handoff_locked(ticket, opts, refs, prompt):
     cmd += ["--base-branch", opts["--base-branch"]] if opts.get("--base-branch") else []
     cmd += ["--parent-worktree", parent] if parent else ["--no-parent"]
     cmd += ["--agent", "claude", "--prompt", prompt]
+    model = session_model(opts, False, HANDOFF)
+    cmd += ["--model", model] if model else []
     for r in refs:
         cmd += ["--reference", r]
     cmd.append("--json")

@@ -622,6 +622,11 @@ assert load[load.index("--name") + 1] == reap.LOAD_NAME and load[load.index("--t
 assert load[load.index("--precheck") + 1] == "python3 /abs/reap.py precheck --load"
 same = reap.schedule_cmd("/abs/reap.py", reap.STATE_HOME, "path:/repo")
 assert load[load.index("--prompt") + 1] == same[same.index("--prompt") + 1]
+assert not any(a.startswith("--extra-agent-args") for a in same), same
+saved_config, reap.config = reap.config, lambda: {"model": "sonnet"}
+assert "--extra-agent-args=--model sonnet" in reap.schedule_cmd("/abs/reap.py", reap.STATE_HOME, "path:/repo")
+assert not any(a.startswith("--extra-agent-args") for a in reap.schedule_cmd("/abs/reap.py", reap.STATE_HOME, "path:/repo", "codex"))
+reap.config = saved_config
 with tempfile.TemporaryDirectory() as tmp:
     s = pathlib.Path(tmp)
     on = {"automations": [{"name": reap.JANITOR_NAME, "enabled": True}]}
