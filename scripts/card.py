@@ -134,11 +134,15 @@ def row_at(lines, i, across_blank=False):
     while j < len(lines):
         if continues(lines[j]):
             out.append(lines[j].rstrip())
-        elif across_blank and not lines[j].strip() and j + 1 < len(lines) and continues(lines[j + 1]):
-            out.append("")
-        else:
+            j += 1
+            continue
+        end = j
+        while across_blank and end < len(lines) and not lines[end].strip():
+            end += 1
+        if end == j or end == len(lines) or not continues(lines[end]):
             break
-        j += 1
+        out += [""] * (end - j)
+        j = end
     return "\n".join(out)
 
 

@@ -306,7 +306,8 @@ GOAL_LINE = "/goal ship the helper and open its PR"
 PARA_NOW = card.forbidden_paragraph()
 FULL = (f"# card brief\n\n{GOAL_LINE}\n\nAPPROVED: push and PR (owner, 2026-01-01)\n\n{CLOSE}\n"
         f"FORBIDDEN   {card.BEGIN}\n            a stale paragraph.\n            {card.END}\n"
-        "            A repository's own ban.\n\n            Never run the thing; wait instead.\n"
+        "            A repository's own ban.\n\n            Never run the thing; wait instead.\n\n\n"
+        "            Never publish data, even after two blank lines.\n"
         "REPORT      worker_done once, at READY, to run:run_me.\n            Body: what changed.\n"
         "REPORT: orca orchestration send --to run:run_me --type status\n")
 rc, out, err, calls = go(brief(FULL, "full.md"), "--repo", "r", "--name", "full")
@@ -319,6 +320,7 @@ for how, text in (("worker spec", spec), ("card prompt", prompt_of(calls))):
     assert all(l.strip() in text for l in PARA_NOW), (how, "the current FORBIDDEN paragraph is cut", text)
     assert card.BEGIN in text and card.END in text and "a stale paragraph" not in text, (how, text)
     assert "A repository's own ban." in text and "Never run the thing; wait instead." in text, (how, text)
+    assert "Never publish data, even after two blank lines." in text, (how, text)
     assert text.count("REPORT") >= 2 and "Body: what changed." in text, (how, text)
     assert "orca orchestration send --to run:run_me --type status" in text, (how, text)
 # A failed reference after the start is exit 5: the worker runs, so it is not started again.
