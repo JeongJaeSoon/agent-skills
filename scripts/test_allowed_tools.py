@@ -87,7 +87,9 @@ def occurrences(name, body):
         if m.group(0) == name and body[m.end():m.end() + 1] == "`":
             continue
         before = body[:m.start()].rsplit("\n", 1)[-1]
-        out.append((m.group(0).rstrip(), re.search(r"(^|`)\s*$", before) is not None))
+        # A span opened before the command must close right after it, and one that did not open must not follow it.
+        whole = (before.count("`") % 2 == 1) == (body[m.end():m.end() + 1] == "`")
+        out.append((m.group(0).rstrip() + ("" if whole else " …"), re.search(r"(^|`)\s*$", before) is not None))
     return out
 
 
@@ -169,6 +171,9 @@ for drift in ("`orca thing go\tlater`", "`orca thing go\n  later`", "`orca  thin
     assert body_errors(["orca thing go now"], f"`orca thing go now`\n{drift}\n"), drift
 # A span's next line is part of its command, and a command named as another's argument is no call.
 assert body_errors(["orca thing go now"], "`orca thing go now\n  --all`")
+assert body_errors(["orca thing go now"], "`orca thing go now\n--all`")
+assert body_errors(["orca thing go now"], "```bash\norca thing go now `printf %s --all`\n```\n")
+assert not body_errors(["orca thing go now"], "text `orca thing go now` text `other` text\n")
 assert body_errors(["orca thing go now"], "```bash\necho orca thing go now\n```\n")
 assert not body_errors(["orca thing go now"], "```bash\n  orca thing go now\n```\n")
 assert any("outside its entries" in e for e in skill_errors("demo", fixture("Bash(orca thing go now) *")))
