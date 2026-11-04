@@ -45,8 +45,12 @@ GLYPHS = re.compile(r"^[\s⏺⎿⚠✗●◯○\ufe0f]+")  # Claude Code's own m
 # Only a live spinner: a finished turn leaves "✻ Cooked for 41s", which has neither mark.
 SPINNER = re.compile(r"^\s*[✻✶✳✢✽·*]\s+\S.*(?:…|esc to interrupt)")
 AUTH_QUIET_MIN = 2  # a dead session writes nothing; a working one quoting the text keeps writing
-# Not sync.BACKGROUND: its "N agents" also shows on sessions `claude agents` calls idle.
-SHELLS = re.compile(r"\b\d+ shells?\b|shells? still running")
+FALLBACK_BACKGROUND = re.compile(r"\b\d+ (?:shells?|monitors?|local agents?|background tasks?)\b|shells? still running")
+sys.path.append(str(pathlib.Path(__file__).resolve().parents[3] / "scripts"))
+try:
+    from sync import BACKGROUND  # noqa: E402
+except ImportError:  # an install without the repo's scripts/
+    BACKGROUND = FALLBACK_BACKGROUND
 
 
 def agent_terminals(listing, self_handle):
@@ -81,7 +85,7 @@ def screen_state(tail, quiet_min, finding=""):
     box = max((i for i, l in enumerate(tail) if l.strip().startswith("❯")), default=len(tail))
     if any(SPINNER.match(l) for l in tail[:box]):
         return "busy", "spinner"
-    if any(SHELLS.search(l) for l in tail[box + 1:]):  # the status bar only: a turn's text can say the same words
+    if any(BACKGROUND.search(l) for l in tail[box + 1:]):  # the status bar only: a turn's text can say the same words
         return "busy", "background running"
     if quiet_min >= AUTH_QUIET_MIN and any(l.strip() == "❯" for l in tail):
         return "idle", "quiet prompt"
