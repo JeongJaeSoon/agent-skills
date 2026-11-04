@@ -51,7 +51,9 @@ import argparse, difflib, hashlib, json, locale, os, pathlib, shlex, shutil, sub
 HERE = pathlib.Path(__file__).resolve().parent
 REPO = HERE.parent
 sys.path.insert(0, str(REPO / "skills" / "tune-automode" / "scripts"))
+sys.path.insert(0, str(REPO / "skills" / "orchestrate" / "scripts"))
 from automode_rule import merge as automode_merge  # noqa: E402
+import orca_settings  # noqa: E402
 
 BUNDLE = HERE / "recommended-settings.json"
 ENV_KEY = "CLAUDE_CODE_PLUGIN_DIRS"
@@ -449,11 +451,9 @@ def orca_run():
     if not shutil.which("orca") or not os.environ.get("ORCA_TERMINAL_HANDLE"):
         print("orca    not in an Orca terminal; bind the orchestrator's terminal later (orchestrate, \"Your Run\")")
         return
-    rc, out = sh(["orca", "orchestration", "run-current", "--json"])
-    try:
-        bound = (json.loads(out).get("result") or {}).get("run")
-    except ValueError:
-        print(f"orca    run-current failed (rc {rc}); run it by hand: orca orchestration run-current --json")
+    bound = orca_settings.binding()
+    if bound == "unknown":
+        print("orca    run-current failed; run it by hand: orca orchestration run-current --json")
         return
     if bound:
         print(f"orca    this terminal is already bound to {bound.get('id')}")
