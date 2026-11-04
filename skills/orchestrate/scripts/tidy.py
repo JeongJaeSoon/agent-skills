@@ -150,7 +150,7 @@ def assess(store, state, prs, me=None, now=None):
         # A busy card's merged PR is not its current PR, but a line about the card may still be about that PR: ❔.
         ev = refs_over(fleet.pr_refs(text) + [card and (card["pr"] or card["newest_pr"])], prs)
         if not ev:
-            if item_id("doing", d) in noref:
+            if item_id("doing", d) in noref and not doing_card(d, cards):
                 put(item_id("doing", d), "check", "no_ref", "PR·카드 참조 없이 24h+ · 참조를 달거나 닫기", d["title"])
             continue
         if card and card["id"] in live:

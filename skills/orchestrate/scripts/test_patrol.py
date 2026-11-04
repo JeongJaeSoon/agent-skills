@@ -413,6 +413,10 @@ d = {"title": "follow up with infra", "owner": "someone", "next": "ask"}
 got = tidy.assess({"doing": [d]}, {"sessions": []}, {}, now=T)
 assert got == {tidy.item_id("doing", d): {"verdict": "check", "rule": "no_ref",
                                            "evidence": "PR·카드 참조 없이 24h+ · 참조를 달거나 닫기", "label": d["title"]}}, got
+# The verdict file is a round old: an owner set since then links the item, whatever it still says.
+d2 = {**d, "owner": "feature-card"}
+got = tidy.assess({"doing": [d2]}, {"sessions": [{"id": "s-owned", "name": "feature-card", "kind": "standalone", "phase": "working"}]}, {}, now=T)
+assert got == {}, got
 
 # sent: supersede is a kind.
 assert sent.add("h1", "replaced by the new card", kind="supersede", now=T)["kind"] == "supersede"
