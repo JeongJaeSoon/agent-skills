@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-import pathlib, sys, tempfile, unittest
+import pathlib, sys, tempfile, time, unittest
+from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import reboot  # noqa: E402
+import rowstate  # noqa: E402  on sys.path through reboot
 
 ROOT = "/work/app"
 ME = "term_me"
 CLAUDE = 100
 SELF = 900  # the check itself, run from a Bash call of the session
+PAST = rowstate.QUEUE_ENDED_H * 3600 + 60
 
 
 def table(*procs):
@@ -27,8 +30,9 @@ def wait_proc(pid, cmd):
 class Orca:
     """Answers `orca <argv> --json` from a fixture: handles that are live, a Run binding, workers."""
 
-    def __init__(self, live=(ME,), run=None, workers=(), title="orchestrator", here=()):
+    def __init__(self, live=(ME,), run=None, workers=(), title="orchestrator", here=(), concise=False):
         self.live, self.run, self.workers, self.title, self.here = set(live), run, list(workers), title, list(here)
+        self.concise = concise
 
     def __call__(self, *argv):
         if argv[:2] == ("terminal", "show"):
@@ -39,7 +43,7 @@ class Orca:
         if argv[:2] == ("terminal", "list"):
             return {"terminals": self.here}
         if argv[:2] == ("orchestration", "run-current"):
-            return {"run": {"id": self.run} if self.run else None}
+            return {"runId": self.run} if self.concise else {"run": {"id": self.run} if self.run else None}
         if argv[:2] == ("orchestration", "worker-list"):
             state = argv[argv.index("--terminal-state") + 1] if "--terminal-state" in argv else None
             run = argv[argv.index("--run") + 1] if "--run" in argv else None
@@ -160,6 +164,11 @@ class Run(unittest.TestCase):
         self.assertEqual(len(out), 1)
         self.assertIn("run-use --id run_9", out[0])
 
+    def test_concise_answer_is_bound(self):
+        lines = run("lead", "acme", "run_1", orca=Orca(run="run_1", concise=True), procs=wait_proc(200, "orch wait acme"))
+        self.assertIn(("ok", "bound to Run run_1"), lines)
+        self.assertEqual(does(lines), [])
+
     def test_bound_to_another_run_checks_no_workers_there(self):
         workers = [{"dispatchId": "d_other", "taskId": "t", "runId": "run_1", "terminalState": "active",
                     "agentTerminalHandle": "term_dead"}]
@@ -248,6 +257,40 @@ class Queue(unittest.TestCase):
         for line in out[2:]:  # the retry was started: no wait, the result first
             self.assertNotIn("queue wait", line)
             self.assertIn("result", line)
+
+    def entry(self, qid, state, **times):
+        return {qid: {"id": qid, "cwd": ROOT, "state": state, "what": "orch heavy", "added": 1, "command": "c", **times}}
+
+    def listed(self, *entries):
+        out = does(run(queue={k: e for q in entries for k, e in q.items()}))
+        return [line for line in out if "pressure queue" in line]
+
+    def test_an_entry_that_ended_long_ago_is_not_listed(self):
+        for state in ("gave_up", "failed"):
+            self.assertEqual(self.listed(self.entry("q-1", state, ended=time.time() - PAST)), [], state)
+
+    def test_a_late_sweep_does_not_keep_it_listed(self):  # the earlier of ended and deadline, as on the row
+        q = self.entry("q-1", "gave_up", ended=time.time(), deadline=time.time() - PAST)
+        self.assertEqual(self.listed(q), [])
+
+    def test_an_entry_that_just_ended_is_listed(self):
+        for state in ("gave_up", "failed"):
+            out = self.listed(self.entry("q-1", state, ended=time.time() - 60))
+            self.assertEqual(len(out), 1, state)
+
+    def test_a_waiting_or_retrying_entry_is_listed_whatever_its_times(self):
+        # `queue wait` writes down the end of a late entry, so reboot still has to send the session there.
+        for state in ("waiting", "retrying"):
+            q = self.entry("q-1", state, ended=time.time() - PAST, deadline=time.time() - PAST)
+            self.assertEqual(len(self.listed(q)), 1, state)
+
+    def test_the_row_and_reboot_share_one_judgment(self):
+        q = self.entry("q-1", "gave_up", ended=time.time() - 60)
+        self.assertEqual(len(self.listed(q)), 1)
+        with mock.patch.object(rowstate, "queue_over", return_value=True) as over:
+            self.assertEqual(self.listed(q), [])
+        self.assertTrue(over.called)
+        self.assertIn("queue_over", rowstate.judge.__code__.co_names)
 
 
 class Cli(unittest.TestCase):
