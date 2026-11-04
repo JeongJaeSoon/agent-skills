@@ -378,7 +378,7 @@ starts. A new card (`orca worktree create`, a worker into a new worktree) is den
 shows `active_turns_per_cpu` (0.5, 9 on 18 CPUs; null is off) agent turns per CPU in progress (a main turn
 running: an agent whose turn ended and that only waits on a background shell, `orch wait`, an orchestration `ask` or
 a subagent does not count; an Orca that gives no `workingMode` or `mainAgent` is read by `state` alone); the deny names
-`Monitor` on `python3 "$P" turns --wait 15`, which exits 0 once under the cap and 3 after the wait. A count Orca cannot
+`Monitor` on `python3 "$P" turns --wait 15`, which exits 0 once under the cap and 3 after the wait (2 when `--wait` has no minute count: it never skips the wait). A count Orca cannot
 give (no answer, a cut-short list) holds like a full one, in the hook and in `turns`/`turns --wait` alike (`turn_hold`):
 the wait polls until the count is readable and exits 3 with "cannot count" if it never is; only `null` turns the cap off.
 The caller's own turn is left out of the count (its pane key comes from `$ORCA_TERMINAL_HANDLE`), so the wait, which runs

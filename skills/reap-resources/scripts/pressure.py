@@ -1100,8 +1100,16 @@ def main(argv):
     cmd = argv[0] if argv else ""
     cfg = config(overrides(argv)) if cmd in ("check", "round", "queue", "history", "turns") else None
     if cmd == "turns":
-        if "--wait" in argv[:-1]:
-            return turns_wait(cfg, float(argv[argv.index("--wait") + 1]))
+        if "--wait" in argv:
+            i = argv.index("--wait") + 1
+            try:
+                minutes = float(argv[i]) if i < len(argv) else None
+            except ValueError:
+                minutes = None
+            if minutes is None or not 0 <= minutes < math.inf:  # nan, negatives and inf (a wait with no end) fail
+                print("--wait needs the minutes to wait, e.g. `turns --wait 3`", file=sys.stderr)
+                return 2
+            return turns_wait(cfg, minutes)
         n, cap = active_turns(), turn_cap(cfg)
         print(f"진행 중인 에이전트 턴 {'?' if n is None else n}개 / 상한 {cap or '없음'}")
         if SELF_NOTE:
