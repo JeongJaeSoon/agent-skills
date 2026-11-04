@@ -1899,9 +1899,13 @@ def release_own_lanes(p, pr):
         ExclusiveLock(p, path.stem[len(prefix):]).release(pr)
 
 
+class HoldRefusal(str):
+    """A land's exit-1 message that keeps its land call: the hold passes the PR over, `record admitted` brings it back."""
+
+
 def stop_land(p, pr, why):
     release_own_lanes(p, pr)
-    if not on_hold(p.events(), pr):  # the hold passes it over already, and `record admitted` brings the call back
+    if not isinstance(why, HoldRefusal):
         p.append("land_check", pr=pr, outcome="stopped", note=why[:300])
 
 
@@ -2139,7 +2143,7 @@ def attempt(p, pr, klass, onto_lower=False):
             close_gate_task(p, pr, "failed")
         return 1, f"#{pr} is {v['state']}"
     if on_hold(events, pr):
-        return 1, f"#{pr} is on hold (record parked); `orch record {p.slug} admitted --pr {pr}` releases it"
+        return 1, HoldRefusal(f"#{pr} is on hold (record parked); `orch record {p.slug} admitted --pr {pr}` releases it")
     # Before the waits below: a dependent PR outside a stack waits on them for as long as its lower PR takes.
     gaps, flipped = stack_gaps(events, rows, stacks, deps, pr) if not unread else ([], [])
     if flipped:
@@ -2212,6 +2216,7 @@ def attempt(p, pr, klass, onto_lower=False):
             lane.release(pr)
         elif code == 1:  # parked, so exclusive_turn passes it over until `record admitted`
             p.append("parked", pr=pr, note=msg[:300])
+            return code, HoldRefusal(msg)
         return code, msg
     if me["state"] == "catching_up":
         note_attempt(p, events, pr, "catching_up", me["reasons"])

@@ -755,6 +755,16 @@ assert "READY-stop" in out and out.index("READY-stop") < out.index("#2"), out
 code, out = prog(env, "land", "t", "--pr", "2")
 assert code == 0 and "landed #2" in out, out
 
+# What ended the land decides, not whether a hold happens to be on: a STOP refusal during a hold still ends the call.
+d, env = two_no_ci()
+prog(env, "record", "t", "parked", "--pr", "1", "--note", "waits for a cutover")
+prog(env, "record", "t", "stop", "--note", "window")
+assert prog(env, "land", "t", "--pr", "1")[0] == 1
+prog(env, "record", "t", "resume")
+prog(env, "record", "t", "admitted", "--pr", "1")
+code, out = prog(env, "land", "t", "--pr", "2")
+assert code == 0 and "landed #2" in out, out
+
 # It is not starved: once it calls land it contends in its old place, ahead of the PR that passed it.
 d, env = no_ci_setup(dict(pr(1), behind=1), pr(2))
 verdict_only(d, 1, "T-1"); verdict(d, 2, "T-2")

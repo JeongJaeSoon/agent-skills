@@ -49,7 +49,7 @@ Only a PR with a live `land` call takes a turn. Passed over, keeping its place i
 - a PR on hold (`record parked --pr N`), and the stack above it, since the merge would take that layer; `record admitted` brings it back. This ledger hold is the one `land` reads. The board's `todo`/`later` PR hold only quiets the owner's report.
 - a READY-stop PR: one with a verdict and no `land` call, or whose last `land` ended at exit 1 (a human gate, a STOP line). It is merged outside `land` or is waiting, so a turn would go unused. `orch queue` marks it `READY-stop`.
 
-When such a PR calls `land`, it contends from its old place, ahead of the PRs that passed it. A hold does not free a lock the PR already has, because a `land` may be running under it: the yield says `on hold`, and `exclusive_stale_minutes` ends it.
+When such a PR calls `land`, it contends from its old place, ahead of the PRs that passed it. Recording a hold does not free a lock the PR already has, because a `land` may be running under it: the yield says `on hold`, and that PR's next `land` or `exclusive_stale_minutes` ends it.
 
 **No-CI lane.** For a repo with no CI at all. The human lists it in `~/.claude/agent-skills.json`:
 
