@@ -63,8 +63,8 @@ PRODUCERS = {
     "pressure": ("pressure round · launchd", ("pressure",)),
     "reaphard": ("reap-hard · launchd", ("reap_hard",)),
     "cardwatch": ("card-watch monitor", ("card_watch",)),
-    "hooks": ("hooks · reorient, roles, refusals, permission, onboard", (
-        "reorient", "roles", "lib/refusals", "config", "permission", "onboard")),
+    "hooks": ("hooks · reorient, roles, permission, onboard", (
+        "reorient", "roles", "config", "permission", "onboard")),
     "sync": ("skills-sync · launchd", ("sync",)),
     "preview": ("preview-watch · launchd", ("preview_watch",)),
     "share": ("share-server", ("share_server",)),
@@ -89,7 +89,7 @@ CONSUMERS = {
     "reflect": "reflect precheck · improvement loop",
     "watchprs": "watch-prs round",
     "mentions": "watch-mentions round",
-    "reorient": "hooks · reorient, guard, delegate_gate, refusals",
+    "reorient": "hooks · reorient, guard, delegate_gate",
     "patrol": "patrol round · orch patrol timing",
     "janitor": "janitor · reap, reap-hard, cards, sweep",
     "pressure": "pressure round · pressure gate hook",
@@ -252,13 +252,10 @@ STORES = [
     Store("synclock", "S/sync.lock", {"sync.result": LOCK}, ("sync:locked",)),
     Store("reload", "S/reload-pending.json", {"sync.reload_pending": CANONICAL},
           ("sync:queue_reload", "sync:broadcast_locked"), ("fleet",), rule="reloads not yet sent, per terminal"),
+    Store("restarts", "S/restarts.json", {"sync.stale_restart": CANONICAL}, ("sync:restart_stale",), ("sync",),
+          rule="per terminal: the /restart or /reload-plugins typed once for a stale screen, or why it waits"),
     Store("synclog", "S/sync.log*", {"sync.output": CANONICAL}, ("ext:launchd", "reap:reap_state_file"), ("nobody",),
           rule="launchd stdout; the janitor rotates it"),
-    Store("refusals", "S/refusals.jsonl", {"refusal.act": CANONICAL},
-          ("lib/refusals:start", "lib/refusals:record", "lib/refusals:clear"), ("reorient", "programview"),
-          rule="acts the classifier or the human refused, open until `orch refusal clear`; every session is "
-               "blocked from doing them again"),
-    Store("refusalslock", "S/refusals.lock", {"refusal.act": LOCK}, ("lib/refusals:locked",)),
     Store("guarderrors", "S/guard-errors.jsonl", {"hook.error": CANONICAL}, ("config:log_error",), ("nobody",),
           rule="a hook's own exception, let through; read by a person"),
     Store("onboard", "S/onboard-declined.json", {"onboard.declined": CANONICAL}, ("onboard:decline",), ("reorient",)),
@@ -639,7 +636,7 @@ class _Module:
         self.name, self.tree, self.home = name, tree, home
         self.stem = name.rsplit("/", 1)[-1]
         self.consts, self.funcs, self.attrs = {}, {}, {}
-        self.packaged = {}  # `from lib import refusals`: refusals -> "lib"
+        self.packaged = {}  # `from lib import danger`: danger -> "lib"
         for node in tree.body:
             if isinstance(node, ast.ImportFrom) and node.module and not node.level:
                 for a in node.names:
