@@ -1332,6 +1332,12 @@ def _legacy_item(r):
     return legacy, legacy_id(r["lane"], legacy)
 
 
+def legacy_ids(ids):
+    """The ids older code knows items by, for a line it will run."""
+    with read() as db:
+        return [_legacy_item(_item_now(db, i))[1] for i in ids]
+
+
 def _export_board(dest):
     db = open_db()
     try:

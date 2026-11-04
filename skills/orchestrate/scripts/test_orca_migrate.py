@@ -91,14 +91,17 @@ os.environ["ORCH_FLEET_STATE"] = was
 assert json.loads((bk / "migrate.json").read_text())["closed"] == [first, owned]
 cur = tidy.latest()[first]
 assert cur["ev"] == "done" and cur["by"] == "migrate" and cur["rule"] == "moved_to_orca", cur
-assert f"--restore {bk}" in out and f"orch board reopen {first} {owned}" in out, out
+hashes = store.legacy_ids([first, owned])
+assert hashes[0].startswith("doing:") and f"--restore {bk}" in out and f"orch board reopen {' '.join(hashes)}" in out, out
 
 # Idempotent: nothing left, no second backup.
 code, out, err = run("--apply")
 assert code == 0 and "nothing to migrate" in out, (out, err)
 assert len([d for d in sd.iterdir() if d.name.startswith("backup-orca-v2-")]) == 1
 
-# Restore: reopens it; the board reads the line open again.
+# Restore: reopens it; the board reads the line open again. A record from before stable ids holds their hashes.
+record = json.loads((bk / "migrate.json").read_text())
+(bk / "migrate.json").write_text(json.dumps({**record, "closed": hashes}))
 code, out, err = run("--restore", str(bk))
 assert code == 0, err
 assert tidy.latest()[first]["ev"] == "reopen" and first in out, out

@@ -103,7 +103,7 @@ def restore(dest, now=None):
     ts, opened, again, skipped = fleet.iso(now or fleet.utcnow()), [], [], []
     with store_db.tx() as db:
         have = store_db.latest(db)
-        for iid in record["closed"]:
+        for iid in (store_db.resolve(db, i) for i in record["closed"]):  # a run from before stable ids recorded hashes
             cur = have.get(iid) or {}
             if cur.get("ev") == "done" and cur.get("by") == "migrate":
                 store_db.reopen_unit(db, iid, ts, "migrate", "restore")
@@ -145,7 +145,7 @@ def run(argv):
         print(f"backup: {dest}")
         print(f"closed {len(ids)}: " + " ".join(ids))
         print(f"undo: orch migrate --restore {dest}")
-        print("undo with older code: orch board reopen " + " ".join(ids))
+        print("undo with older code, after the 4b rollback: orch board reopen " + " ".join(store_db.legacy_ids(ids)))
     elif argv[:1] == ["--restore"] and len(argv) == 2:
         try:
             ids, again, skipped = restore(pathlib.Path(argv[1]).expanduser())
