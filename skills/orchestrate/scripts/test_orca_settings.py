@@ -142,7 +142,8 @@ for result in ({"run": None}, {"runId": None}):
 got, calls, err = bound(answer({"bindings": []}))
 assert got is None and len(err.splitlines()) == 1 and "neither" in err and "bindings" in err, (got, err)
 # Only the refusal of --full is asked again: any other failure is "unknown", never "unbound".
-for broken in ((1, "", "connect ECONNREFUSED"), (0, "not json", ""), (0, "[]", "")):
+for broken in ((1, "", "connect ECONNREFUSED"), (0, "not json", ""), (0, "[]", ""),
+               (0, json.dumps({"ok": False, "error": {"code": "runtime_unavailable"}}), "")):
     got, calls, err = bound(broken)
     assert got == "unknown" and len(calls) == 1, (broken, got, calls)
 got, calls, _ = bound((1, "", REFUSED), (1, "", "connect ECONNREFUSED"))

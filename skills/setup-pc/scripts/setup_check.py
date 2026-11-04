@@ -239,7 +239,7 @@ def check_orca(settings, run=run, environ=os.environ):
         answer = json.loads(out) if not rc else None
     except ValueError:
         answer = None
-    if not isinstance(answer, dict):
+    if not isinstance(answer, dict) or answer.get("ok") is False:
         return rows + [row("warn", "Orca Run 바인딩", f"run-current 를 읽지 못함 (rc {rc})", "! orca orchestration run-current --json")]
     bound = orca_settings.run_of(answer.get("result"))
     if bound:

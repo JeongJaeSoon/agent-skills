@@ -208,7 +208,7 @@ class Orca(Base):
 
     def test_failed_run_current_is_not_unbound(self):
         out = json.dumps({"ok": False, "error": {"code": "runtime_unavailable"}})
-        for answer in ((1, out), (0, "not json")):
+        for answer in ((1, out), (0, out), (0, "not json")):
             rows = sc.check_orca({}, fake_run({self.CURRENT: answer}), environ={"ORCA_TERMINAL_HANDLE": "term_x"})
             self.assertEqual(rows[0]["status"], "warn")
 

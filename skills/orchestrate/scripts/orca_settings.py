@@ -91,13 +91,17 @@ def suggestions(settings):
 
 
 def orca_call(orca=None):
-    """call(*argv): the result object of `orca <argv> --json`; RuntimeError with Orca's output when it fails."""
+    """call(*argv): the result object of `orca <argv> --json`; RuntimeError with Orca's output when it fails, by exit
+    code or by `ok: false`."""
     def call(*argv):
         p = subprocess.run([orca or os.environ.get("SKILLS_SYNC_ORCA", "orca"), *argv, "--json"],
                            capture_output=True, text=True, timeout=30)
         if p.returncode:
             raise RuntimeError(f"{p.stdout} {p.stderr}")
-        return json.loads(p.stdout).get("result") or {}
+        out = json.loads(p.stdout)
+        if out.get("ok") is False:
+            raise RuntimeError(p.stdout)
+        return out.get("result") or {}
     return call
 
 
