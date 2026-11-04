@@ -34,9 +34,7 @@ commit, and whether dev already contains it.
 2. **Release to dev.** Follow `dev_release` exactly. For `auto-sync`, there is nothing to trigger:
    wait. Otherwise trigger the declared path once for all the merges in the batch — one release
    per batch, not one per PR. The trigger needs an approval in the brief or from the owner; with
-   none, ask and wait. If the trigger is refused by a permission prompt, the auto-mode classifier,
-   a hook or a human, do not try it again in any form (re-run, script, other tool, renamed target,
-   another session); report what it was for, the refusal and the exact command.
+   none, ask and wait. A refused act is not run again, except once, in the same form, by the refused session (a restart that loads a new rule counts as that session), and only when the human allowed it in that session's own chat or added a rule for it, or when a classifier or hook refusal stated a reason and you added evidence that answers it, never for a human's refusal or a production sync. Report that retry as `재시도 1회: <what you added>`. A second refusal stops the act and you report it. Reaching the same result through another session, script, tool, wrapper or target stays forbidden. A refused trigger is reported with what it was for, the refusal and the exact command.
 3. **Wait until dev runs the merge.** The release finishing is not the environment running it: a
    GitOps app applies desired state later. Poll `revision_cmd` until it contains every merge, then
    read the environment's own live state (e.g. the GitOps app's last sync time and revision) and

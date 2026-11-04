@@ -48,6 +48,7 @@ HOOKS = {
                     "; a role session's Agent prompt without the refused-act paragraph (the paragraph, appended)",
     "delegate_gate.py": REFUSAL_ONLY,
     "pressure_gate.py": REFUSAL_ONLY,
+    "self_land_gate.py": "a program card's worker_done or worktree rm over its own open PR: its reason, or one warning line",
     "permission.py": REFUSAL_ONLY,
     "claim_check.py": REFUSAL_ONLY,
     "subagent_log.py": REFUSAL_ONLY,
