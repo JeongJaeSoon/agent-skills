@@ -3157,9 +3157,16 @@ def cmd_stage(argv):
             t, gone = stages.table(state), 0
             if opt(rest, "--program"):
                 t = stages.of_program(t, opt(rest, "--program"))
+            import rowstate
+            try:  # 지금: the brief's own judgment of each row's linked board row; none when the board cannot be read
+                by_pr, known = rowstate.snapshot()["by_pr"], True
+            except Exception as e:  # noqa: BLE001 — the stage table still shows, without 지금 and folding no PR row
+                by_pr, known = {}, False
+                print(f"warning: 지금 칸 없음: {type(e).__name__}: {e}", file=sys.stderr)
+            t = stages.with_now(t, by_pr)
             if "--all" not in rest:  # the rows the brief's line counts
                 idle_d = {**board.LIMITS, **(fleet.config().get("board") or {})}["stage_idle_d"]
-                t, gone = stages.current(t, fleet.utcnow(), idle_d * 86400, state)
+                t, gone = stages.current(t, fleet.utcnow(), idle_d * 86400, state, by_pr, known)
             if "--json" in rest:
                 return print(json.dumps(t, ensure_ascii=False, indent=1))
             text = (stages.render_telegram if "--telegram" in rest else stages.render_md)(t)
@@ -3187,7 +3194,8 @@ def cmd_board(argv):
             board.lead_close(rest[1])
         elif sub == "set" and rid:
             board.set_row(rid, **{f: opt(rest, f"--{f}") for f in
-                                  ("kind", "title", "repo", "program", "parent", "status", "progress", "next", "owner", "pr", "worktree")})
+                                  ("kind", "title", "repo", "program", "parent", "status", "progress", "next", "owner", "pr", "worktree",
+                                   "after")})
         elif sub == "drop" and rid:
             board.drop(rid)
         elif sub == "doing" and rest[:1] == ["add"] and len(rest) > 1:
@@ -3251,7 +3259,7 @@ def cmd_board(argv):
         else:
             sys.exit("usage: orch board lead add <name> --handle H --repo R [--program P] [--run RUN] [--stale-min N] [--worktree ID] | "
                      "lead close <name> | set <id> [--kind K] [--title T] [--repo R] [--program P] [--parent ID] [--status S] "
-                     "[--progress N/M] [--next T] [--owner W] [--pr owner/repo#N] [--worktree ID] | drop <id> | doing add <title> --owner W --next E [--waiting] | doing drop <n> | later add <title> --trigger T [--due D] | "
+                     "[--progress N/M] [--next T] [--owner W|-] [--after owner/repo#N|-] [--pr owner/repo#N] [--worktree ID] | drop <id> | doing add <title> --owner W --next E [--waiting] | doing drop <n> | later add <title> --trigger T [--due D] | "
                      "later drop <n> | todo add <title> (--due D | --after C) --who W | todo drop <n> | todo from-later <n> [--due D] --who W | "
                      "now [LINE]... | show | open [--json] | done <id>... [--why T] [--json] | reopen <id>... [--json] | "
                      "tidy [--dry-run] [--json] | closed")

@@ -159,6 +159,8 @@ The guardian, or with none running whoever is about to record `main_red`, reads 
 
 Workers stop at READY. `land` refuses them with exit 1, and they report. You open the gate with `orch gate <slug> --pr N`, which creates an Orca decision gate on a lead-owned Task. The user resolves it in Orca. You then run `orch land <slug> --pr N`: it sees the resolution, records `approved`, and lands. No worker settles that `Land #N` Task, so `land` closes it: completed when the PR lands, failed when the user resolved the gate as hold or the PR was closed. Gating the PR again makes a new Task.
 
+A gate answered hold becomes a held item naming the PR (`orch board later add "<work> <PR>" --trigger <condition>`), which the brief shows as ⏸️. Before gating that PR again, close the held item (`orch board done <later id>` or `orch board later drop <n>`): the brief reads a waiting gate as 🙋 and an approved one as 🔄 only once no held item names the PR, so a gate opened over a live held item leaves the row ⏸️ after approval. A gate the brief cannot confirm open or approved (not in the collector's open gates, no `approved` after its `gate_opened`) is ❔ until `orch land` reads its answer.
+
 ## Permissions
 
 Merging inside `orch land` is what lets a worker land without a per-merge approval prompt. The plugin's PreToolUse hook (`hooks/guard.py`) makes the permission decisions a program needs, for every session and subagent where the plugin is enabled:
