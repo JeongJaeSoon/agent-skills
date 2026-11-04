@@ -225,10 +225,8 @@ GOAL        Keep settled workers, dead processes and leftover worktrees from eat
 ROUND       Every 20 minutes, woken by a Bash loop under run_in_background. Take stock: orca
             worktree list, orca terminal list, the orchestration task and dispatch state; per
             worktree its git status, unpushed commits, PR state and whether its turn is live.
-WORKTREES   orca worktree rm (checks and --run-hooks per end-session §4) only when all hold: its
-            dispatch is settled (worker_done, released or stopped), no live turn, a clean tree, no
-            unpushed commits, its PR merged or closed, or never opened, and no `card left:
-            worktree rm refused` status from it (that card goes to the human). Never --force.
+WORKTREES   reap-hard and the janitor remove worktrees (end-session, "Who cleans up"). This role
+            removes none and reports the finished cards that stay.
             Never touch: an orchestrator's or lead's worktree, the checkout that loads the skills
             (docs/platform.md), a standing role's worktree, a live turn, an open PR, local changes.
 LEFTOVERS   Every round, run the reap-resources skill's scripts/reap.py (its SKILL.md holds the
