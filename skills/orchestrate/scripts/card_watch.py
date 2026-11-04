@@ -290,8 +290,10 @@ def missing(terms, reads, states, problem):
 
 def record(seen, memo, terms, reads, states, problem, raw, warned, by):
     """Both signals of one round into the comparison log; seen keeps what the next round compares with."""
-    cards = {t["handle"]: agent_signal.compare(reads[t["handle"]], *states.get(t["handle"], ("unknown", "unreadable", "")))
-             for t in terms}
+    cards = {}
+    for t in terms:
+        state, basis, finding = states.get(t["handle"], ("unknown", "unreadable", ""))
+        cards[t["handle"]] = agent_signal.compare(reads[t["handle"]], state, finding, basis)
     seen["signals"] = agent_signal.log_round("watch-cards", by, f"r-{int(time.time())}", cards, memo, problem, raw, warned,
                                              {t["handle"]: card_name(t) for t in terms})
 

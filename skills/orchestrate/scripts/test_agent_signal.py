@@ -187,7 +187,8 @@ rec_rows = [r for r in log() if r.get("handle") == "h1" and r["kind"] == "card"]
 assert rec_rows[-1]["differs"] == ["screen"] and rec_rows[-1]["finding"] == "a select menu", rec_rows[-1]
 screens["h1"] = idle
 out = watch([row("s1", status="busy"), row("s2", status="idle")], state=d / "w6.json")
-assert [r for r in log() if r.get("handle") == "h1" and r["kind"] == "card"][-1]["screen"] == "idle"
+last = [r for r in log() if r.get("handle") == "h1" and r["kind"] == "card"][-1]
+assert (last["screen"], last["basis"], last["finding"], last["differs"]) == ("idle", "quiet prompt", "", ["screen"]), last
 state_doc = json.loads((d / "w6.json").read_text())
 assert state_doc["signals"]["cards"]["h1"]["agents"] == "busy" and "h1" not in {k for k in state_doc if k != "signals"}
 
