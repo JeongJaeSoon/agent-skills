@@ -212,7 +212,10 @@ def _file_lock():
 
 
 def _file_decisions():
-    got, nxt, bad = _legacy_decisions(fleet.state_dir() / "decisions.json")
+    try:
+        got, nxt, bad = _legacy_decisions(fleet.state_dir() / "decisions.json")
+    except OSError as e:
+        raise NotMigrated(f"decisions.json: {e}") from e
     if bad:
         raise NotMigrated(f"decisions.json: {bad[0]}")
     return got, nxt
@@ -292,7 +295,7 @@ def _answered_by(db):
 def decision_record(did):
     """One decision of any status with its answered_by, or None."""
     d = next((x for x in decisions() if x["id"] == did), None)
-    if d is None or "answered_by" in d:
+    if d is None or "answered_by" in d or _on_file():
         return d
     with read() as db:
         by = _answered_by(db).get(did)
@@ -593,7 +596,7 @@ def _legacy_decisions(p):
         data = json.loads(p.read_text())
     except ValueError as e:
         return [], 1, [f"{p.name}: not JSON ({e})"]
-    if not isinstance(data, dict):
+    if not isinstance(data, dict) or not isinstance(data.get("decisions") or {}, dict):
         return [], 1, [f"{p.name}: not an object"]
     got, bad = [], []
     for key, d in (data.get("decisions") or {}).items():
@@ -797,10 +800,10 @@ def restore(src, rehearsal=False, checks=True):
     sd = fleet.state_dir()
     sd.mkdir(parents=True, exist_ok=True)
     names = [n for st in steps for n in LEGACY.get(st, ())]
-    files = [n for n in names if (sd / n).is_file()]
-    if files:
-        raise Refused(f"{', '.join(files)} is a file here: the restored DB already holds it. Move it aside first")
-    with _locks():
+    with _locks():  # checked inside: `orch decide` writes decisions.json under the same lock until the DB is there
+        files = [n for n in names if (sd / n).is_file()]
+        if files:
+            raise Refused(f"{', '.join(files)} is a file here: the restored DB already holds it. Move it aside first")
         old_mask = os.umask(0o077)
         try:
             s, d = _connect(src, mode="ro"), _connect(path(), mode="rwc")

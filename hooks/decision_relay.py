@@ -7,8 +7,8 @@ the literal --text or --body, or the file of `--body "$(cat /abs/path)"`, read a
 `오너` and that line or the next holds a quote ("…", “…”, 「…」, or `>` lines) that is not recorded. Recorded means:
 - `오너(dN` in the body names a done decision whose stored answer equals the quote, spaces aside. A part of the answer
   does not count: "go" inside "do not go". Or
-- an earlier call of this turn ran `orch decide answer` or `orch decide done` and got a result without an error. The
-  current call is no evidence: a hook before it knows neither the order inside it nor its outcome.
+- an earlier call of this turn ran `orch decide answer` or `orch decide done` as its only command and got a result
+  without an error. The current call is no evidence: a hook before it knows neither the order inside it nor its outcome.
 
 It only warns (`guard.decision_relay`: warn, default, or off); it is a prompt to record, and misses a quote that spans
 lines inside quotation marks. A check that raises lets the call through and logs to guard-errors.jsonl.
@@ -25,6 +25,8 @@ RELAYS = (["terminal", "send"], ["orchestration", "reply"], ["orchestration", "s
 BODY_MAX = 64 * 1024
 # The same form delegate_gate reads: double quotes, so it is a substitution, and an absolute literal path.
 BODY_FILE = re.compile(r'--(?:body|text)(?:=|[ \t]+)"\$\(cat[ \t]+(/[^\s"\'`$()\\;&|<>*?\[\]{}~]+)\)"')
+# A relay in the raw text, up to its separator: the place to look for that form, as shell.commands gives no offsets.
+RELAY_TEXT = re.compile(r"(?<![\w/.-])orca[ \t]+(?:terminal[ \t]+send|orchestration[ \t]+(?:reply|send))(?=[ \t])[^;&|\n]*")
 QUOTE = re.compile(r'"([^"\n]{2,}?)\\?"|“([^”\n]{2,})”|「([^」\n]{2,})」')
 CITE = re.compile(r"오너\s*\(\s*(d\d+)\b")
 DECIDE = {"orch", "orch.py", "prog.py"}
@@ -32,18 +34,22 @@ DECIDE = {"orch", "orch.py", "prog.py"}
 
 def relay_bodies(raw):
     """The bodies of the relays in this Bash call. A body the shell would substitute comes from its file, or not at all."""
-    bodies = []
+    bodies, substituted = [], False
     for c in shell.commands(raw):
         w = c.words
         if not (w and os.path.basename(w[0]) == "orca" and w[1:3] in RELAYS) or record_check.is_worker_done(w):
             continue
         body = record_check.option(w, "--body") or record_check.option(w, "--text") or ""
-        if "$" not in body:
+        if "$" in body:  # shell.commands leaves `$` only where bash expands, and drops the substitution's text
+            substituted = True
+        else:
             bodies.append(body)
-    for path in BODY_FILE.findall(raw):
-        p = pathlib.Path(path)
-        if p.is_file() and p.stat().st_size <= BODY_MAX:
-            bodies.append(p.read_text(errors="replace"))
+    if substituted:
+        for segment in RELAY_TEXT.findall(raw):
+            m = BODY_FILE.search(segment)
+            p = pathlib.Path(m.group(1)) if m and "worker_done" not in segment else None
+            if p and p.is_file() and p.stat().st_size <= BODY_MAX:
+                bodies.append(p.read_text(errors="replace"))
     return bodies
 
 
@@ -74,14 +80,13 @@ def cited_answers(body):
 
 
 def records(command):
-    """True when this Bash command runs `orch decide answer` or `done`."""
-    for c in shell.commands(str(command)):
-        w = c.words
-        if w and os.path.basename(w[0]).startswith("python"):
-            w = w[1:]
-        if w and os.path.basename(w[0]) in DECIDE and w[1:3] in (["decide", "answer"], ["decide", "done"]):
-            return True
-    return False
+    """True when this Bash command is `orch decide answer` or `done` alone: the call's result says nothing about one
+    command of several (`… || true`)."""
+    cmds = shell.commands(str(command))
+    w = cmds[0].words if len(cmds) == 1 else []
+    if w and os.path.basename(w[0]).startswith("python"):
+        w = w[1:]
+    return bool(w) and os.path.basename(w[0]) in DECIDE and w[1:3] in (["decide", "answer"], ["decide", "done"])
 
 
 def recorded_this_turn(path):

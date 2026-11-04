@@ -3345,8 +3345,8 @@ def cmd_decide(argv):
                 sys.exit("usage: orch decide answer <id> | --title T, with --quote TEXT | --quote-file F [--by SESSION]")
             d = fleet.decision_quote(did, quote, opt(rest, "--by") or os.environ.get("ORCA_TERMINAL_HANDLE"), title)
             d = store.decision_record(d["id"])
-            if d.get("answer") != fleet.mask(quote.strip()):
-                print(f"{d['id']} keeps the answer it already had; this quote was not stored: {quote.strip()}", file=sys.stderr)
+            if d.get("answer") != fleet.mask(quote):
+                print(f"{d['id']} keeps the answer it already had; this quote was not stored", file=sys.stderr)
             print(fleet.decision_cite(d))
         elif sub == "show" and rest:
             d = store.decision_record(rest[0])

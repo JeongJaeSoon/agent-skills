@@ -2665,7 +2665,9 @@ def decision_ensure(item, handle=None):
     the same decision while it is open, or for DECISION_REPEAT_H after an answer, so a report rendered again neither
     doubles it nor asks again. Options stay empty: a made-up label would let the prompt hook close it on a sentence
     that only starts like the recommendation."""
-    text = _one_line(item, DECISION_BODY_MAX)
+    text = _one_line(item, None)
+    if len(text) > DECISION_BODY_MAX:  # cut, two items differing past the limit would be one decision
+        raise ValueError(f"a --decision item of at most {DECISION_BODY_MAX} characters")
     now = utcnow()
 
     def ensure(store):
@@ -2684,8 +2686,7 @@ def decision_ensure(item, handle=None):
 def decision_quote(did, quote, by=None, title=None):
     """`orch decide answer`: the owner's words as given, never cut (too long is refused). With a title instead of an id
     it records an order nobody asked for: added and closed in one write."""
-    quote = quote.strip()
-    if not quote or len(quote) > DECISION_ANSWER_MAX:
+    if not quote.strip() or len(mask(quote)) > DECISION_ANSWER_MAX:  # masking can lengthen it
         raise ValueError(f"a quote of 1 to {DECISION_ANSWER_MAX} characters; nothing recorded")
     if title is None:
         return decision_close(did, "done", quote, by=by)
@@ -2703,7 +2704,7 @@ def decision_quote(did, quote, by=None, title=None):
 
 def decision_cite(d):
     """The line a brief or an APPROVED row quotes: id, time, session and the first line of the words."""
-    lines = (d.get("answer") or "").splitlines() or [""]
+    lines = (d.get("answer") or "").strip().splitlines() or [""]
     more = f" (+{len(lines) - 1}줄)" if len(lines) > 1 else ""
     return f'{d["id"]} {d.get("closed_at")} by {d.get("answered_by") or "?"}: "{lines[0]}"{more}'
 

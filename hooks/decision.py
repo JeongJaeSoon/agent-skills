@@ -33,7 +33,8 @@ NUDGE = re.compile(r"You have \d+ orchestration messages?(?: waiting)?(?:\.?\s*R
 
 def pick(prompt, mine):
     """(decision, answer) the prompt settles unambiguously, else (None, None). The answer is the prompt's whole text,
-    without an id it opened with: a label only picks the decision, and the words that follow it are the record."""
+    without an id it opened with: a label only picks the decision, and the words that follow it are the record. Its
+    outer whitespace goes: removing Orca's nudge leaves some there, and no one can tell it from the human's."""
     text = prompt.strip()
     line, _, more = text.partition("\n")
     m = ID_RE.fullmatch(line.strip())
@@ -55,7 +56,7 @@ def main():
     if not mine or not prompt.strip():
         return
     d, answer = pick(prompt, mine)
-    if d and len(answer) > fleet.DECISION_ANSWER_MAX:
+    if d and len(fleet.mask(answer)) > fleet.DECISION_ANSWER_MAX:
         text = (f"This message answers the dashboard decision {d['id']} and is too long to close it here. Keep the "
                 f"owner's words: run `orch decide answer {d['id']} --quote-file <file>`, trimmed to what answers it.")
     elif d:
