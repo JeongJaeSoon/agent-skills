@@ -68,7 +68,7 @@ def read(state=None):
             if not isinstance(e["path"], str) or not ino_ok or not born_ok:
                 return None  # a row with a field of the wrong type is no evidence the card is new
             p = real(e["path"])
-        except (ValueError, KeyError, TypeError):
+        except (ValueError, KeyError, TypeError, AttributeError, OverflowError):  # a row that is not an object, a huge number
             return None
         if same_folder(p, e):
             out[p] = e

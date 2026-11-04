@@ -163,6 +163,9 @@ for bad in ({"ino": str(ino)}, {"ino": ino, "born": "yesterday"}, {"ino": True},
             {"ino": ino, "born": float("nan")}):  # rounds 3-4: wrong-typed identity (NaN is written as a bare token)
     (refused_state / rm_refused.NAME).write_text(json.dumps({"path": CARD, **bad}) + "\n")
     assert rm_refused.read(refused_state) is None, bad
+for raw in ("[]", "null", '{"path": "' + CARD + '", "ino": 1, "born": ' + "9" * 400 + "}"):  # round 5: no crash either
+    (refused_state / rm_refused.NAME).write_text(raw + "\n")
+    assert rm_refused.read(refused_state) is None, raw
 (refused_state / rm_refused.NAME).write_text("{not json\n")
 out = reap.act({"kind": "orca-worktree", "key": "orca-worktree:" + CARD, "name": CARD}, [])
 assert out.startswith("건너뜀:") and "읽지 못함" in out and not ran, (out, ran)
