@@ -18,7 +18,7 @@ Usage: orch-dash <command> [options]
                                      update); `$ORCH_DASH_LABEL` names it. uninstall-agent removes it.
   note <slug> --kind risk|digest|decision --text TEXT [--author NAME]
                                      add a human-readable line to the dashboard
-  demo [--port 4780] [--live] [--no-serve] [--crowd N]
+  demo [--port 4780] [--live] [--no-serve] [--crowd N] [--layout]
                                      a realistic fake program in a temp store, served offline
   fleet                              one collect of the fleet view (every Orca session), prints a summary
   skills [--no-signals]              one collect of skill usage from local transcripts (skill_usage.py), prints a summary
@@ -2173,7 +2173,7 @@ def cmd_demo(argv):
     if "--no-serve" in argv:
         print(root)
         return
-    world = dash_demo.FakeFleetWorld(utcnow(), crowd=int(prog.opt(argv, "--crowd", "0")))
+    world = dash_demo.FakeFleetWorld(utcnow(), crowd=int(prog.opt(argv, "--crowd", "0")), layout="--layout" in argv)
     world.seed_sent()
     world.seed_timeline()
     world.seed_jobs()
