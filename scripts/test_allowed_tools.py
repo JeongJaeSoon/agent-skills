@@ -28,9 +28,11 @@ def grant_value(text):
     """(value, errors) of the `allowed-tools` key. YAML can spell a grant in forms a line parser misses (a quoted or
     escaped key, a continuation, a list), and a missed grant still applies, so every frontmatter line must be a plain
     `key: value` on one line."""
-    head = re.match(r"---\r?\n(.*?)\r?\n---", text, re.S)
-    lines = head.group(1).split("\n") if head else []
-    odd = [line for line in lines if not re.fullmatch(r"[a-z][a-z-]*: \S.*", line)]
+    head = re.match(r"---\n(.*?)\n---\n", text, re.S)
+    if not head:
+        return "", ["frontmatter must open and close with a bare --- line"]
+    lines = head.group(1).split("\n")
+    odd =[line for line in lines if not re.fullmatch(r"[a-z][a-z-]*: \S.*", line)]
     if odd:
         return "", [f"frontmatter line is not a plain `key: value`: {odd[0]!r}"]
     grants = [line[len("allowed-tools: "):] for line in lines if line.startswith("allowed-tools: ")]
@@ -183,6 +185,10 @@ assert any("outside its entries" in e for e in skill_errors("demo", fixture("Bas
 GOOD = "Bash(orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json)"
 assert grant_value(f"---\nname: a\nallowed-tools: {GOOD}\ndescription: b\n---\n") == (GOOD, [])
 assert grant_value("---\nname: a\ndescription: mentions allowed-tools only\n---\n") == ("", [])
+# Frontmatter this file cannot read fails: the plugin loader takes a BOM, a spaced fence and CRLF, so a grant there applies.
+SEND = "allowed-tools: Bash(orca terminal send *)"
+for unread in (f"﻿---\n{SEND}\n---\n", f"--- \n{SEND}\n---\n", f"---\r\n{SEND}\r\n---\r\n", f"---\n{SEND}\n--- \n", "no frontmatter\n"):
+    assert skill_errors("demo", unread), repr(unread)
 for spelling in (f"allowed-tools: {GOOD}\n  Bash(orca terminal send *)", '"allowed-tools": Bash(orca terminal send *)',
                  "'allowed-tools': Bash(orca terminal send *)", "allowed-tools:\n  - Bash(orca terminal send *)",
                  f"allowed-tools:\n- {GOOD}", f"allowed-tools: [{GOOD}]", f'allowed-tools: "{GOOD}"',
