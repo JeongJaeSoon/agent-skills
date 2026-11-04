@@ -990,8 +990,8 @@ function sectionTable(name, items, ids = []) {
 // A repository table's name cell as the reply's table_rows labels it: its whole text, without the └ and the bold.
 const rowLabel = (cell, notes) => uncut(cell, notes).replace(/^[└ㄴ] /, "").replace(/^\*\*(.*)\*\*$/, "$1");
 // tableRows (the reply's table_rows): per repository table, {table, rows}, each row {id, label, ack, done, session}.
-// A row's buttons go to the table row with its label (render() makes labels unique in a report); a row no entry names
-// gets none. listRows (list_rows): the items of the lists around the tables; an item with no table row of its own gets
+// A row's buttons and session go to the table row with its label (render() makes labels unique in a report); a row no
+// entry names gets neither. listRows (list_rows): the items of the lists around the tables; an item with no table row of its own gets
 // its Done in the list. placed collects the Ack ids that got a button, closed the Done ids, so no card lists them again.
 function briefHtml(text, tableRows = [], placed = new Set(), listRows = {}, closed = new Set()) {
   const out = [], lines = text.split("\n");
@@ -1016,19 +1016,19 @@ function briefHtml(text, tableRows = [], placed = new Set(), listRows = {}, clos
       // one shared set of column widths; a cell too long for its column scrolls sideways within itself instead of being cut.
       const sessAt = head.indexOf("세션"), repo = sessAt >= 0 && !head[0], acts = repo && tableRows[t++];
       // A label that is not one row's, in the reply and in the drawn table both (a lead's name over its sub-tasks in
-      // another repository may equal one of them), gets no button: a wrong row's Done is worse than none.
+      // another repository may equal one of them), pairs with no entry: a wrong row's Done or session is worse than none.
       const tally = (xs) => xs.reduce((m, x) => m.set(x, (m.get(x) || 0) + 1), new Map());
-      const labels = body.map((r) => rowLabel(r[1] || "", notes));
-      const count = tally(((acts && acts.rows) || []).map((x) => x.label)), drawnCount = tally(labels);
-      const byLabel = new Map(((acts && acts.rows) || []).filter((x) => (x.ack || x.done) && count.get(x.label) === 1)
-        .map((x) => [x.label, x]));
+      const labels = body.map((r) => rowLabel(r[1] || "", notes)), entries = (acts && acts.rows) || [];
+      const count = tally(entries.map((x) => x.label)), drawnCount = tally(labels);
+      const byLabel = new Map(entries.filter((x) => count.get(x.label) === 1).map((x) => [x.label, x]));
       const found = labels.map((l) => (drawnCount.get(l) === 1 && byLabel.get(l)) || null);
-      const btns = found.some(Boolean) ? found : null;
+      const withBtn = found.map((x) => (x && (x.ack || x.done) ? x : null));
+      const btns = withBtn.some(Boolean) ? withBtn : null;
       (btns || []).forEach((x) => { if (x && x.ack) placed.add(x.ack); else if (x && x.done) closed.add(x.done); });
       const act = (x) => x ? `<td class="bact" data-row-label="${esc(x.label || "")}">${x.ack ? ackBtn({ ack: "ackable", key: x.ack }) : x.done ? doneBtn(x.done) : ""}</td>` : '<td class="bact"></td>';
       out.push(`<div class="table-wrap"><table class="brief-table${repo ? " brepo" : ""}">${repo ? `<colgroup><col class="bmark"><col><col class="bpr">${head.includes("진행") ? '<col class="bprog">' : ""}<col class="bnext"><col class="bsess">${btns ? '<col class="bact">' : ""}</colgroup>` : ""}
         <thead><tr>${head.map((c) => `<th>${briefInline(c)}</th>`).join("")}${btns ? "<th></th>" : ""}</tr></thead>
-        <tbody>${body.map((r, k) => `<tr>${r.map((c, n) => repo && n === sessAt && btns && btns[k] ? `<td class="bsess">${sessCell(btns[k].session, c)}</td>`
+        <tbody>${body.map((r, k) => `<tr>${r.map((c, n) => repo && n === sessAt && found[k] ? `<td class="bsess">${sessCell(found[k].session, c)}</td>`
           : `<td${repo && !n ? ' class="bmark"' : ""}>${repo && n ? `<div class="slide">${briefInline(uncut(c, notes))}</div>` : briefInline(uncut(c, notes))}</td>`).join("")}${btns ? act(btns[k]) : ""}</tr>`).join("")}</tbody></table></div>`);
       continue;
     }

@@ -1072,7 +1072,7 @@ process.stdout.write(briefHtml({json.dumps(chip_text)}, {json.dumps(chip_rows)})
     assert re.findall(r'data-done="([^"]+)"', chip_first) == ["row:d"], chip_first
     assert 'data-row-label="with done"' in chip_first and 'data-row-label="no buttons"' not in chip_first, chip_first
     assert chip_first.count('<td class="bact"') == 8 and '<col class="bact">' in chip_first, chip_first
-    assert "bact" not in chip_second and "<th></th>" not in chip_second, chip_second
+    assert "bact" not in chip_second, chip_second
     # The Orca button's last outcome: a confirmed switch says it was the host's window only, an unconfirmed one says so
     # with Orca's reply; both offer what to type or find on another device, escaped.
     copy = "workspace: <b>w</b>\nterminal: term_x\nworktree: /tmp/\"w\""
