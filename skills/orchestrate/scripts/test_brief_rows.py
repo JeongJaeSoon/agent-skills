@@ -246,6 +246,13 @@ assert [r["status"] for r in rows_.values()] == ["check"], rows_
 fleet.write_atomic(verdicts, json.dumps({"t": now.timestamp() - 2 * board.PATROL_CHECK_S,
                                          "check": {"/w/stuck": "hook 오류로 도구가 막힘"}}))
 assert {o["label"]: o["status"] for o in brief()["open"]}["stuck-card"] == "moving", "a stale round says nothing of now"
+# patrol's B (a card idle on a background task nothing will finish) reaches the same ❔ row with its own reason.
+fleet.write_atomic(verdicts, json.dumps({"t": now.timestamp() - 600,
+                                         "check": {"/w/stuck": "백그라운드 작업을 기다리지만 깨울 작업이 없음"}}))
+b = brief()
+rows = {o["label"]: o["status"] for o in b["open"]}
+assert rows["stuck-card"] == "check", rows
+assert any("에이전트 조치 필요: 백그라운드 작업을 기다리지만 깨울 작업이 없음" in m for m in section(b["text"], "🔄")), b["text"]
 # The same verdict on a card a board row links: no fleet row exists to carry it, so the board row does.
 fleet.write_atomic(verdicts, json.dumps({"t": now.timestamp() - 600, "check": {"/w/stuck": "hook 오류로 도구가 막힘"}}))
 board.set_row("linked-stuck", title="linked-stuck", repo="acme/app", status="moving", worktree="s-stuck")
