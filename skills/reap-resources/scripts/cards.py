@@ -438,6 +438,8 @@ def main(argv):
             with guard.hold(guard.targets({"kind": "card", "path": item["path"]})) as got:
                 if why := guard.keep({"kind": "card", "verdict": item["verdict"]}, None) if got else guard.LOCK_BUSY:
                     print(f"- 건너뜀 {item['name']}: {why}")
+                    if guard.check_error(why):  # left, not decided: the others run, then the round ends non-zero
+                        failed += 1
                     continue
                 done = {}
                 logged = {"key": f"card:{item['path']}", "kind": "card", "head": item.get("head"), "ino": item.get("ino")}

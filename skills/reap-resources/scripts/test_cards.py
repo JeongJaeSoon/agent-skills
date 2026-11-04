@@ -364,6 +364,24 @@ assert cards.act(item, {}).startswith("터미널 1개 닫음") and closed
 cardguard.observe = saved_observe
 cards.read_machine, cards.cards_listing, cards.gather, reap.run = saved
 
+# apply's exit code follows reap's: a pre-act check that could not run leaves the card and the round ends 1 (after the
+# others ran); a guard that decides to leave a card is a normal 0.
+plan = pathlib.Path(tmp) / "plan.json"
+plan.write_text(json.dumps({"items": [{"name": "c1", "path": CARD, "verdict": cards.REMOVE, "head": HEAD, "close": []}]}))
+saved_keep, saved_own, saved_act, saved_argv = guard.keep, guard.ownership, cards.act, sys.argv
+guard.ownership = lambda: None
+cards.act = lambda *a, **k: "acted"
+sys.argv = ["cards.py", "apply", "--plan", str(plan)]
+for why, code in (("검사를 마치지 못함(PermissionError: x)", 1), ("보호 목록의 경로", 0), (None, 0)):
+    guard.keep = lambda *a, w=why, **k: w
+    try:
+        cards.main(sys.argv)
+    except SystemExit as e:
+        assert e.code == code, (why, e.code)
+    else:
+        raise AssertionError("apply must exit")
+guard.keep, guard.ownership, cards.act, sys.argv = saved_keep, saved_own, saved_act, saved_argv
+
 # janitor integration: card is the scheduled kind, the old card kinds are not.
 assert "card" in reap.SCHEDULED and "orca-worktree" not in reap.SCHEDULED and "done-card" not in reap.SCHEDULED
 prompt = reap.schedule_prompt(pathlib.Path("/x/reap.py"), pathlib.Path("/s"))
