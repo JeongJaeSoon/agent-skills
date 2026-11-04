@@ -35,7 +35,7 @@ BUSY_MS = 5000
 LEGACY = {DECISION_STEP: ("decisions.json",), BOARD_STEP: ("board.json", "tidy.jsonl")}
 RETIRED = ("board.prev.json", "tidy.jsonl.1")  # no reader left: they move into the backup with the step's files
 LOCKS = ("board.lock", "tidy.lock", "decisions.lock")
-CUTOVER_LOCK = "cutover.lock"
+CUTOVER_LOCK, RUN_LOCK = "cutover.lock", "cutover-run.lock"
 SCRIPTS = "skills/orchestrate/scripts"
 BINS = ("orch", "orch-dash", "skills-sync")
 CRON = re.compile(r"\b(?:orch-dash|orch|skills-sync)\b|skills/orchestrate/|hooks/[a-z_]+\.py")
@@ -939,12 +939,13 @@ def _locks():
 
 
 @contextlib.contextmanager
-def cutover_lock():
-    """Held from the first stop to the end of the import by `orch db migrate`; a second one refuses (Refused) instead of
-    waiting. The kernel drops it with the process, so a killed run leaves nothing stale."""
+def cutover_lock(name=CUTOVER_LOCK):
+    """`orch db migrate` holds two: RUN_LOCK for the whole run, recovery included, so a second run refuses instead of
+    racing it; CUTOVER_LOCK from before the first stop to the end of the import, which keeps the dashboard server down.
+    A second holder is refused, not waited for. The kernel drops them with the process: a killed run leaves nothing stale."""
     sd = fleet.state_dir()
     sd.mkdir(parents=True, exist_ok=True)
-    with (sd / CUTOVER_LOCK).open("a") as f:
+    with (sd / name).open("a") as f:
         try:
             fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
@@ -1704,6 +1705,9 @@ def main(argv):
             import cutover
             sys.exit(cutover.main(rest))
         elif sub == "init":
+            import cutover
+            if why := cutover.ensure_env("init", rest):  # the state a LaunchAgent uses, not this shell's default
+                sys.exit(why)
             print(init_empty())
         else:
             sys.exit(__doc__)

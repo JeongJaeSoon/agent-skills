@@ -53,6 +53,18 @@ def settle_env():
     return add, bad
 
 
+def ensure_env(sub, argv):
+    """None when this shell's env already matches the LaunchAgents', else the refusal text; or, when the shell lacks
+    values they have, starts `store.py <sub>` again with them (prog.HOME and the state directory are read when the
+    modules load, so setting os.environ late is not enough). Never returns in that case."""
+    add, conflicts = settle_env()
+    if conflicts:
+        return "refused: " + "; ".join(conflicts)
+    if add:
+        os.execve(sys.executable, [sys.executable, str(HERE / "store.py"), sub, *argv], {**os.environ, **add})
+    return None
+
+
 # ---------------------------------------------------------------- what is done already (reads only)
 
 def status():
@@ -104,7 +116,11 @@ def snapshot():
     if sys.platform == "darwin":
         for label, (p, _) in store.launch_plists().items():
             if loaded(label):
-                steps.append({"do": "bootstrap", "label": label, "plist": str(p) if p else None})
+                if not p:  # nothing to load it from afterwards: do not take it down
+                    raise store.Refused(f"LaunchAgent {label} is loaded but has no plist in ~/Library/LaunchAgents, so it "
+                                        "could not be put back: stop it yourself (launchctl bootout) or restore the plist; "
+                                        "nothing was changed")
+                steps.append({"do": "bootstrap", "label": label, "plist": str(p)})
     for name, (_, rec) in _jobs().items():
         if rec.get("enabled"):
             steps.append({"do": "enable", "name": name, "id": rec["id"]})
@@ -144,7 +160,7 @@ def _stop_one(s):
         raise store.Refused(f"LaunchAgent {s['label']} is still loaded after bootout")
     if s["do"] == "enable":
         automations, rec = _jobs().get(s["name"], (None, None))
-        if rec is None:
+        if rec is None or rec.get("id") != s["id"]:  # gone or replaced since it was recorded: not this one to stop
             return
         r = sh([automations.ORCA, "automations", "edit", "--id", s["id"], "--disabled", "--json"])
         after = _jobs().get(s["name"])
@@ -159,7 +175,8 @@ def stop_server(plan):
     h = dash.health(port)
     if not h or h.get("store") != str(dash.home()):
         return
-    plan.append({"do": "server", "port": port})
+    if not any(s["do"] == "server" for s in plan):
+        plan.append({"do": "server", "port": port})
     save_plan(plan)
     dash.stop(h, port)
     if dash.health(port):
@@ -187,8 +204,8 @@ def _undo(s):
             automations, rec = _jobs().get(s["name"], (None, None))
         except store.Refused as e:
             return False, str(e)
-        if rec is None:
-            return False, f"{s['name']}: the automation is gone; nothing to turn on"
+        if rec is None or rec.get("id") != s["id"]:  # the name now belongs to another automation: never touch that one
+            return True, f"{s['name']}: the automation recorded is gone or was replaced; nothing to turn on"
         if rec.get("enabled"):
             return True, f"{s['name']}: already on"
         r = sh([automations.ORCA, "automations", "edit", "--id", s["id"], "--enabled", "--json"])
@@ -286,6 +303,7 @@ def run():
     if why:
         print("refused: old code could still write the state. Nothing was imported; what was stopped is put back.\n" + table(why))
         return 1
+    stop_server(plan)  # once more: a server that started between the first check and now is stopped before the import
     print(store.import_apply())
     state, detail = status()
     if state != "migrated":
@@ -302,36 +320,34 @@ def main(argv):
     bad = [a for a in argv if a != "--check"]
     if bad:
         sys.exit("usage: orch db migrate [--check]")
-    add, conflicts = settle_env()
-    if conflicts:
-        print("refused: " + "; ".join(conflicts), file=sys.stderr)
+    if why := ensure_env("migrate", argv):
+        print(why, file=sys.stderr)
         return 1
-    if add:  # prog.HOME and the state directory are read when the modules load: start again with the env in place
-        os.execve(sys.executable, [sys.executable, str(HERE / "store.py"), "migrate", *argv], {**os.environ, **add})
     try:
         if argv:
             return check_only()
     except store.Refused as e:
         print(e, file=sys.stderr)
         return 1
-    code, got = 1, False
     try:
-        with store.cutover_lock():
-            got = True
-            code = run()
-    except (Exception, KeyboardInterrupt) as e:  # whatever went wrong, what was stopped is put back below
-        print(f"stopped: {e}" if str(e) else "interrupted", file=sys.stderr)
-        code = 1
-    if not got:
-        return code
-    ok, lines = recover()  # the lock is released: the dashboard may start again now
-    for line in lines:
-        print(line)
-    if not ok:
-        print("some services were not put back; run `orch db migrate` again to retry them", file=sys.stderr)
-    elif code:
-        print("run it again after fixing the cause above: it carries on from where it stopped")
-    return code or (0 if ok else 1)
+        with store.cutover_lock(store.RUN_LOCK):  # the whole run: a second migrate cannot read this plan while it is put back
+            code = 1
+            try:
+                with store.cutover_lock():  # the dashboard server stays down while this one is held
+                    code = run()
+            except (Exception, KeyboardInterrupt) as e:  # whatever went wrong, what was stopped is put back below
+                print(f"stopped: {e}" if str(e) else "interrupted", file=sys.stderr)
+            ok, lines = recover()  # cutover.lock is released: the dashboard may start again now
+            for line in lines:
+                print(line)
+            if not ok:
+                print("some services were not put back; run `orch db migrate` again to retry them", file=sys.stderr)
+            elif code:
+                print("run it again after fixing the cause above: it carries on from where it stopped")
+            return code or (0 if ok else 1)
+    except store.Refused as e:  # cutover-run.lock is held by another run
+        print(e, file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

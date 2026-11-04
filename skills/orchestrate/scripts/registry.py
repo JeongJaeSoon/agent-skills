@@ -230,9 +230,9 @@ STORES = [
     Store("tidyold", "D/tidy.jsonl.1", {"board.closure": REMOVED}, ("ext:legacy",), ("nobody",),
           rule="older code's rotated generation; the 4b import moves it into its backup"),
     Store("tidylock", "D/tidy.lock", {"board.closure": LOCK}, ("store:_locks",)),
-    Store("cutoverlock", "D/cutover.lock", {"db.file": LOCK}, ("store:cutover_lock",), ("nobody",),
-          rule="held by `orch db migrate` from its first stop to the end of the import; the dashboard server does not start "
-               "while it is held"),
+    Store("cutoverlock", "D/cutover*.lock", {"db.file": LOCK}, ("store:cutover_lock", "cutover:main"), ("nobody",),
+          rule="`orch db migrate`: cutover-run.lock for the whole run (a second run refuses), cutover.lock from the first "
+               "stop to the end of the import (the dashboard server does not start while it is held)"),
     Store("cutoverplan", "D/cutover-recover.json*", {"db.file": LOCK}, ("cutover:save_plan",), ("nobody",),
           rule="what `orch db migrate` stopped and how to put it back; a killed run leaves it and the next run uses it"),
     Store("migrate", "D/backup-orca-v2-*/*", {"board.item": BACKUP, "board.closure": BACKUP},

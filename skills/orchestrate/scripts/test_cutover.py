@@ -193,6 +193,54 @@ with world() as (w, sd):
             assert e.code == dash.MIGRATING
     assert store.cutover_running() is False
 
+# ---- a second run while one runs (recovery included) refuses and leaves the first one's plan alone
+with world() as (w, sd):
+    with store.cutover_lock(store.RUN_LOCK):
+        cutover.save_plan([{"do": "bootstrap", "label": "t.orch-dash", "plist": str(agents / "t.orch-dash.plist")}])
+        code, out, err = run()
+        assert code == 1 and "another `orch db migrate` is running" in err and not w.calls, (out, err)
+        assert (sd / cutover.RECOVER).is_file() and not store.path().exists()
+
+# ---- a server that slipped past the start checks ends itself once the lock is held
+import dash  # noqa: E402
+with world() as (w, sd):
+    killed = []
+    with store.cutover_lock():
+        dash.watch_migrate(poll=0.01, kill=lambda pid, sig: killed.append((pid, sig)))
+    assert killed == [(os.getpid(), __import__("signal").SIGTERM)], killed
+
+# ---- a LaunchAgent that is loaded but has no plist to load it from again is not taken down
+with world() as (w, sd):
+    (agents / f"{store.SYNC_LABEL}.plist").rename(agents / "sync.plist.off")
+    try:
+        code, out, err = run()
+    finally:
+        (agents / "sync.plist.off").rename(agents / f"{store.SYNC_LABEL}.plist")
+    assert code == 1 and "no plist" in err and "nothing was changed" in err, (out, err)
+    assert not [c for c in w.calls if c[1] in ("bootout", "bootstrap") or "edit" in c], w.calls
+    assert w.plan() == (sorted({"t.orch-dash", store.SYNC_LABEL}), dict(w.jobs))
+
+# ---- an automation replaced under the recorded name is never touched
+with world() as (w, sd):
+    cutover.save_plan([{"do": "enable", "name": "janitor", "id": "id-old"}])
+    w.jobs["agent-skills janitor"] = False
+    ok, lines = cutover.recover()
+    assert ok and "replaced" in lines[0] and not [c for c in w.calls if "edit" in c], (lines, w.calls)
+    assert w.jobs["agent-skills janitor"] is False and not (sd / cutover.RECOVER).exists()
+
+# ---- init uses the state directory a LaunchAgent uses, and refuses when the shell names another
+with world(legacy=False, state_name="init-env") as (w, sd):
+    (agents / "t.orch-dash.plist").write_bytes(plistlib.dumps({"Label": "t.orch-dash", "EnvironmentVariables": {
+        "ORCH_FLEET_STATE": str(tmp / "elsewhere")}}))
+    try:
+        store.main(["init"])
+        raise AssertionError("init ran against a state directory the LaunchAgent does not use")
+    except SystemExit as e:
+        assert "ORCH_FLEET_STATE" in str(e.code), e.code
+    finally:
+        (agents / "t.orch-dash.plist").write_bytes(plistlib.dumps({"Label": "t.orch-dash", "ProgramArguments": ["/bin/true"]}))
+    assert not store.path().exists()
+
 # ---- a server that `ensure` started is stopped, checked, and started again
 with world(server=True) as (w, sd):
     import dash  # noqa: E402
