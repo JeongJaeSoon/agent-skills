@@ -1014,11 +1014,14 @@ function briefHtml(text, tableRows = [], placed = new Set(), listRows = {}, clos
       // A repository table (`| | name | PR | progress | next | session |`) gets one shared set of column widths; a cell
       // too long for its column scrolls sideways within itself instead of being cut.
       const repo = head.length === 6 && !head[0], acts = repo && tableRows[t++];
-      // Only rows with a button take part; a label two of them share gets neither (the renderer keeps labels unique).
-      const withBtn = ((acts && acts.rows) || []).filter((x) => x.ack || x.done);
-      const count = withBtn.reduce((m, x) => m.set(x.label, (m.get(x.label) || 0) + 1), new Map());
-      const byLabel = new Map(withBtn.filter((x) => count.get(x.label) === 1).map((x) => [x.label, x]));
-      const found = body.map((r) => byLabel.get(rowLabel(r[1] || "", notes)) || null);
+      // A label that is not one row's, in the reply and in the drawn table both (a lead's name over its sub-tasks in
+      // another repository may equal one of them), gets no button: a wrong row's Done is worse than none.
+      const tally = (xs) => xs.reduce((m, x) => m.set(x, (m.get(x) || 0) + 1), new Map());
+      const labels = body.map((r) => rowLabel(r[1] || "", notes));
+      const count = tally(((acts && acts.rows) || []).map((x) => x.label)), drawnCount = tally(labels);
+      const byLabel = new Map(((acts && acts.rows) || []).filter((x) => (x.ack || x.done) && count.get(x.label) === 1)
+        .map((x) => [x.label, x]));
+      const found = labels.map((l) => (drawnCount.get(l) === 1 && byLabel.get(l)) || null);
       const btns = found.some(Boolean) ? found : null;
       (btns || []).forEach((x) => { if (x && x.ack) placed.add(x.ack); else if (x && x.done) closed.add(x.done); });
       const act = (x) => x ? `<td class="bact" data-row-label="${esc(x.label || "")}">${x.ack ? ackBtn({ ack: "ackable", key: x.ack }) : x.done ? doneBtn(x.done) : ""}</td>` : '<td class="bact"></td>';

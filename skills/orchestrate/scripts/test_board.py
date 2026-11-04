@@ -342,6 +342,8 @@ prs_json["prs"]["acme/web#52"]["detail"]["base"] = "main"
 (state / "prs.json").write_text(json.dumps(prs_json))
 out = json.loads(ok("brief", "render", "--periodic", "--now", NOW, "--json"))
 assert "notify/~rev-a" in out["changed"] and "[#51](https://example.test/51)·#52→main·#53 |" in out["text"], out["text"]
+# The folded rows are placed with the reviewer row that stands for them; the reviewer row itself is no item.
+assert out["duplicates"] == [] and out["missing"] == [], (out["duplicates"], out["missing"])
 last = json.loads((tmp / "brief-last" / "top-level.json").read_text())
 for r in last["rows"].values():
     r.pop("pr")

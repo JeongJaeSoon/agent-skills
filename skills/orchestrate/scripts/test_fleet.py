@@ -1012,6 +1012,24 @@ process.stdout.write(JSON.stringify({{page: fleetBrief()}}));"""
     opened = page.split("<h3>Open items</h3>")[1]
     assert "folded away" in opened and not any(w in opened for w in ("stuck lead", "busy lead", "loose item")), opened
     assert all(page.count(f'data-done="{i}"') == 1 for i in ("row:b", "row:c", "doing:x", "row:gone")), page
+    # A lead's name over its sub-tasks in another repository equal to a sub-task's: neither row gets that Done, and a
+    # list line that only contains an item's text does not get it either.
+    clash = "\n".join(["| | 리드/Phase | PR | 진행 | 다음 | 세션 |", "|---|---|---|---|---|---|", "| | Z | — | — | — | — |",
+                       "| 🔄 | └ Z | — | — | 리뷰 | — |", "", "🙋 **지금 오너가 할 일**", "", "- 배포 조사", "- 배포"])
+    crows = [{"table": "acme/b", "rows": [
+        {"id": "z", "label": "Z", "status": "—", "session": None, "ack": None, "done": None},
+        {"id": "z/c", "label": "Z", "status": "🔄", "session": None, "ack": None, "done": "row:z/c"}]}]
+    clists = {"moving": [], "owner": [{"id": "todo:1", "label": "배포", "text": "배포"}], "waiting": [], "held": []}
+    cjs = f"""{helpers}
+{(assets / "fleet.js").read_text()}
+const S = {{filters: {{}}}};
+F.brief = {{text: {json.dumps(clash)}, table_rows: {json.dumps(crows)}, list_rows: {json.dumps(clists)}, done: [],
+  open: [{{id: "row:z/c", kind: "row", label: "Z"}}, {{id: "todo:1", kind: "todo", label: "배포"}}], closed: []}};
+process.stdout.write(JSON.stringify({{page: fleetBrief()}}));"""
+    cpage = json.loads(subprocess.run(["node", "-e", ctx], input=cjs, capture_output=True, text=True, check=True).stdout)["page"]
+    ctable = cpage.split('<div class="table-wrap">')[1]
+    assert 'data-done="row:z/c"' not in ctable, ctable
+    assert cpage.count('data-done="todo:1"') == 1 and cpage.index("배포 조사") < cpage.index('data-done="todo:1"'), cpage
     # A row's 세션 cell links to its session by worktree id, opens it in Orca and quotes its last report (escaped); one
     # no session runs says so with no link or button; a table with no entries keeps the plain text.
     cells = re.findall(r'<td class="bsess">(.*?)</td>', first, re.S)

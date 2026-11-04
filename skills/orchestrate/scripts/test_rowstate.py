@@ -165,6 +165,31 @@ progs.mkdir(parents=True)
 (progs / "ledger.jsonl").write_text("{not json\n")
 seen = set()
 assert rowstate.program_facts(home=progs.parent, unread=seen) == {} and seen == {"octo/app"}
+# A program read that is not the only one on the repository does not decide who merges: one unread may hold its gate.
+auto = {"octo/app#1": [{"program": "q", "policy": "autonomous", "verdict": None, "gate": "none"}]}
+assert rowstate.judge(row, facts({"octo/app#1": READY}, programs=auto) | {"programs_unread": {"octo/app"}})["next"].endswith("프로그램 파일 못 읽음")
+# A PR detail a rule does not read leaves the earlier rule's answer: no CI read, and --owner 오너 is still 🙋.
+no_ci = {k: v for k, v in READY.items() if k != "ci"}
+assert rowstate.judge({**row, "owner": "오너"}, facts({"octo/app#1": no_ci}))["status"] == "owner"
+assert rowstate.judge(row, facts({"octo/app#1": no_ci}))["unknown"] == ["PR 상세 모름"]
+# A team asked needs no owner login to be another's wait; a person asked does.
+assert rowstate.judge(row, facts({"octo/app#1": team}, me=None))["status"] == "waiting"
+# A stale session list is no evidence an agent works on the draft.
+card = {**row, "session": "wt"}
+busy_stale = facts({"octo/app#1": draft}, sessions=[{"id": "wt", "phase": "working", "terminals": []}])
+busy_stale["sessions_known"] = False
+assert rowstate.judge(card, busy_stale)["unknown"] == ["세션 목록 모름"]
+# A pressure queue file that does not parse is a queue not read, not an empty one.
+sys.path.insert(0, str(HERE.parents[1] / "reap-resources" / "scripts"))
+import pressure  # noqa: E402
+real_q = pressure.QUEUE
+pressure.QUEUE = tmp / "pressure-queue.json"
+try:
+    assert rowstate.pressure_facts({}, T) == {}
+    pressure.QUEUE.write_text("{torn")
+    assert rowstate.pressure_facts({}, T) is None
+finally:
+    pressure.QUEUE = real_q
 # 지금 in the stage table only for a PR exactly one row links, even when two rows agree.
 two = {"a": rowstate.RowState("held"), "b": rowstate.RowState("held"), "c": rowstate.RowState("owner")}
 assert rowstate.by_pr(two, {"a": {"pr": "x#1"}, "b": {"pr": "x#1"}, "c": {"pr": "x#2"}}) == {"x#2": "owner"}
@@ -203,6 +228,14 @@ rolled = [k for k, st in out["states"].items() if st.get("own") == "moving" and 
 assert rolled and any(x["id"] in rolled for x in shown_rows), out["states"]
 assert all(out["now_by_pr"].get(r["pr"]) in (None, out["states"][k]["status"])
            for k, r in board.read()["rows"].items() if k in out["states"] and r.get("pr")), out["now_by_pr"]
+# Placement counts the rows written, not the lines handed to the table: one the table lost is missing.
+real_fit = board.table_width.fit
+board.table_width.fit = lambda rows, *a, **kw: (lambda t, n: (t[:-1], n))(*real_fit(rows, *a, **kw))
+try:
+    lost = board.render(now=T, fill=True, periodic=False)
+finally:
+    board.table_width.fit = real_fit
+assert lost["missing"], lost["missing"]
 # A quiet stage row is kept while its 지금 has work left (⏸️ too), or while the brief's judgment could not be read.
 old = {**stages.table(), "rows": [{**r, "created_at": "2026-01-01T00:00:00Z"} for r in stages.table()["rows"]]}
 assert [r["id"] for r in stages.current(old, T, 60, None, {"octo/app#5": "held"})[0]["rows"]] == ["s1"]

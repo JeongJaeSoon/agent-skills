@@ -1164,14 +1164,14 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     # row ("what · where → name"). 표 밖 진행 lists only what has no row: doing items, flagged held items, arrived to-dos.
     # Names are unique across the whole report (the dashboard matches buttons and list references by them): a repeat
     # takes the next ·N no other row already shows, a name that itself ends in ·N included. A lead's name over its
-    # sub-tasks in another repository is that lead again, not a row, and keeps the name.
-    used = set()
+    # sub-tasks in another repository is that lead again, not a row, and keeps the name; a row in its table does not.
+    used, heads = set(), {(l["sec"], l["name"]) for l in lines if l["status"] is None}
     for l in lines:
         if l["status"] is None:
             l["shown"] = l["name"]
             continue
         shown, n = l["name"], 1
-        while shown in used:
+        while shown in used or (l["sec"], shown) in heads:
             n += 1
             shown = f"{l['name']}·{n}"
         used.add(shown)
@@ -1255,14 +1255,19 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             prog, many = UNNAMED, many | {repo}
         title = (f"{repo} — {prog}" if repo in many and prog else repo) + (f" → {bases[sec]}" if sec in bases else "")
         out += ["", f"📋 {title}" if tg else f"**{title}**"]
-        for l in mine:
-            if l["status"] is not None:
+
+        def drawn(l):
+            """Placement of a row as it is written out: a folded reviewer row stands for its members, a card row for
+            the doing items merged into it; the fold row itself is no item."""
+            if l["status"] is None:
+                return
+            if l["key"] not in members:
                 place(l["key"], f"table:{title}")
-                for m in members.get(l["key"], ()):
-                    place(m, f"table:{title}")
-                for iid, _, _, row_l in merged_doing:
-                    if row_l is l:
-                        place(iid, f"table:{title}")
+            for m in members.get(l["key"], ()):
+                place(m, f"table:{title}")
+            for iid, _, _, row_l in merged_doing:
+                if row_l is l:
+                    place(iid, f"table:{title}")
         if tg:
             for l in mine:
                 name = (f"{l['shown']} {l['cell']}" if l["fold"] is None else f"{l['cell']} {l['shown']}").strip()
@@ -1273,6 +1278,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                 out.append(("└ " if l["depth"] else "") + f"{mark(l, l['status'])} {name} — {l['progress']}"
                            + (f" · {nc}" if (nc := next_cell(l)) != "—" else "")
                            + (f" · {l['session']['word']}" if l["session"] else ""))
+                drawn(l)
         elif mine:  # a section of folded bullets only has no table
             def dress(i, c, s):
                 l = mine[i - 1]
@@ -1285,6 +1291,12 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             width_ok &= table_width.table_width(table) <= COLS
             out += ["", "| " + " | ".join(HEADER).strip() + " |", "|---" * len(HEADER) + "|"]
             out += ["| " + " | ".join(c.replace("|", "\\|") for c in row) + " |" for row in table[1:]]
+            # Placed from the rows written: a table that lost or gained a row places none of its rows, so the
+            # placement check reports them missing rather than trusting the lines it was handed.
+            if len(table) - 1 == len(mine):
+                for l, row in zip(mine, table[1:]):
+                    if row[0] == mark(l, l["status"]):
+                        drawn(l)
             # Done on every open row the board can close; Ack on a ✅ row not yet acknowledged.
             table_rows.append({"table": title, "rows": [
                 {"id": l["key"], "label": l["shown"], "status": mark(l, l["status"]), "session": l["session"],

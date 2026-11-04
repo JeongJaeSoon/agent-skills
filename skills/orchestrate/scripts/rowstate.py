@@ -43,9 +43,13 @@ class RowState(dict):
             raise AttributeError(k) from None
 
 
+def is_team(who):
+    return (who or "").strip().lstrip("@").lower().startswith("team:")
+
+
 def is_owner(who, me):
     w = (who or "").strip().lstrip("@").lower()
-    if w.startswith("team:"):
+    if is_team(w):
         return False
     return w in OWNER_NAMES or bool(me) and w == me.lower()
 
@@ -56,7 +60,7 @@ def merged(p):
 
 def who_state(login, me):
     """The status of a wait on one person: the owner's, another's, or ❔ when the owner's login is not known."""
-    if not me:
+    if not me and not is_team(login):
         return "check"
     return "owner" if is_owner(login, me) else "waiting"
 
@@ -136,6 +140,9 @@ def pressure_facts(sessions, now):
         import sys
         sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts"))
         import pressure
+        # queue_read() reads a broken file as an empty queue; here that is a queue not read. No file is an empty one.
+        if pressure.QUEUE.exists() and not isinstance(json.loads(pressure.QUEUE.read_text()), dict):
+            return None
         q = pressure.queue_read()
     except Exception:  # an install without reap-resources, or a queue that cannot be read
         return None
@@ -210,6 +217,10 @@ def canonical(r):
 def merge_actor(key, f):
     """Who merges an open PR once nothing else stands in its way: "agent", "owner" (its gate waits on the owner), or
     None (unknown). A program's policy comes first; two programs naming the PR with different policies are unknown."""
+    repo = key.rsplit("#", 1)[0]
+    unread = f.get("programs_unread") or ()
+    if "*" in unread or repo in unread:  # a program whose files could not be read may own this PR, with another policy
+        return None
     progs = f["programs"].get(key) or []
     if progs:
         prog = program_of(key, f)
@@ -218,10 +229,6 @@ def merge_actor(key, f):
         if prog["policy"] == "autonomous":
             return "agent"
         return {"none": "agent", "approved": "agent", "pending": "owner"}.get(prog["gate"])
-    repo = key.rsplit("#", 1)[0]
-    unread = f.get("programs_unread") or ()
-    if "*" in unread or repo in unread:  # a program may own this PR and its files could not be read
-        return None
     if any(fnmatch.fnmatchcase(repo, p) for p in f["agent_merges"]):
         return "agent"
     if f["me"] and repo.split("/", 1)[0].lower() == f["me"].lower():
@@ -289,8 +296,10 @@ def judge(r, f, lead=None, sid=None):
         return RowState("done")
     if key and p is None:
         return stop_unknown("PR 상태 모름")
-    if p and p.get("state") == "OPEN" and any(k not in p for k in PR_FIELDS):
-        return stop_unknown("PR 상세 모름")
+
+    def lacks(*fields):
+        """The open PR's details a rule reads and the collector did not write: that rule stops (gap), not the row."""
+        return is_open and any(k not in p for k in fields)
     left = None
     if merged(p):
         if busy and r.get("session"):
@@ -313,16 +322,18 @@ def judge(r, f, lead=None, sid=None):
     prog = program_of(key, f) if is_open else None
     if prog and prog["policy"] == "human-gate" and prog["gate"] == "pending":
         hit("owner", nxt, what="gate 응답")
-    if is_open and not p.get("draft"):
-        people = asked(p)
-        if people and not me:
-            return stop_unknown("오너 login 모름") if not found else _first(found, unknown=["오너 login 모름"])
-        if any(is_owner(a, me) for a in people):
-            hit("owner", nxt, what="리뷰")
-    if r.get("owner") and not me and not is_owner(r["owner"], me) and not r["owner"].lower().startswith("team:"):
+    if r.get("owner") and not me and not is_owner(r["owner"], me) and not is_team(r["owner"]):
         return gap("오너 login 모름")  # --owner may name the owner by login
     if r.get("owner") and is_owner(r["owner"], me) or status == "owner" and not r.get("owner"):
         hit("owner", nxt, what=nxt or "응답")
+    if lacks("draft", "reviewers"):
+        return gap("PR 상세 모름")
+    if is_open and not p.get("draft"):
+        people = asked(p)
+        if not me and any(not is_team(a) for a in people):  # a team is never the owner; a person may be
+            return gap("오너 login 모름")
+        if any(is_owner(a, me) for a in people):
+            hit("owner", nxt, what="리뷰")
 
     # 3 ⏸️ a condition holds it
     if p and p.get("state") == "CLOSED":
@@ -348,6 +359,8 @@ def judge(r, f, lead=None, sid=None):
         hit("held", nxt)
 
     # 4 ⏳ another person
+    if lacks("ci", "decision"):
+        return gap("PR 상세 모름")
     if is_open and reviewable(p):
         others = [a for a in asked(p) if not is_owner(a, me)]
         if others:
@@ -376,9 +389,12 @@ def judge(r, f, lead=None, sid=None):
         if e.get("state") in ("gave_up", "failed"):
             hit("check", f"{AGENT_ACTION}: pressure {e['state']} {e.get('what')}", f"pressure {e['state']}")
     # The PR's own facts come before the row's word: a ready PR the agent merges is 🔄 whatever "waiting" the row says.
+    if lacks(*PR_FIELDS):
+        return gap("PR 상세 모름")
     if is_open:
         quiet = not busy and bool(r.get("session") or status in ("held", "waiting"))
-        if p.get("draft") and not busy and not f["sessions_known"]:
+        # Whether an agent works on it decides the draft and the quiet PR: a stale session list is no evidence either way.
+        if not f["sessions_known"] and (p.get("draft") or not ready(p) and (r.get("session") or status in ("held", "waiting"))):
             return gap("세션 목록 모름")
         if p.get("draft") and not busy:  # the session list is trusted and nobody works on the draft
             hit("check", f"{AGENT_ACTION}: 초안 · 세션 없음 — 재개하거나 보류로 기록", "초안 · 세션 없음")
