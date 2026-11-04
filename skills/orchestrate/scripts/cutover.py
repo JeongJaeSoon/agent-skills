@@ -351,6 +351,10 @@ def main(argv):
         with store.cutover_lock(store.RUN_LOCK):  # the whole run: a second migrate cannot read this plan while it is put back
             code = 1
             try:
+                # Before cutover.lock: once it is held a running server ends itself, and one that is gone leaves no trace.
+                seen = load_plan()
+                if note_server(seen) and seen:
+                    save_plan(seen)
                 with store.cutover_lock():  # the dashboard server stays down while this one is held
                     code = run()
             except (Exception, KeyboardInterrupt) as e:  # whatever went wrong, what was stopped is put back below

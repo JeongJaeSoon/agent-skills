@@ -244,6 +244,21 @@ with world() as (w, sd):
     assert not ok and cutover.load_plan(), lines
     automations.orca_automations = w.listing
 
+# ---- a server that ends itself once the lock is held is still put back: it is recorded before the lock
+with world(reasons=("old code still runs",)) as (w, sd):
+    def seen_up(plan):
+        if not any(s["do"] == "server" for s in plan):
+            plan.append({"do": "server", "port": 4999})
+        return {"pid": 1}
+    real_note, cutover.note_server = cutover.note_server, seen_up
+    try:
+        code, out, err = run()
+    finally:
+        cutover.note_server = real_note
+    assert code == 1 and any(c[1:] == ["ensure", "--port", "4999"] or c[2:] == ["ensure", "--port", "4999"]
+                             for c in w.calls if "dash.py" in " ".join(map(str, c))), w.calls
+    assert not (sd / cutover.RECOVER).exists()
+
 # ---- a server that is up when the run starts is recorded before any stop
 with world(server=True) as (w, sd):
     real = (dash.health, dash.home, dash.default_port)
