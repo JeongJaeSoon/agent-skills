@@ -52,12 +52,16 @@ const ids = (s, rows) => ticketIds(s, rows).map((t) => t.key + (t.url ? "@" : ""
 out.t1 = ids(st.sessions[2], []);
 out.t2 = ids(st.sessions[3], []);
 out.t3 = ids(st.sessions[4], [{{label: "XYZ-7 brief row"}}]);
-out.t4 = ids({{name: "UTF-8 and E2E-3, ABC-12 ABC-12"}}, []);
+out.t4 = ids({{name: "UTF-8 and SHA-256 with E2E-3, ABC-12 ABC-12"}}, []);
 out.fin = sessions.map((s) => finished(st, s));
 F.doneOpen = false;
 out.closed = fleetSessions(st);
 F.doneOpen = true;
 out.open = fleetSessions(st);
+F.leadFold = new Set(["lead"]);
+out.foldedOpen = fleetSessions(st);
+F.doneOpen = false;
+out.foldedClosed = fleetSessions(st);
 process.stdout.write(JSON.stringify(out));"""
 sandbox = ("const vm = require('vm'); vm.runInNewContext(require('fs').readFileSync(0, 'utf8'), "
            "{document: {addEventListener() {}}, process, location: {hash: '#/fleet/sessions'}, window: {}, fetch() { throw new Error('no fetch'); }});")
@@ -69,7 +73,7 @@ out = json.loads(r.stdout)
 assert out["t1"] == ["ABC-12@", "94S-1336"], out["t1"]
 assert out["t2"] == [], out["t2"]
 assert out["t3"] == ["XYZ-7"], out["t3"]
-assert out["t4"] == ["UTF-8", "E2E-3", "ABC-12"], out["t4"]
+assert out["t4"] == ["E2E-3", "ABC-12"], out["t4"]  # a standard's name ("UTF-8", "SHA-256") is not a ticket
 
 # finished: offline and a merged PR (the collector's, else Orca's own link, either case); never a lead or a live worker
 assert out["fin"] == [False, False, False, True, False], out["fin"]
@@ -90,5 +94,17 @@ assert 'aria-expanded="false"' in out["closed"].split("fold-done")[-1] and 'aria
 # the lead's own count leaves the finished worker out, and each cell stays on one line
 assert "the 2 sessions under lead one" in out["closed"], out["closed"][:600]
 assert 'class="cut"' in out["closed"] and "XYZ-7" in out["closed"]
+
+# A folded lead keeps its live workers and their subagents out of sight whatever the Finished line does; opening
+# Finished shows the finished worker even there, and the count leaves out the subagent no one can reach.
+def row_of(html, rid):
+    return next(r for r in rows(html) if f'id="{rid}"' in r)
+
+
+for page in (out["foldedOpen"], out["foldedClosed"]):
+    assert row_of(page, "row-w1").startswith(" hidden") and row_of(page, "row-w3").startswith(" hidden"), page[:300]
+    assert row_of(page, "row-lead-sub-0").startswith(" hidden") is (page is out["foldedClosed"])  # the lead's own stale subagent
+assert not row_of(out["foldedOpen"], "row-w2").startswith(" hidden") and row_of(out["foldedClosed"], "row-w2").startswith(" hidden")
+assert 'aria-controls="row-w2 row-lead-sub-0"' in out["foldedOpen"], out["foldedOpen"]
 
 print("test_sessions_layout: ok")

@@ -1491,11 +1491,13 @@ function subagentRows(s, d, hidden = false, foldStale = false) {
 // A ticket id is letters or digits, a dash and digits ("ABC-12", "94S-1336"), with a letter in the prefix: no
 // tracker's key format is assumed. Only upper case counts, so a branch like "feat-123" is not a ticket.
 const TICKET_RE = /\b(?=[A-Z0-9]*[A-Z])[A-Z0-9]{2,10}-\d{1,6}\b/g;
+// Standards and formats that read like a ticket id ("UTF-8", "SHA-256"); a card named for one has no ticket from it.
+const NOT_TICKET = /^(UTF|SHA|MD|AES|RSA|ISO|TLS|SSL|HTTP|CRC|USB|GPT|WCAG|IPV|TCP|UDP|X)-/;
 // The card's own ticket links first, then ids in its name, its branch and the labels of its brief rows.
 function ticketIds(s, rows = []) {
   const out = (s.refs || []).filter((r) => r.type !== "pr" && r.url).map((r) => ({ key: r.key || r.provider || "ticket", url: r.url }));
   [s.name, s.branch, ...rows.map((x) => x.label)].forEach((t) => (String(t || "").match(TICKET_RE) || []).forEach((k) => {
-    if (!out.some((o) => o.key === k)) out.push({ key: k, url: "" });
+    if (!NOT_TICKET.test(k) && !out.some((o) => o.key === k)) out.push({ key: k, url: "" });
   }));
   return out;
 }
@@ -1580,9 +1582,13 @@ function fleetSessions(st) {
     const all = kidsOf.get(s.id), kids = all && live(all), folded = fold.has(s.id) && kids && kids.length > 0;
     const open = `<a class="${kids ? "lead-link" : "tree-cell"}"${kids ? "" : ` style="--d:${Math.min(d, 4)}"`} href="${sessionHref(s.id)}" title="${esc(s.name)}">${phaseDot(s)}<b class="cut">${esc(s.name)}</b></a>`;
     const name = kids ? `<span class="tree-cell lead-cell" style="--d:${Math.min(d, 4)}">${kids.length ? leadToggle(s, kids, folded) : ""}${open}${folded ? foldSummary(kids) : ""}</span>` : open;
-    const away = hidden.has(s.id) || (done.has(s.id) && !doneOpen);
-    stale += (s.subagents || []).filter((a) => a.stale).length;
-    foldedAway.push(...subRowIds(s).filter((_, i) => s.subagents[i].stale));
+    // Opening Finished shows a finished worker even under a folded lead; the rest of a folded lead stays folded, and
+    // so do its subagents, which the Finished count then leaves out.
+    const away = done.has(s.id) ? !doneOpen : hidden.has(s.id);
+    if (done.has(s.id) || !hidden.has(s.id)) {
+      stale += (s.subagents || []).filter((a) => a.stale).length;
+      foldedAway.push(...subRowIds(s).filter((_, i) => s.subagents[i].stale));
+    }
     return `<tr${away ? " hidden" : ""} id="row-${domId(s.id)}"><td>${name}</td>
       <td>${kindTag(st, s)}</td><td>${esc(s.phase)}${board}${modelCell(s)}</td>
       <td>${tickets}</td><td>${prCell}</td><td>${briefCell(s)}</td><td class="num">${badge(s.unread, s.missed)}</td><td class="num when">${relSpan(s.last_activity)}</td>

@@ -2079,7 +2079,8 @@ class Fleet:
         for w in sorted(self.runs["workers"], key=lambda w: w.get("dispatchId") or ""):
             wt = (w.get("resource") or {}).get("worktreeId") or ""
             ws = sessions.get(wt)
-            task_project[w.get("taskId")] = ws["project"] if ws else project_of(wt.partition("::")[2] or None)
+            path = wt.partition("::")[2] or None
+            task_project[w.get("taskId")] = ws["project"] if ws else project_of(path, None, self.repos.get(path))
         for g in self.runs["gates"]:
             if g.get("status") not in ("resolved", "cancelled"):
                 items.append({"key": f"gate:{g['id']}", "type": "approval", "session": root, "title": mask(g.get("question"), 160),
