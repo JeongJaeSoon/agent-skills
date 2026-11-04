@@ -73,15 +73,14 @@ assert code == 1 and "an age is N" in err, err
 # The brief: an acked ✅ row leaves the table and every open row stays.
 before = brief()
 assert {d["id"] for d in before["done"]} == {"board:lead-a"}, before["done"]
-# table_rows places the page's buttons: one list per repository table, one entry per row, in the text's order. Ack only
-# on a row the server would ack, Done only on 🙋 ❔ 🔴 rows; 🔄 ⏳ ⏸️ get none.
-flat = {x["label"]: (x["ack"], x["done"]) for t in before["table_rows"] for x in t}
-assert flat == {"릴리스 도구": ("board:lead-a", None), "청구 내보내기": (None, None), "t CSV 열": (None, None),
-                "설치 가이드": (None, None)}, before["table_rows"]
-assert len(before["table_rows"]) == sum(1 for line in before["text"].splitlines() if line == "| | 리드/Phase | PR | 진행 | 세션 |")
-board.set_row("lead-c", status="blocked", next="세션 없음")
-assert {x["label"]: x["done"] for t in brief()["table_rows"] for x in t}["설치 가이드"] == "row:lead-c"
-board.set_row("lead-c", status="moving", next="리뷰 반영")
+# table_rows places the page's buttons: one {table, rows} per repository table, one entry per row, in the text's order.
+# Ack only on a row the server would ack; Done on every open row the board can close, whatever its status.
+flat = {x["label"]: (x["ack"], x["done"]) for t in before["table_rows"] for x in t["rows"]}
+assert flat == {"릴리스 도구": ("board:lead-a", None), "청구 내보내기": (None, None), "t CSV 열": (None, "row:lead-b/t"),
+                "설치 가이드": (None, "row:lead-c")}, before["table_rows"]
+assert len(before["table_rows"]) == sum(1 for line in before["text"].splitlines()
+                                        if line == "| | 리드/Phase | PR | 진행 | 다음 | 세션 |")
+assert all(t["table"] for t in before["table_rows"]) and all(x["id"] for t in before["table_rows"] for x in t["rows"])
 assert "릴리스 도구" in before["text"] and "요청" not in before["text"], before["text"]
 code, out, err = run("dash.py", "ack", "board:lead-a")
 assert code == 0, err
@@ -91,7 +90,7 @@ for kept in ("청구 내보내기", "CSV 열", "설치 가이드"):
     assert kept in after["text"], (kept, after["text"])
 assert "확인함으로 숨긴 행 1" in after["text"], after["text"]
 assert after["done"] == [{**before["done"][0], "acked": True}], after["done"]
-assert "릴리스 도구" not in {x["label"] for t in after["table_rows"] for x in t}, after["table_rows"]
+assert "릴리스 도구" not in {x["label"] for t in after["table_rows"] for x in t["rows"]}, after["table_rows"]
 code, out, _ = run("dash.py", "acks", "--json")
 assert {r["id"] for r in json.loads(out)} == {"board:lead-a"}, out
 
