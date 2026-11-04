@@ -2860,6 +2860,14 @@ def judge_wait(waited, lines, activity=None):
     return None if hit and waited is None and hit[0] not in NOT_A_WAIT else hit
 
 
+def sweeps_screen(w):
+    """A worker whose agent may still be at work: active, or retained (Orca keeps the terminal of a card someone typed
+    into, a `terminal send` nudge included) and not yet settled. Reclaimable, released and release_unknown rows are
+    done; so is a retained row that succeeded or failed. A retained row with no workerState is read, not skipped."""
+    state = w.get("terminalState")
+    return state == "active" or (state == "retained" and w.get("workerState") not in ("succeeded", "failed"))
+
+
 def stuck_sweep(workers, slug, seen, read=read_screen, only_new=False, waits=None):
     """A worker's terminal has no human watching it: a menu or permission prompt there blocked a program for hours.
     Orca's agentWait decides first; the screen is read for what it does not cover (disk, API retries), and for every
@@ -2868,7 +2876,7 @@ def stuck_sweep(workers, slug, seen, read=read_screen, only_new=False, waits=Non
     waits = agent_waits() if waits is None else waits
     for w in workers:
         d, h = w.get("dispatchId"), worker_terminal(w)
-        if w.get("terminalState") != "active" or not d or not h:
+        if not sweeps_screen(w) or not d or not h:
             continue
         waited = waits.get(h, NOT_LOOKED)
         try:
