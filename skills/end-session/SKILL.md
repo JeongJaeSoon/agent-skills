@@ -1,6 +1,7 @@
 ---
 name: end-session
 description: "Use when the user asks to end, close or archive this session, card or worktree — \"종료해줘\", \"세션 종료해줘\", \"현재 세션 정리해줘\", \"아카이브해줘\", \"머지하고 종료하자\", \"end this session\" — when handoff-ticket says this session should go, when an Orca worker is about to send worker_done, or when a card's brief says to close itself. Bare \"정리해줘\"/\"마무리해줘\", \"작업 기록 남겨줘\" or \"log this\" leaves the record and keeps the session (references/record.md)."
+allowed-tools: Bash(orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json)
 ---
 
 # Ending the session
@@ -136,6 +137,7 @@ fallback below needs it). Then pick the row:
   `worker_done` a send without `--to` finds no Run), then
   `orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json`. The orchestrator or lead above it
   puts the card to the human and does not remove it: its own rm would be the refused act run by another session.
+- **The pre-approved close.** `allowed-tools` covers only this session's own close, written exactly as above, and only in the turn that invoked this skill. In a later turn, invoke the skill again first.
 - **`KEEP`** is the brief's opt-out: the orchestrator or lead above it plans to reuse this terminal or card.
 - **An open PR** keeps the worker only until it lands. A later wake (a review fix, a message)
   runs this table again and closes if the PR has merged or closed since. Nothing else wakes an
