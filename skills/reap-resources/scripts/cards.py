@@ -142,7 +142,7 @@ def gather(w, m, run=None):
     p = reap.real(w["path"])
     f = {"path": p, "name": w.get("displayName") or os.path.basename(p), "head": "", "pr": None, "state": None,
          "branch": (w.get("branch") or "").removeprefix("refs/heads/"), "repo": os.path.basename(os.path.dirname(p)),
-         "terminals": [], "errors": errs}
+         "terminals": [], "errors": errs, "release": m.get("unreleased", {}).get(p, [])}
     base = os.path.basename(p)
     if w.get("isMainWorktree"):
         return {**f, "protected": "메인 체크아웃"}
@@ -156,8 +156,10 @@ def gather(w, m, run=None):
         return {**f, "protected": "automation runner worktree"}
     if p in m["live"]:
         return {**f, "protected": m["live"][p]}
+    if m["patrol"] is None:
+        return {**f, "protected": "순찰 판정 파일을 읽지 못함"}
     if p in m["patrol"]:
-        return {**f, "protected": "순찰 판정: 작업 중·사람 대기·Run 워커(orch patrol)"}
+        return {**f, "protected": reap.patrol_hold(m["patrol"][p])}
     if (children := cardguard.child_cards(w)):
         return {**f, "protected": f"하위 카드 {os.path.basename(children[0])} 가 열려 있음(리드)"}
     if (coord := reap.coordinator_in(p, m["rows"], m["cwd_of"], m["projects"])):
@@ -277,10 +279,14 @@ def read_machine(cfg, now=None):
     except (SystemExit, Exception):
         workers = None
     live, _, _ = reap.worker_worktrees(workers or [])
+    unreleased = reap.unreleased_settled(workers or [])
     top = sh(["git", "rev-parse", "--show-toplevel"])
     projects = pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser() / "projects"
+    # The patrol read the guard before a close makes (activity included): a card patrol keeps is a keep here, not a
+    # delete that apply then refuses.
     return {"now": now, "st": settings(cfg), "rows": reap.processes(), "cwd_of": reap.cwds(), "live": live,
-            "patrol": reap.patrol_working(now), "workers_unread": workers is None, "runners": reap.automation_workspaces(reap.orca_json("automations", "list")),
+            "unreleased": unreleased,
+            "patrol": reap.patrol_states(now, activity=True), "workers_unread": workers is None, "runners": reap.automation_workspaces(reap.orca_json("automations", "list")),
             "self": top and reap.real(top.strip()), "pr_state": reap.pr_reader(), "projects": projects,
             "quiet": reap.transcript_quiet(projects, now, reasons=True)}
 
@@ -321,8 +327,17 @@ def scan(cfg, repo_list=(), notes=None):
         verdict, why, close = judge(f, m["st"]["idle_s"])
         items.append({"path": f["path"], "name": f["name"], "repo": f["repo"], "branch": f["branch"], "pr": f["pr"],
                       "state": f["state"], "verdict": verdict, "why": why, "close": close, "head": f["head"],
-                      "ino": reap.dir_ino(f["path"]), "regenerated": f.get("regenerated") or []})
+                      "ino": reap.dir_ino(f["path"]), "regenerated": f.get("regenerated") or [],
+                      "release": f.get("release") or []})
     return items, notes
+
+
+def release_lines(items):
+    """One line per card whose settled worker dispatch was never released: the Run that owns it and the command. This
+    never releases anything; the Run's lead or the orchestrator does."""
+    return [f"- {i['name']}: dispatch {r['dispatch']} ({r['outcome']}, Run {r['run']}) 의 터미널이 release 되지 않음 → "
+            f"소유 Run 의 lead·오케스트레이터가 `orca orchestration worker-release --dispatch {r['dispatch']}`"
+            for i in items for r in i.get("release") or ()]
 
 
 def report(items, notes):
@@ -334,6 +349,9 @@ def report(items, notes):
         print(f"| {i['name']} | {i['repo']}/{i['branch'] or '-'} | {pr} | {i['verdict']} | {i['why']} |")
     counts = {v: sum(i["verdict"] == v for i in items) for v in order}
     print("\n" + " · ".join(f"{k} {n}" for k, n in counts.items()))
+    if (lines := release_lines(items)):
+        print("\n## release 필요 (끝난 워커의 dispatch)\n")
+        print("\n".join(lines))
     for n in notes:
         print(f"- 메모: {n}")
 
@@ -370,7 +388,10 @@ def act_locked(item, cfg, wait, done=None):
         return "건너뜀: orca worktree list 에서 다시 찾지 못함"
     verdict, why, close, f = got
     if verdict != item["verdict"] or f["head"] != item["head"]:
-        return f"건너뜀: 다시 보니 {verdict}({why})"
+        # Only something that really changed since the plan lands here; say what, per card.
+        changed = ([f"판정 {item['verdict']}→{verdict}"] if verdict != item["verdict"] else []) + \
+                  ([f"HEAD {(item['head'] or '-')[:8]}→{(f['head'] or '-')[:8]}"] if f["head"] != item["head"] else [])
+        return f"건너뜀: plan 뒤에 바뀜({', '.join(changed)}): {why}"
     ino = reap.dir_ino(item["path"])
     if item.get("ino") is not None and ino != item["ino"]:
         return "건너뜀: 판정 뒤 카드 폴더가 다시 만들어짐"

@@ -317,6 +317,16 @@ res = patrol.round_once(dry=True, now=NOW + 999, gather_fn=lambda now, dl, memo:
 assert [f["code"] for f in res["findings"]] == ["I"] and patrol.LOG.read_text() == before
 assert "NEW PATROL I" in "\n".join(patrol.report(res))
 
+# A finished card keeps nothing: its transcript still ends on an armed wake-up (parked) but no agent terminal is left to
+# take it, and its Run dispatch settled, so it is neither parked nor a Run worker. One with an agent terminal still is.
+fin = facts(terminals=[term("h1", "/w/live")],
+            tails={"/w/done": (idle(99, parked=True), None), "/w/live": (idle(99, parked=True), None),
+                   "/w/ran": (idle(99, parked=True), None)},
+            workers=[{"dispatchId": "d9", "terminalState": "released", "resource": {"worktreeId": "x::/w/ran"},
+                      "projection": {"outcome": "succeeded", "liveness": {"verdict": "exited"}}}])
+_, v, _ = patrol.judge(fin, {})
+assert set(v["activity"]) == {"/w/live"} and v["cards"] == {"/w/live": "working"}, v
+
 # v2 fields: the old ones keep their names and types, so reap.patrol_working reads the same set from a v2 file.
 v2f = facts(now=NOW, terminals=[term("h1", "/w/a"), term("h2", "/w/b"), term("h3", "/w/p")],
             tails={"/w/a": ({"state": "busy", "since": ago(1)}, None), "/w/b": (idle(40), None),
