@@ -85,11 +85,12 @@ for `--allow-failed-archive-hook`.
 **Run each cleanup command alone.** `orca worktree rm`, `orca terminal close`, `orca orchestration
 worker-release` and `worker-stop`, `claude rm`, `gh pr merge`, `git worktree remove` and branch
 deletion each take a Bash call of their own, written as the skill shows them: no pipe, `;`, `&&` or
-`$()`, and no `ls` or `grep` added to check the result. Permission rules pass a call only when every
-part of it matches one; any other part leaves the whole call to the auto-mode classifier or a
-prompt, which can refuse a deletion the rule alone would pass. Check the result in the next tool
-call. Do this from the first run: splitting a call that was already refused is a retry (§7). Other
-skills link here for this rule.
+`$()`, and no `ls` or `grep` added to check the result. A call passes without review only when each
+part of it is approved on its own; a part that is not can leave the whole call to the auto-mode
+classifier or a prompt, which can refuse a deletion its allow rule alone would pass. When the session
+outlives the command, check the result in the next tool call; a command that ends this session stays
+the turn's last call (§6). Do this from the first run: splitting a call that was already refused is
+a retry (§7). Other skills link here for this rule.
 
 ## 6. Order inside the final turn
 
