@@ -1,0 +1,75 @@
+# Required status checks match the job names below (plugin-validate, registry-check, tests, forbidden-terms):
+# renaming a job leaves main waiting on a check that never reports.
+name: CI
+
+on:
+  # `edited` reruns the forbidden-term scan when a PR's title or body changes. No job may skip itself on that event:
+  # a skipped job counts as success for a required check, so a title edit would turn a red head green.
+  # No branches or paths filter, for the same reason: a filtered run never reports its required checks.
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  plugin-validate:
+    name: plugin-validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # No --strict: the omitted version (it would pin users) and the root CLAUDE.md are warnings on purpose.
+      - run: npx --yes @anthropic-ai/claude-code@2.1.311 plugin validate .
+
+  registry-check:
+    name: registry-check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: |
+          python3 skills/orchestrate/scripts/registry.py check 2>&1 | tee "$RUNNER_TEMP/registry.out"
+          test ! -s "$RUNNER_TEMP/registry.out"
+
+  tests:
+    name: tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # hooks/test_retired.py reads the history of hooks.json
+          persist-credentials: false
+      - run: python3 scripts/ci_tests.py
+
+  forbidden-terms:
+    name: forbidden-terms
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the commit range
+          persist-credentials: false
+      - run: python3 scripts/ci_forbidden_terms.py
+        env:
+          FORBIDDEN_TERMS: ${{ secrets.FORBIDDEN_TERMS }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
