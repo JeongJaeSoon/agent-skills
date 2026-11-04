@@ -38,7 +38,6 @@ DONE_KEEP_S = 7 * 86400  # a finished lead stays this long with its rows, then l
 HEADER = ["", "리드/Phase", "PR", "진행", "다음", "세션"]
 SESSION_NAME_W = 12  # the worktree name in a 세션 cell, whose link and Telegram line carry the whole of it
 PR_LEGEND = (("❗", "사람이 풀 것"), ("✓", "머지 가능"), ("CI✗", "CI 실패"), ("CI…", "CI 진행"), ("?", "PR 상태 없음"))
-UNNAMED = "(프로젝트 미지정)"
 SKILLS_CONFIG = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG", "~/.claude/agent-skills.json")).expanduser()
 ASK_WORD = {"request": "의뢰", "remind": "리마인드", "rerequest": "재요청"}
 ASK_GONE = ("sent", "scheduled", "found")  # send-log sources where the message went out, or was already there
@@ -183,7 +182,7 @@ def put(store, rid, fields):
 
 
 def unnamed_leads(rows):
-    """Leads with no program in a repository that has two or more leads: their rows would share one table."""
+    """Leads with no program in a repository that has two or more leads: no program report (--scope) covers them."""
     by_repo = {}
     for r in rows.values():
         if not r.get("parent") and r["kind"] == "lead":
@@ -193,8 +192,8 @@ def unnamed_leads(rows):
 
 def unnamed_warning():
     ids = unnamed_leads(read()["rows"])
-    return ids and (f"warning: no --program on {', '.join(ids)}, beside another lead in the same repository; the report "
-                    f"heads them {UNNAMED} until each gets --program <project>")
+    return ids and (f"warning: no --program on {', '.join(ids)}, beside another lead in the same repository; a program "
+                    f"report (--scope) leaves them out until each gets --program <project>")
 
 
 def set_row(rid, **fields):
@@ -583,7 +582,7 @@ def fleet_rows(state, leads, board_rows, details=None, now=None, stale_s=None, c
             continue
         lid = f"fleet:{lead['id']}"
         if not board_lead:
-            add(lid, lead, "lead", program=one_line(lead.get("name") or lid))  # two leads in one repo: a section each
+            add(lid, lead, "lead", program=one_line(lead.get("name") or lid))
         lead_row[lead["id"]] = board_lead or lid
         for s in under.get(lead["id"], []):
             if shown(s):
@@ -736,7 +735,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     the skipped actions, the reap line and a token warning line; the stage table is one line pointing at it (stages.pointer). fill adds
     fleet_rows() for the leads and cards the board does not have; fresh collects the fleet again when its files are
     old. decisions are the model's own items (DECISION_FORM), numbered after the registered ones; insight goes after
-    진행 중, so the report still ends on what the human acts on.
+    보류, under everything the human acts on.
 
     Returns {"text", "headline_facts", "changed", "stale", "width_ok", "done", "open", "table_rows", "snapshot"}. done is
     drop_acked()'s; table_rows has one list per repository table in the text, in order, one {label, ack, done} per body
@@ -812,7 +811,11 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     if scope != "top-level":
         rows = {k: r for k, r in rows.items() if up(r, "program") == scope}
     order = [k for k in store["order"] if k in rows]
-    unnamed, unnamed_secs = set(unnamed_leads(rows)), set()
+    repo_name = rowstate.repo_names(up(r, "repo") for r in rows.values())
+
+    def repo_of(r):
+        repo = up(r, "repo")
+        return repo_name.get(repo, repo) or "—"
 
     oldest_probe, changed, stale, stale_board, facts, unknown = None, [], [], [], [], set()
     waits = {}  # row id -> its RowState, for the rows waiting on a person or a gap in the record
@@ -888,7 +891,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     sections, lines, bullets = [], [], {}
 
     def section_of(r):
-        sec = (up(r, "repo"), up(r, "program"))
+        sec = repo_of(r)
         if sec not in sections:
             sections.append(sec)
         return sec
@@ -954,14 +957,12 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     alone_rev = {}
     for t in alone:
         if rev := review_of(t):
-            alone_rev.setdefault((up(t, "repo"), up(t, "program"), rev), []).append(t)
+            alone_rev.setdefault((repo_of(t), rev), []).append(t)
     for k in order:
         r = rows[k]
         if r.get("parent"):
             continue
         sec = section_of(r)
-        if k in unnamed:
-            unnamed_secs.add(sec)
         if r["kind"] == "task":  # a sub-task with no lead: its own row, or a bullet when it waits with others on one person
             group = next((g for g in alone_rev.values() if r in g and len(g) >= 2), None)
             if group:
@@ -978,19 +979,17 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             as_group.add(k)
         for h in heads:
             mine = [t for t in tasks if head_of(t) is h]
-            home = [t for t in mine if up(t, "repo") == sec[0]]
+            home = [t for t in mine if repo_of(t) == sec]
             st, nxt, suf = derive(h)
             at = len(lines)
             line(h["id"], sec, 0, st, h["title"], h.get("pr"), bar(h.get("progress")), nxt, suf)
             kid_status = task_lines(h["id"], sec, home)
             for t in mine:
                 if t not in home:  # another repository: its own section, under a row with only the lead's name
-                    tsec = (up(t, "repo"), None)
-                    if tsec not in sections:
-                        sections.append(tsec)
-                    if not any(l["key"] == f"{k}@{tsec[0]}" for l in lines):
-                        line(f"{k}@{tsec[0]}", tsec, 0, None, r["title"], None, "—", "—")
-                    kid_status += task_lines(f"{k}@{tsec[0]}", tsec, [t])
+                    tsec = section_of(t)
+                    if not any(l["key"] == f"{k}@{tsec}" for l in lines):
+                        line(f"{k}@{tsec}", tsec, 0, None, r["title"], None, "—", "—")
+                    kid_status += task_lines(f"{k}@{tsec}", tsec, [t])
             # The head's shown status is the snapshot's too, so the stage table's 지금 cell agrees with this row.
             states[h["id"]] = rowstate.roll_up(states[h["id"]], kid_status)
             lines[at]["status"] = states[h["id"]]["status"]
@@ -1014,6 +1013,11 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     folded_keys = {lines[i]["key"] for i in gone}
     lines[:] = [l for i, l in enumerate(lines) if i not in gone]
     sections[:] = [s for s in sections if any(l["sec"] == s for l in lines) or any(b == s for b, _ in bullets)]
+    # From here on the rows and tables are in report order, so the lists built from them follow it too.
+    lines[:] = rowstate.order_rows(lines)
+    sections[:] = rowstate.order_tables({s: [l["status"] for l in lines if l["sec"] == s]
+                                         + [reviewer_wait(rev, items)[0] for (b, rev), items in bullets.items() if b == s]
+                                         for s in sections})
 
     # A doing item about a card that has a row is that row: one line, with the doing item's next step when the card's
     # own says no more than its session's phase.
@@ -1058,11 +1062,12 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             line_, at = last_report(s)
             l["session"].update(name=s.get("name"), last=line_, at=at, pr=(r or {}).get("pr"))
         l["pr_state"] = pr_status(l["pr"], bases.get(l["sec"])) if l["pr"] else ""
-        if l["fold"]:  # the numbers, each with its base when not the section's; the states go to the snapshot only
-            to = [(prs.get(k) or {}).get("base") for k in l["fold"]]
-            l["cell"] = "·".join((pr_text(k) if i == 0 else pr_num(k)) + (f"→{b}" if b and b != bases.get(l["sec"]) else "")
-                                 for i, (k, b) in enumerate(zip(l["fold"], to)))
-            l["pr_state"] = " · ".join(pr_status(k, bases.get(l["sec"])) for k in l["fold"])
+        if l["fold"]:  # the numbers by base, each base but the section's named once; the states go to the snapshot only
+            to = {}
+            for i, k in enumerate(l["fold"]):
+                to.setdefault((prs.get(k) or {}).get("base"), []).append(pr_text(k) if i == 0 else pr_num(k))
+            l["cell"] = "·".join("·".join(nums) + (f"→{b}" if b and b != bases.get(l["sec"]) else "") for b, nums in to.items())
+            l["pr_state"] =" · ".join(pr_status(k, bases.get(l["sec"])) for k in l["fold"])
         else:
             l["cell"] = f"{pr_text(l['pr'])} {l['pr_state']}".strip() if l["pr"] else ""
 
@@ -1166,10 +1171,6 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     head = f"{local:%H:%M} · " + " · ".join(([headline] if headline else []) + facts[1 if headline else 0:])
     out = [head if tg else f"**{head}**"]
     width_ok = True
-    out += [x for line in (stage_line, lists_line) if line for x in ("", line)]
-    if lines:
-        out += ["", legend] + (["", "PR: " + " · ".join(pr_legend)] if pr_legend else [])
-    many = {repo for repo, prog in sections if sum(1 for s in sections if s[0] == repo) > 1}
     ackable, table_rows = {d["id"] for d in done if not d["acked"]}, []
 
     def label(l):
@@ -1219,27 +1220,30 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     # Names are unique across the whole report (the dashboard matches buttons and list references by them): a repeat
     # takes the next ·N no other row already shows, a name that itself ends in ·N included. A lead's name over its
     # sub-tasks in another repository is that lead again, not a row, and keeps the name; a row in its table does not.
+    # A table shared with another lead's rows names its phases as the lists do: `ph1` alone does not say whose it is.
     used, heads = set(), {(l["sec"], l["name"]) for l in lines if l["status"] is None}
+    shared = {s for s in sections if len({lead_of(rows[l["key"]])["id"] for l in lines if l["sec"] == s and l["key"] in rows}) > 1}
     for l in lines:
+        l["base"] = label(l) if l["sec"] in shared else l["name"]
         if l["status"] is None:
-            l["shown"] = l["name"]
+            l["shown"] = l["base"]
             continue
-        shown, n = l["name"], 1
+        shown, n = l["base"], 1
         while shown in used or (l["sec"], shown) in heads:
             n += 1
-            shown = f"{l['name']}·{n}"
+            shown = f"{l['base']}·{n}"
         used.add(shown)
         l["shown"] = shown
 
     def ref_name(l):
-        return label(l) + l["shown"][len(l["name"]):]
+        return label(l) + l["shown"][len(l["base"]):]
 
     placement, list_rows = {}, {"owner": [], "waiting": [], "held": [], "moving": []}
 
     def place(pid, where):
         placement.setdefault(pid, []).append(where)
 
-    moving, held, turn, theirs = [], [], [], []
+    moving, held, turn, theirs, bullet_of = [], [], [], [], {}
     for sec in sections:
         for l in (l for l in lines if l["sec"] == sec):
             st, w = l["own"], waits.get(l["key"]) or {}
@@ -1261,19 +1265,21 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             if ref:
                 place(l["key"], f"ref:{ref}")
                 list_rows[ref].append({"id": l["key"], "label": ref_name(l)})
-    bullet_of = {}
-    for (bsec, rev), items in bullets.items():
-        st, name, w = reviewer_wait(rev, items)
-        nums = "·".join(pr_num(i["pr"]) for i in items)
-        bullet_of[(bsec, rev)] = f"{ICON[st]} {len(items)}건 {name}" + (f" — {w['next']}" if st == "check" else "")
-        if st == "owner":
-            turn.append(turn_item("리뷰", nums, w["unblocks"]))
-        elif st == "waiting":
-            theirs.append(theirs_item(rev, f"리뷰 {nums}", w["since"], w["unblocks"], "", [i["pr"] for i in items]))
-        for i in items:
-            place(i["id"], f"table:{bsec[0]}")
-            if st in ("owner", "waiting"):
-                place(i["id"], f"ref:{st}")
+        for (bsec, rev), items in bullets.items():
+            if bsec != sec:
+                continue
+            st, name, w = reviewer_wait(rev, items)
+            nums = "·".join(pr_num(i["pr"]) for i in items)
+            bullet_of[(bsec, rev)] = f"{ICON[st]} {len(items)}건 {name}" + (f" — {w['next']}" if st == "check" else "")
+            if st == "owner":
+                turn.append(turn_item("리뷰", nums, w["unblocks"]))
+            elif st == "waiting":
+                theirs.append(theirs_item(rev, f"리뷰 {nums}", w["since"], w["unblocks"], "", [i["pr"] for i in items]))
+            for i in items:
+                place(i["id"], f"table:{bsec}")
+                if st in ("owner", "waiting"):
+                    place(i["id"], f"ref:{st}")
+
     def listed(where, into, iid, title, text):
         """One list line for an item with no row: its text goes out, and list_rows keeps that exact text, so the
         dashboard puts the item's Done on that line and no other."""
@@ -1302,12 +1308,28 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         else:
             listed("moving", moving, iid, t["title"], f"⏰ {t['title']} — {when} 도래 · {t['who']}")
 
+    # What the owner acts on comes first; what explains the rest comes last.
+    todo = todos + due_mine + turn
+    out += ["", ("🙋 지금 오너가 할 일" if tg else "🙋 **지금 오너가 할 일**") + ("" if todo else " — 없음")]
+    out += [""] + [it if tg else f"- {it}" for it in todo] if todo else []
+    try:
+        own, decisions = list(decisions), fleet.open_decisions()
+    except store_db.NotMigrated:  # the headline already says 이행 대기
+        own, decisions = list(decisions), []
+    repeated = set((last or {}).get("decisions") or []) if last_rows is not None else set()
+    if decisions or own:
+        items = []
+        for i, d in enumerate(decisions, 1):
+            rec = d.get("recommend") and d["options"][d["recommend"] - 1]
+            text = (f"{i}. ({d['id']}) {d['title']}" + (f" → 추천: {rec['label']}" + (f" — {rec['description']}" if rec["description"] else "")
+                    if rec else " — 선택지: " + " / ".join(o["label"] for o in d["options"]) if d["options"] else ""))
+            items.append(text + (" (지난 보고와 동일)" if d["id"] in repeated else ""))
+        items += [f"{i}. {one_line(d)}" for i, d in enumerate(own, len(decisions) + 1)]
+        out += ["", ("❓ 결정 필요" if tg else "❓ **결정 필요**") + " — " + items[0]] + [x for it in items[1:] for x in ("", it)]
+
     for sec in sections:
-        repo, prog = sec
         mine = [l for l in lines if l["sec"] == sec]
-        if sec in unnamed_secs:
-            prog, many = UNNAMED, many | {repo}
-        title = (f"{repo} — {prog}" if repo in many and prog else repo) + (f" → {bases[sec]}" if sec in bases else "")
+        title = sec + (f" → {bases[sec]}" if sec in bases else "")
         out += ["", f"📋 {title}" if tg else f"**{title}**"]
 
         def drawn(l):
@@ -1376,38 +1398,21 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             if bsec != sec:
                 continue
             out += ["", f"- {bullet_of[(bsec, rev)]} — 분야 {'·'.join(i['title'] for i in items)}"]
+    if moving:
+        out += ["", "📌 카드 없는 일" if tg else "📌 **카드 없는 일**", ""] + [it if tg else f"- {it}" for it in moving]
+    if theirs:
+        out += ["", "⏳ 다른 사람 대기" if tg else "⏳ **다른 사람 대기**", ""] + [it if tg else f"- {it}" for it in theirs]
+    # Only the ⏸️ rows: the held items are a queue the pointer line counts (todo_tables lists it).
+    if held := list(dict.fromkeys(held)):
+        out += ["", "⏸️ 보류" if tg else "⏸️ **보류**", ""] + [it if tg else f"- {it}" for it in held]
+    if insight:
+        out += ["", insight.strip()]
     if periodic and skipped:
         out += ["", skipped]
     if periodic and (reaped := reap_line(now)):
         out += ["", reaped]
     if periodic and (tokens := token_line(now)):
         out += ["", tokens]
-    if moving:
-        out += ["", "📌 카드 없는 일" if tg else "📌 **카드 없는 일**", ""] + [it if tg else f"- {it}" for it in moving]
-    if theirs:
-        out += ["", "⏳ 다른 사람 대기" if tg else "⏳ **다른 사람 대기**", ""] + [it if tg else f"- {it}" for it in theirs]
-    if insight:
-        out += ["", insight.strip()]
-    try:
-        own, decisions = list(decisions), fleet.open_decisions()
-    except store_db.NotMigrated:  # the headline already says 이행 대기
-        own, decisions = list(decisions), []
-    asked = set((last or {}).get("decisions") or []) if last_rows is not None else set()
-    if decisions or own:
-        items = []
-        for i, d in enumerate(decisions, 1):
-            rec = d.get("recommend") and d["options"][d["recommend"] - 1]
-            text = (f"{i}. ({d['id']}) {d['title']}" + (f" → 추천: {rec['label']}" + (f" — {rec['description']}" if rec["description"] else "")
-                    if rec else " — 선택지: " + " / ".join(o["label"] for o in d["options"]) if d["options"] else ""))
-            items.append(text + (" (지난 보고와 동일)" if d["id"] in asked else ""))
-        items += [f"{i}. {one_line(d)}" for i, d in enumerate(own, len(decisions) + 1)]
-        out += ["", ("❓ 결정 필요" if tg else "❓ **결정 필요**") + " — " + items[0]] + [x for it in items[1:] for x in ("", it)]
-    todo = todos + due_mine + turn
-    out += ["", ("🙋 지금 오너가 할 일" if tg else "🙋 **지금 오너가 할 일**") + ("" if todo else " — 없음")]
-    out += [""] + [it if tg else f"- {it}" for it in todo] if todo else []
-    # Only the ⏸️ rows: the held items are a queue the pointer line counts (todo_tables lists it).
-    if held := list(dict.fromkeys(held)):
-        out += ["", "⏸️ 보류" if tg else "⏸️ **보류**", ""] + [it if tg else f"- {it}" for it in held]
     # A link to this host's 127.0.0.1 is dead on another device, and Orca has no remote link: what works there is text.
     reach = {}
     for l in lines:
@@ -1419,7 +1424,10 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         shown_as = lambda s: f"{s['name']} ({s.get('project')})" if names.count(s["name"]) > 1 else s["name"]  # noqa: E731
         out += ["", "🔗 세션 찾기" if tg else "🔗 **세션 찾기**", ""]
         out += [f"{shown_as(s)} — {how}" if tg else f"- {shown_as(s)} — `{how}`" for s, how in reach.values()]
-    opened = [{"id": item_of(rows[l["key"]]), "kind": "row", "label": label(l), "status": l["own"]}
+    out += [x for pointer in (stage_line, lists_line) if pointer for x in ("", pointer)]
+    if lines:
+        out += ["", legend] + (["", "PR: " + " · ".join(pr_legend)] if pr_legend else [])
+    opened =[{"id": item_of(rows[l["key"]]), "kind": "row", "label": label(l), "status": l["own"]}
               for l in lines if l["key"] in rows and l["own"] not in (None, "done")]
     opened += [{"id": i, "kind": "doing", "label": d["title"], "status": js["status"]} for i, d, js in doing]
     opened += [{"id": i, "kind": "doing", "label": d["title"], "status": js["status"], "row": item_of(rows[l["key"]])}
