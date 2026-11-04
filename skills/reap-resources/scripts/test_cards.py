@@ -245,8 +245,17 @@ assert cardguard.check({"patrol": reap.patrol_states(NOW, activity=True).get(CAR
                         "ino": None}, HEAD, set())[0]
 # A settled dispatch whose terminal nobody released is printed apart, with the Run that owns it and the command; an
 # in_progress one still keeps the card and names its Run.
-rows = [{"dispatchId": "ctx_a", "runId": "run_a", "terminalState": "retained", "resource": {"worktreeId": "w::" + CARD},
+rows = [{"dispatchId": "ctx_a", "runId": "run_a", "terminalState": "reclaimable", "resource": {"worktreeId": "w::" + CARD},
          "projection": {"outcome": "succeeded"}},
+        # No leak: retained (context-only or taken over), no resource left, another host's, a retained reason.
+        {"dispatchId": "ctx_r", "runId": "run_a", "terminalState": "retained", "resource": {"worktreeId": "w::" + CARD},
+         "projection": {"outcome": "succeeded"}},
+        {"dispatchId": "ctx_n", "runId": "run_a", "terminalState": "release_unknown", "resource": None,
+         "projection": {"outcome": "failed", "workspace": {"id": "w::" + CARD}}},
+        {"dispatchId": "ctx_h", "runId": "run_a", "terminalState": "reclaimable", "resource": {"worktreeId": "w::" + CARD},
+         "projection": {"outcome": "succeeded", "host": {"kind": "remote"}}},
+        {"dispatchId": "ctx_k", "runId": "run_a", "terminalState": "reclaimable",
+         "resource": {"worktreeId": "w::" + CARD, "retainedReason": "user"}, "projection": {"outcome": "succeeded"}},
         {"dispatchId": "ctx_b", "runId": "run_b", "terminalState": "released", "resource": {"worktreeId": "w::" + CARD},
          "projection": {"outcome": "succeeded"}},
         {"dispatchId": "ctx_c", "runId": "run_c", "terminalState": "retained", "resource": {"worktreeId": "w::/other"},

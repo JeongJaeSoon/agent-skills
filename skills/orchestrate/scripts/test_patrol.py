@@ -326,6 +326,9 @@ fin = facts(terminals=[term("h1", "/w/live")],
                       "projection": {"outcome": "succeeded", "liveness": {"verdict": "exited"}}}])
 _, v, _ = patrol.judge(fin, {})
 assert set(v["activity"]) == {"/w/live"} and v["cards"] == {"/w/live": "working"}, v
+# Without the terminal list (failed or cut short) no card is proven terminal-less: parked stays.
+_, v, _ = patrol.judge({**fin, "failed": {"terminals"}}, {})
+assert {"/w/done", "/w/live"} <= set(v["activity"]) and v["activity"]["/w/done"]["state"] == "parked", v
 
 # v2 fields: the old ones keep their names and types, so reap.patrol_working reads the same set from a v2 file.
 v2f = facts(now=NOW, terminals=[term("h1", "/w/a"), term("h2", "/w/b"), term("h3", "/w/p")],

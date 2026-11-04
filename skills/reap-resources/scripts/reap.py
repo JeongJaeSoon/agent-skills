@@ -1131,14 +1131,17 @@ def worker_worktrees(workers):
 def unreleased_settled(workers):
     """{real path: [{dispatch, run, outcome}]}: Run workers whose dispatch settled (succeeded or failed) but whose terminal
     Orca does not list as released. They keep nothing: patrol and the live set read `in_progress` only. Releasing one is
-    its Run owner's call (`worker-release`), so a cleaner only names it."""
+    its Run owner's call (`worker-release`), so a cleaner only names it. Only a local dispatch that still owns a terminal
+    resource counts: a row with no resource (nothing shows a terminal is left), a retained one (a context-only dispatch or
+    a card the user took over, which release refuses) and another host's are no leak."""
     out = {}
     for w in workers:
-        pj = w.get("projection") or {}
-        # A settled row often has no resource left; the projection still names the workspace.
-        p = ((w.get("resource") or {}).get("worktreeId") or (pj.get("workspace") or {}).get("id") or "").partition("::")[2]
+        pj, res = w.get("projection") or {}, w.get("resource") or {}
+        p = (res.get("worktreeId") or "").partition("::")[2]
         outcome = pj.get("outcome")
-        if p and outcome in ("succeeded", "failed") and w.get("terminalState") not in (None, "released"):
+        local = ((pj.get("host") or {}).get("kind") or "local") == "local"
+        if p and local and outcome in ("succeeded", "failed") and not res.get("retainedReason") \
+                and w.get("terminalState") not in (None, "released", "retained"):
             out.setdefault(real(p), []).append({"dispatch": w.get("dispatchId"), "run": w.get("runId"), "outcome": outcome})
     return out
 

@@ -169,8 +169,9 @@ assert old["own_retained"] == "ctx_c" and old["end_check_retained"] == "ctx_c", 
 assert old["card_retained"] == {"id": "run_demo", "via": "own_dispatch"}, old
 assert old["own_settled"] is None and old["end_check_settled"] is None and old["card_settled"] is True, old
 assert old["patrol"] == [("X", "card-a", "term_a")], old
-assert old["reap"][0] == {"/work/acme/card-a": "살아 있는 워커 턴(ctx_a)", "/work/acme/lead": "살아 있는 워커 턴(ctx_lead)",
-                          "/work/acme/other": "살아 있는 워커 턴(ctx_x)"} and old["reap"][2] == {"/work/acme/card-c"}, old
+assert old["reap"][0] == {"/work/acme/card-a": "살아 있는 워커 턴(ctx_a, run_demo)",
+                          "/work/acme/lead": "살아 있는 워커 턴(ctx_lead, run_demo)",
+                          "/work/acme/other": "살아 있는 워커 턴(ctx_x, run_demo)"} and old["reap"][2] == {"/work/acme/card-c"}, old
 assert old["fleet"] == ([("ctx_lead", "run_demo", "dispatched"), ("ctx_a", "run_demo", "dispatched"),
                          ("ctx_b", "run_demo", "completed"), ("ctx_c", "run_demo", "completed"),
                          ("ctx_x", "run_demo", "dispatched")], False), old

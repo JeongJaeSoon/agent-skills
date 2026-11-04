@@ -487,7 +487,7 @@ def judge(facts, memo):
             continue
         # Parked is a wake-up the session itself will take: a card with no agent terminal left (its session ended, or
         # its terminal was released) wakes nobody, and its transcript still ends on the arming call for good.
-        if motion and motion.get("parked") and path in agent_paths:
+        if motion and motion.get("parked") and (path in agent_paths or "terminals" in failed):  # an unread list is no proof
             act[path] = {"state": "parked", "why": "a ScheduleWakeup, Monitor or background command will wake it"}
         handle = next((t["handle"] for t in agents if t.get("worktreePath") == path), None)
         if path not in agent_paths:
