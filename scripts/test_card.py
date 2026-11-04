@@ -298,7 +298,7 @@ assert [c["argv"] for c in calls if c["argv"][:2] == ["reference", "add"]] == [[
 assert not any(c["bin"] == "orch" for c in calls) and not any(c["argv"][:2] == ["worktree", "create"] for c in calls)
 assert json.loads(out)["card"] == {"kind": "worker", "path": str(CARD_DIR), "handle": "term_w", "run": {"id": "run_me"},
                                    "parent": "id:repo1::/wt/me", "forbidden": "inserted",
-                                   "close_setup": {"log": "abc-1.log"}}, out
+                                   "close_setup": {"log": "abc-1.log"}, "model": None}, out
 # A failed reference after the start is exit 5: the worker runs, so it is not started again.
 rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", "--reference", URL, mode="ref-fails")
 assert rc == 5 and "Do not create it again" in err and json.loads(out)["card"]["kind"] == "worker", (rc, err)
@@ -634,5 +634,38 @@ for bad, why in (("/goal x\n", "no CLOSE or KEEP row"), (f"{CLOSE}\n", "no `/goa
     results = [go(brief(bad, "a5.md"), "--repo", "r", "--name", "a5", *extra) for extra in ([], ["--agent", "codex"])]
     assert [r[0] for r in results] == [2, 2] and why in results[1][2] and not creates(results[1][3]), results
     assert results[0][2] == results[1][2], results
+
+
+# The session's model.
+def model_of(calls):
+    argv = creates(calls)[0]
+    return argv[argv.index("--model") + 1] if "--model" in argv else None
+
+
+rc, out, err, calls = go(brief(WORKER, "m.md"), "--repo", "r", "--name", "m0", "--no-parent")
+assert rc == 0 and model_of(calls) is None and "orchestrate.models.worker is not set" in err, err
+
+models = tmp / "models.json"
+models.write_text(json.dumps({"orchestrate": {"models": {"lead": "opus", "worker": "sonnet"}}}))
+os.environ["AGENT_SKILLS_CONFIG"] = str(models)
+rc, out, err, calls = go(brief(WORKER, "m.md"), "--repo", "r", "--name", "m3", "--no-parent")
+assert rc == 0 and model_of(calls) == "sonnet" and json.loads(out)["card"]["model"] == "sonnet", calls
+assert "is not set" not in err, err
+rc, out, err, calls = go(brief(LEAD, "ml.md"), "--repo", "r", "--name", "m4", "--no-parent")
+assert rc == 0 and model_of(calls) == "opus", calls
+rc, out, err, calls = go(brief(WORKER, "m.md"), "--repo", "r", "--name", "m5", "--no-parent", "--model", "opus")
+assert rc == 0 and model_of(calls) == "opus", calls
+arn = "arn:aws:bedrock:us-east-1:000000000000:inference-profile/acme.model-v1:0"
+models.write_text(json.dumps({"orchestrate": {"models": {"worker": arn, "lead": "two words"}}}))
+assert card.orca_settings.role_model("worker") == arn and card.orca_settings.role_model("lead") is None
+models.write_text(json.dumps({"orchestrate": {"models": {"lead": "opus", "worker": "sonnet"}}}))
+worker_brief = brief(f"{WORKER}REPORT: orca orchestration send --to run:run_me --type status\n", "mw.md")
+rc, out, err, calls = go(worker_brief, "--repo", "r", "--name", "m6")
+assert rc == 0 and creates(calls)[0][:2] == ["orchestration", "worker-start"] and model_of(calls) == "sonnet", calls
+rc, out, err, calls = go(worker_brief, "--repo", "r", "--name", "m7", "--agent", "codex")
+assert rc == 0 and model_of(calls) is None and "is not set" not in err, (rc, err, calls)
+rc, out, err, calls = handoff("ABC-8", "--title", "next", "--note", "x")
+assert model_of(calls) == "sonnet", calls
+os.environ["AGENT_SKILLS_CONFIG"] = str(tmp / "none.json")
 
 print("ok")

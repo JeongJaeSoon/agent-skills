@@ -55,6 +55,11 @@ actually opened.
   agent implementation. This line is the fix.
 - `흐름` — the real call path, end to end
 - `제약` — only what is specific to this ticket. General repo rules live in CLAUDE.md.
+- `함정`, `예시` — when you know them: what has gone wrong here, an input with its expected output.
+
+Write down as much as you verified: an agent that picks this up later has only the ticket. A
+researcher's report counts as opened when you name it as the source. These lines apply to a
+tracker template too, even when it has no slot for them.
 
 **No repo context (invoked outside a repo)? Drop the whole `🛠 구현 힌트` section.** A guessed
 file path is the most harmful thing this skill can produce — an agent will believe it.

@@ -79,8 +79,11 @@ skills-sync setup disable <이름>         # 끄기
   exit code로 확인한다. 지난 결과를 기억하는 precheck라면 직접 돌린 회차도 기억되므로, 검증할 때는 상태
   폴더를 따로 둔다(reap.py는 `--state`).
 - `--workspace-mode existing`을 쓴다. `new-per-run`은 회차마다 worktree를 만들어 치울 것을 늘린다.
-- 모델은 `--workspace` 체크아웃의 Claude Code 설정을 따른다. `orca automations create`·`edit`에는 모델 옵션이 없고,
-  메인 체크아웃의 `.claude/settings.local.json`에 `model`을 넣으면 그 체크아웃에서 여는 대화형 세션까지 바뀐다.
+- 모델은 `--workspace` 체크아웃의 Claude Code 설정을 따른다. `reap.model`, `reflect.model`, `prs.model`,
+  `mentions.model`을 넣으면 `schedule`이 `--extra-agent-args=--model <값>`을 붙인다. 이 인자는 새 세션 회차에만 붙는다.
+  기준은 판단이 거의 없는 읽기 전용 회차만 haiku,
+  나머지는 sonnet이다. 세션 안의 `CronCreate`·`/loop`는 그 세션의 모델로 돌고 모델을 고를 수 없으니, 반복 작업은 automation으로 옮긴다.
+  설정 키를 쓰지 않을 때는 아래 runner를 쓴다. 메인 체크아웃의 `.claude/settings.local.json`에 `model`을 넣으면 그 체크아웃에서 여는 대화형 세션까지 바뀐다.
   그래서 automation은 전용 runner worktree에서 돌린다. `schedule`을 `--workspace` 없이 돌리면 아래 절차를 함께
   출력하고, 스크립트는 설정 파일을 쓰지 않는다.
   1. `orca worktree create --repo path:<메인 체크아웃> --name automations-runner --no-parent --setup skip --json`.
