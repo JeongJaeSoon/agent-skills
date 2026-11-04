@@ -635,7 +635,9 @@ def refuse_codex(brief, opts):
     text = FENCE.sub("", text)
     if guard.is_lead(FENCE.sub("", raw)) or guard.is_lead(text):
         raise Refuse(2, f"[{ME}] {CODEX_LEAD}")
-    if opts.get("--card") or not any(a.startswith("run:") for a in report_to(text)):
+    if opts.get("--card"):
+        raise Refuse(2, f"[{ME}] {CODEX_GOAL_CARD}")
+    if not any(a.startswith("run:") for a in report_to(text)):
         raise Refuse(2, f"[{ME}] {CODEX_GOAL_CARD} {unsent_run_note(text)}".rstrip())
 
 

@@ -601,6 +601,8 @@ BARE_RUN = WORKER + "REPORT: worker_done to run:run_me\n"
 rc, out, err, calls = go(brief(BARE_RUN, "a13.md"), "--repo", "r", "--name", "a13", "--agent", "codex")
 assert rc == 2 and len(err.splitlines()) == 1 and not creates(calls), (rc, err)
 assert "`orca orchestration send --to run:<id>`" in err and "run:run_me" in err and "REPORT or PARENT" in err, err
+rc, out, err, calls = go(brief(BARE_RUN, "a17.md"), "--repo", "r", "--name", "a17", "--agent", "codex", "--card")
+assert rc == 2 and "names run:run_me" not in err, (rc, err)
 rc, out, err, calls = go(brief(BARE_RUN, "a14.md"), "--repo", "r", "--name", "a14")
 assert rc == 0 and creates(calls)[0][:2] == ["worktree", "create"] and "run:run_me" in err and "send --to" in err, (rc, err)
 rc, out, err, calls = go(brief(WORKER, "a15.md"), "--repo", "r", "--name", "a15")
