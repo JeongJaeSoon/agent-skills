@@ -56,6 +56,53 @@ assert pid(head + "-    run()\n+    stop()\n") != pid(head + "-    run()\n+stop(
 
 print("prog.py ledger edge cases: all pass")
 
+
+def chk(name, concl, started, run, status="COMPLETED", completed=None, workflow="CI"):
+    return {"__typename": "CheckRun", "name": name, "status": status, "conclusion": concl, "workflowName": workflow,
+            "startedAt": started, "completedAt": completed or started,
+            "detailsUrl": f"https://github.com/o/r/actions/runs/{run}/job/1"}
+
+
+ZERO = "0001-01-01T00:00:00Z"  # what gh prints for a check that has not started
+A, B, C = "2026-11-04T08:21:44Z", "2026-11-04T08:21:50Z", "2026-11-04T08:22:30Z"
+
+# The rollup of a head whose PR was edited while CI ran: each job once CANCELLED (run 1), once SUCCESS (run 2).
+names = ("plugin-validate", "registry-check", "tests", "forbidden-terms")
+dup = [c for n in names for c in (chk(n, "CANCELLED", A, 1), chk(n, "SUCCESS", B, 2))]
+bot = {"name": "CodeRabbit", "status": "COMPLETED", "conclusion": "SKIPPED", "workflowName": "", "startedAt": B,
+       "completedAt": B, "detailsUrl": "https://coderabbit.ai"}
+assert prog.ci_summary(dup + [bot]) == ([], [], ["2"])
+assert prog.ci_summary(dup[::-1]) == ([], [], ["2"])
+
+# A cancel nothing replaced is still a failure, and so is one that came after a pass.
+assert prog.ci_summary([chk("tests", "CANCELLED", A, 1)])[0] == ["tests=CANCELLED"]
+assert prog.ci_summary([chk("tests", "SUCCESS", A, 1), chk("tests", "CANCELLED", B, 2)])[0] == ["tests=CANCELLED"]
+# Latest wins for a real failure too, in either order.
+assert prog.ci_summary([chk("tests", "SUCCESS", A, 1), chk("tests", "FAILURE", B, 2)])[0] == ["tests=FAILURE"]
+assert prog.ci_summary([chk("tests", "FAILURE", A, 1), chk("tests", "SUCCESS", B, 2)])[:2] == ([], [])
+
+# A rerun keeps its old, lower run id, so start time decides before the id does.
+assert prog.ci_summary([chk("tests", "CANCELLED", A, 9), chk("tests", "SUCCESS", B, 5)])[:2] == ([], [])
+assert prog.ci_summary([chk("tests", "SUCCESS", A, 9), chk("tests", "CANCELLED", B, 5)])[0] == ["tests=CANCELLED"]
+# Same second: the later run.
+assert prog.ci_summary([chk("tests", "SUCCESS", A, 9), chk("tests", "CANCELLED", A, 10)])[0] == ["tests=CANCELLED"]
+assert prog.ci_summary([chk("tests", "CANCELLED", A, 10), chk("tests", "SUCCESS", A, 11)])[:2] == ([], [])
+
+# A check still going outranks any finished one: a queued run has no start time, and an old pass must not stand in.
+queued = chk("tests", None, ZERO, 3, status="QUEUED", completed=ZERO)
+assert prog.ci_summary([chk("tests", "SUCCESS", B, 2), queued])[:2] == ([], ["tests"])
+running = chk("tests", None, A, 1, status="IN_PROGRESS", completed=ZERO)
+assert prog.ci_summary([running, chk("tests", "SUCCESS", B, 2)])[:2] == ([], ["tests"])
+# A run cancelled before it started has only its end time, and it is still the latest.
+never_ran = chk("tests", "CANCELLED", ZERO, 3, completed=C)
+assert prog.ci_summary([chk("tests", "SUCCESS", B, 2), never_ran])[0] == ["tests=CANCELLED"]
+
+# The same job name in two workflows is two checks: one workflow's pass does not hide the other's failure.
+assert prog.ci_summary([chk("tests", "FAILURE", A, 1, workflow="nightly"), chk("tests", "SUCCESS", B, 2)])[0] == ["tests=FAILURE"]
+# A commit status carries no check-run fields.
+assert prog.ci_summary([{"context": "ci/x", "state": "FAILURE"}])[0] == ["ci/x=FAILURE"]
+print("prog.py latest check per name: all pass")
+
 # --- land order ---------------------------------------------------------------------------
 import datetime as dt
 NOW = dt.datetime(2026, 9, 24, 6, 0, tzinfo=dt.timezone.utc)

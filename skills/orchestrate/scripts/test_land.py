@@ -309,6 +309,33 @@ st["prs"]["74"]["statusCheckRollup"] = [{"name": "bot", "status": "COMPLETED", "
 code, out = prog(env, "land", "t", "--pr", "74")
 assert code == 3 and "CI failed" in out and not merged(d), out
 
+# A PR edited while CI ran: the same head holds a cancelled run and the run that replaced it.
+def dup_rollup(n, last="SUCCESS"):
+    def c(concl, started, run):
+        return {"name": "tests", "workflowName": "CI", "status": "COMPLETED", "conclusion": concl, "startedAt": started,
+                "completedAt": started, "detailsUrl": f"https://github.com/o/r/actions/runs/{run}/job/1"}
+    return [c("CANCELLED", "2026-11-04T08:21:44Z", n * 100), c(last, "2026-11-04T08:21:50Z", n * 100 + 1)]
+
+
+p_ = pr(77); p_["statusCheckRollup"] = dup_rollup(77)
+d, env = setup({"77": p_})
+verdict(d, 77, "T-77")
+st = json.loads((d / "state.json").read_text())
+st["runs"] = {"h77": [{"name": "CI", "status": "completed", "conclusion": "cancelled"},
+                      {"name": "CI", "status": "completed", "conclusion": "success"}]}
+(d / "state.json").write_text(json.dumps(st))
+code, out = prog(env, "land-check", "t", "--pr", "77")
+assert "CI failed" not in out and "CI pending" not in out, out
+code, out = prog(env, "land", "t", "--pr", "77")
+assert code == 0 and "landed #77" in out and "CI runs 7701;" in out and merged(d), out
+
+# The run that replaced it was cancelled too: nothing proves the head, so land stops as before.
+p_ = pr(78); p_["statusCheckRollup"] = dup_rollup(78, last="CANCELLED")
+d, env = setup({"78": p_})
+verdict(d, 78, "T-78")
+code, out = prog(env, "land", "t", "--pr", "78")
+assert code == 3 and "CI failed: tests=CANCELLED" in out and not merged(d), out
+
 # A stack lands in this lane when every layer meets it; any one layer short of it holds the whole unit.
 def no_ci_stack(**lower):
     d, env = no_ci_setup(dict(pr(75, stacked=True), **lower), pr(76, base="b75", stacked=True))
