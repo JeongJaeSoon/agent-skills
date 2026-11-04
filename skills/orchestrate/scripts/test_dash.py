@@ -719,6 +719,30 @@ dash._cache_state["dirty"] = True
 dash.save_compare_cache()
 saved = json.loads(dash.cache_path().read_text())
 assert saved["acme/other"] == {"x...y": True} and "o6...n" in saved["acme/app"], saved
+# The loops renew answers while a save rebuilds the dict: no "changed during iteration".
+for i in range(3000):
+    dash._CONTAINS[("acme/app", f"h{i}", "n")] = True
+stop, errors = threading.Event(), []
+def hammer():
+    i = 0
+    while not stop.is_set():
+        try:
+            dash.cached(("acme/app", f"h{i % 3000}", "n"))
+        except Exception as e:
+            errors.append(e)
+        i += 1
+th = threading.Thread(target=hammer, daemon=True)
+th.start()
+for _ in range(30):
+    dash._cache_state["dirty"] = True
+    dash.save_compare_cache()
+stop.set(); th.join(5)
+assert not errors, errors[:1]
+# A graft file rewrites ancestry: the local answer is not trusted.
+(clone / ".git" / "info").mkdir(exist_ok=True)
+(clone / ".git" / "info" / "grafts").write_text(c3 + "\n")
+assert dash.local_contains(clone, c1, c3) is None, "grafts: unknown"
+(clone / ".git" / "info" / "grafts").unlink()
 dash.sh = real_sh
 dash._CONTAINS.clear(); dash._cache_state.update(loaded=False, dirty=False); dash._gh_down_until = dash._gh_check_at = 0.0
 dash.cache_path().unlink(missing_ok=True)

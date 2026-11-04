@@ -895,6 +895,7 @@ def stalls(workers, tnow, held=frozenset()):
 
 
 _CONTAINS = {}
+_cache_lock = threading.RLock()  # guards _CONTAINS: the loops read and renew it while a save rebuilds it
 # After one failed compare gh is not called again for this long, and never while core quota is below GH_MIN_CORE
 # (until its reset). The quota is read with `gh api rate_limit`, which costs none. A flat window for plain failures,
 # since the error text carries no reset time.
@@ -930,9 +931,11 @@ def load_compare_cache():
     """Answers survive a restart: a commit's ancestry never changes, and every restart used to ask them all again."""
     if _cache_state["loaded"]:
         return
-    for k, v in read_compare_cache().items():
-        _CONTAINS.setdefault(k, v)
-    _cache_state["loaded"] = True
+    disk = read_compare_cache()
+    with _cache_lock:
+        for k, v in disk.items():
+            _CONTAINS.setdefault(k, v)
+        _cache_state["loaded"] = True
 
 
 def read_compare_cache():
@@ -951,10 +954,17 @@ def read_compare_cache():
 
 def cached(key):
     """The remembered answer, moved to the young end so that eviction keeps what the current ledgers still ask."""
-    v = _CONTAINS.pop(key, None)
-    if v is not None:
-        _CONTAINS[key] = v
-    return v
+    with _cache_lock:
+        v = _CONTAINS.pop(key, None)
+        if v is not None:
+            _CONTAINS[key] = v
+        return v
+
+
+def remember(key, value):
+    with _cache_lock:
+        _CONTAINS[key] = value
+        _cache_state["dirty"] = True
 
 
 def save_compare_cache():
@@ -963,31 +973,36 @@ def save_compare_cache():
     try:
         with cache_path().with_suffix(".lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)  # the server and a hand `collect` both save: merge what the other wrote
-            merged = {k: v for k, v in read_compare_cache().items() if k not in _CONTAINS}  # the other's go first
-            merged.update(_CONTAINS)
-            _CONTAINS.clear()
-            _CONTAINS.update(merged)
-            for k in list(_CONTAINS)[:-CACHE_MAX]:  # oldest first: the dict keeps insertion order, cached() renews
-                del _CONTAINS[k]
-            out = {}
-            for (repo, older, newer), v in _CONTAINS.items():
-                out.setdefault(repo, {})[f"{older}...{newer}"] = v
+            disk = read_compare_cache()
+            with _cache_lock:  # the loops read and renew the dict meanwhile
+                merged = {k: v for k, v in disk.items() if k not in _CONTAINS}  # the other's go first
+                merged.update(_CONTAINS)
+                _CONTAINS.clear()
+                _CONTAINS.update(merged)
+                for k in list(_CONTAINS)[:-CACHE_MAX]:  # oldest first: insertion order, cached() renews
+                    del _CONTAINS[k]
+                out = {}
+                for (repo, older, newer), v in _CONTAINS.items():
+                    out.setdefault(repo, {})[f"{older}...{newer}"] = v
+                _cache_state["dirty"] = False
             write_atomic(cache_path(), json.dumps(out))
-        _cache_state["dirty"] = False
     except OSError as e:
+        _cache_state["dirty"] = True
         log(f"compare cache not saved: {e!r}")
 
 
 def local_contains(repo_dir, older, newer):
-    """The answer from a local clone, or None when there is none or it does not know a commit."""
-    git = ["git", "-C", str(repo_dir)]
+    """The answer from a local clone, or None when there is none or it does not know a commit. Replace refs and
+    grafts rewrite ancestry, and a shallow clone's "no" may only mean the history was cut: those go to GitHub."""
+    git = ["git", "--no-replace-objects", "-C", str(repo_dir)]
+    run = lambda *a: subprocess.run(git + list(a), capture_output=True, text=True, timeout=15)
     try:
-        rc = subprocess.run(git + ["merge-base", "--is-ancestor", older, newer], capture_output=True, timeout=15).returncode
-        if rc == 1:  # in a shallow clone "no" may only mean the history was cut: GitHub decides that one
-            shallow = subprocess.run(git + ["rev-parse", "--is-shallow-repository"], capture_output=True, text=True,
-                                     timeout=15).stdout.strip()
-            if shallow != "false":
-                return None
+        grafts = run("rev-parse", "--git-path", "info/grafts").stdout.strip()
+        if grafts and (pathlib.Path(repo_dir) / grafts).exists():
+            return None
+        rc = run("merge-base", "--is-ancestor", older, newer).returncode
+        if rc == 1 and run("rev-parse", "--is-shallow-repository").stdout.strip() != "false":
+            return None
     except (OSError, subprocess.TimeoutExpired):
         return None
     return {0: True, 1: False}.get(rc)
@@ -1004,12 +1019,11 @@ def gh_contains(repo, older, newer, repo_dir=None):
     if (hit := cached(key)) is not None:
         return hit
     if repo_dir and (known := local_contains(repo_dir, older, newer)) is not None:
-        _CONTAINS[key] = known
-        _cache_state["dirty"] = True
+        remember(key, known)
         return known
     with _gh_lock:  # the slow and fast loops share the quota check and the backoff: one asker at a time
-        if key in _CONTAINS:
-            return _CONTAINS[key]
+        if (hit := cached(key)) is not None:
+            return hit
         if _budget[0] <= 0:
             return None
         if time.monotonic() < _gh_down_until:
@@ -1027,9 +1041,8 @@ def gh_contains(repo, older, newer, repo_dir=None):
             _gh_down_until = time.monotonic() + GH_BACKOFF_S  # counted from the failure, not from before a 45 s call
             _gh_check_at = 0.0  # when the backoff ends the quota is read first: a limit hit then waits for the reset
             return None
-        _CONTAINS[key] = st in ("ahead", "identical")
-        _cache_state["dirty"] = True
-        return _CONTAINS[key]
+        remember(key, answer := st in ("ahead", "identical"))
+        return answer
 
 
 GAP_MAX_AGE_D = 14  # a landing still without a main CI row after this long is stale history, not a gap to chase
