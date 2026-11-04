@@ -864,13 +864,14 @@ def plugins_updated():
     return latest
 
 
-def opened_after(since, terms):
+def opened_after(since, terms, plugins=None):
     """Handles of `terms` whose Orca worktree was created after the later of `since` (when agent-skills changed) and
     the last plugin update: their agent started after the change and already loaded it. Orca keeps no terminal
     creation time, and a worktree predates its terminals, so this never skips a session that is older than the
     change. Anything unreadable leaves the terminal a target."""
     try:
-        cutoff = max(datetime.datetime.strptime(since, "%Y-%m-%dT%H:%M:%S%z").timestamp(), plugins_updated()) * 1000
+        cutoff = max(datetime.datetime.strptime(since, "%Y-%m-%dT%H:%M:%S%z").timestamp(),
+                     plugins_updated() if plugins is None else plugins) * 1000
         created = {w.get("worktreeId"): w.get("createdAt") for w in orca("worktree", "ps", "--limit", "500")["worktrees"]}
     except (Stop, KeyError, TypeError, ValueError):
         return set()
@@ -980,6 +981,8 @@ def broadcast_locked(kind, dry_run=False, only=None):
         kind = "plugins"
         if pending.get("plugins_at") != stamp:
             pending = dict(pending, done=[], plugins_at=stamp)
+    if queued in ORDER[1:] and ORDER.index(kind) > ORDER.index(queued):
+        pending = dict(pending, done=[])  # those done got the lesser reload
     try:
         listed = [t for t in orca("terminal", "list")["terminals"]
                   if t.get("agentIdentity") == "claude" and t.get("connected") and t.get("writable")]
@@ -999,7 +1002,7 @@ def broadcast_locked(kind, dry_run=False, only=None):
     if not kind:
         print("nothing to reload")
         return 0
-    newer = opened_after(pending.get("since"), listed)
+    newer = opened_after(pending.get("since"), listed, stamp)  # the stamp that chose the kind, not a later read
     # A named terminal is sent to whatever the queue says: the caller knows it needs the reload.
     done, failed = (restarted if only else set(pending.get("done", [])) | restarted), {}
     for h in terms:

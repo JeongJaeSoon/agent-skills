@@ -434,6 +434,27 @@ def test_plugin_update_and_terminal():
             sync.broadcast(None, dry_run=False, only="after")
         check("with no plugin update the queued skills reload stays skills",
               json.loads(st.read_text())["sent"] == [["after", "/reload-skills"]], json.loads(st.read_text())["sent"])
+        # Still no plugin update: a named send ignores a done entry on its own, and a higher explicit kind drops the
+        # entries of those that got the lesser one.
+        pending_file.write_text(json.dumps({"kind": "skills", "since": since, "head": head, "done": ["after", "gone"]}))
+        cur["sent"] = []
+        st.write_text(json.dumps(cur))
+        with contextlib.redirect_stdout(io.StringIO()):
+            sync.broadcast(None, dry_run=False, only="after")
+        kept = json.loads(pending_file.read_text())
+        check("a named session already in done is sent to again with no plugin update",
+              json.loads(st.read_text())["sent"] == [["after", "/reload-skills"]] and kept["done"] == ["after", "gone"],
+              (json.loads(st.read_text())["sent"], kept))
+        cur["sent"] = []
+        st.write_text(json.dumps(cur))
+        with contextlib.redirect_stdout(io.StringIO()):
+            sync.broadcast("plugins", dry_run=False, only="after")
+        kept = json.loads(pending_file.read_text())
+        check("naming a higher kind saves it and drops the done entries that got the lesser one",
+              kept["kind"] == "plugins" and kept["done"] == ["after"], kept)
+        with mock.patch.object(sync, "orca", return_value={"worktrees": worktrees}):
+            fixed = sync.opened_after(since, listed, 0)
+        check("opened_after uses the stamp it is given, not a later read", fixed == {"between", "after"}, fixed)
         os.environ["AGENT_SKILLS_INSTALLED_PLUGINS"] = str(installed)
         # One malformed plugin entry, and an unreadable file, must not hide the good ones or crash.
         installed.write_text(json.dumps({"plugins": {"bad": None, "num": 3, "good": [{"lastUpdated": stamp}]}}))
