@@ -1168,19 +1168,60 @@ def no_ci_repo(repo):
     return isinstance(repos, list) and repo in repos
 
 
+def check_run_id(c):
+    url = c.get("detailsUrl") or c.get("targetUrl") or ""
+    return url.split("/actions/runs/")[1].split("/")[0] if "/actions/runs/" in url else ""
+
+
+def latest_checks(rollup):
+    """The newest entry of each check. A head keeps every run started at it, so a run superseded by a PR edit
+    (cancel-in-progress) stays in the rollup as CANCELLED beside the run that replaced it. The workflow is part of the
+    check's identity: one workflow's pass must not hide another's failure under the same job name. A check still going
+    outranks a finished one, since a queued run has no start time and an older pass must not stand in for it. Start
+    time decides before the run id, as a rerun keeps its old, lower id. A check that never started is older than a start
+    after its end; past that its end says nothing, so only the run id places it against the started ones."""
+    def started(c):
+        t = c.get("startedAt") or ""  # gh prints the zero time for a check that never started
+        return "" if t.startswith("0001-") else t
+
+    def going(c):
+        return (c.get("status") or "COMPLETED").upper() != "COMPLETED"
+
+    def run(c):
+        r = check_run_id(c)
+        return int(r) if r.isdigit() else 0
+
+    def newest(checks):
+        timed = [c for c in checks if started(c)]
+        # Starts in one second are unordered and the id cannot settle them, so a pass does not win that tie.
+        rank = lambda c: (going(c), started(c), (c.get("conclusion") or "").upper() not in PASSING, run(c))
+        best = [max(timed, key=rank)] if timed else []
+        rest = [c for c in checks if not started(c)
+                and not (best and not going(c) and (c.get("completedAt") or "~") < started(best[0]))]
+        return max(best + rest, key=lambda c: (going(c), run(c)))
+    groups = {}
+    for c in rollup:
+        groups.setdefault((c.get("workflowName"), c.get("name") or c.get("context")), []).append(c)
+    kept = []
+    for checks in groups.values():
+        last = newest(checks)
+        # Only another run replaces a job: two jobs of one run may share a display name.
+        kept += [c for c in checks if c is last or (run(last) and run(c) == run(last))]
+    return kept
+
+
 def ci_summary(rollup, no_ci=False):
     # No checks on a head usually means CI has not reported yet, so it never counts as green. Only a declared no-CI
     # repo reads a confirmed empty rollup as nothing to wait for; a missing one stays unknown.
     if not rollup:
         return [], [] if no_ci and rollup is not None else ["no CI checks reported yet"], []
     failed, pending, runs = [], [], set()
-    for c in rollup or []:
+    for c in latest_checks(rollup):
         name = c.get("name") or c.get("context")
         concl = (c.get("conclusion") or c.get("state") or "").upper()
         status = (c.get("status") or "COMPLETED").upper()
-        url = c.get("detailsUrl") or c.get("targetUrl") or ""
-        if "/actions/runs/" in url:
-            runs.add(url.split("/actions/runs/")[1].split("/")[0])
+        if run := check_run_id(c):
+            runs.add(run)
         if status != "COMPLETED" or concl in ("", "PENDING", "EXPECTED"):
             pending.append(name)
         elif concl not in PASSING:
