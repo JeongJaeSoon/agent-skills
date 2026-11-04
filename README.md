@@ -9,7 +9,7 @@ Claude Code skills that take a ticket to a merged PR, with you deciding where a 
 
 ## What it is
 
-agent-skills is a Claude Code plugin: 41 skills, 4 agent definitions, 12 hooks and a few commands. It covers two flows. One takes a single ticket from the first edit to a merged PR and a closed ticket. The other runs a whole project on several Orca workers at once, one ticket each, and lands their PRs in order.
+agent-skills is a Claude Code plugin: 41 skills, 4 agent definitions, 13 hooks and a few commands. It covers two flows. One takes a single ticket from the first edit to a merged PR and a closed ticket. The other runs a whole project on several Orca workers at once, one ticket each, and lands their PRs in order.
 
 It is for developers who hand ticket work in GitHub repositories to Claude Code and want to choose, point by point, whether a human approves each step (human in the loop, HITL) or the agent goes ahead while the human watches and steps in on exceptions (human on the loop, HOTL). Writes to your user settings and irreversible actions always wait for you.
 
