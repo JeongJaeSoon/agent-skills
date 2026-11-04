@@ -1318,13 +1318,13 @@ def cmd_init(argv):
 
 STALL_TEXT = {
     "idle": "turn ended {minutes} min ago with its task open and no wake-up armed; an orchestration message "
-            "does not wake an idle session: send the content to dispatch:{dispatch}, then nudge its terminal with "
-            "one line (orca terminal send --text 'run your orchestration check' --enter)",
+            "does not wake an idle session: send the content to dispatch:{dispatch}, then wake it by "
+            "references/waking.md (skills-sync wake-target <terminal>)",
     "start_unconfirmed": "dispatched {minutes} min ago and its session has written nothing: check it got the brief",
     "long_tool": "one {tool} call running for {minutes} min ({detail}): still waiting on purpose?",
     "silent": "its session has written nothing for {minutes} min though its last row is input, not an ended turn "
               "(a notification that arrived after the turn ended looks like this): read its terminal, and if it sits "
-              "at the prompt, send the content to dispatch:{dispatch} and nudge its terminal as for an idle one",
+              "at the prompt, send the content to dispatch:{dispatch} and wake it as for an idle one",
 }
 
 
@@ -2941,6 +2941,9 @@ def review_lines(p, workers=None, tasks=None, unknown=frozenset()):
     return lines
 
 
+WAKE_DUE_S = 1800  # sync.py's WAKE_PENDING_S
+
+
 def cmd_wait(argv):
     p = Program(argv[0])
     timeout = opt(argv, "--timeout-ms", "540000")
@@ -2969,6 +2972,8 @@ def cmd_wait(argv):
     if watched := watch_lines(me, False):
         print("\n".join(watched), flush=True)
     for i in range(rounds):
+        if wakes := wake_lines(me):  # before the wait: a busy inbox returns early and must not hide these
+            print("\n".join(wakes), flush=True)
         res = check(*box, "--wait", "--types", ",".join(sorted(ACTIONABLE)), "--timeout-ms", timeout)
         did, msgs = batch(res)
         if not did and not msgs:
@@ -3017,6 +3022,29 @@ def cmd_wait(argv):
     moves = next_moves(run_workers(run_id))
     print("\n".join([f"EMPTY x{rounds}: " + (f"{len(moves)} live worker(s), each with its move:" if moves else "no live worker")]
                     + moves))
+
+
+def wake_lines(me, now=None):
+    """Signals this session sent that stayed unconfirmed past `skills-sync wake-target`'s deadline. The background
+    recheck dies with a restart, so the wait keeps the deadline. A record sync's wake_entry would refuse, or one with no
+    sender, belongs to nobody it can name and shows to every session."""
+    root = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()
+    now = time.time() if now is None else now
+    out = []
+    for f in sorted((root / "wakes").glob("*.json")):
+        try:
+            entry = json.loads(f.read_text())
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError):
+            entry = None
+        valid = isinstance(entry, dict) and all(isinstance(entry.get(k), str) for k in ("session", "to", "nonce")) \
+            and isinstance(entry.get("at"), (int, float)) and isinstance(entry.get("offset"), int)
+        if valid and (now - entry["at"] < WAKE_DUE_S or entry.get("from") and entry["from"] != me):
+            continue
+        out.append(f"WAKE {f.stem}: unconfirmed past its deadline; skills-sync wake-check {f.stem}, and without "
+                   "`started` follow references/waking.md (inbox item, then wake-reset once the human has answered)")
+    return out
 
 
 def watch_lines(me, unowned):
@@ -3100,7 +3128,7 @@ def next_moves(workers):
         elif not h or (pj.get("liveness") or {}).get("verdict") == "exited":
             out.append(f"  {d} no terminal: worker-stop or worker-abandon (recovery-and-cleanup.md)")
         elif activity == "idle":  # the turn ended without worker_done; send alone does not wake it (SKILL.md, terminal send)
-            out.append(f"  {d} idle: orchestration send --to dispatch:{d}, then nudge {h}")
+            out.append(f"  {d} idle: orchestration send --to dispatch:{d}, then skills-sync wake-target {h}")
         elif activity == "working":
             out.append(f"  {d} working")
         else:  # waiting may be a permission prompt; unknown needs a look either way

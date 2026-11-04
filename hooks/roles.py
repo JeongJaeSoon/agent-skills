@@ -68,6 +68,43 @@ def roles_dir():
     return state() / "roles"
 
 
+def terminal_file(handle):
+    return state() / "terminals" / f"{handle}.json"
+
+
+def record_terminal(handle, session, cwd, now):
+    """Ties an Orca terminal to the session that just started in it. Orca's own data has no session id, and a cwd
+    match can name another session in the same worktree."""
+    if not SESSION.fullmatch(handle or "") or not SESSION.fullmatch(session or ""):
+        return
+    path = terminal_file(handle)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"handle": handle, "session_id": session, "cwd": cwd, "at": now}))
+    tmp.replace(path)
+
+
+def session_for(handle, rows):
+    """(row, None) for the `claude agents --json` row of the session this terminal recorded, else (None, why). A record
+    older than the row's process is stale: the session was resumed somewhere else."""
+    if not SESSION.fullmatch(handle or ""):
+        return None, "not a terminal handle"
+    try:
+        record = json.loads(terminal_file(handle).read_text())
+        session, at = record["session_id"], record["at"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None, "no session record for this terminal"
+    row = next((r for r in rows if isinstance(r, dict) and r.get("sessionId") == session), None)
+    if row is None:
+        return None, "its recorded session is not listed"
+    if row.get("kind") != "interactive":
+        return None, "its recorded session is not interactive"
+    started = row.get("startedAt")
+    if not isinstance(started, (int, float)) or not isinstance(at, (int, float)) or at < started / 1000:
+        return None, "the record is older than the session"
+    return row, None
+
+
 def lead_text(text):
     """The text is a lead's brief or first prompt."""
     return bool(MODE.search(text) or LEAD_HEAD.search(text) or LEAD_ROLE.search(text))
