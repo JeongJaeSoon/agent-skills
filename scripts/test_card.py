@@ -583,6 +583,10 @@ MARKED = f"{WORKER}FORBIDDEN   {card.BEGIN}\n  REPORT: orca orchestration send -
 rc, out, err, calls = go(brief(MARKED, "a10.md"), "--repo", "r", "--name", "a10", "--agent", "codex")
 assert rc == 2 and "/goal card" in err and not creates(calls), (rc, err, calls)
 assert pathlib.Path(tmp / "a10.md").read_text() == MARKED, "a refused start leaves the brief as it was"
+# A row the refresh splits off its FORBIDDEN head turns the brief into a lead's.
+SPLIT = SUPERVISED + "FORBIDDEN   MODE example\n"
+rc, out, err, calls = go(brief(SPLIT, "a11.md"), "--repo", "r", "--name", "a11", "--agent", "codex")
+assert rc == 2 and "lead" in err and not creates(calls) and (tmp / "a11.md").read_text() == SPLIT, (rc, err, calls)
 rc, out, err, calls = handoff("ABC-9", "--agent", "codex")
 assert rc == 2 and "/goal card" in err and len(err.splitlines()) == 1 and not creates(calls), (rc, err)
 rc, out, err, calls = handoff("ABC-9", "--agent", "claude")
