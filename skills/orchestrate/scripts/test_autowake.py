@@ -47,7 +47,7 @@ class World:
     def write_state(self):
         (self.p.dir / "dashboard" / "state.json").write_text(json.dumps({
             "generated_at": prog.now(), "summary": {"stalls": self.stalls},
-            "workers": [{"dispatch": "ctx_1", "since": mins(-60).isoformat()}]}))
+            "workers": [{"dispatch": "ctx_1", "since": None}]}))
 
     def orca(self, *a):
         if a[:2] in self.fail:
@@ -59,6 +59,8 @@ class World:
             return {"messages": self.mail}
         if a[:2] == ("orchestration", "gate-list"):
             return {"gates": self.gates}
+        if a[:2] == ("orchestration", "worker-show"):  # Orca's own shape: no zone, a space, 60 minutes before T0
+            return {"dispatch": {"id": a[a.index("--dispatch") + 1], "dispatchedAt": "2026-01-01 11:00:00"}}
         raise AssertionError(a)
 
     def sync(self, *a):
@@ -257,6 +259,40 @@ w = World(mail=[answer, ask, other])
 w.sweep(0)
 w.sweep(10)
 assert len(w.sent) == 1, "answered"
+
+# The three a live run found, in the shapes it saw.
+# 1. A stopped Claude worker reads `done` to Orca while its outcome stays in_progress.
+done_row = row(workerState="ready", projection={"stage": {"activity": "done"}})
+w = World(workers=[done_row])
+w.sweep(0)
+w.sweep(10)
+assert len(w.sent) == 1, "activity done with the task open is a stopped worker"
+excluded("waiting on a prompt", world={"workers": [row(projection={"stage": {"activity": "waiting"}})]})
+assert prog.next_moves([{"dispatchId": "w4", "agentTerminalHandle": "h4", "projection": {
+    "outcome": "in_progress", "nextAction": {"kind": "none"}, "stage": {"activity": "done"}}}], {"w4"}) \
+    == ["  w4 done: auto-wake holds it (orch wait)"]
+# 2. state.json has no `since` and the page is full: the start comes from worker-show, and a page reaching it is enough.
+old = (mins(-120)).isoformat()
+w = World(mail=[{"id": f"m{i}", "type": "status", "from_handle": "x", "created_at": old, "payload": None}
+                for i in range(autowake.INBOX_LIMIT)])
+w.sweep(0)
+w.sweep(10)
+assert len(w.sent) == 1, "the page reaches back past dispatchedAt"
+w = World(mail=[{"id": f"m{i}", "type": "status", "from_handle": "x", "created_at": old, "payload": None}
+                for i in range(autowake.INBOX_LIMIT)])
+w.fail.add(("orchestration", "worker-show"))
+w.sweep(0)
+assert not w.sweep(10).skip and not w.sent, "no start known and a full page: not a yes"
+# 3. Orca's own stop notice is an escalation from the worker that nobody answers; it is the stop, not a question.
+stop = {"id": "msg_stop_f4ba436cb4d1", "type": "escalation", "from_handle": "term_1", "to_handle": "dispatch:ctx_lead",
+        "subject": "Worker stopped without reporting", "body": "Worker term_1 ended its turn without sending worker_done",
+        "created_at": mins(-1).isoformat(), "thread_id": None,
+        "payload": json.dumps({"taskId": "task_1", "dispatchId": "ctx_1", "handle": "term_1", "stopReason": "finished"})}
+w = World(mail=[stop])
+w.sweep(0)
+w.sweep(10)
+assert len(w.sent) == 1, "Orca's stop notice"
+excluded("a real escalation", world={"mail": [{**stop, "id": "msg_real", "subject": "Blocked"}]})
 
 # Two due in one round: what the first wake's seconds changed is read again for the second, and the row's time is real.
 stall2 = {"dispatch": "ctx_2", "ticket": "ABC-1", "kind": "idle", "minutes": 16}

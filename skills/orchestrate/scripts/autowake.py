@@ -19,9 +19,10 @@ OFF_LINE = (f"auto-wake is off: set orchestrate.{KEY} in ~/.claude/agent-skills.
 SYNC = pathlib.Path(__file__).resolve().parents[3] / "scripts" / "sync.py"
 SIGNAL = "run your orchestration check"
 ROWS = ("auto_wake_claimed", "auto_wake", "auto_wake_failed", "auto_wake_escalated")
-INBOX_LIMIT = 1000
+INBOX_LIMIT = 5000  # Orca's inbox spans every Run with no cursor; 1000 rows covered under a day of a busy machine
 READY = re.compile(r"\bREADY\b")
 OPEN_MAIL = ("question", "escalation", "decision_gate")
+STOP_NOTICE = "msg_stop_"  # the escalation Orca itself sends when a worker stops: the stop, not a question it waits on
 SYNC_TIMEOUT_S = 60
 
 
@@ -83,8 +84,8 @@ class Facts:
     """Why a dispatch must not be woken, read once per round and only when one is due. state.json can be 3 minutes
     old, so everything here is read fresh."""
 
-    def __init__(self, p, state, events):
-        self.p, self.state, self.events = p, state, events
+    def __init__(self, p, events):
+        self.p, self.events = p, events
         self.workers = self.mail = self.answered = self.gates = None
 
     def why_not(self, d, ticket):
@@ -107,8 +108,9 @@ class Facts:
             return f"settled ({pj.get('outcome')})"
         if (pj.get("liveness") or {}).get("verdict") == "exited":
             return "its agent exited"
-        if ((pj.get("stage") or {}).get("activity")) != "idle":
-            return "Orca does not show it idle"
+        # done with the outcome still in_progress is how a Claude worker that stopped early reads
+        if ((pj.get("stage") or {}).get("activity")) not in ("idle", "done"):
+            return "Orca does not show it stopped"
         if not prog.worker_terminal(w):
             return "no terminal"
         if (pj.get("nextAction") or {}).get("kind") not in (None, "none") or (pj.get("attention") or {}).get("requiresAction"):
@@ -155,14 +157,17 @@ class Facts:
         if self.mail is None:
             self.mail = orca_settings.with_full(orca, "orchestration", "inbox", "--limit", str(INBOX_LIMIT)).get("messages") or []
             self.answered = fleet.answered_mail(self.mail)
-        since = next((w.get("since") for w in self.state.get("workers") or [] if w.get("dispatch") == d), None)
-        oldest = min((m.get("created_at") or "" for m in self.mail), default="")
-        reaches = len(self.mail) < INBOX_LIMIT or since and prog.parse_ts(oldest) <= prog.parse_ts(since)
-        if not reaches:
-            return "the inbox page does not reach back to its start"
+        if len(self.mail) >= INBOX_LIMIT:
+            at = orca_settings.with_full(orca, "orchestration", "worker-show", "--dispatch", d)["dispatch"]["dispatchedAt"]
+            start = prog.parse_ts(at)
+            start = start if start.tzinfo else start.replace(tzinfo=dt.timezone.utc)  # Orca writes UTC with no zone
+            if min(prog.parse_ts(m["created_at"]) for m in self.mail) > start:
+                return "the inbox page does not reach back to its start"
         for m in self.mail:
             h = m.get("from_handle") or ""
             if d not in (prog.payload_of(m).get("dispatchId"), h[9:] if h.startswith("dispatch:") else None):
+                continue
+            if str(m.get("id")).startswith(STOP_NOTICE):
                 continue
             if m.get("type") in OPEN_MAIL and m.get("id") not in self.answered:
                 return "waiting on an answer (open question)"
@@ -253,7 +258,7 @@ def sweep(p, n, now=None):
     for e in events:
         if e["ev"] in ROWS and e.get("dispatch"):
             acted.setdefault(e["dispatch"], {})[e["ev"]] = e
-    facts = Facts(p, state, events)
+    facts = Facts(p, events)
     for d, x in stalls.items():
         if d in acted:
             second_stop(p, d, x, acted[d], n, now, r, facts)
@@ -276,7 +281,7 @@ def sweep(p, n, now=None):
             continue
         save_marks(p, marks)
         wake(p, d, x, mark, n, clock, r, facts.workers)
-        facts = Facts(p, state, p.events())  # a wake takes seconds; what it read may have changed for the next dispatch
+        facts = Facts(p, p.events())  # a wake takes seconds; what it read may have changed for the next dispatch
     if marks != before:
         save_marks(p, marks)
     return r

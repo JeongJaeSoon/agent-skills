@@ -3186,8 +3186,8 @@ def next_moves(workers, auto=frozenset()):
             out.append(f"  {d} {act['kind']}: {' '.join(act.get('argv') or [])}")
         elif not h or (pj.get("liveness") or {}).get("verdict") == "exited":
             out.append(f"  {d} no terminal: worker-stop or worker-abandon (recovery-and-cleanup.md)")
-        elif activity == "idle" and d in auto:
-            out.append(f"  {d} idle: auto-wake holds it (orch wait)")
+        elif activity in ("idle", "done") and d in auto:
+            out.append(f"  {d} {activity}: auto-wake holds it (orch wait)")
         elif activity == "idle":  # the turn ended without worker_done; send alone does not wake it (SKILL.md, terminal send)
             out.append(f"  {d} idle: orchestration send --to dispatch:{d}, then skills-sync wake-target {h}")
         elif activity == "working":
