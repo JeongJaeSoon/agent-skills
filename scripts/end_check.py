@@ -22,7 +22,8 @@ $ORCA_TERMINAL_HANDLE, no reply in its thread). The KEEP row is read from --brie
 A linked ticket in --card mode needs --ticket-done once use-tracker shows it completed (its state is not read here).
 `orch decide` questions are a lead's and not read.
 
---trash-caches moves a done card's build caches and regenerated copies to the trash, so the cleaners can take it.
+--trash-caches moves the card's build caches and regenerated copies to the trash, so the cleaners can take it; not on
+the main checkout or a card another agent works on. Exit 4 means the move failed: hold the card.
 
 --apply carries the verdict out. remove and close-terminal for a worker first ask Orca whether its Dispatch settled
 (`worker-show`: status completed or failed): worker_done must have arrived before the card goes (end-session §7).
@@ -429,10 +430,9 @@ def main(argv):
     verdict, reasons = judge(facts, mode, opts.get("--outcome"), keep_row(opts), bool(opts.get("--ticket-done")))
     print(json.dumps({"verdict": verdict, "mode": mode, "reasons": reasons, "facts": facts}, ensure_ascii=False,
                      indent=1))
-    # Before the send, while nothing above can close this session: an untracked cache reads as dirty to the cleaners,
-    # and the card would stay for good. A card that stays for its main checkout or another agent keeps its caches.
-    if opts.get("--trash-caches") and verdict == "close-terminal" and not (facts.get("main") or facts.get("other_agents")) \
-            and not trash_caches(facts):
+    # On every verdict, before the send, while nothing above can close this session: a card kept for its open PR
+    # reaches the cleaners too once the PR merges, and they read an untracked cache as dirty for good.
+    if opts.get("--trash-caches") and not (facts.get("main") or facts.get("other_agents")) and not trash_caches(facts):
         return 4
     return apply(verdict, facts, mode, opts, me) if opts.get("--apply") else 0
 

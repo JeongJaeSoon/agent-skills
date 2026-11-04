@@ -112,9 +112,11 @@ Before sending `worker_done`, run `skills-sync end-check --worker --outcome <suc
 --dispatch <the preamble's --dispatch-id> --brief <brief path> --trash-caches` (`--keep` or `--no-keep` when the task
 has no brief file; without `--dispatch` it looks the Dispatch up and keeps the card when it cannot). It reads §4's
 commands, the card's terminals and the questions this terminal left unanswered, and prints the row
-below as `close-terminal` or `keep` with its reasons; a fact it could not read is `keep`. On a done
-card it moves the build caches to the trash now: the cleaners keep a card with an untracked one, and
-the session above may close this terminal once `worker_done` arrives. Then pick the row:
+below as `close-terminal` or `keep` with its reasons; a fact it could not read is `keep`. It also
+moves the build caches to the trash now, on either verdict, unless this is the main checkout or
+another agent works on the card: the cleaners keep a card with an untracked one, and the session
+above may close this terminal once `worker_done` arrives. Exit 4 means that move failed: the card
+holds, so name that in `worker_done`. Then pick the row:
 
 | State | The turn's last calls |
 |---|---|
@@ -156,7 +158,7 @@ merged, the note's `## 결과` written), and nothing waits on an answer: no ques
 no open PR, unless the open PR is the deliverable itself (the row below that says so). Follow-up ideas are not a reason to stay: write them in the report and the note for
 the parent to decide. Then run §3 and pick by §4's table on real output: `skills-sync end-check
 --card --brief <brief path> --trash-caches` (or `--keep`/`--no-keep`; `--ticket-done` once `use-tracker`
-shows the linked ticket completed) prints it and, on a done card, moves its build caches to the trash.
+shows the linked ticket completed) prints it and moves its build caches to the trash, as in §7.
 
 | State | The turn's last calls |
 |---|---|

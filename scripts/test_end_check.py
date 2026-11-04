@@ -253,10 +253,11 @@ rc, err, calls = apply("remove", status="completed")
 assert rc == 0 and ["worktree", "rm", "--worktree", "current", "--json"] in calls, calls
 rc, err, calls = apply("close-terminal", status="completed")
 assert rc == 0 and ["terminal", "close", "--terminal", "term_me", "--json"] in calls, calls
-# --trash-caches: a done card's cache goes (the cleaners read an untracked one as dirty); one that stays keeps its own.
+# --trash-caches: the cleaners read an untracked cache as dirty, so it goes even from a card kept for its open PR.
 sys.path.insert(0, str(HERE.parent / "skills" / "reap-resources" / "scripts"))
 import reap  # noqa: E402
 saved = reap.trash, end_check.card_facts, end_check.git_facts, end_check.archive_hook
+saved_apply = end_check.apply
 reap.trash = lambda *p: trashed.extend(p)
 end_check.archive_hook = lambda path: False
 
@@ -271,8 +272,21 @@ def trash_run(**facts):
 
 
 trashed = []
-assert trash_run() == ["/wt/card/x/__pycache__"], trashed
-assert trash_run(other_agents=["term_x"]) == trash_run(main=True) == trash_run(open_prs=[{"number": 1}]) == [], trashed
+assert trash_run() == trash_run(open_prs=[{"number": 1}]) == ["/wt/card/x/__pycache__"], trashed
+assert trash_run(other_agents=["term_x"]) == trash_run(main=True) == [], trashed
+
+
+def refuse_trash(*paths):
+    raise OSError("no trash")
+
+
+reap.trash, applied = refuse_trash, []
+end_check.apply = lambda *a: applied.append(a) or 0
+end_check.card_facts = lambda *a: dict(CLEAN)
+with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+    assert end_check.main(["--card", "--no-keep", "--trash-caches", "--apply"]) == 4
+assert applied == [], applied
+end_check.apply = saved_apply
 reap.trash, end_check.card_facts, end_check.git_facts, end_check.archive_hook = saved
 # A card has no Dispatch to wait for; keep applies nothing for it.
 rc, err, calls = apply("remove", mode="card")
