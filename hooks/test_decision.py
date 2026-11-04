@@ -34,7 +34,7 @@ other = fleet.decision_add("A worker's own", options=["Yes"], handle="term_worke
 
 # Ambiguous or unrelated input closes nothing; the registering terminal gets a reminder, other terminals nothing.
 text = hook("how is the build going?")
-assert "d1 Export format (options: CSV, JSON)" in text and "d2 Ship today?" in text and "orch decide done" in text, text
+assert "d1 Export format (options: CSV, JSON)" in text and "d2 Ship today?" in text and "orch decide answer" in text, text
 assert "d3" not in text
 assert hook("Yesterday's run failed") and status(ship)["status"] == "open"   # "Yes" is not a word of its own there
 assert hook("d9 CSV") and status(fmt)["status"] == "open"                    # no such open decision of this terminal
@@ -46,16 +46,21 @@ assert status(fmt)["status"] == "open"
 
 # An option label at the start of the first line, owned by exactly one open decision of this terminal.
 text = hook("csv, and keep the header row")
-assert status(fmt)["status"] == "done" and status(fmt)["answer"] == "CSV", status(fmt)
+assert status(fmt)["status"] == "done" and status(fmt)["answer"] == "csv, and keep the header row", status(fmt)
+assert store.decision_record(fmt)["answered_by"] == "term_coord"
 assert "d1" in text and "recorded as done" in text, text
-# The longest matching label wins; the id form takes the rest of the line as the answer.
+# The whole prompt is the record: the label only picks the decision. The id form drops the id and keeps the rest.
 fleet_d4 = fleet.decision_add("Ship tomorrow?", options=["Go"], handle="term_coord")["id"]
-assert hook("Yes, but later: after the release notes") and status(ship)["answer"] == "Yes, but later", status(ship)
-assert hook("decision d4: 허락합니다\nmore context") and status(fleet_d4)["answer"] == "허락합니다", status(fleet_d4)
+assert hook("Yes, but later: after the release notes\nand tell the team") \
+    and status(ship)["answer"] == "Yes, but later: after the release notes\nand tell the team", status(ship)
+assert hook("decision d4: 허락합니다\nmore context") and status(fleet_d4)["answer"] == "허락합니다\nmore context", status(fleet_d4)
 d5 = fleet.decision_add("Two with the same label", options=["Retry"], handle="term_coord")["id"]
 d6 = fleet.decision_add("Another", options=["Retry"], handle="term_coord")["id"]
-assert "orch decide done" in hook("Retry") and status(d5)["status"] == status(d6)["status"] == "open"  # ambiguous
+assert "orch decide answer" in hook("Retry") and status(d5)["status"] == status(d6)["status"] == "open"  # ambiguous
 assert hook("d6 Retry") and status(d6)["status"] == "done" and status(d5)["status"] == "open"
+# Too long to keep whole: left open with the command to use, never cut.
+text = hook("d5 " + "x" * (fleet.DECISION_ANSWER_MAX + 1))
+assert "orch decide answer" in text and status(d5)["status"] == "open", text
 assert hook("You have 1 orchestration message. Run `orca orchestration check --run run_0FAKE`.\nd5:skip it") \
     and status(d5)["answer"] == "skip it"  # Orca's nudge typed ahead of the answer is cut out
 assert hook("anything") is None  # this terminal has nothing open: no context at all

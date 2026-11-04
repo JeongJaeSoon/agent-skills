@@ -639,7 +639,14 @@ hook 자신의 판정이 예외를 내면 그 호출은 통과시키고, 경고�
 예전의 터미널 handle 판정(`orchestrate.top_level_handles`, Run의 `coordinator_handle`)과 그 캐시(`<state>/reorient/`)는 없앴다. 남은 캐시 파일은 reap state-file이 7일 뒤 정리한다. `/reload-plugins`로 hook을 받은 기존 세션은 SessionStart를 다시 거치지 않으므로, 다음 프롬프트부터 받는다.
 
 ### 결정 자동 닫기
-`hooks/decision.py`(UserPromptSubmit). `orch decide add`로 결정을 등록한 터미널(`$ORCA_TERMINAL_HANDLE`)에 사람이 친 프롬프트만 본다. 첫 줄이 id로 시작하거나(`d3 허락`, `decision d3: 허락`) 그 터미널의 열린 결정 가운데 하나에만 있는 선택지 이름으로 시작하면 그 결정을 답과 함께 done으로 닫고 오케스트레이터나 리드에게 알린다. 애매하면 닫지 않고 열린 결정 목록을 알림으로만 넣는다. 다른 터미널(워커)의 입력으로는 닫지 않고, 오류는 모두 exit 0이다. 이미 떠 있던 세션은 `/reload-plugins`나 재시작 뒤부터 적용된다.
+`hooks/decision.py`(UserPromptSubmit). `orch decide add`로 결정을 등록한 터미널(`$ORCA_TERMINAL_HANDLE`)에 사람이 친 프롬프트만 본다. 첫 줄이 id로 시작하거나(`d3 허락`, `decision d3: 허락`) 그 터미널의 열린 결정 가운데 하나에만 있는 선택지 이름으로 시작하면 그 결정을 프롬프트 전문과 함께 done으로 닫고 오케스트레이터나 리드에게 알린다. 전문이 답 상한을 넘으면 닫지 않고 `orch decide answer`를 안내한다. 애매하면 닫지 않고 열린 결정 목록을 알림으로만 넣는다. 다른 터미널(워커)의 입력으로는 닫지 않고, 오류는 모두 exit 0이다. 이미 떠 있던 세션은 `/reload-plugins`나 재시작 뒤부터 적용된다.
+
+### 오너 답 기록 경고
+`hooks/decision_relay.py`(PreToolUse의 Bash). 모델을 부르지 않는다. 오케스트레이터나 리드의 본 대화가 `orca terminal send`, `orca orchestration reply`, `orca orchestration send`(`worker_done` 제외)로 보내는 본문을 본다. 본문은 리터럴 `--text`·`--body`이거나 `--body "$(cat /절대/경로)"`의 파일이다.
+
+- `오너`가 있는 줄이나 그 다음 줄에 인용(`"…"`, `“…”`, `「…」`, `>` 줄)이 있고, 그 인용이 기록되어 있지 않으면 알린다. 막지 않는다.
+- 기록됐다고 보는 경우: 본문의 `오너(dN`이 done 결정을 가리키고 저장된 답 전체가 인용과 같을 때(공백 차이는 무시), 또는 이번 턴의 앞선 호출에서 `orch decide answer`·`orch decide done`이 오류 없이 끝났을 때. 지금 호출은 증거가 아니다.
+- 수준 `guard.decision_relay`: `warn`(기본), `off`. 여러 줄에 걸친 따옴표 인용은 보지 못한다. 오류는 지나가게 하고 `guard-errors.jsonl`에 남긴다.
 
 ### 권한 창 기록
 `hooks/permission.py`(PermissionRequest). 권한 창이 뜰 때 도구 이름과 가린 인자를 `$ORCA_TERMINAL_HANDLE`별로 대시보드 상태 디렉터리의 `prompts/`에 적는다. 결정은 내리지 않아서 권한 흐름은 그대로다. 대시보드는 그 터미널 화면에 같은 요청의 권한 창이 떠 있을 때만 인박스 항목에 승인·거부·터미널 열기 버튼을 붙인다. 사람이 누르면 보내기 직전에 화면을 다시 읽어 확인하고, 한 번만 허용하는 `Yes`나 `No`의 번호 하나만 누른다. "다시 묻지 않기", "항상 허용", "auto mode로 전환"처럼 규칙을 저장하거나 모드를 바꾸는 선택지는 고르지 않는다. 자세한 내용은 `skills/orchestrate/references/dashboard.md`.
@@ -725,7 +732,7 @@ pstack 스킬 58개(원칙 24개와 나머지 34개) 가운데 원칙 24개 전�
 - **프로젝트 운영:** `orchestrate`의 `orch` 원장, 착지 게이트와 독점 레인, human-gate, main 가디언, QA 리드, `orch-dash` 대시보드. 모양은 pstack 플레이북을 따랐지만 Orca Run과 GitHub stack 위에서 새로 만들었다.
 - **측정과 어댑터:** `measure-delivery`, `use-tracker`, `use-notes`.
 - **머신 관리:** `reap-resources`, `tune-automode`, `skills-config`, `setup-pc`.
-- **hook:** 권한 결정(`guard.py`), 오케스트레이터·리드 재정렬(`reorient.py`), 미설정 PC의 설정 제안(`onboard.py`), 대시보드에서 답하는 권한 창 기록(`permission.py`), 터미널에서 답한 결정 닫기(`decision.py`), 완료 주장 검사(`claim_check.py`), 무거운 시작 전 사용량 확인(`pressure_gate.py`), 문체 검사(`prose_check.py`), 의존 PR의 스택 확인(`stack_gate.py`), 프로그램 카드의 PR을 연 채 닫는 일 경고(`self_land_gate.py`).
+- **hook:** 권한 결정(`guard.py`), 오케스트레이터·리드 재정렬(`reorient.py`), 미설정 PC의 설정 제안(`onboard.py`), 대시보드에서 답하는 권한 창 기록(`permission.py`), 터미널에서 답한 결정 닫기(`decision.py`), 기록 없는 오너 말 전달 경고(`decision_relay.py`), 완료 주장 검사(`claim_check.py`), 무거운 시작 전 사용량 확인(`pressure_gate.py`), 문체 검사(`prose_check.py`), 의존 PR의 스택 확인(`stack_gate.py`), 프로그램 카드의 PR을 연 채 닫는 일 경고(`self_land_gate.py`).
 
 ### upstream 동기화 상태
 - **마지막 동기화:** 2026-10-26, `b42effe`(0.15.3)에서 `99b609a`(0.15.32)로. 그 사이 upstream은 pstack에 커밋 74개를 쌓았다.

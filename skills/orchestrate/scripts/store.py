@@ -8,6 +8,8 @@ the tables the registry lists for it.
 Access gate: only `orch db import` (import_apply) creates the file, sets the schema version and moves data in. Any
 other open needs SCHEMA_VERSION and every step in NEEDS recorded in `migration`, else NotMigrated: the CLI stops with
 "orch db import", a hook passes silently, the brief shows 이행 대기. Nothing reads or writes an empty DB as canonical.
+With no DB file at all, decisions are read and written in decisions.json under its lock, so `orch decide` works before
+the cutover and the import picks them up unchanged.
 
 Commands (prog.py `orch db`):
   import [--dry-run | --apply] [--rehearsal]   decisions.json -> decision table, then a tombstone in its place
@@ -189,9 +191,55 @@ def _ev_name(before, after):
     return "update"
 
 
+def _on_file():
+    """True until `orch db import`: no DB file and decisions.json is not its tombstone. A DB file that is there and
+    not imported is a cutover in progress, never written around."""
+    sd = fleet.state_dir()
+    return sd.is_dir() and not path().exists() and not (sd / "decisions.json").is_dir()
+
+
+@contextlib.contextmanager
+def _file_lock():
+    """decisions.lock, which import_apply holds too. Callers check _on_file() again inside: the import may have
+    finished while they waited, and its tombstone reads as an empty store."""
+    try:
+        f = (fleet.state_dir() / "decisions.lock").open("a")
+    except OSError as e:
+        raise NotMigrated(f"decisions.lock: {e}") from e
+    with f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        yield
+
+
+def _file_decisions():
+    got, nxt, bad = _legacy_decisions(fleet.state_dir() / "decisions.json")
+    if bad:
+        raise NotMigrated(f"decisions.json: {bad[0]}")
+    return got, nxt
+
+
+def _change_file(change):
+    """change_decisions on decisions.json; `orch db import` reads it as it stands, so nothing here needs migrating."""
+    got, nxt = _file_decisions()
+    store = {"next": nxt, "decisions": {d["id"]: d for d in got}}
+    out = change(store)
+    if {d["id"] for d in got} - set(store.get("decisions") or {}):
+        raise ValueError("decisions are never deleted")
+    target = fleet.state_dir() / "decisions.json"
+    fleet.write_atomic(target, json.dumps(store, ensure_ascii=False, indent=1) + "\n")
+    os.chmod(target, 0o600)
+    return out
+
+
 def change_decisions(change, by=None):
     """Run change(store) on {"next", "decisions"} as decisions.json held them, in one write transaction; each changed
-    decision is written with its event. A decision change() removes is refused: closed ones stay, filtered by status."""
+    decision is written with its event. A decision change() removes is refused: closed ones stay, filtered by status.
+    Before `orch db import` the same change runs on decisions.json. answered_by has no column: it stays in the event's
+    `after`, or in the file, and _answered_by reads it back."""
+    if _on_file():
+        with _file_lock():
+            if _on_file():
+                return _change_file(change)
     with tx() as db:
         old = {r["id"]: _decision(r) for r in db.execute("SELECT * FROM decision")}
         n = _counter(db, "d")
@@ -222,8 +270,33 @@ def decisions(status=None, db=None):
         return sorted((_decision(r) for r in c.execute(q, a)), key=lambda d: int(d["id"][1:]))
     if db is not None:
         return run(db)
+    if _on_file():
+        with _file_lock():
+            if _on_file():
+                return sorted((d for d in _file_decisions()[0] if not status or d["status"] == status),
+                              key=lambda d: int(d["id"][1:]))
     with read() as c:
         return run(c)
+
+
+def _answered_by(db):
+    """{id: the session that recorded the answer}, from each decision's events; later events may lack the key."""
+    out = {}
+    for r in db.execute("SELECT id, after FROM event WHERE entity='decision' ORDER BY seq"):
+        by = json.loads(r["after"] or "{}").get("answered_by")
+        if by:
+            out[r["id"]] = by
+    return out
+
+
+def decision_record(did):
+    """One decision of any status with its answered_by, or None."""
+    d = next((x for x in decisions() if x["id"] == did), None)
+    if d is None or "answered_by" in d:
+        return d
+    with read() as db:
+        by = _answered_by(db).get(did)
+    return {**d, "answered_by": by} if by else d
 
 
 # ---------------------------------------------------------------- the guard older board and tidy writes pass
@@ -532,8 +605,9 @@ def _legacy_decisions(p):
             bad.append(f"{key}: no title or created_at")
         elif not isinstance(d.get("options") or [], list) or d.get("delivered") not in (None, True, False):
             bad.append(f"{key}: options or delivered of the wrong type")
-        elif set(d) - set(DECISION_COLS):
-            bad.append(f"{key}: fields this table has no column for: {', '.join(sorted(set(d) - set(DECISION_COLS)))}")
+        elif set(d) - set(DECISION_COLS) - {"answered_by"}:  # answered_by goes on in the import event's `after`
+            extra = set(d) - set(DECISION_COLS) - {"answered_by"}
+            bad.append(f"{key}: fields this table has no column for: {', '.join(sorted(extra))}")
         else:
             got.append(d)
     top = max([int(d["id"][1:]) for d in got], default=0) + 1
@@ -752,7 +826,8 @@ def export_legacy(dest, target):
     db = open_db()  # a DB without the decisions step would export an empty file that old code takes as canonical
     try:
         db.execute("BEGIN")
-        rows = decisions(db=db)
+        by = _answered_by(db)
+        rows = [{**d, "answered_by": by[d["id"]]} if d["id"] in by else d for d in decisions(db=db)]
         nxt = _counter(db, "d")
         db.execute("COMMIT")
         busy = db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]

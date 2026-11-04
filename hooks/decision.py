@@ -32,18 +32,16 @@ NUDGE = re.compile(r"You have \d+ orchestration messages?(?: waiting)?(?:\.?\s*R
 
 
 def pick(prompt, mine):
-    """(decision, answer) the prompt settles unambiguously, else (None, None)."""
-    line = next((l.strip() for l in prompt.splitlines() if l.strip()), "")
-    m = ID_RE.fullmatch(line)
+    """(decision, answer) the prompt settles unambiguously, else (None, None). The answer is the prompt's whole text,
+    without an id it opened with: a label only picks the decision, and the words that follow it are the record."""
+    text = prompt.strip()
+    line, _, more = text.partition("\n")
+    m = ID_RE.fullmatch(line.strip())
     if m:
         d = mine.get(m.group(1).lower())
-        return (d, m.group(2).strip()) if d else (None, None)
-    hits = []
-    for d in mine.values():
-        labels = [o["label"] for o in d.get("options") or [] if label_match(line, o.get("label") or "")]
-        if labels:
-            hits.append((d, max(labels, key=len)))  # "Yes, but later" over "Yes"
-    return hits[0] if len(hits) == 1 else (None, None)
+        return (d, f"{m.group(2).strip()}\n{more}".strip()) if d else (None, None)
+    hits = [d for d in mine.values() if any(label_match(line.strip(), o.get("label") or "") for o in d.get("options") or [])]
+    return (hits[0], text) if len(hits) == 1 else (None, None)
 
 
 def main():
@@ -57,15 +55,18 @@ def main():
     if not mine or not prompt.strip():
         return
     d, answer = pick(prompt, mine)
-    if d:
-        fleet.decision_close(d["id"], "done", answer[:fleet.DECISION_ANSWER_MAX])
+    if d and len(answer) > fleet.DECISION_ANSWER_MAX:
+        text = (f"This message answers the dashboard decision {d['id']} and is too long to close it here. Keep the "
+                f"owner's words: run `orch decide answer {d['id']} --quote-file <file>`, trimmed to what answers it.")
+    elif d:
+        fleet.decision_close(d["id"], "done", answer, by=handle)
         text = (f"This message answers the dashboard decision {d['id']} ({d['title']}): \"{answer[:300]}\". It is now "
-                f"recorded as done (`orch decide done` is not needed); act on the answer.")
+                f"recorded as done (`orch decide answer` is not needed); act on the answer.")
     else:
         listed = "; ".join(f"{x['id']} {x['title']}" + (f" (options: {', '.join(o['label'] for o in x['options'])})" if x.get("options") else "")
                            for x in list(mine.values())[:REMIND_MAX])
         text = (f"Open dashboard decisions you registered: {listed}. If this message answers or settles one, run "
-                f"`orch decide done <id> --answer \"<answer>\"` now.")
+                f"`orch decide answer <id> --quote \"<the owner's words>\"` now.")
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": text}}, ensure_ascii=False))
 
 
