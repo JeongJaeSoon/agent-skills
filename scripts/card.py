@@ -614,10 +614,16 @@ def parse_args(rest):
 def refuse_codex(brief, opts):
     """Refuse(2) for a form Codex does not run. It comes before the brief is rewritten and the Run is checked, so a
     refused start changes nothing and says one thing."""
-    text = FENCE.sub("", pathlib.Path(brief).expanduser().read_text())
-    if guard.is_lead(text):
+    text = pathlib.Path(brief).expanduser().read_text()
+    if guard.is_lead(FENCE.sub("", text)):
         raise Refuse(2, f"[{ME}] {CODEX_LEAD}")
-    if opts.get("--card") or not any(a.startswith("run:") for a in report_to(text)):
+    if not opts.get("--no-forbidden"):  # a REPORT row left between the markers does not survive the refresh
+        try:
+            text = place_forbidden(text, forbidden_paragraph())[0]
+        except (OSError, ValueError):
+            pass  # refresh_forbidden reports it
+    reports = report_to(FENCE.sub("", text))
+    if opts.get("--card") or not any(a.startswith("run:") for a in reports):
         raise Refuse(2, f"[{ME}] {CODEX_GOAL_CARD}")
 
 
@@ -664,8 +670,6 @@ def create_locked(brief, opts, refs, prompt):
             print(f"[{ME}] the lead starts as a /goal card: {fix}", file=sys.stderr)
     run_id = checked if to_run else None
     worker = bool(run_id)
-    if opts["--agent"] == "codex" and not worker:  # the refresh dropped a REPORT row kept between the markers
-        raise Refuse(2, f"[{ME}] {CODEX_GOAL_CARD}")
     parent = None if opts.get("--no-parent") else (
         opts["--parent-worktree"] if opts.get("--parent-worktree") and not worker else caller_worktree())
     if worker:

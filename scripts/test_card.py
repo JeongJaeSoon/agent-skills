@@ -582,6 +582,7 @@ for why, argv in (("/goal card", (brief(WORKER, "a2.md"), "--repo", "r", "--name
 MARKED = f"{WORKER}FORBIDDEN   {card.BEGIN}\n  REPORT: orca orchestration send --to run:run_me\n  {card.END}\n"
 rc, out, err, calls = go(brief(MARKED, "a10.md"), "--repo", "r", "--name", "a10", "--agent", "codex")
 assert rc == 2 and "/goal card" in err and not creates(calls), (rc, err, calls)
+assert pathlib.Path(tmp / "a10.md").read_text() == MARKED, "a refused start leaves the brief as it was"
 rc, out, err, calls = handoff("ABC-9", "--agent", "codex")
 assert rc == 2 and "/goal card" in err and len(err.splitlines()) == 1 and not creates(calls), (rc, err)
 rc, out, err, calls = handoff("ABC-9", "--agent", "claude")
