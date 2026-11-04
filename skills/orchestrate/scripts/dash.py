@@ -1042,6 +1042,8 @@ def gh_contains(repo, older, newer, repo_dir=None):
             _gh_down_until = time.monotonic() + GH_BACKOFF_S  # counted from the failure, not from before a 45 s call
             _gh_check_at = 0.0  # when the backoff ends the quota is read first: a limit hit then waits for the reset
             return None
+        if st not in ("ahead", "identical", "behind", "diverged"):  # anything else is not an answer
+            return None
         remember(key, answer := st in ("ahead", "identical"))
         return answer
 

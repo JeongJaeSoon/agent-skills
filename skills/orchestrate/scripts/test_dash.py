@@ -680,6 +680,9 @@ git("commit", "-q", "--allow-empty", "-m", "two"); c2 = git("rev-parse", "HEAD")
 asked.clear(); dash.sh = counting_sh
 assert dash.gh_contains("acme/local", c1, c2, clone) is True and dash.gh_contains("acme/local", c2, c1, clone) is False
 assert not asked, f"a local clone needs no gh: {asked}"
+# A reply that is not one of GitHub's four statuses is no answer, and is not remembered.
+dash.sh = lambda cmd, timeout=45: {"n": 5000, "t": 0} if cmd[2] == "rate_limit" else {"s": None}
+assert dash.gh_contains("acme/odd", "p", "q") is None and ("acme/odd", "p", "q") not in dash._CONTAINS
 # A shallow clone's "no" may only mean cut history: it is not an answer.
 git("commit", "-q", "--allow-empty", "-m", "three"); c3 = git("rev-parse", "HEAD")
 shallow = pathlib.Path(tempfile.mkdtemp()) / "s"
