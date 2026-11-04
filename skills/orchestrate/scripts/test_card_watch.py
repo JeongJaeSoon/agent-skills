@@ -1,7 +1,14 @@
 """card_watch.py: which screens wake the orchestrator or lead, and which do not twice. Run: python3 test_card_watch.py"""
 import contextlib, io, os, pathlib, sys, tempfile
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
-import card_watch, prog
+import agent_signal, card_watch, prog
+
+SIGNAL_DIR = tempfile.TemporaryDirectory()
+agent_signal.LOG = pathlib.Path(SIGNAL_DIR.name) / "agent-signal.jsonl"
+agent_signal.LOCK = pathlib.Path(SIGNAL_DIR.name) / "agent-signal.lock"
+agent_signal.read = lambda **k: ([{"sessionId": f"s-{h}", "kind": "interactive", "status": "idle"}
+                                  for h in ("me", "h1", "h2", "h3", "h4")], None, "[]")
+agent_signal.session_for = lambda h, rows: (next((r for r in rows if r["sessionId"] == f"s-{h}"), None), None)
 
 NOW = 10_000_000.0
 menu = ["Which base branch should the PR target?", "❯ 1. main", "  2. develop", "Enter to select · ↑/↓ to navigate · Esc to cancel"]
@@ -161,11 +168,12 @@ with tempfile.TemporaryDirectory() as d:
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         card_watch.main(["--self", "me", "--min-free-gb", "0", "--state", str(state), "--once"])
-    assert out.getvalue().startswith("OK 4 agent terminals"), out.getvalue()
+    assert out.getvalue().startswith("PARTIAL 4 agent terminals, nothing new; 화면 판정 없음 1: card-b (unreadable)"), \
+        "a screen it could not read is not OK, even with a busy-or-idle signal for that card: " + out.getvalue()
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         card_watch.main(["--self", "me", "--min-free-gb", "0", "--state", str(state), "--interval", "1", "--timeout-ms", "500"])
-    assert out.getvalue().startswith("QUIET"), out.getvalue()
+    assert out.getvalue().startswith("QUIET nothing new; start the watch again; 화면 판정 없음 1"), out.getvalue()
 
     # Without --self the watch skips the terminal named by ORCA_TERMINAL_HANDLE, so it never reports its own session.
     screens = {"me": menu, "h1": idle, "h2": idle, "h3": idle, "h4": idle}

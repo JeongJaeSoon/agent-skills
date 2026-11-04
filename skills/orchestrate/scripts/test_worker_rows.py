@@ -137,7 +137,7 @@ assert old["in_flight"] == ["ctx_a"], old
 assert old["next_moves"] == ["  ctx_a no terminal: worker-stop or worker-abandon (recovery-and-cleanup.md)"], old
 assert old["sweep"][0] == "SETTLED ctx_b (succeeded): release it; no open PR, nothing unpushed", old
 assert old["sweep"][2].startswith("TAKEN OVER ctx_c (succeeded)") and "--terminal term_c" in old["sweep"][3], old
-assert old["close_out"][0].startswith("CLOSE OUT ctx_b: release it, close its terminals"), old
+assert old["close_out"][0].startswith("CLOSE OUT ctx_b: release it and close its agent terminal"), old
 assert old["init_lead"] == "ctx_lead" and old["own_dispatch"] == "run_demo", old
 assert old["card_supervisor"] == {"id": "run_demo", "via": "own_dispatch"}, old
 assert old["patrol"] == [("X", "card-a", "term_a")], old

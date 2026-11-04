@@ -1,6 +1,6 @@
 # Landing: parallel by default, exclusive where a merge can break what it does not touch
 
-Development, review, CI and landing all run in parallel. Each worker lands its own PR through `orch land` the moment it is ready, whether or not the PR is behind its base. Only changes that can break a merge they do not textually touch take the **exclusive lane** and land one at a time on the latest base. No lead hands out merge slots.
+Development, review, CI and landing all run in parallel. Each worker lands its own PR through `orch land` the moment it is ready, whether or not the PR is behind its base, then closes itself. The lead holds the judgment and the order, not the merge. Only changes that can break a merge they do not textually touch take the **exclusive lane** and land one at a time on the latest base. No lead hands out merge slots.
 
 This design replaced three that failed:
 
@@ -21,7 +21,8 @@ This design replaced three that failed:
 **Normal lane** (most PRs). `land` merges as soon as all of these hold at the current head:
 
 - a passing verdict whose patch-id matches the PR now
-- CI completed and green, with every workflow run at the head finished. No checks yet counts as pending (so a repo with no workflows never lands here; Frame in `SKILL.md` names its replacement lane), and so does a rollup that holds only a bot's status or the first jobs of a run (jobs behind `needs` appear later). A green check is not proof, so read the logs of the runs it prints.
+- CI completed and green, with every workflow run at the head finished. No checks yet counts as pending (a repo with no workflows lands only through the no-CI lane below), and so does a rollup that holds only a bot's status or the first jobs of a run (jobs behind `needs` appear later). A green check is not proof, so read the logs of the runs it prints.
+- zero unresolved review threads, read right before the merge; unreadable threads hold it
 - no conflict, not a draft
 - its dependencies landed
 - main is not red
@@ -41,7 +42,22 @@ The lane works like this:
 - It lands only on the latest base: not behind at all.
 - The lock does not stop normal-lane PRs, from this program or any other, from moving the base. So the holder, or any PR whose acceptance needs a proof at its exact head (live check, E2E), cannot land while landings on its base come faster than one CI cycle or one proof. After its first exit 3 for a moved base, stop retrying: ask the layer above to hold other landings on that base for one CI cycle or proof plus land, and record the hold in decisions.tsv. This is a window for one PR, not a serialized lane.
 
-Normal-lane PRs never wait for the exclusive lane.
+Normal-lane PRs never wait for the exclusive lane. A `land` that ends at exit 1 frees its PR's own lock, and a merge refused inside the lane parks the PR (`record parked`), so the next PR takes its turn; `record admitted --pr N` brings it back.
+
+**No-CI lane.** For a repo with no CI at all. The human lists it in `~/.claude/agent-skills.json`:
+
+```json
+{"orchestrate": {"no_ci_repos": ["acme/app"]}}
+```
+
+The key is a user setting because `orch set` raises no dialog and a worker must not drop CI from its own landing. It goes through `skills-config`. A repo not listed, or a file that cannot be read, stays on the rules above. For a listed repo:
+
+- A confirmed empty rollup and an empty workflow-run list count as nothing to wait for. A check that did report still counts, failed or pending, and a rollup `gh` did not return stays unknown.
+- Every PR takes the exclusive lane, whatever its files: nothing tests the merge, so nothing else may move the base under it. This does not cover a person merging outside `land` in that window, which no client check can stop.
+- `land` needs a passing verdict at exactly the head (same patch-id at another head is not enough), a head that contains its base (`compare` says behind by 0, the same answer as `git merge-base --is-ancestor`), zero unresolved threads, and the merge is pinned to that head (`--match-head-commit`, or `sha` on a stack's merge-async).
+- So an update onto the base needs a new review of the new head and a new `orch verdict`.
+- A stack lands here like any stack, and every layer it lands has to meet all of the above. A verdict, base or thread short on one layer holds the whole unit with nothing merged.
+- No run proves main, so the lander runs the brief's VERIFY commands at the merge commit before it records `main_green` or `main_red`.
 
 Proposals to serialize the normal lane for safety are rejected by default ("one CI at a time", "land one per N minutes"). They kill throughput, and GitHub already queues CI jobs. The safety comes from the self-check and the exclusive lane.
 
@@ -109,14 +125,14 @@ A series of cards reworking one area works on `feat/<topic>`, branched from main
 
 ## What a worker does: `orch land <slug> --pr N [--wait-minutes 50]`
 
-Run it under `run_in_background` with `--wait-minutes`. It sleeps through yields and returns when something needs you.
+Run it under `run_in_background` with `--wait-minutes`. It sleeps through yields and returns when something needs you. The land is the card's own job, approved in its first prompt: after it, record main and close by `end-session` §7. A card stops at READY only for a `READY-WAIT:` kind (`references/brief.md` LAND).
 
 | Exit | Meaning | Do |
 |---|---|---|
 | 0 | Landed. It printed the merge commit and the main-CI watch command. | Watch main CI, `record main_green\|main_red --sha`, finish the ticket, `worker_done` |
 | 2 | Yield: CI still running, a dependency or the stack top first, another PR holds the exclusive lane, or GitHub did not answer (timeout, 5xx) | Nothing. Keep the `--wait-minutes` loop |
 | 3 | Act: the message says what (conflicts, failed CI, a changed patch that needs re-review, the base changed your files, missing evidence in the test-results comment, or "you hold the exclusive lane: update onto the latest base") | Do it, then `land` again. On "update onto the latest base", also ask for a hold before that update (Exclusive lane above), so the next attempt is not overtaken again |
-| 1 | Refused: STOP line, main red (only `--class main-fix` lands), or the human gate | Report and stop |
+| 1 | Refused: STOP line, main red (only `--class main-fix` lands), the human gate, or a merge GitHub or the no-CI lane refused | Report and stop with `READY-WAIT: land-refused`. No retry |
 
 Rebase conflicts change the patch-id. That voids the verdict, so the resolution gets re-reviewed.
 
@@ -149,6 +165,7 @@ The guardian, or with none running whoever is about to record `main_red`, reads 
   - `HELD` lines are PRs on hold (`record parked`). They do not count as stale, so they never block spawning; close a superseded one on GitHub so it leaves the land order.
 - A landing backlog over `max_backlog_hours` means **stop starting, start finishing**.
 - Merges you did not make: `land` records a PR that was merged outside it.
+- `orchestrate.self_land` in `~/.claude/agent-skills.json` (`warn` by default, `deny` to enforce, `off`) sets what `hooks/self_land_gate.py` does when a card with a `PROGRAM` row and an APPROVED line naming `orch land` closes over its open PR.
 - Tune a program in `program.json` under `"landing"`: `aging_hours`, `stale_hours`, `max_backlog_hours`, `land_interval_minutes` (only the backlog estimate before two landings exist, never a pacing limit), `exclusive_stale_minutes`, `exclusive_paths`, `visual_paths` (`orch set <slug> visual_paths a/*,b/*`), `heavy_slots`.
 - Shared state is append-only (`ledger.jsonl`) or replaced whole: write a temp file and rename it, since a shared JSON file overwritten in place can be read empty mid-write.
 
@@ -169,3 +186,5 @@ Merging inside `orch land` is what lets a worker land without a per-merge approv
 Everything else goes to the normal permission flow: the user's own deny and ask rules, then auto mode's classifier. A skill's `allowed-tools` cannot replace the hook, because it lasts only for the turn that loads the skill and a worker runs LAND from its brief hours later.
 
 A worker that calls `gh pr merge`, `gh stack merge` or `gh api … merge-async` by hand is merging outside the gate. The classifier rightly refuses that as "Merge Without Review": use `land`.
+
+Two things let a card merge, and they do different work. Its first prompt's APPROVED line is the human's approval: it tells the card the merge is its job, and a later message cannot stand in for it. The hook's allow is what reaches the runtime: `orch land …` as one simple command skips the classifier, so no autoMode rule is needed; with an operator or a redirection the allow is gone and the classifier judges the call. An autoMode rule (`tune-automode`) is a backstop, not the path. After the land the card closes its own terminal by `end-session` §7, and the cleaners take the worktree.

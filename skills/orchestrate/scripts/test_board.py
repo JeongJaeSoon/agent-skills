@@ -234,9 +234,9 @@ PR: ❗ 사람이 풀 것 · CI✗ CI 실패 · CI… CI 진행 · 7자리=머�
 
 21:00 이후라 Slack 미전송
 
-🔄 **표 밖 진행**
+📌 **카드 없는 일**
 
-- 🔄 로그 누락 조사 — 원인 보고 · 워커
+- ❔ 로그 누락 조사 — 세션 없음 · 원인 보고 · 워커
 
 ⏳ **다른 사람 대기**
 
@@ -435,11 +435,11 @@ fill_rows = [l for l in filled.splitlines() if "acme/fill" in l or "acme/other" 
              or "c2" in l or "c4" in l]
 assert fill_rows == [
     "**acme/fill — 정산 리드 → main**",
-    "| 🙋 | 정산 리드 | — | — | — | 작업 중 |",
-    "| 🔄 | └ FILL-1 영수증 | [#5](https://example.test/5) ❗리뷰 CI… | — | — | 작업 중 |",
-    "| 🙋 | └ c2 | — | — | ↓ 오너 | 멈춤 |",
+    "| 🙋 | 정산 리드 | — | — | 작업 중 |",
+    "| 🔄 | └ FILL-1 영수증 | [#5](https://example.test/5) ❗리뷰 CI… | — | 작업 중 · c1 |",
+    "| 🙋 | └ c2 | — | ↓ 오너 | 멈춤 |",
     "**acme/fill**",
-    "| 🔄 | c4 | — | — | 3h 전 | 작업 중 |",
+    "| 🔄 | c4 | — | 3h 전 | 작업 중 |",
     "- 확인 대기 → c2"], filled
 assert "held" not in filled and "c3" not in filled and "c5" not in filled, filled
 # The last committed report never had fleet rows (it ran without --fill): they are not bold as new on every poll.
@@ -474,8 +474,7 @@ assert fleet.report_of(str(briefs / "c.md"))["next"] == "2026-10-13 착수"
 (tmp / "brief-last" / "top-level.json").unlink()
 carded = ok("brief", "render", "--periodic", "--now", NOW)
 # Its PR is not collected yet: a fact the row needs is unknown, so it stops at ❔ for the agent (rowstate rule 1).
-assert "| ❔ | 관측 카드 | #77 ? | — | 에이전트 조치 필요: PR …[1] | 작업 중 |" in carded and "runner" not in carded, carded
-assert "- [1] 에이전트 조치 필요: PR 상태 모름" in carded, carded
+assert "| ❔ | 관측 카드 | #77 ? | 에이전트 조치 필요: PR 상태 모름 | 작업 중 |" in carded and "runner" not in carded, carded
 
 # A requests.jsonl left by the removed owner-request ledger is not read: the pointer line counts no requests.
 (state / "requests.jsonl").write_text(json.dumps({"ev": "open", "id": "r1", "ts": "2026-10-13T13:30:00Z", "text": "merge acme/web#77"}) + "\n")
@@ -527,15 +526,15 @@ REQUEST_GOLDEN = """\
 
 단계표 1행 · `orch stage show`
 
-🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류 · 막대=단계(추정)
+🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류
 
 PR: ❗ 사람이 풀 것 · CI… CI 진행
 
 **acme/web → main**
 
-| | 리드/Phase | PR | 진행 | 다음 | 세션 |
-|---|---|---|---|---|---|
-| 🔄 | ABC-1 정렬 | [#45](https://example.test/45) ❗리뷰 CI… | — | CI 통과 → 리뷰 의…[1] | 작업 중 |
+| | 리드/Phase | PR | 다음 | 세션 |
+|---|---|---|---|---|
+| 🔄 | ABC-1 정렬 | [#45](https://example.test/45) ❗리뷰 CI… | CI 통과 → 리뷰 의…[1] | 작업 중 · c7 |
 
 - [1] CI 통과 → 리뷰 의뢰 · 워커
 
@@ -560,7 +559,7 @@ periodic = rok("brief", "render", "--periodic", "--now", NOW)
 assert "| 작업 |" not in periodic and "단계표 1행 · `orch stage show`" in periodic.splitlines(), periodic
 tg_req = rok(*REQUEST, "--telegram")
 assert not any(m in tg_req for m in ("**", "|", "](", "`", "📋 작업별")), tg_req
-assert "단계표 1행 · orch stage show --telegram" in tg_req.splitlines() and "🔄 ABC-1 정렬 #45 ❗리뷰 CI… — — · CI 통과 → 리뷰 의뢰 · 워커 · 작업 중" in tg_req.splitlines(), tg_req
+assert "단계표 1행 · orch stage show --telegram" in tg_req.splitlines() and "🔄 ABC-1 정렬 #45 ❗리뷰 CI… — CI 통과 → 리뷰 의뢰 · 워커 · 작업 중 · c7" in tg_req.splitlines(), tg_req
 (tmp / "programs").mkdir(exist_ok=True)
 (tmp / "programs" / ".dash.json").write_text(json.dumps({"pid": os.getpid(), "port": 4799}))
 assert "단계표 1행 · http://127.0.0.1:4799/#/fleet/stages" in rok(*REQUEST).splitlines()
@@ -620,11 +619,11 @@ merged = json.loads(mok("brief", "render", "--periodic", "--now", NOW, "--json")
 text = merged["text"]
 assert "| ✅ | ph1 | [#45](https://example.test/45) 45c0ffe | — |" in text, text
 assert "| ✅ | └ 하위 | [#46](https://example.test/46) 46c0ffe | — |" in text, text
-assert "| ⏸️ | ph2 | [#48](https://example.test/48) 닫힘 | — |" in text and "- PR 닫힘 → L ph2" in text, text
-assert "| ❔ | └ ABC-9 라이브 | #47 ? | — | 에이전트 조치 …[1] | 작업 중 |" in text, text
+assert "| ⏸️ | ph2 | [#48](https://example.test/48) 닫힘 | ↓ 보류 |" in text and "- PR 닫힘 → L ph2" in text, text
+assert "| ❔ | └ ABC-9 라이브 | #47 ? | 에이전트 조치 …[1] | 작업 중 · c9 |" in text, text
 assert "- [1] 에이전트 조치 필요: PR 상태 모름" in text, text
 assert "머지 대기" not in text and "ABC-8" not in text and "fleet:lead" not in merged["snapshot"]["rows"], text
-assert "| 🔄 | └ ABC-10 다음 PR | — | — | — | 작업 중 |" in text, text
+assert "| 🔄 | └ ABC-10 다음 PR | — | — | 작업 중 · c10 |" in text, text
 
 
 class GhDown:  # sessions collected, the PR list not: the headline says the PR states are old
@@ -675,14 +674,14 @@ stamp_dir, state = state, wd / "dashboard"
 stamp()
 state = stamp_dir
 text = wok("brief", "render", "--periodic", "--now", NOW)
-mine, theirs, moving = section(text, "🙋 **지금 오너가 할 일**"), section(text, "⏳ **다른 사람 대기**"), section(text, "🔄 **표 밖 진행**")
-assert "| 🙋 | └ 내 리뷰 | [#91](https://example.test/91) ❗리뷰 | — |" in text, text
-assert "| ⏳ | └ 남 리뷰 | [#92](https://example.test/92) ❗리뷰 | — |" in text, text
-assert "| ⏳ | └ reply 디자인 답변 | — | — |" in text and "| ❔ | └ ask 누구 대기 | — | — |" in text, text
+mine, theirs, moving = section(text, "🙋 **지금 오너가 할 일**"), section(text, "⏳ **다른 사람 대기**"), section(text, "📌 **카드 없는 일**")
+assert "| 🙋 | └ 내 리뷰 | [#91](https://example.test/91) ❗리뷰 | ↓ 오너 |" in text, text
+assert "| ⏳ | └ 남 리뷰 | [#92](https://example.test/92) ❗리뷰 | ↓ 대기 |" in text, text
+assert "| ⏳ | └ reply 디자인 답변 | — |" in text and "| ❔ | └ ask 누구 대기 | — |" in text, text
 assert mine == ["- 리뷰 · [#91](https://example.test/91) → 내 리뷰"], mine
 assert theirs == ["- rev-x · 리뷰 [#92](https://example.test/92) · 30분 전부터 → 남 리뷰",
                   "- 디자인팀 · 30분 전부터 → reply 디자인 답변 · 다음: 10/15 리마인드"], theirs
-assert "| ❔ | └ ask 누구 대기 | — | — | 에이전트 조치…[1] | 작업 중 |" in text and not moving, text
+assert "| ❔ | └ ask 누구 대기 | — | 에이전트 조치" in text and not moving, text
 assert "- [1] 에이전트 조치 필요: 누구 대기인지 기록 없음" in text, text
 assert not any(w in l for l in mine + moving for w in ("남 리뷰", "디자인 답변")), (mine, moving)
 assert not any(w in l for l in theirs + moving for w in ("내 리뷰", "캐시 정책")) and "누구 대기" not in "".join(mine + theirs)
@@ -691,7 +690,7 @@ assert "❓ **결정 필요** — 1. (d1) 캐시 정책 → 추천: TTL 1h" in t
 del who_prs["me"]
 (wd / "dashboard" / "prs.json").write_text(json.dumps(who_prs))
 text = wok("brief", "render", "--periodic", "--now", NOW)
-assert "| ❔ | └ 내 리뷰 | [#91](https://example.test/91) ❗리뷰 | — | 에이전트 조치…[1] |" in text \
+assert "| ❔ | └ 내 리뷰 | [#91](https://example.test/91) ❗리뷰 | 에이전트 조치" in text \
     and "- [1] 에이전트 조치 필요: 오너 login 모름" in text and "→ 내 리뷰" not in text, text
 # A waiting row on the owner by name, a check status nobody may set, and 🙋 as a status shorthand.
 assert board.is_owner("오너", None) and board.is_owner("@Octo-Owner", "octo-owner") and not board.is_owner("rev-x", "octo-owner")

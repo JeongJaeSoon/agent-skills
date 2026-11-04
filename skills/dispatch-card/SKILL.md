@@ -76,7 +76,9 @@ session as not the human's, so an approval sent afterwards is refused. The brief
   their words and the date (merge, deploy, restarting an app, a settings or language change, an
   upgrade). Written as a row, it reaches the first prompt (§3); a heading or bullet does not. The
   card decides inside them with the recommended default and reports what it chose; it does not
-  ask.
+  ask. A card that lands its own PR carries the merge here, in the first prompt, never in a later
+  message: `APPROVED: required checks green + independent review Act-on 0: merge with orch land`
+  plus the human's words and date. A card without it stops at READY.
 - **Human only** — what stays the human's: permission dialogs, logins, payments, document
   submissions, and any irreversible or outward act not under Approved. The card puts these to
   the human in one batched message and keeps doing the rest.
