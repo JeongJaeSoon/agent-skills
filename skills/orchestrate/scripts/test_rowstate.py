@@ -165,6 +165,9 @@ assert rowstate.judge(row, stalled, sid="wt")["status"] == "moving"
 stalled_pr = facts({"octo/app#1": READY}) | {"stalled": {"octo/app#1": "hook 오류"}}
 assert rowstate.judge(row, stalled_pr)["why"] == "hook 오류"
 assert rowstate.judge({**row, "worktree": "wt-other"}, stalled_pr)["status"] == "moving"
+# A lead's row holds no worktree of its own: `board lead add` keeps it in the lead record, which sid resolves.
+lead_row = {"id": "L", "kind": "lead", "status": "moving", "next": ""}
+assert rowstate.judge(lead_row, stalled, sid="wt")["why"] == "hook 오류"
 assert rowstate.judge({**row, "owner": "someone"}, facts({"octo/app#1": READY}, me=None))["unknown"] == ["오너 login 모름"]
 # A draft nobody works on, by a session list that can be trusted, is the agent's to resume or hold.
 draft = {**READY, "draft": True}

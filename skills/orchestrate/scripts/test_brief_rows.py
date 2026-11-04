@@ -265,6 +265,10 @@ b = brief()
 rows = {o["label"]: o["status"] for o in b["open"]}
 assert rows["pr-only"] == "check" and "stuck-card" not in rows, rows
 assert any("에이전트 조치 필요: hook 오류로 도구가 막힘" in m for m in section(b["text"], "🔄")), b["text"]
+# A lead's report names its cards' PRs: a stalled lead says nothing of them.
+st["sessions"] = [{**s, "kind": "orchestrator"} if s.get("id") == "s-stuck" else s for s in st["sessions"]]
+fleet.write_atomic(sd / "state.json", json.dumps(st))
+assert "hook 오류" not in brief()["text"]
 board.set_row("pr-only", status="done")
 verdicts.unlink()
 print("test_brief_rows: ok")

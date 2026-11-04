@@ -820,8 +820,13 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         open_dec, dec_known = fleet.open_decisions(), True
     except store_db.NotMigrated:
         open_dec, dec_known = [], False
-    stalled = {k: one_line(w) for i, s in sessions.items() if (w := stalled_why(s, checks))
-               for k in (i, fleet.current_pr(s, by_session, prs)) if k}
+    stalled = {}
+    for sid, s in sessions.items():
+        if why := stalled_why(s, checks):
+            stalled[sid] = one_line(why)
+            # A card's PR is its work; the PR in a lead's report is a card's, so a stalled lead says nothing of it.
+            if s.get("kind") not in ("orchestration", "orchestrator") and (pr := fleet.current_pr(s, by_session, prs)):
+                stalled[pr] = one_line(why)
     facts_in = rowstate.gather(now=now, prs=prs, me=me, shut=shut, verdicts=verdicts, holds=holds, hold_why=hold_why,
                                leads=store["leads"], state=state, decisions=open_dec, state_min=limits["state_min"],
                                stalled=stalled)

@@ -268,6 +268,15 @@ def merge_next(key, p, f):
     return "머지" if p.get("ci") == "success" and p.get("merge_state") in ("CLEAN", "HAS_HOOKS") else "체크"
 
 
+def patrol_reason(r, stalled, sid):
+    """Patrol's verdict on the row's own session. A task's sid may be its lead's, so only a lead row reads it; a row with
+    no card link reaches the card by the PR, which is what hides the card's own row."""
+    own = r.get("session") or r.get("linked") or r.get("worktree")
+    if own:
+        return stalled.get(own)
+    return r.get("kind") == "lead" and stalled.get(sid) or stalled.get(r.get("pr"))
+
+
 def judge(r, f, lead=None, sid=None):
     """The RowState of one row. lead: the board lead the row hangs under (None for fleet rows with none); sid: the
     worktree the row's work runs in (its own, else its lead's)."""
@@ -392,8 +401,7 @@ def judge(r, f, lead=None, sid=None):
         hit("check", f"{AGENT_ACTION}: {v['evidence']}", v["evidence"])
     if status == "check":
         hit("check", f"{AGENT_ACTION}: {r.get('why') or '상태 모름'}", r.get("why") or "상태 모름")
-    # The row's own card, not sid's (a lead's); a row with no card link by its PR, since that PR hides the card's own row.
-    elif why := f["stalled"].get(r.get("session") or r.get("linked") or r.get("worktree") or key):
+    elif why := patrol_reason(r, f["stalled"], sid):
         hit("check", f"{AGENT_ACTION}: {why}", why)
     for e in queue:
         if e.get("state") in ("gave_up", "failed"):
