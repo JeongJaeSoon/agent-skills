@@ -955,7 +955,7 @@ const briefInline = (s) => esc(s).replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, text
 // The renderer cuts a cell to fit 78 terminal columns as `head…[n]` and puts the whole text in `- [n] …` under the
 // table. The page has the width: each cut cell gets its whole text back (its └ and bold kept) and the list goes.
 const uncut = (cell, notes) => cell.replace(/^((?:[└ㄴ] )?(?:\*\*)?)(.*)…\[(\d+)\](\**)$/, (m, pre, head, n, post) => notes[n] != null ? pre + notes[n] + post : m);
-// The sections under the tables, as `<emoji> **name**[ — first item]` then `- item` (or `n. item`) lines, become tables
+// The sections around the tables, as `<emoji> **name**[ — first item]` then `- item` (or `n. item`) lines, become tables
 // too. split: what parts a line falls into, in order: [separator, column name] — the text before the first separator
 // is the first column. A line without the separator leaves the rest empty.
 const BRIEF_SECTIONS = {
@@ -991,7 +991,7 @@ function sectionTable(name, items, ids = []) {
 const rowLabel = (cell, notes) => uncut(cell, notes).replace(/^[└ㄴ] /, "").replace(/^\*\*(.*)\*\*$/, "$1");
 // tableRows (the reply's table_rows): per repository table, {table, rows}, each row {id, label, ack, done, session}.
 // A row's buttons go to the table row with its label (render() makes labels unique in a report); a row no entry names
-// gets none. listRows (list_rows): the items of the lists under the tables; an item with no table row of its own gets
+// gets none. listRows (list_rows): the items of the lists around the tables; an item with no table row of its own gets
 // its Done in the list. placed collects the Ack ids that got a button, closed the Done ids, so no card lists them again.
 function briefHtml(text, tableRows = [], placed = new Set(), listRows = {}, closed = new Set()) {
   const out = [], lines = text.split("\n");
@@ -1128,7 +1128,7 @@ function fleetBrief() {
   const finished = rest.length || head ? `<div class="card"><div class="card-head"><h3>Finished rows</h3><span class="aside">${head}</span></div>
     <ul class="rows">${rest.map((d) => `<li class="${d.acked ? "is-acked" : ""}"><span class="grow full">${esc(d.label)}</span><span class="acts muted">${d.at ? relSpan(d.at) : ""}</span>${ackBtn(d)}</li>`).join("")
       || '<li class="muted">Every finished row is in the table above or acked.</li>'}</ul></div>` : "";
-  return headHtml + ackNote() + undoNote() + stage + `<div class="card"><div class="brief card-body">${report}</div></div>` + finished + doneCards(b, closable);
+  return headHtml + ackNote() + undoNote() + `<div class="card"><div class="brief card-body">${report}</div></div>` + stage + finished + doneCards(b, closable);
 }
 
 // Done (tidy.py, `orch board done`): close a row, card or board item that is over, or reopen one. The collector closes
@@ -1191,9 +1191,10 @@ function stageSection(w) {
       <td class="wtitle" data-label="Work" style="--lv:${level[r.id]}">${level[r.id] ? '<span class="muted">└ </span>' : ""}${r.now ? `<span class="wnow" title="Now, as the brief judges its board row">${briefInline(NOW_ICON[r.now] || "")}</span> ` : ""}${linkRefs(r.title_full || r.title, refs)}${r.done_at ? ` <span class="muted">· ${r.stopped ? "stopped" : "done"} ${relSpan(r.done_at)}</span>` : ""} ${ackBtn(r)}</td>
       <td class="mono wpr" data-label="PR">${r.pr ? linkRefs(r.pr, refs) : '<span class="muted">–</span>'}</td>
       ${STAGE_COLS.slice(2).map(([l, c]) => `<td data-label="${l}"${(r.cells || {})[c] ? "" : ' class="wempty"'}>${stageCell((r.cells || {})[c], refs)}</td>`).join("")}</tr>`;
-  const blocks = {};
-  all.forEach((r) => (blocks[topOf(r)] ||= []).push(r));
-  const html = Object.entries(blocks).map(([id, members]) => {
+  // A Map keeps the server's order (rowstate.order_tree): an object would sort a numeric id first.
+  const blocks = new Map();
+  all.forEach((r) => { const id = topOf(r); blocks.has(id) ? blocks.get(id).push(r) : blocks.set(id, [r]); });
+  const html = [...blocks].map(([id, members]) => {
     const g = byId[id], work = members.filter((r) => !r.group);
     const done = work.filter((r) => !lit.has(r.id)), open = work.length - done.length, unfolded = F.stageFold.has(id);
     const ackable = done.filter((r) => r.ack === "ackable" && !r.hidden).map((r) => r.key);
@@ -1205,6 +1206,7 @@ function stageSection(w) {
     const shown = members.filter((r) => !r.group && (lit.has(r.id) || unfolded));
     return { open, html: head + shown.map(row).join("") };
   });
+  // Open blocks read as `orch stage show` prints them; the rows it leaves out (stages.current) fold below them.
   const body = [...html.filter((b) => b.open), ...html.filter((b) => !b.open)].map((b) => b.html).join("");
   const where = w.env || {}, envFresh = where.at && Date.now() - ms(where.at) < STAGE_DONE_KEEP;
   const envText = ["prod", "dev"].filter((k) => where[k]).map((k) => `<span><b>${k}</b> <span class="mono">${esc(where[k])}</span></span>`).join("");

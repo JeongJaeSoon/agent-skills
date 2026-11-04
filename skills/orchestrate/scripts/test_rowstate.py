@@ -85,7 +85,7 @@ assert "선행 octo/app#1 머지 대기 → 선행 대기" in text, text  # the 
 assert out["duplicates"] == [] and out["missing"] == [], (out["duplicates"], out["missing"])
 for name in ("머지 대기", "결정 대기", "거부된 머지", "남 리뷰", "선행 대기", "보류 행", "gap 빈 기록"):
     assert sum(1 for l in text.splitlines() if l.startswith("| ") and f"└ {name} |" in l) == 1, (name, text)
-assert "🔄 **진행 중**" not in text and "| ↓ 오너 |" in text and "| ↓ 대기 |" in text and "| ↓ 보류 |" in text, text
+assert "🔄 **진행 중**" not in text and "| ↑ 오너 |" in text and "| ↓ 대기 |" in text and "| ↓ 보류 |" in text, text
 ok("board", "set", "L/after", "--after", "-")  # the record path takes the wait back
 assert "after" not in json.loads((state / "board.json").read_text())["rows"]["L/after"]
 
