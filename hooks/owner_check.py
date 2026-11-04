@@ -7,8 +7,8 @@ and the dashboard inbox are where the owner finds it. This hook counts the owner
 for a call in the same turn that stores one. A turn is everything after the last prompt a person typed.
 
 An owner item is a line of the reply (outside code, quotes and table rows) with 🙋, "오너 할 일", or a phrase that asks
-the owner (`오너에게 묻`, `오너 결정 필요`, `ask the owner`, `owner approval needed`). A line that says there are none
-(`— 없음`) and the status legend (a line with 🔄 and 🙋) are not items. A table row is not one: its status is derived
+the owner (`오너에게 묻`, `오너 결정 필요`, `ask the owner`, `owner approval needed`). A line that says only that there
+are none (`🙋 지금 오너가 할 일 — 없음`) and the status legend (`🔄 진행 · 🙋 오너 차례`) are not items. A table row is not one: its status is derived
 from records.
 
 Recorded means a Bash call this turn that was not refused and ran one of `orch decide add`, `orch board now`,
@@ -38,8 +38,9 @@ OWNER = re.compile(
     r"|오너\s*(?:결정|승인|확인|답변|판단)\s*(?:이\s*|가\s*)?(?:필요|대기|요청)"
     r"|\bask(?:ing)?\s+the\s+owner\b|\bowner\s+(?:decision|approval|action|input)\s+(?:is\s+)?(?:needed|required)\b",
     re.I)
-NONE = re.compile(r"(?:[—–:：-]\s*|할\s*일\s*)(?:없음|없습니다|none|n/a)\s*[.。]?\s*$", re.I)
-STATUS_LEGEND = re.compile(r"🔄.*⏳|⏳.*🔄")
+FILLER = re.compile(r"[\W_]|지금|오너가|오너|할\s*일")
+NONE_WORDS = {"없음", "없습니다", "none", "na"}
+STATUS_LEGEND = re.compile(r"🔄\s*진행.*🙋\s*오너\s*차례|🙋\s*오너\s*차례.*🔄\s*진행")
 UNWRAP = {"orch.py": "orch", "prog.py": "orch", "dash.py": "orch-dash", "orch_dash.py": "orch-dash"}
 
 
@@ -50,7 +51,9 @@ def owner_items(text):
         s = line.strip()
         if not s or s.startswith("|") or not OWNER.search(s):
             continue
-        if NONE.search(s) or ("🙋" in s and STATUS_LEGEND.search(s)):
+        # What is left once the owner phrase and filler go: "없음" alone says there is nothing; "대안: 없음" after a
+        # real request leaves more than that.
+        if FILLER.sub("", OWNER.sub("", s)).lower() in NONE_WORDS or STATUS_LEGEND.search(s):
             continue
         out.append(s)
     return out
@@ -62,10 +65,14 @@ def records(words):
         return False
     head, args = os.path.basename(words[0]), words[1:]
     if head.startswith("python"):
-        while args and args[0].startswith("-"):
-            args = args[1:]
-        if args:
-            head, args = os.path.basename(args[0]), args[1:]
+        i = 0
+        while i < len(args) and args[i].startswith("-"):
+            if args[i] in ("-c", "-m"):  # a program text or module, not a script path
+                return False
+            i += 2 if args[i] in ("-W", "-X") else 1
+        if i >= len(args):
+            return False
+        head, args = os.path.basename(args[i]), args[i + 1:]
     head = UNWRAP.get(head, head)
     if head == "orch":
         return (args[:2] in (["decide", "add"], ["board", "now"]) or args[:1] == ["gate"]

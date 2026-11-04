@@ -62,7 +62,8 @@ assert hook([prompt("go"), say(CAUGHT)], level="ask")[0] == out  # ask acts as w
 # Other phrasings count.
 for text in ("이건 오너에게 물어봐야 합니다.", "오너 결정 필요: 범위를 줄일지.", "We should ask the owner about this.",
              "Owner approval needed before the merge.", "오너에게 승인을 요청해야 합니다.",
-             "🙋 승인 필요 · 대안 없음", "🙋 배포 승인 필요; 🔄 테스트 진행 중"):
+             "🙋 승인 필요 · 대안 없음", "🙋 배포 승인 필요; 🔄 테스트 진행 중", "🙋 배포 승인 필요 · 대안: 없음",
+             "🙋 오너 승인 필요 · 🔄 테스트 통과 · ⏳ 승인 대기"):
     out, r = hook([prompt("go"), say(text)])
     assert out and "기록 안 된 오너 항목 1" in out["systemMessage"] and r, text
 
@@ -71,13 +72,15 @@ for cmd in ('orch decide add --title "범위" --options a,b', 'orch board now "�
             "orch board set d3 --owner 오너", "orch board set d3 --owner=오너", "orch gate acme/app#1",
             "orch-dash inbox add --type approval --title x --key k", "python3 skills/orchestrate/scripts/prog.py decide add --title x",
             "cd /r && orca orchestration gate-create --task t1",
-            "python3 -B skills/orchestrate/scripts/prog.py decide add --title x"):
+            "python3 -B skills/orchestrate/scripts/prog.py decide add --title x",
+            "python3 -W ignore skills/orchestrate/scripts/prog.py decide add --title x"):
     assert hook([prompt("go"), *bash(cmd), say(CAUGHT)]) == (None, []), cmd
 
 # A call that does not store an item, or that was refused, covers nothing.
 for cmd in ("orch board show", "orch board set d3 --after acme/app#1", "orch decide list", "echo orch decide add",
             "orch-dash inbox list", "ls", "orca terminal rename gate-create", "orch decide add --help",
-            "orch-dash inbox add --dry-run"):
+            "orch-dash inbox add --dry-run", 'python3 -c "# /prog.py" decide add --title x',
+            "python3 -m prog decide add --title x", "python3"):
     assert hook([prompt("go"), *bash(cmd), say(CAUGHT)])[0], cmd
 assert hook([prompt("go"), *bash("orch decide add --title x", error="The user doesn't want to proceed with this tool use."),
              say(CAUGHT)])[0]
@@ -86,7 +89,7 @@ assert hook([prompt("old"), *bash("orch decide add --title x"), say("ok"), promp
 
 # Plain replies pass: nothing about the owner, no items, the legend, a table row, code and quotes.
 for text in ("고쳤습니다. 테스트 통과.", "", "🙋 지금 오너가 할 일 — 없음", "🙋 오너 할 일: 없음.",
-             "🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류",
+             "🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류", "🙋 오너 할 일 — none", "- 오너 할 일: n/a",
              "| 🙋 | 알림 정리 | #50 | ↑ 오너 |", "```\n🙋 지금 오너가 할 일\n```", "> 🙋 인용된 줄",
              "`orch board now` 로 `🙋` 줄을 남긴다", "The owner of this module is the platform team."):
     assert hook([prompt("go"), say(text)]) == (None, []), text
