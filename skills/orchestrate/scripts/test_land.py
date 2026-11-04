@@ -755,6 +755,19 @@ assert "READY-stop" in out and out.index("READY-stop") < out.index("#2"), out
 code, out = prog(env, "land", "t", "--pr", "2")
 assert code == 0 and "landed #2" in out, out
 
+# A repo with CI gets the same rule from its exclusive paths: a verdict alone, or a land that ended at exit 1, ahead.
+d, env = setup({"1": pr(1, files=["compose.yaml"]), "2": pr(2, files=["compose.yaml"])})
+verdict_only(d, 1, "T-1"); verdict(d, 2, "T-2")
+code, out = prog(env, "land", "t", "--pr", "2")
+assert code == 0 and "landed #2" in out, out
+d, env = setup({"1": pr(1, files=["compose.yaml"]), "2": pr(2, files=["compose.yaml"])})
+verdict(d, 1, "T-1"); verdict(d, 2, "T-2")
+prog(env, "record", "t", "stop", "--note", "window")
+assert prog(env, "land", "t", "--pr", "1")[0] == 1
+prog(env, "record", "t", "resume")
+code, out = prog(env, "land", "t", "--pr", "2")
+assert code == 0 and "landed #2" in out, out
+
 # What ended the land decides, not whether a hold happens to be on: a STOP refusal during a hold still ends the call.
 d, env = two_no_ci()
 prog(env, "record", "t", "parked", "--pr", "1", "--note", "waits for a cutover")
