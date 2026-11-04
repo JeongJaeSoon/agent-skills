@@ -859,7 +859,8 @@ def reaped_lines(out):
     if any(line.startswith(REAP_FAILED) for line in out):
         return []
     return [line for line in out if line.startswith("- ") and not line.startswith(("- 건너뜀", "- 실패", "- 메모", "- 아무것도"))
-            and not any(reap.NOOP_RESULT.match(part) for part in line.split(": "))]
+            and not any(part.startswith(reap.NOOP_PREFIX) or reap.NOOP_RESULT.match(part)
+                        for part in line.split(": ")[1:])]  # "- <label>: <result>": the result says nothing was done
 
 
 def leak_notice(cfg, m, st, record, now, dry_run, out, send_fn):

@@ -390,11 +390,15 @@ def apply(verdict, f, mode, opts, me):
     if verdict == "remove":
         sys.path.insert(0, str(REPO / "skills" / "reap-resources" / "scripts"))
         import rm_refused
-        refused = rm_refused.held(f["path"] or ".", STATE)
-        if refused is None or refused:  # a refused removal is not run again; an unreadable record is no proof it was not
-            print(f"[{ME}] not applied: " + ("the record of refused card removals could not be read" if refused is None else
-                  f"`orca worktree rm` of this card was refused; a person runs: {rm_refused.command(f['path'])}"),
-                  file=sys.stderr)
+        def blocked():
+            """Why the removal must not run: refused before and recorded, or the record cannot be read."""
+            refused = rm_refused.held(f["path"] or ".", STATE)
+            if refused is None:
+                return "the record of refused card removals could not be read"
+            return f"`orca worktree rm` of this card was refused; a person runs: {rm_refused.command(f['path'])}" \
+                if refused else None
+        if why := blocked():
+            print(f"[{ME}] not applied: {why}", file=sys.stderr)
             return 3
         hooks = archive_hook(f["path"])
         if hooks is None:
@@ -403,6 +407,9 @@ def apply(verdict, f, mode, opts, me):
             return 3
         if not trash_caches(f):
             return 4
+        if why := blocked():  # read again right before the rm: a record may arrive while the caches move
+            print(f"[{ME}] not applied: {why}", file=sys.stderr)
+            return 3
         cmd = [ORCA, "worktree", "rm", "--worktree", "current", *(["--run-hooks"] if hooks else []), "--json"]
     elif verdict == "close-terminal":
         cmd = [ORCA, "terminal", "close", "--terminal", me, "--json"]

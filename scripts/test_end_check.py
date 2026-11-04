@@ -268,6 +268,13 @@ assert rc == 3 and "was refused" in err and rm_refused.command(refused_card) in 
 rc, err, calls = apply("remove", status="completed")
 assert rc == 3 and "could not be read" in err and not any(c[:2] == ["worktree", "rm"] for c in calls), (rc, err, calls)
 (refused_state / rm_refused.NAME).unlink()
+# Codex round 2: a record added while the caches move to the trash stops the rm (read again right before it).
+saved_tc = end_check.trash_caches
+end_check.trash_caches = lambda f: rm_refused.add(refused_card, refused_state) and True
+rc, err, calls = apply("remove", status="completed")
+assert rc == 3 and "was refused" in err and not any(c[:2] == ["worktree", "rm"] for c in calls), (rc, err, calls)
+end_check.trash_caches = saved_tc
+(refused_state / rm_refused.NAME).unlink()
 CLEAN_FACTS["path"] = CLEAN["path"]
 rc, err, calls = apply("remove", status="completed")
 assert rc == 0 and ["worktree", "rm", "--worktree", "current", "--json"] in calls, calls

@@ -142,6 +142,23 @@ reap.STATE, ran = refused_state, []
 reap.run = lambda cmd, **k: ran.append(cmd) or ""
 out = reap.act({"kind": "orca-worktree", "key": "orca-worktree:" + CARD, "name": CARD}, [])
 assert out.startswith("건너뜀: 사람에게 넘김") and rm_refused.command(CARD) in out and not ran, (out, ran)
+# Codex round 2: a record that arrives while the ignored files go to the trash stops the rm (the second read).
+(refused_state / rm_refused.NAME).unlink()
+subprocess_ran = []
+saved_trash, saved_ls = reap.trash, reap.run
+reap.run = lambda cmd, **k: subprocess_ran.append(cmd) or ("a\0" if "ls-files" in cmd else "")
+reap.trash = lambda *paths: rm_refused.add(CARD, refused_state)
+out = reap.act({"kind": "orca-worktree", "key": "orca-worktree:" + CARD, "name": CARD}, [])
+assert out.startswith("건너뜀: 사람에게 넘김") and not any(c[:3] == ["orca", "worktree", "rm"] for c in subprocess_ran), (out, subprocess_ran)
+reap.trash, reap.run = saved_trash, saved_ls
+reap.run = lambda cmd, **k: ran.append(cmd) or ""
+# A record that is a link to nothing, or a row with a path that is not text, cannot be read.
+(refused_state / rm_refused.NAME).unlink()
+os.symlink(refused_state / "nowhere", refused_state / rm_refused.NAME)
+assert rm_refused.read(refused_state) is None
+(refused_state / rm_refused.NAME).unlink()
+(refused_state / rm_refused.NAME).write_text(json.dumps({"path": None, "ino": 1}) + "\n")
+assert rm_refused.read(refused_state) is None
 (refused_state / rm_refused.NAME).write_text("{not json\n")
 out = reap.act({"kind": "orca-worktree", "key": "orca-worktree:" + CARD, "name": CARD}, [])
 assert out.startswith("건너뜀:") and "읽지 못함" in out and not ran, (out, ran)

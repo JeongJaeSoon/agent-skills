@@ -53,7 +53,7 @@ def read(state=None):
     try:
         lines = f.read_text().splitlines()
     except FileNotFoundError:
-        return {}
+        return None if os.path.islink(f) else {}  # a link to nothing is a record that cannot be read
     except (OSError, ValueError):
         return None
     out = {}
@@ -62,6 +62,8 @@ def read(state=None):
             continue
         try:
             e = json.loads(line)
+            if not isinstance(e["path"], str):
+                return None
             p = real(e["path"])
         except (ValueError, KeyError, TypeError):
             return None

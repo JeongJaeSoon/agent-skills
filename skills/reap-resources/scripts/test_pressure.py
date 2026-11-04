@@ -212,6 +212,10 @@ DID = "- card app/x: PR 7 merged: worktree 는 orca worktree rm 으로 제거"
 NOTHING = ["- 아무것도 하지 않았다: 보호 목록을 읽지 못함", "- card app/y: 터미널 0개 닫음, worktree 는 남김"]
 assert p.reaped_lines([DID] + NOTHING) == [DID], p.reaped_lines([DID] + NOTHING)
 assert p.reaped_lines([f"{p.REAP_FAILED} 1", DID]) == []
+# Codex round 2: reap prints "- <label>: <result>", so a skip, a gone process or a refusal sits in the result part.
+IN_RESULT = ["- card app/x: 건너뜀: 사람에게 넘김: worktree rm 이 거부된 카드", "- orphan pid 42 vite: 사라졌거나 다른 프로세스",
+             "- orphan pid 43 vite: 거부됨: [Errno 1] Operation not permitted"]
+assert p.reaped_lines([DID] + IN_RESULT) == [DID], p.reaped_lines([DID] + IN_RESULT)
 class Done:
     def __init__(self, code, out):
         self.returncode, self.stdout, self.stderr = code, out, ""
