@@ -145,6 +145,23 @@ def card_agent(call, worktree_id):
     return next((t.get("handle") for t in terms if t.get("agentIdentity") and t.get("handle")), None)
 
 
+def has_dispatch(call, handle):
+    """Whether a Dispatch of any Run is on the terminal. worker-list is scoped to this terminal's Run, so the Runs
+    (run-list's first page) are read one by one: the resume may have been made from another Run. A list that cannot
+    be read reads as none; Orca refuses a second Dispatch on a busy terminal."""
+    try:
+        if orca_settings.terminal_dispatch(call, handle):
+            return True
+        for r in orca_settings.run_list(call, error=OrcaError):
+            for w in orca_settings.all_workers(call, "--run", r.get("id"), "--limit", "100", error=OrcaError):
+                if orca_settings.worker_terminal(w) == handle and w.get("dispatchStatus") not in RESTART_LOST \
+                        and w.get("terminalState") != "released":
+                    return True
+    except OrcaError:
+        pass
+    return False
+
+
 def own_dispatch(call, handle):
     """This terminal's Dispatch while it still works for a Run. An abandoned one is the Dispatch the restart took: Orca
     keeps its row on the terminal, but the lead has lost it."""
@@ -306,7 +323,7 @@ def check_workers(run, call, lead_dispatch=None, me=None):
             continue
         if abandoned:  # Orca settled it when its terminal went: there is nothing to stop or retry, only a session to resume
             if agent := card_agent(call, wt):  # a session runs there: resumed, maybe from another Run
-                if orca_settings.terminal_dispatch(call, agent):
+                if has_dispatch(call, agent):
                     out.append(("info", f"worker {d} (task {task}) is abandoned here, but its worktree has a live agent "
                                         f"terminal {agent} with a Dispatch: it was resumed (perhaps on another Run)"))
                 else:  # stopped between `terminal create` and `worker-start`: the session has no mailbox

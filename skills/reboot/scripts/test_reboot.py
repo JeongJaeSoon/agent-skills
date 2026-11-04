@@ -30,8 +30,9 @@ def wait_proc(pid, cmd):
 class Orca:
     """Answers `orca <argv> --json` from a fixture: handles that are live, a Run binding, workers."""
 
-    def __init__(self, live=(ME,), run=None, workers=(), title="orchestrator", here=(), concise=False):
+    def __init__(self, live=(ME,), run=None, workers=(), title="orchestrator", here=(), concise=False, runs=()):
         self.live, self.run, self.workers, self.title, self.here = set(live), run, list(workers), title, list(here)
+        self.runs = list(runs)
         self.concise = concise
 
     def __call__(self, *argv):
@@ -44,9 +45,11 @@ class Orca:
             return {"terminals": self.here}
         if argv[:2] == ("orchestration", "run-current"):
             return {"runId": self.run} if self.concise else {"run": {"id": self.run} if self.run else None}
+        if argv[:2] == ("orchestration", "run-list"):
+            return {"runs": [{"id": r} for r in self.runs]}
         if argv[:2] == ("orchestration", "worker-list"):
             state = argv[argv.index("--terminal-state") + 1] if "--terminal-state" in argv else None
-            run = argv[argv.index("--run") + 1] if "--run" in argv else None
+            run = argv[argv.index("--run") + 1] if "--run" in argv else self.run  # unscoped = this terminal's Run
             return {"workers": [w for w in self.workers if (not state or w.get("terminalState") == state)
                                 and (not run or w.get("runId", run) == run)]}
         raise AssertionError(f"unexpected orca call {argv}")
@@ -275,7 +278,7 @@ class Restarted(unittest.TestCase):
         live = [{"handle": "term_new", "agentIdentity": "claude", "worktreePath": "/work/My Card"}]
         other_run = self.row("d_new", "dispatched", "active", handle="term_new", runId="run_other")
         other_run["resource"] = {"worktreeId": "repo::/work/My Card::workspace:2"}
-        orca = Orca(run="run_1", workers=[self.row("d1", "abandoned"), other_run], here=live)
+        orca = Orca(run="run_1", workers=[self.row("d1", "abandoned"), other_run], here=live, runs=("run_1", "run_other"))
         lines = run("lead", "acme", "run_1", orca=orca, procs=wait_proc(200, "orch wait acme"))
         self.assertEqual(does(lines), [])
         self.assertTrue([t for k, t in lines if k == "info" and "d1" in t and "live agent terminal" in t])
