@@ -9,6 +9,11 @@ Usage:
                                          whose screen shows it runs on what changed under it, once
   skills-sync nudge <terminal> <one line>
                                          type one line into a session, only if it is idle at an empty prompt
+  skills-sync wake-target <terminal>     say how to wake a Claude card: the session and one-line signal for the SendMessage
+                                         tool (which only a session can call), or why the terminal path applies
+  skills-sync wake-check <terminal> [--wait <seconds>]
+                                         whether that signal started a turn, from the receiving session's transcript
+  skills-sync wake-reset <terminal>      forget a signal that was not sent, or that a human has resolved
   skills-sync close-setup <worktree path> [--agent <handle>]
                                          close a new card's setup terminal once Orca's setup script finished;
                                          with --agent, first report a trust or permission dialog, or no start
@@ -32,11 +37,13 @@ The checkout is loaded live through CLAUDE_CODE_PLUGIN_DIRS (docs/platform.md), 
 every session reads. It never rebases, merges, forces or commits: anything but a fast-forward or a push of
 signed commits stops it, and the reason goes to the state file and a desktop notification.
 """
-import contextlib, datetime, fcntl, json, os, pathlib, platform, re, subprocess, sys, time
+import contextlib, datetime, fcntl, glob, json, os, pathlib, platform, re, secrets, subprocess, sys, time
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE", "~/.local/state/agent-skills")).expanduser()
+CONFIG = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG", "~/.claude/agent-skills.json")).expanduser()
 ORCA = os.environ.get("SKILLS_SYNC_ORCA", "orca")
+CLAUDE = os.environ.get("SKILLS_SYNC_CLAUDE", "claude")
 BRANCH = "main"
 RELOAD = {"skills": "/reload-skills", "plugins": "/reload-plugins"}
 RELOAD_TAGS = tuple(f"<command-name>{c}</command-name>" for c in RELOAD.values())
@@ -451,6 +458,262 @@ def nudge(handle, text):
     return 0 if ok else 1
 
 
+# --- wake ------------------------------------------------------------------------------------------
+
+# A typed line can be cut, tangle with Esc under /goal and takes the terminal over; a message does none of these, but
+# only a session can send one and its success means nothing about delivery. So these commands pick the target and
+# judge the result, and the session calls SendMessage itself (orchestrate, "Waking a worker"). The line takes no text:
+# a message reaches the receiver as not from the user, so it must never carry an instruction or approval.
+WAKE_LINE = "wake {nonce}: run your orchestration check"
+WAKE_WAIT_S = float(os.environ.get("SKILLS_SYNC_WAKE_WAIT_S", "20"))
+WAKE_PENDING_S = float(os.environ.get("SKILLS_SYNC_WAKE_PENDING_S", "1800"))
+WAKE_POLL_S = float(os.environ.get("SKILLS_SYNC_WAKE_POLL_S", "1"))
+HOMES = (os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude"), "~/.claude", "~/Library/Application Support/orca/claude-profiles/*/home")
+MODE_ROW = re.compile(r"^(?:⏵⏵|⏸) (auto mode|accept edits|bypass permissions|plan mode) on\b")
+MODE_CLASS = {"auto mode": "prompting", "accept edits": "prompting", "bypass permissions": "bypass", "plan mode": None}
+
+
+def _roles():
+    """hooks/roles.py (terminal -> session, shared with the card watchers), loaded only here: sync itself must keep
+    running on a checkout whose hooks are broken."""
+    sys.path.insert(0, str(REPO / "hooks"))
+    import roles
+    return roles
+
+
+def wake_file(handle):
+    return STATE / "wakes" / f"{handle}.json"
+
+
+@contextlib.contextmanager
+def wake_lock(handle):
+    """One reservation per terminal: two callers must not both get `route: sendmessage`, and a slow checker must not
+    remove the attempt that replaced the one it watched."""
+    path = wake_file(handle).with_suffix(".lock")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        yield
+
+
+def wake_entry(path):
+    """The attempt kept at path: None when there is none, False when a file is there that cannot be trusted, which is
+    not the same thing, since a signal may have gone out."""
+    try:
+        entry = json.loads(path.read_text())
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        return False
+    valid = isinstance(entry, dict) and all(isinstance(entry.get(k), str) for k in ("session", "to", "nonce")) \
+        and isinstance(entry.get("at"), (int, float)) and isinstance(entry.get("offset"), int)
+    return entry if valid else False
+
+
+def wake_transport():
+    """"sendmessage" or "terminal" from agent-skills.json; off by default until a card has run it for real."""
+    cfg = read_json(CONFIG, {})
+    wake = cfg.get("wake", {}) if isinstance(cfg, dict) else {}
+    value = wake.get("transport", "terminal") if isinstance(wake, dict) else wake
+    if value not in ("sendmessage", "terminal"):
+        print(f"warning: unknown wake.transport {value!r}, using terminal", file=sys.stderr)
+        return "terminal"
+    return value
+
+
+def permission_class(lines):
+    """ "bypass" or "prompting" from the mode row under the prompt box, the two classes Claude Code compares to hold a
+    message; None when no row, several rows, or plan mode, whose class depends on what the session has available."""
+    lines = norm(lines or [])
+    box = prompt_box(lines)
+    if not box:
+        return None
+    below = [l.strip() for l in lines[box[1] + 1:] if l.strip()]
+    found = [MODE_ROW.match(l).group(1) for l in below if MODE_ROW.match(l)]
+    found += ["default"] * sum(l.startswith("? for shortcuts") for l in below)
+    return None if len(found) != 1 else {**MODE_CLASS, "default": "prompting"}[found[0]]
+
+
+def agent_rows():
+    """(rows, problem) from `claude agents --json`."""
+    try:
+        p = subprocess.run([CLAUDE, "agents", "--json"], capture_output=True, text=True, timeout=15)
+        rows = json.loads(p.stdout) if p.returncode == 0 else None
+    except (OSError, ValueError, subprocess.TimeoutExpired) as e:
+        return [], f"claude agents failed: {e}"
+    return (rows, None) if isinstance(rows, list) else ([], "claude agents gave no list")
+
+
+def wake_plan(handle):
+    """(session row, None) when a SendMessage can reach this terminal's session unheld, else (None, why)."""
+    if wake_transport() == "terminal":
+        return None, "wake.transport is terminal"
+    me = os.environ.get("ORCA_TERMINAL_HANDLE")
+    if not me or me == handle:
+        return None, "the sender has no other terminal to read its permission mode from"
+    try:
+        target, reason = screen(handle)
+        if not target:
+            return None, reason or "no screen"  # a Codex card lands here too
+        mine, _ = screen(me)
+    except Stop as e:
+        return None, str(e)
+    rows, problem = agent_rows()
+    if problem:
+        return None, problem
+    row, why = _roles().session_for(handle, rows)
+    if not row:
+        return None, why
+    name = row.get("name")
+    if not name or sum(isinstance(r, dict) and r.get("name") == name for r in rows) != 1:
+        return None, "the session has no name of its own"
+    sender, receiver = permission_class(mine), permission_class(target)
+    if sender is None or receiver is None or sender != receiver:
+        return None, f"permission modes do not match or are unknown ({sender} -> {receiver})"
+    return row, None
+
+
+def transcript_of(session):
+    """The session's transcript under any config home; only the homes' own `*` is a pattern."""
+    for home in HOMES:
+        for root in glob.glob(os.path.expanduser(home)):
+            for hit in pathlib.Path(root).glob(f"projects/*/{session}.jsonl"):
+                return hit
+    return None
+
+
+def wake_envelope(nonce):
+    """The whole of this wake as Claude Code wraps it: whoever merely quotes the nonce is not delivering it. An idle
+    receiver's row carries a prefix and a trailing note, a running turn's does not."""
+    return re.compile(r'(?:Another Claude session sent a message:\n)?<cross-session-message from="[^"\n]*"[^\n]*>\n'
+                      + re.escape(WAKE_LINE.format(nonce=nonce)) + r"\n</cross-session-message>(?:\n|\Z)")
+
+
+def enqueued(row, envelope):
+    content = row.get("content")
+    return row.get("type") == "queue-operation" and row.get("operation") == "enqueue" \
+        and isinstance(content, str) and envelope.match(content) is not None
+
+
+def delivered(row, envelope):
+    """The row hands this wake to the receiving Claude: a user row, or the attachment a running turn takes it in."""
+    attached = row.get("attachment") if isinstance(row.get("attachment"), dict) else {}
+    if row.get("type") == "attachment" and attached.get("type") == "queued_command":
+        texts = [attached.get("prompt")]
+    elif row.get("type") == "user":
+        content = row.get("message", {}).get("content") if isinstance(row.get("message"), dict) else None
+        texts = [content] if isinstance(content, str) else [
+            b.get("text") for b in content or [] if isinstance(b, dict) and b.get("type") == "text"]
+    else:
+        return False
+    return any(isinstance(t, str) and envelope.match(t) for t in texts)
+
+
+def wake_state(entry):
+    """"started" (delivered, then assistant activity), "delivered", "accepted" (queued) or None, read from where the
+    transcript ended when the attempt was reserved. Only those shapes advance the state, in that order: an unknown
+    transcript reads as None, never as a start. The activity may be a turn already under way: the signal was seen,
+    which is all a wake can prove."""
+    path = transcript_of(entry["session"])
+    if not path:
+        return None
+    envelope = wake_envelope(entry["nonce"])
+    state = None
+    try:
+        with open(path, "rb") as f:
+            if os.fstat(f.fileno()).st_size < entry["offset"]:
+                return None
+            f.seek(entry["offset"])
+            for line in f:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                if state == "delivered" and row.get("type") == "assistant":
+                    return "started"
+                if state == "accepted" and delivered(row, envelope):
+                    state = "delivered"
+                elif not state and enqueued(row, envelope):
+                    state = "accepted"
+    except OSError:
+        return None
+    return state
+
+
+def wake_target(handle):
+    """Prints the route, one `key: value` per line. Always exits 0 on a decision, so a shell chain does not end on
+    `route: terminal`."""
+    if not _roles().SESSION.fullmatch(handle):
+        print("not a terminal handle")
+        return 2
+    path = wake_file(handle)
+    check = f"check: skills-sync wake-check {handle}"
+    with wake_lock(handle):
+        pending = wake_entry(path)
+        if pending is False:
+            print(f"route: report\nreason: the wake record cannot be read and a signal may have gone out\n{check}")
+            return 0
+        if pending:
+            if wake_state(pending) != "started":
+                old = time.time() - pending["at"] >= WAKE_PENDING_S
+                print(f"route: {'report' if old else 'pending'}\nreason: wake {pending['nonce']} is not confirmed; "
+                      f"another signal could arrive beside it\n{check}")
+                return 0
+            path.unlink(missing_ok=True)
+        row, why = wake_plan(handle)
+        transcript = transcript_of(row["sessionId"]) if row else None
+        if row and not transcript:
+            why = "the session has no transcript to confirm a wake in"
+        try:
+            offset = transcript.stat().st_size if transcript else None
+        except OSError as e:
+            offset, why = None, f"cannot read the transcript: {e}"
+        if offset is None:
+            print(f"route: terminal\nreason: {why}")
+            return 0
+        nonce = secrets.token_hex(8)
+        write_json(path, {"session": row["sessionId"], "to": row["name"], "nonce": nonce, "at": time.time(),
+                          "offset": offset, "from": os.environ.get("ORCA_TERMINAL_HANDLE")})
+    print(f"route: sendmessage\nto: {row['name']}\nmessage: {WAKE_LINE.format(nonce=nonce)}\n{check}")
+    return 0
+
+
+def wake_check(handle, wait_s):
+    path = wake_file(handle) if _roles().SESSION.fullmatch(handle) else None
+    entry = wake_entry(path) if path else None
+    if not entry:
+        print("unconfirmed: the wake record cannot be read" if entry is False
+              else "unconfirmed: no wake recorded for this terminal")
+        return 1
+    deadline = time.monotonic() + wait_s
+    while True:
+        state = wake_state(entry)
+        if state == "started":
+            with wake_lock(handle):
+                current = wake_entry(path)
+                if current and current["nonce"] == entry["nonce"]:
+                    path.unlink(missing_ok=True)
+            print("started")
+            return 0
+        if time.monotonic() >= deadline:
+            print(f"{'accepted' if state else 'unconfirmed'}: wake {entry['nonce']} "
+                  f"{'reached the session; no turn followed yet' if state else 'is not in the session transcript'}")
+            return 1
+        time.sleep(WAKE_POLL_S)
+
+
+def wake_reset(handle):
+    if not _roles().SESSION.fullmatch(handle):
+        print("not a terminal handle")
+        return 2
+    with wake_lock(handle):
+        wake_file(handle).unlink(missing_ok=True)
+    print("reset")
+    return 0
+
+
 # --- setup terminals -------------------------------------------------------------------------------
 
 SETUP_RUNNER = re.compile(r"(/\S+/orca/setup-runner\.sh)")
@@ -766,6 +1029,14 @@ def main(argv):
         return broadcast(kind, dry_run="--dry-run" in argv, only=only)
     if cmd == "nudge" and len(argv) == 3:
         return nudge(argv[1], argv[2])
+    if cmd == "wake-target" and len(argv) == 2:
+        return wake_target(argv[1])
+    if cmd == "wake-check" and len(argv) == 2:
+        return wake_check(argv[1], WAKE_WAIT_S)
+    if cmd == "wake-check" and len(argv) == 4 and argv[2] == "--wait" and argv[3].isdigit():
+        return wake_check(argv[1], float(argv[3]))
+    if cmd == "wake-reset" and len(argv) == 2:
+        return wake_reset(argv[1])
     if cmd == "close-setup" and len(argv) == 2:
         return close_setup(argv[1])
     if cmd == "close-setup" and len(argv) == 4 and argv[2] == "--agent":

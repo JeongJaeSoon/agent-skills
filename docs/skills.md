@@ -211,7 +211,8 @@ PR 을 맡는 스킬과 머지 주체:
   - **worktree:** 임시 디렉터리에 있다가 사라진 worktree(Orca 것은 제외)와, 세션 transcript가 N시간 조용한 Claude scratchpad의 깨끗하고 push된 detached worktree. 둘 다 `git worktree remove <경로>`로 그 항목만 지운다. Orca worktree는 resource steward의 몫이다.
   - **load:** `reap.py load`는 읽기만 한다. CPU 상위 소비자(Claude 세션과 그 자식, 잔재 트리, 그 밖의 프로세스)를 ours-idle·ours-working·leftover·system으로 나누고, 5분 부하가 한도(기본 CPU 수) 이상이면 분류별 조치를 낸다: 조용한 세션에는 남은 일을 묻고 없으면 스스로 닫게 하고, 잔재는 `reap`으로, 일하는 것은 두고 새 dispatch를 멈추며, system은 우리 것이 아니라고 보고만 한다. 한도 위에서 잰 벤치마크는 증거가 아니다.
   - **card:** Orca 카드 전부(앱·CLI·워커 어느 쪽이 만들었든)를 `scripts/cards.py scan`이 카드마다 삭제·터미널만 닫기(열린 PR)·남김·사람 결정 중 하나로 판정해 표로 낸다. 사람이 표를 보고 `apply --plan`으로 실행하고, janitor 회차도 같은 코드를 쓴다. 규칙과 함정(낡은 `origin/HEAD`는 GitHub compare로 다시 확인, rebase 전 사본은 patch-id로 가름, 프롬프트에 멈춘 셸, "끝났다"고 쓴 idle 화면)은 `references/cards.md` 한 곳에 있다.
-  - **janitor:** 에이전트가 ledger(`~/.local/state/agent-skills/ledger.jsonl`)에 올린 tmpdir·GUI 앱·브라우저 창과, Orca 오케스트레이션 워커가 만든 worktree·끝난 워커 터미널만 본다. `reap --plan`이 대상을 다시 확인한 뒤 닫거나 휴지통으로 옮긴다. 도구는 영구 삭제도 휴지통 비우기도 하지 않는다. OS가 휴지통을 자동으로 비우는 설정이면 경보로 알린다. 브라우저 창은 에이전트가 브라우저 도구로 닫는다.
+  - **janitor:** 에이전트가 ledger(`~/.local/state/agent-skills/ledger.jsonl`)에 올린 tmpdir·GUI 앱·브라우저 창과, Orca 오케스트레이션 워커가 만든 worktree·끝난 워커 터미널만 본다. `reap --plan`이 대상을 다시 확인한 뒤 닫거나 휴지통으로 옮긴다. 아래 볼륨·컨테이너 종류의 `docker` 삭제 말고는 영구 삭제도 휴지통 비우기도 하지 않는다. OS가 휴지통을 자동으로 비우는 설정이면 경보로 알린다. 브라우저 창은 에이전트가 브라우저 도구로 닫는다.
+  - **stopped-container·labeled-volume:** 설정을 적어야 켜진다. janitor와 reap-hard가 같은 규칙으로 본다. `reap.stopped_containers.prefixes`로 시작하는 이름에 compose가 만들지 않은 멈춘(exited·created) 컨테이너와, `<namespace>.origin` 라벨 값이 `reap.labeled_volumes.origins`에 있고 어떤 컨테이너도 참조하지 않는 볼륨이다. 하나씩 ID나 이름으로 지우고 기록을 남긴다. 이 라벨은 출처 표시이자 폐기 허가다. 라벨 없는 익명 볼륨은 지우지 않고, `reap.py inventory --unlabeled-volumes`가 읽기 전용으로 목록만 낸다.
   - **user-folder:** `reap.user_folders`에 명시한 폴더만 정리한다. 설정이 없으면 끈다. 기간·열린 파일·다운로드 중 파일 검사와 휴지통 보관은 유지한다.
   - **program:** `~/.claude/programs`(`PROGRAMS_HOME`)에서 닫힌 프로그램(최종 확인 `predicate_verified` 뒤에 착지·predicate 변경·admitted 후속이 없는 것) 중 기록(대시보드 캐시를 뺀 ledger·decisions·reflect 등)이 7일(`reap.program_days`) 넘게 안 바뀐 것을 `_archive/`로 옮긴다. 지우지 않는다. 이름에 `resume`이나 `handoff`가 든 재개 노트가 있으면 닫혔어도 남긴다.
   - **state-file:** reorient hook의 세션 파일(`<state>/reorient/*.json`) 중 7일(`reap.state_days`) 지난 것을 한 폴더로 묶어 휴지통으로, 512KB(`reap.log_max_kb`)를 넘은 `sync.log`는 `sync.log.1`로 회전한다(이전 `.1`은 휴지통). program과 함께 정기 실행에서 하루 한 번만 본다.
@@ -540,6 +541,7 @@ PR 을 맡는 스킬과 머지 주체:
   - `sync`: fetch → ff-only pull 또는 서명 커밋 push. main이 아님, 커밋 안 한 변경, 갈라짐, 서명 없는 커밋, credential helper 없음이면 아무것도 바꾸지 않고 멈춘 뒤 macOS 알림과 `~/.local/state/agent-skills/sync.json`에 남긴다. launchd가 15분마다와 로그인 때 돌린다.
   - `broadcast [--skills|--plugins] [--dry-run] [--terminal <handle>]`: `SKILL.md`가 바뀌었으면 `/reload-skills`, hook 연결(`hooks/hooks.json`)·플러그인 manifest가 바뀌었으면 `/reload-plugins`를 보낸다. 빈 입력칸, 스피너 없음, 권한·신뢰·질문 창 없음, 입력칸 아래에 셸 없음, 1.5초 간격 두 번 읽은 화면이 같음을 모두 확인한 세션에만 보내고, 나머지는 `reload-pending.json`에 남겨 다음에 다시 시도한다. `--terminal <handle>`이면 그 세션 하나에만 보낸다. 스킬을 고친 세션이 턴을 끝낸 뒤 자기 handle로 돌려 스스로 reload하는 데 쓴다(`write-skill` §7).
   - `nudge <terminal> <한 줄>`: 같은 확인을 통과한 세션에만 한 줄을 보내고 턴이 시작됐는지 본다.
+  - `wake-target <terminal>`, `wake-check <terminal> [--wait <초>]`, `wake-reset <terminal>`: Claude 카드를 깨우는 신호의 경로를 고르고, SendMessage로 보낸 신호가 턴을 시작했는지 받는 세션의 transcript에서 확인한다. 보내는 일은 세션이 도구로 한다. `agent-skills.json`의 `wake.transport`가 `sendmessage`일 때만 그 경로를 쓰고 기본값은 `terminal`이다. 절차는 `skills/orchestrate/references/waking.md`.
   - `status`: 마지막 동기화 결과와 남은 reload.
 
 ## 설정 파일
