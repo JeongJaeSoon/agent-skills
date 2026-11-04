@@ -1,5 +1,5 @@
 """Edge cases of prog.py's ledger arithmetic. Run: python3 test_prog.py"""
-import subprocess, sys, pathlib
+import os, shlex, subprocess, sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import prog
 
@@ -296,6 +296,27 @@ def co(payload, workers=workers):
 done = co({"dispatchId": "d1", "outcome": "succeeded"})
 assert done[0].startswith("CLOSE OUT d1: release it and close its agent terminal") and "the cleaners take /w/1" in done[0], done
 assert done[-1] == "  orca orchestration worker-release --dispatch d1" and not any("orca worktree rm" in l for l in done), done
+# A card whose `orca worktree rm` was refused (recorded by reap-resources' rm_refused) gets a hand-off line naming the
+# refused act and the one command for a person; the cleaners' line is gone. Before the fix this printed "the cleaners take".
+import tempfile
+with tempfile.TemporaryDirectory() as td:
+    card_dir = os.path.join(td, "card a")
+    os.mkdir(card_dir)
+    saved = os.environ.get("AGENT_SKILLS_STATE")
+    os.environ["AGENT_SKILLS_STATE"] = os.path.join(td, "state")
+    try:
+        rwts = wts + [{"id": "wr", "path": card_dir}]
+        rworkers = workers + [{"dispatchId": "dr", "taskId": "tr", "terminalState": "released", "resource": {"worktreeId": "wr"}}]
+        def cor():
+            return prog.close_out([{"type": "worker_done", "payload": {"dispatchId": "dr", "outcome": "succeeded"}}], rworkers, rwts)
+        assert "the cleaners take" in cor()[0], cor()
+        prog.rm_refused().add(card_dir)
+        refused_out = cor()
+        assert "HANDED TO A PERSON" in refused_out[0] and "the cleaners take" not in refused_out[0], refused_out
+        assert f"orca worktree rm --worktree path:{shlex.quote(os.path.realpath(card_dir))} --run-hooks" in refused_out[0], refused_out
+        assert refused_out[-1] == "  orca orchestration worker-release --dispatch dr", refused_out
+    finally:
+        os.environ.pop("AGENT_SKILLS_STATE") if saved is None else os.environ.update(AGENT_SKILLS_STATE=saved)
 assert co('{"dispatchId": "d1", "outcome": "succeeded"}') == co({"dispatchId": "d1", "outcome": "succeeded"})
 assert not any("cleaners" in l for l in co({"dispatchId": "d3a", "outcome": "succeeded"})), "the card was reused for A-3"
 failed = co({"dispatchId": "d1", "outcome": "failed"})

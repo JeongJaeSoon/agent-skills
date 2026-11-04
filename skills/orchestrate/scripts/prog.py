@@ -2694,10 +2694,29 @@ def close_out(msgs, workers, worktrees, here=""):
         elif here is None:
             out += [f"CLOSE OUT {d}: release it; this session's own worktree could not be read (`orca terminal show`),"
                     f" so close its agent terminal only once it is not this session's", release]
+        elif handed_off(p):
+            out += [f"CLOSE OUT {d}: release it and close its agent terminal if still open; HANDED TO A PERSON: "
+                    f"`orca worktree rm` of {shlex.quote(p)} was refused, so no cleaner takes it and nothing here runs "
+                    f"it again. The person runs: {rm_refused().command(p)}", release]
         else:
             out += [f"CLOSE OUT {d}: release it and close its agent terminal if still open, unless its next task starts"
                     f" there; the cleaners take {shlex.quote(p)} ({CLEANUP})", release]
     return out
+
+
+def rm_refused():
+    """reap-resources' record of cards whose `orca worktree rm` was refused (one predicate for every reader)."""
+    scripts = str(pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    import rm_refused as mod
+    return mod
+
+
+def handed_off(path):
+    """True when the card's removal is recorded as refused. A record that cannot be read is not (the cleaners keep a
+    card then, and say why)."""
+    return bool(rm_refused().held(path))
 
 
 def taken_over(w):

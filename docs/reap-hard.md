@@ -19,6 +19,8 @@ reap-hard는 이 네 가지를 우회하지 않고 대체한다. 등록 여부�
 
 한 회차는 아래 순서로 돈다. 뒤 단계는 앞 단계에서 닫은 것을 반영해 판정한다.
 
+`orca worktree rm`이 권한 계층에 거부돼 `rm_refused.py add`로 기록된 카드는 이 표의 어느 조건을 채워도 닫지 않는다. 판정 이유에 `사람에게 넘김`과 사람이 실행할 `orca worktree rm` 한 줄이 나온다. 기록을 읽지 못하면 카드를 남긴다.
+
 | 대상 | 닫는 조건 | 동작 |
 |---|---|---|
 | 카드 | 그 브랜치의 자기 PR(포크 제외)이 MERGED/CLOSED이고 PR head가 worktree HEAD와 같다. 열린 PR이 없다. 변경 없음(추적 안 되는 파일 포함). 세션 기록이 `idle_minutes`(30분) 넘게 조용하고, Orca 터미널 출력도 그만큼 없다. 세션 기록이 있는 Claude 터미널은 출력 기준이 5분이다. 사람이 띄운 프로세스가 없다. 카드 안 Claude 세션이 돌리는 셸이 없다 | 카드 잠금(janitor와 공유)을 잡고 다시 판정한 뒤 공용 가드(`cardguard.guard`)를 통과하면, 판정 때 본 터미널만 `orca terminal close --terminal H`로 닫는다. 가드를 한 번 더 통과하면 ignored 파일은 휴지통, `orca worktree rm --run-hooks` |
