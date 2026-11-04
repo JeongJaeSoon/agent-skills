@@ -4,6 +4,9 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import reap
 
 H = 3600
+# The volume rules' owner judgment has its own section at the end; the sections before it test the rest of each rule.
+saved_owner = getattr(reap, "owner_facts", None), getattr(reap, "owner_hold", None)
+reap.owner_facts, reap.owner_hold = dict, lambda owners, facts: None
 
 
 def row(pid, cmd, ppid=1, age=10 * H, rss=1024):
@@ -1382,5 +1385,171 @@ with tempfile.TemporaryDirectory() as tmp:
     (f,) = reap.folded(reap.ledger_read(pathlib.Path(led)), "compose-stack")
     assert f["links"]["pr"] == "acme/app#2" and f["pid"] == 77 and f["previewed"] is True and f["registered"], f
 
+# The owner of a stack volume, the judgment every volume rule goes through. The first fixture is the incident: a
+# verification stack brought down with no -v, older than the hours, its card's worktree there and its PR open, the
+# ledger line carrying the worktree and no PR.
+reap.owner_facts, reap.owner_hold = saved_owner
+guard.protect_file, guard.always_on = (lambda: str(protect_txt)), set
+PROJECT = "com.docker.compose.project"
+OWNER = "app.installation"
+ORIGIN = "example.agent.origin"
+with tempfile.TemporaryDirectory() as tmp:
+    root = pathlib.Path(tmp)
+    live = root / "workspaces" / "app" / "card-open"
+    live.mkdir(parents=True)
+    gone = str(root / "workspaces" / "app" / "card-closed")
+    other_gone = str(root / "workspaces" / "app" / "card-closed-2")
+    led = root / "ledger.jsonl"
+    line = lambda stack, kind="compose-stack", pr=None, wt=gone, **extra: json.dumps(
+        {"kind": kind, "id": stack, "links": {"pr": pr, "worktree": wt}, **extra})
+    good = [
+        line("verify-app-incident", wt=str(live)),
+        line("verify-app-closed"),
+        line("verify-app-merged", pr="acme/app#1"),
+        line("verify-app-pr-open", pr="acme/app#2"),
+        line("verify-app-pr-unread", pr="acme/app#3"),
+        line("verify-app-retired"), line("verify-app-retired", wt=None, retired=True),
+        line("verify-app-pr-only", pr="acme/app#1", wt=None),
+        line("verify-app-reused"), line("verify-app-reused", kind="stack-seen", wt=str(live)),
+        line("verify-app-relinked", wt=str(live)), line("verify-app-relinked", pr="acme/app#1", wt=None),
+        line("verify-app-reregistered", wt=other_gone), line("verify-app-reregistered"),
+        line("verify-app-torn"),
+    ]
+    torn = '{"kind": "compose-stack", "id": "verify-app-torn", "links": {"worktree": "' + str(live)
+    led.write_text("\n".join(good) + "\n" + torn)
+    os.environ["AGENT_SKILLS_LEDGER"] = str(led)
+    stacks = ["incident", "closed", "merged", "pr-open", "pr-unread", "retired", "pr-only", "reused", "relinked",
+              "reregistered", "torn", "unregistered"]
+    old_time = "2026-10-25T00:00:00Z"
+    late = reap.parse_ts(old_time) + 7 * H
+    compose = [{"Name": f"verify-app-{s}_db", "Labels": {PROJECT: f"verify-app-{s}"}, "CreatedAt": old_time} for s in stacks]
+    workspace = [{"Name": f"ws-verify-app-{s}-s1", "Labels": {OWNER: f"verify-app-{s}"}, "CreatedAt": old_time} for s in stacks]
+    labeled = [{"Name": f"verify-app-{s}_data", "Labels": {ORIGIN: "verify-example", PROJECT: f"verify-app-{s}"},
+                "CreatedAt": old_time} for s in stacks]
+    labeled.append({"Name": "no-owner", "Labels": {ORIGIN: "verify-example"}, "CreatedAt": old_time})
+    orca = {"reply": json.dumps({"result": {"worktrees": [{"path": str(live)}]}})}
+    prs = {"1": "MERGED", "2": "OPEN"}
+
+    def world(cmd, cwd=None, check=True):
+        if cmd[:2] == ["orca", "worktree"]:
+            return orca["reply"]
+        if cmd[:3] == ["gh", "pr", "view"]:
+            state = prs.get(cmd[3])
+            return state and json.dumps({"state": state, "headRefOid": "x", "closedAt": None})
+        if cmd[:3] == ["docker", "volume", "ls"]:
+            if cmd[-1] == f"label={ORIGIN}":
+                return "\n".join(v["Name"] for v in labeled)
+            return "\n".join(v["Name"] for v in (compose if cmd[-1] == f"label={PROJECT}" else workspace))
+        if cmd[:3] == ["docker", "volume", "inspect"]:
+            return json.dumps([v for v in compose + workspace + labeled if v["Name"] in cmd[3:]])
+        if cmd[:2] == ["docker", "ps"] or cmd[:2] == ["docker", "inspect"]:
+            return ""
+        raise AssertionError(cmd)
+
+    saved = reap.run, reap.shutil.which, reap.pr_reader
+    reader = reap.pr_reader
+    reap.run, reap.shutil.which, reap.pr_reader = world, lambda name: "/bin/" + name, lambda: reader(world)
+    SV = {"prefixes": ["verify-app-"], "label": OWNER}
+    CFG2 = {"stack_volumes": SV, "labeled_volumes": {"namespace": "example.agent", "origins": ["verify-example"]}}
+    CLOSED = {"closed", "merged", "retired", "reregistered"}
+
+    def scanned(cfg=CFG2):
+        notes = []
+        items = reap.janitor_scan({"stack-volume", "labeled-volume"}, [], [], notes, pr_state=lambda r: None, hours=6,
+                                  now=late, cfg=cfg)
+        return items, notes
+
+    items, notes = scanned()
+    want = {f"verify-app-{s}_db" for s in CLOSED} | {f"ws-verify-app-{s}-s1" for s in CLOSED} | {f"verify-app-{s}_data" for s in CLOSED}
+    assert {i["name"] for i in items if i["target"]} == want, sorted(i["name"] for i in items if i["target"])
+    why = {i["name"]: i["why"] for i in items}
+    assert "카드" in why["verify-app-incident_db"] and "카드" in why["ws-verify-app-incident-s1"], why
+    assert "카드" in why["verify-app-incident_data"] and "열린 PR" in why["verify-app-pr-open_db"], why
+    assert "읽지 못함" in why["verify-app-pr-unread_db"] and "기록이 없음" in why["verify-app-unregistered_db"], why
+    assert "worktree 연결" in why["verify-app-pr-only_db"] and "카드" in why["verify-app-reused_db"], why
+    assert "카드" in why["verify-app-relinked_db"] and "깨진" in why["verify-app-torn_db"], why
+    assert "소유" in why["no-owner"], why
+
+    # What cannot be read holds every volume, with a note, whichever rule listed it.
+    orca["reply"] = None
+    items, notes = scanned()
+    assert not [i for i in items if i["target"]] and any("카드 목록" in n for n in notes), (items, notes)
+    orca["reply"] = json.dumps({"result": {"worktrees": [{"path": str(live)}], "truncated": True}})
+    assert not [i for i in scanned()[0] if i["target"]]
+    orca["reply"] = json.dumps({"result": None})
+    assert not [i for i in scanned()[0] if i["target"]]
+    orca["reply"] = json.dumps({"result": {"worktrees": [{"path": str(live)}]}})
+    prs["1"] = None
+    assert "verify-app-merged_db" not in {i["name"] for i in scanned()[0] if i["target"]}
+    prs["1"] = "MERGED"
+    os.environ["AGENT_SKILLS_LEDGER"] = str(root)  # a directory: there, and not readable as a ledger
+    assert not [i for i in scanned()[0] if i["target"]]
+    os.environ["AGENT_SKILLS_LEDGER"] = str(root / "missing.jsonl")
+    assert not [i for i in scanned()[0] if i["target"]]
+    os.environ["AGENT_SKILLS_LEDGER"] = str(led)
+
+    # A card Orca still lists holds its stack with its folder out of sight, as does a path that cannot be looked at.
+    orca["reply"] = json.dumps({"result": {"worktrees": [{"path": gone}]}})
+    assert not {f"verify-app-{s}_db" for s in CLOSED} & {i["name"] for i in scanned()[0] if i["target"]}
+    orca["reply"] = json.dumps({"result": {"worktrees": [{"path": str(live)}]}})
+    facts = reap.owner_facts()
+    saved_stat = reap.os.stat
+    reap.os.stat = lambda p, **k: (_ for _ in ()).throw(PermissionError(p)) if str(p) == gone else saved_stat(p, **k)
+    assert "카드" in reap.owner_hold(["verify-app-closed"], facts)
+    reap.os.stat = saved_stat
+
+    # The last check, inside the lock, reads everything again, whichever cleaner and kind it is.
+    plan = {i["name"]: i for i in scanned()[0] if i["target"]}
+    empty = {"port": set(), "pid": set(), "path": [], "project": set()}
+    stale = plan["verify-app-closed_db"]
+    hard = {**plan["verify-app-closed_data"], "kind": "volume", "id": "verify-app-closed_data"}
+    manual = {"kind": "docker", "key": "volume:verify-app-closed_db", "name": "volume verify-app-closed_db",
+              "owners": ["verify-app-closed"]}
+    for target, cleaner in ((stale, "reap"), (plan["ws-verify-app-closed-s1"], "reap"), (plan["verify-app-closed_data"], "reap"),
+                            (hard, "hard"), (manual, "reap")):
+        assert guard.item(target, empty, cleaner) is None, target
+    pathlib.Path(gone).mkdir()
+    for target, cleaner in ((stale, "reap"), (hard, "hard"), (manual, "reap")):
+        assert "카드" in guard.item(target, empty, cleaner), target
+    pathlib.Path(gone).rmdir()
+    orca["reply"] = None
+    assert "읽지 못함" in guard.keep(stale, empty) and "읽지 못함" in guard.keep(hard, empty, "hard")
+    orca["reply"] = json.dumps({"result": {"worktrees": [{"path": str(live)}]}})
+    assert guard.item({**stale, "owners": []}, empty) and guard.item({k: v for k, v in manual.items() if k != "owners"}, empty)
+    # The protect file's project lines hold a stack volume too.
+    assert "보호" in guard.item(stale, {**empty, "project": {"verify-app-closed"}})
+
+    # The manual docker kind carries the same owners and goes through the same judgment.
+    now_read = {"names": [v["Name"] for v in compose[:2]]}
+
+    def dangling(cmd, cwd=None, check=True):
+        if cmd[:3] == ["docker", "volume", "ls"]:
+            return "\n".join(now_read["names"])
+        if cmd[:2] == ["docker", "images"]:
+            return ""
+        return world(cmd, cwd, check)
+
+    reap.run = dangling
+    notes = []
+    got = {i["key"]: i for i in reap.docker_scan(0, notes)}
+    assert got["volume:verify-app-closed_db"]["target"] and got["volume:verify-app-closed_db"]["owners"] == ["verify-app-closed"], got
+    assert not got["volume:verify-app-incident_db"]["target"] and "카드" in got["volume:verify-app-incident_db"]["why"], got
+    reap.run = world
+
+    # A working directory seen on a stack's containers is recorded once, so its volumes outlive the labels.
+    seen = {"verify-app-closed": {"dirs": {str(live), "relative/dir"}}, "verify-app-incident": {"dirs": {str(live)}}}
+    led.write_text("\n".join(good) + "\n")
+    before = len(good)
+    reap.note_stack_dirs(seen)
+    reap.note_stack_dirs(seen)
+    assert len(led.read_text().splitlines()) == before + 1, led.read_text()
+    assert "카드" in reap.owner_hold(["verify-app-closed"], reap.owner_facts())
+    entries = reap.ledger_read(led)
+    assert "verify-app-closed" in {e["id"] for e in reap.folded(entries, "compose-stack")}
+    assert not reap.folded(entries, "compose-stack")[0].get("kind") == "stack-seen"
+    reap.run, reap.shutil.which, reap.pr_reader = saved
+    os.environ.pop("AGENT_SKILLS_LEDGER")
+
+guard.protect_file, guard.always_on = saved_guard
 
 print("ok")

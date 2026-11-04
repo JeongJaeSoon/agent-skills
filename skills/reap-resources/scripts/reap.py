@@ -30,7 +30,7 @@ Janitor kinds (card, orca-worker, tmpdir, gui-app, chrome-window, evidence, remo
 stopped-container, labeled-volume; `--kinds janitor`): card is every Orca card, judged by cards.py; stack-volume only
 volumes of stacks under reap.stack_volumes.prefixes; stopped-container only containers named under
 reap.stopped_containers.prefixes that compose did not make; labeled-volume only volumes whose <namespace>.origin label is
-in reap.labeled_volumes.origins; the rest cover only what the ledger lists or an Orca orchestration worker made. user-folder covers only top-level entries of explicitly configured reap.user_folders
+in reap.labeled_volumes.origins, both only once the owner stack's card has closed (owner_hold); the rest cover only what the ledger lists or an Orca orchestration worker made. user-folder covers only top-level entries of explicitly configured reap.user_folders
 untouched for reap.user_folder_days (default 7; screenshots and screen recordings reap.user_folder_screenshot_days,
 default 1), and keeps them all while Finder empties the trash on its own, unless $AGENT_SKILLS_TRASH is set.
 orca-worktree and done-card, the card kinds before card, are gone: --kinds or a plan naming them is refused. reap moves files to the trash and never empties it (the OS may: scan
@@ -281,7 +281,7 @@ def judge_volumes(vols, active, hours, now):
         else:
             why, target = f"컨테이너 없는 project {proj}", True
         out.append({"kind": "docker", "key": f"volume:{v['name']}", "name": f"volume {v['name']}", "age": age,
-                    "why": why, "target": target})
+                    "owners": [proj] if proj else [], "why": why, "target": target})
     return out
 
 
@@ -327,7 +327,7 @@ def docker_scan(hours, notes):
     for line in (run(["docker", "images", "-f", "dangling=true", "--format", "{{json .}}"]) or "").splitlines():
         i = json.loads(line)
         images.append({"id": i["ID"], "created": parse_ts(i["CreatedAt"]), "size": i.get("Size", "")})
-    return judge_volumes(vols, set(states), hours, now) + judge_images(images, used, hours, now)
+    return owner_holds(judge_volumes(vols, set(states), hours, now), notes) + judge_images(images, used, hours, now)
 
 
 def repos(given):
@@ -408,7 +408,7 @@ def orca_paths():
     try:
         res = json.loads(out)["result"]
         return None if res.get("truncated") else {w["path"] for w in res["worktrees"]}
-    except (TypeError, ValueError, KeyError):
+    except (AttributeError, TypeError, ValueError, KeyError):
         return None
 
 
@@ -529,7 +529,8 @@ SCHEDULED = JANITOR + ("user-folder", "program", "state-file")
 # reap.act's "orca-worktree" removal stays: cards.py and reap_hard.py call it.
 RETIRED_KINDS = ("orca-worktree", "done-card")
 # What `ledger add` accepts: the kinds whose scan reads the ledger. `card` reads Orca instead.
-LEDGER_KINDS = tuple(k for k in JANITOR if k not in ("card", "stack-volume", "stopped-container", "labeled-volume"))
+LEDGER_KINDS = tuple(k for k in JANITOR if k not in ("card", "stack-volume", "stopped-container", "labeled-volume")) + ("stack-seen",)
+STACK_LINES = ("compose-stack", "stack-seen")  # the ledger lines that say which card used a stack
 # Kinds that would find something new every round; the precheck looks at them once a day.
 DAILY = ("user-folder", "program", "state-file")
 MEDIA = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".mp4", ".mov", ".webm")
@@ -708,6 +709,16 @@ def trash(*paths):
 
 def ledger_path():
     return pathlib.Path(opt("--ledger") or os.environ.get("AGENT_SKILLS_LEDGER") or STATE / "ledger.jsonl").expanduser()
+
+
+def dir_gone(d):
+    """True only for a directory that is not there; one that cannot be looked at (permissions, I/O) is not gone."""
+    try:
+        return not stat.S_ISDIR(os.stat(d).st_mode)
+    except (FileNotFoundError, NotADirectoryError):
+        return True
+    except (OSError, ValueError):
+        return False
 
 
 def ledger_read(path):
@@ -1191,6 +1202,94 @@ def stack_owner(links, pr_state, pr_of=branch_pr, exists=os.path.exists, head=No
     return done, why
 
 
+def stack_records(path):
+    """What the ledger says about who used each stack: {"stacks": {stack: [links, ...]}, "bad": [lines that did not
+    parse]}, None when it cannot be read. Unlike ledger_read and folded, every line counts, retired or not, and a bad
+    line is kept: dropping one could leave only an older owner of the stack looking like its current one."""
+    try:
+        text = path.read_text(errors="replace")
+    except FileNotFoundError:
+        text = ""
+    except OSError:
+        return None
+    stacks, bad = {}, []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            e = json.loads(line)
+            if e.get("kind") in STACK_LINES:
+                links = e["links"] or {}
+                stacks.setdefault(e["id"], []).append({k: links.get(k) for k in ("pr", "worktree")})
+        except (ValueError, AttributeError, KeyError, TypeError):
+            bad.append(line)
+    return {"stacks": stacks, "bad": bad}
+
+
+def owner_facts():
+    """What owner_hold reads, fresh; None when the cards or the ledger cannot be read."""
+    cards, ledger = orca_paths(), stack_records(ledger_path())
+    if cards is None or ledger is None:
+        return None
+    return {"cards": {real(p) for p in cards}, **ledger, "pr": pr_reader()}
+
+
+def owner_hold(owners, facts):
+    """Why a volume of these stacks stays, or None once the card of every one has closed. Every volume rule goes through
+    this. A stack's containers name its card only while they exist; its volumes outlive them, so the ledger is the
+    record. A worktree still there holds whatever its PR says: closing a card weighs its PR, sessions and terminals
+    (cards.py, reap-hard), and its worktree going is the answer. What cannot be proved closed stays."""
+    if facts is None:
+        return "카드 목록이나 ledger 를 읽지 못함"
+    if not owners:
+        return "소유 스택을 모름(보고만)"
+    for o in owners:
+        if any(o in line or '"id"' not in line for line in facts["bad"]):
+            return f"스택 {o} 의 ledger 에 깨진 줄이 있음"
+        records = facts["stacks"].get(o) or ()
+        worktrees = {w for r in records if (w := r.get("worktree"))}
+        if not records:
+            return f"스택 {o} 의 소유 카드 기록이 없음(보고만)"
+        if not worktrees:
+            return f"스택 {o} 에 worktree 연결이 없음(보고만)"
+        for w in sorted(worktrees):
+            if real(w) in facts["cards"] or not dir_gone(w):
+                return f"스택 {o} 의 카드 {w} 가 남아 있음"
+        for ref in sorted({p for r in records if (p := r.get("pr"))}):
+            s = facts["pr"](ref)
+            if s is None:
+                return f"스택 {o} 의 PR {ref} 상태를 읽지 못함"
+            if s["state"] == "OPEN":
+                return f"스택 {o} 의 열린 PR {ref}"
+    return None
+
+
+def owner_holds(items, notes):
+    """owner_hold over a scan's volume items, so a held volume is reported, not listed as a target."""
+    if targets := [i for i in items if i["target"]]:
+        facts = owner_facts()
+        if facts is None:
+            notes.append("볼륨: 카드 목록이나 ledger 를 읽지 못함, 모두 남김")
+        for i in targets:
+            if why := owner_hold(i.get("owners"), facts):
+                i.update(target=False, why=why)
+    return items
+
+
+def note_stack_dirs(stacks):
+    """A line for each working directory a stack's containers name and the ledger does not. Only the first card that
+    brings a stack up registers it, so a card that reuses the name is recorded here."""
+    path = ledger_path()
+    ledger = stack_records(path)
+    if ledger is None:
+        return
+    for name, st in sorted(stacks.items()):
+        known = {r.get("worktree") for r in ledger["stacks"].get(name, ())}
+        for d in sorted(st["dirs"]):
+            if os.path.isabs(d) and d not in known:
+                ledger_add(path, "stack-seen", name, worktree=d, by="reap-hard")
+
+
 def judge_compose(entries, stacks, owner, hours, now, preview=(4500, 4599)):
     """Registered stacks only. Target: its owner is done, and it is all stopped or nothing restarted it for `hours`;
     a stack on a preview port also needs a `previewed` line. A keep line holds it until its deadline."""
@@ -1326,7 +1425,7 @@ def stack_volume_scan(spec, hours, notes, now=None):
         for v in json.loads(found):
             vols.append({"name": v["Name"], "labels": v.get("Labels") or {}, "created": parse_ts(v["CreatedAt"])})
     owners = {o for line in ps.splitlines() for o in line.split("\t") if o}
-    return judge_stack_volumes(vols, owners, spec, hours, now or time.time())
+    return owner_holds(judge_stack_volumes(vols, owners, spec, hours, now or time.time()), notes)
 
 
 def stopped_container_spec(cfg):
@@ -1444,10 +1543,10 @@ def judge_stopped_containers(rows, spec, hours, now, keep=frozenset(), ports=fro
     return out
 
 
-def judge_labeled_volumes(vols, rows, spec, hours, now, keep=frozenset()):
+def judge_labeled_volumes(vols, rows, spec, hours, now, keep=frozenset(), owner_label=None):
     """vols: [{name, labels, created}]; rows: container_row of every container. The origin label is the proof a
     verification stack made the volume, so a volume without it is never listed: that no container uses a volume, or that
-    one mounted it once, says nothing about who made it."""
+    one mounted it once, says nothing about who made it. owner_label: reap.stack_volumes.label, the other owner label."""
     key, origins, protect = spec
     used = {n for r in rows for n in r["volumes"]}
     stacks = {r["project"] for r in rows if r["project"]}
@@ -1460,8 +1559,8 @@ def judge_labeled_volumes(vols, rows, spec, hours, now, keep=frozenset()):
         project = v["labels"].get(COMPOSE_PROJECT) or ""
         age = now - v["created"]
         item = {"kind": "labeled-volume", "key": f"labeled-volume:{v['name']}", "name": v["name"], "origin": origin,
-                "project": project, "created": v["created"], "age": age, "target": False,
-                "how": [f"docker volume rm {shlex.quote(v['name'])}"]}
+                "project": project, "owners": volume_owners(v["labels"], (None, owner_label)), "created": v["created"],
+                "age": age, "target": False, "how": [f"docker volume rm {shlex.quote(v['name'])}"]}
         out.append(item)
         if origin not in origins:
             item["why"] = f"목록에 없는 출처 {origin}(보고만)"
@@ -1517,7 +1616,9 @@ def leftovers(cfg, hours, now, notes, keep=frozenset(), ports=frozenset(), kinds
         if vols is None:
             notes.append("docker 볼륨을 읽지 못함: 라벨 볼륨은 건너뜀")
         else:
-            items += judge_labeled_volumes(vols, rows, spec, hours, now, keep)
+            stack = stack_volume_spec(cfg)
+            items += owner_holds(judge_labeled_volumes(vols, rows, spec, hours, now, keep,
+                                                       stack[1] if isinstance(stack, tuple) else None), notes)
     return items
 
 

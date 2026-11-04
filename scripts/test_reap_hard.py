@@ -304,8 +304,27 @@ def fake_leftovers(cfg, hours, now, notes, keep, ports):
 
 rh.reap.leftovers = fake_leftovers
 rh.guard.settings = lambda: {"reap": {"hours": 2, "labeled_volumes": {"namespace": "example.agent"}}}
+noted, saved_note = [], rh.reap.note_stack_dirs
+rh.reap.note_stack_dirs = noted.append
 got = rh.scan_rest(rh.DEFAULTS, P, set(), [], machine, NOW)[0]
 assert [(i["kind"], i["id"]) for i in got] == [("container", "cid1"), ("volume", "v1")], got
+assert noted == [{}], noted
+rh.reap.compose_stacks = lambda: None  # docker unreadable: nothing to record
+noted.clear()
+rh.scan_rest(rh.DEFAULTS, P, set(), [], machine, NOW)
+assert not noted, noted
+rh.reap.compose_stacks = lambda: {}
+
+
+def no_disk(stacks):
+    raise OSError("disk full")
+
+
+rh.reap.note_stack_dirs = no_disk  # the record failing must not stop the pass
+notes = rh.scan_rest(rh.DEFAULTS, P, set(), [], machine, NOW)[1]
+assert any("ledger" in n for n in notes), notes
+rh.reap.note_stack_dirs = saved_note
+got = rh.scan_rest(rh.DEFAULTS, P, set(), [], machine, NOW)[0]
 assert seen[-1][1] == 2.0 and seen[-1][2] == {"keepme", "always-on"} and seen[-1][3] == {4999}, seen
 assert rh.guard.targets(got[0]) == [("container", "cid1")] and rh.guard.targets(got[1]) == [("volume", "v1")]
 rh.guard.settings = lambda: None  # a settings file that cannot be read turns both off for the pass
