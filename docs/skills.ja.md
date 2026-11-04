@@ -201,7 +201,8 @@ PR を受け持つスキルとマージする主体:
   - **branch:** PR がすべてマージかクローズ済みで、worktree がなく、tip が PR の head と同じローカルブランチ。復元コマンドも出力します。
   - **worktree:** 一時ディレクトリにあって消えた worktree（Orca のものは除く）と、セッションの transcript が N 時間動いていない Claude scratchpad の、クリーンで push 済みの detached worktree。どちらも `git worktree remove <パス>` でその項目だけを消します。Orca の worktree は resource steward の担当です。
   - **card:** Orca のカードすべて（アプリ・CLI・ワーカーのどれが作ったかを問わず）を `scripts/cards.py scan` がカードごとに、削除・ターミナルだけ閉じる（開いた PR あり）・残す・人の判断、のどれかに判定して表にします。人が表を見て `apply --plan` で実行し、janitor の回も同じコードを使います。規則と落とし穴（古い `origin/HEAD` は GitHub の compare で確かめ直す、rebase 前の写しは patch-id で見分ける、プロンプトで止まったシェル、「終わった」と書いた idle の画面）は `references/cards.md` 一か所にあります。
-  - **janitor:** エージェントが ledger（`~/.local/state/agent-skills/ledger.jsonl`）に登録した一時ディレクトリ・GUI アプリ・ブラウザウィンドウと、Orca オーケストレーションのワーカーが作った worktree・終わったワーカーのターミナルだけを見ます。`reap --plan` が対象を確かめ直してから閉じるかゴミ箱に移します。ツールは完全には削除せず、ゴミ箱も空にしません。OS がゴミ箱を自動で空にする設定なら警報で知らせます。ブラウザウィンドウはエージェントがブラウザツールで閉じます。
+  - **janitor:** エージェントが ledger（`~/.local/state/agent-skills/ledger.jsonl`）に登録した一時ディレクトリ・GUI アプリ・ブラウザウィンドウと、Orca オーケストレーションのワーカーが作った worktree・終わったワーカーのターミナルだけを見ます。`reap --plan` が対象を確かめ直してから閉じるかゴミ箱に移します。下のコンテナ・ボリューム種別の `docker` 削除を除き、ツールは完全には削除せず、ゴミ箱も空にしません。OS がゴミ箱を自動で空にする設定なら警報で知らせます。ブラウザウィンドウはエージェントがブラウザツールで閉じます。
+  - **stopped-container・labeled-volume:** 設定を書いたときだけ有効になり、janitor と reap-hard が同じルールで判定します。`reap.stopped_containers.prefixes` で始まる名前で compose が作っていない、停止中（exited・created）のコンテナと、`<namespace>.origin` ラベルの値が `reap.labeled_volumes.origins` にあり、どのコンテナからも参照されていないボリュームが対象です。ID か名前を指定して1つずつ削除し、記録を残します。このラベルは出どころの表示であり、削除の許可でもあります。ラベルのない匿名ボリュームは削除せず、`reap.py inventory --unlabeled-volumes` が読み取り専用で一覧を出すだけです。
   - **user-folder:** `reap.user_folders` に明示したフォルダーだけを整理します。未設定なら無効です。期間・開いているファイル・ダウンロード中の検査とゴミ箱への保管は維持します。
   - **program:** `~/.claude/programs`（`PROGRAMS_HOME`）のうち、閉じたプログラム（最終確認 `predicate_verified` の後に着地・predicate 変更・admitted の後続がないもの）で、記録（ダッシュボードのキャッシュを除く ledger・decisions・reflect など）が 7 日（`reap.program_days`）以上変わっていないものを `_archive/` に移します。削除はしません。名前に `resume` か `handoff` を含む再開ノートがあれば、閉じていても残します。
   - **state-file:** reorient フックのセッションファイル（`<state>/reorient/*.json`）のうち 7 日（`reap.state_days`）を過ぎたものを 1 つのフォルダにまとめてゴミ箱へ、512KB（`reap.log_max_kb`）を超えた `sync.log` は `sync.log.1` にローテーションします（前の `.1` はゴミ箱）。program とあわせて、定期実行では 1 日 1 回だけ見ます。
@@ -511,6 +512,7 @@ PR を受け持つスキルとマージする主体:
   - `sync`: fetch のあと ff-only の pull か、署名済みコミットの push。main でない、未コミットの変更がある、分岐している、署名のないコミットがある、credential helper がない場合は何も変えずに止まり、macOS 通知と `~/.local/state/agent-skills/sync.json` に残します。launchd が15分ごととログイン時に実行します。
   - `broadcast [--skills|--plugins] [--dry-run] [--terminal <handle>]`: `SKILL.md` が変わったら `/reload-skills`、hook の配線（`hooks/hooks.json`）やプラグインの manifest が変わったら `/reload-plugins` を送ります。入力欄が空、スピナーなし、権限・信頼・質問の画面なし、入力欄の下にシェルなし、1.5秒おきに二回読んだ画面が同じ、をすべて確かめたセッションにだけ送り、残りは `reload-pending.json` に残して次に再試行します。`--terminal <handle>` はそのセッション一つにだけ送ります。スキルを変えたセッションがターンを終えたあと自分の handle に向けて、自分自身を reload するのに使います（`write-skill` §7）。
   - `nudge <terminal> <一行>`: 同じ確認を通ったセッションにだけ一行を送り、ターンが始まったか確かめます。
+  - `wake-target <terminal>`、`wake-check <terminal> [--wait <秒>]`、`wake-reset <terminal>`: Claude カードを起こす信号の経路を選び、SendMessage で送った信号がターンを始めたかを受け手のセッションの transcript で確かめます。送るのはセッション自身がツールで行います。`agent-skills.json` の `wake.transport` が `sendmessage` のときだけその経路を使い、既定値は `terminal` です。手順は `skills/orchestrate/references/waking.md` にあります。
   - `status`: 最後の同期結果と残っている reload。
 
 ## 設定ファイル
