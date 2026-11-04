@@ -23,12 +23,15 @@ def answer(version, argv):
         if full and version.startswith("old"):
             raise RuntimeError(UNKNOWN_FULL.replace("worker-list", "run-list"))
         return copy.deepcopy(RUNS["full" if full or version.startswith("old") else "concise"][1 if "--cursor" in argv else 0])
-    if argv[:2] == ["orchestration", "run-current"]:
-        return {"run": None}
+    if argv[:2] in (["orchestration", "run-current"], ["orchestration", "run-show"]):
+        if "--full" in argv and version.startswith("old"):
+            raise RuntimeError(UNKNOWN_FULL.replace("worker-list", argv[1]))
+        full = "--full" in argv or version.startswith("old")
+        if argv[1] == "run-current":
+            return {"run": None} if full else {"runId": None}
+        return {"run": {"id": "run_demo", "objective": "demo"}} if full else {"runId": "run_demo", "objective": "demo"}
     if argv[:2] in (["orchestration", "task-list"], ["orchestration", "gate-list"]):
         return {"tasks": [], "gates": []}
-    if argv[:2] == ["orchestration", "run-show"]:
-        return {"run": {"id": "run_demo"}}
     assert argv[:2] == ["orchestration", "worker-list"], argv
     full = "--full" in argv
     if full and version.startswith("old"):
@@ -125,7 +128,9 @@ def results(version):
     runs = fresh(fleet.fetch_runs)
     out["fleet_runs"] = ([(r["id"], r.get("coordinator_handle")) for r in runs["runs"]],
                          sorted({w.get("runId") for w in runs["workers"]}))
-    out["dash"] = [w.get("dispatchId") for w in fresh(dash.fetch_orca, {"run": "run_demo", "lead_dispatch": "ctx_lead"})["workers"]]
+    shown = fresh(dash.fetch_orca, {"run": "run_demo", "lead_dispatch": "ctx_lead"})
+    out["dash"] = [w.get("dispatchId") for w in shown["workers"]]
+    out["dash_objective"] = shown["run"].get("objective")
     return out
 
 
@@ -146,7 +151,7 @@ assert old["reap"][0] == {"/work/acme/card-a": "살아 있는 워커 턴(ctx_a)"
 assert old["fleet"] == ([("ctx_lead", "run_demo", "dispatched"), ("ctx_a", "run_demo", "dispatched"),
                          ("ctx_b", "run_demo", "completed"), ("ctx_c", "run_demo", "completed"),
                          ("ctx_x", "run_demo", "dispatched")], False), old
-assert old["dash"] == ["ctx_a", "ctx_b", "ctx_c"], old
+assert old["dash"] == ["ctx_a", "ctx_b", "ctx_c"] and old["dash_objective"] == "demo", old
 # run-list's first page only, as before; the legacy Run is left out and run_demo keeps its coordinator.
 assert old["fleet_runs"] == ([("run_demo", "term_coord")], ["run_demo"]), old
 

@@ -443,6 +443,42 @@ class Bundle(unittest.TestCase):
         hits = [p for p in patterns if re.search(p, text, re.I)]
         self.assertEqual(hits, [])
 
+    def orca_run(self, result, rc=0):
+        """setup's orca_run against a fake `orca` answering run-current so: (stdout, the argv of each call)."""
+        with tempfile.TemporaryDirectory() as d:
+            tmp = pathlib.Path(d)
+            (tmp / "answer").write_text(json.dumps({"ok": not rc, "result": result}))
+            orca = tmp / "orca"
+            orca.write_text('#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$ORCA_LOG"\n'
+                            'case "$2" in run-current) cat "$ORCA_ANSWER"; exit "$ORCA_RC";; esac\necho "{}"\n')
+            orca.chmod(0o755)
+            env = {"PATH": f"{d}{os.pathsep}{os.environ['PATH']}", "ORCA_LOG": str(tmp / "log"), "ORCA_RC": str(rc),
+                   "ORCA_ANSWER": str(tmp / "answer"), "ORCA_TERMINAL_HANDLE": "term_me"}
+            spec = importlib.util.spec_from_file_location("setup_orca_run", SETUP)
+            setup = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(setup)
+            out = io.StringIO()
+            with mock.patch.dict(os.environ, env), contextlib.redirect_stdout(out):
+                os.environ.pop("SKILLS_SYNC_ORCA", None)
+                setup.orca_run()
+            return out.getvalue(), (tmp / "log").read_text().splitlines()
+
+    def test_a_bound_terminal_gets_no_second_run(self):
+        for result in ({"run": {"id": "run_fake"}}, {"runId": "run_fake"}):
+            out, calls = self.orca_run(result)
+            self.assertIn("already bound to run_fake", out)
+            self.assertFalse([c for c in calls if "run-create" in c], calls)
+
+    def test_an_unbound_terminal_gets_a_run(self):
+        for result in ({"run": None}, {"runId": None}):
+            out, calls = self.orca_run(result)
+            self.assertIn("run-create: ok", out)
+
+    def test_a_failed_run_current_creates_no_run(self):
+        out, calls = self.orca_run(None, rc=1)
+        self.assertIn("run-current failed", out)
+        self.assertFalse([c for c in calls if "run-create" in c], calls)
+
     def test_labels_are_unique_per_section(self):
         spec = importlib.util.spec_from_file_location("setup_labels", SETUP)
         setup = importlib.util.module_from_spec(spec)

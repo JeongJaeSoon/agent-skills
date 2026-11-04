@@ -25,8 +25,9 @@ AGENT_ACTION = "에이전트 조치 필요"
 PR_FIELDS = ("draft", "reviewers", "ci", "decision", "merge_state")
 # The lists around the tables (the owner's above, the others below), and the word a row's 다음 cell points at them with.
 POINTER = {"owner": "↑ 오너", "waiting": "↓ 대기", "held": "↓ 보류"}  # short: the 78-column table cuts at 8
-# How long an ended pressure entry stays its row's ❔. The queue keeps it for 7 days, and nothing closes one a session
-# retried under other text (a new id) or dropped, so without a limit the ❔ outlives what it reports.
+# How long an ended pressure entry stays its row's ❔ and a line of the reboot check. The queue keeps it for 7 days, and
+# nothing closes one a session retried under other text (a new id) or dropped, so without a limit both outlive it.
+QUEUE_ENDED = ("gave_up", "failed")
 QUEUE_ENDED_H = 3
 LIVE_PHASES = ("working", "waiting", "idle")  # a session that can still move a doing item (board.session_state)
 
@@ -176,10 +177,10 @@ def queue_state(e, now):
 
 
 def queue_over(e, now):
-    """Whether an ended entry is past its QUEUE_ENDED_H on the row. The earlier of ended and deadline: a sweep that
-    runs late writes a late `ended` on an entry whose deadline ended it. An entry with neither stays on the row."""
+    """Whether an entry ended and is past its QUEUE_ENDED_H. The earlier of ended and deadline: a sweep that runs late
+    writes a late `ended` on an entry whose deadline ended it. An ended entry with neither is not over."""
     times = [t for t in (e.get("ended"), e.get("deadline")) if isinstance(t, (int, float))]
-    return bool(times) and now.timestamp() - min(times) >= QUEUE_ENDED_H * 3600
+    return e.get("state") in QUEUE_ENDED and bool(times) and now.timestamp() - min(times) >= QUEUE_ENDED_H * 3600
 
 
 def agent_merges(cfg=None):
@@ -416,7 +417,7 @@ def judge(r, f, lead=None, sid=None):
     elif why := patrol_reason(r, f["stalled"], sid):
         hit("check", f"{AGENT_ACTION}: {why}", why)
     for e in queue:
-        if e.get("state") in ("gave_up", "failed") and not queue_over(e, f["now"]):
+        if e.get("state") in QUEUE_ENDED and not queue_over(e, f["now"]):
             hit("check", f"{AGENT_ACTION}: pressure {e['state']} {e.get('what')}", f"pressure {e['state']}")
     # The PR's own facts come before the row's word: a ready PR the agent merges is 🔄 whatever "waiting" the row says.
     if lacks(*PR_FIELDS):
