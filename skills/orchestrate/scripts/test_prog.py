@@ -928,7 +928,8 @@ except SystemExit:
 assert len(updates) == 1, "a PR without a gate has no Land task to close"
 prog.Program("gt").append("gate_opened", pr=14, task="task_h", gate="g2")
 real_res, prog.gate_resolution = prog.gate_resolution, lambda cfg, events, pr: "hold"
-assert prog.attempt(prog.Program("gt"), 14, "normal") == (1, "human-gate: the user resolved the gate as 'hold'")
+gt = prog.Program("gt")
+assert prog.gate_hold(gt, gt.events(), 14) == "human-gate: the user resolved the gate as 'hold'"
 assert updates[-1] == ["task_h", "--status", "failed"], "a held gate closes its Land task; a new gate makes a new one"
 prog.run, prog.pr_view, prog.gate_resolution = real_run, real_view, real_res
 
