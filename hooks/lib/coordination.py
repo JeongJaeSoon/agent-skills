@@ -97,10 +97,28 @@ def expands(c, value):
         return True
     if not re.search(r"[*?\[{]", value):
         return False
-    # The word that parsed to `value`, so a `--model` quoted inside --spec text is not mistaken for the flag. Literal
-    # only when it is one quoted string; a partly quoted word or a glued redirection is unsure.
-    tokens = [t for t in re.findall(r"--model(?:=|\s+)(\S+)", c.raw) if t.strip("'\"") == value]
-    return not (tokens and all(re.fullmatch(r"""(['"])[^'"]*\1""", t) for t in tokens))
+    # Every word after a `--model` in the raw text, including one quoted inside --spec text: when unsure, skip.
+    return any(bare_glob(t) for t in re.findall(r"--model(?:=|\s+)(\S+)", c.raw))
+
+
+def bare_glob(word):
+    """True when `word` has a glob or brace character outside quotes and not escaped, before any redirection."""
+    quote = ""
+    chars = iter(word)
+    for ch in chars:
+        if quote == "'":
+            quote = "" if ch == "'" else quote
+        elif ch == "\\":
+            next(chars, "")
+        elif quote:
+            quote = "" if ch == quote else quote
+        elif ch in "'\"":
+            quote = ch
+        elif ch in "<>;&|":
+            return False
+        elif ch in "*?[{":
+            return True
+    return False
 
 
 def warn_only(cfg, reason):

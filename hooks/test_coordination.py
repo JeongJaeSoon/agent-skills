@@ -153,6 +153,9 @@ for cmd in (f"{START} --spec \"Use --model 'opus[1m]' here\" --model claude-sonn
             f"{START} --model claude-sonnet-4-? --spec \"Use --model 'claude-sonnet-4-?' here\"",
             f"{START} --model \"claude-sonnet-\"*", f"{START} --model claude-sonnet-4-?>out"):
     assert model_warning(cmd) == "", "a partly quoted or redirect-glued glob is not judged: " + cmd
+CONFIG.write_text(json.dumps({"orchestrate": {"models": {"worker": "sonnet"}}}))
+for cmd in (f"{START} --model opus\\[1m\\]", f"{START} --model 'opus[1m]'>out"):
+    assert "differs" in model_warning(cmd), "an escaped or quoted bracket is literal: " + cmd
 CONFIG.write_text(json.dumps({"orchestrate": {"models": {"worker": "sonnet"}, "model_flag": "deny"}}))
 assert bash(f"{START} --spec 'x' --model opus", "lead") in ("none", "allow"), "a comparison never blocks, whatever the level"
 CONFIG.write_text(json.dumps({"orchestrate": {"models": {"lead": "opus"}}}))
