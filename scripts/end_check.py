@@ -4,12 +4,13 @@ from real output and printed as one verdict.
 
 Usage:
   skills-sync end-check [--worker --outcome succeeded|failed | --card] [--brief <file> | --keep | --no-keep]
-                        [--ticket-done] [--dispatch <id>] [--apply]
+                        [--ticket-done] [--dispatch <id>] [--trash-caches] [--apply]
 
 Verdicts:
-  remove          the Remove row holds: `orca worktree rm --worktree current` (after moving build caches and
-                  regenerated skill copies to the trash)
-  close-terminal  the card stays (main worktree, or another agent works on it): only this terminal goes
+  remove          (no --worker or --card) the Remove row holds: `orca worktree rm --worktree current` (after moving
+                  build caches and regenerated skill copies to the trash)
+  close-terminal  only this terminal goes: a worker or a dispatched card that is done, whose worktree the cleaners
+                  take (end-session, "Who cleans up"), or the main worktree, or a card another agent works on
   keep           something holds the card: a failed outcome, an open PR, a question waiting, a dirty tree, a KEEP row,
                   or a fact this could not read. Not knowing is keeping: nothing is removed on a guess.
   ask             (no --worker or --card) tracked changes, unexpected untracked files or unpushed work: the human picks
@@ -20,6 +21,9 @@ questions this terminal sent that nobody answered yet (`orca orchestration inbox
 $ORCA_TERMINAL_HANDLE, no reply in its thread). The KEEP row is read from --brief, or stated with --keep or --no-keep.
 A linked ticket in --card mode needs --ticket-done once use-tracker shows it completed (its state is not read here).
 `orch decide` questions are a lead's and not read.
+
+--trash-caches moves the card's build caches and regenerated copies to the trash, so the cleaners can take it; not on
+the main checkout or a card another agent works on. Exit 4 means the move failed: hold the card.
 
 --apply carries the verdict out. remove and close-terminal for a worker first ask Orca whether its Dispatch settled
 (`worker-show`: status completed or failed): worker_done must have arrived before the card goes (end-session §7).
@@ -302,12 +306,15 @@ def judge(f, mode, outcome=None, keep=None, ticket_done=False):
     if f["main"] or f["other_agents"]:
         why = "isMainWorktree" if f["main"] else "other agents on the card: " + ", ".join(map(str, f["other_agents"]))
         return "close-terminal", [why]
+    if mode != "user":
+        return "close-terminal", ["the Remove row holds: reap-hard and the janitor take the card"]
     return "remove", ["the Remove row holds"]
 
 
 def parse(argv):
     opts, valued, flags = {}, {"--outcome", "--brief", "--dispatch"}, {"--worker", "--card", "--keep", "--no-keep",
-                                                                       "--ticket-done", "--apply", "--json"}
+                                                                       "--ticket-done", "--apply", "--json",
+                                                                       "--trash-caches"}
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -361,6 +368,19 @@ def archive_hook(path):
     return True
 
 
+def trash_caches(f):
+    if f["caches"]:
+        sys.path.insert(0, str(REPO / "skills" / "reap-resources" / "scripts"))
+        import reap
+        try:
+            reap.trash(*(str(pathlib.Path(f["path"] or ".") / p) for p in f["caches"]))
+        except (RuntimeError, OSError) as e:
+            print(f"[{ME}] moving build caches to the trash failed: {e}", file=sys.stderr)
+            return False
+        f["caches"] = []
+    return True
+
+
 def apply(verdict, f, mode, opts, me):
     if mode == "worker" and verdict in ("remove", "close-terminal"):
         ok, why = dispatch_settled(opts.get("--dispatch"))
@@ -373,14 +393,8 @@ def apply(verdict, f, mode, opts, me):
             print(f"[{ME}] not applied: {f['path']}/orca.yaml could not be read, so its archive hook is unknown",
                   file=sys.stderr)
             return 3
-        if f["caches"]:
-            sys.path.insert(0, str(REPO / "skills" / "reap-resources" / "scripts"))
-            import reap
-            try:
-                reap.trash(*(str(pathlib.Path(f["path"] or ".") / p) for p in f["caches"]))
-            except (RuntimeError, OSError) as e:
-                print(f"[{ME}] moving build caches to the trash failed: {e}", file=sys.stderr)
-                return 4
+        if not trash_caches(f):
+            return 4
         cmd = [ORCA, "worktree", "rm", "--worktree", "current", *(["--run-hooks"] if hooks else []), "--json"]
     elif verdict == "close-terminal":
         cmd = [ORCA, "terminal", "close", "--terminal", me, "--json"]
@@ -417,6 +431,11 @@ def main(argv):
     verdict, reasons = judge(facts, mode, opts.get("--outcome"), keep_row(opts), bool(opts.get("--ticket-done")))
     print(json.dumps({"verdict": verdict, "mode": mode, "reasons": reasons, "facts": facts}, ensure_ascii=False,
                      indent=1))
+    # On every verdict, before the send, while nothing above can close this session: a card kept for its open PR
+    # reaches the cleaners too once the PR merges, and they read an untracked cache as dirty for good.
+    if opts.get("--trash-caches") and facts.get("main") is False and facts.get("other_agents") == [] \
+            and not trash_caches(facts):
+        return 4
     return apply(verdict, facts, mode, opts, me) if opts.get("--apply") else 0
 
 
