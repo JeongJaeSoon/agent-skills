@@ -245,15 +245,18 @@ class Orca:
 
     def current_origin(self):
         result = self._orca("get", "--what", "url")
-        url = result.get("value") if isinstance(result, dict) else result
+        # Current Orca answers {"url": ...}; older builds answered {"value": ...}.
+        url = (result.get("url", result.get("value")) if isinstance(result, dict) else result)
         return normalize_origin(url) if isinstance(url, str) else None
 
     def focused_field(self):
         result = self._orca("eval", "--expression",
                             "document.hasFocus() && !!document.activeElement"
                             " && ['INPUT','TEXTAREA'].includes(document.activeElement.tagName)")
-        value = result.get("value") if isinstance(result, dict) else result
-        return value is True
+        # Current Orca returns the evaluated value as a string under "result" ("true"/"false");
+        # older builds returned a JSON boolean under "value". Anything else counts as no field.
+        value = (result.get("result", result.get("value")) if isinstance(result, dict) else result)
+        return value is True or value == "true"
 
     def fill(self, origin, selector, secret, submit):
         if selector:
