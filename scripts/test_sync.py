@@ -452,6 +452,7 @@ def test_plugin_update_and_terminal():
         kept = json.loads(pending_file.read_text())
         check("naming a higher kind saves it and drops the done entries that got the lesser one",
               kept["kind"] == "plugins" and kept["done"] == ["after"], kept)
+        os.environ["AGENT_SKILLS_INSTALLED_PLUGINS"] = str(installed)  # a re-read would find the update and differ
         with mock.patch.object(sync, "orca", return_value={"worktrees": worktrees}):
             fixed = sync.opened_after(since, listed, 0)
         check("opened_after uses the stamp it is given, not a later read", fixed == {"between", "after"}, fixed)
