@@ -857,15 +857,18 @@ def switch_round(drifts, rows, notes, path_of, switch):
     A failed or abandoned attempt goes to the human's inbox, once; it is never retried."""
     claims = STATE / "model-switch"
 
-    def failed(session, name, why):
-        notes.append(f"model auto-switch failed: {name}: {why}")
-        fleet.inbox_add("approval", f"모델 자동 전환 실패: {name} ({why})", session=session,
-                        key=f"model-switch:{session}", source="patrol")
+    def failed(c):
+        """Tell the human, then mark the claim reported: a notice that failed is offered again next round, and one
+        that was taken is never opened again after the human resolved it."""
+        name = card_name(path_of.get(c["handle"])) or c["handle"] or c["session"]
+        notes.append(f"model auto-switch failed: {name}: {c['why']}")
+        fleet.inbox_add("approval", f"모델 자동 전환 실패: {name} ({c['why']})", session=c["session"],
+                        key=f"model-switch:{c['session']}", source="patrol")
+        model_drift.mark_reported(claims, c)
 
     try:
         for c in model_drift.unreported(claims):
-            failed(c["session"], card_name(path_of.get(c["handle"])) or c["handle"] or c["session"], c["why"])
-            model_drift.mark_reported(claims, c)  # after the inbox took it: a failed notice is offered again
+            failed(c)
     except OSError as e:
         notes.append(f"model auto-switch: a failure could not be reported: {type(e).__name__}")
     for d in drifts:
@@ -879,7 +882,10 @@ def switch_round(drifts, rows, notes, path_of, switch):
         if status == "switched":
             notes.append(f"model auto-switch: {name} restarted on {d['want']}; the finding clears after its next reply")
         elif status == "failed":
-            failed(d["session"], name, why)
+            try:
+                failed({"session": d["session"], "handle": d["handle"], "why": why})
+            except OSError as e:
+                notes.append(f"model auto-switch: a failure could not be reported: {type(e).__name__}")
         else:
             continue
         return  # one session a round: each takes up to a minute

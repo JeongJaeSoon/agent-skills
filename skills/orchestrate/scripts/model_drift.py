@@ -222,7 +222,9 @@ def _wait(sync, handle, ok, limit_s, sleep, clock):
     limit is a deadline and not a count). Reads at least once."""
     end = clock() + limit_s
     while True:
-        if ok(sync.norm(sync.orca("terminal", "read", "--terminal", handle, "--screen")["terminal"].get("tail") or [])):
+        t = sync.orca("terminal", "read", "--terminal", handle, "--screen")["terminal"]
+        # A log or any non-rendered source may hold an old resume hint and shell prompt: it proves nothing.
+        if t.get("source") in (None, "screen") and ok(sync.norm(t.get("tail") or [])):
             return True
         if clock() >= end:
             return False
@@ -324,20 +326,27 @@ def unreported(claims, now=None, stale_s=600):
     now, out = now or time.time(), []
     for path in sorted(pathlib.Path(claims).glob("*.json")):
         try:
-            c = json.loads(path.read_text())
-            if not isinstance(c, dict):
-                raise ValueError("not an object")
-            lost = not c.get("result") and now - c.get("at", now) > stale_s
-            if c.get("reported") or not (c.get("result") == "failed" or lost):
+            try:
+                c = json.loads(path.read_text())
+            except ValueError:
+                c = None
+            c = c if isinstance(c, dict) else None
+            if c and (c.get("reported") or c.get("result") == "switched"):
                 continue
-            c = {**c, "why": c.get("why") or "no result was recorded (patrol was interrupted)"}
+            if c and c.get("result") == "failed":
+                why = c.get("why") or "failed"
+            elif c and not c.get("result") and isinstance(c.get("at"), (int, float)) and not isinstance(c["at"], bool):
+                if now - c["at"] <= stale_s:
+                    continue
+                why = "no result was recorded (patrol was interrupted)"
+            else:  # cut short, or not a claim this code wrote: a session was still tried or about to be
+                if now - path.stat().st_mtime <= stale_s:
+                    continue
+                why = "the claim file is unreadable"
         except OSError:
             continue
-        except ValueError:  # a claim cut short: it still means a session was tried or about to be
-            if now - path.stat().st_mtime <= stale_s:
-                continue
-            c = {"session": path.stem, "handle": "", "why": "the claim file is unreadable"}
-        out.append(c)
+        handle = (c or {}).get("handle")
+        out.append({"session": path.stem, "handle": handle if isinstance(handle, str) else "", "why": why})
     return out
 
 

@@ -371,6 +371,31 @@ try:
 except FileExistsError:
     twice = False
 check("and never twice", not twice and json.loads((tmp / "whole.json").read_text()) == {"a": 1})
+# Codex review (round 3): a log is not a screen; an odd claim never stops the round; a notice taken is not reopened.
+class LogSync(FakeSync):
+    def orca(self, *args):
+        if args[1] == "send":
+            return super().orca(*args)
+        return {"terminal": {"source": "log", "tail": SHELL}}
+
+
+f = LogSync([SHELL])
+got = go(worker, "claims-log", f)
+check("a screen read that is really a log never lets the resume line out",
+      got[0] == "failed" and f.typed == ["/exit"], (got, f.typed))
+odd = tmp / "claims-odd"
+odd.mkdir()
+for name, body in (("s-empty", "{}"), ("s-badat", json.dumps({"session": "s-badat", "handle": "t", "at": "invalid"})),
+                   ("s-list", "[1]"), ("s-bool", json.dumps({"at": True}))):
+    (odd / f"{name}.json").write_text(body)
+    os.utime(odd / f"{name}.json", (1000.0, 1000.0))
+found = model_drift.unreported(odd, now=1000.0 + 700)
+check("a claim of any odd shape is reported as unreadable, once old, and never raises",
+      sorted((c["session"], c["why"]) for c in found) == sorted(
+          (n, "the claim file is unreadable") for n in ("s-empty", "s-badat", "s-list", "s-bool")), found)
+for c in found:
+    model_drift.mark_reported(odd, c)
+check("and once marked each stays quiet", model_drift.unreported(odd, now=1000.0 + 700) == [])
 # Codex review 4: the wait is a deadline on the clock, not a count of polls.
 slow = [0.0]
 
@@ -426,6 +451,10 @@ notes = switch_round("t_worker", {"model_autoswitch": True}, answer=("failed", "
 inbox = (tmp / "dashboard" / "inbox-external.jsonl").read_text()
 check("a failed switch is a note and a human inbox item keyed by the session",
       any("auto-switch failed" in n for n in notes) and "model-switch:s-worker" in inbox, (notes, inbox))
+asks = inbox.count("model-switch:s-worker")
+switch_round("t_lead", {"model_autoswitch": True})
+check("and is marked reported, so the next round does not open the notice again",
+      (tmp / "dashboard" / "inbox-external.jsonl").read_text().count("model-switch:s-worker") == asks, asks)
 gone = patrol.STATE / "model-switch"
 gone.mkdir(parents=True, exist_ok=True)
 (gone / "s-lost.json").write_text(json.dumps({"session": "s-lost", "handle": "t_worker", "at": 1.0}))
