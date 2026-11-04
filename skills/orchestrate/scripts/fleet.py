@@ -69,7 +69,7 @@ def ticket_url():
         url = (json.loads(path.read_text()).get("dashboard") or {}).get("ticket_url")
     except (OSError, ValueError, AttributeError):
         url = None
-    if isinstance(url, str) and re.fullmatch(r"https?://[^\s?#{}]+", url):
+    if isinstance(url, str) and re.fullmatch(r"https?://[A-Za-z0-9][^\s?#{}/]*(/[^\s?#{}]*)?", url):
         return url if url.endswith("/") else url + "/"
     if not _ticket_warned:
         _ticket_warned.append(1)

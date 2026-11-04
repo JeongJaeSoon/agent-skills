@@ -1499,7 +1499,7 @@ const ticketHref = (k) => { const t = (S.fleet || {}).ticket_url; return t && sa
 // Links the ticket ids in already-escaped brief HTML. Tags and existing anchors pass through whole, so no id in an
 // href, a title or a link's own text is touched.
 const linkTickets = (html) => (S.fleet || {}).ticket_url
-  ? html.replace(new RegExp(`(<a\\b[^>]*>.*?</a>)|(<[^>]+>)|(${TICKET_RE.source})`, "g"),
+  ? html.replace(new RegExp(`(<a\\b[^>]*>[\\s\\S]*?</a>)|(<[^>]+>)|(${TICKET_RE.source})`, "g"),
     (m, a, tag, id) => !id || NOT_TICKET.test(id) ? m : link(ticketHref(id), id)) : html;
 // The card's own ticket links first, then ids in its name, its branch and the labels of its brief rows.
 function ticketIds(s, rows = []) {

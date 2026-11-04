@@ -636,7 +636,7 @@ process.stdout.write(JSON.stringify(out));"""
     # existing link, a tag attribute or a standard's name ("UTF-8") are left alone.
     js = f"""{helpers}
 {(assets / "fleet.js").read_text()}
-const cell = "ABC-12 <b>x</b> [ABC-13](https://x.test/ABC-14) UTF-8 `ABC-15` feat-16 <i title=\\"ABC-17\\">y</i>";
+const cell = "[ABC-19\\u2028ABC-20](https://x.test/z) ABC-12<b>x</b> [ABC-13](https://x.test/ABC-14) UTF-8 `ABC-15` feat-16 <i title=\\"ABC-17\\">y</i>";
 const S = {{fleet: {{ticket_url: "https://tracker.example.test/acme/issue/"}}}};
 const on = briefInline(cell);
 S.fleet = {{}};
@@ -646,6 +646,7 @@ process.stdout.write(JSON.stringify({{on, off: briefInline(cell), ids: (S.fleet.
     link_to = lambda k: f'<a class="link" href="https://tracker.example.test/acme/issue/{k}" target="_blank" rel="noopener noreferrer">{k}</a>'
     assert link_to("ABC-12") in got["on"] and link_to("ABC-15") in got["on"], got["on"]
     assert link_to("ABC-13") not in got["on"] and link_to("ABC-14") not in got["on"], got["on"]
+    assert got["on"].count("<a ") == 5 and "ABC-19 ABC-20</a>" in got["on"], "a line separator inside a link text keeps it one link"
     assert "<i " not in got["on"] and link_to("ABC-17") in got["on"], "raw markup is escaped text, so an id in it is only text"
     assert 'href="https://x.test/ABC-14"' in got["on"] and ">ABC-13</a>" in got["on"] and "UTF-8" in got["on"] and "tracker.example.test/acme/issue/UTF" not in got["on"]
     assert "tracker.example.test" not in got["off"] and "ABC-12" in got["off"], got["off"]
@@ -2227,7 +2228,7 @@ def ticket_url_for(cfg):
 assert ticket_url_for({"dashboard": {"ticket_url": "https://t.example.test/i/"}}) == "https://t.example.test/i/"
 assert ticket_url_for({"dashboard": {"ticket_url": "https://t.example.test/i"}}) == "https://t.example.test/i/", "slash added"
 for bad in (None, {}, {"dashboard": {"ticket_url": "javascript:alert(1)/"}}, {"dashboard": {"ticket_url": "https://t.example.test/{key}"}},
-            {"dashboard": {"ticket_url": "https://t.example.test/i?x=1"}}, {"dashboard": {"ticket_url": 5}}, {"dashboard": 3}):
+            {"dashboard": {"ticket_url": "https://t.example.test/i?x=1"}}, {"dashboard": {"ticket_url": 5}}, {"dashboard": 3}, {"dashboard": {"ticket_url": "https:///"}}):
     assert ticket_url_for(bad) is None, bad
 os.environ.pop("AGENT_SKILLS_CONFIG")
 shutil.rmtree(cfg_file.parent)
