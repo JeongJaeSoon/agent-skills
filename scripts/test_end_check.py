@@ -16,12 +16,13 @@ def judge(mode="worker", outcome="succeeded", keep=False, ticket_done=False, **f
     return end_check.judge({**CLEAN, **facts}, mode, outcome, keep, ticket_done)
 
 
-# Remove: every criterion holds (build caches do not count as dirt).
-assert judge() == ("remove", ["the Remove row holds"]), judge()
-assert judge(mode="card")[0] == "remove" and judge(mode="user", keep=None)[0] == "remove"
+# Every criterion holds (build caches do not count as dirt): only a person's ending removes; a worker and a dispatched
+# card close their terminal and the cleaners take the card.
+assert judge(mode="user", keep=None) == ("remove", ["the Remove row holds"]), judge(mode="user", keep=None)
+assert judge()[0] == judge(mode="card")[0] == "close-terminal" and "janitor" in judge()[1][0], judge()
 # An orca.yaml that exists but cannot be read keeps the card before any rm: a direct rm would skip its archive hook.
 assert judge(mode="card", archive_hook=None) == ("keep", ["cannot read: orca.yaml (its archive hook)"])
-assert judge(mode="card", archive_hook=True)[0] == "remove"
+assert judge(mode="user", keep=None, archive_hook=True)[0] == "remove"
 # The keep rows, each alone.
 rows = {
     "failed outcome": dict(outcome="failed"),
@@ -49,7 +50,7 @@ assert judge(other_agents=["term_x"])[0] == "close-terminal"
 assert judge(main=True, open_prs=[{"number": 2}])[0] == "keep", "a hold wins over close-terminal"
 # --card: a linked ticket needs --ticket-done (its state is not read here).
 assert judge(mode="card", tickets=[{"id": "ABC-1"}])[0] == "keep"
-assert judge(mode="card", tickets=[{"id": "ABC-1"}], ticket_done=True)[0] == "remove"
+assert judge(mode="card", tickets=[{"id": "ABC-1"}], ticket_done=True)[0] == "close-terminal"
 assert judge(mode="card", tickets=None)[0] == "keep"
 # No mode (the user asked): a dirty tree alone asks the human; with a hold it keeps.
 assert judge(mode="user", keep=None, tracked=[" M a.py"])[0] == "ask"
@@ -252,6 +253,18 @@ rc, err, calls = apply("remove", status="completed")
 assert rc == 0 and ["worktree", "rm", "--worktree", "current", "--json"] in calls, calls
 rc, err, calls = apply("close-terminal", status="completed")
 assert rc == 0 and ["terminal", "close", "--terminal", "term_me", "--json"] in calls, calls
+# A done card's untracked cache goes first (the cleaners read it as dirty); a card that stays for another agent keeps its own.
+sys.path.insert(0, str(HERE.parent / "skills" / "reap-resources" / "scripts"))
+import reap  # noqa: E402
+saved_trash, trashed = reap.trash, []
+reap.trash = lambda *p: trashed.extend(p)
+with contextlib.redirect_stdout(io.StringIO()):
+    assert end_check.apply("close-terminal", dict(CLEAN_FACTS, caches=["x/__pycache__/"]), "card", {}, "term_me") == 0
+    assert trashed == ["/wt/card/x/__pycache__"], trashed
+    trashed.clear()
+    assert end_check.apply("close-terminal", dict(CLEAN_FACTS, caches=["x/__pycache__/"], other_agents=["term_x"]), "card", {}, "term_me") == 0
+    assert trashed == [], trashed
+reap.trash = saved_trash
 # A card has no Dispatch to wait for; keep applies nothing for it.
 rc, err, calls = apply("remove", mode="card")
 assert rc == 0 and calls == [["worktree", "rm", "--worktree", "current", "--json"]], calls

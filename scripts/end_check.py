@@ -7,9 +7,10 @@ Usage:
                         [--ticket-done] [--dispatch <id>] [--apply]
 
 Verdicts:
-  remove          the Remove row holds: `orca worktree rm --worktree current` (after moving build caches and
-                  regenerated skill copies to the trash)
-  close-terminal  the card stays (main worktree, or another agent works on it): only this terminal goes
+  remove          (no --worker or --card) the Remove row holds: `orca worktree rm --worktree current` (after moving
+                  build caches and regenerated skill copies to the trash)
+  close-terminal  only this terminal goes: a worker or a dispatched card that is done, whose worktree the cleaners
+                  take (end-session, "Who cleans up"), or the main worktree, or a card another agent works on
   keep           something holds the card: a failed outcome, an open PR, a question waiting, a dirty tree, a KEEP row,
                   or a fact this could not read. Not knowing is keeping: nothing is removed on a guess.
   ask             (no --worker or --card) tracked changes, unexpected untracked files or unpushed work: the human picks
@@ -302,6 +303,8 @@ def judge(f, mode, outcome=None, keep=None, ticket_done=False):
     if f["main"] or f["other_agents"]:
         why = "isMainWorktree" if f["main"] else "other agents on the card: " + ", ".join(map(str, f["other_agents"]))
         return "close-terminal", [why]
+    if mode != "user":
+        return "close-terminal", ["the Remove row holds: reap-hard and the janitor take the card"]
     return "remove", ["the Remove row holds"]
 
 
@@ -361,6 +364,18 @@ def archive_hook(path):
     return True
 
 
+def trash_caches(f):
+    if f["caches"]:
+        sys.path.insert(0, str(REPO / "skills" / "reap-resources" / "scripts"))
+        import reap
+        try:
+            reap.trash(*(str(pathlib.Path(f["path"] or ".") / p) for p in f["caches"]))
+        except (RuntimeError, OSError) as e:
+            print(f"[{ME}] moving build caches to the trash failed: {e}", file=sys.stderr)
+            return False
+    return True
+
+
 def apply(verdict, f, mode, opts, me):
     if mode == "worker" and verdict in ("remove", "close-terminal"):
         ok, why = dispatch_settled(opts.get("--dispatch"))
@@ -373,16 +388,13 @@ def apply(verdict, f, mode, opts, me):
             print(f"[{ME}] not applied: {f['path']}/orca.yaml could not be read, so its archive hook is unknown",
                   file=sys.stderr)
             return 3
-        if f["caches"]:
-            sys.path.insert(0, str(REPO / "skills" / "reap-resources" / "scripts"))
-            import reap
-            try:
-                reap.trash(*(str(pathlib.Path(f["path"] or ".") / p) for p in f["caches"]))
-            except (RuntimeError, OSError) as e:
-                print(f"[{ME}] moving build caches to the trash failed: {e}", file=sys.stderr)
-                return 4
+        if not trash_caches(f):
+            return 4
         cmd = [ORCA, "worktree", "rm", "--worktree", "current", *(["--run-hooks"] if hooks else []), "--json"]
     elif verdict == "close-terminal":
+        # An untracked cache reads as dirty to the cleaners, and the card would stay for good.
+        if not (f.get("main") or f.get("other_agents")) and not trash_caches(f):
+            return 4
         cmd = [ORCA, "terminal", "close", "--terminal", me, "--json"]
     elif verdict == "keep" and mode == "worker" and f.get("path"):
         log = STATE / "close-setup" / f"{pathlib.Path(f['path']).name}.log"
