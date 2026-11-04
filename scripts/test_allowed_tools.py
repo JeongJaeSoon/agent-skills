@@ -77,12 +77,18 @@ def family(pattern):
 
 
 def occurrences(name, body):
-    """Each place the body writes the command `name`, however its words are spaced, up to a backtick or the line's
-    end, spacing kept: the rule matches literally, so a respaced command must not read as the same one. A code span
-    holding only the name is prose naming the command, not a call."""
+    """[(command, is a call)] for each place the body writes the command `name`, however its words are spaced, up to
+    a backtick or the end of its indented lines, spacing kept: the rule matches literally, so a respaced command must
+    not read as the same one. A call starts a line or a code span, so `echo <name>` is not one. A code span holding
+    only the name is prose naming the command, and is skipped."""
     words = r"\s+".join(re.escape(w) for w in name.split())
-    found = re.finditer(rf"(?<![\w-]){words}(?![\w-])[^`\n]*", body)
-    return [m.group(0).rstrip() for m in found if not (m.group(0) == name and body[m.end():m.end() + 1] == "`")]
+    out = []
+    for m in re.finditer(rf"(?<![\w-]){words}(?![\w-])[^`\n]*(?:\n[ \t]+[^`\s][^`\n]*)*", body):
+        if m.group(0) == name and body[m.end():m.end() + 1] == "`":
+            continue
+        before = body[:m.start()].rsplit("\n", 1)[-1]
+        out.append((m.group(0).rstrip(), re.search(r"(^|`)\s*$", before) is not None))
+    return out
 
 
 def body_errors(granted, body):
@@ -90,9 +96,9 @@ def body_errors(granted, body):
     errors = []
     for p in granted:
         found = occurrences(family(p), body)
-        if not any(matches(p, c) for c in found):
+        if not any(call and matches(p, c) for c, call in found):
             errors.append(f"{p}: no command in the body matches it")
-        for c in found:
+        for c, _ in found:
             if c not in UNGRANTED and not any(matches(q, c) for q in granted):
                 errors.append(f"{c}: documented but outside every pattern")
     return errors
@@ -102,6 +108,8 @@ def skill_errors(name, text):
     value, errors = grant_value(text)
     body = split_frontmatter(text)[1]
     found = entries(value)
+    if " ".join(found) != value:
+        errors.append(f"{name}: allowed-tools holds text outside its entries: {value}")
     errors += [e for entry in found for e in pattern_errors(entry)]
     want = [f"Bash({p})" for p in GRANTS.get(name, [])]
     if found != want:
@@ -159,6 +167,12 @@ for drift in ("`orca thing go\tlater`", "`orca thing go\n  later`", "`orca  thin
               "~~~bash\norca thing go later\n~~~", "  ```bash\n  orca thing go later\n  ```", "    orca thing go later",
               "``orca thing go ` later``"):
     assert body_errors(["orca thing go now"], f"`orca thing go now`\n{drift}\n"), drift
+# A span's next line is part of its command, and a command named as another's argument is no call.
+assert body_errors(["orca thing go now"], "`orca thing go now\n  --all`")
+assert body_errors(["orca thing go now"], "```bash\necho orca thing go now\n```\n")
+assert not body_errors(["orca thing go now"], "```bash\n  orca thing go now\n```\n")
+assert any("outside its entries" in e for e in skill_errors("demo", fixture("Bash(orca thing go now) *")))
+assert any("outside its entries" in e for e in skill_errors("demo", fixture("Bash(orca thing go now) (*)")))
 
 # Every other YAML spelling of the key is refused, so a grant cannot sit where this file's parser misses it.
 GOOD = "Bash(orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json)"
