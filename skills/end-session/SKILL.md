@@ -106,10 +106,13 @@ closes it, so the worker closes itself as the last step of its task. The preambl
 further actions after worker_done" still holds: only the closing calls follow `worker_done`, in
 the same turn, and nothing runs after them.
 
-Before sending `worker_done`, read the state with §4's commands,
-`orca terminal list --worktree current --json`, and the `runId` in
-`orca orchestration check --terminal $ORCA_TERMINAL_HANDLE --json` (the fallback below needs
-it), then pick the row:
+Before sending `worker_done`, run `skills-sync end-check --worker --outcome <succeeded|failed>
+--dispatch <the preamble's --dispatch-id> --brief <brief path>` (`--keep` or `--no-keep` when the task
+has no brief file; without `--dispatch` it looks the Dispatch up and keeps the card when it cannot). It reads §4's
+commands, the card's terminals and the questions this terminal left unanswered, and prints the row
+below as `remove`, `close-terminal` or `keep` with its reasons; a fact it could not read is `keep`.
+Also read the `runId` in `orca orchestration check --terminal $ORCA_TERMINAL_HANDLE --json` (the
+fallback below needs it). Then pick the row:
 
 | State | The turn's last calls |
 |---|---|
@@ -119,7 +122,9 @@ it), then pick the row:
 
 - **The close waits for the send.** Calls in one message run together, so a `worker_done` and a
   `worktree rm` sent side by side remove the card even when a hook refused the send, and the
-  report never arrives. A send refused only on its body text is reworded in the same command;
+  report never arrives. The plugin's `hooks/lifecycle.py` warns on such an rm (`guard.exit_order`),
+  and `skills-sync end-check --worker --apply`, run after the `"ok": true`, removes only once Orca
+  shows the Dispatch settled. A send refused only on its body text is reworded in the same command;
   after any other refusal the card and this session stay, idle, for the orchestrator or lead above it to find.
 - **A refused `worktree rm`.** The host's permission layer (the auto-mode classifier, a hook),
   not Orca, often refuses `orca worktree rm` as irreversible. A refused act is not run again,
@@ -153,7 +158,10 @@ plan.
 Done means the brief's deliverable is complete and recorded where the brief says (its PRs
 merged, the note's `## 결과` written), and nothing waits on an answer: no question you asked,
 no open PR, unless the open PR is the deliverable itself (the row below that says so). Follow-up ideas are not a reason to stay: write them in the report and the note for
-the parent to decide. Then run §3 and pick by §4's table on real output:
+the parent to decide. Then run §3 and pick by §4's table on real output: `skills-sync end-check
+--card --brief <brief path>` (or `--keep`/`--no-keep`; `--ticket-done` once `use-tracker` shows the
+linked ticket completed) prints it. Run it as its own call before the `worktree rm`: the plugin's
+hook warns on a CLOSE card's rm with no earlier `remove` from it.
 
 | State | The turn's last calls |
 |---|---|
