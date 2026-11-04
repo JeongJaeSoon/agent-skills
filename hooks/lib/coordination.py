@@ -74,7 +74,7 @@ def check_model_flag(cmds, cfg):
         w = c.words
         if not (c.name == "orca" and w[1:3] in LAUNCHES and flag(w, "--agent") == "claude" and flag(w, "--terminal") is None):
             continue
-        have = flag(own_words(w), "--model")
+        have = model_value(w)
         if not have:
             out += finding(cfg, "orchestrate.model_flag",
                            f"This `orca {' '.join(w[1:3])}` names no model, so the session runs on the account's default. "
@@ -90,15 +90,27 @@ def check_model_flag(cmds, cfg):
     return out
 
 
-def own_words(words):
-    """The command's words without the text values of --spec and --prompt, which may quote a `--model` of their own."""
-    return [x for i, x in enumerate(words) if not (i and words[i - 1] in ("--spec", "--prompt"))]
+TEXT_FLAGS = ("--spec", "--prompt", "--display-name", "--name", "--comment")
+
+
+def model_value(words):
+    """The `--model` value of a launch, or None. The value of a text flag (--spec, ...) is skipped whatever it says;
+    any other `--flag value` pair consumes its value unless that looks like another flag."""
+    i = 0
+    while i < len(words):
+        w, nxt = words[i], words[i + 1] if i + 1 < len(words) else None
+        if w == "--model":
+            return "" if nxt is None or nxt.startswith("--") else nxt
+        if w.startswith("--model="):
+            return w[len("--model="):]
+        i += 2 if w in TEXT_FLAGS or (w.startswith("--") and "=" not in w and nxt and not nxt.startswith("--")) else 1
+    return None
 
 
 def expands(c, value):
     """True when `value` holds a character bash may expand ($ ` * ? [ {). The words arrive unquoted, so a quoted one
     cannot be told from a bare one without re-parsing the shell; the guard only warns, so it skips what it is unsure of."""
-    return re.search(r"[$`*?\[{]", value) is not None
+    return re.search(r"[$`*?\[{-]", value) is not None  # the last range: shell.py's stand-ins for `$` and `~`
 
 
 def warn_only(cfg, reason):

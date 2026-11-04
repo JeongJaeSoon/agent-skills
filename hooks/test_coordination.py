@@ -149,6 +149,12 @@ assert model_warning(f"{START} --model opus[1m]") == "", "an unquoted bracket ma
 CONFIG.write_text(json.dumps({"orchestrate": {"models": {"worker": "sonnet"}}}))
 assert model_warning(f"{START} --spec '--model=opus' --model sonnet") == "", "text in --spec is not the flag"
 assert "orch model worker" in model_warning(f"{START} --spec '--model=sonnet'"), "and does not stand in for it"
+for cmd in (f"{START} --spec '--prompt' --model sonnet", f"{START} --display-name '--model=opus' --spec fix --model sonnet",
+            f"{START} --json --model sonnet", f"{START} --model sonnet --spec '--model=opus'"):
+    assert model_warning(cmd) == "", "the real --model is the one read: " + cmd
+for cmd in (f"{START} --model '$MODEL'", f"{START} --model \\$MODEL"):
+    assert model_warning(cmd) == "", "a literal-looking $ is still not judged: " + cmd
+assert "differs" in model_warning(f"{START} --json --model opus")
 CONFIG.write_text(json.dumps({"orchestrate": {"models": {"worker": "claude-sonnet-4-6"}}}))
 # Any shell-active character skips the comparison, quoted or not: the words arrive unquoted, so the guard is unsure.
 for cmd in (f"{START} --model 'opus[1m]'", f"{START} --model=\"opus[1m]\"", f"{START} --model claude-sonnet-4-?>out",
