@@ -65,7 +65,9 @@ Usage: orch <command> <slug> [options]
                                      (compose-stack) so the janitor downs it once the card is done
   wait <slug> [--timeout-ms 540000] [--rounds 3]
                                      lead only: block until the Run inbox holds actionable
-                                     mail; acks heartbeat-only batches; never acks actionable ones
+                                     mail; acks heartbeat-only batches; never acks actionable ones.
+                                     With orchestrate.auto_wake_min it wakes a stopped worker once
+                                     (references/waking.md, "Automatic wake")
   inbox [--ack DELIVERY] [--wait] [--timeout-ms 3300000]
                                      no slug, a session without a program: ack the batch you handled,
                                      peek-wait (no --types, so Orca's typed notice stays out), then
@@ -325,6 +327,16 @@ class Program:
         row = {"ts": now(), "ev": ev, **{k: v for k, v in fields.items() if v is not None}}
         with self.locked(), self.ledger_path.open("a") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        return row
+
+    def append_once(self, ev, seen, **fields):
+        """append, unless a row already satisfies seen; None then. One lock over both, or two rounds both pass."""
+        row = {"ts": now(), "ev": ev, **{k: v for k, v in fields.items() if v is not None}}
+        with self.locked():
+            if any(seen(e) for e in self.events()):
+                return None
+            with self.ledger_path.open("a") as f:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
         return row
 
 
@@ -1361,9 +1373,10 @@ def stall_line(x):
     return f"  STALLED {x.get('ticket') or '?'} ({x['dispatch']}): " + STALL_TEXT[x["kind"]].format(**{"tool": "", "detail": "", **x})
 
 
-def new_stalls(pdir, renotify=dt.timedelta(minutes=30)):
+def new_stalls(pdir, renotify=dt.timedelta(minutes=30), skip=frozenset()):
     """STALLED lines `orch wait` has not shown in the last 30 minutes. A lead that only loops `orch wait`
-    never reads `orch status`, so a stall shown only there went unseen for hours."""
+    never reads `orch status`, so a stall shown only there went unseen for hours. skip: dispatches auto-wake holds,
+    so the lead is not told to wake them beside it."""
     st = dash_state(pdir)
     if st is None:
         return []
@@ -1373,7 +1386,7 @@ def new_stalls(pdir, renotify=dt.timedelta(minutes=30)):
     except (OSError, ValueError):
         seen = {}
     seen = seen if isinstance(seen, dict) else {}
-    stalls = (st.get("summary") or {}).get("stalls") or []
+    stalls = [x for x in (st.get("summary") or {}).get("stalls") or [] if x["dispatch"] not in skip]
     fresh = [x for x in stalls if f"{x['dispatch']}:{x['kind']}" not in seen
              or now - parse_ts(seen[f"{x['dispatch']}:{x['kind']}"]) >= renotify]
     keep = {f"{x['dispatch']}:{x['kind']}": seen.get(f"{x['dispatch']}:{x['kind']}") for x in stalls}
@@ -1703,7 +1716,8 @@ def next_move(cfg, events, tnow, *, tickets_done, live, human, order, leftover=0
 
 OWNED = {"approved": "land, gate", "gate_opened": "gate", "landed": "land, landed", "land_check": "land",
          "land_failed": "land", "ready": "land-check", "lane": "land", "yield": "land",
-         "lock_acquired": "land", "lock_released": "land", "dep": "dep", "config": "set"}
+         "lock_acquired": "land", "lock_released": "land", "dep": "dep", "config": "set",
+         "auto_wake_claimed": "wait", "auto_wake": "wait", "auto_wake_failed": "wait", "auto_wake_escalated": "wait"}
 
 
 # land_failed, main_red and failed verdicts are already in the ledger; a signal records what only the lead sees.
@@ -2996,10 +3010,25 @@ def cmd_wait(argv):
         print(line, flush=True)
     if watched := watch_lines(me, False):
         print("\n".join(watched), flush=True)
+    import autowake
+    auto_min = autowake.minutes()
+
+    def auto_round():
+        try:
+            r = autowake.sweep(p, auto_min) if auto_min else autowake.Round()
+        except (SystemExit, Exception) as e:  # the batch and its ack line matter more than the sweep
+            r = autowake.Round(lines=[f"auto-wake failed ({type(e).__name__}: {e}); STALLED lines stay the lead's"])
+        if r.lines:
+            print("\n".join(r.lines), flush=True)
+        return r
+
     for i in range(rounds):
         if wakes := wake_lines(me):  # before the wait: a busy inbox returns early and must not hide these
             print("\n".join(wakes), flush=True)
-        res = check(*box, "--wait", "--types", ",".join(sorted(ACTIONABLE)), "--timeout-ms", timeout)
+        auto = auto_round()  # here too: busy mail returns before the empty branch below and would starve a wake
+        if auto.stop:
+            return
+        res = check(*box, "--wait", "--types", ",".join(sorted(ACTIONABLE)), "--timeout-ms", auto.timeout_ms(timeout))
         did, msgs = batch(res)
         if not did and not msgs:
             # A typed wait never wakes for heartbeats, so they pile up in the FIFO; pull that batch.
@@ -3033,8 +3062,13 @@ def cmd_wait(argv):
             return
         if leftovers := new_leftovers(p.dir):
             print("\n".join(leftovers), flush=True)
-        if stalled := new_stalls(p.dir):
+        auto = auto_round()
+        if auto.stop:
+            return
+        if stalled := new_stalls(p.dir, skip=auto.skip):
             print("\n".join(stalled), flush=True)
+            if not auto_min:
+                print(autowake.OFF_LINE, flush=True)
             print("STALLED: a worker stopped with its ticket open and nothing will wake it; wake it now", flush=True)
             return
         if watched := watch_lines(me, False):  # each shows at most once per 30 minutes, so this ends no wait twice
@@ -3044,7 +3078,7 @@ def cmd_wait(argv):
     print_sweep(run_id, p.dir / "self-check.json")
     print_stuck(p, run_id)
     print_reviews(p)
-    moves = next_moves(run_workers(run_id))
+    moves = next_moves(run_workers(run_id), auto.skip)
     print("\n".join([f"EMPTY x{rounds}: " + (f"{len(moves)} live worker(s), each with its move:" if moves else "no live worker")]
                     + moves))
 
@@ -3138,9 +3172,9 @@ def cmd_inbox(argv):
         print("inbox empty" + (f" ({skipped} heartbeat(s) or refusals acked)" if skipped else "") + "; wait again: orch inbox --wait")
 
 
-def next_moves(workers):
+def next_moves(workers, auto=frozenset()):
     """The move for each live worker after a wait that stayed empty, read from Orca's projection here so the
-    lead does not list the workers and work it out again."""
+    lead does not list the workers and work it out again. auto: dispatches auto-wake holds."""
     out = []
     for w in workers:
         pj = w.get("projection") or {}
@@ -3152,6 +3186,8 @@ def next_moves(workers):
             out.append(f"  {d} {act['kind']}: {' '.join(act.get('argv') or [])}")
         elif not h or (pj.get("liveness") or {}).get("verdict") == "exited":
             out.append(f"  {d} no terminal: worker-stop or worker-abandon (recovery-and-cleanup.md)")
+        elif activity == "idle" and d in auto:
+            out.append(f"  {d} idle: auto-wake holds it (orch wait)")
         elif activity == "idle":  # the turn ended without worker_done; send alone does not wake it (SKILL.md, terminal send)
             out.append(f"  {d} idle: orchestration send --to dispatch:{d}, then skills-sync wake-target {h}")
         elif activity == "working":
