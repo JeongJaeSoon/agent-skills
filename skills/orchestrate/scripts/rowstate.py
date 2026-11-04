@@ -23,8 +23,8 @@ OWNER_TYPES = ("approval", "run_command", "login", "verify_failed", "question") 
 AGENT_ACTION = "에이전트 조치 필요"
 # What the rules read off an open PR; the collector (fleet.shape_pr) always writes them, so a missing one is unknown.
 PR_FIELDS = ("draft", "reviewers", "ci", "decision", "merge_state")
-# The lists below the tables, and the word a row's 다음 cell points at them with.
-POINTER = {"owner": "↓ 오너", "waiting": "↓ 대기", "held": "↓ 보류"}  # short: the 78-column table cuts at 8
+# The lists around the tables (the owner's above, the others below), and the word a row's 다음 cell points at them with.
+POINTER = {"owner": "↑ 오너", "waiting": "↓ 대기", "held": "↓ 보류"}  # short: the 78-column table cuts at 8
 # How long an ended pressure entry stays its row's ❔ and a line of the reboot check. The queue keeps it for 7 days, and
 # nothing closes one a session retried under other text (a new id) or dropped, so without a limit both outlive it.
 QUEUE_ENDED = ("gave_up", "failed")
@@ -505,6 +505,68 @@ def roll_up(st, kids):
         return {**st, "own": "done"}
     open_ = [st["status"]] + [k for k in kids if k not in ("done", None)]
     return {**st, "own": st["status"], "status": min(open_, key=lambda s: WORST.index(s) if s in WORST else len(WORST))}
+
+
+# A table's and the stage table's order: what waits on the owner or on a fill-in first, what is over last. WORST above
+# answers another question (which sub-task a head's icon shows), so the two differ on ⏳.
+ROW_ORDER = ("owner", "blocked", "check", "moving", "waiting", "held", "done")
+ATTENTION = ("owner", "blocked", "check")
+
+
+def rank(status):
+    return ROW_ORDER.index(status) if status in ROW_ORDER else len(ROW_ORDER)
+
+
+def order_rows(lines):
+    """The display lines of each table by status, the same status keeping its order. A head and its └ rows move as one
+    block, at the rank of the block's best row, so an open sub-task is not buried under its ✅ or nameless head."""
+    tables = {}
+    for l in lines:
+        blocks = tables.setdefault(l["sec"], [])
+        if l["depth"] and blocks:
+            blocks[-1].append(l)
+        else:
+            blocks.append([l])
+    return [x for blocks in tables.values()
+            for head, *subs in sorted(blocks, key=lambda b: min(rank(l["status"]) for l in b))
+            for x in (head, *sorted(subs, key=lambda l: rank(l["status"])))]
+
+
+def order_tables(tables):
+    """{table name: its rows' statuses} as names in report order: a table with a row in ATTENTION first, then the most
+    🔄 rows, then the name."""
+    return sorted(tables, key=lambda n: (not set(tables[n]) & set(ATTENTION), -list(tables[n]).count("moving"), n.casefold()))
+
+
+def repo_names(names):
+    """{spelling: the one name its table goes by}: GitHub's owner/name is case-insensitive, so its spellings are one
+    repository. A bare name stays apart even when it is another's tail: it is a project or directory name (fleet's
+    fallback with no GitHub remote), and `app` may belong to any owner."""
+    first = {}
+    return {n: first.setdefault(n.casefold(), n) if "/" in n else n for n in names if n}
+
+
+def order_tree(rows):
+    """The stage rows (each with its children right after it) with siblings by status and each row's children still
+    under it. A row's rank is its `now`; with none, a finished row is ✅ and any other goes after the ⏸️ rows, since
+    no status says it is moving. A group counts only by the rows under it."""
+    ids, kids = {r["id"] for r in rows}, {}
+    for r in rows:
+        kids.setdefault(r.get("parent") if r.get("parent") in ids else None, []).append(r)
+
+    def own(r):
+        if r.get("group"):
+            return len(ROW_ORDER) + 1
+        return rank(r["now"]) if r.get("now") else rank("done") if r.get("done_at") else rank("held") + .5
+
+    def walk(parent):
+        blocks = []
+        for r in kids.get(parent, ()):
+            sub, low = walk(r["id"])
+            blocks.append((min(low, own(r)), [r, *sub]))
+        blocks.sort(key=lambda b: b[0])
+        return [x for _, b in blocks for x in b], min((low for low, _ in blocks), default=len(ROW_ORDER) + 1)
+    return walk(None)[0]
 
 
 def ref_list(st):
