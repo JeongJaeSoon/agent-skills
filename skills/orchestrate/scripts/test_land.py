@@ -430,6 +430,11 @@ code, out = prog(env, "land-check", "t", "--pr", "71", "--main-fix")  # the diag
 assert code == 0 and "READY" in out and "warning: #72 lands after #71" in out, out
 code, out = prog(env, "land", "t", "--pr", "71", "--class", "main-fix")  # a red main's repair is not held back
 assert code == 0 and "warning: #72 lands after #71" in out, out
+# The open PR listing unread: land-check stays a diagnosis, one warning and no judgement of the edge.
+d, env = dependent("deny")
+st = json.loads((d / "state.json").read_text()); st["flaky"] = {"pr list": 1}; (d / "state.json").write_text(json.dumps(st))
+code, out = prog(env, "land-check", "t", "--pr", "71")
+assert code == 0 and "READY" in out and out.count("could not be read") == 1 and "gh stack link" not in out, out
 d, env = dependent(False)
 code, out = prog(env, "land", "t", "--pr", "71")
 assert code == 0 and "gh stack link" not in out, out

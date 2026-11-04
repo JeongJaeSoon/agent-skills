@@ -2190,11 +2190,16 @@ def cmd_land_check(argv):
             problems.append("human-gate: gate open in Orca, waiting for the user")
         else:
             problems.append(f"human-gate: open the gate first (orch gate {p.slug} --pr {pr})")
-    rows, stacks = open_rows(repo), read_stacks(repo)
+    try:
+        rows = open_rows(repo)
+    except SystemExit:  # this listing serves only the check below, which passes when it cannot read
+        rows = None
+    stacks = read_stacks(repo)
     members = next((m for m in (stacks or {}).values() if pr in m), [])
-    gaps, flipped = ([], []) if stacks is None else stack_gaps(events, rows, stacks, orca_deps(p.cfg["run"]), pr)
+    unread = stacks is None or rows is None
+    gaps, flipped = ([], []) if unread else stack_gaps(events, rows, stacks, orca_deps(p.cfg["run"]), pr)
     level = stack_level()
-    if stacks is None:
+    if unread:
         print("warning: the repository's stacks could not be read; dependent PRs are not checked")
     problems += [FLIPPED.format(low=low, up=up) for low, up in flipped]
     if gaps and level == "deny" and "--main-fix" not in argv:
