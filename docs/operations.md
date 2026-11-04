@@ -84,7 +84,7 @@ skills-sync setup disable janitor        # 하나 끄기. 어느 것이든 apply
 
 **4. auto mode가 막았을 때: 「auto mode 가 막았어」, 「이거 허용되게 규칙 추가해줘」 → `tune-automode`**
 
-에이전트는 거부된 행동을 다른 형태로 다시 하지 않는다. 대신 그 행동 부류만 덮는 가장 작은 autoMode 규칙 초안과 적용 스크립트를 만들고, 사람이 diff를 보고 `! python3 -I <경로> --apply <spec 해시>`로 적용한다. 에이전트는 `settings.json`을 고치지 않는다.
+에이전트는 거부된 행동을 우회하지 않는다. 대신 그 행동 부류만 덮는 가장 작은 autoMode 규칙 초안과 적용 스크립트를 만들고, 사람이 diff를 보고 `! python3 -I <경로> --apply <spec 해시>`로 적용한다. 에이전트는 `settings.json`을 고치지 않는다.
 
 **5. 나를 기다리는 PR: 「리뷰 요청 온 PR 정리해줘」, 「내 PR 리뷰 리마인드」 → `watch-prs`**
 
@@ -98,9 +98,9 @@ skills-sync setup disable janitor        # 하나 끄기. 어느 것이든 apply
 - **되돌릴 수 없는 행동과 사람 몫의 행동.** 파괴적 migration, 공유 브랜치 force push, 바깥으로 보내기, 저장소·브랜치 보호 변경, 프로덕션 배포, 리뷰 규칙이 사람에게 요구하는 승인, 다른 사람의 티켓 앞에서는 멈추고 묻는다(`skills/orchestrate/SKILL.md` "Merge policy"). 권장 autoMode 묶음은 기본 브랜치 force push와 요청받지 않은 프로덕션 단계를 막는다(`scripts/recommended-settings.json`).
 - **자격 증명.** `gh auth login`은 사람이 한다. 브라우저 인증 칸의 비밀값은 `secure-fill`이 소유자의 Touch ID 승인 뒤 Keychain에서 페이지로 바로 넣고, 에이전트는 값을 보지 않는다.
 
-### 거부된 행동은 다시 하지 않는다
+### 거부된 행동의 재시도는 한 번이다
 
-권한 창, auto mode 분류기, hook, 사람이 거부한 행동은 어떤 형태로도 다시 하지 않는다. 명령을 바꿔 쓰기, 스크립트로 감싸기, 다른 세션·워커·서브에이전트에게 시키기가 모두 우회다. 거부된 세션은 행동, 목적, 거부 종류, 정확한 명령을 보고한다. 계속 허용하려면 `tune-automode`가 규칙 초안을 만들고 사람이 적용한다(`skills/orchestrate/SKILL.md` "Refused acts", `skills/tune-automode/SKILL.md`).
+권한 창, auto mode 분류기, hook, 사람이 거부한 행동은 다시 하지 않는다. 예외는 한 번뿐이고, 거부된 세션이 같은 형태로 한다. 사람이 그 세션 채팅에서 허락했거나 규칙을 넣었을 때, 또는 분류기나 hook이 말한 사유에 맞는 근거를 보강했을 때만이고, 보고에 `재시도 1회: <보강한 것>`을 적는다. 다시 거부되면 멈춘다. 명령을 바꿔 쓰기, 스크립트로 감싸기, 다른 세션·워커·서브에이전트에게 시키기가 모두 우회다. 거부된 세션은 행동, 목적, 거부 종류, 정확한 명령을 보고한다. 계속 허용하려면 `tune-automode`가 규칙 초안을 만들고 사람이 적용한다(`skills/orchestrate/SKILL.md` "Refused acts", `skills/tune-automode/SKILL.md`).
 
 ### hook
 
@@ -109,6 +109,7 @@ skills-sync setup disable janitor        # 하나 끄기. 어느 것이든 apply
 | `guard.py` | Bash·Skill·Edit·Write·MultiEdit·NotebookEdit·AskUserQuestion 호출 전 | 이 플러그인 스킬과 `orch`(`heavy`·`set`·`init`·`backfill` 제외)·`orca orchestration`(reset·worker-abandon·gate-resolve 제외) 명령을 허용하고, 다른 터미널의 Orca 메일함 읽기와 foreground sleep 폴링 루프를 거부한다. `setup.py --actions-only`는 권한 창. 그보다 먼저 패턴 kill·prune·`down -v`·강제 worktree 삭제·사용자 설정 쓰기 같은 위험 명령과, 역할 세션의 AskUserQuestion·foreground 대기·`/dev/null` 전송을 거부한다. 규칙마다 `agent-skills.json` 키로 끄거나 warn으로 낮춘다. 나머지는 평소 권한 흐름을 탄다([권한 결정](skills.md#권한-결정), [위험 명령과 역할 세션 규칙](skills.md#위험-명령과-역할-세션-규칙)) |
 | `delegate_gate.py` | 모든 도구 호출 전 | 오케스트레이터 세션(`--agent agent-skills:orchestrator` 또는 `ROLE: orchestrator`)의 본 대화가 조정 밖의 도구를 부르면 `[gate:delegate]` 사유로 거부하고 서브에이전트·카드·`orca orchestration send`로 넘기라고 알린다. 허용: `orch`(`heavy` 제외)·`skills-sync`·`orca` 조정 명령, `gh pr merge`·`ready`, `gh … --json` 읽기, Agent·SendMessage·TaskStop, 상태·출력 Read, 브리프·메모리 Write. 서브에이전트 호출(`agent_id` 있음)과 다른 세션은 그대로 둔다. `~/.claude/agent-skills.json`의 `orchestrate.delegate_gate`를 `false`로 하면 끈다 |
 | `pressure_gate.py` | Bash 호출 전·후 | `orch heavy`·`docker compose up`·`orca worktree create`를 PC 사용량이 위험이거나, 경고인데 최근 15분 안에 정리 회차가 없으면 거부하고 정리·대기 방법을 알린다. 위험으로 거부한 명령은 대기열과 대시보드에 남기고, 같은 세션의 재시도 결과를 기록한다. 전체 테스트·E2E·headless Chrome은 `orch heavy` 밖이면 감싼 명령을 알려 주며 거부하고, 새 카드는 진행 중 에이전트 턴이 상한(`reap.pressure.active_turns_per_cpu`)에 닿으면 거부한다. `AGENT_SKILLS_PRESSURE_GATE=0`으로 끈다 |
+| `self_land_gate.py` | Bash 호출 전 | 머지를 맡은 프로그램 카드가 자기 PR이 열린 채 `worker_done`이나 `orca worktree rm`을 부르면 알린다. `orchestrate.self_land`를 `deny`로 올리면 막는다. 읽지 못한 것은 통과시키고 한 줄로 알린다 |
 | `prose_check.py` | PR·커밋·Linear·Jira 저장 전 | 본문의 write-plainly 금지 패턴을 알린다. 막지 않는다 |
 | `stack_gate.py` | `gh pr create` 전 | 브리프의 `Lands after`나 브랜치 이력으로 의존하는 열린 PR이 있는데 base가 그 위가 아니면 알린다. `orchestrate.stack_dependent: deny`면 막는다 |
 | `claim_check.py` | 멈출 때(Stop, SubagentStop) | 코드를 고치고 아무것도 돌리지 않은 채 "고쳤다"고 하면 한 번 막는다. `AGENT_SKILLS_CLAIM_CHECK=0`으로 끈다 |

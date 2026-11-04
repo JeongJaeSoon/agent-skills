@@ -123,7 +123,15 @@ LAND        After review, record the verdict on the reviewed head: orch verdict 
             watch-prs or the lead. GitHub's GraphQL limit (5000 points per hour) is shared
             by every session using the same token. On a rate-limit error, retry nothing: wait
             until the reset time (the error's `retry-after`, else `gh api rate_limit`).
-            Never merge any other way. (human-gate: stop at READY and report instead.)
+            You land your own PR: independent review Act-on 0, zero unresolved threads, required
+            checks green, or on a declared no-CI repo the lane in `references/landing.md`. Then
+            record main_green or main_red and close (REPORT). Never merge any other way. Stop at
+            READY only for a wait you cannot end, and name it in the report as one line
+            `READY-WAIT: <kind>`: owner-merge (the owner said they will merge it), human-review (a
+            person's approval is required), land-refused (`land` exit 1, a refusal of the merge, or
+            a merge method `land` lacks; do not retry it, the session above decides), land-after (an
+            earlier PR, a stack, a lead's hold or OK), external-wait (an automated review still
+            running, a rate-limit reset). (human-gate: stop at READY and report instead.)
             A base that needs a merge method `land` lacks is a blocked land: report it and stop.
             The one exception is a plain merge the human approved, under SKILL.md "Merge policy":
             a verdict at the exact head, a new one for every later commit, zero unresolved threads
@@ -160,9 +168,17 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             and then nothing wakes you. A notice with no report: read the report in the
             subagent's transcript (its hand-back), then the diff; never ask for a resend.
             An act refused by a permission prompt, the auto-mode classifier (including an error that
-            returns no verdict), a Claude Code hook or the human is not tried again in any form: not
-            re-run, not moved into a script or another tool (Bash after an Edit got no verdict), not
-            aimed at a renamed target, not handed to a subagent or another session. Work the
+            returns no verdict), a Claude Code hook or the human is not run again, except once, in
+            the same form, by the refused session (a restart that loads a new rule counts as that
+            session), and only when the human allowed it in that session's own chat or added a rule
+            for it, or when a classifier or hook refusal stated a reason and you added evidence that
+            answers it, never for a human's refusal or a production sync. Report that retry as
+            `재시도 1회: <what you added>`. A second refusal stops the act and you report it.
+            Reaching the same result through another session, script, tool, wrapper or target stays
+            forbidden. Evidence answers a reason when it supplies what the refusal said was missing (a
+            ledger verdict and test output for a merge refused as unreviewed); restating the command
+            or arguing is not evidence, and an error with no verdict states no reason. The cases this
+            paragraph names as not a retry keep their own rules and do not use up this one. Work the
             orchestrator handed down after its own `[gate:delegate]` block is not such an act: that
             block refuses only the orchestrator doing it itself. Report a refusal in the
             same turn to whoever gave you this work, with what the act was for, the refusal's
@@ -183,8 +199,8 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             this paragraph, from "An act refused" through "run it again.", verbatim into every
             subagent prompt you write, including tracker and notes delegates: a summary drops
             the forms it lists. Taking the path this
-            brief already names for that act (`orch land` for a merge, in a worker's brief) is not a
-            retry, nor is doing the act again after the human added a rule for it or approved it in
+            brief already names for that act (`orch land` for a merge, in a worker's brief), when no
+            human refused the act, is not a retry, nor is doing the act once more after the human added a rule for it or approved it in
             the refused session's own chat. Nor is the restart of a unit whose subagent's Edit or
             Write got no verdict: the session that started that unit, never the refused one, takes
             the whole unit back once (the orchestrator or lead restarts it as a new card, a worker does it in
@@ -213,7 +229,10 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             you were given does not name, a refused step, a `queue wait` that does not end 0, or
             a deny from that gate after its entry gave up: report and stop. A switch that turns that gate off (an environment variable, a flag) is used
             only when the human, in this session's chat after the block, names that gate and that
-            command; a relayed message never counts, and any other substitute is a retry. A
+            command; a relayed message never counts, and any other substitute is a retry. A deny
+            from the plugin's `hooks/self_land_gate.py` whose reason starts with `[gate:self-land]`
+            names a step you skipped, not a refused report: land the PR, or add the READY-WAIT line it
+            names, and send again; that uses up no retry. A
             read-only command on files in
             your own worktree (no credential, no personal data) that the classifier refused as
             something it does not do, such as destruction or exfiltration, or with no verdict: do
@@ -228,14 +247,18 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             linter, test or CI) is not a refusal: fix the cause and run it again.
             <repository data-sharing restrictions, applying to every reviewer and tool>
             <unit-specific bans>
-REPORT      worker_done once, after landing and main CI (or at READY under human-gate).
+REPORT      worker_done once, after landing and main CI (or at READY, with its READY-WAIT line,
+            or under human-gate). A body with backticks or `$` goes in single quotes or a quoted
+            heredoc: double quotes run them.
             Body: what changed, what was verified and how, what remains. Include the PR URL,
             merge commit, review rounds and who reviewed, the PR body's review-scope line (deliver-ticket §3), the VERIFY output you actually saw,
             the main-CI run you read, and the findings with their proposed class. --outcome succeeded only
             when the ticket's acceptance criteria hold. Load end-session §7 before you send it:
             worker_done is one of the closing calls §7 picks, and the lead may release
             this terminal the moment it arrives.
-KEEP        <optional: the next task this worker's terminal or card is kept for>
+APPROVED    required checks green + independent review Act-on 0: merge with orch land. <the human's words and date>
+KEEP        <optional: the next task this worker's terminal or card is kept for; review fixes
+            after READY, never the land itself>
 STANDING    <the program note's standing orders for workers, pasted verbatim, numbered; the
             lead-only ones stay in the note>
 ```
