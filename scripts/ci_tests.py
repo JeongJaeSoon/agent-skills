@@ -3,8 +3,8 @@
 
 Usage: python3 scripts/ci_tests.py
 
-Discovery, not a list: a new test_*.py runs here without touching CI. A file that cannot run on Linux goes into
-EXCLUDED with its reason. CONTRIBUTING.md's loop stays the full suite, and it still runs these on a Mac.
+Discovery, not a list: a new test_*.py runs here without touching CI. A file that cannot run on a hosted Linux runner
+goes into EXCLUDED with its reason. CONTRIBUTING.md's loop stays the full suite, and it still runs these on a Mac.
 """
 import os, pathlib, subprocess, sys, tempfile, time
 
@@ -16,6 +16,7 @@ EXCLUDED = {
     "hooks/test_pressure_gate.py": "macOS only: the memory reading comes from kern.memorystatus_level",
     "scripts/pstack-sync-test.sh": "macOS only: BSD `sed -i ''`",
     "scripts/test_share_server.py": "macOS only: sandbox-exec and launchd",
+    "skills/reap-resources/scripts/test_reap.py": "hosted runner: a process of this user has an unreadable /proc cwd",
 }
 
 

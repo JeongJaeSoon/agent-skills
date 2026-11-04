@@ -24,10 +24,10 @@ To try your changes in a session, start Claude Code with the checkout loaded as 
 
 Every pull request and every push to `main` runs [CI](.github/workflows/ci.yml): `plugin-validate`, `registry-check`, `tests` and `forbidden-terms`. The job names are stable because required status checks match on them, so renaming a job means changing the ruleset with it.
 
-- `tests` runs `python3 scripts/ci_tests.py`. It finds every `test_*.py`, gives each an empty `HOME`, and skips the macOS-only files in its `EXCLUDED` table, printing why. It needs a full clone, not a shallow one.
+- `tests` runs `python3 scripts/ci_tests.py`. It finds every `test_*.py`, gives each an empty `HOME`, and skips the files in its `EXCLUDED` table, printing why. It needs a full clone, not a shallow one.
 - `forbidden-terms` scans the tree, the commit messages and the pull request's title and body for a list kept outside the repository, in the `FORBIDDEN_TERMS` Actions secret. Its log shows counts only. Fork pull requests get no secret, so the scan warns and passes there.
 
-CI does not replace the local suite, which also runs the macOS-only files. Run this from the repository root before you open a pull request:
+CI does not replace the local suite, which also runs those files. Run this from the repository root before you open a pull request:
 
 ```bash
 fail=0
