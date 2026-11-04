@@ -135,30 +135,25 @@ def check_handle(handle, call, root):
 
 
 def card_agent(call, worktree_id):
-    """The handle of an agent terminal open in the worktree, else None. Unknown (no id, Orca unsure) reads as none."""
+    """The handle of an agent terminal open in the worktree, else None. Raises OrcaError when the list cannot be read:
+    an unreadable list is not an empty one."""
     if not worktree_id:
         return None
-    try:
-        terms = call("terminal", "list", "--worktree", f"id:{worktree_id}").get("terminals") or []
-    except OrcaError:
-        return None
+    terms = call("terminal", "list", "--worktree", f"id:{worktree_id}").get("terminals") or []
     return next((t.get("handle") for t in terms if t.get("agentIdentity") and t.get("handle")), None)
 
 
 def has_dispatch(call, handle):
-    """Whether a Dispatch of any Run is on the terminal. worker-list is scoped to this terminal's Run, so the Runs
-    (run-list's first page) are read one by one: the resume may have been made from another Run. A list that cannot
-    be read reads as none; Orca refuses a second Dispatch on a busy terminal."""
-    try:
-        if orca_settings.terminal_dispatch(call, handle):
-            return True
-        for r in orca_settings.run_list(call, error=OrcaError):
+    """Whether a Dispatch of any Run is on the terminal. worker-list is scoped to this terminal's Run, so every page
+    of run-list is read, Run by Run: the resume may have been made from another Run. OrcaError when a read fails."""
+    if orca_settings.terminal_dispatch(call, handle):
+        return True
+    for res, _ in orca_settings.pages(call, "run-list", error=OrcaError):
+        for r in res.get("runs") or []:
             for w in orca_settings.all_workers(call, "--run", r.get("id"), "--limit", "100", error=OrcaError):
                 if orca_settings.worker_terminal(w) == handle and w.get("dispatchStatus") not in RESTART_LOST \
                         and w.get("terminalState") != "released":
                     return True
-    except OrcaError:
-        pass
     return False
 
 
@@ -322,8 +317,15 @@ def check_workers(run, call, lead_dispatch=None, me=None):
                               f"{parent.get('dispatchId')}: send that lead this line, and it restarts its own worker"))
             continue
         if abandoned:  # Orca settled it when its terminal went: there is nothing to stop or retry, only a session to resume
-            if agent := card_agent(call, wt):  # a session runs there: resumed, maybe from another Run
-                if has_dispatch(call, agent):
+            try:
+                agent = card_agent(call, wt)
+                resumed = bool(agent) and has_dispatch(call, agent)
+            except (OrcaError, RuntimeError, SystemExit) as e:  # unreadable is not "nothing there": no command from a guess
+                out.append(("info", f"worker {d} (task {task}) is abandoned, but Orca could not say whether its worktree "
+                                    f"already runs a resumed session ({e}): run this check again"))
+                continue
+            if agent:  # a session runs there: resumed, maybe from another Run
+                if resumed:
                     out.append(("info", f"worker {d} (task {task}) is abandoned here, but its worktree has a live agent "
                                         f"terminal {agent} with a Dispatch: it was resumed (perhaps on another Run)"))
                 else:  # stopped between `terminal create` and `worker-start`: the session has no mailbox

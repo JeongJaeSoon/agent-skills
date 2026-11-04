@@ -32,7 +32,7 @@ class Orca:
 
     def __init__(self, live=(ME,), run=None, workers=(), title="orchestrator", here=(), concise=False, runs=()):
         self.live, self.run, self.workers, self.title, self.here = set(live), run, list(workers), title, list(here)
-        self.runs = list(runs)
+        self.runs, self.runs_fail, self.list_fails = list(runs), False, False
         self.concise = concise
 
     def __call__(self, *argv):
@@ -41,12 +41,18 @@ class Orca:
             if h not in self.live:
                 raise reboot.OrcaError("terminal_handle_stale")
             return {"terminal": {"handle": h, "title": self.title, "worktreePath": ROOT}}
+        if argv[:2] == ("terminal", "list") and self.list_fails:
+            raise reboot.OrcaError("no_answer")
         if argv[:2] == ("terminal", "list"):
             return {"terminals": self.here}
         if argv[:2] == ("orchestration", "run-current"):
             return {"runId": self.run} if self.concise else {"run": {"id": self.run} if self.run else None}
         if argv[:2] == ("orchestration", "run-list"):
-            return {"runs": [{"id": r} for r in self.runs]}
+            if self.runs_fail:
+                raise reboot.OrcaError("no_answer")
+            first = "--cursor" not in argv  # two runs a page, so a third Run is on page two
+            chunk = self.runs[:2] if first else self.runs[2:]
+            return {"runs": [{"id": r} for r in chunk], "page": {"hasMore": first and len(self.runs) > 2, "nextCursor": "c2"}}
         if argv[:2] == ("orchestration", "worker-list"):
             state = argv[argv.index("--terminal-state") + 1] if "--terminal-state" in argv else None
             run = argv[argv.index("--run") + 1] if "--run" in argv else self.run  # unscoped = this terminal's Run
@@ -282,6 +288,22 @@ class Restarted(unittest.TestCase):
         lines = run("lead", "acme", "run_1", orca=orca, procs=wait_proc(200, "orch wait acme"))
         self.assertEqual(does(lines), [])
         self.assertTrue([t for k, t in lines if k == "info" and "d1" in t and "live agent terminal" in t])
+
+    def test_the_dispatch_on_a_later_page_of_runs_is_found(self):
+        live = [{"handle": "term_new", "agentIdentity": "claude"}]
+        other_run = self.row("d_new", "dispatched", "active", handle="term_new", runId="run_c")
+        other_run["resource"] = {"worktreeId": "repo::/elsewhere"}
+        orca = Orca(run="run_1", workers=[self.row("d1", "abandoned"), other_run], here=live, runs=("run_1", "run_b", "run_c"))
+        self.assertEqual(does(run("lead", "acme", "run_1", orca=orca, procs=wait_proc(200, "orch wait acme"))), [])
+
+    def test_an_unreadable_terminal_or_run_list_issues_no_recovery_command(self):
+        live = [{"handle": "term_new", "agentIdentity": "claude"}]
+        for attr in ("list_fails", "runs_fail"):
+            orca = Orca(run="run_1", workers=[self.row("d1", "abandoned")], here=live)
+            setattr(orca, attr, True)
+            lines = run("lead", "acme", "run_1", orca=orca, procs=wait_proc(200, "orch wait acme"))
+            self.assertEqual(does(lines), [], attr)
+            self.assertTrue([t for k, t in lines if k == "info" and "could not" in t and "d1" in t], attr)
 
     def test_a_resumed_session_with_no_dispatch_yet_is_told_to_get_one(self):
         # The run stopped between the terminal and `worker-start --terminal`: the session runs but has no mailbox.
