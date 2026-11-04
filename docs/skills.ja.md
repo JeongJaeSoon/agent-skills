@@ -1,4 +1,4 @@
-<!-- translated-from: d63ffc0c65c2c03eeb13da1c8b43c895bea596c9 -->
+<!-- translated-from: 1f68ea30042bf8e7162e02e8e3de6bd7bc8bb50d -->
 # スキルカタログ
 
 `agent-skills` プラグインに入っているスキル41個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック14個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
@@ -603,7 +603,7 @@ hook 自身の判定が例外を出したら、その呼び出しは通し、警
 `hooks/decision_relay.py`（Bash の PreToolUse）。モデルを呼びません。オーケストレーターかリードの本会話が `orca terminal send`、`orca orchestration reply`、`orca orchestration send`（`worker_done` を除く）で送る本文を見ます。本文はリテラルの `--text`・`--body` か、`--body "$(cat /絶対パス)"` のファイルです。
 
 - `오너` を含む行かその次の行に引用（`"…"`、`“…”`、`「…」`、`>` の行）があり、その引用が記録されていないと警告します。ブロックはしません。
-- 記録済みと見なすのは、本文の `오너(dN` が done の決定を指し、保存された答え全体が引用と一致するとき（空白の差は無視）、または今のターンの先行する呼び出しで `orch decide answer`・`orch decide done` がエラーなく終わったときです。今の呼び出しは証拠になりません。
+- 記録済みと見なすのは、その行の `오너(dN` が done の決定を指し、保存された答え全体が引用と一致するとき（空白の差は無視）、または今のターンの先行する呼び出しが `orch decide answer`・`orch decide done` だけを実行して記録行を出力したときです。今の呼び出しは証拠になりません。
 - レベル `guard.decision_relay`: `warn`（既定）、`off`。引用符の中で複数行にわたる引用は検出しません。エラーは通過させ、`guard-errors.jsonl` に残します。
 
 ### 権限ダイアログの記録

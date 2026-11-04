@@ -1,4 +1,4 @@
-<!-- translated-from: d63ffc0c65c2c03eeb13da1c8b43c895bea596c9 -->
+<!-- translated-from: 1f68ea30042bf8e7162e02e8e3de6bd7bc8bb50d -->
 # Skill catalog
 
 This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 14 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
@@ -601,7 +601,7 @@ Supervision (the preamble), CLOSE and KEEP are attributes, not roles. Orca's exe
 `hooks/decision_relay.py` (PreToolUse on Bash). It calls no model. It reads what an orchestrator's or lead's main conversation sends with `orca terminal send`, `orca orchestration reply` or `orca orchestration send` (except `worker_done`). The body is a literal `--text` or `--body`, or the file of `--body "$(cat /absolute/path)"`.
 
 - It warns when a line with `오너`, or the line after it, holds a quote (`"…"`, `“…”`, `「…」`, `>` lines) that is not recorded. It never blocks.
-- A quote counts as recorded when `오너(dN` in the body names a done decision whose whole stored answer equals the quote, spaces aside, or when an earlier call of this turn ran `orch decide answer` or `orch decide done` without an error. The current call is no evidence.
+- A quote counts as recorded when `오너(dN` on that line names a done decision whose whole stored answer equals the quote, spaces aside, or when an earlier call of this turn ran only `orch decide answer` or `orch decide done` and printed its record line. The current call is no evidence.
 - Level `guard.decision_relay`: `warn` (default), `off`. It does not see a quotation that spans lines inside quotation marks. An error lets the call through and is logged to `guard-errors.jsonl`.
 
 
