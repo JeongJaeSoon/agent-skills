@@ -23,12 +23,6 @@ if a[:2] == ["worktree", "ps"]:
 if a[:2] == ["terminal", "list"]:
     print(json.dumps({"ok": True, "result": {"terminals": [{"handle": "term_old", "agentIdentity": "claude"}]}})); sys.exit(0)
 if a[:2] == ["terminal", "wait"]:
-    if mode == "wait-timeout":  # Orca 1.4: exit 1, ok false, code timeout
-        print(json.dumps({"ok": False, "error": {"code": "timeout", "message": "timeout"}})); sys.exit(1)
-    print(json.dumps({"ok": True, "result": {}})); sys.exit(0)
-if a[:2] == ["terminal", "send"]:
-    if mode == "send-fails":
-        print("terminal_handle_stale", file=sys.stderr); sys.exit(1)
     print(json.dumps({"ok": True, "result": {}})); sys.exit(0)
 if a[:2] == ["terminal", "show"] and a[a.index("--terminal") + 1] == "term_new":
     print(json.dumps({"ok": True, "result": {"terminal": {"title": "✳ Claude"}}})); sys.exit(0)
@@ -718,31 +712,48 @@ assert not any(c["argv"][:2] in (["terminal", "wait"], ["terminal", "send"]) for
     ("card itself neither waits nor types: the helper is detached", calls)
 
 LINE = "/goal ship the helper and open its PR 브리프: /b.md"
+import sync  # noqa: E402  the helper types through sync.try_send; its answers are canned here
+REAL_TRY_SEND, REAL_SLEEP, SENDS, SLEPT = sync.try_send, card.time.sleep, [], []
+card.time.sleep = lambda s: SLEPT.append(s)
 
 
-def goal_calls(calls):
-    return [c["argv"] for c in calls if c["argv"][0] == "terminal"]
-
-
-def run_helper(mode, timeout_s=7):
-    os.environ["FAKE_CARD_MODE"] = mode
-    CALLS.write_text("")
-    out, err = io.StringIO(), io.StringIO()
-    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+def run_helper(answers, timeout_s=3600):
+    """goal_after_idle with try_send answering from `answers` in turn: (ok, reason) pairs."""
+    queue = list(answers)
+    SENDS.clear()
+    sync.try_send = lambda handle, line: SENDS.append((handle, line)) or queue.pop(0)
+    err = io.StringIO()
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
         rc = card.goal_after_idle("term_w", LINE, timeout_s)
-    return rc, out.getvalue(), err.getvalue(), [json.loads(l) for l in CALLS.read_text().splitlines()]
+    return rc, err.getvalue()
 
 
-rc, out, err, calls = run_helper("")
-waits, sends = goal_calls(calls)  # the wait comes first, and is the only thing before the send
-assert rc == 0 and waits[:2] == ["terminal", "wait"] and "tui-idle" in waits and waits[waits.index("--timeout-ms") + 1] == "7000", calls
-assert sends == ["terminal", "send", "--terminal", "term_w", "--text", LINE, "--enter", "--json"], sends
-rc, out, err, calls = run_helper("wait-timeout")
-assert rc == 1 and [a[1] for a in goal_calls(calls)] == ["wait"], ("a timed-out wait types nothing", calls)
-assert "not idle within 7s" in err and f"terminal send --terminal term_w --text '{LINE}' --enter" in err, err
-rc, out, err, calls = run_helper("send-fails")
-assert rc == 1 and "typing the /goal line into term_w failed" in err and "terminal send" in err, (rc, err)
-assert card.main(["goal-after-idle", "term_w", LINE]) in (0, 1)  # the entry point start_goal_input launches
+BUSY_REASON = "turn in progress: ✶ Crunching… (running UserPromptSubmit hooks…)"
+# Idle only after two busy reads: nothing is typed before that, and the line goes out once.
+SLEPT.clear()
+rc, err = run_helper([(False, BUSY_REASON), (False, BUSY_REASON), (True, None)])
+assert rc == 0 and len(SENDS) == 3 and SLEPT == [card.GOAL_POLL_S] * 2 and not err, (rc, SENDS, SLEPT, err)
+assert all(s == ("term_w", LINE) for s in SENDS)
+# Past the limit: nothing more is tried, and the warning carries the manual command.
+real_monotonic = card.time.monotonic
+ticks = iter([0, 1, 2, 100])
+card.time.monotonic = lambda: next(ticks)
+try:
+    rc, err = run_helper([(False, BUSY_REASON)] * 5, timeout_s=50)
+finally:
+    card.time.monotonic = real_monotonic
+assert rc == 1 and len(SENDS) == 3 and "not typed into term_w" in err and "waited up to 50s" in err, (rc, SENDS, err)
+assert f"terminal send --terminal term_w --text '{LINE}' --enter" in err, err
+# A reason waiting will not change stops at once; a screen that never confirmed the line is not retyped.
+rc, err = run_helper([(False, "orca terminal read failed: terminal_handle_stale")] * 3)
+assert rc == 1 and len(SENDS) == 1 and "not typed into term_w" in err, (rc, SENDS, err)
+rc, err = run_helper([(False, sync.UNCONFIRMED), (True, None)])
+assert rc == 1 and len(SENDS) == 1 and "Read the screen before typing it again" in err, (rc, SENDS, err)
+sync.try_send = lambda handle, line: (True, None)
+with contextlib.redirect_stdout(io.StringIO()):
+    assert card.main(["goal-after-idle", "term_w", LINE]) == 0  # the entry point start_goal_input launches
+sync.try_send = REAL_TRY_SEND
+card.time.sleep = REAL_SLEEP
 card.start_goal_input = REAL_START_GOAL_INPUT
 spawned = []
 

@@ -37,9 +37,10 @@ parent; `new-top-level` with --no-parent; any other --parent-worktree is ignored
 Dispatch, so the card's worker_done, escalation and ask reach this session and Orca watches it for prompts. Its spec
 is the prompt below, `/goal` line included. Orca puts its own preamble before a spec, so that line never runs as the
 slash command there: for a Claude worker a detached helper (`card.py goal-after-idle`, log in
-$AGENT_SKILLS_STATE/goal-input/<name>.log, its path in the `card` object's goal_input) waits with `orca terminal wait
---for tui-idle` (at most GOAL_IDLE_S) until the first turn ends, then types that one line with `orca terminal send
---enter`. Past the limit it types nothing and logs a warning with the manual command. When this session is bound to no Run, works for another Run than the
+$AGENT_SKILLS_STATE/goal-input/<name>.log, its path in the `card` object's goal_input) polls `sync.try_send` (the
+reload broadcast's screen checks: no spinner or dialog, an empty prompt box, two equal reads) for at most GOAL_IDLE_S
+until the first turn ends, then types that one line. Past the limit, or when the screen does not confirm the line, it
+types nothing more and logs a warning with the manual command. When this session is bound to no Run, works for another Run than the
 brief names, or Orca does not answer, nothing is created (exit 6): the lines printed say how to bind it
 (`orca orchestration run-use`) or to make a /goal card on purpose (--card). A refused new-child is not retried as
 new-top-level.
@@ -80,7 +81,7 @@ exists but linking, logging or naming it failed, or a started worker's receipt n
 output is still printed; do not create it again); 6 nothing created because the Run or the parent did not check
 out (the choices are printed).
 """
-import contextlib, datetime, fcntl, itertools, json, os, pathlib, re, shlex, subprocess, sys
+import contextlib, datetime, fcntl, itertools, json, os, pathlib, re, shlex, subprocess, sys, time
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE", "~/.local/state/agent-skills")).expanduser()
@@ -106,6 +107,8 @@ ORCA = os.environ.get("SKILLS_SYNC_ORCA", "orca")
 ORCH = os.environ.get("SKILLS_SYNC_ORCH", str(REPO / "bin" / "orch"))
 GOAL = re.compile(r"(?m)^/goal[ \t]+\S.*$")
 GOAL_IDLE_S = 3600  # how long the detached helper waits for a worker's first turn to end
+GOAL_POLL_S = 10
+GOAL_FATAL = ("orca ", "not a connected", "no rendered screen")  # try_send reasons that waiting will not change
 LEAD_ROWS = ("MODE", "ROLE", "INBOX", "DELEGATE", "PREDICATE", "MERGE", "TASKS", "GATE")
 MERGE_VALUE = re.compile(r"\bmerge_policy (autonomous|human-gate)\b")
 ROWS = ("PROGRAM", "APPROVED", *LEAD_ROWS, "CLOSE", "KEEP", "FORBIDDEN", "REPORT")
@@ -513,27 +516,29 @@ def manual_goal_command(handle, line):
 
 
 def goal_after_idle(handle, line, timeout_s=GOAL_IDLE_S):
-    """Types the /goal line into the worker's terminal once its TUI is idle, i.e. its first turn ended and the prompt
-    is back. Orca puts its own preamble before a worker's spec, so the line inside the spec never runs as the slash
-    command. Nothing is typed while the first turn runs, or after the wait times out or fails: a line typed into a
-    running turn would queue behind it or be read as plain text. 0 sent, 1 not sent (the manual command is printed)."""
-    p, err = run([ORCA, "terminal", "wait", "--terminal", handle, "--for", "tui-idle",
-                  "--timeout-ms", str(timeout_s * 1000), "--json"], timeout=timeout_s + 60)
-    try:
-        idle = bool(p and not p.returncode and json.loads(p.stdout).get("ok") is not False)
-    except ValueError:
-        idle = False
+    """Types the /goal line into the worker's terminal once its first turn ended and an empty prompt is back. Orca puts
+    its own preamble before a worker's spec, so the line inside the spec never runs as the slash command. The idle
+    judgement is the reload broadcast's (`sync.try_send`: two equal screen reads, no spinner, no dialog, an empty
+    prompt box), polled until the limit: `orca terminal wait --for tui-idle` is not used, since it answered during
+    UserPromptSubmit hooks (docs/platform.md). Nothing is typed while the turn runs or after the limit. 0 sent, 1 not
+    sent (the manual command is printed)."""
+    import sync
     manual = manual_goal_command(handle, line)
-    if not idle:
-        print(f"[{ME}] warning: {handle} was not idle within {timeout_s}s ({err or 'no answer'}); the /goal line was "
-              f"not typed. Once the worker is idle, run: {manual}", file=sys.stderr)
-        return 1
-    p, err = run([ORCA, "terminal", "send", "--terminal", handle, "--text", line, "--enter", "--json"])
-    if not p or p.returncode:
-        print(f"[{ME}] warning: typing the /goal line into {handle} failed ({err}); run: {manual}", file=sys.stderr)
-        return 1
-    print(f"[{ME}] typed the /goal line into {handle}: {line}")
-    return 0
+    deadline = time.monotonic() + timeout_s
+    while True:
+        ok, reason = sync.try_send(handle, line)
+        if ok:
+            print(f"[{ME}] typed the /goal line into {handle}: {line}")
+            return 0
+        if reason == sync.UNCONFIRMED:  # it was typed; typing it again would set the goal twice
+            print(f"[{ME}] warning: the /goal line may have reached {handle}, but its screen does not show it. Read "
+                  f"the screen before typing it again: {manual}", file=sys.stderr)
+            return 1
+        if reason.startswith(GOAL_FATAL) or time.monotonic() >= deadline:
+            print(f"[{ME}] warning: the /goal line was not typed into {handle} ({reason}; waited up to {timeout_s}s). "
+                  f"Once the worker is idle, run: {manual}", file=sys.stderr)
+            return 1
+        time.sleep(GOAL_POLL_S)
 
 
 def pressure_check(cmd):
