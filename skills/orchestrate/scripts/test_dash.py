@@ -500,16 +500,17 @@ def limited(cmd, timeout=45):
     if cmd[2] == "rate_limit":
         return {"n": left["n"], "t": reset_at}
     left["n"] = 0  # the failed compare is what used the last of it
+    clock[0] += 45  # it timed out: the backoff counts from here, not from when the call began
     raise dash.SourceError("API rate limit exceeded")
 dash.sh = limited
 assert dash.ledger_gaps(cfg_q, two, [], [], now)["ci"] == [], "a failed compare is no gap"
 assert len(compares()) == 1, f"one failed compare, the rest of the pairs wait: {calls}"
 assert dash.gh_contains("acme/app", "s20", "s22") is None, "unknown is None, never False"
 asked = len(calls)
-clock[0] = 2299.0
+clock[0] = 2344.0  # 299 s after the failure finished at 2045
 dash.ledger_gaps(cfg_q, two, [], [], now)
 assert len(calls) == asked, "inside the 300 s backoff nothing is asked"
-clock[0] = 2301.0
+clock[0] = 2346.0
 dash.ledger_gaps(cfg_q, two, [], [], now)
 assert calls[asked:] == ["rate_limit"], f"after the backoff the quota is read first: {calls[asked:]}"
 asked = len(calls)
