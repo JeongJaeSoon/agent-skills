@@ -323,6 +323,21 @@ class Restarted(unittest.TestCase):
             orca = Orca(run="run_1", workers=[self.row("d1", "abandoned"), other], here=live, runs=("run_1", "run_other"))
             self.assertEqual(does(run("lead", "acme", "run_1", orca=orca, procs=wait_proc(200, "orch wait acme"))), [], order)
 
+    def test_a_worker_resumed_elsewhere_and_finished_with_its_terminal_closed_is_not_woken(self):
+        old = self.row("d1", "abandoned", projection={"evidence": {"lastObservedAt": 100}})
+        done = self.row("d_done", "completed", "released", handle=None, runId="run_other",
+                        projection={"evidence": {"lastObservedAt": 200}})
+        orca = Orca(run="run_1", workers=[old, done], here=[], runs=("run_1", "run_other"))
+        lines = run("lead", "acme", "run_1", orca=orca, procs=wait_proc(200, "orch wait acme"))
+        self.assertEqual(does(lines), [])
+
+    def test_two_agent_terminals_without_a_dispatch_give_one_command_with_a_placeholder(self):
+        live = [{"handle": h, "agentIdentity": "claude"} for h in ("term_diag", "term_resume")]
+        orca = Orca(run="run_1", workers=[self.row("d1", "abandoned")], here=live, runs=("run_1",))
+        out = does(run("lead", "acme", "run_1", orca=orca, procs=wait_proc(200, "orch wait acme")))
+        self.assertEqual(len(out), 1)
+        self.assertIn("--terminal <the handle of the worker's own terminal: term_diag, term_resume>", out[0])
+
     def test_a_cut_short_terminal_list_issues_no_recovery_command(self):
         orca = Orca(run="run_1", workers=[self.row("d1", "abandoned")], here=[])
         orca.truncated = True

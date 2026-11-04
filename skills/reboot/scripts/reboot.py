@@ -150,17 +150,20 @@ def observed(w):
     return ((w.get("projection") or {}).get("evidence") or {}).get("lastObservedAt") or 0
 
 
-def has_dispatch(call, handle, since=0):
-    """Whether a Dispatch of any Run is on the terminal. worker-list is scoped to this terminal's Run, so every page
-    of run-list is read, Run by Run: the resume may have been made from another Run. OrcaError when a read fails."""
+def has_dispatch(call, handles, worktree_id, since=0):
+    """Whether a later Dispatch of any Run is on one of the terminals or on the worktree. worker-list is scoped to this
+    terminal's Run, so every page of run-list is read, Run by Run: the resume may have been made from another Run, and
+    its worker may have finished and closed its terminal since. OrcaError when a read fails."""
     for res, _ in orca_settings.pages(call, "run-list", error=OrcaError):
         for r in res.get("runs") or []:
             for w in orca_settings.all_workers(call, "--run", r.get("id"), "--limit", "100", error=OrcaError):
-                if orca_settings.worker_terminal(w) != handle or w.get("dispatchStatus") in RESTART_LOST \
-                        or w.get("terminalState") == "released":
+                on_terminal = orca_settings.worker_terminal(w) in handles
+                on_card = bool(worktree_id) and (w.get("resource") or {}).get("worktreeId") == worktree_id
+                if not (on_terminal or on_card) or (not on_terminal and not (since and observed(w) > since)) or w.get("dispatchStatus") in RESTART_LOST or w.get("terminalState") == "released" and \
+                        w.get("dispatchStatus") not in FINISHED:
                     continue
                 # A Dispatch that already reported counts only when Orca saw it after the abandoned one: rows carry no
-                # creation time, and an older finished worker of the terminal proves nothing about this resume.
+                # creation time, and an older finished worker proves nothing about this resume.
                 if w.get("dispatchStatus") not in FINISHED or (since and observed(w) > since):
                     return True
     return False
@@ -328,18 +331,22 @@ def check_workers(run, call, lead_dispatch=None, me=None):
         if abandoned:  # Orca settled it when its terminal went: there is nothing to stop or retry, only a session to resume
             try:
                 agents = card_agents(call, wt)
-                resumed = any(has_dispatch(call, a, observed(w)) for a in agents)
+                resumed = has_dispatch(call, agents, wt, observed(w))
             except (OrcaError, RuntimeError, SystemExit) as e:  # unreadable is not "nothing there": no command from a guess
                 out.append(("info", f"worker {d} (task {task}) is abandoned, but Orca could not say whether its worktree "
                                     f"already runs a resumed session ({e}): run this check again"))
                 continue
             if agents:  # a session runs there: resumed, maybe from another Run
-                agent = " or ".join(agents)  # which one is the worker's is for the reader to tell
+                agent = agents[0] if len(agents) == 1 else "<the handle of the worker's own terminal: " + ", ".join(agents) + ">"
                 if resumed:
                     out.append(("info", f"worker {d} (task {task}) is abandoned here, but its worktree has a live agent "
                                         f"terminal ({agent}) with a Dispatch: it was resumed (perhaps on another Run)"))
                 else:  # stopped between `terminal create` and `worker-start`: the session has no mailbox
                     out.append(("do", resume_line(w, d, task, h, agent)))
+                continue
+            if resumed:  # a later Dispatch on the card (from another Run) has taken the work over
+                out.append(("info", f"worker {d} (task {task}) is abandoned here, but a later Dispatch of another Run is on "
+                                    "its worktree: it was resumed"))
                 continue
             out.append(("do", resume_line(w, d, task, h)))
             continue
