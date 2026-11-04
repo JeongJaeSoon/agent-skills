@@ -112,7 +112,9 @@ only when each owner stack has at least one such line, every worktree any line n
 holds its stacks' volumes whatever its PR says, because closing a card is what weighs its PR, sessions and terminals;
 the volumes go on the first round after the card closes. Everything else stays, reported with its reason: no owner
 label, no ledger line (a stack started outside `orch heavy` that reap-hard never saw up), no worktree link, a damaged
-ledger line anywhere, no `orca` on PATH, a card list, process list or PR that cannot be read. Such a volume waits for a person. This guard starts as a block,
+ledger line anywhere, no `orca` on PATH, a card list, process list or PR that cannot be read. Such a volume waits for a person.
+One gap stays: a card that reuses a stack name another, closed card registered, and brings it up and down between two
+reap-hard passes, leaves no line, so the closed card's record lets the volumes go. Stamped stack names keep this rare. This guard starts as a block,
 not a warning: a kept volume can still go, a deleted one cannot come back.
 
 **The provenance label.** `<namespace>.origin=<verify skill>`, the namespace from `reap.labeled_volumes.namespace`;

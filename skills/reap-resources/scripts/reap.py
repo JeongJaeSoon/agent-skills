@@ -1304,12 +1304,14 @@ def owner_holds(items, notes):
 def note_stack_dirs(stacks):
     """A line for each card or other working directory a stack's containers name and the ledger does not. Only the first
     card that brings a stack up registers it, so a card that reuses the name is recorded here. The card, not a folder
-    inside it: a session sits at the card's root."""
+    inside it: a session sits at the card's root. Without the card list nothing is written: a folder recorded as if it
+    were a card would stay in the ledger as one."""
     path = ledger_path()
     ledger = stack_records(path)
-    if ledger is None:
+    listed = orca_paths() if shutil.which("orca") else None
+    if ledger is None or listed is None:
         return
-    cards = {os.path.realpath(p) for p in (orca_paths() or ())}
+    cards = {os.path.realpath(p) for p in listed}
     for name, st in sorted(stacks.items()):
         known = {os.path.realpath(r["worktree"]) for r in ledger.get(name, ()) if r["worktree"]}
         found = {os.path.realpath(d) for d in st["dirs"] if os.path.isabs(d)}

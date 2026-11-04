@@ -1600,6 +1600,15 @@ with tempfile.TemporaryDirectory() as tmp:
     # A stack run from a folder inside a card records the card: that is where its session sits.
     reap.note_stack_dirs({"verify-app-merged": {"dirs": {str(live / "backend")}}})
     assert reap.stack_records(led)["verify-app-merged"][-1]["worktree"] == os.path.realpath(live), led.read_text()
+    # Without the card list a folder cannot be told from a card, so nothing is written.
+    before = led.read_text()
+    orca["reply"] = None
+    reap.note_stack_dirs({"verify-app-closed": {"dirs": {str(live / "other")}}})
+    orca["reply"] = json.dumps({"result": {"worktrees": [{"path": str(live)}]}})
+    missing.add("orca")
+    reap.note_stack_dirs({"verify-app-pr-open": {"dirs": {str(live / "other")}}})
+    missing.clear()
+    assert led.read_text() == before
     entries = reap.ledger_read(led)
     assert "verify-app-closed" in {e["id"] for e in reap.folded(entries, "compose-stack")}
     assert not reap.folded(entries, "compose-stack")[0].get("kind") == "stack-seen"

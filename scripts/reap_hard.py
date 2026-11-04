@@ -347,11 +347,7 @@ def scan_rest(cfg, protect, dark_before, closed, m, now):
     stacks = reap.compose_stacks()
     if stacks is None:
         notes.append("docker 를 읽지 못함: 스택은 건너뜀")
-    else:
-        try:
-            reap.note_stack_dirs(stacks)
-        except OSError as e:
-            notes.append(f"스택 작업 폴더를 ledger 에 적지 못함: {e}")
+    m["stacks"] = stacks
     try:
         keep, unread = always_on(), None
     except ValueError as e:  # the always-on list cannot be read: every stack stays this pass
@@ -574,6 +570,11 @@ def run_pass(dry, cfg=None, now=None):
         closed = [i["id"] for i in items if i["target"] and (dry or (not i["result"].startswith(("건너뜀", "실패"))
                                                                      and not os.path.isdir(i["id"])))]
         rest, more, dark = scan_rest(cfg, protect, set(last.get("dark") or ()), closed, m, now)
+        if not dry and m.get("stacks"):
+            try:
+                reap.note_stack_dirs(m["stacks"])
+            except Exception as e:  # the record is for later rounds; failing it must not stop this one
+                more.append(f"스택 작업 폴더를 ledger 에 적지 못함: {type(e).__name__}: {e}")
         do(rest)
         items, notes = items + rest, notes + more
     finally:
