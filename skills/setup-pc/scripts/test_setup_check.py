@@ -193,11 +193,24 @@ class Orca(Base):
         self.assertEqual(rows[0]["status"], "ok")
         self.assertIn("run_fake", rows[0]["have"])
 
-    def test_unbound_terminal_points_to_binding(self):
-        out = json.dumps({"ok": True, "result": {"run": None}})
+    def test_concise_bound_terminal_is_ok(self):
+        out = json.dumps({"ok": True, "result": {"runId": "run_fake"}})
         rows = sc.check_orca({}, fake_run({self.CURRENT: (0, out)}), environ={"ORCA_TERMINAL_HANDLE": "term_x"})
-        self.assertEqual(rows[0]["status"], "info")
-        self.assertIn("run-use", rows[0]["next"])
+        self.assertEqual(rows[0]["status"], "ok")
+        self.assertIn("run_fake", rows[0]["have"])
+
+    def test_unbound_terminal_points_to_binding(self):
+        for result in ({"run": None}, {"runId": None}):
+            out = json.dumps({"ok": True, "result": result})
+            rows = sc.check_orca({}, fake_run({self.CURRENT: (0, out)}), environ={"ORCA_TERMINAL_HANDLE": "term_x"})
+            self.assertEqual(rows[0]["status"], "info")
+            self.assertIn("run-use", rows[0]["next"])
+
+    def test_failed_run_current_is_not_unbound(self):
+        out = json.dumps({"ok": False, "error": {"code": "runtime_unavailable"}})
+        for answer in ((1, out), (0, out), (0, "not json")):
+            rows = sc.check_orca({}, fake_run({self.CURRENT: answer}), environ={"ORCA_TERMINAL_HANDLE": "term_x"})
+            self.assertEqual(rows[0]["status"], "warn")
 
     def test_title_disabled_warns_from_settings_env(self):
         rows = sc.check_orca({"env": {sc.TITLE_OFF: "1"}}, fake_run({}), environ={})
