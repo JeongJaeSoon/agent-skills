@@ -93,11 +93,14 @@ assert got == sorted([("prompt", "wt-docs"), ("question", "wt-export"), ("approv
 def badges_agree(st):
     per = {s["id"]: sum(1 for i in st["items"] if i.get("session") == s["id"]) for s in st["sessions"]}
     assert {s["id"]: s["unread"] for s in st["sessions"]} == per, per
+    owed = {s["id"]: sum(1 for i in st["items"] if i.get("session") == s["id"] and fleet.needs_rank(i) < 2) for s in st["sessions"]}
+    assert {s["id"]: s["needs_owner"] for s in st["sessions"]} == owed, owed
     assert sum(per.values()) + sum(1 for i in st["items"] if i.get("session") not in per) == len(st["items"])
 
 
 badges_agree(st)
 assert ss["wt-export"]["unread"] == 4 and ss["wt-docs"]["unread"] == 1 and ss["wt-scratch"]["unread"] == 1, ss
+assert ss["wt-export"]["needs_owner"] < ss["wt-export"]["unread"] and ss["wt-login"]["needs_owner"] >= 1, ss  # ci_failed is the agent's
 assert not (state_dir / "pr-events.jsonl").exists()  # the first snapshot is a baseline, not a change
 
 # Dismissing an item removes it from the inbox and from its session's badge alike.
@@ -1050,8 +1053,9 @@ process.stdout.write(JSON.stringify({shut, again, open, kept: mem[FOLD_KEY]}));"
     assert "<tr hidden" not in got["open"] and json.loads(got["kept"]) == [], got
     # A row a to-do holds reads 📅 in the table and ranks as held; a session with only finished rows has nothing urgent.
     got = fold_run(storage_ok, """F.brief.table_rows[0].rows.push({session: {id: "x"}, status: "📅"}, {session: {id: "y"}, status: "📅"}, {session: {id: "y"}, status: "⏳"});
-process.stdout.write(JSON.stringify([urgentMark([{id: "x"}]), urgentMark([{id: "y"}]), urgentMark([{id: "z"}])]));""")
-    assert got == ["📅", "⏳", ""], got
+process.stdout.write(JSON.stringify([urgentMark([{id: "x"}]), urgentMark([{id: "y"}]), urgentMark([{id: "z"}]),
+  urgentMark([{id: "z", unread: 1, needs_owner: 0}]), urgentMark([{id: "z", unread: 1, needs_owner: 1}])]));""")
+    assert got == ["📅", "⏳", "", "", "🙋"], got  # an inbox item the agent handles, like failing CI, is not the owner's turn
     # Storage that throws, or holds junk: open, and the toggle still works for this page.
     for setup in (storage_bad, storage_ok + ' mem["orch-dash:lead-fold"] = "{not json";', storage_ok + ' mem["orch-dash:lead-fold"] = "7";'):
         got = fold_run(setup, """const open = fleetSessions(st); foldLead("lead:1"); const shut = fleetSessions(st);

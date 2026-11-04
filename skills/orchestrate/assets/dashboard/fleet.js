@@ -1513,7 +1513,7 @@ const MARK_RANK = ["🙋", "🔴", "❔", "🔄", "⏳", "⏸️", "📅"];  // 
 // A folded lead's worst session: its brief rows' marks, and 🙋 for one waiting on a person, which may have no row.
 // A finished row has no session in table_rows and nothing urgent to say.
 function urgentMark(kids) {
-  const marks = new Set(kids.flatMap((k) => [...sessionRowsOf(k.id).map((x) => x.status), ...(k.phase === "waiting" || k.unread ? ["🙋"] : [])]));
+  const marks = new Set(kids.flatMap((k) => [...sessionRowsOf(k.id).map((x) => x.status), ...(k.phase === "waiting" || k.needs_owner ? ["🙋"] : [])]));
   return MARK_RANK.find((m) => marks.has(m)) || "";
 }
 const domId = (id) => encodeURIComponent(id).replace(/[^\w-]/g, "_");  // renderView finds the focused id by selector
