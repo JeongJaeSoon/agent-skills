@@ -27,7 +27,7 @@ On macOS, `install-agent`, run from the git checkout sessions load (a worktree o
 
 A closed program (its `predicate_verified` is current), or a quiet one (no ledger event for 3 days, the line at which the sidebar folds it away), keeps only the ledger check. Its tracker, GitHub and Orca sections stay as last collected, and a landing, a predicate edit, an admitted follow-up or any other new ledger event reopens it. Most programs on a machine are quiet: polling them every 20 s was most of the collector's Orca calls.
 
-The page polls `/api/<slug>/state` every 5 s with `If-None-Match`, so a poll with nothing new gets a 304 and no body. Keep `--host` at 127.0.0.1: the page shows PR titles and worker paths.
+The page polls `/api/<slug>/state` every 5 s with `If-None-Match`, so a poll with nothing new gets a 304 and no body. Keep `--host` at 127.0.0.1: the page shows PR titles and worker paths. Every `/api/` read and write answers only a loopback `Host` and `Origin`, so a reverse proxy that reaches the dashboard from another name must rewrite both and do its own authentication. The page has no fixed address: the Brief's dashboard links open and read under whatever address it was loaded from.
 
 Each program's files are in `<program>/dashboard/`:
 

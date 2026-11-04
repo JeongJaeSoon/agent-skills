@@ -1051,7 +1051,7 @@ function briefHtml(text, tableRows = [], placed = new Set(), listRows = {}, clos
       if (items.length) out.push(sectionTable(sec[2], items, ids));
       continue;
     }
-    if (line.trim()) out.push(`<p>${briefInline(line).replace(DASH_URL, '<a class="link" href="$2">$1</a>')}</p>`);
+    if (line.trim()) out.push(`<p>${briefInline(line).replace(DASH_URL, (_, url, hash) => `<a class="link" href="${hash}">${location.origin}/${hash}</a>`)}</p>`);
     i++;
   }
   return out.join("");
