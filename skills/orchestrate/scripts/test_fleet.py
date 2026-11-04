@@ -1087,7 +1087,7 @@ process.stdout.write(JSON.stringify({open, shut}));""")
     # Open items one whose Done is: a list item with no row of its own gets its Done in its list.
     two = "\n".join(["| | 리드/Phase | PR | 다음 | 세션 |", "|---|---|---|---|---|", "| ✅ | done lead | — | — | — |",  # no bar, no 진행
                      "| 🔴 | stuck lead | — | 재개·정리 | 세션 없음 |", "| 🔄 | **busy…** | — | 리뷰 | 작업 중 |", "",  # cut, as a server that sends no `full` yet sends it
-                     "| | 리드/Phase | PR | 진행 | 다음 | 세션 |", "|---|---|---|---|---|---|", "| ⏳ | other | — | — | ↓ 대기 | 멈춤 |", "",
+                     "| | 리드/Phase | PR | 진행 | 다음 | 세션 |", "|---|---|---|---|---|---|", "| ⏳ | oth… | — | — | ↓ 대기 | 멈춤 |", "",  # two reply labels start with `oth`: no button
                      "📌 **카드 없는 일**", "", "- 🔄 loose item — 정리 · lead"])
     busy = {"id": "wt-busy", "name": "busy-card", "state": "working", "word": "작업 중", "last": "PR 열고 <리뷰> 대기",
             "at": "2026-10-28T09:00:00Z", "pr": "acme/plugins#7"}
@@ -1095,7 +1095,9 @@ process.stdout.write(JSON.stringify({open, shut}));""")
                 {"id": "b", "label": "stuck lead", "status": "🔴", "session": {"id": None, "state": "none", "word": "세션 없음"}, "ack": None, "done": "row:b"},
                 {"id": "a", "label": "done lead", "status": "✅", "session": None, "ack": "board:a", "done": None},
                 {"id": "c", "label": "busy lead", "status": "🔄", "session": busy, "ack": None, "done": "row:c"}]},
-            {"table": "acme/b", "rows": []}]
+            {"table": "acme/b", "rows": [
+                {"id": "o1", "label": "other one", "status": "⏳", "session": None, "ack": None, "done": "row:o1"},
+                {"id": "o2", "label": "other two", "status": "⏳", "session": None, "ack": None, "done": "row:o2"}]}]
     lists = {"moving": [{"id": "doing:x", "label": "loose item", "text": "🔄 loose item — 정리 · lead"}], "owner": [], "waiting": [], "held": []}
     js = f"""{helpers}
 {(assets / "fleet.js").read_text()}

@@ -1017,7 +1017,7 @@ function briefHtml(text, tableRows = [], placed = new Set(), listRows = {}, clos
       const known = ((acts && acts.rows) || []).map((x) => x.label);
       const labels = body.map((r) => {
         const l = rowLabel(r[1] || ""), pre = l.endsWith("…") && known.filter((k) => k.startsWith(l.slice(0, -1)));
-        return pre && pre.length === 1 ? pre[0] : l;
+        return !pre || !pre.length ? l : pre.length === 1 ? pre[0] : l + "\0";  // several share the head: no button, never a wrong one
       });
       const count = tally(((acts && acts.rows) || []).map((x) => x.label)), drawnCount = tally(labels);
       const byLabel = new Map(((acts && acts.rows) || []).filter((x) => (x.ack || x.done) && count.get(x.label) === 1)

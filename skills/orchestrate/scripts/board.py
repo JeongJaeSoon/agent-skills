@@ -1410,12 +1410,20 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             # table lost is missing and one it wrote twice is a duplicate, whatever the lines handed to it said.
             by_name = {l["shown"]: l for l in mine if l["status"] is not None}
             bare = lambda cell: re.sub(r"^\*\*(.*)\*\*$", r"\1", re.sub(r"^└ ", "", cell))
+
+            def of_row(i):
+                """Whether table row i is whole row i, every cell as it is or cut to its head (the session cell, which
+                gives up its worktree name on its own, is not compared)."""
+                if i + 1 >= len(whole) or len(whole[i + 1]) != len(table[i + 1]):
+                    return False
+                return all(bare(w) == bare(f) or bare(w).endswith("…") and bare(f).startswith(bare(w)[:-1])
+                           for w, f in zip(table[i + 1][:-1], whole[i + 1][:-1]))
             for i, row in enumerate(table[1:]):
                 name = bare(row[1])
                 if name not in by_name and name.endswith("…"):  # a cut name: the one name it is the head of
                     heads = [n for n in by_name if n.startswith(name[:-1])]
-                    same = bare(whole[i + 1][1]) if i + 1 < len(whole) else None
-                    name = same if same in heads else heads[0] if heads else name
+                    # Several names share the head: the row's other cells say which, or it is placed as none.
+                    name = heads[0] if len(heads) == 1 else bare(whole[i + 1][1]) if heads and of_row(i) else None
                 if name in by_name:
                     drawn(by_name[name])
             # Done on every open row the board can close; Ack on a ✅ row not yet acknowledged.
