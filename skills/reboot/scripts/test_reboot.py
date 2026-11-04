@@ -270,6 +270,14 @@ class Restarted(unittest.TestCase):
         out = does(self.lines(w))[0]
         self.assertEqual(out.count("--worktree id:repo::/work/card::workspace:1 "), 2)
 
+    def test_a_worktree_with_a_live_agent_terminal_is_not_resumed_again(self):
+        # Resumed from a lead on another Run: this Run keeps only the abandoned row, the worktree has the live agent.
+        live = [{"handle": "term_new", "agentIdentity": "claude", "worktreePath": "/work/My Card"}]
+        orca = Orca(run="run_1", workers=[self.row("d1", "abandoned")], here=live)
+        lines = run("lead", "acme", "run_1", orca=orca, procs=wait_proc(200, "orch wait acme"))
+        self.assertEqual(does(lines), [])
+        self.assertTrue([t for k, t in lines if k == "info" and "d1" in t and "live agent terminal" in t])
+
     def test_the_resume_command_follows_the_workers_agent(self):
         def line(agent):
             w = self.row("d1", "abandoned")
@@ -346,6 +354,18 @@ class LostDispatch(unittest.TestCase):
         self.assertEqual(len(out), 1)
         self.assertNotIn("run-use", out[0])
         self.assertIn("orch set acme run run_own", out[0])
+
+    def test_a_lead_resumed_under_a_new_dispatch_is_not_ok_while_the_program_names_the_old_one(self):
+        self.program(lead_dispatch="ctx_old")
+        new = {"dispatchId": "ctx_new", "taskId": "t", "runId": "run_parent", "terminalState": "active",
+               "dispatchStatus": "dispatched", "agentTerminalHandle": ME}
+        out = does(run("lead", "acme", orca=Orca(run=None, workers=[new]), procs=wait_proc(200, "orch wait acme")))
+        self.assertEqual(len(out), 1)
+        self.assertIn("run-create", out[0])
+        self.assertIn("ctx_old", out[0])
+        # With the Dispatch the program names, the lead is fine.
+        self.program(lead_dispatch="ctx_new")
+        self.assertEqual(does(run("lead", "acme", orca=Orca(run=None, workers=[new]), procs=wait_proc(200, "orch wait acme"))), [])
 
     def test_the_abandoned_row_of_this_terminal_is_no_dispatch(self):
         gone = {"dispatchId": "ctx_gone", "taskId": "t", "runId": "run_parent", "terminalState": "retained",

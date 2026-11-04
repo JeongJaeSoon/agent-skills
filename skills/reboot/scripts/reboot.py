@@ -134,6 +134,17 @@ def check_handle(handle, call, root):
                    "so the variable is renewed")], None, None
 
 
+def card_has_agent(call, worktree_id):
+    """Whether an agent terminal is open in the worktree. Unknown (no id, Orca unsure) reads as no."""
+    if not worktree_id:
+        return False
+    try:
+        terms = call("terminal", "list", "--worktree", f"id:{worktree_id}").get("terminals") or []
+    except OrcaError:
+        return False
+    return any(t.get("agentIdentity") for t in terms)
+
+
 def own_dispatch(call, handle):
     """This terminal's Dispatch while it still works for a Run. An abandoned one is the Dispatch the restart took: Orca
     keeps its row on the terminal, but the lead has lost it."""
@@ -157,6 +168,10 @@ def check_run(role, run, handle, call, lead_dispatch=None, slug=None):
         return [("ok", f"bound to Run {bound_id}")], bound_id, None
     if not bound_id and role == "lead":
         mine = own_dispatch(call, handle)
+        # A Dispatch other than the one program.json names (the coordinator resumed the lead with worker-start) is the
+        # same loss for the program: `orch wait` refuses a terminal that is not its lead_dispatch.
+        if mine and lead_dispatch and mine.get("dispatchId") != lead_dispatch:
+            mine = None
         if mine:  # a lead started as a dispatched worker: Orca refuses it a binding to the Run it works for
             return [("ok", f"dispatched lead ({mine.get('dispatchId')} on Run {mine.get('runId')}): binds no Run")], \
                 mine.get("runId"), mine.get("dispatchId")
@@ -284,6 +299,10 @@ def check_workers(run, call, lead_dispatch=None, me=None):
                               f"{parent.get('dispatchId')}: send that lead this line, and it restarts its own worker"))
             continue
         if abandoned:  # Orca settled it when its terminal went: there is nothing to stop or retry, only a session to resume
+            if card_has_agent(call, wt):  # resumed from another Run: this Run keeps only the abandoned row
+                out.append(("info", f"worker {d} (task {task}) is abandoned here, but its worktree has a live agent "
+                                    "terminal: it was resumed (perhaps on another Run), so it is not resumed again"))
+                continue
             out.append(("do", resume_line(w, d, task, h)))
             continue
         card = (w.get("resource") or {}).get("worktreeId") or "<its worktree>"
