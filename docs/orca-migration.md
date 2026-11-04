@@ -32,7 +32,7 @@ Do this when no merge or card start is in flight. Nothing here touches a running
 
 1. Fast-forward the loaded main checkout to the release (see [platform.md](platform.md), Korean).
 2. In the orchestrator, then in each lead, at a turn boundary: `/reload-plugins`. Running cards need nothing.
-3. In the orchestrator: `orca orchestration run-current --json`. If it is null, `orca orchestration run-use <id>` with the Run that earlier briefs report to. Create a Run only when there is none.
+3. In the orchestrator: `orch doctor`. Only if it says this terminal is bound to no Run (`이 터미널은 Run에 묶여 있지 않다`), `orca orchestration run-use --id <id>` with the Run that earlier briefs report to. Create a Run only when there is none. Reading `orca orchestration run-current --json` yourself: `result.runId` or `result.run.id` set means bound.
 4. `orch migrate` (dry-run). Check the first list: doing lines that name exactly one card. Lines waiting on a person, the owner's, ones the owner reopened, and ones whose card merged but which name a step left (a release, a deploy) are not in it; the last are listed apart and stay.
 5. `orch migrate --apply`. Note the backup directory and the `orch board reopen` line it prints.
 6. Check the dashboard: the Sessions table shows the Ticket and PR columns from Orca, and the board's open doing list is the waits that remain.
