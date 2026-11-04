@@ -9,8 +9,8 @@ Sessions end and leave things running or lying around: test
 servers reparented to pid 1, the volumes and images of finished compose stacks, local branches
 of merged PRs, git worktrees in the scratchpad of a finished session.
 
-This skill needs no program. Finished Orca cards are removed with `orca worktree rm`, the same command the resource
-steward uses (`orchestrate` `references/roles.md`), after moving the worktree's ignored files to the trash.
+This skill needs no program. Its janitor and reap-hard remove finished Orca cards with `orca worktree rm`, after moving
+the worktree's ignored files to the trash; sessions leave that to them (`end-session`, "Who cleans up").
 
 ## Cards: take stock of every Orca card
 
@@ -213,8 +213,7 @@ A precheck prints what it could not read (`gh`, `orca`) and the alerts to stderr
 so a scan there can see fewer workers than the automation does. What keeps a card from removal is
 [references/cards.md](references/cards.md); `orca-worker` reports a reclaimable worker terminal. The kinds `card`
 replaced, `orca-worktree` and `done-card`, are gone: `--kinds` or a saved plan naming them is refused. `card` and reap-hard
-are sweeps for cards that neither closed themselves nor were closed by the session that started them
-(`end-session` §8, "Who closes a finished card"). Which device fits which job:
+are who removes a finished card (`end-session`, "Who cleans up"). Which device fits which job:
 [docs/automation.md](../../docs/automation.md).
 
 ## Hard pass: reap-hard
