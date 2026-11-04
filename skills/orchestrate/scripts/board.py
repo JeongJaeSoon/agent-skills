@@ -820,9 +820,11 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         open_dec, dec_known = fleet.open_decisions(), True
     except store_db.NotMigrated:
         open_dec, dec_known = [], False
+    stalled = {k: one_line(w) for i, s in sessions.items() if (w := stalled_why(s, checks))
+               for k in (i, fleet.current_pr(s, by_session, prs)) if k}
     facts_in = rowstate.gather(now=now, prs=prs, me=me, shut=shut, verdicts=verdicts, holds=holds, hold_why=hold_why,
                                leads=store["leads"], state=state, decisions=open_dec, state_min=limits["state_min"],
-                               stalled={i: one_line(w) for i, s in sessions.items() if (w := stalled_why(s, checks))})
+                               stalled=stalled)
     states = {}  # row id -> RowState: every status shown below is rowstate.judge()'s, never decided here
 
     def judged(r):

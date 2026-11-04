@@ -161,6 +161,10 @@ stalled = facts({"octo/app#1": READY}) | {"stalled": {"wt": "hook 오류"}}
 for link in ({"worktree": "wt"}, {"linked": "wt"}, {"session": "wt"}):
     assert rowstate.judge({**row, **link}, stalled, sid="wt")["why"] == "hook 오류", link
 assert rowstate.judge(row, stalled, sid="wt")["status"] == "moving"
+# A row with no card link reaches the card by its PR; a row with its own card never takes another card's verdict.
+stalled_pr = facts({"octo/app#1": READY}) | {"stalled": {"octo/app#1": "hook 오류"}}
+assert rowstate.judge(row, stalled_pr)["why"] == "hook 오류"
+assert rowstate.judge({**row, "worktree": "wt-other"}, stalled_pr)["status"] == "moving"
 assert rowstate.judge({**row, "owner": "someone"}, facts({"octo/app#1": READY}, me=None))["unknown"] == ["오너 login 모름"]
 # A draft nobody works on, by a session list that can be trusted, is the agent's to resume or hold.
 draft = {**READY, "draft": True}

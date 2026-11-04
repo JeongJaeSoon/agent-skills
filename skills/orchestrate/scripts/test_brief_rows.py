@@ -254,5 +254,17 @@ rows = {o["label"]: o["status"] for o in b["open"]}
 assert rows["linked-stuck"] == "check" and "stuck-card" not in rows, rows
 assert any("에이전트 조치 필요: hook 오류로 도구가 막힘" in m for m in section(b["text"], "🔄")), b["text"]
 board.set_row("linked-stuck", status="done")
+# Nor is there one when only the PR ties a board row to the card: the card's row is left to the board row.
+PRS["acme/app#9"] = {"detail": {"key": "acme/app#9", "state": "OPEN", "merged_at": None, "draft": False, "ci": "success",
+                                "decision": None, "merge_state": "CLEAN", "reviewers": []}}
+fleet.write_atomic(sd / "prs.json", json.dumps({"prs": PRS, "me": "owner-me"}))
+st["sessions"] = [{**s, "linked_pr": {"key": "acme/app#9"}} if s.get("id") == "s-stuck" else s for s in st["sessions"]]
+fleet.write_atomic(sd / "state.json", json.dumps(st))
+board.set_row("pr-only", title="pr-only", repo="acme/app", status="moving", pr="acme/app#9")
+b = brief()
+rows = {o["label"]: o["status"] for o in b["open"]}
+assert rows["pr-only"] == "check" and "stuck-card" not in rows, rows
+assert any("에이전트 조치 필요: hook 오류로 도구가 막힘" in m for m in section(b["text"], "🔄")), b["text"]
+board.set_row("pr-only", status="done")
 verdicts.unlink()
 print("test_brief_rows: ok")

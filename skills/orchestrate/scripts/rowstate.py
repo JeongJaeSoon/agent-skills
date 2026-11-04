@@ -185,7 +185,8 @@ def agent_merges(cfg=None):
 def gather(*, now, prs, me, shut, verdicts, holds, hold_why, leads, state, decisions, owner_items=None,
            programs=None, pressure=None, merges=None, state_min=5, programs_unread=None, stalled=None):
     """The facts judge() reads, from what the render already holds plus the program, pressure and config files.
-    stalled: session id -> patrol's reason, for a card patrol found stalled and that has not moved since."""
+    stalled: session id, and that session's current PR -> patrol's reason, for a card patrol found stalled and that has
+    not moved since."""
     unread = set(programs_unread or ())
     sessions = {s.get("id"): s for s in (state or {}).get("sessions") or []}
     src = (state or {}).get("sources") or {}
@@ -391,7 +392,8 @@ def judge(r, f, lead=None, sid=None):
         hit("check", f"{AGENT_ACTION}: {v['evidence']}", v["evidence"])
     if status == "check":
         hit("check", f"{AGENT_ACTION}: {r.get('why') or '상태 모름'}", r.get("why") or "상태 모름")
-    elif why := f["stalled"].get(r.get("session") or r.get("linked") or r.get("worktree")):  # the row's own card, not sid's
+    # The row's own card, not sid's (a lead's); a row with no card link by its PR, since that PR hides the card's own row.
+    elif why := f["stalled"].get(r.get("session") or r.get("linked") or r.get("worktree") or key):
         hit("check", f"{AGENT_ACTION}: {why}", why)
     for e in queue:
         if e.get("state") in ("gave_up", "failed"):
