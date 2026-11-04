@@ -530,7 +530,7 @@ The dashboard is complete without one. If you want a periodic digest, schedule a
 
 ```sh
 orca automations create --name "dash notes: <slug>" --trigger "*/15 * * * *" --provider claude \
-  --workspace <selector> --workspace-mode existing \
+  --extra-agent-args="--model haiku" --workspace <selector> --workspace-mode existing \
   --prompt "Read \$PROGRAMS_HOME/<slug>/dashboard/state.json only. If something needs a human (stalled land order, idle worker, stale source, main red), write at most 3 lines with: orch-dash note <slug> --kind risk|digest --text '...' --author annotator. Otherwise write nothing."
 ```
 

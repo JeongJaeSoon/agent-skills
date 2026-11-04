@@ -8,13 +8,17 @@ which session they reach is roles.applies' matrix, how hard they hold is a key i
   or `| head` (its output is read only at the end).
 - orchestrate.send_devnull (deny): `orca orchestration send|reply` with its output sent to /dev/null, which hides
   whether the message went out.
+- orchestrate.model_flag (warn): with `orchestrate.models` set, an `orca orchestration worker-start`, `orca worktree
+  create` or `orca agent launch` of Claude from any session with no `--model`. `--terminal` reuses a running session,
+  which takes no model. The value is the human's to change, so it is not compared.
 """
 import roles
 from lib import config, shell
 from lib.danger import Finding
 
 RULES = {"orchestrate.ask_user_question": "deny", "orchestrate.wait_foreground": "deny",
-         "orchestrate.send_devnull": "deny"}
+         "orchestrate.send_devnull": "deny", "orchestrate.model_flag": "warn"}
+LAUNCHES = (["orchestration", "worker-start"], ["worktree", "create"], ["agent", "launch"])
 SOURCE = "(agent-skills hooks/guard.py, {key})"
 
 
@@ -48,8 +52,33 @@ def downstream(cmds, c):
     return out
 
 
+def flag(words, name):
+    """The value of `name` in argv, written `--x v` or `--x=v`; None when absent."""
+    for i, w in enumerate(words):
+        if w == name:
+            return words[i + 1] if i + 1 < len(words) else ""
+        if w.startswith(name + "="):
+            return w[len(name) + 1:]
+    return None
+
+
+def check_model_flag(cmds, cfg):
+    if not config.get(cfg, "orchestrate.models"):
+        return []
+    out = []
+    for c in cmds:
+        w = c.words
+        if (c.name == "orca" and w[1:3] in LAUNCHES and flag(w, "--agent") == "claude"
+                and flag(w, "--terminal") is None and not flag(w, "--model")):
+            out += finding(cfg, "orchestrate.model_flag",
+                           f"This `orca {' '.join(w[1:3])}` names no model, so the session runs on the account's default. "
+                           "Add `--model` with what `orch model worker` (or `lead`) prints.")
+    return out
+
+
 def check_bash(cmd, background, s, cfg):
     out, cmds = [], shell.commands(cmd)
+    out += check_model_flag(cmds, cfg)
     if roles.applies("wait_foreground", s):
         wait = next((c for c in cmds if waits(c)), None)
         if wait and not background:

@@ -526,7 +526,8 @@ Program state lives in `~/.claude/programs/<slug>/`: `program.json`, the append-
     "jira": {"base_url": "https://…", "email_env": "JIRA_EMAIL", "token_env": "JIRA_API_TOKEN", "issue_type": "Task"},
     "rules_file": "~/.config/agent-skills/tracker-rules.md"
   },
-  "notes": {"adapter": "obsidian", "obsidian": {"vault": "<vault>", "access": "mcp"}, "markdown": {"root": "~/notes"}}
+  "notes": {"adapter": "obsidian", "obsidian": {"vault": "<vault>", "access": "mcp"}, "markdown": {"root": "~/notes"}},
+  "orchestrate": {"models": {"lead": "opus", "worker": "sonnet"}}
 }
 ```
 
@@ -574,6 +575,7 @@ Every rule has a key in `~/.claude/agent-skills.json`. Its value is one of `"den
 | `orchestrate.ask_user_question` | deny | AskUserQuestion in the main conversation of an orchestrator, lead or worker. Subagents and general sessions are not covered |
 | `orchestrate.wait_foreground` | deny | An orchestrator or lead running `orch wait`, `orch inbox --wait`, `orch watch-cards` or `orca orchestration check\|inbox --wait` without `run_in_background`, or cutting a background wait with `\| tail` or `\| head`. A worker's `check --wait` is not covered |
 | `orchestrate.send_devnull` | deny | An orchestrator, lead or worker sending the output of `orca orchestration send\|reply` to `/dev/null`. `2>/dev/null` alone is not covered |
+| `orchestrate.model_flag` | warn | With `orchestrate.models` set, `orca orchestration worker-start`, `orca worktree create` or `orca agent launch` starting Claude with no `--model`. `--terminal` is out of scope |
 | `orchestrate.self_land` | warn | `hooks/self_land_gate.py`. A card whose first prompt has `PROGRAM` and an `APPROVED` line naming `orch land` calling `worker_done` or `orca worktree rm` over its own open PR. A `READY-WAIT:` line, `--outcome failed` and a human-gate program pass. `deny` blocks it |
 | `orchestrate.stack_dependent` | warn | A dependent PR that is not a stack. `hooks/stack_gate.py` reads the brief's `Lands after` and the branch's history at `gh pr create`; `orch land` and `land-check` compare land-after edges with the real stacks. `deny` makes both block. What cannot be read passes with one warning line |
 | `orchestrate.auto_wake_min` | none (off) | A positive integer N. `orch wait` wakes a worker once, N minutes after it first marked it idle (`skills/orchestrate/references/waking.md`, "Automatic wake"). With no key it only marks the worker and prints one line saying auto-wake is off. One dispatch is never woken twice; a second stop goes to Needs you |

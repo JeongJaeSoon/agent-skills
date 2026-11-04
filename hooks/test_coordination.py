@@ -22,6 +22,9 @@ ROLES = {"orchestrator": {"agent_type": "agent-skills:orchestrator"}, "lead": {"
          "worker": {"transcript_path": WORKER}, "card": {"transcript_path": CARD}, "general": {"transcript_path": HUMAN}}
 
 
+LAST = {}
+
+
 def hook(tool, tool_input, role, **extra):
     env = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE_", "AGENT_SKILLS_"))}
     env.update(HOME=str(TMP), AGENT_SKILLS_STATE=str(STATE), AGENT_SKILLS_CONFIG=str(CONFIG),
@@ -30,7 +33,9 @@ def hook(tool, tool_input, role, **extra):
                "cwd": str(TMP), **ROLES[role], **extra}
     out = subprocess.run([sys.executable, HERE / "guard.py"], input=json.dumps(payload), capture_output=True,
                          text=True, env=env).stdout
-    spec = (json.loads(out) if out.strip() else {}).get("hookSpecificOutput") or {}
+    parsed = json.loads(out) if out.strip() else {}
+    LAST["warning"] = parsed.get("systemMessage") or ""
+    spec = parsed.get("hookSpecificOutput") or {}
     return spec.get("permissionDecision") or "none"
 
 
@@ -96,5 +101,27 @@ for cmd in ("orca orchestration send --to run:r --text hi 2>/dev/null", "orca or
     assert bash(cmd, "lead") in ("none", "allow"), cmd
 CONFIG.write_text(json.dumps({"orchestrate": {"send_devnull": False}}))
 assert bash("orca orchestration send --to run:r --text hi > /dev/null", "lead") == "none"
+CONFIG.write_text("{}")
+
+
+# A Claude start with no --model warns, and only once orchestrate.models is set.
+def model_warning(cmd, role="lead"):
+    bash(cmd, role)
+    return LAST["warning"]
+
+
+START = "orca orchestration worker-start --worktree new-child --agent claude"
+assert "orchestrate.model_flag" not in model_warning(f"{START} --spec 'ABC-1 fix'")
+CONFIG.write_text(json.dumps({"orchestrate": {"models": {"lead": "opus", "worker": "sonnet"}}}))
+for role in ("lead", "general"):
+    assert "orch model worker" in model_warning(f"{START} --spec 'ABC-1 fix'", role)
+assert "orch model worker" in model_warning("orca agent launch --agent claude --worktree active")
+assert "orch model worker" in model_warning("orca worktree create --repo id:r --name x --agent claude --prompt 'ABC-1 fix'")
+for cmd in (f"{START} --spec 'x' --model sonnet", f"{START} --spec 'x' --model=opus", f"{START} --terminal term_x --spec 'x'",
+            "orca orchestration worker-start --terminal term_x --worktree id:w --spec 'x'",
+            "orca orchestration worker-start --worktree new-child --agent codex --spec 'x'"):
+    assert model_warning(cmd) == "", cmd
+CONFIG.write_text(json.dumps({"orchestrate": {"models": {"worker": "sonnet"}, "model_flag": "off"}}))
+assert model_warning(f"{START} --spec 'x'") == ""
 CONFIG.write_text("{}")
 print("coordination: all pass")
