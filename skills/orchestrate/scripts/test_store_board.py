@@ -535,6 +535,11 @@ with state("before", None, None, STATE) as sd:
     assert r["duplicates"] == [] and r["missing"] == [] and not store.path().exists()
     assert rowstate.judged({"id": "x", "kind": "task", "status": "moving"}, {"db_unknown": True})["unknown"] == ["결정·닫힘 DB 이행 대기"]
     assert all(v["status"] == "check" for v in rowstate.snapshot()["by_pr"].values())
+    # Decisions work from decisions.json until the import, so a registered one is in the report: `--decision` hands its
+    # item to the store, and a render that lost it would drop the owner's question without a word.
+    code, out, err = orch("brief", "render", "--no-refresh", "--no-fill", "--decision", "Export format → 추천: JSON")
+    assert code == 0 and "(d1) Export format → 추천: JSON" in out and not store.path().exists(), (out, err)
+    assert [d["id"] for d in fleet.open_decisions()] == ["d1"]
 # A 4a DB, the guard row not in: the board is still not read, and 4a's decisions wait with it.
 with state("half") as sd:
     store.import_apply(checks=False, upto=store.DECISION_STEP)

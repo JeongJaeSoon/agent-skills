@@ -808,7 +808,11 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         store, open_dec, db_known = seen["board"], seen["decisions"], True
         shut = {k: r for k, r in seen["latest"].items() if r["ev"] == "done"}
     except store_db.NotMigrated:
-        store, open_dec, db_known, shut = {"rows": {}, "order": [], "leads": {}, **{l: [] for l in store_db.LANES}}, [], False, {}
+        store, db_known, shut = {"rows": {}, "order": [], "leads": {}, **{l: [] for l in store_db.LANES}}, False, {}
+        try:  # decisions are in decisions.json until the import, and `--decision` has registered there: list them
+            open_dec = fleet.open_decisions()
+        except store_db.NotMigrated:  # a DB that is not imported: unknown, and the headline and the ❔ rows say so
+            open_dec = []
     prs_file = fleet.read_json(sd / "prs.json", {}) or {}
     me = prs_file.get("me")
     prs = {k: {**v["detail"], "probed_at": v.get("probed_at")} for k, v in (prs_file.get("prs") or {}).items() if v.get("detail")}
