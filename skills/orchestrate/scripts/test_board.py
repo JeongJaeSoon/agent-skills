@@ -320,10 +320,14 @@ assert out["stale"] == ["ghost"] and out["width_ok"] is True
 
 # A PR whose state moves bolds its row; a saved table from before PR states were kept bolds nothing for them.
 prs_json = json.loads((state / "prs.json").read_text())
+merge_state = prs_json["prs"]["acme/web#45"]["detail"].get("merge_state")
 prs_json["prs"]["acme/web#45"]["detail"]["merge_state"] = "DIRTY"
 (state / "prs.json").write_text(json.dumps(prs_json))
-out = json.loads(ok("brief", "render", "--periodic", "--now", NOW, "--json"))
+out = json.loads(orch("brief", "render", "--periodic", "--now", NOW, "--json")[1])
 assert out["changed"] == ["search/ph3/sort", "search/ph2"], out["changed"]
+# The longer PR cell leaves no room to keep `검색 개선 ph3` and `검색 개선 ph4 · ph5` apart, and two names are never cut
+# alike: the table stays wider than 78 columns and the render says so.
+assert out["width_ok"] is False and "| 검색 개선 ph4 · ph5 |" in out["text"], out["text"]
 assert "| 🔄 | └ **정렬** | [#45](https://example.test/45) ❗DIRTY CI✗→main |" in out["text"], out["text"]
 # A folded PR keeps a base other than its section's in the cell, and moving it bolds the row. The section's base turns
 # to main here, so a PR cell then names the long branch: too wide to fit, reported, and written whole.
@@ -341,6 +345,7 @@ for r in last["rows"].values():
 (tmp / "brief-last" / "top-level.json").write_text(json.dumps(last))
 assert json.loads(orch("brief", "render", "--periodic", "--now", NOW, "--json")[1])["changed"] == ["search/ph2"]
 prs_json["prs"]["acme/web#52"]["detail"]["base"] = "feature/notify"
+prs_json["prs"]["acme/web#45"]["detail"]["merge_state"] = merge_state  # the longer cell was for the two checks above
 (state / "prs.json").write_text(json.dumps(prs_json))
 
 assert board.pr_state({"state": "OPEN", "merge_state": "BLOCKED", "ci": "success"}) == "BLOCKED"

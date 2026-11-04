@@ -81,8 +81,7 @@ def fit(rows, cols, cuttable, floor=10, deco=None, keep=()):
     to read as itself, so a column in keep never goes below the width at which its distinct cells still differ (two
     cards `xx-agent-actions-lead` and `xx-agent-wizard-lead` stay two), and the rest below floor. deco(row, column,
     text) dresses a body cell after the cut (a bold, a └), so the `…` never lands inside the markup. When no cut gets
-    it into cols, nothing is cut: the table overflows whole, for the width check to report, or for the caller to try
-    again without keep."""
+    it into cols, nothing is cut: the table overflows whole, for the width check to report."""
     deco = deco or (lambda i, c, s: s)
     low = {c: max(floor, apart([r[c] for r in rows[1:]], floor) if c in keep else 0) for c in cuttable}
     cap, first, spent = {}, None, set()
@@ -113,13 +112,13 @@ def fit(rows, cols, cuttable, floor=10, deco=None, keep=()):
 
 def tiers(keep=(), floor=10, tight=6):
     """The (keep, floor) pairs to try in turn, the most readable first: every cut cell at floor columns or more, then
-    two fewer at a time down to tight, all with the names in keep kept apart, and last tight with names that may read
-    alike. A table that fits with two names alike is better than one that wraps."""
-    return [(keep, f) for f in range(floor, tight - 1, -2)] + [((), tight)]
+    two fewer at a time down to tight, always with the names in keep kept apart. A table that cannot fit that way
+    overflows whole and the width check reports it: two rows that read alike cannot be told apart, nor checked."""
+    return [(keep, f) for f in range(floor, tight - 1, -2)]
 
 
 def fit_best(rows, cols, cuttable, keep=(), floor=10, **kw):
-    """fit with the first of tiers() that brings the table into cols; the last one's table when none does."""
+    """fit with the first of tiers() that brings the table into cols; the last one's (whole) table when none does."""
     for k, f in tiers(keep, floor):
         out = fit(rows, cols, cuttable, keep=k, floor=f, **kw)
         if table_width(out) <= cols:

@@ -1392,7 +1392,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             # different names still differ. A table the other cells alone make too wide overflows, and the render reports it.
             # The session cell keeps its state word and model mark; only its worktree name gives way, a column at a time,
             # when the cut name and next step alone do not bring the table to the width. Only then may a cell go
-            # shorter, down to the last of table_width.tiers, where two names may end up alike.
+            # shorter, down to the last of table_width.tiers. Two names never read alike: a table that cannot be cut
+            # that way overflows whole, and the render reports it.
             cells = lambda w: [[x for c, x in enumerate(r) if c not in drop] for r in
                                ([mark(l, l["status"]), l["shown"], l["cell"] or "—", l["progress"], next_cell(l),
                                  session_text(l, w)] for l in mine)]
@@ -1403,28 +1404,17 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             width_ok &= table_width.table_width(table) <= COLS
             out += ["", "| " + " | ".join(head).strip() + " |", "|---" * len(head) + "|"]
             # The dashboard has the page's width: its copy of the report keeps every cell whole.
-            # Built without fit, so the check below compares what was written with what the rows are, not with itself.
             whole = [head] + [[dress(i, c, s) for c, s in enumerate(r)] for i, r in enumerate(cells(SESSION_NAME_W), 1)]
             swaps.append((len(out), len(table) - 1, [table_width.md_row(row) for row in whole[1:]]))
             out += [table_width.md_row(row) for row in table[1:]]
             # Placed from the rows written, by the whole name each one shows (names are unique in the report): a row the
             # table lost is missing and one it wrote twice is a duplicate, whatever the lines handed to it said.
             by_name = {l["shown"]: l for l in mine if l["status"] is not None}
-            bare = lambda cell: re.sub(r"^\*\*(.*)\*\*$", r"\1", re.sub(r"^└ ", "", cell))
-
-            def of_row(row, full):
-                """Whether row is the whole row full, every cell as it is or cut to its head (the session cell, which
-                gives up its worktree name on its own, is not compared)."""
-                return len(row) == len(full) and all(
-                    bare(w) == bare(f) or bare(w).endswith("…") and bare(f).startswith(bare(w)[:-1])
-                    for w, f in zip(row[:-1], full[:-1]))
-            for row in table[1:]:
-                name = bare(row[1])
-                if name not in by_name and name.endswith("…"):  # a cut name: the one name it is the head of
-                    heads = [n for n in by_name if n.startswith(name[:-1])]
-                    # Several names share the head: the row's other cells say which, or it is placed as none.
-                    like = [f for f in whole[1:] if bare(f[1]) in heads and of_row(row, f)]
-                    name = heads[0] if len(heads) == 1 else bare(like[0][1]) if len(like) == 1 else None
+            written = [re.sub(r"^\*\*(.*)\*\*$", r"\1", re.sub(r"^└ ", "", row[1])) for row in table[1:]]
+            for name in written:
+                if name not in by_name and name.endswith("…"):  # a cut name is the head of one name that is not written whole
+                    heads = [n for n in by_name if n.startswith(name[:-1]) and n not in written]
+                    name = heads[0] if len(heads) == 1 else None
                 if name in by_name:
                     drawn(by_name[name])
             # Done on every open row the board can close; Ack on a ✅ row not yet acknowledged.

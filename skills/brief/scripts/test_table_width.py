@@ -91,13 +91,13 @@ for rows, k in folded:
 assert fit([["a", "b"], ["x" * 15, "y"]], 20, (0,)) == [["a", "b"], ["x" * 11 + "…", "y"]]
 assert fit([["a", "b"], ["x" * 15, "y"], ["z" * 12, "y"]], 20, (0,))[1:] == [["x" * 11 + "…", "y"], ["z" * 12, "y"]]
 assert fit([["a", "b"], ["x" * 15, "y"], ["z" * 8, "y"]], 20, (0,))[1:] == [["x" * 11 + "…", "y"], ["z" * 8, "y"]]
-# Near the floor no cut gets the table in: the loop ends, and the table overflows whole.
+# Near the floor no cut gets the table in: the loop ends with the cuttable cells at their floor, still too wide.
 assert fit([["a", "b"], ["x" * 12, "y" * 60]], 40, (0,)) == [["a", "b"], ["x" * 12, "y" * 60]]
 # deco dresses a cell after the cut, so the `…` stays inside the markup.
 assert fit([["a", "b"], ["x" * 15, "y"]], 20, (0,), deco=lambda i, c, s: f"**{s}**" if c == 0 else s)[1][0] == "**" + "x" * 11 + "…**"
 
-# Two long names with one head stay two: keep stops the cut where they would read alike, and the table then
-# overflows whole; fit_best goes on to cut them as short as the floor lets it.
+# Two long names with one head stay two: keep stops the cut where they would read alike, and the table then stays
+# uncut, for fit_best too: two rows that read alike cannot be told apart.
 cards = ["xx-agent-actions-lead", "xx-agent-wizard-lead"]
 assert apart(cards, 6) == 11 and apart(cards + cards, 6) == 11 and apart(["ab", "cd"], 6) == 6
 table = [["name", "n"]] + [[c, "y"] for c in cards]
@@ -106,7 +106,7 @@ assert [r[0] for r in out[1:]] == ["xx-agent-ac…", "xx-agent-wi…"], out
 out = fit(table, 16, (0,), floor=6, keep=(0,))
 assert [r[0] for r in out[1:]] == cards and table_width(out) > 16, out
 out = fit_best(table, 16, (0,), floor=6, keep=(0,))
-assert [r[0] for r in out[1:]] == ["xx-agen…"] * 2 and table_width(out) <= 16, out
+assert [r[0] for r in out[1:]] == cards and table_width(out) > 16, out
 assert fit_best(table, 20, (0,), floor=6, keep=(0,)) == fit(table, 20, (0,), floor=6, keep=(0,))
 
 wide = "| " + "가" * 40 + " | b |\n|---|---|\n"
