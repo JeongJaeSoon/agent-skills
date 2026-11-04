@@ -81,7 +81,7 @@ def screen_state(tail, quiet_min, finding=""):
     box = max((i for i, l in enumerate(tail) if l.strip().startswith("❯")), default=len(tail))
     if any(SPINNER.match(l) for l in tail[:box]):
         return "busy", "spinner"
-    if any(SHELLS.search(l) for l in tail[-6:]):
+    if any(SHELLS.search(l) for l in tail[box + 1:]):  # the status bar only: a turn's text can say the same words
         return "busy", "background running"
     if quiet_min >= AUTH_QUIET_MIN and any(l.strip() == "❯" for l in tail):
         return "idle", "quiet prompt"
@@ -333,7 +333,7 @@ def main(argv):
         save(state, seen)
         gap = missing(terms, reads, states, problem)
         if lines:
-            print("\n".join(lines + warned), flush=True)
+            print("\n".join(lines + ([f"PARTIAL {gap}"] if gap else []) + warned), flush=True)
             return
         if a.once:
             head = f"PARTIAL {len(terms)} agent terminals, nothing new; {gap}" if gap else f"OK {len(terms)} agent terminals, nothing new"

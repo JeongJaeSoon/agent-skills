@@ -104,8 +104,9 @@ assert a.evidence({**busy, "applies": True}, "busy") == "busy"
 spin = ["⏺ Running", "✻ Cogitating… (esc to interrupt)", "❯ "]
 assert card_watch.screen_state(spin, 0) == ("busy", "spinner")
 assert card_watch.screen_state(["done.", "❯ "], 5) == ("idle", "quiet prompt")
-bg = ["⏺ text", "✻ Cooked for 41s · done 7:47 PM · 1 shell still running", "─" * 20, "❯ ", "─" * 20, "  ⏵⏵ auto mode on"]
+bg = ["⏺ text", "✻ Cooked for 41s", "─" * 20, "❯ ", "─" * 20, "  ⏵⏵ auto mode on · 1 shell · ← 1 agent"]
 assert card_watch.screen_state(bg, 30) == ("busy", "background running"), "claude agents says busy for this turn-ended session"
+assert card_watch.screen_state(["⏺ Both 2 shells have finished.", "❯ "], 5) == ("idle", "quiet prompt"), "a turn's words are not the status bar"
 assert card_watch.screen_state(["done.", "❯ ", "  ⏵⏵ auto mode on · ← 1 agent"], 30) == ("idle", "quiet prompt"), \
     "the status line's agent count shows on sessions claude agents calls idle"
 assert card_watch.screen_state(["done.", "❯ "], 0) == ("unknown", "no evidence"), "a prompt that just drew is no idle"
@@ -206,6 +207,8 @@ screens["h1"] = menu
 out = watch([row("s1", status="busy"), row("s2", status="busy")], state=d / "w5.json")
 assert out[:3] == ['STUCK h1 (a select menu): "Which base branch should the PR target?"', "  agents: busy (screen blocked)",
                    "  orca terminal read --terminal h1 --screen"], out
+out = watch([row("s1", status="busy")], state=d / "w5b.json")
+assert "PARTIAL 신호 없음 1: h2 (not listed)" in out, "a finding on one card does not hide the gap on another: " + str(out)
 rec_rows = [r for r in log() if r.get("handle") == "h1" and r["kind"] == "card"]
 assert rec_rows[-1]["differs"] == ["screen"] and rec_rows[-1]["finding"] == "a select menu", rec_rows[-1]
 screens["h1"] = idle
