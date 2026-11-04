@@ -304,6 +304,8 @@ assert "screens cut short" in pround(facts(terminals=[t1], cut_short=True), [row
 assert "못 읽은 곳 1: h1" in pround(facts(terminals=[t1], screens={"h1": ["⏺ text"]}), [row("s1", status="busy")])[4]
 assert pround(facts(terminals=[t1]), [], "not JSON")[4] == "신호 없음: claude agents failed: not JSON"
 assert pround(facts(terminals=[]), [], "exit 1")[4] == "신호 없음: claude agents failed: exit 1", "no card to judge is still not OK"
+assert pround(facts(terminals=[t1], failed={"models"}), [], "boom")[4] == \
+    "신호 없음: claude agents failed: boom · 모델 판정·자동 전환 건너뜀", "a skipped model check is named, not only failed"
 assert pround(facts(terminals=[t1]), [])[4] == "신호 없음 1: h1 (not listed)"
 cx = term("cx", "codex")
 assert pround(facts(terminals=[cx], screens={"cx": ["⏺ text"]}), [])[4] == "", "Codex: screen only, and no gap"

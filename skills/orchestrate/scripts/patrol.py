@@ -799,7 +799,8 @@ def signal_round(facts, findings, verdicts, memo, memo2, notes, dry, rid):
     parts = [f"못 읽은 곳 {len(blind)}: " + ", ".join(blind)] if blind else []
     gaps = agent_signal.gaps(reads)
     if problem:
-        parts.append(f"{agent_signal.NO_SIGNAL}: claude agents failed: {problem}")
+        skipped = " · 모델 판정·자동 전환 건너뜀" if "models" in (facts.get("failed") or ()) else ""
+        parts.append(f"{agent_signal.NO_SIGNAL}: claude agents failed: {problem}{skipped}")
     elif gaps:
         parts.append(f"{agent_signal.NO_SIGNAL} {len(gaps)}: " + ", ".join(f"{h} ({w})" for h, w in gaps.items()))
     return "; ".join(parts)

@@ -402,4 +402,29 @@ assert "주기를 넘김" in rh.last_line(now=NOW + 3 * 900 + 60, interval=900)
 s = rh.spec(900)
 assert s["ProgramArguments"][-2:] == [str(pathlib.Path(rh.__file__).resolve()), "run"] and s["StartInterval"] == 900
 assert "/usr/bin" in s["EnvironmentVariables"]["PATH"]
+
+# launchd's PATH has no `claude`, so patrol's `claude agents` died with PermissionError. The spec must carry its dir.
+import shutil  # noqa: E402
+fake_home, other = tmp / "home", tmp / "elsewhere"
+for d in (fake_home / ".local" / "bin", other):
+    d.mkdir(parents=True)
+    (d / "claude").write_text("#!/bin/sh\nexit 0\n")
+    (d / "claude").chmod(0o755)
+launchd_path = "/usr/bin:/bin:/usr/sbin:/sbin"
+saved = {k: os.environ.get(k) for k in ("HOME", "PATH")}
+try:
+    os.environ["HOME"] = str(fake_home)
+    os.environ["PATH"] = launchd_path
+    assert shutil.which("claude", path=launchd_path) is None, "the repro: launchd's PATH cannot find claude"
+    spec_path = rh.spec(900)["EnvironmentVariables"]["PATH"]  # installer shell without claude: the home dir stands in
+    assert shutil.which("claude", path=spec_path) == str(fake_home / ".local" / "bin" / "claude"), spec_path
+    os.environ["PATH"] = f"{other}:{launchd_path}"  # installer shell that finds claude elsewhere: that dir is kept
+    spec_path = rh.spec(900)["EnvironmentVariables"]["PATH"]
+    assert shutil.which("claude", path=spec_path) == str(other / "claude"), spec_path
+    (fake_home / ".local" / "bin" / "claude").unlink()
+    os.environ["PATH"] = launchd_path
+    assert str(fake_home / ".local" / "bin") not in rh.spec(900)["EnvironmentVariables"]["PATH"], "no claude there, no entry"
+finally:
+    for k, v in saved.items():
+        os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
 print("ok")

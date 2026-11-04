@@ -637,8 +637,11 @@ def agent_target():
 
 
 def spec(interval):
-    tools = [os.path.dirname(t) for t in map(shutil.which, ("orca", "gh", "docker", "lsof")) if t]
-    path = ":".join(dict.fromkeys(tools + ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin"]))
+    # `claude` is what patrol's `claude agents` needs; the installer's shell finds it where launchd's PATH does not.
+    tools = [os.path.dirname(t) for t in map(shutil.which, ("orca", "gh", "docker", "lsof", "claude")) if t]
+    home_bin = pathlib.Path.home() / ".local" / "bin"  # the standard user install dir, if the shell did not have it
+    extra = [str(home_bin)] if (home_bin / "claude").exists() else []
+    path = ":".join(dict.fromkeys(tools + extra + ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin"]))
     return {"Label": LABEL,
             "ProgramArguments": [shutil.which("python3") or sys.executable, "-I", str(pathlib.Path(__file__).resolve()), "run"],
             "StartInterval": int(interval), "RunAtLoad": True, "ProcessType": "Background", "LowPriorityIO": True,
