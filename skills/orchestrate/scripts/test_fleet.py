@@ -698,6 +698,25 @@ process.stdout.write(JSON.stringify(out));"""
     assert got["open"].count("<tr") == 7 and 'class="jsub"' in got["open"] and "Self-clean</b>" in got["open"], got["open"]
     assert "no record · agent not installed" in got["closed"] and 'class="is-done"' in got["closed"], got["closed"]
 
+    # A brief row's session shows its model tag like the Sessions table's model cell, in the brief table's 세션 cell and in
+    # the session page's brief-rows card: a tag after the word, a warn tag when it ends in `!`, nothing without a model.
+    js = f"""{helpers}
+{(assets / "fleet.js").read_text()}
+const sess = (model, word = "working") => ({{id: "wt-a", name: "a", state: "working", word, last: "x", at: null, pr: null, ...(model === undefined ? {{}} : {{model}})}});
+F.brief = {{table_rows: [{{rows: [{{status: "🔄", label: "row-one", session: sess("O")}}, {{status: "🔄", label: "row-two", session: sess("S!")}},
+                                  {{status: "🔄", label: "row-three", session: sess("")}}, {{status: "🔄", label: "row-four", session: sess()}}]}}]}};
+const cards = briefRowsCard({{id: "wt-a"}}, {{prs: []}}).split("</li>");
+process.stdout.write(JSON.stringify({{cell: [sess("O"), sess("S!"), sess(""), sess()].map((s) => sessCell(s, "x")), cards}}));"""
+    got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
+    ok_html, warn_html, empty_html, none_html = got["cell"]
+    assert 'class="model-mark"' in ok_html and ">O<" in ok_html and "warn" not in ok_html.split("model-mark")[1].split("</span>")[0], ok_html
+    assert 'class="model-mark"' in warn_html and ">S!<" in warn_html and "warn" in warn_html.split("model-mark")[1], warn_html
+    assert ok_html.index("working") < ok_html.index("model-mark"), "the model comes after the word tag"
+    assert "model-mark" not in empty_html and "model-mark" not in none_html, (empty_html, none_html)
+    assert 'class="model-mark"' in got["cards"][0] and ">O<" in got["cards"][0], got["cards"][0]
+    assert 'class="model-mark"' in got["cards"][1] and ">S!<" in got["cards"][1] and "warn" in got["cards"][1].split("model-mark")[1], got["cards"][1]
+    assert "model-mark" not in got["cards"][2] and "model-mark" not in got["cards"][3], got["cards"]
+
     # Monitors render escaped; every one not running is flagged and counted, a dead one with its exit code.
     js = f"""{helpers}
 {(assets / "fleet.js").read_text()}

@@ -1060,12 +1060,15 @@ function briefHtml(text, tableRows = [], placed = new Set(), listRows = {}, clos
 // restart changes. The state links to the session page; Orca brings its agent terminal to the front; under them, the
 // line it last reported. A row no session runs says 세션 없음 with neither.
 const SESSION_TONE = { working: "accent", stalled: "warn", none: "bad" };
+// The model tag (O, S or H; a trailing `!` when it is not the role's configured model), shared by the Sessions table and
+// the brief. A brief row carries the tag only, so its hover title is empty; the Sessions table has the full id.
+const modelMark = (t, full) => !t ? "" : ` <span class="model-mark"${full ? ` title="${esc(full)}"` : ""}>${tag(t, t.endsWith("!") ? "warn" : "")}</span>`;
 function sessCell(s, text) {
   if (!s) return esc(text);
   const word = tag(s.word, SESSION_TONE[s.state] || "", "");
   const open = s.id && s.state !== "none" ? `<button class="chip" type="button" data-open-session="${esc(s.id)}" title="Bring this session's terminal to the front in the host's Orca window">${icon("arrow")}Orca</button>` : "";
   const last = s.last ? `<span class="bsess-last muted" title="${esc(s.last)}">${esc(s.last)}${s.at ? ` · ${relSpan(s.at)}` : ""}</span>` : "";
-  return `<div class="bsess-head">${s.id ? `<a href="${sessionHref(s.id)}" title="${esc(`Session ${s.name || ""}`)}">${word}</a>` : word}${open}${last}</div>`;
+  return `<div class="bsess-head">${s.id ? `<a href="${sessionHref(s.id)}" title="${esc(`Session ${s.name || ""}`)}">${word}</a>` : word}${modelMark(s.model)}${open}${last}</div>`;
 }
 // The server switches only the host's Orca window and cannot tell which device clicked, so the last click's outcome
 // stays in a fixed note, with what to type or look for on another device, until it is closed.
@@ -1097,7 +1100,7 @@ function briefRowsCard(s, st) {
   const list = rows.map((x) => {
     const p = x.session.pr && prOf(x.session.pr);
     return `<li><span class="bmark">${esc(x.status || "")}</span><a class="grow ellipsis" href="#/fleet/brief">${esc(x.label)}</a>
-      <span class="acts">${x.session.pr ? (p && p.url ? link(p.url, esc(`#${p.number}`)) : `<span class="mono">${esc(x.session.pr)}</span>`) : ""}${tag(x.session.word, SESSION_TONE[x.session.state] || "", "")}</span></li>`;
+      <span class="acts">${x.session.pr ? (p && p.url ? link(p.url, esc(`#${p.number}`)) : `<span class="mono">${esc(x.session.pr)}</span>`) : ""}${tag(x.session.word, SESSION_TONE[x.session.state] || "", "")}${modelMark(x.session.model)}</span></li>`;
   }).join("");
   return `<div class="card"><div class="card-head"><h3>Brief rows</h3><span class="aside">${rows.length}${at ? ` · last report ${relSpan(at)}` : ""}</span></div>
     <ul class="rows">${list || `<li class="muted">${F.brief ? "No brief row is linked to this session." : "Loading…"}</li>`}</ul></div>`;
@@ -1485,7 +1488,7 @@ function subagentRows(s, d, hidden = false) {
 }
 
 // The one-cell model mark the collector wrote (fleet.py model_tags): O, S or H, with `!` when off orchestrate.models.
-const modelCell = (s) => !s.model_tag ? "" : ` <span class="model-mark" title="${esc(s.model)}">${tag(s.model_tag, s.model_tag.endsWith("!") ? "warn" : "")}</span>`;
+const modelCell = (s) => modelMark(s.model_tag, s.model);
 // A lead's rows fold on the Sessions page. Which leads are folded is this browser's, kept across reloads when storage
 // works; F.leadFold holds it for the page either way, so a redraw keeps it and blocked storage still lets it fold.
 const FOLD_KEY = "orch-dash:lead-fold";
