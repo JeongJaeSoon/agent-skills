@@ -154,7 +154,7 @@ assert pressure.turn_cap(cfg, 18) == 9 and pressure.turn_cap({**cfg, "active_tur
 assert pressure.turn_cap({**cfg, "active_turns_per_cpu": 0.01}, 18) == 1
 real_turns, real_cap = pressure.active_turns, pressure.turn_cap
 pressure.turn_cap = lambda c, cpus=None: 9
-for n, card, compose in ((9, "deny", "none"), (8, "none", "none"), (None, "none", "none")):
+for n, card, compose in ((9, "deny", "none"), (8, "none", "none"), (None, "deny", "none")):
     pressure.active_turns = lambda n=n: n
     assert gate("orca worktree create --repo x", OK) == card, n
     assert gate("orca orchestration worker-start --spec x --worktree new-top-level", OK) == card, n
@@ -167,6 +167,23 @@ pressure.active_turns = lambda: 12
 turns = g.gate("orca worktree create --repo x", OK, {}, cfg, now=1.0, p=pressure)[1]
 assert "12개" in turns and "상한 9개" in turns and "turns --wait 15" in turns and "Monitor" in turns
 assert "Bash run_in_background" in turns, turns
+pressure.active_turns = lambda: None
+unknown = g.gate("orca worktree create --repo x", OK, {}, cfg, now=1.0, p=pressure)[1]
+assert "셀 수 없어" in unknown and "turns --wait 15" in unknown, unknown
+# The hook, `turns` and `turns --wait` give one verdict on the same count: wait on a full or unreadable count, go otherwise.
+for n, hold in ((8, False), (9, True), (None, True)):
+    pressure.active_turns = lambda n=n: n
+    assert pressure.turn_hold(n, 9) is hold and (gate("orca worktree create --repo x", OK) == "deny") is hold, n
+    ticks = iter([0.0, 0.0, 901.0])
+    said = []
+    code = pressure.turns_wait(cfg, 15, now_fn=lambda: next(ticks), sleep=lambda s: None, count=lambda n=n: n, out=said.append)
+    assert code == (3 if hold else 0), (n, code)
+    assert ("셀 수 없음" in said[-1]) is (n is None) and "?" not in said[-1], said
+assert pressure.turn_hold(None, None) is False and pressure.turn_hold(10**6, None) is False  # cap off: never waits
+ticks = iter([0.0, 0.0, 1.0, 2.0])  # unreadable at first, readable on the second poll: waits, then goes
+said = []
+assert pressure.turns_wait(cfg, 15, now_fn=lambda: next(ticks), sleep=lambda s: None, count=iter([None, 0]).__next__,
+                           out=said.append) == 0 and "0개" in said[-1]
 pressure.active_turns, pressure.turn_cap = real_turns, real_cap
 assert pressure.active_turns(run=lambda *a, **k: json.dumps({"ok": True, "result": {"worktrees": [
     {"agents": [{"state": "working"}, {"state": "done"}]}, {"agents": [{"state": "working"}]}, {"agents": None}]}})) == 2
