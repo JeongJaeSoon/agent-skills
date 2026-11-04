@@ -539,7 +539,8 @@ def build(root, now=None):
                                                           "skipped": 0, "failed": 0, "kept": 5, "notes": [], "dark": []}))
     seed_pressure(root, now.timestamp())
     # The roles' models the Sessions table's Model cell is judged against: the demo workers run on both.
-    (root / "agent-skills.json").write_text(json.dumps({"orchestrate": {"models": {"lead": "opus", "worker": "sonnet"}}}))
+    (root / "agent-skills.json").write_text(json.dumps({"orchestrate": {"models": {"lead": "opus", "worker": "sonnet"}},
+                                                                  "dashboard": {"ticket_url": "https://tracker.example.test/acme/issue/"}}))
     # The fleet collector must never write the real ~/.local/state or read the real config from a demo or test.
     return {"AGENT_SKILLS_CONFIG": str(root / "agent-skills.json"), "ORCH_FLEET_STATE": str(root / "fleet-state"), "ORCH_FLEET_CONFIG": str(root / "fleet-config.json"),
             "PROGRAMS_HOME": str(root / "programs"), "AGENT_SKILLS_STATE": str(root), "CLAUDE_PROJECTS_DIR": str(projects), "ORCH_SKILLS": "off", "ORCH_PR_STATS": "off", "ORCH_TOKENS": "off", "DASH_DEMO_FIXTURES": str(root / "fixtures"),

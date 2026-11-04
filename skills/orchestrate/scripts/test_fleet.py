@@ -623,7 +623,7 @@ const click = (target) => {{ location.hash = ""; handlers.click({{target}}); ret
 out.clicks = {{row: click(node("span", {{}}, grow)), link: click(node("a", {{}}, grow)), button: click(node("button", {{copy: "x"}}, li))}};
 selection = "picked"; out.clicks.selecting = click(grow);
 process.stdout.write(JSON.stringify(out));"""
-    ctx = ("const vm = require('vm'), handlers = {}, sb = {process, handlers, location: {hash: '', origin: 'https://dash.example.test'}, selection: '', CSS: {escape: String},"
+    ctx = ("const vm = require('vm'), handlers = {}, sb = {process, handlers, S: {}, location: {hash: '', origin: 'https://dash.example.test'}, selection: '', CSS: {escape: String},"
            " getSelection: () => sb.selection, renderView() {}, document: {addEventListener(t, f) { handlers[t] = f; }, querySelector() { return null; }}};"
            "vm.runInNewContext(require('fs').readFileSync(0, 'utf8'), sb);")
     got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
@@ -631,6 +631,25 @@ process.stdout.write(JSON.stringify(out));"""
     assert got["clicks"] == {"row": "#/fleet/session/wt-coord", "link": "", "button": "", "selecting": ""}, got["clicks"]
     # A decision says how to answer it in the coordinator's terminal too, with the recommended option filled in.
     assert "<span class=\"mono\">d1: &lt;i&gt;CSV&lt;/i&gt;</span>" in html, html
+
+    # A ticket id in a brief cell becomes a link to state.ticket_url; with none, text stays as it was. Ids inside an
+    # existing link, a tag attribute or a standard's name ("UTF-8") are left alone.
+    js = f"""{helpers}
+{(assets / "fleet.js").read_text()}
+const cell = "ABC-12 <b>x</b> [ABC-13](https://x.test/ABC-14) UTF-8 `ABC-15` feat-16 <i title=\\"ABC-17\\">y</i>";
+const S = {{fleet: {{ticket_url: "https://tracker.example.test/acme/issue/"}}}};
+const on = briefInline(cell);
+S.fleet = {{}};
+process.stdout.write(JSON.stringify({{on, off: briefInline(cell), ids: (S.fleet.ticket_url = "https://t.example.test/", ticketIds({{name: "ABC-18 w", refs: []}}))}}));"""
+    got = json.loads(subprocess.run(["node", "-e", "const vm = require('vm'); vm.runInNewContext(require('fs').readFileSync(0, 'utf8'), "
+                                    "{document: {addEventListener() {}}, process});"], input=js, capture_output=True, text=True, check=True).stdout)
+    link_to = lambda k: f'<a class="link" href="https://tracker.example.test/acme/issue/{k}" target="_blank" rel="noopener noreferrer">{k}</a>'
+    assert link_to("ABC-12") in got["on"] and link_to("ABC-15") in got["on"], got["on"]
+    assert link_to("ABC-13") not in got["on"] and link_to("ABC-14") not in got["on"], got["on"]
+    assert "<i " not in got["on"] and link_to("ABC-17") in got["on"], "raw markup is escaped text, so an id in it is only text"
+    assert 'href="https://x.test/ABC-14"' in got["on"] and ">ABC-13</a>" in got["on"] and "UTF-8" in got["on"] and "tracker.example.test/acme/issue/UTF" not in got["on"]
+    assert "tracker.example.test" not in got["off"] and "ABC-12" in got["off"], got["off"]
+    assert got["ids"] == [{"key": "ABC-18", "url": "https://t.example.test/ABC-18"}], got["ids"]
 
     # Automations and shared resources render escaped; an overdue or failed automation is flagged and counted.
     js = f"""{helpers}
@@ -2195,5 +2214,22 @@ p = sent.page(fleet.orca_messages_sent([{"id": "m9", "type": "status", "to_handl
 got = [(r["source"], r["to"], r.get("also")) for r in p["rows"] if r["text"] == "logged twice"]
 assert sorted(got, key=str) == sorted([("log", "dispatch:ctx_9", ["orca"]), ("orca", "dispatch:ctx_8", None)], key=str), got
 assert [r.get("message") for r in p["rows"] if r["source"] == "log" and r["text"] == "logged twice"] == ["m9"], "the log row keeps the message id"
+
+# The ticket link prefix: dashboard.ticket_url, else nothing (and one stderr line, not a guess).
+cfg_file = pathlib.Path(tempfile.mkdtemp()) / "agent-skills.json"
+def ticket_url_for(cfg):
+    if cfg is None:
+        cfg_file.unlink(missing_ok=True)
+    else:
+        cfg_file.write_text(json.dumps(cfg))
+    os.environ["AGENT_SKILLS_CONFIG"] = str(cfg_file)
+    return fleet.ticket_url()
+assert ticket_url_for({"dashboard": {"ticket_url": "https://t.example.test/i/"}}) == "https://t.example.test/i/"
+assert ticket_url_for({"dashboard": {"ticket_url": "https://t.example.test/i"}}) == "https://t.example.test/i/", "slash added"
+for bad in (None, {}, {"dashboard": {"ticket_url": "javascript:alert(1)/"}}, {"dashboard": {"ticket_url": "https://t.example.test/{key}"}},
+            {"dashboard": {"ticket_url": "https://t.example.test/i?x=1"}}, {"dashboard": {"ticket_url": 5}}, {"dashboard": 3}):
+    assert ticket_url_for(bad) is None, bad
+os.environ.pop("AGENT_SKILLS_CONFIG")
+shutil.rmtree(cfg_file.parent)
 
 print("test_fleet: ok")
