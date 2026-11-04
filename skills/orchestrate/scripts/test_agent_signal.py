@@ -4,6 +4,9 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent))
 tmp = tempfile.TemporaryDirectory()
 os.environ["AGENT_SKILLS_STATE"] = tmp.name
 os.environ["ORCH_FLEET_STATE"] = tmp.name
+CONFIG_FILE = pathlib.Path(tmp.name) / "agent-skills.json"  # the model check is off unless a case turns it on
+CONFIG_FILE.write_text("{}")
+os.environ["AGENT_SKILLS_CONFIG"] = str(CONFIG_FILE)
 import agent_signal as a, card_watch, patrol, prog  # noqa: E402
 
 LOG, LOCK = pathlib.Path(tmp.name) / "agent-signal.jsonl", pathlib.Path(tmp.name) / "agent-signal.lock"
@@ -304,8 +307,13 @@ assert "screens cut short" in pround(facts(terminals=[t1], cut_short=True), [row
 assert "못 읽은 곳 1: h1" in pround(facts(terminals=[t1], screens={"h1": ["⏺ text"]}), [row("s1", status="busy")])[4]
 assert pround(facts(terminals=[t1]), [], "not JSON")[4] == "신호 없음: claude agents failed: not JSON"
 assert pround(facts(terminals=[]), [], "exit 1")[4] == "신호 없음: claude agents failed: exit 1", "no card to judge is still not OK"
-assert pround(facts(terminals=[t1], failed={"models"}), [], "boom")[4] == \
-    "신호 없음: claude agents failed: boom · 모델 판정·자동 전환 건너뜀", "a skipped model check is named, not only failed"
+CONFIG_FILE.write_text(json.dumps({"orchestrate": {"models": {"worker": "sonnet"}}}))
+try:  # models configured and the listing failed: model_round really skips, and the line says so
+    assert pround(facts(terminals=[t1]), [], "boom")[4] == \
+        "신호 없음: claude agents failed: boom · 모델 판정·자동 전환 건너뜀", "a skipped model check is named, not only failed"
+finally:
+    CONFIG_FILE.write_text("{}")
+assert "건너뜀" not in pround(facts(terminals=[t1]), [], "boom")[4], "no models configured: nothing was skipped"
 assert pround(facts(terminals=[t1]), [])[4] == "신호 없음 1: h1 (not listed)"
 cx = term("cx", "codex")
 assert pround(facts(terminals=[cx], screens={"cx": ["⏺ text"]}), [])[4] == "", "Codex: screen only, and no gap"
