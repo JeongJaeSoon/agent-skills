@@ -45,7 +45,9 @@ elif a[:2] == ["pr", "diff"]:
 elif a[:2] == ["pr", "merge"]:
     p = pr(a[2])
     if p.get("stacked"):
-        sys.exit("GraphQL: stacked pull requests cannot be merged this way")
+        sys.exit("GraphQL: This pull request is part of a stack and must be merged using the asynchronous merge REST API."
+                 " For more information, see https://docs.github.com/rest/pulls/pulls#merge-a-pull-request-asynchronously"
+                 " (mergePullRequest)")
     p["state"], p["merge_sha"] = "MERGED", f"m{a[2]}"; save(); st["log"] = st.get("log", []) + [a]; save()
 elif a[:2] == ["api", "graphql"]:
     n = next(x for x in a if x.startswith("n="))[2:]
@@ -68,15 +70,63 @@ elif a[:2] == ["run", "list"] and "--branch" in a:
     print(json.dumps(st.get("branch_runs", {}).get(a[a.index("--branch") + 1], [])))
 elif a[:2] == ["run", "list"]:
     print(json.dumps(st.get("runs", {}).get(a[a.index("--commit") + 1], [{"name": "CI", "status": "completed"}])))
-elif a[:1] == ["api"] and a[-1].endswith("cli_internal/pulls/stacks"):
-    print(json.dumps(st.get("stacks", [])))
+elif a[:1] == ["api"] and a[1].startswith("repos/o/r/stacks"):
+    # Bodies copied from a real stack: `pull_requests` holds objects, merged stacks stay listed with open false.
+    if st.get("stacks_fail"):
+        sys.exit("gh: Not Found (HTTP 404)")
+    assert "--paginate" in a and "--slurp" in a and "per_page=100" in a[1], a
+    for s in st.get("stacks", []):
+        for x in s["pull_requests"]:
+            x["state"] = "open" if st["prs"].get(str(x["number"]), {}).get("state", "OPEN") == "OPEN" else "closed"
+        s["open"] = s["open"] and any(x["state"] == "open" for x in s["pull_requests"])
+    print(json.dumps([st.get("stacks", [])]))
 elif a[:3] == ["api", "-X", "PUT"] and "merge-async" in a[3]:
     top = a[3].split("/pulls/")[1].split("/")[0]
-    for s in st.get("stacks", []):
-        if int(top) in s["pull_requests"]:
-            for n in s["pull_requests"][: s["pull_requests"].index(int(top)) + 1]:
+    mode = st.get("merge_async", "merged")
+    st["log"] = st.get("log", []) + [a]; save()
+    if st.get("conflict"):  # a 409 returns the running request's uuid; its other fields are not documented
+        print(json.dumps({"details": {"uuid": "u-1", "merge_method": "squash"}}))
+        if mode == "merged":
+            for n in top, "7":
                 pr(n)["state"], pr(n)["merge_sha"] = "MERGED", f"m{n}"
-    st["log"] = st.get("log", []) + [a]; save(); print("{}")
+            save()
+        sys.exit("gh: A merge request is already enqueued for this pull request (HTTP 409)")
+    if mode == "stale":  # a real HTTP 400: gh prints the body on stdout and its own line on stderr
+        print(json.dumps({"status": "failed", "details": {"message": "Pull request head branch was modified."}}))
+        sys.exit("gh: HTTP 400")
+    if mode == "queued409":
+        print(json.dumps({"message": "A merge request is already enqueued for this pull request"}))
+        sys.exit("gh: A merge request is already enqueued for this pull request (HTTP 409)")
+    if mode == "enqueued200":
+        print(json.dumps({"status": "enqueued", "details": {"message": "Pull request is already queued to merge."}}))
+        sys.exit(0)
+    if mode in ("merged", "junk"):
+        for s in st.get("stacks", []):
+            members = [x["number"] for x in s["pull_requests"]]
+            if int(top) in members:
+                for n in members[: members.index(int(top)) + 1]:
+                    pr(n)["state"], pr(n)["merge_sha"] = "MERGED", f"m{n}"
+        save()
+    if mode == "junk":
+        print("{}")
+    else:
+        print(json.dumps({"status": "pending", "details": {"message": "Merge request enqueued.", "uuid": "u-1",
+                                                           "merge_method": "squash", "merge_action": "default",
+                                                           "expected_head_sha": f"h{top}", "bypass_rules": False}}))
+elif a[:1] == ["api"] and "/merge-async/" in a[1]:
+    mode = st.get("merge_async", "merged")
+    if st.get("poll_blips"):
+        st["poll_blips"] -= 1; save()
+        sys.exit("gh: Bad Gateway (HTTP 502)")
+    print(json.dumps({"merged": {"status": "merged", "details": {"message": "Pull request was merged.", "sha": "m"}},
+                      "failed": {"status": "failed", "details": {"message": "Cannot perform a merge queue merge for a"
+                                                                            " branch with no merge queue"}},
+                      "enqueued": {"status": "enqueued", "details": {"message": "Added to the merge queue."}},
+                      "stuck": {"status": "pending", "details": {"message": "Merge request enqueued."}},
+                      "nonlinear": {"status": "failed", "details": {"message": "Stack needs to be rebased: PR #8's branch"
+                                                                               " is not a linear descendant of PR #7's branch."}}}[mode]))
+elif a[:1] == ["api"] and "/pulls/" in a[1] and a[1].split("/pulls/")[1].isdigit():
+    print(json.dumps(st.get("pr_stack", {}).get(a[1].split("/pulls/")[1])))
 else:
     sys.exit(f"fake gh: unhandled {a}")
 '''
@@ -103,6 +153,12 @@ cat "$FAKE_DOCKER_STATE" 2>/dev/null || echo "[]"
 '''
 
 
+def stack_rows(stacks):
+    return [{"id": 900 + i, "number": 100 + i, "open": True, "base": {"ref": "main"},
+             "pull_requests": [{"number": n, "state": "open", "draft": False, "merged_at": None,
+                                "head": {"ref": f"b{n}", "sha": f"h{n}"}} for n in s]} for i, s in enumerate(stacks)]
+
+
 def setup(prs, stacks=()):
     d = pathlib.Path(tempfile.mkdtemp())
     (d / "bin").mkdir()
@@ -112,7 +168,7 @@ def setup(prs, stacks=()):
     (d / "bin" / "orca").chmod(0o755)
     (d / "bin" / "docker").write_text(FAKE_DOCKER)
     (d / "bin" / "docker").chmod(0o755)
-    (d / "state.json").write_text(json.dumps({"prs": prs, "stacks": [{"id": i, "pull_requests": s} for i, s in enumerate(stacks)]}))
+    (d / "state.json").write_text(json.dumps({"prs": prs, "stacks": stack_rows(stacks)}))
     env = dict(os.environ, PATH=f"{d / 'bin'}:{os.environ['PATH']}", FAKE_GH_STATE=str(d / "state.json"),
                PROGRAMS_HOME=str(d / "programs"), ORCH_DASH="off",
                AGENT_SKILLS_LEDGER=str(d / "reap-ledger.jsonl"))
@@ -256,7 +312,7 @@ assert code == 3 and "CI failed" in out and not merged(d), out
 # A stack lands in this lane when every layer meets it; any one layer short of it holds the whole unit.
 def no_ci_stack(**lower):
     d, env = no_ci_setup(dict(pr(75, stacked=True), **lower), pr(76, base="b75", stacked=True))
-    st = json.loads((d / "state.json").read_text()); st["stacks"] = [{"id": 0, "pull_requests": [75, 76]}]
+    st = json.loads((d / "state.json").read_text()); st["stacks"] = stack_rows([[75, 76]])
     (d / "state.json").write_text(json.dumps(st))
     verdict(d, 75, "T-75"); verdict(d, 76, "T-76")
     return d, env
@@ -270,7 +326,7 @@ assert not list((d / "programs" / "_locks").glob("*.lock"))
 d, env = no_ci_stack(behind=1)
 code, out = prog(env, "land", "t", "--pr", "76")
 assert code == 3 and "#75's head does not contain its base" in out and not merged(d), out
-assert "update-branch 75 --repo o/r --rebase; gh pr update-branch 76 --repo o/r --rebase" in out, out
+assert "update-branch 75 --rebase --repo o/r; gh pr update-branch 76 --rebase --repo o/r" in out, out
 
 d, env = no_ci_stack()
 ledger_file = d / "programs" / "t" / "ledger.jsonl"
@@ -402,6 +458,12 @@ d, env = setup({"14": pr(14, "BEHIND")})
 verdict(d, 14, "T-14")
 code, out = prog(env, "land", "t", "--pr", "14")
 assert code == 3 and "update-branch 14" in out, out
+# land-check says the same, stacked or not, and with no stack listing to read.
+code, out = prog(env, "land-check", "t", "--pr", "14")
+assert code == 1 and "HOLD" in out and "update-branch 14" in out and "Traceback" not in out, out
+st = json.loads((d / "state.json").read_text()); st["stacks_fail"] = True; (d / "state.json").write_text(json.dumps(st))
+code, out = prog(env, "land-check", "t", "--pr", "14")
+assert code == 1 and "HOLD" in out and "update-branch 14" in out and "Traceback" not in out, out
 
 # 3b. Exclusive lane: a migration takes the lane in order, lands only on the latest base, then frees it.
 d, env = setup({"15": pr(15, files=["db/migrations/1.sql"], behind=1), "16": pr(16, files=["db/migrations/2.sql"])})
@@ -460,12 +522,178 @@ code, out = prog(env, "land", "t", "--pr", "32")
 assert code == 0 and "landed #32" in out, out
 assert [c[:2] for c in json.loads((d / "state.json").read_text())["log"]] == [["pr", "merge"]]
 
-# A behind exclusive stack is updated bottom-up: update-branch on the top only pulls the layer below.
+# merge-async's result is read from its uuid, not guessed from the PR after 15 minutes.
+def stack_of_two(mode, **state):
+    d, env = setup({"7": pr(7, stacked=True), "8": pr(8, base="b7", stacked=True)}, stacks=[[7, 8]])
+    verdict(d, 7, "T-7"); verdict(d, 8, "T-8")
+    st = json.loads((d / "state.json").read_text()); st["merge_async"] = mode; st.update(state)
+    (d / "state.json").write_text(json.dumps(st))
+    return d, env
+
+
+# A failed merge ends at once, with GitHub's own message.
+d, env = stack_of_two("failed")
+code, out = prog(env, "land", "t", "--pr", "8")
+assert code == 1 and "no merge queue" in out, out
+assert [e["note"] for e in ledger(d) if e["ev"] == "land_failed"] == [
+    "Cannot perform a merge queue merge for a branch with no merge queue"], ledger(d)
+# Enqueued is the normal end on a queue branch, not a failure: yield, and no landed row until the queue merges it.
+d, env = stack_of_two("enqueued")
+code, out = prog(env, "land", "t", "--pr", "8")
+assert code == 2 and "merge queue" in out, out
+evs = ledger(d)
+assert not [e for e in evs if e["ev"] in ("landed", "land_failed")], evs
+assert [e["note"] for e in evs if e["ev"] == "yield"][-1].startswith("in the merge queue"), evs
+# Landing again while queued answers 200 enqueued by the same yield.
+d, env = stack_of_two("enqueued200")
+code, out = prog(env, "land", "t", "--pr", "8")
+assert code == 2 and "merge queue" in out, out
+assert not [e for e in ledger(d) if e["ev"] == "land_failed"], ledger(d)
+# The queue merged the stack: the next land records every layer, bottom first, with no stack_top.
+st = json.loads((d / "state.json").read_text())
+st["prs"]["7"].update(state="MERGED", merge_sha="m7"); st["prs"]["8"].update(state="MERGED", merge_sha="m8")
+(d / "state.json").write_text(json.dumps(st))
+code, out = prog(env, "land", "t", "--pr", "8")
+assert code == 0 and "merge queue" in out, out
+landed = [e for e in ledger(d) if e["ev"] == "landed"]
+assert [(e["pr"], e["sha"]) for e in landed] == [(7, "m7"), (8, "m8")] and not any("stack_top" in e for e in landed), landed
+# A queue that put the layers in separate groups: the top still queued yields, and its merge records both.
+d, env = stack_of_two("enqueued")
+prog(env, "land", "t", "--pr", "8")
+st = json.loads((d / "state.json").read_text())
+st["prs"]["7"].update(state="MERGED", merge_sha="m7"); (d / "state.json").write_text(json.dumps(st))
+assert prog(env, "land", "t", "--pr", "8")[0] == 2
+st = json.loads((d / "state.json").read_text())
+st["prs"]["8"].update(state="MERGED", merge_sha="m8"); (d / "state.json").write_text(json.dumps(st))
+assert prog(env, "land", "t", "--pr", "8")[0] == 0
+assert [e["pr"] for e in ledger(d) if e["ev"] == "landed"] == [7, 8], ledger(d)
+# The queue took the lower layer and the retry merges the top itself: the lower layer is still recorded.
+d, env = stack_of_two("enqueued")
+prog(env, "land", "t", "--pr", "8")
+st = json.loads((d / "state.json").read_text())
+st["prs"]["7"].update(state="MERGED", merge_sha="m7"); st["merge_async"] = "merged"; (d / "state.json").write_text(json.dumps(st))
+code, out = prog(env, "land", "t", "--pr", "8")
+assert code == 0 and "landed #8" in out, out
+assert [e["pr"] for e in ledger(d) if e["ev"] == "landed"] == [7, 8], ledger(d)
+# A 409 names the request already running: its result is followed, and a failure there is seen.
+d, env = stack_of_two("failed", conflict=True)
+code, out = prog(env, "land", "t", "--pr", "8")
+assert code == 1 and "no merge queue" in out, out
+d, env = stack_of_two("merged", conflict=True)
+code, out = prog(env, "land", "t", "--pr", "8")
+assert code == 0 and "#7 #8" in out, out
+# A 409 that names none is a yield, and not called a queue.
+d, env = stack_of_two("queued409")
+code, out = prog(env, "land", "t", "--pr", "8")
+assert code == 2 and "already running" in out and "queue" not in out, out
+assert not [e for e in ledger(d) if e["ev"] == "land_failed"], ledger(d)
+# A stack that is not linear gets the bottom-up rebase, not the refusal alone.
+d, env = stack_of_two("nonlinear")
+code, out = prog(env, "land", "t", "--pr", "8")
+assert code == 3 and "update-branch 7 --rebase --repo o/r; gh pr update-branch 8 --rebase" in out, out
+# The stack listing failed: a PR whose own field says stacked yields rather than merge layers it cannot see...
+d, env = stack_of_two("merged", stacks_fail=True, pr_stack={"8": {"number": 100}})
+code, out = prog(env, "land", "t", "--pr", "8")
+assert code == 2 and "stack listing did not answer" in out and "could not be read" in out, out
+assert not json.loads((d / "state.json").read_text()).get("log"), out
+# ...and one that says no lands as before, unchecked, with one warning line (a server with no stacks endpoint).
+d, env = setup({"70": pr(70)})
+verdict(d, 70, "T-70")
+st = json.loads((d / "state.json").read_text()); st["stacks_fail"] = True; (d / "state.json").write_text(json.dumps(st))
+code, out = prog(env, "land", "t", "--pr", "70")
+assert code == 0 and "landed #70" in out and out.count("could not be read") == 1, out
+# A lower layer outside the list of open PRs would merge unchecked: merge-async takes every open layer below.
+d, env = setup({"8": pr(8, base="b7", stacked=True)}, stacks=[[7, 8]])
+verdict(d, 8, "T-8")
+code, out = prog(env, "land", "t", "--pr", "8")
+assert code == 3 and "#7 under #8" in out, out
+assert not json.loads((d / "state.json").read_text()).get("log"), out
+
+
+# A land-after edge outside a stack: a warning at warn, exit 3 at deny, off at off.
+def dependent(level=None, stacks=()):
+    d, env = setup({"71": pr(71), "72": pr(72)}, stacks=stacks)
+    verdict(d, 71, "T-low"); verdict(d, 72, "T-up")
+    prog(env, "dep", "t", "--ticket", "T-up", "--after", "T-low")
+    (d / "skills.json").write_text(json.dumps({"orchestrate": {"stack_dependent": level}}) if level is not None else "{}")
+    return d, dict(env, AGENT_SKILLS_CONFIG=str(d / "skills.json"))
+
+
+d, env = dependent()
+code, out = prog(env, "land", "t", "--pr", "72")
+assert code == 2 and "lands after T-low" in out and "warning: #72 lands after #71" in out and "gh stack link 71 72" in out, out
+code, out = prog(env, "land", "t", "--pr", "71")  # the lower end sees it too: landing alone would end the chance
+assert code == 0 and "warning: #72 lands after #71" in out, out
+d, env = dependent("deny")
+code, out = prog(env, "land", "t", "--pr", "72")
+assert code == 3 and "gh stack link 71 72 --base main" in out and "orchestrate.stack_dependent" in out, out
+code, out = prog(env, "land", "t", "--pr", "71")
+assert code == 3 and "gh stack link 71 72" in out, out
+code, out = prog(env, "land-check", "t", "--pr", "71")
+assert code == 1 and "HOLD" in out and "gh stack link 71 72" in out, out
+d, env = dependent("deny")
+code, out = prog(env, "land-check", "t", "--pr", "71", "--main-fix")  # the diagnosis agrees with the land below
+assert code == 0 and "READY" in out and "warning: #72 lands after #71" in out, out
+code, out = prog(env, "land", "t", "--pr", "71", "--class", "main-fix")  # a red main's repair is not held back
+assert code == 0 and "warning: #72 lands after #71" in out, out
+# The open PR listing unread: land-check stays a diagnosis, one warning and no judgement of the edge.
+d, env = dependent("deny")
+st = json.loads((d / "state.json").read_text()); st["flaky"] = {"pr list": 1}; (d / "state.json").write_text(json.dumps(st))
+code, out = prog(env, "land-check", "t", "--pr", "71")
+assert code == 0 and "READY" in out and out.count("could not be read") == 1 and "gh stack link" not in out, out
+d, env = dependent(False)
+code, out = prog(env, "land", "t", "--pr", "71")
+assert code == 0 and "gh stack link" not in out, out
+# Stacked in the right order passes at deny. Stacked upside down can never land: said at any level, even off.
+d, env = dependent("deny", stacks=[[71, 72]])
+code, out = prog(env, "land", "t", "--pr", "71")
+assert code == 2 and "lands with its stack from #72" in out and "gh stack link" not in out, out
+d, env = dependent("off", stacks=[[72, 71]])
+code, out = prog(env, "land", "t", "--pr", "71")
+assert code == 3 and "#72 below #71" in out, out
+# The stack list cannot be read: nothing is judged, one warning, and the deny does not fire.
+d, env = dependent("deny")
+st = json.loads((d / "state.json").read_text()); st["stacks_fail"] = True; (d / "state.json").write_text(json.dumps(st))
+code, out = prog(env, "land", "t", "--pr", "72")
+assert code == 2 and "lands after T-low" in out and out.count("could not be read") == 1 and "gh stack link" not in out, out
+# A head that moved under the request is the ordinary "moved" yield, read from the body of the HTTP 400.
+d, env = stack_of_two("stale")
+code, out = prog(env, "land", "t", "--pr", "8")
+assert code == 2 and "moved" in out, out
+assert not [e for e in ledger(d) if e["ev"] == "land_failed"], ledger(d)
+# One poll that gets a 502 is not the merge's result.
+d, env = stack_of_two("merged", poll_blips=1)
+real_sleep = "import time; time.sleep = lambda s: None; import runpy, sys; sys.argv = ['prog.py'] + sys.argv[1:]; "
+r = subprocess.run([sys.executable, "-c", real_sleep + f"runpy.run_path({str(HERE / 'prog.py')!r}, run_name='__main__')",
+                    "land", "t", "--pr", "8"], env=env, capture_output=True, text=True)
+assert r.returncode == 0 and "#7 #8" in r.stdout, r.stdout + r.stderr
+# A request still pending when the polls run out is not a failure, and the layers it covers are recorded later.
+d, env = stack_of_two("stuck")
+r = subprocess.run([sys.executable, "-c", real_sleep + f"runpy.run_path({str(HERE / 'prog.py')!r}, run_name='__main__')",
+                    "land", "t", "--pr", "8"], env=env, capture_output=True, text=True)
+assert r.returncode == 2 and "still pending" in r.stdout, r.stdout + r.stderr
+assert not [e for e in ledger(d) if e["ev"] in ("land_failed", "landed")], ledger(d)
+st = json.loads((d / "state.json").read_text())
+st["prs"]["7"].update(state="MERGED", merge_sha="m7"); st["merge_async"] = "merged"; (d / "state.json").write_text(json.dumps(st))
+code, out = prog(env, "land", "t", "--pr", "8")
+assert code == 0 and [e["pr"] for e in ledger(d) if e["ev"] == "landed"] == [7, 8], out
+# An answer with no status or uuid falls back to reading the PRs, with one warning line.
+d, env = stack_of_two("junk")
+code, out = prog(env, "land", "t", "--pr", "8")
+assert code == 0 and "#7 #8" in out and out.count("warning: merge-async") == 1, out
+# Merged stacks stay in the listing with open false: they must not count as a stack.
+d, env = stack_of_two("merged")
+st = json.loads((d / "state.json").read_text()); st["stacks"][0]["open"] = False
+st["prs"]["7"]["stacked"] = False; (d / "state.json").write_text(json.dumps(st))
+code, out = prog(env, "land", "t", "--pr", "7")
+assert code == 0 and [c[:2] for c in json.loads((d / "state.json").read_text())["log"]] == [["pr", "merge"]], out
+
+# A behind exclusive stack is rebased bottom-up: a merge commit, or a lower layer alone, leaves it not linear.
 d, env = setup({"7": pr(7, stacked=True, files=["migrations/3.sql"]),
                 "8": pr(8, base="b7", stacked=True, files=["migrations/4.sql"], behind=1)}, stacks=[[7, 8]])
 verdict(d, 7, "T-7"); verdict(d, 8, "T-8")
 code, out = prog(env, "land", "t", "--pr", "8")
-assert code == 3 and "update-branch 7 --repo o/r --rebase; gh pr update-branch 8" in out, out
+assert code == 3 and "update-branch 7 --rebase --repo o/r; gh pr update-branch 8 --rebase" in out, out
 
 # 6. Red main stops everything but the fix.
 d, env = setup({"9": pr(9)})
@@ -841,7 +1069,7 @@ assert code == 0 and "merged outside land" in out and any(e["ev"] == "landed" an
 
 # Every layer a stack lands needs its own approval, and a newer gate voids an older approval.
 d, env = gate_setup({"56": pr(56, stacked=True), "57": pr(57, base="b56", stacked=True)})
-st = json.loads((d / "state.json").read_text()); st["stacks"] = [{"id": 0, "pull_requests": [56, 57]}]
+st = json.loads((d / "state.json").read_text()); st["stacks"] = stack_rows([[56, 57]])
 (d / "state.json").write_text(json.dumps(st))
 verdict(d, 56, "T-56"); verdict(d, 57, "T-57")
 def add_row(**row):

@@ -1,6 +1,6 @@
 # 스킬 카탈로그
 
-`agent-skills` 플러그인이 싣는 스킬 41개(`skills/*/SKILL.md`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 13개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
+`agent-skills` 플러그인이 싣는 스킬 41개(`skills/*/SKILL.md`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 14개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
 
 설정 기본값 변경과 기존 데이터 보존 방법은 [설정 전환 안내](configuration-migration.md)를 따른다. 노트·원장·개인 폴더는 명시 설정이 필요하고, 성과 보고 기본 시간대는 UTC다.
 
@@ -27,7 +27,7 @@ PR 을 맡는 스킬과 머지 주체:
 
 | 스킬 | 맡는 PR | 머지 |
 |---|---|---|
-| deliver-ticket | 이 세션이 작업 중인 내 PR: 작성, 리뷰 대응, 머지, 릴리스 | 세션이 §5 대로 (`gh pr merge`, 스택은 merge-async) |
+| deliver-ticket | 이 세션이 작업 중인 내 PR: 작성, 리뷰 대응, 머지, 릴리스 | 세션이 §5 대로 (`gh pr merge`, 스택은 `gh stack merge`) |
 | watch-prs | 정기 회차가 모은 대기 PR: 나를 지명한 리뷰 요청, 리뷰를 기다리는 내 PR(의뢰·리마인드), 머지 준비가 된 내 PR | `merge_repos` 게이트를 모두 통과한 내 PR 만 |
 | orchestrate | 프로그램 워커의 PR | `orch land`, 또는 사람이 승인한 plain merge |
 | handoff-ticket | PR 을 만들지 않는다. 다음 카드를 정한다 | 하지 않는다 |
@@ -604,6 +604,7 @@ PR 을 맡는 스킬과 머지 주체:
 | `orchestrate.wait_foreground` | deny | 오케스트레이터·리드가 `orch wait`, `orch inbox --wait`, `orch watch-cards`, `orca orchestration check\|inbox --wait`를 `run_in_background` 없이 실행, 또는 배경 대기를 `\| tail`·`\| head`로 자름. 워커의 `check --wait`는 대상이 아니다 |
 | `orchestrate.send_devnull` | deny | 오케스트레이터·리드·워커가 `orca orchestration send\|reply`의 출력을 `/dev/null`로 보냄. `2>/dev/null`만은 대상이 아니다 |
 | `orchestrate.self_land` | warn | `hooks/self_land_gate.py`. 첫 프롬프트에 `PROGRAM`과 `orch land`를 적은 `APPROVED`가 있는 카드가 자기 PR이 열린 채 `worker_done`이나 `orca worktree rm`을 부름. `READY-WAIT:` 줄, `--outcome failed`, human-gate 프로그램은 통과한다. `deny`로 올리면 막는다 |
+| `orchestrate.stack_dependent` | warn | 의존 PR이 스택이 아니다. `hooks/stack_gate.py`가 `gh pr create`에서 브리프의 `Lands after`와 브랜치 이력을 보고, `orch land`·`land-check`가 land-after 간선과 실제 스택을 비교한다. `deny`로 올리면 둘 다 막는다. 못 읽으면 통과 + 경고 한 줄 |
 
 hook 자신의 판정이 예외를 내면 그 호출은 통과시키고, 경고와 함께 `$AGENT_SKILLS_STATE/guard-errors.jsonl`에 시각·hook·예외 종류·위치만 남긴다(명령 원문은 남기지 않는다). 설정 파일을 읽지 못하면 기본값을 쓴다.
 
@@ -722,7 +723,7 @@ pstack 스킬 58개(원칙 24개와 나머지 34개) 가운데 원칙 24개 전�
 - **프로젝트 운영:** `orchestrate`의 `orch` 원장, 착지 게이트와 독점 레인, human-gate, main 가디언, QA 리드, `orch-dash` 대시보드. 모양은 pstack 플레이북을 따랐지만 Orca Run과 GitHub stack 위에서 새로 만들었다.
 - **측정과 어댑터:** `measure-delivery`, `use-tracker`, `use-notes`.
 - **머신 관리:** `reap-resources`, `tune-automode`, `skills-config`, `setup-pc`.
-- **hook:** 권한 결정(`guard.py`), 오케스트레이터·리드 재정렬(`reorient.py`), 미설정 PC의 설정 제안(`onboard.py`), 대시보드에서 답하는 권한 창 기록(`permission.py`), 터미널에서 답한 결정 닫기(`decision.py`), 완료 주장 검사(`claim_check.py`), 무거운 시작 전 사용량 확인(`pressure_gate.py`), 문체 검사(`prose_check.py`).
+- **hook:** 권한 결정(`guard.py`), 오케스트레이터·리드 재정렬(`reorient.py`), 미설정 PC의 설정 제안(`onboard.py`), 대시보드에서 답하는 권한 창 기록(`permission.py`), 터미널에서 답한 결정 닫기(`decision.py`), 완료 주장 검사(`claim_check.py`), 무거운 시작 전 사용량 확인(`pressure_gate.py`), 문체 검사(`prose_check.py`), 의존 PR의 스택 확인(`stack_gate.py`), 프로그램 카드의 PR을 연 채 닫는 일 경고(`self_land_gate.py`).
 
 ### upstream 동기화 상태
 - **마지막 동기화:** 2026-10-26, `b42effe`(0.15.3)에서 `99b609a`(0.15.32)로. 그 사이 upstream은 pstack에 커밋 74개를 쌓았다.

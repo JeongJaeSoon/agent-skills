@@ -44,6 +44,8 @@ DESIGN      Only when later units will build on a contract this unit sets (a fun
             contract. Put the sketch in the ticket's plan comment (deliver-ticket §1); the units
             that build on it get that sketch in CONTEXT.
 ORDER       Starts after <TICKET…> (Orca deps) · lands after <TICKET…> (stack / orch dep).
+            `Lands after` means a stack: the unit's Base is then `stacked on #<PR>`. The order
+            with another program's PR is no stack (PARENT settles it): write it in PEERS.
             Class: normal | urgent | gate.
             Lane: normal, or exclusive when it touches migrations, CI, Dockerfile, compose or the
             program's exclusive_paths (land handles it; say it here so the worker expects it).
