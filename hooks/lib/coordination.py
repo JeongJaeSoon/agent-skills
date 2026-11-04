@@ -79,7 +79,7 @@ def check_model_flag(cmds, cfg):
             out += finding(cfg, "orchestrate.model_flag",
                            f"This `orca {' '.join(w[1:3])}` names no model, so the session runs on the account's default. "
                            "Add `--model` with what `orch model worker` (or `lead`) prints.")
-        elif w[1:3] != LAUNCHES[0] or re.search(r"[$`*?\[{]", re.sub(r"\[1m\]$", "", have)):
+        elif w[1:3] != LAUNCHES[0] or re.search(r"[$`*?\[{]", have):
             continue  # only a worker start is a worker; a value the shell expands (variable, glob) cannot be read here
         elif not isinstance(want, str) or not want:
             if not any("is not set" in f.reason for f in out):
