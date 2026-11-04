@@ -1506,8 +1506,10 @@ function ticketIds(s, rows = []) {
 // orchestrator and the leads are not workers: sessions hang under them.
 function finished(st, s) {
   if (s.kind === "orchestration" || s.kind === "orchestrator" || s.phase !== "offline") return false;
-  const pr = (st.prs || []).find((p) => p.session === s.id), state = pr ? pr.state : s.linked_pr && s.linked_pr.state;
-  return String(state || "").toUpperCase() === "MERGED";
+  // Every PR it has: one merged and none still open (an earlier PR merged while a later one is under review is not done).
+  const states = [...(st.prs || []).filter((p) => p.session === s.id).map((p) => p.state), s.linked_pr && s.linked_pr.state]
+    .filter(Boolean).map((x) => String(x).toUpperCase());
+  return states.includes("MERGED") && !states.includes("OPEN");
 }
 // The session's brief rows: what the work is and where it stands, from the same answer the Brief page reads.
 function briefCell(s) {

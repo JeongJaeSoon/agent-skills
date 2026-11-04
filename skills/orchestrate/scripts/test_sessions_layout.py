@@ -54,6 +54,7 @@ out.t2 = ids(st.sessions[3], []);
 out.t3 = ids(st.sessions[4], [{{label: "XYZ-7 brief row"}}]);
 out.t4 = ids({{name: "UTF-8 and SHA-256 with E2E-3, ABC-12 ABC-12"}}, []);
 out.t5 = ids({{name: "x", branch: "feat/ABC-12_fix"}}, []).concat(ids({{name: "feat_DEF-3", branch: "xABC-9 ABC-9x"}}, []));
+out.twoPrs = finished({{prs: [{{session: "w9", state: "MERGED"}}, {{session: "w9", state: "OPEN"}}]}}, {{id: "w9", kind: "task", phase: "offline"}});
 out.root = finished(st, {{kind: "orchestrator", phase: "offline", linked_pr: {{state: "MERGED"}}}});
 out.fin = sessions.map((s) => finished(st, s));
 F.doneOpen = false;
@@ -79,6 +80,7 @@ assert out["t4"] == ["E2E-3", "ABC-12"], out["t4"]  # a standard's name ("UTF-8"
 
 assert out["t5"] == ["ABC-12", "DEF-3"], out["t5"]  # an underscore is a boundary, a letter glued to the id is not
 assert out["root"] is False  # the orchestrator is never a finished worker
+assert out["twoPrs"] is False  # an earlier PR merged while a later one is still open
 # finished: offline and a merged PR (the collector's, else Orca's own link, either case); never a lead or a live worker
 assert out["fin"] == [False, False, False, True, False], out["fin"]
 
