@@ -4,6 +4,23 @@
 Usage:
   skills-sync card <brief.md> --repo <selector> --name <name> [--display-name <title>] [--comment <text>]
                    [--reference <ticket URL or Jira key>]... [--parent-worktree <selector> | --no-parent] [--card]
+                   [--role impl|verify|review] [--supersede] [--no-forbidden]
+  skills-sync handoff <TICKET> ...   (handoff() below)
+
+Before the start: the brief file's FORBIDDEN section is set to the current paragraph of orchestrate references/brief.md
+(the worker template's FORBIDDEN through "run it again."), between `<!-- FORBIDDEN:begin -->` and
+`<!-- FORBIDDEN:end -->`: replaced there, never appended; with no markers an old copy opening the row is replaced, or
+the section goes first in the row, or a new row before REPORT. The row's other lines (a repository's data-sharing
+restriction, the unit's bans) stay. A lead's brief is left alone; --no-forbidden leaves any brief alone and logs that
+with `orch sent add`. Then, with a --reference, one card per key (repo, reference, role): under a lock, a live Orca
+card of the same repo whose linkedItems, or this helper's $AGENT_SKILLS_STATE/cards.jsonl, carry the reference with
+the same --role (default impl) stops this one (exit 2, the cards listed). --supersede starts it anyway, tells the old
+card `superseded by <new>: stop and close by end-session §8` (sync.try_send's idle checks), logs it with `orch sent
+add --kind supersede` and records it in cards.jsonl. An unread card list is a warning, not a stop.
+After the start: `skills-sync close-setup <path> --agent <handle>` runs in the background, its log in
+$AGENT_SKILLS_STATE/close-setup/<name>.log ending in `result: ok|failed` (a trust or permission dialog, or no start,
+is a failure). Its path goes in the `card` object's close_setup; a close-setup that did not start is printed and does
+not fail the card.
 
 Which kind of card: a brief whose REPORT or PARENT line sends to `run:<id>`, from a session bound to that Run or
 itself a dispatched worker on it (a lead started with worker-start, whose `run-current` is null), starts a supervised
@@ -49,9 +66,16 @@ exists but linking, logging or naming it failed, or a started worker's receipt n
 output is still printed; do not create it again); 6 nothing created because the Run or the parent did not check
 out (the choices are printed).
 """
-import itertools, json, os, pathlib, re, shlex, subprocess, sys
+import contextlib, datetime, fcntl, itertools, json, os, pathlib, re, shlex, subprocess, sys
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
+STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE", "~/.local/state/agent-skills")).expanduser()
+TEMPLATE = REPO / "skills" / "orchestrate" / "references" / "brief.md"
+BEGIN, END = "<!-- FORBIDDEN:begin -->", "<!-- FORBIDDEN:end -->"
+INDENT = " " * 12  # the template's column
+PARAGRAPH_END = "run it again."
+WORK_ROLES = ("impl", "verify", "review")
+CLOSE_LINE = "CLOSE: 완료 기준을 채우고 결과를 적으면 end-session §8대로 같은 턴에 스스로 닫는다"
 sys.path.insert(0, str(REPO / "hooks"))
 sys.path.insert(0, str(REPO / "skills" / "orchestrate" / "scripts"))
 import guard  # noqa: E402
@@ -158,6 +182,258 @@ def compose(brief_path):
             not guard.LEAD_ROLE.search(prompt) or any(not re.search(rf"\b{w}\b", prompt) for w in guard.LEAD_LINES)):
         raise Refuse(2, "the composed prompt does not pass hooks/guard.py's card check; fix the brief's rows")
     return prompt
+
+
+def fenced_lines(lines):
+    """Indices of lines inside a ``` fence (the fence lines included): a quoted template is not the brief's own."""
+    inside, out = False, set()
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith("```"):
+            out.add(i)
+            inside = not inside
+        elif inside:
+            out.add(i)
+    return out
+
+
+def row_span(lines, key, skip):
+    """(first, end) line indices of the first `key` row outside `skip`, its indented continuation included."""
+    for i, line in enumerate(lines):
+        if i not in skip and starts_row(line, key):
+            j = i + 1
+            while j < len(lines) and lines[j].strip() and lines[j][:1].isspace() and j not in skip:
+                j += 1
+            return i, j
+    return None
+
+
+def forbidden_paragraph(template=None):
+    """The worker brief's FORBIDDEN paragraph from orchestrate references/brief.md, as stripped lines through the
+    refused-act paragraph's last sentence; the template's placeholders after it are the brief's own lines."""
+    lines = pathlib.Path(template or TEMPLATE).read_text().splitlines()
+    fence = fenced_lines(lines)
+    first = min(fence)
+    body = [l for i, l in enumerate(lines) if i in fence and i > first]
+    span = row_span(body, "FORBIDDEN", set())
+    if not span:
+        raise ValueError(f"{template or TEMPLATE} has no FORBIDDEN row in its first template")
+    out = []
+    for line in body[span[0]:span[1]]:
+        out.append(re.sub(r"^\s*FORBIDDEN\s+", "", line).strip() if not out else line.strip())
+        if line.rstrip().endswith(PARAGRAPH_END):
+            return out
+    raise ValueError(f"the template's FORBIDDEN row does not end its paragraph with {PARAGRAPH_END!r}")
+
+
+def place_forbidden(text, paragraph):
+    """(text, how): the brief with its FORBIDDEN section set to `paragraph`. Between the markers it is replaced, never
+    appended to; with no markers, an unmarked copy identical to the current paragraph is wrapped in markers, and any
+    other text (an older or edited copy included) stays while the marked section goes first in the row; with
+    no row, a new row goes before REPORT (else at the end). Lines outside the section (a repository's data-sharing
+    restriction, the unit's own bans) stay as they are. how: unchanged | replaced | inserted."""
+    lines = text.splitlines()
+    skip = fenced_lines(lines)
+    body = [INDENT + l for l in paragraph]
+    b = next((i for i, l in enumerate(lines) if i not in skip and BEGIN in l), None)
+    e = next((i for i, l in enumerate(lines) if b is not None and i > b and i not in skip and END in l), None)
+    if b is not None and e is not None:
+        head = lines[b][:lines[b].index(BEGIN) + len(BEGIN)]
+        tail = INDENT + lines[e][lines[e].index(END):]
+        new = lines[:b] + [head] + body + [tail] + lines[e + 1:]
+        how = "replaced"
+    else:
+        block = ["FORBIDDEN   " + BEGIN] + body + [INDENT + END]
+        span = row_span(lines, "FORBIDDEN", skip)
+        if span:
+            first, end = span
+            # An unmarked copy is replaced only when it is the current paragraph word for word (wrapped differently);
+            # an older or edited copy may hold a repository's own restriction, so it stays and the section goes first.
+            opening = paragraph[0].split(".")[0] + "."
+            strip = lambda l: re.sub(r"^\s*`?FORBIDDEN`?\s*:?\s*", "", l).strip()  # noqa: E731
+            s = next((i for i in range(first, end) if strip(lines[i]).startswith(opening)), None)
+            old = next((i for i in range(s, end) if lines[i].rstrip().endswith(PARAGRAPH_END)), None) \
+                if s is not None else None
+            words = lambda ls: " ".join(" ".join(strip(l) for l in ls).split())  # noqa: E731
+            if old is not None and words(lines[s:old + 1]) != words(paragraph):
+                old = None
+            if old is not None and s == first:
+                new = lines[:first] + block + lines[old + 1:]
+            elif old is not None:
+                new = lines[:s] + [INDENT + BEGIN] + body + [INDENT + END] + lines[old + 1:]
+            else:
+                rest = re.sub(r"^\s*`?FORBIDDEN`?\s*:?\s*", "", lines[first])
+                new = lines[:first] + block + ([INDENT + rest] if rest.strip() else []) + lines[first + 1:]
+        else:
+            report = row_span(lines, "REPORT", skip)
+            at = report[0] if report else len(lines)
+            new = lines[:at] + block + lines[at:]
+        how = "inserted"
+    out = "\n".join(new) + ("\n" if text.endswith("\n") else "")
+    return (text, "unchanged") if out == text else (out, how)
+
+
+def refresh_forbidden(brief_path):
+    """Writes the current FORBIDDEN paragraph into the brief file; returns how (place_forbidden), or Refuse(2)."""
+    path = pathlib.Path(brief_path).expanduser().resolve()
+    try:
+        text, how = place_forbidden(path.read_text(), forbidden_paragraph())
+        if how != "unchanged":
+            tmp = path.with_name(path.name + ".card-tmp")
+            tmp.write_text(text)
+            tmp.replace(path)
+    except (OSError, ValueError) as e:
+        raise Refuse(2, f"[{ME}] could not refresh the brief's FORBIDDEN section ({e}); fix it, or pass "
+                        "--no-forbidden to start the card with the brief as it is (that is logged)")
+    return how
+
+
+# ---- one card per (repo, reference, role)
+
+
+def ledger():
+    return STATE / "cards.jsonl"
+
+
+@contextlib.contextmanager
+def card_lock():
+    """Held from the duplicate check through the record, so two starts of the same key cannot both pass."""
+    STATE.mkdir(parents=True, exist_ok=True)
+    with open(STATE / "cards.lock", "w") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        yield
+
+
+def ledger_rows():
+    """{worktree path: the merged record} from cards.jsonl; a supersede line adds `superseded_by` to its path, and a
+    creation line (one with `role`) starts the path's record over, since Orca reuses a removed card's path."""
+    out = {}
+    try:
+        text = ledger().read_text()
+    except OSError:
+        return out
+    for line in text.splitlines():
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(r, dict) and isinstance(r.get("path"), str):
+            if "role" in r:
+                out[r["path"]] = dict(r)
+            else:
+                out.setdefault(r["path"], {}).update(r)
+    return out
+
+
+def ledger_add(**row):
+    STATE.mkdir(parents=True, exist_ok=True)
+    row = {"at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), **row}
+    with open(ledger(), "a") as f:
+        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def orca_result(*args):
+    p, _ = run([ORCA, *args, "--json"], timeout=30)
+    try:
+        res = json.loads(p.stdout).get("result") if p and not p.returncode else None
+    except (ValueError, AttributeError):
+        return None
+    return res if isinstance(res, dict) else None
+
+
+def repo_id(selector):
+    """Orca's repo id for a --repo selector, or for this terminal's worktree when selector is None; None unread."""
+    res = orca_result("repo", "show", "--repo", selector) if selector else orca_result("worktree", "current")
+    node = (res or {}).get("repo" if selector else "worktree")
+    node = node if isinstance(node, dict) else {}
+    return node.get("id" if selector else "repoId")
+
+
+def duplicates(repo, refs, role):
+    """Live Orca cards on the same key: the same repo, any of `refs` (in Orca's linkedItems or this ledger) and the
+    same role (the ledger's, `impl` for a card it never recorded). None when Orca's list could not be read."""
+    res = orca_result("worktree", "ps", "--limit", "500")
+    rows = (res or {}).get("worktrees")
+    if not isinstance(rows, list):
+        return None
+    known = ledger_rows()
+    out = []
+    for w in rows:
+        if not isinstance(w, dict) or w.get("isArchived") or w.get("isMainWorktree") or w.get("repoId") != repo:
+            continue
+        rec = known.get(w.get("path"), {})
+        if rec.get("superseded_by") or (rec.get("role") or "impl") != role:
+            continue
+        linked = json.dumps([w.get(k) for k in ("linkedItems", "linkedLinearIssue", "linkedIssue")], ensure_ascii=False)
+        # whole references only: ABC-2 is not ABC-20, nor a URL's prefix
+        if any(re.search(rf"(?<![\w-]){re.escape(r)}(?![\w/-])", linked) or r in (rec.get("references") or [])
+               for r in refs):
+            out.append({"path": w.get("path"), "name": w.get("displayName"), "worktree": w.get("worktreeId"),
+                        "role": rec.get("role") or "impl", "dispatch": rec.get("dispatch")})
+    return out
+
+
+def check_duplicates(repo_selector, refs, role, supersede):
+    """(repo id, the cards to supersede) or Refuse(2) when a card on this key is live and --supersede is absent.
+    An unread repo or card list is printed and lets the card through."""
+    if not refs:
+        return None, []
+    repo = repo_id(repo_selector)
+    found = duplicates(repo, refs, role) if repo else None
+    if found is None:
+        print(f"[{ME}] warning: Orca's repo or card list could not be read; the duplicate-card check was skipped",
+              file=sys.stderr)
+        return repo, []
+    if found and not supersede:
+        listed = "\n".join(f"  {d['path']}  {d['name'] or ''}  role {d['role']}" for d in found)
+        raise Refuse(2, f"[{ME}] a card on the same key (repo, {', '.join(refs)}, {role}) is already live:\n{listed}\n"
+                        "Send it what it needs instead (dispatch-card §3), or pass --supersede to start this one and "
+                        "tell that one to stop (it is recorded).")
+    return repo, found
+
+
+def supersede(old, new_path, new_name):
+    """Tells a superseded card to stop, logs it with `orch sent add --kind supersede` and records it. Returns the
+    failures."""
+    import sync
+    text = f"superseded by {new_name} ({new_path}): stop and close by end-session §8"
+    failed = []
+    ledger_add(path=old["path"], superseded_by=new_path)
+    if old.get("dispatch"):  # a worker: typed into its terminal, it would be taken over
+        p, err = run([ORCA, "orchestration", "send", "--to", f"dispatch:{old['dispatch']}", "--type", "status",
+                      "--subject", "superseded", "--body", text, "--json"])
+        failed += [] if p and not p.returncode else [f"dispatch:{old['dispatch']} was not told ({err}): {text}"]
+        res = {"terminals": []}
+    else:
+        res = orca_result("terminal", "list", "--worktree", f"path:{old['path']}")
+    agents = [t.get("handle") for t in (res or {}).get("terminals") or [] if isinstance(t, dict) and t.get("agentIdentity")]
+    if not agents and not old.get("dispatch"):
+        failed.append(f"no agent terminal found on {old['path']} to tell it: {text}")
+    for h in agents:
+        ok, why = sync.try_send(h, text)
+        if not ok:
+            failed.append(f"{h} was not told ({why}); send it by hand: {text}")
+    p, err = run([ORCH, "sent", "add", "--to", old.get("name") or old["path"], "--kind", "supersede", "--channel", ME,
+                  "-"], stdin=text)
+    if not p or p.returncode:
+        failed.append(f"orch sent add: {err}")
+    return failed
+
+
+def start_close_setup(path, handle, name):
+    """Starts `skills-sync close-setup <path> --agent <handle>` in the background. Returns {log, pid} or {error}: a
+    failure here never fails the card, it is printed."""
+    log = STATE / "close-setup" / f"{name}.log"
+    try:
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with open(log, "a") as out:
+            cmd = [sys.executable, str(REPO / "scripts" / "sync.py"), "close-setup", path, *(["--agent", handle] if handle else [])]
+            p = subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                 start_new_session=True)
+        return {"log": str(log), "pid": p.pid}
+    except OSError as e:
+        print(f"[{ME}] warning: close-setup did not start ({e}); run `skills-sync close-setup {path}` in the "
+              "background yourself", file=sys.stderr)
+        return {"error": str(e)}
 
 
 def pressure_check(cmd):
@@ -304,7 +580,8 @@ def handle_of(res):
 
 def parse_args(rest):
     opts, refs = {}, []
-    valued = {"--repo", "--name", "--display-name", "--comment", "--parent-worktree"}
+    valued = {"--repo", "--name", "--display-name", "--comment", "--parent-worktree", "--role", "--title", "--note",
+              "--base-branch"}
     i = 0
     while i < len(rest):
         if rest[i] == "--reference" and i + 1 < len(rest):
@@ -312,13 +589,12 @@ def parse_args(rest):
             i += 2
         elif rest[i] in valued and i + 1 < len(rest):
             opts[rest[i]], i = rest[i + 1], i + 2
-        elif rest[i] in ("--no-parent", "--card"):
+        elif rest[i] in ("--no-parent", "--card", "--supersede", "--no-forbidden"):
             opts[rest[i]], i = True, i + 1
         else:
             raise Refuse(2, f"unexpected argument {rest[i]!r}\n{__doc__}")
-    for k in ("--repo", "--name"):
-        if not opts.get(k):
-            raise Refuse(2, f"{k} is required (dispatch-card §3)")
+    if opts.setdefault("--role", "impl") not in WORK_ROLES:
+        raise Refuse(2, f"--role is one of {', '.join(WORK_ROLES)}")
     return opts, refs
 
 
@@ -327,7 +603,19 @@ def create(argv):
         raise Refuse(2, __doc__)
     brief = argv[0]
     opts, refs = parse_args(argv[1:])
+    for k in ("--repo", "--name"):
+        if not opts.get(k):
+            raise Refuse(2, f"{k} is required (dispatch-card §3)")
     prompt = compose(brief)
+    with card_lock():
+        return create_locked(brief, opts, refs, prompt)
+
+
+def create_locked(brief, opts, refs, prompt):
+    repo, superseded = check_duplicates(opts["--repo"], refs, opts["--role"], opts.get("--supersede"))
+    # A lead's brief has no FORBIDDEN row in its template: the worker paragraph is not its rule set.
+    forbidden = ("skipped (--no-forbidden)" if opts.get("--no-forbidden") else "skipped (lead brief)"
+                 if guard.is_lead(pathlib.Path(brief).expanduser().read_text()) else refresh_forbidden(brief))
     text = FENCE.sub("", pathlib.Path(brief).expanduser().read_text())
     wanted = {a[len("run:"):] for a in report_to(text) if a.startswith("run:")}
     to_run = bool(wanted)
@@ -415,9 +703,22 @@ def create(argv):
             hint = f"Before starting it again, ask Orca whether this start took effect: {query}" if query else ""
         raise Refuse(4, f"[{ME}] {verb} failed: {err}" + (f". {hint}" if hint else ""))
     mark("done")
-    print(json.dumps({**res, "card": {"kind": "worker" if worker else "card", "path": path, "handle": handle_of(res),
-                                      "run": run_id, "parent": parent}}, ensure_ascii=False, indent=1))
+    handle = handle_of(res)
+    setup = start_close_setup(path, handle, opts["--name"])
+    print(json.dumps({**res, "card": {"kind": "worker" if worker else "card", "path": path, "handle": handle,
+                                      "run": run_id, "parent": parent, "forbidden": forbidden, "close_setup": setup}},
+                     ensure_ascii=False, indent=1))
     failed = []
+    if refs:
+        ledger_add(repo=repo, references=refs, role=opts["--role"], path=path, name=opts["--name"],
+                   dispatch=res.get("dispatchId") if worker else None)
+    for old in superseded:
+        failed += supersede(old, path, opts.get("--display-name") or opts["--name"])
+    if opts.get("--no-forbidden"):
+        p, err = run([ORCH, "sent", "add", "--to", opts["--name"], "--kind", "other", "--channel", ME, "-"],
+                     stdin=f"started with --no-forbidden: the brief's FORBIDDEN section was not refreshed ({brief})")
+        if not p or p.returncode:
+            failed.append(f"orch sent add: {err}")
     if worker and refs and path:  # worker-start takes no link flag; only this new card is written
         p, err = run([ORCA, "reference", "add", *refs, "--worktree", f"path:{path}", "--json"])
         if not p or p.returncode:
@@ -434,6 +735,112 @@ def create(argv):
                 failed.append(f"orca worktree set: {err}")
     if failed:
         raise Refuse(5, f"[{ME}] the card was created but: {'; '.join(failed)}. Do not create it again.")
+    return 0
+
+
+HANDOFF = "skills-sync handoff"
+
+
+def handoff_parent():
+    """`id:<…>` of this card's parent worktree, else of this card itself (handoff-ticket §3), or Refuse(6)."""
+    mine = caller_worktree()
+    res = orca_result("worktree", "show", "--worktree", mine)
+    parent = ((res or {}).get("worktree") or {}).get("parentWorktreeId") if isinstance((res or {}).get("worktree"), dict) else None
+    if res is None:
+        print(f"[{HANDOFF}] warning: `orca worktree show` did not answer; the new card goes under this one",
+              file=sys.stderr)
+    return f"id:{parent}" if isinstance(parent, str) and parent else mine
+
+
+def confirm_start(handle):
+    """(started, detail): wait for the new agent to settle, then read its screen (handoff-ticket §4)."""
+    import sync
+    run([ORCA, "terminal", "wait", "--terminal", handle, "--for", "tui-idle", "--timeout-ms", "60000", "--json"],
+        timeout=90)
+    try:
+        state, detail = sync.start_state(handle)
+    except (sync.Stop, KeyError, TypeError) as e:
+        return False, f"screen unreadable: {e}"
+    return state == "started", f"{state}: {detail}"
+
+
+def handoff(argv):
+    """skills-sync handoff <TICKET> [--title <short title>] [--note <text>] [--base-branch <b>] [--reference <url>]...
+    [--role impl|verify|review] [--supersede] [--no-parent]
+
+    The next ticket's /goal card, as handoff-ticket §3 makes it: named after the ticket, under this card's parent (or
+    this card), its prompt `/goal <TICKET>. <note> CLOSE: …`, linked to --reference, displayed as `<TICKET> <title>`,
+    its setup closed in the background. The duplicate-card key uses the ticket and every --reference. Then its start is
+    read from its screen: exit 0 only once it shows the prompt taken; 5 when the card exists but the start, the link
+    or the name is not confirmed (do not create it again; look at the card). 2, 3, 4 and 6 as `skills-sync card`."""
+    try:
+        if not argv or argv[0].startswith("-"):
+            raise Refuse(2, handoff.__doc__)
+        ticket = argv[0]
+        opts, refs = parse_args(argv[1:])
+        # CLOSE on a line of its own: roles.py reads a CLOSE card by its row
+        prompt = f"/goal {ticket}." + (f" {opts['--note']}" if opts.get("--note") else "") + f"\n{CLOSE_LINE}"
+        if not guard.CLOSE_OR_KEEP.search(prompt):
+            raise Refuse(2, f"[{HANDOFF}] the prompt does not pass hooks/guard.py's card check")
+        with card_lock():
+            return handoff_locked(ticket, opts, refs, prompt)
+    except Refuse as e:
+        print(e, file=sys.stderr)
+        return e.code
+
+
+def handoff_locked(ticket, opts, refs, prompt):
+    keys = [ticket, *refs]
+    repo, superseded = check_duplicates(None, keys, opts["--role"], opts.get("--supersede"))
+    parent = None if opts.get("--no-parent") else handoff_parent()
+    name = opts.get("--name") or ticket.lower()
+    cmd = [ORCA, "worktree", "create", "--name", name]
+    cmd += ["--base-branch", opts["--base-branch"]] if opts.get("--base-branch") else []
+    cmd += ["--parent-worktree", parent] if parent else ["--no-parent"]
+    cmd += ["--agent", "claude", "--prompt", prompt]
+    for r in refs:
+        cmd += ["--reference", r]
+    cmd.append("--json")
+    reason, mark = pressure_check(shlex.join(["orca", *cmd[1:]]))
+    if reason:
+        raise Refuse(3, f"[{HANDOFF}] not created, the pressure gate refused it (run this same command again once "
+                        f"its `queue wait` ends with 0): {reason}")
+    p, err = run(cmd)
+    try:
+        out = json.loads(p.stdout) if p else None
+    except ValueError:
+        out = None
+    res = (out or {}).get("result") or {}
+    path = worktree_path(res)
+    if not (p and not p.returncode and out and out.get("ok") is not False and path):
+        mark("failed", err)
+        if out:
+            print(json.dumps(out, ensure_ascii=False, indent=1), file=sys.stderr)
+        refused = next((v for k, v in REFUSED_UNSTARTED.items() if p and k in p.stdout + p.stderr), None)
+        raise Refuse(4, f"[{HANDOFF}] orca worktree create failed: {err}"
+                        + (f". Nothing was created: {refused}" if refused else ""))
+    mark("done")
+    handle = handle_of(res)
+    failed = []
+    ledger_add(repo=repo, references=keys, role=opts["--role"], path=path, name=name)
+    title = f"{ticket} {opts['--title']}" if opts.get("--title") else ticket
+    p, err = run([ORCA, "worktree", "set", "--worktree", f"path:{path}", "--display-name", title, "--json"])
+    if not p or p.returncode:
+        failed.append(f"orca worktree set: {err}")
+    p, err = run([ORCH, "sent", "add", "--to", name, "--kind", "card", "--channel", HANDOFF,
+                  *(["--repo", gh] if (gh := github_repo(path)) else []), "-"], stdin=prompt)
+    if not p or p.returncode:
+        failed.append(f"orch sent add: {err}")
+    for old in superseded:
+        failed += supersede(old, path, title)
+    started, detail = confirm_start(handle) if handle else (False, "the receipt names no agent handle")
+    if not started:
+        failed.append(f"the start is not confirmed ({detail}); read `orca terminal read --terminal {handle} --screen`")
+    setup = start_close_setup(path, None, name)  # the start was just read; close-setup only closes the setup shell
+    print(json.dumps({**res, "card": {"kind": "card", "path": path, "handle": handle, "parent": parent,
+                                      "start": detail, "close_setup": setup}}, ensure_ascii=False, indent=1))
+    if failed:
+        raise Refuse(5, f"[{HANDOFF}] the card was created but: {'; '.join(failed)}. Do not create it again.")
     return 0
 
 
