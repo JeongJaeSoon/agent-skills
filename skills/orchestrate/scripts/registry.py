@@ -63,8 +63,8 @@ PRODUCERS = {
     "pressure": ("pressure round · launchd", ("pressure",)),
     "reaphard": ("reap-hard · launchd", ("reap_hard",)),
     "cardwatch": ("card-watch monitor", ("card_watch", "agent_signal")),
-    "hooks": ("hooks · reorient, roles, permission, onboard, record_check", (
-        "reorient", "roles", "config", "permission", "onboard", "record_check")),
+    "hooks": ("hooks · reorient, roles, permission, onboard, record_check, owner_check", (
+        "reorient", "roles", "config", "permission", "onboard", "record_check", "owner_check")),
     "sync": ("skills-sync · launchd, card, handoff, end-check", ("sync", "card", "end_check")),
     "preview": ("preview-watch · launchd", ("preview_watch",)),
     "share": ("share-server", ("share_server",)),
@@ -282,6 +282,9 @@ STORES = [
     Store("recordcheck", "S/record-check.jsonl", {"record.obligation": CANONICAL}, ("record_check:append",),
           ("nobody",), rule="merges, lands and PR opens that still owe a record line, their closes, and the warn "
                             "rows a week of observation reads before guard.record_check goes to deny"),
+    Store("ownercheck", "S/owner-check.jsonl", {"owner.unrecorded_warn": CANONICAL}, ("owner_check:append",), ("nobody",),
+          rule="one row per final reply that named owner items and recorded none: the observation guard.owner_check "
+               "reads before it goes to deny"),
     Store("onboard", "S/onboard-declined.json", {"onboard.declined": CANONICAL}, ("onboard:decline",), ("reorient",)),
     Store("ledger", "S/ledger.jsonl", {"resource.made": CANONICAL}, ("reap:act", "reap:main", "reap:note_stack_dirs"), ("janitor",),
           rule="what agents made, retired when reaped"),
@@ -374,6 +377,8 @@ STORES = [
     Store("progreflect", "P/*/reflect/*.md", {"program.event": DERIVED}, ("ext:leads",), ("reflect",)),
     Store("dashmeta", "P/.dash.*", {"dash.server": CANONICAL}, ("dash:serve", "dash:ensure"), ("programview",),
           rule="the serving process, its lock and log"),
+    Store("comparecache", "P/.compare-cache.*", {"pr.state": CACHE}, ("dash:save_compare_cache",), ("programview",),
+          rule="GitHub compare answers (is commit A in B's history): commits never change, so a restart keeps them"),
     Store("landlocks", "P/_locks/*.lock", {"program.event": LOCK, "resource.hold": CANONICAL},
           ("prog:ExclusiveLock.take", "holds:hold", "holds:_locked"), ("programview", "page"),
           rule="landing lanes and `orch hold` resources"),

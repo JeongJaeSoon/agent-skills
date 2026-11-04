@@ -1,7 +1,7 @@
-<!-- translated-from: 2b518b7763c9bf4819376cfbc44973442a7c3333 -->
+<!-- translated-from: 19be1ac364d135d7cc0164da90b55fddd57267ec -->
 # Skill catalog
 
-This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 15 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
+This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 16 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
 
 Follow the [configuration migration guide](configuration-migration.md) for changed defaults and preservation of existing data. Notes, ledgers and personal folders require explicit configuration; report time defaults to UTC.
 
@@ -626,6 +626,15 @@ Supervision (the preamble), CLOSE and KEEP are attributes, not roles. Orca's exe
 
 ### Record line checks
 `hooks/record_check.py` (PreToolUse, PostToolUse and PostToolUseFailure on Bash; Stop; SubagentStop). It calls no model and reads no tracker, notes store, Orca or GitHub state; it is off unless `~/.claude/agent-skills.json` has a `tracker` or `notes` object. A `gh pr merge` (not `--auto`/`--disable-auto`), `gh pr create` or `orch land` leaves a record obligation on the session and agent and adds a reminder naming the configured destinations and `references/record.md`; a failed call leaves one only when it held more than one command. Only a record line closes it: `기록: …` or `기록 못 함: <reason>` (`Recorded:`/`Not recorded:`) at the start of a line, outside code and quotes, with text after the colon, read from the final reply, a `worker_done` sent alone, or this turn's text before a close command. It checks a `worker_done` body without that line (a body from a variable or file counts as none), a milestone and a close command (`orca worktree rm`, `orca terminal close`) in one call, a close while this session or one under the closed path still owes a line, and a turn that ends owing one. `guard.record_check`: `warn` (default; the model is told before a send or close, and at Stop the human sees a warning and an observation row is written), `deny` (refuses the call, blocks the Stop once), `ask`, `off`. After a week of `warn` rows in `$AGENT_SKILLS_STATE/record-check.jsonl` it goes to `deny`. It proves the outcome was reported, not that the record was written; the lead's reconcile checks that. A merge left in the background and a close target named only by id are not followed.
+
+### Owner item checks
+
+`hooks/owner_check.py` (Stop, SubagentStop). It calls no model and reads no store. An owner item that lives only in the final reply, and not on the board, in the decision register or in the dashboard inbox, is gone after the next compaction; this hook counts the turns that leave one.
+
+- An owner item is one line of the reply: `🙋`, "오너 할 일", or a phrase that asks the owner (`ask the owner`, `owner approval needed`, `오너에게 묻`, `오너 결정 필요`). Code, quotes, table rows (their status is derived from records), a line that says only "없음" (none; `🙋 지금 오너가 할 일 — 없음`) and the status legend (`🔄 진행 · 🙋 오너 차례`) are not counted.
+- The reply passes when a Bash call this turn (after the last prompt a person typed) that was not refused ran `orch decide add`, `orch board now`, `orch board set … --owner`, `orch gate`, `orca orchestration gate-create` or `orch-dash inbox add`. Items are not matched to records: one call covers the whole reply.
+- Level `guard.owner_check`: `warn` when the key is unset. The human sees one line, "owner_check: 기록 안 된 오너 항목 N" (N unrecorded owner items), and a row goes to `$AGENT_SKILLS_STATE/owner-check.jsonl`; the model sees nothing, because a systemMessage does not reach it. The false-positive rate is measured from those rows. `deny` is turned on only by the key and blocks that stop once, as claim_check does, so the model records the items (`stop_hook_active` passes). `off` and `AGENT_SKILLS_OWNER_CHECK=0` turn it off.
+- The judgment matches phrases, so it has false positives and misses. That is why it starts at `warn`.
 
 ## Differences from pstack
 

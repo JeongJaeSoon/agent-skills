@@ -1,6 +1,6 @@
 # 스킬 카탈로그
 
-`agent-skills` 플러그인이 싣는 스킬 41개(`skills/*/SKILL.md`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 15개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
+`agent-skills` 플러그인이 싣는 스킬 41개(`skills/*/SKILL.md`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 16개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
 
 설정 기본값 변경과 기존 데이터 보존 방법은 [설정 전환 안내](configuration-migration.md)를 따른다. 노트·원장·개인 폴더는 명시 설정이 필요하고, 성과 보고 기본 시간대는 UTC다.
 
@@ -686,6 +686,14 @@ Bash의 `sed`나 heredoc으로 고친 파일은 수정으로 세지 않는다. �
 - 검사 대상: 기록 줄 없는 `worker_done` 본문(변수·파일 본문은 없는 것으로 본다), 기록 명령과 종료 명령(`orca worktree rm`, `orca terminal close`)을 한 호출에 넣은 것, 미결 의무가 남은 채 이 세션이나 그 경로 아래 세션을 닫는 것, 미결 의무를 두고 끝나는 턴.
 - 수준 `guard.record_check`: `warn`(기본: 보내기·닫기 전에는 모델에게 알리고, Stop에서는 사람에게 보이는 경고와 관찰 행만), `deny`(호출 거부, Stop은 한 번 block), `ask`, `off`. 한 주 동안 `$AGENT_SKILLS_STATE/record-check.jsonl`의 warn 행을 보고 deny로 올린다.
 - 보장하는 것은 "기록 결과를 보고했다"이지 "기록했다"가 아니다. 진위는 리드의 reconcile이 본다. 백그라운드로 띄운 머지의 완료, id로만 가리킨 종료 대상은 따라가지 않는다.
+
+### 오너 항목 기록 검사
+`hooks/owner_check.py`(Stop, SubagentStop). 모델을 부르지 않고 아무 저장소도 읽지 않는다. 최종 응답에만 있고 보드·결정 등록·인박스에 없는 오너 항목은 다음 compaction에서 사라진다. 이 훅은 그런 턴을 센다.
+
+- 오너 항목은 응답의 한 줄이다: `🙋`, "오너 할 일", 오너에게 묻는 표현(`오너에게 묻`, `오너 결정 필요`, `ask the owner`, `owner approval needed`). 코드·인용·표의 행(상태는 기록에서 파생된다), "없음"만 말하는 줄(`🙋 지금 오너가 할 일 — 없음`), 상태 범례(`🔄 진행 · 🙋 오너 차례`)는 세지 않는다.
+- 이번 턴(사람이 마지막으로 친 프롬프트 뒤)에 거부되지 않은 Bash 호출이 `orch decide add`, `orch board now`, `orch board set … --owner`, `orch gate`, `orca orchestration gate-create`, `orch-dash inbox add` 중 하나를 돌렸으면 통과한다. 항목과 기록을 짝짓지 않고, 호출 하나가 응답 전체를 덮는다.
+- 수준 `guard.owner_check`: 키가 없으면 `warn`. 사람에게 "owner_check: 기록 안 된 오너 항목 N" 한 줄을 보이고 `$AGENT_SKILLS_STATE/owner-check.jsonl`에 행을 남긴다. 모델에는 닿지 않는다(systemMessage는 모델에 가지 않는다). 오탐률은 이 행으로 잰다. `deny`는 설정 키로만 켜고, claim_check처럼 그 정지를 한 번 막아 모델이 기록하게 한다(`stop_hook_active`면 통과). `off`와 `AGENT_SKILLS_OWNER_CHECK=0`은 끈다.
+- 판정은 문구 매칭이라 오탐과 미탐이 있다. 그래서 warn으로 시작한다.
 
 ## pstack과의 차이
 
