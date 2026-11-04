@@ -1189,7 +1189,12 @@ def latest_checks(rollup):
     groups = {}
     for c in rollup:
         groups.setdefault((c.get("workflowName"), c.get("name") or c.get("context")), []).append(c)
-    return [newest(checks) for checks in groups.values()]
+    kept = []
+    for checks in groups.values():
+        last = newest(checks)
+        # Only another run replaces a job: two jobs of one run may share a display name.
+        kept += [c for c in checks if c is last or (run(last) and run(c) == run(last))]
+    return kept
 
 
 def ci_summary(rollup, no_ci=False):

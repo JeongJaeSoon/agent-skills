@@ -108,6 +108,10 @@ assert prog.ci_summary([dict(queued, completedAt=ZERO), chk("tests", "SUCCESS", 
 
 # The same job name in two workflows is two checks: one workflow's pass does not hide the other's failure.
 assert prog.ci_summary([chk("tests", "FAILURE", A, 1, workflow="nightly"), chk("tests", "SUCCESS", B, 2)])[0] == ["tests=FAILURE"]
+# Two jobs of one run sharing a display name are two checks too: only another run replaces a job.
+assert prog.ci_summary([chk("tests", "FAILURE", A, 100), chk("tests", "SUCCESS", B, 100)]) == (["tests=FAILURE"], [], ["100"])
+assert prog.ci_summary([chk("tests", "CANCELLED", A, 1), chk("tests", "CANCELLED", A, 1),
+                        chk("tests", "SUCCESS", B, 2), chk("tests", "FAILURE", B, 2)]) == (["tests=FAILURE"], [], ["2"])
 # A commit status carries no check-run fields.
 assert prog.ci_summary([{"context": "ci/x", "state": "FAILURE"}])[0] == ["ci/x=FAILURE"]
 print("prog.py latest check per name: all pass")
