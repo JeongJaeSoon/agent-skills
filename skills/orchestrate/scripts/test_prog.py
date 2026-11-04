@@ -220,26 +220,25 @@ assert prog.landed_but_open(ev, blind, tasks, wts) == [("A-1", "d1", None, "/w/1
     prog.landed_but_open(ev, blind, tasks, wts)
 empty = [dict(w, terminalState="") if w["dispatchId"] == "d1" else w for w in workers]
 assert prog.landed_but_open(ev, empty, tasks, wts)[0] == ("A-1", "d1", None, "/w/1"), "an empty terminalState is as unknown"
-# orch wait says what to do with each worker_done's card; it offers removal only for a finished card nobody uses.
+# orch wait says what to do with each worker_done's card; the worktree is the cleaners', never a line of its own.
 def co(payload, workers=workers):
     return prog.close_out([{"type": "worker_done", "payload": payload}], workers, wts + [{"id": "wx", "path": "/w/a b"}])
 done = co({"dispatchId": "d1", "outcome": "succeeded"})
-assert done[-1] == "  orca worktree rm --worktree path:/w/1", done
+assert done[0].startswith("CLOSE OUT d1: release it and close its agent terminal") and "the cleaners take /w/1" in done[0], done
+assert done[-1] == "  orca orchestration worker-release --dispatch d1" and not any("orca worktree rm" in l for l in done), done
 assert co('{"dispatchId": "d1", "outcome": "succeeded"}') == co({"dispatchId": "d1", "outcome": "succeeded"})
-assert not any("worktree rm" in l for l in co({"dispatchId": "d3a", "outcome": "succeeded"})), "the card was reused for A-3"
+assert not any("cleaners" in l for l in co({"dispatchId": "d3a", "outcome": "succeeded"})), "the card was reused for A-3"
 failed = co({"dispatchId": "d1", "outcome": "failed"})
-assert "--retry-of d1 --task t1 " in failed[0] and not any(l.strip().startswith("orca worktree rm") for l in failed), failed
+assert "--retry-of d1 --task t1 " in failed[0] and not any("remove" in l for l in failed), failed
 assert "not in `orca worktree list`" in co({"dispatchId": "d9", "outcome": "succeeded"})[0]
-# A worker that closed itself (end-session §7) removed its card before the lead read worker_done: release only.
+# A card already gone before the lead read worker_done: release only.
 gone = co({"dispatchId": "dg", "outcome": "succeeded"}, [{"dispatchId": "dg", "terminalState": "reclaimable", "resource": {"worktreeId": "wgone"}}])
 assert gone == ["CLOSE OUT dg: release it; its card is not in `orca worktree list`", "  orca orchestration worker-release --dispatch dg"], gone
-# One whose worktree rm the permission layer refused closed only its terminal (§7 fallback): the card is still offered.
+# A card that closed only its terminal is still named, quoted for the shell.
 left = co({"dispatchId": "dl", "outcome": "succeeded"}, [{"dispatchId": "dl", "terminalState": "reclaimable", "resource": {"worktreeId": "wx"}}])
-assert left[0].startswith("CLOSE OUT dl: release it, close its terminals and remove its card") and left[-1] == "  orca worktree rm --worktree path:'/w/a b'", left
-spaced = [{"dispatchId": "dx", "terminalState": "active", "resource": {"worktreeId": "wx"}}]
-assert co({"dispatchId": "dx", "outcome": "succeeded"}, spaced)[-1] == "  orca worktree rm --worktree path:'/w/a b'"
-# A `--worktree current` worker reports the caller's own card: release it, never offer to remove it. The caller's
-# worktree is its terminal's, not the cwd; when that cannot be read, no rm line is offered for any card.
+assert "the cleaners take '/w/a b'" in left[0], left
+# A `--worktree current` worker reports the caller's own card: release it, never offer to close it. The caller's
+# worktree is its terminal's, not the cwd; when that cannot be read, its terminal is closed only once it is not its own.
 def mine(outcome, here):
     return prog.close_out([{"type": "worker_done", "payload": {"dispatchId": "dl", "outcome": outcome}}],
                           [{"dispatchId": "dl", "terminalState": "reclaimable", "resource": {"worktreeId": "wx"}}],
@@ -248,11 +247,10 @@ for outcome in ("succeeded", "failed"):
     assert mine(outcome, "wx") == ["CLOSE OUT dl: release it and close its terminal; its card is this session's own"
                                    " worktree (`--worktree current`), so it stays",
                                    "  orca orchestration worker-release --dispatch dl"], mine(outcome, "wx")
-    assert not any("orca worktree rm" in l for l in mine(outcome, None)), mine(outcome, None)
-assert mine("succeeded", "w1")[-1] == "  orca worktree rm --worktree path:'/w/a b'"
-# Own worktree unreadable and the worker failed: the retry line still comes, and no rm line.
-unread = mine("failed", None)
-assert "--retry-of dl " in unread[0] and not any(l.strip().startswith("orca worktree rm") for l in unread), unread
+assert "only once it is not this session's" in mine("succeeded", None)[0], mine("succeeded", None)
+assert "the cleaners take '/w/a b'" in mine("succeeded", "w1")[0], mine("succeeded", "w1")
+# Own worktree unreadable and the worker failed: the retry line still comes.
+assert "--retry-of dl " in mine("failed", None)[0], mine("failed", None)
 # landed_but_open leaves out the caller's own worktree: a `--worktree current` worker's card is the lead's.
 lead_ws = [{"dispatchId": "d1", "taskId": "t1", "terminalState": "reclaimable", "resource": {"worktreeId": "LEAD"}}]
 lead_wt = [{"id": "LEAD", "path": "/w/lead"}]
@@ -572,7 +570,7 @@ prog.os.environ["ORCA_TERMINAL_HANDLE"] = "term_lead"
 out = io.StringIO()
 with contextlib.redirect_stdout(out):
     prog.cmd_wait(["s", "--rounds", "2"])
-assert "LANDED-BUT-OPEN T-8 (dispatch a8)" in out.getvalue() and "path:/w/8" in out.getvalue() \
+assert "LANDED-BUT-OPEN T-8 (dispatch a8)" in out.getvalue() and "card /w/8" in out.getvalue() \
     and "T-7" not in out.getvalue() and "EMPTY x2" in out.getvalue(), out.getvalue()
 assert "T-6" not in out.getvalue(), "a card whose worker state is unknown is not called released"
 assert "T-5" not in out.getvalue(), "this session's own worktree is never offered for removal"

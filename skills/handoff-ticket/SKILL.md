@@ -138,9 +138,8 @@ branch and handle.
 ## 5. Close this session
 
 Only after step 4 is verified. Read and follow the `end-session`
-skill for the state check, the command and the order inside
-the final turn. Which ending applies comes from `orca worktree current`, never from an
-assumption that this session is a card — `isMainWorktree: true` rules out `worktree rm`.
+skill for the record, the command and the order inside the final turn. This session closes
+its own terminal; `end-session`'s "Who cleans up" takes the card.
 In addition to what that skill asks for, the report names the cards you spawned (path,
 branch, handle) and any tickets you filed, and the same content must already be in the
 ticket's completion comment and the worklog before the command runs.

@@ -196,24 +196,23 @@ HERE = {"terminal": {"worktreeId": "wlead"}}
 prog.orca_json = lambda *a: ({"worktrees": [{"id": "wa", "path": "/work/card-a"}]} if a[:2] == ("worktree", "list")
                              else HERE if a[:2] == ("terminal", "show") else {})
 lines, _ = status("run-lead", workers=lambda run: [dict(done_a), dict(done_b)])
-assert "  LANDED-BUT-OPEN ABC-1 (dispatch ctx_a1): released, but its card is still there: `orca worktree rm --worktree path:/work/card-a`" in lines, lines
+assert f"  LANDED-BUT-OPEN ABC-1 (dispatch ctx_a1): released, card /work/card-a still there for the cleaners ({prog.CLEANUP})" in lines, lines
 # The card is this session's own worktree (a `--worktree current` worker): no line at all.
 HERE = {"terminal": {"worktreeId": "wa"}}
 lines, _ = status("run-lead", workers=lambda run: [dict(done_a), dict(done_b)])
 assert not any("LANDED-BUT-OPEN" in l for l in lines), lines
-# Its own worktree unreadable: the card is named, the rm command is not.
+# Its own worktree unreadable: the card is still only named.
 HERE = {}
 lines, _ = status("run-lead", workers=lambda run: [dict(done_a), dict(done_b)])
-assert "  LANDED-BUT-OPEN ABC-1 (dispatch ctx_a1): released, but its card is still there: remove /work/card-a only once it" \
-       " is not this session's own worktree (`orca terminal show` could not be read)" in lines, lines
+assert f"  LANDED-BUT-OPEN ABC-1 (dispatch ctx_a1): released, card /work/card-a still there for the cleaners ({prog.CLEANUP})" in lines, lines
 HERE = {"terminal": {"worktreeId": "wlead"}}
 lines, _ = status("run-lead", workers=lambda run: [blind_a, dict(done_b)])
-assert "  LANDED-BUT-OPEN ABC-1 (dispatch ctx_a1): worker state unknown (row below); release and remove nothing on this line" in lines, lines
+assert "  LANDED-BUT-OPEN ABC-1 (dispatch ctx_a1): worker state unknown (row below); release nothing on this line" in lines, lines
 assert not any("worktree rm" in l for l in lines), lines
 assert "  WARN status: worker row not judged (missing terminalState)" in lines, lines
 # A retained row missing what TAKEN OVER needs is not judged either: its card is not called released.
 half = {"dispatchId": "ctx_a1", "taskId": "ta", "terminalState": "retained", "workerState": "succeeded", "resource": {"worktreeId": "wa"}}
 lines, _ = status("run-lead", workers=lambda run: [half, dict(done_b)])
-assert "  LANDED-BUT-OPEN ABC-1 (dispatch ctx_a1): worker state unknown (row below); release and remove nothing on this line" in lines, lines
+assert "  LANDED-BUT-OPEN ABC-1 (dispatch ctx_a1): worker state unknown (row below); release nothing on this line" in lines, lines
 assert not any("worktree rm" in l or "close out" in l for l in lines), lines
 print("test_status_lines: ok")

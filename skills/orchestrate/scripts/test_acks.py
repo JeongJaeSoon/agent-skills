@@ -79,7 +79,7 @@ flat = {x["label"]: (x["ack"], x["done"]) for t in before["table_rows"] for x in
 assert flat == {"릴리스 도구": ("board:lead-a", None), "청구 내보내기": (None, None), "t CSV 열": (None, "row:lead-b/t"),
                 "설치 가이드": (None, "row:lead-c")}, before["table_rows"]
 assert len(before["table_rows"]) == sum(1 for line in before["text"].splitlines()
-                                        if line == "| | 리드/Phase | PR | 진행 | 다음 | 세션 |")
+                                        if line.startswith("| | 리드/Phase | PR | "))
 assert all(t["table"] for t in before["table_rows"]) and all(x["id"] for t in before["table_rows"] for x in t["rows"])
 assert "릴리스 도구" in before["text"] and "요청" not in before["text"], before["text"]
 code, out, err = run("dash.py", "ack", "board:lead-a")

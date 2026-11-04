@@ -13,7 +13,7 @@ janitor automation(`reap.py precheck`)은 당시 30분마다 돌았지만(지금
 
 reap-hard는 이 네 가지를 우회하지 않고 대체한다. 등록 여부를 묻지 않고 `~/orca/workspaces` 아래 Orca 카드 전부를 같은 규칙으로 보고, 세션에게 묻지 않고 직접 닫는다. 마지막 실행 시각은 정기 보고(`orch brief`)에 나온다.
 
-끝난 카드를 닫는 1차 주체는 카드 자신이고 백스톱은 그 카드를 띄운 세션이다. reap-hard는 둘 다 놓친 카드를 거두는 마지막 정리이고, 누구도 이것을 계획으로 삼지 않는다(`end-session` §8 "Who closes a finished card").
+세션은 자기가 띄운 스택과 자기 터미널까지 정리하고, 끝난 카드의 worktree와 나머지는 reap-hard와 janitor가 거둔다(`end-session` "Who cleans up").
 
 ## 규칙
 
