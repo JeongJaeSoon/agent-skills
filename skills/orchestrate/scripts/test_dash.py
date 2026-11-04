@@ -665,8 +665,22 @@ asked.clear()
 dash.warm_contains(store / CP, cfg_cp)
 again = [c for c in asked if c != "rate_limit"]
 assert set(again).isdisjoint(first), "an answer already on disk is not asked again"
+# A program at rest (no ledger event for 3 days) asks GitHub nothing, even with unknown pairs left.
+RP = "rest-test"
+(store / RP).mkdir()
+(store / RP / "program.json").write_text(json.dumps(cfg_cp))
+(store / RP / "ledger.jsonl").write_text("".join(
+    json.dumps({**r, "ts": dash.iso(dash.utcnow() - dash.dt.timedelta(days=5, minutes=i))}) + "\n"
+    for i, r in enumerate(rows_cp)))
+dash._CONTAINS.clear(); dash._cache_state.update(loaded=False, dirty=False); dash.cache_path().unlink(missing_ok=True)
+asked.clear(); dash.sh = counting_sh
+assert dash.closed(RP)
+real_fetch, dash.FETCHERS["github"] = dash.FETCHERS["github"], lambda cfg: []
+dash.collect(RP, ("github",))
+dash.FETCHERS["github"] = real_fetch
+assert not [c for c in asked if c != "rate_limit"], f"a program at rest was asked about: {asked[:3]}"
 # A landing past the age limit is not a gap to chase.
-old = [{"ts": ago(60 * 24 * 15), "ev": "landed", "pr": 1, "sha": "o1"}]
+old =[{"ts": ago(60 * 24 * 15), "ev": "landed", "pr": 1, "sha": "o1"}]
 assert dash.ledger_gaps(cfg_cp, old, [], [], now, contains=lambda a, b: False)["ci"] == [], "15 days old"
 assert dash.ledger_gaps(cfg_cp, [{**old[0], "ts": ago(60 * 24 * 10)}], [], [], now, contains=lambda a, b: False)["ci"] == [1]
 dash.sh = real_sh

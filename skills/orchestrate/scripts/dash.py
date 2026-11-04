@@ -1226,7 +1226,7 @@ def collect(slug, sources=SOURCES, interval=None):
             fetched[name] = (True, FETCHERS[name](cfg), iso(utcnow()))
         except SourceError as e:
             fetched[name] = (False, str(e), iso(utcnow()))
-    if "github" in sources:
+    if "github" in sources and not closed(slug):  # a program at rest has no gap worth a GitHub call
         warm_contains(d, cfg)
     with lock_for(slug):
         return _merge(slug, d, cfg, fetched, interval)
