@@ -350,8 +350,9 @@ class Watch(OrcaJob):
 
     def configured(self):
         try:
-            return bool(json.loads(CONFIG.read_text()).get(self.key))
-        except (OSError, ValueError, AttributeError):
+            section = json.loads(CONFIG.read_text()).get(self.key)
+            return bool(section) and set(section) != {"model"}  # the round's model alone does not turn the watch on
+        except (OSError, ValueError, AttributeError, TypeError):
             return False
 
     def status(self):

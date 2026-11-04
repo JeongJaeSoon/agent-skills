@@ -46,6 +46,12 @@ DESIGN      Only when later units will build on a contract this unit sets (a fun
             changes or plugs into (skip what an upstream report covers), then `architect` on the
             contract. Put the sketch in the ticket's plan comment (deliver-ticket §1); the units
             that build on it get that sketch in CONTEXT.
+CHANGES     Optional, like the next two rows: write what you already know and leave out the
+            rest. The files and functions to change and how, and what to reuse. Where this and
+            the code disagree, the code wins.
+PITFALLS    What has already gone wrong here: an approach that failed, an order that matters,
+            what the tests miss.
+EXAMPLES    An input with its expected output, or a command with what it should print.
 ORDER       Starts after <TICKET…> (Orca deps) · lands after <TICKET…> (stack / orch dep).
             `Lands after` means a stack: the unit's Base is then `stacked on #<PR>`. The order
             with another program's PR is no stack (PARENT settles it): write it in PEERS.
@@ -292,8 +298,7 @@ APPROVED    The acts the human already approved for this unit, with their words 
             them, decide with the recommended default and report what you chose; do not ask.
 HUMAN ONLY  Permission dialogs outside APPROVED, logins, payments, document submissions, and
             any irreversible or outward act not under APPROVED. Ask for these together, once.
-MODEL CALLS Another model (a subagent or an API) only when the task needs it; pick the model
-            then, and list each call with its reason in REPORT.
+MODEL CALLS Another model (a subagent or an API) only when the task needs it.
 LAND        A change: its normal flow (deliver-ticket), or the push the owner allows. An investigation: none.
             Waiting on a review or another outside event: the program brief's LAND sentences from
             "A wait on a human review" through "rate_limit`).", pasted verbatim.
@@ -389,7 +394,7 @@ HUMAN ONLY  Permission dialogs outside APPROVED, logins, payments, document subm
             notify the parent once with both ids. Never treat an answer to the old question as
             approval of changed scope. The parent owns delivery to the human; if its channel is
             unavailable, report that routing gap in the current task.
-MODEL CALLS As in "Single worker"; no model is named here.
+MODEL CALLS As in "Single worker".
 REPORT      Digest lines appended to this brief's note at each milestone and when the predicate holds.
             Your first report to PARENT names your address: your Run id once your terminal is
             bound to it, or your dispatch id when you started as a dispatched worker.
@@ -406,7 +411,7 @@ CLOSE       Once the predicate holds and the program's Close is done: `end-sessi
 ## Rules for filling it
 
 - The spec starts with the ticket ID, never `/`: Orca delivers a `worker-start` spec as the task. A card made with `orca worktree create` starts with `/goal` instead, its APPROVED line in that first prompt or the brief it names (`dispatch-card` §2). The second line, `PROGRAM: <slug>`, is how the user's own skills (`deliver-ticket`, `handoff-ticket`) know they are running inside a program. Nothing else switches them.
-- Name no model for the worker to call, and leave out a "use a cheap model for X" hint: a worker then calls that model again and again with nothing to gain. MODEL CALLS says when another model is worth calling.
+- The worker's own model comes from `--model` at its start, not from the brief. Name no model for the worker to call, and leave out a "use a cheap model for X" hint: a worker then calls that model again and again with nothing to gain. MODEL CALLS says when another model is worth calling.
 - The worker runs the user's normal flow (`deliver-ticket`) for implementation and review. LAND, ORDER, PEERS and REPORT are what change inside a program, and so do browser checks: VERIFY sends them to the host's own browser (Orca's `orca tab` commands), not a browser extension. An extension may be disconnected, and that is not a blocker. Lanes share that browser and its logins, so a worker takes it with `orch hold browser --note "<what it checks>"` before driving it and `orch release browser` when done (the VERIFY line in both templates). `hold` refuses while another lane has it and names the holder: wait for it or ask that lane, never drive over its session.
 - A unit whose result a person opens as a live page (a mockup, a branch preview) gets in VERIFY: its own free port in the preview watcher's range, the server bound to 127.0.0.1, and the tailnet link fetched for 200 before it is reported, by `deliver-ticket` `references/visual-evidence.md` ("A live page for a person"). Two lanes on one port show each other's page. The card never runs `tailscale serve` and never asks for a port to be opened.
 - **Name the card.** Orca's automatic title comes from the first prompt and can be meaningless, unrelated to the ticket. Pass `worker-start --display-name "<ID> <short title>"`. That name sticks; the terminal tab title belongs to the agent, which overwrites a rename.

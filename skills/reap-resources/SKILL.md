@@ -405,6 +405,7 @@ the exact `reap --plan` command to the user (a scheduled run: to `reap.inbox_to`
 ## Config
 
 `~/.claude/agent-skills.json`, all optional, changed through `skills-config` (the agent emits, the user applies).
+`reap.model` names the janitor rounds' Claude model: `schedule` passes it with `--extra-agent-args`.
 Paths of a particular project's test cache stay here, not in this repo:
 
 ```json
