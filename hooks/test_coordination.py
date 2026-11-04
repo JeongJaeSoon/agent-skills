@@ -153,7 +153,7 @@ for cmd in (f"{START} --spec '--prompt' --model sonnet", f"{START} --display-nam
             f"{START} --json --model sonnet", f"{START} --spec fix --model opus --model sonnet","orca orchestration worker-start --worktree new-child --spec '--agent=claude' --agent codex --model gpt-5",
             f"{START} --spec '--terminal=t' --model sonnet", f"{START} --model sonnet --spec '--model=opus'"):
     assert model_warning(cmd) == "", "the real --model is the one read: " + cmd
-for cmd in (f"{START} --model '$MODEL'", f"{START} --model \\$MODEL"):
+for cmd in (f"{START} --model '$MODEL'", f"{START} --model \\$MODEL", f"{START} --model ~/sonnet"):
     assert model_warning(cmd) == "", "a literal-looking $ is still not judged: " + cmd
 assert "differs" in model_warning(f"{START} --json --model opus")
 CONFIG.write_text(json.dumps({"orchestrate": {"models": {"worker": "claude-sonnet-4-6"}}}))

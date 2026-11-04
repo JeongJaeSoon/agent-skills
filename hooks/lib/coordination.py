@@ -110,9 +110,9 @@ def option(words, name):
 
 
 def expands(c, value):
-    """True when `value` holds a character bash may expand ($ ` * ? [ {). The words arrive unquoted, so a quoted one
+    """True when `value` holds a character bash may expand ($ ` * ? [ { ~). The words arrive unquoted, so a quoted one
     cannot be told from a bare one without re-parsing the shell; the guard only warns, so it skips what it is unsure of."""
-    return re.search(r"[$`*?\[{-]", value) is not None  # the last range: shell.py's stand-ins for `$` and `~`
+    return re.search(r"[$`*?\[{~-]", value) is not None  # the last range: shell.py's stand-ins for `$` and `~`
 
 
 def warn_only(cfg, reason):
