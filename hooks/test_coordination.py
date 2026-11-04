@@ -68,6 +68,12 @@ for role in ("orchestrator", "lead"):
     assert bash("orch wait app | jq . | head -3", role, background=True) == "deny"
     assert bash("orch wait a | jq .; orch wait b | tail -5", role, background=True) == "deny"
     assert bash("orch wait app | jq .; tail -5 /tmp/status.log", role, background=True) != "deny"
+    # Monitor runs beside the turn: its wait is a background one, and the pipe and /dev/null rules still hold.
+    for cmd in WAITS:
+        assert hook("Monitor", {"command": cmd, "description": "x"}, role) in ("none", "allow"), (role, cmd)
+    assert hook("Monitor", {"command": "orch wait app | tail -5", "description": "x"}, role) == "deny"
+    assert hook("Monitor", {"command": "orca orchestration send --to t --subject s > /dev/null",
+                            "description": "x"}, role) == "deny"
     assert bash("orch status app", role) == "allow"
     assert bash("orch inbox --json", role) == "allow"
     assert bash("echo 'orch wait app'", role) == "none"
