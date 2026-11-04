@@ -1055,7 +1055,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         r = rows.get(l["key"])
         sid = session_of(r) if r and not l["fold"] else None
         st = session_state(sessions.get(sid), now) if state is not None and (sid or r) else None
-        l["sid"] = sid if sid in sessions else None  # a finished row has no session cell but still shares the worktree
+        # A finished row has no session cell but still shares the worktree; a subagent's row names its task, not it.
+        l["sid"] = sid if sid in sessions and "subagent" not in r else None
         l["session"] = None if l["status"] in (None, "done") or st is None else {"id": sid if sid in sessions else None,
                                                                                    "state": st, "word": SESSION_WORD[st]}
         if l["session"] and l["session"]["id"]:
@@ -1078,7 +1079,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     on_session = collections.Counter(l["sid"] for l in lines)
     for l in lines:
         name = l["sid"] and one_line(sessions[l["sid"]].get("name") or "")
-        if name and on_session[l["sid"]] == 1 and name.lower() not in l["name"].lower():
+        if name and l["session"] and on_session[l["sid"]] == 1 and name.lower() not in l["name"].lower():
             l.update(name=name, orca_name=True)
 
     # Bold: a row the last report did not have, or whose status, progress, next, PR state or session changed.
