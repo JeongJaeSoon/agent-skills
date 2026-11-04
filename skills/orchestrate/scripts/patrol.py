@@ -68,7 +68,7 @@ import contextlib, datetime as dt, fcntl, hashlib, json, os, pathlib, re, secret
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 sys.path.insert(1, str(pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts"))
 import agent_signal, card_watch, cardguard, dash, fleet, prog  # noqa: E402
-from card_watch import BACKGROUND  # noqa: E402
+from card_watch import AGENT_PANEL, BACKGROUND  # noqa: E402
 try:  # dash put the repo's scripts/ on the path
     from sync import STALE_COMMAND, stale_signal  # noqa: E402
 except ImportError:  # an install without the repo's scripts/: H judges nothing
@@ -137,7 +137,10 @@ transcript_tail = cardguard.transcript_tail
 def background(lines):
     """Claude Code's status line shows a background shell, monitor or agent still running. A message typed in after
     the command was armed resets the transcript's record of it, so only the screen still shows it."""
-    return bool(lines) and any(BACKGROUND.search(l) for l in lines[-6:])
+    if not lines:
+        return False
+    box = max((i for i, l in enumerate(lines) if l.strip().startswith("❯")), default=len(lines))
+    return any(BACKGROUND.search(l) for l in lines[-6:]) or any(AGENT_PANEL.search(l) for l in lines[box + 1:])
 
 
 # A last message that says the session waits on a background task still to finish (English or Korean). A launch

@@ -386,7 +386,8 @@ def test_stale_signal():
     check("this session's own shell, monitor, agent or task is",
           all(on_mode_line(l) for l in OWN_WORK), [l for l in OWN_WORK if not on_mode_line(l)])
     check("the panel listing this session's agents is", sync.background_running(NOTE_PANEL) is not None)
-    check("a turn's words about main are not that panel", not sync.BACKGROUND.search("⏺ main is up to date"))
+    check("a reply reading like its row, above the prompt box, is not",
+          sync.background_running(["⏺ main", "◯ a note"] + RESTART_NOTE[1:]) is None)
     reloaded_note = RELOAD_DONE[:2] + [RELOAD_DONE[2]] + RESTART_NOTE[1:]
     check("installed agents counted in a reload's output are no background work",
           sync.background_running(reloaded_note) is None, sync.background_running(reloaded_note))
