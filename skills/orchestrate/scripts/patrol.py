@@ -776,7 +776,7 @@ def signal_round(facts, findings, verdicts, memo, memo2, notes, dry, rid):
     facts["agent_rows"] = (rows, problem)
     facts["timings"]["agents"] = round(time.monotonic() - t0, 2)
     t0 = time.monotonic()
-    model_round(facts, findings, verdicts, notes)  # before the blind list below, which names what it could not read
+    model_round(facts, findings, verdicts, notes, dry=dry)  # before the blind list below, which names what it could not read
     facts["timings"]["models"] = round(time.monotonic() - t0, 2)
     verdicts["failed"] = sorted(facts.get("failed") or ())
     terms = [t for t in facts["terminals"] if t.get("agentIdentity") and t.get("connected", True) and t.get("handle")]
@@ -803,7 +803,7 @@ def signal_round(facts, findings, verdicts, memo, memo2, notes, dry, rid):
     return "; ".join(parts)
 
 
-def model_round(facts, findings, verdicts, notes, run=None):
+def model_round(facts, findings, verdicts, notes, run=None, dry=False, switch=None):
     """M: sessions off their role's model (model_drift.py). Needs the rows signal_round read; adds findings, the
     brief's ❔ reasons and notes. A round that could not look (no listing, a transcript unread) marks "models" failed,
     so an M finding already standing is kept. A failure here costs the round nothing else."""
@@ -847,6 +847,48 @@ def model_round(facts, findings, verdicts, notes, run=None):
                          "title": f"❔ {d['line']}"})
         if path:
             verdicts["check"][path] = f"모델 불일치: {d['have']} (설정 {d['want']})"
+    if not dry and model_drift.autoswitch_on():
+        switch_round(drifts, rows, notes, path_of, switch or model_drift.autoswitch)
+
+
+def switch_round(drifts, rows, notes, path_of, switch):
+    """orchestrate.model_autoswitch: restart one idle worker per round on its role's model (model_drift.autoswitch).
+    The M finding stays until the session answers once on the new model, since that is when its transcript shows it.
+    A failed or abandoned attempt goes to the human's inbox, once; it is never retried."""
+    claims = STATE / "model-switch"
+
+    def failed(c):
+        """Tell the human, then mark the claim reported: a notice that failed is offered again next round, and one
+        that was taken is never opened again after the human resolved it."""
+        name = card_name(path_of.get(c["handle"])) or c["handle"] or c["session"]
+        notes.append(f"model auto-switch failed: {name}: {c['why']}")
+        fleet.inbox_add("approval", f"모델 자동 전환 실패: {name} ({c['why']})", session=c["session"],
+                        key=f"model-switch:{c['session']}", source="patrol")
+        model_drift.mark_reported(claims, c)
+
+    try:
+        for c in model_drift.unreported(claims):
+            failed(c)
+    except OSError as e:
+        notes.append(f"model auto-switch: a failure could not be reported: {type(e).__name__}")
+    for d in drifts:
+        if d["role"] != "worker":
+            continue
+        name = card_name(path_of.get(d["handle"])) or d["handle"]
+        try:
+            status, why = switch(d, rows, claims)
+        except (SystemExit, Exception) as e:
+            status, why = "failed", f"{type(e).__name__}: {str(e)[:120]}"
+        if status == "switched":
+            notes.append(f"model auto-switch: {name} restarted on {d['want']}; the finding clears after its next reply")
+        elif status == "failed":
+            try:
+                failed({"session": d["session"], "handle": d["handle"], "why": why})
+            except OSError as e:
+                notes.append(f"model auto-switch: a failure could not be reported: {type(e).__name__}")
+        else:
+            continue
+        return  # one session a round: each takes up to a minute
 
 
 def round_once(dry=False, if_due=False, now=None, gather_fn=gather, rid=None):
