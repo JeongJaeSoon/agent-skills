@@ -130,6 +130,12 @@ CONFIG.write_text(json.dumps({"orchestrate": {"models": {"worker": "claude-sonne
 assert "differs" in model_warning(f"{START} --spec 'x' --model claude-sonnet-4-5"), "two ids of one family are two models"
 assert model_warning(f"{START} --spec 'x' --model claude-sonnet-4-6-20260101") == ""
 assert model_warning(f"{START} --spec 'x' --model sonnet") == "", "a bare family matches its ids"
+CONFIG.write_text(json.dumps({"orchestrate": {"models": {"worker": "sonnet"}}}))
+assert model_warning(f"{START} --model claude-3-7-sonnet-20250219") == "", "version before the family"
+CONFIG.write_text(json.dumps({"orchestrate": {"models": {"worker": "haiku"}}}))
+assert model_warning(f"{START} --model claude-3-5-haiku-20241022") == ""
+assert "differs" in model_warning(f"{START} --model claude-3-7-sonnet-20250219")
+CONFIG.write_text(json.dumps({"orchestrate": {"models": {"worker": "claude-sonnet-4-6"}}}))
 CONFIG.write_text(json.dumps({"orchestrate": {"models": {"worker": "opusplan"}}}))
 assert "differs" in model_warning(f"{START} --spec 'x' --model opus"), "opusplan is not opus"
 CONFIG.write_text(json.dumps({"orchestrate": {"models": {"lead": "opus", "worker": ""}}}))

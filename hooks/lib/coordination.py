@@ -101,7 +101,8 @@ def same_model(have, want):
     families = ("opus", "sonnet", "haiku")
     for fam, other in ((have, want), (want, have)):
         if fam in families:
-            return other == fam or other.startswith(f"claude-{fam}-")  # not `opusplan` and the like
+            # `claude-sonnet-4-6` and `claude-3-7-sonnet-…` are the family; `opusplan` and the like are not
+            return other == fam or re.fullmatch(rf"claude-(\d+(-\d+)*-)?{fam}(-.*)?", other) is not None
     return have == want
 
 
