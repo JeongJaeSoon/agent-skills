@@ -1403,7 +1403,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             width_ok &= table_width.table_width(table) <= COLS
             out += ["", "| " + " | ".join(head).strip() + " |", "|---" * len(head) + "|"]
             # The dashboard has the page's width: its copy of the report keeps every cell whole.
-            whole = table_width.fit([head] + cells(SESSION_NAME_W), 10 ** 6, (), deco=dress)
+            # Built without fit, so the check below compares what was written with what the rows are, not with itself.
+            whole = [head] + [[dress(i, c, s) for c, s in enumerate(r)] for i, r in enumerate(cells(SESSION_NAME_W), 1)]
             swaps.append((len(out), len(table) - 1, [table_width.md_row(row) for row in whole[1:]]))
             out += [table_width.md_row(row) for row in table[1:]]
             # Placed from the rows written, by the whole name each one shows (names are unique in the report): a row the

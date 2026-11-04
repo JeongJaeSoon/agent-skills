@@ -307,7 +307,7 @@ try:
     dup = board.render(now=T, fill=True, periodic=False)
 finally:
     board.table_width.fit = real_fit
-assert "twin-b" in dup["missing"] or any("twin-b" in str(m) for m in dup["missing"]), (twin, dup["duplicates"], dup["missing"])
+assert "twin-a" in dup["duplicates"] and "twin-b" in dup["missing"], (twin, dup["duplicates"], dup["missing"])
 # A quiet stage row is kept while its 지금 has work left (⏸️ too), or while the brief's judgment could not be read.
 old = {**stages.table(), "rows": [{**r, "created_at": "2026-01-01T00:00:00Z"} for r in stages.table()["rows"]]}
 assert [r["id"] for r in stages.current(old, T, 60, None, {"octo/app#5": "held"})[0]["rows"]] == ["s1"]
