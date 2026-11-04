@@ -24,6 +24,21 @@ FORBIDDEN = re.compile(
     r"|~/|/Users/|/home/")
 
 
+def grant_value(text):
+    """(value, errors) of the `allowed-tools` key. One plain line is the only form read: YAML has others (a quoted
+    key, a folded continuation, a list) that a line parser would miss, and a missed grant still applies."""
+    head = re.match(r"---\r?\n(.*?)\r?\n---", text, re.S)
+    lines = head.group(1).splitlines() if head else []
+    keys = [i for i, line in enumerate(lines) if re.match(r"""\W*allowed[-_]tools\W*:""", line, re.I)]
+    if not keys:
+        return "", []
+    following = lines[keys[0] + 1:keys[0] + 2]
+    m = re.fullmatch(r"allowed-tools: (Bash\(.*)", lines[keys[0]])
+    if len(keys) > 1 or not m or (following and re.match(r"\s|-", following[0])):
+        return "", ["allowed-tools must be one plain `allowed-tools: Bash(...)` line"]
+    return m.group(1), []
+
+
 def entries(value):
     """The tool entries of an `allowed-tools` value, keeping the spaces inside `Bash(...)`."""
     return re.findall(r"[\w-]+(?:\([^)]*\))?", value)
@@ -69,22 +84,23 @@ def inline_commands(body):
 
 def body_errors(granted, body):
     """A pattern with no command behind it is stale; a documented command in its family that misses it is a drift."""
-    errors, fenced = [], fenced_commands(body)
-    documented = fenced + inline_commands(body)
+    errors, documented = [], fenced_commands(body) + inline_commands(body)
     for p in granted:
         if not any(matches(p, c) for c in documented):
             errors.append(f"{p}: no command in the body matches it")
     families = {" ".join(p.split()[:3]) for p in granted}
-    for c in fenced:
-        if any(c.startswith(f) for f in families) and c not in UNGRANTED and not any(matches(p, c) for p in granted):
+    for c in documented:
+        # A bare family name is prose naming the command, not a call.
+        if any(c.startswith(f + " ") for f in families) and c not in UNGRANTED and not any(matches(p, c) for p in granted):
             errors.append(f"{c}: documented but outside every pattern")
     return errors
 
 
 def skill_errors(name, text):
-    fm, body = split_frontmatter(text)
-    found = entries(fm.get("allowed-tools", ""))
-    errors = [e for entry in found for e in pattern_errors(entry)]
+    value, errors = grant_value(text)
+    body = split_frontmatter(text)[1]
+    found = entries(value)
+    errors += [e for entry in found for e in pattern_errors(entry)]
     want = [f"Bash({p})" for p in GRANTS.get(name, [])]
     if found != want:
         errors.append(f"{name}: allowed-tools is {found}, GRANTS pins {want}")
@@ -120,6 +136,8 @@ for rebound in ("ORCA_TERMINAL_HANDLE=t1 ", "ORCA_TERMINAL_HANDLE=t1; ", "export
     assert not matches(CLOSE, rebound + CLOSE), rebound
 assert not matches(CLOSE, CLOSE.replace("$ORCA_TERMINAL_HANDLE", "t1"))
 assert not matches(CLOSE, CLOSE + " --all")
+assert any("orca terminal close --terminal t1" in e for e in skill_errors(
+    "end-session", fixture(f"Bash({CLOSE})", f"`{CLOSE}` and `orca terminal close --terminal t1 --json`")))
 
 # A stale pattern and a drifted command fail, and an entry GRANTS does not pin fails.
 assert body_errors(["orca thing stop *"], "`orca thing go now`")
@@ -128,13 +146,30 @@ assert body_errors(["orca thing go now"], "```bash\norca thing go later\n```\n`o
 assert any("GRANTS pins" in e for e in skill_errors("demo", fixture("Bash(orca thing go *)")))
 assert not fenced_commands("no block") and fenced_commands("```bash\na b \\\n  c  # note\n# only\n```\n") == ["a b c"]
 
+# A drifted inline command fails beside a matching one; a family is whole words; a bare family name is prose.
+assert body_errors(["orca thing go now"], "`orca thing go now` and `orca thing go now --all`")
+assert not body_errors(["orca thing go now"], "`orca thing go now` and `orca thing gone x`")
+assert not body_errors(["orca thing go now"], "`orca thing go now` beside `orca thing go`")
+
+# Every other YAML spelling of the key is refused, so a grant cannot sit where this file's parser misses it.
+GOOD = "Bash(orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json)"
+assert grant_value(f"---\nname: a\nallowed-tools: {GOOD}\ndescription: b\n---\n") == (GOOD, [])
+assert grant_value("---\nname: a\ndescription: mentions allowed-tools only\n---\n") == ("", [])
+for spelling in (f"allowed-tools: {GOOD}\n  Bash(orca terminal send *)", '"allowed-tools": Bash(orca terminal send *)',
+                 "'allowed-tools': Bash(orca terminal send *)", "allowed-tools:\n  - Bash(orca terminal send *)",
+                 f"allowed-tools:\n- {GOOD}", f"allowed-tools: [{GOOD}]", f'allowed-tools: "{GOOD}"',
+                 "allowed-tools: Read", f"allowed-tools: {GOOD}\nallowed-tools: {GOOD}",
+                 "allowed-tools: >\n  Bash(orca terminal send *)"):
+    assert grant_value(f"---\nname: a\n{spelling}\n---\n")[1], spelling
+    assert skill_errors("demo", f"---\nname: a\n{spelling}\n---\n"), spelling
+
 # This checkout.
 seen = {}
 errors = []
 for path in sorted((REPO / "skills").glob("*/SKILL.md")):
     name = path.parent.name
     text = path.read_text(encoding="utf-8")
-    seen[name] = "allowed-tools" in split_frontmatter(text)[0]
+    seen[name] = bool(grant_value(text)[0])
     errors += skill_errors(name, text)
 assert not errors, "\n".join(errors)
 assert {n for n, has in seen.items() if has} == set(GRANTS), seen
