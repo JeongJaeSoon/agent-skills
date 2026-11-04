@@ -138,6 +138,7 @@ skills-sync card <brief file> \
   --comment "<brief path>" \
   --reference "<ticket URL, or a Jira key>"   # one per ticket; omit when there is none
   # --role verify|review for a second card on the same ticket that checks, not implements (default impl)
+  # --agent codex for a Codex card (default claude); only a supervised worker, see below
 ```
 
 The helper starts `skills-sync close-setup <path> --agent <handle>` in the background itself:
@@ -172,6 +173,12 @@ references/top-level.md "Starting a worker".
   than the brief's `run:<id>`, creates nothing (exit 6): bind the brief's Run (`orca orchestration
   run-use --id <id>`), fix the brief's Run, or pass `--card` for a `/goal` card on purpose. The
   printed output ends in a `card` object: `kind` (worker or card), `path`, `handle`, `run`, `parent`.
+- `--agent codex` passes codex to Orca, and the brief checks are the same as for Claude. It starts
+  only a supervised worker. A brief with no Run report, `--card` or a lead's brief is refused (exit
+  2, nothing created, never switched to claude): a leading `/goal` and the start read from the screen
+  are not proven on Codex, and a lead's `ROLE` row works through this plugin's Claude Code hooks.
+  `close-setup` then gets no agent handle, so its log says nothing about the start; the worker-start
+  receipt does.
 - A brief that sends to a `term_…` handle, in any line, is refused (exit 2): the handle dies with
   its terminal, so a report sent after a restart is refused (`terminal_not_found`), and until then
   it is only stored. Write `orca orchestration send --to run:<your run id>`.
