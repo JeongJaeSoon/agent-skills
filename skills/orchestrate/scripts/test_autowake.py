@@ -29,7 +29,8 @@ class World:
     """One program on disk with Orca, the wake commands and the human inbox replaced by records."""
     count = 0
 
-    def __init__(self, stalls=None, workers=None, mail=(), gates=(), routes=("route: terminal\nreason: off",), nudge=0):
+    def __init__(self, stalls=None, workers=None, mail=(), gates=(), routes=("route: terminal\nreason: off",), nudge=0,
+                 refused="refused at a dialog"):
         World.count += 1
         self.slug = f"p{World.count}"
         d = prog.HOME / self.slug
@@ -40,7 +41,7 @@ class World:
         self.p = prog.Program(self.slug)
         self.stalls = [{"dispatch": "ctx_1", "ticket": "ABC-1", "kind": "idle", "minutes": 16}] if stalls is None else stalls
         self.workers, self.mail, self.gates = [row()] if workers is None else workers, list(mail), list(gates)
-        self.routes, self.nudge = list(routes), nudge
+        self.routes, self.nudge, self.refused = list(routes), nudge, refused
         self.sent, self.synced, self.inbox, self.fail = [], [], [], set()
         self.write_state()
 
@@ -67,7 +68,7 @@ class World:
         self.synced.append(a)
         if a[0] == "wake-target":
             return 0, self.routes.pop(0)
-        return (self.nudge, "refused at a dialog") if a[0] == "nudge" else (0, "reset")
+        return (self.nudge, self.refused) if a[0] == "nudge" else (0, "reset")
 
     def sweep(self, m):
         saved = autowake.orca, autowake.sync, prog.all_workers, fleet.inbox_add
@@ -372,6 +373,18 @@ saved, w.orca = w.orca, lambda *a: (_ for _ in ()).throw(SystemExit("send failed
 r = w.sweep(10)
 assert not w.synced, "no signal without the content"
 assert len(w.inbox) == 1 and "send failed" in w.rows("auto_wake_failed")[0]["why"]
+
+# Live run: the send alone starts the worker's turn, so the nudge finds it busy. That is a wake, not a failure, and the
+# one-wake limit still holds for it.
+for said in ("title shows the agent is busy", "turn in progress: ✻ Thinking"):
+    w = World(nudge=1, refused=said)
+    w.sweep(0)
+    r = w.sweep(10)
+    assert not w.rows("auto_wake_failed") and not w.inbox and not r.stop, (said, w.rows("auto_wake_failed"))
+    assert len(w.rows("auto_wake")) == 1 and w.rows("auto_wake")[0]["route"] == "mail", w.rows("auto_wake")
+    assert r.skip == {"ctx_1"}
+    w.sweep(21)
+    assert len(w.sent) == 1 and len(w.inbox) == 1 and len(w.rows("auto_wake_escalated")) == 1, "second stop"
 
 # A human inbox that cannot be written leaves no row claiming it was told: the next round tells it.
 w = World()

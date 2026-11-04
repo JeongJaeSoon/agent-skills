@@ -18,6 +18,7 @@ OFF_LINE = (f"auto-wake is off: set orchestrate.{KEY} in ~/.claude/agent-skills.
             "(references/waking.md)")
 SYNC = pathlib.Path(__file__).resolve().parents[3] / "scripts" / "sync.py"
 SIGNAL = "run your orchestration check"
+BUSY = ("title shows the agent is busy", "turn in progress")  # sync.classify's refusals for a running turn
 ROWS = ("auto_wake_claimed", "auto_wake", "auto_wake_failed", "auto_wake_escalated")
 INBOX_LIMIT = 5000  # Orca's inbox spans every Run with no cursor; 1000 rows covered under a day of a busy machine
 READY = re.compile(r"\bREADY\b")
@@ -197,6 +198,8 @@ def attempt(d, handle, message):
     if route == "sendmessage":
         sync("wake-reset", handle)
     code, out = sync("nudge", handle, SIGNAL)
+    if code != 0 and out.startswith(BUSY):  # it read idle just before the send, so the mail alone started its turn
+        return "mail"
     if code != 0:
         raise Failed(f"the signal was not sent: {out[:200]}")
     return "typed" if route == "terminal" else "typed, sendmessage route"
