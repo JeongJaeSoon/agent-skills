@@ -140,6 +140,12 @@ def check_run(role, run, handle, call, lead_dispatch=None, slug=None):
     if not role or not handle:
         return [], None, None
     bound_id = (orca_settings.run_current(call, "--from", handle) or {}).get("id")
+    if bound_id and role == "lead" and lead_dispatch and run and bound_id != run \
+            and not orca_settings.terminal_dispatch(call, handle, settled=True):
+        # run-create was done and the session ended before `orch set`: the program still names its coordinator's Run.
+        return [("do", f"this dispatched lead lost its Dispatch ({lead_dispatch}) and is bound to its own Run {bound_id}, "
+                       f"but the program still names {run}: `orch set {slug or '<slug>'} run {bound_id}` (it also drops "
+                       "lead_dispatch), and run this check again")], None, None
     if bound_id and (not run or bound_id == run):
         return [("ok", f"bound to Run {bound_id}")], bound_id, None
     if not bound_id and role == "lead":
@@ -226,7 +232,9 @@ def check_workers(run, call, lead_dispatch=None, me=None):
     workers = orca_settings.lead_scope(orca_settings.all_workers(call, "--run", run), lead_dispatch)
     by_task = {w.get("taskId"): w for w in workers if w.get("taskId")}
     own_task = next((w.get("taskId") for w in workers if w.get("dispatchId") == lead_dispatch), None)
-    finished = 0
+    finished, newest = 0, {}
+    for w in workers:
+        newest.setdefault((w.get("resource") or {}).get("worktreeId"), w)
     for w in workers:
         h = orca_settings.worker_terminal(w)
         state, status = w.get("terminalState"), w.get("dispatchStatus")
@@ -235,7 +243,11 @@ def check_workers(run, call, lead_dispatch=None, me=None):
         if status in FINISHED:  # it reported: a dead terminal is its normal end, not something to wake
             finished += 1
             continue
+        # worker-list is newest first: a later Dispatch on the same worktree (the resume) supersedes an abandoned one.
+        wt = (w.get("resource") or {}).get("worktreeId")
         abandoned = status in RESTART_LOST
+        if abandoned and wt and newest[wt] is not w:
+            continue
         if state != "active" and not abandoned:
             continue
         if h:
@@ -247,18 +259,18 @@ def check_workers(run, call, lead_dispatch=None, me=None):
                     raise
         d = w.get("dispatchId") or "<dispatch>"
         task = w.get("taskId") or "<task>"
-        if abandoned:  # Orca settled it when its terminal went: there is nothing to stop or retry, only a session to resume
-            out.append(("do", resume_line(w, d, task, h)))
-            continue
-        if not h:  # a worker can run without a terminal, so this alone is no reason to restart it
+        if not abandoned and not h:  # a worker can run without a terminal, so this alone is no reason to restart it
             out.append(("info", f"worker {d} (task {task}) has no terminal on record: "
                                 f"`{shlex.join(['orca', 'orchestration', 'worker-show', '--dispatch', d])}` shows "
                                 "whether it is live; restart it only when that shows it is not"))
             continue
         parent = by_task.get(((w.get("projection") or {}).get("parent") or {}).get("taskId"))
         if parent and parent.get("taskId") != own_task:  # a unit under another lead is that lead's to restart
-            out.append(("do", f"worker {d} (task {task}) lost its terminal {h}; it sits under "
+            out.append(("do", f"worker {d} (task {task}) lost its terminal {h or '(none on record)'}; it sits under "
                               f"{parent.get('dispatchId')}: send that lead this line, and it restarts its own worker"))
+            continue
+        if abandoned:  # Orca settled it when its terminal went: there is nothing to stop or retry, only a session to resume
+            out.append(("do", resume_line(w, d, task, h)))
             continue
         card = (w.get("resource") or {}).get("worktreeId") or "<its worktree>"
         provider = (w.get("projection") or {}).get("provider") or {}

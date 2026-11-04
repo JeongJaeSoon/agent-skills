@@ -282,6 +282,23 @@ class Restarted(unittest.TestCase):
         self.assertEqual(len(infos), 1)
         self.assertIn("2 workers", infos[0])  # the released one is gone for good and is not counted
 
+    def test_a_resumed_worker_is_not_woken_again(self):  # worker-list is newest first
+        old = self.row("d_old", "abandoned")
+        for status in ("dispatched", "completed"):
+            new = self.row("d_new", status, "active", handle="term_ok")
+            orca = Orca(live=(ME, "term_ok"), run="run_1", workers=[new, old])
+            out = run("lead", "acme", "run_1", orca=orca, procs=wait_proc(200, "orch wait acme"))
+            self.assertEqual(does(out), [], status)
+
+    def test_an_abandoned_worker_under_another_lead_goes_to_that_lead(self):
+        lead = {"dispatchId": "d_lead", "taskId": "t_lead", "terminalState": "active", "agentTerminalHandle": "term_lead"}
+        kid = self.row("d_kid", "abandoned", projection={"parent": {"taskId": "t_lead"}})
+        procs = wait_proc(200, "orch inbox --wait") + wait_proc(300, "orch watch-cards")
+        out = does(run("top", run_id="run_1", orca=Orca(live=(ME, "term_lead"), run="run_1", workers=[kid, lead]), procs=procs))
+        self.assertEqual(len(out), 1)
+        self.assertIn("sits under d_lead", out[0])
+        self.assertNotIn("terminal create", out[0])
+
     def test_an_abandoned_worker_is_not_an_ok_line(self):
         lines = self.lines(self.row("d1", "abandoned"))
         self.assertFalse([t for k, t in lines if k == "ok" and "has a live terminal" in t])
@@ -305,6 +322,13 @@ class LostDispatch(unittest.TestCase):
         self.assertIn("orca orchestration run-create --objective", out[0])
         self.assertIn("orch set acme run <the new Run>", out[0])
         self.assertIn("ctx_gone", out[0])
+
+    def test_a_lead_already_bound_to_its_own_run_is_told_to_set_the_program_there(self):
+        self.program(lead_dispatch="ctx_gone")  # run-create done, the session ended before `orch set`
+        out = does(run("lead", "acme", orca=Orca(run="run_own"), procs=wait_proc(200, "orch wait acme")))
+        self.assertEqual(len(out), 1)
+        self.assertNotIn("run-use", out[0])
+        self.assertIn("orch set acme run run_own", out[0])
 
     def test_a_lead_that_was_never_dispatched_still_gets_run_use(self):
         self.program()
