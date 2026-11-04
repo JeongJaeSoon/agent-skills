@@ -46,7 +46,7 @@
     }
   },
   "agent_skills_json": {
-    "orchestrate": {"models": {"lead": "opus", "worker": "sonnet"}},
+    "orchestrate": {"models": {"lead": "opus", "worker": "sonnet"}, "auto_wake_min": 10},
     "reflect": {"skill_repository": "{checkout}", "model": "sonnet"},
     "reap": {"user_folders": [], "model": "sonnet"}
   }

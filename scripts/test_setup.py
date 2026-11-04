@@ -171,6 +171,23 @@ class Setup(unittest.TestCase):
         self.assertIn("reflect", json.loads((self.cfg / "agent-skills.json").read_text()))
         self.assertFalse((profile / "agent-skills.json").exists())
 
+    def test_bundle_turns_auto_wake_on_without_overwriting_the_users_value(self):
+        out = self.run_setup().stdout
+        self.assertRegex(out, r'\+\s+"auto_wake_min": 10')
+        self.run_setup("--apply", self.plan_hash())
+        orch = json.loads((self.cfg / "agent-skills.json").read_text())["orchestrate"]
+        self.assertEqual(orch["auto_wake_min"], 10)
+        self.assertEqual(orch["models"], {"lead": "opus", "worker": "sonnet"})
+        (self.cfg / "agent-skills.json").unlink()
+        (self.cfg / "agent-skills.json").write_text(json.dumps({"orchestrate": {"auto_wake_min": 30}}))
+        shutil.rmtree(self.state)  # forget what was offered, so the bundle value is proposed again
+        out = self.run_setup().stdout
+        self.assertIn("kept    orchestrate.auto_wake_min = 30 (recommended 10)", out)
+        self.run_setup("--apply", self.plan_hash())
+        orch = json.loads((self.cfg / "agent-skills.json").read_text())["orchestrate"]
+        self.assertEqual(orch["auto_wake_min"], 30)
+        self.assertIn("models", orch)
+
     def test_actions_only_takes_no_hash(self):
         p = self.run_setup("--actions-only", "--apply", "000000000000", ok=False)
         self.assertEqual(p.returncode, 2)

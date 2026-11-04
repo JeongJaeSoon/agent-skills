@@ -1,4 +1,4 @@
-<!-- translated-from: 7f26accc76ef467500cf85937beecd3b9d2d23e5 -->
+<!-- translated-from: 5f7d7226309da1ffcafd62b04de29bfa2399ce3e -->
 # Skill catalog
 
 This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 15 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
@@ -578,7 +578,7 @@ Every rule has a key in `~/.claude/agent-skills.json`. Its value is one of `"den
 | `orchestrate.model_flag` | warn | With `orchestrate.models` set, `orca orchestration worker-start`, `orca worktree create` or `orca agent launch` starting Claude with no `--model`. `--terminal` is out of scope |
 | `orchestrate.self_land` | warn | `hooks/self_land_gate.py`. A card whose first prompt has `PROGRAM` and an `APPROVED` line naming `orch land` calling `worker_done` or `orca worktree rm` over its own open PR. A `READY-WAIT:` line, `--outcome failed` and a human-gate program pass. `deny` blocks it |
 | `orchestrate.stack_dependent` | warn | A dependent PR that is not a stack. `hooks/stack_gate.py` reads the brief's `Lands after` and the branch's history at `gh pr create`; `orch land` and `land-check` compare land-after edges with the real stacks. `deny` makes both block. What cannot be read passes with one warning line |
-| `orchestrate.auto_wake_min` | none (off) | A positive integer N. `orch wait` wakes a worker once, N minutes after it first marked it idle (`skills/orchestrate/references/waking.md`, "Automatic wake"). With no key it only marks the worker and prints one line saying auto-wake is off. One dispatch is never woken twice; a second stop goes to Needs you |
+| `orchestrate.auto_wake_min` | none (off); setup bundle: 10 | A positive integer N. `orch wait` wakes a worker once, N minutes after it first marked it idle (`skills/orchestrate/references/waking.md`, "Automatic wake"). With no key it only marks the worker and prints one line saying auto-wake is off. One dispatch is never woken twice; a second stop goes to Needs you |
 | `orchestrate.model_autoswitch` | none (off) | On only when `true`. For patrol's M finding (a model other than the role's setting), an idle worker is switched once by `/exit` and then `claude --resume <id> --model <alias>` in the same terminal. A lead, an orchestrator, a running turn, an open question or background work on the screen is skipped; a failure goes to Needs you with no retry (`docs/automation.md`, finding M) |
 | `orchestrate.stall_idle_min` | 15 | A positive integer: minutes after a worker's turn ended before it shows as a STALLED `idle`. Lower it for a short live measurement |
 
