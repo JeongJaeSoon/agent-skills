@@ -142,6 +142,30 @@ assert rowstate.judge(row, facts({"octo/app#1": READY}, pressure=q("waiting"), s
 for st, late in (("waiting", True), ("retrying", True), ("failed", False)):
     got = rowstate.judge(row, facts({"octo/app#1": READY}, pressure=q(st, late), sessions=sess), sid="wt")
     assert got["status"] == "check" and got["next"].startswith(rowstate.AGENT_ACTION), (st, got)
+# An ended entry is the row's ❔ for QUEUE_ENDED_H only: by then it was retried under other text, dropped or reported.
+# Its time is when it ended, not when a late sweep wrote that down, and an old `ended` on a reopened entry does not count.
+H, flagged = 3600, lambda e: rowstate.judge(row, facts({"octo/app#1": READY}, pressure={"wt": [rowstate.queue_state(e, T)]}, sessions=sess), sid="wt")["status"] == "check"
+t0 = T.timestamp()
+assert flagged({"state": "gave_up", "what": "빌드", "deadline": t0 - 3 * H + 60, "ended": t0 - 3 * H + 60})
+assert not flagged({"state": "gave_up", "what": "빌드", "deadline": t0 - 3 * H - 60, "ended": t0 - 3 * H - 60})
+assert not flagged({"state": "failed", "what": "빌드", "deadline": t0 + 600, "ended": t0 - 7 * H})
+assert not flagged({"state": "gave_up", "what": "빌드", "deadline": t0 - 5 * H, "ended": t0 - 60}), "a late sweep must not bring it back"
+assert flagged({"state": "retrying", "what": "빌드", "deadline": t0 - 60, "ended": t0 - 9 * H}), "an old ended on a reopened entry"
+assert flagged({"state": "gave_up", "what": "빌드"}), "no time to read: it stays"
+# A doing item with no live session is never 🔄: nothing moves it. One a session runs is, and the owner's or a
+# --waiting item keeps its own list. A session list that cannot be trusted proves neither.
+doing = {"title": "조사", "owner": "lead-a", "next": "원인 보고"}
+live = [{"id": "wt", "phase": "working", "terminals": []}, {"id": "off", "phase": "offline", "terminals": []}]
+got = rowstate.judge_item("doing", doing, facts(sessions=live), "d", "wt")
+assert got["status"] == "moving" and got["next"] == "원인 보고", got
+for sid in (None, "off", "gone"):
+    got = rowstate.judge_item("doing", doing, facts(sessions=live), "d", sid)
+    assert got["status"] == "check" and got["next"] == "세션 없음 · 원인 보고", (sid, got)
+assert rowstate.judge_item("doing", {**doing, "owner": "octo"}, facts(sessions=live), "d")["status"] == "owner"
+assert rowstate.judge_item("doing", {**doing, "waiting": True}, facts(sessions=live), "d")["status"] == "waiting"
+blind = {**facts(sessions=live), "sessions_known": False}
+assert "세션 목록 모름" in rowstate.judge_item("doing", doing, blind, "d", "wt")["next"]
+assert rowstate.judge_item("do", {"title": "t", "who": "lead-a"}, facts(sessions=live), "d")["status"] == "moving"
 # A row marked done whose PR closed unmerged is not done: GitHub outranks the board.
 closed = {**READY, "state": "CLOSED"}
 assert rowstate.judge({**row, "status": "done"}, facts({"octo/app#1": closed}))["status"] == "held"

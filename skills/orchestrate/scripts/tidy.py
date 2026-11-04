@@ -85,6 +85,12 @@ def named(text, cards):
     return hits[0] if len(hits) == 1 else None
 
 
+def doing_card(d, cards):
+    """The card that runs a doing item: the one its title or next step names, else the one its owner names (a doing
+    item's owner is often that card)."""
+    return named(f"{d.get('title')} {d.get('next') or ''}", cards) or named(d.get("owner"), cards)
+
+
 def merged(p):
     return p.get("state") == "MERGED" or bool(p.get("merged_at"))
 
@@ -144,7 +150,7 @@ def assess(store, state, prs, me=None, now=None):
         # A busy card's merged PR is not its current PR, but a line about the card may still be about that PR: ❔.
         ev = refs_over(fleet.pr_refs(text) + [card and (card["pr"] or card["newest_pr"])], prs)
         if not ev:
-            if item_id("doing", d) in noref:
+            if item_id("doing", d) in noref and not doing_card(d, cards):
                 put(item_id("doing", d), "check", "no_ref", "PR·카드 참조 없이 24h+ · 참조를 달거나 닫기", d["title"])
             continue
         if card and card["id"] in live:
