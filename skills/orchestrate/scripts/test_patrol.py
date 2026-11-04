@@ -655,4 +655,84 @@ for text in ("I'll continue once the background review completes.", "백그라�
 assert patrol.bgwait_signal(waiting).startswith("Waiting on the background Codex run to finish; its completion notice")
 assert patrol.DEPENDS["B"] == {"terminals", "waits"}
 
+# T: a config address naming a terminal Orca no longer lists. Placeholders only.
+DEAD, ALIVE = "term_0FAKE-dead-handle", "term_0FAKE-live-handle"
+config = {"reap": {"inbox_to": "run:run_0FAKE", "pressure": {"notify_to": DEAD, "always_on": ["term_is_a_list_item"]}},
+          "prs": {"inbox_to": ALIVE}, "mentions": {"inbox_to": "dispatch:ctx_0FAKE"}, "cron": 5}
+listed = [term(ALIVE, "/w/live"), term("term_is_a_list_item", "/w/other")]
+dead, warning = patrol.dead_handles(config, listed)
+assert dead == [("reap.pressure.notify_to", DEAD)] and warning is None, (dead, warning)
+fs, _, _ = patrol.judge(facts(dead_handles=dead), {})
+f = next(x for x in fs if x["code"] == "T")
+assert codes(fs) == [("T", "reap.pressure.notify_to")] and f["owner"] is None, fs
+assert DEAD[:12] in f["title"] and DEAD not in f["title"] and "run:<id>" in f["title"], f
+assert "T" not in patrol.NEEDS_YOU and patrol.LABEL["T"]  # warn: shown to the orchestrator, no dashboard item
+
+# A live handle, a run: address and an empty config find nothing.
+assert patrol.dead_handles({"prs": {"inbox_to": ALIVE}}, listed) == ([], None)
+assert patrol.dead_handles({"prs": {"inbox_to": "run:run_0FAKE"}}, []) == ([], None)
+assert patrol.dead_handles(None, listed) == ([], None)
+
+# Orca unread or cut short: one warning line, no finding, and a standing finding is kept. No handle in the config
+# has nothing to warn about.
+dead, warning = patrol.dead_handles(config, [], readable=False)
+assert dead == [] and warning and "\n" not in warning and "run:<id>" not in warning, (dead, warning)
+assert patrol.dead_handles({"prs": {"inbox_to": "run:run_0FAKE"}}, [], readable=False) == ([], None)
+assert patrol.DEPENDS["T"] == {"terminals", "handles"}
+
+conf = tmp / "agent-skills-config.json"
+conf.write_text(json.dumps(config))
+conf0, orca0, patrol.CONFIG = patrol.CONFIG, patrol.prog.orca_json, conf
+
+
+def orca_terminals(rows, truncated=False):
+    def fake(*a):
+        if a[:2] == ("terminal", "list"):
+            return {"terminals": rows, "truncated": truncated}
+        raise SystemExit("not this source")
+    return fake
+
+
+try:
+    patrol.prog.orca_json = orca_terminals(listed)
+    got, notes = patrol.gather(NOW, time.time() + 100, {})
+    assert got["dead_handles"] == [("reap.pressure.notify_to", DEAD)] and "handles" not in got["failed"], got["failed"]
+    assert not [n for n in notes if n.startswith("config handles")], notes
+
+    patrol.prog.orca_json = orca_terminals(listed, truncated=True)  # a page without the handle says nothing about it
+    got, notes = patrol.gather(NOW, time.time() + 100, {})
+    assert got["dead_handles"] == [] and "handles" in got["failed"], got["failed"]
+    assert len([n for n in notes if n.startswith("config handles")]) == 1, notes
+
+    def no_orca(*a):
+        raise SystemExit("orca: unreachable")
+    patrol.prog.orca_json = no_orca
+    got, notes = patrol.gather(NOW, time.time() + 100, {})
+    assert got["dead_handles"] == [] and {"terminals", "handles"} <= got["failed"], got["failed"]
+    assert len([n for n in notes if n.startswith("config handles")]) == 1, notes
+
+    # An unreadable config is not one with no handles: the source fails, so a standing T stays. No file is fine.
+    patrol.prog.orca_json = orca_terminals(listed)
+    conf.write_text("{not json")
+    got, notes = patrol.gather(NOW, time.time() + 100, {})
+    assert got["dead_handles"] == [] and "handles" in got["failed"], got["failed"]
+    assert patrol.own_sources(got)["handles"] == "failed" and any("agent-skills.json" in n for n in notes), notes
+    conf.unlink()
+    got, notes = patrol.gather(NOW, time.time() + 100, {})
+    assert got["dead_handles"] == [] and "handles" not in got["failed"], got["failed"]
+    assert patrol.own_sources(got)["handles"] == "ok"
+finally:
+    patrol.prog.orca_json, patrol.CONFIG = orca0, conf0
+
+# The real file lifecycle: found, kept while Orca is unread, cleared once the setting changes.
+fresh = lambda **over: facts(now=NOW + 7000, **over)
+found = [("reap.pressure.notify_to", DEAD)]
+one = patrol.round_once(now=NOW + 7000, gather_fn=lambda now, dl, memo: (fresh(dead_handles=found), []))
+fid_t = next(x["id"] for x in one["findings"] if x["code"] == "T")
+assert fid_t in one["new"]
+two = patrol.round_once(now=NOW + 7100, gather_fn=lambda now, dl, memo: (fresh(failed={"terminals", "handles"}), []))
+assert fid_t in patrol.standing() and fid_t not in two["cleared"]
+three = patrol.round_once(now=NOW + 7200, gather_fn=lambda now, dl, memo: (fresh(), []))
+assert fid_t in three["cleared"] and fid_t not in patrol.standing()
+
 print("test_patrol: ok")

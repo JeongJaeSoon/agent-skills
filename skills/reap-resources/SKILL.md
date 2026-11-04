@@ -200,9 +200,10 @@ by the reap output in its report.
   with `tune-automode`). A scheduled prompt is not the owner's chat instruction, so a rule that
   needs one does not cover it.
 - A refused `reap` is not worked around with another command. The run sends the refused command,
-  one line, to `reap.inbox_to` and puts it first in its report. `inbox_to` is an Orca address; a
-  run address (`run:<id>`) outlives a terminal restart, a terminal handle does not. Unset, only the
-  report line and the precheck's stdout carry it.
+  one line, to `reap.inbox_to` and puts it first in its report. `inbox_to` and
+  `reap.pressure.notify_to` are Orca addresses. Use `run:<id>`: a `term_` handle is still accepted
+  but changes when its terminal restarts, and `orch patrol` raises one Orca no longer lists (T).
+  With `inbox_to` unset, only the report line and the precheck's stdout carry it.
 - The precheck counts how often it planned the same set. After `reap.plan_repeat` (default 2)
   rounds with no `reap`, it stops waking the model for that set, retries it once a day, and sends
   one message to `reap.inbox_to` with the command to run by hand; a failed send is tried again on
