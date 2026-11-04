@@ -1,15 +1,14 @@
----
-name: record-progress
-description: "Use when work reaches a moment the shared record should show — a PR opened, review requested, a merge or deploy verified, an investigation or design reached its conclusion, follow-up work turned up — and when the user asks for the record without ending the session: \"티켓 갱신해줘\", \"노트에 남겨줘\", \"작업 기록 남겨줘\", \"KB에 정리해줘\", bare \"정리해줘\"/\"마무리해줘\", \"update the ticket\", \"log this\". Decides what goes to the tracker (state), what goes to the notes store (reasoning), and what is not recorded at all. Ending the session is end-session."
----
+# Recording progress
 
-# Record progress
-
-The tracker and the notes store outlive this session; the transcript does not. This skill
-decides, at each moment that matters, what each of them gets. The writes themselves go through
-`use-tracker` and `use-notes`. Use only destinations and external writes authorized by the
-user or the selected workflow. Without that authorization, prepare the proposed record in
-the current task.
+The tracker and the notes store outlive this session; the transcript does not. This file
+decides, at each moment that matters, what each of them gets. Read it and act on it at that
+moment: `deliver-ticket` at each milestone, `orchestrate` on a `worker_done` and on the human's
+decision, `use-notes` when an investigation or design concludes, `end-session` §3 before the
+session goes, and on its own when the user asks only for the record ("정리해줘", "마무리해줘"
+with no object, "작업 기록 남겨줘", "log this"): then do this file and report, and do not run
+the ending steps. The writes themselves go through `use-tracker` and `use-notes`. Use only
+destinations and external writes authorized by the user or the selected workflow. Without that
+authorization, prepare the proposed record in the current task.
 
 | | Tracker (`use-tracker`) | Notes store (`use-notes`) |
 |---|---|---|
@@ -85,4 +84,20 @@ still investigating. Record when one of these happened:
 
 One message after the writes land, merging the delegates' returns: per epic "N/M 완료 조건 충족"
 first, each ticket with its key and transition, each note with its path and a one-line summary,
-LATER and DROP one line each, and what was not recorded and why. A bare "done" fails this skill.
+LATER and DROP one line each, and what was not recorded and why. A bare "done" fails this.
+
+## 4. The record line
+
+A report that follows a PR opened, a merge or a land, and every `worker_done` body, carries
+one line at the start of a line, outside code blocks and quotes:
+
+- `기록: <ticket key and transition> · <note path>`, or `기록: 없음 (<why nothing applies>)`
+- `기록 못 함: <reason>` when a write could not happen: the notes store's tools are not
+  connected or not authenticated, the workflow does not authorize the write, the merge is
+  still running in the background. Name what the record would have said.
+
+`Recorded:` and `Not recorded:` are the same lines in English. The plugin's
+`hooks/record_check.py` reads this line, and only this line: it reminds after `gh pr merge`,
+`gh pr create` and `orch land`, and at `guard.record_check: deny` holds back a `worker_done`,
+a card's close or the turn's end that lacks it. It checks that the outcome was reported, not
+that the record was written; the lead's reconcile checks that.
