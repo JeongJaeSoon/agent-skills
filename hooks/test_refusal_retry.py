@@ -15,7 +15,7 @@ SPEC = json.loads((HERE / "hooks.json").read_text())["hooks"]
 
 assert "PermissionDenied" not in SPEC, "nothing records a refusal any more"
 assert "refusals" not in (HERE / "hooks.json").read_text()
-assert not (HERE / "refusals.py").exists() and not (HERE / "lib" / "refusals.py").exists()
+assert not (HERE / "lib" / "refusals.py").exists()
 
 # A ledger the removed hook left behind is user data: no hook reads, rewrites or deletes it.
 OLD = STATE / "refusals.jsonl"
@@ -84,6 +84,17 @@ GUARD = next(c for c in commands("PreToolUse", "Bash") if "guard.py" in c)
 for cmd in ("pkill -f node", "docker system prune -af", "orch exempt visual 12"):
     assert pre("Bash", {"command": cmd})[GUARD] == "deny", cmd
 assert pre("Write", {"file_path": str(HOME / ".claude/settings.json")})[GUARD] == "deny"
+
+# hooks/refusals.py stays only for a session that loaded hooks.json before its removal (test_retired.py); on each
+# event that session runs it for, it decides nothing and leaves the ledger alone.
+for event in ("PreToolUse", "PermissionDenied", "Stop", "SubagentStop"):
+    out = run(f'python3 "{HERE / "refusals.py"}"',
+              {"hook_event_name": event, "tool_name": "Bash", "tool_input": {"command": MERGE}, **BASE})
+    assert out == {}, (event, out)
+assert run(f'python3 "{HERE / "refusals.py"}" <&-', {}) == {}, "a closed stdin is not a failure"
+held = subprocess.Popen([sys.executable, HERE / "refusals.py"], stdin=subprocess.PIPE)
+assert held.wait(timeout=5) == 0, "a stdin left open does not hold the session up to the hook's timeout"
+held.stdin.close()
 
 assert OLD.read_text() == OLD_TEXT, "the old ledger was changed"
 print("test_refusal_retry: ok")
