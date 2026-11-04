@@ -5,6 +5,10 @@ from unittest import mock
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import automations as au  # noqa: E402
 
+# The jobs read their model from agent-skills.json; a developer's own file must not change what these tests expect.
+NO_CONFIG = pathlib.Path(tempfile.gettempdir()) / "test-automations-no-such-config.json"
+au.CONFIG = au.reap.CONFIG = NO_CONFIG
+
 WANT = au.janitor_want(f"path:{au.REPO}")
 
 
@@ -467,6 +471,15 @@ class Watch(Base):
     def watch(self, enabled=True):
         return {"id": "W1", "name": "agent-skills watch-prs", "enabled": enabled, "rrule": "*/30 * * * *"}
 
+    def test_a_model_alone_does_not_configure_the_watch(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = pathlib.Path(d) / "c.json"
+            with mock.patch.object(au, "CONFIG", path):
+                path.write_text(json.dumps({"prs": {"model": "sonnet"}}))
+                self.assertFalse(au.Watch("watch-prs", "x").configured())
+                path.write_text(json.dumps({"prs": {"model": "sonnet", "inbox_to": "run:r"}}))
+                self.assertTrue(au.Watch("watch-prs", "x").configured())
+
     def test_status(self):
         self.orca([])
         self.assertEqual(self.w.status()[0], "unconfigured")
@@ -506,6 +519,126 @@ class Watch(Base):
         with mock.patch.object(au.PressureWatch, "status", return_value=("on", "")):
             self.assertEqual(au.cmd_apply(False), 0)
         self.assertEqual([c for c in fake.calls if "schedule" in c], [])
+
+
+class Model(Base):
+    """A registered job's model argument follows `<key>.model` of agent-skills.json; no key leaves it alone."""
+    ARGS = "--model sonnet"
+    FLAG = f"--extra-agent-args={ARGS}"
+
+    def with_models(self, **models):
+        """The config keys the jobs read: reap.model for the janitor, <key>.model for the rest."""
+        for p in (mock.patch.object(au.reap, "config", return_value={"model": models["reap"]} if "reap" in models else {}),
+                  mock.patch.object(au, "config_model", side_effect=lambda key: models.get(key))):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def watch(self, name, enabled=True, **over):
+        return {"id": "W-" + name, "name": f"agent-skills {name}", "enabled": enabled, "rrule": "*/30 * * * *",
+                "agentId": "claude", **over}
+
+    def test_janitor_drift_names_a_model_difference(self):
+        self.with_models(reap="sonnet")
+        self.assertEqual(au.janitor_want(f"path:{au.REPO}")["extra-agent-args"], self.ARGS)
+        self.assertIn("extra-agent-args", au.janitor_drift(janitor()))
+        self.assertIn("extra-agent-args", au.janitor_drift(janitor(extraAgentArgs="--model haiku")))
+        self.assertEqual(au.janitor_drift(janitor(extraAgentArgs=self.ARGS)), {})
+
+    def test_janitor_without_the_key_is_not_compared(self):
+        self.with_models()
+        self.assertNotIn("extra-agent-args", au.janitor_want(f"path:{au.REPO}"))
+        self.assertEqual(au.janitor_drift(janitor(extraAgentArgs="--model haiku")), {})
+
+    def test_janitor_enable_fixes_the_model(self):
+        self.with_models(reap="sonnet")
+        fake = self.orca([janitor(extraAgentArgs="--model haiku"), load_job(extraAgentArgs=self.ARGS)])
+        self.assertEqual(au.Janitor().enable(False)[0], 0)
+        (edit,) = fake.edits()
+        self.assertEqual((edit[edit.index("--id") + 1], self.FLAG in edit), ("J1", True))
+        self.assertNotIn("--prompt", edit)
+
+    def test_apply_refreshes_the_model_of_jobs_that_are_on_or_off(self):
+        self.with_models(reap="sonnet", reflect="sonnet", prs="sonnet", mentions="sonnet")
+        autos = [janitor(enabled=False), load_job(), self.watch("watch-prs", enabled=False),
+                 self.watch("watch-mentions", extraAgentArgs="--model haiku"),
+                 self.watch("reflect standing", extraAgentArgs=self.ARGS)]
+        fake = self.orca(autos)
+        with mock.patch.object(au.PreviewWatch, "status", return_value=("on", "")), \
+                mock.patch.object(au.PressureWatch, "status", return_value=("on", "")):
+            self.assertEqual(au.cmd_apply(False), 0)
+        self.assertEqual({e[e.index("--id") + 1]: e for e in fake.edits()}.keys(),
+                         {"J1", "J2", "W-watch-prs", "W-watch-mentions"})
+        for e in fake.edits():
+            self.assertIn(self.FLAG, e)
+            self.assertTrue({"--enabled", "--disabled", "--prompt", "--trigger"}.isdisjoint(e), e)
+
+    def test_apply_without_the_keys_edits_nothing(self):
+        self.with_models()
+        fake = self.orca([janitor(extraAgentArgs="--model haiku"), load_job(), self.watch("watch-prs"),
+                          self.watch("reflect standing", extraAgentArgs="--model haiku")])
+        with mock.patch.object(au.PreviewWatch, "status", return_value=("on", "")), \
+                mock.patch.object(au.PressureWatch, "status", return_value=("on", "")):
+            self.assertEqual(au.cmd_apply(False), 0)
+        self.assertEqual(fake.edits(), [])
+
+    def test_watch_enable_sends_the_model_with_enabled(self):
+        self.with_models(prs="sonnet", mentions="sonnet")
+        for name in ("watch-prs", "watch-mentions"):
+            w = next(a for a in au.AUTOMATIONS if a.name == name)
+            fake = self.orca([self.watch(name, enabled=False)])
+            self.assertEqual(w.enable(False), (0, "켬"))
+            (edit,) = fake.edits()
+            self.assertIn(self.FLAG, edit)
+            self.assertIn("--enabled", edit)
+            fake = self.orca([self.watch(name)])
+            self.assertEqual(w.enable(False)[0], 0)
+            self.assertEqual([self.FLAG in e and "--enabled" in e for e in fake.edits()], [False])
+
+    def test_watch_enable_without_the_key_sends_only_enabled(self):
+        self.with_models()
+        w = next(a for a in au.AUTOMATIONS if a.name == "watch-prs")
+        fake = self.orca([self.watch("watch-prs", enabled=False, extraAgentArgs="--model haiku")])
+        self.assertEqual(w.enable(False), (0, "켬"))
+        self.assertEqual(fake.edits()[0][1:], ["automations", "edit", "--id", "W-watch-prs", "--enabled", "--json"])
+
+    def test_janitor_on_another_agent_keeps_its_arguments(self):
+        self.with_models(reap="sonnet")
+        fake = self.orca([janitor(agentId="codex", extraAgentArgs="--model gpt"), load_job(agentId="codex")])
+        self.assertEqual(au.janitor_drift(janitor(agentId="codex")), {})
+        self.assertEqual(au.Janitor().enable(False), (0, "이미 켜져 있음"))
+        self.assertEqual(fake.edits(), [])
+
+    def test_janitor_enable_from_a_worktree_fixes_only_the_model(self):
+        """A worktree's paths are not the job's, but the model does not depend on the checkout."""
+        self.with_models(reap="sonnet")
+        fake = self.orca([janitor(prompt="old", extraAgentArgs="--model haiku"), load_job()], main=False)
+        self.assertEqual(au.Janitor().enable(False)[0], 0)
+        (edit,) = fake.edits()
+        self.assertEqual((self.FLAG in edit, "--prompt" in edit), (True, False))
+
+    def test_a_job_on_another_agent_keeps_its_arguments(self):
+        self.with_models(prs="sonnet")
+        fake = self.orca([self.watch("watch-prs", agentId="codex")])
+        w = next(a for a in au.AUTOMATIONS if a.name == "watch-prs")
+        self.assertEqual(w.refresh_model(), None)
+        self.assertEqual(fake.edits(), [])
+
+    def test_an_unreadable_list_is_not_success_when_a_model_is_wanted(self):
+        self.with_models(reflect="sonnet", prs="sonnet")
+        self.orca(None)
+        self.assertEqual(au.REFLECT.refresh_model()[0], 1)
+        self.assertEqual(next(a for a in au.AUTOMATIONS if a.name == "watch-prs").refresh_model()[0], 1)
+        self.with_models()
+        self.assertIsNone(au.REFLECT.refresh_model())
+
+    def test_a_failed_edit_fails_apply(self):
+        self.with_models(prs="sonnet")
+        fake = self.orca([janitor(), load_job(), self.watch("watch-prs")])
+        with mock.patch.object(au, "sh", side_effect=lambda c: subprocess.CompletedProcess(c, 1 if c[1:3] == ["automations", "edit"] else 0,
+                                                                                              fake(c).stdout, "boom")), \
+                mock.patch.object(au.PreviewWatch, "status", return_value=("on", "")), \
+                mock.patch.object(au.PressureWatch, "status", return_value=("on", "")):
+            self.assertEqual(au.cmd_apply(False), 1)
 
 
 class Cli(Base):

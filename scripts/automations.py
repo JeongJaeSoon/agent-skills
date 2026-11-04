@@ -35,6 +35,14 @@ def sh(cmd):
         return subprocess.CompletedProcess(cmd, 127, "", str(e))
 
 
+def config_model(key):
+    """`<key>.model` of agent-skills.json, or None: the value the skill's own `schedule` passes to a new job."""
+    try:
+        return (json.loads(CONFIG.read_text()).get(key) or {}).get("model") or None
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
 def main_checkout():
     return (REPO / ".git").is_dir()
 
@@ -64,22 +72,54 @@ def janitor_want(workspace, load=False):
     argv = reap.schedule_cmd(REAP, reap.STATE, workspace, "claude", reap.ledger_path(), reap.config().get("inbox_to"),
                              load=load)
     arg = dict(zip(argv, argv[1:]))
-    return {"trigger": arg["--trigger"], "precheck": arg["--precheck"],
+    want = {"trigger": arg["--trigger"], "precheck": arg["--precheck"],
             "precheck-timeout": int(arg["--precheck-timeout"]), "prompt": arg["--prompt"]}
+    # Only present with reap.model: without the key the stored arguments are left as they are.
+    extra = next((x.partition("=")[2] for x in argv if x.startswith("--extra-agent-args=")), None)
+    return {**want, **({"extra-agent-args": extra} if extra else {})}
 
 
 def janitor_drift(a, load=False):
     pre = a.get("precheck") or {}
     have = {"trigger": a.get("rrule"), "precheck": pre.get("command"),
-            "precheck-timeout": pre.get("timeoutSeconds"), "prompt": a.get("prompt")}
+            "precheck-timeout": pre.get("timeoutSeconds"), "prompt": a.get("prompt"),
+            "extra-agent-args": a.get("extraAgentArgs")}
     want = janitor_want(f"path:{REPO}", load)
+    if a.get("agentId", "claude") != "claude":  # --model is a claude argument; another agent keeps its own
+        want.pop("extra-agent-args", None)
     return {k: v for k, v in want.items() if have[k] != v}
+
+
+def edit_flag(k, v):
+    """argv words for one janitor_want field; a value that starts with `--` only parses after `=`."""
+    return [f"--{k}={v}"] if k == "extra-agent-args" else [f"--{k}", str(v)]
 
 
 class OrcaJob:
     """An Orca automation found by its name; disabling keeps it registered so `apply` leaves it off."""
     default = True
     job_name = ""
+
+    def model(self):
+        """The model its config key names, or None (no key: whatever the job has stays)."""
+        return None
+
+    def refresh_model(self):
+        """Set a registered job's `--model` to the key's value, touching nothing else (not even on/off). None when
+        there is nothing to change; otherwise (code, message). A key that was removed does not clear the job's
+        arguments, and a job on another agent keeps its own."""
+        if not self.model():
+            return None
+        want = f"--model {self.model()}"
+        a, err = self.find()
+        if a is None:
+            return 1, err
+        if not a or a.get("agentId", "claude") != "claude" or a.get("extraAgentArgs") == want:
+            return None
+        p = sh([ORCA, "automations", "edit", "--id", a["id"], f"--extra-agent-args={want}", "--json"])
+        if p.returncode:
+            return 1, f"orca automations edit 실패: {(p.stderr or p.stdout).strip()[:200]}"
+        return 0, f"모델 인자를 맞춤: {want}"
 
     def find(self):
         autos, err = orca_automations()
@@ -119,6 +159,9 @@ class Janitor(OrcaJob):
             detail += f" · reap schedule 과 다름: {', '.join(drift)} (enable 로 맞춤)"
         return ("on" if a.get("enabled") else "off"), detail
 
+    def model(self):
+        return reap.config().get("model")
+
     def create_args(self):
         return [], None
 
@@ -136,13 +179,15 @@ class Janitor(OrcaJob):
                 return 0, skip
             p = sh([sys.executable, str(REAP), "schedule", *args, "--write"])
             return p.returncode, (p.stdout + p.stderr).strip()
-        drift = janitor_drift(a, self.load) if main_checkout() else {}
+        drift = janitor_drift(a, self.load)
+        if not main_checkout():  # a worktree's paths differ from the job's; the model does not depend on the checkout
+            drift = {k: v for k, v in drift.items() if k == "extra-agent-args"}
         if not drift and a.get("enabled"):
             return 0, "이미 켜져 있음"
         # orca rejects --precheck-timeout without --precheck.
         fields = {"precheck": janitor_want(f"path:{REPO}", self.load)["precheck"], **drift} \
             if "precheck-timeout" in drift else drift
-        edit = [x for k, v in fields.items() for x in (f"--{k}", str(v))]
+        edit = [x for k, v in fields.items() for x in edit_flag(k, v)]
         p = sh([ORCA, "automations", "edit", "--id", a["id"], *edit, "--enabled", "--json"])
         if p.returncode:
             return 1, f"orca automations edit 실패: {(p.stderr or p.stdout).strip()[:200]}"
@@ -350,9 +395,13 @@ class Watch(OrcaJob):
 
     def configured(self):
         try:
-            return bool(json.loads(CONFIG.read_text()).get(self.key))
-        except (OSError, ValueError, AttributeError):
+            section = json.loads(CONFIG.read_text()).get(self.key)
+            return bool(section) and set(section) != {"model"}  # the round's model alone does not turn the watch on
+        except (OSError, ValueError, AttributeError, TypeError):
             return False
+
+    def model(self):
+        return config_model(self.key)
 
     def status(self):
         a, err = self.find()
@@ -370,8 +419,10 @@ class Watch(OrcaJob):
             return 1, err
         if a:
             if a.get("enabled"):
-                return 0, "이미 켜져 있음"
-            p = sh([ORCA, "automations", "edit", "--id", a["id"], "--enabled", "--json"])
+                return self.refresh_model() or (0, "이미 켜져 있음")
+            model = f"--model {self.model()}" if self.model() and a.get("agentId", "claude") == "claude" else None
+            extra = [f"--extra-agent-args={model}"] if model and a.get("extraAgentArgs") != model else []
+            p = sh([ORCA, "automations", "edit", "--id", a["id"], *extra, "--enabled", "--json"])
             return (1, f"orca automations edit 실패: {(p.stderr or p.stdout).strip()[:200]}") if p.returncode else (0, "켬")
         if not self.configured():
             return 1, f"agent-skills.json 에 \"{self.key}\" 키가 없어 켜지 않는다({self.name} 스킬의 설정 절)"
@@ -381,6 +432,18 @@ class Watch(OrcaJob):
         p = sh([sys.executable, str(self.script), "schedule", "--write"])
         return p.returncode, (p.stdout + p.stderr).strip()[-300:]
 
+
+class ReflectStanding(OrcaJob):
+    """The reflect standing round (`skill_usage.py schedule --write`). Not an automation `setup` turns on or off: it
+    is here only so `apply` brings its model in line with reflect.model."""
+    name = "reflect-standing"
+    job_name = "agent-skills reflect standing"
+
+    def model(self):
+        return config_model("reflect")
+
+
+REFLECT = ReflectStanding()
 
 AUTOMATIONS = (Janitor(), JanitorLoad(), PreviewWatch(), PressureWatch(), ShareServer(),
                Watch("watch-prs", "나를 지명한 리뷰 요청과 내 PR 의 리뷰 대기를 오케스트레이터나 리드에게 모아 보내는 Orca automation"),
@@ -426,6 +489,11 @@ def cmd_apply(here):
             code |= report(a, 1, detail)
         else:
             report(a, 0, f"{LABEL[state]}, 그대로 둠" + (" (사용자가 끔)" if state == "off" else ""))
+            # Only the model argument: on or off stays as the user left it, and the rest of the job is `enable`'s.
+            if isinstance(a, OrcaJob) and state in ("on", "off") and (r := a.refresh_model()):
+                code |= report(a, *r)
+    if r := REFLECT.refresh_model():
+        code |= report(REFLECT, *r)
     return code
 
 

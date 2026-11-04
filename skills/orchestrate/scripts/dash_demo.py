@@ -362,15 +362,16 @@ def _transcripts(root, now, workers):
                 rows.append({"type": "assistant", "timestamp": _iso(t),
                              "message": {"id": f"msg_{i}_{m}", "model": "claude-opus", "usage": usage}})
         # How the session's last turn stands: a tool running, a tool waiting on a prompt, or a finished turn.
+        model = "claude-opus-5-5" if i % 3 == 0 else "claude-sonnet-5-5"  # the last row's model: the Sessions table's Model cell
         act, last = w["projection"]["stage"]["activity"], rows[-1]["timestamp"] if rows else _iso(now)
         if w["projection"]["outcome"] == "in_progress" and act == "working":
-            rows.append({"type": "assistant", "timestamp": _ago(now, 0.05), "message": {"id": f"msg_{i}_t", "content": [
+            rows.append({"type": "assistant", "timestamp": _ago(now, 0.05), "message": {"id": f"msg_{i}_t", "model": model, "content": [
                 {"type": "tool_use", "name": "Bash", "input": {"command": "bun test", "description": "Run the unit tests"}}]}})
         elif w["projection"]["outcome"] == "in_progress" and act == "waiting":
-            rows.append({"type": "assistant", "timestamp": _ago(now, 0.7), "message": {"id": f"msg_{i}_t", "content": [
+            rows.append({"type": "assistant", "timestamp": _ago(now, 0.7), "message": {"id": f"msg_{i}_t", "model": model, "content": [
                 {"type": "tool_use", "name": "Bash", "input": {"command": "git push --force-with-lease"}}]}})
         else:
-            rows.append({"type": "assistant", "timestamp": last, "message": {"id": f"msg_{i}_e", "stop_reason": "end_turn",
+            rows.append({"type": "assistant", "timestamp": last, "message": {"id": f"msg_{i}_e", "model": model, "stop_reason": "end_turn",
                                                                          "content": [{"type": "text", "text": "done"}]}})
         (d / "session.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
     return base
@@ -506,6 +507,14 @@ def build(root, now=None):
                               ("search-v1", "acme/search", 200, True), ("metrics-spike", "acme/metrics", 300, False)):
         write_program(root, *finished(now, slug, repo, h, ok))
     projects = _transcripts(root, now, a[4]["workers"] + b[4]["workers"])
+    # The Sessions table's Model cell: each fake worktree's last assistant row. A worker on opus is off the demo's
+    # orchestrate.models (below), so it shows the `!`.
+    for path, model in (("coord", "opus"), ("lead", "opus"), ("export", "sonnet"), ("invoice", "opus"), ("login", "sonnet"),
+                        ("docs", "sonnet"), ("tax", "haiku"), ("scratch", "opus")):
+        d = projects / f"-work-wt-{path}"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "session.jsonl").write_text(json.dumps({"type": "assistant", "timestamp": _iso(now), "message": {
+            "id": f"msg_model_{path}", "model": f"claude-{model}-5-5", "content": [{"type": "text", "text": "ok"}]}}) + "\n")
     (root / "fleet-state").mkdir(parents=True, exist_ok=True)
     (root / "fleet-state" / "skills.json").write_text(json.dumps(skills_report(now)))
     (root / "fleet-state" / "pr-stats.json").write_text(json.dumps(pr_stats_report(now)))
@@ -529,8 +538,10 @@ def build(root, now=None):
     (root / "reap-hard-last.json").write_text(json.dumps({"t": t, "at": _ago(now, 7 / 60), "run": "demo", "dry_run": False, "acted": 2,
                                                           "skipped": 0, "failed": 0, "kept": 5, "notes": [], "dark": []}))
     seed_pressure(root, now.timestamp())
+    # The roles' models the Sessions table's Model cell is judged against: the demo workers run on both.
+    (root / "agent-skills.json").write_text(json.dumps({"orchestrate": {"models": {"lead": "opus", "worker": "sonnet"}}}))
     # The fleet collector must never write the real ~/.local/state or read the real config from a demo or test.
-    return {"ORCH_FLEET_STATE": str(root / "fleet-state"), "ORCH_FLEET_CONFIG": str(root / "fleet-config.json"),
+    return {"AGENT_SKILLS_CONFIG": str(root / "agent-skills.json"), "ORCH_FLEET_STATE": str(root / "fleet-state"), "ORCH_FLEET_CONFIG": str(root / "fleet-config.json"),
             "PROGRAMS_HOME": str(root / "programs"), "AGENT_SKILLS_STATE": str(root), "CLAUDE_PROJECTS_DIR": str(projects), "ORCH_SKILLS": "off", "ORCH_PR_STATS": "off", "ORCH_TOKENS": "off", "DASH_DEMO_FIXTURES": str(root / "fixtures"),
             "TRACKER_FIXTURES": str(root / "fixtures" / "tracker"), "TRACKER_PY": str(bin_ / "tracker.py"),
             "PATH": f"{bin_}{os.pathsep}{os.environ.get('PATH', '')}"}
@@ -643,8 +654,8 @@ class FakeFleetWorld:
 
     ME = "you-dev"
 
-    def __init__(self, now, crowd=0):
-        self.now, self.step = now, 0
+    def __init__(self, now, crowd=0, layout=False):
+        self.now, self.step, self.layout = now, 0, layout
         ms = lambda h: int((now - dt.timedelta(hours=h)).timestamp() * 1000)
         agent = lambda pane, state, h, **kw: {"paneKey": pane, "state": state, "agentType": "claude", "stateStartedAt": ms(h),
                                               "updatedAt": ms(h / 2), **kw}
@@ -717,6 +728,20 @@ class FakeFleetWorld:
                                          parentWorktreeId="wt-crowd-lead" if i < 4 else None))
                 if state != "offline":
                     self.terminals.append(term(f"term_c{i}", wid, name, agent=state != "open"))
+        self.renamed = {}
+        self.merged_extra = {}
+        if layout:
+            # The shapes that stretched the Sessions table: long branches, a ticket only the name or branch carries, a
+            # repository Orca still names by its old project name, and workers that are offline with a merged PR.
+            for wid, name, branch in (("wt-long1", "ACME-106 reconcile statements", "lead/billing-statements-reconciliation-with-a-very-long-branch-name"),
+                                      ("wt-long2", "ledger notes backfill", "feat/ACME-107-ledger-notes-export-backfill-for-closed-periods")):
+                self.worktrees.append(wt(wid, name, "acme/oldname", branch, 0.3, [agent(f"p-{wid}", "working", 0.3, prompt=f"Implement {name}.")],
+                                         parentWorktreeId="wt-lead"))
+                self.terminals.append(term(f"term_{wid[3:]}", wid, name))
+                self.renamed[f"/work/{wid}"] = "acme/renamed"
+            for i, n in enumerate((110, 111, 112)):
+                self.worktrees.append(wt(f"wt-fin{i}", f"ACME-{n} finished task {i}", "acme/launchpad", f"feat/fin{i}", 5 + i, parentWorktreeId="wt-lead"))
+                self.merged_extra[50 + i] = f"feat/fin{i}"
         user = lambda login: {"__typename": "User", "login": login, "avatarUrl": None}
         review = lambda rid, login, state, h, oid="h41a": {"id": rid, "state": state, "submittedAt": _ago(now, h),
                                                            "author": user(login), "commit": {"oid": oid}}
@@ -751,6 +776,10 @@ class FakeFleetWorld:
         p44 = base(44, "feat: invoice PDF", "h44a", 0.2, "PENDING")
         self.prs = {41: p41, 42: p42, 43: p43, 44: p44, 7: p7, 6: p6}
         self.branches = {"feat/login": 41, "feat/export": 42, "docs/setup": 43, "feat/invoice": 44}
+        for n, branch in self.merged_extra.items():
+            pm = base(n, f"feat: {branch}", f"h{n}a", 4, "SUCCESS")
+            pm.update(state="MERGED", mergedAt=_ago(now, 4), mergeStateStatus="UNKNOWN")
+            self.prs[n], self.branches[branch] = pm, n
         # wt-docs sits in a permission dialog that hooks/permission.py recorded.
         self.screens = {"term_docs": ["⏺ Checking what the package would ship before the guide links to it.", "─" * 60,
                                       " Bash command", "", "   npm publish --dry-run", "   Show what would be published", "",
@@ -951,5 +980,9 @@ class FakeFleetWorld:
                         fetch_monitors=self.fetch_monitors, fetch_sent=self.fetch_sent, ps_table=lambda: {},
                         declared_roles=lambda procs: [])
         f.me = self.ME
-        f.repos = {w["path"]: f"acme/{w['repo']}" for w in self.worktrees}
+        f.repos = {w["path"]: self.renamed.get(w["path"]) or f"acme/{w['repo']}" for w in self.worktrees}
+        if self.layout:  # two subagents the lead started and nobody saw stop: one old enough to count as stale, one running
+            fleet.write_atomic(fleet.state_dir() / fleet.SUBAGENTS, "".join(json.dumps({
+                "v": 1, "event": "start", "at": _ago(self.now, h), "agent": aid, "type": "general-purpose", "handle": "term_lead",
+                "desc": desc}) + "\n" for aid, h, desc in (("sa1", 19, "check the release script"), ("sa2", 0.1, "read the billing docs"))))
         return f

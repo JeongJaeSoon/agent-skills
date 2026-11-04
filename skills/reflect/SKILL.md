@@ -23,7 +23,8 @@ Skip when the work is trivial, off-topic, or already covered by an existing skil
 
 Use `reflect.ledger` in the skill configuration or an explicit path supplied for this task.
 `reflect.orchestrator_feedback` (default `false`) adds the orchestrator's conversation to standing mode's input
-(step 1); it reads nothing without `reflect.ledger`.
+(step 1); it reads nothing without `reflect.ledger`. `reflect.model` names the daily round's Claude model: `schedule`
+passes it with `--extra-agent-args`.
 Keep private evidence outside public repositories. If no destination is configured, report
 findings in the current task; do not invent a shared note location. Existing ledgers stay at
 their current path and retain their IDs and history. A new ledger uses this table and a

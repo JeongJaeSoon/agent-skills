@@ -166,10 +166,12 @@ STORES = [
     Store("avatars", "D/avatars/*.png", {"pr.author": CACHE}, ("fleet:Fleet.fetch_avatars",), ("page",)),
     Store("prompts", "D/prompts/*.json", {"permission.prompt": CANONICAL}, ("permission:main",), ("fleet",),
           rule="one file per pending permission prompt"),
-    Store("decisions", "D/decisions.json", {"decision.item": REMOVED}, ("store:export_legacy",), ("nobody",),
-          rule="decisions before PR 4a; `orch db import` leaves an empty directory here so older code fails to write, "
-               "and `orch db export --legacy` writes one for a rollback"),
-    Store("decisionslock", "D/decisions.lock", {"decision.item": LOCK}, ("store:_locks",)),
+    Store("decisions", "D/decisions.json", {"decision.item": REMOVED}, ("store:export_legacy", "store:_change_file"),
+          ("nobody",),
+          rule="decisions before PR 4a, and while no DB file exists (`store:_change_file`, which `orch db import` picks "
+               "up); the import leaves an empty directory here so older code fails to write, and `orch db export "
+               "--legacy` writes one for a rollback"),
+    Store("decisionslock", "D/decisions.lock", {"decision.item": LOCK}, ("store:_locks", "store:_file_lock")),
     # -- D: agent-skills.db, every connection through store.py (check() refuses one anywhere else)
     Store("db", "D/agent-skills.db", {"db.file": CANONICAL}, ("store:_import_decisions", "store:restore"),
           ("fleet", "brief", "reorient"), rule="SQLite (WAL) holding the db: tables below; only `orch db import` "
@@ -297,7 +299,7 @@ STORES = [
           ("nobody",), rule="merges, lands and PR opens that still owe a record line, their closes, and the warn "
                             "rows a week of observation reads before guard.record_check goes to deny"),
     Store("onboard", "S/onboard-declined.json", {"onboard.declined": CANONICAL}, ("onboard:decline",), ("reorient",)),
-    Store("ledger", "S/ledger.jsonl", {"resource.made": CANONICAL}, ("reap:act", "reap:main"), ("janitor",),
+    Store("ledger", "S/ledger.jsonl", {"resource.made": CANONICAL}, ("reap:act", "reap:main", "reap:note_stack_dirs"), ("janitor",),
           rule="what agents made, retired when reaped"),
     Store("janitorplan", "S/janitor-plan.json", {"machine.resource": DERIVED}, ("reap:main", "cards:main"), ("janitor",),
           rule="the precheck's scan; the same scanner as pressure-plan"),
@@ -325,6 +327,9 @@ STORES = [
           ("patrol", "programview"), rule="findings and their acks"),
     Store("patrolstate", "S/patrol-*.json", {"patrol.memo": CANONICAL}, ("patrol:round_once", "patrol:pending_lines"),
           ("patrol",), rule="round memo and re-notice guard"),
+    Store("modelswitch", "S/model-switch/*.json", {"patrol.model_switch": CANONICAL}, ("model_drift:autoswitch", "model_drift:mark_reported"),
+          ("patrol",), feature="model_autoswitch", rule="one claim per session, made before the first keystroke: "
+          "a session is switched at most once"),
     Store("patrollock", "S/patrol.lock", {"card.verdict": LOCK}, ("patrol:round_lock",)),
     Store("patrolout", "S/patrol.log", {"patrol.output": CANONICAL}, ("reap:spawn_patrol",), ("nobody",)),
     Store("pressure", "S/pressure.json", {"pressure.level": CANONICAL}, ("pressure:save_state",),
@@ -366,12 +371,13 @@ STORES = [
           ("programview", "fleet", "watchprs", "reorient"),
           rule="repo, Run, predicate, merge policy; stages (`orch set`, cmd_set through Program.update), which "
                "stage_auto reads in the collector and, for a lead not yet in stages-auto, in the hook"),
-    Store("progledger", "P/*/ledger.jsonl", {"program.event": CANONICAL}, ("prog:Program.append", "prog:write_backfill"),
+    Store("progledger", "P/*/ledger.jsonl", {"program.event": CANONICAL},
+          ("prog:Program.append", "prog:Program.append_once", "prog:write_backfill"),
           ("programview", "fleet", "reflect", "skillspage"), rule="one ledger per program"),
     Store("progledgerlock", "P/*/ledger.lock", {"program.event": LOCK}, ("prog:Program.locked",)),
     Store("progwait", "P/*/*.json", {"program.wait_memo": CANONICAL},
-          ("prog:cmd_wait", "prog:print_stuck", "prog:new_stalls", "prog:new_leftovers"), ("programview",),
-          rule="`orch wait` memos: self-check, stuck, stalls and leftovers seen"),
+          ("prog:cmd_wait", "prog:print_stuck", "prog:new_stalls", "prog:new_leftovers", "autowake:save_marks"),
+          ("programview",), rule="`orch wait` memos: self-check, stuck, stalls and leftovers seen, auto-wake's first marks"),
     Store("progstatus", "P/*/status-self-check.json", {"program.status_memo": CANONICAL}, ("prog:cmd_status",),
           ("programview",), rule="`orch status` TAKEN OVER memo: when each self-check was asked, apart from `orch wait`'s"),
     Store("progbackup", "P/*/ledger.jsonl.bak-*", {"program.event": BACKUP}, ("prog:write_backfill",), ("nobody",)),

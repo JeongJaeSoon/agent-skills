@@ -24,6 +24,17 @@ LABELS = {"nestedWorkerMaxDepth": "Nested worker depth (하위 에이전트 최�
           "orchestrationChatErrorEscalationEnabled": "Chat error escalation (채팅 오류 알림)"}
 
 
+def role_model(role):
+    """`orchestrate.models.<role>` of agent-skills.json, or None: unset, unreadable, or not one model name."""
+    try:
+        cfg = json.loads(pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-skills.json")
+                         .expanduser().read_text())
+        value = cfg["orchestrate"]["models"][role]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return value if isinstance(value, str) and re.fullmatch(r"[\w.:/\[\]-]+", value) else None
+
+
 def data_dir():
     if os.environ.get("AGENT_SKILLS_ORCA_DATA_DIR"):
         return pathlib.Path(os.environ["AGENT_SKILLS_ORCA_DATA_DIR"])
@@ -221,19 +232,34 @@ def run_list(call, error=RuntimeError):
     return next(pages(call, "run-list", error=error))[0].get("runs") or []
 
 
-def own_dispatch(orca=None, failed=None):
-    """This terminal's own active Dispatch when it is a dispatched worker (a lead started with worker-start, whose
-    `run-current` is null), else None, or `failed` when worker-list did not answer. Unbound, worker-list spans every
-    Run; only active terminals can be this one."""
-    me = os.environ.get("ORCA_TERMINAL_HANDLE")
-    try:
-        for rows, _, _ in worker_list(orca_call(orca), "--terminal-state", "active", "--limit", "100") if me else ():
-            mine = next((w for w in rows if worker_terminal(w) == me), None)
+SETTLED = ("completed", "failed", "abandoned")  # dispatch statuses whose worker has stopped
+
+
+def terminal_dispatch(call, handle, settled=False):
+    """The Dispatch of the terminal `handle`, else None. A person typing into a worker's terminal, or keeping it open,
+    moves its Dispatch from `active` to `retained` and it is still this terminal's. A settled retained row is not: Orca
+    keeps those for a terminal it reused or that stayed open, and reading one as current would let a finished Dispatch
+    vouch for closing the terminal or name the Run of a new card. Active goes first for the same reuse; a settled active
+    row counts, since a worker that just reported still has to find itself. worker-list is newest first.
+    settled=True counts settled retained rows too, for a caller asking whether this terminal was dispatched at all."""
+    for state in ("active", "retained"):
+        for rows, _, _ in worker_list(call, "--terminal-state", state, "--limit", "100"):
+            mine = next((w for w in rows if worker_terminal(w) == handle and
+                         (settled or state == "active" or w.get("dispatchStatus") not in SETTLED)), None)
             if mine:
                 return mine
+    return None
+
+
+def own_dispatch(orca=None, failed=None):
+    """This terminal's own Dispatch when it is a dispatched worker (a lead started with worker-start, whose
+    `run-current` is null), else None, or `failed` when worker-list did not answer. Unbound, worker-list spans every
+    Run."""
+    me = os.environ.get("ORCA_TERMINAL_HANDLE")
+    try:
+        return terminal_dispatch(orca_call(orca), me) if me else None
     except (OSError, subprocess.TimeoutExpired, ValueError, AttributeError, TypeError, RuntimeError):
         return failed
-    return None
 
 
 def lead_scope(workers, lead_dispatch):

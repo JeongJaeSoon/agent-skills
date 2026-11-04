@@ -23,7 +23,9 @@ A pass, in order (each later step sees what the earlier ones closed):
             -> `tailscale serve --https=<port> off` (or --tcp)
   container a stopped container named under reap.stopped_containers.prefixes that compose did not make -> `docker rm <id>`
   volume    a volume whose origin label is in reap.labeled_volumes.origins, referenced by no container in any state
-            -> `docker volume rm <name>`. Both off without their setting; the rules are reap.py's (reap.leftovers).
+            and its owner's card closed (reap.owner_hold) -> `docker volume rm <name>`. Both off without their setting;
+            the rules are reap.py's (reap.leftovers). A pass also records each working directory a stack's containers
+            name (reap.note_stack_dirs): the volumes outlive those labels.
 Before any rule, the protect file is read; without it nothing runs (exit 2). It holds `port N`, `pid N`, `path P`
 (a card or any prefix) and `project NAME` lines; `#` starts a comment. Pinned cards, the main checkout, the
 compose projects in reap.pressure.always_on and anything a person's shell started are always kept.
@@ -33,7 +35,7 @@ After a pass that is not a dry run, `orch patrol --if-due` starts detached (ever
 it judged working within the hour is kept, and nothing it judged becomes a target.
 Settings: "reap-hard" in ~/.claude/agent-skills.json (DEFAULTS).
 """
-import contextlib, fcntl, functools, json, os, pathlib, plistlib, re, shutil, signal, socket, stat, subprocess, sys, time, uuid
+import contextlib, fcntl, functools, json, os, pathlib, plistlib, re, shutil, signal, socket, subprocess, sys, time, uuid
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -345,6 +347,7 @@ def scan_rest(cfg, protect, dark_before, closed, m, now):
     stacks = reap.compose_stacks()
     if stacks is None:
         notes.append("docker 를 읽지 못함: 스택은 건너뜀")
+    m["stacks"] = stacks
     try:
         keep, unread = always_on(), None
     except ValueError as e:  # the always-on list cannot be read: every stack stays this pass
@@ -404,18 +407,8 @@ def scan_rest(cfg, protect, dark_before, closed, m, now):
     return items, notes, dark
 
 
-def dir_gone(d):
-    """True only for a directory that is not there; one that cannot be looked at (permissions, I/O) is not gone."""
-    try:
-        return not stat.S_ISDIR(os.stat(d).st_mode)
-    except (FileNotFoundError, NotADirectoryError):
-        return True
-    except (OSError, ValueError):
-        return False
-
-
 def stack_gone(closed):
-    return lambda d: dir_gone(d) or any(reap.under(reap.real(d), c) for c in closed)
+    return lambda d: reap.dir_gone(d) or any(reap.under(reap.real(d), c) for c in closed)
 
 
 # ---------------------------------------------------------------- acting
@@ -577,6 +570,11 @@ def run_pass(dry, cfg=None, now=None):
         closed = [i["id"] for i in items if i["target"] and (dry or (not i["result"].startswith(("건너뜀", "실패"))
                                                                      and not os.path.isdir(i["id"])))]
         rest, more, dark = scan_rest(cfg, protect, set(last.get("dark") or ()), closed, m, now)
+        if not dry and m.get("stacks"):
+            try:
+                reap.note_stack_dirs(m["stacks"])
+            except Exception as e:  # the record is for later rounds; failing it must not stop this one
+                more.append(f"스택 작업 폴더를 ledger 에 적지 못함: {type(e).__name__}: {e}")
         do(rest)
         items, notes = items + rest, notes + more
     finally:

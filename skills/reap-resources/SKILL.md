@@ -95,14 +95,28 @@ line adds to it and keeps the owner links. `--pid` is recorded, never checked: t
 | chrome-window | its link is done and its URL is recorded | an open PR, no link, no URL (Chrome reuses ids after a restart, so without the URL the agent cannot tell it is the same tab) | `reap` prints `에이전트가 처리` and retires the id in the ledger, so it is asked once; the agent closes it with its browser tools only when the URL matches, and leaves it otherwise or when it has no browser tools |
 | evidence | a file or directory of screenshots and recordings whose PR has been merged or closed for N hours (`--hours`) | an open PR, no PR link (a worktree link does not prove it was uploaded), a PR state or close time that could not be read, a directory holding anything but images and videos | the trash |
 | compose-stack | in the ledger (`orch heavy` registers a project its command left with a config file in the card's worktree); its PR merged or closed (ledger link, else the worktree branch's own PR, an open one first, counted only when it carried the worktree's HEAD) or its worktree gone; every container stopped, or none started or stopped for `--hours`; on a host port in `reap.preview_ports` (default 4500–4599, hand-served previews) only after a `--previewed` line | an open PR, no PR, a PR it could not read, a `--keep` line before its `--until`, containers created after the latest registration (a new stack under a reused name), a stack nobody registered (the `docker` kind reports those) | `docker compose -p <project> down`, never `-v`: volumes stay. The id is retired in the ledger |
-| stack-volume | a volume whose compose project or `reap.stack_volumes.label` value starts with a `reap.stack_volumes.prefixes` entry and appears in the volume's name, every owner label on it is under a prefix, no container of any state carries an owner, ≥ N hours old (stacks those prefixes declare throwaway, such as test runs; `compose-stack` brings one down, a later round takes its volumes) | a container of that owner, running or stopped; an owner in `protect`; `reap.stack_volumes` unset; any other prefix is not listed | read again first (same creation time and owners, still no container of an owner), then `docker volume rm <name>`, one exact name each; never `prune`, `down -v` or a pattern |
+| stack-volume | a volume whose compose project or `reap.stack_volumes.label` value starts with a `reap.stack_volumes.prefixes` entry and appears in the volume's name, every owner label on it is under a prefix, no container of any state carries an owner, ≥ N hours old (stacks those prefixes declare throwaway, such as test runs; `compose-stack` brings one down, a later round takes its volumes), the owner's card closed (below) | a container of that owner, running or stopped; an owner in `protect`, the protect file or `always_on`; a card not proved closed; `reap.stack_volumes` unset; any other prefix is not listed | read again first (same creation time and owners, still no container of an owner), then `docker volume rm <name>`, one exact name each; never `prune`, `down -v` or a pattern |
 | stopped-container | a container named under a `reap.stopped_containers.prefixes` entry, not made by compose (no `com.docker.compose.oneoff` label), `exited` or `created`, stopped for ≥ N hours (`created`: made that long ago) | any other state; its name or compose project in `protect`, the protect file or `reap.pressure.always_on`; a protected host port; another container of its project not stopped; a stop time it cannot read; `reap.stopped_containers` unset | every container read again and the rule run again without the age; then `docker rm <full id>`, never `-f` or `-v`, so its volumes stay |
-| labeled-volume | a volume whose `<namespace>.origin` value is in `reap.labeled_volumes.origins`, referenced by no container in any state, ≥ N hours old | an origin not listed (reported only); a reference; its name or compose project in `protect`, the protect file or `always_on`; any container left of its compose project; `reap.labeled_volumes` unset. A volume without the label is never listed | the volume and every container read again and the rule run again without the age, same creation time and origin; then `docker volume rm <name>`, one exact name each, never `-f` |
+| labeled-volume | a volume whose `<namespace>.origin` value is in `reap.labeled_volumes.origins`, referenced by no container in any state, ≥ N hours old, the owner's card closed (below) | an origin not listed (reported only); a reference; its name or compose project in `protect`, the protect file or `always_on`; any container left of its compose project; a card not proved closed; `reap.labeled_volumes` unset. A volume without the label is never listed | the volume and every container read again and the rule run again without the age, same creation time and origin; then `docker volume rm <name>`, one exact name each, never `-f` |
 | remote-branch | interface only, never a target | always | - |
 
 `stopped-container` and `labeled-volume` act one target at a time, under a `guard.py` lock, and leave a line in `<state>/reap-actions.jsonl` (reap-hard:
 `<state>/reap-hard.jsonl`). Never `prune`, `down -v`, a filter, a label or a pattern as the target of a delete. A
 container that stopped this round still references its volumes, so those become targets on a later round.
+
+**The owner of a volume.** `stack-volume`, `labeled-volume` and the manual `docker` volumes all go through
+`reap.owner_hold`, at the scan and again inside the target's lock (`guard.item`), for reap and reap-hard alike. A stack's
+containers name its card only while they exist, so the record is the ledger: the `compose-stack` lines `orch heavy`
+writes and the `stack-seen` lines reap-hard adds for each working directory it sees on a stack's containers. A volume goes
+only when each owner stack has at least one such line, every worktree any line names is gone from disk and from
+`orca worktree list` with no process left inside it, and every linked PR is merged or closed. A worktree still there
+holds its stacks' volumes whatever its PR says, because closing a card is what weighs its PR, sessions and terminals;
+the volumes go on the first round after the card closes. Everything else stays, reported with its reason: no owner
+label, no ledger line (a stack started outside `orch heavy` that reap-hard never saw up), no worktree link, a damaged
+ledger line anywhere, no `orca` on PATH, a card list, process list or PR that cannot be read. Such a volume waits for a person.
+One gap stays: a card that reuses a stack name another, closed card registered, and brings it up and down between two
+reap-hard passes, leaves no line, so the closed card's record lets the volumes go. Stamped stack names keep this rare. This guard starts as a block,
+not a warning: a kept volume can still go, a deleted one cannot come back.
 
 **The provenance label.** `<namespace>.origin=<verify skill>`, the namespace from `reap.labeled_volumes.namespace`;
 `python3 "$R" origin-label verify-<app>` prints it and exits 1 when the namespace is unset. The label is both a
@@ -364,7 +378,9 @@ starts. A new card (`orca worktree create`, a worker into a new worktree) is den
 shows `active_turns_per_cpu` (0.5, 9 on 18 CPUs; null is off) agent turns per CPU in progress (a main turn
 running: an agent whose turn ended and that only waits on a background shell, `orch wait`, an orchestration `ask` or
 a subagent does not count; an Orca that gives no `workingMode` or `mainAgent` is read by `state` alone); the deny names
-`Monitor` on `python3 "$P" turns --wait 15`, which exits 0 once under the cap and 3 after the wait.
+`Monitor` on `python3 "$P" turns --wait 15`, which exits 0 once under the cap and 3 after the wait. A count Orca cannot
+give (no answer, a cut-short list) holds like a full one, in the hook and in `turns`/`turns --wait` alike (`turn_hold`):
+the wait polls until the count is readable and exits 3 with "cannot count" if it never is; only `null` turns the cap off.
 `AGENT_SKILLS_PRESSURE_GATE=0` (environment, or before the heavy command when the user said to go ahead) turns it
 off. The gate assumes the LaunchAgent is installed: without it, a machine that sits at warn costs every heavy start
 a deny and a manual `round`.
@@ -391,6 +407,7 @@ the exact `reap --plan` command to the user (a scheduled run: to `reap.inbox_to`
 ## Config
 
 `~/.claude/agent-skills.json`, all optional, changed through `skills-config` (the agent emits, the user applies).
+`reap.model` names the janitor rounds' Claude model: `schedule` passes it with `--extra-agent-args`.
 Paths of a particular project's test cache stay here, not in this repo:
 
 ```json

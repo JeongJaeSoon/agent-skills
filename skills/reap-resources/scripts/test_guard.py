@@ -113,11 +113,14 @@ assert guard.LOCK_ORDER.index("project") < guard.LOCK_ORDER.index("container") <
 assert guard.rule({"kind": "stopped-container"}) == guard.rule({"kind": "container"}, "hard") == "container:stopped"
 assert guard.rule({"kind": "labeled-volume"}) == guard.rule({"kind": "volume"}, "hard") == "volume:labeled"
 SHUT = {"port": {4999}, "pid": set(), "path": [], "project": {"example-held"}}
+saved_owner = reap.owner_facts, reap.owner_hold
+reap.owner_facts, reap.owner_hold = dict, lambda owners, facts: None  # owner_hold is test_reap.py's
 for kind in ("stopped-container", "container", "labeled-volume", "volume"):
     assert guard.item({"kind": kind, "name": "example-verify-1", "project": "", "ports": []}, SHUT) is None
     assert guard.item({"kind": kind, "name": "example-held", "project": ""}, SHUT), kind
     assert guard.item({"kind": kind, "name": "example-verify-1", "project": "example-held"}, SHUT), kind
     assert guard.item({"kind": kind, "name": "example-verify-1", "project": "", "ports": [4999]}, SHUT) == "보호 포트 4999", kind
+reap.owner_facts, reap.owner_hold = saved_owner
 
 # ---------------------------------------------------------------- ownership
 
@@ -213,12 +216,19 @@ def reap_plan(items, kinds):
     plan.write_text(json.dumps({"items": items, "hours": 6, "repos": [], "kinds": kinds}))
     out, argv = io.StringIO(), sys.argv
     sys.argv = ["reap.py", "reap", "--plan", str(plan)]
+    CODE[0] = 0
     try:
         with contextlib.redirect_stdout(out):
-            reap.main()
+            try:
+                reap.main()
+            except SystemExit as e:  # the exit status a shell would see
+                CODE[0] = e.code
     finally:
         sys.argv = argv
     return out.getvalue()
+
+
+CODE = [0]
 
 
 ITEM = {"kind": "tmpdir", "key": "tmpdir:/x", "name": str(tmp / "x"), "target": True, "why": "w"}
@@ -265,6 +275,72 @@ for bad in ({"reap-hard": "invalid"}, {"reap-hard": {"protect_file": 3}}, {"reap
     (tmp / "config.json").write_text(json.dumps(bad))
     out = reap_plan([ITEM], [])
     assert "아무것도 하지 않았다" in out and acted == ["tmpdir:/x"] * 2, out
+(tmp / "config.json").unlink()
+
+# An error in a check before the act (PermissionError injected) never reaches act, and the run ends non-zero.
+# A clean round still exits 0.
+before = len(acted)
+assert "휴지통" in reap_plan([ITEM], []) and CODE[0] == 0 and len(acted) == before + 1
+before = len(acted)
+
+
+def denied(*a, **k):
+    raise PermissionError(13, "Permission denied")
+
+
+# (1) the re-scan itself cannot read: nothing is acted on and the error is not swallowed.
+reap.scan = denied
+try:
+    reap_plan([ITEM], [])
+    raise AssertionError("a scan PermissionError was swallowed")
+except PermissionError:
+    pass
+reap.scan = lambda kinds, hours, cfg, repos: ([dict(ITEM)], [])
+# (2) the ownership file exists but cannot be read (mode 000 is the real shape; the stub covers a root-run test).
+saved_ownership = guard.ownership
+guard.ownership = lambda: (_ for _ in ()).throw(guard.Unreadable("sweep-owner.json: Permission denied"))
+out = reap_plan([ITEM], [])
+assert "아무것도 하지 않았다" in out and CODE[0] == 1 and len(acted) == before, (out, CODE[0])
+guard.ownership = saved_ownership
+# (3) the per-target check raises PermissionError after the lock: this target is left, the others still run, exit 1.
+OTHER = {**ITEM, "key": "tmpdir:/y", "name": str(tmp / "y")}
+reap.scan = lambda kinds, hours, cfg, repos: ([dict(ITEM), dict(OTHER)], [])
+saved_item = guard.item
+guard.item = lambda i, protect, cleaner="reap": denied() if i["key"] == "tmpdir:/x" else None
+out = reap_plan([ITEM, OTHER], [])
+assert "검사를 마치지 못함(PermissionError" in out and CODE[0] == 1, (out, CODE[0])
+assert acted[before:] == ["tmpdir:/y"], acted
+guard.item = saved_item
+# (4) the ownership re-read inside the lock fails: same.
+before = len(acted)
+saved_check = guard.check_owner
+guard.check_owner = lambda rule_name, notes=None: "소유권 파일을 읽지 못함: sweep-owner.json: Permission denied"
+out = reap_plan([ITEM], [])
+assert "소유권 파일을 읽지 못함" in out and CODE[0] == 1 and len(acted) == before, (out, CODE[0])
+guard.check_owner = saved_check
+# (5) the real path: the sweep owns the rule and sweep-last.json cannot be read (PermissionError from read_text).
+OWN.write_text(json.dumps({"generation": 1, "rules": {"trash:tmpdir": "sweep"}}))
+before = len(acted)
+saved_read = pathlib.Path.read_text
+pathlib.Path.read_text = lambda self, *a, **k: denied() if self.name == "sweep-last.json" else saved_read(self, *a, **k)
+try:
+    out = reap_plan([ITEM], [])
+finally:
+    pathlib.Path.read_text = saved_read
+    OWN.unlink()
+assert "소유권 파일을 읽지 못함" in out and CODE[0] == 1 and len(acted) == before, (out, CODE[0])
+# (6) the protect list cannot be read: nothing acted on, exit 1.
+(tmp / "protect.txt").write_text("nonsense line\n")
+(tmp / "config.json").write_text(json.dumps({"reap-hard": {"protect_file": str(tmp / "protect.txt")}}))
+out = reap_plan([ITEM], [])
+assert "아무것도 하지 않았다" in out and CODE[0] == 1 and len(acted) == before, (out, CODE[0])
+# A guard that merely keeps a target (protect list) is not an error.
+(tmp / "protect.txt").write_text(f"path {tmp / 'x'}\n")
+(tmp / "config.json").write_text(json.dumps({"reap-hard": {"protect_file": str(tmp / "protect.txt")}}))
+reap.scan = lambda kinds, hours, cfg, repos: ([dict(ITEM)], [])
+out = reap_plan([ITEM], [])
+assert "보호 목록의 경로" in out and CODE[0] == 0 and len(acted) == before, (out, CODE[0])
+(tmp / "protect.txt").unlink()
 (tmp / "config.json").unlink()
 reap.scan, reap.act, reap.record_reap = saved_scan, saved_act, saved_record
 
@@ -373,7 +449,7 @@ rh.os.stat = lambda d, *a, **k: (_ for _ in ()).throw(PermissionError(13, "denie
 (tmp / "gone").rmdir()
 assert rh.act({"kind": "stack", "id": "s1"}, {}, PROTECT).startswith("건너뜀: 다시 보니") and len(downs) == 1
 rh.os.stat = saved_stat
-assert rh.dir_gone(str(tmp / "gone")) and not rh.dir_gone(str(tmp))
+assert reap.dir_gone(str(tmp / "gone")) and not reap.dir_gone(str(tmp))
 stacks.clear()
 assert "다시 읽지 못함" in rh.act({"kind": "stack", "id": "s1"}, {}, PROTECT) and len(downs) == 1
 # An always-on list of the wrong shape keeps every stack in the scan and in the act, and the pass goes on.

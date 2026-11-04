@@ -71,6 +71,9 @@ ok("board", "set", "K", "--kind", "lead", "--repo", "aaa", "--program", "bare")
 ok("board", "set", "K", "--title", "리드K", "--status", "held", "--next", "나중에")
 ok("decide", "add", "--title", "캐시 정책", "--option", "TTL 1h", "--option", "TTL 1d", "--recommend", "1")
 ok("board", "doing", "add", "표 밖 일", "--owner", "워커", "--next", "조사")
+ok("board", "todo", "add", "다음에 할 일", "--after", "11/1", "--who", "워커")
+ok("board", "later", "add", "미룬일", "--trigger", "다음 분기")
+ok("stage", "add", "login", "--title", "로그인 개선")
 
 text = ok("brief", "render", "--periodic", "--now", NOW, "--skipped", "건너뜀", "--insight", "덧붙임")
 tg = ok("brief", "render", "--periodic", "--now", NOW, "--telegram", "--skipped", "건너뜀", "--insight", "덧붙임")
@@ -90,14 +93,21 @@ assert marks == ["🙋 리드A", "🙋 내일", "❔ gap 빈일", "🔄 move 도
 assert "| ↑ 오너 |" in block and "| ↓ 대기 |" in block and "| ↓ 보류 |" in block, block  # each points where its list is
 
 # 3. Sections in the fixed order: what the owner acts on first, what explains the rest last.
+# The pointer and legend lines open the report, on the lines right under the headline: the owner reads them first.
 ORDER = ("🙋 **지금 오너가 할 일**", "❓ **결정 필요**", "**acme/app", "📌 **카드 없는 일**", "⏳ **다른 사람 대기**",
-         "⏸️ **보류**", "덧붙임", "건너뜀", "🔄 진행 · 🙋 오너 차례")
+         "⏸️ **보류**", "덧붙임", "건너뜀")
 at = [text.index(s) for s in ORDER]
 assert at == sorted(at), [s for _, s in sorted(zip(at, ORDER))]
 TG_ORDER = ("🙋 지금 오너가 할 일", "❓ 결정 필요", "📋 acme/app", "📌 카드 없는 일", "⏳ 다른 사람 대기", "⏸️ 보류",
-            "덧붙임", "건너뜀", "🔄 진행 · 🙋 오너 차례")
-at = [tg.index(s) for s in TG_ORDER]
+            "덧붙임", "건너뜀")
+body = tg[tg.index("🙋 지금 오너가 할 일"):]  # the legend above it names ⏳ and ⏸️ too
+at = [body.index(s) for s in TG_ORDER]
 assert at == sorted(at), [s for _, s in sorted(zip(at, TG_ORDER))]
+for report, owner in ((text, "🙋 **지금 오너가 할 일**"), (tg, "🙋 지금 오너가 할 일")):
+    top = [l for l in report.splitlines()[1:] if l]
+    top = top[:next(i for i, l in enumerate(top) if l.startswith(owner))]
+    assert [l.split(" ")[0] for l in top] == ["단계표", "📅", "🔄", "PR:"], top
+    assert "진행 · 🙋 오너 차례" in top[2] and report.count("🔄 진행 · 🙋 오너 차례") == 1 and report.count("\nPR: ") == 1, report
 
 # The lists follow the tables, and every row still shows once.
 out = json.loads(ok("brief", "render", "--periodic", "--now", NOW, "--json"))

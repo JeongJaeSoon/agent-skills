@@ -309,6 +309,44 @@ st["prs"]["74"]["statusCheckRollup"] = [{"name": "bot", "status": "COMPLETED", "
 code, out = prog(env, "land", "t", "--pr", "74")
 assert code == 3 and "CI failed" in out and not merged(d), out
 
+# A PR edited while CI ran: the same head holds a cancelled run and the run that replaced it.
+def dup_rollup(n, last="SUCCESS"):
+    def c(concl, started, run):
+        return {"name": "tests", "workflowName": "CI", "status": "COMPLETED", "conclusion": concl, "startedAt": started,
+                "completedAt": started, "detailsUrl": f"https://github.com/o/r/actions/runs/{run}/job/1"}
+    return [c("CANCELLED", "2026-11-04T08:21:44Z", n * 100), c(last, "2026-11-04T08:21:50Z", n * 100 + 1)]
+
+
+p_ = pr(77); p_["statusCheckRollup"] = dup_rollup(77)
+d, env = setup({"77": p_})
+verdict(d, 77, "T-77")
+st = json.loads((d / "state.json").read_text())
+st["runs"] = {"h77": [{"name": "CI", "status": "completed", "conclusion": "cancelled"},
+                      {"name": "CI", "status": "completed", "conclusion": "success"}]}
+(d / "state.json").write_text(json.dumps(st))
+code, out = prog(env, "land-check", "t", "--pr", "77")
+assert "CI failed" not in out and "CI pending" not in out, out
+code, out = prog(env, "land", "t", "--pr", "77")
+assert code == 0 and "landed #77" in out and "CI runs 7701;" in out and merged(d), out
+
+# The run that replaced it was cancelled too: nothing proves the head, so land stops as before.
+p_ = pr(78); p_["statusCheckRollup"] = dup_rollup(78, last="CANCELLED")
+d, env = setup({"78": p_})
+verdict(d, 78, "T-78")
+code, out = prog(env, "land", "t", "--pr", "78")
+assert code == 3 and "CI failed: tests=CANCELLED" in out and not merged(d), out
+
+# A failure the rollup no longer counts (a newer run of that check passed) still holds land until the test-results
+# comment accounts for its run. The rollup cannot tell two workflow files with one display name apart; this gate can.
+p_ = pr(79); p_["statusCheckRollup"] = dup_rollup(79); p_["statusCheckRollup"][0]["conclusion"] = "FAILURE"
+d, env = setup({"79": p_})
+verdict(d, 79, "T-79")
+st = json.loads((d / "state.json").read_text())
+st["branch_runs"] = {"b79": [{"databaseId": 7900, "name": "CI", "conclusion": "failure", "headSha": "h79"}]}
+(d / "state.json").write_text(json.dumps(st))
+code, out = prog(env, "land", "t", "--pr", "79")
+assert code == 3 and "failed CI runs" in out and "7900" in out and not merged(d), out
+
 # A stack lands in this lane when every layer meets it; any one layer short of it holds the whole unit.
 def no_ci_stack(**lower):
     d, env = no_ci_setup(dict(pr(75, stacked=True), **lower), pr(76, base="b75", stacked=True))
@@ -723,6 +761,129 @@ prog(env, "record", "t", "parked", "--pr", "1", "--note", "hold")
 code, out = prog(env, "land", "t", "--pr", "2")
 assert code == 0, out
 
+# Only a PR that asked to land contends for the exclusive lane. `orch verdict` writes no `ready`; `land` does.
+def verdict_only(d, n, ticket):
+    verdict(d, n, ticket)
+    path = d / "programs" / "t" / "ledger.jsonl"
+    rows = [r for r in path.read_text().splitlines() if not (json.loads(r)["ev"] == "ready" and json.loads(r)["pr"] == n)]
+    path.write_text("\n".join(rows) + "\n")
+
+def two_no_ci():
+    d, env = no_ci_setup(pr(1), pr(2))
+    verdict(d, 1, "T-1"); verdict(d, 2, "T-2")
+    return d, env
+
+# A PR held on purpose, ahead in the order, does not stop the one behind it; released, it goes first again.
+d, env = two_no_ci()
+prog(env, "record", "t", "parked", "--pr", "1", "--note", "waits for a cutover")
+assert "on hold" in prog(env, "queue", "t")[1]
+assert prog(env, "land", "t", "--pr", "2")[0] == 0
+d, env = two_no_ci()
+prog(env, "record", "t", "parked", "--pr", "1", "--note", "waits for a cutover")
+assert prog(env, "land", "t", "--pr", "1")[0] == 1  # refused for the hold: the release brings the call back, not a new land
+prog(env, "record", "t", "admitted", "--pr", "1")
+code, out = prog(env, "land", "t", "--pr", "2")
+assert code == 2 and "#1 (T-1) takes the exclusive lane first (ready)" in out, out
+
+# A PR that stops at READY for a merge outside land has a verdict and no land call, so it never takes a turn.
+d, env = no_ci_setup(pr(1), pr(2))
+verdict_only(d, 1, "T-1"); verdict(d, 2, "T-2")
+out = prog(env, "queue", "t")[1]
+assert "READY-stop" in out and out.index("READY-stop") < out.index("#2"), out
+code, out = prog(env, "land", "t", "--pr", "2")
+assert code == 0 and "landed #2" in out, out
+
+# A repo with CI gets the same rule from its exclusive paths: a verdict alone, or a land that ended at exit 1, ahead.
+d, env = setup({"1": pr(1, files=["compose.yaml"]), "2": pr(2, files=["compose.yaml"])})
+verdict_only(d, 1, "T-1"); verdict(d, 2, "T-2")
+code, out = prog(env, "land", "t", "--pr", "2")
+assert code == 0 and "landed #2" in out, out
+d, env = setup({"1": pr(1, files=["compose.yaml"]), "2": pr(2, files=["compose.yaml"])})
+verdict(d, 1, "T-1"); verdict(d, 2, "T-2")
+prog(env, "record", "t", "stop", "--note", "window")
+assert prog(env, "land", "t", "--pr", "1")[0] == 1
+prog(env, "record", "t", "resume")
+code, out = prog(env, "land", "t", "--pr", "2")
+assert code == 0 and "landed #2" in out, out
+
+# What ended the land decides, not whether a hold happens to be on: a STOP refusal during a hold still ends the call.
+d, env = two_no_ci()
+prog(env, "record", "t", "parked", "--pr", "1", "--note", "waits for a cutover")
+prog(env, "record", "t", "stop", "--note", "window")
+assert prog(env, "land", "t", "--pr", "1")[0] == 1
+prog(env, "record", "t", "resume")
+prog(env, "record", "t", "admitted", "--pr", "1")
+code, out = prog(env, "land", "t", "--pr", "2")
+assert code == 0 and "landed #2" in out, out
+
+# It is not starved: once it calls land it contends in its old place, ahead of the PR that passed it.
+d, env = no_ci_setup(dict(pr(1), behind=1), pr(2))
+verdict_only(d, 1, "T-1"); verdict(d, 2, "T-2")
+code, out = prog(env, "land", "t", "--pr", "1", "--ticket", "T-1")
+assert code == 3 and "hold the exclusive lane" in out, out
+code, out = prog(env, "land", "t", "--pr", "2")
+assert code == 2 and "held by #1" in out, out
+(d / "programs" / "_locks" / "o__r@main.lock").unlink()
+code, out = prog(env, "land", "t", "--pr", "2")
+assert code == 2 and "#1 (T-1) takes the exclusive lane first (ready)" in out, out
+
+# A land that ended at exit 1 will not come back on its own (the READY-stop of a human gate), so it gives up its turn,
+# and the next land call takes it back. Ledger-order, not timestamps: `verdict` writes one fixed time.
+d, env = two_no_ci()
+prog(env, "record", "t", "stop", "--note", "window")
+assert prog(env, "land", "t", "--pr", "1")[0] == 1
+prog(env, "record", "t", "resume")
+assert prog(env, "land", "t", "--pr", "2")[0] == 0
+d, env = two_no_ci()
+prog(env, "record", "t", "stop", "--note", "window")
+assert prog(env, "land", "t", "--pr", "1")[0] == 1
+prog(env, "record", "t", "resume")
+st = json.loads((d / "state.json").read_text()); st["prs"]["1"]["behind"] = 1
+(d / "state.json").write_text(json.dumps(st))
+assert prog(env, "land", "t", "--pr", "1")[0] == 3
+(d / "programs" / "_locks" / "o__r@main.lock").unlink()
+code, out = prog(env, "land", "t", "--pr", "2")
+assert code == 2 and "#1 (T-1) takes the exclusive lane first (ready)" in out, out
+
+# Every refusal gives the turn up, the repeated one too: the note_attempt window must not swallow the second.
+d, env = two_no_ci()
+for _ in range(2):
+    prog(env, "record", "t", "stop", "--note", "window")
+    assert prog(env, "land", "t", "--pr", "1")[0] == 1
+    prog(env, "record", "t", "resume")
+assert sum(e.get("outcome") == "stopped" for e in ledger(d)) == 2
+assert prog(env, "land", "t", "--pr", "2")[0] == 0
+
+# A land that dies on a hard error gives the turn up as well.
+d, env = two_no_ci()
+st = json.loads((d / "state.json").read_text()); st["hard_fail"] = "pr list"
+(d / "state.json").write_text(json.dumps(st))
+assert prog(env, "land", "t", "--pr", "1")[0] == 1
+del st["hard_fail"]
+(d / "state.json").write_text(json.dumps(st))
+assert prog(env, "land", "t", "--pr", "2")[0] == 0
+
+# A hold cannot take the lock back from a land that may be running, so the yield only says why the lane stays held.
+d, env = no_ci_setup(dict(pr(1), behind=1), pr(2))
+verdict(d, 1, "T-1"); verdict(d, 2, "T-2")
+assert prog(env, "land", "t", "--pr", "1")[0] == 3
+prog(env, "record", "t", "parked", "--pr", "1", "--note", "owner asked to wait")
+code, out = prog(env, "land", "t", "--pr", "2")
+assert code == 2 and "held by #1 (t, on hold)" in out, out
+
+# A held lower layer lands only with its stack, so the top takes no lane and the PR behind them goes.
+d, env = no_ci_setup(pr(75, stacked=True), pr(76, base="b75", stacked=True), pr(77))
+st = json.loads((d / "state.json").read_text())
+st["stacks"] = stack_rows([[75, 76]])
+(d / "state.json").write_text(json.dumps(st))
+verdict(d, 75, "T-75"); verdict(d, 76, "T-76"); verdict(d, 77, "T-77")
+prog(env, "record", "t", "parked", "--pr", "75", "--note", "hold")
+code, out = prog(env, "land", "t", "--pr", "76")
+assert code == 3 and "stack layer #75 on hold" in out, out
+assert not list((d / "programs" / "_locks").glob("*.lock"))
+code, out = prog(env, "land", "t", "--pr", "77")
+assert code == 0 and "landed #77" in out, out
+
 # 7. heavy: slots are shared machine-wide; a full set makes the next caller wait, a dead holder frees its slot.
 d, env = setup({})
 env["PROGRAMS_HOME"] = str(d / "programs")
@@ -751,9 +912,13 @@ stale = d / "programs" / "_heavy" / "slot-gone"
 stale.write_text(json.dumps({"pid": 999999}))
 code, out = prog(dict(env, ORCH_HEAVY_SLOT=str(stale)), "heavy", "t", "--wait-minutes", "0", "--", "true")
 assert code == 1 and "every slot busy" in out, out
-(d / "programs" / "_heavy" / "slot-0.stacks").write_text("123\n")  # a nested run's stack list is no holder
+# A nested run's stack list is no holder. The value parses as JSON but not as a holder dict, and it is too long
+# to turn up by chance in the real pid and time the message prints.
+stack_entry = "9876543210987"
+(d / "programs" / "_heavy" / "slot-0.stacks").write_text(f"{stack_entry}\n")
 code, out = prog(env, "heavy", "t", "--wait-minutes", "0", "--", "true")
-assert code == 1 and "every slot busy" in out and "Traceback" not in out and "123" not in out, out
+assert code == 1 and "every slot busy" in out and "Traceback" not in out, out
+assert stack_entry not in out and "slot-0.stacks" not in out, out
 code, out = prog(dict(env, ORCH_HEAVY_SLOT=str(d / "programs" / "_heavy" / "slot-0")), "heavy", "t", "--wait-minutes", "0",
                  "--", "true")  # a live slot that is not an ancestor's
 assert code == 1 and "every slot busy" in out, out
@@ -969,7 +1134,7 @@ for body, ok in (("", False), ("<!-- test-results -->\nrun 555 failed", False),
     if ok:
         assert code == 0 and "landed #47" in out, out
     else:
-        assert code == 3 and "555 (CI failure)" in out and "557" not in out and "558" not in out, (body, out)
+        assert code == 3 and "555 (CI failure)" in out and "557 (CI" not in out and "558 (CI" not in out, (body, out)
 # A stack checks every layer it lands.
 d, env = setup({"48": dict(shown(48), stacked=True),
                 "49": dict(pr(49, base="b48", stacked=True), comments=[], labels=[])}, stacks=[[48, 49]])

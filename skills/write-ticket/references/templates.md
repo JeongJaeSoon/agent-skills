@@ -38,6 +38,8 @@ Korean; the title and the prose follow `tracker.<adapter>.language` (`write-tick
 * 재사용: *이미 있는 헬퍼·유틸·패턴. 새로 만들지 않게 경로까지 적는다.*
 * 흐름:
 * 제약:
+* 함정: *알면 적는다. 이미 실패한 방식, 순서 의존, 테스트가 못 잡는 것.*
+* 예시: *알면 적는다. 입력과 기대 출력, 또는 명령과 기대 출력.*
 
 ## 🔗 참고
 

@@ -690,10 +690,22 @@ WORKSPACE_RE = re.compile(r"/orca/workspaces/([^/]+)/")
 
 
 def project_of(path, orca_repo=None, gh_repo=None):
-    """The project a worktree belongs to, from live state: Orca's own project name, else the workspace directory Orca
-    put it under (~/orca/workspaces/<project>/<worktree>), else the origin repository's name, else the directory."""
+    """The project a worktree belongs to, from live state: the origin repository's name, else Orca's own project name,
+    else the workspace directory Orca put it under (~/orca/workspaces/<project>/<worktree>), else the directory.
+    GitHub's name comes first because Orca and the workspace directory keep the name the repository had when it was
+    added, so a renamed repository would show its old one."""
     m = WORKSPACE_RE.search(f"{path or ''}/")
-    return orca_repo or (m and m.group(1)) or (gh_repo or "").partition("/")[2] or pathlib.Path(path or "").name or None
+    return (gh_repo or "").partition("/")[2] or orca_repo or (m and m.group(1)) or pathlib.Path(path or "").name or None
+
+
+def workspace_projects(sessions):
+    """workspace directory name -> the project its live sessions have now."""
+    out = {}
+    for s in sessions:
+        m = WORKSPACE_RE.search(f"{s.get('path') or ''}/")
+        if m and s.get("project"):
+            out[m.group(1)] = s["project"]
+    return out
 
 
 def repo_of(path, cache):
@@ -786,6 +798,25 @@ def agent_row(a):
             "title": mask(a.get("taskTitle") or a.get("displayName"), 120),
             "prompt": mask(a.get("prompt"), 400), "last": mask(a.get("lastAssistantMessage"), 1200),
             "interrupted": bool(a.get("interrupted"))}
+
+
+MODEL_KEY = {"orchestrator": "lead", "orchestration": "lead", "task": "worker"}  # a standalone session is a human's
+
+
+def model_tags(sessions):
+    """`model` (the model of the card's last assistant row) and `model_tag` (one cell: O, S or H, plus `!` when the
+    role's orchestrate.models says another) on each session. A model that cannot be read leaves both empty."""
+    import dash, model_drift, orca_settings  # beside this file; they import this module, so not at the top
+    for s in sessions.values():
+        try:
+            folder = dash.transcript_dir(s["path"]) if s.get("path") else None
+            # The card's folder under every config home, Orca profiles' included: the newest transcript wins.
+            s["model"] = model_drift.dir_model(dict.fromkeys(
+                [folder, *(h / "projects" / folder.name for h in claude_homes())])) if folder else None
+            key = MODEL_KEY.get(s.get("kind"))
+            s["model_tag"] = model_drift.model_tag(s["model"], orca_settings.role_model(key) if key else None)
+        except Exception:  # one unreadable folder costs that session's mark, not the tick
+            s["model"], s["model_tag"] = None, ""
 
 
 def phase_of(agents, live_terms):
@@ -2063,11 +2094,17 @@ class Fleet:
         items += decision_items(by_handle, root)
         # A task's project is the worktree its latest dispatch runs in (a released one is gone from Orca's list,
         # but its worktree id still carries the path).
+        # A released worktree's origin cannot be read any more, so it takes the project the live sessions of the same
+        # workspace directory have now (a renamed repository), else its directory's name.
+        dir_project = workspace_projects(sessions.values())
         task_project = {}
         for w in sorted(self.runs["workers"], key=lambda w: w.get("dispatchId") or ""):
             wt = (w.get("resource") or {}).get("worktreeId") or ""
             ws = sessions.get(wt)
-            task_project[w.get("taskId")] = ws["project"] if ws else project_of(wt.partition("::")[2] or None)
+            path = wt.partition("::")[2] or None
+            m = WORKSPACE_RE.search(f"{path or ''}/")
+            task_project[w.get("taskId")] = (ws["project"] if ws else m and dir_project.get(m.group(1))
+                                             or project_of(path, None, self.repos.get(path)))
         for g in self.runs["gates"]:
             if g.get("status") not in ("resolved", "cancelled"):
                 items.append({"key": f"gate:{g['id']}", "type": "approval", "session": root, "title": mask(g.get("question"), 160),
@@ -2132,6 +2169,7 @@ class Fleet:
         for s in sessions.values():
             mine = [i for i in items if i.get("session") == s["id"]]
             s["unread"] = len(mine)
+            s["needs_owner"] = sum(needs_rank(i) < 2 for i in mine)  # the agent answers the rest, like failing CI
             s["missed"] = sum(i["missed"] for i in mine)
         # Keep the sticky store bounded: closed ones older than a week go.
         cutoff = iso(now - dt.timedelta(days=7))
@@ -2156,6 +2194,7 @@ class Fleet:
             held = [{**h, "session": by_handle.get(h["by"])} for h in holds.current()]
         except (OSError, ValueError):
             held = []
+        model_tags(sessions)
         return {"generated_at": iso(now), "root": root, "sessions": sorted(sessions.values(), key=lambda s: s.get("last_activity") or "", reverse=True),
                 "runs": [{"id": r["id"], "objective": mask(r.get("objective"), 200), "updated_at": r.get("updated_at")} for r in self.runs["runs"]],
                 "tasks": [{"id": t["id"], "run": t.get("run_id"), "title": task_name(t),
@@ -2695,6 +2734,7 @@ def inbox_resolve(key):
 
 DECISION_BODY_MAX = 4000
 DECISION_ANSWER_MAX = 1900  # the page's answer box; "decision <id>: " plus this stays inside send()'s 2000
+DECISION_REPEAT_H = 24
 
 
 def change_decisions(change):
@@ -2704,28 +2744,81 @@ def change_decisions(change):
     return db_store.change_decisions(change)
 
 
+def _new_decision(store, title, body="", opts=(), recommend=None, link=None, handle=None):
+    n = store.get("next", 1)
+    d = {"id": f"d{n}", "title": title, "body": body, "options": list(opts), "recommend": recommend, "link": link,
+         "handle": handle, "created_at": iso(utcnow()), "status": "open"}
+    store.update(next=n + 1, decisions={**store.get("decisions", {}), d["id"]: d})
+    return d
+
+
+def _one_line(v, n):
+    return mask(" ".join(v.split()), n)
+
+
 def decision_add(title, body="", options=(), recommend=None, link=None, handle=None):
     """Register a decision; options are "label::description". The label is what the page sends back, so one line."""
-    one_line = lambda v, n: mask(" ".join(v.split()), n)
     opts = []
     for o in options:
         label, _, desc = o.partition("::")
         if not label.strip():
             raise ValueError(f"--option {o!r} has no label before '::'")
-        opts.append({"label": one_line(label, 120), "description": one_line(desc, 300)})
+        opts.append({"label": _one_line(label, 120), "description": _one_line(desc, 300)})
     if recommend is not None and not 1 <= recommend <= len(opts):
         raise ValueError(f"--recommend is an option number from 1 to {len(opts)}" if opts else "--recommend needs --option")
     if not title.strip():
         raise ValueError("--title is empty")
+    return change_decisions(lambda store: _new_decision(store, _one_line(title, 200), mask(body.strip(), DECISION_BODY_MAX),
+                                                        opts, recommend, mask(link, 500), handle))
+
+
+def decision_ensure(item, handle=None):
+    """A brief's --decision item as a decision: (decision, already_answered). The same words from the same terminal are
+    the same decision while it is open, or for DECISION_REPEAT_H after an answer, so a report rendered again neither
+    doubles it nor asks again. Options stay empty: a made-up label would let the prompt hook close it on a sentence
+    that only starts like the recommendation."""
+    text = _one_line(item, None)
+    if len(text) > DECISION_BODY_MAX:  # cut, two items differing past the limit would be one decision
+        raise ValueError(f"a --decision item of at most {DECISION_BODY_MAX} characters")
     now = utcnow()
 
-    def add(store):
-        n = store.get("next", 1)
-        d = {"id": f"d{n}", "title": one_line(title, 200), "body": mask(body.strip(), DECISION_BODY_MAX), "options": opts,
-             "recommend": recommend, "link": mask(link, 500), "handle": handle, "created_at": iso(now), "status": "open"}
-        store.update(next=n + 1, decisions={**store.get("decisions", {}), d["id"]: d})
+    def ensure(store):
+        same = [d for d in store.get("decisions", {}).values() if d.get("body") == text and d.get("handle") == handle]
+        hit = next((d for d in same if d["status"] == "open"), None)
+        if hit:
+            return hit, False
+        for d in same:
+            at = parse(d.get("closed_at"))
+            if d["status"] == "done" and d.get("answer") and at and (now - at).total_seconds() < DECISION_REPEAT_H * 3600:
+                return d, True
+        return _new_decision(store, text, text, handle=handle), False  # the report prints the title, so all of it
+    return change_decisions(ensure)
+
+
+def decision_quote(did, quote, by=None, title=None):
+    """`orch decide answer`: the owner's words as given, never cut (too long is refused). With a title instead of an id
+    it records an order nobody asked for: added and closed in one write."""
+    if not quote.strip() or len(mask(quote)) > DECISION_ANSWER_MAX:  # masking can lengthen it
+        raise ValueError(f"a quote of 1 to {DECISION_ANSWER_MAX} characters; nothing recorded")
+    if title is None:
+        return decision_close(did, "done", quote, by=by)
+    if not title.strip():
+        raise ValueError("--title is empty")
+
+    def add_closed(store):
+        d = _new_decision(store, _one_line(title, 200), handle=by)
+        d.update(status="done", answer=mask(quote), closed_at=iso(utcnow()))
+        if by:
+            d["answered_by"] = by
         return d
-    return change_decisions(add)
+    return change_decisions(add_closed)
+
+
+def decision_cite(d):
+    """The line a brief or an APPROVED row quotes: id, time, session and the first line of the words."""
+    lines = (d.get("answer") or "").strip().splitlines() or [""]
+    more = f" (+{len(lines) - 1}줄)" if len(lines) > 1 else ""
+    return f'{d["id"]} {d.get("closed_at")} by {d.get("answered_by") or "?"}: "{lines[0]}"{more}'
 
 
 def decision_keep(did):
@@ -2747,17 +2840,20 @@ def decision_age_from(d):
     return max(filter(None, (d.get("created_at"), d.get("checked_at"))), default=None)
 
 
-def decision_close(did, status, answer=None, relay=False):
+def decision_close(did, status, answer=None, relay=False, by=None):
     """Mark an open decision done (answered) or dropped (no longer needed). relay: answered on the page, so the answer
     still has to reach the coordinator's terminal (delivered stays False until relay_decision types it). Such a decision
     is already done when the coordinator gets to it: its `done` then only stops the relay, and `drop` cancels it.
-    `drop` also takes back any done decision, e.g. one the prompt hook closed on a misread answer."""
+    `drop` also takes back any done decision, e.g. one the prompt hook closed on a misread answer. by: the session that
+    recorded the answer."""
     def close(store):
         d = store.get("decisions", {}).get(did)
         if not d:
             raise ValueError(f"no decision {did}")
         if d.get("status") == "open":
             d.update(status=status, answer=mask(answer, DECISION_ANSWER_MAX), closed_at=iso(utcnow()))
+            if by and status == "done":
+                d["answered_by"] = by
             if relay:
                 d["delivered"] = False
         elif d.get("status") == "done" and d.get("delivered") is False and not relay:
@@ -2820,13 +2916,13 @@ def relay_decision(did, sender=None, skip_working=False):
 
 
 def decision_answer(did, answer, sender=None):
-    """The page's answer: recorded and closed first, as `orch decide done` would, then relayed to the coordinator's
+    """The page's answer: recorded and closed first, as `orch decide answer` would, then relayed to the coordinator's
     terminal if it is idle. A busy coordinator is not a failure: relay_decisions retries on a later collect."""
     answer = " ".join((answer or "").split())
     if not answer or len(answer) > DECISION_ANSWER_MAX:
         return 400, {"ok": False, "reason": f"an answer of 1 to {DECISION_ANSWER_MAX} characters"}
     try:
-        decision_close(did, "done", answer, relay=True)
+        decision_close(did, "done", answer, relay=True, by="dashboard")
     except ValueError as e:
         return 409, {"ok": False, "reason": str(e)}
     with RELAY_LOCK:

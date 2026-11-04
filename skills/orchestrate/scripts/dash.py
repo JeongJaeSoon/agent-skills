@@ -18,7 +18,7 @@ Usage: orch-dash <command> [options]
                                      update); `$ORCH_DASH_LABEL` names it. uninstall-agent removes it.
   note <slug> --kind risk|digest|decision --text TEXT [--author NAME]
                                      add a human-readable line to the dashboard
-  demo [--port 4780] [--live] [--no-serve] [--crowd N]
+  demo [--port 4780] [--live] [--no-serve] [--crowd N] [--layout]
                                      a realistic fake program in a temp store, served offline
   fleet                              one collect of the fleet view (every Orca session), prints a summary
   skills [--no-signals]              one collect of skill usage from local transcripts (skill_usage.py), prints a summary
@@ -872,7 +872,8 @@ def parked_tickets(events):
 
 def stalls(workers, tnow, held=frozenset()):
     """`held`: parked tickets, whose idle worker waits on purpose (often on the human) and wakes nobody."""
-    out = []
+    import autowake
+    out, idle_min = [], autowake.minutes("stall_idle_min") or IDLE_MIN
     mins = lambda ts: (tnow - prog.parse_ts(ts)).total_seconds() / 60
     for w in workers:
         m = w.get("motion") or {}
@@ -883,7 +884,7 @@ def stalls(workers, tnow, held=frozenset()):
         row = {"dispatch": w["dispatch"], "ticket": w.get("ticket") or w.get("worktree")}
         if not m and w.get("transcript_expected", False) and w.get("since") and mins(w["since"]) >= START_MIN:
             out.append({**row, "kind": "start_unconfirmed", "minutes": round(mins(w["since"]))})
-        elif m.get("state") == "idle" and not m.get("parked") and mins(m["since"]) >= IDLE_MIN:
+        elif m.get("state") == "idle" and not m.get("parked") and mins(m["since"]) >= idle_min:
             out.append({**row, "kind": "idle", "minutes": round(mins(m["since"]))})
         elif m.get("state") == "tool" and mins(m["since"]) >= TOOL_MIN:
             out.append({**row, "kind": "long_tool", "minutes": round(mins(m["since"])), "tool": m.get("tool"),
@@ -1332,7 +1333,10 @@ def resting(done, last_ts, now=None):
 def closed(slug):
     """A program with a current final check, or no ledger event for QUIET, has stopped moving, so only its ledger is
     still watched. A landing, a predicate edit or any other new event reopens it."""
-    return resting(*ledger_tail(slug))
+    try:
+        return resting(*ledger_tail(slug))
+    except FileNotFoundError:  # listed by programs(), then its directory was removed: nothing left to watch
+        return True
 
 
 def signature(slug):
@@ -1351,35 +1355,37 @@ def log(msg):
     print(f"[dash {time.strftime('%H:%M:%S')}] {msg}", file=sys.stderr, flush=True)
 
 
+def slow_round(interval, first):
+    for slug in programs():
+        try:  # one program's failure, closed() and its directory vanishing included, must not end the round
+            if not first and closed(slug):
+                continue
+            st = collect(slug, SOURCES if first else ("tracker", "stages", "github"), interval)
+            if st["errors"]:
+                log(f"{slug}: " + " | ".join(st["errors"]))
+        except Exception as e:  # keep serving; the next round retries
+            log(f"{slug}: collect failed: {e!r}")
+
+
 def slow_loop(interval):
     """Tracker and GitHub: network and rate limits, so once per interval."""
     first = True
     while True:
-        for slug in programs():
-            if not first and closed(slug):
-                continue
-            try:
-                st = collect(slug, SOURCES if first else ("tracker", "stages", "github"), interval)
-                if st["errors"]:
-                    log(f"{slug}: " + " | ".join(st["errors"]))
-            except Exception as e:  # keep serving; the next round retries
-                log(f"{slug}: collect failed: {e!r}")
+        try:
+            slow_round(interval, first)
+        except Exception as e:  # programs() itself failed: log and try again next round
+            log(f"slow loop round failed: {e!r}")
         first = False
         beat()
+        tick("slow")
         time.sleep(interval)
 
 
-def fast_loop(interval):
-    """Ledger and notes on change (and every LEDGER_EVERY s), Orca every ORCA_EVERY s."""
-    seen, last_orca, last_write, last_code = {}, {}, {}, time.monotonic()
-    while True:
-        time.sleep(FAST_TICK)
-        beat()
-        now = time.monotonic()
-        if now - last_code >= CODE_CHECK_S:
-            check_code()
-            last_code = now
-        for slug in programs():
+def fast_round(state, interval):
+    seen, last_orca, last_write = state
+    now = time.monotonic()
+    for slug in programs():
+        try:
             sig = signature(slug)
             orca_due = now - last_orca.get(slug, now) >= ORCA_EVERY and not closed(slug)
             last_orca.setdefault(slug, now)
@@ -1388,13 +1394,37 @@ def fast_loop(interval):
             seen[slug] = sig
             if not (orca_due or ledger_due):
                 continue
-            try:
-                collect(slug, ("orca",) if orca_due else (), interval)
-                last_write[slug] = now
-                if orca_due:
-                    last_orca[slug] = now
-            except Exception as e:
-                log(f"{slug}: refresh failed: {e!r}")
+            collect(slug, ("orca",) if orca_due else (), interval)
+            last_write[slug] = now
+            if orca_due:
+                last_orca[slug] = now
+        except Exception as e:
+            log(f"{slug}: refresh failed: {e!r}")
+        finally:
+            tick("fast")  # progress, not only a finished round: many slow collects must not read as a stopped loop
+
+
+def fast_loop(interval):
+    """Ledger and notes on change (and every LEDGER_EVERY s), Orca every ORCA_EVERY s."""
+    state = ({}, {}, {})
+    while True:
+        time.sleep(FAST_TICK)
+        beat()
+        try:
+            fast_round(state, interval)
+        except Exception as e:  # programs() itself failed: the loop must outlive it
+            log(f"fast loop round failed: {e!r}")
+        tick("fast")  # a collect that hangs stops the tick, and ensure restarts the server
+
+
+def code_loop():
+    """Apart from the collectors: a dead or stuck collector must not freeze the stale check with it."""
+    while True:
+        time.sleep(CODE_CHECK_S)
+        try:
+            check_code()
+        except Exception as e:
+            log(f"code check failed: {e!r}")
 
 
 STATIC = {"/": ("index.html", "text/html; charset=utf-8"), "/index.html": ("index.html", "text/html; charset=utf-8"),
@@ -1430,6 +1460,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path in STATIC:
             name, ctype = STATIC[path]
             return self.send(200, (ASSETS / name).read_bytes(), ctype)
+        if path.startswith("/api/") and not self.local_only():
+            return self.send(403, b'{"error":"forbidden"}')
         if path == "/api/health":
             return self.send(200, json.dumps(HEALTH).encode())
         if path.startswith("/api/fleet/"):
@@ -1473,8 +1505,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return self.headers.get("Host") in ok and (origin is None or origin.split("//", 1)[-1] in ok)
 
     def fleet_get(self, path):
-        if not self.local_only():
-            return self.send(403, b'{"error":"forbidden"}')
         if path == "/api/fleet/state":
             if time.monotonic() - FLEET_VIEWED[0] > FLEET_VIEW_S:
                 FLEET_FORCE[0] = True  # the page just opened: runs and every open PR now, not when their turn comes
@@ -1771,6 +1801,27 @@ def beat():
     HEALTH["heartbeat"] = iso(utcnow())
 
 
+LOOP_STALE = dt.timedelta(minutes=5)
+
+
+def tick(name):
+    """When each collector loop last finished a round. The heartbeat alone says the process lives: the slow loop
+    kept it fresh while the fast loop was dead."""
+    HEALTH.setdefault("ticks", {})[name] = iso(utcnow())
+
+
+def loops_alive(h):
+    """False when the fast loop has not finished a round for LOOP_STALE. A server that reports no ticks (older
+    code) counts as alive; the version check restarts it anyway."""
+    ticks = h.get("ticks")
+    if not isinstance(ticks, dict):
+        return True
+    try:
+        return utcnow() - prog.parse_ts(ticks["fast"]) <= LOOP_STALE
+    except (KeyError, ValueError, TypeError, AttributeError):
+        return False
+
+
 def serve(host, port, interval, make_fleet=None):
     global FLEET
     home().mkdir(parents=True, exist_ok=True)
@@ -1792,9 +1843,11 @@ def serve(host, port, interval, make_fleet=None):
                   started_at=iso(utcnow()), git=git_sha(), script=str(HERE / "dash.py"))
     check_code()
     beat()
+    tick("slow"), tick("fast")  # a fresh process is not a stuck one
     write_atomic(home() / ".dash.json", json.dumps(HEALTH))
     threading.Thread(target=slow_loop, args=(interval,), daemon=True).start()
     threading.Thread(target=fast_loop, args=(interval,), daemon=True).start()
+    threading.Thread(target=code_loop, daemon=True).start()
     if os.environ.get("ORCH_FLEET") != "off":
         FLEET = (make_fleet or fleet.Fleet)()
         threading.Thread(target=fleet_loop, daemon=True).start()
@@ -1986,7 +2039,7 @@ def ensure_agent(a):
     h = health(port)
     if h and h.get("store") != str(home()):
         return False, f"port {port} serves another store ({h.get('store')}); fix {agent_plist()}"
-    if h and h.get("pid") == a["pid"] and fresh(h) and not h.get("stale"):
+    if h and h.get("pid") == a["pid"] and fresh(h) and not h.get("stale") and loops_alive(h):
         return True, f"dashboard: {url} (launchd)"
     if h and h.get("pid") == a["pid"] and fresh(h) and h.get("broken") == h.get("disk_version"):
         return True, f"dashboard: {url} (launchd; the code on disk does not import, so it keeps running {h['version']})"
@@ -1994,7 +2047,7 @@ def ensure_agent(a):
     until = time.monotonic() + 20
     while time.monotonic() < until:
         h, a = health(port), agent_status() or a
-        if h and h.get("pid") == a["pid"] and not h.get("stale"):
+        if h and h.get("pid") == a["pid"] and not h.get("stale") and loops_alive(h):
             return True, f"dashboard started by launchd: {url}"
         time.sleep(0.3)
     return False, f"launchd did not bring the dashboard up on port {port}; see {home() / '.dash.log'}"
@@ -2055,7 +2108,7 @@ def ensure(port):
         stop(o, last)  # its store lock would make the new server exit
     h, want = health(port), code_version()
     if h and h.get("store") == str(home()):
-        stale = not h.get("heartbeat") or utcnow() - prog.parse_ts(h["heartbeat"]) > dt.timedelta(minutes=5)
+        stale = not fresh(h) or not loops_alive(h)
         if not stale and (h.get("version") == want or (h.get("mtime") or 0) >= code_mtime()):
             return True, f"dashboard: http://127.0.0.1:{port}/"
         stop(h, port)
@@ -2120,7 +2173,7 @@ def cmd_demo(argv):
     if "--no-serve" in argv:
         print(root)
         return
-    world = dash_demo.FakeFleetWorld(utcnow(), crowd=int(prog.opt(argv, "--crowd", "0")))
+    world = dash_demo.FakeFleetWorld(utcnow(), crowd=int(prog.opt(argv, "--crowd", "0")), layout="--layout" in argv)
     world.seed_sent()
     world.seed_timeline()
     world.seed_jobs()

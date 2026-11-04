@@ -121,7 +121,7 @@ assert "| 🔄 | └ Read the plan |" in text and "| 🔄 | └ Run the suite |"
 assert "| 🔄 | Check the docs |" in text, text
 # A session with no row of its own (its dispatch completed with no PR) puts its subagent under the nearest session
 # above it that has one, and the subagent row stands for it: the worker is not reported missing.
-assert "| 🔄 | └ Collect logs |" in text, text
+assert "| 🔄 | └ Collect logs |" in text, text  # alone on its session, and still named for its task
 assert not any(f.startswith("보고서에 없는 세션") for f in out["headline_facts"]), out["headline_facts"]
 # Without its subagent the same worker is missing, so the count above came from the subagent row.
 write_state([sess("lead-x", "orchestration", "working", orca_parent="root", run="run_x"),

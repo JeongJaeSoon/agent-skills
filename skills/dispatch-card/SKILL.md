@@ -95,10 +95,13 @@ session as not the human's, so an approval sent afterwards is refused. The brief
   To look again, `check --all` and match `thread_id`; never a list you sort or cut yourself (a
   card sorting by a field the rows do not have, `createdAt` for `created_at`, missed two replies).
   A supervised worker needs no such line: its preamble's `ask` does this.
-- **Model calls** — one line: "다른 모델 호출(서브에이전트, API)은 필요할 때만 하고, 모델은 그때
-  고른다. 무엇을 왜 불렀는지는 마지막 보고에 적는다". Never name a model in the brief: the card reads
-  a named model as an order and calls it whether or not the task needs it. The calls go in the
-  final report because nobody reads an unattended card's chat before a call.
+- **Model calls** — one line: "다른 모델 호출(서브에이전트, API)은 필요할 때만 한다".
+  The session's own model comes from `skills-sync card` (§3), not from
+  the brief. A brief that names another model for the card to call gets it called whether or not
+  the task needs it.
+- **Changes, Pitfalls, Examples** — optional. A card starts with only what the brief says, so
+  write down what you already know: the files and functions to change, what has gone wrong there
+  before, an input with its expected output. Leave out what you do not know; the card reads the code.
 - **Target repo rules** — one line: "그 repo의 CLAUDE.md와 스킬을 확인하고 적용하라". Never paste
   its CLAUDE.md or skills into the brief; that session reads them itself.
 - **Close** — one line: "`CLOSE`: 완료 기준을 채우고 결과를 적으면 `end-session` §8대로 같은 턴에
@@ -139,6 +142,7 @@ skills-sync card <brief file> \
   --reference "<ticket URL, or a Jira key>"   # one per ticket; omit when there is none
   # --role verify|review for a second card on the same ticket that checks, not implements (default impl)
   # --agent codex for a Codex card (default claude); only a supervised worker, see below
+  # --model <id> when the human named one; otherwise orchestrate.models.lead or .worker from agent-skills.json
 ```
 
 The helper starts `skills-sync close-setup <path> --agent <handle>` in the background itself:
@@ -165,8 +169,9 @@ references/top-level.md "Starting a worker".
   as one; `orch doctor` says which), `skills-sync card` starts it as a supervised
   worker with `orca orchestration worker-start --worktree new-child` (your worktree becomes its Orca parent; `new-top-level` with `--no-parent`). It is then a Dispatch:
   its escalation, `ask` and `worker_done` reach your Run, and Orca watches it for a prompt only a
-  human can answer. Its spec is the composed prompt without the leading `/goal` (Orca delivers a
-  spec as the task after its own preamble). Everything else is a `/goal` card from `orca
+  human can answer. Its spec is the composed prompt, `/goal` line included (Orca delivers a
+  spec as the task after its own preamble, so the line is not the first thing the session reads and
+  may not run as the slash command; it still states the goal). Everything else is a `/goal` card from `orca
   worktree create`: a brief with no Run report (fire-and-forget), a lead's brief while Orca's
   Nested worker depth is below 3 (the lead's workers' helpers would not fit; the helper prints the
   setting to change), or `--card`. A Run brief from a session bound to no Run, or to another Run
@@ -187,7 +192,8 @@ references/top-level.md "Starting a worker".
   `/goal` card, by `orca reference add` on the new card right after the start for a worker.
   Linear and GitHub take the full URL; a bare key is read as Jira.
 - `skills-sync card` writes the brief's `/goal` line (plus the brief's path, unless the line
-  names one), PROGRAM, APPROVED, lead and CLOSE or KEEP rows into `--prompt` itself, logs a
+  names one), PROGRAM, APPROVED, lead and CLOSE or KEEP rows, the FORBIDDEN section whole and every
+  REPORT row into `--prompt` (or the worker's spec) itself, logs a
   `/goal` card with `orch sent add` (a worker's spec is its Orca Task, which the Sent page reads),
   sets the display name and prints Orca's create output. A row is a line outside
   a ``` fence that starts with its key and a colon (`CLOSE: …`), or the Lead template's wide gap; a

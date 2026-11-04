@@ -282,7 +282,7 @@ rc, out, err, calls = go(brief("/goal fix X. 브리프: ~/notes/x.md\nPROGRAM: a
 p = prompt_of(calls)
 assert rc == 0 and p.splitlines()[:2] == ["/goal fix X. 브리프: ~/notes/x.md", "PROGRAM: acme"], p
 
-# A brief reporting to a Run, from a session bound to one: a supervised worker. Its spec drops the leading /goal, the
+# A brief reporting to a Run, from a session bound to one: a supervised worker. Its spec keeps the /goal line, the
 # display name goes on the start, the ticket is linked on that new card only, and no Sent line is written.
 SUPERVISED = WORKER + "REPORT: orca orchestration send --to run:run_me --type status at each milestone\n"
 URL = "https://linear.app/acme/issue/ABC-1"
@@ -291,14 +291,38 @@ rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "name:acme", "--
 assert rc == 0, err
 start = next(c["argv"] for c in calls if c["argv"][:2] == ["orchestration", "worker-start"])
 spec = start[start.index("--spec") + 1]
-assert spec.startswith("ship the helper and open its PR 브리프:") and "/goal" not in spec.splitlines()[0], spec
+assert spec.splitlines()[0] == f"/goal ship the helper and open its PR 브리프: {tmp / 'sup.md'}", spec
 assert start[start.index("--worktree") + 1] == "new-child" and start[start.index("--display-name") + 1] == "ABC-1 helper"
 assert start[start.index("--timeout-ms") + 1] == "840000", start
 assert [c["argv"] for c in calls if c["argv"][:2] == ["reference", "add"]] == [["reference", "add", URL, "--worktree", f"path:{CARD_DIR}", "--json"]]
 assert not any(c["bin"] == "orch" for c in calls) and not any(c["argv"][:2] == ["worktree", "create"] for c in calls)
 assert json.loads(out)["card"] == {"kind": "worker", "path": str(CARD_DIR), "handle": "term_w", "run": {"id": "run_me"},
                                    "parent": "id:repo1::/wt/me", "forbidden": "inserted",
-                                   "close_setup": {"log": "abc-1.log"}}, out
+                                   "close_setup": {"log": "abc-1.log"}, "model": None}, out
+# Regression (a): a brief whose REPORT is `run:` goes out as a worker, and the spec it hands worker-start keeps the
+# /goal line as its first line. (b): the FORBIDDEN section (markers included, a stale copy replaced by the current
+# paragraph, a line after a blank line too) and every REPORT row reach the prompt, on both paths.
+GOAL_LINE = "/goal ship the helper and open its PR"
+PARA_NOW = card.forbidden_paragraph()
+FULL = (f"# card brief\n\n{GOAL_LINE}\n\nAPPROVED: push and PR (owner, 2026-01-01)\n\n{CLOSE}\n"
+        f"FORBIDDEN   {card.BEGIN}\n            a stale paragraph.\n            {card.END}\n"
+        "            A repository's own ban.\n\n            Never run the thing; wait instead.\n\n\n"
+        "            Never publish data, even after two blank lines.\n"
+        "REPORT      worker_done once, at READY, to run:run_me.\n            Body: what changed.\n"
+        "REPORT: orca orchestration send --to run:run_me --type status\n")
+rc, out, err, calls = go(brief(FULL, "full.md"), "--repo", "r", "--name", "full")
+assert rc == 0, err
+spec = next(c["argv"][c["argv"].index("--spec") + 1] for c in calls if c["argv"][:2] == ["orchestration", "worker-start"])
+rc, out, err, calls = go(brief(FULL, "full-card.md"), "--repo", "r", "--name", "full-card", "--card")
+assert rc == 0, err
+for how, text in (("worker spec", spec), ("card prompt", prompt_of(calls))):
+    assert text.splitlines()[0].startswith(GOAL_LINE), (how, text)
+    assert all(l.strip() in text for l in PARA_NOW), (how, "the current FORBIDDEN paragraph is cut", text)
+    assert card.BEGIN in text and card.END in text and "a stale paragraph" not in text, (how, text)
+    assert "A repository's own ban." in text and "Never run the thing; wait instead." in text, (how, text)
+    assert "Never publish data, even after two blank lines." in text, (how, text)
+    assert text.count("REPORT") >= 2 and "Body: what changed." in text, (how, text)
+    assert "orca orchestration send --to run:run_me --type status" in text, (how, text)
 # A failed reference after the start is exit 5: the worker runs, so it is not started again.
 rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", "--reference", URL, mode="ref-fails")
 assert rc == 5 and "Do not create it again" in err and json.loads(out)["card"]["kind"] == "worker", (rc, err)
@@ -369,7 +393,7 @@ rc, out, err, calls = go(brief(LEAD_RUN, "lead-run.md"), "--repo", "r", "--name"
 start = next(c["argv"] for c in calls if c["argv"][:2] == ["orchestration", "worker-start"])
 spec = start[start.index("--spec") + 1]
 assert rc == 0 and start[start.index("--worktree") + 1] == "new-child", (rc, err, calls)
-assert spec.startswith("run the acme program") and "ROLE: lead acme" in spec and "DELEGATE " in spec and "CLOSE " in spec, spec
+assert spec.startswith("/goal run the acme program") and "ROLE: lead acme" in spec and "DELEGATE " in spec and "CLOSE " in spec, spec
 assert "MERGE       merge_policy autonomous" in spec, spec
 for depth, want in ((2, "Nested worker depth"), (None, "unread")):
     orca_depth(depth)
@@ -634,5 +658,38 @@ for bad, why in (("/goal x\n", "no CLOSE or KEEP row"), (f"{CLOSE}\n", "no `/goa
     results = [go(brief(bad, "a5.md"), "--repo", "r", "--name", "a5", *extra) for extra in ([], ["--agent", "codex"])]
     assert [r[0] for r in results] == [2, 2] and why in results[1][2] and not creates(results[1][3]), results
     assert results[0][2] == results[1][2], results
+
+
+# The session's model.
+def model_of(calls):
+    argv = creates(calls)[0]
+    return argv[argv.index("--model") + 1] if "--model" in argv else None
+
+
+rc, out, err, calls = go(brief(WORKER, "m.md"), "--repo", "r", "--name", "m0", "--no-parent")
+assert rc == 0 and model_of(calls) is None and "orchestrate.models.worker is not set" in err, err
+
+models = tmp / "models.json"
+models.write_text(json.dumps({"orchestrate": {"models": {"lead": "opus", "worker": "sonnet"}}}))
+os.environ["AGENT_SKILLS_CONFIG"] = str(models)
+rc, out, err, calls = go(brief(WORKER, "m.md"), "--repo", "r", "--name", "m3", "--no-parent")
+assert rc == 0 and model_of(calls) == "sonnet" and json.loads(out)["card"]["model"] == "sonnet", calls
+assert "is not set" not in err, err
+rc, out, err, calls = go(brief(LEAD, "ml.md"), "--repo", "r", "--name", "m4", "--no-parent")
+assert rc == 0 and model_of(calls) == "opus", calls
+rc, out, err, calls = go(brief(WORKER, "m.md"), "--repo", "r", "--name", "m5", "--no-parent", "--model", "opus")
+assert rc == 0 and model_of(calls) == "opus", calls
+arn = "arn:aws:bedrock:us-east-1:000000000000:inference-profile/acme.model-v1:0"
+models.write_text(json.dumps({"orchestrate": {"models": {"worker": arn, "lead": "two words"}}}))
+assert card.orca_settings.role_model("worker") == arn and card.orca_settings.role_model("lead") is None
+models.write_text(json.dumps({"orchestrate": {"models": {"lead": "opus", "worker": "sonnet"}}}))
+worker_brief = brief(f"{WORKER}REPORT: orca orchestration send --to run:run_me --type status\n", "mw.md")
+rc, out, err, calls = go(worker_brief, "--repo", "r", "--name", "m6")
+assert rc == 0 and creates(calls)[0][:2] == ["orchestration", "worker-start"] and model_of(calls) == "sonnet", calls
+rc, out, err, calls = go(worker_brief, "--repo", "r", "--name", "m7", "--agent", "codex")
+assert rc == 0 and model_of(calls) is None and "is not set" not in err, (rc, err, calls)
+rc, out, err, calls = handoff("ABC-8", "--title", "next", "--note", "x")
+assert model_of(calls) == "sonnet", calls
+os.environ["AGENT_SKILLS_CONFIG"] = str(tmp / "none.json")
 
 print("ok")

@@ -200,6 +200,12 @@ if "--print" in sys.argv:
 GOLDEN = """\
 **14:30 · 바뀐 행 1 · PR 상태 3h 전 기준 · 오래된 board 행 1 (3h 전) · 접음 완료 1 (대시보드)**
 
+⏸️ 보류 큐 2건 · `orch board todo list`
+
+🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류 · ✅ 완료 · 🔴 막힘 · 막대=단계(추정)
+
+PR: ❗ 사람이 풀 것 · CI✗ CI 실패 · CI… CI 진행 · 7자리=머지 sha
+
 🙋 **지금 오너가 할 일**
 
 - 충돌 해소 승인 · [#50](https://example.test/50) → 알림 정리
@@ -259,13 +265,7 @@ GOLDEN = """\
 
 - ph3 머지 뒤 → 검색 개선 ph4 · ph5
 
-21:00 이후라 Slack 미전송
-
-⏸️ 보류 큐 2건 · `orch board todo list`
-
-🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류 · ✅ 완료 · 🔴 막힘 · 막대=단계(추정)
-
-PR: ❗ 사람이 풀 것 · CI✗ CI 실패 · CI… CI 진행 · 7자리=머지 sha"""
+21:00 이후라 Slack 미전송"""
 
 code, first, err = FIRST
 assert code == 0, err
@@ -326,7 +326,7 @@ sendlog.unlink()
 assert orch_env({"AGENT_SKILLS_CONFIG": str(skills_cfg)}, "brief", "render", "--periodic", "--now", NOW)[1] == \
     orch("brief", "render", "--periodic", "--now", NOW)[1], "a missing log adds nothing"
 assert "🙋 지금 오너가 할 일\n\n충돌 해소 승인 · #50 → 알림 정리\n리뷰 · #70·#71 → 로그·대시보드\n" in tg, tg
-assert "⏸️ 보류\n\nph3 머지 뒤 → 검색 개선 ph4 · ph5\n" in tg, tg
+assert "⏸️ 보류\n\nph3 머지 뒤 → 검색 개선 ph4 · ph5" in tg, tg
 assert "⏸️ 보류 큐 2건 · orch board todo list --telegram" in tg.splitlines(), tg
 # The queue is a table in `orch board todo list`, its first item marked next; on Telegram, lines.
 listed = ok("board", "todo", "list", "--now", NOW, "--no-refresh")
@@ -447,13 +447,13 @@ prs_json["prs"].update(dict([pr("acme/fill#5", ci="pending")]))
 assert "정산 리드" not in ok("brief", "render", "--periodic", "--now", NOW, "--no-fill")
 filled = json.loads(ok("brief", "render", "--periodic", "--now", NOW, "--json"))["text"]
 fill_rows = [l for l in filled.splitlines() if "acme/fill" in l or "acme/other" in l or "정산" in l or "FILL" in l
-             or "c2" in l or "c4" in l]
+             or "c1" in l or "c2" in l or "c4" in l]
 assert fill_rows == [
     "- 확인 대기 → c2",
     "**acme/fill → main**",
     "| 🙋 | 정산 리드 | — | — | 작업 중 |",
     "| 🙋 | └ c2 | — | ↑ 오너 | 멈춤 |",
-    "| 🔄 | └ FILL-1 영수증 | [#5](https://example.test/5) ❗리뷰 CI… | — | 작업 중 · c1 |",
+    "| 🔄 | └ c1 | [#5](https://example.test/5) ❗리뷰 CI… | — | 작업 중 |",
     "| 🔄 | c4 | — | 3h 전 | 작업 중 |"], filled
 assert "held" not in filled and "c3" not in filled and "c5" not in filled, filled
 # The last committed report never had fleet rows (it ran without --fill): they are not bold as new on every poll.
@@ -537,6 +537,12 @@ REQUEST = ["brief", "render", "--now", NOW, "--headline", "정렬 PR CI 중, 유
 REQUEST_GOLDEN = """\
 **14:30 · 정렬 PR CI 중, 유료 플랜 하나만 정해 주세요**
 
+단계표 1행 · `orch stage show`
+
+🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류
+
+PR: ❗ 사람이 풀 것 · CI… CI 진행
+
 🙋 **지금 오너가 할 일** — 없음
 
 ❓ **결정 필요** — 1. (d1) 재색인 권한 → 추천: 서비스 계정 — 만료 없음
@@ -547,17 +553,9 @@ REQUEST_GOLDEN = """\
 
 | | 리드/Phase | PR | 다음 | 세션 |
 |---|---|---|---|---|
-| 🔄 | ABC-1 정렬 | [#45](https://example.test/45) ❗리뷰 CI… | CI 통과 → 리뷰 의…[1] | 작업 중 · c7 |
+| 🔄 | c7 | [#45](https://example.test/45) ❗리뷰 CI… | CI 통과 → 리뷰 의뢰 · 워커 | 작업 중 |
 
-- [1] CI 통과 → 리뷰 의뢰 · 워커
-
-★ 정렬은 CI 가 끝나면 리뷰로 간다
-
-단계표 1행 · `orch stage show`
-
-🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류
-
-PR: ❗ 사람이 풀 것 · CI… CI 진행"""
+★ 정렬은 CI 가 끝나면 리뷰로 간다"""
 request = rok(*REQUEST)
 if "--print" in sys.argv:
     print(request)
@@ -572,7 +570,7 @@ periodic = rok("brief", "render", "--periodic", "--now", NOW)
 assert "| 작업 |" not in periodic and "단계표 1행 · `orch stage show`" in periodic.splitlines(), periodic
 tg_req = rok(*REQUEST, "--telegram")
 assert not any(m in tg_req for m in ("**", "|", "](", "`", "📋 작업별")), tg_req
-assert "단계표 1행 · orch stage show --telegram" in tg_req.splitlines() and "🔄 ABC-1 정렬 #45 ❗리뷰 CI… — CI 통과 → 리뷰 의뢰 · 워커 · 작업 중 · c7" in tg_req.splitlines(), tg_req
+assert "단계표 1행 · orch stage show --telegram" in tg_req.splitlines() and "🔄 c7 #45 ❗리뷰 CI… — CI 통과 → 리뷰 의뢰 · 워커 · 작업 중" in tg_req.splitlines(), tg_req
 (tmp / "programs").mkdir(exist_ok=True)
 (tmp / "programs" / ".dash.json").write_text(json.dumps({"pid": os.getpid(), "port": 4799}))
 assert "단계표 1행 · http://127.0.0.1:4799/#/fleet/stages" in rok(*REQUEST).splitlines()
@@ -634,10 +632,10 @@ text = merged["text"]
 assert "| ✅ | ph1 | [#45](https://example.test/45) 45c0ffe | — |" in text, text
 assert "| ✅ | └ 하위 | [#46](https://example.test/46) 46c0ffe | — |" in text, text
 assert "| ⏸️ | ph2 | [#48](https://example.test/48) 닫힘 | ↓ 보류 |" in text and "- PR 닫힘 → L ph2" in text, text
-assert "| ❔ | └ ABC-9 라이브 | #47 ? | 에이전트 조치 …[1] | 작업 중 · c9 |" in text, text
+assert "| ❔ | └ c9 | #47 ? | 에이전트 조치 필요: P…[1] | 작업 중 |" in text, text
 assert "- [1] 에이전트 조치 필요: PR 상태 모름" in text, text
 assert "머지 대기" not in text and "ABC-8" not in text and "fleet:lead" not in merged["snapshot"]["rows"], text
-assert "| 🔄 | └ ABC-10 다음 PR | — | — | 작업 중 · c10 |" in text, text
+assert "| 🔄 | └ c10 | — | — | 작업 중 |" in text, text
 
 
 class GhDown:  # sessions collected, the PR list not: the headline says the PR states are old

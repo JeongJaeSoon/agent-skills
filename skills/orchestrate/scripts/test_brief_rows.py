@@ -192,7 +192,7 @@ fleet.write_atomic(sd / "state.json", json.dumps(st))
 board.lead_add("gone-lead", "term_gone", "acme/app", worktree="s-gone")
 board.set_row("gone-lead/t", kind="task", parent="gone-lead", title="linked-task", status="moving", worktree="s-task")
 by_label = {x["label"]: x for t in brief()["table_rows"] for x in t["rows"]}
-assert by_label["t linked-task"]["session"]["word"] == "작업 중" and by_label["t linked-task"]["status"] != "🔴", by_label["t linked-task"]
+assert by_label["task-card"]["session"]["word"] == "작업 중" and by_label["task-card"]["status"] != "🔴", by_label["task-card"]
 assert by_label["gone-lead"]["status"] == "🔴" and by_label["gone-lead"]["session"]["word"] == "세션 없음", by_label["gone-lead"]
 
 # A card a board row links with --worktree is that row's work: no fleet row of its own beside it.
@@ -213,7 +213,7 @@ assert "gone-lead/t" in brief()["changed"]
 
 # A row linked by --worktree to a card whose PR its title never names takes that PR, since the card's own row is gone.
 board.set_row("wt-pr", title="untitled-fix", repo="acme/plugins", status="moving", worktree="s4")
-linked_row = next(x for t in brief()["table_rows"] for x in t["rows"] if "untitled-fix" in x["label"])
+linked_row = next(x for t in brief()["table_rows"] for x in t["rows"] if (x["session"] or {}).get("id") == "s4")
 assert linked_row["session"]["pr"] == "acme/plugins#630", linked_row
 
 # A quiet row with no PR whose --worktree card is working is not stale: the card is its evidence.
@@ -259,7 +259,7 @@ fleet.write_atomic(verdicts, json.dumps({"t": now.timestamp() - 600, "check": {"
 board.set_row("linked-stuck", title="linked-stuck", repo="acme/app", status="moving", worktree="s-stuck")
 b = brief()
 rows = {o["label"]: o["status"] for o in b["open"]}
-assert rows["linked-stuck"] == "check" and "stuck-card" not in rows, rows
+assert rows["stuck-card"] == "check" and "linked-stuck" not in rows and [o["label"] for o in b["open"]].count("stuck-card") == 1, rows
 assert "에이전트 조치 필요: hook 오류로 도구가 막힘" in b["text"], b["text"]
 board.set_row("linked-stuck", status="done")
 # Nor is there one when only the PR ties a board row to the card: the card's row is left to the board row.
@@ -300,33 +300,97 @@ assert "[작업 중](http://127.0.0.1:4780/#/fleet/session/s-link) · payments-m
 tg = subprocess.run([sys.executable, str(HERE / "prog.py"), "brief", "render", "--telegram", "--no-refresh"],
                     capture_output=True, text=True, env=env).stdout
 assert any(l.endswith("— 리뷰 · 작업 중 · payments-migration-worktree") and "결제 이행" in l for l in tg.splitlines()) and "127.0.0.1:4780/#/fleet/session" not in tg, tg
-# A link to 127.0.0.1 is dead on another device, and Orca has no remote link: 세션 찾기 gives each row's session as text,
-# the whole worktree name and its handle, or the switch command once orca_environment names this host for that device.
+# The model the collector read for the session (fleet.model_tags) sits in the same cell after the state word: O, S or H,
+# `!` when it is off orchestrate.models. A row with no session shows none.
+st = fleet.read_json(sd / "state.json")
+for s in st["sessions"]:
+    s["model_tag"] = "S!" if s["id"] == "s-link" else ""
+fleet.write_atomic(sd / "state.json", json.dumps(st))
+out = brief()
+text = out["text"]
+assert "[작업 중](http://127.0.0.1:4780/#/fleet/session/s-link) S! · payments-… |" in text, text  # the mark's 3 columns come out of the name's 12
+assert "연결 없음** | — | 리뷰 | 세션 없음 |" in text, text
+assert out["width_ok"], "the model mark must not push the table past 78 columns"
+# The same with a progress bar, a PR and a short session name beside the mark: the cut columns give back its width.
+def link_pr(key):
+    """A linked card's PR is Orca's (its linked_pr): board set --pr is refused on such a row, so the fixture says it here."""
+    for s in st["sessions"]:
+        if s["id"] == "s-link":
+            s["linked_pr"] = {"key": key, "state": "OPEN"} if key else None
+    fleet.write_atomic(sd / "state.json", json.dumps(st))
+
+
+for s in st["sessions"]:
+    if s["id"] == "s-link":
+        s["name"], s["model_tag"] = "pay-mig", "O!"
+board.set_row("link-row", progress="3/8")
+link_pr("acme/links#1")
+out = brief()
+assert "O! · pay-mig" in out["text"] and out["width_ok"], out["text"]
+link_pr("#123→rc-branch")
+out = brief()
+assert "O!" in out["text"] and out["width_ok"], out["text"]  # a too-wide row loses the name, never the state or the mark
+board.set_row("link-row", progress="")
+link_pr(None)
+for s in st["sessions"]:
+    if s["id"] == "s-link":
+        s["name"] = "payments-migration-worktree"
+for s in st["sessions"]:
+    s.pop("model_tag", None)
+fleet.write_atomic(sd / "state.json", json.dumps(st))
+# No section lists terminals: the report's text carries no handle on either surface.
 st = fleet.read_json(sd / "state.json")
 for s in st["sessions"]:
     if s["id"] == "s-link":
         s["terminals"] = [{"handle": "term_other", "connected": True}, {"handle": "term_agent", "connected": True, "agent": True}]
 fleet.write_atomic(sd / "state.json", json.dumps(st))
 text = brief()["text"]
-assert "- payments-migration-worktree — `term_agent`" in text.splitlines() and "🔗 **세션 찾기**" in text, text
-(tmp / "none.json").write_text(json.dumps({"orca_environment": "my host"}))
-text = brief()["text"]
-assert "- payments-migration-worktree — `orca terminal switch --environment 'my host' --terminal term_agent`" in text.splitlines(), text
-(tmp / "none.json").unlink()
+assert "세션 찾기" not in text and "term_agent" not in text, text
 tg = subprocess.run([sys.executable, str(HERE / "prog.py"), "brief", "render", "--telegram", "--no-refresh"],
                     capture_output=True, text=True, env=env).stdout
-assert "payments-migration-worktree — term_agent" in tg.splitlines(), tg
-# Two sessions under one worktree name are two lines, told apart by project.
+assert "세션 찾기" not in tg and "term_agent" not in tg, tg
+# A row alone on its session reads as Orca names the worktree, whatever the board calls it, so that name finds it in
+# Orca's Cmd+J palette: a phase too, without its lead's name in front in a shared table. Two rows on one session keep
+# their titles (asserted above) and a title that holds the name stays. A cut name stays a prefix of it, which the
+# palette also finds, and the list under the table has the whole of it.
+LONG = "orca-display-name-that-runs-well-past-the-width-of-its-column-in-the-table-to-force-a-cut"
 st = fleet.read_json(sd / "state.json")
-twin = next(s for s in st["sessions"] if s["id"] == "s-link")
-st["sessions"].append({**twin, "id": "s-twin", "project": "acme/other", "gh_repo": "acme/other",
-                       "terminals": [{"handle": "term_twin", "connected": True, "agent": True}]})
+st["sessions"] += [card("s-solo", "SOLO-CARD", "working", "acme/solo"), card("s-long", LONG, "working", "acme/solo"),
+                   card("s-holds", "HOLDS-NAME", "working", "acme/solo")]
 fleet.write_atomic(sd / "state.json", json.dumps(st))
-board.set_row("twin-row", title="쌍둥이", repo="acme/links", status="moving", worktree="s-twin", next="리뷰")
-lines_now = brief()["text"].splitlines()
-assert "- payments-migration-worktree (acme/links) — `term_agent`" in lines_now, lines_now
-assert "- payments-migration-worktree (acme/other) — `term_twin`" in lines_now, lines_now
-board.set_row("twin-row", status="done")
+board.set_row("solo-row", title="보드가 지은 제목", repo="acme/solo", status="moving", worktree="s-solo", next="리뷰")
+board.set_row("long-row", title="긴 카드", repo="acme/solo", status="moving", worktree="s-long", next="리뷰")
+board.set_row("holds-row", title="HOLDS-NAME 정리", repo="acme/solo", status="moving", worktree="s-holds", next="리뷰")
+b = brief()
+assert "보드가 지은 제목" not in b["text"] and "| 🔄 | **SOLO-CARD** | — | 리뷰 | [작업 중](" in b["text"], b["text"]
+assert "HOLDS-NAME 정리" in b["text"], b["text"]
+labels = [r["label"] for t in b["table_rows"] for r in t["rows"]]
+assert "SOLO-CARD" in labels, labels
+cut_row = next(l for l in b["text"].splitlines() if l.startswith("| 🔄") and "…[" in l and "orca-display" in l)
+head = cut_row.split("|")[2].strip().strip("*").split("…[")[0]
+assert len(head) >= 6 and LONG.startswith(head) and f"] {LONG}" in b["text"], (head, b["text"])
+tg = subprocess.run([sys.executable, str(HERE / "prog.py"), "brief", "render", "--telegram", "--no-refresh"],
+                    capture_output=True, text=True, env=env).stdout
+assert LONG in tg and "SOLO-CARD" in tg and "보드가 지은 제목" not in tg, tg
+for rid in ("solo-row", "long-row", "holds-row"):
+    board.set_row(rid, status="done")
+# A finished row still shares its session: the row left open keeps its title.
+st["sessions"] = st["sessions"][:-3] + [card("s-pair", "PAIR-CARD", "working", "acme/pair")]
+fleet.write_atomic(sd / "state.json", json.dumps(st))
+board.set_row("pair-done", title="끝난 단계", repo="acme/pair", status="done", worktree="s-pair", next="-")
+board.set_row("pair-open", title="남은 단계", repo="acme/pair", status="moving", worktree="s-pair", next="리뷰")
+text = brief()["text"]
+assert "남은 단계" in text, text
+board.set_row("pair-open", status="done")
+st["sessions"].pop()
+# A display name is Orca's text: a line break in it must not split the table row or part it from table_rows.
+st["sessions"].append(card("s-break", "first\nsecond", "working", "acme/break"))
+fleet.write_atomic(sd / "state.json", json.dumps(st))
+board.set_row("break-row", title="제목", repo="acme/break", status="moving", worktree="s-break", next="리뷰")
+b = brief()
+assert "| 🔄 | **first second** |" in b["text"] and "second |" not in b["text"].replace("first second** |", ""), b["text"]
+assert "first second" in [r["label"] for t in b["table_rows"] for r in t["rows"]], b["table_rows"]
+board.set_row("break-row", status="done")
 st["sessions"].pop()
 fleet.write_atomic(sd / "state.json", json.dumps(st))
 # The 진행 column shows only where a row has a bar; `--progress` on one row brings it back for that table.
