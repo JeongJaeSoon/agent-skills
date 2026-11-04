@@ -206,6 +206,7 @@ assert st["notes"][0]["text"].startswith("hold ACME-107") and st["activity"][0][
 
 # Serving: ETag round trip gives 304; a traversal attempt is a 404.
 srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), dash.Handler)
+dash.HEALTH["port"] = srv.server_address[1]
 threading.Thread(target=srv.serve_forever, daemon=True).start()
 base = f"http://127.0.0.1:{srv.server_address[1]}"
 r = urllib.request.urlopen(f"{base}/api/{A}/state")
@@ -228,7 +229,6 @@ assert done["docs-refresh"] == (True, True) and done["metrics-spike"] == (False,
 assert b"<title>" in urllib.request.urlopen(f"{base}/").read()
 
 # Answering a permission prompt is a POST like the others: this server's Host and Origin, and the page's token.
-dash.HEALTH["port"] = srv.server_address[1]
 answered, dash.fleet.answer_prompt = [], lambda *a: answered.append(a) or (200, {"ok": True})
 body = json.dumps({"session": "wt-docs", "prompt": "p1", "action": "approve"}).encode()
 
@@ -273,6 +273,21 @@ try:
     raise AssertionError("a rebinding name read skill usage")
 except urllib.error.HTTPError as e:
     assert e.code == 403, e.code
+# Every API read refuses a rebinding name or a foreign page, not only the fleet's; the page itself stays open.
+def status(path, headers):
+    try:
+        return urllib.request.urlopen(urllib.request.Request(f"{base}{path}", headers=headers)).status
+    except urllib.error.HTTPError as e:
+        return e.code
+port = srv.server_address[1]
+for path in ("/api/health", "/api/programs", "/api/fleet/skills", "/api/no-such-program/state"):
+    assert status(path, {"Host": f"evil.example:{port}"}) == 403, path
+    assert status(path, {"Origin": "http://evil.example"}) == 403, path
+assert status("/api/health", {}) == status("/api/programs", {}) == 200
+assert status("/api/health", {"Host": f"localhost:{port}"}) == 200
+assert status("/api/health", {"Origin": f"http://127.0.0.1:{port}"}) == 200
+assert status("/", {"Host": f"evil.example:{port}"}) == 200
+assert status("/no-such-page", {"Host": f"evil.example:{port}"}) == 404
 # Data flow and skill changes: served from the demo's own state, cached in the process between polls.
 fl = json.loads(urllib.request.urlopen(f"{base}/api/fleet/flow").read())
 assert next(s for s in fl["stores"] if s["id"] == "skillsj")["exists"] and "error" not in fl, fl.get("error")

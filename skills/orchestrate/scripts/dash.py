@@ -1460,6 +1460,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path in STATIC:
             name, ctype = STATIC[path]
             return self.send(200, (ASSETS / name).read_bytes(), ctype)
+        if path.startswith("/api/") and not self.local_only():
+            return self.send(403, b'{"error":"forbidden"}')
         if path == "/api/health":
             return self.send(200, json.dumps(HEALTH).encode())
         if path.startswith("/api/fleet/"):
@@ -1503,8 +1505,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return self.headers.get("Host") in ok and (origin is None or origin.split("//", 1)[-1] in ok)
 
     def fleet_get(self, path):
-        if not self.local_only():
-            return self.send(403, b'{"error":"forbidden"}')
         if path == "/api/fleet/state":
             if time.monotonic() - FLEET_VIEWED[0] > FLEET_VIEW_S:
                 FLEET_FORCE[0] = True  # the page just opened: runs and every open PR now, not when their turn comes
