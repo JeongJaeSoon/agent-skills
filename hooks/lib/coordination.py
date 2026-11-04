@@ -79,8 +79,8 @@ def check_model_flag(cmds, cfg):
             out += finding(cfg, "orchestrate.model_flag",
                            f"This `orca {' '.join(w[1:3])}` names no model, so the session runs on the account's default. "
                            "Add `--model` with what `orch model worker` (or `lead`) prints.")
-        elif w[1:3] != LAUNCHES[0] or re.search(r"[$`*?\[{]", have):
-            continue  # only a worker start is a worker; a value the shell expands (variable, glob) cannot be read here
+        elif w[1:3] != LAUNCHES[0] or expands(c, have):
+            continue  # only a worker start is a worker; a value the shell expands cannot be read here
         elif not isinstance(want, str) or not want:
             if not any("is not set" in f.reason for f in out):
                 out += warn_only(cfg, "A `--model` is not compared: orchestrate.models.worker is not set.")
@@ -88,6 +88,15 @@ def check_model_flag(cmds, cfg):
             out += warn_only(cfg, f"`--model {have}` differs from orchestrate.models.worker ({want}). "
                                   "Use what `orch model worker` prints, or change the setting.")
     return out
+
+
+def expands(c, value):
+    """True when bash may rewrite `value`: a variable or substitution, or an unquoted glob or brace pattern. The
+    words are already unquoted, so the command's raw text says whether a glob character was quoted."""
+    if re.search(r"[$`]", value):
+        return True
+    bare = re.search(rf"--model(?:=|\s+){re.escape(value)}(?=\s|$|[;&|])", c.raw)
+    return bool(re.search(r"[*?\[{]", value)) and bare is not None
 
 
 def warn_only(cfg, reason):
