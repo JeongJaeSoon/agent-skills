@@ -123,7 +123,12 @@ assert card_watch.screen_state(bg, 30) == ("busy", "background running"), "claud
 assert card_watch.screen_state(["⏺ Both 2 shells have finished.", "❯ "], 5) == ("idle", "quiet prompt"), "a turn's words are not the status bar"
 assert card_watch.screen_state(["done.", "❯ ", "  ⏵⏵ auto mode on · ← 1 agent"], 30) == ("idle", "quiet prompt"), \
     "the status line's agent count shows on sessions claude agents calls idle"
+assert card_watch.screen_state(["done.", "❯ ", "  ⏵⏵ auto mode on · 1 monitor · ← 1 agent"], 30) == ("busy", "background running")
 assert card_watch.screen_state(["done.", "❯ "], 0) == ("unknown", "no evidence"), "a prompt that just drew is no idle"
+panel = ["done.", "❯ ", "  ⏵⏵ auto mode on · ← 1 agent", "  ⏺ main", "  ◯ general-purpose  reading notes"]
+assert card_watch.screen_state(panel, 30) == ("busy", "background running")
+assert (card_watch.FALLBACK_BACKGROUND.pattern, card_watch.FALLBACK_AGENT_PANEL.pattern) \
+    == (card_watch.BACKGROUND.pattern, card_watch.AGENT_PANEL.pattern), "the copy for an install without scripts/ follows sync"
 assert card_watch.screen_state(["❯ half typed"], 5) == ("unknown", "no evidence")
 assert card_watch.screen_state([], 5) == ("unknown", "no evidence")
 assert card_watch.screen_state(["❯ "], 5, "auth") == ("blocked", "auth")
