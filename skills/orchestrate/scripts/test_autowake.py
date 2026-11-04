@@ -114,7 +114,7 @@ assert "/goal" not in body and "\n" not in body
 done = w.rows("auto_wake")
 assert len(done) == 1, done
 e = done[0]
-assert e["dispatch"] == "ctx_1" and e["ticket"] == "ABC-1" and "16 min" in e["reason"] and e["route"] == "terminal", e
+assert e["dispatch"] == "ctx_1" and e["ticket"] == "ABC-1" and "16 min" in e["reason"] and e["route"] == "typed", e
 assert prog.parse_ts(e["marked_at"]) == mins(0), e
 assert mins(10) <= prog.parse_ts(e["woken_at"]) < mins(10) + dt.timedelta(seconds=5), e
 assert r.skip == {"ctx_1"}, "the wake just went out: no STALLED line tells the lead to wake it by hand"
@@ -157,6 +157,24 @@ w.sweep(11)
 assert not w.sent, "resumed at 5, stopped again at 11: the timer starts at 11"
 w.sweep(21)
 assert len(w.sent) == 1
+
+# Idle, then silent (a turn took input), then idle again: the second idle has its own timer.
+w = World()
+w.sweep(0)
+w.stalls[0]["kind"] = "silent"
+w.sweep(5)
+w.stalls[0]["kind"] = "idle"
+w.sweep(11)
+assert not w.sent, "the timer restarted at 11"
+w.sweep(21)
+assert len(w.sent) == 1
+
+# An Orca that refuses --full still gets its inbox read.
+w = World()
+real_orca, w.orca = w.orca, lambda *a: (_ for _ in ()).throw(SystemExit("failed: Unknown flag --full")) if "--full" in a else real_orca(*a)
+w.sweep(0)
+w.sweep(10)
+assert len(w.sent) == 1, "with_full fell back"
 
 # A stale collector changes nothing: no wake, and the marks stay.
 w = World()
@@ -340,7 +358,7 @@ w.sweep(0)
 w.sweep(10)
 assert [a[0] for a in w.synced] == ["wake-target", "wake-reset", "nudge"], w.synced
 assert w.synced[1] == ("wake-reset", "term_1") and w.synced[2] == NUDGED, w.synced
-assert w.rows("auto_wake")[0]["route"] == "sendmessage", w.rows("auto_wake")
+assert w.rows("auto_wake")[0]["route"] == "typed, sendmessage route", w.rows("auto_wake")
 
 # Claim before act: a crash after the claim leaves no wake, then the human, never a second wake.
 w = World()

@@ -147,13 +147,13 @@ class Facts:
 
     def gate_open(self, task):
         if self.gates is None:
-            self.gates = orca("orchestration", "gate-list", "--run", self.p.cfg["run"]).get("gates") or []
-        return any(g.get("status") == "pending" and (g.get("taskId") or g.get("task_id") or task) == task for g in self.gates)
+            self.gates = orca("orchestration", "gate-list", "--run", self.p.cfg["run"], "--status", "pending").get("gates") or []
+        return any((g.get("taskId") or g.get("task_id") or task) == task for g in self.gates)
 
     def mail_why_not(self, d):
-        import fleet
+        import fleet, orca_settings
         if self.mail is None:
-            self.mail = orca("orchestration", "inbox", "--limit", str(INBOX_LIMIT), "--full").get("messages") or []
+            self.mail = orca_settings.with_full(orca, "orchestration", "inbox", "--limit", str(INBOX_LIMIT)).get("messages") or []
             self.answered = fleet.answered_mail(self.mail)
         since = next((w.get("since") for w in self.state.get("workers") or [] if w.get("dispatch") == d), None)
         oldest = min((m.get("created_at") or "" for m in self.mail), default="")
@@ -194,7 +194,7 @@ def attempt(d, handle, message):
     code, out = sync("nudge", handle, SIGNAL)
     if code != 0:
         raise Failed(f"the signal was not sent: {out[:200]}")
-    return route
+    return "typed" if route == "terminal" else "typed, sendmessage route"
 
 
 def wake(p, d, x, mark, n, clock, r, workers):
@@ -247,7 +247,7 @@ def sweep(p, n, now=None):
         return r
     stalls = {x["dispatch"]: x for x in (state.get("summary") or {}).get("stalls") or [] if x.get("kind") in ("idle", "silent")}
     before = load_marks(p)
-    marks = {d: dict(m) for d, m in before.items() if d in stalls}
+    marks = {d: dict(m) for d, m in before.items() if d in stalls and stalls[d]["kind"] == "idle"}
     events = p.events()
     acted = {}
     for e in events:
