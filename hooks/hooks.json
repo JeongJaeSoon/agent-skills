@@ -31,6 +31,10 @@
       {
         "matcher": "Bash",
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/record_check.py\"", "timeout": 5 }]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/decision_relay.py\"", "timeout": 5 }]
       }
     ],
     "PostToolUse": [

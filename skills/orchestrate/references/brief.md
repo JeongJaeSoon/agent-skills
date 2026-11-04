@@ -294,7 +294,8 @@ VERIFY      Exact commands, and the output that proves each criterion.
 TIMEBOX     Rough cap. When it runs out, report partial findings with --outcome failed and stop.
 FORBIDDEN   Other work. No force-push. Nothing sent outside Orca. The refused-act paragraph of the
             program brief's FORBIDDEN above, pasted verbatim. <unit-specific bans>
-APPROVED    The acts the human already approved for this unit, with their words and date. Inside
+APPROVED    The acts the human already approved for this unit, with their words and date, recorded
+            with `orch decide answer` and cited as `오너(d150, 2026-11-04): "<words>"`. Inside
             them, decide with the recommended default and report what you chose; do not ask.
 HUMAN ONLY  Permission dialogs outside APPROVED, logins, payments, document submissions, and
             any irreversible or outward act not under APPROVED. Ask for these together, once.

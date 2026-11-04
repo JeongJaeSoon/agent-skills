@@ -2622,6 +2622,7 @@ def inbox_resolve(key):
 
 DECISION_BODY_MAX = 4000
 DECISION_ANSWER_MAX = 1900  # the page's answer box; "decision <id>: " plus this stays inside send()'s 2000
+DECISION_REPEAT_H = 24
 
 
 def change_decisions(change):
@@ -2631,28 +2632,81 @@ def change_decisions(change):
     return db_store.change_decisions(change)
 
 
+def _new_decision(store, title, body="", opts=(), recommend=None, link=None, handle=None):
+    n = store.get("next", 1)
+    d = {"id": f"d{n}", "title": title, "body": body, "options": list(opts), "recommend": recommend, "link": link,
+         "handle": handle, "created_at": iso(utcnow()), "status": "open"}
+    store.update(next=n + 1, decisions={**store.get("decisions", {}), d["id"]: d})
+    return d
+
+
+def _one_line(v, n):
+    return mask(" ".join(v.split()), n)
+
+
 def decision_add(title, body="", options=(), recommend=None, link=None, handle=None):
     """Register a decision; options are "label::description". The label is what the page sends back, so one line."""
-    one_line = lambda v, n: mask(" ".join(v.split()), n)
     opts = []
     for o in options:
         label, _, desc = o.partition("::")
         if not label.strip():
             raise ValueError(f"--option {o!r} has no label before '::'")
-        opts.append({"label": one_line(label, 120), "description": one_line(desc, 300)})
+        opts.append({"label": _one_line(label, 120), "description": _one_line(desc, 300)})
     if recommend is not None and not 1 <= recommend <= len(opts):
         raise ValueError(f"--recommend is an option number from 1 to {len(opts)}" if opts else "--recommend needs --option")
     if not title.strip():
         raise ValueError("--title is empty")
+    return change_decisions(lambda store: _new_decision(store, _one_line(title, 200), mask(body.strip(), DECISION_BODY_MAX),
+                                                        opts, recommend, mask(link, 500), handle))
+
+
+def decision_ensure(item, handle=None):
+    """A brief's --decision item as a decision: (decision, already_answered). The same words from the same terminal are
+    the same decision while it is open, or for DECISION_REPEAT_H after an answer, so a report rendered again neither
+    doubles it nor asks again. Options stay empty: a made-up label would let the prompt hook close it on a sentence
+    that only starts like the recommendation."""
+    text = _one_line(item, None)
+    if len(text) > DECISION_BODY_MAX:  # cut, two items differing past the limit would be one decision
+        raise ValueError(f"a --decision item of at most {DECISION_BODY_MAX} characters")
     now = utcnow()
 
-    def add(store):
-        n = store.get("next", 1)
-        d = {"id": f"d{n}", "title": one_line(title, 200), "body": mask(body.strip(), DECISION_BODY_MAX), "options": opts,
-             "recommend": recommend, "link": mask(link, 500), "handle": handle, "created_at": iso(now), "status": "open"}
-        store.update(next=n + 1, decisions={**store.get("decisions", {}), d["id"]: d})
+    def ensure(store):
+        same = [d for d in store.get("decisions", {}).values() if d.get("body") == text and d.get("handle") == handle]
+        hit = next((d for d in same if d["status"] == "open"), None)
+        if hit:
+            return hit, False
+        for d in same:
+            at = parse(d.get("closed_at"))
+            if d["status"] == "done" and d.get("answer") and at and (now - at).total_seconds() < DECISION_REPEAT_H * 3600:
+                return d, True
+        return _new_decision(store, text, text, handle=handle), False  # the report prints the title, so all of it
+    return change_decisions(ensure)
+
+
+def decision_quote(did, quote, by=None, title=None):
+    """`orch decide answer`: the owner's words as given, never cut (too long is refused). With a title instead of an id
+    it records an order nobody asked for: added and closed in one write."""
+    if not quote.strip() or len(mask(quote)) > DECISION_ANSWER_MAX:  # masking can lengthen it
+        raise ValueError(f"a quote of 1 to {DECISION_ANSWER_MAX} characters; nothing recorded")
+    if title is None:
+        return decision_close(did, "done", quote, by=by)
+    if not title.strip():
+        raise ValueError("--title is empty")
+
+    def add_closed(store):
+        d = _new_decision(store, _one_line(title, 200), handle=by)
+        d.update(status="done", answer=mask(quote), closed_at=iso(utcnow()))
+        if by:
+            d["answered_by"] = by
         return d
-    return change_decisions(add)
+    return change_decisions(add_closed)
+
+
+def decision_cite(d):
+    """The line a brief or an APPROVED row quotes: id, time, session and the first line of the words."""
+    lines = (d.get("answer") or "").strip().splitlines() or [""]
+    more = f" (+{len(lines) - 1}줄)" if len(lines) > 1 else ""
+    return f'{d["id"]} {d.get("closed_at")} by {d.get("answered_by") or "?"}: "{lines[0]}"{more}'
 
 
 def decision_keep(did):
@@ -2674,17 +2728,20 @@ def decision_age_from(d):
     return max(filter(None, (d.get("created_at"), d.get("checked_at"))), default=None)
 
 
-def decision_close(did, status, answer=None, relay=False):
+def decision_close(did, status, answer=None, relay=False, by=None):
     """Mark an open decision done (answered) or dropped (no longer needed). relay: answered on the page, so the answer
     still has to reach the coordinator's terminal (delivered stays False until relay_decision types it). Such a decision
     is already done when the coordinator gets to it: its `done` then only stops the relay, and `drop` cancels it.
-    `drop` also takes back any done decision, e.g. one the prompt hook closed on a misread answer."""
+    `drop` also takes back any done decision, e.g. one the prompt hook closed on a misread answer. by: the session that
+    recorded the answer."""
     def close(store):
         d = store.get("decisions", {}).get(did)
         if not d:
             raise ValueError(f"no decision {did}")
         if d.get("status") == "open":
             d.update(status=status, answer=mask(answer, DECISION_ANSWER_MAX), closed_at=iso(utcnow()))
+            if by and status == "done":
+                d["answered_by"] = by
             if relay:
                 d["delivered"] = False
         elif d.get("status") == "done" and d.get("delivered") is False and not relay:
@@ -2747,13 +2804,13 @@ def relay_decision(did, sender=None, skip_working=False):
 
 
 def decision_answer(did, answer, sender=None):
-    """The page's answer: recorded and closed first, as `orch decide done` would, then relayed to the coordinator's
+    """The page's answer: recorded and closed first, as `orch decide answer` would, then relayed to the coordinator's
     terminal if it is idle. A busy coordinator is not a failure: relay_decisions retries on a later collect."""
     answer = " ".join((answer or "").split())
     if not answer or len(answer) > DECISION_ANSWER_MAX:
         return 400, {"ok": False, "reason": f"an answer of 1 to {DECISION_ANSWER_MAX} characters"}
     try:
-        decision_close(did, "done", answer, relay=True)
+        decision_close(did, "done", answer, relay=True, by="dashboard")
     except ValueError as e:
         return 409, {"ok": False, "reason": str(e)}
     with RELAY_LOCK:

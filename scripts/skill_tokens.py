@@ -41,6 +41,7 @@ HOOKS = {
     "onboard.py": "once per profile, until setup is applied or declined",
     "reorient.py": "sessions with a declared orchestrator or lead role: each prompt, and session start",
     "decision.py": "Orca terminals with an open dashboard decision they registered: each prompt",
+    "decision_relay.py": "an orchestrator or lead relaying the owner's quoted words with no decision record behind them",
     "prose_check.py": "a commit, PR or tracker write whose text breaks write-plainly",
     "stack_gate.py": "a `gh pr create` with an open PR it depends on, or what that needs left unread",
     "guard.py": "its reason when it denies; one line per warn rule (guard.warn.*) that matched the call",

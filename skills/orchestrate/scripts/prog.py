@@ -86,14 +86,19 @@ Usage: orch <command> <slug> [options]
                                      (orca_settings.py)
   model lead|worker                  no slug: the role's model from orchestrate.models; prints nothing when unset
   decide add --title T [--body-file F] [--option "label::description"]... [--recommend N] [--link URL]
-  decide list | done <id> [--answer TEXT] | drop <id> | keep <id>
+  decide answer <id> | --title T  (--quote TEXT | --quote-file F) [--by SESSION]
+  decide list | show <id> | done <id> [--answer TEXT] | drop <id> | keep <id>
                                      no slug: a decision you wait on the human for, shown on the fleet
                                      dashboard until done or dropped; add prints its id. Each option is a
                                      button that closes it with that answer, then types
                                      "decision <id>: <label>" into this terminal once it is idle. keep: you
                                      checked it and it still stands (checked_at); the brief counts one
-                                     unchecked for board.decision_stale_h hours as 오래된 결정. Decisions
-                                     live in agent-skills.db; before `orch db import` they stop with that
+                                     unchecked for board.decision_stale_h hours as 오래된 결정. answer records
+                                     the owner's words as given, with the time and the session (--by, else
+                                     this terminal), and prints the line to quote; --title records an order
+                                     nobody asked for. A quote over the limit is refused, never cut. show
+                                     prints that line again. Decisions live in agent-skills.db, or in
+                                     decisions.json while no DB file exists; a DB not imported yet stops with that
   db import [--dry-run | --apply] [--rehearsal] | export --legacy --target pre-4a DIR | dump [TABLE]
   db backup FILE | restore FILE [--rehearsal] | cutover-plan 4a|4b
                                      no slug: agent-skills.db (store.py). import moves decisions.json in
@@ -160,7 +165,11 @@ Usage: orch <command> <slug> [options]
                                      page (`orch stage show` while the dashboard is down); --periodic adds
                                      --skipped and the last reap. The model gives only --headline (a sentence),
                                      --decision ("<question>: <options> → 추천: X — <reason> · 답이 없으면 Y",
-                                     numbered after the registered ones) and --insight (after 진행 중). state.json
+                                     registered on the spot, so it shows with its id; the same words again
+                                     are the same decision, and one answered within 24 h is not asked again.
+                                     If it cannot be registered the report still prints, with a warning line
+                                     above it, the item marked (미등록), and exit 1. --now registers nothing)
+                                     and --insight (after 진행 중). state.json
                                      older than 5 min ("state_min") is collected again first unless --now or
                                      --no-refresh; a failed collect is in the headline with the files' age. --commit
                                      saves this table as the last one (after sending). Staleness: a row past 90
@@ -3370,15 +3379,36 @@ def cmd_decide(argv):
                     print(f"    {i}. {o['label']}{mark}" + (f" — {o['description']}" if o["description"] else ""))
             for d in fleet.pending_relays():
                 print(f"{d['id']}  answered on the dashboard, not relayed yet: {d.get('answer')}  ({d['title']})")
+        elif sub == "answer":
+            did = rest[0] if rest and not rest[0].startswith("--") else None
+            title, quote_file = opt(rest, "--title"), opt(rest, "--quote-file")
+            quote = pathlib.Path(quote_file).read_text() if quote_file else opt(rest, "--quote")
+            if quote is None or (did is None) == (title is None):
+                sys.exit("usage: orch decide answer <id> | --title T, with --quote TEXT | --quote-file F [--by SESSION]")
+            d = fleet.decision_quote(did, quote, opt(rest, "--by") or os.environ.get("ORCA_TERMINAL_HANDLE"), title)
+            d = store.decision_record(d["id"])
+            if d.get("answer") != fleet.mask(quote):
+                print(f"{d['id']} keeps the answer it already had; this quote was not stored", file=sys.stderr)
+            print(fleet.decision_cite(d))
+        elif sub == "show" and rest:
+            d = store.decision_record(rest[0])
+            if not d:
+                sys.exit(f"no decision {rest[0]}")
+            print(fleet.decision_cite(d) if d["status"] == "done" else f"{d['id']} {d['status']}")
+            print(f"  {d['title']}")
+            if "\n" in (d.get("answer") or ""):
+                print(d["answer"])
         elif sub in ("done", "drop") and rest:
-            d = fleet.decision_close(rest[0], "done" if sub == "done" else "dropped", opt(rest, "--answer"))
+            d = fleet.decision_close(rest[0], "done" if sub == "done" else "dropped", opt(rest, "--answer"),
+                                     by=os.environ.get("ORCA_TERMINAL_HANDLE"))
             print(f"{d['id']} {d['status']}")
         elif sub == "keep" and rest:
             d = fleet.decision_keep(rest[0])
             print(f"{d['id']} checked {d['checked_at']}")
         else:
             sys.exit("usage: orch decide add --title T [--body-file F] [--option 'label::description']... [--recommend N] "
-                     "[--link URL] | list | done <id> [--answer TEXT] | drop <id> | keep <id>")
+                     "[--link URL] | list | show <id> | answer <id>|--title T --quote TEXT|--quote-file F [--by SESSION] | "
+                     "done <id> [--answer TEXT] | drop <id> | keep <id>")
     except store.NotMigrated as e:
         sys.exit(f"decisions are not in {store.DB_NAME} yet ({e}); orch db cutover-plan 4a lists the steps")
     except (ValueError, OSError) as e:
@@ -3530,6 +3560,23 @@ def cmd_board(argv):
         print(warning, file=sys.stderr)
 
 
+def register_decisions(items):
+    """Register a brief's --decision items; registered ones render from the store with their id. Returns the items
+    still to print as given, marked unregistered, and the warning line, or None. A store that fails must not cost the
+    report: it is how the owner hears of everything else, so every failure lands here."""
+    import fleet
+    left, errors = [], []
+    for item in items:
+        try:
+            d, answered = fleet.decision_ensure(item, os.environ.get("ORCA_TERMINAL_HANDLE"))
+            if answered:
+                print(f"--decision skipped: {d['id']} already has its answer (orch decide show {d['id']})", file=sys.stderr)
+        except Exception as e:
+            left.append(f"(미등록) {item}")
+            errors.append(str(e))
+    return left, f"⚠️ 결정 등록 실패 {len(left)}건: {errors[0]}" if errors else None
+
+
 def cmd_brief(argv):
     import board
     if argv[:1] != ["render"]:
@@ -3538,20 +3585,29 @@ def cmd_brief(argv):
     now = opt(argv, "--now")
     scope = opt(argv, "--scope", "top-level")
     fill = "--no-fill" not in argv  # --fill, the old opt-in, is now the default and still accepted
+    items = [argv[i + 1] for i, a in enumerate(argv[:-1]) if a == "--decision"]
+    failed = None
+    if not now:  # --now replays a past moment; only a report of this moment is sent
+        if any("→ 추천:" not in d for d in items):
+            sys.exit(f"--decision is one line: {board.DECISION_FORM}")
+        items, failed = register_decisions(items)
     try:
         out = board.render(scope, "telegram" if "--telegram" in argv else "terminal", now and fleet_parse(now),
                            opt(argv, "--headline"), opt(argv, "--skipped"), fill, periodic="--periodic" in argv,
-                           decisions=[argv[i + 1] for i, a in enumerate(argv[:-1]) if a == "--decision"],
-                           insight=opt(argv, "--insight"),
+                           decisions=items, insight=opt(argv, "--insight"),
                            # --now replays a past moment, so the fleet as it is now does not belong in it
                            fresh=not now and "--no-refresh" not in argv)
     except ValueError as e:
         sys.exit(str(e))
+    if failed:
+        print(failed, file=sys.stderr if "--json" in argv else sys.stdout)
     print(json.dumps(out, ensure_ascii=False, indent=1) if "--json" in argv else out["text"])
     if "--commit" in argv:
         board.commit(scope, out["snapshot"])
     if not out["width_ok"]:
         sys.exit("a table is wider than 78 columns")
+    if failed:
+        sys.exit(1)
 
 
 def fleet_parse(s):
