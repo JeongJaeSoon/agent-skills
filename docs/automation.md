@@ -140,6 +140,7 @@ orca automations edit <id> --prompt "<schedule 이 출력한 --prompt 값>"   # 
 | B | 사람을 기다리지 않는 에이전트 카드(Run 워커 포함)의 턴이 15분 넘게 끝나 있고, 마지막 메시지는 백그라운드 작업의 완료 알림을 기다린다고 말하는데 깨울 것이 없다. 세션 기록에 결과를 기다리는 백그라운드 명령이나 Monitor가 없고(parked 아님), Claude Code 상태줄에도 도는 shell·agent·작업이 없다. 이 문구가 없는 화면은 판정하지 않는다. brief의 그 카드 행은 ❔ `에이전트 조치 필요: 백그라운드 작업을 기다리지만 깨울 작업이 없음`이 된다 |
 | L | 경고·위험 회차에 상위 소비자가 I·X·S·O·R·H로 판정된 카드에 속한다 |
 | W | 오케스트레이터의 `orch watch-cards`가 1시간 넘게 회차를 마치지 않았다. 대시보드 Needs you에는 collector가 올린다 |
+| T | `~/.claude/agent-skills.json`의 `term_` 값이 `orca terminal list`에 없다. 발견은 키, 값의 앞 12자, 권장 주소 `run:<id>`를 적어 오케스트레이터에게 간다. Orca 목록을 못 읽거나 잘렸으면 발견 없이 note 한 줄만 남기고 이미 있던 발견은 유지한다. 경고만 하고 값을 거부하지는 않는다 |
 
 결과는 `<state>/patrol.jsonl`(발견, 해소, ack), `<state>/patrol-verdicts.json`에 남는다. 이 파일의 `cards`는 카드별 활동 판정(run·waiting·working·idle·exited·stalled), `hints`는 발견이 그 카드에 대해 한 말(superseded 등), `check`는 H·B와 R(스스로 깨어날 장치가 없는 것)이 걸린 카드와 brief가 그 행의 ❔에 붙일 이유, `failed`는 그 라운드에 못 읽은 소스다. brief는 1시간이 넘은 라운드의 `check`는 쓰지 않고, 그 라운드 뒤에 세션이 움직였거나 지금 작업 중인 카드에도 붙이지 않는다. 발견은 run·waiting·working 판정을 덮어쓰지 않는다. X·E·L·O는 대시보드 Needs you에 올라가고 조건이 풀리거나 ack하면 빠진다. `orch inbox`와 `orch wait`는 그 카드를 띄운 세션(없으면 오케스트레이터)에 ack되지 않은 발견을 30분마다 다시 보여 준다(R은 처음 한 번만). 처리한 세션은 `orch patrol ack <id>`로 닫는다. 순찰은 화면 입력, nudge, 터미널 닫기, 워커 종료, 카드 삭제를 하지 않는다. reap-hard와 pressure는 판정을 카드를 남기는 쪽으로만 쓴다(작업 중, 사람 대기, Run 워커). 판정에 없는 카드, 특히 `failed`가 있는 라운드에서 빠진 카드를 안전하다는 근거로 쓰지 않는다.
 
