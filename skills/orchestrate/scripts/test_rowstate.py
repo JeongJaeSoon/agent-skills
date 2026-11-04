@@ -172,6 +172,13 @@ assert rowstate.judge(row, facts({"octo/app#1": READY}, programs=auto) | {"progr
 no_ci = {k: v for k, v in READY.items() if k != "ci"}
 assert rowstate.judge({**row, "owner": "오너"}, facts({"octo/app#1": no_ci}))["status"] == "owner"
 assert rowstate.judge(row, facts({"octo/app#1": no_ci}))["unknown"] == ["PR 상세 모름"]
+# ... and a rule that cannot apply needs none: a draft asks no review, nor does a PR known to ask nobody.
+held_row = {**row, "status": "held", "next": "대기"}
+no_revs = {k: v for k, v in {**READY, "draft": True}.items() if k != "reviewers"}
+assert rowstate.judge(held_row, facts({"octo/app#1": no_revs}))["status"] == "held"
+no_draft = {k: v for k, v in READY.items() if k != "draft"}
+assert rowstate.judge(held_row, facts({"octo/app#1": no_draft}))["status"] == "held"
+assert rowstate.judge({**row, "owner": "rev-b"}, facts({"octo/app#1": no_ci}))["status"] == "waiting"
 # A team asked needs no owner login to be another's wait; a person asked does.
 assert rowstate.judge(row, facts({"octo/app#1": team}, me=None))["status"] == "waiting"
 # A stale session list is no evidence an agent works on the draft.
@@ -236,6 +243,13 @@ try:
 finally:
     board.table_width.fit = real_fit
 assert lost["missing"], lost["missing"]
+# ... and a row written in another's place (same count, same icon) is that other row twice, and this one missing.
+board.table_width.fit = lambda rows, *a, **kw: (lambda t, n: (t[:-1] + [t[-2]], n))(*real_fit(rows, *a, **kw))
+try:
+    swapped = board.render(now=T, fill=True, periodic=False)
+finally:
+    board.table_width.fit = real_fit
+assert swapped["duplicates"] and swapped["missing"], (swapped["duplicates"], swapped["missing"])
 # A quiet stage row is kept while its 지금 has work left (⏸️ too), or while the brief's judgment could not be read.
 old = {**stages.table(), "rows": [{**r, "created_at": "2026-01-01T00:00:00Z"} for r in stages.table()["rows"]]}
 assert [r["id"] for r in stages.current(old, T, 60, None, {"octo/app#5": "held"})[0]["rows"]] == ["s1"]

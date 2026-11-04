@@ -1291,12 +1291,15 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             width_ok &= table_width.table_width(table) <= COLS
             out += ["", "| " + " | ".join(HEADER).strip() + " |", "|---" * len(HEADER) + "|"]
             out += ["| " + " | ".join(c.replace("|", "\\|") for c in row) + " |" for row in table[1:]]
-            # Placed from the rows written: a table that lost or gained a row places none of its rows, so the
-            # placement check reports them missing rather than trusting the lines it was handed.
-            if len(table) - 1 == len(mine):
-                for l, row in zip(mine, table[1:]):
-                    if row[0] == mark(l, l["status"]):
-                        drawn(l)
+            # Placed from the rows written, by the whole name each one shows (names are unique in the report): a row the
+            # table lost is missing and one it wrote twice is a duplicate, whatever the lines handed to it said.
+            by_name = {l["shown"]: l for l in mine if l["status"] is not None}
+            for row in table[1:]:
+                name = re.sub(r"^\*\*(.*)\*\*$", r"\1", re.sub(r"^└ ", "", row[1]))
+                if (cut := re.search(r"…\[(\d+)\]$", name)) and int(cut[1]) <= len(notes):
+                    name = notes[int(cut[1]) - 1]
+                if name in by_name:
+                    drawn(by_name[name])
             # Done on every open row the board can close; Ack on a ✅ row not yet acknowledged.
             table_rows.append({"table": title, "rows": [
                 {"id": l["key"], "label": l["shown"], "status": mark(l, l["status"]), "session": l["session"],

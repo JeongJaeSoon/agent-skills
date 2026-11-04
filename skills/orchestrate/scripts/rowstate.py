@@ -326,9 +326,11 @@ def judge(r, f, lead=None, sid=None):
         return gap("오너 login 모름")  # --owner may name the owner by login
     if r.get("owner") and is_owner(r["owner"], me) or status == "owner" and not r.get("owner"):
         hit("owner", nxt, what=nxt or "응답")
-    if lacks("draft", "reviewers"):
+    # A missing detail stops a rule only while the rule may still apply: a draft, or a PR known to ask nobody, cannot.
+    review_off = is_open and (p.get("draft") is True or "reviewers" in p and not asked(p))
+    if not review_off and lacks("draft", "reviewers"):
         return gap("PR 상세 모름")
-    if is_open and not p.get("draft"):
+    if is_open and not review_off:
         people = asked(p)
         if not me and any(not is_team(a) for a in people):  # a team is never the owner; a person may be
             return gap("오너 login 모름")
@@ -359,14 +361,14 @@ def judge(r, f, lead=None, sid=None):
         hit("held", nxt)
 
     # 4 ⏳ another person
-    if lacks("ci", "decision"):
+    named = r.get("owner") and not is_owner(r["owner"], me)  # ⏳ already, whatever the review says
+    others = [a for a in asked(p) if not is_owner(a, me)] if is_open and not review_off else []
+    off = review_off or not others or p.get("ci") == "failure" or p.get("decision") == "CHANGES_REQUESTED"
+    if not off and not named and lacks("ci", "decision"):
         return gap("PR 상세 모름")
-    if is_open and reviewable(p):
-        others = [a for a in asked(p) if not is_owner(a, me)]
-        if others:
-            who = ", ".join(others)
-            hit("waiting", "" if nxt in GENERIC_NEXT else nxt, who=who, what="리뷰")
-    if r.get("owner") and not is_owner(r["owner"], me):
+    if not off and not lacks("ci", "decision") and reviewable(p):
+        hit("waiting", "" if nxt in GENERIC_NEXT else nxt, who=", ".join(others), what="리뷰")
+    if named:
         hit("waiting", nxt, who=r["owner"])
 
     # 5 🔴 its lead's session is gone
