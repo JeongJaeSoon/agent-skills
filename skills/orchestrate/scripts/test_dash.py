@@ -546,6 +546,21 @@ stale[0] = True
 dash.health = lambda p: (h := real_health(p)) and dict(h, stale=stale[0])
 ok, msg = dash.ensure(port)
 assert ok and kicks == [True], (msg, kicks)
+# A live process whose fast loop stopped ticking is restarted too, even though the slow loop keeps its heartbeat
+# fresh; one that never reports ticks (older code) is judged by its version alone.
+kicks.clear()
+stale[0] = False
+old_tick = dash.iso(dash.utcnow() - dash.LOOP_STALE - dash.dt.timedelta(minutes=1))
+dash.health = lambda p: (h := real_health(p)) and dict(h, ticks={"slow": dash.iso(dash.utcnow()), "fast": old_tick})
+assert dash.fresh(dash.health(port))
+ok, msg = dash.ensure(port)
+assert kicks == [True], (msg, kicks)
+assert not dash.loops_alive({"ticks": {"slow": dash.iso(dash.utcnow())}}) and dash.loops_alive({})
+assert dash.loops_alive({"ticks": {"fast": dash.iso(dash.utcnow())}})
+kicks.clear()
+dash.health = lambda p: (h := real_health(p)) and dict(h, ticks={"fast": dash.iso(dash.utcnow())})
+ok, msg = dash.ensure(port)
+assert ok and kicks == [], (msg, kicks)
 # ...unless the code on disk does not import: then the old server is the one to keep.
 kicks.clear()
 stale[0] = True
@@ -641,6 +656,62 @@ except StopIteration:
 dash.time.sleep, dash.collect = real_sleep, real_collect
 assert collected.count(B) == 2 and A in collected, collected  # the second round reached B through closed()
 (store / B / "ledger.jsonl").write_text(clean)
+
+# A program listed by programs() whose directory is gone before the loop reads it (closed(), signature()) is resting,
+# and neither loop ends: both once died on the first FileNotFoundError and nothing noticed.
+class Stop(BaseException):
+    pass
+def run_loop(loop, rounds_wanted):
+    n = []
+    def sleep(_):
+        n.append(1)
+        if len(n) == rounds_wanted:
+            raise Stop
+    dash.time.sleep = sleep
+    try:
+        loop(1)
+    except Stop:
+        pass
+    finally:
+        dash.time.sleep = real_sleep
+    return len(n)
+GONE = "vanished-slug"
+real_programs, real_orca_every = dash.programs, dash.ORCA_EVERY
+dash.programs = lambda: [GONE, A]
+dash.ORCA_EVERY = 0
+assert dash.closed(GONE) and dash.signature(GONE) == (None, None, None)
+collected.clear()
+dash.collect = lambda slug, *a, **k: collected.append(slug) or {"errors": []}
+dash.HEALTH.pop("ticks", None)
+assert run_loop(dash.fast_loop, 3) == 3 and collected.count(A) >= 2, collected  # survived 3 rounds, A still served
+assert run_loop(dash.slow_loop, 3) == 3 and "fast" in dash.HEALTH["ticks"] and "slow" in dash.HEALTH["ticks"]
+assert dash.loops_alive(dash.HEALTH)
+# Any other error in one program's step stays on that program; an error from programs() itself costs one round.
+def boom(slug):
+    if slug == GONE:
+        raise RuntimeError("bad ledger")
+    return real_signature(slug)
+real_signature = dash.signature
+dash.signature = boom
+collected.clear()
+assert run_loop(dash.fast_loop, 3) == 3 and A in collected, collected
+dash.signature = real_signature
+def no_programs():
+    raise OSError("store unreadable")
+dash.programs = no_programs
+dash.HEALTH["ticks"] = {}
+assert run_loop(dash.fast_loop, 2) == 2 and "fast" in dash.HEALTH["ticks"]  # logged, ticked, still looping
+assert run_loop(dash.slow_loop, 2) == 2
+dash.programs, dash.ORCA_EVERY, dash.collect = real_programs, real_orca_every, real_collect
+# The stale check runs on its own thread, so a collector that died or hangs does not freeze it.
+checks = []
+real_check = dash.check_code
+def failing_check():
+    checks.append(1)
+    1 / 0
+dash.check_code = failing_check  # raises every time; the loop lives
+assert run_loop(lambda _i: dash.code_loop(), 4) == 4 and len(checks) == 3, checks
+dash.check_code = real_check
 
 # The screen quotes prog.py's cleanup line, so the two cannot drift, and a person is not told to remove cards by hand.
 app_js = pathlib.Path(__file__).parents[1].joinpath("assets/dashboard/app.js").read_text()
