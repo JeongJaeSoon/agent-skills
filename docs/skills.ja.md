@@ -1,4 +1,4 @@
-<!-- translated-from: 5f7d7226309da1ffcafd62b04de29bfa2399ce3e -->
+<!-- translated-from: 2b518b7763c9bf4819376cfbc44973442a7c3333 -->
 # スキルカタログ
 
 `agent-skills` プラグインに入っているスキル41個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック15個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
@@ -186,6 +186,8 @@ PR を受け持つスキルとマージする主体:
   - Run のバインド（`run-current`、未バインドなら `run-use`）と、オーケストレーターのタブ名を見ます。
   - このセッションのプロセスの下で、inbox の待機（`orch wait`、`orch inbox --wait`）と `orch watch-cards` がちょうど1つずつ動いているかを数えます。足りなければ起動コマンドを、2つ以上なら止めるものを示します。
   - 端末を失ったワーカーを見つけ、同じカードで起動し直す `worker-stop` と `worker-start --retry-of` の組を出します。
+  - 再起動で Dispatch が `abandoned` になったワーカーを復旧対象として出します（手順は SKILL.md: `claude --resume` で端末を立て直し、`worker-start --terminal` で新しい Dispatch を付けます）。報告を終えたワーカーは起こさず、区別して扱います。
+  - Dispatch を失った dispatched リードには、親の Run への `run-use` を指示しません。自分の Run を作り、`orch set <slug> run <新しい Run>` でプログラムを移します。
   - この worktree で pressure ゲートが止めた重い起動が、キューに残っていないかを見ます。
   - スクリプトから見えないもの（再起動で終わったバックグラウンドタスクとサブエージェント、プログラムの状態、マシン再起動後のリードの再起動、コンパクション後の順序）は、SKILL.md が順序だけを決め、規則そのものは `orchestrate` の該当する節を指します。
 - **同梱:** `scripts/reboot.py`（読み取り専用の点検）とテスト。

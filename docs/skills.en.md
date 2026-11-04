@@ -1,4 +1,4 @@
-<!-- translated-from: 5f7d7226309da1ffcafd62b04de29bfa2399ce3e -->
+<!-- translated-from: 2b518b7763c9bf4819376cfbc44973442a7c3333 -->
 # Skill catalog
 
 This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 15 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
@@ -186,6 +186,8 @@ Which skill owns a PR, and who merges it:
   - The Run binding (`run-current`, and `run-use` when unbound) and the orchestrator's tab title.
   - Whether exactly one inbox wait (`orch wait`, `orch inbox --wait`) and one `orch watch-cards` run under this session's process. It prints the start command for a missing one and what to stop when there are two.
   - Workers that lost their terminal, with the `worker-stop` and `worker-start --retry-of` pair that restarts each on the same card.
+  - Workers whose Dispatch a restart made `abandoned`, listed as things to recover (SKILL.md has the steps: bring the terminal back with `claude --resume`, then attach a new Dispatch with `worker-start --terminal`). Workers that already reported are told apart and not woken.
+  - A dispatched lead that lost its Dispatch is not told to `run-use` its parent's Run. It creates a Run of its own and moves the program there with `orch set <slug> run <new Run>`.
   - Heavy starts the pressure gate held for this worktree that are still in the queue.
   - For what the script cannot see (background tasks and subagents a restart ended, the program's state, relaunching leads after a machine restart, the order after a compaction), SKILL.md only sets the order and points at the `orchestrate` section that holds each rule.
 - **Ships:** `scripts/reboot.py` (the read-only check) and its tests.

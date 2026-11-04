@@ -28,7 +28,20 @@ It only reads: Orca's terminal, Run and worker records, this session's process t
 - **The tab title,** the orchestrator's only (`references/top-level.md`, its opening paragraph).
 - **Waits,** counted against `orchestrate` core rule 6. Start a missing one under `run_in_background`. Stop an extra one with `TaskStop` on the background task that started it; the pids in the line only tell them apart.
 - **A worker that lost its terminal.** The line prints the stop and retry pair from `orchestrate` Drain (the `outcome_unknown` line), with the model Orca recorded; when it recorded none, the line says where to find it. A worker under another lead gets no such pair: the line names that lead, which restarts its own worker (`orchestrate` core rule 4). When Orca refuses the retry, follow `orca skills get orchestration --reference recovery-and-cleanup`.
+- **An abandoned worker.** A restart that takes a worker's terminal makes Orca settle its Dispatch as `abandoned` (or `interrupted`), so `worker-stop` and `--retry-of` have nothing to act on. The line prints the resume of "Resume a worker" below. A worker that reported (`completed`, `failed`) is not woken: the check only counts it in an `info` line. If you ended an abandoned worker on purpose, leave its line.
+- **A dispatched lead that lost its Dispatch.** Its program names a `lead_dispatch` Orca no longer answers for, and the Run in `program.json` is its coordinator's, so the check does not send it to `run-use` there (that would take the Run's binding from the coordinator). It prints `orca orchestration run-create` for a Run of its own, then `orch set <slug> run <the new Run>`, which accepts only the Run this terminal is bound to, refuses a terminal that is still a worker of it, and drops `lead_dispatch`. Run the check again afterwards.
 - **A held heavy start** (`reap-resources` "Pressure"). `waiting`: its Monitor on `queue wait` again. `gave_up`: it never ran, and its brief's rule for a held start decides, otherwise report it to whoever gave the work. `retrying` or `failed`: the retry was started, so find its result before running anything again. A `gave_up` or `failed` entry leaves the check `rowstate.QUEUE_ENDED_H` hours after it ended, by the rule its row's ❔ follows (`rowstate.queue_over`); `pressure.py queue` still lists it.
+
+## Resume a worker
+
+For a worker the check printed as abandoned, in this order, each in its own call:
+
+1. Find its session id: the newest transcript under `~/.claude/projects/<the worktree path, / as ->/`, the file name without `.jsonl`. Its model alias is the one the line prints (`--model`), else the one in its brief.
+2. Open a terminal in its worktree that resumes that session: `orca terminal create --worktree path:<worktree> --command "claude --resume <session-id> --model <alias>"`. It prints the new terminal's handle.
+3. Write what the worker should do next to a file (read what it was doing from its brief and its last turns; a restart is no reason to restate the whole brief), then attach a new Dispatch to that terminal: `orca orchestration worker-start --spec-file <that file> --worktree path:<worktree> --terminal <the new handle>`. That, not the terminal alone, gives the worker its mailbox and `worker_done` back.
+4. Run the check again: the worker's newest Dispatch is now `dispatched`, so the line is gone.
+
+The janitor leaves the card of an abandoned worker alone while it holds uncommitted changes or an open PR (`reap-resources` `references/cards.md`), so the worktree is still there to resume in.
 
 ## 3. What the check cannot see
 

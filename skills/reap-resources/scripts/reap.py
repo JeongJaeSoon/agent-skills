@@ -1128,6 +1128,21 @@ def worker_worktrees(workers):
     return live, made, users
 
 
+RESTART_LOST = ("abandoned", "interrupted")  # dispatch statuses of a worker whose terminal a restart took
+
+
+def recovering_worktrees(workers):
+    """{real path: dispatch id} of cards whose newest Dispatch is abandoned or interrupted: the worker was cut off and
+    its card waits for a resume (reboot SKILL.md), so nothing there is finished. worker-list is newest first, so a
+    later Dispatch on the card (the resume, or work that completed) means the wait is over."""
+    newest = {}
+    for w in workers:
+        p = ((w.get("resource") or {}).get("worktreeId") or "").partition("::")[2]
+        if p:
+            newest.setdefault(real(p), w)
+    return {p: w.get("dispatchId") for p, w in newest.items() if w.get("dispatchStatus") in RESTART_LOST}
+
+
 def unreleased_settled(workers):
     """{real path: [{dispatch, run, outcome}]}: Run workers whose dispatch settled (succeeded or failed) but whose terminal
     Orca does not list as released. They keep nothing: patrol and the live set read `in_progress` only. Releasing one is

@@ -195,6 +195,8 @@ PR 을 맡는 스킬과 머지 주체:
   - Run 바인딩(`run-current`, 없으면 `run-use`)과 오케스트레이터 탭 이름을 본다.
   - 이 세션 프로세스 아래의 inbox 대기(`orch wait`, `orch inbox --wait`)와 `orch watch-cards`가 정확히 하나씩인지 센다. 없으면 시작 명령을, 둘 이상이면 멈출 것을 알려 준다.
   - 터미널을 잃은 워커를 찾아, 같은 카드에서 다시 시작하는 `worker-stop`·`worker-start --retry-of` 쌍을 낸다.
+  - 재시작으로 Dispatch가 `abandoned`가 된 워커를 복구 대상으로 내고(`claude --resume`으로 터미널을 다시 띄운 뒤 `worker-start --terminal`로 새 Dispatch를 붙이는 절차는 SKILL.md), 보고를 마친 워커는 깨우지 않고 구분한다.
+  - Dispatch를 잃은 dispatched 리드는 부모 Run에 `run-use` 하라고 하지 않고, 자기 Run을 만들어 `orch set <slug> run <새 Run>`으로 프로그램을 옮기게 한다.
   - 이 worktree에서 pressure 게이트가 붙잡아 둔 무거운 시작이 대기열에 남았는지 본다.
   - 스크립트가 못 보는 것(재시작으로 끝난 백그라운드 작업·서브에이전트, 프로그램 상태, 머신 재시작 뒤 리드 다시 띄우기, 컴팩션 뒤 순서)은 SKILL.md가 순서만 정하고, 규칙 자체는 `orchestrate`의 해당 절을 가리킨다.
 - **동봉:** `scripts/reboot.py`(읽기 전용 점검)와 테스트.

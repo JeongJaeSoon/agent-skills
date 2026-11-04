@@ -1799,16 +1799,36 @@ def cmd_record(argv):
     print(json.dumps(row, ensure_ascii=False))
 
 
+def set_run(p, run_id):
+    """Move the program to the Run this terminal is bound to, for a dispatched lead whose restart cost it the Dispatch it
+    worked under: the old Run belongs to its coordinator, and `lead_dispatch` names a Dispatch that no longer answers.
+    Only the bound Run is accepted, so mail cannot be pointed at a Run nobody reads."""
+    import orca_settings
+    bound = (orca_settings.run_current(orca_json) or {}).get("id")
+    if bound != run_id:
+        sys.exit(f"this terminal is {'bound to ' + bound if bound else 'not bound to any Run'}, not {run_id}: "
+                 f"`orca orchestration run-create` (or `run-use --id {run_id}` for a Run you coordinate), then set again")
+    me = os.environ.get("ORCA_TERMINAL_HANDLE")
+    if me and own_worker(all_workers(run_id), me):
+        sys.exit(f"this terminal is a dispatched worker of {run_id}: it still works for that Run's coordinator, so the "
+                 "program stays there")
+    old = p.cfg.get("run")
+    p.update(lambda cfg: (cfg.__setitem__("run", run_id), cfg.pop("lead_dispatch", None)))
+    print(json.dumps(p.append("config", note=f"run={old}->{run_id}; lead_dispatch cleared"), ensure_ascii=False))
+
+
 def cmd_set(argv):
     p = Program(argv[0])
     key, value = argv[1], argv[2]
+    if key == "run":
+        return set_run(p, value)
     if key == "merge_policy" and value not in ("autonomous", "human-gate"):
         sys.exit("merge_policy is autonomous or human-gate")
     split = lambda v: [x for x in v.split(",") if x]
     conv = {"ceiling": int, "predicate": split, "exclusive_paths": split, "visual_paths": split, "stages": split}.get(key, str)
     if key not in ("merge_policy", "ceiling", "deadline", "predicate", "exclusive_paths", "visual_paths", "note", "final_check",
                    "stages"):
-        sys.exit("settable: merge_policy, ceiling, deadline, predicate, exclusive_paths, visual_paths, note, final_check, stages")
+        sys.exit("settable: run, merge_policy, ceiling, deadline, predicate, exclusive_paths, visual_paths, note, final_check, stages")
     if key == "visual_paths" and not conv(value):
         sys.exit("visual_paths cannot be empty: the screenshot check has no off switch, only the no-visual-change label")
     if key in ("exclusive_paths", "visual_paths"):

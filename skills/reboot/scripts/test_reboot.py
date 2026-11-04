@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import pathlib, sys, tempfile, time, unittest
+import json, pathlib, sys, tempfile, time, unittest
 from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -240,6 +240,81 @@ class Workers(unittest.TestCase):
             self.assertEqual(len(out), 1, lead_state)  # no run-use, and the coordinator's other worker is not ours
             self.assertIn("worker d_mine", out[0])
             self.assertIn("worker-stop", out[0])
+
+
+class Restarted(unittest.TestCase):
+    """Orca marks the Dispatches whose terminals a restart took abandoned; they are what the check must bring back."""
+
+    def row(self, d, status, state="retained", handle="term_dead", **extra):
+        return {"dispatchId": d, "taskId": "t_" + d, "terminalState": state, "dispatchStatus": status,
+                "agentTerminalHandle": handle, "resource": {"worktreeId": "repo::/work/My Card"},
+                "projection": {"provider": {"id": "claude", "model": "opus"}}, **extra}
+
+    def lines(self, *workers):
+        return run("lead", "acme", "run_1", orca=Orca(run="run_1", workers=workers), procs=wait_proc(200, "orch wait acme"))
+
+    def test_an_abandoned_worker_with_a_dead_terminal_is_a_recovery_target(self):
+        for state in ("active", "retained", "reclaimable"):
+            out = does(self.lines(self.row("d1", "abandoned", state)))
+            self.assertEqual(len(out), 1, state)
+            self.assertIn("worker d1", out[0])
+            self.assertIn("abandoned", out[0])
+            self.assertIn("orca terminal create --worktree 'path:/work/My Card'", out[0])
+            self.assertIn("claude --resume <session-id> --model opus", out[0])
+            self.assertIn("worker-start --spec-file <resume instruction> --worktree 'path:/work/My Card' --terminal", out[0])
+            self.assertNotIn("worker-stop", out[0])  # it is already settled: no stop, and no retry-of
+
+    def test_an_abandoned_worker_with_no_terminal_on_record_is_one_too(self):
+        out = does(self.lines(self.row("d1", "abandoned", handle=None)))
+        self.assertEqual(len(out), 1)
+        self.assertIn("worker d1", out[0])
+
+    def test_an_abandoned_worker_whose_terminal_is_live_is_left_alone(self):
+        orca = Orca(live=(ME, "term_ok"), run="run_1", workers=[self.row("d1", "abandoned", handle="term_ok")])
+        out = run("lead", "acme", "run_1", orca=orca, procs=wait_proc(200, "orch wait acme"))
+        self.assertEqual(does(out), [])
+
+    def test_settled_workers_are_not_woken_and_are_told_apart(self):
+        lines = self.lines(self.row("d1", "completed", "active"), self.row("d2", "failed", "retained"),
+                           self.row("d3", "completed", "released"))
+        self.assertEqual(does(lines), [])
+        infos = [t for k, t in lines if k == "info" and "finished" in t]
+        self.assertEqual(len(infos), 1)
+        self.assertIn("2 workers", infos[0])  # the released one is gone for good and is not counted
+
+    def test_an_abandoned_worker_is_not_an_ok_line(self):
+        lines = self.lines(self.row("d1", "abandoned"))
+        self.assertFalse([t for k, t in lines if k == "ok" and "has a live terminal" in t])
+
+
+class LostDispatch(unittest.TestCase):
+    def program(self, **cfg):
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        p = pathlib.Path(d.name) / "acme"
+        p.mkdir()
+        (p / "program.json").write_text(json.dumps({"slug": "acme", "run": "run_parent", **cfg}))
+        orig, reboot.PROGRAMS = reboot.PROGRAMS, pathlib.Path(d.name)
+        self.addCleanup(setattr, reboot, "PROGRAMS", orig)
+
+    def test_a_dispatched_lead_that_lost_its_dispatch_is_not_sent_to_its_parents_run(self):
+        self.program(lead_dispatch="ctx_gone")
+        out = does(run("lead", "acme", procs=wait_proc(200, "orch wait acme")))
+        self.assertEqual(len(out), 1)
+        self.assertNotIn("run-use", out[0])
+        self.assertIn("orca orchestration run-create --objective", out[0])
+        self.assertIn("orch set acme run <the new Run>", out[0])
+        self.assertIn("ctx_gone", out[0])
+
+    def test_a_lead_that_was_never_dispatched_still_gets_run_use(self):
+        self.program()
+        out = does(run("lead", "acme", procs=wait_proc(200, "orch wait acme")))
+        self.assertIn("run-use --id run_parent", out[0])
+
+    def test_after_the_program_moved_the_lead_is_bound_and_clean(self):
+        self.program(run="run_own")
+        lines = run("lead", "acme", orca=Orca(run="run_own"), procs=wait_proc(200, "orch wait acme"))
+        self.assertEqual(does(lines), [])
 
 
 class Queue(unittest.TestCase):

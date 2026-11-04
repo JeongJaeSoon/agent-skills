@@ -28,7 +28,9 @@ GONE = re.compile(r"stale|not_found|not found", re.I)
 INBOX = re.compile(r"(?:\borch|prog\.py)\s+(?:wait\b|inbox\b.*--wait\b)")
 WAIT_SLUG = re.compile(r"(?:\borch|prog\.py)\s+wait\s+([^\s'\"]+)")
 CARDS = re.compile(r"(?:\borch|prog\.py)\s+watch-cards\b(?!.*--once)")
-ACTIVE_QUEUE = ("waiting", "retrying", "failed", "gave_up")
+FINISHED = ("completed", "failed")  # dispatch statuses whose worker reported; "abandoned" is not one, a restart makes it
+RESTART_LOST = ("abandoned", "interrupted")  # what Orca calls a Dispatch whose terminal a restart took
+ACTIVE_QUEUE =("waiting", "retrying", "failed", "gave_up")
 
 
 class OrcaError(Exception):
@@ -99,15 +101,15 @@ def waits(table, root):
     return found["inbox"], found["cards"]
 
 
-def program_run(slug):
+def program_cfg(slug):
     for path in PROGRAMS.glob("*/program.json"):
         try:
             cfg = json.loads(path.read_text())
         except (OSError, ValueError):
             continue
         if cfg.get("slug") == slug:
-            return cfg.get("run")
-    return None
+            return cfg
+    return {}
 
 
 def worktree_root(cwd):
@@ -132,8 +134,9 @@ def check_handle(handle, call, root):
                    "so the variable is renewed")], None, None
 
 
-def check_run(role, run, handle, call):
-    """(lines, the Run whose workers to check or None, this terminal's own Dispatch when it is a dispatched lead)."""
+def check_run(role, run, handle, call, lead_dispatch=None, slug=None):
+    """(lines, the Run whose workers to check or None, this terminal's own Dispatch when it is a dispatched lead).
+    lead_dispatch: the Dispatch program.json says this lead worked under."""
     if not role or not handle:
         return [], None, None
     bound_id = (orca_settings.run_current(call, "--from", handle) or {}).get("id")
@@ -144,6 +147,14 @@ def check_run(role, run, handle, call):
         if mine:  # a lead started as a dispatched worker: Orca refuses it a binding to the Run it works for
             return [("ok", f"dispatched lead ({mine.get('dispatchId')} on Run {mine.get('runId')}): binds no Run")], \
                 mine.get("runId"), mine.get("dispatchId")
+    if not bound_id and role == "lead" and lead_dispatch:
+        # The restart cost it the Dispatch, and the program's Run is its coordinator's: run-use there would take that
+        # Run's binding from the coordinator, so the lead coordinates a Run of its own.
+        whose = f"the Run {run}" if run else "the Run it worked on"
+        return [("do", f"this dispatched lead lost its Dispatch ({lead_dispatch}) and {whose} is its coordinator's, "
+                       "so do not bind this terminal to it: `orca orchestration run-create --objective <the program's goal>`, then "
+                       f"`orch set {slug or '<slug>'} run <the new Run>` (it also drops lead_dispatch), and run this "
+                       "check again")], None, None
     target = run or "<the Run your briefs report to>"
     why = f"bound to Run {bound_id}, not {run}" if bound_id else "this terminal is bound to no Run"
     # No worker check against a Run this terminal should not hold: run the check again once bound.
@@ -194,6 +205,20 @@ def check_waits(role, slug, table, pid):
     return out
 
 
+def resume_line(w, d, task, handle):
+    """The recovery of an abandoned worker (reboot SKILL.md "Resume a worker"): its Claude session resumed in a new
+    terminal of its own worktree, then a new Dispatch attached to that terminal."""
+    card = (w.get("resource") or {}).get("worktreeId") or ""
+    path = card.split("::", 1)[-1] if card else "<its worktree>"
+    sel = shlex.quote(f"path:{path}") if card else "path:<its worktree>"
+    model = ((w.get("projection") or {}).get("provider") or {}).get("model") or "<alias>"
+    gone = f"its terminal {handle} is gone" if handle else "it has no terminal"
+    return (f"worker {d} (task {task}) was abandoned and {gone}: resume it, `orca terminal create --worktree {sel} "
+            f"--command \"claude --resume <session-id> --model {model}\"`, then `orca orchestration worker-start "
+            f"--spec-file <resume instruction> --worktree {sel} --terminal <the new handle>` "
+            "(reboot SKILL.md \"Resume a worker\"; if you ended it on purpose, leave it)")
+
+
 def check_workers(run, call, lead_dispatch=None, me=None):
     if not run:
         return []
@@ -201,9 +226,17 @@ def check_workers(run, call, lead_dispatch=None, me=None):
     workers = orca_settings.lead_scope(orca_settings.all_workers(call, "--run", run), lead_dispatch)
     by_task = {w.get("taskId"): w for w in workers if w.get("taskId")}
     own_task = next((w.get("taskId") for w in workers if w.get("dispatchId") == lead_dispatch), None)
+    finished = 0
     for w in workers:
         h = orca_settings.worker_terminal(w)
-        if w.get("terminalState") != "active" or (h and h == me):
+        state, status = w.get("terminalState"), w.get("dispatchStatus")
+        if state == "released" or (h and h == me):
+            continue
+        if status in FINISHED:  # it reported: a dead terminal is its normal end, not something to wake
+            finished += 1
+            continue
+        abandoned = status in RESTART_LOST
+        if state != "active" and not abandoned:
             continue
         if h:
             try:
@@ -214,6 +247,9 @@ def check_workers(run, call, lead_dispatch=None, me=None):
                     raise
         d = w.get("dispatchId") or "<dispatch>"
         task = w.get("taskId") or "<task>"
+        if abandoned:  # Orca settled it when its terminal went: there is nothing to stop or retry, only a session to resume
+            out.append(("do", resume_line(w, d, task, h)))
+            continue
         if not h:  # a worker can run without a terminal, so this alone is no reason to restart it
             out.append(("info", f"worker {d} (task {task}) has no terminal on record: "
                                 f"`{shlex.join(['orca', 'orchestration', 'worker-show', '--dispatch', d])}` shows "
@@ -234,6 +270,9 @@ def check_workers(run, call, lead_dispatch=None, me=None):
         out.append(("do", f"worker {d} (task {task}) lost its terminal {h}: restart it on its card, "
                           f"`{shlex.join(['orca', 'orchestration', 'worker-stop', '--dispatch', d])}`, then "
                           f"`{shlex.join(argv)}`{note}"))
+    if finished:
+        out.append(("info", f"{finished} worker{'s' if finished != 1 else ''} finished (completed or failed) and "
+                            "are not restarted, whatever became of their terminals"))
     if not any(k == "do" for k, _ in out):
         out.append(("ok", f"every active worker with a terminal on record{' under ' + lead_dispatch if lead_dispatch else ''} of Run {run} "
                           "has a live terminal"))
@@ -268,7 +307,8 @@ def check_queue(root, read=None):
 def run_checks(role, slug, run, handle, cwd, call=orca, table=None, pid=None, queue=None):
     root = worktree_root(cwd)
     lines, terminal, live = check_handle(handle, call, root)
-    run_lines, bound, lead_dispatch = check_run(role, run or (program_run(slug) if slug else None), live, call)
+    cfg = program_cfg(slug) if slug else {}
+    run_lines, bound, lead_dispatch = check_run(role, run or cfg.get("run"), live, call, cfg.get("lead_dispatch"), slug)
     lines += run_lines
     lines += check_tab(role, terminal, live)
     lines += check_waits(role, slug, ps_table() if table is None else table, os.getpid() if pid is None else pid)
