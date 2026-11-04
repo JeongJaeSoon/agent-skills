@@ -34,8 +34,11 @@ registered in $AGENT_SKILLS_STATE/transcripts/<session_id>.json with the span it
 `ROLE: none` clears it), so standing reflect reads the owner's corrections from that span only and never globs
 ~/.claude/projects. Off, nothing is written. The span lives apart from the roles file so the role logic above stays
 the same whether or not the feature is on.
+
+At SessionStart an interactive session in an Orca terminal records terminal -> session (roles.record_terminal), which
+`skills-sync wake-target` reads to name the session behind a handle.
 """
-import datetime, json, os, pathlib, re, sys
+import datetime, json, os, pathlib, re, sys, time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import roles  # noqa: E402  the role rules above live there, shared with every hook and script
@@ -220,6 +223,12 @@ def main():
         if text and entry and (warn := stage_warning(entry)):
             text += " " + warn
     elif kind == "SessionStart" and event.get("source") in ("startup", "resume", "compact", "fork"):
+        # A `claude -p` run from a card's shell inherits the handle and is not the terminal's session.
+        if os.environ.get("CLAUDE_CODE_ENTRYPOINT") == "cli":
+            try:
+                roles.record_terminal(os.environ.get("ORCA_TERMINAL_HANDLE"), session, event.get("cwd"), time.time())
+            except OSError:
+                pass
         record = declared(session)
         entry = resolve(event, record)
         try:
