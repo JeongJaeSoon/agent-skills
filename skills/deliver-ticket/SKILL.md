@@ -242,7 +242,7 @@ Then land it. How depends on where you run:
   command (`orch land`), which re-checks readiness at the current head, waits for your
   dependencies, and puts migrations, CI and other shared files in the exclusive lane; other PRs
   land in parallel, behind or not.
-  Never `gh pr merge` or merge-async by hand there: that skips the order and the review gate.
+  Never `gh pr merge`, `gh stack merge` or merge-async by hand there: that skips the order and the review gate.
   Under human-gate it refuses; report READY and stop. A human review that will outlast this
   session does not hold the session open either: say in the brief's REPORT that the PR waits on a
   review, and the lead's wake lands it once it is ready. After landing, the brief's REPORT is the
@@ -269,7 +269,7 @@ Then land it. How depends on where you run:
   hand once it is ready.
 
 ```bash
-gh pr merge <n> --squash --delete-branch      # the merge method the repo allows; not for a stack, which lands with merge-async (§5)
+gh pr merge <n> --squash --delete-branch      # the merge method the repo allows; not for a stack, which lands with `gh stack merge` (§5)
 gh pr view <n> --json state,mergeCommit       # confirm MERGED and record the commit
 ```
 

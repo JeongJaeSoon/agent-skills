@@ -67,7 +67,7 @@ Two kinds of edge, declared in two places. Pick per edge:
 | B needs A… | Edge | Where |
 |---|---|---|
 | **before B can start**: A's result on main, A's report, an API A creates that B cannot stub | start-after | Orca task deps. Orca keeps B out of `task-list --ready` until A's task completes |
-| **only to land first**: B can be written on top of A's branch now, or B changes a path A changes (`orch overlap`) | land-after | A GitHub stack (B on A's branch) plus `orch dep <slug> --ticket B --after A`. No Orca dep: it would hold B back until A had landed, and the chain could never ride one merge |
+| **only to land first**: B can be written on top of A's branch now, or B changes a path A changes (`orch overlap`) | land-after | A GitHub stack (B on A's branch) plus `orch dep <slug> --ticket B --after A`; `land` checks the two match ("Dependent PRs are a stack"). No Orca dep: it would hold B back until A had landed, and the chain could never ride one merge |
 
 Start-after edges in Orca:
 
@@ -79,15 +79,29 @@ Start-after edges in Orca:
 
 ## GitHub stacks: several PRs, one merge
 
-When PRs must land in order (a dependency chain, consecutive migrations, layers of one feature), make them a GitHub stack. The top layer's CI tests the whole chain, and `orch land <slug> --pr <top>` merges every layer in one `merge-async` call. That holds only where CI runs on pull requests into any base. Where the workflow runs only on PRs into the default branch (`on: pull_request: branches: [main]`), an upper layer never gets CI, so the stack would wait on its top forever and a READY on that layer means READY without CI. There, skip the stack: base each PR on the branch below and order them with `orch dep` only. Before landing the lower one, `gh pr edit <next> --base <default branch>`: a squash merge that deletes the lower branch closes a PR still based on it, a closed PR whose base is gone cannot be reopened, and many repos delete merged branches whatever `orch land` passes. Until the lower one lands, the next PR's diff also shows the lower one's changes. Once it lands, `gh pr update-branch <next>` (a retarget alone starts no CI); the next PR lands on that run. `land` on a PR still based on a lower tracked PR's branch answers exit 3 with these steps instead of squashing it into that branch; `--onto-lower` folds it into the lower branch on purpose (top-down, when a retarget is not available). `orch dep` is per ticket: the layers of one ticket's split get no dep (it would wait on itself, and `dep` refuses it); they land bottom-up in this order.
+When PRs must land in order (a dependency chain, consecutive migrations, layers of one feature), make them a GitHub stack. The top layer's CI tests the whole chain, and `orch land <slug> --pr <top>` merges every layer in one `merge-async` request. A workflow limited to PRs into the default branch (`on: pull_request: branches: [main]`) runs on every layer once they are a stack ([about stacked PRs](https://docs.github.com/en/pull-requests/get-started/about-stacked-prs): no run on the upper PR before linking, a run after, with its base still the lower branch). A PR merely based on the lower branch gets none of this, so `land` on a PR still based on a lower tracked PR's branch answers exit 3 with the `gh stack link` line instead of squashing it into that branch; `--onto-lower` folds it into the lower branch on purpose (top-down). `orch dep` is per ticket: the layers of one ticket's split get no dep (it would wait on itself, and `dep` refuses it); they land bottom-up in this order.
 
 - Create it with `gh stack link <bottom> <top> --base main`, or `gh stack init` / `add` / `submit`. Confirm it with `gh api repos/<owner>/<repo>/pulls/<top> --jq .stack` (`gh pr view` does not show stacks, and `gh stack view` needs a locally tracked stack).
-- Bring a stack onto the latest base bottom-up: `gh pr update-branch` merges a PR's own base into it, so on the top it pulls only the layer below. `land` prints the sequence.
+- A stack merges only as a linear chain ([merging stacked PRs](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/merging-stacked-pull-requests)). `gh pr update-branch` on a lower layer alone, with or without `--rebase`, makes the merge fail with `Stack needs to be rebased`; `gh pr update-branch <n> --rebase` on every layer from the bottom clears it, even with a merge commit already in the chain. `land` prints the sequence. A base that moved is no reason to do this: a stack behind its base still merges, so rebase when the repository requires it or a conflict does.
 - A lower layer is `waiting` ("lands with its stack from #top") while the top is not blocked. The top is `ready` only when every open layer below it is ready at its own head. A blocked top releases the lower layers to land alone.
 - Main CI runs once, on the top's merge commit. Record `main_green` or `main_red` for that sha only; the lower commits have no run of their own.
 - The layers of one chain count once against the concurrency cap, since they land as one merge. Start the whole chain together, even in the pilot.
 - On a repo whose ruleset dismisses stale approvals, merging a lower layer on its own dismisses the approval of every PR whose branch contains it: the retarget and the changed merge base both count, even with the head unchanged. Where a human approves each layer, map containment first (`git merge-base --is-ancestor`) and merge each chain from its top, which marks the contained layers merged. When a lower layer must merge alone, say in the first review request that the layers above will need approval again, and ask for those re-approvals once, bundled.
-- Stacked PRs refuse `gh pr merge`. `land` uses `merge-async` and polls until every layer is MERGED. If any layer is exclusive, the stack takes the exclusive lane as one unit.
+- `land` merges with [`merge-async`](https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request-asynchronously), the only API the docs give for a stack: the synchronous endpoint "does not support stacked pull requests", and `gh pr merge` refuses every stacked PR, the last open layer too. It polls the request's uuid, not the PR. `failed` ends the land with GitHub's message. `enqueued` is the normal end on a merge queue branch and is not a merge: exit 2, and the `land` after the queue has merged it records every layer. If any layer is exclusive, the stack takes the exclusive lane as one unit.
+- When a lower layer merges alone, GitHub moves the next layer onto the base and rebases it (`automatic_base_change_succeeded` and `head_ref_force_pushed` in its timeline). Its head changes, so CI runs again. Do it by hand only when neither event appears: [a report](https://github.com/github/gh-stack/discussions/463) saw no rebase through `merge-async`.
+- Outside `land` the command is `gh stack merge <top> --squash --yes` ([reference](https://docs.github.com/en/pull-requests/reference/stacked-prs-cli-commands)), and never in a program.
+
+### Dependent PRs are a stack
+
+`land` and `land-check` compare the land-after edges (`orch dep`, Orca deps) with the real stacks. For two open PRs joined by an edge, on either PR's land:
+
+| Found | warn (default) | deny | off |
+|---|---|---|---|
+| Not in one stack | a `warning:` line with the `gh stack link` command, the land goes on | exit 3 (`land-check`: HOLD) | nothing |
+| In one stack, upside down: neither could ever land | exit 3 | exit 3 | exit 3 |
+| The stack listing cannot be read | one warning line, the land goes on | same | same |
+
+The level is `orchestrate.stack_dependent` in `~/.claude/agent-skills.json`; the owner promotes it (`skills-config`). `--class main-fix` is never held by it. The `hooks/stack_gate.py` hook reads the same key at `gh pr create`, where it reads the brief's `Lands after` and the branch's history and no stack exists yet to check. Two PRs that change one path and need nothing from each other are not an edge until the lead makes them one: `OVERLAP` lines stay what they are, a prompt to decide.
 
 ## Feature integration branches
 
@@ -152,4 +166,4 @@ Merging inside `orch land` is what lets a worker land without a per-merge approv
 
 Everything else goes to the normal permission flow: the user's own deny and ask rules, then auto mode's classifier. A skill's `allowed-tools` cannot replace the hook, because it lasts only for the turn that loads the skill and a worker runs LAND from its brief hours later.
 
-A worker that calls `gh pr merge` or `gh api … merge-async` by hand is merging outside the gate. The classifier rightly refuses that as "Merge Without Review": use `land`.
+A worker that calls `gh pr merge`, `gh stack merge` or `gh api … merge-async` by hand is merging outside the gate. The classifier rightly refuses that as "Merge Without Review": use `land`.
