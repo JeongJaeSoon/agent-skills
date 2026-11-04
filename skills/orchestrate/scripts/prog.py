@@ -133,9 +133,9 @@ Usage: orch <command> <slug> [options]
                                      fields given and stamps reported_at; an id a/b hangs off a. A row without
                                      --parent is a lead (needs --repo); under a parent it is a task unless
                                      --kind phase. PR state is joined from the collector's prs.json at render.
-                                     --program is the lead's project (epic, program): leads sharing a repository
-                                     get one table each only when each has one; lead add and set warn until
-                                     they do, and the report heads the rest (프로젝트 미지정)
+                                     --program is the lead's project (epic, program): a program report (--scope)
+                                     covers only those; lead add and set warn while a lead beside another in its
+                                     repository has none
                                      A waiting row waits on a person: the PR's requested reviewers say who, else
                                      --owner (오너, owner or the gh login is the owner; another name is someone
                                      else); with neither the report marks it 확인 필요. --status owner is a row
