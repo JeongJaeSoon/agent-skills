@@ -40,8 +40,8 @@ assert not check(final=True, patrol=True)[0] and not check(final=True, head="c" 
 assert check(handles=("t1", "s1", "gone"), final=True)[0], "a handle already closed is fine"
 
 # observe(): each reader that fails is None, which check() turns into a keep.
-saved = reap.patrol_read, reap.run, reap.orca_json, cardguard._orch, cardguard.parked
-reap.patrol_read = lambda now=None, activity=False: set()
+saved = reap.patrol_states, reap.run, reap.orca_json, cardguard._orch, cardguard.parked
+reap.patrol_states = lambda now=None, activity=False: {}
 reap.run = lambda cmd, **k: H + "\n"
 reap.orca_json = lambda *a: {"terminals": OK["terminals"]}
 prog = types.SimpleNamespace(agent_waits=lambda strict=False: {"t1": None}, read_screen=lambda h: ["❯ "])
@@ -73,11 +73,11 @@ reap.orca_json = lambda *a: {"terminals": OK["terminals"]}
 reap.run = boom
 assert "HEAD 를 읽지 못함" in cardguard.guard("/w/x", H, ["t1", "s1"])[1]
 reap.run = lambda cmd, **k: H + "\n"
-reap.patrol_read = lambda now=None, activity=False: {"/w/x"}
-assert "순찰 판정:" in cardguard.guard("/w/x", H, ["t1", "s1"])[1]
-reap.patrol_read = lambda now=None, activity=False: None
+reap.patrol_states = lambda now=None, activity=False: {reap.real("/w/x"): "parked"}
+assert "순찰 판정:" in cardguard.guard("/w/x", H, ["t1", "s1"])[1] and "parked" in cardguard.guard("/w/x", H, ["t1", "s1"])[1]
+reap.patrol_states = lambda now=None, activity=False: None
 assert "순찰 판정 파일을 읽지 못함" in cardguard.guard("/w/x", H, ["t1", "s1"])[1]
-reap.patrol_read, reap.run, reap.orca_json, cardguard._orch, cardguard.parked = saved
+reap.patrol_states, reap.run, reap.orca_json, cardguard._orch, cardguard.parked = saved
 
 # reap.patrol_read: no file or a stale one is no protection; one that exists and cannot be read is None.
 reap.STATE.mkdir(parents=True, exist_ok=True)
@@ -93,6 +93,8 @@ vf.write_text(json.dumps({"t": time.time(), "cards": {"/w/x": "idle"},
                           "activity": {"/w/p": {"state": "parked"}, "/w/u": {"state": "unknown"}, "/w/i": {"state": "idle"}}}))
 assert reap.patrol_read() == set(), "activity is read only by the guard before a close"
 assert reap.patrol_read(activity=True) == {reap.real("/w/p"), reap.real("/w/u")}
+assert reap.patrol_states(activity=True) == {reap.real("/w/p"): "parked", reap.real("/w/u"): "unknown"}
+assert "parked" in reap.patrol_hold("parked") and "Run 워커" in reap.patrol_hold("run") and "Run 워커" in reap.patrol_hold(True)
 for bad in ({"/w/x": "parked"}, {"/w/x": {}}, ["parked"], False, 0, "", []):
     vf.write_text(json.dumps({"t": time.time(), "cards": {}, "activity": bad}))
     assert reap.patrol_read() == set() and reap.patrol_read(activity=True) is None, bad

@@ -22,7 +22,7 @@ def row(pid, cmd, ppid=1):
 
 
 def machine(rows=None, cwd_of=None, quiet=3 * 3600, prs=None, **kw):
-    return {"now": NOW, "st": cards.settings({}), "rows": rows or {}, "cwd_of": cwd_of or {}, "live": {}, "patrol": set(), "workers_unread": False,
+    return {"now": NOW, "st": cards.settings({}), "rows": rows or {}, "cwd_of": cwd_of or {}, "live": {}, "patrol": {}, "workers_unread": False,
             "runners": set(), "self": None, "projects": pathlib.Path(tmp) / "projects",
             "pr_state": (prs or {}).get, "quiet": lambda p: quiet, **kw}
 
@@ -198,23 +198,85 @@ assert verdict(machine(prs=MERGED), branch_prs=[PR], terminals=[term("a1", True,
 # judged it working, waiting or a Run worker, so it stays. reap.patrol_working feeds m["patrol"].
 parked = lambda: dict(branch_prs=[PR], terminals=[term("a1", True, 2 * 3600)])
 assert verdict(machine(prs=MERGED), **parked())[0] == cards.REMOVE
-v = verdict(machine(prs=MERGED, patrol={CARD}), **parked())
-assert v[0] == cards.KEEP and "orch patrol" in v[1], v
+v = verdict(machine(prs=MERGED, patrol={CARD: "run"}), **parked())
+assert v[0] == cards.KEEP and "orch patrol" in v[1] and "Run 워커" in v[1], v
 # read_machine takes m["patrol"] from patrol-verdicts.json itself, once per read.
 stubs = {n: getattr(reap, n) for n in ("orca_workers", "processes", "cwds", "orca_json", "pr_reader", "transcript_quiet",
-                                        "STATE", "patrol_working")}
+                                        "STATE", "patrol_states")}
 reap.orca_workers, reap.processes, reap.cwds = lambda: [], lambda: {}, lambda: {}
 reap.orca_json, reap.pr_reader, reap.transcript_quiet = lambda *a: {"automations": []}, lambda: {}.get, lambda *a, **k: None
 reap.STATE = pathlib.Path(tmp) / "state"
 reap.STATE.mkdir()
 (reap.STATE / "patrol-verdicts.json").write_text(json.dumps({"t": NOW, "cards": {CARD: "waiting"}}))
 reads = []
-reap.patrol_working = lambda now=None: reads.append(now) or stubs["patrol_working"](now)
+reap.patrol_states = lambda now=None, activity=False: reads.append((now, activity)) or stubs["patrol_states"](now, activity)
 m = cards.read_machine({}, now=NOW)
-assert m["patrol"] == {CARD} and reads == [NOW], (m["patrol"], reads)
+assert m["patrol"] == {CARD: "waiting"} and reads == [(NOW, True)], (m["patrol"], reads)
 assert cards.judge(cards.gather({"path": CARD}, {**m, "pr_state": MERGED.get}, fake(**parked())), IDLE)[0] == cards.KEEP
 for n, f in stubs.items():
     setattr(reap, n, f)
+
+# F5: scan and apply read the one patrol file the one way. A finished card with no terminal that patrol's v2 `activity`
+# keeps (parked, unknown) is a keep in the scan too, with patrol's own word for it, so apply never meets a refusal the
+# plan did not show. Shaped like the owner's 17: PR merged, nothing running, dispatch settled and released.
+import cardguard  # noqa: E402
+scanned = lambda m: {**m, "pr_state": MERGED.get, "quiet": lambda p: 3 * 3600}
+stubs = {n: getattr(reap, n) for n in ("orca_workers", "processes", "cwds", "orca_json", "pr_reader", "transcript_quiet",
+                                        "STATE")}
+reap.orca_workers, reap.processes, reap.cwds = lambda: [], lambda: {}, lambda: {}
+reap.orca_json, reap.pr_reader, reap.transcript_quiet = lambda *a: {"automations": []}, lambda: {}.get, lambda *a, **k: None
+reap.STATE = pathlib.Path(tmp) / "state5"
+reap.STATE.mkdir()
+saved_workers = cardguard.worker_pages
+cardguard.worker_pages = lambda *a, **k: []
+for state in ("parked", "unknown"):
+    (reap.STATE / "patrol-verdicts.json").write_text(json.dumps(
+        {"t": NOW, "cards": {}, "activity": {CARD: {"state": state, "why": "x"}}}))
+    m = cards.read_machine({}, now=NOW)
+    scan_v = cards.judge(cards.gather({"path": CARD}, scanned(m), fake(branch_prs=[PR])), IDLE)
+    guard_ok, guard_why = cardguard.check({"patrol": reap.patrol_states(NOW, activity=True).get(CARD), "head": HEAD,
+                                           "terminals": [], "ino": None}, HEAD, set())
+    assert not guard_ok, "the guard keeps this card"
+    assert scan_v[0] == cards.KEEP, f"scan said {scan_v[0]} but apply's guard refuses: {guard_why}"
+    assert state in scan_v[1] and scan_v[1] == "보호: " + guard_why, (scan_v, guard_why)
+# A patrol file that cannot be read keeps every card in the scan, as it does in the guard.
+(reap.STATE / "patrol-verdicts.json").write_text("{")
+m = cards.read_machine({}, now=NOW)
+v = cards.judge(cards.gather({"path": CARD}, scanned(m), fake(branch_prs=[PR])), IDLE)
+assert v[0] == cards.KEEP and "읽지 못함" in v[1], v
+# No file, or a round with the card in neither list: the card goes, and the guard agrees.
+(reap.STATE / "patrol-verdicts.json").write_text(json.dumps({"t": NOW, "cards": {}, "activity": {}}))
+m = cards.read_machine({}, now=NOW)
+assert cards.judge(cards.gather({"path": CARD}, scanned(m), fake(branch_prs=[PR])), IDLE)[0] == cards.REMOVE
+assert cardguard.check({"patrol": reap.patrol_states(NOW, activity=True).get(CARD, False), "head": HEAD, "terminals": [],
+                        "ino": None}, HEAD, set())[0]
+# A settled dispatch whose terminal nobody released is printed apart, with the Run that owns it and the command; an
+# in_progress one still keeps the card and names its Run.
+rows = [{"dispatchId": "ctx_a", "runId": "run_a", "terminalState": "reclaimable", "resource": {"worktreeId": "w::" + CARD},
+         "projection": {"outcome": "succeeded"}},
+        # No leak: retained (context-only or taken over), no resource left, another host's, a retained reason.
+        {"dispatchId": "ctx_r", "runId": "run_a", "terminalState": "retained", "resource": {"worktreeId": "w::" + CARD},
+         "projection": {"outcome": "succeeded"}},
+        {"dispatchId": "ctx_n", "runId": "run_a", "terminalState": "release_unknown", "resource": None,
+         "projection": {"outcome": "failed", "workspace": {"id": "w::" + CARD}}},
+        {"dispatchId": "ctx_h", "runId": "run_a", "terminalState": "reclaimable", "resource": {"worktreeId": "w::" + CARD},
+         "projection": {"outcome": "succeeded", "host": {"kind": "remote"}}},
+        {"dispatchId": "ctx_k", "runId": "run_a", "terminalState": "reclaimable",
+         "resource": {"worktreeId": "w::" + CARD, "retainedReason": "user"}, "projection": {"outcome": "succeeded"}},
+        {"dispatchId": "ctx_b", "runId": "run_b", "terminalState": "released", "resource": {"worktreeId": "w::" + CARD},
+         "projection": {"outcome": "succeeded"}},
+        {"dispatchId": "ctx_c", "runId": "run_c", "terminalState": "retained", "resource": {"worktreeId": "w::/other"},
+         "projection": {"outcome": "in_progress"}}]
+assert reap.unreleased_settled(rows) == {CARD: [{"dispatch": "ctx_a", "run": "run_a", "outcome": "succeeded"}]}
+assert "run_c" in reap.worker_worktrees(rows)[0][reap.real("/other")]
+f = cards.gather({"path": CARD}, {**machine(prs=MERGED), "unreleased": reap.unreleased_settled(rows)}, fake(branch_prs=[PR]))
+assert f["release"] == [{"dispatch": "ctx_a", "run": "run_a", "outcome": "succeeded"}]
+out = cards.release_lines([{"name": "c1", "release": f["release"]}])
+assert "c1" in out[0] and "run_a" in out[0] and "orca orchestration worker-release --dispatch ctx_a" in out[0], out
+assert cards.release_lines([{"name": "c1", "release": []}]) == []
+for n, fn in stubs.items():
+    setattr(reap, n, fn)
+cardguard.worker_pages = saved_workers
 
 # Protected cards are never read further: the main checkout, a pinned card, a lead by name, this session's own card,
 # an automation's runner, a live worker turn.
@@ -251,7 +313,8 @@ reap.run = lambda cmd, **kw: closed.append(cmd) or "{}"
 item = {"path": CARD, "verdict": cards.CLOSE, "head": HEAD, "close": ["t1"]}
 assert cards.act(item, {}).startswith("터미널 1개 닫음") and closed[0][:4] == ["orca", "terminal", "close", "--terminal"]
 closed.clear()
-assert cards.act({**item, "head": PRHEAD}, {}).startswith("건너뜀") and not closed
+got = cards.act({**item, "head": PRHEAD}, {})
+assert got.startswith("건너뜀") and "HEAD aaaaaaaa→bbbbbbbb" not in got and "HEAD bbbbbbbb→aaaaaaaa" in got and not closed, got
 assert cards.act({**item, "verdict": cards.REMOVE}, {}).startswith("건너뜀") and not closed
 # F4: a re-read that cannot see what scan needs keeps the card, before any terminal closes.
 cards.cards_listing = lambda repo_list=(): None
@@ -300,6 +363,24 @@ closed.clear()
 assert cards.act(item, {}).startswith("터미널 1개 닫음") and closed
 cardguard.observe = saved_observe
 cards.read_machine, cards.cards_listing, cards.gather, reap.run = saved
+
+# apply's exit code follows reap's: a pre-act check that could not run leaves the card and the round ends 1 (after the
+# others ran); a guard that decides to leave a card is a normal 0.
+plan = pathlib.Path(tmp) / "plan.json"
+plan.write_text(json.dumps({"items": [{"name": "c1", "path": CARD, "verdict": cards.REMOVE, "head": HEAD, "close": []}]}))
+saved_keep, saved_own, saved_act, saved_argv = guard.keep, guard.ownership, cards.act, sys.argv
+guard.ownership = lambda: None
+cards.act = lambda *a, **k: "acted"
+sys.argv = ["cards.py", "apply", "--plan", str(plan)]
+for why, code in (("검사를 마치지 못함(PermissionError: x)", 1), ("보호 목록의 경로", 0), (None, 0)):
+    guard.keep = lambda *a, w=why, **k: w
+    try:
+        cards.main(sys.argv)
+    except SystemExit as e:
+        assert e.code == code, (why, e.code)
+    else:
+        raise AssertionError("apply must exit")
+guard.keep, guard.ownership, cards.act, sys.argv = saved_keep, saved_own, saved_act, saved_argv
 
 # janitor integration: card is the scheduled kind, the old card kinds are not.
 assert "card" in reap.SCHEDULED and "orca-worktree" not in reap.SCHEDULED and "done-card" not in reap.SCHEDULED

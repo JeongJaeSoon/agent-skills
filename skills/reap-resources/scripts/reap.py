@@ -552,30 +552,48 @@ def patrol_working(now=None):
 PATROL_KEEP_ACTIVITY = ("parked", "unknown")  # v2 `activity`: a session that wakes itself, or one patrol could not tell
 
 
-def patrol_read(now=None, activity=False):
-    """patrol_working, but None when the verdicts file exists and cannot be read: a guard keeps the card then. No file,
-    or one over an hour old, is an empty set. activity adds the cards the round's `activity` keeps (PATROL_KEEP_ACTIVITY),
-    which only the guard right before a close reads."""
+def patrol_states(now=None, activity=False):
+    """{card path: what patrol judged}, the cards PATROL_KEEP keeps; None when the verdicts file exists and cannot be
+    read: a guard keeps the card then. No file, or one over an hour old, is {}. activity adds the cards the round's
+    `activity` keeps (PATROL_KEEP_ACTIVITY). cards.py's scan and the guard right before a close both read it with
+    activity, so a plan never holds a card that the close then refuses."""
     try:
         v = json.loads((STATE / "patrol-verdicts.json").read_text())
     except FileNotFoundError:
-        return set()
+        return {}
     except (OSError, ValueError):
         return None
     try:
         if (now or time.time()) - float(v.get("t") or 0) > PATROL_FRESH_S:
-            return set()
-        kept = {real(p) for p, x in (v.get("cards") or {}).items() if x in PATROL_KEEP}
+            return {}
+        kept = {real(p): x for p, x in (v.get("cards") or {}).items() if x in PATROL_KEEP}
         if activity:
             act = v.get("activity")
             act = {} if act is None else act  # a file from before v2 has none
             if not isinstance(act, dict) or not all(isinstance(x, dict) and isinstance(x.get("state"), str)
                                                     for x in act.values()):
                 return None  # an activity row that cannot be read is no proof the card may go
-            kept |= {real(p) for p, x in act.items() if x["state"] in PATROL_KEEP_ACTIVITY}
+            for p, x in act.items():
+                if x["state"] in PATROL_KEEP_ACTIVITY:
+                    kept.setdefault(real(p), x["state"])
         return kept
     except (ValueError, TypeError, AttributeError):
         return None
+
+
+def patrol_read(now=None, activity=False):
+    """patrol_states as a set of paths (None when unreadable)."""
+    kept = patrol_states(now, activity)
+    return None if kept is None else set(kept)
+
+
+PATROL_WHY = {"working": "작업 중", "waiting": "사람 대기", "run": "Run 워커", "parked": "스스로 깨울 예약을 걸어 둠(parked)",
+              "unknown": "patrol 이 알 수 없음(unknown)"}
+
+
+def patrol_hold(state=None):
+    """Why patrol keeps a card, in patrol's word for it; every refusal of cards.py and its guard goes through here."""
+    return "순찰 판정: " + PATROL_WHY.get(state, "작업 중·사람 대기·Run 워커") + "(orch patrol)"
 
 
 ORCH = pathlib.Path(__file__).resolve().parents[2] / "orchestrate" / "scripts" / "prog.py"
@@ -1106,8 +1124,26 @@ def worker_worktrees(workers):
         else:
             made.add(p)
         if (w.get("projection") or {}).get("outcome") == "in_progress":
-            live[p] = f"살아 있는 워커 턴({w.get('dispatchId')})"
+            live[p] = f"살아 있는 워커 턴({w.get('dispatchId')}, {w.get('runId')})"
     return live, made, users
+
+
+def unreleased_settled(workers):
+    """{real path: [{dispatch, run, outcome}]}: Run workers whose dispatch settled (succeeded or failed) but whose terminal
+    Orca does not list as released. They keep nothing: patrol and the live set read `in_progress` only. Releasing one is
+    its Run owner's call (`worker-release`), so a cleaner only names it. Only a local dispatch that still owns a terminal
+    resource counts: a row with no resource (nothing shows a terminal is left), a retained one (a context-only dispatch or
+    a card the user took over, which release refuses) and another host's are no leak."""
+    out = {}
+    for w in workers:
+        pj, res = w.get("projection") or {}, w.get("resource") or {}
+        p = (res.get("worktreeId") or "").partition("::")[2]
+        outcome = pj.get("outcome")
+        local = ((pj.get("host") or {}).get("kind") or "local") == "local"
+        if p and local and outcome in ("succeeded", "failed") and not res.get("retainedReason") \
+                and w.get("terminalState") not in (None, "released", "retained"):
+            out.setdefault(real(p), []).append({"dispatch": w.get("dispatchId"), "run": w.get("runId"), "outcome": outcome})
+    return out
 
 
 COMPOSE_PROJECT = "com.docker.compose.project"

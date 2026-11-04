@@ -164,8 +164,8 @@ def observe(path):
             return fn()
         except (SystemExit, Exception):  # any failure is "could not see", which keeps the card
             return None
-    kept = reap.patrol_read(activity=True)
-    f = {"patrol": None if kept is None else path in kept,
+    kept = reap.patrol_states(activity=True)
+    f = {"patrol": None if kept is None else kept.get(reap.real(path), False),
          "head": attempt(lambda: reap.run(["git", "-C", path, "rev-parse", "HEAD"]).strip() or None),
          "ino": reap.dir_ino(path)}
     res = reap.orca_json("terminal", "list", "--worktree", f"path:{path}")
@@ -192,7 +192,7 @@ def check(f, head, handles, final=False, ino=None):
     if f.get("patrol") is None:
         return False, "순찰 판정 파일을 읽지 못함"
     if f["patrol"]:
-        return False, "순찰 판정: 작업 중·사람 대기·Run 워커(orch patrol)"
+        return False, reap.patrol_hold(f["patrol"])
     if not f.get("head"):
         return False, "HEAD 를 읽지 못함"
     if f["head"] != head:

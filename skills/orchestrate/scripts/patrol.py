@@ -66,7 +66,7 @@ every Claude card with a signal. Otherwise the line opens PARTIAL and names what
 (reap-hard calls this every pass, the pressure round when its level changes). The round gives up at 120 seconds.
 
 The same file also carries the cleanup v2 fields, which nothing reads yet: schema, round, complete, sources, activity
-(parked, unknown), timings, and candidates_t (when the scans started) with candidates/reports/alerts from ../../reap-resources/scripts/candidates.py. That phase
+(parked, unknown; parked only for a card that still has an agent terminal, since a card without one wakes nobody), timings, and candidates_t (when the scans started) with candidates/reports/alerts from ../../reap-resources/scripts/candidates.py. That phase
 runs after the round lets go of its lock, within 240 seconds, is skipped at pressure danger, and writes only while the
 file still holds its round. `orch patrol timing` shows p50 and p95 per source from <state>/patrol-rounds.jsonl.
 """
@@ -485,7 +485,9 @@ def judge(facts, memo):
             if path and path not in run_paths:
                 act[path] = {"state": "unknown", "why": "worker-list not read: a Run worker cannot be told apart"}
             continue
-        if motion and motion.get("parked"):
+        # Parked is a wake-up the session itself will take: a card with no agent terminal left (its session ended, or
+        # its terminal was released) wakes nobody, and its transcript still ends on the arming call for good.
+        if motion and motion.get("parked") and (path in agent_paths or "terminals" in failed or facts.get("terminals_cut")):  # an unread or cut list is no proof
             act[path] = {"state": "parked", "why": "a ScheduleWakeup, Monitor or background command will wake it"}
         handle = next((t["handle"] for t in agents if t.get("worktreePath") == path), None)
         if path not in agent_paths:
