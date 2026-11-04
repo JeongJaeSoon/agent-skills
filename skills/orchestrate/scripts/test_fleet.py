@@ -1037,6 +1037,42 @@ process.stdout.write(JSON.stringify({{page: fleetBrief()}}));"""
     assert 'href="#/fleet/session/wt-busy"' in cells[2] and 'data-open-session="wt-busy"' in cells[2], cells[2]
     assert "PR 열고 &lt;리뷰&gt; 대기" in cells[2] and 'data-rel="2026-10-28T09:00:00Z"' in cells[2], cells[2]
     assert "bsess" not in second.split("<tbody>")[1] and "멈춤" in second, second
+    # The Orca button goes by the row's session, not by its Ack or Done. A label two rows share, in the reply or in the
+    # drawn table, points at no session; a row no session runs has no button, whatever id it carries.
+    chip_text = "\n".join(["| | 리드/Phase | PR | 다음 | 세션 |", "|---|---|---|---|---|",
+                           "| 🔄 | no buttons | — | 리뷰 | 작업 중 |", "| 🔄 | with done | — | 리뷰 | 작업 중 |",
+                           "| 🔄 | twice drawn | — | 리뷰 | 작업 중 |", "| 🔄 | twice drawn | — | 리뷰 | 작업 중 |",
+                           "| 🔄 | twice listed | — | 리뷰 | 작업 중 |", "| 🔴 | none state | — | 재개 | 세션 없음 |",
+                           "| 🔴 | no id | — | 재개 | 멈춤 |", "| 🔄 | not listed | — | 리뷰 | 작업 중 |", "",
+                           "| | 리드/Phase | PR | 다음 | 세션 |", "|---|---|---|---|---|",
+                           "| 🔄 | only table row | — | 리뷰 | 작업 중 |"])
+    live = lambda i: {"id": i, "name": i, "state": "working", "word": "작업 중"}
+    chip_rows = [{"table": "acme/a", "rows": [
+                     {"id": "n", "label": "no buttons", "session": live("wt-plain"), "ack": None, "done": None},
+                     {"id": "d", "label": "with done", "session": live("wt-done"), "ack": None, "done": "row:d"},
+                     {"id": "t", "label": "twice drawn", "session": live("wt-drawn"), "ack": None, "done": "row:t"},
+                     {"id": "l1", "label": "twice listed", "session": live("wt-listed-1"), "ack": None, "done": "row:l1"},
+                     {"id": "l2", "label": "twice listed", "session": live("wt-listed-2"), "ack": None, "done": "row:l2"},
+                     {"id": "o", "label": "none state", "session": {"id": "wt-gone", "state": "none", "word": "세션 없음"},
+                      "ack": None, "done": None},
+                     {"id": "i", "label": "no id", "session": {"id": None, "state": "stalled", "word": "멈춤"},
+                      "ack": None, "done": None}]},
+                 {"table": "acme/b", "rows": [
+                     {"id": "x", "label": "only table row", "session": live("wt-only"), "ack": None, "done": None}]}]
+    js = f"""{helpers}
+{(assets / "fleet.js").read_text()}
+const S = {{filters: {{}}}};
+process.stdout.write(briefHtml({json.dumps(chip_text)}, {json.dumps(chip_rows)}));"""
+    chip_page = subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout
+    chip_first, chip_second = chip_page.split('<div class="table-wrap">')[1:3]
+    assert re.findall(r'data-open-session="([^"]+)"', chip_first) == ["wt-plain", "wt-done"], chip_first
+    assert re.findall(r'data-open-session="([^"]+)"', chip_second) == ["wt-only"], chip_second
+    # The button column is what it was: Done on the row that has one, nothing for a shared label, none in a table
+    # without any.
+    assert re.findall(r'data-done="([^"]+)"', chip_first) == ["row:d"], chip_first
+    assert 'data-row-label="with done"' in chip_first and 'data-row-label="no buttons"' not in chip_first, chip_first
+    assert chip_first.count('<td class="bact"') == 8 and '<col class="bact">' in chip_first, chip_first
+    assert "bact" not in chip_second and "<th></th>" not in chip_second, chip_second
     # The Orca button's last outcome: a confirmed switch says it was the host's window only, an unconfirmed one says so
     # with Orca's reply; both offer what to type or find on another device, escaped.
     copy = "workspace: <b>w</b>\nterminal: term_x\nworktree: /tmp/\"w\""
