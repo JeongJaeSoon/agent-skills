@@ -111,6 +111,7 @@ elif a[:1] == ["api"] and "/merge-async/" in a[1]:
                       "failed": {"status": "failed", "details": {"message": "Cannot perform a merge queue merge for a"
                                                                             " branch with no merge queue"}},
                       "enqueued": {"status": "enqueued", "details": {"message": "Added to the merge queue."}},
+                      "stuck": {"status": "pending", "details": {"message": "Merge request enqueued."}},
                       "nonlinear": {"status": "failed", "details": {"message": "Stack needs to be rebased: PR #8's branch"
                                                                                " is not a linear descendant of PR #7's branch."}}}[mode]))
 elif a[:1] == ["api"] and "/pulls/" in a[1] and a[1].split("/pulls/")[1].isdigit():
@@ -455,6 +456,16 @@ real_sleep = "import time; time.sleep = lambda s: None; import runpy, sys; sys.a
 r = subprocess.run([sys.executable, "-c", real_sleep + f"runpy.run_path({str(HERE / 'prog.py')!r}, run_name='__main__')",
                     "land", "t", "--pr", "8"], env=env, capture_output=True, text=True)
 assert r.returncode == 0 and "#7 #8" in r.stdout, r.stdout + r.stderr
+# A request still pending when the polls run out is not a failure, and the layers it covers are recorded later.
+d, env = stack_of_two("stuck")
+r = subprocess.run([sys.executable, "-c", real_sleep + f"runpy.run_path({str(HERE / 'prog.py')!r}, run_name='__main__')",
+                    "land", "t", "--pr", "8"], env=env, capture_output=True, text=True)
+assert r.returncode == 2 and "still pending" in r.stdout, r.stdout + r.stderr
+assert not [e for e in ledger(d) if e["ev"] in ("land_failed", "landed")], ledger(d)
+st = json.loads((d / "state.json").read_text())
+st["prs"]["7"].update(state="MERGED", merge_sha="m7"); st["merge_async"] = "merged"; (d / "state.json").write_text(json.dumps(st))
+code, out = prog(env, "land", "t", "--pr", "8")
+assert code == 0 and [e["pr"] for e in ledger(d) if e["ev"] == "landed"] == [7, 8], out
 # An answer with no status or uuid falls back to reading the PRs, with one warning line.
 d, env = stack_of_two("junk")
 code, out = prog(env, "land", "t", "--pr", "8")

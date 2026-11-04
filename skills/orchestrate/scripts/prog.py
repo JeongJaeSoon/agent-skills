@@ -1913,10 +1913,11 @@ def merge_unit(p, pr, unit, klass, events, onto=None, stacked=False):
         r, status, details = merge_async(repo, pr, head)
         if status == "busy":
             return 2, f"yield: a merge request for #{pr} is already running; land again"
-        if status == "enqueued":
-            note = f"in the merge queue: {details.get('message') or 'enqueued'}"
-            p.append("yield", pr=pr, note=note, unit=unit)  # the queue may close the layers apart, hours later
-            return 2, f"yield: #{pr} {note}; land again records it once the queue has merged it"
+        if status in ("enqueued", "pending"):
+            note = (f"in the merge queue: {details.get('message') or 'enqueued'}" if status == "enqueued"
+                    else "merge request still pending after 15 minutes")
+            p.append("yield", pr=pr, note=note, unit=unit)  # the layers may close apart, hours later
+            return 2, f"yield: #{pr} {note}; land again records it once it has merged"
         if status is None and r.returncode == 0:
             print(f"warning: merge-async answered without a status or uuid; reading #{pr} instead: {r.stdout[:200]}", flush=True)
     merged = {}
@@ -1957,7 +1958,7 @@ def merge_unit(p, pr, unit, klass, events, onto=None, stacked=False):
 
 
 def record_queued(p, pr, skip=()):
-    """Record the layers earlier requests for this PR left in the merge queue, bottom first, and return them all."""
+    """Record the layers that earlier requests for this PR left unfinished, bottom first, and return them all."""
     # Every request's unit: a retry after the lower layer merged names a smaller one.
     queued = list(dict.fromkeys(n for e in p.events() if e.get("pr") == pr for n in e.get("unit") or []))
     for n in queued:
@@ -1966,7 +1967,7 @@ def record_queued(p, pr, skip=()):
         x = pr_view(p.cfg["repo"], n)
         if x["state"] == "MERGED" and "landed" not in pr_state(p.events()).get(n, {}):
             # No stack_top: the queue may have put the layers in separate merge groups.
-            p.append("landed", pr=n, sha=(x.get("mergeCommit") or {}).get("oid"), note="merge queue")
+            p.append("landed", pr=n, sha=(x.get("mergeCommit") or {}).get("oid"), note="earlier merge request")
             close_gate_task(p, n, "completed")
     return queued
 
@@ -2036,7 +2037,7 @@ def attempt(p, pr, klass, onto_lower=False):
                 return 0, (f"#{pr} already landed as {(st['landed'].get('sha') or '')[:8]} ({st['landed'].get('note') or 'recorded'});"
                            " main CI ran once on the stack top's commit, and the top's owner records it")
             if queued := record_queued(p, pr):
-                return 0, f"#{pr} was merged by the merge queue; recorded {' '.join(f'#{n}' for n in queued)}"
+                return 0, f"#{pr} was merged by an earlier request (merge queue or a slow merge); recorded {' '.join(f'#{n}' for n in queued)}"
             p.append("landed", pr=pr, sha=sha, note="merged outside land")
             close_gate_task(p, pr, "completed")
             return 0, f"#{pr} was merged outside land; recorded"
