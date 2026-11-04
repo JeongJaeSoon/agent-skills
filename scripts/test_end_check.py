@@ -253,18 +253,27 @@ rc, err, calls = apply("remove", status="completed")
 assert rc == 0 and ["worktree", "rm", "--worktree", "current", "--json"] in calls, calls
 rc, err, calls = apply("close-terminal", status="completed")
 assert rc == 0 and ["terminal", "close", "--terminal", "term_me", "--json"] in calls, calls
-# A done card's untracked cache goes first (the cleaners read it as dirty); a card that stays for another agent keeps its own.
+# --trash-caches: a done card's cache goes (the cleaners read an untracked one as dirty); one that stays keeps its own.
 sys.path.insert(0, str(HERE.parent / "skills" / "reap-resources" / "scripts"))
 import reap  # noqa: E402
-saved_trash, trashed = reap.trash, []
+saved = reap.trash, end_check.card_facts, end_check.git_facts, end_check.archive_hook
 reap.trash = lambda *p: trashed.extend(p)
-with contextlib.redirect_stdout(io.StringIO()):
-    assert end_check.apply("close-terminal", dict(CLEAN_FACTS, caches=["x/__pycache__/"]), "card", {}, "term_me") == 0
-    assert trashed == ["/wt/card/x/__pycache__"], trashed
+end_check.archive_hook = lambda path: False
+
+
+def trash_run(**facts):
+    end_check.card_facts = lambda *a: {**CLEAN, **facts}
+    end_check.git_facts = lambda cwd: {}
     trashed.clear()
-    assert end_check.apply("close-terminal", dict(CLEAN_FACTS, caches=["x/__pycache__/"], other_agents=["term_x"]), "card", {}, "term_me") == 0
-    assert trashed == [], trashed
-reap.trash = saved_trash
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert end_check.main(["--card", "--no-keep", "--trash-caches"]) == 0
+    return list(trashed)
+
+
+trashed = []
+assert trash_run() == ["/wt/card/x/__pycache__"], trashed
+assert trash_run(other_agents=["term_x"]) == trash_run(main=True) == trash_run(open_prs=[{"number": 1}]) == [], trashed
+reap.trash, end_check.card_facts, end_check.git_facts, end_check.archive_hook = saved
 # A card has no Dispatch to wait for; keep applies nothing for it.
 rc, err, calls = apply("remove", mode="card")
 assert rc == 0 and calls == [["worktree", "rm", "--worktree", "current", "--json"]], calls

@@ -109,21 +109,21 @@ further actions after worker_done" still holds: only the closing calls follow `w
 the same turn, and nothing runs after them.
 
 Before sending `worker_done`, run `skills-sync end-check --worker --outcome <succeeded|failed>
---dispatch <the preamble's --dispatch-id> --brief <brief path>` (`--keep` or `--no-keep` when the task
+--dispatch <the preamble's --dispatch-id> --brief <brief path> --trash-caches` (`--keep` or `--no-keep` when the task
 has no brief file; without `--dispatch` it looks the Dispatch up and keeps the card when it cannot). It reads §4's
 commands, the card's terminals and the questions this terminal left unanswered, and prints the row
-below as `close-terminal` or `keep` with its reasons; a fact it could not read is `keep`. Then pick
-the row:
+below as `close-terminal` or `keep` with its reasons; a fact it could not read is `keep`. On a done
+card it moves the build caches to the trash now: the cleaners keep a card with an untracked one, and
+the session above may close this terminal once `worker_done` arrives. Then pick the row:
 
 | State | The turn's last calls |
 |---|---|
-| Outcome `succeeded`; §4's Remove row holds (clean tree apart from its build caches and regenerated copies, the work on `origin/main`, no open PR), or the card is `isMainWorktree: true` or another agent works on it; no `ask` or `orch decide` question waiting; the brief has no `KEEP` line | The report text, `worker_done` as its own call, then, once its output shows `"ok": true`, `skills-sync end-check --worker --outcome succeeded --dispatch <id> --brief <brief path> --apply`, which moves its build caches to the trash (the cleaners keep a card with an untracked one) and closes this terminal. The card stays for "Who cleans up". |
+| Outcome `succeeded`; §4's Remove row holds (clean tree apart from its build caches and regenerated copies, the work on `origin/main`, no open PR), or the card is `isMainWorktree: true` or another agent works on it; no `ask` or `orch decide` question waiting; the brief has no `KEEP` line | The report text, `worker_done` as its own call, then, once its output shows `"ok": true`, `orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json`: this session goes, and the card stays for "Who cleans up". |
 | Anything else: outcome `failed` (the orchestrator or lead that dispatched it retries on this card), an open PR (a wait named by a `READY-WAIT:` line, READY under human-gate), a `KEEP` line, a question waiting, a dirty tree | `worker_done` naming what holds the card, as its own call, then close the card's setup terminal with `skills-sync close-setup <card path>` in the background (it can wait up to 30 minutes; never chain it before `worker_done` with `;` or `&&`), and idle. Never `AskUserQuestion`: nobody sees it. |
 
 - **The close waits for the send.** Calls in one message run together, so a `worker_done` and a
   `terminal close` sent side by side end this session even when a hook refused the send, and the
-  report never arrives. `skills-sync end-check --worker --apply` closes only once Orca shows the
-  Dispatch settled. A send refused only on its body text is reworded in the same command;
+  report never arrives. Close only on the `"ok": true` in the send's own output. A send refused only on its body text is reworded in the same command;
   after any other refusal the card and this session stay, idle, for the orchestrator or lead above it to find.
 - **A refused close.** The host's permission layer (the auto-mode classifier, a hook), not Orca,
   may refuse `orca terminal close`. A refused act is not run again,
@@ -155,12 +155,12 @@ Done means the brief's deliverable is complete and recorded where the brief says
 merged, the note's `## 결과` written), and nothing waits on an answer: no question you asked,
 no open PR, unless the open PR is the deliverable itself (the row below that says so). Follow-up ideas are not a reason to stay: write them in the report and the note for
 the parent to decide. Then run §3 and pick by §4's table on real output: `skills-sync end-check
---card --brief <brief path>` (or `--keep`/`--no-keep`; `--ticket-done` once `use-tracker` shows the
-linked ticket completed) prints it.
+--card --brief <brief path> --trash-caches` (or `--keep`/`--no-keep`; `--ticket-done` once `use-tracker`
+shows the linked ticket completed) prints it and, on a done card, moves its build caches to the trash.
 
 | State | The turn's last calls |
 |---|---|
-| §4's Remove row holds (a document-only card with no commits passes: `git diff origin/main...HEAD` is empty), or the card is `isMainWorktree: true` or another agent works on it | The report text, then `skills-sync end-check --card --brief <brief path> --apply`, which moves its build caches to the trash and closes this terminal |
+| §4's Remove row holds (a document-only card with no commits passes: `git diff origin/main...HEAD` is empty), or the card is `isMainWorktree: true` or another agent works on it | The report text, then `orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json` |
 | A `superseded by <card>` message from the session that started this card | Stop the work and push nothing more. The report names what is uncommitted or unpushed, then `orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json`. A question you left waiting is withdrawn |
 | The brief's deliverable is the open PR itself (its `CLOSE` line says to close once the PR is up and reported; merge and review are not this card's) | The report text, then `orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json`. The worktree stays for the PR (§4); a review round starts a new card on it, and "Who cleans up" takes it once the PR merges |
 | A question waiting on the human, an open PR that is not the deliverable, a dirty tree, or a `KEEP` line | Stay. Say in the report and the note what holds the card. A later wake (a review fix, a message) runs this table again; otherwise the parent's check closes it |

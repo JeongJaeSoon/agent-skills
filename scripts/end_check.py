@@ -4,7 +4,7 @@ from real output and printed as one verdict.
 
 Usage:
   skills-sync end-check [--worker --outcome succeeded|failed | --card] [--brief <file> | --keep | --no-keep]
-                        [--ticket-done] [--dispatch <id>] [--apply]
+                        [--ticket-done] [--dispatch <id>] [--trash-caches] [--apply]
 
 Verdicts:
   remove          (no --worker or --card) the Remove row holds: `orca worktree rm --worktree current` (after moving
@@ -21,6 +21,8 @@ questions this terminal sent that nobody answered yet (`orca orchestration inbox
 $ORCA_TERMINAL_HANDLE, no reply in its thread). The KEEP row is read from --brief, or stated with --keep or --no-keep.
 A linked ticket in --card mode needs --ticket-done once use-tracker shows it completed (its state is not read here).
 `orch decide` questions are a lead's and not read.
+
+--trash-caches moves a done card's build caches and regenerated copies to the trash, so the cleaners can take it.
 
 --apply carries the verdict out. remove and close-terminal for a worker first ask Orca whether its Dispatch settled
 (`worker-show`: status completed or failed): worker_done must have arrived before the card goes (end-session §7).
@@ -310,7 +312,8 @@ def judge(f, mode, outcome=None, keep=None, ticket_done=False):
 
 def parse(argv):
     opts, valued, flags = {}, {"--outcome", "--brief", "--dispatch"}, {"--worker", "--card", "--keep", "--no-keep",
-                                                                       "--ticket-done", "--apply", "--json"}
+                                                                       "--ticket-done", "--apply", "--json",
+                                                                       "--trash-caches"}
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -392,9 +395,6 @@ def apply(verdict, f, mode, opts, me):
             return 4
         cmd = [ORCA, "worktree", "rm", "--worktree", "current", *(["--run-hooks"] if hooks else []), "--json"]
     elif verdict == "close-terminal":
-        # An untracked cache reads as dirty to the cleaners, and the card would stay for good.
-        if not (f.get("main") or f.get("other_agents")) and not trash_caches(f):
-            return 4
         cmd = [ORCA, "terminal", "close", "--terminal", me, "--json"]
     elif verdict == "keep" and mode == "worker" and f.get("path"):
         log = STATE / "close-setup" / f"{pathlib.Path(f['path']).name}.log"
@@ -429,6 +429,11 @@ def main(argv):
     verdict, reasons = judge(facts, mode, opts.get("--outcome"), keep_row(opts), bool(opts.get("--ticket-done")))
     print(json.dumps({"verdict": verdict, "mode": mode, "reasons": reasons, "facts": facts}, ensure_ascii=False,
                      indent=1))
+    # Before the send, while nothing above can close this session: an untracked cache reads as dirty to the cleaners,
+    # and the card would stay for good. A card that stays for its main checkout or another agent keeps its caches.
+    if opts.get("--trash-caches") and verdict == "close-terminal" and not (facts.get("main") or facts.get("other_agents")) \
+            and not trash_caches(facts):
+        return 4
     return apply(verdict, facts, mode, opts, me) if opts.get("--apply") else 0
 
 
