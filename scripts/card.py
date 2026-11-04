@@ -611,6 +611,16 @@ def parse_args(rest):
     return opts, refs
 
 
+def refuse_codex(brief, opts):
+    """Refuse(2) for a form Codex does not run. It comes before the brief is rewritten and the Run is checked, so a
+    refused start changes nothing and says one thing."""
+    text = FENCE.sub("", pathlib.Path(brief).expanduser().read_text())
+    if guard.is_lead(text):
+        raise Refuse(2, f"[{ME}] {CODEX_LEAD}")
+    if opts.get("--card") or not any(a.startswith("run:") for a in report_to(text)):
+        raise Refuse(2, f"[{ME}] {CODEX_GOAL_CARD}")
+
+
 def create(argv):
     if not argv or argv[0].startswith("-"):
         raise Refuse(2, __doc__)
@@ -620,6 +630,8 @@ def create(argv):
         if not opts.get(k):
             raise Refuse(2, f"{k} is required (dispatch-card §3)")
     prompt = compose(brief)
+    if opts["--agent"] == "codex":
+        refuse_codex(brief, opts)
     with card_lock():
         return create_locked(brief, opts, refs, prompt)
 
@@ -652,8 +664,6 @@ def create_locked(brief, opts, refs, prompt):
             print(f"[{ME}] the lead starts as a /goal card: {fix}", file=sys.stderr)
     run_id = checked if to_run else None
     worker = bool(run_id)
-    if opts["--agent"] == "codex" and (lead or not worker):
-        raise Refuse(2, f"[{ME}] {CODEX_LEAD if lead else CODEX_GOAL_CARD}")
     parent = None if opts.get("--no-parent") else (
         opts["--parent-worktree"] if opts.get("--parent-worktree") and not worker else caller_worktree())
     if worker:

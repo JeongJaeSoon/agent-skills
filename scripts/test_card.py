@@ -571,9 +571,13 @@ assert SETUPS == [(str(CARD_DIR), None, "a3")], SETUPS
 # Every other form is refused with its reason, nothing created and never switched to claude.
 for why, argv in (("/goal card", (brief(WORKER, "a2.md"), "--repo", "r", "--name", "a2")),
                   ("/goal card", (brief(SUPERVISED, "a6.md"), "--repo", "r", "--name", "a6", "--card")),
-                  ("lead", (brief(LEAD_RUN, "a7.md"), "--repo", "r", "--name", "a7"))):
+                  ("lead", (brief(LEAD_RUN, "a7.md"), "--repo", "r", "--name", "a7")),
+                  ("lead", (brief(LEAD_GATE, "a8.md"), "--repo", "r", "--name", "a8")),
+                  ("lead", (brief(LEAD_RUN.replace("run:run_me", "run:run_other"), "a9.md"), "--repo", "r", "--name", "a9"))):
+    before = pathlib.Path(argv[0]).read_text()
     rc, out, err, calls = go(*argv, "--agent", "codex")
     assert rc == 2 and why in err and len(err.splitlines()) == 1 and not creates(calls), (why, rc, err)
+    assert pathlib.Path(argv[0]).read_text() == before, argv
 rc, out, err, calls = handoff("ABC-9", "--agent", "codex")
 assert rc == 2 and "/goal card" in err and len(err.splitlines()) == 1 and not creates(calls), (rc, err)
 rc, out, err, calls = handoff("ABC-9", "--agent", "claude")
