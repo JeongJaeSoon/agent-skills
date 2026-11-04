@@ -1,0 +1,312 @@
+#!/usr/bin/env python3
+"""PreToolUse hook of the agent-skills plugin: a card's end, and what a role session's subagents are told.
+
+Exit order (key `guard.exit_order`, default `warn`): an `orca worktree rm` from a dispatched, CLOSE or KEEP card's
+main session (roles.py; a dispatched lead included) before its `worker_done` came back. A dispatched card's rm needs,
+in an earlier assistant message than the rm's, a Bash call that is only `orca orchestration send --type worker_done
+--dispatch-id <its current Dispatch>` (the last `--dispatch-id` its prompts name) whose result is not an error and
+shows `"ok": true` or a `messageId=`. A `/goal` card with a CLOSE row and no
+Dispatch needs instead an earlier `skills-sync end-check --card` result whose verdict is `remove`. Calls sent in one
+message run together, so a worker_done beside the rm has no result yet: the rm would remove the card even when the
+send was refused, and its report never arrives (end-session §7). A KEEP row on the card refuses the rm outright.
+`deny` refuses such an rm, `warn` lets it through with a warning, `off` skips the check.
+
+Agent prompts (key `orchestrate.agent_forbidden`, default on): an Agent call from an orchestrator, a lead or a
+worker (its subagents included) whose prompt lacks the refused-act paragraph of orchestrate references/brief.md
+FORBIDDEN goes through unchanged with a one-line warning. The paragraph is not appended: a PreToolUse
+`updatedInput` takes effect only with `permissionDecision` `allow` (which skips the permission prompt and auto
+mode's check) or `ask`, and this hook never changes the call's permission outcome. The brief says to paste the
+paragraph into every subagent prompt; `skills-sync card` covers card briefs, this warns on the Agent tool.
+`false` or `"off"` turns it off.
+
+An rm of the session's own card whose transcript cannot be read is treated as unread order: warned or denied at the
+key's level. Any other check that raises lets the call through (a line in guard-errors.jsonl).
+"""
+import json, os, pathlib, re, sys
+
+import roles
+from lib import config, shell
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+BRIEF = ROOT / "skills" / "orchestrate" / "references" / "brief.md"
+PARAGRAPH = re.compile(r"An act refused by a permission prompt.*?fix\s+the\s+cause\s+and\s+run\s+it\s+again\.", re.S)
+DISPATCH = re.compile(r"--dispatch-id[ =]+(ctx_\w+)\b")
+RECEIPT = re.compile(r"messageId=msg_\w+")
+SOURCE = "(agent-skills hooks/lifecycle.py, {key})"
+WARNING = re.compile(r"(\[[^\]\n]*\] )?warning: ")
+
+
+def paragraph():
+    m = PARAGRAPH.search(BRIEF.read_text())
+    return " ".join(m.group(0).split()) if m else None
+
+
+def entries(path):
+    """The transcript's entries in order; None when any line of it cannot be read."""
+    out = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                e = json.loads(line)
+                if not isinstance(e, dict) or e.get("type") in ("user", "assistant") and not readable(e):
+                    return None
+                out.append(e)
+    except (OSError, TypeError, ValueError):
+        return None
+    return out
+
+
+def readable(e):
+    """A user or assistant entry whose message content is text or a list of blocks."""
+    m = e.get("message")
+    c = m.get("content") if isinstance(m, dict) else None
+    return isinstance(c, str) or isinstance(c, list) and all(isinstance(b, dict) and bash_readable(b) for b in c)
+
+
+def bash_readable(b):
+    """A text block carries a string, and a Bash tool_use block names its command as one; other blocks are not
+    looked into."""
+    if b.get("type") == "text":
+        return isinstance(b.get("text"), str)
+    if b.get("type") != "tool_use" or b.get("name") != "Bash":
+        return True
+    return isinstance(b.get("input"), dict) and isinstance(b["input"].get("command"), str)
+
+
+def blocks(e):
+    content = (e.get("message") or {}).get("content") if isinstance(e.get("message"), dict) else None
+    return [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
+
+
+def text_of(e):
+    content = (e.get("message") or {}).get("content") if isinstance(e.get("message"), dict) else None
+    if isinstance(content, str):
+        return content
+    return "\n".join(b.get("text") or "" for b in blocks(e) if b.get("type") == "text")
+
+
+def result_text(b):
+    c = b.get("content")
+    if isinstance(c, str):
+        return c
+    # Every part must be a text block; one unread part leaves the whole result unread.
+    if isinstance(c, list) and all(isinstance(x, dict) and x.get("type") == "text" and isinstance(x.get("text"), str)
+                                   for x in c):
+        return "\n".join(x["text"] for x in c)
+    return ""
+
+
+def sent(text):
+    """Whether a send's whole output is Orca's receipt: `messageId=msg_…`, or JSON whose top-level ok is true."""
+    t = (text or "").strip()
+    if RECEIPT.fullmatch(t):
+        return True
+    try:
+        res = json.loads(t)
+    except ValueError:
+        return False
+    return isinstance(res, dict) and res.get("ok") is True
+
+
+def calls(rows):
+    """[(message id, tool_use id, command, result text or None, is_error)] for each Bash call, in order."""
+    uses, results = [], {}
+    for e in rows:
+        mid = (e.get("message") or {}).get("id") if isinstance(e.get("message"), dict) else None
+        for b in blocks(e):
+            if b.get("type") == "tool_use" and b.get("name") == "Bash":
+                cmd = (b.get("input") or {}).get("command") if isinstance(b.get("input"), dict) else None
+                uses.append((mid or e.get("uuid"), b.get("id"), cmd if isinstance(cmd, str) else ""))
+            elif b.get("type") == "tool_result" and isinstance(b.get("tool_use_id"), str):
+                results[b["tool_use_id"]] = (result_text(b), bool(b.get("is_error")))
+    return [(m, i, c, *results.get(i, (None, False))) for m, i, c in uses]
+
+
+def this_message(rows, tool_use_id):
+    """The assistant message id the call under check belongs to: the one holding its tool_use, else the newest."""
+    newest = None
+    for e in rows:
+        if e.get("type") != "assistant":
+            continue
+        mid = (e.get("message") or {}).get("id") if isinstance(e.get("message"), dict) else None
+        newest = mid or e.get("uuid")
+        if any(b.get("type") == "tool_use" and b.get("id") == tool_use_id for b in blocks(e)):
+            return newest
+    return newest
+
+
+def flag(words, name):
+    """The value of `name` in argv words (`--x v` or `--x=v`) when it is given exactly once, else None."""
+    at = [i for i, w in enumerate(words) if w == name or w.startswith(name + "=")]
+    if len(at) != 1:
+        return None
+    w = words[at[0]]
+    return w[len(name) + 1:] if w != name else words[at[0] + 1] if at[0] + 1 < len(words) else None
+
+
+def worker_done_for(cmd, dispatch):
+    """True when `cmd` is one `orca orchestration send --type worker_done` for exactly this Dispatch and nothing
+    else, so its output is that send's own receipt."""
+    cs = shell.commands(cmd)
+    return (len(cs) == 1 and cs[0].name == "orca" and cs[0].words[1:3] == ["orchestration", "send"]
+            and flag(cs[0].words, "--type") == "worker_done" and flag(cs[0].words, "--dispatch-id") == dispatch)
+
+
+def removes(cmd):
+    return any(c.name == "orca" and c.words[1:3] == ["worktree", "rm"] for c in shell.commands(cmd))
+
+
+def removes_own(cmd, cwd):
+    """True when an `orca worktree rm` in `cmd` may target the caller's own card: `current`, `active`, no target, a
+    `path:` at or above the session's cwd, or an `id:` (not comparable without asking Orca). A lead removing a
+    finished child card by its path is not its own end."""
+    for c in shell.commands(cmd):
+        if not (c.name == "orca" and c.words[1:3] == ["worktree", "rm"]):
+            continue
+        target = flag(c.words, "--worktree")
+        if target in (None, "current", "active") or not target.startswith("path:"):
+            return True
+        path = target[len("path:"):]
+        # A path the shell still expands ($PWD, ~, `…`) or a relative one may well be this card.
+        if not path.startswith("/") or any(ch in path for ch in "$`~*?[") or not isinstance(cwd, str):
+            return True
+        path, here = os.path.normpath(path), os.path.normpath(cwd)
+        if here == path or here.startswith(path.rstrip("/") + "/"):
+            return True
+    return False
+
+
+def is_end_check(cmd):
+    return any(c.name == "skills-sync" and c.words[1:2] == ["end-check"] for c in shell.commands(cmd))
+
+
+def end_check_remove(cmd, out):
+    """True when `cmd` is only a `skills-sync end-check` and the JSON it printed says mode `card`, verdict `remove`
+    (the mode it really ran in, not a `--card` word that was some flag's value)."""
+    cs = shell.commands(cmd)
+    if not (len(cs) == 1 and cs[0].name == "skills-sync" and cs[0].words[1:2] == ["end-check"]):
+        return False
+    m = re.search(r"(?m)^\{", out) if isinstance(out, str) else None
+    # Warnings on stderr come first, one line each; anything else around the JSON leaves the output unread.
+    if not m or not all(WARNING.match(line) for line in out[:m.start()].splitlines()):
+        return False
+    try:
+        res, end = json.JSONDecoder().raw_decode(out, m.start())
+    except ValueError:
+        return False
+    return (not out[end:].strip() and isinstance(res, dict) and res.get("mode") == "card"
+            and res.get("verdict") == "remove")
+
+
+def exit_order(event, s, lvl):
+    """(decision, reason) for an `orca worktree rm`, or (None, None)."""
+    cmd = (event.get("tool_input") or {}).get("command")
+    if not isinstance(cmd, str) or not removes_own(cmd, event.get("cwd")):
+        return None, None
+    key = SOURCE.format(key="guard.exit_order")
+    if s.keep:
+        return lvl, (f"This card's brief has a KEEP row: the session above plans to reuse it, so it is not removed "
+                     f"(end-session §7). Send worker_done, then idle. {key}")
+    rows = entries(event.get("transcript_path"))
+    if rows is None:
+        return lvl, f"`orca worktree rm` while this card's transcript cannot be read: its order is unknown. {key}"
+    mine = this_message(rows, event.get("tool_use_id"))
+    earlier = [c for c in calls(rows) if c[0] != mine and c[3] is not None and not c[4]]
+    if s.supervised:
+        ids = [m for e in rows if e.get("type") == "user" for m in DISPATCH.findall(text_of(e))]
+        current = ids[-1] if ids else None
+        if current and any(worker_done_for(c[2], current) and sent(c[3]) for c in earlier):
+            return None, None
+        return lvl, (f"`orca worktree rm` before this Dispatch's worker_done came back"
+                     f"{f' ({current})' if current else ''}. Send worker_done as its own call, and only once its "
+                     "output shows \"ok\": true, in a later message, remove the card; a send and an rm in one message "
+                     f"run together and the rm wins even when the send is refused (end-session §7). {key}")
+    if s.close:
+        # The latest end-check decides: a later keep or unread fact takes back an earlier remove.
+        checks = [c for c in calls(rows) if c[0] != mine and is_end_check(c[2])]
+        if checks and checks[-1][3] is not None and not checks[-1][4] and end_check_remove(checks[-1][2], checks[-1][3]):
+            return None, None
+        return lvl, ("`orca worktree rm` from a CLOSE card before `skills-sync end-check --card` said `remove` "
+                     f"(end-session §8). Run it first, as its own call. {key}")
+    return None, None
+
+
+def lacks_paragraph(event, cfg):
+    """Whether the Agent call's prompt lacks the refused-act paragraph (False when it has it or is not covered)."""
+    value = config.get(cfg, "orchestrate.agent_forbidden", True)
+    if value is False or value == "off":
+        return False
+    args = event.get("tool_input")
+    if not isinstance(args, dict) or not isinstance(args.get("prompt"), str):
+        return False
+    text = paragraph()
+    return bool(text) and text not in " ".join(args["prompt"].split())
+
+
+def main():
+    try:
+        event = json.load(sys.stdin)
+    except ValueError:
+        return 0
+    if not isinstance(event, dict) or event.get("hook_event_name", "PreToolUse") != "PreToolUse":
+        return 0
+    out = {"hookSpecificOutput": {"hookEventName": "PreToolUse"}}
+    tool = event.get("tool_name")
+    cmd = (event.get("tool_input") or {}).get("command") if isinstance(event.get("tool_input"), dict) else None
+    lvl = "warn"
+    try:
+        cfg = config.load()
+        if tool == "Bash" and not (isinstance(cmd, str) and "worktree" in cmd and removes(cmd)):
+            return 0  # the role is read from the transcript only for an rm
+        lvl = config.level(cfg, "guard.exit_order", "warn")
+        s = roles.session(event)
+        # Unread, the transcript cannot say whether this is a card that must report first: it does not pass as one
+        # that need not.
+        blind = (tool == "Bash" and lvl != "off" and not event.get("agent_id") and removes_own(cmd, event.get("cwd"))
+                 and (entries(event.get("transcript_path")) is None
+                      or not roles.first_prompt(event.get("transcript_path")).strip()))
+        # A dispatched or CLOSE/KEEP card ends the same way whatever role it declared (a dispatched lead included).
+        if blind or (tool == "Bash" and roles.applies("exit_order", s) and (s.supervised or s.close or s.keep)):
+            decision, reason = (lvl, "`orca worktree rm` of this card while its transcript cannot be read, so whether "
+                                     "its worker_done or end-check came back first is unknown (end-session §7, §8). "
+                                + SOURCE.format(key="guard.exit_order")) if blind else \
+                exit_order(event, s, lvl) if lvl != "off" else (None, None)
+            if not decision:
+                return 0
+            hold(out, decision, reason)
+        elif tool in ("Agent", "Task") and roles.applies("agent_forbidden", s):
+            if not lacks_paragraph(event, cfg):
+                return 0
+            # No permissionDecision: the call goes to the same permission check it would without this hook.
+            out["systemMessage"] = out["hookSpecificOutput"]["additionalContext"] = (
+                "This subagent prompt lacks the refused-act paragraph of orchestrate references/brief.md FORBIDDEN; "
+                "paste it into every subagent prompt. " + SOURCE.format(key="orchestrate.agent_forbidden"))
+        else:
+            return 0
+    except Exception as e:
+        config.log_error("lifecycle", e)
+        # A failure while judging an rm of this very card does not let the rm through.
+        try:
+            if not (tool == "Bash" and lvl != "off" and not event.get("agent_id") and isinstance(cmd, str)
+                    and removes_own(cmd, event.get("cwd"))):
+                return 0
+        except Exception:
+            pass
+        hold(out, lvl, f"`orca worktree rm` of this card while this hook could not judge it ({type(e).__name__}), "
+                       "so whether its worker_done or end-check came back first is unknown (end-session §7, §8). "
+                       + SOURCE.format(key="guard.exit_order"))
+    print(json.dumps(out, ensure_ascii=False))
+    return 0
+
+
+def hold(out, decision, reason):
+    if decision == "deny":
+        out["hookSpecificOutput"].update(permissionDecision="deny", permissionDecisionReason=reason)
+    else:
+        out["systemMessage"] = out["hookSpecificOutput"]["additionalContext"] = reason
+
+
+if __name__ == "__main__":
+    sys.exit(main())
