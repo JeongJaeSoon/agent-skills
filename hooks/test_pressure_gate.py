@@ -200,6 +200,42 @@ pressure.shutil.which = real_which
 assert pressure.active_turns(run=lambda *a, **k: "not json") is None
 assert pressure.active_turns(run=lambda *a, **k: json.dumps({"result": {"truncated": True, "worktrees": [
     {"agents": [{"state": "working"}]}]}})) is None  # a card left out could hold a turn
+# The caller's own turn is not counted: cap-1 other turns plus the caller's own pass the gate (before: 9 held it) and
+# agree with `turns --wait`, which runs while the caller's turn is over. Other sessions' turns still count.
+ME = "tab-me:leaf-me"
+def orca_says(others, mine=True, shown=True):
+    agents = [{"paneKey": f"t{i}:l{i}", "state": "working"} for i in range(others)]
+    agents += [{"paneKey": ME, "state": "working"}] if mine else []
+    shown_json = json.dumps({"result": {"terminal": {"tabId": "tab-me", "leafId": "leaf-me"}}})
+    ps_json = json.dumps({"result": {"worktrees": [{"agents": agents[:4]}, {"agents": agents[4:]}]}})
+    return lambda cmd, **k: shown_json if cmd[:3] == ["orca", "terminal", "show"] and shown else ps_json
+real_handle = os.environ.get("ORCA_TERMINAL_HANDLE")
+os.environ["ORCA_TERMINAL_HANDLE"] = "term_me"
+assert pressure.own_pane(orca_says(0)) == ME
+assert pressure.own_pane(orca_says(0, shown=False)) is None
+for others, want in ((8, 8), (9, 9), (7, 7)):
+    assert pressure.active_turns(run=orca_says(others)) == want, others
+    assert pressure.SELF_NOTE == ""
+    assert pressure.turn_hold(pressure.active_turns(run=orca_says(others)), 9) is (others >= 9), others
+    assert pressure.active_turns(run=orca_says(others, mine=False)) == want  # wait (turn over) and gate (turn running) agree
+pressure.turn_cap = lambda c, cpus=None: 9
+for others, card in ((8, "none"), (9, "deny")):  # the hook's own verdict, caller's turn running
+    pressure.active_turns = lambda o=others: real_turns(run=orca_says(o))
+    assert gate("orca worktree create --repo x", OK) == card, others
+pressure.active_turns, pressure.turn_cap = real_turns, real_cap
+del os.environ["ORCA_TERMINAL_HANDLE"]  # not identifiable: counted like any other turn, with a warning
+assert pressure.active_turns(run=orca_says(8)) == 9 and "식별하지 못해" in pressure.SELF_NOTE
+os.environ["ORCA_TERMINAL_HANDLE"] = "term_me"
+assert pressure.active_turns(run=orca_says(8, shown=False)) == 9 and "식별하지 못해" in pressure.SELF_NOTE
+if real_handle is not None:
+    os.environ["ORCA_TERMINAL_HANDLE"] = real_handle
+else:
+    del os.environ["ORCA_TERMINAL_HANDLE"]
+pressure.SELF_NOTE = "호출 세션을 식별하지 못해 X"
+pressure.active_turns = lambda: 9
+assert "경고: 호출 세션을 식별하지 못해 X" in g.gate("orca worktree create --repo x", OK, {}, cfg, now=1.0, p=pressure)[1]
+pressure.SELF_NOTE = ""
+pressure.active_turns = real_turns
 ticks = iter([100.0, 100.0, 200.0, 2000.0])
 said = []
 assert pressure.turns_wait(cfg, 15, now_fn=lambda: next(ticks), sleep=lambda s: None, count=iter([10**6, 10**6, 0]).__next__,
