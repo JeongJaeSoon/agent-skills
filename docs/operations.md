@@ -111,6 +111,7 @@ skills-sync setup disable janitor        # 하나 끄기. 어느 것이든 apply
 | `pressure_gate.py` | Bash 호출 전·후 | `orch heavy`·`docker compose up`·`orca worktree create`를 PC 사용량이 위험이거나, 경고인데 최근 15분 안에 정리 회차가 없으면 거부하고 정리·대기 방법을 알린다. 위험으로 거부한 명령은 대기열과 대시보드에 남기고, 같은 세션의 재시도 결과를 기록한다. 전체 테스트·E2E·headless Chrome은 `orch heavy` 밖이면 감싼 명령을 알려 주며 거부하고, 새 카드는 진행 중 에이전트 턴이 상한(`reap.pressure.active_turns_per_cpu`)에 닿으면 거부한다. `AGENT_SKILLS_PRESSURE_GATE=0`으로 끈다 |
 | `prose_check.py` | PR·커밋·Linear·Jira 저장 전 | 본문의 write-plainly 금지 패턴을 알린다. 막지 않는다 |
 | `claim_check.py` | 멈출 때(Stop, SubagentStop) | 코드를 고치고 아무것도 돌리지 않은 채 "고쳤다"고 하면 한 번 막는다. `AGENT_SKILLS_CLAIM_CHECK=0`으로 끈다 |
+| `record_check.py` | Bash 호출 전·후, 멈출 때 | `gh pr merge`·`gh pr create`·`orch land` 뒤 기록을 요구하고, 보고·`worker_done` 본문에 `기록:`·`기록 못 함:` 줄이 나올 때까지 그 세션에 의무를 남긴다. 기록 줄 없는 `worker_done`, 의무가 남은 카드 닫기, 의무를 남긴 채 끝나는 턴을 `guard.record_check`(기본 warn)로 알리거나 막는다. `tracker`·`notes` 설정이 없으면 꺼진다([기록 줄 검사](skills.md#기록-줄-검사)) |
 | `onboard.py` | 세션 시작 | 설정되지 않은 PC에서 `setup-pc`를 제안한다. 거절하면 그 프로필에서는 다시 묻지 않고(`onboard.py --decline`), `AGENT_SKILLS_ONBOARD=0`으로 모두 끈다 |
 | `reorient.py` | 세션 시작, 프롬프트 | `--agent agent-skills:orchestrator`·`lead`나 `ROLE:` 줄로 선언한 세션에 다시 읽을 규칙과 매 프롬프트 한 줄을 넣는다 |
 | `decision.py` | 프롬프트 | 터미널에서 답한 대시보드 결정을 닫는다 |
