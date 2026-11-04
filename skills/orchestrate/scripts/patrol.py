@@ -33,7 +33,7 @@ tail of each card's session transcript, the `orch sent` log and the last pressur
   B  bg wait   an agent card, Run workers included, whose turn ended 15+ min ago, not waiting on a human, whose last
                message says it waits on a background task (bgwait_signal), while nothing will wake it: the transcript
                owes no armed background call or Monitor a result (not parked) and Claude Code's status line shows no
-               shell, agent or task running. A screen without that wording is not judged (shown as ❔)
+               shell, monitor, agent or task running. A screen without that wording is not judged (shown as ❔)
   L  load      at pressure warn or danger, a top consumer whose card is judged I, X, S or O
   W  watcher   an orchestrator whose `orch watch-cards` has not finished a round in an hour (reported here; the
                collector raises it on the dashboard)
@@ -71,11 +71,11 @@ import contextlib, datetime as dt, fcntl, hashlib, json, os, pathlib, re, secret
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 sys.path.insert(1, str(pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts"))
 import agent_signal, card_watch, cardguard, dash, fleet, prog  # noqa: E402
+from card_watch import AGENT_PANEL, BACKGROUND  # noqa: E402
 try:  # dash put the repo's scripts/ on the path
-    from sync import BACKGROUND, STALE_COMMAND, stale_signal  # noqa: E402
+    from sync import STALE_COMMAND, stale_signal  # noqa: E402
 except ImportError:  # an install without the repo's scripts/: H judges nothing
     STALE_COMMAND = {}
-    BACKGROUND = re.compile(r"\b\d+ (?:shells?|agents?|background tasks?)\b|shells? still running")  # sync.BACKGROUND
 
     def stale_signal(lines):
         return None
@@ -140,9 +140,12 @@ transcript_tail = cardguard.transcript_tail
 
 
 def background(lines):
-    """Claude Code's status line shows a background shell or agent still running (BACKGROUND). A message typed in after
+    """Claude Code's status line shows a background shell, monitor or agent still running. A message typed in after
     the command was armed resets the transcript's record of it, so only the screen still shows it."""
-    return bool(lines) and any(BACKGROUND.search(l) for l in lines[-6:])
+    if not lines:
+        return False
+    box = max((i for i, l in enumerate(lines) if l.strip().startswith("❯")), default=len(lines))
+    return any(BACKGROUND.search(l) for l in lines[-6:]) or any(AGENT_PANEL.search(l) for l in lines[box + 1:])
 
 
 # A last message that says the session waits on a background task still to finish (English or Korean). A launch
