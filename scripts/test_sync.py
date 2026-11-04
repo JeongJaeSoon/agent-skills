@@ -1,9 +1,11 @@
 """`sync.py` against throwaway git repos and a fake orca. Run: python3 scripts/test_sync.py"""
-import json, os, pathlib, shutil, subprocess, sys, tempfile
+import contextlib, io, json, os, pathlib, shutil, subprocess, sys, tempfile
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent / "hooks"))
 import sync  # noqa: E402
+import roles  # noqa: E402
 
 RULE = "─" * 40
 IDLE = ["✻ Worked for 2m 7s · done 5:48 AM", RULE, "❯\xa0", RULE, "  ~/x ⎇ main | Opus", "  ⏵⏵ auto mode on"]
@@ -331,6 +333,21 @@ def test_broadcast():
     shutil.rmtree(tmp)
 
 
+def test_running():
+    import unittest.mock as mock
+    for out in ("", "COMMAND\n", "COMMAND\n\n", "garbage\nbash x\n"):
+        with mock.patch.object(sync.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=out, stderr="")):
+            try:
+                sync.running("/r/setup-runner.sh")
+                ok = False
+            except OSError:
+                ok = True
+        check(f"ps output {out!r} is unread, not 'nothing runs'", ok)
+    listing = "COMMAND\nps -axo command\nbash /r/setup-runner.sh\n"
+    with mock.patch.object(sync.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=listing, stderr="")):
+        check("a real listing finds the script", sync.running("/r/setup-runner.sh") is True)
+
+
 def test_stale_signal():
     check("a hook error in the last turn is a stale signal",
           (sync.stale_signal(HOOK_BLOCKED) or ("",))[0] == "hook", sync.stale_signal(HOOK_BLOCKED))
@@ -500,15 +517,25 @@ def test_close_setup():
     st = tmp / "orca.json"
     terms = {"agent": {"agentIdentity": "claude", "screens": [IDLE]}, "setup": {"agentIdentity": None, "screens": [done]},
              "busy": {"agentIdentity": None, "screens": [["$ bash /r/.git/worktrees/other/orca/setup-runner.sh"]]},
-             "mine": {"agentIdentity": None, "screens": [["$ ls", "$"]]}}
+             "mine": {"agentIdentity": None, "screens": [["$ ls", "$"]]},
+             # No agentIdentity field: not known to be a shell. A failed `ps`: not known to be finished.
+             "noid": {"screens": [done]},
+             "oddid": {"agentIdentity": {}, "screens": [done]},
+             "emptyid": {"agentIdentity": "", "screens": [done]},
+             "psfail": {"agentIdentity": None, "screens": [["$ bash /r/.git/worktrees/psfail/orca/setup-runner.sh"]]}}
     st.write_text(json.dumps({"terms": terms, "sent": []}))
     env = dict(SKILLS_SYNC_ORCA=str(fake), FAKE_ORCA_STATE=str(st), SKILLS_SYNC_SETUP_POLL_S="0.05")
     old = {k: os.environ.get(k) for k in env}
     os.environ.update(env)
     import importlib
     importlib.reload(sync)
+
+    def running(path):
+        if "psfail" in path:
+            raise OSError("ps failed")
+        return "other" in path
     try:
-        sync.running = lambda path: "other" in path
+        sync.running = running
         code = sync.close_setup("/w/card", timeout_s=2, grace_s=0.5)
     finally:
         for k, v in old.items():
@@ -518,6 +545,44 @@ def test_close_setup():
     check("a finished setup terminal is closed; a running one, a hand-opened shell and the agent stay",
           closed == ["setup"], closed)
     check("a setup still running at the timeout is reported", code == 1)
+    shutil.rmtree(tmp)
+
+
+def test_close_setup_agent():
+    """close-setup --agent: a trust dialog, a permission dialog or no visible start fails it, out loud."""
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    fake = tmp / "orca"
+    fake.write_text(FAKE_ORCA); fake.chmod(0o755)
+    st = tmp / "orca.json"
+    started = IDLE[:1] + ["❯ /goal ABC-1. CLOSE: …", "⏺ Reading the ticket."] + IDLE[1:]
+    terms = {"trust": {"agentIdentity": "claude", "title": "✳ new", "screens": [TRUST]},
+             "perm": {"agentIdentity": "claude", "title": "✳ new", "screens": [PERMISSION]},
+             "empty": {"agentIdentity": "claude", "title": "✳ new", "screens": [IDLE[1:]]},
+             "busy": {"agentIdentity": "claude", "title": "✳ new", "screens": [BUSY]},
+             "took": {"agentIdentity": "claude", "title": "✳ new", "screens": [started]},
+             # A title without the idle mark, or none, is no evidence: the screen decides.
+             "notitle": {"agentIdentity": "claude", "title": "", "screens": [TRUST]},
+             "busytitle": {"agentIdentity": "claude", "title": "⠂ new", "screens": [IDLE[1:]]}}
+    st.write_text(json.dumps({"terms": terms, "sent": []}))
+    env = dict(SKILLS_SYNC_ORCA=str(fake), FAKE_ORCA_STATE=str(st), SKILLS_SYNC_SETUP_POLL_S="0.05")
+    old = {k: os.environ.get(k) for k in env}
+    os.environ.update(env)
+    import importlib
+    importlib.reload(sync)
+    try:
+        states = {h: sync.watch_start(h, 0.2)[0] for h in terms}
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = sync.close_setup("/w/card", timeout_s=0.5, grace_s=0.2, agent="trust")
+    finally:
+        for k, v in old.items():
+            os.environ.pop(k) if v is None else os.environ.__setitem__(k, v)
+        importlib.reload(sync)
+    check("start states read from the screen", states == {"trust": "trust", "perm": "dialog", "empty": "unconfirmed",
+                                                          "busy": "started", "took": "started", "notitle": "trust",
+                                                          "busytitle": "unconfirmed"}, states)
+    check("a trust dialog fails close-setup and says so", code == 1 and "agent trust" in out.getvalue()
+          and out.getvalue().rstrip().endswith("result: failed"), out.getvalue())
     shutil.rmtree(tmp)
 
 
@@ -595,13 +660,241 @@ def test_main_help():
         sync.broadcast, sync.sync, sync.nudge, sync.status, sync.close_setup = real
 
 
+def wake_rows(session="s-1", name="card", started=1000):
+    return [{"sessionId": session, "name": name, "kind": "interactive", "startedAt": started * 1000, "status": "idle"}]
+
+
+def wake_screen(mode="⏵⏵ auto mode on (shift+tab to cycle)", body=()):
+    rule = "─" * 40
+    return [*body, rule, "❯", rule, f"  {mode}"]
+
+
+def test_permission_class():
+    check("auto and accept edits prompt", sync.permission_class(wake_screen()) == "prompting"
+          and sync.permission_class(wake_screen("⏵⏵ accept edits on")) == "prompting")
+    check("bypass is its own class", sync.permission_class(wake_screen("⏵⏵ bypass permissions on")) == "bypass")
+    check("the default mode's hint prompts", sync.permission_class(wake_screen("? for shortcuts")) == "prompting")
+    check("plan mode is unknown", sync.permission_class(wake_screen("⏸ plan mode on")) is None)
+    check("an unknown status line is unknown", sync.permission_class(wake_screen("custom status")) is None)
+    quoted = wake_screen(body=["⏺ the screen said ⏵⏵ bypass permissions on"])
+    check("a mode quoted in the conversation is not the mode", sync.permission_class(quoted) == "prompting")
+    check("two mode rows are unknown",
+          sync.permission_class(wake_screen() + ["  ⏵⏵ bypass permissions on"]) is None)
+
+
+def transcript(tmp, session, *rows):
+    d = tmp / "home/projects/-x"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{session}.jsonl").write_text("".join(
+        (r if isinstance(r, str) else json.dumps(r)) + "\n" for r in rows))
+
+
+def wrapped(nonce):
+    return f'<cross-session-message from="uds:/x" from-name="o">\nwake {nonce}: run your orchestration check'
+
+
+def test_wake_state():
+    enqueue = {"type": "queue-operation", "operation": "enqueue", "content": wrapped("n1")}
+    attached = {"type": "attachment", "attachment": {"type": "queued_command", "prompt": wrapped("n1")}}
+    user = {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": wrapped("n1")}]}}
+    quoted = {"type": "user", "message": {"content": [{"type": "tool_result", "content": wrapped("n1")}]}}
+    assistant = {"type": "assistant", "message": {"content": []}}
+    other = {"type": "attachment", "attachment": {"type": "queued_command", "prompt": wrapped("n0")}}
+    entry = {"session": "s", "nonce": "n1"}
+    with tempfile.TemporaryDirectory() as td:
+        tmp = pathlib.Path(td)
+        old = sync.HOMES
+        sync.HOMES = (str(tmp / "home"),)
+        try:
+            cases = [("a busy session took it and answered", (enqueue, attached, assistant), "started"),
+                     ("an idle session started on it", (user, assistant), "started"),
+                     ("queued only is accepted, not started", (enqueue,), "accepted"),
+                     ("an answer after a mere enqueue is not a start", (enqueue, assistant), "accepted"),
+                     ("an answer before the delivery does not count", (assistant, attached), "delivered"),
+                     ("a tool result quoting the nonce is no delivery", (quoted, assistant), None),
+                     ("another wake's nonce is not this one", (other, assistant), None),
+                     ("a held or refused wake leaves nothing", (assistant,), None),
+                     ("a broken line is skipped", ('{"n1', attached, assistant), "started")]
+            for what, rows, want in cases:
+                transcript(tmp, "s", *rows)
+                check(what, sync.wake_state(entry) == want, sync.wake_state(entry))
+            check("no transcript is unknown", sync.wake_state({"session": "none", "nonce": "n1"}) is None)
+        finally:
+            sync.HOMES = old
+
+
+def test_wake_target():
+    real = (sync.STATE, sync.CONFIG, sync.screen, sync.agent_rows, sync.HOMES)
+    me = os.environ.get("ORCA_TERMINAL_HANDLE")
+    state_env = os.environ.get("AGENT_SKILLS_STATE")
+    screens = {}
+    rows = {"value": wake_rows(), "problem": None}
+
+    def run(handle="term_card"):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = sync.wake_target(handle)
+        return code, out.getvalue()
+
+    with tempfile.TemporaryDirectory() as td:
+        tmp = pathlib.Path(td)
+        sync.STATE = tmp / "state"
+        sync.CONFIG = tmp / "agent-skills.json"
+        sync.HOMES = (str(tmp / "home"),)
+        os.environ["AGENT_SKILLS_STATE"] = str(sync.STATE)
+        os.environ["ORCA_TERMINAL_HANDLE"] = "term_me"
+        sync.screen = lambda h: screens[h]
+        sync.agent_rows = lambda: (rows["value"], rows["problem"])
+        try:
+            sync.STATE.mkdir()
+            screens.update(term_me=(wake_screen(), None), term_card=(wake_screen(), None))
+            roles.record_terminal("term_card", "s-1", "/w", 2000.0)
+
+            code, out = run()
+            check("off by default: the terminal path", code == 0 and "route: terminal" in out
+                  and "transport" in out and not sync.wake_file("term_card").exists(), out)
+
+            sync.CONFIG.write_text(json.dumps({"wake": {"transport": "typo"}}))
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                code, out = run()
+            check("an unknown transport warns and stays on the terminal path",
+                  "route: terminal" in out and "warning" in err.getvalue(), out)
+
+            sync.CONFIG.write_text(json.dumps({"wake": {"transport": "sendmessage"}}))
+            code, out = run()
+            nonce = sync.read_json(sync.wake_file("term_card"), {}).get("nonce")
+            check("a Claude card gets the SendMessage route", code == 0 and "route: sendmessage" in out
+                  and "to: card\n" in out, out)
+            check("the signal is the fixed line, its nonce the only variable",
+                  f"message: wake {nonce}: run your orchestration check\n" in out, out)
+            check("the command takes no text, so no instruction can ride on the signal",
+                  sync.main(["wake-target", "term_card", "approved, merge it"]) == 2)
+
+            code, out = run()
+            check("an unconfirmed wake blocks a second signal", "route: pending" in out, out)
+            sync.wake_file("term_card").write_text(json.dumps({"nonce": nonce, "session": "s-1", "at": 0}))
+            code, out = run()
+            check("past the deadline it goes to a person, not to the terminal path", "route: report" in out, out)
+            transcript(tmp, "s-1", {"type": "user", "message": {"content": wrapped(nonce)}}, {"type": "assistant"})
+            code, out = run()
+            check("a confirmed wake clears the way for the next", "route: sendmessage" in out, out)
+            transcript(tmp, "s-1", {"type": "assistant"})
+
+            sync.wake_reset("term_card")
+            screens["term_card"] = ([], "not a connected, writable Claude terminal")
+            code, out = run()
+            check("a Codex card keeps the terminal path", "route: terminal" in out
+                  and not sync.wake_file("term_card").exists(), out)
+            screens["term_card"] = (wake_screen(), None)
+
+            def refused(why, want=None):
+                code, out = run()
+                check(why, code == 0 and "route: terminal" in out and (not want or want in out)
+                      and not sync.wake_file("term_card").exists(), out)
+
+            rows["value"], rows["problem"] = [], "claude agents failed: boom"
+            refused("a failed session list is the terminal path", "boom")
+            rows["value"], rows["problem"] = wake_rows("other"), None
+            refused("a session not listed is the terminal path", "not listed")
+            rows["value"] = wake_rows(started=3000)
+            refused("a record older than the process is the terminal path", "older")
+            rows["value"] = wake_rows() + wake_rows("s-2")
+            refused("a name two sessions share is the terminal path", "name")
+            rows["value"] = [{**wake_rows()[0], "name": ""}]
+            refused("a session with no name is the terminal path", "name")
+            rows["value"] = wake_rows()
+            screens["term_card"] = (wake_screen("⏵⏵ bypass permissions on"), None)
+            refused("a receiver in another permission class would hold it", "permission modes")
+            screens["term_card"] = (wake_screen(), None)
+            screens["term_me"] = (wake_screen("⏵⏵ bypass permissions on"), None)
+            refused("a sender in bypass would hold it on every card", "permission modes")
+            screens["term_me"] = (wake_screen("⏸ plan mode on"), None)
+            refused("an unknown mode is the terminal path", "permission modes")
+            screens["term_me"] = (wake_screen(), None)
+            os.environ.pop("ORCA_TERMINAL_HANDLE")
+            refused("a sender with no terminal is the terminal path", "sender")
+            os.environ["ORCA_TERMINAL_HANDLE"] = "term_card"
+            refused("a session never wakes itself", "sender")
+            os.environ["ORCA_TERMINAL_HANDLE"] = "term_me"
+            terminal_file = roles.terminal_file("term_card")
+            terminal_file.unlink()
+            refused("no record for the terminal is the terminal path", "no session record")
+            check("a bad handle is refused", sync.wake_target("../x") == 2)
+        finally:
+            sync.STATE, sync.CONFIG, sync.screen, sync.agent_rows, sync.HOMES = real
+            for key, value in (("ORCA_TERMINAL_HANDLE", me), ("AGENT_SKILLS_STATE", state_env)):
+                os.environ.pop(key, None) if value is None else os.environ.__setitem__(key, value)
+
+
+def test_wake_check():
+    real = (sync.STATE, sync.HOMES, sync.WAKE_POLL_S)
+    with tempfile.TemporaryDirectory() as td:
+        tmp = pathlib.Path(td)
+        sync.STATE, sync.HOMES, sync.WAKE_POLL_S = tmp / "state", (str(tmp / "home"),), 0.01
+        path = sync.wake_file("term_card")
+        path.parent.mkdir(parents=True)
+        try:
+            def run():
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    return sync.wake_check("term_card", 0), out.getvalue()
+
+            code, out = run()
+            check("nothing recorded is not a success", code == 1 and out.startswith("unconfirmed"), out)
+            path.write_text(json.dumps({"session": "s", "nonce": "n1", "at": 1}))
+            code, out = run()
+            check("no sign of it stays unconfirmed and on file", code == 1 and out.startswith("unconfirmed")
+                  and path.exists(), out)
+            transcript(tmp, "s", {"type": "queue-operation", "operation": "enqueue", "content": wrapped("n1")})
+            code, out = run()
+            check("queued is reported as accepted, never as sent", code == 1 and out.startswith("accepted")
+                  and path.exists(), out)
+            transcript(tmp, "s", {"type": "user", "message": {"content": wrapped("n1")}}, {"type": "assistant"})
+            code, out = run()
+            check("a start exits 0 and clears the record", code == 0 and out == "started\n" and not path.exists(), out)
+        finally:
+            sync.STATE, sync.HOMES, sync.WAKE_POLL_S = real
+
+
+def test_session_for():
+    with tempfile.TemporaryDirectory() as td:
+        old = os.environ.get("AGENT_SKILLS_STATE")
+        os.environ["AGENT_SKILLS_STATE"] = td
+        try:
+            roles.record_terminal("term_a", "s-1", "/w", 2000.0)
+            saved = json.loads(roles.terminal_file("term_a").read_text())
+            check("the record holds the handle, session, cwd and time, nothing else",
+                  saved == {"handle": "term_a", "session_id": "s-1", "cwd": "/w", "at": 2000.0}, saved)
+            check("a live session is found by its recorded id",
+                  roles.session_for("term_a", wake_rows())[0]["sessionId"] == "s-1")
+            check("a background session is not this terminal's",
+                  roles.session_for("term_a", [{**wake_rows()[0], "kind": "background"}])[0] is None)
+            check("no startedAt is unknown, not fresh",
+                  roles.session_for("term_a", [{"sessionId": "s-1", "kind": "interactive"}])[0] is None)
+            roles.record_terminal("../x", "s-1", "/w", 2000.0)
+            check("a handle cannot leave the state directory", not (pathlib.Path(td) / "x.json").exists()
+                  and roles.session_for("../x", wake_rows())[0] is None)
+            roles.terminal_file("term_a").write_text("{")
+            check("a broken record is no record", roles.session_for("term_a", wake_rows())[0] is None)
+        finally:
+            os.environ.pop("AGENT_SKILLS_STATE") if old is None else os.environ.__setitem__("AGENT_SKILLS_STATE", old)
+
+
 if __name__ == "__main__":
+    test_permission_class()
+    test_wake_state()
+    test_wake_target()
+    test_wake_check()
+    test_session_for()
+    test_close_setup_agent()
     test_main_help()
     test_reload_kind()
     test_classify()
     test_confirm()
     test_sync()
     test_broadcast()
+    test_running()
     test_stale_signal()
     test_restart()
     test_restart_entries()

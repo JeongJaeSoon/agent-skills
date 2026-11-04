@@ -16,11 +16,12 @@ ORCH, LEAD = "agent-skills:orchestrator", "agent-skills:lead"
 
 
 def hook(event="UserPromptSubmit", session="s1", prompt="hi", source="startup", agent=None, title=None,
-         handle="term_me", transcript=None):
+         handle="term_me", transcript=None, entrypoint=None):
     env = {"PATH": f"{TMP / 'bin'}:/usr/bin:/bin", "HOME": str(TMP / "home"), "AGENT_SKILLS_STATE": str(TMP / "state"),
            "PROGRAMS_HOME": str(TMP / "programs"), "ORCA_TERMINAL_HANDLE": handle,
-           "ORCH_FLEET_STATE": str(TMP / "fleet"), "ORCH_FLEET_CONFIG": str(TMP / "none.json")}
-    payload = {"hook_event_name": event, "session_id": session}
+           "ORCH_FLEET_STATE": str(TMP / "fleet"), "ORCH_FLEET_CONFIG": str(TMP / "none.json"),
+           **({"CLAUDE_CODE_ENTRYPOINT": entrypoint} if entrypoint else {})}
+    payload = {"hook_event_name": event, "session_id": session, "cwd": "/work"}
     if event == "SessionStart":
         payload["source"] = source
     if event == "UserPromptSubmit":
@@ -192,4 +193,20 @@ assert reg("u9") is None, "undeclared"
 CFG.write_text("not json")
 hook(session="f7", prompt="ROLE: orchestrator", transcript=T)
 assert reg("f7") is None, "unreadable config counts as off"
+
+# Terminal -> session: only an interactive session at its own start, and nothing but the four fields.
+term = TMP / "state/terminals/term_t.json"
+hook(session="t1", handle="term_t", source="startup", entrypoint="sdk-cli", **START)
+assert not term.exists(), "a nested `claude -p` inherits the handle and must not take the terminal"
+hook(session="t1", handle="term_t", source="startup", **START)
+assert not term.exists(), "no entrypoint is unknown, not interactive"
+hook(session="t1", handle="term_t", source="startup", entrypoint="cli", **START)
+record = json.loads(term.read_text())
+assert set(record) == {"handle", "session_id", "cwd", "at"}, record
+assert (record["handle"], record["session_id"], record["cwd"]) == ("term_t", "t1", "/work"), record
+hook(session="t2", handle="term_t", source="resume", entrypoint="cli", **START)
+assert json.loads(term.read_text())["session_id"] == "t2", "a resume takes the terminal"
+hook(session="t3", handle="term_t", prompt="hi", entrypoint="cli")
+assert json.loads(term.read_text())["session_id"] == "t2", "a prompt writes nothing"
+hook(session="t4", handle="", source="startup", entrypoint="cli", **START)
 print("reorient: all pass")

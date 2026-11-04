@@ -43,6 +43,8 @@ MATRIX = {
     "wait_foreground": ({"main"}, {"orchestrator", "lead"}),
     "send_devnull": ({"main"}, {"orchestrator", "lead", "worker"}),
     "worker_only": ({"main"}, {"worker"}),
+    "exit_order": ({"main"}, set(ROLES)),  # lifecycle.py also needs a Dispatch, CLOSE or KEEP on the card
+    "agent_forbidden": ({"main", "subagent"}, {"orchestrator", "lead", "worker"}),
 }
 
 
@@ -190,14 +192,15 @@ def session(event, prompt=None):
     """The Session of a hook event. `prompt` stands in for the transcript's first prompt when given."""
     actor = "subagent" if event.get("agent_id") else "main"
     record = declared(str(event.get("session_id") or ""))
-    if record and record.get("role") == "none":
-        return Session("general", actor, declared=True)
-    # A subagent's event carries its own agent_type, not its parent's: the parent's role comes from the rest.
-    entry = resolve({k: v for k, v in event.items() if k != "agent_type"} if actor == "subagent" else event, record)
     first = first_prompt(event.get("transcript_path")) if prompt is None else prompt
+    # The card's own facts (a Dispatch, a CLOSE or KEEP row) hold whatever role the session declared or dropped.
     attrs = {"supervised": bool(PREAMBLE.search(first)), "close": False, "keep": False}
     for m in CARD_ROW.finditer(first):
         attrs[m.group(1).lower()] = True
+    if record and record.get("role") == "none":
+        return Session("general", actor, declared=True, **attrs)
+    # A subagent's event carries its own agent_type, not its parent's: the parent's role comes from the rest.
+    entry = resolve({k: v for k, v in event.items() if k != "agent_type"} if actor == "subagent" else event, record)
     if entry:
         return Session(entry["role"], actor, entry.get("slug"), True, **attrs)
     if lead_text(first):
