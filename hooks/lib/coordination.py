@@ -81,7 +81,7 @@ def check_model_flag(cmds, cfg):
                            "Add `--model` with what `orch model worker` (or `lead`) prints.")
         elif w[1:3] != LAUNCHES[0] or re.search(r"[$`*?\[]", re.sub(r"\[1m\]$", "", have)):
             continue  # only a worker start is a worker; a value the shell expands (variable, glob) cannot be read here
-        elif not isinstance(want, str):
+        elif not isinstance(want, str) or not want:
             if not any("is not set" in f.reason for f in out):
                 out += warn_only(cfg, "A `--model` is not compared: orchestrate.models.worker is not set.")
         elif not same_model(have, want):
@@ -99,8 +99,9 @@ def same_model(have, want):
     """Equal ignoring case, a `[1m]` suffix and a `-YYYYMMDD` date. A bare family (`sonnet`) matches any id of it."""
     have, want = (re.sub(r"-\d{8}$", "", m.split("[")[0].lower()) for m in (have, want))
     families = ("opus", "sonnet", "haiku")
-    if have in families or want in families:
-        return any(f in have and f in want for f in families)
+    for fam, other in ((have, want), (want, have)):
+        if fam in families:
+            return other == fam or other.startswith(f"claude-{fam}-")  # not `opusplan` and the like
     return have == want
 
 

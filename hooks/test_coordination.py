@@ -130,6 +130,10 @@ CONFIG.write_text(json.dumps({"orchestrate": {"models": {"worker": "claude-sonne
 assert "differs" in model_warning(f"{START} --spec 'x' --model claude-sonnet-4-5"), "two ids of one family are two models"
 assert model_warning(f"{START} --spec 'x' --model claude-sonnet-4-6-20260101") == ""
 assert model_warning(f"{START} --spec 'x' --model sonnet") == "", "a bare family matches its ids"
+CONFIG.write_text(json.dumps({"orchestrate": {"models": {"worker": "opusplan"}}}))
+assert "differs" in model_warning(f"{START} --spec 'x' --model opus"), "opusplan is not opus"
+CONFIG.write_text(json.dumps({"orchestrate": {"models": {"lead": "opus", "worker": ""}}}))
+assert "is not set" in model_warning(f"{START} --spec 'x' --model sonnet"), "an empty worker is unset"
 CONFIG.write_text(json.dumps({"orchestrate": {"models": {"lead": "opus", "worker": "sonnet"}}}))
 assert model_warning("orca agent launch --agent claude --worktree active --model opus") == "", "not a worker start"
 assert model_warning(f"MODEL=sonnet {START} --model \"$MODEL\"") == "", "a value the shell expands is not judged"
