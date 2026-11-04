@@ -54,6 +54,14 @@ f2 = {**f, "screens": {}, "read": lambda h: bar}
 assert patrol.judge(f2, {})[0] == [], "a background shell still running is not idle, though the transcript lost it"
 assert patrol.judge({**f, "screens": {}, "read": lambda h: ["❯ "]}, {})[0][0]["code"] == "I"
 assert patrol.background(["✻ Crunched for 22s · done 7:47 PM · 1 shell still running"])
+# Captured status lines: "← N agent" counts sessions elsewhere waiting on a human, not work of this one.
+fleet_bar = "  ⏵⏵ auto mode on (shift+tab to cycle) · PR #1 · ← 1 agent"
+monitor_bar = "  ⏵⏵ auto mode on · 1 monitor · ← 1 agent"
+assert not patrol.background(["⏺ Done.", "❯ ", fleet_bar])
+assert patrol.background(["❯ ", monitor_bar]) and patrol.background(["❯ ", "  ⏵⏵ auto mode on · 1 shell, 1 monitor · ← 1 agent"])
+assert [x["code"] for x in patrol.judge({**f, "screens": {}, "read": lambda h: ["⏺ Done.", "❯ ", fleet_bar]}, {})[0]] == ["I"], \
+    "an idle session showing only that count is still idle"
+assert patrol.judge({**f, "screens": {}, "read": lambda h: ["⏺ Done.", "❯ ", monitor_bar]}, {})[0] == [], "a Monitor running is not idle"
 
 # X: Orca's exited verdict for a worker; for a card outside a Run, a transcript ending on an error with no agent left.
 err = {"type": "assistant", "isApiErrorMessage": True, "timestamp": ago(30),
@@ -608,6 +616,9 @@ f = facts(terminals=[term(f"b{n}", f"/w/b{n}") for n in range(1, 9)],
 found, v, _ = patrol.judge(f, {})
 bg = sorted((x for x in found if x["code"] == "B"), key=lambda x: x["card"])
 assert codes(bg) == [("B", "b1"), ("B", "b2"), ("B", "b8")], found
+fleet_shown = {**shown, "b1": waiting[:-1] + [fleet_bar], "b2": korean[:-1] + [monitor_bar]}
+bg2 = [x for x in patrol.judge({**f, "screens": {}, "read": lambda h: fleet_shown[h]}, {})[0] if x["code"] == "B"]
+assert sorted(codes(bg2)) == [("B", "b1"), ("B", "b8")], "the waiting-sessions count hides no B finding; a Monitor does"
 why = "백그라운드 작업을 기다리지만 깨울 작업이 없음"
 assert v["check"] == {"/w/b1": why, "/w/b2": why, "/w/b8": why}, v["check"]
 assert "Waiting on the background Codex run" in bg[0]["title"] and bg[0]["handle"] == "b1", bg[0]["title"]
