@@ -227,6 +227,12 @@ del os.environ["ORCA_TERMINAL_HANDLE"]  # not identifiable: counted like any oth
 assert pressure.active_turns(run=orca_says(8)) == 9 and "식별하지 못해" in pressure.SELF_NOTE
 os.environ["ORCA_TERMINAL_HANDLE"] = "term_me"
 assert pressure.active_turns(run=orca_says(8, shown=False)) == 9 and "식별하지 못해" in pressure.SELF_NOTE
+assert pressure.active_turns(run=lambda *a, **k: "not json") is None and pressure.SELF_NOTE == ""  # no stale warning
+said = []
+ticks = iter([0.0, 0.0, 901.0])  # a timeout with an unidentified caller still carries the warning
+assert pressure.turns_wait({**cfg, "active_turns_per_cpu": 0.00001}, 15, now_fn=lambda: next(ticks), sleep=lambda s: None,
+                           out=said.append, count=lambda: pressure.active_turns(run=orca_says(9, mine=False, shown=False))) == 3
+assert "식별하지 못해" in said[-1], said
 if real_handle is not None:
     os.environ["ORCA_TERMINAL_HANDLE"] = real_handle
 else:

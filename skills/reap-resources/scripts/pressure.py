@@ -232,6 +232,7 @@ def active_turns(run=sh):
     from, not load the start adds. A caller that cannot be identified counts like any other turn and SELF_NOTE says so
     (`turns --wait` runs while the caller's turn is over, so counting it in the gate alone would never agree)."""
     global SELF_NOTE
+    SELF_NOTE = ""  # reset first: an early return below must not leave the previous poll's warning
     out = run(["orca", "worktree", "ps", "--limit", "10000", "--json"], timeout=5)  # sh gives None when orca is missing
     try:
         data = json.loads(out or "")
@@ -274,6 +275,8 @@ def turns_wait(cfg, minutes, poll=30.0, now_fn=time.time, sleep=time.sleep, coun
                 out(f"에이전트 턴 수를 {minutes:g}분 동안 셀 수 없음(Orca 응답 없음·목록 잘림) — 시작하지 않는다")
             else:
                 out(f"진행 중인 에이전트 턴 {n}개 ≥ 상한 {cap}, {minutes:g}분 기다려도 줄지 않음 — 시작하지 않는다")
+            if SELF_NOTE:
+                out(f"경고: {SELF_NOTE}")
             return 3
         sleep(poll)
 
