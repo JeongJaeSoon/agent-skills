@@ -221,19 +221,27 @@ def run_list(call, error=RuntimeError):
     return next(pages(call, "run-list", error=error))[0].get("runs") or []
 
 
-def own_dispatch(orca=None, failed=None):
-    """This terminal's own active Dispatch when it is a dispatched worker (a lead started with worker-start, whose
-    `run-current` is null), else None, or `failed` when worker-list did not answer. Unbound, worker-list spans every
-    Run; only active terminals can be this one."""
-    me = os.environ.get("ORCA_TERMINAL_HANDLE")
-    try:
-        for rows, _, _ in worker_list(orca_call(orca), "--terminal-state", "active", "--limit", "100") if me else ():
-            mine = next((w for w in rows if worker_terminal(w) == me), None)
+def terminal_dispatch(call, handle):
+    """The Dispatch of the terminal `handle`, else None. Retained counts: a person typing into a worker's terminal, or
+    keeping it open, moves its Dispatch out of `active` and it is still this terminal's. Active goes first because Orca
+    reuses a terminal for a new Dispatch, leaving older ones retained; within a state worker-list is newest first."""
+    for state in ("active", "retained"):
+        for rows, _, _ in worker_list(call, "--terminal-state", state, "--limit", "100"):
+            mine = next((w for w in rows if worker_terminal(w) == handle), None)
             if mine:
                 return mine
+    return None
+
+
+def own_dispatch(orca=None, failed=None):
+    """This terminal's own Dispatch when it is a dispatched worker (a lead started with worker-start, whose
+    `run-current` is null), else None, or `failed` when worker-list did not answer. Unbound, worker-list spans every
+    Run."""
+    me = os.environ.get("ORCA_TERMINAL_HANDLE")
+    try:
+        return terminal_dispatch(orca_call(orca), me) if me else None
     except (OSError, subprocess.TimeoutExpired, ValueError, AttributeError, TypeError, RuntimeError):
         return failed
-    return None
 
 
 def lead_scope(workers, lead_dispatch):

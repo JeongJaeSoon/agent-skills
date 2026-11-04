@@ -6,7 +6,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import orca_settings as s  # noqa: E402
 
 base = pathlib.Path(tempfile.mkdtemp(prefix="test-orca-settings-"))
-real_binding = s.binding
+real_binding, real_own_dispatch = s.binding, s.own_dispatch
 
 
 def store(settings, profile="local-default", index=True):
@@ -160,4 +160,44 @@ s.FULL[:] = ["--full"]
 seen = []
 assert s.run_current(lambda *a: seen.append(a) or CONCISE_RUN, "--from", "term_me") == {"id": "run_x"}
 assert seen == [("orchestration", "run-current", "--from", "term_me", "--full")], seen
+
+
+def own(**states):
+    """The real own_dispatch in term_me against an Orca listing these rows per --terminal-state, None for a state
+    whose listing fails: (own_dispatch, the states asked, what doctor prints)."""
+    asked = []
+
+    def fake(cmd, **_):
+        state = cmd[cmd.index("--terminal-state") + 1]
+        asked.append(state)
+        rc, out, err = (1, "", "connect ECONNREFUSED") if states[state] is None else answer({"workers": states[state]})
+        return types.SimpleNamespace(returncode=rc, stdout=out, stderr=err)
+    s.FULL[:] = ["--full"]
+    s.own_dispatch = real_own_dispatch
+    doctor = io.StringIO()
+    with mock.patch.object(s.subprocess, "run", fake), mock.patch.dict(os.environ, ORCA_TERMINAL_HANDLE="term_me"), \
+            contextlib.redirect_stdout(doctor):
+        got = real_own_dispatch(failed="unknown")
+        s.main([])
+    return got, asked[:len(asked) // 2], doctor.getvalue()
+
+
+def row(dispatch, handle="term_me"):
+    return {"dispatchId": dispatch, "runId": "run_top", "agentTerminalHandle": handle}
+
+
+# A person typed into the lead's terminal, so its Dispatch left `active` for `retained`: still this terminal's.
+got, asked, doctor = own(active=[row("ctx_other", "term_other")], retained=[row("ctx_lead")])
+assert got == row("ctx_lead") and asked == ["active", "retained"], (got, asked)
+assert "Run run_top 의 워커" in doctor and "dispatch:ctx_lead" in doctor and "묶여 있지 않다" not in doctor, doctor
+# Orca reuses a terminal for a new Dispatch, so an old retained row must not shadow the live one.
+got, asked, _ = own(active=[row("ctx_live")], retained=[row("ctx_old")])
+assert got == row("ctx_live") and asked == ["active"], (got, asked)
+got, _, _ = own(active=[], retained=[row("ctx_newest"), row("ctx_older")])  # worker-list answers newest first
+assert got == row("ctx_newest"), got
+got, asked, doctor = own(active=[], retained=[row("ctx_other", "term_other")])
+assert got is None and asked == ["active", "retained"] and "묶여 있지 않다" in doctor, (got, asked)
+# Either listing failing is Orca not answering, never "no Dispatch".
+assert own(active=None, retained=[row("ctx_lead")])[:2] == ("unknown", ["active"])
+assert own(active=[], retained=None)[:2] == ("unknown", ["active", "retained"])
 print("test_orca_settings: ok")
