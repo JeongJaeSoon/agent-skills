@@ -273,10 +273,21 @@ class Restarted(unittest.TestCase):
     def test_a_worktree_with_a_live_agent_terminal_is_not_resumed_again(self):
         # Resumed from a lead on another Run: this Run keeps only the abandoned row, the worktree has the live agent.
         live = [{"handle": "term_new", "agentIdentity": "claude", "worktreePath": "/work/My Card"}]
-        orca = Orca(run="run_1", workers=[self.row("d1", "abandoned")], here=live)
+        other_run = self.row("d_new", "dispatched", "active", handle="term_new", runId="run_other")
+        other_run["resource"] = {"worktreeId": "repo::/work/My Card::workspace:2"}
+        orca = Orca(run="run_1", workers=[self.row("d1", "abandoned"), other_run], here=live)
         lines = run("lead", "acme", "run_1", orca=orca, procs=wait_proc(200, "orch wait acme"))
         self.assertEqual(does(lines), [])
         self.assertTrue([t for k, t in lines if k == "info" and "d1" in t and "live agent terminal" in t])
+
+    def test_a_resumed_session_with_no_dispatch_yet_is_told_to_get_one(self):
+        # The run stopped between the terminal and `worker-start --terminal`: the session runs but has no mailbox.
+        live = [{"handle": "term_new", "agentIdentity": "claude", "worktreePath": "/work/My Card"}]
+        orca = Orca(run="run_1", workers=[self.row("d1", "abandoned")], here=live)
+        out = does(run("lead", "acme", "run_1", orca=orca, procs=wait_proc(200, "orch wait acme")))
+        self.assertEqual(len(out), 1)
+        self.assertIn("worker-start --spec-file <resume instruction> --worktree 'id:repo::/work/My Card' --terminal term_new", out[0])
+        self.assertNotIn("terminal create", out[0])
 
     def test_the_resume_command_follows_the_workers_agent(self):
         def line(agent):

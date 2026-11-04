@@ -134,15 +134,15 @@ def check_handle(handle, call, root):
                    "so the variable is renewed")], None, None
 
 
-def card_has_agent(call, worktree_id):
-    """Whether an agent terminal is open in the worktree. Unknown (no id, Orca unsure) reads as no."""
+def card_agent(call, worktree_id):
+    """The handle of an agent terminal open in the worktree, else None. Unknown (no id, Orca unsure) reads as none."""
     if not worktree_id:
-        return False
+        return None
     try:
         terms = call("terminal", "list", "--worktree", f"id:{worktree_id}").get("terminals") or []
     except OrcaError:
-        return False
-    return any(t.get("agentIdentity") for t in terms)
+        return None
+    return next((t.get("handle") for t in terms if t.get("agentIdentity") and t.get("handle")), None)
 
 
 def own_dispatch(call, handle):
@@ -233,9 +233,10 @@ def check_waits(role, slug, table, pid):
     return out
 
 
-def resume_line(w, d, task, handle):
-    """The recovery of an abandoned worker (reboot SKILL.md "Resume a worker"): its Claude session resumed in a new
-    terminal of its own worktree, then a new Dispatch attached to that terminal."""
+def resume_line(w, d, task, handle, running=None):
+    """The recovery of an abandoned worker (reboot SKILL.md "Resume a worker"): its session resumed in a new terminal
+    of its own worktree, then a new Dispatch attached to that terminal. running: the agent terminal already open there
+    (a resume cut short), which only needs the Dispatch."""
     card = (w.get("resource") or {}).get("worktreeId") or ""
     sel = shlex.quote(f"id:{card}") if card else "id:<its worktree id>"  # the whole id: workspaces can share a path
     provider = (w.get("projection") or {}).get("provider") or {}
@@ -247,6 +248,11 @@ def resume_line(w, d, task, handle):
         resume = f"codex resume <session-id> -m {model}"
     else:
         resume = f"<{agent}'s own command that resumes session <session-id>>"
+    if running:
+        return (f"worker {d} (task {task}) was abandoned and its worktree runs an agent terminal {running} with no "
+                f"Dispatch (a resume cut short): attach one, `orca orchestration worker-start --spec-file <resume "
+                f"instruction> --worktree {sel} --terminal {running}` (reboot SKILL.md \"Resume a worker\"; if that "
+                "session is not this worker's, leave it)")
     gone = f"its terminal {handle} is gone" if handle else "it has no terminal"
     return (f"worker {d} (task {task}) was abandoned and {gone}: resume it, `orca terminal create --worktree {sel} "
             f"--command \"{resume}\"`, then `orca orchestration worker-start "
@@ -299,9 +305,12 @@ def check_workers(run, call, lead_dispatch=None, me=None):
                               f"{parent.get('dispatchId')}: send that lead this line, and it restarts its own worker"))
             continue
         if abandoned:  # Orca settled it when its terminal went: there is nothing to stop or retry, only a session to resume
-            if card_has_agent(call, wt):  # resumed from another Run: this Run keeps only the abandoned row
-                out.append(("info", f"worker {d} (task {task}) is abandoned here, but its worktree has a live agent "
-                                    "terminal: it was resumed (perhaps on another Run), so it is not resumed again"))
+            if agent := card_agent(call, wt):  # a session runs there: resumed, maybe from another Run
+                if orca_settings.terminal_dispatch(call, agent):
+                    out.append(("info", f"worker {d} (task {task}) is abandoned here, but its worktree has a live agent "
+                                        f"terminal {agent} with a Dispatch: it was resumed (perhaps on another Run)"))
+                else:  # stopped between `terminal create` and `worker-start`: the session has no mailbox
+                    out.append(("do", resume_line(w, d, task, h, agent)))
                 continue
             out.append(("do", resume_line(w, d, task, h)))
             continue
