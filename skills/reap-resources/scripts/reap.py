@@ -265,8 +265,9 @@ def parse_ts(s):
     return dt.datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
 
 
-def judge_volumes(vols, active, hours, now):
-    """vols: [{name, labels, created}] of dangling volumes; active: compose projects that have any container."""
+def judge_volumes(vols, active, hours, now, owner_label=None):
+    """vols: [{name, labels, created}] of dangling volumes; active: compose projects that have any container.
+    owner_label: reap.stack_volumes.label, the other owner label."""
     out = []
     for v in vols:
         proj = (v["labels"] or {}).get("com.docker.compose.project")
@@ -281,7 +282,7 @@ def judge_volumes(vols, active, hours, now):
         else:
             why, target = f"컨테이너 없는 project {proj}", True
         out.append({"kind": "docker", "key": f"volume:{v['name']}", "name": f"volume {v['name']}", "age": age,
-                    "owners": [proj] if proj else [], "why": why, "target": target})
+                    "owners": volume_owners(v["labels"], (None, owner_label)), "why": why, "target": target})
     return out
 
 
@@ -327,7 +328,9 @@ def docker_scan(hours, notes):
     for line in (run(["docker", "images", "-f", "dangling=true", "--format", "{{json .}}"]) or "").splitlines():
         i = json.loads(line)
         images.append({"id": i["ID"], "created": parse_ts(i["CreatedAt"]), "size": i.get("Size", "")})
-    return owner_holds(judge_volumes(vols, set(states), hours, now), notes) + judge_images(images, used, hours, now)
+    stack = stack_volume_spec(config())
+    return owner_holds(judge_volumes(vols, set(states), hours, now, stack[1] if isinstance(stack, tuple) else None), notes) + \
+        judge_images(images, used, hours, now)
 
 
 def repos(given):
@@ -1203,35 +1206,41 @@ def stack_owner(links, pr_state, pr_of=branch_pr, exists=os.path.exists, head=No
 
 
 def stack_records(path):
-    """What the ledger says about who used each stack: {"stacks": {stack: [links, ...]}, "bad": [lines that did not
-    parse]}, None when it cannot be read. Unlike ledger_read and folded, every line counts, retired or not, and a bad
-    line is kept: dropping one could leave only an older owner of the stack looking like its current one."""
+    """Who used each stack, as the ledger says: {stack: [links, ...]}, from every line, retired or not. None when it
+    cannot be read, a line included: ledger_read skips a damaged line, and the one skipped may be the stack's current
+    owner, leaving an older one looking like it."""
     try:
         text = path.read_text(errors="replace")
     except FileNotFoundError:
         text = ""
     except OSError:
         return None
-    stacks, bad = {}, []
+    stacks = {}
     for line in text.splitlines():
         if not line.strip():
             continue
         try:
             e = json.loads(line)
-            if e.get("kind") in STACK_LINES:
-                links = e["links"] or {}
-                stacks.setdefault(e["id"], []).append({k: links.get(k) for k in ("pr", "worktree")})
+            if e.get("kind") not in STACK_LINES:
+                continue
+            links = {k: (e["links"] or {}).get(k) for k in ("pr", "worktree")}
+            if not isinstance(e["id"], str) or not all(isinstance(v, (str, type(None))) for v in links.values()):
+                return None
+            stacks.setdefault(e["id"], []).append(links)
         except (ValueError, AttributeError, KeyError, TypeError):
-            bad.append(line)
-    return {"stacks": stacks, "bad": bad}
+            return None
+    return stacks
 
 
 def owner_facts():
-    """What owner_hold reads, fresh; None when the cards or the ledger cannot be read."""
-    cards, ledger = orca_paths(), stack_records(ledger_path())
-    if cards is None or ledger is None:
+    """What owner_hold reads, fresh; None when any of it cannot be read. Without orca there is no card list, and a card
+    Orca knows may sit on a volume not mounted right now, so that counts as unreadable."""
+    cards = orca_paths() if shutil.which("orca") else None
+    stacks, procs = stack_records(ledger_path()), cwds()
+    if cards is None or stacks is None or procs is None:
         return None
-    return {"cards": {real(p) for p in cards}, **ledger, "pr": pr_reader()}
+    return {"cards": {real(p) for p in cards}, "stacks": stacks, "cwds": {real(c) for c in procs.values() if c},
+            "pr": pr_reader()}
 
 
 def owner_hold(owners, facts):
@@ -1244,8 +1253,6 @@ def owner_hold(owners, facts):
     if not owners:
         return "소유 스택을 모름(보고만)"
     for o in owners:
-        if any(o in line or '"id"' not in line for line in facts["bad"]):
-            return f"스택 {o} 의 ledger 에 깨진 줄이 있음"
         records = facts["stacks"].get(o) or ()
         worktrees = {w for r in records if (w := r.get("worktree"))}
         if not records:
@@ -1255,23 +1262,32 @@ def owner_hold(owners, facts):
         for w in sorted(worktrees):
             if real(w) in facts["cards"] or not dir_gone(w):
                 return f"스택 {o} 의 카드 {w} 가 남아 있음"
+            if any(under(c, real(w)) for c in facts["cwds"]):
+                return f"스택 {o} 의 카드 {w} 안에서 프로세스가 돎"
         for ref in sorted({p for r in records if (p := r.get("pr"))}):
             s = facts["pr"](ref)
-            if s is None:
-                return f"스택 {o} 의 PR {ref} 상태를 읽지 못함"
-            if s["state"] == "OPEN":
+            if s and s.get("state") == "OPEN":
                 return f"스택 {o} 의 열린 PR {ref}"
+            if not s or s.get("state") not in ("MERGED", "CLOSED"):
+                return f"스택 {o} 의 PR {ref} 상태를 읽지 못함"
     return None
 
 
 def owner_holds(items, notes):
     """owner_hold over a scan's volume items, so a held volume is reported, not listed as a target."""
     if targets := [i for i in items if i["target"]]:
-        facts = owner_facts()
+        try:
+            facts = owner_facts()
+        except Exception:  # one bad read holds the volumes; it must not end the round for every other kind
+            facts = None
         if facts is None:
             notes.append("볼륨: 카드 목록이나 ledger 를 읽지 못함, 모두 남김")
         for i in targets:
-            if why := owner_hold(i.get("owners"), facts):
+            try:
+                why = owner_hold(i.get("owners"), facts)
+            except Exception as e:
+                why = f"소유 카드를 판정하지 못함({type(e).__name__})"
+            if why:
                 i.update(target=False, why=why)
     return items
 
@@ -1284,7 +1300,7 @@ def note_stack_dirs(stacks):
     if ledger is None:
         return
     for name, st in sorted(stacks.items()):
-        known = {r.get("worktree") for r in ledger["stacks"].get(name, ())}
+        known = {r["worktree"] for r in ledger.get(name, ())}
         for d in sorted(st["dirs"]):
             if os.path.isabs(d) and d not in known:
                 ledger_add(path, "stack-seen", name, worktree=d, by="reap-hard")

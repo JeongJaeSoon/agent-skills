@@ -108,11 +108,11 @@ container that stopped this round still references its volumes, so those become 
 containers name its card only while they exist, so the record is the ledger: the `compose-stack` lines `orch heavy`
 writes and the `stack-seen` lines reap-hard adds for each working directory it sees on a stack's containers. A volume goes
 only when each owner stack has at least one such line, every worktree any line names is gone from disk and from
-`orca worktree list`, and no linked PR is open or unreadable. A worktree still there holds its stacks' volumes
-whatever its PR says, because closing a card is what weighs its PR, sessions and terminals; the volumes go on the first
-round after the card closes. Everything else stays, reported with its reason: no owner label, no ledger line (a stack
-started outside `orch heavy` that reap-hard never saw up), no worktree link, a damaged ledger line that names the
-stack or names no id, a card list that cannot be read. Such a volume waits for a person. This guard starts as a block,
+`orca worktree list` with no process left inside it, and every linked PR is merged or closed. A worktree still there
+holds its stacks' volumes whatever its PR says, because closing a card is what weighs its PR, sessions and terminals;
+the volumes go on the first round after the card closes. Everything else stays, reported with its reason: no owner
+label, no ledger line (a stack started outside `orch heavy` that reap-hard never saw up), no worktree link, a damaged
+ledger line anywhere, no `orca` on PATH, a card list, process list or PR that cannot be read. Such a volume waits for a person. This guard starts as a block,
 not a warning: a kept volume can still go, a deleted one cannot come back.
 
 **The provenance label.** `<namespace>.origin=<verify skill>`, the namespace from `reap.labeled_volumes.namespace`;

@@ -1413,13 +1413,11 @@ with tempfile.TemporaryDirectory() as tmp:
         line("verify-app-reused"), line("verify-app-reused", kind="stack-seen", wt=str(live)),
         line("verify-app-relinked", wt=str(live)), line("verify-app-relinked", pr="acme/app#1", wt=None),
         line("verify-app-reregistered", wt=other_gone), line("verify-app-reregistered"),
-        line("verify-app-torn"),
     ]
-    torn = '{"kind": "compose-stack", "id": "verify-app-torn", "links": {"worktree": "' + str(live)
-    led.write_text("\n".join(good) + "\n" + torn)
+    led.write_text("\n".join(good) + "\n")
     os.environ["AGENT_SKILLS_LEDGER"] = str(led)
     stacks = ["incident", "closed", "merged", "pr-open", "pr-unread", "retired", "pr-only", "reused", "relinked",
-              "reregistered", "torn", "unregistered"]
+              "reregistered", "unregistered"]
     old_time = "2026-10-25T00:00:00Z"
     late = reap.parse_ts(old_time) + 7 * H
     compose = [{"Name": f"verify-app-{s}_db", "Labels": {PROJECT: f"verify-app-{s}"}, "CreatedAt": old_time} for s in stacks]
@@ -1427,30 +1425,33 @@ with tempfile.TemporaryDirectory() as tmp:
     labeled = [{"Name": f"verify-app-{s}_data", "Labels": {ORIGIN: "verify-example", PROJECT: f"verify-app-{s}"},
                 "CreatedAt": old_time} for s in stacks]
     labeled.append({"Name": "no-owner", "Labels": {ORIGIN: "verify-example"}, "CreatedAt": old_time})
+    split = {"Name": "split-owner_db", "Labels": {PROJECT: "verify-app-closed", OWNER: "verify-app-incident"}, "CreatedAt": old_time}
     orca = {"reply": json.dumps({"result": {"worktrees": [{"path": str(live)}]}})}
     prs = {"1": "MERGED", "2": "OPEN"}
+    procs, missing = {1: "/"}, set()
 
     def world(cmd, cwd=None, check=True):
         if cmd[:2] == ["orca", "worktree"]:
             return orca["reply"]
         if cmd[:3] == ["gh", "pr", "view"]:
             state = prs.get(cmd[3])
-            return state and json.dumps({"state": state, "headRefOid": "x", "closedAt": None})
+            return state if state == "not json" else state and json.dumps({"state": state, "headRefOid": "x", "closedAt": None})
         if cmd[:3] == ["docker", "volume", "ls"]:
             if cmd[-1] == f"label={ORIGIN}":
                 return "\n".join(v["Name"] for v in labeled)
             return "\n".join(v["Name"] for v in (compose if cmd[-1] == f"label={PROJECT}" else workspace))
         if cmd[:3] == ["docker", "volume", "inspect"]:
-            return json.dumps([v for v in compose + workspace + labeled if v["Name"] in cmd[3:]])
+            return json.dumps([v for v in compose + workspace + labeled + [split] if v["Name"] in cmd[3:]])
         if cmd[:2] == ["docker", "ps"] or cmd[:2] == ["docker", "inspect"]:
             return ""
         raise AssertionError(cmd)
 
-    saved = reap.run, reap.shutil.which, reap.pr_reader
+    saved = reap.run, reap.shutil.which, reap.pr_reader, reap.cwds, reap.config
     reader = reap.pr_reader
-    reap.run, reap.shutil.which, reap.pr_reader = world, lambda name: "/bin/" + name, lambda: reader(world)
     SV = {"prefixes": ["verify-app-"], "label": OWNER}
     CFG2 = {"stack_volumes": SV, "labeled_volumes": {"namespace": "example.agent", "origins": ["verify-example"]}}
+    reap.run, reap.shutil.which = world, lambda name: None if name in missing else "/bin/" + name
+    reap.pr_reader, reap.cwds, reap.config = (lambda: reader(world)), (lambda: procs), (lambda: CFG2)
     CLOSED = {"closed", "merged", "retired", "reregistered"}
 
     def scanned(cfg=CFG2):
@@ -1467,8 +1468,29 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "카드" in why["verify-app-incident_data"] and "열린 PR" in why["verify-app-pr-open_db"], why
     assert "읽지 못함" in why["verify-app-pr-unread_db"] and "기록이 없음" in why["verify-app-unregistered_db"], why
     assert "worktree 연결" in why["verify-app-pr-only_db"] and "카드" in why["verify-app-reused_db"], why
-    assert "카드" in why["verify-app-relinked_db"] and "깨진" in why["verify-app-torn_db"], why
-    assert "소유" in why["no-owner"], why
+    assert "카드" in why["verify-app-relinked_db"] and "소유" in why["no-owner"], why
+    closed_db = "verify-app-closed_db"
+    is_target = lambda name: name in {i["name"] for i in scanned()[0] if i["target"]}
+    assert is_target(closed_db)
+
+    # A session still running in a card whose folder went, with the card gone from Orca.
+    procs[2] = gone + "/sub"
+    assert not is_target(closed_db)
+    del procs[2]
+    procs[3] = gone + "-other"  # a sibling path is not inside it
+    assert is_target(closed_db)
+    del procs[3]
+
+    # A damaged line, wherever it stands and however little of its id survived, holds everything: it may be an owner.
+    for bad in ('{"kind": "compose-stack", "id": "verify-', '{"ts": "2026', json.dumps(["not", "an", "object"]),
+                line("verify-app-other", wt=["a", "list"]), line("verify-app-other", pr=7),
+                json.dumps({"kind": "stack-seen", "id": 7, "links": {}}), json.dumps({"kind": "compose-stack", "id": "x"})):
+        led.write_text("\n".join(good) + "\n" + bad)
+        items, notes = scanned()
+        assert not [i for i in items if i["target"]] and notes, bad
+    led.write_text(line("unrelated", kind="tmpdir", wt=7) + "\n" + "\n".join(good) + "\n")
+    assert is_target(closed_db), "a line about something else is not this judgment's to read"
+    led.write_text("\n".join(good) + "\n")
 
     # What cannot be read holds every volume, with a note, whichever rule listed it.
     orca["reply"] = None
@@ -1479,8 +1501,22 @@ with tempfile.TemporaryDirectory() as tmp:
     orca["reply"] = json.dumps({"result": None})
     assert not [i for i in scanned()[0] if i["target"]]
     orca["reply"] = json.dumps({"result": {"worktrees": [{"path": str(live)}]}})
-    prs["1"] = None
-    assert "verify-app-merged_db" not in {i["name"] for i in scanned()[0] if i["target"]}
+    missing.add("orca")  # a scheduler's PATH without orca: no card list, not an empty one
+    assert not [i for i in scanned()[0] if i["target"]]
+    missing.clear()
+    saved_cwds = reap.cwds
+    reap.cwds = lambda: None
+    assert not [i for i in scanned()[0] if i["target"]]
+    reap.cwds = saved_cwds
+    real_facts = reap.owner_facts
+    reap.owner_facts = lambda: (_ for _ in ()).throw(ValueError("x"))  # a crash holds the volumes, and the round goes on
+    assert not [i for i in scanned()[0] if i["target"]]
+    reap.owner_facts = real_facts
+    for state in (None, "DRAFT", "not json"):  # only a state that proves it closed counts
+        prs["1"] = state
+        items, notes = scanned()
+        assert "verify-app-merged_db" not in {i["name"] for i in items if i["target"]}, state
+        assert "verify-app-closed_db" in {i["name"] for i in items if i["target"]}, state
     prs["1"] = "MERGED"
     os.environ["AGENT_SKILLS_LEDGER"] = str(root)  # a directory: there, and not readable as a ledger
     assert not [i for i in scanned()[0] if i["target"]]
@@ -1520,7 +1556,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "보호" in guard.item(stale, {**empty, "project": {"verify-app-closed"}})
 
     # The manual docker kind carries the same owners and goes through the same judgment.
-    now_read = {"names": [v["Name"] for v in compose[:2]]}
+    now_read = {"names": [v["Name"] for v in compose[:2]] + [split["Name"]]}
 
     def dangling(cmd, cwd=None, check=True):
         if cmd[:3] == ["docker", "volume", "ls"]:
@@ -1534,6 +1570,7 @@ with tempfile.TemporaryDirectory() as tmp:
     got = {i["key"]: i for i in reap.docker_scan(0, notes)}
     assert got["volume:verify-app-closed_db"]["target"] and got["volume:verify-app-closed_db"]["owners"] == ["verify-app-closed"], got
     assert not got["volume:verify-app-incident_db"]["target"] and "카드" in got["volume:verify-app-incident_db"]["why"], got
+    assert not got["volume:split-owner_db"]["target"] and got["volume:split-owner_db"]["owners"] == ["verify-app-closed", "verify-app-incident"], got
     reap.run = world
 
     # A working directory seen on a stack's containers is recorded once, so its volumes outlive the labels.
@@ -1547,7 +1584,7 @@ with tempfile.TemporaryDirectory() as tmp:
     entries = reap.ledger_read(led)
     assert "verify-app-closed" in {e["id"] for e in reap.folded(entries, "compose-stack")}
     assert not reap.folded(entries, "compose-stack")[0].get("kind") == "stack-seen"
-    reap.run, reap.shutil.which, reap.pr_reader = saved
+    reap.run, reap.shutil.which, reap.pr_reader, reap.cwds, reap.config = saved
     os.environ.pop("AGENT_SKILLS_LEDGER")
 
 guard.protect_file, guard.always_on = saved_guard
