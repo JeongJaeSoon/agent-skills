@@ -79,7 +79,7 @@ def hook(command, level=None, prompt=None, path=None, env=None, cwd=None):
     return spec.get("permissionDecision"), spec.get("permissionDecisionReason", "") + out.get("systemMessage", "")
 
 
-BRIEF = "TASK\nORDER       Starts after: none. Lands after: ABC-7(a note on it) and DEF-1. Then the rest XYZ-9.\n"
+BRIEF = "TASK\nORDER       Starts after: none. Lands after: ABC-7(a note on it) and PROJ-1. Then the rest XYZ-9.\n"
 
 # A branch holding another open PR's head, based on main: a warning by default, a deny once promoted.
 rows(row(5, "lower", LOWER))
@@ -114,6 +114,13 @@ assert hook("gh pr create --base upper", "deny")[0] is None
 assert hook("gh pr create --base lower", "deny")[0] == "deny"  # #6 is above that base and this branch holds its head
 git("checkout", "-q", "upper")
 
+# A dependency far down a long branch is still seen.
+stream = "".join(f"commit refs/heads/long\nmark :{i}\ncommitter t <t@example.test> 0 +0000\ndata 1\nx\n"
+                 + (f"from :{i - 1}\n" if i > 1 else f"from {LOWER}\n") for i in range(1, 2102))
+subprocess.run(["git", "fast-import", "--quiet"], cwd=REPO, input=stream, text=True, check=True)
+rows(row(5, "lower", LOWER))
+assert hook("gh pr create --head long --base main", "deny")[0] == "deny"
+
 # --head decides, not what is checked out.
 rows(row(5, "lower", LOWER))
 assert hook("gh pr create --head side --base main", "deny")[0] is None
@@ -131,12 +138,12 @@ assert hook("gh pr create --base main", "deny") == (None, "")
 
 # The brief's ORDER: a named open PR off main, by ticket in the title or the branch, in any of the value's forms.
 git("checkout", "-q", "side")
-rows(row(7, "x", "0" * 40, title="fix(abc): ABC-7 it"), row(8, "you/def-1", "1" * 40, base="other"))
+rows(row(7, "x", "0" * 40, title="fix(abc): ABC-7 it"), row(8, "you/proj-1", "1" * 40, base="other"))
 decision, text = hook("gh pr create --base main", "deny", BRIEF)
 assert decision == "deny" and "#7" in text and "ABC-7" in text and "#8" in text, text
 assert "XYZ" not in text, text  # past the sentence end
 # Its branch as base satisfies the brief.
-rows(row(7, "x", "0" * 40, title="ABC-7"), row(8, "y", "1" * 40, title="DEF-1", base="x"))
+rows(row(7, "x", "0" * 40, title="ABC-7"), row(8, "y", "1" * 40, title="PROJ-1", base="x"))
 git("update-ref", "refs/remotes/origin/y", SIDE)
 decision, text = hook("gh pr create --base y", "deny", BRIEF)
 assert decision is None and "gh stack link" in text and "could not read" not in text, text
@@ -150,7 +157,7 @@ for line in ("ORDER  Starts after <TICKET…> · lands after <TICKET…> (stack 
 # A named PR that no open PR answers to may have landed since dispatch: one warning line, never a deny.
 rows(row(99, "z", "2" * 40))
 decision, text = hook("gh pr create --base main", "deny", BRIEF)
-assert decision is None and "ABC-7, DEF-1" in text and text.count("\n") == 0, text
+assert decision is None and "ABC-7, PROJ-1" in text and text.count("\n") == 0, text
 git("checkout", "-q", "upper")
 
 # What cannot be read passes with one warning line.

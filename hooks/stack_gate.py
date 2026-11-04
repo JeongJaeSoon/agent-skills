@@ -118,7 +118,7 @@ def verdict(args, here, prompt):
     except (TypeError, ValueError, KeyError):
         raise Unread("`gh pr list` did not answer")
     upstream = f"origin/{base}" if base else "origin/HEAD"
-    mine = run(["git", "rev-list", "--max-count=2000", head, "--not", upstream, "--"], here)
+    mine = run(["git", "rev-list", head, "--not", upstream, "--"], here)
     if mine is None:
         raise Unread(f"`git rev-list {head} --not {upstream}` failed")
     keys, numbers = named_deps(prompt)

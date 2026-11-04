@@ -360,6 +360,14 @@ st = json.loads((d / "state.json").read_text())
 st["prs"]["8"].update(state="MERGED", merge_sha="m8"); (d / "state.json").write_text(json.dumps(st))
 assert prog(env, "land", "t", "--pr", "8")[0] == 0
 assert [e["pr"] for e in ledger(d) if e["ev"] == "landed"] == [7, 8], ledger(d)
+# The queue took the lower layer and the retry merges the top itself: the lower layer is still recorded.
+d, env = stack_of_two("enqueued")
+prog(env, "land", "t", "--pr", "8")
+st = json.loads((d / "state.json").read_text())
+st["prs"]["7"].update(state="MERGED", merge_sha="m7"); st["merge_async"] = "merged"; (d / "state.json").write_text(json.dumps(st))
+code, out = prog(env, "land", "t", "--pr", "8")
+assert code == 0 and "landed #8" in out, out
+assert [e["pr"] for e in ledger(d) if e["ev"] == "landed"] == [7, 8], ledger(d)
 # A 409 names the request already running: its result is followed, and a failure there is seen.
 d, env = stack_of_two("failed", conflict=True)
 code, out = prog(env, "land", "t", "--pr", "8")

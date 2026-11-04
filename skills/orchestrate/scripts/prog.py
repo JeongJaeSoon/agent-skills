@@ -1928,6 +1928,8 @@ def merge_unit(p, pr, unit, klass, events, onto=None, stacked=False):
             break
         time.sleep(10)
     one_push = merged[pr]["state"] == "MERGED"  # a layer merged without its top got its own main CI run
+    if one_push:
+        record_queued(p, pr, skip=unit)
     for n, x in merged.items():
         if x["state"] == "MERGED" and "landed" not in states.get(n, {}):
             p.append("landed", pr=n, sha=(x.get("mergeCommit") or {}).get("oid"),
@@ -1952,6 +1954,21 @@ def merge_unit(p, pr, unit, klass, events, onto=None, stacked=False):
                f"Watch main: gh run list --repo {repo} --commit {sha} --json databaseId,workflowName,status, "
                f"then gh run watch <id> --repo {repo} --exit-status and orch record {p.slug} main_green|main_red --pr {pr} --sha {sha}"
                + base_ci_hint(repo, merged[pr].get("baseRefName")))
+
+
+def record_queued(p, pr, skip=()):
+    """Record the layers earlier requests for this PR left in the merge queue, bottom first, and return them all."""
+    # Every request's unit: a retry after the lower layer merged names a smaller one.
+    queued = list(dict.fromkeys(n for e in p.events() if e.get("pr") == pr for n in e.get("unit") or []))
+    for n in queued:
+        if n in skip:
+            continue
+        x = pr_view(p.cfg["repo"], n)
+        if x["state"] == "MERGED" and "landed" not in pr_state(p.events()).get(n, {}):
+            # No stack_top: the queue may have put the layers in separate merge groups.
+            p.append("landed", pr=n, sha=(x.get("mergeCommit") or {}).get("oid"), note="merge queue")
+            close_gate_task(p, n, "completed")
+    return queued
 
 
 def base_ci_hint(repo, base):
@@ -2018,14 +2035,7 @@ def attempt(p, pr, klass, onto_lower=False):
             if "landed" in st:  # a stack layer lands with its top, whose land call recorded it
                 return 0, (f"#{pr} already landed as {(st['landed'].get('sha') or '')[:8]} ({st['landed'].get('note') or 'recorded'});"
                            " main CI ran once on the stack top's commit, and the top's owner records it")
-            # Every request's unit: a retry after the lower layer merged names a smaller one.
-            queued = list(dict.fromkeys(n for e in events if e.get("pr") == pr for n in e.get("unit") or []))
-            if queued:  # no stack_top: the queue may have put the layers in separate merge groups
-                for n in queued:
-                    x = v if n == pr else pr_view(repo, n)
-                    if x["state"] == "MERGED" and "landed" not in pr_state(p.events()).get(n, {}):
-                        p.append("landed", pr=n, sha=(x.get("mergeCommit") or {}).get("oid"), note="merge queue")
-                        close_gate_task(p, n, "completed")
+            if queued := record_queued(p, pr):
                 return 0, f"#{pr} was merged by the merge queue; recorded {' '.join(f'#{n}' for n in queued)}"
             p.append("landed", pr=pr, sha=sha, note="merged outside land")
             close_gate_task(p, pr, "completed")
