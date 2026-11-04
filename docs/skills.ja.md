@@ -1,4 +1,4 @@
-<!-- translated-from: 8941654d08d77b891ea25d2e517e00f848e11b38 -->
+<!-- translated-from: aaac29d7f173a37aa1d16d2c067c867305aaff71 -->
 # スキルカタログ
 
 `agent-skills` プラグインに入っているスキル41個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック15個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
@@ -580,6 +580,8 @@ PR を受け持つスキルとマージする主体:
 | `orchestrate.model_flag` | warn | `orchestrate.models` を設定しているのに、`orca orchestration worker-start`・`orca worktree create`・`orca agent launch` が `--model` なしで Claude を起動した。`--terminal` は対象外 |
 | `orchestrate.self_land` | warn | `hooks/self_land_gate.py`。最初のプロンプトに `PROGRAM` と `orch land` を書いた `APPROVED` があるカードが、自分の PR を開いたまま `worker_done` や `orca worktree rm` を呼ぶこと。`READY-WAIT:` の行、`--outcome failed`、human-gate のプログラムは通します。`deny` にすると止めます |
 | `orchestrate.stack_dependent` | warn | 依存する PR がスタックになっていないこと。`hooks/stack_gate.py` が `gh pr create` でブリーフの `Lands after` とブランチの履歴を見て、`orch land`・`land-check` が land-after の依存と実際のスタックを比べます。`deny` にすると両方が止めます。読めないときは警告 1 行で通します |
+| `orchestrate.auto_wake_min` | なし(オフ) | 正の整数 N。`orch wait` が idle と最初に表示したワーカーを N 分後に 1 回起こします(`skills/orchestrate/references/waking.md` の "Automatic wake")。キーがなければ表示だけで、オフだという警告を 1 行出します。同じ dispatch は 2 回起こさず、2 回目の停止は Needs you に上げます |
+| `orchestrate.stall_idle_min` | 15 | 正の整数。ワーカーのターンが終わってから STALLED `idle` と表示するまでの分数。短い実測で減らすときに使います |
 
 hook 自身の判定が例外を出したら、その呼び出しは通し、警告とともに `$AGENT_SKILLS_STATE/guard-errors.jsonl` に時刻・hook・例外の種類・発生位置だけを残します（コマンドの原文は残しません）。設定ファイルが読めなければ既定値を使います。
 
