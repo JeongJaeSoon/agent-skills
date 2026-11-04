@@ -63,7 +63,7 @@ assert hook([prompt("go"), say(CAUGHT)], level="ask")[0] == out  # ask acts as w
 for text in ("이건 오너에게 물어봐야 합니다.", "오너 결정 필요: 범위를 줄일지.", "We should ask the owner about this.",
              "Owner approval needed before the merge.", "오너에게 승인을 요청해야 합니다.",
              "🙋 승인 필요 · 대안 없음", "🙋 배포 승인 필요; 🔄 테스트 진행 중", "🙋 배포 승인 필요 · 대안: 없음",
-             "🙋 오너 승인 필요 · 🔄 테스트 통과 · ⏳ 승인 대기"):
+             "🙋 오너 승인 필요 · 🔄 테스트 통과 · ⏳ 승인 대기", "🔄 진행: 테스트 통과 · 🙋 오너 차례: 배포 승인"):
     out, r = hook([prompt("go"), say(text)])
     assert out and "기록 안 된 오너 항목 1" in out["systemMessage"] and r, text
 
@@ -89,7 +89,8 @@ assert hook([prompt("old"), *bash("orch decide add --title x"), say("ok"), promp
 
 # Plain replies pass: nothing about the owner, no items, the legend, a table row, code and quotes.
 for text in ("고쳤습니다. 테스트 통과.", "", "🙋 지금 오너가 할 일 — 없음", "🙋 오너 할 일: 없음.",
-             "🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류", "🙋 오너 할 일 — none", "- 오너 할 일: n/a",
+             "🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류", "🙋 오너 할 일 — none",
+             "🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류 · ✅ 완료 · 🔴 막힘 · ❔ 확인 필요 · 막대=단계(추정)","- 오너 할 일: n/a",
              "| 🙋 | 알림 정리 | #50 | ↑ 오너 |", "```\n🙋 지금 오너가 할 일\n```", "> 🙋 인용된 줄",
              "`orch board now` 로 `🙋` 줄을 남긴다", "The owner of this module is the platform team."):
     assert hook([prompt("go"), say(text)]) == (None, []), text

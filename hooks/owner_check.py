@@ -40,7 +40,13 @@ OWNER = re.compile(
     re.I)
 FILLER = re.compile(r"[\W_]|지금|오너가|오너|할\s*일")
 NONE_WORDS = {"없음", "없습니다", "none", "na"}
-STATUS_LEGEND = re.compile(r"🔄\s*진행.*🙋\s*오너\s*차례|🙋\s*오너\s*차례.*🔄\s*진행")
+LEGEND_LABELS = re.compile(r"진행|오너\s*차례|다른\s*사람\s*대기|보류|완료|막힘|확인\s*필요|할\s*일로\s*넘김|도래"
+                           r"|막대\s*=\s*단계\s*\(추정\)")
+
+
+def is_legend(line):
+    """The brief's status legend: only status labels and symbols, with the owner's among them."""
+    return "오너 차례" in re.sub(r"\s+", " ", line) and not re.sub(r"[\W_]", "", LEGEND_LABELS.sub("", line))
 UNWRAP = {"orch.py": "orch", "prog.py": "orch", "dash.py": "orch-dash", "orch_dash.py": "orch-dash"}
 
 
@@ -53,7 +59,7 @@ def owner_items(text):
             continue
         # What is left once the owner phrase and filler go: "없음" alone says there is nothing; "대안: 없음" after a
         # real request leaves more than that.
-        if FILLER.sub("", OWNER.sub("", s)).lower() in NONE_WORDS or STATUS_LEGEND.search(s):
+        if FILLER.sub("", OWNER.sub("", s)).lower() in NONE_WORDS or is_legend(s):
             continue
         out.append(s)
     return out
