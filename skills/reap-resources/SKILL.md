@@ -10,7 +10,8 @@ servers reparented to pid 1, the volumes and images of finished compose stacks, 
 of merged PRs, git worktrees in the scratchpad of a finished session.
 
 This skill needs no program. Finished Orca cards are removed with `orca worktree rm`, the same command the resource
-steward uses (`orchestrate` `references/roles.md`), after moving the worktree's ignored files to the trash.
+steward uses (`orchestrate` `references/roles.md`), after moving the worktree's ignored files to the trash. A
+cleanup command you run by hand runs alone (`end-session` §4).
 
 ## Cards: take stock of every Orca card
 
