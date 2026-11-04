@@ -1155,19 +1155,38 @@ def no_ci_repo(repo):
     return isinstance(repos, list) and repo in repos
 
 
+def check_run_id(c):
+    url = c.get("detailsUrl") or c.get("targetUrl") or ""
+    return url.split("/actions/runs/")[1].split("/")[0] if "/actions/runs/" in url else ""
+
+
+def latest_checks(rollup):
+    """The newest entry of each check. A head keeps every run started at it, so a run superseded by a PR edit
+    (cancel-in-progress) stays in the rollup as CANCELLED beside the run that replaced it. The workflow is part of the
+    check's identity: one workflow's pass must not hide another's failure under the same job name. A check still going
+    outranks a finished one, since a queued run has no start time and an older pass must not stand in for it. Start
+    time decides before the run id: a rerun keeps its old, lower id."""
+    def order(c):
+        # gh prints the zero time for a check that never started.
+        stamps = [t for t in (c.get("startedAt"), c.get("completedAt")) if t and not t.startswith("0001-")]
+        run = check_run_id(c)
+        going = (c.get("status") or "COMPLETED").upper() != "COMPLETED"
+        return going, stamps[0] if stamps else "", int(run) if run.isdigit() else 0
+    return list({(c.get("workflowName"), c.get("name") or c.get("context")): c for c in sorted(rollup, key=order)}.values())
+
+
 def ci_summary(rollup, no_ci=False):
     # No checks on a head usually means CI has not reported yet, so it never counts as green. Only a declared no-CI
     # repo reads a confirmed empty rollup as nothing to wait for; a missing one stays unknown.
     if not rollup:
         return [], [] if no_ci and rollup is not None else ["no CI checks reported yet"], []
     failed, pending, runs = [], [], set()
-    for c in rollup or []:
+    for c in latest_checks(rollup):
         name = c.get("name") or c.get("context")
         concl = (c.get("conclusion") or c.get("state") or "").upper()
         status = (c.get("status") or "COMPLETED").upper()
-        url = c.get("detailsUrl") or c.get("targetUrl") or ""
-        if "/actions/runs/" in url:
-            runs.add(url.split("/actions/runs/")[1].split("/")[0])
+        if run := check_run_id(c):
+            runs.add(run)
         if status != "COMPLETED" or concl in ("", "PENDING", "EXPECTED"):
             pending.append(name)
         elif concl not in PASSING:
