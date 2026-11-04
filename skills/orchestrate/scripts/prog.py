@@ -407,6 +407,14 @@ def ready_prs(events):
     return [s for s in pr_state(events).values() if ("ready" in s or "verdict" in s) and "landed" not in s]
 
 
+def claimed(events, pr):
+    """Is a `land` call for this PR live? `ready` is written only by land, and a verdict alone asks for nothing.
+    A land that ended at exit 1 will not come back on its own, so it withdraws the call until the next land."""
+    marks = [e["ev"] for e in events if e.get("pr") == pr and
+             (e["ev"] == "ready" or e["ev"] == "land_check" and e.get("outcome") == "stopped")]
+    return bool(marks) and marks[-1] == "ready"
+
+
 def stopped(events):
     marks = [e["ev"] for e in events if e["ev"] in ("stop", "resume")]
     return bool(marks) and marks[-1] == "stop"
@@ -689,10 +697,14 @@ def land_order(events, rows, cfg, when, stacks=None, deps=None):
         if waits and state != "gone":
             state, reasons = "waiting", [f"lands after {', '.join(waits)}"] + reasons
         lane = (s.get("lane") or {}).get("exclusive", False) or klass == "gate" or no_ci
+        wants = claimed(events, pr)
+        if lane and not wants and state in ("ready", "catching_up"):
+            reasons = reasons + ["READY-stop: no live land call, passed over for the exclusive lane"]
         out.append({"pr": pr, "ticket": ticket, "klass": klass, "rank": rank,
                     "unblocks": unblocks(ticket, after, open_t) if ticket else 0,
                     "since": first.isoformat(), "age_h": round(age_h, 2), "state": state, "reasons": reasons,
-                    "exclusive": bool(lane), "base": (rows.get(pr) or {}).get("baseRefName"), "stack": None})
+                    "exclusive": bool(lane), "claimed": wants, "base": (rows.get(pr) or {}).get("baseRefName"),
+                    "stack": None})
     by_pr = {e["pr"]: e for e in out}
     own = {e["pr"]: e["state"] for e in out}  # before stack rules rewrite them
     for live in {tuple(v) for v in stack_of.values()}:
@@ -707,7 +719,10 @@ def land_order(events, rows, cfg, when, stacks=None, deps=None):
                 top = max(u["pr"] for u in upper if u and own[u["pr"]] not in ("blocked", "gone"))
                 e["state"], e["reasons"] = "waiting", [f"lands with its stack from #{top}"] + e["reasons"]
                 continue
-            unready = [f"#{b} {own.get(b, 'not in the program')}" for b in live[:i] if own.get(b) != "ready"]
+            if held := [b for b in live[:i] if on_hold(events, b)]:  # the merge takes that layer too
+                e["state"], e["reasons"] = "blocked", [f"stack layer {', '.join(f'#{b}' for b in held)} on hold"] + e["reasons"]
+                continue
+            unready =[f"#{b} {own.get(b, 'not in the program')}" for b in live[:i] if own.get(b) != "ready"]
             if unready and e["state"] == "ready":
                 e["state"], e["reasons"] = "catching_up", [f"stack layer {', '.join(unready)}"] + e["reasons"]
     out.sort(key=lambda e: (e["state"] == "gone", e["rank"], -e["unblocks"], e["since"], e["pr"]))
@@ -717,14 +732,16 @@ def land_order(events, rows, cfg, when, stacks=None, deps=None):
 def exclusive_turn(order, pr):
     """The exclusive-lane entry that goes before this one on its base, or None when it is this PR's turn.
 
-    Only exclusive entries that could land soon contend (ready, or catching up); blocked and
-    waiting ones are passed over, so a stuck PR never holds the lane.
+    Only exclusive entries that could land soon (ready, or catching up) and asked to land contend.
+    Blocked and waiting ones are passed over, so a stuck PR never holds the lane; so is one merged
+    outside land, which would never use its turn. Passing over leaves the order alone: a PR that
+    calls land contends from its old place.
     """
     base = next(e for e in order if e["pr"] == pr).get("base")
     for e in order:
         if e["pr"] == pr:
             return None
-        if e["exclusive"] and e.get("base") == base and e["state"] in ("ready", "catching_up"):
+        if e["exclusive"] and e["claimed"] and e.get("base") == base and e["state"] in ("ready", "catching_up"):
             return e
     return None
 
@@ -1882,6 +1899,16 @@ def release_own_lanes(p, pr):
         ExclusiveLock(p, path.stem[len(prefix):]).release(pr)
 
 
+class HoldRefusal(str):
+    """A land's exit-1 message that keeps its land call: the hold passes the PR over, `record admitted` brings it back."""
+
+
+def stop_land(p, pr, why):
+    release_own_lanes(p, pr)
+    if not isinstance(why, HoldRefusal):
+        p.append("land_check", pr=pr, outcome="stopped", note=why[:300])
+
+
 def note_attempt(p, events, pr, outcome, reasons):
     """Refresh the reservation at most every 10 minutes, or when the outcome changes."""
     last = pr_state(events).get(pr, {}).get("land_check")
@@ -2116,7 +2143,7 @@ def attempt(p, pr, klass, onto_lower=False):
             close_gate_task(p, pr, "failed")
         return 1, f"#{pr} is {v['state']}"
     if on_hold(events, pr):
-        return 1, f"#{pr} is on hold (record parked); `orch record {p.slug} admitted --pr {pr}` releases it"
+        return 1, HoldRefusal(f"#{pr} is on hold (record parked); `orch record {p.slug} admitted --pr {pr}` releases it")
     # Before the waits below: a dependent PR outside a stack waits on them for as long as its lower PR takes.
     gaps, flipped = stack_gaps(events, rows, stacks, deps, pr) if not unread else ([], [])
     if flipped:
@@ -2161,7 +2188,7 @@ def attempt(p, pr, klass, onto_lower=False):
         # PRs ahead whose lane is not known yet (they have not called land) are classified now.
         for e in order[:order.index(me)]:
             if e.get("base") == me["base"] and e["state"] in ("ready", "catching_up") and not e["exclusive"] \
-                    and "lane" not in pr_state(events).get(e["pr"], {}):
+                    and e["claimed"] and "lane" not in pr_state(events).get(e["pr"], {}):
                 hit = is_exclusive(cfg, pr_files(repo, e["pr"]))
                 p.append("lane", pr=e["pr"], exclusive=bool(hit), note=", ".join(hit[:5]) or None)
                 e["exclusive"] = bool(hit)
@@ -2171,9 +2198,10 @@ def attempt(p, pr, klass, onto_lower=False):
         if held and (held.get("pr"), held.get("program")) != (pr, p.slug):
             held = lane.break_if_closed(held)
         if held and (held.get("pr"), held.get("program")) != (pr, p.slug):
-            return 2, f"yield: the exclusive lane of {me['base']} is held by #{held.get('pr')} ({held.get('program')})"
+            why = ", on hold" if held.get("program") == p.slug and on_hold(events, held.get("pr")) else ""
+            return 2, f"yield: the exclusive lane of {me['base']} is held by #{held.get('pr')} ({held.get('program')}{why})"
         if not held and ahead:
-            return 2, f"yield: #{ahead['pr']} ({ahead['ticket']}) takes the exclusive lane first"
+            return 2, f"yield: #{ahead['pr']} ({ahead['ticket']}) takes the exclusive lane first ({ahead['state']})"
         if not lane.take(pr):
             return 2, "yield: another lander just took the exclusive lane"
         if me["state"] == "catching_up":
@@ -2188,6 +2216,7 @@ def attempt(p, pr, klass, onto_lower=False):
             lane.release(pr)
         elif code == 1:  # parked, so exclusive_turn passes it over until `record admitted`
             p.append("parked", pr=pr, note=msg[:300])
+            return code, HoldRefusal(msg)
         return code, msg
     if me["state"] == "catching_up":
         note_attempt(p, events, pr, "catching_up", me["reasons"])
@@ -2209,8 +2238,9 @@ def cmd_land(argv):
     pr, klass = int(opt(argv, "--pr")), opt(argv, "--class")
     if klass and klass not in KLASS:
         sys.exit(f"--class is one of {', '.join(KLASS)}")
-    st = pr_state(p.events()).get(pr, {})
-    if "ready" not in st or (klass and klass != st["ready"].get("klass", "normal")):
+    events = p.events()
+    st = pr_state(events).get(pr, {})
+    if not claimed(events, pr) or (klass and klass != st["ready"].get("klass", "normal")):
         p.append("ready", pr=pr, ticket=opt(argv, "--ticket"), klass=klass)
     klass = klass or next((e["klass"] for e in reversed(p.events()) if e.get("pr") == pr and e.get("klass")), "normal")
     deadline = time.monotonic() + 60 * float(opt(argv, "--wait-minutes", "0"))
@@ -2219,12 +2249,12 @@ def cmd_land(argv):
             code, msg = attempt(p, pr, klass, "--onto-lower" in argv)
         except SystemExit as e:
             if not TRANSIENT.search(str(e.code)):
-                release_own_lanes(p, pr)
+                stop_land(p, pr, str(e.code))
                 raise
             code, msg = 2, f"yield: GitHub or Orca did not answer ({str(e.code)[:160]}); land again"
         print(msg, flush=True)
         if code == 1:
-            release_own_lanes(p, pr)
+            stop_land(p, pr, msg)
         if code != 2 or time.monotonic() >= deadline:
             sys.exit(code)
         time.sleep(60)
