@@ -45,7 +45,9 @@ GLYPHS = re.compile(r"^[\s⏺⎿⚠✗●◯○\ufe0f]+")  # Claude Code's own m
 # Only a live spinner: a finished turn leaves "✻ Cooked for 41s", which has neither mark.
 SPINNER = re.compile(r"^\s*[✻✶✳✢✽·*]\s+\S.*(?:…|esc to interrupt)")
 AUTH_QUIET_MIN = 2  # a dead session writes nothing; a working one quoting the text keeps writing
-FALLBACK_BACKGROUND = re.compile(r"\b\d+ (?:shells?|monitors?|local agents?|background tasks?)\b|shells? still running")
+FALLBACK_BACKGROUND = re.compile(r"\b\d+ (?:shells?|(?:Artifact comment )?monitors?|local agents?|teams?|cloud sessions?|MCP tasks?"
+                                 r"|(?:background|remote) dynamic workflows?|background tasks?)\b|shells? still running"
+                                 r"|^\s*(?:⏺\s+main\s*$|◯\s)")
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[3] / "scripts"))
 try:
     from sync import BACKGROUND  # noqa: E402

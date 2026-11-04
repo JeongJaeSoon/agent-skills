@@ -62,6 +62,9 @@ assert patrol.background(["❯ ", monitor_bar]) and patrol.background(["❯ ", "
 assert [x["code"] for x in patrol.judge({**f, "screens": {}, "read": lambda h: ["⏺ Done.", "❯ ", fleet_bar]}, {})[0]] == ["I"], \
     "an idle session showing only that count is still idle"
 assert patrol.judge({**f, "screens": {}, "read": lambda h: ["⏺ Done.", "❯ ", monitor_bar]}, {})[0] == [], "a Monitor running is not idle"
+assert patrol.background(["❯ ", "  ⏵⏵ auto mode on · ← 1 agent", "  ⏺ main", "  ◯ general-purpose  reading notes"]), \
+    "the panel listing the session's agents is background work"
+assert not patrol.background(["⏺ main is up to date", "❯ "])
 
 # X: Orca's exited verdict for a worker; for a card outside a Run, a transcript ending on an error with no agent left.
 err = {"type": "assistant", "isApiErrorMessage": True, "timestamp": ago(30),

@@ -238,8 +238,11 @@ RESTART_NOTICE = re.compile(r"(?<![\w/])/restart\b.*\bto apply\b", re.I)
 # Only Claude Code's own result line ("⎿  PreToolUse:Bash hook error: …"); a tool's output that quotes it does not count.
 HOOK_ERROR = re.compile(r"^⎿\s+\w+:\w+ hook (?:error|returned (?:a )?blocking error)\b", re.I)
 # Claude Code's status line while a background shell, monitor or agent of the session still runs (shared with
-# card_watch.py). Not a bare "N agent": "← N agent" counts sessions elsewhere waiting on a human, so idle ones show it.
-BACKGROUND = re.compile(r"\b\d+ (?:shells?|monitors?|local agents?|background tasks?)\b|shells? still running")
+# card_watch.py), or the panel under it that lists its agents instead. Not a bare "N agent": "← N agent" counts sessions
+# elsewhere waiting on a human, so idle ones show it.
+BACKGROUND = re.compile(r"\b\d+ (?:shells?|(?:Artifact comment )?monitors?|local agents?|teams?|cloud sessions?|MCP tasks?"
+                        r"|(?:background|remote) dynamic workflows?|background tasks?)\b|shells? still running"
+                        r"|^\s*(?:⏺\s+main\s*$|◯\s)")
 # The line under the prompt box that counts those: the permission mode, or the shortcuts hint in default mode.
 MODE_LINE = re.compile(r"\bmode on\b|\? for shortcuts")
 # A guard's deny reads "hook error" too; only a hook that could not find its own file is stale.

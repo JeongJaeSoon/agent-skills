@@ -45,7 +45,12 @@ NOTE_SUMMARY_SHELL = ["✻ Crunched for 22s · done 7:47 PM · 1 shell still run
 FLEET_COUNT = ["  ⏵⏵ auto mode on (shift+tab to cycle) · PR #1 · ← 1 agent", "  ⏵⏵ auto mode on · ← 2 agents"]
 OWN_WORK = ["  ⏵⏵ auto mode on · 1 shell · ← 1 agent", "  ⏵⏵ auto mode on · PR #1 · 2 shells · ← 1 agent",
             "  ⏵⏵ auto mode on · 1 monitor · ← 1 agent", "  ⏵⏵ auto mode on · 1 shell, 1 monitor · ← 1 agent",
-            "  ⏵⏵ auto mode on · 1 local agent", "  ⏵⏵ auto mode on · 3 background tasks"]
+            "  ⏵⏵ auto mode on · 1 local agent", "  ⏵⏵ auto mode on · 3 background tasks",
+            "  ⏵⏵ auto mode on · 1 team · ← 1 agent", "  ⏵⏵ auto mode on · ◇ 1 cloud session", "  ⏵⏵ auto mode on · 2 MCP tasks",
+            "  ⏵⏵ auto mode on · 1 Artifact comment monitor", "  ⏵⏵ auto mode on · 1 background dynamic workflow",
+            "  ⏵⏵ auto mode on · ◇ 2 remote dynamic workflows"]
+# The panel that replaces "N local agent" under the mode line while the session has background agents.
+NOTE_PANEL = RESTART_NOTE[:5] + ["  ⏵⏵ auto mode on · ← 1 agent", "  ⏺ main", "  ◯ general-purpose  reading notes", RESTART_NOTE[6]]
 # No mode line under the box (a custom status line only): whether background work runs is unknown.
 NOTE_NO_MODE = RESTART_NOTE[:5] + RESTART_NOTE[6:]
 # A grep run's output quotes a hook error with a missing file: it is a tool's output, not Claude Code's own line.
@@ -380,6 +385,8 @@ def test_stale_signal():
           [on_mode_line(l) for l in FLEET_COUNT] == [None, None], [on_mode_line(l) for l in FLEET_COUNT])
     check("this session's own shell, monitor, agent or task is",
           all(on_mode_line(l) for l in OWN_WORK), [l for l in OWN_WORK if not on_mode_line(l)])
+    check("the panel listing this session's agents is", sync.background_running(NOTE_PANEL) is not None)
+    check("a turn's words about main are not that panel", not sync.BACKGROUND.search("⏺ main is up to date"))
     reloaded_note = RELOAD_DONE[:2] + [RELOAD_DONE[2]] + RESTART_NOTE[1:]
     check("installed agents counted in a reload's output are no background work",
           sync.background_running(reloaded_note) is None, sync.background_running(reloaded_note))
