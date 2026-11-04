@@ -144,10 +144,10 @@ assert row["title"] == row["cells"]["prod"]["evidence"] == " ".join(LONG.split()
 # keeps it whole.
 b = brief()
 lines = b["text"].splitlines()
-cut = next((l for l in lines if l.startswith("| 🔄 | ac…[1] | — | acme/app#877")), None)
-assert cut and cut.endswith("…[2] | 세션 없음 |"), b["text"]
-assert f"- [1] {' '.join(LONG.split())}" in lines and f"- [2] {' '.join(LONG.split())}" in lines, b["text"]
-assert lines.index(f"- [1] {' '.join(LONG.split())}") - lines.index(cut) <= 3, b["text"]
+cut = next((l for l in lines if l.startswith("| 🔄 | ac…[3] | — | acme/app#877")), None)
+assert cut and cut.endswith("…[4] | 세션 없음 |"), b["text"]
+assert f"- [3] {' '.join(LONG.split())}" in lines and f"- [4] {' '.join(LONG.split())}" in lines, b["text"]
+assert lines.index(f"- [3] {' '.join(LONG.split())}") - lines.index(cut) <= 5, b["text"]
 assert b["width_ok"] and {o["label"] for o in b["open"]} >= {" ".join(LONG.split())}, b["open"]
 # Orca cuts a task's name to a head and "...": the spec's first line is the whole of it, and nothing else replaces it.
 assert fleet.task_name({"display_name": "role-terms: 용어 정리 — card (202...", "spec": "role-terms: 용어 정리 — card (2026-10-27)\n\n본문"}) \

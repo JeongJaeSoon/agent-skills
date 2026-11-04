@@ -597,6 +597,7 @@ function predWait(st, p) {
 const moveDot = (mo) => mo.moving ? `<span class="pulse ${mo.tone ? "tone-" + mo.tone : ""}" aria-label="moving"></span>` : `<span class="dot-s ${mo.tone ? "tone-" + mo.tone : ""}"></span>`;
 const agoSpan = (iso) => iso ? `<span class="muted" data-age-text="${esc(iso)}">${ageText(iso)}</span>` : "";
 
+const CLEANUP = `end-session "Who cleans up"; a lead's card, or a machine with no cleaner: end-session §4`;
 const STALL_TEXT = {
   idle: (x) => `${x.ticket || x.dispatch}: turn ended ${x.minutes} min ago with its task open — an orchestration message does not wake an idle session; send the content to dispatch:${x.dispatch}, then nudge its terminal with one line ("run your orchestration check").`,
   start_unconfirmed: (x) => `${x.ticket || x.dispatch}: dispatched ${x.minutes} min ago and its session has written nothing — did it get the brief?`,
@@ -623,7 +624,7 @@ function attentionItems(st) {
     out.push(["warn", "clock", `Worker ${d}${w.ticket ? ` (${w.ticket})` : ""} has not reported for ${ageText(w.seen_at)} — Orca cannot tell if it is alive; look at its terminal.`, "workers"]);
   }
   const cards = st.landed_open || [];
-  if (cards.length) out.push(["warn", "merge", `${cards.length} landed card${cards.length > 1 ? "s" : ""} still open (${cards.slice(0, 5).map((c) => c.ticket).join(", ")}${cards.length > 5 ? ", …" : ""}) — close out: release, then orca worktree rm`, "workers"]);
+  if (cards.length) out.push(["warn", "merge", `${cards.length} landed card${cards.length > 1 ? "s" : ""} still on disk (${cards.slice(0, 5).map((c) => c.ticket).join(", ")}${cards.length > 5 ? ", …" : ""}) — for the cleaners (${CLEANUP})`, "workers"]);
   for (const x of s.stalls || []) out.push([x.kind === "idle" ? "bad" : "warn", "clock", STALL_TEXT[x.kind](x), "workers"]);
   const sp = s.spare || {};
   if (sp.slots && (sp.ready || []).length) out.push(["accent", "spark", `${sp.slots} slot${sp.slots > 1 ? "s" : ""} free under the cap — ready to start: ${sp.ready.slice(0, 6).join(", ")}`, "tasks"]);
@@ -901,9 +902,10 @@ function viewWorkers(st) {
       <div><div class="eyebrow">Program total</div><div style="font-size:var(--t-2xl);font-weight:600">${compact(u?.total)}</div></div>
       ${u ? [["input", u.input_tokens], ["output", u.output_tokens], ["cache write", u.cache_creation_input_tokens], ["cache read", u.cache_read_input_tokens]].map(([k, v]) => `<div><div class="eyebrow">${k}</div><div>${compact(v)}</div></div>`).join("") : '<span class="muted">No transcripts found for these workers.</span>'}
       <span style="margin-left:auto">${sparkline(trend.slice(-60), cssVar("--accent"), 160, 32)}</span></div></div>
-  ${(st.landed_open || []).length ? `<div class="card" data-src="orca"><div class="card-head"><h3>Cards to close</h3><span class="aside">landed, card still on disk</span></div>
+  ${(st.landed_open || []).length ? `<div class="card" data-src="orca"><div class="card-head"><h3>Landed cards</h3><span class="aside">on disk, for the cleaners</span></div>
+    <div class="card-body muted">${esc(CLEANUP)}</div>
     <ul class="rows">${st.landed_open.map((c) => `<li><span class="mono" style="width:78px;flex:none">${esc(c.ticket)}</span>
-      <span class="grow mono dim ellipsis" title="${esc(c.path)}">${c.active ? "worker-release, then " : ""}orca worktree rm --worktree path:${esc(c.path)}</span></li>`).join("")}</ul></div>` : ""}
+      <span class="grow mono dim ellipsis" title="${esc(c.path)}">${c.active ? "worker-release once main CI is recorded: " : ""}${esc(c.path)}</span></li>`).join("")}</ul></div>` : ""}
   <div class="card" data-src="orca"><div class="card-head"><h3>In-flight vs cap</h3><span class="aside legend"><span><i class="key" style="background:var(--ink-3)"></i>Cap</span><span><i class="key" style="background:var(--accent)"></i>In-flight</span></span></div>
     <div class="card-body"><div class="chart" id="chart-flow"></div></div></div>
   <div class="toolbar">${chips("workers", [["active", "In flight", ws.filter(F.active).length], ["all", "All", ws.length]], f)}</div>
