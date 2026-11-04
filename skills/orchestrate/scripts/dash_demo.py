@@ -362,15 +362,16 @@ def _transcripts(root, now, workers):
                 rows.append({"type": "assistant", "timestamp": _iso(t),
                              "message": {"id": f"msg_{i}_{m}", "model": "claude-opus", "usage": usage}})
         # How the session's last turn stands: a tool running, a tool waiting on a prompt, or a finished turn.
+        model = "claude-opus-5-5" if i % 3 == 0 else "claude-sonnet-5-5"  # the last row's model: the Sessions table's Model cell
         act, last = w["projection"]["stage"]["activity"], rows[-1]["timestamp"] if rows else _iso(now)
         if w["projection"]["outcome"] == "in_progress" and act == "working":
-            rows.append({"type": "assistant", "timestamp": _ago(now, 0.05), "message": {"id": f"msg_{i}_t", "content": [
+            rows.append({"type": "assistant", "timestamp": _ago(now, 0.05), "message": {"id": f"msg_{i}_t", "model": model, "content": [
                 {"type": "tool_use", "name": "Bash", "input": {"command": "bun test", "description": "Run the unit tests"}}]}})
         elif w["projection"]["outcome"] == "in_progress" and act == "waiting":
-            rows.append({"type": "assistant", "timestamp": _ago(now, 0.7), "message": {"id": f"msg_{i}_t", "content": [
+            rows.append({"type": "assistant", "timestamp": _ago(now, 0.7), "message": {"id": f"msg_{i}_t", "model": model, "content": [
                 {"type": "tool_use", "name": "Bash", "input": {"command": "git push --force-with-lease"}}]}})
         else:
-            rows.append({"type": "assistant", "timestamp": last, "message": {"id": f"msg_{i}_e", "stop_reason": "end_turn",
+            rows.append({"type": "assistant", "timestamp": last, "message": {"id": f"msg_{i}_e", "model": model, "stop_reason": "end_turn",
                                                                          "content": [{"type": "text", "text": "done"}]}})
         (d / "session.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
     return base
@@ -506,6 +507,14 @@ def build(root, now=None):
                               ("search-v1", "acme/search", 200, True), ("metrics-spike", "acme/metrics", 300, False)):
         write_program(root, *finished(now, slug, repo, h, ok))
     projects = _transcripts(root, now, a[4]["workers"] + b[4]["workers"])
+    # The Sessions table's Model cell: each fake worktree's last assistant row. A worker on opus is off the demo's
+    # orchestrate.models (below), so it shows the `!`.
+    for path, model in (("coord", "opus"), ("lead", "opus"), ("export", "sonnet"), ("invoice", "opus"), ("login", "sonnet"),
+                        ("docs", "sonnet"), ("tax", "haiku"), ("scratch", "opus")):
+        d = projects / f"-work-wt-{path}"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "session.jsonl").write_text(json.dumps({"type": "assistant", "timestamp": _iso(now), "message": {
+            "id": f"msg_model_{path}", "model": f"claude-{model}-5-5", "content": [{"type": "text", "text": "ok"}]}}) + "\n")
     (root / "fleet-state").mkdir(parents=True, exist_ok=True)
     (root / "fleet-state" / "skills.json").write_text(json.dumps(skills_report(now)))
     (root / "fleet-state" / "pr-stats.json").write_text(json.dumps(pr_stats_report(now)))
@@ -529,8 +538,10 @@ def build(root, now=None):
     (root / "reap-hard-last.json").write_text(json.dumps({"t": t, "at": _ago(now, 7 / 60), "run": "demo", "dry_run": False, "acted": 2,
                                                           "skipped": 0, "failed": 0, "kept": 5, "notes": [], "dark": []}))
     seed_pressure(root, now.timestamp())
+    # The roles' models the Sessions table's Model cell is judged against: the demo workers run on both.
+    (root / "agent-skills.json").write_text(json.dumps({"orchestrate": {"models": {"lead": "opus", "worker": "sonnet"}}}))
     # The fleet collector must never write the real ~/.local/state or read the real config from a demo or test.
-    return {"ORCH_FLEET_STATE": str(root / "fleet-state"), "ORCH_FLEET_CONFIG": str(root / "fleet-config.json"),
+    return {"AGENT_SKILLS_CONFIG": str(root / "agent-skills.json"), "ORCH_FLEET_STATE": str(root / "fleet-state"), "ORCH_FLEET_CONFIG": str(root / "fleet-config.json"),
             "PROGRAMS_HOME": str(root / "programs"), "AGENT_SKILLS_STATE": str(root), "CLAUDE_PROJECTS_DIR": str(projects), "ORCH_SKILLS": "off", "ORCH_PR_STATS": "off", "ORCH_TOKENS": "off", "DASH_DEMO_FIXTURES": str(root / "fixtures"),
             "TRACKER_FIXTURES": str(root / "fixtures" / "tracker"), "TRACKER_PY": str(bin_ / "tracker.py"),
             "PATH": f"{bin_}{os.pathsep}{os.environ.get('PATH', '')}"}

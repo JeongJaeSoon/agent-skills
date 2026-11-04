@@ -790,7 +790,8 @@ def signal_round(facts, findings, verdicts, memo, memo2, notes, dry, rid):
     if not dry:
         memo2["signals"] = agent_signal.log_round("patrol", None, rid, cards, memo.get("signals"), problem, raw, warned,
                                                   {t["handle"]: card_name(t.get("worktreePath")) or t["handle"] for t in terms})
-    blind = sorted(facts.get("failed") or ()) + sorted(facts.get("unread") or ())
+    # A failed `claude agents` is reported below as 신호 없음; the models source failing with it is the same news.
+    blind = sorted(set(facts.get("failed") or ()) - ({"models"} if problem else set())) + sorted(facts.get("unread") or ())
     blind += ["screens cut short"] if facts.get("cut_short") else []
     blind += [t["handle"] for t in terms if agent_signal.is_claude(t) and cards[t["handle"]]["basis"] == "no evidence"]
     parts = [f"못 읽은 곳 {len(blind)}: " + ", ".join(blind)] if blind else []
@@ -825,8 +826,7 @@ def model_round(facts, findings, verdicts, notes, run=None):
         notes.append(f"model drift not judged: agent-skills.json not read: {type(e).__name__}")
         return
     models = {k: orca_settings.role_model(k) for k in ("lead", "worker")}
-    if not any(models.values()):
-        notes.append("orchestrate.models is not set: no model drift judged")
+    if not any(models.values()):  # no model configured for any role: the feature is off, and quiet
         return
     own = owners(facts["sessions"])
     try:

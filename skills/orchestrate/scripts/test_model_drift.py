@@ -101,7 +101,7 @@ check("a full id must be the same model", model_drift.matches("claude-opus-5-5",
       and model_drift.matches("claude-opus-5-50", "claude-opus-5-5") is False
       and model_drift.matches("claude-opus-5-5-1", "claude-opus-5-5") is False)
 check("an unreadable transcript is not 'no turn yet'",
-      model_drift.last_model(tmp / "nope.jsonl") == (None, False)
+      model_drift.last_model(tmp / "nope.jsonl") == (None, None)
       and model_drift.last_model(tmp / "claude" / "projects" / "p" / "s-new.jsonl") == (None, True))
 check("a transcript whose last 16 MiB hold no assistant row is not complete", (lambda p: (
     p.write_bytes(b'{"type":"user"}\n' * (17 * 2**20 // 16)), model_drift.last_model(p))[1])(tmp / "huge.jsonl") == (None, False))
@@ -133,8 +133,8 @@ check("patrol adds an M finding and a check reason", [f["code"] for f in finding
 (tmp / "cfg.json").write_text("{}")
 findings, verdicts, notes = [], {"check": {}}, []
 patrol.model_round(facts, findings, verdicts, notes)
-check("patrol without orchestrate.models: no finding, one note",
-      not findings and notes == ["orchestrate.models is not set: no model drift judged"], (findings, notes))
+check("patrol without orchestrate.models: no finding, no note (the feature is off)",
+      not findings and notes == [], (findings, notes))
 (tmp / "cfg.json").write_text(json.dumps({"orchestrate": {"models": MODELS}}))
 blind_facts = dict(facts, agent_rows=([], "exit 1"), failed=set())
 patrol.model_round(blind_facts, [], {"check": {}}, [])
@@ -155,6 +155,50 @@ for what, setup in (("a cut terminal list", lambda f: f.update(terminals_cut=Tru
     patrol.model_round(f2, [], {"check": {}}, [])
     patrol.model_drift = saved
     check(f"{what} marks models failed, so a standing M stays", "models" in f2["failed"], f2["failed"])
+# The collector's one-cell mark (fleet.model_tags): family letter, `!` when off the role's configured model.
+check("model_tag: family letter, and ! only when the role's model says another",
+      [model_drift.model_tag(m, w) for m, w in ((OPUS, "sonnet"), (SONNET, "sonnet"), ("claude-haiku-5-5", None),
+                                                 ("some-model", "sonnet"), (None, "sonnet"), (OPUS, "opusplan"))]
+      == ["O!", "S", "H", "?!", "", "O"])
+os.environ["CLAUDE_PROJECTS_DIR"] = str(tmp / "claude" / "projects")
+(tmp / "cfg.json").write_text(json.dumps({"orchestrate": {"models": MODELS}}))
+for name, model in (("-w-worker", OPUS), ("-w-lead", OPUS), ("-w-human", OPUS), ("-w-empty", None)):
+    folder = tmp / "claude" / "projects" / name
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "a.jsonl").write_text(json.dumps({"type": "assistant", "message": {"model": model}}) if model else "")
+sess = {"w": {"path": "/w/worker", "kind": "task"}, "l": {"path": "/w/lead", "kind": "orchestration"},
+        "h": {"path": "/w/human", "kind": "standalone"}, "e": {"path": "/w/empty", "kind": "task"}, "n": {"kind": "task"}}
+patrol.fleet.model_tags(sess)
+check("model_tags: a worker on opus is O!, a lead on opus is O, a human's session has no want, none is empty",
+      {k: v["model_tag"] for k, v in sess.items()} == {"w": "O!", "l": "O", "h": "O", "e": "", "n": ""}, sess)
+(tmp / "claude" / "projects" / "-w-worker" / "b.jsonl").write_text(
+    json.dumps({"type": "assistant", "message": {"model": SONNET}}))
+patrol.fleet.model_tags(sess)
+check("model_tags reads the newest transcript", sess["w"]["model_tag"] == "S", sess["w"])
+# Another config home (an Orca profile) holds the card's newer transcript; an unfinished read is not remembered.
+profile = tmp / "profile" / "projects" / "-w-worker"
+profile.mkdir(parents=True)
+(profile / "c.jsonl").write_text(json.dumps({"type": "assistant", "message": {"model": OPUS}}))
+os.environ["ORCH_CLAUDE_HOMES"] = os.pathsep.join([str(tmp / "profile"), str(tmp / "claude")])
+patrol.fleet.model_tags(sess)
+check("model_tags looks in every config home, newest first", sess["w"]["model_tag"] == "O!", sess["w"])
+del os.environ["ORCH_CLAUDE_HOMES"]
+seen = tmp / "claude" / "projects" / "-w-seen"
+seen.mkdir(parents=True)
+(seen / "s.jsonl").write_text(json.dumps({"type": "assistant", "message": {"model": SONNET}}))
+real_last = model_drift.last_model
+model_drift.last_model = lambda p: (None, None)
+check("an unreadable file gives no model", model_drift.dir_model([seen]) is None)
+model_drift.last_model = real_last
+check("and is tried again on the unchanged file", model_drift.dir_model([seen]) == SONNET)
+huge = tmp / "claude" / "projects" / "-w-huge"
+huge.mkdir(parents=True)
+(huge / "h.jsonl").write_bytes(b'{"type":"user"}\n' * (17 * 2**20 // 16))
+reads = []
+model_drift.last_model = lambda p: reads.append(p) or real_last(p)
+model_drift.dir_model([huge]), model_drift.dir_model([huge])
+model_drift.last_model = real_last
+check("a file with no model in its last 16 MiB is scanned once while it stays the same", len(reads) == 1, reads)
 check("no subprocess anywhere in these rounds", not calls, calls)
 
 print("FAILED" if failures else "all passed")

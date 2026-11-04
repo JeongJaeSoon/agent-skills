@@ -38,8 +38,8 @@ def transcript_of(session):
 
 def last_model(path):
     """(model, complete): the model of the transcript's last assistant row that names one, and whether the search
-    was whole. (None, True) is a session with no turn yet; (None, False) is a file that could not be read or whose
-    last 16 MiB hold no such row. A row Claude Code wrote itself (`<synthetic>`) names none."""
+    was whole. (None, True) is a session with no turn yet; (None, False) is a file whose last 16 MiB hold no such
+    row; (None, None) is a file that could not be read. A row Claude Code wrote itself (`<synthetic>`) names none."""
     try:
         size = os.stat(path).st_size
         with open(path, "rb") as f:
@@ -58,8 +58,44 @@ def last_model(path):
                 if size <= step:
                     return None, True
     except OSError:
-        pass
+        return None, None
     return None, False
+
+
+TAG = {"opus": "O", "sonnet": "S", "haiku": "H"}
+SEEN = {}  # newest transcript -> ((mtime, size), model): the collector reads every card each tick
+
+
+def dir_model(folders):
+    """The last assistant model of the newest transcript in a card's transcript folders (one per Claude config home),
+    else None. A file that could not be read is not remembered, so the next tick tries again; one that was read and
+    holds no model in its last 16 MiB is, so an unchanged file costs one scan, not one a tick."""
+    files = []
+    for folder in folders:
+        try:
+            files += [f for f in pathlib.Path(folder).iterdir() if f.suffix == ".jsonl"]
+        except OSError:
+            pass
+    try:
+        newest = max(files, key=lambda f: f.stat().st_mtime)
+        stamp = (newest.stat().st_mtime_ns, newest.stat().st_size)
+    except (OSError, ValueError):
+        return None
+    if SEEN.get(newest, (None,))[0] != stamp:
+        model, complete = last_model(newest)
+        if complete is None:
+            return None
+        SEEN[newest] = (stamp, model)
+    return SEEN[newest][1]
+
+
+def model_tag(model, want):
+    """The one-cell mark of a session's model: O, S or H (`?` for another), then `!` when `want` (the role's
+    configured model) says another. "" when the model is unknown."""
+    if not model:
+        return ""
+    family = next((TAG[f] for f in TAG if f in model.lower()), "?")
+    return family + ("!" if want and matches(model, want) is False else "")
 
 
 def agent_type(path):

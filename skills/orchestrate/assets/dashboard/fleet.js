@@ -1481,6 +1481,9 @@ function subagentRows(s, d) {
       <td class="hide-md"></td><td class="hide-sm"></td><td></td><td class="num"></td><td class="num hide-sm when">${relSpan(a.started_at)}</td></tr>`).join("");
 }
 
+// The one-cell model mark the collector wrote (fleet.py model_tags): O, S or H, with `!` when off orchestrate.models.
+const modelCell = (s) => !s.model_tag ? "" : ` <span class="model-mark" title="${esc(s.model)}">${tag(s.model_tag, s.model_tag.endsWith("!") ? "warn" : "")}</span>`;
+
 function fleetSessions(st) {
   const rows = sessionTree(st).filter(([s]) => inProject(s.project)).map(([s, d]) => {
     const pr = (st.prs || []).find((p) => p.session === s.id);
@@ -1491,13 +1494,13 @@ function fleetSessions(st) {
     const tickets = (s.refs || []).filter((r) => r.type !== "pr" && r.url).map((r) => link(r.url, esc(r.key || r.provider || "ticket"))).join(" ");
     const board = s.workspace_status && s.workspace_status !== "in-progress" ? ` <span class="tag">${esc(s.workspace_status)}</span>` : "";
     return `<tr><td><a class="tree-cell" style="--d:${Math.min(d, 4)}" href="${sessionHref(s.id)}">${phaseDot(s)}<b>${esc(s.name)}</b></a></td>
-      <td>${kindTag(st, s)}</td><td>${esc(s.phase)}${board}</td>
+      <td>${kindTag(st, s)}</td><td>${esc(s.phase)}${board}${modelCell(s)}</td>
       <td class="hide-md">${projBadge(s.project)}<span class="mono dim">${s.branch ? esc(s.branch) : ""}</span></td>
       <td class="hide-sm">${tickets}</td><td>${prCell}</td><td class="num">${badge(s.unread, s.missed)}</td><td class="num hide-sm when">${relSpan(s.last_activity)}</td></tr>`
       + subagentRows(s, d);
   }).join("");
   return `<div class="view-head"><div><h2>Sessions</h2><p>Every Orca worktree, placed under the orchestrator or lead whose run dispatched it, else under its Orca parent, else under the root. A lead is a session under the root with its own run; the sessions under it are its workers. Ticket, PR and the board column (shown when not in-progress) are the card's own Orca fields. A subagent a session started and has not been seen to stop sits under it, dimmed.</p></div>${phaseLegend()}</div>
-    ${projectChips(st)}<div class="card table-wrap"><table><thead><tr><th>Session</th><th>Kind</th><th>Phase</th><th class="hide-md">Project · branch</th><th class="hide-sm">Ticket</th><th>PR</th><th class="num">Needs you</th><th class="num hide-sm">Active</th></tr></thead><tbody>${rows}</tbody></table></div>
+    ${projectChips(st)}<div class="card table-wrap"><table><thead><tr><th>Session</th><th>Kind</th><th title="After the phase: the model of the session's last assistant row, O opus, S sonnet, H haiku. A ! means orchestrate.models for its role says another.">Phase · model</th><th class="hide-md">Project · branch</th><th class="hide-sm">Ticket</th><th>PR</th><th class="num">Needs you</th><th class="num hide-sm">Active</th></tr></thead><tbody>${rows}</tbody></table></div>
     ${holdsCard(st)}`;
 }
 

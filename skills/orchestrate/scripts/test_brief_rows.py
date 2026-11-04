@@ -299,6 +299,35 @@ assert "[작업 중](http://127.0.0.1:4780/#/fleet/session/s-link) · payments-m
 tg = subprocess.run([sys.executable, str(HERE / "prog.py"), "brief", "render", "--telegram", "--no-refresh"],
                     capture_output=True, text=True, env=env).stdout
 assert any(l.endswith("— 리뷰 · 작업 중 · payments-migration-worktree") and "결제 이행" in l for l in tg.splitlines()) and "127.0.0.1:4780/#/fleet/session" not in tg, tg
+# The model the collector read for the session (fleet.model_tags) sits in the same cell after the state word: O, S or H,
+# `!` when it is off orchestrate.models. A row with no session shows none.
+st = fleet.read_json(sd / "state.json")
+for s in st["sessions"]:
+    s["model_tag"] = "S!" if s["id"] == "s-link" else ""
+fleet.write_atomic(sd / "state.json", json.dumps(st))
+out = brief()
+text = out["text"]
+assert "[작업 중](http://127.0.0.1:4780/#/fleet/session/s-link) S! · payments-… |" in text, text  # the mark's 3 columns come out of the name's 12
+assert "연결 없음** | — | 리뷰 | 세션 없음 |" in text, text
+assert out["width_ok"], "the model mark must not push the table past 78 columns"
+# The same with a progress bar, a PR and a short session name beside the mark: the cut columns give back its width.
+for s in st["sessions"]:
+    if s["id"] == "s-link":
+        s["name"], s["model_tag"] = "pay-mig", "O!"
+fleet.write_atomic(sd / "state.json", json.dumps(st))
+board.set_row("link-row", progress="3/8", pr="acme/links#1")
+out = brief()
+assert "O! · pay-mig" in out["text"] and out["width_ok"], out["text"]
+board.set_row("link-row", progress="3/8", pr="#123→rc-branch")
+out = brief()
+assert "O!" in out["text"] and out["width_ok"], out["text"]  # a too-wide row loses the name, never the state or the mark
+board.set_row("link-row", progress="", pr="")
+for s in st["sessions"]:
+    if s["id"] == "s-link":
+        s["name"] = "payments-migration-worktree"
+for s in st["sessions"]:
+    s.pop("model_tag", None)
+fleet.write_atomic(sd / "state.json", json.dumps(st))
 # A link to 127.0.0.1 is dead on another device, and Orca has no remote link: 세션 찾기 gives each row's session as text,
 # the whole worktree name and its handle, or the switch command once orca_environment names this host for that device.
 st = fleet.read_json(sd / "state.json")
