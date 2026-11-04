@@ -515,7 +515,7 @@ def manual_goal_command(handle, line):
     return shlex.join([ORCA, "terminal", "send", "--terminal", handle, "--text", line, "--enter"])
 
 
-def type_when_idle(handle, line):
+def type_when_idle(handle, line, deadline=None):
     """None once `line` was typed into an idle Claude session and the screen shows it was taken, else the reason it
     was not (sync.UNCONFIRMED when it may have been typed). This is `sync.send_to` with the tab title left out of the
     judgement: a worker's title is the session's topic (`GOAL-DEMO-OK …`), never the `✳` that `sync.classify` wants,
@@ -534,25 +534,33 @@ def type_when_idle(handle, line):
         tail = t.get("tail") or []
         return tail, sync.classify(tail, "✳", t.get("draft") or "")
 
-    try:
-        first, reason = look()
-        if reason:
-            return reason
-        time.sleep(sync.SETTLE_S)
-        second, reason = look()
-        if reason:
-            return reason
-        if second != first:
-            return "screen changed between two reads (someone may be typing)"
-        sync.orca("terminal", "send", "--terminal", handle, "--text", line, "--enter")
-    except sync.Stop as e:
-        return str(e)
-    time.sleep(sync.CONFIRM_S)
-    try:
-        after, _ = look()
-    except sync.Stop:  # typed already: an unread confirmation must not read as never sent
-        return sync.UNCONFIRMED
-    return None if sync.turn_started(second, after, line) else sync.UNCONFIRMED
+    with sync.locked(10) as got:  # the lock sync, broadcast and nudge share: no other writer types between the reads
+        if not got:
+            return "a sync or broadcast is running"
+        try:
+            first, reason = look()
+            if reason:
+                return reason
+            time.sleep(sync.SETTLE_S)
+            second, reason = look()
+            if reason:
+                return reason
+            if second != first:
+                return "screen changed between two reads (someone may be typing)"
+        except sync.Stop as e:
+            return str(e)
+        if deadline is not None and time.monotonic() >= deadline:
+            return "time limit reached while waiting"
+        try:
+            sync.orca("terminal", "send", "--terminal", handle, "--text", line, "--enter")
+        except sync.Stop:  # Orca may have taken the input and lost the answer: typing it again could set the goal twice
+            return sync.UNCONFIRMED
+        time.sleep(sync.CONFIRM_S)
+        try:
+            after, _ = look()
+        except sync.Stop:  # typed already: an unread confirmation must not read as never sent
+            return sync.UNCONFIRMED
+        return None if sync.turn_started(second, after, line) else sync.UNCONFIRMED
 
 
 def goal_after_idle(handle, line, timeout_s=GOAL_IDLE_S):
@@ -565,7 +573,11 @@ def goal_after_idle(handle, line, timeout_s=GOAL_IDLE_S):
     manual = manual_goal_command(handle, line)
     deadline = time.monotonic() + timeout_s
     while True:
-        reason = type_when_idle(handle, line)
+        if time.monotonic() >= deadline:
+            print(f"[{ME}] warning: the /goal line was not typed into {handle} (waited up to {timeout_s}s). "
+                  f"Once the worker is idle, run: {manual}", file=sys.stderr)
+            return 1
+        reason = type_when_idle(handle, line, deadline)
         if reason is None:
             print(f"[{ME}] typed the /goal line into {handle}: {line}")
             return 0
@@ -573,7 +585,7 @@ def goal_after_idle(handle, line, timeout_s=GOAL_IDLE_S):
             print(f"[{ME}] warning: the /goal line may have reached {handle}, but its screen does not show it. Read "
                   f"the screen before typing it again: {manual}", file=sys.stderr)
             return 1
-        if reason.startswith(GOAL_FATAL) or time.monotonic() >= deadline:
+        if reason.startswith(GOAL_FATAL):
             print(f"[{ME}] warning: the /goal line was not typed into {handle} ({reason}; waited up to {timeout_s}s). "
                   f"Once the worker is idle, run: {manual}", file=sys.stderr)
             return 1

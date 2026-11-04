@@ -724,7 +724,7 @@ def run_helper(answers, timeout_s=3600):
     """goal_after_idle with type_when_idle answering from `answers` in turn: None (typed) or a reason."""
     queue = list(answers)
     SENDS.clear()
-    card.type_when_idle = lambda handle, line: SENDS.append((handle, line)) or queue.pop(0)
+    card.type_when_idle = lambda handle, line, deadline=None: SENDS.append((handle, line)) or queue.pop(0)
     err = io.StringIO()
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
         rc = card.goal_after_idle("term_w", LINE, timeout_s)
@@ -739,7 +739,7 @@ assert rc == 0 and len(SENDS) == 3 and SLEPT == [card.GOAL_POLL_S] * 2 and not e
 assert all(s == ("term_w", LINE) for s in SENDS)
 # Past the limit: nothing more is tried, and the warning carries the manual command.
 real_monotonic = card.time.monotonic
-ticks = iter([0, 1, 2, 100])
+ticks = iter([0, 1, 2, 3, 100])  # the deadline, then one check before each attempt
 card.time.monotonic = lambda: next(ticks)
 try:
     rc, err = run_helper([BUSY_REASON] * 5, timeout_s=50)
@@ -752,7 +752,7 @@ rc, err = run_helper(["orca terminal read failed: terminal_handle_stale"] * 3)
 assert rc == 1 and len(SENDS) == 1 and "not typed into term_w" in err, (rc, SENDS, err)
 rc, err = run_helper([sync.UNCONFIRMED, None])
 assert rc == 1 and len(SENDS) == 1 and "Read the screen before typing it again" in err, (rc, SENDS, err)
-card.type_when_idle = lambda handle, line: None
+card.type_when_idle = lambda handle, line, deadline=None: None
 with contextlib.redirect_stdout(io.StringIO()):
     assert card.main(["goal-after-idle", "term_w", LINE]) == 0  # the entry point start_goal_input launches
 card.type_when_idle = REAL_TYPE
@@ -763,7 +763,7 @@ STATUS = "  ⏵⏵ auto mode on (shift+tab to cycle)"
 IDLE = ["⏺ GOAL-DEMO-OK", "✻ Churned for 17s · done 12:08 AM", RULE, "❯ ", RULE, STATUS]
 RUNNING = ["⏺ Reading the brief.", "✶ Crunching… (running UserPromptSubmit hooks… 3/4 · 0s)", RULE, "❯ ", RULE, STATUS]
 TAKEN = ["❯ " + LINE, "✶ Thinking… (1s)", RULE, "❯ ", RULE, STATUS]
-SCREENS, TYPED = [], []
+SCREENS, TYPED, SEND_FAILS = [], [], []
 
 
 def fake_orca(*args):
@@ -772,6 +772,8 @@ def fake_orca(*args):
                              "title": "GOAL-DEMO-OK 워커 브리프 실행"}}
     if args[:2] == ("terminal", "read"):
         return {"terminal": {"tail": SCREENS.pop(0) if len(SCREENS) > 1 else SCREENS[0]}}
+    if SEND_FAILS:
+        raise sync.Stop("orca terminal send failed: timed out")
     TYPED.append(args)
     return {}
 
@@ -787,6 +789,14 @@ try:
     assert TYPED[0] == ("terminal", "send", "--terminal", "term_w", "--text", LINE, "--enter"), TYPED
     TYPED.clear(); SCREENS[:] = [IDLE, IDLE, IDLE]
     assert card.type_when_idle("term_w", LINE) == sync.UNCONFIRMED and len(TYPED) == 1  # typed, never shown taken
+    TYPED.clear(); SCREENS[:] = [IDLE, IDLE]  # a send whose answer was lost may have been taken: never "not typed"
+    SEND_FAILS.append(1)
+    try:
+        assert card.type_when_idle("term_w", LINE) == sync.UNCONFIRMED and not TYPED
+    finally:
+        SEND_FAILS.clear()
+    SCREENS[:] = [IDLE, IDLE]  # idle only after the limit: nothing is typed
+    assert card.type_when_idle("term_w", LINE, deadline=0).startswith("time limit") and not TYPED, TYPED
     TYPED.clear(); SCREENS[:] = [IDLE, IDLE[:1] + ["✻ Churned for 18s · done 12:09 AM"] + IDLE[2:]]
     assert "changed between two reads" in card.type_when_idle("term_w", LINE) and not TYPED
 finally:
