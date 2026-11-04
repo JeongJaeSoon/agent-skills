@@ -230,8 +230,10 @@ class Workers(unittest.TestCase):
         def row(d, task, handle, parent):
             return {"dispatchId": d, "taskId": task, "runId": "run_p", "terminalState": "active",
                     "agentTerminalHandle": handle, "projection": {"parent": {"taskId": parent}}}
-        for lead_state in ("active", "retained"):  # retained: a person typed into the lead's terminal
-            workers = [dict(row("d_lead", "t_lead", ME, "t_coord"), terminalState=lead_state),
+        # retained: a person typed into the lead's terminal. Settled, it is still a dispatched lead: run-use on its
+        # coordinator's Run would take that Run's binding away.
+        for lead_state, status in (("active", "dispatched"), ("retained", "dispatched"), ("retained", "completed")):
+            workers = [dict(row("d_lead", "t_lead", ME, "t_coord"), terminalState=lead_state, dispatchStatus=status),
                        row("d_mine", "t_mine", "term_dead1", "t_lead"),
                        row("d_other", "t_other", "term_dead2", "t_coord")]
             out = does(run("lead", "acme", orca=Orca(run=None, workers=workers), procs=wait_proc(200, "orch wait acme")))
