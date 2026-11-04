@@ -788,6 +788,25 @@ def agent_row(a):
             "interrupted": bool(a.get("interrupted"))}
 
 
+MODEL_KEY = {"orchestrator": "lead", "orchestration": "lead", "task": "worker"}  # a standalone session is a human's
+
+
+def model_tags(sessions):
+    """`model` (the model of the card's last assistant row) and `model_tag` (one cell: O, S or H, plus `!` when the
+    role's orchestrate.models says another) on each session. A model that cannot be read leaves both empty."""
+    import dash, model_drift, orca_settings  # beside this file; they import this module, so not at the top
+    for s in sessions.values():
+        try:
+            folder = dash.transcript_dir(s["path"]) if s.get("path") else None
+            # The card's folder under every config home, Orca profiles' included: the newest transcript wins.
+            s["model"] = model_drift.dir_model(dict.fromkeys(
+                [folder, *(h / "projects" / folder.name for h in claude_homes())])) if folder else None
+            key = MODEL_KEY.get(s.get("kind"))
+            s["model_tag"] = model_drift.model_tag(s["model"], orca_settings.role_model(key) if key else None)
+        except Exception:  # one unreadable folder costs that session's mark, not the tick
+            s["model"], s["model_tag"] = None, ""
+
+
 def phase_of(agents, live_terms):
     states = {a["state"] for a in agents}
     if "waiting" in states:
@@ -2148,6 +2167,7 @@ class Fleet:
             held = [{**h, "session": by_handle.get(h["by"])} for h in holds.current()]
         except (OSError, ValueError):
             held = []
+        model_tags(sessions)
         return {"generated_at": iso(now), "root": root, "sessions": sorted(sessions.values(), key=lambda s: s.get("last_activity") or "", reverse=True),
                 "runs": [{"id": r["id"], "objective": mask(r.get("objective"), 200), "updated_at": r.get("updated_at")} for r in self.runs["runs"]],
                 "tasks": [{"id": t["id"], "run": t.get("run_id"), "title": task_name(t),

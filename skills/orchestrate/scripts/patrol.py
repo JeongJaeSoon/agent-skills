@@ -40,8 +40,12 @@ tail of each card's session transcript, the `orch sent` log and the last pressur
   T  dead handle  a term_ value in ~/.claude/agent-skills.json that `orca terminal list` does not show, so what is
                sent there has no reader. The finding names the key and the value's first 12 characters and goes to
                the orchestrator; a config or list that could not be read whole leaves a note line and no finding
+  M  model     a Claude session whose last assistant row's model is not its role's `orchestrate.models.lead|worker`
+               (model_drift.py; orchestrator and lead read `.lead`). Shown as ❔ with the session-only fix,
+               `claude --resume <id> --model <alias>`; no key for the role, no judgement
 
-Patrol records and shows; it never types into a terminal, closes one, stops a worker or removes a card. Findings
+Patrol records and shows; it never types into a terminal, closes one, stops a worker or removes a card (`/model`
+least of all: it writes the user's default model). Findings
 go to <state>/patrol.jsonl with detected_at, are cleared there when a later round no longer sees them, and are acked
 by whoever dealt with them (`orch patrol ack`). `orch inbox` and `orch wait` show the unacked ones routed to them
 (the card's parent session, else the orchestrator) every 30 minutes. X, E, L and O also go to the dashboard's
@@ -70,7 +74,7 @@ import contextlib, datetime as dt, fcntl, hashlib, json, os, pathlib, re, secret
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 sys.path.insert(1, str(pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts"))
-import agent_signal, card_watch, cardguard, dash, fleet, prog  # noqa: E402
+import agent_signal, card_watch, cardguard, dash, fleet, orca_settings, prog  # noqa: E402
 from card_watch import AGENT_PANEL, BACKGROUND  # noqa: E402
 try:  # dash put the repo's scripts/ on the path
     from sync import STALE_COMMAND, stale_signal  # noqa: E402
@@ -79,6 +83,10 @@ except ImportError:  # an install without the repo's scripts/: H judges nothing
 
     def stale_signal(lines):
         return None
+try:
+    import model_drift  # noqa: E402
+except ImportError:  # same install: M judges nothing
+    model_drift = None
 
 STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()
 LOG = STATE / "patrol.jsonl"
@@ -96,7 +104,7 @@ CANDIDATE_BUDGET_S = 240
 AGENTS_MARGIN_S = 15  # agent_signal.read's 10 s, and the round's own writes after it
 ROUNDS_KEEP = 1000
 CURRENT = {}  # the running round's timings and failed sources, read by mark_cut
-OWN_SOURCES = ("terminals", "waits", "workers", "state", "board", "sent", "consumers", "handles")
+OWN_SOURCES = ("terminals", "waits", "workers", "state", "board", "sent", "consumers", "handles", "models")
 IDLE_MIN = dash.IDLE_MIN
 SUPERSEDE_MIN = 30
 ORPHAN_H = 24
@@ -108,7 +116,7 @@ SCREEN_READS = 30
 NEEDS_YOU = {"X", "E", "L", "O"}
 LABEL = {"I": "idle", "X": "exited", "S": "superseded", "O": "orphan PR", "D": "no ref", "E": "error loop",
          "L": "load", "W": "watcher down", "R": "repeat", "H": "stale", "B": "background wait",
-         "T": "dead handle"}
+         "T": "dead handle", "M": "model"}
 BGWAIT_WHY = "백그라운드 작업을 기다리지만 깨울 작업이 없음"  # B's reason on the brief's ❔ row
 VERDICT_OF = {"I": "idle", "X": "exited", "S": "superseded", "O": "pr_open_no_session", "R": "stalled", "H": "stalled"}
 # H's two kinds: what the owner's line says, and the reason on the brief's ❔ row (Korean, as the brief is).
@@ -641,7 +649,7 @@ def sync_needs_you(rows=None):
 DEPENDS = {"I": {"terminals", "workers", "waits"}, "X": {"terminals", "workers"}, "S": {"terminals", "sent"},
            "O": {"state", "terminals"}, "D": {"state", "board"}, "E": {"terminals"}, "L": {"consumers", "terminals", "workers", "waits"},
            "W": {"state"}, "R": {"terminals", "workers", "waits"}, "H": {"terminals", "waits"}, "B": {"terminals", "waits"},
-           "T": {"terminals", "handles"}}
+           "T": {"terminals", "handles"}, "M": {"terminals", "models"}}
 
 
 def write_round(findings, verdicts, dry, now, failed=()):
@@ -765,7 +773,12 @@ def signal_round(facts, findings, verdicts, memo, memo2, notes, dry, rid):
     no judgement; a finding's title only gains what the signal said. Returns what the round missed, '' when nothing."""
     t0 = time.monotonic()
     rows, problem, raw = facts["agents_fn"]()
+    facts["agent_rows"] = (rows, problem)
     facts["timings"]["agents"] = round(time.monotonic() - t0, 2)
+    t0 = time.monotonic()
+    model_round(facts, findings, verdicts, notes)  # before the blind list below, which names what it could not read
+    facts["timings"]["models"] = round(time.monotonic() - t0, 2)
+    verdicts["failed"] = sorted(facts.get("failed") or ())
     terms = [t for t in facts["terminals"] if t.get("agentIdentity") and t.get("connected", True) and t.get("handle")]
     reads, warned = agent_signal.readings(terms, rows, problem)
     cards = {t["handle"]: signal_card(t, facts, reads[t["handle"]]) for t in terms}
@@ -777,7 +790,8 @@ def signal_round(facts, findings, verdicts, memo, memo2, notes, dry, rid):
     if not dry:
         memo2["signals"] = agent_signal.log_round("patrol", None, rid, cards, memo.get("signals"), problem, raw, warned,
                                                   {t["handle"]: card_name(t.get("worktreePath")) or t["handle"] for t in terms})
-    blind = sorted(facts.get("failed") or ()) + sorted(facts.get("unread") or ())
+    # A failed `claude agents` is reported below as 신호 없음; the models source failing with it is the same news.
+    blind = sorted(set(facts.get("failed") or ()) - ({"models"} if problem else set())) + sorted(facts.get("unread") or ())
     blind += ["screens cut short"] if facts.get("cut_short") else []
     blind += [t["handle"] for t in terms if agent_signal.is_claude(t) and cards[t["handle"]]["basis"] == "no evidence"]
     parts = [f"못 읽은 곳 {len(blind)}: " + ", ".join(blind)] if blind else []
@@ -787,6 +801,52 @@ def signal_round(facts, findings, verdicts, memo, memo2, notes, dry, rid):
     elif gaps:
         parts.append(f"{agent_signal.NO_SIGNAL} {len(gaps)}: " + ", ".join(f"{h} ({w})" for h, w in gaps.items()))
     return "; ".join(parts)
+
+
+def model_round(facts, findings, verdicts, notes, run=None):
+    """M: sessions off their role's model (model_drift.py). Needs the rows signal_round read; adds findings, the
+    brief's ❔ reasons and notes. A round that could not look (no listing, a transcript unread) marks "models" failed,
+    so an M finding already standing is kept. A failure here costs the round nothing else."""
+    failed = facts.setdefault("failed", set())
+    if not model_drift:
+        failed.add("models")
+        notes.append("model drift not judged: model_drift.py could not be loaded")
+        return
+    if "agent_rows" not in facts:
+        failed.add("models")
+        return
+    if "terminals" in failed or facts.get("terminals_cut"):  # a session missing from the list is not one that left
+        failed.add("models")
+    rows, problem = facts["agent_rows"]
+    terms = [t for t in facts["terminals"] if agent_signal.is_claude(t) and t.get("connected", True) and t.get("handle")]
+    try:
+        read_config()  # role_model() answers None for an unreadable file as for a missing key
+    except (OSError, ValueError) as e:
+        failed.add("models")
+        notes.append(f"model drift not judged: agent-skills.json not read: {type(e).__name__}")
+        return
+    models = {k: orca_settings.role_model(k) for k in ("lead", "worker")}
+    if not any(models.values()):  # no model configured for any role: the feature is off, and quiet
+        return
+    own = owners(facts["sessions"])
+    try:
+        drifts, more, blind = (run or model_drift.run)(terms, rows, problem, models, os.environ.get("ORCA_TERMINAL_HANDLE"))
+    except (SystemExit, Exception) as e:
+        notes.append(f"model drift not judged: {type(e).__name__}: {str(e)[:120]}")
+        failed.add("models")
+        return
+    notes += more
+    if blind:
+        failed.add("models")
+    path_of = {t["handle"]: t.get("worktreePath") for t in terms}
+    for d in drifts:
+        path = path_of.get(d["handle"])
+        sid, owner = own.get(path, (None, None))
+        findings.append({"id": fid("M", d["session"], d["want"], d["have"]), "code": "M", "card": card_name(path) or d["handle"],
+                         "path": path, "handle": d["handle"], "session": d["session"] or sid, "owner": owner,
+                         "title": f"❔ {d['line']}"})
+        if path:
+            verdicts["check"][path] = f"모델 불일치: {d['have']} (설정 {d['want']})"
 
 
 def round_once(dry=False, if_due=False, now=None, gather_fn=gather, rid=None):

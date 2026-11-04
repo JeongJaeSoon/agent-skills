@@ -642,3 +642,5 @@ table.sent details > summary { cursor: pointer; max-width: 720px; }
 .repo-row { display: grid; grid-template-columns: minmax(0, 14em) 1fr 3em; gap: var(--s2); align-items: center; font-size: var(--t-sm); }
 .repo-bar { height: 8px; border-radius: 2px; background: var(--panel-2); }
 .repo-bar > span { display: block; height: 100%; border-radius: 2px; background: var(--warn); }
+/* The Sessions table's model tag sits beside the phase word without making its row taller than a row with none. */
+.model-mark { display: inline-flex; vertical-align: middle; margin: -4px 0; }

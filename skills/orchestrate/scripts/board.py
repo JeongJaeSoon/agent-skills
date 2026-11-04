@@ -1062,7 +1062,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         if l["session"] and l["session"]["id"]:
             s = sessions[sid]
             line_, at = last_report(s)
-            l["session"].update(name=one_line(s.get("name")), last=line_, at=at, pr=(r or {}).get("pr"))
+            l["session"].update(name=one_line(s.get("name")), last=line_, at=at, pr=(r or {}).get("pr"),
+                                model=s.get("model_tag") if st != "none" else "")
         l["pr_state"] = pr_status(l["pr"], bases.get(l["sec"])) if l["pr"] else ""
         if l["fold"]:  # the numbers by base, each base but the section's named once; the states go to the snapshot only
             to = {}
@@ -1158,9 +1159,14 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         if not s:
             return "—"
         name = s.get("name")
+        word = s["word"] + (f" {s['model']}" if s.get("model") else "")  # O, S or H; `!` when off orchestrate.models
         if not name or name.lower() in l["shown"].lower():
-            return s["word"]
-        return f"{s['word']} · {name if not width or len(name) <= width else name[:width] + '…'}"
+            return word
+        if width is not None:
+            width -= len(word) - len(s["word"])  # the mark's columns come out of the name's
+            if width < 1:
+                return word
+        return f"{word} · {name if width is None or len(name) <= width else name[:width] + '…'}"
 
     def session_link(l, cell):
         """Its state word as a link to the session's dashboard page while the server runs; a cut cell keeps the word."""
@@ -1383,10 +1389,15 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                 return ("└ " if l["depth"] else "") + (f"**{s}**" if l["key"] in changed else s) if c == 1 else s
             # Only a name or a next step is cut to fit, and its whole text goes in the numbered list under the
             # table. A table the other cells alone make too wide overflows, and the render reports it.
-            body = [[mark(l, l["status"]), l["shown"], l["cell"] or "—", l["progress"], next_cell(l), session_text(l, SESSION_NAME_W)]
-                    for l in mine]
-            table, notes = table_width.fit([head] + [[x for c, x in enumerate(r) if c not in drop] for r in body], COLS,
-                                           (1, head.index("다음")), floor=6, deco=dress)
+            # The session cell keeps its state word and model mark; only its worktree name gives way, a column at a time,
+            # when the cut name and next step alone do not bring the table to the width.
+            for name_w in range(SESSION_NAME_W, -1, -2):
+                body = [[mark(l, l["status"]), l["shown"], l["cell"] or "—", l["progress"], next_cell(l),
+                         session_text(l, name_w)] for l in mine]
+                table, notes = table_width.fit([head] + [[x for c, x in enumerate(r) if c not in drop] for r in body], COLS,
+                                               (1, head.index("다음")), floor=6, deco=dress)
+                if table_width.table_width(table) <= COLS:
+                    break
             width_ok &= table_width.table_width(table) <= COLS
             out += ["", "| " + " | ".join(head).strip() + " |", "|---" * len(head) + "|"]
             out += ["| " + " | ".join(c.replace("|", "\\|") for c in row) + " |" for row in table[1:]]
