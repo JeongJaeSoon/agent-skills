@@ -500,6 +500,7 @@ def live_units(events, dispatches, orca_tickets=None):
 
 
 TICKET_ID = re.compile(r"\b[A-Z0-9]*[A-Z][A-Z0-9]*-\d+\b")  # 94S-12, ENG-3
+CLEANUP = 'end-session "Who cleans up"; a lead\'s card, or a machine with no cleaner: end-session §4'
 
 
 def ticket_of(task):
@@ -1398,10 +1399,8 @@ def new_leftovers(pdir, renotify=dt.timedelta(minutes=30)):
         mine, here = set(), None
     if here and not mine:  # its id is known but its path is not: any card may be this session's own
         here = None
-    return [f"  LANDED-BUT-OPEN {c.get('ticket') or '?'} (dispatch {c['dispatch']}): released, but its card is still"
-            + (f" there: `orca worktree rm --worktree path:{c['path']}`" if here is not None else
-               f" there: remove {c['path']} only once it is not this session's own worktree (`orca terminal show` could not be read)")
-            for c in fresh if c.get("path") not in mine]
+    return [f"  LANDED-BUT-OPEN {c.get('ticket') or '?'} (dispatch {c['dispatch']}): released, card {c['path']} still"
+            f" there for the cleaners ({CLEANUP})" for c in fresh if c.get("path") not in mine]
 
 
 def ensure_dash():
@@ -1596,12 +1595,12 @@ def cmd_status(argv):
     leftover = landed_but_open(events, workers, tasks, worktrees, by_id, here=here or "",
                                unjudged={w.get("dispatchId") for w, _ in gaps} - {None, ""})
     for tk, dispatch, active, path in leftover:
-        rm = (f"`orca worktree rm --worktree path:{path}`" if here is not None else
-              f"remove {path} only once it is not this session's own worktree (`orca terminal show` could not be read)")
         lines.append(f"  LANDED-BUT-OPEN {tk} (dispatch {dispatch}): "
-                     + ("worker state unknown (row below); release and remove nothing on this line" if active is None
-                        else f"once its main CI is recorded, worker-release, close its terminals and {rm}" if active
-                        else f"released, but its card is still there: {rm}"))
+                     + ("worker state unknown (row below); release nothing on this line" if active is None
+                        else f"once its main CI is recorded, worker-release"
+                             f"{' and close its agent terminal' if here is not None else ''}; card {path}"
+                             f" stays for the cleaners ({CLEANUP})" if active
+                        else f"released, card {path} still there for the cleaners ({CLEANUP})"))
     lines += taken_over_lines(judged, p.dir / "status-self-check.json", unknown={w.get("dispatchId") or None for w, _ in gaps})
     # A row status cannot judge may hold any PR its ticket names, or any PR at all when its ticket is unknown.
     unknown = {named.get(w.get("dispatchId")) or "*" for w, g in gaps if HOLDS_FIELDS & set(g)}
@@ -2544,11 +2543,9 @@ def own_worktree_id():
 
 
 def close_out(msgs, workers, worktrees, here=""):
-    """What to do with each worker_done's card, printed beside the message: after a compaction a lead kept
-    releasing workers but dropped `worktree rm`, and eight cards stayed open. `here` is the worktree id of the
-    caller's own terminal (None: it could not be read, so no rm line at all; "": not checked): a worker started
-    with `--worktree current` reports that card, and Orca lists no worker for the caller itself, so without it
-    the line told five leads to remove the worktree they ran in."""
+    """What to do with each worker_done's card, printed beside the message. `here` is the worktree id of the caller's
+    own terminal: a worker started with `--worktree current` reports that card, and Orca lists no worker for the caller
+    itself, so it is the one card whose terminal the caller must not treat as a finished card's."""
     card = {w["dispatchId"]: (w.get("resource") or {}).get("worktreeId") for w in workers}
     task = {w["dispatchId"]: w.get("taskId") or "<task>" for w in workers}
     path = {w["id"]: w.get("path") for w in worktrees if not w.get("isMainWorktree")}
@@ -2574,16 +2571,14 @@ def close_out(msgs, workers, worktrees, here=""):
                     " (`--worktree current`), so it stays", release]
         elif payload.get("outcome") != "succeeded":
             out += [f"CLOSE OUT {d} ({payload.get('outcome') or 'no outcome'}): release it, then retry on its card"
-                    f" (worker-start --retry-of {d} --task {task[d]} --worktree path:{shlex.quote(p)} --agent <agent> [--model <id>])"
-                    + (" or remove the card" if here is not None
-                       else "; this session's own worktree could not be read, so remove the card only once it is not this session's"),
+                    f" (worker-start --retry-of {d} --task {task[d]} --worktree path:{shlex.quote(p)} --agent <agent> [--model <id>])",
                     release]
         elif here is None:
             out += [f"CLOSE OUT {d}: release it; this session's own worktree could not be read (`orca terminal show`),"
-                    f" so remove its card ({shlex.quote(p)}) by hand only once it is not this session's", release]
+                    f" so close its agent terminal only once it is not this session's", release]
         else:
-            out += [f"CLOSE OUT {d}: release it, close its terminals and remove its card (checks and --run-hooks in end-session §4),"
-                    " unless its next task starts there", release, f"  orca worktree rm --worktree path:{shlex.quote(p)}"]
+            out += [f"CLOSE OUT {d}: release it and close its agent terminal if still open, unless its next task starts"
+                    f" there; the cleaners take {shlex.quote(p)} ({CLEANUP})", release]
     return out
 
 

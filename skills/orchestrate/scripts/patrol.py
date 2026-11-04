@@ -492,7 +492,7 @@ def judge(facts, memo):
     doing_noref, shut = [], tidy.closed() if facts["board"] else {}
     for d in (facts["board"].get("doing") or []):
         text = f"{d.get('title')} {d.get('next') or ''}"
-        if d.get("waiting") or fleet.pr_refs(text) or tidy.named(text, cards):
+        if d.get("waiting") or fleet.pr_refs(text) or tidy.doing_card(d, cards):
             continue
         iid = tidy.item_id("doing", d)
         if iid in shut:
