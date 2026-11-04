@@ -148,6 +148,9 @@ assert model_warning(f"{START} --model {{sonnet,}}") == "", "a brace expansion i
 assert model_warning(f"{START} --model opus[1m]") == "", "an unquoted bracket may be a glob, so the value is not judged"
 assert "differs" in model_warning(f"{START} --model 'opus[1m]'"), "a quoted bracket is literal"
 assert "differs" in model_warning(f"{START} --model=\"opus[1m]\"")
+CONFIG.write_text(json.dumps({"orchestrate": {"models": {"worker": "claude-sonnet-4-6"}}}))
+for cmd in (f"{START} --model \"claude-sonnet-\"*", f"{START} --model claude-sonnet-4-?>out"):
+    assert model_warning(cmd) == "", "a partly quoted or redirect-glued glob is not judged: " + cmd
 CONFIG.write_text(json.dumps({"orchestrate": {"models": {"worker": "sonnet"}, "model_flag": "deny"}}))
 assert bash(f"{START} --spec 'x' --model opus", "lead") in ("none", "allow"), "a comparison never blocks, whatever the level"
 CONFIG.write_text(json.dumps({"orchestrate": {"models": {"lead": "opus"}}}))

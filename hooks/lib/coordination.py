@@ -95,8 +95,11 @@ def expands(c, value):
     words are already unquoted, so the command's raw text says whether a glob character was quoted."""
     if re.search(r"[$`]", value):
         return True
-    bare = re.search(rf"--model(?:=|\s+){re.escape(value)}(?=\s|$|[;&|])", c.raw)
-    return bool(re.search(r"[*?\[{]", value)) and bare is not None
+    if not re.search(r"[*?\[{]", value):
+        return False
+    token = re.search(r"--model(?:=|\s+)(\S+)", c.raw)
+    # Literal only when the whole word is one quoted string; any partly quoted word or glued redirection is unsure.
+    return not (token and re.fullmatch(r"""(['"])[^'"]*\1""", token.group(1)))
 
 
 def warn_only(cfg, reason):
