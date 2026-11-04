@@ -161,6 +161,21 @@ for cmd in ("sleep 5; cat /tmp/x", "for i in 1 2 3; do curl -fs x && break; slee
             "echo 'until x; do sleep 1; done'", "git log --format=%s | grep -c 'do not sleep'"):
     assert bash(cmd) != "deny", cmd
 
+# Both alternatives the sleep-loop deny names pass this hook: the same command in the background, and Monitor.
+# Claude Code hands a Monitor call to a hook whose matcher meets it only through `Bash` as a foreground Bash call
+# ({command, description}), which the sleep-loop gate refuses; naming Monitor in the matcher keeps its own input.
+said = reason(f"until [ -s {O} ]; do sleep 5; done")
+assert "run_in_background: true" in said and "Monitor tool" in said, said
+wired = json.loads((HERE / "hooks.json").read_text())["hooks"]["PreToolUse"]
+matcher = next(e["matcher"] for e in wired if any("guard.py" in h["command"] for h in e["hooks"]))
+assert "Monitor" in matcher.split("|"), matcher
+for cmd in (f"until [ -s {O} ]; do sleep 5; done", f"while true; do grep -q done {O} && break; sleep 30; done",
+            "until ! gh pr checks 304 | grep -q pending; do\n  sleep 30\ndone"):
+    assert run("Monitor", {"command": cmd, "description": "wait", "timeout_ms": 600000}, "term_me") != "deny", cmd
+# A Monitor command is still a shell command: the danger rules and the mailbox rule hold for it.
+assert run("Monitor", {"command": "until pkill -f node; do sleep 5; done", "description": "x"}, "term_me") == "deny"
+assert run("Monitor", {"command": f"{CHECK} --terminal term_other --wait", "description": "x"}, "term_me") == "deny"
+
 # setup.py's steps that write no settings go to a permission dialog; anything else about setup.py gets no decision.
 SETUP = HERE.parent / "scripts" / "setup.py"
 assert bash(f"python3 {SETUP} --actions-only") == "ask"
