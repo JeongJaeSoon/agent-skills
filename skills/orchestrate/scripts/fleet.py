@@ -690,10 +690,12 @@ WORKSPACE_RE = re.compile(r"/orca/workspaces/([^/]+)/")
 
 
 def project_of(path, orca_repo=None, gh_repo=None):
-    """The project a worktree belongs to, from live state: Orca's own project name, else the workspace directory Orca
-    put it under (~/orca/workspaces/<project>/<worktree>), else the origin repository's name, else the directory."""
+    """The project a worktree belongs to, from live state: the origin repository's name, else Orca's own project name,
+    else the workspace directory Orca put it under (~/orca/workspaces/<project>/<worktree>), else the directory.
+    GitHub's name comes first because Orca and the workspace directory keep the name the repository had when it was
+    added, so a renamed repository would show its old one."""
     m = WORKSPACE_RE.search(f"{path or ''}/")
-    return orca_repo or (m and m.group(1)) or (gh_repo or "").partition("/")[2] or pathlib.Path(path or "").name or None
+    return (gh_repo or "").partition("/")[2] or orca_repo or (m and m.group(1)) or pathlib.Path(path or "").name or None
 
 
 def repo_of(path, cache):

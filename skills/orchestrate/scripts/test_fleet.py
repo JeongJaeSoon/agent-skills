@@ -63,7 +63,9 @@ assert [i["project"] for i in items(st, "decision")] == ["platform"] and all(i["
 assert {t["id"]: t["project"] for t in st["tasks"]} == {"task_login": "launchpad", "task_export": "launchpad", "task_docs": "launchpad",
                                                        "task_lead": "platform", "task_invoice": "launchpad",
                                                        **{t: None for t, _ in dash_demo.PLUGIN_TASKS}}  # cards with no worktree left
-assert fleet.project_of("/h/orca/workspaces/acme-api/fix-1", None, "o/other") == "acme-api"
+assert fleet.project_of("/h/orca/workspaces/acme-api/fix-1") == "acme-api"
+assert fleet.project_of("/h/orca/workspaces/acme-api/fix-1", "acme-api", "o/renamed") == "renamed"  # the repository was renamed on GitHub
+assert fleet.project_of("/h/orca/workspaces/acme-api/fix-1", "orca-name", None) == "orca-name"
 assert fleet.project_of("/src/app-wt", None, "o/app") == "app" and fleet.project_of("/src/app-wt") == "app-wt"
 assert fleet.project_of(None) is None
 
