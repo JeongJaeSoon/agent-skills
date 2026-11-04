@@ -1,7 +1,7 @@
 <!-- translated-from: 68d0f0e978e3a01fce2c0a9b1f79dae26b9e8bd2 -->
 # Skill catalog
 
-This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 8 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
+This page covers the 40 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 8 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
 
 Follow the [configuration migration guide](configuration-migration.md) for changed defaults and preservation of existing data. Notes, ledgers and personal folders require explicit configuration; report time defaults to UTC.
 
@@ -23,7 +23,7 @@ Machine     reap-resources (clears processes, Docker leftovers and branches that
             setup-pc (set up or update a PC: dry-run diff → the human's --apply line)
 Chat        watch-mentions (mentions, name mentions and new replies in threads the user joined,
               in public channels, sent to the orchestrator or lead in one message)
-Anywhere    record-progress (when to record what) → use-tracker (tickets) · use-notes (notes)
+Anywhere    end-session references/record.md (when to record what, the record_check hook) → use-tracker (tickets) · use-notes (notes)
               · pstack skills (design · review · verification · retrospective)
 ```
 
@@ -34,7 +34,7 @@ Which skill owns a PR, and who merges it:
 | deliver-ticket | My PR this session is working: writing, review replies, merge, release | The session, per §5 (`gh pr merge`; a stack lands with merge-async) |
 | watch-prs | Waiting PRs a scheduled round collects: review requests naming me, my PRs waiting on review (requests, reminders), my PRs ready to merge | Only my PRs that pass every `merge_repos` gate |
 | orchestrate | A program worker's PRs | `orch land`, or a plain merge the human approved |
-| handoff-ticket · record-progress | Opens no PR: picks the next card, or records opened, reviewed and merged | Never |
+| handoff-ticket | Opens no PR: picks the next card | Never |
 
 - deliver-ticket ↔ watch-prs: a PR whose branch is checked out in a live worktree is merged by that session; watch-prs skips it.
 - orchestrate ↔ watch-prs: a PR in a program ledger is merged by `orch land`; watch-prs does not merge it even after the program stops, and only sends its reminders. A program whose ledger has no event within `stale_days` counts as abandoned, and its PRs go back to watch-prs for reminders and merges.
@@ -123,9 +123,9 @@ Which skill owns a PR, and who merges it:
   - A card whose brief has a `CLOSE` line (`dispatch-card`, or a card an orchestrator or lead made with `worktree create`) also closes itself in the same turn once its done criteria are met. It does not leave the cleanup to the parent session.
   - Before ending, it checks the background subagents this session started, the git worktrees it made and the child cards it dispatched.
   - Writes the report first and runs the close command as its last tool call.
-
-### record-progress
-Records verified milestones in the configured tracker or notes store within the user's authorized workflow. Keeps state separate from reasoning, classifies follow-ups, avoids duplicate writes, and does not post chat announcements.
+- **Recording rules (`references/record.md`, formerly the `record-progress` skill):** the skill never fired from the listing, so it is gone as a skill and its body lives in this file. `deliver-ticket` reads it at each milestone, `orchestrate` on each `worker_done` and each human decision, `use-notes` when an investigation or design concludes, and `end-session` before closing. A bare "정리해줘"/"마무리해줘" (wrap up), "작업 기록 남겨줘" (log the work) or "log this" runs only this file and keeps the session. "티켓 갱신해줘" (update the ticket) goes to `use-tracker`; "노트에 남겨줘" (put it in the notes) and "KB에 정리해줘" go to `use-notes`.
+  - State and its evidence go to the tracker; the reasoning (the choice, what was ruled out, the trap, measured numbers) goes to the notes, which link the ticket rather than copy its state. Recorded only within the user's authorized workflow; follow-ups are classified, writes are not repeated, and nothing is announced in chat.
+  - Every report after a PR open, merge or land, and every `worker_done` body, carries one record line at the start of a line: `기록: …`, `기록: 없음 (<why>)` or `기록 못 함: <reason>` (`Recorded:`/`Not recorded:` in English). A notes store whose tools are not connected, or a write the workflow does not authorize, is `기록 못 함`. `hooks/record_check.py` reads this line ("Record line checks" below).
 
 ## One project (several Orca workers)
 
@@ -592,6 +592,9 @@ Supervision (the preamble), CLOSE and KEEP are attributes, not roles. Orca's exe
 
 ### Prose checks
 `hooks/prose_check.py` checks PR, commit and tracker text for deterministic writing patterns. It gives advisory context without blocking or changing permissions. `AGENT_SKILLS_PROSE_CHECK=0` disables it.
+
+### Record line checks
+`hooks/record_check.py` (PreToolUse, PostToolUse and PostToolUseFailure on Bash; Stop; SubagentStop). It calls no model and reads no tracker, notes store, Orca or GitHub state; it is off unless `~/.claude/agent-skills.json` has a `tracker` or `notes` object. A `gh pr merge` (not `--auto`/`--disable-auto`), `gh pr create` or `orch land` leaves a record obligation on the session and agent and adds a reminder naming the configured destinations and `references/record.md`; a failed call leaves one only when it held more than one command. Only a record line closes it: `기록: …` or `기록 못 함: <reason>` (`Recorded:`/`Not recorded:`) at the start of a line, outside code and quotes, with text after the colon, read from the final reply, a `worker_done` sent alone, or this turn's text before a close command. It checks a `worker_done` body without that line (a body from a variable or file counts as none), a milestone and a close command (`orca worktree rm`, `orca terminal close`) in one call, a close while this session or one under the closed path still owes a line, and a turn that ends owing one. `guard.record_check`: `warn` (default; the model is told before a send or close, and at Stop the human sees a warning and an observation row is written), `deny` (refuses the call, blocks the Stop once), `ask`, `off`. After a week of `warn` rows in `$AGENT_SKILLS_STATE/record-check.jsonl` it goes to `deny`. It proves the outcome was reported, not that the record was written; the lead's reconcile checks that. A merge left in the background and a close target named only by id are not followed.
 
 ## Differences from pstack
 

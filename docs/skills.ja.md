@@ -1,7 +1,7 @@
 <!-- translated-from: 68d0f0e978e3a01fce2c0a9b1f79dae26b9e8bd2 -->
 # スキルカタログ
 
-`agent-skills` プラグインに入っているスキル41個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック8個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
+`agent-skills` プラグインに入っているスキル40個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック8個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
 
 既定値の変更と既存データの保持は[設定移行ガイド](configuration-migration.md)を参照してください。ノート・台帳・個人フォルダーには明示的な設定が必要で、レポートの既定タイムゾーンは UTC です。
 
@@ -23,7 +23,7 @@
               setup-pc（新しい PC の設定・更新：dry run の diff → ユーザーの --apply 1 行）
 チャット      watch-mentions（公開チャンネルのメンション・名前への言及・参加スレッドの新しい返信を、
               オーケストレーターかリードに1通で）
-どこでも      record-progress（いつ何を残すか）→ use-tracker（チケット）· use-notes（ノート）
+どこでも      end-session references/record.md（いつ何を残すか、record_check フック）→ use-tracker（チケット）· use-notes（ノート）
               · pstack スキル（設計・レビュー・検証・振り返り）
 ```
 
@@ -34,7 +34,7 @@ PR を受け持つスキルとマージする主体:
 | deliver-ticket | このセッションが作業中の自分の PR: 作成、レビュー対応、マージ、リリース | セッションが §5 どおり（`gh pr merge`、スタックは merge-async） |
 | watch-prs | 定期の回が集めた待ち PR: 自分を指名したレビュー依頼、レビュー待ちの自分の PR（依頼・リマインド）、マージ準備ができた自分の PR | `merge_repos` のゲートをすべて通った自分の PR だけ |
 | orchestrate | プログラムのワーカーの PR | `orch land`、または人が承認した plain merge |
-| handoff-ticket · record-progress | PR を作らない。次のカードを決めるか、オープン・レビュー・マージを記録する | しない |
+| handoff-ticket | PR を作らない。次のカードを決める | しない |
 
 - deliver-ticket ↔ watch-prs: 生きている worktree にブランチがチェックアウトされた PR はそのセッションがマージする。watch-prs は飛ばす。
 - orchestrate ↔ watch-prs: プログラム台帳にある PR は `orch land` がマージする。watch-prs は止まったプログラムの PR もマージせず、リマインドだけ送る。台帳に `stale_days` のあいだ記録がないプログラムは放棄されたとみなし、その PR は再び watch-prs のリマインド・マージの対象になる。
@@ -123,9 +123,9 @@ PR を受け持つスキルとマージする主体:
   - ブリーフに `CLOSE` 行があるカード（`dispatch-card`、オーケストレーターかリードが `worktree create` で立ち上げたカード）も、完了条件を満たしたら同じターンで自分で閉じます。後片付けを親セッションに任せません。
   - 終える前に、このセッションが起動したバックグラウンドのサブエージェント、作った git worktree、立ち上げた子カードを確認します。
   - 報告を先に書き、終了コマンドを最後のツール呼び出しとして実行します。
-
-### record-progress
-許可されたワークフローの範囲で、検証済みの節目を設定したトラッカーやノートに記録します。状態と判断の理由を分け、後続作業を分類し、重複書き込みや無断のチャット投稿を避けます。
+- **記録のルール（`references/record.md`、以前の `record-progress` スキル）:** スキル一覧から一度も呼ばれなかったのでスキルとしては廃止し、本文をこのファイルに移しました。`deliver-ticket` は節目ごとに、`orchestrate` は `worker_done` と人の決定ごとに、`use-notes` は調査・設計が結論に達したときに、`end-session` は閉じる前にこのファイルを読みます。対象なしの「정리해줘」「마무리해줘」（まとめて）、「작업 기록 남겨줘」（作業記録を残して）、「log this」はこのファイルだけを行い、セッションは閉じません。「티켓 갱신해줘」（チケットを更新して）は `use-tracker`、「노트에 남겨줘」（ノートに残して）・「KB에 정리해줘」は `use-notes` に行きます。
+  - 状態とその根拠はトラッカーに、判断の理由（採用案、捨てた案、落とし穴、実測値）はノートに残し、ノートはチケットの状態を写さずリンクします。許可されたワークフローの範囲でだけ書き、後続作業を分類し、同じ書き込みを繰り返さず、チャットには投稿しません。
+  - PR のオープン・マージ・land の後の報告と、すべての `worker_done` 本文は、行頭に記録行を一行置きます: `기록: …`、`기록: 없음 (<理由>)`、`기록 못 함: <理由>`（英語では `Recorded:`・`Not recorded:`）。ノートストアのツールがつながっていない、または書き込みが許可されていなければ `기록 못 함` です。`hooks/record_check.py` がこの行を読みます（下の「記録行の検査」）。
 
 ## プロジェクト1件（Orca ワーカー複数）
 
@@ -593,6 +593,9 @@ hook 自身の判定が例外を出したら、その呼び出しは通し、警
 
 ### 文体の検査
 `hooks/prose_check.py` は PR・コミット・トラッカーの文章を決定的なパターンで確認します。助言を追加するだけで、操作を止めたり権限を変更したりしません。`AGENT_SKILLS_PROSE_CHECK=0` で無効になります。
+
+### 記録行の検査
+`hooks/record_check.py`（Bash の PreToolUse・PostToolUse・PostToolUseFailure、Stop、SubagentStop）。モデルを呼ばず、トラッカー・ノートストア・Orca・GitHub を読みません。`~/.claude/agent-skills.json` に `tracker` か `notes` のオブジェクトがなければ無効です。`gh pr merge`（`--auto`・`--disable-auto` を除く）、`gh pr create`、`orch land` が走ると、そのセッション・エージェントに記録の義務を残し、設定された記録先と `references/record.md` を示す案内をモデルのコンテキストに入れます。失敗した呼び出しは、コマンドが二つ以上のときだけ義務を残します。義務を閉じるのは記録行だけです: 行頭の `기록: …` か `기록 못 함: <理由>`（`Recorded:`・`Not recorded:`）で、コードと引用の外にあり、コロンの後が空でないもの。最終応答、単独で送った `worker_done`、終了コマンド直前のこのターンの文から読みます。検査するのは、記録行のない `worker_done` 本文（変数やファイルからの本文はないものと見なす）、記録コマンドと終了コマンド（`orca worktree rm`、`orca terminal close`）を一つの呼び出しに入れたもの、義務が残ったままこのセッションやその経路の下のセッションを閉じるもの、義務を残して終わるターンです。`guard.record_check`: `warn`（既定。送信・終了の前はモデルに知らせ、Stop では人に見える警告と観察行だけ）、`deny`（呼び出しを拒否し、Stop は一度 block）、`ask`、`off`。`$AGENT_SKILLS_STATE/record-check.jsonl` の warn 行を一週間見てから deny に上げます。保証するのは「記録の結果を報告した」ことで、「記録した」ことではありません。真偽はリードの reconcile が確かめます。バックグラウンドで走らせたマージの完了や、id だけで指した終了対象は追いません。
 
 ## pstack との違い
 

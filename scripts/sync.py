@@ -9,12 +9,19 @@ Usage:
                                          whose screen shows it runs on what changed under it, once
   skills-sync nudge <terminal> <one line>
                                          type one line into a session, only if it is idle at an empty prompt
-  skills-sync close-setup <worktree path>
-                                         close a new card's setup terminal once Orca's setup script finished
+  skills-sync close-setup <worktree path> [--agent <handle>]
+                                         close a new card's setup terminal once Orca's setup script finished;
+                                         with --agent, first report a trust or permission dialog, or no start
   skills-sync card <brief.md> --repo <selector> --name <name> [--display-name <title>] [--comment <text>]
-                   [--parent-worktree <selector> | --no-parent]
+                   [--parent-worktree <selector> | --no-parent] [--role impl|verify|review] [--supersede]
                                          create a card whose first prompt carries the brief's /goal, CLOSE/KEEP
-                                         and lead lines written out (scripts/card.py)
+                                         and lead lines written out, its FORBIDDEN refreshed, its setup closed in
+                                         the background, and no second card on the same key (scripts/card.py)
+  skills-sync handoff <TICKET> [--title <short title>] [--note <text>] [--base-branch <b>]
+                                         the next ticket's /goal card under this card's parent, its start read
+                                         from the screen (scripts/card.py)
+  skills-sync end-check [--worker --outcome <o> | --card] [--brief <f> | --keep | --no-keep] [--apply]
+                                         end-session §4/§7/§8's table as one verdict (scripts/end_check.py)
   skills-sync status                     print the last sync result and the pending reload
   skills-sync setup [status|apply|enable NAME|disable NAME]
                                          periodic automations: list, turn on defaults, turn one on or off
@@ -459,21 +466,77 @@ def setup_runner(lines):
 
 
 def running(path):
+    """Whether a process runs the script; a failed `ps` raises, so the terminal stays open."""
     p = subprocess.run(["ps", "-axo", "command"], capture_output=True, text=True, timeout=10)
-    return any(path in l for l in p.stdout.splitlines()[1:])
+    lines = p.stdout.splitlines()
+    # A real listing has its header and at least `ps` itself; anything less is unread, not "nothing runs".
+    if p.returncode != 0 or not lines or lines[0].strip() != "COMMAND" or not any(l.strip() for l in lines[1:]):
+        raise OSError(f"ps failed or printed no process list: {(p.stderr or p.stdout).strip()[:80]}")
+    return any(path in l for l in lines[1:])
 
 
-def close_setup(worktree, timeout_s=1800, grace_s=120):
+def start_state(handle):
+    """(state, detail) of a new card's agent from its screen: `started` (a turn runs, or a message was taken),
+    `trust` (the folder trust dialog), `dialog` (a permission or other dialog), or `unconfirmed` (anything else,
+    an empty prompt included: a silent screen is not a start)."""
+    tail = orca("terminal", "read", "--terminal", handle, "--screen")["terminal"].get("tail") or []
+    # Only the screen counts: a title without Claude's idle mark (a missing one included) proves no start.
+    reason = classify(tail, "✳")
+    if reason and reason.startswith("dialog open"):
+        return ("trust" if "trust this folder" in reason else "dialog"), reason
+    if reason and reason.startswith("turn in progress"):
+        return "started", reason
+    if reason is None and last_message(tail)[0] is not None:
+        return "started", "a message was taken"
+    return "unconfirmed", reason or "idle at an empty prompt"
+
+
+def watch_start(handle, grace_s):
+    """Poll the agent's screen until it started or grace_s passed. Returns (state, detail)."""
+    start, state = time.monotonic(), ("unconfirmed", "not read")
+    while True:
+        try:
+            state = start_state(handle)
+        except (Stop, KeyError, TypeError) as e:
+            state = ("unconfirmed", f"screen unreadable: {e}")
+        if state[0] != "unconfirmed" or time.monotonic() - start >= grace_s:
+            return state
+        time.sleep(SETUP_POLL_S)
+
+
+def close_setup(worktree, timeout_s=1800, grace_s=120, agent=None):
     """Close each of the card's terminals without an agent once the setup script it ran has finished.
     The setup terminal is a shell that outlives its script, so `orca terminal wait --for exit` never fires.
-    A shell that never showed the script is someone's own and stays."""
+    A shell that never showed the script is someone's own and stays.
+    With `agent` (the card's agent handle) it first watches that agent start: a trust dialog, a permission dialog or
+    no visible start within grace_s is printed and makes the exit code 1, since a setup that waits on such a dialog
+    never ends. The last line is always `result: …`."""
     start = time.monotonic()
+    rc = 0
+    if agent:
+        state, detail = watch_start(agent, grace_s)
+        print(f"{agent}  agent {state}: {detail}")
+        if state != "started":
+            rc = 1
     try:
-        handles = [t["handle"] for t in orca("terminal", "list", "--worktree", f"path:{worktree}")["terminals"]
-                   if not t.get("agentIdentity")]
+        terms = orca("terminal", "list", "--worktree", f"path:{worktree}")["terminals"]
+        # Only a row that says it has no agent is a shell; one with no agentIdentity field at all is left open.
+        handles = [t["handle"] for t in terms if "agentIdentity" in t and t["agentIdentity"] is None]
+        unknown = [t.get("handle") for t in terms
+                   if "agentIdentity" not in t
+                   or not (t["agentIdentity"] is None or isinstance(t["agentIdentity"], str) and t["agentIdentity"])]
+        if unknown:
+            print(f"warning: no agentIdentity on {', '.join(map(str, unknown))}; left open")
     except (Stop, KeyError, TypeError) as e:
         print(f"cannot list the card's terminals: {e}")
+        print("result: failed")
         return 1
+    rc = close_setup_terminals(handles, start, timeout_s, grace_s) or rc
+    print(f"result: {'ok' if rc == 0 else 'failed'}")
+    return rc
+
+
+def close_setup_terminals(handles, start, timeout_s, grace_s):
     rc = 0
     for h in handles:
         path, idle = None, 0
@@ -704,9 +767,17 @@ def main(argv):
         return nudge(argv[1], argv[2])
     if cmd == "close-setup" and len(argv) == 2:
         return close_setup(argv[1])
+    if cmd == "close-setup" and len(argv) == 4 and argv[2] == "--agent":
+        return close_setup(argv[1], agent=argv[3])
     if cmd == "card":
         from card import main as card
         return card(argv[1:])
+    if cmd == "handoff":
+        from card import handoff
+        return handoff(argv[1:])
+    if cmd == "end-check":
+        from end_check import main as end_check
+        return end_check(argv[1:])
     if cmd == "status":
         return status()
     if cmd == "setup":

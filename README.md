@@ -9,7 +9,7 @@ Claude Code skills that take a ticket to a merged PR, with you deciding where a 
 
 ## What it is
 
-agent-skills is a Claude Code plugin: 41 skills, 4 agent definitions, 8 hooks and a few commands. It covers two flows. One takes a single ticket from the first edit to a merged PR and a closed ticket. The other runs a whole project on several Orca workers at once, one ticket each, and lands their PRs in order.
+agent-skills is a Claude Code plugin: 40 skills, 4 agent definitions, 8 hooks and a few commands. It covers two flows. One takes a single ticket from the first edit to a merged PR and a closed ticket. The other runs a whole project on several Orca workers at once, one ticket each, and lands their PRs in order.
 
 It is for developers who hand ticket work in GitHub repositories to Claude Code and want to choose, point by point, whether a human approves each step (human in the loop, HITL) or the agent goes ahead while the human watches and steps in on exceptions (human on the loop, HOTL). Writes to your user settings and irreversible actions always wait for you.
 
@@ -105,7 +105,7 @@ When each skill fires, what it does and the files it ships are in the [skill cat
 
 | Group | Skills | What they do |
 |---|---|---|
-| [One ticket](docs/skills.en.md#one-ticket) | `write-ticket`, `deliver-ticket`, `ui-review`, `handoff-ticket`, `dispatch-card`, `end-session`, `record-progress` | Write a ticket, deliver it, hand the next one to a fresh card, close the session, record progress |
+| [One ticket](docs/skills.en.md#one-ticket) | `write-ticket`, `deliver-ticket`, `ui-review`, `handoff-ticket`, `dispatch-card`, `end-session` | Write a ticket, deliver it, hand the next one to a fresh card, record progress and close the session |
 | [One project](docs/skills.en.md#one-project-several-orca-workers) | `orchestrate`, `measure-delivery` | Land many tickets in parallel on Orca workers, then measure how it actually went |
 | [One machine](docs/skills.en.md#one-machine) | `reap-resources`, `secure-fill`, `tune-automode`, `skills-config`, `setup-pc` | Clean up leftovers, fill secrets the agent never sees, draft autoMode rules, change config keys, install and update |
 | [Chat and reviews](docs/skills.en.md#chat-and-reviews) | `watch-mentions`, `watch-prs` | Turn chat and PRs that concern you into work |

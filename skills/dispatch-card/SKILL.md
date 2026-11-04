@@ -65,13 +65,13 @@ session as not the human's, so an approval sent afterwards is refused. The brief
 - **Background** — what happened in repo A and why this work follows from it.
 - **Sources** — links, not summaries: repo, PR, commit, note paths the target session reads itself.
 - **Deliverable and done** — the exact output and what makes it complete.
-- **Do not** — repo A is off limits; anything else the target must leave alone. Paste from
-  `orchestrate` `references/brief.md` FORBIDDEN, verbatim, the refused-act paragraph (a card
-  restarted after a `no verdict` needs it most) and the sentences from "No force-push" through
-  "splitting an unquoted `$var`": no force-push, no rebase only to catch up, file edits
-  with Edit and Write only, one file-changing act per Bash call, nothing chained, no inline
-  hook-matchable text, quoting under zsh. A card gets
-  these rules from no other place. Copy them by those first and last words, not by line numbers.
+- **Do not** — repo A is off limits; anything else the target must leave alone, written in the
+  brief's `FORBIDDEN` row after its marked section. `skills-sync card` (§3) writes `orchestrate`
+  `references/brief.md` FORBIDDEN (through "run it again.", the refused-act paragraph included)
+  into that row between `<!-- FORBIDDEN:begin -->` and `<!-- FORBIDDEN:end -->`, replacing an older
+  copy, so the card never gets a stale one; lines outside the markers stay yours. A card gets these
+  rules from no other place: an inline `--prompt` card with no brief file pastes the paragraph
+  itself, by its first and last words, not by line numbers.
 - **Approved** — an `APPROVED:` row: the acts the human already approved for this work, each with
   their words and the date (merge, deploy, restarting an app, a settings or language change, an
   upgrade). Written as a row, it reaches the first prompt (§3); a heading or bullet does not. The
@@ -135,13 +135,19 @@ skills-sync card <brief file> \
   --display-name "<ID or target> <short title>" \
   --comment "<brief path>" \
   --reference "<ticket URL, or a Jira key>"   # one per ticket; omit when there is none
-# close the setup terminal once setup finishes; it stays a shell, so `terminal wait --for exit` never fires
-# (run it in the background: it waits up to 30 min, past the 10-min foreground Bash limit;
-#  a setup stopped on a trust prompt never ends: trust as in orchestrate references/top-level.md "Starting a worker")
-skills-sync close-setup "<result.worktree.path>"
+  # --role verify|review for a second card on the same ticket that checks, not implements (default impl)
 ```
 
-- A card already on the task (the same PR, branch or ticket). If it only needs to be told
+The helper starts `skills-sync close-setup <path> --agent <handle>` in the background itself:
+the setup terminal stays a shell after its script, so `terminal wait --for exit` never fires. Its
+log (the output's `card.close_setup.log`) ends in `result: failed` when the agent sits on a trust
+or permission dialog or shows no start; read it before §4, and trust a path as in `orchestrate`
+references/top-level.md "Starting a worker".
+
+- A card already on the task (the same PR, branch or ticket). With `--reference`, `skills-sync
+  card` stops on a live card of the same repo, reference and `--role` (exit 2, the cards listed);
+  `--supersede` starts the new one anyway and sends the old one the line below, logged and
+  recorded. If it only needs to be told
   something, send that to it (`skills-sync nudge <handle> "<message>"`, logged with `orch sent
   add`) and create no card. If the work needs a different implementation, ask it for a state
   summary (done, left, branch and PR), put that summary in the new card's brief, and in the turn
