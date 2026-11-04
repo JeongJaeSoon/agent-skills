@@ -264,6 +264,13 @@ class Restarted(unittest.TestCase):
             self.assertIn("worker-start --spec-file <resume instruction> --worktree 'path:/work/My Card' --terminal", out[0])
             self.assertNotIn("worker-stop", out[0])  # it is already settled: no stop, and no retry-of
 
+    def test_a_workspace_suffix_on_the_worktree_id_is_not_part_of_the_path(self):
+        w = self.row("d1", "abandoned")
+        w["resource"]["worktreeId"] = "repo::/work/card::workspace:1"
+        out = does(self.lines(w))[0]
+        self.assertIn("--worktree path:/work/card ", out)
+        self.assertNotIn("workspace", out)
+
     def test_the_resume_command_follows_the_workers_agent(self):
         def line(agent):
             w = self.row("d1", "abandoned")

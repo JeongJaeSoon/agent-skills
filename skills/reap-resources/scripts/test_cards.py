@@ -398,6 +398,8 @@ assert reap.recovering_worktrees([dispatch("d_resume", "dispatched"), dispatch("
 assert reap.recovering_worktrees([dispatch("d_done", "completed"), dispatch("d_old", "abandoned")]) == {}
 assert reap.recovering_worktrees([dispatch("d_other", "abandoned", wt="/other-card"), dispatch("d_ok", "completed")]) == \
     {reap.real("/other-card"): "d_other"}
+# Orca may suffix the worktree id (`<repo>::<path>::workspace:<n>`): the card is the path alone.
+assert reap.recovering_worktrees([dispatch("d_ws", "abandoned", wt=CARD + "::workspace:1")]) == {CARD: "d_ws"}
 recovering = {"recovering": {CARD: "d_old"}}
 v = verdict(machine(prs=OPEN, **recovering), branch_prs=[{**PR, "state": "OPEN"}], terminals=[term("t1", True, 2 * 3600)])
 assert v[0] == cards.KEEP and v[2] == [] and "d_old" in v[1], v  # an open PR: without the guard this closes t1

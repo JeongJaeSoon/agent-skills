@@ -1137,7 +1137,7 @@ def recovering_worktrees(workers):
     later Dispatch on the card (the resume, or work that completed) means the wait is over."""
     newest = {}
     for w in workers:
-        p = ((w.get("resource") or {}).get("worktreeId") or "").partition("::")[2]
+        p = ((w.get("resource") or {}).get("worktreeId") or "").partition("::")[2].partition("::")[0]  # no `::workspace:<n>`
         if p:
             newest.setdefault(real(p), w)
     return {p: w.get("dispatchId") for p, w in newest.items() if w.get("dispatchStatus") in RESTART_LOST}
