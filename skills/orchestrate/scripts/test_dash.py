@@ -583,6 +583,33 @@ dash.note_landings(LQ)
 assert wait_for(4) == 4, "its landed row is new to the loop"
 dash.slow_round, dash.SLOW_WAKE = real_round, real_wake_event
 
+# A gh call that never returns must not hold the program lock: a ledger-only refresh (the fast loop) still finishes.
+H = "hang-test"
+(store / H).mkdir()
+(store / H / "program.json").write_text(json.dumps({"repo": "acme/app", "created_at": ago(900)}))
+(store / H / "ledger.jsonl").write_text("".join(json.dumps(r) + "\n" for r in two))
+release = threading.Event()
+def hanging_sh(cmd, timeout=45):
+    release.wait(30)
+    raise dash.SourceError("released")
+real_gh_fetch, dash.FETCHERS["github"] = dash.FETCHERS["github"], lambda cfg: []
+dash.sh = hanging_sh
+slow = threading.Thread(target=dash.collect, args=(H, ("github",)), daemon=True)
+slow.start()
+dash.time.sleep(0.5)
+fast = threading.Thread(target=dash.collect, args=(H, ()), daemon=True)
+fast.start()
+fast.join(5)
+stuck = fast.is_alive()
+release.set()
+slow.join(10)
+fast.join(10)
+dash.sh, dash.FETCHERS["github"] = real_sh, real_gh_fetch
+dash._CONTAINS.clear()
+dash._gh_down_until = 0.0
+assert not stuck, "a ledger-only collect waited on another collect's gh call"
+assert dash.loops_alive({"ticks": {"fast": dash.iso(dash.utcnow() - dash.dt.timedelta(minutes=6))}}) is False
+
 mixed = [{"number": 11, "state": "merged", "merged_at": ago(100), "base": "feat/x", "branch": "a"},
          {"number": 12, "state": "merged", "merged_at": ago(90), "base": "feat/x", "branch": "b"},
          {"number": 13, "state": "merged", "merged_at": ago(80), "base": "main", "branch": "c"}]

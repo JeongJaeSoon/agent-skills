@@ -199,8 +199,19 @@ saved, prog.dash_state = prog.dash_state, lambda pdir: None
 r = w.sweep(30)
 prog.dash_state = saved
 assert not w.sent and not r.skip
+assert any("due, waiting for a fresh collector state (state.json" in l and "(ABC-1)" in l for l in r.lines), r.lines
+assert "ctx_1" in autowake.load_marks(w.p), "the mark is left in place"
 w.sweep(31)
 assert len(w.sent) == 1, "the mark survived the stale round"
+
+# A stale state before the deadline says nothing; past it, the stale age is shown.
+w = World()
+w.sweep(0)
+(w.p.dir / "dashboard" / "state.json").write_text(json.dumps({"generated_at": "2026-01-01T00:00:00Z"}))
+r = autowake.sweep(w.p, 10, mins(5))
+assert not r.lines, r.lines
+r = autowake.sweep(w.p, 10, mins(30))
+assert any("(state.json" in l and "m old)" in l for l in r.lines) and not w.sent, r.lines
 
 
 def excluded(name, **kw):

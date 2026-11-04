@@ -895,6 +895,11 @@ def stalls(workers, tnow, held=frozenset()):
 
 
 _CONTAINS = {}
+# After one failed compare, gh is not called again for this long. A flat window rather than the rate-limit reset:
+# the error text carries no reset time, and reading it costs another call. It runs inside the program lock, so
+# an unbounded retry per collect stalls every program behind it.
+GH_BACKOFF_S = 300
+_gh_down_until = 0.0
 
 
 # After one failed compare gh is not called again for this long, and never while core quota is below GH_MIN_CORE
@@ -1121,8 +1126,20 @@ def collect(slug, sources=SOURCES, interval=None):
             fetched[name] = (True, FETCHERS[name](cfg), iso(utcnow()))
         except SourceError as e:
             fetched[name] = (False, str(e), iso(utcnow()))
+    if "github" in sources:
+        warm_contains(d, cfg)
     with lock_for(slug):
         return _merge(slug, d, cfg, fetched, interval)
+
+
+def warm_contains(d, cfg):
+    """Asks GitHub, outside the program lock, the compare questions ledger_gaps will put. _merge runs under that lock
+    and the fast loop waits on it, so a gh call there stopped every collect behind it."""
+    try:
+        prev = read_json(d / "dashboard" / "state.json", {}) or {}
+        ledger_gaps(cfg, ledger_events(d / "ledger.jsonl")[0], [], prev.get("prs") or [], utcnow())
+    except Exception as e:  # a warm-up is best effort: the merge reads whatever the cache holds
+        log(f"{d.name}: compare warm-up failed: {e!r}")
 
 
 def landing_of(cfg, events, prs):
@@ -1270,7 +1287,9 @@ def _merge(slug, d, cfg, fetched, interval):
     notes = read_jsonl(dash / "notes.jsonl")
     summary = summarize(cfg, events, issues, workers, tnow, order, sum(not c["active"] for c in cards))
     summary["stalls"], summary["spare"] = stalls(workers, tnow, parked_tickets(events)), spare(summary, tasks)
-    summary["gaps"] = ledger_gaps(cfg, events, workers, prs, tnow)
+    # Under the program lock: answers already fetched by warm_contains only, never a gh call.
+    summary["gaps"] = ledger_gaps(cfg, events, workers, prs, tnow,
+                                  contains=lambda older, newer: _CONTAINS.get((cfg["repo"], older, newer)))
     open_prs = [p for p in prs if p["state"] == "open" and not p.get("draft") and p.get("created_at")]
     oldest = min(open_prs, key=lambda p: p["created_at"], default=None)
     summary["oldest_open_pr"] = ({"pr": oldest["number"], "since": oldest["created_at"],
@@ -1500,8 +1519,17 @@ def code_loop():
         time.sleep(CODE_CHECK_S)
         try:
             check_code()
+            check_loops()
         except Exception as e:
             log(f"code check failed: {e!r}")
+
+
+def check_loops():
+    """The fast loop stopped finishing rounds (a call that never returns): under launchd, exit so it starts again,
+    instead of waiting for someone to run `ensure`. Elsewhere /api/health reports stale and the banner says what to run."""
+    if not loops_alive(HEALTH) and under_agent():
+        log(f"fast loop silent since {HEALTH['ticks'].get('fast')}; exiting so launchd starts it again")
+        restart()
 
 
 STATIC = {"/": ("index.html", "text/html; charset=utf-8"), "/index.html": ("index.html", "text/html; charset=utf-8"),
@@ -1540,7 +1568,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path.startswith("/api/") and not self.local_only():
             return self.send(403, b'{"error":"forbidden"}')
         if path == "/api/health":
-            return self.send(200, json.dumps(HEALTH).encode())
+            # stale also means a collector loop stopped: the heartbeat alone and the code hash both look fine then
+            return self.send(200, json.dumps({**HEALTH, "stale": bool(HEALTH.get("stale")) or not loops_alive(HEALTH)}).encode())
         if path.startswith("/api/fleet/"):
             return self.fleet_get(path)
         if path == "/api/programs":

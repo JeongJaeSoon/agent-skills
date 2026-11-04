@@ -272,6 +272,21 @@ def second_stop(p, d, x, done, n, now, r, facts):
     r.stop = True
 
 
+def overdue_without_state(p, n, now, r):
+    """A mark past its deadline that cannot be acted on because state.json is stale or missing. The marks stay;
+    the line is what lets the lead see the wake is late and why."""
+    due = [(d, m) for d, m in load_marks(p).items()
+           if isinstance(m, dict) and m.get("at") and (prog.parse_ts(m["at"]) + dt.timedelta(minutes=n) - now).total_seconds() <= 0]
+    if not due:
+        return
+    try:
+        age = f"{round((now - prog.parse_ts(json.loads((p.dir / 'dashboard' / 'state.json').read_text())['generated_at'])).total_seconds() / 60)}m old"
+    except (OSError, ValueError, KeyError, TypeError):
+        age = "missing"
+    for d, m in due:
+        r.lines.append(f"AUTO-WAKE {d} ({m.get('ticket') or '?'}): due, waiting for a fresh collector state (state.json {age})")
+
+
 def sweep(p, n, now=None):
     now = now or dt.datetime.now(dt.timezone.utc)
     began = time.monotonic()
@@ -279,6 +294,7 @@ def sweep(p, n, now=None):
     r = Round()
     state = prog.dash_state(p.dir)
     if state is None:  # a stale collector says nothing about anyone: the marks wait for a fresh one
+        overdue_without_state(p, n, now, r)
         return r
     stalls = {x["dispatch"]: x for x in (state.get("summary") or {}).get("stalls") or [] if x.get("kind") in ("idle", "silent")}
     before = load_marks(p)
@@ -297,7 +313,7 @@ def sweep(p, n, now=None):
             continue
         mark = marks.get(d)
         if mark is None:
-            mark = marks[d] = {"at": stamp(now), "idle_min": x.get("minutes")}
+            mark = marks[d] = {"at": stamp(now), "idle_min": x.get("minutes"), "ticket": x.get("ticket")}
             due = now + dt.timedelta(minutes=n)
             r.lines.append(f"AUTO-WAKE {d} ({x.get('ticket')}): idle; wakes once at {due:%H:%M} UTC unless it may not be woken")
         left = (prog.parse_ts(mark["at"]) + dt.timedelta(minutes=n) - now).total_seconds()
