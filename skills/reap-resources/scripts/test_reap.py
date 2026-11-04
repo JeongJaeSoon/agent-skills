@@ -625,6 +625,7 @@ assert load[load.index("--prompt") + 1] == same[same.index("--prompt") + 1]
 assert not any(a.startswith("--extra-agent-args") for a in same), same
 saved_config, reap.config = reap.config, lambda: {"model": "sonnet"}
 assert "--extra-agent-args=--model sonnet" in reap.schedule_cmd("/abs/reap.py", reap.STATE_HOME, "path:/repo")
+assert not any(a.startswith("--extra-agent-args") for a in reap.schedule_cmd("/abs/reap.py", reap.STATE_HOME, "path:/repo", "codex"))
 reap.config = saved_config
 with tempfile.TemporaryDirectory() as tmp:
     s = pathlib.Path(tmp)

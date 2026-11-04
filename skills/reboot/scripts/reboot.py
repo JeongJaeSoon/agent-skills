@@ -226,16 +226,11 @@ def check_workers(run, call, lead_dispatch=None, me=None):
             continue
         card = (w.get("resource") or {}).get("worktreeId") or "<its worktree>"
         provider = (w.get("projection") or {}).get("provider") or {}
-        # A retry inherits neither placement nor model, so both are named again. It is a new session, so it takes the
-        # configured model: Orca's record cannot tell a model the human named from the one a card happened to run.
-        recorded = provider.get("model")
-        model = (orca_settings.role_model("worker") if provider.get("id") == "claude" else None) or recorded
+        # A retry inherits neither placement nor model, so both are named again.
         argv = ["orca", "orchestration", "worker-start", "--retry-of", d, "--task", task, "--worktree", f"id:{card}",
-                "--agent", provider.get("id") or "<agent>"] + (["--model", model] if model else [])
-        note = (" (Orca recorded no model: add `--model <id>` when the worker ran one, "
-                "from its brief or the program note)" if not model else
-                f" (Orca recorded {recorded}: keep that only if the human named it; a lead takes `orch model lead`)"
-                if recorded and recorded != model else "")
+                "--agent", provider.get("id") or "<agent>"] + (["--model", provider["model"]] if provider.get("model") else [])
+        note = "" if provider.get("model") else (" (Orca recorded no model: add `--model <id>` when the worker ran one, "
+                                                 "from its brief or the program note)")
         out.append(("do", f"worker {d} (task {task}) lost its terminal {h}: restart it on its card, "
                           f"`{shlex.join(['orca', 'orchestration', 'worker-stop', '--dispatch', d])}`, then "
                           f"`{shlex.join(argv)}`{note}"))

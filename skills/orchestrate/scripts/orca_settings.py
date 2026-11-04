@@ -32,7 +32,7 @@ def role_model(role):
         value = cfg["orchestrate"]["models"][role]
     except (OSError, ValueError, KeyError, TypeError):
         return None
-    return value if isinstance(value, str) and re.fullmatch(r"[\w.\[\]-]+", value) else None
+    return value if isinstance(value, str) and re.fullmatch(r"[\w.:/\[\]-]+", value) else None
 
 
 def data_dir():

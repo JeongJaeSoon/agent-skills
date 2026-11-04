@@ -655,6 +655,10 @@ rc, out, err, calls = go(brief(LEAD, "ml.md"), "--repo", "r", "--name", "m4", "-
 assert rc == 0 and model_of(calls) == "opus", calls
 rc, out, err, calls = go(brief(WORKER, "m.md"), "--repo", "r", "--name", "m5", "--no-parent", "--model", "opus")
 assert rc == 0 and model_of(calls) == "opus", calls
+arn = "arn:aws:bedrock:us-east-1:000000000000:inference-profile/acme.model-v1:0"
+models.write_text(json.dumps({"orchestrate": {"models": {"worker": arn, "lead": "two words"}}}))
+assert card.orca_settings.role_model("worker") == arn and card.orca_settings.role_model("lead") is None
+models.write_text(json.dumps({"orchestrate": {"models": {"lead": "opus", "worker": "sonnet"}}}))
 worker_brief = brief(f"{WORKER}REPORT: orca orchestration send --to run:run_me --type status\n", "mw.md")
 rc, out, err, calls = go(worker_brief, "--repo", "r", "--name", "m6")
 assert rc == 0 and creates(calls)[0][:2] == ["orchestration", "worker-start"] and model_of(calls) == "sonnet", calls

@@ -2117,7 +2117,7 @@ def schedule_cmd(script, state_dir, workspace, provider="claude", ledger=None, i
             "--precheck", round_cmd(script, state_dir, ledger, "precheck", *(["--load"] if load else [])),
             "--precheck-timeout", str(PRECHECK_TIMEOUT),
             "--prompt", schedule_prompt(script, state_dir, ledger, inbox), "--json",
-            *([f"--extra-agent-args=--model {config()['model']}"] if config().get("model") else [])]
+            *([f"--extra-agent-args=--model {config()['model']}"] if provider == "claude" and config().get("model") else [])]
 
 
 def load_due(state_dir, cfg, now=None, load5=None, autos=None):

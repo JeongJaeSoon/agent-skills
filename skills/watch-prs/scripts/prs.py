@@ -1404,10 +1404,11 @@ def schedule_cmd(script, cfg, workspace, provider="claude", edit=None):
               f"--body \"$(cat {shlex.quote(str(body_file))})\" --json` 로 한 통만 보낸다(N 은 본문 첫 줄의 건수). "
               + (steps + " " if steps else "")
               + f"inbox_to 전송이 성공했을 때만 마지막에 `{run('commit')}` 을 실행한다." + reads)
-    model = [f"--extra-agent-args=--model {cfg['model']}"] if cfg.get("model") else []
+    model = [f"--extra-agent-args=--model {cfg['model']}"] if provider == "claude" and cfg.get("model") else []
     if edit:
+        # Orca keeps stored extras unless told otherwise, so a removed prs.model has to clear them.
         return ["orca", "automations", "edit", edit, "--trigger", cfg["cron"], "--precheck", run("precheck"),
-                "--precheck-timeout", str(PRECHECK_TIMEOUT), "--prompt", prompt, "--json"] + (["--timezone", cfg["timezone"]] if cfg.get("timezone") else []) + model
+                "--precheck-timeout", str(PRECHECK_TIMEOUT), "--prompt", prompt, "--json"] + (["--timezone", cfg["timezone"]] if cfg.get("timezone") else []) + (model or (["--extra-agent-args="] if provider == "claude" else []))
     cmd = ["orca", "automations", "create", "--name", "agent-skills watch-prs", "--trigger", cfg["cron"],
            "--provider", provider, "--workspace-mode", "existing", "--workspace", workspace,
            "--precheck", run("precheck"), "--precheck-timeout", str(PRECHECK_TIMEOUT), "--prompt", prompt, "--json", *model]

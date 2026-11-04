@@ -150,6 +150,7 @@ assert "python3 /abs/mentions.py plan --state '/scratch dir'" in prompt and "--s
 assert "env " not in shlex.join(off) and "AGENT_SKILLS_STATE" not in shlex.join(off)
 assert not any(a.startswith("--extra-agent-args") for a in off), off
 assert "--extra-agent-args=--model sonnet" in m.schedule_cmd(pathlib.Path("/abs/mentions.py"), {**cfg, "model": "sonnet"}, "path:/abs")
+assert not any(a.startswith("--extra-agent-args") for a in m.schedule_cmd(pathlib.Path("/abs/mentions.py"), {**cfg, "model": "sonnet"}, "path:/abs", "codex"))
 hint = m.runner_hint(pathlib.Path("/abs dir"))
 assert "--repo 'path:/abs dir'" in hint and "--no-parent" in hint and "settings.local.json" in hint, hint
 

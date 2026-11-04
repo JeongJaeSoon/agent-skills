@@ -2602,8 +2602,7 @@ def close_out(msgs, workers, worktrees, here=""):
                     " (`--worktree current`), so it stays", release]
         elif payload.get("outcome") != "succeeded":
             out += [f"CLOSE OUT {d} ({payload.get('outcome') or 'no outcome'}): release it, then retry on its card"
-                    f" (worker-start --retry-of {d} --task {task[d]} --worktree path:{shlex.quote(p)} --agent <agent>,"
-                    " with --model from `orch model worker` for Claude when it prints one)",
+                    f" (worker-start --retry-of {d} --task {task[d]} --worktree path:{shlex.quote(p)} --agent <agent> [--model <id>])",
                     release]
         elif here is None:
             out += [f"CLOSE OUT {d}: release it; this session's own worktree could not be read (`orca terminal show`),"

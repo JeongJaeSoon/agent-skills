@@ -95,8 +95,8 @@ session as not the human's, so an approval sent afterwards is refused. The brief
   To look again, `check --all` and match `thread_id`; never a list you sort or cut yourself (a
   card sorting by a field the rows do not have, `createdAt` for `created_at`, missed two replies).
   A supervised worker needs no such line: its preamble's `ask` does this.
-- **Model calls** — one line: "다른 모델 호출(서브에이전트, API)은 필요할 때만 한다. 서브에이전트는
-  이 세션의 모델을 물려받는다". The session's own model comes from `skills-sync card` (§3), not from
+- **Model calls** — one line: "다른 모델 호출(서브에이전트, API)은 필요할 때만 한다".
+  The session's own model comes from `skills-sync card` (§3), not from
   the brief. A brief that names another model for the card to call gets it called whether or not
   the task needs it.
 - **Changes, Pitfalls, Examples** — optional. A card starts with only what the brief says, so

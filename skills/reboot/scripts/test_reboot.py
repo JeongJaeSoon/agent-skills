@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import json, os, pathlib, sys, tempfile, time, unittest
+import pathlib, sys, tempfile, time, unittest
 from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -225,18 +225,6 @@ class Workers(unittest.TestCase):
         out = does(run("lead", "acme", "run_1", orca=Orca(run="run_1", workers=workers),
                        procs=wait_proc(200, "orch wait acme")))
         self.assertIn("--agent claude --model claude-opus-5-5`", out[0])
-
-    def test_a_retry_takes_the_configured_model_and_names_the_recorded_one(self):
-        workers = [{"dispatchId": "d1", "taskId": "t1", "terminalState": "active", "agentTerminalHandle": "term_dead",
-                    "projection": {"provider": {"id": "claude", "model": "claude-opus-5-5"}}}]
-        with tempfile.TemporaryDirectory() as d:
-            path = pathlib.Path(d) / "c.json"
-            path.write_text(json.dumps({"orchestrate": {"models": {"worker": "sonnet"}}}))
-            with mock.patch.dict(os.environ, {"AGENT_SKILLS_CONFIG": str(path)}):
-                out = does(run("lead", "acme", "run_1", orca=Orca(run="run_1", workers=workers),
-                               procs=wait_proc(200, "orch wait acme")))
-        self.assertIn("--agent claude --model sonnet`", out[0])
-        self.assertIn("Orca recorded claude-opus-5-5: keep that only if the human named it", out[0])
 
     def test_dispatched_lead_binds_nothing_and_checks_only_its_own_workers(self):
         def row(d, task, handle, parent):

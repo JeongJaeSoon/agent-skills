@@ -399,8 +399,9 @@ Every command starts with `python3`: a scheduled session can refuse a leading `e
 assignment as a command of its own, so a non-default state goes in as `--state`.
 
 Run `schedule` from the checkout that loads the skills, never a card's worktree: the precheck keeps
-that path. The run's model comes from its `--workspace` checkout's settings; `--edit` leaves the
-workspace as it is. For a runner worktree with its own model, see
+that path. The run's model is `prs.model`, or with none its `--workspace` checkout's settings; for
+Claude, `--edit` sets the automation's extra agent arguments to that value, or clears them, so pass
+`--provider` for another agent. `--edit` leaves the workspace as it is. For a runner worktree with its own model, see
 [docs/automation.md](../../docs/automation.md).
 
 The precheck (`prs.py precheck`) uses no model. It reads GitHub and exits:

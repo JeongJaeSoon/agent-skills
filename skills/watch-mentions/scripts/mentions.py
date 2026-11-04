@@ -259,7 +259,7 @@ def schedule_cmd(script, cfg, workspace, provider="claude", state=None):
     cmd = ["orca", "automations", "create", "--name", "agent-skills watch-mentions", "--trigger", cfg["cron"],
            "--provider", provider, "--workspace-mode", "existing", "--workspace", workspace,
            "--precheck", run("precheck"), "--prompt", prompt, "--json",
-           *([f"--extra-agent-args=--model {cfg['model']}"] if cfg.get("model") else [])]
+           *([f"--extra-agent-args=--model {cfg['model']}"] if provider == "claude" and cfg.get("model") else [])]
     if cfg.get("timezone"):
         cmd[cmd.index("--provider"):cmd.index("--provider")] = ["--timezone", cfg["timezone"]]
     return cmd

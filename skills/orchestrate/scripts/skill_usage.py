@@ -695,7 +695,7 @@ def schedule_cmd(script, workspace, provider="claude"):
     return ["orca", "automations", "create", "--name", "agent-skills reflect standing", "--trigger", "40 6 * * *",
             "--provider", provider, "--workspace-mode", "existing", "--workspace", workspace,
             "--precheck", f"python3 {shlex.quote(str(script))} precheck", "--prompt", prompt, "--json",
-            *([f"--extra-agent-args=--model {round_model()}"] if round_model() else [])]
+            *([f"--extra-agent-args=--model {round_model()}"] if provider == "claude" and round_model() else [])]
 
 
 def list_misses(skill, cache_path=None, now=None):
