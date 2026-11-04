@@ -533,8 +533,15 @@ assert dash.github_every() == 600
 cfg_file.write_text(json.dumps({"dashboard": {"github_every_s": 5}}))
 assert dash.github_every() == 300, "below the 60 s floor is not a guess"
 cfg_file.write_text(json.dumps({"dashboard": {"github_every_s": 900}}))
-rounds = []
-real_round, dash.slow_round = dash.slow_round, lambda interval, first: rounds.append(first)
+rounds, seen_intervals, seen_waits = [], [], []
+real_wake_event = dash.SLOW_WAKE
+real_round = dash.slow_round
+dash.slow_round = lambda interval, first: (rounds.append(first), seen_intervals.append(interval))
+class RecordingEvent(type(dash.SLOW_WAKE)):
+    def wait(self, timeout=None):
+        seen_waits.append(timeout)
+        return super().wait(timeout)
+dash.SLOW_WAKE = RecordingEvent()
 loop = threading.Thread(target=dash.slow_loop, args=(60,), daemon=True)
 loop.start()
 def wait_for(n, secs=5):
@@ -565,7 +572,14 @@ with (store / LP / "ledger.jsonl").open("a") as f:
     f.write(json.dumps({"ts": ago(0), "ev": "landed", "pr": 1, "sha": "s1"}) + "\n")
 dash.note_landings(LP)
 assert wait_for(3) == 3, "a new landed row runs it now"
-dash.slow_round = real_round
+assert set(seen_intervals) == {900} and set(seen_waits) == {900}, (seen_intervals, seen_waits)
+LQ = "landing-new"  # a program that appears after start with a landing already in its ledger
+(store / LQ).mkdir()
+(store / LQ / "program.json").write_text(json.dumps({"repo": "acme/app", "created_at": ago(900)}))
+(store / LQ / "ledger.jsonl").write_text(json.dumps({"ts": ago(1), "ev": "landed", "pr": 2, "sha": "s2"}) + "\n")
+dash.note_landings(LQ)
+assert wait_for(4) == 4, "its landed row is new to the loop"
+dash.slow_round, dash.SLOW_WAKE = real_round, real_wake_event
 
 mixed = [{"number": 11, "state": "merged", "merged_at": ago(100), "base": "feat/x", "branch": "a"},
          {"number": 12, "state": "merged", "merged_at": ago(90), "base": "feat/x", "branch": "b"},
@@ -790,6 +804,8 @@ def run_loop(loop, rounds_wanted):
             raise Stop
     class Ev:  # the slow loop waits on its wake event, the fast loop sleeps
         def clear(self):
+            pass
+        def set(self):
             pass
         def wait(self, t):
             sleep(t)

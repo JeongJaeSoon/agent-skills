@@ -1436,7 +1436,7 @@ def note_landings(slug):
     """Wakes the GitHub stage when a landed or main_green row is new in this program's ledger: the PR list and the
     CI answer change then, and waiting out the period would show the old state."""
     n = sum(e.get("ev") in ("landed", "main_green") for e in ledger_events(program_dir(slug) / "ledger.jsonl")[0])
-    if n > _landings.get(slug, n):
+    if n > _landings.get(slug, 0):  # serve() seeds the programs it starts with, so a new one counts from zero
         SLOW_WAKE.set()
     _landings[slug] = n
 
@@ -1925,6 +1925,12 @@ def serve(host, port, interval, make_fleet=None):
     beat()
     tick("slow"), tick("fast")  # a fresh process is not a stuck one
     write_atomic(home() / ".dash.json", json.dumps(HEALTH))
+    for slug in programs():  # the first slow round covers what is there; only later rows wake the stage
+        try:
+            note_landings(slug)
+        except Exception as e:
+            log(f"{slug}: landing baseline failed: {e!r}")
+    SLOW_WAKE.clear()
     threading.Thread(target=slow_loop, args=(interval,), daemon=True).start()
     threading.Thread(target=fast_loop, args=(interval,), daemon=True).start()
     threading.Thread(target=code_loop, daemon=True).start()
