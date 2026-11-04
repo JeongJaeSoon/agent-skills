@@ -16,7 +16,7 @@ os.environ.update({"ORCH_FLEET_STATE": str(tmp / "a" / "dashboard"), "ORCH_FLEET
 os.environ.pop("CLAUDECODE", None)
 for k in ("PROGRAMS_HOME", "ORCH_FLEET", "ORCH_SKILLS", "ORCH_PR_STATS", "ORCH_CLAUDE_HOMES"):
     os.environ.pop(k, None)
-import automations, bootstrap, cutover, fleet, store  # noqa: E402
+import automations, bootstrap, cutover, dash, fleet, store  # noqa: E402  (dash first: urllib needs the real sys.platform)
 
 assert store.SYNC_LABEL == bootstrap.LABEL
 
