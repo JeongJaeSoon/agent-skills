@@ -965,6 +965,8 @@ const BRIEF_SECTIONS = {
   "지금 오너가 할 일": [["", "할 일"], [" → ", "항목"]],
   "보류": [["", "언제 · 조건"], [" → ", "할 일"]],
 };
+// Which list_rows list each section's lines come from (board.py render).
+const LIST_OF = { "표 밖 진행": "moving", "다른 사람 대기": "waiting", "지금 오너가 할 일": "owner", "보류": "held" };
 const STATUS_MARK = /^(└ )?(🔄|🙋|⏳|⏸️|📅|⏰|✅|❔|❓|🔴|📝|\d+\.)\s+/u;  // a row under a lead keeps its └ in the item
 // A row the orchestrator or a lead wrote ends with who wrote it; the old role name reads as today's.
 const roleNow = (s) => s.replace(/(^|· )coordinator$/, "$1orchestrator").replace(/(^|· )코디네이터$/, "$1오케스트레이터");
@@ -993,7 +995,8 @@ const rowLabel = (cell, notes) => uncut(cell, notes).replace(/^[└ㄴ] /, "").r
 function briefHtml(text, tableRows = [], placed = new Set(), listRows = {}, closed = new Set()) {
   const out = [], lines = text.split("\n");
   const rowIds = new Set(tableRows.flatMap((x) => (x.rows || []).map((r) => r.id)));
-  const listed = Object.values(listRows || {}).flat().filter((e) => e && e.id && !rowIds.has(e.id));
+  const listed = Object.entries(listRows || {}).flatMap(([list, es]) => (es || []).map((e) => ({ ...e, list })))
+    .filter((e) => e && e.id && e.text && !rowIds.has(e.id));
   let i = 0, t = 0;
   const blank = () => { while (i < lines.length && !lines[i].trim()) i++; };
   while (i < lines.length) {
@@ -1011,7 +1014,10 @@ function briefHtml(text, tableRows = [], placed = new Set(), listRows = {}, clos
       // A repository table (`| | name | PR | progress | next | session |`) gets one shared set of column widths; a cell
       // too long for its column scrolls sideways within itself instead of being cut.
       const repo = head.length === 6 && !head[0], acts = repo && tableRows[t++];
-      const byLabel = new Map(((acts && acts.rows) || []).map((x) => [x.label, x]));
+      // Only rows with a button take part; a label two of them share gets neither (the renderer keeps labels unique).
+      const withBtn = ((acts && acts.rows) || []).filter((x) => x.ack || x.done);
+      const count = withBtn.reduce((m, x) => m.set(x.label, (m.get(x.label) || 0) + 1), new Map());
+      const byLabel = new Map(withBtn.filter((x) => count.get(x.label) === 1).map((x) => [x.label, x]));
       const found = body.map((r) => byLabel.get(rowLabel(r[1] || "", notes)) || null);
       const btns = found.some(Boolean) ? found : null;
       (btns || []).forEach((x) => { if (x && x.ack) placed.add(x.ack); else if (x && x.done) closed.add(x.done); });
@@ -1028,10 +1034,13 @@ function briefHtml(text, tableRows = [], placed = new Set(), listRows = {}, clos
       i++;
       for (blank(); i < lines.length && /^(- |\d+\. )/.test(lines[i]); i++, blank()) items.push(lines[i].replace(/^- /, ""));
       out.push(`<h4 class="bhead">${briefInline(`${sec[1]} ${sec[2]}`)}${sec[3] === "없음" ? ' <span class="muted">— 없음</span>' : ""}</h4>`);
+      // An item's Done goes on the line whose text is exactly the one the renderer wrote for it, in its own list.
+      const own = listed.filter((x) => x.list === LIST_OF[sec[2]]);
       const ids = items.map((it) => {
-        const e = listed.find((x) => !closed.has(x.id) && x.label && it.includes(x.label));
-        if (e) closed.add(e.id);
-        return e ? e.id : null;
+        const hits = own.filter((x) => !closed.has(x.id) && x.text === it);
+        if (hits.length !== 1) return null;
+        closed.add(hits[0].id);
+        return hits[0].id;
       });
       if (items.length) out.push(sectionTable(sec[2], items, ids));
       continue;

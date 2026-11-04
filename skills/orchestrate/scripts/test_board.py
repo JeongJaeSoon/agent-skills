@@ -729,7 +729,7 @@ for k in ("G", "H"):
     b["rows"][k]["done_at"] = "2026-10-10T00:00:00Z"
 (state / "board.json").write_text(json.dumps(b, ensure_ascii=False))
 state = stamp_dir
-(fd / "dashboard" / "prs.json").write_text(json.dumps({"prs": dict([
+(fd / "dashboard" / "prs.json").write_text(json.dumps({"me": "octo", "prs": dict([
     pr("acme/web#1", "MERGED", merged="2026-10-11T00:00:00Z"), pr("acme/web#2", "MERGED", merged="2026-10-13T12:00:00Z"),
     pr("acme/old#3", "MERGED", merged="2026-10-09T00:00:00Z"), pr("acme/mid#4", "MERGED", merged="2026-10-13T13:00:00Z"),
     pr("acme/web#5", "MERGED", merged="2026-10-11T00:00:00Z")])}))

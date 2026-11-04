@@ -7,9 +7,9 @@ a later rule never rewrites an earlier one's result, and what later rules also f
 needs and cannot read is unknown, not false: the rule stops there with ❔ and names what is missing.
 
 gather() is the one adapter that reads the facts (board, tidy, state, prs, decisions, the external inbox, the pressure
-queue, program files and ledgers). PR 4b-1 swaps it for one that reads agent-skills.db; judge() and place() do not
-change. brief render, the dashboard's Brief and Stages and `orch stage show` all read states through snapshot() or
-judge(); none of them decides a status of its own.
+queue, program files and ledgers). PR 4b-1 swaps it for one that reads agent-skills.db; judge(), roll_up() and the
+placement helpers below do not change. brief render, the dashboard's Brief and Stages and `orch stage show` all read
+states through snapshot() or judge(); none of them decides a status of its own.
 """
 import fnmatch, json, os, pathlib, re
 
@@ -21,6 +21,8 @@ OWNER_NAMES = ("오너", "owner")
 POST_MERGE = re.compile(r"릴리스|배포|apply|deploy|release|rollout|롤아웃", re.I)
 OWNER_TYPES = ("approval", "run_command", "login", "verify_failed", "question")  # fleet.STICKY_TYPES
 AGENT_ACTION = "에이전트 조치 필요"
+# What the rules read off an open PR; the collector (fleet.shape_pr) always writes them, so a missing one is unknown.
+PR_FIELDS = ("draft", "reviewers", "ci", "decision", "merge_state")
 # The lists below the tables, and the word a row's 다음 cell points at them with.
 POINTER = {"owner": "↓ 오너", "waiting": "↓ 대기", "held": "↓ 보류"}  # short: the 78-column table cuts at 8
 
@@ -86,26 +88,32 @@ def gate_of(evs, open_gates):
     return "pending" if open_gates is not None and evs[last].get("gate") in open_gates else "unknown"
 
 
-def program_facts(open_gates=None, home=None):
+def program_facts(open_gates=None, home=None, unread=None):
     """{PR key: [{"program", "policy", "gate", "verdict"}]} for every PR a program's ledger names, read from
-    $PROGRAMS_HOME/<slug>/program.json and ledger.jsonl. policy None: no valid merge_policy. gate: gate_of(), or
-    "unknown" when the ledger cannot be read. verdict: the newest verdict's {sha, pass} for that PR, or None."""
+    $PROGRAMS_HOME/<slug>/program.json and ledger.jsonl. policy None: no valid merge_policy. verdict: the newest
+    verdict's {sha, pass} for that PR, or None. unread (a set, filled in): the repositories whose program files could
+    not be read, so which of their PRs a program owns is unknown; "*" when the programs directory itself could not."""
     home = pathlib.Path(home or os.environ.get("PROGRAMS_HOME", "~/.claude/programs")).expanduser()
-    out = {}
+    out, unread = {}, unread if unread is not None else set()
     try:
-        dirs = sorted(d for d in home.iterdir() if d.is_dir() and not d.name.startswith(("_", ".")))
+        dirs = sorted(d for d in home.iterdir() if d.is_dir() and not d.name.startswith(("_", "."))) if home.exists() else []
     except OSError:
+        unread.add("*")
         return out
     for d in dirs:
+        if not (d / "program.json").exists():
+            continue
         cfg = fleet.read_json(d / "program.json", None)
         if not isinstance(cfg, dict) or not cfg.get("repo"):
+            unread.add(cfg.get("repo") if isinstance(cfg, dict) and cfg.get("repo") else "*")
             continue
         policy = cfg.get("merge_policy") if cfg.get("merge_policy") in ("autonomous", "human-gate") else None
         try:
             lines = (d / "ledger.jsonl").read_text().splitlines() if (d / "ledger.jsonl").exists() else []
             events = [json.loads(l) for l in lines if l.strip()]
         except (OSError, ValueError):
-            events = None
+            unread.add(cfg["repo"])
+            continue
         per = {}
         for e in events or []:
             if isinstance(e, dict) and isinstance(e.get("pr"), int):
@@ -115,7 +123,7 @@ def program_facts(open_gates=None, home=None):
             verdict = v and {"sha": v.get("sha") or "", "pass": str(v.get("result") or "pass").lower() in ("pass", "ok")}
             out.setdefault(f"{cfg['repo']}#{n}", []).append(
                 {"program": d.name, "policy": policy, "verdict": verdict,
-                 "gate": gate_of(evs, open_gates) if events is not None else "unknown"})
+                 "gate": gate_of(evs, open_gates)})
     return out
 
 
@@ -168,8 +176,9 @@ def agent_merges(cfg=None):
 
 
 def gather(*, now, prs, me, shut, verdicts, holds, hold_why, leads, state, decisions, owner_items=None,
-           programs=None, pressure=None, merges=None, state_min=5):
+           programs=None, pressure=None, merges=None, state_min=5, programs_unread=None):
     """The facts judge() reads, from what the render already holds plus the program, pressure and config files."""
+    unread = set(programs_unread or ())
     sessions = {s.get("id"): s for s in (state or {}).get("sessions") or []}
     src = (state or {}).get("sources") or {}
     at = fleet.parse((state or {}).get("generated_at"))
@@ -185,7 +194,8 @@ def gather(*, now, prs, me, shut, verdicts, holds, hold_why, leads, state, decis
             "leads": leads, "sessions": sessions, "sessions_known": known, "live": live, "decisions": decisions,
             "owner_items": owner_items if owner_items is not None else
             [i for i in fleet.external_items(now) if i["type"] in OWNER_TYPES and i.get("session")],
-            "programs": programs if programs is not None else program_facts(open_gates),
+            "programs": programs if programs is not None else program_facts(open_gates, unread=unread),
+            "programs_unread": unread,
             "pressure": pressure or {}, "pressure_known": pressure is not None,
             "agent_merges": merges if merges is not None else agent_merges()}
 
@@ -209,6 +219,9 @@ def merge_actor(key, f):
             return "agent"
         return {"none": "agent", "approved": "agent", "pending": "owner"}.get(prog["gate"])
     repo = key.rsplit("#", 1)[0]
+    unread = f.get("programs_unread") or ()
+    if "*" in unread or repo in unread:  # a program may own this PR and its files could not be read
+        return None
     if any(fnmatch.fnmatchcase(repo, p) for p in f["agent_merges"]):
         return "agent"
     if f["me"] and repo.split("/", 1)[0].lower() == f["me"].lower():
@@ -266,12 +279,18 @@ def judge(r, f, lead=None, sid=None):
         return RowState("check", f"{AGENT_ACTION}: {' · '.join(missing)}", " · ".join(missing), unknown=missing,
                         since=since, also=[st for st, _ in found])
 
+    def gap(missing):
+        """A rule that may apply needs a fact it cannot read: an earlier rule's result stands, else ❔ here."""
+        return _first(found, unknown=[missing]) if found else stop_unknown(missing)
+
     # 1 ✅: only a confirmed completion returns here; a merged PR with work left goes on through the rules below. A row
     # marked done whose PR closed unmerged is not: GitHub outranks the board, and rule 3 holds it as PR 닫힘.
     if tid in f["shut"] or status == "done" and not (p and p.get("state") == "CLOSED" and not merged(p)):
         return RowState("done")
     if key and p is None:
         return stop_unknown("PR 상태 모름")
+    if p and p.get("state") == "OPEN" and any(k not in p for k in PR_FIELDS):
+        return stop_unknown("PR 상세 모름")
     left = None
     if merged(p):
         if busy and r.get("session"):
@@ -300,6 +319,8 @@ def judge(r, f, lead=None, sid=None):
             return stop_unknown("오너 login 모름") if not found else _first(found, unknown=["오너 login 모름"])
         if any(is_owner(a, me) for a in people):
             hit("owner", nxt, what="리뷰")
+    if r.get("owner") and not me and not is_owner(r["owner"], me) and not r["owner"].lower().startswith("team:"):
+        return gap("오너 login 모름")  # --owner may name the owner by login
     if r.get("owner") and is_owner(r["owner"], me) or status == "owner" and not r.get("owner"):
         hit("owner", nxt, what=nxt or "응답")
 
@@ -318,6 +339,8 @@ def judge(r, f, lead=None, sid=None):
             hit("held", f"선행 {r['after']} 머지 대기")
         elif not merged(pa):
             hit("check", f"{AGENT_ACTION}: 선행 {r['after']} 닫힘", f"선행 {r['after']} 닫힘")
+    if sid and not f.get("pressure_known", True):
+        return gap("pressure 대기열 모름")
     for e in queue:
         if e.get("state") == "waiting":
             hit("held", f"기계 대기: {e.get('what')}")
@@ -335,8 +358,8 @@ def judge(r, f, lead=None, sid=None):
 
     # 5 🔴 its lead's session is gone
     if status == "moving" and lead and not lead.get("closed_at"):
-        if not f["sessions_known"]:
-            pass  # unknown: never 🔴 on a list that cannot be trusted
+        if not f["sessions_known"]:  # never 🔴 on a list that cannot be trusted, and never 🔄 either
+            return gap("세션 목록 모름")
         else:
             gone = (sid not in f["sessions"] or f["sessions"][sid].get("phase") == "offline") if sid \
                 else f["live"] is not None and lead.get("handle") not in f["live"]
@@ -355,13 +378,17 @@ def judge(r, f, lead=None, sid=None):
     # The PR's own facts come before the row's word: a ready PR the agent merges is 🔄 whatever "waiting" the row says.
     if is_open:
         quiet = not busy and bool(r.get("session") or status in ("held", "waiting"))
-        if p.get("draft") and quiet:
+        if p.get("draft") and not busy and not f["sessions_known"]:
+            return gap("세션 목록 모름")
+        if p.get("draft") and not busy:  # the session list is trusted and nobody works on the draft
             hit("check", f"{AGENT_ACTION}: 초안 · 세션 없음 — 재개하거나 보류로 기록", "초안 · 세션 없음")
         elif ready(p):
             # Nothing on the PR is the agent's to fix: who merges it is what decides whether it moves.
             actor = merge_actor(key, f)
             if actor is None and prog and prog["policy"] == "human-gate" and prog["gate"] == "unknown":
                 hit("check", f"{AGENT_ACTION}: gate 상태 확인 필요 — orch land 로 응답 읽기", "gate 상태 모름")
+            elif actor is None and ({"*", key.rsplit("#", 1)[0]} & set(f.get("programs_unread") or ())):
+                hit("check", f"{AGENT_ACTION}: 프로그램 파일 못 읽음", "프로그램 파일 못 읽음")
             elif actor is None:
                 hit("check", f"{AGENT_ACTION}: 머지 주체 기록 없음", "머지 주체 기록 없음")
             elif actor == "agent":  # its next step comes from the evidence, never from a word like 머지 대기
@@ -415,9 +442,17 @@ GENERIC_NEXT = {"작업 중", "턴 종료", "확인 대기", "에이전트 없�
 
 # ---------------------------------------------------------------- place
 
-def place(st):
-    """Where a row with this state shows: always its repository table, once. The lists below hold references only."""
-    return "table"
+# The owner's turn outranks another person's: the head row shows what the owner can unblock now.
+WORST = ("blocked", "owner", "waiting", "check", "held", "moving")
+
+
+def roll_up(st, kids):
+    """A head row's state as every reader shows it: its own, with the status of its worst open sub-task (WORST
+    order). A ✅ head stays ✅. "own" keeps judge()'s status for the 다음 cell and the Done button."""
+    if st["status"] == "done":
+        return {**st, "own": "done"}
+    open_ = [st["status"]] + [k for k in kids if k not in ("done", None)]
+    return {**st, "own": st["status"], "status": min(open_, key=lambda s: WORST.index(s) if s in WORST else len(WORST))}
 
 
 def ref_list(st):
@@ -435,13 +470,14 @@ def cell_next(st, suffix=""):
 
 
 def by_pr(states, rows):
-    """{PR key: status} for each PR exactly one judged row links, or several that agree: the stage table's 지금 cell.
-    A PR rows disagree on has none, never a pick."""
+    """{PR key: status} for each PR exactly one judged row links (states holds one entry per row shown, aliases
+    already merged): the stage table's 지금 cell. A PR two rows link has none, even when they agree: which row the
+    stage row means is unknown."""
     seen = {}
     for rid, st in states.items():
         if (pr := (rows.get(rid) or {}).get("pr")):
-            seen.setdefault(pr, set()).add(st["status"])
-    return {k: next(iter(v)) for k, v in seen.items() if len(v) == 1}
+            seen.setdefault(pr, []).append(st["status"])
+    return {k: v[0] for k, v in seen.items() if len(v) == 1}
 
 
 def snapshot(now=None):

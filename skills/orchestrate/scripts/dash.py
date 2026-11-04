@@ -1828,7 +1828,7 @@ def cmd_serve(argv):
 
 def brief_report():
     rep = periodic_report()
-    return rep | {"stages": stage_report(rep.get("now_by_pr"))}
+    return rep | {"stages": stage_report(rep.get("now_by_pr"), "now_by_pr" in rep and rep["now_by_pr"] is not None)}
 
 
 def periodic_report():
@@ -1877,13 +1877,13 @@ def closed_recent(days=7):
                   key=lambda r: r.get("ts") or "", reverse=True)
 
 
-def stage_report(by_pr=None):
+def stage_report(by_pr=None, now_known=True):
     """The stage table whole, generated rows and recorded ones, for the Stages page: the brief's text has only a line pointing here.
     Read per request, so an `orch stage set` shows on the next poll. Counted by stages.counted(), the brief line's count.
-    by_pr: the same render's now_by_pr, each row's 지금."""
+    by_pr: the same render's now_by_pr, each row's 지금; now_known False when that render failed."""
     try:
         state = fleet.read_json(fleet.state_dir() / "state.json", {}) or {}
-        return acks.mark_stages(stages.counted(stages.table(state), state, by_pr=by_pr))
+        return acks.mark_stages(stages.counted(stages.table(state), state, by_pr=by_pr, now_known=now_known))
     except (OSError, ValueError) as e:
         return {"error": f"stages: {type(e).__name__}: {e}"}
 

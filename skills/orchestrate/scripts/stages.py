@@ -254,7 +254,7 @@ def ref_urls(rows, nxt, prs):
             for t in texts for m in REF.finditer(t)}
 
 
-ACT = ("owner", "check", "blocked")  # a 지금 that needs someone to act keeps its row in the table however quiet
+ACT = ("owner", "held", "check", "blocked")  # a 지금 with work left keeps its row in the table however quiet
 
 
 def with_now(t, by_pr):
@@ -263,12 +263,13 @@ def with_now(t, by_pr):
     return {**t, "rows": [r if r.get("group") else {**r, "now": by_pr.get(r.get("pr"))} for r in t["rows"]]}
 
 
-def current(t, now, idle_s, state=None, by_pr=None):
+def current(t, now, idle_s, state=None, by_pr=None, now_known=True):
     """table() without the rows the report has no use for: finished (`done`, or every column ✅ or 해당 없음) or
     unchanged for idle_s, its PR's merge in state's PR list counting as a change. A row with a ❌, ⚠️ or 🔄 cell is
-    stuck, not finished, and stays however quiet; so does one whose 지금 (by_pr, the brief's judgment) needs someone to
-    act. A row stays while a row under it stays, and with no time to judge by. Returns (table, how many work rows
-    left); with no row left, 다음 순서 goes too. The dashboard reads table() whole."""
+    stuck, not finished, and stays however quiet; so does one whose 지금 (by_pr, the brief's judgment) has work left,
+    and, when the brief's judgment could not be read (now_known False), every unfinished row with a PR. A row stays
+    while a row under it stays, and with no time to judge by. Returns (table, how many work rows left); with no row
+    left, 다음 순서 goes too. The dashboard reads table() whole."""
     t = with_now(t, by_pr)
     rows = {r["id"]: r for r in t["rows"]}
     merged = {p.get("key"): p.get("merged_at") for p in (state or {}).get("prs") or []}
@@ -283,7 +284,9 @@ def current(t, now, idle_s, state=None, by_pr=None):
             return True
         if marks <= {"ok", "na"}:
             return False
-        times = [fleet.parse(x) for x in [r.get("created_at"), r.get("at"), merged.get(r.get("pr"))] + [c.get("at") for c in r["cells"].values()]]
+        if not now_known and r.get("pr"):
+            return True
+        times =[fleet.parse(x) for x in [r.get("created_at"), r.get("at"), merged.get(r.get("pr"))] + [c.get("at") for c in r["cells"].values()]]
         last = max(filter(None, times), default=None)
         return not last or (now - last).total_seconds() <= idle_s
     keep = set()
@@ -303,10 +306,10 @@ def idle_s():
     return {**board.LIMITS, **(fleet.config().get("board") or {})}["stage_idle_d"] * 86400
 
 
-def counted(t, state, now=None, by_pr=None):
+def counted(t, state, now=None, by_pr=None, now_known=True):
     """The table whole for the Stages page, counted by current() as the brief's line counts it: each row's `open`
     (current() keeps it) and `now`, `open` (the line's N) and `folded` (its 접음)."""
-    cur, gone = current(t, now or fleet.utcnow(), idle_s(), state, by_pr)
+    cur, gone = current(t, now or fleet.utcnow(), idle_s(), state, by_pr, now_known)
     keep = {r["id"] for r in cur["rows"]}
     return {**t, "rows": [{**r, "open": r["id"] in keep} for r in with_now(t, by_pr)["rows"]],
             "open": sum(1 for r in cur["rows"] if not r.get("group")), "folded": gone}

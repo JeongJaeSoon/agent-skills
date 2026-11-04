@@ -29,8 +29,6 @@ KINDS = ("lead", "phase", "task")
 # What each status means and which rule gives it is rowstate.py's; the board only stores what a person set.
 ICON = rowstate.ICON
 ALIASES = {v: k for k, v in ICON.items() if k != "check"} | {"⏸": "held"}  # VS16 dropped, as some keyboards and pastes do
-# The owner's turn outranks another person's: the head row shows what the owner can unblock now.
-WORST = ("blocked", "owner", "waiting", "check", "held", "moving")
 OWNER_NAMES = ("오너", "owner")
 COLS = 78
 LIMITS = {"row_min": 90, "pr_warn_min": 30, "pr_stale_min": 120, "state_min": 5, "done_fold_h": 24, "stage_idle_d": 7,
@@ -852,12 +850,6 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         to = p.get("base")
         return pr_state(p) + (f"→{to}" if to and to != base else "")
 
-    def worst(own, kids):
-        if own == "done":
-            return "done"
-        open_ = [own] + [k for k in kids if k != "done"]
-        return min(open_, key=lambda s: WORST.index(s) if s in WORST else len(WORST))
-
     # Each display line: {key, section, depth (0 head, 1 sub-task), status, name, title, progress, next, suffix}
     sections, lines, bullets = [], [], {}
 
@@ -911,6 +903,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             progs = {tuple(t.get("progress") or ()) for t in ts}
             nexts = {t.get("next") or "" for t in ts}
             st, name, waits[f"{head}/~{rev}"] = reviewer_wait(rev, ts)
+            members[f"{head}/~{rev}"] = list(ids)
             line(f"{head}/~{rev}", sec, 1, st, name, None,
                  bar(ts[0].get("progress")) if len(progs) == 1 else "—",
                  nexts.pop() if len(nexts) == 1 else "", fold=[t["pr"] for t in ts])
@@ -922,6 +915,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             t = rows[t["parent"]]
         return rows.get(t.get("parent"))
 
+    members, as_group = {}, set()  # a reviewer row's folded rows; leads shown only as their phases
     alone = [rows[k] for k in order if not rows[k].get("parent") and rows[k]["kind"] == "task"]
     alone_rev = {}
     for t in alone:
@@ -946,6 +940,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         phases = [rows[c] for c in order if c in family and rows[c]["kind"] == "phase"]
         tasks = [rows[c] for c in order if c in family and rows[c]["kind"] == "task"]
         heads = ([r] if any(head_of(t) is r for t in tasks) or not phases else []) + phases
+        if r not in heads:  # a lead that works only in phases is their section, not a row
+            as_group.add(k)
         for h in heads:
             mine = [t for t in tasks if head_of(t) is h]
             home = [t for t in mine if up(t, "repo") == sec[0]]
@@ -961,7 +957,9 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                     if not any(l["key"] == f"{k}@{tsec[0]}" for l in lines):
                         line(f"{k}@{tsec[0]}", tsec, 0, None, r["title"], None, "—", "—")
                     kid_status += task_lines(f"{k}@{tsec[0]}", tsec, [t])
-            lines[at]["status"] = worst(st, kid_status)
+            # The head's shown status is the snapshot's too, so the stage table's 지금 cell agrees with this row.
+            states[h["id"]] = rowstate.roll_up(states[h["id"]], kid_status)
+            lines[at]["status"] = states[h["id"]]["status"]
 
     lines, done, hidden = drop_acked(lines, prs, rows, acks.acked())
 
@@ -979,13 +977,15 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         if all(j in gone for j in kids) and (done_long_ago(l) or l["status"] is None and kids):
             gone.add(i)
             folded[l["sec"]] = folded.get(l["sec"], 0) + (l["status"] is not None)
+    folded_keys = {lines[i]["key"] for i in gone}
     lines[:] = [l for i, l in enumerate(lines) if i not in gone]
     sections[:] = [s for s in sections if any(l["sec"] == s for l in lines) or any(b == s for b, _ in bullets)]
 
     # A doing item about a card that has a row is that row: one line, with the doing item's next step when the card's
     # own says no more than its session's phase.
     card_line = {c: l for l in lines if (r := rows.get(l["key"])) and (c := r.get("session") or r.get("linked"))}
-    doing = []
+    # Such an item stays open under its own id (the row's Done closes the row only) and is placed in the row's table.
+    doing, merged_doing = [], []
     for d in store["doing"]:
         iid, card = tidy.item_id("doing", d), tidy.named(f"{d['title']} {d['next']}", cards)
         js = rowstate.judge_item("doing", d, facts_in, iid)
@@ -994,6 +994,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         if card and (l := card_line.get(card["id"])) and js["status"] == "moving" and iid not in verdicts:
             if l["own"] == "moving" and l["next"] in GENERIC_NEXT:
                 l["next"] = d["next"]
+            merged_doing.append((iid, d, js, l))
             continue
         doing.append((iid, d, js))
     later = [store["later"][i] for i in shown_later(store["later"], shut)]
@@ -1158,14 +1159,23 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         return (f"{who}{f' · {what}' if what else ''}{since(at)}{asked(who, keys)} → {unblocks}"
                 f"{f' · 다음: {nxt}' if nxt else ''}")
 
-    # Every row shows once, in its section's table, with its next step in the 다음 column (rowstate.place). A row that
+    # Every row shows once, in its section's table, with its next step in the 다음 column (rowstate.cell_next). A row that
     # waits on the owner, another person or a condition points down to that list, which holds one reference line per
     # row ("what · where → name"). 표 밖 진행 lists only what has no row: doing items, flagged held items, arrived to-dos.
-    dup = {}
+    # Names are unique across the whole report (the dashboard matches buttons and list references by them): a repeat
+    # takes the next ·N no other row already shows, a name that itself ends in ·N included. A lead's name over its
+    # sub-tasks in another repository is that lead again, not a row, and keeps the name.
+    used = set()
     for l in lines:
-        n = dup.setdefault((l["sec"], l["name"]), 0) + 1
-        dup[(l["sec"], l["name"])] = n
-        l["shown"] = l["name"] if n == 1 else f"{l['name']}·{n}"
+        if l["status"] is None:
+            l["shown"] = l["name"]
+            continue
+        shown, n = l["name"], 1
+        while shown in used:
+            n += 1
+            shown = f"{l['name']}·{n}"
+        used.add(shown)
+        l["shown"] = shown
 
     def ref_name(l):
         return label(l) + l["shown"][len(l["name"]):]
@@ -1210,32 +1220,33 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             place(i["id"], f"table:{bsec[0]}")
             if st in ("owner", "waiting"):
                 place(i["id"], f"ref:{st}")
+    def listed(where, into, iid, title, text):
+        """One list line for an item with no row: its text goes out, and list_rows keeps that exact text, so the
+        dashboard puts the item's Done on that line and no other."""
+        into.append(text)
+        list_rows[where].append({"id": iid, "label": title, "text": text})
+
     for iid, d, js in doing:
-        list_rows["owner" if js["status"] == "owner" else "waiting" if js["status"] == "waiting" else "moving"].append(
-            {"id": iid, "label": d["title"]})
         place(iid, f"list:{js['status']}")
         if js["status"] == "owner":
-            turn.append(turn_item(d["next"], "", d["title"]))
+            listed("owner", turn, iid, d["title"], turn_item(d["next"], "", d["title"]))
         elif js["status"] == "waiting":
-            theirs.append(theirs_item(d["owner"], "", d.get("since"), d["title"], d["next"]))
+            listed("waiting", theirs, iid, d["title"], theirs_item(d["owner"], "", d.get("since"), d["title"], d["next"]))
         else:
-            moving.append(f"{ICON[js['status']]} {d['title']} — {js['next']} · {d['owner']}")
+            listed("moving", moving, iid, d["title"], f"{ICON[js['status']]} {d['title']} — {js['next']} · {d['owner']}")
     for l in later:
         iid = tidy.item_id("later", l)
         if (js := rowstate.judge_item("later", l, facts_in, iid))["status"] == "check":
-            moving.append(f"{ICON['check']} {l['title']} — {js['next']}")
-            list_rows["moving"].append({"id": iid, "label": l["title"]})
+            listed("moving", moving, iid, l["title"], f"{ICON['check']} {l['title']} — {js['next']}")
             place(iid, "list:check")
     due_mine = []
     for iid, t, when in arrived:
         js = rowstate.judge_item("do", t, facts_in, iid)
         place(iid, f"list:{js['status']}")
         if js["status"] == "owner":
-            due_mine.append(f"⏰ {t['title']} · {when} 도래")
-            list_rows["owner"].append({"id": iid, "label": t["title"]})
+            listed("owner", due_mine, iid, t["title"], f"⏰ {t['title']} · {when} 도래")
         else:
-            moving.append(f"⏰ {t['title']} — {when} 도래 · {t['who']}")
-            list_rows["moving"].append({"id": iid, "label": t["title"]})
+            listed("moving", moving, iid, t["title"], f"⏰ {t['title']} — {when} 도래 · {t['who']}")
 
     for sec in sections:
         repo, prog = sec
@@ -1247,6 +1258,11 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         for l in mine:
             if l["status"] is not None:
                 place(l["key"], f"table:{title}")
+                for m in members.get(l["key"], ()):
+                    place(m, f"table:{title}")
+                for iid, _, _, row_l in merged_doing:
+                    if row_l is l:
+                        place(iid, f"table:{title}")
         if tg:
             for l in mine:
                 name = (f"{l['shown']} {l['cell']}" if l["fold"] is None else f"{l['cell']} {l['shown']}").strip()
@@ -1317,6 +1333,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     opened = [{"id": item_of(rows[l["key"]]), "kind": "row", "label": label(l), "status": l["own"]}
               for l in lines if l["key"] in rows and l["own"] not in (None, "done")]
     opened += [{"id": i, "kind": "doing", "label": d["title"], "status": js["status"]} for i, d, js in doing]
+    opened += [{"id": i, "kind": "doing", "label": d["title"], "status": js["status"], "row": item_of(rows[l["key"]])}
+               for i, d, js, l in merged_doing if l["key"] in rows]
     opened += [{"id": tidy.item_id("later", l), "kind": "later", "label": f"{l['trigger']} → {l['title']}", "status": "held",
                 "title": l["title"], "trigger": l["trigger"], "who": l.get("who"), "n": n}
                for n, l in enumerate(later, 1)]
@@ -1332,10 +1350,16 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         o["check"] = v.get("evidence") if v.get("verdict") == "check" else None
     for t in todos:
         place(tidy.item_id("todo", t), "list:owner")
-        list_rows["owner"].append({"id": tidy.item_id("todo", t), "label": t})
-    expected = [l["key"] for l in lines if l["status"] is not None]
-    expected += [i["id"] for items in bullets.values() for i in items]
-    expected += [p for p, ws in placement.items() if any(w.startswith("list:") for w in ws)]
+        list_rows["owner"].append({"id": tidy.item_id("todo", t), "label": t, "text": t})
+    # What must show, from the inputs rather than from what was drawn: every row in scope less the ones the owner acked,
+    # the ✅ rows folded into a count and the leads shown only as their phases (a folded reviewer row's members and a
+    # merged doing item are placed with the row that stands for them), then every open item with no row.
+    folded_members = {m for k, ms in members.items() if k in hidden | folded_keys for m in ms}
+    expected = [k for k in order if k not in hidden | folded_keys | as_group | folded_members]
+    expected += [i for i, *_ in doing] + [i for i, *_ in merged_doing if _[-1]["key"] not in hidden | folded_keys]
+    expected += [i for i, _, _ in arrived] + [tidy.item_id("todo", t) for t in todos]
+    expected += [tidy.item_id("later", l) for l in later
+                 if rowstate.judge_item("later", l, facts_in, tidy.item_id("later", l))["status"] == "check"]
     dup_ids, missing_ids, extra_ids = rowstate.check_placement(placement, expected)
     return {"text": "\n".join(out), "headline_facts": facts, "changed": changed, "stale": stale, "width_ok": width_ok, "done": done,
             "open": opened, "table_rows": table_rows, "list_rows": list_rows, "placement": placement, "now_by_pr": by_pr,

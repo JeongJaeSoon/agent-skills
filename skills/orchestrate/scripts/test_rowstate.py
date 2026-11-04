@@ -145,6 +145,29 @@ for st, late in (("waiting", True), ("retrying", True), ("failed", False)):
 # A row marked done whose PR closed unmerged is not done: GitHub outranks the board.
 closed = {**READY, "state": "CLOSED"}
 assert rowstate.judge({**row, "status": "done"}, facts({"octo/app#1": closed}))["status"] == "held"
+# A fact a rule needs and cannot read stops at ❔, never a guessed 🔄 or ⏳.
+lead = {"title": "L", "handle": "term_0FAKEL"}
+stale = facts({"octo/app#1": READY})
+stale["sessions_known"] = False
+assert rowstate.judge(row, stale, lead=lead)["unknown"] == ["세션 목록 모름"]
+assert rowstate.judge(row, facts({"octo/app#1": READY}, sessions=sess) | {"pressure_known": False}, sid="wt")["unknown"] == ["pressure 대기열 모름"]
+assert rowstate.judge(row, facts({"octo/app#1": {"key": "octo/app#1", "state": "OPEN"}}))["unknown"] == ["PR 상세 모름"]
+assert rowstate.judge({**row, "owner": "someone"}, facts({"octo/app#1": READY}, me=None))["unknown"] == ["오너 login 모름"]
+# A draft nobody works on, by a session list that can be trusted, is the agent's to resume or hold.
+draft = {**READY, "draft": True}
+assert rowstate.judge(row, facts({"octo/app#1": draft}))["next"].startswith(f"{rowstate.AGENT_ACTION}: 초안")
+# A program whose files cannot be read may own the PR: who merges it is unknown, not the owner-repository default.
+unread = facts({"octo/app#1": READY}) | {"programs_unread": {"octo/app"}}
+assert rowstate.judge(row, unread)["next"].endswith("프로그램 파일 못 읽음")
+progs = tmp / "programs-broken" / "p"
+progs.mkdir(parents=True)
+(progs / "program.json").write_text(json.dumps({"repo": "octo/app", "merge_policy": "human-gate"}))
+(progs / "ledger.jsonl").write_text("{not json\n")
+seen = set()
+assert rowstate.program_facts(home=progs.parent, unread=seen) == {} and seen == {"octo/app"}
+# 지금 in the stage table only for a PR exactly one row links, even when two rows agree.
+two = {"a": rowstate.RowState("held"), "b": rowstate.RowState("held"), "c": rowstate.RowState("owner")}
+assert rowstate.by_pr(two, {"a": {"pr": "x#1"}, "b": {"pr": "x#1"}, "c": {"pr": "x#2"}}) == {"x#2": "owner"}
 # Placement: an id in two places, or one expected nowhere.
 assert rowstate.check_placement({"a": ["table:x", "list:moving"], "b": ["table:x", "ref:owner"]}, ["a", "b", "c"]) == (["a"], ["c"], [])
 
@@ -166,11 +189,33 @@ assert icons == {"⏸️"}, icons
 stages.add("s1", "단계 행", pr="octo/app#5")
 cur, _ = stages.current(stages.table(), T, 0, None, snap["by_pr"])
 assert [r["now"] for r in cur["rows"] if r["id"] == "s1"] == ["held"], cur["rows"]
+# A head and its sub-task judged apart (head 🔄, sub-task ⏳): the head shows its worst open sub-task, and the
+# snapshot carries that same status, so the table and the stage table's 지금 agree; "own" keeps judge()'s.
+rowstate.judge = lambda r, f, lead=None, sid=None: (
+    rowstate.RowState("waiting", "x", who="rev", what="리뷰") if r["kind"] == "task" else rowstate.RowState("moving", "x"))
+try:
+    out = board.render(now=T, fill=True, periodic=False)
+finally:
+    rowstate.judge = real
+shown_rows = [x for t in out["table_rows"] for x in t["rows"] if x["id"] in out["states"]]
+assert all(x["status"] == rowstate.ICON[out["states"][x["id"]]["status"]] for x in shown_rows), shown_rows
+rolled = [k for k, st in out["states"].items() if st.get("own") == "moving" and st["status"] == "waiting"]
+assert rolled and any(x["id"] in rolled for x in shown_rows), out["states"]
+assert all(out["now_by_pr"].get(r["pr"]) in (None, out["states"][k]["status"])
+           for k, r in board.read()["rows"].items() if k in out["states"] and r.get("pr")), out["now_by_pr"]
+# A quiet stage row is kept while its 지금 has work left (⏸️ too), or while the brief's judgment could not be read.
+old = {**stages.table(), "rows": [{**r, "created_at": "2026-01-01T00:00:00Z"} for r in stages.table()["rows"]]}
+assert [r["id"] for r in stages.current(old, T, 60, None, {"octo/app#5": "held"})[0]["rows"]] == ["s1"]
+assert stages.current(old, T, 60, None, {})[0]["rows"] == []
+assert [r["id"] for r in stages.current(old, T, 60, None, {}, now_known=False)[0]["rows"]] == ["s1"]
 # Who reads statuses decides none: the renderers name no rule of rowstate's.
 for f in ("board.py", "stages.py", "dash.py", "../assets/dashboard/fleet.js"):
     src = (HERE / f).read_text()
     assert not re.search(r"\b(def blocker|merge_actor|reviewable|gate_of)\b", src), f
 # 지금 in `orch stage show`: the brief's own status of the board row its PR links (L/after, its wait taken back: 🔄).
+# It renders at the real time, so the session list must be fresh; a stale one would make every lead row ❔.
+fresh = json.loads((state / "state.json").read_text()) | {"generated_at": dt.datetime.now(dt.timezone.utc).isoformat()}
+(state / "state.json").write_text(json.dumps(fresh))
 shown = ok("stage", "show")
 assert "| 지금 | 작업 |" in shown and "| 🔄 | 단계 행 | octo/app#5 |" in shown, shown
 print("test_rowstate: ok")

@@ -993,7 +993,7 @@ process.stdout.write(briefHtml({json.dumps(text)}));"""
                 {"id": "a", "label": "done lead", "status": "✅", "session": None, "ack": "board:a", "done": None},
                 {"id": "c", "label": "busy lead", "status": "🔄", "session": busy, "ack": None, "done": "row:c"}]},
             {"table": "acme/b", "rows": []}]
-    lists = {"moving": [{"id": "doing:x", "label": "loose item"}], "owner": [], "waiting": [], "held": []}
+    lists = {"moving": [{"id": "doing:x", "label": "loose item", "text": "🔄 loose item — 정리 · lead"}], "owner": [], "waiting": [], "held": []}
     js = f"""{helpers}
 {(assets / "fleet.js").read_text()}
 const S = {{filters: {{}}}};

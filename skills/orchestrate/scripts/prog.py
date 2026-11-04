@@ -3032,14 +3032,14 @@ def cmd_stage(argv):
                 t = stages.of_program(t, opt(rest, "--program"))
             import rowstate
             try:  # 지금: the brief's own judgment of each row's linked board row; none when the board cannot be read
-                by_pr = rowstate.snapshot()["by_pr"]
-            except Exception as e:  # noqa: BLE001 — the stage table still shows, only without 지금
-                by_pr = {}
+                by_pr, known = rowstate.snapshot()["by_pr"], True
+            except Exception as e:  # noqa: BLE001 — the stage table still shows, without 지금 and folding no PR row
+                by_pr, known = {}, False
                 print(f"warning: 지금 칸 없음: {type(e).__name__}: {e}", file=sys.stderr)
             t = stages.with_now(t, by_pr)
             if "--all" not in rest:  # the rows the brief's line counts
                 idle_d = {**board.LIMITS, **(fleet.config().get("board") or {})}["stage_idle_d"]
-                t, gone = stages.current(t, fleet.utcnow(), idle_d * 86400, state, by_pr)
+                t, gone = stages.current(t, fleet.utcnow(), idle_d * 86400, state, by_pr, known)
             if "--json" in rest:
                 return print(json.dumps(t, ensure_ascii=False, indent=1))
             text = (stages.render_telegram if "--telegram" in rest else stages.render_md)(t)
