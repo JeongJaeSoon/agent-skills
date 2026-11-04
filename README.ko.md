@@ -9,7 +9,7 @@
 
 ## 무엇인가
 
-agent-skills는 Claude Code 플러그인이다. 스킬 41개, 에이전트 정의 4개, hook 8개와 명령 몇 개로 이뤄져 있다. 흐름은 둘이다. 하나는 티켓 하나를 첫 수정부터 머지와 티켓 닫기까지 끌고 간다. 다른 하나는 Orca 워커 여러 개를 동시에 돌려 워커마다 티켓 하나를 맡기고, 그 PR들을 순서대로 머지한다.
+agent-skills는 Claude Code 플러그인이다. 스킬 40개, 에이전트 정의 4개, hook 8개와 명령 몇 개로 이뤄져 있다. 흐름은 둘이다. 하나는 티켓 하나를 첫 수정부터 머지와 티켓 닫기까지 끌고 간다. 다른 하나는 Orca 워커 여러 개를 동시에 돌려 워커마다 티켓 하나를 맡기고, 그 PR들을 순서대로 머지한다.
 
 GitHub 저장소의 티켓 작업을 Claude Code에 맡기려는 개발자를 위한 것이다. 단계마다 사람이 승인하는 방식(Human-in-the-loop, HITL)과, 에이전트가 진행하고 사람은 지켜보다 예외에만 끼어드는 방식(Human-on-the-loop, HOTL)을 지점마다 고른다. 사용자 설정 쓰기와 되돌릴 수 없는 행동은 늘 사람의 승인을 기다린다.
 
@@ -105,7 +105,7 @@ https://github.com/JeongJaeSoon/agent-skills 의 Claude Code 플러그인을 설
 
 | 묶음 | 스킬 | 하는 일 |
 |---|---|---|
-| [티켓 하나](docs/skills.md#티켓-하나) | `write-ticket`, `deliver-ticket`, `ui-review`, `handoff-ticket`, `dispatch-card`, `end-session`, `record-progress` | 티켓 쓰기부터 완료, 다음 티켓 넘기기, 세션 정리, 진행 기록까지 |
+| [티켓 하나](docs/skills.md#티켓-하나) | `write-ticket`, `deliver-ticket`, `ui-review`, `handoff-ticket`, `dispatch-card`, `end-session` | 티켓 쓰기부터 완료, 다음 티켓 넘기기, 진행 기록과 세션 정리까지 |
 | [프로젝트 하나](docs/skills.md#프로젝트-하나-orca-워커-여러-개) | `orchestrate`, `measure-delivery` | 여러 티켓을 Orca 워커로 병렬 처리해 머지하고, 끝난 뒤 실제로 어땠는지 잰다 |
 | [머신 하나](docs/skills.md#머신-하나) | `reap-resources`, `secure-fill`, `tune-automode`, `skills-config`, `setup-pc` | 끝난 세션의 잔여물 정리, 에이전트가 보지 않는 비밀값 입력, autoMode 규칙 초안, 설정 키 변경, PC 설치·갱신 |
 | [채팅·GitHub](docs/skills.md#채팅) | `watch-mentions`, `watch-prs` | 나와 관련된 채팅과 PR을 작업으로 모은다 |
