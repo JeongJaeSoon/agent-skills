@@ -309,6 +309,9 @@ STORES = [
           ("patrol", "programview"), rule="findings and their acks"),
     Store("patrolstate", "S/patrol-*.json", {"patrol.memo": CANONICAL}, ("patrol:round_once", "patrol:pending_lines"),
           ("patrol",), rule="round memo and re-notice guard"),
+    Store("modelswitch", "S/model-switch/*.json", {"patrol.model_switch": CANONICAL}, ("model_drift:autoswitch", "model_drift:mark_reported"),
+          ("patrol",), feature="model_autoswitch", rule="one claim per session, made before the first keystroke: "
+          "a session is switched at most once"),
     Store("patrollock", "S/patrol.lock", {"card.verdict": LOCK}, ("patrol:round_lock",)),
     Store("patrolout", "S/patrol.log", {"patrol.output": CANONICAL}, ("reap:spawn_patrol",), ("nobody",)),
     Store("pressure", "S/pressure.json", {"pressure.level": CANONICAL}, ("pressure:save_state",),
