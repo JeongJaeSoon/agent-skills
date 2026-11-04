@@ -180,6 +180,12 @@ for n, hold in ((8, False), (9, True), (None, True)):
     assert code == (3 if hold else 0), (n, code)
     assert ("셀 수 없음" in said[-1]) is (n is None) and "?" not in said[-1], said
 assert pressure.turn_hold(None, None) is False and pressure.turn_hold(10**6, None) is False  # cap off: never waits
+real_config = pressure.config
+for per, want in ((0.5, 1), (None, 0)):  # plain `turns` on an unreadable count holds only while the cap is on
+    pressure.config = lambda *a, per=per: {**cfg, "active_turns_per_cpu": per}
+    pressure.active_turns, pressure.turn_cap = lambda: None, real_cap
+    assert pressure.main(["turns"]) == want, per
+pressure.config = real_config
 ticks = iter([0.0, 0.0, 1.0, 2.0])  # unreadable at first, readable on the second poll: waits, then goes
 said = []
 assert pressure.turns_wait(cfg, 15, now_fn=lambda: next(ticks), sleep=lambda s: None, count=iter([None, 0]).__next__,

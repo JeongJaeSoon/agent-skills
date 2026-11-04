@@ -243,7 +243,7 @@ def turns_wait(cfg, minutes, poll=30.0, now_fn=time.time, sleep=time.sleep, coun
     while True:
         n = count()
         if not turn_hold(n, cap):
-            out(f"진행 중인 에이전트 턴 {n}개 / 상한 {cap or '없음'}: 새 카드를 시작해도 된다")
+            out(f"진행 중인 에이전트 턴 {'?' if n is None else n}개 / 상한 {cap or '없음'}: 새 카드를 시작해도 된다")
             return 0
         if now_fn() >= deadline:
             if n is None:
