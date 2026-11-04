@@ -850,16 +850,17 @@ def plugins_updated():
     before that update on the old code, whichever plugin it is, so no name is read."""
     path = pathlib.Path(os.environ.get("AGENT_SKILLS_INSTALLED_PLUGINS",
                                        "~/.claude/plugins/installed_plugins.json")).expanduser()
-    latest = 0
     try:
-        for entries in read_json(path, {}).get("plugins", {}).values():
-            for e in entries:
-                try:
-                    latest = max(latest, datetime.datetime.fromisoformat(e["lastUpdated"].replace("Z", "+00:00")).timestamp())
-                except (KeyError, TypeError, ValueError, AttributeError):
-                    continue
-    except (AttributeError, TypeError):
+        plugins = list(read_json(path, {}).get("plugins", {}).values())
+    except (OSError, AttributeError, TypeError):
         return 0
+    latest = 0
+    for entries in plugins:  # one malformed plugin or entry must not hide the others
+        for e in entries if isinstance(entries, list) else []:
+            try:
+                latest = max(latest, datetime.datetime.fromisoformat(e["lastUpdated"].replace("Z", "+00:00")).timestamp())
+            except (KeyError, TypeError, ValueError, AttributeError):
+                continue
     return latest
 
 
@@ -968,6 +969,12 @@ def broadcast_locked(kind, dry_run=False, only=None):
         pending = dict(pending, done=[], failed={}, head=head, since=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
     queued = pending.get("kind")
     kind = max(kind, queued if queued in ORDER else "plugins", key=ORDER.index)  # unreadable: the safe superset
+    try:
+        updated = datetime.datetime.strptime(pending.get("since"), "%Y-%m-%dT%H:%M:%S%z").timestamp() < plugins_updated()
+    except (TypeError, ValueError):
+        updated = False
+    if kind and updated:  # a plugin updated after the change needs /reload-plugins, which /reload-skills does not do
+        kind = "plugins"
     try:
         listed = [t for t in orca("terminal", "list")["terminals"]
                   if t.get("agentIdentity") == "claude" and t.get("connected") and t.get("writable")]

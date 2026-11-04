@@ -401,15 +401,48 @@ def test_plugin_update_and_terminal():
         st.write_text(json.dumps({"terms": terms, "worktrees": worktrees, "sent": []}))
         head = subprocess.run(["git", "-C", str(HERE.parent), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
         pending_file = tmp / "state" / "reload-pending.json"
-        pending_file.write_text(json.dumps({"kind": "skills", "since": since, "done": ["after"], "head": head}))
+        pending_file.write_text(json.dumps({"kind": "skills", "since": since, "head": head, "done": ["after", "gone"],
+                                            "failed": {"busy": {"reason": "typing"}}}))
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             code = sync.broadcast(None, dry_run=False, only="after")
         sent = json.loads(st.read_text())["sent"]
+        kept = json.loads(pending_file.read_text())
         check("--terminal sends to a session that looks current, even one marked done, with a warning",
-              code == 0 and sent == [["after", "/reload-skills"]] and out.getvalue().count("warning") == 1,
+              code == 0 and sent[0][0] == "after" and len(sent) == 1 and out.getvalue().count("warning") == 1,
               (code, sent, out.getvalue()))
-        check("the send keeps the queue's other entries", json.loads(pending_file.read_text())["done"] == ["after"])
+        check("a plugin updated after the change raises the queued skills reload to plugins",
+              sent == [["after", "/reload-plugins"]], sent)
+        check("the send keeps the queue's other entries",
+              kept["done"] == ["after", "gone"] and kept["failed"] == {"busy": {"reason": "typing"}}, kept)
+        # The named session cannot be reached: it leaves done and is recorded as failed, the rest stays.
+        cur = json.loads(st.read_text())
+        cur["terms"]["after"]["screens"] = [PERMISSION]
+        st.write_text(json.dumps(cur))
+        pending_file.write_text(json.dumps({"kind": "skills", "since": since, "head": head, "done": ["after", "gone"]}))
+        with contextlib.redirect_stdout(io.StringIO()):
+            code = sync.broadcast(None, dry_run=False, only="after")
+        kept = json.loads(pending_file.read_text())
+        check("a named send that fails leaves the target pending and the other entries alone",
+              code == 1 and kept["done"] == ["gone"] and set(kept["failed"]) == {"after"}, kept)
+        os.environ["AGENT_SKILLS_INSTALLED_PLUGINS"] = str(tmp / "missing.json")
+        cur["terms"]["after"]["screens"] = [IDLE]; cur["sent"] = []
+        st.write_text(json.dumps(cur))
+        pending_file.write_text(json.dumps({"kind": "skills", "since": since, "head": head, "done": []}))
+        with contextlib.redirect_stdout(io.StringIO()):
+            sync.broadcast(None, dry_run=False, only="after")
+        check("with no plugin update the queued skills reload stays skills",
+              json.loads(st.read_text())["sent"] == [["after", "/reload-skills"]], json.loads(st.read_text())["sent"])
+        os.environ["AGENT_SKILLS_INSTALLED_PLUGINS"] = str(installed)
+        # One malformed plugin entry, and an unreadable file, must not hide the good ones or crash.
+        installed.write_text(json.dumps({"plugins": {"bad": None, "num": 3, "good": [{"lastUpdated": stamp}]}}))
+        check("a malformed plugin entry does not hide the others", abs(sync.plugins_updated() - update_ms / 1000) < 1)
+        installed.chmod(0)
+        try:
+            unreadable = sync.plugins_updated()
+        finally:
+            installed.chmod(0o644)
+        check("an unreadable record counts as no plugin update", unreadable == 0, unreadable)
 
         # A broadcast to everyone, with the reload pending since the change.
         st.write_text(json.dumps({"terms": terms, "worktrees": worktrees, "sent": []}))
