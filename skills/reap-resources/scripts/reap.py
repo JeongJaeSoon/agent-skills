@@ -552,30 +552,48 @@ def patrol_working(now=None):
 PATROL_KEEP_ACTIVITY = ("parked", "unknown")  # v2 `activity`: a session that wakes itself, or one patrol could not tell
 
 
-def patrol_read(now=None, activity=False):
-    """patrol_working, but None when the verdicts file exists and cannot be read: a guard keeps the card then. No file,
-    or one over an hour old, is an empty set. activity adds the cards the round's `activity` keeps (PATROL_KEEP_ACTIVITY),
-    which only the guard right before a close reads."""
+def patrol_states(now=None, activity=False):
+    """{card path: what patrol judged}, the cards PATROL_KEEP keeps; None when the verdicts file exists and cannot be
+    read: a guard keeps the card then. No file, or one over an hour old, is {}. activity adds the cards the round's
+    `activity` keeps (PATROL_KEEP_ACTIVITY). cards.py's scan and the guard right before a close both read it with
+    activity, so a plan never holds a card that the close then refuses."""
     try:
         v = json.loads((STATE / "patrol-verdicts.json").read_text())
     except FileNotFoundError:
-        return set()
+        return {}
     except (OSError, ValueError):
         return None
     try:
         if (now or time.time()) - float(v.get("t") or 0) > PATROL_FRESH_S:
-            return set()
-        kept = {real(p) for p, x in (v.get("cards") or {}).items() if x in PATROL_KEEP}
+            return {}
+        kept = {real(p): x for p, x in (v.get("cards") or {}).items() if x in PATROL_KEEP}
         if activity:
             act = v.get("activity")
             act = {} if act is None else act  # a file from before v2 has none
             if not isinstance(act, dict) or not all(isinstance(x, dict) and isinstance(x.get("state"), str)
                                                     for x in act.values()):
                 return None  # an activity row that cannot be read is no proof the card may go
-            kept |= {real(p) for p, x in act.items() if x["state"] in PATROL_KEEP_ACTIVITY}
+            for p, x in act.items():
+                if x["state"] in PATROL_KEEP_ACTIVITY:
+                    kept.setdefault(real(p), x["state"])
         return kept
     except (ValueError, TypeError, AttributeError):
         return None
+
+
+def patrol_read(now=None, activity=False):
+    """patrol_states as a set of paths (None when unreadable)."""
+    kept = patrol_states(now, activity)
+    return None if kept is None else set(kept)
+
+
+PATROL_WHY = {"working": "작업 중", "waiting": "사람 대기", "run": "Run 워커", "parked": "스스로 깨울 예약을 걸어 둠(parked)",
+              "unknown": "patrol 이 알 수 없음(unknown)"}
+
+
+def patrol_hold(state=None):
+    """Why patrol keeps a card, in patrol's word for it; every refusal of cards.py and its guard goes through here."""
+    return "순찰 판정: " + PATROL_WHY.get(state, "작업 중·사람 대기·Run 워커") + "(orch patrol)"
 
 
 ORCH = pathlib.Path(__file__).resolve().parents[2] / "orchestrate" / "scripts" / "prog.py"
@@ -1106,8 +1124,26 @@ def worker_worktrees(workers):
         else:
             made.add(p)
         if (w.get("projection") or {}).get("outcome") == "in_progress":
-            live[p] = f"살아 있는 워커 턴({w.get('dispatchId')})"
+            live[p] = f"살아 있는 워커 턴({w.get('dispatchId')}, {w.get('runId')})"
     return live, made, users
+
+
+def unreleased_settled(workers):
+    """{real path: [{dispatch, run, outcome}]}: Run workers whose dispatch settled (succeeded or failed) but whose terminal
+    Orca does not list as released. They keep nothing: patrol and the live set read `in_progress` only. Releasing one is
+    its Run owner's call (`worker-release`), so a cleaner only names it. Only a local dispatch that still owns a terminal
+    resource counts: a row with no resource (nothing shows a terminal is left), a retained one (a context-only dispatch or
+    a card the user took over, which release refuses) and another host's are no leak."""
+    out = {}
+    for w in workers:
+        pj, res = w.get("projection") or {}, w.get("resource") or {}
+        p = (res.get("worktreeId") or "").partition("::")[2]
+        outcome = pj.get("outcome")
+        local = ((pj.get("host") or {}).get("kind") or "local") == "local"
+        if p and local and outcome in ("succeeded", "failed") and not res.get("retainedReason") \
+                and w.get("terminalState") not in (None, "released", "retained"):
+            out.setdefault(real(p), []).append({"dispatch": w.get("dispatchId"), "run": w.get("runId"), "outcome": outcome})
+    return out
 
 
 COMPOSE_PROJECT = "com.docker.compose.project"
@@ -2116,7 +2152,8 @@ def schedule_cmd(script, state_dir, workspace, provider="claude", ledger=None, i
             "--provider", provider, "--workspace-mode", "existing", "--workspace", workspace,
             "--precheck", round_cmd(script, state_dir, ledger, "precheck", *(["--load"] if load else [])),
             "--precheck-timeout", str(PRECHECK_TIMEOUT),
-            "--prompt", schedule_prompt(script, state_dir, ledger, inbox), "--json"]
+            "--prompt", schedule_prompt(script, state_dir, ledger, inbox), "--json",
+            *([f"--extra-agent-args=--model {config()['model']}"] if provider == "claude" and config().get("model") else [])]
 
 
 def load_due(state_dir, cfg, now=None, load5=None, autos=None):
@@ -2159,7 +2196,7 @@ def stamp_round(state_dir, now=None):
 
 
 def runner_hint(checkout):
-    return ("\n모델: automation 은 --workspace 체크아웃의 Claude Code 설정을 따른다(create 에 모델 옵션이 없다). "
+    return ("\n모델: automation 은 --workspace 체크아웃의 Claude Code 설정을 따른다. reap.model 을 넣으면 schedule 이 --extra-agent-args 로 넘긴다. 넣지 않을 때는 아래 방법을 쓴다. "
             "메인 체크아웃에 model 을 넣으면 거기서 여는 대화형 세션도 바뀌므로, 전용 runner worktree 를 한 번 만든다:\n"
             f"  orca worktree create --repo {shlex.quote('path:' + str(checkout))} --name automations-runner --no-parent --setup skip --json\n"
             '  <runner>/.claude/settings.local.json 에 {"model": "<고른 모델>"} (gitignored)\n'
@@ -2542,10 +2579,11 @@ def main():
             protect = guard.read_protect(guard.protect_file(), missing_ok=True)
         except (guard.Unreadable, guard.NoProtect) as e:
             print(f"- 아무것도 하지 않았다: {e}")
-            return
+            sys.exit(1)  # a check that could not run is not a clean round: the caller must see it
         kinds = {i["kind"] for i in wanted.values()}
         fresh, notes = scan(kinds, plan["hours"], cfg, plan["repos"])
         failed = []
+        unchecked = False
         now = {i["key"]: i for i in fresh if i["target"]}
         for key, old in wanted.items():
             new = now.get(key)
@@ -2560,6 +2598,9 @@ def main():
                 why = guard.keep(new, protect, notes=notes) if got else guard.LOCK_BUSY
                 if why:
                     print(f"- 건너뜀 {label(new)}: {why}")
+                    if guard.check_error(why):  # left, but not decided: the round ends non-zero after the others run
+                        failed.append(key)
+                        unchecked = True
                     continue
                 done = {}
                 try:
@@ -2579,6 +2620,8 @@ def main():
             stamp_user_folder(STATE, kind=k)
         for n in notes:
             print(f"- 메모: {n}")
+        if unchecked:
+            sys.exit(1)
         return
     if cmd == "load":
         data = load_report(cfg, int(opt("--top") or 10))
@@ -2634,7 +2677,7 @@ def main():
         argv = schedule_cmd(script, STATE, workspace, opt("--provider") or "claude", ledger_path(), cfg.get("inbox_to"),
                             load="--load" in sys.argv)
         print(" ".join(shlex.quote(a) for a in argv))
-        if not opt("--workspace"):
+        if not opt("--workspace") and not cfg.get("model"):
             print(runner_hint(top.strip()))
         if "--write" in sys.argv:
             out = run(argv)

@@ -291,7 +291,8 @@ def test_broadcast():
     (state / "reload-pending.json").write_text(json.dumps({"kind": "plugins", "since": "2026-09-25T23:39:02+0900",
                                                             "done": [], "head": head}))
     env = dict(AGENT_SKILLS_STATE=str(state), SKILLS_SYNC_ORCA=str(fake), FAKE_ORCA_STATE=str(st),
-               SKILLS_SYNC_SETTLE_S="0", SKILLS_SYNC_CONFIRM_S="0")
+               SKILLS_SYNC_SETTLE_S="0", SKILLS_SYNC_CONFIRM_S="0",
+               AGENT_SKILLS_INSTALLED_PLUGINS=str(tmp / "no-installed-plugins.json"))
     old = {k: os.environ.get(k) for k in env}
     os.environ.update(env)
     import importlib
@@ -342,6 +343,149 @@ def test_broadcast():
     check("no orca means a refusal, not a crash", no_orca == (1, 1, 1), no_orca)
     check("a session done for an older checkout gets the reload again", resent == ["idle", "/reload-skills"], resent)
     shutil.rmtree(tmp)
+
+
+def test_plugin_update_and_terminal():
+    """A plugin updated after `since` makes the sessions opened before that update targets; --terminal sends to a
+    session that looks current, with a warning, and with nothing queued."""
+    import importlib, unittest.mock as mock
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    fake = tmp / "orca"
+    fake.write_text(FAKE_ORCA); fake.chmod(0o755)
+    st = tmp / "orca.json"
+    since_ms = 1790347142000  # 2026-09-25T23:39:02+0900
+    update_ms = since_ms + 3_600_000  # a plugin updated an hour after agent-skills changed
+    installed = tmp / "installed_plugins.json"
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(update_ms / 1000))
+    installed.write_text(json.dumps({"version": 2, "plugins": {
+        "other@market": [{"scope": "user", "version": "3.6.12", "lastUpdated": stamp}],
+        "broken@market": [{"scope": "user", "lastUpdated": "not a time"}, {"scope": "user"}]}}))
+
+    def idle(wt):
+        return {"agentIdentity": "claude", "connected": True, "writable": True, "title": "✳ a", "screens": [IDLE], "worktreeId": wt}
+    terms = {"before": idle("wt-before"), "between": idle("wt-between"), "after": idle("wt-after")}
+    worktrees = [{"worktreeId": "wt-before", "createdAt": since_ms - 1},
+                 {"worktreeId": "wt-between", "createdAt": since_ms + 1000},
+                 {"worktreeId": "wt-after", "createdAt": update_ms + 1000}]
+    listed = [dict(t, handle=h) for h, t in terms.items()]
+    since = "2026-09-25T23:39:02+0900"
+    env = dict(AGENT_SKILLS_STATE=str(tmp / "state"), SKILLS_SYNC_ORCA=str(fake), FAKE_ORCA_STATE=str(st),
+               SKILLS_SYNC_SETTLE_S="0", SKILLS_SYNC_CONFIRM_S="0", AGENT_SKILLS_INSTALLED_PLUGINS=str(installed))
+    (tmp / "state").mkdir()
+    old = {k: os.environ.get(k) for k in env}
+    os.environ.update(env)
+    importlib.reload(sync)
+    try:
+        with mock.patch.object(sync, "orca", return_value={"worktrees": worktrees}):
+            newer = sync.opened_after(since, listed)
+        check("a session opened between the change and a later plugin update is still a target",
+              newer == {"after"}, newer)
+        read = getattr(sync, "plugins_updated", lambda: None)()
+        check("the latest plugin update is read, unreadable stamps skipped",
+              read is not None and abs(read - update_ms / 1000) < 1, read)
+        os.environ["AGENT_SKILLS_INSTALLED_PLUGINS"] = str(tmp / "missing.json")
+        with mock.patch.object(sync, "orca", return_value={"worktrees": worktrees}):
+            newer = sync.opened_after(since, listed)
+        check("with no installed-plugins record only the change time counts", newer == {"between", "after"}, newer)
+        os.environ["AGENT_SKILLS_INSTALLED_PLUGINS"] = str(installed)
+
+        # --terminal alone: nothing pending and no kind given.
+        st.write_text(json.dumps({"terms": terms, "worktrees": worktrees, "sent": []}))
+        code = sync.broadcast(None, dry_run=False, only="before")
+        sent = json.loads(st.read_text())["sent"]
+        check("--terminal alone sends the reload with nothing pending",
+              code == 0 and sent == [["before", "/reload-plugins"]], (code, sent))
+        check("a named send queues nothing", not (tmp / "state" / "reload-pending.json").exists())
+
+        # --terminal on a session that opened after the change: sent anyway, one warning line.
+        st.write_text(json.dumps({"terms": terms, "worktrees": worktrees, "sent": []}))
+        head = subprocess.run(["git", "-C", str(HERE.parent), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        pending_file = tmp / "state" / "reload-pending.json"
+        pending_file.write_text(json.dumps({"kind": "skills", "since": since, "head": head, "done": ["after", "gone"],
+                                            "failed": {"busy": {"reason": "typing"}}}))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = sync.broadcast(None, dry_run=False, only="after")
+        sent = json.loads(st.read_text())["sent"]
+        kept = json.loads(pending_file.read_text())
+        check("--terminal sends to a session that looks current, even one marked done, with a warning",
+              code == 0 and sent[0][0] == "after" and len(sent) == 1 and out.getvalue().count("warning") == 1,
+              (code, sent, out.getvalue()))
+        check("a plugin updated after the change raises the queued skills reload to plugins",
+              sent == [["after", "/reload-plugins"]], sent)
+        check("the send saves the raised kind, clears done for the new update and keeps the failed entries",
+              kept["kind"] == "plugins" and kept["done"] == ["after"] and kept["plugins_at"] > 0
+              and kept["failed"] == {"busy": {"reason": "typing"}}, kept)
+        # The named session cannot be reached: it leaves done and is recorded as failed, the rest stays.
+        cur = json.loads(st.read_text())
+        cur["terms"]["after"]["screens"] = [PERMISSION]
+        st.write_text(json.dumps(cur))
+        pending_file.write_text(json.dumps({"kind": "skills", "since": since, "head": head, "done": ["after", "gone"]}))
+        with contextlib.redirect_stdout(io.StringIO()):
+            code = sync.broadcast(None, dry_run=False, only="after")
+        kept = json.loads(pending_file.read_text())
+        check("a named send that fails leaves the target pending",
+              code == 1 and kept["done"] == [] and set(kept["failed"]) == {"after"}, kept)
+        os.environ["AGENT_SKILLS_INSTALLED_PLUGINS"] = str(tmp / "missing.json")
+        cur["terms"]["after"]["screens"] = [IDLE]; cur["sent"] = []
+        st.write_text(json.dumps(cur))
+        pending_file.write_text(json.dumps({"kind": "skills", "since": since, "head": head, "done": []}))
+        with contextlib.redirect_stdout(io.StringIO()):
+            sync.broadcast(None, dry_run=False, only="after")
+        check("with no plugin update the queued skills reload stays skills",
+              json.loads(st.read_text())["sent"] == [["after", "/reload-skills"]], json.loads(st.read_text())["sent"])
+        # Still no plugin update: a named send ignores a done entry on its own, and a higher explicit kind drops the
+        # entries of those that got the lesser one.
+        pending_file.write_text(json.dumps({"kind": "skills", "since": since, "head": head, "done": ["after", "gone"]}))
+        cur["sent"] = []
+        st.write_text(json.dumps(cur))
+        with contextlib.redirect_stdout(io.StringIO()):
+            sync.broadcast(None, dry_run=False, only="after")
+        kept = json.loads(pending_file.read_text())
+        check("a named session already in done is sent to again with no plugin update",
+              json.loads(st.read_text())["sent"] == [["after", "/reload-skills"]] and kept["done"] == ["after", "gone"],
+              (json.loads(st.read_text())["sent"], kept))
+        cur["sent"] = []
+        st.write_text(json.dumps(cur))
+        with contextlib.redirect_stdout(io.StringIO()):
+            sync.broadcast("plugins", dry_run=False, only="after")
+        kept = json.loads(pending_file.read_text())
+        check("naming a higher kind saves it and drops the done entries that got the lesser one",
+              kept["kind"] == "plugins" and kept["done"] == ["after"], kept)
+        os.environ["AGENT_SKILLS_INSTALLED_PLUGINS"] = str(installed)  # a re-read would find the update and differ
+        with mock.patch.object(sync, "orca", return_value={"worktrees": worktrees}):
+            fixed = sync.opened_after(since, listed, 0)
+        check("opened_after uses the stamp it is given, not a later read", fixed == {"between", "after"}, fixed)
+        os.environ["AGENT_SKILLS_INSTALLED_PLUGINS"] = str(installed)
+        # One malformed plugin entry, and an unreadable file, must not hide the good ones or crash.
+        installed.write_text(json.dumps({"plugins": {"bad": None, "num": 3, "good": [{"lastUpdated": stamp}]}}))
+        check("a malformed plugin entry does not hide the others", abs(sync.plugins_updated() - update_ms / 1000) < 1)
+        installed.chmod(0)
+        try:
+            unreadable = sync.plugins_updated()
+        finally:
+            installed.chmod(0o644)
+        check("an unreadable record counts as no plugin update", unreadable == 0, unreadable)
+
+        # A broadcast to everyone, with the reload pending since the change.
+        st.write_text(json.dumps({"terms": terms, "worktrees": worktrees, "sent": []}))
+        pending_file.write_text(json.dumps({"kind": "plugins", "since": since, "done": [], "head": head}))
+        sync.broadcast(None, dry_run=False)
+        sent = json.loads(st.read_text())["sent"]
+        check("a plugin updated after the change puts the sessions opened before it in the broadcast",
+              sorted(h for h, _ in sent) == ["before", "between"], sent)
+        # A session done under a skills reload before the plugin update gets the plugins reload too.
+        st.write_text(json.dumps({"terms": terms, "worktrees": worktrees, "sent": []}))
+        pending_file.write_text(json.dumps({"kind": "skills", "since": since, "done": ["before"], "head": head}))
+        sync.broadcast(None, dry_run=False)
+        sent = json.loads(st.read_text())["sent"]
+        check("a session done before the plugin update is sent the plugins reload again",
+              sorted(sent) == [["before", "/reload-plugins"], ["between", "/reload-plugins"]], sent)
+    finally:
+        for k, v in old.items():
+            os.environ.pop(k) if v is None else os.environ.__setitem__(k, v)
+        importlib.reload(sync)
+        shutil.rmtree(tmp)
 
 
 def test_running():
@@ -1000,6 +1144,7 @@ if __name__ == "__main__":
     test_confirm()
     test_sync()
     test_broadcast()
+    test_plugin_update_and_terminal()
     test_running()
     test_stale_signal()
     test_restart()

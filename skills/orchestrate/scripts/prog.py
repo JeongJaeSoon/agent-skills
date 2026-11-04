@@ -65,7 +65,9 @@ Usage: orch <command> <slug> [options]
                                      (compose-stack) so the janitor downs it once the card is done
   wait <slug> [--timeout-ms 540000] [--rounds 3]
                                      lead only: block until the Run inbox holds actionable
-                                     mail; acks heartbeat-only batches; never acks actionable ones
+                                     mail; acks heartbeat-only batches; never acks actionable ones.
+                                     With orchestrate.auto_wake_min it wakes a stopped worker once
+                                     (references/waking.md, "Automatic wake")
   inbox [--ack DELIVERY] [--wait] [--timeout-ms 3300000]
                                      no slug, a session without a program: ack the batch you handled,
                                      peek-wait (no --types, so Orca's typed notice stays out), then
@@ -84,15 +86,21 @@ Usage: orch <command> <slug> [options]
                                      as a dispatched worker (Nested worker depth >= 3) or a /goal card, a
                                      one-line proposal per setting to change, and this terminal's Run
                                      (orca_settings.py)
+  model lead|worker                  no slug: the role's model from orchestrate.models; prints nothing when unset
   decide add --title T [--body-file F] [--option "label::description"]... [--recommend N] [--link URL]
-  decide list | done <id> [--answer TEXT] | drop <id> | keep <id>
+  decide answer <id> | --title T  (--quote TEXT | --quote-file F) [--by SESSION]
+  decide list | show <id> | done <id> [--answer TEXT] | drop <id> | keep <id>
                                      no slug: a decision you wait on the human for, shown on the fleet
                                      dashboard until done or dropped; add prints its id. Each option is a
                                      button that closes it with that answer, then types
                                      "decision <id>: <label>" into this terminal once it is idle. keep: you
                                      checked it and it still stands (checked_at); the brief counts one
-                                     unchecked for board.decision_stale_h hours as 오래된 결정. Decisions
-                                     live in agent-skills.db; before `orch db import` they stop with that
+                                     unchecked for board.decision_stale_h hours as 오래된 결정. answer records
+                                     the owner's words as given, with the time and the session (--by, else
+                                     this terminal), and prints the line to quote; --title records an order
+                                     nobody asked for. A quote over the limit is refused, never cut. show
+                                     prints that line again. Decisions live in agent-skills.db, or in
+                                     decisions.json while no DB file exists; a DB not imported yet stops with that
   db import [--dry-run | --apply] [--rehearsal] | export --legacy --target pre-4a DIR | dump [TABLE]
   db backup FILE | restore FILE [--rehearsal] | cutover-plan 4a|4b
                                      no slug: agent-skills.db (store.py). import moves decisions.json in
@@ -159,7 +167,11 @@ Usage: orch <command> <slug> [options]
                                      page (`orch stage show` while the dashboard is down); --periodic adds
                                      --skipped and the last reap. The model gives only --headline (a sentence),
                                      --decision ("<question>: <options> → 추천: X — <reason> · 답이 없으면 Y",
-                                     numbered after the registered ones) and --insight (after 진행 중). state.json
+                                     registered on the spot, so it shows with its id; the same words again
+                                     are the same decision, and one answered within 24 h is not asked again.
+                                     If it cannot be registered the report still prints, with a warning line
+                                     above it, the item marked (미등록), and exit 1. --now registers nothing)
+                                     and --insight (after 진행 중). state.json
                                      older than 5 min ("state_min") is collected again first unless --now or
                                      --no-refresh; a failed collect is in the headline with the files' age. --commit
                                      saves this table as the last one (after sending). Staleness: a row past 90
@@ -325,6 +337,16 @@ class Program:
         row = {"ts": now(), "ev": ev, **{k: v for k, v in fields.items() if v is not None}}
         with self.locked(), self.ledger_path.open("a") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        return row
+
+    def append_once(self, ev, seen, **fields):
+        """append, unless a row already satisfies seen; None then. One lock over both, or two rounds both pass."""
+        row = {"ts": now(), "ev": ev, **{k: v for k, v in fields.items() if v is not None}}
+        with self.locked():
+            if any(seen(e) for e in self.events()):
+                return None
+            with self.ledger_path.open("a") as f:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
         return row
 
 
@@ -1155,19 +1177,60 @@ def no_ci_repo(repo):
     return isinstance(repos, list) and repo in repos
 
 
+def check_run_id(c):
+    url = c.get("detailsUrl") or c.get("targetUrl") or ""
+    return url.split("/actions/runs/")[1].split("/")[0] if "/actions/runs/" in url else ""
+
+
+def latest_checks(rollup):
+    """The newest entry of each check. A head keeps every run started at it, so a run superseded by a PR edit
+    (cancel-in-progress) stays in the rollup as CANCELLED beside the run that replaced it. The workflow is part of the
+    check's identity: one workflow's pass must not hide another's failure under the same job name. A check still going
+    outranks a finished one, since a queued run has no start time and an older pass must not stand in for it. Start
+    time decides before the run id, as a rerun keeps its old, lower id. A check that never started is older than a start
+    after its end; past that its end says nothing, so only the run id places it against the started ones."""
+    def started(c):
+        t = c.get("startedAt") or ""  # gh prints the zero time for a check that never started
+        return "" if t.startswith("0001-") else t
+
+    def going(c):
+        return (c.get("status") or "COMPLETED").upper() != "COMPLETED"
+
+    def run(c):
+        r = check_run_id(c)
+        return int(r) if r.isdigit() else 0
+
+    def newest(checks):
+        timed = [c for c in checks if started(c)]
+        # Starts in one second are unordered and the id cannot settle them, so a pass does not win that tie.
+        rank = lambda c: (going(c), started(c), (c.get("conclusion") or "").upper() not in PASSING, run(c))
+        best = [max(timed, key=rank)] if timed else []
+        rest = [c for c in checks if not started(c)
+                and not (best and not going(c) and (c.get("completedAt") or "~") < started(best[0]))]
+        return max(best + rest, key=lambda c: (going(c), run(c)))
+    groups = {}
+    for c in rollup:
+        groups.setdefault((c.get("workflowName"), c.get("name") or c.get("context")), []).append(c)
+    kept = []
+    for checks in groups.values():
+        last = newest(checks)
+        # Only another run replaces a job: two jobs of one run may share a display name.
+        kept += [c for c in checks if c is last or (run(last) and run(c) == run(last))]
+    return kept
+
+
 def ci_summary(rollup, no_ci=False):
     # No checks on a head usually means CI has not reported yet, so it never counts as green. Only a declared no-CI
     # repo reads a confirmed empty rollup as nothing to wait for; a missing one stays unknown.
     if not rollup:
         return [], [] if no_ci and rollup is not None else ["no CI checks reported yet"], []
     failed, pending, runs = [], [], set()
-    for c in rollup or []:
+    for c in latest_checks(rollup):
         name = c.get("name") or c.get("context")
         concl = (c.get("conclusion") or c.get("state") or "").upper()
         status = (c.get("status") or "COMPLETED").upper()
-        url = c.get("detailsUrl") or c.get("targetUrl") or ""
-        if "/actions/runs/" in url:
-            runs.add(url.split("/actions/runs/")[1].split("/")[0])
+        if run := check_run_id(c):
+            runs.add(run)
         if status != "COMPLETED" or concl in ("", "PENDING", "EXPECTED"):
             pending.append(name)
         elif concl not in PASSING:
@@ -1361,9 +1424,10 @@ def stall_line(x):
     return f"  STALLED {x.get('ticket') or '?'} ({x['dispatch']}): " + STALL_TEXT[x["kind"]].format(**{"tool": "", "detail": "", **x})
 
 
-def new_stalls(pdir, renotify=dt.timedelta(minutes=30)):
+def new_stalls(pdir, renotify=dt.timedelta(minutes=30), skip=frozenset()):
     """STALLED lines `orch wait` has not shown in the last 30 minutes. A lead that only loops `orch wait`
-    never reads `orch status`, so a stall shown only there went unseen for hours."""
+    never reads `orch status`, so a stall shown only there went unseen for hours. skip: dispatches auto-wake holds,
+    so the lead is not told to wake them beside it."""
     st = dash_state(pdir)
     if st is None:
         return []
@@ -1373,7 +1437,7 @@ def new_stalls(pdir, renotify=dt.timedelta(minutes=30)):
     except (OSError, ValueError):
         seen = {}
     seen = seen if isinstance(seen, dict) else {}
-    stalls = (st.get("summary") or {}).get("stalls") or []
+    stalls = [x for x in (st.get("summary") or {}).get("stalls") or [] if x["dispatch"] not in skip]
     fresh = [x for x in stalls if f"{x['dispatch']}:{x['kind']}" not in seen
              or now - parse_ts(seen[f"{x['dispatch']}:{x['kind']}"]) >= renotify]
     keep = {f"{x['dispatch']}:{x['kind']}": seen.get(f"{x['dispatch']}:{x['kind']}") for x in stalls}
@@ -1703,7 +1767,8 @@ def next_move(cfg, events, tnow, *, tickets_done, live, human, order, leftover=0
 
 OWNED = {"approved": "land, gate", "gate_opened": "gate", "landed": "land, landed", "land_check": "land",
          "land_failed": "land", "ready": "land-check", "lane": "land", "yield": "land",
-         "lock_acquired": "land", "lock_released": "land", "dep": "dep", "config": "set"}
+         "lock_acquired": "land", "lock_released": "land", "dep": "dep", "config": "set",
+         "auto_wake_claimed": "wait", "auto_wake": "wait", "auto_wake_failed": "wait", "auto_wake_escalated": "wait"}
 
 
 # land_failed, main_red and failed verdicts are already in the ledger; a signal records what only the lead sees.
@@ -2795,6 +2860,14 @@ def judge_wait(waited, lines, activity=None):
     return None if hit and waited is None and hit[0] not in NOT_A_WAIT else hit
 
 
+def sweeps_screen(w):
+    """A worker whose agent may still be at work: active, or retained (Orca keeps the terminal of a card someone typed
+    into, a `terminal send` nudge included) and not yet settled. Reclaimable, released and release_unknown rows are
+    done; so is a retained row that succeeded or failed. A retained row with no workerState is read, not skipped."""
+    state = w.get("terminalState")
+    return state == "active" or (state == "retained" and w.get("workerState") not in ("succeeded", "failed"))
+
+
 def stuck_sweep(workers, slug, seen, read=read_screen, only_new=False, waits=None):
     """A worker's terminal has no human watching it: a menu or permission prompt there blocked a program for hours.
     Orca's agentWait decides first; the screen is read for what it does not cover (disk, API retries), and for every
@@ -2803,7 +2876,7 @@ def stuck_sweep(workers, slug, seen, read=read_screen, only_new=False, waits=Non
     waits = agent_waits() if waits is None else waits
     for w in workers:
         d, h = w.get("dispatchId"), worker_terminal(w)
-        if w.get("terminalState") != "active" or not d or not h:
+        if not sweeps_screen(w) or not d or not h:
             continue
         waited = waits.get(h, NOT_LOOKED)
         try:
@@ -2996,10 +3069,25 @@ def cmd_wait(argv):
         print(line, flush=True)
     if watched := watch_lines(me, False):
         print("\n".join(watched), flush=True)
+    import autowake
+    auto_min = autowake.minutes()
+
+    def auto_round():
+        try:
+            r = autowake.sweep(p, auto_min) if auto_min else autowake.Round()
+        except (SystemExit, Exception) as e:  # the batch and its ack line matter more than the sweep
+            r = autowake.Round(lines=[f"auto-wake failed ({type(e).__name__}: {e}); STALLED lines stay the lead's"])
+        if r.lines:
+            print("\n".join(r.lines), flush=True)
+        return r
+
     for i in range(rounds):
         if wakes := wake_lines(me):  # before the wait: a busy inbox returns early and must not hide these
             print("\n".join(wakes), flush=True)
-        res = check(*box, "--wait", "--types", ",".join(sorted(ACTIONABLE)), "--timeout-ms", timeout)
+        auto = auto_round()  # here too: busy mail returns before the empty branch below and would starve a wake
+        if auto.stop:
+            return
+        res = check(*box, "--wait", "--types", ",".join(sorted(ACTIONABLE)), "--timeout-ms", auto.timeout_ms(timeout))
         did, msgs = batch(res)
         if not did and not msgs:
             # A typed wait never wakes for heartbeats, so they pile up in the FIFO; pull that batch.
@@ -3033,8 +3121,13 @@ def cmd_wait(argv):
             return
         if leftovers := new_leftovers(p.dir):
             print("\n".join(leftovers), flush=True)
-        if stalled := new_stalls(p.dir):
+        auto = auto_round()
+        if auto.stop:
+            return
+        if stalled := new_stalls(p.dir, skip=auto.skip):
             print("\n".join(stalled), flush=True)
+            if not auto_min:
+                print(autowake.OFF_LINE, flush=True)
             print("STALLED: a worker stopped with its ticket open and nothing will wake it; wake it now", flush=True)
             return
         if watched := watch_lines(me, False):  # each shows at most once per 30 minutes, so this ends no wait twice
@@ -3044,7 +3137,7 @@ def cmd_wait(argv):
     print_sweep(run_id, p.dir / "self-check.json")
     print_stuck(p, run_id)
     print_reviews(p)
-    moves = next_moves(run_workers(run_id))
+    moves = next_moves(run_workers(run_id), auto.skip)
     print("\n".join([f"EMPTY x{rounds}: " + (f"{len(moves)} live worker(s), each with its move:" if moves else "no live worker")]
                     + moves))
 
@@ -3138,9 +3231,9 @@ def cmd_inbox(argv):
         print("inbox empty" + (f" ({skipped} heartbeat(s) or refusals acked)" if skipped else "") + "; wait again: orch inbox --wait")
 
 
-def next_moves(workers):
+def next_moves(workers, auto=frozenset()):
     """The move for each live worker after a wait that stayed empty, read from Orca's projection here so the
-    lead does not list the workers and work it out again."""
+    lead does not list the workers and work it out again. auto: dispatches auto-wake holds."""
     out = []
     for w in workers:
         pj = w.get("projection") or {}
@@ -3152,6 +3245,8 @@ def next_moves(workers):
             out.append(f"  {d} {act['kind']}: {' '.join(act.get('argv') or [])}")
         elif not h or (pj.get("liveness") or {}).get("verdict") == "exited":
             out.append(f"  {d} no terminal: worker-stop or worker-abandon (recovery-and-cleanup.md)")
+        elif activity in ("idle", "done") and d in auto:
+            out.append(f"  {d} {activity}: auto-wake holds it (orch wait)")
         elif activity == "idle":  # the turn ended without worker_done; send alone does not wake it (SKILL.md, terminal send)
             out.append(f"  {d} idle: orchestration send --to dispatch:{d}, then skills-sync wake-target {h}")
         elif activity == "working":
@@ -3328,19 +3423,47 @@ def cmd_decide(argv):
                     print(f"    {i}. {o['label']}{mark}" + (f" — {o['description']}" if o["description"] else ""))
             for d in fleet.pending_relays():
                 print(f"{d['id']}  answered on the dashboard, not relayed yet: {d.get('answer')}  ({d['title']})")
+        elif sub == "answer":
+            did = rest[0] if rest and not rest[0].startswith("--") else None
+            title, quote_file = opt(rest, "--title"), opt(rest, "--quote-file")
+            quote = pathlib.Path(quote_file).read_text() if quote_file else opt(rest, "--quote")
+            if quote is None or (did is None) == (title is None):
+                sys.exit("usage: orch decide answer <id> | --title T, with --quote TEXT | --quote-file F [--by SESSION]")
+            d = fleet.decision_quote(did, quote, opt(rest, "--by") or os.environ.get("ORCA_TERMINAL_HANDLE"), title)
+            d = store.decision_record(d["id"])
+            if d.get("answer") != fleet.mask(quote):
+                print(f"{d['id']} keeps the answer it already had; this quote was not stored", file=sys.stderr)
+            print(fleet.decision_cite(d))
+        elif sub == "show" and rest:
+            d = store.decision_record(rest[0])
+            if not d:
+                sys.exit(f"no decision {rest[0]}")
+            print(fleet.decision_cite(d) if d["status"] == "done" else f"{d['id']} {d['status']}")
+            print(f"  {d['title']}")
+            if "\n" in (d.get("answer") or ""):
+                print(d["answer"])
         elif sub in ("done", "drop") and rest:
-            d = fleet.decision_close(rest[0], "done" if sub == "done" else "dropped", opt(rest, "--answer"))
+            d = fleet.decision_close(rest[0], "done" if sub == "done" else "dropped", opt(rest, "--answer"),
+                                     by=os.environ.get("ORCA_TERMINAL_HANDLE"))
             print(f"{d['id']} {d['status']}")
         elif sub == "keep" and rest:
             d = fleet.decision_keep(rest[0])
             print(f"{d['id']} checked {d['checked_at']}")
         else:
             sys.exit("usage: orch decide add --title T [--body-file F] [--option 'label::description']... [--recommend N] "
-                     "[--link URL] | list | done <id> [--answer TEXT] | drop <id> | keep <id>")
+                     "[--link URL] | list | show <id> | answer <id>|--title T --quote TEXT|--quote-file F [--by SESSION] | "
+                     "done <id> [--answer TEXT] | drop <id> | keep <id>")
     except store.NotMigrated as e:
         sys.exit(f"decisions are not in {store.DB_NAME} yet ({e}); orch db cutover-plan 4a lists the steps")
     except (ValueError, OSError) as e:
         sys.exit(str(e))
+
+
+def cmd_model(argv):
+    import orca_settings
+    if argv not in (["lead"], ["worker"]):
+        sys.exit("usage: orch model lead|worker")
+    print(orca_settings.role_model(argv[0]) or "")
 
 
 def cmd_db(argv):
@@ -3481,6 +3604,23 @@ def cmd_board(argv):
         print(warning, file=sys.stderr)
 
 
+def register_decisions(items):
+    """Register a brief's --decision items; registered ones render from the store with their id. Returns the items
+    still to print as given, marked unregistered, and the warning line, or None. A store that fails must not cost the
+    report: it is how the owner hears of everything else, so every failure lands here."""
+    import fleet
+    left, errors = [], []
+    for item in items:
+        try:
+            d, answered = fleet.decision_ensure(item, os.environ.get("ORCA_TERMINAL_HANDLE"))
+            if answered:
+                print(f"--decision skipped: {d['id']} already has its answer (orch decide show {d['id']})", file=sys.stderr)
+        except Exception as e:
+            left.append(f"(미등록) {item}")
+            errors.append(str(e))
+    return left, f"⚠️ 결정 등록 실패 {len(left)}건: {errors[0]}" if errors else None
+
+
 def cmd_brief(argv):
     import board
     if argv[:1] != ["render"]:
@@ -3489,20 +3629,29 @@ def cmd_brief(argv):
     now = opt(argv, "--now")
     scope = opt(argv, "--scope", "top-level")
     fill = "--no-fill" not in argv  # --fill, the old opt-in, is now the default and still accepted
+    items = [argv[i + 1] for i, a in enumerate(argv[:-1]) if a == "--decision"]
+    failed = None
+    if not now:  # --now replays a past moment; only a report of this moment is sent
+        if any("→ 추천:" not in d for d in items):
+            sys.exit(f"--decision is one line: {board.DECISION_FORM}")
+        items, failed = register_decisions(items)
     try:
         out = board.render(scope, "telegram" if "--telegram" in argv else "terminal", now and fleet_parse(now),
                            opt(argv, "--headline"), opt(argv, "--skipped"), fill, periodic="--periodic" in argv,
-                           decisions=[argv[i + 1] for i, a in enumerate(argv[:-1]) if a == "--decision"],
-                           insight=opt(argv, "--insight"),
+                           decisions=items, insight=opt(argv, "--insight"),
                            # --now replays a past moment, so the fleet as it is now does not belong in it
                            fresh=not now and "--no-refresh" not in argv)
     except ValueError as e:
         sys.exit(str(e))
+    if failed:
+        print(failed, file=sys.stderr if "--json" in argv else sys.stdout)
     print(json.dumps(out, ensure_ascii=False, indent=1) if "--json" in argv else out["text"])
     if "--commit" in argv:
         board.commit(scope, out["snapshot"])
     if not out["width_ok"]:
         sys.exit("a table is wider than 78 columns")
+    if failed:
+        sys.exit(1)
 
 
 def fleet_parse(s):
@@ -3587,7 +3736,7 @@ def cmd_sent(argv):
 COMMANDS = {"init": cmd_init, "set": cmd_set, "status": cmd_status, "record": cmd_record, "verdict": cmd_verdict,
             "gate": cmd_gate, "dep": cmd_dep, "queue": cmd_queue, "overlap": cmd_overlap, "land": cmd_land, "land-check": cmd_land_check,
             "landed": cmd_landed, "heavy": cmd_heavy, "wait": cmd_wait, "inbox": cmd_inbox, "backfill": cmd_backfill, "decide": cmd_decide,
-            "db": cmd_db,
+            "db": cmd_db, "model": cmd_model,
             "stage": cmd_stage, "board": cmd_board, "brief": cmd_brief, "hold": cmd_hold, "sent": cmd_sent, "release": lambda argv: cmd_hold(argv, release=True),
             "watch-cards": lambda argv: __import__("card_watch").main(argv),
             "patrol": lambda argv: __import__("patrol").main(argv),

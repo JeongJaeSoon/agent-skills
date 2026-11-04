@@ -1,0 +1,11 @@
+{
+  "id": "fcb00234-056a-46c9-92d7-dd11047cbdea",
+  "ok": true,
+  "result": {
+    "result": "true",
+    "origin": "http://127.0.0.1:18765/index.html"
+  },
+  "_meta": {
+    "runtimeId": "98b77a6d-7728-49bd-b85f-526a5ef0d817"
+  }
+}

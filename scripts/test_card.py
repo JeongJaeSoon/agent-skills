@@ -117,6 +117,11 @@ SETUPS = []
 REAL_START_CLOSE_SETUP = card.start_close_setup
 card.start_close_setup = lambda path, handle, name: SETUPS.append((path, handle, name)) or {"log": f"{name}.log"}
 
+# The detached /goal helper would outlive the test: recorded instead, and run in-process by the tests of goal_after_idle.
+GOALS = []
+REAL_START_GOAL_INPUT = card.start_goal_input
+card.start_goal_input = lambda handle, line, name: GOALS.append((handle, line, name)) or {"log": f"{name}.goal.log"}
+
 ORCA_DATA = tmp / "orca-data"  # never the real Orca profile store
 os.environ["AGENT_SKILLS_ORCA_DATA_DIR"] = str(ORCA_DATA)
 
@@ -282,7 +287,7 @@ rc, out, err, calls = go(brief("/goal fix X. 브리프: ~/notes/x.md\nPROGRAM: a
 p = prompt_of(calls)
 assert rc == 0 and p.splitlines()[:2] == ["/goal fix X. 브리프: ~/notes/x.md", "PROGRAM: acme"], p
 
-# A brief reporting to a Run, from a session bound to one: a supervised worker. Its spec drops the leading /goal, the
+# A brief reporting to a Run, from a session bound to one: a supervised worker. Its spec keeps the /goal line, the
 # display name goes on the start, the ticket is linked on that new card only, and no Sent line is written.
 SUPERVISED = WORKER + "REPORT: orca orchestration send --to run:run_me --type status at each milestone\n"
 URL = "https://linear.app/acme/issue/ABC-1"
@@ -291,14 +296,41 @@ rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "name:acme", "--
 assert rc == 0, err
 start = next(c["argv"] for c in calls if c["argv"][:2] == ["orchestration", "worker-start"])
 spec = start[start.index("--spec") + 1]
-assert spec.startswith("ship the helper and open its PR 브리프:") and "/goal" not in spec.splitlines()[0], spec
+assert spec.splitlines()[0] == f"/goal ship the helper and open its PR 브리프: {tmp / 'sup.md'}", spec
 assert start[start.index("--worktree") + 1] == "new-child" and start[start.index("--display-name") + 1] == "ABC-1 helper"
 assert start[start.index("--timeout-ms") + 1] == "840000", start
 assert [c["argv"] for c in calls if c["argv"][:2] == ["reference", "add"]] == [["reference", "add", URL, "--worktree", f"path:{CARD_DIR}", "--json"]]
 assert not any(c["bin"] == "orch" for c in calls) and not any(c["argv"][:2] == ["worktree", "create"] for c in calls)
 assert json.loads(out)["card"] == {"kind": "worker", "path": str(CARD_DIR), "handle": "term_w", "run": {"id": "run_me"},
                                    "parent": "id:repo1::/wt/me", "forbidden": "inserted",
-                                   "close_setup": {"log": "abc-1.log"}}, out
+                                   "close_setup": {"log": "abc-1.log"}, "model": None,
+                                   "goal_input": {"log": "abc-1.goal.log"}}, out
+# The worker's /goal line is not left to the spec: a detached helper types it once the first turn ends.
+assert GOALS == [("term_w", f"/goal ship the helper and open its PR 브리프: {tmp / 'sup.md'}", "abc-1")], GOALS
+# Regression (a): a brief whose REPORT is `run:` goes out as a worker, and the spec it hands worker-start keeps the
+# /goal line as its first line. (b): the FORBIDDEN section (markers included, a stale copy replaced by the current
+# paragraph, a line after a blank line too) and every REPORT row reach the prompt, on both paths.
+GOAL_LINE = "/goal ship the helper and open its PR"
+PARA_NOW = card.forbidden_paragraph()
+FULL = (f"# card brief\n\n{GOAL_LINE}\n\nAPPROVED: push and PR (owner, 2026-01-01)\n\n{CLOSE}\n"
+        f"FORBIDDEN   {card.BEGIN}\n            a stale paragraph.\n            {card.END}\n"
+        "            A repository's own ban.\n\n            Never run the thing; wait instead.\n\n\n"
+        "            Never publish data, even after two blank lines.\n"
+        "REPORT      worker_done once, at READY, to run:run_me.\n            Body: what changed.\n"
+        "REPORT: orca orchestration send --to run:run_me --type status\n")
+rc, out, err, calls = go(brief(FULL, "full.md"), "--repo", "r", "--name", "full")
+assert rc == 0, err
+spec = next(c["argv"][c["argv"].index("--spec") + 1] for c in calls if c["argv"][:2] == ["orchestration", "worker-start"])
+rc, out, err, calls = go(brief(FULL, "full-card.md"), "--repo", "r", "--name", "full-card", "--card")
+assert rc == 0, err
+for how, text in (("worker spec", spec), ("card prompt", prompt_of(calls))):
+    assert text.splitlines()[0].startswith(GOAL_LINE), (how, text)
+    assert all(l.strip() in text for l in PARA_NOW), (how, "the current FORBIDDEN paragraph is cut", text)
+    assert card.BEGIN in text and card.END in text and "a stale paragraph" not in text, (how, text)
+    assert "A repository's own ban." in text and "Never run the thing; wait instead." in text, (how, text)
+    assert "Never publish data, even after two blank lines." in text, (how, text)
+    assert text.count("REPORT") >= 2 and "Body: what changed." in text, (how, text)
+    assert "orca orchestration send --to run:run_me --type status" in text, (how, text)
 # A failed reference after the start is exit 5: the worker runs, so it is not started again.
 rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", "--reference", URL, mode="ref-fails")
 assert rc == 5 and "Do not create it again" in err and json.loads(out)["card"]["kind"] == "worker", (rc, err)
@@ -369,7 +401,7 @@ rc, out, err, calls = go(brief(LEAD_RUN, "lead-run.md"), "--repo", "r", "--name"
 start = next(c["argv"] for c in calls if c["argv"][:2] == ["orchestration", "worker-start"])
 spec = start[start.index("--spec") + 1]
 assert rc == 0 and start[start.index("--worktree") + 1] == "new-child", (rc, err, calls)
-assert spec.startswith("run the acme program") and "ROLE: lead acme" in spec and "DELEGATE " in spec and "CLOSE " in spec, spec
+assert spec.startswith("/goal run the acme program") and "ROLE: lead acme" in spec and "DELEGATE " in spec and "CLOSE " in spec, spec
 assert "MERGE       merge_policy autonomous" in spec, spec
 for depth, want in ((2, "Nested worker depth"), (None, "unread")):
     orca_depth(depth)
@@ -634,5 +666,181 @@ for bad, why in (("/goal x\n", "no CLOSE or KEEP row"), (f"{CLOSE}\n", "no `/goa
     results = [go(brief(bad, "a5.md"), "--repo", "r", "--name", "a5", *extra) for extra in ([], ["--agent", "codex"])]
     assert [r[0] for r in results] == [2, 2] and why in results[1][2] and not creates(results[1][3]), results
     assert results[0][2] == results[1][2], results
+
+
+# The session's model.
+def model_of(calls):
+    argv = creates(calls)[0]
+    return argv[argv.index("--model") + 1] if "--model" in argv else None
+
+
+rc, out, err, calls = go(brief(WORKER, "m.md"), "--repo", "r", "--name", "m0", "--no-parent")
+assert rc == 0 and model_of(calls) is None and "orchestrate.models.worker is not set" in err, err
+
+models = tmp / "models.json"
+models.write_text(json.dumps({"orchestrate": {"models": {"lead": "opus", "worker": "sonnet"}}}))
+os.environ["AGENT_SKILLS_CONFIG"] = str(models)
+rc, out, err, calls = go(brief(WORKER, "m.md"), "--repo", "r", "--name", "m3", "--no-parent")
+assert rc == 0 and model_of(calls) == "sonnet" and json.loads(out)["card"]["model"] == "sonnet", calls
+assert "is not set" not in err, err
+rc, out, err, calls = go(brief(LEAD, "ml.md"), "--repo", "r", "--name", "m4", "--no-parent")
+assert rc == 0 and model_of(calls) == "opus", calls
+rc, out, err, calls = go(brief(WORKER, "m.md"), "--repo", "r", "--name", "m5", "--no-parent", "--model", "opus")
+assert rc == 0 and model_of(calls) == "opus", calls
+arn = "arn:aws:bedrock:us-east-1:000000000000:inference-profile/acme.model-v1:0"
+models.write_text(json.dumps({"orchestrate": {"models": {"worker": arn, "lead": "two words"}}}))
+assert card.orca_settings.role_model("worker") == arn and card.orca_settings.role_model("lead") is None
+models.write_text(json.dumps({"orchestrate": {"models": {"lead": "opus", "worker": "sonnet"}}}))
+worker_brief = brief(f"{WORKER}REPORT: orca orchestration send --to run:run_me --type status\n", "mw.md")
+rc, out, err, calls = go(worker_brief, "--repo", "r", "--name", "m6")
+assert rc == 0 and creates(calls)[0][:2] == ["orchestration", "worker-start"] and model_of(calls) == "sonnet", calls
+rc, out, err, calls = go(worker_brief, "--repo", "r", "--name", "m7", "--agent", "codex")
+assert rc == 0 and model_of(calls) is None and "is not set" not in err, (rc, err, calls)
+rc, out, err, calls = handoff("ABC-8", "--title", "next", "--note", "x")
+assert model_of(calls) == "sonnet", calls
+os.environ["AGENT_SKILLS_CONFIG"] = str(tmp / "none.json")
+
+# ---- the worker's /goal line: typed after the first turn ends, never before, never after a timed-out wait.
+GOALS.clear()
+rc, out, err, calls = go(worker_brief, "--repo", "r", "--name", "g1", "--agent", "codex")
+assert rc == 0 and not GOALS, ("a Codex worker has no /goal command", GOALS)
+rc, out, err, calls = go(brief(WORKER, "g2.md"), "--repo", "r", "--name", "g2", "--card")
+assert rc == 0 and not GOALS and "goal_input" not in json.loads(out)["card"], ("a /goal card gets it as its prompt", GOALS)
+rc, out, err, calls = go(worker_brief, "--repo", "r", "--name", "g3")
+assert rc == 0 and len(GOALS) == 1 and GOALS[0][0] == "term_w" and GOALS[0][1].startswith("/goal "), GOALS
+assert not any(c["argv"][:2] in (["terminal", "wait"], ["terminal", "send"]) for c in calls), \
+    ("card itself neither waits nor types: the helper is detached", calls)
+
+LINE = "/goal ship the helper and open its PR 브리프: /b.md"
+import sync  # noqa: E402  the helper types through sync.try_send; its answers are canned here
+REAL_TRY_SEND, REAL_SLEEP, SENDS, SLEPT = sync.try_send, card.time.sleep, [], []
+card.time.sleep = lambda s: SLEPT.append(s)
+
+
+REAL_TYPE = card.type_when_idle
+
+
+def run_helper(answers, timeout_s=3600):
+    """goal_after_idle with type_when_idle answering from `answers` in turn: None (typed) or a reason."""
+    queue = list(answers)
+    SENDS.clear()
+    card.type_when_idle = lambda handle, line, deadline=None: SENDS.append((handle, line)) or queue.pop(0)
+    err = io.StringIO()
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+        rc = card.goal_after_idle("term_w", LINE, timeout_s)
+    return rc, err.getvalue()
+
+
+BUSY_REASON = "turn in progress: ✶ Crunching… (running UserPromptSubmit hooks…)"
+# Idle only after two busy reads: nothing is typed before that, and the line goes out once.
+SLEPT.clear()
+rc, err = run_helper([BUSY_REASON, BUSY_REASON, None])
+assert rc == 0 and len(SENDS) == 3 and SLEPT == [card.GOAL_POLL_S] * 2 and not err, (rc, SENDS, SLEPT, err)
+assert all(s == ("term_w", LINE) for s in SENDS)
+# Past the limit: nothing more is tried, and the warning carries the manual command.
+real_monotonic = card.time.monotonic
+ticks = iter([0, 1, 2, 3, 100])  # the deadline, then one check before each attempt
+card.time.monotonic = lambda: next(ticks)
+try:
+    rc, err = run_helper([BUSY_REASON] * 5, timeout_s=50)
+finally:
+    card.time.monotonic = real_monotonic
+assert rc == 1 and len(SENDS) == 3 and "not typed into term_w" in err and "waited up to 50s" in err, (rc, SENDS, err)
+assert f"terminal send --terminal term_w --text '{LINE}' --enter" in err, err
+# A reason waiting will not change stops at once; a screen that never confirmed the line is not retyped.
+rc, err = run_helper(["orca terminal read failed: terminal_handle_stale"] * 3)
+assert rc == 1 and len(SENDS) == 1 and "not typed into term_w" in err, (rc, SENDS, err)
+rc, err = run_helper([sync.UNCONFIRMED, None])
+assert rc == 1 and len(SENDS) == 1 and "Read the screen before typing it again" in err, (rc, SENDS, err)
+card.type_when_idle = lambda handle, line, deadline=None: None
+with contextlib.redirect_stdout(io.StringIO()):
+    assert card.main(["goal-after-idle", "term_w", LINE]) == 0  # the entry point start_goal_input launches
+card.type_when_idle = REAL_TYPE
+
+# type_when_idle on canned screens, through the real sync.classify. The tab title is the session's topic, not `✳`.
+RULE = "─" * 40
+STATUS = "  ⏵⏵ auto mode on (shift+tab to cycle)"
+IDLE = ["⏺ GOAL-DEMO-OK", "✻ Churned for 17s · done 12:08 AM", RULE, "❯ ", RULE, STATUS]
+RUNNING = ["⏺ Reading the brief.", "✶ Crunching… (running UserPromptSubmit hooks… 3/4 · 0s)", RULE, "❯ ", RULE, STATUS]
+TAKEN = ["❯ " + LINE, "✶ Thinking… (1s)", RULE, "❯ ", RULE, STATUS]
+SCREENS, TYPED, SEND_FAILS = [], [], []
+
+
+def fake_orca(*args):
+    if args[:2] == ("terminal", "show"):
+        return {"terminal": {"agentIdentity": "claude", "connected": True, "writable": True,
+                             "title": "GOAL-DEMO-OK 워커 브리프 실행"}}
+    if args[:2] == ("terminal", "read"):
+        return {"terminal": {"tail": SCREENS.pop(0) if len(SCREENS) > 1 else SCREENS[0]}}
+    if SEND_FAILS:
+        raise sync.Stop("orca terminal send failed: timed out")
+    TYPED.append(args)
+    return {}
+
+
+real_orca = sync.orca
+sync.orca = fake_orca
+sync.SETTLE_S = sync.CONFIRM_S = 0
+try:
+    TYPED.clear(); SCREENS[:] = [RUNNING]
+    assert card.type_when_idle("term_w", LINE).startswith("turn in progress") and not TYPED, TYPED  # first turn still runs
+    SCREENS[:] = [IDLE, IDLE, TAKEN]
+    assert card.type_when_idle("term_w", LINE) is None and len(TYPED) == 1, TYPED  # the title alone does not block it
+    assert TYPED[0] == ("terminal", "send", "--terminal", "term_w", "--text", LINE, "--enter"), TYPED
+    TYPED.clear(); SCREENS[:] = [IDLE, IDLE, IDLE]
+    assert card.type_when_idle("term_w", LINE) == sync.UNCONFIRMED and len(TYPED) == 1  # typed, never shown taken
+    TYPED.clear(); SCREENS[:] = [IDLE, IDLE]  # a send whose answer was lost may have been taken: never "not typed"
+    SEND_FAILS.append(1)
+    try:
+        assert card.type_when_idle("term_w", LINE) == sync.UNCONFIRMED and not TYPED
+    finally:
+        SEND_FAILS.clear()
+    SCREENS[:] = [IDLE, IDLE]  # idle only after the limit: nothing is typed
+    assert card.type_when_idle("term_w", LINE, deadline=0).startswith("time limit") and not TYPED, TYPED
+    TYPED.clear(); SCREENS[:] = [IDLE, IDLE[:1] + ["✻ Churned for 18s · done 12:09 AM"] + IDLE[2:]]
+    assert "changed between two reads" in card.type_when_idle("term_w", LINE) and not TYPED
+    # The lock sync, broadcast and nudge share: a busy lock means nothing is read or typed, and it is held from the
+    # first read to the confirming one.
+    EVENTS = []
+    real_locked = sync.locked
+
+    @contextlib.contextmanager
+    def recording_lock(wait_s=0.0, free=True):
+        EVENTS.append("lock")
+        yield free
+        EVENTS.append("unlock")
+
+    sync.locked = lambda wait_s=0.0: recording_lock(wait_s, free=False)
+    TYPED.clear(); SCREENS[:] = [IDLE, IDLE, TAKEN]
+    assert card.type_when_idle("term_w", LINE) == "a sync or broadcast is running" and not TYPED, TYPED
+    sync.locked = recording_lock
+    EVENTS.clear()
+    sync_orca = sync.orca
+    sync.orca = lambda *a: EVENTS.append(a[1]) or sync_orca(*a)
+    SCREENS[:] = [IDLE, IDLE, TAKEN]
+    assert card.type_when_idle("term_w", LINE) is None
+    assert EVENTS[0] == "lock" and EVENTS[-1] == "unlock" and EVENTS.count("send") == 1 and "read" in EVENTS[-2], EVENTS
+    sync.locked, sync.orca = real_locked, sync_orca
+finally:
+    sync.orca = real_orca
+card.time.sleep = REAL_SLEEP
+card.start_goal_input = REAL_START_GOAL_INPUT
+spawned = []
+
+
+class FakePopen:
+    def __init__(self, cmd, **kw):
+        spawned.append((cmd, kw))
+        self.pid = 4242
+
+
+real_popen, card.subprocess.Popen = card.subprocess.Popen, FakePopen
+try:
+    log = card.start_goal_input("term_w", LINE, "g4")
+finally:
+    card.subprocess.Popen = real_popen
+cmd, kw = spawned[0]
+assert cmd[1:] == [str(HERE / "card.py"), "goal-after-idle", "term_w", LINE] and kw["start_new_session"], spawned
+assert pathlib.Path(log["log"]).parent.name == "goal-input" and log["pid"] == 4242, log
 
 print("ok")

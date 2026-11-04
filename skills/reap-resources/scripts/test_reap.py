@@ -1,7 +1,20 @@
 """Judgement rules of reap.py, plus one real reap of throwaway processes. Run: python3 test_reap.py"""
-import contextlib, io, json, os, pathlib, re, subprocess, sys, tempfile, time
+import atexit, contextlib, io, json, os, pathlib, re, shutil, subprocess, sys, tempfile, time
+
+# reap.py resolves CONFIG, STATE_HOME and PROGRAMS from ~ when it is imported, so the sandbox HOME has to exist before
+# the import. Without it the in-process sections read the owner's agent-skills.json (a "reap.model" there changed the
+# schedule command) and the ledger and state writes land in the real ~/.local/state.
+_SANDBOX = tempfile.mkdtemp(prefix="test-reap-home-")
+atexit.register(shutil.rmtree, _SANDBOX, ignore_errors=True)
+os.environ["HOME"] = _SANDBOX
+for _name in ("CLAUDE_CONFIG_DIR", "AGENT_SKILLS_CONFIG", "AGENT_SKILLS_STATE", "AGENT_SKILLS_LEDGER", "AGENT_SKILLS_TRASH",
+              "PROGRAMS_HOME", "XDG_CONFIG_HOME", "GH_CONFIG_DIR", *(k for k in os.environ if k.startswith("GIT_CONFIG_"))):
+    os.environ.pop(_name, None)
+
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import reap
+
+assert str(reap.CONFIG).startswith(_SANDBOX), reap.CONFIG
 
 H = 3600
 # The volume rules' owner judgment has its own section at the end; the sections before it test the rest of each rule.
@@ -622,6 +635,11 @@ assert load[load.index("--name") + 1] == reap.LOAD_NAME and load[load.index("--t
 assert load[load.index("--precheck") + 1] == "python3 /abs/reap.py precheck --load"
 same = reap.schedule_cmd("/abs/reap.py", reap.STATE_HOME, "path:/repo")
 assert load[load.index("--prompt") + 1] == same[same.index("--prompt") + 1]
+assert not any(a.startswith("--extra-agent-args") for a in same), same
+saved_config, reap.config = reap.config, lambda: {"model": "sonnet"}
+assert "--extra-agent-args=--model sonnet" in reap.schedule_cmd("/abs/reap.py", reap.STATE_HOME, "path:/repo")
+assert not any(a.startswith("--extra-agent-args") for a in reap.schedule_cmd("/abs/reap.py", reap.STATE_HOME, "path:/repo", "codex"))
+reap.config = saved_config
 with tempfile.TemporaryDirectory() as tmp:
     s = pathlib.Path(tmp)
     on = {"automations": [{"name": reap.JANITOR_NAME, "enabled": True}]}

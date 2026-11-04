@@ -422,6 +422,38 @@ td.when { white-space: nowrap; }
 .confirm { display: flex; align-items: center; gap: var(--s2); padding: var(--s2); border-radius: var(--r-md); background: var(--tone-wash); color: var(--ink); }
 .confirm svg.i { color: var(--tone); }
 .tree-cell { display: inline-flex; align-items: center; gap: var(--s2); padding-left: calc(var(--d, 0) * 16px); }
+/* The toggle hangs in a lead's indent, so a lead's dot and name line up with or without one. */
+.lead-cell { padding-left: max(calc(var(--d, 0) * 16px), 24px); position: relative; }
+.lead-link { display: inline-flex; align-items: center; gap: var(--s2); white-space: nowrap; }
+.fold-btn { width: 24px; height: 24px; margin: -4px calc(-1 * var(--s2)) -4px -24px; padding: 0; flex: none; display: grid; place-items: center; border: 0; border-radius: var(--r-sm); background: none; color: var(--ink-3); cursor: pointer; }
+.fold-btn:hover { color: var(--ink); background: var(--hover); }
+.fold-btn .chev::before { content: ""; display: block; border: 4px solid transparent; border-left: 6px solid currentColor; border-right-width: 0; transition: transform .12s; }
+.fold-btn[aria-expanded="true"] .chev::before { transform: rotate(90deg); }
+.fold-sum { white-space: nowrap; font-size: var(--t-sm); flex: none; }
+/* The Sessions table: fixed columns and one line per row, so folding a lead or a long branch never changes a row's
+   height. A value that does not fit is cut with an ellipsis (its title holds the whole value) and the card scrolls
+   sideways instead of squeezing the columns. */
+table.sess { table-layout: fixed; }
+table.sess col.c-name { width: 240px; }
+table.sess col.c-kind { width: 120px; }
+table.sess col.c-phase { width: 136px; }
+table.sess col.c-tk { width: 96px; }
+table.sess col.c-pr { width: 96px; }
+table.sess col.c-brief { width: 170px; }
+table.sess col.c-need { width: 100px; }
+table.sess col.c-act { width: 80px; }
+table.sess col.c-pb { width: 250px; }
+table.sess th, table.sess td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+table.sess .cut { display: inline-block; max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+table.sess td > .cut { display: block; }
+table.sess .tree-cell, table.sess .lead-cell, table.sess .lead-link, table.sess .pb { display: flex; align-items: center; min-width: 0; }
+table.sess .lead-link { flex: 0 1 auto; }
+/* One width for every project chip, so the branch after it starts at one edge; a longer name is cut (the filter's own chip has it whole). */
+table.sess .pb .chip { flex: none; display: block; width: 88px; padding: 0 4px; overflow: hidden; text-overflow: ellipsis; text-align: center; line-height: 18px; }
+table.sess .pb .cut { flex: 0 1 auto; }
+table.sess tbody td { height: 38px; padding-top: 0; padding-bottom: 0; }
+table.sess tr.done-row td { padding: 0 var(--s3); }
+table.sess .done-row .fold-btn { display: inline-grid; margin: 0 var(--s2) 0 0; vertical-align: middle; }
 .badge { min-width: 18px; height: 18px; padding: 0 var(--s1); border-radius: 9px; display: inline-grid; place-items: center; line-height: 1;
   font-size: var(--t-xs); font-weight: 600; color: #fff; background: var(--bad); flex: none; }
 .badge.missed { box-shadow: 0 0 0 2px var(--bad-wash); }
@@ -585,6 +617,9 @@ li.is-acked > :not(.ack) { opacity: 0.5; }
 /* One line, so a row with a report is as tall as one without: the line is cut and its whole text is the title. */
 .brief-table .bsess-head { display: flex; align-items: center; gap: var(--s2); white-space: nowrap; min-width: 0; }
 .brief-table .chip { min-width: 60px; justify-content: center; }
+/* Fixed slots for the state word and the model mark, so the Orca button sits at one edge in every row. */
+.brief-table .bsess-head > a, .brief-table .bsess-head > .tag { flex: none; min-width: 64px; display: inline-flex; }
+.brief-table .bsess-head .model-mark, .brief-table .bsess-head .model-slot { flex: none; min-width: 44px; margin: 0; }
 .brief-table .bsess-head .chip { height: 20px; padding: 0 8px; gap: var(--s1); font-size: 11px; flex: none; }
 .brief-table .bsess-head .chip svg.i { width: 12px; height: 12px; }
 .brief-table .bsess-last { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
@@ -634,3 +669,5 @@ table.sent details > summary { cursor: pointer; max-width: 720px; }
 .repo-row { display: grid; grid-template-columns: minmax(0, 14em) 1fr 3em; gap: var(--s2); align-items: center; font-size: var(--t-sm); }
 .repo-bar { height: 8px; border-radius: 2px; background: var(--panel-2); }
 .repo-bar > span { display: block; height: 100%; border-radius: 2px; background: var(--warn); }
+/* The Sessions table's model tag sits beside the phase word without making its row taller than a row with none. */
+.model-mark { display: inline-flex; vertical-align: middle; margin: -4px 0; }

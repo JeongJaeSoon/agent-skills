@@ -12,7 +12,7 @@ Only finished work folds: a ✅ row a day after its merge, a stage row finished 
 render() is the one implementation of the brief skill's report rules (sections, sub-task rows, the
 same-reviewer fold, next steps under 진행 중 and 보류, bold for changed rows); test_board.py pins its output.
 """
-import datetime as dt, difflib, fcntl, json, os, pathlib, re, shutil, sys, urllib.parse
+import collections, datetime as dt, difflib, fcntl, json, os, pathlib, re, shutil, sys, urllib.parse
 
 import fleet
 import acks
@@ -1055,12 +1055,15 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         r = rows.get(l["key"])
         sid = session_of(r) if r and not l["fold"] else None
         st = session_state(sessions.get(sid), now) if state is not None and (sid or r) else None
+        # A finished row has no session cell but still shares the worktree; a subagent's row names its task, not it.
+        l["sid"] = sid if sid in sessions and "subagent" not in r else None
         l["session"] = None if l["status"] in (None, "done") or st is None else {"id": sid if sid in sessions else None,
                                                                                    "state": st, "word": SESSION_WORD[st]}
         if l["session"] and l["session"]["id"]:
             s = sessions[sid]
             line_, at = last_report(s)
-            l["session"].update(name=s.get("name"), last=line_, at=at, pr=(r or {}).get("pr"))
+            l["session"].update(name=one_line(s.get("name")), last=line_, at=at, pr=(r or {}).get("pr"),
+                                model=s.get("model_tag") if st != "none" else "")
         l["pr_state"] = pr_status(l["pr"], bases.get(l["sec"])) if l["pr"] else ""
         if l["fold"]:  # the numbers by base, each base but the section's named once; the states go to the snapshot only
             to = {}
@@ -1070,6 +1073,15 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             l["pr_state"] =" · ".join(pr_status(k, bases.get(l["sec"])) for k in l["fold"])
         else:
             l["cell"] = f"{pr_text(l['pr'])} {l['pr_state']}".strip() if l["pr"] else ""
+
+    # A row alone on its session is named as Orca names the worktree, so the table's name finds it in the Cmd+J palette
+    # (prefix and substring match, so a cut name does too). Rows sharing a session keep their titles: the worktree's
+    # name would say the same thing twice, and the 세션 cell has it.
+    on_session = collections.Counter(l["sid"] for l in lines)
+    for l in lines:
+        name = l["sid"] and one_line(sessions[l["sid"]].get("name") or "")
+        if name and l["session"] and on_session[l["sid"]] == 1 and name.lower() not in l["name"].lower():
+            l.update(name=name, orca_name=True)
 
     # Bold: a row the last report did not have, or whose status, progress, next, PR state or session changed.
     snap = {}
@@ -1147,9 +1159,14 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         if not s:
             return "—"
         name = s.get("name")
+        word = s["word"] + (f" {s['model']}" if s.get("model") else "")  # O, S or H; `!` when off orchestrate.models
         if not name or name.lower() in l["shown"].lower():
-            return s["word"]
-        return f"{s['word']} · {name if not width or len(name) <= width else name[:width] + '…'}"
+            return word
+        if width is not None:
+            width -= len(word) - len(s["word"])  # the mark's columns come out of the name's
+            if width < 1:
+                return word
+        return f"{word} · {name if width is None or len(name) <= width else name[:width] + '…'}"
 
     def session_link(l, cell):
         """Its state word as a link to the session's dashboard page while the server runs; a cut cell keeps the word."""
@@ -1170,13 +1187,16 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     local = now.astimezone()
     head = f"{local:%H:%M} · " + " · ".join(([headline] if headline else []) + facts[1 if headline else 0:])
     out = [head if tg else f"**{head}**"]
+    out += [x for pointer in (stage_line, lists_line) if pointer for x in ("", pointer)]
+    if lines:
+        out += ["", legend] + (["", "PR: " + " · ".join(pr_legend)] if pr_legend else [])
     width_ok = True
     ackable, table_rows = {d["id"] for d in done if not d["acked"]}, []
 
     def label(l):
         """A phase is named with its lead outside the table, where no section heading says whose it is."""
         r = rows.get(l["key"])
-        return f"{lead_of(r)['title']} {l['name']}" if r and r["kind"] == "phase" else l["name"]
+        return f"{lead_of(r)['title']} {l['name']}" if r and r["kind"] == "phase" and not l.get("orca_name") else l["name"]
 
     def next_cell(l):
         """The 다음 cell: the row's next step, or rowstate's pointer to the list below that holds it."""
@@ -1369,10 +1389,15 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                 return ("└ " if l["depth"] else "") + (f"**{s}**" if l["key"] in changed else s) if c == 1 else s
             # Only a name or a next step is cut to fit, and its whole text goes in the numbered list under the
             # table. A table the other cells alone make too wide overflows, and the render reports it.
-            body = [[mark(l, l["status"]), l["shown"], l["cell"] or "—", l["progress"], next_cell(l), session_text(l, SESSION_NAME_W)]
-                    for l in mine]
-            table, notes = table_width.fit([head] + [[x for c, x in enumerate(r) if c not in drop] for r in body], COLS,
-                                           (1, head.index("다음")), floor=6, deco=dress)
+            # The session cell keeps its state word and model mark; only its worktree name gives way, a column at a time,
+            # when the cut name and next step alone do not bring the table to the width.
+            for name_w in range(SESSION_NAME_W, -1, -2):
+                body = [[mark(l, l["status"]), l["shown"], l["cell"] or "—", l["progress"], next_cell(l),
+                         session_text(l, name_w)] for l in mine]
+                table, notes = table_width.fit([head] + [[x for c, x in enumerate(r) if c not in drop] for r in body], COLS,
+                                               (1, head.index("다음")), floor=6, deco=dress)
+                if table_width.table_width(table) <= COLS:
+                    break
             width_ok &= table_width.table_width(table) <= COLS
             out += ["", "| " + " | ".join(head).strip() + " |", "|---" * len(head) + "|"]
             out += ["| " + " | ".join(c.replace("|", "\\|") for c in row) + " |" for row in table[1:]]
@@ -1413,20 +1438,6 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         out += ["", reaped]
     if periodic and (tokens := token_line(now)):
         out += ["", tokens]
-    # A link to this host's 127.0.0.1 is dead on another device, and Orca has no remote link: what works there is text.
-    reach = {}
-    for l in lines:
-        s = sessions.get((l["session"] or {}).get("id")) or {}
-        if s.get("name") and (term := fleet.session_terminal(s)) and l["session"]["state"] != "none":
-            reach.setdefault(s["id"], (s, fleet.switch_command(term["handle"]) or term["handle"]))
-    if reach:
-        names = [s["name"] for s, _ in reach.values()]
-        shown_as = lambda s: f"{s['name']} ({s.get('project')})" if names.count(s["name"]) > 1 else s["name"]  # noqa: E731
-        out += ["", "🔗 세션 찾기" if tg else "🔗 **세션 찾기**", ""]
-        out += [f"{shown_as(s)} — {how}" if tg else f"- {shown_as(s)} — `{how}`" for s, how in reach.values()]
-    out += [x for pointer in (stage_line, lists_line) if pointer for x in ("", pointer)]
-    if lines:
-        out += ["", legend] + (["", "PR: " + " · ".join(pr_legend)] if pr_legend else [])
     opened =[{"id": item_of(rows[l["key"]]), "kind": "row", "label": label(l), "status": l["own"]}
               for l in lines if l["key"] in rows and l["own"] not in (None, "done")]
     opened += [{"id": i, "kind": "doing", "label": d["title"], "status": js["status"]} for i, d, js in doing]

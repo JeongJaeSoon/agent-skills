@@ -206,6 +206,7 @@ assert st["notes"][0]["text"].startswith("hold ACME-107") and st["activity"][0][
 
 # Serving: ETag round trip gives 304; a traversal attempt is a 404.
 srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), dash.Handler)
+dash.HEALTH["port"] = srv.server_address[1]
 threading.Thread(target=srv.serve_forever, daemon=True).start()
 base = f"http://127.0.0.1:{srv.server_address[1]}"
 r = urllib.request.urlopen(f"{base}/api/{A}/state")
@@ -228,7 +229,6 @@ assert done["docs-refresh"] == (True, True) and done["metrics-spike"] == (False,
 assert b"<title>" in urllib.request.urlopen(f"{base}/").read()
 
 # Answering a permission prompt is a POST like the others: this server's Host and Origin, and the page's token.
-dash.HEALTH["port"] = srv.server_address[1]
 answered, dash.fleet.answer_prompt = [], lambda *a: answered.append(a) or (200, {"ok": True})
 body = json.dumps({"session": "wt-docs", "prompt": "p1", "action": "approve"}).encode()
 
@@ -273,6 +273,21 @@ try:
     raise AssertionError("a rebinding name read skill usage")
 except urllib.error.HTTPError as e:
     assert e.code == 403, e.code
+# Every API read refuses a rebinding name or a foreign page, not only the fleet's; the page itself stays open.
+def status(path, headers):
+    try:
+        return urllib.request.urlopen(urllib.request.Request(f"{base}{path}", headers=headers)).status
+    except urllib.error.HTTPError as e:
+        return e.code
+port = srv.server_address[1]
+for path in ("/api/health", "/api/programs", "/api/fleet/skills", "/api/no-such-program/state"):
+    assert status(path, {"Host": f"evil.example:{port}"}) == 403, path
+    assert status(path, {"Origin": "http://evil.example"}) == 403, path
+assert status("/api/health", {}) == status("/api/programs", {}) == 200
+assert status("/api/health", {"Host": f"localhost:{port}"}) == 200
+assert status("/api/health", {"Origin": f"http://127.0.0.1:{port}"}) == 200
+assert status("/", {"Host": f"evil.example:{port}"}) == 200
+assert status("/no-such-page", {"Host": f"evil.example:{port}"}) == 404
 # Data flow and skill changes: served from the demo's own state, cached in the process between polls.
 fl = json.loads(urllib.request.urlopen(f"{base}/api/fleet/flow").read())
 assert next(s for s in fl["stores"] if s["id"] == "skillsj")["exists"] and "error" not in fl, fl.get("error")
@@ -449,6 +464,323 @@ tip = [{"ts": ago(300), "ev": "landed", "pr": 9, "sha": "s9"}, {"ts": ago(290), 
 assert dash.ledger_gaps(cfg_g, tip, [], [], now, contains=lambda a, b: (a, b) == ("s9", "s10"))["ci"] == [], \
     "a later green at the branch tip covers the landing under it"
 assert dash.ledger_gaps(cfg_g, tip, [], [], now, contains=lambda a, b: False)["ci"] == [9], "not in its history: still a gap"
+# gh compare is guarded: not asked while core quota is low, and not again until the reset after a rate-limit error.
+cfg_q = {**cfg_g, "repo": "acme/app"}
+two = [{"ts": ago(300), "ev": "landed", "pr": 20, "sha": "s20"}, {"ts": ago(290), "ev": "landed", "pr": 21, "sha": "s21"},
+       {"ts": ago(280), "ev": "main_green", "sha": "s22"}, {"ts": ago(270), "ev": "main_green", "sha": "s23"}]
+calls, quota, clock = [], {"n": 0, "t": 1000 + 3600}, [1000.0]
+def fake_sh(cmd, timeout=45):
+    calls.append(cmd[2])
+    if cmd[2] == "rate_limit":
+        return {"n": quota["n"], "t": quota["t"]}
+    if quota["n"] < 1:
+        raise dash.SourceError("API rate limit exceeded")
+    return {"s": "ahead"}
+real_sh, real_mono, real_time = dash.sh, dash.time.monotonic, dash.time.time
+dash.sh, dash.time.monotonic, dash.time.time = fake_sh, lambda: clock[0], lambda: clock[0]
+dash._CONTAINS.clear(); dash._gh_down_until = dash._gh_check_at = 0.0
+compares = lambda: [c for c in calls if c != "rate_limit"]
+assert dash.ledger_gaps(cfg_q, two, [], [], now)["ci"] == [], "unknown is no gap"
+assert not compares(), f"quota low: no compare asked: {calls}"
+n_quota = len(calls)
+for _ in range(20):
+    clock[0] += 60
+    dash.ledger_gaps(cfg_q, two, [], [], now)
+assert not compares() and len(calls) == n_quota, f"nothing is asked until the reset: {calls}"
+clock[0], quota["n"] = 1000.0 + 3601, 5000
+dash.ledger_gaps(cfg_q, two, [], [], now)
+assert compares(), "after the reset the compares run"
+# A rate-limit error with plenty of quota reported: one failed call, then backoff.
+calls.clear(); dash._CONTAINS.clear(); dash._gh_down_until = dash._gh_check_at = 0.0
+quota["n"] = 5000
+clock[0] = 2000.0
+reset_at, left = 3800.0, {"n": 5000}
+def limited(cmd, timeout=45):
+    calls.append(cmd[2])
+    if cmd[2] == "rate_limit":
+        return {"n": left["n"], "t": reset_at}
+    left["n"] = 0  # the failed compare is what used the last of it
+    clock[0] += 45  # it timed out: the backoff counts from here, not from when the call began
+    raise dash.SourceError("API rate limit exceeded")
+dash.sh = limited
+assert dash.ledger_gaps(cfg_q, two, [], [], now)["ci"] == [], "a failed compare is no gap"
+assert len(compares()) == 1, f"one failed compare, the rest of the pairs wait: {calls}"
+assert dash.gh_contains("acme/app", "s20", "s22") is None, "unknown is None, never False"
+asked = len(calls)
+clock[0] = 2344.0  # 299 s after the failure finished at 2045
+dash.ledger_gaps(cfg_q, two, [], [], now)
+assert len(calls) == asked, "inside the 300 s backoff nothing is asked"
+clock[0] = 2346.0
+dash.ledger_gaps(cfg_q, two, [], [], now)
+assert calls[asked:] == ["rate_limit"], f"after the backoff the quota is read first: {calls[asked:]}"
+asked = len(calls)
+for t in range(2400, 3800, 100):
+    clock[0] = float(t)
+    dash.ledger_gaps(cfg_q, two, [], [], now)
+assert len(compares()) == 1, f"no compare until the reset: {calls}"
+left["n"], clock[0] = 5000, 3801.0
+dash.ledger_gaps(cfg_q, two, [], [], now)
+assert len(compares()) == 2, f"asked again after the reset: {calls}"
+pathlib.Path(os.environ["AGENT_SKILLS_CONFIG"]).write_text(json.dumps({"dashboard": {"github_every_s": 10 ** 20}}))
+assert dash.github_every() == 300, "a value Event.wait cannot take is not used"
+dash.sh, dash.time.monotonic, dash.time.time = real_sh, real_mono, real_time
+dash._CONTAINS.clear(); dash._gh_down_until = dash._gh_check_at = 0.0
+
+# The GitHub stage runs once per period; a landing row or a manual refresh runs it at once.
+cfg_file = pathlib.Path(os.environ["AGENT_SKILLS_CONFIG"])
+cfg_file.write_text("{}")
+assert dash.github_every() == 300, "no key: the default"
+cfg_file.write_text(json.dumps({"dashboard": {"github_every_s": 600}}))
+assert dash.github_every() == 600
+cfg_file.write_text(json.dumps({"dashboard": {"github_every_s": 5}}))
+assert dash.github_every() == 300, "below the 60 s floor is not a guess"
+cfg_file.write_text(json.dumps({"dashboard": {"github_every_s": 900}}))
+rounds, seen_intervals, seen_waits = [], [], []
+real_wake_event = dash.SLOW_WAKE
+real_round = dash.slow_round
+dash.slow_round = lambda interval, first: (rounds.append(first), seen_intervals.append(interval))
+class RecordingEvent(type(dash.SLOW_WAKE)):
+    def wait(self, timeout=None):
+        seen_waits.append(timeout)
+        return super().wait(timeout)
+dash.SLOW_WAKE = RecordingEvent()
+loop = threading.Thread(target=dash.slow_loop, args=(60,), daemon=True)
+loop.start()
+def wait_for(n, secs=5):
+    end = dash.time.monotonic() + secs
+    while len(rounds) < n and dash.time.monotonic() < end:
+        dash.time.sleep(0.02)
+    return len(rounds)
+assert wait_for(1) == 1
+dash.time.sleep(0.5)
+assert len(rounds) == 1, f"inside the period the stage does not run again: {rounds}"
+dash.SLOW_WAKE.set()  # a manual refresh
+assert wait_for(2) == 2, "a refresh runs it now"
+dash.time.sleep(0.3)
+assert len(rounds) == 2
+LP = "landing-test"
+(store / LP).mkdir()
+(store / LP / "program.json").write_text(json.dumps({"repo": "acme/app", "created_at": ago(900)}))
+(store / LP / "ledger.jsonl").write_text(json.dumps({"ts": ago(10), "ev": "spawned", "ticket": "X-1"}) + "\n")
+dash.note_landings(LP)
+dash.time.sleep(0.3)
+assert len(rounds) == 2, "the first look at a ledger wakes nothing"
+with (store / LP / "ledger.jsonl").open("a") as f:
+    f.write(json.dumps({"ts": ago(1), "ev": "note", "text": "x"}) + "\n")
+dash.note_landings(LP)
+dash.time.sleep(0.3)
+assert len(rounds) == 2, "a row that is not a landing wakes nothing"
+with (store / LP / "ledger.jsonl").open("a") as f:
+    f.write(json.dumps({"ts": ago(0), "ev": "landed", "pr": 1, "sha": "s1"}) + "\n")
+dash.note_landings(LP)
+assert wait_for(3) == 3, "a new landed row runs it now"
+assert set(seen_intervals) == {900} and set(seen_waits) == {900}, (seen_intervals, seen_waits)
+LQ = "landing-new"  # a program that appears after start with a landing already in its ledger
+(store / LQ).mkdir()
+(store / LQ / "program.json").write_text(json.dumps({"repo": "acme/app", "created_at": ago(900)}))
+(store / LQ / "ledger.jsonl").write_text(json.dumps({"ts": ago(1), "ev": "landed", "pr": 2, "sha": "s2"}) + "\n")
+dash.note_landings(LQ)
+assert wait_for(4) == 4, "its landed row is new to the loop"
+dash.slow_round, dash.SLOW_WAKE = real_round, real_wake_event
+
+# A gh call that never returns must not hold the program lock: a ledger-only refresh (the fast loop) still finishes.
+H = "hang-test"
+(store / H).mkdir()
+(store / H / "program.json").write_text(json.dumps({"repo": "acme/app", "created_at": ago(900)}))
+(store / H / "ledger.jsonl").write_text("".join(json.dumps(r) + "\n" for r in two))
+release, entered = threading.Event(), threading.Event()
+def hanging_sh(cmd, timeout=45):
+    entered.set()
+    release.wait(30)
+    raise dash.SourceError("released")
+real_gh_fetch, dash.FETCHERS["github"] = dash.FETCHERS["github"], lambda cfg: []
+dash.sh = hanging_sh
+slow = threading.Thread(target=dash.collect, args=(H, ("github",)), daemon=True)
+slow.start()
+assert entered.wait(10), "the slow collect never reached gh"
+fast = threading.Thread(target=dash.collect, args=(H, ()), daemon=True)
+fast.start()
+fast.join(5)
+stuck = fast.is_alive()
+release.set()
+slow.join(10)
+fast.join(10)
+dash.sh, dash.FETCHERS["github"] = real_sh, real_gh_fetch
+dash._CONTAINS.clear()
+dash._gh_down_until = 0.0
+assert not stuck, "a ledger-only collect waited on another collect's gh call"
+
+# A silent fast loop: health says stale though the heartbeat is fresh; under launchd the server exits itself.
+old_health, old_agent, old_restart = dict(dash.HEALTH), dash.under_agent, dash.restart
+exits = []
+dash.restart, dash.under_agent = lambda: exits.append(1), lambda: True
+age = lambda m: dash.iso(dash.utcnow() - dash.dt.timedelta(minutes=m))
+dash.HEALTH.clear(); dash.HEALTH.update(heartbeat=age(0), stale=False)
+assert not dash.health_view()["stale"], "no tick yet (just started) is not a stop"
+dash.check_loops(); assert not exits
+dash.HEALTH["ticks"] = {"fast": age(4)}
+assert not dash.health_view()["stale"]; dash.check_loops(); assert not exits, "inside the 5 minutes"
+dash.HEALTH["ticks"] = {"fast": age(6)}
+assert dash.health_view()["stale"] is True; dash.check_loops(); assert not exits, "stale in health, but a slow round is not restarted yet"
+dash.HEALTH["ticks"] = {"fast": age(16)}
+dash.check_loops(); assert exits == [1], "a loop silent for 15 minutes restarts the server"
+dash.HEALTH.update(stale=True)
+dash.check_loops(); assert exits == [1], "other code on disk: check_code restarts it, after importing it"
+dash.HEALTH.update(stale=False)
+dash.under_agent = lambda: False
+dash.check_loops(); assert exits == [1], "outside launchd it only reports"
+dash.HEALTH.clear(); dash.HEALTH.update(old_health); dash.under_agent, dash.restart = old_agent, old_restart
+
+# A bad-ts event in the ledger does not stop the compare warm-up from asking about the good ones.
+calls.clear()
+dash.sh = lambda cmd, timeout=45: (calls.append(cmd), {"s": "behind"})[1]
+(store / H / "ledger.jsonl").write_text("".join(json.dumps(r) + "\n" for r in
+                                               [{"ts": "not a time", "ev": "main_green", "sha": "s99"}] + two))
+dash._CONTAINS.clear(); dash._cache_state.update(loaded=False, dirty=False); dash.cache_path().unlink(missing_ok=True)
+dash.warm_contains(store / H, {"repo": "acme/app", "created_at": ago(900)})
+dash.sh = real_sh
+pairs_asked = sorted(c[2].rsplit("/", 1)[1] for c in calls if c[2].startswith("repos/"))
+dash._CONTAINS.clear()
+assert pairs_asked == ["s20...s22", "s20...s23", "s21...s22", "s21...s23"], f"every good pair is asked: {pairs_asked}"
+
+# Calls per collect are bounded, answers outlive a restart, and a local clone answers without GitHub.
+CP = "cap-test"
+(store / CP).mkdir()
+cfg_cp = {"repo": "acme/app", "created_at": ago(60 * 24 * 30)}
+(store / CP / "program.json").write_text(json.dumps(cfg_cp))
+rows_cp = ([{"ts": ago(600 + i), "ev": "landed", "pr": 100 + i, "sha": f"a{i}"} for i in range(30)]
+           + [{"ts": ago(100 + i), "ev": "main_green", "sha": f"g{i}"} for i in range(30)])
+(store / CP / "ledger.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows_cp))
+asked = []
+def counting_sh(cmd, timeout=45):
+    asked.append(cmd[2])
+    return {"n": 5000, "t": 0} if cmd[2] == "rate_limit" else {"s": "behind"}
+for f in (dash.cache_path(),):
+    f.unlink(missing_ok=True)
+dash._CONTAINS.clear(); dash._cache_state.update(loaded=False, dirty=False); dash._gh_down_until = dash._gh_check_at = 0.0
+dash.sh = counting_sh
+dash.warm_contains(store / CP, cfg_cp)
+first = [c for c in asked if c != "rate_limit"]
+assert 0 < len(first) <= dash.GH_COMPARES_PER_ROUND, f"900 pairs, {len(first)} asked in one collect"
+assert dash.cache_path().exists(), "the answers are on disk"
+dash._CONTAINS.clear(); dash._cache_state.update(loaded=False, dirty=False)  # a restart
+asked.clear()
+dash.warm_contains(store / CP, cfg_cp)
+again = [c for c in asked if c != "rate_limit"]
+assert set(again).isdisjoint(first), "an answer already on disk is not asked again"
+# A program at rest (no ledger event for 3 days) asks GitHub nothing, even with unknown pairs left.
+RP = "rest-test"
+(store / RP).mkdir()
+(store / RP / "program.json").write_text(json.dumps(cfg_cp))
+(store / RP / "ledger.jsonl").write_text("".join(
+    json.dumps({**r, "ts": dash.iso(dash.utcnow() - dash.dt.timedelta(days=5, minutes=i))}) + "\n"
+    for i, r in enumerate(rows_cp)))
+dash._CONTAINS.clear(); dash._cache_state.update(loaded=False, dirty=False); dash.cache_path().unlink(missing_ok=True)
+asked.clear(); dash.sh = counting_sh
+assert dash.closed(RP)
+real_fetch, dash.FETCHERS["github"] = dash.FETCHERS["github"], lambda cfg: []
+dash.collect(RP, ("github",))
+dash.FETCHERS["github"] = real_fetch
+assert not [c for c in asked if c != "rate_limit"], f"a program at rest was asked about: {asked[:3]}"
+# A landing past the age limit is not a gap to chase.
+old =[{"ts": ago(60 * 24 * 15), "ev": "landed", "pr": 1, "sha": "o1"}]
+assert dash.ledger_gaps(cfg_cp, old, [], [], now, contains=lambda a, b: False)["ci"] == [], "15 days old"
+assert dash.ledger_gaps(cfg_cp, [{**old[0], "ts": ago(60 * 24 * 10)}], [], [], now, contains=lambda a, b: False)["ci"] == [1]
+dash.sh = real_sh
+# A local clone answers first: no gh call at all.
+import subprocess
+clone = pathlib.Path(tempfile.mkdtemp())
+git = lambda *a: subprocess.run(["git", "-C", str(clone), "-c", "user.name=t", "-c", "user.email=t@example.test",
+                                 "-c", "commit.gpgsign=false", *a], capture_output=True, text=True, check=True).stdout.strip()
+git("init", "-q"); git("commit", "-q", "--allow-empty", "-m", "one"); c1 = git("rev-parse", "HEAD")
+git("commit", "-q", "--allow-empty", "-m", "two"); c2 = git("rev-parse", "HEAD")
+asked.clear(); dash.sh = counting_sh
+assert dash.gh_contains("acme/local", c1, c2, clone) is True and dash.gh_contains("acme/local", c2, c1, clone) is False
+assert not asked, f"a local clone needs no gh: {asked}"
+# A reply that is not one of GitHub's four statuses is no answer, and is not remembered.
+dash.sh = lambda cmd, timeout=45: {"n": 5000, "t": 0} if cmd[2] == "rate_limit" else {"s": None}
+assert dash.gh_contains("acme/odd", "p", "q") is None and ("acme/odd", "p", "q") not in dash._CONTAINS
+# A shallow clone's "no" may only mean cut history: it is not an answer.
+git("commit", "-q", "--allow-empty", "-m", "three"); c3 = git("rev-parse", "HEAD")
+shallow = pathlib.Path(tempfile.mkdtemp()) / "s"
+git("config", "uploadpack.allowAnySHA1InWant", "true")
+subprocess.run(["git", "clone", "-q", "--depth", "1", f"file://{clone}", str(shallow)], check=True, capture_output=True)
+subprocess.run(["git", "-C", str(shallow), "fetch", "-q", "--depth", "1", "origin", c1], check=True, capture_output=True)
+rc = subprocess.run(["git", "-C", str(shallow), "merge-base", "--is-ancestor", c1, c3], capture_output=True).returncode
+assert rc == 1, f"the fixture must make git itself answer no: {rc}"
+assert dash.local_contains(shallow, c1, c3) is None, "shallow: unknown, not False"
+# A damaged cache file is a cold cache, and the cache stays bounded.
+dash._CONTAINS.clear(); dash._cache_state.update(loaded=False, dirty=False)
+dash.cache_path().write_text('["not", "a", "dict"]')
+dash.load_compare_cache()
+assert dash._cache_state["loaded"] and not dash._CONTAINS
+dash.cache_path().write_text('{"acme/app": ["x"]}')
+dash._cache_state["loaded"] = False
+dash.load_compare_cache()
+assert not dash._CONTAINS
+real_max, dash.CACHE_MAX = dash.CACHE_MAX, 3
+for i in range(5):
+    dash._CONTAINS[("acme/app", f"o{i}", "n")] = True
+dash._cache_state["dirty"] = True
+dash.save_compare_cache()
+dash.CACHE_MAX = real_max
+assert sorted(json.loads(dash.cache_path().read_text())["acme/app"]) == ["o2...n", "o3...n", "o4...n"], "the file is bounded"
+assert len(dash._CONTAINS) == 5, "memory holds twice the file bound, so the active pairs stay"
+dash.CACHE_MAX = 2
+for i in range(10):
+    dash._CONTAINS[("acme/gone", f"g{i}", "n")] = True
+dash._cache_state["dirty"] = True
+dash.save_compare_cache()
+dash.CACHE_MAX = real_max
+assert len(dash._CONTAINS) == 4, f"answers of long-gone pairs leave memory too: {len(dash._CONTAINS)}"
+for i in range(5):  # put the five back for the checks below
+    dash._CONTAINS[("acme/app", f"o{i}", "n")] = True
+# An answer a ledger still asks for is renewed, so the file keeps it; a long active set is never judged unknown.
+dash.CACHE_MAX = 3
+dash.cached(("acme/app", "o0", "n"))
+dash._CONTAINS[("acme/app", "o5", "n")] = False
+dash._cache_state["dirty"] = True
+dash.save_compare_cache()
+dash.CACHE_MAX = real_max
+assert dash.cached(("acme/app", "o1", "n")) is True, "memory is not evicted by the file bound"
+assert "o0...n" in json.loads(dash.cache_path().read_text())["acme/app"], "a renewed answer stays in the file"
+# Another process saved meanwhile: its answers are merged in, not overwritten.
+other = json.loads(dash.cache_path().read_text())
+other.setdefault("acme/other", {})["x...y"] = True
+dash.cache_path().write_text(json.dumps(other))
+dash._CONTAINS[("acme/app", "o6", "n")] = True
+dash._cache_state["dirty"] = True
+dash.save_compare_cache()
+saved = json.loads(dash.cache_path().read_text())
+assert saved["acme/other"] == {"x...y": True} and "o6...n" in saved["acme/app"], saved
+# The loops renew answers while a save rebuilds the dict: no "changed during iteration".
+for i in range(3000):
+    dash._CONTAINS[("acme/app", f"h{i}", "n")] = True
+stop, errors = threading.Event(), []
+def hammer():
+    i = 0
+    while not stop.is_set():
+        try:
+            dash.cached(("acme/app", f"h{i % 3000}", "n"))
+        except Exception as e:
+            errors.append(e)
+        i += 1
+th = threading.Thread(target=hammer, daemon=True)
+th.start()
+for _ in range(30):
+    dash._cache_state["dirty"] = True
+    dash.save_compare_cache()
+stop.set(); th.join(5)
+assert not errors, errors[:1]
+# A graft file rewrites ancestry: the local answer is not trusted.
+(clone / ".git" / "info").mkdir(exist_ok=True)
+(clone / ".git" / "info" / "grafts").write_text(c3 + "\n")
+assert dash.local_contains(clone, c1, c3) is None, "grafts: unknown"
+(clone / ".git" / "info" / "grafts").unlink()
+dash.sh = real_sh
+dash._CONTAINS.clear(); dash._cache_state.update(loaded=False, dirty=False); dash._gh_down_until = dash._gh_check_at = 0.0
+dash.cache_path().unlink(missing_ok=True)
+
 mixed = [{"number": 11, "state": "merged", "merged_at": ago(100), "base": "feat/x", "branch": "a"},
          {"number": 12, "state": "merged", "merged_at": ago(90), "base": "feat/x", "branch": "b"},
          {"number": 13, "state": "merged", "merged_at": ago(80), "base": "main", "branch": "c"}]
@@ -546,6 +878,21 @@ stale[0] = True
 dash.health = lambda p: (h := real_health(p)) and dict(h, stale=stale[0])
 ok, msg = dash.ensure(port)
 assert ok and kicks == [True], (msg, kicks)
+# A live process whose fast loop stopped ticking is restarted too, even though the slow loop keeps its heartbeat
+# fresh; one that never reports ticks (older code) is judged by its version alone.
+kicks.clear()
+stale[0] = False
+old_tick = dash.iso(dash.utcnow() - dash.LOOP_STALE - dash.dt.timedelta(minutes=1))
+dash.health = lambda p: (h := real_health(p)) and dict(h, ticks={"slow": dash.iso(dash.utcnow()), "fast": old_tick})
+assert dash.fresh(dash.health(port))
+ok, msg = dash.ensure(port)
+assert kicks == [True], (msg, kicks)
+assert not dash.loops_alive({"ticks": {"slow": dash.iso(dash.utcnow())}}) and dash.loops_alive({})
+assert dash.loops_alive({"ticks": {"fast": dash.iso(dash.utcnow())}})
+kicks.clear()
+dash.health = lambda p: (h := real_health(p)) and dict(h, ticks={"fast": dash.iso(dash.utcnow())})
+ok, msg = dash.ensure(port)
+assert ok and kicks == [], (msg, kicks)
 # ...unless the code on disk does not import: then the old server is the one to keep.
 kicks.clear()
 stale[0] = True
@@ -627,20 +974,93 @@ assert not dash.closed(B) and dash.ledger_tail(B)[1] == last_ts  # the last even
 st = dash.collect(B, sources=())
 assert "ledger: 2 row(s) without an ev left out, first [1, 2]" in st["errors"] and st["summary"], st["errors"]
 assert not any(e.startswith("ledger:") for e in dash.collect(A, sources=())["errors"])
-real_sleep, real_collect, rounds, collected = dash.time.sleep, dash.collect, [], []
+real_wake, real_collect, waits, collected = dash.SLOW_WAKE, dash.collect, [], []
 dash.collect = lambda slug, *a, **k: collected.append(slug) or {"errors": []}
-def sleep(_):
-    rounds.append(1)
-    if len(rounds) == 2:
-        raise StopIteration
-dash.time.sleep = sleep
+class StopAfterTwo:
+    def clear(self):
+        pass
+    def wait(self, _):
+        waits.append(1)
+        if len(waits) == 2:
+            raise StopIteration
+dash.SLOW_WAKE = StopAfterTwo()
 try:
     dash.slow_loop(1)
 except StopIteration:
     pass
-dash.time.sleep, dash.collect = real_sleep, real_collect
+dash.SLOW_WAKE, dash.collect = real_wake, real_collect
 assert collected.count(B) == 2 and A in collected, collected  # the second round reached B through closed()
 (store / B / "ledger.jsonl").write_text(clean)
+
+# A program listed by programs() whose directory is gone before the loop reads it (closed(), signature()) is resting,
+# and neither loop ends: both once died on the first FileNotFoundError and nothing noticed.
+class Stop(BaseException):
+    pass
+def run_loop(loop, rounds_wanted):
+    n = []
+    def sleep(_):
+        n.append(1)
+        if len(n) == rounds_wanted:
+            raise Stop
+    class Ev:  # the slow loop waits on its wake event, the fast loop sleeps
+        def clear(self):
+            pass
+        def set(self):
+            pass
+        def wait(self, t):
+            sleep(t)
+    real_sleep, dash.time.sleep, dash.SLOW_WAKE = dash.time.sleep, sleep, Ev()
+    try:
+        loop(1)
+    except Stop:
+        pass
+    finally:
+        dash.time.sleep, dash.SLOW_WAKE = real_sleep, real_wake
+    return len(n)
+GONE = "vanished-slug"
+real_programs, real_orca_every = dash.programs, dash.ORCA_EVERY
+dash.programs = lambda: [GONE, A]
+dash.ORCA_EVERY = 0
+assert dash.closed(GONE) and dash.signature(GONE) == (None, None, None)
+collected.clear()
+dash.collect = lambda slug, *a, **k: collected.append(slug) or {"errors": []}
+dash.HEALTH.pop("ticks", None)
+assert run_loop(dash.fast_loop, 3) == 3 and collected.count(A) >= 2, collected  # survived 3 rounds, A still served
+assert run_loop(dash.slow_loop, 3) == 3 and "fast" in dash.HEALTH["ticks"] and "slow" in dash.HEALTH["ticks"]
+assert dash.loops_alive(dash.HEALTH)
+# The tick moves with each program, so a round of many slow collects is not read as a stopped loop.
+seen_ticks = []
+dash.collect = lambda slug, *a, **k: (seen_ticks.append(dash.HEALTH["ticks"]["fast"]), {"errors": []})[1]
+dash.HEALTH["ticks"]["fast"] = "2000-01-01T00:00:00Z"
+dash.fast_round(({}, {}, {}), 1)
+assert len(seen_ticks) == 1 and seen_ticks[0] > "2020", seen_ticks  # ticked after the vanished program, before A's collect
+dash.collect = lambda slug, *a, **k: collected.append(slug) or {"errors": []}
+# Any other error in one program's step stays on that program; an error from programs() itself costs one round.
+def boom(slug):
+    if slug == GONE:
+        raise RuntimeError("bad ledger")
+    return real_signature(slug)
+real_signature = dash.signature
+dash.signature = boom
+collected.clear()
+assert run_loop(dash.fast_loop, 3) == 3 and A in collected, collected
+dash.signature = real_signature
+def no_programs():
+    raise OSError("store unreadable")
+dash.programs = no_programs
+dash.HEALTH["ticks"] = {}
+assert run_loop(dash.fast_loop, 2) == 2 and "fast" in dash.HEALTH["ticks"]  # logged, ticked, still looping
+assert run_loop(dash.slow_loop, 2) == 2
+dash.programs, dash.ORCA_EVERY, dash.collect = real_programs, real_orca_every, real_collect
+# The stale check runs on its own thread, so a collector that died or hangs does not freeze it.
+checks = []
+real_check = dash.check_code
+def failing_check():
+    checks.append(1)
+    1 / 0
+dash.check_code = failing_check  # raises every time; the loop lives
+assert run_loop(lambda _i: dash.code_loop(), 4) == 4 and len(checks) == 3, checks
+dash.check_code = real_check
 
 # The screen quotes prog.py's cleanup line, so the two cannot drift, and a person is not told to remove cards by hand.
 app_js = pathlib.Path(__file__).parents[1].joinpath("assets/dashboard/app.js").read_text()

@@ -4,7 +4,7 @@ cutover-plan and the preflight. Everything runs in temporary state directories w
 
 Run: python3 test_store.py
 """
-import contextlib, json, os, pathlib, sqlite3, stat, subprocess, sys, tempfile, threading
+import contextlib, json, os, pathlib, shutil, sqlite3, stat, subprocess, sys, tempfile, threading, time
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -122,20 +122,20 @@ with state("restore-onto-legacy") as sd3:
 
 # ---- the access gate: nothing opens, reads or writes a DB `orch db import` did not make
 with state("gate") as sd:
+    # A DB with the schema but without this code's data step is refused, and decisions.json is not written instead.
+    db = sqlite3.connect(str(store.path()))
+    db.executescript(store.SCHEMA)
+    db.execute("PRAGMA user_version=1")
+    db.close()
     for call in (fleet.open_decisions, fleet.pending_relays, lambda: fleet.decision_add("x")):
         try:
             call()
             raise AssertionError(call)
         except store.NotMigrated:
             pass
-    assert fleet.relay_decisions() == [] and fleet.decision_items({}, None) == [] and not store.path().exists()
+    assert fleet.relay_decisions() == [] and fleet.decision_items({}, None) == []
     code, _, err = orch("decide", "add", "--title", "x")
-    assert code == 1 and "orch db cutover-plan 4a" in err and not store.path().exists(), err
-    # A DB with the schema but without this code's data step is refused too.
-    db = sqlite3.connect(str(store.path()))
-    db.executescript(store.SCHEMA)
-    db.execute("PRAGMA user_version=1")
-    db.close()
+    assert code == 1 and "orch db cutover-plan 4a" in err and not (sd / "decisions.json").exists(), err
     try:
         store.open_db()
         raise AssertionError("opened without 4a-decisions")
@@ -523,5 +523,229 @@ assert sorted((w, t) for w, t, _ in sql) == [("store:bracket", "migration"), ("s
 got = registry.db_violations(registry.STORES, (connects, sql))
 assert {key for _, key, _ in got} == {"board:1", "card:2", "tidy:1", "store:surprise", "store:upsert", "store:schema",
                                       "store:bracket"}, got
+
+# ---- no DB yet: decisions.json is the store, and `orch db import` takes over from it
+ME = {"ORCA_TERMINAL_HANDLE": "term_0FAKEME"}
+with state("before-db") as sd:
+    d = fleet.decision_add("Before the DB", handle="term_0FAKE1")
+    assert [x["id"] for x in fleet.open_decisions()] == [d["id"]] and not store.path().exists()
+    code, out, err = orch("decide", "answer", d["id"], "--quote", "placeholder answer", env=ME)
+    assert code == 0 and out.startswith(f"{d['id']} ") and "by term_0FAKEME" in out and '"placeholder answer"' in out, (out, err)
+    assert fleet.open_decisions() == [] and json.loads((sd / "decisions.json").read_text())["decisions"][d["id"]]["answered_by"] == "term_0FAKEME"
+    code, out, _ = orch("decide", "answer", "--title", "Unasked order", "--quote", "placeholder order", env=ME)
+    assert code == 0 and "placeholder order" in out, out
+    # No session to name, and an open decision: both print from the file, with no DB to ask.
+    bare = {k: v for k, v in os.environ.items() if k != "ORCA_TERMINAL_HANDLE"}
+    open_d = fleet.decision_add("Still open")["id"]
+    assert orch("decide", "show", open_d)[0] == 0, "show of an open decision before the DB"
+    r = subprocess.run([sys.executable, str(HERE / "prog.py"), "decide", "answer", open_d, "--quote", "no session"],
+                       capture_output=True, text=True, env=bare)
+    assert r.returncode == 0 and "by ?" in r.stdout, r
+    fleet.decision_close(open_d, "dropped")
+    legacy_ids = [x["id"] for x in store.decisions("done")]
+    assert len(legacy_ids) == 2 and store.import_plan()["problems"] == [], legacy_ids
+    store.import_apply(checks=False)
+    assert (sd / "decisions.json").is_dir() and store.path().is_file()
+    assert store.decision_record(d["id"])["answered_by"] == "term_0FAKEME" and store.decision_record(legacy_ids[1])["answered_by"] == "term_0FAKEME"
+    # The tombstone is never read as an empty store, nor written.
+    assert [x["id"] for x in store.decisions("done")] == legacy_ids and (sd / "decisions.json").is_dir()
+    # Added and closed in one write the event is `add`, which show and export read as well.
+    code, out, _ = orch("decide", "answer", "--title", "After the DB", "--quote", "placeholder two", env=ME)
+    after = out.split()[0]
+    assert store.decision_record(after)["answered_by"] == "term_0FAKEME"
+    fleet.decision_close(after, "dropped")
+    out_file, _, _ = store.export_legacy(tmp / "with-by", "pre-4a")
+    exported = json.loads(out_file.read_text())["decisions"]
+    assert exported[d["id"]]["answered_by"] == "term_0FAKEME" and exported[after]["answered_by"] == "term_0FAKEME", exported
+with state("before-db-fresh-roundtrip") as sd:
+    fleet.write_atomic(sd / "decisions.json", (tmp / "with-by" / "decisions.json").read_text())
+    store.import_apply(checks=False)
+    assert store.decision_record(d["id"])["answered_by"] == "term_0FAKEME"
+
+# Corrupt, or missing its directory: never overwritten, and the callers see the same NotMigrated as before.
+with state("before-db-corrupt") as sd:
+    for bad in ("{not json", '{"decisions": [1]}', '{"decisions": []}', '{"decisions": false}'):
+        (sd / "decisions.json").write_text(bad)
+        for call in (fleet.open_decisions, lambda: fleet.decision_add("x")):
+            try:
+                call()
+                raise AssertionError(call)
+            except store.NotMigrated:
+                pass
+        assert (sd / "decisions.json").read_text() == bad
+    os.chmod(sd / "decisions.json", 0)
+    try:
+        fleet.open_decisions()
+        raise AssertionError("read an unreadable file")
+    except store.NotMigrated:
+        pass
+    finally:
+        os.chmod(sd / "decisions.json", 0o600)
+os.environ["ORCH_FLEET_STATE"], was = str(tmp / "no-such" / "dashboard"), os.environ["ORCH_FLEET_STATE"]
+try:
+    fleet.open_decisions()
+    raise AssertionError("read from a state directory that is not there")
+except store.NotMigrated:
+    assert not (tmp / "no-such").exists()
+finally:
+    os.environ["ORCH_FLEET_STATE"] = was
+
+
+# A reader or writer that waited on the lock while the import ran goes on to the DB; it never sees the tombstone.
+def waits_through_import(call):
+    with state("lock-race") as sd:
+        shutil.rmtree(sd)
+        sd.mkdir(parents=True)
+        fleet.decision_add("Raced")
+        got, started = [], threading.Event()
+
+        def run():
+            started.set()
+            got.append(call())
+        with store._locks():
+            worker = threading.Thread(target=run)
+            worker.start()
+            started.wait()
+            time.sleep(0.2)
+            assert not got, "the fallback did not wait for the import's lock"
+            real = store._locks
+            store._locks = contextlib.nullcontext
+            try:
+                store.import_apply(checks=False)
+            finally:
+                store._locks = real
+        worker.join(10)
+        assert not worker.is_alive() and (sd / "decisions.json").is_dir()
+        return got[0]
+
+
+assert [x["title"] for x in waits_through_import(fleet.open_decisions)] == ["Raced"]
+assert waits_through_import(lambda: fleet.decision_add("During"))["id"] == "d2"
+
+
+# A restore checks for decisions.json under the lock: `orch decide` may have written it just before.
+with state("restore-race") as sd:
+    store.import_apply(checks=False)
+    store.backup(sd / "copy.db")
+    store.path().unlink()
+    (sd / "decisions.json").rmdir()
+
+    @contextlib.contextmanager
+    def writer_got_there_first():
+        legacy(sd)
+        yield
+    real, store._locks = store._locks, writer_got_there_first
+    try:
+        store.restore(sd / "copy.db", checks=False)
+        raise AssertionError("restored over a decisions.json written while it waited")
+    except store.Refused as e:
+        assert "is a file here" in str(e) and (sd / "decisions.json").is_file(), e
+    finally:
+        store._locks = real
+
+# ---- `orch decide answer`: the words as given, when, and through which session
+with state("answer") as sd:
+    store.import_apply(checks=False)
+    d = fleet.decision_add("Ship?", handle="term_0FAKE1")["id"]
+    words = "first line\n\n  second line  "
+    code, out, err = orch("decide", "answer", d, "--quote", words, "--by", "term_0FAKEBY", env=ME)
+    rec = store.decision_record(d)
+    assert code == 0 and rec["answer"] == words and rec["status"] == "done" and rec["closed_at"], rec
+    assert rec["answered_by"] == "term_0FAKEBY" and out == f'{d} {rec["closed_at"]} by term_0FAKEBY: "first line" (+2줄)', out
+    code, out, _ = orch("decide", "show", d)
+    assert code == 0 and "first line" in out and "second line" in out and "Ship?" in out, out
+    code, _, err = orch("decide", "answer", d, "--quote", "again")
+    assert code == 1 and "already done" in err and store.decision_record(d)["answer"] == words, err
+    assert orch("decide", "show", "d999")[0] == 1
+    for bad in (("decide", "answer", "--quote", "no id"), ("decide", "answer", d), ("decide", "answer", "d1", "--title", "T", "--quote", "x")):
+        assert orch(*bad)[0] == 1, bad
+    # Too long is refused, never cut: a truncated quote is not the owner's words.
+    long_d = fleet.decision_add("Long", handle=None)["id"]
+    code, _, err = orch("decide", "answer", long_d, "--quote", "x" * (fleet.DECISION_ANSWER_MAX + 1))
+    assert code == 1 and "characters" in err and store.decision_record(long_d)["status"] == "open", err
+    code, _, _ = orch("decide", "answer", long_d, "--quote", " ")
+    assert code == 1 and store.decision_record(long_d)["status"] == "open"
+    # Masking lengthens a short secret: the stored text is what must fit, or it would end in a cut.
+    grows = "password=a " * 160
+    assert len(grows) < fleet.DECISION_ANSWER_MAX < len(fleet.mask(grows))
+    assert orch("decide", "answer", long_d, "--quote", grows)[0] == 1 and store.decision_record(long_d)["status"] == "open"
+    # --quote-file, and the answer survives a later delivered event.
+    (sd / "q.txt").write_text("from a file\n")
+    assert orch("decide", "answer", long_d, "--quote-file", str(sd / "q.txt"), env=ME)[0] == 0
+    assert store.decision_record(long_d)["answer"] == "from a file\n"
+    # Answered on the page and not relayed: the page's answer stays, the relay stops, and a different quote is said so.
+    page = fleet.decision_add("On the page", handle="term_0FAKE1")["id"]
+    assert fleet.decision_close(page, "done", "page answer", relay=True, by="dashboard")["delivered"] is False
+    code, out, err = orch("decide", "answer", page, "--quote", "password=PLACEHOLDER_VALUE", env=ME)
+    rec = store.decision_record(page)
+    assert code == 0 and rec["answer"] == "page answer" and rec["answered_by"] == "dashboard" and rec["delivered"] is True, rec
+    assert '"page answer"' in out and "not stored" in err and "PLACEHOLDER" not in err, (out, err)
+    # `done` records who too.
+    plain = fleet.decision_add("Plain")["id"]
+    assert orch("decide", "done", plain, "--answer", "yes", env=ME)[0] == 0 and store.decision_record(plain)["answered_by"] == "term_0FAKEME"
+
+# ---- brief render: an unregistered --decision is registered, with its id, and only once
+ITEM = "캐시를 지울까: 지움 / 유지 → 추천: 유지 — 무료 한도 안 · 답이 없으면 유지"
+
+
+def brief(*args, env=ME):
+    return orch("brief", "render", "--no-refresh", "--no-fill", *args, env=env)
+
+
+with state("register") as sd:
+    store.import_apply(checks=False)
+    code, out, err = brief("--decision", ITEM)
+    opened = fleet.open_decisions()
+    assert code == 0 and len(opened) == 1 and opened[0]["handle"] == "term_0FAKEME" and opened[0]["options"] == [], (out, err, opened)
+    did = opened[0]["id"]
+    assert f"({did}) {ITEM}" in out and out.count(ITEM) == 1, out
+    # A second render, as after sending, registers nothing new.
+    code, out, _ = brief("--decision", ITEM, "--commit")
+    assert code == 0 and [x["id"] for x in fleet.open_decisions()] == [did] and out.count(ITEM) == 1, out
+    # Another session's same words, or a changed recommendation, is another decision.
+    brief("--decision", ITEM, env={"ORCA_TERMINAL_HANDLE": "term_0FAKE2"})
+    brief("--decision", ITEM.replace("추천: 유지", "추천: 지움"))
+    assert len(fleet.open_decisions()) == 3
+    # Answered between the render and the next: not asked again, and said so.
+    fleet.decision_close(did, "done", "placeholder")
+    code, out, err = brief("--decision", ITEM)
+    assert code == 0 and did in err and len(fleet.open_decisions()) == 2 and f"({did})" not in out, (out, err)
+    # Dropped is no answer: raised again, it is a new decision.
+    third = fleet.open_decisions()[-1]["id"]
+    fleet.decision_close(third, "dropped")
+    brief("--decision", ITEM.replace("추천: 유지", "추천: 지움"))
+    assert len(fleet.open_decisions()) == 2 and third not in [x["id"] for x in fleet.open_decisions()]
+    # --now replays the past: nothing is registered.
+    before = len(store.decisions())
+    code, out, _ = orch("brief", "render", "--now", "2026-11-01T00:00:00Z", "--no-fill", "--decision", ITEM + " 재현")
+    assert code == 0 and ITEM + " 재현" in out and len(store.decisions()) == before, out
+    # A bad form registers nothing, the others included.
+    code, _, err = brief("--decision", ITEM + " 앞", "--decision", "추천이 없는 문구")
+    assert code == 1 and err.startswith("--decision is one line") and len(store.decisions()) == before, err
+    # A label is not made up, so an owner's sentence starting with the recommendation closes nothing by itself.
+    assert all(not x["options"] for x in fleet.open_decisions())
+    # A long item keeps its recommendation in the report, and a skipped one's answer stays out of stderr.
+    long_item = "긴 질문 " * 200 + "→ 추천: 유지 — 끝까지 · 답이 없으면 유지"
+    code, out, _ = brief("--decision", long_item)
+    assert code == 0 and "답이 없으면 유지" in out and "끝까지" in out, out[-300:]
+    long_id = fleet.open_decisions()[-1]["id"]
+    fleet.decision_close(long_id, "done", "placeholder quiet")
+    code, _, err = brief("--decision", long_item)
+    assert code == 0 and long_id in err and "placeholder quiet" not in err, err
+    before = len(store.decisions())
+    # Too long to hold whole: two items differing past the limit must not become one decision.
+    code, out, err = brief("--decision", "x" * (fleet.DECISION_BODY_MAX + 1) + " → 추천: 유지")
+    assert code == 1 and "(미등록)" in out and len(store.decisions()) == before, (out[:300], err)
+
+# Registration failed: the report still goes out, with a warning above it, the item marked, and exit 1.
+with state("register-fails") as sd:
+    db = sqlite3.connect(str(store.path()))
+    db.executescript(store.SCHEMA)
+    db.close()
+    code, out, err = brief("--decision", ITEM)
+    lines = out.splitlines()
+    assert code == 1 and lines[0].startswith("⚠️ 결정 등록 실패 1건") and f"(미등록) {ITEM}" in out and "오너가 할 일" in out, (out, err)
+    code, out, err = brief("--decision", ITEM, "--json")
+    assert code == 1 and "결정 등록 실패" in err and f"(미등록) {ITEM}" in json.loads(out)["text"], (out, err)
 
 print("test_store: ok")

@@ -4,8 +4,12 @@
 Usage:
   skills-sync card <brief.md> --repo <selector> --name <name> [--display-name <title>] [--comment <text>]
                    [--reference <ticket URL or Jira key>]... [--parent-worktree <selector> | --no-parent] [--card]
-                   [--role impl|verify|review] [--supersede] [--no-forbidden] [--agent claude|codex]
+                   [--role impl|verify|review] [--supersede] [--no-forbidden] [--agent claude|codex] [--model <id>]
   skills-sync handoff <TICKET> ...   (handoff() below)
+
+The session's model: --model when the human named one, else `orchestrate.models.lead` for a lead's brief and
+`orchestrate.models.worker` for anything else (agent-skills.json). With neither, no flag goes out, the card runs on the
+account's default and one warning line says so. A Codex card takes only --model: those keys name Claude models.
 
 --agent picks the card's CLI (default claude). Every brief check runs the same for either. Codex is a supervised
 worker only: its close-setup gets no agent handle, since that reads Claude's screen and worker-start's receipt says it
@@ -31,7 +35,12 @@ itself a dispatched worker on it (a lead started with worker-start, whose `run-c
 worker (`orca orchestration worker-start --worktree new-child`, so Orca records this session's worktree as its
 parent; `new-top-level` with --no-parent; any other --parent-worktree is ignored, since worker-start takes none): a
 Dispatch, so the card's worker_done, escalation and ask reach this session and Orca watches it for prompts. Its spec
-is the prompt below without the leading `/goal`. When this session is bound to no Run, works for another Run than the
+is the prompt below, `/goal` line included. Orca puts its own preamble before a spec, so that line never runs as the
+slash command there: for a Claude worker a detached helper (`card.py goal-after-idle`, log in
+$AGENT_SKILLS_STATE/goal-input/<name>.log, its path in the `card` object's goal_input) polls `sync.try_send` (the
+reload broadcast's screen checks: no spinner or dialog, an empty prompt box, two equal reads) for at most GOAL_IDLE_S
+until the first turn ends, then types that one line. Past the limit, or when the screen does not confirm the line, it
+types nothing more and logs a warning with the manual command. When this session is bound to no Run, works for another Run than the
 brief names, or Orca does not answer, nothing is created (exit 6): the lines printed say how to bind it
 (`orca orchestration run-use`) or to make a /goal card on purpose (--card). A refused new-child is not retried as
 new-top-level.
@@ -50,7 +59,8 @@ lost on a restart (`terminal_not_found`), and while it lives the mail is only st
 start for a worker, which takes no link flag.
 
 The prompt is the brief's `/goal` line (with ` 브리프: <brief path>` appended unless it already names a brief), then
-its PROGRAM, APPROVED, lead and CLOSE/KEEP rows. A row is a line outside a ``` fence that starts with the key and a
+its PROGRAM, APPROVED, lead, CLOSE/KEEP and FORBIDDEN rows (the FORBIDDEN section whole, markers and the lines after
+a blank line included) and every REPORT row, so both paths carry the bans and the report address. A row is a line outside a ``` fence that starts with the key and a
 colon (`CLOSE: …`, `` `CLOSE`: … ``) or the template's wide gap (`DELEGATE    …`), plus the indented lines under it.
 A lead's brief (a MODE row, a `ROLE: lead <slug>` row or a `<project>: lead` head) needs every row of orchestrate
 references/brief.md "Lead", its MERGE row naming exactly one merge_policy; any brief needs CLOSE or KEEP, and one with an Approved heading or bullet needs its
@@ -71,7 +81,7 @@ exists but linking, logging or naming it failed, or a started worker's receipt n
 output is still printed; do not create it again); 6 nothing created because the Run or the parent did not check
 out (the choices are printed).
 """
-import contextlib, datetime, fcntl, itertools, json, os, pathlib, re, shlex, subprocess, sys
+import contextlib, datetime, fcntl, itertools, json, os, pathlib, re, shlex, subprocess, sys, time
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE", "~/.local/state/agent-skills")).expanduser()
@@ -96,9 +106,12 @@ import orca_settings  # noqa: E402
 ORCA = os.environ.get("SKILLS_SYNC_ORCA", "orca")
 ORCH = os.environ.get("SKILLS_SYNC_ORCH", str(REPO / "bin" / "orch"))
 GOAL = re.compile(r"(?m)^/goal[ \t]+\S.*$")
+GOAL_IDLE_S = 3600  # how long the detached helper waits for a worker's first turn to end
+GOAL_POLL_S = 10
+GOAL_FATAL = ("orca ", "not a connected", "no rendered screen")  # try_send reasons that waiting will not change
 LEAD_ROWS = ("MODE", "ROLE", "INBOX", "DELEGATE", "PREDICATE", "MERGE", "TASKS", "GATE")
 MERGE_VALUE = re.compile(r"\bmerge_policy (autonomous|human-gate)\b")
-ROWS = ("PROGRAM", "APPROVED", *LEAD_ROWS, "CLOSE", "KEEP")
+ROWS = ("PROGRAM", "APPROVED", *LEAD_ROWS, "CLOSE", "KEEP", "FORBIDDEN", "REPORT")
 FENCE = re.compile(r"(?ms)^[ \t]*```.*?^[ \t]*```[^\n]*$")
 # dispatch-card §2's prose form of the approval, which carries nothing into the prompt without an APPROVED row
 APPROVED_PROSE = re.compile(r"(?im)^[ \t]*(?:#{1,6}[ \t]*|[-*][ \t]+\*\*)approved\b")
@@ -116,18 +129,40 @@ def starts_row(line, key):
     return re.match(rf"^[ \t]*`?{key}`?(?:[ \t]*:|[ \t]{{2,}}\S)", line) is not None
 
 
-def row(text, key):
+def continues(line):
+    return bool(line.strip()) and line[:1].isspace() and not any(starts_row(line, k) for k in ROWS)
+
+
+def row_at(lines, i, across_blank=False):
+    """The row starting at lines[i] with its indented continuation lines. With across_blank, a blank line does not end
+    it when the next line still continues it: the FORBIDDEN section a brief writes in two paragraphs."""
+    out = [lines[i].strip()]
+    j = i + 1
+    while j < len(lines):
+        if continues(lines[j]):
+            out.append(lines[j].rstrip())
+            j += 1
+            continue
+        end = j
+        while across_blank and end < len(lines) and not lines[end].strip():
+            end += 1
+        if end == j or end == len(lines) or not continues(lines[end]):
+            break
+        out += [""] * (end - j)
+        j = end
+    return "\n".join(out)
+
+
+def row(text, key, across_blank=False):
     """The first row for `key`, with its indented continuation lines, else None."""
     lines = text.splitlines()
-    for i, line in enumerate(lines):
-        if starts_row(line, key):
-            out = [line.strip()]
-            for nxt in lines[i + 1:]:
-                if not nxt.strip() or not nxt[:1].isspace() or any(starts_row(nxt, k) for k in ROWS):
-                    break
-                out.append(nxt.rstrip())
-            return "\n".join(out)
-    return None
+    return next((row_at(lines, i, across_blank) for i, line in enumerate(lines) if starts_row(line, key)), None)
+
+
+def all_rows(text, key):
+    """Every row for `key`: a brief may keep a short REPORT line near the top and the full one at the end."""
+    lines = text.splitlines()
+    return [row_at(lines, i) for i, line in enumerate(lines) if starts_row(line, key)]
 
 
 def merge_policy(merge_row):
@@ -171,7 +206,7 @@ def compose(brief_path):
         raise Refuse(2, f"cannot read the brief: {e}")
     text = FENCE.sub("", text)  # a quoted template is not the brief's own rows
     goal = GOAL.search(text)
-    rows = {k: row(text, k) for k in ROWS}
+    rows = {k: row(text, k, across_blank=k == "FORBIDDEN") for k in ROWS}
     lead = guard.is_lead(text)
     missing = [] if goal else ["`/goal <goal>` line"]
     if not (rows["CLOSE"] or rows["KEEP"]):
@@ -198,7 +233,9 @@ def compose(brief_path):
     head = goal.group(0).rstrip()
     if not any(s in head for s in ("브리프:", str(path), brief_path)):
         head += f" 브리프: {path}"
-    prompt = "\n".join([head, *(rows[k] for k in ROWS if rows[k])])
+    # FORBIDDEN (markers included) and every REPORT row go in whole: the worker gets its bans and where to report from
+    # no other place than this first prompt, and a path to the brief file is not a substitute for them.
+    prompt = "\n".join([head, *(r for k in ROWS for r in (all_rows(text, k) if k == "REPORT" else [rows[k]]) if r)])
     # The hook's own test on the result: if its patterns move, this refuses instead of creating what it would refuse.
     if not guard.CLOSE_OR_KEEP.search(prompt) or guard.is_lead(prompt) != lead or lead and (
             not guard.LEAD_ROLE.search(prompt) or any(not re.search(rf"\b{w}\b", prompt) for w in guard.LEAD_LINES)):
@@ -458,6 +495,103 @@ def start_close_setup(path, handle, name):
         return {"error": str(e)}
 
 
+def start_goal_input(handle, line, name):
+    """Starts `card.py goal-after-idle <handle> <line>` detached: the worker's first turn can last the whole task, and
+    this command must not wait for it. Returns {log, pid} or {error}; a failure to start is printed, never fatal."""
+    log = STATE / "goal-input" / f"{name}.log"
+    try:
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with open(log, "a") as out:
+            p = subprocess.Popen([sys.executable, str(pathlib.Path(__file__).resolve()), "goal-after-idle", handle, line],
+                                 stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
+        return {"log": str(log), "pid": p.pid}
+    except OSError as e:
+        print(f"[{ME}] warning: the /goal input did not start ({e}); once the worker is idle, run: "
+              f"{manual_goal_command(handle, line)}", file=sys.stderr)
+        return {"error": str(e)}
+
+
+def manual_goal_command(handle, line):
+    return shlex.join([ORCA, "terminal", "send", "--terminal", handle, "--text", line, "--enter"])
+
+
+def type_when_idle(handle, line, deadline=None):
+    """None once `line` was typed into an idle Claude session and the screen shows it was taken, else the reason it
+    was not (sync.UNCONFIRMED when it may have been typed). This is `sync.send_to` with the tab title left out of the
+    judgement: a worker's title is the session's topic (`GOAL-DEMO-OK …`), never the `✳` that `sync.classify` wants,
+    so the title would read every worker as busy. The screen checks (spinner, dialog, empty prompt box, two equal
+    reads) stay."""
+    import sync
+
+    def look():
+        meta = sync.orca("terminal", "show", "--terminal", handle)
+        meta = meta.get("terminal", meta)
+        if meta.get("agentIdentity") != "claude" or not meta.get("connected") or not meta.get("writable"):
+            return [], "not a connected, writable Claude terminal"
+        t = sync.orca("terminal", "read", "--terminal", handle, "--screen")["terminal"]
+        if t.get("source") not in (None, "screen"):
+            return [], f"no rendered screen ({t.get('source')})"
+        tail = t.get("tail") or []
+        return tail, sync.classify(tail, "✳", t.get("draft") or "")
+
+    with sync.locked(10) as got:  # the lock sync, broadcast and nudge share: no other writer types between the reads
+        if not got:
+            return "a sync or broadcast is running"
+        try:
+            first, reason = look()
+            if reason:
+                return reason
+            time.sleep(sync.SETTLE_S)
+            second, reason = look()
+            if reason:
+                return reason
+            if second != first:
+                return "screen changed between two reads (someone may be typing)"
+        except sync.Stop as e:
+            return str(e)
+        if deadline is not None and time.monotonic() >= deadline:
+            return "time limit reached while waiting"
+        try:
+            sync.orca("terminal", "send", "--terminal", handle, "--text", line, "--enter")
+        except sync.Stop:  # Orca may have taken the input and lost the answer: typing it again could set the goal twice
+            return sync.UNCONFIRMED
+        time.sleep(sync.CONFIRM_S)
+        try:
+            after, _ = look()
+        except sync.Stop:  # typed already: an unread confirmation must not read as never sent
+            return sync.UNCONFIRMED
+        return None if sync.turn_started(second, after, line) else sync.UNCONFIRMED
+
+
+def goal_after_idle(handle, line, timeout_s=GOAL_IDLE_S):
+    """Types the /goal line into the worker's terminal once its first turn ended and an empty prompt is back. Orca puts
+    its own preamble before a worker's spec, so the line inside the spec never runs as the slash command. The idle
+    judgement is `type_when_idle`'s, polled until the limit: `orca terminal wait --for tui-idle` is not used, since it
+    answered during UserPromptSubmit hooks (docs/platform.md). Nothing is typed while the turn runs or after the
+    limit. 0 sent, 1 not sent (the manual command is printed)."""
+    import sync
+    manual = manual_goal_command(handle, line)
+    deadline = time.monotonic() + timeout_s
+    while True:
+        if time.monotonic() >= deadline:
+            print(f"[{ME}] warning: the /goal line was not typed into {handle} (waited up to {timeout_s}s). "
+                  f"Once the worker is idle, run: {manual}", file=sys.stderr)
+            return 1
+        reason = type_when_idle(handle, line, deadline)
+        if reason is None:
+            print(f"[{ME}] typed the /goal line into {handle}: {line}")
+            return 0
+        if reason == sync.UNCONFIRMED:  # it was typed; typing it again would set the goal twice
+            print(f"[{ME}] warning: the /goal line may have reached {handle}, but its screen does not show it. Read "
+                  f"the screen before typing it again: {manual}", file=sys.stderr)
+            return 1
+        if reason.startswith(GOAL_FATAL):
+            print(f"[{ME}] warning: the /goal line was not typed into {handle} ({reason}; waited up to {timeout_s}s). "
+                  f"Once the worker is idle, run: {manual}", file=sys.stderr)
+            return 1
+        time.sleep(GOAL_POLL_S)
+
+
 def pressure_check(cmd):
     """(the pressure gate's deny reason or None, a function recording this start's outcome in the gate's queue).
     The hook's own steps for a command it sees: a danger deny queues it, a pass marks that entry's retry. Running the
@@ -603,7 +737,7 @@ def handle_of(res):
 def parse_args(rest):
     opts, refs = {}, []
     valued = {"--repo", "--name", "--display-name", "--comment", "--parent-worktree", "--role", "--title", "--note",
-              "--base-branch", "--agent"}
+              "--base-branch", "--agent", "--model"}
     i = 0
     while i < len(rest):
         if rest[i] == "--reference" and i + 1 < len(rest):
@@ -620,6 +754,20 @@ def parse_args(rest):
     if opts.setdefault("--agent", "claude") not in AGENTS:
         raise Refuse(2, f"--agent is one of {', '.join(AGENTS)}")
     return opts, refs
+
+
+def session_model(opts, lead, name):
+    """The model this start names, or None after a warning line. See the module docstring."""
+    if opts.get("--model"):
+        return opts["--model"]
+    if opts["--agent"] != "claude":
+        return None
+    role = "lead" if lead else "worker"
+    model = orca_settings.role_model(role)
+    if not model:
+        print(f"[{name}] orchestrate.models.{role} is not set: this card runs on the account's default model",
+              file=sys.stderr)
+    return model
 
 
 def refuse_codex(brief, opts):
@@ -661,6 +809,7 @@ def create_locked(brief, opts, refs, prompt):
     # A lead's brief has no FORBIDDEN row in its template: the worker paragraph is not its rule set.
     forbidden = ("skipped (--no-forbidden)" if opts.get("--no-forbidden") else "skipped (lead brief)"
                  if guard.is_lead(pathlib.Path(brief).expanduser().read_text()) else refresh_forbidden(brief))
+    prompt = compose(brief)  # again: the refresh may have rewritten the FORBIDDEN section the prompt carries
     text = FENCE.sub("", pathlib.Path(brief).expanduser().read_text())
     wanted = {a[len("run:"):] for a in report_to(text) if a.startswith("run:")}
     to_run = bool(wanted)
@@ -690,9 +839,12 @@ def create_locked(brief, opts, refs, prompt):
         raise Refuse(2, f"[{ME}] {CODEX_GOAL_CARD}")
     parent = None if opts.get("--no-parent") else (
         opts["--parent-worktree"] if opts.get("--parent-worktree") and not worker else caller_worktree())
+    model = session_model(opts, lead, ME)
     if worker:
-        # Orca delivers a worker's spec as its task, after its own preamble: a leading /goal would not run there.
-        spec = re.sub(r"^/goal[ \t]+", "", prompt, count=1)
+        # Orca puts its own preamble before the spec, so the /goal line is not the first thing the session reads and
+        # Claude Code may not run it as the slash command. It stays: the line still states the goal, and stripping it
+        # dropped the owner's goal from the worker altogether.
+        spec = prompt
         # worker-start takes no parent selector: new-child parents it to this session, --no-parent drops lineage
         cmd = [ORCA, "orchestration", "worker-start", "--spec", spec, "--worktree",
                "new-top-level" if opts.get("--no-parent") else "new-child",
@@ -708,6 +860,7 @@ def create_locked(brief, opts, refs, prompt):
             cmd += ["--reference", r]
     if opts.get("--comment"):
         cmd += ["--comment", opts["--comment"]]
+    cmd += ["--model", model] if model else []
     cmd.append("--json")
     reason, mark = pressure_check(shlex.join(["orca", *cmd[1:]]))
     if reason:
@@ -755,8 +908,12 @@ def create_locked(brief, opts, refs, prompt):
     handle = handle_of(res)
     # close-setup judges the start from Claude's screen; worker-start's receipt already says a Codex worker is ready.
     setup = start_close_setup(path, handle if opts["--agent"] == "claude" else None, opts["--name"])
+    # A worker's /goal line is typed by a detached helper once the first turn ends; a card gets it as its prompt.
+    goal_input = (start_goal_input(handle, prompt.splitlines()[0], opts["--name"])
+                  if worker and handle and opts["--agent"] == "claude" else None)  # /goal is Claude Code's command
     print(json.dumps({**res, "card": {"kind": "worker" if worker else "card", "path": path, "handle": handle,
-                                      "run": run_id, "parent": parent, "forbidden": forbidden, "close_setup": setup}},
+                                      "run": run_id, "parent": parent, "forbidden": forbidden, "close_setup": setup,
+                                      "model": model, **({"goal_input": goal_input} if goal_input else {})}},
                      ensure_ascii=False, indent=1))
     failed = []
     if refs:
@@ -850,6 +1007,8 @@ def handoff_locked(ticket, opts, refs, prompt):
     cmd += ["--base-branch", opts["--base-branch"]] if opts.get("--base-branch") else []
     cmd += ["--parent-worktree", parent] if parent else ["--no-parent"]
     cmd += ["--agent", "claude", "--prompt", prompt]
+    model = session_model(opts, False, HANDOFF)
+    cmd += ["--model", model] if model else []
     for r in refs:
         cmd += ["--reference", r]
     cmd.append("--json")
@@ -897,6 +1056,8 @@ def handoff_locked(ticket, opts, refs, prompt):
 
 
 def main(argv):
+    if argv[:1] == ["goal-after-idle"] and len(argv) == 3:  # the detached helper start_goal_input starts
+        return goal_after_idle(argv[1], argv[2])
     try:
         return create(argv)
     except Refuse as e:

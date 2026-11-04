@@ -113,10 +113,12 @@ skills-sync setup disable janitor        # 하나 끄기. 어느 것이든 apply
 | `prose_check.py` | PR·커밋·Linear·Jira 저장 전 | 본문의 write-plainly 금지 패턴을 알린다. 막지 않는다 |
 | `stack_gate.py` | `gh pr create` 전 | 브리프의 `Lands after`나 브랜치 이력으로 의존하는 열린 PR이 있는데 base가 그 위가 아니면 알린다. `orchestrate.stack_dependent: deny`면 막는다 |
 | `claim_check.py` | 멈출 때(Stop, SubagentStop) | 코드를 고치고 아무것도 돌리지 않은 채 "고쳤다"고 하면 한 번 막는다. `AGENT_SKILLS_CLAIM_CHECK=0`으로 끈다 |
+| `owner_check.py` | 멈출 때(Stop, SubagentStop) | 최종 응답에 🙋·"오너 할 일"·오너에게 묻는 표현이 있는데 이번 턴에 `orch decide add`·`orch board now`·`orch board set --owner`·`orch gate`·`orch-dash inbox add`가 없으면 "기록 안 된 오너 항목 N"을 사람에게 한 줄 보이고 `owner-check.jsonl`에 남긴다. 모델에 전달하는 block은 `guard.owner_check: "deny"`로만 켠다([오너 항목 기록 검사](skills.md#오너-항목-기록-검사)) |
 | `record_check.py` | Bash 호출 전·후, 멈출 때 | `gh pr merge`·`gh pr create`·`orch land` 뒤 기록을 요구하고, 보고·`worker_done` 본문에 `기록:`·`기록 못 함:` 줄이 나올 때까지 그 세션에 의무를 남긴다. 기록 줄 없는 `worker_done`, 의무가 남은 카드 닫기, 의무를 남긴 채 끝나는 턴을 `guard.record_check`(기본 warn)로 알리거나 막는다. `tracker`·`notes` 설정이 없으면 꺼진다([기록 줄 검사](skills.md#기록-줄-검사)) |
 | `onboard.py` | 세션 시작 | 설정되지 않은 PC에서 `setup-pc`를 제안한다. 거절하면 그 프로필에서는 다시 묻지 않고(`onboard.py --decline`), `AGENT_SKILLS_ONBOARD=0`으로 모두 끈다 |
 | `reorient.py` | 세션 시작, 프롬프트 | `--agent agent-skills:orchestrator`·`lead`나 `ROLE:` 줄로 선언한 세션에 다시 읽을 규칙과 매 프롬프트 한 줄을 넣는다 |
 | `decision.py` | 프롬프트 | 터미널에서 답한 대시보드 결정을 닫는다 |
+| `decision_relay.py` | Bash 호출 전 | 오케스트레이터나 리드가 오너 말을 인용해 전달하는데 결정 기록이 없으면 알린다. 막지 않는다. `guard.decision_relay: off`로 끈다 |
 | `permission.py` | 권한 창 | 대시보드에서 답할 수 있게 권한 창을 기록한다. 결정은 내리지 않는다 |
 
 hook마다의 판정 세부는 [skills.md](skills.md#hook).
