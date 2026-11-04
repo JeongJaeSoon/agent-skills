@@ -8,5 +8,4 @@ hooks/test_retired.py fails when any path hooks.json ever ran is missing.
 """
 import sys
 
-sys.stdin.buffer.read()
 sys.exit(0)

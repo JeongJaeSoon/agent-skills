@@ -91,6 +91,10 @@ for event in ("PreToolUse", "PermissionDenied", "Stop", "SubagentStop"):
     out = run(f'python3 "{HERE / "refusals.py"}"',
               {"hook_event_name": event, "tool_name": "Bash", "tool_input": {"command": MERGE}, **BASE})
     assert out == {}, (event, out)
+assert run(f'python3 "{HERE / "refusals.py"}" <&-', {}) == {}, "a closed stdin is not a failure"
+held = subprocess.Popen([sys.executable, HERE / "refusals.py"], stdin=subprocess.PIPE)
+assert held.wait(timeout=5) == 0, "a stdin left open does not hold the session up to the hook's timeout"
+held.stdin.close()
 
 assert OLD.read_text() == OLD_TEXT, "the old ledger was changed"
 print("test_refusal_retry: ok")
