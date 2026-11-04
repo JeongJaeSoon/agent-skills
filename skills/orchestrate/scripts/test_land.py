@@ -34,8 +34,10 @@ elif a[:2] == ["pr", "view"] and a[-1] == "files":
 elif a[:2] == ["pr", "view"] and "--jq" in a and a[a.index("--jq") + 1] == ".state":
     print(pr(a[2])["state"])
 elif a[:2] == ["pr", "view"]:
-    p = pr(a[2]); print(json.dumps(dict(p, mergeCommit={"oid": p.get("merge_sha")} if p.get("merge_sha") else None,
-                                        url=f"https://x/pull/{a[2]}", title="t", headRefName=f"b{a[2]}")))
+    # Like real gh, only the fields asked for with --json come back.
+    p = pr(a[2]); full = dict(p, mergeCommit={"oid": p.get("merge_sha")} if p.get("merge_sha") else None,
+                              url=f"https://x/pull/{a[2]}", title=p.get("title", "t"), headRefName=f"b{a[2]}")
+    print(json.dumps({k: full[k] for k in a[a.index("--json") + 1].split(",") if k in full and k not in p.get("drop", [])}))
 elif a[:2] == ["pr", "diff"]:
     print(pr(a[2])["diff"])
 elif a[:2] == ["pr", "merge"]:
@@ -583,5 +585,90 @@ code, out = prog(lead_env, "gate", "au", "--pr", "1")
 assert code != 0 and "/goal card" in out and "decide add" not in out, out
 src =(HERE / "prog.py").read_text()
 assert "decide add` per PR" not in src, "prog.py still offers `orch decide add` per PR as a way to land"
+
+# `orch gate`, the step land-check's HOLD names, asks the user with the PR title and records the gate it opened.
+FAKE_ORCA_GATE = r'''#!/usr/bin/env python3
+import json, os, sys
+st = json.load(open(os.environ["FAKE_GH_STATE"]))
+a = sys.argv[1:]
+st["orca_log"] = st.get("orca_log", []) + [a]; json.dump(st, open(os.environ["FAKE_GH_STATE"], "w"))
+reply = st.get("orca_reply", {})
+if a[:2] == ["orchestration", "task-create"]:
+    print(json.dumps({"ok": True, "result": reply.get("task", {"task": {"id": "task_g"}})}))
+elif a[:2] == ["orchestration", "gate-create"] and reply.get("gate_error"):
+    print(json.dumps({"ok": False, "error": reply["gate_error"]}))
+elif a[:2] == ["orchestration", "gate-create"]:
+    print(json.dumps({"ok": True, "result": reply.get("gate", {"gate": {"id": "gate_g"}})}))
+else:
+    print(json.dumps({"ok": True, "result": {"tasks": [], "workers": []}}))
+'''
+
+
+def gate_setup(prs, orca_reply=None):
+    d, env = setup(prs)
+    (d / "bin" / "orca").write_text(FAKE_ORCA_GATE)
+    st = json.loads((d / "state.json").read_text())
+    (d / "state.json").write_text(json.dumps(dict(st, orca_reply=orca_reply or {})))
+    env = {k: v for k, v in env.items() if k != "ORCA_TERMINAL_HANDLE"}
+    code, out = prog(env, "set", "t", "merge_policy", "human-gate")
+    assert code == 0, out
+    return d, env
+
+
+def orca_calls(d, verb):
+    return [c for c in json.loads((d / "state.json").read_text()).get("orca_log", []) if c[1:2] == [verb]]
+
+
+d, env = gate_setup({"60": dict(pr(60), title="Add the widget")})
+code, out = prog(env, "gate", "t", "--pr", "60")
+assert code == 0 and "Traceback" not in out, out
+q = orca_calls(d, "gate-create")[0]
+assert q[q.index("--question") + 1] == "Land PR #60: Add the widget?", q
+assert [e for e in ledger(d) if e["ev"] == "gate_opened"][-1]["gate"] == "gate_g"
+
+# A PR view without a title (gh left the field out) still opens the gate, with the PR URL in the question and one
+# warning line; a closed PR, or an Orca reply without an id, opens no gate and records none.
+d, env = gate_setup({"61": dict(pr(61), drop=["title"])})
+code, out = prog(env, "gate", "t", "--pr", "61")
+assert code == 0 and "Traceback" not in out, out
+assert sum("warning:" in l and "title" in l for l in out.splitlines()) == 1, out
+q = orca_calls(d, "gate-create")[0]
+assert q[q.index("--question") + 1] == "Land PR #61 (https://x/pull/61)?", q
+d, env = gate_setup({"62": dict(pr(62), state="MERGED")})
+code, out = prog(env, "gate", "t", "--pr", "62")
+assert code != 0 and "MERGED" in out and "Traceback" not in out, out
+assert not orca_calls(d, "task-create") and not [e for e in ledger(d) if e["ev"] == "gate_opened"]
+d, env = gate_setup({"63": pr(63)}, orca_reply={"gate": {"gate": {}}})
+code, out = prog(env, "gate", "t", "--pr", "63")
+assert code != 0 and "Traceback" not in out and not [e for e in ledger(d) if e["ev"] == "gate_opened"], out
+assert [c[c.index("--status") + 1] for c in orca_calls(d, "task-update")] == ["failed"], orca_calls(d, "task-update")
+d, env = gate_setup({"64": pr(64)}, orca_reply={"gate_error": {"code": "boom"}})
+code, out = prog(env, "gate", "t", "--pr", "64")
+assert code != 0 and "boom" in out and "marked failed" in out and "Traceback" not in out, out
+assert not [e for e in ledger(d) if e["ev"] == "gate_opened"]
+assert [c[c.index("--status") + 1] for c in orca_calls(d, "task-update")] == ["failed"], orca_calls(d, "task-update")
+
+# A gate_opened row naming no task or gate is no gate: land-check warns once and asks for a gate, and orch gate opens one.
+d, env = gate_setup({"65": pr(65)})
+verdict(d, 65, "T-65")
+with (d / "programs" / "t" / "ledger.jsonl").open("a") as f:
+    f.write(json.dumps({"ts": "2026-09-24T00:00:00+00:00", "ev": "gate_opened", "pr": 65}) + "\n")
+code, out = prog(env, "land-check", "t", "--pr", "65")
+assert code == 1 and "open the gate first" in out and "Traceback" not in out, out
+assert sum(l.startswith("warning:") and "gate_opened" in l for l in out.splitlines()) == 1, out
+code, out = prog(env, "gate", "t", "--pr", "65")
+assert code == 0 and [e for e in ledger(d) if e["ev"] == "gate_opened"][-1]["gate"] == "gate_g", out
+code, out = prog(env, "land-check", "t", "--pr", "65")
+assert "gate open in Orca, waiting for the user" in out and "Traceback" not in out, out
+assert sum(l.startswith("warning:") and "gate_opened" in l for l in out.splitlines()) == 1, out
+code, out = prog(env, "gate", "t", "--pr", "65")
+assert code != 0 and "already open" in out and "gate_g" in out, out
+assert sum(l.startswith("warning:") and "gate_opened" in l for l in out.splitlines()) == 1, out
+
+# land-check on a PR view without its state holds with one warning line, never READY and never a traceback.
+d, env = gate_setup({"66": dict(pr(66), drop=["state"])})
+code, out = prog(env, "land-check", "t", "--pr", "66")
+assert code == 1 and "HOLD: PR state unknown" in out and "READY" not in out and "Traceback" not in out, out
+assert sum(l.startswith("warning:") for l in out.splitlines()) == 1, out
 
 print("prog.py land against fake gh: all pass")

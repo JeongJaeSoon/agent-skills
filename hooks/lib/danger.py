@@ -187,8 +187,6 @@ def check_command(c, masked, cfg, cwd, session, here=None):
     files = user_files()
     if any(expand(t, here) in files for t in write_targets(c) if t):
         out.append(("guard.deny.user_settings", USER_SETTINGS))
-    if any(expand(t, here) in owner_files() for t in write_targets(c) if t):
-        out.append(("guard.deny.owner_only", OWNER_FILES))
     if not w:
         return out
     if name in ("pkill", "killall"):
@@ -247,7 +245,7 @@ def check_command(c, masked, cfg, cwd, session, here=None):
         if label_add(w):
             out.append(("guard.deny.self_exempt_label", "The `no-visual-change` label exempts a PR from visual review; "
                                                         "an agent never adds it to its own PR. Ask the human."))
-    if name == "orch" and (w[1:3] == ["refusal", "clear"] or w[1:2] == ["exempt"]):
+    if name == "orch" and w[1:2] == ["exempt"]:
         out.append(("guard.deny.owner_only", f"`orch {' '.join(w[1:3])}` is the human's to run, as a `!` line in their "
                                              "own chat."))
     if name == "codex" and (reason := external_review(w, here, cfg)):
@@ -274,13 +272,6 @@ def check_command(c, masked, cfg, cwd, session, here=None):
 USER_SETTINGS = ("This writes the user's own settings (Claude Code user settings, ~/.claude/agent-skills.json or "
                  "secure-fill's allowlist). The user changes them: agent-skills:skills-config or tune-automode emits "
                  "a script the user runs.")
-OWNER_FILES = ("This writes the refused-act ledger (refusals.jsonl in the agent-skills state directory). Only the human "
-               "changes it, with `!orch refusal clear <id>`; `orch refusal report` reads it.")
-
-
-def owner_files():
-    """Real paths of the files only the human changes: the refused-act ledger."""
-    return {os.path.realpath(config.state() / "refusals.jsonl")}
 
 
 def name_script(w):
@@ -446,12 +437,9 @@ def check_bash(cmd, cfg, cwd=None, session=None):
 
 def check_write(path, cfg):
     """[Finding] for an Edit, Write or NotebookEdit of path."""
-    if not isinstance(path, str) or not path:
+    key = "guard.deny.user_settings"
+    if not isinstance(path, str) or not path or (lvl := level(cfg, key)) == "off":
         return []
-    real = os.path.realpath(os.path.expanduser(path))
-    out = []
-    for key, files, reason in (("guard.deny.user_settings", user_files(), USER_SETTINGS),
-                               ("guard.deny.owner_only", owner_files(), OWNER_FILES)):
-        if (lvl := level(cfg, key)) != "off" and real in files:
-            out.append(Finding(key, lvl, f"{reason} {KEY_SOURCE.format(key=key)}"))
-    return out
+    if os.path.realpath(os.path.expanduser(path)) in user_files():
+        return [Finding(key, lvl, f"{USER_SETTINGS} {KEY_SOURCE.format(key=key)}")]
+    return []

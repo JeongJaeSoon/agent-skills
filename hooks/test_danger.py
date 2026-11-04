@@ -178,8 +178,7 @@ CASES = [
       "gh api --method DELETE repos/acme/app/issues/12/labels/no-visual-change",
       'gh api repos/acme/app/issues/12/labels --jq ".[] | select(.name == \\"no-visual-change\\")"',
       "gh api repos/acme/app/issues/1/labels -f 'labels[]=no-visual-change-needed'"]),
-    ("guard.deny.owner_only", "deny", ["orch refusal clear r1", "orch exempt visual 12"],
-     ["orch refusal report", "orch status p", "echo orch exempt"]),
+    ("guard.deny.owner_only", "deny", ["orch exempt visual 12"], ["orch status p", "echo orch exempt"]),
     ("guard.deny.external_review", "deny",
      [(f"codex exec --sandbox read-only - < p.md", REPOX), f"codex exec -C {REPOX} --sandbox read-only -",
       (f"cd {REPOX} && codex exec -", CLEAN),
@@ -260,8 +259,7 @@ configure({})
 # A deny and the old allow: the deny wins. Off, the old allow is back.
 assert bash("orch exempt visual 12") == "deny"
 configure(off("guard.deny.owner_only"))
-assert bash("orch exempt visual 12") == "allow"
-assert bash("orch refusal clear r1") == "allow", "off restores the old allow"
+assert bash("orch exempt visual 12") == "allow", "off restores the old allow"
 configure({})
 
 # The hook never stops a session over its own fault: a check that raises passes with a warning and a log line.

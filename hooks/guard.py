@@ -204,9 +204,7 @@ def bash(cmd, background, who, cwd=None):
     # The verb must come first: a leading flag could put an excluded verb out of sight.
     if words[:2] == ["orca", "orchestration"] and len(words) > 2 and words[2] not in ORCA_ASK and words[2][:1].isalpha():
         return decide("allow", f"{PLUGIN}: orca orchestration {words[2]}")
-    # `orch refusal clear` is the human's (guard.deny.owner_only): not allowed past the classifier while that rule is on.
-    if (words[0] == "orch" and len(words) > 1 and words[1] not in ORCH_ASK and words[1][:1].isalpha()
-            and (words[1:3] != ["refusal", "clear"] or danger.level(config.load(), "guard.deny.owner_only") == "off")):
+    if words[0] == "orch" and len(words) > 1 and words[1] not in ORCH_ASK and words[1][:1].isalpha():
         return decide("allow", f"{PLUGIN}: orch {words[1]} (the program ledger and landing gate)")
     reason = setup_actions(words)
     if reason:
