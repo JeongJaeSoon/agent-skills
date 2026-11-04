@@ -146,6 +146,9 @@ assert model_warning(f"MODEL=sonnet {START} --model \"$MODEL\"") == "", "a value
 assert model_warning(f"{START} --model claude-sonnet-4-?") == "", "a glob the shell may expand is not judged"
 assert model_warning(f"{START} --model {{sonnet,}}") == "", "a brace expansion is not judged"
 assert model_warning(f"{START} --model opus[1m]") == "", "an unquoted bracket may be a glob, so the value is not judged"
+CONFIG.write_text(json.dumps({"orchestrate": {"models": {"worker": "sonnet"}}}))
+assert model_warning(f"{START} --spec '--model=opus' --model sonnet") == "", "text in --spec is not the flag"
+assert "orch model worker" in model_warning(f"{START} --spec '--model=sonnet'"), "and does not stand in for it"
 CONFIG.write_text(json.dumps({"orchestrate": {"models": {"worker": "claude-sonnet-4-6"}}}))
 # Any shell-active character skips the comparison, quoted or not: the words arrive unquoted, so the guard is unsure.
 for cmd in (f"{START} --model 'opus[1m]'", f"{START} --model=\"opus[1m]\"", f"{START} --model claude-sonnet-4-?>out",

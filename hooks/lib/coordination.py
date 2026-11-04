@@ -74,7 +74,7 @@ def check_model_flag(cmds, cfg):
         w = c.words
         if not (c.name == "orca" and w[1:3] in LAUNCHES and flag(w, "--agent") == "claude" and flag(w, "--terminal") is None):
             continue
-        have = flag(w, "--model")
+        have = flag(own_words(w), "--model")
         if not have:
             out += finding(cfg, "orchestrate.model_flag",
                            f"This `orca {' '.join(w[1:3])}` names no model, so the session runs on the account's default. "
@@ -88,6 +88,11 @@ def check_model_flag(cmds, cfg):
             out += warn_only(cfg, f"`--model {have}` differs from orchestrate.models.worker ({want}). "
                                   "Use what `orch model worker` prints, or change the setting.")
     return out
+
+
+def own_words(words):
+    """The command's words without the text values of --spec and --prompt, which may quote a `--model` of their own."""
+    return [x for i, x in enumerate(words) if not (i and words[i - 1] in ("--spec", "--prompt"))]
 
 
 def expands(c, value):

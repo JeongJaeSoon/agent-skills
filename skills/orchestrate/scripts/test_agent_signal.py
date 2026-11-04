@@ -314,6 +314,8 @@ try:  # models configured and the listing failed: model_round really skips, and 
 finally:
     CONFIG_FILE.write_text("{}")
 assert "건너뜀" not in pround(facts(terminals=[t1]), [], "boom")[4], "no models configured: nothing was skipped"
+assert "건너뜀" not in pround(facts(terminals=[t1], failed={"terminals", "models"}), [], "boom")[4], \
+    "another source failing is not the model check being on"
 assert pround(facts(terminals=[t1]), [])[4] == "신호 없음 1: h1 (not listed)"
 cx = term("cx", "codex")
 assert pround(facts(terminals=[cx], screens={"cx": ["⏺ text"]}), [])[4] == "", "Codex: screen only, and no gap"
