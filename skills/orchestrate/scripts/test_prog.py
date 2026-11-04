@@ -570,7 +570,7 @@ prog.os.environ["ORCA_TERMINAL_HANDLE"] = "term_lead"
 out = io.StringIO()
 with contextlib.redirect_stdout(out):
     prog.cmd_wait(["s", "--rounds", "2"])
-assert "LANDED-BUT-OPEN T-8 (dispatch a8)" in out.getvalue() and "path:/w/8" in out.getvalue() \
+assert "LANDED-BUT-OPEN T-8 (dispatch a8)" in out.getvalue() and "card /w/8" in out.getvalue() \
     and "T-7" not in out.getvalue() and "EMPTY x2" in out.getvalue(), out.getvalue()
 assert "T-6" not in out.getvalue(), "a card whose worker state is unknown is not called released"
 assert "T-5" not in out.getvalue(), "this session's own worktree is never offered for removal"
