@@ -1,6 +1,6 @@
 # 스킬 카탈로그
 
-`agent-skills` 플러그인이 싣는 스킬 40개(`skills/*/SKILL.md`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 8개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
+`agent-skills` 플러그인이 싣는 스킬 41개(`skills/*/SKILL.md`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 12개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
 
 설정 기본값 변경과 기존 데이터 보존 방법은 [설정 전환 안내](configuration-migration.md)를 따른다. 노트·원장·개인 폴더는 명시 설정이 필요하고, 성과 보고 기본 시간대는 UTC다.
 
@@ -13,6 +13,7 @@
               (이 세션은 계속 일하면서 다른 저장소·곁가지로 보낼 때는 dispatch-card)
 프로젝트    orchestrate ─ 워커마다 deliver-ticket ─ orch land ─ main 가디언·QA 리드 ─ 대시보드
               └ 끝나면 measure-delivery
+              └ 재시작·컴팩션 뒤에는 먼저 reboot
 머신 하나   reap-resources(죽은 세션이 남긴 프로세스·Docker·브랜치 정리, resource steward가 주기로)
               secure-fill(브라우저 인증 칸에 비밀값을, 에이전트가 값을 보지 않고)
               tune-automode(분류기 거부를 가장 작은 autoMode 규칙으로, 적용은 사용자가)
@@ -186,6 +187,18 @@ PR 을 맡는 스킬과 머지 주체:
   - 새어 나간 결함 후보(Bug 라벨, main CI 실패, revert)를 찾는다.
   - PR당 사용 가능한 로컬 transcript의 토큰을 집계한다. 측정하지 못한 세션은 0으로 단정하지 않는다.
   - Linear에서 정확한 종료 시각이 필요하면 MCP로 뽑은 파일을 쓴다. 요청받은 숫자를 먼저 보여 주고 보고서는 노트에 저장한다.
+
+### reboot
+- **언제:** 세션·Orca·머신이 재시작됐거나 컴팩션이 일어난 직후, 다른 일보다 먼저. "재시작했어", "Orca 재시작했어", "세션 다시 띄웠어", "복구 점검해줘". 무슨 일을 하던 중이었는지 되짚는 것은 `recall`이다.
+- **내용:** 재시작은 일 자체는 그대로 두고, 일을 굴리는 장치를 떨어뜨린다. `scripts/reboot.py`가 그 장치를 한 번에 읽기만 하고 점검한 뒤, 고칠 것마다 칠 명령을 한 줄씩 낸다(`--slug <slug>`는 리드, `--top`은 오케스트레이터, 없으면 워커).
+  - 이 터미널의 handle이 Orca 재시작으로 stale이 됐는지 본다. stale이면 이 worktree의 살아 있는 터미널을 알려 준다.
+  - Run 바인딩(`run-current`, 없으면 `run-use`)과 오케스트레이터 탭 이름을 본다.
+  - 이 세션 프로세스 아래의 inbox 대기(`orch wait`, `orch inbox --wait`)와 `orch watch-cards`가 정확히 하나씩인지 센다. 없으면 시작 명령을, 둘 이상이면 멈출 것을 알려 준다.
+  - 터미널을 잃은 워커를 찾아, 같은 카드에서 다시 시작하는 `worker-stop`·`worker-start --retry-of` 쌍을 낸다.
+  - 이 worktree에서 pressure 게이트가 붙잡아 둔 무거운 시작이 대기열에 남았는지 본다.
+  - 스크립트가 못 보는 것(재시작으로 끝난 백그라운드 작업·서브에이전트, 프로그램 상태, 머신 재시작 뒤 리드 다시 띄우기, 컴팩션 뒤 순서)은 SKILL.md가 순서만 정하고, 규칙 자체는 `orchestrate`의 해당 절을 가리킨다.
+- **동봉:** `scripts/reboot.py`(읽기 전용 점검)와 테스트.
+- **관계:** `orchestrate`의 핵심 규칙 6, Drain, Resume이 재시작 뒤 할 일을 이 스킬로 넘긴다. `reap-resources`의 pressure 대기열을 읽는다.
 
 ## 머신 하나
 
