@@ -168,7 +168,10 @@ class Scanner(Repo):
     def test_a_new_branch_push_reads_its_whole_history(self):
         self.add("a.md", "x\n", f"mentions {TERM}")
         self.add("b.md", "y\n", "clean")
-        self.assertEqual(self.scan(TERM, BASE_SHA="0" * 40, HEAD_SHA="HEAD").returncode, 1)
+        p = self.scan(TERM, BASE_SHA="0" * 40, HEAD_SHA="HEAD")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("commit messages: 1", p.stdout)
+        self.assert_quiet(p)
 
     def test_a_hit_in_the_pr_text_fails(self):
         self.add("a.md", "x\n")
