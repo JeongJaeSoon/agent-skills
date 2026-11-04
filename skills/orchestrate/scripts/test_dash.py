@@ -464,6 +464,93 @@ tip = [{"ts": ago(300), "ev": "landed", "pr": 9, "sha": "s9"}, {"ts": ago(290), 
 assert dash.ledger_gaps(cfg_g, tip, [], [], now, contains=lambda a, b: (a, b) == ("s9", "s10"))["ci"] == [], \
     "a later green at the branch tip covers the landing under it"
 assert dash.ledger_gaps(cfg_g, tip, [], [], now, contains=lambda a, b: False)["ci"] == [9], "not in its history: still a gap"
+# gh compare is guarded: not asked while core quota is low, and not again until the reset after a rate-limit error.
+cfg_q = {**cfg_g, "repo": "acme/app"}
+two = [{"ts": ago(300), "ev": "landed", "pr": 20, "sha": "s20"}, {"ts": ago(290), "ev": "landed", "pr": 21, "sha": "s21"},
+       {"ts": ago(280), "ev": "main_green", "sha": "s22"}, {"ts": ago(270), "ev": "main_green", "sha": "s23"}]
+calls, quota, clock = [], {"n": 0, "t": 1000 + 3600}, [1000.0]
+def fake_sh(cmd, timeout=45):
+    calls.append(cmd[2])
+    if cmd[2] == "rate_limit":
+        return {"n": quota["n"], "t": quota["t"]}
+    if quota["n"] < 1:
+        raise dash.SourceError("API rate limit exceeded")
+    return {"s": "ahead"}
+real_sh, real_mono, real_time = dash.sh, dash.time.monotonic, dash.time.time
+dash.sh, dash.time.monotonic, dash.time.time = fake_sh, lambda: clock[0], lambda: clock[0]
+dash._CONTAINS.clear(); dash._gh_down_until = dash._gh_check_at = 0.0
+compares = lambda: [c for c in calls if c != "rate_limit"]
+assert dash.ledger_gaps(cfg_q, two, [], [], now)["ci"] == [], "unknown is no gap"
+assert not compares(), f"quota low: no compare asked: {calls}"
+n_quota = len(calls)
+for _ in range(20):
+    clock[0] += 60
+    dash.ledger_gaps(cfg_q, two, [], [], now)
+assert not compares() and len(calls) == n_quota, f"nothing is asked until the reset: {calls}"
+clock[0], quota["n"] = 1000.0 + 3601, 5000
+dash.ledger_gaps(cfg_q, two, [], [], now)
+assert compares(), "after the reset the compares run"
+# A rate-limit error with plenty of quota reported: one failed call, then backoff.
+calls.clear(); dash._CONTAINS.clear(); dash._gh_down_until = dash._gh_check_at = 0.0
+quota["n"] = 5000
+real_fake = fake_sh
+def limited(cmd, timeout=45):
+    calls.append(cmd[2])
+    if cmd[2] == "rate_limit":
+        return {"n": 5000 if len(calls) == 1 else 0, "t": clock[0] + 1800}
+    raise dash.SourceError("API rate limit exceeded")
+dash.sh = limited
+start = clock[0]
+for _ in range(30):
+    dash.ledger_gaps(cfg_q, two, [], [], now)
+    clock[0] += 60
+assert len(compares()) <= 2, f"a rate-limit error stops the compares until the reset: {calls}"
+dash.sh, dash.time.monotonic, dash.time.time = real_sh, real_mono, real_time
+dash._CONTAINS.clear(); dash._gh_down_until = dash._gh_check_at = 0.0
+
+# The GitHub stage runs once per period; a landing row or a manual refresh runs it at once.
+cfg_file = pathlib.Path(os.environ["AGENT_SKILLS_CONFIG"])
+cfg_file.write_text("{}")
+assert dash.github_every() == 300, "no key: the default"
+cfg_file.write_text(json.dumps({"dashboard": {"github_every_s": 600}}))
+assert dash.github_every() == 600
+cfg_file.write_text(json.dumps({"dashboard": {"github_every_s": 5}}))
+assert dash.github_every() == 300, "below the 60 s floor is not a guess"
+cfg_file.write_text(json.dumps({"dashboard": {"github_every_s": 900}}))
+rounds = []
+real_round, dash.slow_round = dash.slow_round, lambda interval, first: rounds.append(first)
+loop = threading.Thread(target=dash.slow_loop, args=(60,), daemon=True)
+loop.start()
+def wait_for(n, secs=5):
+    end = dash.time.monotonic() + secs
+    while len(rounds) < n and dash.time.monotonic() < end:
+        dash.time.sleep(0.02)
+    return len(rounds)
+assert wait_for(1) == 1
+dash.time.sleep(0.5)
+assert len(rounds) == 1, f"inside the period the stage does not run again: {rounds}"
+dash.SLOW_WAKE.set()  # a manual refresh
+assert wait_for(2) == 2, "a refresh runs it now"
+dash.time.sleep(0.3)
+assert len(rounds) == 2
+LP = "landing-test"
+(store / LP).mkdir()
+(store / LP / "program.json").write_text(json.dumps({"repo": "acme/app", "created_at": ago(900)}))
+(store / LP / "ledger.jsonl").write_text(json.dumps({"ts": ago(10), "ev": "spawned", "ticket": "X-1"}) + "\n")
+dash.note_landings(LP)
+dash.time.sleep(0.3)
+assert len(rounds) == 2, "the first look at a ledger wakes nothing"
+with (store / LP / "ledger.jsonl").open("a") as f:
+    f.write(json.dumps({"ts": ago(1), "ev": "note", "text": "x"}) + "\n")
+dash.note_landings(LP)
+dash.time.sleep(0.3)
+assert len(rounds) == 2, "a row that is not a landing wakes nothing"
+with (store / LP / "ledger.jsonl").open("a") as f:
+    f.write(json.dumps({"ts": ago(0), "ev": "landed", "pr": 1, "sha": "s1"}) + "\n")
+dash.note_landings(LP)
+assert wait_for(3) == 3, "a new landed row runs it now"
+dash.slow_round = real_round
+
 mixed = [{"number": 11, "state": "merged", "merged_at": ago(100), "base": "feat/x", "branch": "a"},
          {"number": 12, "state": "merged", "merged_at": ago(90), "base": "feat/x", "branch": "b"},
          {"number": 13, "state": "merged", "merged_at": ago(80), "base": "main", "branch": "c"}]
@@ -657,18 +744,21 @@ assert not dash.closed(B) and dash.ledger_tail(B)[1] == last_ts  # the last even
 st = dash.collect(B, sources=())
 assert "ledger: 2 row(s) without an ev left out, first [1, 2]" in st["errors"] and st["summary"], st["errors"]
 assert not any(e.startswith("ledger:") for e in dash.collect(A, sources=())["errors"])
-real_sleep, real_collect, rounds, collected = dash.time.sleep, dash.collect, [], []
+real_wake, real_collect, waits, collected = dash.SLOW_WAKE, dash.collect, [], []
 dash.collect = lambda slug, *a, **k: collected.append(slug) or {"errors": []}
-def sleep(_):
-    rounds.append(1)
-    if len(rounds) == 2:
-        raise StopIteration
-dash.time.sleep = sleep
+class StopAfterTwo:
+    def clear(self):
+        pass
+    def wait(self, _):
+        waits.append(1)
+        if len(waits) == 2:
+            raise StopIteration
+dash.SLOW_WAKE = StopAfterTwo()
 try:
     dash.slow_loop(1)
 except StopIteration:
     pass
-dash.time.sleep, dash.collect = real_sleep, real_collect
+dash.SLOW_WAKE, dash.collect = real_wake, real_collect
 assert collected.count(B) == 2 and A in collected, collected  # the second round reached B through closed()
 (store / B / "ledger.jsonl").write_text(clean)
 
@@ -682,13 +772,18 @@ def run_loop(loop, rounds_wanted):
         n.append(1)
         if len(n) == rounds_wanted:
             raise Stop
-    dash.time.sleep = sleep
+    class Ev:  # the slow loop waits on its wake event, the fast loop sleeps
+        def clear(self):
+            pass
+        def wait(self, t):
+            sleep(t)
+    real_sleep, dash.time.sleep, dash.SLOW_WAKE = dash.time.sleep, sleep, Ev()
     try:
         loop(1)
     except Stop:
         pass
     finally:
-        dash.time.sleep = real_sleep
+        dash.time.sleep, dash.SLOW_WAKE = real_sleep, real_wake
     return len(n)
 GONE = "vanished-slug"
 real_programs, real_orca_every = dash.programs, dash.ORCA_EVERY

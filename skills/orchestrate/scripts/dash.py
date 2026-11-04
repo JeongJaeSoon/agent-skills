@@ -897,15 +897,49 @@ def stalls(workers, tnow, held=frozenset()):
 _CONTAINS = {}
 
 
+# After one failed compare gh is not called again for this long, and never while core quota is below GH_MIN_CORE
+# (until its reset). The quota is read with `gh api rate_limit`, which costs none. A flat window for plain failures,
+# since the error text carries no reset time.
+GH_BACKOFF_S = 300
+GH_MIN_CORE = 500
+GH_CHECK_S = 60
+_gh_down_until = 0.0  # time.monotonic() before which no compare is asked
+_gh_check_at = 0.0
+
+
+def gh_quota_low():
+    """Seconds until core quota resets when it is below GH_MIN_CORE, else 0. Unreadable counts as fine: the compare
+    then fails and backs off by itself."""
+    try:
+        r = sh(["gh", "api", "rate_limit", "--jq", "{n: .resources.core.remaining, t: .resources.core.reset}"], timeout=15)
+        return max(0.0, r["t"] - time.time()) if r["n"] < GH_MIN_CORE else 0.0
+    except (SourceError, KeyError, TypeError):
+        return 0.0
+
+
 def gh_contains(repo, older, newer):
-    """Whether commit `older` is in `newer`'s history (GitHub compare). Cached: commits do not change."""
+    """Whether commit `older` is in `newer`'s history (GitHub compare): True or False, or None when unknown.
+    Answers are cached, since commits do not change. An unknown one is not, but it stops further gh calls: for
+    GH_BACKOFF_S after a failure, until the reset when the quota is low."""
+    global _gh_down_until, _gh_check_at
     key = (repo, older, newer)
-    if key not in _CONTAINS:
-        try:
-            st = sh(["gh", "api", f"repos/{repo}/compare/{older}...{newer}", "--jq", "{s: .status}"])["s"]
-        except (SourceError, KeyError, TypeError):
-            return False  # unknown is not cached: the next collect asks again
-        _CONTAINS[key] = st in ("ahead", "identical")
+    if key in _CONTAINS:
+        return _CONTAINS[key]
+    now = time.monotonic()
+    if now < _gh_down_until:
+        return None
+    if now >= _gh_check_at:
+        _gh_check_at = now + GH_CHECK_S
+        if wait := gh_quota_low():
+            _gh_down_until = now + wait
+            return None
+    try:
+        st = sh(["gh", "api", f"repos/{repo}/compare/{older}...{newer}", "--jq", "{s: .status}"])["s"]
+    except (SourceError, KeyError, TypeError):
+        _gh_down_until = now + GH_BACKOFF_S
+        _gh_check_at = 0.0  # when the backoff ends the quota is read first: a limit hit then waits for the reset
+        return None
+    _CONTAINS[key] = st in ("ahead", "identical")
     return _CONTAINS[key]
 
 
@@ -923,8 +957,9 @@ def ledger_gaps(cfg, events, workers, prs, tnow, contains=None):
     # A branch CI started by hand runs at the branch tip, so a green there covers every earlier landing it contains.
     contains = contains or (lambda older, newer: gh_contains(cfg["repo"], older, newer))
     greens = [g for g in events if g["ev"] == "main_green" and g.get("sha")]
+    # An unknown answer (None) counts as covered: a gap is reported only when GitHub said the green does not contain it.
     covered = lambda e: any(g["sha"] != e["sha"] and prog.parse_ts(g["ts"]) >= prog.parse_ts(e["ts"])
-                            and contains(e["sha"], g["sha"]) for g in greens)
+                            and contains(e["sha"], g["sha"]) is not False for g in greens)
     t0 = prog.parse_ts(cfg["created_at"])
     # Only the bases this program lands into: another session's merge into main is not this ledger's gap.
     ours = {x.get("base") for x in prs if x["number"] in landed} | {x.get("branch") for x in prs if x["number"] in landed}
@@ -1367,18 +1402,54 @@ def slow_round(interval, first):
             log(f"{slug}: collect failed: {e!r}")
 
 
+# The GitHub stage (tracker, PRs, compare) runs every GITHUB_EVERY_S, set by `dashboard.github_every_s` in
+# ~/.claude/agent-skills.json. 5 minutes: CI and review state move on that scale, a landing or a manual refresh
+# runs it at once, and one round costs a request per open PR page plus the compares, so 60 s spent the hourly quota.
+GITHUB_EVERY_S, GITHUB_EVERY_MIN_S = 300, 60
+SLOW_WAKE = threading.Event()  # set: run the GitHub stage now (a landing, a manual refresh)
+_warned = []
+
+
+def github_every():
+    path = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-skills.json").expanduser()
+    try:
+        n = (json.loads(path.read_text()).get("dashboard") or {}).get("github_every_s")
+    except (OSError, ValueError, AttributeError):
+        n = None
+    if isinstance(n, int) and not isinstance(n, bool) and n >= GITHUB_EVERY_MIN_S:
+        return n
+    if not _warned:
+        _warned.append(1)
+        log(f"dashboard.github_every_s is not set to an integer >= {GITHUB_EVERY_MIN_S} in {path}; "
+            f"using {GITHUB_EVERY_S}s")
+    return GITHUB_EVERY_S
+
+
+_landings = {}
+
+
+def note_landings(slug):
+    """Wakes the GitHub stage when a landed or main_green row is new in this program's ledger: the PR list and the
+    CI answer change then, and waiting out the period would show the old state."""
+    n = sum(e.get("ev") in ("landed", "main_green") for e in ledger_events(program_dir(slug) / "ledger.jsonl")[0])
+    if n > _landings.get(slug, n):
+        SLOW_WAKE.set()
+    _landings[slug] = n
+
+
 def slow_loop(interval):
-    """Tracker and GitHub: network and rate limits, so once per interval."""
+    """Tracker and GitHub: network and rate limits, so once per github_every() unless something wakes it."""
     first = True
     while True:
+        SLOW_WAKE.clear()
         try:
-            slow_round(interval, first)
+            slow_round(github_every(), first)  # the page's freshness warning is a multiple of this
         except Exception as e:  # programs() itself failed: log and try again next round
             log(f"slow loop round failed: {e!r}")
         first = False
         beat()
         tick("slow")
-        time.sleep(interval)
+        SLOW_WAKE.wait(github_every())
 
 
 def fast_round(state, interval):
@@ -1391,6 +1462,8 @@ def fast_round(state, interval):
             last_orca.setdefault(slug, now)
             ledger_due = seen.get(slug) not in (None, sig) or now - last_write.get(slug, now) >= LEDGER_EVERY
             last_write.setdefault(slug, now)
+            if seen.get(slug) != sig:
+                note_landings(slug)
             seen[slug] = sig
             if not (orca_due or ledger_due):
                 continue
@@ -1411,7 +1484,7 @@ def fast_loop(interval):
         time.sleep(FAST_TICK)
         beat()
         try:
-            fast_round(state, interval)
+            fast_round(state, github_every())
         except Exception as e:  # programs() itself failed: the loop must outlive it
             log(f"fast loop round failed: {e!r}")
         tick("fast")  # a collect that hangs stops the tick, and ensure restarts the server
@@ -1577,6 +1650,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             code, out = fleet.send(body["session"], body["text"], handle)
             FLEET_WAKE.set()
             return self.send(code, json.dumps(out).encode())
+        elif path == "/api/refresh":  # runs the GitHub stage now instead of at its next period
+            SLOW_WAKE.set()
+            return self.send(200, b'{"ok":true}')
         elif path == "/api/fleet/open" and isinstance(body.get("session"), str):
             code, out = fleet.open_session(body["session"])
             return self.send(code, json.dumps(out).encode())
@@ -1857,7 +1933,7 @@ def serve(host, port, interval, make_fleet=None):
             threading.Thread(target=tokens_loop, daemon=True).start()
         if os.environ.get("ORCH_PR_STATS") != "off":
             threading.Thread(target=pr_stats_loop, daemon=True).start()
-    log(f"serving {home()} on http://{host}:{port}/ (tracker+github every {interval}s, "
+    log(f"serving {home()} on http://{host}:{port}/ (tracker+github every {github_every()}s, "
         f"orca every {ORCA_EVERY}s, ledger every {FAST_TICK}s)")
     try:
         httpd.serve_forever()
