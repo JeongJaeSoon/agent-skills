@@ -237,8 +237,12 @@ GONE = "what the command was for is no longer on the screen"
 RESTART_NOTICE = re.compile(r"(?<![\w/])/restart\b.*\bto apply\b", re.I)
 # Only Claude Code's own result line ("⎿  PreToolUse:Bash hook error: …"); a tool's output that quotes it does not count.
 HOOK_ERROR = re.compile(r"^⎿\s+\w+:\w+ hook (?:error|returned (?:a )?blocking error)\b", re.I)
-# Claude Code's status line while a background shell or agent of the session still runs (shared with patrol.py).
-BACKGROUND = re.compile(r"\b\d+ (?:shells?|agents?|background tasks?)\b|shells? still running")
+# Claude Code's status line while a background shell, monitor or agent of the session still runs (shared with
+# card_watch.py). Not a bare "N agent": "← N agent" counts sessions elsewhere waiting on a human, so idle ones show it.
+BACKGROUND = re.compile(r"\b\d+ (?:shells?|(?:Artifact comment )?monitors?|local agents?|teams?|cloud sessions?|MCP tasks?"
+                        r"|(?:background|remote) dynamic workflows?|background tasks?)\b|shells? still running")
+# The panel that lists the session's agents instead. Only under the prompt box: a reply can read the same.
+AGENT_PANEL = re.compile(r"^\s*(?:⏺\s+main\s*$|◯\s)")
 # The line under the prompt box that counts those: the permission mode, or the shortcuts hint in default mode.
 MODE_LINE = re.compile(r"\bmode on\b|\? for shortcuts")
 # A guard's deny reads "hook error" too; only a hook that could not find its own file is stale.
@@ -331,7 +335,7 @@ def stale_signal(lines):
 
 
 def background_running(lines):
-    """Why a /restart could end work this screen may be running, else None: a background shell or agent shown under
+    """Why a /restart could end work this screen may be running, else None: a background shell, monitor or agent shown under
     the prompt box or on the finished turn's summary, or no mode line to show them on (unknown is not none)."""
     lines = norm(lines or [])
     box = prompt_box(lines)
@@ -340,7 +344,7 @@ def background_running(lines):
     below = [l.strip() for l in lines[box[1] + 1:] if l.strip()]
     # Above the box only the summary, which may sit under a notice: other output there counts installed agents too.
     summary = [l for l in [l.strip() for l in lines[:box[0]] if l.strip()][-2:] if TURN_SUMMARY.match(l)]
-    if any(BACKGROUND.search(l) for l in below + summary):
+    if any(BACKGROUND.search(l) for l in below + summary) or any(AGENT_PANEL.search(l) for l in below):
         return "background shells or agents still running"
     if not any(MODE_LINE.search(l) for l in below):
         return "no mode line to show background work on"
