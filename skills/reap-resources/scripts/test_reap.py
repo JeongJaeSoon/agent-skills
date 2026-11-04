@@ -7,7 +7,8 @@ import atexit, contextlib, io, json, os, pathlib, re, shutil, subprocess, sys, t
 _SANDBOX = tempfile.mkdtemp(prefix="test-reap-home-")
 atexit.register(shutil.rmtree, _SANDBOX, ignore_errors=True)
 os.environ["HOME"] = _SANDBOX
-for _name in ("CLAUDE_CONFIG_DIR", "AGENT_SKILLS_STATE", "AGENT_SKILLS_LEDGER", "AGENT_SKILLS_TRASH", "PROGRAMS_HOME"):
+for _name in ("CLAUDE_CONFIG_DIR", "AGENT_SKILLS_CONFIG", "AGENT_SKILLS_STATE", "AGENT_SKILLS_LEDGER", "AGENT_SKILLS_TRASH",
+              "PROGRAMS_HOME", "GIT_CONFIG_GLOBAL", "XDG_CONFIG_HOME"):
     os.environ.pop(_name, None)
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
