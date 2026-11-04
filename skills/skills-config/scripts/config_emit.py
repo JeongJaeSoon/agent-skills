@@ -76,6 +76,8 @@ FILE_EXTS = {"py", "json", "md", "sh", "js", "ts", "txt", "yaml", "yml", "toml",
 SECRET = re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}|github_pat_|xox[abposr]-|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}"
                     r"|-----BEGIN|(?<![A-Za-z0-9/])(?=[A-Za-z0-9_+=-]*\d)(?=[A-Za-z0-9_+=-]*[A-Za-z])[A-Za-z0-9_+=-]{40,}")
 SECRET_KEY = re.compile(r"token|secret|passw|api_?key|credential", re.I)
+# An Orca address is long enough for SECRET's last branch; only the whole value in exactly this shape is exempt.
+ORCA_HANDLE = re.compile(r"(?:term_|run:(?:run_)?)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 
 class Refused(Exception):
@@ -133,7 +135,7 @@ def check_secret(value, where):
     elif isinstance(value, list):
         for v in value:
             check_secret(v, where)
-    elif isinstance(value, str) and SECRET.search(value):
+    elif isinstance(value, str) and not ORCA_HANDLE.fullmatch(value) and SECRET.search(value):
         raise Refused(f"{where}: the value looks like a secret; keep it out of settings files")
 
 

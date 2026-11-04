@@ -32,7 +32,7 @@
 
 1. 로드되는 메인 체크아웃을 릴리스까지 fast-forward 한다([platform.md](platform.md)).
 2. 오케스트레이터, 그다음 각 리드에서 턴이 끝난 때 `/reload-plugins`. 돌고 있는 카드는 할 일이 없다.
-3. 오케스트레이터에서 `orca orchestration run-current --json`. null이면 이전 브리프들이 보고하던 Run으로 `orca orchestration run-use <id>`. Run이 하나도 없을 때만 새로 만든다.
+3. 오케스트레이터에서 `orch doctor`. `이 터미널은 Run에 묶여 있지 않다`고 답할 때만 이전 브리프들이 보고하던 Run으로 `orca orchestration run-use --id <id>`. Run이 하나도 없을 때만 새로 만든다. `orca orchestration run-current --json`을 직접 읽을 때는 `result.runId`나 `result.run.id`가 있으면 묶여 있는 것이다.
 4. `orch migrate`(dry-run). 첫 목록(카드 하나를 가리키는 doing 줄)을 확인한다. 사람을 기다리는 줄, 오너의 줄, 오너가 다시 연 줄, 카드는 머지됐지만 남은 단계(릴리스, 배포)를 적은 줄은 들어 있지 않다. 마지막 것은 따로 나열되고 그대로 남는다.
 5. `orch migrate --apply`. 출력되는 백업 디렉터리와 `orch board reopen` 줄을 적어 둔다.
 6. 대시보드를 확인한다. Sessions 표에 Orca에서 온 Ticket·PR 칸이 보이고, board의 열린 doing 목록에는 남은 대기만 있다.

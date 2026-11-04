@@ -134,6 +134,21 @@ class AgentSkillsKeysTest(Base):
         r, _ = self.emit({"agent_skills": {"set": {"tracker.api_token": "x"}, "allow_unknown": ["tracker.api_token"]}})
         self.assertIn("secrets do not go", r.stderr)
 
+    def test_orca_handle_is_not_a_secret(self):
+        uuid = "00000000-0000-4000-8000-000000000000"
+        for handle in (f"term_{uuid}", f"run:{uuid}", f"run:run_{uuid}"):
+            self.assertIsNone(config_emit.check_secret(handle, "notify_to"))
+        r, _ = self.emit({"agent_skills": {"set": {"reap.pressure.notify_to": f"term_{uuid}"}}})
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_near_handle_shapes_stay_refused(self):
+        uuid = "abcdef00-0000-4000-8000-000000000000"
+        opaque = "a1" * 25
+        for value in (f"term_{opaque}", f"run:{opaque}", f"term_{uuid}x", f"term_{uuid} {opaque}",
+                      f"term_{uuid.upper()}", "sk-" + "a" * 30):
+            with self.assertRaises(config_emit.Refused, msg=value):
+                config_emit.check_secret(value, "notify_to")
+
     def test_unset_missing_refused_and_set_through_list_refused(self):
         r, _ = self.emit({"agent_skills": {"unset": ["prs.cron"]}})
         self.assertIn("already removed?", r.stderr)
