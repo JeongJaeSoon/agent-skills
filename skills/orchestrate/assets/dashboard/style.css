@@ -577,10 +577,11 @@ li.is-acked > :not(.ack) { opacity: 0.5; }
 /* Every repository table shares these widths, so their columns line up down the page. */
 .brief-table.brepo { table-layout: fixed; min-width: 940px; }
 .brief-table.brepo col.bmark { width: 2.75em; }
-.brief-table.brepo col.bpr { width: 15em; }
+.brief-table.brepo col.bpr { width: 12em; }
 .brief-table.brepo col.bprog { width: 9em; }
+.brief-table.brepo col.bnext { width: 12em; }
 .brief-table.brepo col.bact { width: 6.5em; }
-.brief-table.brepo col.bsess { width: 21em; }
+.brief-table.brepo col.bsess { width: 14em; }
 /* One line, so a row with a report is as tall as one without: the line is cut and its whole text is the title. */
 .brief-table .bsess-head { display: flex; align-items: center; gap: var(--s2); white-space: nowrap; min-width: 0; }
 .brief-table .chip { min-width: 60px; justify-content: center; }
