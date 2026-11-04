@@ -96,16 +96,17 @@ TEXT_FLAGS = ("--spec", "--prompt", "--display-name", "--name", "--comment")
 
 def option(words, name):
     """The value of `name` in a launch's words, or None. The value of a text flag (--spec, ...) is skipped whatever
-    it says; any other `--flag value` pair consumes its value unless that looks like another flag."""
-    i = 0
+    it says; any other `--flag value` pair consumes its value unless that looks like another flag. Orca takes the
+    last of a repeated option, so this does too."""
+    i, found = 0, None
     while i < len(words):
         w, nxt = words[i], words[i + 1] if i + 1 < len(words) else None
         if w == name:
-            return "" if nxt is None or nxt.startswith("--") else nxt
-        if w.startswith(name + "="):
-            return w[len(name) + 1:]
+            found = "" if nxt is None or nxt.startswith("--") else nxt
+        elif w.startswith(name + "="):
+            found = w[len(name) + 1:]
         i += 2 if w in TEXT_FLAGS or (w.startswith("--") and "=" not in w and nxt and not nxt.startswith("--")) else 1
-    return None
+    return found
 
 
 def expands(c, value):

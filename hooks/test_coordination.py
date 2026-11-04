@@ -150,7 +150,7 @@ CONFIG.write_text(json.dumps({"orchestrate": {"models": {"worker": "sonnet"}}}))
 assert model_warning(f"{START} --spec '--model=opus' --model sonnet") == "", "text in --spec is not the flag"
 assert "orch model worker" in model_warning(f"{START} --spec '--model=sonnet'"), "and does not stand in for it"
 for cmd in (f"{START} --spec '--prompt' --model sonnet", f"{START} --display-name '--model=opus' --spec fix --model sonnet",
-            f"{START} --json --model sonnet", "orca orchestration worker-start --worktree new-child --spec '--agent=claude' --agent codex --model gpt-5",
+            f"{START} --json --model sonnet", f"{START} --spec fix --model opus --model sonnet","orca orchestration worker-start --worktree new-child --spec '--agent=claude' --agent codex --model gpt-5",
             f"{START} --spec '--terminal=t' --model sonnet", f"{START} --model sonnet --spec '--model=opus'"):
     assert model_warning(cmd) == "", "the real --model is the one read: " + cmd
 for cmd in (f"{START} --model '$MODEL'", f"{START} --model \\$MODEL"):
