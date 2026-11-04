@@ -562,4 +562,54 @@ rc, out, err, calls = handoff("ABC-2", "--name", "abc-2-again")
 assert rc == 0, "ABC-20's card is not ABC-2's"
 os.environ["FAKE_CARD_PS"] = "[]"
 
+
+# ---- --agent: which CLI the card runs. Default claude; every brief check holds for either.
+def agent_of(calls):
+    make = creates(calls)[0]
+    return make[make.index("--agent") + 1]
+
+
+rc, out, err, calls = go(brief(WORKER, "a1.md"), "--repo", "r", "--name", "a1")
+assert rc == 0 and agent_of(calls) == "claude", (rc, err)
+SETUPS.clear()
+rc, out, err, calls = go(brief(SUPERVISED, "a3.md"), "--repo", "r", "--name", "a3", "--agent", "codex")
+assert rc == 0 and creates(calls)[0][:2] == ["orchestration", "worker-start"] and agent_of(calls) == "codex", (rc, err)
+# close-setup reads Claude's screen, so a Codex worker's start is Orca's receipt alone and the helper gets no handle.
+assert SETUPS == [(str(CARD_DIR), None, "a3")], SETUPS
+# Every other form is refused with its reason, nothing created and never switched to claude.
+for why, argv in (("/goal card", (brief(WORKER, "a2.md"), "--repo", "r", "--name", "a2")),
+                  ("/goal card", (brief(SUPERVISED, "a6.md"), "--repo", "r", "--name", "a6", "--card")),
+                  ("lead", (brief(LEAD_RUN, "a7.md"), "--repo", "r", "--name", "a7")),
+                  ("lead", (brief(LEAD_GATE, "a8.md"), "--repo", "r", "--name", "a8")),
+                  ("lead", (brief(LEAD_RUN.replace("run:run_me", "run:run_other"), "a9.md"), "--repo", "r", "--name", "a9"))):
+    before = pathlib.Path(argv[0]).read_text()
+    rc, out, err, calls = go(*argv, "--agent", "codex")
+    assert rc == 2 and why in err and len(err.splitlines()) == 1 and not creates(calls), (why, rc, err)
+    assert pathlib.Path(argv[0]).read_text() == before, argv
+# A Run report only between the FORBIDDEN markers is gone once they are refreshed: still no Codex /goal card.
+MARKED = f"{WORKER}FORBIDDEN   {card.BEGIN}\n  REPORT: orca orchestration send --to run:run_me\n  {card.END}\n"
+rc, out, err, calls = go(brief(MARKED, "a10.md"), "--repo", "r", "--name", "a10", "--agent", "codex")
+assert rc == 2 and "/goal card" in err and not creates(calls), (rc, err, calls)
+assert pathlib.Path(tmp / "a10.md").read_text() == MARKED, "a refused start leaves the brief as it was"
+# A quoted lead template skips the refresh, so that same REPORT stays and the worker starts.
+QUOTED = f"```\nMODE example\n```\n{MARKED}"
+assert card.guard.is_lead(QUOTED), "the fence must be what skips the refresh"
+rc, out, err, calls = go(brief(QUOTED, "a12.md"), "--repo", "r", "--name", "a12", "--agent", "codex")
+assert rc == 0 and creates(calls)[0][:2] == ["orchestration", "worker-start"], (rc, err, calls)
+# A row the refresh splits off its FORBIDDEN head turns the brief into a lead's.
+SPLIT = SUPERVISED + "FORBIDDEN   MODE example\n"
+rc, out, err, calls = go(brief(SPLIT, "a11.md"), "--repo", "r", "--name", "a11", "--agent", "codex")
+assert rc == 2 and "lead" in err and not creates(calls) and (tmp / "a11.md").read_text() == SPLIT, (rc, err, calls)
+rc, out, err, calls = handoff("ABC-9", "--agent", "codex")
+assert rc == 2 and "/goal card" in err and len(err.splitlines()) == 1 and not creates(calls), (rc, err)
+rc, out, err, calls = handoff("ABC-9", "--agent", "claude")
+assert rc == 0 and agent_of(calls) == "claude", (rc, err)
+rc, out, err, calls = go(brief(WORKER, "a4.md"), "--repo", "r", "--name", "a4", "--agent", "cursor")
+assert rc == 2 and "--agent is one of claude, codex" in err and not creates(calls), (rc, err)
+for bad, why in (("/goal x\n", "no CLOSE or KEEP row"), (f"{CLOSE}\n", "no `/goal <goal>` line"),
+                 (f"/goal x\n{CLOSE}\nREPORT: orca orchestration send --to term_abc\n", "a terminal handle")):
+    results = [go(brief(bad, "a5.md"), "--repo", "r", "--name", "a5", *extra) for extra in ([], ["--agent", "codex"])]
+    assert [r[0] for r in results] == [2, 2] and why in results[1][2] and not creates(results[1][3]), results
+    assert results[0][2] == results[1][2], results
+
 print("ok")
