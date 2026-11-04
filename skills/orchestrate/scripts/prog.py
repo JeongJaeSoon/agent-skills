@@ -188,10 +188,6 @@ Usage: orch <command> <slug> [options]
                                      holds it and refreshes your own; a hold idle past --ttl (120) is
                                      broken. WHO defaults to $ORCA_TERMINAL_HANDLE. --list shows these
                                      and the exclusive landing lanes
-  refusal report [--json] | refusal clear <id>
-                                     no slug: the refused-act ledger (hooks/refusals.py). report lists the open
-                                     refusals every session is blocked from doing again; clear is the human's,
-                                     typed as a `!` line (the guard hook refuses it from an agent)
 
 Store: ~/.claude/programs/<slug>/ (program.json holds identifiers only; ledger.jsonl is
 append-only). Events: spawned, ready, verdict, landed, main_green, main_red, land_failed,
@@ -3237,36 +3233,11 @@ def cmd_sent(argv):
         sys.exit(f"{e}\n{usage}")
 
 
-def cmd_refusal(argv):
-    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3] / "hooks"))
-    from lib import refusals
-    usage = "usage: orch refusal report [--json] | refusal clear <id>  (no slug)"
-    if argv[:1] == ["report"]:
-        rows = refusals.open_refusals()
-        if "--json" in argv:
-            print(json.dumps(rows, ensure_ascii=False, indent=1))
-            return
-        if not rows:
-            print("no open refusals")
-        for r in rows:
-            print(f"{r['id']}  {r.get('at')}  {r.get('verb')} {r.get('target')}\n"
-                  f"    session {r.get('session') or '?'}  terminal {r.get('terminal') or '-'}  run {r.get('run') or '-'}")
-        if rows:
-            print("\nEach is blocked for every session until you clear it: !orch refusal clear <id>")
-    elif argv[:1] == ["clear"] and len(argv) == 2:
-        hit = refusals.clear(argv[1], sys.stdin.isatty())
-        if not hit:
-            sys.exit(f"{argv[1]} is not an open refusal (orch refusal report lists them)")
-        print("\n".join(f"cleared {r['id']}: {r.get('verb')} {r.get('target')}" for r in hit))
-    else:
-        sys.exit(usage)
-
-
 COMMANDS = {"init": cmd_init, "set": cmd_set, "status": cmd_status, "record": cmd_record, "verdict": cmd_verdict,
             "gate": cmd_gate, "dep": cmd_dep, "queue": cmd_queue, "overlap": cmd_overlap, "land": cmd_land, "land-check": cmd_land_check,
             "landed": cmd_landed, "heavy": cmd_heavy, "wait": cmd_wait, "inbox": cmd_inbox, "backfill": cmd_backfill, "decide": cmd_decide,
             "db": cmd_db,
-            "stage": cmd_stage, "board": cmd_board, "brief": cmd_brief, "hold": cmd_hold, "sent": cmd_sent, "refusal": cmd_refusal, "release": lambda argv: cmd_hold(argv, release=True),
+            "stage": cmd_stage, "board": cmd_board, "brief": cmd_brief, "hold": cmd_hold, "sent": cmd_sent, "release": lambda argv: cmd_hold(argv, release=True),
             "watch-cards": lambda argv: __import__("card_watch").main(argv),
             "patrol": lambda argv: __import__("patrol").main(argv),
             "migrate": lambda argv: __import__("orca_migrate").main(argv),
