@@ -493,18 +493,34 @@ assert compares(), "after the reset the compares run"
 # A rate-limit error with plenty of quota reported: one failed call, then backoff.
 calls.clear(); dash._CONTAINS.clear(); dash._gh_down_until = dash._gh_check_at = 0.0
 quota["n"] = 5000
-real_fake = fake_sh
+clock[0] = 2000.0
+reset_at, left = 3800.0, {"n": 5000}
 def limited(cmd, timeout=45):
     calls.append(cmd[2])
     if cmd[2] == "rate_limit":
-        return {"n": 5000 if len(calls) == 1 else 0, "t": clock[0] + 1800}
+        return {"n": left["n"], "t": reset_at}
+    left["n"] = 0  # the failed compare is what used the last of it
     raise dash.SourceError("API rate limit exceeded")
 dash.sh = limited
-start = clock[0]
-for _ in range(30):
+dash.ledger_gaps(cfg_q, two, [], [], now)
+assert len(compares()) == 1, f"one failed compare, the rest of the pairs wait: {calls}"
+asked = len(calls)
+clock[0] = 2299.0
+dash.ledger_gaps(cfg_q, two, [], [], now)
+assert len(calls) == asked, "inside the 300 s backoff nothing is asked"
+clock[0] = 2301.0
+dash.ledger_gaps(cfg_q, two, [], [], now)
+assert calls[asked:] == ["rate_limit"], f"after the backoff the quota is read first: {calls[asked:]}"
+asked = len(calls)
+for t in range(2400, 3800, 100):
+    clock[0] = float(t)
     dash.ledger_gaps(cfg_q, two, [], [], now)
-    clock[0] += 60
-assert len(compares()) <= 2, f"a rate-limit error stops the compares until the reset: {calls}"
+assert len(compares()) == 1, f"no compare until the reset: {calls}"
+left["n"], clock[0] = 5000, 3801.0
+dash.ledger_gaps(cfg_q, two, [], [], now)
+assert len(compares()) == 2, f"asked again after the reset: {calls}"
+pathlib.Path(os.environ["AGENT_SKILLS_CONFIG"]).write_text(json.dumps({"dashboard": {"github_every_s": 10 ** 20}}))
+assert dash.github_every() == 300, "a value Event.wait cannot take is not used"
 dash.sh, dash.time.monotonic, dash.time.time = real_sh, real_mono, real_time
 dash._CONTAINS.clear(); dash._gh_down_until = dash._gh_check_at = 0.0
 

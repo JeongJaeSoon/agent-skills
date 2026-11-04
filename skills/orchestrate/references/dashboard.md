@@ -20,7 +20,7 @@ On macOS, `install-agent`, run from the git checkout sessions load (a worktree o
 
 | Source | How often |
 |---|---|
-| Tracker and GitHub | Every `dashboard.github_every_s` seconds (default 300, at least 60, in `~/.claude/agent-skills.json`; without the key the server logs one warning and uses 300), and at once when a `landed` or `main_green` row is new in a ledger or `POST /api/refresh` arrives. `--interval` no longer sets it. These use the network and have rate limits |
+| Tracker and GitHub | Every `dashboard.github_every_s` seconds (default 300, from 60 to 86400, in `~/.claude/agent-skills.json`; without the key the server logs one warning and uses 300), and at once when a `landed` or `main_green` row is new in a ledger or `POST /api/refresh` arrives. `--interval` no longer sets it. These use the network and have rate limits |
 | Stages (tracker tree) | With the line above, at most 24 tracker calls each time |
 | Orca (`worker-list`, `task-list`, `run-show`) | Every 20 s |
 | Ledger | Checked every 3 s; re-collected when it changes, and at least every 30 s |

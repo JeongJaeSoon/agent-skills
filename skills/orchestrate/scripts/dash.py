@@ -905,6 +905,7 @@ GH_MIN_CORE = 500
 GH_CHECK_S = 60
 _gh_down_until = 0.0  # time.monotonic() before which no compare is asked
 _gh_check_at = 0.0
+_gh_lock = threading.Lock()
 
 
 def gh_quota_low():
@@ -925,22 +926,25 @@ def gh_contains(repo, older, newer):
     key = (repo, older, newer)
     if key in _CONTAINS:
         return _CONTAINS[key]
-    now = time.monotonic()
-    if now < _gh_down_until:
-        return None
-    if now >= _gh_check_at:
-        _gh_check_at = now + GH_CHECK_S
-        if wait := gh_quota_low():
-            _gh_down_until = now + wait
+    with _gh_lock:  # the slow and fast loops share the quota check and the backoff: one asker at a time
+        if key in _CONTAINS:
+            return _CONTAINS[key]
+        if time.monotonic() < _gh_down_until:
             return None
-    try:
-        st = sh(["gh", "api", f"repos/{repo}/compare/{older}...{newer}", "--jq", "{s: .status}"])["s"]
-    except (SourceError, KeyError, TypeError):
-        _gh_down_until = now + GH_BACKOFF_S
-        _gh_check_at = 0.0  # when the backoff ends the quota is read first: a limit hit then waits for the reset
-        return None
-    _CONTAINS[key] = st in ("ahead", "identical")
-    return _CONTAINS[key]
+        if time.monotonic() >= _gh_check_at:
+            wait = gh_quota_low()
+            _gh_check_at = time.monotonic() + GH_CHECK_S
+            if wait:
+                _gh_down_until = time.monotonic() + wait
+                return None
+        try:
+            st = sh(["gh", "api", f"repos/{repo}/compare/{older}...{newer}", "--jq", "{s: .status}"])["s"]
+        except (SourceError, KeyError, TypeError):
+            _gh_down_until = time.monotonic() + GH_BACKOFF_S  # counted from the failure, not from before a 45 s call
+            _gh_check_at = 0.0  # when the backoff ends the quota is read first: a limit hit then waits for the reset
+            return None
+        _CONTAINS[key] = st in ("ahead", "identical")
+        return _CONTAINS[key]
 
 
 def ledger_gaps(cfg, events, workers, prs, tnow, contains=None):
@@ -1405,7 +1409,7 @@ def slow_round(interval, first):
 # The GitHub stage (tracker, PRs, compare) runs every GITHUB_EVERY_S, set by `dashboard.github_every_s` in
 # ~/.claude/agent-skills.json. 5 minutes: CI and review state move on that scale, a landing or a manual refresh
 # runs it at once, and one round costs a request per open PR page plus the compares, so 60 s spent the hourly quota.
-GITHUB_EVERY_S, GITHUB_EVERY_MIN_S = 300, 60
+GITHUB_EVERY_S, GITHUB_EVERY_MIN_S, GITHUB_EVERY_MAX_S = 300, 60, 86400
 SLOW_WAKE = threading.Event()  # set: run the GitHub stage now (a landing, a manual refresh)
 _warned = []
 
@@ -1416,11 +1420,11 @@ def github_every():
         n = (json.loads(path.read_text()).get("dashboard") or {}).get("github_every_s")
     except (OSError, ValueError, AttributeError):
         n = None
-    if isinstance(n, int) and not isinstance(n, bool) and n >= GITHUB_EVERY_MIN_S:
+    if isinstance(n, int) and not isinstance(n, bool) and GITHUB_EVERY_MIN_S <= n <= GITHUB_EVERY_MAX_S:
         return n
     if not _warned:
         _warned.append(1)
-        log(f"dashboard.github_every_s is not set to an integer >= {GITHUB_EVERY_MIN_S} in {path}; "
+        log(f"dashboard.github_every_s is not set to an integer from {GITHUB_EVERY_MIN_S} to {GITHUB_EVERY_MAX_S} in {path}; "
             f"using {GITHUB_EVERY_S}s")
     return GITHUB_EVERY_S
 
