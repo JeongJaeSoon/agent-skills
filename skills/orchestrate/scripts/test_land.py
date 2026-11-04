@@ -742,6 +742,7 @@ assert "on hold" in prog(env, "queue", "t")[1]
 assert prog(env, "land", "t", "--pr", "2")[0] == 0
 d, env = two_no_ci()
 prog(env, "record", "t", "parked", "--pr", "1", "--note", "waits for a cutover")
+assert prog(env, "land", "t", "--pr", "1")[0] == 1  # refused for the hold: the release brings the call back, not a new land
 prog(env, "record", "t", "admitted", "--pr", "1")
 code, out = prog(env, "land", "t", "--pr", "2")
 assert code == 2 and "#1 (T-1) takes the exclusive lane first (ready)" in out, out

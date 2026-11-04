@@ -1901,7 +1901,8 @@ def release_own_lanes(p, pr):
 
 def stop_land(p, pr, why):
     release_own_lanes(p, pr)
-    p.append("land_check", pr=pr, outcome="stopped", note=why[:300])
+    if not on_hold(p.events(), pr):  # the hold passes it over already, and `record admitted` brings the call back
+        p.append("land_check", pr=pr, outcome="stopped", note=why[:300])
 
 
 def note_attempt(p, events, pr, outcome, reasons):
