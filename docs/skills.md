@@ -685,6 +685,14 @@ Bash의 `sed`나 heredoc으로 고친 파일은 수정으로 세지 않는다. �
 - 수준 `guard.record_check`: `warn`(기본: 보내기·닫기 전에는 모델에게 알리고, Stop에서는 사람에게 보이는 경고와 관찰 행만), `deny`(호출 거부, Stop은 한 번 block), `ask`, `off`. 한 주 동안 `$AGENT_SKILLS_STATE/record-check.jsonl`의 warn 행을 보고 deny로 올린다.
 - 보장하는 것은 "기록 결과를 보고했다"이지 "기록했다"가 아니다. 진위는 리드의 reconcile이 본다. 백그라운드로 띄운 머지의 완료, id로만 가리킨 종료 대상은 따라가지 않는다.
 
+### 오너 항목 기록 검사
+`hooks/owner_check.py`(Stop, SubagentStop). 모델을 부르지 않고 아무 저장소도 읽지 않는다. 최종 응답에만 있고 보드·결정 등록·인박스에 없는 오너 항목은 다음 compaction에서 사라진다. 이 훅은 그런 턴을 센다.
+
+- 오너 항목은 응답의 한 줄이다: `🙋`, "오너 할 일", 오너에게 묻는 표현(`오너에게 묻`, `오너 결정 필요`, `ask the owner`, `owner approval needed`). 코드·인용·표의 행(상태는 기록에서 파생된다), "— 없음"으로 끝나는 줄, 상태 범례(🔄와 🙋가 한 줄)는 세지 않는다.
+- 이번 턴(사람이 마지막으로 친 프롬프트 뒤)에 거부되지 않은 Bash 호출이 `orch decide add`, `orch board now`, `orch board set … --owner`, `orch gate`, `orca orchestration gate-create`, `orch-dash inbox add` 중 하나를 돌렸으면 통과한다. 항목과 기록을 짝짓지 않고, 호출 하나가 응답 전체를 덮는다.
+- 수준 `guard.owner_check`: 키가 없으면 `warn`. 사람에게 "owner_check: 기록 안 된 오너 항목 N" 한 줄을 보이고 `$AGENT_SKILLS_STATE/owner-check.jsonl`에 행을 남긴다. 모델에는 닿지 않는다(systemMessage는 모델에 가지 않는다). 오탐률은 이 행으로 잰다. `deny`는 설정 키로만 켜고, claim_check처럼 그 정지를 한 번 막아 모델이 기록하게 한다(`stop_hook_active`면 통과). `off`와 `AGENT_SKILLS_OWNER_CHECK=0`은 끈다.
+- 판정은 문구 매칭이라 오탐과 미탐이 있다. 그래서 warn으로 시작한다.
+
 ## pstack과의 차이
 
 ### 한눈에

@@ -29,7 +29,20 @@ def stop_passes(event):
     path = event.get("agent_transcript_path") or event.get("transcript_path")
     if not isinstance(path, str) or not os.path.isfile(path):
         return True
-    return claim_check.judge(claim_check.turn(path), event.get("last_assistant_message")) is None
+    entries = claim_check.turn(path)
+    if claim_check.judge(entries, event.get("last_assistant_message")) is not None:
+        return False
+    return not owner_blocks(entries, event)
+
+
+def owner_blocks(entries, event):
+    """True when owner_check.py would block this stop: only its `deny` level blocks."""
+    import owner_check
+    from lib import config
+    if os.environ.get("AGENT_SKILLS_OWNER_CHECK", "1") == "0" or config.level(config.load(), owner_check.KEY, "warn") != "deny":
+        return False
+    items, recorded = owner_check.judge(entries, event.get("last_assistant_message"))
+    return bool(items) and not recorded
 
 
 def main():
