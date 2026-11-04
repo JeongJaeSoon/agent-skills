@@ -1953,10 +1953,6 @@ def attempt(p, pr, klass, onto_lower=False):
         return 0, f"#{pr} already landed as {st['landed'].get('sha', '')[:8]}"
     if stopped(events):
         return 1, "STOP line active: nothing lands"
-    if cfg["merge_policy"] == "human-gate":
-        if hold := gate_hold(p, events, pr):
-            return 1, hold
-        events, st = p.events(), pr_state(p.events()).get(pr, {})
     main = main_state(events)
     if main == "red" and klass != "main-fix":
         return 1, "safety stop: main is red; only the repair lands (--class main-fix)"

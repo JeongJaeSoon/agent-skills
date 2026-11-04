@@ -831,6 +831,14 @@ assert prog(env, "gate", "t", "--pr", "59")[0] == 0
 code, out = prog(env, "land", "t", "--pr", "59")
 assert code == 1 and "waiting for the user" in out and not merged(d), out
 
+# The gate guards a merge land would make: a PR a person already merged is still recorded.
+d, env = gate_setup({"58": pr(58)})
+verdict(d, 58, "T-58")
+st = json.loads((d / "state.json").read_text()); st["prs"]["58"].update(state="MERGED", merge_sha="m58")
+(d / "state.json").write_text(json.dumps(st))
+code, out = prog(env, "land", "t", "--pr", "58")
+assert code == 0 and "merged outside land" in out and any(e["ev"] == "landed" and e["pr"] == 58 for e in ledger(d)), out
+
 # Every layer a stack lands needs its own approval, and a newer gate voids an older approval.
 d, env = gate_setup({"56": pr(56, stacked=True), "57": pr(57, base="b56", stacked=True)})
 st = json.loads((d / "state.json").read_text()); st["stacks"] = [{"id": 0, "pull_requests": [56, 57]}]
