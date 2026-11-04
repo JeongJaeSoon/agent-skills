@@ -69,13 +69,14 @@ def world(*, reasons=(), state_name=None, legacy=True, guard=False, server=False
     w = World()
     state_name = state_name or f"s{len(list(tmp.iterdir()))}"
     saved = (cutover.sh, automations.orca_automations, store.preflight, cutover.guard_owner, cutover.stop_server,
-             sys.platform, os.environ["ORCH_FLEET_STATE"])
+             sys.platform, os.environ["ORCH_FLEET_STATE"], cutover.note_server)
     cutover.sh, automations.orca_automations = w.sh, w.listing
     store.preflight = lambda: list(reasons)
     if not guard:
         cutover.guard_owner = lambda: None
     if not server:
         cutover.stop_server = lambda plan: None
+        cutover.note_server = lambda plan: None
     sys.platform = "darwin"
     os.environ["ORCH_FLEET_STATE"] = str(tmp / state_name / "dashboard")
     sd = fleet.state_dir()
@@ -86,7 +87,7 @@ def world(*, reasons=(), state_name=None, legacy=True, guard=False, server=False
         yield w, sd
     finally:
         (cutover.sh, automations.orca_automations, store.preflight, cutover.guard_owner, cutover.stop_server,
-         sys.platform, os.environ["ORCH_FLEET_STATE"]) = saved
+         sys.platform, os.environ["ORCH_FLEET_STATE"], cutover.note_server) = saved
 
 
 def run(argv=()):
@@ -225,8 +226,36 @@ with world() as (w, sd):
     cutover.save_plan([{"do": "enable", "name": "janitor", "id": "id-old"}])
     w.jobs["agent-skills janitor"] = False
     ok, lines = cutover.recover()
-    assert ok and "replaced" in lines[0] and not [c for c in w.calls if "edit" in c], (lines, w.calls)
+    assert ok and "gone" in lines[0] and not [c for c in w.calls if "edit" in c], (lines, w.calls)
     assert w.jobs["agent-skills janitor"] is False and not (sd / cutover.RECOVER).exists()
+
+# ---- an automation renamed since it was recorded is found by its id and turned on again
+with world() as (w, sd):
+    w.jobs["agent-skills janitor"] = False
+    cutover.save_plan([{"do": "enable", "name": "janitor", "id": "id-agent-skills janitor"}])
+    w.jobs["renamed"] = w.jobs.pop("agent-skills janitor")  # the old name is gone, the id id-renamed is not the recorded one
+    cutover.save_plan([{"do": "enable", "name": "janitor", "id": "id-renamed"}])
+    ok, lines = cutover.recover()
+    assert ok and "on again" in lines[0] and w.jobs["renamed"] is True, (lines, w.jobs)
+    # Orca unreadable: the step stays in the plan
+    cutover.save_plan([{"do": "enable", "name": "janitor", "id": "id-x"}])
+    automations.orca_automations = lambda: (None, "orca down")
+    ok, lines = cutover.recover()
+    assert not ok and cutover.load_plan(), lines
+    automations.orca_automations = w.listing
+
+# ---- a server that is up when the run starts is recorded before any stop
+with world(server=True) as (w, sd):
+    real = (dash.health, dash.home, dash.default_port)
+    dash.health = lambda port: {"store": str(dash.home()), "pid": 1}
+    dash.home = lambda: tmp / "programs"
+    dash.default_port = lambda: 4999
+    try:
+        plan = []
+        cutover.note_server(plan)
+        assert plan == [{"do": "server", "port": 4999}] and not (sd / cutover.RECOVER).exists()
+    finally:
+        dash.health, dash.home, dash.default_port = real
 
 # ---- init uses the state directory a LaunchAgent uses, and refuses when the shell names another
 with world(legacy=False, state_name="init-env") as (w, sd):

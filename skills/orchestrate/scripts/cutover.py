@@ -168,15 +168,24 @@ def _stop_one(s):
             raise store.Refused(f"could not turn the {s['name']} automation off: {(r.stderr or r.stdout).strip()[:120]}")
 
 
-def stop_server(plan):
-    """A dashboard server nobody manages (started by `ensure`): stop it and record how to start it again."""
+def note_server(plan):
+    """Record a dashboard server that is up now, before any stop: the server ends itself once the lock is held, and
+    a server that is gone by the time it is looked for would leave no way back."""
     import dash
     port = dash.default_port()
     h = dash.health(port)
+    if h and h.get("store") == str(dash.home()) and not any(s["do"] == "server" for s in plan):
+        plan.append({"do": "server", "port": port})
+    return h
+
+
+def stop_server(plan):
+    """A dashboard server nobody manages (started by `ensure`): stop it; its recovery step is already in the plan."""
+    import dash
+    port = dash.default_port()
+    h = note_server(plan)
     if not h or h.get("store") != str(dash.home()):
         return
-    if not any(s["do"] == "server" for s in plan):
-        plan.append({"do": "server", "port": port})
     save_plan(plan)
     dash.stop(h, port)
     if dash.health(port):
@@ -201,11 +210,19 @@ def _undo(s):
         return r.returncode == 0, f"dashboard server on port {s['port']}: {(r.stdout or r.stderr).strip()[-120:]}"
     if s["do"] == "enable":
         try:
-            automations, rec = _jobs().get(s["name"], (None, None))
+            _, rec = _jobs().get(s["name"], (None, None))
         except store.Refused as e:
             return False, str(e)
-        if rec is None or rec.get("id") != s["id"]:  # the name now belongs to another automation: never touch that one
-            return True, f"{s['name']}: the automation recorded is gone or was replaced; nothing to turn on"
+        sys.path.insert(0, str(store.REPO / "scripts"))
+        import automations
+        if rec is None or rec.get("id") != s["id"]:
+            # The name no longer leads to the recorded automation: it was renamed, replaced, or deleted. Look by id.
+            autos, err = automations.orca_automations()
+            if autos is None:
+                return False, f"{s['name']}: cannot read Orca's automations ({err}); it stays in the plan"
+            rec = next((a for a in autos if a.get("id") == s["id"]), None)
+            if rec is None:  # gone, or the name now belongs to another one: never touch that
+                return True, f"{s['name']}: the automation recorded is gone; nothing to turn on"
         if rec.get("enabled"):
             return True, f"{s['name']}: already on"
         r = sh([automations.ORCA, "automations", "edit", "--id", s["id"], "--enabled", "--json"])
@@ -293,6 +310,7 @@ def run():
     plan = load_plan()
     have = {_key(s) for s in plan}
     plan += [s for s in snapshot() if _key(s) not in have]
+    note_server(plan)
     save_plan(plan)  # before the first stop: a killed run leaves the way back
     for s in plan:
         if s["do"] != "server":

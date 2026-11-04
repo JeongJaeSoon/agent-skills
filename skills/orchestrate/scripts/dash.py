@@ -2054,7 +2054,7 @@ def loops_alive(h, limit=LOOP_STALE):
         return False
 
 
-def watch_migrate(poll=2.0, kill=os.kill):
+def watch_migrate(poll=0.5, kill=os.kill):
     """A server that slipped past the start checks (they are not atomic with the start) ends itself once `orch db
     migrate` holds its lock, so it never writes the state during the import."""
     while True:
@@ -2082,6 +2082,8 @@ def serve(host, port, interval, make_fleet=None):
             "waiting for its store lock")
         fcntl.flock(lock, fcntl.LOCK_EX)
     httpd = http.server.ThreadingHTTPServer((host, port), Handler)  # bind before the loops start
+    if store_db.cutover_running():  # checked again after the bind: a migrate that starts later finds this server up
+        sys.exit(MIGRATING)
     HEALTH.update(pid=os.getpid(), store=str(home()), version=code_version(), mtime=code_mtime(), port=port,
                   started_at=iso(utcnow()), git=git_sha(), script=str(HERE / "dash.py"))
     check_code()
