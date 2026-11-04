@@ -677,7 +677,7 @@ moves = prog.next_moves([
     {"dispatchId": "w5", "agentTerminalHandle": "h5", "projection": {"outcome": "succeeded"}}])
 assert [m.split()[0] for m in moves] == ["w1", "w2", "w3", "w4"], moves
 assert "reply: orca x" in moves[0] and "worker-abandon" in moves[1] and "worker-read --dispatch w3" in moves[2] \
-    and moves[3] == "  w4 idle: orchestration send --to dispatch:w4, then nudge h4", moves
+    and moves[3] == "  w4 idle: orchestration send --to dispatch:w4, then skills-sync wake-target h4", moves
 assert prog.next_moves(newer([
     {"dispatchId": "w4", "agentTerminalHandle": "h4", "projection": pj(stage={"activity": "idle"})}])) == moves[3:], "newer Orca's `terminal`"
 # orch inbox: one call per wake. It acks what was handled, peek-waits only when nothing is queued, and prints the

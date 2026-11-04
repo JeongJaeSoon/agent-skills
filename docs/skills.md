@@ -530,6 +530,7 @@ PR 을 맡는 스킬과 머지 주체:
   - `sync`: fetch → ff-only pull 또는 서명 커밋 push. main이 아님, 커밋 안 한 변경, 갈라짐, 서명 없는 커밋, credential helper 없음이면 아무것도 바꾸지 않고 멈춘 뒤 macOS 알림과 `~/.local/state/agent-skills/sync.json`에 남긴다. launchd가 15분마다와 로그인 때 돌린다.
   - `broadcast [--skills|--plugins] [--dry-run] [--terminal <handle>]`: `SKILL.md`가 바뀌었으면 `/reload-skills`, hook 연결(`hooks/hooks.json`)·플러그인 manifest가 바뀌었으면 `/reload-plugins`를 보낸다. 빈 입력칸, 스피너 없음, 권한·신뢰·질문 창 없음, 입력칸 아래에 셸 없음, 1.5초 간격 두 번 읽은 화면이 같음을 모두 확인한 세션에만 보내고, 나머지는 `reload-pending.json`에 남겨 다음에 다시 시도한다. `--terminal <handle>`이면 그 세션 하나에만 보낸다. 스킬을 고친 세션이 턴을 끝낸 뒤 자기 handle로 돌려 스스로 reload하는 데 쓴다(`write-skill` §7).
   - `nudge <terminal> <한 줄>`: 같은 확인을 통과한 세션에만 한 줄을 보내고 턴이 시작됐는지 본다.
+  - `wake-target <terminal>`, `wake-check <terminal> [--wait <초>]`, `wake-reset <terminal>`: Claude 카드를 깨우는 신호의 경로를 고르고, SendMessage로 보낸 신호가 턴을 시작했는지 받는 세션의 transcript에서 확인한다. 보내는 일은 세션이 도구로 한다. `agent-skills.json`의 `wake.transport`가 `sendmessage`일 때만 그 경로를 쓰고 기본값은 `terminal`이다. 절차는 `skills/orchestrate/references/waking.md`.
   - `status`: 마지막 동기화 결과와 남은 reload.
 
 ## 설정 파일

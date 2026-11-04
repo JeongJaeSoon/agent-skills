@@ -567,7 +567,7 @@ def delivered(row, nonce):
             b.get("text") for b in content or [] if isinstance(b, dict) and b.get("type") == "text"]
     else:
         return False
-    return any(isinstance(t, str) and t.lstrip().startswith("<cross-session-message") and nonce in t for t in texts)
+    return any(isinstance(t, str) and "<cross-session-message from=" in t and nonce in t for t in texts)
 
 
 def wake_state(entry):

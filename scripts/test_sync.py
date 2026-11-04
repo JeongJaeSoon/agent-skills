@@ -696,7 +696,7 @@ def wrapped(nonce):
 def test_wake_state():
     enqueue = {"type": "queue-operation", "operation": "enqueue", "content": wrapped("n1")}
     attached = {"type": "attachment", "attachment": {"type": "queued_command", "prompt": wrapped("n1")}}
-    user = {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": wrapped("n1")}]}}
+    user = {"type": "user", "message": {"role": "user", "content": f"Another Claude session sent a message:\n{wrapped('n1')}"}}
     quoted = {"type": "user", "message": {"content": [{"type": "tool_result", "content": wrapped("n1")}]}}
     assistant = {"type": "assistant", "message": {"content": []}}
     other = {"type": "attachment", "attachment": {"type": "queued_command", "prompt": wrapped("n0")}}

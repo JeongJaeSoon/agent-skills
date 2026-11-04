@@ -1240,13 +1240,13 @@ def cmd_init(argv):
 
 STALL_TEXT = {
     "idle": "turn ended {minutes} min ago with its task open and no wake-up armed; an orchestration message "
-            "does not wake an idle session: send the content to dispatch:{dispatch}, then nudge its terminal with "
-            "one line (orca terminal send --text 'run your orchestration check' --enter)",
+            "does not wake an idle session: send the content to dispatch:{dispatch}, then wake it by "
+            "references/waking.md (skills-sync wake-target <terminal>)",
     "start_unconfirmed": "dispatched {minutes} min ago and its session has written nothing: check it got the brief",
     "long_tool": "one {tool} call running for {minutes} min ({detail}): still waiting on purpose?",
     "silent": "its session has written nothing for {minutes} min though its last row is input, not an ended turn "
               "(a notification that arrived after the turn ended looks like this): read its terminal, and if it sits "
-              "at the prompt, send the content to dispatch:{dispatch} and nudge its terminal as for an idle one",
+              "at the prompt, send the content to dispatch:{dispatch} and wake it as for an idle one",
 }
 
 
@@ -2849,7 +2849,7 @@ def next_moves(workers):
         elif not h or (pj.get("liveness") or {}).get("verdict") == "exited":
             out.append(f"  {d} no terminal: worker-stop or worker-abandon (recovery-and-cleanup.md)")
         elif activity == "idle":  # the turn ended without worker_done; send alone does not wake it (SKILL.md, terminal send)
-            out.append(f"  {d} idle: orchestration send --to dispatch:{d}, then nudge {h}")
+            out.append(f"  {d} idle: orchestration send --to dispatch:{d}, then skills-sync wake-target {h}")
         elif activity == "working":
             out.append(f"  {d} working")
         else:  # waiting may be a permission prompt; unknown needs a look either way
