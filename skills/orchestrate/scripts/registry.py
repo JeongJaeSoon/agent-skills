@@ -65,7 +65,7 @@ PRODUCERS = {
     "cardwatch": ("card-watch monitor", ("card_watch", "agent_signal")),
     "hooks": ("hooks · reorient, roles, permission, onboard", (
         "reorient", "roles", "config", "permission", "onboard")),
-    "sync": ("skills-sync · launchd", ("sync",)),
+    "sync": ("skills-sync · launchd, card, handoff, end-check", ("sync", "card", "end_check")),
     "preview": ("preview-watch · launchd", ("preview_watch",)),
     "share": ("share-server", ("share_server",)),
     "watchprs": ("watch-prs round", ("prs", "notify")),
@@ -121,8 +121,9 @@ STORES = [
           rule="read by the sessions themselves, no script"),
     Store("notes", "ext:notes", {"program.config": CANONICAL, "lesson.row": CANONICAL}, ("ext:leads",), ("reflect",),
           feature="reflect.ledger", rule="notes store; the lessons ledger when it is a plain file"),
-    Store("briefs", "P/*/briefs/*.md", {"card.brief": CANONICAL}, ("ext:leads",), ("fleet",),
-          rule="card briefs; their REPORT line names the report file"),
+    Store("briefs", "P/*/briefs/*.md", {"card.brief": CANONICAL}, ("ext:leads", "card:create"), ("fleet",),
+          rule="card briefs; their REPORT line names the report file; skills-sync card rewrites the marked "
+               "FORBIDDEN section of the brief it is given"),
     Store("reports", "ext:card-report", {"card.milestone": CANONICAL}, ("ext:cards",), ("fleet", "brief"),
           rule="a card's own report: the file its brief names, else its newest milestone message to its Run"),
     # -- configuration
@@ -254,6 +255,12 @@ STORES = [
     Store("sync", "S/sync.json", {"sync.result": CANONICAL}, ("sync:sync",), ("fleet",), 3600,
           rule="last skills-sync result"),
     Store("synclock", "S/sync.lock", {"sync.result": LOCK}, ("sync:locked",)),
+    Store("cards", "S/cards.jsonl", {"card.key": CANONICAL}, ("card:ledger_add",), ("sync",),
+          rule="cards skills-sync card and handoff started: repo, references, role, superseded_by"),
+    Store("cardslock", "S/cards.lock", {"card.key": LOCK}, ("card:card_lock",)),
+    Store("closesetup", "S/close-setup/*.log", {"close_setup.output": CANONICAL},
+          ("card:start_close_setup", "end_check:apply"), ("nobody",),
+          rule="each background close-setup's output, ending in result: ok or failed"),
     Store("reload", "S/reload-pending.json", {"sync.reload_pending": CANONICAL},
           ("sync:queue_reload", "sync:broadcast_locked"), ("fleet",), rule="reloads not yet sent, per terminal"),
     Store("restarts", "S/restarts.json", {"sync.stale_restart": CANONICAL}, ("sync:restart_stale",), ("sync",),
