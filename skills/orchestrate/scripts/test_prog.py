@@ -677,7 +677,7 @@ moves = prog.next_moves([
     {"dispatchId": "w5", "agentTerminalHandle": "h5", "projection": {"outcome": "succeeded"}}])
 assert [m.split()[0] for m in moves] == ["w1", "w2", "w3", "w4"], moves
 assert "reply: orca x" in moves[0] and "worker-abandon" in moves[1] and "worker-read --dispatch w3" in moves[2] \
-    and moves[3] == "  w4 idle: orchestration send --to dispatch:w4, then nudge h4", moves
+    and moves[3] == "  w4 idle: orchestration send --to dispatch:w4, then skills-sync wake-target h4", moves
 assert prog.next_moves(newer([
     {"dispatchId": "w4", "agentTerminalHandle": "h4", "projection": pj(stage={"activity": "idle"})}])) == moves[3:], "newer Orca's `terminal`"
 # orch inbox: one call per wake. It acks what was handled, peek-waits only when nothing is queued, and prints the
@@ -1096,3 +1096,47 @@ finally:
     prog.run, prog.pr_view = real_run, real_view
 
 print("prog.py patch-id fallback: all pass")
+
+# wake_lines: a signal nobody settled still reaches its sender after a restart
+state = pathlib.Path(tempfile.mkdtemp(prefix="test-wakes-"))
+wakes = state / "wakes"
+wakes.mkdir()
+wake = {"session": "s", "to": "card", "nonce": "n", "at": 1000, "offset": 0}
+(wakes / "term_a.json").write_text(json.dumps({**wake, "from": "term_me"}))
+(wakes / "term_b.json").write_text(json.dumps({**wake, "from": "term_other"}))
+(wakes / "term_a.lock").write_text("")
+old_state = os.environ.get("AGENT_SKILLS_STATE")
+os.environ["AGENT_SKILLS_STATE"] = str(state)
+try:
+    assert prog.wake_lines("term_me", now=1000 + prog.WAKE_DUE_S - 1) == [], "not due yet"
+    lines = prog.wake_lines("term_me", now=1000 + prog.WAKE_DUE_S)
+    assert len(lines) == 1 and lines[0].startswith("WAKE term_a:"), lines
+    for broken in ("{", '{"at": 0}', '{"at": 0, "from": "term_other"}'):
+        (wakes / "term_c.json").write_text(broken)
+        lines = prog.wake_lines("term_me", now=1001)
+        assert [l.split(":")[0] for l in lines] == ["WAKE term_c"], (broken, lines)
+    (wakes / "term_c.json").write_text(json.dumps(wake))
+    assert prog.wake_lines("term_me", now=1001) == [], "a sender-less record waits for its deadline too"
+    lines = prog.wake_lines("term_me", now=1000 + prog.WAKE_DUE_S)
+    assert [l.split(":")[0] for l in lines] == ["WAKE term_a", "WAKE term_c"], lines
+    (wakes / "term_c.json").unlink()
+
+    me_was = os.environ.get("ORCA_TERMINAL_HANDLE")
+    os.environ["ORCA_TERMINAL_HANDLE"] = "term_me"
+    real_wait = prog.orca_json, prog.Program, prog.run_workers, prog.own_worker, prog.all_workers, prog.print_stuck
+    prog.orca_json = lambda *a: {"deliveryId": "dv", "messages": [{"type": "escalation", "payload": "{}"}]} if "--wait" in a else {}
+    prog.run_workers = prog.all_workers = lambda run: []
+    prog.print_stuck = lambda *a, **k: []
+    prog.Program = lambda slug: type("P", (), {"cfg": {"run": "run_x", "repo": "o/r"}, "slug": slug, "events": lambda self: [],
+                                               "dir": pathlib.Path(tempfile.mkdtemp())})()
+    try:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            prog.cmd_wait(["s", "--rounds", "1"])
+        assert "WAKE term_a:" in out.getvalue() and "ACTIONABLE" in out.getvalue(), out.getvalue()
+    finally:
+        prog.orca_json, prog.Program, prog.run_workers, prog.own_worker, prog.all_workers, prog.print_stuck = real_wait
+        os.environ.pop("ORCA_TERMINAL_HANDLE") if me_was is None else os.environ.__setitem__("ORCA_TERMINAL_HANDLE", me_was)
+finally:
+    os.environ.pop("AGENT_SKILLS_STATE") if old_state is None else os.environ.__setitem__("AGENT_SKILLS_STATE", old_state)
+print("prog.py wake lines: all pass")

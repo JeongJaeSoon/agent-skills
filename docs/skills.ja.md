@@ -1,4 +1,4 @@
-<!-- translated-from: d54b88796f0bc76b97f6212b63cf4b79c9af4c30 -->
+<!-- translated-from: fcf9329dc2a5e4773f135579ef2f195819c9de64 -->
 # スキルカタログ
 
 `agent-skills` プラグインに入っているスキル41個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック12個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
@@ -512,6 +512,7 @@ PR を受け持つスキルとマージする主体:
   - `sync`: fetch のあと ff-only の pull か、署名済みコミットの push。main でない、未コミットの変更がある、分岐している、署名のないコミットがある、credential helper がない場合は何も変えずに止まり、macOS 通知と `~/.local/state/agent-skills/sync.json` に残します。launchd が15分ごととログイン時に実行します。
   - `broadcast [--skills|--plugins] [--dry-run] [--terminal <handle>]`: `SKILL.md` が変わったら `/reload-skills`、hook の配線（`hooks/hooks.json`）やプラグインの manifest が変わったら `/reload-plugins` を送ります。入力欄が空、スピナーなし、権限・信頼・質問の画面なし、入力欄の下にシェルなし、1.5秒おきに二回読んだ画面が同じ、をすべて確かめたセッションにだけ送り、残りは `reload-pending.json` に残して次に再試行します。`--terminal <handle>` はそのセッション一つにだけ送ります。スキルを変えたセッションがターンを終えたあと自分の handle に向けて、自分自身を reload するのに使います（`write-skill` §7）。
   - `nudge <terminal> <一行>`: 同じ確認を通ったセッションにだけ一行を送り、ターンが始まったか確かめます。
+  - `wake-target <terminal>`、`wake-check <terminal> [--wait <秒>]`、`wake-reset <terminal>`: Claude カードを起こす信号の経路を選び、SendMessage で送った信号がターンを始めたかを受け手のセッションの transcript で確かめます。送るのはセッション自身がツールで行います。`agent-skills.json` の `wake.transport` が `sendmessage` のときだけその経路を使い、既定値は `terminal` です。手順は `skills/orchestrate/references/waking.md` にあります。
   - `status`: 最後の同期結果と残っている reload。
 
 ## 設定ファイル
