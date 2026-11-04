@@ -958,7 +958,7 @@ process.stdout.write(JSON.stringify({{page: fleetTodo(), section: fleetSection("
         "| ⏳ | └ ABC-1 K4: client plugins for…[2] | [#7](https://github.com/acme/plugins/pull/7) ❗리뷰 | — | ↓ 대기 | 세션 없음 |", "",
         "- [1] ABC-1 rollout: release then prod, then the final check", "- [2] ABC-1 K4: client plugins for both versions",
         "- [3] 에이전트 조치 필요: 세션 꺼짐 · 6h 전", "",
-        "🔄 **표 밖 진행**", "", "- ❔ guard-fix — 에이전트 조치 필요: 세션 꺼짐 · 6h 전", "- 🔄 rollout plan — 수 10/28: release · coordinator", "- └ 🔴 child card — 턴 종료", "",
+        "📌 **카드 없는 일**", "", "- ❔ guard-fix — 에이전트 조치 필요: 세션 꺼짐 · 6h 전", "- 🔄 rollout plan — 수 10/28: release · coordinator", "- └ 🔴 child card — 턴 종료", "",
         "⏳ **다른 사람 대기**", "", "- team:reviewers · 리뷰 [#7](https://github.com/acme/plugins/pull/7) · 3일 전부터 → ABC-1 K4 · 다음: 리뷰 대기 · 코디네이터", "",
         "❓ **결정 필요** — 1. (d1) settle the copy → 추천: 적용", "", "2. (d2) pick a date → 추천: Friday", "",
         "🙋 **지금 오너가 할 일** — 없음", "",
@@ -969,7 +969,7 @@ process.stdout.write(briefHtml({json.dumps(text)}));"""
     page = subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout
     assert "…[" not in page and "- [1]" not in page and "then the final check</b>" in page and "└ ABC-1 K4: client plugins for both versions" in page, page
     assert 'class="brief-table brepo"' in page and '<col class="bpr">' in page and '<col class="bnext">' in page and 'class="slide"' in page, page
-    assert re.findall(r'<h4 class="bhead">(.*?)</h4>', page) == ["🔄 표 밖 진행", "⏳ 다른 사람 대기", "❓ 결정 필요",
+    assert re.findall(r'<h4 class="bhead">(.*?)</h4>', page) == ["📌 카드 없는 일", "⏳ 다른 사람 대기", "❓ 결정 필요",
                                                                  '🙋 지금 오너가 할 일 <span class="muted">— 없음</span>', "⏸️ 보류"], page
     assert '<div class="slide">에이전트 조치 필요: 세션 꺼짐 · 6h 전</div>' in page and '<div class="slide">↓ 오너</div>' in page, page
     assert "<td>에이전트 조치 필요: 세션 꺼짐 · 6h 전</td>" in page and "release · orchestrator</td>" in page and "코디네이터" not in page, page
@@ -982,10 +982,10 @@ process.stdout.write(briefHtml({json.dumps(text)}));"""
     # Each repository row gets the button of the table_rows entry with its label, at the right end, whatever the order;
     # a table no entry names gets none. The Finished rows card leaves out a row whose Ack is already in the table, and
     # Open items one whose Done is: a list item with no row of its own gets its Done in its list.
-    two = "\n".join(["| | 리드/Phase | PR | 진행 | 다음 | 세션 |", "|---|---|---|---|---|---|", "| ✅ | done lead | — | — | — | — |",
-                     "| 🔴 | stuck lead | — | — | 재개·정리 | 세션 없음 |", "| 🔄 | **busy lead** | — | — | 리뷰 | 작업 중 |", "",
+    two = "\n".join(["| | 리드/Phase | PR | 다음 | 세션 |", "|---|---|---|---|---|", "| ✅ | done lead | — | — | — |",  # no bar, no 진행
+                     "| 🔴 | stuck lead | — | 재개·정리 | 세션 없음 |", "| 🔄 | **busy lead** | — | 리뷰 | 작업 중 |", "",
                      "| | 리드/Phase | PR | 진행 | 다음 | 세션 |", "|---|---|---|---|---|---|", "| ⏳ | other | — | — | ↓ 대기 | 멈춤 |", "",
-                     "🔄 **표 밖 진행**", "", "- 🔄 loose item — 정리 · lead"])
+                     "📌 **카드 없는 일**", "", "- 🔄 loose item — 정리 · lead"])
     busy = {"id": "wt-busy", "name": "busy-card", "state": "working", "word": "작업 중", "last": "PR 열고 <리뷰> 대기",
             "at": "2026-10-28T09:00:00Z", "pr": "acme/plugins#7"}
     rows = [{"table": "acme/a", "rows": [
