@@ -979,8 +979,11 @@ def save_compare_cache():
                 merged.update(_CONTAINS)
                 _CONTAINS.clear()
                 _CONTAINS.update(merged)
-                # Only the file is bounded, oldest first (insertion order, cached() renews): this process keeps every
-                # answer its ledgers ask for, so a long active set is never judged unknown by its own eviction.
+                # The file keeps the newest CACHE_MAX answers; memory keeps twice that, so a ledger's active pairs
+                # (a few thousand, renewed by cached() every round) are never evicted into "unknown" while pairs of
+                # programs long gone do leave. Oldest first: the dict keeps insertion order.
+                for k in list(_CONTAINS)[:-2 * CACHE_MAX]:
+                    del _CONTAINS[k]
                 out = {}
                 for (repo, older, newer), v in list(_CONTAINS.items())[-CACHE_MAX:]:
                     out.setdefault(repo, {})[f"{older}...{newer}"] = v

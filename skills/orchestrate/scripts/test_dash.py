@@ -722,7 +722,16 @@ dash._cache_state["dirty"] = True
 dash.save_compare_cache()
 dash.CACHE_MAX = real_max
 assert sorted(json.loads(dash.cache_path().read_text())["acme/app"]) == ["o2...n", "o3...n", "o4...n"], "the file is bounded"
-assert len(dash._CONTAINS) == 5, "this process keeps every answer its ledgers ask for"
+assert len(dash._CONTAINS) == 5, "memory holds twice the file bound, so the active pairs stay"
+dash.CACHE_MAX = 2
+for i in range(10):
+    dash._CONTAINS[("acme/gone", f"g{i}", "n")] = True
+dash._cache_state["dirty"] = True
+dash.save_compare_cache()
+dash.CACHE_MAX = real_max
+assert len(dash._CONTAINS) == 4, f"answers of long-gone pairs leave memory too: {len(dash._CONTAINS)}"
+for i in range(5):  # put the five back for the checks below
+    dash._CONTAINS[("acme/app", f"o{i}", "n")] = True
 # An answer a ledger still asks for is renewed, so the file keeps it; a long active set is never judged unknown.
 dash.CACHE_MAX = 3
 dash.cached(("acme/app", "o0", "n"))
