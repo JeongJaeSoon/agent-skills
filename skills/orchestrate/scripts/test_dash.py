@@ -624,6 +624,9 @@ dash.HEALTH["ticks"] = {"fast": age(6)}
 assert dash.health_view()["stale"] is True; dash.check_loops(); assert not exits, "stale in health, but a slow round is not restarted yet"
 dash.HEALTH["ticks"] = {"fast": age(16)}
 dash.check_loops(); assert exits == [1], "a loop silent for 15 minutes restarts the server"
+dash.HEALTH.update(broken="abc", disk_version="abc")
+dash.check_loops(); assert exits == [1], "code on disk that does not import is not restarted into"
+dash.HEALTH.update(broken=None)
 dash.under_agent = lambda: False
 dash.check_loops(); assert exits == [1], "outside launchd it only reports"
 dash.HEALTH.clear(); dash.HEALTH.update(old_health); dash.under_agent, dash.restart = old_agent, old_restart
@@ -701,15 +704,17 @@ for i in range(5):
 dash._cache_state["dirty"] = True
 dash.save_compare_cache()
 dash.CACHE_MAX = real_max
-assert list(dash._CONTAINS) == [("acme/app", f"o{i}", "n") for i in (2, 3, 4)], list(dash._CONTAINS)
-# An answer a ledger still asks for is renewed, so eviction does not take it.
+assert sorted(json.loads(dash.cache_path().read_text())["acme/app"]) == ["o2...n", "o3...n", "o4...n"], "the file is bounded"
+assert len(dash._CONTAINS) == 5, "this process keeps every answer its ledgers ask for"
+# An answer a ledger still asks for is renewed, so the file keeps it; a long active set is never judged unknown.
 dash.CACHE_MAX = 3
-dash.cached(("acme/app", "o2", "n"))
+dash.cached(("acme/app", "o0", "n"))
 dash._CONTAINS[("acme/app", "o5", "n")] = False
 dash._cache_state["dirty"] = True
 dash.save_compare_cache()
 dash.CACHE_MAX = real_max
-assert ("acme/app", "o2", "n") in dash._CONTAINS and ("acme/app", "o3", "n") not in dash._CONTAINS, list(dash._CONTAINS)
+assert dash.cached(("acme/app", "o1", "n")) is True, "memory is not evicted by the file bound"
+assert "o0...n" in json.loads(dash.cache_path().read_text())["acme/app"], "a renewed answer stays in the file"
 # Another process saved meanwhile: its answers are merged in, not overwritten.
 other = json.loads(dash.cache_path().read_text())
 other.setdefault("acme/other", {})["x...y"] = True

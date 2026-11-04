@@ -979,10 +979,10 @@ def save_compare_cache():
                 merged.update(_CONTAINS)
                 _CONTAINS.clear()
                 _CONTAINS.update(merged)
-                for k in list(_CONTAINS)[:-CACHE_MAX]:  # oldest first: insertion order, cached() renews
-                    del _CONTAINS[k]
+                # Only the file is bounded, oldest first (insertion order, cached() renews): this process keeps every
+                # answer its ledgers ask for, so a long active set is never judged unknown by its own eviction.
                 out = {}
-                for (repo, older, newer), v in _CONTAINS.items():
+                for (repo, older, newer), v in list(_CONTAINS.items())[-CACHE_MAX:]:
                     out.setdefault(repo, {})[f"{older}...{newer}"] = v
                 _cache_state["dirty"] = False
             write_atomic(cache_path(), json.dumps(out))
@@ -1639,6 +1639,8 @@ def health_view():
 def check_loops():
     """The fast loop stopped finishing rounds (a call that never returns): under launchd, exit so it starts again,
     instead of waiting for someone to run `ensure`. Elsewhere /api/health reports stale and the banner says what to run."""
+    if HEALTH.get("broken") and HEALTH.get("broken") == HEALTH.get("disk_version"):
+        return  # the code on disk does not import: a restart would only leave nothing serving
     if not loops_alive(HEALTH, RESTART_STALE) and under_agent():
         log(f"fast loop silent since {HEALTH['ticks'].get('fast')}; exiting so launchd starts it again")
         restart()
