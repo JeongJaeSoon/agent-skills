@@ -2142,6 +2142,7 @@ class Fleet:
         for s in sessions.values():
             mine = [i for i in items if i.get("session") == s["id"]]
             s["unread"] = len(mine)
+            s["needs_owner"] = sum(needs_rank(i) < 2 for i in mine)  # the agent answers the rest, like failing CI
             s["missed"] = sum(i["missed"] for i in mine)
         # Keep the sticky store bounded: closed ones older than a week go.
         cutoff = iso(now - dt.timedelta(days=7))

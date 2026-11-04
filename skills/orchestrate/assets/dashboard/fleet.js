@@ -932,7 +932,7 @@ function fleetChanges() {
 
 // The periodic report as `orch brief render --periodic` prints it (via /api/fleet/brief), re-rendered on every poll
 // while this view is open. The renderer owns rows, order, icons and bold; this only turns its Markdown into HTML.
-const BRIEF_FED = ["brief", "stages", "todo", "session"];  // the Stages and To-do pages read the same answer's `stages` and `open`
+const BRIEF_FED = ["brief", "stages", "todo", "session", "sessions"];  // the Stages and To-do pages read the same answer's `stages` and `open`, Sessions its marks
 async function pollBrief() {
   if (F.briefBusy) return;
   F.briefBusy = true;
@@ -952,6 +952,9 @@ async function pollBrief() {
 const briefInline = (s) => esc(s).replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, text, url) => link(url, text))
   .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, '<span class="mono">$1</span>')
   .replace(/❔/g, '<span class="qmark" role="img" aria-label="확인 필요">?</span>');
+// A pointer line ends with a page of this dashboard, as its host's 127.0.0.1 URL: linked by its hash, so it also opens
+// from another device.
+const DASH_URL = /(https?:\/\/[^\s<]+\/(#\/fleet\/[\w/-]+))$/;
 // The renderer cuts a cell to fit 78 terminal columns as `head…[n]` and puts the whole text in `- [n] …` under the
 // table. The page has the width: each cut cell gets its whole text back (its └ and bold kept) and the list goes.
 const uncut = (cell, notes) => cell.replace(/^((?:[└ㄴ] )?(?:\*\*)?)(.*)…\[(\d+)\](\**)$/, (m, pre, head, n, post) => notes[n] != null ? pre + notes[n] + post : m);
@@ -964,7 +967,6 @@ const BRIEF_SECTIONS = {
   "결정 필요": [["", "결정"], [" → 추천: ", "추천"]],
   "지금 오너가 할 일": [["", "할 일"], [" → ", "항목"]],
   "보류": [["", "언제 · 조건"], [" → ", "할 일"]],
-  "세션 찾기": [["", "worktree"], [" — ", "터미널"]],
 };
 // Which list_rows list each section's lines come from (board.py render).
 const LIST_OF = { "카드 없는 일": "moving", "다른 사람 대기": "waiting", "지금 오너가 할 일": "owner", "보류": "held" };
@@ -1049,7 +1051,7 @@ function briefHtml(text, tableRows = [], placed = new Set(), listRows = {}, clos
       if (items.length) out.push(sectionTable(sec[2], items, ids));
       continue;
     }
-    if (line.trim()) out.push(`<p>${briefInline(line)}</p>`);
+    if (line.trim()) out.push(`<p>${briefInline(line).replace(DASH_URL, '<a class="link" href="$2">$1</a>')}</p>`);
     i++;
   }
   return out.join("");
@@ -1128,7 +1130,7 @@ function fleetBrief() {
   const finished = rest.length || head ? `<div class="card"><div class="card-head"><h3>Finished rows</h3><span class="aside">${head}</span></div>
     <ul class="rows">${rest.map((d) => `<li class="${d.acked ? "is-acked" : ""}"><span class="grow full">${esc(d.label)}</span><span class="acts muted">${d.at ? relSpan(d.at) : ""}</span>${ackBtn(d)}</li>`).join("")
       || '<li class="muted">Every finished row is in the table above or acked.</li>'}</ul></div>` : "";
-  return headHtml + ackNote() + undoNote() + `<div class="card"><div class="brief card-body">${report}</div></div>` + stage + finished + doneCards(b, closable);
+  return headHtml + ackNote() + undoNote() + stage + `<div class="card"><div class="brief card-body">${report}</div></div>` + finished + doneCards(b, closable);
 }
 
 // Done (tidy.py, `orch board done`): close a row, card or board item that is over, or reopen one. The collector closes
@@ -1474,8 +1476,9 @@ function fleetGraph(st) {
 // A session's started subagents (subagents.jsonl, attached by the collector) as rows under it. Not sessions: no link,
 // PR or Needs you of their own, and not counted with the sessions. A stale one has no stop on record for
 // board.subagent_stale_h hours, or its session is offline: "check", not running.
-function subagentRows(s, d) {
-  return (s.subagents || []).map((a) => `<tr class="dim"><td><span class="tree-cell" style="--d:${Math.min(d + 1, 4)}">${esc(a.desc || a.type || "subagent")}</span></td>
+function subagentRows(s, d, hidden = false) {
+  const ids = subRowIds(s);
+  return (s.subagents || []).map((a, i) => `<tr${hidden ? " hidden" : ""} class="dim" id="${ids[i]}"><td><span class="tree-cell" style="--d:${Math.min(d + 1, 4)}">${esc(a.desc || a.type || "subagent")}</span></td>
       <td>${tag("subagent")}${a.type ? ` <span class="muted">${esc(a.type)}</span>` : ""}</td>
       <td>${a.stale ? tag("check: no stop recorded", "warn") : "running"}</td>
       <td class="hide-md"></td><td class="hide-sm"></td><td></td><td class="num"></td><td class="num hide-sm when">${relSpan(a.started_at)}</td></tr>`).join("");
@@ -1483,9 +1486,55 @@ function subagentRows(s, d) {
 
 // The one-cell model mark the collector wrote (fleet.py model_tags): O, S or H, with `!` when off orchestrate.models.
 const modelCell = (s) => !s.model_tag ? "" : ` <span class="model-mark" title="${esc(s.model)}">${tag(s.model_tag, s.model_tag.endsWith("!") ? "warn" : "")}</span>`;
+// A lead's rows fold on the Sessions page. Which leads are folded is this browser's, kept across reloads when storage
+// works; F.leadFold holds it for the page either way, so a redraw keeps it and blocked storage still lets it fold.
+const FOLD_KEY = "orch-dash:lead-fold";
+function leadFolds() {
+  if (F.leadFold) return F.leadFold;
+  let ids = null;
+  try { ids = JSON.parse(store.get(FOLD_KEY)); } catch (e) { /* not ours, or cut short: nothing is folded */ }
+  return (F.leadFold = new Set(Array.isArray(ids) ? ids : []));
+}
+function foldLead(id) {
+  const fold = leadFolds();
+  if (!fold.delete(id)) fold.add(id);
+  store.set(FOLD_KEY, JSON.stringify([...fold]));
+}
+// Each lead's sessions: what follows it in the depth-first tree, deeper than it. Subagents are not sessions: a lead's
+// own stay on screen, a worker's fold with it.
+function leadKids(tree) {
+  const out = new Map();
+  tree.forEach(([s, d], i) => {
+    if (s.kind !== "orchestration") return;
+    const end = tree.findIndex(([, e], j) => j > i && e <= d);
+    out.set(s.id, tree.slice(i + 1, end < 0 ? tree.length : end).map(([k]) => k).filter((k) => inProject(k.project)));
+  });
+  return out;
+}
+const MARK_RANK = ["🙋", "🔴", "❔", "🔄", "⏳", "⏸️", "📅"];  // rowstate.ROW_ORDER; 📅 is a held row a to-do holds
+// A folded lead's worst session: its brief rows' marks, and 🙋 for one waiting on a person, which may have no row.
+// A finished row has no session in table_rows and nothing urgent to say.
+function urgentMark(kids) {
+  const marks = new Set(kids.flatMap((k) => [...sessionRowsOf(k.id).map((x) => x.status), ...(k.phase === "waiting" || k.needs_owner ? ["🙋"] : [])]));
+  return MARK_RANK.find((m) => marks.has(m)) || "";
+}
+const domId = (id) => encodeURIComponent(id).replace(/[^\w-]/g, "_");  // renderView finds the focused id by selector
+const subRowIds = (s) => (s.subagents || []).map((a, i) => `row-${domId(s.id)}-sub-${i}`);
+function leadToggle(s, kids, folded) {
+  const ids = kids.flatMap((k) => [`row-${domId(k.id)}`, ...subRowIds(k)]).join(" ");
+  return `<button class="fold-btn" type="button" id="fold-${domId(s.id)}" data-fold-lead="${esc(s.id)}" aria-expanded="${!folded}" aria-controls="${esc(ids)}"
+    aria-label="${esc(`${folded ? "Show" : "Hide"} the ${kids.length} session${kids.length === 1 ? "" : "s"} under ${s.name}`)}"><span class="chev" aria-hidden="true"></span></button>`;
+}
+function foldSummary(kids) {
+  const mark = urgentMark(kids);
+  return `<span class="fold-sum muted" title="Most urgent status under this lead">${kids.length} session${kids.length === 1 ? "" : "s"}${mark ? ` · ${briefInline(mark)}` : ""}</span>`;
+}
 
 function fleetSessions(st) {
-  const rows = sessionTree(st).filter(([s]) => inProject(s.project)).map(([s, d]) => {
+  if (!F.brief) pollBrief();
+  const tree = sessionTree(st), kidsOf = leadKids(tree), fold = leadFolds();
+  const hidden = new Set([...kidsOf].filter(([id, kids]) => fold.has(id) && kids.length && inProject(byId(st)[id].project)).flatMap(([, kids]) => kids.map((k) => k.id)));
+  const rows = tree.filter(([s]) => inProject(s.project)).map(([s, d]) => {
     const pr = (st.prs || []).find((p) => p.session === s.id);
     // Orca's own link when the collector holds no PR for the session: number, state and CI as Orca observed them.
     const lp = !pr && s.linked_pr && s.linked_pr.number ? s.linked_pr : null;
@@ -1493,11 +1542,14 @@ function fleetSessions(st) {
       : lp ? `${lp.url ? link(lp.url, `#${esc(lp.number)}`) : `#${esc(lp.number)}`} <span class="muted">${esc([lp.state, lp.checksStatus].filter((x) => x && x !== "unknown").join(" · "))}</span>` : "";
     const tickets = (s.refs || []).filter((r) => r.type !== "pr" && r.url).map((r) => link(r.url, esc(r.key || r.provider || "ticket"))).join(" ");
     const board = s.workspace_status && s.workspace_status !== "in-progress" ? ` <span class="tag">${esc(s.workspace_status)}</span>` : "";
-    return `<tr><td><a class="tree-cell" style="--d:${Math.min(d, 4)}" href="${sessionHref(s.id)}">${phaseDot(s)}<b>${esc(s.name)}</b></a></td>
+    const kids = kidsOf.get(s.id), folded = fold.has(s.id) && kids && kids.length > 0;
+    const open = `<a class="${kids ? "lead-link" : "tree-cell"}"${kids ? "" : ` style="--d:${Math.min(d, 4)}"`} href="${sessionHref(s.id)}">${phaseDot(s)}<b>${esc(s.name)}</b></a>`;
+    const name = kids ? `<span class="tree-cell lead-cell" style="--d:${Math.min(d, 4)}">${kids.length ? leadToggle(s, kids, folded) : ""}${open}${folded ? foldSummary(kids) : ""}</span>` : open;
+    return `<tr${hidden.has(s.id) ? " hidden" : ""} id="row-${domId(s.id)}"><td>${name}</td>
       <td>${kindTag(st, s)}</td><td>${esc(s.phase)}${board}${modelCell(s)}</td>
       <td class="hide-md">${projBadge(s.project)}<span class="mono dim">${s.branch ? esc(s.branch) : ""}</span></td>
       <td class="hide-sm">${tickets}</td><td>${prCell}</td><td class="num">${badge(s.unread, s.missed)}</td><td class="num hide-sm when">${relSpan(s.last_activity)}</td></tr>`
-      + subagentRows(s, d);
+      + subagentRows(s, d, hidden.has(s.id));
   }).join("");
   return `<div class="view-head"><div><h2>Sessions</h2><p>Every Orca worktree, placed under the orchestrator or lead whose run dispatched it, else under its Orca parent, else under the root. A lead is a session under the root with its own run; the sessions under it are its workers. Ticket, PR and the board column (shown when not in-progress) are the card's own Orca fields. A subagent a session started and has not been seen to stop sits under it, dimmed.</p></div>${phaseLegend()}</div>
     ${projectChips(st)}<div class="card table-wrap"><table><thead><tr><th>Session</th><th>Kind</th><th title="After the phase: the model of the session's last assistant row, O opus, S sonnet, H haiku. A ! means orchestrate.models for its role says another.">Phase · model</th><th class="hide-md">Project · branch</th><th class="hide-sm">Ticket</th><th>PR</th><th class="num">Needs you</th><th class="num hide-sm">Active</th></tr></thead><tbody>${rows}</tbody></table></div>
@@ -1709,6 +1761,8 @@ document.addEventListener("click", async (e) => {
   const opener = e.target.closest("[data-open-session]");
   if (opener) { openSession(opener); return; }
   if (e.target.closest("[data-open-close]")) { F.open = null; showOpenNote(); return; }
+  const lead = e.target.closest("[data-fold-lead]");
+  if (lead) { foldLead(lead.dataset.foldLead); renderView(); return; }
   const answer = e.target.closest("[data-prompt]");
   if (answer) { promptAction(answer.dataset.key, answer.dataset.prompt); return; }
   const decide = e.target.closest("[data-decide]");

@@ -146,20 +146,20 @@ assert any("결제 릴리스 (card-release 카드) — 에이전트 조치 필�
 assert any("다음 일 시작 — 에이전트 조치 필요: 조건 충족: acme/app#1 머지 abc1234" in m for m in moving), moving
 assert "| ❔ | 오래된 일 |" in b["text"] and any(n.startswith("에이전트 조치 필요: 12h 갱신 없음") for n in notes), b["text"]
 # Nothing on #10 is the agent's to fix and nobody is asked, but who merges it is not recorded: ❔, not a guess.
-assert "| ❔ | 설정 화면 | [#10]" in b["text"] and "에이전트 조치 필요: 머지 주체 기록 없음 · 2h 전" in notes, b["text"]
+assert "| ❔ | card-quiet | [#10]" in b["text"] and "에이전트 조치 필요: 머지 주체 기록 없음 · 2h 전" in notes, b["text"]
 # A draft no session works on and nothing holds: ❔ for the agent to resume it or record the hold, not the owner's.
-assert "| ❔ | 초안 작업 |" in b["text"] and not any("초안 작업" in t for t in section(b["text"], "🙋")), b["text"]
+assert "| ❔ | card-draft |" in b["text"] and not any("card-draft" in t for t in section(b["text"], "🙋")), b["text"]
 assert "에이전트 조치 필요: 초안 · 세션 없음 — 재개하거나 보류로 기록 · 2h 전" in notes, notes
-assert any(t.startswith("rev-a · 리뷰") and "청구 화면" in t for t in theirs), theirs  # was ⏸️ 세션 꺼짐, now the PR's wait
+assert any(t.startswith("rev-a · 리뷰") and "card-review" in t for t in theirs), theirs  # was ⏸️ 세션 꺼짐, now the PR's wait
 assert not any("다음 일 시작" in h or "다른 일" in h for h in held), held
 queued = [o.get("title") for o in b["open"] if o.get("kind") == "later"]  # the queue stays; the pointer line counts it
 assert "열린 PR 뒤의 일" in queued and "모호한 일" in queued, queued
 assert not any(h.startswith("세션 꺼짐") for h in held), held
 # A doing item about a card that has a row is one line: the card's, with the doing item's next step.
 assert not any("(card-review 카드)" in m for m in moving + theirs), moving
-assert not any("설정 화면" in m for m in moving), moving
+assert not any("card-quiet" in m for m in moving), moving
 # A board row about a card takes the card's PR, so the card's own row is not listed again.
-assert "| ❔ | 중복 카드 작업 | [#8]" in b["text"] and "중복 카드 |" not in b["text"], b["text"]
+assert "| ❔ | card-dup | [#8]" in b["text"] and "중복 카드 |" not in b["text"], b["text"]
 open_ids = {o["id"] for o in b["open"]}
 assert {doing[0], doing[1], later[0], todo[0], "row:stale-row", "card:s4"} <= open_ids, open_ids
 
@@ -193,7 +193,7 @@ assert "새 일" not in brief()["text"].split("📌")[-1]
 code, out, err = run("board", "reopen", "row:fresh-row", "card:s4")
 assert code == 0 and out == "reopened 2: row:fresh-row card:s4", (out, err)
 assert tidy.run(now=now) == [], "the tick does not undo the owner's reopen"
-assert "| ⏸️ | 실험 정리 |" in brief()["text"]
+assert "| ⏸️ | card-closed |" in brief()["text"]
 code, out, err = run("board", "reopen", "row:fresh-row")
 assert code == 1 and "not closed" in err, err
 
