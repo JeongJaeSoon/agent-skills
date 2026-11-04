@@ -62,8 +62,9 @@ def read(state=None):
             continue
         try:
             e = json.loads(line)
-            if not isinstance(e["path"], str):
-                return None
+            num = lambda x: x is None or (isinstance(x, (int, float)) and not isinstance(x, bool))
+            if not isinstance(e["path"], str) or not num(e.get("ino")) or not num(e.get("born")):
+                return None  # a row with a field of the wrong type is no evidence the card is new
             p = real(e["path"])
         except (ValueError, KeyError, TypeError):
             return None

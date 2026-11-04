@@ -602,7 +602,7 @@ ORCH = pathlib.Path(__file__).resolve().parents[2] / "orchestrate" / "scripts" /
 
 # Results that say nothing was done: the second look left it, or it was gone, or a close-only card had no terminal.
 NOOP_PREFIX = ("건너뜀", "사라졌거나", "거부됨", "실패", "dry-run")
-NOOP_RESULT = re.compile(r"^터미널 0개 닫음, worktree 는 남김")
+NOOP_RESULT = re.compile(r"^터미널 0개 닫음, (worktree 는 남김|삭제는 건너뜀)")
 # What names one target, beyond its key: logged with each act and compared by `sweep diff` (a list is the files or
 # terminals one act covers). Patrol's candidates carry the same fields.
 ACT_IDENTITY = ("head", "tip", "ino", "dir", "pid", "start", "cmd", "created", "flag", "port", "local", "paths")

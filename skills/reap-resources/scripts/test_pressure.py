@@ -216,6 +216,10 @@ assert p.reaped_lines([f"{p.REAP_FAILED} 1", DID]) == []
 IN_RESULT = ["- card app/x: 건너뜀: 사람에게 넘김: worktree rm 이 거부된 카드", "- orphan pid 42 vite: 사라졌거나 다른 프로세스",
              "- orphan pid 43 vite: 거부됨: [Errno 1] Operation not permitted"]
 assert p.reaped_lines([DID] + IN_RESULT) == [DID], p.reaped_lines([DID] + IN_RESULT)
+# Round 3: no terminal closed and the removal skipped is nothing done; one that closed terminals did something.
+SKIPPED = "- card app/w: 터미널 0개 닫음, 삭제는 건너뜀: worktree rm 거부 기록을 읽지 못함"
+CLOSED = "- card app/v: 터미널 2개 닫음, 삭제는 건너뜀: 판정 뒤 HEAD 가 바뀜"
+assert p.reaped_lines([DID, SKIPPED, CLOSED]) == [DID, CLOSED], p.reaped_lines([DID, SKIPPED, CLOSED])
 class Done:
     def __init__(self, code, out):
         self.returncode, self.stdout, self.stderr = code, out, ""

@@ -159,6 +159,9 @@ assert rm_refused.read(refused_state) is None
 (refused_state / rm_refused.NAME).unlink()
 (refused_state / rm_refused.NAME).write_text(json.dumps({"path": None, "ino": 1}) + "\n")
 assert rm_refused.read(refused_state) is None
+for bad in ({"ino": str(ino)}, {"ino": ino, "born": "yesterday"}, {"ino": True}):  # round 3: wrong-typed identity
+    (refused_state / rm_refused.NAME).write_text(json.dumps({"path": CARD, **bad}) + "\n")
+    assert rm_refused.read(refused_state) is None, bad
 (refused_state / rm_refused.NAME).write_text("{not json\n")
 out = reap.act({"kind": "orca-worktree", "key": "orca-worktree:" + CARD, "name": CARD}, [])
 assert out.startswith("건너뜀:") and "읽지 못함" in out and not ran, (out, ran)
