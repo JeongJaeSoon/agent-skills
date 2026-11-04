@@ -12,7 +12,7 @@ env = {**os.environ, "ORCH_FLEET_STATE": str(tmp / "dashboard"), "ORCH_BRIEF_LAS
        "AGENT_SKILLS_CONFIG": str(tmp / "none.json"), "PROGRAMS_HOME": str(tmp / "programs")}
 os.environ.update(env)
 sys.path.insert(0, str(HERE))
-import board, fleet, tidy  # noqa: E402
+import board, fleet, table_width, tidy  # noqa: E402
 
 now = fleet.utcnow()
 sd = fleet.state_dir()
@@ -97,14 +97,15 @@ b = brief()
 text, rows = b["text"], {o["label"]: o["status"] for o in b["open"]}
 moving, theirs, turn, held = (section(text, h) for h in ("📌", "⏳", "🙋", "⏸️"))
 
-notes = [l[l.index("] ") + 2:] for l in text.splitlines() if l.startswith("- [")]
+full = b["full"]  # the dashboard's copy: no cell cut, so a long next step is read whole
+assert "- [" not in text and "…[" not in text, text
 # acme/app#363: nothing on the PR is the agent's to fix and nobody is asked, but who merges it is not recorded (not the
 # owner's repository, no program, no agent_merges): ❔ for the agent to record, never 🙋 on a guess.
 assert rows["plugins-reference"] == "check", rows
-assert "에이전트 조치 필요: 머지 주체 기록 없음 · 5h 전" in notes and not any("plugins-reference" in t for t in turn), (notes, turn)
+assert "에이전트 조치 필요: 머지 주체 기록 없음 · 5h 전" in full and not any("plugins-reference" in t for t in turn), (full, turn)
 # acme/api#550: a draft no session works on and no held item names: ❔ for the agent to resume or hold, not 🙋.
 assert rows["headless-apitoken"] == "check", rows
-assert "에이전트 조치 필요: 초안 · 세션 없음 — 재개하거나 보류로 기록 · 5h 전" in notes, notes
+assert "에이전트 조치 필요: 초안 · 세션 없음 — 재개하거나 보류로 기록 · 5h 전" in full, full
 # acme/plugins#633: the held item naming #633 holds the row: ⏸️ in the table, one 보류 line with the row's name.
 assert rows["headless-skill"] == "held" and "| ⏸️ | headless-skill | [#633](https://example.test/633) 초안 수정요청 | ↓ 보류 |" in text, text
 assert f"{soon} prod 전환 확인 후 → headless-skill" in held, held  # the held item itself is counted on the pointer line
@@ -144,10 +145,9 @@ assert row["title"] == row["cells"]["prod"]["evidence"] == " ".join(LONG.split()
 # keeps it whole.
 b = brief()
 lines = b["text"].splitlines()
-cut = next((l for l in lines if l.startswith("| 🔄 | ac…[3] | — | acme/app#877")), None)
-assert cut and cut.endswith("…[4] | 세션 없음 |"), b["text"]
-assert f"- [3] {' '.join(LONG.split())}" in lines and f"- [4] {' '.join(LONG.split())}" in lines, b["text"]
-assert lines.index(f"- [3] {' '.join(LONG.split())}") - lines.index(cut) <= 5, b["text"]
+cut = next((l for l in lines if l.startswith("| 🔄 | acme/app#877 머지 +… | — | acme/app#877 머지 +… | 세션 없음 |")), None)
+assert cut and not any(l.startswith("- [") for l in lines), b["text"]
+assert f"| 🔄 | {' '.join(LONG.split())} | — | {' '.join(LONG.split())} | 세션 없음 |" in b["full"].splitlines(), b["full"]
 assert b["width_ok"] and {o["label"] for o in b["open"]} >= {" ".join(LONG.split())}, b["open"]
 # Orca cuts a task's name to a head and "...": the spec's first line is the whole of it, and nothing else replaces it.
 assert fleet.task_name({"display_name": "role-terms: 용어 정리 — card (202...", "spec": "role-terms: 용어 정리 — card (2026-10-27)\n\n본문"}) \
@@ -233,7 +233,7 @@ verdicts = sd.parent / "patrol-verdicts.json"
 fleet.write_atomic(verdicts, json.dumps({"t": now.timestamp() - 600, "check": {"/w/stuck": "hook 오류로 도구가 막힘"}}))
 b = brief()
 rows = {o["label"]: o["status"] for o in b["open"]}
-assert "에이전트 조치 필요: hook 오류로 도구가 막힘" in b["text"], b["text"]
+assert "에이전트 조치 필요: hook 오류로 도구가 막힘" in b["full"], b["full"]
 assert rows["stuck-card"] == "check" and rows["fine-card"] == "moving", rows
 judged = {"/w/stuck": ("hook 오류로 도구가 막힘", now - dt.timedelta(minutes=10))}
 stuck = st["sessions"][-2]
@@ -252,14 +252,14 @@ fleet.write_atomic(verdicts, json.dumps({"t": now.timestamp() - 600,
 b = brief()
 rows = {o["label"]: o["status"] for o in b["open"]}
 assert rows["stuck-card"] == "check", rows
-assert "에이전트 조치 필요: 백그라운드 작업을 기다리지만 깨울 작업이 없음" in b["text"], b["text"]
+assert "에이전트 조치 필요: 백그라운드 작업을 기다리지만 깨울 작업이 없음" in b["full"], b["full"]
 # The same verdict on a card a board row links: no fleet row exists to carry it, so the board row does.
 fleet.write_atomic(verdicts, json.dumps({"t": now.timestamp() - 600, "check": {"/w/stuck": "hook 오류로 도구가 막힘"}}))
 board.set_row("linked-stuck", title="linked-stuck", repo="acme/app", status="moving", worktree="s-stuck")
 b = brief()
 rows = {o["label"]: o["status"] for o in b["open"]}
 assert rows["stuck-card"] == "check" and "linked-stuck" not in rows and [o["label"] for o in b["open"]].count("stuck-card") == 1, rows
-assert "에이전트 조치 필요: hook 오류로 도구가 막힘" in b["text"], b["text"]
+assert "에이전트 조치 필요: hook 오류로 도구가 막힘" in b["full"], b["full"]
 board.set_row("linked-stuck", status="done")
 # Nor is there one when only the PR ties a board row to the card: the card's row is left to the board row.
 PRS["acme/app#9"] = {"detail": {"key": "acme/app#9", "state": "OPEN", "merged_at": None, "draft": False, "ci": "success",
@@ -271,7 +271,7 @@ board.set_row("pr-only", title="pr-only", repo="acme/app", status="moving", pr="
 b = brief()
 rows = {o["label"]: o["status"] for o in b["open"]}
 assert rows["pr-only"] == "check" and "stuck-card" not in rows, rows
-assert "에이전트 조치 필요: hook 오류로 도구가 막힘" in b["text"], b["text"]
+assert "에이전트 조치 필요: hook 오류로 도구가 막힘" in b["full"], b["full"]
 # A lead's report names its cards' PRs: a stalled lead says nothing of them.
 st["sessions"] = [{**s, "kind": "orchestrator"} if s.get("id") == "s-stuck" else s for s in st["sessions"]]
 fleet.write_atomic(sd / "state.json", json.dumps(st))
@@ -291,7 +291,8 @@ programs = tmp / "programs"
 programs.mkdir(exist_ok=True)
 text = brief()["text"]
 assert "| 작업 중 · payments-mig… |" in text and "(http://" not in text, text  # no server: the name alone
-assert "- [1] payments-migration-worktree 정리" in text and "…[1]** | — | 리뷰 | 작업 중 |" in text, text
+assert "- [" not in text and "…** | — | 리뷰 | 작업 중 |" in text, text
+assert "payments-migration-worktree 정리** | — | 리뷰 | 작업 중 |" in brief()["full"]
 assert "연결 없음** | — | 리뷰 | 세션 없음 |" in text, text
 (programs / ".dash.json").write_text(json.dumps({"pid": os.getpid(), "port": 4780}))
 text = brief()["text"]
@@ -356,13 +357,26 @@ assert "보드가 지은 제목" not in b["text"] and "| 🔄 | **SOLO-CARD** | 
 assert "HOLDS-NAME 정리" in b["text"], b["text"]
 labels = [r["label"] for t in b["table_rows"] for r in t["rows"]]
 assert "SOLO-CARD" in labels, labels
-cut_row = next(l for l in b["text"].splitlines() if l.startswith("| 🔄") and "…[" in l and "orca-display" in l)
-head = cut_row.split("|")[2].strip().strip("*").split("…[")[0]
-assert len(head) >= 6 and LONG.startswith(head) and f"] {LONG}" in b["text"], (head, b["text"])
+cut_row = next(l for l in b["text"].splitlines() if l.startswith("| 🔄") and "…" in l and "orca-display" in l)
+head = cut_row.split("|")[2].strip().strip("*").removesuffix("…")
+assert len(head) >= 6 and LONG.startswith(head) and LONG in b["full"] and "- [" not in b["text"], (head, b["text"])
 tg = subprocess.run([sys.executable, str(HERE / "prog.py"), "brief", "render", "--telegram", "--no-refresh"],
                     capture_output=True, text=True, env=env).stdout
 assert LONG in tg and "SOLO-CARD" in tg and "보드가 지은 제목" not in tg, tg
 for rid in ("solo-row", "long-row", "holds-row"):
+    board.set_row(rid, status="done")
+# Two long cards with one head stay two once cut: the name keeps the width at which they differ, and the next step,
+# which is not a name, gives way first.
+ACTIONS, WIZARD = "xx-agent-actions-lead", "xx-agent-wizard-lead-with-a-longer-name"
+for rid, name in (("pair-a", ACTIONS), ("pair-w", WIZARD)):
+    board.set_row(rid, title=name, repo="acme/twins", status="moving", next="에이전트 조치 필요: " + "설명이 아주 긴 다음 단계 " * 4)
+b = brief()
+twins = [l for l in b["text"].splitlines() if l.startswith("| 🔄 |") and "xx-agent-" in l]
+heads = [l.split("|")[2].strip().strip("*") for l in twins]
+assert len(heads) == 2 and len(set(heads)) == 2 and all(h.startswith("xx-agent-") for h in heads), (heads, b["text"])
+assert all(table_width.table_width(t) <= 78 for _, t in table_width.tables(b["text"])) and "- [" not in b["text"], b["text"]
+assert ACTIONS in b["full"] and WIZARD in b["full"], b["full"]
+for rid in ("pair-a", "pair-w"):
     board.set_row(rid, status="done")
 # A finished row still shares its session: the row left open keeps its title.
 st["sessions"] = st["sessions"][:-3] + [card("s-pair", "PAIR-CARD", "working", "acme/pair")]

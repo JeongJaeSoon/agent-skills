@@ -141,15 +141,16 @@ for k in (doing[3], doing[4], doing[5], doing[6], doing[7], doing[8], later[2], 
 # 카드 없는 일; a quiet card follows its PR, a fired trigger leaves 보류.
 b = brief()
 moving, held, theirs = section(b["text"], "📌"), section(b["text"], "⏸️"), section(b["text"], "⏳")
-notes = [l[l.index("] ") + 2:] for l in b["text"].splitlines() if l.startswith("- [")]
+full = b["full"]  # no cell cut: the next step is read whole
+assert "- [" not in b["text"], b["text"]
 assert any("결제 릴리스 (card-release 카드) — 에이전트 조치 필요: acme/app#2 머지 abc1234 · 남은 단계" in m for m in moving), moving
 assert any("다음 일 시작 — 에이전트 조치 필요: 조건 충족: acme/app#1 머지 abc1234" in m for m in moving), moving
-assert "| ❔ | 오래된 일 |" in b["text"] and any(n.startswith("에이전트 조치 필요: 12h 갱신 없음") for n in notes), b["text"]
+assert "| ❔ | 오래된 일 |" in b["text"] and "에이전트 조치 필요: 12h 갱신 없음" in full, b["text"]
 # Nothing on #10 is the agent's to fix and nobody is asked, but who merges it is not recorded: ❔, not a guess.
-assert "| ❔ | card-quiet | [#10]" in b["text"] and "에이전트 조치 필요: 머지 주체 기록 없음 · 2h 전" in notes, b["text"]
+assert "| ❔ | card-quiet | [#10]" in b["text"] and "에이전트 조치 필요: 머지 주체 기록 없음 · 2h 전" in full, b["text"]
 # A draft no session works on and nothing holds: ❔ for the agent to resume it or record the hold, not the owner's.
 assert "| ❔ | card-draft |" in b["text"] and not any("card-draft" in t for t in section(b["text"], "🙋")), b["text"]
-assert "에이전트 조치 필요: 초안 · 세션 없음 — 재개하거나 보류로 기록 · 2h 전" in notes, notes
+assert "에이전트 조치 필요: 초안 · 세션 없음 — 재개하거나 보류로 기록 · 2h 전" in full, full
 assert any(t.startswith("rev-a · 리뷰") and "card-review" in t for t in theirs), theirs  # was ⏸️ 세션 꺼짐, now the PR's wait
 assert not any("다음 일 시작" in h or "다른 일" in h for h in held), held
 queued = [o.get("title") for o in b["open"] if o.get("kind") == "later"]  # the queue stays; the pointer line counts it

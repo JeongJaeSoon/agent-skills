@@ -205,20 +205,13 @@ PR: ❗ 사람이 풀 것 · CI✗ CI 실패 · CI… CI 진행 · 7자리=머�
 | | 리드/Phase | PR | 진행 | 다음 | 세션 |
 |---|---|---|---|---|---|
 | 🙋 | 알림 정리 | [#50](https://example.test/50) ❗DIRTY→main | ██████░░ 3/4 | ↑ 오너 | 작업 중 |
-| 🔄 | └ 문구 다듬…[1] | [#54](https://example.test/54) ❗리뷰 CI✗ | ████░░░░ 2/4 | CI…[2] | 작업 중 |
+| 🔄 | └ 문구 다듬기… | [#54](https://example.test/54) ❗리뷰 CI✗ | ████░░░░ 2/4 | CI 재실… | 작업 중 |
 | ⏳ | └ rev-a 대기 | [#51](https://example.test/51)·#52·#53 | ██████░░ 3/4 | ↓ 대기 | — |
-| 🔄 | 검색 개선 ph3 | — | ███░░░░░ 3/8 | 하…[3] | 작업 중 |
-| 🔄 | └ w2 색인 | — | ██░░░░░░ 2/8 | PR…[4] | 작업 중 |
-| 🔄 | └ 정렬 | [#45](https://example.test/45) CI✗→main | ████░░░░ 4/8 | CI…[5] | 작업 중 |
-| ⏸️ | 검색 개선 …[6] | — | ░░░░░░░░ 0/8 | ↓ 보류 | 작업 중 |
+| 🔄 | 검색 개선 ph3 | — | ███░░░░░ 3/8 | 하위 3… | 작업 중 |
+| 🔄 | └ w2 색인 | — | ██░░░░░░ 2/8 | PR 작성… | 작업 중 |
+| 🔄 | └ 정렬 | [#45](https://example.test/45) CI✗→main | ████░░░░ 4/8 | CI 재실… | 작업 중 |
+| ⏸️ | 검색 개선 ph… | — | ░░░░░░░░ 0/8 | ↓ 보류 | 작업 중 |
 | ✅ | **검색 개선 ph2** | [#42](https://example.test/42) 42c0ffe→main | ████████ 8/8 | — | — |
-
-- [1] 문구 다듬기와 길이 정리
-- [2] CI 재실행 뒤 리뷰 의뢰 다시 보내기 · 워커
-- [3] 하위 3건 · 워커
-- [4] PR 작성 · 워커
-- [5] CI 재실행 · 워커
-- [6] 검색 개선 ph4 · ph5
 
 ✅ 그 전 완료 1건 (대시보드)
 
@@ -226,15 +219,11 @@ PR: ❗ 사람이 풀 것 · CI✗ CI 실패 · CI… CI 진행 · 7자리=머�
 
 | | 리드/Phase | PR | 진행 | 다음 | 세션 |
 |---|---|---|---|---|---|
-| 🔴 | 정리 작업 | — | ███░░░░░ 1/3 | 재개…[1] | 세션 없음 |
+| 🔴 | 정리 작업 | — | ███░░░░░ 1/3 | 재개·정… | 세션 없음 |
 | — | 검색 개선 | — | — | — | — |
-| 🔄 | └ 재색인 | [#88](https://example.test/88)⚠️ ❗리뷰 CI… | ██░░░░░░ 2/8 | 권한…[2] | 작업 중 |
-| ⏳ | 분류 | — | — | 에이…[3] | 작업 중 |
+| 🔄 | └ 재색인 | [#88](https://example.test/88)⚠️ ❗리뷰 CI… | ██░░░░░░ 2/8 | 권한 · … | 작업 중 |
+| ⏳ | 분류 | — | — | 에이전… | 작업 중 |
 | ⏳ | └ rev-b 대기 | [#61](https://example.test/61)·#62 | — | ↓ 대기 | — |
-
-- [1] 재개·정리 · 3h 전
-- [2] 권한 · 결정 1
-- [3] 에이전트 조치 필요: 누구 대기인지 기록 없음
 
 - 🙋 2건 오너 리뷰 — 분야 로그·대시보드
 
@@ -567,18 +556,18 @@ tg_req = rok(*REQUEST, "--telegram")  # the dashboard is on 127.0.0.1 only: Tele
 assert "단계표 1행 · orch stage show --telegram" in tg_req.splitlines() and "127.0.0.1" not in tg_req, tg_req
 (tmp / "programs" / ".dash.json").write_text(json.dumps({"pid": 2 ** 22 + 1, "port": 4799}))  # no such process
 assert "단계표 1행 · `orch stage show`" in rok(*REQUEST).splitlines()
-# The table itself is `orch stage show`'s: a long stage name is cut to fit, its whole text listed under the table.
+# The table itself is `orch stage show`'s: a long stage name is cut to its head and `…`, with no list under the table.
 WIDE_TITLE, WIDE_EVIDENCE = "아주 긴 이름의 작업으로 표의 폭을 넘기는 행", "로그로만 확인하고 화면은 아직 보지 않음"
 rok("stage", "add", "wide", "--title", WIDE_TITLE, "--pr", "acme/web#1234")
 code, cut, err = orch_env(renv, "stage", "show")
 assert code == 0 and all(table_width.table_width(t) <= 78 for _, t in table_width.tables(cut)), (code, err, cut)
-assert any(l.startswith("- [") and l.endswith(f"] {WIDE_TITLE}") for l in cut.splitlines()), cut
+assert "| 아주 긴 이름의 작업… |" in cut and "- [" not in cut and "…[" not in cut, cut
 assert "| 작업 |" in cut and "1. v1.7.2 prod 배포 (사람, 미정)" in cut and "단계표 2행 · `orch stage show`" in rok(*REQUEST).splitlines()
-# The stage table's PR is a plain key, so a long one is cut and listed the same way.
+# The stage table's PR is a plain key, so a long one is cut the same way.
 WIDE_PR = "acme/a-very-long-repository-name-for-the-table#123456"
 rok("stage", "add", "wider", "--title", "넓은 PR", "--pr", WIDE_PR)
 code, cut, err = orch_env(renv, "stage", "show")
-assert code == 0 and any(l.startswith("- [") and l.endswith(f"] {WIDE_PR}") for l in cut.splitlines()), (code, err, cut)
+assert code == 0 and "- [" not in cut and "| acme/a-ver… |" in cut and "| acme/web#40 |" in cut and WIDE_PR not in cut, (code, err, cut)
 # A stage cell is never cut: a table its stage cells make too wide overflows whole, and show says so. The brief has
 # no table left to overflow.
 rok("stage", "set", "wide", "--col", "dev", "--mark", "partial", "--evidence", WIDE_EVIDENCE)
@@ -620,8 +609,9 @@ text = merged["text"]
 assert "| ✅ | ph1 | [#45](https://example.test/45) 45c0ffe | — |" in text, text
 assert "| ✅ | └ 하위 | [#46](https://example.test/46) 46c0ffe | — |" in text, text
 assert "| ⏸️ | ph2 | [#48](https://example.test/48) 닫힘 | ↓ 보류 |" in text and "- PR 닫힘 → L ph2" in text, text
-assert "| ❔ | └ c9 | #47 ? | 에이전트 조치 필요: P…[1] | 작업 중 |" in text, text
-assert "- [1] 에이전트 조치 필요: PR 상태 모름" in text, text
+assert "| ❔ | └ c9 | #47 ? | 에이전트 조치 필요: PR … | 작업 중 |" in text and "- [" not in text and "…[" not in text, text
+# The dashboard's copy of the report keeps the cell whole.
+assert "| ❔ | └ c9 | #47 ? | 에이전트 조치 필요: PR 상태 모름 | 작업 중 |" in merged["full"] and "…" not in merged["full"].split("**acme/web")[1].split("⏸️ **보류**")[0], merged["full"]
 assert "머지 대기" not in text and "ABC-8" not in text and "fleet:lead" not in merged["snapshot"]["rows"], text
 assert "| 🔄 | └ c10 | — | — | 작업 중 |" in text, text
 
@@ -682,7 +672,7 @@ assert mine == ["- 리뷰 · [#91](https://example.test/91) → 내 리뷰"], mi
 assert theirs == ["- rev-x · 리뷰 [#92](https://example.test/92) · 30분 전부터 → 남 리뷰",
                   "- 디자인팀 · 30분 전부터 → reply 디자인 답변 · 다음: 10/15 리마인드"], theirs
 assert "| ❔ | └ ask 누구 대기 | — | 에이전트 조치" in text and not moving, text
-assert "- [1] 에이전트 조치 필요: 누구 대기인지 기록 없음" in text, text
+assert "- [" not in text and "…[" not in text, text
 assert not any(w in l for l in mine + moving for w in ("남 리뷰", "디자인 답변")), (mine, moving)
 assert not any(w in l for l in theirs + moving for w in ("내 리뷰", "캐시 정책")) and "누구 대기" not in "".join(mine + theirs)
 assert "❓ **결정 필요** — 1. (d1) 캐시 정책 → 추천: TTL 1h" in text and "캐시 정책" not in "".join(mine), text
@@ -691,7 +681,7 @@ del who_prs["me"]
 (wd / "dashboard" / "prs.json").write_text(json.dumps(who_prs))
 text = wok("brief", "render", "--periodic", "--now", NOW)
 assert "| ❔ | └ 내 리뷰 | [#91](https://example.test/91) ❗리뷰 | 에이전트 조치" in text \
-    and "- [1] 에이전트 조치 필요: 오너 login 모름" in text and "→ 내 리뷰" not in text, text
+    and "- [" not in text and "→ 내 리뷰" not in text, text
 # A waiting row on the owner by name, a check status nobody may set, and 🙋 as a status shorthand.
 assert board.is_owner("오너", None) and board.is_owner("@Octo-Owner", "octo-owner") and not board.is_owner("rev-x", "octo-owner")
 assert board.status_of("🙋") == "owner" and orch("board", "set", "search", "--status", "check")[2].startswith("--status is one of")

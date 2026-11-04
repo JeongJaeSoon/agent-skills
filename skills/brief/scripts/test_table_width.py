@@ -6,7 +6,7 @@ import pathlib, re, subprocess, sys
 
 HERE = pathlib.Path(__file__).parent
 sys.path.insert(0, str(HERE))
-from table_width import fit, table_width, tables, text_width
+from table_width import apart, fit, fit_best, table_width, tables, text_width
 
 assert text_width("검색 개선") == 9
 assert text_width("⚠️ 로그만") == 9
@@ -87,16 +87,27 @@ for rows, k in folded:
     assert len(re.findall(r"#\d+", rows[k][2])) >= 2, rows[k]
     assert subtask_runs(rows[:k])[0] == 0 and any(not is_sub(r) for r in rows[1:k]), ("reviewer row without its lead", rows)
 
-# A cut saves at least its mark's width: 3 columns over, a 4-column …[1] would leave a 1-column head's worth, so the
-# name is cut deeper, and a cell over its cap by less than its mark stays whole.
-assert fit([["a", "b"], ["x" * 15, "y"]], 20, (0,)) == ([["a", "b"], ["x" * 7 + "…[1]", "y"]], ["x" * 15]), \
-    fit([["a", "b"], ["x" * 15, "y"]], 20, (0,))
-assert fit([["a", "b"], ["x" * 15, "y"], ["z" * 12, "y"]], 21, (0,))[0][1:] == [["x" * 7 + "…[1]", "y"], ["z" * 12, "y"]]
-out, notes = fit([["a", "b"], ["x" * 15, "y"], ["z" * 14, "y"]], 20, (0,))
-assert out[1:] == [["x" * 6 + "…[1]", "y"], ["z" * 6 + "…[2]", "y"]] and len(notes) == 2, out
-# Near the floor no cut saves a mark's width: the loop ends, and the table overflows whole.
-assert fit([["a", "b"], ["x" * 15, "y"], ["z" * 13, "y"]], 20, (0,))[1] == []
-assert fit([["a", "b"], ["x" * 12, "y" * 60]], 40, (0,)) == ([["a", "b"], ["x" * 12, "y" * 60]], [])
+# A cut cell is its head and a single `…`, with no mark and no list under the table; a cell that fits stays whole.
+assert fit([["a", "b"], ["x" * 15, "y"]], 20, (0,)) == [["a", "b"], ["x" * 11 + "…", "y"]]
+assert fit([["a", "b"], ["x" * 15, "y"], ["z" * 12, "y"]], 20, (0,))[1:] == [["x" * 11 + "…", "y"], ["z" * 12, "y"]]
+assert fit([["a", "b"], ["x" * 15, "y"], ["z" * 8, "y"]], 20, (0,))[1:] == [["x" * 11 + "…", "y"], ["z" * 8, "y"]]
+# Near the floor no cut gets the table in: the loop ends, and the table overflows whole.
+assert fit([["a", "b"], ["x" * 12, "y" * 60]], 40, (0,)) == [["a", "b"], ["x" * 12, "y" * 60]]
+# deco dresses a cell after the cut, so the `…` stays inside the markup.
+assert fit([["a", "b"], ["x" * 15, "y"]], 20, (0,), deco=lambda i, c, s: f"**{s}**" if c == 0 else s)[1][0] == "**" + "x" * 11 + "…**"
+
+# Two long names with one head stay two: keep stops the cut where they would read alike, and the table then
+# overflows whole; fit_best goes on to cut them as short as the floor lets it.
+cards = ["xx-agent-actions-lead", "xx-agent-wizard-lead"]
+assert apart(cards, 6) == 11 and apart(cards + cards, 6) == 11 and apart(["ab", "cd"], 6) == 6
+table = [["name", "n"]] + [[c, "y"] for c in cards]
+out = fit(table, 20, (0,), floor=6, keep=(0,))
+assert [r[0] for r in out[1:]] == ["xx-agent-ac…", "xx-agent-wi…"], out
+out = fit(table, 16, (0,), floor=6, keep=(0,))
+assert [r[0] for r in out[1:]] == cards and table_width(out) > 16, out
+out = fit_best(table, 16, (0,), floor=6, keep=(0,))
+assert [r[0] for r in out[1:]] == ["xx-agen…"] * 2 and table_width(out) <= 16, out
+assert fit_best(table, 20, (0,), floor=6, keep=(0,)) == fit(table, 20, (0,), floor=6, keep=(0,))
 
 wide = "| " + "가" * 40 + " | b |\n|---|---|\n"
 r = subprocess.run([sys.executable, str(HERE / "table_width.py"), "--cols", "78"], input=wide, capture_output=True, text=True)

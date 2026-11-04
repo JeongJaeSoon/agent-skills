@@ -1191,6 +1191,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     if lines:
         out += ["", legend] + (["", "PR: " + " · ".join(pr_legend)] if pr_legend else [])
     width_ok = True
+    swaps = []  # (first line in out, count, lines): a table's rows with every cell whole, for the dashboard's copy
     ackable, table_rows = {d["id"] for d in done if not d["acked"]}, []
 
     def label(l):
@@ -1387,27 +1388,29 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                 if c == len(head) - 1:
                     return session_link(l, s)
                 return ("└ " if l["depth"] else "") + (f"**{s}**" if l["key"] in changed else s) if c == 1 else s
-            # Only a name or a next step is cut to fit, and its whole text goes in the numbered list under the
-            # table. A table the other cells alone make too wide overflows, and the render reports it.
+            # Only a name or a next step is cut to fit, to its head and `…`, and a name never below the width at which two
+            # different names still differ. A table the other cells alone make too wide overflows, and the render reports it.
             # The session cell keeps its state word and model mark; only its worktree name gives way, a column at a time,
-            # when the cut name and next step alone do not bring the table to the width.
-            for name_w in range(SESSION_NAME_W, -1, -2):
-                body = [[mark(l, l["status"]), l["shown"], l["cell"] or "—", l["progress"], next_cell(l),
-                         session_text(l, name_w)] for l in mine]
-                table, notes = table_width.fit([head] + [[x for c, x in enumerate(r) if c not in drop] for r in body], COLS,
-                                               (1, head.index("다음")), floor=6, deco=dress)
+            # when the cut name and next step alone do not bring the table to the width. Only then may a cell go
+            # shorter, down to the last of table_width.tiers, where two names may end up alike.
+            cells = lambda w: [[x for c, x in enumerate(r) if c not in drop] for r in
+                               ([mark(l, l["status"]), l["shown"], l["cell"] or "—", l["progress"], next_cell(l),
+                                 session_text(l, w)] for l in mine)]
+            for keep, floor, name_w in [(k, f, w) for k, f in table_width.tiers((1,)) for w in range(SESSION_NAME_W, -1, -2)]:
+                table = table_width.fit([head] + cells(name_w), COLS, (1, head.index("다음")), floor=floor, deco=dress, keep=keep)
                 if table_width.table_width(table) <= COLS:
                     break
             width_ok &= table_width.table_width(table) <= COLS
             out += ["", "| " + " | ".join(head).strip() + " |", "|---" * len(head) + "|"]
-            out += ["| " + " | ".join(c.replace("|", "\\|") for c in row) + " |" for row in table[1:]]
+            # The dashboard has the page's width: its copy of the report keeps every cell whole.
+            whole = table_width.fit([head] + cells(SESSION_NAME_W), 10 ** 6, (), deco=dress)
+            swaps.append((len(out), len(table) - 1, [table_width.md_row(row) for row in whole[1:]]))
+            out += [table_width.md_row(row) for row in table[1:]]
             # Placed from the rows written, by the whole name each one shows (names are unique in the report): a row the
             # table lost is missing and one it wrote twice is a duplicate, whatever the lines handed to it said.
             by_name = {l["shown"]: l for l in mine if l["status"] is not None}
-            for row in table[1:]:
+            for row in whole[1:]:
                 name = re.sub(r"^\*\*(.*)\*\*$", r"\1", re.sub(r"^└ ", "", row[1]))
-                if (cut := re.search(r"…\[(\d+)\]$", name)) and int(cut[1]) <= len(notes):
-                    name = notes[int(cut[1]) - 1]
                 if name in by_name:
                     drawn(by_name[name])
             # Done on every open row the board can close; Ack on a ✅ row not yet acknowledged.
@@ -1416,7 +1419,6 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                  "ack": f"board:{l['key']}" if f"board:{l['key']}" in ackable else None,
                  "done": item_of(rows[l["key"]]) if l["key"] in rows and l["own"] not in (None, "done") else None}
                 for l in mine]})
-            out += [""] + [f"- [{n}] {t}" for n, t in enumerate(notes, 1)] if notes else []
         if folded.get(sec):
             out += ["", f"{ICON['done']} 그 전 완료 {folded[sec]}건 (대시보드)"]
         for (bsec, rev), items in bullets.items():
@@ -1469,7 +1471,10 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     expected += [tidy.item_id("later", l) for l in later
                  if rowstate.judge_item("later", l, facts_in, tidy.item_id("later", l))["status"] == "check"]
     dup_ids, missing_ids, extra_ids = rowstate.check_placement(placement, expected)
-    return {"text": "\n".join(out), "headline_facts": facts, "changed": changed, "stale": stale, "width_ok": width_ok, "done": done,
+    whole = list(out)
+    for at, n, lines_ in reversed(swaps):
+        whole[at:at + n] = lines_
+    return {"text": "\n".join(out), "full": "\n".join(whole), "headline_facts": facts, "changed": changed, "stale": stale, "width_ok": width_ok, "done": done,
             "open": opened, "table_rows": table_rows, "list_rows": list_rows, "placement": placement, "now_by_pr": by_pr,
             "states": states,
             "duplicates": dup_ids, "missing": missing_ids + extra_ids,
@@ -1520,11 +1525,10 @@ def todo_tables(now=None, tg=False, fresh=True):
         if tg:
             out += [""] + [f"{r[0]} " + " · ".join(r[1:]) for r in rows]
             continue
-        table, notes = table_width.fit([head] + rows, COLS, (2, 1))
+        table = table_width.fit_best([head] + rows, COLS, (2, 1), keep=(1, 2))
         ok &= table_width.table_width(table) <= COLS
         out += ["", ("| " + " | ".join(table[0]) + " |").replace("|  |", "| |"), "|" + "---|" * len(head)]
-        out += ["| " + " | ".join(c.replace("|", "\\|") for c in row) + " |" for row in table[1:]]
-        out += [""] + [f"- [{n}] {t}" for n, t in enumerate(notes, 1)] if notes else []
+        out += [table_width.md_row(row) for row in table[1:]]
     return "\n".join(out), ok
 
 

@@ -44,20 +44,20 @@ assert orch("next", "acme/web#45 리뷰 → 머지 (에이전트, 오늘)", "v1.
     {"key": "acme/ops#88", "state": "MERGED", "merged_at": "2026-10-02T05:00:00Z"},
     {"key": "acme/web#45", "state": "OPEN", "ci": "failure"},
 ]}))
-# --all is the whole table; its stage cells alone pass 78 columns, so show prints it and exits 1.
+# --all is the whole table; whole it passes 78 columns, so the names are cut to fit, as long as the room allows.
 code, md, err = orch("show", "--md", "--all")
-assert code == 1 and err == "a table is wider than 78 columns", (code, err, md)
+assert code == 0 and err == "", (code, err, md)
 lines = md.splitlines()
 assert lines[0] == "prod: v1.7.2 · dev: v1.8.0" and lines[1].startswith("✅ 완료·확인"), lines[:2]
 rows = [l for l in lines if l.startswith("| ") and not l.startswith("| 작업")]
-# Only a name or PR is cut, never a stage cell: these names are short, so the table overflows 78 whole, no list under it.
+# Only a name or PR is cut, never a stage cell, to its head and `…`, with no list under the table and the names still apart.
 assert rows[:3] == [
-    "| 검색 개선 | acme/web#42 | ✅ 10/2 | ✅ v1.8.0 | 🔄 확인 중 (QA 리드) |",
-    "| ㄴ 인덱스 재구축 | acme/ops#88 | ✅ 10/2 | – | 해당 없음 |",
-    "| ㄴ 정렬 버그 | acme/web#45 | ❌ CI 실패 | ⚠️ a\\|b | – |",
+    "| 검색 개… | acme/web#42 | ✅ 10/2 | ✅ v1.8.0 | 🔄 확인 중 (QA 리드) |",
+    "| ㄴ 인덱… | acme/ops#88 | ✅ 10/2 | – | 해당 없음 |",
+    "| ㄴ 정렬… | acme/web#45 | ❌ CI 실패 | ⚠️ a\\|b | – |",
 ], rows
 # Every cell ✅: the row has ended, at its latest cell's time, without anyone running `orch stage done`.
-assert rows[3].startswith("| 로그인 개선 (끝남) | acme/web#40 | ✅ 9/28 | ✅ v1.7.2 | ✅ token=") and "…[" not in md, md
+assert rows[3].startswith("| 로그인 … | acme/web#40 | ✅ 9/28 | ✅ v1.7.2 | ✅ token=") and "…[" not in md, md
 assert not any(l.startswith("- [") for l in lines), lines
 assert lines[-2:] == ["1. acme/web#45 리뷰 → 머지 (에이전트, 오늘)", "2. v1.8.0 prod 배포 (사람, 미정)"], lines[-2:]
 
@@ -78,7 +78,7 @@ assert t["rows"][0]["cells"]["merge"] == {"mark": "ok", "evidence": "10/2", "aut
 # Without --all, show prints what the brief's line counts: the finished row folds into one line.
 code, cur, _ = orch("show")
 assert "로그인 개선" not in cur and cur.endswith("접음 1행 (끝남 또는 7일 그대로) · --all 로 전부"), cur
-assert orch("done", "login")[0] == 0 and "로그인 개선 (끝남)" in orch("show", "--all")[1]
+assert orch("done", "login")[0] == 0 and "| 로그인 … |" in orch("show", "--all")[1]
 assert orch("drop", "search")[0] == 0
 assert [r["id"] for r in json.loads(orch("show", "--json", "--all")[1])["rows"]] == ["login"]
 store = json.loads((state / "stages.json").read_text())
@@ -103,7 +103,7 @@ rows = [l for l in orch("show", "--md")[1].splitlines() if l.startswith("| ") an
 assert rows == [
     "| **채팅** |  |  |  |  |",
     "| 본체 | acme/web#60 | – | – | – |",
-    "| ㄴ 사이드…[1] | – | – | ⚠️ 스텁으로만 확인 | – |",
+    "| ㄴ 사이드바 … | – | – | ⚠️ 스텁으로만 확인 | – |",
     "| 티켓 하나 | – | – | – | – |",
     "| 단독 작업 | – | – | – | – |",
 ], rows

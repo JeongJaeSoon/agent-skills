@@ -219,10 +219,10 @@ cards = {"c1": {"id": "c1", "name": "deploy-card", "pr": "acme/app#5"}}
 assert fleet.todo_come({"title": "x", "who": "w", "after": "deploy-card 끝나면"}, fleet.parse(BEFORE), merged, cards)
 assert not fleet.todo_come({"title": "x", "who": "w", "after": "deploy-card 끝나면"}, fleet.parse(BEFORE), {}, cards)
 
-# A long name is cut to fit 78 columns as the report's tables are, its whole text under the table.
+# A long name is cut to fit 78 columns as the report's tables are, to its head and `…`, with no list under the table.
 board.todo_add("아주 긴 할 일 이름이 표 폭을 넘겨서 잘려야 하는 경우를 확인하기 위한 문장 — 끝까지 읽혀야 한다", due="2027-05-01", who="writer")
 listed = ok("board", "todo", "list", "--now", BEFORE, "--no-refresh")
-assert "아주 긴 할 일 이…[2]" in listed and "- [2] 아주 긴 할 일 이름이 표 폭을 넘겨서 잘려야 하는 경우를 확인하기 위한 문장 — 끝까지 읽혀야 한다" in listed, listed
+assert "| 아주 긴 할 일 이름이 표 … |" in listed and "- [" not in listed and "…[" not in listed, listed
 sys.path.insert(0, str(HERE.parents[1] / "brief" / "scripts"))
 import table_width  # noqa: E402
 assert all(table_width.text_width(l) <= 78 for l in listed.splitlines() if l.startswith("|")), listed

@@ -1901,7 +1901,7 @@ def periodic_report():
         out = json.loads(r.stdout)
     except ValueError:  # an empty board, or a renderer this checkout does not have yet: its own words
         return {"message": (r.stdout or r.stderr).strip() or f"orch brief render exited {r.returncode}"}
-    keys = ("text", "changed", "stale", "width_ok", "done", "open", "table_rows", "list_rows", "placement", "duplicates",
+    keys = ("text", "full", "changed", "stale", "width_ok", "done", "open", "table_rows", "list_rows", "placement", "duplicates",
             "missing", "now_by_pr")
     return {k: out.get(k) for k in keys} | {"closed": closed_recent()}
 

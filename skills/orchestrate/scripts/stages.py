@@ -382,12 +382,12 @@ def render_md(t):
             name += " (중단)" if r.get("stopped") else " (끝남)"
         body.append(([now_mark(r)] if now else []) + [name, r.get("pr") or "–"] + [cell_text(r["cells"].get(c)) for c in COLUMNS])
     # Only the name and PR cells are cut to fit (the PR column is a plain key here, not a link), as in the brief's
-    # tables, each whole text in the list under it. A table its stage cells alone make too wide overflows.
+    # tables, to their head and `…`, no shorter than keeps one row's name and PR apart from the others'. A table its
+    # stage cells alone make too wide overflows.
     at = 1 if now else 0
-    rows, notes = table_width.fit([header] + body, COLS, (at, at + 1),
-                                  deco=lambda i, c, x: f"**{x}**" if c == at and t["rows"][i - 1].get("group") else x)
-    lines += ["| " + " | ".join(x.replace("|", "\\|") for x in row) + " |" for row in rows[1:]]
-    lines += [""] + [f"- [{n}] {x}" for n, x in enumerate(notes, 1)] if notes else []
+    rows = table_width.fit_best([header] + body, COLS, (at, at + 1), keep=(at, at + 1),
+                                deco=lambda i, c, x: f"**{x}**" if c == at and t["rows"][i - 1].get("group") else x)
+    lines += [table_width.md_row(row) for row in rows[1:]]
     if t["next"]:
         lines += ["", "다음 순서"] + [f"{i}. {n}" for i, n in enumerate(t["next"], 1)]
     return "\n".join(lines)
