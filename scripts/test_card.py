@@ -799,6 +799,28 @@ try:
     assert card.type_when_idle("term_w", LINE, deadline=0).startswith("time limit") and not TYPED, TYPED
     TYPED.clear(); SCREENS[:] = [IDLE, IDLE[:1] + ["✻ Churned for 18s · done 12:09 AM"] + IDLE[2:]]
     assert "changed between two reads" in card.type_when_idle("term_w", LINE) and not TYPED
+    # The lock sync, broadcast and nudge share: a busy lock means nothing is read or typed, and it is held from the
+    # first read to the confirming one.
+    EVENTS = []
+    real_locked = sync.locked
+
+    @contextlib.contextmanager
+    def recording_lock(wait_s=0.0, free=True):
+        EVENTS.append("lock")
+        yield free
+        EVENTS.append("unlock")
+
+    sync.locked = lambda wait_s=0.0: recording_lock(wait_s, free=False)
+    TYPED.clear(); SCREENS[:] = [IDLE, IDLE, TAKEN]
+    assert card.type_when_idle("term_w", LINE) == "a sync or broadcast is running" and not TYPED, TYPED
+    sync.locked = recording_lock
+    EVENTS.clear()
+    sync_orca = sync.orca
+    sync.orca = lambda *a: EVENTS.append(a[1]) or sync_orca(*a)
+    SCREENS[:] = [IDLE, IDLE, TAKEN]
+    assert card.type_when_idle("term_w", LINE) is None
+    assert EVENTS[0] == "lock" and EVENTS[-1] == "unlock" and EVENTS.count("send") == 1 and "read" in EVENTS[-2], EVENTS
+    sync.locked, sync.orca = real_locked, sync_orca
 finally:
     sync.orca = real_orca
 card.time.sleep = REAL_SLEEP
