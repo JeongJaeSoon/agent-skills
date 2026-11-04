@@ -502,8 +502,9 @@ def limited(cmd, timeout=45):
     left["n"] = 0  # the failed compare is what used the last of it
     raise dash.SourceError("API rate limit exceeded")
 dash.sh = limited
-dash.ledger_gaps(cfg_q, two, [], [], now)
+assert dash.ledger_gaps(cfg_q, two, [], [], now)["ci"] == [], "a failed compare is no gap"
 assert len(compares()) == 1, f"one failed compare, the rest of the pairs wait: {calls}"
+assert dash.gh_contains("acme/app", "s20", "s22") is None, "unknown is None, never False"
 asked = len(calls)
 clock[0] = 2299.0
 dash.ledger_gaps(cfg_q, two, [], [], now)
