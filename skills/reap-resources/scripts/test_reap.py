@@ -8,7 +8,7 @@ _SANDBOX = tempfile.mkdtemp(prefix="test-reap-home-")
 atexit.register(shutil.rmtree, _SANDBOX, ignore_errors=True)
 os.environ["HOME"] = _SANDBOX
 for _name in ("CLAUDE_CONFIG_DIR", "AGENT_SKILLS_CONFIG", "AGENT_SKILLS_STATE", "AGENT_SKILLS_LEDGER", "AGENT_SKILLS_TRASH",
-              "PROGRAMS_HOME", "GIT_CONFIG_GLOBAL", "XDG_CONFIG_HOME", "GH_CONFIG_DIR"):
+              "PROGRAMS_HOME", "XDG_CONFIG_HOME", "GH_CONFIG_DIR", *(k for k in os.environ if k.startswith("GIT_CONFIG_"))):
     os.environ.pop(_name, None)
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
