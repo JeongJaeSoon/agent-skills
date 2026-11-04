@@ -9,7 +9,7 @@ HERE = pathlib.Path(__file__).parent
 tmp = pathlib.Path(tempfile.mkdtemp(prefix="test-brief-rows-"))
 env = {**os.environ, "ORCH_FLEET_STATE": str(tmp / "dashboard"), "ORCH_BRIEF_LAST": str(tmp / "brief-last"),
        "ORCH_FLEET_CONFIG": str(tmp / "none.json"), "AGENT_SKILLS_STATE": str(tmp / "state"), "TZ": "UTC",
-       "AGENT_SKILLS_CONFIG": str(tmp / "none.json")}
+       "AGENT_SKILLS_CONFIG": str(tmp / "none.json"), "PROGRAMS_HOME": str(tmp / "programs")}
 os.environ.update(env)
 sys.path.insert(0, str(HERE))
 import board, fleet, store, tidy  # noqa: E402
@@ -86,7 +86,7 @@ def brief():
 def section(text, head):
     lines, on = [], False
     for line in text.splitlines():
-        if line and line[0] in "🔄⏳⏸🙋❓📝":
+        if line and line[0] in "📌⏳⏸🙋❓📝":
             on = line.startswith(head)
             continue
         if on and line.startswith("- "):
@@ -96,7 +96,7 @@ def section(text, head):
 
 b = brief()
 text, rows = b["text"], {o["label"]: o["status"] for o in b["open"]}
-moving, theirs, turn, held = (section(text, h) for h in ("🔄", "⏳", "🙋", "⏸️"))
+moving, theirs, turn, held = (section(text, h) for h in ("📌", "⏳", "🙋", "⏸️"))
 
 notes = [l[l.index("] ") + 2:] for l in text.splitlines() if l.startswith("- [")]
 # acme/app#363: nothing on the PR is the agent's to fix and nobody is asked, but who merges it is not recorded (not the
@@ -107,7 +107,7 @@ assert "에이전트 조치 필요: 머지 주체 기록 없음 · 5h 전" in no
 assert rows["headless-apitoken"] == "check", rows
 assert "에이전트 조치 필요: 초안 · 세션 없음 — 재개하거나 보류로 기록 · 5h 전" in notes, notes
 # acme/plugins#633: the held item naming #633 holds the row: ⏸️ in the table, one 보류 line with the row's name.
-assert rows["headless-skill"] == "held" and "| ⏸️ | headless-skill | [#633](https://example.test/633) 초안 수정요청 | — |" in text, text
+assert rows["headless-skill"] == "held" and "| ⏸️ | headless-skill | [#633](https://example.test/633) 초안 수정요청 | ↓ 보류 |" in text, text
 assert f"{soon} prod 전환 확인 후 → headless-skill" in held, held  # the held item itself is counted on the pointer line
 assert not any("headless-skill" in m for m in moving + turn + theirs), (moving, turn, theirs)
 # ...and Needs you demotes the PR on the same rule.
@@ -145,7 +145,7 @@ assert row["title"] == row["cells"]["prod"]["evidence"] == " ".join(LONG.split()
 # keeps it whole.
 b = brief()
 lines = b["text"].splitlines()
-cut = next((l for l in lines if l.startswith("| 🔄 | ac…[1] | — | — | acme/app#877")), None)
+cut = next((l for l in lines if l.startswith("| 🔄 | ac…[1] | — | acme/app#877")), None)
 assert cut and cut.endswith("…[2] | 세션 없음 |"), b["text"]
 assert f"- [1] {' '.join(LONG.split())}" in lines and f"- [2] {' '.join(LONG.split())}" in lines, b["text"]
 assert lines.index(f"- [1] {' '.join(LONG.split())}") - lines.index(cut) <= 3, b["text"]
@@ -233,8 +233,8 @@ fleet.write_atomic(sd / "state.json", json.dumps(st))
 verdicts = sd.parent / "patrol-verdicts.json"
 fleet.write_atomic(verdicts, json.dumps({"t": now.timestamp() - 600, "check": {"/w/stuck": "hook 오류로 도구가 막힘"}}))
 b = brief()
-moving, rows = section(b["text"], "🔄"), {o["label"]: o["status"] for o in b["open"]}
-assert any("에이전트 조치 필요: hook 오류로 도구가 막힘" in m for m in moving), moving
+rows = {o["label"]: o["status"] for o in b["open"]}
+assert "에이전트 조치 필요: hook 오류로 도구가 막힘" in b["text"], b["text"]
 assert rows["stuck-card"] == "check" and rows["fine-card"] == "moving", rows
 judged = {"/w/stuck": ("hook 오류로 도구가 막힘", now - dt.timedelta(minutes=10))}
 stuck = st["sessions"][-2]
@@ -253,14 +253,14 @@ fleet.write_atomic(verdicts, json.dumps({"t": now.timestamp() - 600,
 b = brief()
 rows = {o["label"]: o["status"] for o in b["open"]}
 assert rows["stuck-card"] == "check", rows
-assert any("에이전트 조치 필요: 백그라운드 작업을 기다리지만 깨울 작업이 없음" in m for m in section(b["text"], "🔄")), b["text"]
+assert "에이전트 조치 필요: 백그라운드 작업을 기다리지만 깨울 작업이 없음" in b["text"], b["text"]
 # The same verdict on a card a board row links: no fleet row exists to carry it, so the board row does.
 fleet.write_atomic(verdicts, json.dumps({"t": now.timestamp() - 600, "check": {"/w/stuck": "hook 오류로 도구가 막힘"}}))
 board.set_row("linked-stuck", title="linked-stuck", repo="acme/app", status="moving", worktree="s-stuck")
 b = brief()
 rows = {o["label"]: o["status"] for o in b["open"]}
 assert rows["linked-stuck"] == "check" and "stuck-card" not in rows, rows
-assert any("에이전트 조치 필요: hook 오류로 도구가 막힘" in m for m in section(b["text"], "🔄")), b["text"]
+assert "에이전트 조치 필요: hook 오류로 도구가 막힘" in b["text"], b["text"]
 board.set_row("linked-stuck", status="done")
 # Nor is there one when only the PR ties a board row to the card: the card's row is left to the board row.
 PRS["acme/app#9"] = {"detail": {"key": "acme/app#9", "state": "OPEN", "merged_at": None, "draft": False, "ci": "success",
@@ -272,11 +272,72 @@ board.set_row("pr-only", title="pr-only", repo="acme/app", status="moving", pr="
 b = brief()
 rows = {o["label"]: o["status"] for o in b["open"]}
 assert rows["pr-only"] == "check" and "stuck-card" not in rows, rows
-assert any("에이전트 조치 필요: hook 오류로 도구가 막힘" in m for m in section(b["text"], "🔄")), b["text"]
+assert "에이전트 조치 필요: hook 오류로 도구가 막힘" in b["text"], b["text"]
 # A lead's report names its cards' PRs: a stalled lead says nothing of them.
 st["sessions"] = [{**s, "kind": "orchestrator"} if s.get("id") == "s-stuck" else s for s in st["sessions"]]
 fleet.write_atomic(sd / "state.json", json.dumps(st))
 assert "hook 오류" not in brief()["text"]
 board.set_row("pr-only", status="done")
 verdicts.unlink()
+
+# The 세션 cell says which session: its worktree's name (cut in a table, unless the row's name already says it) and,
+# while the dashboard runs, a link to that session's page. Telegram has the whole name and no link: 127.0.0.1 is dead there.
+st = fleet.read_json(sd / "state.json")
+st["sessions"] += [card("s-link", "payments-migration-worktree", "working", "acme/links")]
+fleet.write_atomic(sd / "state.json", json.dumps(st))
+board.set_row("link-row", title="결제 이행", repo="acme/links", status="moving", worktree="s-link", next="리뷰")
+board.set_row("named-row", title="payments-migration-worktree 정리", repo="acme/links", status="moving", worktree="s-link", next="리뷰")
+board.set_row("no-link", title="연결 없음", repo="acme/links", status="moving", next="리뷰")
+programs = tmp / "programs"
+programs.mkdir(exist_ok=True)
+text = brief()["text"]
+assert "| 작업 중 · payments-mig… |" in text and "(http://" not in text, text  # no server: the name alone
+assert "- [1] payments-migration-worktree 정리" in text and "…[1]** | — | 리뷰 | 작업 중 |" in text, text
+assert "연결 없음** | — | 리뷰 | 세션 없음 |" in text, text
+(programs / ".dash.json").write_text(json.dumps({"pid": os.getpid(), "port": 4780}))
+text = brief()["text"]
+assert "[작업 중](http://127.0.0.1:4780/#/fleet/session/s-link) · payments-mig… |" in text, text
+tg = subprocess.run([sys.executable, str(HERE / "prog.py"), "brief", "render", "--telegram", "--no-refresh"],
+                    capture_output=True, text=True, env=env).stdout
+assert any(l.endswith("— 리뷰 · 작업 중 · payments-migration-worktree") and "결제 이행" in l for l in tg.splitlines()) and "127.0.0.1:4780/#/fleet/session" not in tg, tg
+# A link to 127.0.0.1 is dead on another device, and Orca has no remote link: 세션 찾기 gives each row's session as text,
+# the whole worktree name and its handle, or the switch command once orca_environment names this host for that device.
+st = fleet.read_json(sd / "state.json")
+for s in st["sessions"]:
+    if s["id"] == "s-link":
+        s["terminals"] = [{"handle": "term_other", "connected": True}, {"handle": "term_agent", "connected": True, "agent": True}]
+fleet.write_atomic(sd / "state.json", json.dumps(st))
+text = brief()["text"]
+assert "- payments-migration-worktree — `term_agent`" in text.splitlines() and "🔗 **세션 찾기**" in text, text
+(tmp / "none.json").write_text(json.dumps({"orca_environment": "my host"}))
+text = brief()["text"]
+assert "- payments-migration-worktree — `orca terminal switch --environment 'my host' --terminal term_agent`" in text.splitlines(), text
+(tmp / "none.json").unlink()
+tg = subprocess.run([sys.executable, str(HERE / "prog.py"), "brief", "render", "--telegram", "--no-refresh"],
+                    capture_output=True, text=True, env=env).stdout
+assert "payments-migration-worktree — term_agent" in tg.splitlines(), tg
+# Two sessions under one worktree name are two lines, told apart by project.
+st = fleet.read_json(sd / "state.json")
+twin = next(s for s in st["sessions"] if s["id"] == "s-link")
+st["sessions"].append({**twin, "id": "s-twin", "project": "acme/other", "gh_repo": "acme/other",
+                       "terminals": [{"handle": "term_twin", "connected": True, "agent": True}]})
+fleet.write_atomic(sd / "state.json", json.dumps(st))
+board.set_row("twin-row", title="쌍둥이", repo="acme/links", status="moving", worktree="s-twin", next="리뷰")
+lines_now = brief()["text"].splitlines()
+assert "- payments-migration-worktree (acme/links) — `term_agent`" in lines_now, lines_now
+assert "- payments-migration-worktree (acme/other) — `term_twin`" in lines_now, lines_now
+board.set_row("twin-row", status="done")
+st["sessions"].pop()
+fleet.write_atomic(sd / "state.json", json.dumps(st))
+# The 진행 column shows only where a row has a bar; `--progress` on one row brings it back for that table.
+assert "| | 리드/Phase | PR | 다음 | 세션 |" in text and "막대=단계" not in text, text
+board.set_row("no-link", progress="1/4")
+text = brief()["text"]
+assert "| | 리드/Phase | PR | 진행 | 다음 | 세션 |" in text and "| ██░░░░░░ 1/4 | 리뷰 | 세션 없음 |" in text and "막대=단계" in text, text
+# A doing item no session runs is ❔ with who holds it, never 🔄; one naming a live card by its owner is that card's.
+board.doing_add("장애 조사", "lead-x", "원인 보고")
+board.doing_add("이행 점검", "payments-migration-worktree", "리뷰 뒤 점검")
+b = brief()
+no_card = section(b["text"], "📌")
+assert "❔ 장애 조사 — 세션 없음 · 원인 보고 · lead-x" in no_card and not any("이행 점검" in m for m in no_card), no_card
 print("test_brief_rows: ok")

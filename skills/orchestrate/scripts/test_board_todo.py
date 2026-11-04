@@ -103,14 +103,14 @@ ok("board", "set", "deploy", "--repo", "acme/app", "--title", "배포 리드", "
 out, tg = render(BEFORE), render(BEFORE, "--telegram")
 assert "| 📅 | 배포 리드 |" in out and "⏸️ **보류**" not in out and "→ 배포 리드" not in out, out
 assert "📅 할 일 3건 · ⏸️ 보류 큐 1건 · `orch board todo list`" in out.splitlines(), out
-assert "🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류 · 📅 할 일로 넘김 · 막대=단계(추정)" in out.splitlines(), out
-assert "📅 배포 리드 #1 ✓ — — · → 📅 할 일 · 세션 없음" in tg.splitlines() and "⏸️ 보류" not in tg.splitlines() and "→ 배포 리드" not in tg, tg
+assert "🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류 · 📅 할 일로 넘김" in out.splitlines(),out
+assert "📅 배포 리드 #1 ✓ — → 📅 할 일 · 세션 없음" in tg.splitlines() and "⏸️ 보류" not in tg.splitlines() and "→ 배포 리드" not in tg, tg
 got = json.loads(render(BEFORE, "--json"))
 assert got["width_ok"] and got["snapshot"]["rows"]["deploy"]["next"] == "10/30(금) 09:00 · 머지+배포 (오너 지시)", got["snapshot"]
 # A sub-task still moving under it says its next step in its own table row, and nowhere else.
 ok("board", "set", "deploy/notes", "--title", "배포 노트", "--status", "moving", "--next", "초안 작성")
 out = render(BEFORE)
-assert "| 🔄 | └ notes 배포 노트 | — | — | 초안 작성 | 세션 없음 |" in out and out.count("초안 작성") == 1, out
+assert "| 🔄 | └ notes 배포 노트 | — | 초안 작성 | 세션 없음 |" in out and out.count("초안 작성") == 1, out
 ok("board", "drop", "deploy/notes")
 # A held item naming the same PR is the row's hold (its trigger is the text), so the row is ⏸️ under 보류 again, its
 # --next less the date the trigger already says.
@@ -149,11 +149,11 @@ now = fleet.parse(BEFORE)
 assert fleet.held_prs(board.read(), {}, {}, now) == {"acme/app#1": "10/30(금) 09:00", "acme/app#2": "acme/app#5 머지 후"}
 assert "acme/app#1" in fleet.board_prs()
 
-# 10/30 09:05 with #5 merged: the owner's item goes to their list, lead-billing's to 표 밖 진행; 할 일 keeps the rest.
+# 10/30 09:05 with #5 merged: the owner's item goes to their list, lead-billing's to 카드 없는 일; 할 일 keeps the rest.
 write_prs(merged5=True)
 out = render(AFTER)
 assert "- ⏰ acme/app#1 머지·배포 · 10/30(금) 09:00 도래" in section(out, "🙋 **지금 오너가 할 일**"), out
-assert "- ⏰ acme/app#2 ready로 전환 — acme/app#5 머지 후 도래 · lead-billing" in section(out, "🔄 **표 밖 진행**"), out
+assert "- ⏰ acme/app#2 ready로 전환 — acme/app#5 머지 후 도래 · lead-billing" in section(out, "📌 **카드 없는 일**"), out
 assert "📅 할 일 1건 · ⏸️ 보류 큐 1건 · `orch board todo list`" in out.splitlines(), out
 merged = {"acme/app#5": {"state": "MERGED", "merged_at": "2026-10-29T00:00:00Z"}}
 assert set(fleet.held_prs(board.read(), {}, merged, fleet.parse(AFTER))) == set()
@@ -188,7 +188,7 @@ board.change(lambda s: s["todo"].append({"title": "옛 할 일", "who": "writer"
 assert store()["todo"][-1]["added"] == "2026-10-28T01:00:00Z", store()["todo"]
 JAN = "2027-01-10T00:00:00Z"
 out = render(JAN)
-doing = "\n".join(section(out, "🔄 **표 밖 진행**"))
+doing = "\n".join(section(out, "📌 **카드 없는 일**"))
 assert all(f"⏰ {w}" in doing for w in ("분기 정산", "회고 정리", "감사 대응", "옛 할 일")), out
 assert not any(l.startswith("📅 할 일 ") for l in out.splitlines()), out
 
@@ -197,7 +197,7 @@ assert not any(l.startswith("📅 할 일 ") for l in out.splitlines()), out
 board.todo_add("acme/app#1 핫픽스 배포", due="2027-03-01", after="acme/app#5 머지 후", who="writer")
 board.todo_add("acme/app#2 롤백 확인", due="10/27", after="acme/app#9 머지 후", who="writer")
 out = render(AFTER)
-doing = "\n".join(section(out, "🔄 **표 밖 진행**"))
+doing = "\n".join(section(out, "📌 **카드 없는 일**"))
 assert "⏰ acme/app#1 핫픽스 배포" in doing and "⏰ acme/app#2 롤백 확인" in doing, out
 assert set(fleet.held_prs(board.read(), {}, merged, fleet.parse(AFTER))) == set()
 write_prs(merged5=False)
@@ -211,7 +211,7 @@ t = store()["todo"][-1]
 assert not fleet.todo_come(t, fleet.parse(BEFORE), {}) and "acme/app#2" in fleet.held_prs(board.read(), {}, {}, fleet.parse(BEFORE))
 assert fleet.todo_come(t, fleet.parse(BEFORE), merged)
 write_prs(merged5=True)
-assert "- ⏰ acme/app#2 배포 노트 — acme/app#5 도래 · writer" in section(render(BEFORE), "🔄 **표 밖 진행**"), render(BEFORE)
+assert "- ⏰ acme/app#2 배포 노트 — acme/app#5 도래 · writer" in section(render(BEFORE), "📌 **카드 없는 일**"), render(BEFORE)
 assert "acme/app#2" not in fleet.held_prs(board.read(), {}, merged, fleet.parse(BEFORE))
 # A card it names stands for the card's PR, in both.
 cards = {"c1": {"id": "c1", "name": "deploy-card", "pr": "acme/app#5"}}

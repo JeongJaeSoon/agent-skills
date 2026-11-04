@@ -35,7 +35,7 @@ def section(text, head):
     """The bullet lines under one heading of the brief."""
     lines, on = [], False
     for line in text.splitlines():
-        if line.startswith("🔄") or line.startswith("⏳") or line.startswith("⏸️") or line.startswith("🙋") or line.startswith("❓"):
+        if line.startswith("📌") or line.startswith("⏳") or line.startswith("⏸️") or line.startswith("🙋") or line.startswith("❓"):
             on = line.startswith(head)
             continue
         if on and line.startswith("- "):
@@ -137,9 +137,9 @@ for k in (doing[3], doing[4], doing[5], doing[6], doing[7], doing[8], later[2], 
     assert k not in v, (k, v.get(k))
 
 # The brief before the tick: a check is ❔ 에이전트 조치 필요, in its row's 다음 cell or, for an item with no row, in
-# 표 밖 진행; a quiet card follows its PR, a fired trigger leaves 보류.
+# 카드 없는 일; a quiet card follows its PR, a fired trigger leaves 보류.
 b = brief()
-moving, held, theirs = section(b["text"], "🔄"), section(b["text"], "⏸️"), section(b["text"], "⏳")
+moving, held, theirs = section(b["text"], "📌"), section(b["text"], "⏸️"), section(b["text"], "⏳")
 notes = [l[l.index("] ") + 2:] for l in b["text"].splitlines() if l.startswith("- [")]
 assert any("결제 릴리스 (card-release 카드) — 에이전트 조치 필요: acme/app#2 머지 abc1234 · 남은 단계" in m for m in moving), moving
 assert any("다음 일 시작 — 에이전트 조치 필요: 조건 충족: acme/app#1 머지 abc1234" in m for m in moving), moving
@@ -187,7 +187,7 @@ assert len(tl) == 5 and all(e["kind"] == "tidy_done_auto" for e in tl), tl
 # Done and Reopen by hand: only an open id closes; a reopen keeps the tick from closing it again on the same evidence.
 code, out, err = run("board", "done", "row:fresh-row", "nonsense", "--why", "다른 카드로 옮김")
 assert code == 1 and out == "closed 1: row:fresh-row" and "refused nonsense:" in err, (out, err)
-assert "새 일" not in brief()["text"].split("🔄")[-1]
+assert "새 일" not in brief()["text"].split("📌")[-1]
 code, out, err = run("board", "reopen", "row:fresh-row", "card:s4")
 assert code == 0 and out == "reopened 2: row:fresh-row card:s4", (out, err)
 assert tidy.run(now=now) == [], "the tick does not undo the owner's reopen"

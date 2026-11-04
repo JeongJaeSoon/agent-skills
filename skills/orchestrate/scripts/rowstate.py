@@ -26,6 +26,10 @@ AGENT_ACTION = "에이전트 조치 필요"
 PR_FIELDS = ("draft", "reviewers", "ci", "decision", "merge_state")
 # The lists below the tables, and the word a row's 다음 cell points at them with.
 POINTER = {"owner": "↓ 오너", "waiting": "↓ 대기", "held": "↓ 보류"}  # short: the 78-column table cuts at 8
+# How long an ended pressure entry stays its row's ❔. The queue keeps it for 7 days, and nothing closes one a session
+# retried under other text (a new id) or dropped, so without a limit the ❔ outlives what it reports.
+QUEUE_ENDED_H = 3
+LIVE_PHASES = ("working", "waiting", "idle")  # a session that can still move a doing item (board.session_state)
 
 
 class RowState(dict):
@@ -167,8 +171,16 @@ def queue_state(e, now):
     except (TypeError, ValueError):
         late = False
     if late and e.get("state") in ("waiting", "retrying"):
-        return {**e, "state": "gave_up" if e["state"] == "waiting" else "failed"}
+        # Its own deadline ended it: an `ended` it still carries is from before it was reopened.
+        return {**e, "state": "gave_up" if e["state"] == "waiting" else "failed", "ended": e["deadline"]}
     return e
+
+
+def queue_over(e, now):
+    """Whether an ended entry is past its QUEUE_ENDED_H on the row. The earlier of ended and deadline: a sweep that
+    runs late writes a late `ended` on an entry whose deadline ended it. An entry with neither stays on the row."""
+    times = [t for t in (e.get("ended"), e.get("deadline")) if isinstance(t, (int, float))]
+    return bool(times) and now.timestamp() - min(times) >= QUEUE_ENDED_H * 3600
 
 
 def agent_merges(cfg=None):
@@ -405,7 +417,7 @@ def judge(r, f, lead=None, sid=None):
     elif why := patrol_reason(r, f["stalled"], sid):
         hit("check", f"{AGENT_ACTION}: {why}", why)
     for e in queue:
-        if e.get("state") in ("gave_up", "failed"):
+        if e.get("state") in ("gave_up", "failed") and not queue_over(e, f["now"]):
             hit("check", f"{AGENT_ACTION}: pressure {e['state']} {e.get('what')}", f"pressure {e['state']}")
     # The PR's own facts come before the row's word: a ready PR the agent merges is 🔄 whatever "waiting" the row says.
     if lacks(*PR_FIELDS):
@@ -446,9 +458,9 @@ def judged(r, f, lead=None, sid=None):
     return judge(r, f, lead, sid)
 
 
-def judge_item(kind, item, f, iid):
+def judge_item(kind, item, f, iid, session=None):
     """The RowState of a list item that is not a table row: a doing item, a held item (later), an arrived to-do (do).
-    The same rules as judge(), on the facts such an item has."""
+    The same rules as judge(), on the facts such an item has. session: the worktree a doing item names."""
     if iid in f["shut"]:
         return RowState("done")
     v = f["verdicts"].get(iid)
@@ -464,6 +476,11 @@ def judge_item(kind, item, f, iid):
         if not f["me"]:
             return RowState("check", f"{AGENT_ACTION}: 오너 login 모름", "오너 login 모름", unknown=["오너 login 모름"])
         return RowState("waiting", nxt, who=who, since=item.get("since"))
+    if kind == "doing":  # 🔄 says something is moving it: a board line alone does not
+        if not f["sessions_known"]:
+            return RowState("check", f"{AGENT_ACTION}: 세션 목록 모름", "세션 목록 모름", unknown=["세션 목록 모름"])
+        if (f["sessions"].get(session) or {}).get("phase") not in LIVE_PHASES:
+            return RowState("check", f"세션 없음 · {nxt}" if nxt else "세션 없음", "세션 없음", who=who)
     return RowState("moving", nxt, who=who)
 
 

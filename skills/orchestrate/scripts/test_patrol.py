@@ -129,6 +129,12 @@ _, v, memo = patrol.judge(f, {})
 assert v["doing_noref"] == []
 found, v, _ = patrol.judge({**f, "now": NOW + 25 * 3600}, memo)
 assert codes(found) == [("D", "b1")] and v["doing_noref"] == [found[0]["card"]]
+# An owner naming a live card links the item as the brief does, so it is no unreferenced item.
+owned = {"doing": [{"id": "b1", "title": "follow up with infra", "owner": "feature-card", "next": "ask"}]}
+f = facts(board=owned, state={"sessions": [{"id": "s-owned", "name": "feature-card", "kind": "standalone", "phase": "working"}]})
+_, _, memo = patrol.judge(f, {})
+found, v, _ = patrol.judge({**f, "now": NOW + 25 * 3600}, memo)
+assert codes(found) == [] and v["doing_noref"] == [], found
 
 # E: one error line in three rounds in a row with new output; timings in it do not make it new, other lines do.
 scr = lambda t: ["⏺ Running the suite", f"  ⎿  Error: hook pre-tool failed after {t}s at 12:0{t}", "❯ "]
@@ -405,6 +411,10 @@ d = {"id": "b1", "title": "follow up with infra", "owner": "someone", "next": "a
 got = tidy.assess({"doing": [d]}, {"sessions": []}, {}, now=T)
 assert got == {"b1": {"verdict": "check", "rule": "no_ref",
                       "evidence": "PR·카드 참조 없이 24h+ · 참조를 달거나 닫기", "label": d["title"]}}, got
+# The verdict file is a round old: an owner set since then links the item, whatever it still says.
+d2 = {**d, "owner": "feature-card"}
+got = tidy.assess({"doing": [d2]}, {"sessions": [{"id": "s-owned", "name": "feature-card", "kind": "standalone", "phase": "working"}]}, {}, now=T)
+assert got == {}, got
 
 # sent: supersede is a kind.
 assert sent.add("h1", "replaced by the new card", kind="supersede", now=T)["kind"] == "supersede"
