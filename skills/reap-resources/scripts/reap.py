@@ -1223,7 +1223,7 @@ def stack_records(path):
             e = json.loads(line)
             if e.get("kind") not in STACK_LINES:
                 continue
-            links = {k: (e["links"] or {}).get(k) for k in ("pr", "worktree")}
+            links = {k: e["links"].get(k) for k in ("pr", "worktree")}
             if not isinstance(e["id"], str) or not all(isinstance(v, (str, type(None))) for v in links.values()):
                 return None
             stacks.setdefault(e["id"], []).append(links)
@@ -1239,9 +1239,10 @@ def owner_facts():
     stacks, procs = stack_records(ledger_path()), cwds()
     if cards is None or stacks is None or procs is None:
         return None
+    plain = os.path.isdir("/proc/self")  # cwds() read /proc, not lsof
     # realpath, not real(): a recorded folder may be gone, and a symlink above it must still resolve the same way.
     return {"cards": {os.path.realpath(p) for p in cards}, "stacks": stacks, "pr": pr_reader(),
-            "cwds": {os.path.realpath(unescaped(c)) for c in procs.values() if c}}
+            "cwds": {os.path.realpath(c if plain else unescaped(c)) for c in procs.values() if c}}
 
 
 def unescaped(path):
@@ -1301,17 +1302,19 @@ def owner_holds(items, notes):
 
 
 def note_stack_dirs(stacks):
-    """A line for each working directory a stack's containers name and the ledger does not. Only the first card that
-    brings a stack up registers it, so a card that reuses the name is recorded here."""
+    """A line for each card or other working directory a stack's containers name and the ledger does not. Only the first
+    card that brings a stack up registers it, so a card that reuses the name is recorded here. The card, not a folder
+    inside it: a session sits at the card's root."""
     path = ledger_path()
     ledger = stack_records(path)
     if ledger is None:
         return
+    cards = {os.path.realpath(p) for p in (orca_paths() or ())}
     for name, st in sorted(stacks.items()):
-        known = {r["worktree"] for r in ledger.get(name, ())}
-        for d in sorted(st["dirs"]):
-            if os.path.isabs(d) and d not in known:
-                ledger_add(path, "stack-seen", name, worktree=d, by="reap-hard")
+        known = {os.path.realpath(r["worktree"]) for r in ledger.get(name, ()) if r["worktree"]}
+        found = {os.path.realpath(d) for d in st["dirs"] if os.path.isabs(d)}
+        for d in sorted({max((c for c in cards if under(p, c)), key=len, default=p) for p in found} - known):
+            ledger_add(path, "stack-seen", name, worktree=d, by="reap-hard")
 
 
 def judge_compose(entries, stacks, owner, hours, now, preview=(4500, 4599)):

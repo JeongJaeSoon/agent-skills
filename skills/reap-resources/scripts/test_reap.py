@@ -1499,7 +1499,8 @@ with tempfile.TemporaryDirectory() as tmp:
     # A damaged line, wherever it stands and however little of its id survived, holds everything: it may be an owner.
     for bad in ('{"kind": "compose-stack", "id": "verify-', '{"ts": "2026', json.dumps(["not", "an", "object"]),
                 line("verify-app-other", wt=["a", "list"]), line("verify-app-other", pr=7),
-                json.dumps({"kind": "stack-seen", "id": 7, "links": {}}), json.dumps({"kind": "compose-stack", "id": "x"})):
+                json.dumps({"kind": "stack-seen", "id": 7, "links": {}}), json.dumps({"kind": "compose-stack", "id": "x"}),
+                json.dumps({"kind": "compose-stack", "id": "x", "links": []}), json.dumps({"kind": "compose-stack", "id": "x", "links": None})):
         led.write_text("\n".join(good) + "\n" + bad)
         items, notes = scanned()
         assert not [i for i in items if i["target"]] and notes, bad
@@ -1596,6 +1597,9 @@ with tempfile.TemporaryDirectory() as tmp:
     reap.note_stack_dirs(seen)
     assert len(led.read_text().splitlines()) == before + 1, led.read_text()
     assert "카드" in reap.owner_hold(["verify-app-closed"], reap.owner_facts())
+    # A stack run from a folder inside a card records the card: that is where its session sits.
+    reap.note_stack_dirs({"verify-app-merged": {"dirs": {str(live / "backend")}}})
+    assert reap.stack_records(led)["verify-app-merged"][-1]["worktree"] == os.path.realpath(live), led.read_text()
     entries = reap.ledger_read(led)
     assert "verify-app-closed" in {e["id"] for e in reap.folded(entries, "compose-stack")}
     assert not reap.folded(entries, "compose-stack")[0].get("kind") == "stack-seen"
