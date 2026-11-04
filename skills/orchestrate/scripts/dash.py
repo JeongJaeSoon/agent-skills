@@ -295,14 +295,16 @@ def fetch_orca(cfg):
     """Workers, tasks, the Run's objective and the worktrees (cards) still on disk: local, read-only CLI calls."""
     wts = sh(["orca", "worktree", "list", "--json"])
     import orca_settings  # a lead started as a worker shares its coordinator's Run: only the units under it
+
+    def call(*argv):
+        return orca_result(*argv[1:])
     # worker-list pages at 100 rows; one run passed 86 in two days
-    workers = orca_settings.all_workers(lambda *a: orca_result(*a[1:]), "--run", cfg["run"], "--limit", "100",
-                                        error=SourceError)
+    workers = orca_settings.all_workers(call, "--run", cfg["run"], "--limit", "100", error=SourceError)
     tasks = orca_result("task-list", "--run", cfg["run"]).get("tasks", [])
     workers = orca_settings.lead_scope(workers, cfg.get("lead_dispatch"))
     return {"workers": workers,
             "tasks": orca_settings.scope_tasks(tasks, workers, cfg.get("lead_dispatch")),
-            "run": orca_result("run-show", "--id", cfg["run"]).get("run") or {},
+            "run": orca_settings.with_full(call, "orchestration", "run-show", "--id", cfg["run"]).get("run") or {},
             "worktrees": (wts.get("result", wts) if isinstance(wts, dict) else {}).get("worktrees", [])}
 
 

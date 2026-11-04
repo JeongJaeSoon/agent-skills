@@ -135,8 +135,7 @@ def check_run(role, run, handle, call):
     """(lines, the Run whose workers to check or None, this terminal's own Dispatch when it is a dispatched lead)."""
     if not role or not handle:
         return [], None, None
-    bound = orca_settings.with_full(call, "orchestration", "run-current", "--from", handle).get("run")
-    bound_id = bound.get("id") if isinstance(bound, dict) else bound
+    bound_id = (orca_settings.run_current(call, "--from", handle) or {}).get("id")
     if bound_id and (not run or bound_id == run):
         return [("ok", f"bound to Run {bound_id}")], bound_id, None
     if not bound_id and role == "lead":
