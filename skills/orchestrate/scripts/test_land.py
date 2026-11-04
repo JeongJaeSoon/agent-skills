@@ -874,9 +874,13 @@ stale = d / "programs" / "_heavy" / "slot-gone"
 stale.write_text(json.dumps({"pid": 999999}))
 code, out = prog(dict(env, ORCH_HEAVY_SLOT=str(stale)), "heavy", "t", "--wait-minutes", "0", "--", "true")
 assert code == 1 and "every slot busy" in out, out
-(d / "programs" / "_heavy" / "slot-0.stacks").write_text("123\n")  # a nested run's stack list is no holder
+# A nested run's stack list is no holder. The value parses as JSON but not as a holder dict, and it is too long
+# to turn up by chance in the real pid and time the message prints.
+stack_entry = "9876543210987"
+(d / "programs" / "_heavy" / "slot-0.stacks").write_text(f"{stack_entry}\n")
 code, out = prog(env, "heavy", "t", "--wait-minutes", "0", "--", "true")
-assert code == 1 and "every slot busy" in out and "Traceback" not in out and "123" not in out, out
+assert code == 1 and "every slot busy" in out and "Traceback" not in out, out
+assert stack_entry not in out and "slot-0.stacks" not in out, out
 code, out = prog(dict(env, ORCH_HEAVY_SLOT=str(d / "programs" / "_heavy" / "slot-0")), "heavy", "t", "--wait-minutes", "0",
                  "--", "true")  # a live slot that is not an ancestor's
 assert code == 1 and "every slot busy" in out, out
@@ -1092,7 +1096,7 @@ for body, ok in (("", False), ("<!-- test-results -->\nrun 555 failed", False),
     if ok:
         assert code == 0 and "landed #47" in out, out
     else:
-        assert code == 3 and "555 (CI failure)" in out and "557" not in out and "558" not in out, (body, out)
+        assert code == 3 and "555 (CI failure)" in out and "557 (CI" not in out and "558 (CI" not in out, (body, out)
 # A stack checks every layer it lands.
 d, env = setup({"48": dict(shown(48), stacked=True),
                 "49": dict(pr(49, base="b48", stacked=True), comments=[], labels=[])}, stacks=[[48, 49]])

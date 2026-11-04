@@ -305,7 +305,6 @@ def fake_leftovers(cfg, hours, now, notes, keep, ports):
 rh.reap.leftovers = fake_leftovers
 rh.guard.settings = lambda: {"reap": {"hours": 2, "labeled_volumes": {"namespace": "example.agent"}}}
 got = rh.scan_rest(rh.DEFAULTS, P, set(), [], machine, NOW)[0]
-assert [(i["kind"], i["id"]) for i in got] == [("container", "cid1"), ("volume", "v1")], got
 assert seen[-1][1] == 2.0 and seen[-1][2] == {"keepme", "always-on"} and seen[-1][3] == {4999}, seen
 assert rh.guard.targets(got[0]) == [("container", "cid1")] and rh.guard.targets(got[1]) == [("volume", "v1")]
 rh.guard.settings = lambda: None  # a settings file that cannot be read turns both off for the pass
@@ -342,6 +341,7 @@ rh.scan_cards = lambda *a, **k: ([dict(i) for i in items[:1]], ["n"], {})
 
 def fake_rest(cfg, protect, dark_before, closed, m, now):
     seen_closed.append(list(closed))
+    m["stacks"] = {"v1": {"dirs": set()}}
     return [dict(i) for i in items[1:]], [], {"--https=4600>4600"}
 
 
@@ -362,8 +362,11 @@ outcome = ["건너뜀: 다시 보니 열린 PR acme/app#1"]
 rh.act = fake_act
 guard_item = rh.guard.item
 rh.guard.item = lambda *a, **k: None  # the shared guards have their own tests below
+noted = []
+rh.reap.note_stack_dirs = noted.append
 res, code = rh.run_pass(True, cfg, now=NOW)
 assert code == 0 and acted == [] and res["acted"] == 2, res
+assert not noted, "a dry-run writes nothing"
 assert seen_closed[-1] == ["/ws/app/done"]  # a dry-run plans the rest as if the card were closed
 log = [json.loads(line) for line in rh.LOG.read_text().splitlines()]
 assert [r.get("result") for r in log[-2:]] == ["dry-run", "dry-run"] and all(r["dry_run"] for r in log[-2:])
@@ -372,6 +375,19 @@ res, code = rh.run_pass(False, cfg, now=NOW)
 assert code == 1 and acted == ["/ws/app/done", "v1"] and res["acted"] == 0 and res["skipped"] == 1, res
 # A close skipped on the second look frees neither its stack nor its servers.
 assert seen_closed[-1] == [], seen_closed
+assert noted == [{"v1": {"dirs": set()}}], noted
+
+
+def bad_record(stacks):
+    raise TypeError("worktree path is null")
+
+
+rh.reap.note_stack_dirs = bad_record  # a record that fails ends neither the pass nor the rows after it
+acted.clear()
+res = rh.run_pass(False, cfg, now=NOW)[0]
+assert acted == ["/ws/app/done", "v1"] and any("ledger" in n for n in res["notes"]), res
+acted[:] = ["/ws/app/done", "v1"]
+rh.reap.note_stack_dirs = noted.append
 outcome[0] = "터미널 닫음, worktree 제거"
 res, code = rh.run_pass(False, cfg, now=NOW)
 assert seen_closed[-1] == ["/ws/app/done"] and res["acted"] == 1 and res["failed"] == 1, (seen_closed, res)

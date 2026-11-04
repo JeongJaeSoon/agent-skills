@@ -140,10 +140,7 @@ def check_run(role, run, handle, call):
     if bound_id and (not run or bound_id == run):
         return [("ok", f"bound to Run {bound_id}")], bound_id, None
     if not bound_id and role == "lead":
-        # retained too: a dispatch whose terminal a person typed into is retained, and is still this lead's
-        mine = next((w for state in ("active", "retained")
-                     for w in orca_settings.all_workers(call, "--terminal-state", state)
-                     if orca_settings.worker_terminal(w) == handle), None)
+        mine = orca_settings.terminal_dispatch(call, handle, settled=True)
         if mine:  # a lead started as a dispatched worker: Orca refuses it a binding to the Run it works for
             return [("ok", f"dispatched lead ({mine.get('dispatchId')} on Run {mine.get('runId')}): binds no Run")], \
                 mine.get("runId"), mine.get("dispatchId")
