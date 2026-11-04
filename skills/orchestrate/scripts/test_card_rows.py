@@ -124,9 +124,13 @@ assert "누락 검사 안 함: 세션 목록 2h 전 기준" in facts, facts
 # ---- decisions: stale after decision_stale_h from max(created_at, checked_at), and with no route back
 usable_root = {"handle": "term_root", "agent": "claude", "connected": True, "writable": True}
 write_state([], root_term=usable_root)
-# Before `orch db import` the brief says the decisions wait on it, and still renders.
-assert any(f.startswith("이행 대기: 결정 DB") for f in render()["headline_facts"])
+# With no DB the decisions work from decisions.json, so nothing waits on `orch db import`. A DB that is there and not
+# imported does wait: the brief says so, and still renders.
 import store  # noqa: E402
+assert not any(f.startswith("이행 대기") for f in render()["headline_facts"])
+store.path().touch()
+assert any(f.startswith("이행 대기: 결정 DB") for f in render()["headline_facts"])
+store.path().unlink()
 store.import_apply(checks=False)
 assert not any(f.startswith("이행 대기") for f in render()["headline_facts"])
 d_old = fleet.decision_add("오래된 질문", handle="term_root")

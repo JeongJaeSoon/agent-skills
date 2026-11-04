@@ -872,7 +872,8 @@ def parked_tickets(events):
 
 def stalls(workers, tnow, held=frozenset()):
     """`held`: parked tickets, whose idle worker waits on purpose (often on the human) and wakes nobody."""
-    out = []
+    import autowake
+    out, idle_min = [], autowake.minutes("stall_idle_min") or IDLE_MIN
     mins = lambda ts: (tnow - prog.parse_ts(ts)).total_seconds() / 60
     for w in workers:
         m = w.get("motion") or {}
@@ -883,7 +884,7 @@ def stalls(workers, tnow, held=frozenset()):
         row = {"dispatch": w["dispatch"], "ticket": w.get("ticket") or w.get("worktree")}
         if not m and w.get("transcript_expected", False) and w.get("since") and mins(w["since"]) >= START_MIN:
             out.append({**row, "kind": "start_unconfirmed", "minutes": round(mins(w["since"]))})
-        elif m.get("state") == "idle" and not m.get("parked") and mins(m["since"]) >= IDLE_MIN:
+        elif m.get("state") == "idle" and not m.get("parked") and mins(m["since"]) >= idle_min:
             out.append({**row, "kind": "idle", "minutes": round(mins(m["since"]))})
         elif m.get("state") == "tool" and mins(m["since"]) >= TOOL_MIN:
             out.append({**row, "kind": "long_tool", "minutes": round(mins(m["since"])), "tool": m.get("tool"),

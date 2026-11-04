@@ -1,7 +1,7 @@
-<!-- translated-from: 8297746a9b0b4d36160e1c1a868b145215b5ba6d -->
+<!-- translated-from: aaac29d7f173a37aa1d16d2c067c867305aaff71 -->
 # Skill catalog
 
-This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 14 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
+This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 15 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
 
 Follow the [configuration migration guide](configuration-migration.md) for changed defaults and preservation of existing data. Notes, ledgers and personal folders require explicit configuration; report time defaults to UTC.
 
@@ -578,6 +578,8 @@ Every rule has a key in `~/.claude/agent-skills.json`. Its value is one of `"den
 | `orchestrate.model_flag` | warn | With `orchestrate.models` set, `orca orchestration worker-start`, `orca worktree create` or `orca agent launch` starting Claude with no `--model`. `--terminal` is out of scope |
 | `orchestrate.self_land` | warn | `hooks/self_land_gate.py`. A card whose first prompt has `PROGRAM` and an `APPROVED` line naming `orch land` calling `worker_done` or `orca worktree rm` over its own open PR. A `READY-WAIT:` line, `--outcome failed` and a human-gate program pass. `deny` blocks it |
 | `orchestrate.stack_dependent` | warn | A dependent PR that is not a stack. `hooks/stack_gate.py` reads the brief's `Lands after` and the branch's history at `gh pr create`; `orch land` and `land-check` compare land-after edges with the real stacks. `deny` makes both block. What cannot be read passes with one warning line |
+| `orchestrate.auto_wake_min` | none (off) | A positive integer N. `orch wait` wakes a worker once, N minutes after it first marked it idle (`skills/orchestrate/references/waking.md`, "Automatic wake"). With no key it only marks the worker and prints one line saying auto-wake is off. One dispatch is never woken twice; a second stop goes to Needs you |
+| `orchestrate.stall_idle_min` | 15 | A positive integer: minutes after a worker's turn ended before it shows as a STALLED `idle`. Lower it for a short live measurement |
 
 When the hook's own check raises, the call goes through with a warning, and `$AGENT_SKILLS_STATE/guard-errors.jsonl` gets the time, the hook, the exception type and where it was raised (never the command text). An unreadable settings file means the defaults.
 
@@ -597,7 +599,14 @@ Supervision (the preamble), CLOSE and KEEP are attributes, not roles. Orca's exe
 `hooks/reorient.py` runs on SessionStart and UserPromptSubmit for declared roles only. It reads the host's `agent_type`, session title on resume/fork, or an explicit `ROLE: orchestrator` / `ROLE: lead <slug>` line. `ROLE: none` disables the role. A new fork declared only by ROLE must declare again. State lives under `$AGENT_SKILLS_STATE/roles/`; no terminal-handle inference is used. Declared sessions receive role guidance at start and a reminder each prompt. On SessionStart after a compaction, that guidance also carries the "Core rules" list from the top of orchestrate's SKILL.md, read verbatim, with delegation first: the skill is too large to come back with the compaction's re-injection, and a line asking to reload it did not get it reloaded. The hook does not block or run external commands. When the orchestrator's session name (`session_title`) is not `orchestrator`, the SessionStart guidance ends with a line asking the human to run `/rename orchestrator` and telling the agent to rename its own Orca tab (`orca terminal rename`).
 
 ### Closing decisions answered in the terminal
-`hooks/decision.py` (UserPromptSubmit). It reads only prompts typed into the terminal that registered a decision with `orch decide add` (`$ORCA_TERMINAL_HANDLE`). When the first line starts with the id (`d3 yes`, `decision d3: yes`), or with an option label that only one of that terminal's open decisions has, it closes that decision as done with the answer and tells the orchestrator or lead. When it is ambiguous it closes nothing and only adds a reminder listing the open decisions. Input in any other terminal (a worker's) never closes one, and every error exits 0. Sessions already running pick it up after `/reload-plugins` or a restart.
+`hooks/decision.py` (UserPromptSubmit). It reads only prompts typed into the terminal that registered a decision with `orch decide add` (`$ORCA_TERMINAL_HANDLE`). When the first line starts with the id (`d3 yes`, `decision d3: yes`), or with an option label that only one of that terminal's open decisions has, it closes that decision as done with the whole prompt as the answer and tells the orchestrator or lead. A prompt over the answer limit closes nothing and points to `orch decide answer`. When it is ambiguous it closes nothing and only adds a reminder listing the open decisions. Input in any other terminal (a worker's) never closes one, and every error exits 0. Sessions already running pick it up after `/reload-plugins` or a restart.
+
+### Owner answer record warning
+`hooks/decision_relay.py` (PreToolUse on Bash). It calls no model. It reads what an orchestrator's or lead's main conversation sends with `orca terminal send`, `orca orchestration reply` or `orca orchestration send` (except `worker_done`). The body is a literal `--text` or `--body`, or the file of `--body "$(cat /absolute/path)"`.
+
+- It warns when a line with `오너`, or the line after it, holds a quote (`"…"`, `“…”`, `「…」`, `>` lines) that is not recorded. It never blocks.
+- A quote counts as recorded when `오너(dN` on that line names a done decision whose whole stored answer equals the quote, spaces aside, or when an earlier call of this turn ran only `orch decide answer` or `orch decide done` and printed its record line. The current call is no evidence.
+- Level `guard.decision_relay`: `warn` (default), `off`. It does not see a quotation that spans lines inside quotation marks. An error lets the call through and is logged to `guard-errors.jsonl`.
 
 
 ### Recording permission prompts
@@ -667,7 +676,7 @@ Of pstack's 58 skills (24 principles and 34 others), we took all 24 principles a
 - **Running projects:** `orchestrate`'s `orch` ledger, the landing gate and exclusive lane, human-gate, the main guardian, the QA lead, and the `orch-dash` dashboard. The shape follows pstack's playbooks, but it was built fresh on top of Orca Runs and GitHub stacks.
 - **Measurement and adapters:** `measure-delivery`, `use-tracker`, `use-notes`.
 - **Machine upkeep:** `reap-resources`, `tune-automode`, `skills-config`, `setup-pc`.
-- **Hooks:** permission decisions (`guard.py`), re-orienting the orchestrator and leads (`reorient.py`), offering setup on a PC that was never set up (`onboard.py`), recording permission prompts for the dashboard to answer (`permission.py`), closing decisions answered in the terminal (`decision.py`), completion claim checks (`claim_check.py`), a load check before a heavy start (`pressure_gate.py`), prose checks (`prose_check.py`), the stack check on dependent PRs (`stack_gate.py`), and a warning when a program card closes over its own open PR (`self_land_gate.py`).
+- **Hooks:** permission decisions (`guard.py`), re-orienting the orchestrator and leads (`reorient.py`), offering setup on a PC that was never set up (`onboard.py`), recording permission prompts for the dashboard to answer (`permission.py`), closing decisions answered in the terminal (`decision.py`), a warning on relaying the owner's words with no record (`decision_relay.py`), completion claim checks (`claim_check.py`), a load check before a heavy start (`pressure_gate.py`), prose checks (`prose_check.py`), the stack check on dependent PRs (`stack_gate.py`), and a warning when a program card closes over its own open PR (`self_land_gate.py`).
 
 ### Upstream sync status
 - **Last sync:** 2026-10-26, from `b42effe` (0.15.3) to `99b609a` (0.15.32). Upstream added 74 commits to pstack in between.
