@@ -1061,7 +1061,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         if l["session"] and l["session"]["id"]:
             s = sessions[sid]
             line_, at = last_report(s)
-            l["session"].update(name=s.get("name"), last=line_, at=at, pr=(r or {}).get("pr"))
+            l["session"].update(name=one_line(s.get("name")), last=line_, at=at, pr=(r or {}).get("pr"))
         l["pr_state"] = pr_status(l["pr"], bases.get(l["sec"])) if l["pr"] else ""
         if l["fold"]:  # the numbers by base, each base but the section's named once; the states go to the snapshot only
             to = {}

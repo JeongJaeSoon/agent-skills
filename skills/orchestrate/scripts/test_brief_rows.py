@@ -349,7 +349,7 @@ st["sessions"].append(card("s-break", "first\nsecond", "working", "acme/break"))
 fleet.write_atomic(sd / "state.json", json.dumps(st))
 board.set_row("break-row", title="제목", repo="acme/break", status="moving", worktree="s-break", next="리뷰")
 b = brief()
-assert "| 🔄 | **first second** |" in b["text"], b["text"]
+assert "| 🔄 | **first second** |" in b["text"] and "second |" not in b["text"].replace("first second** |", ""), b["text"]
 assert "first second" in [r["label"] for t in b["table_rows"] for r in t["rows"]], b["table_rows"]
 board.set_row("break-row", status="done")
 st["sessions"].pop()
