@@ -98,6 +98,16 @@ order = prog.land_order(events, [row(70, "BEHIND"), row(71), row(72)], CFG, NOW)
 assert [e["exclusive"] for e in order if e["pr"] in (70, 71)] == [True, True]
 assert prog.exclusive_turn(order, 71)["pr"] == 70 and prog.exclusive_turn(order, 70) is None
 assert prog.exclusive_turn(order, 72) is None
+# A verdict alone is no request to land: that entry keeps its place in the order and gets no turn.
+no_call = [at(1, "verdict", pr=73, ticket="G-4", sha="x", result="pass"), at(1, "lane", pr=73, exclusive=True)]
+order = prog.land_order(no_call + ready(74, "G-5", 0.5) + [at(0.5, "lane", pr=74, exclusive=True)], [row(73), row(74)], CFG, NOW)
+assert [e["pr"] for e in order] == [73, 74] and order[0]["reasons"][-1].startswith("READY-stop")
+assert prog.exclusive_turn(order, 74) is None
+assert prog.claimed([ev("verdict", pr=9)], 9) is False
+assert prog.claimed([ev("ready", pr=9)], 9) is True
+stopped = [ev("ready", pr=9), ev("land_check", pr=9, outcome="stopped")]
+assert prog.claimed(stopped, 9) is False and prog.claimed(stopped + [ev("ready", pr=9)], 9) is True
+assert prog.claimed([ev("ready", pr=9), ev("land_check", pr=9, outcome="act")], 9) is True
 assert prog.is_exclusive({}, ["db/migrations/0003.sql", "src/a.py"]) == ["db/migrations/0003.sql"]
 assert prog.is_exclusive({"landing": {"exclusive_paths": ["contracts/*"]}}, ["src/a.py", "contracts/x.md"]) == ["contracts/x.md"]
 
