@@ -1174,6 +1174,23 @@ def gate_resolution(cfg, events, pr, warn=True):
     return None
 
 
+def gate_hold(p, events, pr):
+    """None when the human gate clears this PR, else why not. An approval holds only until a newer gate opens."""
+    rows = [e for e in events if e.get("pr") == pr and e["ev"] in ("gate_opened", "approved")]
+    if rows and rows[-1]["ev"] == "approved":
+        return None
+    resolution = gate_resolution(p.cfg, events, pr)
+    if resolution == "land":
+        p.append("approved", pr=pr, note="orca gate resolved: land")
+        return None
+    if resolution:
+        close_gate_task(p, pr, "failed")
+        return f"human-gate: the user resolved the gate as '{resolution}'"
+    if gate_rows(events, pr, warn=False):
+        return "human-gate: gate open in Orca, waiting for the user"
+    return f"human-gate: open the gate first (orch gate {p.slug} --pr {pr})"
+
+
 GATE_TASK = "Land #"
 
 
@@ -1936,18 +1953,10 @@ def attempt(p, pr, klass, onto_lower=False):
         return 0, f"#{pr} already landed as {st['landed'].get('sha', '')[:8]}"
     if stopped(events):
         return 1, "STOP line active: nothing lands"
-    if cfg["merge_policy"] == "human-gate" and "approved" not in st:
-        resolution = gate_resolution(cfg, events, pr)
-        if resolution == "land":
-            p.append("approved", pr=pr, note="orca gate resolved: land")
-            events, st = p.events(), pr_state(p.events()).get(pr, {})
-        elif resolution:
-            close_gate_task(p, pr, "failed")
-            return 1, f"human-gate: the user resolved the gate as '{resolution}'"
-        elif gate_rows(events, pr, warn=False):
-            return 1, "human-gate: gate open in Orca, waiting for the user"
-        else:
-            return 1, f"human-gate: open the gate first (orch gate {p.slug} --pr {pr})"
+    if cfg["merge_policy"] == "human-gate":
+        if hold := gate_hold(p, events, pr):
+            return 1, hold
+        events, st = p.events(), pr_state(p.events()).get(pr, {})
     main = main_state(events)
     if main == "red" and klass != "main-fix":
         return 1, "safety stop: main is red; only the repair lands (--class main-fix)"
@@ -1992,6 +2001,10 @@ def attempt(p, pr, klass, onto_lower=False):
         todo = [ADVICE.get(r, r).format(pr=pr, repo=repo) for r in me["reasons"]]
         return 3, "act: " + " | ".join(todo)
     unit = (me["stack"] or [pr])[: (me["stack"] or [pr]).index(pr) + 1]
+    if cfg["merge_policy"] == "human-gate":
+        for n in unit:
+            if hold := gate_hold(p, p.events(), n):
+                return 1, f"#{n}: {hold}"
     missing = []
     for n in unit:
         problems, notes = evidence_problems(cfg, repo, n)
@@ -2114,17 +2127,8 @@ def cmd_land_check(argv):
             problems.append(f"no-CI lane: verdict is for {verdict['sha'][:8]}, not the head {v['headRefOid'][:8]}: re-review")
         elif v["headRefOid"] != verdict.get("sha"):
             print(f"note: head moved {verdict['sha'][:8]} -> {v['headRefOid'][:8]} with the same patch-id; verdict holds, CI must pass at the new head")
-    if p.cfg["merge_policy"] == "human-gate" and "approved" not in st:
-        resolution = gate_resolution(p.cfg, events, pr)
-        if resolution == "land":
-            p.append("approved", pr=pr, note="orca gate resolved: land")
-        elif resolution:
-            close_gate_task(p, pr, "failed")
-            problems.append(f"human-gate: the user resolved the gate as '{resolution}'")
-        elif gate_rows(events, pr, warn=False):
-            problems.append("human-gate: gate open in Orca, waiting for the user")
-        else:
-            problems.append(f"human-gate: open the gate first (orch gate {p.slug} --pr {pr})")
+    if p.cfg["merge_policy"] == "human-gate" and (hold := gate_hold(p, events, pr)):
+        problems.append(hold)
     mss = v["mergeStateStatus"]
     if mss == "DIRTY":
         problems.append("conflicts with base: fix task in the PR's worktree")

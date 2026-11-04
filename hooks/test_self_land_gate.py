@@ -109,6 +109,11 @@ for value in ("owner-merge", "land-refused", "external-wait"):
 # A value outside the list is no exception, and a worktree rm reads no line.
 assert decision(run("orca orchestration send --type worker_done --outcome succeeded --subject s --body 'READY-WAIT: later'")) == "deny"
 assert decision(run(RM + " # READY-WAIT: owner-merge")) == "deny"
+# Every target that may be this card counts, the same set lifecycle.py uses, and a report's line cannot excuse an rm.
+for target in ("--worktree active", "--worktree id:card", ""):
+    assert decision(run(f"orca worktree rm {target}".strip())) == "deny", target
+assert decision(run("orca orchestration send --type worker_done --outcome succeeded --subject s "
+                    "--body 'READY-WAIT: owner-merge'; orca worktree rm --worktree current")) == "deny"
 assert LOG.read_text() != "", "the last case did read gh"
 
 # A human-gate program waits on the human by policy: no gh read at all.

@@ -197,8 +197,8 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             this paragraph, from "An act refused" through "run it again.", verbatim into every
             subagent prompt you write, including tracker and notes delegates: a summary drops
             the forms it lists. Taking the path this
-            brief already names for that act (`orch land` for a merge, in a worker's brief) is not a
-            retry, nor is doing the act once more after the human added a rule for it or approved it in
+            brief already names for that act (`orch land` for a merge, in a worker's brief), when no
+            human refused the act, is not a retry, nor is doing the act once more after the human added a rule for it or approved it in
             the refused session's own chat. Nor is the restart of a unit whose subagent's Edit or
             Write got no verdict: the session that started that unit, never the refused one, takes
             the whole unit back once (the orchestrator or lead restarts it as a new card, a worker does it in

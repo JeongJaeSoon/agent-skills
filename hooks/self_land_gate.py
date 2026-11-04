@@ -19,7 +19,7 @@ A command inside a script or `bash -c` is not seen: a guardrail, not a sandbox.
 """
 import json, os, pathlib, re, subprocess, sys
 
-import roles
+import lifecycle, roles
 from lib import config, shell
 
 KEY = "orchestrate.self_land"
@@ -52,25 +52,15 @@ def git(cwd, *args):
     return r.stdout.strip() if r.returncode == 0 else ""
 
 
-def own_worktree(target, cwd):
-    if target == "current":
-        return True
-    if not (target or "").startswith("path:"):
-        return False
-    root = git(cwd, "rev-parse", "--show-toplevel")
-    return bool(root) and os.path.realpath(target[len("path:"):]) == os.path.realpath(root)
-
-
 def settling(cmd, cwd):
-    """What in this command settles the card: ("report", its body or ""), ("remove", None), or None."""
+    """What in this command settles the card: ("remove", None), ("report", its body or ""), or None. A removal wins, so a
+    report's READY-WAIT line cannot excuse an rm in the same command."""
+    if lifecycle.removes_own(cmd, cwd):
+        return "remove", None
     for c in shell.commands(cmd):
-        if c.name != "orca":
-            continue
-        if c.words[1:3] == ["orchestration", "send"] and option(c.words, "--type") == "worker_done" \
+        if c.name == "orca" and c.words[1:3] == ["orchestration", "send"] and option(c.words, "--type") == "worker_done" \
                 and option(c.words, "--outcome") != "failed":
             return "report", option(c.words, "--body") or ""
-        if c.words[1:3] == ["worktree", "rm"] and own_worktree(option(c.words, "--worktree"), cwd):
-            return "remove", None
     return None
 
 

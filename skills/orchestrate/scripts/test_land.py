@@ -831,6 +831,25 @@ assert prog(env, "gate", "t", "--pr", "59")[0] == 0
 code, out = prog(env, "land", "t", "--pr", "59")
 assert code == 1 and "waiting for the user" in out and not merged(d), out
 
+# Every layer a stack lands needs its own approval, and a newer gate voids an older approval.
+d, env = gate_setup({"56": pr(56, stacked=True), "57": pr(57, base="b56", stacked=True)})
+st = json.loads((d / "state.json").read_text()); st["stacks"] = [{"id": 0, "pull_requests": [56, 57]}]
+(d / "state.json").write_text(json.dumps(st))
+verdict(d, 56, "T-56"); verdict(d, 57, "T-57")
+def add_row(**row):
+    with (d / "programs" / "t" / "ledger.jsonl").open("a") as f:
+        f.write(json.dumps({"ts": "2026-09-24T00:00:00+00:00", **row}) + "\n")
+add_row(ev="approved", pr=57)
+code, out = prog(env, "land", "t", "--pr", "57")
+assert code == 1 and "#56: human-gate" in out and not merged(d), out
+add_row(ev="approved", pr=56)
+add_row(ev="gate_opened", pr=57, task="task_g", gate="gate_g")
+code, out = prog(env, "land", "t", "--pr", "57")
+assert code == 1 and "waiting for the user" in out and not merged(d), out
+assert prog(env, "land-check", "t", "--pr", "57")[0] == 1
+add_row(ev="approved", pr=57)
+assert prog(env, "land", "t", "--pr", "57")[0] == 0
+
 d, env = gate_setup({"60": dict(pr(60), title="Add the widget")})
 code, out = prog(env, "gate", "t", "--pr", "60")
 assert code == 0 and "Traceback" not in out, out
