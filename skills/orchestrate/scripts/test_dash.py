@@ -588,15 +588,16 @@ H = "hang-test"
 (store / H).mkdir()
 (store / H / "program.json").write_text(json.dumps({"repo": "acme/app", "created_at": ago(900)}))
 (store / H / "ledger.jsonl").write_text("".join(json.dumps(r) + "\n" for r in two))
-release = threading.Event()
+release, entered = threading.Event(), threading.Event()
 def hanging_sh(cmd, timeout=45):
+    entered.set()
     release.wait(30)
     raise dash.SourceError("released")
 real_gh_fetch, dash.FETCHERS["github"] = dash.FETCHERS["github"], lambda cfg: []
 dash.sh = hanging_sh
 slow = threading.Thread(target=dash.collect, args=(H, ("github",)), daemon=True)
 slow.start()
-dash.time.sleep(0.5)
+assert entered.wait(10), "the slow collect never reached gh"
 fast = threading.Thread(target=dash.collect, args=(H, ()), daemon=True)
 fast.start()
 fast.join(5)
@@ -608,7 +609,31 @@ dash.sh, dash.FETCHERS["github"] = real_sh, real_gh_fetch
 dash._CONTAINS.clear()
 dash._gh_down_until = 0.0
 assert not stuck, "a ledger-only collect waited on another collect's gh call"
-assert dash.loops_alive({"ticks": {"fast": dash.iso(dash.utcnow() - dash.dt.timedelta(minutes=6))}}) is False
+
+# A silent fast loop: health says stale though the heartbeat is fresh; under launchd the server exits itself.
+old_health, old_agent, old_restart = dict(dash.HEALTH), dash.under_agent, dash.restart
+exits = []
+dash.restart, dash.under_agent = lambda: exits.append(1), lambda: True
+age = lambda m: dash.iso(dash.utcnow() - dash.dt.timedelta(minutes=m))
+dash.HEALTH.clear(); dash.HEALTH.update(heartbeat=age(0), stale=False)
+assert not dash.health_view()["stale"], "no tick yet (just started) is not a stop"
+dash.check_loops(); assert not exits
+dash.HEALTH["ticks"] = {"fast": age(4)}
+assert not dash.health_view()["stale"]; dash.check_loops(); assert not exits, "inside the 5 minutes"
+dash.HEALTH["ticks"] = {"fast": age(6)}
+assert dash.health_view()["stale"] is True; dash.check_loops(); assert exits == [1], "stopped loop restarts the server"
+dash.under_agent = lambda: False
+dash.check_loops(); assert exits == [1], "outside launchd it only reports"
+dash.HEALTH.clear(); dash.HEALTH.update(old_health); dash.under_agent, dash.restart = old_agent, old_restart
+
+# A bad-ts event in the ledger does not stop the compare warm-up from asking about the good ones.
+calls.clear()
+dash.sh = lambda cmd, timeout=45: (calls.append(cmd), {"s": "behind"})[1]
+(store / H / "ledger.jsonl").write_text("".join(json.dumps(r) + "\n" for r in two + [{"ts": "not a time", "ev": "main_green", "sha": "s99"}]))
+dash.warm_contains(store / H, {"repo": "acme/app", "created_at": ago(900)})
+dash.sh = real_sh
+dash._CONTAINS.clear()
+assert calls, "the warm-up asked nothing because of one bad ts"
 
 mixed = [{"number": 11, "state": "merged", "merged_at": ago(100), "base": "feat/x", "branch": "a"},
          {"number": 12, "state": "merged", "merged_at": ago(90), "base": "feat/x", "branch": "b"},

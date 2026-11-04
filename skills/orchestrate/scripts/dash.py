@@ -1132,12 +1132,27 @@ def collect(slug, sources=SOURCES, interval=None):
         return _merge(slug, d, cfg, fetched, interval)
 
 
+def dated(rows):
+    """(events, bad ts): the rows every view below can parse a timezone-aware ts from."""
+    events, bad = [], []
+    for e in rows:
+        ts = e.get("ts")
+        try:
+            if prog.parse_ts(ts).tzinfo is not None:  # a naive ts parses but fails every comparison with now
+                events.append(e)
+                continue
+        except (ValueError, TypeError, AttributeError):
+            pass
+        bad.append(ts)
+    return events, bad
+
+
 def warm_contains(d, cfg):
     """Asks GitHub, outside the program lock, the compare questions ledger_gaps will put. _merge runs under that lock
     and the fast loop waits on it, so a gh call there stopped every collect behind it."""
     try:
         prev = read_json(d / "dashboard" / "state.json", {}) or {}
-        ledger_gaps(cfg, ledger_events(d / "ledger.jsonl")[0], [], prev.get("prs") or [], utcnow())
+        ledger_gaps(cfg, dated(ledger_events(d / "ledger.jsonl")[0])[0], [], prev.get("prs") or [], utcnow())
     except Exception as e:  # a warm-up is best effort: the merge reads whatever the cache holds
         log(f"{d.name}: compare warm-up failed: {e!r}")
 
@@ -1179,16 +1194,7 @@ def land_order(events, pr_rows, cfg, now, tasks=None):
 
 def _merge(slug, d, cfg, fetched, interval):
     rows, rejected = ledger_events(d / "ledger.jsonl")
-    events, bad = [], []
-    for e in rows:
-        ts = e.get("ts")
-        try:
-            if prog.parse_ts(ts).tzinfo is not None:  # a naive ts parses but fails every comparison with now
-                events.append(e)
-                continue
-        except (ValueError, TypeError, AttributeError):
-            pass
-        bad.append(ts)
+    events, bad = dated(rows)
     dash = d / "dashboard"
     dash.mkdir(exist_ok=True)
     prev = read_json(dash / "state.json", {}) or {}
@@ -1524,6 +1530,11 @@ def code_loop():
             log(f"code check failed: {e!r}")
 
 
+def health_view():
+    """stale also means a collector loop stopped: the heartbeat alone and the code hash both look fine then."""
+    return {**HEALTH, "stale": bool(HEALTH.get("stale")) or not loops_alive(HEALTH)}
+
+
 def check_loops():
     """The fast loop stopped finishing rounds (a call that never returns): under launchd, exit so it starts again,
     instead of waiting for someone to run `ensure`. Elsewhere /api/health reports stale and the banner says what to run."""
@@ -1568,8 +1579,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path.startswith("/api/") and not self.local_only():
             return self.send(403, b'{"error":"forbidden"}')
         if path == "/api/health":
-            # stale also means a collector loop stopped: the heartbeat alone and the code hash both look fine then
-            return self.send(200, json.dumps({**HEALTH, "stale": bool(HEALTH.get("stale")) or not loops_alive(HEALTH)}).encode())
+            return self.send(200, json.dumps(health_view()).encode())
         if path.startswith("/api/fleet/"):
             return self.fleet_get(path)
         if path == "/api/programs":
