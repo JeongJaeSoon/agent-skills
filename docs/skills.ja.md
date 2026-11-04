@@ -1,4 +1,4 @@
-<!-- translated-from: a0a838153ceaa17607aa23065ec51591f3031695 -->
+<!-- translated-from: d63ffc0c65c2c03eeb13da1c8b43c895bea596c9 -->
 # スキルカタログ
 
 `agent-skills` プラグインに入っているスキル41個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック14個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
@@ -597,7 +597,14 @@ hook 自身の判定が例外を出したら、その呼び出しは通し、警
 `hooks/reorient.py` は SessionStart と UserPromptSubmit で宣言済みの役割だけを処理します。ホストの `agent_type`、resume/fork 時のセッション名、明示した `ROLE: orchestrator` / `ROLE: lead <slug>` を読みます。`ROLE: none` で無効化できます。ROLE だけで宣言したセッションの fork は再宣言が必要です。状態は `$AGENT_SKILLS_STATE/roles/` に置き、ターミナルの handle から推測しません。開始時に役割の案内、各プロンプトにリマインダーを加えます。compact 後の SessionStart では、orchestrate の SKILL.md 冒頭にある「Core rules」の一覧（最初の項目は委任）をそのまま読んで案内に添えます。スキルが大きく compaction の再注入では戻らず、「再ロードせよ」という一文だけではロードされなかったためです。操作を止めず外部コマンドも実行しません。オーケストレーターのセッション名（`session_title`）が `orchestrator` でなければ、SessionStart の案内の最後に、人に `/rename orchestrator` を頼み自分の Orca タブの名前を変える（`orca terminal rename`）よう促す行を付けます。
 
 ### ターミナルで答えた決定のクローズ
-`hooks/decision.py`（UserPromptSubmit）。`orch decide add` で決定を登録したターミナル（`$ORCA_TERMINAL_HANDLE`）に人が入力したプロンプトだけを見ます。1 行目が id で始まる（`d3 許可`、`decision d3: 許可`）か、そのターミナルの開いている決定のうち一つにしかない選択肢名で始まると、その決定を答えとともに done でクローズし、オーケストレーターかリードに伝えます。曖昧なときはクローズせず、開いている決定の一覧をリマインダーとして差し込むだけです。ほかのターミナル（ワーカー）の入力ではクローズせず、エラーはすべて exit 0 です。すでに起動しているセッションには `/reload-plugins` か再起動のあとから効きます。
+`hooks/decision.py`（UserPromptSubmit）。`orch decide add` で決定を登録したターミナル（`$ORCA_TERMINAL_HANDLE`）に人が入力したプロンプトだけを見ます。1 行目が id で始まる（`d3 許可`、`decision d3: 許可`）か、そのターミナルの開いている決定のうち一つにしかない選択肢名で始まると、その決定をプロンプト全文を答えとして done でクローズし、オーケストレーターかリードに伝えます。全文が答えの上限を超えるとクローズせず、`orch decide answer` を案内します。曖昧なときはクローズせず、開いている決定の一覧をリマインダーとして差し込むだけです。ほかのターミナル（ワーカー）の入力ではクローズせず、エラーはすべて exit 0 です。すでに起動しているセッションには `/reload-plugins` か再起動のあとから効きます。
+
+### オーナーの回答の記録の警告
+`hooks/decision_relay.py`（Bash の PreToolUse）。モデルを呼びません。オーケストレーターかリードの本会話が `orca terminal send`、`orca orchestration reply`、`orca orchestration send`（`worker_done` を除く）で送る本文を見ます。本文はリテラルの `--text`・`--body` か、`--body "$(cat /絶対パス)"` のファイルです。
+
+- `오너` を含む行かその次の行に引用（`"…"`、`“…”`、`「…」`、`>` の行）があり、その引用が記録されていないと警告します。ブロックはしません。
+- 記録済みと見なすのは、本文の `오너(dN` が done の決定を指し、保存された答え全体が引用と一致するとき（空白の差は無視）、または今のターンの先行する呼び出しで `orch decide answer`・`orch decide done` がエラーなく終わったときです。今の呼び出しは証拠になりません。
+- レベル `guard.decision_relay`: `warn`（既定）、`off`。引用符の中で複数行にわたる引用は検出しません。エラーは通過させ、`guard-errors.jsonl` に残します。
 
 ### 権限ダイアログの記録
 `hooks/permission.py`（PermissionRequest）。権限ダイアログが開くと、ツール名とマスクした引数を `$ORCA_TERMINAL_HANDLE` ごとにダッシュボードの状態ディレクトリの `prompts/` に書きます。判定はしないので、権限の流れは変わりません。ダッシュボードは、そのターミナルの画面に同じリクエストのダイアログが出ている間だけ、インボックスの項目に承認・拒否・ターミナルを開くボタンを付けます。人が押すと、送る直前に画面を読み直して確かめ、一回だけ許可する `Yes` か `No` の番号を一つだけ押します。「今後確認しない」「常に許可」「auto mode に切り替え」のようにルールを保存したりモードを変えたりする選択肢は選びません。詳しくは `skills/orchestrate/references/dashboard.md` にあります。
@@ -666,7 +673,7 @@ pstack のスキル58個（原則24個と、その他34個）のうち、原則2
 - **プロジェクト運営:** `orchestrate` の `orch` 台帳、着地ゲートと専有レーン、human-gate、main ガーディアン、QA リード、`orch-dash` ダッシュボード。形は pstack のプレイブックに倣いましたが、Orca の Run と GitHub stack の上で新しく作りました。
 - **測定とアダプター:** `measure-delivery`、`use-tracker`、`use-notes`。
 - **マシンの手入れ:** `reap-resources`、`tune-automode`、`skills-config`、`setup-pc`。
-- **フック:** 権限の判定（`guard.py`）、オーケストレーター・リードの再確認（`reorient.py`）、未設定の PC での設定の提案（`onboard.py`）、ダッシュボードから答える権限ダイアログの記録（`permission.py`）、ターミナルで答えた決定のクローズ（`decision.py`）、完了主張の検査（`claim_check.py`）、重い開始の前の負荷確認（`pressure_gate.py`）、文体の検査（`prose_check.py`）、依存する PR のスタック確認（`stack_gate.py`）、プログラムのカードが自分の PR を開いたまま閉じるときの警告（`self_land_gate.py`）。
+- **フック:** 権限の判定（`guard.py`）、オーケストレーター・リードの再確認（`reorient.py`）、未設定の PC での設定の提案（`onboard.py`）、ダッシュボードから答える権限ダイアログの記録（`permission.py`）、ターミナルで答えた決定のクローズ（`decision.py`）、記録のないオーナーの言葉の転送の警告（`decision_relay.py`）、完了主張の検査（`claim_check.py`）、重い開始の前の負荷確認（`pressure_gate.py`）、文体の検査（`prose_check.py`）、依存する PR のスタック確認（`stack_gate.py`）、プログラムのカードが自分の PR を開いたまま閉じるときの警告（`self_land_gate.py`）。
 
 ### upstream との同期状況
 - **最後の同期:** 2026-10-26、`b42effe`（0.15.3）から `99b609a`（0.15.32）へ。その間に upstream は pstack に74個のコミットを積みました。
