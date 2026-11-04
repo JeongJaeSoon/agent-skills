@@ -1101,6 +1101,7 @@ COMPOSE_PROJECT = "com.docker.compose.project"
 STOPPED_STATES = ("exited", "created")
 ORIGIN_RESERVED = ("com.docker.", "io.docker.", "org.dockerproject.")  # Docker keeps these label namespaces for itself
 ANON_VOLUME = re.compile(r"[0-9a-f]{64}")
+CONTAINER_SHAPE = {"Name": str, "State": dict, "Config": dict, "HostConfig": dict, "Mounts": list}
 
 
 def docker_ts(s):
@@ -1118,7 +1119,11 @@ def docker_containers():
     if not ids.split():
         return []
     out = run(["docker", "inspect", *ids.split()], check=False)
-    return None if out is None else json.loads(out)
+    try:
+        found = None if out is None else json.loads(out)
+        return found if {c["Id"] for c in found or ()} == set(ids.split()) else None
+    except (ValueError, TypeError, KeyError):
+        return None
 
 
 def compose_stacks():
@@ -1379,6 +1384,20 @@ def container_row(c):
             "volumes": [m["Name"] for m in c.get("Mounts") or () if m.get("Type") == "volume" and m.get("Name")]}
 
 
+def container_rows():
+    """container_row of every container, None unless each came back whole: a Mounts or Labels missing from what Docker
+    answered would read as no reference and no stack."""
+    found = docker_containers()
+    if found is None:
+        return None
+    try:
+        if all(isinstance(c.get(k), t) for c in found for k, t in CONTAINER_SHAPE.items()):
+            return [container_row(c) for c in found]
+    except (ValueError, TypeError, KeyError, AttributeError):
+        pass
+    return None
+
+
 def stopped_at(r):
     """When a stopped container stopped (a `created` one never ran: when it was made). None when Docker's time cannot
     be read, its zero time included."""
@@ -1462,12 +1481,18 @@ def labeled_volumes_read(key):
     names = run(["docker", "volume", "ls", "-q", "--filter", f"label={key}"], check=False)
     if names is None:
         return None
-    if not names.split():
-        return []
-    found = run(["docker", "volume", "inspect", *sorted(names.split())], check=False)
-    if found is None:
+    return volumes_read(sorted(names.split())) if names.split() else []
+
+
+def volumes_read(names):
+    """[{name, labels, created}] of exactly these volumes, None unless each came back whole."""
+    out = run(["docker", "volume", "inspect", *names], check=False)
+    try:
+        vols = [{"name": v["Name"], "labels": v.get("Labels") or {}, "created": parse_ts(v["CreatedAt"])}
+                for v in json.loads(out)]
+    except (ValueError, TypeError, KeyError, AttributeError):
         return None
-    return [{"name": v["Name"], "labels": v.get("Labels") or {}, "created": parse_ts(v["CreatedAt"])} for v in json.loads(found)]
+    return vols if {v["name"] for v in vols} == set(names) else None
 
 
 def leftovers(cfg, hours, now, notes, keep=frozenset(), ports=frozenset(), kinds=("stopped-container", "labeled-volume")):
@@ -1478,11 +1503,10 @@ def leftovers(cfg, hours, now, notes, keep=frozenset(), ports=frozenset(), kinds
     notes += [f"{k}: {s}" for k, s in want.items() if isinstance(s, str)]
     if not any(isinstance(s, tuple) for s in want.values()) or not shutil.which("docker"):
         return []
-    found = docker_containers()
-    if found is None:
+    rows = container_rows()
+    if rows is None:
         notes.append("docker 를 읽지 못함: 멈춘 컨테이너·라벨 볼륨은 건너뜀")
         return []
-    rows = [container_row(c) for c in found]
     items = []
     if isinstance(want["stopped-container"], tuple):
         items += judge_stopped_containers(rows, want["stopped-container"], hours, now, keep, ports)
@@ -1495,39 +1519,44 @@ def leftovers(cfg, hours, now, notes, keep=frozenset(), ports=frozenset(), kinds
     return items
 
 
-def leftover_recheck(item, cfg):
+def leftover_recheck(item, cfg, protect_path=None):
     """Judged again from a fresh read, right before the rm, with no age left to wait: why it stays, or None. A container
-    run again, or a volume a container took up since the scan, keeps it; the protect guards are guard.item's."""
-    found = docker_containers()
-    if found is None:
+    run again, a volume a container took up since the scan, or a protect line added since keeps it. protect_path: the
+    file a cleaner requires; without it, the shared file, which may be missing."""
+    import guard
+    try:
+        protect = guard.read_protect(protect_path or guard.protect_file(), missing_ok=protect_path is None)
+        keep = protect["project"] | guard.always_on()
+    except (guard.NoProtect, ValueError) as e:
+        return f"보호 목록을 다시 읽지 못함({e})"
+    rows = container_rows()
+    if rows is None:
         return "컨테이너를 다시 읽지 못함"
-    rows = [container_row(c) for c in found]
     if "cid" in item:
         spec = stopped_container_spec(cfg)
         if not isinstance(spec, tuple):
             return "reap.stopped_containers 를 읽지 못함"
-        same = next((i for i in judge_stopped_containers(rows, spec, 0, time.time()) if i["cid"] == item["cid"]), None)
+        judged = judge_stopped_containers(rows, spec, 0, time.time(), keep, protect["port"])
+        same = next((i for i in judged if i["cid"] == item["cid"]), None)
         if same is None or same["name"] != item["name"] or same["start"] != item["start"]:
             return "사라졌거나 다시 시작된 컨테이너"
         return None if same["target"] else same["why"]
     spec = labeled_volume_spec(cfg)
     if not isinstance(spec, tuple):
         return "reap.labeled_volumes 를 읽지 못함"
-    out = run(["docker", "volume", "inspect", item["name"]], check=False)
-    if out is None:
+    vols = volumes_read([item["name"]])
+    if vols is None:
         return "볼륨을 다시 읽지 못함"
-    v = json.loads(out)[0]
-    vol = {"name": v["Name"], "labels": v.get("Labels") or {}, "created": parse_ts(v["CreatedAt"])}
-    (same,) = judge_labeled_volumes([vol], rows, spec, 0, time.time()) or (None,)
+    (same,) = judge_labeled_volumes(vols, rows, spec, 0, time.time(), keep) or (None,)
     if same is None or same["created"] != item["created"] or same["origin"] != item["origin"]:
         return "다시 만들어졌거나 출처가 바뀐 볼륨"
     return None if same["target"] else same["why"]
 
 
-def remove_leftover(item, cfg):
+def remove_leftover(item, cfg, protect_path=None):
     """One container or volume, by its exact id or name, never -f or -v: Docker itself refuses a running container and a
     volume any container references, so what starts between the recheck and the rm still stays."""
-    if why := leftover_recheck(item, cfg):
+    if why := leftover_recheck(item, cfg, protect_path):
         return f"건너뜀: {why}"
     if "cid" in item:
         run(["docker", "rm", item["cid"]])
@@ -1541,16 +1570,17 @@ def unlabeled_volumes():
     the unreferenced ones}, None when docker cannot be read. Never a target: nothing proves who made them."""
     if not shutil.which("docker"):
         return None
-    names, found = run(["docker", "volume", "ls", "-q"], check=False), docker_containers()
-    if names is None or found is None:
+    names, rows = run(["docker", "volume", "ls", "-q"], check=False), container_rows()
+    if names is None or rows is None:
         return None
     anon = [n for n in names.split() if ANON_VOLUME.fullmatch(n)]
-    out = run(["docker", "volume", "inspect", *anon], check=False) if anon else "[]"
-    if out is None:
+    vols = volumes_read(anon) if anon else []
+    if vols is None:
         return None
-    bare = [v for v in json.loads(out) if not set(v.get("Labels") or ()) - {"com.docker.volume.anonymous"}]
-    used = {n for c in found for n in container_row(c)["volumes"]}
-    free = [{"name": v["Name"], "created": v.get("CreatedAt")} for v in bare if v["Name"] not in used]
+    bare = [v for v in vols if not set(v["labels"]) - {"com.docker.volume.anonymous"}]
+    used = {n for r in rows for n in r["volumes"]}
+    free = [{"name": v["name"], "created": dt.datetime.fromtimestamp(v["created"]).isoformat(timespec="seconds")}
+            for v in bare if v["name"] not in used]
     return {"total": len(bare), "referenced": len(bare) - len(free), "volumes": free}
 
 

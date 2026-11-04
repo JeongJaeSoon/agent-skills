@@ -317,9 +317,10 @@ rh.always_on = lambda: (_ for _ in ()).throw(ValueError("설정 읽지 못함"))
 got = rh.scan_rest(rh.DEFAULTS, P, set(), [], machine, NOW)[0]
 assert not seen and not got
 removed = []
-rh.reap.remove_leftover = lambda item, cfg: removed.append((item["id"], cfg)) or "docker rm"
+rh.reap.remove_leftover = lambda item, cfg, protect_path: removed.append((item["id"], cfg, protect_path)) or "docker rm"
 assert rh.act({"kind": "container", "id": "cid1", "cid": "cid1", "name": "x"}, rh.DEFAULTS, P) == "docker rm"
-assert rh.act({"kind": "volume", "id": "v1", "name": "v1"}, rh.DEFAULTS, P) == "docker rm" and removed[-1] == ("v1", {}), removed
+assert rh.act({"kind": "volume", "id": "v1", "name": "v1"}, rh.DEFAULTS, P) == "docker rm", removed
+assert removed[-1] == ("v1", {}, rh.DEFAULTS["protect_file"]), "the file reap-hard requires, read again before the rm"
 rh.reap.leftovers, rh.reap.remove_leftover, rh.reap.compose_stacks, rh.pw.tailscale_cli, rh.guard.settings, rh.always_on = saved_lo
 
 # A pass: no protect file means nothing is scanned or done, and the brief line says it stopped.

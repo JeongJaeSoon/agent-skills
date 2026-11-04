@@ -1064,6 +1064,7 @@ c = lambda proj, svc, status, started, ports=None: {"Created": "2026-10-25T01:00
     "NetworkSettings": {"Ports": ports or {}}}
 fake = [c("s1", "web", "running", "2026-10-25T02:00:00.1Z", {"80/tcp": [{"HostIp": "127.0.0.1", "HostPort": "4501"}], "81/tcp": None}),
         c("s1", "init", "exited", "2026-10-25T01:30:00Z"), c("w1", None, "exited", "2026-10-25T01:00:00Z")]
+fake = [{**x, "Id": i} for i, x in zip("abc", fake)]
 saved = reap.run, reap.shutil.which
 reap.shutil.which = lambda name: "/bin/" + name
 reap.run = lambda cmd, cwd=None, check=True: "a\nb\nc\n" if cmd[1] == "ps" else json.dumps(fake)
@@ -1255,6 +1256,11 @@ def docker_run(cmd, cwd=None, check=True, env=None, timeout=None):
 
 saved = reap.run, reap.shutil.which, reap.config
 reap.run, reap.shutil.which = docker_run, lambda name: "/bin/" + name
+import guard  # noqa: E402
+saved_guard = guard.protect_file, guard.always_on
+protect_dir = tempfile.TemporaryDirectory()
+protect_txt = pathlib.Path(protect_dir.name, "protect.txt")
+guard.protect_file, guard.always_on = lambda: str(protect_txt), set
 CFG = {"stopped_containers": {"prefixes": ["example-verify-"]}, "labeled_volumes": LV}
 reap.config = lambda: CFG
 docker["volumes"][0]["created"] = reap.parse_ts("2026-10-25T00:00:00Z")
@@ -1287,6 +1293,20 @@ for change in (ctr("late", mounts=("example_db",)), ctr("late", labels={PROJ: "d
     assert reap.act(shelf, []).startswith("건너뜀:") and not any(c[:3] == ["docker", "volume", "rm"] for c in calls), calls
     docker["containers"] = was
 assert reap.act({**shelf, "created": 1.0}, []).startswith("건너뜀: 다시 만들어졌"), shelf
+# A protect line added after the scan, or a list that can no longer be read, keeps the target. reap-hard requires the file.
+for line in ("project example-verify-1", "project done-stack", "project example_db"):
+    protect_txt.write_text(line + "\n")
+    wanted = shelf if line != "project example-verify-1" else box
+    calls.clear()
+    assert reap.act(wanted, []) == "건너뜀: 보호 목록·상시 서비스", (line, calls)
+    assert not any(c[:2] == ["docker", "rm"] or c[:3] == ["docker", "volume", "rm"] for c in calls), calls
+protect_txt.write_text("not a line\n")
+calls.clear()
+assert reap.act(box, []).startswith("건너뜀: 보호 목록을 다시 읽지 못함") and reap.act(shelf, []).startswith("건너뜀: 보호 목록을 다시 읽지 못함")
+assert not calls, calls
+protect_txt.unlink()
+assert reap.remove_leftover(box, CFG, str(protect_txt)).startswith("건너뜀: 보호 목록을 다시 읽지 못함")
+assert not any(c[:2] == ["docker", "rm"] for c in calls), calls
 reap.config = lambda: {}
 assert reap.act(box, []).startswith("건너뜀: reap.stopped_containers") and reap.act(shelf, []).startswith("건너뜀: reap.labeled_volumes")
 reap.config = lambda: CFG
@@ -1295,6 +1315,21 @@ reap.run = lambda cmd, cwd=None, check=True: None
 notes = []
 assert reap.leftovers(CFG, 6, LATE, notes) == [] and "읽지 못함" in notes[0], notes
 assert reap.act(box, []).startswith("건너뜀: 컨테이너를 다시 읽지 못함")
+reap.run = docker_run
+# A reply that succeeded but is not whole reads as unreadable, never as no reference: nothing is a target.
+whole = ctr("example-verify-1")
+for reply in ("[]", "{}", "not json", json.dumps([{"Id": "other"}]), *(json.dumps([{k: v for k, v in whole.items() if k != gap}])
+                                                                       for gap in ("Id", "Name", "State", "Config", "HostConfig", "Mounts"))):
+    reap.run = lambda cmd, cwd=None, check=True, env=None, timeout=None: reply if cmd[:2] == ["docker", "inspect"] else docker_run(cmd)
+    notes = []
+    assert reap.leftovers(CFG, 6, LATE, notes) == [] and "읽지 못함" in notes[0], (reply, notes)
+    assert reap.act(shelf, []).startswith("건너뜀: 컨테이너를 다시 읽지 못함"), reply
+    assert reap.unlabeled_volumes() is None, reply
+for reply in ("[]", "not json", json.dumps([{"Name": "example_db"}]), json.dumps([{"Name": "other", "CreatedAt": "2026-10-25T00:00:00Z"}])):
+    reap.run = lambda cmd, cwd=None, check=True, env=None, timeout=None: reply if cmd[:3] == ["docker", "volume", "inspect"] else docker_run(cmd)
+    notes = []
+    assert [i["kind"] for i in reap.leftovers(CFG, 6, LATE, notes)] == ["stopped-container"] and "볼륨을 읽지 못함" in notes[0], (reply, notes)
+    assert reap.act(shelf, []).startswith("건너뜀: 볼륨을 다시 읽지 못함"), reply
 reap.run = docker_run
 
 # No bulk delete anywhere: the source names none, and a full path above only ever ran single-target removals.
@@ -1315,6 +1350,8 @@ assert not [i for i in reap.leftovers(CFG, 6, LATE, []) if i["kind"] == "labeled
 reap.run = lambda cmd, cwd=None, check=True: None
 assert reap.unlabeled_volumes() is None
 reap.run, reap.shutil.which, reap.config = saved
+guard.protect_file, guard.always_on = saved_guard
+protect_dir.cleanup()
 
 with tempfile.TemporaryDirectory() as tmp:
     cli = lambda *a: subprocess.run([sys.executable, reap.__file__, *a], capture_output=True, text=True,

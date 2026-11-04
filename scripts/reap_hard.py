@@ -476,7 +476,7 @@ def act(item, cfg, protect, done=None):
         reap.run(["docker", "compose", "-p", item["id"], "down"])  # no -v: volumes are data
         return "docker compose down(볼륨·이미지 유지)"
     if k in ("container", "volume"):
-        return reap.remove_leftover(item, (guard.settings() or {}).get("reap") or {})
+        return reap.remove_leftover(item, (guard.settings() or {}).get("reap") or {}, cfg["protect_file"])
     if k == "listener":
         rows = reap.processes()
         r = rows.get(item["pid"])
