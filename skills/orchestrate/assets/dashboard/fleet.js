@@ -959,14 +959,15 @@ const uncut = (cell, notes) => cell.replace(/^((?:[└ㄴ] )?(?:\*\*)?)(.*)…\[
 // too. split: what parts a line falls into, in order: [separator, column name] — the text before the first separator
 // is the first column. A line without the separator leaves the rest empty.
 const BRIEF_SECTIONS = {
-  "표 밖 진행": [["", "항목"], [" — ", "상황"]],
+  "카드 없는 일": [["", "항목"], [" — ", "상황"]],
   "다른 사람 대기": [["", "누구 · 무엇 · 언제"], [" → ", "항목"], [" · 다음: ", "다음"]],
   "결정 필요": [["", "결정"], [" → 추천: ", "추천"]],
   "지금 오너가 할 일": [["", "할 일"], [" → ", "항목"]],
   "보류": [["", "언제 · 조건"], [" → ", "할 일"]],
+  "세션 찾기": [["", "worktree"], [" — ", "터미널"]],
 };
 // Which list_rows list each section's lines come from (board.py render).
-const LIST_OF = { "표 밖 진행": "moving", "다른 사람 대기": "waiting", "지금 오너가 할 일": "owner", "보류": "held" };
+const LIST_OF = { "카드 없는 일": "moving", "다른 사람 대기": "waiting", "지금 오너가 할 일": "owner", "보류": "held" };
 const STATUS_MARK = /^(└ )?(🔄|🙋|⏳|⏸️|📅|⏰|✅|❔|❓|🔴|📝|\d+\.)\s+/u;  // a row under a lead keeps its └ in the item
 // A row the orchestrator or a lead wrote ends with who wrote it; the old role name reads as today's.
 const roleNow = (s) => s.replace(/(^|· )coordinator$/, "$1orchestrator").replace(/(^|· )코디네이터$/, "$1오케스트레이터");
@@ -1011,9 +1012,9 @@ function briefHtml(text, tableRows = [], placed = new Set(), listRows = {}, clos
       for (let m; i < lines.length && (m = lines[i].match(/^- \[(\d+)\] (.*)$/)); i++) notes[m[1]] = m[2];
       if (!Object.keys(notes).length) i = at;
       const [head, ...body] = rows;
-      // A repository table (`| | name | PR | progress | next | session |`) gets one shared set of column widths; a cell
-      // too long for its column scrolls sideways within itself instead of being cut.
-      const repo = head.length === 6 && !head[0], acts = repo && tableRows[t++];
+      // A repository table (`| | name | PR | [progress |] next | session |`, progress only where a row has a bar) gets
+      // one shared set of column widths; a cell too long for its column scrolls sideways within itself instead of being cut.
+      const sessAt = head.indexOf("세션"), repo = sessAt >= 0 && !head[0], acts = repo && tableRows[t++];
       // A label that is not one row's, in the reply and in the drawn table both (a lead's name over its sub-tasks in
       // another repository may equal one of them), gets no button: a wrong row's Done is worse than none.
       const tally = (xs) => xs.reduce((m, x) => m.set(x, (m.get(x) || 0) + 1), new Map());
@@ -1025,9 +1026,9 @@ function briefHtml(text, tableRows = [], placed = new Set(), listRows = {}, clos
       const btns = found.some(Boolean) ? found : null;
       (btns || []).forEach((x) => { if (x && x.ack) placed.add(x.ack); else if (x && x.done) closed.add(x.done); });
       const act = (x) => x ? `<td class="bact" data-row-label="${esc(x.label || "")}">${x.ack ? ackBtn({ ack: "ackable", key: x.ack }) : x.done ? doneBtn(x.done) : ""}</td>` : '<td class="bact"></td>';
-      out.push(`<div class="table-wrap"><table class="brief-table${repo ? " brepo" : ""}">${repo ? `<colgroup><col class="bmark"><col><col class="bpr"><col class="bprog"><col class="bnext"><col class="bsess">${btns ? '<col class="bact">' : ""}</colgroup>` : ""}
+      out.push(`<div class="table-wrap"><table class="brief-table${repo ? " brepo" : ""}">${repo ? `<colgroup><col class="bmark"><col><col class="bpr">${head.includes("진행") ? '<col class="bprog">' : ""}<col class="bnext"><col class="bsess">${btns ? '<col class="bact">' : ""}</colgroup>` : ""}
         <thead><tr>${head.map((c) => `<th>${briefInline(c)}</th>`).join("")}${btns ? "<th></th>" : ""}</tr></thead>
-        <tbody>${body.map((r, k) => `<tr>${r.map((c, n) => repo && n === 5 && btns && btns[k] ? `<td class="bsess">${sessCell(btns[k].session, c)}</td>`
+        <tbody>${body.map((r, k) => `<tr>${r.map((c, n) => repo && n === sessAt && btns && btns[k] ? `<td class="bsess">${sessCell(btns[k].session, c)}</td>`
           : `<td${repo && !n ? ' class="bmark"' : ""}>${repo && n ? `<div class="slide">${briefInline(uncut(c, notes))}</div>` : briefInline(uncut(c, notes))}</td>`).join("")}${btns ? act(btns[k]) : ""}</tr>`).join("")}</tbody></table></div>`);
       continue;
     }

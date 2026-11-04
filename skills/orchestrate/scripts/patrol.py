@@ -37,6 +37,9 @@ tail of each card's session transcript, the `orch sent` log and the last pressur
   L  load      at pressure warn or danger, a top consumer whose card is judged I, X, S or O
   W  watcher   an orchestrator whose `orch watch-cards` has not finished a round in an hour (reported here; the
                collector raises it on the dashboard)
+  T  dead handle  a term_ value in ~/.claude/agent-skills.json that `orca terminal list` does not show, so what is
+               sent there has no reader. The finding names the key and the value's first 12 characters and goes to
+               the orchestrator; a config or list that could not be read whole leaves a note line and no finding
 
 Patrol records and shows; it never types into a terminal, closes one, stops a worker or removes a card. Findings
 go to <state>/patrol.jsonl with detected_at, are cleared there when a later round no longer sees them, and are acked
@@ -84,6 +87,7 @@ MEMO = STATE / "patrol-state.json"
 SHOWN = STATE / "patrol-shown.json"
 PRESSURE = STATE / "pressure.json"
 ROUNDS = STATE / "patrol-rounds.jsonl"
+CONFIG = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-skills.json").expanduser()
 REAP_SCRIPTS = pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts"
 
 DUE_S = 25 * 60
@@ -92,7 +96,7 @@ CANDIDATE_BUDGET_S = 240
 AGENTS_MARGIN_S = 15  # agent_signal.read's 10 s, and the round's own writes after it
 ROUNDS_KEEP = 1000
 CURRENT = {}  # the running round's timings and failed sources, read by mark_cut
-OWN_SOURCES = ("terminals", "waits", "workers", "state", "board", "sent", "consumers")
+OWN_SOURCES = ("terminals", "waits", "workers", "state", "board", "sent", "consumers", "handles")
 IDLE_MIN = dash.IDLE_MIN
 SUPERSEDE_MIN = 30
 ORPHAN_H = 24
@@ -103,7 +107,8 @@ RENOTIFY = dt.timedelta(minutes=30)
 SCREEN_READS = 30
 NEEDS_YOU = {"X", "E", "L", "O"}
 LABEL = {"I": "idle", "X": "exited", "S": "superseded", "O": "orphan PR", "D": "no ref", "E": "error loop",
-         "L": "load", "W": "watcher down", "R": "repeat", "H": "stale", "B": "background wait"}
+         "L": "load", "W": "watcher down", "R": "repeat", "H": "stale", "B": "background wait",
+         "T": "dead handle"}
 BGWAIT_WHY = "백그라운드 작업을 기다리지만 깨울 작업이 없음"  # B's reason on the brief's ❔ row
 VERDICT_OF = {"I": "idle", "X": "exited", "S": "superseded", "O": "pr_open_no_session", "R": "stalled", "H": "stalled"}
 # H's two kinds: what the owner's line says, and the reason on the brief's ❔ row (Korean, as the brief is).
@@ -234,6 +239,41 @@ def consumers():
             + [{"what": f"compose {g['project']}", "cpu": g.get("cpu"), "card": g.get("card")} for g in projects])
 
 
+def read_config():
+    """The config, {} when there is no file. Unreadable raises: it does not mean the config holds no handle."""
+    try:
+        return json.loads(CONFIG.read_text())
+    except FileNotFoundError:
+        return {}
+
+
+def config_handles(node, key=""):
+    """(dotted key, value) for each term_ value anywhere in the config, so a key added later needs no list here."""
+    if isinstance(node, dict):
+        for k, v in node.items():
+            yield from config_handles(v, f"{key}.{k}" if key else k)
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            yield from config_handles(v, f"{key}[{i}]")
+    elif isinstance(node, str) and node.startswith("term_"):
+        yield key, node
+
+
+def dead_handles(config, terminals, readable=True):
+    """(dead [(key, value)], warning). A list that was not read, or was cut short, says nothing about a handle."""
+    handles = list(config_handles(config))
+    if handles and not readable:
+        return [], f"config handles not checked: Orca's terminal list is unread or cut short ({len(handles)} handle(s))"
+    live = {t.get("handle") for t in terminals}
+    return [h for h in handles if h[1] not in live], None
+
+
+def terminal_rows(facts):
+    listing = prog.orca_json("terminal", "list")
+    facts["terminals_cut"] = bool(listing.get("truncated"))
+    return listing["terminals"]
+
+
 def read_board():
     """board.json, {} when there is none; an unreadable one raises, so D keeps its findings and clocks."""
     try:
@@ -271,7 +311,13 @@ def gather(now, deadline, memo):
             if source:
                 timings[source] = round(timings.get(source, 0) + time.monotonic() - t0, 2)
 
-    facts["terminals"] = take("orca terminal list", lambda: prog.orca_json("terminal", "list")["terminals"], [], "terminals")
+    facts["terminals"] = take("orca terminal list", lambda: terminal_rows(facts), [], "terminals")
+    config = take("agent-skills.json", read_config, {}, "handles")
+    facts["dead_handles"], warning = dead_handles(config, facts["terminals"],
+                                                  "terminals" not in failed and not facts.get("terminals_cut"))
+    if warning:
+        notes.append(warning)
+        failed.add("handles")
     facts["waits"] = take("orca worktree ps --agent-wait", lambda: prog.agent_waits(strict=True), {}, "waits")
     facts["workers"] = take("orca worker-list", lambda: all_workers(deadline), [], "workers")
     t0 = time.monotonic()
@@ -492,7 +538,7 @@ def judge(facts, memo):
     doing_noref, shut = [], tidy.closed() if facts["board"] else {}
     for d in (facts["board"].get("doing") or []):
         text = f"{d.get('title')} {d.get('next') or ''}"
-        if d.get("waiting") or fleet.pr_refs(text) or tidy.named(text, cards):
+        if d.get("waiting") or fleet.pr_refs(text) or tidy.doing_card(d, cards):
             continue
         iid = tidy.item_id("doing", d)
         if iid in shut:
@@ -540,6 +586,9 @@ def judge(facts, memo):
             add("W", None, (int(last[0]) if last else 0,), "orch watch-cards " + (
                 f"last finished a round {int((now - last[0]) // 60)} min ago" if last else "never ran here")
                 + ": the orchestrator restarts it (run_in_background, no pipe)", h)
+    for key, value in facts.get("dead_handles") or ():
+        add("T", None, (value,), f"{value[:12]}… is not in `orca terminal list`, so what is sent there has no reader; "
+            "set it to run:<id>", key)
     return findings, {"cards": verdicts, "hints": hints, "check": check, "failed": sorted(failed),
                       "doing_noref": doing_noref, "load": load, "activity": act}, new_memo
 
@@ -588,7 +637,8 @@ def sync_needs_you(rows=None):
 # The sources each rule reads: a finding whose source failed this round is kept, not cleared.
 DEPENDS = {"I": {"terminals", "workers", "waits"}, "X": {"terminals", "workers"}, "S": {"terminals", "sent"},
            "O": {"state", "terminals"}, "D": {"state", "board"}, "E": {"terminals"}, "L": {"consumers", "terminals", "workers", "waits"},
-           "W": {"state"}, "R": {"terminals", "workers", "waits"}, "H": {"terminals", "waits"}, "B": {"terminals", "waits"}}
+           "W": {"state"}, "R": {"terminals", "workers", "waits"}, "H": {"terminals", "waits"}, "B": {"terminals", "waits"},
+           "T": {"terminals", "handles"}}
 
 
 def write_round(findings, verdicts, dry, now, failed=()):
