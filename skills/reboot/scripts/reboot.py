@@ -297,7 +297,13 @@ def check_workers(run, call, lead_dispatch=None, me=None):
     for w in workers:
         h = orca_settings.worker_terminal(w)
         state, status = w.get("terminalState"), w.get("dispatchStatus")
-        if state == "released" or (h and h == me):
+        if h and h == me:
+            continue
+        if state == "released" and status not in RESTART_LOST:
+            continue
+        if state == "released":  # the terminal resource is freed, which is not a report: unfinished work may remain
+            out.append(("info", f"worker {w.get('dispatchId') or '<dispatch>'} is abandoned and its terminal was released: "
+                                "resume it (reboot SKILL.md \"Resume a worker\") if its work is unfinished"))
             continue
         if status in FINISHED:  # it reported: a dead terminal is its normal end, not something to wake
             finished += 1
@@ -329,13 +335,9 @@ def check_workers(run, call, lead_dispatch=None, me=None):
                               f"{parent.get('dispatchId')}: send that lead this line, and it restarts its own worker"))
             continue
         if abandoned:  # Orca settled it when its terminal went: there is nothing to stop or retry, only a session to resume
-            try:
-                agents = card_agents(call, wt)
-                resumed = has_dispatch(call, agents, wt, observed(w))
-            except (OrcaError, RuntimeError, SystemExit) as e:  # unreadable is not "nothing there": no command from a guess
-                out.append(("info", f"worker {d} (task {task}) is abandoned, but Orca could not say whether its worktree "
-                                    f"already runs a resumed session ({e}): run this check again"))
-                continue
+            # An unreadable list is not an empty one: OrcaError ends the check with exit 2, issuing no command from a guess.
+            agents = card_agents(call, wt)
+            resumed = has_dispatch(call, agents, wt, observed(w))
             if agents:  # a session runs there: resumed, maybe from another Run
                 agent = agents[0] if len(agents) == 1 else "<the handle of the worker's own terminal: " + ", ".join(agents) + ">"
                 if resumed:

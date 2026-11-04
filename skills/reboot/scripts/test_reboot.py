@@ -341,18 +341,21 @@ class Restarted(unittest.TestCase):
     def test_a_cut_short_terminal_list_issues_no_recovery_command(self):
         orca = Orca(run="run_1", workers=[self.row("d1", "abandoned")], here=[])
         orca.truncated = True
-        lines = run("lead", "acme", "run_1", orca=orca, procs=wait_proc(200, "orch wait acme"))
-        self.assertEqual(does(lines), [])
-        self.assertTrue([t for k, t in lines if k == "info" and "could not" in t])
+        with self.assertRaises(reboot.OrcaError):
+            run("lead", "acme", "run_1", orca=orca, procs=wait_proc(200, "orch wait acme"))
 
-    def test_an_unreadable_terminal_or_run_list_issues_no_recovery_command(self):
+    def test_an_unreadable_terminal_or_run_list_ends_the_check_with_orca_not_answering(self):
         live = [{"handle": "term_new", "agentIdentity": "claude"}]
         for attr in ("list_fails", "runs_fail"):
             orca = Orca(run="run_1", workers=[self.row("d1", "abandoned")], here=live)
             setattr(orca, attr, True)
-            lines = run("lead", "acme", "run_1", orca=orca, procs=wait_proc(200, "orch wait acme"))
-            self.assertEqual(does(lines), [], attr)
-            self.assertTrue([t for k, t in lines if k == "info" and "could not" in t and "d1" in t], attr)
+            with self.assertRaises(reboot.OrcaError, msg=attr):  # main() turns it into exit 2
+                run("lead", "acme", "run_1", orca=orca, procs=wait_proc(200, "orch wait acme"))
+
+    def test_a_released_abandoned_worker_is_listed_not_hidden(self):
+        lines = self.lines(self.row("d1", "abandoned", "released"))
+        self.assertEqual(does(lines), [])
+        self.assertTrue([t for k, t in lines if k == "info" and "d1" in t and "released" in t])
 
     def test_a_resumed_session_with_no_dispatch_yet_is_told_to_get_one(self):
         # The run stopped between the terminal and `worker-start --terminal`: the session runs but has no mailbox.
