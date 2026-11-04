@@ -652,8 +652,8 @@ class FakeFleetWorld:
 
     ME = "you-dev"
 
-    def __init__(self, now, crowd=0):
-        self.now, self.step = now, 0
+    def __init__(self, now, crowd=0, layout=False):
+        self.now, self.step, self.layout = now, 0, layout
         ms = lambda h: int((now - dt.timedelta(hours=h)).timestamp() * 1000)
         agent = lambda pane, state, h, **kw: {"paneKey": pane, "state": state, "agentType": "claude", "stateStartedAt": ms(h),
                                               "updatedAt": ms(h / 2), **kw}
@@ -726,6 +726,20 @@ class FakeFleetWorld:
                                          parentWorktreeId="wt-crowd-lead" if i < 4 else None))
                 if state != "offline":
                     self.terminals.append(term(f"term_c{i}", wid, name, agent=state != "open"))
+        self.renamed = {}
+        self.merged_extra = {}
+        if layout:
+            # The shapes that stretched the Sessions table: long branches, a ticket only the name or branch carries, a
+            # repository Orca still names by its old project name, and workers that are offline with a merged PR.
+            for wid, name, branch in (("wt-long1", "ACME-106 reconcile statements", "lead/billing-statements-reconciliation-with-a-very-long-branch-name"),
+                                      ("wt-long2", "ledger notes backfill", "feat/ACME-107-ledger-notes-export-backfill-for-closed-periods")):
+                self.worktrees.append(wt(wid, name, "acme/oldname", branch, 0.3, [agent(f"p-{wid}", "working", 0.3, prompt=f"Implement {name}.")],
+                                         parentWorktreeId="wt-lead"))
+                self.terminals.append(term(f"term_{wid[3:]}", wid, name))
+                self.renamed[f"/work/{wid}"] = "acme/renamed"
+            for i, n in enumerate((110, 111, 112)):
+                self.worktrees.append(wt(f"wt-fin{i}", f"ACME-{n} finished task {i}", "acme/launchpad", f"feat/fin{i}", 5 + i, parentWorktreeId="wt-lead"))
+                self.merged_extra[50 + i] = f"feat/fin{i}"
         user = lambda login: {"__typename": "User", "login": login, "avatarUrl": None}
         review = lambda rid, login, state, h, oid="h41a": {"id": rid, "state": state, "submittedAt": _ago(now, h),
                                                            "author": user(login), "commit": {"oid": oid}}
@@ -760,6 +774,10 @@ class FakeFleetWorld:
         p44 = base(44, "feat: invoice PDF", "h44a", 0.2, "PENDING")
         self.prs = {41: p41, 42: p42, 43: p43, 44: p44, 7: p7, 6: p6}
         self.branches = {"feat/login": 41, "feat/export": 42, "docs/setup": 43, "feat/invoice": 44}
+        for n, branch in self.merged_extra.items():
+            pm = base(n, f"feat: {branch}", f"h{n}a", 4, "SUCCESS")
+            pm.update(state="MERGED", mergedAt=_ago(now, 4), mergeStateStatus="UNKNOWN")
+            self.prs[n], self.branches[branch] = pm, n
         # wt-docs sits in a permission dialog that hooks/permission.py recorded.
         self.screens = {"term_docs": ["⏺ Checking what the package would ship before the guide links to it.", "─" * 60,
                                       " Bash command", "", "   npm publish --dry-run", "   Show what would be published", "",
@@ -958,5 +976,9 @@ class FakeFleetWorld:
                         fetch_monitors=self.fetch_monitors, fetch_sent=self.fetch_sent, ps_table=lambda: {},
                         declared_roles=lambda procs: [])
         f.me = self.ME
-        f.repos = {w["path"]: f"acme/{w['repo']}" for w in self.worktrees}
+        f.repos = {w["path"]: self.renamed.get(w["path"]) or f"acme/{w['repo']}" for w in self.worktrees}
+        if self.layout:  # two subagents the lead started and nobody saw stop: one old enough to count as stale, one running
+            fleet.write_atomic(fleet.state_dir() / fleet.SUBAGENTS, "".join(json.dumps({
+                "v": 1, "event": "start", "at": _ago(self.now, h), "agent": aid, "type": "general-purpose", "handle": "term_lead",
+                "desc": desc}) + "\n" for aid, h, desc in (("sa1", 19, "check the release script"), ("sa2", 0.1, "read the billing docs"))))
         return f

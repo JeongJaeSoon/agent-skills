@@ -293,6 +293,6 @@ The new lead's whole prompt is two lines, `/goal orchestrate resume <slug>` and 
 4. `orch status`.
 5. Stop any inbox watcher the program ran before (a Monitor, a script), start the one `orch wait`, and continue at Drain.
 
-After a restart of the session, Orca or the machine, or an automatic compaction, run `agent-skills:reboot` before anything else.
+After a restart of the session, Orca or the machine, or an automatic compaction, run `agent-skills:reboot` before anything else. A lead started as a dispatched worker that lost its Dispatch in the restart must not `run-use` its coordinator's Run (step 2): `reboot` sends it to `orca orchestration run-create`, then `orch set <slug> run <the new Run>`, which takes only the Run this terminal is bound to and drops `lead_dispatch`. Never edit `program.json` by hand for it.
 
 Whenever the note's policy, ceiling, deadline, predicate or exclusive paths change mid-run, mirror them with `orch set` in the same turn. Workers report to the Run inbox, not to a session name, so nothing needs re-pointing. The old lead ends only after the new one has printed `status`.

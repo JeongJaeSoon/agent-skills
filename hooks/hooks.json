@@ -84,6 +84,9 @@
       { "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/record_check.py\"", "timeout": 5 }] },
       {
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/claim_check.py\"", "timeout": 5 }]
+      },
+      {
+        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/owner_check.py\"", "timeout": 5 }]
       }
     ],
     "SubagentStart": [
@@ -98,6 +101,7 @@
       {
         "hooks": [
           { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/claim_check.py\"", "timeout": 5 },
+          { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/owner_check.py\"", "timeout": 5 },
           { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/subagent_log.py\"", "timeout": 5 }
         ]
       }

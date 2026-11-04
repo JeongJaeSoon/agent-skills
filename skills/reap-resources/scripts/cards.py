@@ -182,6 +182,9 @@ def gather(w, m, run=None):
     if ref and pr is None:
         return {**f, "pr": ref, "pr_unread": f"PR {ref} 상태를 읽지 못함"}
     f.update(pr=ref, state=pr and pr["state"], pr_head=pr and pr.get("headRefOid"))
+    if (d := m.get("recovering", {}).get(p)) and (status or f["state"] == "OPEN"):
+        # Its terminals are the resume's to use, and the tree or PR is the work the resume goes on with.
+        return {**f, "protected": f"복구 전 워커({d})의 카드: 미커밋 변경 또는 열린 PR"}
     if ref and f["pr_head"] and head != f["pr_head"]:
         # HEAD behind the PR's head is the PR's work; HEAD past it is new work on a reused branch name.
         f["carried"] = run(["git", "-C", p, "merge-base", "--is-ancestor", head, f["pr_head"]]) is not None
@@ -291,8 +294,9 @@ def read_machine(cfg, now=None):
     # The patrol read the guard before a close makes (activity included): a card patrol keeps is a keep here, not a
     # delete that apply then refuses.
     return {"now": now, "st": settings(cfg), "rows": reap.processes(), "cwd_of": reap.cwds(), "live": live,
-            "unreleased": unreleased,
-            "patrol": reap.patrol_states(now, activity=True), "refused": rm_refused.read(reap.STATE), "workers_unread": workers is None, "runners": reap.automation_workspaces(reap.orca_json("automations", "list")),
+            "unreleased": unreleased, "recovering": reap.recovering_worktrees(workers or []),
+            "patrol": reap.patrol_states(now, activity=True), "refused": rm_refused.read(reap.STATE),
+            "workers_unread": workers is None, "runners": reap.automation_workspaces(reap.orca_json("automations", "list")),
             "self": top and reap.real(top.strip()), "pr_state": reap.pr_reader(), "projects": projects,
             "quiet": reap.transcript_quiet(projects, now, reasons=True)}
 

@@ -210,9 +210,29 @@ def turning(a):
     return not isinstance(main, dict) or main.get("state", "working") == "working"
 
 
+SELF_NOTE = ""  # why the last active_turns could not leave the caller's own turn out; "" when it did
+
+
+def own_pane(run=sh):
+    """The caller's pane key as `orca worktree ps` prints it (tab id:leaf id), from the terminal handle Orca puts in
+    the session's environment; None when either step cannot say."""
+    handle = os.environ.get("ORCA_TERMINAL_HANDLE")
+    if not handle:
+        return None
+    try:
+        t = json.loads(run(["orca", "terminal", "show", "--terminal", handle, "--json"], timeout=5) or "")["result"]["terminal"]
+        return f"{t['tabId']}:{t['leafId']}"
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
 def active_turns(run=sh):
-    """Agent turns Orca shows in progress (see turning) over every card; None when Orca cannot say, a cut-short list
-    included."""
+    """Agent turns Orca shows in progress (see turning) over every card except the caller's own; None when Orca cannot
+    say, a cut-short list included. The caller asks to start a card, so its running turn is the one that start comes
+    from, not load the start adds. A caller that cannot be identified counts like any other turn and SELF_NOTE says so
+    (`turns --wait` runs while the caller's turn is over, so counting it in the gate alone would never agree)."""
+    global SELF_NOTE
+    SELF_NOTE = ""  # reset first: an early return below must not leave the previous poll's warning
     out = run(["orca", "worktree", "ps", "--limit", "10000", "--json"], timeout=5)  # sh gives None when orca is missing
     try:
         data = json.loads(out or "")
@@ -222,7 +242,10 @@ def active_turns(run=sh):
     trees = res.get("worktrees") if isinstance(res, dict) else None
     if not isinstance(trees, list) or res.get("truncated"):
         return None
-    return sum(turning(a) for w in trees if isinstance(w, dict) for a in w.get("agents") or [])
+    own = own_pane(run)
+    SELF_NOTE = "" if own else "호출 세션을 식별하지 못해(ORCA_TERMINAL_HANDLE 없음·조회 실패) 자기 턴도 센다"
+    return sum(turning(a) for w in trees if isinstance(w, dict) for a in w.get("agents") or []
+               if not (own and isinstance(a, dict) and a.get("paneKey") == own))
 
 
 def turn_cap(cfg, cpus=None):
@@ -244,12 +267,16 @@ def turns_wait(cfg, minutes, poll=30.0, now_fn=time.time, sleep=time.sleep, coun
         n = count()
         if not turn_hold(n, cap):
             out(f"진행 중인 에이전트 턴 {'?' if n is None else n}개 / 상한 {cap or '없음'}: 새 카드를 시작해도 된다")
+            if SELF_NOTE:
+                out(f"경고: {SELF_NOTE}")
             return 0
         if now_fn() >= deadline:
             if n is None:
                 out(f"에이전트 턴 수를 {minutes:g}분 동안 셀 수 없음(Orca 응답 없음·목록 잘림) — 시작하지 않는다")
             else:
                 out(f"진행 중인 에이전트 턴 {n}개 ≥ 상한 {cap}, {minutes:g}분 기다려도 줄지 않음 — 시작하지 않는다")
+            if SELF_NOTE:
+                out(f"경고: {SELF_NOTE}")
             return 3
         sleep(poll)
 
@@ -1085,10 +1112,20 @@ def main(argv):
     cmd = argv[0] if argv else ""
     cfg = config(overrides(argv)) if cmd in ("check", "round", "queue", "history", "turns") else None
     if cmd == "turns":
-        if "--wait" in argv[:-1]:
-            return turns_wait(cfg, float(argv[argv.index("--wait") + 1]))
+        if "--wait" in argv:
+            i = argv.index("--wait") + 1
+            try:
+                minutes = float(argv[i]) if i < len(argv) else None
+            except ValueError:
+                minutes = None
+            if minutes is None or not 0 <= minutes < math.inf:  # nan, negatives and inf (a wait with no end) fail
+                print("--wait needs the minutes to wait, e.g. `turns --wait 3`", file=sys.stderr)
+                return 2
+            return turns_wait(cfg, minutes)
         n, cap = active_turns(), turn_cap(cfg)
         print(f"진행 중인 에이전트 턴 {'?' if n is None else n}개 / 상한 {cap or '없음'}")
+        if SELF_NOTE:
+            print(f"경고: {SELF_NOTE}")
         return 1 if turn_hold(n, cap) else 0
     if cmd == "check":
         m = snapshot(cfg, load_state(), idle_fn=live(cfg))

@@ -518,6 +518,8 @@ def gate(cmd, metrics, state, cfg, now=None, p=None, session="", cwd=""):
         py = shlex.join(["python3", str(SCRIPT)])
         seen = (f"진행 중인 에이전트 턴이 {n}개로 상한 {cap}개(`reap.pressure.active_turns_per_cpu`)에 닿아" if n is not None
                 else f"에이전트 턴 수를 셀 수 없어(Orca 응답 없음·목록 잘림, 상한 {cap}개)")
+        if note := getattr(p, "SELF_NOTE", ""):
+            seen += f" (경고: {note})"
         return ("deny", f"{MARK} {SOURCE} {seen} `{what}` 로 새 카드를 시작하지 않는다. 카드마다 테스트·hook·브라우저가 같이 돌아 CPU 가 포화된다. "
                         f"Bash run_in_background 로 `{py} turns --wait {float(cfg['queue_minutes']):g}` 를 실행해 완료 알림을 "
                         "기다리거나 Monitor 로 기다린다(foreground sleep 루프 금지). 0 으로 끝나면 같은 명령을 다시 실행하고, "

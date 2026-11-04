@@ -1,6 +1,6 @@
 # 스킬 카탈로그
 
-`agent-skills` 플러그인이 싣는 스킬 41개(`skills/*/SKILL.md`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 15개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
+`agent-skills` 플러그인이 싣는 스킬 41개(`skills/*/SKILL.md`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 16개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
 
 설정 기본값 변경과 기존 데이터 보존 방법은 [설정 전환 안내](configuration-migration.md)를 따른다. 노트·원장·개인 폴더는 명시 설정이 필요하고, 성과 보고 기본 시간대는 UTC다.
 
@@ -195,6 +195,8 @@ PR 을 맡는 스킬과 머지 주체:
   - Run 바인딩(`run-current`, 없으면 `run-use`)과 오케스트레이터 탭 이름을 본다.
   - 이 세션 프로세스 아래의 inbox 대기(`orch wait`, `orch inbox --wait`)와 `orch watch-cards`가 정확히 하나씩인지 센다. 없으면 시작 명령을, 둘 이상이면 멈출 것을 알려 준다.
   - 터미널을 잃은 워커를 찾아, 같은 카드에서 다시 시작하는 `worker-stop`·`worker-start --retry-of` 쌍을 낸다.
+  - 재시작으로 Dispatch가 `abandoned`가 된 워커를 복구 대상으로 내고(`claude --resume`으로 터미널을 다시 띄운 뒤 `worker-start --terminal`로 새 Dispatch를 붙이는 절차는 SKILL.md), 보고를 마친 워커는 깨우지 않고 구분한다.
+  - Dispatch를 잃은 dispatched 리드는 부모 Run에 `run-use` 하라고 하지 않고, 자기 Run을 만들어 `orch set <slug> run <새 Run>`으로 프로그램을 옮기게 한다.
   - 이 worktree에서 pressure 게이트가 붙잡아 둔 무거운 시작이 대기열에 남았는지 본다.
   - 스크립트가 못 보는 것(재시작으로 끝난 백그라운드 작업·서브에이전트, 프로그램 상태, 머신 재시작 뒤 리드 다시 띄우기, 컴팩션 뒤 순서)은 SKILL.md가 순서만 정하고, 규칙 자체는 `orchestrate`의 해당 절을 가리킨다.
 - **동봉:** `scripts/reboot.py`(읽기 전용 점검)와 테스트.
@@ -539,7 +541,7 @@ PR 을 맡는 스킬과 머지 주체:
 - **하는 일:** 세션들이 직접 읽는 메인 체크아웃을 origin/main과 맞추고, 바뀐 것이 있으면 떠 있는 Claude 세션에 reload를 보낸다. 운영 방식 전체는 `docs/platform.md`.
 - **명령:**
   - `sync`: fetch → ff-only pull 또는 서명 커밋 push. main이 아님, 커밋 안 한 변경, 갈라짐, 서명 없는 커밋, credential helper 없음이면 아무것도 바꾸지 않고 멈춘 뒤 macOS 알림과 `~/.local/state/agent-skills/sync.json`에 남긴다. launchd가 15분마다와 로그인 때 돌린다.
-  - `broadcast [--skills|--plugins] [--dry-run] [--terminal <handle>]`: `SKILL.md`가 바뀌었으면 `/reload-skills`, hook 연결(`hooks/hooks.json`)·플러그인 manifest가 바뀌었으면 `/reload-plugins`를 보낸다. 빈 입력칸, 스피너 없음, 권한·신뢰·질문 창 없음, 입력칸 아래에 셸 없음, 1.5초 간격 두 번 읽은 화면이 같음을 모두 확인한 세션에만 보내고, 나머지는 `reload-pending.json`에 남겨 다음에 다시 시도한다. `--terminal <handle>`이면 그 세션 하나에만 보낸다. 스킬을 고친 세션이 턴을 끝낸 뒤 자기 handle로 돌려 스스로 reload하는 데 쓴다(`write-skill` §7).
+  - `broadcast [--skills|--plugins] [--dry-run] [--terminal <handle>]`: `SKILL.md`가 바뀌었으면 `/reload-skills`, hook 연결(`hooks/hooks.json`)·플러그인 manifest가 바뀌었으면 `/reload-plugins`를 보낸다. 빈 입력칸, 스피너 없음, 권한·신뢰·질문 창 없음, 입력칸 아래에 셸 없음, 1.5초 간격 두 번 읽은 화면이 같음을 모두 확인한 세션에만 보내고, 나머지는 `reload-pending.json`에 남겨 다음에 다시 시도한다. `--terminal <handle>`이면 그 세션 하나에만 보내고, 대기 항목이 없어도(`/reload-plugins`) 이미 새 코드로 보이는 세션이어도 보낸다(그때는 경고 한 줄). 대상 판정의 기준 시각은 agent-skills가 바뀐 시각과 설치된 플러그인의 마지막 갱신 시각 중 늦은 쪽이다. 스킬을 고친 세션이 턴을 끝낸 뒤 자기 handle로 돌려 스스로 reload하는 데 쓴다(`write-skill` §7).
   - `nudge <terminal> <한 줄>`: 같은 확인을 통과한 세션에만 한 줄을 보내고 턴이 시작됐는지 본다.
   - `wake-target <terminal>`, `wake-check <terminal> [--wait <초>]`, `wake-reset <terminal>`: Claude 카드를 깨우는 신호의 경로를 고르고, SendMessage로 보낸 신호가 턴을 시작했는지 받는 세션의 transcript에서 확인한다. 보내는 일은 세션이 도구로 한다. `agent-skills.json`의 `wake.transport`가 `sendmessage`일 때만 그 경로를 쓰고 기본값은 `terminal`이다. 절차는 `skills/orchestrate/references/waking.md`.
   - `status`: 마지막 동기화 결과와 남은 reload.
@@ -684,6 +686,14 @@ Bash의 `sed`나 heredoc으로 고친 파일은 수정으로 세지 않는다. �
 - 검사 대상: 기록 줄 없는 `worker_done` 본문(변수·파일 본문은 없는 것으로 본다), 기록 명령과 종료 명령(`orca worktree rm`, `orca terminal close`)을 한 호출에 넣은 것, 미결 의무가 남은 채 이 세션이나 그 경로 아래 세션을 닫는 것, 미결 의무를 두고 끝나는 턴.
 - 수준 `guard.record_check`: `warn`(기본: 보내기·닫기 전에는 모델에게 알리고, Stop에서는 사람에게 보이는 경고와 관찰 행만), `deny`(호출 거부, Stop은 한 번 block), `ask`, `off`. 한 주 동안 `$AGENT_SKILLS_STATE/record-check.jsonl`의 warn 행을 보고 deny로 올린다.
 - 보장하는 것은 "기록 결과를 보고했다"이지 "기록했다"가 아니다. 진위는 리드의 reconcile이 본다. 백그라운드로 띄운 머지의 완료, id로만 가리킨 종료 대상은 따라가지 않는다.
+
+### 오너 항목 기록 검사
+`hooks/owner_check.py`(Stop, SubagentStop). 모델을 부르지 않고 아무 저장소도 읽지 않는다. 최종 응답에만 있고 보드·결정 등록·인박스에 없는 오너 항목은 다음 compaction에서 사라진다. 이 훅은 그런 턴을 센다.
+
+- 오너 항목은 응답의 한 줄이다: `🙋`, "오너 할 일", 오너에게 묻는 표현(`오너에게 묻`, `오너 결정 필요`, `ask the owner`, `owner approval needed`). 코드·인용·표의 행(상태는 기록에서 파생된다), "없음"만 말하는 줄(`🙋 지금 오너가 할 일 — 없음`), 상태 범례(`🔄 진행 · 🙋 오너 차례`)는 세지 않는다.
+- 이번 턴(사람이 마지막으로 친 프롬프트 뒤)에 거부되지 않은 Bash 호출이 `orch decide add`, `orch board now`, `orch board set … --owner`, `orch gate`, `orca orchestration gate-create`, `orch-dash inbox add` 중 하나를 돌렸으면 통과한다. 항목과 기록을 짝짓지 않고, 호출 하나가 응답 전체를 덮는다.
+- 수준 `guard.owner_check`: 키가 없으면 `warn`. 사람에게 "owner_check: 기록 안 된 오너 항목 N" 한 줄을 보이고 `$AGENT_SKILLS_STATE/owner-check.jsonl`에 행을 남긴다. 모델에는 닿지 않는다(systemMessage는 모델에 가지 않는다). 오탐률은 이 행으로 잰다. `deny`는 설정 키로만 켜고, claim_check처럼 그 정지를 한 번 막아 모델이 기록하게 한다(`stop_hook_active`면 통과). `off`와 `AGENT_SKILLS_OWNER_CHECK=0`은 끈다.
+- 판정은 문구 매칭이라 오탐과 미탐이 있다. 그래서 warn으로 시작한다.
 
 ## pstack과의 차이
 

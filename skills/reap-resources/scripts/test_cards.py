@@ -456,6 +456,35 @@ for why, code in (("검사를 마치지 못함(PermissionError: x)", 1), ("보�
         raise AssertionError("apply must exit")
 guard.keep, guard.ownership, cards.act, sys.argv = saved_keep, saved_own, saved_act, saved_argv
 
+# A restart abandons the Dispatches whose terminals it took; their cards wait for a resume, so the janitor must not
+# act on them: the resumed session's terminal looks idle (it waits for its instruction), and closing it or reading
+# its state as finished is what the recovery needs undone.
+def dispatch(d, status, wt=CARD, **kw):
+    return {"dispatchId": d, "runId": "run_a", "dispatchStatus": status, "terminalState": "retained",
+            "resource": {"worktreeId": "w::" + wt}, "projection": {"outcome": "failed" if status == "abandoned" else "succeeded"}, **kw}
+
+
+assert reap.recovering_worktrees([dispatch("d_new", "abandoned")]) == {CARD: "d_new"}
+assert reap.recovering_worktrees([dispatch("d_int", "interrupted")]) == {CARD: "d_int"}
+assert reap.recovering_worktrees([dispatch("d_ok", "completed")]) == {}
+# worker-list is newest first: a later Dispatch on the card (the resume, or finished work) ends the wait.
+assert reap.recovering_worktrees([dispatch("d_resume", "dispatched"), dispatch("d_old", "abandoned")]) == {}
+assert reap.recovering_worktrees([dispatch("d_done", "completed"), dispatch("d_old", "abandoned")]) == {}
+assert reap.recovering_worktrees([dispatch("d_other", "abandoned", wt="/other-card"), dispatch("d_ok", "completed")]) == \
+    {reap.real("/other-card"): "d_other"}
+# Orca may suffix the worktree id (`<repo>::<path>::workspace:<n>`): the card is the path alone.
+assert reap.recovering_worktrees([dispatch("d_ws", "abandoned", wt=CARD + "::workspace:1")]) == {CARD: "d_ws"}
+recovering = {"recovering": {CARD: "d_old"}}
+v = verdict(machine(prs=OPEN, **recovering), branch_prs=[{**PR, "state": "OPEN"}], terminals=[term("t1", True, 2 * 3600)])
+assert v[0] == cards.KEEP and v[2] == [] and "d_old" in v[1], v  # an open PR: without the guard this closes t1
+v = verdict(machine(prs=MERGED, **recovering), branch_prs=[PR], status=" M a.py\n")
+assert v[0] == cards.KEEP and "d_old" in v[1], v
+# Nothing left to lose once the PR merged and the tree is clean: the card is cleaned as before.
+assert verdict(machine(prs=MERGED, **recovering), branch_prs=[PR])[0] == cards.REMOVE
+# A card whose Dispatch is not waiting for a resume keeps the old verdict.
+v = verdict(machine(prs=OPEN, recovering={}), branch_prs=[{**PR, "state": "OPEN"}], terminals=[term("t1", True, 2 * 3600)])
+assert v[0] == cards.CLOSE, v
+
 # janitor integration: card is the scheduled kind, the old card kinds are not.
 assert "card" in reap.SCHEDULED and "orca-worktree" not in reap.SCHEDULED and "done-card" not in reap.SCHEDULED
 prompt = reap.schedule_prompt(pathlib.Path("/x/reap.py"), pathlib.Path("/s"))
