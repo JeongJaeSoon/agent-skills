@@ -1,6 +1,6 @@
 # 스킬 카탈로그
 
-`agent-skills` 플러그인이 싣는 스킬 41개(`skills/*/SKILL.md`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 8개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
+`agent-skills` 플러그인이 싣는 스킬 41개(`skills/*/SKILL.md`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 12개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
 
 설정 기본값 변경과 기존 데이터 보존 방법은 [설정 전환 안내](configuration-migration.md)를 따른다. 노트·원장·개인 폴더는 명시 설정이 필요하고, 성과 보고 기본 시간대는 UTC다.
 
@@ -13,13 +13,14 @@
               (이 세션은 계속 일하면서 다른 저장소·곁가지로 보낼 때는 dispatch-card)
 프로젝트    orchestrate ─ 워커마다 deliver-ticket ─ orch land ─ main 가디언·QA 리드 ─ 대시보드
               └ 끝나면 measure-delivery
+              └ 재시작·컴팩션 뒤에는 먼저 reboot
 머신 하나   reap-resources(죽은 세션이 남긴 프로세스·Docker·브랜치 정리, resource steward가 주기로)
               secure-fill(브라우저 인증 칸에 비밀값을, 에이전트가 값을 보지 않고)
               tune-automode(분류기 거부를 가장 작은 autoMode 규칙으로, 적용은 사용자가)
               skills-config(agent-skills.json 키·permissions.allow 변경: emit → 사람의 --apply)
               setup-pc(새 PC 한 줄 설치·갱신: dry run diff → 사람의 --apply)
 채팅       watch-mentions(공개 채널의 멘션·이름 언급·참여 스레드 새 답글을 오케스트레이터나 리드에게 한 통으로)
-어디서나    record-progress(언제 무엇을 남기나) → use-tracker(티켓) · use-notes(노트) · pstack 스킬(설계·검토·검증·회고)
+어디서나    end-session references/record.md(언제 무엇을 남기나, record_check hook) → use-tracker(티켓) · use-notes(노트) · pstack 스킬(설계·검토·검증·회고)
 ```
 
 PR 을 맡는 스킬과 머지 주체:
@@ -29,7 +30,7 @@ PR 을 맡는 스킬과 머지 주체:
 | deliver-ticket | 이 세션이 작업 중인 내 PR: 작성, 리뷰 대응, 머지, 릴리스 | 세션이 §5 대로 (`gh pr merge`, 스택은 `gh stack merge`) |
 | watch-prs | 정기 회차가 모은 대기 PR: 나를 지명한 리뷰 요청, 리뷰를 기다리는 내 PR(의뢰·리마인드), 머지 준비가 된 내 PR | `merge_repos` 게이트를 모두 통과한 내 PR 만 |
 | orchestrate | 프로그램 워커의 PR | `orch land`, 또는 사람이 승인한 plain merge |
-| handoff-ticket · record-progress | PR 을 만들지 않는다. 다음 카드를 정하거나 열림·리뷰·머지를 기록한다 | 하지 않는다 |
+| handoff-ticket | PR 을 만들지 않는다. 다음 카드를 정한다 | 하지 않는다 |
 
 - deliver-ticket ↔ watch-prs: 살아 있는 worktree 에 브랜치가 체크아웃된 PR 은 그 세션이 머지한다. watch-prs 는 그 PR 을 건너뛴다.
 - orchestrate ↔ watch-prs: 프로그램 원장에 있는 PR 은 `orch land` 가 머지한다. watch-prs 는 멈춘 프로그램의 PR 도 머지하지 않고 리마인드만 보낸다. 원장에 `stale_days` 동안 기록이 없는 프로그램은 버려진 것으로 보고, 그 PR 은 다시 watch-prs 의 리마인드·머지 대상이 된다.
@@ -124,11 +125,7 @@ PR 을 맡는 스킬과 머지 주체:
   - 브리프에 `CLOSE` 줄이 있는 카드(`dispatch-card`, 오케스트레이터나 리드가 `worktree create`로 띄운 카드)도 완료 기준을 채우면 같은 턴에 스스로 닫는다. 정리를 부모 세션에 넘기지 않는다.
   - 끝내기 전에 이 세션이 띄운 백그라운드 서브에이전트, 만든 git worktree, 띄운 자식 카드를 확인한다.
   - 보고를 먼저 쓰고 종료 명령을 마지막 도구 호출로 실행한다.
-- **관계:** 무엇을 어디에 남길지는 `record-progress`가 정한다.
-
-### record-progress
-- **언제:** PR을 열었을 때, 리뷰를 요청했을 때, 머지·배포를 확인했을 때, 조사·설계가 결론에 닿았을 때, 후속 작업이 생겼을 때. "티켓 갱신해줘", "작업 기록 남겨줘", "KB에 정리해줘", 대상 없는 "정리해줘"도 여기로 온다. 세션을 닫는 일은 `end-session`이다.
-- **내용:**
+- **기록 규칙(`references/record.md`, 예전 `record-progress` 스킬):** 스킬 목록에서 뜬 적이 없어 스킬로서는 없앴고, 본문은 이 파일로 옮겼다. `deliver-ticket`은 마일스톤마다, `orchestrate`는 `worker_done`과 사람의 결정마다, `use-notes`는 조사·설계가 결론에 닿을 때, `end-session`은 닫기 전에 이 파일을 읽는다. 대상 없는 "정리해줘"·"마무리해줘", "작업 기록 남겨줘", "log this"는 이 파일만 하고 세션을 닫지 않는다. "티켓 갱신해줘"는 `use-tracker`, "노트에 남겨줘"·"KB에 정리해줘"는 `use-notes`로 간다.
   - 트래커에는 상태와 그 근거를, 노트에는 판단의 이유(채택안, 버린 안, 함정, 실측값)를 남긴다. 티켓 상태를 노트에 옮겨 적지 않고 링크한다.
   - 읽기만 한 세션, 결론이 안 난 조사는 기록하지 않고 그렇게 한 줄로 말한다.
   - 작업 이력은 활성 트래커 한 곳에만 남긴다. 같은 일을 다른 시스템(Jira 옆의 GitHub Issues)에 따로 올리지 않는다.
@@ -137,7 +134,8 @@ PR 을 맡는 스킬과 머지 주체:
   - 후속 작업은 완료 조건에 대어 NOW·LATER·DROP으로 나눈다. 완료 조건이 없는 에픽은 그것부터 쓰고, 지난 보고 뒤 늘어난 NOW는 어느 완료 조건 항목에 쓰이는지 적거나 LATER로 옮긴다. 완료 조건을 다 채운 에픽은 보류 줄이 남아 있어도 닫는다. 에픽은 "N/M 완료 조건 충족"으로 보고한다.
   - 설정이나 사용자 지시가 트래커·노트 쓰기 담당 에이전트를 정하면 둘을 한 메시지에서 백그라운드로 띄운다. 티켓마다 따로 띄우지 않고 각각 한 번에 넘기며, 되물어 오면 사실을 채워 다시 보낸다.
   - 기록은 채팅에 올리지 않는다. 팀에 알리는 일은 따로 판단한다.
-- **관계:** 쓰기는 `use-tracker`(Milestones, Reconcile, Exit condition)와 `use-notes`. `end-session` §3이 닫기 전에 이 스킬로 기록을 남긴다.
+  - 보고(그리고 모든 `worker_done` 본문)는 줄 머리에 `기록: …`, `기록: 없음 (<이유>)`, `기록 못 함: <이유>` 중 한 줄을 둔다. 노트 저장소 도구가 연결되지 않았거나 쓰기 권한이 없으면 `기록 못 함`이다. `hooks/record_check.py`가 이 줄을 읽는다(아래 "기록 줄 검사").
+- **관계:** 쓰기는 `use-tracker`(Milestones, Reconcile, Exit condition)와 `use-notes`.
 
 ## 프로젝트 하나 (Orca 워커 여러 개)
 
@@ -189,6 +187,18 @@ PR 을 맡는 스킬과 머지 주체:
   - 새어 나간 결함 후보(Bug 라벨, main CI 실패, revert)를 찾는다.
   - PR당 사용 가능한 로컬 transcript의 토큰을 집계한다. 측정하지 못한 세션은 0으로 단정하지 않는다.
   - Linear에서 정확한 종료 시각이 필요하면 MCP로 뽑은 파일을 쓴다. 요청받은 숫자를 먼저 보여 주고 보고서는 노트에 저장한다.
+
+### reboot
+- **언제:** 세션·Orca·머신이 재시작됐거나 컴팩션이 일어난 직후, 다른 일보다 먼저. "재시작했어", "Orca 재시작했어", "세션 다시 띄웠어", "복구 점검해줘". 무슨 일을 하던 중이었는지 되짚는 것은 `recall`이다.
+- **내용:** 재시작은 일 자체는 그대로 두고, 일을 굴리는 장치를 떨어뜨린다. `scripts/reboot.py`가 그 장치를 한 번에 읽기만 하고 점검한 뒤, 고칠 것마다 칠 명령을 한 줄씩 낸다(`--slug <slug>`는 리드, `--top`은 오케스트레이터, 없으면 워커).
+  - 이 터미널의 handle이 Orca 재시작으로 stale이 됐는지 본다. stale이면 이 worktree의 살아 있는 터미널을 알려 준다.
+  - Run 바인딩(`run-current`, 없으면 `run-use`)과 오케스트레이터 탭 이름을 본다.
+  - 이 세션 프로세스 아래의 inbox 대기(`orch wait`, `orch inbox --wait`)와 `orch watch-cards`가 정확히 하나씩인지 센다. 없으면 시작 명령을, 둘 이상이면 멈출 것을 알려 준다.
+  - 터미널을 잃은 워커를 찾아, 같은 카드에서 다시 시작하는 `worker-stop`·`worker-start --retry-of` 쌍을 낸다.
+  - 이 worktree에서 pressure 게이트가 붙잡아 둔 무거운 시작이 대기열에 남았는지 본다.
+  - 스크립트가 못 보는 것(재시작으로 끝난 백그라운드 작업·서브에이전트, 프로그램 상태, 머신 재시작 뒤 리드 다시 띄우기, 컴팩션 뒤 순서)은 SKILL.md가 순서만 정하고, 규칙 자체는 `orchestrate`의 해당 절을 가리킨다.
+- **동봉:** `scripts/reboot.py`(읽기 전용 점검)와 테스트.
+- **관계:** `orchestrate`의 핵심 규칙 6, Drain, Resume이 재시작 뒤 할 일을 이 스킬로 넘긴다. `reap-resources`의 pressure 대기열을 읽는다.
 
 ## 머신 하나
 
@@ -650,6 +660,15 @@ Bash의 `sed`나 heredoc으로 고친 파일은 수정으로 세지 않는다. �
 
 ### 문체 검사
 `hooks/prose_check.py`(PreToolUse, `Bash`와 Linear·Jira MCP). `gh pr create|edit`(`--title`, `--body`, `--body-file`), `git commit`(`-m`, `-F`, heredoc), Linear·Jira에 이슈·댓글·문서를 저장하는 호출의 본문에서 `write-plainly`의 결정적 금지 패턴(em dash, 둥근 따옴표, 굵은 라벨+콜론, "다양한"·"를 통해"·"해당" 같은 상투어와 번역투, 영어 AI 어휘와 군더더기)을 찾는다. 코드 블록과 인라인 코드는 보지 않는다. 걸리면 `additionalContext`로 알리기만 하고 호출을 막거나 권한을 결정하지 않는다. 이 알림은 모델에게 "PreToolUse:Bash hook additional context: …"로 보인다(헤드리스 세션에서 확인). `AGENT_SKILLS_PROSE_CHECK=0`으로 끈다.
+
+### 기록 줄 검사
+`hooks/record_check.py`(PreToolUse·PostToolUse·PostToolUseFailure의 Bash, Stop, SubagentStop). 모델을 부르지 않고, 트래커·노트 저장소·Orca·GitHub를 읽지 않는다. `~/.claude/agent-skills.json`에 `tracker`나 `notes` 객체가 없으면 꺼진다.
+
+- `gh pr merge`(`--auto`·`--disable-auto` 제외), `gh pr create`, `orch land`가 돌면 그 세션·에이전트에 "기록 의무"를 남기고, 설정된 목적지와 `end-session` `references/record.md`를 짚는 안내를 모델 컨텍스트에 넣는다. 실패한 호출은 명령이 둘 이상일 때만 의무를 남긴다.
+- 의무는 보고의 기록 줄로만 닫힌다: 줄 머리의 `기록: …`, `기록 못 함: <이유>`(영어 `Recorded:`·`Not recorded:`), 코드 블록과 인용 밖, 콜론 뒤가 비어 있지 않을 것. 최종 응답, 혼자 보낸 `worker_done`의 본문, 종료 명령 직전의 이번 턴 텍스트에서 읽는다.
+- 검사 대상: 기록 줄 없는 `worker_done` 본문(변수·파일 본문은 없는 것으로 본다), 기록 명령과 종료 명령(`orca worktree rm`, `orca terminal close`)을 한 호출에 넣은 것, 미결 의무가 남은 채 이 세션이나 그 경로 아래 세션을 닫는 것, 미결 의무를 두고 끝나는 턴.
+- 수준 `guard.record_check`: `warn`(기본: 보내기·닫기 전에는 모델에게 알리고, Stop에서는 사람에게 보이는 경고와 관찰 행만), `deny`(호출 거부, Stop은 한 번 block), `ask`, `off`. 한 주 동안 `$AGENT_SKILLS_STATE/record-check.jsonl`의 warn 행을 보고 deny로 올린다.
+- 보장하는 것은 "기록 결과를 보고했다"이지 "기록했다"가 아니다. 진위는 리드의 reconcile이 본다. 백그라운드로 띄운 머지의 완료, id로만 가리킨 종료 대상은 따라가지 않는다.
 
 ## pstack과의 차이
 

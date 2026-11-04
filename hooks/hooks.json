@@ -23,18 +23,30 @@
       {
         "matcher": "Bash",
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/stack_gate.py\"", "timeout": 10 }]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/record_check.py\"", "timeout": 5 }]
       }
     ],
     "PostToolUse": [
       {
         "matcher": "Bash",
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/pressure_gate.py\"", "timeout": 5 }]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/record_check.py\"", "timeout": 5 }]
       }
     ],
     "PostToolUseFailure": [
       {
         "matcher": "Bash",
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/pressure_gate.py\"", "timeout": 5 }]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/record_check.py\"", "timeout": 5 }]
       }
     ],
     "PermissionRequest": [
@@ -61,6 +73,7 @@
       }
     ],
     "Stop": [
+      { "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/record_check.py\"", "timeout": 5 }] },
       {
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/claim_check.py\"", "timeout": 5 }]
       }
@@ -71,6 +84,9 @@
       }
     ],
     "SubagentStop": [
+      {
+        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/record_check.py\"", "timeout": 5 }]
+      },
       {
         "hooks": [
           { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/claim_check.py\"", "timeout": 5 },
