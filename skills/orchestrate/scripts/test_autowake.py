@@ -115,15 +115,22 @@ done = w.rows("auto_wake")
 assert len(done) == 1, done
 e = done[0]
 assert e["dispatch"] == "ctx_1" and e["ticket"] == "ABC-1" and "16 min" in e["reason"] and e["route"] == "terminal", e
-assert prog.parse_ts(e["marked_at"]) == mins(0) and prog.parse_ts(e["woken_at"]) == mins(10), e
+assert prog.parse_ts(e["marked_at"]) == mins(0), e
+assert mins(10) <= prog.parse_ts(e["woken_at"]) < mins(10) + dt.timedelta(seconds=5), e
 assert r.skip == {"ctx_1"}, "the wake just went out: no STALLED line tells the lead to wake it by hand"
+# The age is the one at the mark, whatever the collector says at the due time.
+w2 = World()
+w2.sweep(0)
+w2.stalls[0]["minutes"] = 26
+w2.sweep(10)
+assert "16 min" in w2.rows("auto_wake")[0]["reason"], w2.rows("auto_wake")
 
 # The same idle, still shown by a collector that has not caught up: no second wake, no human yet.
 r = w.sweep(15)
-assert len(w.sent) == 1 and len(w.synced) == 2 and not w.inbox and r.skip == {"ctx_1"} and r.next_s == 300, r
+assert len(w.sent) == 1 and len(w.synced) == 2 and not w.inbox and r.skip == {"ctx_1"} and 299 < r.next_s < 301, r
 
 # Second stop: no wake; the human gets one item, once, and the ledger says so.
-r = w.sweep(20)
+r = w.sweep(21)
 assert len(w.sent) == 1 and len(w.synced) == 2, "a second idle wakes nobody"
 assert len(w.inbox) == 1 and w.inbox[0][0] == "approval" and w.inbox[0][2] == "auto-wake:ctx_1" and "ABC-1" in w.inbox[0][1], w.inbox
 assert len(w.rows("auto_wake_escalated")) == 1 and r.stop and r.lines, r
@@ -197,6 +204,7 @@ excluded("held ticket", events=[("parked", {"ticket": "ABC-1"})])
 excluded("held PR", events=[("spawned", {"ticket": "ABC-1", "pr": 7}), ("parked", {"pr": 7})])
 excluded("READY in the ledger", events=[("spawned", {"ticket": "ABC-1", "pr": 7}), ("ready", {"pr": 7})])
 excluded("verdict in the ledger", events=[("spawned", {"ticket": "ABC-1", "pr": 7}), ("verdict", {"pr": 7})])
+excluded("READY, then landed", events=[("spawned", {"ticket": "ABC-1", "pr": 7}), ("ready", {"pr": 7}), ("landed", {"pr": 7})])
 ready = {"id": "m2", "type": "status", "from_handle": "term_1", "subject": "READY at abc", "body": "x",
          "created_at": mins(-5).isoformat(), "payload": json.dumps({"dispatchId": "ctx_1"})}
 excluded("READY mail", world={"mail": [ready]})
@@ -243,7 +251,7 @@ w.sweep(0)
 w.sweep(10)
 w.p.append("spawned", ticket="ABC-1", pr=7)
 w.p.append("ready", pr=7)
-r = w.sweep(20)
+r = w.sweep(21)
 assert not w.inbox and not w.rows("auto_wake_escalated"), r
 # A wake that is still a silent row after N minutes is that same second stop.
 w = World()
@@ -251,7 +259,7 @@ w.sweep(0)
 w.sweep(10)
 w.stalls[0]["kind"] = "silent"
 w.workers[0]["projection"]["stage"]["activity"] = "idle"
-w.sweep(20)
+w.sweep(21)
 assert len(w.inbox) == 1
 
 
@@ -279,6 +287,31 @@ r = w.sweep(10)
 assert not w.synced, "no signal without the content"
 assert len(w.inbox) == 1 and "send failed" in w.rows("auto_wake_failed")[0]["why"]
 
+# A human inbox that cannot be written leaves no row claiming it was told: the next round tells it.
+w = World()
+w.sweep(0)
+w.sweep(10)
+autowake_human, autowake.human = autowake.human, lambda *a: 1 / 0
+try:
+    w.sweep(21)
+except ZeroDivisionError:
+    pass
+autowake.human = autowake_human
+assert not w.rows("auto_wake_escalated")
+w.sweep(21)
+assert len(w.rows("auto_wake_escalated")) == 1 and len(w.inbox) == 1, w.inbox
+w = World(nudge=1)
+w.sweep(0)
+autowake_human, autowake.human = autowake.human, lambda *a: 1 / 0
+try:
+    w.sweep(10)
+except ZeroDivisionError:
+    pass
+autowake.human = autowake_human
+assert not w.rows("auto_wake_failed") and len(w.rows("auto_wake_claimed")) == 1
+w.sweep(21)
+assert len(w.inbox) == 1 and len(w.sent) == 1, "the failed attempt reaches the human by the second stop, unsent again"
+
 # route: sendmessage: this process has no SendMessage, which waking.md step 3 sends to wake-reset and the typed signal.
 w = World(routes=("route: sendmessage\nto: worker\nmessage: wake abc: run your orchestration check\ncheck: x",))
 w.sweep(0)
@@ -299,7 +332,7 @@ del w.sync
 assert len(w.rows("auto_wake_claimed")) == 1 and not w.rows("auto_wake")
 w.sweep(11)
 assert len(w.sent) == 1 and not w.synced, "the claim holds: no second attempt"
-w.sweep(20)
+w.sweep(21)
 assert len(w.inbox) == 1, w.inbox
 # Two rounds racing for one dispatch: the lock lets one claim through, and it does not deadlock inside append.
 w = World()
@@ -318,13 +351,14 @@ assert prog.next_moves([idle], {"w4"}) == ["  w4 idle: auto-wake holds it (orch 
 assert "wake-target" in prog.next_moves([idle])[0]
 
 
-def wait(w, cfg, rounds=1):
-    """cmd_wait over one empty round; returns (printed, the --timeout-ms it blocked with)."""
+def wait(w, cfg, rounds=1, mail=()):
+    """cmd_wait over one round, empty unless mail is given; returns (printed, the --timeout-ms it blocked with)."""
     config.write_text(cfg)
     seen = []
+    batch = {"deliveryId": "dv1", "messages": list(mail)} if mail else {"deliveryId": None, "messages": []}
     saved = prog.check, prog.ensure_dash, prog.print_stuck, prog.print_sweep, prog.print_reviews, prog.watch_lines, \
         prog.run_workers, prog.own_worker, prog.all_workers, prog.new_leftovers, autowake.orca, autowake.sync
-    prog.check = lambda *a: (seen.append(a), {"deliveryId": None, "messages": []})[1]
+    prog.check = lambda *a: (seen.append(a), batch)[1]
     prog.ensure_dash, prog.print_stuck, prog.print_sweep = lambda: None, lambda *a, **k: [], lambda *a, **k: None
     prog.print_reviews, prog.watch_lines = lambda p: None, lambda *a: []
     prog.run_workers = prog.all_workers = lambda run: w.workers
@@ -369,5 +403,14 @@ config.write_text('{"orchestrate": {"auto_wake_min": 10}}')
 text, waits = wait(w, '{"orchestrate": {"auto_wake_min": 10}}')
 autowake.sweep = saved
 assert "auto-wake failed" in text and waits, text
+# Nor the batch: a question still prints whole with its ack line, with the sweep broken or not.
+question = {"id": "m9", "type": "question", "subject": "which?", "body": "a or b"}
+w = World(stalls=[])
+autowake.sweep = lambda *a: 1 / 0
+text, _ = wait(w, '{"orchestrate": {"auto_wake_min": 10}}', mail=[question])
+autowake.sweep = saved
+assert "auto-wake failed" in text and "INBOX id=m9" in text and "ACTIONABLE delivery=dv1" in text, text
+text, _ = wait(World(), "{}", mail=[question])
+assert "INBOX id=m9" in text and "--ack dv1" in text and autowake.OFF_LINE not in text, text
 
 print("test_autowake: ok")

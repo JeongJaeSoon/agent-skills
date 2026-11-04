@@ -9,7 +9,7 @@ times, which the ledger has no row for until the wake.
 Rows, each with `dispatch`: auto_wake_claimed (written before the act, so a crash can never mean two wakes),
 auto_wake (dispatch, ticket, reason, marked_at, woken_at, route), auto_wake_failed, auto_wake_escalated.
 """
-import dataclasses, datetime as dt, json, os, pathlib, re, subprocess, sys, tempfile
+import dataclasses, datetime as dt, json, os, pathlib, re, subprocess, sys, tempfile, time
 
 import prog
 
@@ -134,7 +134,8 @@ class Facts:
             return "held"
         # A verdict alone counts: a READY stop on a PR that never reached `land-check` has no `ready` row. A row
         # from before the worker went back to work holds it too; that costs a hand wake, never a wrong one.
-        if any(s["pr"] in prs for s in prog.ready_prs(self.events)):
+        state = prog.pr_state(self.events)
+        if any("ready" in state[pr] or "verdict" in state[pr] for pr in prs):
             return "READY reported"
         return None
 
@@ -205,16 +206,17 @@ def wake(p, d, x, mark, n, now, r, workers):
         return
     handle = next(prog.worker_terminal(w) for w in workers if w.get("dispatchId") == d)
     message = f"Brief: {p.dir / 'briefs' / f'{ticket}.md'}. Continue with the next step from where you stopped."
+    started = time.monotonic()
     try:
         route = attempt(d, handle, message)
     except (Failed, OSError, subprocess.SubprocessError, SystemExit) as e:
+        human(f"자동 깨우기 실패: {ticket} ({d})", d)  # before the row: an inbox that fails leaves second_stop to retry
         p.append("auto_wake_failed", dispatch=d, ticket=ticket, why=str(e)[:300])
-        human(f"자동 깨우기 실패: {ticket} ({d})", d)
         r.lines.append(f"AUTO-WAKE {d} ({ticket}): failed, not retried: {str(e)[:200]}; it is on the human's Needs you")
         r.stop = True
         return
-    p.append("auto_wake", dispatch=d, ticket=ticket, reason=f"turn ended {x.get('minutes')} min before the mark, task open",
-             marked_at=marked, woken_at=stamp(now), route=route)
+    p.append("auto_wake", dispatch=d, ticket=ticket, reason=f"turn ended {mark.get('idle_min')} min before the mark, task open",
+             marked_at=marked, woken_at=stamp(now + dt.timedelta(seconds=time.monotonic() - started)), route=route)
     r.lines.append(f"AUTO-WAKE {d} ({ticket}): woken once ({route}); a second stop goes to the human")
     r.hold(d, n * 60)
 
@@ -230,8 +232,8 @@ def second_stop(p, d, x, done, n, now, r, facts):
     ticket = x.get("ticket")
     if facts.why_not(d, ticket):
         return
+    human(f"자동 깨우기 뒤 다시 멈춤: {ticket} ({d})", d)  # the key makes a repeat the same item
     p.append("auto_wake_escalated", dispatch=d, ticket=ticket, reason="stopped again after its one wake")
-    human(f"자동 깨우기 뒤 다시 멈춤: {ticket} ({d})", d)
     r.lines.append(f"AUTO-WAKE {d} ({ticket}): stopped again after its one wake; not woken, it is on the human's Needs you")
     r.stop = True
 
@@ -259,7 +261,7 @@ def sweep(p, n, now=None):
             continue
         mark = marks.get(d)
         if mark is None:
-            mark = marks[d] = {"at": stamp(now)}
+            mark = marks[d] = {"at": stamp(now), "idle_min": x.get("minutes")}
             due = now + dt.timedelta(minutes=n)
             r.lines.append(f"AUTO-WAKE {d} ({x.get('ticket')}): idle; wakes once at {due:%H:%M} UTC unless it may not be woken")
         left = (prog.parse_ts(mark["at"]) + dt.timedelta(minutes=n) - now).total_seconds()
