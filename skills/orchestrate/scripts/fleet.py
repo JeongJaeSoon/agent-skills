@@ -2476,13 +2476,24 @@ def send(session_id, text, handle=None, sender=None):
     return code, out
 
 
-def open_copy(s, handle):
-    """What to type or look for on a device other than the host. With the config's `orca_environment` (the name that
-    device saved for this host's Orca server) it is the switch command for that device, else where the session is."""
+def session_terminal(s):
+    """The terminal a session is reached by: its agent's, else any connected one; None with no connected terminal."""
+    terms = [t for t in (s or {}).get("terminals") or [] if t.get("connected")]
+    return next((t for t in terms if t.get("agent")), terms[0] if terms else None)
+
+
+def switch_command(handle):
+    """The command that brings this terminal up on another device: needs the config's `orca_environment` (the name that
+    device saved for this host's Orca server); None without it."""
     env = config().get("orca_environment")
     if isinstance(env, str) and env.strip():
         return f"orca terminal switch --environment {shlex.quote(env.strip())} --terminal {handle}"
-    return f"workspace: {s.get('name')}\nterminal: {handle}\nworktree: {s.get('path')}"
+    return None
+
+
+def open_copy(s, handle):
+    """What to type or look for on a device other than the host: the switch command, else where the session is."""
+    return switch_command(handle) or f"workspace: {s.get('name')}\nterminal: {handle}\nworktree: {s.get('path')}"
 
 
 def open_session(session_id, switch=None):
@@ -2493,8 +2504,7 @@ def open_session(session_id, switch=None):
     device clicked, so even a confirmed switch is reported as the host's, and every reply carries `copy`."""
     state = read_json(state_dir() / "state.json", {}) or {}
     s = next((x for x in state.get("sessions") or [] if x["id"] == session_id), None)
-    terms = [t for t in (s or {}).get("terminals") or [] if t.get("connected")]
-    term = next((t for t in terms if t.get("agent")), terms[0] if terms else None)
+    term = session_terminal(s)
     row = {"at": iso(utcnow()), "session": session_id, "handle": term and term["handle"], "text": "open"}
     if not term:
         code, out = 409, {"ok": False, "reason": "no connected terminal in this session"}
