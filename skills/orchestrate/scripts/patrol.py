@@ -33,10 +33,13 @@ tail of each card's session transcript, the `orch sent` log and the last pressur
   B  bg wait   an agent card, Run workers included, whose turn ended 15+ min ago, not waiting on a human, whose last
                message says it waits on a background task (bgwait_signal), while nothing will wake it: the transcript
                owes no armed background call or Monitor a result (not parked) and Claude Code's status line shows no
-               shell, agent or task running. A screen without that wording is not judged (shown as ❔)
+               shell, monitor, agent or task running. A screen without that wording is not judged (shown as ❔)
   L  load      at pressure warn or danger, a top consumer whose card is judged I, X, S or O
   W  watcher   an orchestrator whose `orch watch-cards` has not finished a round in an hour (reported here; the
                collector raises it on the dashboard)
+  T  dead handle  a term_ value in ~/.claude/agent-skills.json that `orca terminal list` does not show, so what is
+               sent there has no reader. The finding names the key and the value's first 12 characters and goes to
+               the orchestrator; a config or list that could not be read whole leaves a note line and no finding
 
 Patrol records and shows; it never types into a terminal, closes one, stops a worker or removes a card. Findings
 go to <state>/patrol.jsonl with detected_at, are cleared there when a later round no longer sees them, and are acked
@@ -68,11 +71,11 @@ import contextlib, datetime as dt, fcntl, hashlib, json, os, pathlib, re, secret
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 sys.path.insert(1, str(pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts"))
 import agent_signal, card_watch, cardguard, dash, fleet, prog  # noqa: E402
+from card_watch import AGENT_PANEL, BACKGROUND  # noqa: E402
 try:  # dash put the repo's scripts/ on the path
-    from sync import BACKGROUND, STALE_COMMAND, stale_signal  # noqa: E402
+    from sync import STALE_COMMAND, stale_signal  # noqa: E402
 except ImportError:  # an install without the repo's scripts/: H judges nothing
     STALE_COMMAND = {}
-    BACKGROUND = re.compile(r"\b\d+ (?:shells?|agents?|background tasks?)\b|shells? still running")  # sync.BACKGROUND
 
     def stale_signal(lines):
         return None
@@ -84,6 +87,7 @@ MEMO = STATE / "patrol-state.json"
 SHOWN = STATE / "patrol-shown.json"
 PRESSURE = STATE / "pressure.json"
 ROUNDS = STATE / "patrol-rounds.jsonl"
+CONFIG = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-skills.json").expanduser()
 REAP_SCRIPTS = pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts"
 
 DUE_S = 25 * 60
@@ -92,7 +96,7 @@ CANDIDATE_BUDGET_S = 240
 AGENTS_MARGIN_S = 15  # agent_signal.read's 10 s, and the round's own writes after it
 ROUNDS_KEEP = 1000
 CURRENT = {}  # the running round's timings and failed sources, read by mark_cut
-OWN_SOURCES = ("terminals", "waits", "workers", "state", "board", "sent", "consumers")
+OWN_SOURCES = ("terminals", "waits", "workers", "state", "board", "sent", "consumers", "handles")
 IDLE_MIN = dash.IDLE_MIN
 SUPERSEDE_MIN = 30
 ORPHAN_H = 24
@@ -103,7 +107,8 @@ RENOTIFY = dt.timedelta(minutes=30)
 SCREEN_READS = 30
 NEEDS_YOU = {"X", "E", "L", "O"}
 LABEL = {"I": "idle", "X": "exited", "S": "superseded", "O": "orphan PR", "D": "no ref", "E": "error loop",
-         "L": "load", "W": "watcher down", "R": "repeat", "H": "stale", "B": "background wait"}
+         "L": "load", "W": "watcher down", "R": "repeat", "H": "stale", "B": "background wait",
+         "T": "dead handle"}
 BGWAIT_WHY = "백그라운드 작업을 기다리지만 깨울 작업이 없음"  # B's reason on the brief's ❔ row
 VERDICT_OF = {"I": "idle", "X": "exited", "S": "superseded", "O": "pr_open_no_session", "R": "stalled", "H": "stalled"}
 # H's two kinds: what the owner's line says, and the reason on the brief's ❔ row (Korean, as the brief is).
@@ -135,9 +140,12 @@ transcript_tail = cardguard.transcript_tail
 
 
 def background(lines):
-    """Claude Code's status line shows a background shell or agent still running (BACKGROUND). A message typed in after
+    """Claude Code's status line shows a background shell, monitor or agent still running. A message typed in after
     the command was armed resets the transcript's record of it, so only the screen still shows it."""
-    return bool(lines) and any(BACKGROUND.search(l) for l in lines[-6:])
+    if not lines:
+        return False
+    box = max((i for i, l in enumerate(lines) if l.strip().startswith("❯")), default=len(lines))
+    return any(BACKGROUND.search(l) for l in lines[-6:]) or any(AGENT_PANEL.search(l) for l in lines[box + 1:])
 
 
 # A last message that says the session waits on a background task still to finish (English or Korean). A launch
@@ -234,6 +242,41 @@ def consumers():
             + [{"what": f"compose {g['project']}", "cpu": g.get("cpu"), "card": g.get("card")} for g in projects])
 
 
+def read_config():
+    """The config, {} when there is no file. Unreadable raises: it does not mean the config holds no handle."""
+    try:
+        return json.loads(CONFIG.read_text())
+    except FileNotFoundError:
+        return {}
+
+
+def config_handles(node, key=""):
+    """(dotted key, value) for each term_ value anywhere in the config, so a key added later needs no list here."""
+    if isinstance(node, dict):
+        for k, v in node.items():
+            yield from config_handles(v, f"{key}.{k}" if key else k)
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            yield from config_handles(v, f"{key}[{i}]")
+    elif isinstance(node, str) and node.startswith("term_"):
+        yield key, node
+
+
+def dead_handles(config, terminals, readable=True):
+    """(dead [(key, value)], warning). A list that was not read, or was cut short, says nothing about a handle."""
+    handles = list(config_handles(config))
+    if handles and not readable:
+        return [], f"config handles not checked: Orca's terminal list is unread or cut short ({len(handles)} handle(s))"
+    live = {t.get("handle") for t in terminals}
+    return [h for h in handles if h[1] not in live], None
+
+
+def terminal_rows(facts):
+    listing = prog.orca_json("terminal", "list")
+    facts["terminals_cut"] = bool(listing.get("truncated"))
+    return listing["terminals"]
+
+
 def read_board():
     """board.json, {} when there is none; an unreadable one raises, so D keeps its findings and clocks."""
     try:
@@ -271,7 +314,13 @@ def gather(now, deadline, memo):
             if source:
                 timings[source] = round(timings.get(source, 0) + time.monotonic() - t0, 2)
 
-    facts["terminals"] = take("orca terminal list", lambda: prog.orca_json("terminal", "list")["terminals"], [], "terminals")
+    facts["terminals"] = take("orca terminal list", lambda: terminal_rows(facts), [], "terminals")
+    config = take("agent-skills.json", read_config, {}, "handles")
+    facts["dead_handles"], warning = dead_handles(config, facts["terminals"],
+                                                  "terminals" not in failed and not facts.get("terminals_cut"))
+    if warning:
+        notes.append(warning)
+        failed.add("handles")
     facts["waits"] = take("orca worktree ps --agent-wait", lambda: prog.agent_waits(strict=True), {}, "waits")
     facts["workers"] = take("orca worker-list", lambda: all_workers(deadline), [], "workers")
     t0 = time.monotonic()
@@ -540,6 +589,9 @@ def judge(facts, memo):
             add("W", None, (int(last[0]) if last else 0,), "orch watch-cards " + (
                 f"last finished a round {int((now - last[0]) // 60)} min ago" if last else "never ran here")
                 + ": the orchestrator restarts it (run_in_background, no pipe)", h)
+    for key, value in facts.get("dead_handles") or ():
+        add("T", None, (value,), f"{value[:12]}… is not in `orca terminal list`, so what is sent there has no reader; "
+            "set it to run:<id>", key)
     return findings, {"cards": verdicts, "hints": hints, "check": check, "failed": sorted(failed),
                       "doing_noref": doing_noref, "load": load, "activity": act}, new_memo
 
@@ -588,7 +640,8 @@ def sync_needs_you(rows=None):
 # The sources each rule reads: a finding whose source failed this round is kept, not cleared.
 DEPENDS = {"I": {"terminals", "workers", "waits"}, "X": {"terminals", "workers"}, "S": {"terminals", "sent"},
            "O": {"state", "terminals"}, "D": {"state", "board"}, "E": {"terminals"}, "L": {"consumers", "terminals", "workers", "waits"},
-           "W": {"state"}, "R": {"terminals", "workers", "waits"}, "H": {"terminals", "waits"}, "B": {"terminals", "waits"}}
+           "W": {"state"}, "R": {"terminals", "workers", "waits"}, "H": {"terminals", "waits"}, "B": {"terminals", "waits"},
+           "T": {"terminals", "handles"}}
 
 
 def write_round(findings, verdicts, dry, now, failed=()):

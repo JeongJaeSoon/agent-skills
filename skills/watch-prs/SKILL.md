@@ -29,7 +29,7 @@ never in this repo. A change to these keys goes through `skills-config`: the age
 {"prs": {"orgs": [], "repos": [], "exclude_orgs": [], "exclude_repos": [],
          "exclude_title_patterns": ["^chore: sync shared config"],
          "self_bots": ["<the user's own bot account>"], "ignore_bots": ["<bot whose PRs are never a review>"],
-         "inbox_to": "<orca address: run:<id> or the orchestrator's or lead's terminal handle>",
+         "inbox_to": "run:<id>",
          "max_items": 10, "stale_days": 30, "cron": "*/30 * * * *", "timezone": "<IANA tz>",
          "kinds": ["review_request", "review_wait", "ready_to_merge", "unreleased", "ownergate"],
          "ownergate": [<gate>, ...],
@@ -54,6 +54,9 @@ never in this repo. A change to these keys goes through `skills-config`: the age
          "required_bots": ["<review bot that must review each head>"],
          "review_verdict_pattern": "<regex with one (pass|fail) group; default in DEFAULTS>", "ci_wait_minutes": 15}}
 ```
+
+`inbox_to` takes a Run address, `run:<id>`. A `term_` handle is still accepted but changes when its
+terminal restarts, and `orch patrol` raises one Orca no longer lists.
 
 `orgs` and `repos` empty mean every repository; otherwise an `owner` in `orgs` or an `owner/name` in
 `repos` is in. `exclude_title_patterns` drops a PR whose title matches any of its regexes
