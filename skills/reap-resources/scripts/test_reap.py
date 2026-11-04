@@ -1480,6 +1480,21 @@ with tempfile.TemporaryDirectory() as tmp:
     procs[3] = gone + "-other"  # a sibling path is not inside it
     assert is_target(closed_db)
     del procs[3]
+    # lsof prints a non-ASCII path byte by byte; bytes that are no text cannot be told from a session's folder.
+    hangul = str(root / "카드")
+    led.write_text("\n".join(good + [line("verify-app-hangul", wt=hangul)]) + "\n")
+    assert reap.owner_hold(["verify-app-hangul"], reap.owner_facts()) is None
+    procs[2] = "".join(chr(b) if b < 128 else f"\\x{b:02x}" for b in hangul.encode())
+    assert "프로세스" in reap.owner_hold(["verify-app-hangul"], reap.owner_facts())
+    procs[2] = "/tmp/\\xff"
+    assert not is_target(closed_db)
+    del procs[2]
+    # A folder of a card still open, deleted on its own, is not the card closing.
+    led.write_text("\n".join(good + [line("verify-app-sub", wt=str(live / "backend"))]) + "\n")
+    assert "카드" in reap.owner_hold(["verify-app-sub"], reap.owner_facts())
+    led.write_bytes("\n".join(good).encode() + b'\n{"kind": "compose\xff-stack", "id": "verify-app-closed", "links": {}}\n')
+    assert not is_target(closed_db), "a damaged byte is damage, not another kind"
+    led.write_text("\n".join(good) + "\n")
 
     # A damaged line, wherever it stands and however little of its id survived, holds everything: it may be an owner.
     for bad in ('{"kind": "compose-stack", "id": "verify-', '{"ts": "2026', json.dumps(["not", "an", "object"]),

@@ -1210,10 +1210,10 @@ def stack_records(path):
     cannot be read, a line included: ledger_read skips a damaged line, and the one skipped may be the stack's current
     owner, leaving an older one looking like it."""
     try:
-        text = path.read_text(errors="replace")
+        text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         text = ""
-    except OSError:
+    except (OSError, ValueError):
         return None
     stacks = {}
     for line in text.splitlines():
@@ -1239,8 +1239,15 @@ def owner_facts():
     stacks, procs = stack_records(ledger_path()), cwds()
     if cards is None or stacks is None or procs is None:
         return None
-    return {"cards": {real(p) for p in cards}, "stacks": stacks, "cwds": {real(c) for c in procs.values() if c},
-            "pr": pr_reader()}
+    # realpath, not real(): a recorded folder may be gone, and a symlink above it must still resolve the same way.
+    return {"cards": {os.path.realpath(p) for p in cards}, "stacks": stacks, "pr": pr_reader(),
+            "cwds": {os.path.realpath(unescaped(c)) for c in procs.values() if c}}
+
+
+def unescaped(path):
+    """A path as lsof prints it, each non-ASCII byte as \\xNN, in the characters the ledger has. Raises ValueError on
+    bytes that are not text: a path that cannot be read may be a session's."""
+    return re.sub(rb"\\x([0-9a-fA-F]{2})", lambda m: bytes([int(m[1], 16)]), path.encode()).decode()
 
 
 def owner_hold(owners, facts):
@@ -1260,9 +1267,10 @@ def owner_hold(owners, facts):
         if not worktrees:
             return f"스택 {o} 에 worktree 연결이 없음(보고만)"
         for w in sorted(worktrees):
-            if real(w) in facts["cards"] or not dir_gone(w):
+            path = os.path.realpath(w)
+            if any(under(path, c) for c in facts["cards"]) or not dir_gone(w):
                 return f"스택 {o} 의 카드 {w} 가 남아 있음"
-            if any(under(c, real(w)) for c in facts["cwds"]):
+            if any(under(c, path) for c in facts["cwds"]):
                 return f"스택 {o} 의 카드 {w} 안에서 프로세스가 돎"
         for ref in sorted({p for r in records if (p := r.get("pr"))}):
             s = facts["pr"](ref)
