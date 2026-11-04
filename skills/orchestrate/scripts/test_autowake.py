@@ -282,6 +282,27 @@ w.sweep(0)
 w.sweep(10)
 assert len(w.sent) == 1, "activity done with the task open is a stopped worker"
 excluded("waiting on a prompt", world={"workers": [row(projection={"stage": {"activity": "waiting"}})]})
+# A long-idle Claude worker as Orca showed it: activity unknown, liveness stale_status, worker ready. Only the
+# collector's transcript motion (the stall this sweep walks) still says it stopped.
+stale = {"stage": {"worker": "ready", "dispatch": "dispatched", "detail": "input_accepted", "activity": "unknown"},
+         "liveness": {"verdict": "unverifiable", "reason": "stale_status"}, "attention": {"requiresAction": False}}
+w = World(workers=[row(workerState="ready", projection=stale)])
+w.sweep(0)
+w.sweep(10)
+assert len(w.sent) == 1, "unknown/stale_status with a ready worker and an idle transcript is a stopped worker"
+# The stale projection alone wakes nobody: with no idle stall (the transcript says working) nothing is marked or sent.
+w = World(workers=[row(workerState="ready", projection=stale)],
+          stalls=[{"dispatch": "ctx_1", "ticket": "ABC-1", "kind": "silent", "minutes": 25}])
+w.sweep(0)
+w.sweep(10)
+assert not w.sent and not w.synced and not w.rows("auto_wake_claimed"), "stale projection with a non-idle transcript"
+# Every other unknown stays refused: the exception is the stale projection, not a missing one.
+excluded("unknown, no stale_status", world={"workers": [row(workerState="ready", projection={
+    "stage": {"worker": "ready", "activity": "unknown"}, "liveness": {"verdict": "unverifiable", "reason": "no_signal"}})]})
+excluded("stale_status, worker not ready", world={"workers": [row(workerState="working", projection={
+    **stale, "stage": {"worker": "working", "activity": "unknown"}})]})
+excluded("stale_status but activity working", world={"workers": [row(workerState="ready", projection={
+    **stale, "stage": {"worker": "ready", "activity": "working"}})]})
 assert prog.next_moves([{"dispatchId": "w4", "agentTerminalHandle": "h4", "projection": {
     "outcome": "in_progress", "nextAction": {"kind": "none"}, "stage": {"activity": "done"}}}], {"w4"}) \
     == ["  w4 done: auto-wake holds it (orch wait)"]
