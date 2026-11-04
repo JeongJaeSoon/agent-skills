@@ -618,7 +618,7 @@ const click = (target) => {{ location.hash = ""; handlers.click({{target}}); ret
 out.clicks = {{row: click(node("span", {{}}, grow)), link: click(node("a", {{}}, grow)), button: click(node("button", {{copy: "x"}}, li))}};
 selection = "picked"; out.clicks.selecting = click(grow);
 process.stdout.write(JSON.stringify(out));"""
-    ctx = ("const vm = require('vm'), handlers = {}, sb = {process, handlers, location: {hash: ''}, selection: '', CSS: {escape: String},"
+    ctx = ("const vm = require('vm'), handlers = {}, sb = {process, handlers, location: {hash: '', origin: 'https://dash.example.test'}, selection: '', CSS: {escape: String},"
            " getSelection: () => sb.selection, renderView() {}, document: {addEventListener(t, f) { handlers[t] = f; }, querySelector() { return null; }}};"
            "vm.runInNewContext(require('fs').readFileSync(0, 'utf8'), sb);")
     got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
@@ -1007,8 +1007,8 @@ process.stdout.write(briefHtml({json.dumps(text)}));"""
 {(assets / "fleet.js").read_text()}
 process.stdout.write(briefHtml({json.dumps(pointers)}));"""
     page = subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout
-    assert '단계표 2행 (접음 1) · <a class="link" href="#/fleet/stages">http://127.0.0.1:4780/#/fleet/stages</a>' in page, page
-    assert '· <a class="link" href="#/fleet/todo">http://127.0.0.1:4780/#/fleet/todo</a>' in page, page
+    assert '단계표 2행 (접음 1) · <a class="link" href="#/fleet/stages">https://dash.example.test/#/fleet/stages</a>' in page, page
+    assert '· <a class="link" href="#/fleet/todo">https://dash.example.test/#/fleet/todo</a>' in page, page
     assert '<p>단계표 3행 · <span class="mono">orch stage show</span></p>' in page, page
     assert 'href="http://example.test' not in page and "&lt;x&gt;" in page, page
 
