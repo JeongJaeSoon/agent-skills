@@ -578,6 +578,10 @@ for why, argv in (("/goal card", (brief(WORKER, "a2.md"), "--repo", "r", "--name
     rc, out, err, calls = go(*argv, "--agent", "codex")
     assert rc == 2 and why in err and len(err.splitlines()) == 1 and not creates(calls), (why, rc, err)
     assert pathlib.Path(argv[0]).read_text() == before, argv
+# A Run report only between the FORBIDDEN markers is gone once they are refreshed: still no Codex /goal card.
+MARKED = f"{WORKER}FORBIDDEN   {card.BEGIN}\n  REPORT: orca orchestration send --to run:run_me\n  {card.END}\n"
+rc, out, err, calls = go(brief(MARKED, "a10.md"), "--repo", "r", "--name", "a10", "--agent", "codex")
+assert rc == 2 and "/goal card" in err and not creates(calls), (rc, err, calls)
 rc, out, err, calls = handoff("ABC-9", "--agent", "codex")
 assert rc == 2 and "/goal card" in err and len(err.splitlines()) == 1 and not creates(calls), (rc, err)
 rc, out, err, calls = handoff("ABC-9", "--agent", "claude")

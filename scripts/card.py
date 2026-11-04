@@ -664,6 +664,8 @@ def create_locked(brief, opts, refs, prompt):
             print(f"[{ME}] the lead starts as a /goal card: {fix}", file=sys.stderr)
     run_id = checked if to_run else None
     worker = bool(run_id)
+    if opts["--agent"] == "codex" and not worker:  # the refresh dropped a REPORT row kept between the markers
+        raise Refuse(2, f"[{ME}] {CODEX_GOAL_CARD}")
     parent = None if opts.get("--no-parent") else (
         opts["--parent-worktree"] if opts.get("--parent-worktree") and not worker else caller_worktree())
     if worker:
