@@ -1,4 +1,4 @@
-<!-- translated-from: be99b8503a539c784a7875e10107fc54b43a2c16 -->
+<!-- translated-from: d54b88796f0bc76b97f6212b63cf4b79c9af4c30 -->
 # Skill catalog
 
 This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 12 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
@@ -32,7 +32,7 @@ Which skill owns a PR, and who merges it:
 
 | Skill | PRs it owns | Merge |
 |---|---|---|
-| deliver-ticket | My PR this session is working: writing, review replies, merge, release | The session, per §5 (`gh pr merge`; a stack lands with merge-async) |
+| deliver-ticket | My PR this session is working: writing, review replies, merge, release | The session, per §5 (`gh pr merge`; a stack lands with `gh stack merge`) |
 | watch-prs | Waiting PRs a scheduled round collects: review requests naming me, my PRs waiting on review (requests, reminders), my PRs ready to merge | Only my PRs that pass every `merge_repos` gate |
 | orchestrate | A program worker's PRs | `orch land`, or a plain merge the human approved |
 | handoff-ticket | Opens no PR: picks the next card | Never |
@@ -277,12 +277,12 @@ Monitors configured public channels for mentions and replies when requested. Use
 ## Writing
 
 ### brief
-Reports completed work, current work, decisions and human-only steps with evidence. Every report, on request or periodic (`--periodic`), is `orch brief render`'s output sent as printed (`--telegram` for Telegram); the model passes only the headline sentence, decisions and an insight block. A wrong row is fixed in the record (`orch board set`, `orch stage set`) and rendered again, never edited in the output. Rows are rebuilt on every render from live Orca cards, leads and Runs, the report files that cards' REPORT lines point to, and GitHub PR state. Each row's session column says whether the session running it is working (`작업 중`), stopped (`멈춤`) or gone (`세션 없음`), linked by its Orca worktree rather than a terminal handle. Rows waiting on a human split into what the owner must clear and what waits on someone else's review or answer. The stage table and the to-do and on-hold queue appear only as pointer lines to the `stage` and `todo` skills. Reports are written by hand only when the renderer fails, or for one session's own report (`end-session`); that format is in `references/hand-format.md`.
+Reports completed work, current work, decisions and human-only steps with evidence. Every report, on request or periodic (`--periodic`), is `orch brief render`'s output sent as printed (`--telegram` for Telegram); the model passes only the headline sentence, decisions and an insight block. A wrong row is fixed in the record (`orch board set`, `orch stage set`) and rendered again, never edited in the output. Rows are rebuilt on every render from live Orca cards, leads and Runs, the report files that cards' REPORT lines point to, and GitHub PR state. Each row's session column says whether the session running it is working (`작업 중`), stopped (`멈춤`) or gone (`세션 없음`), linked by its Orca worktree rather than a terminal handle. Rows waiting on a human split into what the owner must clear and what waits on someone else's review or answer. Every open row appears once in its table, whatever its status; its next-step column either names the next step or points (`↓ 오너`, `↓ 대기`, `↓ 보류`) to the list below that says what it waits on, and only work with no row goes in the list of work outside the tables. One module (`rowstate.py`) judges each row's status, rules in the order ✅ → 🙋 → ⏸️ → ⏳ → 🔴 → ❔ → 🔄 with the first match deciding, and places it, so the report, the dashboard and the stage table read the same result. A missing fact stops at ❔ with what the agent must record; who a row waits on and the PR it must wait for are recorded with `orch board set <id> --owner … --after owner/repo#N`. The stage table and the to-do and on-hold queue appear only as pointer lines to the `stage` and `todo` skills. Reports are written by hand only when the renderer fails, or for one session's own report (`end-session`); that format is in `references/hand-format.md`.
 
 ### stage
 - **When:** "단계표 보여줘" (show the stage table), `/agent-skills:stage`. `brief` shows the stage table only as a one-line link, so call this when the table itself is needed.
 - **What it does:**
-  - Sends the output of `orch stage show [--program P] [--telegram] [--all]` as printed. Rows that are all done, or unchanged for 7 days (`stage_idle_d`), are folded into a count; `--all` shows everything. To fit 78 columns it cuts only long names and PR keys to `…[n]`; when the stage columns alone exceed 78 it prints as is and exits 1.
+  - Sends the output of `orch stage show [--program P] [--telegram] [--all]` as printed. Rows that are all done, or unchanged for 7 days (`stage_idle_d`), are folded into a count; `--all` shows everything. When a row's PR is also on a board row, a `지금` column shows the status the report gives that row, so the two never disagree. To fit 78 columns it cuts only long names and PR keys to `…[n]`; when the stage columns alone exceed 78 it prints as is and exits 1.
   - The dashboard's fleet tick builds the stage table (task / PR merged / dev check / prod check) every minute: for each program whose ledger moved in the last 7 days, one row per predicate item and per worker card in the Run. The merge cell is filled only when there is a merge sha, and the dev and prod cells stay empty. A cell a human or an agent checked is written over with `orch stage set <program>/<item>`, and that value wins over the generated one. On the dashboard it is the Stages screen. When an active program has no rows, or none updated for `board.stage_warn_h` hours (default 6), the reorient hook warns in one line on every prompt.
 - **Related:** Where `brief`'s stage-table line points. The recording rules are in `orchestrate`'s `references/dashboard.md`, "The stage table".
 
@@ -572,6 +572,7 @@ Every rule has a key in `~/.claude/agent-skills.json`. Its value is one of `"den
 | `orchestrate.ask_user_question` | deny | AskUserQuestion in the main conversation of an orchestrator, lead or worker. Subagents and general sessions are not covered |
 | `orchestrate.wait_foreground` | deny | An orchestrator or lead running `orch wait`, `orch inbox --wait`, `orch watch-cards` or `orca orchestration check\|inbox --wait` without `run_in_background`, or cutting a background wait with `\| tail` or `\| head`. A worker's `check --wait` is not covered |
 | `orchestrate.send_devnull` | deny | An orchestrator, lead or worker sending the output of `orca orchestration send\|reply` to `/dev/null`. `2>/dev/null` alone is not covered |
+| `orchestrate.stack_dependent` | warn | A dependent PR that is not a stack. `hooks/stack_gate.py` reads the brief's `Lands after` and the branch's history at `gh pr create`; `orch land` and `land-check` compare land-after edges with the real stacks. `deny` makes both block. What cannot be read passes with one warning line |
 
 When the hook's own check raises, the call goes through with a warning, and `$AGENT_SKILLS_STATE/guard-errors.jsonl` gets the time, the hook, the exception type and where it was raised (never the command text). An unreadable settings file means the defaults.
 
@@ -661,7 +662,7 @@ Of pstack's 58 skills (24 principles and 34 others), we took all 24 principles a
 - **Running projects:** `orchestrate`'s `orch` ledger, the landing gate and exclusive lane, human-gate, the main guardian, the QA lead, and the `orch-dash` dashboard. The shape follows pstack's playbooks, but it was built fresh on top of Orca Runs and GitHub stacks.
 - **Measurement and adapters:** `measure-delivery`, `use-tracker`, `use-notes`.
 - **Machine upkeep:** `reap-resources`, `tune-automode`, `skills-config`, `setup-pc`.
-- **Hooks:** permission decisions (`guard.py`), re-orienting the orchestrator and leads (`reorient.py`), offering setup on a PC that was never set up (`onboard.py`), recording permission prompts for the dashboard to answer (`permission.py`), closing decisions answered in the terminal (`decision.py`), completion claim checks (`claim_check.py`), a load check before a heavy start (`pressure_gate.py`), and prose checks (`prose_check.py`).
+- **Hooks:** permission decisions (`guard.py`), re-orienting the orchestrator and leads (`reorient.py`), offering setup on a PC that was never set up (`onboard.py`), recording permission prompts for the dashboard to answer (`permission.py`), closing decisions answered in the terminal (`decision.py`), completion claim checks (`claim_check.py`), a load check before a heavy start (`pressure_gate.py`), prose checks (`prose_check.py`), and the stack check on dependent PRs (`stack_gate.py`).
 
 ### Upstream sync status
 - **Last sync:** 2026-10-26, from `b42effe` (0.15.3) to `99b609a` (0.15.32). Upstream added 74 commits to pstack in between.

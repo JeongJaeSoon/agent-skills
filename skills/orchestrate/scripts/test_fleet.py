@@ -952,12 +952,13 @@ process.stdout.write(JSON.stringify({{page: fleetTodo(), section: fleetSection("
     # The Brief page draws the renderer's text whole: a cut cell gets the text its `- [n]` line holds (bold and └ kept)
     # and the list goes; repository tables share one set of column widths; the sections under them become tables.
     text = "\n".join([
-        "| | 리드/Phase | PR | 진행 | 세션 |", "|---|---|---|---|---|",
-        "| ❔ | **lead-one** | — | — | 작업 중 |",
-        "| 🙋 | └ **ABC-1 rollout: release then prod…[1]** | — | — | 멈춤 |",
-        "| ⏳ | └ ABC-1 K4: client plugins for…[2] | [#7](https://github.com/acme/plugins/pull/7) ❗리뷰 | — | 세션 없음 |", "",
-        "- [1] ABC-1 rollout: release then prod, then the final check", "- [2] ABC-1 K4: client plugins for both versions", "",
-        "🔄 **진행 중**", "", "- ❔ guard-fix — 확인 필요: 세션 꺼짐 · 6h 전", "- 🔄 rollout plan — 수 10/28: release · coordinator", "- └ 🔴 child card — 턴 종료", "",
+        "| | 리드/Phase | PR | 진행 | 다음 | 세션 |", "|---|---|---|---|---|---|",
+        "| ❔ | **lead-one** | — | — | 에이전트 조치…[3] | 작업 중 |",
+        "| 🙋 | └ **ABC-1 rollout: release then prod…[1]** | — | — | ↓ 오너 | 멈춤 |",
+        "| ⏳ | └ ABC-1 K4: client plugins for…[2] | [#7](https://github.com/acme/plugins/pull/7) ❗리뷰 | — | ↓ 대기 | 세션 없음 |", "",
+        "- [1] ABC-1 rollout: release then prod, then the final check", "- [2] ABC-1 K4: client plugins for both versions",
+        "- [3] 에이전트 조치 필요: 세션 꺼짐 · 6h 전", "",
+        "🔄 **표 밖 진행**", "", "- ❔ guard-fix — 에이전트 조치 필요: 세션 꺼짐 · 6h 전", "- 🔄 rollout plan — 수 10/28: release · coordinator", "- └ 🔴 child card — 턴 종료", "",
         "⏳ **다른 사람 대기**", "", "- team:reviewers · 리뷰 [#7](https://github.com/acme/plugins/pull/7) · 3일 전부터 → ABC-1 K4 · 다음: 리뷰 대기 · 코디네이터", "",
         "❓ **결정 필요** — 1. (d1) settle the copy → 추천: 적용", "", "2. (d2) pick a date → 추천: Friday", "",
         "🙋 **지금 오너가 할 일** — 없음", "",
@@ -967,37 +968,68 @@ process.stdout.write(JSON.stringify({{page: fleetTodo(), section: fleetSection("
 process.stdout.write(briefHtml({json.dumps(text)}));"""
     page = subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout
     assert "…[" not in page and "- [1]" not in page and "then the final check</b>" in page and "└ ABC-1 K4: client plugins for both versions" in page, page
-    assert 'class="brief-table brepo"' in page and '<col class="bpr">' in page and 'class="slide"' in page, page
-    assert re.findall(r'<h4 class="bhead">(.*?)</h4>', page) == ["🔄 진행 중", "⏳ 다른 사람 대기", "❓ 결정 필요",
+    assert 'class="brief-table brepo"' in page and '<col class="bpr">' in page and '<col class="bnext">' in page and 'class="slide"' in page, page
+    assert re.findall(r'<h4 class="bhead">(.*?)</h4>', page) == ["🔄 표 밖 진행", "⏳ 다른 사람 대기", "❓ 결정 필요",
                                                                  '🙋 지금 오너가 할 일 <span class="muted">— 없음</span>', "⏸️ 보류"], page
-    assert "<td>확인 필요: 세션 꺼짐 · 6h 전</td>" in page and "release · orchestrator</td>" in page and "코디네이터" not in page, page
+    assert '<div class="slide">에이전트 조치 필요: 세션 꺼짐 · 6h 전</div>' in page and '<div class="slide">↓ 오너</div>' in page, page
+    assert "<td>에이전트 조치 필요: 세션 꺼짐 · 6h 전</td>" in page and "release · orchestrator</td>" in page and "코디네이터" not in page, page
     assert "<th>다음</th>" in page and "<td>리뷰 대기 · 오케스트레이터</td>" in page and "<td>ABC-1 K4</td>" in page, page
     assert '<td class="bmark">2.</td><td>(d2) pick a date</td><td>Friday</td>' in page, page
     assert '<td class="bmark">🔴</td><td>└ child card</td><td>턴 종료</td>' in page, page
     assert "<td>acme/app#9 머지 + 배포</td>" in page, page
     assert "❔" not in page and page.count('class="qmark"') == 2, "❔ is drawn as a toned mark, not the pale emoji"
 
-    # Each repository row gets the button its table_rows entry names, at the right end; a table whose row count differs
-    # from its entry gets none. The Finished rows card leaves out a row whose Ack is already in the table.
-    two = "\n".join(["| | 리드/Phase | PR | 진행 | 세션 |", "|---|---|---|---|---|", "| ✅ | done lead | — | — | — |",
-                     "| 🔴 | stuck lead | — | — | 세션 없음 |", "| 🔄 | busy lead | — | — | 작업 중 |", "",
-                     "| | 리드/Phase | PR | 진행 | 세션 |", "|---|---|---|---|---|", "| ⏳ | other | — | — | 멈춤 |"])
+    # Each repository row gets the button of the table_rows entry with its label, at the right end, whatever the order;
+    # a table no entry names gets none. The Finished rows card leaves out a row whose Ack is already in the table, and
+    # Open items one whose Done is: a list item with no row of its own gets its Done in its list.
+    two = "\n".join(["| | 리드/Phase | PR | 진행 | 다음 | 세션 |", "|---|---|---|---|---|---|", "| ✅ | done lead | — | — | — | — |",
+                     "| 🔴 | stuck lead | — | — | 재개·정리 | 세션 없음 |", "| 🔄 | **busy lead** | — | — | 리뷰 | 작업 중 |", "",
+                     "| | 리드/Phase | PR | 진행 | 다음 | 세션 |", "|---|---|---|---|---|---|", "| ⏳ | other | — | — | ↓ 대기 | 멈춤 |", "",
+                     "🔄 **표 밖 진행**", "", "- 🔄 loose item — 정리 · lead"])
     busy = {"id": "wt-busy", "name": "busy-card", "state": "working", "word": "작업 중", "last": "PR 열고 <리뷰> 대기",
             "at": "2026-10-28T09:00:00Z", "pr": "acme/plugins#7"}
-    rows = [[{"label": "done lead", "status": "✅", "session": None, "ack": "board:a", "done": None},
-             {"label": "stuck lead", "status": "🔴", "session": {"id": None, "state": "none", "word": "세션 없음"}, "ack": None, "done": "row:b"},
-             {"label": "busy lead", "status": "🔄", "session": busy, "ack": None, "done": None}], []]
+    rows = [{"table": "acme/a", "rows": [
+                {"id": "b", "label": "stuck lead", "status": "🔴", "session": {"id": None, "state": "none", "word": "세션 없음"}, "ack": None, "done": "row:b"},
+                {"id": "a", "label": "done lead", "status": "✅", "session": None, "ack": "board:a", "done": None},
+                {"id": "c", "label": "busy lead", "status": "🔄", "session": busy, "ack": None, "done": "row:c"}]},
+            {"table": "acme/b", "rows": []}]
+    lists = {"moving": [{"id": "doing:x", "label": "loose item", "text": "🔄 loose item — 정리 · lead"}], "owner": [], "waiting": [], "held": []}
     js = f"""{helpers}
 {(assets / "fleet.js").read_text()}
 const S = {{filters: {{}}}};
-F.brief = {{text: {json.dumps(two)}, table_rows: {json.dumps(rows)}, done: [{{id: "board:a", label: "done lead", acked: false}},
-  {{id: "board:old", label: "folded lead", acked: false}}], open: [], closed: []}};
+F.brief = {{text: {json.dumps(two)}, table_rows: {json.dumps(rows)}, list_rows: {json.dumps(lists)},
+  done: [{{id: "board:a", label: "done lead", acked: false}}, {{id: "board:old", label: "folded lead", acked: false}}],
+  open: [{{id: "row:b", kind: "row", label: "stuck lead"}}, {{id: "row:c", kind: "row", label: "busy lead"}},
+         {{id: "doing:x", kind: "doing", label: "loose item"}}, {{id: "row:gone", kind: "row", label: "folded away"}}], closed: []}};
 F.undo = {{attr: "ack", ids: "board:z", label: "<i>gone</i>"}};
 process.stdout.write(JSON.stringify({{page: fleetBrief()}}));"""
     page = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)["page"]
-    first, second = page.split('<div class="table-wrap">')[1:3]
+    first, second, third = page.split('<div class="table-wrap">')[1:4]
     assert first.count('<td class="bact"') == 3 and 'data-ack="board:a"' in first and 'data-done="row:b"' in first, first
+    assert first.index('data-ack="board:a"') < first.index('data-done="row:b"') < first.index('data-done="row:c"'), first
     assert 'data-row-label="stuck lead"' in first and '<col class="bact">' in first and "bact" not in second, (first, second)
+    assert 'data-done="doing:x"' in third, third
+    opened = page.split("<h3>Open items</h3>")[1]
+    assert "folded away" in opened and not any(w in opened for w in ("stuck lead", "busy lead", "loose item")), opened
+    assert all(page.count(f'data-done="{i}"') == 1 for i in ("row:b", "row:c", "doing:x", "row:gone")), page
+    # A lead's name over its sub-tasks in another repository equal to a sub-task's: neither row gets that Done, and a
+    # list line that only contains an item's text does not get it either.
+    clash = "\n".join(["| | 리드/Phase | PR | 진행 | 다음 | 세션 |", "|---|---|---|---|---|---|", "| | Z | — | — | — | — |",
+                       "| 🔄 | └ Z | — | — | 리뷰 | — |", "", "🙋 **지금 오너가 할 일**", "", "- 배포 조사", "- 배포"])
+    crows = [{"table": "acme/b", "rows": [
+        {"id": "z", "label": "Z", "status": "—", "session": None, "ack": None, "done": None},
+        {"id": "z/c", "label": "Z", "status": "🔄", "session": None, "ack": None, "done": "row:z/c"}]}]
+    clists = {"moving": [], "owner": [{"id": "todo:1", "label": "배포", "text": "배포"}], "waiting": [], "held": []}
+    cjs = f"""{helpers}
+{(assets / "fleet.js").read_text()}
+const S = {{filters: {{}}}};
+F.brief = {{text: {json.dumps(clash)}, table_rows: {json.dumps(crows)}, list_rows: {json.dumps(clists)}, done: [],
+  open: [{{id: "row:z/c", kind: "row", label: "Z"}}, {{id: "todo:1", kind: "todo", label: "배포"}}], closed: []}};
+process.stdout.write(JSON.stringify({{page: fleetBrief()}}));"""
+    cpage = json.loads(subprocess.run(["node", "-e", ctx], input=cjs, capture_output=True, text=True, check=True).stdout)["page"]
+    ctable = cpage.split('<div class="table-wrap">')[1]
+    assert 'data-done="row:z/c"' not in ctable, ctable
+    assert cpage.count('data-done="todo:1"') == 1 and cpage.index("배포 조사") < cpage.index('data-done="todo:1"'), cpage
     # A row's 세션 cell links to its session by worktree id, opens it in Orca and quotes its last report (escaped); one
     # no session runs says so with no link or button; a table with no entries keeps the plain text.
     cells = re.findall(r'<td class="bsess">(.*?)</td>', first, re.S)
