@@ -377,8 +377,9 @@ def _put_items(db, old, new, by, ts):
             was_lane, was = known[iid]
             cols = _item_cols(lane, d)
             if was_lane != lane or cols != _item_cols(was_lane, was):
-                db.execute(f"UPDATE item SET status=?, lane=?, pos=?, updated_at=?, {', '.join(f'{c}=?' for c in ITEM_COLS)} "
-                           "WHERE id=?", (LANES[lane][0], lane, pos, ts, *cols, iid))
+                added = d.get("added") if lane == "todo" and was_lane != lane else None  # a to-do's date reads from it
+                db.execute(f"UPDATE item SET status=?, lane=?, pos=?, updated_at=?, created_at=COALESCE(?, created_at), "
+                           f"{', '.join(f'{c}=?' for c in ITEM_COLS)} WHERE id=?", (LANES[lane][0], lane, pos, ts, added, *cols, iid))
                 _event(db, "item", iid, "update", by, {**was, "lane": was_lane}, {**d, "lane": lane})
             else:
                 db.execute("UPDATE item SET pos=? WHERE id=?", (pos, iid))
@@ -1358,11 +1359,17 @@ def _export_board(dest):
         elif r["reopen_evidence"] is not None:
             lines.append({"ev": "reopen", "id": h, "ts": r["updated_at"], "by": r["close_by"], "rule": r["close_rule"],
                           "evidence": r["reopen_evidence"], "label": r["title"]})
+    live = fleet.state_dir() / "inbox-external.jsonl"
+    data = live.read_bytes() if live.is_file() else None
+    inbox = fleet.inbox_lines(data or b"")
     for c in closures:
         done = c["state"] == "done"
-        if c["unit"] in state_of and state_of[c["unit"]][0][0] != done:
-            raise Refused(f"{state_of[c['unit']][1]} has the words of a closed item that left the board ({c['unit']}); the old "
-                          "format would close it too. Reword or close it, then export again")
+        if c["unit"] in state_of and state_of[c["unit"]][0] != (done, None if done else c["undone_evidence"]):
+            raise Refused(f"{state_of[c['unit']][1]} has the words of an item that left the board in another state "
+                          f"({c['unit']}); the old format would give it that state. Reword or close it, then export again")
+        key = c["unit"][4:] if c["unit"].startswith("ext:") else None
+        if done and inbox.get(key) and fleet.ext_state(inbox[key], shut.get(key))[0]:
+            continue  # a newer line of the key is open, and an old done line would hide it from older code
         lines.append({"ev": c["state"], "id": c["unit"], "ts": c["ts"], "by": c["by"], "rule": c["rule"],
                       "evidence": c["evidence"] if done else c["undone_evidence"], "label": c["label"]})
     dest.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -1371,10 +1378,10 @@ def _export_board(dest):
     board_json = {"v": 1, "rows": {k: drop(r) for k, r in b["rows"].items()}, "order": b["order"], "leads": b["leads"], **lanes}
     fleet.write_atomic(dest / "board.json", json.dumps(board_json, ensure_ascii=False, indent=1) + "\n")
     fleet.write_atomic(dest / "tidy.jsonl", "".join(json.dumps(l, ensure_ascii=False, separators=(",", ":")) + "\n" for l in lines))
-    live = fleet.state_dir() / "inbox-external.jsonl"
-    data = live.read_bytes() if live.is_file() else None
+    text = (data or b"").decode()
     extra = "".join(json.dumps(l, ensure_ascii=False, separators=(",", ":")) + "\n" for l in fleet.inbox_for_export(shut, data or b""))
-    fleet.write_atomic(dest / "inbox-external.jsonl", (data or b"").decode() + extra)
+    cut = "\n" if extra and text and not text.endswith("\n") else ""  # a crashed writer's partial line must not swallow them
+    fleet.write_atomic(dest / "inbox-external.jsonl", text + cut + extra)
     names = ("board.json", "tidy.jsonl", "inbox-external.jsonl")
     for name in names:
         os.chmod(dest / name, 0o600)

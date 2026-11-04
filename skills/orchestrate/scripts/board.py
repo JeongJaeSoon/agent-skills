@@ -87,18 +87,18 @@ def check_row_write(rid, row, fields):
     """A card's PR and worktree are Orca's: a linked row shows them without storing them. An unlinked row may name its
     card with --worktree, and that is all it stores."""
     pr, worktree = fields.get("pr"), fields.get("worktree")
-    if pr is None and worktree is None:
+    if pr is None and worktree is None and not fields.get("title"):
         return
     state = fleet_view()
     if state is None:
-        return no_fleet("--pr/--worktree")
+        return None if pr is None and worktree is None else no_fleet("--pr/--worktree")
     cards = tidy.cards_of(state)
     card = linked_card(rid, row, fields, cards)
     if pr is not None and (card or worktree in cards):
         raise ValueError(f"row {rid} is linked to card {(card or cards[worktree])['id']}: Orca knows its PR, so --pr is not stored")
     if worktree is not None and card and worktree != card["id"]:
         raise ValueError(f"row {rid} is linked to card {card['id']}: drop the row to link another")
-    if row and worktree in cards:
+    if row and (card or worktree in cards):
         row.pop("pr", None)  # Orca's from now on
 
 

@@ -213,6 +213,9 @@ with state("bans", None, None, STATE) as sd:
     assert board.read()["rows"]["plain"]["pr"] == "acme/app#9"
     board.set_row("plain", worktree="wt-card")  # linked to a card, the row's PR is Orca's
     assert "pr" not in board.read()["rows"]["plain"]
+    board.set_row("plain2", repo="acme/app", pr="acme/app#9")
+    board.set_row("plain2", title="abc-1-login 후속")  # and the same when a new title names the card
+    assert "pr" not in board.read()["rows"]["plain2"]
     # A lead Orca knows has its row by `board set`; a lead it cannot see is added as before.
     refused(lambda: board.lead_add("M", "term_0FAKE1", "acme/app"), "Orca already knows lead wt-lead", "orch board set M")
     assert "M" not in board.read()["leads"]
@@ -333,6 +336,21 @@ with state("race", None, None) as sd:
     assert {r["id"] for r in tidy.run()} == {iid, "ext:r"}
     tidy.write(["ext:r", iid], undo=True)
     assert tidy.run() == []
+    # orch migrate judges outside its transaction too; an item that changed since is left, and one that did not closes.
+    import orca_migrate
+    board.doing_add("이주 대상", "a", "n")
+    judged = board.read()["doing"][-1]
+    orca_migrate.plan = lambda now=None: {"close": [{"id": judged["id"], "label": "l", "evidence": "e", "item": judged}]}
+    store.change_board(lambda s: s["doing"][-1].update(waiting=True), None)
+    assert orca_migrate.apply()[1] == [] and "waiting" in board.read()["doing"][-1]
+    judged = board.read()["doing"][-1]
+    assert orca_migrate.apply()[1] == [judged["id"]]
+    # A held item that becomes a to-do takes the move's date: its due reads from `added`.
+    board.later_add("옮길 일", "t")
+    with store.tx() as db:
+        db.execute("UPDATE item SET created_at='2025-11-01T00:00:00Z' WHERE title='옮길 일'")
+    board.todo_from_later(len(board.read()["later"]), who="w")
+    assert board.read()["todo"][-1]["added"] > "2026", board.read()["todo"][-1]
 
 
 # ---- export to the 4a files, rollback, and a later import
@@ -368,6 +386,27 @@ with state("roundtrip", fleet_=None) as sd:
         store.change_board(lambda s: s["doing"].append({"title": "gone work", "owner": "a", "next": "n"}))
         code, _, err = orch("db", "export", "--legacy", "--target", "4a", str(tmp / "orphan-export"))
         assert code == 1 and "left the board" in err and not (tmp / "orphan-export").exists(), err
+    with state("orphan-reopen", lines=[line("reopen", store.legacy_id("doing", {"title": "gone work"}), evidence="e")]) as sd2:
+        store.import_apply(checks=False)
+        store.change_board(lambda s: s["doing"].append({"title": "gone work", "owner": "a", "next": "n"}))
+        code, _, err = orch("db", "export", "--legacy", "--target", "4a", str(tmp / "orphan-reopen-export"))
+        assert code == 1 and "left the board" in err, err
+    # A key added again after its close: open now, so no old done line goes out to hide it from older code. A writer's
+    # partial last line stays apart from what the export adds.
+    with state("re-added", {**BOARD, "doing": [], "later": [], "todo": [], "owner_todo": []}, []) as sd2:
+        store.import_apply(checks=False)
+        fleet.inbox_add("review", "t", key="again")
+        fleet.inbox_add("review", "t", key="shut")
+        close("ext:again")
+        close("ext:shut")
+        fleet.inbox_add("review", "t 2", key="again")
+        with open(sd2 / "inbox-external.jsonl", "a") as f:
+            f.write('{"v":1,"op":"ad')
+        out = export("re-added-export")
+        said = {json.loads(l)["id"] for l in (out / "tidy.jsonl").read_text().splitlines()}
+        assert "ext:shut" in said and "ext:again" not in said, said
+        last = (out / "inbox-external.jsonl").read_text().splitlines()[-1]
+        assert json.loads(last)["op"] == "resolve" and json.loads(last)["key"] == "shut", last
     # Same words in two states have no legacy form: refused, and nothing half-written.
     with state("twin-export", twin, []) as sd2:
         store.import_apply(checks=False)

@@ -50,7 +50,7 @@ def plan(now=None):
         owner = (d.get("owner") or "").strip().lower()
         by_owner = [c for c in cards.values() if owner and owner in tidy.keys_of(c)]
         if card := tidy.named(f"{d['title']} {d.get('next') or ''}", cards) or (by_owner[0] if len(by_owner) == 1 else None):
-            close.append({"id": iid, "label": d["title"],
+            close.append({"id": iid, "label": d["title"], "item": d,
                           "evidence": f"Orca 카드 {card.get('name') or card['id']} ({card.get('phase') or '?'})"})
     handles = {t.get("handle") for s in state.get("sessions") or [] for t in s.get("terminals") or []}
     leads = [{"name": n, "handle": l.get("handle"), "in_fleet": l.get("handle") in handles}
@@ -74,9 +74,11 @@ def apply(now=None):
     """Returns (backup dir or None, closed ids)."""
     now = now or fleet.utcnow()
     ts = fleet.iso(now)
+    judged = plan(now)["close"]
     found = [{"ev": "done", "id": c["id"], "ts": ts, "by": "migrate", "rule": RULE, "evidence": fleet.mask(c["evidence"]),
-              "label": fleet.mask(c["label"])} for c in plan(now)["close"]]
+              "label": fleet.mask(c["label"])} for c in judged]
     found = [r for r in found if tidy.fits(r)]
+    items = {c["id"]: c["item"] for c in judged}
     if not found:
         return None, []
     dest = backup(now)
@@ -86,7 +88,8 @@ def apply(now=None):
     with store_db.tx() as db:
         have = store_db.latest(db)
         for r in found:
-            if (have.get(r["id"]) or {}).get("ev") not in ("done", "reopen"):  # plan() read before this transaction
+            # plan() read before this transaction
+            if (have.get(r["id"]) or {}).get("ev") not in ("done", "reopen") and store_db.item_same(db, items[r["id"]]):
                 store_db.close_unit(db, r)
                 closed.append(r["id"])
     return dest, closed
