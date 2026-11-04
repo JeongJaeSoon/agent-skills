@@ -1385,13 +1385,15 @@ def container_row(c):
 
 
 def container_rows():
-    """container_row of every container, None unless each came back whole: a Mounts or Labels missing from what Docker
-    answered would read as no reference and no stack."""
+    """container_row of every container, None unless each came back whole: Mounts, Labels or PortBindings missing from
+    what Docker answered would read as no reference, no stack and no protected port."""
     found = docker_containers()
     if found is None:
         return None
     try:
-        if all(isinstance(c.get(k), t) for c in found for k, t in CONTAINER_SHAPE.items()):
+        if all(isinstance(c.get(k), t) for c in found for k, t in CONTAINER_SHAPE.items()) and \
+                all("Labels" in c["Config"] and "PortBindings" in c["HostConfig"] and all("Type" in m for m in c["Mounts"])
+                    for c in found):
             return [container_row(c) for c in found]
     except (ValueError, TypeError, KeyError, AttributeError):
         pass

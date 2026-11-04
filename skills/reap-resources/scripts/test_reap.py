@@ -1318,8 +1318,11 @@ assert reap.act(box, []).startswith("건너뜀: 컨테이너를 다시 읽지 �
 reap.run = docker_run
 # A reply that succeeded but is not whole reads as unreadable, never as no reference: nothing is a target.
 whole = ctr("example-verify-1")
-for reply in ("[]", "{}", "not json", json.dumps([{"Id": "other"}]), *(json.dumps([{k: v for k, v in whole.items() if k != gap}])
-                                                                       for gap in ("Id", "Name", "State", "Config", "HostConfig", "Mounts"))):
+for reply in ("[]", "{}", "not json", json.dumps([{"Id": "other"}]),
+              *(json.dumps([{k: v for k, v in whole.items() if k != gap}])
+                for gap in ("Id", "Name", "State", "Config", "HostConfig", "Mounts")),
+              json.dumps([{**whole, "Config": {}}]), json.dumps([{**whole, "HostConfig": {}}]),
+              json.dumps([{**whole, "Mounts": [{"Name": "example_db"}]}])):
     reap.run = lambda cmd, cwd=None, check=True, env=None, timeout=None: reply if cmd[:2] == ["docker", "inspect"] else docker_run(cmd)
     notes = []
     assert reap.leftovers(CFG, 6, LATE, notes) == [] and "읽지 못함" in notes[0], (reply, notes)
