@@ -188,10 +188,6 @@ Usage: orch <command> <slug> [options]
                                      holds it and refreshes your own; a hold idle past --ttl (120) is
                                      broken. WHO defaults to $ORCA_TERMINAL_HANDLE. --list shows these
                                      and the exclusive landing lanes
-  refusal report [--json] | refusal clear <id>
-                                     no slug: the refused-act ledger (hooks/refusals.py). report lists the open
-                                     refusals every session is blocked from doing again; clear is the human's,
-                                     typed as a `!` line (the guard hook refuses it from an agent)
 
 Store: ~/.claude/programs/<slug>/ (program.json holds identifiers only; ledger.jsonl is
 append-only). Events: spawned, ready, verdict, landed, main_green, main_red, land_failed,
@@ -617,12 +613,12 @@ def unblocks(ticket, after, open_tickets):
     return len(seen & open_tickets)
 
 
-def row_state(row, verdict):
+def row_state(row, verdict, no_ci=False):
     """ready, catching_up (only an update-branch or CI time stands between it and landing), or blocked."""
     if row is None:
         return "gone", ["PR is no longer open"]
     blocked, catching = [], []
-    failed, pending, _ = ci_summary(row.get("statusCheckRollup"))
+    failed, pending, _ = ci_summary(row.get("statusCheckRollup"), no_ci)
     mss = row.get("mergeStateStatus")
     if row.get("isDraft"):
         blocked.append("draft")
@@ -663,6 +659,7 @@ def land_order(events, rows, cfg, when, stacks=None, deps=None):
     below it is.
     """
     st, tickets, after = pr_state(events), pr_ticket(events), dep_map(events, deps)
+    no_ci = no_ci_repo(cfg.get("repo"))
     rows = {r["number"]: r for r in rows}
     landed_t = {tickets.get(e.get("pr")) for e in events if e["ev"] == "landed"}
     pending = ready_prs(events)
@@ -682,7 +679,7 @@ def land_order(events, rows, cfg, when, stacks=None, deps=None):
         if age_h >= knob(cfg, "aging_hours"):
             rank = min(rank, KLASS["urgent"])
         ticket = tickets.get(pr)
-        state, reasons = row_state(rows.get(pr), s.get("verdict"))
+        state, reasons = row_state(rows.get(pr), s.get("verdict"), no_ci)
         if on_hold(events, pr) and state != "gone":
             state, reasons = "blocked", ["on hold"] + reasons
         live = stack_of.get(pr, [])
@@ -690,7 +687,7 @@ def land_order(events, rows, cfg, when, stacks=None, deps=None):
         waits = sorted(b for b in after.get(ticket, ()) if b not in landed_t | below_t)
         if waits and state != "gone":
             state, reasons = "waiting", [f"lands after {', '.join(waits)}"] + reasons
-        lane = (s.get("lane") or {}).get("exclusive", False) or klass == "gate"
+        lane = (s.get("lane") or {}).get("exclusive", False) or klass == "gate" or no_ci
         out.append({"pr": pr, "ticket": ticket, "klass": klass, "rank": rank,
                     "unblocks": unblocks(ticket, after, open_t) if ticket else 0,
                     "since": first.isoformat(), "age_h": round(age_h, 2), "state": state, "reasons": reasons,
@@ -1012,17 +1009,66 @@ def open_rows(repo):
                    "number,title,headRefOid,headRefName,mergeStateStatus,isDraft,statusCheckRollup,baseRefName")
 
 
-def repo_stacks(repo):
-    """{stack id: [PR numbers bottom→top]} from GitHub stacked PRs, or {} when unavailable.
-
-    This is the endpoint the gh-stack extension itself reads; it is not a documented API, so a
-    failure only turns stack-aware landing off, never landing itself.
+def read_stacks(repo):
+    """{stack number: [open PR numbers bottom→top]} of the open stacks, or None when GitHub did not answer in that
+    shape. https://docs.github.com/en/rest/pulls/stacks. A finished stack stays listed with `open` false and the
+    listing has no state filter, so all pages are read.
     """
-    r = run(["gh", "api", f"repos/{repo}/cli_internal/pulls/stacks"], check=False)
+    r = run(["gh", "api", f"repos/{repo}/stacks?per_page=100", "--paginate", "--slurp"], check=False)
     try:
-        return {s["id"]: s["pull_requests"] for s in json.loads(r.stdout)} if r.returncode == 0 else {}
+        return {s["number"]: [p["number"] for p in s["pull_requests"] if p["state"] == "open"]
+                for page in json.loads(r.stdout) for s in page if s["open"]} if r.returncode == 0 else None
     except (ValueError, KeyError, TypeError):
-        return {}
+        return None
+
+
+def repo_stacks(repo):
+    """read_stacks with an unreadable listing as no stacks: it turns stack-aware landing off, never landing itself."""
+    return read_stacks(repo) or {}
+
+
+def in_a_stack(repo, pr):
+    """The PR's own `stack` field says it is in one. False also when the field cannot be read."""
+    r = run(["gh", "api", f"repos/{repo}/pulls/{pr}", "--jq", ".stack"], check=False)
+    return r.returncode == 0 and r.stdout.strip() not in ("", "null")
+
+
+def stack_level():
+    """`orchestrate.stack_dependent` of ~/.claude/agent-skills.json, read as hooks/lib/config.level reads it, warn
+    by default. hooks/stack_gate.py reads the same key."""
+    path = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-skills.json").expanduser()
+    try:
+        value = json.loads(path.read_text())["orchestrate"]["stack_dependent"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return "warn"
+    return "off" if value is False else value if value in ("deny", "off") else "warn"
+
+
+def stack_gaps(events, rows, stacks, deps, pr):
+    """(gaps, flipped) among the land-after edges at this PR whose two PRs are both open, as (lower, upper) pairs.
+    A gap is an edge outside any stack. Flipped is an edge a stack holds upside down: the upper waits for the lower's
+    layer and the dep waits the other way, so neither ever lands."""
+    after = dep_map(events, deps)
+    prs = program_prs(events, rows, set(after) | {t for lowers in after.values() for t in lowers})
+    mine = prs.get(pr)
+    edges = [(n, pr) for n, t in prs.items() if t in after.get(mine, ())] + \
+            [(pr, n) for n, t in prs.items() if mine in after.get(t, ())] if mine else []
+    gaps, flipped = [], []
+    for low, up in edges:
+        members = next((m for m in stacks.values() if low in m and up in m), None)
+        if members is None:
+            gaps.append((low, up))
+        elif members.index(low) > members.index(up):
+            flipped.append((low, up))
+    return gaps, flipped
+
+
+def gap_text(repo, gaps, base):
+    return "; ".join(f"#{up} lands after #{low} and they are not a GitHub stack: gh stack link {low} {up} --base {base},"
+                     f" confirm with gh api repos/{repo}/pulls/{up} --jq .stack" for low, up in gaps)
+
+
+FLIPPED = "the stack has #{up} below #{low}, which it lands after, so neither can land: fix the dep or the stack's order"
 
 
 def patch_id(repo, pr):
@@ -1071,16 +1117,31 @@ def local_diff(repo, pr, gh_err):
                    "--src-prefix=a/", "--dst-prefix=b/", mb, v["headRefOid"], env=offline).stdout
 
 
+# No checks already holds (ci_summary), so statusCheckRollup is not among them.
+LAND_CHECK_FIELDS = ("state", "isDraft", "headRefOid", "mergeStateStatus", "url")
+
+
 def pr_view(repo, pr):
     return gh_json("pr", "view", str(pr), "--repo", repo, "--json",
-                   "state,isDraft,headRefOid,headRefName,baseRefName,mergeStateStatus,mergeable,statusCheckRollup,mergeCommit,url")
+                   "state,isDraft,headRefOid,headRefName,baseRefName,mergeStateStatus,mergeable,statusCheckRollup,mergeCommit,url,title")
 
 
-def ci_summary(rollup):
-    # No checks on a head usually means CI has not reported yet, so it never counts as green.
-    # A repo with no CI at all therefore cannot land; add a require_ci knob if one ever joins a program.
+def no_ci_repo(repo):
+    """The human declared this repo CI-less in agent-skills.json (orchestrate.no_ci_repos). A user file, not a program
+    key: `orch set` raises no dialog, and a worker must not be able to drop CI from its own landing. Unreadable: False."""
+    path = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-skills.json").expanduser()
+    try:
+        repos = (json.loads(path.read_text()).get("orchestrate") or {}).get("no_ci_repos")
+    except (OSError, ValueError, AttributeError):
+        return False
+    return isinstance(repos, list) and repo in repos
+
+
+def ci_summary(rollup, no_ci=False):
+    # No checks on a head usually means CI has not reported yet, so it never counts as green. Only a declared no-CI
+    # repo reads a confirmed empty rollup as nothing to wait for; a missing one stays unknown.
     if not rollup:
-        return [], ["no CI checks reported yet"], []
+        return [], [] if no_ci and rollup is not None else ["no CI checks reported yet"], []
     failed, pending, runs = [], [], set()
     for c in rollup or []:
         name = c.get("name") or c.get("context")
@@ -1096,7 +1157,7 @@ def ci_summary(rollup):
     return failed, pending, sorted(runs)
 
 
-def runs_unfinished(repo, sha):
+def runs_unfinished(repo, sha, no_ci=False):
     """Workflow runs at `sha` that have not finished. The check rollup alone is not enough: a bot's status
     (a review app) can be its only entry before Actions starts, and a job behind `needs` has no check until
     the jobs before it end, so an early all-green rollup once landed a PR before its CI ran."""
@@ -1105,7 +1166,7 @@ def runs_unfinished(repo, sha):
     except (SystemExit, Exception) as e:
         return [f"workflow runs unreadable ({type(e).__name__})"]
     if not rs:
-        return ["no workflow run at the head yet"]
+        return [] if no_ci else ["no workflow run at the head yet"]
     return [f"{r.get('name')} {r.get('status')}" for r in rs if r.get("status") != "completed"]
 
 
@@ -1138,9 +1199,21 @@ def admitted_tickets(events):
     return [t for t, ev in triage.items() if ev == "admitted"]
 
 
-def gate_resolution(cfg, events, pr):
+def gate_rows(events, pr, warn=True):
+    """The PR's gate_opened rows that name both their Task and gate. A row missing either is no gate anyone can
+    resolve, so it is skipped (with one warning line) and `orch gate` may open a new one."""
+    rows = [e for e in events if e["ev"] == "gate_opened" and e.get("pr") == pr]
+    good = [e for e in rows if e.get("task") and e.get("gate")]
+    if warn and len(good) < len(rows):
+        bad = [e for e in rows if e not in good]
+        print(f"warning: skipped {len(bad)} gate_opened row(s) for #{pr} with no task or gate: {json.dumps(bad[-1])[:300]}",
+              file=sys.stderr)
+    return good
+
+
+def gate_resolution(cfg, events, pr, warn=True):
     """The resolution of the newest landing gate opened for this PR, or None while it is pending."""
-    opened = [e for e in events if e["ev"] == "gate_opened" and e.get("pr") == pr]
+    opened = gate_rows(events, pr, warn)
     if not opened:
         return None
     res = orca_json("orchestration", "gate-list", "--task", opened[-1]["task"], "--run", cfg["run"])
@@ -1150,13 +1223,30 @@ def gate_resolution(cfg, events, pr):
     return None
 
 
+def gate_hold(p, events, pr):
+    """None when the human gate clears this PR, else why not. An approval holds only until a newer gate opens."""
+    rows = [e for e in events if e.get("pr") == pr and e["ev"] in ("gate_opened", "approved")]
+    if rows and rows[-1]["ev"] == "approved":
+        return None
+    resolution = gate_resolution(p.cfg, events, pr)
+    if resolution == "land":
+        p.append("approved", pr=pr, note="orca gate resolved: land")
+        return None
+    if resolution:
+        close_gate_task(p, pr, "failed")
+        return f"human-gate: the user resolved the gate as '{resolution}'"
+    if gate_rows(events, pr, warn=False):
+        return "human-gate: gate open in Orca, waiting for the user"
+    return f"human-gate: open the gate first (orch gate {p.slug} --pr {pr})"
+
+
 GATE_TASK = "Land #"
 
 
 def close_gate_task(p, pr, status):
     """No worker settles the lead-owned `Land #N` Task, so it would sit in `task-list --ready` for good:
     completed when the PR lands, failed when the gate is held or the PR is closed. A new gate makes a new Task."""
-    opened = [e for e in p.events() if e["ev"] == "gate_opened" and e.get("pr") == pr]
+    opened = gate_rows(p.events(), pr, warn=False)
     if opened:
         run(["orca", "orchestration", "task-update", "--id", opened[-1]["task"], "--status", status,
              "--run", p.cfg["run"], "--json"], check=False)
@@ -1228,13 +1318,13 @@ def cmd_init(argv):
 
 STALL_TEXT = {
     "idle": "turn ended {minutes} min ago with its task open and no wake-up armed; an orchestration message "
-            "does not wake an idle session: send the content to dispatch:{dispatch}, then nudge its terminal with "
-            "one line (orca terminal send --text 'run your orchestration check' --enter)",
+            "does not wake an idle session: send the content to dispatch:{dispatch}, then wake it by "
+            "references/waking.md (skills-sync wake-target <terminal>)",
     "start_unconfirmed": "dispatched {minutes} min ago and its session has written nothing: check it got the brief",
     "long_tool": "one {tool} call running for {minutes} min ({detail}): still waiting on purpose?",
     "silent": "its session has written nothing for {minutes} min though its last row is input, not an ended turn "
               "(a notification that arrived after the turn ended looks like this): read its terminal, and if it sits "
-              "at the prompt, send the content to dispatch:{dispatch} and nudge its terminal as for an idle one",
+              "at the prompt, send the content to dispatch:{dispatch} and wake it as for an idle one",
 }
 
 
@@ -1713,6 +1803,11 @@ class ExclusiveLock:
         self.path = HOME / "_locks" / (f"{p.cfg['repo']}@{base}".replace("/", "__") + ".lock")
 
     def holder(self):
+        with self.serialized():
+            return self.read()
+
+    def read(self):
+        """Call with serialized() held: it can delete a stale lock. flock does not nest across descriptors."""
         try:
             held = json.loads(self.path.read_text() or "{}")
         except (OSError, ValueError):
@@ -1724,43 +1819,68 @@ class ExclusiveLock:
             return None
         return held
 
+    @contextlib.contextmanager
+    def serialized(self):
+        """Every check-then-delete of a lock excludes the others: it could otherwise delete a lock the next PR took
+        between the two. The flock is on the directory, so no sidecar file sits among the locks."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(self.path.parent, os.O_RDONLY)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            os.close(fd)
+
     def take(self, pr):
         """True if this PR now holds the lane (newly or already)."""
-        held = self.holder()
-        mine = {"pr": pr, "program": self.p.slug, "ts": now()}
-        if held:
-            if (held.get("pr"), held.get("program")) != (pr, self.p.slug):
+        with self.serialized():
+            held = self.read()
+            mine = {"pr": pr, "program": self.p.slug, "ts": now()}
+            if held:
+                if (held.get("pr"), held.get("program")) != (pr, self.p.slug):
+                    return False
+                tmp = self.path.with_suffix(".tmp")
+                tmp.write_text(json.dumps(mine))
+                os.replace(tmp, self.path)
+                return True
+            try:
+                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
                 return False
-            tmp = self.path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(mine))
-            os.replace(tmp, self.path)
+            os.write(fd, json.dumps(mine).encode())
+            os.close(fd)
+            self.p.append("lock_acquired", pr=pr, note=self.path.name)
             return True
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            return False
-        os.write(fd, json.dumps(mine).encode())
-        os.close(fd)
-        self.p.append("lock_acquired", pr=pr, note=self.path.name)
-        return True
 
     def break_if_closed(self, held):
         """A holder whose PR was closed or merged elsewhere never releases; free the lane now, not after the stale window."""
         r = run(["gh", "pr", "view", str(held.get("pr")), "--repo", self.p.cfg["repo"], "--json", "state", "--jq", ".state"],
                 check=False)
         state = r.stdout.strip()
-        if r.returncode == 0 and state in ("CLOSED", "MERGED"):
+        if r.returncode != 0 or state not in ("CLOSED", "MERGED"):
+            return held
+        with self.serialized():
+            current = self.read()
+            if current != held:  # the lane changed hands while gh answered
+                return current
             self.path.unlink(missing_ok=True)
             self.p.append("lock_released", pr=held.get("pr"), note=f"holder is {state}")
             return None
-        return held
 
     def release(self, pr):
-        held = self.holder()
-        if held and (held.get("pr"), held.get("program")) == (pr, self.p.slug):
-            self.path.unlink(missing_ok=True)
-            self.p.append("lock_released", pr=pr, note=self.path.name)
+        with self.serialized():
+            held = self.read()
+            if held and (held.get("pr"), held.get("program")) == (pr, self.p.slug):
+                self.path.unlink(missing_ok=True)
+                self.p.append("lock_released", pr=pr, note=self.path.name)
+
+
+def release_own_lanes(p, pr):
+    """A land that ended at exit 1 will not come back on its own, so it holds no lane for the stale window. Another
+    PR's lock stays: release checks the owner."""
+    prefix = f"{p.cfg['repo']}@".replace("/", "__")
+    for path in (HOME / "_locks").glob(f"{prefix}*.lock"):
+        ExclusiveLock(p, path.stem[len(prefix):]).release(pr)
 
 
 def note_attempt(p, events, pr, outcome, reasons):
@@ -1773,6 +1893,7 @@ def note_attempt(p, events, pr, outcome, reasons):
 
 
 KEEP = " A clean update keeps the verdict (same patch-id); re-review only if you resolved conflicts."
+NO_CI_KEEP = " The no-CI lane needs a verdict at the exact head: review the updated head and record it."
 
 ADVICE = {
     "conflicts with base": "rebase onto the base, resolve, re-run the review on the resolution, record a new verdict",
@@ -1782,14 +1903,47 @@ ADVICE = {
 }
 
 
-def update_advice(unit, repo):
-    """How to bring a PR, or a stack bottom-up, onto the latest base. update-branch merges a PR's own base
-    into it, so on a stack top it pulls only the layer below."""
-    if len(unit) == 1:
+def update_advice(unit, repo, stacked=False):
+    """How to bring a PR, or a stack bottom-up, onto the latest base. A stack merges only as a linear chain: a merge
+    commit, or a lower layer rebased alone, gets "Stack needs to be rebased"; every layer rebased bottom-up clears it,
+    a merge commit already in the chain included."""
+    if len(unit) == 1 and not stacked:
         return f"gh pr update-branch {unit[0]} --repo {repo}"
-    return ("update the stack bottom-up, each after the previous finishes: "
-            + "; ".join(f"gh pr update-branch {n} --repo {repo}" for n in unit)
+    return ("rebase the stack bottom-up, each after the previous finishes: "
+            + "; ".join(f"gh pr update-branch {n} --rebase --repo {repo}" for n in unit)
             + " (tell the lower layers' owners)")
+
+
+def async_answer(r):
+    """(status, details) of a merge-async response, (None, {}) when it is not one. gh prints the body on stdout on an
+    HTTP error too."""
+    try:
+        body = json.loads(r.stdout)
+        return (body.get("status"), body["details"]) if isinstance(body["details"], dict) else (None, {})
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return None, {}
+
+
+def merge_async(repo, pr, head):
+    """Request the merge and poll its uuid until it has a result: (gh result, status, details). Status is pending
+    when 15 minutes were not enough, busy on a 409 that names no request to follow, None when the response had no
+    status or uuid. https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request-asynchronously"""
+    # merge_method applies only to a direct merge; on a merge queue branch the queue picks, and `enqueued` comes back.
+    r = run(["gh", "api", "-X", "PUT", f"repos/{repo}/pulls/{pr}/merge-async",
+             "-f", "merge_method=squash", "-f", f"sha={head}"], check=False)
+    status, details = async_answer(r)
+    conflict = r.returncode != 0 and "HTTP 409" in r.stderr  # a request is running; it answers with that one's uuid
+    if not details.get("uuid"):
+        return r, "busy" if conflict else status if details else None, details
+    if status != "pending" and not conflict:
+        return r, status, details
+    for _ in range(90):
+        polled = run(["gh", "api", f"repos/{repo}/pulls/{pr}/merge-async/{details['uuid']}"], check=False)
+        got, answer = async_answer(polled)
+        if polled.returncode == 0 and got in ("merged", "enqueued", "failed"):
+            return r, got, answer
+        time.sleep(10)
+    return r, "pending", details
 
 
 def merge_unit(p, pr, unit, klass, events, onto=None, stacked=False):
@@ -1797,32 +1951,63 @@ def merge_unit(p, pr, unit, klass, events, onto=None, stacked=False):
     `onto`: the lower PR whose branch a `--onto-lower` fold merges into; its ticket has not landed yet.
     `stacked`: the PR is in a GitHub stack, also when it lands alone as a lower layer."""
     repo, states, runs = p.cfg["repo"], pr_state(events), []
+    no_ci = no_ci_repo(repo)
     for n in unit:
         v = pr_view(repo, n)
-        if patch_id(repo, n) != (states.get(n, {}).get("verdict") or {}).get("patch_id"):
+        verdict = states.get(n, {}).get("verdict") or {}
+        if patch_id(repo, n) != verdict.get("patch_id"):
             note_attempt(p, events, pr, "blocked", [f"patch of #{n} changed since its verdict"])
             return 3, f"act: the patch of #{n} changed since its verdict (conflict fix, restack or edit): re-review, then orch verdict"
-        failed, pending, r_ = ci_summary(v["statusCheckRollup"])
+        failed, pending, r_ = ci_summary(v["statusCheckRollup"], no_ci)
         runs += r_
         if failed or pending or v["mergeStateStatus"] in ("BEHIND", "DIRTY"):
             return 2, f"#{n} moved since the order was read; land again"
-        if unfinished := runs_unfinished(repo, v["headRefOid"]):
+        if unfinished := runs_unfinished(repo, v["headRefOid"], no_ci):
             return 2, f"yield: CI has not finished at #{n}'s head ({', '.join(unfinished[:3])}); land again"
+        if no_ci:
+            # No run proves this head on this base, so the review has to be of exactly what merges.
+            if verdict.get("sha") != v["headRefOid"]:
+                return 3, (f"act: no-CI lane: #{n}'s verdict is for {(verdict.get('sha') or 'nothing')[:8]}, not the head"
+                           f" {v['headRefOid'][:8]}: review that head, run the VERIFY commands, orch verdict, land again")
+            if compare(repo, v.get("baseRefName") or "main", v["headRefOid"]).get("behind_by") != 0:
+                return 3, (f"act: no-CI lane: #{n}'s head does not contain its base: {update_advice(unit, repo, stacked)},"
+                           " review the new head, orch verdict, land again")
+        try:
+            threads = unresolved_threads(repo, n)
+        except (SystemExit, Exception) as e:
+            return 2, f"yield: #{n}'s review threads are unreadable ({type(e).__name__}); land again"
+        if threads:
+            note_attempt(p, events, pr, "blocked", [f"{threads} unresolved thread(s) on #{n}"])
+            return 3, f"act: #{n} has {threads} unresolved review thread(s): answer and resolve them, then land again"
     head = v["headRefOid"]
     use_async = stacked or len(unit) > 1
+    status, details = None, {}
     if not use_async:
         r = run(["gh", "pr", "merge", str(pr), "--repo", repo, "--squash", "--match-head-commit", head], check=False)
     else:
-        # A stacked PR refuses `gh pr merge`; merge-async on a layer lands it and every layer below, not above.
-        r = run(["gh", "api", "-X", "PUT", f"repos/{repo}/pulls/{pr}/merge-async",
-                 "-f", "merge_method=squash", "-f", f"sha={head}"], check=False)
+        # A stacked PR refuses `gh pr merge`, also as the last open layer; merge-async on a layer lands it and every
+        # layer below, not above.
+        r, status, details = merge_async(repo, pr, head)
+        if status == "busy":
+            return 2, f"yield: a merge request for #{pr} is already running; land again"
+        if status in ("enqueued", "pending"):
+            note = (f"in the merge queue: {details.get('message') or 'enqueued'}" if status == "enqueued"
+                    else "merge request still pending after 15 minutes")
+            p.append("yield", pr=pr, note=note, unit=unit)  # the layers may close apart, hours later
+            return 2, f"yield: #{pr} {note}; land again records it once it has merged"
+        if status is None and r.returncode == 0:
+            print(f"warning: merge-async answered without a status or uuid; reading #{pr} instead: {r.stdout[:200]}", flush=True)
     merged = {}
-    for _ in range(90 if use_async else 1):
+    # `merged` is the requested PR's result and a stack's layers close seconds apart; with no result the PRs are all there is.
+    reads = 1 if not use_async else 6 if status == "merged" else 90 if status is None and r.returncode == 0 else 1
+    for i in range(reads):
         merged = {n: pr_view(repo, n) for n in unit}
-        if all(x["state"] == "MERGED" for x in merged.values()) or r.returncode != 0:
+        if all(x["state"] == "MERGED" for x in merged.values()) or i == reads - 1:
             break
         time.sleep(10)
     one_push = merged[pr]["state"] == "MERGED"  # a layer merged without its top got its own main CI run
+    if one_push:
+        record_queued(p, pr, skip=unit)
     for n, x in merged.items():
         if x["state"] == "MERGED" and "landed" not in states.get(n, {}):
             p.append("landed", pr=n, sha=(x.get("mergeCommit") or {}).get("oid"),
@@ -1830,18 +2015,41 @@ def merge_unit(p, pr, unit, klass, events, onto=None, stacked=False):
                      stack_top=pr if n != pr and one_push else None, onto=onto)
             close_gate_task(p, n, "completed")
     if merged[pr]["state"] != "MERGED":
-        why = (r.stderr or r.stdout).strip()[:300] or "merge-async did not finish in 15 minutes"
+        why = details.get("message") if status == "failed" else r.stderr or ("" if use_async else r.stdout)
+        why = (why or "").strip()[:300] or "merge-async did not finish in 15 minutes"
+        if "head branch was modified" in why:
+            return 2, f"#{pr} moved since the order was read; land again"
         if r.returncode != 0 and TRANSIENT.search(why):
             return 2, f"yield: GitHub did not answer the merge ({why[:160]}); land again"
         p.append("land_failed", pr=pr, note=why)
+        if "needs to be rebased" in why:
+            return 3, f"act: {why} {update_advice(unit, repo, True)}, then land again"
         if "not up to date" in why or "behind" in why.lower():
-            return 3, f"act: the base requires up-to-date branches: {update_advice(unit, repo)}, then land again"
+            return 3, f"act: the base requires up-to-date branches: {update_advice(unit, repo, stacked)}, then land again"
         return 1, f"merge refused: {why}"
     sha = (merged[pr].get("mergeCommit") or {}).get("oid")
+    if no_ci:
+        return 0, (f"landed #{pr} (merge commit {sha[:8]}; no-CI repo, so no run proves main): run the brief's VERIFY"
+                   f" commands at {sha}, then orch record {p.slug} main_green|main_red --pr {pr} --sha {sha}")
     return 0, (f"landed {' '.join('#' + str(n) for n in unit)} (merge commit {sha[:8]}; CI runs {' '.join(runs) or '-'}; read their logs in the report). "
                f"Watch main: gh run list --repo {repo} --commit {sha} --json databaseId,workflowName,status, "
                f"then gh run watch <id> --repo {repo} --exit-status and orch record {p.slug} main_green|main_red --pr {pr} --sha {sha}"
                + base_ci_hint(repo, merged[pr].get("baseRefName")))
+
+
+def record_queued(p, pr, skip=()):
+    """Record the layers that earlier requests for this PR left unfinished, bottom first, and return them all."""
+    # Every request's unit: a retry after the lower layer merged names a smaller one.
+    queued = list(dict.fromkeys(n for e in p.events() if e.get("pr") == pr for n in e.get("unit") or []))
+    for n in queued:
+        if n in skip:
+            continue
+        x = pr_view(p.cfg["repo"], n)
+        if x["state"] == "MERGED" and "landed" not in pr_state(p.events()).get(n, {}):
+            # No stack_top: the queue may have put the layers in separate merge groups.
+            p.append("landed", pr=n, sha=(x.get("mergeCommit") or {}).get("oid"), note="earlier merge request")
+            close_gate_task(p, n, "completed")
+    return queued
 
 
 def base_ci_hint(repo, base):
@@ -1860,21 +2068,26 @@ def attempt(p, pr, klass, onto_lower=False):
         return 0, f"#{pr} already landed as {st['landed'].get('sha', '')[:8]}"
     if stopped(events):
         return 1, "STOP line active: nothing lands"
-    if cfg["merge_policy"] == "human-gate" and "approved" not in st and "gate_opened" in st:
-        resolution = gate_resolution(cfg, events, pr)
-        if resolution == "land":
-            p.append("approved", pr=pr, note="orca gate resolved: land")
-            events, st = p.events(), pr_state(p.events()).get(pr, {})
-        elif resolution:
-            close_gate_task(p, pr, "failed")
-            return 1, f"human-gate: the user resolved the gate as '{resolution}'"
     main = main_state(events)
     if main == "red" and klass != "main-fix":
         return 1, "safety stop: main is red; only the repair lands (--class main-fix)"
     rows = open_rows(repo)
-    stacks = repo_stacks(repo)
-    order = land_order(events, rows, cfg, dt.datetime.now(dt.timezone.utc), stacks, orca_deps(cfg["run"]))
+    stacks = read_stacks(repo)
+    unread = stacks is None
+    if unread:
+        print("warning: the repository's stacks could not be read; dependent PRs are not checked", flush=True)
+        if in_a_stack(repo, pr):
+            # merge-async takes every open layer below; without the listing those layers go unverified.
+            return 2, f"yield: #{pr} is in a stack and the stack listing did not answer; land again"
+        stacks = {}
+    deps = orca_deps(cfg["run"])
+    order = land_order(events, rows, cfg, dt.datetime.now(dt.timezone.utc), stacks, deps)
     stacked = any(pr in members for members in stacks.values())
+    members = next((m for m in stacks.values() if pr in m), [])
+    seen = {r["number"] for r in rows}
+    if unseen := [m for m in members[:members.index(pr)] if m not in seen] if members else []:
+        return 3, (f"act: stack layer {', '.join(f'#{m}' for m in unseen)} under #{pr} is not among the {OPEN_LIMIT} open"
+                   " PRs read, so it cannot be checked, and merge-async would take it too. Land it first")
     me = next((e for e in order if e["pr"] == pr), None)
     tracked = pr_state(events)  # an integration branch's own PR (feature → main) is never landed through orch
     below = next((r for r in rows if me and not me["stack"] and r.get("headRefName") == me.get("base")
@@ -1884,8 +2097,8 @@ def attempt(p, pr, klass, onto_lower=False):
     if lower:
         # Based on another open PR's branch without being a GitHub stack: a squash would land in that branch.
         return 3, (f"act: #{pr} is based on #{lower['number']}'s branch {me['base']}, not a GitHub stack, so a merge would"
-                   f" land in that branch. Land #{lower['number']} first, then gh pr edit {pr} --repo {repo} --base"
-                   f" {lower.get('baseRefName')} and gh pr update-branch {pr} --repo {repo}, and land again."
+                   f" land in that branch. Stack them: gh stack link {lower['number']} {pr} --base"
+                   f" {lower.get('baseRefName')}, confirm with gh api repos/{repo}/pulls/{pr} --jq .stack, and land again."
                    f" To fold it into #{lower['number']} on purpose (top-down), land again with --onto-lower")
     if me is None or me["state"] == "gone":
         v = pr_view(repo, pr)
@@ -1895,6 +2108,8 @@ def attempt(p, pr, klass, onto_lower=False):
             if "landed" in st:  # a stack layer lands with its top, whose land call recorded it
                 return 0, (f"#{pr} already landed as {(st['landed'].get('sha') or '')[:8]} ({st['landed'].get('note') or 'recorded'});"
                            " main CI ran once on the stack top's commit, and the top's owner records it")
+            if queued := record_queued(p, pr):
+                return 0, f"#{pr} was merged by an earlier request (merge queue or a slow merge); recorded {' '.join(f'#{n}' for n in queued)}"
             p.append("landed", pr=pr, sha=sha, note="merged outside land")
             close_gate_task(p, pr, "completed")
             return 0, f"#{pr} was merged outside land; recorded"
@@ -1903,6 +2118,18 @@ def attempt(p, pr, klass, onto_lower=False):
         return 1, f"#{pr} is {v['state']}"
     if on_hold(events, pr):
         return 1, f"#{pr} is on hold (record parked); `orch record {p.slug} admitted --pr {pr}` releases it"
+    # Before the waits below: a dependent PR outside a stack waits on them for as long as its lower PR takes.
+    gaps, flipped = stack_gaps(events, rows, stacks, deps, pr) if not unread else ([], [])
+    if flipped:
+        note_attempt(p, events, pr, "blocked", ["stack order flipped"])
+        return 3, "act: " + "; ".join(FLIPPED.format(low=low, up=up) for low, up in flipped)
+    level = stack_level()
+    if gaps and level != "off":
+        text = gap_text(repo, gaps, me.get("base") or "main")
+        if level == "deny" and klass != "main-fix":
+            note_attempt(p, events, pr, "blocked", ["dependent PR outside a stack"])
+            return 3, f"act: {text} (orchestrate.stack_dependent: deny)"
+        print(f"warning: {text}", flush=True)
     if me["state"] == "waiting":
         if st.get("yield", {}).get("note") != me["reasons"][0]:
             p.append("yield", pr=pr, note=me["reasons"][0])
@@ -1912,6 +2139,10 @@ def attempt(p, pr, klass, onto_lower=False):
         todo = [ADVICE.get(r, r).format(pr=pr, repo=repo) for r in me["reasons"]]
         return 3, "act: " + " | ".join(todo)
     unit = (me["stack"] or [pr])[: (me["stack"] or [pr]).index(pr) + 1]
+    if cfg["merge_policy"] == "human-gate":
+        for n in unit:
+            if hold := gate_hold(p, p.events(), n):
+                return 1, f"#{n}: {hold}"
     missing = []
     for n in unit:
         problems, notes = evidence_problems(cfg, repo, n)
@@ -1921,10 +2152,12 @@ def attempt(p, pr, klass, onto_lower=False):
     if missing:
         note_attempt(p, events, pr, "blocked", missing)
         return 3, "act: " + " | ".join(missing)
+    no_ci = no_ci_repo(repo)
+    keep = NO_CI_KEEP if no_ci else KEEP
     touched = is_exclusive(cfg, [f for n in unit for f in pr_files(repo, n)])
-    if bool(touched) != bool((st.get("lane") or {}).get("exclusive")):
-        p.append("lane", pr=pr, exclusive=bool(touched), note=", ".join(touched[:5]) or None)
-        me["exclusive"] = bool(touched) or me["klass"] == "gate"
+    if (bool(touched) or no_ci) != bool((st.get("lane") or {}).get("exclusive")):
+        p.append("lane", pr=pr, exclusive=bool(touched) or no_ci, note=", ".join(touched[:5]) or ("no-CI repo" if no_ci else None))
+        me["exclusive"] = bool(touched) or no_ci or me["klass"] == "gate"
     if me["exclusive"]:
         # PRs ahead whose lane is not known yet (they have not called land) are classified now.
         for e in order[:order.index(me)]:
@@ -1947,25 +2180,27 @@ def attempt(p, pr, klass, onto_lower=False):
         if me["state"] == "catching_up":
             note_attempt(p, events, pr, "catching_up", me["reasons"])
             return 3, ("act: you hold the exclusive lane; bring the branch onto the latest base (restack migrations),"
-                       f" let CI run, land again — {'; '.join(me['reasons'])}." + KEEP)
+                       f" let CI run, land again — {'; '.join(me['reasons'])}." + keep)
         if compare(repo, me["base"] or "main", pr_view(repo, pr)["headRefOid"]).get("behind_by"):
-            return 3, (f"act: you hold the exclusive lane and it lands on the latest base only: {update_advice(unit, repo)},"
-                       " let CI run, land again." + KEEP)
+            return 3, (f"act: you hold the exclusive lane and it lands on the latest base only: {update_advice(unit, repo, stacked)},"
+                       " let CI run, land again." + keep)
         code, msg = merge_unit(p, pr, unit, klass, events, onto, stacked)
         if code == 0:
             lane.release(pr)
+        elif code == 1:  # parked, so exclusive_turn passes it over until `record admitted`
+            p.append("parked", pr=pr, note=msg[:300])
         return code, msg
     if me["state"] == "catching_up":
         note_attempt(p, events, pr, "catching_up", me["reasons"])
         if "behind base" in me["reasons"]:
-            return 3, f"act: {update_advice(unit, repo)}, then land again"
+            return 3, f"act: {update_advice(unit, repo, stacked)}, then land again"
         return 2, f"not yet: {'; '.join(me['reasons'])}"
     base = me["base"] or "main"
     overlap = base_overlap(repo, base, compare(repo, base, pr_view(repo, pr)["headRefOid"]))
     if overlap:
         note_attempt(p, events, pr, "act", [f"base changed {', '.join(overlap[:5])}"])
         return 3, (f"act: since your branch point the base changed files you also change ({', '.join(overlap[:5])}):"
-                   f" {update_advice(unit, repo)}, check your contract and test assumptions still hold,"
+                   f" {update_advice(unit, repo, stacked)}, check your contract and test assumptions still hold,"
                    " let CI run, land again." + KEEP)
     return merge_unit(p, pr, unit, klass, events, onto, stacked)
 
@@ -1985,9 +2220,12 @@ def cmd_land(argv):
             code, msg = attempt(p, pr, klass, "--onto-lower" in argv)
         except SystemExit as e:
             if not TRANSIENT.search(str(e.code)):
+                release_own_lanes(p, pr)
                 raise
             code, msg = 2, f"yield: GitHub or Orca did not answer ({str(e.code)[:160]}); land again"
         print(msg, flush=True)
+        if code == 1:
+            release_own_lanes(p, pr)
         if code != 2 or time.monotonic() >= deadline:
             sys.exit(code)
         time.sleep(60)
@@ -1999,6 +2237,10 @@ def cmd_land_check(argv):
     events = p.events()
     st = pr_state(events).get(pr, {})
     v = pr_view(repo, pr)
+    if unread := [k for k in LAND_CHECK_FIELDS if v.get(k) is None]:
+        print(f"warning: gh returned no {','.join(unread)} for #{pr}: {json.dumps(v)[:400]}", file=sys.stderr)
+        print(f"HOLD: PR state unknown (no {','.join(unread)} from gh); run land-check again")
+        sys.exit(1)
     problems = []
     main = main_state(events)
     if main == "red" and "--main-fix" not in argv:
@@ -2011,6 +2253,7 @@ def cmd_land_check(argv):
         print("note: main CI for the last landing has not reported yet")
     if v["state"] != "OPEN" or v["isDraft"]:
         problems.append(f"PR is {v['state']}{' draft' if v['isDraft'] else ''}")
+    no_ci = no_ci_repo(repo)
     verdict = st.get("verdict")
     if not verdict or verdict.get("result") != "pass":
         problems.append("no passing verdict recorded (orch verdict)")
@@ -2018,31 +2261,48 @@ def cmd_land_check(argv):
         cur = patch_id(repo, pr)
         if cur != verdict.get("patch_id"):
             problems.append(f"patch changed since verdict ({verdict.get('patch_id', '')[:10]} -> {cur[:10]}): re-review")
+        elif no_ci and v["headRefOid"] != verdict.get("sha"):
+            problems.append(f"no-CI lane: verdict is for {verdict['sha'][:8]}, not the head {v['headRefOid'][:8]}: re-review")
         elif v["headRefOid"] != verdict.get("sha"):
             print(f"note: head moved {verdict['sha'][:8]} -> {v['headRefOid'][:8]} with the same patch-id; verdict holds, CI must pass at the new head")
-    if p.cfg["merge_policy"] == "human-gate" and "approved" not in st:
-        resolution = gate_resolution(p.cfg, events, pr)
-        if resolution == "land":
-            p.append("approved", pr=pr, note="orca gate resolved: land")
-        elif resolution:
-            close_gate_task(p, pr, "failed")
-            problems.append(f"human-gate: the user resolved the gate as '{resolution}'")
-        elif any(e["ev"] == "gate_opened" and e.get("pr") == pr for e in events):
-            problems.append("human-gate: gate open in Orca, waiting for the user")
-        else:
-            problems.append(f"human-gate: open the gate first (orch gate {p.slug} --pr {pr})")
+    if p.cfg["merge_policy"] == "human-gate" and (hold := gate_hold(p, events, pr)):
+        problems.append(hold)
+    try:
+        rows = open_rows(repo)
+    except SystemExit:  # this listing serves only the check below, which passes when it cannot read
+        rows = None
+    stacks = read_stacks(repo)
+    members = next((m for m in (stacks or {}).values() if pr in m), [])
+    unread = stacks is None or rows is None
+    gaps, flipped = ([], []) if unread else stack_gaps(events, rows, stacks, orca_deps(p.cfg["run"]), pr)
+    level = stack_level()
+    if unread:
+        print("warning: the repository's stacks could not be read; dependent PRs are not checked")
+    problems += [FLIPPED.format(low=low, up=up) for low, up in flipped]
+    if gaps and level == "deny" and "--main-fix" not in argv:
+        problems.append(gap_text(repo, gaps, v.get("baseRefName") or "main"))
+    elif gaps and level != "off":
+        print(f"warning: {gap_text(repo, gaps, v.get('baseRefName') or 'main')}")
     mss = v["mergeStateStatus"]
     if mss == "DIRTY":
         problems.append("conflicts with base: fix task in the PR's worktree")
     elif mss == "BEHIND":
-        problems.append(f"behind base: gh pr update-branch {pr} --repo {repo}, then wait for CI")
-    failed, pending, runs = ci_summary(v["statusCheckRollup"])
+        unit = members[:members.index(pr) + 1] if members else [pr]
+        problems.append(f"behind base: {update_advice(unit, repo, bool(members))}, then wait for CI")
+    failed, pending, runs = ci_summary(v.get("statusCheckRollup"), no_ci)
     if not failed and not pending:
-        pending = runs_unfinished(repo, v["headRefOid"])
+        pending = runs_unfinished(repo, v["headRefOid"], no_ci)
     if failed:
         problems.append("CI failed: " + ", ".join(failed))
     if pending:
         problems.append("CI pending: " + ", ".join(pending[:5]))
+    if no_ci and compare(repo, v.get("baseRefName") or "main", v["headRefOid"]).get("behind_by") != 0:
+        problems.append("no-CI lane: the head does not contain its base")
+    try:
+        if threads := unresolved_threads(repo, pr):
+            problems.append(f"{threads} unresolved review thread(s)")
+    except (SystemExit, Exception) as e:
+        problems.append(f"review threads unreadable ({type(e).__name__})")
     missing, notes = evidence_problems(p.cfg, repo, pr)
     problems += missing
     for line in notes:
@@ -2084,21 +2344,40 @@ def cmd_gate(argv):
         sys.exit("this lead is a dispatched worker, and Orca lets no worker create a Task or gate on the Run it works "
                  "for (worker_cannot_coordinate_own_run), so `orch land` never sees `approved`. Have the orchestrator "
                  "restart this lead as a /goal card (`skills-sync card`, its brief's MERGE line saying human-gate)")
-    if any(e["ev"] == "gate_opened" and e.get("pr") == pr for e in p.events()) and gate_resolution(p.cfg, p.events(), pr) is None:
-        gid = next(e.get("gate") for e in reversed(p.events()) if e["ev"] == "gate_opened" and e.get("pr") == pr)
+    if (opened := gate_rows(p.events(), pr)) and gate_resolution(p.cfg, p.events(), pr, warn=False) is None:
+        gid = opened[-1]["gate"]
         sys.exit(f"a gate for #{pr} is already open; the user resolves it in Orca"
                  f" (or: orca orchestration gate-resolve --id {gid} --resolution land|hold)")
     v = pr_view(p.cfg["repo"], pr)
-    spec = (f"Land PR #{pr} ({v['url']}) with orch land once the user resolves the gate. "
+    if v.get("state") != "OPEN":
+        sys.exit(f"PR #{pr} is {v.get('state') or 'in an unknown state'}; a landing gate is only for an open PR")
+    url = v.get("url") or f"#{pr}"
+    if title := v.get("title"):
+        question = f"Land PR #{pr}: {title}?"
+    else:
+        print(f"warning: gh returned no title for #{pr}; the gate asks with the PR URL instead", file=sys.stderr)
+        question = f"Land PR #{pr} ({url})?"
+    spec = (f"Land PR #{pr} ({url}) with orch land once the user resolves the gate. "
             "Lead-owned; no worker is dispatched for this Task.")
     args = ["orchestration", "task-create", "--run", p.cfg["run"], "--spec", spec, "--task-title", f"{GATE_TASK}{pr}"]
     if opt(argv, "--parent"):
         args += ["--parent", opt(argv, "--parent")]
     task = orca_json(*args)
     task_id = (task.get("task") or task).get("id")
-    gate = orca_json("orchestration", "gate-create", "--task", task_id,
-                     "--question", f"Land PR #{pr}: {v['title']}?", "--options", json.dumps(["land", "hold"]))
-    gate_id = (gate.get("gate") or gate).get("id")
+    if not task_id:
+        sys.exit(f"orca task-create returned no Task id, so no gate was opened: {json.dumps(task)[:400]}")
+    try:
+        gate = orca_json("orchestration", "gate-create", "--task", task_id,
+                         "--question", question, "--options", json.dumps(["land", "hold"]))
+        gate_id = (gate.get("gate") or gate).get("id")
+        if not gate_id:
+            sys.exit(f"orca gate-create returned no gate id: {json.dumps(gate)[:400]}")
+    except SystemExit as e:
+        # Unrecorded, the gate-less Task would sit in task-list --ready for good; the next `orch gate` makes a new one.
+        r = run(["orca", "orchestration", "task-update", "--id", task_id, "--status", "failed",
+                 "--run", p.cfg["run"], "--json"], check=False)
+        closed = "marked failed" if r.returncode == 0 else f"left open, task-update failed ({r.returncode}); close it in Orca"
+        sys.exit(f"{e}. No gate recorded; Task {task_id} {closed}")
     print(json.dumps(p.append("gate_opened", pr=pr, task=task_id, gate=gate_id), ensure_ascii=False))
     print(f"the user resolves it in Orca (or: orca orchestration gate-resolve --id {gate_id} --resolution land)")
 
@@ -2560,7 +2839,7 @@ def on_hold(events, pr):
     return bool(marks) and marks[-1] == "parked"
 
 
-def review_sweep(events, view, active, unresolved, slug, gate=None, unknown=frozenset()):
+def review_sweep(events, view, active, unresolved, slug, gate=None, unknown=frozenset(), no_ci=False):
     """A review that outlasts its worker's session leaves a ready PR nobody lands. unknown: tickets whose worker row
     could not be judged ("*" for a row tied to no ticket); their PRs, or every PR with "*", are never offered to land."""
     ticket = pr_ticket(events)
@@ -2578,16 +2857,18 @@ def review_sweep(events, view, active, unresolved, slug, gate=None, unknown=froz
         if r.get("state") != "OPEN":
             waiting.append(f"{name}: {(r.get('state') or 'unknown').lower()} without merging; ask its owner or drop its ticket")
             continue
-        failed, pending, _ = ci_summary(r.get("statusCheckRollup"))
+        failed, pending, _ = ci_summary(r.get("statusCheckRollup"), no_ci)
         mss = r.get("mergeStateStatus")
         verdict = (st.get("verdict") or {}).get("result")
+        decision = r.get("reviewDecision")
         why = [w for w, bad in (
             ("worker state unknown", "*" in unknown or t in unknown),
             ("no ticket, so no worker is ruled out", not t),
             ("no passing verdict", verdict != "pass"),
             ("draft", r.get("isDraft")),
             ("on hold", on_hold(events, n) or any(HOLD.search(l.get("name") or "") for l in r.get("labels") or [])),
-            ((r.get("reviewDecision") or "no review").lower().replace("_", " "), r.get("reviewDecision") != "APPROVED"),
+            # A declared no-CI repo reviews through the ledger verdict: no GitHub decision is not a wait there.
+            ((decision or "no review").lower().replace("_", " "), decision != "APPROVED" and not (no_ci and not decision)),
             (f"merge state {mss}" + {"DIRTY": ", dispatch a fix", "BEHIND": f", gh pr update-branch {n}"}.get(mss, ""), mss != "CLEAN"),
             ("CI failed, dispatch a fix", failed), ("CI pending", pending)) if bad]
         threads = 0 if why else unresolved(n)
@@ -2617,11 +2898,16 @@ def gate_wait(st, gate, slug, n):
 
 def unresolved_threads(repo, n):
     owner, name = repo.split("/")
-    q = ("query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n)"
-         "{reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}}}}}")
-    res = gh_json("api", "graphql", "-f", f"query={q}", "-f", f"o={owner}", "-f", f"r={name}", "-F", f"n={n}")
-    threads = res["data"]["repository"]["pullRequest"]["reviewThreads"]
-    return sum(not t["isResolved"] for t in threads["nodes"]) or int(threads["pageInfo"]["hasNextPage"])
+    q = ("query($o:String!,$r:String!,$n:Int!,$after:String){repository(owner:$o,name:$r){pullRequest(number:$n)"
+         "{reviewThreads(first:100,after:$after){nodes{isResolved} pageInfo{hasNextPage endCursor}}}}}")
+    count, after = 0, []
+    while True:
+        res = gh_json("api", "graphql", "-f", f"query={q}", "-f", f"o={owner}", "-f", f"r={name}", "-F", f"n={n}", *after)
+        threads = res["data"]["repository"]["pullRequest"]["reviewThreads"]
+        count += sum(not t["isResolved"] for t in threads["nodes"])
+        if not threads["pageInfo"]["hasNextPage"]:
+            return count
+        after = ["-f", f"after={threads['pageInfo']['endCursor']}"]
 
 
 def print_reviews(p):
@@ -2649,10 +2935,13 @@ def review_lines(p, workers=None, tasks=None, unknown=frozenset()):
         lines = review_sweep(events, lambda n: gh_json("pr", "view", str(n), "--repo", repo, "--json", fields),
                              active - {None}, lambda n: unresolved_threads(repo, n), p.slug,
                              (lambda n: gate_resolution(p.cfg, events, n)) if p.cfg.get("merge_policy") == "human-gate" else None,
-                             unknown)
+                             unknown, no_ci_repo(repo))
     except (SystemExit, Exception) as e:  # the batch and its ack line matter more than the sweep
         lines = [f"REVIEWS: sweep failed ({type(e).__name__}: {e}); orch status lists the ready PRs"]
     return lines
+
+
+WAKE_DUE_S = 1800  # sync.py's WAKE_PENDING_S
 
 
 def cmd_wait(argv):
@@ -2683,6 +2972,8 @@ def cmd_wait(argv):
     if watched := watch_lines(me, False):
         print("\n".join(watched), flush=True)
     for i in range(rounds):
+        if wakes := wake_lines(me):  # before the wait: a busy inbox returns early and must not hide these
+            print("\n".join(wakes), flush=True)
         res = check(*box, "--wait", "--types", ",".join(sorted(ACTIONABLE)), "--timeout-ms", timeout)
         did, msgs = batch(res)
         if not did and not msgs:
@@ -2731,6 +3022,29 @@ def cmd_wait(argv):
     moves = next_moves(run_workers(run_id))
     print("\n".join([f"EMPTY x{rounds}: " + (f"{len(moves)} live worker(s), each with its move:" if moves else "no live worker")]
                     + moves))
+
+
+def wake_lines(me, now=None):
+    """Signals this session sent that stayed unconfirmed past `skills-sync wake-target`'s deadline. The background
+    recheck dies with a restart, so the wait keeps the deadline. A record sync's wake_entry would refuse, or one with no
+    sender, belongs to nobody it can name and shows to every session."""
+    root = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()
+    now = time.time() if now is None else now
+    out = []
+    for f in sorted((root / "wakes").glob("*.json")):
+        try:
+            entry = json.loads(f.read_text())
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError):
+            entry = None
+        valid = isinstance(entry, dict) and all(isinstance(entry.get(k), str) for k in ("session", "to", "nonce")) \
+            and isinstance(entry.get("at"), (int, float)) and isinstance(entry.get("offset"), int)
+        if valid and (now - entry["at"] < WAKE_DUE_S or entry.get("from") and entry["from"] != me):
+            continue
+        out.append(f"WAKE {f.stem}: unconfirmed past its deadline; skills-sync wake-check {f.stem}, and without "
+                   "`started` follow references/waking.md (inbox item, then wake-reset once the human has answered)")
+    return out
 
 
 def watch_lines(me, unowned):
@@ -2814,7 +3128,7 @@ def next_moves(workers):
         elif not h or (pj.get("liveness") or {}).get("verdict") == "exited":
             out.append(f"  {d} no terminal: worker-stop or worker-abandon (recovery-and-cleanup.md)")
         elif activity == "idle":  # the turn ended without worker_done; send alone does not wake it (SKILL.md, terminal send)
-            out.append(f"  {d} idle: orchestration send --to dispatch:{d}, then nudge {h}")
+            out.append(f"  {d} idle: orchestration send --to dispatch:{d}, then skills-sync wake-target {h}")
         elif activity == "working":
             out.append(f"  {d} working")
         else:  # waiting may be a permission prompt; unknown needs a look either way
@@ -3030,9 +3344,16 @@ def cmd_stage(argv):
             t, gone = stages.table(state), 0
             if opt(rest, "--program"):
                 t = stages.of_program(t, opt(rest, "--program"))
+            import rowstate
+            try:  # 지금: the brief's own judgment of each row's linked board row; none when the board cannot be read
+                by_pr, known = rowstate.snapshot()["by_pr"], True
+            except Exception as e:  # noqa: BLE001 — the stage table still shows, without 지금 and folding no PR row
+                by_pr, known = {}, False
+                print(f"warning: 지금 칸 없음: {type(e).__name__}: {e}", file=sys.stderr)
+            t = stages.with_now(t, by_pr)
             if "--all" not in rest:  # the rows the brief's line counts
                 idle_d = {**board.LIMITS, **(fleet.config().get("board") or {})}["stage_idle_d"]
-                t, gone = stages.current(t, fleet.utcnow(), idle_d * 86400, state)
+                t, gone = stages.current(t, fleet.utcnow(), idle_d * 86400, state, by_pr, known)
             if "--json" in rest:
                 return print(json.dumps(t, ensure_ascii=False, indent=1))
             text = (stages.render_telegram if "--telegram" in rest else stages.render_md)(t)
@@ -3060,7 +3381,8 @@ def cmd_board(argv):
             board.lead_close(rest[1])
         elif sub == "set" and rid:
             board.set_row(rid, **{f: opt(rest, f"--{f}") for f in
-                                  ("kind", "title", "repo", "program", "parent", "status", "progress", "next", "owner", "pr", "worktree")})
+                                  ("kind", "title", "repo", "program", "parent", "status", "progress", "next", "owner", "pr", "worktree",
+                                   "after")})
         elif sub == "drop" and rid:
             board.drop(rid)
         elif sub == "doing" and rest[:1] == ["add"] and len(rest) > 1:
@@ -3124,7 +3446,7 @@ def cmd_board(argv):
         else:
             sys.exit("usage: orch board lead add <name> --handle H --repo R [--program P] [--run RUN] [--stale-min N] [--worktree ID] | "
                      "lead close <name> | set <id> [--kind K] [--title T] [--repo R] [--program P] [--parent ID] [--status S] "
-                     "[--progress N/M] [--next T] [--owner W] [--pr owner/repo#N] [--worktree ID] | drop <id> | doing add <title> --owner W --next E [--waiting] | doing drop <n> | later add <title> --trigger T [--due D] | "
+                     "[--progress N/M] [--next T] [--owner W|-] [--after owner/repo#N|-] [--pr owner/repo#N] [--worktree ID] | drop <id> | doing add <title> --owner W --next E [--waiting] | doing drop <n> | later add <title> --trigger T [--due D] | "
                      "later drop <n> | todo add <title> (--due D | --after C) --who W | todo drop <n> | todo from-later <n> [--due D] --who W | "
                      "now [LINE]... | show | open [--json] | done <id>... [--why T] [--json] | reopen <id>... [--json] | "
                      "tidy [--dry-run] [--json] | closed")
@@ -3237,36 +3559,11 @@ def cmd_sent(argv):
         sys.exit(f"{e}\n{usage}")
 
 
-def cmd_refusal(argv):
-    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3] / "hooks"))
-    from lib import refusals
-    usage = "usage: orch refusal report [--json] | refusal clear <id>  (no slug)"
-    if argv[:1] == ["report"]:
-        rows = refusals.open_refusals()
-        if "--json" in argv:
-            print(json.dumps(rows, ensure_ascii=False, indent=1))
-            return
-        if not rows:
-            print("no open refusals")
-        for r in rows:
-            print(f"{r['id']}  {r.get('at')}  {r.get('verb')} {r.get('target')}\n"
-                  f"    session {r.get('session') or '?'}  terminal {r.get('terminal') or '-'}  run {r.get('run') or '-'}")
-        if rows:
-            print("\nEach is blocked for every session until you clear it: !orch refusal clear <id>")
-    elif argv[:1] == ["clear"] and len(argv) == 2:
-        hit = refusals.clear(argv[1], sys.stdin.isatty())
-        if not hit:
-            sys.exit(f"{argv[1]} is not an open refusal (orch refusal report lists them)")
-        print("\n".join(f"cleared {r['id']}: {r.get('verb')} {r.get('target')}" for r in hit))
-    else:
-        sys.exit(usage)
-
-
 COMMANDS = {"init": cmd_init, "set": cmd_set, "status": cmd_status, "record": cmd_record, "verdict": cmd_verdict,
             "gate": cmd_gate, "dep": cmd_dep, "queue": cmd_queue, "overlap": cmd_overlap, "land": cmd_land, "land-check": cmd_land_check,
             "landed": cmd_landed, "heavy": cmd_heavy, "wait": cmd_wait, "inbox": cmd_inbox, "backfill": cmd_backfill, "decide": cmd_decide,
             "db": cmd_db,
-            "stage": cmd_stage, "board": cmd_board, "brief": cmd_brief, "hold": cmd_hold, "sent": cmd_sent, "refusal": cmd_refusal, "release": lambda argv: cmd_hold(argv, release=True),
+            "stage": cmd_stage, "board": cmd_board, "brief": cmd_brief, "hold": cmd_hold, "sent": cmd_sent, "release": lambda argv: cmd_hold(argv, release=True),
             "watch-cards": lambda argv: __import__("card_watch").main(argv),
             "patrol": lambda argv: __import__("patrol").main(argv),
             "migrate": lambda argv: __import__("orca_migrate").main(argv),

@@ -1,6 +1,6 @@
 # Landing: parallel by default, exclusive where a merge can break what it does not touch
 
-Development, review, CI and landing all run in parallel. Each worker lands its own PR through `orch land` the moment it is ready, whether or not the PR is behind its base. Only changes that can break a merge they do not textually touch take the **exclusive lane** and land one at a time on the latest base. No lead hands out merge slots.
+Development, review, CI and landing all run in parallel. Each worker lands its own PR through `orch land` the moment it is ready, whether or not the PR is behind its base, then closes itself. The lead holds the judgment and the order, not the merge. Only changes that can break a merge they do not textually touch take the **exclusive lane** and land one at a time on the latest base. No lead hands out merge slots.
 
 This design replaced three that failed:
 
@@ -21,7 +21,8 @@ This design replaced three that failed:
 **Normal lane** (most PRs). `land` merges as soon as all of these hold at the current head:
 
 - a passing verdict whose patch-id matches the PR now
-- CI completed and green, with every workflow run at the head finished. No checks yet counts as pending (so a repo with no workflows never lands here; Frame in `SKILL.md` names its replacement lane), and so does a rollup that holds only a bot's status or the first jobs of a run (jobs behind `needs` appear later). A green check is not proof, so read the logs of the runs it prints.
+- CI completed and green, with every workflow run at the head finished. No checks yet counts as pending (a repo with no workflows lands only through the no-CI lane below), and so does a rollup that holds only a bot's status or the first jobs of a run (jobs behind `needs` appear later). A green check is not proof, so read the logs of the runs it prints.
+- zero unresolved review threads, read right before the merge; unreadable threads hold it
 - no conflict, not a draft
 - its dependencies landed
 - main is not red
@@ -41,7 +42,22 @@ The lane works like this:
 - It lands only on the latest base: not behind at all.
 - The lock does not stop normal-lane PRs, from this program or any other, from moving the base. So the holder, or any PR whose acceptance needs a proof at its exact head (live check, E2E), cannot land while landings on its base come faster than one CI cycle or one proof. After its first exit 3 for a moved base, stop retrying: ask the layer above to hold other landings on that base for one CI cycle or proof plus land, and record the hold in decisions.tsv. This is a window for one PR, not a serialized lane.
 
-Normal-lane PRs never wait for the exclusive lane.
+Normal-lane PRs never wait for the exclusive lane. A `land` that ends at exit 1 frees its PR's own lock, and a merge refused inside the lane parks the PR (`record parked`), so the next PR takes its turn; `record admitted --pr N` brings it back.
+
+**No-CI lane.** For a repo with no CI at all. The human lists it in `~/.claude/agent-skills.json`:
+
+```json
+{"orchestrate": {"no_ci_repos": ["acme/app"]}}
+```
+
+The key is a user setting because `orch set` raises no dialog and a worker must not drop CI from its own landing. It goes through `skills-config`. A repo not listed, or a file that cannot be read, stays on the rules above. For a listed repo:
+
+- A confirmed empty rollup and an empty workflow-run list count as nothing to wait for. A check that did report still counts, failed or pending, and a rollup `gh` did not return stays unknown.
+- Every PR takes the exclusive lane, whatever its files: nothing tests the merge, so nothing else may move the base under it. This does not cover a person merging outside `land` in that window, which no client check can stop.
+- `land` needs a passing verdict at exactly the head (same patch-id at another head is not enough), a head that contains its base (`compare` says behind by 0, the same answer as `git merge-base --is-ancestor`), zero unresolved threads, and the merge is pinned to that head (`--match-head-commit`, or `sha` on a stack's merge-async).
+- So an update onto the base needs a new review of the new head and a new `orch verdict`.
+- A stack lands here like any stack, and every layer it lands has to meet all of the above. A verdict, base or thread short on one layer holds the whole unit with nothing merged.
+- No run proves main, so the lander runs the brief's VERIFY commands at the merge commit before it records `main_green` or `main_red`.
 
 Proposals to serialize the normal lane for safety are rejected by default ("one CI at a time", "land one per N minutes"). They kill throughput, and GitHub already queues CI jobs. The safety comes from the self-check and the exclusive lane.
 
@@ -67,7 +83,7 @@ Two kinds of edge, declared in two places. Pick per edge:
 | B needs A… | Edge | Where |
 |---|---|---|
 | **before B can start**: A's result on main, A's report, an API A creates that B cannot stub | start-after | Orca task deps. Orca keeps B out of `task-list --ready` until A's task completes |
-| **only to land first**: B can be written on top of A's branch now, or B changes a path A changes (`orch overlap`) | land-after | A GitHub stack (B on A's branch) plus `orch dep <slug> --ticket B --after A`. No Orca dep: it would hold B back until A had landed, and the chain could never ride one merge |
+| **only to land first**: B can be written on top of A's branch now, or B changes a path A changes (`orch overlap`) | land-after | A GitHub stack (B on A's branch) plus `orch dep <slug> --ticket B --after A`; `land` checks the two match ("Dependent PRs are a stack"). No Orca dep: it would hold B back until A had landed, and the chain could never ride one merge |
 
 Start-after edges in Orca:
 
@@ -79,15 +95,29 @@ Start-after edges in Orca:
 
 ## GitHub stacks: several PRs, one merge
 
-When PRs must land in order (a dependency chain, consecutive migrations, layers of one feature), make them a GitHub stack. The top layer's CI tests the whole chain, and `orch land <slug> --pr <top>` merges every layer in one `merge-async` call. That holds only where CI runs on pull requests into any base. Where the workflow runs only on PRs into the default branch (`on: pull_request: branches: [main]`), an upper layer never gets CI, so the stack would wait on its top forever and a READY on that layer means READY without CI. There, skip the stack: base each PR on the branch below and order them with `orch dep` only. Before landing the lower one, `gh pr edit <next> --base <default branch>`: a squash merge that deletes the lower branch closes a PR still based on it, a closed PR whose base is gone cannot be reopened, and many repos delete merged branches whatever `orch land` passes. Until the lower one lands, the next PR's diff also shows the lower one's changes. Once it lands, `gh pr update-branch <next>` (a retarget alone starts no CI); the next PR lands on that run. `land` on a PR still based on a lower tracked PR's branch answers exit 3 with these steps instead of squashing it into that branch; `--onto-lower` folds it into the lower branch on purpose (top-down, when a retarget is not available). `orch dep` is per ticket: the layers of one ticket's split get no dep (it would wait on itself, and `dep` refuses it); they land bottom-up in this order.
+When PRs must land in order (a dependency chain, consecutive migrations, layers of one feature), make them a GitHub stack. The top layer's CI tests the whole chain, and `orch land <slug> --pr <top>` merges every layer in one `merge-async` request. A workflow limited to PRs into the default branch (`on: pull_request: branches: [main]`) runs on every layer once they are a stack ([about stacked PRs](https://docs.github.com/en/pull-requests/get-started/about-stacked-prs): no run on the upper PR before linking, a run after, with its base still the lower branch). A PR merely based on the lower branch gets none of this, so `land` on a PR still based on a lower tracked PR's branch answers exit 3 with the `gh stack link` line instead of squashing it into that branch; `--onto-lower` folds it into the lower branch on purpose (top-down). `orch dep` is per ticket: the layers of one ticket's split get no dep (it would wait on itself, and `dep` refuses it); they land bottom-up in this order.
 
 - Create it with `gh stack link <bottom> <top> --base main`, or `gh stack init` / `add` / `submit`. Confirm it with `gh api repos/<owner>/<repo>/pulls/<top> --jq .stack` (`gh pr view` does not show stacks, and `gh stack view` needs a locally tracked stack).
-- Bring a stack onto the latest base bottom-up: `gh pr update-branch` merges a PR's own base into it, so on the top it pulls only the layer below. `land` prints the sequence.
+- A stack merges only as a linear chain ([merging stacked PRs](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/merging-stacked-pull-requests)). `gh pr update-branch` on a lower layer alone, with or without `--rebase`, makes the merge fail with `Stack needs to be rebased`; `gh pr update-branch <n> --rebase` on every layer from the bottom clears it, even with a merge commit already in the chain. `land` prints the sequence. A base that moved is no reason to do this: a stack behind its base still merges, so rebase when the repository requires it or a conflict does.
 - A lower layer is `waiting` ("lands with its stack from #top") while the top is not blocked. The top is `ready` only when every open layer below it is ready at its own head. A blocked top releases the lower layers to land alone.
 - Main CI runs once, on the top's merge commit. Record `main_green` or `main_red` for that sha only; the lower commits have no run of their own.
 - The layers of one chain count once against the concurrency cap, since they land as one merge. Start the whole chain together, even in the pilot.
 - On a repo whose ruleset dismisses stale approvals, merging a lower layer on its own dismisses the approval of every PR whose branch contains it: the retarget and the changed merge base both count, even with the head unchanged. Where a human approves each layer, map containment first (`git merge-base --is-ancestor`) and merge each chain from its top, which marks the contained layers merged. When a lower layer must merge alone, say in the first review request that the layers above will need approval again, and ask for those re-approvals once, bundled.
-- Stacked PRs refuse `gh pr merge`. `land` uses `merge-async` and polls until every layer is MERGED. If any layer is exclusive, the stack takes the exclusive lane as one unit.
+- `land` merges with [`merge-async`](https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request-asynchronously), the only API the docs give for a stack: the synchronous endpoint "does not support stacked pull requests", and `gh pr merge` refuses every stacked PR, the last open layer too. It polls the request's uuid, not the PR. `failed` ends the land with GitHub's message. `enqueued` is the normal end on a merge queue branch and is not a merge: exit 2, and the `land` after the queue has merged it records every layer. A request still `pending` after 15 minutes ends the same way. If any layer is exclusive, the stack takes the exclusive lane as one unit.
+- When a lower layer merges alone, GitHub moves the next layer onto the base and rebases it (`automatic_base_change_succeeded` and `head_ref_force_pushed` in its timeline). Its head changes, so CI runs again. Do it by hand only when neither event appears: [a report](https://github.com/github/gh-stack/discussions/463) saw no rebase through `merge-async`.
+- Outside `land` the command is `gh stack merge <top> --squash --yes` ([reference](https://docs.github.com/en/pull-requests/reference/stacked-prs-cli-commands)), and never in a program.
+
+### Dependent PRs are a stack
+
+`land` and `land-check` compare the land-after edges (`orch dep`, Orca deps) with the real stacks. For two open PRs joined by an edge, on either PR's land:
+
+| Found | warn (default) | deny | off |
+|---|---|---|---|
+| Not in one stack | a `warning:` line with the `gh stack link` command, the land goes on | exit 3 (`land-check`: HOLD) | nothing |
+| In one stack, upside down: neither could ever land | exit 3 | exit 3 | exit 3 |
+| The stack listing cannot be read | one warning line, the land goes on | same | same |
+
+The level is `orchestrate.stack_dependent` in `~/.claude/agent-skills.json`; the owner promotes it (`skills-config`). `--class main-fix` is never held by it. The `hooks/stack_gate.py` hook reads the same key at `gh pr create`, where it reads the brief's `Lands after` and the branch's history and no stack exists yet to check. Two PRs that change one path and need nothing from each other are not an edge until the lead makes them one: `OVERLAP` lines stay what they are, a prompt to decide.
 
 ## Feature integration branches
 
@@ -95,18 +125,18 @@ A series of cards reworking one area works on `feat/<topic>`, branched from main
 
 ## What a worker does: `orch land <slug> --pr N [--wait-minutes 50]`
 
-Run it under `run_in_background` with `--wait-minutes`. It sleeps through yields and returns when something needs you.
+Run it under `run_in_background` with `--wait-minutes`. It sleeps through yields and returns when something needs you. The land is the card's own job, approved in its first prompt: after it, record main and close by `end-session` §7. A card stops at READY only for a `READY-WAIT:` kind (`references/brief.md` LAND).
 
 | Exit | Meaning | Do |
 |---|---|---|
 | 0 | Landed. It printed the merge commit and the main-CI watch command. | Watch main CI, `record main_green\|main_red --sha`, finish the ticket, `worker_done` |
 | 2 | Yield: CI still running, a dependency or the stack top first, another PR holds the exclusive lane, or GitHub did not answer (timeout, 5xx) | Nothing. Keep the `--wait-minutes` loop |
 | 3 | Act: the message says what (conflicts, failed CI, a changed patch that needs re-review, the base changed your files, missing evidence in the test-results comment, or "you hold the exclusive lane: update onto the latest base") | Do it, then `land` again. On "update onto the latest base", also ask for a hold before that update (Exclusive lane above), so the next attempt is not overtaken again |
-| 1 | Refused: STOP line, main red (only `--class main-fix` lands), or the human gate | Report and stop |
+| 1 | Refused: STOP line, main red (only `--class main-fix` lands), the human gate, or a merge GitHub or the no-CI lane refused | Report and stop with `READY-WAIT: land-refused`. No retry |
 
 Rebase conflicts change the patch-id. That voids the verdict, so the resolution gets re-reviewed.
 
-Main CI is every push-triggered run at the merge commit. Watch it with the lines `land` prints (`gh run list --commit <sha>`, then `gh run watch <id> --exit-status` for each run id), and record `main_green` or `main_red` only after every one has completed. A watcher's exit is not a finished run, and a failed lookup or API error leaves main unknown: `main_red` needs `gh run view <id> --json status,conclusion` to show `completed` with a non-success conclusion. A run cancelled by a newer push is no result; any other cancelled job is read as below before it counts. The "CI runs" ids `land` prints are the PR's runs, never main's. A watcher script of your own that parses run text can record red over green runs (a workflow name with a space shifts the columns); when one gives a false signal, fix or delete it in the same wake and record from the per-run conclusions.
+Main CI is every push-triggered run at the merge commit. Watch it with the lines `land` prints (`gh run list --commit <sha>`, then `gh run watch <id> --exit-status` for each run id), and record `main_green` or `main_red` only after every one has completed. A watcher's exit is not a finished run, and a failed lookup or API error leaves main unknown: `main_red` needs `gh run view <id> --json status,conclusion` to show `completed` with a non-success conclusion (the no-CI lane has no run: its VERIFY commands decide). A run cancelled by a newer push is no result; any other cancelled job is read as below before it counts. The "CI runs" ids `land` prints are the PR's runs, never main's. A watcher script of your own that parses run text can record red over green runs (a workflow name with a space shifts the columns); when one gives a false signal, fix or delete it in the same wake and record from the per-run conclusions.
 
 `land` and `land-check` also read the PR's sticky `<!-- test-results -->` comment (`deliver-ticket` §5):
 
@@ -135,12 +165,15 @@ The guardian, or with none running whoever is about to record `main_red`, reads 
   - `HELD` lines are PRs on hold (`record parked`). They do not count as stale, so they never block spawning; close a superseded one on GitHub so it leaves the land order.
 - A landing backlog over `max_backlog_hours` means **stop starting, start finishing**.
 - Merges you did not make: `land` records a PR that was merged outside it.
+- `orchestrate.self_land` in `~/.claude/agent-skills.json` (`warn` by default, `deny` to enforce, `off`) sets what `hooks/self_land_gate.py` does when a card with a `PROGRAM` row and an APPROVED line naming `orch land` closes over its open PR.
 - Tune a program in `program.json` under `"landing"`: `aging_hours`, `stale_hours`, `max_backlog_hours`, `land_interval_minutes` (only the backlog estimate before two landings exist, never a pacing limit), `exclusive_stale_minutes`, `exclusive_paths`, `visual_paths` (`orch set <slug> visual_paths a/*,b/*`), `heavy_slots`.
 - Shared state is append-only (`ledger.jsonl`) or replaced whole: write a temp file and rename it, since a shared JSON file overwritten in place can be read empty mid-write.
 
 ## human-gate
 
 Workers stop at READY. `land` refuses them with exit 1, and they report. You open the gate with `orch gate <slug> --pr N`, which creates an Orca decision gate on a lead-owned Task. The user resolves it in Orca. You then run `orch land <slug> --pr N`: it sees the resolution, records `approved`, and lands. No worker settles that `Land #N` Task, so `land` closes it: completed when the PR lands, failed when the user resolved the gate as hold or the PR was closed. Gating the PR again makes a new Task.
+
+A gate answered hold becomes a held item naming the PR (`orch board later add "<work> <PR>" --trigger <condition>`), which the brief shows as ⏸️. Before gating that PR again, close the held item (`orch board done <later id>` or `orch board later drop <n>`): the brief reads a waiting gate as 🙋 and an approved one as 🔄 only once no held item names the PR, so a gate opened over a live held item leaves the row ⏸️ after approval. A gate the brief cannot confirm open or approved (not in the collector's open gates, no `approved` after its `gate_opened`) is ❔ until `orch land` reads its answer.
 
 ## Permissions
 
@@ -152,4 +185,6 @@ Merging inside `orch land` is what lets a worker land without a per-merge approv
 
 Everything else goes to the normal permission flow: the user's own deny and ask rules, then auto mode's classifier. A skill's `allowed-tools` cannot replace the hook, because it lasts only for the turn that loads the skill and a worker runs LAND from its brief hours later.
 
-A worker that calls `gh pr merge` or `gh api … merge-async` by hand is merging outside the gate. The classifier rightly refuses that as "Merge Without Review": use `land`.
+A worker that calls `gh pr merge`, `gh stack merge` or `gh api … merge-async` by hand is merging outside the gate. The classifier rightly refuses that as "Merge Without Review": use `land`.
+
+Two things let a card merge, and they do different work. Its first prompt's APPROVED line is the human's approval: it tells the card the merge is its job, and a later message cannot stand in for it. The hook's allow is what reaches the runtime: `orch land …` as one simple command skips the classifier, so no autoMode rule is needed; with an operator or a redirection the allow is gone and the classifier judges the call. An autoMode rule (`tune-automode`) is a backstop, not the path. `orca worktree rm` after the land does go to the classifier; a refusal takes the `end-session` §7 fallback.

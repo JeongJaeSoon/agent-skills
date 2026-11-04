@@ -63,9 +63,9 @@ PRODUCERS = {
     "pressure": ("pressure round · launchd", ("pressure",)),
     "reaphard": ("reap-hard · launchd", ("reap_hard",)),
     "cardwatch": ("card-watch monitor", ("card_watch",)),
-    "hooks": ("hooks · reorient, roles, refusals, permission, onboard", (
-        "reorient", "roles", "lib/refusals", "config", "permission", "onboard")),
-    "sync": ("skills-sync · launchd", ("sync",)),
+    "hooks": ("hooks · reorient, roles, permission, onboard, record_check", (
+        "reorient", "roles", "config", "permission", "onboard", "record_check")),
+    "sync": ("skills-sync · launchd, card, handoff, end-check", ("sync", "card", "end_check")),
     "preview": ("preview-watch · launchd", ("preview_watch",)),
     "share": ("share-server", ("share_server",)),
     "watchprs": ("watch-prs round", ("prs", "notify")),
@@ -89,7 +89,7 @@ CONSUMERS = {
     "reflect": "reflect precheck · improvement loop",
     "watchprs": "watch-prs round",
     "mentions": "watch-mentions round",
-    "reorient": "hooks · reorient, guard, delegate_gate, refusals",
+    "reorient": "hooks · reorient, guard, delegate_gate",
     "patrol": "patrol round · orch patrol timing",
     "janitor": "janitor · reap, reap-hard, cards, sweep",
     "pressure": "pressure round · pressure gate hook",
@@ -121,8 +121,9 @@ STORES = [
           rule="read by the sessions themselves, no script"),
     Store("notes", "ext:notes", {"program.config": CANONICAL, "lesson.row": CANONICAL}, ("ext:leads",), ("reflect",),
           feature="reflect.ledger", rule="notes store; the lessons ledger when it is a plain file"),
-    Store("briefs", "P/*/briefs/*.md", {"card.brief": CANONICAL}, ("ext:leads",), ("fleet",),
-          rule="card briefs; their REPORT line names the report file"),
+    Store("briefs", "P/*/briefs/*.md", {"card.brief": CANONICAL}, ("ext:leads", "card:create"), ("fleet",),
+          rule="card briefs; their REPORT line names the report file; skills-sync card rewrites the marked "
+               "FORBIDDEN section of the brief it is given"),
     Store("reports", "ext:card-report", {"card.milestone": CANONICAL}, ("ext:cards",), ("fleet", "brief"),
           rule="a card's own report: the file its brief names, else its newest milestone message to its Run"),
     # -- configuration
@@ -237,6 +238,11 @@ STORES = [
     Store("roles", "S/roles/*.json", {"session.role": CANONICAL}, ("roles:declare",), ("reorient", "fleet", "janitor", "patrol",
                                                                                   "tokenspage"),
           rule="the role a session declared with a ROLE: line"),
+    Store("terminals", "S/terminals/*.json", {"session.terminal": CANONICAL}, ("roles:record_terminal",), ("sync",),
+          rule="which session started in an Orca terminal; handle, session id, cwd and time only"),
+    Store("wakes", "S/wakes/*.json", {"session.wake": CANONICAL}, ("sync:wake_target", "sync:wake_check", "sync:wake_reset"),
+          ("sync", "programview"), rule="per terminal: the SendMessage wake not yet confirmed in the receiver's transcript"),
+    Store("wakeslock", "S/wakes/*.lock", {"session.wake": LOCK}, ("sync:wake_lock",)),
     Store("rolespans", "S/transcripts/*.json", {"session.transcript": DERIVED}, ("reorient:register",), ("reflect",),
           rule="where an orchestrator's transcript starts"),
     Store("brieflast", "S/brief-last/*.json", {"brief.last_sent": CANONICAL}, ("board:commit",), ("brief",),
@@ -250,17 +256,23 @@ STORES = [
     Store("sync", "S/sync.json", {"sync.result": CANONICAL}, ("sync:sync",), ("fleet",), 3600,
           rule="last skills-sync result"),
     Store("synclock", "S/sync.lock", {"sync.result": LOCK}, ("sync:locked",)),
+    Store("cards", "S/cards.jsonl", {"card.key": CANONICAL}, ("card:ledger_add",), ("sync",),
+          rule="cards skills-sync card and handoff started: repo, references, role, superseded_by"),
+    Store("cardslock", "S/cards.lock", {"card.key": LOCK}, ("card:card_lock",)),
+    Store("closesetup", "S/close-setup/*.log", {"close_setup.output": CANONICAL},
+          ("card:start_close_setup", "end_check:apply"), ("nobody",),
+          rule="each background close-setup's output, ending in result: ok or failed"),
     Store("reload", "S/reload-pending.json", {"sync.reload_pending": CANONICAL},
           ("sync:queue_reload", "sync:broadcast_locked"), ("fleet",), rule="reloads not yet sent, per terminal"),
+    Store("restarts", "S/restarts.json", {"sync.stale_restart": CANONICAL}, ("sync:restart_stale",), ("sync",),
+          rule="per terminal: the /restart or /reload-plugins typed once for a stale screen, or why it waits"),
     Store("synclog", "S/sync.log*", {"sync.output": CANONICAL}, ("ext:launchd", "reap:reap_state_file"), ("nobody",),
           rule="launchd stdout; the janitor rotates it"),
-    Store("refusals", "S/refusals.jsonl", {"refusal.act": CANONICAL},
-          ("lib/refusals:start", "lib/refusals:record", "lib/refusals:clear"), ("reorient", "programview"),
-          rule="acts the classifier or the human refused, open until `orch refusal clear`; every session is "
-               "blocked from doing them again"),
-    Store("refusalslock", "S/refusals.lock", {"refusal.act": LOCK}, ("lib/refusals:locked",)),
     Store("guarderrors", "S/guard-errors.jsonl", {"hook.error": CANONICAL}, ("config:log_error",), ("nobody",),
           rule="a hook's own exception, let through; read by a person"),
+    Store("recordcheck", "S/record-check.jsonl", {"record.obligation": CANONICAL}, ("record_check:append",),
+          ("nobody",), rule="merges, lands and PR opens that still owe a record line, their closes, and the warn "
+                            "rows a week of observation reads before guard.record_check goes to deny"),
     Store("onboard", "S/onboard-declined.json", {"onboard.declined": CANONICAL}, ("onboard:decline",), ("reorient",)),
     Store("ledger", "S/ledger.jsonl", {"resource.made": CANONICAL}, ("reap:act", "reap:main"), ("janitor",),
           rule="what agents made, retired when reaped"),
@@ -639,7 +651,7 @@ class _Module:
         self.name, self.tree, self.home = name, tree, home
         self.stem = name.rsplit("/", 1)[-1]
         self.consts, self.funcs, self.attrs = {}, {}, {}
-        self.packaged = {}  # `from lib import refusals`: refusals -> "lib"
+        self.packaged = {}  # `from lib import danger`: danger -> "lib"
         for node in tree.body:
             if isinstance(node, ast.ImportFrom) and node.module and not node.level:
                 for a in node.names:

@@ -512,6 +512,7 @@ f = facts(terminals=[term("h1", "/w/a"), term("h2", "/w/b")],
 found, v, memo = patrol.judge(f, {})
 assert codes(found) == [("R", "a"), ("R", "b")], found
 assert v["cards"] == {"/w/a": "stalled", "/w/b": "working"}, v["cards"]
+assert v["check"] == {"/w/a": "같은 답 3턴 반복"}, "the brief's ❔ row: the stalled card, not the parked one"
 assert "assistant in 3 turns" in found[0]["title"] and "acme/app#1" in found[0]["title"], found[0]["title"]
 again, _, memo2 = patrol.judge(f, memo)
 assert [x["id"] for x in again] == [x["id"] for x in found], "a streak that lasts stays the same finding"
@@ -545,5 +546,103 @@ r = {**found[0], "owner": "hr"}
 patrol.write_round([r], {"cards": {}}, False, NOW + 200)
 assert patrol.pending_lines("hr", False, T)[0].startswith("PATROL R"), "shown to its owner"
 assert patrol.pending_lines("hr", False, T + dt.timedelta(hours=3)) == [], "R is shown once, not every 30 minutes"
+
+# H: an ended turn whose screen shows a hook error in its last turn or Claude Code's restart notice. Run workers too;
+# a screen without that wording, a turn still running, a prompt waiting on a human or an unread screen is not judged.
+RULE = "─" * 40
+hooked = ["❯ run the tests", "⏺ Bash(make test)",
+          "  ⎿  PreToolUse:Bash hook error: python3: can't open file '/w/plugin/hooks/gone.py': [Errno 2] No such file",
+          "⏺ Every tool call is blocked by a hook error.", RULE, "❯", RULE, "  ~/w ⎇ main"]
+notice = ["⏺ Goal achieved.", RULE, "❯", RULE, "  ~/w ⎇ main", "  ✓ Update installed · /restart to apply"]
+plain = ["⏺ Done.", RULE, "❯", RULE, "  ~/w ⎇ main"]
+shown = {"h1": hooked, "h2": notice, "h3": plain, "h4": hooked, "h5": notice, "h6": hooked}
+f = facts(terminals=[term(f"h{n}", f"/w/{c}") for n, c in enumerate("abcdef", 1)],
+          tails={"/w/a": (idle(5), None), "/w/b": (idle(300), None), "/w/c": (idle(5), None),
+                 "/w/d": ({"state": "working", "since": ago(1)}, None), "/w/e": (idle(5), None), "/w/f": (idle(5), None)},
+          waits={"h5": {"kind": "permission"}},
+          workers=[{"dispatchId": "d1", "resource": {"worktreeId": "x::/w/f"},
+                    "projection": {"outcome": "in_progress", "liveness": {"verdict": "live"}}}],
+          read=lambda h: shown[h])
+found, v, _ = patrol.judge(f, {})
+stale = sorted((x for x in found if x["code"] == "H"), key=lambda x: x["card"])
+assert codes(stale) == [("H", "a"), ("H", "b"), ("H", "f")], found
+assert v["check"] == {"/w/a": "hook 오류로 도구가 막힘", "/w/b": "업데이트가 /restart 를 기다림",
+                      "/w/f": "hook 오류로 도구가 막힘"}, v["check"]
+assert v["cards"]["/w/a"] == "stalled" and v["cards"]["/w/c"] == "working" and v["cards"]["/w/f"] == "run", v["cards"]
+assert ("I", "b") in codes(found) and v["cards"]["/w/b"] == "stalled" and v["hints"]["/w/b"] == "stalled", \
+    "15+ min idle is told as I too, and the card stays stalled"
+assert "--terminal h1" in stale[0]["title"] and "/reload-plugins" in stale[0]["title"], stale[0]["title"]
+assert "/restart" in stale[1]["title"], stale[1]["title"]
+assert [x["id"] for x in patrol.judge(f, {})[0] if x["code"] == "H"] == [x["id"] for x in stale], "the same screen, the same finding"
+
+
+def unreadable(h):
+    raise OSError("no screen")
+
+
+assert not [x for x in patrol.judge({**f, "screens": {}, "read": unreadable}, {})[0] if x["code"] == "H"], \
+    "an unread screen is not judged"
+assert not [x for x in patrol.judge({**f, "failed": {"waits"}}, {})[0] if x["code"] == "H"], \
+    "without Orca's wait list a prompt for a human cannot be ruled out"
+assert patrol.DEPENDS["H"] == {"terminals", "waits"}
+
+# B: an ended turn, 15+ min, whose last message says it waits on a background task, with nothing that will wake it:
+# the transcript armed no background command or Monitor still owed a result (not parked) and Claude Code's status line
+# shows none running. Run workers too. Still running, parked, a human's prompt, too soon, an unread screen, or a
+# screen without that wording: not judged.
+waiting = ["❯ review it", "⏺ Bash(codex exec --sandbox read-only - < /tmp/p.md)", "  ⎿  Running in the background",
+           "⏺ Waiting on the background Codex run to finish; its completion", "  notice will wake me.", RULE, "❯", RULE,
+           "  ~/w ⎇ main"]
+korean = ["⏺ 백그라운드 Codex 리뷰가 끝나면 완료 알림을 받아 이어서 진행합니다.", RULE, "❯", RULE, "  ~/w ⎇ main"]
+running = waiting[:-1] + ["  ~/w ⎇ main · 1 shell"]
+shown = {"b1": waiting, "b2": korean, "b3": running, "b4": waiting, "b5": plain, "b6": waiting, "b7": waiting,
+         "b8": korean}
+f = facts(terminals=[term(f"b{n}", f"/w/b{n}") for n in range(1, 9)],
+          tails={"/w/b1": (idle(20), None), "/w/b2": (idle(40), None), "/w/b3": (idle(20), None),
+                 "/w/b4": (idle(20, parked=True), None), "/w/b5": (idle(20), None), "/w/b6": (idle(5), None),
+                 "/w/b7": (idle(20), None), "/w/b8": (idle(20), None)},
+          waits={"b7": {"kind": "permission"}},
+          workers=[{"dispatchId": "d8", "resource": {"worktreeId": "x::/w/b8"},
+                    "projection": {"outcome": "in_progress", "liveness": {"verdict": "live"}}}],
+          read=lambda h: shown[h])
+found, v, _ = patrol.judge(f, {})
+bg = sorted((x for x in found if x["code"] == "B"), key=lambda x: x["card"])
+assert codes(bg) == [("B", "b1"), ("B", "b2"), ("B", "b8")], found
+why = "백그라운드 작업을 기다리지만 깨울 작업이 없음"
+assert v["check"] == {"/w/b1": why, "/w/b2": why, "/w/b8": why}, v["check"]
+assert "Waiting on the background Codex run" in bg[0]["title"] and bg[0]["handle"] == "b1", bg[0]["title"]
+assert v["cards"]["/w/b8"] == "run" and v["cards"]["/w/b3"] == "working", v["cards"]
+assert ("I", "b5") in codes(found) and "/w/b5" not in v["check"], "an idle card without that wording stays I only"
+assert [x["id"] for x in patrol.judge(f, {})[0] if x["code"] == "B"] == [x["id"] for x in bg], "the same turn, the same finding"
+assert not [x for x in patrol.judge({**f, "screens": {}, "read": unreadable}, {})[0] if x["code"] == "B"], \
+    "an unread screen is not judged"
+assert not [x for x in patrol.judge({**f, "failed": {"waits"}}, {})[0] if x["code"] == "B"], \
+    "without Orca's wait list a prompt for a human cannot be ruled out"
+for lines in (plain, hooked, notice, ["⏺ Started the review in the background."] + plain[1:],
+              ["⏺ The background run completed; results applied."] + plain[1:],
+              ["⏺ 백그라운드 작업이 완료되어 결과를 반영했습니다."] + plain[1:],
+              ["⏺ Received the background task completion notification; all results are applied."] + plain[1:],
+              ["⏺ 백그라운드 작업 완료 알림을 받았고 결과를 반영했습니다."] + plain[1:],
+              ["⏺ No need to wait on the background run any more: it is done."] + plain[1:],
+              ["⏺ 백그라운드 작업은 기다릴 필요 없이 끝났습니다."] + plain[1:],
+              ["⏺ The background task took 30 seconds to complete; results are applied."] + plain[1:],
+              ["⏺ I waited for the background task to finish, then applied the results."] + plain[1:],
+              ["⏺ 백그라운드 작업을 기다리던 중 완료 알림을 받아 결과를 반영했습니다."] + plain[1:],
+              ["⏺ I was waiting for the background review, but it finished successfully and I applied all findings.",
+               "  The task is complete."] + plain[1:],
+              ["⏺ After waiting for the background review to finish, I applied its findings. All checks pass."]
+              + plain[1:],
+              ["⏺ While waiting on the background build I fixed the lint errors; the build has passed."] + plain[1:],
+              ["⏺ I don’t wait on the background run any more: it is done."] + plain[1:]):
+    assert patrol.bgwait_signal(lines) is None, lines
+for text in ("I'll continue once the background review completes.", "백그라운드 리뷰가 끝나기를 기다리는 중입니다.",
+             "백그라운드 CI 를 기다립니다.", "I'm waiting on the background Codex review; its notice will wake me.",
+             "PR is up. Still waiting for the background CI run.",
+             "I’m waiting on the background Codex run to finish; its completion notice will wake me.",
+             "No need to wait for CI; it has passed. Waiting on the background review to finish; its completion "
+             "notice will wake me."):
+    assert patrol.bgwait_signal([f"⏺ {text}"] + plain[1:]), text
+assert patrol.bgwait_signal(waiting).startswith("Waiting on the background Codex run to finish; its completion notice")
+assert patrol.DEPENDS["B"] == {"terminals", "waits"}
 
 print("test_patrol: ok")

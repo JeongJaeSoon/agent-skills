@@ -89,16 +89,21 @@ def from_reap(items, pressure_only=frozenset()):
 
 
 def from_hard(items, source):
-    out = []
+    """(candidates, reports) from reap_hard's scans."""
+    cands, reports = [], []
     for i in items:
         if not i.get("target"):
             continue
         key = f"card:{i['id']}" if i["kind"] == "card" else f"{i['kind']}:{i['id']}"
+        rule = HARD_RULE.get(i["kind"])
+        if not rule:
+            reports.append({"kind": i["kind"], "key": key, "why": f"규칙 없음: {i['why']}(보고만)"})
+            continue
         # A listener is judged from the machine read the card scan took.
         needs = {source, "protect", *(("reap_hard_cards",) if i["kind"] == "listener" else ()),
                  *(CARD_NEEDS if i["kind"] == "card" else ())}
-        out.append(entry(HARD_RULE[i["kind"]], i["kind"], key, i, needs, i["why"]))
-    return out
+        cands.append(entry(rule, i["kind"], key, i, needs, i["why"]))
+    return cands, reports
 
 
 class Timings(dict):
@@ -177,7 +182,9 @@ def collect(sources, now=None, reap_scan=None, hard=None, pressure_kinds=None, s
     notes += got.get("notes") or []
     for source in ("reap_hard_cards", "reap_hard_rest"):
         t = timings.started.get(source, hard_t)  # a stand-in scan that does not time itself: before any of it ran
-        cands += [{**x, "seen": t} for x in from_hard(got.get(source + "_items") or [], source)]
+        c, r = from_hard(got.get(source + "_items") or [], source)
+        cands += [{**x, "seen": t} for x in c]
+        out["reports"] += r
     for c in cands:
         missing = [n for n in c["needs"] if src.get(n) != "ok"]
         if missing:

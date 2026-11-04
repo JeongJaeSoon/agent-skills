@@ -1,9 +1,11 @@
 """`sync.py` against throwaway git repos and a fake orca. Run: python3 scripts/test_sync.py"""
-import json, os, pathlib, shutil, subprocess, sys, tempfile
+import contextlib, io, json, os, pathlib, shutil, subprocess, sys, tempfile, time
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent / "hooks"))
 import sync  # noqa: E402
+import roles  # noqa: E402
 
 RULE = "─" * 40
 IDLE = ["✻ Worked for 2m 7s · done 5:48 AM", RULE, "❯\xa0", RULE, "  ~/x ⎇ main | Opus", "  ⏵⏵ auto mode on"]
@@ -27,6 +29,47 @@ RELOAD_DONE = [" ▝▝   ▝▝   ~/w", "❯ /reload-plugins",
                "  ⎿  Reloaded: 15 plugins · 75 skills · 13 agents · 22 hooks · 6 plugin MCP servers · 1 plugin LSP server",
                "❯ /reload-skills", "  ⎿  Reloaded skills: 91 skills available (no changes)", RULE, "❯", RULE,
                "  ~/w\xa0⎇\xa0main\xa0|\xa0Haiku\xa04.5", "  ⏸ manual mode on · ← for agents"]
+
+# A session whose hooks.json names a script an update removed: every tool call fails on the hook.
+HOOK_BLOCKED = ["❯ run the tests", "⏺ Bash(make test)",
+                "  ⎿  PreToolUse:Bash hook error: python3: can't open file '/w/plugin/hooks/gone.py': [Errno 2] No such file",
+                "⏺ Every tool call is blocked by a hook error, so I stop here.", RULE, "❯", RULE, "  ~/w ⎇ main",
+                "  ⏵⏵ auto mode on"]
+RESTART_NOTE = ["⏺ Goal achieved.", RULE, "❯", RULE, "  ~/w ⎇ main", "  ⏵⏵ auto mode on",
+                "  ✓ Update installed · /restart to apply"]
+# An orchestrator idle on its inbox waiter: a /restart would end the background shell.
+NOTE_BACKGROUND = RESTART_NOTE[:5] + ["  ⏵⏵ auto mode on · 1 shell · ← 1 agent", RESTART_NOTE[6]]
+NOTE_SUMMARY_SHELL = ["✻ Crunched for 22s · done 7:47 PM · 1 shell still running", RESTART_NOTE[0]] + RESTART_NOTE[1:]
+# No mode line under the box (a custom status line only): whether background work runs is unknown.
+NOTE_NO_MODE = RESTART_NOTE[:5] + RESTART_NOTE[6:]
+# A grep run's output quotes a hook error with a missing file: it is a tool's output, not Claude Code's own line.
+GREP_HOOK = ["❯ find the old error", "⏺ Bash(grep -rn 'hook error' hooks/)",
+             "  ⎿  hooks/test_guard.py:40: PreToolUse:Bash hook error: can't open file '/w/hooks/gone.py'",
+             "⏺ Found it in a test.", RULE, "❯", RULE, "  ⏵⏵ auto mode on"]
+OLD_HOOK_ERROR = ["❯ first", "  ⎿  PreToolUse:Bash hook error: can't open file x", "❯ second", "⏺ done", RULE, "❯", RULE]
+# A guard hook's deny is shown with the same words, and is no stale plugin.
+GUARD_DENY = ["❯ run the suite", "⏺ Bash(make test)", "  ⎿  PreToolUse:Bash hook error: [gate:x] run it in the slot",
+              "⏺ Blocked by the gate.", RULE, "❯", RULE]
+# Shaped like the screen that was stuck: the notice right-aligned under the turn's summary, above the box.
+STUCK_SHOT = ["● Stopped here: a hook names a file that is not there.", "", "✔ Goal achieved (8d · 1 turn · 20.5k tokens)", "",
+              "✻ Brewed for 26s · done 9:34 PM",
+              "                new task? /clear to save 121.3k tokens · ✔ Update installed · /restart to apply", RULE, "❯", RULE]
+# The words in the conversation are no notice: a reply on one line, or wrapped so its last line has no mark.
+SAID = ["❯ what does the footer say?", "⏺ It says /restart to apply the update.", RULE, "❯", RULE]
+SAID_WRAPPED = ["❯ what does the footer say?", "⏺ The footer reads: update installed, and then", "  /restart to apply it.",
+                RULE, "❯", RULE]
+SAID_AFTER_BLANK = ["❯ what changed?", "⏺ Two things:", "", "/restart to apply the update.", RULE, "❯", RULE]
+SAID_LIST = ["❯ what changed?", "⏺ Two things:", "* Update installed", "/restart to apply it.", RULE, "❯", RULE]
+SAID_LIKE_SUMMARY = ["❯ what now?", "⏺ Two steps:", "* Wait for 2s before retrying.", "/restart to apply the update.",
+                     RULE, "❯", RULE]
+# A guard's deny as the last result, then a reply about some other missing file.
+DENY_THEN_REPLY = ["❯ build", "  ⎿  PreToolUse:Bash hook error: [gate:x] run in a slot",
+                   "⏺ The build failed: No such file or directory.", RULE, "❯", RULE]
+# A hook error the session got past: a tool ran after it in the same turn.
+RECOVERED = ["❯ go", "  ⎿  PreToolUse:Bash hook error: can't open file '/w/plugin/hooks/gone.py'", "⏺ Bash(make test)",
+             "  ⎿  12 passed", "⏺ Done.", RULE, "❯", RULE]
+# The missing file wrapped onto the next line.
+WRAPPED = ["❯ go", "  ⎿  PreToolUse:Read hook error: python3:", "     can't open file '/w/plugin/hooks/gone.py'", RULE, "❯", RULE]
 
 FAKE_ORCA = r'''#!/usr/bin/env python3
 import json, os, sys
@@ -290,6 +333,179 @@ def test_broadcast():
     shutil.rmtree(tmp)
 
 
+def test_running():
+    import unittest.mock as mock
+    for out in ("", "COMMAND\n", "COMMAND\n\n", "garbage\nbash x\n"):
+        with mock.patch.object(sync.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=out, stderr="")):
+            try:
+                sync.running("/r/setup-runner.sh")
+                ok = False
+            except OSError:
+                ok = True
+        check(f"ps output {out!r} is unread, not 'nothing runs'", ok)
+    listing = "COMMAND\nps -axo command\nbash /r/setup-runner.sh\n"
+    with mock.patch.object(sync.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=listing, stderr="")):
+        check("a real listing finds the script", sync.running("/r/setup-runner.sh") is True)
+
+
+def test_stale_signal():
+    check("a hook error in the last turn is a stale signal",
+          (sync.stale_signal(HOOK_BLOCKED) or ("",))[0] == "hook", sync.stale_signal(HOOK_BLOCKED))
+    check("the update notice is a stale signal", (sync.stale_signal(RESTART_NOTE) or ("",))[0] == "restart")
+    check("a hook error before the last prompt is not", sync.stale_signal(OLD_HOOK_ERROR) is None)
+    check("a guard's deny is not", sync.stale_signal(GUARD_DENY) is None)
+    check("the notice under the turn's summary is", (sync.stale_signal(STUCK_SHOT) or ("",))[0] == "restart")
+    check("the words in a reply are not", all(sync.stale_signal(s) is None for s in (SAID, SAID_WRAPPED, SAID_AFTER_BLANK, SAID_LIST, SAID_LIKE_SUMMARY)))
+    check("the summary shapes Claude Code writes are summaries",
+          all(sync.TURN_SUMMARY.match(s) for s in (IDLE[0], STUCK_SHOT[4], "✻ Cooked for 1h 2m 3s · done 11:02 PM")))
+    check("a missing file in the reply after a guard's deny is not", sync.stale_signal(DENY_THEN_REPLY) is None)
+    check("a hook error the session got past is not", sync.stale_signal(RECOVERED) is None)
+    check("a missing file wrapped onto the next line is", (sync.stale_signal(WRAPPED) or ("",))[0] == "hook")
+    check("a screen without the wording is not judged",
+          all(sync.stale_signal(s) is None for s in (IDLE, BUSY, FRESH, RELOAD_DONE, PRESS_ENTER, [], None)))
+    check("a restart notice does not make the session busy", sync.classify(RESTART_NOTE, "✳ a") is None)
+    check("a tool's output quoting a hook error is not", sync.stale_signal(GREP_HOOK) is None, sync.stale_signal(GREP_HOOK))
+    check("no background work shown on a mode line is none", sync.background_running(RESTART_NOTE) is None)
+    check("a background shell on the mode line or the turn's summary is running",
+          all(sync.background_running(s) for s in (NOTE_BACKGROUND, NOTE_SUMMARY_SHELL)))
+    check("no mode line is not known to be none", sync.background_running(NOTE_NO_MODE) is not None)
+    reloaded_note = RELOAD_DONE[:2] + [RELOAD_DONE[2]] + RESTART_NOTE[1:]
+    check("installed agents counted in a reload's output are no background work",
+          sync.background_running(reloaded_note) is None, sync.background_running(reloaded_note))
+
+
+def test_restart():
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    fake = tmp / "orca"
+    fake.write_text(FAKE_ORCA); fake.chmod(0o755)
+    st = tmp / "orca.json"
+
+    def term(title, *screens):
+        return {"agentIdentity": "claude", "connected": True, "writable": True, "title": title, "screens": list(screens)}
+    busy_note = BUSY[:-2] + RESTART_NOTE[1:]
+    terms = {"hooked": term("✳ a", HOOK_BLOCKED), "notice": term("✳ b", RESTART_NOTE),
+             "busy": term("◑ c", busy_note), "clean": term("✳ d", IDLE), "old": term("✳ e", OLD_HOOK_ERROR)}
+    st.write_text(json.dumps({"terms": terms, "sent": []}))
+    state = tmp / "state"; state.mkdir()
+    head = subprocess.run(["git", "-C", str(HERE.parent), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    (state / "reload-pending.json").write_text(json.dumps({"kind": "skills", "done": ["notice", "busy", "old"], "head": head}))
+    env = dict(AGENT_SKILLS_STATE=str(state), SKILLS_SYNC_ORCA=str(fake), FAKE_ORCA_STATE=str(st),
+               SKILLS_SYNC_SETTLE_S="0", SKILLS_SYNC_CONFIRM_S="0")
+    old = {k: os.environ.get(k) for k in env}
+    os.environ.update(env)
+    import importlib
+    importlib.reload(sync)
+
+    def sent():
+        return json.loads(st.read_text())["sent"]
+    try:
+        sync.broadcast(None, dry_run=True)
+        dry = (sent(), (state / "restarts.json").exists())
+        first = sync.broadcast(None, dry_run=False)
+        after_first = sent()
+        restarts = json.loads((state / "restarts.json").read_text())
+        second = sync.broadcast(None, dry_run=False)
+        after_second = sent()
+        cur = json.loads(st.read_text())
+        cur["terms"]["busy"] = term("✳ c", RESTART_NOTE)
+        st.write_text(json.dumps(cur))
+        sync.broadcast(None, dry_run=False, only="busy")
+        after_idle = sent()
+        kept = json.loads((state / "restarts.json").read_text())
+        calls = []
+        real = (sync.pull_or_push, sync.broadcast_locked)
+        sync.pull_or_push, sync.broadcast_locked = (lambda: ("up to date", [])), (lambda k: calls.append(k))
+        try:
+            (state / "restarts.json").write_text(json.dumps({"x": {"waiting": "turn in progress"}}))
+            sync.sync()
+            (state / "restarts.json").write_text(json.dumps({"x": {"sent": "t"}}))
+            sync.sync()
+        finally:
+            sync.pull_or_push, sync.broadcast_locked = real
+    finally:
+        for k, v in old.items():
+            os.environ.pop(k) if v is None else os.environ.__setitem__(k, v)
+        importlib.reload(sync)
+    check("a dry run types nothing and writes nothing", dry == ([], False), dry)
+    check("an idle session with a hook error gets /reload-plugins and no second reload; the notice gets /restart",
+          first == 0 and after_first == [["hooked", "/reload-plugins"], ["notice", "/restart"], ["clean", "/reload-skills"]],
+          after_first)
+    check("a busy session waits, recorded as waiting",
+          "waiting" in restarts.get("busy", {}) and not any(h == "busy" for h, _ in after_first), restarts)
+    check("no stale signal, no entry", set(restarts) == {"hooked", "notice", "busy"}, restarts)
+    check("a session is sent the command once while its screen still shows the signal",
+          second == 0 and after_second == after_first, after_second)
+    check("the waiting session gets it once idle", after_idle[len(after_first):] == [["busy", "/restart"]], after_idle)
+    check("--terminal keeps the other sessions' entries", "notice" in kept and "sent" in kept["busy"], kept)
+    check("a sync runs the broadcast while a session waits, and not for one already sent", calls == [None], calls)
+    shutil.rmtree(tmp)
+
+
+def test_restart_entries():
+    """restarts.json across reads that fail: what was typed stays typed, and an unread screen ends nothing."""
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    keys = ("AGENT_SKILLS_STATE", "SKILLS_SYNC_SETTLE_S", "SKILLS_SYNC_CONFIRM_S")
+    old_env = {k: os.environ.get(k) for k in keys}
+    os.environ.update(AGENT_SKILLS_STATE=str(tmp), SKILLS_SYNC_SETTLE_S="0", SKILLS_SYNC_CONFIRM_S="0")
+    import importlib
+    importlib.reload(sync)
+    reads, typed = {}, []
+
+    def screen(h):
+        r = reads[h].pop(0) if len(reads[h]) > 1 else reads[h][0]
+        if isinstance(r, Exception):
+            raise r
+        return r, sync.classify(r, "✳ a")
+    try:
+        sync.screen, sync.orca = screen, lambda *a: typed.append(a[3]) if a[:2] == ("terminal", "send") else {}
+        reads["a"] = [RESTART_NOTE, RESTART_NOTE, sync.Stop("orca terminal read failed")]
+        check("a confirmation read that fails after typing is not 'never sent'",
+              sync.send_to("a", "/restart", sync.stale_cleared) == sync.UNCONFIRMED and typed == ["a"], typed)
+        reads["a"] = [RESTART_NOTE, RESTART_NOTE, RESTART_NOTE, sync.Stop("orca terminal read failed"), RESTART_NOTE]
+        sync.restart_stale(["a"])
+        sync.restart_stale(["a"])
+        entry = json.loads((tmp / "restarts.json").read_text())["a"]
+        check("so it is recorded as sent and never typed again", typed == ["a", "a"] and entry.get("unconfirmed"),
+              (typed, entry))
+        reads["a"] = [[]]
+        sync.restart_stale(["a"])
+        check("an unread screen keeps the entry", "a" in json.loads((tmp / "restarts.json").read_text()))
+        reads["a"] = [PERMISSION]
+        sync.restart_stale(["a"])
+        check("so does a dialog with no prompt box", "sent" in json.loads((tmp / "restarts.json").read_text()).get("a", {}))
+        sync.restart_stale([])
+        check("a terminal Orca does not list now keeps it a while", "a" in json.loads((tmp / "restarts.json").read_text()))
+        reads["a"] = [IDLE]
+        sync.restart_stale(["a"])
+        check("a screen without the signal ends it", json.loads((tmp / "restarts.json").read_text()) == {})
+        reads["a"] = [RESTART_NOTE, IDLE, IDLE]
+        sync.restart_stale(["a"])
+        check("a signal gone by the reads just before typing types nothing",
+              typed == ["a", "a"] and json.loads((tmp / "restarts.json").read_text()) == {}, typed)
+        for name, reads["a"] in (("a background shell on screen", [NOTE_BACKGROUND]),
+                                 ("a screen that cannot show background work", [NOTE_NO_MODE]),
+                                 ("background work shown by the read before typing", [RESTART_NOTE, NOTE_BACKGROUND])):
+            sync.restart_stale(["a"])
+            entry = json.loads((tmp / "restarts.json").read_text()).get("a", {})
+            check(f"{name}: no /restart, recorded as waiting", typed == ["a", "a"] and "waiting" in entry, (typed, entry))
+            (tmp / "restarts.json").write_text("{}")
+        (tmp / "restarts.json").write_text(json.dumps({"a": {"sent": sync._now(), "kind": "hook", "command": "/reload-plugins"}}))
+        reads["a"] = [RESTART_NOTE]
+        sync.restart_stale(["a"])
+        entry = json.loads((tmp / "restarts.json").read_text())["a"]
+        check("a /reload-plugins sent for a hook error does not stand for the /restart a notice asks",
+              typed == ["a", "a", "a"] and entry.get("kind") == "restart" and entry.get("sent"), (typed, entry))
+        (tmp / "restarts.json").write_text(json.dumps({"gone": {"sent": "2020-01-01T00:00:00+0000"},
+                                                       "waits": {"waiting": "busy", "since": "2020-01-01T00:00:00+0000"}}))
+        sync.restart_stale([])
+        check("old entries of unlisted terminals go", json.loads((tmp / "restarts.json").read_text()) == {})
+    finally:
+        for k, v in old_env.items():
+            os.environ.pop(k) if v is None else os.environ.__setitem__(k, v)
+        importlib.reload(sync)
+    shutil.rmtree(tmp)
+
+
 def test_close_setup():
     runner = "/r/.git/worktrees/card/orca/setup-runner.sh"
     done = ["$ bash " + runner, " ERR_PNPM_NO_PKG_MANIFEST  No package.json found", "  ~/w/card on  main", "$"]
@@ -301,15 +517,25 @@ def test_close_setup():
     st = tmp / "orca.json"
     terms = {"agent": {"agentIdentity": "claude", "screens": [IDLE]}, "setup": {"agentIdentity": None, "screens": [done]},
              "busy": {"agentIdentity": None, "screens": [["$ bash /r/.git/worktrees/other/orca/setup-runner.sh"]]},
-             "mine": {"agentIdentity": None, "screens": [["$ ls", "$"]]}}
+             "mine": {"agentIdentity": None, "screens": [["$ ls", "$"]]},
+             # No agentIdentity field: not known to be a shell. A failed `ps`: not known to be finished.
+             "noid": {"screens": [done]},
+             "oddid": {"agentIdentity": {}, "screens": [done]},
+             "emptyid": {"agentIdentity": "", "screens": [done]},
+             "psfail": {"agentIdentity": None, "screens": [["$ bash /r/.git/worktrees/psfail/orca/setup-runner.sh"]]}}
     st.write_text(json.dumps({"terms": terms, "sent": []}))
     env = dict(SKILLS_SYNC_ORCA=str(fake), FAKE_ORCA_STATE=str(st), SKILLS_SYNC_SETUP_POLL_S="0.05")
     old = {k: os.environ.get(k) for k in env}
     os.environ.update(env)
     import importlib
     importlib.reload(sync)
+
+    def running(path):
+        if "psfail" in path:
+            raise OSError("ps failed")
+        return "other" in path
     try:
-        sync.running = lambda path: "other" in path
+        sync.running = running
         code = sync.close_setup("/w/card", timeout_s=2, grace_s=0.5)
     finally:
         for k, v in old.items():
@@ -322,12 +548,444 @@ def test_close_setup():
     shutil.rmtree(tmp)
 
 
+def test_close_setup_agent():
+    """close-setup --agent: a trust dialog, a permission dialog or no visible start fails it, out loud."""
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    fake = tmp / "orca"
+    fake.write_text(FAKE_ORCA); fake.chmod(0o755)
+    st = tmp / "orca.json"
+    started = IDLE[:1] + ["❯ /goal ABC-1. CLOSE: …", "⏺ Reading the ticket."] + IDLE[1:]
+    terms = {"trust": {"agentIdentity": "claude", "title": "✳ new", "screens": [TRUST]},
+             "perm": {"agentIdentity": "claude", "title": "✳ new", "screens": [PERMISSION]},
+             "empty": {"agentIdentity": "claude", "title": "✳ new", "screens": [IDLE[1:]]},
+             "busy": {"agentIdentity": "claude", "title": "✳ new", "screens": [BUSY]},
+             "took": {"agentIdentity": "claude", "title": "✳ new", "screens": [started]},
+             # A title without the idle mark, or none, is no evidence: the screen decides.
+             "notitle": {"agentIdentity": "claude", "title": "", "screens": [TRUST]},
+             "busytitle": {"agentIdentity": "claude", "title": "⠂ new", "screens": [IDLE[1:]]}}
+    st.write_text(json.dumps({"terms": terms, "sent": []}))
+    env = dict(SKILLS_SYNC_ORCA=str(fake), FAKE_ORCA_STATE=str(st), SKILLS_SYNC_SETUP_POLL_S="0.05")
+    old = {k: os.environ.get(k) for k in env}
+    os.environ.update(env)
+    import importlib
+    importlib.reload(sync)
+    try:
+        states = {h: sync.watch_start(h, 0.2)[0] for h in terms}
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = sync.close_setup("/w/card", timeout_s=0.5, grace_s=0.2, agent="trust")
+    finally:
+        for k, v in old.items():
+            os.environ.pop(k) if v is None else os.environ.__setitem__(k, v)
+        importlib.reload(sync)
+    check("start states read from the screen", states == {"trust": "trust", "perm": "dialog", "empty": "unconfirmed",
+                                                          "busy": "started", "took": "started", "notitle": "trust",
+                                                          "busytitle": "unconfirmed"}, states)
+    check("a trust dialog fails close-setup and says so", code == 1 and "agent trust" in out.getvalue()
+          and out.getvalue().rstrip().endswith("result: failed"), out.getvalue())
+    shutil.rmtree(tmp)
+
+
+def test_restart_holds_reload():
+    """A session left waiting before its /restart gets no plugin reload either: that reaches the same background work."""
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    keys = ("AGENT_SKILLS_STATE", "SKILLS_SYNC_SETTLE_S", "SKILLS_SYNC_CONFIRM_S")
+    old_env = {k: os.environ.get(k) for k in keys}
+    os.environ.update(AGENT_SKILLS_STATE=str(tmp), SKILLS_SYNC_SETTLE_S="0", SKILLS_SYNC_CONFIRM_S="0")
+    import importlib
+    importlib.reload(sync)
+    typed = []
+
+    def orca(*a):
+        if a[:2] == ("terminal", "list"):
+            return {"terminals": [{"handle": "a", "agentIdentity": "claude", "connected": True, "writable": True}]}
+        if a[:2] == ("terminal", "send"):
+            typed.append(a[5])
+        return {}
+    try:
+        sync.screen, sync.orca = (lambda h: (NOTE_BACKGROUND, sync.classify(NOTE_BACKGROUND, "✳ a"))), orca
+        sync.broadcast_locked("plugins")
+        pending = json.loads((tmp / "reload-pending.json").read_text())
+        check("nothing is typed, and the reload stays pending for it",
+              typed == [] and "a" in pending.get("failed", {}), (typed, pending))
+        reads = [[], NOTE_BACKGROUND]
+        sync.screen = lambda h: (lambda s: (s, sync.classify(s, "✳ a")))(reads.pop(0) if len(reads) > 1 else reads[0])
+        sync.broadcast_locked("plugins")
+        check("nor when the waiting session's stale check could not be read", typed == [], typed)
+        (tmp / "restarts.json").write_text(json.dumps({"a": {"sent": sync._now(), "kind": "restart", "command": "/restart"}}))
+        sync.screen = lambda h: (NOTE_BACKGROUND, sync.classify(NOTE_BACKGROUND, "✳ a"))
+        import contextlib, io
+        with contextlib.redirect_stdout(io.StringIO()) as dry:
+            sync.broadcast_locked("plugins", dry_run=True)
+        check("a dry run says so too", "would send" not in dry.getvalue() and "background" in dry.getvalue(), dry.getvalue())
+        sync.broadcast_locked("plugins")
+        check("nor when its /restart was sent before and the notice still shows", typed == [], typed)
+        (tmp / "restarts.json").write_text("{}")
+        hook_bg = HOOK_BLOCKED[:-1] + ["  ⏵⏵ auto mode on · 1 shell"]
+        reads = [RESTART_NOTE, hook_bg]
+        sync.screen = lambda h: (lambda s: (s, sync.classify(s, "✳ a")))(reads.pop(0) if len(reads) > 1 else reads[0])
+        sync.broadcast_locked("plugins")
+        check("nor when the signal turned into a hook error with a shell by the read before typing", typed == [], typed)
+    finally:
+        for k, v in old_env.items():
+            os.environ.pop(k) if v is None else os.environ.__setitem__(k, v)
+        importlib.reload(sync)
+    shutil.rmtree(tmp)
+
+
+def test_main_help():
+    calls = []
+    real = (sync.broadcast, sync.sync, sync.nudge, sync.status, sync.close_setup)
+    sync.broadcast = lambda *a, **k: calls.append(("broadcast", a, k)) or 0
+    sync.sync = lambda **k: calls.append(("sync", k)) or 0
+    sync.nudge = lambda *a: calls.append(("nudge", a)) or 0
+    sync.status = lambda: calls.append(("status",)) or 0
+    sync.close_setup = lambda *a: calls.append(("close-setup", a)) or 0
+    try:
+        helped = [sync.main(a) for a in (["broadcast", "--help"], ["broadcast", "--plugins", "-h"], ["sync", "--help"],
+                                          ["nudge", "-h"], ["status", "--help"], ["close-setup", "--help"],
+                                          ["card", "--help"], ["setup", "-h"])]
+        check("--help or -h on any subcommand prints help and runs nothing", helped == [0] * 8 and calls == [], (helped, calls))
+        check("an unknown broadcast flag broadcasts nothing", sync.main(["broadcast", "--dryrun"]) == 2 and calls == [], calls)
+        check("--terminal without a handle broadcasts nothing",
+              [sync.main(["broadcast", "--terminal"]), sync.main(["broadcast", "--terminal", "--dryrun"])] == [2, 2]
+              and calls == [], calls)
+        sync.main(["broadcast", "--terminal", "term_x", "--dry-run"])
+        check("known broadcast flags still run",
+              calls == [("broadcast", (None,), {"dry_run": True, "only": "term_x"})], calls)
+        check("--retry, as docs/platform.md names it, is a plain broadcast",
+              sync.main(["broadcast", "--retry"]) == 0 and calls[-1] == ("broadcast", (None,), {"dry_run": False, "only": None}),
+              calls)
+    finally:
+        sync.broadcast, sync.sync, sync.nudge, sync.status, sync.close_setup = real
+
+
+def wake_rows(session="s-1", name="card", started=1000):
+    return [{"sessionId": session, "name": name, "kind": "interactive", "startedAt": started * 1000, "status": "idle"}]
+
+
+def wake_screen(mode="⏵⏵ auto mode on (shift+tab to cycle)", body=()):
+    rule = "─" * 40
+    return [*body, rule, "❯", rule, f"  {mode}"]
+
+
+def test_permission_class():
+    check("auto and accept edits prompt", sync.permission_class(wake_screen()) == "prompting"
+          and sync.permission_class(wake_screen("⏵⏵ accept edits on")) == "prompting")
+    check("bypass is its own class", sync.permission_class(wake_screen("⏵⏵ bypass permissions on")) == "bypass")
+    check("the default mode's hint prompts", sync.permission_class(wake_screen("? for shortcuts")) == "prompting")
+    check("plan mode is unknown", sync.permission_class(wake_screen("⏸ plan mode on")) is None)
+    check("an unknown status line is unknown", sync.permission_class(wake_screen("custom status")) is None)
+    quoted = wake_screen(body=["⏺ the screen said ⏵⏵ bypass permissions on"])
+    check("a mode quoted in the conversation is not the mode", sync.permission_class(quoted) == "prompting")
+    check("two mode rows are unknown",
+          sync.permission_class(wake_screen() + ["  ⏵⏵ bypass permissions on"]) is None)
+
+
+def transcript(tmp, session, *rows):
+    d = tmp / "home/projects/-x"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{session}.jsonl").write_text("".join(
+        (r if isinstance(r, str) else json.dumps(r)) + "\n" for r in rows))
+
+
+def wrapped(nonce):
+    return ('<cross-session-message from="uds:/x" from-name="o" from-mode="prompting">\n'
+            f"wake {nonce}: run your orchestration check\n</cross-session-message>")
+
+
+def wake_entry(nonce="n1", session="s", at=1, offset=0, sender="term_me"):
+    return {"session": session, "to": "card", "nonce": nonce, "at": at, "offset": offset, "from": sender}
+
+
+def queued(nonce):
+    return {"type": "queue-operation", "operation": "enqueue", "content": wrapped(nonce)}
+
+
+def idle_delivery(nonce):
+    return {"type": "user", "message": {"role": "user", "content":
+            f"Another Claude session sent a message:\n{wrapped(nonce)}\n\nThis came from another Claude session."}}
+
+
+def test_wake_state():
+    enqueue = queued("n1")
+    attached = {"type": "attachment", "attachment": {"type": "queued_command", "prompt": wrapped("n1")}}
+    user = idle_delivery("n1")
+    quoted = {"type": "user", "message": {"content": [{"type": "tool_result", "content": wrapped("n1")}]}}
+    assistant = {"type": "assistant", "message": {"content": []}}
+    other = {"type": "attachment", "attachment": {"type": "queued_command", "prompt": wrapped("n0")}}
+    pasted = {"type": "user", "message": {"content": f"what does this mean?\n{wrapped('n1')}"}}
+    bare = {"type": "user", "message": {"content": wrapped("n1")}}
+    entry = wake_entry()
+    with tempfile.TemporaryDirectory() as td:
+        tmp = pathlib.Path(td)
+        old = sync.HOMES
+        sync.HOMES = (str(tmp / "home"),)
+        try:
+            cases = [("a busy session took it and answered", (enqueue, attached, assistant), "started"),
+                     ("an idle session started on it", (enqueue, user, assistant), "started"),
+                     ("queued only is accepted, not started", (enqueue,), "accepted"),
+                     ("an answer after a mere enqueue is not a start", (enqueue, assistant), "accepted"),
+                     ("an answer before the delivery does not count", (enqueue, assistant, attached), "delivered"),
+                     ("a tool result quoting the nonce is no delivery", (enqueue, quoted, assistant), "accepted"),
+                     ("another wake's nonce is not this one", (other, assistant), None),
+                     ("a held or refused wake leaves nothing", (assistant,), None),
+                     ("a broken line is skipped", (enqueue, '{"n1', attached, assistant), "started"),
+                     ("a user pasting the envelope, with no enqueue, is no delivery", (bare, assistant), None),
+                     ("a user quoting it after the enqueue is no delivery", (enqueue, pasted, assistant), "accepted"),
+                     ("a delivery with no enqueue before it is unknown", (attached, assistant), None)]
+            for what, rows, want in cases:
+                transcript(tmp, "s", *rows)
+                check(what, sync.wake_state(entry) == want, sync.wake_state(entry))
+            check("no transcript is unknown", sync.wake_state(wake_entry(session="none")) is None)
+            transcript(tmp, "s", enqueue, attached, assistant)
+            size = sync.transcript_of("s").stat().st_size
+            check("rows from before the attempt do not count", sync.wake_state(wake_entry(offset=size)) is None)
+            check("a transcript shorter than the mark is unknown", sync.wake_state(wake_entry(offset=size + 1)) is None)
+        finally:
+            sync.HOMES = old
+
+
+def test_wake_target():
+    real = (sync.STATE, sync.CONFIG, sync.screen, sync.agent_rows, sync.HOMES)
+    me = os.environ.get("ORCA_TERMINAL_HANDLE")
+    state_env = os.environ.get("AGENT_SKILLS_STATE")
+    screens = {}
+    rows = {"value": wake_rows(), "problem": None}
+
+    def run(handle="term_card"):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = sync.wake_target(handle)
+        return code, out.getvalue()
+
+    with tempfile.TemporaryDirectory() as td:
+        tmp = pathlib.Path(td)
+        sync.STATE = tmp / "state"
+        sync.CONFIG = tmp / "agent-skills.json"
+        sync.HOMES = (str(tmp / "home"),)
+        os.environ["AGENT_SKILLS_STATE"] = str(sync.STATE)
+        os.environ["ORCA_TERMINAL_HANDLE"] = "term_me"
+        sync.screen = lambda h: screens[h]
+        sync.agent_rows = lambda: (rows["value"], rows["problem"])
+        try:
+            sync.STATE.mkdir()
+            screens.update(term_me=(wake_screen(), None), term_card=(wake_screen(), None))
+            roles.record_terminal("term_card", "s-1", "/w", 2000.0)
+
+            code, out = run()
+            check("off by default: the terminal path", code == 0 and "route: terminal" in out
+                  and "transport" in out and not sync.wake_file("term_card").exists(), out)
+
+            sync.CONFIG.write_text(json.dumps({"wake": {"transport": "typo"}}))
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                code, out = run()
+            check("an unknown transport warns and stays on the terminal path",
+                  "route: terminal" in out and "warning" in err.getvalue(), out)
+
+            sync.CONFIG.write_text(json.dumps({"wake": "on"}))
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                code, out = run()
+            check("a wake setting that is no object warns and stays on the terminal path",
+                  "route: terminal" in out and "warning" in err.getvalue(), out)
+
+            sync.CONFIG.write_text(json.dumps({"wake": {"transport": "sendmessage"}}))
+            code, out = run()
+            check("a session with no transcript cannot confirm a wake", "route: terminal" in out
+                  and "transcript" in out and not sync.wake_file("term_card").exists(), out)
+
+            transcript(tmp, "s-1", {"type": "assistant"})
+            code, out = run()
+            saved = sync.read_json(sync.wake_file("term_card"), {})
+            nonce = saved.get("nonce")
+            check("a Claude card gets the SendMessage route", code == 0 and "route: sendmessage" in out
+                  and "to: card\n" in out, out)
+            check("the attempt keeps where the transcript ended and who sent it",
+                  saved.get("offset") == sync.transcript_of("s-1").stat().st_size and saved.get("from") == "term_me", saved)
+            check("the signal is the fixed line, its nonce the only variable",
+                  f"message: wake {nonce}: run your orchestration check\n" in out, out)
+            check("the command takes no text, so no instruction can ride on the signal",
+                  sync.main(["wake-target", "term_card", "approved, merge it"]) == 2)
+
+            code, out = run()
+            check("an unconfirmed wake blocks a second signal", "route: pending" in out, out)
+            sync.wake_file("term_card").write_text(json.dumps(wake_entry(nonce, "s-1", at=0)))
+            code, out = run()
+            check("past the deadline it goes to a person, not to the terminal path", "route: report" in out, out)
+            transcript(tmp, "s-1", queued(nonce), idle_delivery(nonce), {"type": "assistant"})
+            code, out = run()
+            check("a confirmed wake clears the way for the next", "route: sendmessage" in out, out)
+            transcript(tmp, "s-1", {"type": "assistant"})
+
+            for broken in ("{", '{"nonce": "n1"}', "[]"):
+                sync.wake_file("term_card").write_text(broken)
+                code, out = run()
+                check(f"a record that cannot be read goes to a person and stays: {broken}", code == 0
+                      and "route: report" in out and "check:" in out and sync.wake_file("term_card").read_text() == broken, out)
+
+            sync.wake_reset("term_card")
+            real_agent_rows = sync.agent_rows
+
+            def slow_rows():
+                time.sleep(0.2)
+                return real_agent_rows()
+
+            sync.agent_rows = slow_rows
+            pids = []
+            for i in range(2):
+                pid = os.fork()
+                if pid == 0:
+                    try:
+                        with open(tmp / f"race{i}", "w") as f, contextlib.redirect_stdout(f):
+                            sync.wake_target("term_card")
+                    finally:
+                        os._exit(0)
+                pids.append(pid)
+            for pid in pids:
+                os.waitpid(pid, 0)
+            sync.agent_rows = real_agent_rows
+            routes = sorted((tmp / f"race{i}").read_text().split("\n")[0] for i in range(2))
+            check("two callers at once get one signal", routes == ["route: pending", "route: sendmessage"], routes)
+
+            sync.wake_reset("term_card")
+            screens["term_card"] = ([], "not a connected, writable Claude terminal")
+            code, out = run()
+            check("a Codex card keeps the terminal path", "route: terminal" in out
+                  and not sync.wake_file("term_card").exists(), out)
+            screens["term_card"] = (wake_screen(), None)
+
+            def refused(why, want=None):
+                code, out = run()
+                check(why, code == 0 and "route: terminal" in out and (not want or want in out)
+                      and not sync.wake_file("term_card").exists(), out)
+
+            rows["value"], rows["problem"] = [], "claude agents failed: boom"
+            refused("a failed session list is the terminal path", "boom")
+            rows["value"], rows["problem"] = wake_rows("other"), None
+            refused("a session not listed is the terminal path", "not listed")
+            rows["value"] = wake_rows(started=3000)
+            refused("a record older than the process is the terminal path", "older")
+            rows["value"] = wake_rows() + wake_rows("s-2")
+            refused("a name two sessions share is the terminal path", "name")
+            rows["value"] = [{**wake_rows()[0], "name": ""}]
+            refused("a session with no name is the terminal path", "name")
+            rows["value"] = wake_rows()
+            screens["term_card"] = (wake_screen("⏵⏵ bypass permissions on"), None)
+            refused("a receiver in another permission class would hold it", "permission modes")
+            screens["term_card"] = (wake_screen(), None)
+            screens["term_me"] = (wake_screen("⏵⏵ bypass permissions on"), None)
+            refused("a sender in bypass would hold it on every card", "permission modes")
+            screens["term_me"] = (wake_screen("⏸ plan mode on"), None)
+            refused("an unknown mode is the terminal path", "permission modes")
+            screens["term_me"] = (wake_screen(), None)
+            os.environ.pop("ORCA_TERMINAL_HANDLE")
+            refused("a sender with no terminal is the terminal path", "sender")
+            os.environ["ORCA_TERMINAL_HANDLE"] = "term_card"
+            refused("a session never wakes itself", "sender")
+            os.environ["ORCA_TERMINAL_HANDLE"] = "term_me"
+            terminal_file = roles.terminal_file("term_card")
+            terminal_file.unlink()
+            refused("no record for the terminal is the terminal path", "no session record")
+            check("a bad handle is refused", sync.wake_target("../x") == 2)
+        finally:
+            sync.STATE, sync.CONFIG, sync.screen, sync.agent_rows, sync.HOMES = real
+            for key, value in (("ORCA_TERMINAL_HANDLE", me), ("AGENT_SKILLS_STATE", state_env)):
+                os.environ.pop(key, None) if value is None else os.environ.__setitem__(key, value)
+
+
+def test_wake_check():
+    real = (sync.STATE, sync.HOMES, sync.WAKE_POLL_S)
+    with tempfile.TemporaryDirectory() as td:
+        tmp = pathlib.Path(td)
+        sync.STATE, sync.HOMES, sync.WAKE_POLL_S = tmp / "state", (str(tmp / "home"),), 0.01
+        path = sync.wake_file("term_card")
+        path.parent.mkdir(parents=True)
+        try:
+            def run():
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    return sync.wake_check("term_card", 0), out.getvalue()
+
+            code, out = run()
+            check("nothing recorded is not a success", code == 1 and out.startswith("unconfirmed"), out)
+            path.write_text("{")
+            code, out = run()
+            check("an unreadable record is unconfirmed and stays", code == 1 and "cannot be read" in out
+                  and path.read_text() == "{", out)
+            path.write_text(json.dumps(wake_entry()))
+            code, out = run()
+            check("no sign of it stays unconfirmed and on file", code == 1 and out.startswith("unconfirmed")
+                  and path.exists(), out)
+            transcript(tmp, "s", queued("n1"))
+            code, out = run()
+            check("queued is reported as accepted, never as sent", code == 1 and out.startswith("accepted")
+                  and path.exists(), out)
+            transcript(tmp, "s", queued("n1"), idle_delivery("n1"), {"type": "assistant"})
+            code, out = run()
+            check("a start exits 0 and clears the record", code == 0 and out == "started\n" and not path.exists(), out)
+
+            real_state = sync.wake_state
+
+            def replaced_meanwhile(entry):
+                path.write_text(json.dumps(wake_entry("n2")))
+                return "started"
+
+            path.write_text(json.dumps(wake_entry()))
+            sync.wake_state = replaced_meanwhile
+            try:
+                code, out = run()
+            finally:
+                sync.wake_state = real_state
+            check("a checker leaves an attempt that replaced the one it watched", code == 0
+                  and json.loads(path.read_text())["nonce"] == "n2", out)
+        finally:
+            sync.STATE, sync.HOMES, sync.WAKE_POLL_S = real
+
+
+def test_session_for():
+    with tempfile.TemporaryDirectory() as td:
+        old = os.environ.get("AGENT_SKILLS_STATE")
+        os.environ["AGENT_SKILLS_STATE"] = td
+        try:
+            roles.record_terminal("term_a", "s-1", "/w", 2000.0)
+            saved = json.loads(roles.terminal_file("term_a").read_text())
+            check("the record holds the handle, session, cwd and time, nothing else",
+                  saved == {"handle": "term_a", "session_id": "s-1", "cwd": "/w", "at": 2000.0}, saved)
+            check("a live session is found by its recorded id",
+                  roles.session_for("term_a", wake_rows())[0]["sessionId"] == "s-1")
+            check("a background session is not this terminal's",
+                  roles.session_for("term_a", [{**wake_rows()[0], "kind": "background"}])[0] is None)
+            check("no startedAt is unknown, not fresh",
+                  roles.session_for("term_a", [{"sessionId": "s-1", "kind": "interactive"}])[0] is None)
+            roles.record_terminal("../x", "s-1", "/w", 2000.0)
+            check("a handle cannot leave the state directory", not (pathlib.Path(td) / "x.json").exists()
+                  and roles.session_for("../x", wake_rows())[0] is None)
+            roles.terminal_file("term_a").write_text("{")
+            check("a broken record is no record", roles.session_for("term_a", wake_rows())[0] is None)
+        finally:
+            os.environ.pop("AGENT_SKILLS_STATE") if old is None else os.environ.__setitem__("AGENT_SKILLS_STATE", old)
+
+
 if __name__ == "__main__":
+    test_permission_class()
+    test_wake_state()
+    test_wake_target()
+    test_wake_check()
+    test_session_for()
+    test_close_setup_agent()
+    test_main_help()
     test_reload_kind()
     test_classify()
     test_confirm()
     test_sync()
     test_broadcast()
+    test_running()
+    test_stale_signal()
+    test_restart()
+    test_restart_entries()
+    test_restart_holds_reload()
     test_close_setup()
     print(f"\n{len(failures)} failure(s)" if failures else "\nall passed")
     sys.exit(1 if failures else 0)

@@ -24,6 +24,16 @@ tail of each card's session transcript, the `orch sent` log and the last pressur
                that tell the same thing with the same work (dash.repeat_turns: one error, one last message, one
                prompt such as a nudge, or /reload-* only); its card is "stalled", not "working", unless parked. Shown
                once to its owner, and never raised again for the same session and text (shown as ❔)
+  H  stale     an agent card, Run workers included, whose session ended its turn, not waiting on a human, with a
+               screen that shows it runs on what changed under it (sync.stale_signal: a hook error in the last turn
+               saying its file is missing, as when its hooks.json names a script an update removed, or Claude
+               Code's "/restart to apply"; a guard's deny is not one);
+               its card is "stalled" (a Run worker stays "run"). A screen without that wording is not judged.
+               `skills-sync broadcast` types the fix once the session is idle (shown as ❔)
+  B  bg wait   an agent card, Run workers included, whose turn ended 15+ min ago, not waiting on a human, whose last
+               message says it waits on a background task (bgwait_signal), while nothing will wake it: the transcript
+               owes no armed background call or Monitor a result (not parked) and Claude Code's status line shows no
+               shell, agent or task running. A screen without that wording is not judged (shown as ❔)
   L  load      at pressure warn or danger, a top consumer whose card is judged I, X, S or O
   W  watcher   an orchestrator whose `orch watch-cards` has not finished a round in an hour (reported here; the
                collector raises it on the dashboard)
@@ -34,7 +44,8 @@ by whoever dealt with them (`orch patrol ack`). `orch inbox` and `orch wait` sho
 (the card's parent session, else the orchestrator) every 30 minutes. X, E, L and O also go to the dashboard's
 Needs you until cleared or acked. Card verdicts go to <state>/patrol-verdicts.json: `cards` holds each card's activity
 (run, waiting, working, idle, exited, stalled), `hints` what a finding said of it (superseded, pr_open_no_session,
-idle, exited, stalled), and `failed` the sources this round could not read. A finding never overwrites run, waiting or working in
+idle, exited, stalled), `check` the cards H, B and R found, each with the reason the brief shows on its ❔ row, and
+`failed` the sources this round could not read. A finding never overwrites run, waiting or working in
 `cards`. reap-hard, the pressure round and the janitor read `cards` only to keep a card judged working; no verdict
 makes anything a target, and a card missing from it, in a failed round above all, is not evidence it is safe.
 
@@ -51,6 +62,14 @@ import contextlib, datetime as dt, fcntl, hashlib, json, os, pathlib, re, secret
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 sys.path.insert(1, str(pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts"))
 import card_watch, cardguard, dash, fleet, prog  # noqa: E402
+try:  # dash put the repo's scripts/ on the path
+    from sync import BACKGROUND, STALE_COMMAND, stale_signal  # noqa: E402
+except ImportError:  # an install without the repo's scripts/: H judges nothing
+    STALE_COMMAND = {}
+    BACKGROUND = re.compile(r"\b\d+ (?:shells?|agents?|background tasks?)\b|shells? still running")  # sync.BACKGROUND
+
+    def stale_signal(lines):
+        return None
 
 STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()
 LOG = STATE / "patrol.jsonl"
@@ -77,8 +96,13 @@ RENOTIFY = dt.timedelta(minutes=30)
 SCREEN_READS = 30
 NEEDS_YOU = {"X", "E", "L", "O"}
 LABEL = {"I": "idle", "X": "exited", "S": "superseded", "O": "orphan PR", "D": "no ref", "E": "error loop",
-         "L": "load", "W": "watcher down", "R": "repeat"}
-VERDICT_OF = {"I": "idle", "X": "exited", "S": "superseded", "O": "pr_open_no_session", "R": "stalled"}
+         "L": "load", "W": "watcher down", "R": "repeat", "H": "stale", "B": "background wait"}
+BGWAIT_WHY = "백그라운드 작업을 기다리지만 깨울 작업이 없음"  # B's reason on the brief's ❔ row
+VERDICT_OF = {"I": "idle", "X": "exited", "S": "superseded", "O": "pr_open_no_session", "R": "stalled", "H": "stalled"}
+# H's two kinds: what the owner's line says, and the reason on the brief's ❔ row (Korean, as the brief is).
+STALE_WHAT = {"hook": ("a hook error blocks its tools", "hook 오류로 도구가 막힘"),
+              "restart": ("a Claude Code update waits on /restart", "업데이트가 /restart 를 기다림")}
+REPEAT_WORD = {"error": "에러", "assistant": "답", "user": "입력", "reload": "reload"}
 SHOW_ONCE = {"R"}  # pending_lines shows these once, not every RENOTIFY
 # A stalled card loses patrol's protection, so reap closes it within days; no session stays open this long.
 REPEATS_KEEP_DAYS = 90
@@ -103,13 +127,42 @@ def card_name(path):
 transcript_tail = cardguard.transcript_tail
 
 
-# Claude Code's status line while a background shell or agent of the session still runs. A message typed in after the
-# command was armed resets the transcript's record of it, so only the screen still shows it.
-BACKGROUND = re.compile(r"\b\d+ (?:shells?|agents?|background tasks?)\b|shells? still running")
-
-
 def background(lines):
+    """Claude Code's status line shows a background shell or agent still running (BACKGROUND). A message typed in after
+    the command was armed resets the transcript's record of it, so only the screen still shows it."""
     return bool(lines) and any(BACKGROUND.search(l) for l in lines[-6:])
+
+
+# A last message that says the session waits on a background task still to finish (English or Korean). A launch
+# ("started it in the background"), a report of one that finished ("waited for it, then applied", "기다리던 중 완료
+# 알림을 받아") or a wait denied ("no need to wait") is not one: only a present or future wait counts.
+# English counts a wait only as the session's state now: at the sentence's start, or after a present or future marker
+# ("I'm", "still", "I'll"), so "after waiting …" or "while waiting …" is not one.
+BG_WAIT = re.compile(r"(?:^|\b(?:I'm|I am|am|is|are|still|now|I'll|I will|will|keep|just)\s+)wait(?:ing|s)?\s+"
+                     r"(?:on|for|until)\b.{0,60}?\bbackground\b"
+                     r"|\b(?:until|once|when)\b.{0,20}?\bbackground\b.{0,60}?\b(?:finishes|completes|is done|ends)\b"
+                     r"|백그라운드.{0,60}?(?:기다립니다|기다리는 중|기다리고 있|기다릴게|기다린다|대기 중|끝나면|끝나기를 기다"
+                     r"|완료되면)", re.I)
+# Judged per sentence, so a denied or past wait in one sentence neither makes nor hides a wait in another.
+NO_WAIT = re.compile(r"\b(?:no need to|not|don't|do not|no longer|stopped)\s+(?:\w+\s+)?wait|\b(?:was|were|had been)\s+"
+                     r"waiting\b|\bwaited\b|기다리지 않|기다릴 필요", re.I)
+SENTENCE = re.compile(r"(?<=[.!?;。])\s+|;\s*")
+
+
+def bgwait_signal(lines):
+    """The session's last message, when it says it waits on a background task; else None. Only the last ⏺ block
+    above the input box counts, its wrapped lines joined."""
+    if not lines:
+        return None
+    box = max((i for i, l in enumerate(lines) if l.strip().startswith("❯")), default=len(lines))
+    body = lines[:box]
+    start = max((i for i, l in enumerate(body) if l.strip().startswith("⏺")), default=None)
+    if start is None:
+        return None
+    text = " ".join(card_watch.GLYPHS.sub("", l.strip()) for l in body[start:] if l.strip() and not set(l.strip()) <= {"─"})
+    text = text.replace("’", "'")  # a typographic apostrophe: "I’m waiting", "don’t wait"
+    waits = any(BG_WAIT.search(s.strip()) and not NO_WAIT.search(s) for s in SENTENCE.split(text))
+    return text[:300] if waits else None
 
 
 def screen_of(facts, handle):
@@ -285,7 +338,7 @@ def judge(facts, memo):
     agents = [t for t in terms if t.get("agentIdentity") and t.get("connected", True)]
     agent_paths = {t.get("worktreePath") for t in agents}
     own = owners(facts["sessions"])
-    run_paths, findings, verdicts, hints, act = set(), [], {}, {}, {}
+    run_paths, findings, verdicts, hints, act, check = set(), [], {}, {}, {}, {}
     failed = facts.get("failed") or set()
     fresh = facts.get("fresh", set(facts["screens"]))
     # An output mark moves only past a screen this round read; one skipped by the budget or a failed read is read next.
@@ -325,6 +378,40 @@ def judge(facts, memo):
                 add("X", path, (w.get("dispatchId"),), f"worker {w.get('dispatchId')} exited with its task in progress: "
                     f"worker-read --source transcript, then worker-stop or worker-abandon on positive evidence only",
                     prog.worker_terminal(w))  # its card stays "run": the lead decides, not a cleaner
+    # H: an ended turn whose screen says the session runs on what changed under it. A Run worker too: one whose
+    # every tool call a hook blocks cannot send worker_done.
+    stale_paths = set()  # H's: an I found on the same card keeps them stalled, the more telling verdict
+    for t in agents if "waits" not in failed else ():
+        path, handle = t.get("worktreePath"), t.get("handle")
+        motion = (facts["tails"].get(path) or (None, None))[0]
+        if not (path and handle) or not motion or motion.get("state") != "idle" or motion.get("parked") \
+                or isinstance(facts["waits"].get(handle), dict):
+            continue
+        sig = stale_signal(screen_of(facts, handle))
+        if not sig:
+            continue
+        kind, text = sig
+        what, why = STALE_WHAT[kind]
+        add("H", path, (kind, VOLATILE.sub("#", text)), f"❔ {what}: {text[:120]} · `skills-sync broadcast --terminal "
+            f"{handle}` types {STALE_COMMAND.get(kind, 'the fix')} once it is idle", handle)
+        check[path] = why
+        activity(path, "stalled")
+        stale_paths.add(path)
+    # B: an ended turn that says it waits on a background task while nothing will wake it: the transcript owes no
+    # armed call a result (parked) and Claude Code's status line shows nothing running. A Run worker too.
+    for t in agents if "waits" not in failed else ():
+        path, handle = t.get("worktreePath"), t.get("handle")
+        motion = (facts["tails"].get(path) or (None, None))[0]
+        if not (path and handle) or not motion or motion.get("state") != "idle" or motion.get("parked") \
+                or isinstance(facts["waits"].get(handle), dict):
+            continue
+        mins = (tnow - prog.parse_ts(motion["since"])).total_seconds() / 60
+        lines = screen_of(facts, handle) if mins >= IDLE_MIN else None
+        text = None if not lines or background(lines) else bgwait_signal(lines)
+        if text:
+            add("B", path, (motion["since"],), f"❔ its last message waits on a background task, but nothing armed or "
+                f"running will wake it ({int(mins)} min): {text[:120]}", handle)
+            check.setdefault(path, BGWAIT_WHY)
     for path, (motion, last) in facts["tails"].items():
         if path in run_paths or not path or "workers" in failed:  # without the Run list, a worker looks like a card
             if path and path not in run_paths:
@@ -356,11 +443,15 @@ def judge(facts, memo):
                                         "live": old is None or bool(old.get("live"))}
             if not motion.get("parked"):  # a wake-up it armed may still bring news: parked stays protected
                 activity(path, "stalled")
+                check.setdefault(path, f"같은 {REPEAT_WORD.get(rep['kind'], rep['kind'])} {rep['count']}턴 반복")
         if motion and motion.get("state") == "idle" and not motion.get("parked") and "waits" not in failed:
             mins = (tnow - prog.parse_ts(motion["since"])).total_seconds() / 60
             if mins >= IDLE_MIN and not background(screen_of(facts, handle)):
                 add("I", path, (motion["since"],), f"turn ended {int(mins)} min ago, nothing armed to wake it", handle)
-                activity(path, "idle")
+                if path in stale_paths:
+                    hints[path] = "stalled"
+                else:
+                    activity(path, "idle")
                 continue
         verdicts.setdefault(path, "working")
     # S: what a coordinator logged as superseded and still has an agent.
@@ -438,8 +529,8 @@ def judge(facts, memo):
             add("W", None, (int(last[0]) if last else 0,), "orch watch-cards " + (
                 f"last finished a round {int((now - last[0]) // 60)} min ago" if last else "never ran here")
                 + ": the orchestrator restarts it (run_in_background, no pipe)", h)
-    return findings, {"cards": verdicts, "hints": hints, "failed": sorted(failed), "doing_noref": doing_noref,
-                      "load": load, "activity": act}, new_memo
+    return findings, {"cards": verdicts, "hints": hints, "check": check, "failed": sorted(failed),
+                      "doing_noref": doing_noref, "load": load, "activity": act}, new_memo
 
 
 # ---------------------------------------------------------------- the log
@@ -486,7 +577,7 @@ def sync_needs_you(rows=None):
 # The sources each rule reads: a finding whose source failed this round is kept, not cleared.
 DEPENDS = {"I": {"terminals", "workers", "waits"}, "X": {"terminals", "workers"}, "S": {"terminals", "sent"},
            "O": {"state", "terminals"}, "D": {"state", "board"}, "E": {"terminals"}, "L": {"consumers", "terminals", "workers", "waits"},
-           "W": {"state"}, "R": {"terminals", "workers", "waits"}}
+           "W": {"state"}, "R": {"terminals", "workers", "waits"}, "H": {"terminals", "waits"}, "B": {"terminals", "waits"}}
 
 
 def write_round(findings, verdicts, dry, now, failed=()):

@@ -9,7 +9,7 @@
 
 ## 무엇인가
 
-agent-skills는 Claude Code 플러그인이다. 스킬 41개, 에이전트 정의 4개, hook 8개와 명령 몇 개로 이뤄져 있다. 흐름은 둘이다. 하나는 티켓 하나를 첫 수정부터 머지와 티켓 닫기까지 끌고 간다. 다른 하나는 Orca 워커 여러 개를 동시에 돌려 워커마다 티켓 하나를 맡기고, 그 PR들을 순서대로 머지한다.
+agent-skills는 Claude Code 플러그인이다. 스킬 41개, 에이전트 정의 4개, hook 14개와 명령 몇 개로 이뤄져 있다. 흐름은 둘이다. 하나는 티켓 하나를 첫 수정부터 머지와 티켓 닫기까지 끌고 간다. 다른 하나는 Orca 워커 여러 개를 동시에 돌려 워커마다 티켓 하나를 맡기고, 그 PR들을 순서대로 머지한다.
 
 GitHub 저장소의 티켓 작업을 Claude Code에 맡기려는 개발자를 위한 것이다. 단계마다 사람이 승인하는 방식(Human-in-the-loop, HITL)과, 에이전트가 진행하고 사람은 지켜보다 예외에만 끼어드는 방식(Human-on-the-loop, HOTL)을 지점마다 고른다. 사용자 설정 쓰기와 되돌릴 수 없는 행동은 늘 사람의 승인을 기다린다.
 
@@ -28,7 +28,7 @@ https://github.com/user-attachments/assets/4989f7f2-54d3-493a-8692-e0a4157199b0
 - **티켓 하나를 끝까지.** `deliver-ticket`이 계획, 테스트, 작성자 외 독립 리뷰, PR, CI 확인, 머지, 완료 기준별 근거를 단 티켓 닫기까지 한다.
 - **워커 여러 개로 프로젝트 하나.** `orchestrate`가 Orca 워커마다 티켓 하나를 맡기고 프로그램 원장을 둔다. PR은 `orch land` 게이트를 통과하거나 사람이 승인해야만 머지되고, 공유 파일을 고친 PR은 하나씩 머지된다.
 - **사람이 보는 곳.** `brief`가 진행 중, 다른 사람 대기, 내 결정 대기, 보류로 나눠 보고한다. 대시보드 `orch-dash`에는 열린 결정, 권한 창, 받은편지함이 뜬다.
-- **거부된 행동은 다시 하지 않는다.** 권한 창, auto mode 분류기, hook, 사람이 거부한 행동은 형태를 바꿔 재시도하지 않고 보고한다.
+- **거부된 행동의 재시도는 한 번이다.** 권한 창, auto mode 분류기, hook, 사람이 거부한 행동은 보고한다. 그 세션 채팅에서 사람이 허락하거나 규칙을 넣었을 때, 또는 에이전트가 분류기나 hook의 거부 사유에 맞는 근거를 보강했을 때만 같은 형태로 한 번 다시 한다. 사람의 거부와 프로덕션 sync는 근거로 넘을 수 없다. 다시 거부되면 멈추고, 다른 세션이나 스크립트, 도구로 대신하지 않는다.
 - **설정이 없으면 추정하지 않는다.** 노트, 회고 원장, 개인 폴더, 채팅 채널은 설정에 적힌 곳만 쓴다. 키가 없으면 그 기능은 꺼지거나 스킬이 먼저 묻는다.
 - **머신 정리.** `reap-resources`가 끝난 세션이 남긴 프로세스, worktree, 컨테이너를 목록으로 뽑고, 목록에 오른 것만 치운다.
 
@@ -94,7 +94,7 @@ https://github.com/JeongJaeSoon/agent-skills 의 Claude Code 플러그인을 설
 - **내 설정.** `setup-pc`, `tune-automode`, `skills-config`는 diff와 `!` 줄만 만들고, 실행은 사람이 한다. 이 동작은 바꿀 수 없다.
 - **권한 창과 거부.** 권한 창은 사람의 응답을 기다린다. auto mode 분류기가 행동을 거부하면 에이전트는 보고하고 멈춘다. 어떤 부류의 행동을 이후 통과시키려면 사람이 `permissions.allow` 항목이나 `tune-automode`가 초안을 쓴 autoMode 규칙을 더한다.
 - **되돌릴 수 없는 행동.** 파괴적 migration, 공유 브랜치 force push, 프로덕션 배포, 바깥으로 보내기는 늘 멈추고 묻는다.
-- **머지.** `orchestrate`와 `deliver-ticket`이 준비된 PR을 스스로 머지하는 것은 그 저장소의 머지를 허용하는 autoMode 규칙이 있을 때뿐이다. 없으면 묻는다. `human-gate` 정책으로 두거나 직접 보겠다고 하면 머지마다 그 앞에서 멈춘다.
+- **머지.** `orchestrate` 카드는 첫 프롬프트가 머지를 승인했으면 `orch land`로 자기 PR을 머지하고 스스로 닫는다. CI가 없는 저장소는 먼저 `orchestrate.no_ci_repos`에 넣어야 한다. 프로그램 밖의 `deliver-ticket`이 스스로 머지하는 것은 그 저장소의 머지를 허용하는 autoMode 규칙이 있을 때뿐이고, 없으면 묻는다. `human-gate` 정책으로 두거나 직접 보겠다고 하면 머지마다 그 앞에서 멈춘다.
 - **정기 정리.** `janitor`와 `pressure-watch`가 끝난 에이전트의 잔여물을 정기적으로 치운다. 끄려면 `skills-sync setup disable <이름>`. `watch-prs`의 내 PR 자동 승인·자동 머지는 설정하기 전까지 꺼져 있다.
 
 지점마다 기본값과 바꾸는 법은 [docs/install.ko.md](docs/install.ko.md#안전-장치)에 있다.
@@ -105,8 +105,8 @@ https://github.com/JeongJaeSoon/agent-skills 의 Claude Code 플러그인을 설
 
 | 묶음 | 스킬 | 하는 일 |
 |---|---|---|
-| [티켓 하나](docs/skills.md#티켓-하나) | `write-ticket`, `deliver-ticket`, `ui-review`, `handoff-ticket`, `dispatch-card`, `end-session`, `record-progress` | 티켓 쓰기부터 완료, 다음 티켓 넘기기, 세션 정리, 진행 기록까지 |
-| [프로젝트 하나](docs/skills.md#프로젝트-하나-orca-워커-여러-개) | `orchestrate`, `measure-delivery` | 여러 티켓을 Orca 워커로 병렬 처리해 머지하고, 끝난 뒤 실제로 어땠는지 잰다 |
+| [티켓 하나](docs/skills.md#티켓-하나) | `write-ticket`, `deliver-ticket`, `ui-review`, `handoff-ticket`, `dispatch-card`, `end-session` | 티켓 쓰기부터 완료, 다음 티켓 넘기기, 진행 기록과 세션 정리까지 |
+| [프로젝트 하나](docs/skills.md#프로젝트-하나-orca-워커-여러-개) | `orchestrate`, `reboot`, `measure-delivery` | 여러 티켓을 Orca 워커로 병렬 처리해 머지하고, 재시작으로 떨어진 대기·바인딩을 되살리고, 끝난 뒤 실제로 어땠는지 잰다 |
 | [머신 하나](docs/skills.md#머신-하나) | `reap-resources`, `secure-fill`, `tune-automode`, `skills-config`, `setup-pc` | 끝난 세션의 잔여물 정리, 에이전트가 보지 않는 비밀값 입력, autoMode 규칙 초안, 설정 키 변경, PC 설치·갱신 |
 | [채팅·GitHub](docs/skills.md#채팅) | `watch-mentions`, `watch-prs` | 나와 관련된 채팅과 PR을 작업으로 모은다 |
 | [어댑터](docs/skills.md#어댑터) | `use-tracker`, `use-notes` | Linear·Jira 티켓, Obsidian·Markdown 노트 |
@@ -142,7 +142,7 @@ pstack 묶음은 Lauren Tan의 [pstack](https://github.com/cursor/plugins)(MIT)�
 CI가 없다. 변경을 보내기 전에 테스트 파일을 모두 돌린다.
 
 ```bash
-for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/measure-delivery/scripts/test_measure.py skills/reap-resources/scripts/test_reap.py skills/reap-resources/scripts/test_cards.py skills/reap-resources/scripts/test_pressure.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/watch-prs/scripts/test_review_wait.py skills/watch-prs/scripts/test_notify.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py skills/skills-config/scripts/test_config_emit.py skills/setup-pc/scripts/test_setup_check.py scripts/test_setup.py skills/brief/scripts/test_table_width.py skills/reflect/scripts/test_lesson_ids.py skills/deliver-ticket/scripts/test_shots.py skills/ui-review/scripts/test_ui_measure.py hooks/test_*.py scripts/test_sync.py scripts/test_card.py scripts/test_preview_watch.py scripts/test_automations.py scripts/test_share_server.py scripts/test_reap_hard.py scripts/test_public_shapes.py scripts/test_skill_tokens.py; do python3 "$t"; done
+for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/measure-delivery/scripts/test_measure.py skills/reap-resources/scripts/test_reap.py skills/reap-resources/scripts/test_cards.py skills/reap-resources/scripts/test_pressure.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/watch-prs/scripts/test_review_wait.py skills/watch-prs/scripts/test_notify.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py skills/skills-config/scripts/test_config_emit.py skills/setup-pc/scripts/test_setup_check.py scripts/test_setup.py skills/brief/scripts/test_table_width.py skills/reflect/scripts/test_lesson_ids.py skills/deliver-ticket/scripts/test_shots.py skills/ui-review/scripts/test_ui_measure.py skills/reboot/scripts/test_reboot.py hooks/test_*.py scripts/test_sync.py scripts/test_card.py scripts/test_preview_watch.py scripts/test_automations.py scripts/test_share_server.py scripts/test_reap_hard.py scripts/test_public_shapes.py scripts/test_skill_tokens.py; do python3 "$t"; done
 bash scripts/pstack-sync-test.sh
 ```
 

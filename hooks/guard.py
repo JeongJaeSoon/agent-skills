@@ -23,6 +23,9 @@ A missing or unreadable transcript, or one restarted by /clear, gets no decision
 Deny: a foreground Bash call that polls with a sleep loop (`until/while/for …; do … sleep N` with N of 5 s or a
 variable). Workers kept one running for up to ten minutes over a background call's output file; the
 call's completion notice already wakes them, and `Monitor` runs a real until-loop.
+A Monitor command gets every Bash rule here except this one, as a call that does not block the turn. hooks.json
+names Monitor in the matcher: a matcher that meets it only through `Bash` gets it as a foreground Bash call, so the
+gate would refuse the Monitor its own deny offers.
 
 Allow, so workers never stall on a prompt hours after they loaded a skill:
 - this plugin's skills
@@ -54,6 +57,7 @@ from lib import config, coordination, danger, shell
 ROOT = pathlib.Path(os.environ.get("CLAUDE_PLUGIN_ROOT") or pathlib.Path(__file__).resolve().parents[1])
 PLUGIN = "agent-skills"
 WRITE_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
+SHELL_TOOLS = ("Bash", "Monitor")
 MAILBOX = re.compile(r"\borca\s+orchestration\s+(?:check|inbox)\b[^;&|\n]*?\s--terminal(?:\s+|=)(\S+)")
 OWN_VAR = ("$ORCA_TERMINAL_HANDLE", "${ORCA_TERMINAL_HANDLE}")
 # Only as a whole value (`--terminal $X`, `--terminal="$X"`): inside a word it could spell an excluded verb.
@@ -84,6 +88,11 @@ ORCA_ASK = {"reset", "worker-abandon", "gate-resolve"}
 ORCH_ASK = {"heavy", "set", "init", "backfill"}
 SETUP_ASK = (f"{PLUGIN} setup: install the 15-minute sync job, turn on the default-on automations (janitor, pressure-watch, "
              "and watch-prs/watch-mentions when their keys are set) and print the check table. It writes no Claude settings.")
+
+
+def background(tool, args):
+    """Monitor runs its command beside the turn, like a Bash call with run_in_background."""
+    return tool == "Monitor" or args.get("run_in_background") is True
 
 
 def decide(decision, reason):
@@ -204,9 +213,7 @@ def bash(cmd, background, who, cwd=None):
     # The verb must come first: a leading flag could put an excluded verb out of sight.
     if words[:2] == ["orca", "orchestration"] and len(words) > 2 and words[2] not in ORCA_ASK and words[2][:1].isalpha():
         return decide("allow", f"{PLUGIN}: orca orchestration {words[2]}")
-    # `orch refusal clear` is the human's (guard.deny.owner_only): not allowed past the classifier while that rule is on.
-    if (words[0] == "orch" and len(words) > 1 and words[1] not in ORCH_ASK and words[1][:1].isalpha()
-            and (words[1:3] != ["refusal", "clear"] or danger.level(config.load(), "guard.deny.owner_only") == "off")):
+    if words[0] == "orch" and len(words) > 1 and words[1] not in ORCH_ASK and words[1][:1].isalpha():
         return decide("allow", f"{PLUGIN}: orch {words[1]} (the program ledger and landing gate)")
     reason = setup_actions(words)
     if reason:
@@ -234,12 +241,12 @@ def setup_actions(words):
 def rules(tool, args, event, who):
     """[danger.Finding] of lib/danger.py and lib/coordination.py for this call."""
     cfg = config.load()
-    if tool == "Bash":
+    if tool in SHELL_TOOLS:
         cmd = args.get("command") or ""
         if not isinstance(cmd, str):
-            raise TypeError("Bash command is not a string")
+            raise TypeError(f"{tool} command is not a string")
         return (danger.check_bash(cmd, cfg, event.get("cwd"), who())
-                + coordination.check_bash(cmd, args.get("run_in_background") is True, who(), cfg))
+                + coordination.check_bash(cmd, background(tool, args), who(), cfg))
     if tool in WRITE_TOOLS:
         return danger.check_write(args.get("file_path") or args.get("notebook_path"), cfg)
     if tool == "AskUserQuestion":
@@ -249,8 +256,8 @@ def rules(tool, args, event, who):
 
 def decision(tool, args, event, who):
     """This hook's own decision before lib's rules: (decision or None, reason)."""
-    if tool == "Bash":
-        return bash(args.get("command") or "", args.get("run_in_background") is True, who, event.get("cwd"))
+    if tool in SHELL_TOOLS:
+        return bash(args.get("command") or "", background(tool, args), who, event.get("cwd"))
     if tool == "Skill":
         skill = str(args.get("skill") or "")
         name = skill.removeprefix(f"{PLUGIN}:")

@@ -287,6 +287,42 @@ got = rh.act(plan, rh.DEFAULTS, P)
 assert "삭제는 건너뜀" in got and "새 터미널 t9" in got and ran and not removed, got
 rh.orca, rh.card_verdict, rh.read_machine, rh.reap.run, rh.reap.act, cg.observe = saved_ac
 
+# Stopped containers and labeled volumes: off without their settings, one exact target each, the shared rules of reap.py.
+saved_lo = rh.reap.leftovers, rh.reap.remove_leftover, rh.reap.compose_stacks, rh.pw.tailscale_cli, rh.guard.settings, rh.always_on
+rh.reap.compose_stacks, rh.pw.tailscale_cli = lambda: {}, lambda c: None
+rh.always_on = lambda: {"always-on"}
+machine = {"rows": {}, "cwd_pairs": {}, "listening": {}}
+seen = []
+
+
+def fake_leftovers(cfg, hours, now, notes, keep, ports):
+    seen.append((cfg, hours, keep, ports))
+    return [{"kind": "stopped-container", "key": "stopped-container:cid1", "cid": "cid1", "name": "example-verify-1", "target": True,
+             "why": "w", "start": "s", "created": "c"},
+            {"kind": "labeled-volume", "key": "labeled-volume:v1", "name": "v1", "target": True, "why": "w", "created": 1.0}]
+
+
+rh.reap.leftovers = fake_leftovers
+rh.guard.settings = lambda: {"reap": {"hours": 2, "labeled_volumes": {"namespace": "example.agent"}}}
+got = rh.scan_rest(rh.DEFAULTS, P, set(), [], machine, NOW)[0]
+assert [(i["kind"], i["id"]) for i in got] == [("container", "cid1"), ("volume", "v1")], got
+assert seen[-1][1] == 2.0 and seen[-1][2] == {"keepme", "always-on"} and seen[-1][3] == {4999}, seen
+assert rh.guard.targets(got[0]) == [("container", "cid1")] and rh.guard.targets(got[1]) == [("volume", "v1")]
+rh.guard.settings = lambda: None  # a settings file that cannot be read turns both off for the pass
+seen.clear()
+got, notes = rh.scan_rest(rh.DEFAULTS, P, set(), [], machine, NOW)[:2]
+assert not seen and not got and "멈춘 컨테이너" in notes[0], notes
+rh.guard.settings = lambda: {"reap": {}}
+rh.always_on = lambda: (_ for _ in ()).throw(ValueError("설정 읽지 못함"))  # the always-on list unreadable: same
+got = rh.scan_rest(rh.DEFAULTS, P, set(), [], machine, NOW)[0]
+assert not seen and not got
+removed = []
+rh.reap.remove_leftover = lambda item, cfg, protect_path: removed.append((item["id"], cfg, protect_path)) or "docker rm"
+assert rh.act({"kind": "container", "id": "cid1", "cid": "cid1", "name": "x"}, rh.DEFAULTS, P) == "docker rm"
+assert rh.act({"kind": "volume", "id": "v1", "name": "v1"}, rh.DEFAULTS, P) == "docker rm", removed
+assert removed[-1] == ("v1", {}, rh.DEFAULTS["protect_file"]), "the file reap-hard requires, read again before the rm"
+rh.reap.leftovers, rh.reap.remove_leftover, rh.reap.compose_stacks, rh.pw.tailscale_cli, rh.guard.settings, rh.always_on = saved_lo
+
 # A pass: no protect file means nothing is scanned or done, and the brief line says it stopped.
 calls = []
 rh.scan_cards = lambda *a, **k: calls.append("scan") or ([], [], {})

@@ -1,7 +1,7 @@
-<!-- translated-from: a7255e35ef7581db488d0b530bf22e4f89417d30 -->
+<!-- translated-from: 9f83ea95ea5261de1b68f8270bf65d2bf50910c4 -->
 # Skill catalog
 
-This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 8 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
+This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 14 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
 
 Follow the [configuration migration guide](configuration-migration.md) for changed defaults and preservation of existing data. Notes, ledgers and personal folders require explicit configuration; report time defaults to UTC.
 
@@ -15,6 +15,7 @@ One ticket  write-ticket → deliver-ticket → handoff-ticket → end-session
 Project     orchestrate ─ deliver-ticket in each worker ─ orch land
               ─ main guardian · QA lead ─ dashboard
               └ measure-delivery when it's done
+              └ reboot first after a restart or compaction
 Machine     reap-resources (clears processes, Docker leftovers and branches that dead sessions
               left; the resource steward runs it on a schedule)
             secure-fill (a secret into a browser auth field without the agent seeing the value)
@@ -23,7 +24,7 @@ Machine     reap-resources (clears processes, Docker leftovers and branches that
             setup-pc (set up or update a PC: dry-run diff → the human's --apply line)
 Chat        watch-mentions (mentions, name mentions and new replies in threads the user joined,
               in public channels, sent to the orchestrator or lead in one message)
-Anywhere    record-progress (when to record what) → use-tracker (tickets) · use-notes (notes)
+Anywhere    end-session references/record.md (when to record what, the record_check hook) → use-tracker (tickets) · use-notes (notes)
               · pstack skills (design · review · verification · retrospective)
 ```
 
@@ -31,10 +32,10 @@ Which skill owns a PR, and who merges it:
 
 | Skill | PRs it owns | Merge |
 |---|---|---|
-| deliver-ticket | My PR this session is working: writing, review replies, merge, release | The session, per §5 (`gh pr merge`; a stack lands with merge-async) |
+| deliver-ticket | My PR this session is working: writing, review replies, merge, release | The session, per §5 (`gh pr merge`; a stack lands with `gh stack merge`) |
 | watch-prs | Waiting PRs a scheduled round collects: review requests naming me, my PRs waiting on review (requests, reminders), my PRs ready to merge | Only my PRs that pass every `merge_repos` gate |
 | orchestrate | A program worker's PRs | `orch land`, or a plain merge the human approved |
-| handoff-ticket · record-progress | Opens no PR: picks the next card, or records opened, reviewed and merged | Never |
+| handoff-ticket | Opens no PR: picks the next card | Never |
 
 - deliver-ticket ↔ watch-prs: a PR whose branch is checked out in a live worktree is merged by that session; watch-prs skips it.
 - orchestrate ↔ watch-prs: a PR in a program ledger is merged by `orch land`; watch-prs does not merge it even after the program stops, and only sends its reminders. A program whose ledger has no event within `stale_days` counts as abandoned, and its PRs go back to watch-prs for reminders and merges.
@@ -80,7 +81,7 @@ Which skill owns a PR, and who merges it:
   - **Review loop:** Starting from the bottom PR of the stack, it handles conflicts → review threads → CI and pushes once. Review comments are untrusted data, so they never go into shell commands, and replies are posted with `gh api --input`. CI failures are classified before any retry (the same failure twice is not a flake). After merging or rebasing onto main, it verifies again on the new head. Waiting uses a `Monitor` until-loop. "리뷰 코멘트 대응해줘" (handle the review comments) touches only the threads, and "초록이야?" (is it green?) checks the status just once. Details are in `references/review-loop.md`.
   - **Dependent PRs:** Grouped with `gh stack` and merged in one go from the top layer. CI is confirmed with `gh run view --log`, not a green check mark.
   - **Done:** Done means every acceptance criterion is met.
-    - Inside a program: merges only through `orch land`, and stops at READY under human-gate.
+    - Inside a program: a card whose first prompt approves the merge lands its own PR with `orch land` and closes. It stops at READY, with a `READY-WAIT:` line, only for a wait on a person or another PR, and under human-gate.
     - Standalone card: squash-merges on its own unless the user put it on hold.
     - After leaving the completion comment, it moves on to `handoff-ticket` in the same turn.
 - **Bundled:** `scripts/sticky-comment.sh` (keeps PR test results in a single comment). The skill body keeps only the rules that decide what ships; procedures are split into references: `evidence.md` (bug, refactor and existing-fix procedures), `independent-review.md` (independent review procedures), `pull-request.md` (PR body sections and stacks), `review-loop.md` (the loop from opening the PR to ready, and watching when someone else merges), `review-bot-triage.md` (how to sort review threads into fix / dismiss / ask; used for CodeRabbit, Copilot and human reviews).
@@ -123,9 +124,9 @@ Which skill owns a PR, and who merges it:
   - A card whose brief has a `CLOSE` line (`dispatch-card`, or a card an orchestrator or lead made with `worktree create`) also closes itself in the same turn once its done criteria are met. It does not leave the cleanup to the parent session.
   - Before ending, it checks the background subagents this session started, the git worktrees it made and the child cards it dispatched.
   - Writes the report first and runs the close command as its last tool call.
-
-### record-progress
-Records verified milestones in the configured tracker or notes store within the user's authorized workflow. Keeps state separate from reasoning, classifies follow-ups, avoids duplicate writes, and does not post chat announcements.
+- **Recording rules (`references/record.md`, formerly the `record-progress` skill):** the skill never fired from the listing, so it is gone as a skill and its body lives in this file. `deliver-ticket` reads it at each milestone, `orchestrate` on each `worker_done` and each human decision, `use-notes` when an investigation or design concludes, and `end-session` before closing. A bare "정리해줘"/"마무리해줘" (wrap up), "작업 기록 남겨줘" (log the work) or "log this" runs only this file and keeps the session. "티켓 갱신해줘" (update the ticket) goes to `use-tracker`; "노트에 남겨줘" (put it in the notes) and "KB에 정리해줘" go to `use-notes`.
+  - State and its evidence go to the tracker; the reasoning (the choice, what was ruled out, the trap, measured numbers) goes to the notes, which link the ticket rather than copy its state. Recorded only within the user's authorized workflow; follow-ups are classified, writes are not repeated, and nothing is announced in chat.
+  - Every report after a PR open, merge or land, and every `worker_done` body, carries one record line at the start of a line: `기록: …`, `기록: 없음 (<why>)` or `기록 못 함: <reason>` (`Recorded:`/`Not recorded:` in English). A notes store whose tools are not connected, or a write the workflow does not authorize, is `기록 못 함`. `hooks/record_check.py` reads this line ("Record line checks" below).
 
 ## One project (several Orca workers)
 
@@ -178,6 +179,18 @@ Records verified milestones in the configured tracker or notes store within the 
   - Counts tokens from available local transcripts per PR. Unmeasured sessions are not assumed to have zero usage.
   - When exact close times are needed from Linear, it uses a file exported through MCP. It shows the requested numbers first and saves the report to the notes.
 
+### reboot
+- **When:** Right after the session, Orca or the machine restarted, or after a compaction, before any other work: "재시작했어" (I restarted), "Orca 재시작했어" (Orca restarted), "세션 다시 띄웠어" (I brought the session back up), "복구 점검해줘" (check the recovery). Recalling what the work was is `recall`.
+- **What it does:** A restart leaves the work where it was but drops what keeps it moving. `scripts/reboot.py` checks all of that in one read-only pass and prints, for each thing to fix, the command to run (`--slug <slug>` for a lead, `--top` for the orchestrator, neither for a worker).
+  - Whether this terminal's handle went stale when Orca restarted. If it did, it lists the live terminals in this worktree.
+  - The Run binding (`run-current`, and `run-use` when unbound) and the orchestrator's tab title.
+  - Whether exactly one inbox wait (`orch wait`, `orch inbox --wait`) and one `orch watch-cards` run under this session's process. It prints the start command for a missing one and what to stop when there are two.
+  - Workers that lost their terminal, with the `worker-stop` and `worker-start --retry-of` pair that restarts each on the same card.
+  - Heavy starts the pressure gate held for this worktree that are still in the queue.
+  - For what the script cannot see (background tasks and subagents a restart ended, the program's state, relaunching leads after a machine restart, the order after a compaction), SKILL.md only sets the order and points at the `orchestrate` section that holds each rule.
+- **Ships:** `scripts/reboot.py` (the read-only check) and its tests.
+- **Related:** `orchestrate` core rule 6, Drain and Resume hand what to do after a restart to this skill. It reads the pressure queue of `reap-resources`.
+
 ## One machine
 
 ### reap-resources
@@ -188,7 +201,8 @@ Records verified milestones in the configured tracker or notes store within the 
   - **branch:** local branches whose PRs are all merged or closed, with no worktree, and whose tip matches a PR head. It prints the command to restore each one.
   - **worktree:** worktrees whose directory in a temp dir is gone (except Orca's), and clean, pushed, detached worktrees in a Claude scratchpad whose session transcript has been quiet for N hours. Both go through `git worktree remove <path>`, which drops only that entry. Orca worktrees belong to the resource steward.
   - **card:** `scripts/cards.py scan` judges every Orca card (whether the app, the CLI or a worker made it) as one of delete, close the terminal only (open PR), keep, or human decision, and prints a table. The human reads the table and runs it with `apply --plan`; the janitor round uses the same code. The rules and traps (a stale `origin/HEAD` is checked again with a GitHub compare, a pre-rebase copy is told apart by patch-id, a shell stuck at a prompt, an idle screen that says "done") live in one place, `references/cards.md`.
-  - **janitor:** only what agents registered in the ledger (`~/.local/state/agent-skills/ledger.jsonl`: temp dirs, GUI apps, browser windows) and the worktrees and settled terminals of Orca orchestration workers. `reap --plan` re-checks each target, then closes it or moves it to the trash. The tool never deletes for good or empties the trash; when the OS empties it on its own, scan raises an alert. The agent closes browser windows with its browser tools.
+  - **janitor:** only what agents registered in the ledger (`~/.local/state/agent-skills/ledger.jsonl`: temp dirs, GUI apps, browser windows) and the worktrees and settled terminals of Orca orchestration workers. `reap --plan` re-checks each target, then closes it or moves it to the trash. Apart from the `docker` removals of the container and volume kinds below, the tool never deletes for good or empties the trash; when the OS empties it on its own, scan raises an alert. The agent closes browser windows with its browser tools.
+  - **stopped-container, labeled-volume:** on only once configured, and the janitor and reap-hard apply the same rules. Stopped (exited or created) containers that compose did not make, named under `reap.stopped_containers.prefixes`; and volumes whose `<namespace>.origin` label value is in `reap.labeled_volumes.origins` and that no container references. Each goes by its exact ID or name, with a record kept. The label states the origin and also gives permission to delete. Unlabeled anonymous volumes are never removed; `reap.py inventory --unlabeled-volumes` only lists them, read-only.
   - **user-folder:** cleans only folders explicitly listed in `reap.user_folders`; disabled when unset. Age, open-file and incomplete-download checks and trash retention still apply.
   - **program:** a closed program in `~/.claude/programs` (`PROGRAMS_HOME`; its final check `predicate_verified` with no landing, predicate edit or admitted follow-up after it) whose record (ledger, decisions, reflect and the rest, not the dashboard caches) is untouched for 7 days (`reap.program_days`) moves to `_archive/`. Nothing is deleted. A program with a resume note (a name containing `resume` or `handoff`) stays, closed or not.
   - **state-file:** reorient hook session files (`<state>/reorient/*.json`) older than 7 days (`reap.state_days`) go to the trash bundled in one folder, and a `sync.log` over 512KB (`reap.log_max_kb`) is rotated to `sync.log.1` (the previous `.1` goes to the trash). Like program, the scheduled run looks at them at most once a day.
@@ -264,12 +278,12 @@ Monitors configured public channels for mentions and replies when requested. Use
 ## Writing
 
 ### brief
-Reports completed work, current work, decisions and human-only steps with evidence. Every report, on request or periodic (`--periodic`), is `orch brief render`'s output sent as printed (`--telegram` for Telegram); the model passes only the headline sentence, decisions and an insight block. A wrong row is fixed in the record (`orch board set`, `orch stage set`) and rendered again, never edited in the output. Rows are rebuilt on every render from live Orca cards, leads and Runs, the report files that cards' REPORT lines point to, and GitHub PR state. Each row's session column says whether the session running it is working (`작업 중`), stopped (`멈춤`) or gone (`세션 없음`), linked by its Orca worktree rather than a terminal handle. Rows waiting on a human split into what the owner must clear and what waits on someone else's review or answer. The stage table and the to-do and on-hold queue appear only as pointer lines to the `stage` and `todo` skills. Reports are written by hand only when the renderer fails, or for one session's own report (`end-session`); that format is in `references/hand-format.md`.
+Reports completed work, current work, decisions and human-only steps with evidence. Every report, on request or periodic (`--periodic`), is `orch brief render`'s output sent as printed (`--telegram` for Telegram); the model passes only the headline sentence, decisions and an insight block. A wrong row is fixed in the record (`orch board set`, `orch stage set`) and rendered again, never edited in the output. Rows are rebuilt on every render from live Orca cards, leads and Runs, the report files that cards' REPORT lines point to, and GitHub PR state. Each row's session column says whether the session running it is working (`작업 중`), stopped (`멈춤`) or gone (`세션 없음`), linked by its Orca worktree rather than a terminal handle. Rows waiting on a human split into what the owner must clear and what waits on someone else's review or answer. Every open row appears once in its table, whatever its status; its next-step column either names the next step or points (`↓ 오너`, `↓ 대기`, `↓ 보류`) to the list below that says what it waits on, and only work with no row goes in the list of work outside the tables. One module (`rowstate.py`) judges each row's status, rules in the order ✅ → 🙋 → ⏸️ → ⏳ → 🔴 → ❔ → 🔄 with the first match deciding, and places it, so the report, the dashboard and the stage table read the same result. A missing fact stops at ❔ with what the agent must record; who a row waits on and the PR it must wait for are recorded with `orch board set <id> --owner … --after owner/repo#N`. The stage table and the to-do and on-hold queue appear only as pointer lines to the `stage` and `todo` skills. Reports are written by hand only when the renderer fails, or for one session's own report (`end-session`); that format is in `references/hand-format.md`.
 
 ### stage
 - **When:** "단계표 보여줘" (show the stage table), `/agent-skills:stage`. `brief` shows the stage table only as a one-line link, so call this when the table itself is needed.
 - **What it does:**
-  - Sends the output of `orch stage show [--program P] [--telegram] [--all]` as printed. Rows that are all done, or unchanged for 7 days (`stage_idle_d`), are folded into a count; `--all` shows everything. To fit 78 columns it cuts only long names and PR keys to `…[n]`; when the stage columns alone exceed 78 it prints as is and exits 1.
+  - Sends the output of `orch stage show [--program P] [--telegram] [--all]` as printed. Rows that are all done, or unchanged for 7 days (`stage_idle_d`), are folded into a count; `--all` shows everything. When a row's PR is also on a board row, a `지금` column shows the status the report gives that row, so the two never disagree. To fit 78 columns it cuts only long names and PR keys to `…[n]`; when the stage columns alone exceed 78 it prints as is and exits 1.
   - The dashboard's fleet tick builds the stage table (task / PR merged / dev check / prod check) every minute: for each program whose ledger moved in the last 7 days, one row per predicate item and per worker card in the Run. The merge cell is filled only when there is a merge sha, and the dev and prod cells stay empty. A cell a human or an agent checked is written over with `orch stage set <program>/<item>`, and that value wins over the generated one. On the dashboard it is the Stages screen. When an active program has no rows, or none updated for `board.stage_warn_h` hours (default 6), the reorient hook warns in one line on every prompt.
 - **Related:** Where `brief`'s stage-table line points. The recording rules are in `orchestrate`'s `references/dashboard.md`, "The stage table".
 
@@ -496,6 +510,7 @@ Program state lives in `~/.claude/programs/<slug>/`: `program.json`, the append-
   - `sync`: fetch, then an ff-only pull or a push of signed commits. Off main, uncommitted changes, diverged, an unsigned commit, or no credential helper: it changes nothing, stops, and leaves a macOS notification and `~/.local/state/agent-skills/sync.json`. launchd runs it every 15 minutes and at login.
   - `broadcast [--skills|--plugins] [--dry-run] [--terminal <handle>]`: `/reload-skills` when a `SKILL.md` changed, `/reload-plugins` when the hook wiring (`hooks/hooks.json`) or the plugin manifest changed. Sent only to sessions with an empty prompt, no spinner, no permission, trust or question dialog, no shell below the prompt box, and the same screen on two reads 1.5 s apart; the rest stay in `reload-pending.json` for the next try. `--terminal <handle>` sends to that one session only; the session that changed a skill aims it at its own handle after its turn ends to reload itself (`write-skill` §7).
   - `nudge <terminal> <one line>`: sends one line under the same checks and confirms the turn started.
+  - `wake-target <terminal>`, `wake-check <terminal> [--wait <seconds>]`, `wake-reset <terminal>`: pick the path for the signal that wakes a Claude card, and confirm from the receiving session's transcript that a SendMessage signal started a turn. The session itself sends it with the tool. The message path applies only when `wake.transport` in `agent-skills.json` is `sendmessage`; the default is `terminal`. The steps are in `skills/orchestrate/references/waking.md`.
   - `status`: the last sync result and the pending reload.
 
 ## Config file
@@ -549,26 +564,22 @@ Every rule has a key in `~/.claude/agent-skills.json`. Its value is one of `"den
 | `guard.deny.slash_send` | deny | Typing `/reload…` or `/model` with `orca terminal send` |
 | `guard.deny.prompt_substitution` | deny | A command substitution (`$(…)`, backticks) in `orca worktree create --prompt` |
 | `guard.deny.self_exempt_label` | deny | Adding the `no-visual-change` label with `gh` (`pr create --label`, `pr edit --add-label`, `issue edit`, `gh api …/labels`) |
-| `guard.deny.owner_only` | deny | `orch refusal clear`, `orch exempt`, and writing the refused-act ledger (`refusals.jsonl`) directly. The human types them as a `!` line in their own chat. With the key off, both are allowed like any other `orch` command |
+| `guard.deny.owner_only` | deny | `orch exempt`. The human types it as a `!` line in their own chat. With the key off, it is allowed like any other `orch` command |
 | `guard.deny.external_review` | deny | A `codex` call whose working folder (or `-C`) has an origin repository set to `repos.<owner/repo>.external_llm: false`. Without that key, no decision |
 | `guard.ask.pressure_bypass` | ask | An `AGENT_SKILLS_PRESSURE_GATE=0` assignment before the command or through `env` or `export`. An `echo` that prints the text is not covered |
 | `guard.warn.rm_expansion` | warn | An `rm` path built from an unquoted glob or variable. `${VAR:?}` is fine |
 | `guard.warn.reset_hard` | warn | `git reset --hard` in a repository with uncommitted changes |
 | `guard.warn.run_download` | warn | `gh run download` without `-D` or `--dir` |
 | `guard.warn.tailscale` | warn | `tailscale serve` or `funnel` from a worker |
-| `guard.refusal_registry` | deny | An act that matches an open refusal in the refused-act ledger (below). `warn` records and only warns; `false` or `off` records nothing |
 | `orchestrate.ask_user_question` | deny | AskUserQuestion in the main conversation of an orchestrator, lead or worker. Subagents and general sessions are not covered |
 | `orchestrate.wait_foreground` | deny | An orchestrator or lead running `orch wait`, `orch inbox --wait`, `orch watch-cards` or `orca orchestration check\|inbox --wait` without `run_in_background`, or cutting a background wait with `\| tail` or `\| head`. A worker's `check --wait` is not covered |
 | `orchestrate.send_devnull` | deny | An orchestrator, lead or worker sending the output of `orca orchestration send\|reply` to `/dev/null`. `2>/dev/null` alone is not covered |
+| `orchestrate.self_land` | warn | `hooks/self_land_gate.py`. A card whose first prompt has `PROGRAM` and an `APPROVED` line naming `orch land` calling `worker_done` or `orca worktree rm` over its own open PR. A `READY-WAIT:` line, `--outcome failed` and a human-gate program pass. `deny` blocks it |
+| `orchestrate.stack_dependent` | warn | A dependent PR that is not a stack. `hooks/stack_gate.py` reads the brief's `Lands after` and the branch's history at `gh pr create`; `orch land` and `land-check` compare land-after edges with the real stacks. `deny` makes both block. What cannot be read passes with one warning line |
 
 When the hook's own check raises, the call goes through with a warning, and `$AGENT_SKILLS_STATE/guard-errors.jsonl` gets the time, the hook, the exception type and where it was raised (never the command text). An unreadable settings file means the defaults.
 
-The refused-act ledger (`hooks/refusals.py`, on PermissionDenied, PreToolUse, Stop and SubagentStop). A call the auto mode classifier refused with a category (`Reason: [category]`), or the human refused in the permission dialog, goes into `$AGENT_SKILLS_STATE/refusals.jsonl`, and every session is refused the same act until the human lifts it.
-- Recording: a classifier refusal is recorded on the PermissionDenied event. The human's refusals, and any refusal that event missed, are read from the end of the transcript by the next PreToolUse and by Stop. Both key on the tool call id, so each is written once. Refusals from before the ledger existed aren't collected. When it is read from the transcript, parallel calls sent in the same message as the refused one are not blocked. One run of the hook finishes within 7 seconds; past that it warns and lets the call through.
-- Not recorded: a hook's block, a `<tool_use_error>`, read-only tools, and a classifier refusal with no category (no verdict and the like; one warning line instead). A call whose target can't be read isn't recorded either, with a warning.
-- An act is a verb and a target: a deleted path by its real parent folder and its own name (a symlink is itself), a written file by its real path, a PR as `host/owner/repo#n`, a branch as `host/owner/repo:branch`. Deleting one path is the same act whichever command does it (`rm -rf`, `git worktree remove`, `orca worktree rm`), and deleting a folder that holds it matches too. The shapes read today are `rm`, `git worktree remove`, `git reset --hard`, `git push` (plain, forced and delete as separate verbs), `gh pr merge|close`, `gh api …/pulls/N/merge`, `orca worktree rm`, and Edit, Write, MultiEdit and NotebookEdit. A `--dry-run` push and a GET API call are not acts. Anything that can't be pinned to one target (a PR gh couldn't turn into a number, `git push --all`, a relative path after a `cd` in a subshell, a path built from a variable) is neither recorded nor matched.
-- The ledger holds only the time, the call id, the session, the terminal, the Run, the verb and the target. Never the command text or other argument values. Writes happen under an `fcntl` lock.
-- Only the human lifts a refusal. `orch refusal report` lists the open ones, and the human runs `!orch refusal clear <id>` in their own chat. `guard.deny.owner_only` refuses an agent's `orch refusal clear` and direct writes to the ledger. Refusals don't expire. Once a refusal has been cleared for 30 days, the next clear shrinks it to a single `done` line that keeps only its id, so a transcript that still holds it doesn't record it again.
+No hook records a refused act to block it again. The rule that a refused session retries once in the same form and never goes around the refusal lives in the skills' text (`orchestrate`'s "Refused acts", `tune-automode`). A `$AGENT_SKILLS_STATE/refusals.jsonl` left by an earlier version is no longer read, and nothing deletes it; the human removes it if they want it gone.
 
 Roles come from one module, `hooks/roles.py`. There are four: orchestrator, lead, worker and general.
 1. A `ROLE: none` record turns every role off (general).
@@ -598,6 +609,9 @@ Supervision (the preamble), CLOSE and KEEP are attributes, not roles. Orca's exe
 
 ### Prose checks
 `hooks/prose_check.py` checks PR, commit and tracker text for deterministic writing patterns. It gives advisory context without blocking or changing permissions. `AGENT_SKILLS_PROSE_CHECK=0` disables it.
+
+### Record line checks
+`hooks/record_check.py` (PreToolUse, PostToolUse and PostToolUseFailure on Bash; Stop; SubagentStop). It calls no model and reads no tracker, notes store, Orca or GitHub state; it is off unless `~/.claude/agent-skills.json` has a `tracker` or `notes` object. A `gh pr merge` (not `--auto`/`--disable-auto`), `gh pr create` or `orch land` leaves a record obligation on the session and agent and adds a reminder naming the configured destinations and `references/record.md`; a failed call leaves one only when it held more than one command. Only a record line closes it: `기록: …` or `기록 못 함: <reason>` (`Recorded:`/`Not recorded:`) at the start of a line, outside code and quotes, with text after the colon, read from the final reply, a `worker_done` sent alone, or this turn's text before a close command. It checks a `worker_done` body without that line (a body from a variable or file counts as none), a milestone and a close command (`orca worktree rm`, `orca terminal close`) in one call, a close while this session or one under the closed path still owes a line, and a turn that ends owing one. `guard.record_check`: `warn` (default; the model is told before a send or close, and at Stop the human sees a warning and an observation row is written), `deny` (refuses the call, blocks the Stop once), `ask`, `off`. After a week of `warn` rows in `$AGENT_SKILLS_STATE/record-check.jsonl` it goes to `deny`. It proves the outcome was reported, not that the record was written; the lead's reconcile checks that. A merge left in the background and a close target named only by id are not followed.
 
 ## Differences from pstack
 
@@ -651,7 +665,7 @@ Of pstack's 58 skills (24 principles and 34 others), we took all 24 principles a
 - **Running projects:** `orchestrate`'s `orch` ledger, the landing gate and exclusive lane, human-gate, the main guardian, the QA lead, and the `orch-dash` dashboard. The shape follows pstack's playbooks, but it was built fresh on top of Orca Runs and GitHub stacks.
 - **Measurement and adapters:** `measure-delivery`, `use-tracker`, `use-notes`.
 - **Machine upkeep:** `reap-resources`, `tune-automode`, `skills-config`, `setup-pc`.
-- **Hooks:** permission decisions (`guard.py`), re-orienting the orchestrator and leads (`reorient.py`), offering setup on a PC that was never set up (`onboard.py`), recording permission prompts for the dashboard to answer (`permission.py`), closing decisions answered in the terminal (`decision.py`), completion claim checks (`claim_check.py`), a load check before a heavy start (`pressure_gate.py`), prose checks (`prose_check.py`), and keeping refused acts from being done again (`refusals.py`).
+- **Hooks:** permission decisions (`guard.py`), re-orienting the orchestrator and leads (`reorient.py`), offering setup on a PC that was never set up (`onboard.py`), recording permission prompts for the dashboard to answer (`permission.py`), closing decisions answered in the terminal (`decision.py`), completion claim checks (`claim_check.py`), a load check before a heavy start (`pressure_gate.py`), prose checks (`prose_check.py`), the stack check on dependent PRs (`stack_gate.py`), and a warning when a program card closes over its own open PR (`self_land_gate.py`).
 
 ### Upstream sync status
 - **Last sync:** 2026-10-26, from `b42effe` (0.15.3) to `99b609a` (0.15.32). Upstream added 74 commits to pstack in between.

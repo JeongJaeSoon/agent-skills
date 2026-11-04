@@ -107,6 +107,8 @@ reload-skills:  "Pick up skills added or changed on disk during this session"
 
 `/reload-plugins`는 다른 플러그인의 MCP 서버까지 다시 붙인다(출력의 "6 plugin MCP servers"). 그래서 스킬만 바뀐 경우에는 가벼운 `/reload-skills`를 쓴다.
 
+hooks.json은 세션이 읽어 둔 것을 쓰고, 그 안의 스크립트는 부를 때마다 디스크에서 읽는다. 그래서 hooks.json에서 뺀 스크립트를 지우면, reload하지 않은 세션은 없는 파일을 부른다. `python3 <없는 파일>`은 종료 코드 2를 내고, Claude Code는 PreToolUse hook의 2를 차단으로 읽는다. 그 세션의 모든 Bash·Read가 hook 오류로 막힌다(2026-11-02 `orchestrator_guard.py`를 지운 뒤 실제로 일어났다). 그래서 hooks.json에서 뺀 스크립트는 그 자리에 아무것도 하지 않고 0으로 끝나는 파일로 남긴다. `hooks/test_retired.py`가 git 이력의 hooks.json이 부른 적 있는 경로마다 파일이 있는지, 지금 hooks.json의 명령이 모두 `${CLAUDE_PLUGIN_ROOT}` 아래 스크립트인지 확인한다.
+
 MCP 서버 하나가 끊겼을 때는 재인증이 아니라 `/mcp`에서 그 서버의 Reconnect를 먼저 한다. 같은 서버 URL을 쓰는 세션들은 저장된 토큰 하나를 같이 쓰므로, 한 세션에서 재인증하면 그 토큰이 지워져 다른 세션들도 함께 끊긴다. 토큰 갱신이 실제로 실패했을 때(갱신 뒤에도 401)만 한 세션에서 한 번 재인증하고, 나머지 세션은 Reconnect한다.
 
 편집은 지금처럼 worktree 브랜치에서 한다. 로드되는 것은 메인 체크아웃이므로, worktree의 변경은 메인 체크아웃에 fast-forward되는 순간 반영 대상이 된다. 메인 체크아웃을 직접 고치면 그 즉시 대상이 되지만, 그동안 자동 pull은 멈춘다(§3).
@@ -207,11 +209,29 @@ README의 옛 문장("작업 중인 세션이면 대기열에 들어갔다가 �
 - `sent, but the screen does not show it was taken`이면 다시 보내지 않는다. 실측(2026-10-23)에서 이 사유가 난 전송은 명령이 아니라 앞에 개행이 붙은 평문 사용자 메시지(`\n/reload-plugins`)로 들어가 턴을 하나 시작했고, reload는 일어나지 않았다. 원인은 아직 확인하지 못했다. Claude에는 Orca의 재제출(`submitRetryDelayMs`)이 없어서 두 번째 Enter 때문은 아니다. 이 기기의 transcript에서 명령으로 실행된 reload는 수천 건이고 이 실패는 1건이다. 이렇게 끝나면 사람에게 그 세션에서 직접 치라고 부탁한다.
 - Orca 밖 세션은 `$ORCA_TERMINAL_HANDLE`이 없으니 예전처럼 사람에게 부탁한다.
 
+### 바뀐 것 위에서 멈춘 세션 (2026-11-04)
+
+`broadcast`는 reload를 보내기 전에 대상 터미널마다 화면을 읽고, 그 세션이 바뀌기 전 것으로 돌고 있다는 문구를 찾는다(`sync.stale_signal`).
+
+| 화면 | 보내는 것 |
+|---|---|
+| Claude Code의 업데이트 안내(`/restart to apply`). Claude Code가 자기 안내를 쓰는 자리만 본다: 끝난 턴의 요약 줄(`✻ Brewed for 26s · done …`) 바로 다음, 입력칸 바로 위 마지막 줄과 입력칸 아래 상태 줄. 답은 늘 요약 줄보다 앞에 온다. 대화에 나온 같은 말은 세지 않는다 | `/restart` |
+| 마지막 턴(입력칸 위 마지막 `❯ <프롬프트>` 아래)의 마지막 도구 결과(`⎿`)가 Claude Code가 쓰는 hook 오류 줄(`⎿  PreToolUse:Bash hook error`처럼 `⎿` 바로 뒤에 `<이벤트>:<도구> hook error` 또는 `hook returned blocking error`. grep 출력처럼 다른 말 뒤에 나온 같은 문구는 세지 않는다. 도구 출력의 첫 줄이 이 접두로 시작하면 화면으로는 구별하지 못하고, 그때 치는 것은 같은 조건의 `/reload-plugins` 한 번이다)이고, 그 줄이나 이어지는 두 줄(다음 메시지나 빈 줄 전까지)이 파일이 없다고 말한다(`can't open file`, `No such file or directory`, `ENOENT`, `Cannot find module`). 그 뒤에 도구가 돌았으면 세션이 넘어간 것이다. guard hook의 거부도 `hook error`로 보이므로 그것만으로는 세지 않는다 | `/reload-plugins`(hooks.json을 다시 읽는다. 안내 문구가 `/restart`를 말하지 않으면 그 명령이 있다고 기대지 않는다) |
+
+- 두 문구가 없는 화면은 판정하지 않는다. Claude Code 버전마다 분기하지 않는다.
+- 보내는 조건은 reload와 같다(위 "대상과 안전장치"). 바쁜 세션은 보내지 않고 `~/.local/state/agent-skills/restarts.json`에 기다림으로 남긴다. 두 명령은 세션의 백그라운드 셸·에이전트를 끊을 수 있으므로, 입력칸 아래 모드 줄(`⏵⏵ auto mode on · 1 shell`)이나 끝난 턴의 마지막 줄(`… · 1 shell still running`)에 백그라운드 작업이 보이는 세션도 기다린다. 모드 줄(`… mode on`, `? for shortcuts`)이 없는 화면은 백그라운드 여부를 모르므로 보내지 않고 기다린다. 이 검사는 화면만 읽으므로 예약된 wake-up(ScheduleWakeup)은 보지 않는다. 이렇게 기다리는 세션에는 그 회차의 reload도 보내지 않고 `reload-pending.json`에 남긴다. reload를 치기 직전 화면에 두 문구 중 하나가 남아 있고 백그라운드 작업이 보이거나 모드 줄이 없을 때도 같다. 기다리는 세션이 있으면 다음 `sync`가 broadcast를 다시 돌린다.
+- 한 세션에는 신호 종류(`restart`, `hook`)마다 한 번만 친다. hook 오류로 `/reload-plugins`를 보낸 세션에 업데이트 안내가 뜨면 `/restart`는 따로 친다. 보낸 뒤에도 화면에 그 문구가 남아 있으면 다시 보내지 않는다. 친 뒤 확인 화면을 못 읽어도 보낸 것으로 기록한다. 문구가 사라진 화면을 읽었을 때만 기록을 지우므로, 다음에 다시 생기면 새로 친다. 화면을 못 읽었거나 입력칸이 없는 화면(대화창이 떠 있을 때)이면 기록을 둔다. Orca 목록에서 빠진 터미널의 기록은 7일(기다림은 1일) 둔다.
+- 실제 멈춘 화면(2026-11-04)에서는 도구 결과가 접혀(`Read 1 file`) hook 오류 원문이 보이지 않았고, 안내 문구로 잡혔다. hook 신호는 오류가 화면에 펼쳐져 있을 때만 잡힌다.
+- 이렇게 친 세션은 그 회차의 reload 대상에서 뺀다. 두 명령 모두 플러그인을 새로 읽는다.
+- `orch patrol`은 같은 판정을 H로 올리고 brief의 그 카드 행을 ❔로 만든다. 순찰은 치지 않는다(docs/automation.md "세션 순찰").
+
 ### 셋업 터미널 닫기 (`skills-sync close-setup <카드 경로>`, 2026-09-29)
 
 카드를 만들면 Orca가 셋업 터미널(`agentIdentity` 없는 행)에서 `bash <git dir>/orca/setup-runner.sh`를 돌린다. 스크립트가 끝나도(실패해도) 셸은 `$` 프롬프트로 남는다. 그래서 스킬이 쓰던 `orca terminal wait --for exit … && orca terminal close`는 30분 뒤 시간 초과로 끝나고 `&&` 뒤가 돌지 않았다. 실측한 날 셋업 터미널 세 개가 이렇게 남아 있었다.
 
 `close-setup`은 그 카드의 에이전트 없는 터미널마다 화면과 누적 출력에서 `…/orca/setup-runner.sh` 경로를 찾고, 그 경로를 품은 프로세스가 두 번 연달아 없을 때 닫는다. 명령 줄이 찍힌 직후 스크립트가 시작되기 전을 끝난 것으로 보지 않으려고 두 번 본다. 2분 안에 스크립트가 보이지 않는 셸은 사람이 연 것으로 보고 두고, 30분이 지나도 도는 스크립트는 두고 종료 코드 1로 알린다.
+
+2026-11-04부터 `skills-sync card`와 `skills-sync handoff`가 카드를 만든 뒤 `close-setup`을 백그라운드로 직접 띄우고, 로그(`$AGENT_SKILLS_STATE/close-setup/<이름>.log`) 경로를 출력에 남긴다. `--agent <핸들>`을 주면 셋업을 닫기 전에 에이전트 화면을 broadcast와 같은 `classify()`로 읽어 폴더 trust 창, 권한 창, 2분 안에 시작이 보이지 않는 경우를 알리고 종료 코드 1로 끝난다. 로그 마지막 줄은 늘 `result: ok|failed`라서, 아무 말 없는 로그를 성공으로 읽지 않는다. 띄우기 자체가 실패해도 카드 생성은 실패로 치지 않고 경고 한 줄로 알린다.
 
 ### 브리프 파일로 카드 만들기 (`skills-sync card <브리프>`, 2026-10-30)
 
@@ -352,7 +372,7 @@ orchestrator (사용자가 말을 거는 세션 하나, orchestrate의 top-level
 
 수집과 표시는 대시보드 워커 몫이다. 스킬은 이벤트를 받은 orchestrator가 무엇을 하는지만 정한다. 전문은 `skills/orchestrate/references/top-level.md` "PR events".
 
-- 리뷰 코멘트, changes requested, PR의 CI 실패: PR을 가진 워커에게 `send --to dispatch:<id>`로 넘긴다. 워커의 턴이 끝나 있으면 `skills-sync nudge`로 한 줄 깨운다. nudge는 §4와 같은 판정(빈 입력칸, 스피너 없음, 창 없음, 두 번 읽기)을 통과할 때만 보내고, 보낸 뒤 턴이 시작됐는지 화면으로 확인한다. 거절되면 반복하지 않는다.
+- 리뷰 코멘트, changes requested, PR의 CI 실패: PR을 가진 워커에게 `send --to dispatch:<id>`로 넘긴다. 워커의 턴이 끝나 있으면 `skills/orchestrate/references/waking.md`대로 깨운다. `skills-sync wake-target`이 경로를 고르고, SendMessage로 보낸 신호는 `wake-check`가 받는 세션의 transcript에서 확인한다. 터미널 경로의 `skills-sync nudge`는 §4와 같은 판정(빈 입력칸, 스피너 없음, 창 없음, 두 번 읽기)을 통과할 때만 보내고, 보낸 뒤 턴이 시작됐는지 화면으로 확인한다. 거절되면 반복하지 않는다.
 - 이미 끝난 dispatch의 PR: 새 dispatch를 띄운다. 사용자가 직접 연 세션의 PR: 인박스에만 올린다.
 - 승인 + 체크 통과: autonomous 프로그램이면 워커의 `orch land`가 처리한다. 아니면 인박스에 "머지 준비됨". orchestrator는 머지하지 않는다.
 - main CI 실패: 해당 프로그램의 main 가디언에게 리드를 거쳐 넘긴다.

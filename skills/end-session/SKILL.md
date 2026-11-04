@@ -1,6 +1,6 @@
 ---
 name: end-session
-description: "Use when the user asks to end, close or archive this session, card or worktree — \"종료해줘\", \"세션 종료해줘\", \"현재 세션 정리해줘\", \"아카이브해줘\", \"머지하고 종료하자\", \"end this session\" — when handoff-ticket says this session should go, when an Orca worker is about to send worker_done, or when a card's brief says to close itself. Not bare \"정리해줘\"/\"마무리해줘\": that is record-progress."
+description: "Use when the user asks to end, close or archive this session, card or worktree — \"종료해줘\", \"세션 종료해줘\", \"현재 세션 정리해줘\", \"아카이브해줘\", \"머지하고 종료하자\", \"end this session\" — when handoff-ticket says this session should go, when an Orca worker is about to send worker_done, or when a card's brief says to close itself. Bare \"정리해줘\"/\"마무리해줘\", \"작업 기록 남겨줘\" or \"log this\" leaves the record and keeps the session (references/record.md)."
 ---
 
 # Ending the session
@@ -18,7 +18,9 @@ is the fallback for what Orca cannot reach, not the default.
 ## 3. Leave the record before anything dies
 
 Orca metadata and this transcript die with the session. Before the command runs, the record must
-already exist where it survives (`record-progress` decides what goes where):
+already exist where it survives: read [`references/record.md`](references/record.md) now and
+record by it (what goes to the tracker, what to the notes store, what not at all), and end the
+report with its §4 record line:
 
 - Every ticket this session touched → `use-tracker` "Reconcile", so none is left behind its PR
   or deploy. The ticket linked to this card → final state (moved to completed, or left
@@ -106,38 +108,47 @@ closes it, so the worker closes itself as the last step of its task. The preambl
 further actions after worker_done" still holds: only the closing calls follow `worker_done`, in
 the same turn, and nothing runs after them.
 
-Before sending `worker_done`, read the state with §4's commands,
-`orca terminal list --worktree current --json`, and the `runId` in
-`orca orchestration check --terminal $ORCA_TERMINAL_HANDLE --json` (the fallback below needs
-it), then pick the row:
+Before sending `worker_done`, run `skills-sync end-check --worker --outcome <succeeded|failed>
+--dispatch <the preamble's --dispatch-id> --brief <brief path>` (`--keep` or `--no-keep` when the task
+has no brief file; without `--dispatch` it looks the Dispatch up and keeps the card when it cannot). It reads §4's
+commands, the card's terminals and the questions this terminal left unanswered, and prints the row
+below as `remove`, `close-terminal` or `keep` with its reasons; a fact it could not read is `keep`.
+Also read the `runId` in `orca orchestration check --terminal $ORCA_TERMINAL_HANDLE --json` (the
+fallback below needs it). Then pick the row:
 
 | State | The turn's last calls |
 |---|---|
 | Outcome `succeeded`; `isMainWorktree: false` and §4's Remove row holds (clean tree apart from its build caches and regenerated copies, the work on `origin/main`, no open PR); no other agent terminal on the card; no `ask` or `orch decide` question waiting; the brief has no `KEEP` line | The report text, `worker_done` as its own call, then, once its output shows `"ok": true`, `orca worktree rm --worktree current --json` (`--run-hooks` per §4). The card's terminals, the setup one included, go with it. |
 | The same, but `isMainWorktree: true` or another agent works on the card | The report text, `worker_done` as its own call, then, once its output shows `"ok": true`, `orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json`: only this session goes. |
-| Anything else: outcome `failed` (the orchestrator or lead that dispatched it retries on this card), an open PR (READY under human-gate, a review still running), a `KEEP` line, a question waiting, a dirty tree | `worker_done` naming what holds the card, as its own call, then close the card's setup terminal with `skills-sync close-setup <card path>` in the background (it can wait up to 30 minutes; never chain it before `worker_done` with `;` or `&&`), and idle. Never `AskUserQuestion`: nobody sees it. |
+| Anything else: outcome `failed` (the orchestrator or lead that dispatched it retries on this card), an open PR (a wait named by a `READY-WAIT:` line, READY under human-gate), a `KEEP` line, a question waiting, a dirty tree | `worker_done` naming what holds the card, as its own call, then close the card's setup terminal with `skills-sync close-setup <card path>` in the background (it can wait up to 30 minutes; never chain it before `worker_done` with `;` or `&&`), and idle. Never `AskUserQuestion`: nobody sees it. |
 
 - **The close waits for the send.** Calls in one message run together, so a `worker_done` and a
   `worktree rm` sent side by side remove the card even when a hook refused the send, and the
-  report never arrives. A send refused only on its body text is reworded in the same command;
+  report never arrives. The plugin's `hooks/lifecycle.py` warns on such an rm (`guard.exit_order`),
+  and `skills-sync end-check --worker --apply`, run after the `"ok": true`, removes only once Orca
+  shows the Dispatch settled. A send refused only on its body text is reworded in the same command;
   after any other refusal the card and this session stay, idle, for the orchestrator or lead above it to find.
 - **A refused `worktree rm`.** The host's permission layer (the auto-mode classifier, a hook),
-  not Orca, often refuses `orca worktree rm` as irreversible. Do not run it again in any form:
-  not in smaller pieces, not through another tool or a script, not through a subagent. Fall back
+  not Orca, often refuses `orca worktree rm` as irreversible. A refused act is not run again,
+  except once, in the same form, by the refused session (a restart that loads a new rule counts as that session), and only when the human allowed it in that session's own chat or added a rule for it, or when a classifier or hook refusal stated a reason and you added evidence that answers it, never for a human's refusal or a production sync. Report that retry as `재시도 1회: <what you added>`. A second refusal stops the act and you report it. Reaching the same result through another session, script, tool, wrapper or target stays forbidden. With nothing to add, fall back
   to the second row and leave the card: `orca orchestration send --to run:<runId> --type status
   --subject "card left: worktree rm refused by permission layer" --body "<card path>"` (after
   `worker_done` a send without `--to` finds no Run), then
   `orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json`. The orchestrator or lead above it
   puts the card to the human and does not remove it: its own rm would be the refused act run by another session.
 - **`KEEP`** is the brief's opt-out: the orchestrator or lead above it plans to reuse this terminal or card.
-- **An open PR** keeps the worker only until it lands. A later wake (a review fix, a message)
+- **An open PR** of a card whose first prompt approved the merge is the card's to land first
+  (`orchestrate` `references/landing.md`); `hooks/self_land_gate.py` speaks when it does not. It
+  keeps the worker only until it lands. A later wake (a review fix, a message)
   runs this table again and closes if the PR has merged or closed since. Nothing else wakes an
   idle worker; the `SETTLED` sweep of the session above it is the backstop.
 - **`Rejected worker_done`** after someone typed into the terminal (Orca marks it taken over)
   still settles the task: write the report as text on screen and close by the table. A refusal
   for a missing capability does not: the session above it never got the report, so keep the card.
 - Inside a program the lead reconciles the tickets on `worker_done`, so §3's tracker
-  and worklog steps are its, not the worker's. §6's order holds.
+  and worklog steps are its, not the worker's. §6's order holds. The `worker_done` body still
+  carries the record line ([`references/record.md`](references/record.md) §4): what this worker
+  wrote, `기록: 없음 (리드 reconcile)`, or `기록 못 함: <reason>`.
 
 ## 8. A dispatched card closes itself when its brief is done
 
@@ -151,7 +162,10 @@ plan.
 Done means the brief's deliverable is complete and recorded where the brief says (its PRs
 merged, the note's `## 결과` written), and nothing waits on an answer: no question you asked,
 no open PR, unless the open PR is the deliverable itself (the row below that says so). Follow-up ideas are not a reason to stay: write them in the report and the note for
-the parent to decide. Then run §3 and pick by §4's table on real output:
+the parent to decide. Then run §3 and pick by §4's table on real output: `skills-sync end-check
+--card --brief <brief path>` (or `--keep`/`--no-keep`; `--ticket-done` once `use-tracker` shows the
+linked ticket completed) prints it. Run it as its own call before the `worktree rm`: the plugin's
+hook warns on a CLOSE card's rm with no earlier `remove` from it.
 
 | State | The turn's last calls |
 |---|---|
@@ -170,8 +184,8 @@ call: `orca worktree set --worktree current --workspace-status completed --json`
 superseded card, nor for one whose deliverable is an open PR (its column stays `in-review`):
 Orca's own PR state and agent state stay the truth, the column only shows it on Orca's board.
 
-A refused `worktree rm` is not retried in any form (§7); close only this terminal and say in the
-note that the card is left for the parent or the human.
+A refused `worktree rm` follows §7's one-retry rule; otherwise close only this terminal and say in
+the note that the card is left for the parent or the human.
 
 **Who closes a finished card.** This is the one rule; other skills link here. The card itself
 closes first, in the turn its work is done: a worker by §7, a dispatched card by §8. The backstop

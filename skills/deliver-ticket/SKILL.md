@@ -13,7 +13,10 @@ for approval.** Write the plan where it stays readable — a comment on the tick
 the worklog — and start. The ticket, or the `/goal` that opened the card, is the approval for
 exactly what it says. On the ticket that is one plan comment, edited if the plan changes, and
 the move to `started`. Past that the ticket gets only the milestone lines (`use-tracker`,
-"Milestones") and the completion comment (§6); progress goes to the worklog.
+"Milestones") and the completion comment (§6); progress goes to the worklog. At each milestone
+(PR opened or updated, review requested or answered, merged, released and verified), read
+`end-session` [references/record.md](../end-session/references/record.md) and record by its
+table, then give its record line in the report.
 
 Reading the repo can change the picture. If the scope turns out to be materially different from
 the ticket, do not stop: either it still fits one reviewable PR, or you split the ticket (§5) and
@@ -147,7 +150,9 @@ Before pushing, run **both**:
   compose), else `docker compose -p <project> down`; either way keep volumes (never `-v`). Teardown runs
   bare, never through `orch heavy`, whose load gate would refuse it under load. A stack that has to stay gets its
   reason and deadline: `reap.py ledger add --kind compose-stack --id <project> --keep "<reason>" --until <ISO time>`
-  (reap-resources); `orch heavy` registers its stacks, so the janitor downs a forgotten one after the PR closes
+  (reap-resources); `orch heavy` registers its stacks, so the janitor downs a forgotten one after the PR closes.
+  A throwaway volume you create by hand outside the verify skill carries the label `reap.py origin-label
+  verify-<app>` prints, when it prints one; an unlabeled one can never be cleaned up (reap-resources)
 - a change with no runtime behavior (docs, comments): validate links and run documented
   commands and examples exactly as written in a safe, isolated fixture; record commands,
   outputs and fixture substitutions. If a destructive command or live external write cannot
@@ -242,17 +247,17 @@ Then land it. How depends on where you run:
   command (`orch land`), which re-checks readiness at the current head, waits for your
   dependencies, and puts migrations, CI and other shared files in the exclusive lane; other PRs
   land in parallel, behind or not.
-  Never `gh pr merge` or merge-async by hand there: that skips the order and the review gate.
+  Never `gh pr merge`, `gh stack merge` or merge-async by hand there: that skips the order and the review gate.
   Under human-gate it refuses; report READY and stop. A human review that will outlast this
   session does not hold the session open either: say in the brief's REPORT that the PR waits on a
-  review, and the lead's wake lands it once it is ready. After landing, the brief's REPORT is the
+  review (`READY-WAIT: human-review`), and the lead's wake lands it once it is ready. After landing, the brief's REPORT is the
   end: `worker_done` with the evidence, and the session closes itself in that turn
   (`end-session` §7).
 - **A standalone card** merges its own verified PR unless the user set a hold. Under auto
   mode that merge runs unasked only when the user's `autoMode.allow` has a rule for this
   repository's merges (`orchestrate` Frame, "Check the permission chain"); without one the
-  classifier asks or refuses, and a refusal is reported, not retried in another form
-  (`orchestrate` `references/brief.md` FORBIDDEN). When the
+  classifier asks or refuses, and a refused act is not run again, except once, in the same form, by the refused session (a restart that loads a new rule counts as that session), and only when the human allowed it in that session's own chat or added a rule for it, or when a classifier or hook refusal stated a reason and you added evidence that answers it, never for a human's refusal or a production sync. Report that retry as `재시도 1회: <what you added>`. A second refusal stops the act and you report it. Reaching the same result through another session, script, tool, wrapper or target stays forbidden.
+  The full rule is `orchestrate` `references/brief.md` FORBIDDEN. When the
   ticket, the brief or the project's standing orders name a merge procedure (a merge queue,
   a landing order, an exclusive lane), follow that procedure instead of merging at will.
   Otherwise merge when the PR is ready at its current head — CI green (read the log), review
@@ -269,7 +274,7 @@ Then land it. How depends on where you run:
   hand once it is ready.
 
 ```bash
-gh pr merge <n> --squash --delete-branch      # the merge method the repo allows; not for a stack, which lands with merge-async (§5)
+gh pr merge <n> --squash --delete-branch      # the merge method the repo allows; not for a stack, which lands with `gh stack merge` (§5)
 gh pr view <n> --json state,mergeCommit       # confirm MERGED and record the commit
 ```
 

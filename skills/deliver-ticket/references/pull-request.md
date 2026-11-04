@@ -39,17 +39,28 @@ Dependent PRs are a GitHub stack (one ticket per layer, stacked because the lowe
 merge first), not just a PR whose base is another branch. After opening them, link them with
 the `gh stack` extension (`gh stack link <bottom> <top> --base main`, or `gh stack init` /
 `add` / `submit` from scratch) and confirm with
-`gh api repos/<owner>/<repo>/pulls/<top> --jq .stack` (`gh pr view` does not show stacks).
+`gh api repos/<owner>/<repo>/pulls/<top> --jq .stack` (`gh pr view` does not show stacks). A PR
+only based on the lower branch is not enough: CI limited to the default branch runs on an upper
+layer only once they are linked. `hooks/stack_gate.py` warns at `gh pr create` when a brief's
+`Lands after` or the branch's history shows a dependency its base does not build on
+(`orchestrate.stack_dependent`: warn, deny or off).
 
 Each layer keeps its own 검증 section and sticky comment, verified on top of the layer below.
-A stack lands from its top in one merge: once every layer is verified and green,
-`gh api -X PUT repos/<owner>/<repo>/pulls/<top>/merge-async -f merge_method=squash -f sha=<top head>`
-merges the top and every layer below it; confirm each layer MERGED with `gh pr view`. Stacked
-PRs reject `gh pr merge`. Inside a program, `orch land <slug> --pr <top>` does this for you;
-never call merge-async by hand there.
+A stack lands from its top in one merge ([CLI reference](https://docs.github.com/en/pull-requests/reference/stacked-prs-cli-commands)):
+once every layer is verified and green, `gh stack merge <top> --squash --yes` merges the top and
+every layer below it, and on a merge queue branch adds them to the queue. A queued layer has not
+merged: it is done when `gh pr view` says MERGED. Do not use `gh pr merge`: the docs say the
+synchronous merge "does not support stacked pull requests", and it refuses every stacked PR, the
+last open layer too. Inside a program, `orch land <slug> --pr <top>` does this
+for you; never `gh stack merge` or call merge-async by hand there.
 
-When a lower layer changes, bring the next one onto it (`gh pr update-branch <next>`, or merge
-the lower branch in) and re-verify it. When a lower layer merges on its own, run
-`gh pr edit <next> --base <default branch>` first, since a squash that deletes the lower
-branch closes a PR still based on it, then `gh pr update-branch <next>` so CI runs on the new
-base.
+When a lower layer changes, rebase every layer from the bottom, `gh pr update-branch <n> --rebase`
+one after the other, and re-verify them. A stack merges only as a linear chain: a merge commit,
+or rebasing the lower layer alone, fails the merge with `Stack needs to be rebased`.
+
+When a lower layer merges on its own, GitHub moves the next one onto the base and rebases it
+([merging stacked PRs](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/merging-stacked-pull-requests)).
+Its head changes, so CI runs again; change nothing by hand. Only if its timeline shows no
+`automatic_base_change_succeeded` and its head stays the same (a
+[report](https://github.com/github/gh-stack/discussions/463) for `merge-async`), run
+`gh pr update-branch <next> --rebase`.

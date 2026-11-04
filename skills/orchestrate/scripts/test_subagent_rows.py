@@ -111,9 +111,10 @@ text, snap = out["text"], out["snapshot"]["rows"]
 # The orchestrator's own subagents are rows of their own: one moving, one with no stop for over 3 h ❔.
 assert snap["agent:r1"]["status"] == "moving" and snap["agent:r2"]["status"] == "check", snap
 assert "| 🔄 | Find unsent text |" in text and "| ❔ | Old sweep |" in text, text
-assert "🔄 Find unsent text — 서브에이전트 작업 중 (Explore)" in text, text
-assert "❔ Old sweep — 확인 필요: 종료 기록 없음 · 5h" in text, text
-assert "🔄 Old sweep" not in text, text  # stale is not counted as moving
+notes = [l for l in text.splitlines() if l.startswith("- [")]
+assert any(l.endswith("] 서브에이전트 작업 중 (Explore)") for l in notes), text
+assert any(l.endswith("] 에이전트 조치 필요: 종료 기록 없음 · 5h 전") for l in notes), text
+assert "| 🔄 | Old sweep" not in text, text  # stale is not counted as moving
 # A lead's own subagent and its card's hang under the lead's row; a top-level card's is a row of its own.
 assert "| 🔄 | └ Read the plan |" in text and "| 🔄 | └ Run the suite |" in text, text
 assert "| 🔄 | Check the docs |" in text, text
@@ -140,7 +141,7 @@ write_state([])
 out = render()
 snap = out["snapshot"]["rows"]
 assert snap["agent:r1"]["status"] == "check" and snap["agent:r2"]["status"] == "check", snap
-assert "❔ Find unsent text — 확인 필요: 종료 기록 없음 · 12분 전" in out["text"], out["text"]
+assert "| ❔ | Find unsent text |" in out["text"] and "에이전트 조치 필요: 종료 기록 없음 · 12분 전" in out["text"], out["text"]
 (tmp / "config.json").write_text(json.dumps({"board": {"subagent_stale_h": 10}}))
 assert render()["snapshot"]["rows"]["agent:r2"]["status"] == "moving"
 # --no-fill leaves every derived row out, subagents too.

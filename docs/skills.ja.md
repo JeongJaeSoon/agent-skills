@@ -1,7 +1,7 @@
-<!-- translated-from: a7255e35ef7581db488d0b530bf22e4f89417d30 -->
+<!-- translated-from: 9f83ea95ea5261de1b68f8270bf65d2bf50910c4 -->
 # スキルカタログ
 
-`agent-skills` プラグインに入っているスキル41個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック8個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
+`agent-skills` プラグインに入っているスキル41個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック14個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
 
 既定値の変更と既存データの保持は[設定移行ガイド](configuration-migration.md)を参照してください。ノート・台帳・個人フォルダーには明示的な設定が必要で、レポートの既定タイムゾーンは UTC です。
 
@@ -15,6 +15,7 @@
 プロジェクト  orchestrate ─ 各ワーカーで deliver-ticket ─ orch land
               ─ main ガーディアン・QA リード ─ ダッシュボード
               └ 終わったら measure-delivery
+              └ 再起動・コンパクションのあとはまず reboot
 マシン1台     reap-resources（終わったセッションが残したプロセス・Docker・ブランチの片付け、
               resource steward が定期的に）
               secure-fill（ブラウザの認証欄に秘密の値を。エージェントは値を見ない）
@@ -23,7 +24,7 @@
               setup-pc（新しい PC の設定・更新：dry run の diff → ユーザーの --apply 1 行）
 チャット      watch-mentions（公開チャンネルのメンション・名前への言及・参加スレッドの新しい返信を、
               オーケストレーターかリードに1通で）
-どこでも      record-progress（いつ何を残すか）→ use-tracker（チケット）· use-notes（ノート）
+どこでも      end-session references/record.md（いつ何を残すか、record_check フック）→ use-tracker（チケット）· use-notes（ノート）
               · pstack スキル（設計・レビュー・検証・振り返り）
 ```
 
@@ -31,10 +32,10 @@ PR を受け持つスキルとマージする主体:
 
 | スキル | 受け持つ PR | マージ |
 |---|---|---|
-| deliver-ticket | このセッションが作業中の自分の PR: 作成、レビュー対応、マージ、リリース | セッションが §5 どおり（`gh pr merge`、スタックは merge-async） |
+| deliver-ticket | このセッションが作業中の自分の PR: 作成、レビュー対応、マージ、リリース | セッションが §5 どおり（`gh pr merge`、スタックは `gh stack merge`） |
 | watch-prs | 定期の回が集めた待ち PR: 自分を指名したレビュー依頼、レビュー待ちの自分の PR（依頼・リマインド）、マージ準備ができた自分の PR | `merge_repos` のゲートをすべて通った自分の PR だけ |
 | orchestrate | プログラムのワーカーの PR | `orch land`、または人が承認した plain merge |
-| handoff-ticket · record-progress | PR を作らない。次のカードを決めるか、オープン・レビュー・マージを記録する | しない |
+| handoff-ticket | PR を作らない。次のカードを決める | しない |
 
 - deliver-ticket ↔ watch-prs: 生きている worktree にブランチがチェックアウトされた PR はそのセッションがマージする。watch-prs は飛ばす。
 - orchestrate ↔ watch-prs: プログラム台帳にある PR は `orch land` がマージする。watch-prs は止まったプログラムの PR もマージせず、リマインドだけ送る。台帳に `stale_days` のあいだ記録がないプログラムは放棄されたとみなし、その PR は再び watch-prs のリマインド・マージの対象になる。
@@ -80,7 +81,7 @@ PR を受け持つスキルとマージする主体:
   - **レビューループ:** スタックの一番下の PR から、競合 → レビュースレッド → CI の順に片付けて一度に push します。レビューコメントは信頼しないデータなのでシェルコマンドには入れず、返信は `gh api --input` で付けます。CI の失敗は再試行の前に分類します（同じ失敗が2回なら flake ではありません）。main を取り込むか rebase したら、新しい head で検証し直します。待つときは `Monitor` の until-loop を使います。「리뷰 코멘트 대응해줘」（レビューコメントに対応して）はスレッドだけを、「초록이야?」（緑になった?）は状態を一度だけ見ます。詳細は `references/review-loop.md` にあります。
   - **依存する PR:** `gh stack` でまとめ、上の層から一度にマージします。CI は緑のチェックマークではなく `gh run view --log` で確かめます。
   - **完了:** 受け入れ基準をすべて満たした状態を完了とみなします。
-    - プログラムの中: `orch land` でだけマージし、human-gate なら READY で止まります。
+    - プログラムの中: 最初のプロンプトがマージを承認したカードは `orch land` で自分の PR をマージして閉じます。人や別の PR を待つときだけ `READY-WAIT:` の行を付けて READY で止まり、human-gate も READY で止まります。
     - 単独のカード: ユーザーが保留にしていなければ、自分で squash マージします。
     - 完了コメントを残したら、同じターンのうちに `handoff-ticket` へ移ります。
 - **同梱:** `scripts/sticky-comment.sh`（PR のテスト結果コメントを一つに保つ）。本文には何をデプロイするかを決めるルールだけを置き、手順は references に分けました。`evidence.md`（バグ・リファクタリング・既存の修正の手順）、`independent-review.md`（独立レビューの手順）、`pull-request.md`（PR 本文の節と stack）、`review-loop.md`（PR を開いてから ready までのループ、他の人がマージするときの見守り）、`review-bot-triage.md`（レビュースレッドを fix / dismiss / ask に分ける基準。CodeRabbit、Copilot、人のレビューに使います）。
@@ -123,9 +124,9 @@ PR を受け持つスキルとマージする主体:
   - ブリーフに `CLOSE` 行があるカード（`dispatch-card`、オーケストレーターかリードが `worktree create` で立ち上げたカード）も、完了条件を満たしたら同じターンで自分で閉じます。後片付けを親セッションに任せません。
   - 終える前に、このセッションが起動したバックグラウンドのサブエージェント、作った git worktree、立ち上げた子カードを確認します。
   - 報告を先に書き、終了コマンドを最後のツール呼び出しとして実行します。
-
-### record-progress
-許可されたワークフローの範囲で、検証済みの節目を設定したトラッカーやノートに記録します。状態と判断の理由を分け、後続作業を分類し、重複書き込みや無断のチャット投稿を避けます。
+- **記録のルール（`references/record.md`、以前の `record-progress` スキル）:** スキル一覧から一度も呼ばれなかったのでスキルとしては廃止し、本文をこのファイルに移しました。`deliver-ticket` は節目ごとに、`orchestrate` は `worker_done` と人の決定ごとに、`use-notes` は調査・設計が結論に達したときに、`end-session` は閉じる前にこのファイルを読みます。対象なしの「정리해줘」「마무리해줘」（まとめて）、「작업 기록 남겨줘」（作業記録を残して）、「log this」はこのファイルだけを行い、セッションは閉じません。「티켓 갱신해줘」（チケットを更新して）は `use-tracker`、「노트에 남겨줘」（ノートに残して）・「KB에 정리해줘」は `use-notes` に行きます。
+  - 状態とその根拠はトラッカーに、判断の理由（採用案、捨てた案、落とし穴、実測値）はノートに残し、ノートはチケットの状態を写さずリンクします。許可されたワークフローの範囲でだけ書き、後続作業を分類し、同じ書き込みを繰り返さず、チャットには投稿しません。
+  - PR のオープン・マージ・land の後の報告と、すべての `worker_done` 本文は、行頭に記録行を一行置きます: `기록: …`、`기록: 없음 (<理由>)`、`기록 못 함: <理由>`（英語では `Recorded:`・`Not recorded:`）。ノートストアのツールがつながっていない、または書き込みが許可されていなければ `기록 못 함` です。`hooks/record_check.py` がこの行を読みます（下の「記録行の検査」）。
 
 ## プロジェクト1件（Orca ワーカー複数）
 
@@ -178,6 +179,18 @@ PR を受け持つスキルとマージする主体:
   - PR ごとに利用可能なローカル transcript のトークンを集計します。未測定のセッションをゼロとはみなしません。
   - Linear で正確な終了時刻が必要なら、MCP で書き出したファイルを使います。求められた数字を先に見せ、レポートはノートに保存します。
 
+### reboot
+- **使う場面:** セッション・Orca・マシンが再起動した直後、またはコンパクションのあと、ほかの作業より先に。「재시작했어」（再起動した）、「Orca 재시작했어」（Orca を再起動した）、「세션 다시 띄웠어」（セッションを立ち上げ直した）、「복구 점검해줘」（復旧を点検して）。何の作業をしていたかを振り返るのは `recall` です。
+- **内容:** 再起動は作業そのものは残しますが、作業を回す仕組みを落とします。`scripts/reboot.py` がそれを一度に読み取るだけで点検し、直すものごとに実行するコマンドを1行ずつ出します（リードは `--slug <slug>`、オーケストレーターは `--top`、ワーカーは指定なし）。
+  - この端末の handle が Orca の再起動で stale になっていないかを見ます。stale なら、この worktree で生きている端末を示します。
+  - Run のバインド（`run-current`、未バインドなら `run-use`）と、オーケストレーターのタブ名を見ます。
+  - このセッションのプロセスの下で、inbox の待機（`orch wait`、`orch inbox --wait`）と `orch watch-cards` がちょうど1つずつ動いているかを数えます。足りなければ起動コマンドを、2つ以上なら止めるものを示します。
+  - 端末を失ったワーカーを見つけ、同じカードで起動し直す `worker-stop` と `worker-start --retry-of` の組を出します。
+  - この worktree で pressure ゲートが止めた重い起動が、キューに残っていないかを見ます。
+  - スクリプトから見えないもの（再起動で終わったバックグラウンドタスクとサブエージェント、プログラムの状態、マシン再起動後のリードの再起動、コンパクション後の順序）は、SKILL.md が順序だけを決め、規則そのものは `orchestrate` の該当する節を指します。
+- **同梱:** `scripts/reboot.py`（読み取り専用の点検）とテスト。
+- **関係:** `orchestrate` の中核ルール6、Drain、Resume が、再起動のあとにすることをこのスキルに渡します。`reap-resources` の pressure キューを読みます。
+
 ## マシン1台
 
 ### reap-resources
@@ -188,7 +201,8 @@ PR を受け持つスキルとマージする主体:
   - **branch:** PR がすべてマージかクローズ済みで、worktree がなく、tip が PR の head と同じローカルブランチ。復元コマンドも出力します。
   - **worktree:** 一時ディレクトリにあって消えた worktree（Orca のものは除く）と、セッションの transcript が N 時間動いていない Claude scratchpad の、クリーンで push 済みの detached worktree。どちらも `git worktree remove <パス>` でその項目だけを消します。Orca の worktree は resource steward の担当です。
   - **card:** Orca のカードすべて（アプリ・CLI・ワーカーのどれが作ったかを問わず）を `scripts/cards.py scan` がカードごとに、削除・ターミナルだけ閉じる（開いた PR あり）・残す・人の判断、のどれかに判定して表にします。人が表を見て `apply --plan` で実行し、janitor の回も同じコードを使います。規則と落とし穴（古い `origin/HEAD` は GitHub の compare で確かめ直す、rebase 前の写しは patch-id で見分ける、プロンプトで止まったシェル、「終わった」と書いた idle の画面）は `references/cards.md` 一か所にあります。
-  - **janitor:** エージェントが ledger（`~/.local/state/agent-skills/ledger.jsonl`）に登録した一時ディレクトリ・GUI アプリ・ブラウザウィンドウと、Orca オーケストレーションのワーカーが作った worktree・終わったワーカーのターミナルだけを見ます。`reap --plan` が対象を確かめ直してから閉じるかゴミ箱に移します。ツールは完全には削除せず、ゴミ箱も空にしません。OS がゴミ箱を自動で空にする設定なら警報で知らせます。ブラウザウィンドウはエージェントがブラウザツールで閉じます。
+  - **janitor:** エージェントが ledger（`~/.local/state/agent-skills/ledger.jsonl`）に登録した一時ディレクトリ・GUI アプリ・ブラウザウィンドウと、Orca オーケストレーションのワーカーが作った worktree・終わったワーカーのターミナルだけを見ます。`reap --plan` が対象を確かめ直してから閉じるかゴミ箱に移します。下のコンテナ・ボリューム種別の `docker` 削除を除き、ツールは完全には削除せず、ゴミ箱も空にしません。OS がゴミ箱を自動で空にする設定なら警報で知らせます。ブラウザウィンドウはエージェントがブラウザツールで閉じます。
+  - **stopped-container・labeled-volume:** 設定を書いたときだけ有効になり、janitor と reap-hard が同じルールで判定します。`reap.stopped_containers.prefixes` で始まる名前で compose が作っていない、停止中（exited・created）のコンテナと、`<namespace>.origin` ラベルの値が `reap.labeled_volumes.origins` にあり、どのコンテナからも参照されていないボリュームが対象です。ID か名前を指定して1つずつ削除し、記録を残します。このラベルは出どころの表示であり、削除の許可でもあります。ラベルのない匿名ボリュームは削除せず、`reap.py inventory --unlabeled-volumes` が読み取り専用で一覧を出すだけです。
   - **user-folder:** `reap.user_folders` に明示したフォルダーだけを整理します。未設定なら無効です。期間・開いているファイル・ダウンロード中の検査とゴミ箱への保管は維持します。
   - **program:** `~/.claude/programs`（`PROGRAMS_HOME`）のうち、閉じたプログラム（最終確認 `predicate_verified` の後に着地・predicate 変更・admitted の後続がないもの）で、記録（ダッシュボードのキャッシュを除く ledger・decisions・reflect など）が 7 日（`reap.program_days`）以上変わっていないものを `_archive/` に移します。削除はしません。名前に `resume` か `handoff` を含む再開ノートがあれば、閉じていても残します。
   - **state-file:** reorient フックのセッションファイル（`<state>/reorient/*.json`）のうち 7 日（`reap.state_days`）を過ぎたものを 1 つのフォルダにまとめてゴミ箱へ、512KB（`reap.log_max_kb`）を超えた `sync.log` は `sync.log.1` にローテーションします（前の `.1` はゴミ箱）。program とあわせて、定期実行では 1 日 1 回だけ見ます。
@@ -266,12 +280,12 @@ PR を受け持つスキルとマージする主体:
 ## 文章
 
 ### brief
-進行中・他の人の待ち・判断事項・オーナーが今やること・保留を、根拠とともに報告します。レポートは要求時も定期も `orch brief render --commit`（定期は `--periodic`、Telegram は `--telegram`）の出力を手を加えずにそのまま送り、間違った行は記録（`orch board set`、`orch stage set`）を直してから描き直します。行は board だけでなく、生きている Orca のカード・リード・Run、カードの REPORT 行が指す報告ファイル、GitHub の PR の状態から毎回作り直します。各行のセッション列は、その行を担うセッションが作業中（`작업 중`）・停止（`멈춤`）・なし（`세션 없음`）のどれかを、端末ハンドルではなく Orca の worktree でつないで示します。人を待つ行は、オーナーが解くもの（🙋）と他の人のレビュー・返事待ち（⏳）に分かれます。段階表は1行のリンクで `stage` スキルを、予定（📅）・保留キュー（⏸️）の件数は1行で `todo` スキルとダッシュボードを指します。モデルが渡すのは判断だけで、見出しの一文・推奨付きの判断事項・Insight・定期の回で飛ばした行動です。手で書くのは、レンダラーが失敗したときと、一つのセッションが自分の作業一つを報告するとき（`end-session` §6、`references/hand-format.md`）だけです。
+進行中・他の人の待ち・判断事項・オーナーが今やること・保留を、根拠とともに報告します。レポートは要求時も定期も `orch brief render --commit`（定期は `--periodic`、Telegram は `--telegram`）の出力を手を加えずにそのまま送り、間違った行は記録（`orch board set`、`orch stage set`）を直してから描き直します。行は board だけでなく、生きている Orca のカード・リード・Run、カードの REPORT 行が指す報告ファイル、GitHub の PR の状態から毎回作り直します。各行のセッション列は、その行を担うセッションが作業中（`작업 중`）・停止（`멈춤`）・なし（`세션 없음`）のどれかを、端末ハンドルではなく Orca の worktree でつないで示します。人を待つ行は、オーナーが解くもの（🙋）と他の人のレビュー・返事待ち（⏳）に分かれます。開いている行は状態にかかわらず表に一度だけ出ます。「次」の欄にはその行の次の段階を書き、オーナー・他の人・条件を待つ行は `↓ 오너`・`↓ 대기`・`↓ 보류` で下のリストを指します。表の外の進行リストに載るのは行のない作業だけです。行の状態は一つのモジュール（`rowstate.py`）が規則を ✅ → 🙋 → ⏸️ → ⏳ → 🔴 → ❔ → 🔄 の順に見て最初に当てはまるもので決め、配置も同じモジュールが決めるので、レポート・ダッシュボード・段階表は同じ結果を読みます。事実が足りなければ ❔ で止まり、エージェントが記録すべきものを書きます。誰を待つかと先に待つ PR は `orch board set <id> --owner … --after owner/repo#N` で記録します。段階表は1行のリンクで `stage` スキルを、予定（📅）・保留キュー（⏸️）の件数は1行で `todo` スキルとダッシュボードを指します。モデルが渡すのは判断だけで、見出しの一文・推奨付きの判断事項・Insight・定期の回で飛ばした行動です。手で書くのは、レンダラーが失敗したときと、一つのセッションが自分の作業一つを報告するとき（`end-session` §6、`references/hand-format.md`）だけです。
 
 ### stage
 - **いつ:** 「단계표 보여줘」（段階表を見せて）、`/agent-skills:stage`。`brief` は段階表を1行のリンクでしか見せないので、表そのものが必要なときに呼びます。
 - **内容:**
-  - `orch stage show [--program P] [--telegram] [--all]` の出力をそのまま送ります。すべて終わったか7日（`stage_idle_d`）変わっていない行は畳んで件数だけを書き、`--all` ならすべて見せます。78列に収めるために長い名前・PR キーだけを `…[n]` で切り、段階の欄だけで78列を超えるならそのまま出力して 1 で終わります。
+  - `orch stage show [--program P] [--telegram] [--all]` の出力をそのまま送ります。すべて終わったか7日（`stage_idle_d`）変わっていない行は畳んで件数だけを書き、`--all` ならすべて見せます。ある行の PR が board の行にもあれば、`지금` 列にレポートがその行に付けた状態を並べるので、両者が食い違いません。78列に収めるために長い名前・PR キーだけを `…[n]` で切り、段階の欄だけで78列を超えるならそのまま出力して 1 で終わります。
   - 段階表（作業 / PR マージ / dev 確認 / prod 確認）は、ダッシュボードの fleet tick が1分ごとに作ります。7日以内に ledger が動いたプログラムごとに、predicate の項目と Run のワーカーカード一つにつき1行です。マージの欄はマージ sha があるときだけ埋め、dev・prod の欄は空けておきます。人やエージェントが確認した欄は `orch stage set <プログラム>/<項目>` で上書きし、その値が生成された値に勝ちます。ダッシュボードでは Stages 画面です。有効なプログラムなのに行がない、または `board.stage_warn_h`（既定は6）時間更新されていなければ、reorient フックがプロンプトごとに1行警告します。
 - **関係:** `brief` の段階表の行が指す先です。記録の規則は `orchestrate` の `references/dashboard.md` の「The stage table」にあります。
 
@@ -498,6 +512,7 @@ PR を受け持つスキルとマージする主体:
   - `sync`: fetch のあと ff-only の pull か、署名済みコミットの push。main でない、未コミットの変更がある、分岐している、署名のないコミットがある、credential helper がない場合は何も変えずに止まり、macOS 通知と `~/.local/state/agent-skills/sync.json` に残します。launchd が15分ごととログイン時に実行します。
   - `broadcast [--skills|--plugins] [--dry-run] [--terminal <handle>]`: `SKILL.md` が変わったら `/reload-skills`、hook の配線（`hooks/hooks.json`）やプラグインの manifest が変わったら `/reload-plugins` を送ります。入力欄が空、スピナーなし、権限・信頼・質問の画面なし、入力欄の下にシェルなし、1.5秒おきに二回読んだ画面が同じ、をすべて確かめたセッションにだけ送り、残りは `reload-pending.json` に残して次に再試行します。`--terminal <handle>` はそのセッション一つにだけ送ります。スキルを変えたセッションがターンを終えたあと自分の handle に向けて、自分自身を reload するのに使います（`write-skill` §7）。
   - `nudge <terminal> <一行>`: 同じ確認を通ったセッションにだけ一行を送り、ターンが始まったか確かめます。
+  - `wake-target <terminal>`、`wake-check <terminal> [--wait <秒>]`、`wake-reset <terminal>`: Claude カードを起こす信号の経路を選び、SendMessage で送った信号がターンを始めたかを受け手のセッションの transcript で確かめます。送るのはセッション自身がツールで行います。`agent-skills.json` の `wake.transport` が `sendmessage` のときだけその経路を使い、既定値は `terminal` です。手順は `skills/orchestrate/references/waking.md` にあります。
   - `status`: 最後の同期結果と残っている reload。
 
 ## 設定ファイル
@@ -551,26 +566,22 @@ PR を受け持つスキルとマージする主体:
 | `guard.deny.slash_send` | deny | `orca terminal send` での `/reload…`・`/model` の入力 |
 | `guard.deny.prompt_substitution` | deny | `orca worktree create --prompt` のコマンド置換（`$(…)`、バッククォート） |
 | `guard.deny.self_exempt_label` | deny | `gh` で `no-visual-change` ラベルを付けること（`pr create --label`、`pr edit --add-label`、`issue edit`、`gh api …/labels`） |
-| `guard.deny.owner_only` | deny | `orch refusal clear`、`orch exempt`、拒否台帳（`refusals.jsonl`）への直接の書き込み。人が自分のチャットで `!` 行として打ちます。キーをオフにすると、ほかの `orch` コマンドと同じく許可します |
+| `guard.deny.owner_only` | deny | `orch exempt`。人が自分のチャットで `!` 行として打ちます。キーをオフにすると、ほかの `orch` コマンドと同じく許可します |
 | `guard.deny.external_review` | deny | 作業フォルダ（または `-C`）の origin リポジトリが `repos.<owner/repo>.external_llm: false` の `codex` 呼び出し。このキーがなければ判定しません |
 | `guard.ask.pressure_bypass` | ask | コマンドの前、または `env`・`export` での `AGENT_SKILLS_PRESSURE_GATE=0` の代入。その文字列を出力するだけの `echo` は対象外です |
 | `guard.warn.rm_expansion` | warn | 引用符のない glob や変数で作った `rm` のパス。`${VAR:?}` は除きます |
 | `guard.warn.reset_hard` | warn | コミットしていない変更があるリポジトリでの `git reset --hard` |
 | `guard.warn.run_download` | warn | `-D`・`--dir` のない `gh run download` |
 | `guard.warn.tailscale` | warn | ワーカーの `tailscale serve`・`funnel` |
-| `guard.refusal_registry` | deny | 拒否台帳で開いている拒否と同じ行動（下記）。`warn` なら記録して知らせるだけ、`false`・`off` なら記録もしません |
 | `orchestrate.ask_user_question` | deny | オーケストレーター・リード・ワーカーの本会話の AskUserQuestion。サブエージェントと一般セッションは対象外です |
 | `orchestrate.wait_foreground` | deny | オーケストレーター・リードが `orch wait`、`orch inbox --wait`、`orch watch-cards`、`orca orchestration check\|inbox --wait` を `run_in_background` なしで実行すること、またはバックグラウンドの待機を `\| tail`・`\| head` で切ること。ワーカーの `check --wait` は対象外です |
 | `orchestrate.send_devnull` | deny | オーケストレーター・リード・ワーカーが `orca orchestration send\|reply` の出力を `/dev/null` に捨てること。`2>/dev/null` だけなら対象外です |
+| `orchestrate.self_land` | warn | `hooks/self_land_gate.py`。最初のプロンプトに `PROGRAM` と `orch land` を書いた `APPROVED` があるカードが、自分の PR を開いたまま `worker_done` や `orca worktree rm` を呼ぶこと。`READY-WAIT:` の行、`--outcome failed`、human-gate のプログラムは通します。`deny` にすると止めます |
+| `orchestrate.stack_dependent` | warn | 依存する PR がスタックになっていないこと。`hooks/stack_gate.py` が `gh pr create` でブリーフの `Lands after` とブランチの履歴を見て、`orch land`・`land-check` が land-after の依存と実際のスタックを比べます。`deny` にすると両方が止めます。読めないときは警告 1 行で通します |
 
 hook 自身の判定が例外を出したら、その呼び出しは通し、警告とともに `$AGENT_SKILLS_STATE/guard-errors.jsonl` に時刻・hook・例外の種類・発生位置だけを残します（コマンドの原文は残しません）。設定ファイルが読めなければ既定値を使います。
 
-拒否台帳（`hooks/refusals.py`、PermissionDenied・PreToolUse・Stop・SubagentStop）。自動モードの分類器が範疇（`Reason: [範疇]`）付きで拒否した呼び出しと、人が権限ダイアログで拒否した呼び出しを `$AGENT_SKILLS_STATE/refusals.jsonl` に残し、人が解除するまでどのセッションにも同じ行動を拒否します。
-- 記録: 分類器の拒否は PermissionDenied イベントでその場で残します。人の拒否と、そのイベントが来なかった拒否は、次の PreToolUse と Stop が transcript の末尾を読んで残します。どちらもツール呼び出しの id で一度だけ書きます。台帳ができる前の拒否は集めません。hook は一回 7 秒以内に終え、超えたら警告して通します。transcript から読む場合、拒否された呼び出しと同じメッセージで送った並列の呼び出しは止められません。
-- 記録しないもの: hook の拒否、`<tool_use_error>`、読み取り専用のツール、範疇のない分類器の拒否（判定なしなど。警告一行だけ）。対象を読めなかった呼び出しも記録せず、警告します。
-- 行動は動詞と対象です。削除するパスは実際の親フォルダと自分の名前（symlink はそれ自身）、書き込むファイルは実パス、PR は `host/owner/repo#n`、ブランチは `host/owner/repo:branch`。同じパスの削除はコマンドが違っても（`rm -rf`、`git worktree remove`、`orca worktree rm`）同じ行動で、そのパスを含む上位フォルダの削除も該当します。いま読む形は `rm`、`git worktree remove`、`git reset --hard`、`git push`（通常・強制・削除は別の動詞）、`gh pr merge|close`、`gh api …/pulls/N/merge`、`orca worktree rm`、Edit・Write・MultiEdit・NotebookEdit です。`--dry-run` の push と GET の API 呼び出しは行動ではありません。対象を一つに決められないもの（gh が番号にできなかった PR、`git push --all`、サブシェルの `cd` の後の相対パス、変数で作ったパス）は記録も照合もしません。
-- 台帳に書くのは時刻、呼び出し id、セッション、ターミナル、Run、動詞、対象だけです。コマンドの原文やほかの引数の値は書きません。書き込みは `fcntl` のロックの下で行います。
-- 解除は人だけが行います。`orch refusal report` が開いている拒否を見せ、人が自分のチャットで `!orch refusal clear <id>` を打ちます。エージェントの `orch refusal clear` と台帳への直接の書き込みは `guard.deny.owner_only` が拒否します。期限切れで解除されることはありません。解除から 30 日たった拒否は、次の解除のときに id だけを残した `done` の一行に縮め、transcript に残る同じ拒否を再び記録しないようにします。
+拒否された行動を hook が記録して再び止めることはありません。拒否されたセッションが同じ形で一度だけやり直し、迂回しないという規則は、スキルの文（`orchestrate` の "Refused acts"、`tune-automode`）が守ります。以前のバージョンが残した `$AGENT_SKILLS_STATE/refusals.jsonl` はもう読まず、消しもしません。不要なら人が消します。
 
 ロールは `hooks/roles.py` ひとつが決めます。ロールは orchestrator、lead、worker、general の四つです。
 1. `ROLE: none` の記録があれば、すべてのロールがオフになります（general）。
@@ -599,6 +610,9 @@ hook 自身の判定が例外を出したら、その呼び出しは通し、警
 
 ### 文体の検査
 `hooks/prose_check.py` は PR・コミット・トラッカーの文章を決定的なパターンで確認します。助言を追加するだけで、操作を止めたり権限を変更したりしません。`AGENT_SKILLS_PROSE_CHECK=0` で無効になります。
+
+### 記録行の検査
+`hooks/record_check.py`（Bash の PreToolUse・PostToolUse・PostToolUseFailure、Stop、SubagentStop）。モデルを呼ばず、トラッカー・ノートストア・Orca・GitHub を読みません。`~/.claude/agent-skills.json` に `tracker` か `notes` のオブジェクトがなければ無効です。`gh pr merge`（`--auto`・`--disable-auto` を除く）、`gh pr create`、`orch land` が走ると、そのセッション・エージェントに記録の義務を残し、設定された記録先と `references/record.md` を示す案内をモデルのコンテキストに入れます。失敗した呼び出しは、コマンドが二つ以上のときだけ義務を残します。義務を閉じるのは記録行だけです: 行頭の `기록: …` か `기록 못 함: <理由>`（`Recorded:`・`Not recorded:`）で、コードと引用の外にあり、コロンの後が空でないもの。最終応答、単独で送った `worker_done`、終了コマンド直前のこのターンの文から読みます。検査するのは、記録行のない `worker_done` 本文（変数やファイルからの本文はないものと見なす）、記録コマンドと終了コマンド（`orca worktree rm`、`orca terminal close`）を一つの呼び出しに入れたもの、義務が残ったままこのセッションやその経路の下のセッションを閉じるもの、義務を残して終わるターンです。`guard.record_check`: `warn`（既定。送信・終了の前はモデルに知らせ、Stop では人に見える警告と観察行だけ）、`deny`（呼び出しを拒否し、Stop は一度 block）、`ask`、`off`。`$AGENT_SKILLS_STATE/record-check.jsonl` の warn 行を一週間見てから deny に上げます。保証するのは「記録の結果を報告した」ことで、「記録した」ことではありません。真偽はリードの reconcile が確かめます。バックグラウンドで走らせたマージの完了や、id だけで指した終了対象は追いません。
 
 ## pstack との違い
 
@@ -652,7 +666,7 @@ pstack のスキル58個（原則24個と、その他34個）のうち、原則2
 - **プロジェクト運営:** `orchestrate` の `orch` 台帳、着地ゲートと専有レーン、human-gate、main ガーディアン、QA リード、`orch-dash` ダッシュボード。形は pstack のプレイブックに倣いましたが、Orca の Run と GitHub stack の上で新しく作りました。
 - **測定とアダプター:** `measure-delivery`、`use-tracker`、`use-notes`。
 - **マシンの手入れ:** `reap-resources`、`tune-automode`、`skills-config`、`setup-pc`。
-- **フック:** 権限の判定（`guard.py`）、オーケストレーター・リードの再確認（`reorient.py`）、未設定の PC での設定の提案（`onboard.py`）、ダッシュボードから答える権限ダイアログの記録（`permission.py`）、ターミナルで答えた決定のクローズ（`decision.py`）、完了主張の検査（`claim_check.py`）、重い開始の前の負荷確認（`pressure_gate.py`）、文体の検査（`prose_check.py`）、拒否された行動の繰り返し防止（`refusals.py`）。
+- **フック:** 権限の判定（`guard.py`）、オーケストレーター・リードの再確認（`reorient.py`）、未設定の PC での設定の提案（`onboard.py`）、ダッシュボードから答える権限ダイアログの記録（`permission.py`）、ターミナルで答えた決定のクローズ（`decision.py`）、完了主張の検査（`claim_check.py`）、重い開始の前の負荷確認（`pressure_gate.py`）、文体の検査（`prose_check.py`）、依存する PR のスタック確認（`stack_gate.py`）、プログラムのカードが自分の PR を開いたまま閉じるときの警告（`self_land_gate.py`）。
 
 ### upstream との同期状況
 - **最後の同期:** 2026-10-26、`b42effe`（0.15.3）から `99b609a`（0.15.32）へ。その間に upstream は pstack に74個のコミットを積みました。

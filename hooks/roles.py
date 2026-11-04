@@ -43,6 +43,8 @@ MATRIX = {
     "wait_foreground": ({"main"}, {"orchestrator", "lead"}),
     "send_devnull": ({"main"}, {"orchestrator", "lead", "worker"}),
     "worker_only": ({"main"}, {"worker"}),
+    "exit_order": ({"main"}, set(ROLES)),  # lifecycle.py also needs a Dispatch, CLOSE or KEEP on the card
+    "agent_forbidden": ({"main", "subagent"}, {"orchestrator", "lead", "worker"}),
 }
 
 
@@ -64,6 +66,43 @@ def state():
 def roles_dir():
     """Where reorient.py records each session's ROLE line, one <session id>.json per session."""
     return state() / "roles"
+
+
+def terminal_file(handle):
+    return state() / "terminals" / f"{handle}.json"
+
+
+def record_terminal(handle, session, cwd, now):
+    """Ties an Orca terminal to the session that just started in it. Orca's own data has no session id, and a cwd
+    match can name another session in the same worktree."""
+    if not SESSION.fullmatch(handle or "") or not SESSION.fullmatch(session or ""):
+        return
+    path = terminal_file(handle)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"handle": handle, "session_id": session, "cwd": cwd, "at": now}))
+    tmp.replace(path)
+
+
+def session_for(handle, rows):
+    """(row, None) for the `claude agents --json` row of the session this terminal recorded, else (None, why). A record
+    older than the row's process is stale: the session was resumed somewhere else."""
+    if not SESSION.fullmatch(handle or ""):
+        return None, "not a terminal handle"
+    try:
+        record = json.loads(terminal_file(handle).read_text())
+        session, at = record["session_id"], record["at"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None, "no session record for this terminal"
+    row = next((r for r in rows if isinstance(r, dict) and r.get("sessionId") == session), None)
+    if row is None:
+        return None, "its recorded session is not listed"
+    if row.get("kind") != "interactive":
+        return None, "its recorded session is not interactive"
+    started = row.get("startedAt")
+    if not isinstance(started, (int, float)) or not isinstance(at, (int, float)) or at < started / 1000:
+        return None, "the record is older than the session"
+    return row, None
 
 
 def lead_text(text):
@@ -153,14 +192,15 @@ def session(event, prompt=None):
     """The Session of a hook event. `prompt` stands in for the transcript's first prompt when given."""
     actor = "subagent" if event.get("agent_id") else "main"
     record = declared(str(event.get("session_id") or ""))
-    if record and record.get("role") == "none":
-        return Session("general", actor, declared=True)
-    # A subagent's event carries its own agent_type, not its parent's: the parent's role comes from the rest.
-    entry = resolve({k: v for k, v in event.items() if k != "agent_type"} if actor == "subagent" else event, record)
     first = first_prompt(event.get("transcript_path")) if prompt is None else prompt
+    # The card's own facts (a Dispatch, a CLOSE or KEEP row) hold whatever role the session declared or dropped.
     attrs = {"supervised": bool(PREAMBLE.search(first)), "close": False, "keep": False}
     for m in CARD_ROW.finditer(first):
         attrs[m.group(1).lower()] = True
+    if record and record.get("role") == "none":
+        return Session("general", actor, declared=True, **attrs)
+    # A subagent's event carries its own agent_type, not its parent's: the parent's role comes from the rest.
+    entry = resolve({k: v for k, v in event.items() if k != "agent_type"} if actor == "subagent" else event, record)
     if entry:
         return Session(entry["role"], actor, entry.get("slug"), True, **attrs)
     if lead_text(first):

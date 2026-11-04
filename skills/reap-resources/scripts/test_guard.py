@@ -79,7 +79,7 @@ with guard.hold([("card", "/ws/f")]) as got:
 order = []
 real_lock_file = guard.lock_file
 guard.lock_file = lambda kind, key: (order.append(kind), real_lock_file(kind, key))[1]
-with guard.hold([("serve", "1"), ("other", "x"), ("proc", "9"), ("volume", "v"), ("project", "p"), ("card", "/c")]):
+with guard.hold([("serve", "1"), ("other", "x"), ("proc", "9"), ("volume", "v"), ("container", "i"), ("project", "p"), ("card", "/c")]):
     pass
 guard.lock_file = real_lock_file
 assert order == list(guard.LOCK_ORDER), order
@@ -104,7 +104,20 @@ assert guard.targets({"kind": "compose-stack", "name": "p1"}) == [("project", "p
 assert guard.targets({"kind": "serve", "port": 4600}) == [("serve", "4600")]
 assert guard.targets({"kind": "orphan", "key": "proc:12@x", "pid": 12}) == [("proc", "12")]
 assert guard.targets({"kind": "docker", "key": "volume:v1", "name": "volume v1"}) == \
-    guard.targets({"kind": "stack-volume", "key": "stack-volume:v1", "name": "v1"}) == [("volume", "v1")]
+    guard.targets({"kind": "stack-volume", "key": "stack-volume:v1", "name": "v1"}) == \
+    guard.targets({"kind": "labeled-volume", "key": "labeled-volume:v1", "name": "v1"}) == \
+    guard.targets({"kind": "volume", "id": "v1", "name": "v1"}) == [("volume", "v1")]
+assert guard.targets({"kind": "stopped-container", "cid": "abc"}) == guard.targets({"kind": "container", "cid": "abc"}) == \
+    [("container", "abc")]
+assert guard.LOCK_ORDER.index("project") < guard.LOCK_ORDER.index("container") < guard.LOCK_ORDER.index("volume")
+assert guard.rule({"kind": "stopped-container"}) == guard.rule({"kind": "container"}, "hard") == "container:stopped"
+assert guard.rule({"kind": "labeled-volume"}) == guard.rule({"kind": "volume"}, "hard") == "volume:labeled"
+SHUT = {"port": {4999}, "pid": set(), "path": [], "project": {"example-held"}}
+for kind in ("stopped-container", "container", "labeled-volume", "volume"):
+    assert guard.item({"kind": kind, "name": "example-verify-1", "project": "", "ports": []}, SHUT) is None
+    assert guard.item({"kind": kind, "name": "example-held", "project": ""}, SHUT), kind
+    assert guard.item({"kind": kind, "name": "example-verify-1", "project": "example-held"}, SHUT), kind
+    assert guard.item({"kind": kind, "name": "example-verify-1", "project": "", "ports": [4999]}, SHUT) == "보호 포트 4999", kind
 
 # ---------------------------------------------------------------- ownership
 
