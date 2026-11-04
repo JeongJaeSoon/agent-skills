@@ -1,5 +1,5 @@
 """`sync.py` against throwaway git repos and a fake orca. Run: python3 scripts/test_sync.py"""
-import json, os, pathlib, shutil, subprocess, sys, tempfile
+import contextlib, io, json, os, pathlib, shutil, subprocess, sys, tempfile
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -331,6 +331,21 @@ def test_broadcast():
     shutil.rmtree(tmp)
 
 
+def test_running():
+    import unittest.mock as mock
+    for out in ("", "COMMAND\n", "COMMAND\n\n", "garbage\nbash x\n"):
+        with mock.patch.object(sync.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=out, stderr="")):
+            try:
+                sync.running("/r/setup-runner.sh")
+                ok = False
+            except OSError:
+                ok = True
+        check(f"ps output {out!r} is unread, not 'nothing runs'", ok)
+    listing = "COMMAND\nps -axo command\nbash /r/setup-runner.sh\n"
+    with mock.patch.object(sync.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=listing, stderr="")):
+        check("a real listing finds the script", sync.running("/r/setup-runner.sh") is True)
+
+
 def test_stale_signal():
     check("a hook error in the last turn is a stale signal",
           (sync.stale_signal(HOOK_BLOCKED) or ("",))[0] == "hook", sync.stale_signal(HOOK_BLOCKED))
@@ -500,15 +515,25 @@ def test_close_setup():
     st = tmp / "orca.json"
     terms = {"agent": {"agentIdentity": "claude", "screens": [IDLE]}, "setup": {"agentIdentity": None, "screens": [done]},
              "busy": {"agentIdentity": None, "screens": [["$ bash /r/.git/worktrees/other/orca/setup-runner.sh"]]},
-             "mine": {"agentIdentity": None, "screens": [["$ ls", "$"]]}}
+             "mine": {"agentIdentity": None, "screens": [["$ ls", "$"]]},
+             # No agentIdentity field: not known to be a shell. A failed `ps`: not known to be finished.
+             "noid": {"screens": [done]},
+             "oddid": {"agentIdentity": {}, "screens": [done]},
+             "emptyid": {"agentIdentity": "", "screens": [done]},
+             "psfail": {"agentIdentity": None, "screens": [["$ bash /r/.git/worktrees/psfail/orca/setup-runner.sh"]]}}
     st.write_text(json.dumps({"terms": terms, "sent": []}))
     env = dict(SKILLS_SYNC_ORCA=str(fake), FAKE_ORCA_STATE=str(st), SKILLS_SYNC_SETUP_POLL_S="0.05")
     old = {k: os.environ.get(k) for k in env}
     os.environ.update(env)
     import importlib
     importlib.reload(sync)
+
+    def running(path):
+        if "psfail" in path:
+            raise OSError("ps failed")
+        return "other" in path
     try:
-        sync.running = lambda path: "other" in path
+        sync.running = running
         code = sync.close_setup("/w/card", timeout_s=2, grace_s=0.5)
     finally:
         for k, v in old.items():
@@ -518,6 +543,44 @@ def test_close_setup():
     check("a finished setup terminal is closed; a running one, a hand-opened shell and the agent stay",
           closed == ["setup"], closed)
     check("a setup still running at the timeout is reported", code == 1)
+    shutil.rmtree(tmp)
+
+
+def test_close_setup_agent():
+    """close-setup --agent: a trust dialog, a permission dialog or no visible start fails it, out loud."""
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    fake = tmp / "orca"
+    fake.write_text(FAKE_ORCA); fake.chmod(0o755)
+    st = tmp / "orca.json"
+    started = IDLE[:1] + ["❯ /goal ABC-1. CLOSE: …", "⏺ Reading the ticket."] + IDLE[1:]
+    terms = {"trust": {"agentIdentity": "claude", "title": "✳ new", "screens": [TRUST]},
+             "perm": {"agentIdentity": "claude", "title": "✳ new", "screens": [PERMISSION]},
+             "empty": {"agentIdentity": "claude", "title": "✳ new", "screens": [IDLE[1:]]},
+             "busy": {"agentIdentity": "claude", "title": "✳ new", "screens": [BUSY]},
+             "took": {"agentIdentity": "claude", "title": "✳ new", "screens": [started]},
+             # A title without the idle mark, or none, is no evidence: the screen decides.
+             "notitle": {"agentIdentity": "claude", "title": "", "screens": [TRUST]},
+             "busytitle": {"agentIdentity": "claude", "title": "⠂ new", "screens": [IDLE[1:]]}}
+    st.write_text(json.dumps({"terms": terms, "sent": []}))
+    env = dict(SKILLS_SYNC_ORCA=str(fake), FAKE_ORCA_STATE=str(st), SKILLS_SYNC_SETUP_POLL_S="0.05")
+    old = {k: os.environ.get(k) for k in env}
+    os.environ.update(env)
+    import importlib
+    importlib.reload(sync)
+    try:
+        states = {h: sync.watch_start(h, 0.2)[0] for h in terms}
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = sync.close_setup("/w/card", timeout_s=0.5, grace_s=0.2, agent="trust")
+    finally:
+        for k, v in old.items():
+            os.environ.pop(k) if v is None else os.environ.__setitem__(k, v)
+        importlib.reload(sync)
+    check("start states read from the screen", states == {"trust": "trust", "perm": "dialog", "empty": "unconfirmed",
+                                                          "busy": "started", "took": "started", "notitle": "trust",
+                                                          "busytitle": "unconfirmed"}, states)
+    check("a trust dialog fails close-setup and says so", code == 1 and "agent trust" in out.getvalue()
+          and out.getvalue().rstrip().endswith("result: failed"), out.getvalue())
     shutil.rmtree(tmp)
 
 
@@ -596,12 +659,14 @@ def test_main_help():
 
 
 if __name__ == "__main__":
+    test_close_setup_agent()
     test_main_help()
     test_reload_kind()
     test_classify()
     test_confirm()
     test_sync()
     test_broadcast()
+    test_running()
     test_stale_signal()
     test_restart()
     test_restart_entries()

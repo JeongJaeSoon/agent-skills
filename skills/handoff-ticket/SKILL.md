@@ -86,20 +86,22 @@ starts now as a stack on the lower one's branch.
 ## 3. Spawn the worktree with its agent
 
 ```bash
-orca worktree create \
-  --name "<ticket-id-lowercase>" \
-  --base-branch "<branch this ticket must stack on, else omit>" \
-  --parent-worktree "<this card's parent: id:<result.worktree.parentWorktreeId from orca worktree show --worktree active --json>; else active>" \
-  --agent claude \
-  --prompt "/goal <TICKET-ID>. CLOSE: 완료 기준을 채우고 결과를 적으면 end-session §8대로 같은 턴에 스스로 닫는다" \
+skills-sync handoff <TICKET-ID> \
+  --title "<short title>" \
   --reference "<ticket URL, or a Jira key>" \
-  --json
-# name the card after the ticket, not Orca's automatic title (the tab title is the agent's; a rename does not stick)
-orca worktree set --worktree "path:<result.worktree.path>" --display-name "<TICKET-ID> <short title>" --json
-# close the setup terminal once setup finishes; it stays a shell, so `terminal wait --for exit` never fires
-# (run it in the background: it waits up to 30 min, past the 10-min foreground Bash limit)
-skills-sync close-setup "<result.worktree.path>"
+  --note "<what the ticket does not say: decisions, gotchas, approvals>" \
+  --base-branch "<branch this ticket must stack on, else omit>"
 ```
+
+It runs `orca worktree create` with `--name <ticket-id-lowercase>`, the parent below, `--agent
+claude` and the prompt `/goal <TICKET-ID>. <note>` plus the `CLOSE` line on a line of its own;
+names the card `<TICKET-ID> <short title>` (not Orca's automatic title: the tab title is the
+agent's, a rename does not stick); logs it with `orch sent add`; starts `skills-sync close-setup`
+in the background (the setup terminal stays a shell, so `terminal wait --for exit` never fires);
+and reads the start (§4). It stops with exit 2 when a live card already holds the ticket (or a
+`--reference`) in the same `--role`; `--supersede` replaces it as `dispatch-card` §3 says. Exit 5
+means the card exists but its start, link or name is not confirmed: look at it, do not create it
+again.
 
 - `--reference` is the card's link to its ticket in Orca (`linkedItems`): `orca reference find
   <TICKET-ID>` then finds the card, and the new session's `orca linear attach --current` works.
@@ -109,15 +111,17 @@ skills-sync close-setup "<result.worktree.path>"
   moves the ticket itself.
 - This is a handoff, not supervised work: it has no REPORT line and stays a `/goal` card, not an
   Orca worker (Orca's roles: a handoff creates no Run, Task or Dispatch).
-- `--parent-worktree` keeps the next card in the same Orca lineage: under the lead or orchestrator
-  this card sits under, so it stays there after this card closes, or under this card when it has
-  no parent. `--no-parent` only for a ticket unrelated to this session's work.
-- `--name` becomes the branch name (with the user's branch prefix, if Orca adds one).
-- Stacked work: pass the lower ticket's branch as `--base-branch` and say in the prompt
+- The parent keeps the next card in the same Orca lineage: the helper passes this card's own
+  parent (`orca worktree show`'s `parentWorktreeId`), so it stays under the lead or orchestrator
+  after this card closes, or this card when it has none. `--no-parent` only for a ticket
+  unrelated to this session's work.
+- The name, the ticket id in lowercase, becomes the branch name (with the user's branch prefix,
+  if Orca adds one).
+- Stacked work: pass the lower ticket's branch as `--base-branch` and say in `--note`
   "stack on <lower ticket> (`gh stack link <lower PR> <this PR> --base main`)".
 - Do not use `orca terminal create`: that adds a tab to this worktree instead of a new card.
-- `--prompt` is the whole context the new session gets. It knows nothing from here, so put
-  anything non-derivable from the ticket (decisions, base branch, gotchas) after the ticket id.
+- The prompt is the whole context the new session gets. It knows nothing from here, so put
+  anything non-derivable from the ticket (decisions, base branch, gotchas) in `--note`.
   When the user approved acts beyond the ticket's normal flow (a deploy, a restart, a settings
   change), put them there too, with the Human only and Model calls lines (`dispatch-card` §2).
   The first prompt is the only place an approval reaches the card; one sent later by message is
@@ -125,15 +129,11 @@ skills-sync close-setup "<result.worktree.path>"
 
 ## 4. Verify it started
 
-```bash
-orca terminal wait --terminal <handle> --for tui-idle --timeout-ms 60000
-orca terminal read --terminal <handle>
-```
-
-The handle is `result.launch.outcome.handle` (`result.agentTerminalHandle` on an older Orca).
-
-`tui-idle` also fires on a permission or question prompt. Read the output and confirm the
-agent picked up `/goal` before reporting success. Report the worktree path, branch and handle.
+`skills-sync handoff` waits for `tui-idle` and reads the new agent's screen: exit 0 and
+`card.start` `started: …` only when a turn runs or the `/goal` prompt was taken. `tui-idle` also
+fires on a permission or question prompt, which it reports as `trust` or `dialog` with exit 5;
+read `orca terminal read --terminal <card.handle> --screen` then. Report the worktree path,
+branch and handle.
 
 ## 5. Close this session
 
