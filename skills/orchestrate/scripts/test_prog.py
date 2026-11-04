@@ -84,9 +84,9 @@ assert prog.ci_summary([chk("tests", "FAILURE", A, 1), chk("tests", "SUCCESS", B
 # A rerun keeps its old, lower run id, so start time decides before the id does.
 assert prog.ci_summary([chk("tests", "CANCELLED", A, 9), chk("tests", "SUCCESS", B, 5)])[:2] == ([], [])
 assert prog.ci_summary([chk("tests", "SUCCESS", A, 9), chk("tests", "CANCELLED", B, 5)])[0] == ["tests=CANCELLED"]
-# Same second: the later run.
+# Same second: the order is unknown (the id does not settle it, see above), so the pass does not win.
 assert prog.ci_summary([chk("tests", "SUCCESS", A, 9), chk("tests", "CANCELLED", A, 10)])[0] == ["tests=CANCELLED"]
-assert prog.ci_summary([chk("tests", "CANCELLED", A, 10), chk("tests", "SUCCESS", A, 11)])[:2] == ([], [])
+assert prog.ci_summary([chk("tests", "FAILURE", A, 5), chk("tests", "SUCCESS", A, 9)])[0] == ["tests=FAILURE"]
 
 # A check still going outranks any finished one: a queued run has no start time, and an old pass must not stand in.
 queued = chk("tests", None, ZERO, 3, status="QUEUED", completed=ZERO)

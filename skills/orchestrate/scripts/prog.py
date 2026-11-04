@@ -1180,7 +1180,9 @@ def latest_checks(rollup):
 
     def newest(checks):
         timed = [c for c in checks if started(c)]
-        best = [max(timed, key=lambda c: (going(c), started(c), run(c)))] if timed else []
+        # Starts in one second are unordered and the id cannot settle them, so a pass does not win that tie.
+        rank = lambda c: (going(c), started(c), (c.get("conclusion") or "").upper() not in PASSING, run(c))
+        best = [max(timed, key=rank)] if timed else []
         rest = [c for c in checks if not started(c)
                 and not (best and not going(c) and (c.get("completedAt") or "~") < started(best[0]))]
         return max(best + rest, key=lambda c: (going(c), run(c)))
