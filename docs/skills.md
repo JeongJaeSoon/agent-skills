@@ -1,6 +1,6 @@
 # 스킬 카탈로그
 
-`agent-skills` 플러그인이 싣는 스킬 41개(`skills/*/SKILL.md`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 8개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
+`agent-skills` 플러그인이 싣는 스킬 40개(`skills/*/SKILL.md`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 8개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
 
 설정 기본값 변경과 기존 데이터 보존 방법은 [설정 전환 안내](configuration-migration.md)를 따른다. 노트·원장·개인 폴더는 명시 설정이 필요하고, 성과 보고 기본 시간대는 UTC다.
 
@@ -580,26 +580,20 @@ PR 을 맡는 스킬과 머지 주체:
 | `guard.deny.slash_send` | deny | `orca terminal send`로 `/reload…`·`/model` 입력 |
 | `guard.deny.prompt_substitution` | deny | `orca worktree create --prompt`의 명령 치환(`$(…)`, 백틱) |
 | `guard.deny.self_exempt_label` | deny | `gh`로 `no-visual-change` 라벨 붙이기(`pr create --label`, `pr edit --add-label`, `issue edit`, `gh api …/labels`) |
-| `guard.deny.owner_only` | deny | `orch refusal clear`, `orch exempt`, 거부 원장(`refusals.jsonl`) 직접 쓰기. 사람이 자기 채팅에서 `!`로 친다. 키를 끄면 다른 `orch` 명령처럼 허용된다 |
+| `guard.deny.owner_only` | deny | `orch exempt`. 사람이 자기 채팅에서 `!`로 친다. 키를 끄면 다른 `orch` 명령처럼 허용된다 |
 | `guard.deny.external_review` | deny | `codex` 호출인데 작업 폴더(또는 `-C`)의 origin 저장소가 `repos.<owner/repo>.external_llm: false`. 그 키가 없으면 판정하지 않는다 |
 | `guard.ask.pressure_bypass` | ask | 명령 앞이나 `env`·`export`의 `AGENT_SKILLS_PRESSURE_GATE=0` 대입. 그 글자를 출력하는 `echo`는 대상이 아니다 |
 | `guard.warn.rm_expansion` | warn | 따옴표 없는 glob이나 변수로 만든 `rm` 경로. `${VAR:?}`는 제외 |
 | `guard.warn.reset_hard` | warn | 커밋하지 않은 변경이 있는 저장소의 `git reset --hard` |
 | `guard.warn.run_download` | warn | `-D`·`--dir` 없는 `gh run download` |
 | `guard.warn.tailscale` | warn | 워커의 `tailscale serve`·`funnel` |
-| `guard.refusal_registry` | deny | 거부 원장에 열린 거부와 같은 행동(아래). `warn`이면 기록하고 알리기만, `false`·`off`면 기록도 하지 않는다 |
 | `orchestrate.ask_user_question` | deny | 오케스트레이터·리드·워커 본 대화의 AskUserQuestion. 서브에이전트와 일반 세션은 대상이 아니다 |
 | `orchestrate.wait_foreground` | deny | 오케스트레이터·리드가 `orch wait`, `orch inbox --wait`, `orch watch-cards`, `orca orchestration check\|inbox --wait`를 `run_in_background` 없이 실행, 또는 배경 대기를 `\| tail`·`\| head`로 자름. 워커의 `check --wait`는 대상이 아니다 |
 | `orchestrate.send_devnull` | deny | 오케스트레이터·리드·워커가 `orca orchestration send\|reply`의 출력을 `/dev/null`로 보냄. `2>/dev/null`만은 대상이 아니다 |
 
 hook 자신의 판정이 예외를 내면 그 호출은 통과시키고, 경고와 함께 `$AGENT_SKILLS_STATE/guard-errors.jsonl`에 시각·hook·예외 종류·위치만 남긴다(명령 원문은 남기지 않는다). 설정 파일을 읽지 못하면 기본값을 쓴다.
 
-거부 원장(`hooks/refusals.py`, PermissionDenied·PreToolUse·Stop·SubagentStop). 자동 모드 분류기가 범주(`Reason: [범주]`)를 붙여 거부했거나 사람이 권한 창에서 거부한 호출을 `$AGENT_SKILLS_STATE/refusals.jsonl`에 남기고, 사람이 풀 때까지 어느 세션이든 같은 행동을 거부한다.
-- 기록: 분류기 거부는 PermissionDenied 이벤트에서 바로 남긴다. 사람의 거부와 그 이벤트가 오지 않은 거부는 다음 PreToolUse와 Stop이 transcript 끝을 읽어 남긴다. 둘 다 도구 호출 id로 한 번만 쓴다. 원장이 생기기 전의 거부는 모으지 않는다. transcript로 읽는 경우, 거부된 호출과 같은 메시지에 보낸 병렬 호출은 막지 못한다. hook 하나는 7초 안에 끝내고, 넘기면 경고하고 통과시킨다.
-- 기록하지 않는 것: hook의 거부, `<tool_use_error>`, 읽기 전용 도구, 범주 없는 분류기 거부(판정 없음 등, 경고 한 줄만). 대상을 읽지 못한 호출도 기록하지 않고 경고한다.
-- 행동은 동사와 대상이다. 지우는 경로는 실제 상위 폴더와 자기 이름(symlink는 그 자신), 쓰는 파일은 실제 경로, PR은 `host/owner/repo#n`, 브랜치는 `host/owner/repo:branch`. 같은 경로를 지우는 것은 명령이 달라도(`rm -rf`, `git worktree remove`, `orca worktree rm`) 같은 행동이고, 그 경로를 품은 상위 폴더를 지우는 것도 걸린다. 지금 읽는 모양은 `rm`, `git worktree remove`, `git reset --hard`, `git push`(일반·강제·삭제를 다른 동사로), `gh pr merge|close`, `gh api …/pulls/N/merge`, `orca worktree rm`, Edit·Write·MultiEdit·NotebookEdit다. `--dry-run` push와 GET API는 행동이 아니다. 대상을 하나로 정하지 못하는 것(gh가 번호로 풀지 못한 PR, `git push --all`, 서브셸 `cd` 뒤의 상대 경로, 변수로 만든 경로)은 기록하지도 맞춰 보지도 않는다.
-- 원장에는 시각, 호출 id, 세션, 터미널, Run, 동사, 대상만 쓴다. 명령 원문과 다른 인자 값은 쓰지 않는다. 쓰기는 `fcntl` 잠금 아래에서 한다.
-- 해제는 사람만 한다. `orch refusal report`가 열린 거부를 보여 주고, 사람이 자기 채팅에서 `!orch refusal clear <id>`로 푼다. 에이전트의 `orch refusal clear`와 원장 직접 쓰기는 `guard.deny.owner_only`가 거부한다. 기간이 지나 풀리지는 않는다. 해제한 지 30일이 지난 거부는 다음 해제 때 id만 남긴 `done` 한 줄로 줄여, transcript에 남은 같은 거부를 다시 기록하지 않는다.
+거부된 행동을 hook이 기록해 다시 막는 일은 없다. 다른 형태로 다시 시도하지 않는다는 규칙은 스킬 문장(`orchestrate`의 "Refused acts", `tune-automode`)이 지킨다. 이전 버전이 남긴 `$AGENT_SKILLS_STATE/refusals.jsonl`은 아무것도 읽지 않으며 지우지도 않는다. 필요 없으면 사람이 지운다.
 
 역할은 `hooks/roles.py` 하나가 정한다. 역할은 orchestrator, lead, worker, general 넷이다.
 1. `ROLE: none` 기록이 있으면 모든 역할이 꺼진다(general).
@@ -714,7 +708,7 @@ pstack 스킬 58개(원칙 24개와 나머지 34개) 가운데 원칙 24개 전�
 - **프로젝트 운영:** `orchestrate`의 `orch` 원장, 착지 게이트와 독점 레인, human-gate, main 가디언, QA 리드, `orch-dash` 대시보드. 모양은 pstack 플레이북을 따랐지만 Orca Run과 GitHub stack 위에서 새로 만들었다.
 - **측정과 어댑터:** `measure-delivery`, `use-tracker`, `use-notes`.
 - **머신 관리:** `reap-resources`, `tune-automode`, `skills-config`, `setup-pc`.
-- **hook:** 권한 결정(`guard.py`), 오케스트레이터·리드 재정렬(`reorient.py`), 미설정 PC의 설정 제안(`onboard.py`), 대시보드에서 답하는 권한 창 기록(`permission.py`), 터미널에서 답한 결정 닫기(`decision.py`), 완료 주장 검사(`claim_check.py`), 무거운 시작 전 사용량 확인(`pressure_gate.py`), 문체 검사(`prose_check.py`), 거부된 행동 다시 하지 않기(`refusals.py`).
+- **hook:** 권한 결정(`guard.py`), 오케스트레이터·리드 재정렬(`reorient.py`), 미설정 PC의 설정 제안(`onboard.py`), 대시보드에서 답하는 권한 창 기록(`permission.py`), 터미널에서 답한 결정 닫기(`decision.py`), 완료 주장 검사(`claim_check.py`), 무거운 시작 전 사용량 확인(`pressure_gate.py`), 문체 검사(`prose_check.py`).
 
 ### upstream 동기화 상태
 - **마지막 동기화:** 2026-10-26, `b42effe`(0.15.3)에서 `99b609a`(0.15.32)로. 그 사이 upstream은 pstack에 커밋 74개를 쌓았다.
