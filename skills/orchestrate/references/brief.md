@@ -246,7 +246,7 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             Report leftover files for the normal card cleanup. A failing check (a git hook,
             linter, test or CI) is not a refusal: fix the cause and run it again.
             <repository data-sharing restrictions, applying to every reviewer and tool>
-            <unit-specific bans>
+            <unit-specific bans, per "Unit-specific bans" below>
 REPORT      worker_done once, after landing and main CI (or at READY, with its READY-WAIT line,
             or under human-gate). A body with backticks or `$` goes in single quotes or a quoted
             heredoc: double quotes run them.
@@ -262,6 +262,10 @@ KEEP        <optional: the next task this worker's terminal or card is kept for;
 STANDING    <the program note's standing orders for workers, pasted verbatim, numbered; the
             lead-only ones stay in the note>
 ```
+
+### Unit-specific bans
+
+A merge ban in `<unit-specific bans>` agrees with the program's `merge_policy` and the brief's LAND; one that contradicts them stays out, because a worker cannot follow both. Under `autonomous` with a LAND tail that uses `orch land`, ban only merges outside it (`gh pr merge` run directly, `--admin`, `--auto`), and leave LAND's approved plain-merge exception standing. Under `human-gate`, use the LAND tail that stops at READY. When you copy a ban list from a brief above or an earlier brief, align its merge ban with the current `merge_policy`.
 
 ## Single worker
 
