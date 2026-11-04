@@ -377,6 +377,8 @@ STORES = [
     Store("progreflect", "P/*/reflect/*.md", {"program.event": DERIVED}, ("ext:leads",), ("reflect",)),
     Store("dashmeta", "P/.dash.*", {"dash.server": CANONICAL}, ("dash:serve", "dash:ensure"), ("programview",),
           rule="the serving process, its lock and log"),
+    Store("comparecache", "P/.compare-cache.*", {"pr.state": CACHE}, ("dash:save_compare_cache",), ("programview",),
+          rule="GitHub compare answers (is commit A in B's history): commits never change, so a restart keeps them"),
     Store("landlocks", "P/_locks/*.lock", {"program.event": LOCK, "resource.hold": CANONICAL},
           ("prog:ExclusiveLock.take", "holds:hold", "holds:_locked"), ("programview", "page"),
           rule="landing lanes and `orch hold` resources"),
