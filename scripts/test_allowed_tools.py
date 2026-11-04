@@ -71,49 +71,30 @@ def matches(pattern, command):
     return re.fullmatch(body, command, re.S) is not None
 
 
-def strip_comment(line):
-    """`line` without a shell comment; a `#` inside quotes or a word stays."""
-    quote = None
-    for i, ch in enumerate(line):
-        if quote:
-            quote = None if ch == quote else quote
-        elif ch in "\"'":
-            quote = ch
-        elif ch == "#" and (i == 0 or line[i - 1].isspace()):
-            return line[:i]
-    return line
+def family(pattern):
+    """The first three literal words of a pattern: what names the command it grants."""
+    return " ".join(pattern.split("*")[0].split()[:3])
 
 
-FENCE = re.compile(r"^```[^\n]*\n(.*?)^```", re.S | re.M)
-
-
-def fenced_commands(body):
-    """Each command in the fenced blocks, continuation lines joined, comments off, whitespace collapsed."""
-    out = []
-    for block in FENCE.findall(body):
-        for line in re.sub(r"\\\n\s*", "", block).splitlines():
-            if strip_comment(line).strip():
-                out.append(" ".join(strip_comment(line).split()))
-    return out
-
-
-def inline_commands(body):
-    """Each code span outside the fenced blocks, whatever its backtick run, whitespace collapsed."""
-    spans = re.findall(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)", FENCE.sub("", body), re.S)
-    return [" ".join(span.split()) for _, span in spans]
+def occurrences(name, body):
+    """Each place the body writes the command `name`, however its words are spaced, up to a backtick or the line's
+    end, spacing kept: the rule matches literally, so a respaced command must not read as the same one. A code span
+    holding only the name is prose naming the command, not a call."""
+    words = r"\s+".join(re.escape(w) for w in name.split())
+    found = re.finditer(rf"(?<![\w-]){words}(?![\w-])[^`\n]*", body)
+    return [m.group(0).rstrip() for m in found if not (m.group(0) == name and body[m.end():m.end() + 1] == "`")]
 
 
 def body_errors(granted, body):
-    """A pattern with no command behind it is stale; a documented command in its family that misses it is a drift."""
-    errors, documented = [], fenced_commands(body) + inline_commands(body)
+    """A pattern with no command behind it is stale; another command of its family that misses it is a drift."""
+    errors = []
     for p in granted:
-        if not any(matches(p, c) for c in documented):
+        found = occurrences(family(p), body)
+        if not any(matches(p, c) for c in found):
             errors.append(f"{p}: no command in the body matches it")
-    families = {" ".join(p.split()[:3]) for p in granted}
-    for c in documented:
-        # A bare family name is prose naming the command, not a call.
-        if any(c.startswith(f + " ") for f in families) and c not in UNGRANTED and not any(matches(p, c) for p in granted):
-            errors.append(f"{c}: documented but outside every pattern")
+        for c in found:
+            if c not in UNGRANTED and not any(matches(q, c) for q in granted):
+                errors.append(f"{c}: documented but outside every pattern")
     return errors
 
 
@@ -168,16 +149,16 @@ assert body_errors(["orca thing stop *"], "`orca thing go now`")
 assert body_errors(["orca thing go *"], "```bash\norca thing other\n```\n`orca thing go now`") == []
 assert body_errors(["orca thing go now"], "```bash\norca thing go later\n```\n`orca thing go now`")
 assert any("GRANTS pins" in e for e in skill_errors("demo", fixture("Bash(orca thing go *)")))
-assert not fenced_commands("no block") and fenced_commands("```bash\na b \\\n  c  # note\n# only\n```\n") == ["a b c"]
+assert family("tool sub --flag x *") == "tool sub --flag" and family("tool run *") == "tool run"
 
 # A drifted inline command fails beside a matching one; a family is whole words; a bare family name is prose.
 assert body_errors(["orca thing go now"], "`orca thing go now` and `orca thing go now --all`")
 assert not body_errors(["orca thing go now"], "`orca thing go now` and `orca thing gone x`")
 assert not body_errors(["orca thing go now"], "`orca thing go now` beside `orca thing go`")
-assert fenced_commands('```bash\ntool show "  # text"  # note\n```\n') == ['tool show " # text"']
-assert inline_commands("``a ` b`` and `c\n  d`\n```\nfenced\n```\n") == ["a ` b", "c d"]
-assert body_errors(["orca thing go now"], "`orca thing go now` and `orca thing go\tlater`")
-assert body_errors(["orca thing go now"], "`orca thing go now` and `orca thing go\n  later`")
+for drift in ("`orca thing go\tlater`", "`orca thing go\n  later`", "`orca  thing go now`", "`orca\tthing go now`",
+              "~~~bash\norca thing go later\n~~~", "  ```bash\n  orca thing go later\n  ```", "    orca thing go later",
+              "``orca thing go ` later``"):
+    assert body_errors(["orca thing go now"], f"`orca thing go now`\n{drift}\n"), drift
 
 # Every other YAML spelling of the key is refused, so a grant cannot sit where this file's parser misses it.
 GOOD = "Bash(orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json)"
