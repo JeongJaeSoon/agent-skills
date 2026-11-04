@@ -169,8 +169,9 @@ references/top-level.md "Starting a worker".
   as one; `orch doctor` says which), `skills-sync card` starts it as a supervised
   worker with `orca orchestration worker-start --worktree new-child` (your worktree becomes its Orca parent; `new-top-level` with `--no-parent`). It is then a Dispatch:
   its escalation, `ask` and `worker_done` reach your Run, and Orca watches it for a prompt only a
-  human can answer. Its spec is the composed prompt without the leading `/goal` (Orca delivers a
-  spec as the task after its own preamble). Everything else is a `/goal` card from `orca
+  human can answer. Its spec is the composed prompt, `/goal` line included (Orca delivers a
+  spec as the task after its own preamble, so the line is not the first thing the session reads and
+  may not run as the slash command; it still states the goal). Everything else is a `/goal` card from `orca
   worktree create`: a brief with no Run report (fire-and-forget), a lead's brief while Orca's
   Nested worker depth is below 3 (the lead's workers' helpers would not fit; the helper prints the
   setting to change), or `--card`. A Run brief from a session bound to no Run, or to another Run
@@ -191,7 +192,8 @@ references/top-level.md "Starting a worker".
   `/goal` card, by `orca reference add` on the new card right after the start for a worker.
   Linear and GitHub take the full URL; a bare key is read as Jira.
 - `skills-sync card` writes the brief's `/goal` line (plus the brief's path, unless the line
-  names one), PROGRAM, APPROVED, lead and CLOSE or KEEP rows into `--prompt` itself, logs a
+  names one), PROGRAM, APPROVED, lead and CLOSE or KEEP rows, the FORBIDDEN section whole and every
+  REPORT row into `--prompt` (or the worker's spec) itself, logs a
   `/goal` card with `orch sent add` (a worker's spec is its Orca Task, which the Sent page reads),
   sets the display name and prints Orca's create output. A row is a line outside
   a ``` fence that starts with its key and a colon (`CLOSE: …`), or the Lead template's wide gap; a

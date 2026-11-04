@@ -35,7 +35,8 @@ itself a dispatched worker on it (a lead started with worker-start, whose `run-c
 worker (`orca orchestration worker-start --worktree new-child`, so Orca records this session's worktree as its
 parent; `new-top-level` with --no-parent; any other --parent-worktree is ignored, since worker-start takes none): a
 Dispatch, so the card's worker_done, escalation and ask reach this session and Orca watches it for prompts. Its spec
-is the prompt below without the leading `/goal`. When this session is bound to no Run, works for another Run than the
+is the prompt below, `/goal` line included. Orca puts its own preamble before a spec, so that line is not the first
+thing the session reads there and may not run as the slash command; it still states the goal. When this session is bound to no Run, works for another Run than the
 brief names, or Orca does not answer, nothing is created (exit 6): the lines printed say how to bind it
 (`orca orchestration run-use`) or to make a /goal card on purpose (--card). A refused new-child is not retried as
 new-top-level.
@@ -54,7 +55,8 @@ lost on a restart (`terminal_not_found`), and while it lives the mail is only st
 start for a worker, which takes no link flag.
 
 The prompt is the brief's `/goal` line (with ` 브리프: <brief path>` appended unless it already names a brief), then
-its PROGRAM, APPROVED, lead and CLOSE/KEEP rows. A row is a line outside a ``` fence that starts with the key and a
+its PROGRAM, APPROVED, lead, CLOSE/KEEP and FORBIDDEN rows (the FORBIDDEN section whole, markers and the lines after
+a blank line included) and every REPORT row, so both paths carry the bans and the report address. A row is a line outside a ``` fence that starts with the key and a
 colon (`CLOSE: …`, `` `CLOSE`: … ``) or the template's wide gap (`DELEGATE    …`), plus the indented lines under it.
 A lead's brief (a MODE row, a `ROLE: lead <slug>` row or a `<project>: lead` head) needs every row of orchestrate
 references/brief.md "Lead", its MERGE row naming exactly one merge_policy; any brief needs CLOSE or KEEP, and one with an Approved heading or bullet needs its
@@ -102,7 +104,7 @@ ORCH = os.environ.get("SKILLS_SYNC_ORCH", str(REPO / "bin" / "orch"))
 GOAL = re.compile(r"(?m)^/goal[ \t]+\S.*$")
 LEAD_ROWS = ("MODE", "ROLE", "INBOX", "DELEGATE", "PREDICATE", "MERGE", "TASKS", "GATE")
 MERGE_VALUE = re.compile(r"\bmerge_policy (autonomous|human-gate)\b")
-ROWS = ("PROGRAM", "APPROVED", *LEAD_ROWS, "CLOSE", "KEEP")
+ROWS = ("PROGRAM", "APPROVED", *LEAD_ROWS, "CLOSE", "KEEP", "FORBIDDEN", "REPORT")
 FENCE = re.compile(r"(?ms)^[ \t]*```.*?^[ \t]*```[^\n]*$")
 # dispatch-card §2's prose form of the approval, which carries nothing into the prompt without an APPROVED row
 APPROVED_PROSE = re.compile(r"(?im)^[ \t]*(?:#{1,6}[ \t]*|[-*][ \t]+\*\*)approved\b")
@@ -120,18 +122,36 @@ def starts_row(line, key):
     return re.match(rf"^[ \t]*`?{key}`?(?:[ \t]*:|[ \t]{{2,}}\S)", line) is not None
 
 
-def row(text, key):
+def continues(line):
+    return bool(line.strip()) and line[:1].isspace() and not any(starts_row(line, k) for k in ROWS)
+
+
+def row_at(lines, i, across_blank=False):
+    """The row starting at lines[i] with its indented continuation lines. With across_blank, a blank line does not end
+    it when the next line still continues it: the FORBIDDEN section a brief writes in two paragraphs."""
+    out = [lines[i].strip()]
+    j = i + 1
+    while j < len(lines):
+        if continues(lines[j]):
+            out.append(lines[j].rstrip())
+        elif across_blank and not lines[j].strip() and j + 1 < len(lines) and continues(lines[j + 1]):
+            out.append("")
+        else:
+            break
+        j += 1
+    return "\n".join(out)
+
+
+def row(text, key, across_blank=False):
     """The first row for `key`, with its indented continuation lines, else None."""
     lines = text.splitlines()
-    for i, line in enumerate(lines):
-        if starts_row(line, key):
-            out = [line.strip()]
-            for nxt in lines[i + 1:]:
-                if not nxt.strip() or not nxt[:1].isspace() or any(starts_row(nxt, k) for k in ROWS):
-                    break
-                out.append(nxt.rstrip())
-            return "\n".join(out)
-    return None
+    return next((row_at(lines, i, across_blank) for i, line in enumerate(lines) if starts_row(line, key)), None)
+
+
+def all_rows(text, key):
+    """Every row for `key`: a brief may keep a short REPORT line near the top and the full one at the end."""
+    lines = text.splitlines()
+    return [row_at(lines, i) for i, line in enumerate(lines) if starts_row(line, key)]
 
 
 def merge_policy(merge_row):
@@ -175,7 +195,7 @@ def compose(brief_path):
         raise Refuse(2, f"cannot read the brief: {e}")
     text = FENCE.sub("", text)  # a quoted template is not the brief's own rows
     goal = GOAL.search(text)
-    rows = {k: row(text, k) for k in ROWS}
+    rows = {k: row(text, k, across_blank=k == "FORBIDDEN") for k in ROWS}
     lead = guard.is_lead(text)
     missing = [] if goal else ["`/goal <goal>` line"]
     if not (rows["CLOSE"] or rows["KEEP"]):
@@ -202,7 +222,9 @@ def compose(brief_path):
     head = goal.group(0).rstrip()
     if not any(s in head for s in ("브리프:", str(path), brief_path)):
         head += f" 브리프: {path}"
-    prompt = "\n".join([head, *(rows[k] for k in ROWS if rows[k])])
+    # FORBIDDEN (markers included) and every REPORT row go in whole: the worker gets its bans and where to report from
+    # no other place than this first prompt, and a path to the brief file is not a substitute for them.
+    prompt = "\n".join([head, *(r for k in ROWS for r in (all_rows(text, k) if k == "REPORT" else [rows[k]]) if r)])
     # The hook's own test on the result: if its patterns move, this refuses instead of creating what it would refuse.
     if not guard.CLOSE_OR_KEEP.search(prompt) or guard.is_lead(prompt) != lead or lead and (
             not guard.LEAD_ROLE.search(prompt) or any(not re.search(rf"\b{w}\b", prompt) for w in guard.LEAD_LINES)):
@@ -679,6 +701,7 @@ def create_locked(brief, opts, refs, prompt):
     # A lead's brief has no FORBIDDEN row in its template: the worker paragraph is not its rule set.
     forbidden = ("skipped (--no-forbidden)" if opts.get("--no-forbidden") else "skipped (lead brief)"
                  if guard.is_lead(pathlib.Path(brief).expanduser().read_text()) else refresh_forbidden(brief))
+    prompt = compose(brief)  # again: the refresh may have rewritten the FORBIDDEN section the prompt carries
     text = FENCE.sub("", pathlib.Path(brief).expanduser().read_text())
     wanted = {a[len("run:"):] for a in report_to(text) if a.startswith("run:")}
     to_run = bool(wanted)
@@ -710,8 +733,10 @@ def create_locked(brief, opts, refs, prompt):
         opts["--parent-worktree"] if opts.get("--parent-worktree") and not worker else caller_worktree())
     model = session_model(opts, lead, ME)
     if worker:
-        # Orca delivers a worker's spec as its task, after its own preamble: a leading /goal would not run there.
-        spec = re.sub(r"^/goal[ \t]+", "", prompt, count=1)
+        # Orca puts its own preamble before the spec, so the /goal line is not the first thing the session reads and
+        # Claude Code may not run it as the slash command. It stays: the line still states the goal, and stripping it
+        # dropped the owner's goal from the worker altogether.
+        spec = prompt
         # worker-start takes no parent selector: new-child parents it to this session, --no-parent drops lineage
         cmd = [ORCA, "orchestration", "worker-start", "--spec", spec, "--worktree",
                "new-top-level" if opts.get("--no-parent") else "new-child",
