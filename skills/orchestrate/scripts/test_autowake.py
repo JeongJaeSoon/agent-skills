@@ -95,6 +95,16 @@ for bad in ('{}', '{"orchestrate": {}}', '{"orchestrate": {"auto_wake_min": 0}}'
 config.write_text('{"orchestrate": {"auto_wake_min": 10}}')
 assert autowake.minutes() == 10
 
+# orchestrate.stall_idle_min moves the idle stall's 15 minutes, for a short live measurement; no key keeps them.
+import dash  # noqa: E402
+ended = {"dispatch": "d", "outcome": "in_progress", "motion": {"state": "idle", "since": mins(-3).isoformat()}}
+assert dash.stalls([ended], mins(0)) == [], "3 minutes is under the default"
+config.write_text('{"orchestrate": {"auto_wake_min": 10, "stall_idle_min": 2}}')
+assert [x["kind"] for x in dash.stalls([ended], mins(0))] == ["idle"]
+config.write_text('{"orchestrate": {"stall_idle_min": 0}}')
+assert dash.stalls([ended], mins(0)) == [], "not a positive int: the default"
+config.write_text('{"orchestrate": {"auto_wake_min": 10}}')
+
 # The first mark sets the timer and wakes nobody; the wake waits N minutes from it, not from the turn's end.
 w = World()
 r = w.sweep(0)

@@ -41,12 +41,12 @@ class Round:
         return default if self.next_s is None else str(min(int(default), max(1000, int(self.next_s * 1000))))
 
 
-def minutes():
+def minutes(key=KEY):
     """N, or None for off. Read as no_ci_repo reads it; anything but a positive int is off, never a guess."""
     path = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-skills.json").expanduser()
     try:
         cfg = json.loads(path.read_text())
-        n = (cfg.get("orchestrate") or {}).get(KEY)
+        n = (cfg.get("orchestrate") or {}).get(key)
     except (OSError, ValueError, AttributeError):
         return None
     return n if isinstance(n, int) and not isinstance(n, bool) and n > 0 else None
