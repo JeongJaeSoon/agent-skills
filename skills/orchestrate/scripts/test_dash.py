@@ -642,4 +642,10 @@ dash.time.sleep, dash.collect = real_sleep, real_collect
 assert collected.count(B) == 2 and A in collected, collected  # the second round reached B through closed()
 (store / B / "ledger.jsonl").write_text(clean)
 
+# The screen quotes prog.py's cleanup line, so the two cannot drift, and a person is not told to remove cards by hand.
+app_js = pathlib.Path(__file__).parents[1].joinpath("assets/dashboard/app.js").read_text()
+assert f"const CLEANUP = `{dash.prog.CLEANUP}`;" in app_js
+assert "for the cleaners (${CLEANUP})" in app_js and "${esc(CLEANUP)}" in app_js
+assert "worktree rm" not in app_js
+
 print("dash.py collect/serve: all pass")

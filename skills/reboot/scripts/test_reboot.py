@@ -30,8 +30,9 @@ def wait_proc(pid, cmd):
 class Orca:
     """Answers `orca <argv> --json` from a fixture: handles that are live, a Run binding, workers."""
 
-    def __init__(self, live=(ME,), run=None, workers=(), title="orchestrator", here=()):
+    def __init__(self, live=(ME,), run=None, workers=(), title="orchestrator", here=(), concise=False):
         self.live, self.run, self.workers, self.title, self.here = set(live), run, list(workers), title, list(here)
+        self.concise = concise
 
     def __call__(self, *argv):
         if argv[:2] == ("terminal", "show"):
@@ -42,7 +43,7 @@ class Orca:
         if argv[:2] == ("terminal", "list"):
             return {"terminals": self.here}
         if argv[:2] == ("orchestration", "run-current"):
-            return {"run": {"id": self.run} if self.run else None}
+            return {"runId": self.run} if self.concise else {"run": {"id": self.run} if self.run else None}
         if argv[:2] == ("orchestration", "worker-list"):
             state = argv[argv.index("--terminal-state") + 1] if "--terminal-state" in argv else None
             run = argv[argv.index("--run") + 1] if "--run" in argv else None
@@ -162,6 +163,11 @@ class Run(unittest.TestCase):
                 reboot.PROGRAMS = orig
         self.assertEqual(len(out), 1)
         self.assertIn("run-use --id run_9", out[0])
+
+    def test_concise_answer_is_bound(self):
+        lines = run("lead", "acme", "run_1", orca=Orca(run="run_1", concise=True), procs=wait_proc(200, "orch wait acme"))
+        self.assertIn(("ok", "bound to Run run_1"), lines)
+        self.assertEqual(does(lines), [])
 
     def test_bound_to_another_run_checks_no_workers_there(self):
         workers = [{"dispatchId": "d_other", "taskId": "t", "runId": "run_1", "terminalState": "active",

@@ -431,7 +431,9 @@ def check_bash(cmd, cfg, cwd=None, session=None):
         if (lvl := level(cfg, key)) != "off":
             out.append(Finding(key, lvl, "The card's --prompt runs a command substitution, so nothing checks what it "
                                          "puts there. Create the card with `skills-sync card <brief>`, which reads "
-                                         f"and checks the brief file. {KEY_SOURCE.format(key=key)}"))
+                                         "and checks the brief file (`--agent codex` for a supervised Codex worker; "
+                                         "dispatch-card §3 says which briefs). "
+                                         f"{KEY_SOURCE.format(key=key)}"))
     return out
 
 
