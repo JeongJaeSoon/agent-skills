@@ -1509,8 +1509,9 @@ function leadKids(tree) {
   });
   return out;
 }
-const MARK_RANK = ["🙋", "🔴", "❔", "🔄", "⏳", "⏸️", "✅"];  // rowstate.ROW_ORDER
+const MARK_RANK = ["🙋", "🔴", "❔", "🔄", "⏳", "⏸️", "📅"];  // rowstate.ROW_ORDER; 📅 is a held row a to-do holds
 // A folded lead's worst session: its brief rows' marks, and 🙋 for one waiting on a person, which may have no row.
+// A finished row has no session in table_rows and nothing urgent to say.
 function urgentMark(kids) {
   const marks = new Set(kids.flatMap((k) => [...sessionRowsOf(k.id).map((x) => x.status), ...(k.phase === "waiting" || k.unread ? ["🙋"] : [])]));
   return MARK_RANK.find((m) => marks.has(m)) || "";

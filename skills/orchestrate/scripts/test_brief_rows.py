@@ -335,7 +335,15 @@ tg = subprocess.run([sys.executable, str(HERE / "prog.py"), "brief", "render", "
 assert LONG in tg and "SOLO-CARD" in tg and "보드가 지은 제목" not in tg, tg
 for rid in ("solo-row", "long-row", "holds-row"):
     board.set_row(rid, status="done")
-st["sessions"] = st["sessions"][:-3]
+# A finished row still shares its session: the row left open keeps its title.
+st["sessions"] = st["sessions"][:-3] + [card("s-pair", "PAIR-CARD", "working", "acme/pair")]
+fleet.write_atomic(sd / "state.json", json.dumps(st))
+board.set_row("pair-done", title="끝난 단계", repo="acme/pair", status="done", worktree="s-pair", next="-")
+board.set_row("pair-open", title="남은 단계", repo="acme/pair", status="moving", worktree="s-pair", next="리뷰")
+text = brief()["text"]
+assert "남은 단계" in text, text
+board.set_row("pair-open", status="done")
+st["sessions"].pop()
 fleet.write_atomic(sd / "state.json", json.dumps(st))
 # The 진행 column shows only where a row has a bar; `--progress` on one row brings it back for that table.
 assert "| | 리드/Phase | PR | 다음 | 세션 |" in text and "막대=단계" not in text, text

@@ -1048,6 +1048,10 @@ process.stdout.write(JSON.stringify({shut, again, open, kept: mem[FOLD_KEY]}));"
     sum_html = re.search(r'<span class="fold-sum[^>]*>.*?</span>', row_with(got["shut"], "lead-two")).group(0)
     assert "1 session<" in sum_html.replace(" · ", "<") and "🔴" in sum_html, sum_html  # one session, and its brief row's mark
     assert "<tr hidden" not in got["open"] and json.loads(got["kept"]) == [], got
+    # A row a to-do holds reads 📅 in the table and ranks as held; a session with only finished rows has nothing urgent.
+    got = fold_run(storage_ok, """F.brief.table_rows[0].rows.push({session: {id: "x"}, status: "📅"}, {session: {id: "y"}, status: "📅"}, {session: {id: "y"}, status: "⏳"});
+process.stdout.write(JSON.stringify([urgentMark([{id: "x"}]), urgentMark([{id: "y"}]), urgentMark([{id: "z"}])]));""")
+    assert got == ["📅", "⏳", ""], got
     # Storage that throws, or holds junk: open, and the toggle still works for this page.
     for setup in (storage_bad, storage_ok + ' mem["orch-dash:lead-fold"] = "{not json";', storage_ok + ' mem["orch-dash:lead-fold"] = "7";'):
         got = fold_run(setup, """const open = fleetSessions(st); foldLead("lead:1"); const shut = fleetSessions(st);

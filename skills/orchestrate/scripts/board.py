@@ -1055,6 +1055,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         r = rows.get(l["key"])
         sid = session_of(r) if r and not l["fold"] else None
         st = session_state(sessions.get(sid), now) if state is not None and (sid or r) else None
+        l["sid"] = sid if sid in sessions else None  # a finished row has no session cell but still shares the worktree
         l["session"] = None if l["status"] in (None, "done") or st is None else {"id": sid if sid in sessions else None,
                                                                                    "state": st, "word": SESSION_WORD[st]}
         if l["session"] and l["session"]["id"]:
@@ -1074,11 +1075,11 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     # A row alone on its session is named as Orca names the worktree, so the table's name finds it in the Cmd+J palette
     # (prefix and substring match, so a cut name does too). Rows sharing a session keep their titles: the worktree's
     # name would say the same thing twice, and the 세션 cell has it.
-    on_session = collections.Counter((l["session"] or {}).get("id") for l in lines)
+    on_session = collections.Counter(l["sid"] for l in lines)
     for l in lines:
-        s = l["session"]
-        if s and s.get("id") and on_session[s["id"]] == 1 and s.get("name") and s["name"].lower() not in l["name"].lower():
-            l.update(name=s["name"], orca_name=True)
+        name = l["sid"] and sessions[l["sid"]].get("name")
+        if name and on_session[l["sid"]] == 1 and name.lower() not in l["name"].lower():
+            l.update(name=name, orca_name=True)
 
     # Bold: a row the last report did not have, or whose status, progress, next, PR state or session changed.
     snap = {}
