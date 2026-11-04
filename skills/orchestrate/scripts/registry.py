@@ -287,6 +287,8 @@ STORES = [
     Store("closesetup", "S/close-setup/*.log", {"close_setup.output": CANONICAL},
           ("card:start_close_setup", "end_check:apply"), ("nobody",),
           rule="each background close-setup's output, ending in result: ok or failed"),
+    Store("goalinput", "S/goal-input/*.log", {"goal_input.output": CANONICAL}, ("card:start_goal_input",), ("nobody",),
+          rule="each worker's detached /goal input: typed once the first turn ended, or the warning with the manual command"),
     Store("reload", "S/reload-pending.json", {"sync.reload_pending": CANONICAL},
           ("sync:queue_reload", "sync:broadcast_locked"), ("fleet",), rule="reloads not yet sent, per terminal"),
     Store("restarts", "S/restarts.json", {"sync.stale_restart": CANONICAL}, ("sync:restart_stale",), ("sync",),
