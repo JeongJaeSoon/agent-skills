@@ -222,8 +222,8 @@ PR: ❗ 사람이 풀 것 · CI✗ CI 실패 · CI… CI 진행 · 7자리=머�
 | 🔴 | 정리 작업 | — | ███░░░░░ 1/3 | 재개·정… | 세션 없음 |
 | — | 검색 개선 | — | — | — | — |
 | 🔄 | └ 재색인 | [#88](https://example.test/88)⚠️ ❗리뷰 CI… | ██░░░░░░ 2/8 | 권한 · … | 작업 중 |
-| ⏳ | 분류 | — | — | 에이전… | 작업 중 |
-| ⏳ | └ rev-b 대기 | [#61](https://example.test/61)·#62 | — | ↓ 대기 | — |
+| ⏳ | 분류 | — | — | 에이전트… | 작업 중 |
+| ⏳ | └ rev-b 대… | [#61](https://example.test/61)·#62 | — | ↓ 대기 | — |
 
 - 🙋 2건 오너 리뷰 — 분야 로그·대시보드
 
@@ -567,7 +567,7 @@ assert "| 작업 |" in cut and "1. v1.7.2 prod 배포 (사람, 미정)" in cut a
 WIDE_PR = "acme/a-very-long-repository-name-for-the-table#123456"
 rok("stage", "add", "wider", "--title", "넓은 PR", "--pr", WIDE_PR)
 code, cut, err = orch_env(renv, "stage", "show")
-assert code == 0 and "- [" not in cut and "| acme/a-ver… |" in cut and "| acme/web#40 |" in cut and WIDE_PR not in cut, (code, err, cut)
+assert code == 0 and "- [" not in cut and "| acme/a-very-long-… |" in cut and "| acme/web#40 |" in cut and WIDE_PR not in cut, (code, err, cut)
 # A stage cell is never cut: a table its stage cells make too wide overflows whole, and show says so. The brief has
 # no table left to overflow.
 rok("stage", "set", "wide", "--col", "dev", "--mark", "partial", "--evidence", WIDE_EVIDENCE)

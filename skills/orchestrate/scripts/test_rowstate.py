@@ -79,7 +79,7 @@ assert row["머지 대기"] == "🔄" and row["결정 대기"] == "🙋" and row
 # The agent's next step on a ready PR it merges, from the evidence: no program verdict here, so 리뷰·머지, never 머지.
 assert "| 리뷰·머지 |" in text, text
 # A ❔ says it is the agent's to fix, in the row's own 다음 cell.
-assert "에이전트 조치 필요: 누구 대기인지 기록 없음" in text, text
+assert "에이전트 조치 필요: 누구 대기인지 기록 없음" in out["full"], out["full"]
 assert "선행 octo/app#1 머지 대기 → 선행 대기" in text, text  # the 보류 list says what it waits on
 # Every row once: in its table, where its 다음 cell points to the list that names it; the lists hold references only.
 assert out["duplicates"] == [] and out["missing"] == [], (out["duplicates"], out["missing"])
@@ -282,14 +282,14 @@ assert all(out["now_by_pr"].get(r["pr"]) in (None, out["states"][k]["status"])
            for k, r in board.read()["rows"].items() if k in out["states"] and r.get("pr")), out["now_by_pr"]
 # Placement counts the rows written, not the lines handed to the table: one the table lost is missing.
 real_fit = board.table_width.fit
-board.table_width.fit = lambda rows, *a, **kw: (lambda t, n: (t[:-1], n))(*real_fit(rows, *a, **kw))
+board.table_width.fit = lambda rows, *a, **kw: real_fit(rows, *a, **kw)[:-1]
 try:
     lost = board.render(now=T, fill=True, periodic=False)
 finally:
     board.table_width.fit = real_fit
 assert lost["missing"], lost["missing"]
 # ... and a row written in another's place (same count, same icon) is that other row twice, and this one missing.
-board.table_width.fit = lambda rows, *a, **kw: (lambda t, n: (t[:-1] + [t[-2]], n))(*real_fit(rows, *a, **kw))
+board.table_width.fit = lambda rows, *a, **kw: (lambda t: t[:-1] + [t[-2]])(real_fit(rows, *a, **kw))
 try:
     swapped = board.render(now=T, fill=True, periodic=False)
 finally:
