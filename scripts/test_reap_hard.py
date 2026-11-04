@@ -421,6 +421,14 @@ try:
     os.environ["PATH"] = f"{other}:{launchd_path}"  # installer shell that finds claude elsewhere: that dir is kept
     spec_path = rh.spec(900)["EnvironmentVariables"]["PATH"]
     assert shutil.which("claude", path=spec_path) == str(other / "claude"), spec_path
+    legacy = tmp / "legacy"  # an older claude sits beside orca; the one the installer's shell picked must still win
+    legacy.mkdir()
+    for n in ("orca", "claude"):
+        (legacy / n).write_text("#!/bin/sh\nexit 0\n")
+        (legacy / n).chmod(0o755)
+    os.environ["PATH"] = f"{other}:{legacy}:{launchd_path}"
+    spec_path = rh.spec(900)["EnvironmentVariables"]["PATH"]
+    assert shutil.which("claude", path=spec_path) == str(other / "claude"), spec_path
     (fake_home / ".local" / "bin" / "claude").unlink()
     os.environ["PATH"] = launchd_path
     assert str(fake_home / ".local" / "bin") not in rh.spec(900)["EnvironmentVariables"]["PATH"], "no claude there, no entry"

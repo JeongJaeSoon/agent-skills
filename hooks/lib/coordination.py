@@ -97,9 +97,10 @@ def expands(c, value):
         return True
     if not re.search(r"[*?\[{]", value):
         return False
-    token = re.search(r"--model(?:=|\s+)(\S+)", c.raw)
-    # Literal only when the whole word is one quoted string; any partly quoted word or glued redirection is unsure.
-    return not (token and re.fullmatch(r"""(['"])[^'"]*\1""", token.group(1)))
+    # The word that parsed to `value`, so a `--model` quoted inside --spec text is not mistaken for the flag. Literal
+    # only when it is one quoted string; a partly quoted word or a glued redirection is unsure.
+    tokens = [t for t in re.findall(r"--model(?:=|\s+)(\S+)", c.raw) if t.strip("'\"") == value]
+    return not (tokens and re.fullmatch(r"""(['"])[^'"]*\1""", tokens[-1]))
 
 
 def warn_only(cfg, reason):

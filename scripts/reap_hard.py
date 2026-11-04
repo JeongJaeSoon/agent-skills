@@ -638,7 +638,7 @@ def agent_target():
 
 def spec(interval):
     # `claude` is what patrol's `claude agents` needs; the installer's shell finds it where launchd's PATH does not.
-    tools = [os.path.dirname(t) for t in map(shutil.which, ("orca", "gh", "docker", "lsof", "claude")) if t]
+    tools = [os.path.dirname(t) for t in map(shutil.which, ("claude", "orca", "gh", "docker", "lsof")) if t]  # claude first: an older copy beside another tool must not win
     home_bin = pathlib.Path.home() / ".local" / "bin"  # the standard user install dir, if the shell did not have it
     extra = [str(home_bin)] if (home_bin / "claude").exists() else []
     path = ":".join(dict.fromkeys(tools + extra + ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin"]))
