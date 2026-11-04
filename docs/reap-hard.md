@@ -25,6 +25,10 @@ reap-hard는 이 네 가지를 우회하지 않고 대체한다. 등록 여부�
 | 스택 | compose가 만든 컨테이너의 작업 폴더(`com.docker.compose.project.working_dir`)가 모두 없거나 이번 회차에 닫은 카드다 | `docker compose -p P down`. `-v`·prune·볼륨·이미지 삭제는 하지 않는다 |
 | 리스너 | ppid 1인 node·bun·deno·vite가 TCP LISTEN 중이고, `idle_minutes`보다 오래됐고, cwd가 지워졌거나 cwd의 카드가 없다 | 그 pid에만 SIGTERM. pid와 시작 시각을 다시 확인한다 |
 | serve | `tailscale serve` 항목의 로컬 포트가 미리보기 범위(`serve_ranges`, 기본 4500–4599·32768–60999)에 있고 두 회차 연속 리스너가 없다 | `tailscale serve --https=<port> off`(또는 `--tcp`) |
+| 컨테이너 | 이름이 `reap.stopped_containers.prefixes`로 시작하고, compose가 만들지 않았고, `exited`·`created`이고, 멈춘 지 `reap.hours`(6시간)가 지났다 | `docker rm <전체 ID>`. `-f`·`-v` 없음 |
+| 볼륨 | `<namespace>.origin` 라벨 값이 `reap.labeled_volumes.origins`에 있고, 어떤 상태의 컨테이너도 참조하지 않고, 그 compose 프로젝트의 컨테이너가 없고, 만든 지 `reap.hours`가 지났다 | `docker volume rm <이름>`. `-f` 없음 |
+
+컨테이너와 볼륨 규칙은 설정 키가 없으면 꺼진다. 판정은 janitor의 `stopped-container`·`labeled-volume`과 같은 코드(`reap.leftovers`)이고, 상세와 라벨 규약은 `reap-resources` 스킬에 있다. 처리 직전에 모든 컨테이너를 다시 읽어 나이를 뺀 규칙을 다시 돌리고, 대상을 하나씩 전체 ID나 이름으로 지운다. prune, `down -v`, 필터·라벨·패턴 단위 삭제는 없다. 라벨 없는 볼륨은 어떤 규칙의 대상도 아니다.
 
 PR head와 HEAD가 같아야 한다는 조건은 리드가 머지된 브랜치 이름을 다시 쓰는 경우를 거른다. PR이 없는 카드는 닫지 않는다. 리드, 조사 카드, 막 만든 카드도 PR이 없기 때문이다. 카드 안에 살아 있는 Claude 세션이 리드나 오케스트레이터면, 얼마나 조용했든 닫지 않는다. 리드는 inbox를 기다리며 몇 시간씩 조용한 것이 정상이기 때문이다. 판별 근거는 둘 중 하나다. `--agent agent-skills:lead|orchestrator`(또는 `--name lead:<slug>`)로 시작했거나, 그 프로세스가 시작된 뒤 이 카드의 세션 기록을 쓴 세션이 `ROLE: lead|orchestrator`를 선언했다(reorient hook의 `roles/<session>.json`). 판별에 필요한 것을 못 읽어도 남긴다. 예를 들어 카드 안 프로세스의 행이 없거나, role 기록이 손상됐거나, role 기록이나 세션 기록 폴더에 권한이 없는 경우다. role 기록 파일이 아예 없는 경우만 "역할 없음"으로 본다. Orca에 하위 카드가 남아 있는 카드(리드)도 닫지 않는다.
 
@@ -38,7 +42,7 @@ idle 상태의 Claude 화면은 새 내용이 없어도 약 30분마다 터미�
 
 reap-hard, janitor의 `reap.py reap --plan`, `cards.py apply`, preview-watch의 serve off는 대상 하나를 처리하기 전에 같은 절차를 거친다.
 
-1. **대상 잠금.** `<state>/locks/` 아래 대상별 파일을 flock으로 잡는다. 기다리지 않는다. 다른 정리 주체가 잡고 있으면 그 대상은 이번에 건너뛴다. 여러 개를 잡을 때는 늘 카드 → compose 프로젝트 → 볼륨 → 프로세스 → serve 포트 → 그 밖의 순서로 잡아서 서로 기다리며 멈추지 않는다. 하나라도 못 잡으면 이미 잡은 것도 바로 놓는다.
+1. **대상 잠금.** `<state>/locks/` 아래 대상별 파일을 flock으로 잡는다. 기다리지 않는다. 다른 정리 주체가 잡고 있으면 그 대상은 이번에 건너뛴다. 여러 개를 잡을 때는 늘 카드 → compose 프로젝트 → 컨테이너 → 볼륨 → 프로세스 → serve 포트 → 그 밖의 순서로 잡아서 서로 기다리며 멈추지 않는다. 하나라도 못 잡으면 이미 잡은 것도 바로 놓는다.
 2. **소유권.** `<state>/sweep-owner.json`(`{"generation": N, "rules": {"<규칙>": "sweep"}, "interval": 초}`)을 다시 읽는다. 파일이 없으면 모든 규칙이 지금 주체의 것이다. sweep이 가진 규칙은 옛 주체가 건너뛴다. 단 `<state>/sweep-last.json`의 마지막 정상 회차가 세 주기보다 오래됐으면 옛 주체가 대신 처리하고 메모를 남긴다. 파일을 읽지 못하면 그 회차의 옛 주체는 아무것도 하지 않는다.
 3. **공통 검사.** 남길 이유만 찾고, 못 읽은 것도 남길 이유다. 프로젝트·포트·경로·pid는 보호 목록과 상시 서비스를 보고, 프로세스는 같은 pid·시작 시각인지와 트리에 사람이 띄운 셸이 있는지를 본다. 카드는 각 주체가 처리하면서 `cardguard.guard()`를 거친다. 이 검사는 순찰 판정(작업 중·사람 대기·Run 워커, `activity`의 parked·unknown), HEAD, 판정 뒤 열린 터미널, Orca agent-wait, 에이전트 화면의 질문이나 못 읽은 화면, 스스로 깨어날 장치를 건 세션을 본다. 카드 잠금은 `cardguard.card_lock()`과 같은 파일이다. 같은 프로세스가 이미 잡았으면 다시 잡지 않고 넘어간다.
 
@@ -107,7 +111,7 @@ bin/reap-hard install         # 메인 체크아웃에서. status, uninstall
 
 ## 설정
 
-`~/.claude/agent-skills.json`의 `"reap-hard"` 키에 둔다. 모두 선택이다.
+`~/.claude/agent-skills.json`의 `"reap-hard"` 키에 둔다. 모두 선택이다. 컨테이너·볼륨 규칙의 키(`reap.stopped_containers`, `reap.labeled_volumes`, `reap.hours`)는 janitor와 같이 `"reap"` 아래에 있다.
 
 ```json
 {"reap-hard": {"interval": 900, "idle_minutes": 30, "workspaces": "~/orca/workspaces",

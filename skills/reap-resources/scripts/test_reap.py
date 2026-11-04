@@ -1064,6 +1064,7 @@ c = lambda proj, svc, status, started, ports=None: {"Created": "2026-10-25T01:00
     "NetworkSettings": {"Ports": ports or {}}}
 fake = [c("s1", "web", "running", "2026-10-25T02:00:00.1Z", {"80/tcp": [{"HostIp": "127.0.0.1", "HostPort": "4501"}], "81/tcp": None}),
         c("s1", "init", "exited", "2026-10-25T01:30:00Z"), c("w1", None, "exited", "2026-10-25T01:00:00Z")]
+fake = [{**x, "Id": i} for i, x in zip("abc", fake)]
 saved = reap.run, reap.shutil.which
 reap.shutil.which = lambda name: "/bin/" + name
 reap.run = lambda cmd, cwd=None, check=True: "a\nb\nc\n" if cmd[1] == "ps" else json.dumps(fake)
@@ -1166,6 +1167,207 @@ reap.run = lambda cmd, cwd=None, check=True: None
 notes = []
 assert reap.stack_volume_scan(SPEC, 6, notes) == [] and "읽지 못함" in notes[0], notes
 reap.run, reap.shutil.which = saved
+
+# stopped-container: a stopped container outside compose under a configured name prefix. Unset is off.
+assert "stopped-container" in reap.SCHEDULED and "stopped-container" not in reap.LEDGER_KINDS
+assert "labeled-volume" in reap.SCHEDULED and "labeled-volume" not in reap.LEDGER_KINDS
+assert reap.stopped_container_spec({}) is None and reap.labeled_volume_spec({}) is None
+for bad in ([], "x", {"prefixes": []}, {"prefixes": ["ab-"]}, {"prefixes": ["example"]}, {"prefixes": ["example-*"]},
+            {"prefixes": ["example-"], "protect": "x"}):
+    assert bad == [] or isinstance(reap.stopped_container_spec({"stopped_containers": bad}), str), bad
+CSPEC = reap.stopped_container_spec({"stopped_containers": {"prefixes": ["example-verify-"], "protect": ["example-verify-keep"]}})
+T0, T1 = "2026-10-25T00:00:00.123456789Z", "2026-10-25T01:00:00Z"
+ZERO = "0001-01-01T00:00:00Z"
+AGO = reap.docker_ts(T1) + 7 * H
+
+
+def ctr(name, status="exited", labels=None, finished=T1, created=T0, ports=(), mounts=()):
+    return {"Id": name + "-id", "Name": "/" + name, "Created": created, "State": {"Status": status, "FinishedAt": finished},
+            "Config": {"Labels": labels or {}}, "HostConfig": {"PortBindings": {f"{p}/tcp": [{"HostPort": str(p)}] for p in ports}},
+            "Mounts": [{"Type": "volume", "Name": m} for m in mounts]}
+
+
+PROJ = reap.COMPOSE_PROJECT
+fleet = [ctr("example-verify-1"), ctr("example-verify-new", finished="2026-10-25T07:00:00Z"),
+         ctr("example-verify-run", "running"), ctr("example-verify-pause", "paused"), ctr("example-verify-dead", "dead"),
+         ctr("example-verify-made", "created", finished=ZERO), ctr("example-verify-keep"),
+         ctr("example-verify-held"), ctr("example-verify-port", ports=(4999,)),
+         ctr("example-verify-zero", finished=ZERO),
+         ctr("example-verify-compose", labels={PROJ: "stack", "com.docker.compose.oneoff": "False"}),
+         ctr("example-verify-copied", labels={PROJ: "stack"}), ctr("example-web", "running", labels={PROJ: "stack"}),
+         ctr("example-verify-lone", labels={PROJ: "gone"}), ctr("unrelated")]
+rows = [reap.container_row(c) for c in fleet]
+got = {i["name"]: (i["target"], i["why"]) for i in
+       reap.judge_stopped_containers(rows, CSPEC, 6, AGO, keep={"example-verify-held"}, ports={4999})}
+assert "unrelated" not in got and "example-web" not in got, got
+assert sorted(k for k, v in got.items() if v[0]) == ["example-verify-1", "example-verify-lone", "example-verify-made"], got
+assert "6시간 미만" in got["example-verify-new"][1] and "멈추지 않음(running)" in got["example-verify-run"][1], got
+assert "paused" in got["example-verify-pause"][1] and "dead" in got["example-verify-dead"][1], got
+assert got["example-verify-keep"][1] == got["example-verify-held"][1] == "보호 목록·상시 서비스", got
+assert got["example-verify-port"][1] == "보호 포트 4999" and "시각" in got["example-verify-zero"][1], got
+assert "compose 가 만든" in got["example-verify-compose"][1] and "아직 돎" in got["example-verify-copied"][1], got
+
+# labeled-volume: the label is the proof; no label is never listed, however unreferenced.
+KEY = "example.agent.origin"
+for bad in ({"namespace": "Bad Space", "origins": ["verify-example"]}, {"namespace": "com.docker.x", "origins": ["a"]},
+            {"namespace": "com.docker", "origins": ["a"]}, {"namespace": "example.agent"},
+            {"namespace": "example.agent", "origins": []}, {"namespace": "example.agent", "origins": ["a"], "protect": 1}):
+    assert isinstance(reap.labeled_volume_spec({"labeled_volumes": bad}), str), bad
+LV = {"namespace": "example.agent", "origins": ["verify-example"], "protect": ["example-held"]}
+VSPEC = reap.labeled_volume_spec({"labeled_volumes": LV})
+assert VSPEC[0] == KEY and reap.origin_key({"labeled_volumes": {"namespace": "example.agent"}}) == KEY
+assert reap.origin_key({}) is None
+
+
+def vol(name, origin="verify-example", project=None, created=NOW - 10 * H):
+    labels = {KEY: origin} if origin else {}
+    return {"name": name, "labels": {**labels, **({PROJ: project} if project else {})}, "created": created}
+
+
+vols = [vol("a" * 64), vol("example_db", project="done-stack"), vol("no-label", origin=None), vol("other", origin="verify-other"),
+        vol("used"), vol("used-stopped"), vol("young", created=NOW - H), vol("held", project="example-held"),
+        vol("kept", project="always-on"), vol("sibling", project="alive-stack")]
+rows = [reap.container_row(c) for c in (ctr("c1", "running", mounts=("used",)), ctr("c2", mounts=("used-stopped",)),
+                                        ctr("c3", labels={PROJ: "alive-stack"}))]
+got = {i["name"]: (i["target"], i["why"]) for i in reap.judge_labeled_volumes(vols, rows, VSPEC, 6, NOW, keep={"always-on"})}
+assert sorted(k for k, v in got.items() if v[0]) == ["a" * 64, "example_db"], got
+assert "no-label" not in got and "보고만" in got["other"][1], got
+assert got["used"][1] == got["used-stopped"][1] == "컨테이너가 참조함(멈춘 것 포함)", got
+assert got["held"][1] == got["kept"][1] == "보호 목록·상시 서비스" and "미만" in got["young"][1], got
+assert "컨테이너가 남은 스택" in got["sibling"][1], got
+
+# The whole path with Docker replaced: every delete names one exact id or name, and is read again first.
+calls, docker = [], {"containers": [ctr("example-verify-1")], "volumes": [vol("example_db", project="done-stack")]}
+
+
+def docker_run(cmd, cwd=None, check=True, env=None, timeout=None):
+    calls.append(cmd)
+    if cmd[:2] == ["docker", "ps"]:
+        return "\n".join(c["Id"] for c in docker["containers"]) + "\n"
+    if cmd[:2] == ["docker", "inspect"]:
+        return json.dumps([c for c in docker["containers"] if c["Id"] in cmd[2:]])
+    if cmd[:3] == ["docker", "volume", "ls"]:
+        return "\n".join(v["name"] for v in docker["volumes"]) + "\n"
+    if cmd[:3] == ["docker", "volume", "inspect"]:
+        return json.dumps([{"Name": v["name"], "Labels": v["labels"], "CreatedAt": "2026-10-25T00:00:00Z"}
+                           for v in docker["volumes"] if v["name"] in cmd[3:]])
+    return ""
+
+
+saved = reap.run, reap.shutil.which, reap.config
+reap.run, reap.shutil.which = docker_run, lambda name: "/bin/" + name
+import guard  # noqa: E402
+saved_guard = guard.protect_file, guard.always_on
+protect_dir = tempfile.TemporaryDirectory()
+protect_txt = pathlib.Path(protect_dir.name, "protect.txt")
+guard.protect_file, guard.always_on = lambda: str(protect_txt), set
+CFG = {"stopped_containers": {"prefixes": ["example-verify-"]}, "labeled_volumes": LV}
+reap.config = lambda: CFG
+docker["volumes"][0]["created"] = reap.parse_ts("2026-10-25T00:00:00Z")
+LATE = docker["volumes"][0]["created"] + 7 * H
+notes = []
+got = reap.leftovers(CFG, 6, LATE, notes)
+assert [(i["kind"], i["target"]) for i in got] == [("stopped-container", True), ("labeled-volume", True)] and not notes, (got, notes)
+assert ["docker", "volume", "ls", "-q", "--filter", f"label={KEY}"] in calls, calls
+assert reap.janitor_scan({"stopped-container", "labeled-volume"}, [], [], [], pr_state=lambda r: None, hours=6, now=LATE,
+                         cfg={}) == []  # unset: nothing is read or listed
+box, shelf = got
+calls.clear()
+assert reap.act(box, []) == "docker rm example-verify-1-id (example-verify-1)", calls
+assert calls[-1] == ["docker", "rm", "example-verify-1-id"], calls
+calls.clear()
+assert reap.act(shelf, []) == "docker volume rm example_db", calls
+assert calls[-1] == ["docker", "volume", "rm", "example_db"], calls
+# What changed between the scan and the rm keeps the target; nothing is removed then.
+for change in ("running", "again", "gone"):
+    was = docker["containers"]
+    docker["containers"] = {"running": [ctr("example-verify-1", "running")], "gone": [],
+                            "again": [ctr("example-verify-1", finished="2026-10-25T05:00:00Z")]}[change]
+    calls.clear()
+    assert reap.act(box, []).startswith("건너뜀:") and calls and not any(c[:2] == ["docker", "rm"] for c in calls), (change, calls)
+    docker["containers"] = was
+for change in (ctr("late", mounts=("example_db",)), ctr("late", labels={PROJ: "done-stack"})):
+    was = docker["containers"]
+    docker["containers"] = was + [change]  # a new container of that stack keeps the volume even before it mounts it
+    calls.clear()
+    assert reap.act(shelf, []).startswith("건너뜀:") and not any(c[:3] == ["docker", "volume", "rm"] for c in calls), calls
+    docker["containers"] = was
+assert reap.act({**shelf, "created": 1.0}, []).startswith("건너뜀: 다시 만들어졌"), shelf
+# A protect line added after the scan, or a list that can no longer be read, keeps the target. reap-hard requires the file.
+for line in ("project example-verify-1", "project done-stack", "project example_db"):
+    protect_txt.write_text(line + "\n")
+    wanted = shelf if line != "project example-verify-1" else box
+    calls.clear()
+    assert reap.act(wanted, []) == "건너뜀: 보호 목록·상시 서비스", (line, calls)
+    assert not any(c[:2] == ["docker", "rm"] or c[:3] == ["docker", "volume", "rm"] for c in calls), calls
+protect_txt.write_text("not a line\n")
+calls.clear()
+assert reap.act(box, []).startswith("건너뜀: 보호 목록을 다시 읽지 못함") and reap.act(shelf, []).startswith("건너뜀: 보호 목록을 다시 읽지 못함")
+assert not calls, calls
+protect_txt.unlink()
+assert reap.remove_leftover(box, CFG, str(protect_txt)).startswith("건너뜀: 보호 목록을 다시 읽지 못함")
+assert not any(c[:2] == ["docker", "rm"] for c in calls), calls
+reap.config = lambda: {}
+assert reap.act(box, []).startswith("건너뜀: reap.stopped_containers") and reap.act(shelf, []).startswith("건너뜀: reap.labeled_volumes")
+reap.config = lambda: CFG
+# Unreadable docker lists nothing and removes nothing.
+reap.run = lambda cmd, cwd=None, check=True: None
+notes = []
+assert reap.leftovers(CFG, 6, LATE, notes) == [] and "읽지 못함" in notes[0], notes
+assert reap.act(box, []).startswith("건너뜀: 컨테이너를 다시 읽지 못함")
+reap.run = docker_run
+# A reply that succeeded but is not whole reads as unreadable, never as no reference: nothing is a target.
+whole = ctr("example-verify-1")
+for reply in ("[]", "{}", "not json", json.dumps([{"Id": "other"}]),
+              *(json.dumps([{k: v for k, v in whole.items() if k != gap}])
+                for gap in ("Id", "Name", "State", "Config", "HostConfig", "Mounts")),
+              json.dumps([{**whole, "Config": {}}]), json.dumps([{**whole, "HostConfig": {}}]),
+              json.dumps([{**whole, "Mounts": [{"Name": "example_db"}]}])):
+    reap.run = lambda cmd, cwd=None, check=True, env=None, timeout=None: reply if cmd[:2] == ["docker", "inspect"] else docker_run(cmd)
+    notes = []
+    assert reap.leftovers(CFG, 6, LATE, notes) == [] and "읽지 못함" in notes[0], (reply, notes)
+    assert reap.act(shelf, []).startswith("건너뜀: 컨테이너를 다시 읽지 못함"), reply
+    assert reap.unlabeled_volumes() is None, reply
+for reply in ("[]", "not json", json.dumps([{"Name": "example_db"}]), json.dumps([{"Name": "other", "CreatedAt": "2026-10-25T00:00:00Z"}])):
+    reap.run = lambda cmd, cwd=None, check=True, env=None, timeout=None: reply if cmd[:3] == ["docker", "volume", "inspect"] else docker_run(cmd)
+    notes = []
+    assert [i["kind"] for i in reap.leftovers(CFG, 6, LATE, notes)] == ["stopped-container"] and "볼륨을 읽지 못함" in notes[0], (reply, notes)
+    assert reap.act(shelf, []).startswith("건너뜀: 볼륨을 다시 읽지 못함"), reply
+reap.run = docker_run
+
+# No bulk delete anywhere: the source names none, and a full path above only ever ran single-target removals.
+SRC = pathlib.Path(reap.__file__).read_text()
+assert not re.search(r'"docker", *"(system|container|volume|image)", *"prune"|"rm", *"-f"|"down", *"-v"', SRC), "bulk delete in reap.py"
+
+# The inventory is read only: unlabeled anonymous volumes are counted and never reach a plan.
+ANON = ["b" * 64, "c" * 64, "d" * 64]
+docker["volumes"] = [vol(ANON[0], origin=None), vol(ANON[1], origin=None), {**vol(ANON[2]), "labels": {KEY: "verify-example"}},
+                     vol("named", origin=None)]
+docker["containers"] = [ctr("user", mounts=(ANON[1],))]
+calls.clear()
+got = reap.unlabeled_volumes()
+assert got["total"] == 2 and got["referenced"] == 1 and [v["name"] for v in got["volumes"]] == [ANON[0]], got
+assert all(c[:3] in (["docker", "volume", "ls"], ["docker", "volume", "inspect"]) or c[:2] in (["docker", "ps"], ["docker", "inspect"])
+           for c in calls), calls
+assert not [i for i in reap.leftovers(CFG, 6, LATE, []) if i["kind"] == "labeled-volume" and i["name"] == ANON[0]]
+reap.run = lambda cmd, cwd=None, check=True: None
+assert reap.unlabeled_volumes() is None
+reap.run, reap.shutil.which, reap.config = saved
+guard.protect_file, guard.always_on = saved_guard
+protect_dir.cleanup()
+
+with tempfile.TemporaryDirectory() as tmp:
+    cli = lambda *a: subprocess.run([sys.executable, reap.__file__, *a], capture_output=True, text=True,
+                                    env={**os.environ, "HOME": tmp, "PATH": tmp})
+    got = cli("inventory")
+    assert got.returncode != 0, got
+    assert cli("inventory", "--unlabeled-volumes").returncode != 0  # no docker on this PATH
+    assert cli("origin-label", "verify-example").returncode != 0  # no namespace set
+    os.makedirs(os.path.join(tmp, ".claude"))
+    pathlib.Path(tmp, ".claude", "agent-skills.json").write_text(json.dumps({"reap": {"labeled_volumes": LV}}))
+    got = cli("origin-label", "verify-example")
+    assert got.returncode == 0 and got.stdout.strip() == f"{KEY}=verify-example", got
+    assert cli("origin-label", "bad value").returncode != 0
 
 # ledger add: a keep needs a deadline, a pid is a number; folded lines keep the owner link.
 with tempfile.TemporaryDirectory() as tmp:
