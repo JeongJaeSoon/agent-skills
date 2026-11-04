@@ -615,7 +615,8 @@ def refuse_codex(brief, opts):
     """Refuse(2) for a form Codex does not run. It comes before the brief is rewritten and the Run is checked, so a
     refused start changes nothing and says one thing."""
     raw = text = pathlib.Path(brief).expanduser().read_text()
-    if not opts.get("--no-forbidden"):  # the refresh can drop a row between the markers and split one from its head
+    # create_locked's condition: the refresh can drop a row between the markers and split one from its head
+    if not opts.get("--no-forbidden") and not guard.is_lead(raw):
         try:
             text = place_forbidden(raw, forbidden_paragraph())[0]
         except (OSError, ValueError):

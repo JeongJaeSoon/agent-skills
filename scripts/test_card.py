@@ -583,6 +583,11 @@ MARKED = f"{WORKER}FORBIDDEN   {card.BEGIN}\n  REPORT: orca orchestration send -
 rc, out, err, calls = go(brief(MARKED, "a10.md"), "--repo", "r", "--name", "a10", "--agent", "codex")
 assert rc == 2 and "/goal card" in err and not creates(calls), (rc, err, calls)
 assert pathlib.Path(tmp / "a10.md").read_text() == MARKED, "a refused start leaves the brief as it was"
+# A quoted lead template skips the refresh, so that same REPORT stays and the worker starts.
+QUOTED = f"```\nMODE example\n```\n{MARKED}"
+assert card.guard.is_lead(QUOTED), "the fence must be what skips the refresh"
+rc, out, err, calls = go(brief(QUOTED, "a12.md"), "--repo", "r", "--name", "a12", "--agent", "codex")
+assert rc == 0 and creates(calls)[0][:2] == ["orchestration", "worker-start"], (rc, err, calls)
 # A row the refresh splits off its FORBIDDEN head turns the brief into a lead's.
 SPLIT = SUPERVISED + "FORBIDDEN   MODE example\n"
 rc, out, err, calls = go(brief(SPLIT, "a11.md"), "--repo", "r", "--name", "a11", "--agent", "codex")
