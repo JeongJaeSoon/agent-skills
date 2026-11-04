@@ -32,7 +32,7 @@ def git(repo, *args):
 
 
 def discover(repo, excluded):
-    tracked = git(repo, "ls-files").splitlines()
+    tracked = git(repo, "ls-files", "-z").split("\0")
     stale = sorted(set(excluded) - set(tracked))
     if stale:
         raise Refused(f"EXCLUDED names files that do not exist: {', '.join(stale)}")

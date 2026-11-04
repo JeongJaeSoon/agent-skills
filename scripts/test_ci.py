@@ -51,6 +51,10 @@ class CiTests(Repo):
         self.add("test_ok.py", "\n")
         self.assertEqual(self.run_all()[0], 0)
 
+    def test_a_path_git_would_quote_still_runs(self):
+        self.add("sub dir/테스트/test_quoted.py", "raise SystemExit(1)\n")
+        self.assertEqual(self.run_all()[0], 1)
+
     def test_an_excluded_file_does_not_run_and_is_printed_with_its_reason(self):
         self.add("test_ok.py", "\n")
         self.add("test_mac.py", "raise SystemExit(1)\n")
@@ -161,8 +165,9 @@ class Scanner(Repo):
                               capture_output=True, text=True).stdout.strip()
         self.assertEqual(self.scan(TERM, BASE_SHA=head, HEAD_SHA=head).returncode, 0)
 
-    def test_a_new_branch_push_reads_the_last_commit(self):
+    def test_a_new_branch_push_reads_its_whole_history(self):
         self.add("a.md", "x\n", f"mentions {TERM}")
+        self.add("b.md", "y\n", "clean")
         self.assertEqual(self.scan(TERM, BASE_SHA="0" * 40, HEAD_SHA="HEAD").returncode, 1)
 
     def test_a_hit_in_the_pr_text_fails(self):

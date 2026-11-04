@@ -40,8 +40,8 @@ def count_tree(terms):
 
 def commit_messages():
     base, head = os.environ.get("BASE_SHA", ""), os.environ.get("HEAD_SHA", "") or "HEAD"
-    span = ["-1", head] if not base or ZERO_SHA.match(base) else [f"{base}..{head}"]
-    p = child(["git", "log", "--format=%B", *span])
+    span = head if not base or ZERO_SHA.match(base) else f"{base}..{head}"
+    p = child(["git", "log", "--format=%B", span])
     if p.returncode:
         raise Failed("could not read the commit range")
     return p.stdout
