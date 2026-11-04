@@ -624,9 +624,9 @@ dash.HEALTH["ticks"] = {"fast": age(6)}
 assert dash.health_view()["stale"] is True; dash.check_loops(); assert not exits, "stale in health, but a slow round is not restarted yet"
 dash.HEALTH["ticks"] = {"fast": age(16)}
 dash.check_loops(); assert exits == [1], "a loop silent for 15 minutes restarts the server"
-dash.HEALTH.update(broken="abc", disk_version="abc")
-dash.check_loops(); assert exits == [1], "code on disk that does not import is not restarted into"
-dash.HEALTH.update(broken=None)
+dash.HEALTH.update(stale=True)
+dash.check_loops(); assert exits == [1], "other code on disk: check_code restarts it, after importing it"
+dash.HEALTH.update(stale=False)
 dash.under_agent = lambda: False
 dash.check_loops(); assert exits == [1], "outside launchd it only reports"
 dash.HEALTH.clear(); dash.HEALTH.update(old_health); dash.under_agent, dash.restart = old_agent, old_restart
@@ -634,11 +634,14 @@ dash.HEALTH.clear(); dash.HEALTH.update(old_health); dash.under_agent, dash.rest
 # A bad-ts event in the ledger does not stop the compare warm-up from asking about the good ones.
 calls.clear()
 dash.sh = lambda cmd, timeout=45: (calls.append(cmd), {"s": "behind"})[1]
-(store / H / "ledger.jsonl").write_text("".join(json.dumps(r) + "\n" for r in two + [{"ts": "not a time", "ev": "main_green", "sha": "s99"}]))
+(store / H / "ledger.jsonl").write_text("".join(json.dumps(r) + "\n" for r in
+                                               [{"ts": "not a time", "ev": "main_green", "sha": "s99"}] + two))
+dash._CONTAINS.clear(); dash._cache_state.update(loaded=False, dirty=False); dash.cache_path().unlink(missing_ok=True)
 dash.warm_contains(store / H, {"repo": "acme/app", "created_at": ago(900)})
 dash.sh = real_sh
+pairs_asked = sorted(c[2].rsplit("/", 1)[1] for c in calls if c[2].startswith("repos/"))
 dash._CONTAINS.clear()
-assert calls, "the warm-up asked nothing because of one bad ts"
+assert pairs_asked == ["s20...s22", "s20...s23", "s21...s22", "s21...s23"], f"every good pair is asked: {pairs_asked}"
 
 # Calls per collect are bounded, answers outlive a restart, and a local clone answers without GitHub.
 CP = "cap-test"

@@ -1645,8 +1645,8 @@ def health_view():
 def check_loops():
     """The fast loop stopped finishing rounds (a call that never returns): under launchd, exit so it starts again,
     instead of waiting for someone to run `ensure`. Elsewhere /api/health reports stale and the banner says what to run."""
-    if HEALTH.get("broken") and HEALTH.get("broken") == HEALTH.get("disk_version"):
-        return  # the code on disk does not import: a restart would only leave nothing serving
+    if HEALTH.get("stale"):
+        return  # other code is on disk: check_code restarts into it, but only after it has imported it
     if not loops_alive(HEALTH, RESTART_STALE) and under_agent():
         log(f"fast loop silent since {HEALTH['ticks'].get('fast')}; exiting so launchd starts it again")
         restart()
