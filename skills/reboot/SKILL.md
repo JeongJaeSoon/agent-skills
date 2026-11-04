@@ -28,7 +28,7 @@ It only reads: Orca's terminal, Run and worker records, this session's process t
 - **The tab title,** the orchestrator's only (`references/top-level.md`, its opening paragraph).
 - **Waits,** counted against `orchestrate` core rule 6. Start a missing one under `run_in_background`. Stop an extra one with `TaskStop` on the background task that started it; the pids in the line only tell them apart.
 - **A worker that lost its terminal.** The line prints the stop and retry pair from `orchestrate` Drain (the `outcome_unknown` line), with the model Orca recorded; when it recorded none, the line says where to find it. A worker under another lead gets no such pair: the line names that lead, which restarts its own worker (`orchestrate` core rule 4). When Orca refuses the retry, follow `orca skills get orchestration --reference recovery-and-cleanup`.
-- **A held heavy start** (`reap-resources` "Pressure"). `waiting`: its Monitor on `queue wait` again. `gave_up`: it never ran, and its brief's rule for a held start decides, otherwise report it to whoever gave the work. `retrying` or `failed`: the retry was started, so find its result before running anything again.
+- **A held heavy start** (`reap-resources` "Pressure"). `waiting`: its Monitor on `queue wait` again. `gave_up`: it never ran, and its brief's rule for a held start decides, otherwise report it to whoever gave the work. `retrying` or `failed`: the retry was started, so find its result before running anything again. A `gave_up` or `failed` entry leaves the check `rowstate.QUEUE_ENDED_H` hours after it ended, by the rule its row's ❔ follows (`rowstate.queue_over`); `pressure.py queue` still lists it.
 
 ## 3. What the check cannot see
 
