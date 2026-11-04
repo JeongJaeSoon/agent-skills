@@ -224,16 +224,17 @@ def run_list(call, error=RuntimeError):
 SETTLED = ("completed", "failed", "abandoned")  # dispatch statuses whose worker has stopped
 
 
-def terminal_dispatch(call, handle):
+def terminal_dispatch(call, handle, settled=False):
     """The Dispatch of the terminal `handle`, else None. A person typing into a worker's terminal, or keeping it open,
     moves its Dispatch from `active` to `retained` and it is still this terminal's. A settled retained row is not: Orca
     keeps those for a terminal it reused or that stayed open, and reading one as current would let a finished Dispatch
     vouch for closing the terminal or name the Run of a new card. Active goes first for the same reuse; a settled active
-    row counts, since a worker that just reported still has to find itself. worker-list is newest first."""
+    row counts, since a worker that just reported still has to find itself. worker-list is newest first.
+    settled=True counts settled retained rows too, for a caller asking whether this terminal was dispatched at all."""
     for state in ("active", "retained"):
         for rows, _, _ in worker_list(call, "--terminal-state", state, "--limit", "100"):
-            mine = next((w for w in rows if worker_terminal(w) == handle
-                         and (state == "active" or w.get("dispatchStatus") not in SETTLED)), None)
+            mine = next((w for w in rows if worker_terminal(w) == handle and
+                         (settled or state == "active" or w.get("dispatchStatus") not in SETTLED)), None)
             if mine:
                 return mine
     return None
