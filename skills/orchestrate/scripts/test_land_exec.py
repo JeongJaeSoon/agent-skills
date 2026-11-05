@@ -261,6 +261,16 @@ class LandExec(unittest.TestCase):
         self.round()
         self.settled(row, "refused", 3, "conflicts")
 
+    def test_blocked_by_a_required_review_waits_then_lands_once_approved(self):
+        self.edit_pr(mergeStateStatus="BLOCKED")
+        row = self.request()
+        self.round()
+        self.assertIn("required review", self.settled(row, "queued", None)["reason"])
+        self.assertEqual(inbox(row["id"]), [], "a wait is not a refusal")
+        self.edit_pr(mergeStateStatus="CLEAN")  # someone approved
+        self.round()
+        self.settled(row, "merged", 0)
+
     def test_human_gate_program(self):
         self.p.update(lambda c: c.update(merge_policy="human-gate"))
         row = self.request()

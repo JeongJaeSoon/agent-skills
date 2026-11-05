@@ -147,6 +147,11 @@ class Round:
         if mss == "BEHIND":
             return settle("refused", 3, f"#{pr} is behind a base that requires up-to-date branches:"
                                          f" {prog.update_advice([pr], repo)}, then land again")
+        if mss == "BLOCKED":
+            # A required review or check still missing can come later (a person approves, a check finishes); the
+            # request waits for it until max_wait_hours instead of making the worker ask again.
+            return settle("queued", None, f"GitHub blocks #{pr} (a required review or check is missing):"
+                                          " waiting; it lands once GitHub allows it")
         try:
             code, msg = prog.attempt(p, pr, row["klass"], expect=sha)
         except SystemExit as e:
