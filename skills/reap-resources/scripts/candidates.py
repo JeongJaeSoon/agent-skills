@@ -12,7 +12,7 @@ A candidate keeps the sources it relied on in `needs`; one whose source did not 
 `reports` instead. A scan that returned but noted an unreadable part fails that part's source. Kinds that only a
 model closed today (chrome-window) and kinds with no rule go to `reports` too.
 """
-import copy, json, pathlib, sys, threading, time
+import contextlib, copy, json, os, pathlib, signal, subprocess, sys, threading, time
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -33,8 +33,38 @@ IDENTITY = tuple(dict.fromkeys(reap.ACT_IDENTITY + ("verdict", "close")))
 # How today's scans word a part they could not read.
 UNREAD = ("읽지 못함", "실패", "응답 없음", "not read", "timed out")
 RUN_TIMEOUT_S = 60
-CUT_MARGIN_S = 5  # past a command's own timeout, for its thread to return once the round is cut
+CUT_GRACE_S = 1  # a cut thread's own way out before its commands are killed
+CUT_WAIT_S = 10  # the most a cut adds to the round
 HARD_SOURCES = ("protect", "reap_hard_cards", "reap_hard_rest")
+
+
+def children():
+    """PIDs of this process's children in its own process group: a detached spawn (start_new_session) is not one."""
+    try:
+        out = subprocess.run(["pgrep", "-P", str(os.getpid())], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return set()
+    pids = set()
+    for pid in map(int, out.split()):
+        with contextlib.suppress(OSError):
+            if os.getpgid(pid) == os.getpgrp():
+                pids.add(pid)
+    return pids
+
+
+def stop_children(threads, before):
+    """Cut scan threads: start nothing more on them, and after CUT_GRACE_S kill by PID each child started since the
+    scans began until they return, for at most CUT_WAIT_S. One still running after that stays cancelled."""
+    reap.CANCELLED.update(th.ident for th in threads)
+    start = time.monotonic()
+    while any(th.is_alive() for th in threads) and time.monotonic() - start < CUT_WAIT_S:
+        if time.monotonic() - start >= CUT_GRACE_S:
+            for pid in children() - before:
+                with contextlib.suppress(ProcessLookupError, PermissionError):
+                    os.kill(pid, signal.SIGKILL)
+        for th in threads:
+            th.join(0.1)
+    reap.CANCELLED.difference_update(th.ident for th in threads if not th.is_alive())
 
 
 def scan_kinds(cfg, pressure_kinds, state_dir, now):
@@ -193,10 +223,12 @@ def collect(sources, now=None, reap_scan=None, hard=None, pressure_kinds=None, s
     # The two scans wait on gh, git, lsof and orca, so they run side by side. Each part writes only its own dict, and
     # a part is merged only once its thread has finished: a round cut short (patrol's SIGALRM, which only this thread
     # receives) merges the finished part and marks the other's sources timed out. A signal cannot stop a command a
-    # thread waits on, so the cut sets reap.CANCEL (no new command) and waits for the running one to end within its
-    # own timeout: none is left behind when the process exits.
+    # thread waits on, and not every scan path goes through reap.run, so the cut marks the thread cancelled (reap.run
+    # and cards.sh start nothing more on it) and kills the commands it started (stop_children): none is left behind
+    # when the process exits.
     parts = [dict(fn=fn, owns=owns, sources={}, timings=Timings(), notes=[], cands=[], reports=[], alerts=[])
              for fn, owns in ((reap_part, ("reap_scan",)), (hard_part, HARD_SOURCES))]
+    before = children()
     threads = [threading.Thread(target=p["fn"], args=(p,), daemon=True) for p in parts]
     for th in threads:
         th.start()
@@ -228,13 +260,7 @@ def collect(sources, now=None, reap_scan=None, hard=None, pressure_kinds=None, s
     finally:
         cut.update(n for n, th in enumerate(threads) if th.is_alive())
         if cut:
-            reap.CANCEL.set()
-            until = time.monotonic() + (reap.RUN_TIMEOUT or RUN_TIMEOUT_S) + CUT_MARGIN_S
-            try:
-                for n in cut:
-                    threads[n].join(max(0.0, until - time.monotonic()))
-            finally:
-                reap.CANCEL.clear()
+            stop_children([threads[n] for n in cut], before)
         merge(True)
     for c in cands:
         missing = [n for n in c["needs"] if src.get(n) != "ok"]

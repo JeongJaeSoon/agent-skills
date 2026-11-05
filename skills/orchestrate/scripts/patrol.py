@@ -160,12 +160,14 @@ def card_name(path):
 
 
 def pr_open(facts, path):
-    """The card's PR (Orca's linkedPR, which takes a PR seen on its branch too) is open, or its state unread."""
-    for s in facts.get("sessions") or ():
-        if s.get("path") == path and (key := (s.get("linked_pr") or {}).get("key")):
+    """The card's PR (Orca's linkedPR, which takes a PR seen on its branch too) is open, or unknown: its state unread,
+    or no session read for the card (the collector stale or failed). False only for a read session with no PR."""
+    sessions = [s for s in facts.get("sessions") or () if s.get("path") == path]
+    for s in sessions:
+        if key := (s.get("linked_pr") or {}).get("key"):
             state = ((facts.get("prs") or {}).get(key) or {}).get("state")
             return state is None or str(state).upper() == "OPEN"
-    return False
+    return not sessions
 
 
 transcript_tail = cardguard.transcript_tail
@@ -754,6 +756,8 @@ def standing(rows=None):
             out[r["id"]] = r
         elif r.get("op") in ("owner", "ack") and r["id"] in out:
             out[r["id"]] = {**out[r["id"]], **({"owner": r.get("owner")} if r["op"] == "owner" else {"acked": True})}
+        elif r.get("op") == "pr" and r["id"] in out:
+            out[r["id"]] = {**out[r["id"]], "pr_open": r.get("pr_open")}
         elif r.get("op") == "clear":
             out.pop(r["id"], None)
     return out
@@ -797,10 +801,13 @@ def write_round(findings, verdicts, dry, now, failed=()):
     new = [f for f in findings if f["id"] not in live]
     gone = [r for i, r in live.items() if i not in ids and not DEPENDS.get(r.get("code"), set()) & set(failed)]
     moved = [f for f in findings if f["id"] in live and live[f["id"]].get("owner") != f.get("owner")]
+    linked = [f for f in findings if "pr_open" in f and f["id"] in live and live[f["id"]].get("pr_open") != f["pr_open"]]
     if dry:
         return new, gone
     for f in moved:
         fleet.append_line(LOG, {"op": "owner", "id": f["id"], "owner": f.get("owner"), "at": at})
+    for f in linked:  # a PR linked after the finding was held: pending_lines stops holding it
+        fleet.append_line(LOG, {"op": "pr", "id": f["id"], "pr_open": f["pr_open"], "at": at})
     for f in new:
         fleet.append_line(LOG, {"op": "found", **f, "title": fleet.mask(f["title"], 300), "detected_at": at})
     for r in gone:

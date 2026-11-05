@@ -428,12 +428,12 @@ SHELL_JOBS = (
              ["python3", str(HERE / "reap_hard.py"), "run"], reap_hard_interval, False),
     ShellJob("orch-dash", "10분마다 오케스트레이터 대시보드 서버를 확인해 내려갔으면 올리는 Orca automation(모델 없음, orch-dash ensure)",
              ["python3", str(REPO / "skills" / "orchestrate" / "scripts" / "dash.py"), "ensure"], 600, False),
-    # The round (120 s), its cleanup scans (240 s) and the wait for a cut scan's last command (65 s) under the runner's
+    # The round (120 s), its cleanup scans (240 s) and stopping a cut scan's commands (10 s) under the runner's
     # timeout; reap-hard's beat starts one only when this job has not run one for 40 minutes, so the two do not overlap.
     ShellJob("patrol", "30분마다 모든 에이전트 카드를 모델 없이 순찰하는 Orca automation(orch patrol --if-due). 발견은 카드를 띄운 세션의 "
              "inbox 대기에 나타나고, 정리 후보는 기록만 한다. 꺼져 있으면 reap-hard 가 40분마다 대신 돈다",
              ["python3", str(REPO / "skills" / "orchestrate" / "scripts" / "prog.py"), "patrol", "--if-due"], 1800, False,
-             timeout=480),
+             timeout=420),
 )
 
 

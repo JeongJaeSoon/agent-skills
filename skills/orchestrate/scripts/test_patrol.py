@@ -334,7 +334,16 @@ sess = [{"path": "/w/p", "linked_pr": {"key": "acme/app#1"}}, {"path": "/w/q", "
 prs = {"acme/app#1": {"state": "OPEN"}, "acme/app#2": {"state": "MERGED"}}
 assert patrol.pr_open({"sessions": sess, "prs": prs}, "/w/p") and not patrol.pr_open({"sessions": sess, "prs": prs}, "/w/q")
 assert patrol.pr_open({"sessions": sess, "prs": {}}, "/w/p"), "a PR whose state was not read counts as open"
-assert not patrol.pr_open({"sessions": sess, "prs": prs}, "/w/none")
+assert not patrol.pr_open({"sessions": sess + [{"path": "/w/none"}], "prs": prs}, "/w/none"), "a read session, no PR"
+assert patrol.pr_open({"sessions": sess, "prs": prs}, "/w/none"), "no session read for the card: unknown, not held"
+assert patrol.pr_open({"prs": prs}, "/w/p"), "the collector gave no sessions at all"
+# A PR linked after the I was held: the logged finding follows (op "pr"), and the line goes out without the hour.
+late = {**i, "id": "Ilate", "card": "l", "path": "/w/l", "owner": "hq", "pr_open": False}
+patrol.write_round([x, i, ip, late], verd, False, NOW + 72)
+assert patrol.pending_lines("hq", False, T + dt.timedelta(minutes=3)) == [], "held while the card has no PR"
+patrol.write_round([x, i, ip, {**late, "pr_open": True}], verd, False, NOW + 74)
+assert patrol.standing()["Ilate"]["pr_open"] is True
+assert [l.split()[2] for l in patrol.pending_lines("hq", False, T + dt.timedelta(minutes=3))[:-1]] == ["Ilate"]
 new, gone = patrol.write_round([x, i], verd, False, NOW + 80)
 new, gone = patrol.write_round([x], verd, False, NOW + 90, failed={"workers"})
 assert gone == [], "a finding whose source failed this round is kept, not cleared"

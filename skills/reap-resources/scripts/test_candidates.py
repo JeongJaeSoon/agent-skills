@@ -316,19 +316,22 @@ finally:
 assert progress["sources"]["reap_scan"] == "ok" and progress["sources"]["reap_hard_cards"] == "timeout", progress["sources"]
 assert progress["sources"]["protect"] == "timeout" and "reap_scan" in progress["timings"], progress
 
-# A cut while a thread waits on a real command: no new command starts (reap.CANCEL), the running one ends within its
-# own timeout, and collect returns only then, so no child outlives the process. The part still reads as timed out.
-events, saved_timeout = [], reap.RUN_TIMEOUT
-reap.RUN_TIMEOUT = 1
+# A cut while a thread waits on real commands, one through reap.run and one past it: each is killed by PID, the thread
+# starts nothing more through reap.run, and collect returns only once the thread has, so no child outlives the
+# process. The part reads as timed out, and the calling thread still runs commands afterwards.
+import subprocess  # noqa: E402
+
+events = []
 
 
 def hung_hard(t):
-    events.append(("first", reap.run(["sleep", "30"], check=False)))
-    events.append(("second", reap.run(["sleep", "30"], check=False)))
+    events.append(("first", reap.run(["sleep", "30"], check=False) is None))
+    events.append(("bypass", subprocess.run(["sleep", "31"]).returncode))  # a scan path that skips reap.run
+    events.append(("second", reap.run(["sleep", "32"], check=False)))
     return HARD
 
 
-progress = {}
+progress, before = {}, candidates.children()
 signal.setitimer(signal.ITIMER_REAL, 0.3)
 t0 = time.monotonic()
 try:
@@ -340,10 +343,11 @@ except Cut:
     pass
 finally:
     signal.setitimer(signal.ITIMER_REAL, 0)
-    reap.RUN_TIMEOUT = saved_timeout
 took = time.monotonic() - t0
-assert events == [("first", None), ("second", None)], events  # timed out, then never started
-assert took < 1 + candidates.CUT_MARGIN_S and not reap.CANCEL.is_set(), (took, reap.CANCEL.is_set())
+assert events == [("first", True), ("bypass", -signal.SIGKILL), ("second", None)], events
+assert took < candidates.CUT_GRACE_S + 3 < candidates.CUT_WAIT_S, took
+assert candidates.children() == before and not reap.CANCELLED, (candidates.children(), reap.CANCELLED)
 assert progress["sources"]["reap_hard_cards"] == "timeout", progress["sources"]
+assert reap.run(["true"], check=False) is not None, "the calling thread is not cancelled"
 
 print("test_candidates: ok")

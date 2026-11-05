@@ -342,11 +342,10 @@ class ShellJobs(Base):
         import candidates
         import patrol
         w = self.jobs["patrol"].want()
-        self.assertEqual((w["trigger"], w["precheck-timeout"]), ("*/30 * * * *", 480))
+        self.assertEqual((w["trigger"], w["precheck-timeout"]), ("*/30 * * * *", 420))
         self.assertTrue(w["precheck"].endswith("prog.py patrol --if-due"), w["precheck"])
-        self.assertIn("orca_job.py run patrol --interval 1800 --timeout 460 ", w["precheck"])
-        self.assertLess(patrol.BUDGET_S + patrol.CANDIDATE_BUDGET_S + candidates.RUN_TIMEOUT_S + candidates.CUT_MARGIN_S,
-                        460)
+        self.assertIn("orca_job.py run patrol --interval 1800 --timeout 400 ", w["precheck"])
+        self.assertLess(patrol.BUDGET_S + patrol.CANDIDATE_BUDGET_S + candidates.CUT_WAIT_S, 400)
         self.assertGreater(patrol.FALLBACK_DUE_S, 1800, "reap-hard's fallback never fires while the job keeps its beat")
 
     def test_no_job_is_a_launchagent_or_names_launchctl(self):

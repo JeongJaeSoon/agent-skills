@@ -73,14 +73,18 @@ def opt(name, default=None):
 # None waits for every command; patrol's candidate round sets seconds, so one hung command fails its source instead
 # of the round.
 RUN_TIMEOUT = None
-# Set when a round is cut while scans still run in threads (candidates.collect): no new command starts, and the one
-# running ends within its own timeout, so none outlives the process.
-CANCEL = threading.Event()
+# Idents of scan threads whose round was cut (candidates.collect): run starts no new command on them. Per thread, so
+# the rest of the process keeps running commands even while a cut thread has not returned yet.
+CANCELLED = set()
+
+
+def cancelled():
+    return threading.get_ident() in CANCELLED
 
 
 def run(cmd, cwd=None, check=True, env=None, timeout=None):
     timeout = timeout or RUN_TIMEOUT
-    if CANCEL.is_set():
+    if cancelled():
         if check:
             raise RuntimeError(f"{' '.join(cmd[:4])}: not started, the round was cut")
         return None
