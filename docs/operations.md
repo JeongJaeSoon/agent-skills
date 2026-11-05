@@ -56,8 +56,8 @@ skills-sync setup disable janitor        # 하나 끄기. 어느 것이든 apply
 | `preview-watch` | off | macOS LaunchAgent | loopback 웹페이지를 tailnet HTTPS로 자동 공개한다. tailscale CLI가 없으면 켜지 않는다 |
 | `sync` | on | Orca automation(에이전트 없음) | 15분마다 체크아웃을 origin에 맞춘다(`skills-sync sync`) |
 | `pressure-watch` | on | Orca automation(에이전트 없음) | 3분마다 PC 사용량을 재고, 높으면 reap이 올린 안전한 대상만 정리해 알린다. 아무것도 종료하지 않는다([pressure.md](pressure.md)) |
-| `reap-hard` | off | Orca automation(에이전트 없음) | 15분마다 끝난 세션이 남긴 프로세스·창을 규칙으로 정리한다([reap-hard.md](reap-hard.md)) |
-| `orch-dash` | off | Orca automation(에이전트 없음) | 10분마다 대시보드 서버를 확인해 내려갔으면 올린다 |
+| `reap-hard` | on(보호 목록 파일이 있을 때) | Orca automation(에이전트 없음) | 15분마다 끝난 세션이 남긴 프로세스·창을 규칙으로 정리한다. 세션 순찰도 이 회차가 띄운다([reap-hard.md](reap-hard.md)) |
+| `orch-dash` | on | Orca automation(에이전트 없음) | 10분마다 대시보드 서버를 확인해 내려갔으면 올린다 |
 | `share-server` | off | macOS LaunchAgent | 공유 폴더를 127.0.0.1에서 Caddy로 읽기 전용 서빙한다. tailnet 공개는 하지 않는다([share-server.md](share-server.md)) |
 | `land-executor` | off | Orca automation(에이전트 없음) | `orchestrate.land_executor`가 켜진 repo에서 `orch land`가 남긴 머지 요청을 1분마다 모델 없이 다시 검사해 머지한다. agent 턴에서는 머지하지 않는다([landing.md](../skills/orchestrate/references/landing.md#land-executor)) |
 | `watch-prs` | on(`prs` 키가 있을 때) | Orca automation | `watch-prs` 스킬의 회차. 설정 키가 없으면 켜지 않는다 |
@@ -68,7 +68,7 @@ skills-sync setup disable janitor        # 하나 끄기. 어느 것이든 apply
 ## 선택 설정
 
 - `recall`이 지난 세션을 빨리 찾게 하려면 Orca 앱에서 Settings → Agent Session Search → Search inside sessions의 이 컴퓨터(Local Mac) 스위치를 켠다. CLI로는 켤 수 없고, 켜기 전에는 `recall`이 `~/.claude/projects`의 transcript를 grep한다. 켜졌는지는 `orca search --index-status`의 `enabled`로 확인한다.
-- 대시보드를 늘 띄워 두려면 메인 체크아웃에서 `skills-sync setup enable orch-dash`를 한다. 10분마다 `ensure`를 돌리는 Orca automation이 걸린다(`orch init`·`orch status`도 ensure를 돌린다). 예전 `orch-dash install-agent` LaunchAgent는 setup이 더 만들지 않는다. 자세한 동작은 `skills/orchestrate/references/dashboard.md`의 "Start it".
+- 대시보드는 `setup.py --apply`(또는 `skills-sync setup apply`)가 켠다. 손으로 하려면 메인 체크아웃에서 `skills-sync setup enable orch-dash`를 한다. 10분마다 `ensure`를 돌리는 Orca automation이 걸린다(`orch init`·`orch status`도 ensure를 돌린다). 예전 `orch-dash install-agent` LaunchAgent는 setup이 더 만들지 않는다. 자세한 동작은 `skills/orchestrate/references/dashboard.md`의 "Start it".
 
 ## 사용 시나리오
 

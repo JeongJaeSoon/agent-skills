@@ -326,10 +326,17 @@ class ShellJob(OrcaJob):
     """A periodic shell job with no agent: an Orca automation whose precheck (scripts/orca_job.py) runs the command,
     records how it ended and exits 1, so Orca skips the agent every time. A job that needs no model must not start one."""
 
-    def __init__(self, name, what, argv, interval, default, ok=(0,), turned_off=None, clear_off=None, prepare=None):
+    def __init__(self, name, what, argv, interval, default, ok=(0,), turned_off=None, clear_off=None, gate=None,
+                 prepare=None):
         self.name, self.job_name, self.what, self.default = name, f"agent-skills {name}", what, default
         self.argv, self.interval, self.ok, self.turned_off, self.clear_off = argv, interval, ok, turned_off, clear_off
+        self.gate = gate  # () -> why this PC must not get the job yet, or None; checked only while it is unregistered
         self.prepare = prepare  # () -> (code, message), run before the job is created or turned on
+
+    def stale(self):
+        """On, but registered with other paths, trigger or precheck than this checkout's: apply writes them again."""
+        a, _ = self.find()
+        return bool(a) and a.get("enabled") and main_checkout() and bool(self.drift(a))
 
     def disable(self):
         code, msg = super().disable()
@@ -365,6 +372,8 @@ class ShellJob(OrcaJob):
         if not a:
             if self.turned_off and self.turned_off():
                 return "off", "LaunchAgent 시절 `pressure.py uninstall` 로 끈 표지가 있음 (enable 로 다시 켬)"
+            if self.gate and (why := self.gate()):
+                return "unconfigured", why
             return "absent", "등록 안 됨"
         detail = f"{a.get('rrule')} · 에이전트 없이 precheck 로 실행"
         drift = self.drift(a) if main_checkout() else {}  # from a worktree every path differs; that is not drift
@@ -405,6 +414,20 @@ class ShellJob(OrcaJob):
         return 0, "켬" + (f" (맞춘 필드: {', '.join(drift)})" if drift else "")
 
 
+def planned(key):
+    """The section of agent-skills.json that the run about to write has, else the file as it is now."""
+    if PLANNED_CONFIG is not None:
+        return PLANNED_CONFIG.get(key) or {}
+    try:
+        return json.loads(CONFIG.read_text()).get(key) or {}
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
+# Set by plan() to the agent-skills.json that --apply is about to write, so the dry run judges what apply will see.
+PLANNED_CONFIG = None
+
+
 LAND_EXEC = REPO / "skills" / "orchestrate" / "scripts" / "land_exec.py"
 
 
@@ -417,7 +440,18 @@ def land_setup():
 
 def reap_hard_interval():
     import reap_hard  # not at import: it pulls in the whole guard stack
-    return reap_hard.config()["interval"]
+    return planned("reap-hard").get("interval") or reap_hard.config()["interval"]
+
+
+def reap_hard_gate():
+    """No job until the protect list exists: reap-hard closes cards without asking, and without the file it refuses to run."""
+    import reap_hard
+    path = pathlib.Path(planned("reap-hard").get("protect_file") or reap_hard.config()["protect_file"]).expanduser()
+    return None if path.is_file() else f"보호 목록 파일 {path} 가 없음 (순찰 `orch patrol` 도 이 job 이 띄운다)"
+
+
+def pressure_interval():
+    return (planned("reap").get("pressure") or {}).get("interval") or pressure.config()["interval"]
 
 
 SHELL_JOBS = (
@@ -425,12 +459,14 @@ SHELL_JOBS = (
              ["python3", str(HERE / "sync.py"), "sync"], sync.INTERVAL_S, True),
     ShellJob("pressure-watch", "PC 사용량(load·메모리 압박·swap·디스크·컨테이너)을 모델 없이 재고, 높으면 reap 이 올린 안전한 대상만 "
              "정리해 알리는 Orca automation(docs/pressure.md). 아무것도 종료하지 않고, 정리할 것이 없으면 상위 소비자만 알린다",
-             ["python3", str(REAP.parent / "pressure.py"), "round"], lambda: pressure.config()["interval"], True, ok=(0, 1, 2),
+             ["python3", str(REAP.parent / "pressure.py"), "round"], pressure_interval, True, ok=(0, 1, 2),
              turned_off=pressure.disabled, clear_off=lambda: pressure.DISABLED.unlink(missing_ok=True)),
-    ShellJob("reap-hard", "15분마다 끝난 세션이 남긴 프로세스·창을 강하게 정리하는 Orca automation(모델 없음, reap_hard.py run)",
-             ["python3", str(HERE / "reap_hard.py"), "run"], reap_hard_interval, False),
-    ShellJob("orch-dash", "10분마다 오케스트레이터 대시보드 서버를 확인해 내려갔으면 올리는 Orca automation(모델 없음, orch-dash ensure)",
-             ["python3", str(REPO / "skills" / "orchestrate" / "scripts" / "dash.py"), "ensure"], 600, False),
+    ShellJob("reap-hard", "15분마다 끝난 세션이 남긴 프로세스·창을 강하게 정리하는 Orca automation(모델 없음, reap_hard.py run). "
+             "세션 순찰(`orch patrol`)도 이 회차가 띄운다. 묻지 않고 카드를 지우므로 보호 목록 파일이 있는 PC에서만 켠다",
+             ["python3", str(HERE / "reap_hard.py"), "run"], reap_hard_interval, True, gate=reap_hard_gate),
+    ShellJob("orch-dash", "10분마다 오케스트레이터 대시보드 서버를 확인해 내려갔으면 올리는 Orca automation(모델 없음, orch-dash ensure). "
+             "읽기 위주이고 아무것도 지우지 않는다",
+             ["python3", str(REPO / "skills" / "orchestrate" / "scripts" / "dash.py"), "ensure"], 600, True),
     ShellJob("land-executor", "orchestrate.land_executor 가 켜진 repo 에서 `orch land` 가 남긴 머지 요청을 1분마다 모델 없이 다시 "
              "검사해 머지하는 Orca automation(skills/orchestrate/references/landing.md). 설정 키를 켜는 것은 skills-config 로 따로 한다",
              ["python3", str(LAND_EXEC), "round"], 60, False, prepare=land_setup),
@@ -492,9 +528,9 @@ class Watch(OrcaJob):
 
     def configured(self):
         try:
-            section = json.loads(CONFIG.read_text()).get(self.key)
+            section = planned(self.key)
             return bool(section) and set(section) != {"model"}  # the round's model alone does not turn the watch on
-        except (OSError, ValueError, AttributeError, TypeError):
+        except (AttributeError, TypeError):
             return False
 
     def model(self):
@@ -574,18 +610,49 @@ def report(a, code, msg):
     return code
 
 
+def decide(a):
+    """(verb, state, detail, message) for one automation: what `apply` does, which the dry run lists before it does it.
+    verb is install (never set up), refresh (on, but the registered job differs from this checkout's), skip or fail."""
+    state, detail = a.status()
+    if not a.default:
+        return "skip", state, detail, f"기본 off, 그대로 둠 ({LABEL[state]})"
+    if state == "absent":
+        return "install", state, detail, detail
+    if state == "unknown":
+        return "fail", state, detail, detail
+    if state == "on" and hasattr(a, "stale") and a.stale():
+        return "refresh", state, detail, detail
+    return "skip", state, detail, f"{LABEL[state]}, 그대로 둠" + (" (사용자가 끔)" if state == "off" else "")
+
+
+def plan(config=None):
+    """The lines setup.py's dry run shows: one per automation `apply` would install or refresh, and one per default-on
+    automation it cannot (unknown, or unconfigured with the reason). Nothing is written. `config` is the
+    agent-skills.json the run is about to write, which the later steps read."""
+    global PLANNED_CONFIG
+    PLANNED_CONFIG, out = config, []
+    try:
+        for a in AUTOMATIONS:
+            verb, state, detail, _ = decide(a)
+            if verb in ("install", "refresh"):
+                out.append(f"automation {a.name}: {'install' if verb == 'install' else 'refresh the registered job'}")
+            elif verb == "fail" or (a.default and state == "unconfigured"):
+                out.append(f"automation {a.name}: 건너뜀, {detail}")
+    finally:
+        PLANNED_CONFIG = None
+    return out
+
+
 def cmd_apply(here):
     code = 0
     for a in AUTOMATIONS:
-        state, detail = a.status()
-        if not a.default:
-            report(a, 0, f"기본 off, 그대로 둠 ({LABEL[state]})")
-        elif state == "absent":
+        verb, state, detail, msg = decide(a)
+        if verb in ("install", "refresh"):
             code |= report(a, *a.enable(here))
-        elif state == "unknown":
+        elif verb == "fail":
             code |= report(a, 1, detail)
         else:
-            report(a, 0, f"{LABEL[state]}, 그대로 둠" + (" (사용자가 끔)" if state == "off" else ""))
+            report(a, 0, msg)
             # Only the model argument: on or off stays as the user left it, and the rest of the job is `enable`'s.
             if isinstance(a, OrcaJob) and state in ("on", "off") and (r := a.refresh_model()):
                 code |= report(a, *r)
