@@ -49,7 +49,7 @@ SESSIONS = [{**card("s-root", "working"), "kind": "orchestrator", "parent": None
             card("s-under", "working", parent="s-lead", orca_parent="s-lead", name="ABC-12 fix", branch="user/ABC-12-fix", subagents=[{"agent": "a1"}]),
             card("s-off", "offline"),
             card("s-onboard", "working"),
-            card("s-plain", "working", needs_owner=2, refs=[{"type": "issue", "key": "ZZ-9", "url": "https://tracker.example.test/ZZ-9"},
+            card("s-plain", "working", needs_owner=2, refs=[{"type": "issue", "key": "ABC-1", "url": "https://tracker.example.test/ABC-1"},
                                              {"type": "pr", "key": "acme/app#4", "url": "https://example.test/4"}])]
 STATE = {"generated_at": fleet.iso(now), "sources": {"orca": {}, "runs": {}}, "sessions": SESSIONS,
          "runs": [{"id": "run_a", "coordinator": "term_s-root"}],
@@ -134,7 +134,7 @@ assert rowstate.snapshot(now)["rows"] == inp["states"]
 # Tickets are computed here once: the card's link, then ids in name, branch, row titles.
 assert [(t["id"], t["from"]) for t in by["card:s-under"]["tickets"]] == [("ABC-12", "name")]
 assert by["card:s-under"]["tickets"][0]["url"] == "https://tracker.example.test/issue/ABC-12"
-assert by["card:s-plain"]["tickets"][0] == {"id": "ZZ-9", "url": "https://tracker.example.test/ZZ-9", "from": "refs"}
+assert by["card:s-plain"]["tickets"][0] == {"id": "ABC-1", "url": "https://tracker.example.test/ABC-1", "from": "refs"}
 assert [t["id"] for t in by["row:r-pr"]["tickets"]] == ["XYZ-7"]
 got = units.tickets_of({"name": "UTF-8 SHA-256 XYZ-3, ABC-12 ABC-12", "branch": "feat/ABC-12_fix xABC-9 ABC-9x feat_ABC-3", "task_title": "ABC-3 ABC-4"},
                        ["row ABC-5", "ABC-12"], "")
