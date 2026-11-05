@@ -315,6 +315,12 @@ finally:
     signal.setitimer(signal.ITIMER_REAL, 0)
 assert progress["sources"]["reap_scan"] == "ok" and progress["sources"]["reap_hard_cards"] == "timeout", progress["sources"]
 assert progress["sources"]["protect"] == "timeout" and "reap_scan" in progress["timings"], progress
+# A part whose thread had not yet recorded its ident when the cut came (a start cut short) is marked, not waited on;
+# its thread, once it runs, sees the mark and runs nothing.
+late = dict(gate=threading.Lock(), ident=None, cancel=False, done=threading.Event())
+t0 = time.monotonic()
+candidates.stop_scans([late])
+assert late["cancel"] and time.monotonic() - t0 < candidates.CUT_GRACE_S, (late, time.monotonic() - t0)
 
 # A cut while a thread waits on real commands: one through reap.run, one past it whose shell leaves a grandchild
 # holding its pipe. Run as patrol runs (leading its own process group, so this part reruns this file in a new

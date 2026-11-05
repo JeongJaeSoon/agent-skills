@@ -4,6 +4,7 @@ A runtime that advertises orchestration.worker-auto-release.v1 sets `resource.au
 about two minutes after an accepted worker_done, and clears it when the worker is reused or kept open. The janitor's
 orca-worker kind and the orchestrator's SETTLED lines both leave such a row to Orca."""
 import datetime as dt
+import math
 import time
 
 
@@ -20,4 +21,4 @@ def ahead(row, now=None):
             t = dt.datetime.fromisoformat(str(at).replace("Z", "+00:00")).timestamp()
     except (TypeError, ValueError, OverflowError):
         return False
-    return t > (time.time() if now is None else now)
+    return math.isfinite(t) and t > (time.time() if now is None else now)
