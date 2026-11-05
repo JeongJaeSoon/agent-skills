@@ -35,12 +35,12 @@ def section(text, head):
     """The bullet lines under one heading of the brief."""
     lines, on = [], False
     for line in text.splitlines():
-        if line.startswith("📌") or line.startswith("⏳") or line.startswith("⏸️") or line.startswith("🙋") or line.startswith("❓"):
-            on = line.startswith(head)
+        if line.startswith("## ") and line[3:4] in ("📌", "⏳", "⏸", "🙋", "❓"):
+            on = line[3:].startswith(head)
             continue
         if on and line.startswith("- "):
             lines.append(line[2:])
-        elif on and line.startswith("**"):
+        elif on and line.startswith("## "):
             on = False
     return lines
 

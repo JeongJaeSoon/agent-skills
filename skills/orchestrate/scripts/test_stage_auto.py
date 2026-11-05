@@ -381,7 +381,7 @@ assert {r["id"] for r in page["rows"] if r["open"]} >= {"theta/T-2", "theta/T-4"
 assert not any(r["open"] for r in page["rows"] if r["id"] in ("theta/T-1", "theta/T-3", "theta/T-5"))
 brief = subprocess.run([sys.executable, str(HERE / "prog.py"), "brief", "render", "--no-refresh"], capture_output=True,
                        text=True, env={**os.environ, "PATH": "/usr/bin:/bin"})
-line = next((l for l in brief.stdout.splitlines() if l.startswith("단계표 ")), None)
-assert line and line.startswith(f"단계표 {page['open']}행 (접음 {page['folded']}) · "), (line, page["open"], page["folded"], brief.stderr[-500:])
+line = next((l for l in brief.stdout.splitlines() if l.startswith("> 단계표 ")), None)
+assert line and line.startswith(f"> 단계표 {page['open']}행 (접음 {page['folded']}) · "), (line, page["open"], page["folded"], brief.stderr[-500:])
 
 print("test_stage_auto: ok")

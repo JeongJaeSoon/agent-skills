@@ -564,7 +564,7 @@ def seed_pressure(root, now):
         rows.append({"t": t, "level": level, "queued": 1 if storm > 0.6 or i * step < 600 else 0, "load_per_cpu": load,
                      "cpu_idle_pct": round(max(1.0, 70 - 60 * storm), 1), "mem_free_pct": mem, "swap_gb": 3.2,
                      "swapout_pps": round(400 * storm, 1), "containers": 12 + round(26 * storm), "docker_mem_pct": 41.0,
-                     "disk_free_gb": 212.4})
+                     "mem_active_wired_gb": round(30 + 8 * storm, 1), "disk_free_gb": 212.4})
     (root / "pressure-history.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
     last = rows[-1]
     metrics = {k: v for k, v in last.items() if k not in ("t", "level", "queued")} | {"cpus": 18, "load5": round(last["load_per_cpu"] * 18, 1)}

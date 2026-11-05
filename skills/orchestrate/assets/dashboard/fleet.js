@@ -455,7 +455,7 @@ function relGraph(st, sessionId) {
 const PRESSURE_LEVEL = { ok: ["ok", "good"], warn: ["warn", "warn"], danger: ["danger", "bad"] };
 const PRESSURE_CHARTS = [
   ["load_per_cpu", "Load per CPU", (v) => num(v, 2)],
-  ["mem_free_pct", "Memory free", (v) => (v == null ? "—" : `${v}%`)],
+  ["mem_free_pct", "Memory available", (v) => (v == null ? "—" : `${v}%`)],
   ["docker_cpu_pct", "Docker CPU", (v) => (v == null ? "—" : `${v}%`)],
   ["queued", "Held starts", (v) => num(v)],
 ];
@@ -507,7 +507,9 @@ function pressureCard() {
     return `<i class="tone-${(PRESSURE_LEVEL[r.level] || ["", "derived"])[1]}" style="left:${l.toFixed(2)}%;width:${w.toFixed(2)}%"></i>`;
   }).join("");
   const m = (last && last.metrics) || {};
-  const extra = [["CPU idle", m.cpu_idle_pct, "%"], ["Swap", m.swap_gb, " GB"], ["Swap-out", m.swapout_pps, "/s"], ["Docker memory", m.docker_mem_pct, "%"], ["Containers", m.containers, ""], ["Disk free", m.disk_free_gb, " GB"]]
+  // "Memory available" (the kernel's level) counts file cache and compressible pages as free, so it reads far above
+  // what is in use; "Memory active+wired" is the in-use figure a host-metrics dashboard shows.
+  const extra = [["CPU idle", m.cpu_idle_pct, "%"], ["Memory active+wired", m.mem_active_wired_gb, " GiB"], ["Swap", m.swap_gb, " GB"], ["Swap-out", m.swapout_pps, "/s"], ["Docker memory", m.docker_mem_pct, "%"], ["Containers", m.containers, ""], ["Disk free", m.disk_free_gb, " GB"]]
     .filter(([, v]) => v != null).map(([k, v, u]) => `${k} <b>${esc(String(v))}${u}</b>`).join(" · ");
   const queue = (rep.queue || []).map((e) => `<li>${tag(e.state, e.state === "waiting" ? "warn" : "accent", "")}<span class="grow ellipsis">${esc(e.what)} <span class="muted">${esc(e.why || "")}</span></span><span class="when">until ${hhmm(e.deadline * 1000)}</span></li>`).join("");
   const empty = !(rep.series || []).length;
@@ -1027,7 +1029,8 @@ function briefHtml(text, tableRows = [], placed = new Set(), listRows = {}, clos
           : `<td${repo && !n ? ' class="bmark"' : ""}>${repo && n ? `<div class="slide">${briefInline(c)}</div>` : briefInline(c)}</td>`).join("")}${btns ? act(btns[k]) : ""}</tr>`).join("")}</tbody></table></div>`);
       continue;
     }
-    const sec = line.match(/^(\S+) \*\*(.+?)\*\*(?: — (.*))?$/u);
+    // The terminal text titles a section `## <emoji> name` (older text: `<emoji> **name**`).
+    const sec = line.match(/^## (\S+) (.+?)(?: — (.*))?$/u) || line.match(/^(\S+) \*\*(.+?)\*\*(?: — (.*))?$/u);
     if (sec && (BRIEF_SECTIONS[sec[2]] || sec[3] != null)) {
       const items = sec[3] && sec[3] !== "없음" ? [sec[3]] : [];
       i++;
@@ -1044,7 +1047,11 @@ function briefHtml(text, tableRows = [], placed = new Set(), listRows = {}, clos
       if (items.length) out.push(sectionTable(sec[2], items, ids));
       continue;
     }
-    if (line.trim()) out.push(`<p>${briefInline(line).replace(DASH_URL, (_, url, hash) => `<a class="link" href="${hash}">${location.origin}/${hash}</a>`)}</p>`);
+    // `## repo → main` is a repository's title, `> note` a guide line: drawn as the bold and plain lines they replace.
+    const plain = line.replace(/^> ?/, ""), title = line.match(/^## (.+)$/);
+    if (/^>\s*$/.test(line)) { i++; continue; }
+    if (title) { out.push(`<p>${briefInline(`**${title[1]}**`)}</p>`); i++; continue; }
+    if (line.trim()) out.push(`<p>${briefInline(plain).replace(DASH_URL, (_, url, hash) => `<a class="link" href="${hash}">${location.origin}/${hash}</a>`)}</p>`);
     i++;
   }
   return out.join("");

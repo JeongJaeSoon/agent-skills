@@ -90,8 +90,8 @@ write_prs(merged5=False)
 # Before anything comes the report lists no to-do: one line counts them and says where the list is (the dashboard's
 # To-do page; with no server here, the command), and Telegram always gets the commands.
 out = render(BEFORE)
-assert out.count("📅") == 1 and "📅 할 일 3건 · ⏸️ 보류 큐 1건 · `orch board todo list`" in out.splitlines(), out
-assert section(out, "🙋 **지금 오너가 할 일**") == ["- acme/app#3 리뷰"], out
+assert out.count("📅") == 1 and "> 📅 할 일 3건 · ⏸️ 보류 큐 1건 · `orch board todo list`" in out.splitlines(), out
+assert section(out, "## 🙋 지금 오너가 할 일") == ["- acme/app#3 리뷰"], out
 assert "⏰" not in out and "머지·배포" not in out, out
 tg = render(BEFORE, "--telegram")
 assert "📅 할 일 3건 · ⏸️ 보류 큐 1건 · orch board todo list --telegram" in tg.splitlines(), tg
@@ -101,9 +101,9 @@ assert "📅 할 일 3건 · ⏸️ 보류 큐 1건 · orch board todo list --te
 ok("board", "set", "deploy", "--repo", "acme/app", "--title", "배포 리드", "--status", "held", "--pr", "acme/app#1",
    "--next", "금 10/30 09:00 머지+배포 (오너 지시)")
 out, tg = render(BEFORE), render(BEFORE, "--telegram")
-assert "| 📅 | 배포 리드 |" in out and "⏸️ **보류**" not in out and "→ 배포 리드" not in out, out
-assert "📅 할 일 3건 · ⏸️ 보류 큐 1건 · `orch board todo list`" in out.splitlines(), out
-assert "🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류 · 📅 할 일로 넘김" in out.splitlines(),out
+assert "| 📅 | 배포 리드 |" in out and "## ⏸️ 보류" not in out and "→ 배포 리드" not in out, out
+assert "> 📅 할 일 3건 · ⏸️ 보류 큐 1건 · `orch board todo list`" in out.splitlines(), out
+assert "> 🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류 · 📅 할 일로 넘김" in out.splitlines(),out
 assert "📅 배포 리드 #1 ✓ — → 📅 할 일 · 세션 없음" in tg.splitlines() and "⏸️ 보류" not in tg.splitlines() and "→ 배포 리드" not in tg, tg
 got = json.loads(render(BEFORE, "--json"))
 assert got["width_ok"] and got["snapshot"]["rows"]["deploy"]["next"] == "10/30(금) 09:00 · 머지+배포 (오너 지시)", got["snapshot"]
@@ -116,7 +116,7 @@ ok("board", "drop", "deploy/notes")
 # --next less the date the trigger already says.
 ok("board", "later", "add", "acme/app#1 재검토", "--trigger", "10/30 09:00 QA 뒤")
 out = render(BEFORE)
-assert section(out, "⏸️ **보류**") == ["- 10/30 09:00 QA 뒤 · 머지+배포 (오너 지시) → 배포 리드"], out
+assert section(out, "## ⏸️ 보류") == ["- 10/30 09:00 QA 뒤 · 머지+배포 (오너 지시) → 배포 리드"], out
 assert "| ⏸️ | 배포 리드 |" in out and "할 일로 넘김" not in out, out
 ok("board", "later", "drop", "2")
 ok("board", "set", "deploy", "--next", "")
@@ -132,7 +132,7 @@ assert "| ▶ 1 | 캐시 TTL 다시 보기 | 11월 QA 다음 회차 | — |" in 
 # With the dashboard up, the line links its To-do page; never on Telegram, where 127.0.0.1 is another device.
 (tmp / "programs").mkdir()
 (tmp / "programs" / ".dash.json").write_text(json.dumps({"pid": os.getpid(), "port": 4999}))
-assert "📅 할 일 3건 · ⏸️ 보류 큐 1건 · http://127.0.0.1:4999/#/fleet/todo" in render(BEFORE).splitlines()
+assert "> 📅 할 일 3건 · ⏸️ 보류 큐 1건 · http://127.0.0.1:4999/#/fleet/todo" in render(BEFORE).splitlines()
 assert "📅 할 일 3건 · ⏸️ 보류 큐 1건 · orch board todo list --telegram" in render(BEFORE, "--telegram").splitlines()
 (tmp / "programs" / ".dash.json").unlink()
 # The page reads each to-do's parts from the render's open items: dated ones carry their first date as `at`.
@@ -152,9 +152,9 @@ assert "acme/app#1" in fleet.board_prs()
 # 10/30 09:05 with #5 merged: the owner's item goes to their list, lead-billing's to 카드 없는 일; 할 일 keeps the rest.
 write_prs(merged5=True)
 out = render(AFTER)
-assert "- ⏰ acme/app#1 머지·배포 · 10/30(금) 09:00 도래" in section(out, "🙋 **지금 오너가 할 일**"), out
-assert "- ⏰ acme/app#2 ready로 전환 — acme/app#5 머지 후 도래 · lead-billing" in section(out, "📌 **카드 없는 일**"), out
-assert "📅 할 일 1건 · ⏸️ 보류 큐 1건 · `orch board todo list`" in out.splitlines(), out
+assert "- ⏰ acme/app#1 머지·배포 · 10/30(금) 09:00 도래" in section(out, "## 🙋 지금 오너가 할 일"), out
+assert "- ⏰ acme/app#2 ready로 전환 — acme/app#5 머지 후 도래 · lead-billing" in section(out, "## 📌 카드 없는 일"), out
+assert "> 📅 할 일 1건 · ⏸️ 보류 큐 1건 · `orch board todo list`" in out.splitlines(), out
 merged = {"acme/app#5": {"state": "MERGED", "merged_at": "2026-10-29T00:00:00Z"}}
 # The owner's to-do (acme/app#1) stays a hold after its date: the owner's answer is what the PR waits for. lead-billing's
 # (acme/app#2, after #5 merged) lifts. Only closing the owner's to-do releases the PR.
@@ -194,21 +194,21 @@ board.change(lambda s: s["todo"].append({"title": "옛 할 일", "who": "writer"
 assert store()["todo"][-1]["added"] == "2026-10-28T01:00:00Z", store()["todo"]
 JAN = "2027-01-10T00:00:00Z"
 out = render(JAN)
-doing = "\n".join(section(out, "📌 **카드 없는 일**"))
+doing = "\n".join(section(out, "## 📌 카드 없는 일"))
 assert all(f"⏰ {w}" in doing for w in ("분기 정산", "회고 정리", "감사 대응", "옛 할 일")), out
-assert not any(l.startswith("📅 할 일 ") for l in out.splitlines()), out
+assert not any(l.startswith("> 📅 할 일 ") for l in out.splitlines()), out
 
 # --due and --after: whichever comes first. A later --due does not wait out a merged --after, and a passed --due does
 # not wait for an --after still open; Needs you lifts the PR hold on the same rule.
 board.todo_add("acme/app#1 핫픽스 배포", due="2027-03-01", after="acme/app#5 머지 후", who="writer")
 board.todo_add("acme/app#2 롤백 확인", due="10/27", after="acme/app#9 머지 후", who="writer")
 out = render(AFTER)
-doing = "\n".join(section(out, "📌 **카드 없는 일**"))
+doing = "\n".join(section(out, "## 📌 카드 없는 일"))
 assert "⏰ acme/app#1 핫픽스 배포" in doing and "⏰ acme/app#2 롤백 확인" in doing, out
 assert set(fleet.held_prs(board.read(), {}, merged, fleet.parse(AFTER))) == set()  # the owner's was closed above
 write_prs(merged5=False)
 out = render(BEFORE)
-assert "acme/app#1 핫픽스 배포" not in out and any(l.startswith("📅 할 일 ") for l in out.splitlines()), out
+assert "acme/app#1 핫픽스 배포" not in out and any(l.startswith("> 📅 할 일 ") for l in out.splitlines()), out
 
 # --after naming only a PR, no merge word: the report's ⏰ and the Needs you hold read one rule (fleet.todo_come), so
 # the to-do comes the moment the hold lifts, and not before.
@@ -217,7 +217,7 @@ t = store()["todo"][-1]
 assert not fleet.todo_come(t, fleet.parse(BEFORE), {}) and "acme/app#2" in fleet.held_prs(board.read(), {}, {}, fleet.parse(BEFORE))
 assert fleet.todo_come(t, fleet.parse(BEFORE), merged)
 write_prs(merged5=True)
-assert "- ⏰ acme/app#2 배포 노트 — acme/app#5 도래 · writer" in section(render(BEFORE), "📌 **카드 없는 일**"), render(BEFORE)
+assert "- ⏰ acme/app#2 배포 노트 — acme/app#5 도래 · writer" in section(render(BEFORE), "## 📌 카드 없는 일"), render(BEFORE)
 assert "acme/app#2" not in fleet.held_prs(board.read(), {}, merged, fleet.parse(BEFORE))
 # A card it names stands for the card's PR, in both.
 cards = {"c1": {"id": "c1", "name": "deploy-card", "pr": "acme/app#5"}}
@@ -272,7 +272,7 @@ listed = ok("board", "todo", "list", "--now", BEFORE, "--no-refresh")
 due_n = sum(o["due"] for o in page.values())
 assert f"**📅 할 일 {len(page) - due_n}건 · ⏰ 도래 {due_n}**" in listed.splitlines(), listed
 assert "**⏸️ 보류 큐 2건 · ▶ 다음 차례 · ❔ 확인 필요 1**" in listed.splitlines() and "| ❔2 | acme/app#2 후속 정리 |" in listed, listed
-assert f"📅 할 일 {len(page) - due_n}건 · ⏸️ 보류 큐 2건 · `orch board todo list`" in render(BEFORE).splitlines()
+assert f"> 📅 할 일 {len(page) - due_n}건 · ⏸️ 보류 큐 2건 · `orch board todo list`" in render(BEFORE).splitlines()
 held = {o["title"]: o["id"] for o in json.loads(ok("board", "open", "--json")) if o["kind"] == "later"}
 ok("board", "done", held["캐시 TTL 다시 보기"])
 listed = ok("board", "todo", "list", "--now", BEFORE, "--no-refresh")

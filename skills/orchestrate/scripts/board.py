@@ -1256,9 +1256,17 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     local = now.astimezone()
     head = f"{local:%H:%M} · " + " · ".join(([headline] if headline else []) + facts[1 if headline else 0:])
     out = [head if tg else f"**{head}**"]
-    out += [x for pointer in (stage_line, lists_line) if pointer for x in ("", pointer)]
+    notes = [x for x in (stage_line, lists_line) if x]
     if lines:
-        out += ["", legend] + (["", "PR: " + " · ".join(pr_legend)] if pr_legend else [])
+        notes += [legend] + (["PR: " + " · ".join(pr_legend)] if pr_legend else [])
+    if tg:
+        out += [x for note in notes for x in ("", note)]
+    elif notes:  # one quote block: the guide lines read as a margin note, apart from the sections below
+        out += [""] + [x for i, note in enumerate(notes) for x in ((">",) if i else ()) + (f"> {note}",)]
+
+    def heading(text):
+        """A section's title: `##` on the terminal, where markdown draws it; the Telegram text is plain."""
+        return text if tg else f"## {text}"
     width_ok = True
     swaps = []  # (first line in out, count, lines): a table's rows with every cell whole, for the dashboard's copy
     ackable, table_rows = {d["id"] for d in done if not d["acked"]}, []
@@ -1400,7 +1408,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
 
     # What the owner acts on comes first; what explains the rest comes last.
     todo = [t["title"] for t in todos] + due_mine + turn
-    out += ["", ("🙋 지금 오너가 할 일" if tg else "🙋 **지금 오너가 할 일**") + ("" if todo else " — 없음")]
+    out += ["", heading("🙋 지금 오너가 할 일") + ("" if todo else " — 없음")]
     out += [""] + [it if tg else f"- {it}" for it in todo] if todo else []
     own, decisions = list(decisions), open_dec
     repeated =set((last or {}).get("decisions") or []) if last_rows is not None else set()
@@ -1412,12 +1420,15 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                     if rec else " — 선택지: " + " / ".join(o["label"] for o in d["options"]) if d["options"] else ""))
             items.append(text + (" (지난 보고와 동일)" if d["id"] in repeated else ""))
         items += [f"{i}. {one_line(d)}" for i, d in enumerate(own, len(decisions) + 1)]
-        out += ["", ("❓ 결정 필요" if tg else "❓ **결정 필요**") + " — " + items[0]] + [x for it in items[1:] for x in ("", it)]
+        if tg:
+            out += ["", "❓ 결정 필요 — " + items[0]] + [x for it in items[1:] for x in ("", it)]
+        else:
+            out += ["", heading("❓ 결정 필요"), ""] + items
 
     for sec in sections:
         mine = [l for l in lines if l["sec"] == sec]
         title = sec + (f" → {bases[sec]}" if sec in bases else "")
-        out += ["", f"📋 {title}" if tg else f"**{title}**"]
+        out += ["", heading(f"📋 {title}") if tg else heading(title)]
 
         def drawn(l):
             """Placement of a row as it is written out: a folded reviewer row stands for its members, a card row for
@@ -1490,12 +1501,12 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                 continue
             out += ["", f"- {bullet_of[(bsec, rev)]} — 분야 {'·'.join(i['title'] for i in items)}"]
     if moving:
-        out += ["", "📌 카드 없는 일" if tg else "📌 **카드 없는 일**", ""] + [it if tg else f"- {it}" for it in moving]
+        out += ["", heading("📌 카드 없는 일"), ""] + [it if tg else f"- {it}" for it in moving]
     if theirs:
-        out += ["", "⏳ 다른 사람 대기" if tg else "⏳ **다른 사람 대기**", ""] + [it if tg else f"- {it}" for it in theirs]
+        out += ["", heading("⏳ 다른 사람 대기"), ""] + [it if tg else f"- {it}" for it in theirs]
     # Only the ⏸️ rows: the held items are a queue the pointer line counts (todo_tables lists it).
     if held := list(dict.fromkeys(held)):
-        out += ["", "⏸️ 보류" if tg else "⏸️ **보류**", ""] + [it if tg else f"- {it}" for it in held]
+        out += ["", heading("⏸️ 보류"), ""] + [it if tg else f"- {it}" for it in held]
     if insight:
         out += ["", insight.strip()]
     if periodic and skipped:
