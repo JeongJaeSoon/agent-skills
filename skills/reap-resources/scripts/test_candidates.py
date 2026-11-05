@@ -315,12 +315,34 @@ finally:
     signal.setitimer(signal.ITIMER_REAL, 0)
 assert progress["sources"]["reap_scan"] == "ok" and progress["sources"]["reap_hard_cards"] == "timeout", progress["sources"]
 assert progress["sources"]["protect"] == "timeout" and "reap_scan" in progress["timings"], progress
-# A part whose thread had not yet recorded its ident when the cut came (a start cut short) is marked, not waited on;
-# its thread, once it runs, sees the mark and runs nothing.
-late = dict(gate=threading.Lock(), ident=None, cancel=False, done=threading.Event())
+# A start cut short: the hard part's thread exists but has not run when the cut comes. It is marked, not waited on,
+# and once it runs it sees the mark and runs no scan; its sources stay timed out.
+class LateStart(threading.Thread):
+    held = []
+
+    def start(self):
+        if self._args[0]["owns"] == candidates.HARD_SOURCES:
+            LateStart.held.append(self)
+            raise Cut()
+        super().start()
+
+
+hard_calls, progress = [], {}
+real_thread, candidates.threading.Thread = candidates.threading.Thread, LateStart
 t0 = time.monotonic()
-candidates.stop_scans([late])
-assert late["cancel"] and time.monotonic() - t0 < candidates.CUT_GRACE_S, (late, time.monotonic() - t0)
+try:
+    candidates.collect(OK, now=time.time(), reap_scan=lambda kinds: (REAP_ITEMS, []),
+                       hard=lambda t: (hard_calls.append(1), HARD)[1], pressure_kinds=["orphan"], state_dir=tmp,
+                       live=lambda targets, notes: targets, progress=progress)
+    raise AssertionError("not cut")
+except Cut:
+    pass
+finally:
+    candidates.threading.Thread = real_thread
+assert time.monotonic() - t0 < candidates.CUT_GRACE_S and progress["sources"]["reap_hard_cards"] == "timeout", progress
+late = LateStart.held[0]
+late._target(*late._args)  # the thread runs only now
+assert hard_calls == [] and late._args[0]["done"].is_set(), hard_calls
 
 # A cut while a thread waits on real commands: one through reap.run, one past it whose shell leaves a grandchild
 # holding its pipe. Run as patrol runs (leading its own process group, so this part reruns this file in a new
