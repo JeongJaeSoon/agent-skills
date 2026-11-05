@@ -105,9 +105,9 @@ verdict. **Trivial** means all of these: about 20 changed lines or fewer, no aut
 migration, concurrency, CI or public-contract change, and a test that covers it. A trivial
 change may use a focused independent review of the diff and relevant tests (record
 `subagent-review` when that is the source). Non-trivial changes need the full independent
-review evidence contract. Use available review tools appropriate
-to the scope; their command names and models are not requirements of this skill.
-Follow [references/independent-review.md](references/independent-review.md) for the evidence
+review evidence contract. The reviewer is the one `scripts/review_pick.py` picks (Codex, or a
+fresh-context Claude reviewer), recorded as `review:codex` or `review:claude`.
+Follow [references/independent-review.md](references/independent-review.md) for the pick, the evidence
 contract and unavailable-review handling.
 
 Sort every finding the way `interrogate`'s `references/lead-judgment.md` does — Act on,

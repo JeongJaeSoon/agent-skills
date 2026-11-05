@@ -11,7 +11,7 @@ sys.path.insert(0, str(HERE))
 tmp = pathlib.Path(tempfile.mkdtemp(prefix="test-store-"))
 os.environ.update({"ORCH_FLEET_STATE": str(tmp / "a" / "dashboard"), "ORCH_FLEET_CONFIG": str(tmp / "none.json"),
                    "AGENT_SKILLS_CONFIG": str(tmp / "none.json"), "TZ": "UTC"})
-import fleet, store  # noqa: E402
+import board, fleet, store  # noqa: E402
 
 LEGACY = {"next": 4, "decisions": {
     "d1": {"id": "d1", "title": "Export format", "body": "CSV or JSON", "options": [{"label": "CSV", "description": "sheets"}],
@@ -88,7 +88,9 @@ with state("import") as sd:
 
     # decide add / close / keep / list through the CLI, all on the DB; a closed one stays (no 7-day delete).
     env = {"ORCA_TERMINAL_HANDLE": "term_0FAKE1"}
-    assert orch("decide", "add", "--title", "Next step", "--option", "Go", env=env) == (0, "d4", "")
+    assert orch("decide", "add", "--title", "Next step", "--option", "Go::ships now", "--recommend", "1", "--if-no-answer", "Go",
+                "--reason", "owner-asked", env=env) == (0, "d4", "")
+    assert store.decision_record("d4")["body"] == "답이 없으면 Go · 근거: owner-asked"
     assert orch("decide", "keep", "d4", env=env)[0] == 0
     assert orch("decide", "done", "d4", "--answer", "Go", env=env) == (0, "d4 done", "")
     code, out, _ = orch("decide", "list")
@@ -138,7 +140,8 @@ with state("gate") as sd:
         except store.NotMigrated:
             pass
     assert fleet.relay_decisions() == [] and fleet.decision_items({}, None) == []
-    code, _, err = orch("decide", "add", "--title", "x")
+    code, _, err = orch("decide", "add", "--title", "x", "--option", "a::b", "--recommend", "1", "--if-no-answer", "진행 못 함",
+                        "--reason", "owner-hands-only")
     assert code == 1 and "bin/orch db migrate" in err and not (sd / "decisions.json").exists(), err
     try:
         store.open_db()
@@ -270,7 +273,8 @@ with state("tx") as sd:
     release.set()
     t.join()
     # Many processes adding at once: every id once, every row with its event.
-    procs = [subprocess.Popen([sys.executable, str(HERE / "prog.py"), "decide", "add", "--title", f"p{i}"],
+    procs = [subprocess.Popen([sys.executable, str(HERE / "prog.py"), "decide", "add", "--title", f"p{i}",
+                              "--option", "a::b", "--recommend", "1", "--if-no-answer", "진행 못 함", "--reason", "owner-asked"],
                               stdout=subprocess.PIPE, text=True) for i in range(8)]
     ids = sorted(p.communicate()[0].strip() for p in procs)
     assert all(p.returncode == 0 for p in procs) and ids == sorted(f"d{i}" for i in range(2, 10)), ids
@@ -643,7 +647,8 @@ with state("answer") as sd:
     assert orch("decide", "done", plain, "--answer", "yes", env=ME)[0] == 0 and store.decision_record(plain)["answered_by"] == "term_0FAKEME"
 
 # ---- brief render: an unregistered --decision is registered, with its id, and only once
-ITEM = "캐시를 지울까: 지움 / 유지 → 추천: 유지 — 무료 한도 안 · 답이 없으면 유지"
+ITEM = "캐시를 지울까: 지움 / 유지 → 추천: 유지 — 무료 한도 안 · 답이 없으면 유지 · 근거: owner-asked"
+WIPE = ITEM.replace("추천: 유지", "추천: 지움").replace("답이 없으면 유지", "답이 없으면 지움")
 
 
 def brief(*args, env=ME):
@@ -662,7 +667,7 @@ with state("register") as sd:
     assert code == 0 and [x["id"] for x in fleet.open_decisions()] == [did] and out.count(ITEM) == 1, out
     # Another session's same words, or a changed recommendation, is another decision.
     brief("--decision", ITEM, env={"ORCA_TERMINAL_HANDLE": "term_0FAKE2"})
-    brief("--decision", ITEM.replace("추천: 유지", "추천: 지움"))
+    brief("--decision", WIPE)
     assert len(fleet.open_decisions()) == 3
     # Answered between the render and the next: not asked again, and said so.
     fleet.decision_close(did, "done", "placeholder")
@@ -671,19 +676,68 @@ with state("register") as sd:
     # Dropped is no answer: raised again, it is a new decision.
     third = fleet.open_decisions()[-1]["id"]
     fleet.decision_close(third, "dropped")
-    brief("--decision", ITEM.replace("추천: 유지", "추천: 지움"))
+    brief("--decision", WIPE)
     assert len(fleet.open_decisions()) == 2 and third not in [x["id"] for x in fleet.open_decisions()]
     # --now replays the past: nothing is registered.
     before = len(store.decisions())
-    code, out, _ = orch("brief", "render", "--now", "2026-11-01T00:00:00Z", "--no-fill", "--decision", ITEM + " 재현")
-    assert code == 0 and ITEM + " 재현" in out and len(store.decisions()) == before, out
-    # A bad form registers nothing, the others included.
-    code, _, err = brief("--decision", ITEM + " 앞", "--decision", "추천이 없는 문구")
+    code, out, _ = orch("brief", "render", "--now", "2026-11-01T00:00:00Z", "--no-fill", "--decision", "재현 " + ITEM)
+    assert code == 0 and "재현 " + ITEM in out and len(store.decisions()) == before, out
+    # A bad form registers nothing, the others included, and the refusal names the missing part.
+    code, _, err = brief("--decision", "앞 " + ITEM, "--decision", "추천이 없는 문구")
     assert code == 1 and err.startswith("--decision is one line") and len(store.decisions()) == before, err
+    assert "→ 추천: is missing" in err and "owner-ask-gate.md" in err, err
+    # The owner-ask gate: a reason tag, and an if-no-answer that is the recommendation or 진행 못 함.
+    for bad, why in ((ITEM.replace(" · 근거: owner-asked", ""), "· 근거: is missing"),
+                     (ITEM.replace("owner-asked", "just-checking"), "근거 is one of"),
+                     (ITEM.replace("답이 없으면 유지", "답이 없으면 나중에"), "답이 없으면 is the recommendation ('유지')"),
+                     (ITEM.replace(" — 무료 한도 안", ""), "'<X> — <reason>', both filled"),
+                     ("캐시를 지울까: 지움 / 유지 → 추천:  —  · 답이 없으면 진행 못 함 · 근거: owner-asked", "both filled"),
+                     ("→ 추천: 유지 — 싸다 · 답이 없으면 유지 · 근거: owner-asked", "question before → 추천: is empty"),
+                     (ITEM.replace(" · 답이 없으면 유지", ""), "· 답이 없으면 is missing")):
+        code, _, err = brief("--decision", bad)
+        assert code == 1 and why in err and len(store.decisions()) == before, (bad, err)
+    code, out, _ = brief("--decision", "패스키 등록: 오너 기기 → 추천: 오너가 등록 — 에이전트 경로 없음 · 답이 없으면 진행 못 함"
+                         " · 근거: owner-hands-only")
+    assert code == 0 and "진행 못 함" in out and len(store.decisions()) == before + 1, out
+    before += 1
+    # decide add holds the same gate before it writes anything.
+    two = ("--option", "A::싸다", "--option", "B")
+    gate = ("--if-no-answer", "진행 못 함", "--reason", "owner-asked")
+    for args, why in (((*two, "--recommend", "1"), "근거 is missing"),
+                      ((*two, "--recommend", "1", "--reason", "owner-asked"), "답이 없으면 is missing"),
+                      ((*two, "--recommend", "1", "--if-no-answer", "B", "--reason", "owner-asked"),
+                       "답이 없으면 is the recommendation ('A')"),
+                      ((*two, *gate), "--recommend N, one of the --option numbers, is missing"),
+                      ((*two, "--recommend", "3", *gate), "--recommend N, one of the --option numbers, is missing"),
+                      ((*two, "--recommend", "2", *gate), "the recommended option needs its reason")):
+        code, _, err = orch("decide", "add", "--title", "고를까", *args)
+        assert code == 1 and why in err and "--if-no-answer" in err and len(store.decisions()) == before, (args, err)
+    # Accepted, the gate's fields lead the body, so the page's one-line detail and the report both show them.
+    (sd / "why.md").write_text("A is cheap.\n")
+    code, picked, _ = orch("decide", "add", "--title", "고를까", "--option", "A::싸다", "--option", "B", "--recommend", "1",
+                           "--body-file", str(sd / "why.md"), "--if-no-answer", "A", "--reason", "owner-asked", env=ME)
+    assert code == 0 and store.decision_record(picked)["body"] == "답이 없으면 A · 근거: owner-asked\n\nA is cheap.", picked
+    code, out, _ = brief()
+    assert f"({picked}) 고를까 → 추천: A — 싸다 · 답이 없으면 A · 근거: owner-asked" in out, out
+    fleet.decision_close(picked, "dropped")
+    # A label over two lines or past its 120 characters is checked as stored, so the gate line stays one whole line.
+    for raw in ("CSV\nformat", "x" * 130):
+        code, multi, err = orch("decide", "add", "--title", "형식", "--option", raw + "::싸다", "--recommend", "1",
+                                "--if-no-answer", raw, "--reason", "owner-asked", env=ME)
+        rec = store.decision_record(multi)
+        body = rec["body"]
+        assert code == 0 and body == board.ask_line(rec["options"][0]["label"], "owner-asked") == board.ask_line_of(body), \
+            (raw, body, err)
+        fleet.decision_close(multi, "dropped")
+        before += 1
+    # A reason may quote a field name: the fields are split off from the right.
+    code, out, err = brief("--decision", ITEM.replace("무료 한도 안", "'· 답이 없으면' 칸을 그대로 둠"))
+    assert code == 0, err
+    before += 2
     # A label is not made up, so an owner's sentence starting with the recommendation closes nothing by itself.
     assert all(not x["options"] for x in fleet.open_decisions())
     # A long item keeps its recommendation in the report, and a skipped one's answer stays out of stderr.
-    long_item = "긴 질문 " * 200 + "→ 추천: 유지 — 끝까지 · 답이 없으면 유지"
+    long_item = "긴 질문 " * 200 + "→ 추천: 유지 — 끝까지 · 답이 없으면 유지 · 근거: owner-asked"
     code, out, _ = brief("--decision", long_item)
     assert code == 0 and "답이 없으면 유지" in out and "끝까지" in out, out[-300:]
     long_id = fleet.open_decisions()[-1]["id"]
@@ -692,7 +746,7 @@ with state("register") as sd:
     assert code == 0 and long_id in err and "placeholder quiet" not in err, err
     before = len(store.decisions())
     # Too long to hold whole: two items differing past the limit must not become one decision.
-    code, out, err = brief("--decision", "x" * (fleet.DECISION_BODY_MAX + 1) + " → 추천: 유지")
+    code, out, err = brief("--decision", "x" * (fleet.DECISION_BODY_MAX + 1) + " → 추천: 유지 — r · 답이 없으면 유지 · 근거: owner-asked")
     assert code == 1 and "(미등록)" in out and len(store.decisions()) == before, (out[:300], err)
 
 # Registration failed: the report still goes out, with a warning above it, the item marked, and exit 1.

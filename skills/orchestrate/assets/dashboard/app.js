@@ -969,16 +969,41 @@ function render() { renderSidebar(); renderHeader(); renderFresh(); renderView()
 
 // ------------------------------------------------------------ data
 
+// ETag of the last 200 per URL. Sent back only while the data it describes is still held, so a 304 never
+// leaves a null behind; a server that sends no ETag (a route not on send_cached) just answers 200 each time.
+// POLL_BODY holds the object that ETag came with: when another path (pollState writes S.fleet too) replaced it,
+// the ETag no longer describes what is on screen and is not sent.
+const POLL_ETAG = {}, POLL_BODY = {};
+function conditionalFetch(url, have) {
+  const etag = have && POLL_BODY[url] === have ? POLL_ETAG[url] : null;
+  return fetch(url, { cache: "no-store", headers: etag ? { "If-None-Match": etag } : {} });
+}
+// Parse first, then store the ETag with its data: an ETag kept for a body that failed to parse would 304 onto stale data.
+async function readConditional(url, r) {
+  const data = await r.json();
+  const etag = r.headers.get("ETag");
+  if (etag) { POLL_ETAG[url] = etag; POLL_BODY[url] = data; } else { delete POLL_ETAG[url]; delete POLL_BODY[url]; }
+  return data;
+}
+
+let programsBusy = false; // two overlapping polls could commit an older body under a newer ETag
 async function pollPrograms() {
+  if (document.hidden || programsBusy) return; // the visibilitychange handler polls once when the tab comes back
+  programsBusy = true;
   try {
     // A program page still draws the fleet tree in the sidebar; the fleet page polls that state itself.
-    const [r, f] = await Promise.all([fetch("/api/programs", { cache: "no-store" }),
-      isFleet() ? null : fetch("/api/fleet/state", { cache: "no-store" })]);
-    if (!r.ok) throw new Error(r.status);
-    S.programs = await r.json();
-    if (f) S.fleet = f.ok ? await f.json() : null;
-    renderSidebar();
+    const [r, f] = await Promise.all([conditionalFetch("/api/programs", S.programs),
+      isFleet() ? null : conditionalFetch("/api/fleet/state", S.fleet)]);
+    if (!r.ok && r.status !== 304) throw new Error(r.status);
+    let changed = false;
+    if (r.status !== 304) { S.programs = await readConditional("/api/programs", r); changed = true; }
+    if (f && f.status !== 304) {
+      if (f.ok) S.fleet = await readConditional("/api/fleet/state", f); else { S.fleet = null; delete POLL_ETAG["/api/fleet/state"]; }
+      changed = true;
+    }
+    if (changed) renderSidebar();
   } catch (e) { S.down = true; setLive(); }
+  finally { programsBusy = false; }
 }
 
 // A server started before a merge keeps serving the old code (a new route answers 404) until it is restarted.
@@ -1077,7 +1102,7 @@ document.addEventListener("click", (e) => {
 });
 document.addEventListener("input", (e) => { if (e.target.id === "issue-search") { S.q = e.target.value; renderView(); } });
 addEventListener("hashchange", route);
-document.addEventListener("visibilitychange", () => { if (!document.hidden) pollState(); });
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { pollState(); pollPrograms(); } });
 setInterval(pollState, POLL_MS);
 setInterval(() => { if (isFleet() && BRIEF_FED.includes(S.section) && !document.hidden) pollBrief(); }, POLL_MS);
 setInterval(() => { if (isFleet() && S.section === "sent" && !document.hidden) pollSent(); }, POLL_MS);
