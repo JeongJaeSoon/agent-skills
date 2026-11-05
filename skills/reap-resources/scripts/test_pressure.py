@@ -117,6 +117,11 @@ def fake_ps(cmd, timeout=None):
 m = p.measure(run=fake_ps, always_on=["lf"]) if p.shutil.which("docker") else None
 assert m is None or (m["containers"], m["always_on"]) == (7, 2), m
 assert m is None or (m["mem_active_wired_gb"], m["mem_anon_wired_gb"]) == (22.9, 19.8), m
+m = p.measure(docker=False, run=fake_ps)  # no docker needed for the memory fields
+assert (m["mem_active_wired_gb"], m["mem_anon_wired_gb"]) == (22.9, 19.8) and m["containers"] is None, m
+m = p.measure(docker=False, run=lambda cmd, timeout=None: None)  # vm_stat failing leaves them None, never raises
+assert (m["mem_active_wired_gb"], m["mem_anon_wired_gb"]) == (None, None), m
+assert p.vm_used_gb(VM_STAT.replace("16384", "4096")) == (5.7, 5.0)
 assert p.summary({**OK, "always_on": 2}).endswith("컨테이너 10개(상시 2개 제외)")
 assert p.summary({**OK, "always_on": 0}).endswith("컨테이너 10개")
 assert p.config([("always_on", "lf,webui")])["always_on"] == ["lf", "webui"]

@@ -45,10 +45,10 @@
 |---|---|---|
 | `hooks/pressure_gate.py`, `card.py`의 카드 생성 | `judge`가 모든 지표 중 최악 수준 | 무거운 시작(`orch heavy` 밖 전체 테스트·E2E·compose·새 카드). ok는 통과, warn은 `round` 한 번 뒤 15분(`gate_fresh_minutes`) 동안 통과, danger는 대기열에 넣고 `queue wait`로 기다린다. 디스크만 위험이면 대기하지 않는다 |
 | 같은 hook, 새 카드 | 진행 중인 턴 수 ≥ `active_turns_per_cpu`×CPU | 수준과 무관하게 새 카드만 막는다 |
-| `orch heavy` | 슬롯 수(기본 2) | 수준과 무관 |
+| `orch heavy` | 위 hook이 같은 수준으로 먼저 판정하고, 통과하면 슬롯 수(기본 2) | 슬롯은 수준과 무관하다 |
 | `pressure.py round` | 같은 수준 | warn·danger에서 reap 안전 대상을 정리하고, 수준이 바뀌면 patrol을 부른다. danger는 알림과 Needs you |
 | `patrol` | 마지막 수준 | danger에서는 정리 스캔을 건너뛴다 |
-| `swap_growth_gb_h`, `swap_gb`, `docker_cpu_pct` | 위험이 없는 지표 | 경고와 정리만, 시작을 막지 않는다 |
+| `swap_growth_gb_h`, `swap_gb`, `docker_cpu_pct` | 위험이 없는 지표 | danger와 대기열을 만들지 않는다. 경고 수준이 되면 최근 스캔이 없는 동안 hook이 `round` 한 번을 요구한다 |
 | janitor, 대시보드 | 수준을 읽지 않는다 | janitor는 일정으로 돌고, 대시보드는 기록만 그린다 |
 
 수준을 정하는 지표 중 `mem_free_pct`, `vm_pressure`, `swapout_pps`, `load_per_cpu`(idle 조건 있음), `disk_free_gb`, `docker_mem_pct`가 danger를 낼 수 있다.
@@ -60,7 +60,9 @@
 - `mem_free_pct ≤ X`를 한 지표로 놓고 센 결과(폭주 = swapout ≥ 1500인 16회차, 평시 = 나머지 471회차): X=20·10은 0/16, 평시 0. X=40은 11/16, 평시 0. X=50은 13/16, 평시 0. X=60은 13/16, 평시 1. X=80은 14/16, 평시 5.
 - `swap_gb ≥ 16`은 12/16이고 평시 0이지만 폭주가 지나간 뒤에도 한참 남는 값이라 게이트로는 틀리다(위 표의 판단 그대로 경고만).
 
-**결론**: 기본값은 바꾸지 않는다. `mem_free_pct`의 20·10은 이 기록에서 한 번도 닿지 않아 오탐도 미탐 개선도 없다. 40~50으로 올려도 새로 잡는 행이 없다. 시작을 여닫는 실질 지표는 `swapout_pps`이고, 20·10은 정의가 다른 이 값으로 "13GB 여유"를 약속하지 않는 안전망으로 남긴다. 위의 근거 문장은 이 검토로 고쳤다. 한계: 기록이 24시간뿐이고 폭주가 3번이며 anonymous+wired와 swap 증가율 대안은 재현할 값이 없었다. 새 필드가 쌓이면(일주일 이상, 폭주 여러 번) 다시 본다. 다시 볼 때 바꾸려면 `reap.pressure.mem_free_pct`에 `[50, 40]`처럼 적는다. 기본값은 건드리지 않는다.
+시간 차이도 있다. 판정은 `mem_free_pct`를 그 자리에서 읽고 `swapout_pps`는 회차 샘플을 `sample_fresh_minutes`(7분)까지만 쓴다. 부하로 회차가 밀려 샘플이 만료되면 swapout은 판정에서 빠지고 `mem_free_pct`만 남는다. 40~50 같은 높은 `mem_free_pct` 임계는 그때의 독립 방어선이다. 다만 이 기록에서는 그런 회차가 없었고, 폭주를 swapout으로 정의했으므로 위의 포착 수는 두 지표가 같은 현상을 보는지만 말해 줄 뿐 독립 검증이 아니다.
+
+**결론**: 기본값은 바꾸지 않는다. `mem_free_pct`의 20·10은 이 기록에서 한 번도 닿지 않아 오탐도 미탐 개선도 없다. 40~50으로 올려도 이 기록에서는 새로 잡는 행이 없다. 시작을 여닫는 실질 지표는 `swapout_pps`이고, 20·10은 정의가 다른 이 값으로 "13GB 여유"를 약속하지 않는 안전망으로 남긴다. 위의 근거 문장은 이 검토로 고쳤다. 한계: 기록이 24시간뿐이고 폭주가 3번이며 anonymous+wired와 swap 증가율 대안은 재현할 값이 없었다. 새 필드가 쌓이면(일주일 이상, 폭주 여러 번) 다시 본다. 다시 볼 때 바꾸려면 `reap.pressure.mem_free_pct`에 `[50, 40]`처럼 적는다. 기본값은 건드리지 않는다.
 
 ### 테스트 슬롯과 새 카드 턴 상한
 
