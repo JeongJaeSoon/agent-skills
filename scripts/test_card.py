@@ -884,6 +884,23 @@ rc, err = run_helper([None], worktree=WT)
 assert rc == 0 and not SENDS, ("an older file that is this session, with /goal run", SENDS)
 session_rows(META, PASTED)
 (TDIR / "other.jsonl").unlink()
+# A short handoff goal named in another session's prompt, beside an unrelated /goal: not this card's session.
+session_rows({"type": "user", "message": {"content": "Please review ABC-7. today"}}, ran("unrelated"), name="other.jsonl")
+assert card.goal_state(WT, "/goal ABC-7.") == "none"
+session_rows(ran("ABC-7."), name="other.jsonl")
+assert card.goal_state(WT, "/goal ABC-7.") == "ran"
+(TDIR / "other.jsonl").unlink()
+# Without CLAUDE_PROJECTS_DIR the config homes are read as they are written: brackets in a path are no pattern.
+literal = tmp / "profile[1]"
+(literal / "projects" / TDIR.name).mkdir(parents=True)
+(literal / "projects" / TDIR.name / "s.jsonl").write_text(json.dumps(RAN) + "\n")
+del os.environ["CLAUDE_PROJECTS_DIR"]
+real_homes, sync.HOMES = sync.HOMES, (str(literal), str(tmp / "orca-homes" / "*" / "home"))
+try:
+    assert card.goal_state(WT, LINE) == "ran"
+finally:
+    sync.HOMES = real_homes
+    os.environ["CLAUDE_PROJECTS_DIR"] = str(PROJECTS)
 # The KIND row's kind is the whole word before the dash.
 for bad in ("KIND: design-extra — reason", "KIND: edit-typo — x", "KIND: edit -x"):
     try:

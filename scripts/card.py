@@ -598,25 +598,27 @@ def user_texts(path):
 
 
 def goal_state(worktree, line):
-    """What the worktree's session says about `line`: "ran" once a user row is the /goal command, "none" while no
-    transcript holds the goal text (Orca has not typed the first prompt; a reload broadcast's rows do not count),
-    else "other". The session is the transcript whose user rows hold the goal text, never the newest file: another
-    session can share the folder. The folders are Claude Code's under CLAUDE_PROJECTS_DIR, else each of sync.HOMES'
-    `projects`, named after the path with every non-alphanumeric character as `-`."""
+    """What the worktree's sessions say about `line`: "ran" once a user row is the /goal command with this goal as
+    its args, "other" once a user row holds the whole line (the folded paste, a worker's spec), else "none": Orca has
+    not typed the first prompt yet, and a reload broadcast's rows or another session's prompt do not count. No file
+    is picked by its age: another session can share the folder. The folders are Claude Code's under
+    CLAUDE_PROJECTS_DIR, else under each of sync.HOMES (only the Orca profile pattern's `*` is a pattern),
+    named after the path with every non-alphanumeric character as `-`."""
     import sync
-    goal = line.split(None, 1)[1] if len(line.split(None, 1)) == 2 else line
+    ran = f"<command-args>{line.split(None, 1)[-1].strip()}</command-args>"
     name = re.sub(r"[^A-Za-z0-9]", "-", worktree)
-    roots = ([os.environ["CLAUDE_PROJECTS_DIR"]] if os.environ.get("CLAUDE_PROJECTS_DIR") else
-             [str(pathlib.Path(h) / "projects") for home in sync.HOMES for h in glob.glob(os.path.expanduser(home))])
+    homes = [h for home in sync.HOMES for h in (glob.glob(os.path.expanduser(home)) if "*" in home
+                                                else [os.path.expanduser(home)])]
+    roots = [os.environ["CLAUDE_PROJECTS_DIR"]] if os.environ.get("CLAUDE_PROJECTS_DIR") else [
+        str(pathlib.Path(h) / "projects") for h in homes]
     state = "none"
     for root in dict.fromkeys(roots):
         for path in pathlib.Path(root).expanduser().joinpath(name).glob("*.jsonl"):
-            texts = user_texts(path)
-            if not any(goal in t for t in texts):
-                continue
-            if any(t.lstrip().startswith(GOAL_RAN) for t in texts):
-                return "ran"
-            state = "other"
+            for t in user_texts(path):
+                if t.lstrip().startswith(GOAL_RAN) and ran in t:
+                    return "ran"
+                if line in t:
+                    state = "other"
     return state
 
 
