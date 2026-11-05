@@ -336,12 +336,12 @@ if sys.argv[1:] == ["cut-child"]:
         until = time.monotonic() + 10
         while not (grand.exists() and grand.read_text().strip()) and time.monotonic() < until:
             time.sleep(0.05)
+        cut_at.append(time.monotonic())
         os.kill(os.getpid(), signal.SIGALRM)
 
     import threading  # noqa: E402
-    progress = {}
+    progress, cut_at = {}, []
     threading.Thread(target=cut_once_written, daemon=True).start()
-    t0 = time.monotonic()
     try:
         candidates.collect(OK, now=time.time(), reap_scan=lambda kinds: (REAP_ITEMS, []), hard=hung_hard,
                            pressure_kinds=["orphan", "compose-stack"], state_dir=tmp,
@@ -356,7 +356,7 @@ if sys.argv[1:] == ["cut-child"]:
         grand_alive = True
     except ProcessLookupError:
         grand_alive = False
-    print(json.dumps({"events": events, "took": time.monotonic() - t0, "left": sorted(candidates.group_members()),
+    print(json.dumps({"events": events, "took": time.monotonic() - cut_at[0], "left": sorted(candidates.group_members()),
                       "grand_alive": grand_alive,
                       "cancelled": len(reap.CANCELLED), "source": progress["sources"]["reap_hard_cards"],
                       "after": reap.run(["true"], check=False) is not None}))
