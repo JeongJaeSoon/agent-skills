@@ -23,9 +23,7 @@ import cardguard, reap, rm_refused  # noqa: E402
 REMOVE, CLOSE, KEEP, ASK = "삭제", "터미널만 닫기", "남김", "사람 결정"
 ACTING = (REMOVE, CLOSE)
 SCREEN_LINES = 40
-# Rule 8b: a session idle this long in a card kept for its work (changes, unpushed commits, no PR) gives its terminals
-# back; the worktree, and so the work, stays. A card kept only because its session never said it was done has nothing
-# to lose, so its threshold is shorter.
+# Rule 8b. A card kept only because its session never said it was done has no work to lose, so it closes sooner.
 STALE_HOURS = 24
 CLOSE_HOURS = 2
 LIVE_UNDONE = "PR 없음, Claude 세션이 있음(끝났다는 말 없음)"
@@ -52,7 +50,7 @@ def sh(cmd, cwd=None, input=None, errors=None):
 def settings(cfg):
     c = cfg.get("cards") or {}
 
-    def hours(key, default):  # 0, or a value that is not a positive number, turns that half of rule 8b off
+    def hours(key, default):
         v = c.get(key, default)
         return float(v) * 3600 if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 else None
     return {"idle_s": float(cfg.get("idle_minutes") or 30) * 60,
@@ -242,8 +240,8 @@ def gather(w, m, run=None):
 # ---------------------------------------------------------------- the rule
 
 def judge(f, idle_s, stale_s=None, close_s=None):
-    """(verdict, why, handles to close). Pure: every fact comes from gather(). stale_s, close_s: rule 8b's thresholds
-    (a card kept for its work; one kept only for a session that never said done), None off."""
+    """(verdict, why, handles to close). Pure: every fact comes from gather(). stale_s, close_s: rule 8b's thresholds,
+    None off."""
     if f.get("protected"):
         return KEEP, f"보호: {f['protected']}", []
     if f.get("handed"):
@@ -285,12 +283,10 @@ def judge(f, idle_s, stale_s=None, close_s=None):
             return CLOSE, f"열린 PR {f['pr']}: worktree 는 두고 idle 터미널 {len(handles)}개만 닫음", handles
         return KEEP, f"열린 PR {f['pr']}" + ("" if agents_idle else ", 세션이 아직 조용하지 않음"), []
     verdict = settled(f, handles, live, said_done, agents_idle)
-    # 8b: every agent terminal and the transcript quiet past the threshold. "Done" on the screen is no evidence of
-    # hours of quiet, a terminal with no output time is no evidence of silence, a keep for what could not be read is
-    # not timed out, and a Claude process with no agent terminal has nothing here to close.
+    # 8b: "done" on the screen is no evidence of hours of quiet, and a keep for what could not be read is not timed out.
     limit = close_s if verdict[1] == LIVE_UNDONE else stale_s
-    read = f.get("unpushed") is not None and (f.get("pr") or f.get("landed") is not None)
-    if verdict[0] == KEEP and limit and read and agents and handles and isinstance(quiet, (int, float)) \
+    git_state_known = f.get("unpushed") is not None and (f.get("pr") or f.get("landed") is not None)
+    if verdict[0] == KEEP and limit and git_state_known and agents and handles and isinstance(quiet, (int, float)) \
             and quiet >= limit and all(t.get("output_known") and t["silent"] >= limit for t in agents):
         where = f" ({f['transcripts']})" if f.get("transcripts") else ""
         return CLOSE, (f"유휴 {quiet / 3600:.1f}시간({verdict[1]}): worktree 와 변경은 두고 터미널 {len(handles)}개만 닫음, "

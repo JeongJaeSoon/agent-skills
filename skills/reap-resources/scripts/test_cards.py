@@ -568,8 +568,6 @@ planned, _ = cards.scan({})
 assert [(i["verdict"], i["dirty"]) for i in planned] == [(cards.KEEP, None)], planned
 cards.read_machine, cards.cards_listing, cards.gather, reap.run = saved
 
-# Rule 8b: an idle session gives its terminals back. A card kept only because its session never said done (clean, HEAD
-# on the default branch) after idle_close_hours; a card kept for its work after stale_hours, the worktree left.
 ST = cards.settings({})
 assert (ST["stale_s"], ST["close_s"]) == (24 * 3600, 2 * 3600), ST
 H = 3600
@@ -588,7 +586,6 @@ for kw in ({"local_landed": True, "status": " M a.py\n"}, {"ahead": "c1\n", "rem
     assert idle8b(23 * H, 23 * H, **kw)[0] == cards.KEEP, ("work keeps it under a day", kw)
     v = idle8b(24 * H, 24 * H, **kw)
     assert v[0] == cards.CLOSE and "worktree 와 변경은 두고" in v[1] and v[2] == ["a1"], (kw, v)
-# Off by config, and never without a numeric transcript quiet, an agent terminal, or past a protection or a question.
 off = cards.settings({"cards": {"stale_hours": 0, "idle_close_hours": "soon"}})
 assert (off["stale_s"], off["close_s"]) == (None, None), off
 f = cards.gather({"path": CARD}, machine(quiet=30 * H), fake(local_landed=True, terminals=[term("a1", True, 30 * H)]))
@@ -604,16 +601,13 @@ assert cards.judge(f, IDLE, ST["stale_s"], ST["close_s"])[0] == cards.KEEP, "a p
 f = cards.gather({"path": CARD}, machine(quiet=30 * H), fake(ahead="c1\n", remote_log="r1\0fix: thing\n",
                                                              patches={"c1": "P", "r1": "Q"}, terminals=[term("a1", True, 30 * H)]))
 assert cards.judge(f, IDLE, ST["stale_s"], ST["close_s"])[0] == cards.ASK, "a question for a person is not a keep"
-# A terminal Orca gives no output time for is no evidence of silence.
 blind = {**term("a1", True, 0), "lastOutputAt": None}
 f = cards.gather({"path": CARD}, machine(quiet=30 * H), fake(local_landed=True, terminals=[blind]))
 assert cards.judge(f, IDLE, ST["stale_s"], ST["close_s"])[0] == cards.KEEP, "no output time, no close"
-# A keep for what could not be read is not timed out.
 for unread in ({"unpushed": None}, {"landed": None, "landed_via": "기본 브랜치를 모름"}):
     f = {**cards.gather({"path": CARD}, machine(quiet=30 * H), fake(terminals=[term("a1", True, 30 * H)])), **unread}
     v = cards.judge(f, IDLE, ST["stale_s"], ST["close_s"])
     assert v[0] == cards.KEEP, (unread, v)
-# The close's ledger line keeps the reason, so the resume path outlives the plan file.
 reap.log_action({"kind": "card", "path": "/w/idle", "why": "유휴 2.0시간: … claude --resume (/p/-w-idle)"}, "닫음 a1", True,
                 "card:close-idle", ["a1"])
 row = json.loads((reap.STATE / "reap-actions.jsonl").read_text().splitlines()[-1])
