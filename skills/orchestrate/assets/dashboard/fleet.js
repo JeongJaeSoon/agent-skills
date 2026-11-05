@@ -961,6 +961,7 @@ const DASH_URL = /(https?:\/\/[^\s<]+\/(#\/fleet\/[\w/-]+))$/;
 // too. split: what parts a line falls into, in order: [separator, column name] — the text before the first separator
 // is the first column. A line without the separator leaves the rest empty.
 const BRIEF_SECTIONS = {
+  "우선순위": [["", "그룹"], [" — ", "현황"]],
   "카드 없는 일": [["", "항목"], [" — ", "상황"]],
   "다른 사람 대기": [["", "누구 · 무엇 · 언제"], [" → ", "항목"], [" · 다음: ", "다음"]],
   "결정 필요": [["", "결정"], [" → 추천: ", "추천"]],
