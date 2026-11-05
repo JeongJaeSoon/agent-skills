@@ -339,6 +339,23 @@ class ShellJobs(Base):
         with mock.patch.object(j, "turned_off", return_value=False):
             self.assertEqual(j.status()[0], "absent")
 
+    def test_enable_clears_the_old_off_marker_only_when_it_worked(self):
+        cleared = []
+        j = au.ShellJob("x", "w", ["a"], 900, True, clear_off=lambda: cleared.append(1))
+        self.orca([])
+        self.assertEqual(j.enable(False)[0], 0)
+        self.assertEqual(cleared, [1])
+        self.orca([], main=False)  # a worktree refuses: the marker stays
+        self.assertEqual(j.enable(False)[0], 1)
+        self.assertEqual(cleared, [1])
+
+    def test_disable_of_an_already_off_job_still_drops_a_stale_record(self):
+        j = self.jobs["sync"]
+        self.orca([self.stored(j, enabled=False)])
+        with mock.patch.object(au.orca_job, "forget") as forget:
+            self.assertEqual(j.disable(), (0, "이미 꺼져 있음"))
+        forget.assert_called_once_with("sync")
+
     def test_disable_drops_the_last_run_record(self):
         j = self.jobs["sync"]
         self.orca([self.stored(j)])

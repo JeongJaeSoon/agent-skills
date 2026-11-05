@@ -332,7 +332,7 @@ class ShellJob(OrcaJob):
 
     def disable(self):
         code, msg = super().disable()
-        if not code and not msg.startswith("이미"):  # a job left off after failing keeps its failure record
+        if not code:
             orca_job.forget(self.name)  # a stopped job's last run must not turn into a 'late' warning
         return code, msg
 

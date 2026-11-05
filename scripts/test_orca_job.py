@@ -96,6 +96,7 @@ class RunTest(unittest.TestCase):
         (oj.JOBS / "a.json").write_text("[]")
         (oj.JOBS / "b.json").write_text(json.dumps({"name": "b"}))
         (oj.JOBS / "c.json").write_text("{not json")
+        (oj.JOBS / "d.json").write_text(json.dumps({"name": "d", "at": 1, "ok": "false", "message": "", "interval": "abc"}))
         self.assertIsNone(oj.read("a") or oj.read("b") or oj.read("c"))  # status and stale() read through the same guard
         self.run_job(["run", "good", "--", sys.executable, "-c", "pass"])
         self.assertEqual([r["name"] for r in oj.records()], ["good"])

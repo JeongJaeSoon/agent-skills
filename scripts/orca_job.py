@@ -22,7 +22,9 @@ def record_path(name):
 
 
 def valid(rec):
-    return isinstance(rec, dict) and {"name", "at", "ok", "message"} <= rec.keys() and isinstance(rec["at"], (int, float))
+    num = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)  # noqa: E731
+    return (isinstance(rec, dict) and {"name", "at", "ok", "message"} <= rec.keys() and num(rec["at"])
+            and isinstance(rec["ok"], bool) and (rec.get("interval") is None or num(rec["interval"])))
 
 
 def read(name):
