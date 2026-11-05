@@ -49,6 +49,12 @@ Usage: orch <command> <slug> [options]
                                      and what resolved it. Exit 0
                                      landed, 2 yield (nothing to do yet), 3 act (fix, update or
                                      re-review now), 1 refused
+                                     With orchestrate.land_executor on for the repo it merges nothing: it
+                                     records a request for the current head and waits for the land
+                                     executor's result, with the same exit codes (land_exec.py)
+  land-exec round|queue|setup|status
+                                     the land executor (land_exec.py); round runs from the land-executor
+                                     automation's precheck
   land-check <slug> --pr N [--main-fix]
                                      readiness only, no merge (lead diagnostics)
   landed <slug> --pr N               record a merge made outside `land` and print the main-CI watch
@@ -95,7 +101,10 @@ Usage: orch <command> <slug> [options]
                                      one-line proposal per setting to change, and this terminal's Run
                                      (orca_settings.py)
   model lead|worker                  no slug: the role's model from orchestrate.models; prints nothing when unset
-  decide add --title T [--body-file F] [--option "label::description"]... [--recommend N] [--link URL]
+  decide add --title T [--body-file F] --option "label::description"... --recommend N [--link URL]
+             --if-no-answer <the --recommend label | 진행 못 함> --reason <owner-asked | hard-after-review | owner-hands-only>
+                                     the owner-ask gate (references/owner-ask-gate.md): the recommended option
+                                     has its reason, and the last two lead the body
   decide answer <id> | --title T  (--quote TEXT | --quote-file F) [--by SESSION]
   decide list | show <id> | done <id> [--answer TEXT] | drop <id> | keep <id>
                                      no slug: a decision you wait on the human for, shown on the fleet
@@ -190,7 +199,8 @@ Usage: orch <command> <slug> [options]
                                      zone. The stage table is one line: its row count and the dashboard's Stages
                                      page (`orch stage show` while the dashboard is down); --periodic adds
                                      --skipped and the last reap. The model gives only --headline (a sentence),
-                                     --decision ("<question>: <options> → 추천: X — <reason> · 답이 없으면 Y",
+                                     --decision ("<question>: <options> → 추천: X — <reason> · 답이 없으면
+                                     <X | 진행 못 함> · 근거: <tag>", the owner-ask gate,
                                      registered on the spot, so it shows with its id; the same words again
                                      are the same decision, and one answered within 24 h is not asked again.
                                      If it cannot be registered the report still prints, with a warning line
@@ -231,7 +241,7 @@ admitted, parked, approved, gate_opened, stop, resume, predicate_verified, confi
 land_check, yield, lane, lock_acquired, lock_released, reprioritized, signal.
 Tickets come from the tracker adapter (use-tracker/scripts/tracker.py), never from a tracker directly.
 """
-import contextlib, datetime as dt, fcntl, fnmatch, hashlib, heapq, json, os, pathlib, re, shlex, subprocess, sys, tempfile, time
+import contextlib, datetime as dt, fcntl, fnmatch, hashlib, heapq, json, math, os, pathlib, re, shlex, subprocess, sys, tempfile, time
 
 TRACKER = pathlib.Path(__file__).resolve().parents[2] / "use-tracker" / "scripts" / "tracker.py"
 HOME = pathlib.Path(os.environ.get("PROGRAMS_HOME", "~/.claude/programs")).expanduser()
@@ -668,6 +678,9 @@ def unblocks(ticket, after, open_tickets):
     return len(seen & open_tickets)
 
 
+PROTECTED = "branch protection blocks it (required review or check)"
+
+
 def row_state(row, verdict, no_ci=False):
     """ready, catching_up (only an update-branch or CI time stands between it and landing), or blocked."""
     if row is None:
@@ -688,7 +701,7 @@ def row_state(row, verdict, no_ci=False):
     if pending:
         catching.append(f"CI pending ({len(pending)})")
     elif mss == "BLOCKED" and not failed:
-        blocked.append("branch protection blocks it (required review or check)")
+        blocked.append(PROTECTED)
     if mss == "UNKNOWN":
         catching.append("GitHub is computing mergeability")
     if blocked:
@@ -1882,7 +1895,8 @@ def cmd_verdict(argv):
     if not head.startswith(sha):
         sys.exit(f"head is {head[:8]}, not the reviewed {sha[:8]}: the new head has not been reviewed")
     row = p.append("verdict", pr=pr, sha=head, patch_id=patch_id(p.cfg["repo"], pr),
-                   source=src, result=opt(argv, "--result", "pass"), note=opt(argv, "--note"))
+                   source=src, result=opt(argv, "--result", "pass"), note=opt(argv, "--note"),
+                   by=os.environ.get("ORCA_TERMINAL_HANDLE"))
     print(json.dumps(row, ensure_ascii=False))
 
 
@@ -2084,14 +2098,22 @@ def merge_async(repo, pr, head):
     return r, "pending", details
 
 
-def merge_unit(p, pr, unit, klass, events, onto=None, stacked=False):
+def merge_unit(p, pr, unit, klass, events, onto=None, stacked=False, expect=None, verdict_sources=None):
     """Merge a PR (or a stack from its top) after re-checking every layer at its current head.
     `onto`: the lower PR whose branch a `--onto-lower` fold merges into; its ticket has not landed yet.
-    `stacked`: the PR is in a GitHub stack, also when it lands alone as a lower layer."""
+    `stacked`: the PR is in a GitHub stack, also when it lands alone as a lower layer.
+    `expect`: the land executor's requested head; any other head, or a merge state other than clean, does not merge.
+    `verdict_sources`: with `expect`, the sources whose pass at exactly that head the merge needs."""
     repo, states, runs = p.cfg["repo"], pr_state(events), []
     no_ci = no_ci_repo(repo)
     for n in unit:
         v = pr_view(repo, n)
+        if expect and n == pr:
+            if v["headRefOid"] != expect:
+                return 3, (f"act: #{pr}'s head moved from {expect[:8]} to {v['headRefOid'][:8]} since the request:"
+                           " review the new head, orch verdict, land again")
+            if v["mergeStateStatus"] not in ("CLEAN", "HAS_HOOKS"):
+                return 2, f"yield: #{pr}'s merge state is {v['mergeStateStatus']}, not CLEAN; land again"
         verdict = states.get(n, {}).get("verdict") or {}
         if patch_id(repo, n) != verdict.get("patch_id"):
             note_attempt(p, events, pr, "blocked", [f"patch of #{n} changed since its verdict"])
@@ -2117,7 +2139,15 @@ def merge_unit(p, pr, unit, klass, events, onto=None, stacked=False):
         if threads:
             note_attempt(p, events, pr, "blocked", [f"{threads} unresolved thread(s) on #{n}"])
             return 3, f"act: #{n} has {threads} unresolved review thread(s): answer and resolve them, then land again"
-    head = v["headRefOid"]
+    if expect:
+        # The verdict the executor checked may have been replaced since: merge only on the one standing now.
+        latest = pr_state(p.events()).get(pr, {}).get("verdict") or {}
+        p.land_verdict = latest
+        if latest.get("sha") != expect or latest.get("result") != "pass" or \
+                (verdict_sources is not None and latest.get("source") not in verdict_sources):
+            return 3, (f"act: #{pr}'s verdict changed during the checks ({latest.get('result')} from"
+                       f" {latest.get('source')} at {(latest.get('sha') or '')[:8]}): review this head, orch verdict, land again")
+    head = expect or v["headRefOid"]
     use_async = stacked or len(unit) > 1
     status, details = None, {}
     if not use_async:
@@ -2198,8 +2228,9 @@ def base_ci_hint(repo, base):
             f" there; start it with gh workflow run <ci workflow file> --repo {repo} --ref {base} and watch that run")
 
 
-def attempt(p, pr, klass, onto_lower=False):
-    """One pass: returns (exit_code, message)."""
+def attempt(p, pr, klass, onto_lower=False, expect=None, verdict_sources=None):
+    """One pass: returns (exit_code, message). `expect`: the head the land executor was asked to merge, and
+    `verdict_sources` the sources its verdict must come from (merge_unit)."""
     events, cfg, repo = p.events(), p.cfg, p.cfg["repo"]
     st = pr_state(events).get(pr, {})
     if "landed" in st:
@@ -2215,12 +2246,19 @@ def attempt(p, pr, klass, onto_lower=False):
     if unread:
         print("warning: the repository's stacks could not be read; dependent PRs are not checked", flush=True)
         if in_a_stack(repo, pr):
+            if expect:
+                return 1, f"#{pr} is in a stack: the land executor lands single PRs only"
             # merge-async takes every open layer below; without the listing those layers go unverified.
             return 2, f"yield: #{pr} is in a stack and the stack listing did not answer; land again"
         stacks = {}
     deps = orca_deps(cfg["run"])
     order = land_order(events, rows, cfg, dt.datetime.now(dt.timezone.utc), stacks, deps)
     stacked = any(pr in members for members in stacks.values())
+    if expect and (stacked or onto_lower):
+        # Its checks pin one PR at one sha; the lower layers merge-async would take have no such pin.
+        return 1, f"#{pr} is in a stack: the land executor lands single PRs only"
+    if expect and unread:
+        return 2, "yield: the stack listing did not answer, so the land executor cannot tell a single PR; land again"
     members = next((m for m in stacks.values() if pr in m), [])
     seen = {r["number"] for r in rows}
     if unseen := [m for m in members[:members.index(pr)] if m not in seen] if members else []:
@@ -2272,7 +2310,10 @@ def attempt(p, pr, klass, onto_lower=False):
         if st.get("yield", {}).get("note") != me["reasons"][0]:
             p.append("yield", pr=pr, note=me["reasons"][0])
         return 2, f"yield: {me['reasons'][0]}"
-    if me["state"] == "blocked":
+    # The land executor waits on GitHub's own rule (a required review or check, which can still come) only once
+    # the checks below that row_state does not cover (evidence, threads) pass too.
+    github_block = bool(expect) and me["reasons"] == [PROTECTED]
+    if me["state"] == "blocked" and not github_block:
         note_attempt(p, events, pr, "blocked", me["reasons"])
         todo = [ADVICE.get(r, r).format(pr=pr, repo=repo) for r in me["reasons"]]
         return 3, "act: " + " | ".join(todo)
@@ -2290,6 +2331,17 @@ def attempt(p, pr, klass, onto_lower=False):
     if missing:
         note_attempt(p, events, pr, "blocked", missing)
         return 3, "act: " + " | ".join(missing)
+    if github_block:
+        try:
+            threads = unresolved_threads(repo, pr)
+        except (SystemExit, Exception) as e:
+            return 2, f"yield: #{pr}'s review threads are unreadable ({type(e).__name__}); land again"
+        if threads:
+            note_attempt(p, events, pr, "blocked", [f"{threads} unresolved thread(s) on #{pr}"])
+            return 3, f"act: #{pr} has {threads} unresolved review thread(s): answer and resolve them, then land again"
+        note_attempt(p, events, pr, "blocked", me["reasons"])
+        release_own_lanes(p, pr)  # a wait for a person must not hold a lane, also one taken in an earlier round
+        return 2, f"yield: GitHub blocks #{pr}: a required review or check is missing; it lands once GitHub allows it"
     no_ci = no_ci_repo(repo)
     keep = NO_CI_KEEP if no_ci else KEEP
     touched = is_exclusive(cfg, [f for n in unit for f in pr_files(repo, n)])
@@ -2323,7 +2375,7 @@ def attempt(p, pr, klass, onto_lower=False):
         if compare(repo, me["base"] or "main", pr_view(repo, pr)["headRefOid"]).get("behind_by"):
             return 3, (f"act: you hold the exclusive lane and it lands on the latest base only: {update_advice(unit, repo, stacked)},"
                        " let CI run, land again." + keep)
-        code, msg = merge_unit(p, pr, unit, klass, events, onto, stacked)
+        code, msg = merge_unit(p, pr, unit, klass, events, onto, stacked, expect, verdict_sources)
         if code == 0:
             lane.release(pr)
         elif code == 1:  # parked, so exclusive_turn passes it over until `record admitted`
@@ -2342,7 +2394,93 @@ def attempt(p, pr, klass, onto_lower=False):
         return 3, (f"act: since your branch point the base changed files you also change ({', '.join(overlap[:5])}):"
                    f" {update_advice(unit, repo, stacked)}, check your contract and test assumptions still hold,"
                    " let CI run, land again." + KEEP)
-    return merge_unit(p, pr, unit, klass, events, onto, stacked)
+    return merge_unit(p, pr, unit, klass, events, onto, stacked, expect, verdict_sources)
+
+
+LAND_HEARTBEAT = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser() \
+    / "land-exec.json"
+LAND_STALE_S = 600
+
+
+def land_executor(repo=None):
+    """`orchestrate.land_executor` of agent-skills.json when it is on (and lists `repo`, when given), else None. A file
+    that names the key but cannot be parsed stops the caller: a direct merge then would skip the executor's checks."""
+    path = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-skills.json").expanduser()
+    try:
+        text = path.read_text()
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        sys.exit(f"{path}: unreadable ({e}); land stops rather than decide without orchestrate.land_executor")
+    try:
+        cfg = (json.loads(text).get("orchestrate") or {}).get("land_executor")
+    except (ValueError, AttributeError) as e:
+        if "land_executor" in text:
+            sys.exit(f"{path}: unreadable ({e}); land stops rather than merge around orchestrate.land_executor")
+        return None
+    if not isinstance(cfg, dict) or cfg.get("enabled") is not True:
+        return None
+    repos = [r for r in cfg.get("repos") or [] if isinstance(r, str)]
+    if repo is not None and repo not in repos:
+        return None
+    hours = cfg.get("max_wait_hours")
+    try:
+        hours = 24.0 if hours is None else float(hours)
+    except (TypeError, ValueError):
+        hours = float("nan")
+    if not (math.isfinite(hours) and hours > 0) or isinstance(cfg.get("max_wait_hours"), bool):
+        # A wait that can never end (NaN, inf) or a typo ("24h") would keep requests queued for ever.
+        sys.exit(f"{path}: orchestrate.land_executor.max_wait_hours must be a positive number of hours, "
+                 f"not {cfg.get('max_wait_hours')!r}")
+    return {"repos": repos, "verdict_sources": cfg.get("verdict_sources") or ["review:codex"], "max_wait_hours": hours}
+
+
+LAND_EXIT = {"merged": 0, "superseded": 2}
+
+
+def land_request(p, pr, klass, argv):
+    """With the land executor on: record a request for the current head and wait for its result. Nothing here merges."""
+    import store
+    repo = p.cfg["repo"]
+    if "--onto-lower" in argv:
+        print("refused: the land executor lands single PRs only; --onto-lower needs orchestrate.land_executor off")
+        sys.exit(1)
+    v = pr_view(repo, pr)
+    if v["state"] != "OPEN":
+        print(f"#{pr} is {v['state']}; nothing to request")
+        sys.exit(0 if v["state"] == "MERGED" else 1)
+    base = run(["gh", "api", f"repos/{repo}/commits/{v.get('baseRefName') or 'main'}", "--jq", ".sha"], check=False)
+    try:
+        row, outcome = store.land_put(p.slug, str(p.dir.parent.resolve()), repo, pr, v["headRefOid"], base.stdout.strip() or None,
+                                      klass, os.environ.get("ORCA_TERMINAL_HANDLE"), by=os.environ.get("ORCA_TERMINAL_HANDLE"))
+    except store.NotMigrated as e:
+        print(f"refused: {e}")
+        sys.exit(1)
+    if outcome == "busy":
+        print(f"yield: the land executor is running request {row['id']} for {row['sha'][:8]}; land again")
+        sys.exit(2)
+    print(f"{'queued' if outcome == 'new' else 'waiting on'} land request {row['id']}: #{pr} at {row['sha'][:8]}."
+          " The land executor re-checks and merges it; this command only reads the result.", flush=True)
+    deadline = time.monotonic() + 60 * float(opt(argv, "--wait-minutes", "0"))
+    while True:
+        row = store.land_get(row["id"])
+        if row["status"] not in store.LAND_OPEN:
+            note = f" as {row['merge_sha'][:8]}" if row.get("merge_sha") else ""
+            print(f"{row['status']}{note} (land request {row['id']}): {row.get('reason') or ''}".rstrip(": "))
+            sys.exit(LAND_EXIT.get(row["status"], row.get("code") or 1))
+        try:
+            beat = json.loads(LAND_HEARTBEAT.read_text()).get("ts")
+            stale = beat is None or (dt.datetime.now(dt.timezone.utc) - parse_ts(beat)).total_seconds() > LAND_STALE_S
+        except (OSError, ValueError):
+            stale = True
+        if stale:
+            print(f"yield: no land executor round in the last {LAND_STALE_S // 60} minutes ({LAND_HEARTBEAT}); the request"
+                  " stays queued. Turn it on: skills-sync setup enable land-executor")
+            sys.exit(2)
+        if time.monotonic() >= deadline:
+            print(f"yield: land request {row['id']} is still {row['status']}: {row.get('reason') or 'not tried yet'}")
+            sys.exit(2)
+        time.sleep(15)
 
 
 def cmd_land(argv):
@@ -2350,11 +2488,14 @@ def cmd_land(argv):
     pr, klass = int(opt(argv, "--pr")), opt(argv, "--class")
     if klass and klass not in KLASS:
         sys.exit(f"--class is one of {', '.join(KLASS)}")
+    executor = land_executor(p.cfg["repo"])
     events = p.events()
     st = pr_state(events).get(pr, {})
     if not claimed(events, pr) or (klass and klass != st["ready"].get("klass", "normal")):
         p.append("ready", pr=pr, ticket=opt(argv, "--ticket"), klass=klass)
     klass = klass or next((e["klass"] for e in reversed(p.events()) if e.get("pr") == pr and e.get("klass")), "normal")
+    if executor:
+        land_request(p, pr, klass, argv)
     deadline = time.monotonic() + 60 * float(opt(argv, "--wait-minutes", "0"))
     while True:
         try:
@@ -3644,8 +3785,27 @@ def cmd_decide(argv):
             rec, body = opt(rest, "--recommend"), opt(rest, "--body-file")
             if rec is not None and not rec.isdigit():
                 sys.exit("--recommend is an option number")
-            d = fleet.decision_add(opt(rest, "--title"), pathlib.Path(body).read_text() if body else "",
-                                   [rest[i + 1] for i, a in enumerate(rest[:-1]) if a == "--option"],
+            import board
+            options = [rest[i + 1] for i, a in enumerate(rest[:-1]) if a == "--option"]
+            # Both are made one line and cut as decision_add stores a label, so the gate line checked is the one stored.
+            label, _, cost = options[int(rec) - 1].partition("::") if rec and 1 <= int(rec) <= len(options) else ("", "", "")
+            label = fleet._one_line(label, 120)
+            default, reason = opt(rest, "--if-no-answer"), opt(rest, "--reason")
+            default = fleet._one_line(default, 120) if default else default
+            if not label:
+                why = "--recommend N, one of the --option numbers, is missing"
+            elif not cost.strip():
+                why = f"the recommended option needs its reason: --option '{label}::<why>'"
+            else:
+                why = board.ask_lint(default, reason, label)
+            if why:
+                sys.exit(f"decide add: {why}. It needs --option 'label::why' --recommend N --if-no-answer "
+                         f"<that label | {board.CANNOT_PROCEED}> --reason <{' | '.join(board.ASK_REASONS)}> ({board.ASK_GATE})")
+            # The decision table has no column for these. The body's first line carries them: the page shows that line,
+            # the report appends it, and a long body loses its end, not them.
+            text = (pathlib.Path(body).read_text() if body else "").strip()
+            text = board.ask_line(default, reason) + (f"\n\n{text}" if text else "")
+            d = fleet.decision_add(opt(rest, "--title"), text, options,
                                    int(rec) if rec else None, opt(rest, "--link"), os.environ.get("ORCA_TERMINAL_HANDLE"))
             print(d["id"])
         elif sub == "list":
@@ -3683,8 +3843,8 @@ def cmd_decide(argv):
             d = fleet.decision_keep(rest[0])
             print(f"{d['id']} checked {d['checked_at']}")
         else:
-            sys.exit("usage: orch decide add --title T [--body-file F] [--option 'label::description']... [--recommend N] "
-                     "[--link URL] | list | show <id> | answer <id>|--title T --quote TEXT|--quote-file F [--by SESSION] | "
+            sys.exit("usage: orch decide add --title T [--body-file F] --option 'label::description'... --recommend N "
+                     "[--link URL] --if-no-answer LABEL|'진행 못 함' --reason TAG | list | show <id> | answer <id>|--title T --quote TEXT|--quote-file F [--by SESSION] | "
                      "done <id> [--answer TEXT] | drop <id> | keep <id>")
     except store.NotMigrated as e:
         sys.exit(f"decisions are not in {store.DB_NAME} yet ({e})")
@@ -3878,8 +4038,9 @@ def cmd_brief(argv):
     items = [argv[i + 1] for i, a in enumerate(argv[:-1]) if a == "--decision"]
     failed = None
     if not now:  # --now replays a past moment; only a report of this moment is sent
-        if any("→ 추천:" not in d for d in items):
-            sys.exit(f"--decision is one line: {board.DECISION_FORM}")
+        for d in items:
+            if why := board.decision_lint(d):
+                sys.exit(f"--decision is one line: {board.DECISION_FORM}\n{why} ({board.ASK_GATE})")
         items, failed = register_decisions(items)
     try:
         out = board.render(scope, "telegram" if "--telegram" in argv else "terminal", now and fleet_parse(now),
@@ -3984,6 +4145,7 @@ COMMANDS = {"init": cmd_init, "set": cmd_set, "status": cmd_status, "record": cm
             "landed": cmd_landed, "heavy": cmd_heavy, "wait": cmd_wait, "inbox": cmd_inbox, "backfill": cmd_backfill, "decide": cmd_decide,
             "db": cmd_db, "model": cmd_model,
             "stage": cmd_stage, "board": cmd_board, "brief": cmd_brief, "hold": cmd_hold, "sent": cmd_sent, "release": lambda argv: cmd_hold(argv, release=True),
+            "land-exec": lambda argv: __import__("land_exec").main(argv),
             "watch-cards": lambda argv: __import__("card_watch").main(argv),
             "handoff": lambda argv: __import__("handoff").main(argv),
             "patrol": lambda argv: __import__("patrol").main(argv),

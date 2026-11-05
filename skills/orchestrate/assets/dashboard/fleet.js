@@ -20,7 +20,6 @@ const FLEET_SECTIONS = [
   { id: "changes", label: "Skill changes", icon: "merge" },
   { id: "tokens", label: "Tokens", icon: "coins" },
   { id: "stats", label: "PR stats", icon: "chart" },
-  { id: "graph", label: "Graph", icon: "graph" },
   { id: "flow", label: "Data flow", icon: "link" },
 ];
 
@@ -80,11 +79,22 @@ const F = { token: null, draft: {}, confirm: null, chat: {}, arm: null, prompt: 
 
 // route() hands over "#/fleet/<section>[/<arg>]"; the only argument is a session id.
 // The Work page's stage table is the Stages page now: an old #/fleet/work link opens it.
-const MOVED = { work: "stages" };
-function fleetSection(section, arg) {
+// A page that folded into another is [section, view]: the old address opens that view of the new page.
+const MOVED = { work: "stages", graph: ["prs", "graph"] };
+function fleetSection(section, arg, hash = location.hash) {
   F.sessionId = section === "session" && arg ? arg : null;
-  section = MOVED[section] || section;
+  const moved = MOVED[section];
+  F.view = (Array.isArray(moved) ? moved[1] : null) || (hash.match(/[?&]view=([^&]*)/) || [])[1] || null;
+  section = Array.isArray(moved) ? moved[0] : moved || section;
   return F.sessionId ? "session" : FLEET_SECTIONS.some((s) => s.id === section) ? section : "overview";
+}
+// One page, several shapes of the same thing: `#/fleet/<section>?view=<id>`. views is [[id, label], ...], the first
+// the default (its link carries no query). A view the address names but the page lacks falls back to the default.
+const viewOf = (views) => (views.some(([id]) => id === F.view) ? F.view : views[0][0]);
+function viewSwitch(section, views) {
+  const cur = viewOf(views);
+  return `<nav class="view-switch" aria-label="보기">${views.map(([id, label], i) =>
+    `<a href="#/fleet/${section}${i ? `?view=${id}` : ""}" ${id === cur ? 'aria-current="page"' : ""}>${esc(label)}</a>`).join("")}</nav>`;
 }
 const BY_ID = new WeakMap();  // one map per state, not one per rendered row
 const byId = (st) => BY_ID.get(st) || BY_ID.set(st, Object.fromEntries((st.sessions || []).map((s) => [s.id, s]))).get(st);
@@ -129,7 +139,7 @@ function sessionTree(st) {
 function fleetSidebar() {
   const st = S.state;
   const counts = st ? { inbox: (st.items || []).length || null, sessions: (st.sessions || []).length,
-    prs: (st.prs || []).filter((p) => p.state === "OPEN").length || null, stages: stageOpen() || null, todo: todoCount() || null, automations: autoTroubled(st).length || null, monitors: monTroubled(st).length || null, graph: (st.prs || []).filter((p) => p.session).length || null } : {};
+    prs: (st.prs || []).filter((p) => p.state === "OPEN").length || null, stages: stageOpen() || null, todo: todoCount() || null, automations: autoTroubled(st).length || null, monitors: monTroubled(st).length || null } : {};
   $("#section-list").innerHTML = FLEET_SECTIONS.map((s) => `${s.sep ? '<li class="sb-sep" aria-hidden="true"></li>' : ""}<li><a class="nav-item" href="#/fleet/${s.id}"
       ${s.id === S.section ? 'aria-current="page"' : ""} title="${s.label}">${icon(s.icon)}<span class="sb-text">${s.label}</span>
       ${counts[s.id] != null ? `<span class="count">${counts[s.id]}</span>` : ""}</a></li>`).join("");
@@ -702,7 +712,18 @@ function prTable(st, list) {
   return `<table><thead><tr>${head.map(([c, l, cls]) => th("fleet_prs", c, l, cls)).join("")}</tr></thead><tbody>${rows}</tbody></table>`;
 }
 
+const PRS_VIEWS = [["table", "테이블"], ["graph", "그래프"]];
+const PRS_INFO = {
+  table: "Every open PR you authored, in any repository, and every PR a session's branch has. GitHub is read every 30 s while this page is open; a column head sorts.",
+  graph: "Session → pull request → reviewer. Edge colour is the reviewer's latest state; the bar on each PR is its CI. Only sessions with a linked pull request are drawn; a PR that is merged or closed is dimmed.",
+};
 function fleetPrs(st) {
+  const view = viewOf(PRS_VIEWS);
+  return `<div class="view-head"><div><h2>Pull requests</h2><p>${PRS_INFO[view]}</p></div>
+    <div class="aside muted">Updated ${prUpdated(st)}</div></div>
+    ${viewSwitch("prs", PRS_VIEWS)}${view === "graph" ? prsGraph(st) : prsTable(st)}`;
+}
+function prsTable(st) {
   const open = (st.prs || []).filter((p) => p.state === "OPEN"), merged = merged24h(st);
   const f = PR_FILTERS[S.filters.fleet_prs] ? S.filters.fleet_prs : "all";
   const repos = [...new Set(open.map((p) => p.repo))].sort(), repo = repos.includes(S.filters.fleet_prs_repo) ? S.filters.fleet_prs_repo : "all";
@@ -710,9 +731,7 @@ function fleetPrs(st) {
   const groups = {};
   shown.forEach((p) => (groups[p.repo] ||= []).push(p));
   const repoChip = (v, label, n) => `<button class="chip" type="button" data-group="fleet_prs_repo" data-val="${esc(v)}" aria-pressed="${v === repo}">${esc(label)}${n != null ? `<span class="n">${n}</span>` : ""}</button>`;
-  return `<div class="view-head"><div><h2>Pull requests</h2><p>Every open PR you authored, in any repository, and every PR a session's branch has. GitHub is read every 30 s while this page is open; a column head sorts.</p></div>
-    <div class="aside muted">Updated ${prUpdated(st)}</div></div>
-    <div class="toolbar">${chips("fleet_prs", Object.entries(PR_FILTERS).map(([id, [fn, label]]) => [id, label, open.filter(fn).length]), f)}</div>
+  return `<div class="toolbar">${chips("fleet_prs", Object.entries(PR_FILTERS).map(([id, [fn, label]]) => [id, label, open.filter(fn).length]), f)}</div>
     ${repos.length > 1 ? `<div class="chips proj-chips" role="group" aria-label="Repository">${repoChip("all", "All repositories")}${repos.map((r) => repoChip(r, r, open.filter((p) => p.repo === r).length)).join("")}</div>` : ""}
     ${Object.keys(groups).sort().map((r) => `<div class="card table-wrap" data-src="github"><div class="card-head"><h3 class="mono">${esc(r)}</h3><span class="aside">${groups[r].length} open</span></div>${prTable(st, groups[r])}</div>`).join("")
       || '<div class="card"><div class="empty-chart">No open pull request matches.</div></div>'}
@@ -987,6 +1006,32 @@ async function pollBrief() {
     }
   } catch (e) { F.brief = { message: String(e.message || e) }; F.briefEtag = null; }
   F.briefBusy = false;
+  if (S.section === "sessions") pollUnits();
+}
+// The server's join of sessions, brief rows, PRs and tickets (/api/fleet/units, units.py). The Sessions page is a column
+// preset of it: a ticket, a PR, a brief row or an owner's turn is read from here, never worked out again on the page.
+async function pollUnits() {
+  if (F.unitsBusy) return;
+  F.unitsBusy = true;
+  try {
+    const r = await fetch("/api/fleet/units", { cache: "no-store", headers: F.unitsEtag ? { "If-None-Match": F.unitsEtag } : {} });
+    if (r.status !== 304) {
+      F.units = r.ok ? await r.json() : { error: `HTTP ${r.status}`, units: [] };
+      F.unitsEtag = r.ok ? r.headers.get("ETag") : null;
+      if (isFleet() && S.section === "sessions") renderView();
+    }
+  } catch (e) {
+    F.units = { error: String(e.message || e), units: [] }; F.unitsEtag = null;
+    if (isFleet() && S.section === "sessions") renderView();
+  }
+  F.unitsBusy = false;
+}
+// The unit of a session, or null until the units are loaded (or when the server could not build them).
+function unitOf(id) {
+  const us = (F.units || {}).units;
+  if (!us) return null;
+  if (F.unitsFor !== F.units) { F.unitsFor = F.units; F.unitIdx = new Map(us.filter((u) => u.session).map((u) => [u.session.id, u])); }
+  return F.unitIdx.get(id) || null;
 }
 // ❔ is a pale outline glyph in most emoji fonts: drawn as a toned mark instead.
 const briefInline = (s) => linkTickets(esc(s).replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, text, url) => link(url, text))
@@ -1510,9 +1555,9 @@ function holdsCard(st) {
       : '<div class="empty-chart">Nothing held. Take a shared resource (a browser profile, a login) with <span class="mono">orch hold &lt;resource&gt;</span>.</div>'}</div>`;
 }
 
-function fleetGraph(st) {
-  return `<div class="view-head"><div><h2>Graph</h2><p>Edge colour is the reviewer's latest state; the bar on each PR is its CI. Only sessions with a linked pull request are drawn.</p></div></div>
-    ${projectChips(st)}<div class="card" data-src="github">${relGraph(st)}</div>`;
+// The graph view of Pull requests: a PR no longer open (merged, closed) is dimmed, and a project chip keeps only that project's sessions.
+function prsGraph(st) {
+  return `${projectChips(st)}<div class="card" data-src="github">${relGraph(st)}</div>`;
 }
 
 // A session's started subagents (subagents.jsonl, attached by the collector) as rows under it. Not sessions: no link,
@@ -1540,21 +1585,17 @@ const ticketHref = (k) => { const t = (S.fleet || {}).ticket_url; return t && sa
 const linkTickets = (html) => (S.fleet || {}).ticket_url
   ? html.replace(new RegExp(`(<a\\b[^>]*>[\\s\\S]*?</a>)|(<[^>]+>)|(${TICKET_RE.source})`, "g"),
     (m, a, tag, id) => !id || NOT_TICKET.test(id) ? m : link(ticketHref(id), id)) : html;
-// The card's own ticket links first, then ids in its name, its branch and the labels of its brief rows.
-function ticketIds(s, rows = []) {
-  const out = (s.refs || []).filter((r) => r.type !== "pr" && r.url).map((r) => ({ key: r.key || r.provider || "ticket", url: r.url }));
-  [s.name, s.branch, ...rows.map((x) => x.label)].forEach((t) => (String(t || "").match(TICKET_RE) || []).forEach((k) => {
-    if (!NOT_TICKET.test(k) && !out.some((o) => o.key === k)) out.push({ key: k, url: ticketHref(k) });
-  }));
-  return out;
-}
+// The unit's tickets, which units.py found once: the card's own links, then ids in its name, branch and brief rows.
+const unitTickets = (u) => ((u && u.tickets) || []).map((t) => ({ key: t.id, url: t.url }));
 // An offline worker whose pull request merged has nothing left to do: its row folds into the finished group. The
 // orchestrator and the leads are not workers: sessions hang under them.
 function finished(st, s) {
   if (s.kind === "orchestration" || s.kind === "orchestrator" || s.phase !== "offline") return false;
   // Every PR it has: one merged and none still open (an earlier PR merged while a later one is under review is not done).
-  const states = [...(st.prs || []).filter((p) => p.session === s.id).map((p) => p.state), s.linked_pr && s.linked_pr.state]
-    .filter(Boolean).map((x) => String(x).toUpperCase());
+  // The unit's PRs (a PR several sessions claimed is none of theirs). Without the unit, nothing says it is finished.
+  const u = unitOf(s.id);
+  if (!u) return false;
+  const states = u.prs.map((p) => p.state).filter(Boolean).map((x) => String(x).toUpperCase());
   return states.includes("MERGED") && !states.includes("OPEN");
 }
 // The session's brief rows: what the work is and where it stands, from the same answer the Brief page reads.
@@ -1624,6 +1665,7 @@ function foldSummary(kids) {
 
 function fleetSessions(st) {
   if (!F.brief) pollBrief();
+  if (!F.units) pollUnits();
   const tree = sessionTree(st), kidsOf = leadKids(tree), fold = leadFolds(), doneOpen = !!F.doneOpen;
   const shown = tree.filter(([s]) => inProject(s.project));
   const done = new Set(shown.filter(([s]) => finished(st, s)).map(([s]) => s.id));
@@ -1632,12 +1674,14 @@ function fleetSessions(st) {
   const foldedAway = [...done].map((id) => `row-${domId(id)}`);
   let stale = 0;
   const rows = shown.map(([s, d]) => {
-    const pr = (st.prs || []).find((p) => p.session === s.id);
-    // Orca's own link when the collector holds no PR for the session: number, state and CI as Orca observed them.
-    const lp = !pr && s.linked_pr && s.linked_pr.number ? s.linked_pr : null;
-    const prCell = pr ? link(pr.url, `#${esc(pr.number)}`)
-      : lp ? `${lp.url ? link(lp.url, `#${esc(lp.number)}`) : `#${esc(lp.number)}`} <span class="muted">${esc([lp.state, lp.checksStatus].filter((x) => x && x !== "unknown").join(" · "))}</span>` : "";
-    const ids = ticketIds(s, sessionRowsOf(s.id));
+    const u = unitOf(s.id);
+    // The unit's PRs: the one this session owns, else Orca's own link (number, state and CI as Orca observed them). A PR
+    // several sessions claimed is linked to none of them.
+    const [pr, ...morePrs] = (u && u.prs) || [];
+    const prLink = (p) => (p.url ? link(p.url, `#${esc(p.number)}`) : `#${esc(p.number)}`);
+    const prCell = (pr ? `${prLink(pr)}${pr.via === "orca" ? ` <span class="muted">${esc([pr.state, pr.ci].filter((x) => x && x !== "unknown").join(" · "))}</span>` : ""}${morePrs.length ? ` <span class="muted">+${morePrs.length}</span>` : ""}` : "")
+      + (u && u.pr_unknown.length ? ` <span class="muted" title="${esc(`Claimed by several sessions, so linked to none: ${u.pr_unknown.join(" ")}`)}">PR link unknown</span>` : "");
+    const ids = unitTickets(u);
     const tickets = ids.length ? `<span class="cut" title="${esc(ids.map((t) => t.key).join(" "))}">${ids.map((t) => t.url ? link(t.url, esc(t.key)) : `<span class="mono">${esc(t.key)}</span>`).join(" ")}</span>` : "";
     const board = s.workspace_status && s.workspace_status !== "in-progress" ? ` <span class="tag">${esc(s.workspace_status)}</span>` : "";
     const all = kidsOf.get(s.id), kids = all && live(all), folded = fold.has(s.id) && kids && kids.length > 0;
@@ -1652,14 +1696,15 @@ function fleetSessions(st) {
     }
     return `<tr${away ? " hidden" : ""} id="row-${domId(s.id)}"><td>${name}</td>
       <td>${kindTag(st, s)}</td><td>${esc(s.phase)}${board}${modelCell(s)}${reloadCell(s)}</td>
-      <td>${tickets}</td><td>${prCell}</td><td>${briefCell(s)}</td><td class="num">${badge(s.unread, s.missed)}</td><td class="num when">${relSpan(s.last_activity)}</td>
+      <td>${tickets}</td><td>${prCell}</td><td>${briefCell(s)}</td><td class="num">${u && u.owner_turn ? '<span class="bmark" title="Waits on you">🙋</span> ' : ""}${badge(s.unread, s.missed)}</td><td class="num when">${relSpan(s.last_activity)}</td>
       <td><div class="pb">${projBadge(s.project)}<span class="cut mono dim" title="${esc(s.branch || "")}">${esc(s.branch || "")}</span></div></td></tr>`
       + subagentRows(s, d, away, !doneOpen);
   }).join("");
   const sum = [done.size ? `${done.size} offline with a merged PR` : "", stale ? `${stale} subagent${stale === 1 ? "" : "s"} with no stop recorded` : ""].filter(Boolean).join(" · ");
   const doneRow = sum ? `<tr class="done-row"><td colspan="9" data-ui-review-ignore="a toggle across all columns, not a column's control"><button class="fold-btn" type="button" id="fold-done" data-fold-done aria-expanded="${doneOpen}" aria-controls="${esc(foldedAway.join(" "))}"
       aria-label="${doneOpen ? "Hide" : "Show"} finished sessions and stale subagents"><span class="chev" aria-hidden="true"></span></button><span class="muted">Finished · ${esc(sum)}</span></td></tr>` : "";
-  return `<div class="view-head"><div><h2>Sessions</h2><p>Every Orca worktree, placed under the orchestrator or lead whose run dispatched it, else under its Orca parent, else under the root. A lead is a session under the root with its own run; the sessions under it are its workers. Ticket is the card's own link, else an id in the session name, branch or brief row. Brief is the session's row from the Brief page. PR and the board column (shown when not in-progress) are the card's own Orca fields. A subagent a session started sits under it, dimmed. An offline worker whose PR merged, and a subagent with no stop recorded for hours, wait in the Finished line. The table scrolls sideways; a long value is cut to one line, whole on hover.</p></div>${phaseLegend()}</div>
+  return `<div class="view-head"><div><h2>Sessions</h2><p>Every Orca worktree, placed under the orchestrator or lead whose run dispatched it, else under its Orca parent, else under the root. A lead is a session under the root with its own run; the sessions under it are its workers. Ticket, PR and the owner's-turn mark in Needs you come from the server's units (/api/fleet/units): the ticket is the card's own link, else an id in the session name, branch or brief row; a PR several sessions claimed is linked to none of them. Brief is the session's row from the Brief page. The board column is shown when not in-progress. A subagent a session started sits under it, dimmed. An offline worker whose PR merged, and a subagent with no stop recorded for hours, wait in the Finished line. The table scrolls sideways; a long value is cut to one line, whole on hover.</p></div>${phaseLegend()}</div>
+    ${F.units && F.units.error ? `<div class="ack-note">${tag("units unavailable", "warn", "alert")} ${esc(F.units.error)}. Ticket, PR and the owner's-turn mark stay blank until it loads.</div>` : ""}
     ${projectChips(st)}<div class="card table-wrap"><table class="sess"><colgroup><col class="c-name"><col class="c-kind"><col class="c-phase"><col class="c-tk"><col class="c-pr"><col class="c-brief"><col class="c-need"><col class="c-act"><col class="c-pb"></colgroup>
       <thead><tr><th>Session</th><th>Kind</th><th title="After the phase: the model of the session's last assistant row, O opus, S sonnet, H haiku. A ! means orchestrate.models for its role says another. Then reload: the session loaded older hooks than the checkout has; no record: nothing recorded, so not known.">Phase · model</th><th>Ticket</th><th>PR</th><th>Brief</th><th class="num">Needs you</th><th class="num">Active</th><th>Project · branch</th></tr></thead><tbody>${rows}${doneRow}</tbody></table></div>
     ${holdsCard(st)}`;
@@ -1844,7 +1889,7 @@ document.addEventListener("pointermove", (e) => {
   else if (F.statTip) { hideTip(); F.statTip = false; }
 });
 document.addEventListener("pointerout", (e) => { if (!e.relatedTarget && F.statTip) { hideTip(); F.statTip = false; } });
-const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, prs: fleetPrs, brief: fleetBrief, stages: fleetStages, todo: fleetTodo, automations: fleetAutomations, monitors: fleetMonitors, sent: fleetSent, skills: fleetSkills, changes: fleetChanges, tokens: fleetTokens, flow: fleetFlow, stats: fleetStats, graph: fleetGraph, sessions: fleetSessions, session: fleetSession, timeline: fleetTimeline };
+const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, prs: fleetPrs, brief: fleetBrief, stages: fleetStages, todo: fleetTodo, automations: fleetAutomations, monitors: fleetMonitors, sent: fleetSent, skills: fleetSkills, changes: fleetChanges, tokens: fleetTokens, flow: fleetFlow, stats: fleetStats, sessions: fleetSessions, session: fleetSession, timeline: fleetTimeline };
 
 document.addEventListener("input", (e) => {
   const key = e.target.id === "chat-input" ? F.sessionId : e.target.dataset.decideInput;

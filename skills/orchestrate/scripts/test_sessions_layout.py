@@ -46,17 +46,22 @@ const S = {{filters: {{}}, state: {{sessions: []}}, fleet: null}};
 const sessions = {json.dumps(STATE)}.sessions;
 const by = Object.fromEntries(sessions.map((s) => [s.id, s]));
 const st = {json.dumps(STATE)};
-F.brief = {{table_rows: [{{rows: [{{label: "XYZ-7 brief row", status: "x", session: {{id: "w3"}}}}]}}]}};
+F.brief = {{table_rows: [{{rows: [{{label: "XYZ-7 brief row", status: "🙋", session: {{id: "w3"}}}}]}}]}};
+// What units.py wrote: the page only reads it. w1 has a ticket link, w3 a brief row and a PR, w2 owes the owner an answer.
+F.units = {{units: [
+  {{id: "card:w1", session: {{id: "w1"}}, tickets: [{{id: "ABC-12", url: "https://example.test/ABC-12", from: "refs"}}, {{id: "94S-1336", url: null, from: "name"}}], rows: [], prs: [], pr_unknown: [], owner_turn: false}},
+  {{id: "card:w2", session: {{id: "w2"}}, tickets: [], rows: [], prs: [{{key: "a/b#5", number: 5, url: "https://example.test/5", via: "orca", state: "merged", ci: "unknown"}}], pr_unknown: ["a/b#7"], owner_turn: true}},
+  {{id: "card:w3", session: {{id: "w3"}}, tickets: [{{id: "XYZ-7", url: null, from: "row"}}], pr_unknown: [], owner_turn: false,
+    rows: [{{id: "r1", title: "XYZ-7 brief row", state: {{status: "owner"}}}}, {{id: "r2", title: "done one", state: {{status: "done"}}}}],
+    prs: [{{key: "a/b#6", number: 6, url: "https://example.test/6", via: "session"}}]}}]}};
 const out = {{}};
-const ids = (s, rows) => ticketIds(s, rows).map((t) => t.key + (t.url ? "@" : ""));
-out.t1 = ids(st.sessions[2], []);
-out.t2 = ids(st.sessions[3], []);
-out.t3 = ids(st.sessions[4], [{{label: "XYZ-7 brief row"}}]);
-out.t4 = ids({{name: "UTF-8 and SHA-256 with XYZ-3, ABC-12 ABC-12"}}, []);
-out.t5 = ids({{name: "x", branch: "feat/ABC-12_fix"}}, []).concat(ids({{name: "feat_ABC-3", branch: "xABC-9 ABC-9x"}}, []));
+out.cells = {{w1: unitTickets(unitOf("w1")), none: unitTickets(unitOf("nobody"))}};
 out.twoPrs = finished({{prs: [{{session: "w9", state: "MERGED"}}, {{session: "w9", state: "OPEN"}}]}}, {{id: "w9", kind: "task", phase: "offline"}});
 out.root = finished(st, {{kind: "orchestrator", phase: "offline", linked_pr: {{state: "MERGED"}}}});
 out.fin = sessions.map((s) => finished(st, s));
+// two sessions claimed one merged PR: the unit links it to neither, so neither is finished because of it
+F.units = {{units: [...F.units.units, {{id: "card:w9", session: {{id: "w9"}}, tickets: [], rows: [], prs: [], pr_unknown: ["a/b#1"], owner_turn: false}}]}};
+out.shared = finished({{prs: [{{session: "w9", state: "MERGED"}}]}}, {{id: "w9", kind: "task", phase: "offline"}});
 F.doneOpen = false;
 out.closed = fleetSessions(st);
 F.doneOpen = true;
@@ -65,6 +70,11 @@ F.leadFold = new Set(["lead"]);
 out.foldedOpen = fleetSessions(st);
 F.doneOpen = false;
 out.foldedClosed = fleetSessions(st);
+F.units = null;
+out.unloaded = finished(st, sessions[3]);
+F.units = {{error: "units.py timed out after 30 s", units: []}};
+out.failed = fleetSessions(st);
+out.failedFinished = finished(st, sessions[3]);
 process.stdout.write(JSON.stringify(out));"""
 sandbox = ("const vm = require('vm'); vm.runInNewContext(require('fs').readFileSync(0, 'utf8'), "
            "{document: {addEventListener() {}}, process, location: {hash: '#/fleet/sessions'}, window: {}, fetch() { throw new Error('no fetch'); }});")
@@ -72,13 +82,14 @@ r = subprocess.run(["node", "-e", sandbox], input=js, capture_output=True, text=
 assert r.returncode == 0, r.stderr[-1500:]
 out = json.loads(r.stdout)
 
-# ticket ids: the card's own link first (with its url), then the name, branch and brief rows; no duplicates; only upper case
-assert out["t1"] == ["ABC-12@", "94S-1336"], out["t1"]
-assert out["t2"] == [], out["t2"]
-assert out["t3"] == ["XYZ-7"], out["t3"]
-assert out["t4"] == ["XYZ-3", "ABC-12"], out["t4"]  # a standard's name ("UTF-8", "SHA-256") is not a ticket
-
-assert out["t5"] == ["ABC-12", "ABC-3"], out["t5"]  # an underscore is a boundary, a letter glued to the id is not
+# tickets, brief rows, PRs and the owner's turn come from the unit (units.py finds the ticket ids; test_units covers that)
+assert out["cells"] == {"w1": [{"key": "ABC-12", "url": "https://example.test/ABC-12"}, {"key": "94S-1336", "url": None}], "none": []}, out["cells"]
+assert "#6</a>" in out["closed"] and "#5</a>" in out["closed"] and "merged" in out["closed"], "a unit's PRs, Orca's own link with its state"
+assert "PR link unknown" in out["closed"] and "a/b#7" in out["closed"], "a PR several sessions claimed is linked to none"
+assert out["closed"].count('title="Waits on you"') == 1 and "XYZ-7 brief row" in out["closed"], "one owner's turn mark (w2), and the brief row"
+assert out["shared"] is False, "a PR several sessions claimed does not finish the first claimant"
+assert out["unloaded"] is False and out["failedFinished"] is False, "without a unit, nothing says a session is finished"
+assert "units unavailable" in out["failed"] and "timed out after 30 s" in out["failed"] and "units unavailable" not in out["closed"]
 assert out["root"] is False  # the orchestrator is never a finished worker
 assert out["twoPrs"] is False  # an earlier PR merged while a later one is still open
 # finished: offline and a merged PR (the collector's, else Orca's own link, either case); never a lead or a live worker
