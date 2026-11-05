@@ -131,7 +131,7 @@ assert s.due() == []
 clock.t += ist.QUIET_S
 assert s.due()[0].startswith("RESTART DUE")
 
-never = lambda me: (_ for _ in ()).throw(AssertionError("typed"))  # noqa: E731
+never = lambda me, still=None: (_ for _ in ()).throw(AssertionError("typed"))  # noqa: E731
 req = ("2026-01-01T00:00:00Z", {"stage": "requested", "handle": ME, "session": "s1"})
 # auto_clear off (the default): a stored request is disarmed, never typed.
 st = Store(req)
@@ -141,7 +141,7 @@ assert s.restart()[0].startswith("RESTART OFF") and st.rows[-1][2]["stage"] == "
 
 typed = []
 st = Store(req)
-s, orca, out, clock = stream([], store=st, clear=lambda me: typed.append(me) or None)
+s, orca, out, clock = stream([], store=st, clear=lambda me, still: still() or typed.append(me) or None)
 s.now = lambda: 1767225600.0 + 60
 s.restart()
 s.restart()
@@ -159,7 +159,7 @@ except OSError:
     pass
 # A busy screen: nothing typed, the request goes back to requested with its first time, and expires from that.
 st = Store(req)
-s, orca, out, clock = stream([], store=st, clear=lambda me: "screen changed between two reads (someone may be typing)")
+s, orca, out, clock = stream([], store=st, clear=lambda me, still: "screen changed between two reads (someone may be typing)")
 s.now = lambda: 1767225600.0 + 60
 assert s.restart() == [] and [r[2]["stage"] for r in st.rows] == ["typing", "requested"], st.rows
 assert st.rows[-1][2]["requested_at"] == "2026-01-01T00:00:00Z"
@@ -175,22 +175,50 @@ st = Store(req)
 s, orca, out, clock = stream([], store=st, clear=never, session=lambda me: live["v"])
 live["v"] = "s2"
 assert s.restart() == [] and st.rows[-1][2]["stage"] == "stale"
+# A human /clear while the typing lock reads the screen: the check under the lock stops the send.
+live["v"] = "s1"
+st = Store(req)
+def clear_after_human(me, still):
+    live["v"] = "s2"
+    return still() or "typed"
+s, orca, out, clock = stream([], store=st, clear=clear_after_human, session=lambda me: live["v"])
+assert s.restart() == [] and [r[2]["stage"] for r in st.rows] == ["typing", "stale"], st.rows
 (root / "none.json").unlink()
 
 # An Orca error inside the debounce window: what was already taken still goes out, then the error.
 s, orca, out, clock = stream([{"deliveryId": "dv9", "messages": [{"id": "m9", "type": "status", "body": "x"}]}])
 real = prog.check
-def flaky(*args):
-    if "--peek" in args:
-        raise SystemExit("orca down")
-    return real(*args)
-prog.check = flaky
+for boom in (SystemExit("orca down"), ValueError("bad JSON from orca")):
+    s, orca, out, clock = stream([{"deliveryId": "dv9", "messages": [{"id": "m9", "type": "status", "body": "x"}]}])
+    real = prog.check
+    def flaky(*args, boom=boom, real=real):
+        if "--peek" in args:
+            raise boom
+        return real(*args)
+    prog.check = flaky
+    try:
+        s.mail(deadline=600)
+        raise AssertionError("the error must still end the round")
+    except type(boom):
+        pass
+    assert "INBOX id=m9" in out.getvalue() and ("--ack", "dv9") in orca.calls and not ist.holding(ME), boom
+# The mark lasts the stream's own window, longer than the default: a 600 s debounce still holds near its end.
+ist.hold(ME, 600 + ist.TICK_S * 2)
+real_time = ist.time.time
+ist.time.time = lambda: real_time() + 590
+assert ist.holding(ME)
+ist.time.time = lambda: real_time() + 600 + ist.TICK_S * 3
+assert not ist.holding(ME), "a dead stream's mark expires"
+ist.time.time = real_time
+ist.hold(ME, 0)
+# A take that fails before anything is printed leaves no mark behind.
+s, orca, out, clock = stream([])
+prog.check = lambda *a: (_ for _ in ()).throw(SystemExit("orca down"))
 try:
     s.mail(deadline=600)
-    raise AssertionError("the error must still end the round")
 except SystemExit:
     pass
-assert "INBOX id=m9" in out.getvalue() and not ist.holding(ME), out.getvalue()
+assert not ist.holding(ME)
 # While the window is open the stream marks that it holds mail.
 seen = []
 s, orca, out, clock = stream([{"deliveryId": "dv8", "messages": [{"id": "m8", "type": "status"}]}])

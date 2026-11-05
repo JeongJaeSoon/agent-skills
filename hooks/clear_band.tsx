@@ -17,6 +17,10 @@ const view = atom(
 let timer: { cancel: () => void } | undefined
 let asking = false
 let running = false
+let working = false
+// Bumped at each turn start and end: a check begun before one is about a turn that no longer stands.
+let turn = 0
+let again = false
 
 function stop(): void {
   timer?.cancel()
@@ -24,8 +28,13 @@ function stop(): void {
 }
 
 async function check($: EngineInterface): Promise<void> {
-  if (running) return
+  if (working) return
+  if (running) {
+    again = true
+    return
+  }
   running = true
+  const began = turn
   try {
     const tokens = (await $.session.usage()).context.tokens ?? 0
     if (tokens < FLOOR) {
@@ -50,6 +59,10 @@ async function check($: EngineInterface): Promise<void> {
       const error = `check failed (exit ${run.exitCode}) ${detail}`
       got = { show: true, ready: false, context: tokens, threshold: 0, reason: '', session, error }
     }
+    if (began !== turn) {
+      again = true
+      return
+    }
     await update($, view, () => got)
     if (got.show && !timer) timer = $.clock.every(PERIOD_MS, () => void check($))
     if (!got.show) stop()
@@ -57,11 +70,21 @@ async function check($: EngineInterface): Promise<void> {
     const why = `check failed: ${error instanceof Error ? error.message : String(error)}`.slice(0, 160)
     const session = await $.session.id().catch(() => '')
     const blank = { show: true, ready: false, context: 0, threshold: 0, reason: '', session }
-    await update($, view, old => ({ ...(old ?? blank), ready: false, error: why }))
+    await update($, view, old => ({
+      ...(old && old.session === session ? old : blank),
+      show: true,
+      ready: false,
+      session,
+      error: why,
+    }))
     // The timer is the retry: without it a first failure would leave the band blank until the next turn.
     if (!timer) timer = $.clock.every(PERIOD_MS, () => void check($))
   } finally {
     running = false
+    if (again && !working) {
+      again = false
+      void check($)
+    }
   }
 }
 
@@ -70,9 +93,21 @@ function k(n: number): string {
 }
 
 export const register: Register = on => {
+  on('turn.start', async ($, e, next) => {
+    if (e.agentId === undefined) {
+      working = true
+      turn += 1
+      // A turn may take mail or start subagents: the verdict from before it stops counting.
+      await update($, view, old => (old ? { ...old, ready: false } : old))
+    }
+    return next(e)
+  })
+
   on('turn.complete', async ($, e, next) => {
     const done = await next(e)
     if (e.agentId === undefined) {
+      working = false
+      turn += 1
       asking = /[?？]\s*$/.test(e.answer)
       void check($)
     }

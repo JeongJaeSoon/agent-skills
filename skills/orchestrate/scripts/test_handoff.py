@@ -70,16 +70,23 @@ got = handoff.ready(S, 150_000, False, peek=lambda k, h: [{"id": "m", "type": "s
 assert not got["ready"] and "1 message" in got["reason"], got
 # Mail the stream took but holds in its debounce window is not in the inbox any more, and still not safe to drop.
 hold_handle = os.environ.get("ORCA_TERMINAL_HANDLE") or handoff.terminal_of(S)
-inbox_stream.hold(hold_handle, True)
+inbox_stream.hold(hold_handle, 60)
 got = handoff.ready(S, 150_000, False, peek=empty)
 assert not got["ready"] and "holds mail" in got["reason"], got
-inbox_stream.hold(hold_handle, False)
+inbox_stream.hold(hold_handle, 0)
 # A session with no ROLE record but a role SessionStart resolved (an --agent lead) still gets a key.
 L = "00000000-0000-4000-8000-000000000002"
-roles.record_resolved(L, {"role": "lead", "slug": "app"})
+roles.record_resolved(L, {"role": "lead", "slug": "app", "agent_type": "agent-skills:lead"})
 assert handoff.role_key(L) == "lead:app"
-(roles.roles_dir() / f"{L}.json").write_text('{"role": "worker"}')
-assert handoff.role_key(L) is None, "a declared role other than orchestrator or lead wins over the resolved one"
+# resolve()'s order: an --agent role outranks a ROLE line declared later; `ROLE: none` outranks both.
+(roles.roles_dir() / f"{L}.json").write_text('{"role": "orchestrator"}')
+assert handoff.role_key(L) == "lead:app"
+(roles.roles_dir() / f"{L}.json").write_text('{"role": "none"}')
+assert handoff.role_key(L) is None
+# A title role (no agent_type) gives way to a declared orchestrator or lead.
+roles.record_resolved(L, {"role": "lead", "slug": "app", "agent_type": None})
+(roles.roles_dir() / f"{L}.json").write_text('{"role": "orchestrator"}')
+assert handoff.role_key(L) == "orchestrator"
 roles.record_resolved(L, None)
 assert not roles.resolved_file(L).exists()
 before =store.last_session_event("orchestrator", "handoff")

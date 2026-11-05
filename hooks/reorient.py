@@ -266,7 +266,8 @@ def main():
             except OSError:
                 pass
         entry = resolve(event, record)
-        roles.record_resolved(session, entry)
+        # The agent_type marks an --agent role, which outranks a ROLE line declared later (roles.role_of).
+        roles.record_resolved(session, entry and {**entry, "agent_type": event.get("agent_type")})
         try:
             register(event, session, entry, record)
         except OSError:

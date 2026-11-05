@@ -230,16 +230,22 @@ def record_resolved(session, entry):
 
 
 def role_of(session):
-    """The session's orchestrator or lead entry without a hook event: its ROLE record (`ROLE: none` answers None),
-    else what SessionStart resolved."""
+    """The session's orchestrator or lead entry without a hook event, in resolve()'s order: `ROLE: none`, the
+    `--agent` role SessionStart saw, a ROLE record declared since, then the title role SessionStart resolved."""
     record = declared(session)
-    if record:
-        return record if record.get("role") in ("orchestrator", "lead") else None
-    try:
-        entry = json.loads(resolved_file(session).read_text())
-    except (OSError, ValueError):
+    if record and record.get("role") == "none":
         return None
-    return entry if isinstance(entry, dict) and entry.get("role") in ("orchestrator", "lead") else None
+    try:
+        saved = json.loads(resolved_file(session).read_text())
+    except (OSError, ValueError):
+        saved = None
+    saved = saved if isinstance(saved, dict) and saved.get("role") in ("orchestrator", "lead") else None
+    entry = {k: v for k, v in (saved or {}).items() if k != "agent_type"} or None
+    if saved and AGENTS.get(saved.get("agent_type")):
+        return entry
+    if record and record.get("role") in ("orchestrator", "lead"):
+        return record
+    return entry
 
 
 def declare(session, prompt):

@@ -106,10 +106,13 @@ def context(session):
     return context_of(path) if path else None
 
 
-def type_clear(me):
+def type_clear(me, still=None):
     """None once /clear was typed and taken, else why not (sync.UNCONFIRMED when it may have been typed)."""
     import card
-    return card.type_when_idle(me, "/clear")
+    return card.type_when_idle(me, "/clear", still=still)
+
+
+STALE = "the session changed before the send (a /clear came meanwhile)"
 
 
 def ts_age(ts, now):
@@ -151,13 +154,21 @@ class Stream:
         prog.check("--peek", "--wait", "--timeout-ms", str(max(int(seconds * 1000), 1000)))
 
     def mail(self, deadline):
+        # Mail taken but not yet printed: the clear band must not call the inbox empty meanwhile. Marked before the
+        # take, which consumes, and kept until the print; the mark carries its own end so a dead stream's expires.
+        hold(self.me, TICK_S * 2)
+        try:
+            return self._mail(deadline)
+        finally:
+            hold(self.me, 0)
+
+    def _mail(self, deadline):
         did, work, revoked = self.take()
         dids = [did] if did else []
         error = None
         if work and not urgent(work):
-            # Mail taken but not yet printed: the clear band must not call the inbox empty meanwhile.
-            hold(self.me, True)
             until = min(self.clock() + self.debounce, deadline)
+            hold(self.me, until - self.clock() + TICK_S * 2)
             try:
                 while self.clock() < until:
                     self.wait(until - self.clock())
@@ -166,7 +177,7 @@ class Stream:
                     work, revoked = work + w2, revoked + r2
                     if urgent(w2):
                         break
-            except SystemExit as e:  # what was taken goes out now; the error ends this round after it
+            except BaseException as e:  # what was taken goes out now; the error ends this round after it
                 error = e
         lines = [f"ignored: Orca refused a repeat from released dispatch {d}" for d in revoked]
         if work:
@@ -176,7 +187,6 @@ class Stream:
             self.last_mail = self.clock()
             lines += self.due(force=True)
         self.emit(lines)
-        hold(self.me, False)
         for d in dids:  # an older Orca marks a batch read only on --ack; a newer one treats it as a no-op
             with contextlib.suppress(SystemExit):
                 prog.check("--ack", d)
@@ -248,8 +258,12 @@ class Stream:
         # Claimed before typing: if the claim cannot be written nothing is typed, and once written no later round
         # types again whatever happens after it.
         self.store.session_event(self.key, "restart", {**req, "stage": "typing"}, by=by)
-        why = self.clear(self.me)
-        if why is None or "taken" in why:
+        # Checked again under the typing lock, after the screen reads: a human /clear between the two checks
+        # leaves a new, idle session that must not get this one's /clear.
+        why = self.clear(self.me, lambda: None if self.session_of(self.me) == req.get("session") else STALE)
+        if why == STALE:
+            self.store.session_event(self.key, "restart", {**req, "stage": "stale"}, by=by)
+        elif why is None or "taken" in why:
             self.store.session_event(self.key, "restart", {**req, "stage": "sent", "confirmed": why is None}, by=by)
         else:  # nothing was typed (the screen was busy): ask again next round
             self.store.session_event(self.key, "restart", {**req, "stage": "requested"}, by=by)
@@ -325,21 +339,21 @@ def hold_path(me):
     return roles.state() / "inbox-stream" / f"{me or 'none'}.holding"
 
 
-def hold(me, on):
-    """Mark (or clear) that this terminal's stream holds mail it took and has not printed yet."""
+def hold(me, seconds):
+    """Mark that this terminal's stream holds mail it took and has not printed, for at most `seconds`; 0 clears it."""
     path = hold_path(me)
     with contextlib.suppress(OSError):
-        if on:
+        if seconds > 0:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(str(time.time()))
+            path.write_text(str(time.time() + seconds))
         else:
             path.unlink(missing_ok=True)
 
 
 def holding(me):
-    """Whether the stream holds unprinted mail; a mark older than a debounce window and a round is a dead stream's."""
+    """Whether the stream holds unprinted mail: a mark past its end is a dead stream's."""
     try:
-        return time.time() - float(hold_path(me).read_text()) < DEBOUNCE_S + TICK_S * 2
+        return time.time() < float(hold_path(me).read_text())
     except (OSError, ValueError):
         return False
 

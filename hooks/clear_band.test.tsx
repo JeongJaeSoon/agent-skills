@@ -101,3 +101,60 @@ test('asks orch only past the floor, says when /clear is safe, rechecks every mi
   session = 'sess-2'
   expect(await bandText($)).toBe('engine')
 })
+
+test('drops a verdict begun before a turn, and shows a failure after a hidden state', async ($, on) => {
+  const clock = mock.clock(on)
+  let tokens = 150_000
+  let release: (v: ReturnType<typeof verdict>) => void = () => {}
+  const queue: Array<ReturnType<typeof verdict> | Promise<ReturnType<typeof verdict>> | Error> = []
+  const argvs: string[][] = []
+  on('session.usage', () => ({ value: { startedAt: 0, context: { tokens, window: 200_000 }, rateLimits: {}, cost: {} } }))
+  on('session.id', () => ({ value: 'sess-1' }))
+  on('agent.list', () => ({ value: [] }))
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  on('turn.complete', (_, e) => ({ text: e.answer }))
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('process.run', async (_, e) => {
+    argvs.push([...e.argv])
+    const next = queue.shift() ?? verdict({ show: false })
+    if (next instanceof Error) throw next
+    return next
+  })
+
+  queue.push(verdict({ reason: '1 message(s) in the inbox' }))
+  await $.turn.complete(turn('done'))
+  await clock.settle()
+
+  // The minute check is still waiting on orch when a turn starts and ends on a question.
+  const asks = verdict({ reason: 'your last answer asks a question' })
+  let releaseRerun: (v: ReturnType<typeof verdict>) => void = () => {}
+  queue.push(new Promise(r => (release = r)), new Promise(r => (releaseRerun = r)), asks)
+  const pending = clock.advance(60_000)
+  await clock.settle()
+  await $.turn.start({ text: '', turnId: 't2' })
+  await $.turn.complete({ ...turn('which one first?'), turnId: 't2' })
+  release(verdict({ ready: true, reason: 'handoff saved' }))
+  await clock.settle()
+  // The rerun is still out: what the band shows meanwhile is not the verdict from before the turn.
+  expect(await bandText($)).not.toContain('/clear is safe')
+  releaseRerun(asks)
+  await pending
+  await clock.settle()
+  expect(argvs.slice(0, 3).map(a => a.at(-1))).toEqual(['0', '0', '--asking'])
+  expect(await bandText($)).not.toContain('/clear is safe')
+  expect(await bandText($)).toContain('asks a question')
+
+  // Below the threshold the band hides; a failure once past it must still show.
+  queue.length = 0
+  queue.push(verdict({ show: false }), new Error('spawn refused'))
+  await $.turn.complete(turn('done'))
+  await clock.settle()
+  expect(await bandText($)).toBe('engine')
+  tokens = 160_000
+  await $.turn.complete(turn('done'))
+  await clock.settle()
+  expect(await bandText($)).toContain('clear check: check failed:')
+})
