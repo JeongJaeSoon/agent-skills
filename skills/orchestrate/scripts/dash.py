@@ -53,6 +53,7 @@ import stages  # noqa: E402
 import flow  # noqa: E402
 import acks  # noqa: E402
 import tidy  # noqa: E402
+import store as store_db  # noqa: E402
 import board  # noqa: E402
 import jobs  # noqa: E402
 sys.path.append(str(HERE.parents[2] / "scripts"))
@@ -895,8 +896,7 @@ def stalls(workers, tnow, held=frozenset()):
 
 
 _CONTAINS = {}
-
-
+_cache_lock = threading.RLock()  # guards _CONTAINS: the loops read and renew it while a save rebuilds it
 # After one failed compare gh is not called again for this long, and never while core quota is below GH_MIN_CORE
 # (until its reset). The quota is read with `gh api rate_limit`, which costs none. A flat window for plain failures,
 # since the error text carries no reset time.
@@ -918,17 +918,119 @@ def gh_quota_low():
         return 0.0
 
 
-def gh_contains(repo, older, newer):
-    """Whether commit `older` is in `newer`'s history (GitHub compare): True or False, or None when unknown.
-    Answers are cached, since commits do not change. An unknown one is not, but it stops further gh calls: for
-    GH_BACKOFF_S after a failure, until the reset when the quota is low."""
+GH_COMPARES_PER_ROUND = 40  # new compare questions one warm-up may ask; the rest wait for the next round
+_budget = [GH_COMPARES_PER_ROUND]
+_cache_state = {"loaded": False, "dirty": False}
+CACHE_MAX = 20000  # answers kept; the oldest go first
+
+
+def cache_path():
+    return home() / ".compare-cache.json"
+
+
+def load_compare_cache():
+    """Answers survive a restart: a commit's ancestry never changes, and every restart used to ask them all again."""
+    if _cache_state["loaded"]:
+        return
+    disk = read_compare_cache()
+    with _cache_lock:
+        for k, v in disk.items():
+            _CONTAINS.setdefault(k, v)
+        _cache_state["loaded"] = True
+
+
+def read_compare_cache():
+    out = {}
+    try:
+        data = read_json(cache_path(), {})
+        for repo, pairs in (data.items() if isinstance(data, dict) else ()):
+            for k, v in (pairs.items() if isinstance(pairs, dict) else ()):
+                older, _, newer = k.partition("...")
+                if newer and isinstance(v, bool):
+                    out[(repo, older, newer)] = v
+    except Exception as e:  # a damaged cache is a cold cache, never a failed collect
+        log(f"compare cache ignored: {e!r}")
+    return out
+
+
+def cached(key):
+    """The remembered answer, moved to the young end so that eviction keeps what the current ledgers still ask."""
+    with _cache_lock:
+        v = _CONTAINS.pop(key, None)
+        if v is not None:
+            _CONTAINS[key] = v
+        return v
+
+
+def remember(key, value):
+    with _cache_lock:
+        _CONTAINS[key] = value
+        _cache_state["dirty"] = True
+
+
+def save_compare_cache():
+    if not _cache_state["dirty"]:
+        return
+    try:
+        with cache_path().with_suffix(".lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)  # the server and a hand `collect` both save: merge what the other wrote
+            disk = read_compare_cache()
+            with _cache_lock:  # the loops read and renew the dict meanwhile
+                merged = {k: v for k, v in disk.items() if k not in _CONTAINS}  # the other's go first
+                merged.update(_CONTAINS)
+                _CONTAINS.clear()
+                _CONTAINS.update(merged)
+                # The file keeps the newest CACHE_MAX answers; memory keeps twice that, so a ledger's active pairs
+                # (a few thousand, renewed by cached() every round) are never evicted into "unknown" while pairs of
+                # programs long gone do leave. Oldest first: the dict keeps insertion order.
+                for k in list(_CONTAINS)[:-2 * CACHE_MAX]:
+                    del _CONTAINS[k]
+                out = {}
+                for (repo, older, newer), v in list(_CONTAINS.items())[-CACHE_MAX:]:
+                    out.setdefault(repo, {})[f"{older}...{newer}"] = v
+                _cache_state["dirty"] = False
+            write_atomic(cache_path(), json.dumps(out))
+    except OSError as e:
+        _cache_state["dirty"] = True
+        log(f"compare cache not saved: {e!r}")
+
+
+def local_contains(repo_dir, older, newer):
+    """The answer from a local clone, or None when there is none or it does not know a commit. Replace refs and
+    grafts rewrite ancestry, and a shallow clone's "no" may only mean the history was cut: those go to GitHub."""
+    git = ["git", "--no-replace-objects", "-C", str(repo_dir)]
+    run = lambda *a: subprocess.run(git + list(a), capture_output=True, text=True, timeout=15)
+    try:
+        grafts = run("rev-parse", "--git-path", "info/grafts").stdout.strip()
+        if grafts and (pathlib.Path(repo_dir) / grafts).exists():
+            return None
+        shallow = run("rev-parse", "--is-shallow-repository").stdout.strip() != "false"  # read before the answer
+        rc = run("merge-base", "--is-ancestor", older, newer).returncode
+        if rc == 1 and shallow:
+            return None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return {0: True, 1: False}.get(rc)
+
+
+def gh_contains(repo, older, newer, repo_dir=None):
+    """Whether commit `older` is in `newer`'s history: True or False, or None when unknown. A local clone
+    (`repo_dir`) answers first at no cost to GitHub. Answers are cached on disk, since commits do not change. An
+    unknown one is not cached, but it stops further gh calls: for GH_BACKOFF_S after a failure, until the reset when
+    the quota is low, and past GH_COMPARES_PER_ROUND new questions in a warm-up round."""
     global _gh_down_until, _gh_check_at
+    load_compare_cache()
     key = (repo, older, newer)
-    if key in _CONTAINS:
-        return _CONTAINS[key]
+    if (hit := cached(key)) is not None:
+        return hit
+    if repo_dir and (known := local_contains(repo_dir, older, newer)) is not None:
+        remember(key, known)
+        return known
     with _gh_lock:  # the slow and fast loops share the quota check and the backoff: one asker at a time
-        if key in _CONTAINS:
-            return _CONTAINS[key]
+        if (hit := cached(key)) is not None:
+            return hit
+        if _budget[0] <= 0:
+            return None
         if time.monotonic() < _gh_down_until:
             return None
         if time.monotonic() >= _gh_check_at:
@@ -937,14 +1039,20 @@ def gh_contains(repo, older, newer):
             if wait:
                 _gh_down_until = time.monotonic() + wait
                 return None
+        _budget[0] -= 1
         try:
             st = sh(["gh", "api", f"repos/{repo}/compare/{older}...{newer}", "--jq", "{s: .status}"])["s"]
         except (SourceError, KeyError, TypeError):
             _gh_down_until = time.monotonic() + GH_BACKOFF_S  # counted from the failure, not from before a 45 s call
             _gh_check_at = 0.0  # when the backoff ends the quota is read first: a limit hit then waits for the reset
             return None
-        _CONTAINS[key] = st in ("ahead", "identical")
-        return _CONTAINS[key]
+        if st not in ("ahead", "identical", "behind", "diverged"):  # anything else is not an answer
+            return None
+        remember(key, answer := st in ("ahead", "identical"))
+        return answer
+
+
+GAP_MAX_AGE_D = 14  # a landing still without a main CI row after this long is stale history, not a gap to chase
 
 
 def ledger_gaps(cfg, events, workers, prs, tnow, contains=None):
@@ -959,7 +1067,7 @@ def ledger_gaps(cfg, events, workers, prs, tnow, contains=None):
     heads = {x.get("branch") for x in prs} - {None}
     folded = {x["number"] for x in prs if x.get("base") in heads}
     # A branch CI started by hand runs at the branch tip, so a green there covers every earlier landing it contains.
-    contains = contains or (lambda older, newer: gh_contains(cfg["repo"], older, newer))
+    contains = contains or (lambda older, newer: gh_contains(cfg["repo"], older, newer, cfg.get("repo_dir")))
     greens = [g for g in events if g["ev"] == "main_green" and g.get("sha")]
     # An unknown answer (None) counts as covered: a gap is reported only when GitHub said the green does not contain it.
     covered = lambda e: any(g["sha"] != e["sha"] and prog.parse_ts(g["ts"]) >= prog.parse_ts(e["ts"])
@@ -976,7 +1084,8 @@ def ledger_gaps(cfg, events, workers, prs, tnow, contains=None):
                            and prog.parse_ts(p["merged_at"]) >= t0 and p["number"] not in landed
                            and (not ours or p.get("base") in ours)),
         "ci": [e.get("pr") for e in events if e["ev"] == "landed" and e.get("sha") not in decided and e.get("pr") not in folded
-               and tnow - prog.parse_ts(e["ts"]) > dt.timedelta(hours=2) and not covered(e)],
+               and dt.timedelta(hours=2) < tnow - prog.parse_ts(e["ts"]) <= dt.timedelta(days=GAP_MAX_AGE_D)
+               and not covered(e)],
     }
 
 
@@ -1121,8 +1230,38 @@ def collect(slug, sources=SOURCES, interval=None):
             fetched[name] = (True, FETCHERS[name](cfg), iso(utcnow()))
         except SourceError as e:
             fetched[name] = (False, str(e), iso(utcnow()))
+    if "github" in sources and not closed(slug):  # a program at rest has no gap worth a GitHub call
+        warm_contains(d, cfg)
     with lock_for(slug):
         return _merge(slug, d, cfg, fetched, interval)
+
+
+def dated(rows):
+    """(events, bad ts): the rows every view below can parse a timezone-aware ts from."""
+    events, bad = [], []
+    for e in rows:
+        ts = e.get("ts")
+        try:
+            if prog.parse_ts(ts).tzinfo is not None:  # a naive ts parses but fails every comparison with now
+                events.append(e)
+                continue
+        except (ValueError, TypeError, AttributeError):
+            pass
+        bad.append(ts)
+    return events, bad
+
+
+def warm_contains(d, cfg):
+    """Asks GitHub, outside the program lock, the compare questions ledger_gaps will put. _merge runs under that lock
+    and the fast loop waits on it, so a gh call there stopped every collect behind it."""
+    _budget[0] = GH_COMPARES_PER_ROUND
+    try:
+        prev = read_json(d / "dashboard" / "state.json", {}) or {}
+        ledger_gaps(cfg, dated(ledger_events(d / "ledger.jsonl")[0])[0], [], prev.get("prs") or [], utcnow())
+    except Exception as e:  # a warm-up is best effort: the merge reads whatever the cache holds
+        log(f"{d.name}: compare warm-up failed: {e!r}")
+    finally:
+        save_compare_cache()
 
 
 def landing_of(cfg, events, prs):
@@ -1162,16 +1301,7 @@ def land_order(events, pr_rows, cfg, now, tasks=None):
 
 def _merge(slug, d, cfg, fetched, interval):
     rows, rejected = ledger_events(d / "ledger.jsonl")
-    events, bad = [], []
-    for e in rows:
-        ts = e.get("ts")
-        try:
-            if prog.parse_ts(ts).tzinfo is not None:  # a naive ts parses but fails every comparison with now
-                events.append(e)
-                continue
-        except (ValueError, TypeError, AttributeError):
-            pass
-        bad.append(ts)
+    events, bad = dated(rows)
     dash = d / "dashboard"
     dash.mkdir(exist_ok=True)
     prev = read_json(dash / "state.json", {}) or {}
@@ -1270,7 +1400,10 @@ def _merge(slug, d, cfg, fetched, interval):
     notes = read_jsonl(dash / "notes.jsonl")
     summary = summarize(cfg, events, issues, workers, tnow, order, sum(not c["active"] for c in cards))
     summary["stalls"], summary["spare"] = stalls(workers, tnow, parked_tickets(events)), spare(summary, tasks)
-    summary["gaps"] = ledger_gaps(cfg, events, workers, prs, tnow)
+    # Under the program lock: answers already fetched by warm_contains only, never a gh call.
+    load_compare_cache()
+    summary["gaps"] = ledger_gaps(cfg, events, workers, prs, tnow,
+                                  contains=lambda older, newer: cached((cfg["repo"], older, newer)))
     open_prs = [p for p in prs if p["state"] == "open" and not p.get("draft") and p.get("created_at")]
     oldest = min(open_prs, key=lambda p: p["created_at"], default=None)
     summary["oldest_open_pr"] = ({"pr": oldest["number"], "since": oldest["created_at"],
@@ -1500,8 +1633,24 @@ def code_loop():
         time.sleep(CODE_CHECK_S)
         try:
             check_code()
+            check_loops()
         except Exception as e:
             log(f"code check failed: {e!r}")
+
+
+def health_view():
+    """stale also means a collector loop stopped: the heartbeat alone and the code hash both look fine then."""
+    return {**HEALTH, "stale": bool(HEALTH.get("stale")) or not loops_alive(HEALTH)}
+
+
+def check_loops():
+    """The fast loop stopped finishing rounds (a call that never returns): under launchd, exit so it starts again,
+    instead of waiting for someone to run `ensure`. Elsewhere /api/health reports stale and the banner says what to run."""
+    if HEALTH.get("stale"):
+        return  # other code is on disk: check_code restarts into it, but only after it has imported it
+    if not loops_alive(HEALTH, RESTART_STALE) and under_agent():
+        log(f"fast loop silent since {HEALTH['ticks'].get('fast')}; exiting so launchd starts it again")
+        restart()
 
 
 STATIC = {"/": ("index.html", "text/html; charset=utf-8"), "/index.html": ("index.html", "text/html; charset=utf-8"),
@@ -1540,7 +1689,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path.startswith("/api/") and not self.local_only():
             return self.send(403, b'{"error":"forbidden"}')
         if path == "/api/health":
-            return self.send(200, json.dumps(HEALTH).encode())
+            return self.send(200, json.dumps(health_view()).encode())
         if path.startswith("/api/fleet/"):
             return self.fleet_get(path)
         if path == "/api/programs":
@@ -1882,6 +2031,9 @@ def beat():
 
 
 LOOP_STALE = dt.timedelta(minutes=5)
+# The server restarts itself later than health reports stale: a long but healthy first round (many pages, a big
+# transcript scan) must not put launchd in a restart loop. At most one self-restart per this long.
+RESTART_STALE = dt.timedelta(minutes=15)
 
 
 def tick(name):
@@ -1890,16 +2042,30 @@ def tick(name):
     HEALTH.setdefault("ticks", {})[name] = iso(utcnow())
 
 
-def loops_alive(h):
-    """False when the fast loop has not finished a round for LOOP_STALE. A server that reports no ticks (older
+def loops_alive(h, limit=LOOP_STALE):
+    """False when the fast loop has not finished a round for `limit`. A server that reports no ticks (older
     code) counts as alive; the version check restarts it anyway."""
     ticks = h.get("ticks")
     if not isinstance(ticks, dict):
         return True
     try:
-        return utcnow() - prog.parse_ts(ticks["fast"]) <= LOOP_STALE
+        return utcnow() - prog.parse_ts(ticks["fast"]) <= limit
     except (KeyError, ValueError, TypeError, AttributeError):
         return False
+
+
+def watch_migrate(poll=0.5, kill=os.kill, port=None):
+    """A server that slipped past the start checks (they are not atomic with the start) ends itself once `orch db
+    migrate` holds its lock, so it never writes the state during the import. It leaves its port first: the migrate
+    starts it again from that, whether or not its own probes saw it."""
+    while True:
+        time.sleep(poll)
+        if store_db.cutover_running():
+            log(MIGRATING)
+            if port:
+                store_db.mark_dash_yielded(port)
+            kill(os.getpid(), signal.SIGTERM)
+            return
 
 
 def serve(host, port, interval, make_fleet=None):
@@ -1919,6 +2085,8 @@ def serve(host, port, interval, make_fleet=None):
             "waiting for its store lock")
         fcntl.flock(lock, fcntl.LOCK_EX)
     httpd = http.server.ThreadingHTTPServer((host, port), Handler)  # bind before the loops start
+    if store_db.cutover_running():  # checked again after the bind: a migrate that starts later finds this server up
+        sys.exit(MIGRATING)
     HEALTH.update(pid=os.getpid(), store=str(home()), version=code_version(), mtime=code_mtime(), port=port,
                   started_at=iso(utcnow()), git=git_sha(), script=str(HERE / "dash.py"))
     check_code()
@@ -1934,6 +2102,7 @@ def serve(host, port, interval, make_fleet=None):
     threading.Thread(target=slow_loop, args=(interval,), daemon=True).start()
     threading.Thread(target=fast_loop, args=(interval,), daemon=True).start()
     threading.Thread(target=code_loop, daemon=True).start()
+    threading.Thread(target=watch_migrate, kwargs={"port": port}, daemon=True).start()
     if os.environ.get("ORCH_FLEET") != "off":
         FLEET = (make_fleet or fleet.Fleet)()
         threading.Thread(target=fleet_loop, daemon=True).start()
@@ -1963,6 +2132,8 @@ def cmd_collect(argv):
 
 
 def cmd_serve(argv):
+    if store_db.cutover_running():  # a server that wins the race with `ensure`'s check still ends here
+        sys.exit(MIGRATING)
     serve(prog.opt(argv, "--host", "127.0.0.1"), int(prog.opt(argv, "--port") or default_port()),
           int(prog.opt(argv, "--interval", "60")))
 
@@ -1987,7 +2158,7 @@ def periodic_report():
         out = json.loads(r.stdout)
     except ValueError:  # an empty board, or a renderer this checkout does not have yet: its own words
         return {"message": (r.stdout or r.stderr).strip() or f"orch brief render exited {r.returncode}"}
-    keys = ("text", "changed", "stale", "width_ok", "done", "open", "table_rows", "list_rows", "placement", "duplicates",
+    keys = ("text", "full", "changed", "stale", "width_ok", "done", "open", "table_rows", "list_rows", "placement", "duplicates",
             "missing", "now_by_pr")
     return {k: out.get(k) for k in keys} | {"closed": closed_recent()}
 
@@ -2012,7 +2183,7 @@ def pressure_report(hours=6):
 
 
 def closed_recent(days=7):
-    """What tidy.jsonl closed in the last days, newest first, for the page's Reopen buttons."""
+    """What was closed in the last days, newest first, for the page's Reopen buttons."""
     cut = iso(utcnow() - dt.timedelta(days=days))
     return sorted(({"id": k, **r, "reopen": tidy.can_reopen(k)} for k, r in tidy.closed().items() if (r.get("ts") or "") >= cut),
                   key=lambda r: r.get("ts") or "", reverse=True)
@@ -2069,6 +2240,9 @@ def stop(h, port):
 
 
 # ---------------------------------------------------------------- launchd
+
+MIGRATING = "orch db migrate is running: the dashboard server starts again when it ends"
+
 
 def agent_label():
     return os.environ.get("ORCH_DASH_LABEL") or "io.github.jeongjaesoon.orch-dash"
@@ -2156,6 +2330,8 @@ def agent_spec(port):
 
 
 def install_agent(port):
+    if store_db.cutover_running():
+        return False, MIGRATING
     if sys.platform != "darwin":
         return False, "no launchd on this OS; `orch init` and `orch status` keep the dashboard up with `ensure`"
     if not (HERE.parents[2] / ".git").is_dir():  # a worktree or the plugin cache goes away under launchd
@@ -2187,6 +2363,8 @@ def uninstall_agent():
 
 def ensure(port):
     """(ok, message). Starts, restarts or moves only a server it can identify as this store's."""
+    if store_db.cutover_running():  # a restarted session's `orch wait` must not bring the server back mid-import
+        return False, MIGRATING
     if a := agent_status():
         return ensure_agent(a)
     last = (read_json(home() / ".dash.json") or {}).get("port")

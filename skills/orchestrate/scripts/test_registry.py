@@ -21,7 +21,7 @@ found = registry.check(writes=real)
 assert found == [], "\n".join(f"{v['kind']} {v['key']}: {v['detail']}" for v in found)
 assert len(set(registry._names(registry.sources()).values())) == len(registry.sources()), "two modules share a name"
 writers = {w.writer for w in real}
-for must in ("fleet:Fleet.tick", "board:change", "tidy:append", "patrol:write_round", "roles:declare",
+for must in ("fleet:Fleet.tick", "store:_export_board", "patrol:write_round", "roles:declare",
              "reap-resources/guard:hold"):
     assert must in writers, must  # the scan sees writes through wrappers, **kwargs and self attributes
 
@@ -221,8 +221,7 @@ assert [(x["kind"], x["key"]) for x in v] == [("unregistered", "elsewhere/board.
 # `path.with_name(path.name + ".lock")` names a file of its own: dropping its store is caught.
 for gone, name in (("subagentslock", "dashboard/subagents.jsonl.lock"), ("subagentsold", "dashboard/subagents.jsonl.1"),
                    # fleet.rotate(path) renames its parameter: the caller's file with ".1" added
-                   ("eventsold", "dashboard/events.jsonl.1"), ("preventsold", "dashboard/pr-events.jsonl.1"),
-                   ("tidyold", "dashboard/tidy.jsonl.1")):
+                   ("eventsold", "dashboard/events.jsonl.1"), ("preventsold", "dashboard/pr-events.jsonl.1")):
     v = registry.check(stores=[s for s in registry.STORES if s.id != gone], writes=real)
     assert ("unregistered", name) in [(x["kind"], x["key"]) for x in v], (gone, v)
 # Registered, the same writes pass.

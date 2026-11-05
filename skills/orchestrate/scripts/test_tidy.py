@@ -12,8 +12,9 @@ env = {**os.environ, "ORCH_FLEET_STATE": str(tmp / "dashboard"), "ORCH_BRIEF_LAS
        "AGENT_SKILLS_CONFIG": str(tmp / "none.json")}
 os.environ.update(env)
 sys.path.insert(0, str(HERE))
-import board, fleet, tidy  # noqa: E402
+import board, fleet, store, tidy  # noqa: E402
 
+store.import_apply(checks=False)
 now = fleet.utcnow()
 sd = fleet.state_dir()
 ago = lambda h: fleet.iso(now - dt.timedelta(hours=h))  # noqa: E731
@@ -92,7 +93,7 @@ for title, owner, nxt, waiting in [
         ("acme/app#7 오너 확인", "오너", "확인", False),
         ("청구 화면 (card-review 카드)", "card", "리뷰 반영 → 머지", False),
         ("설정 화면 (card-quiet 카드)", "card", "머지 대기", False)]:
-    board.doing_add(title, owner, nxt, waiting)
+    board.doing_add(title, owner, nxt, waiting, force=True, why="lines from before the write ban")
 board.later_add("다음 일 시작", "card-done PR 머지")
 board.later_add("다른 일", "acme/app#9 머지 뒤")
 board.later_add("열린 PR 뒤의 일", "acme/app#8 머지 뒤")
@@ -103,9 +104,7 @@ board.set_now([LONG_TODO, "acme/app#8 리뷰", "회의 준비"])
 board.set_row("stale-row", title="오래된 일", repo="acme/app", status="moving", next="조사")
 board.set_row("fresh-row", title="새 일", repo="acme/app", status="moving", next="조사")
 board.set_row("card-dup", title="중복 카드 작업", repo="acme/app", status="moving", next="정리")
-st = fleet.read_json(sd / "board.json")
-st["rows"]["stale-row"]["reported_at"] = ago(12)
-fleet.write_atomic(sd / "board.json", json.dumps(st))
+store.change_board(lambda s: s["rows"]["stale-row"].update(reported_at=ago(12)))
 # Inbox items.
 fleet.inbox_add("review", "acme/app#7 리뷰 요청", key="k-merged")
 fleet.inbox_add("review", "acme/app#8 리뷰 요청", key="k-open")
@@ -117,9 +116,9 @@ fleet.inbox_add("run_command", "acme/app#7 뒤에 실행", session="s1", command
 fleet.inbox_add("decision", "배포 순서 결정", session="s-gone", key="k-decide")
 fleet.inbox_add("question", "사라진 세션의 질문", session="s-gone", key="k-ask")
 
-S = fleet.read_json(sd / "board.json")
-ids = lambda kind, items: [tidy.item_id(kind, i) for i in items]  # noqa: E731
-doing, later, todo = ids("doing", S["doing"]), ids("later", S["later"]), ids("todo", S["owner_todo"])
+S = board.read()
+ids = lambda items: [i["id"] for i in items]  # noqa: E731
+doing, later, todo = ids(S["doing"]), ids(S["later"]), ids(S["owner_todo"])
 v = tidy.assess(S, fleet.read_json(sd / "state.json"), {k: p["detail"] for k, p in PRS.items()}, "owner-me", now)
 got = {k: (x["verdict"], x["rule"]) for k, x in v.items()}
 want = {doing[0]: ("done", "pr_merged"),                  # its card's PR merged, nothing after the merge
@@ -141,15 +140,16 @@ for k in (doing[3], doing[4], doing[5], doing[6], doing[7], doing[8], later[2], 
 # 카드 없는 일; a quiet card follows its PR, a fired trigger leaves 보류.
 b = brief()
 moving, held, theirs = section(b["text"], "📌"), section(b["text"], "⏸️"), section(b["text"], "⏳")
-notes = [l[l.index("] ") + 2:] for l in b["text"].splitlines() if l.startswith("- [")]
+full = b["full"]  # no cell cut: the next step is read whole
+assert "- [" not in b["text"], b["text"]
 assert any("결제 릴리스 (card-release 카드) — 에이전트 조치 필요: acme/app#2 머지 abc1234 · 남은 단계" in m for m in moving), moving
 assert any("다음 일 시작 — 에이전트 조치 필요: 조건 충족: acme/app#1 머지 abc1234" in m for m in moving), moving
-assert "| ❔ | 오래된 일 |" in b["text"] and any(n.startswith("에이전트 조치 필요: 12h 갱신 없음") for n in notes), b["text"]
+assert "| ❔ | 오래된 일 |" in full and "에이전트 조치 필요: 12h 갱신 없음" in full, b["text"]
 # Nothing on #10 is the agent's to fix and nobody is asked, but who merges it is not recorded: ❔, not a guess.
-assert "| ❔ | card-quiet | [#10]" in b["text"] and "에이전트 조치 필요: 머지 주체 기록 없음 · 2h 전" in notes, b["text"]
+assert "| ❔ | card-quiet | [#10]" in full and "에이전트 조치 필요: 머지 주체 기록 없음 · 2h 전" in full, b["text"]
 # A draft no session works on and nothing holds: ❔ for the agent to resume it or record the hold, not the owner's.
-assert "| ❔ | card-draft |" in b["text"] and not any("card-draft" in t for t in section(b["text"], "🙋")), b["text"]
-assert "에이전트 조치 필요: 초안 · 세션 없음 — 재개하거나 보류로 기록 · 2h 전" in notes, notes
+assert "| ❔ | card-draft |" in full and not any("card-draft" in t for t in section(b["text"], "🙋")), b["text"]
+assert "에이전트 조치 필요: 초안 · 세션 없음 — 재개하거나 보류로 기록 · 2h 전" in full, full
 assert any(t.startswith("rev-a · 리뷰") and "card-review" in t for t in theirs), theirs  # was ⏸️ 세션 꺼짐, now the PR's wait
 assert not any("다음 일 시작" in h or "다른 일" in h for h in held), held
 queued = [o.get("title") for o in b["open"] if o.get("kind") == "later"]  # the queue stays; the pointer line counts it
@@ -159,28 +159,27 @@ assert not any(h.startswith("세션 꺼짐") for h in held), held
 assert not any("(card-review 카드)" in m for m in moving + theirs), moving
 assert not any("card-quiet" in m for m in moving), moving
 # A board row about a card takes the card's PR, so the card's own row is not listed again.
-assert "| ❔ | card-dup | [#8]" in b["text"] and "중복 카드 |" not in b["text"], b["text"]
+assert "| ❔ | card-dup | [#8]" in b["full"] and "중복 카드 |" not in b["full"], b["full"]
 open_ids = {o["id"] for o in b["open"]}
 assert {doing[0], doing[1], later[0], todo[0], "row:stale-row", "card:s4"} <= open_ids, open_ids
 
 # The tick closes what the evidence settles, once, with its evidence; it writes nothing for a check.
 code, out, err = run("board", "tidy", "--dry-run", "--json")
 dry = json.loads(out)
-assert not tidy.path().exists(), "a dry run writes nothing"
+assert tidy.latest() == {}, "a dry run writes nothing"
 rows = tidy.run(now=now)
 assert [r["id"] for r in rows] == [r["id"] for r in dry]
 assert {r["id"] for r in rows} == {doing[0], todo[0], "card:s4", "ext:k-merged", "ext:k-gone"}, rows
 assert all(r["by"] == "auto" and r["evidence"] for r in rows), rows
-assert next(r for r in rows if r["id"] == todo[0])["label"] == S["owner_todo"][0] and len(S["owner_todo"][0]) > 120, "a label is kept whole"
+assert next(r for r in rows if r["id"] == todo[0])["label"] == S["owner_todo"][0]["title"] and len(S["owner_todo"][0]["title"]) > 120, "a label is kept whole"
 assert tidy.run(now=now) == [], "a second tick finds nothing new"
-assert tidy.path().stat().st_mode & 0o777 == 0o600
 # Inbox: the merged PR's and the gone session's items leave; the open PR's and the command item stay.
 OWNER_ITEMS = {"ext:k-cmd", "ext:k-rule", "ext:k-after", "ext:k-decide", "ext:k-ask"}
 assert {i["key"] for i in fleet.external_items({})} == {"ext:k-open"} | OWNER_ITEMS
 b = brief()
 assert "로그인 개편 (card-done 카드)" not in b["text"] and "acme/app#7 리뷰" not in b["text"].split("🙋")[1], b["text"]
 assert "회의 준비" in b["text"] and "acme/app#8 리뷰" in b["text"]
-assert "| ✅ | 실험 정리 |" in b["text"], b["text"]  # the closed-PR card is ✅ now, so the ack and the fold take it
+assert "| ✅ | 실험 정리 |" in b["full"], b["full"]  # the closed-PR card is ✅ now, so the ack and the fold take it
 
 # The timeline gets one line per close.
 tl = tidy.timeline()
@@ -193,7 +192,7 @@ assert "새 일" not in brief()["text"].split("📌")[-1]
 code, out, err = run("board", "reopen", "row:fresh-row", "card:s4")
 assert code == 0 and out == "reopened 2: row:fresh-row card:s4", (out, err)
 assert tidy.run(now=now) == [], "the tick does not undo the owner's reopen"
-assert "| ⏸️ | card-closed |" in brief()["text"]
+assert "| ⏸️ | card-closed |" in brief()["full"]
 code, out, err = run("board", "reopen", "row:fresh-row")
 assert code == 1 and "not closed" in err, err
 
@@ -203,8 +202,9 @@ assert code == 0 and out == "reopened 1: ext:k-gone", (out, err)
 assert "ext:k-gone" in {i["key"] for i in fleet.external_items({})}
 # One that cannot be reopened is refused, writes nothing, and the page shows no Reopen for it: an inbox item whose line
 # is gone, and a request the removed owner-request ledger closed.
-tidy.append([{"ev": "done", "id": i, "ts": fleet.iso(now), "by": "auto", "rule": "pr_over", "evidence": "x",
-              "label": "지워진 줄"} for i in ("ext:k-none", "req:r99")], tidy.latest())
+with store.tx() as db:
+    for i in ("ext:k-none", "req:r99"):
+        store.close_unit(db, {"id": i, "ts": fleet.iso(now), "by": "auto", "rule": "pr_over", "evidence": "x", "label": "지워진 줄"})
 code, out, err = run("board", "reopen", "ext:k-none", "req:r99")
 assert code == 1 and "its inbox line is gone" in err and "owner-request ledger was removed" in err, err
 assert {"ext:k-none", "req:r99"} <= set(tidy.closed()) and not tidy.can_reopen("ext:k-none") and not tidy.can_reopen("req:r99")
@@ -248,18 +248,8 @@ reopen = {c["id"]: c["reopen"] for c in page["closed"]}
 assert reopen["ext:k-none"] is reopen["req:r99"] is False and reopen[doing[0]] is True and reopen["ext:k-merged"] is True, reopen
 srv.shutdown()
 
-# Rotation: the ledger moves to .1 and every id's last line comes along, so closes and reopens hold.
-before = tidy.latest()
-fleet.ROTATE_BYTES = 1
-try:
-    assert tidy.run(now=now) == [], "a reopen still holds after the rotation"
-finally:
-    fleet.ROTATE_BYTES = 5 * 1024 * 1024
-assert tidy.path().with_name("tidy.jsonl.1").exists()
-assert {k: {**r, "carried": True} for k, r in before.items()} == tidy.latest()
 assert tidy.closed()[todo[2]]["by"] == "owner" and tidy.latest()["card:s4"]["ev"] == "reopen"
-assert tidy.timeline() == [], "carried lines are not new events"
-assert tidy.run(now=now) == []
+assert tidy.run(now=now) == [], "a reopen still holds"
 
 # Card keys: the worktree directory and a slug display name, in any case; two cards sharing a key find neither; the
 # owner field is never a key. The ticket ID alone and the branch tail are not keys: a follow-up cites its parent's ID,
@@ -283,10 +273,10 @@ assert tidy.named("abc-1-login", {**cards, "k3": twin}) is None, "two cards with
 oc = {**card("k4", "ABC-2 orca linked", "offline"), "path": "/w/abc-2-orca",
       "linked_pr": {"number": 77, "state": "merged", "key": "acme/app#77", "url": "https://github.com/acme/app/pull/77"}}
 st2 = {"sessions": [oc], "prs": []}
-got = tidy.assess({"doing": [{"title": "abc-2-orca 작업", "owner": "card", "next": "머지"}]}, st2, {}, "owner-me", now)
-assert [v["rule"] for k, v in got.items() if k.startswith("doing:")] == ["pr_merged"], got
+line = {"id": "b900", "title": "abc-2-orca 작업", "owner": "card", "next": "머지"}
+got = tidy.assess({"doing": [line]}, st2, {}, "owner-me", now)
+assert got["b900"]["rule"] == "pr_merged", got
 open_lp = {**oc, "linked_pr": {**oc["linked_pr"], "state": "open"}}
-got = tidy.assess({"doing": [{"title": "abc-2-orca 작업", "owner": "card", "next": "머지"}]},
-                  {"sessions": [open_lp], "prs": []}, {}, "owner-me", now)
-assert not [k for k in got if k.startswith("doing:")], got
+got = tidy.assess({"doing": [line]}, {"sessions": [open_lp], "prs": []}, {}, "owner-me", now)
+assert "b900" not in got, got
 print("test_tidy: ok")

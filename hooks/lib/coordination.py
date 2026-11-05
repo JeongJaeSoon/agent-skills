@@ -10,8 +10,11 @@ which session they reach is roles.applies' matrix, how hard they hold is a key i
   whether the message went out.
 - orchestrate.model_flag (warn): with `orchestrate.models` set, an `orca orchestration worker-start`, `orca worktree
   create` or `orca agent launch` of Claude from any session with no `--model`. `--terminal` reuses a running session,
-  which takes no model. The value is the human's to change, so it is not compared.
+  which takes no model. A `worker-start` whose `--model` differs from `orchestrate.models.worker` also warns, and
+  one warning says the value was not compared when that key is unset. These never go above warn.
 """
+import re
+
 import roles
 from lib import config, shell
 from lib.danger import Finding
@@ -66,14 +69,66 @@ def check_model_flag(cmds, cfg):
     if not config.get(cfg, "orchestrate.models"):
         return []
     out = []
+    want = config.get(cfg, "orchestrate.models.worker")
     for c in cmds:
         w = c.words
-        if (c.name == "orca" and w[1:3] in LAUNCHES and flag(w, "--agent") == "claude"
-                and flag(w, "--terminal") is None and not flag(w, "--model")):
+        if not (c.name == "orca" and w[1:3] in LAUNCHES and option(w, "--agent") == "claude"
+                and option(w, "--terminal") is None):
+            continue
+        have = option(w, "--model")
+        if not have:
             out += finding(cfg, "orchestrate.model_flag",
                            f"This `orca {' '.join(w[1:3])}` names no model, so the session runs on the account's default. "
                            "Add `--model` with what `orch model worker` (or `lead`) prints.")
+        elif w[1:3] != LAUNCHES[0] or expands(c, have):
+            continue  # only a worker start is a worker; a value the shell expands cannot be read here
+        elif not isinstance(want, str) or not want:
+            if not any("is not set" in f.reason for f in out):
+                out += warn_only(cfg, "A `--model` is not compared: orchestrate.models.worker is not set.")
+        elif not same_model(have, want):
+            out += warn_only(cfg, f"`--model {have}` differs from orchestrate.models.worker ({want}). "
+                                  "Use what `orch model worker` prints, or change the setting.")
     return out
+
+
+TEXT_FLAGS = ("--spec", "--prompt", "--display-name", "--name", "--comment")
+
+
+def option(words, name):
+    """The value of `name` in a launch's words, or None. The value of a text flag (--spec, ...) is skipped whatever
+    it says; any other `--flag value` pair consumes its value unless that looks like another flag. Orca takes the
+    last of a repeated option, so this does too."""
+    i, found = 0, None
+    while i < len(words):
+        w, nxt = words[i], words[i + 1] if i + 1 < len(words) else None
+        if w == name:
+            found = "" if nxt is None or nxt.startswith("--") else nxt
+        elif w.startswith(name + "="):
+            found = w[len(name) + 1:]
+        i += 2 if w in TEXT_FLAGS or (w.startswith("--") and "=" not in w and nxt and not nxt.startswith("--")) else 1
+    return found
+
+
+def expands(c, value):
+    """True when `value` holds a character bash may expand ($ ` * ? [ { ~). The words arrive unquoted, so a quoted one
+    cannot be told from a bare one without re-parsing the shell; the guard only warns, so it skips what it is unsure of."""
+    return re.search(r"[$`*?\[{~-]", value) is not None  # the last range: shell.py's stand-ins for `$` and `~`
+
+
+def warn_only(cfg, reason):
+    """A comparison finding never goes above warn, even when orchestrate.model_flag is set to deny or ask."""
+    return [f._replace(level="warn") for f in finding(cfg, "orchestrate.model_flag", reason)]
+
+
+def same_model(have, want):
+    """Equal ignoring case, a `[1m]` suffix and a `-YYYYMMDD` date. A bare family (`sonnet`) matches any id of it."""
+    have, want = (re.sub(r"-\d{8}$", "", m.split("[")[0].lower()) for m in (have, want))
+    families = ("opus", "sonnet", "haiku")
+    for fam, other in ((have, want), (want, have)):
+        if fam in families:
+            # `claude-sonnet-4-6` and `claude-3-7-sonnet-…` are the family; `opusplan` and the like are not
+            return other == fam or re.fullmatch(rf"claude-(\d+(-\d+)*-)?{fam}(-.*)?", other) is not None
+    return have == want
 
 
 def check_bash(cmd, background, s, cfg):

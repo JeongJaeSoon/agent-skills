@@ -101,12 +101,16 @@ Usage: orch <command> <slug> [options]
                                      nobody asked for. A quote over the limit is refused, never cut. show
                                      prints that line again. Decisions live in agent-skills.db, or in
                                      decisions.json while no DB file exists; a DB not imported yet stops with that
-  db import [--dry-run | --apply] [--rehearsal] | export --legacy --target pre-4a DIR | dump [TABLE]
-  db backup FILE | restore FILE [--rehearsal] | cutover-plan 4a|4b
-                                     no slug: agent-skills.db (store.py). import moves decisions.json in
-                                     and leaves an empty directory in its place; --apply refuses while old
-                                     code, an unreloaded session or a loaded LaunchAgent could still write.
-                                     cutover-plan prints the commands you run around it and runs none
+  db import [--dry-run | --apply] [--rehearsal] | export --legacy --target 4a|pre-4a DIR | dump [TABLE]
+  db backup FILE | restore FILE [--rehearsal] | rollback 4b DIR [--rehearsal] | cutover-plan 4a|4b
+  db migrate [--check] | init        migrate is the whole cutover in one rerunnable command, run by the owner from a
+                                     plain terminal (cutover.py); init is for a PC with no state (setup runs it)
+                                     no slug: agent-skills.db (store.py). import moves decisions.json,
+                                     board.json and tidy.jsonl in and leaves an empty directory in each
+                                     place; --apply refuses while old code, an unreloaded session or a
+                                     loaded LaunchAgent could still write. rollback 4b puts back what
+                                     export --target 4a wrote. cutover-plan prints the commands you run
+                                     around it and runs none
   stage add <id> --title T [--pr owner/repo#N] [--parent ID] [--group]
   stage set <id> --col merge|dev|prod --mark ok|fail|partial|checking|na [--evidence TEXT] [--by WHO]
   stage env [--prod V] [--dev V] | next [LINE]... | done <id> | drop <id> | show [--program P] [--all] [--md|--telegram|--json]
@@ -124,20 +128,23 @@ Usage: orch <command> <slug> [options]
                  [--worktree ID]
                                      --worktree: the Orca worktree id whose session works the row (lead add
                                      records the handle's own); the brief's 세션 column and the dashboard
-                                     link the row to it by that id, which a terminal restart does not change
-  board drop <id> | doing add <title> --owner W --next E [--waiting] | doing drop <n>
+                                     link the row to it by that id, which a terminal restart does not change.
+                                     A row linked to a card takes neither --pr nor another --worktree: Orca
+                                     knows them. lead add refuses a lead Orca knows; board set links a row
+  board drop <id> | doing add <title> --owner W --next E [--waiting] [--force --why T] | doing drop <n>
         | later add <title> --trigger T [--due D] [--who W] [--at N] | later move <n> --to N | later drop <n>
         | todo add <title> (--due D | --after C) --who W | todo drop <n> | todo from-later <n> [--due D] --who W
         | todo list [--telegram] [--json] [--now ISO8601] [--no-refresh] | now [LINE]... | show
   board open [--json] | done <id>... [--why T] [--json] | reopen <id>... [--json] | tidy [--dry-run] [--json] | closed
                                      close what is over (tidy.py): open lists what can be closed now (a row,
-                                     card:<session>, doing:/later:/do:/todo:<k>); done closes it, reopen undoes it.
+                                     card:<session>, a list item's b<N>); done closes it, reopen undoes it.
                                      tidy is one pass of what the dashboard's collector runs after each tick:
                                      it closes on evidence only (a merged or closed PR, a session gone) and
                                      marks what it cannot settle 확인 필요; closed lists every close with its
                                      evidence. The dashboard's Done and Reopen buttons call the same function.
-                                     no slug: the board the periodic report is rendered from (board.json beside
-                                     stages.json), one row per lead, phase and sub-task. set changes only the
+                                     no slug: the board the periodic report is rendered from (agent-skills.db),
+                                     one row per lead, phase and sub-task. doing add refuses a live card's or
+                                     subagent's work: it has its own row. set changes only the
                                      fields given and stamps reported_at; an id a/b hangs off a. A row without
                                      --parent is a lead (needs --repo); under a parent it is a task unless
                                      --kind phase. PR state is joined from the collector's prs.json at render.
@@ -1799,16 +1806,39 @@ def cmd_record(argv):
     print(json.dumps(row, ensure_ascii=False))
 
 
+def set_run(p, run_id):
+    """Move the program to the Run this terminal is bound to, for a dispatched lead whose restart cost it the Dispatch it
+    worked under: the old Run belongs to its coordinator, and `lead_dispatch` names a Dispatch that no longer answers.
+    Only the bound Run is accepted, so mail cannot be pointed at a Run nobody reads."""
+    import orca_settings
+    bound = (orca_settings.run_current(orca_json) or {}).get("id")
+    if bound != run_id:
+        sys.exit(f"this terminal is {'bound to ' + bound if bound else 'not bound to any Run'}, not {run_id}: "
+                 f"`orca orchestration run-create` (or `run-use --id {run_id}` for a Run you coordinate), then set again")
+    me = os.environ.get("ORCA_TERMINAL_HANDLE")
+    if me and own_worker(all_workers(run_id), me):
+        sys.exit(f"this terminal is a dispatched worker of {run_id}: it still works for that Run's coordinator, so the "
+                 "program stays there")
+    old = p.cfg.get("run")
+    p.update(lambda cfg: (cfg.__setitem__("run", run_id), cfg.pop("lead_dispatch", None)))
+    print(json.dumps(p.append("config", note=f"run={old}->{run_id}; lead_dispatch cleared"), ensure_ascii=False))
+    # Units started under the old Dispatch stay on the old Run, where this lead's checks no longer look.
+    print(f"units this lead started stay on {old}: list them with `orca orchestration worker-list --run {old}`; resume an "
+          "abandoned one from this terminal (reboot SKILL.md \"Resume a worker\"), which attaches it to the new Run")
+
+
 def cmd_set(argv):
     p = Program(argv[0])
     key, value = argv[1], argv[2]
+    if key == "run":
+        return set_run(p, value)
     if key == "merge_policy" and value not in ("autonomous", "human-gate"):
         sys.exit("merge_policy is autonomous or human-gate")
     split = lambda v: [x for x in v.split(",") if x]
     conv = {"ceiling": int, "predicate": split, "exclusive_paths": split, "visual_paths": split, "stages": split}.get(key, str)
     if key not in ("merge_policy", "ceiling", "deadline", "predicate", "exclusive_paths", "visual_paths", "note", "final_check",
                    "stages"):
-        sys.exit("settable: merge_policy, ceiling, deadline, predicate, exclusive_paths, visual_paths, note, final_check, stages")
+        sys.exit("settable: run, merge_policy, ceiling, deadline, predicate, exclusive_paths, visual_paths, note, final_check, stages")
     if key == "visual_paths" and not conv(value):
         sys.exit("visual_paths cannot be empty: the screenshot check has no off switch, only the no-visual-change label")
     if key in ("exclusive_paths", "visual_paths"):
@@ -2671,10 +2701,29 @@ def close_out(msgs, workers, worktrees, here=""):
         elif here is None:
             out += [f"CLOSE OUT {d}: release it; this session's own worktree could not be read (`orca terminal show`),"
                     f" so close its agent terminal only once it is not this session's", release]
+        elif handed_off(p):
+            out += [f"CLOSE OUT {d}: release it and close its agent terminal if still open; HANDED TO A PERSON: "
+                    f"`orca worktree rm` of {shlex.quote(p)} was refused, so no cleaner takes it and nothing here runs "
+                    f"it again. The person runs: {rm_refused().command(p)}", release]
         else:
             out += [f"CLOSE OUT {d}: release it and close its agent terminal if still open, unless its next task starts"
                     f" there; the cleaners take {shlex.quote(p)} ({CLEANUP})", release]
     return out
+
+
+def rm_refused():
+    """reap-resources' record of cards whose `orca worktree rm` was refused (one predicate for every reader)."""
+    scripts = str(pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    import rm_refused as mod
+    return mod
+
+
+def handed_off(path):
+    """True when the card's removal is recorded as refused. A record that cannot be read is not (the cleaners keep a
+    card then, and say why)."""
+    return bool(rm_refused().held(path))
 
 
 def taken_over(w):
@@ -3454,7 +3503,7 @@ def cmd_decide(argv):
                      "[--link URL] | list | show <id> | answer <id>|--title T --quote TEXT|--quote-file F [--by SESSION] | "
                      "done <id> [--answer TEXT] | drop <id> | keep <id>")
     except store.NotMigrated as e:
-        sys.exit(f"decisions are not in {store.DB_NAME} yet ({e}); orch db cutover-plan 4a lists the steps")
+        sys.exit(f"decisions are not in {store.DB_NAME} yet ({e})")
     except (ValueError, OSError) as e:
         sys.exit(str(e))
 
@@ -3518,7 +3567,7 @@ def cmd_stage(argv):
 
 
 def cmd_board(argv):
-    import board, tidy
+    import board, store, tidy
     sub, rest = argv[0], argv[1:]
     rid = rest[0] if rest and not rest[0].startswith("--") else None
     try:
@@ -3534,7 +3583,7 @@ def cmd_board(argv):
         elif sub == "drop" and rid:
             board.drop(rid)
         elif sub == "doing" and rest[:1] == ["add"] and len(rest) > 1:
-            board.doing_add(rest[1], opt(rest, "--owner"), opt(rest, "--next"), "--waiting" in rest)
+            board.doing_add(rest[1], opt(rest, "--owner"), opt(rest, "--next"), "--waiting" in rest, "--force" in rest, opt(rest, "--why"))
         elif sub == "doing" and rest[:1] == ["drop"] and len(rest) > 1:
             board.doing_drop(int(rest[1]))
         elif sub == "later" and rest[:1] == ["add"] and len(rest) > 1:
@@ -3577,6 +3626,10 @@ def cmd_board(argv):
             sys.exit(1 if refused else 0)
         elif sub == "open":
             items = board.render(fill=True)["open"]
+            try:  # a list without the board's items before the cutover is not the whole board: say what is missing
+                store.open_db().close()
+            except store.NotMigrated:
+                print(f"이행 대기: 보드를 읽을 수 없어 목록에 보드 항목이 없다. 한 줄로 끝낸다: {store.migrate_command()}", file=sys.stderr)
             if "--json" in rest:
                 return print(json.dumps(items, ensure_ascii=False, indent=1))
             for o in items:
@@ -3594,10 +3647,12 @@ def cmd_board(argv):
         else:
             sys.exit("usage: orch board lead add <name> --handle H --repo R [--program P] [--run RUN] [--stale-min N] [--worktree ID] | "
                      "lead close <name> | set <id> [--kind K] [--title T] [--repo R] [--program P] [--parent ID] [--status S] "
-                     "[--progress N/M] [--next T] [--owner W|-] [--after owner/repo#N|-] [--pr owner/repo#N] [--worktree ID] | drop <id> | doing add <title> --owner W --next E [--waiting] | doing drop <n> | later add <title> --trigger T [--due D] | "
+                     "[--progress N/M] [--next T] [--owner W|-] [--after owner/repo#N|-] [--pr owner/repo#N] [--worktree ID] | drop <id> | doing add <title> --owner W --next E [--waiting] [--force --why T] | doing drop <n> | later add <title> --trigger T [--due D] | "
                      "later drop <n> | todo add <title> (--due D | --after C) --who W | todo drop <n> | todo from-later <n> [--due D] --who W | "
                      "now [LINE]... | show | open [--json] | done <id>... [--why T] [--json] | reopen <id>... [--json] | "
                      "tidy [--dry-run] [--json] | closed")
+    except store.NotMigrated as e:
+        sys.exit(f"the board is not in {store.DB_NAME} yet ({e})")
     except (ValueError, OSError) as e:
         sys.exit(str(e))
     if sub in ("lead", "set") and (warning := board.unnamed_warning()):

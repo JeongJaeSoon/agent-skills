@@ -162,7 +162,8 @@ FORBIDDEN   Touching a program's tickets, PRs or workers. Code another worker is
             and target only, without its command. Paste
             this paragraph, from "An act refused" through "run it again.", verbatim into every
             subagent prompt you write, including tracker and notes delegates: a summary drops
-            the forms it lists. Taking the path this
+            the forms it lists. That end is the paragraph's last sentence, the one that begins
+            "A failing check"; a copy that stops at "another way" drops half of it. Taking the path this
             brief already names for that act (`orch land` for a merge, in a worker's brief), when no
             human refused the act, is not a retry, nor is doing the act once more after the human added a rule for it or approved it in
             the refused session's own chat. Nor is the restart of a unit whose subagent's Edit or

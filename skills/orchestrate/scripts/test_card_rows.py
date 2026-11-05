@@ -13,8 +13,9 @@ env = {**os.environ, "ORCH_FLEET_STATE": str(tmp / "dashboard"), "ORCH_BRIEF_LAS
        "ORCA_TERMINAL_HANDLE": "term_root"}
 os.environ.update(env)
 sys.path.insert(0, str(HERE))
-import board, fleet, tidy  # noqa: E402
+import board, fleet, store, tidy  # noqa: E402
 
+store.import_apply(checks=False)
 now = fleet.utcnow()
 sd = fleet.state_dir()
 sd.mkdir(parents=True, exist_ok=True)
@@ -106,12 +107,11 @@ facts = render()["headline_facts"]
 # The lead has its own row; its worker's completed dispatch with no PR leaves the table, but it still works.
 assert "보고서에 없는 세션 1 (worker-x)" in facts, facts
 # A doing item naming it would stand for it, but not once that item is closed: the report no longer lists it.
-board.doing_add("worker-x 후속 정리", "card", "확인")
+board.doing_add("worker-x 후속 정리", "card", "확인", force=True, why="a line from before the write ban")
 assert not any(f.startswith("보고서에 없는 세션") for f in render()["headline_facts"])
-iid = tidy.item_id("doing", fleet.read_json(sd / "board.json")["doing"][0])
+iid = board.read()["doing"][0]["id"]
 assert tidy.write([iid], can={iid: "worker-x 후속 정리"})[0] == [iid]
 assert "보고서에 없는 세션 1 (worker-x)" in render()["headline_facts"]
-board.doing_drop(1)
 # A source that failed, or an old state.json, says the check did not run instead of counting.
 write_state([sess("worker-x", "task", "working", dispatch="ctx_x", dispatch_status="completed")],
             sources={"runs": {"error": "orca: timed out"}})
@@ -124,14 +124,6 @@ assert "누락 검사 안 함: 세션 목록 2h 전 기준" in facts, facts
 # ---- decisions: stale after decision_stale_h from max(created_at, checked_at), and with no route back
 usable_root = {"handle": "term_root", "agent": "claude", "connected": True, "writable": True}
 write_state([], root_term=usable_root)
-# With no DB the decisions work from decisions.json, so nothing waits on `orch db import`. A DB that is there and not
-# imported does wait: the brief says so, and still renders.
-import store  # noqa: E402
-assert not any(f.startswith("이행 대기") for f in render()["headline_facts"])
-store.path().touch()
-assert any(f.startswith("이행 대기: 결정 DB") for f in render()["headline_facts"])
-store.path().unlink()
-store.import_apply(checks=False)
 assert not any(f.startswith("이행 대기") for f in render()["headline_facts"])
 d_old = fleet.decision_add("오래된 질문", handle="term_root")
 d_gone = fleet.decision_add("떠난 터미널의 질문", handle="term_gone")

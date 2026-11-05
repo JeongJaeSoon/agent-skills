@@ -18,7 +18,7 @@ Config: ~/.claude/agent-skills.json → "reap": {"idle_minutes": 30, "cards": {"
 import json, os, pathlib, re, shlex, subprocess, sys, time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-import cardguard, reap  # noqa: E402
+import cardguard, reap, rm_refused  # noqa: E402
 
 REMOVE, CLOSE, KEEP, ASK = "삭제", "터미널만 닫기", "남김", "사람 결정"
 ACTING = (REMOVE, CLOSE)
@@ -156,6 +156,10 @@ def gather(w, m, run=None):
         return {**f, "protected": "automation runner worktree"}
     if p in m["live"]:
         return {**f, "protected": m["live"][p]}
+    if m["refused"] is None:
+        return {**f, "protected": "worktree rm 거부 기록을 읽지 못함"}
+    if p in m["refused"]:
+        return {**f, "handed": cardguard.handed_off(p)}
     if m["patrol"] is None:
         return {**f, "protected": "순찰 판정 파일을 읽지 못함"}
     if p in m["patrol"]:
@@ -178,6 +182,9 @@ def gather(w, m, run=None):
     if ref and pr is None:
         return {**f, "pr": ref, "pr_unread": f"PR {ref} 상태를 읽지 못함"}
     f.update(pr=ref, state=pr and pr["state"], pr_head=pr and pr.get("headRefOid"))
+    if (d := m.get("recovering", {}).get(p)) and (status or f["state"] == "OPEN"):
+        # Its terminals are the resume's to use, and the tree or PR is the work the resume goes on with.
+        return {**f, "protected": f"복구 전 워커({d})의 카드: 미커밋 변경 또는 열린 PR"}
     if ref and f["pr_head"] and head != f["pr_head"]:
         # HEAD behind the PR's head is the PR's work; HEAD past it is new work on a reused branch name.
         f["carried"] = run(["git", "-C", p, "merge-base", "--is-ancestor", head, f["pr_head"]]) is not None
@@ -215,6 +222,8 @@ def judge(f, idle_s):
     """(verdict, why, handles to close). Pure: every fact comes from gather()."""
     if f.get("protected"):
         return KEEP, f"보호: {f['protected']}", []
+    if f.get("handed"):
+        return ASK, f["handed"], []
     if f.get("unreadable"):
         return KEEP, f["unreadable"], []
     agents = [t for t in f["terminals"] if t["agent"]]
@@ -285,8 +294,9 @@ def read_machine(cfg, now=None):
     # The patrol read the guard before a close makes (activity included): a card patrol keeps is a keep here, not a
     # delete that apply then refuses.
     return {"now": now, "st": settings(cfg), "rows": reap.processes(), "cwd_of": reap.cwds(), "live": live,
-            "unreleased": unreleased,
-            "patrol": reap.patrol_states(now, activity=True), "workers_unread": workers is None, "runners": reap.automation_workspaces(reap.orca_json("automations", "list")),
+            "unreleased": unreleased, "recovering": reap.recovering_worktrees(workers or []),
+            "patrol": reap.patrol_states(now, activity=True), "refused": rm_refused.read(reap.STATE),
+            "workers_unread": workers is None, "runners": reap.automation_workspaces(reap.orca_json("automations", "list")),
             "self": top and reap.real(top.strip()), "pr_state": reap.pr_reader(), "projects": projects,
             "quiet": reap.transcript_quiet(projects, now, reasons=True)}
 

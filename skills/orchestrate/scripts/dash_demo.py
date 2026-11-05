@@ -586,7 +586,9 @@ def seed_holds(root, now=None):
 
 def seed_board():
     """An invented board for the Brief page, written through board.py into $ORCH_FLEET_STATE (set it first)."""
-    import board, fleet
+    import board, fleet, store
+    if not store.path().exists():
+        store.import_apply(checks=False)
     board.lead_add("lead-login", "term_0FAKE1", "acme/launchpad")
     board.set_row("lead-login", title="로그인 개편", status="moving", progress="3/5", next="CI · 워커", pr="acme/launchpad#41")
     # Linked to their cards by worktree id, so the brief's 세션 column shows one working and one stopped at a prompt;
@@ -972,6 +974,8 @@ class FakeFleetWorld:
         if not store.path().exists():  # the demo's decisions go in as a cutover moves a real decisions.json
             fleet.write_atomic(fleet.state_dir() / "decisions.json", json.dumps(self.decisions))
             store.import_apply(checks=False)
+        elif not store.decisions():  # seed_board made the DB first
+            store.change_decisions(lambda s: s.update(self.decisions))
         f = fleet.Fleet(fetch_fast=self.fetch_fast, fetch_runs=self.fetch_runs, graphql=self.graphql, now=clock or fleet.utcnow,
                         read_screen=self.read_screen, fetch_automations=self.fetch_automations,
                         fetch_monitors=self.fetch_monitors, fetch_sent=self.fetch_sent, ps_table=lambda: {},

@@ -955,9 +955,6 @@ const briefInline = (s) => linkTickets(esc(s).replace(/\[([^\]]+)\]\(([^)\s]+)\)
 // A pointer line ends with a page of this dashboard, as its host's 127.0.0.1 URL: linked by its hash, so it also opens
 // from another device.
 const DASH_URL = /(https?:\/\/[^\s<]+\/(#\/fleet\/[\w/-]+))$/;
-// The renderer cuts a cell to fit 78 terminal columns as `head…[n]` and puts the whole text in `- [n] …` under the
-// table. The page has the width: each cut cell gets its whole text back (its └ and bold kept) and the list goes.
-const uncut = (cell, notes) => cell.replace(/^((?:[└ㄴ] )?(?:\*\*)?)(.*)…\[(\d+)\](\**)$/, (m, pre, head, n, post) => notes[n] != null ? pre + notes[n] + post : m);
 // The sections around the tables, as `<emoji> **name**[ — first item]` then `- item` (or `n. item`) lines, become tables
 // too. split: what parts a line falls into, in order: [separator, column name] — the text before the first separator
 // is the first column. A line without the separator leaves the rest empty.
@@ -990,7 +987,7 @@ function sectionTable(name, items, ids = []) {
     <tbody>${rows.map((r, k) => `<tr>${(marked ? r : r.slice(1)).map((c, i) => `<td${marked && !i ? ' class="bmark"' : ""}>${briefInline(c)}</td>`).join("")}${acts ? `<td class="bact">${ids[k] ? doneBtn(ids[k]) : ""}</td>` : ""}</tr>`).join("")}</tbody></table></div>`;
 }
 // A repository table's name cell as the reply's table_rows labels it: its whole text, without the └ and the bold.
-const rowLabel = (cell, notes) => uncut(cell, notes).replace(/^[└ㄴ] /, "").replace(/^\*\*(.*)\*\*$/, "$1");
+const rowLabel = (cell) => cell.replace(/^[└ㄴ] /, "").replace(/^\*\*(.*)\*\*$/, "$1");
 // tableRows (the reply's table_rows): per repository table, {table, rows}, each row {id, label, ack, done, session}.
 // A row's buttons go to the table row with its label (render() makes labels unique in a report); a row no entry names
 // gets none. listRows (list_rows): the items of the lists around the tables; an item with no table row of its own gets
@@ -1009,10 +1006,6 @@ function briefHtml(text, tableRows = [], placed = new Set(), listRows = {}, clos
       for (; i < lines.length && lines[i].startsWith("|"); i++) {
         if (!/^\|[-| ]+\|$/.test(lines[i])) rows.push(lines[i].slice(1, -1).split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|")));
       }
-      const at = i, notes = {};
-      blank();
-      for (let m; i < lines.length && (m = lines[i].match(/^- \[(\d+)\] (.*)$/)); i++) notes[m[1]] = m[2];
-      if (!Object.keys(notes).length) i = at;
       const [head, ...body] = rows;
       // A repository table (`| | name | PR | [progress |] next | session |`, progress only where a row has a bar) gets
       // one shared set of column widths; a cell too long for its column scrolls sideways within itself instead of being cut.
@@ -1020,7 +1013,7 @@ function briefHtml(text, tableRows = [], placed = new Set(), listRows = {}, clos
       // A label that is not one row's, in the reply and in the drawn table both (a lead's name over its sub-tasks in
       // another repository may equal one of them), gets no button: a wrong row's Done is worse than none.
       const tally = (xs) => xs.reduce((m, x) => m.set(x, (m.get(x) || 0) + 1), new Map());
-      const labels = body.map((r) => rowLabel(r[1] || "", notes));
+      const labels = body.map((r) => rowLabel(r[1] || ""));
       const count = tally(((acts && acts.rows) || []).map((x) => x.label)), drawnCount = tally(labels);
       const byLabel = new Map(((acts && acts.rows) || []).filter((x) => (x.ack || x.done) && count.get(x.label) === 1)
         .map((x) => [x.label, x]));
@@ -1031,7 +1024,7 @@ function briefHtml(text, tableRows = [], placed = new Set(), listRows = {}, clos
       out.push(`<div class="table-wrap"><table class="brief-table${repo ? " brepo" : ""}">${repo ? `<colgroup><col class="bmark"><col><col class="bpr">${head.includes("진행") ? '<col class="bprog">' : ""}<col class="bnext"><col class="bsess">${btns ? '<col class="bact">' : ""}</colgroup>` : ""}
         <thead><tr>${head.map((c) => `<th>${briefInline(c)}</th>`).join("")}${btns ? "<th></th>" : ""}</tr></thead>
         <tbody>${body.map((r, k) => `<tr>${r.map((c, n) => repo && n === sessAt && btns && btns[k] ? `<td class="bsess">${sessCell(btns[k].session, c)}</td>`
-          : `<td${repo && !n ? ' class="bmark"' : ""}>${repo && n ? `<div class="slide">${briefInline(uncut(c, notes))}</div>` : briefInline(uncut(c, notes))}</td>`).join("")}${btns ? act(btns[k]) : ""}</tr>`).join("")}</tbody></table></div>`);
+          : `<td${repo && !n ? ' class="bmark"' : ""}>${repo && n ? `<div class="slide">${briefInline(c)}</div>` : briefInline(c)}</td>`).join("")}${btns ? act(btns[k]) : ""}</tr>`).join("")}</tbody></table></div>`);
       continue;
     }
     const sec = line.match(/^(\S+) \*\*(.+?)\*\*(?: — (.*))?$/u);
@@ -1127,7 +1120,7 @@ function fleetBrief() {
   if (!b.text) return headHtml + ackNote() + stage + `<div class="card"><div class="empty-chart">${esc(b.message || "Nothing to report.")}</div></div>`;
   // A row with its Ack in the table is not listed again: the card keeps the acked rows, those folded out of the table
   // and those of a table that got no buttons.
-  const inTable = new Set(), closable = new Set(), report = briefHtml(b.text, b.table_rows, inTable, b.list_rows, closable);
+  const inTable = new Set(), closable = new Set(), report = briefHtml(b.full || b.text, b.table_rows, inTable, b.list_rows, closable);
   const { shown, head } = ackSplit((b.done || []).map((d) => ({ ...d, key: d.id, ack: d.acked ? "acked" : "ackable" })), "finished row");
   const rest = shown.filter((d) => !inTable.has(d.id));
   const finished = rest.length || head ? `<div class="card"><div class="card-head"><h3>Finished rows</h3><span class="aside">${head}</span></div>

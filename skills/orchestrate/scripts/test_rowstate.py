@@ -50,7 +50,9 @@ state.mkdir(parents=True, exist_ok=True)
 (state / "state.json").write_text(json.dumps({"generated_at": NOW, "sessions": [
     {"id": "wt-lead", "kind": "orchestration", "phase": "working", "name": "lead",
      "terminals": [{"handle": "term_0FAKEL", "agent": "claude", "connected": True, "writable": True}]}]}))
-ok("board", "lead", "add", "L", "--handle", "term_0FAKEL", "--repo", "octo/app", "--worktree", "wt-lead")
+code, _, err = orch("board", "lead", "add", "L", "--handle", "term_0FAKEL", "--repo", "octo/app", "--worktree", "wt-lead")
+assert code != 0 and "Orca already knows lead wt-lead" in err, err  # the row links the lead Orca lists instead
+ok("board", "set", "L", "--kind", "lead", "--repo", "octo/app", "--worktree", "wt-lead")
 ok("board", "set", "L/merge", "--title", "머지 대기", "--pr", "octo/app#1", "--status", "waiting", "--next", "머지 대기")
 ok("board", "set", "L/dec", "--title", "결정 대기", "--pr", "octo/app#2", "--next", "구현")
 ok("decide", "add", "--title", "캐시 정책", "--option", "TTL 1h", "--option", "TTL 1d", "--recommend", "1", "--link", "octo/app#2")
@@ -64,7 +66,7 @@ ok("board", "later", "add", "octo/app#6 재검토", "--trigger", "10/20 QA 뒤")
 ok("board", "set", "L/gap", "--title", "빈 기록", "--status", "waiting")
 
 out = json.loads(ok("brief", "render", "--periodic", "--now", NOW, "--json", "--no-refresh"))
-text = out["text"]
+text = out["full"]  # the table with every cell whole, whether or not it fits 78 columns
 status = {o["id"]: o["status"] for o in out["open"] if o["kind"] == "row"}
 want = {"row:L/merge": "moving",   # (a) the owner's repository: green and unasked, so the agent merges it
         "row:L/dec": "owner",      # (b) a decision only the owner makes
@@ -79,7 +81,7 @@ assert row["머지 대기"] == "🔄" and row["결정 대기"] == "🙋" and row
 # The agent's next step on a ready PR it merges, from the evidence: no program verdict here, so 리뷰·머지, never 머지.
 assert "| 리뷰·머지 |" in text, text
 # A ❔ says it is the agent's to fix, in the row's own 다음 cell.
-assert "에이전트 조치 필요: 누구 대기인지 기록 없음" in text, text
+assert "에이전트 조치 필요: 누구 대기인지 기록 없음" in out["full"], out["full"]
 assert "선행 octo/app#1 머지 대기 → 선행 대기" in text, text  # the 보류 list says what it waits on
 # Every row once: in its table, where its 다음 cell points to the list that names it; the lists hold references only.
 assert out["duplicates"] == [] and out["missing"] == [], (out["duplicates"], out["missing"])
@@ -87,7 +89,7 @@ for name in ("머지 대기", "결정 대기", "거부된 머지", "남 리뷰",
     assert sum(1 for l in text.splitlines() if l.startswith("| ") and f"└ {name} |" in l) == 1, (name, text)
 assert "🔄 **진행 중**" not in text and "| ↑ 오너 |" in text and "| ↓ 대기 |" in text and "| ↓ 보류 |" in text, text
 ok("board", "set", "L/after", "--after", "-")  # the record path takes the wait back
-assert "after" not in json.loads((state / "board.json").read_text())["rows"]["L/after"]
+assert "after" not in json.loads(ok("board", "show"))["rows"]["L/after"]
 
 # ---------------------------------------------------------------- the rules, on facts
 import rowstate  # noqa: E402
@@ -281,21 +283,30 @@ assert rolled and any(x["id"] in rolled for x in shown_rows), out["states"]
 assert all(out["now_by_pr"].get(r["pr"]) in (None, out["states"][k]["status"])
            for k, r in board.read()["rows"].items() if k in out["states"] and r.get("pr")), out["now_by_pr"]
 # Placement counts the rows written, not the lines handed to the table: one the table lost is missing.
-real_fit = board.table_width.fit
-board.table_width.fit = lambda rows, *a, **kw: (lambda t, n: (t[:-1], n))(*real_fit(rows, *a, **kw))
+real_rows_of = board.table_rows_of
+board.table_rows_of = lambda head, body: real_rows_of(head, body)[:-1]
 try:
     lost = board.render(now=T, fill=True, periodic=False)
 finally:
-    board.table_width.fit = real_fit
+    board.table_rows_of = real_rows_of
 assert lost["missing"], lost["missing"]
 # ... and a row written in another's place (same count, same icon) is that other row twice, and this one missing.
-board.table_width.fit = lambda rows, *a, **kw: (lambda t, n: (t[:-1] + [t[-2]], n))(*real_fit(rows, *a, **kw))
+board.table_rows_of = lambda head, body: (lambda t: t[:-1] + [t[-2]])(real_rows_of(head, body))
 try:
     swapped = board.render(now=T, fill=True, periodic=False)
 finally:
-    board.table_width.fit = real_fit
+    board.table_rows_of = real_rows_of
 assert swapped["duplicates"] and swapped["missing"], (swapped["duplicates"], swapped["missing"])
-# A quiet stage row is kept while its 지금 has work left (⏸️ too), or while the brief's judgment could not be read.
+# Two names too long for a 78-column table are never cut: the repository goes out as whole lines, and both rows are
+# placed once.
+HEAD = "shared-prefix-" * 8
+for rid, tail, nxt in (("twin-a", "a", "first"), ("twin-b", "b", "second")):
+    board.set_row(rid, title=HEAD + tail, repo="octo/twins", status="moving", next=nxt)
+twin = board.render(now=T, fill=True, periodic=False)
+assert twin["duplicates"] == [] and twin["missing"] == [], (twin["duplicates"], twin["missing"])
+assert [l for l in twin["text"].splitlines() if HEAD + "a" in l and l.startswith("- ")] and \
+       [l for l in twin["text"].splitlines() if HEAD + "b" in l and l.startswith("- ")], twin["text"]
+assert twin["width_ok"] is True# A quiet stage row is kept while its 지금 has work left (⏸️ too), or while the brief's judgment could not be read.
 old = {**stages.table(), "rows": [{**r, "created_at": "2026-01-01T00:00:00Z"} for r in stages.table()["rows"]]}
 assert [r["id"] for r in stages.current(old, T, 60, None, {"octo/app#5": "held"})[0]["rows"]] == ["s1"]
 assert stages.current(old, T, 60, None, {})[0]["rows"] == []
