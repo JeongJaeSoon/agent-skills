@@ -326,17 +326,19 @@ prs_json["prs"]["acme/web#45"]["detail"]["merge_state"] = "DIRTY"
 out = json.loads(orch("brief", "render", "--periodic", "--now", NOW, "--json")[1])
 assert out["changed"] == ["search/ph3/sort", "search/ph2"], out["changed"]
 # The longer PR cell leaves no room to keep `검색 개선 ph3` and `검색 개선 ph4 · ph5` apart, and two names are never cut
-# alike: the table stays wider than 78 columns and the render says so.
-assert out["width_ok"] is False and "| 검색 개선 ph4 · ph5 |" in out["text"], out["text"]
-assert "| 🔄 | └ **정렬** | [#45](https://example.test/45) ❗DIRTY CI✗→main |" in out["text"], out["text"]
+# alike: that section goes out as one whole line per row instead of a table, still within the width check.
+assert out["width_ok"] is True and "| 검색 개선 ph4 · ph5 |" not in out["text"], out["text"]
+assert any(l.startswith("- ") and "검색 개선 ph4 · ph5" in l and "…" not in l for l in out["text"].splitlines()), out["text"]
+assert "- 🔄 └ **정렬** — [#45](https://example.test/45) ❗DIRTY CI✗→main" in out["text"], out["text"]
+assert "| 검색 개선 ph4 · ph5 |" in out["full"], "the dashboard copy stays a table with whole cells"
 # A folded PR keeps a base other than its section's in the cell, and moving it bolds the row. The section's base turns
-# to main here, so a PR cell then names the long branch: too wide to fit, reported, and written whole.
+# to main here, so a PR cell then names the long branch: too wide for a table, so the rows go out as whole lines.
 prs_json["prs"]["acme/web#52"]["detail"]["base"] = "main"
 (state / "prs.json").write_text(json.dumps(prs_json))
 code, raw, err = orch("brief", "render", "--periodic", "--now", NOW, "--json")
-assert code == 1 and "78 columns" in err, (code, err)
+assert code == 0 and err == "", (code, err)
 out = json.loads(raw)
-assert "notify/~rev-a" in out["changed"] and "[#51](https://example.test/51)·#53→feature/notify·#52 |" in out["text"], out["text"]
+assert "notify/~rev-a" in out["changed"] and "[#51](https://example.test/51)·#53→feature/notify·#52" in out["text"], out["text"]
 # The folded rows are placed with the reviewer row that stands for them; the reviewer row itself is no item.
 assert out["duplicates"] == [] and out["missing"] == [], (out["duplicates"], out["missing"])
 last = json.loads((tmp / "brief-last" / "top-level.json").read_text())
@@ -395,12 +397,15 @@ prs_json["prs"].update(dict([pr("acme/wide#1201", merge_state="DIRTY", decision=
 (state / "prs.json").write_text(json.dumps(prs_json))
 code, wide, err = orch("brief", "render", "--periodic", "--now", NOW, "--json", "--scope", "넓은 표")
 wide = json.loads(wide)
-assert code == 1 and wide["width_ok"] is False and err == "a table is wider than 78 columns", (code, err, wide)
-assert ("| 🔴 | 긴 이름의 리드 작업 | [#1201](https://example.test/1201) ❗DIRTY→release/2026-10 | ████████ 100/100 "
-        "| 재개·정리 | 세션 없음 |") in wide["text"].splitlines(), wide["text"]
-assert "| ⏳ | └ rev-d 대기 | [#1123](https://example.test/1123)·#1125·#1124→feature/long-target | — | ↓ 대기 | — |" \
+assert code == 0 and wide["width_ok"] is True and err == "", (code, err, wide)
+assert ("- 🔴 긴 이름의 리드 작업 — [#1201](https://example.test/1201) ❗DIRTY→release/2026-10 · ████████ 100/100 "
+        "· 재개·정리 · 세션 없음") in wide["text"].splitlines(), wide["text"]
+assert "- ⏳ └ rev-d 대기 — [#1123](https://example.test/1123)·#1125·#1124→feature/long-target · ↓ 대기" \
     in wide["text"].splitlines(), wide["text"]
-assert not any(m in wide["text"] for m in "¹²³…"), wide["text"]
+assert not any(m in wide["text"] for m in "¹²³…") and "\n| " not in wide["text"], wide["text"]
+# The dashboard's copy keeps the table, every cell whole.
+assert "| ⏳ | └ rev-d 대기 | [#1123](https://example.test/1123)·#1125·#1124→feature/long-target | — | ↓ 대기 | — |" \
+    in wide["full"].splitlines(), wide["full"]
 ok("board", "drop", "wide")
 
 # A repository whose only rows are lead-less PRs waiting on one reviewer is a bullet with no table.

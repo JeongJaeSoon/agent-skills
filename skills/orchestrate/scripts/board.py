@@ -1389,11 +1389,11 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                     return session_link(l, s)
                 return ("└ " if l["depth"] else "") + (f"**{s}**" if l["key"] in changed else s) if c == 1 else s
             # Only a name or a next step is cut to fit, to its head and `…`, and a name never below the width at which two
-            # different names still differ. A table the other cells alone make too wide overflows, and the render reports it.
+            # different names still differ. A table that cannot be cut that way is written as whole lines, not a table.
             # The session cell keeps its state word and model mark; only its worktree name gives way, a column at a time,
             # when the cut name and next step alone do not bring the table to the width. Only then may a cell go
-            # shorter, down to the last of table_width.tiers. Two names never read alike: a table that cannot be cut
-            # that way overflows whole, and the render reports it.
+            # shorter, down to the last of table_width.tiers. Two names never read alike: when no tier fits, the rows
+            # go out whole, one line each.
             cells = lambda w: [[x for c, x in enumerate(r) if c not in drop] for r in
                                ([mark(l, l["status"]), l["shown"], l["cell"] or "—", l["progress"], next_cell(l),
                                  session_text(l, w)] for l in mine)]
@@ -1401,12 +1401,19 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                 table = table_width.fit([head] + cells(name_w), COLS, (1, head.index("다음")), floor=floor, deco=dress, keep=keep)
                 if table_width.table_width(table) <= COLS:
                     break
-            width_ok &= table_width.table_width(table) <= COLS
-            out += ["", "| " + " | ".join(head).strip() + " |", "|---" * len(head) + "|"]
             # The dashboard has the page's width: its copy of the report keeps every cell whole.
             whole = [head] + [[dress(i, c, s) for c, s in enumerate(r)] for i, r in enumerate(cells(SESSION_NAME_W), 1)]
-            swaps.append((len(out), len(table) - 1, [table_width.md_row(row) for row in whole[1:]]))
-            out += [table_width.md_row(row) for row in table[1:]]
+            head_md = ["| " + " | ".join(head).strip() + " |", "|---" * len(head) + "|"]
+            if table_width.table_width(table) > COLS:
+                # No cut table keeps the names apart in 78 columns: the rows go out as one whole line each, not a table.
+                table = whole
+                swaps.append((len(out) + 1, len(whole) - 1, head_md + [table_width.md_row(row) for row in whole[1:]]))
+                out += [""] + ["- " + " ".join(row[:2]) + (f" — {' · '.join(t)}" if (t := [x for x in row[2:] if x and x != "—"]) else "")
+                               for row in whole[1:]]
+            else:
+                out += [""] + head_md
+                swaps.append((len(out), len(table) - 1, [table_width.md_row(row) for row in whole[1:]]))
+                out += [table_width.md_row(row) for row in table[1:]]
             # Placed from the rows written, by the whole name each one shows (names are unique in the report): a row the
             # table lost is missing and one it wrote twice is a duplicate, whatever the lines handed to it said.
             by_name = {l["shown"]: l for l in mine if l["status"] is not None}
