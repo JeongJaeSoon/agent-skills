@@ -13,6 +13,7 @@ g init -q -b main
 put "$T/up/pstack/skills/a/SKILL.md" '---\nname: a\n---\nline1\n'
 put "$T/up/pstack/skills/b/SKILL.md" '---\nname: b\n---\nx1\n'
 put "$T/up/pstack/.cursor-plugin/plugin.json" '{"version": "1.0.0"}\n'
+put "$T/up/pstack/skills/z/SKILL.md" '---\nname: z\n---\nnot vendored\n'
 g add -A; g commit -qm one; p1=$(g rev-parse HEAD)
 g remote add origin "$T/up"
 cat > "$T/repo/vendor/pstack/manifest.json" <<EOF
@@ -21,7 +22,7 @@ cat > "$T/repo/vendor/pstack/manifest.json" <<EOF
  {"upstream":"skills/b/SKILL.md","local":"skills/b/SKILL.md","mode":"verbatim"}]}
 EOF
 echo "our own a" > "$T/repo/skills/a/SKILL.md"
-sync() { (cd "$T/repo" && PSTACK_CACHE="$T/up" AGENT_SKILLS_STATE="$T/state" SKILLS_SYNC_NO_NOTIFY=1 \
+sync() { (cd "$T/repo" && PSTACK_CACHE="$T/up" AGENT_SKILLS_STATE="$T/state" PSTACK_NOTIFY_CMD="${NOTIFY:-true}" \
   python3 scripts/pstack-sync.py "$@"); }
 expect() { grep -q -- "$1" <<<"$2" || { echo "FAIL: expected '$1' in:"; echo "$2"; exit 1; }; }
 pin() { python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['pin'])" "$T/repo/vendor/pstack/manifest.json"; }
@@ -38,21 +39,27 @@ put "$T/up/pstack/skills/a/references/r.md" 'new ref\n'
 put "$T/up/pstack/skills/c/SKILL.md" '---\nname: c\n---\n'
 put "$T/up/pstack/skills/c/notes.md" 'not reported: c is not vendored\n'
 g rm -q pstack/skills/b/SKILL.md
+mkdir -p "$T/up/pstack/skills/y"; g mv pstack/skills/z/SKILL.md pstack/skills/y/SKILL.md  # a renamed skill is new
 put "$T/up/pstack/.cursor-plugin/plugin.json" '{"version": "1.1.0"}\n'
 g add -A; g commit -qm two; p2=$(g rev-parse HEAD)
 echo "edited copy" >> "$T/repo/vendor/pstack/skills/b/SKILL.md"
+if [ "$(uname)" = Darwin ]; then  # only macOS delivers; a failed delivery leaves no marker, so the next run retries
+  out=$(NOTIFY=false sync --notify); expect "notification failed" "$out"
+  [ ! -e "$T/state/pstack-upstream.json" ] || { echo "FAIL: marked notified after a failed delivery"; exit 1; }
+fi
 out=$(sync --notify)
 expect "changed        skills/a/SKILL.md" "$out"; expect "drift+deleted  skills/b/SKILL.md" "$out"
 expect "new            skills/a/references/r.md" "$out"; expect "new            skills/c/SKILL.md" "$out"
+expect "new            skills/y/SKILL.md" "$out"
 if grep -q "notes.md" <<<"$out"; then echo "FAIL: a file of an unvendored skill was reported"; exit 1; fi
-expect "4 file(s) differ" "$out"; expect "notified" "$out"
+expect "5 file(s) differ" "$out"; expect "notified" "$out"
 grep -q "$p2" "$T/state/pstack-upstream.json"
 [ "$(pin)" = "$p1" ] && grep -q '^line1$' "$T/repo/vendor/pstack/skills/a/SKILL.md"
 
 # The same upstream commit is notified once; the summary is still the last line the job records.
 out=$(sync --notify)
 if grep -q "notified" <<<"$out"; then echo "FAIL: notified twice for one commit"; exit 1; fi
-[ "$(tail -n 1 <<<"$out")" = "pstack upstream: 4 file(s) differ from vendor/pstack (pin ${p1:0:7}, upstream ${p2:0:7})" ]
+[ "$(tail -n 1 <<<"$out")" = "pstack upstream: 5 file(s) differ from vendor/pstack (pin ${p1:0:7}, upstream ${p2:0:7})" ]
 
 # A hand refresh rewrites the copies, drops the deleted file, advances the pin and leaves skills/ alone.
 out=$(sync --write); expect "wrote 1 file(s), dropped 1, pin -> ${p2:0:12} (version 1.1.0)" "$out"

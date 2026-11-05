@@ -32,9 +32,15 @@ def out(*args):
     return git(*args).stdout.decode()
 
 
+TREES = {}
+
+
 def show(ref, path):
-    r = git("show", f"{ref}:{path}", check=False)
-    return r.stdout if r.returncode == 0 else None
+    """The file's bytes at ref, or None when ref has no such path. The cache is a blob:none clone, so a blob may
+    still need the network: that failure exits here instead of reading as a deleted file that --write would drop."""
+    if ref not in TREES:
+        TREES[ref] = set(out("ls-tree", "-r", "--name-only", ref).splitlines())
+    return git("show", f"{ref}:{path}").stdout if path in TREES[ref] else None
 
 
 def compare(m, vendor, target):
@@ -51,7 +57,7 @@ def compare(m, vendor, target):
             rows.append(("+".join(states), path))
         fresh[path] = new
     skill_dirs = {p.split("/")[1] for p in fresh if p.startswith("skills/")}
-    for name in out("diff", "--name-only", "--diff-filter=A", pin, target, "--", f"{up}/skills").split():
+    for name in out("diff", "--name-only", "--no-renames", "--diff-filter=A", pin, target, "--", f"{up}/skills").split():
         rel = name[len(up) + 1:]
         if rel not in fresh and (rel.endswith("/SKILL.md") or rel.split("/")[1] in skill_dirs):
             rows.append(("new", rel))
@@ -68,7 +74,14 @@ def notify(text, target):
         pass
     if platform.system() == "Darwin" and not os.environ.get("SKILLS_SYNC_NO_NOTIFY"):
         script = f"display notification {json.dumps(text)} with title \"agent-skills pstack upstream\""
-        subprocess.run(["osascript", "-e", script], capture_output=True, timeout=10)
+        try:
+            rc = subprocess.run([os.environ.get("PSTACK_NOTIFY_CMD", "osascript"), "-e", script],
+                                capture_output=True, timeout=10).returncode
+        except (OSError, subprocess.TimeoutExpired):
+            rc = -1
+        if rc:
+            print("notification failed; the next run tries again")  # no marker, so a failed delivery is retried
+            return
     seen.parent.mkdir(parents=True, exist_ok=True)
     seen.write_text(json.dumps({"notified": target}) + "\n")
     print(f"notified ({target[:12]})")
