@@ -62,6 +62,7 @@ SECTIONS = {
     "reflect": (["skills/reflect/SKILL.md"], {}),
     "brief": (["skills/brief/SKILL.md"], {}),
     "orchestrate": (["skills/orchestrate/references/landing.md", "docs/skills.md"], {}),
+    "dashboard": (["skills/orchestrate/references/dashboard.md"], {}),
     "preview-watch": (["docs/preview-watch.md"], {"": "scripts/preview_watch.py"}),
     "share-server": (["docs/share-server.md"], {"": "scripts/share_server.py"}),
     "reap-hard": (["docs/reap-hard.md"], {"": "scripts/reap_hard.py"}),

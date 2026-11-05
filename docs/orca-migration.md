@@ -61,7 +61,7 @@ Older code still writes `decisions.json`, so it must not run while the data move
 
 1. Stop the dashboard server (it relays answers from the page). On macOS that is `launchctl bootout` of its LaunchAgent.
 2. Fast-forward the loaded main checkout.
-3. Restart every live Claude session (`/reload-plugins` does not pass the check), because each one runs the decision hook it loaded.
+3. End every live Claude session and start a new process (neither `/reload-plugins` nor `/restart` passes the check: they keep the pid and start time), because each one runs the decision hook it loaded.
 4. `orch db import --dry-run` shows how many decisions move and whether `--apply` would refuse.
 5. `orch db import --apply`. It refuses while a process runs the scripts, wrappers or hooks from another checkout or from before the fast-forward, while a live session in any Claude home started before it, while the plugin loads a copy at another commit or a session loads another checkout with `--plugin-dir`, while a LaunchAgent is still loaded (even without a pid) that is the dashboard's under this shell's label or is any agent in `~/Library/LaunchAgents` running an agent-skills script, wrapper or hook, or while any uncommented crontab line runs one of them, even from the updated checkout (comment it out for the cutover). When it cannot tell, it refuses too: `ps` or `crontab -l` fails (a user with no crontab, or no `crontab` command, is fine), or a process's directory or the checkout's update time cannot be read. Then it takes the board, tidy and decision locks, copies `decisions.json` to `backup-db-<time>/` (0700, files 0600) with its sha256, builds the database under a temporary name, checks it, renames it into place, and leaves an empty `decisions.json` directory in its place so older code fails to write there.
 6. Start the dashboard server again (`orch-dash install-agent` on macOS).
@@ -98,7 +98,7 @@ The owner types the main checkout's `bin/orch db migrate` in a plain terminal (t
 
 1. Already migrated: it says "already migrated" and changes nothing, however many times it runs. If older code has put a legacy file back after the cutover, it says that and stops.
 2. It stops what writes the state: the dashboard LaunchAgent, agent-skills-sync, a dashboard server started by `ensure`, and the janitor and watch-prs automations. Before the first stop it writes what to put back into `cutover-recover.json`. It reads `ORCH_*` and `PROGRAMS_HOME` from a LaunchAgent plist (never writes the plist) and uses them for the run when this shell does not set them; a value that differs from the shell's is refused.
-3. If a reason to refuse remains (a session, process or cron line still running older code) it prints a table, imports nothing and puts back what it stopped. A session does not pass with `/reload-plugins`; only one that ended and started again after the update does.
+3. If a reason to refuse remains (a session, process or cron line still running older code) it prints a table, imports nothing and puts back what it stopped. A session does not pass with `/reload-plugins` or `/restart`; only one that ended and started again after the update does.
 4. It runs the same import as `orch db import`, then checks the `migration` steps and `orch board show`. (`orch board open` exits cleanly before the cutover, so it proves nothing.)
 5. When it ends, fails or is killed, it puts back what it stopped: each LaunchAgent is loaded again from its existing plist with `launchctl bootstrap` (`install-agent` would rewrite the plist), and an automation that was off stays off. A step that could not be put back stays in `cutover-recover.json` and the next run does it first.
 6. While it runs, `cutover.lock` is held, so a restarted session's `orch wait` or `ensure` cannot bring the dashboard server back.
@@ -111,7 +111,7 @@ The owner types the main checkout's `bin/orch db migrate` in a plain terminal (t
 
 1. Stop the dashboard server and turn the janitor off: `launchctl bootout` of the LaunchAgents on macOS, and `skills-sync setup disable janitor`.
 2. Fast-forward the loaded main checkout.
-3. Restart every live Claude session (`/reload-plugins` does not pass the check).
+3. End every live Claude session and start a new process (neither `/reload-plugins` nor `/restart` passes the check).
 4. `orch db import --dry-run` shows what moves: items per list, closures, rows and leads, which leads and row PRs leave because Orca holds them, and whether `--apply` would refuse.
 5. `orch db import --apply`, which runs the same checks as the decisions step. The board's backup goes to `backup-db-*`, with the sha256 of each file in the `migration` table, and an empty directory replaces `board.json` and `tidy.jsonl`, so code older than the decisions release fails to write. Code from the decisions release stops on the `4b-board` row.
 6. Start the dashboard server and the janitor again.

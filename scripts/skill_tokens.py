@@ -53,6 +53,9 @@ HOOKS = {
     "permission.py": REFUSAL_ONLY,
     "claim_check.py": REFUSAL_ONLY,
     "subagent_log.py": REFUSAL_ONLY,
+    "artifact_archive.py": "every Artifact publish: the claude.ai and backup links to give the owner or the caller",
+    "artifact_links_stop.py": "no additionalContext; only its reason when it blocks a reply that omits an Artifact's links",
+    "artifact_send_check.py": "a message that names a backed-up Artifact without its backup link (the denial, or one warning line)",
     "owner_check.py": "no additionalContext; only its reason when `guard.owner_check` is `deny` and it blocks",
     "record_check.py": "a PR opened, merged or landed (a reminder); a worker_done, card close or turn end that owes a "
                        "record line (the warning or the denial)",

@@ -291,6 +291,9 @@ with state("plan") as sd:
         assert line in text, (line, text)
     if sys.platform == "darwin":
         assert f"launchctl bootout gui/{os.getuid()}/{store.launch_labels()[0]}" in text and "orch-dash install-agent" in text
+    for step in ("4a", "4b"):  # /restart keeps the pid and start time, so the plan must not offer it
+        step3 = next(l for l in store.cutover_plan(step).splitlines() if l.startswith("# 3."))
+        assert "end every live Claude session and start a new process" in step3 and "/restart do not count" in step3, step3
     assert "skills-sync setup disable janitor" in store.cutover_plan("4b")
     code, out, _ = orch("db", "cutover-plan", "4a")
     assert code == 0 and out == text and list(sd.iterdir()) == [], out
@@ -408,6 +411,7 @@ try:
 finally:
     fleet.live_sessions = real_live
 assert len(why) == 1 and "s-old" in why[0], why  # one pid from before the update is enough
+assert why[0].endswith("end it and start a new process; /restart keeps the pid and start time, so it does not count"), why
 home = tmp / "home"
 (home / "plugins").mkdir(parents=True)
 (home / "plugins" / "installed_plugins.json").write_text(json.dumps({"plugins": {
