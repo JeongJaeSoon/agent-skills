@@ -60,7 +60,9 @@ class Base(unittest.TestCase):
         fake = FakeOrca(autos)
         for p in (mock.patch.object(au, "sh", fake), mock.patch.object(au.shutil, "which", return_value="/x/orca"),
                   mock.patch.object(au, "main_checkout", return_value=main),
-                  mock.patch.object(au.Watch, "configured", return_value=configured)):
+                  mock.patch.object(au.Watch, "configured", return_value=configured),
+                  # A disable drops the job's record: never the real one under the user's state directory.
+                  mock.patch.object(au.orca_job, "forget")):
             p.start()
             self.addCleanup(p.stop)
         return fake
@@ -216,8 +218,10 @@ class Janitor(Base):
         self.assertEqual([e[e.index("--id") + 1] for e in fake.edits()], ["J1", "J2"])
         self.assertTrue(all("--disabled" in e for e in fake.edits()))
         fake = self.orca([janitor(), load_job()])
-        self.assertEqual(au.JanitorLoad().disable()[0], 0)
+        with mock.patch.object(au.orca_job, "forget") as forget:
+            self.assertEqual(au.JanitorLoad().disable()[0], 0)
         self.assertEqual([e[e.index("--id") + 1] for e in fake.edits()], ["J2"])
+        forget.assert_called_once_with("janitor-load")
 
     def test_enable_turns_a_disabled_load_job_back_on(self):
         """disable then enable janitor leaves both as they were; apply never turns a disabled job on."""

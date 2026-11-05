@@ -212,7 +212,10 @@ class JanitorLoad(ReapJob):
         return self.enable_job(here)
 
     def disable(self):
-        return OrcaJob.disable(self)
+        code, msg = OrcaJob.disable(self)
+        if not code:
+            orca_job.forget(self.name)  # its runner's record must not turn into a 'late' warning once it is off
+        return code, msg
 
 
 # ---------------------------------------------------------------- preview-watch (LaunchAgent)
