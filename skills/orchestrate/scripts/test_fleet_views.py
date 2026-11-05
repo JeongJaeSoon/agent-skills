@@ -154,4 +154,39 @@ assert "<h2>Automations</h2>" in out["automations"] and "<h2>Automations</h2>" i
 assert "<h2>Skills</h2>" in out["skills"] and "<h2>Skills</h2>" in out["changes"] and "Skill changes" not in out["changes"].split("</p>")[0].split("<h2>")[1]
 assert "<h2>Pull requests</h2>" in out["stats"] and "PR stats" not in out["stats"].split("</h2>")[0]
 
+# The polls redraw only the view that asked for them: a response that lands after the reader moved to another view of the
+# same page must not replace the DOM (a text selection, a hover). fetch answers at once; the checks await its microtasks.
+helpers2 = helpers + "\n" + take("redrawCharts")
+js2 = f"""{helpers2}
+const S = {{slug: "fleet", filters: {{}}, state: {{}}, fleet: null, sort: {{}}}};
+{(assets / "fleet.js").read_text()}
+const VIEWS = {{}}, pollState = () => {{}}, render = () => {{}};
+let renders = 0;
+const renderView = () => {{ renders++; }};
+document.querySelector = () => ({{ scrollTo() {{}} }});
+globalThis.fetch = async () => ({{ ok: true, json: async () => ({{ error: "stub" }}) }});
+const go = (hash) => {{ location.hash = hash; route(); }};
+const settle = async () => {{ for (let i = 0; i < 12; i++) await null; }};
+// start a poll on startHash, move to endHash before it answers, and count the redraws
+const race = async (startHash, endHash, start) => {{
+  go(startHash); renders = 0; F.stats = F.skills = F.changes = F.jobs = null; F.statsAt = F.skillsAt = F.changesAt = F.jobsAt = 0;
+  start(); go(endHash); await settle(); return renders;
+}};
+const out = {{}};
+out.stats = [await race("#/fleet/prs?view=stats", "#/fleet/prs?view=stats", fleetStats), await race("#/fleet/prs?view=stats", "#/fleet/prs", fleetStats)];
+out.skills = [await race("#/fleet/skills", "#/fleet/skills", fleetSkills), await race("#/fleet/skills", "#/fleet/skills?view=changes", fleetSkills)];
+out.changes = [await race("#/fleet/skills?view=changes", "#/fleet/skills?view=changes", fleetChanges), await race("#/fleet/skills?view=changes", "#/fleet/skills", fleetChanges)];
+out.jobs = [await race("#/fleet/automations", "#/fleet/automations", internalJobs), await race("#/fleet/automations", "#/fleet/automations?view=monitors", internalJobs)];
+go("#/fleet/prs?view=stats"); renders = 0; redrawCharts(); out.resizeStats = renders;
+go("#/fleet/prs"); renders = 0; redrawCharts(); out.resizeTable = renders;
+process.stdout.write(JSON.stringify(out));"""
+# an async body in the sandbox: the script awaits the fetch stub's microtasks, so it runs as an async function
+sandbox2 = ("const vm = require('vm'); const ctx = vm.createContext({document: {addEventListener() {}}, process, setTimeout() {}, "
+            "location: {hash: '#/fleet/prs', replace() {}}, window: {}}); ctx.globalThis = ctx; "
+            "vm.runInContext('(async () => {' + require('fs').readFileSync(0, 'utf8') + '})().catch((e) => { process.stderr.write(String(e && e.stack || e)); process.exitCode = 1; })', ctx);")
+r2 = subprocess.run(["node", "-e", sandbox2], input=js2, capture_output=True, text=True)
+assert r2.returncode == 0, r2.stderr[-1500:]
+polls = json.loads(r2.stdout)
+assert polls == {"stats": [1, 0], "skills": [1, 0], "changes": [1, 0], "jobs": [1, 0], "resizeStats": 1, "resizeTable": 0}, polls
+
 print("test_fleet_views: ok")

@@ -1429,7 +1429,7 @@ function fleetAutomations(st) {
 // orch-dash's own jobs (/api/fleet/jobs, jobs.py): each row is the record the job wrote when it last ran, read on every
 // poll, so a fleet tick that keeps failing still shows here. A job with no record says so; nothing here is estimated.
 function internalJobs() {
-  pollJson("jobs", "/api/fleet/jobs", 10e3, "automations");
+  pollJson("jobs", "/api/fleet/jobs", 10e3, () => onView("automations", "automations", AUTO_VIEWS));
   const rep = F.jobs;
   if (!rep) return '<div class="card"><div class="empty-chart">Loading orch-dash jobs…</div></div>';
   if (rep.error) return `<div class="card"><div class="empty-chart">${tag("not loaded", "warn", "alert")} Could not read orch-dash's jobs: ${esc(rep.error)}</div></div>`;
