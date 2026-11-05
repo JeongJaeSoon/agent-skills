@@ -660,11 +660,32 @@ pathlib.Path.read_text = lambda self, *a, **k: (_ for _ in ()).throw(PermissionE
 try:
     prog.mark_shown(pend, "x")
     raise AssertionError("an unreadable pending request must raise")
-except PermissionError:
+except SystemExit as e:
+    assert "unreadable" in str(e), e
+finally:
+    pathlib.Path.read_text = real_read
+# A replay whose request cannot be read stops before any take or print; only a missing file means "none".
+pend.write_text(json.dumps({"retry_request": "r-f", "shown": ["s1"]}))
+pathlib.Path.read_text = lambda self, *a, **k: (_ for _ in ()).throw(PermissionError("denied")) if self == pend \
+    else real_read(self, *a, **k)
+log, printed = [], []
+prog.orca_json = scripted([("take", st("s1", "d1"))], log)
+try:
+    prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: printed.append(a[0]), pending=pend)
+    raise AssertionError("an unreadable request must stop the wait")
+except SystemExit:
     pass
 finally:
     pathlib.Path.read_text = real_read
+assert not log and not printed, (log, printed)
+pend.write_text("{trunc")
+try:
+    prog.pending_request(pend)
+    raise AssertionError("a broken request must stop the wait")
+except SystemExit as e:
+    assert "unreadable" in str(e), e
 prog.done_take(pend)
+assert prog.pending_request(pend) is None
 # cmd_wait notes each ACTIONABLE-batch message as it prints it: a replay after a crash prints none of them again.
 batch3 = {"deliveryId": "d7", "messages": [{"id": "s1", "type": "status", "body": "s1"},
                                            {"id": "s2", "type": "status", "body": "s2"}, q["messages"][0]]}

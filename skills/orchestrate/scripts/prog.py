@@ -3112,13 +3112,19 @@ WAKE_DUE_S = 1800  # sync.py's WAKE_PENDING_S
 
 
 def pending_request(pending):
-    """The consuming request a dead wait left in `pending`: {"retry_request", "ack"}, or None."""
+    """The consuming request a dead wait left in `pending`: {"retry_request", "ack", "shown"}, or None when there is
+    none. Any other read failure stops the wait: guessing "none" would lose a batch or print it twice."""
     if pending is None:
         return None
-    with contextlib.suppress(OSError, ValueError, AttributeError):
+    try:
         req = json.loads(pending.read_text())
-        return req if req.get("retry_request") else None
-    return None
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as e:
+        sys.exit(f"wait request {pending} is unreadable ({e}); check it, then remove it to go on")
+    if not isinstance(req, dict) or not req.get("retry_request"):
+        sys.exit(f"wait request {pending} holds no retry_request; check it, then remove it to go on")
+    return req
 
 
 def take(box, pending=None, ack=None):
@@ -3147,9 +3153,9 @@ def mark_shown(pending, mid):
     """Note a message of the pending batch as printed, so a replay after a crash does not print it again. Written
     after the print: a crash between the two prints it twice rather than never. A failed write raises, so nothing
     more is printed past the one message it could not note."""
-    if pending is None or mid is None:
+    req = pending_request(pending) if mid is not None else None
+    if req is None:
         return
-    req = json.loads(pending.read_text())  # strict: an unreadable request stops the output too
     req["shown"] = [*(req.get("shown") or []), mid]
     tmp = pending.with_suffix(".tmp")
     tmp.write_text(json.dumps(req))
