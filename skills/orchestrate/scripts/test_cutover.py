@@ -103,6 +103,8 @@ def fingerprint(sd):
 
 
 # ---- a refusal stops nothing for good: the table names what stands in the way, and every service comes back
+kind, todo = cutover.classify("session s1 (/w/x, home /h) started before the update: x")
+assert kind == "session" and todo.startswith("end it and start a new process (/reload-plugins and /restart do not count"), todo
 reasons = ["session s1 (/w/x, home /h) started before the update: end it and start a new process",
            "pid 42 started Mon before this checkout's update: python3 prog.py wait"]
 with world(reasons=reasons) as (w, sd):
