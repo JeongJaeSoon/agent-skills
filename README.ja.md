@@ -86,7 +86,7 @@ https://github.com/JeongJaeSoon/agent-skills の Claude Code プラグインを�
 スキルは、description に書かれた状況になるとモデルが自分で呼び出します。`/agent-skills:<名前>` で直接呼ぶこともできます。
 
 - 「ABC-1 を終わらせて」と頼むと、`deliver-ticket` が計画からマージ、チケットのクローズまで進めます。トラッカーが必要です(既定は Linear。変えるには `tracker.adapter`、[設定](#設定)を参照)。
-- 「状況を報告して」と頼むと `brief` が動きます。Claude Code には組み込みの `/brief` があるので、直接呼ぶときは `/agent-skills:brief` です。
+- 「状況を報告して」と頼むと `brief` が動きます。Claude Code には組み込みの `/brief` があるので、直接呼ぶときは `/agent-skills:brief` です。`/brief-pane` でチャットの横にパネルを開くと、開いている間だけ 30 秒ごとに同じ報告を更新します(110 列以上なら横に固定、それより狭いとプロンプトの上に出ます)。
 - Orca の中で `claude --agent agent-skills:orchestrator --name orchestrator` を実行して最上位セッションを立て、全セッションの管理を頼みます。オーケストレーターはプロジェクトごとにリードのセッションを立て、リードがワーカーを動かします。
 
 ## 人が決定権を持つ地点

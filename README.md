@@ -86,7 +86,7 @@ The full guide, with a shell-only path, updates, the complete table of approval 
 Skills fire on their own when the situation in their description comes up. You can also call one by name as `/agent-skills:<name>`.
 
 - "Finish ABC-1" runs `deliver-ticket` from the plan to the merge and the closed ticket. This needs a tracker: Linear by default, or set `tracker.adapter` (see [Configuration](#configuration)).
-- "Give me a status report" runs `brief`. Claude Code has a built-in `/brief`, so call this one directly as `/agent-skills:brief`.
+- "Give me a status report" runs `brief`. Claude Code has a built-in `/brief`, so call this one directly as `/agent-skills:brief`. `/brief-pane` opens the same report in a panel beside the chat that refreshes every 30 seconds while it is open (it docks at 110+ columns; narrower terminals show it above the prompt).
 - In Orca, start a top-level session with `claude --agent agent-skills:orchestrator --name orchestrator` and ask it to take over every session. The orchestrator hands each project to a lead session, and each lead runs its workers.
 
 ## Where you stay in charge
