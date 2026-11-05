@@ -556,8 +556,10 @@ def touch_last(key):
     """When this artifact was last published, also for a republish that reused the newest version (no new row)."""
     path = last_file(key)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'w', encoding='utf-8') as f:
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix='.tmp-')  # replaced whole, never truncated in place
+    with os.fdopen(fd, 'w', encoding='utf-8') as f:
         f.write(repr(time.time()))
+    os.replace(tmp, path)
 
 
 def newer_version(key, at):
