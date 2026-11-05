@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import contextlib, io, json, pathlib, subprocess, sys, tempfile, unittest
+import contextlib, io, json, pathlib, shutil, subprocess, sys, tempfile, unittest
 from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -10,6 +10,7 @@ NO_CONFIG = pathlib.Path(tempfile.gettempdir()) / "test-automations-no-such-conf
 au.CONFIG = au.reap.CONFIG = NO_CONFIG
 
 WANT = au.janitor_want(f"path:{au.REPO}")
+ORIG_PROTECT_FILE = au.ReapHard.protect_file
 
 
 def janitor(enabled=True, **over):
@@ -428,10 +429,14 @@ class ReapHard(unittest.TestCase):
     """patrol has no job of its own; it runs inside reap-hard's pass, so this is what installs it."""
     r = au.ReapHard()
 
-    def patch(self, loaded, spec, protect=True, main=True, rc=0):
+    def patch(self, loaded, spec, protect=True, main=True, rc=0, bootrc=0):
         self.install = mock.Mock(return_value=rc)
-        self.boot = mock.Mock()
-        for p in (mock.patch.object(au, "label_loaded", return_value=loaded),
+        self.boot = mock.Mock(return_value=bootrc)
+        if not hasattr(self, "tmp"):
+            self.tmp = pathlib.Path(tempfile.mkdtemp())
+            self.addCleanup(shutil.rmtree, self.tmp)
+        for p in (mock.patch.object(au, "off_marker", lambda n: self.tmp / f"off-{n}"),
+                  mock.patch.object(au, "label_loaded", return_value=loaded),
                   mock.patch.object(au, "rh_spec", return_value=spec),
                   mock.patch.object(au.ReapHard, "protect_file", return_value=mock.Mock(is_file=lambda: protect)),
                   mock.patch.object(au, "main_checkout", return_value=main),
@@ -479,15 +484,36 @@ class ReapHard(unittest.TestCase):
         self.patch(False, None, rc=1)
         self.assertEqual(self.r.enable(False), (1, "실패 (위 출력)"))
 
-    def test_disable_keeps_the_plist_so_apply_leaves_it_off(self):
-        self.patch(False, self.current())
-        self.assertEqual(self.r.disable(), (0, "이미 꺼져 있음"))
+    def test_disable_leaves_a_marker_so_apply_leaves_it_off_even_when_never_installed(self):
+        self.patch(False, None)
+        self.assertEqual(au.decide(self.r)[0], "install")
+        self.assertEqual(self.r.disable()[0], 0)
         self.boot.assert_not_called()
+        self.assertEqual(self.r.status()[0], "off")
+        self.assertEqual(au.decide(self.r)[0], "skip")
+        self.assertEqual(self.r.enable(False), (0, "켬"))  # enable clears it
+        self.assertFalse(au.off_marker("reap-hard").exists())
+
+    def test_disable_unloads_a_loaded_job(self):
         self.patch(True, self.current())
         self.assertEqual(self.r.disable()[0], 0)
         self.boot.assert_called_once_with(au.rh.LABEL)
-        self.patch(False, self.current())
-        self.assertEqual(au.decide(self.r)[0], "skip")
+
+    def test_a_failed_bootout_is_a_failed_disable(self):
+        self.patch(True, self.current(), bootrc=1)
+        code, msg = self.r.disable()
+        self.assertEqual(code, 1)
+        self.assertFalse(au.off_marker("reap-hard").exists())
+
+    def test_the_dry_run_judges_the_config_apply_will_write(self):
+        self.patch(False, None, protect=False)
+        with mock.patch.object(au.ReapHard, "protect_file", ORIG_PROTECT_FILE), \
+                mock.patch.object(au.rh, "config", return_value={"protect_file": str(self.tmp / "none"), "interval": 900}):
+            (self.tmp / "mine").write_text("port 1\n")
+            self.assertEqual(self.r.status()[0], "unconfigured")
+            au.PLANNED_CONFIG = {"reap-hard": {"protect_file": str(self.tmp / "mine")}}
+            self.addCleanup(setattr, au, "PLANNED_CONFIG", None)
+            self.assertEqual(self.r.status()[0], "absent")
 
     def test_other_os(self):
         self.patch(False, None)
@@ -500,10 +526,14 @@ class ReapHard(unittest.TestCase):
 class Dash(unittest.TestCase):
     d = au.OrchDash()
 
-    def patch(self, exists, loaded, main=True, rc=0):
+    def patch(self, exists, loaded, main=True, rc=0, bootrc=0):
         self.sh = mock.Mock(return_value=subprocess.CompletedProcess([], rc, "wrote x", ""))
-        self.boot = mock.Mock()
-        for p in (mock.patch.object(au, "label_loaded", return_value=loaded),
+        self.boot = mock.Mock(return_value=bootrc)
+        if not hasattr(self, "tmp"):
+            self.tmp = pathlib.Path(tempfile.mkdtemp())
+            self.addCleanup(shutil.rmtree, self.tmp)
+        for p in (mock.patch.object(au, "off_marker", lambda n: self.tmp / f"off-{n}"),
+                  mock.patch.object(au, "label_loaded", return_value=loaded),
                   mock.patch.object(au.OrchDash, "plist", return_value=mock.Mock(exists=lambda: exists)),
                   mock.patch.object(au, "main_checkout", return_value=main),
                   mock.patch.object(au, "bootout", self.boot),
@@ -534,10 +564,15 @@ class Dash(unittest.TestCase):
         self.assertEqual(self.d.enable(False)[0], 1)
         self.sh.assert_not_called()
 
-    def test_disable(self):
+    def test_disable_survives_apply_and_reports_a_failed_bootout(self):
+        self.patch(False, False)
+        self.assertEqual(self.d.disable()[0], 0)
+        self.assertEqual(au.decide(self.d)[0], "skip")
         self.patch(True, True)
         self.assertEqual(self.d.disable()[0], 0)
         self.boot.assert_called_once()
+        self.patch(True, True, bootrc=1)
+        self.assertEqual(self.d.disable()[0], 1)
 
 
 class Plan(Base):

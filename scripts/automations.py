@@ -393,7 +393,25 @@ def label_loaded(label):
 
 
 def bootout(label):
-    sh(["launchctl", "bootout", f"gui/{os.getuid()}/{label}"])
+    return sh(["launchctl", "bootout", f"gui/{os.getuid()}/{label}"]).returncode
+
+
+def off_marker(name):
+    """Left by `disable` even when nothing was installed, so a later `apply` does not install what the user turned off."""
+    return reap.STATE / f"automation-disabled-{name}"
+
+
+def turn_off(name, label):
+    if label_loaded(label) and bootout(label):
+        return 1, "launchctl bootout 실패: job 이 아직 로드돼 있다. 다시 시도한다"
+    marker = off_marker(name)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.touch()
+    return 0, "끔 (표지를 남겨 apply 가 다시 켜지 않는다)"
+
+
+# Set by plan() to the agent-skills.json that --apply is about to write, so the dry run judges what apply will see.
+PLANNED_CONFIG = None
 
 
 class ReapHard:
@@ -404,13 +422,16 @@ class ReapHard:
             "이 회차가 띄운다. 묻지 않고 카드를 지우므로 보호 목록 파일(reap-hard.protect_file)을 쓴 PC에서만 켠다")
 
     def protect_file(self):
-        return pathlib.Path(rh.config()["protect_file"]).expanduser()
+        planned = (PLANNED_CONFIG or {}).get("reap-hard") or {}
+        return pathlib.Path(planned.get("protect_file") or rh.config()["protect_file"]).expanduser()
 
     def status(self):
         if sys.platform != "darwin":
             return "unsupported", "macOS LaunchAgent 전용"
         spec, loaded = rh_spec(), label_loaded(rh.LABEL)
         if spec is None and not loaded:
+            if off_marker(self.name).exists():
+                return "off", f"disable 로 끔 ({off_marker(self.name)}, enable 로 다시 켬)"
             if not self.protect_file().is_file():
                 return "unconfigured", f"보호 목록 파일 {self.protect_file()} 가 없음 (순찰도 이 job 이 띄우므로 같이 꺼져 있다)"
             return "absent", "등록 안 됨"
@@ -432,15 +453,14 @@ class ReapHard:
         if refusal:
             return 1, refusal
         code = rh.cmd_install(here)
+        if not code:
+            off_marker(self.name).unlink(missing_ok=True)
         return code, "실패 (위 출력)" if code else "켬"
 
     def disable(self):
         if sys.platform != "darwin":
             return 0, "macOS LaunchAgent 전용(이 OS 에는 등록된 것이 없다)"
-        if not label_loaded(rh.LABEL):
-            return 0, "이미 꺼져 있음"
-        bootout(rh.LABEL)  # the plist stays, so the state is "off" and apply leaves it
-        return 0, "끔 (plist 는 남겨 apply 가 다시 켜지 않는다)"
+        return turn_off(self.name, rh.LABEL)
 
 
 def rh_spec():
@@ -467,6 +487,8 @@ class OrchDash:
             return "unsupported", "macOS LaunchAgent 전용"
         exists, loaded = self.plist().exists(), label_loaded(self.label())
         if not exists and not loaded:
+            if off_marker(self.name).exists():
+                return "off", f"disable 로 끔 ({off_marker(self.name)}, enable 로 다시 켬)"
             return "absent", "등록 안 됨"
         if not loaded:
             return "off", f"{self.plist()} 는 있으나 로드 안 됨 (enable 로 다시 로드)"
@@ -483,15 +505,14 @@ class OrchDash:
         # dash.py's own installer: its plist carries the ORCH_* variables of the shell that installs, which a refresh
         # from another shell would drop, so a loaded agent is never rewritten here.
         p = sh([sys.executable, str(REPO / "skills" / "orchestrate" / "scripts" / "dash.py"), "install-agent"])
+        if label_loaded(self.label()):  # install-agent can load the job and still exit 1 when its port is taken
+            off_marker(self.name).unlink(missing_ok=True)
         return p.returncode, (p.stdout + p.stderr).strip()[-300:] or "켬"
 
     def disable(self):
         if sys.platform != "darwin":
             return 0, "macOS LaunchAgent 전용(이 OS 에는 등록된 것이 없다)"
-        if not label_loaded(self.label()):
-            return 0, "이미 꺼져 있음"
-        bootout(self.label())
-        return 0, "끔 (plist 는 남겨 apply 가 다시 켜지 않는다)"
+        return turn_off(self.name, self.label())
 
 
 # ---------------------------------------------------------------- watch-prs, watch-mentions (Orca automation)
@@ -604,16 +625,21 @@ def decide(a):
     return "skip", state, detail, f"{LABEL[state]}, 그대로 둠" + (" (사용자가 끔)" if state == "off" else "")
 
 
-def plan():
+def plan(config=None):
     """The lines setup.py's dry run shows: one per automation `apply` would install or refresh, and one per default-on
-    automation it cannot (unknown, or unconfigured with the reason). Nothing is written."""
-    out = []
-    for a in AUTOMATIONS:
-        verb, state, detail, _ = decide(a)
-        if verb in ("install", "refresh"):
-            out.append(f"automation {a.name}: {'install' if verb == 'install' else 'refresh the registered job'}")
-        elif verb == "fail" or (a.default and state == "unconfigured"):
-            out.append(f"automation {a.name}: 건너뜀, {detail}")
+    automation it cannot (unknown, or unconfigured with the reason). Nothing is written. `config` is the
+    agent-skills.json the run is about to write, which the later steps read."""
+    global PLANNED_CONFIG
+    PLANNED_CONFIG, out = config, []
+    try:
+        for a in AUTOMATIONS:
+            verb, state, detail, _ = decide(a)
+            if verb in ("install", "refresh"):
+                out.append(f"automation {a.name}: {'install' if verb == 'install' else 'refresh the registered job'}")
+            elif verb == "fail" or (a.default and state == "unconfigured"):
+                out.append(f"automation {a.name}: 건너뜀, {detail}")
+    finally:
+        PLANNED_CONFIG = None
     return out
 
 

@@ -44,7 +44,7 @@ claude plugin install agent-skills@jeongjaesoon
 
 ```bash
 skills-sync setup                        # 목록: 이름, 지금 상태, 기본값, 하는 일
-skills-sync setup apply                  # 기본 on 중 한 번도 설정하지 않은 것만 켠다(setup.py --apply 와 bootstrap --write 가 부른다)
+skills-sync setup apply                  # 기본 on 중 한 번도 설정하지 않은 것을 켜고, 이 체크아웃과 달라진 pressure-watch·reap-hard 등록은 다시 쓴다(setup.py --apply 와 bootstrap --write 가 부른다)
 skills-sync setup enable preview-watch   # 하나 켜기
 skills-sync setup disable janitor        # 하나 끄기. 어느 것이든 apply 를 다시 돌려도 꺼진 채로 남는다
 ```
