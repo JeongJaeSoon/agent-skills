@@ -1765,6 +1765,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send_cached(flow_report(path.rsplit("/", 1)[1]))
         if path == "/api/fleet/brief":
             return self.send_cached(json.dumps(brief_report(), ensure_ascii=False).encode())
+        if path == "/api/fleet/units":
+            return self.send_cached(json.dumps(units_report(), ensure_ascii=False).encode())
         if path == "/api/fleet/sent":
             # The `orch sent` log is read on every poll, like the brief: a send shows on the next poll, not the next collect.
             days = re.search(r"[?&]days=(\d{1,2})\b", self.path)
@@ -2141,6 +2143,19 @@ def cmd_serve(argv):
 def brief_report():
     rep = periodic_report()
     return rep | {"stages": stage_report(rep.get("now_by_pr"), "now_by_pr" in rep and rep["now_by_pr"] is not None)}
+
+
+def units_report():
+    """units.py's build of the brief's own render, run per request like the brief (a child process, so a slow render times
+    out here and not in the server). Nothing is cached or kept: the units are a join, not a second source."""
+    try:
+        r = subprocess.run([sys.executable, str(HERE / "units.py")], capture_output=True, text=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        return {"error": "units.py timed out after 30 s"}
+    try:
+        return json.loads(r.stdout)
+    except ValueError:
+        return {"error": (r.stderr.strip().splitlines() or [f"units.py exited {r.returncode}"])[-1]}
 
 
 def periodic_report():
