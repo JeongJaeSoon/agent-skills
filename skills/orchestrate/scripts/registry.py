@@ -235,6 +235,9 @@ STORES = [
                "stop to the end of the import (the dashboard server does not start while it is held)"),
     Store("cutoverplan", "D/cutover-recover.json*", {"db.file": LOCK}, ("cutover:save_plan",), ("nobody",),
           rule="what `orch db migrate` stopped and how to put it back; a killed run leaves it and the next run uses it"),
+    Store("dashyielded", "D/dash-yielded.json*", {"db.file": LOCK}, ("store:mark_dash_yielded", "store:take_dash_yielded"),
+          ("nobody",), rule="a dashboard server that ended itself under cutover.lock leaves its port here; `orch db migrate` "
+                            "starts it again from it and removes the file"),
     Store("migrate", "D/backup-orca-v2-*/*", {"board.item": BACKUP, "board.closure": BACKUP},
           ("orca_migrate:backup", "orca_migrate:apply"), ("nobody",), rule="`orch migrate` copies and its undo list"),
     Store("adoption", "D/adoption.jsonl", {"work.parent_adopted": CANONICAL}, ("fleet:adopt",), ("fleet",),
@@ -435,6 +438,7 @@ OUTSIDE = {
     "measure:main": "a report to the --out path",
     "store:main": "`orch db backup FILE`: a copy of the DB to the path the owner names",
     "store:_finish": "the 4b import moves RETIRED's old copies into its dbbackup directory",
+    "store:peek_steps": "reads a copy of the DB and its -wal made in its own temporary directory; the live files are never opened for writing",
     "ui_measure:main": "a measurement to the --out path",
     "skill_tokens:measure_ref": "a tar in its own temporary directory",
     "reap:trash": "moves a reaped target to the trash",
