@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-import json, pathlib, sys, tempfile, time, unittest
+import json, os, pathlib, sys, tempfile, time, unittest
 from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import reboot  # noqa: E402
+import roles  # noqa: E402  on sys.path through reboot
+import fleet  # noqa: E402  the sessions Claude Code registers are read there
+os.environ["AGENT_SKILLS_STATE"] = tempfile.mkdtemp()  # the SessionStart record is read from here, never the real one
 import rowstate  # noqa: E402  on sys.path through reboot
 
 ROOT = "/work/app"
@@ -61,12 +64,12 @@ class Orca:
         raise AssertionError(f"unexpected orca call {argv}")
 
 
-def run(role=None, slug=None, run_id=None, handle=ME, orca=None, procs=(), queue=None):
+def run(role=None, slug=None, run_id=None, handle=ME, orca=None, procs=(), queue=None, reload_root=None):
     orig = reboot.worktree_root
     reboot.worktree_root = lambda cwd: ROOT
     try:
         return reboot.run_checks(role, slug, run_id, handle, ROOT, call=orca or Orca(), table=table(*procs), pid=SELF,
-                                 queue=lambda: queue or {})
+                                 queue=lambda: queue or {}, reload_root=reload_root)
     finally:
         reboot.worktree_root = orig
 
@@ -527,6 +530,87 @@ class Queue(unittest.TestCase):
             self.assertEqual(self.listed(q), [])
         self.assertTrue(over.called)
         self.assertIn("queue_over", rowstate.judge.__code__.co_names)
+
+
+class Reload(unittest.TestCase):
+    """A session that loaded another hooks/hooks.json than the checkout has now is told to reload; no record is not it."""
+
+    def setUp(self):
+        self.tmp = pathlib.Path(tempfile.mkdtemp())
+        (self.tmp / "plugin/hooks").mkdir(parents=True)
+        (self.tmp / "plugin/hooks/hooks.json").write_text('{"hooks": {}}')
+        self.sha = roles.hooks_sha(self.tmp / "plugin")
+        patcher = mock.patch.dict("os.environ", {"AGENT_SKILLS_STATE": str(self.tmp / "state")})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def record(self, sha):
+        roles.record_terminal(ME, "s1", ROOT, time.time(), {"plugin_version": None, "hooks_sha": sha})
+
+    def check(self, session="s1"):
+        return reboot.check_reload(ME, self.tmp / "plugin", session)
+
+    def test_record_of_another_session_is_not_this_ones(self):
+        self.record("0" * 64)  # s1 started last in the terminal and has since ended; the caller is s2
+        (kind, text), = self.check("s2")
+        self.assertEqual(kind, "info")
+        self.assertNotIn("reload needed", text)
+
+    def test_unknown_own_session_says_so(self):
+        self.record("0" * 64)
+        (kind, text), = self.check(None)
+        self.assertEqual(kind, "info")
+        self.assertIn("could not be told", text)
+
+    def test_own_session_comes_from_the_process_tree(self):
+        # fleet's own process-table shape (ppid, start, command) and a registration under a config home, unmocked:
+        # reboot's (ppid, command) table does not fit live_sessions.
+        home = self.tmp / "home"
+        (home / "sessions").mkdir(parents=True)
+        for pid, sid in ((CLAUDE, "s1"), (4242, "s9")):
+            (home / "sessions" / f"{pid}.json").write_text(json.dumps(
+                {"pid": pid, "sessionId": sid, "cwd": ROOT, "procStart": "Thu Nov 5 08:00:00 2026"}))
+        procs = {CLAUDE: (1, "Thu Nov 5 08:00:00 2026", "claude --continue"), 4242: (1, "Thu Nov 5 08:00:00 2026", "claude")}
+        with mock.patch.dict("os.environ", {"ORCH_CLAUDE_HOMES": str(home)}), mock.patch.object(fleet, "ps_table", return_value=procs):
+            self.assertEqual(reboot.own_session(table(), SELF), "s1")
+        with mock.patch.object(fleet, "ps_table", side_effect=OSError):
+            self.assertIsNone(reboot.own_session(table(), SELF))
+
+    def test_same_sha_is_ok(self):
+        self.record(self.sha)
+        self.assertEqual([k for k, _ in self.check()], ["ok"])
+
+    def test_other_sha_is_info_not_do(self):
+        self.record("0" * 64)
+        (kind, text), = self.check()
+        self.assertEqual(kind, "info")
+        self.assertIn("reload needed", text)
+
+    def test_no_record_is_not_called_stale(self):
+        (kind, text), = self.check()
+        self.assertEqual(kind, "info")
+        self.assertNotIn("reload needed", text)
+        self.assertIn("unknown", text)
+
+    def test_unreadable_record_is_not_called_missing_or_stale(self):
+        roles.terminal_file(ME).parent.mkdir(parents=True, exist_ok=True)
+        roles.terminal_file(ME).write_text("{not json")
+        (kind, text), = self.check()
+        self.assertEqual(kind, "info")
+        self.assertIn("unreadable", text)
+
+    def test_unreadable_reference_warns_and_does_not_block(self):
+        self.record(self.sha)
+        (kind, text), = reboot.check_reload(ME, self.tmp / "missing", "s1")
+        self.assertEqual(kind, "info")
+        self.assertIn("unreadable", text)
+
+    def test_exit_stays_zero_on_stale(self):
+        self.record("0" * 64)
+        with mock.patch.object(reboot, "own_session", return_value="s1"):
+            lines = run(reload_root=self.tmp / "plugin")
+        self.assertFalse(does(lines))
+        self.assertTrue(any("reload needed" in t for _, t in lines))
 
 
 class Cli(unittest.TestCase):
