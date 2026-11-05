@@ -80,6 +80,10 @@ def run(name, cmd, interval=None, timeout=None, ok_codes=(0,)):
             with contextlib.suppress(subprocess.TimeoutExpired):
                 proc.communicate(timeout=5)  # a child that left the group may still hold the pipes: do not wait on it
             raise
+        # What the job left running in its group (a cut thread's late spawn) ends with it; a spawn meant to outlive
+        # the job (the dashboard server, patrol's fallback) starts a session of its own.
+        with contextlib.suppress(OSError):
+            os.killpg(proc.pid, signal.SIGKILL)
         rc = proc.returncode
         out = stdout if rc in ok_codes else (stderr if last_line(stderr) else stdout)
         message = f"{ended(rc)}: {last_line(out)}" if last_line(out) else ended(rc)

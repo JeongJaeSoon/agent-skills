@@ -40,10 +40,11 @@ HARD_SOURCES = ("protect", "reap_hard_cards", "reap_hard_rest")
 
 def group_members():
     """PIDs in this process's own process group, itself left out: every command a scan started, and theirs, whatever
-    path started it. Empty unless this process leads its group (orca_job and spawn_patrol start it with
-    start_new_session); run from a shell, the group is the shell's job. A detached spawn has a group of its own."""
+    path started it. Empty unless this process leads its own session (orca_job and spawn_patrol start it with
+    start_new_session); from a shell the group can hold a pipe partner (`| tee`). A detached spawn has a group of its
+    own. What a scan spawns after the last listing is the runner's to end (orca_job kills the group on exit)."""
     pgid = os.getpgrp()
-    if pgid != os.getpid():
+    if pgid != os.getpid() or os.getsid(0) != os.getpid():
         return set()
     try:
         out = subprocess.run(["pgrep", "-g", str(pgid)], capture_output=True, text=True, timeout=5).stdout
@@ -62,7 +63,7 @@ def kill_group():
 def stop_scans(threads):
     """Cut scan threads: start nothing more on them, and after CUT_GRACE_S kill by PID what the group runs until the
     threads return, for at most CUT_WAIT_S. The main thread runs no command meanwhile, so the group's commands are the
-    scans'. A thread still running after that is caught at exit."""
+    scans'. A thread still running after that is caught at exit, and what it spawns later by the runner."""
     reap.CANCELLED.update(th.ident for th in threads)
     atexit.register(kill_group)
     start = time.monotonic()

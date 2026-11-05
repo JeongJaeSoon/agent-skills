@@ -323,17 +323,17 @@ assert progress["sources"]["protect"] == "timeout" and "reap_scan" in progress["
 import subprocess  # noqa: E402
 
 if sys.argv[1:] == ["cut-child"]:
-    events = []
+    events, grand = [], tmp / "grandchild.pid"
 
     def hung_hard(t):
-        events.append(("first", reap.run(["sleep", "30"], check=False) is None))
-        p = subprocess.run(["sh", "-c", "sleep 31 & sleep 32"], capture_output=True)  # a path that skips reap.run
+        # A path that skips reap.run, its shell's child holding the pipe; the cut comes once it has written its PID.
+        p = subprocess.run(["sh", "-c", f"sleep 31 & echo $! > {grand}; wait"], capture_output=True)
         events.append(("bypass", p.returncode))
-        events.append(("second", reap.run(["sleep", "33"], check=False)))
+        events.append(("next", reap.run(["sleep", "33"], check=False)))
         return HARD
 
     progress = {}
-    signal.setitimer(signal.ITIMER_REAL, 0.3)
+    signal.setitimer(signal.ITIMER_REAL, 0.5)
     t0 = time.monotonic()
     try:
         candidates.collect(OK, now=time.time(), reap_scan=lambda kinds: (REAP_ITEMS, []), hard=hung_hard,
@@ -343,7 +343,14 @@ if sys.argv[1:] == ["cut-child"]:
         pass
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
+    pid = int(grand.read_text())
+    try:
+        os.kill(pid, 0)
+        grand_alive = True
+    except ProcessLookupError:
+        grand_alive = False
     print(json.dumps({"events": events, "took": time.monotonic() - t0, "left": sorted(candidates.group_members()),
+                      "grand_alive": grand_alive,
                       "cancelled": len(reap.CANCELLED), "source": progress["sources"]["reap_hard_cards"],
                       "after": reap.run(["true"], check=False) is not None}))
     sys.exit(0)
@@ -351,9 +358,10 @@ if sys.argv[1:] == ["cut-child"]:
 child = subprocess.run([sys.executable, __file__, "cut-child"], capture_output=True, text=True, timeout=60,
                        start_new_session=True)
 got = json.loads(child.stdout.strip().splitlines()[-1])
-assert got["events"] == [["first", True], ["bypass", -signal.SIGKILL], ["second", None]], got
+assert got["events"] == [["bypass", -signal.SIGKILL], ["next", None]], got  # killed, then nothing more started
 assert got["took"] < candidates.CUT_GRACE_S + 3 < candidates.CUT_WAIT_S, got
-assert got["left"] == [] and got["cancelled"] == 0 and got["source"] == "timeout" and got["after"], got
+assert got["left"] == [] and not got["grand_alive"], got
+assert got["cancelled"] == 0 and got["source"] == "timeout" and got["after"], got
 assert candidates.group_members() == set(), "run from a shell, the group is not this process's to stop"
 
 print("test_candidates: ok")
