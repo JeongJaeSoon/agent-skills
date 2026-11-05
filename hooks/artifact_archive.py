@@ -169,6 +169,17 @@ def lock_down(path):
         os.chmod(path, 0o600)
 
 
+def move_into(src, dst):
+    """Move a file or a tree to dst, merging into a directory a killed earlier move left part-way (shutil.move would
+    nest the source inside it)."""
+    if os.path.isdir(src) and os.path.isdir(dst):
+        for name in os.listdir(src):
+            move_into(os.path.join(src, name), os.path.join(dst, name))
+        os.rmdir(src)
+    else:
+        shutil.move(src, dst)
+
+
 def make_private(key):
     """Move a key's public versions and rows to the private store (a page that once leaked stays private). The
     caller holds the key's lock; the global index lock covers only the short rewrite of the public index, never the
@@ -188,7 +199,7 @@ def make_private(key):
         if r['copy'] not in have:
             append_row(al.private_dir(), r)
     for name in os.listdir(folder) if os.path.isdir(folder) else []:
-        shutil.move(os.path.join(folder, name), os.path.join(target, name))
+        move_into(os.path.join(folder, name), os.path.join(target, name))
         lock_down(os.path.join(target, name))
     if os.path.isdir(folder):
         os.rmdir(folder)
@@ -432,6 +443,11 @@ def store(data, url, orig, orig_extras, stage):
 
 def save_version(data, url, orig, key, slug, now, src, extras):
     stage = os.path.dirname(os.path.dirname(src))
+    # A retry of a killed run, checked under the key's lock: a later publish already stands as the newest version
+    # and as the links it announced, so the retry must not become newer than it.
+    if data.get('_restore_at') is not None and newer_version(key, data['_restore_at']):
+        log_error(f'killed publish of {key[:8]} was superseded by a newer version; not restored')
+        return None
     private = any(r.get('key') == key for r in read_rows(al.private_dir()))
     if not private and exclusion_reason(stage, [src] + [f for _, f in extras]):
         make_private(key)
@@ -485,7 +501,7 @@ def save_version(data, url, orig, key, slug, now, src, extras):
     category = category or classify(title, data.get('cwd'))
     subcategory = next((r['subcategory'] for r in reversed(earlier) if r.get('key') == key and r.get('subcategory')), None)
     subcategory = subcategory or subclassify(title, data.get('cwd'))
-    append_row(root, {'time': now.isoformat(timespec='seconds'), 'key': key, 'url': url, 'title': title,
+    append_row(root, {'time': now.isoformat(timespec='seconds'), 'epoch': now.timestamp(), 'key': key, 'url': url, 'title': title,
                       'source': os.path.abspath(orig), 'copy': dest, 'dir': folder,
                       'session': data.get('session_id'), 'cwd': data.get('cwd'), 'category': category,
                       'subcategory': subcategory})
@@ -530,20 +546,14 @@ def alive(pid):
     return True
 
 
-def restored_key(data):
-    resp = json.dumps(data.get('tool_response'), ensure_ascii=False)
-    m = al.URL_RE.search(resp) or al.URL_RE.search((data.get('tool_input') or {}).get('url') or '')
-    return m.group(1) if m else None
-
-
 def newer_version(key, at):
     for root in (al.public_dir(), al.private_dir()):
         for r in read_rows(root):
             try:
-                when = datetime.datetime.fromisoformat(r.get('time')).timestamp()
+                when = r.get('epoch') or datetime.datetime.fromisoformat(r.get('time')).timestamp()
             except (TypeError, ValueError):
                 continue
-            if r.get('key') == key and when >= int(at):
+            if r.get('key') == key and when >= at:
                 return True
     return False
 
@@ -575,17 +585,11 @@ def recover_killed(limit=1):
         # The marker stays until the retry finishes, owned by this process meanwhile: a retry that is killed
         # too is found again, up to twice.
         mark.update(pid=os.getpid(), tries=mark.get('tries', 0) + 1)
-        key = restored_key(mark['data'])
-        if key and newer_version(key, mark.get('at', 0)):
-            # A later publish of this artifact already stands as the newest version and its announced links.
-            log_error(f'killed publish of {key[:8]} was superseded by a newer version; not restored')
-            os.remove(path)
-            continue
         write_marker(path, mark)
         src = (mark['data'].get('tool_input') or {}).get('file_path')
         log_error(f'previous run was killed before it finished ({src}); backing it up again')
         try:
-            archive(dict(mark['data'], agent_id=None, session_id=None))
+            archive(dict(mark['data'], agent_id=None, session_id=None, _restore_at=mark.get('at', 0)))
             os.remove(path)
         except Exception as e:
             log_error(f'recovery failed: {type(e).__name__}: {e}')

@@ -315,7 +315,7 @@ STORES = [
           ("artifact_archive:log_error", "artifact_archive:append_row", "artifact_archive:migrate_served_files",
            "artifact_archive:exclusion_reason", "artifact_archive:render_index",
            "artifact_archive:record_pending", "artifact_archive:store", "artifact_archive:start_marker",
-           "artifact_archive:index_lock", "artifact_archive:key_lock",
+           "artifact_archive:index_lock", "artifact_archive:key_lock", "artifact_archive:move_into",
            "artifact_archive:make_private", "artifact_archive:save_version", "artifact_archive:write_marker", "artifact_archive:snapshot", "artifact_archive:recover_killed",
            "artifact_links_stop:locked", "artifact_links_stop:save", "artifact_links_stop:main", "artifact_hooks_cutover:save",
            "artifact_hooks_cutover:main"), ("nobody",),

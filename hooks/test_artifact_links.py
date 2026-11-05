@@ -656,6 +656,40 @@ nrows = [json.loads(l) for l in open(os.path.join(STATE_ROOT, 'index.jsonl')) if
 check('killed publish older than a newer version: dropped, the newest stays the newest',
       not os.path.exists(mark4) and len(nrows) == 1 and 'NEW' in open(nrows[-1]['copy']).read() and 'superseded' in errors(), nrows)
 
+# --- Codex round 5
+SAMESEC = 'cc5f1111-2222-3333-4444-555566667777'
+publish('s4g', page('samesec.html', text='first'), SAMESEC)
+row = [json.loads(l) for l in open(os.path.join(STATE_ROOT, 'index.jsonl')) if SAMESEC in l][-1]
+dead5 = subprocess.Popen([sys.executable, '-c', 'pass'])
+dead5.wait()
+mark5 = os.path.join(STATE_ROOT, 'inflight', f'{dead5.pid}-6.json')
+with open(mark5, 'w') as f:
+    # started in the same second as the row, but after it was written
+    json.dump({'pid': dead5.pid, 'at': row['epoch'] + 0.01, 'data': {'cwd': HOME, 'tool_input': {'file_path': page('samesec2.html', text='second')},
+                                                                     'tool_response': f'https://claude.ai/code/artifact/{SAMESEC}'}}, f)
+publish('s4h', page('go2.html'), 'cd5f1111-2222-3333-4444-555566667777')
+srows = [json.loads(l) for l in open(os.path.join(STATE_ROOT, 'index.jsonl')) if SAMESEC in l]
+check('killed publish started after a same-second row: restored', len(srows) == 2 and 'second' in open(srows[-1]['copy']).read(), srows)
+
+MERGE = 'ce5f1111-2222-3333-4444-555566667777'
+os.makedirs(os.path.join(HOME, 'site/assets'), exist_ok=True)
+for n in ('a.txt', 'b.txt'):
+    open(os.path.join(HOME, 'site/assets', n), 'w').write(n)
+publish('s4i', page('merge.html', text='m'), MERGE, tool_input={'file_path': os.path.join(HOME, 'merge.html'),
+                                                                  'root': 'site', 'files': ['assets/a.txt', 'assets/b.txt']})
+mrows = [json.loads(l) for l in open(os.path.join(STATE_ROOT, 'index.jsonl')) if MERGE in l]
+mfolder = mrows[-1]['dir']
+mp = os.path.join(HOME, 'artifacts-private', os.path.basename(mfolder))
+os.makedirs(os.path.join(mp, 'assets'), mode=0o700)
+shutil.move(os.path.join(mfolder, 'assets/a.txt'), os.path.join(mp, 'assets/a.txt'))  # half of the directory moved
+with open(os.path.join(HOME, 'artifacts-private', 'index.jsonl'), 'a') as f:
+    f.write(json.dumps(dict(mrows[-1], dir=mp, copy=os.path.join(mp, os.path.basename(mrows[-1]['copy'])))) + '\n')
+shutil.move(mrows[-1]['copy'], os.path.join(mp, os.path.basename(mrows[-1]['copy'])))
+publish('s4i', page('merge.html', text='m'), MERGE, tool_input={'file_path': os.path.join(HOME, 'merge.html'),
+                                                                  'root': 'site', 'files': ['assets/a.txt', 'assets/b.txt']})
+check('half-moved directory: merged, not nested', os.path.isfile(os.path.join(mp, 'assets/b.txt'))
+      and os.path.isfile(os.path.join(mp, 'assets/a.txt')) and not os.path.exists(os.path.join(mp, 'assets/assets')), os.listdir(mp))
+
 # --- Reported: a reply in a later turn repeats an Artifact link published in an earlier turn
 EARLIER = 'c45f1111-2222-3333-4444-555566667777'
 publish('s48', page('earlier.html'), EARLIER)
