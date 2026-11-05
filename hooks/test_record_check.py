@@ -20,9 +20,9 @@ def reset(cfg={"tracker": {"adapter": "linear"}, "notes": {"adapter": "markdown"
     (STATE / "record-check.jsonl").unlink(missing_ok=True)
 
 
-def run(event, session="s1", **kw):
+def run(event, session="s1", orca=True, **kw):
     env = {"PATH": "/usr/bin:/bin", "HOME": str(TMP), "AGENT_SKILLS_STATE": str(STATE),
-           "AGENT_SKILLS_CONFIG": str(CONFIG), "ORCA_TERMINAL_HANDLE": "term_fake"}
+           "AGENT_SKILLS_CONFIG": str(CONFIG), **({"ORCA_TERMINAL_HANDLE": "term_fake"} if orca else {})}
     payload = {"hook_event_name": event, "session_id": session, "cwd": str(CARD), **kw}
     p = subprocess.run([sys.executable, HERE / "record_check.py"], input=json.dumps(payload),
                        capture_output=True, text=True, env=env)
@@ -122,6 +122,25 @@ check("off level: no reminder", post("gh pr merge 12") == {} and rows() == [])
 reset({"notes": {"adapter": "markdown"}})
 msg = post("gh pr merge 12")["hookSpecificOutput"]["additionalContext"]
 check("notes only: names notes, not tracker", "notes store" in msg and "the tracker" not in msg)
+check("merge: no PR-opened follow-ups", "in-review" not in msg and "PR opened" not in msg)
+
+# A PR open adds deliver-ticket §5's follow-ups: the board column in Orca, the Linear attach, the milestone move.
+reset()
+msg = post("gh pr create --title x --body y", tid="o1")["hookSpecificOutput"]["additionalContext"]
+check("create, linear, Orca: in-review, attach and milestone",
+      "record.md" in msg and "--workspace-status in-review" in msg and "orca linear attach" in msg and "`review`" in msg)
+reset({"tracker": {"adapter": "jira"}})
+msg = post("gh pr create --title x --body y", tid="o2", orca=False)["hookSpecificOutput"]["additionalContext"]
+check("create, jira, no Orca: milestone only", "in-review" not in msg and "linear" not in msg and "Milestones" in msg)
+reset({})
+out = post("gh pr create --title x --body y", tid="o3")
+check("create, no config, Orca: in-review only, no obligation",
+      ctx(out, "PostToolUse") and "in-review" in out["hookSpecificOutput"]["additionalContext"]
+      and "record.md" not in out["hookSpecificOutput"]["additionalContext"] and rows() == [])
+check("create, no config, no Orca: silent", post("gh pr create --title x --body y", tid="o4", orca=False) == {})
+check("create --help, no config: silent", post("gh pr create --help", tid="o5") == {})
+reset({"guard": {"record_check": "off"}})
+check("create, off level: silent", post("gh pr create --title x --body y", tid="o6") == {})
 
 # Commands that are not milestones, or not run.
 reset()
