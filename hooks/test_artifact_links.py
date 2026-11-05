@@ -557,6 +557,53 @@ with concurrent.futures.ThreadPoolExecutor(8) as ex:
 keys = {json.loads(l)['key'] for l in open(os.path.join(STATE_ROOT, 'index.jsonl'))}
 check('parallel publishes: no public index row lost', all(a in keys for a in ids2), len(keys))
 
+# --- Codex round 2
+write_config(DENY)
+LEAK = 'c15f1111-2222-3333-4444-555566667777'
+src_leak = page('leakytitle.html')
+publish('s39', src_leak, LEAK)
+check('same content turned private: public at first', 'leakytitle.html' in open(os.path.join(SHARE, 'index.html'), encoding='utf-8').read())
+publish('s39', src_leak, LEAK, env=env_noguard)
+check('same content turned private: the served index drops its title and link',
+      'leakytitle.html' not in open(os.path.join(SHARE, 'index.html'), encoding='utf-8').read())
+
+RACE2 = 'c25f1111-2222-3333-4444-555566667777'
+publish('s4x', page('conc.html', text='seed'), RACE2)  # the folder exists, so the six below share it
+for i in range(6):
+    os.makedirs(os.path.join(HOME, f'd{i}'), exist_ok=True)
+    page(f'd{i}/conc.html', text=f'version {i}')
+with concurrent.futures.ThreadPoolExecutor(6) as ex:
+    list(ex.map(lambda i: publish(f's4{i}', os.path.join(HOME, f'd{i}/conc.html'), RACE2), range(6)))
+cdir = next(os.path.join(SHARE, d) for d in os.listdir(SHARE) if d.endswith('-conc-c25f1111'))
+crows = [json.loads(l) for l in open(os.path.join(STATE_ROOT, 'index.jsonl')) if RACE2 in l]
+check('concurrent publishes of one artifact: one file per version',
+      len({r['copy'] for r in crows}) == len(crows) == 7 and len([f for f in os.listdir(cdir) if f.endswith('.html')]) == 7,
+      (len(crows), os.listdir(cdir)))
+
+with open(os.path.join(STATE_ROOT, 'inflight', '.tmp-half'), 'w') as f:
+    f.write('{')
+publish('s47', page('half.html'), 'c35f1111-2222-3333-4444-555566667777')
+check('a marker being written is left alone', os.path.exists(os.path.join(STATE_ROOT, 'inflight', '.tmp-half')))
+os.remove(os.path.join(STATE_ROOT, 'inflight', '.tmp-half'))
+
+# --- Reported: a reply in a later turn repeats an Artifact link published in an earlier turn
+EARLIER = 'c45f1111-2222-3333-4444-555566667777'
+publish('s48', page('earlier.html'), EARLIER)
+e48 = pending('s48')[0]
+t_turns = transcript('t_turns.jsonl', [dict(user('publish it'), timestamp=iso(-120)),
+                                       dict(assistant({'type': 'text', 'text': f"{e48['url']} {e48['backup']}"}), timestamp=iso(-100)),
+                                       dict(user('what was that page again?'), timestamp=iso(5)),
+                                       dict(assistant({'type': 'text', 'text': f"It is {e48['url']}"}), timestamp=iso(6))])
+out = stop('s48', t_turns, last=f"It is {e48['url']}")
+check('later turn repeats the link without the backup: blocked under deny, though the publish is an earlier turn',
+      (out or {}).get('decision') == 'block' and e48['backup'] in out['reason'], out)
+check('later turn with both links: allowed', stop('s48', t_turns, last=f"{e48['url']} {e48['backup']}") is None)
+write_config({'artifact-backup': {'base_url': BASE}})
+out = stop('s48', t_turns, last=f"It is {e48['url']}")
+check('later turn, default level: one warning line naming the backup link', out is not None and 'decision' not in out
+      and e48['backup'] in out['systemMessage'], out)
+write_config(DENY)
+
 print(f'\n{sum(results)}/{len(results)} passed (HOME={HOME})')
 if all(results):
     shutil.rmtree(HOME)

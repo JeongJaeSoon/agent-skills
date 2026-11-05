@@ -219,6 +219,12 @@ a{{color:var(--link);text-decoration:none}} a:hover{{text-decoration:underline}}
 
 
 def write_index():
+    # Read, render and replace under one lock: a render made before a page went private must not land after it.
+    with index_lock():
+        render_index()
+
+
+def render_index():
     public = al.public_dir()
     private = al.private_dir()
     latest, versions, category, subcategory = {}, {}, {}, {}
@@ -425,13 +431,18 @@ def store(data, url, orig, orig_extras, stage):
                     for pub, f in extras))
     if same:
         out = announce(data, key, url, last['copy'], private)
+        refresh_index()  # a page that just went private must leave the served index too
         return out
     stem = f'{now:%Y%m%d-%H%M%S}'
     ext = os.path.splitext(orig)[1] or '.html'
     dest, n = os.path.join(folder, stem + ext), 1
-    while os.path.exists(dest):  # two publishes in one second keep both versions
-        n += 1
-        dest = os.path.join(folder, f'{stem}-{n}{ext}')
+    while True:  # two publishes in one second keep both versions; O_EXCL makes the name ours
+        try:
+            os.close(os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+            break
+        except FileExistsError:
+            n += 1
+            dest = os.path.join(folder, f'{stem}-{n}{ext}')
     shutil.copy2(src, dest)
     os.chmod(dest, 0o600 if private else 0o644)
     # Supporting files land at their published paths so the copy's relative links resolve.
@@ -456,22 +467,33 @@ def store(data, url, orig, orig_extras, stage):
                       'session': data.get('session_id'), 'cwd': data.get('cwd'), 'category': category,
                       'subcategory': subcategory})
     out = announce(data, key, url, dest, private)
+    refresh_index()
+    return out
+
+
+def refresh_index():
     try:
         write_index()
-    except Exception as e:  # the links below still matter more than the index page
+    except Exception as e:  # the links announced matter more than the index page
         log_error(f'index: {type(e).__name__}: {e}')
-    return out
 
 
 def inflight_dir():
     return os.path.join(al.state_dir(), 'inflight')
 
 
+def write_marker(path, mark):
+    """Whole or not at all: a reader never sees a half-written marker."""
+    fd, tmp = tempfile.mkstemp(dir=inflight_dir(), prefix='.tmp-')
+    with os.fdopen(fd, 'w', encoding='utf-8') as f:
+        json.dump(mark, f, ensure_ascii=False)
+    os.replace(tmp, path)
+
+
 def start_marker(data):
     os.makedirs(inflight_dir(), exist_ok=True)
     path = os.path.join(inflight_dir(), f'{os.getpid()}-{time.time_ns()}.json')
-    with open(path, 'w', encoding='utf-8') as f:
-        json.dump({'pid': os.getpid(), 'data': data}, f, ensure_ascii=False)
+    write_marker(path, {'pid': os.getpid(), 'data': data})
     return path
 
 
@@ -493,6 +515,8 @@ def recover_killed():
     except OSError:
         return
     for name in names:
+        if name.startswith('.'):
+            continue  # a marker being written
         path = os.path.join(inflight_dir(), name)
         try:
             with open(path, encoding='utf-8') as f:
@@ -510,8 +534,7 @@ def recover_killed():
         # The marker stays until the retry finishes, owned by this process meanwhile: a retry that is killed
         # too is found again, up to twice.
         mark.update(pid=os.getpid(), tries=mark.get('tries', 0) + 1)
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(mark, f, ensure_ascii=False)
+        write_marker(path, mark)
         src = (mark['data'].get('tool_input') or {}).get('file_path')
         log_error(f'previous run was killed before it finished ({src}); backing it up again')
         try:
