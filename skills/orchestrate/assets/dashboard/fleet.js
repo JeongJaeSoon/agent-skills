@@ -462,7 +462,7 @@ const pct = (v) => (v == null ? "—" : `${num(v, v < 10 ? 1 : 0)}%`);
 const gib = (v) => (v == null ? "—" : `${num(v, 1)} GiB`);
 const PRESSURE_CHARTS = [
   { key: "cpu_used_pct", label: "CPU 사용률", fmt: pct, bad: "높을수록 나쁨", from: (r) => (r.cpu_idle_pct == null ? null : Math.round((100 - r.cpu_idle_pct) * 10) / 10),
-    judge: "load_per_cpu", sub: (m, rep) => `${Math.round(rep.interval / 60)}분 평균 · load/CPU ${num(m.load_per_cpu, 2)}` },
+    judge: "load_per_cpu", sub: (m, rep) => `${m.idle_live ? "순간값(회차 간 값 없음)" : `약 ${Math.max(1, Math.round(rep.interval / 60))}분 평균`} · load/CPU ${num(m.load_per_cpu, 2)}` },
   { key: "mem_active_wired_gb", label: "사용 메모리", fmt: gib, bad: "높을수록 나쁨",
     judge: "mem_free_pct", sub: (m) => `회수 가능 ${m.mem_free_pct == null ? "—" : `${m.mem_free_pct}%`}` },
   { key: "disk_free_gb", label: "디스크 여유", fmt: gib, bad: "낮을수록 나쁨", judge: "disk_free_gb", line: true },
