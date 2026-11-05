@@ -812,7 +812,41 @@ def item_of(r):
 
 
 GENERIC_NEXT = {nxt for _, nxt in PHASE_ROW.values()} | {""}
-DECISION_FORM = "<question>: <options> → 추천: <X> — <reason> · 답이 없으면 <default>"
+ASK_REASONS = ("owner-asked", "hard-after-review", "owner-hands-only")
+CANNOT_PROCEED = "진행 못 함"
+DECISION_FORM = (f"<question>: <options> → 추천: <X> — <reason> · 답이 없으면 <X | {CANNOT_PROCEED}>"
+                 f" · 근거: <{' | '.join(ASK_REASONS)}>")
+ASK_GATE = "skills/orchestrate/references/owner-ask-gate.md"
+
+
+def ask_lint(if_no_answer, reason, recommendation=None):
+    """Why an owner ask fails the owner-ask gate (ASK_GATE), or None: a known reason tag, and an if-no-answer that is
+    the recommendation itself or CANNOT_PROCEED."""
+    if reason not in ASK_REASONS:
+        return f"근거 is one of {' | '.join(ASK_REASONS)}, not {reason!r}" if reason else "근거 is missing"
+    y = (if_no_answer or "").strip()
+    if not y:
+        return f"답이 없으면 is missing: the recommendation, or {CANNOT_PROCEED}"
+    if y not in (CANNOT_PROCEED, (recommendation or "").strip()):
+        return f"답이 없으면 is the recommendation ({recommendation!r}) or {CANNOT_PROCEED}, not {y!r}"
+    return None
+
+
+def decision_lint(item):
+    """Why a brief --decision item does not hold DECISION_FORM and the owner-ask gate, or None."""
+    _, sep, tail = item.partition("→ 추천:")
+    if not sep:
+        return "→ 추천: is missing"
+    rec, sep, rest = tail.partition("· 답이 없으면")
+    if not sep:
+        return "· 답이 없으면 is missing"
+    rec, sep, _ = rec.partition(" — ")
+    if not sep:
+        return "the recommendation has no ' — <reason>'"
+    default, sep, tag = rest.partition("· 근거:")
+    if not sep:
+        return "· 근거: is missing at the end"
+    return ask_lint(default, tag.strip(), rec.strip())
 
 
 def refresh(now, limit_min):
@@ -881,8 +915,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     sd = fleet.state_dir()
     limits = {**LIMITS, **(fleet.config().get("board") or {})}
     for d in decisions:
-        if "→ 추천:" not in d:
-            raise ValueError(f"--decision is one line: {DECISION_FORM}")
+        if why := decision_lint(d):
+            raise ValueError(f"--decision is one line: {DECISION_FORM}\n{why} ({ASK_GATE})")
     collected = refresh(now, limits["state_min"]) if fresh else None
     try:  # one snapshot, so a close and the open list cannot disagree within a report
         seen = store_db.view()

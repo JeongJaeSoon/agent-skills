@@ -157,7 +157,8 @@ ok("board", "later", "drop", "1")
 assert queue() == ["prod 배포 창", "캐시 TTL 다시 한번 보기"], queue()
 ok("board", "later", "add", "캐시 TTL을 다시 보기", "--trigger", "10/20")
 assert queue() == ["prod 배포 창", "캐시 TTL을 다시 보기"], queue()
-ok("decide", "add", "--title", "재색인 권한", "--option", "서비스 계정::만료 없음", "--option", "개인 토큰", "--recommend", "1")
+ok("decide", "add", "--title", "재색인 권한", "--option", "서비스 계정::만료 없음", "--option", "개인 토큰", "--recommend", "1",
+   "--if-no-answer", "서비스 계정", "--reason", "owner-hands-only")
 stamp(ghost="2026-10-13T11:20:00Z")
 
 
@@ -520,7 +521,8 @@ rok("stage", "set", "login", "--col", "dev", "--mark", "ok", "--evidence", "v1.7
 rok("stage", "set", "login", "--col", "prod", "--mark", "checking", "--by", "QA")
 rok("stage", "env", "--prod", "v1.7.1", "--dev", "v1.7.2")
 rok("stage", "next", "v1.7.2 prod 배포 (사람, 미정)")
-rok("decide", "add", "--title", "재색인 권한", "--option", "서비스 계정::만료 없음", "--option", "개인 토큰", "--recommend", "1")
+rok("decide", "add", "--title", "재색인 권한", "--option", "서비스 계정::만료 없음", "--option", "개인 토큰", "--recommend", "1",
+    "--if-no-answer", "서비스 계정", "--reason", "owner-hands-only")
 (req / "dashboard" / "state.json").write_text(json.dumps({"generated_at": NOW, "sessions": [
     sess("root", "orchestrator", None, "working",
          terminals=[{"handle": "term_0FAKE1", "agent": "claude", "connected": True, "writable": True}]),
@@ -530,7 +532,8 @@ rok("decide", "add", "--title", "재색인 권한", "--option", "서비스 계�
 (req / "dashboard" / "prs.json").write_text(json.dumps({"prs": dict([pr("acme/web#45", ci="pending")])}))
 REQUEST = ["brief", "render", "--now", NOW, "--headline", "정렬 PR CI 중, 유료 플랜 하나만 정해 주세요",
            "--insight", "★ 정렬은 CI 가 끝나면 리뷰로 간다",
-           "--decision", "검색 API 유료 플랜(월 $50): 올림 / 현행 유지 → 추천: 현행 유지 — 무료 한도의 60% · 답이 없으면 현행 유지"]
+           "--decision", "검색 API 유료 플랜(월 $50): 올림 / 현행 유지 → 추천: 현행 유지 — 무료 한도의 60% · 답이 없으면 현행 유지"
+           " · 근거: owner-hands-only"]
 REQUEST_GOLDEN = """\
 **14:30 · 정렬 PR CI 중, 유료 플랜 하나만 정해 주세요**
 
@@ -545,7 +548,7 @@ REQUEST_GOLDEN = """\
 ## ❓ 결정 필요
 
 1. (d1) 재색인 권한 → 추천: 서비스 계정 — 만료 없음
-2. 검색 API 유료 플랜(월 $50): 올림 / 현행 유지 → 추천: 현행 유지 — 무료 한도의 60% · 답이 없으면 현행 유지
+2. 검색 API 유료 플랜(월 $50): 올림 / 현행 유지 → 추천: 현행 유지 — 무료 한도의 60% · 답이 없으면 현행 유지 · 근거: owner-hands-only
 
 ## acme/web → main
 
@@ -674,7 +677,8 @@ wok("board", "set", "W/mine", "--title", "내 리뷰", "--pr", "acme/web#91", "-
 wok("board", "set", "W/theirs", "--title", "남 리뷰", "--pr", "acme/web#92", "--status", "waiting")
 wok("board", "set", "W/reply", "--title", "디자인 답변", "--status", "waiting", "--owner", "디자인팀", "--next", "10/15 리마인드")
 wok("board", "set", "W/ask", "--title", "누구 대기", "--status", "waiting")
-wok("decide", "add", "--title", "캐시 정책", "--option", "TTL 1h", "--option", "TTL 1d", "--recommend", "1")
+wok("decide", "add", "--title", "캐시 정책", "--option", "TTL 1h", "--option", "TTL 1d", "--recommend", "1",
+    "--if-no-answer", "TTL 1h", "--reason", "hard-after-review")
 (wd / "dashboard" / "state.json").write_text(json.dumps({"generated_at": NOW, "sessions": [
     sess("lw", "orchestration", "root", "working", h="term_0FAKEW")]}))
 who_prs = {"me": "octo-owner", "prs": dict([pr("acme/web#91", reviewers=["octo-owner"]), pr("acme/web#92", reviewers=["rev-x"])])}

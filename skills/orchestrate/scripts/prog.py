@@ -88,6 +88,8 @@ Usage: orch <command> <slug> [options]
                                      (orca_settings.py)
   model lead|worker                  no slug: the role's model from orchestrate.models; prints nothing when unset
   decide add --title T [--body-file F] [--option "label::description"]... [--recommend N] [--link URL]
+             --if-no-answer <the --recommend label | 진행 못 함> --reason <owner-asked | hard-after-review | owner-hands-only>
+                                     the owner-ask gate (references/owner-ask-gate.md); both go into the body
   decide answer <id> | --title T  (--quote TEXT | --quote-file F) [--by SESSION]
   decide list | show <id> | done <id> [--answer TEXT] | drop <id> | keep <id>
                                      no slug: a decision you wait on the human for, shown on the fleet
@@ -182,7 +184,8 @@ Usage: orch <command> <slug> [options]
                                      zone. The stage table is one line: its row count and the dashboard's Stages
                                      page (`orch stage show` while the dashboard is down); --periodic adds
                                      --skipped and the last reap. The model gives only --headline (a sentence),
-                                     --decision ("<question>: <options> → 추천: X — <reason> · 답이 없으면 Y",
+                                     --decision ("<question>: <options> → 추천: X — <reason> · 답이 없으면
+                                     <X | 진행 못 함> · 근거: <tag>", the owner-ask gate,
                                      registered on the spot, so it shows with its id; the same words again
                                      are the same decision, and one answered within 24 h is not asked again.
                                      If it cannot be registered the report still prints, with a warning line
@@ -3469,8 +3472,17 @@ def cmd_decide(argv):
             rec, body = opt(rest, "--recommend"), opt(rest, "--body-file")
             if rec is not None and not rec.isdigit():
                 sys.exit("--recommend is an option number")
-            d = fleet.decision_add(opt(rest, "--title"), pathlib.Path(body).read_text() if body else "",
-                                   [rest[i + 1] for i, a in enumerate(rest[:-1]) if a == "--option"],
+            import board
+            options = [rest[i + 1] for i, a in enumerate(rest[:-1]) if a == "--option"]
+            label = options[int(rec) - 1].partition("::")[0].strip() if rec and 1 <= int(rec) <= len(options) else None
+            default, reason = opt(rest, "--if-no-answer"), opt(rest, "--reason")
+            if why := board.ask_lint(default, reason, label):
+                sys.exit(f"decide add needs --if-no-answer <the --recommend label | {board.CANNOT_PROCEED}> and "
+                         f"--reason <{' | '.join(board.ASK_REASONS)}>: {why} ({board.ASK_GATE})")
+            # The decision table has no column for these, so the body carries them for the page and the relay.
+            text, gate = (pathlib.Path(body).read_text() if body else "").rstrip(), f"답이 없으면: {default.strip()} · 근거: {reason}"
+            text = f"{text}\n\n{gate}" if text else gate
+            d = fleet.decision_add(opt(rest, "--title"), text, options,
                                    int(rec) if rec else None, opt(rest, "--link"), os.environ.get("ORCA_TERMINAL_HANDLE"))
             print(d["id"])
         elif sub == "list":
@@ -3509,7 +3521,7 @@ def cmd_decide(argv):
             print(f"{d['id']} checked {d['checked_at']}")
         else:
             sys.exit("usage: orch decide add --title T [--body-file F] [--option 'label::description']... [--recommend N] "
-                     "[--link URL] | list | show <id> | answer <id>|--title T --quote TEXT|--quote-file F [--by SESSION] | "
+                     "[--link URL] --if-no-answer LABEL|'진행 못 함' --reason TAG | list | show <id> | answer <id>|--title T --quote TEXT|--quote-file F [--by SESSION] | "
                      "done <id> [--answer TEXT] | drop <id> | keep <id>")
     except store.NotMigrated as e:
         sys.exit(f"decisions are not in {store.DB_NAME} yet ({e})")
@@ -3703,8 +3715,9 @@ def cmd_brief(argv):
     items = [argv[i + 1] for i, a in enumerate(argv[:-1]) if a == "--decision"]
     failed = None
     if not now:  # --now replays a past moment; only a report of this moment is sent
-        if any("→ 추천:" not in d for d in items):
-            sys.exit(f"--decision is one line: {board.DECISION_FORM}")
+        for d in items:
+            if why := board.decision_lint(d):
+                sys.exit(f"--decision is one line: {board.DECISION_FORM}\n{why} ({board.ASK_GATE})")
         items, failed = register_decisions(items)
     try:
         out = board.render(scope, "telegram" if "--telegram" in argv else "terminal", now and fleet_parse(now),
