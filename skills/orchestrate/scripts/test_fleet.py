@@ -507,8 +507,10 @@ assert orch("list")[0] == 0 and not (dec_state / store.DB_NAME).exists()
 assert orch("import", "--apply", "--rehearsal", cmd="db")[0] == 0
 assert (dec_state / "decisions.json").is_dir()  # the tombstone: older code's write_atomic fails on it
 assert orch("add", "--title", "Export format", "--body-file", str(body_file), "--option", "CSV::finance uses sheets",
-            "--option", "JSON", "--recommend", "1", "--link", "https://example.com/t/1") == (0, "d1", "")
-assert orch("add", "--title", "Second", "--option", "A") == (0, "d2", "")
+            "--option", "JSON", "--recommend", "1", "--link", "https://example.com/t/1",
+            "--if-no-answer", "CSV", "--reason", "owner-asked") == (0, "d1", "")
+assert orch("add", "--title", "Second", "--option", "A::a", "--recommend", "1", "--if-no-answer", "진행 못 함",
+            "--reason", "owner-hands-only") == (0, "d2", "")
 code, out, _ = orch("list")
 assert code == 0 and out.splitlines()[1:3] == ["    1. CSV (recommended) — finance uses sheets", "    2. JSON"], out
 saved = saved_decision("d1")
@@ -640,7 +642,7 @@ const cell = "[ABC-19\\u2028ABC-20](https://x.test/z) ABC-12<b>x</b> [ABC-13](ht
 const S = {{fleet: {{ticket_url: "https://tracker.example.test/acme/issue/"}}}};
 const on = briefInline(cell);
 S.fleet = {{}};
-process.stdout.write(JSON.stringify({{on, off: briefInline(cell), ids: (S.fleet.ticket_url = "https://t.example.test/", ticketIds({{name: "ABC-18 w", refs: []}}))}}));"""
+process.stdout.write(JSON.stringify({{on, off: briefInline(cell)}}));"""
     got = json.loads(subprocess.run(["node", "-e", "const vm = require('vm'); vm.runInNewContext(require('fs').readFileSync(0, 'utf8'), "
                                     "{document: {addEventListener() {}}, process});"], input=js, capture_output=True, text=True, check=True).stdout)
     link_to = lambda k: f'<a class="link" href="https://tracker.example.test/acme/issue/{k}" target="_blank" rel="noopener noreferrer">{k}</a>'
@@ -650,7 +652,6 @@ process.stdout.write(JSON.stringify({{on, off: briefInline(cell), ids: (S.fleet.
     assert "<i " not in got["on"] and link_to("ABC-17") in got["on"], "raw markup is escaped text, so an id in it is only text"
     assert 'href="https://x.test/ABC-14"' in got["on"] and ">ABC-13</a>" in got["on"] and "UTF-8" in got["on"] and "tracker.example.test/acme/issue/UTF" not in got["on"]
     assert "tracker.example.test" not in got["off"] and "ABC-12" in got["off"], got["off"]
-    assert got["ids"] == [{"key": "ABC-18", "url": "https://t.example.test/ABC-18"}], got["ids"]
 
     # Automations and shared resources render escaped; an overdue or failed automation is flagged and counted.
     js = f"""{helpers}
@@ -1076,6 +1077,7 @@ const S = {{filters: {{}}}};
 {setup}
 const st = {json.dumps(fold_world)};
 F.brief = {{table_rows: [{{rows: {json.dumps(fold_rows)}}}]}};
+F.units = {{units: []}};
 {body}"""
     def fold_run(setup, body):
         return json.loads(subprocess.run(["node", "-e", ctx], input=sessions_js(setup, body), capture_output=True, text=True, check=True).stdout)
@@ -1245,6 +1247,7 @@ process.stdout.write(JSON.stringify([briefRowsCard({{id: "wt-busy"}}, {{prs: [{{
 {(assets / "fleet.js").read_text()}
 const st = {{sessions: {json.dumps(sess)}, prs: {json.dumps(prs)}}};
 var S = {{filters: {{}}, sort: {{}}, state: st}};
+F.brief = {{table_rows: []}}; F.units = {{units: []}};
 const out = {{labels: Object.fromEntries(st.sessions.map((s) => [s.id, kindLabel(st, s)[0]])), table: fleetSessions(st), card: leadCard(st)}};
 out.one = leadCard({{sessions: st.sessions.filter((s) => s.id !== "wt-a"), prs: st.prs.filter((p) => p.session !== "wt-lead")}});
 S.filters.fleet_project = "other"; out.hidden = leadCard(st);

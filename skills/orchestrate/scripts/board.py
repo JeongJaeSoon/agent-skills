@@ -812,7 +812,54 @@ def item_of(r):
 
 
 GENERIC_NEXT = {nxt for _, nxt in PHASE_ROW.values()} | {""}
-DECISION_FORM = "<question>: <options> → 추천: <X> — <reason> · 답이 없으면 <default>"
+ASK_REASONS = ("owner-asked", "hard-after-review", "owner-hands-only")
+CANNOT_PROCEED = "진행 못 함"
+DECISION_FORM = (f"<question>: <options> → 추천: <X> — <reason> · 답이 없으면 <X | {CANNOT_PROCEED}>"
+                 f" · 근거: <{' | '.join(ASK_REASONS)}>")
+ASK_GATE = "skills/orchestrate/references/owner-ask-gate.md"
+
+
+def ask_lint(if_no_answer, reason, recommendation=None):
+    """Why an owner ask fails the owner-ask gate (ASK_GATE), or None: a known reason tag, and an if-no-answer that is
+    the recommendation itself or CANNOT_PROCEED."""
+    if reason not in ASK_REASONS:
+        return f"근거 is one of {' | '.join(ASK_REASONS)}, not {reason!r}" if reason else "근거 is missing"
+    y = (if_no_answer or "").strip()
+    if not y:
+        return f"답이 없으면 is missing: the recommendation, or {CANNOT_PROCEED}"
+    if y not in (CANNOT_PROCEED, (recommendation or "").strip()):
+        return f"답이 없으면 is the recommendation ({recommendation!r}) or {CANNOT_PROCEED}, not {y!r}"
+    return None
+
+
+def ask_line(if_no_answer, reason):
+    """The gate's fields as `orch decide add` puts them on the body's first line, where the page and the report read them."""
+    return f"답이 없으면 {if_no_answer.strip()} · 근거: {reason}"
+
+
+def ask_line_of(body):
+    first = (body or "").split("\n", 1)[0]
+    return first if first.startswith("답이 없으면 ") and "· 근거: " in first else None
+
+
+def decision_lint(item):
+    """Why a brief --decision item does not hold DECISION_FORM and the owner-ask gate, or None."""
+    question, sep, tail = item.partition("→ 추천:")
+    if not sep:
+        return "→ 추천: is missing"
+    if not question.removeprefix("(미등록)").strip():
+        return "the question before → 추천: is empty"
+    # The fixed fields are split off from the right, so a reason may quote them.
+    tail, sep, tag = tail.rpartition("· 근거:")
+    if not sep:
+        return "· 근거: is missing at the end"
+    rec, sep, default = tail.rpartition("· 답이 없으면")
+    if not sep:
+        return "· 답이 없으면 is missing"
+    rec, sep, why = rec.partition(" — ")
+    if not sep or not rec.strip() or not why.strip():
+        return "the recommendation needs '<X> — <reason>', both filled"
+    return ask_lint(default, tag.strip(), rec.strip())
 
 
 def refresh(now, limit_min):
@@ -881,8 +928,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     sd = fleet.state_dir()
     limits = {**LIMITS, **(fleet.config().get("board") or {})}
     for d in decisions:
-        if "→ 추천:" not in d:
-            raise ValueError(f"--decision is one line: {DECISION_FORM}")
+        if why := decision_lint(d):
+            raise ValueError(f"--decision is one line: {DECISION_FORM}\n{why} ({ASK_GATE})")
     collected = refresh(now, limits["state_min"]) if fresh else None
     try:  # one snapshot, so a close and the open list cannot disagree within a report
         seen = store_db.view()
@@ -1564,6 +1611,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             rec = d.get("recommend") and d["options"][d["recommend"] - 1]
             text = (f"{i}. ({d['id']}) {d['title']}" + (f" → 추천: {rec['label']}" + (f" — {rec['description']}" if rec["description"] else "")
                     if rec else " — 선택지: " + " / ".join(o["label"] for o in d["options"]) if d["options"] else ""))
+            text += f" · {gate}" if (gate := ask_line_of(d.get("body"))) else ""
             items.append(text + (" (지난 보고와 동일)" if d["id"] in repeated else ""))
         items += [f"{i}. {one_line(d)}" for i, d in enumerate(own, len(decisions) + 1)]
         if tg:
