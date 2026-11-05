@@ -1463,14 +1463,15 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                 return k in leaf and up(leaf[k], "priority") == g and states[k]["status"] != "done"
             open_rows = []
             for sec in sections:
-                open_rows += [(ref_name(l) if k == l["key"] or l["key"] in members else rows[k]["title"], k)
+                # A row's own line carries judge()'s step as the table shows it, a doing item's step included.
+                open_rows += [(ref_name(l) if k == l["key"] or l["key"] in members else rows[k]["title"], k,
+                               l["next"] if k == l["key"] else states[k]["next"])
                               for l in lines if l["sec"] == sec for k in members.get(l["key"], [l["key"]]) if mine(k)]
-                open_rows += [(i["title"], i["id"]) for (bsec, _), items in bullets.items() if bsec == sec
-                              for i in items if mine(i["id"])]
+                open_rows += [(i["title"], i["id"], states[i["id"]]["next"]) for (bsec, _), items in bullets.items()
+                              if bsec == sec for i in items if mine(i["id"])]
             first = open_rows[0] if open_rows else None
             if first:
-                shown, k = first
-                nxt = states[k]["next"]  # judge()'s step, which is what the table's 다음 column derives from
+                shown, _, nxt = first
                 nxt = f"{shown} — {nxt}" if nxt and nxt not in GENERIC_NEXT else shown
             out.append(("" if tg else "- ") + (name if tg else f"**{name}**")
                        + f" — 진행 {mv} · 대기 {wt} · 완료 {dn} · 다음: {nxt if first else '없음'}")
