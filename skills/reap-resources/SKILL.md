@@ -265,7 +265,8 @@ bin/reap-hard install            # from the main checkout; `status`, `uninstall`
   `--shadow` refuses.
   `python3 scripts/sweep.py diff --hours 48` compares that with what reap-hard (`reap-hard.jsonl`) and
   `reap --plan` / `cards.py apply` (`reap-actions.jsonl`) really did: every round's plan should be met by an old
-  cleaner's act of the same effect on the same target within its rule's lag, and `넘침` (excess) should be 0.
+  cleaner's act of the same effect on the same target within its rule's lag, and `넘침` (excess) should be 0. A card already gone with no old-cleaner act on it was cleaned
+  from outside (a worker's end-session, a lead's `orca worktree rm`): it is listed as `외부 정리`, not excess.
 - The rules and settings: [docs/reap-hard.md](../../docs/reap-hard.md).
 
 No cleanup path (orphan, pressure, gui-app, reap-hard) ever stops a process a person started: walking up from it,
