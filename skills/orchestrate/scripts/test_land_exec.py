@@ -271,6 +271,15 @@ class LandExec(unittest.TestCase):
         self.round()
         self.settled(row, "merged", 0)
 
+    def test_a_failure_of_ours_behind_a_github_block_is_still_refused(self):
+        """A missing approval must not hide a failed CI run: the worker has something to fix now."""
+        st = self.gh()
+        st["prs"][str(self.n)] = pr(self.n, mss="BLOCKED", conclusion="FAILURE")
+        self.write(st)
+        row = self.request()
+        self.round()
+        self.settled(row, "refused", 3, "CI failed")
+
     def test_human_gate_program(self):
         self.p.update(lambda c: c.update(merge_policy="human-gate"))
         row = self.request()

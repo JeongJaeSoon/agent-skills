@@ -666,6 +666,9 @@ def unblocks(ticket, after, open_tickets):
     return len(seen & open_tickets)
 
 
+PROTECTED = "branch protection blocks it (required review or check)"
+
+
 def row_state(row, verdict, no_ci=False):
     """ready, catching_up (only an update-branch or CI time stands between it and landing), or blocked."""
     if row is None:
@@ -686,7 +689,7 @@ def row_state(row, verdict, no_ci=False):
     if pending:
         catching.append(f"CI pending ({len(pending)})")
     elif mss == "BLOCKED" and not failed:
-        blocked.append("branch protection blocks it (required review or check)")
+        blocked.append(PROTECTED)
     if mss == "UNKNOWN":
         catching.append("GitHub is computing mergeability")
     if blocked:
@@ -2281,6 +2284,11 @@ def attempt(p, pr, klass, onto_lower=False, expect=None):
         if st.get("yield", {}).get("note") != me["reasons"][0]:
             p.append("yield", pr=pr, note=me["reasons"][0])
         return 2, f"yield: {me['reasons'][0]}"
+    if expect and me["reasons"] == [PROTECTED]:
+        # The land executor: every check of ours passed and only GitHub's own rule (a required review or check) is
+        # missing, which can still come. The request waits for it instead of sending the worker back.
+        note_attempt(p, events, pr, "blocked", me["reasons"])
+        return 2, f"yield: GitHub blocks #{pr}: a required review or check is missing; it lands once GitHub allows it"
     if me["state"] == "blocked":
         note_attempt(p, events, pr, "blocked", me["reasons"])
         todo = [ADVICE.get(r, r).format(pr=pr, repo=repo) for r in me["reasons"]]
