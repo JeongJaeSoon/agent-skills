@@ -226,6 +226,25 @@ with world() as (w, sd):
     code, out, err = run()
     assert code == 1 and "still loaded" in err and not store.path().exists() and w.plan() == want, (out, err)
 
+# ---- a bootout the system kills (SIGKILL) is reported with its signal, not as a launchd problem alone
+with world() as (w, sd):
+    real = w.sh
+
+    def killed(cmd):
+        if cmd[:2] == ["launchctl", "bootout"]:
+            w.calls.append(cmd)
+            return __import__("subprocess").CompletedProcess(cmd, -9, "", "")
+        return real(cmd)
+    cutover.sh = killed
+    code, out, err = run()
+    assert code == 1 and "still loaded" in err and "killed by signal 9" in err, (out, err)
+
+# ---- no LaunchAgent loaded: no launchctl bootout/bootstrap is run at all
+with world() as (w, sd):
+    w.loaded.clear()
+    code, out, err = run()
+    assert code == 0 and not [c for c in w.calls if c[1] in ("bootout", "bootstrap")], (out, err, w.calls)
+
 # ---- an automation that was off stays off: only what was on is put back
 with world() as (w, sd):
     code, out, err = run()

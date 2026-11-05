@@ -306,8 +306,9 @@ P="${CLAUDE_SKILL_DIR}/scripts/pressure.py"
 python3 "$P" check                     # measure only; exit 0 ok, 1 warn, 2 danger
 python3 "$P" queue                     # heavy starts the hook held at danger: waiting, retrying, done, failed, gave_up
 python3 "$P" round --dry-run --set load_per_cpu=0.5,1   # what a round would reap and send, with lowered thresholds
-python3 "$P" round                     # one round, what the LaunchAgent runs
-python3 "$P" install | uninstall | status   # macOS LaunchAgent, every `interval` seconds, from the main checkout
+python3 "$P" round                     # one round, what the pressure-watch Orca automation runs
+python3 "$P" status                    # last round; `skills-sync setup enable pressure-watch` turns the automation on
+python3 "$P" install | uninstall       # legacy macOS LaunchAgent; setup does not use it
 ```
 
 `uninstall` leaves `<state>/pressure-disabled` so `skills-sync setup apply` keeps the job off; `install` removes it,
@@ -385,7 +386,7 @@ The caller's own turn is left out of the count (its pane key comes from `$ORCA_T
 while the caller's turn is over, and the hook, which runs inside it, give one verdict; a caller that cannot be identified
 is counted like any other turn and the output carries a warning line.
 `AGENT_SKILLS_PRESSURE_GATE=0` (environment, or before the heavy command when the user said to go ahead) turns it
-off. The gate assumes the LaunchAgent is installed: without it, a machine that sits at warn costs every heavy start
+off. The gate assumes the pressure-watch automation is on and Orca is open: without it, a machine that sits at warn costs every heavy start
 a deny and a manual `round`.
 
 Defaults and the measurements behind them: [docs/pressure.md](../../docs/pressure.md).

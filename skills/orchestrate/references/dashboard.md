@@ -8,7 +8,7 @@
 
 ```sh
 orch-dash ensure [--port P]
-orch-dash install-agent [--port P]   # macOS: launchd keeps it up; uninstall-agent removes it
+orch-dash install-agent [--port P]   # legacy macOS LaunchAgent; setup does not use it. Prefer `skills-sync setup enable orch-dash` (an Orca automation running `ensure` every 10 minutes)
 orch-dash serve [--port P] [--interval 60] [--host 127.0.0.1]
 orch-dash collect <slug>   # one collect, prints a one-line summary
 orch-dash demo [--port 4780] [--live] [--no-serve]   # fixture programs and an invented fleet, no network

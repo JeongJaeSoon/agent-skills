@@ -48,13 +48,13 @@ dry run은 아무것도 쓰지 않는다. 두 번째 줄은 첫 줄이 출력한
    - autoMode 규칙 묶음: 체크아웃 안 편집, 요청받은 로컬 정리, 사용자 저장소의 PR 작업, 사용자가 지시한 머지, 오케스트레이터의 워커 지시·받은편지함, 워커의 자기 작업 공간, janitor 회차, 저장소가 승인을 요구하지 않을 때 자기가 연 PR·번호로 지명된 PR의 머지(워커는 브리프 APPROVED가 머지를 허락할 때만)와 그 앞의 별도 리뷰어·리뷰봇 지적 해제(통과한 체크가 하나 이상이고 실패·대기 없음, 오케스트레이션 프로그램의 PR 제외), 검증 증거 첨부, 로컬·개발 환경 VERIFY, 리드의 자기 카드 권한 창 응답, 그리고 "사용자 본인의 채팅만 지시로 친다". 막는 쪽은 기본 브랜치 force push와 요청받지 않은 프로덕션 단계. 규칙마다 `Not covered:`로 한계를 적는다. 체크아웃 경로와 `gh` 로그인 이름은 실행할 때 채운다.
    - `agent-skills.json`: `orchestrate.models`(`lead`: `opus`, `worker`: `sonnet`), `orchestrate.auto_wake_min`(`10`: `orch wait`가 멈춘 워커를 10분 뒤 한 번 깨운다), `reflect.skill_repository`(체크아웃)와 `reflect.model`(`sonnet`), `reap.user_folders`(빈 배열 = 끔)와 `reap.model`(`sonnet`). 이미 있는 값은 덮지 않는다.
 3. 임시 파일에 써서 원자적으로 바꾸고, 다시 읽어 같은지 확인한 뒤 파일마다 되돌리는 `cp` 줄을 출력한다.
-4. 15분마다 `skills-sync sync`를 돌리는 launchd 작업을 설치하고(Linux면 crontab 줄을 출력), 한 번 동기화하고, 기본 on 정기 자동화를 켠다(`skills-sync setup apply`, [operations.md](operations.md#정기-자동화)).
+4. 한 번 동기화하고, 기본 on 정기 자동화를 켠다(`skills-sync setup apply`, [operations.md](operations.md#정기-자동화)). 15분마다 `skills-sync sync`를 돌리는 동기화 작업도 여기서 Orca automation으로 걸린다. LaunchAgent는 만들지 않는다. 예전 setup이 만든 LaunchAgent가 남아 있으면 점검이 알리니, 오너가 직접 제거한다.
 5. `--orca-run`을 주면 이 터미널에 묶인 Orca Run이 없을 때 하나 만든다. 오케스트레이터의 메일 알림은 Run에 묶인 터미널에만 뜬다(`orchestrate` references/top-level.md "Your Run").
 6. `setup-pc` 점검 표를 출력한다. `missing`·`differs`·`warn` 행이 남은 일이다(`gh auth login`, git 커밋 서명 등은 사람이 한다).
 
 다시 돌려도 이미 된 것은 건너뛴다. 묶음에서 빼고 싶은 규칙은 적용 뒤 지우면 된다. 한 번 제안한 항목은 `~/.local/state/agent-skills/setup-applied.json`에 남아 다시 제안하지 않는다. 새 설정은 새 세션부터 적용되므로 떠 있던 세션은 재시작한다. 체크아웃 폴더에서 `claude`를 처음 띄우면 폴더 신뢰 창이 한 번 뜬다.
 
-옵션: `--settings-only`(파일만 쓰고 launchd·동기화·자동화·점검은 건너뜀), `--actions-only`(그 반대: 파일은 쓰지 않고 4~6만, 해시 없음. `setup-pc`가 권한 창 뒤에서 돌린다), `--update`(아래), `--replace-drifted`·`--settings`([아래](#본문이-바뀐-automode-규칙-drift)). 기본 on 자동화에는 watch-prs·watch-mentions도 있는데, `agent-skills.json`에 `prs`·`mentions` 키가 있을 때만 켠다.
+옵션: `--settings-only`(파일만 쓰고 동기화·자동화·점검은 건너뜀), `--actions-only`(그 반대: 파일은 쓰지 않고 4~6만, 해시 없음. `setup-pc`가 권한 창 뒤에서 돌린다), `--update`(아래), `--replace-drifted`·`--settings`([아래](#본문이-바뀐-automode-규칙-drift)). 기본 on 자동화에는 watch-prs·watch-mentions도 있는데, `agent-skills.json`에 `prs`·`mentions` 키가 있을 때만 켠다.
 
 ## 갱신
 
@@ -76,7 +76,7 @@ python3 <체크아웃>/scripts/setup.py --replace-drifted 'Scheduled janitor rou
 python3 -I <체크아웃>/scripts/setup.py --replace-drifted 'Scheduled janitor round' --apply <해시>
 ```
 
-- `--replace-drifted`는 drift 규칙을 권장 본문(`{checkout}`·`{state}`는 다른 값과 같은 방식으로 채운 것)으로 바꾸는 것만 계획한다. 다른 권장값은 더하지 않고, 제안 기록·`agent-skills.json`도 쓰지 않고, launchd·동기화·자동화도 돌리지 않는다.
+- `--replace-drifted`는 drift 규칙을 권장 본문(`{checkout}`·`{state}`는 다른 값과 같은 방식으로 채운 것)으로 바꾸는 것만 계획한다. 다른 권장값은 더하지 않고, 제안 기록·`agent-skills.json`도 쓰지 않고, 동기화·자동화도 돌리지 않는다.
 - `--apply` 없이는 diff만 보인다. `--apply`는 다른 쓰기와 같이 백업, 원자적 교체, 다시 읽어 확인, 되돌리는 `cp` 줄 출력을 한다.
 - 라벨이 권장 규칙과 겹치지 않는 사용자 규칙은 건드리지 않는다. 같은 라벨의 규칙이 둘 이상이면 어느 쪽을 바꿀지 정할 수 없어 `kept` 줄만 내고 그대로 둔다. 하나만 남기고 다시 돌린다.
 - drift가 아닌 라벨(오타, 이미 권장 본문과 같은 규칙)을 넘기면 `refused: --replace-drifted: no drifted rule labelled …`로 멈춘다.

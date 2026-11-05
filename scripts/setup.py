@@ -10,9 +10,9 @@ Options:
   --update          with --apply, fast-forward this checkout first (`skills-sync sync`) and check the plan again;
                     the dry run only lists that step
   --language NAME   `language` when it is unset (default: from the system locale)
-  --settings-only   only the files: no launchd job, sync, automations, Orca or check
+  --settings-only   only the files: no sync, automations, Orca or check
   --orca-run        bind this terminal to a new Orca Run when it has none (`run-create`)
-  --actions-only    only the steps after the files: launchd job, sync, automations, Orca and check. Writes no
+  --actions-only    only the steps after the files: sync, automations, Orca and check. Writes no
                     settings and takes no HASH: the agent runs it, and the plugin's guard hook asks the human first
   --replace-drifted [LABEL ...]
                     plan only this: the recommended text in place of each drifted autoMode rule (below), or only
@@ -292,7 +292,6 @@ def plan(args):
         files.append((p["record"], record or None, {"offered": all_offered}))
     actions = [FAST_FORWARD] if args.update else []
     if not args.settings_only:
-        actions.append("launchd sync job (bootstrap.py)" if sys.platform == "darwin" else "cron line to add by hand")
         if not args.update:
             actions.append("skills-sync sync --no-broadcast")
         actions.append("skills-sync setup apply")
@@ -427,8 +426,6 @@ def write(path, data):
 
 def run_actions(args):
     """Names of the steps that failed."""
-    sys.path.insert(0, str(HERE))
-    import bootstrap
     failed = []
     sys.stdout.flush()
     # A PC with no state gets an empty agent-skills.db, so no cutover is needed; one with state is left for `orch db migrate`.
@@ -436,10 +433,6 @@ def run_actions(args):
     if subprocess.run([sys.executable, str(store_py), "init"]).returncode:
         failed.append("orch db init")
     sys.stdout.flush()
-    try:
-        bootstrap.scheduler(True)
-    except SystemExit as e:
-        failed.append(f"launchd sync job ({e})")
     steps = [] if args.update else [("skills-sync sync", "sync.py", "sync", "--no-broadcast")]
     for name, script, *rest in steps + [("skills-sync setup apply", "automations.py", "apply")]:
         sys.stdout.flush()
