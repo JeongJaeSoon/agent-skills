@@ -307,22 +307,37 @@ SHELL_PROMPT = ("이 자동화는 precheck 가 주기 작업을 직접 실행하
 SHELL_TIMEOUT_S = 300
 
 
-def cron_every(seconds):
-    """5-field cron for a period in seconds: whole minutes (at least 1); an hour or more is every N hours."""
+def cron_period(seconds):
+    """The period cron can run evenly at, in seconds: a divisor of 60 minutes, or of 24 hours from an hour up (45 min
+    becomes 30, 90 min becomes 1 h). Cron steps that do not divide the field restart at its top and run unevenly."""
     minutes = max(1, round(float(seconds) / 60))
-    return f"*/{minutes} * * * *" if minutes < 60 else f"0 */{max(1, minutes // 60)} * * *"
+    if minutes < 60:
+        return max(d for d in (1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30) if d <= minutes) * 60
+    return max(d for d in (1, 2, 3, 4, 6, 8, 12, 24) if d <= min(24, minutes // 60)) * 3600
+
+
+def cron_every(seconds):
+    """5-field cron for cron_period(seconds)."""
+    p = cron_period(seconds)
+    return f"*/{p // 60} * * * *" if p < 3600 else f"0 */{p // 3600} * * *"
 
 
 class ShellJob(OrcaJob):
     """A periodic shell job with no agent: an Orca automation whose precheck (scripts/orca_job.py) runs the command,
     records how it ended and exits 1, so Orca skips the agent every time. A job that needs no model must not start one."""
 
-    def __init__(self, name, what, argv, interval, default, ok=(0,)):
+    def __init__(self, name, what, argv, interval, default, ok=(0,), turned_off=None):
         self.name, self.job_name, self.what, self.default = name, f"agent-skills {name}", what, default
-        self.argv, self.interval, self.ok = argv, interval, ok
+        self.argv, self.interval, self.ok, self.turned_off = argv, interval, ok, turned_off
+
+    def disable(self):
+        code, msg = super().disable()
+        if not code:
+            orca_job.forget(self.name)  # a stopped job's last run must not turn into a 'late' warning
+        return code, msg
 
     def want(self):
-        secs = self.interval() if callable(self.interval) else self.interval
+        secs = cron_period(self.interval() if callable(self.interval) else self.interval)  # what cron really runs at
         return {"trigger": cron_every(secs), "prompt": SHELL_PROMPT, "precheck-timeout": SHELL_TIMEOUT_S,
                 "precheck": orca_job.command(self.name, self.argv, secs, SHELL_TIMEOUT_S - 20, self.ok)}
 
@@ -337,6 +352,8 @@ class ShellJob(OrcaJob):
         if a is None:
             return "unknown", err
         if not a:
+            if self.turned_off and self.turned_off():  # `pressure.py uninstall` of the LaunchAgent days: apply must not undo it
+                return "off", "이전 disable 로 끔 (enable 로 다시 켬)"
             return "absent", "등록 안 됨"
         detail = f"{a.get('rrule')} · 에이전트 없이 precheck 로 실행"
         drift = self.drift(a) if main_checkout() else {}  # from a worktree every path differs; that is not drift
@@ -387,7 +404,8 @@ SHELL_JOBS = (
              ["python3", str(HERE / "sync.py"), "sync"], sync.INTERVAL_S, True),
     ShellJob("pressure-watch", "PC 사용량(load·메모리 압박·swap·디스크·컨테이너)을 모델 없이 재고, 높으면 reap 이 올린 안전한 대상만 "
              "정리해 알리는 Orca automation(docs/pressure.md). 아무것도 종료하지 않고, 정리할 것이 없으면 상위 소비자만 알린다",
-             ["python3", str(REAP.parent / "pressure.py"), "round"], lambda: pressure.config()["interval"], True, ok=(0, 1, 2)),
+             ["python3", str(REAP.parent / "pressure.py"), "round"], lambda: pressure.config()["interval"], True, ok=(0, 1, 2),
+             turned_off=pressure.disabled),
     ShellJob("reap-hard", "15분마다 끝난 세션이 남긴 프로세스·창을 강하게 정리하는 Orca automation(모델 없음, reap_hard.py run)",
              ["python3", str(HERE / "reap_hard.py"), "run"], reap_hard_interval, False),
     ShellJob("orch-dash", "10분마다 오케스트레이터 대시보드 서버를 확인해 내려갔으면 올리는 Orca automation(모델 없음, orch-dash ensure)",

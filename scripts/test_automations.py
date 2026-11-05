@@ -322,6 +322,30 @@ class ShellJobs(Base):
         self.assertEqual(au.cron_every(30), "*/1 * * * *")
         self.assertEqual(au.cron_every(7200), "0 */2 * * *")
 
+    def test_a_period_cron_cannot_run_evenly_becomes_the_nearest_divisor_below(self):
+        """*/45 fires at :00 and :45, then :00 again; the job must say the period it really runs at."""
+        self.assertEqual(au.cron_every(2700), "*/30 * * * *")
+        self.assertEqual(au.cron_every(5400), "0 */1 * * *")
+        self.assertEqual(au.cron_every(100000), "0 */24 * * *")
+        self.assertEqual(au.cron_period(2700), 1800)
+        self.assertIn("--interval 1800 ", self.jobs["pressure-watch"].__class__(
+            "x", "w", ["a"], 2700, True).want()["precheck"])
+
+    def test_pressure_watch_turned_off_before_stays_off_on_apply(self):
+        self.orca([])
+        j = self.jobs["pressure-watch"]
+        with mock.patch.object(j, "turned_off", return_value=True):
+            self.assertEqual(j.status()[0], "off")
+        with mock.patch.object(j, "turned_off", return_value=False):
+            self.assertEqual(j.status()[0], "absent")
+
+    def test_disable_drops_the_last_run_record(self):
+        j = self.jobs["sync"]
+        self.orca([self.stored(j)])
+        with mock.patch.object(au.orca_job, "forget") as forget:
+            j.disable()
+        forget.assert_called_once_with("sync")
+
     def test_precheck_runs_the_command_through_orca_job(self):
         pre = self.jobs["pressure-watch"].want()["precheck"]
         self.assertIn("orca_job.py run pressure-watch", pre)

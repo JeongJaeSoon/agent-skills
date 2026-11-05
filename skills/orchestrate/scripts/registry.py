@@ -376,7 +376,7 @@ STORES = [
     Store("reaphardout", "S/reap-hard.log", {"reap_hard.pass": LOG}, ("ext:launchd",), ("nobody",),
           rule="launchd stdout; the jsonl rows again"),
     Store("reaphardlock", "S/reap-hard.lock", {"reap_hard.pass": LOCK}, ("reap_hard:locked",)),
-    Store("periodicjob", "S/jobs/*.json", {"periodic_job.last_run": CANONICAL}, ("orca_job:write",), ("nobody",),
+    Store("periodicjob", "S/jobs/*.json", {"periodic_job.last_run": CANONICAL}, ("orca_job:write", "orca_job:forget"), ("nobody",),
           rule="how the last run of a sync, pressure-watch, reap-hard or orch-dash Orca automation ended; setup-pc reads it"),
     Store("preview", "S/preview-watch.json", {"preview.link": CANONICAL}, ("preview_watch:save_state",),
           ("janitor",)),

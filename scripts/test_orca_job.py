@@ -68,6 +68,34 @@ class RunTest(unittest.TestCase):
         self.run_job(["run", "k", "--", *cmd])
         self.assertFalse(oj.read("k")["ok"])
 
+    def test_a_timeout_takes_the_jobs_children_down_too(self):
+        pidfile = oj.STATE / "child.pid"
+        code = ("import subprocess, sys, time; c = subprocess.Popen(['sleep', '60']); "
+                f"open({str(pidfile)!r}, 'w').write(str(c.pid)); time.sleep(60)")
+        self.run_job(["run", "j", "--timeout", "1", "--", sys.executable, "-c", code])
+        pid = int(pidfile.read_text())
+        time.sleep(0.3)
+        with self.assertRaises(ProcessLookupError):
+            os.kill(pid, 0)
+
+    def test_a_failure_with_only_stdout_still_names_its_cause(self):
+        self.run_job(["run", "j", "--", sys.executable, "-c", "print('docker is not running'); raise SystemExit(2)"])
+        self.assertEqual(oj.read("j")["message"], "exit 2: docker is not running")
+
+    def test_python3_means_the_interpreter_running_the_wrapper(self):
+        self.run_job(["run", "j", "--", "python3", "-c", "import sys; print(sys.executable)"])
+        self.assertIn(os.path.realpath(sys.executable), os.path.realpath(oj.read("j")["message"].split(": ", 1)[1]))
+
+    def test_a_malformed_record_is_skipped_not_fatal(self):
+        oj.JOBS.mkdir(parents=True, exist_ok=True)
+        (oj.JOBS / "a.json").write_text("[]")
+        (oj.JOBS / "b.json").write_text(json.dumps({"name": "b"}))
+        (oj.JOBS / "c.json").write_text("{not json")
+        self.run_job(["run", "good", "--", sys.executable, "-c", "pass"])
+        self.assertEqual([r["name"] for r in oj.records()], ["good"])
+        oj.forget("good")
+        self.assertEqual(oj.records(), [])
+
     def test_the_command_gets_a_usable_path(self):
         with mock.patch.dict(os.environ, {"PATH": "/nowhere"}):
             self.run_job(["run", "j", "--", sys.executable, "-c", "import os; print(os.environ['PATH'])"])

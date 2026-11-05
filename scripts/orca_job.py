@@ -10,7 +10,7 @@ Orca automations always carry an agent prompt, but a precheck runs first and a n
 the agent never starts. Since that hides a failing job behind the same `skipped_precheck`, `run` writes
 <state>/jobs/NAME.json (when, rc, one message line) and `status` / setup-pc read it back (docs/automation.md).
 """
-import json, os, pathlib, signal, subprocess, sys, time
+import contextlib, json, os, pathlib, shutil, signal, subprocess, sys, time
 
 STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()
 JOBS = STATE / "jobs"
@@ -37,10 +37,10 @@ def write(name, rec):
 
 def job_path():
     """Orca starts the precheck with whatever PATH the app has; the jobs need git, gh, orca, docker and claude."""
-    dirs = [os.path.dirname(p) for p in (sys.executable,) if p]
+    first = [os.path.dirname(p) for p in (sys.executable, *map(shutil.which, ("git", "orca"))) if p]
     home = pathlib.Path.home()
-    dirs += ["/opt/homebrew/bin", "/usr/local/bin", str(home / ".local" / "bin"), "/usr/sbin", "/usr/bin", "/bin"]
-    return ":".join(dict.fromkeys([*os.environ.get("PATH", "").split(":"), *dirs]))
+    rest = ["/opt/homebrew/bin", "/usr/local/bin", str(home / ".local" / "bin"), "/usr/sbin", "/usr/bin", "/bin"]
+    return ":".join(dict.fromkeys([*first, *os.environ.get("PATH", "").split(":"), *rest]))
 
 
 def ended(rc):
@@ -59,11 +59,21 @@ def run(name, cmd, interval=None, timeout=None, ok_codes=(0,)):
     are a result, not a failure (pressure.py round exits 1 and 2 for warn and danger)."""
     started = time.time()
     env = {**os.environ, "PATH": job_path()}
+    if cmd and cmd[0] == "python3":  # the interpreter running this wrapper, not whatever the app's PATH finds first
+        cmd = [sys.executable, *cmd[1:]]
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=timeout, stdin=subprocess.DEVNULL,
-                           start_new_session=True)
-        rc = p.returncode
-        out = p.stdout if rc in ok_codes else p.stderr
+        # Its own process group, so a timeout takes the job's children (git, docker, gh) down with it.
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
+                                stdin=subprocess.DEVNULL, start_new_session=True)
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            with contextlib.suppress(OSError):
+                os.killpg(proc.pid, signal.SIGKILL)
+            proc.communicate()
+            raise
+        rc = proc.returncode
+        out = stdout if rc in ok_codes else (last_line(stderr) and stderr) or stdout  # a failure: stderr, else stdout
         message = f"{ended(rc)}: {last_line(out)}" if last_line(out) else ended(rc)
     except subprocess.TimeoutExpired:
         rc, message = -signal.SIGKILL, f"timed out after {timeout:g}s"
@@ -88,10 +98,17 @@ def records(jobs_dir=None):
     out = []
     for p in sorted((jobs_dir or JOBS).glob("*.json")):
         try:
-            out.append(json.loads(p.read_text()))
+            rec = json.loads(p.read_text())
         except (OSError, ValueError):
-            pass
+            continue
+        if isinstance(rec, dict) and {"name", "at", "ok", "message"} <= rec.keys():  # a hand-edited file is skipped
+            out.append(rec)
     return out
+
+
+def forget(name):
+    """Drop a job's record: a job turned off must not read as 'late' for ever."""
+    record_path(name).unlink(missing_ok=True)
 
 
 def command(name, argv, interval, timeout, ok=(0,)):
