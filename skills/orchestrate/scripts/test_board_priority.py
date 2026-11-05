@@ -217,6 +217,10 @@ state_file.write_text(json.dumps(world))
 after = fleet_totals()[0]
 assert after["Pin"] == before["Pin"] + 1 and after["Prog"] == before["Prog"], (before, after)
 
+# A board row that names the card's worktree is that card's row: the subagent follows it, over the worktree rule.
+forch("board", "set", "man", "--kind", "task", "--repo", "acme/web", "--worktree", "card-2", "--priority", "9:Man")
+assert fleet_totals()[0].get("Man") == 2, fleet_totals()
+
 # Its host card is gone from the report (a completed dispatch with no PR), but the host's worktree rule still holds.
 world = json.loads(state_file.read_text())
 world["sessions"].append(session("card-6", "task", "lead-a", dispatch_status="completed",
@@ -251,7 +255,9 @@ try:
     rule = next(iter(saved["groups"].values()))
     for what, bad in (("team match", {**rule, "id": "prio:team:x", "match": "team:x"}),
                       ("priority form", {**rule, "priority": "bad"}), ("id", {**rule, "id": "prio:other"}),
-                      ("repo form", {**rule, "id": "prio:repo:x", "match": "repo:x"})):
+                      ("repo form", {**rule, "id": "prio:repo:x", "match": "repo:x"}),
+                      ("folded priority", {**rule, "priority": "1:a\t—\tb"}), ("leading zero", {**rule, "priority": "01:Group"}),
+                      ("folded match", {**rule, "id": "prio:program:a\tb", "match": "program:a\tb"})):
         (exported / "bad.json").write_text(json.dumps({**saved, "groups": {bad["id"]: bad}}))
         assert any("priority rule" in p for p in store_db._legacy_board(exported / "bad.json")[1]), what
     store_db.load_board(saved)

@@ -1129,7 +1129,9 @@ def _legacy_board(p):
         if (not isinstance(g, dict) or g.get("id") != gid or g.get("kind") != GROUP_KIND
                 or not isinstance(g.get("match"), str) or gid != f"prio:{g['match']}"
                 or not GROUP_MATCH.fullmatch(g["match"]) or not isinstance(g.get("priority"), str)
-                or not GROUP_PRIORITY.fullmatch(g["priority"])):
+                or not GROUP_PRIORITY.fullmatch(g["priority"])
+                or any(" ".join(g[k].split()) != g[k] for k in ("match", "priority"))  # board writes whitespace folded
+                or g["priority"].split(":", 1)[0] != str(int(g["priority"].split(":", 1)[0]))):  # and no leading zero
             bad.append(f"priority rule {gid}: not a group with id prio:MATCH, a match of worktree:ID, program:NAME or "
                        "repo:OWNER/NAME, and a priority of RANK:NAME")
     return out, bad, extra

@@ -939,10 +939,11 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         program's rule, else the repository's. A subagent row is first its host's. A fleet row (a lead or card the
         board has no row of) has only rules."""
         if r.get("host"):  # the host row as subagent_rows() picks it (the last row naming that worktree), else its rule
+            # subagent_rows()' order: a lead's own row, then rows naming the worktree, then the row running in that session
             host = None
-            for n in rows.values():
-                if r["host"] in worktrees(n):
-                    host = n
+            for pick in (lambda n: r["host"] in worktrees(n), lambda n: r["host"] in (n.get("worktree"), n.get("linked")),
+                         lambda n: n.get("session") == r["host"]):
+                host = next((n for n in reversed(list(rows.values())) if pick(n)), host)
             if host is not None and host is not r and (g := prio(host)) or (g := rules["worktree"].get(r["host"])):
                 return g
         n = r
