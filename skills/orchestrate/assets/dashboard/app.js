@@ -969,15 +969,35 @@ function render() { renderSidebar(); renderHeader(); renderFresh(); renderView()
 
 // ------------------------------------------------------------ data
 
+// ETag of the last 200 per URL. Sent back only while the data it describes is still held, so a 304 never
+// leaves a null behind; a server that sends no ETag (a route not on send_cached) just answers 200 each time.
+const POLL_ETAG = {};
+function conditionalFetch(url, have) {
+  const etag = have ? POLL_ETAG[url] : null;
+  return fetch(url, { cache: "no-store", headers: etag ? { "If-None-Match": etag } : {} });
+}
+async function readConditional(url, r) {
+  if (r.status === 304) return null;
+  const etag = r.headers.get("ETag");
+  if (etag) POLL_ETAG[url] = etag; else delete POLL_ETAG[url];
+  return { data: await r.json() };
+}
+
 async function pollPrograms() {
+  if (document.hidden) return; // the visibilitychange handler polls once when the tab comes back
   try {
     // A program page still draws the fleet tree in the sidebar; the fleet page polls that state itself.
-    const [r, f] = await Promise.all([fetch("/api/programs", { cache: "no-store" }),
-      isFleet() ? null : fetch("/api/fleet/state", { cache: "no-store" })]);
-    if (!r.ok) throw new Error(r.status);
-    S.programs = await r.json();
-    if (f) S.fleet = f.ok ? await f.json() : null;
-    renderSidebar();
+    const [r, f] = await Promise.all([conditionalFetch("/api/programs", S.programs),
+      isFleet() ? null : conditionalFetch("/api/fleet/state", S.fleet)]);
+    if (!r.ok && r.status !== 304) throw new Error(r.status);
+    const p = await readConditional("/api/programs", r);
+    let changed = false;
+    if (p) { S.programs = p.data; changed = true; }
+    if (f && f.status !== 304) {
+      if (f.ok) S.fleet = (await readConditional("/api/fleet/state", f)).data; else { S.fleet = null; delete POLL_ETAG["/api/fleet/state"]; }
+      changed = true;
+    }
+    if (changed) renderSidebar();
   } catch (e) { S.down = true; setLive(); }
 }
 
@@ -1077,7 +1097,7 @@ document.addEventListener("click", (e) => {
 });
 document.addEventListener("input", (e) => { if (e.target.id === "issue-search") { S.q = e.target.value; renderView(); } });
 addEventListener("hashchange", route);
-document.addEventListener("visibilitychange", () => { if (!document.hidden) pollState(); });
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { pollState(); pollPrograms(); } });
 setInterval(pollState, POLL_MS);
 setInterval(() => { if (isFleet() && BRIEF_FED.includes(S.section) && !document.hidden) pollBrief(); }, POLL_MS);
 setInterval(() => { if (isFleet() && S.section === "sent" && !document.hidden) pollSent(); }, POLL_MS);

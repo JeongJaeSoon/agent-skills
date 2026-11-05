@@ -1068,4 +1068,11 @@ assert f"const CLEANUP = `{dash.prog.CLEANUP}`;" in app_js
 assert "for the cleaners (${CLEANUP})" in app_js and "${esc(CLEANUP)}" in app_js
 assert "worktree rm" not in app_js
 
+# The programs poll stops on a hidden tab, resumes once when the tab returns, and revalidates with If-None-Match.
+poll_src = app_js.split("async function pollPrograms()", 1)[1].split("\n}\n", 1)[0]
+assert poll_src.lstrip().startswith("{\n  if (document.hidden) return;"), poll_src[:80]
+assert "if (!document.hidden) { pollState(); pollPrograms(); }" in app_js
+assert '"If-None-Match": etag' in app_js and 'r.status === 304' in app_js
+assert "if (changed) renderSidebar();" in poll_src
+
 print("dash.py collect/serve: all pass")
