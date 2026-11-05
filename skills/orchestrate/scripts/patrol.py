@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Session patrol: one round over every agent card, by rules fixed in code, with no model in the loop.
 
-Usage: orch patrol [--once] [--if-due] [--dry-run] [--json]
+Usage: orch patrol [--once] [--if-due [--fallback]] [--dry-run] [--json]
        orch patrol list [--all]
        orch patrol ack <id>... | --all
        orch patrol timing
@@ -104,8 +104,8 @@ CONFIG = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-
 REAP_SCRIPTS = pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts"
 
 DUE_S = 25 * 60
-# reap-hard's 15-minute beat starts a round only when the Orca job (every 30 minutes) missed one: past 40 minutes the
-# gap stays under the hour a verdict protects a card for.
+# reap-hard's 15-minute beat starts a round only when no round ran for 40 minutes: the patrol shell job (every 30
+# minutes) is off, absent or failing. The gap then stays under the hour a verdict protects a card for.
 FALLBACK_DUE_S = 40 * 60
 BUDGET_S = 120
 CANDIDATE_BUDGET_S = 240
@@ -1199,11 +1199,9 @@ def main(argv):
             rows = {i: f for i, f in rows.items() if not f.get("owner") or f.get("owner") == me}
         print("\n".join(line(f) + f" (since {f.get('detected_at')})" for f in rows.values()) or "no open finding")
         return
-    if set(argv) - {"--once", "--if-due", "--dry-run", "--json", "--precheck", "--fallback"}:
+    if set(argv) - {"--once", "--if-due", "--dry-run", "--json", "--fallback"}:
         sys.exit(__doc__)
     patrol_round(argv)
-    if "--precheck" in argv:
-        sys.exit(1)  # an Orca precheck: the round is done here, and no agent starts
 
 
 def patrol_round(argv):

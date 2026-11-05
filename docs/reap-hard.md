@@ -123,4 +123,4 @@ bin/reap-hard install         # 메인 체크아웃에서. status, uninstall
 
 ## 세션 순찰과의 연결
 
-회차를 마치면(dry-run이 아닐 때) `orch patrol --if-due`를 별도 프로세스로 띄운다. 순찰이 한 시간 안에 작업 중·사람 대기·Run 워커로 판정한 카드는 정리 대상에서 뺀다. 순찰 판정만으로 새로 닫히는 카드는 없다. 자세한 규칙은 [automation.md](automation.md)의 "세션 순찰". `reap-hard run --no-patrol`은 순찰을 띄우지 않는다.
+회차를 마치면(dry-run이 아닐 때) `orch patrol --if-due --fallback`을 별도 프로세스로 띄운다. 순찰의 주기는 `patrol` 주기 작업이 맡고, 이 호출은 라운드가 40분 넘게 없었을 때만 돈다. 순찰이 한 시간 안에 작업 중·사람 대기·Run 워커로 판정한 카드는 정리 대상에서 뺀다. 순찰 판정만으로 새로 닫히는 카드는 없다. 자세한 규칙은 [automation.md](automation.md)의 "세션 순찰". `reap-hard run --no-patrol`은 순찰을 띄우지 않는다.

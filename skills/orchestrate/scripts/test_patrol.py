@@ -1,6 +1,6 @@
 """patrol.py rules, its log and delivery, and the watcher-down signals in card_watch and fleet.
 Run: python3 test_patrol.py"""
-import datetime as dt, json, os, pathlib, signal, sys, tempfile, time
+import contextlib, datetime as dt, io, json, os, pathlib, signal, sys, tempfile, time
 
 tmp = pathlib.Path(tempfile.mkdtemp())
 os.environ["AGENT_SKILLS_STATE"] = str(tmp)
@@ -883,5 +883,20 @@ two = patrol.round_once(now=NOW + 7100, gather_fn=lambda now, dl, memo: (fresh(f
 assert fid_t in patrol.standing() and fid_t not in two["cleared"]
 three = patrol.round_once(now=NOW + 7200, gather_fn=lambda now, dl, memo: (fresh(), []))
 assert fid_t in three["cleared"] and fid_t not in patrol.standing()
+
+# --fallback (reap-hard's beat) waits 40 minutes, not 25: while the patrol shell job keeps its 30-minute beat, the two
+# never both run a round. A rise in pressure still starts one at once.
+assert patrol.due({"t": NOW - 26 * 60}, "ok", NOW) and not patrol.due({"t": NOW - 39 * 60}, "ok", NOW, patrol.FALLBACK_DUE_S)
+assert patrol.due({"t": NOW - 41 * 60}, "ok", NOW, patrol.FALLBACK_DUE_S)
+assert patrol.due({"t": NOW - 60, "level": "ok"}, "warn", NOW, patrol.FALLBACK_DUE_S)
+# One round at a time across the round and its cleanup scans: a second one meanwhile does nothing.
+with patrol.run_lock() as first:
+    assert first
+    with patrol.run_lock() as second:
+        assert not second
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        patrol.patrol_round(["--once", "--dry-run"])
+    assert "another round is running" in out.getvalue(), out.getvalue()
 
 print("test_patrol: ok")

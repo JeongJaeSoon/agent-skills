@@ -58,6 +58,7 @@ skills-sync setup disable janitor        # 하나 끄기. 어느 것이든 apply
 | `pressure-watch` | on | Orca automation(에이전트 없음) | 3분마다 PC 사용량을 재고, 높으면 reap이 올린 안전한 대상만 정리해 알린다. 아무것도 종료하지 않는다([pressure.md](pressure.md)) |
 | `reap-hard` | off | Orca automation(에이전트 없음) | 15분마다 끝난 세션이 남긴 프로세스·창을 규칙으로 정리한다([reap-hard.md](reap-hard.md)) |
 | `orch-dash` | off | Orca automation(에이전트 없음) | 10분마다 대시보드 서버를 확인해 내려갔으면 올린다 |
+| `patrol` | off | Orca automation(에이전트 없음) | 30분마다 모든 에이전트 카드를 모델 없이 순찰한다(`orch patrol --if-due`). 꺼져 있으면 reap-hard가 대신 돈다 |
 | `share-server` | off | macOS LaunchAgent | 공유 폴더를 127.0.0.1에서 Caddy로 읽기 전용 서빙한다. tailnet 공개는 하지 않는다([share-server.md](share-server.md)) |
 | `watch-prs` | on(`prs` 키가 있을 때) | Orca automation | `watch-prs` 스킬의 회차. 설정 키가 없으면 켜지 않는다 |
 | `watch-mentions` | on(`mentions` 키가 있을 때) | Orca automation | `watch-mentions` 스킬의 회차. 설정 키가 없으면 켜지 않는다 |

@@ -303,7 +303,8 @@ taken while the load is at or above the limit is not evidence: measure again onc
 
 `scripts/pressure.py` watches the machine without a model and reaps what is safe before anyone notices.
 A round whose level turns warn or danger also starts `orch patrol --if-due` detached, which ties the top consumers
-to the state of the card behind each (its `L` rule); reap-hard starts it every other pass. Patrol verdicts only keep.
+to the state of the card behind each (its `L` rule); the `patrol` shell job runs it every 30 minutes, and reap-hard's
+pass starts one only when no round ran for 40 minutes (`--fallback`). Patrol verdicts only keep.
 
 ```bash
 P="${CLAUDE_SKILL_DIR}/scripts/pressure.py"
