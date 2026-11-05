@@ -469,6 +469,7 @@ def save_version(data, url, orig, key, slug, now, src, extras):
             and all(os.path.isfile(os.path.join(folder, pub)) and filecmp.cmp(f, os.path.join(folder, pub), shallow=False)
                     for pub, f in extras))
     if same:
+        touch_last(key)
         out = announce(data, key, url, last['copy'], private)
         refresh_index()  # a page that just went private must leave the served index too
         return out
@@ -505,6 +506,7 @@ def save_version(data, url, orig, key, slug, now, src, extras):
                       'source': os.path.abspath(orig), 'copy': dest, 'dir': folder,
                       'session': data.get('session_id'), 'cwd': data.get('cwd'), 'category': category,
                       'subcategory': subcategory})
+    touch_last(key)
     out = announce(data, key, url, dest, private)
     refresh_index()
     return out
@@ -546,7 +548,25 @@ def alive(pid):
     return True
 
 
+def last_file(key):
+    return os.path.join(al.state_dir(), 'last', re.sub(r'[^A-Za-z0-9_-]', '_', key)[:100])
+
+
+def touch_last(key):
+    """When this artifact was last published, also for a republish that reused the newest version (no new row)."""
+    path = last_file(key)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(repr(time.time()))
+
+
 def newer_version(key, at):
+    try:
+        with open(last_file(key), encoding='utf-8') as f:
+            if float(f.read()) >= at:
+                return True
+    except (OSError, ValueError):
+        pass
     for root in (al.public_dir(), al.private_dir()):
         for r in read_rows(root):
             try:

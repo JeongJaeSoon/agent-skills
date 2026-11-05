@@ -665,7 +665,7 @@ dead5.wait()
 mark5 = os.path.join(STATE_ROOT, 'inflight', f'{dead5.pid}-6.json')
 with open(mark5, 'w') as f:
     # started in the same second as the row, but after it was written
-    json.dump({'pid': dead5.pid, 'at': row['epoch'] + 0.01, 'data': {'cwd': HOME, 'tool_input': {'file_path': page('samesec2.html', text='second')},
+    json.dump({'pid': dead5.pid, 'at': float(open(os.path.join(STATE_ROOT, 'last', SAMESEC)).read()) + 0.01, 'data': {'cwd': HOME, 'tool_input': {'file_path': page('samesec2.html', text='second')},
                                                                      'tool_response': f'https://claude.ai/code/artifact/{SAMESEC}'}}, f)
 publish('s4h', page('go2.html'), 'cd5f1111-2222-3333-4444-555566667777')
 srows = [json.loads(l) for l in open(os.path.join(STATE_ROOT, 'index.jsonl')) if SAMESEC in l]
@@ -689,6 +689,23 @@ publish('s4i', page('merge.html', text='m'), MERGE, tool_input={'file_path': os.
                                                                   'root': 'site', 'files': ['assets/a.txt', 'assets/b.txt']})
 check('half-moved directory: merged, not nested', os.path.isfile(os.path.join(mp, 'assets/b.txt'))
       and os.path.isfile(os.path.join(mp, 'assets/a.txt')) and not os.path.exists(os.path.join(mp, 'assets/assets')), os.listdir(mp))
+
+# --- Codex round 6: a republish that reused the newest version still outranks an older killed run
+REUSE = 'cf5f1111-2222-3333-4444-555566667777'
+src_reuse = page('reuse.html', text='CURRENT')
+publish('s4j', src_reuse, REUSE)
+dead6 = subprocess.Popen([sys.executable, '-c', 'pass'])
+dead6.wait()
+mark6 = os.path.join(STATE_ROOT, 'inflight', f'{dead6.pid}-8.json')
+with open(mark6, 'w') as f:
+    json.dump({'pid': dead6.pid, 'at': time.time(), 'data': {'cwd': HOME, 'tool_input': {'file_path': page('reuse2.html', text='STALE')},
+                                                            'tool_response': f'https://claude.ai/code/artifact/{REUSE}'}}, f)
+time.sleep(0.05)
+publish('s4j', src_reuse, REUSE)  # same content as the newest version: no new row, but it is a later publish
+publish('s4k', page('go3.html'), 'd05f1111-2222-3333-4444-555566667777')
+rrows = [json.loads(l) for l in open(os.path.join(STATE_ROOT, 'index.jsonl')) if REUSE in l]
+check('reused-version republish outranks an older killed run', len(rrows) == 1 and 'CURRENT' in open(rrows[-1]['copy']).read()
+      and not os.path.exists(mark6), rrows)
 
 # --- Reported: a reply in a later turn repeats an Artifact link published in an earlier turn
 EARLIER = 'c45f1111-2222-3333-4444-555566667777'
