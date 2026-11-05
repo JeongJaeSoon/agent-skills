@@ -364,22 +364,51 @@ def fleet_worktrees():
         return None
 
 
+FLEET_RUNS_TTL_S = 150  # the fleet tick reads runs every 120 s (fleet.RUNS_EVERY); a snapshot older than one round plus slack is not trusted
+
+
+def fleet_run(run_id):
+    """(run record, workers, tasks) of one Run from the fleet tick's runs snapshot, or None when that snapshot is older
+    than FLEET_RUNS_TTL_S, failed, or does not list the Run with its objective (run-list holds the newest page only, and
+    an Orca from before --full lists no objective): the caller then asks Orca. Ownership stays with the fleet tick."""
+    f = FLEET
+    try:
+        src = (f.sources.get("runs") or {}) if f else {}
+        at = src.get("updated_at")
+        if not at or src.get("error") or (utcnow() - prog.parse_ts(at)).total_seconds() > FLEET_RUNS_TTL_S:
+            return None
+        runs = f.runs or {}
+        run = next((r for r in runs.get("runs") or [] if r.get("id") == run_id), None)
+        if not run or "objective" not in run:
+            return None
+        return (run, [w for w in runs.get("workers") or [] if w.get("runId") == run_id],
+                [t for t in runs.get("tasks") or [] if t.get("run_id") == run_id])
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
 def fetch_orca(cfg):
     """Workers, tasks, the Run's objective and the worktrees (cards) still on disk: local, read-only CLI calls. The
-    worktrees come from the fleet tick's snapshot while it is fresh, so a collect does not list them a second time."""
+    Run and the worktrees come from the fleet tick's snapshots while they are fresh, so a collect does not list them a
+    second time (the fleet tick already reads every Run's workers and tasks)."""
     shared = fleet_worktrees()
     wts = {"worktrees": shared} if shared is not None else sh(["orca", "worktree", "list", "--json"])
     import orca_settings  # a lead started as a worker shares its coordinator's Run: only the units under it
 
     def call(*argv):
         return orca_result(*argv[1:])
-    # worker-list pages at 100 rows; one run passed 86 in two days
-    workers = orca_settings.all_workers(call, "--run", cfg["run"], "--limit", "100", error=SourceError)
-    tasks = orca_result("task-list", "--run", cfg["run"]).get("tasks", [])
+    snap = fleet_run(cfg["run"])
+    if snap:
+        run, workers, tasks = snap
+    else:
+        # worker-list pages at 100 rows; one run passed 86 in two days
+        workers = orca_settings.all_workers(call, "--run", cfg["run"], "--limit", "100", error=SourceError)
+        tasks = orca_result("task-list", "--run", cfg["run"]).get("tasks", [])
+        run = orca_settings.with_full(call, "orchestration", "run-show", "--id", cfg["run"]).get("run") or {}
     workers = orca_settings.lead_scope(workers, cfg.get("lead_dispatch"))
     return {"workers": workers,
             "tasks": orca_settings.scope_tasks(tasks, workers, cfg.get("lead_dispatch")),
-            "run": orca_settings.with_full(call, "orchestration", "run-show", "--id", cfg["run"]).get("run") or {},
+            "run": run,
             "worktrees": (wts.get("result", wts) if isinstance(wts, dict) else {}).get("worktrees", [])}
 
 
