@@ -95,7 +95,7 @@ An illustrative shape (the items are made up):
 - Markdown tables where items share columns (item, state, evidence). In progress with several items is one table, `| 작업 | 상태 | 다음 |`: 상태 is what is done so far, with its evidence; 다음 is the next event and who moves it. A `진행` column (§1 Progress) goes after 작업 only when the items have a basis for one, and a child item is a row under its parent, named `ㄴ <name>`. Items that ship through PRs and deploys still take this table, with the stage pointer (§1) under the sections; a periodic report has one table per repository (below).
 - A table fits in 78 columns as Claude Code draws it (an 80-column terminal less the 2-column gutter in front of each reply line), or it wraps and the columns break apart. Count Hangul and emoji as two columns each, and add three per column for borders and padding. Never cut a name or a reason to fit (cut to the same head in every row, they tell nothing, and a numbered list under the table breaks the reading); a periodic table wider than 78 is not drawn: write each row as one whole line (`- 🔄 name — PR · next · session`) instead, as the renderer does. In other tables, detail that does not fit goes in a one-line footnote under the table (`¹ …`), not in the cell. `python3 scripts/table_width.py < draft.md` (in this skill's directory) prints each table's width.
 - Structure: the headline stays one bold line with no `#`, first in the report. Each big section (Only you, Decision needed, each repository, 카드 없는 일, 다른 사람 대기, Held) opens with a `## ` title and its items follow as lines under it. The guide lines (stage pointer, to-do pointer, legend, PR key) are one `>` quote block, a bare `>` line between them. Put no `---` between sections. A heading adds structure, not lines: do not split a section only to give it a title.
-- Decision needed, Only you and Held, and In progress when it is not a table, take one line per item under the title: `## ❓ 결정 필요` then `1. 질문: 선택지 → 추천: X — 이유 · 답이 없으면 …`, `## 🙋 지금 오너가 할 일` then `- 할 일 · 어디서 → 풀리는 작업`, `## 🔄 진행 중` then `- 할 일 · 담당 · 다음: 이벤트`, `## ⏳ 다른 사람 대기` then `- 누구 · 무엇 · 언제부터 → 작업 · 다음: 리마인드`, `## ⏸️ 보류` then `- 조건 → 할 일`; a periodic report takes the forms in §1 Periodic report. Leave a blank line between lines that must stay separate; markdown joins adjacent lines.
+- Decision needed, Only you and Held, and In progress when it is not a table, take one line per item under the title: `## ❓ 결정 필요` then `1. 질문: 선택지 → 추천: X — 이유 · 답이 없으면 X | 진행 못 함 · 근거: 태그` ([owner-ask gate](../../orchestrate/references/owner-ask-gate.md)), `## 🙋 지금 오너가 할 일` then `- 할 일 · 어디서 → 풀리는 작업`, `## 🔄 진행 중` then `- 할 일 · 담당 · 다음: 이벤트`, `## ⏳ 다른 사람 대기` then `- 누구 · 무엇 · 언제부터 → 작업 · 다음: 리마인드`, `## ⏸️ 보류` then `- 조건 → 할 일`; a periodic report takes the forms in §1 Periodic report. Leave a blank line between lines that must stay separate; markdown joins adjacent lines.
 - `file:line` for code, `owner/repo#123` for PRs and issues, so both are clickable.
 - The same sections and the same numbering of decisions.
 
@@ -110,7 +110,7 @@ An illustrative report on request (the items are made up):
 
 ## ❓ 결정 필요
 
-1. 검색 API 유료 플랜(월 $50, 승인 예산 밖): 올림 / 현행 유지 → 추천: 현행 유지 — 무료 한도의 60%만 씀 · 답이 없으면 현행 유지
+1. 검색 API 유료 플랜(월 $50, 승인 예산 밖): 올림 / 현행 유지 → 추천: 현행 유지 — 무료 한도의 60%만 씀 · 답이 없으면 현행 유지 · 근거: owner-hands-only
 
 ## ✅ 완료
 
