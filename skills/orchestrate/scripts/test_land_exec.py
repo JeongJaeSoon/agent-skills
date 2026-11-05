@@ -32,8 +32,6 @@ import json, os, sys
 a = sys.argv[1:]
 if a[:2] == ["orchestration", "send"]:
     path = os.environ["FAKE_GH_STATE"]; st = json.load(open(path))
-    if st.get("send_fail"):
-        sys.exit("orca: runtime not reachable")
     st["sent"] = st.get("sent", []) + [a[a.index("--to") + 1]]; json.dump(st, open(path, "w")); sys.exit()
 os.execv(sys.executable, [sys.executable, os.environ["FAKE_ORCA_INNER"], *a])
 '''
@@ -74,6 +72,12 @@ def drain():
         if r["status"] == "queued":
             store.land_claim(r["id"])
         store.land_finish(r["id"], "refused", 1, "test teardown")
+
+
+def inbox(rid):
+    path = pathlib.Path(os.environ["ORCH_FLEET_STATE"]) / "inbox-external.jsonl"
+    rows = [json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
+    return [r for r in rows if r.get("key") == f"land-exec:{rid}"]
 
 
 def config(**over):
@@ -144,19 +148,35 @@ class LandExec(unittest.TestCase):
         self.assertEqual(got["audit"]["verdict"]["source"], "review:codex")
         landed = [e for e in self.p.events() if e["ev"] == "landed"]
         self.assertEqual(len(landed), 1)
-        self.assertEqual(sorted(self.gh()["sent"]), ["run:run_x", "term_req"])
-        self.round()  # nothing new is sent or merged
-        self.assertEqual(len(self.gh()["sent"]), 2)
+        self.assertEqual(self.gh().get("sent", []), [], "a precheck has no sender terminal: no Orca mail")
+        self.assertEqual(inbox(row["id"]), [], "a merge is in the ledger, not the inbox")
+        self.round()  # nothing new is merged
         self.assertEqual(len(self.merges()), 1)
 
-    def test_a_failed_send_is_retried_next_round(self):
+    def test_a_refusal_goes_to_the_inbox_once(self):
         row = self.request()
-        st = self.gh(); st["send_fail"] = True; self.write(st)
+        self.edit_pr(headRefOid=f"h{self.n}b")
         self.round()
-        self.assertIsNone(store.land_get(row["id"])["told_run"])
-        st = self.gh(); st["send_fail"] = False; self.write(st)
         self.round()
-        self.assertIsNotNone(store.land_get(row["id"])["told_run"])
+        rows = inbox(row["id"])
+        self.assertEqual(len(rows), 1, rows)
+        self.assertIn(f"o/r#{self.n} (exit 3)", rows[0]["title"])
+        self.assertEqual(rows[0]["url"], f"https://github.com/o/r/pull/{self.n}")
+        self.assertIsNotNone(store.land_get(row["id"])["told_at"])
+
+    def test_a_failed_inbox_write_is_retried_next_round(self):
+        import fleet
+        row = self.request()
+        self.edit_pr(headRefOid=f"h{self.n}b")
+        real = fleet.inbox_add
+        fleet.inbox_add = lambda *a, **k: (_ for _ in ()).throw(OSError("disk full"))
+        try:
+            self.round()
+        finally:
+            fleet.inbox_add = real
+        self.assertIsNone(store.land_get(row["id"])["told_at"])
+        self.round()
+        self.assertEqual(len(inbox(row["id"])), 1)
 
     def test_recovers_a_merge_a_dead_round_left_running(self):
         row = self.request()

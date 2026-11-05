@@ -3,40 +3,34 @@
 "Land executor").
 
 With `orchestrate.land_executor` on for a repo, `orch land` records a request (program, PR, head sha) in
-agent-skills.db and waits; nothing in an agent's turn merges. A LaunchAgent runs `round` every minute: for each queued
-request it re-checks, in order, the setting and the repo's owner, the program, the PR at the requested sha, the latest
-verdict at that exact sha from an allowed source, the test-results comment, the merge state, and then every check of
-`orch land` itself (prog.attempt with the sha pinned). Any failure leaves the PR unmerged and records why; a wait
-(CI running, a dependency, the lane) keeps the request queued for the next round.
+agent-skills.db and waits; nothing in an agent's turn merges. The `land-executor` automation (an Orca automation whose
+precheck runs `round` every minute through scripts/orca_job.py and never starts an agent; `skills-sync setup enable
+land-executor`) takes each queued request and re-checks, in order, the setting and the repo's owner, the program, the
+PR at the requested sha, the latest verdict at that exact sha from an allowed source, the test-results comment, the
+merge state, and then every check of `orch land` itself (prog.attempt with the sha pinned). Any failure leaves the PR
+unmerged and records why; a wait (CI running, a dependency, the lane) keeps the request queued for the next round.
 
 These checks are procedural: they catch a step skipped or recorded wrongly. Every agent runs as the same user with the
 same gh token, so nothing here proves who reviewed or who asked.
 
 Usage: land_exec.py <command>   (also `orch land-exec <command>`)
-  round [--budget-s 240]   one pass over the queue; launchd runs it. Refuses inside an agent session (CLAUDECODE)
+  round [--budget-s 240]   one pass over the queue; the automation runs it. Refuses inside an agent session (CLAUDECODE)
   queue [--json]           requests, newest last: status, sha, reason, merge sha
-  setup                    add the land_request table to agent-skills.db (a recorded step; install runs it)
-  install [--here]         setup, then write and load the LaunchAgent (from the main checkout; --here for a test)
-  uninstall                unload and remove the LaunchAgent; queued requests stay
-  status                   the LaunchAgent, the last round and the queue counts
+  setup                    add the land_request table to agent-skills.db (a recorded step; enabling the automation runs it)
+  status                   the last round and the queue counts
 """
-import contextlib, datetime as dt, fcntl, json, os, pathlib, plistlib, shutil, subprocess, sys, time
+import contextlib, datetime as dt, fcntl, json, os, pathlib, subprocess, sys, time
 
 HERE = pathlib.Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE))  # launchd runs this file with -I, which leaves its directory off sys.path
+sys.path.insert(0, str(HERE))  # run with -I, this file's directory is not on sys.path
 import prog  # noqa: E402
 import store  # noqa: E402
 
-LABEL = "io.github.jeongjaesoon.land-executor"
-PLIST = pathlib.Path(f"~/Library/LaunchAgents/{LABEL}.plist").expanduser()
 STATE = prog.LAND_HEARTBEAT.parent
 LOCK = STATE / "land-exec.lock"
 LOG = STATE / "land-exec.log"
-DISABLED = STATE / "land-exec-disabled"
 INTERVAL_S = 60
 BY = "land-executor"
-# Passed into the LaunchAgent when the installing shell sets them, so a test install runs on its own state.
-ENV_KEEP = ("PROGRAMS_HOME", "ORCH_FLEET_STATE", "AGENT_SKILLS_CONFIG", "AGENT_SKILLS_STATE")
 TELL_DAYS = 7
 
 
@@ -167,28 +161,26 @@ class Round:
         return settle("refused", code, msg)  # a HoldRefusal keeps its type: stop_land then leaves the hold alone
 
     def tell(self):
-        """Deliver each settled result once per recipient: the requesting terminal and the program's Run."""
+        """Put each refusal in the dashboard inbox once. The requester learns the outcome from its own `orch land`,
+        which waits on the row, and a merge is in the program's ledger; a refusal the requester stopped waiting for is
+        what would otherwise go unseen. Orca mail is not an option here: a precheck has no sender terminal."""
         try:
-            rows = [r for r in store.land_rows(("merged", "refused"))
-                    if (now() - prog.parse_ts(r["closed_at"])).days < TELL_DAYS]
+            rows = [r for r in store.land_rows(("refused",)) if not r.get("told_at")
+                    and (now() - prog.parse_ts(r["closed_at"])).days < TELL_DAYS]
         except store.NotMigrated:
             return
+        if not rows:
+            return
+        import fleet  # not at import: only a round with a refusal to report needs the dashboard module
         for r in rows:
-            text = (f"[land-exec request {r['id']}] {r['program']} {r['repo']}#{r['pr']} "
-                    + (f"merged as {(r.get('merge_sha') or '?')[:8]}" if r["status"] == "merged"
-                       else f"refused (exit {r.get('code')}): {r.get('reason') or ''}"))
-            run_id = None
-            with contextlib.suppress(OSError, ValueError):
-                run_id = json.loads((pathlib.Path(r["home"]) / r["program"] / "program.json").read_text()).get("run")
-            for who, to in (("requester", r.get("requester")), ("run", f"run:{run_id}" if run_id else None)):
-                if r.get(f"told_{who}") or not to:
-                    continue
-                s = prog.run(["orca", "orchestration", "send", "--to", to, "--type", "status",
-                              "--subject", f"land #{r['pr']} {r['status']}", "--body", text], check=False)
-                if s.returncode == 0:
-                    store.land_told(r["id"], who)
-                else:
-                    log(f"request {r['id']}: telling {to} failed ({s.returncode}): {(s.stderr or s.stdout)[:200]}")
+            try:
+                fleet.inbox_add("land", f"머지 거절 {r['repo']}#{r['pr']} (exit {r.get('code')}): {r.get('reason') or ''}",
+                                url=f"https://github.com/{r['repo']}/pull/{r['pr']}", key=f"land-exec:{r['id']}",
+                                source=BY)
+            except OSError as e:
+                log(f"request {r['id']}: the inbox write failed: {e}")
+                continue
+            store.land_told(r["id"])
 
 
 @contextlib.contextmanager
@@ -206,7 +198,7 @@ def round_lock():
 def cmd_round(argv):
     if os.environ.get("CLAUDECODE"):
         # A guardrail against an agent running the merge itself, not an identity check.
-        print("refused: the land executor runs from its LaunchAgent, not inside an agent session", file=sys.stderr)
+        print("refused: the land executor runs from its automation, not inside an agent session", file=sys.stderr)
         return 1
     budget = float(prog.opt(argv, "--budget-s", "240"))
     with round_lock() as mine:
@@ -237,6 +229,7 @@ def cmd_round(argv):
             beat(phase="running", done=done)
         r.tell()
         beat(phase="done", done=done)
+    print(f"{done} request(s) processed")
     return 0
 
 
@@ -251,37 +244,6 @@ def cmd_queue(argv):
     return 0
 
 
-# ---------------------------------------------------------------- LaunchAgent
-
-def agent_target():
-    return f"gui/{os.getuid()}/{LABEL}"
-
-
-def launch_path():
-    dirs = [os.path.dirname(p) for p in map(shutil.which, ("orca", "gh", "git")) if p]
-    return ":".join(dict.fromkeys(dirs + ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]))
-
-
-def spec():
-    env = {"PATH": launch_path(), "HOME": str(pathlib.Path.home())}
-    env.update({k: os.environ[k] for k in ENV_KEEP if os.environ.get(k)})
-    return {"Label": LABEL,
-            "ProgramArguments": [shutil.which("python3") or sys.executable, "-I", str(pathlib.Path(__file__).resolve()),
-                                 "round"],
-            "StartInterval": INTERVAL_S, "RunAtLoad": True, "ProcessType": "Background",
-            "EnvironmentVariables": env, "StandardOutPath": "/dev/null", "StandardErrorPath": str(LOG)}
-
-
-def plist_spec():
-    with contextlib.suppress(OSError, ValueError, plistlib.InvalidFileException):
-        return plistlib.loads(PLIST.read_bytes())
-    return None
-
-
-def loaded():
-    return subprocess.run(["launchctl", "print", agent_target()], capture_output=True).returncode == 0
-
-
 def cmd_setup(argv):
     try:
         print(store.land_setup())
@@ -291,42 +253,7 @@ def cmd_setup(argv):
     return 0
 
 
-def cmd_install(argv):
-    if sys.platform != "darwin":
-        print("no launchd on this OS; run `land_exec.py round` from cron every minute instead", file=sys.stderr)
-        return 1
-    if not (HERE.parents[2] / ".git").is_dir() and "--here" not in argv:  # a worktree goes away under launchd
-        print(f"{HERE.parents[2]} is not a main git checkout; install from the checkout sessions load (or --here)",
-              file=sys.stderr)
-        return 1
-    if cmd_setup(argv):
-        return 1
-    STATE.mkdir(parents=True, exist_ok=True)
-    PLIST.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["launchctl", "bootout", agent_target()], capture_output=True)
-    PLIST.write_bytes(plistlib.dumps(spec()))
-    for _ in range(5):  # bootstrap right after bootout can fail with error 5 until the old job is gone
-        p = subprocess.run(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(PLIST)], capture_output=True, text=True)
-        if p.returncode == 0:
-            DISABLED.unlink(missing_ok=True)
-            print(f"wrote {PLIST} and loaded {agent_target()} (every {INTERVAL_S}s)")
-            return 0
-        time.sleep(1)
-    print(f"launchctl bootstrap failed: {p.stderr.strip()}", file=sys.stderr)
-    return 1
-
-
-def cmd_uninstall(argv):
-    subprocess.run(["launchctl", "bootout", agent_target()], capture_output=True)
-    PLIST.unlink(missing_ok=True)
-    STATE.mkdir(parents=True, exist_ok=True)
-    DISABLED.touch()
-    print(f"removed {agent_target()}; queued requests stay (land_exec.py queue)")
-    return 0
-
-
 def cmd_status(argv):
-    print(f"LaunchAgent: {'loaded' if loaded() else 'not loaded'} ({PLIST}{'' if PLIST.exists() else ', absent'})")
     with contextlib.suppress(OSError, ValueError):
         print(f"last round: {json.loads(prog.LAND_HEARTBEAT.read_text())}")
     try:
@@ -341,8 +268,7 @@ def cmd_status(argv):
     return 0
 
 
-COMMANDS = {"round": cmd_round, "queue": cmd_queue, "setup": cmd_setup, "install": cmd_install,
-            "uninstall": cmd_uninstall, "status": cmd_status}
+COMMANDS = {"round": cmd_round, "queue": cmd_queue, "setup": cmd_setup, "status": cmd_status}
 
 
 def main(argv):

@@ -52,8 +52,9 @@ Usage: orch <command> <slug> [options]
                                      With orchestrate.land_executor on for the repo it merges nothing: it
                                      records a request for the current head and waits for the land
                                      executor's result, with the same exit codes (land_exec.py)
-  land-exec round|queue|setup|install|uninstall|status
-                                     the land executor (land_exec.py); round runs from its LaunchAgent
+  land-exec round|queue|setup|status
+                                     the land executor (land_exec.py); round runs from the land-executor
+                                     automation's precheck
   land-check <slug> --pr N [--main-fix]
                                      readiness only, no merge (lead diagnostics)
   landed <slug> --pr N               record a merge made outside `land` and print the main-CI watch

@@ -294,7 +294,7 @@ class Preview(unittest.TestCase):
 
 
 class ShellJobs(Base):
-    """sync, pressure-watch, reap-hard and orch-dash: Orca automations whose precheck runs the command and skips the agent."""
+    """sync, pressure-watch, reap-hard, orch-dash and land-executor: Orca automations whose precheck runs the command and skips the agent."""
     jobs = {j.name: j for j in au.SHELL_JOBS}
 
     def stored(self, job, enabled=True, **over):
@@ -309,7 +309,17 @@ class ShellJobs(Base):
 
     def test_defaults(self):
         self.assertEqual({n: j.default for n, j in self.jobs.items()},
-                         {"sync": True, "pressure-watch": True, "reap-hard": False, "orch-dash": False})
+                         {"sync": True, "pressure-watch": True, "reap-hard": False, "orch-dash": False,
+                          "land-executor": False})
+
+    def test_land_executor_rounds_every_minute_and_enable_sets_up_the_queue(self):
+        j = self.jobs["land-executor"]
+        self.assertEqual(j.argv[1:], [str(au.LAND_EXEC), "round"])
+        self.assertEqual(j.want()["trigger"], "*/1 * * * *")
+        self.orca([])
+        with mock.patch.object(au.subprocess, "run") as run:
+            self.assertEqual(j.enable(False)[0], 0)
+        self.assertEqual(run.call_args[0][0][-2:], [str(au.LAND_EXEC), "setup"])
 
     def test_no_job_is_a_launchagent_or_names_launchctl(self):
         for j in self.jobs.values():

@@ -145,13 +145,13 @@ Rebase conflicts change the patch-id. That voids the verdict, so the resolution 
 
 ## Land executor
 
-With `orchestrate.land_executor` on for the program's repo, `orch land` merges nothing. It records a request for the PR's current head in `agent-skills.db` (`land_request`) and waits up to `--wait-minutes` for the result. Exit codes stay those of the table above. The merge itself runs in the `land-executor` LaunchAgent (`land_exec.py round`, every minute, no model): no agent turn merges, so no merge reaches the auto mode classifier.
+With `orchestrate.land_executor` on for the program's repo, `orch land` merges nothing. It records a request for the PR's current head in `agent-skills.db` (`land_request`) and waits up to `--wait-minutes` for the result. Exit codes stay those of the table above. The merge itself runs in the `land-executor` automation: an Orca automation whose precheck runs `land_exec.py round` every minute through `scripts/orca_job.py` and never starts an agent (`docs/automation.md`): no agent turn merges, so no merge reaches the auto mode classifier.
 
 ```json
 {"orchestrate": {"land_executor": {"enabled": true, "repos": ["owner/repo"], "verdict_sources": ["review:codex"], "max_wait_hours": 24}}}
 ```
 
-The owner sets the key (`skills-config`) and turns the LaunchAgent on (`skills-sync setup enable land-executor`, which also records the `5-land-queue` step). With the key off, `orch land` merges in its own process. A settings file that names the key but cannot be parsed stops `land` with exit 1 instead of falling back to a direct merge.
+The owner sets the key (`skills-config`) and turns the automation on (`skills-sync setup enable land-executor` from the main checkout, which also records the `5-land-queue` step). With the key off, `orch land` merges in its own process. A settings file that names the key but cannot be parsed stops `land` with exit 1 instead of falling back to a direct merge.
 
 Each round takes the queued requests oldest first. For each one, the first check that fails leaves the PR unmerged:
 
@@ -166,7 +166,7 @@ Each round takes the queued requests oldest first. For each one, the first check
 | `mergeStateStatus` is not DIRTY or BEHIND | refused, exit 3 |
 | Everything `orch land` checks (STOP, main red, hold, deps, stack order, human gate, evidence, lanes, base overlap, CI at the head, threads), with the merge pinned to the requested sha by `--match-head-commit` and a clean merge state | wait (queued, next round) or refused with land's own exit code |
 
-Stacks and `--onto-lower` are refused (exit 1): the executor pins one PR at one sha, and merge-async would also take the layers below. A round first reconciles: a request that a dead round left running goes back to the queue, and a PR GitHub shows merged is recorded once (`landed`), not refused. Each settled request is sent once each to the requesting terminal and the program's Run, as `[land-exec request N] … merged as <sha>` or `refused (exit N): <reason>`; a failed send is retried next round, so a crash between sending and recording can repeat a message. Main CI after the merge stays with whoever watches it today (the worker after exit 0, or the guardian).
+Stacks and `--onto-lower` are refused (exit 1): the executor pins one PR at one sha, and merge-async would also take the layers below. A round first reconciles: a request that a dead round left running goes back to the queue, and a PR GitHub shows merged is recorded once (`landed`), not refused. The waiting `orch land` reads the outcome from the request row and exits with it; a merge is also in the program's ledger (`landed`). Each refusal goes once to the dashboard inbox (`머지 거절 <repo>#N (exit N): <reason>`), so one the requester stopped waiting for is still seen. A precheck has no sender terminal, so the executor sends no Orca mail. A round's last line and exit go to `<state>/jobs/land-executor.json`, which `setup-pc` checks for failures and stalls. Main CI after the merge stays with whoever watches it today (the worker after exit 0, or the guardian).
 
 `orch land-exec queue` lists the requests with their reason and merge sha; each row keeps the verdict it merged on, the checked head and base sha, and the executor's git revision. The checks catch a skipped or wrongly recorded step. They prove nothing about who reviewed: every agent runs as the same user with the same token and can write any verdict source. `land-exec` is left out of the hook's `orch` allow, and `round` refuses inside an agent session (`CLAUDECODE`); both are guardrails, not identity checks.
 

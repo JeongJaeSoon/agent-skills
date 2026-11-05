@@ -673,7 +673,7 @@ SCHEMA_LAND = (
   status TEXT NOT NULL CHECK (status IN ('queued','running','merged','refused','superseded')),
   code INTEGER, reason TEXT, merge_sha TEXT, audit TEXT, attempts INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL, closed_at TEXT,
-  told_requester TEXT, told_run TEXT,
+  told_at TEXT,
   CHECK ((status IN ('merged','refused','superseded')) = (closed_at IS NOT NULL))
 )""",
     "CREATE UNIQUE INDEX land_request_open ON land_request(program, pr) WHERE status IN ('queued','running')",
@@ -793,11 +793,10 @@ def land_requeue_running(by=None):
         return ids
 
 
-def land_told(rid, who):
-    """Mark the result as delivered to `who` (requester or run)."""
-    col = {"requester": "told_requester", "run": "told_run"}[who]
+def land_told(rid):
+    """Mark a refusal as put in the dashboard inbox."""
     with _land_tx() as db:
-        db.execute(f"UPDATE land_request SET {col}=? WHERE id=? AND {col} IS NULL", (now(), rid))
+        db.execute("UPDATE land_request SET told_at=? WHERE id=? AND told_at IS NULL", (now(), rid))
 
 
 # ---------------------------------------------------------------- what older code left

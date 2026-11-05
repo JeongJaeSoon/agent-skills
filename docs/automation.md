@@ -29,7 +29,7 @@ skills-sync setup disable <이름>         # 끄기
 | `reap-hard` | off | Orca automation `agent-skills reap-hard`(에이전트 없음) | `sync`와 같다. 15분마다 `reap_hard.py run` | `sync`와 같다 |
 | `orch-dash` | off | Orca automation `agent-skills orch-dash`(에이전트 없음) | `sync`와 같다. 10분마다 `dash.py ensure`로 이 스토어의 대시보드 서버를 확인해 내려갔으면 올린다 | `sync`와 같다 |
 | `share-server` | off | LaunchAgent(라벨은 설정 `share-server.label`, 기본 `io.github.jeongjaesoon.share-server`) | `share_server.py install`(KeepAlive로 `serve`, 그 안에서 sandbox-exec 아래 caddy. caddy가 없으면 `brew install caddy`부터. 같은 라벨의 다른 plist는 백업 후 교체) | `share_server.py uninstall` |
-| `land-executor` | off | LaunchAgent `io.github.jeongjaesoon.land-executor` | `land_exec.py install`(agent-skills.db에 `5-land-queue` 단계를 기록한 뒤 1분마다 `round`). 머지 요청은 `orchestrate.land_executor`가 켜진 repo에서만 생긴다. 그 키는 `skills-config`로 따로 켠다 | `land_exec.py uninstall`. 끈 표지(`land-exec-disabled`)를 남기고, 남은 요청은 큐에 그대로 둔다 |
+| `land-executor` | off | Orca automation `agent-skills land-executor`(에이전트 없음) | `sync`와 같다. 1분마다 `land_exec.py round`. 켤 때 agent-skills.db에 `5-land-queue` 단계(`land_exec.py setup`)를 기록한다. 머지 요청은 `orchestrate.land_executor`가 켜진 repo에서만 생긴다. 그 키는 `skills-config`로 따로 켠다 | `sync`와 같다. 남은 요청은 큐에 그대로 둔다 |
 | `watch-prs` | on(설정 키가 있을 때) | Orca automation `agent-skills watch-prs` | `agent-skills.json`에 `prs` 키가 없으면 상태는 "꺼짐(설정 키 없음)"이고 `apply`가 건너뛴다. 있으면 `prs.py schedule --write`로 만든다. 이미 등록돼 있으면 키와 상관없이 켜기만 한다. worktree에서는 거부한다 | `orca automations edit --disabled`. 등록은 남긴다 |
 | `watch-mentions` | on(설정 키가 있을 때) | Orca automation `agent-skills watch-mentions` | `watch-prs`와 같다. 키는 `mentions`, 만드는 명령은 `mentions.py schedule --write` | `orca automations edit --disabled`. 등록은 남긴다 |
 
