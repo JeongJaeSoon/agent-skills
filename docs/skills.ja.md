@@ -1,4 +1,4 @@
-<!-- translated-from: a2200f61b0618e851aefc43bdd5ace0377c3355d -->
+<!-- translated-from: 8d2f4c7a2c07084362f2ee5fa85cbe707e6a2f18 -->
 # スキルカタログ
 
 `agent-skills` プラグインに入っているスキル41個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック16個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
@@ -289,7 +289,7 @@ PR を受け持つスキルとマージする主体:
 - **内容:**
   - `orch stage show [--program P] [--telegram] [--all]` の出力をそのまま送ります。すべて終わったか7日（`stage_idle_d`）変わっていない行は畳んで件数だけを書き、`--all` ならすべて見せます。ある行の PR が board の行にもあれば、`지금` 列にレポートがその行に付けた状態を並べるので、両者が食い違いません。どの欄も切りません（番号付きの注もありません）。表が78列を超えるときは、表の代わりに1行ごとに1本の行（`- 名前 — PR · 머지 ✅ · dev ❌ …`。空の欄は省き、残す欄には欄の名前を付けます）で出します。
   - 段階表（作業 / PR マージ / dev 確認 / prod 確認）は、ダッシュボードの fleet tick が1分ごとに作ります。7日以内に ledger が動いたプログラムごとに、predicate の項目と Run のワーカーカード一つにつき1行です。マージの欄はマージ sha があるときだけ埋め、dev・prod の欄は空けておきます。人やエージェントが確認した欄は `orch stage set <プログラム>/<項目>` で上書きし、その値が生成された値に勝ちます。ダッシュボードでは Stages 画面です。有効なプログラムなのに行がない、または `board.stage_warn_h`（既定は6）時間更新されていなければ、reorient フックがプロンプトごとに1行警告します。
-- **関係:** `brief` の段階表の行が指す先です。記録の規則は `orchestrate` の `references/dashboard.md` の「The stage table」にあります。
+- **関係:** `brief` の段階表の行が指す先です。記録の規則は `orchestrate` の `references/stage-table.md` の「The stage table」にあります。
 
 ### todo
 - **いつ:** 「할 일 보여줘」（予定を見せて）、「보류 큐 보여줘」（保留キューを見せて）、`/agent-skills:todo`。`brief` は予定と保留キューを1行で数えるだけなので、一覧が必要なときに呼びます。

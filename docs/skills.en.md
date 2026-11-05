@@ -1,4 +1,4 @@
-<!-- translated-from: a2200f61b0618e851aefc43bdd5ace0377c3355d -->
+<!-- translated-from: 8d2f4c7a2c07084362f2ee5fa85cbe707e6a2f18 -->
 # Skill catalog
 
 This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 16 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
@@ -287,7 +287,7 @@ Reports completed work, current work, decisions and human-only steps with eviden
 - **What it does:**
   - Sends the output of `orch stage show [--program P] [--telegram] [--all]` as printed. Rows that are all done, or unchanged for 7 days (`stage_idle_d`), are folded into a count; `--all` shows everything. When a row's PR is also on a board row, a `지금` column shows the status the report gives that row, so the two never disagree. It never cuts a cell (and has no numbered footnotes); a table wider than 78 columns goes out as one whole line per row (`- name — PR · 머지 ✅ · dev ❌ …`, empty cells left out and each kept cell named) instead.
   - The dashboard's fleet tick builds the stage table (task / PR merged / dev check / prod check) every minute: for each program whose ledger moved in the last 7 days, one row per predicate item and per worker card in the Run. The merge cell is filled only when there is a merge sha, and the dev and prod cells stay empty. A cell a human or an agent checked is written over with `orch stage set <program>/<item>`, and that value wins over the generated one. On the dashboard it is the Stages screen. When an active program has no rows, or none updated for `board.stage_warn_h` hours (default 6), the reorient hook warns in one line on every prompt.
-- **Related:** Where `brief`'s stage-table line points. The recording rules are in `orchestrate`'s `references/dashboard.md`, "The stage table".
+- **Related:** Where `brief`'s stage-table line points. The recording rules are in `orchestrate`'s `references/stage-table.md`, "The stage table".
 
 ### todo
 - **When:** "할 일 보여줘" (show the to-dos), "보류 큐 보여줘" (show the on-hold queue), `/agent-skills:todo`. `brief` only counts to-dos and the on-hold queue in one line, so call this when the list is needed.
