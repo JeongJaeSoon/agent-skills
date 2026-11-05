@@ -6,6 +6,7 @@
   "repository": "https://github.com/JeongJaeSoon/agent-skills",
   "license": "MIT",
   "keywords": ["pstack", "orca", "linear", "orchestration", "code-review"],
+  "types": "./types/index.d.ts",
   "userConfig": {
     "language": {
       "type": "string",
