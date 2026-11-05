@@ -2,13 +2,14 @@
 
 `skills/reap-resources/scripts/pressure.py`가 모델 없이 3분마다 머신을 재고, 높으면 reap-resources가 정리 대상으로 올린 것부터 정리한다. 새 무거운 작업은 `hooks/pressure_gate.py`가 시작 전에 막는다. 규칙은 [reap-resources SKILL.md](../skills/reap-resources/SKILL.md)의 "Pressure" 절에 있다.
 
-## 왜 Orca automation이 아니라 LaunchAgent인가
+## 왜 에이전트 없는 Orca automation인가
 
-[automation.md](automation.md)의 기본은 Orca automation + precheck다. 이 감시는 다음 이유로 preview-watch처럼 LaunchAgent로 돌린다.
+예전에는 LaunchAgent였다. 엔드포인트 보안 에이전트가 Orca 터미널 아래에서 도는 `launchctl bootout`을 SIGKILL로 막아 `orch db migrate`가 멈춘 일이 있어, 주기 작업을 Orca automation으로 옮겼다([automation.md](automation.md#에이전트-없이-도는-주기-작업)).
 
 - 할 일이 모두 결정적이다. 측정, `reap.py scan`·`reap --plan`, `orca orchestration send` 한 통이면 끝나고 모델이 판단할 것이 없다.
-- 모델 세션을 띄우는 것 자체가 부하다. 위험 단계에서 Claude 세션을 하나 더 띄우면 막으려던 일을 키운다.
-- 주기가 짧다. 3분 주기 automation은 정상인 회차마다 "건너뜀" 기록을 하루 480개 남긴다.
+- 모델 세션을 띄우는 것 자체가 부하다. 위험 단계에서 Claude 세션을 하나 더 띄우면 막으려던 일을 키운다. 그래서 `orca_job.py`가 precheck 안에서 `round`를 직접 돌리고 항상 exit 1로 끝내, 에이전트는 한 번도 뜨지 않는다.
+- 주기가 짧다. 3분 주기는 하루 480회차인데 Orca는 자동화마다 최근 100개만 남기므로 쌓이지 않는다. 실패는 `skipped_precheck`에 묻히므로 `jobs/pressure-watch.json`과 `setup-pc` 점검으로 본다.
+- Orca 앱이 꺼져 있으면 돌지 않는다. 훅이 보는 `round` 샘플이 오래되면 `sample_fresh_minutes`가 판정에서 뺀다.
 
 ## 판정 규칙
 
@@ -63,6 +64,21 @@
 시간 차이도 있다. 판정은 `mem_free_pct`를 그 자리에서 읽고 `swapout_pps`는 회차 샘플을 `sample_fresh_minutes`(7분)까지만 쓴다. 부하로 회차가 밀려 샘플이 만료되면 swapout은 판정에서 빠지고 그 자리에서 읽는 값(`mem_free_pct`, `vm_pressure`, load, swap, 디스크, hook이 다시 재는 CPU idle)이 남는다. 40~50 같은 높은 `mem_free_pct` 임계는 그때의 독립 방어선이다. 다만 이 기록에서는 그런 회차가 없었고, 폭주를 swapout으로 정의했으므로 위의 포착 수는 두 지표가 같은 현상을 보는지만 말해 줄 뿐 독립 검증이 아니다.
 
 **결론**: 기본값은 바꾸지 않는다. `mem_free_pct`의 20·10은 이 기록에서 한 번도 닿지 않아 오탐도 미탐 개선도 없다. 40~50으로 올려도 이 기록에서는 새로 잡는 행이 없다. 시작을 여닫는 실질 지표는 `swapout_pps`이고, 20·10은 정의가 다른 이 값으로 "13GB 여유"를 약속하지 않는 안전망으로 남긴다. 위의 근거 문장은 이 검토로 고쳤다. 한계: 기록이 24시간뿐이고 폭주가 3번이며 anonymous+wired와 swap 증가율 대안은 재현할 값이 없었다. 새 필드가 쌓이면(일주일 이상, 폭주 여러 번) 다시 본다. 다시 볼 때 바꾸려면 `reap.pressure.mem_free_pct`에 `[50, 40]`처럼 적는다. 기본값은 건드리지 않는다.
+
+### 대시보드 PC 부하 패널의 지표
+
+패널의 큰 숫자는 호스트 지표 대시보드와 같은 정의를 쓰고, 단위는 GiB(1024³바이트)로 통일한다. 판정은 위 표의 지표와 임계값 그대로이며 패널에 새 임계값은 없다.
+
+| 타일 | 큰 숫자 | 상태를 정하는 지표 | 좋은 방향 |
+|---|---|---|---|
+| CPU 사용률 | 100 − `cpu_idle_pct` (%) | `load_per_cpu` 1.3·2.0. 위험은 CPU idle이 `load_idle_pct` 이하일 때만 | 낮을수록 좋음 |
+| 사용 메모리 | `mem_active_wired_gb`: `vm_stat`의 (Pages active + Pages wired down) × 페이지 크기 ÷ 1024³ | `mem_free_pct` 20·10 이하 | 낮을수록 좋음 |
+| 디스크 여유 | `disk_free_gb`: `$HOME` 볼륨 여유 ÷ 1024³ | `disk_free_gb` 50·20 이하 | 높을수록 좋음 |
+| Docker CPU | `docker_cpu_pct` | `docker_cpu_pct` 50 (경고만) | 낮을수록 좋음 |
+
+CPU 사용률은 직전 회차 사이 CPU tick 차이라 회차 간격(`interval`, 기본 3분) 평균이고, 보조 줄이 "약 3분 평균"으로 밝힌다(분은 `interval`에서 읽고, 실제 간격은 `interval`의 3배까지 달라질 수 있어 "약"을 붙인다). 첫 회차나 공백 뒤처럼 회차 간 값이 없어 그 자리에서 잰 값(`idle_live`)이면 평균이 아니므로 "순간값(회차 간 값 없음)"으로 쓴다. 메모리·디스크·Docker CPU는 회차 시점에 읽은 값이고 회차 간 평균이 아니다.
+
+판정에 쓰는 값(load/CPU, 회수 가능 %)은 타일 아래 보조 줄에 내렸다. 차트의 세로 눈금은 그려진 값의 범위로 잡고, 임계선이 그 밖이면 선 대신 "(범위 밖)"으로만 적는다.
 
 ### 테스트 슬롯과 새 카드 턴 상한
 

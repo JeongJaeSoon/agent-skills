@@ -18,7 +18,7 @@ Usage:
                      JSON for the dashboard: the last round's level and metrics, the thresholds, the queue, and one
                      point per round over the last H hours (default 6, at most 24). Reads files only, measures nothing
   pressure.py install [--here] | uninstall | status
-                     macOS LaunchAgent running `round` every `interval` seconds
+                     legacy macOS LaunchAgent; setup runs `round` as the pressure-watch Orca automation
 
 No model is called. Thresholds live under "reap" → "pressure" in ~/.claude/agent-skills.json (DEFAULTS); each is
 [warn, danger], a danger of null (or inf) meaning warn only. check and the hook judge what `round` last sampled
@@ -510,6 +510,7 @@ def history_report(cfg, hours=6, now=None):
             "thresholds": {k: [t if t is None or math.isfinite(float(t)) else None for t in cfg[k][:2]]
                            for k, _ in CHECKS},
             "higher_worse": {k: higher for k, higher in CHECKS},
+            "load_idle_pct": cfg["load_idle_pct"],
             "queue": [{k: e.get(k) for k in ("id", "what", "why", "state", "added", "deadline")}
                       for e in sorted(q.values(), key=lambda e: e["added"]) if e["state"] in ("waiting", "retrying")],
             "series": history_read(now - hours * 3600)}
