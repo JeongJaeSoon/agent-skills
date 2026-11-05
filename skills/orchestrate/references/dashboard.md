@@ -381,7 +381,7 @@ State lives outside every repository, in `$ORCH_FLEET_STATE` or `~/.local/state/
 | `stages.json`, `stages-auto.json` | The stage table: what `orch stage` recorded, and the rows each tick generates per program (The stage table, above) |
 | `jobs.json` | Each orch-dash job's last run (orch-dash jobs, above) |
 | `sends.jsonl`, `adoption.jsonl` | Send and prompt-answer attempts; adoption writes and undos |
-| `prompts/` | The latest permission request per terminal, from `hooks/permission.py`; dropped after a day or once answered |
+| `prompts/` | The latest permission request per terminal, from `hooks/permission.py`; dropped after 2 hours or once answered; hidden while Orca does not list its terminal (a record under 5 minutes old is shown anyway) |
 | `subagents.jsonl`, `.1`, `.lock` | Each subagent start and stop `hooks/subagent_log.py` observed (Subagents, above); past 1 MiB the file is copied to `.1` and keeps only its open starts of the last 7 days |
 | `avatars/` | Reviewer avatars |
 
