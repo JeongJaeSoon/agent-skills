@@ -1013,12 +1013,7 @@ function briefHtml(text, tableRows = [], placed = new Set(), listRows = {}, clos
       // A label that is not one row's, in the reply and in the drawn table both (a lead's name over its sub-tasks in
       // another repository may equal one of them), gets no button: a wrong row's Done is worse than none.
       const tally = (xs) => xs.reduce((m, x) => m.set(x, (m.get(x) || 0) + 1), new Map());
-      // A name still cut to `head…` (a reply from a server that sends no `full` yet) is the one reply label it starts.
-      const known = ((acts && acts.rows) || []).map((x) => x.label);
-      const labels = body.map((r) => {
-        const l = rowLabel(r[1] || ""), pre = l.endsWith("…") && known.filter((k) => k.startsWith(l.slice(0, -1)));
-        return !pre || !pre.length ? l : pre.length === 1 ? pre[0] : l + "\0";  // several share the head: no button, never a wrong one
-      });
+      const labels = body.map((r) => rowLabel(r[1] || ""));
       const count = tally(((acts && acts.rows) || []).map((x) => x.label)), drawnCount = tally(labels);
       const byLabel = new Map(((acts && acts.rows) || []).filter((x) => (x.ack || x.done) && count.get(x.label) === 1)
         .map((x) => [x.label, x]));
