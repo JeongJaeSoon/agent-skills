@@ -33,7 +33,7 @@ def term(handle, agent, silent_s, screen=None):
 
 
 def fake(branch_prs=(), terminals=(), local_landed=False, compare=None, ahead="", remote_log="", patches=None,
-         status="", calls=None):
+         status="", calls=None, behind_pr=False):
     """A runner answering the commands gather() issues. compare: GitHub's ahead_by, or "404"."""
     screens = {t["handle"]: t.pop("_screen") for t in terminals}
     patches = patches or {}
@@ -53,6 +53,8 @@ def fake(branch_prs=(), terminals=(), local_landed=False, compare=None, ahead=""
             if "symbolic-ref" in cmd:
                 return "origin/main\n"
             if "merge-base" in cmd:
+                if "--is-ancestor" in cmd and cmd[-1] == PRHEAD:
+                    return "" if behind_pr else None
                 return "" if (cmd[-1] == "origin/main" and local_landed) else None
             if "remote" in cmd:
                 return "https://github.com/acme/app.git\n"
@@ -261,6 +263,27 @@ assert v[0] == cards.KEEP and "Claude 세션이 있음" in v[1], v
 v = verdict(m, local_landed=True, status=" M a.py\n", terminals=[term("a1", True, 20 * 60, done)])
 assert v[0] == cards.KEEP and "변경" in v[1], v
 
+# Class 3: a card whose PR another card carries on. The open PR keeps this one forever otherwise. Only the facts together
+# (no terminal, clean, nothing local, HEAD behind the PR's head, another card AT the PR's head) make it a question for
+# a person: ASK, never a delete. A missing fact leaves it the plain keep.
+THEIRS = "/work/app/other-card"
+handed = lambda **kw: verdict(machine(prs=OPEN_PRHEAD, heads={THEIRS: PRHEAD}, **kw.pop("m", {})),  # noqa: E731
+                              branch_prs=[{**PR, "state": "OPEN"}], terminals=kw.pop("terminals", []), behind_pr=True, **kw)
+OPEN_PRHEAD = {"acme/app#7": {"state": "OPEN", "headRefOid": PRHEAD}}
+v = handed()
+assert v[0] == cards.ASK and "other-card" in v[1] and v[2] == [], v
+plain = verdict(machine(prs=OPEN_PRHEAD), branch_prs=[{**PR, "state": "OPEN"}], terminals=[], behind_pr=True)
+assert plain[0] == cards.KEEP and "열린 PR" in plain[1], "no other card at the head: the plain keep"
+assert verdict(machine(prs=OPEN_PRHEAD, heads={THEIRS: HEAD}), branch_prs=[{**PR, "state": "OPEN"}], terminals=[], behind_pr=True)[0] == cards.KEEP
+assert verdict(machine(prs=OPEN_PRHEAD, heads={THEIRS: PRHEAD}), branch_prs=[{**PR, "state": "OPEN"}], terminals=[]) [0] == cards.KEEP, \
+    "HEAD not behind the PR's head: its own work"
+assert handed(status=" M f.py\n")[0] == cards.KEEP, "uncommitted work"
+assert handed(ahead=HEAD + "\n")[0] == cards.KEEP, "a commit only here"
+assert handed(terminals=[term("t1", True, 2 * 3600)])[0] == cards.CLOSE, "a terminal left: the terminal rule, not this one"
+assert handed(m={"rows": {42: row(42, "python3 serve.py")}, "cwd_of": {42: CARD}})[0] == cards.KEEP, "a process in the card"
+assert verdict(machine(prs=OPEN_PRHEAD, heads={CARD: PRHEAD}), branch_prs=[{**PR, "state": "OPEN"}], terminals=[], behind_pr=True)[0] == cards.KEEP, \
+    "the card itself at the PR's head is no other card"
+
 # F3: an agent screen that could not be read may hide a question: the card stays, whatever else says it is done.
 v = verdict(machine(prs=MERGED), branch_prs=[PR], terminals=[term("a1", True, 2 * 3600, "UNREADABLE")])
 assert v[0] == cards.KEEP and "화면을 읽지 못함" in v[1], v
@@ -274,6 +297,38 @@ parked = lambda: dict(branch_prs=[PR], terminals=[term("a1", True, 2 * 3600)])
 assert verdict(machine(prs=MERGED), **parked())[0] == cards.REMOVE
 v = verdict(machine(prs=MERGED, patrol={CARD: "run"}), **parked())
 assert v[0] == cards.KEEP and "orch patrol" in v[1] and "Run 워커" in v[1], v
+# Class 4: a patrol verdict is a reading of a terminal. Once the card has none (the lead released it, the janitor closed
+# it), a `working` or `run` verdict up to an hour old is the terminal's last word, not a live session: the rest of the
+# rule decides. What patrol cannot tell (parked, unknown) or what waits on a human still keeps a card with no terminal.
+bare = dict(branch_prs=[PR], terminals=[])
+for state in ("working", "run"):
+    assert verdict(machine(prs=MERGED, patrol={CARD: state}), **bare)[0] == cards.REMOVE, state
+    assert verdict(machine(prs=MERGED, patrol={CARD: state}), **parked())[0] == cards.KEEP, "a terminal is still there"
+for state in ("waiting", "parked", "unknown"):
+    assert verdict(machine(prs=MERGED, patrol={CARD: state}), **bare)[0] == cards.KEEP, state
+# ... and the rest of the rule still runs: a stale verdict never lifts a dirty tree, an unpushed commit or a live process.
+assert verdict(machine(prs=MERGED, patrol={CARD: "run"}), branch_prs=[PR], terminals=[], status=" M f.py\n")[0] == cards.KEEP
+assert verdict(machine(prs=MERGED, patrol={CARD: "run"}, rows={42: row(42, "python3 serve.py")}, cwd_of={42: CARD}), **bare)[0] == cards.KEEP
+MERGED_BEHIND = {"acme/app#7": {"state": "MERGED", "headRefOid": PRHEAD}}  # HEAD is a step behind the PR's head
+local_commit = dict(branch_prs=[PR], terminals=[], behind_pr=True, ahead=HEAD + "\n")
+for state in ("working", "run"):
+    v = verdict(machine(prs=MERGED_BEHIND, patrol={CARD: state}), **local_commit)
+    assert v[0] == cards.KEEP and "원격에 없는 커밋" in v[1], (state, v)  # a stale verdict never lifts an unpushed commit
+    # An open PR keeps the card with or without the verdict; the stale verdict adds nothing once no terminal is left.
+    v = verdict(machine(prs=OPEN, patrol={CARD: state}), branch_prs=[{**PR, "state": "OPEN"}], terminals=[])
+    assert v[0] == cards.KEEP and "열린 PR" in v[1], (state, v)
+    # A Claude process in the card with no Orca terminal (headless, another tool) is a session patrol saw working: it
+    # keeps the card as the verdict did while a terminal was there, however quiet its transcript is.
+    v = verdict(machine(prs=MERGED, patrol={CARD: state}, rows={42: row(42, "claude")}, cwd_of={42: CARD}), **bare)
+    assert v[0] == cards.KEEP and "순찰 판정" in v[1], (state, v)
+# patrol_states: a card both lists name keeps the stronger reason, parked or unknown, over working or run.
+reap.STATE_old = reap.STATE
+reap.STATE = pathlib.Path(tmp) / "state-merge"
+reap.STATE.mkdir()
+(reap.STATE / "patrol-verdicts.json").write_text(json.dumps(
+    {"t": NOW, "cards": {CARD: "working"}, "activity": {CARD: {"state": "parked", "why": "x"}}}))
+assert reap.patrol_states(NOW, activity=True) == {CARD: "parked"}
+reap.STATE = reap.STATE_old
 # read_machine takes m["patrol"] from patrol-verdicts.json itself, once per read.
 stubs = {n: getattr(reap, n) for n in ("orca_workers", "processes", "cwds", "orca_json", "pr_reader", "transcript_quiet",
                                         "STATE", "patrol_states")}
@@ -481,6 +536,15 @@ v = verdict(machine(prs=MERGED, **recovering), branch_prs=[PR], status=" M a.py\
 assert v[0] == cards.KEEP and "d_old" in v[1], v
 # Nothing left to lose once the PR merged and the tree is clean: the card is cleaned as before.
 assert verdict(machine(prs=MERGED, **recovering), branch_prs=[PR])[0] == cards.REMOVE
+# Right after an Orca restart its terminals are gone until the resume, and an investigation card (no PR, HEAD on the
+# base branch, nothing changed) has nothing in git for the resume to go on with but the directory: it stays. A card
+# whose PR is closed unmerged, or whose merged PR shipped the work, is cleaned as before.
+investigation = dict(branch_prs=[], terminals=[], local_landed=True)
+v = verdict(machine(**recovering), **investigation)
+assert v[0] == cards.KEEP and "d_old" in v[1], v
+assert verdict(machine(recovering={}), **investigation)[0] == cards.REMOVE, "no dispatch waiting: the old verdict"
+assert verdict(machine(prs={"acme/app#7": {"state": "CLOSED", "headRefOid": HEAD}}, **recovering),
+               branch_prs=[{**PR, "state": "CLOSED"}], terminals=[])[0] == cards.REMOVE
 # A card whose Dispatch is not waiting for a resume keeps the old verdict.
 v = verdict(machine(prs=OPEN, recovering={}), branch_prs=[{**PR, "state": "OPEN"}], terminals=[term("t1", True, 2 * 3600)])
 assert v[0] == cards.CLOSE, v

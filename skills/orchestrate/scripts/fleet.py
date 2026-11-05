@@ -2175,7 +2175,7 @@ class Fleet:
         import tidy
         details = {k: e["detail"] for k, e in self.prs.items() if e.get("detail")}
         held = held_prs(board_open(), tidy.closed(), details, now,
-                        tidy.cards_of(read_json(state_dir() / "state.json", {}), details), why := {})
+                        tidy.cards_of(read_json(state_dir() / "state.json", {}), details), why := {}, me=self.me)
         for i in items:
             if i.get("source") == "github" and i.get("pr") in held:
                 i["held"], i["held_todo"] = held[i["pr"]], why[i["pr"]][0] == "do"
@@ -2517,13 +2517,15 @@ def todo_when(t, now):
     return " · ".join(x for x in todo_parts(t, now) if x)
 
 
-def held_prs(store, shut, prs, now, cards=None, why=None):
+def held_prs(store, shut, prs, now, cards=None, why=None, me=None):
     """PR key -> the hold, for each PR a held board item or a to-do names in its title (held_refs). The hold lifts
     when the item is dropped or closed (tidy), when a to-do's time comes (todo_come), or when a held item's --due or
     the date in its trigger comes or, with no date, every PR its trigger names has merged. cards: tidy.cards_of().
+    The owner's own to-do does not lift when its time comes: the owner's answer is what the PR waits for, so only
+    closing it does (me: the owner's login, for a to-do whose who is that login).
     why, a dict, gets PR key -> (the hold's kind, "later" or "do"; the moment it names: a to-do's first date, a held
     item's --due or trigger date, else None)."""
-    import tidy
+    import rowstate, tidy
     out = {}
     items = [("later", l, l["trigger"]) for l in store.get("later") or []]
     items += [("do", t, t.get("after") or "") for t in store.get("todo") or []]
@@ -2531,7 +2533,7 @@ def held_prs(store, shut, prs, now, cards=None, why=None):
         if l["id"] in shut:
             continue
         if kind == "do":
-            if todo_come(l, now, prs, cards):
+            if todo_come(l, now, prs, cards) and not rowstate.is_owner(l.get("who"), me):
                 continue
             when = todo_start(l, now)
         else:

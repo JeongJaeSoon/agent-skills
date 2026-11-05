@@ -137,6 +137,18 @@ assert held["status"] == "held", held                                # G1 hold �
 G2 = G1 + [{"ev": "gate_opened", "gate": "g2"}]
 assert gate(G2, {"g2"})["status"] == "owner"                         # held item closed, G2 open: 🙋
 assert gate(G2 + [{"ev": "approved"}], set())["status"] == "moving"  # G2 approved: 🔄
+# A conflict on a PR nobody works on is ❔, not 🔄: "moving" claims an agent is at it. A working agent, a conflict-free
+# PR and a recorded hold keep their own state.
+dirty = {**READY, "merge_state": "DIRTY"}
+at_rest = lambda phase: [{"id": "wt", "phase": phase, "terminals": []}]  # noqa: E731
+sess_row = {**row, "session": "wt"}
+got = rowstate.judge(sess_row, facts({"octo/app#1": dirty}, sessions=at_rest("idle")))
+assert got["status"] == "check" and "충돌 · 세션 없음" in got["next"], got
+assert rowstate.judge(sess_row, facts({"octo/app#1": dirty}, sessions=at_rest("working")))["status"] == "moving"
+assert rowstate.judge(sess_row, facts({"octo/app#1": {**READY, "ci": "pending"}}, sessions=at_rest("idle")))["status"] == "moving"
+assert rowstate.judge(sess_row, facts({"octo/app#1": dirty}, sessions=at_rest("idle"), holds={"octo/app#1": "다음 주"}))["status"] == "held"
+# A held/waiting board row with no session is as quiet: its conflict is just as unattended.
+assert rowstate.judge({**row, "status": "held"}, facts({"octo/app#1": dirty}))["status"] == "held"
 # The pressure queue: a machine wait holds the row; one past its deadline, or failed, is the agent's to look at.
 q = lambda st, late=False: {"wt": [rowstate.queue_state({"state": st, "what": "빌드", "deadline": T.timestamp() + (-60 if late else 600)}, T)]}  # noqa: E731
 sess = [{"id": "wt", "phase": "working", "terminals": []}]

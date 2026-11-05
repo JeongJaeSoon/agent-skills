@@ -550,6 +550,7 @@ def patrol_working(now=None):
     return patrol_read(now, activity=True) or set()
 
 
+PATROL_TERMINAL_READ = ("working", "run")  # verdicts read off a terminal: with none left, an hour-old one is not a live session
 PATROL_KEEP_ACTIVITY = ("parked", "unknown")  # v2 `activity`: a session that wakes itself, or one patrol could not tell
 
 
@@ -576,7 +577,7 @@ def patrol_states(now=None, activity=False):
                 return None  # an activity row that cannot be read is no proof the card may go
             for p, x in act.items():
                 if x["state"] in PATROL_KEEP_ACTIVITY:
-                    kept.setdefault(real(p), x["state"])
+                    kept[real(p)] = x["state"]  # the stronger reason wins over a working or run the same round also gave
         return kept
     except (ValueError, TypeError, AttributeError):
         return None

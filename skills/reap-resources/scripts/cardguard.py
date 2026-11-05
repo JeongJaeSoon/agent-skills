@@ -172,6 +172,7 @@ def observe(path):
     res = reap.orca_json("terminal", "list", "--worktree", f"path:{path}")
     f["terminals"] = res["terminals"] if isinstance(res, dict) and not res.get("truncated") \
         and isinstance(res.get("terminals"), list) else None
+    f["claude"] = attempt(lambda: claude_in(path, reap.processes(), reap.cwds())[1])  # None: not seen, which keeps the card
     agents = [t["handle"] for t in f["terminals"] or () if t.get("agentIdentity")]
     if agents:  # a session with no agent terminal left can neither answer a prompt nor wake itself
         prog = attempt(lambda: _orch("prog"))
@@ -202,7 +203,10 @@ def check(f, head, handles, final=False, ino=None):
         return False, handed_off(refused["path"])
     if f.get("patrol") is None:
         return False, "순찰 판정 파일을 읽지 못함"
-    if f["patrol"]:
+    # A working or run verdict is read off a session: a card with no terminal (none to close) and no Claude process,
+    # seen and not merely unread, is not that session.
+    if f["patrol"] and not (f["patrol"] in reap.PATROL_TERMINAL_READ and not f.get("terminals") and not handles
+                            and f.get("claude") is not None and not f["claude"]):
         return False, reap.patrol_hold(f["patrol"])
     if not f.get("head"):
         return False, "HEAD 를 읽지 못함"

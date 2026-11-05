@@ -39,6 +39,19 @@ assert not check(final=True, terminals=[{"handle": "t1"}, {"handle": "n2"}])[0]
 assert not check(final=True, patrol=True)[0] and not check(final=True, head="c" * 40)[0]
 assert check(handles=("t1", "s1", "gone"), final=True)[0], "a handle already closed is fine"
 
+# A working or run verdict is read off a terminal: with no terminal and none to close it no longer holds the card, and
+# every other state still does, as does one with a terminal.
+bare = dict(terminals=[], waits=None, screens=None, motion=None, claude=set())
+for state in ("working", "run"):
+    assert check(handles=(), patrol=state, **bare)[0], state
+    assert not check(handles=(), patrol=state, **{**bare, "claude": {42}})[0], "a Claude process in the card"
+    assert not check(handles=(), patrol=state, **{**bare, "claude": None})[0], "processes not seen"
+    assert not check(handles=(), patrol=state, **{k: v for k, v in bare.items() if k != "claude"})[0], "no reading at all"
+    assert not check(patrol=state)[0], "a terminal is there"
+    assert not check(handles=("t1",), patrol=state, **bare)[0], "a terminal is about to be closed"
+for state in ("waiting", "parked", "unknown"):
+    assert not check(handles=(), patrol=state, **bare)[0], state
+
 # observe(): each reader that fails is None, which check() turns into a keep.
 saved = reap.patrol_states, reap.run, reap.orca_json, cardguard._orch, cardguard.parked
 reap.patrol_states = lambda now=None, activity=False: {}
@@ -50,6 +63,19 @@ cardguard.parked = lambda path: False
 f = cardguard.observe("/w/x")
 assert f["head"] == H and f["waits"] == {"t1": None} and f["screens"] == {"t1": ["❯ "]} and not f["patrol"], f
 assert cardguard.guard("/w/x", H, ["t1", "s1"]) == (True, "확인함")
+
+# observe() carries whether a Claude process runs in the card (present, absent, or not seen) into the guard: with a
+# working verdict and no terminal, only a card seen to have none may go.
+saved_proc = reap.processes, reap.cwds, reap.orca_json, reap.patrol_states
+reap.orca_json = lambda *a: {"terminals": []}
+reap.patrol_states = lambda now=None, activity=False: {reap.real("/w/x"): "working"}
+reap.processes, reap.cwds = (lambda: {7: {"cmd": "claude", "ppid": 1}}), (lambda: {7: "/w/x"})
+assert cardguard.observe("/w/x")["claude"] == {7} and not cardguard.guard("/w/x", H, [])[0]
+reap.processes, reap.cwds = (lambda: {}), (lambda: {})
+assert cardguard.observe("/w/x")["claude"] == set() and cardguard.guard("/w/x", H, [])[0]
+reap.processes = lambda: (_ for _ in ()).throw(OSError("ps failed"))
+assert cardguard.observe("/w/x")["claude"] is None and not cardguard.guard("/w/x", H, [])[0]
+reap.processes, reap.cwds, reap.orca_json, reap.patrol_states = saved_proc
 
 
 def boom(*a, **k):
