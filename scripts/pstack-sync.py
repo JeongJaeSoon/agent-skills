@@ -39,7 +39,7 @@ def show(ref, path):
     """The file's bytes at ref, or None when ref has no such path. The cache is a blob:none clone, so a blob may
     still need the network: that failure exits here instead of reading as a deleted file that --write would drop."""
     if ref not in TREES:
-        TREES[ref] = set(out("ls-tree", "-r", "--name-only", ref).splitlines())
+        TREES[ref] = set(filter(None, out("ls-tree", "-r", "-z", "--name-only", ref).split("\0")))  # -z: no quoting
     return git("show", f"{ref}:{path}").stdout if path in TREES[ref] else None
 
 
@@ -57,7 +57,8 @@ def compare(m, vendor, target):
             rows.append(("+".join(states), path))
         fresh[path] = new
     skill_dirs = {p.split("/")[1] for p in fresh if p.startswith("skills/")}
-    for name in out("diff", "--name-only", "--no-renames", "--diff-filter=A", pin, target, "--", f"{up}/skills").split():
+    added = out("diff", "-z", "--name-only", "--no-renames", "--diff-filter=A", pin, target, "--", f"{up}/skills")
+    for name in filter(None, added.split("\0")):
         rel = name[len(up) + 1:]
         if rel not in fresh and (rel.endswith("/SKILL.md") or rel.split("/")[1] in skill_dirs):
             rows.append(("new", rel))

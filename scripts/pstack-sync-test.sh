@@ -14,12 +14,14 @@ put "$T/up/pstack/skills/a/SKILL.md" '---\nname: a\n---\nline1\n'
 put "$T/up/pstack/skills/b/SKILL.md" '---\nname: b\n---\nx1\n'
 put "$T/up/pstack/.cursor-plugin/plugin.json" '{"version": "1.0.0"}\n'
 put "$T/up/pstack/skills/z/SKILL.md" '---\nname: z\n---\nnot vendored\n'
+put "$T/up/pstack/skills/a/references/가이드.md" 'a path git quotes unless -z\n'
 g add -A; g commit -qm one; p1=$(g rev-parse HEAD)
 g remote add origin "$T/up"
 cat > "$T/repo/vendor/pstack/manifest.json" <<EOF
 {"remote":"x","remote_slug":"cursor/plugins","upstream_root":"pstack","pin":"$p1","files":[
  {"upstream":"skills/a/SKILL.md","local":"skills/a/SKILL.md","mode":"adapted"},
- {"upstream":"skills/b/SKILL.md","local":"skills/b/SKILL.md","mode":"verbatim"}]}
+ {"upstream":"skills/b/SKILL.md","local":"skills/b/SKILL.md","mode":"verbatim"},
+ {"upstream":"skills/a/references/가이드.md","local":"skills/a/references/가이드.md","mode":"verbatim"}]}
 EOF
 echo "our own a" > "$T/repo/skills/a/SKILL.md"
 sync() { (cd "$T/repo" && PSTACK_CACHE="$T/up" AGENT_SKILLS_STATE="$T/state" PSTACK_NOTIFY_CMD="${NOTIFY:-true}" \
@@ -28,7 +30,7 @@ expect() { grep -q -- "$1" <<<"$2" || { echo "FAIL: expected '$1' in:"; echo "$2
 pin() { python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['pin'])" "$T/repo/vendor/pstack/manifest.json"; }
 
 # A missing copy is drift; --write at the pin makes the pristine copy, and then it matches.
-out=$(sync --write); expect "drift          skills/a/SKILL.md" "$out"; expect "wrote 2 file(s)" "$out"
+out=$(sync --write); expect "drift          skills/a/SKILL.md" "$out"; expect "wrote 3 file(s)" "$out"
 cmp -s "$T/repo/vendor/pstack/skills/b/SKILL.md" "$T/up/pstack/skills/b/SKILL.md"
 out=$(sync --notify); expect "matches upstream" "$out"
 [ ! -e "$T/state/pstack-upstream.json" ] || { echo "FAIL: notified with nothing to report"; exit 1; }
@@ -62,10 +64,18 @@ if grep -q "notified" <<<"$out"; then echo "FAIL: notified twice for one commit"
 [ "$(tail -n 1 <<<"$out")" = "pstack upstream: 5 file(s) differ from vendor/pstack (pin ${p1:0:7}, upstream ${p2:0:7})" ]
 
 # A hand refresh rewrites the copies, drops the deleted file, advances the pin and leaves skills/ alone.
-out=$(sync --write); expect "wrote 1 file(s), dropped 1, pin -> ${p2:0:12} (version 1.1.0)" "$out"
+out=$(sync --write); expect "wrote 2 file(s), dropped 1, pin -> ${p2:0:12} (version 1.1.0)" "$out"
 grep -q '^line1 up$' "$T/repo/vendor/pstack/skills/a/SKILL.md"
 [ ! -e "$T/repo/vendor/pstack/skills/b/SKILL.md" ] && [ "$(pin)" = "$p2" ]
 [ "$(cat "$T/repo/skills/a/SKILL.md")" = "our own a" ]
 # "new" counts from the pin: once the pin moves past them, unvendored files are no longer reported.
 out=$(sync); expect "matches upstream" "$out"
+
+# A blob the cache cannot read (a blob:none clone offline) stops the run; it is never read as a deleted file.
+blob=$(g rev-parse "HEAD:pstack/skills/a/SKILL.md")
+command rm -f "$T/up/.git/objects/${blob:0:2}/${blob:2}"
+out=$(sync --write 2>&1) && { echo "FAIL: a missing blob should stop the run"; exit 1; }
+expect "failed" "$out"
+[ -e "$T/repo/vendor/pstack/skills/a/SKILL.md" ] && [ "$(pin)" = "$p2" ]
+grep -q '"skills/a/SKILL.md"' "$T/repo/vendor/pstack/manifest.json"
 echo "pstack-sync: all cases pass"
