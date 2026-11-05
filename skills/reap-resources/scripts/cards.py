@@ -185,9 +185,10 @@ def gather(w, m, run=None):
     if ref and pr is None:
         return {**f, "pr": ref, "pr_unread": f"PR {ref} 상태를 읽지 못함"}
     f.update(pr=ref, state=pr and pr["state"], pr_head=pr and pr.get("headRefOid"))
-    if (d := m.get("recovering", {}).get(p)) and (status or f["state"] == "OPEN"):
-        # Its terminals are the resume's to use, and the tree or PR is the work the resume goes on with.
-        return {**f, "protected": f"복구 전 워커({d})의 카드: 미커밋 변경 또는 열린 PR"}
+    if (d := m.get("recovering", {}).get(p)) and (status or f["state"] == "OPEN" or not ref):
+        # Its terminals are the resume's to use, and the tree, the PR or, with no PR (an investigation), the directory
+        # itself is what the resume goes on with. Only a PR that shipped or closed the work ends the wait.
+        return {**f, "protected": f"복구 전 워커({d})의 카드: 미커밋 변경, 열린 PR 또는 PR 없는 조사 카드"}
     if ref and f["pr_head"] and head != f["pr_head"]:
         # HEAD behind the PR's head is the PR's work; HEAD past it is new work on a reused branch name.
         f["carried"] = run(["git", "-C", p, "merge-base", "--is-ancestor", head, f["pr_head"]]) is not None
@@ -220,7 +221,7 @@ def gather(w, m, run=None):
             except (TypeError, ValueError, KeyError):
                 screen = "unreadable"
         f["terminals"].append({"handle": t["handle"], "agent": agent, "silent": silent, "screen": screen})
-    if stale and f["terminals"]:
+    if stale and (f["terminals"] or f["claude"]):  # a Claude process is the session too, terminal or not
         return {**f, "protected": reap.patrol_hold(stale)}
     return f
 

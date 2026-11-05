@@ -41,9 +41,12 @@ assert check(handles=("t1", "s1", "gone"), final=True)[0], "a handle already clo
 
 # A working or run verdict is read off a terminal: with no terminal and none to close it no longer holds the card, and
 # every other state still does, as does one with a terminal.
-bare = dict(terminals=[], waits=None, screens=None, motion=None)
+bare = dict(terminals=[], waits=None, screens=None, motion=None, claude=set())
 for state in ("working", "run"):
     assert check(handles=(), patrol=state, **bare)[0], state
+    assert not check(handles=(), patrol=state, **{**bare, "claude": {42}})[0], "a Claude process in the card"
+    assert not check(handles=(), patrol=state, **{**bare, "claude": None})[0], "processes not seen"
+    assert not check(handles=(), patrol=state, **{k: v for k, v in bare.items() if k != "claude"})[0], "no reading at all"
     assert not check(patrol=state)[0], "a terminal is there"
     assert not check(handles=("t1",), patrol=state, **bare)[0], "a terminal is about to be closed"
 for state in ("waiting", "parked", "unknown"):

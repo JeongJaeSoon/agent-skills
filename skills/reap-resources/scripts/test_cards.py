@@ -309,6 +309,18 @@ for state in ("waiting", "parked", "unknown"):
 # ... and the rest of the rule still runs: a stale verdict never lifts a dirty tree, an unpushed commit or a live process.
 assert verdict(machine(prs=MERGED, patrol={CARD: "run"}), branch_prs=[PR], terminals=[], status=" M f.py\n")[0] == cards.KEEP
 assert verdict(machine(prs=MERGED, patrol={CARD: "run"}, rows={42: row(42, "python3 serve.py")}, cwd_of={42: CARD}), **bare)[0] == cards.KEEP
+MERGED_BEHIND = {"acme/app#7": {"state": "MERGED", "headRefOid": PRHEAD}}  # HEAD is a step behind the PR's head
+local_commit = dict(branch_prs=[PR], terminals=[], behind_pr=True, ahead=HEAD + "\n")
+for state in ("working", "run"):
+    v = verdict(machine(prs=MERGED_BEHIND, patrol={CARD: state}), **local_commit)
+    assert v[0] == cards.KEEP and "원격에 없는 커밋" in v[1], (state, v)  # a stale verdict never lifts an unpushed commit
+    # An open PR keeps the card with or without the verdict; the stale verdict adds nothing once no terminal is left.
+    v = verdict(machine(prs=OPEN, patrol={CARD: state}), branch_prs=[{**PR, "state": "OPEN"}], terminals=[])
+    assert v[0] == cards.KEEP and "열린 PR" in v[1], (state, v)
+    # A Claude process in the card with no Orca terminal (headless, another tool) is a session patrol saw working: it
+    # keeps the card as the verdict did while a terminal was there, however quiet its transcript is.
+    v = verdict(machine(prs=MERGED, patrol={CARD: state}, rows={42: row(42, "claude")}, cwd_of={42: CARD}), **bare)
+    assert v[0] == cards.KEEP and "순찰 판정" in v[1], (state, v)
 # patrol_states: a card both lists name keeps the stronger reason, parked or unknown, over working or run.
 reap.STATE_old = reap.STATE
 reap.STATE = pathlib.Path(tmp) / "state-merge"
@@ -524,6 +536,15 @@ v = verdict(machine(prs=MERGED, **recovering), branch_prs=[PR], status=" M a.py\
 assert v[0] == cards.KEEP and "d_old" in v[1], v
 # Nothing left to lose once the PR merged and the tree is clean: the card is cleaned as before.
 assert verdict(machine(prs=MERGED, **recovering), branch_prs=[PR])[0] == cards.REMOVE
+# Right after an Orca restart its terminals are gone until the resume, and an investigation card (no PR, HEAD on the
+# base branch, nothing changed) has nothing in git for the resume to go on with but the directory: it stays. A card
+# whose PR is closed unmerged, or whose merged PR shipped the work, is cleaned as before.
+investigation = dict(branch_prs=[], terminals=[], local_landed=True)
+v = verdict(machine(**recovering), **investigation)
+assert v[0] == cards.KEEP and "d_old" in v[1], v
+assert verdict(machine(recovering={}), **investigation)[0] == cards.REMOVE, "no dispatch waiting: the old verdict"
+assert verdict(machine(prs={"acme/app#7": {"state": "CLOSED", "headRefOid": HEAD}}, **recovering),
+               branch_prs=[{**PR, "state": "CLOSED"}], terminals=[])[0] == cards.REMOVE
 # A card whose Dispatch is not waiting for a resume keeps the old verdict.
 v = verdict(machine(prs=OPEN, recovering={}), branch_prs=[{**PR, "state": "OPEN"}], terminals=[term("t1", True, 2 * 3600)])
 assert v[0] == cards.CLOSE, v
