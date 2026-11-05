@@ -1,4 +1,5 @@
 {
+  "modules": ["./brief_pane.tsx"],
   "hooks": {
     "PreToolUse": [
       {
