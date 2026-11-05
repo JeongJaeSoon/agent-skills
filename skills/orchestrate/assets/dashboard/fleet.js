@@ -20,7 +20,6 @@ const FLEET_SECTIONS = [
   { id: "changes", label: "Skill changes", icon: "merge" },
   { id: "tokens", label: "Tokens", icon: "coins" },
   { id: "stats", label: "PR stats", icon: "chart" },
-  { id: "graph", label: "Graph", icon: "graph" },
   { id: "flow", label: "Data flow", icon: "link" },
 ];
 
@@ -80,11 +79,22 @@ const F = { token: null, draft: {}, confirm: null, chat: {}, arm: null, prompt: 
 
 // route() hands over "#/fleet/<section>[/<arg>]"; the only argument is a session id.
 // The Work page's stage table is the Stages page now: an old #/fleet/work link opens it.
-const MOVED = { work: "stages" };
-function fleetSection(section, arg) {
+// A page that folded into another is [section, view]: the old address opens that view of the new page.
+const MOVED = { work: "stages", graph: ["prs", "graph"] };
+function fleetSection(section, arg, hash = location.hash) {
   F.sessionId = section === "session" && arg ? arg : null;
-  section = MOVED[section] || section;
+  const moved = MOVED[section];
+  F.view = (Array.isArray(moved) ? moved[1] : null) || (hash.match(/[?&]view=([a-z]+)/) || [])[1] || null;
+  section = Array.isArray(moved) ? moved[0] : moved || section;
   return F.sessionId ? "session" : FLEET_SECTIONS.some((s) => s.id === section) ? section : "overview";
+}
+// One page, several shapes of the same thing: `#/fleet/<section>?view=<id>`. views is [[id, label], ...], the first
+// the default (its link carries no query). A view the address names but the page lacks falls back to the default.
+const viewOf = (views) => (views.some(([id]) => id === F.view) ? F.view : views[0][0]);
+function viewSwitch(section, views) {
+  const cur = viewOf(views);
+  return `<nav class="view-switch" aria-label="보기">${views.map(([id, label], i) =>
+    `<a href="#/fleet/${section}${i ? `?view=${id}` : ""}" ${id === cur ? 'aria-current="page"' : ""}>${esc(label)}</a>`).join("")}</nav>`;
 }
 const BY_ID = new WeakMap();  // one map per state, not one per rendered row
 const byId = (st) => BY_ID.get(st) || BY_ID.set(st, Object.fromEntries((st.sessions || []).map((s) => [s.id, s]))).get(st);
@@ -129,7 +139,7 @@ function sessionTree(st) {
 function fleetSidebar() {
   const st = S.state;
   const counts = st ? { inbox: (st.items || []).length || null, sessions: (st.sessions || []).length,
-    prs: (st.prs || []).filter((p) => p.state === "OPEN").length || null, stages: stageOpen() || null, todo: todoCount() || null, automations: autoTroubled(st).length || null, monitors: monTroubled(st).length || null, graph: (st.prs || []).filter((p) => p.session).length || null } : {};
+    prs: (st.prs || []).filter((p) => p.state === "OPEN").length || null, stages: stageOpen() || null, todo: todoCount() || null, automations: autoTroubled(st).length || null, monitors: monTroubled(st).length || null } : {};
   $("#section-list").innerHTML = FLEET_SECTIONS.map((s) => `${s.sep ? '<li class="sb-sep" aria-hidden="true"></li>' : ""}<li><a class="nav-item" href="#/fleet/${s.id}"
       ${s.id === S.section ? 'aria-current="page"' : ""} title="${s.label}">${icon(s.icon)}<span class="sb-text">${s.label}</span>
       ${counts[s.id] != null ? `<span class="count">${counts[s.id]}</span>` : ""}</a></li>`).join("");
@@ -702,7 +712,18 @@ function prTable(st, list) {
   return `<table><thead><tr>${head.map(([c, l, cls]) => th("fleet_prs", c, l, cls)).join("")}</tr></thead><tbody>${rows}</tbody></table>`;
 }
 
+const PRS_VIEWS = [["table", "테이블"], ["graph", "그래프"]];
+const PRS_INFO = {
+  table: "Every open PR you authored, in any repository, and every PR a session's branch has. GitHub is read every 30 s while this page is open; a column head sorts.",
+  graph: "Session → pull request → reviewer. Edge colour is the reviewer's latest state; the bar on each PR is its CI. Only sessions with a linked pull request are drawn; a PR that is merged or closed is dimmed.",
+};
 function fleetPrs(st) {
+  const view = viewOf(PRS_VIEWS);
+  return `<div class="view-head"><div><h2>Pull requests</h2><p>${PRS_INFO[view]}</p></div>
+    <div class="aside muted">Updated ${prUpdated(st)}</div></div>
+    ${viewSwitch("prs", PRS_VIEWS)}${view === "graph" ? prsGraph(st) : prsTable(st)}`;
+}
+function prsTable(st) {
   const open = (st.prs || []).filter((p) => p.state === "OPEN"), merged = merged24h(st);
   const f = PR_FILTERS[S.filters.fleet_prs] ? S.filters.fleet_prs : "all";
   const repos = [...new Set(open.map((p) => p.repo))].sort(), repo = repos.includes(S.filters.fleet_prs_repo) ? S.filters.fleet_prs_repo : "all";
@@ -710,9 +731,7 @@ function fleetPrs(st) {
   const groups = {};
   shown.forEach((p) => (groups[p.repo] ||= []).push(p));
   const repoChip = (v, label, n) => `<button class="chip" type="button" data-group="fleet_prs_repo" data-val="${esc(v)}" aria-pressed="${v === repo}">${esc(label)}${n != null ? `<span class="n">${n}</span>` : ""}</button>`;
-  return `<div class="view-head"><div><h2>Pull requests</h2><p>Every open PR you authored, in any repository, and every PR a session's branch has. GitHub is read every 30 s while this page is open; a column head sorts.</p></div>
-    <div class="aside muted">Updated ${prUpdated(st)}</div></div>
-    <div class="toolbar">${chips("fleet_prs", Object.entries(PR_FILTERS).map(([id, [fn, label]]) => [id, label, open.filter(fn).length]), f)}</div>
+  return `<div class="toolbar">${chips("fleet_prs", Object.entries(PR_FILTERS).map(([id, [fn, label]]) => [id, label, open.filter(fn).length]), f)}</div>
     ${repos.length > 1 ? `<div class="chips proj-chips" role="group" aria-label="Repository">${repoChip("all", "All repositories")}${repos.map((r) => repoChip(r, r, open.filter((p) => p.repo === r).length)).join("")}</div>` : ""}
     ${Object.keys(groups).sort().map((r) => `<div class="card table-wrap" data-src="github"><div class="card-head"><h3 class="mono">${esc(r)}</h3><span class="aside">${groups[r].length} open</span></div>${prTable(st, groups[r])}</div>`).join("")
       || '<div class="card"><div class="empty-chart">No open pull request matches.</div></div>'}
@@ -1536,9 +1555,9 @@ function holdsCard(st) {
       : '<div class="empty-chart">Nothing held. Take a shared resource (a browser profile, a login) with <span class="mono">orch hold &lt;resource&gt;</span>.</div>'}</div>`;
 }
 
-function fleetGraph(st) {
-  return `<div class="view-head"><div><h2>Graph</h2><p>Edge colour is the reviewer's latest state; the bar on each PR is its CI. Only sessions with a linked pull request are drawn.</p></div></div>
-    ${projectChips(st)}<div class="card" data-src="github">${relGraph(st)}</div>`;
+// The graph view of Pull requests: a PR no longer open (merged, closed) is dimmed, and a project chip keeps only that project's sessions.
+function prsGraph(st) {
+  return `${projectChips(st)}<div class="card" data-src="github">${relGraph(st)}</div>`;
 }
 
 // A session's started subagents (subagents.jsonl, attached by the collector) as rows under it. Not sessions: no link,
@@ -1870,7 +1889,7 @@ document.addEventListener("pointermove", (e) => {
   else if (F.statTip) { hideTip(); F.statTip = false; }
 });
 document.addEventListener("pointerout", (e) => { if (!e.relatedTarget && F.statTip) { hideTip(); F.statTip = false; } });
-const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, prs: fleetPrs, brief: fleetBrief, stages: fleetStages, todo: fleetTodo, automations: fleetAutomations, monitors: fleetMonitors, sent: fleetSent, skills: fleetSkills, changes: fleetChanges, tokens: fleetTokens, flow: fleetFlow, stats: fleetStats, graph: fleetGraph, sessions: fleetSessions, session: fleetSession, timeline: fleetTimeline };
+const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, prs: fleetPrs, brief: fleetBrief, stages: fleetStages, todo: fleetTodo, automations: fleetAutomations, monitors: fleetMonitors, sent: fleetSent, skills: fleetSkills, changes: fleetChanges, tokens: fleetTokens, flow: fleetFlow, stats: fleetStats, sessions: fleetSessions, session: fleetSession, timeline: fleetTimeline };
 
 document.addEventListener("input", (e) => {
   const key = e.target.id === "chat-input" ? F.sessionId : e.target.dataset.decideInput;
