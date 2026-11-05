@@ -285,6 +285,14 @@ STORES = [
     Store("ownercheck", "S/owner-check.jsonl", {"owner.unrecorded_warn": CANONICAL}, ("owner_check:append",), ("nobody",),
           rule="one row per final reply that named owner items and recorded none: the observation guard.owner_check "
                "reads before it goes to deny"),
+    Store("artifactbackup", "S/artifact-backup/*", {"artifact.backup": CANONICAL},
+          ("artifact_archive:log_error", "artifact_archive:append_row", "artifact_archive:migrate_served_files",
+           "artifact_archive:exclusion_reason", "artifact_archive:make_private", "artifact_archive:write_index",
+           "artifact_archive:record_pending", "artifact_archive:archive", "artifact_archive:start_marker",
+           "artifact_links_stop:locked", "artifact_links_stop:save", "artifact_links_stop:main", "artifact_hooks_cutover:save",
+           "artifact_hooks_cutover:main"), ("nobody",),
+          rule="Artifact backup hooks: the public index and error log, the links still owed per session, in-flight "
+               "markers; copies go to artifact-backup.public_dir and private_dir, which the config names"),
     Store("onboard", "S/onboard-declined.json", {"onboard.declined": CANONICAL}, ("onboard:decline",), ("reorient",)),
     Store("ledger", "S/ledger.jsonl", {"resource.made": CANONICAL}, ("reap:act", "reap:main", "reap:note_stack_dirs"), ("janitor",),
           rule="what agents made, retired when reaped"),

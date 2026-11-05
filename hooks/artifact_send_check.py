@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """PreToolUse hook of the agent-skills plugin: refuse to send a message that names a backed-up Artifact without its
-backup link. Covers the Telegram and Slack send tools and `orca terminal send`, `orca orchestration send|reply` in a
-Bash call (worker_done included), the paths a link pair takes between sessions and to the owner. A page that went
-private, or has no backup, is never demanded a link for.
+backup link. Covers the Telegram send tools and `orca terminal send`, `orca orchestration send|reply` in a Bash call
+(worker_done included), the paths a link pair takes between sessions and to the owner. A page that went private, or has
+no backup, is never demanded a link for.
 
 An orca body is the literal --body or --text, or the file of `--body "$(cat /abs/path)"`, read and never run; a body
-this hook cannot read is let through. Level `guard.artifact_links` in ~/.claude/agent-skills.json: `deny` (default),
-`warn` (a message to the model, the call goes through), or `off`. A check that raises lets the call through and logs
-to guard-errors.jsonl.
+this hook cannot read is let through. Level `guard.artifact_links` in ~/.claude/agent-skills.json: `warn` (default; one
+line to the model and the human, the call goes through), `deny` (only by this key), or `off`. A check that raises lets
+the call through and logs to guard-errors.jsonl.
 """
 import json, os, pathlib, re, sys
 
@@ -17,7 +17,7 @@ import decision_relay, record_check
 from lib import artifact_links as al, config, shell
 
 KEY = "guard.artifact_links"
-SEND_TOOLS = re.compile(r"^mcp__.*(?:telegram.*__(?:reply|send_message)|slack.*__slack_(?:send_message|schedule_message))$", re.I)
+SEND_TOOLS = re.compile(r"^mcp__.*telegram.*__(?:reply|send_message)$", re.I)
 
 
 def orca_bodies(raw):
@@ -51,8 +51,7 @@ def outgoing(data):
 
 def main():
     data = json.load(sys.stdin)
-    cfg = config.load()
-    mode = config.level(cfg, KEY, "deny")
+    mode = al.level()
     if mode == "off":
         return
     owed = []
@@ -65,6 +64,7 @@ def main():
     if mode == "deny":
         out["hookSpecificOutput"].update(permissionDecision="deny", permissionDecisionReason=text)
     else:
+        out["systemMessage"] = text
         out["hookSpecificOutput"]["additionalContext"] = text
     print(json.dumps(out, ensure_ascii=False))
 

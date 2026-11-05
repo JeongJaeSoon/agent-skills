@@ -184,10 +184,11 @@ def stateless(data):
     text = data.get('last_assistant_message')
     if text is None:
         text = read_transcript(data.get('transcript_path'))[0]
-    links = al.owed_links(text)
+    mode = al.level()
+    links = al.owed_links(text) if mode != 'off' else []
     if not links:
         return None
-    if data.get('stop_hook_active'):
+    if mode != 'deny' or data.get('stop_hook_active'):
         return {'systemMessage': 'Artifact backup links were not given to the owner: ' + ', '.join(links)}
     return {'decision': 'block', 'reason': al.reason(links)}
 

@@ -34,7 +34,8 @@ def write_config(cfg):
         json.dump(cfg, f)
 
 
-write_config({'artifact-backup': {'base_url': BASE}})
+DENY = {'artifact-backup': {'base_url': BASE}, 'guard': {'artifact_links': 'deny'}}
+write_config(DENY)
 
 
 def run(script, payload, env=None):
@@ -115,6 +116,11 @@ def denied(out):
 def errors():
     path = os.path.join(STATE_ROOT, 'errors.log')
     return open(path).read() if os.path.exists(path) else ''
+
+
+def al_links(out):
+    ctx = out['hookSpecificOutput']['additionalContext']
+    return [l.split(': ', 1)[1] for l in ctx.splitlines() if l.startswith(('claude.ai link:', 'backup link:'))]
 
 
 def latest_url(folder):
@@ -350,8 +356,6 @@ full = f'Plan: {CLAUDE} backup: {PLAN_LINK}'
 check('send telegram: link missing -> deny', denied(send('mcp__plugin_telegram_telegram__reply', {'text': bare})))
 check('send telegram: deny names the backup link', PLAN_LINK in json.dumps(send('mcp__plugin_telegram_telegram__reply', {'text': bare})))
 check('send telegram: pair present -> allowed', send('mcp__plugin_telegram_telegram__reply', {'text': full}) is None)
-check('send slack: link missing -> deny', denied(send('mcp__claude_ai_Slack__slack_send_message', {'message': bare})))
-check('send slack: search tool not checked', send('mcp__claude_ai_Slack__slack_search_public', {'query': bare}) is None)
 check('send telegram: private artifact allowed', send('mcp__plugin_telegram_telegram__reply', {'text': PRIV}) is None)
 check('send telegram: no artifact link allowed', send('mcp__plugin_telegram_telegram__reply', {'text': 'hello'}) is None)
 ORCA = 'orca orchestration send --to term_1 --subject s --body '
@@ -373,7 +377,32 @@ out = send('mcp__plugin_telegram_telegram__reply', {'text': bare})
 check('send warn level: no deny, context names the link', out and not denied(out) and PLAN_LINK in out['hookSpecificOutput']['additionalContext'], out)
 write_config({'artifact-backup': {'base_url': BASE}, 'guard': {'artifact_links': 'off'}})
 check('send off level: nothing', send('mcp__plugin_telegram_telegram__reply', {'text': bare}) is None)
-write_config({'artifact-backup': {'base_url': BASE}})
+write_config({'artifact-backup': {'base_url': BASE}})  # no guard key: the default is warn
+out = send('mcp__plugin_telegram_telegram__reply', {'text': bare})
+check('send default (no guard key): warns, does not deny', out and not denied(out) and PLAN_LINK in out['systemMessage'], out)
+check('send default: orca body also only warns', not denied(send('Bash', {'command': f"{ORCA}'{bare}'"})))
+out = stop('s20', t_none, last=f'Plan is at {CLAUDE}')
+check('stop default (no guard key): one systemMessage, no block', out is not None and 'decision' not in out and PLAN_LINK in out['systemMessage'], out)
+write_config({'artifact-backup': {'base_url': BASE}, 'guard': {'artifact_links': 'off'}})
+check('stop off level: nothing', stop('s20', t_none, last=f'Plan is at {CLAUDE}') is None)
+write_config(DENY)
+
+# --- Slack is not a checked send path
+check('send slack: not checked', send('mcp__claude_ai_Slack__slack_send_message', {'message': bare}) is None)
+
+# --- Until the cutover both the old settings.json hook and the plugin copy run: a second run is harmless
+before = len(open(os.path.join(STATE_ROOT, 'index.jsonl')).read().splitlines())
+TWICE = 'bb5f1111-2222-3333-4444-555566667777'
+src_twice = page('twice.html')
+first = publish('s33', src_twice, TWICE)
+second = publish('s33', src_twice, TWICE)
+tf = [d for d in os.listdir(SHARE) if d.endswith('-twice-bb5f1111')]
+check('double run: one folder, one pending entry', len(tf) == 1 and len(pending('s33')) == 1, (tf, pending('s33')))
+check('double run: both announce the same links', first == second or
+      al_links(first) == al_links(second), (first, second))
+check('double run: the backup link in the pending entry exists on disk',
+      os.path.isfile(os.path.join(SHARE, pending('s33')[0]['backup'][len(BASE):])), pending('s33'))
+check('double run: stop passes with the announced pair', stop('s33', t_none, last=' '.join(al_links(second))) is None)
 
 # --- Supporting files: a list of strings is backed up and scanned like the map form
 os.makedirs(os.path.join(HOME, 'site/css'))

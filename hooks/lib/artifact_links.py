@@ -6,6 +6,8 @@ Settings, under `artifact-backup` in ~/.claude/agent-skills.json ($AGENT_SKILLS_
     announcement says so, and nothing demands a backup link.
   - `public_dir` (default ~/share/artifacts): copies of pages that passed the secret scan, and the generated index.html.
   - `private_dir` (default ~/artifacts-private): copies that must not be served, and their index.jsonl.
+  - `guard.artifact_links` (a separate top-level key): `warn` (default) tells the sender once, `deny` blocks the reply
+    or message that omits the backup link, `off` does nothing. Only this key turns blocking on.
   - `categories`: [[name, regex], ...] checked in order against title + cwd; the first match groups the page in the index.
 The public index.jsonl and errors.log are kept in $AGENT_SKILLS_STATE/artifact-backup, outside the served folder: they
 hold session ids and local paths.
@@ -87,6 +89,11 @@ def owed_links(text):
         if link and link not in text and link not in owed:
             owed.append(link)
     return owed
+
+
+def level():
+    """`guard.artifact_links`: warn (default; one line, nothing blocked), deny (only by this key) or off."""
+    return config.level(config.load(), "guard.artifact_links", "warn")
 
 
 def reason(links):

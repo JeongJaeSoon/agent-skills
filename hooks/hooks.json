@@ -37,7 +37,7 @@
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/decision_relay.py\"", "timeout": 5 }]
       },
       {
-        "matcher": "Bash|mcp__.*[Tt]elegram.*|mcp__.*[Ss]lack.*",
+        "matcher": "Bash|mcp__.*[Tt]elegram.*",
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/artifact_send_check.py\"", "timeout": 5 }]
       }
     ],
