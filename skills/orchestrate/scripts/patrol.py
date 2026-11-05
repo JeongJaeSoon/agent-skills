@@ -601,8 +601,8 @@ def judge(facts, memo):
             going = [w for w in facts["workers"] if (w.get("projection") or {}).get("outcome") == "in_progress"]
             if any(w.get("runId") in (run, None) for w in going):  # a worker whose Run is unknown cannot be ruled out
                 continue
-            handle = next((t["handle"] for t in agents if t.get("worktreePath") == path), None)
-            if isinstance(facts["waits"].get(handle), dict):  # at a prompt for a human, which is a wait
+            handles = [t["handle"] for t in agents if t.get("worktreePath") == path]
+            if any(isinstance(facts["waits"].get(h), dict) for h in handles):  # at a prompt for a human, which is a wait
                 continue
 
             def under(r):  # a row below this lead at any depth
@@ -614,7 +614,8 @@ def judge(facts, memo):
                     r = board_rows.get(r["parent"]) or {}
                 return False
             waits = lambda r: not (r.get("done_at") or r.get("status") == "done") and (  # noqa: E731
-                r.get("status") in ("waiting", "owner", "held") or r.get("owner") or r.get("after"))
+                r.get("status") in ("waiting", "owner", "held") or r.get("owner")
+                or r.get("after") and (facts["prs"].get(r["after"]) or {}).get("state", "OPEN").upper() == "OPEN")  # a merged or closed PR is no wait
             if waits(lead) or any(under(r) and waits(r) for r in board_rows.values()):
                 continue
             still = lead_still_h(events, tnow)

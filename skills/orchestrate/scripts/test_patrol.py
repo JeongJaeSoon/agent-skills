@@ -208,6 +208,11 @@ assert quiet_lead(board=lboard(lead={"status": "waiting", "owner": "someone"})) 
 assert quiet_lead(board=lboard(lead={"status": "held"})) == [], "a lead held on purpose"
 assert quiet_lead(tails={"/w/lead": ({**idle(300, parked=True), "state": "tool"}, None)}) == [], "a tool is running: the turn has not ended"
 assert quiet_lead(board=lboard({"L/a": {**waits_row, "status": "moving", "after": "acme/app#9"}})) == [], "a row after an open PR"
+for state in ("MERGED", "CLOSED"):
+    assert quiet_lead(board=lboard({"L/a": {**waits_row, "status": "moving", "after": "acme/app#9"}}),
+                      prs={"acme/app#9": {"state": state}}) != [], f"a {state} PR is no wait"
+second = [term("hl", "/w/lead"), term("h2", "/w/lead")]
+assert quiet_lead(terminals=second, waits={"h2": {"kind": "permission"}}) == [], "any agent terminal of the card at a prompt"
 assert quiet_lead(board=lboard({"L/a": {**waits_row, "status": "done", "owner": "someone"}})) != [], "a done row waits for nothing"
 assert quiet_lead(board=lboard({"L/a": {**waits_row, "done_at": ago(5)}})) != [], "a closed row waits for nothing"
 deep = {"L/p": {"kind": "phase", "parent": "L", "status": "moving"}, "L/p/t": {**waits_row, "parent": "L/p"}}
