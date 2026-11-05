@@ -1,4 +1,4 @@
-<!-- translated-from: 76135f0633a0e61b13c2c7d9a65a4191939790fa -->
+<!-- translated-from: 6bccbba78301554054ebb761250201ca8658b856 -->
 # スキルカタログ
 
 `agent-skills` プラグインに入っているスキル41個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック16個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
@@ -295,7 +295,7 @@ PR を受け持つスキルとマージする主体:
 - **いつ:** 「할 일 보여줘」（予定を見せて）、「보류 큐 보여줘」（保留キューを見せて）、`/agent-skills:todo`。`brief` は予定と保留キューを1行で数えるだけなので、一覧が必要なときに呼びます。
 - **内容:**
   - `orch board todo list [--telegram]` の出力をそのまま送ります。表は二つです。予定の表（状態 ⏰ 到来 / 📅 待ち · いつ · やること · 担当）は到来したものが先、次に日付順、日付のないものは入れた順です。保留キューの表（# · やること · 次に着手する条件 · 担当）は順番どおりで、先頭に ▶（次に着手）が付きます。番号は閉じた項目を除いた1からの順番で、`later move`・`later drop`・`todo from-later` が受け取る番号と同じです。表の見出しの件数は brief の1行と同じ基準です。78列に収めるために長い欄だけを `…[n]` で切り、原文を表の下に置きます。Telegram では表を使わず行で書きます。
-  - 追加と完了: 予定は `orch board todo add <作業> (--due D | --after C) --who W`、閉じるのは `orch board done do:<k>`、保留の項目を予定に変えるのは `todo from-later <n> --who W` です。保留は `orch board later add <作業> --trigger <次に着手する条件> [--who W] [--at N]`、順番の移動は `later move <n> --to N` です。
+  - 追加と完了: 予定は `orch board todo add <作業> (--due D | --after C) --who W`、閉じるのは `orch board done <id>`、保留の項目を予定に変えるのは `todo from-later <n> --who W` です。保留は `orch board later add <作業> --trigger <次に着手する条件> [--who W] [--at N]`、順番の移動は `later move <n> --to N` です。
 - **関係:** `brief` の予定・保留キューの行が指す先です。ダッシュボードでは To-do ページです。
 
 ### map-features
@@ -576,6 +576,7 @@ PR を受け持つスキルとマージする主体:
 | `guard.warn.reset_hard` | warn | コミットしていない変更があるリポジトリでの `git reset --hard` |
 | `guard.warn.run_download` | warn | `-D`・`--dir` のない `gh run download` |
 | `guard.warn.tailscale` | warn | ワーカーの `tailscale serve`・`funnel` |
+| `guard.deliver_load` | warn | `hooks/lib/skillload.py`。ワーカー(Dispatch、または CLOSE・KEEP のカード)のメイン会話が `deliver-ticket` を読み込む前に、作業ディレクトリ(hook 入力の `cwd`)内のファイルを Edit・Write・MultiEdit・NotebookEdit する。読み込むまで、対象の編集ごとに警告が 1 行付く(状態ファイルは持たない)。`deny` はその編集を止め、`ask` は確認を求める。最初のプロンプトに `LOAD: none` 行がある読み取り専用カード、`.git` 配下と作業ディレクトリ外のパス、サブエージェント、オーケストレーター・リード・人が開いたセッションは対象外。読み込み済みとは、エラーのない `Skill` 結果か `/deliver-ticket` コマンドのこと。結果がまだない、または transcript を時間内に読めないときは不明として通す |
 | `orchestrate.ask_user_question` | deny | オーケストレーター・リード・ワーカーの本会話の AskUserQuestion。サブエージェントと一般セッションは対象外です |
 | `orchestrate.wait_foreground` | deny | オーケストレーター・リードが `orch wait`、`orch inbox --wait`、`orch watch-cards`、`orca orchestration check\|inbox --wait` を `run_in_background` なしで実行すること、またはバックグラウンドの待機を `\| tail`・`\| head` で切ること。ワーカーの `check --wait` は対象外です |
 | `orchestrate.send_devnull` | deny | オーケストレーター・リード・ワーカーが `orca orchestration send\|reply` の出力を `/dev/null` に捨てること。`2>/dev/null` だけなら対象外です |

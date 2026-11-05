@@ -431,6 +431,11 @@ def run_actions(args):
     import bootstrap
     failed = []
     sys.stdout.flush()
+    # A PC with no state gets an empty agent-skills.db, so no cutover is needed; one with state is left for `orch db migrate`.
+    store_py = REPO / "skills" / "orchestrate" / "scripts" / "store.py"
+    if subprocess.run([sys.executable, str(store_py), "init"]).returncode:
+        failed.append("orch db init")
+    sys.stdout.flush()
     try:
         bootstrap.scheduler(True)
     except SystemExit as e:

@@ -1,7 +1,8 @@
 """The board the brief skill's reports are rendered from: one row per lead, phase and sub-task, with its status,
 progress, next step and the time it was last confirmed, and the renderer that turns it into the report.
 
-The orchestrator or lead writes rows (`orch board set`) as reports come in; `orch brief render` (on request) and
+The board lives in agent-skills.db (store.py). A card's or lead's own facts stay Orca's: the write bans below refuse
+what would copy them here. The orchestrator or lead writes rows (`orch board set`) as reports come in; `orch brief render` (on request) and
 `orch brief render --periodic` (on a schedule) read the board, the fleet collector's sessions and PR list
 (state.json, prs.json, collected again first when older than state_min), the open decisions and the last sent table
 (brief-last/<scope>.json) and print the report. The model passes only judgment: the headline sentence, decisions,
@@ -12,7 +13,7 @@ Only finished work folds: a ✅ row a day after its merge, a stage row finished 
 render() is the one implementation of the brief skill's report rules (sections, sub-task rows, the
 same-reviewer fold, next steps under 진행 중 and 보류, bold for changed rows); test_board.py pins its output.
 """
-import collections, datetime as dt, difflib, fcntl, json, os, pathlib, re, shutil, sys, urllib.parse
+import collections, datetime as dt, difflib, json, os, pathlib, re, sys, urllib.parse
 
 import fleet
 import acks
@@ -43,40 +44,61 @@ ASK_WORD = {"request": "의뢰", "remind": "리마인드", "rerequest": "재요�
 ASK_GONE = ("sent", "scheduled", "found")  # send-log sources where the message went out, or was already there
 
 
-def path():
-    return fleet.state_dir() / "board.json"
-
-
 def last_path(scope):
     base = os.environ.get("ORCH_BRIEF_LAST")
     return (pathlib.Path(base).expanduser() if base else fleet.state_dir().parent / "brief-last") / f"{scope}.json"
 
 
 def read():
-    store = fleet.read_json(path(), {}) or {}
-    return {"v": 1, "rows": store.get("rows") or {}, "order": store.get("order") or [], "leads": store.get("leads") or {},
-            "doing": store.get("doing") or [], "later": store.get("later") or [], "todo": store.get("todo") or [],
-            "owner_todo": store.get("owner_todo") or []}
+    """The open board, each item with its id. Raises store.NotMigrated before `orch db import`."""
+    return store_db.board()
 
 
 def change(fn):
-    """Run fn(store) on board.json under a lock and replace the file whole, keeping the previous one as board.prev.json."""
-    path().parent.mkdir(parents=True, exist_ok=True)
-    with (fleet.state_dir() / "board.lock").open("a") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        store_db.guard_legacy_write("board write")  # under the lock: the 4b import holds it while it records 4b-board
-        store = read()
-        for t in store["todo"]:  # a to-do from before the stamp: its M/D reads against this write
-            t.setdefault("added", fleet.iso(fleet.utcnow()))
+    """Run fn(store) in one DB write transaction, each change with its event; a finished lead leaves here."""
+    def go(store):
         out = fn(store)
         cutoff = fleet.iso(fleet.utcnow() - dt.timedelta(seconds=DONE_KEEP_S))
         gone = {k for k, r in store["rows"].items() if not r.get("parent") and (r.get("done_at") or "9") < cutoff}
         store["rows"] = {k: r for k, r in store["rows"].items() if k not in with_descendants(store["rows"], gone)}
         store["order"] = [k for k in store["order"] if k in store["rows"]]
-        if path().exists():
-            shutil.copyfile(path(), fleet.state_dir() / "board.prev.json")
-        fleet.write_atomic(path(), json.dumps(store, ensure_ascii=False, indent=1) + "\n")
         return out
+    return store_db.change_board(go, os.environ.get("ORCA_TERMINAL_HANDLE"))
+
+
+def fleet_view():
+    """state.json's sessions by id, or None when the collector has not written it: what the write bans below check."""
+    state = fleet.read_json(fleet.state_dir() / "state.json", None)
+    return state if state and state.get("sessions") else None
+
+
+def no_fleet(what):
+    print(f"warning: no fleet state; {what} not checked against Orca", file=sys.stderr)
+
+
+def linked_card(rid, row, fields, cards):
+    """The card a row about rid is, by its --worktree or by the name in its id and title."""
+    title = fields.get("title") or (row or {}).get("title") or rid.rsplit("/", 1)[-1]
+    return cards.get((row or {}).get("worktree")) or tidy.named(f"{rid} {title}", cards)
+
+
+def check_row_write(rid, row, fields):
+    """A card's PR and worktree are Orca's: a linked row shows them without storing them. An unlinked row may name its
+    card with --worktree, and that is all it stores."""
+    pr, worktree = fields.get("pr"), fields.get("worktree")
+    if pr is None and worktree is None and not fields.get("title"):
+        return
+    state = fleet_view()
+    if state is None:
+        return None if pr is None and worktree is None else no_fleet("--pr/--worktree")
+    cards = tidy.cards_of(state)
+    card = linked_card(rid, row, fields, cards)
+    if pr is not None and (card or worktree in cards):
+        raise ValueError(f"row {rid} is linked to card {(card or cards[worktree])['id']}: Orca knows its PR, so --pr is not stored")
+    if worktree is not None and card and worktree != card["id"]:
+        raise ValueError(f"row {rid} is linked to card {card['id']}: drop the row to link another")
+    if row and (card or worktree in cards):
+        row.pop("pr", None)  # Orca's from now on
 
 
 def one_line(text, limit=None):
@@ -113,6 +135,12 @@ def lead_add(name, handle, repo, run=None, stale_min=None, program=None, worktre
         raise ValueError("board lead add needs a name, --handle and --repo")
     # A handle changes when the lead's terminal restarts; its worktree does not, so the brief links the lead by that.
     worktree = worktree or worktree_of(handle)
+    state = fleet_view()
+    if state is None:
+        no_fleet("lead add")
+    elif any(s.get("id") == worktree and s.get("kind") == "orchestration" for s in state["sessions"]):
+        raise ValueError(f"Orca already knows lead {worktree}: `orch board set {name} --kind lead --repo {repo} --worktree {worktree}`"
+                         " (with --program P) links a row to it")
 
     def go(store):
         store["leads"][name] = {"name": name, "handle": handle, "repo": repo, "run": run, "started_at": fleet.iso(fleet.utcnow()),
@@ -200,7 +228,11 @@ def set_row(rid, **fields):
     """Add or update one row; only the fields given change. reported_at becomes now: the row was confirmed now."""
     if not rid:
         raise ValueError("board set needs a row id")
-    return change(lambda store: put(store, rid, fields))
+
+    def go(store):
+        check_row_write(rid, store["rows"].get(rid), fields)
+        return put(store, rid, fields)
+    return change(go)
 
 
 def drop(rid):
@@ -212,12 +244,31 @@ def drop(rid):
     return change(go)
 
 
-def doing_add(title, owner, next_, waiting=False):
-    """waiting: owner is a person this work waits on (a reply, a review), not the agent moving it."""
+def live_work(title):
+    """What Orca already shows for title: the live card it names, or a subagent by id or description. None when neither."""
+    state = fleet_view()
+    if state is None:
+        return no_fleet("doing add")
+    alive = [s for s in state["sessions"] if s.get("state") != "offline"]
+    if card := tidy.named(title, tidy.cards_of({**state, "sessions": alive})):
+        return f"card {card['id']}"
+    low = title.lower()
+    return next((f"subagent {a['agent']}" for s in alive for a in s.get("subagents") or []
+                 if not a.get("stale") and any(w and w.lower() in low for w in (a.get("agent"), a.get("desc")))), None)
+
+
+def doing_add(title, owner, next_, waiting=False, force=False, why=None):
+    """waiting: owner is a person this work waits on (a reply, a review), not the agent moving it. force: add it though
+    Orca shows that work, with why in the item's event."""
     if not all((x or "").strip() for x in (title, owner, next_)):
         raise ValueError("board doing add needs a title, --owner (who moves it) and --next (the next event)")
+    if force and not (why or "").strip():
+        raise ValueError("board doing add --force needs --why")
+    if not force and (seen := live_work(title)):
+        raise ValueError(f"{seen} already shows this work in its own row; --force --why W adds it anyway")
     item = {"title": one_line(title), "owner": one_line(owner), "next": one_line(next_),
-            **({"waiting": True, "since": fleet.iso(fleet.utcnow())} if waiting else {})}
+            **({"waiting": True, "since": fleet.iso(fleet.utcnow())} if waiting else {}),
+            **({"forced": one_line(why)} if force else {})}
     return change(lambda store: store["doing"].append(item))
 
 
@@ -247,7 +298,7 @@ def shown_later(q, shut):
     shown = []
     for i in reversed(range(len(q))):
         l = q[i]
-        if tidy.item_id("later", l) not in shut and not any(same_later(l, q[k]) or work_key(l) == work_key(q[k]) for k in shown):
+        if l["id"] not in shut and not any(same_later(l, q[k]) or work_key(l) == work_key(q[k]) for k in shown):
             shown.insert(0, i)
     return shown
 
@@ -279,7 +330,7 @@ def later_add(title, trigger, due=None, who=None, at=None):
         q = store["later"]
         old = next((i for i, l in enumerate(q) if same_later(l, item)), None)
         if old is not None:
-            q.pop(old)
+            item["id"] = q.pop(old)["id"]
         if at is None and old is not None:
             q.insert(old, item)
         else:
@@ -345,7 +396,7 @@ def todo_add(title, due=None, after=None, who=None):
         if old is None:
             store["todo"].append(item)
         else:
-            store["todo"][old] = item
+            store["todo"][old] = {**item, "id": store["todo"][old]["id"]}
     return change(go)
 
 
@@ -367,13 +418,17 @@ def todo_from_later(n, due=None, who=None):
     def go(store):
         l = store["later"].pop(queue_at(store["later"], n))
         due_ = due or l.get("due") and (moment(l["due"], now) or one_line(l["due"]))
-        store["todo"].append({"title": l["title"], "who": one_line(who), **({"due": due_} if due_ else {}),
+        store["todo"].append({"id": l["id"], "title": l["title"], "who": one_line(who), **({"due": due_} if due_ else {}),
                               "after": l["trigger"], "added": fleet.iso(now)})
     return change(go)
 
 
 def set_now(lines):
-    return change(lambda store: store.update(owner_todo=[one_line(l) for l in lines if l.strip()]))
+    """Replace the owner's now-list. A line it already has keeps its id, so a close on it stands."""
+    def go(store):
+        had = {t["title"]: t for t in reversed(store["owner_todo"])}
+        store["owner_todo"] = [had.pop(t, None) or {"title": t} for t in (one_line(l) for l in lines if l.strip())]
+    return change(go)
 
 
 todo_when = fleet.todo_when
@@ -661,8 +716,7 @@ def unlisted(state, sessions, rows, store, cards, shut, lead_session, now, state
         shown |= {r.get("session"), r.get("worktree"), r.get("linked"), r.get("host")}
         if r.get("kind") == "lead" and (lead := store["leads"].get(r["id"])):
             shown.add(lead_session(lead))
-    shown |= {c["id"] for d in store["doing"] if tidy.item_id("doing", d) not in shut
-              and (c := tidy.doing_card(d, cards))}
+    shown |= {c["id"] for d in store["doing"] if d["id"] not in shut and (c := tidy.doing_card(d, cards))}
     shown |= {c["id"] for c in cards.values() if c["pr"] and c["pr"] in row_prs}
     shown |= {k.removeprefix("card:") for k in shut if k.startswith("card:")}
 
@@ -749,7 +803,16 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         if "→ 추천:" not in d:
             raise ValueError(f"--decision is one line: {DECISION_FORM}")
     collected = refresh(now, limits["state_min"]) if fresh else None
-    store = read()
+    try:  # one snapshot, so a close and the open list cannot disagree within a report
+        seen = store_db.view()
+        store, open_dec, db_known = seen["board"], seen["decisions"], True
+        shut = {k: r for k, r in seen["latest"].items() if r["ev"] == "done"}
+    except store_db.NotMigrated:
+        store, db_known, shut = {"rows": {}, "order": [], "leads": {}, **{l: [] for l in store_db.LANES}}, False, {}
+        try:  # decisions are in decisions.json until the import, and `--decision` has registered there: list them
+            open_dec = fleet.open_decisions()
+        except store_db.NotMigrated:  # a DB that is not imported: unknown, and the headline and the ❔ rows say so
+            open_dec = []
     prs_file = fleet.read_json(sd / "prs.json", {}) or {}
     me = prs_file.get("me")
     prs = {k: {**v["detail"], "probed_at": v.get("probed_at")} for k, v in (prs_file.get("prs") or {}).items() if v.get("detail")}
@@ -759,7 +822,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     wt_of_handle = {t.get("handle"): sid for sid, s in sessions.items() for t in s.get("terminals") or []}
     last = fleet.read_json(last_path(scope), None)
     last_rows = last.get("rows") if isinstance(last, dict) and isinstance(last.get("rows"), dict) else None
-    shut, verdicts, cards = tidy.closed(), tidy.assess(store, state, prs, me, now), tidy.cards_of(state, prs)
+    verdicts, cards = tidy.assess(store, state, prs, me, now), tidy.cards_of(state, prs)
     by_session = fleet.prs_by_session((state or {}).get("prs"))
     holds, held_by = fleet.held_prs(store, shut, prs, now, cards, hold_why := {}), {}  # held_by: row id -> the PR a held item covers
     # The PRs a to-do holds and no held item does (that one's text wins): their rows read 📅, not ⏸️.
@@ -819,10 +882,6 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
 
     oldest_probe, changed, stale, stale_board, facts, unknown = None, [], [], [], [], set()
     waits = {}  # row id -> its RowState, for the rows waiting on a person or a gap in the record
-    try:
-        open_dec, dec_known = fleet.open_decisions(), True
-    except store_db.NotMigrated:
-        open_dec, dec_known = [], False
     stalled = {}
     for sid, s in sessions.items():
         if why := stalled_why(s, checks):
@@ -832,12 +891,17 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                 stalled[pr] = one_line(why)
     facts_in = rowstate.gather(now=now, prs=prs, me=me, shut=shut, verdicts=verdicts, holds=holds, hold_why=hold_why,
                                leads=store["leads"], state=state, decisions=open_dec, state_min=limits["state_min"],
-                               stalled=stalled)
+                               stalled=stalled, db_unknown=not db_known)
     states = {}  # row id -> RowState: every status shown below is rowstate.judge()'s, never decided here
+
+    def lead_record(r):
+        """The lead judge() checks r's session against: the board's, else the session a row of a lead Orca knows links."""
+        top = lead_of(r)
+        return store["leads"].get(top["id"]) or ({"worktree": top["worktree"]} if top.get("kind") == "lead" and top.get("worktree") else None)
 
     def judged(r):
         if r["id"] not in states:
-            states[r["id"]] = rowstate.judge(r, facts_in, store["leads"].get(lead_of(r)["id"]), session_of(r))
+            states[r["id"]] = rowstate.judged(r, facts_in, lead_record(r), session_of(r))
         return states[r["id"]]
 
     def review_of(r):
@@ -847,7 +911,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
 
     def derive(r):
         """(status, next, stale suffix): rowstate.judge()'s state, and the row's age when it is past its limit."""
-        lead = store["leads"].get(lead_of(r)["id"])
+        lead = lead_record(r)
         st = judged(r)
         status, nxt = st["status"], st["next"]
         if status == "held" and st["hold"]:
@@ -1025,7 +1089,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     # Such an item stays open under its own id (the row's Done closes the row only) and is placed in the row's table.
     doing, merged_doing = [], []
     for d in store["doing"]:
-        iid, card = tidy.item_id("doing", d), tidy.doing_card(d, cards)
+        iid, card = d["id"], tidy.doing_card(d, cards)
         js = rowstate.judge_item("doing", d, facts_in, iid, card and card["id"])
         if js["status"] == "done":
             continue
@@ -1037,9 +1101,9 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             continue
         doing.append((iid, d, js))
     later = [store["later"][i] for i in shown_later(store["later"], shut)]
-    todos = [t for t in store["owner_todo"] if tidy.item_id("todo", t) not in shut]
+    todos = [t for t in store["owner_todo"] if t["id"] not in shut]
     # A to-do whose date or condition has come goes to the owner's list or 진행 중, and stays there until Done.
-    planned = [(tidy.item_id("do", t), t, todo_when(t, now)) for t in store["todo"] if tidy.item_id("do", t) not in shut]
+    planned = [(t["id"], t, todo_when(t, now)) for t in store["todo"] if t["id"] not in shut]
     arrived = [p for p in planned if fleet.todo_come(p[1], now, prs, cards)]
     upcoming = [p for p in planned if p not in arrived]
 
@@ -1120,8 +1184,11 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     if missing and not isinstance(missing, str):
         names = [one_line(sessions[m].get("name") or m) for m in missing]
         facts.append(f"보고서에 없는 세션 {len(missing)} ({', '.join(names[:3])}{' 외' if len(names) > 3 else ''})")
-    if not dec_known:
-        facts.append("이행 대기: 결정 DB (`orch db cutover-plan 4a`)")
+    if not db_known:
+        facts.append(f"이행 대기: 보드·결정 DB (`{store_db.migrate_command()}`)")
+    fleet.external_marked(None, lost := [])
+    if lost:
+        facts.append(f"인박스 기록 어긋남 {len(lost)} ({', '.join(lost[:3])}{' 외' if len(lost) > 3 else ''}: 마지막 줄로 판정)")
     if traces := store_db.legacy_traces():
         facts.append(f"옛 코드가 쓴 흔적 {', '.join(traces)}")
     old = [d for d in open_dec if (at := fleet.parse(fleet.decision_age_from(d)))
@@ -1142,7 +1209,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         facts.append(f"등록 터미널 없음 {len(rerouted)} ({', '.join(d['id'] for d in rerouted)} · 답은 오케스트레이터로)")
     by_pr = rowstate.by_pr(states, rows)
     stage_line = stages.pointer(*stages.current(stages.table(state), now, limits["stage_idle_d"] * 86400, state, by_pr), tg)
-    queued = [l for l in later if (verdicts.get(tidy.item_id("later", l)) or {}).get("verdict") != "check"]
+    queued = [l for l in later if (verdicts.get(l["id"]) or {}).get("verdict") != "check"]
     lists_line = lists_pointer(len(upcoming), len(queued), tg)
     if sum(folded.values()):
         facts.append(f"접음 완료 {sum(folded.values())} (대시보드)")
@@ -1315,7 +1382,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         else:
             listed("moving", moving, iid, d["title"], f"{ICON[js['status']]} {d['title']} — {js['next']} · {d['owner']}")
     for l in later:
-        iid = tidy.item_id("later", l)
+        iid = l["id"]
         if (js := rowstate.judge_item("later", l, facts_in, iid))["status"] == "check":
             listed("moving", moving, iid, l["title"], f"{ICON['check']} {l['title']} — {js['next']}")
             place(iid, "list:check")
@@ -1329,14 +1396,11 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             listed("moving", moving, iid, t["title"], f"⏰ {t['title']} — {when} 도래 · {t['who']}")
 
     # What the owner acts on comes first; what explains the rest comes last.
-    todo = todos + due_mine + turn
+    todo = [t["title"] for t in todos] + due_mine + turn
     out += ["", ("🙋 지금 오너가 할 일" if tg else "🙋 **지금 오너가 할 일**") + ("" if todo else " — 없음")]
     out += [""] + [it if tg else f"- {it}" for it in todo] if todo else []
-    try:
-        own, decisions = list(decisions), fleet.open_decisions()
-    except store_db.NotMigrated:  # the headline already says 이행 대기
-        own, decisions = list(decisions), []
-    repeated = set((last or {}).get("decisions") or []) if last_rows is not None else set()
+    own, decisions = list(decisions), open_dec
+    repeated =set((last or {}).get("decisions") or []) if last_rows is not None else set()
     if decisions or own:
         items = []
         for i, d in enumerate(decisions, 1):
@@ -1443,7 +1507,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     opened += [{"id": i, "kind": "doing", "label": d["title"], "status": js["status"]} for i, d, js in doing]
     opened += [{"id": i, "kind": "doing", "label": d["title"], "status": js["status"], "row": item_of(rows[l["key"]])}
                for i, d, js, l in merged_doing if l["key"] in rows]
-    opened += [{"id": tidy.item_id("later", l), "kind": "later", "label": f"{l['trigger']} → {l['title']}", "status": "held",
+    opened += [{"id": l["id"], "kind": "later", "label": f"{l['trigger']} → {l['title']}", "status": "held",
                 "title": l["title"], "trigger": l["trigger"], "who": l.get("who"), "n": n}
                for n, l in enumerate(later, 1)]
     opened += [{"id": i, "kind": "do", "label": f"{when} → {t['title']} · {t['who']}", "due": (i, t, when) in arrived,
@@ -1452,22 +1516,21 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                 **dict(zip(("date", "cond"), fleet.todo_parts(t, now))),
                 "at": fleet.iso(fleet.todo_start(t, now))}
                for i, t, when in planned]
-    opened += [{"id": tidy.item_id("todo", t), "kind": "todo", "label": t, "status": "owner"} for t in todos]
+    opened += [{"id": t["id"], "kind": "todo", "label": t["title"], "status": "owner"} for t in todos]
     for o in opened:
         v = verdicts.get(o["id"]) or {}
         o["check"] = v.get("evidence") if v.get("verdict") == "check" else None
     for t in todos:
-        place(tidy.item_id("todo", t), "list:owner")
-        list_rows["owner"].append({"id": tidy.item_id("todo", t), "label": t, "text": t})
+        place(t["id"], "list:owner")
+        list_rows["owner"].append({"id": t["id"], "label": t["title"], "text": t["title"]})
     # What must show, from the inputs rather than from what was drawn: every row in scope less the ones the owner acked,
     # the ✅ rows folded into a count and the leads shown only as their phases (a folded reviewer row's members and a
     # merged doing item are placed with the row that stands for them), then every open item with no row.
     folded_members = {m for k, ms in members.items() if k in hidden | folded_keys for m in ms}
     expected = [k for k in order if k not in hidden | folded_keys | as_group | folded_members]
     expected += [i for i, *_ in doing] + [i for i, *_ in merged_doing if _[-1]["key"] not in hidden | folded_keys]
-    expected += [i for i, _, _ in arrived] + [tidy.item_id("todo", t) for t in todos]
-    expected += [tidy.item_id("later", l) for l in later
-                 if rowstate.judge_item("later", l, facts_in, tidy.item_id("later", l))["status"] == "check"]
+    expected += [i for i, _, _ in arrived] + [t["id"] for t in todos]
+    expected += [l["id"] for l in later if rowstate.judge_item("later", l, facts_in, l["id"])["status"] == "check"]
     dup_ids, missing_ids, extra_ids = rowstate.check_placement(placement, expected)
     return {"text": "\n".join(out), "headline_facts": facts, "changed": changed, "stale": stale, "width_ok": width_ok, "done": done,
             "open": opened, "table_rows": table_rows, "list_rows": list_rows, "placement": placement, "now_by_pr": by_pr,

@@ -315,7 +315,7 @@ PR 을 맡는 스킬과 머지 주체:
 - **언제:** "할 일 보여줘", "보류 큐 보여줘", `/agent-skills:todo`. `brief`는 할 일과 보류 큐를 한 줄로 세기만 하므로, 목록이 필요할 때 부른다.
 - **하는 일:**
   - `orch board todo list [--telegram]` 출력을 그대로 보낸다. 표 두 개다. 할 일 표(상태 ⏰ 도래/📅 대기 · 언제 · 할 일 · 담당)는 도래한 것 먼저, 그다음 날짜순, 날짜 없는 것은 넣은 순서. 보류 큐 표(# · 할 일 · 다음 차례 조건 · 담당)는 차례대로이고 맨 앞에 ▶(다음 차례)가 붙는다. 번호는 닫힌 항목을 뺀 1부터의 차례이고 `later move`·`later drop`·`todo from-later` 가 받는 번호와 같다. 표 머리의 건수는 brief 포인터 줄과 같은 기준이다(도래한 할 일, 트리거가 충족돼 ❔ 확인 필요인 보류 항목은 따로 센다). `--after` 가 `--due` 의 날짜를 되풀이하면 언제 칸에 한 번만 쓴다. 78열에 맞추려고 긴 칸만 `…[n]`으로 자르고 원문을 표 아래에 둔다. Telegram 은 표 없이 줄로.
-  - 추가·완료: 할 일은 `orch board todo add <작업> (--due D | --after C) --who W`, 닫기는 `orch board done do:<k>`, 보류 항목을 할 일로 바꾸려면 `todo from-later <n> --who W`. 보류는 `orch board later add <작업> --trigger <다음 차례 조건> [--who W] [--at N]`, 차례 이동은 `later move <n> --to N`.
+  - 추가·완료: 할 일은 `orch board todo add <작업> (--due D | --after C) --who W`, 닫기는 `orch board done <id>`, 보류 항목을 할 일로 바꾸려면 `todo from-later <n> --who W`. 보류는 `orch board later add <작업> --trigger <다음 차례 조건> [--who W] [--at N]`, 차례 이동은 `later move <n> --to N`.
 - **관계:** `brief`의 할 일·보류 큐 줄이 가리키는 곳. 대시보드에서는 To-do 페이지.
 
 ### map-features
@@ -605,6 +605,7 @@ PR 을 맡는 스킬과 머지 주체:
 | `guard.warn.reset_hard` | warn | 커밋하지 않은 변경이 있는 저장소의 `git reset --hard` |
 | `guard.warn.run_download` | warn | `-D`·`--dir` 없는 `gh run download` |
 | `guard.warn.tailscale` | warn | 워커의 `tailscale serve`·`funnel` |
+| `guard.deliver_load` | warn | `hooks/lib/skillload.py`. 워커(Dispatch 또는 CLOSE·KEEP 카드)의 본 대화가 `deliver-ticket`을 로드하기 전에 작업 폴더(hook 입력의 `cwd`) 안 파일을 Edit·Write·MultiEdit·NotebookEdit한다. 로드하기 전까지 대상 편집마다 경고 한 줄이 붙고(상태 파일은 없다), `deny`는 그 편집을 막고 `ask`는 확인을 묻는다. 첫 프롬프트에 `LOAD: none` 행이 있는 읽기 전용 카드, `.git` 아래와 작업 폴더 밖 경로, 서브에이전트, 오케스트레이터·리드·사람이 연 세션은 대상이 아니다. 로드는 오류 없는 `Skill` 결과 또는 `/deliver-ticket` 명령이다. 결과가 아직 없거나 transcript를 시간 안에 읽지 못하면 모른 것으로 보고 통과시킨다 |
 | `orchestrate.ask_user_question` | deny | 오케스트레이터·리드·워커 본 대화의 AskUserQuestion. 서브에이전트와 일반 세션은 대상이 아니다 |
 | `orchestrate.wait_foreground` | deny | 오케스트레이터·리드가 `orch wait`, `orch inbox --wait`, `orch watch-cards`, `orca orchestration check\|inbox --wait`를 `run_in_background` 없이 실행, 또는 배경 대기를 `\| tail`·`\| head`로 자름. 워커의 `check --wait`는 대상이 아니다 |
 | `orchestrate.send_devnull` | deny | 오케스트레이터·리드·워커가 `orca orchestration send\|reply`의 출력을 `/dev/null`로 보냄. `2>/dev/null`만은 대상이 아니다 |

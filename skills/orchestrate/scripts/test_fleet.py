@@ -132,12 +132,12 @@ for py in [sys.executable] + [p for p in ("/usr/bin/python3",) if os.path.exists
                          cwd=pathlib.Path(__file__).parent, capture_output=True, text=True)
     assert out.stdout.strip() == "2026-10-27T15:31:21+09:00", (py, out.stdout, out.stderr)
 # A PR a held board item names goes last, marked with the hold, until its date comes or the item leaves the board.
-board_path, ahead = state_dir / "board.json", (now + dt.timedelta(days=2)).astimezone().strftime("%m/%d 09:00")
+import store  # noqa: E402
+ahead = (now + dt.timedelta(days=2)).astimezone().strftime("%m/%d 09:00")
 
 
 def hold(trigger):
-    fleet.write_atomic(board_path, json.dumps({"doing": [], "owner_todo": [], "rows": {},
-                                               "later": [{"title": "acme/launchpad#42 마무리", "trigger": trigger}]}))
+    store.load_board({"later": [{"title": "acme/launchpad#42 마무리", "trigger": trigger}]})
     return f.tick(force=True)
 
 
@@ -151,11 +151,10 @@ st = hold("acme/launchpad#41 머지 뒤")  # no date: held while the PR its trig
 assert all(i.get("held") for i in items(st) if i.get("pr") == "acme/launchpad#42")
 assert not any(i.get("held_todo") for i in items(st))
 # A to-do naming the PR holds it too, tagged as the to-do's, not a held item's.
-fleet.write_atomic(board_path, json.dumps({"doing": [], "owner_todo": [], "rows": {}, "later": [], "todo": [
-    {"title": "acme/launchpad#42 머지·배포", "who": "오너", "after": "acme/launchpad#41 머지 뒤"}]}))
+store.load_board({"todo": [{"title": "acme/launchpad#42 머지·배포", "who": "오너", "after": "acme/launchpad#41 머지 뒤"}]})
 pr42 = [i for i in items(f.tick(force=True)) if i.get("pr") == "acme/launchpad#42"]
 assert pr42 and all(i["held"] == "acme/launchpad#41 머지 뒤" and i["held_todo"] for i in pr42), pr42
-board_path.unlink()
+store.load_board()
 st = f.tick(force=True)
 assert not any(i.get("held") for i in items(st)) and [fleet.needs_rank(i) for i in items(st)] == ranks
 assert fleet.trigger_at("2026-11-02 14:30", now).strftime("%Y-%m-%d %H:%M") == "2026-11-02 14:30"
@@ -1342,18 +1341,17 @@ f.graphql = counting
 assert 8 not in {p["number"] for p in pr_tick(viewed=True)["prs"]}, "closed or gone from the search: off the page"
 # Unless the board names it: a row about a PR the search no longer finds still gets its state, not "?".
 world.prs[8] = dict(world.prs[7], number=8, state="CLOSED", url="https://github.com/acme/tools/pull/8")
-fleet.write_atomic(state_dir / "board.json", json.dumps({"rows": {"x": {"id": "x", "pr": "acme/tools#8"}},
-                                                        "later": [{"title": "t", "trigger": "acme/tools#7 머지"}]}))
+store.load_board({"rows": {"x": {"id": "x", "pr": "acme/tools#8"}}, "later": [{"title": "t", "trigger": "acme/tools#7 머지"}]})
 assert fleet.board_prs() == {"acme/tools#8", "acme/tools#7"}, fleet.board_prs()
 assert next(p for p in pr_tick(viewed=True)["prs"] if p["number"] == 8)["state"] == "CLOSED"
-# A board item tidy.jsonl closed no longer holds its PR: prs.json drops it on the next PR tick.
+# A closed board item no longer holds its PR: prs.json drops it on the next PR tick.
 import tidy  # noqa: E402
-held = {"row:x": "x", tidy.item_id("later", {"title": "t", "trigger": "acme/tools#7 머지"}): "t"}
+held = {"row:x": "x", store.board()["later"][0]["id"]: "t"}
 assert tidy.write(list(held), can=held)[0] == list(held)
 assert fleet.board_prs() == set(), fleet.board_prs()
 assert 8 not in {p["number"] for p in pr_tick(viewed=True)["prs"]}
 assert tidy.write(list(held), undo=True)[0] == list(held)
-(state_dir / "board.json").unlink()
+store.load_board()
 # Nor while a program's ledger names it: the stage table reads a landed PR's branch from here once its card is gone.
 prog_dir = root / "no-programs" / "p1"
 prog_dir.mkdir(parents=True)
