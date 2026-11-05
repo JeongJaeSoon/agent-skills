@@ -595,7 +595,8 @@ def judge(facts, memo):
             ledger = (facts.get("ledgers") or {}).get(lead.get("program"))
             events = ledger and ledger["events"]
             # The program's Run must be this session's: a program moved to another Run says nothing about this lead.
-            if not (run and path in agent_paths and motion and motion.get("parked") and events and ledger["run"] == run):
+            if not (run and path in agent_paths and motion and motion.get("parked") and motion.get("state") == "idle"
+                    and events and ledger["run"] == run):  # parked stays set while a tool runs: the turn must have ended
                 continue
             going = [w for w in facts["workers"] if (w.get("projection") or {}).get("outcome") == "in_progress"]
             if any(w.get("runId") in (run, None) for w in going):  # a worker whose Run is unknown cannot be ruled out
@@ -612,7 +613,8 @@ def judge(facts, memo):
                         return True
                     r = board_rows.get(r["parent"]) or {}
                 return False
-            waits = lambda r: r.get("status") in ("waiting", "owner", "held") or r.get("owner")  # noqa: E731
+            waits = lambda r: not (r.get("done_at") or r.get("status") == "done") and (  # noqa: E731
+                r.get("status") in ("waiting", "owner", "held") or r.get("owner") or r.get("after"))
             if waits(lead) or any(under(r) and waits(r) for r in board_rows.values()):
                 continue
             still = lead_still_h(events, tnow)
