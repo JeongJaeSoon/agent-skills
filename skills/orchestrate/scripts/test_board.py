@@ -208,7 +208,7 @@ GOLDEN = """\
 
 ## 🙋 지금 오너가 할 일
 
-- 충돌 해소 승인 · [#50](https://example.test/50) → 알림 정리
+- 충돌 해소 승인 · acme/web#50 → 알림 정리
 - 리뷰 · #70·#71 → 로그·대시보드
 
 ## ❓ 결정 필요
@@ -217,14 +217,14 @@ GOLDEN = """\
 
 ## acme/web → feature/notify
 
-- 🙋 알림 정리 — [#50](https://example.test/50) ❗DIRTY→main · ██████░░ 3/4 · ↑ 오너 · 작업 중
-- 🔄 └ 문구 다듬기와 길이 정리 — [#54](https://example.test/54) ❗리뷰 CI✗ · ████░░░░ 2/4 · CI 재실행 뒤 리뷰 의뢰 다시 보내기 · 워커 · 작업 중
-- ⏳ └ rev-a 대기 — [#51](https://example.test/51)·#52·#53 · ██████░░ 3/4 · ↓ 대기
+- 🙋 알림 정리 — acme/web#50 ❗DIRTY→main · ██████░░ 3/4 · ↑ 오너 · 작업 중
+- 🔄 └ 문구 다듬기와 길이 정리 — acme/web#54 ❗리뷰 CI✗ · ████░░░░ 2/4 · CI 재실행 뒤 리뷰 의뢰 다시 보내기 · 워커 · 작업 중
+- ⏳ └ rev-a 대기 — acme/web#51·#52·#53 · ██████░░ 3/4 · ↓ 대기
 - 🔄 검색 개선 ph3 — ███░░░░░ 3/8 · 하위 3건 · 워커 · 작업 중
 - 🔄 └ w2 색인 — ██░░░░░░ 2/8 · PR 작성 · 워커 · 작업 중
-- 🔄 └ 정렬 — [#45](https://example.test/45) CI✗→main · ████░░░░ 4/8 · CI 재실행 · 워커 · 작업 중
+- 🔄 └ 정렬 — acme/web#45 CI✗→main · ████░░░░ 4/8 · CI 재실행 · 워커 · 작업 중
 - ⏸️ 검색 개선 ph4 · ph5 — ░░░░░░░░ 0/8 · ↓ 보류 · 작업 중
-- ✅ **검색 개선 ph2** — [#42](https://example.test/42) 42c0ffe→main · ████████ 8/8
+- ✅ **검색 개선 ph2** — acme/web#42 42c0ffe→main · ████████ 8/8
 
 ✅ 그 전 완료 1건 (대시보드)
 
@@ -232,9 +232,9 @@ GOLDEN = """\
 
 - 🔴 정리 작업 — ███░░░░░ 1/3 · 재개·정리 · 3h 전 · 세션 없음
 - — 검색 개선
-- 🔄 └ 재색인 — [#88](https://example.test/88)⚠️ ❗리뷰 CI… · ██░░░░░░ 2/8 · 권한 · 결정 1 · 작업 중
+- 🔄 └ 재색인 — acme/ops#88⚠️ ❗리뷰 CI… · ██░░░░░░ 2/8 · 권한 · 결정 1 · 작업 중
 - ⏳ 분류 — 에이전트 조치 필요: 누구 대기인지 기록 없음 · 작업 중
-- ⏳ └ rev-b 대기 — [#61](https://example.test/61)·#62 · ↓ 대기
+- ⏳ └ rev-b 대기 — acme/ops#61·#62 · ↓ 대기
 
 - 🙋 2건 오너 리뷰 — 분야 로그·대시보드
 
@@ -244,8 +244,8 @@ GOLDEN = """\
 
 ## ⏳ 다른 사람 대기
 
-- rev-a · 리뷰 [#51](https://example.test/51)·#52·#53 · 30분 전부터 → 설정·발송·로그 · 다음: 10/13 09:30 의뢰
-- rev-b · 리뷰 [#61](https://example.test/61)·#62 · 30분 전부터 → p61·p62
+- rev-a · 리뷰 acme/web#51·#52·#53 · 30분 전부터 → 설정·발송·로그 · 다음: 10/13 09:30 의뢰
+- rev-b · 리뷰 acme/ops#61·#62 · 30분 전부터 → p61·p62
 - 다른 팀 · 30분 전부터 → 다른 팀 답변 대기 · 다음: 10/14 리마인드
 
 ## ⏸️ 보류
@@ -298,9 +298,9 @@ skills_cfg = tmp / "agent-skills.json"
 skills_cfg.write_text(json.dumps({"brief": {"sendlog": str(sendlog)}}))
 code, asked, err = orch_env({"AGENT_SKILLS_CONFIG": str(skills_cfg)}, "brief", "render", "--periodic", "--now", NOW)
 assert code == 0, err
-assert "- rev-b · 리뷰 [#61](https://example.test/61)·#62 · 30분 전부터 · 마지막 리마인드 rev-b 1h 전 (C0FAKE 스레드) → p61·p62" \
+assert "- rev-b · 리뷰 acme/ops#61·#62 · 30분 전부터 · 마지막 리마인드 rev-b 1h 전 (C0FAKE 스레드) → p61·p62" \
     in asked.splitlines(), asked
-assert ("- rev-a · 리뷰 [#51](https://example.test/51)·#52·#53 · 30분 전부터 · 마지막 의뢰 rev-a 2h 전 → 설정·발송·로그"
+assert ("- rev-a · 리뷰 acme/web#51·#52·#53 · 30분 전부터 · 마지막 의뢰 rev-a 2h 전 → 설정·발송·로그"
         " · 다음: 10/13 09:30 의뢰") in asked.splitlines(), asked
 assert "- 다른 팀 · 30분 전부터 → 다른 팀 답변 대기 · 다음: 10/14 리마인드" in asked.splitlines(), asked
 # A request scheduled for later shows its post time, not an age.
@@ -340,7 +340,7 @@ assert out["changed"] == ["search/ph3/sort", "search/ph2"], out["changed"]
 # alike: that section goes out as one whole line per row instead of a table, still within the width check.
 assert out["width_ok"] is True and "| 검색 개선 ph4 · ph5 |" not in out["text"], out["text"]
 assert any(l.startswith("- ") and "검색 개선 ph4 · ph5" in l and "…" not in l for l in out["text"].splitlines()), out["text"]
-assert "- 🔄 └ **정렬** — [#45](https://example.test/45) ❗DIRTY CI✗→main" in out["text"], out["text"]
+assert "- 🔄 └ **정렬** — acme/web#45 ❗DIRTY CI✗→main" in out["text"], out["text"]
 assert "| 검색 개선 ph4 · ph5 |" in out["full"], "the dashboard copy stays a table with whole cells"
 # A folded PR keeps a base other than its section's in the cell, and moving it bolds the row. The section's base turns
 # to main here, so a PR cell then names the long branch: too wide for a table, so the rows go out as whole lines.
@@ -349,7 +349,7 @@ prs_json["prs"]["acme/web#52"]["detail"]["base"] = "main"
 code, raw, err = orch("brief", "render", "--periodic", "--now", NOW, "--json")
 assert code == 0 and err == "", (code, err)
 out = json.loads(raw)
-assert "notify/~rev-a" in out["changed"] and "[#51](https://example.test/51)·#53→feature/notify·#52" in out["text"], out["text"]
+assert "notify/~rev-a" in out["changed"] and "acme/web#51·#53→feature/notify·#52" in out["text"], out["text"]
 # The folded rows are placed with the reviewer row that stands for them; the reviewer row itself is no item.
 assert out["duplicates"] == [] and out["missing"] == [], (out["duplicates"], out["missing"])
 last = json.loads((tmp / "brief-last" / "top-level.json").read_text())
@@ -408,9 +408,9 @@ prs_json["prs"].update(dict([pr("acme/wide#1201", merge_state="DIRTY", decision=
 code, wide, err = orch("brief", "render", "--periodic", "--now", NOW, "--json", "--scope", "넓은 표")
 wide = json.loads(wide)
 assert code == 0 and wide["width_ok"] is True and err == "", (code, err, wide)
-assert ("- 🔴 긴 이름의 리드 작업 — [#1201](https://example.test/1201) ❗DIRTY→release/2026-10 · ████████ 100/100 "
+assert ("- 🔴 긴 이름의 리드 작업 — acme/wide#1201 ❗DIRTY→release/2026-10 · ████████ 100/100 "
         "· 재개·정리 · 세션 없음") in wide["text"].splitlines(), wide["text"]
-assert "- ⏳ └ rev-d 대기 — [#1123](https://example.test/1123)·#1125·#1124→feature/long-target · ↓ 대기" \
+assert "- ⏳ └ rev-d 대기 — acme/wide#1123·#1125·#1124→feature/long-target · ↓ 대기" \
     in wide["text"].splitlines(), wide["text"]
 assert not any(m in wide["text"] for m in "¹²³…") and "\n| " not in wide["text"], wide["text"]
 # The dashboard's copy keeps the table, every cell whole.
@@ -450,7 +450,7 @@ assert fill_rows == [
     "## acme/fill → main",
     "| 🙋 | 정산 리드 | — | — | 작업 중 |",
     "| 🙋 | └ c2 | — | ↑ 오너 | 멈춤 |",
-    "| 🔄 | └ c1 | [#5](https://example.test/5) ❗리뷰 CI… | — | 작업 중 |",
+    "| 🔄 | └ c1 | acme/fill#5 ❗리뷰 CI… | — | 작업 중 |",
     "| 🔄 | c4 | — | 3h 전 | 작업 중 |"], filled
 assert "held" not in filled and "c3" not in filled and "c5" not in filled, filled
 # The last committed report never had fleet rows (it ran without --fill): they are not bold as new on every poll.
@@ -549,9 +549,7 @@ REQUEST_GOLDEN = """\
 
 ## acme/web → main
 
-| | 리드/Phase | PR | 다음 | 세션 |
-|---|---|---|---|---|
-| 🔄 | c7 | [#45](https://example.test/45) ❗리뷰 CI… | CI 통과 → 리뷰 의뢰 · 워커 | 작업 중 |
+- 🔄 c7 — acme/web#45 ❗리뷰 CI… · CI 통과 → 리뷰 의뢰 · 워커 · 작업 중
 
 ★ 정렬은 CI 가 끝나면 리뷰로 간다"""
 request = rok(*REQUEST)
@@ -568,6 +566,9 @@ periodic = rok("brief", "render", "--periodic", "--now", NOW)
 assert "| 작업 |" not in periodic and "> 단계표 1행 · `orch stage show`" in periodic.splitlines(), periodic
 tg_req = rok(*REQUEST, "--telegram")
 assert not any(m in tg_req for m in ("**", "|", "](", "`", "📋 작업별")), tg_req
+# Only the terminal text drops links; a link the caller wrote into the Telegram text stays as written.
+tg_link = rok(*REQUEST[:4], "--insight", "★ [표](https://example.test/t)", "--telegram")
+assert "[표](https://example.test/t)" in tg_link, tg_link
 assert "단계표 1행 · orch stage show --telegram" in tg_req.splitlines() and "🔄 c7 #45 ❗리뷰 CI… — CI 통과 → 리뷰 의뢰 · 워커 · 작업 중" in tg_req.splitlines(), tg_req
 (tmp / "programs").mkdir(exist_ok=True)
 (tmp / "programs" / ".dash.json").write_text(json.dumps({"pid": os.getpid(), "port": 4799}))
@@ -687,8 +688,8 @@ tab = json.loads(wok("brief", "render", "--periodic", "--now", NOW, "--json"))["
 assert "| 🙋 | └ 내 리뷰 | [#91](https://example.test/91) ❗리뷰 | ↑ 오너 |" in tab, tab
 assert "| ⏳ | └ 남 리뷰 | [#92](https://example.test/92) ❗리뷰 | ↓ 대기 |" in tab, tab
 assert "| ⏳ | └ reply 디자인 답변 | — |" in tab and "| ❔ | └ ask 누구 대기 | — |" in tab, tab
-assert mine == ["- 리뷰 · [#91](https://example.test/91) → 내 리뷰"], mine
-assert theirs == ["- rev-x · 리뷰 [#92](https://example.test/92) · 30분 전부터 → 남 리뷰",
+assert mine == ["- 리뷰 · acme/web#91 → 내 리뷰"], mine
+assert theirs == ["- rev-x · 리뷰 acme/web#92 · 30분 전부터 → 남 리뷰",
                   "- 디자인팀 · 30분 전부터 → reply 디자인 답변 · 다음: 10/15 리마인드"], theirs
 assert "| ❔ | └ ask 누구 대기 | — | 에이전트 조치" in tab and not moving, text
 assert "- [" not in text and "…[" not in text, text
