@@ -133,9 +133,17 @@ def totals(text):
     return got
 
 
+# The next step is the first open row of the group in the order the tables print, not the order rows were added.
+code, _, err = orch("board", "set", "cross", "--priority", "5:a\t—\tb")
+assert code == 1 and err.startswith("--priority is RANK:NAME"), err
+for repo, lead in (("acme/zeta", "oz"), ("acme/alpha", "oa")):
+    ok("board", "lead", "add", lead, "--handle", "term_0FAKE1", "--repo", repo)
+    ok("board", "set", lead, "--title", f"{lead}작업", "--priority", "5:Order", "--next", f"{lead} 다음")
 text = render()
-assert totals(text) == {"Child": 2, "Solo": 2, "Cross": 1}, (totals(text), text)
+first = "oz" if text.index("## acme/zeta") < text.index("## acme/alpha") else "oa"
+assert f"**Order** — 진행 2 · 대기 0 · 완료 0 · 다음: {first}작업 — {first} 다음" in text, text
+assert totals(text) == {"Child": 2, "Solo": 2, "Cross": 1, "Order": 2}, (totals(text), text)
 assert "Parent" not in totals(text), "a head with rows under it is not a row"
-assert "다음: k 다른 저장소 작업 — CI 확인" in text, text
+assert "다음: k 다른 저장소 작업 — 재개·정리" in text, "the step is judge()'s, not the stored --next: " + text
 
 print("ok")
