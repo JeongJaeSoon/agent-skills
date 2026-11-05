@@ -64,6 +64,19 @@ f = cardguard.observe("/w/x")
 assert f["head"] == H and f["waits"] == {"t1": None} and f["screens"] == {"t1": ["❯ "]} and not f["patrol"], f
 assert cardguard.guard("/w/x", H, ["t1", "s1"]) == (True, "확인함")
 
+# observe() carries whether a Claude process runs in the card (present, absent, or not seen) into the guard: with a
+# working verdict and no terminal, only a card seen to have none may go.
+saved_proc = reap.processes, reap.cwds, reap.orca_json, reap.patrol_states
+reap.orca_json = lambda *a: {"terminals": []}
+reap.patrol_states = lambda now=None, activity=False: {reap.real("/w/x"): "working"}
+reap.processes, reap.cwds = (lambda: {7: {"cmd": "claude", "ppid": 1}}), (lambda: {7: "/w/x"})
+assert cardguard.observe("/w/x")["claude"] == {7} and not cardguard.guard("/w/x", H, [])[0]
+reap.processes, reap.cwds = (lambda: {}), (lambda: {})
+assert cardguard.observe("/w/x")["claude"] == set() and cardguard.guard("/w/x", H, [])[0]
+reap.processes = lambda: (_ for _ in ()).throw(OSError("ps failed"))
+assert cardguard.observe("/w/x")["claude"] is None and not cardguard.guard("/w/x", H, [])[0]
+reap.processes, reap.cwds, reap.orca_json, reap.patrol_states = saved_proc
+
 
 def boom(*a, **k):
     raise SystemExit("orca down")

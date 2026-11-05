@@ -38,7 +38,7 @@ the process cwds (what makes `scan` judge nothing) keeps the card.
 Both `apply` here and reap-hard close a card only through `scripts/cardguard.py`: they hold the card's lock
 (`<state>/locks/card-<hash>.lock`, so the janitor and reap-hard never work one card at once; the one that finds it
 held skips the card), and `guard()` must pass before the terminals close and again before `worktree rm`. The guard
-keeps the card when patrol judged it parked, unknown or waiting, or working or running while a terminal is open or to be closed, HEAD moved, a terminal opened since the judgement, Orca's agent-wait
+keeps the card when patrol judged it parked, unknown or waiting, or working or running while a terminal is open or to be closed or a Claude process runs in the card (one it could not look for keeps the card too), HEAD moved, a terminal opened since the judgement, Orca's agent-wait
 or an agent's screen shows a prompt or cannot be read, or the session armed its own wake-up (parked); anything it
 cannot read keeps the card too. When the card changed since the plan (a verdict or HEAD), `apply` says which one
 and skips it. The scan also lists, apart, a card whose settled worker dispatch was never released: the Run that
