@@ -1,28 +1,35 @@
 #!/usr/bin/env python3
-"""Sync the vendored pstack subset against cursor/plugins with a three-way merge.
+"""Report how cursor/plugins' pstack has moved past the pristine copy in vendor/pstack.
 
-Usage: python3 scripts/pstack-sync.py [--to REF] [--write] [--manifest PATH]
+Usage: python3 scripts/pstack-sync.py [--to REF] [--notify] [--write] [--manifest PATH]
 
-Dry run by default: one row per vendored file, nothing touched. --write applies new, clean and
-merged files and advances the pin, and only when no file conflicts. The merge base is read from
-upstream git at the pinned SHA, so no base copy is stored here.
+vendor/pstack/<upstream path> holds each manifest file exactly as upstream had it at the pin. The skills under
+skills/ are this repo's own and nothing here touches them: an upstream change is read and, when worth it, ported
+by hand. One line per file that differs, then a summary line:
+  changed  upstream at REF differs from the copy
+  deleted  upstream at REF no longer has the file
+  new      upstream added it since the pin: a new skill, or a new file in a vendored skill
+  drift    the copy no longer equals upstream at the pin (edited or missing)
+--notify  a desktop notification when anything differs, once per upstream commit (the periodic job passes it)
+--write   by hand only: rewrite the copies as REF has them, drop the deleted ones and advance the pin
+Exits 0 whether or not anything differs; a git or fetch failure exits non-zero.
 """
-import json, os, re, subprocess, sys, tempfile, pathlib
+import json, os, platform, subprocess, sys, pathlib
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 CACHE = os.path.expanduser(os.environ.get("PSTACK_CACHE", "~/.cache/pstack-upstream"))
-# Cursor-only tokens that should not survive in an adapted file. Advisory: negated mentions
-# ("never require gt") also match, so a hit is a prompt to look, not a failure.
-DENY = [r"\.cursor/", r"agent-transcripts", r"cursor-team-kit", r'environment: ?"cloud"',
-        r"cloud_base_branch", r"\bAskQuestion\b", r"\bgeneralPurpose\b", r"\breadonly: ?(true|false)",
-        r"pstack-models\.mdc", r"\bgrok-\d", r"\bgt\b", r"control-(ui|cli)", r"\bcreate-skill\b", r"/deslop\b"]
+STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()
 
 
 def git(*args, check=True):
-    r = subprocess.run(["git", "-C", CACHE, *args], capture_output=True, text=True)
+    r = subprocess.run(["git", "-C", CACHE, *args], capture_output=True)
     if check and r.returncode != 0:
-        sys.exit(f"git {' '.join(args)} failed: {r.stderr.strip()}")
+        sys.exit(f"git {' '.join(args)} failed: {r.stderr.decode(errors='replace').strip()}")
     return r
+
+
+def out(*args):
+    return git(*args).stdout.decode()
 
 
 def show(ref, path):
@@ -30,82 +37,89 @@ def show(ref, path):
     return r.stdout if r.returncode == 0 else None
 
 
-def merge3(local, base, new):
-    with tempfile.TemporaryDirectory() as d:
-        p = {k: os.path.join(d, k) for k in ("local", "base", "new")}
-        for k, v in (("local", local), ("base", base or ""), ("new", new)):
-            pathlib.Path(p[k]).write_text(v)
-        r = subprocess.run(["git", "merge-file", "-p", "-L", "local", "-L", "base", "-L", "upstream",
-                            p["local"], p["base"], p["new"]], capture_output=True, text=True)
-    return r.stdout, r.returncode
+def compare(m, vendor, target):
+    """(rows, fresh): rows are (state, upstream path); fresh maps each vendored path to its bytes at target."""
+    pin, up = m["pin"], m["upstream_root"]
+    rows, fresh = [], {}
+    for f in m["files"]:
+        path = f["upstream"]
+        copy = (vendor / path).read_bytes() if (vendor / path).is_file() else None
+        base, new = show(pin, f"{up}/{path}"), show(target, f"{up}/{path}")
+        states = ["drift"] if copy != base else []
+        states += ["deleted"] if new is None else ["changed"] if new != base else []
+        if states:
+            rows.append(("+".join(states), path))
+        fresh[path] = new
+    skill_dirs = {p.split("/")[1] for p in fresh if p.startswith("skills/")}
+    for name in out("diff", "--name-only", "--diff-filter=A", pin, target, "--", f"{up}/skills").split():
+        rel = name[len(up) + 1:]
+        if rel not in fresh and (rel.endswith("/SKILL.md") or rel.split("/")[1] in skill_dirs):
+            rows.append(("new", rel))
+    return rows, fresh
+
+
+def notify(text, target):
+    """Once per upstream commit, so a daily job does not repeat itself until someone refreshes the copy."""
+    seen = STATE / "pstack-upstream.json"
+    try:
+        if json.loads(seen.read_text()).get("notified") == target:
+            return
+    except (OSError, ValueError, AttributeError):
+        pass
+    if platform.system() == "Darwin" and not os.environ.get("SKILLS_SYNC_NO_NOTIFY"):
+        script = f"display notification {json.dumps(text)} with title \"agent-skills pstack upstream\""
+        subprocess.run(["osascript", "-e", script], capture_output=True, timeout=10)
+    seen.parent.mkdir(parents=True, exist_ok=True)
+    seen.write_text(json.dumps({"notified": target}) + "\n")
+    print(f"notified ({target[:12]})")
+
+
+def refresh(m, manifest_path, vendor, fresh, target):
+    keep = []
+    for f in m["files"]:
+        p, data = vendor / f["upstream"], fresh[f["upstream"]]
+        if data is None:
+            p.unlink(missing_ok=True)
+            continue
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(data)
+        if p.suffix == ".sh":
+            p.chmod(0o755)
+        keep.append(f)
+    dropped, m["files"], m["pin"] = len(m["files"]) - len(keep), keep, target
+    plugin = show(target, f"{m['upstream_root']}/.cursor-plugin/plugin.json")
+    if plugin:
+        m["upstream_version"] = json.loads(plugin).get("version", m.get("upstream_version"))
+    manifest_path.write_text(json.dumps(m, indent=2, ensure_ascii=False) + "\n")
+    print(f"wrote {len(keep)} file(s), dropped {dropped}, pin -> {target[:12]} (version {m.get('upstream_version', '?')})")
 
 
 def main():
     argv = sys.argv[1:]
     manifest_path = pathlib.Path(argv[argv.index("--manifest") + 1]) if "--manifest" in argv else REPO / "vendor/pstack/manifest.json"
     to = argv[argv.index("--to") + 1] if "--to" in argv else "origin/main"
-    write = "--write" in argv
     m = json.loads(manifest_path.read_text())
+    vendor = manifest_path.parent
 
     if not os.path.isdir(CACHE):
         subprocess.run(["git", "clone", "-q", "--filter=blob:none", "--no-checkout", m["remote"], CACHE], check=True)
     git("fetch", "-q", "origin")
-    pin, target = m["pin"], git("rev-parse", to).stdout.strip()
-    up = m["upstream_root"]
+    pin, target = m["pin"], out("rev-parse", to).strip()
+    log = out("log", "--format=%h %cs %s", f"{pin}..{target}", "--", m["upstream_root"]).strip()
+    print(f"pin {pin[:12]} -> {target[:12]}\nupstream commits touching {m['upstream_root']}/:\n{log or '  (none)'}\n")
 
-    log = git("log", "--format=%h %cs %s", f"{pin}..{target}", "--", up).stdout.strip()
-    print(f"pin {pin[:12]} -> {target[:12]}\nupstream commits touching {up}/:\n{log or '  (none)'}\n")
-
-    rows, blocked, writes = [], 0, {}
-    for f in m["files"]:
-        base, new = show(pin, f"{up}/{f['upstream']}"), show(target, f"{up}/{f['upstream']}")
-        local_path = REPO / f["local"]
-        local = local_path.read_text() if local_path.exists() else None
-        if new is None:
-            rows.append((f["upstream"], "deleted-upstream", "")); blocked += 1; continue
-        if local is None:
-            merged, state = new, "new"
-        elif base == new:
-            # A verbatim file must still equal upstream even when upstream did not move.
-            drift = f["mode"] == "verbatim" and local != base
-            rows.append((f["upstream"], "drift" if drift else "unchanged", "")); blocked += drift; continue
-        elif local == base:
-            merged, state = new, "clean"
-        else:
-            merged, n = merge3(local, base, new)
-            state = "merged" if n == 0 else f"conflict({n})"
-            if f["mode"] == "verbatim":
-                # A verbatim file edited locally is no longer verbatim; the manifest has to say so.
-                state = "drift+" + state
-            blocked += n > 0 or f["mode"] == "verbatim"
-        hits = sorted({p for p in DENY if re.search(p, merged)}) if f["mode"] == "adapted" else []
-        rows.append((f["upstream"], state, ",".join(hits)))
-        writes[local_path] = merged
-
-    tracked = {f["upstream"] for f in m["files"]}
-    names = git("ls-tree", "-r", "--name-only", target, "--", f"{up}/skills").stdout.split()
-    untracked = sorted(n[len(up) + 1:] for n in names if n.endswith("SKILL.md") and n[len(up) + 1:] not in tracked)
-
-    w = max(len(r[0]) for r in rows)
-    for name, state, hits in rows:
-        print(f"{name:<{w}}  {state:<16} {('denylist: ' + hits) if hits else ''}")
-    print(f"\nupstream SKILL.md files not vendored: {len(untracked)}")
-
-    if not write:
-        return
-    if blocked:
-        sys.exit(f"{blocked} blocked file(s): nothing written, pin stays at {pin[:12]}")
-    for path, text in writes.items():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text)
-        if path.suffix == ".sh":
-            path.chmod(0o755)
-    m["pin"] = target
-    plugin = show(target, f"{up}/.cursor-plugin/plugin.json")
-    if plugin:
-        m["upstream_version"] = json.loads(plugin).get("version", m.get("upstream_version"))
-    manifest_path.write_text(json.dumps(m, indent=2, ensure_ascii=False) + "\n")
-    print(f"wrote {len(writes)} file(s), pin -> {target[:12]} (version {m.get('upstream_version', '?')})")
+    rows, fresh = compare(m, vendor, target)
+    for state, path in rows:
+        print(f"{state:<14} {path}")
+    if rows:
+        summary = f"pstack upstream: {len(rows)} file(s) differ from vendor/pstack (pin {pin[:7]}, upstream {target[:7]})"
+    else:
+        summary = f"pstack upstream: vendor/pstack matches upstream {target[:7]}"
+    if rows and "--notify" in argv:
+        notify(summary, target)
+    print(summary)
+    if "--write" in argv:
+        refresh(m, manifest_path, vendor, fresh, target)
 
 
 if __name__ == "__main__":

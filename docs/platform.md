@@ -307,7 +307,7 @@ The human must get an answer from you within seconds, at any time. You route; yo
   the answer's shape.
 ```
 
-`principles`에는 Delegation 묶음에 한 줄을 더하는 안을 제안한다: "**Stay Answerable** — the session the human talks to routes and answers; every piece of work runs in a background subagent or another session." 다만 `principles`는 pstack upstream을 따라가는 스킬이라, 구현할 때 `scripts/pstack-sync-test.sh`로 upstream 동기화가 깨지지 않는지 먼저 본다. 깨지면 `orchestrate`에만 둔다.
+`principles`에는 Delegation 묶음에 한 줄을 더하는 안을 제안한다: "**Stay Answerable** — the session the human talks to routes and answers; every piece of work runs in a background subagent or another session." `principles`는 pstack에서 가져왔지만 이제 이 저장소가 따로 관리하므로(`vendor/pstack/NOTICE.md`) 바로 고쳐도 upstream 원본과 부딪히지 않는다.
 
 ### 6.2 실측 근거 (2026-09-24~25 리드 세션 한 개의 트랜스크립트)
 

@@ -2,10 +2,10 @@
 
 이 저장소의 일부 파일은 [cursor/plugins](https://github.com/cursor/plugins)의 `pstack`(Lauren Tan, MIT)에서 가져왔다. 라이선스 전문은 같은 폴더의 `LICENSE`에 있다. 고정 커밋(`pin`), pstack 버전(`upstream_version`), 파일 목록은 `manifest.json`이 정본이다.
 
+- 이 폴더의 `skills/`는 `manifest.json`의 각 파일을 `pin` 시점 upstream 그대로(바이트 단위) 둔 원본 사본이다. 손으로 고치지 않는다. 플러그인은 루트의 `skills/`만 읽으므로 이 사본은 스킬로 실리지 않는다.
+- 루트 `skills/`의 스킬은 이 저장소가 따로 관리한다. 아래 표의 방식은 처음 가져올 때의 모습이다. `verbatim`은 그대로, `adapted`는 표의 수정만 해서 가져왔고, `derived`는 upstream 여러 파일을 합치거나 번역해 새로 썼다(`manifest.json`에 없다). 그 뒤의 수정은 이 저장소의 커밋 기록이 맡는다.
 - 스킬 파일 자체에는 출처 줄을 두지 않는다. 출처와 라이선스 고지는 이 문서, `LICENSE`, `manifest.json`, README가 맡는다. 이 폴더는 플러그인에 함께 실린다.
-- `verbatim`은 upstream과 바이트 단위로 같다. `adapted`는 아래 표의 수정만 했다. `derived`는 upstream 여러 파일을 합치거나 번역해 새로 쓴 파일이다. 3-way 병합이 맞지 않아 `manifest.json`에 넣지 않으므로 동기화 스크립트가 다루지 않고, upstream이 바뀌면 사람이 읽고 손으로 반영한다.
-- 동기화: `python3 scripts/pstack-sync.py`(기본 dry-run, `--write`는 충돌 0일 때만 쓰고 pin을 올린다). 스크립트 자체 검사는 `bash scripts/pstack-sync-test.sh`.
-- 3-way 병합은 텍스트 충돌만 잡는다. 동기화 PR에서는 새로 들어온 문장이 사용자 규칙(`~/.claude/CLAUDE.md`)과 부딪히지 않는지, 설치되지 않은 스킬을 부르지 않는지 사람이 읽고 확인한다.
+- upstream 변경 확인: `python3 scripts/pstack-sync.py`가 사본과 upstream을 비교해 바뀐(changed)·지워진(deleted)·새(new)·사본이 어긋난(drift) 파일을 한 줄씩 보여 준다. 아무것도 쓰지 않는다. `--write`는 사본을 upstream으로 새로 쓰고 pin을 올린다. 루트 `skills/`에 무엇을 옮길지는 사람이 diff를 읽고 정해 손으로 고친다. 그때 새 문장이 사용자 규칙(`~/.claude/CLAUDE.md`)과 부딪히지 않는지, 설치되지 않은 스킬을 부르지 않는지 확인한다. 스크립트 자체 검사는 `bash scripts/pstack-sync-test.sh`.
 
 ## 파일별 수정
 
@@ -57,7 +57,7 @@
 | `skills/write-plainly/references/korean.md` | `pstack/skills/unslop/SKILL.md` | derived | unslop의 서식 금지(긴 대시, 문장 중간 콜론, 굵은 글씨+콜론 목록, 장식 이모지)와 챗봇 문구 규칙을 한국어로 옮겼다. 상투어, 번역투, 얼버무림, 주어 생략, 명사 나열, 문체 규칙과 예문은 여기서 새로 썼다 |
 | `skills/brief/SKILL.md` §1 결정 항목·이름 규칙 두 문장 | `pstack/skills/ketchup/SKILL.md`(pin 이후 upstream `978ca6e`에 추가) | derived | 결정 항목에 "답하지 않으면 어떻게 되는지"를, PR·브랜치·워커는 사람이 아는 이름으로 부른다는 규칙을 옮겼다. "마지막 메시지 이후" 범위와 `/ketchup` 명령은 `recall`·`brief`와 겹쳐 가져오지 않았다 |
 
-위 표의 adapted `SKILL.md`는 모두 description을 이 환경의 스킬 목록 예산에 맞춰 줄였다. 트리거 문구와 다른 스킬과의 구분만 남기고 동작 설명은 본문에 맡긴다. upstream의 description 변경은 3-way 병합에서 충돌로 잡히니 이 원칙대로 손으로 합친다.
+위 표의 adapted `SKILL.md`는 모두 description을 이 환경의 스킬 목록 예산에 맞춰 줄였다. 트리거 문구와 다른 스킬과의 구분만 남기고 동작 설명은 본문에 맡긴다. upstream의 description 변경을 옮길 때도 이 원칙대로 손으로 줄인다.
 
 `skills/principles/SKILL.md`는 vendoring 대상이 아니다. poteto-mode의 `## Principles` 절을 참고해 여기서 새로 쓴 인덱스이며, 본문에 출처를 적었다.
 
