@@ -67,9 +67,10 @@ class JanitorLoad(Base):
     j = au.JanitorLoad()
 
     def test_shape(self):
-        self.assertTrue(LOAD["precheck"].endswith("precheck --load"), LOAD["precheck"])
+        self.assertTrue(LOAD["precheck"].endswith("precheck --load --act"), LOAD["precheck"])
+        self.assertTrue(WANT["precheck"].endswith("precheck --act"), WANT["precheck"])
         self.assertNotEqual(LOAD["trigger"], WANT["trigger"])
-        self.assertEqual(WANT["trigger"], "17 */3 * * *")
+        self.assertEqual((WANT["trigger"], WANT["precheck-timeout"]), ("7,37 * * * *", 600))
 
     def test_status_finds_only_its_own_job(self):
         self.orca([janitor()])

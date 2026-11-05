@@ -541,7 +541,8 @@ send = lambda argv, check: calls.append(argv) or "{}"
 assert reap.notify_unrun("run:r1", "python3 reap.py reap --plan /s/p.json", send)(2) is True
 assert calls[0][:5] == ["orca", "orchestration", "send", "--to", "run:r1"] and "reap --plan /s/p.json" in calls[0][-2], calls
 assert calls[0][calls[0].index("--type") + 1] == "status", calls
-assert "--type status" in reap.schedule_prompt("reap.py", pathlib.Path("/s"), inbox="run:r1")
+# The prompt is only for Run now, which skips the precheck: it runs the same --act round once.
+assert "`python3 reap.py precheck --act --state /s`" in reap.schedule_prompt("reap.py", pathlib.Path("/s"), inbox="run:r1")
 assert reap.notify_unrun(None, "x", send)(2) is False and len(calls) == 1
 assert reap.notify_unrun("run:r1", "x", lambda argv, check: None)(2) is False
 
@@ -628,11 +629,11 @@ with tempfile.TemporaryDirectory() as tmp:
     assert [c[4] for c in calls[:2]] == ["t1", "t2"], calls
 argv = reap.schedule_cmd("/abs/reap.py", pathlib.Path("/s"), "path:/repo", ledger=pathlib.Path("/l/ledger.jsonl"))
 assert argv[:3] == ["orca", "automations", "create"] and "--write" not in argv
-assert argv[argv.index("--workspace-mode") + 1] == "existing" and argv[argv.index("--trigger") + 1] == "17 */3 * * *"
+assert argv[argv.index("--workspace-mode") + 1] == "existing" and argv[argv.index("--trigger") + 1] == "7,37 * * * *"
 # The load job: its own name and trigger, the same round prompt, and a precheck that first reads the load.
 load = reap.schedule_cmd("/abs/reap.py", reap.STATE_HOME, "path:/repo", load=True)
 assert load[load.index("--name") + 1] == reap.LOAD_NAME and load[load.index("--trigger") + 1] == reap.LOAD_TRIGGER
-assert load[load.index("--precheck") + 1] == "python3 /abs/reap.py precheck --load"
+assert load[load.index("--precheck") + 1] == "python3 /abs/reap.py precheck --load --act"
 same = reap.schedule_cmd("/abs/reap.py", reap.STATE_HOME, "path:/repo")
 assert load[load.index("--prompt") + 1] == same[same.index("--prompt") + 1]
 assert not any(a.startswith("--extra-agent-args") for a in same), same
@@ -670,14 +671,14 @@ with tempfile.TemporaryDirectory() as tmp:
     assert reap.load_due(s, {"load_limit": 8}, now=1e6, load5=12, autos=on)[0], "a stamp from the future holds nothing off"
 # The automation does not inherit the shell that ran schedule, so a state or ledger off the default goes in as flags,
 # never an `env` or `VAR=` prefix, which a scheduled session may refuse as a command of its own.
-assert argv[argv.index("--precheck") + 1] == "python3 /abs/reap.py precheck --state /s --ledger /l/ledger.jsonl"
+assert argv[argv.index("--precheck") + 1] == "python3 /abs/reap.py precheck --act --state /s --ledger /l/ledger.jsonl"
 joined = " ".join(argv)
 assert "env " not in joined and not re.search(r"(^|[\s`])[A-Z_]{2,}=", joined), joined
-assert "`python3 /abs/reap.py reap --plan /s/janitor-plan.json --state /s --ledger /l/ledger.jsonl`" in joined, joined
-# Orca's 60-second default cut off every precheck once the cards passed 40.
-assert argv[argv.index("--precheck-timeout") + 1] == "300"
+assert "`python3 /abs/reap.py precheck --act --state /s --ledger /l/ledger.jsonl`" in joined, joined
+# The scan, the reap's re-scan and its acts all run inside the precheck now.
+assert argv[argv.index("--precheck-timeout") + 1] == "600" and reap.ACT_BUDGET_S < reap.PRECHECK_TIMEOUT
 default = reap.schedule_cmd("/abs/reap.py", reap.STATE_HOME, "path:/repo", ledger=reap.STATE_HOME / "ledger.jsonl")
-assert default[default.index("--precheck") + 1] == "python3 /abs/reap.py precheck", default
+assert default[default.index("--precheck") + 1] == "python3 /abs/reap.py precheck --act", default
 
 # CLI: ledger add, precheck twice, reap moves a settled tmpdir to the trash and skips what no longer holds, schedule only prints.
 with tempfile.TemporaryDirectory() as tmp:
@@ -728,6 +729,97 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "automations-runner" not in out.stdout, "a chosen workspace needs no runner hint"
     out = cli("schedule")
     assert "--no-parent" in out.stdout and "settings.local.json" in out.stdout, out
+
+# precheck --act: the janitor round with no agent. It reaps in the same process and always exits 1, so Orca never
+# starts the model; a second round meanwhile waits for nothing.
+with tempfile.TemporaryDirectory() as tmp:
+    tmp = pathlib.Path(os.path.realpath(tmp))
+    d = tmp / "build"
+    d.mkdir()
+    env = {**os.environ, "AGENT_SKILLS_STATE": str(tmp / "state"), "AGENT_SKILLS_TRASH": str(tmp / "trash")}
+    script = str(pathlib.Path(__file__).parent / "reap.py")
+    cli = lambda *a: subprocess.run([sys.executable, script, *a], env=env, capture_output=True, text=True)
+    assert cli("ledger", "add", "--kind", "tmpdir", "--path", str(d), "--worktree", str(tmp / "gone-wt")).returncode == 0
+    r = cli("precheck", "--act", "--kinds", "tmpdir")
+    assert r.returncode == 1 and "정리 1" in r.stdout and "휴지통으로 옮김" in r.stdout, (r.stdout, r.stderr)
+    assert not d.exists() and (tmp / "trash" / "build").is_dir()
+    runs = [json.loads(x) for x in (tmp / "state" / "janitor-runs.jsonl").read_text().splitlines()]
+    assert runs[-1]["acted"] == [f"tmpdir:{d}"] and runs[-1]["source"] == "scan" and runs[-1]["error"] is None, runs
+    r = cli("precheck", "--act", "--kinds", "tmpdir")
+    assert r.returncode == 1 and "대상 0개" in r.stdout, r.stdout
+    saved_state, reap.STATE = reap.STATE, tmp / "state"
+    with reap.janitor_lock(tmp / "state") as got:
+        assert got
+        r = cli("precheck", "--act", "--kinds", "tmpdir")
+        assert r.returncode == 1 and "다른 janitor 회차" in r.stdout, r.stdout
+    reap.STATE = saved_state
+    assert len((tmp / "state" / "janitor-runs.jsonl").read_text().splitlines()) == 2, "the skipped round logs nothing"
+
+# act_round, with the reap stood in: what it hands the reap, the per-target rest, and the one message for a person.
+with tempfile.TemporaryDirectory() as tmp:
+    st = pathlib.Path(tmp)
+    item = lambda key, kind="tmpdir", target=True, **kw: {"key": key, "kind": kind, "target": target, "why": "끝남", **kw}
+    data = {"hours": 6, "repos": [], "kinds": ["tmpdir", "card", "chrome-window"],
+            "items": [item("tmpdir:/a"), item("tmpdir:/b"), item("chrome-window:7", "chrome-window", url="https://example.test/x"),
+                      item("card:/c", "card", False, verdict="사람 결정"), item("card:/d", "card", False, verdict="남김")]}
+    handed, sent = [], []
+    def fake_reap(outcome):
+        def f(plan, cfg, scheduled_only, deadline):
+            assert scheduled_only and deadline is not None
+            handed.append(sorted(i["key"] for i in plan["items"]))
+            return {"acted": [], "skipped": [], "failed": [], "left": [], "unchecked": False, "refused": None, "notes": [], **outcome}
+        return f
+    send = lambda argv, check: sent.append(argv) or "{}"
+    jrow = reap.act_round(data, {}, st, time.monotonic(), "run:r1", send, fake_reap({"failed": ["tmpdir:/a"], "acted": ["tmpdir:/b"]}), now=1000)
+    # Never a chrome window: with no agent its act would retire the ledger entry and leave the window open.
+    assert handed == [["tmpdir:/a", "tmpdir:/b"]], handed
+    fails = json.loads((st / "janitor-fails.json").read_text())
+    assert fails["tmpdir:/a"]["until"] == 1000 + reap.RETRY_AFTER and "tmpdir:/b" not in fails, fails
+    body = sent[0][sent[0].index("--body") + 1]
+    assert sent[0][:5] == ["orca", "orchestration", "send", "--to", "run:r1"] and jrow["human"] == 3 and jrow["notified"], jrow
+    assert "card:/c" in body and "chrome-window:7" in body and "https://example.test/x" in body and "tmpdir:/a" in body
+    assert "card:/d" not in body
+    # A rest is the failed target's alone: a new target beside it still runs, the rested one is not handed over.
+    data["items"].append(item("tmpdir:/e"))
+    reap.act_round(data, {}, st, time.monotonic(), "run:r1", send, fake_reap({"acted": ["tmpdir:/b", "tmpdir:/e"]}), now=2000)
+    assert handed[-1] == ["tmpdir:/b", "tmpdir:/e"], handed
+    assert len(sent) == 1, "the same set of keys for a person is not sent again"
+    # The rest ends a day later.
+    reap.act_round(data, {}, st, time.monotonic(), "run:r1", send, fake_reap({"acted": ["tmpdir:/a"]}), now=1001 + reap.RETRY_AFTER)
+    assert "tmpdir:/a" in handed[-1] and "tmpdir:/a" not in json.loads((st / "janitor-fails.json").read_text())
+    # A send that failed saves nothing, so the next round tries again; a new key sends the whole list once more.
+    data["items"].append(item("card:/f", "card", False, verdict="사람 결정"))
+    reap.act_round(data, {}, st, time.monotonic(), "run:r1", lambda argv, check: None, fake_reap({}), now=1e6)
+    reap.act_round(data, {}, st, time.monotonic(), "run:r1", send, fake_reap({}), now=1e6 + 1)
+    assert len(sent) == 2 and "card:/f" in sent[1][sent[1].index("--body") + 1] and "card:/c" in sent[1][sent[1].index("--body") + 1]
+    # No inbox: printed, never marked as sent.
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        data["items"].append(item("card:/g", "card", False, verdict="사람 결정"))
+        assert reap.act_round(data, {}, st, time.monotonic(), None, send, fake_reap({}), now=1e6 + 2)["notified"] is False
+    assert "card:/g" in out.getvalue() and len(sent) == 2
+    # A refused reap (protect file unreadable) changes no rest; a crash is still logged.
+    reap.act_round(data, {}, st, time.monotonic(), None, send, fake_reap({"refused": "보호 파일", "failed": ["tmpdir:/b"]}), now=1e6 + 3)
+    assert "tmpdir:/b" not in json.loads((st / "janitor-fails.json").read_text())
+    def boom(*a, **k):
+        raise RuntimeError("scan blew up")
+    jrow = reap.act_round(data, {}, st, time.monotonic(), None, send, boom, now=1e6 + 4)
+    last = json.loads((st / "janitor-runs.jsonl").read_text().splitlines()[-1])
+    assert jrow["error"] == last["error"] == "RuntimeError: scan blew up", last
+
+# reap_plan's deadline is checked between targets, so it never cuts an act in the middle: past it, the rest are left.
+saved_scan, plan_items = reap.scan, [{"key": f"tmpdir:/x{n}", "kind": "tmpdir", "target": True, "name": f"/x{n}"} for n in range(3)]
+reap.scan = lambda kinds, hours, cfg, repos: (plan_items, [])
+res = reap.reap_plan({"hours": 6, "repos": [], "kinds": ["tmpdir"], "items": plan_items}, {}, scheduled_only=True,
+                     deadline=time.monotonic() - 1, out=lambda s: None)
+reap.scan = saved_scan
+assert res["left"] == [i["key"] for i in plan_items] and not res["acted"], res
+# A plan of manual kinds handed to the janitor round is refused per item, whatever the file is called.
+reap.scan = lambda kinds, hours, cfg, repos: ([], [])
+res = reap.reap_plan({"hours": 6, "repos": [], "kinds": [], "items": [{"key": "orphan:1", "kind": "orphan", "target": True}]},
+                     {}, scheduled_only=True, out=lambda s: None)
+reap.scan = saved_scan
+assert res["skipped"] == ["orphan:1"], res
 
 # user-folder: top-level entries untouched for `days`, not open, not a download in progress.
 D = 86400
@@ -1028,9 +1120,8 @@ with tempfile.TemporaryDirectory() as tmp:
     assert calls == [["orca", "worktree", "rm", "--worktree", f"path:{wt}", "--run-hooks", "--json"]], calls
 
 prompt = reap.schedule_prompt("/abs/reap.py", pathlib.Path("/s"))
-assert "reap --plan /s/janitor-plan.json" in prompt and "휴지통" in prompt and "report-only" not in prompt, prompt
-assert "우회하지 않는다" in prompt and "orchestration send" not in prompt, prompt
-assert "--to run:r1" in reap.schedule_prompt("/abs/reap.py", pathlib.Path("/s"), inbox="run:r1")
+assert "precheck --act --state /s" in prompt and "휴지통" in prompt and "report-only" not in prompt, prompt
+assert "우회하지 않고" in prompt and "orchestration send" not in prompt, prompt
 
 
 # compose-stack: only registered stacks; the owner done, then stopped or idle for N hours; preview ports wait for a record.

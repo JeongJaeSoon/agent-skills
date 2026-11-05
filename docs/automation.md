@@ -109,15 +109,20 @@ skills-sync setup disable <이름>         # 끄기
 ## 정기 정리(janitor)
 
 `skills/reap-resources`의 `reap.py`가 맡는다. Orca 카드 전부(`card`, 규칙은 `references/cards.md`), 에이전트가 만든 것(ledger에 올린 것과 끝난
-오케스트레이션 워커 터미널)과, `reap.user_folders`에 지정한 폴더에서 7일 넘게 안 바뀐 항목을 정리한다. automation의 에이전트는
-`reap --plan`을 한 번 돌려 대상을 닫거나 휴지통으로 옮기고, 무엇을 했는지 보고한다. 도구는 영구 삭제도
+오케스트레이션 워커 터미널)과, `reap.user_folders`에 지정한 폴더에서 7일 넘게 안 바뀐 항목을 정리한다. 회차에는 모델이
+없다. Orca는 precheck를 Claude 세션 밖에서 직접 실행하므로 거기서 돈 정리는 권한 프롬프트나 auto mode 분류기를 만나지
+않는다. precheck `reap.py precheck --act`가 계획을 만들고, 같은 프로세스에서 `reap --plan`과 같은 경로(다시 scan, 같은
+identity만, 대상 잠금 안에서 guard 재확인)로 정리한 뒤 늘 exit 1로 끝나서 Orca가 에이전트를 띄우지 않는다(실행 기록은
+`skipped_precheck`). 실제로 한 일은 `<state>/janitor-runs.jsonl`에 회차마다 한 줄 남는다. 실패한 대상은 그 대상만 하루
+쉬고(`janitor-fails.json`), chrome-window는 브라우저에서 URL을 확인해야 하므로 손대지 않는다. 사람 결정 카드, chrome-window,
+쉬는 대상은 `reap.inbox_to`로 한 통에 묶어 보내고, 지난번에 보낸 목록에 없던 것이 생겼을 때만 다시 보낸다. 도구는 영구 삭제도
 휴지통 비우기도 하지 않지만, OS 설정(Finder의 "30일 후 휴지통에서 항목 제거")이 켜져 있으면 휴지통으로 옮긴 것은
 30일 뒤 지워진다. scan과 precheck는 이 설정을 `## 경보`로 알리고, 그동안 지정한 개인 폴더 항목은
-`$AGENT_SKILLS_TRASH`(일반 폴더)를 주지 않는 한 옮기지 않고 남긴다. reap이 거부되면 회차는 우회하지 않고 거부된
-명령을 `reap.inbox_to`로 보낸다.
+`$AGENT_SKILLS_TRASH`(일반 폴더)를 주지 않는 한 옮기지 않고 남긴다.
 
 ```bash
-python3 <reap.py 절대 경로> precheck     # 대상이 있으면 exit 0. 지난 reap 이 실패한 대상과 같으면 하루 동안, 같은 계획이 reap 없이 plan_repeat 번 쌓이면 하루 한 번만 exit 0
+python3 <reap.py 절대 경로> precheck --act   # 예약 회차: 계획 → 정리 → 늘 exit 1. 다른 회차가 돌고 있으면 바로 exit 1
+python3 <reap.py 절대 경로> precheck     # 계획만(에이전트 회차용): 대상이 있으면 exit 0. 지난 reap 이 실패한 대상과 같으면 하루 동안, 같은 계획이 reap 없이 plan_repeat 번 쌓이면 하루 한 번만 exit 0
 skills-sync setup enable janitor        # 등록·갱신은 이 명령으로 한다. 아래 schedule 은 그 내부와 runner 용
 python3 <reap.py 절대 경로> schedule     # 만들 `orca automations create …` 명령을 출력만 한다. 스킬을 로드하는 체크아웃에서 돌린다
 python3 <reap.py 절대 경로> schedule --workspace path:<runner>   # runner worktree 에서 돌린다(위 "지킬 것"의 모델 항목)
@@ -125,7 +130,7 @@ python3 <reap.py 절대 경로> schedule --write   # 실제로 만든다
 orca automations edit <id> --prompt "<schedule 이 출력한 --prompt 값>"   # 이미 있는 automation 의 프롬프트만 바꾼다
 ```
 
-주기는 3시간(`17 */3 * * *`)이다. #190 이전에 등록한 PC에는 옛 30분 주기(`7,37 * * * *`)가 그대로 남고 `janitor-load`도 없다. `skills-sync setup`이 이 경우를 `reap schedule 과 다름: trigger, prompt (enable 로 맞춤)`으로 보여 주며, 오너가 메인 체크아웃에서 `skills-sync setup enable janitor`를 실행하면 3시간 주기로 고쳐지고 `janitor-load`가 함께 등록된다. 등록된 실제 주기는 `orca automations list --json`의 `rrule`로 확인한다. 그 사이에 PC 부하가 높아지면 두 번째 automation `janitor-load`(`27,57 * * * *`, `precheck --load`)가 같은 회차를 한 번 더 돈다. janitor를 꺼 두었거나 지운 PC에는 만들지 않고, janitor가 옮겨 간 worktree에 만든다. 이 precheck는 5분 load만 읽고, load가 `reap.load_limit`(기본 CPU 수) 이상이며 janitor가 등록돼 켜져 있고(Orca 앱에서 끄거나 지운 것도, automation 목록을 못 읽은 것도 꺼짐으로 본다) 두 job 어느 쪽도 `reap.load_cooldown_minutes`(기본 60분) 안에 precheck를 돌리지 않았을 때만 전체 precheck로 넘어간다. 쿨다운은 부하 job만 멈추고, 3시간 job은 늘 제 시각에 돈다. 부하가 높을 때가 끝난 카드와 compose 스택(`compose-stack`: `orch heavy`가 등록한 것)이 가장 비싼 때이기 때문이다. pressure-watch LaunchAgent가 없는 PC에서도 Orca가 돌린다. 같은 계획이 reap 없이 쌓이면 모델을 깨우지 않는 규칙(`reap.plan_repeat`)은 두 job이 함께 쓴다. 규칙과 ledger 형식은 [reap-resources SKILL.md](../skills/reap-resources/SKILL.md).
+주기는 30분(`7,37 * * * *`, precheck timeout 600초)이다. 모델을 부르지 않으니 회차 비용은 scan 한 번이다. 에이전트 회차로 등록한 PC(precheck에 `--act`가 없는 것)는 `skills-sync setup`이 `reap schedule 과 다름: precheck, prompt (enable 로 맞춤)`으로 보여 주고, 오너가 메인 체크아웃에서 `skills-sync setup enable janitor`를 실행하면 이 값으로 고쳐진다. 프롬프트는 precheck를 건너뛰는 Run now 때만 쓰인다. 등록된 실제 주기는 `orca automations list --json`의 `rrule`로 확인한다. 그 사이에 PC 부하가 높아지면 두 번째 automation `janitor-load`(`27,57 * * * *`, `precheck --load --act`)가 같은 회차를 한 번 더 돈다(30분 janitor 옆에서는 아래 쿨다운 때문에 거의 돌지 않는다). janitor를 꺼 두었거나 지운 PC에는 만들지 않고, janitor가 옮겨 간 worktree에 만든다. 이 precheck는 5분 load만 읽고, load가 `reap.load_limit`(기본 CPU 수) 이상이며 janitor가 등록돼 켜져 있고(Orca 앱에서 끄거나 지운 것도, automation 목록을 못 읽은 것도 꺼짐으로 본다) 두 job 어느 쪽도 `reap.load_cooldown_minutes`(기본 60분) 안에 precheck를 돌리지 않았을 때만 전체 precheck로 넘어간다. 쿨다운은 부하 job만 멈추고, 30분 job은 늘 제 시각에 돈다. 부하가 높을 때가 끝난 카드와 compose 스택(`compose-stack`: `orch heavy`가 등록한 것)이 가장 비싼 때이기 때문이다. pressure-watch LaunchAgent가 없는 PC에서도 Orca가 돌린다. 두 job은 `<state>/janitor.lock`을 함께 써서 한 번에 한 회차만 돈다. 규칙과 ledger 형식은 [reap-resources SKILL.md](../skills/reap-resources/SKILL.md).
 
 ## 세션 순찰 (`orch patrol`)
 

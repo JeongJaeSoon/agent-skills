@@ -51,7 +51,7 @@ skills-sync setup disable janitor        # 하나 끄기. 어느 것이든 apply
 
 | 이름 | 기본 | 장치 | 하는 일 |
 |---|---|---|---|
-| `janitor` | on | Orca automation(Orca 필요) | 에이전트가 만든 끝난 리소스를 3시간마다 정리한다(#190 이전 등록은 30분 주기로 남으며 `skills-sync setup enable janitor`로 맞춘다). compose는 down까지만, `-v`·prune·볼륨/이미지 삭제는 하지 않는다 |
+| `janitor` | on | Orca automation(Orca 필요) | 에이전트가 만든 끝난 리소스를 30분마다 모델 없이 정리한다(precheck `reap.py precheck --act`가 정리까지 하고 exit 1, 에이전트 회차로 등록된 것은 `skills-sync setup enable janitor`로 맞춘다). compose는 down까지만, `-v`·prune·볼륨/이미지 삭제는 하지 않는다 |
 | `janitor-load` | on | Orca automation(Orca 필요) | 30분마다 5분 load만 재고, CPU 수 이상이면 janitor와 같은 정리를 한 번 더 돈다(1시간 안에 돈 회차가 있거나 janitor가 꺼져 있으면 건너뜀) |
 | `preview-watch` | off | macOS LaunchAgent | loopback 웹페이지를 tailnet HTTPS로 자동 공개한다. tailscale CLI가 없으면 켜지 않는다 |
 | `pressure-watch` | on | macOS LaunchAgent | 3분마다 PC 사용량을 재고, 높으면 reap이 올린 안전한 대상만 정리해 알린다. 아무것도 종료하지 않는다([pressure.md](pressure.md)) |
