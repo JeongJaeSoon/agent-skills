@@ -1037,15 +1037,18 @@ process.stdout.write(briefHtml({json.dumps(pointers)}));"""
     # The terminal text titles its sections `## ...` and quotes its guide lines: the page draws the same sections, the
     # repository title in bold, and the quote without its `>` marks.
     titled = "\n".join(["**09:00 · x**", "", "> 단계표 2행 (접음 1) · http://127.0.0.1:4780/#/fleet/stages", ">",
-                        "> PR: ❗ 사람이 풀 것", "", "## 🙋 지금 오너가 할 일 — 없음", "", "## ❓ 결정 필요", "",
+                        "> PR: ❗ 사람이 풀 것", "", "## 🧭 우선순위", "",
+                        "- **Group A** — 진행 1 · 대기 0 · 완료 2 · 다음: t1 — CI 확인", "",
+                        "## 🙋 지금 오너가 할 일 — 없음", "", "## ❓ 결정 필요", "",
                         "1. (d1) settle the copy → 추천: 적용", "2. (d2) pick a date → 추천: Friday", "", "## acme/app → main", "",
                         "## ⏸️ 보류", "", "- 10/30 09:00 → acme/app#9 머지 + 배포"])
     js = f"""{helpers}
 {(assets / "fleet.js").read_text()}
 process.stdout.write(briefHtml({json.dumps(titled)}));"""
     page = subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout
-    assert re.findall(r'<h4 class="bhead">(.*?)</h4>', page) == ['🙋 지금 오너가 할 일 <span class="muted">— 없음</span>',
+    assert re.findall(r'<h4 class="bhead">(.*?)</h4>', page) == ["🧭 우선순위", '🙋 지금 오너가 할 일 <span class="muted">— 없음</span>',
                                                                  "❓ 결정 필요", "⏸️ 보류"], page
+    assert "<td><b>Group A</b></td><td>진행 1 · 대기 0 · 완료 2 · 다음: t1 — CI 확인</td>" in page, page
     assert "<p><b>acme/app → main</b></p>" in page and "##" not in page and "&gt;" not in page, page
     assert '<td class="bmark">2.</td><td>(d2) pick a date</td><td>Friday</td>' in page and "<p>PR: ❗ 사람이 풀 것</p>" in page, page
     assert '<p>단계표 2행 (접음 1) · <a class="link" href="#/fleet/stages">' in page, page

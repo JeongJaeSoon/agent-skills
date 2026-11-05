@@ -130,6 +130,15 @@ def progress_of(text):
     return [n, m]
 
 
+def priority_of(text):
+    """`RANK:NAME`, the owner's priority group of a row (and of the rows under it): groups sort by RANK, then NAME."""
+    m = re.fullmatch(r"(\d{1,3}):\s*(\S.*)", (text or "").strip())
+    name = one_line(m[2]) if m else ""
+    if not m or " — " in name:  # the dashboard splits the summary line at the first " — "; checked once whitespace is folded
+        raise ValueError("--priority is RANK:NAME (a number, then the group's name without ' — '; groups show in RANK order), or - to clear")
+    return f"{int(m[1])}:{name}"
+
+
 def worktree_of(handle):
     """The Orca worktree whose terminal the handle is, from the fleet collector's last state; None when not seen."""
     state = fleet.read_json(fleet.state_dir() / "state.json", None) or {}
@@ -172,6 +181,8 @@ def put(store, rid, fields):
     rows = store["rows"]
     row = rows.get(rid)
     if not row:
+        if rid.startswith("prio:"):  # the ids of the priority rules (board priority set)
+            raise ValueError("a row id cannot start with prio: (those are priority rules)")
         parent = fields.get("parent") or (rid.rsplit("/", 1)[0] if "/" in rid else None)
         if parent and parent not in rows:
             raise ValueError(f"no row {parent} to be the parent; add it first")
@@ -190,7 +201,7 @@ def put(store, rid, fields):
             continue
         if k == "next" and v.strip() in ("-", "—"):
             v = ""
-        if k in ("owner", "after") and v.strip() in ("-", "—", ""):  # the record path's way to take a wait back
+        if k in ("owner", "after", "priority") and v.strip() in ("-", "—", ""):  # the record path's way to take a wait back
             row.pop(k, None)
             continue
         if k == "after" and not re.fullmatch(r"[\w.-]+/[\w.-]+#\d+", v.strip()):
@@ -200,6 +211,7 @@ def put(store, rid, fields):
         if k == "kind" and v not in KINDS:
             raise ValueError(f"--kind is one of {', '.join(KINDS)}")
         row[k] = (status_of(v) if k == "status" else progress_of(v) if k == "progress" else
+                  priority_of(v) if k == "priority" else
                   one_line(v) if isinstance(v, str) else v)
     if row.get("progress") is None:
         row.pop("progress", None)
@@ -239,6 +251,47 @@ def set_row(rid, **fields):
         check_row_write(rid, store["rows"].get(rid), fields)
         return put(store, rid, fields)
     return change(go)
+
+
+MATCH_KINDS = ("worktree", "program", "repo")  # most specific first: the order a rule is looked up in
+
+
+def match_of(text):
+    """`KIND:VALUE` a priority rule matches by: the Orca worktree a card runs in, a lead's program, or its repository."""
+    kind, _, value = (text or "").strip().partition(":")
+    value = one_line(value)
+    if kind not in MATCH_KINDS or not value or (kind == "repo" and not re.fullmatch(r"[\w.-]+/[\w.-]+", value)):
+        raise ValueError(f"the match is worktree:ID, program:NAME or repo:OWNER/NAME, not {text!r}")
+    return f"{kind}:{value}"
+
+
+def priority_set(match, text):
+    """Rows that match get the group `text` (RANK:NAME) unless they or a nearer row carry their own --priority. This is
+    how work the board has no row of (the fleet's lead and card rows) gets a group."""
+    match, group = match_of(match), priority_of(text)
+
+    def go(store):
+        store["groups"][f"prio:{match}"] = {"id": f"prio:{match}", "kind": store_db.GROUP_KIND, "parent": None,
+                                            "match": match, "priority": group}
+    return change(go)
+
+
+def priority_drop(match):
+    match = match_of(match)
+
+    def go(store):
+        if store["groups"].pop(f"prio:{match}", None) is None:
+            raise ValueError(f"no priority rule for {match}")
+    return change(go)
+
+
+def priority_rules(groups):
+    """{KIND: {VALUE: RANK:NAME}} from the board's rule rows."""
+    out = {k: {} for k in MATCH_KINDS}
+    for g in groups.values():
+        kind, _, value = g["match"].partition(":")
+        out[kind][value] = g["priority"]
+    return out
 
 
 def drop(rid):
@@ -708,6 +761,7 @@ def subagent_rows(sessions, every, rows, order, lead_row, now=None, stale_s=None
                          "why": stale and ("세션 꺼짐, 종료 기록 없음" if s.get("phase") == "offline"
                                            else "종료 기록 없음"),
                          "session": None, "pr": None, "reported_at": a.get("started_at"), "parent": parent,
+                         "host_row": host and host["id"],  # the row the group of this one follows (priority rules)
                          # a row of its own takes its host row's section and program, so a program's report keeps it
                          "repo": None if parent else (host or {}).get("repo") or s.get("gh_repo") or s.get("project") or "—",
                          "program": None if parent else (host or {}).get("program")}
@@ -869,12 +923,44 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         store["rows"], store["order"] = {**extra, **store["rows"]}, store["order"] + extra_order
     rows = store["rows"]
 
-    def up(r, field):
+    everyone = rows  # every row, before a --scope report keeps only its program's: a group does not depend on the scope
+
+    def up(r, field, table=None):
+        table = rows if table is None else table
         while r is not None:
             if r.get(field):
                 return r[field]
-            r = rows.get(r.get("parent"))
+            r = table.get(r.get("parent"))
         return None
+
+    rules = priority_rules(store.get("groups") or {})
+
+    def worktrees(n):
+        """The Orca worktrees a row stands for: a card's own, the one a row names, a board lead's recorded or handle's."""
+        lead = store["leads"].get(n["id"]) if n.get("kind") == "lead" else None
+        return [w for w in (n.get("session"), n.get("worktree"), n.get("linked"), lead and lead_session(lead)) if w]
+
+    def prio(r):
+        """A row's priority group: its own `priority`, else the nearest parent's own or its worktree's rule, else the
+        program's rule, else the repository's. A subagent row is first its host's. A fleet row (a lead or card the
+        board has no row of) has only rules."""
+        if r.get("host"):  # a subagent follows the row subagent_rows() found for its host: the host's own row first
+            host = everyone.get(r.get("host_row"))  # (that row's own value, then the host worktree's rule), else a row above it
+            mine = host is not None and host is not r and r["host"] in worktrees(host)
+            if mine and host.get("priority"):
+                return host["priority"]
+            if g := rules["worktree"].get(r["host"]):
+                return g
+            if host is not None and host is not r and (g := prio(host)):
+                return g
+        n = r
+        while n is not None:
+            if n.get("priority"):
+                return n["priority"]
+            if g := next((rules["worktree"][w] for w in worktrees(n) if w in rules["worktree"]), None):
+                return g
+            n = everyone.get(n.get("parent"))
+        return rules["program"].get(up(r, "program", everyone)) or rules["repo"].get(up(r, "repo", everyone))
 
     def lead_of(r):
         while r.get("parent") in rows:
@@ -1091,6 +1177,16 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             lines[at]["status"] = states[h["id"]]["status"]
 
     lines, done, hidden = drop_acked(lines, prs, rows, acks.acked())
+
+    # Per group: how many rows move, wait on a person or a condition, or are done. Counted from the rows themselves, so
+    # a reviewer fold, a bullet and a ✅ row folded away still count once each; a row with rows under it is their
+    # roll-up, not a row of its own, and a row the owner acked leaves the count. Rows with no group are in none.
+    parents = {r.get("parent") for r in rows.values()}
+    leaf = {k: rows[k] for k in states if k in rows and k not in parents and k not in hidden and k not in as_group}
+    tally = {}
+    for k, r in leaf.items():
+        if g := prio(r):
+            tally.setdefault(g, [0, 0, 0])[{"moving": 0, "done": 2}.get(states[k]["status"], 1)] += 1
 
     # A ✅ row merged (or marked done) over done_fold_h ago leaves the table for one count per section; the dashboard
     # keeps it. A head stays while any row under it stays, and a row with no time to judge by stays.
@@ -1432,8 +1528,32 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         else:
             listed("moving", moving, iid, t["title"], f"⏰ {t['title']} — {when} 도래 · {t['who']}")
 
+    # The owner's priority groups, one line each, above everything else; no group on any row, no section.
+    if tally:
+        out += ["", heading("🧭 우선순위")]
+        out.append("")
+        for g in sorted(tally, key=lambda g: (int(g.split(":", 1)[0]), g)):
+            name, (mv, wt, dn) = g.split(":", 1)[1], tally[g]
+            # The first open row of the group in the order the tables are printed: each section's lines, then its bullets.
+            def mine(k):
+                return k in leaf and prio(leaf[k]) == g and states[k]["status"] != "done"
+            open_rows = []
+            for sec in sections:
+                # A row's own line carries judge()'s step as the table shows it, a doing item's step included.
+                open_rows += [(ref_name(l) if k == l["key"] or l["key"] in members else rows[k]["title"], k,
+                               l["next"] if k == l["key"] else states[k]["next"])
+                              for l in lines if l["sec"] == sec for k in members.get(l["key"], [l["key"]]) if mine(k)]
+                open_rows += [(i["title"], i["id"], states[i["id"]]["next"]) for (bsec, _), items in bullets.items()
+                              if bsec == sec for i in items if mine(i["id"])]
+            first = open_rows[0] if open_rows else None
+            if first:
+                shown, _, nxt = first
+                nxt = f"{shown} — {nxt}" if nxt and nxt not in GENERIC_NEXT else shown
+            out.append(("" if tg else "- ") + (name if tg else f"**{name}**")
+                       + f" — 진행 {mv} · 대기 {wt} · 완료 {dn} · 다음: {nxt if first else '없음'}")
+
     # What the owner acts on comes first; what explains the rest comes last.
-    todo = [t["title"] for t in todos] + due_mine + turn
+    todo =[t["title"] for t in todos] + due_mine + turn
     out += ["", heading("🙋 지금 오너가 할 일") + ("" if todo else " — 없음")]
     out += [""] + [it if tg else f"- {it}" for it in todo] if todo else []
     own, decisions = list(decisions), open_dec
