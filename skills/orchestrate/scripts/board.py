@@ -133,8 +133,8 @@ def progress_of(text):
 def priority_of(text):
     """`RANK:NAME`, the owner's priority group of a row (and of the rows under it): groups sort by RANK, then NAME."""
     m = re.fullmatch(r"(\d{1,3}):\s*(\S.*)", (text or "").strip())
-    if not m:
-        raise ValueError("--priority is RANK:NAME (a number, then the group's name; groups show in RANK order), or - to clear")
+    if not m or " — " in m[2]:  # the dashboard splits the summary line at the first " — "
+        raise ValueError("--priority is RANK:NAME (a number, then the group's name without ' — '; groups show in RANK order), or - to clear")
     return f"{int(m[1])}:{one_line(m[2])}"
 
 
@@ -1101,22 +1101,15 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
 
     lines, done, hidden = drop_acked(lines, prs, rows, acks.acked())
 
-    def group_of(l):
-        """The priority group a display line counts in: its row's own `priority`, else the nearest parent's."""
-        r = rows.get(l["key"].split("/~")[0])
-        return up(r, "priority") if r else None
-
-    # Per group, before the ✅ rows fold away: how many rows move, wait on a person or a condition, or are done. A
-    # reviewer fold stands for its members; a head with └ rows under it is their roll-up, not a row of its own.
-    # Rows with no group are in none.
-    tally, rolled = {}, set()
-    for i, l in enumerate(lines):
-        if i + 1 < len(lines) and lines[i + 1]["depth"] > l["depth"] and lines[i + 1]["sec"] == l["sec"]:
-            rolled.add(l["key"])
-        elif l["status"] is not None and (g := group_of(l)):
-            n = len(members[l["key"]]) if l["key"] in members else 1
-            kind = {"moving": 0, "done": 2}.get(l["status"], 1)
-            tally.setdefault(g, [0, 0, 0])[kind] += n
+    # Per group: how many rows move, wait on a person or a condition, or are done. Counted from the rows themselves, so
+    # a reviewer fold, a bullet and a ✅ row folded away still count once each; a row with rows under it is their
+    # roll-up, not a row of its own, and a row the owner acked leaves the count. Rows with no group are in none.
+    parents = {r.get("parent") for r in rows.values()}
+    leaf = {k: rows[k] for k in states if k in rows and k not in parents and k not in hidden and k not in as_group}
+    tally = {}
+    for k, r in leaf.items():
+        if g := up(r, "priority"):
+            tally.setdefault(g, [0, 0, 0])[{"moving": 0, "done": 2}.get(states[k]["status"], 1)] += 1
 
     # A ✅ row merged (or marked done) over done_fold_h ago leaves the table for one count per section; the dashboard
     # keeps it. A head stays while any row under it stays, and a row with no time to judge by stays.
@@ -1464,11 +1457,17 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         out.append("")
         for g in sorted(tally, key=lambda g: (int(g.split(":", 1)[0]), g)):
             name, (mv, wt, dn) = g.split(":", 1)[1], tally[g]
-            first = next((l for l in lines if l["status"] not in (None, "done") and l["key"] not in rolled
-                          and group_of(l) == g), None)
+            # The first open row of the group in report order: a row's own line, its reviewer fold's, else (a bullet) its title.
+            open_rows = [(ref_name(l) if k == l["key"] or l["key"] in members else rows[k]["title"], k)
+                         for l in lines for k in members.get(l["key"], [l["key"]])
+                         if k in leaf and up(leaf[k], "priority") == g and states[k]["status"] != "done"]
+            open_rows += [(r["title"], k) for k, r in leaf.items() if up(r, "priority") == g and states[k]["status"] != "done"
+                          and k not in {x for _, x in open_rows}]
+            first = open_rows[0] if open_rows else None
             if first:
-                nxt = (waits.get(first["key"]) or {}).get("next") or first["next"]
-                nxt = f"{ref_name(first)} — {nxt}" if nxt and nxt not in GENERIC_NEXT else ref_name(first)
+                shown, k = first
+                nxt = (waits.get(k) or {}).get("next") or leaf[k].get("next")
+                nxt = f"{shown} — {nxt}" if nxt and nxt not in GENERIC_NEXT else shown
             out.append(("" if tg else "- ") + (name if tg else f"**{name}**")
                        + f" — 진행 {mv} · 대기 {wt} · 완료 {dn} · 다음: {nxt if first else '없음'}")
 

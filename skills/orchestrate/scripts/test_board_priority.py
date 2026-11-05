@@ -51,7 +51,7 @@ plain = {"text": render(), "tg": render("--telegram"), "full": json.loads(render
 assert "우선순위" not in plain["text"] + plain["tg"] + plain["full"], plain
 
 # Refusals say the form.
-for bad in ("high", "x:name", "1:", ":name", "1000:name"):
+for bad in ("high", "x:name", "1:", ":name", "1000:name", "1:a — b"):
     code, _, err = orch("board", "set", "alpha", "--priority", bad)
     assert code == 1 and err.startswith("--priority is RANK:NAME"), (bad, err)
 
@@ -100,5 +100,42 @@ assert text.index("**Zed**") < text.index("**Group A**") and "**Group A** — �
 for rid in ("alpha", "beta"):
     ok("board", "set", rid, "--priority", "-")
 assert "우선순위" not in render()
+
+# Counts follow the rows, not the table lines: rows that fold on one reviewer keep their own groups, tasks that wait on
+# one reviewer with no lead (bullets) are counted, and a head over rows in another repository is not counted twice.
+def open_pr(n, reviewer):
+    return f"acme/web#{n}", {"probed_at": NOW, "detail": {
+        "key": f"acme/web#{n}", "url": f"https://example.test/{n}", "state": "OPEN", "draft": False, "ci": "success",
+        "decision": "REVIEW_REQUIRED", "base": "main", "merge_state": "BLOCKED", "merged_at": None, "merge_sha": None,
+        "reviewers": [{"login": reviewer, "requested": True, "state": None, "team": False}]}}
+
+
+(tmp / "dashboard" / "prs.json").write_text(json.dumps({"me": "octo-owner", "prs": dict([
+    open_pr(1, "rev-a"), open_pr(2, "rev-a"), open_pr(3, "rev-b"), open_pr(4, "rev-b")])}))
+ok("board", "lead", "add", "fold", "--handle", "term_0FAKE4", "--repo", "acme/web")
+ok("board", "set", "fold", "--priority", "1:Parent")
+for n in (1, 2):
+    ok("board", "set", f"fold/c{n}", "--title", f"자식 {n}", "--pr", f"acme/web#{n}", "--priority", "2:Child")
+for n in (3, 4):
+    ok("board", "set", f"solo{n}", "--kind", "task", "--repo", "acme/web", "--title", f"단독 {n}", "--pr", f"acme/web#{n}",
+       "--priority", "3:Solo")
+ok("board", "lead", "add", "cross", "--handle", "term_0FAKE5", "--repo", "acme/web")
+ok("board", "set", "cross", "--priority", "4:Cross")
+ok("board", "set", "cross/k", "--title", "다른 저장소 작업", "--repo", "acme/other", "--next", "CI 확인")
+
+
+def totals(text):
+    got = {}
+    for l in text.splitlines():
+        if l.startswith("- **") and " — 진행 " in l:
+            name, rest = l[4:].split("** — 진행 ", 1)
+            got[name] = sum(int(x.split()[-1]) for x in rest.split(" · 다음:")[0].split(" · "))
+    return got
+
+
+text = render()
+assert totals(text) == {"Child": 2, "Solo": 2, "Cross": 1}, (totals(text), text)
+assert "Parent" not in totals(text), "a head with rows under it is not a row"
+assert "다음: k 다른 저장소 작업 — CI 확인" in text, text
 
 print("ok")
