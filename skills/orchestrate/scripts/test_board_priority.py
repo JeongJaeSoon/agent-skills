@@ -217,6 +217,15 @@ state_file.write_text(json.dumps(world))
 after = fleet_totals()[0]
 assert after["Pin"] == before["Pin"] + 1 and after["Prog"] == before["Prog"], (before, after)
 
+# Its host card is gone from the report (a completed dispatch with no PR), but the host's worktree rule still holds.
+world = json.loads(state_file.read_text())
+world["sessions"].append(session("card-6", "task", "lead-a", dispatch_status="completed",
+                                 subagents=[{"agent": "ag2", "desc": "끝난 카드의 검토", "type": "general-purpose",
+                                             "started_at": "2026-10-13T14:29:00Z"}]))
+state_file.write_text(json.dumps(world))
+forch("board", "priority", "set", "worktree:card-6", "8:Gone")
+assert fleet_totals()[0].get("Gone") == 1, fleet_totals()
+
 # A lead the board records with --worktree takes its worktree's rule, and its sub-rows inherit it.
 forch("board", "lead", "add", "bl", "--handle", "term_0FAKE9", "--repo", "acme/web", "--worktree", "wt-b")
 forch("board", "set", "bl/t1", "--title", "하위", "--next", "일")
@@ -238,6 +247,13 @@ try:
     exported = store_db._export_board(tmp / "export-rules")[0]
     saved = json.loads((exported / "board.json").read_text())
     assert saved["groups"] == rules and not [k for k in saved["rows"] if k.startswith("prio:")], saved
+    # An import refuses a rule the renderer could not read.
+    rule = next(iter(saved["groups"].values()))
+    for what, bad in (("team match", {**rule, "id": "prio:team:x", "match": "team:x"}),
+                      ("priority form", {**rule, "priority": "bad"}), ("id", {**rule, "id": "prio:other"}),
+                      ("repo form", {**rule, "id": "prio:repo:x", "match": "repo:x"})):
+        (exported / "bad.json").write_text(json.dumps({**saved, "groups": {bad["id"]: bad}}))
+        assert any("priority rule" in p for p in store_db._legacy_board(exported / "bad.json")[1]), what
     store_db.load_board(saved)
     assert store_db.board()["groups"] == rules and "prio:repo:acme/web" not in store_db.board()["rows"]
 finally:

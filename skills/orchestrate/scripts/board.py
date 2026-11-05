@@ -938,9 +938,13 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         """A row's priority group: its own `priority`, else the nearest parent's own or its worktree's rule, else the
         program's rule, else the repository's. A subagent row is first its host's. A fleet row (a lead or card the
         board has no row of) has only rules."""
-        host = next((n for n in rows.values() if r.get("host") in worktrees(n)), None) if r.get("host") else None
-        if host is not None and host is not r and (g := prio(host)):
-            return g
+        if r.get("host"):  # the host row as subagent_rows() picks it (the last row naming that worktree), else its rule
+            host = None
+            for n in rows.values():
+                if r["host"] in worktrees(n):
+                    host = n
+            if host is not None and host is not r and (g := prio(host)) or (g := rules["worktree"].get(r["host"])):
+                return g
         n = r
         while n is not None:
             if n.get("priority"):

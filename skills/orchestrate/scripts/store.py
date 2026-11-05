@@ -92,6 +92,8 @@ LANES = {"todo": ("todo", "do"), "later": ("held", "later"), "doing": ("doing", 
 OPEN = ("todo", "doing", "held")
 OPEN_SQL = "('todo','doing','held')"
 GROUP_KIND, GROUP_POS = "group", 1_000_000  # a priority rule is a board_row of this kind, listed after every row
+GROUP_MATCH = re.compile(r"(?:worktree|program):\S.*|repo:[\w.-]+/[\w.-]+")  # what board.match_of() lets in
+GROUP_PRIORITY = re.compile(r"\d{1,3}:(?!.* — )\S.*")  # RANK:NAME, as board.priority_of() writes it
 ITEM_COLS = ("who", "title", "next", "waiting", "waiting_since", "trig", "due", "after_ref")
 ORPHAN = tuple(f"{prefix}:" for _, prefix in LANES.values())  # a tidy id from before stable ids whose item left the board
 DECISION_COLS = ("id", "status", "title", "body", "options", "recommend", "link", "handle", "created_at", "checked_at",
@@ -1125,8 +1127,11 @@ def _legacy_board(p):
             bad.append(f"lead {name}: not an object")
     for gid, g in out["groups"].items():
         if (not isinstance(g, dict) or g.get("id") != gid or g.get("kind") != GROUP_KIND
-                or not isinstance(g.get("match"), str) or not isinstance(g.get("priority"), str)):
-            bad.append(f"priority rule {gid}: id does not match its key, or not a group with a match and a priority")
+                or not isinstance(g.get("match"), str) or gid != f"prio:{g['match']}"
+                or not GROUP_MATCH.fullmatch(g["match"]) or not isinstance(g.get("priority"), str)
+                or not GROUP_PRIORITY.fullmatch(g["priority"])):
+            bad.append(f"priority rule {gid}: not a group with id prio:MATCH, a match of worktree:ID, program:NAME or "
+                       "repo:OWNER/NAME, and a priority of RANK:NAME")
     return out, bad, extra
 
 
