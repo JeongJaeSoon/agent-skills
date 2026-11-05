@@ -416,7 +416,7 @@ STORES = [
     Store("progledgerlock", "P/*/ledger.lock", {"program.event": LOCK}, ("prog:Program.locked",)),
     Store("progwait", "P/*/*.json", {"program.wait_memo": CANONICAL},
           ("prog:cmd_wait", "prog:print_stuck", "prog:new_stalls", "prog:new_leftovers", "autowake:save_marks",
-           "prog:take", "prog:mark_shown"),
+           "prog:write_request"),
           ("programview",), rule="`orch wait` memos: self-check, stuck, stalls and leftovers seen, auto-wake's first marks,"
                                  " and the consuming request a dead wait left (wait-request.json)"),
     Store("progstatus", "P/*/status-self-check.json", {"program.status_memo": CANONICAL}, ("prog:cmd_status",),
