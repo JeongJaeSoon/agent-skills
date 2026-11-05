@@ -462,7 +462,7 @@ const pct = (v) => (v == null ? "—" : `${num(v, v < 10 ? 1 : 0)}%`);
 const gib = (v) => (v == null ? "—" : `${num(v, 1)} GiB`);
 const PRESSURE_CHARTS = [
   { key: "cpu_used_pct", label: "CPU 사용률", fmt: pct, bad: "높을수록 나쁨", from: (r) => (r.cpu_idle_pct == null ? null : Math.round((100 - r.cpu_idle_pct) * 10) / 10),
-    judge: "load_per_cpu", sub: (m) => `load/CPU ${num(m.load_per_cpu, 2)}` },
+    judge: "load_per_cpu", sub: (m, rep) => `${m.idle_live ? "순간값(회차 간 값 없음)" : `약 ${Math.max(1, Math.round(rep.interval / 60))}분 평균`} · load/CPU ${num(m.load_per_cpu, 2)}` },
   { key: "mem_active_wired_gb", label: "사용 메모리", fmt: gib, bad: "높을수록 나쁨",
     judge: "mem_free_pct", sub: (m) => `회수 가능 ${m.mem_free_pct == null ? "—" : `${m.mem_free_pct}%`}` },
   { key: "disk_free_gb", label: "디스크 여유", fmt: gib, bad: "낮을수록 나쁨", judge: "disk_free_gb", line: true },
@@ -523,7 +523,7 @@ function pressureChart(rep, c) {
   const set = [["경고", warn], ["위험", danger]].filter(([, v]) => v != null);
   const outOf = (v) => c.line && !inside(v);
   const limits = !set.length ? "임계값 없음" : set.map(([n, v]) => `${n} ${op} ${v}${unit}${outOf(v) ? " (범위 밖)" : ""}`).join(" · ");
-  const sub = c.sub ? c.sub(m) : "";
+  const sub = c.sub ? c.sub(m, rep) : "";
   const said = `${label}: 지금 ${fmt(now)}, ${lv ? PRESSURE_LEVEL_KO[lv] : "수준 없음"}, ${c.bad}, ${limits}, ${rep.hours}시간 동안 ${pts.length}개`;
   return `<div class="pmetric"><div class="pm-head"><span class="eyebrow">${esc(label)}</span><b class="pm-v">${esc(fmt(now))}</b></div>
     <div class="pm-state"><span class="muted">${esc(c.bad)}</span>${lv ? tag(PRESSURE_LEVEL_KO[lv], PRESSURE_LEVEL[lv][1]) : ""}</div>
