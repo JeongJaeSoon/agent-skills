@@ -541,6 +541,14 @@ def build(root, now=None):
     # The roles' models the Sessions table's Model cell is judged against: the demo workers run on both.
     (root / "agent-skills.json").write_text(json.dumps({"orchestrate": {"models": {"lead": "opus", "worker": "sonnet"}},
                                                                   "dashboard": {"ticket_url": "https://tracker.example.test/acme/issue/"}}))
+    # SessionStart records (hooks/reorient.py): most demo sessions loaded today's hooks.json, term_docs an older one, and
+    # the orchestrator, ACME-104 and the scratch session predate the record, so the Sessions table shows all three cases.
+    import hashlib
+    now_sha = hashlib.sha256((pathlib.Path(__file__).resolve().parents[3] / "hooks" / "hooks.json").read_bytes()).hexdigest()
+    (root / "terminals").mkdir(exist_ok=True)
+    for h, sha in (("term_login", now_sha), ("term_export", now_sha), ("term_docs", "0" * 64), ("term_lead", now_sha), ("term_tax", now_sha)):
+        (root / "terminals" / f"{h}.json").write_text(json.dumps(
+            {"handle": h, "session_id": f"demo-{h[5:]}", "cwd": "/demo", "at": now.timestamp(), "plugin_version": None, "hooks_sha": sha}))
     # The fleet collector must never write the real ~/.local/state or read the real config from a demo or test.
     return {"AGENT_SKILLS_CONFIG": str(root / "agent-skills.json"), "ORCH_FLEET_STATE": str(root / "fleet-state"), "ORCH_FLEET_CONFIG": str(root / "fleet-config.json"),
             "PROGRAMS_HOME": str(root / "programs"), "AGENT_SKILLS_STATE": str(root), "CLAUDE_PROJECTS_DIR": str(projects), "ORCH_SKILLS": "off", "ORCH_PR_STATS": "off", "ORCH_TOKENS": "off", "DASH_DEMO_FIXTURES": str(root / "fixtures"),

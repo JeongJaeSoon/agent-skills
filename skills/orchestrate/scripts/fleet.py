@@ -839,6 +839,25 @@ def model_tags(sessions):
             s["model"], s["model_tag"] = None, ""
 
 
+PLUGIN_ROOT = pathlib.Path(__file__).resolve().parents[3]
+_reload_warned = []
+
+
+def reload_marks(sessions, root=None):
+    """`reload` on each session with a live terminal: "stale" when the session recorded a hooks/hooks.json digest other
+    than the one on disk now (it loaded the hooks before the file changed, so it lacks the new ones and cannot say so),
+    "ok", or "unknown" when nothing was recorded (hooks/reorient.py writes it at SessionStart; an older session, a
+    session outside Orca). Unknown is not stale. Only a mark: nothing is blocked. An unreadable hooks.json leaves
+    every row "unknown" and warns once."""
+    current = roles.hooks_sha(root or PLUGIN_ROOT)
+    if not current and not _reload_warned:
+        _reload_warned.append(1)
+        print(f"fleet: {root or PLUGIN_ROOT}/hooks/hooks.json is unreadable; no reload marks", file=sys.stderr)
+    for s in sessions.values():
+        handles = [t.get("handle") for t in s.get("terminals") or []]
+        s["reload"] = roles.reload_state(handles, current) if s.get("phase") != "offline" else "unknown"
+
+
 def phase_of(agents, live_terms):
     states = {a["state"] for a in agents}
     if "waiting" in states:
@@ -2215,6 +2234,7 @@ class Fleet:
         except (OSError, ValueError):
             held = []
         model_tags(sessions)
+        reload_marks(sessions)
         return {"generated_at": iso(now), "root": root, "sessions": sorted(sessions.values(), key=lambda s: s.get("last_activity") or "", reverse=True),
                 "runs": [{"id": r["id"], "objective": mask(r.get("objective"), 200), "updated_at": r.get("updated_at")} for r in self.runs["runs"]],
                 "tasks": [{"id": t["id"], "run": t.get("run_id"), "title": task_name(t),

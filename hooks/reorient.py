@@ -36,7 +36,9 @@ registered in $AGENT_SKILLS_STATE/transcripts/<session_id>.json with the span it
 the same whether or not the feature is on.
 
 At SessionStart an interactive session in an Orca terminal records terminal -> session (roles.record_terminal), which
-`skills-sync wake-target` reads to name the session behind a handle.
+`skills-sync wake-target` reads to name the session behind a handle. The same record carries the plugin version and the
+sha256 of hooks/hooks.json the new process loaded (not rewritten on a compaction), so the dashboard and reboot can tell
+a session that never reloaded after hooks.json changed: a session without new hooks cannot say so itself.
 """
 import datetime, json, os, pathlib, re, sys, time
 
@@ -225,8 +227,11 @@ def main():
     elif kind == "SessionStart" and event.get("source") in ("startup", "resume", "compact", "fork"):
         # A `claude -p` run from a card's shell inherits the handle and is not the terminal's session.
         if os.environ.get("CLAUDE_CODE_ENTRYPOINT") == "cli":
+            # A compaction keeps the process, so it keeps what the process loaded (record_terminal's None).
+            root = os.environ.get("CLAUDE_PLUGIN_ROOT") or pathlib.Path(__file__).resolve().parents[1]
+            loaded = None if event.get("source") == "compact" else roles.loaded_fields(root)
             try:
-                roles.record_terminal(os.environ.get("ORCA_TERMINAL_HANDLE"), session, event.get("cwd"), time.time())
+                roles.record_terminal(os.environ.get("ORCA_TERMINAL_HANDLE"), session, event.get("cwd"), time.time(), loaded)
             except OSError:
                 pass
         record = declared(session)

@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-import json, pathlib, sys, tempfile, time, unittest
+import json, os, pathlib, sys, tempfile, time, unittest
 from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import reboot  # noqa: E402
+import roles  # noqa: E402  on sys.path through reboot
+os.environ["AGENT_SKILLS_STATE"] = tempfile.mkdtemp()  # the SessionStart record is read from here, never the real one
 import rowstate  # noqa: E402  on sys.path through reboot
 
 ROOT = "/work/app"
@@ -61,12 +63,12 @@ class Orca:
         raise AssertionError(f"unexpected orca call {argv}")
 
 
-def run(role=None, slug=None, run_id=None, handle=ME, orca=None, procs=(), queue=None):
+def run(role=None, slug=None, run_id=None, handle=ME, orca=None, procs=(), queue=None, reload_root=None):
     orig = reboot.worktree_root
     reboot.worktree_root = lambda cwd: ROOT
     try:
         return reboot.run_checks(role, slug, run_id, handle, ROOT, call=orca or Orca(), table=table(*procs), pid=SELF,
-                                 queue=lambda: queue or {})
+                                 queue=lambda: queue or {}, reload_root=reload_root)
     finally:
         reboot.worktree_root = orig
 
@@ -527,6 +529,53 @@ class Queue(unittest.TestCase):
             self.assertEqual(self.listed(q), [])
         self.assertTrue(over.called)
         self.assertIn("queue_over", rowstate.judge.__code__.co_names)
+
+
+class Reload(unittest.TestCase):
+    """A session that loaded another hooks/hooks.json than the checkout has now is told to reload; no record is not it."""
+
+    def setUp(self):
+        self.tmp = pathlib.Path(tempfile.mkdtemp())
+        (self.tmp / "plugin/hooks").mkdir(parents=True)
+        (self.tmp / "plugin/hooks/hooks.json").write_text('{"hooks": {}}')
+        self.sha = roles.hooks_sha(self.tmp / "plugin")
+        patcher = mock.patch.dict("os.environ", {"AGENT_SKILLS_STATE": str(self.tmp / "state")})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def record(self, sha):
+        roles.record_terminal(ME, "s1", ROOT, time.time(), {"plugin_version": None, "hooks_sha": sha})
+
+    def check(self):
+        return reboot.check_reload(ME, self.tmp / "plugin")
+
+    def test_same_sha_is_ok(self):
+        self.record(self.sha)
+        self.assertEqual([k for k, _ in self.check()], ["ok"])
+
+    def test_other_sha_is_info_not_do(self):
+        self.record("0" * 64)
+        (kind, text), = self.check()
+        self.assertEqual(kind, "info")
+        self.assertIn("reload needed", text)
+
+    def test_no_record_is_not_called_stale(self):
+        (kind, text), = self.check()
+        self.assertEqual(kind, "info")
+        self.assertNotIn("reload needed", text)
+        self.assertIn("unknown", text)
+
+    def test_unreadable_reference_warns_and_does_not_block(self):
+        self.record(self.sha)
+        (kind, text), = reboot.check_reload(ME, self.tmp / "missing")
+        self.assertEqual(kind, "info")
+        self.assertIn("unreadable", text)
+
+    def test_exit_stays_zero_on_stale(self):
+        self.record("0" * 64)
+        lines = run(reload_root=self.tmp / "plugin")
+        self.assertFalse(does(lines))
+        self.assertTrue(any("reload needed" in t for _, t in lines))
 
 
 class Cli(unittest.TestCase):

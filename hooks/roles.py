@@ -16,7 +16,7 @@ and a worktree's lineage are neither: a `/goal` card lead is depth 0 of its own 
 Actor: `subagent` when the input has an `agent_id`, else `main`. A subagent shares its parent's session id and
 transcript, so it gets the parent's role; `applies` decides which rules reach it.
 """
-import dataclasses, json, os, pathlib, re
+import dataclasses, hashlib, json, os, pathlib, re
 
 ROLES =("orchestrator", "lead", "worker", "general")
 SESSION = re.compile(r"[\w-]{1,128}")
@@ -74,16 +74,62 @@ def terminal_file(handle):
     return state() / "terminals" / f"{handle}.json"
 
 
-def record_terminal(handle, session, cwd, now):
+def record_terminal(handle, session, cwd, now, loaded=None):
     """Ties an Orca terminal to the session that just started in it. Orca's own data has no session id, and a cwd
-    match can name another session in the same worktree."""
+    match can name another session in the same worktree. `loaded` (loaded_fields) is what that session's process read
+    of the plugin when it started; None keeps what the same session recorded before (a compaction reloads nothing)."""
     if not SESSION.fullmatch(handle or "") or not SESSION.fullmatch(session or ""):
         return
     path = terminal_file(handle)
     path.parent.mkdir(parents=True, exist_ok=True)
+    entry = {"handle": handle, "session_id": session, "cwd": cwd, "at": now}
+    if loaded is None:
+        old = read_terminal(handle)
+        loaded = {k: old[k] for k in LOADED_KEYS if k in old} if old and old.get("session_id") == session else {}
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"handle": handle, "session_id": session, "cwd": cwd, "at": now}))
+    tmp.write_text(json.dumps({**entry, **loaded}))
     tmp.replace(path)
+
+
+LOADED_KEYS = ("plugin_version", "hooks_sha")
+
+
+def read_terminal(handle):
+    try:
+        record = json.loads(terminal_file(handle).read_text())
+    except (OSError, ValueError):
+        return None
+    return record if isinstance(record, dict) else None
+
+
+def hooks_sha(root):
+    """sha256 of <plugin root>/hooks/hooks.json, None when it cannot be read."""
+    try:
+        return hashlib.sha256((pathlib.Path(root) / "hooks" / "hooks.json").read_bytes()).hexdigest()
+    except (OSError, TypeError):
+        return None
+
+
+def loaded_fields(root):
+    """What a session start records of the plugin it loaded: the manifest's version (None when it names none) and the
+    hooks.json digest. Claude Code reads hooks.json once per process, so this is what the session runs until it is
+    restarted."""
+    try:
+        version = json.loads((pathlib.Path(root) / ".claude-plugin" / "plugin.json").read_text()).get("version")
+    except (OSError, ValueError, TypeError, AttributeError):
+        version = None
+    return {"plugin_version": version, "hooks_sha": hooks_sha(root)}
+
+
+def reload_state(handles, current):
+    """'stale' when a session recorded in one of the terminals loaded another hooks.json than `current`, 'ok' when
+    every recorded one matches, 'unknown' when none recorded a digest (older than this record, or not an Orca
+    terminal): never 'stale' on a missing record."""
+    shas = [(read_terminal(h) or {}).get("hooks_sha") for h in handles if SESSION.fullmatch(h or "")]
+    shas = [s for s in shas if isinstance(s, str)]
+    if not shas or not current:
+        return "unknown"
+    return "stale" if any(s != current for s in shas) else "ok"
 
 
 def session_for(handle, rows):

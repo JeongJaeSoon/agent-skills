@@ -2247,4 +2247,23 @@ for bad in (None, {}, {"dashboard": {"ticket_url": "javascript:alert(1)/"}}, {"d
 os.environ.pop("AGENT_SKILLS_CONFIG")
 shutil.rmtree(cfg_file.parent)
 
+# Reload marks: a session whose SessionStart record holds another hooks.json digest than the checkout's is "stale"; no
+# record, an offline row or an unreadable reference is "unknown", never "stale".
+plugin = pathlib.Path(tempfile.mkdtemp(prefix="test-reload-"))
+(plugin / "hooks").mkdir()
+(plugin / "hooks/hooks.json").write_text("{}")
+sha = fleet.roles.hooks_sha(plugin)
+for h, loaded in (("term_same", sha), ("term_old", "0" * 64)):
+    fleet.roles.record_terminal(h, "s-" + h, "/w", 1.0, {"plugin_version": None, "hooks_sha": loaded})
+fleet.roles.record_terminal("term_bare", "s-bare", "/w", 1.0, {})
+marks = {k: {"phase": ph, "terminals": [{"handle": h}]} for k, ph, h in (
+    ("same", "idle", "term_same"), ("old", "working", "term_old"), ("bare", "idle", "term_bare"),
+    ("none", "idle", "term_missing"), ("off", "offline", "term_old"))}
+fleet.reload_marks(marks, plugin)
+assert {k: v["reload"] for k, v in marks.items()} == {"same": "ok", "old": "stale", "bare": "unknown", "none": "unknown", "off": "unknown"}, marks
+fleet.reload_marks(marks, plugin / "missing")
+assert {v["reload"] for v in marks.values()} == {"unknown"}, "an unreadable reference marks nothing stale"
+assert all(s["reload"] in ("ok", "stale", "unknown") for s in st["sessions"]), "the collector writes the mark on every session"
+shutil.rmtree(plugin)
+
 print("test_fleet: ok")

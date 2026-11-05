@@ -436,7 +436,7 @@ td.when { white-space: nowrap; }
 table.sess { table-layout: fixed; }
 table.sess col.c-name { width: 240px; }
 table.sess col.c-kind { width: 120px; }
-table.sess col.c-phase { width: 136px; }
+table.sess col.c-phase { width: 232px; }
 table.sess col.c-tk { width: 96px; }
 table.sess col.c-pr { width: 96px; }
 table.sess col.c-brief { width: 170px; }
@@ -670,4 +670,4 @@ table.sent details > summary { cursor: pointer; max-width: 720px; }
 .repo-bar { height: 8px; border-radius: 2px; background: var(--panel-2); }
 .repo-bar > span { display: block; height: 100%; border-radius: 2px; background: var(--warn); }
 /* The Sessions table's model tag sits beside the phase word without making its row taller than a row with none. */
-.model-mark { display: inline-flex; vertical-align: middle; margin: -4px 0; }
+.model-mark, .reload-mark { display: inline-flex; vertical-align: middle; margin: -4px 0; }

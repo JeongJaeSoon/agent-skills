@@ -22,6 +22,8 @@ PRESSURE = SKILLS / "reap-resources" / "scripts" / "pressure.py"
 sys.path.insert(0, str(SKILLS / "orchestrate" / "scripts"))
 import orca_settings  # noqa: E402  Orca's concise/full answers and worker rows are read there, once for every script
 import rowstate  # noqa: E402  when an ended queue entry stops being listed is the row's ❔ rule, not a second one
+sys.path.insert(0, str(SKILLS.parent / "hooks"))
+import roles  # noqa: E402  the session's SessionStart record (terminals/<handle>.json) is read there
 
 PROGRAMS = pathlib.Path(os.environ.get("PROGRAMS_HOME", "~/.claude/programs")).expanduser()
 GONE = re.compile(r"stale|not_found|not found", re.I)
@@ -214,6 +216,23 @@ def check_run(role, run, handle, call, lead_dispatch=None, slug=None):
                    "to confirm, and run this check again for the workers")], None, None
 
 
+def check_reload(handle, root=None):
+    """A line when this session loaded another hooks/hooks.json than the checkout has now. `info`, never `do`: the
+    check only reports (the session restarts itself or not), and a missing record is not stale."""
+    if not handle:  # the record is keyed by terminal handle; check_handle already says Orca checks are skipped
+        return []
+    current = roles.hooks_sha(root or SKILLS.parent)
+    if not current:
+        return [("info", f"{root or SKILLS.parent}/hooks/hooks.json is unreadable: whether this session needs a reload is unknown")]
+    state = roles.reload_state([handle], current)
+    if state == "stale":
+        return [("info", "reload needed: this session loaded an older hooks/hooks.json than the checkout has now, so "
+                         "it runs without the newer hooks. Restart it (`claude --continue` in this terminal)")]
+    if state == "unknown":
+        return [("info", "no SessionStart record of the hooks this session loaded: reload need unknown, not assumed")]
+    return [("ok", "hooks/hooks.json is the one this session loaded")]
+
+
 def check_tab(role, terminal, handle):
     if role != "top" or terminal is None:
         return []
@@ -396,9 +415,10 @@ def check_queue(root, read=None):
     return out
 
 
-def run_checks(role, slug, run, handle, cwd, call=orca, table=None, pid=None, queue=None):
+def run_checks(role, slug, run, handle, cwd, call=orca, table=None, pid=None, queue=None, reload_root=None):
     root = worktree_root(cwd)
     lines, terminal, live = check_handle(handle, call, root)
+    lines += check_reload(handle, reload_root)
     cfg = program_cfg(slug) if slug else {}
     run_lines, bound, lead_dispatch = check_run(role, run or cfg.get("run"), live, call, cfg.get("lead_dispatch"), slug)
     lines += run_lines
