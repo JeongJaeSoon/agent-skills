@@ -58,6 +58,26 @@ def config():
     return read_json(config_path(), {}) or {}
 
 
+_ticket_warned = []
+
+
+def ticket_url():
+    """`dashboard.ticket_url` of agent-skills.json: an http(s) URL prefix, to which the ticket id is appended (a missing
+    trailing slash is added). None when unset or malformed: the page then shows a ticket id as plain text. No value is assumed."""
+    path = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-skills.json").expanduser()
+    try:
+        url = (json.loads(path.read_text()).get("dashboard") or {}).get("ticket_url")
+    except (OSError, ValueError, AttributeError):
+        url = None
+    if isinstance(url, str) and re.fullmatch(r"https?://[A-Za-z0-9][^\s?#{}/]*(/[^\s?#{}]*)?", url):
+        return url if url.endswith("/") else url + "/"
+    if not _ticket_warned:
+        _ticket_warned.append(1)
+        print(f"fleet: dashboard.ticket_url is not set to an http(s) URL prefix in {path}; ticket ids stay plain text",
+              file=sys.stderr)
+    return None
+
+
 def utcnow():
     return dt.datetime.now(dt.timezone.utc)
 
@@ -2202,6 +2222,7 @@ class Fleet:
                            "status": t.get("status"), "deps": t.get("deps")} for t in self.runs["tasks"]],
                 "prs": sorted(prs, key=lambda p: p.get("updated") or "", reverse=True), "items": items,
                 "timeline": timeline[:300], "holds": held, "automations": self.automations, "monitors": monitors, "sources": self.sources, "me": self.me,
+                "ticket_url": ticket_url(),
                 "counts": {t: sum(1 for i in items if i["type"] == t) for t in {i["type"] for i in items}}}
 
 

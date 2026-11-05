@@ -883,7 +883,7 @@ def check_sessions(procs, since):
         starts = [fleet.ps_time((procs.get(p) or (0, ""))[1]) for p in s.get("pids") or []]
         if not starts or not since or any(t is None or t < since for t in starts):
             out.append(f"session {sid} ({s.get('cwd')}, home {s.get('home')}) started before the update: "
-                       "end or restart it")
+                       "end it and start a new process; /restart keeps the pid and start time, so it does not count")
     return out
 
 
@@ -1705,8 +1705,8 @@ def cutover_plan(step):
              *stop,
              "# 2. bring the main checkout to the merged code",
              f"git -C {main_checkout()} pull --ff-only",
-             "# 3. restart every live Claude session (each runs the decision hook; /reload-plugins does not count: only "
-             "a process that started after the update passes), then",
+             "# 3. end every live Claude session and start a new process (each runs the decision hook; /reload-plugins and "
+             "/restart do not count: only a process that started after the update passes), then",
              "orch db import --dry-run",
              "# 4. it refuses while any old writer, session or loaded LaunchAgent remains; then",
              "orch db import --apply",

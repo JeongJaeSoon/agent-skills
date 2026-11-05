@@ -61,7 +61,7 @@
 
 1. 대시보드 서버를 멈춘다(페이지의 답을 전달하는 곳이다). macOS에서는 그 LaunchAgent를 `launchctl bootout`한다.
 2. 로드되는 메인 체크아웃을 fast-forward한다.
-3. 살아 있는 Claude 세션을 모두 재시작한다(`/reload-plugins`로는 통과하지 못한다). 세션마다 자기가 로드한 decision hook을 부르기 때문이다.
+3. 살아 있는 Claude 세션을 모두 끝내고 새 프로세스로 다시 띄운다(`/reload-plugins`와 `/restart`는 pid와 시작 시각이 그대로라 통과하지 못한다). 세션마다 자기가 로드한 decision hook을 부르기 때문이다.
 4. `orch db import --dry-run`으로 옮길 결정 수와 `--apply`가 거부할지를 본다.
 5. `orch db import --apply`. 다음 중 하나라도 있으면 거부한다. 다른 체크아웃의 스크립트·래퍼·hook을 실행 중이거나 fast-forward 전부터 그것들을 실행해 온 프로세스, 어느 Claude home에서든 그 전에 시작한 살아 있는 세션, 다른 커밋의 사본을 로드하는 plugin이나 `--plugin-dir`로 다른 체크아웃을 로드한 세션, 아직 로드된 LaunchAgent(pid가 없어도)로서 이 셸의 label을 쓰는 대시보드이거나 `~/Library/LaunchAgents`에서 agent-skills의 스크립트·래퍼·hook을 실행하는 것, 그것들을 실행하는 주석 처리되지 않은 crontab 줄(갱신된 체크아웃을 가리켜도 해당하니 전환하는 동안 주석 처리한다). 확인하지 못할 때도 거부한다: `ps`나 `crontab -l`이 실패했을 때(crontab이 없는 사용자나 `crontab` 명령이 없는 경우는 괜찮다), 프로세스의 디렉터리나 체크아웃의 갱신 시각을 읽지 못했을 때. 통과하면 board·tidy·decision 잠금을 잡고, `decisions.json`을 sha256과 함께 `backup-db-<시각>/`(0700, 파일 0600)에 복사하고, 임시 이름으로 DB를 만들어 검사한 뒤 제자리로 rename하고, `decisions.json` 자리에 빈 디렉터리를 남겨 옛 코드의 쓰기가 실패하게 한다.
 6. 대시보드 서버를 다시 올린다(macOS는 `orch-dash install-agent`).
@@ -98,7 +98,7 @@
 
 1. 이미 이행됐으면 "already migrated"라고 하고 아무것도 바꾸지 않는다. 몇 번을 돌려도 같다. 이행 뒤 옛 코드가 파일을 다시 만들었으면 그렇게 말하고 멈춘다.
 2. 서비스를 멈춘다. 대시보드 LaunchAgent, agent-skills-sync, `ensure`로 뜬 대시보드 서버, janitor와 watch-prs 자동화다. 멈춘 것은 `cutover-recover.json`에 먼저 적어 둔다. LaunchAgent plist의 `ORCH_*`·`PROGRAMS_HOME` 값은 읽기만 하고(셸에 없을 때 이행 중 env로 쓴다, plist는 고치지 않는다), 셸의 값과 다르면 거부한다.
-3. 거부 사유가 남아 있으면(옛 코드를 도는 세션·프로세스·cron 줄) 표로 보이고, 아무것도 이행하지 않은 채 멈춘 서비스를 되살린다. 세션은 `/reload-plugins`로는 통과하지 못한다. 끝내고 새로 시작한 세션만 통과한다.
+3. 거부 사유가 남아 있으면(옛 코드를 도는 세션·프로세스·cron 줄) 표로 보이고, 아무것도 이행하지 않은 채 멈춘 서비스를 되살린다. 세션은 `/reload-plugins`나 `/restart`로는 통과하지 못한다. 끝내고 새로 시작한 세션만 통과한다.
 4. `orch db import`와 같은 이행을 하고, 결과를 `migration` 단계와 `orch board show`로 확인한다(`orch board open`은 이행 전에도 정상 종료해서 확인이 되지 않는다).
 5. 끝나거나 실패하거나 중간에 죽어도 멈춘 것을 되살린다. LaunchAgent는 `install-agent`로 plist를 다시 쓰지 않고 있던 plist를 그대로 `launchctl bootstrap`하고, 꺼져 있던 자동화는 켜지 않는다. 되살리지 못한 것은 `cutover-recover.json`에 남아 다음 실행이 먼저 되살린다.
 6. 이행 중에는 `cutover.lock`이 잡혀 있어, 재시작한 세션의 `orch wait`이나 `ensure`가 대시보드 서버를 되살리지 못한다.
@@ -111,7 +111,7 @@
 
 1. 대시보드 서버를 멈추고 janitor를 끈다. macOS에서는 LaunchAgent를 `launchctl bootout`하고 `skills-sync setup disable janitor`.
 2. 로드되는 메인 체크아웃을 fast-forward한다.
-3. 살아 있는 Claude 세션을 모두 재시작한다. `/reload-plugins`로는 통과하지 못한다.
+3. 살아 있는 Claude 세션을 모두 끝내고 새 프로세스로 다시 띄운다. `/reload-plugins`와 `/restart`로는 통과하지 못한다.
 4. `orch db import --dry-run`으로 옮길 내용을 본다. 목록별 항목 수, 닫기 기록, 행과 리드, Orca가 갖고 있어서 빠지는 리드와 행 PR, `--apply`가 거부할지.
 5. `orch db import --apply`. 결정 단계와 같은 검사를 한다. 보드 백업은 `backup-db-*`로 가고 파일별 sha256은 `migration` 테이블에 남으며, `board.json`·`tidy.jsonl` 자리에 빈 디렉터리를 놓아 결정 릴리스보다 옛 코드의 쓰기가 실패하게 한다. 결정 릴리스의 코드는 `4b-board` 행을 보고 멈춘다.
 6. 대시보드 서버와 janitor를 다시 올린다.
