@@ -2,8 +2,28 @@
 
 Review the exact head and its diff against the intended base. Give a reviewer who did not
 implement the change the requirements, repository, base and head, and access to the relevant
-files and tests. Do not seed the review with the implementer's conclusions. A human reviewer
-or an available read-only agent can do this; no model family is required.
+files and tests. Do not seed the review with the implementer's conclusions.
+
+## Pick the reviewer
+
+Run `python3 -I "${CLAUDE_SKILL_DIR}/scripts/review_pick.py" --repo <checkout>` first. It prints
+`<codex|claude|none> <why>`; run the reviewer it names and record it as `review:codex` or `review:claude`
+(`orch verdict --source review:codex` in a program; the PR body names it either way). The setting is
+`review` in `~/.claude/agent-skills.json`:
+
+```json
+"review": {"reviewer": "auto | codex | off"}
+```
+
+- `auto` (default): Codex when `codex login status` answers within 10 s, else a fresh-context Claude
+  reviewer (a subagent, or `claude -p --no-session-persistence --permission-mode plan` with the prompt on stdin).
+- `codex`: Codex only. When it does not answer the script prints `none` and exits 3: the review waits;
+  it does not fall back.
+- `off`: never calls Codex; the Claude reviewer always runs. Independent review is not skipped.
+
+A repository with `repos.<owner/repo>.external_llm: false` always gets Claude. Exit 2 is a config error to fix.
+Codex that passed the probe and then returns no review is INCONCLUSIVE (below): under `auto`, run the Claude
+reviewer on the same head and record that one. A human reviewer also counts; record `review:<name>`.
 
 Read the repository's data-sharing restrictions before selecting a reviewer. A ban on
 external services applies to every provider; use a reviewer within the allowed boundary or
