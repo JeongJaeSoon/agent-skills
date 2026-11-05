@@ -5,8 +5,7 @@ Run it yourself from a plain terminal, never from a Claude session. It stops wha
 LaunchAgent, agent-skills-sync, a dashboard server nobody manages, the janitor and watch-prs automations), refuses
 while a session, process or cron line that runs old code remains (it prints a table and changes nothing), runs the
 import, checks the result, and puts back what it stopped, also when it fails. Already migrated: it says so and
-touches nothing. `--check` lists what it would stop and what stands in the way, and writes no state
-(on a live WAL DB a reader updates the -shm read marks, as every reader does).
+touches nothing. `--check` lists what it would stop and what stands in the way, and writes nothing.
 
 A killed run leaves `cutover-recover.json`; the next run puts those services back first. The values in a
 LaunchAgent's ORCH_* and PROGRAMS_HOME env are used for the run when this shell does not set them; the plist is never
@@ -184,6 +183,16 @@ def note_server(plan):
     if h and h.get("store") == str(dash.home()) and not any(s["do"] == "server" for s in plan):
         plan.append({"do": "server", "port": port})
     return h
+
+
+def add_yielded_server():
+    """Put a server that ended itself because this run held cutover.lock into the plan (see dash.watch_migrate)."""
+    port = store.take_dash_yielded()
+    if port is None:
+        return
+    plan = load_plan()
+    if not any(s["do"] == "server" for s in plan):
+        save_plan(plan + [{"do": "server", "port": port}])
 
 
 def stop_server(plan):
@@ -370,14 +379,10 @@ def main(argv):
                 if note_server(seen) and seen:
                     save_plan(seen)
                 with store.cutover_lock():  # the dashboard server stays down while this one is held
-                    # A server that started after the probe above ends itself within the watcher's poll; look again at
-                    # once, before the owner check and the snapshot take seconds.
-                    held = load_plan()
-                    if note_server(held):
-                        save_plan(held)
                     code = run()
             except (Exception, KeyboardInterrupt) as e:  # whatever went wrong, what was stopped is put back below
                 print(f"stopped: {e}" if str(e) else "interrupted", file=sys.stderr)
+            add_yielded_server()  # a server that ended itself under the lock, wherever the probes above fell
             ok, lines = recover()  # cutover.lock is released: the dashboard may start again now
             for line in lines:
                 print(line)

@@ -2054,13 +2054,16 @@ def loops_alive(h, limit=LOOP_STALE):
         return False
 
 
-def watch_migrate(poll=0.5, kill=os.kill):
+def watch_migrate(poll=0.5, kill=os.kill, port=None):
     """A server that slipped past the start checks (they are not atomic with the start) ends itself once `orch db
-    migrate` holds its lock, so it never writes the state during the import."""
+    migrate` holds its lock, so it never writes the state during the import. It leaves its port first: the migrate
+    starts it again from that, whether or not its own probes saw it."""
     while True:
         time.sleep(poll)
         if store_db.cutover_running():
             log(MIGRATING)
+            if port:
+                store_db.mark_dash_yielded(port)
             kill(os.getpid(), signal.SIGTERM)
             return
 
@@ -2099,7 +2102,7 @@ def serve(host, port, interval, make_fleet=None):
     threading.Thread(target=slow_loop, args=(interval,), daemon=True).start()
     threading.Thread(target=fast_loop, args=(interval,), daemon=True).start()
     threading.Thread(target=code_loop, daemon=True).start()
-    threading.Thread(target=watch_migrate, daemon=True).start()
+    threading.Thread(target=watch_migrate, kwargs={"port": port}, daemon=True).start()
     if os.environ.get("ORCH_FLEET") != "off":
         FLEET = (make_fleet or fleet.Fleet)()
         threading.Thread(target=fleet_loop, daemon=True).start()

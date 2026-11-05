@@ -190,10 +190,19 @@ with world(legacy=False, state_name="walpeek") as (w, sd):
     writer.close()
     wal = pathlib.Path(f"{store.path()}-wal")
     assert wal.is_file() and wal.stat().st_size > 0, "the scenario needs a live -wal"
-    main_before, wal_before = hashlib.sha256(store.path().read_bytes()).hexdigest(), hashlib.sha256(wal.read_bytes()).hexdigest()
+    shm = pathlib.Path(f"{store.path()}-shm")
+    sums = lambda: {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(sd.iterdir()) if p.is_file()}  # noqa: E731
+    before = sums()
     assert store.peek_steps()[1]["4b-board"] == "imported", store.peek_steps()
-    assert hashlib.sha256(store.path().read_bytes()).hexdigest() == main_before
-    assert hashlib.sha256(wal.read_bytes()).hexdigest() == wal_before
+    assert sums() == before and shm.name in before, "peek_steps changed, made or removed a file in the state directory"
+    # the -wal is gone between the check and the copy: the file is then read immutable, still creating nothing
+    real_copy = store.shutil.copyfile
+    store.shutil.copyfile = lambda src, dst: real_copy(src, dst) if not str(src).endswith("-wal") else (_ for _ in ()).throw(FileNotFoundError(src))
+    try:
+        assert store.peek_steps()[0] == store.SCHEMA_VERSION
+    finally:
+        store.shutil.copyfile = real_copy
+    assert sums() == before
     reader.close()
 
 # ---- a service that will not come back stays in the plan file, and the next run puts it back first
@@ -305,25 +314,23 @@ with world(reasons=("old code still runs",)) as (w, sd):
                              for c in w.calls if "dash.py" in " ".join(map(str, c))), w.calls
     assert not (sd / cutover.RECOVER).exists()
 
-# ---- a server that starts after the pre-lock probe is recorded as soon as the lock is held, before the slow steps
-with world(reasons=("old code still runs",)) as (w, sd):
-    slow = {"done": False}
-
-    def late_up(plan):  # visible only in the moments after the lock is taken; the watcher ends it once the owner check ran
-        if slow["done"] or not store.cutover_running():
-            return None
-        if not any(s["do"] == "server" for s in plan):
-            plan.append({"do": "server", "port": 4998})
-        return {"pid": 1}
-    real_note, real_guard = cutover.note_server, cutover.guard_owner
-    cutover.note_server = late_up
-    cutover.guard_owner = lambda: slow.update(done=True)
-    try:
-        code, out, err = run()
-    finally:
-        cutover.note_server, cutover.guard_owner = real_note, real_guard
+# ---- a server that ends itself under the lock leaves its port, so the run starts it again however its probes fell
+with world() as (w, sd):
+    killed = []
+    with store.cutover_lock():
+        dash.watch_migrate(poll=0.01, kill=lambda pid, sig: killed.append(pid), port=4977)
+    assert killed == [os.getpid()] and (sd / store.YIELD_MARK).is_file()
+    assert store.take_dash_yielded() == 4977 and not (sd / store.YIELD_MARK).exists()
+    assert store.take_dash_yielded() is None
+with world(reasons=("old code still runs",)) as (w, sd):  # note_server saw nothing: neither probe caught the server
+    store.mark_dash_yielded(4998)
+    code, out, err = run()
     assert code == 1 and any(c[-2:] == ["--port", "4998"] for c in w.calls), w.calls
-    assert not (sd / cutover.RECOVER).exists()
+    assert not (sd / cutover.RECOVER).exists() and not (sd / store.YIELD_MARK).exists()
+with world() as (w, sd):  # a mark with no usable port starts nothing
+    (sd / store.YIELD_MARK).write_text('{"port": "x"}')
+    code, out, err = run()
+    assert code == 0 and not any("ensure" in c for c in w.calls) and not (sd / store.YIELD_MARK).exists(), w.calls
 
 # ---- a server that is up when the run starts is recorded before any stop
 with world(server=True) as (w, sd):

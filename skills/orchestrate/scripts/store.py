@@ -23,7 +23,7 @@ Commands (prog.py `orch db`):
   migrate [--check]                            the whole cutover in one rerunnable command (cutover.py); owner only
   init                                         a new PC: an empty DB with both steps done, only when no state exists
 """
-import contextlib, copy, datetime as dt, fcntl, functools, hashlib, json, os, pathlib, plistlib, re, shutil, sqlite3, subprocess, sys
+import contextlib, copy, datetime as dt, fcntl, functools, hashlib, json, os, pathlib, plistlib, re, shutil, sqlite3, subprocess, sys, tempfile
 
 import fleet
 
@@ -655,25 +655,41 @@ def migrated_steps():
         return {}
 
 
+def _steps_of(db):
+    return db.execute("PRAGMA user_version").fetchone()[0], dict(db.execute("SELECT step, stage FROM migration"))
+
+
 def peek_steps():
-    """(user_version, {step: stage}) read read-only. Immutable by default: no -wal or -shm is created or removed. A -wal
-    with content next to a -shm means a process still holds the DB open and commits sit in the -wal, which an immutable
-    open ignores; then a plain read-only open reads them. It creates and removes no file and leaves the DB and the -wal
-    byte for byte as they were; it can update the read marks in the -shm, the index every reader of a live WAL DB
-    updates, which holds no state.
-    (0, {}) with no DB; Refused when it cannot be read."""
+    """(user_version, {step: stage}) without touching anything in the state directory: the DB file is opened immutable,
+    which never creates or changes a file. An immutable open ignores a -wal, and while a process holds the DB open its
+    commits sit there; so a -wal with content is read from a copy of the DB and the -wal made in a private temporary
+    directory (the DB first, then the -wal, so a checkpoint in between only shows fewer steps). Nothing opens the live
+    -shm. (0, {}) with no DB; Refused when it cannot be read."""
     p = path()
     if not p.is_file():
         return 0, {}
-    wal, shm = pathlib.Path(f"{p}-wal"), pathlib.Path(f"{p}-shm")
-    live = wal.is_file() and wal.stat().st_size > 0 and shm.is_file()
+    wal = pathlib.Path(f"{p}-wal")
     try:
-        db = sqlite3.connect(f"{p.resolve().as_uri()}?mode=ro" + ("" if live else "&immutable=1"), uri=True)
+        if wal.is_file() and wal.stat().st_size > 0:
+            with tempfile.TemporaryDirectory(prefix="orch-peek-") as d:
+                q = pathlib.Path(d) / p.name
+                try:
+                    shutil.copyfile(p, q)
+                    shutil.copyfile(wal, f"{q}-wal")
+                except FileNotFoundError:  # the last holder closed and checkpointed between the check and the copy
+                    q = None
+                if q:
+                    db = sqlite3.connect(str(q))
+                    try:
+                        return _steps_of(db)
+                    finally:
+                        db.close()
+        db = sqlite3.connect(f"{p.resolve().as_uri()}?mode=ro&immutable=1", uri=True)
         try:
-            return db.execute("PRAGMA user_version").fetchone()[0], dict(db.execute("SELECT step, stage FROM migration"))
+            return _steps_of(db)
         finally:
             db.close()
-    except sqlite3.DatabaseError as e:
+    except (sqlite3.DatabaseError, OSError) as e:
         raise Refused(f"{p} cannot be read: {e}") from e
 
 
@@ -972,6 +988,28 @@ def cutover_running():
     finally:
         os.close(fd)
     return False
+
+
+YIELD_MARK = "dash-yielded.json"
+
+
+def mark_dash_yielded(port):
+    """A dashboard server ends itself because a migrate holds its lock: say so before it goes, so the migrate can start
+    it again even when its own probes ran too early or too late to see it."""
+    sd = fleet.state_dir()
+    sd.mkdir(parents=True, exist_ok=True)
+    tmp = sd / f"{YIELD_MARK}.{os.getpid()}.tmp"
+    tmp.write_text(json.dumps({"port": port}))
+    os.replace(tmp, sd / YIELD_MARK)
+
+
+def take_dash_yielded():
+    """The port a server left with mark_dash_yielded, and the mark is removed; None when there is none."""
+    p = fleet.state_dir() / YIELD_MARK
+    got = fleet.read_json(p, None)
+    p.unlink(missing_ok=True)
+    port = got.get("port") if isinstance(got, dict) else None
+    return port if isinstance(port, int) else None
 
 
 def init_empty():
