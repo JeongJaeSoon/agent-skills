@@ -658,7 +658,9 @@ def migrated_steps():
 def peek_steps():
     """(user_version, {step: stage}) read read-only. Immutable by default: no -wal or -shm is created or removed. A -wal
     with content next to a -shm means a process still holds the DB open and commits sit in the -wal, which an immutable
-    open ignores; then a plain read-only open reads them and creates nothing, since both files already exist.
+    open ignores; then a plain read-only open reads them. It creates and removes no file and leaves the DB and the -wal
+    byte for byte as they were; it can update the read marks in the -shm, the index every reader of a live WAL DB
+    updates, which holds no state.
     (0, {}) with no DB; Refused when it cannot be read."""
     p = path()
     if not p.is_file():

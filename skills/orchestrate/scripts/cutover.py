@@ -5,7 +5,8 @@ Run it yourself from a plain terminal, never from a Claude session. It stops wha
 LaunchAgent, agent-skills-sync, a dashboard server nobody manages, the janitor and watch-prs automations), refuses
 while a session, process or cron line that runs old code remains (it prints a table and changes nothing), runs the
 import, checks the result, and puts back what it stopped, also when it fails. Already migrated: it says so and
-touches nothing. `--check` lists what it would stop and what stands in the way, and writes nothing.
+touches nothing. `--check` lists what it would stop and what stands in the way, and writes no state
+(on a live WAL DB a reader updates the -shm read marks, as every reader does).
 
 A killed run leaves `cutover-recover.json`; the next run puts those services back first. The values in a
 LaunchAgent's ORCH_* and PROGRAMS_HOME env are used for the run when this shell does not set them; the plist is never
