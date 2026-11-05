@@ -31,7 +31,8 @@ Allow, so workers never stall on a prompt hours after they loaded a skill:
 - this plugin's skills
 - `orca orchestration <verb>`, except reset, worker-abandon and gate-resolve
 - `orch <subcommand>` (the program ledger and the landing gate), except heavy, which runs any command,
-  set and init, which can change a program's merge policy, and backfill, which rewrites the ledger
+  set and init, which can change a program's merge policy, backfill, which rewrites the ledger, and land-exec,
+  the land executor, whose round merges and belongs to its LaunchAgent
 
 Ask: `python3 <checkout>/scripts/setup.py --actions-only`, the setup steps that write no Claude settings (setup-pc).
 The dialog says what they do only when <checkout> is this plugin's root or the install dialog's `checkout`;
@@ -87,7 +88,7 @@ SLEEP_MARK = "[gate:sleep-loop]"
 SLEEP_SOURCE = "(agent-skills hooks/guard.py)"
 SLEEP_LOOP = re.compile(r"(?:^|[;&|(\s])(?:until|while|for)\b[\s\S]*?\bdo\b[\s\S]*?\bsleep\s+(\$|\d+)")
 ORCA_ASK = {"reset", "worker-abandon", "gate-resolve"}
-ORCH_ASK = {"heavy", "set", "init", "backfill"}
+ORCH_ASK = {"heavy", "set", "init", "backfill", "land-exec"}
 SETUP_ASK = (f"{PLUGIN} setup: install the 15-minute sync job, turn on the default-on automations (janitor, pressure-watch, "
              "and watch-prs/watch-mentions when their keys are set) and print the check table. It writes no Claude settings.")
 
