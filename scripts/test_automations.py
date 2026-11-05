@@ -345,6 +345,7 @@ class ShellJobs(Base):
         self.assertEqual((w["trigger"], w["precheck-timeout"]), ("*/30 * * * *", 420))
         self.assertTrue(w["precheck"].endswith("prog.py patrol --if-due"), w["precheck"])
         self.assertIn("orca_job.py run patrol --interval 1800 --timeout 400 ", w["precheck"])
+        self.assertEqual(au.reap.SPAWN_TIMEOUT_S, 400, "reap-hard's spawned patrol gets the job's runner limit")
         self.assertLess(patrol.BUDGET_S + patrol.CANDIDATE_BUDGET_S + candidates.CUT_WAIT_S, 400)
         self.assertGreater(patrol.FALLBACK_DUE_S, 1800, "reap-hard's fallback never fires while the job keeps its beat")
 

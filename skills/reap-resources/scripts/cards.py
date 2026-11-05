@@ -30,7 +30,7 @@ QUESTION_PATTERNS = cardguard.QUESTION_PATTERNS
 
 def sh(cmd, cwd=None, input=None, errors=None):
     """stdout, or None on failure with the first stderr line appended to errors: a reason is evidence."""
-    if reap.cancelled():  # this scan's round was cut (candidates.collect): start nothing new
+    if reap.cancelled():
         if errors is not None:
             errors.append(f"{cmd[0]}: not started, the round was cut")
         return None

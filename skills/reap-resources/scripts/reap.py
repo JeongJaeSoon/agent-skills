@@ -73,8 +73,6 @@ def opt(name, default=None):
 # None waits for every command; patrol's candidate round sets seconds, so one hung command fails its source instead
 # of the round.
 RUN_TIMEOUT = None
-# Idents of scan threads whose round was cut (candidates.collect): run starts no new command on them. Per thread, so
-# the rest of the process keeps running commands even while a cut thread has not returned yet.
 CANCELLED = set()
 
 
@@ -709,10 +707,9 @@ SPAWN_TIMEOUT_S = 400  # the patrol job's runner limit (scripts/automations.py)
 
 
 def spawn_patrol(reason, python=None, fallback=False):
-    """Start `orch patrol --if-due` detached, so a LaunchAgent pass never waits on it, under the shared runner as the
-    patrol job runs (record <state>/jobs/patrol-spawn.json): it ends what a cut round leaves in its group. The runner's
-    failures go to <state>/patrol.log. fallback: only when the Orca patrol job missed a round (--fallback). False when
-    it could not start, or AGENT_SKILLS_PATROL=off (tests)."""
+    """Start `orch patrol --if-due` detached under the shared runner (record <state>/jobs/patrol-spawn.json), so a
+    LaunchAgent pass never waits on it; output goes to <state>/patrol.log. False when it could not start, or
+    AGENT_SKILLS_PATROL=off (tests)."""
     if os.environ.get("AGENT_SKILLS_PATROL") == "off":
         return False
     py = python or sys.executable

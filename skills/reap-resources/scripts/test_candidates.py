@@ -326,13 +326,13 @@ if sys.argv[1:] == ["cut-child"]:
     events, grand = [], tmp / "grandchild.pid"
 
     def hung_hard(t):
-        # A path that skips reap.run, its shell's child holding the pipe; the cut comes once it has written its PID.
+        # A path that skips reap.run, its shell's child holding the pipe.
         p = subprocess.run(["sh", "-c", f"sleep 31 & echo $! > {grand}; wait"], capture_output=True)
         events.append(("bypass", p.returncode))
         events.append(("next", reap.run(["sleep", "33"], check=False)))
         return HARD
 
-    def cut_once_written():  # the cut, once the grandchild exists (at most 10 s)
+    def cut_once_written():
         until = time.monotonic() + 10
         while not (grand.exists() and grand.read_text().strip()) and time.monotonic() < until:
             time.sleep(0.05)
@@ -365,7 +365,7 @@ if sys.argv[1:] == ["cut-child"]:
 child = subprocess.run([sys.executable, __file__, "cut-child"], capture_output=True, text=True, timeout=60,
                        start_new_session=True)
 got = json.loads(child.stdout.strip().splitlines()[-1])
-assert got["events"] == [["bypass", -signal.SIGKILL], ["next", None]], got  # killed, then nothing more started
+assert got["events"] == [["bypass", -signal.SIGKILL], ["next", None]], got
 assert got["took"] < candidates.CUT_GRACE_S + 3 < candidates.CUT_WAIT_S, got
 assert got["left"] == [] and not got["grand_alive"], got
 assert got["cancelled"] == 0 and got["source"] == "timeout" and got["after"], got

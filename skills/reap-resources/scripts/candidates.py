@@ -34,7 +34,7 @@ IDENTITY = tuple(dict.fromkeys(reap.ACT_IDENTITY + ("verdict", "close")))
 UNREAD = ("읽지 못함", "실패", "응답 없음", "not read", "timed out")
 RUN_TIMEOUT_S = 60
 CUT_GRACE_S = 1  # a cut thread's own way out before its commands are killed
-CUT_WAIT_S = 10  # the most a cut adds to the round
+CUT_WAIT_S = 10
 HARD_SOURCES = ("protect", "reap_hard_cards", "reap_hard_rest")
 
 
@@ -61,9 +61,8 @@ def kill_group():
 
 
 def stop_scans(threads):
-    """Cut scan threads: start nothing more on them, and after CUT_GRACE_S kill by PID what the group runs until the
-    threads return, for at most CUT_WAIT_S. The main thread runs no command meanwhile, so the group's commands are the
-    scans'. A thread still running after that is caught at exit, and what it spawns later by the runner."""
+    """The main thread runs no command meanwhile, so the group's commands are the scans'. A thread still running after
+    CUT_WAIT_S is caught at exit, and what it spawns later by the runner."""
     reap.CANCELLED.update(th.ident for th in threads)
     atexit.register(kill_group)
     start = time.monotonic()
@@ -228,12 +227,9 @@ def collect(sources, now=None, reap_scan=None, hard=None, pressure_kinds=None, s
             p["cands"] += [{**x, "seen": st} for x in c]
             p["reports"] += r
 
-    # The two scans wait on gh, git, lsof and orca, so they run side by side. Each part writes only its own dict, and
-    # a part is merged only once its thread has finished: a round cut short (patrol's SIGALRM, which only this thread
-    # receives) merges the finished part and marks the other's sources timed out. A signal cannot stop a command a
-    # thread waits on, and not every scan path goes through reap.run, so the cut marks the thread cancelled (reap.run
-    # and cards.sh start nothing more on it) and kills what its process group runs (stop_scans): none is left behind
-    # when the process exits.
+    # Each part writes only its own dict and is merged only once its thread has finished. Patrol's SIGALRM reaches
+    # only this thread and cannot stop a command a scan thread waits on, and not every scan path goes through
+    # reap.run, so a cut both marks the thread cancelled and kills what its process group runs (stop_scans).
     parts = [dict(fn=fn, owns=owns, sources={}, timings=Timings(), notes=[], cands=[], reports=[], alerts=[])
              for fn, owns in ((reap_part, ("reap_scan",)), (hard_part, HARD_SOURCES))]
 
@@ -255,7 +251,7 @@ def collect(sources, now=None, reap_scan=None, hard=None, pressure_kinds=None, s
             if th.is_alive() or n in cut:
                 if final:
                     src.update({s: "timeout" for s in p["owns"]})
-                    timings.update(dict(p["timings"]))  # where its time went so far
+                    timings.update(dict(p["timings"]))
                 continue
             merged.add(n)
             src.update(p["sources"])

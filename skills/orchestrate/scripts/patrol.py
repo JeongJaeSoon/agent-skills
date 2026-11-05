@@ -104,8 +104,8 @@ CONFIG = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-
 REAP_SCRIPTS = pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts"
 
 DUE_S = 25 * 60
-# reap-hard's 15-minute beat starts a round only when no round ran for 40 minutes: the patrol shell job (every 30
-# minutes) is off, absent or failing. The gap then stays under the hour a verdict protects a card for.
+# Under the hour a patrol verdict protects a card for (reap.patrol_working), so a card stays protected while the
+# patrol job is off.
 FALLBACK_DUE_S = 40 * 60
 BUDGET_S = 120
 CANDIDATE_BUDGET_S = 240
@@ -120,8 +120,6 @@ ORPHAN_CONFLICT_H = 2  # a conflict only grows: a PR with no session waits no da
 NOREF_H = 24
 ERROR_ROUNDS = 3
 WATCH_DOWN_MIN = 60
-# Each line shown ends the reader's `orch wait`, a whole turn of the orchestrator: an unacked finding comes back after
-# hours, not every round.
 RENOTIFY = dt.timedelta(hours=4)
 HOLD_CODES = {"I"}
 HOLD_ALONE = dt.timedelta(minutes=60)
@@ -160,8 +158,8 @@ def card_name(path):
 
 
 def pr_open(facts, path):
-    """The card's PR (Orca's linkedPR, which takes a PR seen on its branch too) is open, or unknown: its state unread,
-    or no session read for the card (the collector stale or failed). False only for a read session with no PR."""
+    """Orca's linkedPR also takes a PR seen on the card's branch. With no session read for the card (the collector
+    stale or failed), the PR is unknown and counts as open."""
     sessions = [s for s in facts.get("sessions") or () if s.get("path") == path]
     for s in sessions:
         if key := (s.get("linked_pr") or {}).get("key"):
@@ -601,8 +599,6 @@ def judge(facts, memo):
             mins = (tnow - prog.parse_ts(motion["since"])).total_seconds() / 60
             if mins >= IDLE_MIN and not background(screen_of(facts, handle)):
                 add("I", path, (motion["since"],), f"turn ended {int(mins)} min ago, nothing armed to wake it", handle)
-                # The janitor closes an idle card's terminals once it has an open PR (cards rule 8), which clears this
-                # finding: such an I is never held back (pending_lines), or no one would hear of it.
                 findings[-1]["pr_open"] = pr_open(facts, path)
                 if path in stale_paths:
                     hints[path] = "stalled"
@@ -806,7 +802,7 @@ def write_round(findings, verdicts, dry, now, failed=()):
         return new, gone
     for f in moved:
         fleet.append_line(LOG, {"op": "owner", "id": f["id"], "owner": f.get("owner"), "at": at})
-    for f in linked:  # a PR linked after the finding was held: pending_lines stops holding it
+    for f in linked:
         fleet.append_line(LOG, {"op": "pr", "id": f["id"], "pr_open": f["pr_open"], "at": at})
     for f in new:
         fleet.append_line(LOG, {"op": "found", **f, "title": fleet.mask(f["title"], 300), "detected_at": at})
@@ -860,7 +856,6 @@ def pending_lines(me, unowned, now=None):
            or f.get("code") not in SHOW_ONCE and now - fleet.parse(seen[f["id"]]) >= RENOTIFY]
     # A card that ended its turn and waits (I) is often a worker that just reported and waits on the very session
     # reading this: alone, it wakes nobody until it has stayed open HOLD_ALONE; beside another line it goes with it.
-    # One on a card with an open PR is not held: the janitor closes that card's idle terminals first.
     if all(f.get("code") in HOLD_CODES for f in due):
         due = [f for f in due if f.get("pr_open") or not f.get("detected_at")
                or now - fleet.parse(f["detected_at"]) >= HOLD_ALONE]
@@ -883,7 +878,6 @@ def due(memo, level, now, every=DUE_S):
 
 @contextlib.contextmanager
 def run_lock():
-    """patrol-run.lock without waiting, held across the round and its cleanup scans: True while held."""
     STATE.mkdir(parents=True, exist_ok=True)
     with open(STATE / "patrol-run.lock", "w") as lock:
         try:

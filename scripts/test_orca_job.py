@@ -105,7 +105,7 @@ class RunTest(unittest.TestCase):
             time.sleep(0.1)
         else:
             self.fail(f"{pid} outlived its job")
-        os.kill(own_pid, 0)  # still there
+        os.kill(own_pid, 0)
 
     def test_a_failure_with_only_stdout_still_names_its_cause(self):
         self.run_job(["run", "j", "--", sys.executable, "-c", "print('docker is not running'); raise SystemExit(2)"])
