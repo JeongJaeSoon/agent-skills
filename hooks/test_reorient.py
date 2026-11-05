@@ -240,4 +240,56 @@ assert json.loads(term.read_text())["session_id"] == "t2", "a resume takes the t
 hook(session="t3", handle="term_t", prompt="hi", entrypoint="cli")
 assert json.loads(term.read_text())["session_id"] == "t2", "a prompt writes nothing"
 hook(session="t4", handle="", source="startup", entrypoint="cli", **START)
+# Failure injection: a record that cannot be written or read must not change what the hook prints (the ROLE paragraph)
+# nor its exit status. The reminder is the hook's job; the record is a side effect.
+import os, shutil  # noqa: E402,F811
+want = hook(**START, agent=ORCH, title="orchestrator", session="fi0", handle="term_fi", entrypoint="cli")
+assert want and "top-level orchestrator" in want, want
+terms = TMP / "state/terminals"
+
+
+want_compact = hook(**START, source="compact", agent=ORCH, title="orchestrator", session="fi0", handle="term_fi", entrypoint="cli")
+assert want_compact and want_compact != want and "just compacted" in want_compact
+
+
+def same_output(label, source="startup"):
+    got = hook(**START, source=source, agent=ORCH, title="orchestrator", session="fi0", handle="term_fi", entrypoint="cli")
+    assert got == (want_compact if source == "compact" else want), (label, got)
+
+
+# 1. terminals/ cannot be created or written: a plain file stands where the directory should be, then a read-only dir.
+shutil.rmtree(terms)
+terms.write_text("not a directory")
+same_output("terminals is a file")
+terms.unlink()
+terms.mkdir()
+terms.chmod(0o500)
+try:
+    same_output("terminals is read-only")
+    assert not (terms / "term_fi.json").exists(), "nothing could be written there"
+finally:
+    terms.chmod(0o700)
+# 2. A corrupt record, on a startup and on a compaction (which reads the old one to keep its digest).
+for junk in ("{not json", "[]", '{"session_id": []}', ""):
+    (terms / "term_fi.json").write_text(junk)
+    same_output(f"corrupt record {junk!r}")
+    same_output(f"corrupt record {junk!r} on compact", "compact")
+# 3. A record that is a directory, so reading it fails with an OSError other than "missing".
+(terms / "term_fi.json").unlink()
+(terms / "term_fi.json").mkdir()
+same_output("record is a directory")
+same_output("record is a directory, compact", "compact")
+shutil.rmtree(terms / "term_fi.json")
+# 4. An unreadable hooks.json (plugin root without one): still the same paragraph, and a warning on stderr only.
+bare = TMP / "bare-root"
+bare.mkdir()
+event = json.dumps({"hook_event_name": "SessionStart", "session_id": "fi1", "cwd": "/work", "source": "startup",
+                    "agent_type": ORCH, "session_title": "orchestrator"})
+out = subprocess.run([sys.executable, HERE / "reorient.py"], input=event, capture_output=True, text=True,
+                     env={"PATH": "/usr/bin:/bin", "HOME": str(TMP / "home"), "AGENT_SKILLS_STATE": str(TMP / "state"),
+                          "PROGRAMS_HOME": str(TMP / "programs"), "ORCA_TERMINAL_HANDLE": "term_fi",
+                          "CLAUDE_CODE_ENTRYPOINT": "cli", "CLAUDE_PLUGIN_ROOT": str(bare)})
+assert out.returncode == 0 and json.loads(out.stdout)["hookSpecificOutput"]["additionalContext"] == want, out
+assert "unreadable" in out.stderr, out.stderr
+assert json.loads((terms / "term_fi.json").read_text())["hooks_sha"] is None, "recorded as no digest, not a wrong one"
 print("reorient: all pass")
