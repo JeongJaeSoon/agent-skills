@@ -177,6 +177,25 @@ with world() as (w, sd):
     assert code == 0 and "orch board show: ok" in out and "the import ended but" not in err, (out, err)
     assert store.migrated_steps() == {"4a-decisions": "tombstoned", "4b-board": "tombstoned"}
 
+# ---- peek_steps sees a commit that sits in the -wal because a reader holds the DB, and writes nothing to do it
+with world(legacy=False, state_name="walpeek") as (w, sd):
+    import sqlite3  # noqa: E402
+    store.init_empty()
+    reader = sqlite3.connect(str(store.path()))
+    reader.execute("BEGIN")
+    reader.execute("SELECT count(*) FROM migration").fetchall()  # holds a snapshot: the next commit cannot be checkpointed
+    writer = sqlite3.connect(str(store.path()))
+    writer.execute("UPDATE migration SET stage='imported' WHERE step='4b-board'")
+    writer.commit()
+    writer.close()
+    wal = pathlib.Path(f"{store.path()}-wal")
+    assert wal.is_file() and wal.stat().st_size > 0, "the scenario needs a live -wal"
+    main_before, wal_before = hashlib.sha256(store.path().read_bytes()).hexdigest(), hashlib.sha256(wal.read_bytes()).hexdigest()
+    assert store.peek_steps()[1]["4b-board"] == "imported", store.peek_steps()
+    assert hashlib.sha256(store.path().read_bytes()).hexdigest() == main_before
+    assert hashlib.sha256(wal.read_bytes()).hexdigest() == wal_before
+    reader.close()
+
 # ---- a service that will not come back stays in the plan file, and the next run puts it back first
 with world() as (w, sd):
     want = w.plan()

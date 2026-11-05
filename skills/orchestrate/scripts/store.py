@@ -656,13 +656,17 @@ def migrated_steps():
 
 
 def peek_steps():
-    """(user_version, {step: stage}) read with the file opened immutable: no -wal or -shm is created or removed, and a
-    snapshot older than a live writer only shows fewer steps. (0, {}) with no DB; Refused when it cannot be read."""
+    """(user_version, {step: stage}) read read-only. Immutable by default: no -wal or -shm is created or removed. A -wal
+    with content next to a -shm means a process still holds the DB open and commits sit in the -wal, which an immutable
+    open ignores; then a plain read-only open reads them and creates nothing, since both files already exist.
+    (0, {}) with no DB; Refused when it cannot be read."""
     p = path()
     if not p.is_file():
         return 0, {}
+    wal, shm = pathlib.Path(f"{p}-wal"), pathlib.Path(f"{p}-shm")
+    live = wal.is_file() and wal.stat().st_size > 0 and shm.is_file()
     try:
-        db = sqlite3.connect(f"{p.resolve().as_uri()}?mode=ro&immutable=1", uri=True)
+        db = sqlite3.connect(f"{p.resolve().as_uri()}?mode=ro" + ("" if live else "&immutable=1"), uri=True)
         try:
             return db.execute("PRAGMA user_version").fetchone()[0], dict(db.execute("SELECT step, stage FROM migration"))
         finally:
