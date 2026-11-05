@@ -185,14 +185,20 @@ def note_server(plan):
     return h
 
 
-def add_yielded_server():
-    """Put a server that ended itself because this run held cutover.lock into the plan (see dash.watch_migrate)."""
-    port = store.take_dash_yielded()
-    if port is None:
-        return
-    plan = load_plan()
-    if not any(s["do"] == "server" for s in plan):
-        save_plan(plan + [{"do": "server", "port": port}])
+def add_yielded_server(wait=5.0):
+    """Put a server that ended itself because this run held cutover.lock into the plan (see dash.watch_migrate). The
+    mark is written just before the server ends, so wait until it is down: `ensure` on a server still up would succeed
+    and drop the step. The mark is removed only after the step is saved, so a run killed in between still finds it."""
+    port = store.dash_yielded()
+    if port is not None:
+        import dash
+        end = time.monotonic() + wait
+        while dash.health(port) and time.monotonic() < end:
+            time.sleep(0.1)
+        plan = load_plan()
+        if not any(s["do"] == "server" for s in plan):
+            save_plan(plan + [{"do": "server", "port": port}])
+    store.clear_dash_yielded()
 
 
 def stop_server(plan):

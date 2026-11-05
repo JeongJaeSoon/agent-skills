@@ -1003,13 +1003,16 @@ def mark_dash_yielded(port):
     os.replace(tmp, sd / YIELD_MARK)
 
 
-def take_dash_yielded():
-    """The port a server left with mark_dash_yielded, and the mark is removed; None when there is none."""
-    p = fleet.state_dir() / YIELD_MARK
-    got = fleet.read_json(p, None)
-    p.unlink(missing_ok=True)
+def dash_yielded():
+    """The port a server left with mark_dash_yielded; None when there is none or it holds no port. Reads only: the
+    caller clears the mark once the port is safely in the recovery plan."""
+    got = fleet.read_json(fleet.state_dir() / YIELD_MARK, None)
     port = got.get("port") if isinstance(got, dict) else None
     return port if isinstance(port, int) else None
+
+
+def clear_dash_yielded():
+    (fleet.state_dir() / YIELD_MARK).unlink(missing_ok=True)
 
 
 def init_empty():

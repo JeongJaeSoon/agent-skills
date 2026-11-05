@@ -235,7 +235,7 @@ STORES = [
                "stop to the end of the import (the dashboard server does not start while it is held)"),
     Store("cutoverplan", "D/cutover-recover.json*", {"db.file": LOCK}, ("cutover:save_plan",), ("nobody",),
           rule="what `orch db migrate` stopped and how to put it back; a killed run leaves it and the next run uses it"),
-    Store("dashyielded", "D/dash-yielded.json*", {"db.file": LOCK}, ("store:mark_dash_yielded", "store:take_dash_yielded"),
+    Store("dashyielded", "D/dash-yielded.json*", {"db.file": LOCK}, ("store:mark_dash_yielded", "store:clear_dash_yielded"),
           ("nobody",), rule="a dashboard server that ended itself under cutover.lock leaves its port here; `orch db migrate` "
                             "starts it again from it and removes the file"),
     Store("migrate", "D/backup-orca-v2-*/*", {"board.item": BACKUP, "board.closure": BACKUP},

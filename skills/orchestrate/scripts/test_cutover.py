@@ -320,13 +320,46 @@ with world() as (w, sd):
     with store.cutover_lock():
         dash.watch_migrate(poll=0.01, kill=lambda pid, sig: killed.append(pid), port=4977)
     assert killed == [os.getpid()] and (sd / store.YIELD_MARK).is_file()
-    assert store.take_dash_yielded() == 4977 and not (sd / store.YIELD_MARK).exists()
-    assert store.take_dash_yielded() is None
+    assert store.dash_yielded() == 4977 and (sd / store.YIELD_MARK).is_file()  # reading leaves the mark
+    store.clear_dash_yielded()
+    assert store.dash_yielded() is None and not (sd / store.YIELD_MARK).exists()
 with world(reasons=("old code still runs",)) as (w, sd):  # note_server saw nothing: neither probe caught the server
     store.mark_dash_yielded(4998)
     code, out, err = run()
     assert code == 1 and any(c[-2:] == ["--port", "4998"] for c in w.calls), w.calls
     assert not (sd / cutover.RECOVER).exists() and not (sd / store.YIELD_MARK).exists()
+# the mark is written just before the server ends: the step waits until it is down, so ensure never sees it still up
+with world() as (w, sd):
+    store.mark_dash_yielded(4996)
+    real_health, polls = dash.health, []
+    dash.health = lambda port: (polls.append(port), {"pid": 1} if len(polls) < 3 else None)[1]
+    try:
+        cutover.add_yielded_server(wait=5)
+    finally:
+        dash.health = real_health
+    assert len(polls) == 3 and cutover.load_plan() == [{"do": "server", "port": 4996}], (polls, cutover.load_plan())
+    assert not (sd / store.YIELD_MARK).exists()
+# a server that never goes down is not waited for longer than the cap, and its step is still recorded
+with world() as (w, sd):
+    store.mark_dash_yielded(4995)
+    real_health, dash.health = dash.health, lambda port: {"pid": 1}
+    try:
+        cutover.add_yielded_server(wait=0.3)
+    finally:
+        dash.health = real_health
+    assert cutover.load_plan() == [{"do": "server", "port": 4995}]
+# a run killed after reading the mark and before saving the plan leaves the mark for the next run
+with world() as (w, sd):
+    store.mark_dash_yielded(4994)
+    real_save = cutover.save_plan
+    cutover.save_plan = lambda steps: (_ for _ in ()).throw(KeyboardInterrupt())
+    try:
+        cutover.add_yielded_server(wait=0)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        cutover.save_plan = real_save
+    assert store.dash_yielded() == 4994 and not cutover.load_plan()
 with world() as (w, sd):  # a mark with no usable port starts nothing
     (sd / store.YIELD_MARK).write_text('{"port": "x"}')
     code, out, err = run()
