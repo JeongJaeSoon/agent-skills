@@ -20,8 +20,9 @@ table, then give its record line in the report.
 
 Reading the repo can change the picture. If the scope turns out to be materially different from
 the ticket, do not stop: either it still fits one reviewable PR, or you split the ticket (§5) and
-say so. Ask only when a decision is genuinely blocked — `AskUserQuestion` with concrete options,
-then keep going.
+say so. A decision you cannot make yourself goes through the
+[owner-ask gate](../orchestrate/references/owner-ask-gate.md) before it reaches the owner; while
+it waits, take its "if no answer" and keep going.
 
 Pick the procedure by the shape of the work:
 
@@ -106,7 +107,8 @@ migration, concurrency, CI or public-contract change, and a test that covers it.
 change may use a focused independent review of the diff and relevant tests (record
 `subagent-review` when that is the source). Non-trivial changes need the full independent
 review evidence contract. The reviewer is the one `scripts/review_pick.py` picks (Codex, or a
-fresh-context Claude reviewer), recorded as `review:codex` or `review:claude`.
+fresh-context Claude reviewer), recorded as `review:codex` or `review:claude` (`orch verdict` in a
+program, and the PR body).
 Follow [references/independent-review.md](references/independent-review.md) for the pick, the evidence
 contract and unavailable-review handling.
 
@@ -145,12 +147,10 @@ Before pushing, run **both**:
   parallel cards do not starve the machine; the pressure hook denies a whole suite, an E2E or a
   headless browser run outside it) — CLI / `curl` for backend and APIs, browser automation for UI
   and web flows (logged-in sites included), IDE diagnostics
-  for type and lint. Once the check is done, down the compose stacks you started in the same turn
-  (`end-session`, "Who cleans up"), with the project verify skill's own teardown when it has one (the app may start containers outside
-  compose), else `docker compose -p <project> down`; either way keep volumes (never `-v`). Teardown runs
-  bare, never through `orch heavy`, whose load gate would refuse it under load. A stack that has to stay gets its
-  reason and deadline: `reap.py ledger add --kind compose-stack --id <project> --keep "<reason>" --until <ISO time>`
-  (reap-resources); `orch heavy` registers its stacks, so the janitor downs a forgotten one after the PR closes.
+  for type and lint. Once the check is done, down what you started in the same turn (`end-session`,
+  "Who cleans up"): the verify skill's teardown, else `docker compose -p <project> down`, never `-v`,
+  run bare, not through `orch heavy`; a stack that has to stay gets
+  `reap.py ledger add --kind compose-stack --id <project> --keep "<reason>" --until <ISO time>`.
   A throwaway volume you create by hand outside the verify skill carries the label `reap.py origin-label
   verify-<app>` prints, when it prints one; an unlabeled one can never be cleaned up (reap-resources)
 - a change with no runtime behavior (docs, comments): validate links and run documented
@@ -170,16 +170,12 @@ Repair it within scope or report the unresolved gap and use direct checks that p
 acceptance criteria; never claim a pass from a stale harness.
 
 After the test suite and E2E check, push and open a PR with `gh pr create` in the draft/ready state the user requested.
-In an Orca card, once it returns, as its own Bash call (never chained to `gh pr create` with `&&`: a refusal takes every act in the call with it):
-`orca worktree set --worktree current --workspace-status in-review --json`
-(the card's board column; Orca links the PR to the card by itself, from the branch, so no `--pr`).
-`Closes #n` links a GitHub issue; a Linear ticket ignores it, so attach the PR to the ticket
-with `orca linear attach --current --url <pr> --title "PR"` when the card links a Linear issue
-(`linkedItems` in `orca worktree current --json`, set by the card's `--reference`), else
-`orca linear attach <ID> --url <pr>`. Move the ticket at each milestone as `use-tracker`
-"Milestones" says: its `PR:` line now, `review` when you request a review. A review request
-is not made until `gh pr view <n> --json reviewRequests,assignees` lists the reviewer:
-`gh pr edit --add-reviewer` can exit 0 without adding anyone.
+Once it returns, run each follow-up the plugin's PR-opened reminder lists (the card's board
+column, the ticket's PR link and state; a CLI without the plugin's hooks reads them in
+`hooks/record_check.py`), each as its own Bash call, never chained to `gh pr create` with `&&`: a
+refusal takes every act in the call with it. A review request is not made until
+`gh pr view <n> --json reviewRequests,assignees` lists the reviewer: `gh pr edit --add-reviewer`
+can exit 0 without adding anyone.
 
 **The PR body is a briefing, not the lab notebook**: `## 왜`, `## 범위`, `## 트레이드오프`,
 `## 영향 범위`, and the required `## 검증`, within about 40 lines, titled
@@ -200,22 +196,21 @@ Post the results as a **sticky comment**:
 
 ```bash
 bash "${CLAUDE_SKILL_DIR}/scripts/sticky-comment.sh" <pr> <body-file>
+bash "${CLAUDE_SKILL_DIR}/scripts/sticky-comment.sh" --check <pr>   # exit 0 only when it names the PR's current head sha
 ```
 
-It upserts on the `<!-- test-results -->` marker, so results never stack. Include suite
+It upserts on the `<!-- test-results -->` marker, so results never stack. Name the head sha the
+results ran on, and run `--check` before you report the PR ready. Include suite
 counts, E2E output with each verdict, an explicit "not covered" section, and one line per failed CI
 run of the branch with its run id and what resolved it. E2E belongs in that comment, not in CI. A
 change people see adds screenshots and the lead's verdict on them, never a wait for the user:
 [references/visual-evidence.md](references/visual-evidence.md). In a program `orch land` refuses a PR
 whose comment lacks either.
 
-**A green check is not evidence.** Confirm from logs that the step actually ran
-(`gh run view <id> --log`) — a skipped step, a rate-limited reviewer, and a real pass all
-look identical in the checks list. Read a failed run with `gh run view <id> --log-failed`
-first. Download logs and artifacts into an explicitly scoped system temporary directory,
-outside git worktrees (`gh run download -D <temporary-directory>`). A standalone card also
-resolves the platform temporary root and names its task-specific download directory before
-use; never expand an unset temporary-root variable into an absolute destination.
+**A green check is not evidence.** Confirm from logs that the step actually ran — a skipped
+step, a rate-limited reviewer, and a real pass all look identical in the checks list. Which
+log to read, and where downloads go, is in [references/review-loop.md](references/review-loop.md)
+"CI logs".
 
 **Report each check as VERIFIED, NOT VERIFIED or INCONCLUSIVE** — in 검증, the sticky comment
 and the completion comment. Inconclusive, or a pass on the wrong surface, is not a pass; name
@@ -253,10 +248,12 @@ Then land it. How depends on where you run:
   review (`READY-WAIT: human-review`), and the lead's wake lands it once it is ready. After landing, the brief's REPORT is the
   end: `worker_done` with the evidence, and the session closes itself in that turn
   (`end-session` §7).
-- **A standalone card in a repo with the land executor on** (`orchestrate.land_executor`) does
-  not merge: it reports READY with the head sha, and the orchestrator lands it through the repo's
-  standing program (`orchestrate` `references/landing.md`, "Land executor"). Elsewhere:
-- **A standalone card** merges its own verified PR unless the user set a hold. Under auto
+- **A standalone card** (no `PROGRAM:` line) in a repo with the land executor on
+  (`orchestrate.land_executor`) does not merge: it sends READY to its REPORT line with the head
+  sha, the CI run ids whose logs it read and the review verdict with its source, stops watching
+  CI, and the orchestrator lands it (`orchestrate` `references/landing.md`, "Land executor").
+- **Merging it yourself** (a standalone card whose repo has the executor off, or a session the
+  user started): merge your own verified PR unless the user set a hold. Under auto
   mode that merge runs unasked only when the user's `autoMode.allow` has a rule for this
   repository's merges (`orchestrate` `references/program.md` Frame, "Check the permission chain"); without one the
   classifier asks or refuses, and a refused act is not run again, except once, in the same form, by the refused session (a restart that loads a new rule counts as that session), and only when the human allowed it in that session's own chat or added a rule for it, or when a classifier or hook refusal stated a reason and you added evidence that answers it, never for a human's refusal or a production sync. Report that retry as `재시도 1회: <what you added>`. A second refusal stops the act and you report it. Reaching the same result through another session, script, tool, wrapper or target stays forbidden.
@@ -281,7 +278,7 @@ gh pr merge <n> --squash --delete-branch      # the merge method the repo allows
 gh pr view <n> --json state,mergeCommit       # confirm MERGED and record the commit
 ```
 
-On a standalone card, merging is yours to do; no need to ask. Ask first only when the user said to hold, when they
+Where merging is yours to do, no need to ask. Ask first only when the user said to hold, when they
 said they wanted to look at this one themselves, or when the state is off-script — a check that
 keeps flaking, a thread you resolved on the author's behalf, a migration you cannot roll back.
 
@@ -302,9 +299,9 @@ link, and each criterion with the evidence that it holds (`use-tracker`). Update
 **Say what the user should check themselves — without being asked.** First verify everything
 that can be verified, the merely tedious checks included. What is
 left for the user is what genuinely needs them — a judgment call you made on their behalf, how
-something feels to use, data or an account only they have, a decision the ticket left open.
-Name each one with the exact command or URL, and say why it is theirs. If nothing is left, say
-that too. The same list goes into the ticket's completion comment as "남은 확인 사항", so it
+something feels to use, data or an account only they have, a decision the ticket left open,
+and only after the owner-ask gate's step 1 found no agent-only route to it. Name each one with
+the exact command or URL, and say why it is theirs. If nothing is left, say that too. The same list goes into the ticket's completion comment as "남은 확인 사항", so it
 survives this session.
 
 **The completion comment does not end the turn** (outside a program; inside one, `worker_done`
