@@ -42,7 +42,9 @@ const open = (section, hash) => {{ const s = fleetSection(section, undefined, ha
 out.routes = {{
   graph: open("graph", "#/fleet/graph"), work: open("work", "#/fleet/work"), plain: open("prs", "#/fleet/prs"),
   queried: open("prs", "#/fleet/prs?view=graph"), unknown: open("prs", "#/fleet/prs?view=nope"),
+  suffixed: open("prs", "#/fleet/prs?view=graph-extra"), digit: open("prs", "#/fleet/prs?view=graph1"), more: open("prs", "#/fleet/prs?view=graph&x=1"),
 }};
+out.suffixedView = (F.view = "graph-extra", viewOf(PRS_VIEWS));
 out.ids = FLEET_SECTIONS.map((s) => s.id);
 F.view = null; out.table = fleetPrs(st);
 F.view = "graph"; out.graph = fleetPrs(st);
@@ -58,7 +60,9 @@ out = json.loads(r.stdout)
 
 # old addresses open the view they moved to; a view the address makes up falls back to the first
 assert out["routes"] == {"graph": ["prs", "graph"], "work": ["stages", None], "plain": ["prs", None],
-                         "queried": ["prs", "graph"], "unknown": ["prs", "nope"]}, out["routes"]
+                         "queried": ["prs", "graph"], "unknown": ["prs", "nope"],
+                         "suffixed": ["prs", "graph-extra"], "digit": ["prs", "graph1"], "more": ["prs", "graph"]}, out["routes"]
+assert out["suffixedView"] == "table", "a value that only starts like a view is not that view"
 assert "graph" not in out["ids"] and "prs" in out["ids"], out["ids"]
 
 # the switch: the table is the default and carries no query; the current view is marked

@@ -84,7 +84,7 @@ const MOVED = { work: "stages", graph: ["prs", "graph"] };
 function fleetSection(section, arg, hash = location.hash) {
   F.sessionId = section === "session" && arg ? arg : null;
   const moved = MOVED[section];
-  F.view = (Array.isArray(moved) ? moved[1] : null) || (hash.match(/[?&]view=([a-z]+)/) || [])[1] || null;
+  F.view = (Array.isArray(moved) ? moved[1] : null) || (hash.match(/[?&]view=([^&]*)/) || [])[1] || null;
   section = Array.isArray(moved) ? moved[0] : moved || section;
   return F.sessionId ? "session" : FLEET_SECTIONS.some((s) => s.id === section) ? section : "overview";
 }
