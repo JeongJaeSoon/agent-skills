@@ -2158,8 +2158,11 @@ def notify_unrun(inbox, command, send=run):
     return notify
 
 
-# Every 30 minutes: the round runs no model, so it costs a scan, not a session. Five minutes after patrol's own beat.
-TRIGGER = "7,37 * * * *"
+# Every 30 minutes: the round runs no model, so it costs a scan, not a session. The cron the shared shell-job path
+# (scripts/orca_job.py, scripts/automations.py ShellJob) writes for that period.
+TRIGGER = "*/30 * * * *"
+INTERVAL_S = 1800
+JOB_RUNNER = pathlib.Path(__file__).resolve().parents[3] / "scripts" / "orca_job.py"
 # A busy machine is when finished cards cost the most, so a second job looks at the load between rounds; its precheck
 # reads only the load average unless the load is at the limit, and wakes nothing within the cooldown of any round.
 # Off the minutes of the periodic job.
@@ -2171,11 +2174,19 @@ JANITOR_NAME = "agent-skills janitor"
 LOAD_NAME = "agent-skills janitor load"
 
 
+def job_cmd(name, command):
+    """The precheck that runs a round through orca_job: it records the round's exit in <state>/jobs/NAME.json (which
+    setup-pc reads) and always exits 1, so Orca starts no agent. The same string as orca_job.command()."""
+    return shlex.join(["python3", "-I", str(JOB_RUNNER), "run", name, "--interval", str(INTERVAL_S),
+                       "--timeout", str(PRECHECK_TIMEOUT - 20), "--ok", "0", "--", *shlex.split(command)])
+
+
 def schedule_cmd(script, state_dir, workspace, provider="claude", ledger=None, inbox=None, load=False):
     return ["orca", "automations", "create", "--name", LOAD_NAME if load else JANITOR_NAME,
             "--trigger", LOAD_TRIGGER if load else TRIGGER,
             "--provider", provider, "--workspace-mode", "existing", "--workspace", workspace,
-            "--precheck", round_cmd(script, state_dir, ledger, "precheck", *(["--load"] if load else []), "--act"),
+            "--precheck", job_cmd("janitor-load" if load else "janitor",
+                                  round_cmd(script, state_dir, ledger, "precheck", *(["--load"] if load else []), "--act")),
             "--precheck-timeout", str(PRECHECK_TIMEOUT),
             "--prompt", schedule_prompt(script, state_dir, ledger, inbox), "--json",
             *([f"--extra-agent-args=--model {config()['model']}"] if provider == "claude" and config().get("model") else [])]
@@ -2870,6 +2881,8 @@ def act_round(data, cfg, state_dir, started, inbox=None, send=run, reap_fn=reap_
                 row["seconds"] = round(time.monotonic() - started, 1)
                 with contextlib.suppress(OSError):
                     log_run(state_dir, row)
+            if gate.cut and not row["error"]:  # cut while writing that line: the line misses it, the exit does not
+                row["error"] = f"RoundCut: {gate.cut}"
     return row
 
 
@@ -2990,14 +3003,17 @@ def main():
     act = cmd == "precheck" and "--act" in sys.argv
     started, held = time.monotonic(), contextlib.ExitStack()
     # The whole round, load check included: a periodic and a load round never share janitor-fails or the run log.
+    # Under --act the exit is the round's own (orca_job records it and exits 1 for Orca): a skip is 0, a failure 2.
+    # Without it the precheck's exit still decides whether the agent starts.
+    skip = 0 if act else 1
     if act and not held.enter_context(janitor_lock(STATE)):
         print("다른 janitor 회차가 도는 중: 건너뜀")
-        sys.exit(1)
+        sys.exit(skip)
     if cmd == "precheck" and "--load" in sys.argv:
         due, why = load_due(STATE, cfg)
         if not due:
             print(f"부하 회차 아님({why}): 건너뜀")
-            sys.exit(1)
+            sys.exit(skip)
         print(f"부하 회차: {why}")
     if cmd == "precheck":
         import guard
@@ -3008,7 +3024,7 @@ def main():
             if act:
                 log_run(STATE, {"t": time.time(), "source": "scan", "error": f"소유권 파일을 읽지 못함: {e}",
                                 "stage": "plan"})
-            sys.exit(1)
+            sys.exit(2 if act else 1)
         # Stamped before the scan, which takes seconds: a precheck starting meanwhile must already see it.
         stamp_round(STATE)
     names =(opt("--kinds") or ",".join(SCHEDULED if cmd == "precheck" else KINDS)).split(",")
@@ -3040,7 +3056,8 @@ def main():
               f"실패 {len(row['failed'])} · 예산 초과로 남김 {len(row['left'])} · 쉬는 중 {len(row['resting'])} · "
               f"사람이 볼 것 {row['human']}" + (f" · 오류 {row['error']}" if row["error"] else "") +
               (f" · 거부 {row['refused']}" if row.get("refused") else "") + f" ({row['seconds']}초)")
-        sys.exit(1)  # always: the round is done here, and Orca starts no agent
+        # A failed target rests and goes to a person; only a round that could not run is a failed job.
+        sys.exit(2 if row["error"] or row.get("refused") else 0)
     if cmd == "precheck":
         (STATE / "janitor-plan.json").write_text(json.dumps(data, ensure_ascii=False, indent=1))
         command = round_cmd(pathlib.Path(__file__).resolve(), STATE, ledger_path(), "reap", "--plan", str(STATE / "janitor-plan.json"))

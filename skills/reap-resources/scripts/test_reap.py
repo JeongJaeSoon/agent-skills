@@ -1,5 +1,5 @@
 """Judgement rules of reap.py, plus one real reap of throwaway processes. Run: python3 test_reap.py"""
-import atexit, contextlib, io, json, os, pathlib, re, shutil, signal, subprocess, sys, tempfile, time
+import atexit, contextlib, io, json, os, pathlib, re, shlex, shutil, signal, subprocess, sys, tempfile, time
 
 # reap.py resolves CONFIG, STATE_HOME and PROGRAMS from ~ when it is imported, so the sandbox HOME has to exist before
 # the import. Without it the in-process sections read the owner's agent-skills.json (a "reap.model" there changed the
@@ -629,11 +629,13 @@ with tempfile.TemporaryDirectory() as tmp:
     assert [c[4] for c in calls[:2]] == ["t1", "t2"], calls
 argv = reap.schedule_cmd("/abs/reap.py", pathlib.Path("/s"), "path:/repo", ledger=pathlib.Path("/l/ledger.jsonl"))
 assert argv[:3] == ["orca", "automations", "create"] and "--write" not in argv
-assert argv[argv.index("--workspace-mode") + 1] == "existing" and argv[argv.index("--trigger") + 1] == "7,37 * * * *"
-# The load job: its own name and trigger, the same round prompt, and a precheck that first reads the load.
+assert argv[argv.index("--workspace-mode") + 1] == "existing" and argv[argv.index("--trigger") + 1] == "*/30 * * * *"
+# The load job: its own name and trigger, the same round prompt, and a precheck that first reads the load. Both run the
+# round through orca_job, which records its exit and always exits 1 for Orca.
 load = reap.schedule_cmd("/abs/reap.py", reap.STATE_HOME, "path:/repo", load=True)
 assert load[load.index("--name") + 1] == reap.LOAD_NAME and load[load.index("--trigger") + 1] == reap.LOAD_TRIGGER
-assert load[load.index("--precheck") + 1] == "python3 /abs/reap.py precheck --load --act"
+assert load[load.index("--precheck") + 1] == reap.job_cmd("janitor-load", "python3 /abs/reap.py precheck --load --act")
+assert reap.job_cmd("j", "python3 /x y").startswith(f"python3 -I {reap.JOB_RUNNER} run j --interval 1800 --timeout 580 --ok 0 -- ")
 same = reap.schedule_cmd("/abs/reap.py", reap.STATE_HOME, "path:/repo")
 assert load[load.index("--prompt") + 1] == same[same.index("--prompt") + 1]
 assert not any(a.startswith("--extra-agent-args") for a in same), same
@@ -671,14 +673,14 @@ with tempfile.TemporaryDirectory() as tmp:
     assert reap.load_due(s, {"load_limit": 8}, now=1e6, load5=12, autos=on)[0], "a stamp from the future holds nothing off"
 # The automation does not inherit the shell that ran schedule, so a state or ledger off the default goes in as flags,
 # never an `env` or `VAR=` prefix, which a scheduled session may refuse as a command of its own.
-assert argv[argv.index("--precheck") + 1] == "python3 /abs/reap.py precheck --act --state /s --ledger /l/ledger.jsonl"
+assert argv[argv.index("--precheck") + 1] == reap.job_cmd("janitor", "python3 /abs/reap.py precheck --act --state /s --ledger /l/ledger.jsonl")
 joined = " ".join(argv)
 assert "env " not in joined and not re.search(r"(^|[\s`])[A-Z_]{2,}=", joined), joined
 assert "`python3 /abs/reap.py precheck --act --state /s --ledger /l/ledger.jsonl`" in joined, joined
 # The scan, the reap's re-scan and its acts all run inside the precheck now.
 assert argv[argv.index("--precheck-timeout") + 1] == "600" and reap.ACT_BUDGET_S < reap.PRECHECK_TIMEOUT
 default = reap.schedule_cmd("/abs/reap.py", reap.STATE_HOME, "path:/repo", ledger=reap.STATE_HOME / "ledger.jsonl")
-assert default[default.index("--precheck") + 1] == "python3 /abs/reap.py precheck --act", default
+assert default[default.index("--precheck") + 1] == reap.job_cmd("janitor", "python3 /abs/reap.py precheck --act"), default
 
 # CLI: ledger add, precheck twice, reap moves a settled tmpdir to the trash and skips what no longer holds, schedule only prints.
 with tempfile.TemporaryDirectory() as tmp:
@@ -730,8 +732,9 @@ with tempfile.TemporaryDirectory() as tmp:
     out = cli("schedule")
     assert "--no-parent" in out.stdout and "settings.local.json" in out.stdout, out
 
-# precheck --act: the janitor round with no agent. It reaps in the same process and always exits 1, so Orca never
-# starts the model; a second round meanwhile waits for nothing.
+# precheck --act: the janitor round with no agent. It reaps in the same process and exits with the round's own result
+# (0, or 2 when it could not run); orca_job records that and exits 1, so Orca never starts the model. A second round
+# meanwhile waits for nothing.
 with tempfile.TemporaryDirectory() as tmp:
     tmp = pathlib.Path(os.path.realpath(tmp))
     d = tmp / "build"
@@ -741,17 +744,20 @@ with tempfile.TemporaryDirectory() as tmp:
     cli = lambda *a: subprocess.run([sys.executable, script, *a], env=env, capture_output=True, text=True)
     assert cli("ledger", "add", "--kind", "tmpdir", "--path", str(d), "--worktree", str(tmp / "gone-wt")).returncode == 0
     r = cli("precheck", "--act", "--kinds", "tmpdir")
-    assert r.returncode == 1 and "정리 1" in r.stdout and "휴지통으로 옮김" in r.stdout, (r.stdout, r.stderr)
+    assert r.returncode == 0 and "정리 1" in r.stdout and "휴지통으로 옮김" in r.stdout, (r.stdout, r.stderr)
     assert not d.exists() and (tmp / "trash" / "build").is_dir()
     runs = [json.loads(x) for x in (tmp / "state" / "janitor-runs.jsonl").read_text().splitlines()]
     assert runs[-1]["acted"] == [f"tmpdir:{d}"] and runs[-1]["source"] == "scan" and runs[-1]["error"] is None, runs
-    r = cli("precheck", "--act", "--kinds", "tmpdir")
-    assert r.returncode == 1 and "대상 0개" in r.stdout, r.stdout
+    # Through the job runner the automation stores: exit 1 for Orca, the round's result in jobs/janitor.json.
+    r = subprocess.run(shlex.split(reap.job_cmd("janitor", reap.round_cmd(script, reap.STATE_HOME, None, "precheck", "--act",
+                                                                          "--kinds", "tmpdir"))), env=env, capture_output=True, text=True)
+    rec = json.loads((tmp / "state" / "jobs" / "janitor.json").read_text())
+    assert r.returncode == 1 and rec["ok"] and "대상 0개" in rec["message"], (r, rec)
     saved_state, reap.STATE = reap.STATE, tmp / "state"
     with reap.janitor_lock(tmp / "state") as got:
         assert got
         r = cli("precheck", "--act", "--kinds", "tmpdir")
-        assert r.returncode == 1 and "다른 janitor 회차" in r.stdout, r.stdout
+        assert r.returncode == 0 and "다른 janitor 회차" in r.stdout, r.stdout
     reap.STATE = saved_state
     assert len((tmp / "state" / "janitor-runs.jsonl").read_text().splitlines()) == 2, "the skipped round logs nothing"
 
@@ -913,7 +919,7 @@ with tempfile.TemporaryDirectory() as tmp:
     r = subprocess.run([sys.executable, str(pathlib.Path(__file__).parent / "reap.py"), "precheck", "--act", "--kinds", "tmpdir"],
                        env=env, capture_output=True, text=True)
     last = json.loads((pathlib.Path(tmp) / "janitor-runs.jsonl").read_text().splitlines()[-1])
-    assert r.returncode == 1 and "소유권 파일" in last["error"], (r.stdout, last)
+    assert r.returncode == 2 and "소유권 파일" in last["error"], (r.stdout, last)  # a failed job, not a skip
 
 # user-folder: top-level entries untouched for `days`, not open, not a download in progress.
 D = 86400

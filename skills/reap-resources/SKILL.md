@@ -179,15 +179,17 @@ New session files appear every day, so the precheck looks at program and state-f
 ## Scheduled run
 
 ```bash
-python3 "$R" precheck --act    # the scheduled round: plan, reap that plan in this process, always exit 1 (no agent)
-python3 "$R" precheck --load --act    # the same, but exit 1 at once unless the 5-minute load is at the limit
+python3 "$R" precheck --act    # the scheduled round: plan, reap that plan in this process; exit 0, or 2 when it could not run
+python3 "$R" precheck --load --act    # the same, but exit 0 at once unless the 5-minute load is at the limit
 python3 "$R" precheck    # plan only: writes <state>/janitor-plan.json, exit 0 when there are targets (see below)
 python3 "$R" schedule [--load]    # prints the `orca automations create` command; nothing is created without --write
 ```
 
 The round runs no model. Orca runs a job's precheck itself, outside any Claude session, so the reap there meets no
 permission prompt or auto-mode classifier, and an exit other than 0 starts no agent (the run shows as
-`skipped_precheck`). `precheck --act` uses that: under `<state>/janitor.lock` (a second round meanwhile exits at once)
+`skipped_precheck`). The job runs `precheck --act` through the shared agentless-job runner, `scripts/orca_job.py run
+janitor -- …`, which records the round's exit in `<state>/jobs/janitor.json` (setup-pc warns on a failed or late one)
+and always exits 1. `precheck --act` itself: under `<state>/janitor.lock` (a second round meanwhile exits at once)
 it scans the janitor kinds (user-folder, program and state-file at most once a day), writes the plan, and runs `reap`'s
 own path on it in the same process: the scheduled kinds only, each target re-scanned and acted on only with the same
 identity, inside its lock, after the guard passes again. A target whose act failed rests a day, on its own
@@ -199,11 +201,12 @@ of a cleanup: Orca's run history shows a skip either way. `inbox_to` and `reap.p
 Use `run:<id>`: a `term_` handle changes when its terminal restarts, and `orch patrol` raises one Orca no longer lists
 (T).
 
-`schedule` builds an existing-workspace automation on `7,37 * * * *` (every 30 minutes) whose precheck is
-`python3 <absolute reap.py> precheck --act` (its cwd is the repo's main checkout, so paths are absolute)
-with `--precheck-timeout 600`. Its prompt is only for Orca's Run now, which skips the precheck: the agent runs the
-same `precheck --act` line once and reports.
-`schedule --load` builds the second job, `agent-skills janitor load`, on `27,57 * * * *` with `precheck --load --act`:
+`skills-sync setup enable janitor` registers it as one of setup's agentless shell jobs: `*/30 * * * *`, precheck
+`orca_job.py run janitor --timeout 580 -- python3 <absolute reap.py> precheck --act` with `--precheck-timeout 600`, and
+the shared prompt that only says the precheck misbehaved. `schedule` prints the same precheck and trigger for a runner
+workspace, with a prompt for Orca's Run now (which skips the precheck): the agent runs `precheck --act` once and reports.
+`schedule --load` builds the second job, `agent-skills janitor load`, on `27,57 * * * *` with `precheck --load --act`
+through the same runner (`orca_job.py run janitor-load`):
 a loaded machine is when finished cards cost the most. Its precheck reads only the load average and goes on
 to the full round when the 5-minute load is at `reap.load_limit` (default the CPU count), the periodic job is
 registered and on (removed, or an unreadable automation list, counts as off), and no precheck of either job ran within
