@@ -30,20 +30,28 @@ and decide whether this change belongs on top of one:
 
 - An open PR already does this scope: do not open a second PR for it. Build on that PR's
   branch and stack on it, or add to it when it is yours.
-- This change needs code from an open PR, or must land after it: stack it.
+- This change uses code from an open PR (its symbols or schema): stack it.
   `gh pr create --base <lower branch>`, and the body's first line is `Stacked on #<lower>`
-  with the land order (`#<lower> → #<this>`).
-- Neither: base it on the default branch.
+  with the land order (`#<lower> → #<this>`). Keep the stack linear and at most 3 layers, with one
+  layer on a base: a second PR on the same base is a fan-out, which lands neither as one stack nor
+  as two independent PRs.
+- It only touches the same files as an open PR and needs nothing from it: do not stack. Open it
+  after that PR lands, unless the overlap is only a hotspot (a `translated-from` line, a generated
+  file), which stays parallel.
+- It only has to deploy or run after an open PR: base it on the default branch; the order is an
+  `orch dep` edge in a program, else a line in the body, never a stack.
+- None of these: base it on the default branch.
 
-Dependent PRs are a GitHub stack (one ticket per layer, stacked because the lower one must
-merge first), not just a PR whose base is another branch. After opening them, link them with
+Dependent PRs are a GitHub stack (one ticket per layer, stacked because the upper one uses the
+lower one's code), not just a PR whose base is another branch. After opening them, link them with
 the `gh stack` extension (`gh stack link <bottom> <top> --base main`, or `gh stack init` /
 `add` / `submit` from scratch) and confirm with
-`gh api repos/<owner>/<repo>/pulls/<top> --jq .stack` (`gh pr view` does not show stacks). A PR
-only based on the lower branch is not enough: CI limited to the default branch runs on an upper
-layer only once they are linked. `hooks/stack_gate.py` warns at `gh pr create` when a brief's
-`Lands after` or the branch's history shows a dependency its base does not build on
-(`orchestrate.stack_dependent`: warn, deny or off).
+`gh api repos/<owner>/<repo>/pulls/<top> --jq .stack` (`gh pr view` does not show stacks). The
+link is what lands them in one merge. Whether CI runs on an unlinked upper layer depends on the
+repository's workflow triggers: read `gh pr checks` on that layer rather than assume either way.
+`hooks/stack_gate.py` warns at `gh pr create` when a brief's ORDER `stacked on` or the branch's
+history shows a dependency its base does not build on (`orchestrate.stack_dependent`: warn, deny
+or off).
 
 Each layer keeps its own 검증 section and sticky comment, verified on top of the layer below.
 A stack lands from its top in one merge ([CLI reference](https://docs.github.com/en/pull-requests/reference/stacked-prs-cli-commands)):
@@ -56,7 +64,9 @@ for you; never `gh stack merge` or call merge-async by hand there.
 
 When a lower layer changes, rebase every layer from the bottom, `gh pr update-branch <n> --rebase`
 one after the other, and re-verify them. A stack merges only as a linear chain: a merge commit,
-or rebasing the lower layer alone, fails the merge with `Stack needs to be rebased`.
+or rebasing the lower layer alone, fails the merge with `Stack needs to be rebased`. So a layer
+branch takes no merge commit, `origin/main` included: the exception to SKILL.md §4's "merge main
+in". When `update-branch` is refused, report it rather than merge.
 
 When a lower layer merges on its own, GitHub moves the next one onto the base and rebases it
 ([merging stacked PRs](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/merging-stacked-pull-requests)).
