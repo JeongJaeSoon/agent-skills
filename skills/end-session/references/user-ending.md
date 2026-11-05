@@ -3,10 +3,21 @@
 The path for a session the user asks to end. §3, §4 and §6 are in `SKILL.md`; the section
 numbers are shared, so "§4" below is that file's §4.
 
-Ending is yours to do. The user asked; do not ask back unless the state is off-script (§4) or
-the ending is `EndConversation`, which has its own rule (§5).
+Ending is yours to do. The user asked; do not ask back unless the state is off-script (§4), the
+ending is `EndConversation`, which has its own rule (§5), or this session is the top-level
+orchestrator and the words do not name it (§1).
 
 ## 1. Is this even a request to end
+
+First, the session's role. The declared top-level orchestrator (`orchestrate` "Roles": started
+with `--agent agent-skills:orchestrator`, a `ROLE: orchestrator` line, or the reorient hook's
+orchestrator reminder; `ROLE: none` clears it) holds the one inbox wait and the follow-ups after
+today, so "세션 정리", "정리해줘" and "마무리해줘" do not end it. They mean the work under it:
+close what finished below it (`SKILL.md` "Who cleans up"), leave the record
+([`record.md`](record.md)), start nothing new, and idle with the one inbox wait still running.
+It ends only when the user names its role ("오케스트레이터 세션 종료해"); words that could mean
+either are asked with `AskUserQuestion`. A lead is not this case: a request to end it, and its
+own close after its program's Close (`orchestrate` step 9), go by the table below.
 
 | What the user said | What they mean | Do |
 |---|---|---|
@@ -69,3 +80,5 @@ has to come *after* the warning.
 - Calling `orca terminal close --all` "sleeping the card". It is the opposite: Sleep resumes,
   this drops the resume records for good.
 - Calling `EndConversation` on the first "종료해줘", with no confirmation turn.
+- Closing the top-level orchestrator's own terminal on "세션 정리" because its worktree row says
+  so. Its inbox wait and next-day follow-ups die with it; §1's role check comes before the table.
