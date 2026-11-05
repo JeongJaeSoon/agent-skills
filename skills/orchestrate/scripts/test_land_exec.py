@@ -347,6 +347,27 @@ class LandExec(unittest.TestCase):
         _, outcome = store.land_put(self.slug, "/homes/b", "o/r", self.n, "s2", None, "normal", None)
         self.assertEqual(store.land_get(a["id"])["status"], "queued", "another home's request is not superseded")
 
+    def test_a_stack_seen_on_the_pr_is_refused_even_when_the_listing_fails(self):
+        st = self.gh(); st["stacks_fail"] = True; st["pr_stack"] = {str(self.n): {"number": 100}}; self.write(st)
+        row = self.request()
+        self.round()
+        self.settled(row, "refused", 1, "single PRs only")
+
+    def test_a_github_wait_releases_a_lane_taken_in_an_earlier_round(self):
+        lane = prog.ExclusiveLock(self.p, "main")
+        self.assertTrue(lane.take(self.n))
+        self.edit_pr(mergeStateStatus="BLOCKED")
+        self.request()
+        self.round()
+        self.assertIsNone(prog.ExclusiveLock(self.p, "main").holder())
+
+    def test_a_github_that_never_answers_expires_the_request(self):
+        config(max_wait_hours=1e-9)
+        st = self.gh(); st["user_fail"] = True; self.write(st)
+        row = self.request()
+        self.round()
+        self.settled(row, "refused", 1, "expired")
+
     def test_human_gate_program(self):
         self.p.update(lambda c: c.update(merge_policy="human-gate"))
         row = self.request()

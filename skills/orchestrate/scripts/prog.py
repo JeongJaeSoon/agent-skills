@@ -2234,6 +2234,8 @@ def attempt(p, pr, klass, onto_lower=False, expect=None, verdict_sources=None):
     if unread:
         print("warning: the repository's stacks could not be read; dependent PRs are not checked", flush=True)
         if in_a_stack(repo, pr):
+            if expect:
+                return 1, f"#{pr} is in a stack: the land executor lands single PRs only"
             # merge-async takes every open layer below; without the listing those layers go unverified.
             return 2, f"yield: #{pr} is in a stack and the stack listing did not answer; land again"
         stacks = {}
@@ -2325,7 +2327,8 @@ def attempt(p, pr, klass, onto_lower=False, expect=None, verdict_sources=None):
         if threads:
             note_attempt(p, events, pr, "blocked", [f"{threads} unresolved thread(s) on #{pr}"])
             return 3, f"act: #{pr} has {threads} unresolved review thread(s): answer and resolve them, then land again"
-        note_attempt(p, events, pr, "blocked", me["reasons"])  # before any lane: a wait must not hold one
+        note_attempt(p, events, pr, "blocked", me["reasons"])
+        release_own_lanes(p, pr)  # a wait for a person must not hold a lane, also one taken in an earlier round
         return 2, f"yield: GitHub blocks #{pr}: a required review or check is missing; it lands once GitHub allows it"
     no_ci = no_ci_repo(repo)
     keep = NO_CI_KEEP if no_ci else KEEP

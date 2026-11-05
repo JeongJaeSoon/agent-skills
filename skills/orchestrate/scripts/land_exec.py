@@ -94,10 +94,22 @@ class Round:
         if p.cfg.get("repo") != row["repo"]:
             return settle("refused", 1, f"program {row['program']} is on {p.cfg.get('repo')}, not the requested {row['repo']}")
         repo, pr, sha = row["repo"], row["pr"], row["sha"]
+        age_h = (now() - prog.parse_ts(row["created_at"])).total_seconds() / 3600
+
+        def unanswered(what):
+            """Wait for GitHub, but not past max_wait_hours: a repo gone or a token revoked never answers."""
+            try:
+                limit = (prog.land_executor(repo) or {}).get("max_wait_hours", 24)
+            except SystemExit:
+                limit = 24
+            if age_h > limit:
+                return settle("refused", 1, f"expired: queued {age_h:.0f} h while {what}")
+            return settle("queued", None, what)
+
         try:
             v = prog.pr_view(repo, pr)
         except SystemExit as e:
-            return settle("queued", None, f"GitHub did not answer: {str(e.code)[:200]}")
+            return unanswered(f"GitHub did not answer: {str(e.code)[:200]}")
         audit["merge_state"] = v.get("mergeStateStatus")
         if v["state"] == "MERGED":
             # A round that died after the merge, or a merge made elsewhere: record what GitHub shows, once. This comes
@@ -116,10 +128,9 @@ class Round:
             return settle("refused", 1, f"orchestrate.land_executor is off for {repo}: land again (it merges directly)")
         login = self.owner_login()
         if login is None:
-            return settle("queued", None, "GitHub did not answer `gh api user`: the repo's owner is unchecked")
+            return unanswered("GitHub did not answer `gh api user`: the repo's owner is unchecked")
         if repo.split("/")[0].casefold() != login.casefold():
             return settle("refused", 1, f"{repo} is not owned by the gh account '{login}'")
-        age_h = (now() - prog.parse_ts(row["created_at"])).total_seconds() / 3600
         if age_h > ex["max_wait_hours"]:
             return settle("refused", 1, f"expired: queued {age_h:.0f} h, over max_wait_hours {ex['max_wait_hours']:g}")
         if p.cfg.get("merge_policy") != "autonomous":
