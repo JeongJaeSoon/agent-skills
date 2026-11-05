@@ -688,10 +688,13 @@ def round_model():
 
 def schedule_cmd(script, workspace, provider="claude"):
     reflect = script.parents[2] / "reflect" / "SKILL.md"
+    rnd = shlex.quote(str(script.parents[2] / "reflect" / "scripts" / "reflect_round.py"))
     prompt = (f"{reflect} 의 standing 모드로 reflect 한 라운드를 돌린다. precheck({script} precheck)가 새 신호를 봤다. "
-              "lock·cursor·열린 standing PR 확인부터 그 문서대로 한다. 제안은 draft PR(브랜치 reflect/standing-*) 하나까지만 열고, "
+              f"python3 {rnd} begin 으로 lock 을 잡고(exit 1 이면 멈춘다) settle 로 지난 standing PR 을 정리한 뒤 그 문서대로 한다. "
+              "제안은 draft PR(브랜치 reflect/standing-*) 하나까지만 열고, "
               "어떤 PR도 머지하지 않으며, 스킬을 지우지 않는다(은퇴는 사람에게 넘기는 티켓으로만). "
-              "편집은 이 체크아웃이 아니라 새 worktree 브랜치에서 한다. 끝나면 cursor 를 옮기고, PR 이나 티켓을 만든 때만 보고한다.")
+              f"편집은 이 체크아웃이 아니라 새 worktree 브랜치에서 한다. 끝나면 python3 {rnd} end --advance 로 cursor 를 옮기고 "
+              "lock 을 푼다. PR 이나 티켓을 만든 때만 보고한다.")
     return ["orca", "automations", "create", "--name", "agent-skills reflect standing", "--trigger", "40 6 * * *",
             "--provider", provider, "--workspace-mode", "existing", "--workspace", workspace,
             "--precheck", f"python3 {shlex.quote(str(script))} precheck", "--prompt", prompt, "--json",

@@ -407,6 +407,7 @@ assert cmd[cmd.index("--workspace-mode") + 1] == "existing" and cmd[cmd.index("-
 assert cmd[cmd.index("--precheck") + 1] == "python3 /repo/skills/orchestrate/scripts/skill_usage.py precheck", cmd
 prompt = cmd[cmd.index("--prompt") + 1]
 assert "standing" in prompt and "draft PR" in prompt and "머지하지 않" in prompt, prompt
+assert "/repo/skills/reflect/scripts/reflect_round.py begin" in prompt and "reflect_round.py end --advance" in prompt, prompt
 assert not any(a.startswith("--extra-agent-args") for a in cmd), cmd
 saved_model, su.round_model = su.round_model, lambda: "sonnet"
 modelled = su.schedule_cmd(pathlib.Path("/repo/skills/orchestrate/scripts/skill_usage.py"), "path:/repo")
