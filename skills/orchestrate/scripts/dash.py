@@ -1379,8 +1379,9 @@ def _merge(slug, d, cfg, fetched, interval):
     dash = d / "dashboard"
     dash.mkdir(exist_ok=True)
     prev = read_json(dash / "state.json", {}) or {}
-    if (kept := STATE_SOURCES.get(dash / "state.json")) is not None and prev:
-        prev["sources"] = kept  # successes a skipped write left only in memory
+    kept = STATE_SOURCES.get(dash / "state.json")
+    if kept and prev and kept[0] == file_key(dash / "state.json"):
+        prev["sources"] = kept[1]  # successes a skipped write left only in memory; a file another process wrote since wins
     srcs = {k: dict(v) for k, v in (prev.get("sources") or {}).items() if isinstance(v, dict)}
     # The ledger is read on every collect, so its error is recomputed rather than carried over.
     errors = [e for e in prev.get("errors") or [] if e.split(":", 1)[0] not in fetched and not e.startswith("ledger:")]
@@ -1536,7 +1537,15 @@ def _merge(slug, d, cfg, fetched, interval):
 
 STATE_BEAT_S = 90  # longest an unchanged state.json goes unwritten: prog.py reads one older than 3 minutes as stale
 STATE_WROTE = {}   # path -> (digest of the state without what moves by itself, monotonic time of the write)
-STATE_SOURCES = {}  # path -> the `sources` of a state that was not written, until the next write
+STATE_SOURCES = {}  # path -> (file_key of the file then on disk, the `sources` of a state that was not written)
+
+
+def file_key(path):
+    try:
+        s = path.stat()
+        return (s.st_mtime_ns, s.st_size)
+    except OSError:
+        return None
 
 
 def settled(state):
@@ -1557,7 +1566,7 @@ def write_state(path, state):
     digest, now = settled(state), time.monotonic()
     last = STATE_WROTE.get(path)
     if last and last[0] == digest and now - last[1] < STATE_BEAT_S and path.exists():
-        STATE_SOURCES[path] = state["sources"]  # the next collect reads prev from disk: it must still see these times
+        STATE_SOURCES[path] = (file_key(path), state["sources"])  # the next collect reads prev from disk: it must still see these times
         return False
     write_atomic(path, json.dumps(state, ensure_ascii=False, indent=1))
     STATE_WROTE[path] = (digest, now)
@@ -1948,7 +1957,8 @@ CHECK = selfcheck.SelfCheck()
 # Longest each fleet file goes unwritten while only its clocks moved, and the clock fields themselves. board.py reads
 # state.json's age in minutes; stage_auto.warning reads memory.json's stage_auto_at against an hours-long limit, and
 # flow.py shows a store stale by its mtime.
-FLEET_BEAT_S = {"state.json": 30, "memory.json": 120}  # registry.py judges fleetmem stale at 300 s by mtime
+# registry.py judges fleetmem stale at 300 s and prs at 1800 s, by mtime
+FLEET_BEAT_S = {"state.json": 30, "memory.json": 120, "prs.json": 600}
 FLEET_CLOCKS = {"state.json": ("generated_at",), "memory.json": ("stage_auto_at",)}
 
 
@@ -2329,7 +2339,9 @@ def render_signature():
     """What the brief's render reads, cheaply: the collector's files by mtime and size, the store by data_version."""
     out = [db_version()]
     root = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()
-    paths = [fleet.state_dir() / n for n in RENDER_FILES] + [root / n for n in RENDER_ROOT_FILES]
+    # board.py reads patrol-verdicts.json beside the fleet's dir, rowstate.py reads the janitor's under AGENT_SKILLS_STATE
+    roots = [root] + ([fleet.state_dir().parent] if fleet.state_dir().parent != root else [])
+    paths = [fleet.state_dir() / n for n in RENDER_FILES] + [r / n for r in roots for n in RENDER_ROOT_FILES]
     try:  # every program's ledger and config: the render reads them through the board and the stage table
         paths += [home() / s / n for s in programs() for n in ("ledger.jsonl", "program.json")]
     except OSError:

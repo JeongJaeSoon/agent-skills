@@ -1259,4 +1259,32 @@ append(B, ev="note", note="signature probe")
 assert dash.render_signature() != sig1, "a program ledger change did not move the render signature"
 del os.environ["AGENT_SKILLS_STATE"]
 
+# A file another process wrote after the skipped write wins over the remembered sources.
+dash.collect(A, sources=("github",))
+dash.collect(A, sources=("github",))  # skipped, remembered
+other = json.loads(sp.read_text())
+other["sources"]["github"] = {"updated_at": "2099-01-01T00:00:00Z", "ok": False, "error": "from an external collect"}
+sp.write_text(json.dumps(other))
+assert dash.collect(A, sources=())["sources"]["github"]["error"] == "from an external collect", "an external collect was overwritten"
+
+# The signature follows the patrol file beside a custom fleet dir, and prs.json gets a beat of its own.
+custom = pathlib.Path(tempfile.mkdtemp(prefix="custom-root-"))
+(custom / "dashboard").mkdir()
+real_fs = os.environ.get("ORCH_FLEET_STATE")
+os.environ["ORCH_FLEET_STATE"] = str(custom / "dashboard")
+try:
+    s0 = dash.render_signature()
+    (custom / "patrol-verdicts.json").write_text("{}")
+    assert dash.render_signature() != s0, "patrol-verdicts.json beside a custom fleet dir is not in the signature"
+finally:
+    os.environ["ORCH_FLEET_STATE"] = real_fs if real_fs is not None else str(fl_dir)
+assert dash.FLEET_BEAT_S["prs.json"] < 1800 and dash.FLEET_BEAT_S["memory.json"] < 300
+beat = type("S", (), {"saved": {}})()
+dash.quiet_save(beat, **{"prs.json": '{"prs": {}}'})
+beat.wrote["prs.json"] = (beat.wrote["prs.json"][0], beat.wrote["prs.json"][1] - dash.FLEET_BEAT_S["prs.json"] - 1)
+before_beat = (fl_dir / "prs.json").stat().st_mtime_ns
+time_mod.sleep(0.01)
+dash.quiet_save(beat, **{"prs.json": '{"prs": {}}'})
+assert (fl_dir / "prs.json").stat().st_mtime_ns != before_beat, "an unchanged prs.json never gets a beat"
+
 print("dash.py collect/serve: all pass")
