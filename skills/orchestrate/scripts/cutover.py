@@ -193,8 +193,13 @@ def add_yielded_server(wait=5.0):
     if port is not None:
         import dash
         end = time.monotonic() + wait
-        while dash.health(port) and time.monotonic() < end:
+        up = dash.health(port)
+        while up and time.monotonic() < end:
             time.sleep(0.1)
+            up = dash.health(port)
+        if up:  # still up: it has not ended yet, and ensure would call it done and drop the step
+            print(f"the dashboard on port {port} left its mark but is still up; the mark stays for the next run", file=sys.stderr)
+            return
         plan = load_plan()
         if not any(s["do"] == "server" for s in plan):
             save_plan(plan + [{"do": "server", "port": port}])

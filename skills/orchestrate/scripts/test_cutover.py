@@ -339,15 +339,20 @@ with world() as (w, sd):
         dash.health = real_health
     assert len(polls) == 3 and cutover.load_plan() == [{"do": "server", "port": 4996}], (polls, cutover.load_plan())
     assert not (sd / store.YIELD_MARK).exists()
-# a server that never goes down is not waited for longer than the cap, and its step is still recorded
+# a server still up at the cap (its watcher stalled between the mark and the kill) is not turned into a step that
+# ensure would drop as done: nothing is recorded, the mark stays, and the next run finds it
 with world() as (w, sd):
     store.mark_dash_yielded(4995)
     real_health, dash.health = dash.health, lambda port: {"pid": 1}
+    err = io.StringIO()
     try:
-        cutover.add_yielded_server(wait=0.3)
+        with contextlib.redirect_stderr(err):
+            cutover.add_yielded_server(wait=0.3)
     finally:
         dash.health = real_health
-    assert cutover.load_plan() == [{"do": "server", "port": 4995}]
+    assert not cutover.load_plan() and store.dash_yielded() == 4995 and "still up" in err.getvalue(), err.getvalue()
+    cutover.add_yielded_server(wait=0.3)  # next run: the server is gone now (nothing answers on that port)
+    assert cutover.load_plan() == [{"do": "server", "port": 4995}] and store.dash_yielded() is None
 # an error while reading the mark must not skip putting the other services back
 with world() as (w, sd):
     want = w.plan()
