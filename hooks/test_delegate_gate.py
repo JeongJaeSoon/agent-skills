@@ -156,6 +156,25 @@ for args in ({"command": "tail -f /tmp/x.log"}, {"command": "orch heavy - -- mak
              {"ws": {"url": "wss://example.test/s"}}, {"command": "orch inbox --stream", "ws": {"url": "wss://example.test"}}):
     assert run("Monitor", args) == "deny", args
 
+# A ticket milestone without the task-tracker subagent: this plugin's tracker.py, transition or comment, exact shapes.
+TRACKER = HERE.parent / "skills" / "use-tracker" / "scripts" / "tracker.py"
+BODY_MD = HOME / ".claude" / "programs" / "app" / "done.md"
+for cmd in (f"python3 {TRACKER} transition --to review ABC-1", f"python3 {TRACKER} transition ABC-1 --to completed",
+            f"python3 {TRACKER} --adapter linear transition --to started ABC-1",
+            f"python3 {TRACKER} comment --body-file {BODY_MD} ABC-1",
+            "orca linear attach ABC-1 --url https://example.test/acme/app/pull/1 --title PR"):
+    assert run("Bash", {"command": cmd}) == "none", cmd
+OTHER_TRACKER = TMP / "skills" / "use-tracker" / "scripts" / "tracker.py"
+for cmd in (f"python3 {TRACKER} create --title x", f"python3 {TRACKER} label ABC-1 --add x",
+            f"python3 {TRACKER} transition --to done ABC-1", f"python3 {TRACKER} transition --to review",
+            f"python3 {TRACKER} --config {TMP}/other.json transition --to review ABC-1",
+            f"python3 {TRACKER} comment --body-file /etc/passwd ABC-1",
+            f"python3 {TRACKER} comment --body-file {HOME}/.claude/agent-skills.json ABC-1",
+            f"python3 {OTHER_TRACKER} transition --to review ABC-1",
+            f"cd {HERE.parent} && python3 skills/use-tracker/scripts/tracker.py transition --to review ABC-1",
+            f"python3 {TRACKER} transition --to review ABC-1; rm -rf x", "orca linear create --title x"):
+    assert run("Bash", {"command": cmd}) == "deny", cmd
+
 # The hook is wired for every tool.
 wired = json.loads((HERE / "hooks.json").read_text())["hooks"]["PreToolUse"]
 assert any("delegate_gate.py" in h["command"] and "matcher" not in entry for entry in wired for h in entry["hooks"])

@@ -21,7 +21,9 @@ Allowed (orchestrate references/top-level.md, "Routing", and SKILL.md "Stay answ
   inbox|ensure|note`, `skills-sync`, `orca` coordination groups and `orca skills get|list` (not browser, computer use
   or emulator), `gh pr merge|ready`, a `gh … --json` read, `git worktree list|remove`, `cd`, `jq <filter>` after
   a pipe, and the pressure gate's wait (`python3 <this plugin>/skills/reap-resources/scripts/pressure.py queue wait
-  q-<id>` or `turns --wait <n>`) with run_in_background, which pressure_gate.py's block names. Monitor, when
+  q-<id>` or `turns --wait <n>`) with run_in_background, which pressure_gate.py's block names. A ticket
+  milestone without the task-tracker subagent: this plugin's `python3 <path>/tracker.py transition --to <state> <id>`
+  or `comment --body-file <writable file> <id>`, and `orca linear attach` for the PR link. Monitor, when
   its command passes the same check (the inbox stream, `orch inbox --stream`), and never with a ws source. The only expansions are $ORCA_TERMINAL_HANDLE as an option's whole value and top-level.md's
   `--body "$(cat <absolute path>)"` of a file this hook lets the session write; no other substitution, variable, glob, backtick, `$'…'`, line continuation, or
   redirection other than `2>&1` and to /dev/null. guard.py still denies a send or reply to /dev/null
@@ -164,8 +166,32 @@ def pressure_wait(words, background):
             or (verb, flag) == ("turns", "--wait") and bool(re.fullmatch(r"\d+(\.\d+)?", value)))
 
 
+# A ticket milestone (use-tracker "Milestones") is a fixed move, not task work: a state, a completion comment, a PR
+# link. This plugin's tracker.py by real path, those two verbs in their exact shapes, and no --config (another file
+# could name another tracker); the comment body is a file this hook lets the session write.
+TRACKER = pathlib.Path(__file__).resolve().parents[1] / "skills" / "use-tracker" / "scripts" / "tracker.py"
+STATES = {"started", "review", "completed", "canceled"}
+
+
+def milestone(words):
+    if not (words[:1] == ["python3"] and len(words) >= 3 and os.path.isabs(words[1]) and real(words[1]) == real(TRACKER)):
+        return False
+    rest = words[2:]
+    if rest[:1] == ["--adapter"] and rest[1:2] in (["linear"], ["jira"]):
+        rest = rest[2:]
+    if len(rest) != 4 or rest[0] not in ("transition", "comment"):
+        return False
+    verb, a, b, c = rest
+    flag, value, ticket = (a, b, c) if a.startswith("--") else (b, c, a)
+    if ticket.startswith("-"):
+        return False
+    if verb == "transition":
+        return flag == "--to" and value in STATES
+    return flag == "--body-file" and os.path.isabs(value) and writable(real(value))
+
+
 def coordination(words, piped, background=False):
-    if pressure_wait(words, background):
+    if pressure_wait(words, background) or milestone(words):
         return True
     name = os.path.basename(words[0])
     if "/" in words[0] and name not in ("orch", "skills-sync"):
@@ -182,7 +208,7 @@ def coordination(words, piped, background=False):
     if name == "skills-sync":
         return True
     if name == "orca":
-        return bool(args) and (args[0] in ORCA or args[:2] in (["skills", "get"], ["skills", "list"]))
+        return bool(args) and (args[0] in ORCA or args[:2] in (["skills", "get"], ["skills", "list"], ["linear", "attach"]))
     if name == "gh":
         if args[:2] in (["pr", "merge"], ["pr", "ready"]):
             return True

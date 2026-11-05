@@ -488,7 +488,7 @@ assert prog.revoked_echo({"payload": "not json"}) is None and prog.revoked_echo(
 calls = []
 def fake_orca(*a):
     calls.append(a)
-    if "--wait" in a:
+    if "--wait" in a or "--retry-request" in a:  # the peek wait sees the batch, the owner's take gets it
         return {"deliveryId": "dv1", "messages": [{"type": "worker_done", "payload": rej("Dispatch d1 capability is revoked.")}]}
     return {}
 saved = prog.orca_json, prog.Program, prog.run_workers
@@ -508,7 +508,7 @@ with contextlib.redirect_stdout(out):
     prog.cmd_wait(["s", "--rounds", "1"])
 assert "SETTLED s7 (succeeded): release it" in out.getvalue(), out.getvalue()
 prog.orca_json = lambda *a: {"deliveryId": "dv2", "messages": [{"type": "worker_done", "payload": {"dispatchId": "d1"}}]} \
-    if "--wait" in a else {}
+    if "--wait" in a or "--retry-request" in a else {}
 out = io.StringIO()
 with contextlib.redirect_stdout(out):
     prog.cmd_wait(["s", "--rounds", "1"])
@@ -580,6 +580,13 @@ assert prog.stuck_sweep(live, "s", seen, read=read) == [] and seen == {}
 waits = {"h1": {"evidence": "hook", "prompt": "Allow the edit?"}, "h2": None}
 got = prog.stuck_sweep(live, "s", {}, read=read, waits=waits)
 assert got[0].startswith('STUCK a1 (waiting on a prompt (Orca agentWait, hook)): "Allow the edit?"'), got
+# Only a wait Orca found spares the screen read; None (looked, no wait) and never looked still read it.
+read_of = []
+prog.stuck_sweep(live, "s", {}, read=lambda h: (read_of.append(h), read(h))[1], waits=waits)
+assert "h1" not in read_of and "h2" in read_of, read_of
+read_of.clear()
+prog.stuck_sweep(live, "s", {}, read=lambda h: (read_of.append(h), read(h))[1], waits={})
+assert "h1" in read_of and "h2" in read_of, read_of
 screens["h2"] = menu
 assert not any(l.startswith("STUCK a2") for l in prog.stuck_sweep(live, "s", {}, read=read, waits=waits))
 screens["h2"] = ["npm ERR! ENOSPC: no space left", "❯ "]
@@ -1225,7 +1232,8 @@ try:
     me_was = os.environ.get("ORCA_TERMINAL_HANDLE")
     os.environ["ORCA_TERMINAL_HANDLE"] = "term_me"
     real_wait = prog.orca_json, prog.Program, prog.run_workers, prog.own_worker, prog.all_workers, prog.print_stuck
-    prog.orca_json = lambda *a: {"deliveryId": "dv", "messages": [{"type": "escalation", "payload": "{}"}]} if "--wait" in a else {}
+    prog.orca_json = lambda *a: {"deliveryId": "dv", "messages": [{"type": "escalation", "payload": "{}"}]} \
+        if "--wait" in a or "--retry-request" in a else {}
     prog.run_workers = prog.all_workers = lambda run: []
     prog.print_stuck = lambda *a, **k: []
     prog.Program = lambda slug: type("P", (), {"cfg": {"run": "run_x", "repo": "o/r"}, "slug": slug, "events": lambda self: [],
