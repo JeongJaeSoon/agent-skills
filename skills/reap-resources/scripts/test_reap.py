@@ -677,7 +677,6 @@ assert argv[argv.index("--precheck") + 1] == reap.job_cmd("janitor", "python3 /a
 joined = " ".join(argv)
 assert "env " not in joined and not re.search(r"(^|[\s`])[A-Z_]{2,}=", joined), joined
 assert "`python3 /abs/reap.py precheck --act --state /s --ledger /l/ledger.jsonl`" in joined, joined
-# The scan, the reap's re-scan and its acts all run inside the precheck now.
 assert argv[argv.index("--precheck-timeout") + 1] == "600" and reap.ACT_BUDGET_S < reap.PRECHECK_TIMEOUT
 default = reap.schedule_cmd("/abs/reap.py", reap.STATE_HOME, "path:/repo", ledger=reap.STATE_HOME / "ledger.jsonl")
 assert default[default.index("--precheck") + 1] == reap.job_cmd("janitor", "python3 /abs/reap.py precheck --act"), default
@@ -873,7 +872,7 @@ with tempfile.TemporaryDirectory() as tmp:
         with contextlib.suppress(Exception):
             subprocess.run(["sleep", "5"])
         res["acted"].append("tmpdir:/after")
-    signal.setitimer(signal.ITIMER_REAL, 60, 10)  # a caller's timer, kept across the round
+    signal.setitimer(signal.ITIMER_REAL, 60, 10)
     t0 = time.monotonic()
     jrow = reap.act_round({"hours": 6, "repos": [], "kinds": ["tmpdir"], "items": []}, {}, st,
                           t0 - reap.HARD_STOP_S + 0.3, None, lambda argv, check: None, slow_reap, now=1e6)
@@ -919,7 +918,7 @@ with tempfile.TemporaryDirectory() as tmp:
     r = subprocess.run([sys.executable, str(pathlib.Path(__file__).parent / "reap.py"), "precheck", "--act", "--kinds", "tmpdir"],
                        env=env, capture_output=True, text=True)
     last = json.loads((pathlib.Path(tmp) / "janitor-runs.jsonl").read_text().splitlines()[-1])
-    assert r.returncode == 2 and "소유권 파일" in last["error"], (r.stdout, last)  # a failed job, not a skip
+    assert r.returncode == 2 and "소유권 파일" in last["error"], (r.stdout, last)
 
 # user-folder: top-level entries untouched for `days`, not open, not a download in progress.
 D = 86400

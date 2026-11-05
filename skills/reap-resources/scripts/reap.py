@@ -2173,8 +2173,6 @@ def notify_unrun(inbox, command, send=run):
     return notify
 
 
-# Every 30 minutes: the round runs no model, so it costs a scan, not a session. The cron the shared shell-job path
-# (scripts/orca_job.py, scripts/automations.py ShellJob) writes for that period.
 TRIGGER = "*/30 * * * *"
 INTERVAL_S = 1800
 JOB_RUNNER = pathlib.Path(__file__).resolve().parents[3] / "scripts" / "orca_job.py"
@@ -2183,15 +2181,12 @@ JOB_RUNNER = pathlib.Path(__file__).resolve().parents[3] / "scripts" / "orca_job
 # Off the minutes of the periodic job.
 LOAD_TRIGGER = "27,57 * * * *"
 LOAD_COOLDOWN_MINUTES = 60
-# The scan (gh and lsof for dozens of cards) and the reap's own re-scan and acts, under ACT_BUDGET_S plus a margin.
 PRECHECK_TIMEOUT = 600
 JANITOR_NAME = "agent-skills janitor"
 LOAD_NAME = "agent-skills janitor load"
 
 
 def job_cmd(name, command):
-    """The precheck that runs a round through orca_job: it records the round's exit in <state>/jobs/NAME.json (which
-    setup-pc reads) and always exits 1, so Orca starts no agent. The same string as orca_job.command()."""
     return shlex.join(["python3", "-I", str(JOB_RUNNER), "run", name, "--interval", str(INTERVAL_S),
                        "--timeout", str(PRECHECK_TIMEOUT - 20), "--ok", "0", "--", *shlex.split(command)])
 
@@ -2604,7 +2599,7 @@ def act(item, notes, done=None):
 
 
 class PlanRefused(Exception):
-    """The plan names a kind this code no longer supports: nothing was done."""
+    pass
 
 
 IDENTITY_KEYS = ("cmd", "start", "tip", "head", "ino", "dir", "verdict", "created")
@@ -2624,7 +2619,6 @@ def reap_plan(plan, cfg, scheduled_only=False, deadline=None, out=print, res=Non
     if retired := sorted(i["key"] for i in wanted.values() if i["kind"] in RETIRED_KINDS):
         raise PlanRefused(f"reap: 이 계획에 더는 지원하지 않는 종류가 있어 아무것도 하지 않았다: {', '.join(retired)}. "
                           "scan --kinds card 로 계획을 다시 만든다")
-    # The janitor round covers only the scheduled kinds; a manual kind in that plan was put there by hand.
     if scheduled_only:
         for key in [k for k, i in wanted.items() if i["kind"] not in SCHEDULED]:
             out(f"- 건너뜀 {wanted.pop(key)['key']}: janitor 계획에 들어갈 수 없는 종류")
@@ -2650,17 +2644,16 @@ def reap_plan(plan, cfg, scheduled_only=False, deadline=None, out=print, res=Non
             out(f"- 건너뜀 {label(old)}: 더는 정리 대상이 아님")
             res["skipped"].append(key)
             continue
-        # The plan's terminals are what the judgment saw: one opened since keeps the card.
         if new["kind"] == "card" and set(new.get("close") or ()) - set(old.get("close") or ()):
             out(f"- 건너뜀 {label(old)}: 판정 뒤 터미널이 새로 열림")
             res["skipped"].append(key)
             continue
-        res["current"] = key  # until its outcome is in a list, so a caller cut meanwhile knows which one was running
+        res["current"] = key
         with guard.hold(guard.targets(new)) as got:
             why = guard.keep(new, protect, notes=notes) if got else guard.LOCK_BUSY
             if why:
                 out(f"- 건너뜀 {label(new)}: {why}")
-                if guard.check_error(why):  # left, but not decided: the round ends non-zero after the others run
+                if guard.check_error(why):
                     res["failed"].append(key)
                     res["unchecked"] = True
                 else:
@@ -2669,18 +2662,17 @@ def reap_plan(plan, cfg, scheduled_only=False, deadline=None, out=print, res=Non
             done = {}
             try:
                 got = act(new, notes, done)
-            except BaseException as e:  # logged whatever it was: terminals closed before it are still closed
-                res["failed"].append(key)  # before a re-raise too, so the target rests instead of rerunning
+            except BaseException as e:
+                res["failed"].append(key)
                 log_action({**new, **(done.get("identity") or {})}, e, False, guard.rule(new), done.get("closed"))
                 if not isinstance(e, (RuntimeError, OSError)):
                     raise
                 out(f"- 실패 {label(new)}: {e}")
             else:
-                res["acted" if acted(got) else "skipped"].append(key)  # an act can still end in "건너뜀: …"
+                res["acted" if acted(got) else "skipped"].append(key)
                 log_action({**new, **(done.get("identity") or {})}, got, True, guard.rule(new), done.get("closed"))
                 out(f"- {label(new)}: {got}")
         res["current"] = None
-    # A daily kind the deadline left keeps its day open, so the next round tries it again.
     for k in set(DAILY) & set(plan.get("kinds") or ()) - {wanted[key]["kind"] for key in res["left"]}:
         try:
             stamp_user_folder(STATE, kind=k)
@@ -2691,11 +2683,10 @@ def reap_plan(plan, cfg, scheduled_only=False, deadline=None, out=print, res=Non
     return res
 
 
-# ---------------------------------------------------------------- precheck --act: the janitor round with no agent
 # Orca runs the precheck itself, outside any Claude session, so the reap there meets no permission prompt or
 # classifier; it then exits 1 and Orca starts no agent.
 ACT_BUDGET_S = 480  # no new target after this, counted from the round's start
-HARD_STOP_S = 570  # an act still running here is cut, so the round is recorded before Orca's PRECHECK_TIMEOUT kill
+HARD_STOP_S = 570  # an act still running here is cut, so the round is recorded before the runner's kill
 
 
 class RoundCut(BaseException):  # not an Exception: no `except Exception` on the way may swallow it
@@ -2725,7 +2716,6 @@ class _Gate:
             self.held = held
 
     def check(self):
-        """Raise a cut that came while recording, before more work starts."""
         if self.cut and not self.raised:
             self.raised = True
             raise RoundCut(self.cut)
@@ -2749,15 +2739,14 @@ def hard_stop(started):
         signal.setitimer(signal.ITIMER_REAL, 0)
         for s, h in old.items():
             signal.signal(s, h)
-        if old_timer[0] > 0:  # a caller's own timer goes on, less the time spent here
+        if old_timer[0] > 0:
             signal.setitimer(signal.ITIMER_REAL, max(0.01, old_timer[0] - (time.monotonic() - t0)), old_timer[1])
 RUNS_KEEP = 500
-HUMAN_KINDS = ("chrome-window",)  # closing one needs a URL check in a browser: a person's, with no agent in the round
+HUMAN_KINDS = ("chrome-window",)
 
 
 @contextlib.contextmanager
 def janitor_lock(state_dir):
-    """<state>/janitor.lock without waiting: True while held, False when another round has it."""
     import fcntl
     state_dir.mkdir(parents=True, exist_ok=True)
     with open(state_dir / "janitor.lock", "w") as f:
@@ -2784,7 +2773,6 @@ def read_obj(path):
 
 
 def resting_keys(fails, now):
-    """Targets whose last act failed less than RETRY_AFTER ago. A record that cannot be read keeps resting."""
     out = set()
     for k, f in fails.items():
         try:
@@ -2796,7 +2784,6 @@ def resting_keys(fails, now):
 
 
 def update_fails(fails, res, now):
-    """A failure rests that one target for RETRY_AFTER; an act, or a target gone from the plan, clears it."""
     for k in res["failed"]:
         f = fails.get(k) if isinstance(fails.get(k), dict) else {}
         fails[k] = {"n": int(f.get("n") or 0) + 1, "until": now + RETRY_AFTER}
@@ -2806,8 +2793,6 @@ def update_fails(fails, res, now):
 
 
 def human_items(items, resting, fails):
-    """What the round leaves to a person: cards judged 사람 결정, chrome windows to check by URL, targets resting
-    after a failure. [{key, why}]."""
     out = []
     for i in items:
         if i["kind"] == "card" and i.get("verdict") == "사람 결정":
@@ -2820,14 +2805,12 @@ def human_items(items, resting, fails):
 
 
 def notify_human(state_dir, inbox, rows, send=run):
-    """One message to reap.inbox_to listing every row, sent only when a key not in the last sent set appears; the set
-    is saved only once the message went out. True when it was sent."""
     path = state_dir / "janitor-human.json"
     keys = sorted(r["key"] for r in rows)
     last = set(read_obj(path).get("keys") or ())
     body = "\n".join(f"- {r['key']}: {r['why']}" for r in rows)
     if not set(keys) - last:
-        if set(keys) != last:  # settled ones drop out, so they are sent again if they come back
+        if set(keys) != last:
             write_atomic(path, json.dumps({"keys": keys, "t": time.time()}))
         return False
     if not inbox:
@@ -2851,8 +2834,7 @@ def log_run(state_dir, row, keep=RUNS_KEEP):
 
 
 def act_round(data, cfg, state_dir, started, inbox=None, send=run, reap_fn=reap_plan, now=None):
-    """Reap the round's plan in this process: the scheduled kinds only, never a chrome window or a target resting after
-    a failure; then one message for what a person has to look at. Caller holds janitor_lock. Returns the run row."""
+    """Caller holds janitor_lock."""
     now = now or time.time()
     fails_path = state_dir / "janitor-fails.json"
     fails = read_obj(fails_path)
@@ -2871,7 +2853,7 @@ def act_round(data, cfg, state_dir, started, inbox=None, send=run, reap_fn=reap_
                 got = reap_fn(plan, cfg, scheduled_only=True, deadline=started + ACT_BUDGET_S, res=res)
                 if isinstance(got, dict) and got is not res:
                     res.update(got)
-            finally:  # what was done before anything raised is recorded too
+            finally:
                 with gate.recording():
                     # A target cut between its act and its outcome is not known to be done: it fails, and rests.
                     if (cur := res.get("current")) and not any(cur in (res.get(k) or ()) for k in ("acted", "skipped", "failed")):
@@ -2887,7 +2869,7 @@ def act_round(data, cfg, state_dir, started, inbox=None, send=run, reap_fn=reap_
             rows = human_items(items, resting_keys(fails, now), fails)
             row["human"] = len(rows)
             row["notified"] = notify_human(state_dir, inbox, rows, send)
-        except BaseException as e:  # recorded whatever it was; the Orca run shows only a skip
+        except BaseException as e:
             row["error"] = f"{type(e).__name__}: {str(e)[:200]}"
             if not isinstance(e, (Exception, RoundCut)):
                 raise
@@ -2896,7 +2878,7 @@ def act_round(data, cfg, state_dir, started, inbox=None, send=run, reap_fn=reap_
                 row["seconds"] = round(time.monotonic() - started, 1)
                 with contextlib.suppress(OSError):
                     log_run(state_dir, row)
-            if gate.cut and not row["error"]:  # cut while writing that line: the line misses it, the exit does not
+            if gate.cut and not row["error"]:
                 row["error"] = f"RoundCut: {gate.cut}"
     return row
 
@@ -3071,7 +3053,6 @@ def main():
               f"실패 {len(row['failed'])} · 예산 초과로 남김 {len(row['left'])} · 쉬는 중 {len(row['resting'])} · "
               f"사람이 볼 것 {row['human']}" + (f" · 오류 {row['error']}" if row["error"] else "") +
               (f" · 거부 {row['refused']}" if row.get("refused") else "") + f" ({row['seconds']}초)")
-        # A failed target rests and goes to a person; only a round that could not run is a failed job.
         sys.exit(2 if row["error"] or row.get("refused") else 0)
     if cmd == "precheck":
         (STATE / "janitor-plan.json").write_text(json.dumps(data, ensure_ascii=False, indent=1))
@@ -3101,7 +3082,6 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        # act_round logs its own failures; this is the plan before it (scan, plan write), still under janitor.lock.
         if sys.argv[1:2] == ["precheck"] and "--act" in sys.argv:
             with contextlib.suppress(OSError):
                 log_run(STATE, {"t": time.time(), "source": "scan", "error": f"{type(e).__name__}: {str(e)[:200]}",
