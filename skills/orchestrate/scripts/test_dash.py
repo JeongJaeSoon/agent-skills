@@ -1282,6 +1282,20 @@ dash.write_state(sp, st_race, race_key)
 assert sp not in dash.STATE_SOURCES, "sources were remembered for a file this state was not built from"
 assert dash.collect(A, sources=())["sources"]["github"].get("error") == "raced"
 
+# The store's mark moves on a commit to the DB or to its -wal, and no connection is opened to read it.
+fake_db = root / "fake.db"
+real_path = dash.store_db.path
+dash.store_db.path = lambda: fake_db
+try:
+    m0 = dash.db_version()
+    fake_db.write_text("x")
+    m1 = dash.db_version()
+    pathlib.Path(f"{fake_db}-wal").write_text("w")
+    m2 = dash.db_version()
+    assert m0 != m1 != m2 and m0 != m2, (m0, m1, m2)
+finally:
+    dash.store_db.path = real_path
+
 # The signature follows the patrol file beside a custom fleet dir, and prs.json gets a beat of its own.
 custom = pathlib.Path(tempfile.mkdtemp(prefix="custom-root-"))
 (custom / "dashboard").mkdir()

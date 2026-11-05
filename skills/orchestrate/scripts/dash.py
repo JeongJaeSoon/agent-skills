@@ -38,7 +38,7 @@ Store: $PROGRAMS_HOME or ~/.claude/programs. The dashboard writes only under <sl
 Fleet state: $ORCH_FLEET_STATE or ~/.local/state/agent-skills/dashboard (see fleet.py). ORCH_FLEET=off disables it,
 ORCH_SKILLS=off disables only the skill usage collect, and ORCH_PR_STATS=off only the PR stats collect.
 """
-import concurrent.futures, copy, datetime as dt, fcntl, functools, hashlib, http.server, itertools, json, os, pathlib, plistlib, re, shutil, signal, socket, sqlite3, subprocess, sys, tempfile, threading, time, urllib.request
+import concurrent.futures, copy, datetime as dt, fcntl, functools, hashlib, http.server, itertools, json, os, pathlib, plistlib, re, shutil, signal, socket, subprocess, sys, tempfile, threading, time, urllib.request
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -2324,25 +2324,19 @@ RENDER_MAX_AGE_S = 30  # a render prints ages ("3 min ago"): never serve one old
 # shows up to RENDER_MAX_AGE_S late.
 RENDER_FILES = ("state.json", "prs.json", "inbox-external.jsonl", "stages.json", "stages-auto.json", "tokens.json")
 RENDER_ROOT_FILES = ("janitor-plan.json", "patrol-verdicts.json", "pressure-queue.json", "reload-pending.json")
-_DATA_VERSION = {}  # one long-lived read connection: data_version only moves for commits made by other connections
-
-
 def db_version():
-    """PRAGMA data_version of the store: changes when `orch board set`, `decide add` or any other process commits."""
+    """The store's change mark: mtime and size of the DB and its -wal. A commit lands in the -wal (or in the DB itself
+    without one), so `orch board set`, `decide add` or any other process moves it. No connection is opened here:
+    registry.py lets store.py alone import sqlite3."""
     try:
-        if (db := _DATA_VERSION.get("db")) is None:
-            p = store_db.path()
-            if not p.is_file():
-                return None
-            db = _DATA_VERSION["db"] = sqlite3.connect(f"file:{p}?mode=ro", uri=True, check_same_thread=False, timeout=2)
-        return db.execute("PRAGMA data_version").fetchone()[0]
-    except sqlite3.Error:
-        _DATA_VERSION.pop("db", None)
+        p = store_db.path()
+    except OSError:
         return None
+    return tuple(file_key(pathlib.Path(f"{p}{suffix}")) for suffix in ("", "-wal"))
 
 
 def render_signature():
-    """What the brief's render reads, cheaply: the collector's files by mtime and size, the store by data_version."""
+    """What the brief's render reads, cheaply: the collector's files by mtime and size, the store by db_version."""
     out = [db_version()]
     root = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()
     # board.py reads patrol-verdicts.json beside the fleet's dir, rowstate.py reads the janitor's under AGENT_SKILLS_STATE
