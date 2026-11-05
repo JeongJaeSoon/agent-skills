@@ -84,7 +84,10 @@ def record_terminal(handle, session, cwd, now, loaded=None):
     path.parent.mkdir(parents=True, exist_ok=True)
     entry = {"handle": handle, "session_id": session, "cwd": cwd, "at": now}
     if loaded is None:
-        old = read_terminal(handle)
+        try:
+            old = read_terminal(handle)
+        except (OSError, ValueError):
+            old = None
         loaded = {k: old[k] for k in LOADED_KEYS if k in old} if old and old.get("session_id") == session else {}
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps({**entry, **loaded}))
@@ -95,9 +98,11 @@ LOADED_KEYS = ("plugin_version", "hooks_sha")
 
 
 def read_terminal(handle):
+    """The terminal's record, None when there is none or it is not a record. An unreadable one (permissions, bad JSON)
+    raises OSError/ValueError: reload_state tells that from a missing record."""
     try:
         record = json.loads(terminal_file(handle).read_text())
-    except (OSError, ValueError):
+    except FileNotFoundError:
         return None
     return record if isinstance(record, dict) else None
 
@@ -121,12 +126,27 @@ def loaded_fields(root):
     return {"plugin_version": version, "hooks_sha": hooks_sha(root)}
 
 
-def reload_state(handles, current):
+DIGEST = re.compile(r"[0-9a-f]{64}")
+
+
+def reload_state(handles, current, sessions=None):
     """'stale' when a session recorded in one of the terminals loaded another hooks.json than `current`, 'ok' when
     every recorded one matches, 'unknown' when none recorded a digest (older than this record, or not an Orca
-    terminal): never 'stale' on a missing record."""
-    shas = [(read_terminal(h) or {}).get("hooks_sha") for h in handles if SESSION.fullmatch(h or "")]
-    shas = [s for s in shas if isinstance(s, str)]
+    terminal): never 'stale' on a missing record. 'unreadable' when a record exists and cannot be read.
+    `sessions`, when given, is the set of session ids alive in the place being judged: a terminal record names the
+    session that started last in it, so a record of any other session says nothing about the ones running now."""
+    shas = []
+    for h in handles:
+        if not SESSION.fullmatch(h or ""):
+            continue
+        try:
+            record = read_terminal(h)
+        except (OSError, ValueError):
+            return "unreadable"
+        if not record or (sessions is not None and record.get("session_id") not in sessions):
+            continue
+        if isinstance(record.get("hooks_sha"), str) and DIGEST.fullmatch(record["hooks_sha"]):
+            shas.append(record["hooks_sha"])
     if not shas or not current:
         return "unknown"
     return "stale" if any(s != current for s in shas) else "ok"

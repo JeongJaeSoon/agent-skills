@@ -225,6 +225,14 @@ assert roles.reload_state(["term_none"], "other") == "unknown", "no record is no
 assert roles.reload_state(["term_t"], None) == "unknown", "an unreadable reference says nothing"
 term.write_text(json.dumps({**record, "hooks_sha": None}))
 assert roles.reload_state(["term_t"], "other") == "unknown", "a record without a digest is not stale"
+term.write_text(json.dumps({**record, "hooks_sha": ""}))
+assert roles.reload_state(["term_t"], record["hooks_sha"]) == "unknown", "a malformed digest is not a digest"
+term.write_text(json.dumps(record))
+assert roles.reload_state(["term_t"], "other", {record["session_id"]}) == "stale"
+assert roles.reload_state(["term_t"], "other", {"another-session"}) == "unknown", \
+    "the record of a session that is not alive here says nothing about the live ones"
+term.write_text("{not json")
+assert roles.reload_state(["term_t"], "other") == "unreadable", "an unreadable record is not a missing one"
 hook(session="t2", handle="term_t", source="resume", entrypoint="cli", **START)
 assert json.loads(term.read_text())["session_id"] == "t2", "a resume takes the terminal"
 hook(session="t3", handle="term_t", prompt="hi", entrypoint="cli")

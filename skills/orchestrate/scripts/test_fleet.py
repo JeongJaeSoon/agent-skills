@@ -2256,14 +2256,28 @@ sha = fleet.roles.hooks_sha(plugin)
 for h, loaded in (("term_same", sha), ("term_old", "0" * 64)):
     fleet.roles.record_terminal(h, "s-" + h, "/w", 1.0, {"plugin_version": None, "hooks_sha": loaded})
 fleet.roles.record_terminal("term_bare", "s-bare", "/w", 1.0, {})
-marks = {k: {"phase": ph, "terminals": [{"handle": h}]} for k, ph, h in (
+fleet.roles.record_terminal("term_other", "s-gone", "/w", 1.0, {"plugin_version": None, "hooks_sha": "0" * 64})
+marks = {k: {"phase": ph, "path": f"/w/{k}", "terminals": [{"handle": h}]} for k, ph, h in (
     ("same", "idle", "term_same"), ("old", "working", "term_old"), ("bare", "idle", "term_bare"),
-    ("none", "idle", "term_missing"), ("off", "offline", "term_old"))}
-fleet.reload_marks(marks, plugin)
-assert {k: v["reload"] for k, v in marks.items()} == {"same": "ok", "old": "stale", "bare": "unknown", "none": "unknown", "off": "unknown"}, marks
-fleet.reload_marks(marks, plugin / "missing")
-assert {v["reload"] for v in marks.values()} == {"unknown"}, "an unreadable reference marks nothing stale"
-assert all(s["reload"] in ("ok", "stale", "unknown") for s in st["sessions"]), "the collector writes the mark on every session"
+    ("none", "idle", "term_missing"), ("off", "offline", "term_old"), ("shell", "open", "term_old"),
+    ("moved", "idle", "term_other"))}
+# Every row but the shell and the offline one has a live Claude session in its worktree; "moved" runs s-live, while
+# the terminal's record names s-gone, a session that started there earlier.
+live = {"s-term_same": "/w/same", "s-term_old": "/w/old", "s-bare": "/w/bare", "s-x": "/w/none", "s-live": "/w/moved/sub"}
+fleet.reload_marks(marks, live, plugin)
+assert {k: v["reload"] for k, v in marks.items()} == {"same": "ok", "old": "stale", "bare": "unknown", "none": "unknown", "off": "none",
+                                                      "shell": "none", "moved": "unknown"}, marks
+fleet.reload_marks(marks, live, plugin / "missing")
+assert {v["reload"] for v in marks.values()} == {"none"}, "an unreadable reference marks nothing"
+fleet.reload_marks(marks, None, plugin)
+assert {v["reload"] for v in marks.values()} == {"none"}, "no live-session list, no mark"
+fleet.roles.terminal_file("term_same").chmod(0)
+fleet.reload_marks(marks, live, plugin)
+assert marks["same"]["reload"] == "none" and marks["old"]["reload"] == "stale", "an unreadable record leaves its own row unmarked"
+fleet.roles.terminal_file("term_same").chmod(0o644)
+fleet.reload_marks(marks, live, plugin)
+assert marks["same"]["reload"] == "ok"
+assert all(s["reload"] in ("ok", "stale", "unknown", "none") for s in st["sessions"]), "the collector writes the mark on every session"
 shutil.rmtree(plugin)
 
 print("test_fleet: ok")

@@ -230,6 +230,8 @@ def main():
             # A compaction keeps the process, so it keeps what the process loaded (record_terminal's None).
             root = os.environ.get("CLAUDE_PLUGIN_ROOT") or pathlib.Path(__file__).resolve().parents[1]
             loaded = None if event.get("source") == "compact" else roles.loaded_fields(root)
+            if loaded is not None and not loaded["hooks_sha"]:
+                print(f"reorient: {root}/hooks/hooks.json is unreadable; this session records no reload digest", file=sys.stderr)
             try:
                 roles.record_terminal(os.environ.get("ORCA_TERMINAL_HANDLE"), session, event.get("cwd"), time.time(), loaded)
             except OSError:

@@ -565,6 +565,13 @@ class Reload(unittest.TestCase):
         self.assertNotIn("reload needed", text)
         self.assertIn("unknown", text)
 
+    def test_unreadable_record_is_not_called_missing_or_stale(self):
+        roles.terminal_file(ME).parent.mkdir(parents=True, exist_ok=True)
+        roles.terminal_file(ME).write_text("{not json")
+        (kind, text), = self.check()
+        self.assertEqual(kind, "info")
+        self.assertIn("unreadable", text)
+
     def test_unreadable_reference_warns_and_does_not_block(self):
         self.record(self.sha)
         (kind, text), = reboot.check_reload(ME, self.tmp / "missing")

@@ -843,19 +843,34 @@ PLUGIN_ROOT = pathlib.Path(__file__).resolve().parents[3]
 _reload_warned = []
 
 
-def reload_marks(sessions, root=None):
-    """`reload` on each session with a live terminal: "stale" when the session recorded a hooks/hooks.json digest other
-    than the one on disk now (it loaded the hooks before the file changed, so it lacks the new ones and cannot say so),
-    "ok", or "unknown" when nothing was recorded (hooks/reorient.py writes it at SessionStart; an older session, a
-    session outside Orca). Unknown is not stale. Only a mark: nothing is blocked. An unreadable hooks.json leaves
-    every row "unknown" and warns once."""
+def _reload_warn(key, text):
+    if key not in _reload_warned:
+        _reload_warned.append(key)
+        print(f"fleet: {text}; no reload mark", file=sys.stderr)
+
+
+def reload_marks(sessions, live, root=None):
+    """`reload` on each session that runs a live Claude Code session: "stale" when the session recorded a
+    hooks/hooks.json digest other than the one on disk now (it loaded the hooks before the file changed, so it lacks the
+    new ones and cannot say so), "ok", or "unknown" when nothing was recorded (hooks/reorient.py writes it at
+    SessionStart; an older session). Unknown is not stale. "none" is no mark: the row has no live Claude session (a
+    shell, an offline card), or the key or a record cannot be read, which warns once and leaves the row as before.
+    `live` is session id -> cwd; a terminal record counts only when it names a session alive in that worktree, since it
+    keeps the session that started last in the terminal. Only a mark: nothing is blocked."""
     current = roles.hooks_sha(root or PLUGIN_ROOT)
-    if not current and not _reload_warned:
-        _reload_warned.append(1)
-        print(f"fleet: {root or PLUGIN_ROOT}/hooks/hooks.json is unreadable; no reload marks", file=sys.stderr)
+    if not current:
+        _reload_warn("ref", f"{root or PLUGIN_ROOT}/hooks/hooks.json is unreadable")
     for s in sessions.values():
-        handles = [t.get("handle") for t in s.get("terminals") or []]
-        s["reload"] = roles.reload_state(handles, current) if s.get("phase") != "offline" else "unknown"
+        s["reload"] = "none"
+        path = (s.get("path") or "").rstrip("/")
+        ids = {sid for sid, cwd in (live or {}).items() if path and (cwd == path or cwd.startswith(path + "/"))}
+        if not current or not ids or s.get("phase") == "offline":
+            continue
+        state = roles.reload_state([t.get("handle") for t in s.get("terminals") or []], current, ids)
+        if state == "unreadable":
+            _reload_warn("record", "a terminals/<handle>.json record is unreadable")
+        else:
+            s["reload"] = state
 
 
 def phase_of(agents, live_terms):
@@ -1689,13 +1704,14 @@ class Fleet:
 
     def __init__(self, fetch_fast=fetch_fast, fetch_runs=fetch_runs, graphql=graphql, now=utcnow, read_screen=read_screen,
                  fetch_automations=fetch_automations, fetch_monitors=fetch_monitors, fetch_sent=fetch_sent, ps_table=ps_table,
-                 declared_roles=declared_roles):
+                 declared_roles=declared_roles, live_sessions=live_sessions):
         self.fetch_fast, self.fetch_runs, self.graphql, self.now = fetch_fast, fetch_runs, graphql, now
         self.ps_table = ps_table  # read once a runs cycle for both monitors and sent
         self.fetch_automations, self.automations = fetch_automations, []
         self.fetch_monitors, self.monitors = fetch_monitors, []
         self.fetch_sent, self.sent, self.sent_inbox_since = fetch_sent, [], None  # served by /api/fleet/sent with the `orch sent` log, not in state.json
         self.declared_roles, self.declared = declared_roles, []
+        self.live_sessions, self.live_cwds = live_sessions, None  # session id -> cwd of each live Claude session; None: not read
         self.read_screen = read_screen
         self.lock = threading.Lock()
         d = state_dir()
@@ -1778,6 +1794,7 @@ class Fleet:
                     except SourceError as e:
                         self.ok("sent", str(e))
                     self.declared = self.declared_roles(procs)
+                    self.live_cwds = {sid: s["cwd"] for sid, s in self.live_sessions(procs).items()}
                 self.last["runs"] = mono
             if self.fast is None:
                 return self.state
@@ -2234,7 +2251,7 @@ class Fleet:
         except (OSError, ValueError):
             held = []
         model_tags(sessions)
-        reload_marks(sessions)
+        reload_marks(sessions, self.live_cwds)
         return {"generated_at": iso(now), "root": root, "sessions": sorted(sessions.values(), key=lambda s: s.get("last_activity") or "", reverse=True),
                 "runs": [{"id": r["id"], "objective": mask(r.get("objective"), 200), "updated_at": r.get("updated_at")} for r in self.runs["runs"]],
                 "tasks": [{"id": t["id"], "run": t.get("run_id"), "title": task_name(t),

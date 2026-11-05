@@ -225,6 +225,8 @@ def check_reload(handle, root=None):
     if not current:
         return [("info", f"{root or SKILLS.parent}/hooks/hooks.json is unreadable: whether this session needs a reload is unknown")]
     state = roles.reload_state([handle], current)
+    if state == "unreadable":
+        return [("info", f"the SessionStart record of terminal {handle} is unreadable: reload need unknown")]
     if state == "stale":
         return [("info", "reload needed: this session loaded an older hooks/hooks.json than the checkout has now, so "
                          "it runs without the newer hooks. Restart it (`claude --continue` in this terminal)")]

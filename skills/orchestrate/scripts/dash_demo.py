@@ -987,7 +987,9 @@ class FakeFleetWorld:
         f = fleet.Fleet(fetch_fast=self.fetch_fast, fetch_runs=self.fetch_runs, graphql=self.graphql, now=clock or fleet.utcnow,
                         read_screen=self.read_screen, fetch_automations=self.fetch_automations,
                         fetch_monitors=self.fetch_monitors, fetch_sent=self.fetch_sent, ps_table=lambda: {},
-                        declared_roles=lambda procs: [])
+                        declared_roles=lambda procs: [],
+                        live_sessions=lambda procs: {f"demo-{w['worktreeId'][3:]}": {"cwd": w["path"]}
+                                                             for w in self.worktrees if w["worktreeId"] != "wt-old"})
         f.me = self.ME
         f.repos = {w["path"]: self.renamed.get(w["path"]) or f"acme/{w['repo']}" for w in self.worktrees}
         if self.layout:  # two subagents the lead started and nobody saw stop: one old enough to count as stale, one running
