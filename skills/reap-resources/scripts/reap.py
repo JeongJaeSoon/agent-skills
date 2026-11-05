@@ -1791,7 +1791,9 @@ def janitor_scan(kinds, repo_list, entries, notes, pr_state=None, hours=6.0, now
         import cards
         found, card_notes = cards.scan(config(), repo_list)
         notes += card_notes
-        items += [{"kind": "card", "key": f"card:{c['path']}", "name": c["path"], "target": c["verdict"] in cards.ACTING,
+        # path and dirty are read back from the saved plan by orchestrate's rowstate.card_dirty.
+        items += [{"kind": "card", "key": f"card:{c['path']}", "name": c["path"], "path": c["path"], "dirty": c.get("dirty"),
+                   "target": c["verdict"] in cards.ACTING,
                    **{k: c[k] for k in ("verdict", "why", "head", "close", "pr", "state")},
                    **({"ino": c["ino"]} if c.get("ino") is not None else {})} for c in found]
     if "compose-stack" in kinds:
