@@ -90,7 +90,10 @@ def notify(text, target):
 
 def refresh(m, manifest_path, vendor, fresh, target):
     plugin = show(target, f"{m['upstream_root']}/.cursor-plugin/plugin.json")  # read before the first write
-    version = json.loads(plugin).get("version", m.get("upstream_version")) if plugin else m.get("upstream_version")
+    try:
+        version = json.loads(plugin).get("version") if plugin else None
+    except ValueError:
+        sys.exit("upstream plugin.json is not JSON: nothing written")
     keep = []
     for f in m["files"]:
         p, data = vendor / f["upstream"], fresh[f["upstream"]]

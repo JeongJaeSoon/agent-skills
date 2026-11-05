@@ -72,14 +72,20 @@ grep -q '^line1 up$' "$T/repo/vendor/pstack/skills/a/SKILL.md"
 # "new" counts from the pin: once the pin moves past them, unvendored files are no longer reported.
 out=$(sync); expect "matches upstream" "$out"
 
-# A blob the cache cannot read (a blob:none clone offline) stops the run before anything is written: first the
-# plugin.json --write reads for the version, then a vendored file, which is never read as a deleted one.
+# --write stops before anything is written when it cannot finish: a plugin.json that is not JSON, then a blob the
+# cache cannot read (a blob:none clone offline): plugin.json's, then a vendored file's, never read as a deleted one.
+# The drifted copy is what a write that started early would undo.
+put "$T/up/pstack/.cursor-plugin/plugin.json" 'not json\n'
+g commit -qam three
+echo "drift a write would undo" >> "$T/repo/vendor/pstack/skills/a/SKILL.md"
 cp -R "$T/repo/vendor" "$T/before"
+same() { diff -r "$T/before" "$T/repo/vendor" || { echo "FAIL: vendor/pstack changed after a failed run"; exit 1; }; }
+out=$(sync --write 2>&1) && { echo "FAIL: a plugin.json that is not JSON should stop --write"; exit 1; }
+expect "nothing written" "$out"; same
 for path in pstack/.cursor-plugin/plugin.json pstack/skills/a/SKILL.md; do
   blob=$(g rev-parse "HEAD:$path")
   command rm -f "$T/up/.git/objects/${blob:0:2}/${blob:2}"
   out=$(sync --write 2>&1) && { echo "FAIL: a missing blob of $path should stop the run"; exit 1; }
-  expect "failed" "$out"
-  diff -r "$T/before" "$T/repo/vendor" || { echo "FAIL: vendor/pstack changed after a failed run"; exit 1; }
+  expect "failed" "$out"; same
 done
 echo "pstack-sync: all cases pass"
