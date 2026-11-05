@@ -625,6 +625,37 @@ publish('s4c', page('quick2.html'), 'c85f1111-2222-3333-4444-555566667777')
 check('quick publish afterwards: the old marker is retried', not os.path.exists(mark3)
       and any(d.endswith('-stale-c65f1111') for d in os.listdir(SHARE)))
 
+# --- Codex round 4: a private move killed part-way is finished by the next run; a retry never outranks a newer version
+HALF = 'c95f1111-2222-3333-4444-555566667777'
+publish('s4d', page('half2.html', text='one'), HALF)
+time.sleep(1.1)
+publish('s4d', page('half2.html', text='two'), HALF)
+hrows = [json.loads(l) for l in open(os.path.join(STATE_ROOT, 'index.jsonl')) if HALF in l]
+pfolder = os.path.join(HOME, 'artifacts-private', os.path.basename(hrows[-1]['dir']))
+os.makedirs(pfolder, mode=0o700)
+moved = dict(hrows[0], dir=pfolder, copy=os.path.join(pfolder, os.path.basename(hrows[0]['copy'])))
+shutil.move(hrows[0]['copy'], moved['copy'])  # the first file moved, then the run was killed
+with open(os.path.join(HOME, 'artifacts-private', 'index.jsonl'), 'a') as f:
+    f.write(json.dumps(moved) + '\n')
+out = publish('s4d', page('half2.html', text='three'), HALF)
+left = [l for l in open(os.path.join(STATE_ROOT, 'index.jsonl')) if HALF in l]
+check('killed private move: next run finishes it, nothing stays public, no public link announced',
+      not left and not any(d.endswith('-half2-c95f1111') for d in os.listdir(SHARE))
+      and 'backup link: none' in out['hookSpecificOutput']['additionalContext'], (left, out))
+
+NEWER = 'ca5f1111-2222-3333-4444-555566667777'
+publish('s4e', page('newer.html', text='NEW'), NEWER)
+dead4 = subprocess.Popen([sys.executable, '-c', 'pass'])
+dead4.wait()
+mark4 = os.path.join(STATE_ROOT, 'inflight', f'{dead4.pid}-5.json')
+with open(mark4, 'w') as f:
+    json.dump({'pid': dead4.pid, 'at': time.time() - 30, 'data': {'cwd': HOME, 'tool_input': {'file_path': page('older.html', text='OLD')},
+                                                                  'tool_response': f'https://claude.ai/code/artifact/{NEWER}'}}, f)
+publish('s4f', page('go.html'), 'cb5f1111-2222-3333-4444-555566667777')
+nrows = [json.loads(l) for l in open(os.path.join(STATE_ROOT, 'index.jsonl')) if NEWER in l]
+check('killed publish older than a newer version: dropped, the newest stays the newest',
+      not os.path.exists(mark4) and len(nrows) == 1 and 'NEW' in open(nrows[-1]['copy']).read() and 'superseded' in errors(), nrows)
+
 # --- Reported: a reply in a later turn repeats an Artifact link published in an earlier turn
 EARLIER = 'c45f1111-2222-3333-4444-555566667777'
 publish('s48', page('earlier.html'), EARLIER)

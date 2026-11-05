@@ -179,15 +179,19 @@ def make_private(key):
     folder = mine[-1]['dir']
     target = os.path.join(al.private_dir(), os.path.basename(folder))
     private_folder(target)
+    # The private rows come first: a run killed part-way still leaves the key private, and the next run finishes
+    # the move (save_version calls this again for a private key that has public rows left).
+    have = {r.get('copy') for r in read_rows(al.private_dir())}
+    for r in mine:
+        r['dir'] = target
+        r['copy'] = os.path.join(target, os.path.basename(r['copy']))
+        if r['copy'] not in have:
+            append_row(al.private_dir(), r)
     for name in os.listdir(folder) if os.path.isdir(folder) else []:
         shutil.move(os.path.join(folder, name), os.path.join(target, name))
         lock_down(os.path.join(target, name))
     if os.path.isdir(folder):
         os.rmdir(folder)
-    for r in mine:
-        r['dir'] = target
-        r['copy'] = os.path.join(target, os.path.basename(r['copy']))
-        append_row(al.private_dir(), r)
     with index_lock():
         keep = [r for r in read_rows(al.public_dir()) if r.get('key') != key]
         fd, tmp = tempfile.mkstemp(dir=al.state_dir(), prefix='.tmp-')
@@ -432,6 +436,8 @@ def save_version(data, url, orig, key, slug, now, src, extras):
     if not private and exclusion_reason(stage, [src] + [f for _, f in extras]):
         make_private(key)
         private = True
+    elif private:
+        make_private(key)  # finishes a move that was killed part-way; a no-op when no public row is left
     root = al.private_dir() if private else al.public_dir()
     last = None
     for row in read_rows(root):
@@ -510,7 +516,7 @@ def write_marker(path, mark):
 def start_marker(data):
     os.makedirs(inflight_dir(), exist_ok=True)
     path = os.path.join(inflight_dir(), f'{os.getpid()}-{time.time_ns()}.json')
-    write_marker(path, {'pid': os.getpid(), 'data': data})
+    write_marker(path, {'pid': os.getpid(), 'at': time.time(), 'data': data})
     return path
 
 
@@ -522,6 +528,24 @@ def alive(pid):
     except OSError:
         return True
     return True
+
+
+def restored_key(data):
+    resp = json.dumps(data.get('tool_response'), ensure_ascii=False)
+    m = al.URL_RE.search(resp) or al.URL_RE.search((data.get('tool_input') or {}).get('url') or '')
+    return m.group(1) if m else None
+
+
+def newer_version(key, at):
+    for root in (al.public_dir(), al.private_dir()):
+        for r in read_rows(root):
+            try:
+                when = datetime.datetime.fromisoformat(r.get('time')).timestamp()
+            except (TypeError, ValueError):
+                continue
+            if r.get('key') == key and when >= int(at):
+                return True
+    return False
 
 
 def recover_killed(limit=1):
@@ -551,6 +575,12 @@ def recover_killed(limit=1):
         # The marker stays until the retry finishes, owned by this process meanwhile: a retry that is killed
         # too is found again, up to twice.
         mark.update(pid=os.getpid(), tries=mark.get('tries', 0) + 1)
+        key = restored_key(mark['data'])
+        if key and newer_version(key, mark.get('at', 0)):
+            # A later publish of this artifact already stands as the newest version and its announced links.
+            log_error(f'killed publish of {key[:8]} was superseded by a newer version; not restored')
+            os.remove(path)
+            continue
         write_marker(path, mark)
         src = (mark['data'].get('tool_input') or {}).get('file_path')
         log_error(f'previous run was killed before it finished ({src}); backing it up again')
