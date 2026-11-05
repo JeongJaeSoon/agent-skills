@@ -604,5 +604,19 @@ assert cards.judge(f, IDLE, ST["stale_s"], ST["close_s"])[0] == cards.KEEP, "a p
 f = cards.gather({"path": CARD}, machine(quiet=30 * H), fake(ahead="c1\n", remote_log="r1\0fix: thing\n",
                                                              patches={"c1": "P", "r1": "Q"}, terminals=[term("a1", True, 30 * H)]))
 assert cards.judge(f, IDLE, ST["stale_s"], ST["close_s"])[0] == cards.ASK, "a question for a person is not a keep"
+# A terminal Orca gives no output time for is no evidence of silence.
+blind = {**term("a1", True, 0), "lastOutputAt": None}
+f = cards.gather({"path": CARD}, machine(quiet=30 * H), fake(local_landed=True, terminals=[blind]))
+assert cards.judge(f, IDLE, ST["stale_s"], ST["close_s"])[0] == cards.KEEP, "no output time, no close"
+# A keep for what could not be read is not timed out.
+for unread in ({"unpushed": None}, {"landed": None, "landed_via": "기본 브랜치를 모름"}):
+    f = {**cards.gather({"path": CARD}, machine(quiet=30 * H), fake(terminals=[term("a1", True, 30 * H)])), **unread}
+    v = cards.judge(f, IDLE, ST["stale_s"], ST["close_s"])
+    assert v[0] == cards.KEEP, (unread, v)
+# The close's ledger line keeps the reason, so the resume path outlives the plan file.
+reap.log_action({"kind": "card", "path": "/w/idle", "why": "유휴 2.0시간: … claude --resume (/p/-w-idle)"}, "닫음 a1", True,
+                "card:close-idle", ["a1"])
+row = json.loads((reap.STATE / "reap-actions.jsonl").read_text().splitlines()[-1])
+assert "claude --resume (/p/-w-idle)" in row["why"] and row["handles"] == ["a1"], row
 
 print("ok")

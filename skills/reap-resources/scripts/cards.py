@@ -232,7 +232,8 @@ def gather(w, m, run=None):
                 screen = classify_screen(json.loads(out)["result"]["terminal"]["tail"], m["st"])
             except (TypeError, ValueError, KeyError):
                 screen = "unreadable"
-        f["terminals"].append({"handle": t["handle"], "agent": agent, "silent": silent, "screen": screen})
+        f["terminals"].append({"handle": t["handle"], "agent": agent, "silent": silent, "screen": screen,
+                               "output_known": bool(t.get("lastOutputAt"))})
     if stale and (f["terminals"] or f["claude"]):  # a Claude process is the session too, terminal or not
         return {**f, "protected": reap.patrol_hold(stale)}
     return f
@@ -285,11 +286,12 @@ def judge(f, idle_s, stale_s=None, close_s=None):
         return KEEP, f"열린 PR {f['pr']}" + ("" if agents_idle else ", 세션이 아직 조용하지 않음"), []
     verdict = settled(f, handles, live, said_done, agents_idle)
     # 8b: every agent terminal and the transcript quiet past the threshold. "Done" on the screen is no evidence of
-    # hours of quiet, and a Claude process with no agent terminal has nothing here to close.
+    # hours of quiet, a terminal with no output time is no evidence of silence, a keep for what could not be read is
+    # not timed out, and a Claude process with no agent terminal has nothing here to close.
     limit = close_s if verdict[1] == LIVE_UNDONE else stale_s
-    if verdict[0] == KEEP and limit and agents and handles and isinstance(quiet, (int, float)) \
-            and quiet >= limit and all(t["silent"] >= limit for t in agents):
-        # Where the session record lives, so the close's ledger line says how to resume it.
+    read = f.get("unpushed") is not None and (f.get("pr") or f.get("landed") is not None)
+    if verdict[0] == KEEP and limit and read and agents and handles and isinstance(quiet, (int, float)) \
+            and quiet >= limit and all(t.get("output_known") and t["silent"] >= limit for t in agents):
         where = f" ({f['transcripts']})" if f.get("transcripts") else ""
         return CLOSE, (f"유휴 {quiet / 3600:.1f}시간({verdict[1]}): worktree 와 변경은 두고 터미널 {len(handles)}개만 닫음, "
                        f"이어서 하려면 claude --resume{where}"), handles
@@ -509,7 +511,8 @@ def main(argv):
                         failed += 1
                     continue
                 done = {}
-                logged = {"key": f"card:{item['path']}", "kind": "card", "head": item.get("head"), "ino": item.get("ino")}
+                logged = {"key": f"card:{item['path']}", "kind": "card", "head": item.get("head"), "ino": item.get("ino"),
+                          "why": item.get("why")}
                 rule = guard.rule({"kind": "card", "verdict": item["verdict"]})
                 try:
                     got = act(item, cfg, done=done)

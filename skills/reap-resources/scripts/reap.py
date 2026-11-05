@@ -664,6 +664,8 @@ def log_action(item, result, ok, rule=None, closed=None):
            "effect": act_effect(rule, kind, result) if ok else None}
     if closed is not None:
         row["handles"] = sorted(closed)
+    if kind == "card" and item.get("why"):  # an idle close (cards rule 8b) names where `claude --resume` finds it
+        row["why"] = str(item["why"])[:300]
     with contextlib.suppress(Exception):  # a log line is never worth an act left half-reported
         line = json.dumps(row, ensure_ascii=False, default=str) + "\n"
         STATE.mkdir(parents=True, exist_ok=True)

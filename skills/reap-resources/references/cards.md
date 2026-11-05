@@ -32,13 +32,14 @@ transcript), or its screen says it is done. A Claude process in the card with no
 Rule 8b, after rules 9 to 14: a card they keep (남김; a 사람 결정 stays one) whose transcript has been quiet for a
 number of seconds and whose every agent terminal printed nothing for as long gives its terminals back: 터미널만 닫기,
 the worktree and its changes stay. "Done" on the screen is no evidence of that quiet, an unreadable transcript is
-none, and a Claude process with no agent terminal has nothing to close. The threshold is
+none, nor is a terminal Orca gives no output time for; a keep for what could not be read (unpushed commits, the
+default branch) never times out, and a Claude process with no agent terminal has nothing to close. The threshold is
 `reap.cards.idle_close_hours` (default 2) for a card kept only because a session is there and never said it was done
 (rule 13 with a live session: clean, nothing unpushed, HEAD on the default branch); it has nothing to lose, and with
 its session gone the next round removes it by rule 13. That keep exists so a card just started (HEAD still on the
 default branch) is not removed while its first turn thinks; two hours of silence on both counts is past that.
 Every other keep (changes, unpushed commits, no PR off the default branch) uses `reap.cards.stale_hours` (default 24).
-The reason names the session record folder (`~/.claude/projects/<cwd>`), so the close's ledger line says where
+The reason names the session record folder (`~/.claude/projects/<cwd>`), and the close's line in `reap-actions.jsonl` keeps it, so it says where
 `claude --resume` finds it. `0` turns either half off.
 
 삭제 closes each listed terminal (`orca terminal close --terminal <handle>`, never `--all`), judges the card again
