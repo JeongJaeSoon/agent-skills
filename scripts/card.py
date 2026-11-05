@@ -85,7 +85,7 @@ exists but linking, logging or naming it failed, or a started worker's receipt n
 output is still printed; do not create it again); 6 nothing created because the Run or the parent did not check
 out (the choices are printed).
 """
-import contextlib, datetime, fcntl, itertools, json, os, pathlib, re, shlex, subprocess, sys, time
+import contextlib, datetime, fcntl, glob, itertools, json, os, pathlib, re, shlex, subprocess, sys, time
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE", "~/.local/state/agent-skills")).expanduser()
@@ -576,33 +576,48 @@ def type_when_idle(handle, line, deadline=None):
 GOAL_RAN = "<command-name>/goal</command-name>"
 
 
-def goal_state(worktree):
-    """What the newest session transcript of `worktree` says: "ran" once a user row is the /goal command, "none"
-    before any user row (Orca has not typed the first prompt yet), else "other". The folder is Claude Code's:
-    CLAUDE_PROJECTS_DIR or ~/.claude/projects, then the path with every non-alphanumeric character as `-`."""
-    root = pathlib.Path(os.environ.get("CLAUDE_PROJECTS_DIR", "~/.claude/projects")).expanduser()
+def user_texts(path):
+    """The text of each user row in a transcript that is not Claude Code's own (isMeta)."""
     try:
-        newest = max((root / re.sub(r"[^A-Za-z0-9]", "-", worktree)).glob("*.jsonl"), key=lambda p: p.stat().st_mtime,
-                     default=None)
-        lines = newest.read_text(errors="replace").splitlines() if newest else []
+        lines = path.read_text(errors="replace").splitlines()
     except OSError:
-        lines = []
-    seen = False
+        return []
+    out = []
     for raw in lines:
         try:
             r = json.loads(raw)
         except ValueError:
             continue
-        if not isinstance(r, dict) or r.get("type") != "user" or r.get("isMeta"):
+        if not isinstance(r, dict) or r.get("type") != "user" or r.get("isMeta") or not isinstance(r.get("message"), dict):
             continue
-        content = (r.get("message") or {}).get("content") if isinstance(r.get("message"), dict) else None
+        content = r["message"].get("content")
         texts = [content] if isinstance(content, str) else [
             b.get("text") for b in content or [] if isinstance(b, dict) and b.get("type") == "text"]
-        texts = [t for t in texts if isinstance(t, str)]
-        if any(t.lstrip().startswith(GOAL_RAN) for t in texts):
-            return "ran"
-        seen = seen or bool(texts)
-    return "other" if seen else "none"
+        out += [t for t in texts if isinstance(t, str)]
+    return out
+
+
+def goal_state(worktree, line):
+    """What the worktree's session says about `line`: "ran" once a user row is the /goal command, "none" while no
+    transcript holds the goal text (Orca has not typed the first prompt; a reload broadcast's rows do not count),
+    else "other". The session is the transcript whose user rows hold the goal text, never the newest file: another
+    session can share the folder. The folders are Claude Code's under CLAUDE_PROJECTS_DIR, else each of sync.HOMES'
+    `projects`, named after the path with every non-alphanumeric character as `-`."""
+    import sync
+    goal = line.split(None, 1)[1] if len(line.split(None, 1)) == 2 else line
+    name = re.sub(r"[^A-Za-z0-9]", "-", worktree)
+    roots = ([os.environ["CLAUDE_PROJECTS_DIR"]] if os.environ.get("CLAUDE_PROJECTS_DIR") else
+             [str(pathlib.Path(h) / "projects") for home in sync.HOMES for h in glob.glob(os.path.expanduser(home))])
+    state = "none"
+    for root in dict.fromkeys(roots):
+        for path in pathlib.Path(root).expanduser().joinpath(name).glob("*.jsonl"):
+            texts = user_texts(path)
+            if not any(goal in t for t in texts):
+                continue
+            if any(t.lstrip().startswith(GOAL_RAN) for t in texts):
+                return "ran"
+            state = "other"
+    return state
 
 
 def goal_after_idle(handle, line, timeout_s=GOAL_IDLE_S, worktree=None):
@@ -621,7 +636,7 @@ def goal_after_idle(handle, line, timeout_s=GOAL_IDLE_S, worktree=None):
             print(f"[{ME}] warning: the /goal line was not typed into {handle} (waited up to {timeout_s}s). "
                   f"Once the session is idle, run: {manual}", file=sys.stderr)
             return 1
-        state = goal_state(worktree) if worktree else "other"
+        state = goal_state(worktree, line) if worktree else "other"
         if state == "ran":
             print(f"[{ME}] {handle} already ran /goal; nothing typed")
             return 0
@@ -808,7 +823,8 @@ def parse_args(rest):
 
 
 KIND_MODEL = {"design": "opus", "edit": "sonnet", "lookup": "haiku"}
-KIND_ROW = re.compile(r"^`?KIND`?(?:[ \t]*:|[ \t]{2,})[ \t]*(\S*?)[ \t]*(?:—|--?)[ \t]*(\S.*)?$", re.S)
+# The kind is the whole word before the dash: `edit-typo — x` is the kind `edit-typo`, refused, never `edit`.
+KIND_ROW = re.compile(r"^`?KIND`?(?:[ \t]*:|[ \t]{2,})[ \t]*([^\s—]*)(?:[ \t]*—|[ \t]+--?(?=\s))[ \t]*(\S.*)?$", re.S)
 
 
 def brief_kind(brief_path):

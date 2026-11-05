@@ -813,9 +813,10 @@ rc, err = run_helper(["orca terminal read failed: terminal_handle_stale"] * 3)
 assert rc == 1 and len(SENDS) == 1 and "not typed into term_w" in err, (rc, SENDS, err)
 rc, err = run_helper([sync.UNCONFIRMED, None])
 assert rc == 1 and len(SENDS) == 1 and "Read the screen before typing it again" in err, (rc, SENDS, err)
-# With the card's worktree, its transcript decides first: the /goal command already ran (the paste was short, or
-# someone typed it), so nothing is typed; no user message yet, so the first prompt has not landed and nothing is
-# typed; any other first message (the folded paste), so the line goes out once the first turn ends.
+# With the card's worktree, its session's transcript (the one whose user rows hold the goal text) decides first: the
+# /goal command already ran (the paste was short, or someone typed it), so nothing is typed; no such session yet, so
+# the first prompt has not landed and nothing is typed; otherwise (the folded paste) the line goes out once the first
+# turn ends.
 PROJECTS = tmp / "projects"
 os.environ["CLAUDE_PROJECTS_DIR"] = str(PROJECTS)
 WT = "/wt/acme.card_1"
@@ -829,8 +830,14 @@ def session_rows(*rows, name="s1.jsonl"):
 
 META = {"type": "user", "isMeta": True, "message": {"role": "user", "content": "<local-command-caveat>x</local-command-caveat>"}}
 PASTED = {"type": "user", "message": {"role": "user", "content": f'\n\n<pasted_content id="a1">\n{LINE}\nCLOSE: x\n</pasted_content>'}}
-RAN = {"type": "user", "message": {"role": "user", "content": "<command-name>/goal</command-name>\n            "
-                                                               "<command-message>goal</command-message>"}}
+def ran(goal):
+    return {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": (
+        "<command-name>/goal</command-name>\n            <command-message>goal</command-message>\n"
+        f"            <command-args>{goal}</command-args>")}]}}
+
+
+RAN = ran(LINE.split(None, 1)[1])
+RELOAD = {"type": "user", "message": {"role": "user", "content": "<command-name>/reload-plugins</command-name>"}}
 ticks = iter([0, 1, 2, 3, 100])
 card.time.monotonic = lambda: next(ticks)
 try:
@@ -839,11 +846,11 @@ try:
 finally:
     card.time.monotonic = real_monotonic
 assert rc == 1 and not SENDS and len(SLEPT) == 3 and "not typed into term_w" in err, (rc, SENDS, SLEPT, err)
-session_rows({"type": "summary"}, META)
+session_rows({"type": "summary"}, META, RELOAD)
 ticks = iter([0, 1, 100])
 card.time.monotonic = lambda: next(ticks)
 try:
-    rc, err = run_helper([None], timeout_s=50, worktree=WT)  # only a meta row: the first prompt has not landed
+    rc, err = run_helper([None], timeout_s=50, worktree=WT)  # a meta row and a broadcast's reload: not the prompt
 finally:
     card.time.monotonic = real_monotonic
 assert rc == 1 and not SENDS, (rc, SENDS, err)
@@ -865,11 +872,26 @@ try:
 finally:
     card.time.sleep = lambda s: SLEPT.append(s)
 assert rc == 0 and SENDS == [("term_w", LINE)] and SLEPT == [card.GOAL_POLL_S], (rc, SENDS, SLEPT)
-# Several sessions in the folder: the newest is the card's.
-session_rows(RAN, name="old.jsonl")
-os.utime(TDIR / "old.jsonl", (1, 1))
+# Several sessions in the folder: the card's is the one holding its goal text, whichever file is newest.
+session_rows(ran("another goal"), name="other.jsonl")
+os.utime(TDIR / "s1.jsonl", (1, 1))
 rc, err = run_helper([None], worktree=WT)
-assert rc == 0 and SENDS == [("term_w", LINE)], ("an older session's /goal is not this one's", SENDS)
+assert rc == 0 and SENDS == [("term_w", LINE)], ("another session's /goal is not this one's", SENDS)
+session_rows(PASTED, name="other.jsonl")
+session_rows(META, PASTED, RAN)
+os.utime(TDIR / "s1.jsonl", (1, 1))
+rc, err = run_helper([None], worktree=WT)
+assert rc == 0 and not SENDS, ("an older file that is this session, with /goal run", SENDS)
+session_rows(META, PASTED)
+(TDIR / "other.jsonl").unlink()
+# The KIND row's kind is the whole word before the dash.
+for bad in ("KIND: design-extra — reason", "KIND: edit-typo — x", "KIND: edit -x"):
+    try:
+        card.brief_kind(brief(f"{WORKER}{bad}\n", "k7.md"))
+        raise AssertionError(bad)
+    except card.Refuse as e:
+        assert e.code == 2, bad
+assert card.brief_kind(brief(f"{WORKER}KIND: edit - rename two flags\n", "k8.md")) == "edit"
 card.type_when_idle = lambda handle, line, deadline=None: None
 with contextlib.redirect_stdout(io.StringIO()):
     assert card.main(["goal-after-idle", "term_w", LINE]) == 0  # the entry point start_goal_input launches
