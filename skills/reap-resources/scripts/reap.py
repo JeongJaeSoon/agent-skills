@@ -2629,6 +2629,7 @@ def reap_plan(plan, cfg, scheduled_only=False, deadline=None, out=print, res=Non
             out(f"- 건너뜀 {label(old)}: 판정 뒤 터미널이 새로 열림")
             res["skipped"].append(key)
             continue
+        res["current"] = key  # until its outcome is in a list, so a caller cut meanwhile knows which one was running
         with guard.hold(guard.targets(new)) as got:
             why = guard.keep(new, protect, notes=notes) if got else guard.LOCK_BUSY
             if why:
@@ -2643,15 +2644,16 @@ def reap_plan(plan, cfg, scheduled_only=False, deadline=None, out=print, res=Non
             try:
                 got = act(new, notes, done)
             except BaseException as e:  # logged whatever it was: terminals closed before it are still closed
-                log_action({**new, **(done.get("identity") or {})}, e, False, guard.rule(new), done.get("closed"))
                 res["failed"].append(key)  # before a re-raise too, so the target rests instead of rerunning
+                log_action({**new, **(done.get("identity") or {})}, e, False, guard.rule(new), done.get("closed"))
                 if not isinstance(e, (RuntimeError, OSError)):
                     raise
                 out(f"- 실패 {label(new)}: {e}")
             else:
-                log_action({**new, **(done.get("identity") or {})}, got, True, guard.rule(new), done.get("closed"))
                 res["acted" if acted(got) else "skipped"].append(key)  # an act can still end in "건너뜀: …"
+                log_action({**new, **(done.get("identity") or {})}, got, True, guard.rule(new), done.get("closed"))
                 out(f"- {label(new)}: {got}")
+        res["current"] = None
     # A daily kind the deadline left keeps its day open, so the next round tries it again.
     for k in set(DAILY) & set(plan.get("kinds") or ()) - {wanted[key]["kind"] for key in res["left"]}:
         try:
@@ -2670,29 +2672,59 @@ ACT_BUDGET_S = 480  # no new target after this, counted from the round's start
 HARD_STOP_S = 570  # an act still running here is cut, so the round is recorded before Orca's PRECHECK_TIMEOUT kill
 
 
-class RoundCut(Exception):
+class RoundCut(BaseException):  # not an Exception: no `except Exception` on the way may swallow it
     pass
+
+
+class _Gate:
+    """The first SIGALRM or SIGTERM cuts the round: raised while targets run, only marked while the round records, so
+    a record is never left half written. Later signals are ignored; the cut already stands."""
+    def __init__(self):
+        self.held, self.cut, self.raised = False, None, False
+
+    def __call__(self, signum, _frame):
+        if self.cut:
+            return
+        self.cut = f"회차 중단({signal.Signals(signum).name})"
+        if not self.held:
+            self.raised = True
+            raise RoundCut(self.cut)
+
+    @contextlib.contextmanager
+    def recording(self):
+        held, self.held = self.held, True
+        try:
+            yield
+        finally:
+            self.held = held
+
+    def check(self):
+        """Raise a cut that came while recording, before more work starts."""
+        if self.cut and not self.raised:
+            self.raised = True
+            raise RoundCut(self.cut)
 
 
 @contextlib.contextmanager
 def hard_stop(started):
-    """Raise RoundCut at started + HARD_STOP_S, or on SIGTERM, so the round's finally still records it. subprocess.run
-    kills its child when interrupted this way. A no-op off the main thread, where signals cannot be set."""
+    """A _Gate on SIGTERM and on a timer at started + HARD_STOP_S, so the round is recorded before Orca's kill.
+    subprocess.run kills its child when interrupted this way. Off the main thread no signal is set."""
     import threading
+    gate = _Gate()
     if threading.current_thread() is not threading.main_thread():
-        yield
+        yield gate
         return
-
-    def cut(signum, _frame):
-        raise RoundCut(f"회차 중단({signal.Signals(signum).name})")
-    old = {s: signal.signal(s, cut) for s in (signal.SIGALRM, signal.SIGTERM)}
-    signal.setitimer(signal.ITIMER_REAL, max(0.01, started + HARD_STOP_S - time.monotonic()))
+    old = {s: signal.signal(s, gate) for s in (signal.SIGALRM, signal.SIGTERM)}
+    t0 = time.monotonic()
+    old_timer = signal.setitimer(signal.ITIMER_REAL, max(0.01, started + HARD_STOP_S - t0))
     try:
-        yield
+        yield gate
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         for s, h in old.items():
             signal.signal(s, h)
+        if old_timer[0] > 0:  # a caller's own timer goes on, less the time spent here
+            signal.setitimer(signal.ITIMER_REAL, max(0.01, old_timer[0] - (time.monotonic() - t0)), old_timer[1])
 RUNS_KEEP = 500
 HUMAN_KINDS = ("chrome-window",)  # closing one needs a URL check in a browser: a person's, with no agent in the round
 
@@ -2807,31 +2839,37 @@ def act_round(data, cfg, state_dir, started, inbox=None, send=run, reap_fn=reap_
     row = {"t": now, "source": "scan", "targets": sum(1 for i in items if i["target"]), "acted": [], "skipped": [],
            "failed": [], "left": [], "resting": sorted(resting & {i["key"] for i in items}), "human": 0, "error": None}
     res = {}
-    try:
+    with hard_stop(started) as gate:
         try:
-            with hard_stop(started):
+            try:
                 got = reap_fn(plan, cfg, scheduled_only=True, deadline=started + ACT_BUDGET_S, res=res)
-            if isinstance(got, dict) and got is not res:
-                res.update(got)
-        finally:  # what was done before anything raised is recorded too
-            row.update({k: list(res.get(k) or ()) for k in ("acted", "skipped", "failed", "left")},
-                       refused=res.get("refused"))
-            if res and not res.get("refused"):
-                write_atomic(fails_path, json.dumps(update_fails(fails, row, now)))
-                # The old precheck's record too, so a job still on the agent round reads the same state.
-                record_reap(state_dir, row["failed"])
-        fails = read_obj(fails_path)
-        rows = human_items(items, resting_keys(fails, now), fails)
-        row["human"] = len(rows)
-        row["notified"] = notify_human(state_dir, inbox, rows, send)
-    except BaseException as e:  # recorded whatever it was; the Orca run shows only a skip
-        row["error"] = f"{type(e).__name__}: {str(e)[:200]}"
-        if not isinstance(e, Exception):
-            raise
-    finally:
-        row["seconds"] = round(time.monotonic() - started, 1)
-        with contextlib.suppress(OSError):
-            log_run(state_dir, row)
+                if isinstance(got, dict) and got is not res:
+                    res.update(got)
+            finally:  # what was done before anything raised is recorded too
+                with gate.recording():
+                    # A target cut between its act and its outcome is not known to be done: it fails, and rests.
+                    if (cur := res.get("current")) and not any(cur in (res.get(k) or ()) for k in ("acted", "skipped", "failed")):
+                        res.setdefault("failed", []).append(cur)
+                    row.update({k: list(res.get(k) or ()) for k in ("acted", "skipped", "failed", "left")},
+                               refused=res.get("refused"))
+                    if res and not res.get("refused"):
+                        write_atomic(fails_path, json.dumps(update_fails(fails, row, now)))
+                        # The old precheck's record too, so a job still on the agent round reads the same state.
+                        record_reap(state_dir, row["failed"])
+            gate.check()
+            fails = read_obj(fails_path)
+            rows = human_items(items, resting_keys(fails, now), fails)
+            row["human"] = len(rows)
+            row["notified"] = notify_human(state_dir, inbox, rows, send)
+        except BaseException as e:  # recorded whatever it was; the Orca run shows only a skip
+            row["error"] = f"{type(e).__name__}: {str(e)[:200]}"
+            if not isinstance(e, (Exception, RoundCut)):
+                raise
+        finally:
+            with gate.recording():
+                row["seconds"] = round(time.monotonic() - started, 1)
+                with contextlib.suppress(OSError):
+                    log_run(state_dir, row)
     return row
 
 

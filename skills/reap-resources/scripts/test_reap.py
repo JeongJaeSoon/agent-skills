@@ -860,15 +860,36 @@ assert res["failed"] == ["tmpdir:/x0"], res
 # The hard stop cuts an act still running near the precheck timeout, kills its child, and the round is recorded.
 with tempfile.TemporaryDirectory() as tmp:
     st = pathlib.Path(tmp)
+    # The target running when the cut lands is failed even with no outcome yet, and an `except Exception` on the way
+    # (log_action's) does not swallow the cut.
     def slow_reap(plan, cfg, scheduled_only, deadline, res):
-        res.update({"acted": ["tmpdir:/done"], "skipped": [], "failed": ["tmpdir:/slow"], "left": [], "refused": None})
-        subprocess.run(["sleep", "5"])
+        res.update({"acted": ["tmpdir:/done"], "skipped": [], "failed": [], "left": [], "refused": None, "current": "tmpdir:/slow"})
+        with contextlib.suppress(Exception):
+            subprocess.run(["sleep", "5"])
+        res["acted"].append("tmpdir:/after")
+    signal.setitimer(signal.ITIMER_REAL, 60, 10)  # a caller's timer, kept across the round
     t0 = time.monotonic()
     jrow = reap.act_round({"hours": 6, "repos": [], "kinds": ["tmpdir"], "items": []}, {}, st,
                           t0 - reap.HARD_STOP_S + 0.3, None, lambda argv, check: None, slow_reap, now=1e6)
+    left_timer = signal.setitimer(signal.ITIMER_REAL, 0)
     assert time.monotonic() - t0 < 2 and jrow["error"].startswith("RoundCut"), jrow
-    assert jrow["acted"] == ["tmpdir:/done"] and "tmpdir:/slow" in json.loads((st / "janitor-fails.json").read_text()), jrow
-    assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0) and signal.getsignal(signal.SIGTERM) is signal.SIG_DFL
+    assert jrow["acted"] == ["tmpdir:/done"] and jrow["failed"] == ["tmpdir:/slow"], jrow
+    assert "tmpdir:/slow" in json.loads((st / "janitor-fails.json").read_text())
+    last = json.loads((st / "janitor-runs.jsonl").read_text().splitlines()[-1])
+    assert last["error"].startswith("RoundCut") and last["failed"] == ["tmpdir:/slow"], last
+    assert 55 < left_timer[0] <= 60 and left_timer[1] == 10, left_timer
+    assert signal.getsignal(signal.SIGTERM) is signal.SIG_DFL
+# A cut while the round records is only marked; it is raised before more work, and once.
+gate = reap._Gate()
+with gate.recording():
+    gate(signal.SIGTERM, None)
+try:
+    gate.check()
+    raise AssertionError("a cut marked while recording is raised by check()")
+except reap.RoundCut as e:
+    assert "SIGTERM" in str(e)
+gate(signal.SIGALRM, None)
+gate.check()
 # A daily kind the deadline left is not stamped: the next round must still see it as due.
 with tempfile.TemporaryDirectory() as tmp:
     saved_state, reap.STATE = reap.STATE, pathlib.Path(tmp)
