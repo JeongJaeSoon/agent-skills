@@ -1219,7 +1219,44 @@ try:
     assert dash.fleet_worktrees() is None, "a stale fleet snapshot must not be reused"
     dash.FLEET = FakeFleet(None)
     assert dash.fleet_worktrees() is None
+
+    # fetch_orca asks Orca for no worktree list while the snapshot is fresh, and does when it is not.
+    asked = []
+    real_sh2 = dash.sh
+    dash.sh = lambda cmd, timeout=45: (asked.append(cmd[:3]), real_sh2(cmd, timeout))[1]
+    cfg_a = json.loads((dash.program_dir(A) / "program.json").read_text())
+    dash.FLEET = FakeFleet(dash.iso(dash.utcnow()))
+    dash.fetch_orca(cfg_a)
+    assert ["orca", "worktree", "list"] not in asked, asked
+    dash.FLEET = None
+    dash.fetch_orca(cfg_a)
+    assert ["orca", "worktree", "list"] in asked, asked
+    dash.sh = real_sh2
 finally:
     dash.FLEET = real_fleet
+    dash.sh = real_sh
+
+# A write skipped for an unchanged state still keeps the sources' new success times for the next collect.
+import time as time_mod
+sp = store / A / "dashboard" / "state.json"
+dash.collect(A, sources=("github",))
+time_mod.sleep(1.1)
+dash.collect(A, sources=("github",))  # the same data again: its updated_at moves, the write is skipped
+t_ok = dash.collect(A, sources=())["sources"]["github"]["updated_at"]
+assert json.loads(sp.read_text())["sources"]["github"]["updated_at"] < t_ok, "the skipped write reached the disk"
+dash.STATE_WROTE[sp] = (dash.STATE_WROTE[sp][0], dash.STATE_WROTE[sp][1] - dash.STATE_BEAT_S - 1)
+dash.collect(A, sources=())
+assert json.loads(sp.read_text())["sources"]["github"]["updated_at"] == t_ok, "the heartbeat write lost a source's success time"
+
+# The render signature sees the files the renders read outside the store.
+state_root = pathlib.Path(tempfile.mkdtemp(prefix="agent-skills-state-"))
+os.environ["AGENT_SKILLS_STATE"] = str(state_root)
+sig0 = dash.render_signature()
+(state_root / "janitor-plan.json").write_text('{"at": "x", "items": []}')
+sig1 = dash.render_signature()
+assert sig0 != sig1, "a janitor-plan.json change did not move the render signature"
+append(B, ev="note", note="signature probe")
+assert dash.render_signature() != sig1, "a program ledger change did not move the render signature"
+del os.environ["AGENT_SKILLS_STATE"]
 
 print("dash.py collect/serve: all pass")
