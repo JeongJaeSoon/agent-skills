@@ -39,11 +39,9 @@ or PR that is already running, file it as its own ticket and hand it off (or que
 append it to the running card's prompt or scope.
 
 **Dependent tickets.** When ticket B can only start after A, record it in the tracker (A
-blocks B). How the two PRs relate depends on what ties them (`deliver-ticket`
-[pull-request.md](../deliver-ticket/references/pull-request.md) "Stacks"): B uses A's code → a
-GitHub stack, B's card starts from A's branch (§3 `--base-branch`) and the two land in one merge
-from the top; linear, at most 3 layers, one layer per base. B only edits the same files → B starts
-after A lands, no stack. B only deploys after A → both on the default branch, no stack.
+blocks B). Only when B uses A's code is it a stack: B's card starts from A's branch (§3
+`--base-branch`). Same files → B starts after A lands; a deploy order alone → both on the default
+branch (`deliver-ticket` [pull-request.md](../deliver-ticket/references/pull-request.md) "Stacks").
 
 **Who runs it.** A small defect in the code this session just shipped stays here, on its own
 branch and its own PR. A session can ship N PRs this way — one ticket each, one at a time — so
@@ -82,9 +80,8 @@ if unsure.
 
 Parallel requests ("병렬로", "동시에") still mean one card per ticket — repeat step 3 per ticket,
 never two tickets in one prompt. Hold back a ticket that would edit the same files as one already
-running until the first lands, and say what you held — unless it uses the first one's code, which
-makes it a stack layer that starts now on the lower one's branch (and only if no other layer
-already sits on that branch).
+running until the first lands, and say what you held — unless it uses the first one's code: a
+stack layer starts now on the lower one's branch.
 
 ## 3. Spawn the worktree with its agent
 
@@ -120,9 +117,8 @@ again.
   unrelated to this session's work.
 - The name, the ticket id in lowercase, becomes the branch name (with the user's branch prefix,
   if Orca adds one).
-- Stacked work (a code dependency only): pass the lower ticket's branch as `--base-branch` and say
-  in `--note` "stack on <lower ticket> (`gh stack link <lower PR> <this PR> --base main`); rebase
-  only, no merge commit on this branch". Same files or a deploy order alone is no `--base-branch`.
+- Stacked work: pass the lower ticket's branch as `--base-branch` and say in `--note`
+  "stack on <lower ticket> (`gh stack link <lower PR> <this PR> --base main`); rebase only".
 - Do not use `orca terminal create`: that adds a tab to this worktree instead of a new card.
 - The prompt is the whole context the new session gets. It knows nothing from here, so put
   anything non-derivable from the ticket (decisions, base branch, gotchas) in `--note`.
