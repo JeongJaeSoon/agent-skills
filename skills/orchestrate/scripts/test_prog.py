@@ -596,10 +596,15 @@ prog.orca_json = scripted([("ack", q)], log)
 got = prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: None, pending=pend)
 assert log[0][0] == "ack" and req["retry_request"] in log[0][1] and got[3] is True and got[0] == ["dq"], log
 prog.done_take(pend)
-# An old ack Orca no longer answers is dropped, and the wait goes on to peek.
+# A replayed ack with no answer from Orca stays for the next wait; one Orca refuses is dropped and the wait goes on.
 pend.write_text(json.dumps({"retry_request": "r-old", "ack": "d0"}))
 log = []
-prog.orca_json = scripted([("ack", SystemExit("gone")), ("ack", SystemExit("gone")), ("peek", row), ("take", q)], log)
+prog.orca_json = scripted([("ack", SystemExit("timed out")), ("ack", SystemExit("timed out"))], log)
+got = prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: None, pending=pend)
+assert [k for k, _ in log] == ["ack", "ack"] and got[3] is False and pend.exists(), log
+gone = SystemExit('orca orchestration: {"code": "delivery_not_found"}')
+log = []
+prog.orca_json = scripted([("ack", gone), ("ack", gone), ("peek", row), ("take", q)], log)
 got = prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: None, pending=pend)
 assert [k for k, _ in log] == ["ack", "ack", "peek", "take"] and got[3] is True, log
 prog.done_take(pend)

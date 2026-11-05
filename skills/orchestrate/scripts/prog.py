@@ -3187,11 +3187,15 @@ def wait_take(box, timeout_ms, clock=time.monotonic, out=print, pending=None, se
             replayed, replay = replay, False
             try:
                 did, got = take(box, pending)
-            except SystemExit:
-                if replayed and (pending_request(pending) or {}).get("ack"):  # an ack Orca no longer answers
-                    done_take(pending)
-                    continue
-                raise
+            except SystemExit as e:
+                if not (replayed and (pending_request(pending) or {}).get("ack")):
+                    raise
+                if '"code"' not in str(e):  # no answer from Orca: the ack may still hold a batch, keep it for later
+                    out(f"wait request replay failed ({e}); kept in {pending} for the next wait", flush=True)
+                    break
+                out(f"wait request dropped: Orca refused the replayed ack ({e})", flush=True)
+                done_take(pending)
+                continue
             if not did and not got:  # rows peeked but none handed out: waiting again would spin on them
                 done_take(pending)
                 break
