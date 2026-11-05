@@ -145,7 +145,11 @@ LAND        After review, record the verdict on the reviewed head: orch verdict 
             by every session using the same token. On a rate-limit error, retry nothing: wait
             until the reset time (the error's `retry-after`, else `gh api rate_limit`).
             You land your own PR: independent review Act-on 0, zero unresolved threads, required
-            checks green, or on a declared no-CI repo the lane in `references/landing.md`. Then
+            checks green (`gh pr checks <N> --required` lists the ones that count; name the repo's
+            expected set here when the program has branch protection), or on a declared no-CI repo
+            the lane in `references/landing.md`. When `merge_policy` leaves the merge to the lead or
+            the owner, replace this sentence with that policy's LAND tail: the card stops at READY
+            and never runs `orch land`. Then
             record main_green or main_red and close (REPORT). Never merge any other way. Stop at
             READY only for a wait you cannot end, and name it in the report as one line
             `READY-WAIT: <kind>`: owner-merge (the owner said they will merge it), human-review (a
@@ -164,7 +168,9 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             with the reason). The lead classifies and files the NOW ones. No force-push
             to shared branches. Do not rebase only because the branch is behind; `land` says when.
             Edit files with the Edit and Write tools, never Bash (heredoc, `cat >`, `sed -i`, a
-            python one-liner), even where the harness allows small shell edits: a Bash-made patch
+            python one-liner), for any file in or out of the repo: a merge-conflict resolution, a
+            scratch file and a PR-body draft count, and so does an `rm -rf` on a variable path.
+            Even where the harness allows small shell edits: a Bash-made patch
             can pass tests that re-applying it with Edit shows broken. A formatter or generator
             VERIFY names (`--write`, `--fix`) is a tool run, not a hand edit. Give each Bash act
             that changes a file or its mode its own call, so a refusal names it. Never chain a
