@@ -9,7 +9,7 @@ worktree create`, an orchestration worker. The first row that matches decides.
 | # | When | Verdict |
 |---|---|---|
 | 0 | `orca worktree rm` of this card was refused and recorded (`scripts/rm_refused.py add <path>`, kept in `<state>/rm-refused.jsonl` by path and folder inode); the record exists and cannot be read keeps it too | 사람 결정: the reason is `사람에게 넘김` and the one `orca worktree rm` line a person runs; nothing is acted on, and `apply`, reap-hard and the guard skip it |
-| 1 | Protected: pinned; its directory or display name starts with a `reap.cards.protect_prefixes` entry (default `lead-`); the card this scan runs in; an Orca automation's `--workspace`; a worker turn `in_progress`; a child card still open; a Claude session in it started as a lead or the orchestrator, or that declared that `ROLE`; `orch patrol` judged it working, waiting on a human or a Run worker, or kept it as parked or unknown, in a round under an hour old (the scan reads the verdicts file the way the guard does, and the reason names patrol's word for it); the verdicts file exists but cannot be read; its newest worker Dispatch is `abandoned` or `interrupted` (a restart cut the worker off and a resume is due, `reboot`) and the card has any change in `git status` (untracked and regenerated copies included) or an open PR | 남김 |
+| 1 | Protected: pinned; its directory or display name starts with a `reap.cards.protect_prefixes` entry (default `lead-`); the card this scan runs in; an Orca automation's `--workspace`; a worker turn `in_progress`; a child card still open; a Claude session in it started as a lead or the orchestrator, or that declared that `ROLE`; `orch patrol` judged it working, waiting on a human or a Run worker, or kept it as parked or unknown, in a round under an hour old (the scan reads the verdicts file the way the guard does, and the reason names patrol's word for it; a `working` or `run` verdict reads a terminal, so it keeps a card only while the card still has an Orca terminal or a Claude process, and the rest of the rules decide a card with neither); the verdicts file exists but cannot be read; its newest worker Dispatch is `abandoned` or `interrupted` (a restart cut the worker off and a resume is due, `reboot`) and the card has any change in `git status` (untracked and regenerated copies included), an open PR, or no PR at all (an investigation card: the directory is what the resume goes on with) | 남김 |
 | 2 | git status, the terminal list or a transcript could not be read | 남김 |
 | 3 | An agent turn is running: a Claude session in the card runs a shell (a Bash call, a background shell, a Monitor), or its agent terminal wrote output in the last 5 minutes | 남김 |
 | 4 | The agent's screen waits on a person (a question or permission dialog) | 사람 결정 |
@@ -38,7 +38,7 @@ the process cwds (what makes `scan` judge nothing) keeps the card.
 Both `apply` here and reap-hard close a card only through `scripts/cardguard.py`: they hold the card's lock
 (`<state>/locks/card-<hash>.lock`, so the janitor and reap-hard never work one card at once; the one that finds it
 held skips the card), and `guard()` must pass before the terminals close and again before `worktree rm`. The guard
-keeps the card when patrol judged it working, HEAD moved, a terminal opened since the judgement, Orca's agent-wait
+keeps the card when patrol judged it parked, unknown or waiting, or working or running while a terminal is open or to be closed or a Claude process runs in the card (one it could not look for keeps the card too), HEAD moved, a terminal opened since the judgement, Orca's agent-wait
 or an agent's screen shows a prompt or cannot be read, or the session armed its own wake-up (parked); anything it
 cannot read keeps the card too. When the card changed since the plan (a verdict or HEAD), `apply` says which one
 and skips it. The scan also lists, apart, a card whose settled worker dispatch was never released: the Run that
@@ -66,8 +66,9 @@ the cleaner never releases one.
 
 - **A worker cut off by a restart.** Its terminals are gone, so rules 3 and 5 see nothing, and the resumed session
   waits idle for its instruction: rule 8 would close that terminal and rule 9 ignores the regenerated copies. Rule 1
-  keeps the card while the newest Dispatch on it is `abandoned` or `interrupted` and it holds changes or an open PR; a
-  resume (a newer `dispatched` row) or a clean merged card ends the hold.
+  keeps the card while the newest Dispatch on it is `abandoned` or `interrupted` and it holds changes, an open PR, or
+  has no PR (an investigation card with nothing in git: the directory is what the resume needs); a resume (a newer
+  `dispatched` row), or a PR that merged or closed with a clean tree, ends the hold.
 
 ## Config
 

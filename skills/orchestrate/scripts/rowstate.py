@@ -441,7 +441,9 @@ def judge(r, f, lead=None, sid=None):
                 hit("check", f"{AGENT_ACTION}: 머지 주체 기록 없음", "머지 주체 기록 없음")
             elif actor == "agent":  # its next step comes from the evidence, never from a word like 머지 대기
                 hit("moving", merge_next(key, p, f))
-        elif quiet:  # no agent on it now, and the PR has the agent's work left (CI, a conflict, a review to answer)
+        elif quiet and p.get("merge_state") == "DIRTY":  # a conflict nobody is resolving is not "moving"
+            hit("check", f"{AGENT_ACTION}: 충돌 · 세션 없음 — 재개하거나 보류로 기록", "충돌 · 세션 없음")
+        elif quiet:  # no agent on it now, and the PR has the agent's work left (CI, a review to answer)
             hit("moving", merge_next(key, p, f))
     if status == "waiting" and not r.get("owner") and not (is_open and asked(p)):
         hit("check", f"{AGENT_ACTION}: 누구 대기인지 기록 없음", "누구 대기인지 기록 없음")
