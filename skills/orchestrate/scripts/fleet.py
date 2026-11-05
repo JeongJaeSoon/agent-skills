@@ -1623,6 +1623,40 @@ def edge_status(r):
     return "requested" if r.get("requested") else "none"
 
 
+def stack_chain(prs):
+    """{key: [keys, base first]} for every open PR in prs (dicts with key, repo, branch, base, state). The one place that
+    decides what a stack is: a PR is stacked on the open PR in its repository whose branch is its base. Merged and
+    closed PRs are not links, so a chain breaks where its parent landed. A PR on no stack gets [].
+    At a fork the chain of each child is root → child, and the parent's stops at the fork (a list cannot be
+    two paths); two open PRs from one branch name leave their children without a parent, as a guess could land
+    the wrong PR first."""
+    live = [p for p in prs if p.get("state") == "OPEN" and p.get("branch") and p.get("repo")]
+    by_head = {}
+    for p in live:
+        by_head.setdefault((p["repo"], p["branch"]), []).append(p["key"])
+    parent, kids = {}, {}
+    for p in live:
+        hit = by_head.get((p["repo"], p.get("base")), [])
+        if len(hit) == 1 and hit[0] != p["key"]:
+            parent[p["key"]] = hit[0]
+            kids.setdefault(hit[0], []).append(p["key"])
+    out = {}
+    for p in live:
+        up, seen = [p["key"]], {p["key"]}
+        while up[0] in parent and parent[up[0]] not in seen:
+            up.insert(0, parent[up[0]])
+            seen.add(up[0])
+        if up[0] in parent:  # the walk met itself: a cycle of bases has no first PR, so no order to give
+            out[p["key"]] = []
+            continue
+        down, cur = [], p["key"]
+        while len(kids.get(cur, ())) == 1:
+            cur = kids[cur][0]
+            down.append(cur)
+        out[p["key"]] = up + down if len(up + down) > 1 else []
+    return out
+
+
 def open_threads(p, me):
     return [t for t in p["threads"] if not t["resolved"] and t["last_by"] and t["last_by"] != me]
 
@@ -2180,13 +2214,16 @@ class Fleet:
                 continue
             prs.append({f: det.get(f) for f in ("key", "repo", "number", "url", "title", "state", "draft", "author", "ci",
                                                 "decision", "merge_state", "coderabbit", "reviewers", "created", "updated",
-                                                "merged_at", "merge_sha", "branch")}
+                                                "merged_at", "merge_sha", "branch", "base")}
                        | {"session": sid, "candidates": list(self.cand_of.get(k, ())),
                           "unresolved": sum(not t["resolved"] for t in det["threads"])})
             if not sid:
                 continue
             for it in pr_items(det, self.me, cfg):
                 items.append({**it, "key": f"pr:{k}:{it['type']}", "session": sid, "at": det["updated"], "source": "github"})
+        chains = stack_chain(prs)
+        for p in prs:
+            p["stack"] = chains.get(p["key"], [])
         # Skill-side items and sync state.
         terms = {t["handle"]: (s["id"], t["title"]) for s in sessions.values() for t in s["terminals"]}
         added, kept = external_items(), external_items(now)
