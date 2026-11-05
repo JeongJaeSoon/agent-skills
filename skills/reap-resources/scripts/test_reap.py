@@ -1644,4 +1644,18 @@ with tempfile.TemporaryDirectory() as tmp:
 
 guard.protect_file, guard.always_on = saved_guard
 
+# The card items janitor_scan writes into the plan keep `path` and `dirty`: rowstate.card_dirty reads both from the saved
+# plan, and a plan without them made every card's dirty None.
+import cards  # noqa: E402
+saved_scan = cards.scan
+cards.scan = lambda cfg, repos=(): ([{"path": "/work/s-a", "verdict": "남김", "why": "w", "head": "h", "close": [], "pr": None,
+                                       "state": None, "ino": 7, "dirty": True},
+                                      {"path": "/work/s-b", "verdict": "남김", "why": "w", "head": "h", "close": [], "pr": None,
+                                       "state": None, "ino": 8, "dirty": None}], [])
+try:
+    planned = reap.janitor_scan({"card"}, [], [], [], pr_state=lambda r: None)
+finally:
+    cards.scan = saved_scan
+assert [(i["path"], i["dirty"]) for i in planned] == [("/work/s-a", True), ("/work/s-b", None)], planned
+
 print("ok")
