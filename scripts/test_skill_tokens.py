@@ -179,7 +179,7 @@ assert not [h["name"] for h in here["hooks"] if h["when"].startswith("unknown")]
 assert here["skills"] and here["totals"]["always_tokens"] > 0
 
 # Every description shares the listing budget: one past the cap is cut to trigger phrases and one boundary.
-# The cap is the widest trimmed description (340) plus headroom; the exempt ones shrink in their own PRs.
+# The cap is the widest trimmed description (346) plus headroom; the exempt ones shrink in their own PRs.
 DESC_WIDTH_CAP = 360
 DESC_CAP_EXEMPT = {"reap-resources", "watch-prs", "reboot", "skills-config"}
 wide = []

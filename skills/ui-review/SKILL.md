@@ -1,6 +1,6 @@
 ---
 name: ui-review
-description: "Use before a mockup, screen or UI PR is shown to a person, and after one points out a UI problem: measures layout and consistency and walks the flow — \"UI 리뷰해줘\", \"시안 점검해줘\", \"화면 밸런스 봐줘\". Screenshots for a PR are deliver-ticket's."
+description: "Use before a mockup, screen or UI PR is shown to a person, and after one points out a UI problem: measures layout and consistency and walks the flow — \"UI 리뷰해줘\", \"시안 점검해줘\", \"화면 밸런스 봐줘\", \"보여주기 전에 UI 확인해줘\". Screenshots for a PR are deliver-ticket's."
 ---
 
 # UI review

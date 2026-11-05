@@ -1,6 +1,6 @@
 ---
 name: use-notes
-description: "Use whenever working docs are read or written — \"노트에 기록해줘\", \"노트에 남겨줘\", \"KB에 정리해줘\", \"설계안을 노트에\", design docs, worklogs, program notes, a note path. Routes to the configured notes store."
+description: "Use whenever working docs are read or written — \"노트에 기록해줘\", \"노트에 남겨줘\", \"KB에 정리해줘\", \"설계안을 노트에\", design docs, worklogs, program notes, \"정본\", a note path. Routes to the configured notes store."
 ---
 
 # Working notes
