@@ -162,8 +162,11 @@ def gather(w, m, run=None):
         return {**f, "handed": cardguard.handed_off(p)}
     if m["patrol"] is None:
         return {**f, "protected": "순찰 판정 파일을 읽지 못함"}
+    stale = None
     if p in m["patrol"]:
-        return {**f, "protected": reap.patrol_hold(m["patrol"][p])}
+        if m["patrol"][p] not in reap.PATROL_TERMINAL_READ:
+            return {**f, "protected": reap.patrol_hold(m["patrol"][p])}
+        stale = m["patrol"][p]  # protects only while a terminal is left to be the session; checked once they are listed
     if (children := cardguard.child_cards(w)):
         return {**f, "protected": f"하위 카드 {os.path.basename(children[0])} 가 열려 있음(리드)"}
     if (coord := reap.coordinator_in(p, m["rows"], m["cwd_of"], m["projects"])):
@@ -193,6 +196,10 @@ def gather(w, m, run=None):
     if not ref or not f["carried"]:
         f["landed"], f["landed_via"] = landed(p, head, run)
     f["unpushed"] = "none" if f.get("landed") else unpushed(p, head, f["pr_head"], run)
+    if f["state"] == "OPEN" and f["pr_head"] and head != f["pr_head"] and f["carried"]:
+        # HEAD is a step on the way to the PR's head: another card standing exactly at that head carries the PR on.
+        f["handed_to"] = next((q for q, h in (m.get("heads") or {}).items()
+                               if q != p and h == f["pr_head"]), None)
     claude, busy, other = processes_in(p, m["rows"], m["cwd_of"])
     f.update(claude=claude, busy=busy, other=other, quiet=m["quiet"](p))
     terms = run(["orca", "terminal", "list", "--worktree", f"path:{p}", "--json"])
@@ -213,6 +220,8 @@ def gather(w, m, run=None):
             except (TypeError, ValueError, KeyError):
                 screen = "unreadable"
         f["terminals"].append({"handle": t["handle"], "agent": agent, "silent": silent, "screen": screen})
+    if stale and f["terminals"]:
+        return {**f, "protected": reap.patrol_hold(stale)}
     return f
 
 
@@ -252,6 +261,11 @@ def judge(f, idle_s):
     if f.get("pr_unread"):
         return KEEP, f["pr_unread"], []
     if f.get("state") == "OPEN":
+        # Nothing here is lost and the PR's head is held by another card; a person decides, since an open PR keeps a
+        # card for good and the pair could be a deliberate second checkout.
+        if f.get("handed_to") and not handles and not live and not f.get("dirty") and f.get("unpushed") == "none":
+            return ASK, f"PR {f['pr']} 는 카드 {os.path.basename(f['handed_to'])} 가 이어받은 듯함(HEAD 가 PR head 의 조상, " \
+                        "미커밋·미push 없음): 이 카드를 닫아도 되는지 사람이 판단", []
         if agents_idle and handles:
             return CLOSE, f"열린 PR {f['pr']}: worktree 는 두고 idle 터미널 {len(handles)}개만 닫음", handles
         return KEEP, f"열린 PR {f['pr']}" + ("" if agents_idle else ", 세션이 아직 조용하지 않음"), []
@@ -322,6 +336,15 @@ def blind(m, rows):
     return rows is None or m["cwd_of"] is None or m["workers_unread"] or m["runners"] is None
 
 
+def card_heads(rows):
+    """{card path: HEAD} for each listed card; one whose HEAD cannot be read is left out (no evidence, no hand-over)."""
+    out = {}
+    for w in rows:
+        if not w.get("isMainWorktree") and (h := (sh(["git", "-C", w["path"], "rev-parse", "HEAD"]) or "").strip()):
+            out[reap.real(w["path"])] = h
+    return out
+
+
 def scan(cfg, repo_list=(), notes=None):
     notes = [] if notes is None else notes
     m = read_machine(cfg)
@@ -329,6 +352,7 @@ def scan(cfg, repo_list=(), notes=None):
     if blind(m, rows):
         notes.append(BLIND + ": 카드는 판정하지 않는다")
         return [], notes
+    m["heads"] = card_heads(rows)
     items = []
     for w in rows:
         if w.get("isMainWorktree"):
@@ -376,6 +400,7 @@ def reread(path, cfg):
     row = next((w for w in rows if reap.real(w["path"]) == path), None)
     if row is None:
         return None
+    m["heads"] = card_heads(rows)  # the verdict is read again from fresh facts, this one too
     f = gather(row, m)
     return (*judge(f, m["st"]["idle_s"]), f)
 

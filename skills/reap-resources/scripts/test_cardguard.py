@@ -39,6 +39,16 @@ assert not check(final=True, terminals=[{"handle": "t1"}, {"handle": "n2"}])[0]
 assert not check(final=True, patrol=True)[0] and not check(final=True, head="c" * 40)[0]
 assert check(handles=("t1", "s1", "gone"), final=True)[0], "a handle already closed is fine"
 
+# A working or run verdict is read off a terminal: with no terminal and none to close it no longer holds the card, and
+# every other state still does, as does one with a terminal.
+bare = dict(terminals=[], waits=None, screens=None, motion=None)
+for state in ("working", "run"):
+    assert check(handles=(), patrol=state, **bare)[0], state
+    assert not check(patrol=state)[0], "a terminal is there"
+    assert not check(handles=("t1",), patrol=state, **bare)[0], "a terminal is about to be closed"
+for state in ("waiting", "parked", "unknown"):
+    assert not check(handles=(), patrol=state, **bare)[0], state
+
 # observe(): each reader that fails is None, which check() turns into a keep.
 saved = reap.patrol_states, reap.run, reap.orca_json, cardguard._orch, cardguard.parked
 reap.patrol_states = lambda now=None, activity=False: {}

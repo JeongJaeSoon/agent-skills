@@ -830,7 +830,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     last_rows = last.get("rows") if isinstance(last, dict) and isinstance(last.get("rows"), dict) else None
     verdicts, cards = tidy.assess(store, state, prs, me, now), tidy.cards_of(state, prs)
     by_session = fleet.prs_by_session((state or {}).get("prs"))
-    holds, held_by = fleet.held_prs(store, shut, prs, now, cards, hold_why := {}), {}  # held_by: row id -> the PR a held item covers
+    holds, held_by = fleet.held_prs(store, shut, prs, now, cards, hold_why := {}, me=me), {}  # held_by: row id -> the PR a held item covers
     # The PRs a to-do holds and no held item does (that one's text wins): their rows read 📅, not ⏸️.
     todo_held = {k for k, (kind, _) in hold_why.items() if kind == "do"}
     for rid, r in store["rows"].items():

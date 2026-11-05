@@ -156,7 +156,13 @@ assert "- ⏰ acme/app#1 머지·배포 · 10/30(금) 09:00 도래" in section(o
 assert "- ⏰ acme/app#2 ready로 전환 — acme/app#5 머지 후 도래 · lead-billing" in section(out, "📌 **카드 없는 일**"), out
 assert "📅 할 일 1건 · ⏸️ 보류 큐 1건 · `orch board todo list`" in out.splitlines(), out
 merged = {"acme/app#5": {"state": "MERGED", "merged_at": "2026-10-29T00:00:00Z"}}
-assert set(fleet.held_prs(board.read(), {}, merged, fleet.parse(AFTER))) == set()
+# The owner's to-do (acme/app#1) stays a hold after its date: the owner's answer is what the PR waits for. lead-billing's
+# (acme/app#2, after #5 merged) lifts. Only closing the owner's to-do releases the PR.
+after_hold = fleet.held_prs(board.read(), {}, merged, fleet.parse(AFTER))
+assert set(after_hold) == {"acme/app#1"}, after_hold
+owner_todo = next(t["id"] for t in store()["todo"] if t["who"] == "오너")
+assert fleet.held_prs(board.read(), {owner_todo: 1}, merged, fleet.parse(AFTER)) == {}, "a closed to-do holds nothing"
+assert fleet.held_prs(board.read(), {}, merged, fleet.parse(AFTER), me="someone-else") == after_hold, "the owner's name matches whoever me is"
 
 # Open items list every to-do with its do: id; Done closes one and nothing closes it on its own.
 items = {o["id"]: o for o in json.loads(ok("board", "open", "--json"))}
@@ -199,7 +205,7 @@ board.todo_add("acme/app#2 롤백 확인", due="10/27", after="acme/app#9 머지
 out = render(AFTER)
 doing = "\n".join(section(out, "📌 **카드 없는 일**"))
 assert "⏰ acme/app#1 핫픽스 배포" in doing and "⏰ acme/app#2 롤백 확인" in doing, out
-assert set(fleet.held_prs(board.read(), {}, merged, fleet.parse(AFTER))) == set()
+assert set(fleet.held_prs(board.read(), {}, merged, fleet.parse(AFTER))) == set()  # the owner's was closed above
 write_prs(merged5=False)
 out = render(BEFORE)
 assert "acme/app#1 핫픽스 배포" not in out and any(l.startswith("📅 할 일 ") for l in out.splitlines()), out

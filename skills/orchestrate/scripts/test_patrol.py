@@ -133,6 +133,92 @@ memo = {"first_seen": {"O:/w/p:acme/app#1": NOW, "O:/w/r:acme/app#3": NOW}}
 found, _, memo2 = patrol.judge({**f, "prs": {**prs, "acme/app#1": {**prs["acme/app#1"], "state": "MERGED"}}}, memo)
 assert found == [] and list(memo2["first_seen"]) == ["O:/w/r:acme/app#3"], "a PR that moved on forgets its first sighting"
 
+# O, class 2: running CI is not someone on it for good. The clock stays through a round that skips the PR for CI, so a
+# push that starts CI does not hand a PR with no session another day; a requested review still starts it over.
+pending = {**prs, "acme/app#1": {**prs["acme/app#1"], "ci": "pending"}}
+f1 = facts(sessions=sess[:1], prs=prs)
+_, _, m1 = patrol.judge(f1, {})
+_, _, m2 = patrol.judge({**f1, "now": NOW + 3600, "prs": pending}, m1)
+assert m2["first_seen"] == {"O:/w/p:acme/app#1": NOW}, "CI running keeps the clock"
+found, _, m3 = patrol.judge({**f1, "now": NOW + 25 * 3600}, m2)
+assert codes(found) == [("O", "p")], "the day counts from the first sighting, CI in between or not"
+asked_pr = {**prs, "acme/app#1": {**prs["acme/app#1"], "reviewers": [{"login": "x", "requested": True}]}}
+_, _, m4 = patrol.judge({**f1, "now": NOW + 3600, "prs": asked_pr}, m1)
+assert m4["first_seen"] == {}, "a requested review is someone waiting: the clock starts over"
+
+# O, proposal 2: a conflict on a PR with no session is found after 2 hours; a clean one still takes a day. A PR a
+# board item holds (a held item, or a to-do not yet closed) is never found, the owner's to-do included after its date.
+dirty = {**prs, "acme/app#1": {**prs["acme/app#1"], "merge_state": "DIRTY"}}
+fd = facts(sessions=sess[:1], prs=dirty)
+_, _, md = patrol.judge(fd, {})
+assert patrol.judge({**fd, "now": NOW + 3600}, md)[0] == [], "under 2 hours"
+found, _, _ = patrol.judge({**fd, "now": NOW + 2 * 3600}, md)
+assert codes(found) == [("O", "p")] and "conflict" in found[0]["title"], found
+assert patrol.judge({**f1, "now": NOW + 2 * 3600}, m1)[0] == [], "a clean PR waits the day"
+later = {"later": [{"id": "b1", "title": "acme/app#1 보류", "trigger": "next quarter"}]}
+todo_w = {"todo": [{"id": "b2", "title": "acme/app#1 정리", "who": "writer", "after": "acme/app#9 머지 후"}]}
+todo_o = {"todo": [{"id": "b3", "title": "acme/app#1 답변", "who": "owner", "due": "2020-01-01"}]}
+for name, board in (("later", later), ("to-do", todo_w), ("owner to-do past its date", todo_o)):
+    found, _, kept = patrol.judge({**fd, "now": NOW + 3 * 3600, "board": board}, md)
+    assert found == [] and kept["first_seen"] == {}, (name, found)
+todo_past = {"todo": [{"id": "b4", "title": "acme/app#1 정리", "who": "writer", "due": "2020-01-01"}]}
+assert codes(patrol.judge({**fd, "now": NOW + 3 * 3600, "board": todo_past}, md)[0]) == [("O", "p")], "a writer's to-do past its date holds nothing"
+# A board that could not be read: no new finding, and the clock is kept.
+found, _, kept = patrol.judge({**fd, "now": NOW + 3 * 3600, "board": {}, "failed": {"board"}}, md)
+assert found == [] and kept["first_seen"] == md["first_seen"], (found, kept)
+
+# P, class 5: a lead that parked itself with no worker running and nothing on record it waits for. Parked alone is a
+# wake-up it armed, so the ledger has to be still too, and a recorded hold, a board row waiting on someone, or a Run
+# worker still going each name what it waits for.
+# The board is shaped as `board lead add` writes it: a lead row (kind lead, program) and a `leads` entry (worktree).
+lsess = [{"id": "lead-s", "path": "/w/lead", "kind": "orchestration", "run": "run_1", "agents": [{}]}]
+ev = lambda ev_, minutes, **kw: {"ev": ev_, "ts": ago(minutes), **kw}  # noqa: E731
+led = lambda events, run="run_1": {"prog-a": {"run": run, "events": events}}  # noqa: E731
+lboard = lambda rows=None, lead=None, entry=None: {  # noqa: E731
+    "rows": {"L": {"kind": "lead", "program": "prog-a", "status": "moving", **(lead or {})}, **(rows or {})},
+    "leads": {"L": {"name": "L", "worktree": "lead-s", **(entry or {})}}}
+lead_facts = lambda **over: facts(**{  # noqa: E731
+    "sessions": lsess, "terminals": [term("hl", "/w/lead")], "tails": {"/w/lead": (idle(300, parked=True), None)},
+    "board": lboard(), "workers": [], "ledgers": led([ev("admitted", 200, ticket="T-1"), ev("landed", 190, pr=5)]), **over})
+found, v, _ = patrol.judge(lead_facts(), {})
+assert codes(found) == [("P", "lead")] and v["check"]["/w/lead"] == "워커 없이 대기 · 대상 기록 없음", (found, v)
+quiet_lead = lambda **over: [x for x in patrol.judge(lead_facts(**over), {})[0] if x["code"] == "P"]  # noqa: E731
+assert quiet_lead(ledgers=led([ev("landed", 90)])) == [], "the ledger moved an hour and a half ago"
+assert quiet_lead(ledgers=led([ev("landed", 190)], run="run_2")) == [], "the program moved to another Run"
+assert quiet_lead(board=lboard(entry={"worktree": None}, lead={"worktree": "lead-s"})) != [], "the worktree on the row counts"
+assert quiet_lead(tails={"/w/lead": (idle(300), None)}) == [], "not parked: the idle rule's"
+run_w = lambda run, outcome="in_progress": {"dispatchId": "d9", "runId": run, "resource": {"worktreeId": "x::/w/q"},  # noqa: E731
+                                              "projection": {"outcome": outcome, "liveness": {"verdict": "live"}}}
+assert quiet_lead(workers=[run_w("run_1")]) == [], "a worker of its Run is going"
+assert quiet_lead(workers=[run_w("run_2")]) != [], "another Run's worker is not its"
+assert quiet_lead(workers=[run_w("run_1", "succeeded")]) != [], "a finished worker waits for nothing"
+assert quiet_lead(workers=[{**run_w("run_1"), "runId": None}]) == [], "a worker whose Run is unknown: cannot be ruled out"
+assert quiet_lead(failed={"workers"}) == [] and quiet_lead(failed={"board"}) == []
+for held_ledger in ([ev("parked", 200, pr=5)], [ev("parked", 200, pr=5), ev("landed", 190, pr=6)],
+                    [ev("parked", 200, ticket="T-1")], [ev("admitted", 220, ticket="T-1"), ev("parked", 200)]):
+    assert quiet_lead(ledgers=led(held_ledger)) == [], held_ledger  # a hold or a parked mark on record
+assert quiet_lead(ledgers=led([ev("parked", 300, pr=5), ev("admitted", 200, pr=5)])) != [], "admitted lifts the hold"
+assert quiet_lead(ledgers={"prog-a": None}) == [] and quiet_lead(ledgers={}) == [], "no ledger read: no evidence"
+assert quiet_lead(ledgers=led([])) == [], "an empty ledger says nothing about how long it was still"
+waits_row = {"kind": "task", "parent": "L", "status": "waiting", "title": "x"}
+assert quiet_lead(board=lboard({"L/a": waits_row})) == [], "a row waiting on someone is the target"
+assert quiet_lead(board=lboard({"L/a": {**waits_row, "status": "moving", "owner": "someone"}})) == []
+assert quiet_lead(board=lboard({"M/a": {**waits_row, "parent": "M"}})) != [], "another lead's row"
+assert quiet_lead(board=lboard(lead={"status": "waiting", "owner": "someone"})) == [], "the lead's own row records the wait"
+assert quiet_lead(board=lboard(entry={"closed_at": ago(5)})) == [], "a closed lead"
+assert quiet_lead(board=lboard(lead={"done_at": ago(5)})) == [], "a finished lead row"
+# read_ledgers reads program.json's Run and the ledger as files; a missing or broken program is None, not a guess.
+saved_home, patrol.prog.HOME = patrol.prog.HOME, tmp / "programs"
+(patrol.prog.HOME / "prog-a").mkdir(parents=True)
+(patrol.prog.HOME / "prog-a" / "program.json").write_text(json.dumps({"run": "run_1"}))
+(patrol.prog.HOME / "prog-a" / "ledger.jsonl").write_text(json.dumps(ev("landed", 190, pr=5)) + "\n\n")
+got = patrol.read_ledgers(lboard())
+assert got == {"prog-a": {"run": "run_1", "events": [ev("landed", 190, pr=5)]}}, got
+(patrol.prog.HOME / "prog-a" / "ledger.jsonl").write_text("{broken\n")
+assert patrol.read_ledgers(lboard()) == {"prog-a": None}
+assert patrol.read_ledgers(lboard(entry={"closed_at": ago(5)})) == {}, "a closed lead's program is not read"
+patrol.prog.HOME = saved_home
+
 # D: a doing item that names no PR or card, a day on; one naming a PR is tidy's to judge.
 board = {"doing": [{"id": "b1", "title": "follow up with infra", "owner": "someone", "next": "ask"},
                    {"id": "b2", "title": "land acme/app#3", "owner": "someone", "next": "merge"}]}
@@ -271,7 +357,8 @@ _, _, m = patrol.judge(facts(failed={"board"}), memo0)
 assert m["first_seen"] == memo0["first_seen"]
 assert "board" in patrol.DEPENDS["D"]
 _, _, m = patrol.judge(facts(failed={"board"}), {"first_seen": {"D:item": NOW - 3600, "O:/w/a:acme/app#1": NOW - 90000}})
-assert m["first_seen"] == {"D:item": NOW - 3600}, "an O clock the round could see go is not kept by a board failure"
+assert m["first_seen"] == {"D:item": NOW - 3600, "O:/w/a:acme/app#1": NOW - 90000}, "O reads the board for holds: a board failure keeps its clock"
+assert "board" in patrol.DEPENDS["O"]
 _, _, m = patrol.judge(facts(failed={"state"}), {"first_seen": {"D:item": 1, "O:/w/a:acme/app#1": 2}})
 assert m["first_seen"] == {"D:item": 1, "O:/w/a:acme/app#1": 2}
 

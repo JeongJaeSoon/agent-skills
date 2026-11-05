@@ -17,7 +17,12 @@ tail of each card's session transcript, the `orch sent` log and the last pressur
                agent left whose transcript ends on an API error or an error notice
   S  superseded  a card an `orch sent add --kind supersede --to <handle|card>` named 30+ min ago that still has an
                agent terminal
-  O  orphan PR  a card with no agent and an open PR, 24h so, with no review requested and no CI running
+  O  orphan PR  a card with no agent and an open PR, 24h so (2h when it has a merge conflict), with no review
+               requested and no CI running. Running CI keeps the clock, a requested review restarts it; a PR a held
+               board item or a to-do not yet closed names is waited on by design and never found
+  P  parked lead  a lead whose session parked itself, with no worker of its Run going, its program ledger still
+               2h+, and no hold, parked ticket or waiting board row on record: it waits for nothing anyone can see
+               (shown as ❔)
   D  no ref    a board doing item naming no PR and no card, unchanged 24h; tidy shows it as ❔
   E  error loop  the same error line in three rounds in a row, each with new output (shown as ❔, never acted on)
   R  repeat    a card outside any Run, not waiting on a human, whose transcript ends in 3+ finished turns over 30+ min
@@ -108,6 +113,7 @@ OWN_SOURCES = ("terminals", "waits", "workers", "state", "board", "sent", "consu
 IDLE_MIN = dash.IDLE_MIN
 SUPERSEDE_MIN = 30
 ORPHAN_H = 24
+ORPHAN_CONFLICT_H = 2  # a conflict only grows: a PR with no session waits no day for it to be found
 NOREF_H = 24
 ERROR_ROUNDS = 3
 WATCH_DOWN_MIN = 60
@@ -118,6 +124,8 @@ LABEL = {"I": "idle", "X": "exited", "S": "superseded", "O": "orphan PR", "D": "
          "L": "load", "W": "watcher down", "R": "repeat", "H": "stale", "B": "background wait",
          "T": "dead handle", "M": "model"}
 BGWAIT_WHY = "백그라운드 작업을 기다리지만 깨울 작업이 없음"  # B's reason on the brief's ❔ row
+LEAD_WAIT_WHY = "워커 없이 대기 · 대상 기록 없음"  # P's
+PARKED_LEAD_H = 2
 VERDICT_OF = {"I": "idle", "X": "exited", "S": "superseded", "O": "pr_open_no_session", "R": "stalled", "H": "stalled"}
 # H's two kinds: what the owner's line says, and the reason on the brief's ❔ row (Korean, as the brief is).
 STALE_WHAT = {"hook": ("a hook error blocks its tools", "hook 오류로 도구가 막힘"),
@@ -335,6 +343,8 @@ def gather(now, deadline, memo):
     facts["sessions"] = st.get("sessions") or []
     facts["prs"] = {p.get("key"): p for p in st.get("prs") or [] if p.get("key")}
     facts["board"] = take("board", read_board, {}, "board") if st else {}
+    facts["ledgers"] = read_ledgers(facts["board"])
+    facts["me"] = (fleet.read_json(fleet.state_dir() / "prs.json", {}) or {}).get("me")
     facts["state"] = st
     facts["supersedes"] = take("orch sent log", lambda: sent_supersedes(fleet.utcnow()), [], "sent")
     facts["level"], _ = pressure_level()
@@ -372,6 +382,54 @@ def gather(now, deadline, memo):
 
 
 # ---------------------------------------------------------------- judging (pure)
+
+def open_leads(board):
+    """{lead row id: (row, worktree id)} for each lead row of the board not closed. A lead's program sits on its row,
+    its worktree on the row or on its `leads` entry (`board lead add` writes both)."""
+    board = board or {}
+    out = {}
+    for rid, r in (board.get("rows") or {}).items():
+        entry = (board.get("leads") or {}).get(rid) or {}
+        if r.get("kind") == "lead" and not r.get("parent") and not r.get("done_at") and not entry.get("closed_at"):
+            out[rid] = (r, r.get("worktree") or entry.get("worktree"))
+    return out
+
+
+def read_ledgers(board):
+    """{program slug: {"run": program.json's Run, "events": its ledger} or None when unreadable} for each open lead's
+    program. Read as files: prog.Program would set the process's lead dispatch."""
+    out = {}
+    for r, _ in open_leads(board).values():
+        slug = r.get("program")
+        if not slug or slug in out:
+            continue
+        try:
+            cfg = json.loads((prog.HOME / slug / "program.json").read_text())
+            text = (prog.HOME / slug / "ledger.jsonl").read_text()
+            out[slug] = {"run": cfg.get("run"), "events": [e for e in map(json.loads, filter(str.strip, text.splitlines()))
+                                                          if isinstance(e, dict) and e.get("ev")]}
+        except (OSError, ValueError, AttributeError):
+            out[slug] = None
+    return out
+
+
+def lead_still_h(events, tnow):
+    """Hours since the program ledger's last event, or None when a wait is on record (a PR held by `parked` until
+    `admitted`, a ticket whose latest triage is `parked`, or a last event that is itself `parked`) or the ledger has no
+    readable time."""
+    marks = {}
+    for e in events:
+        if e.get("pr") is not None and e["ev"] in ("parked", "admitted"):
+            marks[("pr", e["pr"])] = e["ev"]
+        if e.get("ticket") and e["ev"] in ("parked", "admitted"):
+            marks[("ticket", e["ticket"])] = e["ev"]
+    if events[-1]["ev"] == "parked" or "parked" in marks.values():
+        return None
+    try:
+        return (tnow - prog.parse_ts(events[-1]["ts"])).total_seconds() / 3600
+    except (KeyError, TypeError, ValueError):
+        return None
+
 
 def fid(code, *key):
     return code + hashlib.sha1("|".join(map(str, key)).encode()).hexdigest()[:7]
@@ -526,22 +584,58 @@ def judge(facts, memo):
         if hit:
             add("S", hit.get("worktreePath"), (r["ts"],), f"superseded {int((tnow - at).total_seconds() // 60)} min ago "
                 f"and still open: close its terminal (SKILL.md, superseded cards)", hit["handle"])
-    # O: a card with no agent and an open PR nobody waits on, for a day.
+    # P: a lead that parked itself while nothing runs and nothing on record is what it waits for. Parked alone is a
+    # wake-up it armed; what makes it a stall is a still ledger, no worker of its Run, and no hold or waiting row.
+    if not {"workers", "board", "terminals"} & failed:
+        board_rows = (facts["board"] or {}).get("rows") or {}
+        for name, (lead, worktree) in open_leads(facts["board"]).items():
+            s = next((x for x in facts["sessions"] if worktree and x.get("id") == worktree), None)
+            path, run = s and s.get("path"), s and s.get("run")
+            motion = (facts["tails"].get(path) or (None, None))[0] if path else None
+            ledger = (facts.get("ledgers") or {}).get(lead.get("program"))
+            events = ledger and ledger["events"]
+            # The program's Run must be this session's: a program moved to another Run says nothing about this lead.
+            if not (run and path in agent_paths and motion and motion.get("parked") and events and ledger["run"] == run):
+                continue
+            going = [w for w in facts["workers"] if (w.get("projection") or {}).get("outcome") == "in_progress"]
+            if any(w.get("runId") in (run, None) for w in going):  # a worker whose Run is unknown cannot be ruled out
+                continue
+            waits = lambda r: r.get("status") in ("waiting", "owner") or r.get("owner")  # noqa: E731
+            if waits(lead) or any(r.get("parent") == name and waits(r) for r in board_rows.values()):
+                continue
+            still = lead_still_h(events, tnow)
+            if still is not None and still >= PARKED_LEAD_H:
+                add("P", path, (name, events[-1].get("ts")), f"❔ lead {name} is parked with no worker running and the "
+                    f"program ledger still for {int(still)}h, and nothing on record it waits for: record the wait "
+                    "(`record parked`, a waiting board row) or resume", next((t["handle"] for t in agents if t.get("worktreePath") == path), None))
+                check.setdefault(path, LEAD_WAIT_WHY)
+    # O: a card with no agent and an open PR nobody waits on, for a day (two hours when it conflicts). A PR a board
+    # item holds is waited on by design. Without the board that cannot be told, so no new finding and the clock stays.
+    import tidy
+    cards = tidy.cards_of(facts["state"]) if facts["state"] else {}
+    doing_noref, shut = [], tidy.closed() if facts["board"] else {}
+    held = fleet.held_prs(facts["board"], shut, facts["prs"], tnow, cards, me=facts.get("me")) if facts["board"] else {}
     for s in facts["sessions"]:
         pr = (s.get("linked_pr") or {}).get("key")
         det = facts["prs"].get(pr) or {}
         if s.get("agents") or s.get("path") in agent_paths or (det.get("state") or "").upper() != "OPEN":
             continue
-        if any(r.get("requested") for r in det.get("reviewers") or []) or str(det.get("ci") or "").lower() in ("pending", "running", "in_progress", "queued"):
+        key = f"O:{s.get('path')}:{pr}"
+        if "board" in failed or pr in held:
             continue
-        h = first_seen(f"O:{s.get('path')}:{pr}")
-        if h >= ORPHAN_H:
-            add("O", s.get("path"), (pr, tnow.date().isoformat()), f"{pr} open with no session for {int(h)}h and no "
-                "review or CI running: hand it on, hold it, or close it", session=s.get("id"))
+        if any(r.get("requested") for r in det.get("reviewers") or []):  # someone waits: the day starts over
+            continue
+        if str(det.get("ci") or "").lower() in ("pending", "running", "in_progress", "queued"):
+            if key in (memo.get("first_seen") or {}):  # CI running is no end to "nobody on it": the clock stays
+                new_memo["first_seen"][key] = memo["first_seen"][key]
+            continue
+        conflict = det.get("merge_state") == "DIRTY"
+        h = first_seen(key)
+        if h >= (ORPHAN_CONFLICT_H if conflict else ORPHAN_H):
+            add("O", s.get("path"), (pr, tnow.date().isoformat()), f"{pr} open{' with a merge conflict' if conflict else ''} "
+                f"with no session for {int(h)}h and no review or CI running: hand it on, hold it, or close it",
+                session=s.get("id"))
     # D: board doing items naming nothing tidy can follow.
-    import tidy
-    cards = tidy.cards_of(facts["state"]) if facts["state"] else {}
-    doing_noref, shut = [], tidy.closed() if facts["board"] else {}
     for d in (facts["board"].get("doing") or []):
         text = f"{d.get('title')} {d.get('next') or ''}"
         if d.get("waiting") or fleet.pr_refs(text) or tidy.doing_card(d, cards):
@@ -575,7 +669,7 @@ def judge(facts, memo):
             add("L", c["card"], (c["what"], facts["level"]), f"PC {facts['level']}: {c['what']} "
                 f"(CPU {c.get('cpu') or 0:.0f}%) held by a card judged {v}")
     # A rule that could not look keeps its day-long clocks; one that looked keeps only what it saw.
-    blind = ("O:", "D:") if "state" in failed else ("D:",) if "board" in failed else ()
+    blind = ("O:", "D:") if "state" in failed or "board" in failed else ()
     for k, at in (memo.get("first_seen") or {}).items():
         if k.startswith(blind):
             new_memo["first_seen"].setdefault(k, at)
@@ -642,9 +736,9 @@ def sync_needs_you(rows=None):
 
 # The sources each rule reads: a finding whose source failed this round is kept, not cleared.
 DEPENDS = {"I": {"terminals", "workers", "waits"}, "X": {"terminals", "workers"}, "S": {"terminals", "sent"},
-           "O": {"state", "terminals"}, "D": {"state", "board"}, "E": {"terminals"}, "L": {"consumers", "terminals", "workers", "waits"},
+           "O": {"state", "terminals", "board"}, "D": {"state", "board"}, "E": {"terminals"}, "L": {"consumers", "terminals", "workers", "waits"},
            "W": {"state"}, "R": {"terminals", "workers", "waits"}, "H": {"terminals", "waits"}, "B": {"terminals", "waits"},
-           "T": {"terminals", "handles"}, "M": {"terminals", "models"}}
+           "T": {"terminals", "handles"}, "M": {"terminals", "models"}, "P": {"terminals", "workers", "board"}}
 
 
 def write_round(findings, verdicts, dry, now, failed=()):

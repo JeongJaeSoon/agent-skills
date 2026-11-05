@@ -202,7 +202,8 @@ def check(f, head, handles, final=False, ino=None):
         return False, handed_off(refused["path"])
     if f.get("patrol") is None:
         return False, "순찰 판정 파일을 읽지 못함"
-    if f["patrol"]:
+    # A working or run verdict is read off a terminal: the card with none (and none to close) is not that session.
+    if f["patrol"] and not (f["patrol"] in reap.PATROL_TERMINAL_READ and not f.get("terminals") and not handles):
         return False, reap.patrol_hold(f["patrol"])
     if not f.get("head"):
         return False, "HEAD 를 읽지 못함"
