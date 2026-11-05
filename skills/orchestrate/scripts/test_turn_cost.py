@@ -85,6 +85,16 @@ d = tc.what_if(tc.turns(write(rows)), {"stream"}, debounce=30)
 assert d["calls"] == 5, d  # the second wake (20 s) shares the first's notice; the third (40 s) opens a new window
 
 assert tc.main([p, "--json", "--what-if", "stream,restart"]) == 0
+# Several transcripts (a fleet of cards) are summed, each replayed alone.
+import contextlib, io, json  # noqa: E402
+for args in ([p], [p, p]):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        tc.main(args + ["--json", "--what-if", "stream"])
+    got = json.loads(buf.getvalue())
+    if args == [p]:
+        one = got
+assert got["calls"] == 2 * one["calls"] and got["what_if"]["weight"] == 2 * one["what_if"]["weight"], (one, got)
 try:
     tc.main([p, "--what-if", "nope"])
     raise AssertionError("an unknown --what-if must fail")

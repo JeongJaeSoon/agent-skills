@@ -49,6 +49,8 @@ test('asks orch only past the floor, says when /clear is safe, rechecks every mi
   ]
   on('session.usage', () => ({ value: { startedAt: 0, context: { tokens, window: 200_000 }, rateLimits: {}, cost: {} } }))
   on('session.id', () => ({ value: session }))
+  let agents = [{ id: 'a1', description: 'reboot check', type: 'general-purpose', status: 'running' }]
+  on('agent.list', () => ({ value: agents }))
   on('turn.complete', (_, e) => ({ text: e.answer }))
   on('ui.render', ($, e) => {
     const { Box } = $.ui.resolve(e)
@@ -69,8 +71,9 @@ test('asks orch only past the floor, says when /clear is safe, rechecks every mi
   await $.turn.complete(turn('done'))
   await clock.settle()
   expect(argvs[0]?.[0]).toMatch(/\/bin\/orch$/)
-  expect(argvs[0]?.slice(1)).toEqual(['handoff', 'ready', '--session', 'sess-1', '--context', '150000'])
+  expect(argvs[0]?.slice(1)).toEqual(['handoff', 'ready', '--session', 'sess-1', '--context', '150000', '--agents', '1'])
   expect(await bandText($)).toContain('/clear not yet: 2 message(s) in the inbox')
+  agents = []
 
   // The minute timer looks again: the inbox emptied.
   await clock.advance(60_000)

@@ -272,10 +272,10 @@ def main():
             pass
         if entry:
             text = role_long(entry, source in ("compact", "clear"), cleared=source == "clear")
-            if source == "clear" and (note := handoff_text(entry)):
-                text += "\n" + note
             if entry["role"] == "orchestrator":
                 text += name_check(event)
+            if source == "clear" and (note := handoff_text(entry)):
+                text += "\n" + note
     if text:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": kind, "additionalContext": text}}))
     return 0

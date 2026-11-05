@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """`orch inbox --stream`: the top-level session's inbox wait and card watch as one Monitor event stream.
 
-Usage (the Monitor tool, never Bash): orch inbox --stream [--debounce 30] [--ttl-ms 1740000] [--no-cards] [--key KEY]
+Usage (the Monitor tool, never Bash): orch inbox --stream [--debounce 300] [--ttl-ms 1740000] [--no-cards] [--key KEY]
 
 The background `orch inbox --wait` cost three model calls per wake: its completion notice carries no output, so the
 session read the output file, then acked and started the wait again, then answered. Under Monitor every stdout line
@@ -11,8 +11,9 @@ Each round takes the inbox batch. A consuming check marks the batch handled when
 check --help); `orch inbox` takes it the same way, so the stream holds mail no shorter than the wait did, and what a
 crash loses after the print is still in `orca orchestration inbox`, which reboot --top lists since the last handoff.
 Heartbeats and Orca's refusals of a released worker's repeat are dropped; the rest is printed as `INBOX` lines in one
-write, which Monitor delivers as one notice. A batch with no question or escalation waits --debounce seconds for more
-mail first (a third of the wakes came within two minutes of the one before), and that wait is a `check --peek --wait`
+write, which Monitor delivers as one notice. A batch with nothing urgent (a question, an escalation, a worker_done, a
+subject saying READY, BLOCKED or STUCK) waits up to --debounce seconds for more mail first: most mail is status, and a
+third of the wakes came within two minutes of the one before. That wait is a `check --peek --wait`
 with no --types, as is every wait between batches: it keeps Orca from typing its "You have N orchestration
 message(s)" notice into the composer.
 
@@ -118,7 +119,7 @@ def ts_age(ts, now):
 
 
 class Stream:
-    def __init__(self, me, key="orchestrator", debounce=30, ttl_ms=TTL_MS, cards=True, threshold=None, out=None,
+    def __init__(self, me, key="orchestrator", debounce=300, ttl_ms=TTL_MS, cards=True, threshold=None, out=None,
                  clock=time.monotonic, now=time.time, session=session_of, ctx=context, spawn=None, clear=type_clear,
                  store=None):
         self.me, self.key, self.debounce, self.ttl, self.cards = me, key, debounce, ttl_ms / 1000, cards
@@ -340,7 +341,7 @@ def main(argv):
     me = os.environ.get("ORCA_TERMINAL_HANDLE")
     if not me or not roles.SESSION.fullmatch(me):
         sys.exit("orch inbox --stream reads this terminal's inbox: run it in an Orca terminal (ORCA_TERMINAL_HANDLE)")
-    stream = Stream(me, key=prog.opt(argv, "--key", "orchestrator"), debounce=int(prog.opt(argv, "--debounce", "30")),
+    stream = Stream(me, key=prog.opt(argv, "--key", "orchestrator"), debounce=int(prog.opt(argv, "--debounce", "300")),
                     ttl_ms=int(prog.opt(argv, "--ttl-ms", str(TTL_MS))), cards="--no-cards" not in argv)
 
     def on_term(*_):

@@ -74,7 +74,7 @@ Usage: orch <command> <slug> [options]
                                      print the next batch one line per message with its ack line;
                                      with --wait, acks heartbeat-only batches and waits on; a failed
                                      --ack is reported and the wait still runs
-  inbox --stream [--debounce 30] [--ttl-ms 1740000] [--no-cards]
+  inbox --stream [--debounce 300] [--ttl-ms 1740000] [--no-cards]
                                      no slug, the orchestrator under the Monitor tool: one stdout line
                                      per message (each line a notification), the card watch as its
                                      child, RESTART DUE / SESSION CLEARED lines, STREAM END before

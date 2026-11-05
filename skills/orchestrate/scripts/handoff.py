@@ -4,7 +4,7 @@
 Usage:
   orch handoff save --next TEXT [--waiting TEXT] [--question TEXT] [--reply TEXT] [--note TEXT] [--key KEY] [--restart]
   orch handoff show [--key KEY]
-  orch handoff ready --session ID --context TOKENS [--asking]
+  orch handoff ready --session ID --context TOKENS [--agents N] [--asking]
 
 KEY is `orchestrator` (default) or `lead:<slug>`: the role, not the session or the terminal, since a /clear gives a
 new session id and a role can move to another terminal. The record is an event row in agent-skills.db
@@ -18,7 +18,7 @@ the open `orch decide` items.
 
 `ready` is what the plugin's clear band (hooks/clear_band.tsx) runs after each turn of a session whose context passed
 `orchestrate.restart_at`: it prints one JSON line saying whether a /clear is safe now (an orchestrator or lead, its
-inbox empty, its last answer not a question) and, when it is, saves a handoff from the stores with no model turn,
+inbox empty, its last answer not a question, no subagent running) and, when it is, saves a handoff from the stores with no model turn,
 carrying the fields this session saved itself. The band then tells the human `/clear` is safe; the reorient hook gives
 the next session the handoff.
 
@@ -134,7 +134,7 @@ def unread(key, handle):
     return [m for m in msgs if m.get("type") != "heartbeat" and not prog.revoked_echo(m)]
 
 
-def ready(session, context, asking, now=None, peek=unread):
+def ready(session, context, asking, now=None, peek=unread, agents=0):
     """The clear band's verdict for this session, as a dict; saves the handoff when a /clear is safe."""
     import inbox_stream
     import time
@@ -147,6 +147,9 @@ def ready(session, context, asking, now=None, peek=unread):
     if asking:
         out["reason"] = "your last answer asks a question"
         return out
+    if agents:
+        out["reason"] = f"{agents} subagent(s) running"
+        return out
     handle = os.environ.get("ORCA_TERMINAL_HANDLE") or terminal_of(session)
     try:
         waiting = peek(key, handle)
@@ -158,10 +161,11 @@ def ready(session, context, asking, now=None, peek=unread):
         return out
     now = time.time() if now is None else now
     last = store.last_session_event(key, "handoff")
-    mine = last[1] if last and isinstance(last[1], dict) and last[1].get("session") == session else {}
+    prev = last[1] if last and isinstance(last[1], dict) else {}
     age = inbox_stream.ts_age(last[0], now) if last else None
-    if not (mine.get("auto") and age is not None and age < AUTO_EVERY_S):
-        carried = {f: mine.get(f) for f in FIELDS if mine.get(f)}
+    if not (prev.get("auto") and prev.get("session") == session and age is not None and age < AUTO_EVERY_S):
+        # The role's lines, whichever session wrote them: the session after a /clear has not rewritten them yet.
+        carried = {f: prev.get(f) for f in FIELDS if prev.get(f)}
         carried.setdefault("next", "act on the mail taken since this handoff, then the open decisions")
         store.session_event(key, "handoff", {**carried, "auto": True, "session": session, "handle": handle,
                                              "context": context}, by="orch handoff ready")
@@ -178,7 +182,9 @@ def main(argv):
             session, context = opt(argv, "--session"), opt(argv, "--context")
             if not session or not (context or "").isdigit():
                 sys.exit("orch handoff ready needs --session ID and --context TOKENS")
-            print(json.dumps(ready(session, int(context), "--asking" in argv)))
+            agents = opt(argv, "--agents") or "0"
+            print(json.dumps(ready(session, int(context), "--asking" in argv,
+                                   agents=int(agents) if agents.isdigit() else 0)))
             return
         if argv[0] == "show":
             print("\n".join(lines(key)) or f"no handoff recorded for {key}")

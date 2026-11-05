@@ -37,8 +37,10 @@ async function check($: EngineInterface): Promise<void> {
       return
     }
     const session = await $.session.id()
+    // A subagent's result would land in the cleared session, which knows nothing of it.
+    const agents = (await $.agent.list()).filter(a => a.status === 'running').length
     // The module's process has no plugin bin/ on PATH, so name orch by path.
-    const args = ['handoff', 'ready', '--session', session, '--context', String(tokens)]
+    const args = ['handoff', 'ready', '--session', session, '--context', String(tokens), '--agents', String(agents)]
     const run = await $.process.run([`${$.plugin.root}/bin/orch`, ...args, ...(asking ? ['--asking'] : [])], {
       timeoutMs: READY_TIMEOUT_MS,
     })

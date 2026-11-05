@@ -4,7 +4,7 @@ claims to cut tokens is compared before and after with the same numbers.
 
 Usage:
   turn_cost.py TRANSCRIPT.jsonl [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--json]
-               [--what-if stream,restart] [--restart-at 130000] [--fresh 77000] [--debounce 30]
+               [--what-if stream,restart] [--restart-at 130000] [--fresh 77000] [--debounce 300]
 
 A turn starts at a user row that is not a tool result and ends at the next one. Each turn is classified by what woke
 it (`turnOrigin`; a task notification is further split by what its follow-up did) and counts its model calls, the
@@ -216,22 +216,25 @@ def what_if(ts, changes, restart_at=130_000, fresh=77_000, debounce=30):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("transcript")
+    ap.add_argument("transcript", nargs="+", help="several (a fleet of cards) are summed; each is replayed alone")
     ap.add_argument("--since")
     ap.add_argument("--until")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--what-if", default="")
     ap.add_argument("--restart-at", type=int, default=130_000)
     ap.add_argument("--fresh", type=int, default=77_000)
-    ap.add_argument("--debounce", type=int, default=30)
+    ap.add_argument("--debounce", type=int, default=300)  # orch inbox --stream's default
     a = ap.parse_args(argv)
     changes = {x for x in a.what_if.split(",") if x}
     if bad := changes - {"stream", "restart"}:
         ap.error(f"unknown --what-if: {', '.join(sorted(bad))}")
-    ts = turns(a.transcript, a.since, a.until)
-    s = summarize(ts)
+    per = [turns(t, a.since, a.until) for t in a.transcript]
+    s = summarize([t for ts in per for t in ts])
     if changes:
-        s["what_if"] = {"changes": sorted(changes), **what_if(ts, changes, a.restart_at, a.fresh, a.debounce)}
+        runs = [what_if(ts, changes, a.restart_at, a.fresh, a.debounce) for ts in per if ts]
+        s["what_if"] = {"changes": sorted(changes), "calls": sum(r["calls"] for r in runs),
+                        "weight": sum(r["weight"] for r in runs), "restarts": sum(r["restarts"] for r in runs),
+                        "ctx_median": int(statistics.median([r["ctx_median"] for r in runs])) if runs else 0}
     if a.json:
         print(json.dumps(s, indent=1))
         return 0

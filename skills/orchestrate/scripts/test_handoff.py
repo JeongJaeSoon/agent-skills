@@ -76,7 +76,9 @@ before = store.last_session_event("orchestrator", "handoff")
 got = handoff.ready(S, 150_000, False, peek=empty)
 ts, saved = store.last_session_event("orchestrator", "handoff")
 assert got["ready"] and saved["auto"] and saved["session"] == S and saved["context"] == 150_000, (got, saved)
-assert saved["next"].startswith("act on the mail"), saved  # the last save was another session's: nothing carried
+# The role's lines carry over even when another session (the one before a /clear) wrote them.
+assert saved["next"] == "y", saved
+assert not handoff.ready(S, 150_000, False, peek=empty, agents=1)["ready"]  # a subagent's result would be lost
 assert "saved by the clear band" in run("show")[1]
 # Again within AUTO_EVERY_S: ready, but no new row.
 rows = lambda: __import__("sqlite3").connect(store.path()).execute("select count(*) from event where entity='session'").fetchone()[0]  # noqa: E731
