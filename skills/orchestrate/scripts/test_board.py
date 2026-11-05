@@ -68,7 +68,7 @@ def orch_env(extra, *args):
 
 
 # Nothing to show is still a report: the headline says so and 오너가 할 일 is there, so no report is made by hand.
-assert ok("brief", "render", "--periodic", "--now", NOW) == "**14:30 · 리드·카드 행 없음**\n\n🙋 **지금 오너가 할 일** — 없음"
+assert ok("brief", "render", "--periodic", "--now", NOW) == "**14:30 · 리드·카드 행 없음**\n\n## 🙋 지금 오너가 할 일 — 없음"
 # The time is the system clock's, in the session's time zone; the model never writes it.
 for tz in ("UTC", "Asia/Tokyo"):
     import datetime as dt, time
@@ -200,20 +200,22 @@ if "--print" in sys.argv:
 GOLDEN = """\
 **14:30 · 바뀐 행 1 · PR 상태 3h 전 기준 · 오래된 board 행 1 (3h 전) · 접음 완료 1 (대시보드)**
 
-⏸️ 보류 큐 2건 · `orch board todo list`
+> ⏸️ 보류 큐 2건 · `orch board todo list`
+>
+> 🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류 · ✅ 완료 · 🔴 막힘 · 막대=단계(추정)
+>
+> PR: ❗ 사람이 풀 것 · CI✗ CI 실패 · CI… CI 진행 · 7자리=머지 sha
 
-🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류 · ✅ 완료 · 🔴 막힘 · 막대=단계(추정)
-
-PR: ❗ 사람이 풀 것 · CI✗ CI 실패 · CI… CI 진행 · 7자리=머지 sha
-
-🙋 **지금 오너가 할 일**
+## 🙋 지금 오너가 할 일
 
 - 충돌 해소 승인 · [#50](https://example.test/50) → 알림 정리
 - 리뷰 · #70·#71 → 로그·대시보드
 
-❓ **결정 필요** — 1. (d1) 재색인 권한 → 추천: 서비스 계정 — 만료 없음 (지난 보고와 동일)
+## ❓ 결정 필요
 
-**acme/web → feature/notify**
+1. (d1) 재색인 권한 → 추천: 서비스 계정 — 만료 없음 (지난 보고와 동일)
+
+## acme/web → feature/notify
 
 - 🙋 알림 정리 — [#50](https://example.test/50) ❗DIRTY→main · ██████░░ 3/4 · ↑ 오너 · 작업 중
 - 🔄 └ 문구 다듬기와 길이 정리 — [#54](https://example.test/54) ❗리뷰 CI✗ · ████░░░░ 2/4 · CI 재실행 뒤 리뷰 의뢰 다시 보내기 · 워커 · 작업 중
@@ -226,7 +228,7 @@ PR: ❗ 사람이 풀 것 · CI✗ CI 실패 · CI… CI 진행 · 7자리=머�
 
 ✅ 그 전 완료 1건 (대시보드)
 
-**acme/ops → main**
+## acme/ops → main
 
 - 🔴 정리 작업 — ███░░░░░ 1/3 · 재개·정리 · 3h 전 · 세션 없음
 - — 검색 개선
@@ -236,17 +238,17 @@ PR: ❗ 사람이 풀 것 · CI✗ CI 실패 · CI… CI 진행 · 7자리=머�
 
 - 🙋 2건 오너 리뷰 — 분야 로그·대시보드
 
-📌 **카드 없는 일**
+## 📌 카드 없는 일
 
 - ❔ 로그 누락 조사 — 세션 없음 · 원인 보고 · 워커
 
-⏳ **다른 사람 대기**
+## ⏳ 다른 사람 대기
 
 - rev-a · 리뷰 [#51](https://example.test/51)·#52·#53 · 30분 전부터 → 설정·발송·로그 · 다음: 10/13 09:30 의뢰
 - rev-b · 리뷰 [#61](https://example.test/61)·#62 · 30분 전부터 → p61·p62
 - 다른 팀 · 30분 전부터 → 다른 팀 답변 대기 · 다음: 10/14 리마인드
 
-⏸️ **보류**
+## ⏸️ 보류
 
 - ph3 머지 뒤 → 검색 개선 ph4 · ph5
 
@@ -381,7 +383,7 @@ code, _, err = orch("board", "lead", "add", "refund", "--handle", "term_0FAKE6",
 assert code == 0 and err.startswith("warning: ") and "refund" in err and "triage" in err, err
 ok("board", "set", "refund", "--title", "환불")
 mixed = ok("brief", "render", "--periodic", "--now", NOW)
-assert mixed.count("**acme/api") == 1 and "| 환불 |" in mixed, mixed
+assert mixed.count("## acme/api") == 1 and "| 환불 |" in mixed, mixed
 code, _, err = orch("board", "set", "refund", "--program", "환불")
 assert code == 0 and "refund" not in err, err
 # Leads that work in phases show only their phase rows: in one table, each phase names its lead.
@@ -390,7 +392,7 @@ ok("board", "lead", "add", "promo", "--handle", "term_0FAKE8", "--repo", "acme/s
 ok("board", "set", "cart/ph1", "--kind", "phase")
 ok("board", "set", "promo/ph1", "--kind", "phase")
 shop = ok("brief", "render", "--periodic", "--now", NOW)
-assert shop.count("**acme/shop") == 1 and "| cart ph1 |" in shop and "| promo ph1 |" in shop, shop
+assert shop.count("## acme/shop") == 1 and "| cart ph1 |" in shop and "| promo ph1 |" in shop, shop
 
 # Only a name is ever cut, and only when that gets the table into 78 columns: a long PR state, a folded row's bases and
 # a long progress show whole, and a table they alone make too wide overflows uncut and the render reports it.
@@ -422,7 +424,7 @@ for n in (81, 82):
 prs_json["prs"].update(dict(pr(f"acme/solo#{n}", reviewers=["rev-e"]) for n in (81, 82)))
 (state / "prs.json").write_text(json.dumps(prs_json))
 solo = ok("brief", "render", "--periodic", "--now", NOW)
-assert "**acme/solo → main**\n\n- ⏳ 2건 rev-e 대기 — 분야 작업81·작업82" in solo, solo
+assert "## acme/solo → main\n\n- ⏳ 2건 rev-e 대기 — 분야 작업81·작업82" in solo, solo
 
 # --fill: a lead session nobody wrote to the board shows with its cards and their PRs, in the lead's section even when a
 # card works in another repo; a lead the board holds (by its terminal) keeps only its board rows; the orchestrator's own
@@ -445,7 +447,7 @@ fill_rows = [l for l in filled.splitlines() if "acme/fill" in l or "acme/other" 
              or "c1" in l or "c2" in l or "c4" in l]
 assert fill_rows == [
     "- 확인 대기 → c2",
-    "**acme/fill → main**",
+    "## acme/fill → main",
     "| 🙋 | 정산 리드 | — | — | 작업 중 |",
     "| 🙋 | └ c2 | — | ↑ 오너 | 멈춤 |",
     "| 🔄 | └ c1 | [#5](https://example.test/5) ❗리뷰 CI… | — | 작업 중 |",
@@ -488,7 +490,7 @@ assert "| ❔ | 관측 카드 | #77 ? | 에이전트 조치 필요: PR 상태 �
 # A requests.jsonl left by the removed owner-request ledger is not read: the pointer line counts no requests.
 (state / "requests.jsonl").write_text(json.dumps({"ev": "open", "id": "r1", "ts": "2026-10-13T13:30:00Z", "text": "merge acme/web#77"}) + "\n")
 asked = ok("brief", "render", "--periodic", "--now", NOW)
-assert "요청" not in asked and "⏸️ 보류 큐 2건 · `orch board todo list`" in asked.splitlines(), asked
+assert "요청" not in asked and "> ⏸️ 보류 큐 2건 · `orch board todo list`" in asked.splitlines(), asked
 
 # A held item stored twice before later add merged them renders once, in its newest words.
 in_state(lambda: store.change_board(lambda b: b["later"].extend(
@@ -532,19 +534,20 @@ REQUEST = ["brief", "render", "--now", NOW, "--headline", "정렬 PR CI 중, 유
 REQUEST_GOLDEN = """\
 **14:30 · 정렬 PR CI 중, 유료 플랜 하나만 정해 주세요**
 
-단계표 1행 · `orch stage show`
+> 단계표 1행 · `orch stage show`
+>
+> 🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류
+>
+> PR: ❗ 사람이 풀 것 · CI… CI 진행
 
-🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류
+## 🙋 지금 오너가 할 일 — 없음
 
-PR: ❗ 사람이 풀 것 · CI… CI 진행
+## ❓ 결정 필요
 
-🙋 **지금 오너가 할 일** — 없음
-
-❓ **결정 필요** — 1. (d1) 재색인 권한 → 추천: 서비스 계정 — 만료 없음
-
+1. (d1) 재색인 권한 → 추천: 서비스 계정 — 만료 없음
 2. 검색 API 유료 플랜(월 $50): 올림 / 현행 유지 → 추천: 현행 유지 — 무료 한도의 60% · 답이 없으면 현행 유지
 
-**acme/web → main**
+## acme/web → main
 
 | | 리드/Phase | PR | 다음 | 세션 |
 |---|---|---|---|---|
@@ -562,23 +565,23 @@ for start, rows in table_width.tables(request):
 # Every form has the line and no table: periodic, and Telegram (no markdown, so no backticks). With the dashboard
 # up (its .dash.json pid alive) the line links its Stages page instead.
 periodic = rok("brief", "render", "--periodic", "--now", NOW)
-assert "| 작업 |" not in periodic and "단계표 1행 · `orch stage show`" in periodic.splitlines(), periodic
+assert "| 작업 |" not in periodic and "> 단계표 1행 · `orch stage show`" in periodic.splitlines(), periodic
 tg_req = rok(*REQUEST, "--telegram")
 assert not any(m in tg_req for m in ("**", "|", "](", "`", "📋 작업별")), tg_req
 assert "단계표 1행 · orch stage show --telegram" in tg_req.splitlines() and "🔄 c7 #45 ❗리뷰 CI… — CI 통과 → 리뷰 의뢰 · 워커 · 작업 중" in tg_req.splitlines(), tg_req
 (tmp / "programs").mkdir(exist_ok=True)
 (tmp / "programs" / ".dash.json").write_text(json.dumps({"pid": os.getpid(), "port": 4799}))
-assert "단계표 1행 · http://127.0.0.1:4799/#/fleet/stages" in rok(*REQUEST).splitlines()
+assert "> 단계표 1행 · http://127.0.0.1:4799/#/fleet/stages" in rok(*REQUEST).splitlines()
 tg_req = rok(*REQUEST, "--telegram")  # the dashboard is on 127.0.0.1 only: Telegram, read elsewhere, gets the command
 assert "단계표 1행 · orch stage show --telegram" in tg_req.splitlines() and "127.0.0.1" not in tg_req, tg_req
 (tmp / "programs" / ".dash.json").write_text(json.dumps({"pid": 2 ** 22 + 1, "port": 4799}))  # no such process
-assert "단계표 1행 · `orch stage show`" in rok(*REQUEST).splitlines()
+assert "> 단계표 1행 · `orch stage show`" in rok(*REQUEST).splitlines()
 # The table itself is `orch stage show`'s: no cell is cut, so a table past 78 columns is one whole line per row.
 WIDE_TITLE, WIDE_EVIDENCE = "아주 긴 이름의 작업으로 표의 폭을 넘기는 행", "로그로만 확인하고 화면은 아직 보지 않음"
 rok("stage", "add", "wide", "--title", WIDE_TITLE, "--pr", "acme/web#1234")
 code, cut, err = orch_env(renv, "stage", "show")
 assert code == 0 and "…" not in cut and "- [" not in cut, (code, err, cut)
-assert f"- {WIDE_TITLE} — acme/web#1234" in cut.splitlines() and "1. v1.7.2 prod 배포 (사람, 미정)" in cut and "단계표 2행 · `orch stage show`" in rok(*REQUEST).splitlines()
+assert f"- {WIDE_TITLE} — acme/web#1234" in cut.splitlines() and "1. v1.7.2 prod 배포 (사람, 미정)" in cut and "> 단계표 2행 · `orch stage show`" in rok(*REQUEST).splitlines()
 # A long PR key stays whole too.
 WIDE_PR = "acme/a-very-long-repository-name-for-the-table#123456"
 rok("stage", "add", "wider", "--title", "넓은 PR", "--pr", WIDE_PR)
@@ -679,7 +682,7 @@ stamp_dir, state = state, wd / "dashboard"
 stamp()
 state = stamp_dir
 text = wok("brief", "render", "--periodic", "--now", NOW)
-mine, theirs, moving = section(text, "🙋 **지금 오너가 할 일**"), section(text, "⏳ **다른 사람 대기**"), section(text, "📌 **카드 없는 일**")
+mine, theirs, moving = section(text, "## 🙋 지금 오너가 할 일"), section(text, "## ⏳ 다른 사람 대기"), section(text, "## 📌 카드 없는 일")
 tab = json.loads(wok("brief", "render", "--periodic", "--now", NOW, "--json"))["full"]
 assert "| 🙋 | └ 내 리뷰 | [#91](https://example.test/91) ❗리뷰 | ↑ 오너 |" in tab, tab
 assert "| ⏳ | └ 남 리뷰 | [#92](https://example.test/92) ❗리뷰 | ↓ 대기 |" in tab, tab
@@ -691,7 +694,7 @@ assert "| ❔ | └ ask 누구 대기 | — | 에이전트 조치" in tab and no
 assert "- [" not in text and "…[" not in text, text
 assert not any(w in l for l in mine + moving for w in ("남 리뷰", "디자인 답변")), (mine, moving)
 assert not any(w in l for l in theirs + moving for w in ("내 리뷰", "캐시 정책")) and "누구 대기" not in "".join(mine + theirs)
-assert "❓ **결정 필요** — 1. (d1) 캐시 정책 → 추천: TTL 1h" in text and "캐시 정책" not in "".join(mine), text
+assert "## ❓ 결정 필요\n\n1. (d1) 캐시 정책 → 추천: TTL 1h" in text and "캐시 정책" not in "".join(mine), text
 # Without the owner's gh login a requested review could be anyone's: 확인 필요, not someone else's.
 del who_prs["me"]
 (wd / "dashboard" / "prs.json").write_text(json.dumps(who_prs))
@@ -762,7 +765,7 @@ assert text.count("✅ 그 전 완료 2건 (대시보드)") == 1 and "접음 완
 assert "F/old" not in folded["snapshot"]["rows"] and "G/t" not in folded["snapshot"]["rows"]
 # A held item written twice, case and spacing aside, is one line in its newest wording; two that differ only in an
 # aside (a PR, a stage) are two items and both stay.
-assert section(text, "⏸️ **보류**") == ["- 다음 분기 → hold 보류 행"], text
+assert section(text, "## ⏸️ 보류") == ["- 다음 분기 → hold 보류 행"], text
 queued = fok("board", "todo", "list", "--now", NOW, "--no-refresh")
 assert [l.split(" | ")[1] for l in queued.splitlines() if l.startswith("| ") and "다음 차례" not in l] == [
     "Rollout  카드 재기동", "배포 확인 (acme/app#1)", "배포 확인 (acme/app#2)", "A 머지 — dev 확인", "A 머지 — prod 확인"], queued
@@ -777,13 +780,13 @@ sp.write_text(json.dumps({"order": ["done", "all", "idle"], "next": ["다음 배
              "cells": {"merge": {"mark": "ok", "evidence": "10/5", "at": "2026-10-05T00:00:00Z"}}}}}, ensure_ascii=False))
 rq = fok("brief", "render", "--now", NOW, "--json")
 assert "| 작업 |" not in rq and "다음 배포" not in rq and "단계표" not in json.loads(rq)["headline_facts"][-1], rq
-assert "단계표 0행 (접음 3) · `orch stage show`" in json.loads(rq)["text"].splitlines(), rq
+assert "> 단계표 0행 (접음 3) · `orch stage show`" in json.loads(rq)["text"].splitlines(), rq
 s = json.loads(sp.read_text())
 s["order"].append("live")
 s["rows"]["live"] = {"id": "live", "title": "확인 중", "created_at": "2026-10-13T13:00:00Z", "cells": {}}
 sp.write_text(json.dumps(s, ensure_ascii=False))
 rq = json.loads(fok("brief", "render", "--now", NOW, "--json"))["text"]
-assert "단계표 1행 (접음 3) · `orch stage show`" in rq.splitlines(), rq
+assert "> 단계표 1행 (접음 3) · `orch stage show`" in rq.splitlines(), rq
 # A row with a ❌, ⚠️ or 🔄 cell is stuck, not finished: it stays however long it has been quiet.
 for m in ("fail", "partial", "checking"):
     s["order"].append(m)
@@ -791,7 +794,7 @@ for m in ("fail", "partial", "checking"):
                     "cells": {"merge": {"mark": "ok", "at": "2026-10-05T00:00:00Z"}, "dev": {"mark": m, "at": "2026-10-05T00:00:00Z"}}}
 sp.write_text(json.dumps(s, ensure_ascii=False))
 rq = json.loads(fok("brief", "render", "--now", NOW, "--json"))["text"]
-assert "단계표 4행 (접음 3) · `orch stage show`" in rq.splitlines(), rq
+assert "> 단계표 4행 (접음 3) · `orch stage show`" in rq.splitlines(), rq
 # A row quiet since it was added whose PR just merged has dev to check next: the merge counts as a change.
 s["order"].append("merged")
 s["rows"]["merged"] = {"id": "merged", "title": "막 머지", "pr": "acme/web#9", "created_at": "2026-10-01T00:00:00Z", "cells": {}}
@@ -799,7 +802,7 @@ sp.write_text(json.dumps(s, ensure_ascii=False))
 (fd / "dashboard" / "state.json").write_text(json.dumps({"generated_at": NOW, "sessions": [],
                                                          "prs": [{"key": "acme/web#9", "state": "MERGED", "merged_at": "2026-10-12T00:00:00Z"}]}))
 rq = json.loads(fok("brief", "render", "--now", NOW, "--json"))["text"]
-assert "단계표 5행 (접음 3) · `orch stage show`" in rq.splitlines(), rq
+assert "> 단계표 5행 (접음 3) · `orch stage show`" in rq.splitlines(), rq
 # Telegram keeps the section's fold line.
 assert "✅ 그 전 완료 1건 (대시보드)" in fok("brief", "render", "--periodic", "--now", NOW, "--telegram").splitlines()
 
