@@ -9,8 +9,24 @@ export type BriefPaneView = {
   error: string
 }
 
+// The verdict of `orch handoff ready` (skills/orchestrate/scripts/handoff.py).
+export type ClearBandView = {
+  // An orchestrator or lead session past orchestrate.restart_at.
+  show: boolean
+  // Safe to /clear now: inbox empty, no question asked, handoff saved.
+  ready: boolean
+  context: number
+  threshold: number
+  // Why not ready yet; empty when ready.
+  reason: string
+  // The session the verdict is for: a /clear starts a new one in the same process.
+  session: string
+  // One line about the latest failed check; empty after a success.
+  error: string
+}
+
 declare module 'claude-code' {
   interface PluginState {
-    'agent-skills': { 'brief-pane': Shaped<BriefPaneView> }
+    'agent-skills': { 'brief-pane': Shaped<BriefPaneView>; 'clear-band': Shaped<ClearBandView | null> }
   }
 }
