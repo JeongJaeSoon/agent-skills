@@ -51,7 +51,7 @@ https://github.com/user-attachments/assets/4989f7f2-54d3-493a-8692-e0a4157199b0
 - Obsidian 또는 평범한 Markdown 폴더: 노트 스킬
 - tailscale, caddy: `preview-watch`와 `share-server`
 
-macOS에서는 전체 설정이 동기화 작업과 기본 자동화를 LaunchAgent로 설치한다. Linux에서는 대신 crontab 줄을 출력하니 직접 넣는다.
+전체 설정은 동기화 작업과 기본 자동화를 Orca automation으로 켠다. LaunchAgent는 만들지 않는다. Orca 앱이 켜져 있는 동안 돈다. 예전 설정이 LaunchAgent를 남겼으면 `setup-pc`가 알리니, 직접 제거한다.
 
 ## 설치
 

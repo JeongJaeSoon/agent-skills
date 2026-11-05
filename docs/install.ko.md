@@ -20,7 +20,7 @@
 | 필수 | `git` | 설치, 체크아웃, 동기화 |
 | 필수 | `python3` 3.9 이상 | 모든 스크립트. macOS의 `/usr/bin/python3`(3.9.6)로 돈다 |
 | B·C에 필수 | github.com에 로그인한 `gh` | 내 저장소에 관한 권장 규칙, private 개인 설정 저장소 clone |
-| B·C | macOS | 동기화 작업과 일부 자동화가 LaunchAgent다. Linux에서는 setup이 crontab 줄을 출력하고, 그 자동화는 `unsupported`로 나온다 |
+| B·C | macOS, Linux | 동기화 작업과 기본 자동화는 Orca automation이라 Orca가 설치돼 있고 열려 있는 동안만 돈다. setup은 LaunchAgent를 만들지 않는다. `preview-watch`와 `share-server`(기본 off)는 macOS에서 여전히 LaunchAgent다 |
 | 선택 | Orca | 여러 세션을 다루는 스킬(`orchestrate`, `dispatch-card`, `handoff-ticket`)과 정기 회차 |
 | 선택 | Linear 또는 Jira | 트래커 스킬. `tracker.adapter`가 없으면 Linear |
 | 선택 | Obsidian 또는 Markdown 폴더 | 노트 스킬. `notes.adapter`를 정하기 전에는 꺼져 있다 |
@@ -163,8 +163,8 @@ claude plugin marketplace remove jeongjaesoon
 | setup이 바꾼 것 | 되돌리는 법 |
 |---|---|
 | `settings.json`의 `env.CLAUDE_CODE_PLUGIN_DIRS`와 다른 권장 설정 | `--apply`가 출력한 되돌리기 줄(`cp settings.json.bak-setup-<시각> settings.json`)을 치거나 원하지 않는 키를 지운다. 떠 있는 세션은 재시작한다 |
-| 동기화 작업(macOS) | `launchctl bootout gui/$(id -u)/io.github.jeongjaesoon.agent-skills-sync` 뒤 `~/Library/LaunchAgents/io.github.jeongjaesoon.agent-skills-sync.plist` 삭제 |
-| 자동화 | 하나씩 `<체크아웃>/bin/skills-sync setup disable <이름>`. LaunchAgent인 것은 그 agent도 내린다. 손으로 설치한 `bin/reap-hard`와 대시보드 agent는 `<체크아웃>/bin/reap-hard uninstall`, `<체크아웃>/bin/orch-dash uninstall-agent` |
+| 동기화 작업 | `<체크아웃>/bin/skills-sync setup disable sync`. 예전 setup이 LaunchAgent를 남겼으면 직접 제거한다. `launchctl bootout gui/$(id -u)/io.github.jeongjaesoon.agent-skills-sync` 뒤 `~/Library/LaunchAgents/io.github.jeongjaesoon.agent-skills-sync.plist` 삭제 |
+| 자동화 | 하나씩 `<체크아웃>/bin/skills-sync setup disable <이름>`. LaunchAgent인 것은 그 agent도 내린다. `reap-hard install`, `orch-dash install-agent`, `pressure.py install`이 남긴 옛 LaunchAgent는 위와 같이 직접 제거한다 |
 | 상태 파일 | `~/.local/state/agent-skills/` 삭제 |
 
 남는 것이 둘 있다. Orca automation 등록은 `disable`이 끄기만 하고 지우지 않는다. `~/.claude/agent-skills.json`은 어떤 단계도 지우지 않으니 필요하면 직접 지운다.
@@ -175,4 +175,4 @@ claude plugin marketplace remove jeongjaesoon
 - **setup이 내 세션이 읽는 것과 다른 `settings.json`에 썼다.** Claude Code는 `CLAUDE_CONFIG_DIR`이 있으면 `$CLAUDE_CONFIG_DIR/settings.json`을, 없으면 `~/.claude/settings.json`을 읽는다(Orca는 프로필마다 따로 준다). dry run 첫 줄 `target <경로>`가 setup이 계획하는 파일이고, `--settings <파일>`로 다른 것을 고른다. 프로필이 여럿이면 프로필마다 한 번씩 설정한다. `agent-skills.json`은 모든 프로필이 함께 쓰는 한 파일이다.
 - **`refused: … is a worktree`, `… is on 'feature'`.** `main`의 메인 체크아웃에서 돌린다.
 - **hook이 두 번 돈다.** 마켓플레이스 사본과 체크아웃이 둘 다 켜져 있다. setup dry run을 돌리면 그 diff가 마켓플레이스 사본을 끈다.
-- **Linux.** setup이 출력한 crontab 줄을 더한다. LaunchAgent 자동화는 지원하지 않는다.
+- **Linux.** Orca automation은 똑같이 돈다. `preview-watch`와 `share-server`는 LaunchAgent라 지원하지 않는다.

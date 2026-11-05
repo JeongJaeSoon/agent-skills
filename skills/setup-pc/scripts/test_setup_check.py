@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import datetime, json, os, pathlib, sys, tempfile, unittest
+import datetime, json, os, pathlib, plistlib, sys, tempfile, unittest
 from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -119,14 +119,63 @@ class Install(Base):
         rows = self.by_item(sc.check_install({"env": {sc.ENV_KEY: str(co)}}, {}, sc.paths(), fake_run({}), darwin=False))
         self.assertEqual(rows["최신 여부"]["status"], "warn")
 
-    def test_launchd_missing_on_darwin(self):
-        rows = self.inline({"ok": True, "message": "ok", "at": "2026-01-01T11:59:00+0000"}, darwin=True, launchd_rc=113)
-        self.assertEqual(rows["launchd 동기화 작업"]["status"], "missing")
+    def test_no_launchd_row_and_no_launchctl_call(self):
+        """The sync job is an Orca automation now: its absence shows in the 정기 자동화 row, not in a launchd row."""
+        calls = []
+        run = fake_run({("git", "ls-remote"): (0, f"{REMOTE}\trefs/heads/main")})
+        co = self.checkout()
+        rows = sc.check_install({"env": {sc.ENV_KEY: str(co)}}, {}, sc.paths(),
+                                lambda cmd, **kw: calls.append(cmd) or run(cmd, **kw), darwin=True)
+        self.assertFalse([r for r in rows if "launchd" in r["item"]])
+        self.assertFalse([c for c in calls if c[0] == "launchctl"])
 
-    def test_launchd_unsupported_off_darwin(self):
-        rows = self.inline({"ok": True, "message": "ok", "at": "2026-01-01T11:59:00+0000"}, darwin=False)
-        self.assertEqual(rows["launchd 동기화 작업"]["status"], "unsupported")
-        self.assertIn("sync.py sync", rows["launchd 동기화 작업"]["next"])
+
+class Jobs(Base):
+    def setUp(self):
+        super().setUp()
+        self.state, self.agents = self.tmp / "state", self.tmp / "LaunchAgents"
+        (self.state / "jobs").mkdir(parents=True)
+        self.agents.mkdir()
+        self.p = {"state": self.state}
+
+    def record(self, name, ok=True, at=1000.0, interval=900, message="ok"):
+        (self.state / "jobs" / f"{name}.json").write_text(json.dumps(
+            {"name": name, "at": at, "ok": ok, "interval": interval, "message": message}))
+
+    def plist(self, label, args=("/usr/bin/true",)):
+        (self.agents / f"{label}.plist").write_bytes(plistlib.dumps({"Label": label, "ProgramArguments": list(args)}))
+
+    def rows(self, now=1100.0):
+        return [r for r in sc.check_jobs(self.p, now, self.agents)]
+
+    def test_nothing_recorded_and_no_legacy_is_silent(self):
+        self.assertEqual(self.rows(), [])
+
+    def test_legacy_launchagent_is_a_warn_row_that_leaves_removal_to_the_owner(self):
+        self.plist("io.github.jeongjaesoon.pressure-watch")
+        self.plist("com.example.other")
+        (row,) = self.rows()
+        self.assertEqual((row["item"], row["status"]), ("legacy LaunchAgent", "warn"))
+        self.assertIn("io.github.jeongjaesoon.pressure-watch", row["have"])
+        self.assertNotIn("com.example.other", row["have"])
+        self.assertIn("오너가 직접 제거", row["next"])
+        self.assertTrue((self.agents / "io.github.jeongjaesoon.pressure-watch.plist").exists())  # read-only
+
+    def test_a_hand_made_agent_running_our_script_is_legacy_too(self):
+        self.plist("dev.example.dash", ("/usr/bin/env", "python3", f"{sc.REPO}/skills/orchestrate/scripts/dash.py", "ensure"))
+        self.assertEqual([r["status"] for r in self.rows()], ["warn"])
+
+    def test_failed_and_stale_jobs_warn_and_healthy_ones_are_ok(self):
+        self.record("sync")
+        self.assertEqual([r["status"] for r in self.rows()], ["ok"])
+        self.record("pressure-watch", ok=False, message="exit 3: no docker")
+        (row,) = self.rows()
+        self.assertEqual(row["status"], "warn")
+        self.assertIn("pressure-watch: exit 3: no docker", row["have"])
+        self.record("pressure-watch")
+        rows = self.rows(now=1000.0 + 3 * 900 + 1)  # Orca closed or the automation off: nothing ran for three periods
+        self.assertEqual(rows[0]["status"], "warn")
+        self.assertIn("sync", rows[0]["have"])
 
 
 class Tools(Base):

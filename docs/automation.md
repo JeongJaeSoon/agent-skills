@@ -5,10 +5,11 @@
 
 ## 처음 설치할 때
 
-`skills-sync setup`(`scripts/automations.py`)이 이 저장소가 거는 정기 자동화의 입구다. 예외는 `reap-hard` 하나다.
-묻지 않고 카드를 지우는 정리라 보호 목록 파일을 먼저 써야 하므로, `apply`가 닿지 않게 목록 밖에 두고
-`bin/reap-hard install`로 따로 건다([reap-hard.md](reap-hard.md)). 자동화마다
-기본값이 있고, `apply`는 기본 on 중 한 번도 설정하지 않은 것만 켠다. `bootstrap.py --write`가 마지막에 `apply`를
+`skills-sync setup`(`scripts/automations.py`)이 이 저장소가 거는 정기 자동화의 입구다. 주기 작업(동기화,
+pressure-watch, reap-hard, 대시보드 ensure)은 macOS LaunchAgent가 아니라 Orca automation으로 돈다. 자동화마다
+기본값이 있고, `apply`는 기본 on 중 한 번도 설정하지 않은 것만 켠다. `reap-hard`는 묻지 않고 카드를 지우는 정리라
+보호 목록 파일을 먼저 써야 하므로 기본 off이고, 목록을 쓴 뒤 `skills-sync setup enable reap-hard`로 켠다
+([reap-hard.md](reap-hard.md)). `setup.py`와 `bootstrap.py --write`가 마지막에 `apply`를
 부르므로, 처음 설치한 사람은 따로 할 일이 없다. 바꾸고 싶으면 아래 명령을 메인 체크아웃에서 돌린다.
 
 ```bash
@@ -20,10 +21,13 @@ skills-sync setup disable <이름>         # 끄기
 
 | 이름 | 기본 | 장치 | 켜기 | 끄기 |
 |---|---|---|---|---|
-| `janitor` | on | Orca automation `agent-skills janitor` | 없으면 `reap.py schedule --write`로 만든다. 있으면 trigger·precheck·precheck timeout·prompt 중 `reap.py schedule`과 다른 것만 `orca automations edit`로 맞추고 켠다. workspace는 건드리지 않는다(runner worktree로 옮긴 것은 그대로). janitor가 꺼져 있었으면 꺼 둔 `janitor-load`도 같이 켠다(켜진 janitor 옆에 따로 끈 것은 그대로). 새로 만들 때는 `janitor-load`를 만들지 않는다. `enable janitor-load`나 `apply`가 만든다 | `orca automations edit --disabled`로 `janitor-load`까지 끈다. 등록은 남겨 `apply`가 다시 켜지 않는다 |
+| `janitor` | on | Orca automation `agent-skills janitor`(에이전트 없는 주기 작업) | 아래 "에이전트 없이 도는 주기 작업"의 다른 작업과 같이 만든다. 있으면 trigger·precheck·precheck timeout·prompt 중 다른 것만 `orca automations edit`로 맞추고 켠다. workspace는 건드리지 않는다(runner worktree로 옮긴 것은 그대로). janitor가 꺼져 있었으면 꺼 둔 `janitor-load`도 같이 켠다(켜진 janitor 옆에 따로 끈 것은 그대로). 새로 만들 때는 `janitor-load`를 만들지 않는다. `enable janitor-load`나 `apply`가 만든다 | `orca automations edit --disabled`로 `janitor-load`까지 끈다. 등록은 남겨 `apply`가 다시 켜지 않는다 |
 | `janitor-load` | on | Orca automation `agent-skills janitor load` | `janitor`와 같고, 만들 때는 `reap.py schedule --load --write`. `janitor`가 꺼져 있거나 없으면 만들지 않는다 | 이 job만 끈다 |
 | `preview-watch` | off | LaunchAgent `io.github.jeongjaesoon.preview-watch` | tailscale CLI가 없으면 거부한다. 있으면 `preview_watch.py install` | `preview_watch.py uninstall`(watcher가 연 serve 항목도 닫는다) |
-| `pressure-watch` | on | LaunchAgent `io.github.jeongjaesoon.pressure-watch` | `pressure.py install`(3분마다 `round`). 끈 표지를 지운다 | `pressure.py uninstall`. LaunchAgent는 지우고 상태 폴더에 끈 표지(`pressure-disabled`)를 남겨, 상태는 "꺼짐"이고 `apply`가 다시 켜지 않는다 |
+| `sync` | on | Orca automation `agent-skills sync`(에이전트 없음, [아래](#에이전트-없이-도는-주기-작업)) | 없으면 만든다(15분마다 `sync.py sync`). 있으면 trigger·precheck·timeout·prompt 중 다른 것만 맞추고 켠다 | `orca automations edit --disabled`. 등록은 남겨 `apply`가 다시 켜지 않는다 |
+| `pressure-watch` | on | Orca automation `agent-skills pressure-watch`(에이전트 없음) | `sync`와 같다. 3분마다 `pressure.py round`. `round`가 경고·위험으로 끝나는 exit 1·2는 실패가 아닌 결과로 기록한다 | `sync`와 같다 |
+| `reap-hard` | off | Orca automation `agent-skills reap-hard`(에이전트 없음) | `sync`와 같다. 15분마다 `reap_hard.py run` | `sync`와 같다 |
+| `orch-dash` | off | Orca automation `agent-skills orch-dash`(에이전트 없음) | `sync`와 같다. 10분마다 `dash.py ensure`로 이 스토어의 대시보드 서버를 확인해 내려갔으면 올린다 | `sync`와 같다 |
 | `share-server` | off | LaunchAgent(라벨은 설정 `share-server.label`, 기본 `io.github.jeongjaesoon.share-server`) | `share_server.py install`(KeepAlive로 `serve`, 그 안에서 sandbox-exec 아래 caddy. caddy가 없으면 `brew install caddy`부터. 같은 라벨의 다른 plist는 백업 후 교체) | `share_server.py uninstall` |
 | `watch-prs` | on(설정 키가 있을 때) | Orca automation `agent-skills watch-prs` | `agent-skills.json`에 `prs` 키가 없으면 상태는 "꺼짐(설정 키 없음)"이고 `apply`가 건너뛴다. 있으면 `prs.py schedule --write`로 만든다. 이미 등록돼 있으면 키와 상관없이 켜기만 한다. worktree에서는 거부한다 | `orca automations edit --disabled`. 등록은 남긴다 |
 | `watch-mentions` | on(설정 키가 있을 때) | Orca automation `agent-skills watch-mentions` | `watch-prs`와 같다. 키는 `mentions`, 만드는 명령은 `mentions.py schedule --write` | `orca automations edit --disabled`. 등록은 남긴다 |
@@ -37,8 +41,28 @@ skills-sync setup disable <이름>         # 끄기
 - janitor·watch-prs·watch-mentions는 Orca가 있어야 한다. `orca` CLI가 없으면 상태는 "확인 불가"이고 `enable`은 안내만 하고 실패한다.
 - preview-watch는 macOS 전용이다. 다른 OS에서는 상태가 "미지원"이고, `enable`은 cron으로 `bin/preview-watch run`을
   돌리라는 안내만 한다.
-- `agent-skills-sync` LaunchAgent(15분 동기화)는 자동화 목록에 없다. 체크아웃을 실시간으로 읽는 설치의 일부라
-  `bootstrap.py`가 건다.
+- 예전 setup이 만든 LaunchAgent(`agent-skills-sync`, `pressure-watch`, `reap-hard`, `orch-dash`와 손으로 만든
+  대시보드 ensure plist)는 건드리지 않는다. 남아 있으면 `setup-pc` 점검이 `legacy LaunchAgent` warn 행으로 알린다.
+  제거는 오너가 직접 한다(`launchctl bootout gui/$(id -u)/<라벨>` 뒤 plist 삭제). 같은 일을 하는 자동화와 LaunchAgent가
+  함께 돌아도 각 작업의 잠금이 겹침을 막지만, 제거하기 전까지는 둘 다 돈다.
+- Orca 앱이 꺼져 있으면 Orca automation은 돌지 않는다. LaunchAgent는 앱과 상관없이 돌았으므로 달라지는 점이다.
+  세션을 쓰는 동안은 Orca가 켜져 있으니 영향이 없고, 앱을 닫아 둔 시간만큼 동기화·감시가 쉰다.
+
+## 에이전트 없이 도는 주기 작업
+
+Orca automation은 항상 에이전트 프롬프트를 갖지만, 실행 전에 `--precheck` 명령을 먼저 돌리고 exit가 0이 아니면
+에이전트를 띄우지 않고 `skipped_precheck`로 끝낸다. `janitor`·`janitor-load`·`sync`·`pressure-watch`·`reap-hard`·`orch-dash`는 이를 이용해
+precheck 안에서 작업을 직접 하고 항상 exit 1로 끝나므로(`scripts/orca_job.py run`) 회차마다 모델 비용이 0이다.
+이것은 precheck의 원래 용도(돌릴지 말지의 판단)를 벗어난 쓰임이다. Orca가 precheck의 부작용을 막거나 시간 제한을
+바꾸면 이 방식이 깨진다.
+
+- **성공과 실패 구분:** 항상 exit 1이라 Orca 쪽 기록(`skipped_precheck`)만으로는 작업이 실패했는지 알 수 없다. 그래서
+  `orca_job.py run`이 매 회차 `~/.local/state/agent-skills/jobs/<이름>.json`에 시각, exit 코드(시그널로 죽었으면
+  `killed by signal N`), 마지막 한 줄, 주기를 쓴다. `python3 scripts/orca_job.py status`가 읽고, `setup-pc` 점검이
+  마지막 실행이 실패했거나 주기의 3배를 넘게 안 돈 작업을 warn 행으로 보인다.
+- **run history:** Orca는 자동화마다 최근 100회차만 남긴다(실측: runNumber 108~207이 한 번에 읽힘). 3분 주기라도
+  쌓이지 않는다. 그만큼 Orca 쪽 기록은 최근 5시간뿐이라 길게 볼 때는 위의 `jobs/*.json`을 쓴다.
+- **시간 제한:** precheck는 300초에서 끊기고, 작업은 280초에서 먼저 끊어 `timed out`으로 기록한다.
 
 ## 장치별 성질
 
@@ -60,7 +84,7 @@ skills-sync setup disable <이름>         # 끄기
 | skill_usage 수집·reflect 깨우기 | Orca automation precheck(새 신호도, 닫힌 standing PR 뒤에 기다리는 교훈도 없으면 exit 1) + 에이전트 |
 | PR 머지 후 확인 | Orca automation + precheck(gh 상태 diff). 로컬 작업이 필요 없으면 클라우드 routine |
 | 채팅 멘션 감시 | Orca automation + precheck(설정·잠금만. Slack은 MCP로만 닿아 새 메시지 유무는 회차 안에서 판단) |
-| PC 사용량 감시·선제 정리 | LaunchAgent(모델이 판단할 것이 없고, 부하 중에 세션을 띄우지 않으려고. [pressure.md](pressure.md)) |
+| PC 사용량 감시·선제 정리 | Orca automation + precheck 안에서 직접 실행(에이전트 없음. [pressure.md](pressure.md)) |
 | 세션 안 사건 반응 | `Monitor` 또는 `run_in_background`. 결정적인 반응은 hooks |
 
 ## Orca automation을 걸 때 지킬 것
@@ -112,8 +136,10 @@ skills-sync setup disable <이름>         # 끄기
 오케스트레이션 워커 터미널)과, `reap.user_folders`에 지정한 폴더에서 7일 넘게 안 바뀐 항목을 정리한다. 회차에는 모델이
 없다. Orca는 precheck를 Claude 세션 밖에서 직접 실행하므로 거기서 돈 정리는 권한 프롬프트나 auto mode 분류기를 만나지
 않는다. precheck `reap.py precheck --act`가 계획을 만들고, 같은 프로세스에서 `reap --plan`과 같은 경로(다시 scan, 같은
-identity만, 대상 잠금 안에서 guard 재확인)로 정리한 뒤 늘 exit 1로 끝나서 Orca가 에이전트를 띄우지 않는다(실행 기록은
-`skipped_precheck`). 실제로 한 일은 `<state>/janitor-runs.jsonl`에 회차마다 한 줄 남는다. 실패한 대상은 그 대상만 하루
+identity만, 대상 잠금 안에서 guard 재확인)로 정리한다. 이 명령은 위의 공용 실행기 `orca_job.py run janitor -- …` 안에서
+돌아 그 결과(exit 0, 돌지 못한 회차는 2)가 `jobs/janitor.json`에 남고, 실행기가 늘 exit 1로 끝나서 Orca가 에이전트를 띄우지
+않는다(실행 기록은 `skipped_precheck`). 480초 뒤에는 새 대상을 시작하지 않고, 570초가 되면 진행 중인 대상을 끊어 실패로
+기록한다(실행기의 시간 제한 580초, precheck 600초보다 앞). 실제로 한 일은 `<state>/janitor-runs.jsonl`에 회차마다 한 줄 남는다. 실패한 대상은 그 대상만 하루
 쉬고(`janitor-fails.json`), chrome-window는 브라우저에서 URL을 확인해야 하므로 손대지 않는다. 사람 결정 카드, chrome-window,
 쉬는 대상은 `reap.inbox_to`로 한 통에 묶어 보내고, 지난번에 보낸 목록에 없던 것이 생겼을 때만 다시 보낸다. 도구는 영구 삭제도
 휴지통 비우기도 하지 않지만, OS 설정(Finder의 "30일 후 휴지통에서 항목 제거")이 켜져 있으면 휴지통으로 옮긴 것은
@@ -121,16 +147,16 @@ identity만, 대상 잠금 안에서 guard 재확인)로 정리한 뒤 늘 exit 
 `$AGENT_SKILLS_TRASH`(일반 폴더)를 주지 않는 한 옮기지 않고 남긴다.
 
 ```bash
-python3 <reap.py 절대 경로> precheck --act   # 예약 회차: 계획 → 정리 → 늘 exit 1. 다른 회차가 돌고 있으면 바로 exit 1
+python3 <reap.py 절대 경로> precheck --act   # 예약 회차: 계획 → 정리 → exit 0(돌지 못하면 2). 다른 회차가 돌고 있으면 바로 exit 0
 python3 <reap.py 절대 경로> precheck     # 계획만(에이전트 회차용): 대상이 있으면 exit 0. 지난 reap 이 실패한 대상과 같으면 하루 동안, 같은 계획이 reap 없이 plan_repeat 번 쌓이면 하루 한 번만 exit 0
 skills-sync setup enable janitor        # 등록·갱신은 이 명령으로 한다. 아래 schedule 은 그 내부와 runner 용
-python3 <reap.py 절대 경로> schedule     # 만들 `orca automations create …` 명령을 출력만 한다. 스킬을 로드하는 체크아웃에서 돌린다
+python3 <reap.py 절대 경로> schedule     # 같은 precheck·trigger 로 만들 `orca automations create …` 명령을 출력만 한다(prompt 는 Run now 용). 스킬을 로드하는 체크아웃에서 돌린다
 python3 <reap.py 절대 경로> schedule --workspace path:<runner>   # runner worktree 에서 돌린다(위 "지킬 것"의 모델 항목)
 python3 <reap.py 절대 경로> schedule --write   # 실제로 만든다
 orca automations edit <id> --prompt "<schedule 이 출력한 --prompt 값>"   # 이미 있는 automation 의 프롬프트만 바꾼다
 ```
 
-주기는 30분(`7,37 * * * *`, precheck timeout 600초)이다. 모델을 부르지 않으니 회차 비용은 scan이다(대상이 있으면 계획과 실행 직전 재확인, 두 번). 에이전트 회차로 등록한 PC(precheck에 `--act`가 없는 것)는 `skills-sync setup`이 `reap schedule 과 다름: precheck, prompt (enable 로 맞춤)`으로 보여 주고, 오너가 메인 체크아웃에서 `skills-sync setup enable janitor`를 실행하면 이 값으로 고쳐진다. 프롬프트는 precheck를 건너뛰는 Run now 때만 쓰인다. 등록된 실제 주기는 `orca automations list --json`의 `rrule`로 확인한다. 그 사이에 PC 부하가 높아지면 두 번째 automation `janitor-load`(`27,57 * * * *`, `precheck --load --act`)가 같은 회차를 한 번 더 돈다(30분 janitor 옆에서는 아래 쿨다운 때문에 거의 돌지 않는다). janitor를 꺼 두었거나 지운 PC에는 만들지 않고, janitor가 옮겨 간 worktree에 만든다. 이 precheck는 5분 load만 읽고, load가 `reap.load_limit`(기본 CPU 수) 이상이며 janitor가 등록돼 켜져 있고(Orca 앱에서 끄거나 지운 것도, automation 목록을 못 읽은 것도 꺼짐으로 본다) 두 job 어느 쪽도 `reap.load_cooldown_minutes`(기본 60분) 안에 precheck를 돌리지 않았을 때만 전체 precheck로 넘어간다. 쿨다운은 부하 job만 멈추고, 30분 job은 늘 제 시각에 돈다. 부하가 높을 때가 끝난 카드와 compose 스택(`compose-stack`: `orch heavy`가 등록한 것)이 가장 비싼 때이기 때문이다. pressure-watch LaunchAgent가 없는 PC에서도 Orca가 돌린다. 두 job은 `<state>/janitor.lock`을 함께 써서 한 번에 한 회차만 돈다. 규칙과 ledger 형식은 [reap-resources SKILL.md](../skills/reap-resources/SKILL.md).
+주기는 30분(`*/30 * * * *`, precheck timeout 600초)이다. 모델을 부르지 않으니 회차 비용은 scan이다(대상이 있으면 계획과 실행 직전 재확인, 두 번). 에이전트 회차로 등록한 PC(옛 `7,37 * * * *`, precheck에 `orca_job.py`가 없는 것)는 `skills-sync setup`이 `등록된 내용이 이 체크아웃과 다름: <필드> (enable 로 맞춤)`으로 보여 주고, 오너가 메인 체크아웃에서 `skills-sync setup enable janitor`를 실행하면 이 값으로 고쳐진다. 남는 `--model` 인자는 에이전트가 뜨지 않으니 쓰이지 않는다. 등록된 실제 주기는 `orca automations list --json`의 `rrule`로 확인한다. 그 사이에 PC 부하가 높아지면 두 번째 automation `janitor-load`(`27,57 * * * *`, `precheck --load --act`)가 같은 회차를 한 번 더 돈다(30분 janitor 옆에서는 아래 쿨다운 때문에 거의 돌지 않는다). janitor를 꺼 두었거나 지운 PC에는 만들지 않고, janitor가 옮겨 간 worktree에 만든다. 이 precheck는 5분 load만 읽고, load가 `reap.load_limit`(기본 CPU 수) 이상이며 janitor가 등록돼 켜져 있고(Orca 앱에서 끄거나 지운 것도, automation 목록을 못 읽은 것도 꺼짐으로 본다) 두 job 어느 쪽도 `reap.load_cooldown_minutes`(기본 60분) 안에 precheck를 돌리지 않았을 때만 전체 precheck로 넘어간다. 쿨다운은 부하 job만 멈추고, 30분 job은 늘 제 시각에 돈다. 부하가 높을 때가 끝난 카드와 compose 스택(`compose-stack`: `orch heavy`가 등록한 것)이 가장 비싼 때이기 때문이다. pressure-watch LaunchAgent가 없는 PC에서도 Orca가 돌린다. 두 job은 `<state>/janitor.lock`을 함께 써서 한 번에 한 회차만 돈다. 규칙과 ledger 형식은 [reap-resources SKILL.md](../skills/reap-resources/SKILL.md).
 
 ## 세션 순찰 (`orch patrol`)
 
