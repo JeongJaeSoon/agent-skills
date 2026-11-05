@@ -175,6 +175,23 @@ with tempfile.TemporaryDirectory() as d:
         card_watch.main(["--self", "me", "--min-free-gb", "0", "--state", str(state), "--interval", "1", "--timeout-ms", "500"])
     assert out.getvalue().startswith("QUIET nothing new; start the watch again; 화면 판정 없음 1"), out.getvalue()
 
+    # Claude Code's `waiting` (a dialog open) is classified, and a state nobody classified only adds a warning line:
+    # neither ends the watch before its timeout.
+    real_read = agent_signal.read
+    for status, warn in (("waiting", False), ("hibernating", True)):
+        agent_signal.read = lambda status=status, **k: (
+            [{"sessionId": f"s-{h}", "kind": "interactive", "status": status, "waitingFor": "dialog open"}
+             for h in ("h1", "h2", "h3", "h4")], None, "")
+        screens = {"h1": idle, "h2": idle, "h3": idle, "h4": idle}
+        prog.read_screen = lambda h: screens[h]
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            card_watch.main(["--self", "me", "--min-free-gb", "0", "--state", str(pathlib.Path(d) / f"w-{status}.json"),
+                             "--interval", "1", "--timeout-ms", "500"])
+        assert out.getvalue().startswith("QUIET nothing new; start the watch again"), (status, out.getvalue())
+        assert ("a state outside busy, idle, blocked" in out.getvalue()) == warn, (status, out.getvalue())
+    agent_signal.read = real_read
+
     # Without --self the watch skips the terminal named by ORCA_TERMINAL_HANDLE, so it never reports its own session.
     screens = {"me": menu, "h1": idle, "h2": idle, "h3": idle, "h4": idle}
     prog.read_screen = lambda h: screens[h]
