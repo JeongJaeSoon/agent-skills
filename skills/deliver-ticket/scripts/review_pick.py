@@ -60,7 +60,11 @@ def codex_ready(timeout):
     """None when `codex login status` exits 0 within timeout, else why not.
     Output goes to a file, not a pipe, and the probe runs in its own process group that a timeout kills whole:
     a child left holding a pipe open would keep the read waiting past the timeout."""
-    with tempfile.TemporaryFile() as out:
+    try:
+        out = tempfile.TemporaryFile()
+    except OSError as e:
+        return f"no temporary file for the codex probe ({e.strerror})"
+    with out:
         try:
             p = subprocess.Popen(["codex", "login", "status"], stdin=subprocess.DEVNULL, stdout=out, stderr=out,
                                  start_new_session=True)

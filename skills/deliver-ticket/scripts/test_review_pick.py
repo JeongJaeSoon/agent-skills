@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 PICK = pathlib.Path(__file__).resolve().parent / "review_pick.py"
 GIT = shutil.which("git")
@@ -73,6 +74,16 @@ class ReviewPickTest(unittest.TestCase):
         code, out = self.run_pick(None, "--timeout", "1")
         self.assertLess(time.monotonic() - start, 10)
         self.assertEqual((code, out.split()[0]), (0, "claude"))
+
+    def test_no_temporary_file_falls_back_instead_of_crashing(self):
+        sys.path.insert(0, str(PICK.parent))
+        self.addCleanup(sys.path.remove, str(PICK.parent))
+        import review_pick
+
+        def refuse():
+            raise OSError(28, "No space left on device")
+        with mock.patch.object(review_pick.tempfile, "TemporaryFile", refuse):
+            self.assertEqual(review_pick.pick({}, None, 1)[::2], ("claude", 0))
 
     def test_wrong_config_shape_exits_2_without_calling_codex(self):
         marker = self.tmp / "called"
