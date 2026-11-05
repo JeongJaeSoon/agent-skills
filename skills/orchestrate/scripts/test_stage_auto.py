@@ -342,7 +342,7 @@ assert not made["kappa/K-1"]["done_at"] and held["kappa"]["cards"]["task_k1"]["e
 made, _, _ = stage_auto.build([kappa], {**blind, "prs": pr_k("CLOSED")}, now + dt.timedelta(hours=2), held)
 assert made["kappa/K-1"]["done_at"] == fleet.iso(now), made["kappa/K-1"]
 md = stages.render_md(stages.of_program(stages.table(th), "theta"))
-assert "| T-5: probe (중단) |" in md and "| T-1 (끝남) | acme/th#31 | ✅ 3333333 | 해당 없음 | 해당 없음 |" in md, md
+assert "- T-5: probe (중단) — dev 해당 없음 · prod 해당 없음" in md.splitlines() and "- T-1 (끝남) — acme/th#31 · 머지 ✅ 3333333 · dev 해당 없음 · prod 해당 없음" in md.splitlines(), md
 # stages-auto.json is written only when its content changes: the same tick five minutes on leaves it (and the ended
 # card's time) alone. The collector's stage_auto_at keeps the reorient warning quiet meanwhile.
 written, mtime = stage_auto.read()["generated_at"], stage_auto.path().stat().st_mtime_ns
