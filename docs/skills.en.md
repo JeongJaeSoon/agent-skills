@@ -72,7 +72,7 @@ Which skill owns a PR, and who merges it:
   - **Review:**
     - Before review, `prune-comments` cleans up the comments in the diff.
     - Even a trivial diff goes through a reviewer who isn't the author (the `/code-review` subagent).
-    - Use an independent review suited to the change; record the reviewed SHA, evidence and limits. See `references/independent-review.md`.
+    - Use an independent review suited to the change; record the reviewed SHA, evidence and limits. `scripts/review_pick.py` picks the reviewer: Codex when it answers, else a fresh-context Claude reviewer; `review.reviewer` (`auto` by default, `codex` or `off`) changes that. See `references/independent-review.md`.
     - Findings are sorted into Act on / Consider / Noted / Dismissed. It repeats for up to 5 rounds until no Act on is left, and any remaining Consider items go in the PR body.
   - **Commits:** Small, in an order that tells the story. For a bug the failing test comes before the fix; for a refactor the deletion comes before the new shape.
   - **Before pushing:** Runs the whole test suite and E2E. Backends are checked with the CLI or curl and UIs with browser automation, and heavy runs go through `orch heavy`.
@@ -84,7 +84,7 @@ Which skill owns a PR, and who merges it:
     - Inside a program: a card whose first prompt approves the merge lands its own PR with `orch land` and closes. It stops at READY, with a `READY-WAIT:` line, only for a wait on a person or another PR, and under human-gate.
     - Standalone card: squash-merges on its own unless the user put it on hold.
     - After leaving the completion comment, it moves on to `handoff-ticket` in the same turn.
-- **Bundled:** `scripts/sticky-comment.sh` (keeps PR test results in a single comment). The skill body keeps only the rules that decide what ships; procedures are split into references: `evidence.md` (bug, refactor and existing-fix procedures), `independent-review.md` (independent review procedures), `pull-request.md` (PR body sections and stacks), `review-loop.md` (the loop from opening the PR to ready, and watching when someone else merges), `review-bot-triage.md` (how to sort review threads into fix / dismiss / ask; used for CodeRabbit, Copilot and human reviews).
+- **Bundled:** `scripts/sticky-comment.sh` (keeps PR test results in a single comment), `scripts/review_pick.py` (picks the independent reviewer). The skill body keeps only the rules that decide what ships; procedures are split into references: `evidence.md` (bug, refactor and existing-fix procedures), `independent-review.md` (independent review procedures), `pull-request.md` (PR body sections and stacks), `review-loop.md` (the loop from opening the PR to ready, and watching when someone else merges), `review-bot-triage.md` (how to sort review threads into fix / dismiss / ask; used for CodeRabbit, Copilot and human reviews).
 - **Related:** `figure-it-out`, `architect`, `how`, `why`, `tdd`, `prune-comments`, the verdict framework from `interrogate`, `write-plainly`, `blast-radius`, `write-ticket`, `use-tracker`, `use-notes`, `orchestrate` (`orch land`, `orch heavy`), `handoff-ticket`.
 
 ### ui-review

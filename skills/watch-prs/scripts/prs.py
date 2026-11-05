@@ -32,9 +32,10 @@ business-hours, after_hours and assign_reviewers values (profiles applied) for a
 merges prints the `gh pr merge` command for each ready_to_merge item in plan.json; the round runs
 them itself. verify then checks each is MERGED, waits for the merge commit's CI and rewrites body.txt.
 dispatch reads plan.json and prints one
-`orca orchestration worker-start` line per repo with due unreleased items, its brief kept in brief-<run>-<n>.txt;
-it runs nothing, and the round only forwards the lines: worker-start works only from the orchestrator's or lead's terminal bound
-to the Run. schedule prints the
+`skills-sync card <brief-<run>-<n>.txt>` line per repo with due unreleased items (the brief's REPORT names
+prs.dispatch_run, else an inbox_to of the form run:<id>; with neither it exits non-zero); it runs nothing, and the round
+only forwards the lines: run from the orchestrator's or lead's terminal bound to the Run, card.py starts a supervised
+worker parented under that session (new-child), never a new top-level worktree. schedule prints the
 `orca automations create` command (`edit <id>` with --edit), its steps built from the configured kinds, and
 runs it only with --write.
 Config: ~/.claude/agent-skills.json → "prs" (see SKILL.md). State: <--state or $AGENT_SKILLS_STATE>/prs
@@ -43,6 +44,9 @@ Slack review requests come from watch-mentions' seen ledger (<state>/mentions/se
 category review with a `pr`); a missing ledger means GitHub only.
 """
 import datetime as dt, fnmatch, json, os, pathlib, re, shlex, subprocess, sys, time, zoneinfo
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3] / "scripts"))
+import card  # noqa: E402  (a release brief carries card.py's CLOSE row)
 
 
 def opt(name, default=None):
@@ -1276,40 +1280,59 @@ def round_steps(state):
     return [f"{i['key']}\t{i['command']}" for i in steps]
 
 
-def release_brief(repo, items, cfg):
+def release_brief(repo, items, cfg, run_id):
     decl = cfg["deploy"][repo]
-    lines = [f"{repo} 에서 머지된 PR 을 dev 에서 확인하고 증거를 각 PR 에 sticky comment 로 남긴다.",
+    lines = [f"/goal {repo} 에서 머지된 PR 을 dev 에서 확인하고 증거를 각 PR 에 sticky comment 로 남긴다.",
              f"절차: {REFERENCE} 를 따른다.", "PR:"]
     lines += [f"- #{i['number']} {i['url']} merge {i['merge_commit']} · "
               + ("dev 리비전을 읽지 못함, 직접 확인" if i["deployed"] is None else "dev 에 반영됨" if i["deployed"]
                  else f"dev({i['deployed_revision']}) 에 아직 없음") for i in items]
     lines += ["배포 선언:"] + [f"- {k}: {decl[k]}" for k in ("dev_release", "revision_cmd", "logs", "verify", "ticket") if decl.get(k)]
-    lines += [f"승인: {cfg['release_approval']}" if cfg.get("release_approval")
-              else "승인: dev 배포 승인이 없다. 동기화를 기다리는 것 말고 배포가 필요하면 오케스트레이터나 리드에게 묻는다.",
-              "사람만: 프로덕션 배포, dev 밖의 환경, 되돌릴 수 없는 작업. 하지 않고 오케스트레이터나 리드에게 보고한다.",
-              "권한 프롬프트·auto mode 분류기·hook·사람이 거부한 행위는 어떤 형태로도 다시 시도하지 않는다"
-              "(재실행, 스크립트·다른 도구로 옮기기, 대상 이름 바꾸기, 서브에이전트나 다른 세션에 넘기기 모두 금지). "
-              "무엇을 하려던 것인지, 거부 종류, 정확한 명령을 보고한다.",
-              "끝나면 worker_done 한 통에 PR 별 sticky comment URL, 확인한 리비전, 읽은 로그 줄을 담는다."]
+    # card.py copies only the /goal line and the rows (APPROVED, FORBIDDEN, CLOSE, REPORT) into the first prompt; the
+    # body above is read from the brief file. So the approval and the bans are rows, and card.py puts the refused-act
+    # paragraph at the head of the FORBIDDEN row, keeping these lines after it.
+    approval = cfg.get("release_approval")
+    lines += ([f"APPROVED: {approval}"] if approval else []) + ["FORBIDDEN:"] + (
+        [] if approval else ["  dev 배포 승인이 없다. 동기화를 기다리는 것 말고 배포가 필요하면 오케스트레이터나 리드에게 묻는다."])
+    lines += ["  사람만: 프로덕션 배포, dev 밖의 환경, 되돌릴 수 없는 작업. 하지 않고 오케스트레이터나 리드에게 보고한다.",
+              card.CLOSE_LINE,
+              f'REPORT: 막히면 `orca orchestration send --to run:{run_id} --type escalation --subject "dev 확인" '
+              '--body "<막힌 이유>"`. 끝나면 worker_done 한 통에 PR 별 sticky comment URL, 확인한 리비전, 읽은 로그 줄을 담는다.']
     return "\n".join(lines)
 
 
+BRIEF_ARG = "<brief>"  # dispatch_cmds' placeholder for the brief file the dispatch subcommand writes
+
+
+def dispatch_run(cfg):
+    """The Run the workers report to: prs.dispatch_run, else an inbox_to that is a Run address."""
+    run_id = cfg.get("dispatch_run") or (cfg.get("inbox_to") or "").removeprefix("run:") * (
+        (cfg.get("inbox_to") or "").startswith("run:"))
+    if not run_id:
+        raise ValueError("dispatch: no Run for the workers to report to; set prs.dispatch_run (or an inbox_to of "
+                         "the form run:<id>)")
+    return run_id
+
+
 def dispatch_cmds(plan, cfg):
-    """One worker-start per repo with due unreleased items; items of other kinds are only messaged."""
+    """One (brief, `skills-sync card` argv) per repo with due unreleased items; items of other kinds are only
+    messaged. card.py parents the worker under the session that runs the line, never a new top-level worktree."""
     by_repo = {}
     for i in plan["new"]:
         if i["kind"] == "unreleased" and i["repo"] in cfg["deploy"]:
             by_repo.setdefault(i["repo"], []).append(i)
+    if not by_repo:
+        return []
+    run_id = dispatch_run(cfg)
     cmds = []
     for repo, items in sorted(by_repo.items()):
         decl = cfg["deploy"][repo]
-        cmd = ["orca", "orchestration", "worker-start", "--spec", release_brief(repo, items, cfg),
-               "--task-title", f"dev 확인: {repo} " + " ".join(f"#{i['number']}" for i in items),
-               "--repo", decl.get("orca_repo") or f"name:{repo.split('/')[1]}", "--worktree", "new-top-level",
-               "--agent", cfg["worker_agent"], "--json"]
-        if cfg.get("dispatch_run"):
-            cmd[-1:-1] = ["--run", cfg["dispatch_run"]]
-        cmds.append(cmd)
+        cmd = ["skills-sync", "card", BRIEF_ARG,
+               "--repo", decl.get("orca_repo") or f"name:{repo.split('/')[1]}",
+               "--name", f"dev-check-{repo.split('/')[1]}-{int(plan['run'])}",
+               "--display-name", f"dev 확인: {repo} " + " ".join(f"#{i['number']}" for i in items),
+               "--agent", cfg["worker_agent"]]
+        cmds.append((release_brief(repo, items, cfg, run_id), cmd))
     return cmds
 
 
@@ -1341,8 +1364,8 @@ PROMPT_STEPS = {
         "그 PR 과 명령을 오케스트레이터나 리드에게 보고하되, Slack 의뢰는 그대로 처리한다. "
         "이 단계의 GitHub 쓰기는 retrigger·remind_author 코멘트와 request 의 github 명령뿐이다."),
     "unreleased": (
-        "보내기가 성공했을 때만 `{run[dispatch]}` 를 실행한다. 출력된 줄은 실행하지 않는다: worker-start 는 Run 에 묶인 "
-        "오케스트레이터나 리드의 터미널에서만 된다. 줄이 있으면 같은 줄이 담긴 {dispatch_file} 을 `--body \"$(cat {dispatch_file})\"` 로, 제목 "
+        "보내기가 성공했을 때만 `{run[dispatch]}` 를 실행한다. 출력된 줄은 실행하지 않는다: 그 `skills-sync card` 는 Run 에 묶인 "
+        "오케스트레이터나 리드의 터미널에서 실행해야 워커가 그 세션 아래에 붙는다. 줄이 있으면 같은 줄이 담긴 {dispatch_file} 을 `--body \"$(cat {dispatch_file})\"` 로, 제목 "
         "\"watch-prs: 릴리스 워커 <줄 수>건 시작 요청\" 으로 오케스트레이터나 리드에게 한 통 보낸다(줄이 없으면 건너뛴다). 그 전송이 성공했을 때만 commit 으로 간다. "
         "이 회차는 워커를 띄우지도 배포하지도 않는다."),
 }
@@ -1483,14 +1506,16 @@ def main():
         plan = read_json(STATE / "plan.json", None)
         if not plan:
             sys.exit("dispatch: no plan.json; run plan --body first")
-        # The brief is multi-line, so it goes to a file and each printed command stays on one line.
+        try:
+            cmds = dispatch_cmds(plan, cfg)
+        except ValueError as e:
+            sys.exit(str(e))
         lines = []
-        for n, line in enumerate(dispatch_cmds(plan, cfg)):
-            i = line.index("--spec")
+        for n, (text, line) in enumerate(cmds):
             # Named by run: the orchestrator or lead may start the line after the next round has written its own briefs.
             brief = STATE / f"brief-{int(plan['run'])}-{n}.txt"
-            brief.write_text(line[i + 1])
-            lines.append(shlex.join(line[:i] + line[i + 2:]) + f' --spec "$(cat {shlex.quote(str(brief))})"')
+            brief.write_text(text + "\n")
+            lines.append(shlex.join([str(brief) if a == BRIEF_ARG else a for a in line]))
         # The round forwards these as a message body; a file keeps `$(cat …)` from expanding in the round's shell.
         (STATE / "dispatch.txt").write_text("\n".join(lines))
         print("\n".join(lines))

@@ -68,7 +68,7 @@ PR 을 맡는 스킬과 머지 주체:
   - **리뷰:**
     - 리뷰 전에 `prune-comments`로 diff의 주석을 정리한다.
     - 사소한 diff도 작성자 아닌 리뷰어(서브에이전트 `/code-review`)를 거친다.
-    - 변경 규모에 맞는 독립 리뷰를 하고 검토한 SHA·근거·남은 한계를 기록한다. 절차는 `references/independent-review.md`에 있다.
+    - 변경 규모에 맞는 독립 리뷰를 하고 검토한 SHA·근거·남은 한계를 기록한다. 리뷰어는 `scripts/review_pick.py`가 고른다. Codex가 응답하면 Codex, 아니면 새 맥락 Claude 리뷰어이고, `review.reviewer`(`auto` 기본 / `codex` / `off`)로 바꾼다. 절차는 `references/independent-review.md`에 있다.
     - 발견 사항은 Act on / Consider / Noted / Dismissed로 나눈다. Act on이 없어질 때까지 최대 5라운드 반복하고, 남은 Consider는 PR 본문에 적는다.
   - **커밋:** 작게, 이야기가 되는 순서로 커밋한다. 버그는 실패 테스트가 수정보다 먼저, 리팩터링은 삭제가 새 모양보다 먼저다.
   - **올리기 전:** 테스트 스위트와 E2E를 모두 돌린다. 백엔드는 CLI·curl로, UI는 브라우저 자동화로 확인하고, 무거운 실행은 `orch heavy`로 돌린다.
@@ -80,7 +80,7 @@ PR 을 맡는 스킬과 머지 주체:
     - 프로그램 안: 첫 프롬프트가 머지를 승인한 카드는 `orch land`로 자기 PR을 머지하고 닫는다. 사람이나 다른 PR을 기다릴 때만 `READY-WAIT:` 줄과 함께 READY에서 멈추고, human-gate도 READY에서 멈춘다.
     - 단독 카드: 사용자가 보류하지 않았으면 스스로 squash 머지한다.
     - 완료 댓글을 남긴 뒤 같은 턴에 `handoff-ticket`으로 넘어간다.
-- **동봉:** `scripts/sticky-comment.sh`(PR 테스트 결과 댓글을 하나로 유지). 본문에는 무엇을 배포할지 가르는 규칙만 두고, 절차는 references로 나눴다. `evidence.md`(버그·리팩터링·기존 수정 절차), `independent-review.md`(독립 리뷰 근거와 실패 처리), `pull-request.md`(PR 본문 절과 stack), `review-loop.md`(PR을 연 뒤 ready까지의 루프, 남이 머지할 때 지켜보기), `review-bot-triage.md`(리뷰 스레드를 fix / dismiss / ask로 나누는 기준. 독립 리뷰어, CodeRabbit, Copilot, 사람 리뷰에 쓴다).
+- **동봉:** `scripts/sticky-comment.sh`(PR 테스트 결과 댓글을 하나로 유지), `scripts/review_pick.py`(독립 리뷰어 선택). 본문에는 무엇을 배포할지 가르는 규칙만 두고, 절차는 references로 나눴다. `evidence.md`(버그·리팩터링·기존 수정 절차), `independent-review.md`(독립 리뷰 근거와 실패 처리), `pull-request.md`(PR 본문 절과 stack), `review-loop.md`(PR을 연 뒤 ready까지의 루프, 남이 머지할 때 지켜보기), `review-bot-triage.md`(리뷰 스레드를 fix / dismiss / ask로 나누는 기준. 독립 리뷰어, CodeRabbit, Copilot, 사람 리뷰에 쓴다).
 - **관계:** `figure-it-out`, `architect`, `how`, `why`, `tdd`, `prune-comments`, `interrogate`의 판정 틀, `write-plainly`, `blast-radius`, `write-ticket`, `use-tracker`, `use-notes`, `orchestrate`(`orch land`, `orch heavy`), `handoff-ticket`.
 
 ### ui-review

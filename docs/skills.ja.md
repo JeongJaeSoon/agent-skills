@@ -72,7 +72,7 @@ PR を受け持つスキルとマージする主体:
   - **レビュー:**
     - レビューの前に `prune-comments` で diff のコメントを整理します。
     - 些細な diff でも、作成者ではないレビュアー（サブエージェントの `/code-review`）を通します。
-    - 変更の規模に合った独立レビューを行い、確認した SHA・根拠・制約を記録します。手順は `references/independent-review.md` を参照します。
+    - 変更の規模に合った独立レビューを行い、確認した SHA・根拠・制約を記録します。レビュアーは `scripts/review_pick.py` が選びます。Codex が応答すれば Codex、しなければ新しいコンテキストの Claude レビュアーで、`review.reviewer`（既定は `auto`、ほかに `codex` / `off`）で変えられます。手順は `references/independent-review.md` を参照します。
     - 指摘は Act on / Consider / Noted / Dismissed に分けます。Act on がなくなるまで最大5ラウンド繰り返し、残った Consider は PR 本文に書きます。
   - **コミット:** 小さく、話の筋が通る順にコミットします。バグなら失敗するテストを修正より先に、リファクタリングなら削除を新しい形より先にします。
   - **push の前:** テストスイートと E2E をすべて回します。バックエンドは CLI や curl で、UI はブラウザ自動化で確認し、重い実行は `orch heavy` で回します。
@@ -84,7 +84,7 @@ PR を受け持つスキルとマージする主体:
     - プログラムの中: 最初のプロンプトがマージを承認したカードは `orch land` で自分の PR をマージして閉じます。人や別の PR を待つときだけ `READY-WAIT:` の行を付けて READY で止まり、human-gate も READY で止まります。
     - 単独のカード: ユーザーが保留にしていなければ、自分で squash マージします。
     - 完了コメントを残したら、同じターンのうちに `handoff-ticket` へ移ります。
-- **同梱:** `scripts/sticky-comment.sh`（PR のテスト結果コメントを一つに保つ）。本文には何をデプロイするかを決めるルールだけを置き、手順は references に分けました。`evidence.md`（バグ・リファクタリング・既存の修正の手順）、`independent-review.md`（独立レビューの手順）、`pull-request.md`（PR 本文の節と stack）、`review-loop.md`（PR を開いてから ready までのループ、他の人がマージするときの見守り）、`review-bot-triage.md`（レビュースレッドを fix / dismiss / ask に分ける基準。CodeRabbit、Copilot、人のレビューに使います）。
+- **同梱:** `scripts/sticky-comment.sh`（PR のテスト結果コメントを一つに保つ）、`scripts/review_pick.py`（独立レビュアーを選ぶ）。本文には何をデプロイするかを決めるルールだけを置き、手順は references に分けました。`evidence.md`（バグ・リファクタリング・既存の修正の手順）、`independent-review.md`（独立レビューの手順）、`pull-request.md`（PR 本文の節と stack）、`review-loop.md`（PR を開いてから ready までのループ、他の人がマージするときの見守り）、`review-bot-triage.md`（レビュースレッドを fix / dismiss / ask に分ける基準。CodeRabbit、Copilot、人のレビューに使います）。
 - **関連:** `figure-it-out`、`architect`、`how`、`why`、`tdd`、`prune-comments`、`interrogate` の判定の枠組み、`write-plainly`、`blast-radius`、`write-ticket`、`use-tracker`、`use-notes`、`orchestrate`（`orch land`、`orch heavy`）、`handoff-ticket`。
 
 ### ui-review
