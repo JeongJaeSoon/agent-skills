@@ -38,7 +38,7 @@ Store: $PROGRAMS_HOME or ~/.claude/programs. The dashboard writes only under <sl
 Fleet state: $ORCH_FLEET_STATE or ~/.local/state/agent-skills/dashboard (see fleet.py). ORCH_FLEET=off disables it,
 ORCH_SKILLS=off disables only the skill usage collect, and ORCH_PR_STATS=off only the PR stats collect.
 """
-import concurrent.futures, copy, datetime as dt, fcntl, functools, hashlib, http.server, itertools, json, os, pathlib, plistlib, re, shutil, signal, socket, subprocess, sys, tempfile, threading, time, urllib.request
+import concurrent.futures, copy, datetime as dt, fcntl, functools, hashlib, http.server, itertools, json, os, pathlib, plistlib, re, shutil, signal, socket, subprocess, sys, tempfile, threading, time, urllib.parse, urllib.request
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -1862,7 +1862,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == "/api/fleet/state":
             # Only the page says it is looking (?viewed=1, app.js on a visible tab). A script or a curl reading the file
             # used to count as a view and kept the 10 s Orca poll and the per-tick PR probes running.
-            if re.search(r"[?&]viewed=1\b", self.path):
+            if urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("viewed") == ["1"]:
                 if time.monotonic() - FLEET_VIEWED[0] > FLEET_VIEW_S:
                     FLEET_FORCE[0] = True  # the page just opened: runs and every open PR now, not when their turn comes
                     FLEET_WAKE.set()
@@ -2344,8 +2344,11 @@ def keys_of(paths):
 
 
 def pressure_signature():
-    """pressure.py history reads its own files beside the others in the state root: its history, queue, plan and reading."""
-    return keys_of(sorted(state_root().glob("pressure*")) + [PRESSURE])
+    """pressure.py history reads its own files beside the others in the state root (history, queue, plan, reading), the
+    thresholds and interval in agent-skills.json, and whether its LaunchAgent plist is installed."""
+    config = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-skills.json").expanduser()
+    plists = sorted(pathlib.Path("~/Library/LaunchAgents").expanduser().glob("*pressure-watch.plist"))
+    return keys_of(sorted(state_root().glob("pressure*")) + [PRESSURE, config] + plists)
 
 
 def sent_signature():

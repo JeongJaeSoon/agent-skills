@@ -293,10 +293,28 @@ assert status("/no-such-page", {"Host": f"evil.example:{port}"}) == 404
 dash.FLEET_VIEWED[0] = 0.0
 status("/api/fleet/state", {})
 assert dash.FLEET_VIEWED[0] == 0.0, "a read without ?viewed=1 was counted as a view"
+for q in ("?viewed=1.0", "?viewed=10", "?viewed=1-no", "?x=?viewed=1", "?viewed=0", "?viewed=1&viewed=2"):
+    status("/api/fleet/state" + q, {})
+    assert dash.FLEET_VIEWED[0] == 0.0, f"{q} was counted as a view"
+dash.FLEET_FORCE[0] = False
+dash.FLEET_WAKE.clear()
 status("/api/fleet/state?viewed=1", {})
 assert dash.FLEET_VIEWED[0] > 0.0, "?viewed=1 was not counted as a view"
+assert dash.FLEET_FORCE[0] and dash.FLEET_WAKE.is_set(), "a page opening after idle must collect at once"
+status("/api/fleet/state?a=1&viewed=1", {})
 dash.FLEET_VIEWED[0], dash.FLEET_FORCE[0] = 0.0, False
 dash.FLEET_WAKE.clear()
+# pressure's own config is an input of its answer.
+cfg_file = root / "agent-skills.json"
+real_cfg = os.environ.get("AGENT_SKILLS_CONFIG")
+os.environ["AGENT_SKILLS_CONFIG"] = str(cfg_file)
+cfg_a = dash.pressure_signature()
+cfg_file.write_text('{"reap": {"pressure": {"interval": 60}}}')
+assert dash.pressure_signature() != cfg_a, "a changed agent-skills.json did not move the pressure signature"
+if real_cfg is None:
+    del os.environ["AGENT_SKILLS_CONFIG"]
+else:
+    os.environ["AGENT_SKILLS_CONFIG"] = real_cfg
 # The pressure and sent answers are built once per change of their inputs, not once per poll.
 builds = {"pressure": 0, "sent": 0}
 real_pressure_render, real_sent_render = dash.pressure_render, dash.sent_render
