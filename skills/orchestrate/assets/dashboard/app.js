@@ -971,16 +971,18 @@ function render() { renderSidebar(); renderHeader(); renderFresh(); renderView()
 
 // ETag of the last 200 per URL. Sent back only while the data it describes is still held, so a 304 never
 // leaves a null behind; a server that sends no ETag (a route not on send_cached) just answers 200 each time.
-const POLL_ETAG = {};
+// POLL_BODY holds the object that ETag came with: when another path (pollState writes S.fleet too) replaced it,
+// the ETag no longer describes what is on screen and is not sent.
+const POLL_ETAG = {}, POLL_BODY = {};
 function conditionalFetch(url, have) {
-  const etag = have ? POLL_ETAG[url] : null;
+  const etag = have && POLL_BODY[url] === have ? POLL_ETAG[url] : null;
   return fetch(url, { cache: "no-store", headers: etag ? { "If-None-Match": etag } : {} });
 }
 // Parse first, then store the ETag with its data: an ETag kept for a body that failed to parse would 304 onto stale data.
 async function readConditional(url, r) {
   const data = await r.json();
   const etag = r.headers.get("ETag");
-  if (etag) POLL_ETAG[url] = etag; else delete POLL_ETAG[url];
+  if (etag) { POLL_ETAG[url] = etag; POLL_BODY[url] = data; } else { delete POLL_ETAG[url]; delete POLL_BODY[url]; }
   return data;
 }
 

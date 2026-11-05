@@ -1074,6 +1074,7 @@ assert poll_src.lstrip().startswith("{\n  if (document.hidden || programsBusy) r
 assert "if (!document.hidden) { pollState(); pollPrograms(); }" in app_js
 assert '"If-None-Match": etag' in app_js and 'r.status === 304' in app_js
 assert "if (changed) renderSidebar();" in poll_src
+assert "POLL_BODY[url] === have" in app_js  # an ETag is sent only for the object it came with
 assert "programsBusy" in poll_src and "finally { programsBusy = false; }" in poll_src
 read_src = app_js.split("async function readConditional", 1)[1].split("\n}\n", 1)[0]
 assert read_src.index("await r.json()") < read_src.index("POLL_ETAG[url] = etag")  # parse before the ETag is kept
