@@ -143,6 +143,35 @@ Run it under `run_in_background` with `--wait-minutes`. It sleeps through yields
 
 Rebase conflicts change the patch-id. That voids the verdict, so the resolution gets re-reviewed.
 
+## Land executor
+
+With `orchestrate.land_executor` on for the program's repo, `orch land` merges nothing. It records a request for the PR's current head in `agent-skills.db` (`land_request`) and waits up to `--wait-minutes` for the result. Exit codes stay those of the table above. The merge itself runs in the `land-executor` LaunchAgent (`land_exec.py round`, every minute, no model): no agent turn merges, so no merge reaches the auto mode classifier.
+
+```json
+{"orchestrate": {"land_executor": {"enabled": true, "repos": ["owner/repo"], "verdict_sources": ["review:codex"], "max_wait_hours": 24}}}
+```
+
+The owner sets the key (`skills-config`) and turns the LaunchAgent on (`skills-sync setup enable land-executor`, which also records the `5-land-queue` step). With the key off, `orch land` merges in its own process. A settings file that names the key but cannot be parsed stops `land` with exit 1 instead of falling back to a direct merge.
+
+Each round takes the queued requests oldest first. For each one, the first check that fails leaves the PR unmerged:
+
+| Check | When it fails |
+|---|---|
+| The key is on and lists the repo, and the repo's owner is the `gh` account's login | refused, exit 1 |
+| program.json is readable, names the same repo, and `merge_policy` is `autonomous` | refused, exit 1 |
+| The request is younger than `max_wait_hours` | refused, exit 1 (expired) |
+| The PR is open, not a draft, and its head is the requested sha | refused, exit 3 (head moved: review it, `orch verdict`, land again) |
+| The latest verdict is a pass at exactly that sha, from a source in `verdict_sources` | refused, exit 3. A matching patch-id is not enough here: this is stricter than the direct path |
+| A `<!-- test-results -->` comment exists | refused, exit 3 |
+| `mergeStateStatus` is not DIRTY or BEHIND | refused, exit 3 |
+| Everything `orch land` checks (STOP, main red, hold, deps, stack order, human gate, evidence, lanes, base overlap, CI at the head, threads), with the merge pinned to the requested sha by `--match-head-commit` and a clean merge state | wait (queued, next round) or refused with land's own exit code |
+
+Stacks and `--onto-lower` are refused (exit 1): the executor pins one PR at one sha, and merge-async would also take the layers below. A round first reconciles: a request that a dead round left running goes back to the queue, and a PR GitHub shows merged is recorded once (`landed`), not refused. Each settled request is sent once each to the requesting terminal and the program's Run, as `[land-exec request N] … merged as <sha>` or `refused (exit N): <reason>`; a failed send is retried next round, so a crash between sending and recording can repeat a message. Main CI after the merge stays with whoever watches it today (the worker after exit 0, or the guardian).
+
+`orch land-exec queue` lists the requests with their reason and merge sha; each row keeps the verdict it merged on, the checked head and base sha, and the executor's git revision. The checks catch a skipped or wrongly recorded step. They prove nothing about who reviewed: every agent runs as the same user with the same token and can write any verdict source. `land-exec` is left out of the hook's `orch` allow, and `round` refuses inside an agent session (`CLAUDECODE`); both are guardrails, not identity checks.
+
+A standalone card's PR goes through the same executor once it is in a standing program for its repo: the orchestrator creates one with `orch init <repo>-standalone --repo <repo> --run <its Run> --merge-policy autonomous`, then records the card's verdict there and runs `orch land` for the PR.
+
 Main CI is every push-triggered run at the merge commit. Watch it with the lines `land` prints (`gh run list --commit <sha>`, then `gh run watch <id> --exit-status` for each run id), and record `main_green` or `main_red` only after every one has completed. A watcher's exit is not a finished run, and a failed lookup or API error leaves main unknown: `main_red` needs `gh run view <id> --json status,conclusion` to show `completed` with a non-success conclusion (the no-CI lane has no run: its VERIFY commands decide). A run cancelled by a newer push is no result; any other cancelled job is read as below before it counts. The "CI runs" ids `land` prints are the PR's runs, never main's. A watcher script of your own that parses run text can record red over green runs (a workflow name with a space shifts the columns); when one gives a false signal, fix or delete it in the same wake and record from the per-run conclusions.
 
 `land` and `land-check` also read the PR's sticky `<!-- test-results -->` comment (`deliver-ticket` §5):
@@ -184,9 +213,9 @@ A gate answered hold becomes a held item naming the PR (`orch board later add "<
 
 ## Permissions
 
-Merging inside `orch land` is what lets a worker land without a per-merge approval prompt. The plugin's PreToolUse hook (`hooks/guard.py`) makes the permission decisions a program needs, for every session and subagent where the plugin is enabled:
+Merging inside `orch land`, or in the land executor where it is on, is what lets a worker land without a per-merge approval prompt. The plugin's PreToolUse hook (`hooks/guard.py`) makes the permission decisions a program needs, for every session and subagent where the plugin is enabled:
 
-- allow this plugin's skills, `orca orchestration <verb>` except reset, worker-abandon and gate-resolve, and `orch <subcommand>` except heavy, set, init and backfill (the checks above are the review gate)
+- allow this plugin's skills, `orca orchestration <verb>` except reset, worker-abandon and gate-resolve, and `orch <subcommand>` except heavy, set, init, backfill and land-exec (the checks above are the review gate)
 - only for one simple command: an operator, redirection or substitution gets no decision
 - deny reading another terminal's Orca mailbox
 

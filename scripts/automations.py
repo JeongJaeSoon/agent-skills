@@ -340,6 +340,56 @@ class PressureWatch:
         return pressure.cmd_uninstall(), "끔 (표지를 남겨 apply 가 다시 켜지 않는다)"
 
 
+# ---------------------------------------------------------------- land-executor (LaunchAgent)
+
+def land_exec():
+    """Imported on use: it loads prog and store, which the other automations never need."""
+    sys.path.insert(0, str(REPO / "skills" / "orchestrate" / "scripts"))
+    import land_exec as le
+    return le
+
+
+class LandExecutor:
+    name = "land-executor"
+    default = False
+    what = ("orchestrate.land_executor 가 켜진 repo 에서 `orch land` 가 남긴 머지 요청을 1분마다 모델 없이 다시 검사해 "
+            "머지하는 LaunchAgent(skills/orchestrate/references/landing.md). 설정 키를 켜는 것은 skills-config 로 따로 한다")
+
+    def status(self):
+        if sys.platform != "darwin":
+            return "unsupported", "macOS LaunchAgent 전용"
+        le = land_exec()
+        spec, loaded = le.plist_spec(), le.loaded()
+        if spec is None and not loaded:
+            return ("off", f"disable 로 끔 ({le.DISABLED})") if le.DISABLED.exists() else ("absent", "등록 안 됨")
+        if not loaded:
+            return "off", f"{le.PLIST} 는 있으나 로드 안 됨 (enable 로 다시 로드)"
+        detail = f"{le.INTERVAL_S}초마다"
+        if main_checkout() and spec != le.spec():
+            detail += " · 등록된 내용이 이 체크아웃과 다름 (enable 로 다시 씀)"
+        return "on", detail
+
+    def enable(self, here):
+        if sys.platform != "darwin":
+            return 1, "macOS LaunchAgent 전용이다. 다른 OS 는 cron 에서 `land_exec.py round` 를 1분마다 돌린다"
+        le = land_exec()
+        if le.loaded() and le.plist_spec() == le.spec():
+            return 0, "이미 켜져 있음"
+        refusal = worktree_refusal(here)
+        if refusal:
+            return 1, refusal
+        code = le.cmd_install(["--here"] if here else [])
+        return code, "실패 (위 출력)" if code else "켬"
+
+    def disable(self):
+        if sys.platform != "darwin":
+            return 0, "macOS LaunchAgent 전용(이 OS 에는 등록된 것이 없다)"
+        le = land_exec()
+        if le.plist_spec() is None and not le.loaded() and le.DISABLED.exists():
+            return 0, "이미 꺼져 있음"
+        return le.cmd_uninstall([]), "끔 (남은 요청은 큐에 남는다: orch land-exec queue)"
+
+
 # ---------------------------------------------------------------- share-server (LaunchAgent)
 
 class ShareServer:
@@ -445,7 +495,7 @@ class ReflectStanding(OrcaJob):
 
 REFLECT = ReflectStanding()
 
-AUTOMATIONS = (Janitor(), JanitorLoad(), PreviewWatch(), PressureWatch(), ShareServer(),
+AUTOMATIONS = (Janitor(), JanitorLoad(), PreviewWatch(), PressureWatch(), ShareServer(), LandExecutor(),
                Watch("watch-prs", "나를 지명한 리뷰 요청과 내 PR 의 리뷰 대기를 오케스트레이터나 리드에게 모아 보내는 Orca automation"),
                Watch("watch-mentions", "공개 채널의 멘션·참여 스레드 답글을 오케스트레이터나 리드에게 모아 보내는 Orca automation"))
 LABEL = {"on": "켜짐", "off": "꺼짐", "absent": "꺼짐(미설정)", "unknown": "확인 불가", "unsupported": "미지원",

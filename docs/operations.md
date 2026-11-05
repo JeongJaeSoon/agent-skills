@@ -16,7 +16,7 @@
 - 티켓 트래커: Linear 또는 Jira 어댑터(`use-tracker`). `tracker.adapter`가 없으면 Linear다.
 - 노트: Obsidian vault 또는 일반 Markdown 폴더(`use-notes`). 설정하지 않으면 노트를 쓰지 않고 멈추거나 묻는다([설정 전환 안내](configuration-migration.md)).
 - Orca: `orchestrate`, `handoff-ticket`, `dispatch-card`, Orca automation(`janitor`, `watch-prs`·`watch-mentions` 회차)이 쓴다. `deliver-ticket`은 Orca 카드 밖에서도 돈다. 스킬마다 Orca를 어디에 쓰는지는 [스킬 카탈로그](skills.md)의 그 스킬 절에 있다.
-- macOS: 동기화 작업과 `pressure-watch`·`preview-watch`·`share-server`·`reap-hard`는 launchd를 쓴다. Linux에서는 `setup.py`가 crontab 줄을 출력한다. 다른 OS의 대안은 [automation.md](automation.md#처음-설치할-때).
+- macOS: 동기화 작업과 `pressure-watch`·`preview-watch`·`share-server`·`reap-hard`·`land-executor`는 launchd를 쓴다. Linux에서는 `setup.py`가 crontab 줄을 출력한다. 다른 OS의 대안은 [automation.md](automation.md#처음-설치할-때).
 - 독립 리뷰와 브라우저 검증은 사용 가능한 리뷰어와 브라우저 자동화 도구로 한다. 특정 모델이나 별도 모델 플러그인은 필요하지 않다.
 
 ## 설치 보충
@@ -56,6 +56,7 @@ skills-sync setup disable janitor        # 하나 끄기. 어느 것이든 apply
 | `preview-watch` | off | macOS LaunchAgent | loopback 웹페이지를 tailnet HTTPS로 자동 공개한다. tailscale CLI가 없으면 켜지 않는다 |
 | `pressure-watch` | on | macOS LaunchAgent | 3분마다 PC 사용량을 재고, 높으면 reap이 올린 안전한 대상만 정리해 알린다. 아무것도 종료하지 않는다([pressure.md](pressure.md)) |
 | `share-server` | off | macOS LaunchAgent | 공유 폴더를 127.0.0.1에서 Caddy로 읽기 전용 서빙한다. tailnet 공개는 하지 않는다([share-server.md](share-server.md)) |
+| `land-executor` | off | macOS LaunchAgent | `orchestrate.land_executor`가 켜진 repo에서 `orch land`가 남긴 머지 요청을 1분마다 모델 없이 다시 검사해 머지한다. agent 턴에서는 머지하지 않는다([landing.md](../skills/orchestrate/references/landing.md#land-executor)) |
 | `watch-prs` | on(`prs` 키가 있을 때) | Orca automation | `watch-prs` 스킬의 회차. 설정 키가 없으면 켜지 않는다 |
 | `watch-mentions` | on(`mentions` 키가 있을 때) | Orca automation | `watch-mentions` 스킬의 회차. 설정 키가 없으면 켜지 않는다 |
 
