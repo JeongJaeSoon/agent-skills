@@ -315,7 +315,7 @@ and `status` shows it.
 
 Each metric has a `[warn, danger]` pair under `reap.pressure`; a danger of `null` is warn only:
 `load_per_cpu` (5-minute load / logical CPUs; danger only while CPU idle is at or below `load_idle_pct`, or
-unknown), `mem_free_pct` (`kern.memorystatus_level`, at or below), `vm_pressure` (the kernel's
+unknown), `mem_free_pct` (`kern.memorystatus_level`, at or below: what the kernel could reclaim, file cache included, so far above memory in use; `mem_active_wired_gb` and `mem_anon_wired_gb` are recorded, never judged; the dashboard shows the first), `vm_pressure` (the kernel's
 own level, 2 warn, 4 critical), `swapout_pps` (pages swapped out per second between rounds), `swap_gb` (in use, warn
 only), `swap_growth_gb_h` (net growth over 30-60 minutes, warn only, with one leak note per `renotify_minutes`),
 `disk_free_gb` (the volume holding `$HOME`, at or below), `docker_mem_pct` (all containers' memory / the Docker VM's),

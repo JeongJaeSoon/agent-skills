@@ -107,17 +107,29 @@ PS = ("stack\t\t\tstack-db-1\nstack\t\t\tstack-web-1\n\t\t\tlonely\nlf\t\t\tlf-w
       "\tsvc\tu4\tk8s_POD_s_svc_u4_0\n\tsvc\tu4\tk8s_s_s_svc_u4_0\n\n")
 assert p.count_containers(PS) == (9, 0)
 assert p.count_containers(PS, ["lf", "webui", "svc"]) == (5, 4)
+VM_STAT = ("Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:      100.\nPages active:    1000000.\n"
+           "Pages wired down:      500000.\nAnonymous pages:      800000.\n")
 def fake_ps(cmd, timeout=None):
+    if cmd == ["vm_stat"]:
+        return VM_STAT
     assert cmd[:3] == ["docker", "ps", "--format"] and "io.kubernetes.pod.uid" in cmd[3], cmd
     return PS
 m = p.measure(run=fake_ps, always_on=["lf"]) if p.shutil.which("docker") else None
 assert m is None or (m["containers"], m["always_on"]) == (7, 2), m
+assert m is None or (m["mem_active_wired_gb"], m["mem_anon_wired_gb"]) == (22.9, 19.8), m
+m = p.measure(docker=False, run=fake_ps)  # no docker needed for the memory fields
+assert (m["mem_active_wired_gb"], m["mem_anon_wired_gb"]) == (22.9, 19.8) and m["containers"] is None, m
+m = p.measure(docker=False, run=lambda cmd, timeout=None: None)  # vm_stat failing leaves them None, never raises
+assert (m["mem_active_wired_gb"], m["mem_anon_wired_gb"]) == (None, None), m
+assert p.vm_used_gb(VM_STAT.replace("16384", "4096")) == (5.7, 5.0)
 assert p.summary({**OK, "always_on": 2}).endswith("컨테이너 10개(상시 2개 제외)")
 assert p.summary({**OK, "always_on": 0}).endswith("컨테이너 10개")
 assert p.config([("always_on", "lf,webui")])["always_on"] == ["lf", "webui"]
 
 assert p.swap_gb("total = 3072.00M  used = 1785.31M  free = 1286.69M  (encrypted)") == 1.74
 assert p.swap_gb("total = 0.00M  used = 2.50G  free = 0") == 2.5 and p.swap_gb("") is None
+assert p.vm_used_gb(VM_STAT) == (22.9, 19.8)  # (1.0M+0.5M) and (0.8M+0.5M) pages of 16 KiB
+assert p.vm_used_gb("Pages active: 1.\n") == (None, None) and p.vm_used_gb(None) == (None, None)
 assert p.mem_mb("406MiB ") == 406 and p.mem_mb("1.5GiB") == 1536 and p.mem_mb("--") == 0
 
 # --set overrides take the [warn, danger] pair; safe_kinds a list; an unknown key stops.
