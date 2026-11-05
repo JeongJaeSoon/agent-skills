@@ -219,7 +219,7 @@ python3 "$P" plan --body    # prints the message, or nothing; keeps it in <state
    unreleased items and keeps them in `<state>/dispatch.txt`. Do not run them: send that file as one
    message (`--body "$(cat <state>/dispatch.txt)"`, so `$(cat …)` in the lines is not expanded), and
    the orchestrator or lead starts each worker from its bound terminal.
-7. `python3 "$P" commit` only after every send succeeded. An uncommitted run is retried once its
+7. `python3 "$P" commit` records what `plan.json` held and removes it; run it only after every send succeeded. An uncommitted run is retried once its
    `plan.json` is older than `lock_minutes`; a committed one is never sent again. To retry a failed
    send sooner, send `<state>/body.txt` again and then commit.
 

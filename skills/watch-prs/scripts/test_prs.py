@@ -867,39 +867,51 @@ out = subprocess.run([sys.executable, script, "merges", "--config", str(mconf)],
 assert out.returncode == 0 and out.stdout == "" and p.read_json(xtmp / "prs" / "ledger.json", {}) == {}, out
 
 # verify reads nothing back for it, and commit marks it sent: the same head is handed on once.
-assert "orch land" in p.verify(MergeFake([], [[]]), xtmp / "prs", mcfg)
+class NoLookup(MergeFake):
+    def merge_state(self, ids, me):
+        raise AssertionError(f"verify looked up an executor item: {ids}")
+
+
+assert "orch land" in p.verify(NoLookup([]), xtmp / "prs", mcfg)
 assert p.commit(xtmp / "prs", mcfg, NOW) == 1 and list(p.read_json(xtmp / "prs" / "ledger.json", {})) == [eby[1]["key"]]
 assert p.compute(MergeFake([mpr(1)]), ecfg, p.read_json(xtmp / "prs" / "ledger.json", {}), NOW)["new"] == []
 
-# config() reads the executor's repos from orchestrate.land_executor; off, or not exactly enabled: true, means none.
-saved_env = os.environ.pop("AGENT_SKILLS_CONFIG", None)
+# The executor's repos come from the file `orch land` reads ($AGENT_SKILLS_CONFIG, else the default), not from
+# --config or a prs key; off, or not exactly enabled: true, means none.
+saved_env = os.environ.get("AGENT_SKILLS_CONFIG")
+xconf, envconf = xtmp / "x.json", xtmp / "env.json"
+xconf.write_text(json.dumps({"prs": {"land_executor_repos": ["spoofed/repo"]},
+                             "orchestrate": {"land_executor": {"enabled": True, "repos": ["acme/other"]}}}))
+os.environ["AGENT_SKILLS_CONFIG"] = str(envconf)
 for orch, want in (({"land_executor": {"enabled": True, "repos": ["acme/widgets", 7]}}, ["acme/widgets"]),
                    ({"land_executor": {"enabled": False, "repos": ["acme/widgets"]}}, []),
-                   ({"land_executor": {"enabled": "yes", "repos": ["acme/widgets"]}}, []), ({}, [])):
-    xconf = xtmp / "x.json"
-    xconf.write_text(json.dumps({"prs": {"land_executor_repos": ["spoofed/repo"]}, "orchestrate": orch}))
+                   ({"land_executor": {"enabled": "yes", "repos": ["acme/widgets"]}}, []),
+                   ({"land_executor": {"enabled": True}}, []), ({}, [])):
+    envconf.write_text(json.dumps({"orchestrate": orch}))
     assert p.config(xconf)["land_executor_repos"] == want, (orch, p.config(xconf)["land_executor_repos"])
-# repos that is not a list stops the config, as prog would not read it the same way.
-xconf.write_text(json.dumps({"prs": {}, "orchestrate": {"land_executor": {"enabled": True, "repos": {"acme/widgets": 1}}}}))
-try:
-    p.config(xconf)
-    raise AssertionError("a non-list repos must stop the config")
-except p.ConfigError:
-    pass
-# $AGENT_SKILLS_CONFIG, which `orch land` reads, decides the executor even when the prs file is another one.
-envconf = xtmp / "env.json"
-envconf.write_text(json.dumps({"orchestrate": {"land_executor": {"enabled": True, "repos": ["acme/env"]}}}))
-xconf.write_text(json.dumps({"prs": {}}))
-os.environ["AGENT_SKILLS_CONFIG"] = str(envconf)
-assert p.config(xconf)["land_executor_repos"] == ["acme/env"]
+# A repos value that is not a list, or an unreadable file, stops the config rather than merge around the executor.
+for bad in (json.dumps({"orchestrate": {"land_executor": {"enabled": True, "repos": bad_repos}}})
+            for bad_repos in ({"acme/widgets": 1}, {}, "", 0, False)):
+    envconf.write_text(bad)
+    try:
+        p.config(xconf)
+        raise AssertionError(f"must stop: {bad}")
+    except p.ConfigError:
+        pass
 envconf.write_text("{not json")
 try:
     p.config(xconf)
-    raise AssertionError("an unreadable $AGENT_SKILLS_CONFIG must stop the config")
+    raise AssertionError("an unreadable executor config must stop the config")
 except p.ConfigError:
     pass
-os.environ.pop("AGENT_SKILLS_CONFIG")
-if saved_env is not None:
+# End to end: a ready plan for an executor repo, under the same config, prints no merge command.
+envconf.write_text(json.dumps({"orchestrate": {"land_executor": {"enabled": True, "repos": ["acme/widgets"]}}}))
+assert p.compute(MergeFake([mpr(1)]), p.config(mconf) | {"kinds": ["ready_to_merge"]}, {}, NOW)["new"][0].get("cmd") is None
+envconf.unlink()
+assert p.config(xconf)["land_executor_repos"] == [], "no file: the executor is off, as for orch land"
+if saved_env is None:
+    os.environ.pop("AGENT_SKILLS_CONFIG")
+else:
     os.environ["AGENT_SKILLS_CONFIG"] = saved_env
 
 # Kinds share the ledger key shape: the head ready_to_merge recorded is still due as unreleased once merged.

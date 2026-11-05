@@ -135,8 +135,7 @@ class ConfigError(ValueError):
 
 def config(path=CONFIG):
     try:
-        whole = json.loads(pathlib.Path(path).read_text())
-        raw = whole.get("prs")
+        raw = json.loads(pathlib.Path(path).read_text()).get("prs")
     except (OSError, ValueError):
         raw = None
     if raw is None:
@@ -150,7 +149,7 @@ def config(path=CONFIG):
             re.compile(x)
         except re.error as e:
             raise ConfigError(f"exclude_title_patterns: invalid regex {x!r}: {e}") from None
-    cfg = {**DEFAULTS, **raw, "exclude_title_patterns": pats, "land_executor_repos": land_executor_repos(whole)}
+    cfg = {**DEFAULTS, **raw, "exclude_title_patterns": pats, "land_executor_repos": land_executor_repos()}
     profiles = cfg["profiles"]
     if not isinstance(profiles, list) or not all(isinstance(x, dict) and isinstance(x.get("match"), str) for x in profiles):
         raise ConfigError('profiles must be a list of objects, each with a "match" string')
@@ -172,23 +171,25 @@ def config(path=CONFIG):
     return cfg
 
 
-def land_executor_repos(whole):
-    """The repos orchestrate.land_executor merges, read where `orch land` reads it ($AGENT_SKILLS_CONFIG first),
-    with prog.land_executor's test (enabled exactly true). Not a prs key. A repos value that is not a list stops
-    every command: guessing it empty would print direct merges for repos the executor owns."""
-    env = os.environ.get("AGENT_SKILLS_CONFIG")
-    if env:
-        try:
-            whole = json.loads(pathlib.Path(env).expanduser().read_text())
-        except FileNotFoundError:
-            whole = {}
-        except (OSError, ValueError) as e:
-            raise ConfigError(f"{env}: unreadable ({e}); not merging around orchestrate.land_executor") from None
+def land_executor_repos():
+    """The repos orchestrate.land_executor merges, read from the file `orch land` reads ($AGENT_SKILLS_CONFIG, else
+    ~/.claude/agent-skills.json, whatever --config says), with prog.land_executor's test (enabled exactly true).
+    Not a prs key. An unreadable file or a repos value that is not a list stops every command: guessing it empty
+    would print direct merges for repos the executor owns."""
+    path = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or CONFIG).expanduser()
+    try:
+        whole = json.loads(path.read_text())
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError) as e:
+        raise ConfigError(f"{path}: unreadable ({e}); not merging around orchestrate.land_executor") from None
     orch = whole.get("orchestrate") if isinstance(whole, dict) else None
     ex = orch.get("land_executor") if isinstance(orch, dict) else None
     if not isinstance(ex, dict) or ex.get("enabled") is not True:
         return []
-    repos = ex.get("repos") or []
+    repos = ex.get("repos")
+    if repos is None:
+        return []
     if not isinstance(repos, list):
         raise ConfigError("orchestrate.land_executor.repos must be a list of owner/name strings")
     return [r for r in repos if isinstance(r, str)]
