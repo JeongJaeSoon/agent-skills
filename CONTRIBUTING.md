@@ -44,6 +44,7 @@ Also run:
 
 - `claude plugin validate .` for the manifests.
 - `claude plugin test .` for the hooks module (`hooks/brief_pane.test.tsx`, the `/brief-pane` panel). CI does not run it yet: its validate step is pinned to an older Claude Code that may not know `modules`.
+- `tsc -p .` type-checks the hooks module once Claude Code has loaded the plugin and written `.claude-plugin/types/` (self-ignored). The root `tsconfig.json` that extends it is committed on purpose: the engine writes it whenever it is missing, so an untracked copy blocks `skills-sync` with "checkout has uncommitted changes".
 - `python3 scripts/catalog/build.py /tmp/skill-catalog.html` when you change `docs/skills.md`, `docs/skills.en.md` or `docs/skills.ja.md`. It fails when the three catalogs have a different number of headings or skills, and warns when the English or Japanese catalog lags the Korean one.
 
 `scripts/test_public_shapes.py` checks for the shapes of private data (home directory paths, chat IDs, ticket keys, tenant hostnames). It cannot catch every internal name, so read your own diff for them too.
