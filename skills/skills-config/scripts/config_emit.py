@@ -63,6 +63,8 @@ SECTIONS = {
     "brief": (["skills/brief/SKILL.md"], {}),
     "orchestrate": (["skills/orchestrate/references/landing.md", "docs/skills.md"], {}),
     "dashboard": (["skills/orchestrate/references/dashboard.md"], {}),
+    "review": (["skills/deliver-ticket/references/independent-review.md"],
+               {"": "skills/deliver-ticket/scripts/review_pick.py"}),
     "preview-watch": (["docs/preview-watch.md"], {"": "scripts/preview_watch.py"}),
     "share-server": (["docs/share-server.md"], {"": "scripts/share_server.py"}),
     "reap-hard": (["docs/reap-hard.md"], {"": "scripts/reap_hard.py"}),

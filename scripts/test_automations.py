@@ -309,7 +309,49 @@ class ShellJobs(Base):
 
     def test_defaults(self):
         self.assertEqual({n: j.default for n, j in self.jobs.items()},
-                         {"sync": True, "pressure-watch": True, "reap-hard": False, "orch-dash": False})
+                         {"sync": True, "pressure-watch": True, "reap-hard": True, "orch-dash": True})
+
+    def test_reap_hard_waits_for_the_protect_list_and_orch_dash_does_not(self):
+        # patrol has no job of its own; each reap-hard pass starts it, so this gate is also patrol's.
+        self.orca([])
+        j = self.jobs["reap-hard"]
+        with tempfile.TemporaryDirectory() as d:
+            mine = pathlib.Path(d) / "protect.txt"
+            with mock.patch.object(au, "PLANNED_CONFIG", {"reap-hard": {"protect_file": str(mine)}}):
+                self.assertEqual(j.status()[0], "unconfigured")
+                self.assertIn(str(mine), j.status()[1])
+                mine.write_text("port 1\n")
+                self.assertEqual(j.status()[0], "absent")
+        self.assertEqual(self.jobs["orch-dash"].status()[0], "absent")
+
+    def test_a_registered_job_is_never_gated(self):
+        j = self.jobs["reap-hard"]
+        self.orca([self.stored(j)])
+        with mock.patch.object(au, "reap_hard_gate", return_value="no file"):
+            self.assertEqual(j.status()[0], "on")
+
+    def test_stale_only_when_on_with_a_different_registration(self):
+        j = self.jobs["orch-dash"]
+        self.orca([self.stored(j)])
+        self.assertFalse(j.stale())
+        self.orca([self.stored(j, rrule="*/7 * * * *")])
+        self.assertTrue(j.stale())
+        self.assertEqual(au.decide(j)[0], "refresh")
+        self.orca([self.stored(j, enabled=False, rrule="*/7 * * * *")])  # the user turned it off: left alone
+        self.assertFalse(j.stale())
+        self.orca([self.stored(j, rrule="*/7 * * * *")], main=False)  # a worktree's paths differ: not drift
+        self.assertFalse(j.stale())
+
+    def test_a_new_interval_in_the_config_apply_writes_is_a_refresh(self):
+        j = self.jobs["reap-hard"]
+        self.orca([self.stored(j)])
+        self.assertFalse(j.stale())
+        with mock.patch.object(au, "PLANNED_CONFIG", {"reap-hard": {"interval": 1800}}):
+            self.assertTrue(j.stale())
+        p = self.jobs["pressure-watch"]
+        self.orca([self.stored(p)])
+        with mock.patch.object(au, "PLANNED_CONFIG", {"reap": {"pressure": {"interval": 600}}}):
+            self.assertTrue(p.stale())
 
     def test_no_job_is_a_launchagent_or_names_launchctl(self):
         for j in self.jobs.values():
@@ -471,6 +513,50 @@ class Share(unittest.TestCase):
         self.uninstall.assert_called_once()
 
 
+class Plan(Base):
+    """What setup.py's dry run lists is what apply does."""
+    real_configured = staticmethod(au.Watch.configured)  # Base.orca patches the method; these tests need the real one
+
+    def test_lists_installs_refreshes_and_the_reason_for_a_skip(self):
+        self.orca([janitor(), load_job()])
+        sync_job = next(j for j in au.SHELL_JOBS if j.name == "sync")
+        stale = ShellJobs.stored(None, sync_job, rrule="*/7 * * * *")
+        self.orca([janitor(), load_job(), stale])
+
+        def status(job):
+            return {"sync": ("on", ""), "pressure-watch": ("absent", ""),
+                    "reap-hard": ("unconfigured", "no protect file"), "orch-dash": ("absent", "")}[job.name]
+        with mock.patch.object(au.ShellJob, "status", status), \
+                mock.patch.object(au.PreviewWatch, "status", return_value=("absent", "")), \
+                mock.patch.object(au.ShareServer, "status", return_value=("absent", "")):
+            lines = au.plan()
+        self.assertEqual([l for l in lines if not l.startswith("automation watch-")],
+                         ["automation sync: refresh the registered job",
+                          "automation pressure-watch: install",
+                          "automation reap-hard: 건너뜀, no protect file",
+                          "automation orch-dash: install"])
+
+    def test_a_watch_key_the_run_is_about_to_write_counts_as_configured(self):
+        w = au.Watch("watch-prs", "x")
+        with mock.patch.object(au, "PLANNED_CONFIG", {}):
+            self.assertFalse(self.real_configured(w))
+        with mock.patch.object(au, "PLANNED_CONFIG", {"prs": {"inbox_to": "x"}}):
+            self.assertTrue(self.real_configured(w))
+        with mock.patch.object(au, "PLANNED_CONFIG", {"prs": {"model": "sonnet"}}):
+            self.assertFalse(self.real_configured(w))
+
+    def test_plan_clears_the_planned_config_and_apply_makes_the_same_calls(self):
+        self.orca([janitor(), load_job()])
+        with mock.patch.object(au.ShellJob, "status", return_value=("absent", "")), \
+                mock.patch.object(au.ShellJob, "enable", return_value=(0, "켬")) as sj, \
+                mock.patch.object(au.PreviewWatch, "status", return_value=("absent", "")), \
+                mock.patch.object(au.ShareServer, "status", return_value=("absent", "")):
+            au.plan({"prs": {}})
+            self.assertIsNone(au.PLANNED_CONFIG)
+            self.assertEqual(au.cmd_apply(False), 0)
+        self.assertEqual(sj.call_count, 4)
+
+
 class Apply(Base):
     def setUp(self):
         for p in (mock.patch.object(au.ShellJob, "status", return_value=("on", "")),
@@ -490,7 +576,7 @@ class Apply(Base):
                 mock.patch.object(au.ShellJob, "enable", return_value=(0, "켬")) as sj:
             self.assertEqual(au.cmd_apply(False), 0)
         pv.assert_not_called()
-        self.assertEqual(sj.call_count, 2)  # sync and pressure-watch; reap-hard and orch-dash are off by default
+        self.assertEqual(sj.call_count, 4)  # sync, pressure-watch, reap-hard (status is stubbed past its gate), orch-dash
         self.assertEqual(["--load" in c for c in fake.schedules()], [False, True])
 
     def test_leaves_a_disabled_janitor_off(self):
