@@ -206,4 +206,42 @@ assert not [k for k in shown["rows"] if k.startswith("prio:")] and len(shown["gr
 assert "prio:" not in forch("board", "open", "--json") and "prio:" not in forch("board", "tidy", "--dry-run", "--json")
 assert "prio:" not in forch("brief", "render", "--periodic", "--now", NOW, "--no-refresh", "--json")
 
+# A subagent counts in its host card's group, not in the group of the lead row it hangs under.
+before = fleet_totals()[0]
+state_file = tmp / "fleet" / "dashboard" / "state.json"
+world = json.loads(state_file.read_text())
+for s in world["sessions"]:
+    if s["id"] == "card-2":
+        s["subagents"] = [{"agent": "ag1", "desc": "검토", "type": "general-purpose", "started_at": "2026-10-13T14:29:00Z"}]
+state_file.write_text(json.dumps(world))
+after = fleet_totals()[0]
+assert after["Pin"] == before["Pin"] + 1 and after["Prog"] == before["Prog"], (before, after)
+
+# A lead the board records with --worktree takes its worktree's rule, and its sub-rows inherit it.
+forch("board", "lead", "add", "bl", "--handle", "term_0FAKE9", "--repo", "acme/web", "--worktree", "wt-b")
+forch("board", "set", "bl/t1", "--title", "하위", "--next", "일")
+forch("board", "priority", "set", "worktree:wt-b", "6:Lead")
+assert fleet_totals()[0].get("Lead") == 1, fleet_totals()
+
+# Rules survive the legacy export and the import that follows it, and re-setting one writes no event.
+import store as store_db  # noqa: E402
+import board  # noqa: E402
+
+fleet_env = {k: os.environ.get(k) for k in ("ORCH_FLEET_STATE", "AGENT_SKILLS_STATE")}
+os.environ.update(ORCH_FLEET_STATE=fenv["ORCH_FLEET_STATE"], AGENT_SKILLS_STATE=fenv["AGENT_SKILLS_STATE"])
+try:
+    rules = store_db.board()["groups"]
+    seq = lambda: store_db.dump("event")["event"][-1]["seq"]  # noqa: E731
+    last = seq()
+    board.priority_set("repo:acme/web", "3:Repo")
+    assert seq() == last, "the same rule again is no change"
+    exported = store_db._export_board(tmp / "export-rules")[0]
+    saved = json.loads((exported / "board.json").read_text())
+    assert saved["groups"] == rules and not [k for k in saved["rows"] if k.startswith("prio:")], saved
+    store_db.load_board(saved)
+    assert store_db.board()["groups"] == rules and "prio:repo:acme/web" not in store_db.board()["rows"]
+finally:
+    for k, v in fleet_env.items():
+        os.environ[k] = v or ""
+
 print("ok")

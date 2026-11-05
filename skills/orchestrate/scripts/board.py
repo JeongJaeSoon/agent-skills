@@ -269,8 +269,8 @@ def priority_set(match, text):
     match, group = match_of(match), priority_of(text)
 
     def go(store):
-        store["groups"][f"prio:{match}"] = {"id": f"prio:{match}", "kind": store_db.GROUP_KIND, "match": match,
-                                            "priority": group}
+        store["groups"][f"prio:{match}"] = {"id": f"prio:{match}", "kind": store_db.GROUP_KIND, "parent": None,
+                                            "match": match, "priority": group}
     return change(go)
 
 
@@ -929,15 +929,23 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
 
     rules = priority_rules(store.get("groups") or {})
 
+    def worktrees(n):
+        """The Orca worktrees a row stands for: a card's own, the one a row names, a board lead's recorded or handle's."""
+        lead = store["leads"].get(n["id"]) if n.get("kind") == "lead" else None
+        return [w for w in (n.get("session"), n.get("worktree"), n.get("linked"), lead and lead_session(lead)) if w]
+
     def prio(r):
         """A row's priority group: its own `priority`, else the nearest parent's own or its worktree's rule, else the
-        program's rule, else the repository's. A fleet row (a lead or card the board has no row of) has only rules."""
+        program's rule, else the repository's. A subagent row is first its host's. A fleet row (a lead or card the
+        board has no row of) has only rules."""
+        host = next((n for n in rows.values() if r.get("host") in worktrees(n)), None) if r.get("host") else None
+        if host is not None and host is not r and (g := prio(host)):
+            return g
         n = r
         while n is not None:
             if n.get("priority"):
                 return n["priority"]
-            if g := next((rules["worktree"][w] for w in (n.get("session"), n.get("worktree"), n.get("linked"))
-                          if w in rules["worktree"]), None):
+            if g := next((rules["worktree"][w] for w in worktrees(n) if w in rules["worktree"]), None):
                 return g
             n = rows.get(n.get("parent"))
         return rules["program"].get(up(r, "program")) or rules["repo"].get(up(r, "repo"))
