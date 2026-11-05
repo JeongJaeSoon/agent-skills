@@ -159,6 +159,15 @@ def card_name(path):
     return (path or "").rstrip("/").rsplit("/", 1)[-1]
 
 
+def pr_open(facts, path):
+    """The card's PR (Orca's linkedPR, which takes a PR seen on its branch too) is open, or its state unread."""
+    for s in facts.get("sessions") or ():
+        if s.get("path") == path and (key := (s.get("linked_pr") or {}).get("key")):
+            state = ((facts.get("prs") or {}).get(key) or {}).get("state")
+            return state is None or str(state).upper() == "OPEN"
+    return False
+
+
 transcript_tail = cardguard.transcript_tail
 
 
@@ -590,6 +599,9 @@ def judge(facts, memo):
             mins = (tnow - prog.parse_ts(motion["since"])).total_seconds() / 60
             if mins >= IDLE_MIN and not background(screen_of(facts, handle)):
                 add("I", path, (motion["since"],), f"turn ended {int(mins)} min ago, nothing armed to wake it", handle)
+                # The janitor closes an idle card's terminals once it has an open PR (cards rule 8), which clears this
+                # finding: such an I is never held back (pending_lines), or no one would hear of it.
+                findings[-1]["pr_open"] = pr_open(facts, path)
                 if path in stale_paths:
                     hints[path] = "stalled"
                 else:
@@ -832,7 +844,7 @@ def line(f):
 
 def pending_lines(me, unowned, now=None):
     """Unacked findings routed to terminal `me` (and those routed to nobody, for the orchestrator), each shown again
-    every 30 minutes until acked or cleared; a SHOW_ONCE code only the first time."""
+    every RENOTIFY until acked or cleared; a SHOW_ONCE code only the first time."""
     now = now or fleet.utcnow()
     mine = [f for f in open_findings().values() if f.get("owner") == me or (unowned and not f.get("owner"))]
     shown = fleet.read_json(SHOWN, {}) or {}
@@ -841,8 +853,10 @@ def pending_lines(me, unowned, now=None):
            or f.get("code") not in SHOW_ONCE and now - fleet.parse(seen[f["id"]]) >= RENOTIFY]
     # A card that ended its turn and waits (I) is often a worker that just reported and waits on the very session
     # reading this: alone, it wakes nobody until it has stayed open HOLD_ALONE; beside another line it goes with it.
+    # One on a card with an open PR is not held: the janitor closes that card's idle terminals first.
     if all(f.get("code") in HOLD_CODES for f in due):
-        due = [f for f in due if not f.get("detected_at") or now - fleet.parse(f["detected_at"]) >= HOLD_ALONE]
+        due = [f for f in due if f.get("pr_open") or not f.get("detected_at")
+               or now - fleet.parse(f["detected_at"]) >= HOLD_ALONE]
     if due:
         keep = {f["id"]: seen.get(f["id"]) for f in mine if seen.get(f["id"])}
         keep.update({f["id"]: fleet.iso(now) for f in due})

@@ -30,6 +30,10 @@ QUESTION_PATTERNS = cardguard.QUESTION_PATTERNS
 
 def sh(cmd, cwd=None, input=None, errors=None):
     """stdout, or None on failure with the first stderr line appended to errors: a reason is evidence."""
+    if reap.CANCEL.is_set():  # the round was cut (candidates.collect): start nothing new
+        if errors is not None:
+            errors.append(f"{cmd[0]}: not started, the round was cut")
+        return None
     try:
         r = subprocess.run(cmd, cwd=cwd, input=input, capture_output=True, text=True, env=reap.ENV, timeout=60)
     except (FileNotFoundError, subprocess.TimeoutExpired) as e:

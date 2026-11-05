@@ -325,6 +325,17 @@ assert patrol.pending_lines("hl", False, T + dt.timedelta(hours=4))[0].startswit
 assert patrol.pending_lines("ho", True, T + dt.timedelta(minutes=59)) == [], "a fresh I alone is held"
 assert [l.split()[2] for l in patrol.pending_lines("ho", True, T + dt.timedelta(minutes=60))[:-1]] == ["Iabc"]
 assert patrol.pending_lines("hz", False, T) == []
+# An I on a card with an open PR is shown at once: the janitor closes that card's idle terminals (cards rule 8) before
+# the hour is up, and the finding would clear unseen.
+ip = {**i, "id": "Ipr", "card": "p", "path": "/w/p", "owner": "hp", "pr_open": True}
+patrol.write_round([x, i, ip], verd, False, NOW + 70)
+assert [l.split()[2] for l in patrol.pending_lines("hp", False, T + dt.timedelta(minutes=2))[:-1]] == ["Ipr"]
+sess = [{"path": "/w/p", "linked_pr": {"key": "acme/app#1"}}, {"path": "/w/q", "linked_pr": {"key": "acme/app#2"}}]
+prs = {"acme/app#1": {"state": "OPEN"}, "acme/app#2": {"state": "MERGED"}}
+assert patrol.pr_open({"sessions": sess, "prs": prs}, "/w/p") and not patrol.pr_open({"sessions": sess, "prs": prs}, "/w/q")
+assert patrol.pr_open({"sessions": sess, "prs": {}}, "/w/p"), "a PR whose state was not read counts as open"
+assert not patrol.pr_open({"sessions": sess, "prs": prs}, "/w/none")
+new, gone = patrol.write_round([x, i], verd, False, NOW + 80)
 new, gone = patrol.write_round([x], verd, False, NOW + 90, failed={"workers"})
 assert gone == [], "a finding whose source failed this round is kept, not cleared"
 new, gone = patrol.write_round([{**x, "owner": None}, i], verd, False, NOW + 100)

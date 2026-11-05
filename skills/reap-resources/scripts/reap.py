@@ -48,7 +48,7 @@ within reap.load_cooldown_minutes (default 60). precheck --act is the scheduled 
 whose last act failed less than a day ago are left), sends one message to reap.inbox_to when what a person has to look
 at gained a key, logs <state>/janitor-runs.jsonl and always exits 1, so Orca starts no agent. schedule prints the `orca automations create` command (--load: the load job); only --write runs it.
 """
-import contextlib, datetime as dt, functools, hashlib, json, os, pathlib, re, shlex, shutil, signal, stat, subprocess, sys, time, unicodedata
+import contextlib, datetime as dt, functools, hashlib, json, os, pathlib, re, shlex, shutil, signal, stat, subprocess, sys, threading, time, unicodedata
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[3] / "scripts"))
 try:
@@ -73,10 +73,17 @@ def opt(name, default=None):
 # None waits for every command; patrol's candidate round sets seconds, so one hung command fails its source instead
 # of the round.
 RUN_TIMEOUT = None
+# Set when a round is cut while scans still run in threads (candidates.collect): no new command starts, and the one
+# running ends within its own timeout, so none outlives the process.
+CANCEL = threading.Event()
 
 
 def run(cmd, cwd=None, check=True, env=None, timeout=None):
     timeout = timeout or RUN_TIMEOUT
+    if CANCEL.is_set():
+        if check:
+            raise RuntimeError(f"{' '.join(cmd[:4])}: not started, the round was cut")
+        return None
     try:
         r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=env or ENV, timeout=timeout)
     except FileNotFoundError:

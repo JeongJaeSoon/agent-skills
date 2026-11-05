@@ -33,6 +33,7 @@ IDENTITY = tuple(dict.fromkeys(reap.ACT_IDENTITY + ("verdict", "close")))
 # How today's scans word a part they could not read.
 UNREAD = ("읽지 못함", "실패", "응답 없음", "not read", "timed out")
 RUN_TIMEOUT_S = 60
+CUT_MARGIN_S = 5  # past a command's own timeout, for its thread to return once the round is cut
 HARD_SOURCES = ("protect", "reap_hard_cards", "reap_hard_rest")
 
 
@@ -191,20 +192,21 @@ def collect(sources, now=None, reap_scan=None, hard=None, pressure_kinds=None, s
 
     # The two scans wait on gh, git, lsof and orca, so they run side by side. Each part writes only its own dict, and
     # a part is merged only once its thread has finished: a round cut short (patrol's SIGALRM, which only this thread
-    # receives) merges the finished part, marks the other's sources timed out, and leaves that daemon thread to die
-    # with the process.
+    # receives) merges the finished part and marks the other's sources timed out. A signal cannot stop a command a
+    # thread waits on, so the cut sets reap.CANCEL (no new command) and waits for the running one to end within its
+    # own timeout: none is left behind when the process exits.
     parts = [dict(fn=fn, owns=owns, sources={}, timings=Timings(), notes=[], cands=[], reports=[], alerts=[])
              for fn, owns in ((reap_part, ("reap_scan",)), (hard_part, HARD_SOURCES))]
     threads = [threading.Thread(target=p["fn"], args=(p,), daemon=True) for p in parts]
     for th in threads:
         th.start()
-    cands, merged = [], set()
+    cands, merged, cut = [], set(), set()
 
     def merge(final):
         for n, (p, th) in enumerate(zip(parts, threads)):
             if n in merged:
                 continue
-            if th.is_alive():
+            if th.is_alive() or n in cut:
                 if final:
                     src.update({s: "timeout" for s in p["owns"]})
                     timings.update(dict(p["timings"]))  # where its time went so far
@@ -224,6 +226,15 @@ def collect(sources, now=None, reap_scan=None, hard=None, pressure_kinds=None, s
                 th.join(0.2)
                 merge(False)
     finally:
+        cut.update(n for n, th in enumerate(threads) if th.is_alive())
+        if cut:
+            reap.CANCEL.set()
+            until = time.monotonic() + (reap.RUN_TIMEOUT or RUN_TIMEOUT_S) + CUT_MARGIN_S
+            try:
+                for n in cut:
+                    threads[n].join(max(0.0, until - time.monotonic()))
+            finally:
+                reap.CANCEL.clear()
         merge(True)
     for c in cands:
         missing = [n for n in c["needs"] if src.get(n) != "ok"]

@@ -331,14 +331,18 @@ class ShellJobs(Base):
                          {"sync": True, "pressure-watch": True, "reap-hard": False, "orch-dash": False, "patrol": False})
 
     def test_patrol_round_fits_the_runner(self):
-        """The round's two budgets end before the runner kills the job, which ends before the precheck's limit."""
+        """The round's two budgets, plus the wait for a cut scan's last command, end before the runner kills the job,
+        which ends before the precheck's limit."""
         sys.path.insert(0, str(au.REPO / "skills" / "orchestrate" / "scripts"))
+        sys.path.insert(0, str(au.REPO / "skills" / "reap-resources" / "scripts"))
+        import candidates
         import patrol
         w = self.jobs["patrol"].want()
-        self.assertEqual((w["trigger"], w["precheck-timeout"]), ("*/30 * * * *", 420))
+        self.assertEqual((w["trigger"], w["precheck-timeout"]), ("*/30 * * * *", 480))
         self.assertTrue(w["precheck"].endswith("prog.py patrol --if-due"), w["precheck"])
-        self.assertIn("orca_job.py run patrol --interval 1800 --timeout 400 ", w["precheck"])
-        self.assertLess(patrol.BUDGET_S + patrol.CANDIDATE_BUDGET_S, 400)
+        self.assertIn("orca_job.py run patrol --interval 1800 --timeout 460 ", w["precheck"])
+        self.assertLess(patrol.BUDGET_S + patrol.CANDIDATE_BUDGET_S + candidates.RUN_TIMEOUT_S + candidates.CUT_MARGIN_S,
+                        460)
         self.assertGreater(patrol.FALLBACK_DUE_S, 1800, "reap-hard's fallback never fires while the job keeps its beat")
 
     def test_no_job_is_a_launchagent_or_names_launchctl(self):

@@ -316,4 +316,34 @@ finally:
 assert progress["sources"]["reap_scan"] == "ok" and progress["sources"]["reap_hard_cards"] == "timeout", progress["sources"]
 assert progress["sources"]["protect"] == "timeout" and "reap_scan" in progress["timings"], progress
 
+# A cut while a thread waits on a real command: no new command starts (reap.CANCEL), the running one ends within its
+# own timeout, and collect returns only then, so no child outlives the process. The part still reads as timed out.
+events, saved_timeout = [], reap.RUN_TIMEOUT
+reap.RUN_TIMEOUT = 1
+
+
+def hung_hard(t):
+    events.append(("first", reap.run(["sleep", "30"], check=False)))
+    events.append(("second", reap.run(["sleep", "30"], check=False)))
+    return HARD
+
+
+progress = {}
+signal.setitimer(signal.ITIMER_REAL, 0.3)
+t0 = time.monotonic()
+try:
+    candidates.collect(OK, now=time.time(), reap_scan=lambda kinds: (REAP_ITEMS, []), hard=hung_hard,
+                       pressure_kinds=["orphan", "compose-stack"], state_dir=tmp, live=lambda targets, notes: targets,
+                       progress=progress)
+    raise AssertionError("not cut")
+except Cut:
+    pass
+finally:
+    signal.setitimer(signal.ITIMER_REAL, 0)
+    reap.RUN_TIMEOUT = saved_timeout
+took = time.monotonic() - t0
+assert events == [("first", None), ("second", None)], events  # timed out, then never started
+assert took < 1 + candidates.CUT_MARGIN_S and not reap.CANCEL.is_set(), (took, reap.CANCEL.is_set())
+assert progress["sources"]["reap_hard_cards"] == "timeout", progress["sources"]
+
 print("test_candidates: ok")
