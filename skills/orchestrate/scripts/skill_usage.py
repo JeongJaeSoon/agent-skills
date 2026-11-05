@@ -571,23 +571,25 @@ def is_finding(row):
     return row.get("ev") in FINDINGS or (row.get("ev") == "verdict" and row.get("result", "pass") != "pass")
 
 
-def new_findings(home):
+def ledgers(home):
+    """Each ledger under home that has rows: its directory name -> its rows."""
+    return {led.parent.name: rows for led in sorted(home.glob("*/ledger.jsonl")) if (rows := _jsonl(led))}
+
+
+def new_findings(home, read=None):
     """Rows reflect's standing mode reads as new, before its lessons-ledger check, which only the agent can make.
 
     The cursor (<home>/_standing/reflect/cursor.json) maps each ledger's directory name to the last ts a finished
     round read. A row at the cursor's ts was read by that round, so only rows after it wake the agent; a ledger the
-    cursor does not list yet starts at its newest row, so a new ledger's history is not swept in.
+    cursor does not list yet starts at its newest row, so a new ledger's history is not swept in. `read` is what
+    ledgers(home) returned, for a caller that must judge the same rows it read.
     """
     try:
         cursor = json.loads((home / "_standing" / "reflect" / "cursor.json").read_text())
     except (OSError, ValueError):
         cursor = {}
     out = {}
-    for led in sorted(home.glob("*/ledger.jsonl")):
-        rows = _jsonl(led)
-        if not rows:
-            continue
-        name = led.parent.name
+    for name, rows in (ledgers(home) if read is None else read).items():
         if isinstance(cursor, dict) and parse_ts(cursor.get(name)):
             start, new = parse_ts(cursor[name]), [r for r in rows if parse_ts(r["ts"]) > parse_ts(cursor[name])]
         else:
@@ -693,8 +695,8 @@ def schedule_cmd(script, workspace, provider="claude"):
               f"python3 {rnd} begin 으로 lock 을 잡고(exit 1 이면 멈춘다) settle 로 지난 standing PR 을 정리한 뒤 그 문서대로 한다. "
               "제안은 draft PR(브랜치 reflect/standing-*) 하나까지만 열고, "
               "어떤 PR도 머지하지 않으며, 스킬을 지우지 않는다(은퇴는 사람에게 넘기는 티켓으로만). "
-              f"편집은 이 체크아웃이 아니라 새 worktree 브랜치에서 한다. 끝나면 python3 {rnd} end --advance 로 cursor 를 옮기고 "
-              "lock 을 푼다. PR 이나 티켓을 만든 때만 보고한다.")
+              f"편집은 이 체크아웃이 아니라 새 worktree 브랜치에서 한다. 끝나면 python3 {rnd} end --round <begin 이 출력한 round> "
+              "--advance 로 cursor 를 옮기고 lock 을 푼다. PR 이나 티켓을 만든 때만 보고한다.")
     return ["orca", "automations", "create", "--name", "agent-skills reflect standing", "--trigger", "40 6 * * *",
             "--provider", provider, "--workspace-mode", "existing", "--workspace", workspace,
             "--precheck", f"python3 {shlex.quote(str(script))} precheck", "--prompt", prompt, "--json",
