@@ -475,8 +475,8 @@ function pressureTileLevel(rep, judge, m) {
   if (v == null || (warn == null && danger == null)) return null;
   const hi = (rep.higher_worse || {})[judge] !== false;
   const past = (t) => t != null && (hi ? v >= t : v <= t);
-  // An unknown cap (a server older than load_idle_pct) holds danger back rather than guess pressure.py's default.
-  const idleHolds = judge === "load_per_cpu" && (rep.load_idle_pct == null || (m.cpu_idle_pct != null && m.cpu_idle_pct > rep.load_idle_pct));
+  // 10 is pressure.py's default load_idle_pct, for a server older than the field.
+  const idleHolds = judge === "load_per_cpu" && m.cpu_idle_pct != null && m.cpu_idle_pct > (rep.load_idle_pct ?? 10);
   if (past(danger) && !idleHolds) return "danger";
   return past(warn) || past(danger) ? "warn" : "ok";
 }
@@ -522,10 +522,7 @@ function pressureChart(rep, c) {
   const op = lower ? "≤" : "≥";
   const set = [["경고", warn], ["위험", danger]].filter(([, v]) => v != null);
   const outOf = (v) => c.line && !inside(v);
-  // One "(범위 밖)" at the end when every limit is outside the scale, else one on each limit that is.
-  const allOut = set.length && set.every(([, v]) => outOf(v));
-  const limits = !set.length ? "임계값 없음"
-    : `${set.map(([n, v]) => `${n} ${op} ${v}${!allOut && outOf(v) ? " (범위 밖)" : ""}`).join(" · ")}${unit}${allOut ? " (범위 밖)" : ""}`;
+  const limits = !set.length ? "임계값 없음" : set.map(([n, v]) => `${n} ${op} ${v}${unit}${outOf(v) ? " (범위 밖)" : ""}`).join(" · ");
   const sub = c.sub ? c.sub(m) : "";
   const said = `${label}: 지금 ${fmt(now)}, ${lv ? PRESSURE_LEVEL_KO[lv] : "수준 없음"}, ${c.bad}, ${limits}, ${rep.hours}시간 동안 ${pts.length}개`;
   return `<div class="pmetric"><div class="pm-head"><span class="eyebrow">${esc(label)}</span><b class="pm-v">${esc(fmt(now))}</b></div>
