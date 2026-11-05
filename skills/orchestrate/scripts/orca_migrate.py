@@ -5,23 +5,19 @@ linkedPR, its Task) is the record and the doing list keeps only waits no card co
   migrate                 dry-run. Lists the doing lines that name exactly one card (tidy.named, or an owner field that
                           is one card's whole key) and would close, the ones the next tidy tick closes anyway, the ones
                           kept for a step left after the merge, board leads, and open decisions
-  migrate --apply         backs up board.json, tidy.jsonl, decisions.json while it is still a file, and
-                          agent-skills.db through `orch db backup`'s copy, to <state>/backup-orca-v2-<ts>/
-                          (0700 dir, 0600 files) under the board and tidy locks, then appends a tidy `done` line
-                          (by "migrate", rule "moved_to_orca") per listed doing line and writes migrate.json there.
-                          A second run finds nothing left and writes nothing. It also prints the same undo as an
-                          `orch board reopen` line, which code before this one runs too.
-  migrate --restore DIR   appends a `reopen` line for each id DIR/migrate.json closed that is still closed by
-                          migrate.
+  migrate --apply         backs up agent-skills.db through `orch db backup`'s copy to <state>/backup-orca-v2-<ts>/
+                          (0700 dir, 0600 files), writes migrate.json there, then closes each listed doing line
+                          (by "migrate", rule "moved_to_orca") in one transaction. A second run finds nothing left
+                          and writes nothing. It also prints the same undo as an `orch board reopen` line.
+  migrate --restore DIR   reopens each id DIR/migrate.json closed that is still closed by migrate.
 A doing line waiting on someone, or the owner's, or one the owner reopened, is left alone. Leads and decisions are
 only reported: a running lead started before this version still writes its board lead, and the fleet shows both.
 """
-import contextlib, fcntl, json, os, pathlib, shutil, sys
+import json, os, pathlib, sys
 
 import board, fleet, tidy
 import store as store_db  # `store` is the board dict below
 
-FILES = ("board.json", "tidy.jsonl", "decisions.json")
 RULE = "moved_to_orca"
 
 
@@ -38,7 +34,7 @@ def plan(now=None):
     cards = tidy.cards_of(state)
     close, tick, steps = [], [], []
     for d in store["doing"]:
-        iid = tidy.item_id("doing", d)
+        iid = d["id"]
         cur = have.get(iid) or {}
         if cur.get("ev") == "done" or cur.get("ev") == "reopen" or d.get("waiting") or board.is_owner(d.get("owner"), me):
             continue
@@ -54,7 +50,7 @@ def plan(now=None):
         owner = (d.get("owner") or "").strip().lower()
         by_owner = [c for c in cards.values() if owner and owner in tidy.keys_of(c)]
         if card := tidy.named(f"{d['title']} {d.get('next') or ''}", cards) or (by_owner[0] if len(by_owner) == 1 else None):
-            close.append({"id": iid, "label": d["title"],
+            close.append({"id": iid, "label": d["title"], "item": d,
                           "evidence": f"Orca 카드 {card.get('name') or card['id']} ({card.get('phase') or '?'})"})
     handles = {t.get("handle") for s in state.get("sessions") or [] for t in s.get("terminals") or []}
     leads = [{"name": n, "handle": l.get("handle"), "in_fleet": l.get("handle") in handles}
@@ -66,45 +62,37 @@ def plan(now=None):
     return {"close": close, "tick": tick, "steps": steps, "leads": leads, "decisions": decisions}
 
 
-@contextlib.contextmanager
-def board_lock():
-    sd = fleet.state_dir()
-    sd.mkdir(parents=True, exist_ok=True)
-    with (sd / "board.lock").open("a") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        yield
-
-
 def backup(now):
-    sd = fleet.state_dir()
-    dest = sd / f"backup-orca-v2-{now.strftime('%Y%m%dT%H%M%S%fZ')}"
-    dest.mkdir(mode=0o700)  # applies run under the board lock, so two never take the same microsecond
+    dest = fleet.state_dir() / f"backup-orca-v2-{now.strftime('%Y%m%dT%H%M%S%fZ')}"
+    dest.mkdir(mode=0o700)
     os.chmod(dest, 0o700)
-    for name in FILES:
-        if (sd / name).is_file():  # after `orch db import` decisions.json is an empty directory, its data in the DB
-            shutil.copyfile(sd / name, dest / name)
-            os.chmod(dest / name, 0o600)
-    if store_db.path().is_file():
-        store_db.backup(dest / store_db.DB_NAME)
+    store_db.backup(dest / store_db.DB_NAME)
     return dest
 
 
 def apply(now=None):
     """Returns (backup dir or None, closed ids)."""
     now = now or fleet.utcnow()
-    with board_lock(), tidy.locked() as have:
-        found = [c for c in plan(now)["close"] if (have.get(c["id"]) or {}).get("ev") not in ("done", "reopen")]
-        if not found:
-            return None, []
-        dest = backup(now)
-        ts = fleet.iso(now)
-        rows = [r for c in found
-                if tidy.fits(r := {"ev": "done", "id": c["id"], "ts": ts, "by": "migrate", "rule": RULE,
-                                   "evidence": fleet.mask(c["evidence"]), "label": fleet.mask(c["label"])})]
-        fleet.write_atomic(dest / "migrate.json", json.dumps({"at": ts, "closed": [r["id"] for r in rows]}, ensure_ascii=False) + "\n")
-        os.chmod(dest / "migrate.json", 0o600)
-        tidy.append(rows, have)
-    return dest, [r["id"] for r in rows]
+    ts = fleet.iso(now)
+    judged = plan(now)["close"]
+    found = [{"ev": "done", "id": c["id"], "ts": ts, "by": "migrate", "rule": RULE, "evidence": fleet.mask(c["evidence"]),
+              "label": fleet.mask(c["label"])} for c in judged]
+    found = [r for r in found if tidy.fits(r)]
+    items = {c["id"]: c["item"] for c in judged}
+    if not found:
+        return None, []
+    dest = backup(now)
+    fleet.write_atomic(dest / "migrate.json", json.dumps({"at": ts, "closed": [r["id"] for r in found]}, ensure_ascii=False) + "\n")
+    os.chmod(dest / "migrate.json", 0o600)
+    closed = []
+    with store_db.tx() as db:
+        have = store_db.latest(db)
+        for r in found:
+            # plan() read before this transaction
+            if (have.get(r["id"]) or {}).get("ev") not in ("done", "reopen") and store_db.item_same(db, items[r["id"]]):
+                store_db.close_unit(db, r)
+                closed.append(r["id"])
+    return dest, closed
 
 
 def restore(dest, now=None):
@@ -112,19 +100,19 @@ def restore(dest, now=None):
     record = fleet.read_json(dest / "migrate.json", None)
     if not isinstance(record, dict) or not isinstance(record.get("closed"), list):
         raise ValueError(f"{dest}/migrate.json is missing or not a migrate record")
-    ts, rows, again, skipped = fleet.iso(now or fleet.utcnow()), [], [], []
-    with tidy.locked() as have:
-        for iid in record["closed"]:
+    ts, opened, again, skipped = fleet.iso(now or fleet.utcnow()), [], [], []
+    with store_db.tx() as db:
+        have = store_db.latest(db)
+        for iid in (store_db.resolve(db, i) for i in record["closed"]):  # a run from before stable ids recorded hashes
             cur = have.get(iid) or {}
             if cur.get("ev") == "done" and cur.get("by") == "migrate":
-                rows.append({"ev": "reopen", "id": iid, "ts": ts, "by": "migrate", "rule": "restore",
-                             "evidence": cur.get("evidence"), "label": cur.get("label")})
+                store_db.reopen_unit(db, iid, ts, "migrate", "restore")
+                opened.append(iid)
             elif cur.get("ev") == "reopen" and cur.get("by") == "migrate":
                 again.append(iid)
             else:
                 skipped.append(iid)
-        tidy.append(rows, have)
-    return [r["id"] for r in rows], again, skipped
+    return opened, again, skipped
 
 
 def report(p):
@@ -142,6 +130,13 @@ def report(p):
 
 
 def main(argv):
+    try:
+        run(argv)
+    except store_db.NotMigrated as e:
+        sys.exit(f"the board is not in {store_db.DB_NAME} yet ({e})")
+
+
+def run(argv):
     if argv[:1] == ["--apply"] and len(argv) == 1:
         dest, ids = apply()
         if not ids:
@@ -150,7 +145,7 @@ def main(argv):
         print(f"backup: {dest}")
         print(f"closed {len(ids)}: " + " ".join(ids))
         print(f"undo: orch migrate --restore {dest}")
-        print("undo with older code: orch board reopen " + " ".join(ids))
+        print("undo with older code, after the 4b rollback: orch board reopen " + " ".join(store_db.legacy_ids(ids)))
     elif argv[:1] == ["--restore"] and len(argv) == 2:
         try:
             ids, again, skipped = restore(pathlib.Path(argv[1]).expanduser())

@@ -6,7 +6,7 @@ import pathlib, re, subprocess, sys
 
 HERE = pathlib.Path(__file__).parent
 sys.path.insert(0, str(HERE))
-from table_width import fit, table_width, tables, text_width
+from table_width import as_lines, table_width, tables, text_width
 
 assert text_width("검색 개선") == 9
 assert text_width("⚠️ 로그만") == 9
@@ -87,16 +87,16 @@ for rows, k in folded:
     assert len(re.findall(r"#\d+", rows[k][2])) >= 2, rows[k]
     assert subtask_runs(rows[:k])[0] == 0 and any(not is_sub(r) for r in rows[1:k]), ("reviewer row without its lead", rows)
 
-# A cut saves at least its mark's width: 3 columns over, a 4-column …[1] would leave a 1-column head's worth, so the
-# name is cut deeper, and a cell over its cap by less than its mark stays whole.
-assert fit([["a", "b"], ["x" * 15, "y"]], 20, (0,)) == ([["a", "b"], ["x" * 7 + "…[1]", "y"]], ["x" * 15]), \
-    fit([["a", "b"], ["x" * 15, "y"]], 20, (0,))
-assert fit([["a", "b"], ["x" * 15, "y"], ["z" * 12, "y"]], 21, (0,))[0][1:] == [["x" * 7 + "…[1]", "y"], ["z" * 12, "y"]]
-out, notes = fit([["a", "b"], ["x" * 15, "y"], ["z" * 14, "y"]], 20, (0,))
-assert out[1:] == [["x" * 6 + "…[1]", "y"], ["z" * 6 + "…[2]", "y"]] and len(notes) == 2, out
-# Near the floor no cut saves a mark's width: the loop ends, and the table overflows whole.
-assert fit([["a", "b"], ["x" * 15, "y"], ["z" * 13, "y"]], 20, (0,))[1] == []
-assert fit([["a", "b"], ["x" * 12, "y" * 60]], 40, (0,)) == ([["a", "b"], ["x" * 12, "y" * 60]], [])
+# A table wider than the width goes out as one whole line per row: no cell is cut, two names with one head stay two, a
+# reason shared by a long head stays whole, an empty or `—` cell is left out, and no line carries a footnote mark.
+reasons = ["에이전트 조치 필요: 리뷰 두 팀 승인을 확인한 뒤 머지 그리고 배포까지 " + w for w in ("진행", "보고")]
+cards = ["xx-agent-actions-lead", "xx-agent-wizard-lead"]
+rows = [["🔄", c, "—", r, ""] for c, r in zip(cards, reasons)]
+assert table_width([["", "리드", "PR", "다음", "세션"]] + rows) > 78
+lines = as_lines(rows, 2)
+assert lines == [f"- 🔄 {c} — {r}" for c, r in zip(cards, reasons)], lines
+assert not any("…" in l or "[1]" in l for l in lines)
+assert as_lines([["⏰", "내일", "할 일", "—"]], 1) == ["- ⏰ — 내일 · 할 일"] and as_lines([["🔄", "name", "", ""]], 2) == ["- 🔄 name"]
 
 wide = "| " + "가" * 40 + " | b |\n|---|---|\n"
 r = subprocess.run([sys.executable, str(HERE / "table_width.py"), "--cols", "78"], input=wide, capture_output=True, text=True)

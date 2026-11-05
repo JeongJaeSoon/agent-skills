@@ -44,21 +44,21 @@ assert orch("next", "acme/web#45 리뷰 → 머지 (에이전트, 오늘)", "v1.
     {"key": "acme/ops#88", "state": "MERGED", "merged_at": "2026-10-02T05:00:00Z"},
     {"key": "acme/web#45", "state": "OPEN", "ci": "failure"},
 ]}))
-# --all is the whole table; its stage cells alone pass 78 columns, so show prints it and exits 1.
+# --all is the whole table; whole it passes 78 columns, so the names are cut to fit, as long as the room allows.
 code, md, err = orch("show", "--md", "--all")
-assert code == 1 and err == "a table is wider than 78 columns", (code, err, md)
+assert code == 0 and err == "", (code, err, md)
 lines = md.splitlines()
 assert lines[0] == "prod: v1.7.2 · dev: v1.8.0" and lines[1].startswith("✅ 완료·확인"), lines[:2]
-rows = [l for l in lines if l.startswith("| ") and not l.startswith("| 작업")]
-# Only a name or PR is cut, never a stage cell: these names are short, so the table overflows 78 whole, no list under it.
+rows = [l for l in lines if l.startswith("- ")]
+# No cell is cut: the table passes 78 columns, so each row is one whole line, with no `…` and no list under it.
 assert rows[:3] == [
-    "| 검색 개선 | acme/web#42 | ✅ 10/2 | ✅ v1.8.0 | 🔄 확인 중 (QA 리드) |",
-    "| ㄴ 인덱스 재구축 | acme/ops#88 | ✅ 10/2 | – | 해당 없음 |",
-    "| ㄴ 정렬 버그 | acme/web#45 | ❌ CI 실패 | ⚠️ a\\|b | – |",
+    "- 검색 개선 — acme/web#42 · 머지 ✅ 10/2 · dev ✅ v1.8.0 · prod 🔄 확인 중 (QA 리드)",
+    "- ㄴ 인덱스 재구축 — acme/ops#88 · 머지 ✅ 10/2 · prod 해당 없음",
+    "- ㄴ 정렬 버그 — acme/web#45 · 머지 ❌ CI 실패 · dev ⚠️ a|b",
 ], rows
 # Every cell ✅: the row has ended, at its latest cell's time, without anyone running `orch stage done`.
-assert rows[3].startswith("| 로그인 개선 (끝남) | acme/web#40 | ✅ 9/28 | ✅ v1.7.2 | ✅ token=") and "…[" not in md, md
-assert not any(l.startswith("- [") for l in lines), lines
+assert rows[3].startswith("- 로그인 개선 (끝남) — acme/web#40 · 머지 ✅ 9/28 · dev ✅ v1.7.2 · prod ✅ token=") and "…" not in md, md
+assert not any(l.startswith("- [") for l in lines) and "\n| " not in md, lines
 assert lines[-2:] == ["1. acme/web#45 리뷰 → 머지 (에이전트, 오늘)", "2. v1.8.0 prod 배포 (사람, 미정)"], lines[-2:]
 
 code, tg, _ = orch("show", "--telegram")
@@ -78,7 +78,7 @@ assert t["rows"][0]["cells"]["merge"] == {"mark": "ok", "evidence": "10/2", "aut
 # Without --all, show prints what the brief's line counts: the finished row folds into one line.
 code, cur, _ = orch("show")
 assert "로그인 개선" not in cur and cur.endswith("접음 1행 (끝남 또는 7일 그대로) · --all 로 전부"), cur
-assert orch("done", "login")[0] == 0 and "로그인 개선 (끝남)" in orch("show", "--all")[1]
+assert orch("done", "login")[0] == 0 and "- 로그인 개선 (끝남) — acme/web#40" in orch("show", "--all")[1]
 assert orch("drop", "search")[0] == 0
 assert [r["id"] for r in json.loads(orch("show", "--json", "--all")[1])["rows"]] == ["login"]
 store = json.loads((state / "stages.json").read_text())
@@ -99,13 +99,13 @@ assert orch("add", "g2", "--group", "--title", "그룹", "--pr", "acme/web#1")[2
 assert orch("add", "chat", "--title", "채팅", "--parent", "solo")[2].startswith("a group row (chat)")
 assert orch("set", "chat", "--col", "dev", "--mark", "na")[2].startswith("chat is a group row")
 assert orch("set", "icon", "--col", "dev", "--mark", "partial", "--evidence", "스텁으로만 확인")[0] == 0
-rows = [l for l in orch("show", "--md")[1].splitlines() if l.startswith("| ") and not l.startswith("| 작업")]
+rows = [l for l in orch("show", "--md")[1].splitlines() if l.startswith("- ")]
 assert rows == [
-    "| **채팅** |  |  |  |  |",
-    "| 본체 | acme/web#60 | – | – | – |",
-    "| ㄴ 사이드…[1] | – | – | ⚠️ 스텁으로만 확인 | – |",
-    "| 티켓 하나 | – | – | – | – |",
-    "| 단독 작업 | – | – | – | – |",
+    "- **채팅**",
+    "- 본체 — acme/web#60",
+    "- ㄴ 사이드바 접기 아이콘 — dev ⚠️ 스텁으로만 확인",
+    "- 티켓 하나",
+    "- 단독 작업",
 ], rows
 tg = orch("show", "--telegram")[1].splitlines()
 assert tg[1:4] == ["[채팅]", "- 본체 (acme/web#60) — 머지 – · dev – · prod –",
@@ -115,5 +115,23 @@ assert "단독 작업" not in orch("show", "--program", "chat")[1]
 # Dropping or pruning a group takes its rows' children too, not only its direct rows.
 assert orch("drop", "chat")[0] == 0
 assert [r["id"] for r in json.loads(orch("show", "--json")[1])["rows"]] == ["solo"]
+
+# Two rows with one long head, and a cell that would cut to the same phrase in both, stay whole: lines, no `…`.
+HEAD = "공통 앞부분이 아주 길게 이어지는 작업 이름 "
+for k in ("가", "나"):
+    assert orch("add", f"same-{k}", "--title", HEAD + k, "--pr", f"acme/web#7{'1' if k == '가' else '2'}")[0] == 0
+    assert orch("set", f"same-{k}", "--col", "dev", "--mark", "partial", "--evidence", "에이전트 조치 필요: 두 팀 승인을 확인한 뒤 배포 " + k)[0] == 0
+md = orch("show", "--md")[1]
+same = [l for l in md.splitlines() if "공통 앞부분" in l]
+assert len(same) == 2 and all("…" not in l and ("에이전트 조치 필요: 두 팀 승인을 확인한 뒤 배포 " + k) in l for l, k in zip(same, "가나")), md
+assert all(HEAD + k in l for l, k in zip(same, "가나")) and "\n| " not in md, md
+for k in ("가", "나"):
+    assert orch("drop", f"same-{k}")[0] == 0
+# Same title, one failing only in dev and the other only in prod: the column name tells the lines apart.
+for k, col in (("가", "dev"), ("나", "prod")):
+    assert orch("add", f"col-{k}", "--title", HEAD + "같은 제목", "--pr", f"acme/web#8{'1' if k == '가' else '2'}")[0] == 0
+    assert orch("set", f"col-{k}", "--col", col, "--mark", "fail", "--evidence", "배포 실패")[0] == 0
+same = [l for l in orch("show", "--md")[1].splitlines() if "같은 제목" in l]
+assert len(same) == 2 and "dev ❌" in same[0] and "prod ❌" in same[1] and "prod" not in same[0] and "dev" not in same[1], same
 
 print("test_stages: ok")

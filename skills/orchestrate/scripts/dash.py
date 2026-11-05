@@ -53,6 +53,7 @@ import stages  # noqa: E402
 import flow  # noqa: E402
 import acks  # noqa: E402
 import tidy  # noqa: E402
+import store as store_db  # noqa: E402
 import board  # noqa: E402
 import jobs  # noqa: E402
 sys.path.append(str(HERE.parents[2] / "scripts"))
@@ -2053,6 +2054,20 @@ def loops_alive(h, limit=LOOP_STALE):
         return False
 
 
+def watch_migrate(poll=0.5, kill=os.kill, port=None):
+    """A server that slipped past the start checks (they are not atomic with the start) ends itself once `orch db
+    migrate` holds its lock, so it never writes the state during the import. It leaves its port first: the migrate
+    starts it again from that, whether or not its own probes saw it."""
+    while True:
+        time.sleep(poll)
+        if store_db.cutover_running():
+            log(MIGRATING)
+            if port:
+                store_db.mark_dash_yielded(port)
+            kill(os.getpid(), signal.SIGTERM)
+            return
+
+
 def serve(host, port, interval, make_fleet=None):
     global FLEET
     home().mkdir(parents=True, exist_ok=True)
@@ -2070,6 +2085,8 @@ def serve(host, port, interval, make_fleet=None):
             "waiting for its store lock")
         fcntl.flock(lock, fcntl.LOCK_EX)
     httpd = http.server.ThreadingHTTPServer((host, port), Handler)  # bind before the loops start
+    if store_db.cutover_running():  # checked again after the bind: a migrate that starts later finds this server up
+        sys.exit(MIGRATING)
     HEALTH.update(pid=os.getpid(), store=str(home()), version=code_version(), mtime=code_mtime(), port=port,
                   started_at=iso(utcnow()), git=git_sha(), script=str(HERE / "dash.py"))
     check_code()
@@ -2085,6 +2102,7 @@ def serve(host, port, interval, make_fleet=None):
     threading.Thread(target=slow_loop, args=(interval,), daemon=True).start()
     threading.Thread(target=fast_loop, args=(interval,), daemon=True).start()
     threading.Thread(target=code_loop, daemon=True).start()
+    threading.Thread(target=watch_migrate, kwargs={"port": port}, daemon=True).start()
     if os.environ.get("ORCH_FLEET") != "off":
         FLEET = (make_fleet or fleet.Fleet)()
         threading.Thread(target=fleet_loop, daemon=True).start()
@@ -2114,6 +2132,8 @@ def cmd_collect(argv):
 
 
 def cmd_serve(argv):
+    if store_db.cutover_running():  # a server that wins the race with `ensure`'s check still ends here
+        sys.exit(MIGRATING)
     serve(prog.opt(argv, "--host", "127.0.0.1"), int(prog.opt(argv, "--port") or default_port()),
           int(prog.opt(argv, "--interval", "60")))
 
@@ -2138,7 +2158,7 @@ def periodic_report():
         out = json.loads(r.stdout)
     except ValueError:  # an empty board, or a renderer this checkout does not have yet: its own words
         return {"message": (r.stdout or r.stderr).strip() or f"orch brief render exited {r.returncode}"}
-    keys = ("text", "changed", "stale", "width_ok", "done", "open", "table_rows", "list_rows", "placement", "duplicates",
+    keys = ("text", "full", "changed", "stale", "width_ok", "done", "open", "table_rows", "list_rows", "placement", "duplicates",
             "missing", "now_by_pr")
     return {k: out.get(k) for k in keys} | {"closed": closed_recent()}
 
@@ -2163,7 +2183,7 @@ def pressure_report(hours=6):
 
 
 def closed_recent(days=7):
-    """What tidy.jsonl closed in the last days, newest first, for the page's Reopen buttons."""
+    """What was closed in the last days, newest first, for the page's Reopen buttons."""
     cut = iso(utcnow() - dt.timedelta(days=days))
     return sorted(({"id": k, **r, "reopen": tidy.can_reopen(k)} for k, r in tidy.closed().items() if (r.get("ts") or "") >= cut),
                   key=lambda r: r.get("ts") or "", reverse=True)
@@ -2220,6 +2240,9 @@ def stop(h, port):
 
 
 # ---------------------------------------------------------------- launchd
+
+MIGRATING = "orch db migrate is running: the dashboard server starts again when it ends"
+
 
 def agent_label():
     return os.environ.get("ORCH_DASH_LABEL") or "io.github.jeongjaesoon.orch-dash"
@@ -2307,6 +2330,8 @@ def agent_spec(port):
 
 
 def install_agent(port):
+    if store_db.cutover_running():
+        return False, MIGRATING
     if sys.platform != "darwin":
         return False, "no launchd on this OS; `orch init` and `orch status` keep the dashboard up with `ensure`"
     if not (HERE.parents[2] / ".git").is_dir():  # a worktree or the plugin cache goes away under launchd
@@ -2338,6 +2363,8 @@ def uninstall_agent():
 
 def ensure(port):
     """(ok, message). Starts, restarts or moves only a server it can identify as this store's."""
+    if store_db.cutover_running():  # a restarted session's `orch wait` must not bring the server back mid-import
+        return False, MIGRATING
     if a := agent_status():
         return ensure_agent(a)
     last = (read_json(home() / ".dash.json") or {}).get("port")

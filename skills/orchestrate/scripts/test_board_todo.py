@@ -14,7 +14,9 @@ env = {**os.environ, "ORCH_FLEET_STATE": str(state), "ORCH_BRIEF_LAST": str(tmp 
 os.environ.update(env)
 sys.path.insert(0, str(HERE))
 import board, fleet, tidy  # noqa: E402
+import store as db_store  # noqa: E402  # `store` below reads the board
 
+db_store.import_apply(checks=False)
 BEFORE = "2026-10-27T01:00:00Z"
 AFTER = "2026-10-30T09:05:00Z"
 
@@ -31,7 +33,7 @@ def ok(*args):
 
 
 def store():
-    return json.loads((state / "board.json").read_text())
+    return board.read()
 
 
 def render(now, *extra):
@@ -64,7 +66,7 @@ ok("board", "now", "acme/app#3 리뷰")
 for args in (("board", "todo", "회의 준비"), ("board", "todo")):
     code, _, err = orch(*args)
     assert code == 1 and "orch board now" in err, err
-assert store()["owner_todo"] == ["acme/app#3 리뷰"] and store()["todo"] == []
+assert [t["title"] for t in store()["owner_todo"]] == ["acme/app#3 리뷰"] and store()["todo"] == []
 
 ok("board", "todo", "add", "acme/app#1 머지·배포", "--due", "2026-10-30 09:00", "--who", "오너")
 ok("board", "todo", "add", "acme/app#2 ready 로 전환", "--after", "acme/app#5 머지 후", "--who", "lead-billing")
@@ -78,7 +80,7 @@ assert orch("board", "todo", "from-later", "9", "--who", "오너")[2] == "no lat
 ok("board", "todo", "from-later", "2", "--who", "writer")
 s = store()
 assert [l["title"] for l in s["later"]] == ["캐시 TTL 다시 보기"]
-moved = {k: v for k, v in s["todo"][-1].items() if k != "added"}
+moved = {k: v for k, v in s["todo"][-1].items() if k not in ("added", "id", "updated_at")}
 assert moved == {"title": "릴리스 노트 정리", "who": "writer", "due": "2026-11-03T00:00:00+00:00", "after": "v2 출시 뒤"}, s["todo"]
 
 state.mkdir(parents=True, exist_ok=True)
@@ -159,9 +161,9 @@ assert set(fleet.held_prs(board.read(), {}, merged, fleet.parse(AFTER))) == set(
 # Open items list every to-do with its do: id; Done closes one and nothing closes it on its own.
 items = {o["id"]: o for o in json.loads(ok("board", "open", "--json"))}
 do = {o["label"]: i for i, o in items.items() if o["kind"] == "do"}
-assert len(do) == 3 and all(i.startswith("do:") for i in do.values()), items
-assert tidy.item_id("todo", "acme/app#3 리뷰") in items and items[tidy.item_id("todo", "acme/app#3 리뷰")]["kind"] == "todo"
-assert all(not r["id"].startswith("do:") for r in tidy.run(dry=True))
+assert len(do) == 3 and all(i.startswith("b") for i in do.values()), items
+assert next(i for i in items.values() if i["label"] == "acme/app#3 리뷰")["kind"] == "todo"
+assert not set(do.values()) & {r["id"] for r in tidy.run(dry=True)}
 first = do["10/30(금) 09:00 → acme/app#1 머지·배포 · 오너"]
 ok("board", "done", first)
 out = render(AFTER)
@@ -175,17 +177,14 @@ ok("board", "todo", "drop", "1")
 assert [t["title"] for t in store()["todo"]] == ["acme/app#2 ready로 전환", "릴리스 노트 정리"]
 
 # A M/D is kept as the moment it named when added: read again in January, last October's dates stay come. The date in
-# --after reads against when the to-do was added, and one written before the stamp gets it on the next write.
+# --after reads against when the to-do was added, and every item has that stamp.
 fleet.utcnow = lambda: dt.datetime(2026, 10, 28, 1, tzinfo=dt.timezone.utc)
 board.todo_add("분기 정산", due="10/1", who="writer")
 board.todo_add("회고 정리", due="10/29", who="writer")
 board.todo_add("감사 대응", after="10/27 이후", who="writer")
 assert [t["due"] for t in store()["todo"] if t["title"] in ("분기 정산", "회고 정리")] == ["2026-10-01T00:00:00+00:00",
                                                                                    "2026-10-29T00:00:00+00:00"]
-legacy = store()
-legacy["todo"].append({"title": "옛 할 일", "who": "writer", "due": "10/1"})
-(state / "board.json").write_text(json.dumps(legacy, ensure_ascii=False))
-board.change(lambda s: None)
+board.change(lambda s: s["todo"].append({"title": "옛 할 일", "who": "writer", "due": "10/1"}))
 assert store()["todo"][-1]["added"] == "2026-10-28T01:00:00Z", store()["todo"]
 JAN = "2027-01-10T00:00:00Z"
 out = render(JAN)
@@ -219,13 +218,24 @@ cards = {"c1": {"id": "c1", "name": "deploy-card", "pr": "acme/app#5"}}
 assert fleet.todo_come({"title": "x", "who": "w", "after": "deploy-card 끝나면"}, fleet.parse(BEFORE), merged, cards)
 assert not fleet.todo_come({"title": "x", "who": "w", "after": "deploy-card 끝나면"}, fleet.parse(BEFORE), {}, cards)
 
-# A long name is cut to fit 78 columns as the report's tables are, its whole text under the table.
-board.todo_add("아주 긴 할 일 이름이 표 폭을 넘겨서 잘려야 하는 경우를 확인하기 위한 문장 — 끝까지 읽혀야 한다", due="2027-05-01", who="writer")
+# A long name is never cut: the to-do table passes 78 columns, so its rows go out as one whole line each.
+LONG_TODO = "아주 긴 할 일 이름이 표 폭을 넘겨서 잘리면 안 되는 경우를 확인하기 위한 문장 — 끝까지 읽혀야 한다"
+board.todo_add(LONG_TODO, due="2027-05-01", who="writer")
 listed = ok("board", "todo", "list", "--now", BEFORE, "--no-refresh")
-assert "아주 긴 할 일 이…[2]" in listed and "- [2] 아주 긴 할 일 이름이 표 폭을 넘겨서 잘려야 하는 경우를 확인하기 위한 문장 — 끝까지 읽혀야 한다" in listed, listed
+assert any(l.startswith("- 📅") and LONG_TODO in l and l.endswith("writer") for l in listed.splitlines()), listed
+assert "…" not in listed and "- [" not in listed, listed
 sys.path.insert(0, str(HERE.parents[1] / "brief" / "scripts"))
 import table_width  # noqa: E402
-assert all(table_width.text_width(l) <= 78 for l in listed.splitlines() if l.startswith("|")), listed
+assert all(table_width.table_width(t) <= 78 for _, t in table_width.tables(listed)), listed
+# Two to-dos with one long head and a trigger that would cut to the same phrase stay whole, one line each.
+SAME = "공통 앞부분이 아주 길게 이어지는 보류 항목 이름 "
+for k in ("가", "나"):
+    board.later_add(SAME + k, trigger="조건이 충족되면 두 팀 승인을 확인한 뒤 배포 " + k)
+listed = ok("board", "todo", "list", "--now", BEFORE, "--no-refresh")
+same = [l for l in listed.splitlines() if "공통 앞부분" in l]
+assert len(same) == 2 and all(SAME + k in l and ("두 팀 승인을 확인한 뒤 배포 " + k) in l and "…" not in l for l, k in zip(same, "가나")), listed
+for _ in same:
+    ok("board", "later", "drop", "2")  # the two sit at 2 and 3; the queue closes up after each drop
 
 assert orch("board", "todo", "drop", "abc")[2].startswith("board todo is the to-do list now: todo add")
 
@@ -266,8 +276,8 @@ listed = ok("board", "todo", "list", "--now", BEFORE, "--no-refresh")
 assert "| ▶ 1 | 문서 이미지 교체 |" in listed and "| ❔2 | acme/app#2 후속 정리 |" in listed, listed
 assert orch("board", "later", "move", "3", "--to", "1")[2] == "no later item 3; there are 2"
 ok("board", "later", "add", "릴리스 공지", "--trigger", "v3 뒤", "--at", "2")
-assert [l["title"] for l in store()["later"]] == ["캐시 TTL 다시 보기", "문서 이미지 교체", "릴리스 공지", "acme/app#2 후속 정리"], store()
+assert [l["title"] for l in store()["later"]] == ["문서 이미지 교체", "릴리스 공지", "acme/app#2 후속 정리"], store()
 ok("board", "later", "drop", "3")
-assert [l["title"] for l in store()["later"]] == ["캐시 TTL 다시 보기", "문서 이미지 교체", "릴리스 공지"], store()
+assert [l["title"] for l in store()["later"]] == ["문서 이미지 교체", "릴리스 공지"], store()
 
 print("ok")

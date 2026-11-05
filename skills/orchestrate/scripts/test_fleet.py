@@ -132,12 +132,12 @@ for py in [sys.executable] + [p for p in ("/usr/bin/python3",) if os.path.exists
                          cwd=pathlib.Path(__file__).parent, capture_output=True, text=True)
     assert out.stdout.strip() == "2026-10-27T15:31:21+09:00", (py, out.stdout, out.stderr)
 # A PR a held board item names goes last, marked with the hold, until its date comes or the item leaves the board.
-board_path, ahead = state_dir / "board.json", (now + dt.timedelta(days=2)).astimezone().strftime("%m/%d 09:00")
+import store  # noqa: E402
+ahead = (now + dt.timedelta(days=2)).astimezone().strftime("%m/%d 09:00")
 
 
 def hold(trigger):
-    fleet.write_atomic(board_path, json.dumps({"doing": [], "owner_todo": [], "rows": {},
-                                               "later": [{"title": "acme/launchpad#42 마무리", "trigger": trigger}]}))
+    store.load_board({"later": [{"title": "acme/launchpad#42 마무리", "trigger": trigger}]})
     return f.tick(force=True)
 
 
@@ -151,11 +151,10 @@ st = hold("acme/launchpad#41 머지 뒤")  # no date: held while the PR its trig
 assert all(i.get("held") for i in items(st) if i.get("pr") == "acme/launchpad#42")
 assert not any(i.get("held_todo") for i in items(st))
 # A to-do naming the PR holds it too, tagged as the to-do's, not a held item's.
-fleet.write_atomic(board_path, json.dumps({"doing": [], "owner_todo": [], "rows": {}, "later": [], "todo": [
-    {"title": "acme/launchpad#42 머지·배포", "who": "오너", "after": "acme/launchpad#41 머지 뒤"}]}))
+store.load_board({"todo": [{"title": "acme/launchpad#42 머지·배포", "who": "오너", "after": "acme/launchpad#41 머지 뒤"}]})
 pr42 = [i for i in items(f.tick(force=True)) if i.get("pr") == "acme/launchpad#42"]
 assert pr42 and all(i["held"] == "acme/launchpad#41 머지 뒤" and i["held_todo"] for i in pr42), pr42
-board_path.unlink()
+store.load_board()
 st = f.tick(force=True)
 assert not any(i.get("held") for i in items(st)) and [fleet.needs_rank(i) for i in items(st)] == ranks
 assert fleet.trigger_at("2026-11-02 14:30", now).strftime("%Y-%m-%d %H:%M") == "2026-11-02 14:30"
@@ -974,15 +973,13 @@ process.stdout.write(JSON.stringify({{page: fleetTodo(), section: fleetSection("
     assert page.count("▶ ") == 1 and page.index("▶ 1") < page.index("first held") and ">❔2</td>" in page and "1 · ❔ 1 check" in page, page
     assert "<th>Work · next when</th>" in page and "orch board todo add &lt;" not in page, page
 
-    # The Brief page draws the renderer's text whole: a cut cell gets the text its `- [n]` line holds (bold and └ kept)
-    # and the list goes; repository tables share one set of column widths; the sections under them become tables.
+    # The Brief page draws the renderer's `full` text, where no cell is cut; repository tables share one set of column
+    # widths; the sections under them become tables.
     text = "\n".join([
         "| | 리드/Phase | PR | 진행 | 다음 | 세션 |", "|---|---|---|---|---|---|",
-        "| ❔ | **lead-one** | — | — | 에이전트 조치…[3] | 작업 중 |",
-        "| 🙋 | └ **ABC-1 rollout: release then prod…[1]** | — | — | ↓ 오너 | 멈춤 |",
-        "| ⏳ | └ ABC-1 K4: client plugins for…[2] | [#7](https://github.com/acme/plugins/pull/7) ❗리뷰 | — | ↓ 대기 | 세션 없음 |", "",
-        "- [1] ABC-1 rollout: release then prod, then the final check", "- [2] ABC-1 K4: client plugins for both versions",
-        "- [3] 에이전트 조치 필요: 세션 꺼짐 · 6h 전", "",
+        "| ❔ | **lead-one** | — | — | 에이전트 조치 필요: 세션 꺼짐 · 6h 전 | 작업 중 |",
+        "| 🙋 | └ **ABC-1 rollout: release then prod, then the final check** | — | — | ↓ 오너 | 멈춤 |",
+        "| ⏳ | └ ABC-1 K4: client plugins for both versions | [#7](https://github.com/acme/plugins/pull/7) ❗리뷰 | — | ↓ 대기 | 세션 없음 |", "",
         "📌 **카드 없는 일**", "", "- ❔ guard-fix — 에이전트 조치 필요: 세션 꺼짐 · 6h 전", "- 🔄 rollout plan — 수 10/28: release · coordinator", "- └ 🔴 child card — 턴 종료", "",
         "⏳ **다른 사람 대기**", "", "- team:reviewers · 리뷰 [#7](https://github.com/acme/plugins/pull/7) · 3일 전부터 → ABC-1 K4 · 다음: 리뷰 대기 · 코디네이터", "",
         "❓ **결정 필요** — 1. (d1) settle the copy → 추천: 적용", "", "2. (d2) pick a date → 추천: Friday", "",
@@ -1089,7 +1086,7 @@ process.stdout.write(JSON.stringify({open, shut}));""")
     # Open items one whose Done is: a list item with no row of its own gets its Done in its list.
     two = "\n".join(["| | 리드/Phase | PR | 다음 | 세션 |", "|---|---|---|---|---|", "| ✅ | done lead | — | — | — |",  # no bar, no 진행
                      "| 🔴 | stuck lead | — | 재개·정리 | 세션 없음 |", "| 🔄 | **busy lead** | — | 리뷰 | 작업 중 |", "",
-                     "| | 리드/Phase | PR | 진행 | 다음 | 세션 |", "|---|---|---|---|---|---|", "| ⏳ | other | — | — | ↓ 대기 | 멈춤 |", "",
+                     "| | 리드/Phase | PR | 진행 | 다음 | 세션 |", "|---|---|---|---|---|---|", "| ⏳ | oth… | — | — | ↓ 대기 | 멈춤 |", "",  # a label no reply row has: no button
                      "📌 **카드 없는 일**", "", "- 🔄 loose item — 정리 · lead"])
     busy = {"id": "wt-busy", "name": "busy-card", "state": "working", "word": "작업 중", "last": "PR 열고 <리뷰> 대기",
             "at": "2026-10-28T09:00:00Z", "pr": "acme/plugins#7"}
@@ -1097,7 +1094,9 @@ process.stdout.write(JSON.stringify({open, shut}));""")
                 {"id": "b", "label": "stuck lead", "status": "🔴", "session": {"id": None, "state": "none", "word": "세션 없음"}, "ack": None, "done": "row:b"},
                 {"id": "a", "label": "done lead", "status": "✅", "session": None, "ack": "board:a", "done": None},
                 {"id": "c", "label": "busy lead", "status": "🔄", "session": busy, "ack": None, "done": "row:c"}]},
-            {"table": "acme/b", "rows": []}]
+            {"table": "acme/b", "rows": [
+                {"id": "o1", "label": "other one", "status": "⏳", "session": None, "ack": None, "done": "row:o1"},
+                {"id": "o2", "label": "other two", "status": "⏳", "session": None, "ack": None, "done": "row:o2"}]}]
     lists = {"moving": [{"id": "doing:x", "label": "loose item", "text": "🔄 loose item — 정리 · lead"}], "owner": [], "waiting": [], "held": []}
     js = f"""{helpers}
 {(assets / "fleet.js").read_text()}
@@ -1342,18 +1341,17 @@ f.graphql = counting
 assert 8 not in {p["number"] for p in pr_tick(viewed=True)["prs"]}, "closed or gone from the search: off the page"
 # Unless the board names it: a row about a PR the search no longer finds still gets its state, not "?".
 world.prs[8] = dict(world.prs[7], number=8, state="CLOSED", url="https://github.com/acme/tools/pull/8")
-fleet.write_atomic(state_dir / "board.json", json.dumps({"rows": {"x": {"id": "x", "pr": "acme/tools#8"}},
-                                                        "later": [{"title": "t", "trigger": "acme/tools#7 머지"}]}))
+store.load_board({"rows": {"x": {"id": "x", "pr": "acme/tools#8"}}, "later": [{"title": "t", "trigger": "acme/tools#7 머지"}]})
 assert fleet.board_prs() == {"acme/tools#8", "acme/tools#7"}, fleet.board_prs()
 assert next(p for p in pr_tick(viewed=True)["prs"] if p["number"] == 8)["state"] == "CLOSED"
-# A board item tidy.jsonl closed no longer holds its PR: prs.json drops it on the next PR tick.
+# A closed board item no longer holds its PR: prs.json drops it on the next PR tick.
 import tidy  # noqa: E402
-held = {"row:x": "x", tidy.item_id("later", {"title": "t", "trigger": "acme/tools#7 머지"}): "t"}
+held = {"row:x": "x", store.board()["later"][0]["id"]: "t"}
 assert tidy.write(list(held), can=held)[0] == list(held)
 assert fleet.board_prs() == set(), fleet.board_prs()
 assert 8 not in {p["number"] for p in pr_tick(viewed=True)["prs"]}
 assert tidy.write(list(held), undo=True)[0] == list(held)
-(state_dir / "board.json").unlink()
+store.load_board()
 # Nor while a program's ledger names it: the stage table reads a landed PR's branch from here once its card is gone.
 prog_dir = root / "no-programs" / "p1"
 prog_dir.mkdir(parents=True)
