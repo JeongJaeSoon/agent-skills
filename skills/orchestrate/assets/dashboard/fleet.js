@@ -949,9 +949,9 @@ async function pollBrief() {
   F.briefBusy = false;
 }
 // ❔ is a pale outline glyph in most emoji fonts: drawn as a toned mark instead.
-const briefInline = (s) => esc(s).replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, text, url) => link(url, text))
+const briefInline = (s) => linkTickets(esc(s).replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, text, url) => link(url, text))
   .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, '<span class="mono">$1</span>')
-  .replace(/❔/g, '<span class="qmark" role="img" aria-label="확인 필요">?</span>');
+  .replace(/❔/g, '<span class="qmark" role="img" aria-label="확인 필요">?</span>'));
 // A pointer line ends with a page of this dashboard, as its host's 127.0.0.1 URL: linked by its hash, so it also opens
 // from another device.
 const DASH_URL = /(https?:\/\/[^\s<]+\/(#\/fleet\/[\w/-]+))$/;
@@ -1487,11 +1487,18 @@ function subagentRows(s, d, hidden = false, foldStale = false) {
 const TICKET_RE = /(?<![A-Za-z0-9])(?=[A-Z0-9]*[A-Z])[A-Z0-9]{2,10}-\d{1,6}(?![A-Za-z0-9])/g;
 // Standards and formats that read like a ticket id ("UTF-8", "SHA-256"); a card named for one has no ticket from it.
 const NOT_TICKET = /^(UTF|SHA|MD|AES|RSA|ISO|TLS|SSL|HTTP|CRC|USB|GPT|WCAG|IPV|TCP|UDP|X)-/;
+// state.ticket_url (fleet.ticket_url): the tracker's issue URL prefix, ending in "/"; none configured, no link.
+const ticketHref = (k) => { const t = (S.fleet || {}).ticket_url; return t && safeUrl(t) ? t + encodeURIComponent(k) : ""; };
+// Links the ticket ids in already-escaped brief HTML. Tags and existing anchors pass through whole, so no id in an
+// href, a title or a link's own text is touched.
+const linkTickets = (html) => (S.fleet || {}).ticket_url
+  ? html.replace(new RegExp(`(<a\\b[^>]*>[\\s\\S]*?</a>)|(<[^>]+>)|(${TICKET_RE.source})`, "g"),
+    (m, a, tag, id) => !id || NOT_TICKET.test(id) ? m : link(ticketHref(id), id)) : html;
 // The card's own ticket links first, then ids in its name, its branch and the labels of its brief rows.
 function ticketIds(s, rows = []) {
   const out = (s.refs || []).filter((r) => r.type !== "pr" && r.url).map((r) => ({ key: r.key || r.provider || "ticket", url: r.url }));
   [s.name, s.branch, ...rows.map((x) => x.label)].forEach((t) => (String(t || "").match(TICKET_RE) || []).forEach((k) => {
-    if (!NOT_TICKET.test(k) && !out.some((o) => o.key === k)) out.push({ key: k, url: "" });
+    if (!NOT_TICKET.test(k) && !out.some((o) => o.key === k)) out.push({ key: k, url: ticketHref(k) });
   }));
   return out;
 }
