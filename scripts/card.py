@@ -574,6 +574,7 @@ def type_when_idle(handle, line, deadline=None):
 
 
 GOAL_RAN = "<command-name>/goal</command-name>"
+GOAL_ARGS = re.compile(r"<command-args>(.*?)</command-args>", re.S)
 
 
 def user_texts(path):
@@ -605,7 +606,8 @@ def goal_state(worktree, line):
     CLAUDE_PROJECTS_DIR, else under each of sync.HOMES (only the Orca profile pattern's `*` is a pattern),
     named after the path with every non-alphanumeric character as `-`."""
     import sync
-    ran = f"<command-args>{line.split(None, 1)[-1].strip()}</command-args>"
+    line = line.strip()
+    goal = line.split(None, 1)[-1]
     name = re.sub(r"[^A-Za-z0-9]", "-", worktree)
     homes = [h for home in sync.HOMES for h in (glob.glob(os.path.expanduser(home)) if "*" in home
                                                 else [os.path.expanduser(home)])]
@@ -615,9 +617,9 @@ def goal_state(worktree, line):
     for root in dict.fromkeys(roots):
         for path in pathlib.Path(root).expanduser().joinpath(name).glob("*.jsonl"):
             for t in user_texts(path):
-                if t.lstrip().startswith(GOAL_RAN) and ran in t:
+                if t.lstrip().startswith(GOAL_RAN) and any(a.strip() == goal for a in GOAL_ARGS.findall(t)):
                     return "ran"
-                if line in t:
+                if any(l.strip() == line for l in t.splitlines()):  # a whole line: `/goal ABC-7. more` is not it
                     state = "other"
     return state
 

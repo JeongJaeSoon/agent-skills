@@ -887,8 +887,12 @@ session_rows(META, PASTED)
 # A short handoff goal named in another session's prompt, beside an unrelated /goal: not this card's session.
 session_rows({"type": "user", "message": {"content": "Please review ABC-7. today"}}, ran("unrelated"), name="other.jsonl")
 assert card.goal_state(WT, "/goal ABC-7.") == "none"
-session_rows(ran("ABC-7."), name="other.jsonl")
-assert card.goal_state(WT, "/goal ABC-7.") == "ran"
+session_rows({"type": "user", "message": {"content": "/goal ABC-7. review only\nCLOSE: x"}}, name="other.jsonl")
+assert card.goal_state(WT, "/goal ABC-7.") == "none", "a longer goal that starts the same is another card's"
+session_rows({"type": "user", "message": {"content": "\n\n<pasted_content>\n/goal ABC-7.\nCLOSE: x"}}, name="other.jsonl")
+assert card.goal_state(WT, "/goal ABC-7.") == "other"
+session_rows(ran(" ABC-7. "), name="other.jsonl")
+assert card.goal_state(WT, "/goal ABC-7.") == "ran", "args padded with spaces"
 (TDIR / "other.jsonl").unlink()
 # Without CLAUDE_PROJECTS_DIR the config homes are read as they are written: brackets in a path are no pattern.
 literal = tmp / "profile[1]"
