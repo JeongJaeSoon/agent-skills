@@ -133,7 +133,7 @@ def main(argv):
     try:
         run(argv)
     except store_db.NotMigrated as e:
-        sys.exit(f"the board is not in {store_db.DB_NAME} yet ({e}); orch db cutover-plan 4b lists the steps")
+        sys.exit(f"the board is not in {store_db.DB_NAME} yet ({e})")
 
 
 def run(argv):

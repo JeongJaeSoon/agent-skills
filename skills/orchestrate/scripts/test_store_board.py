@@ -523,14 +523,16 @@ for name, touch in (("crash-after", False), ("crash-after-write", True)):
 # ---- before the import: no write, and the report says what it cannot know
 with state("before", None, None, STATE) as sd:
     for call in (lambda: board.later_add("x", "t"), lambda: tidy.write(["row:x"], can={"row:x": "x"})):
-        refused(call, "run orch db import", kind=store.NotMigrated)
+        refused(call, "bin/orch db migrate", kind=store.NotMigrated)
     code, _, err = orch("board", "later", "add", "x", "--trigger", "t")
-    assert code == 1 and "orch db cutover-plan 4b" in err, err
+    assert code == 1 and f"{store.main_checkout()}/bin/orch db migrate" in err, err
     code, _, err = orch("migrate", "--apply")
-    assert code == 1 and "orch db cutover-plan 4b" in err and "Traceback" not in err, err
+    assert code == 1 and "bin/orch db migrate" in err and "Traceback" not in err, err
+    code, out, err = orch("board", "open")  # a list without the board's items says why, on stderr
+    assert code == 0 and "이행 대기" in err and "bin/orch db migrate" in err, (out, err)
     assert tidy.run() == [] and tidy.closed() == {} and tidy.timeline() == [] and fleet.board_prs() == set()
     r = board.render(fill=True, fresh=False, periodic=False)
-    assert "이행 대기: 보드·결정 DB (`orch db cutover-plan 4b`)" in r["headline_facts"], r["headline_facts"]
+    assert f"이행 대기: 보드·결정 DB (`{store.main_checkout()}/bin/orch db migrate`)" in r["headline_facts"], r["headline_facts"]
     assert r["states"] and all(s["status"] == "check" for s in r["states"].values()), r["states"]
     assert r["duplicates"] == [] and r["missing"] == [] and not store.path().exists()
     assert rowstate.judged({"id": "x", "kind": "task", "status": "moving"}, {"db_unknown": True})["unknown"] == ["결정·닫힘 DB 이행 대기"]

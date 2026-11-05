@@ -1191,7 +1191,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         names = [one_line(sessions[m].get("name") or m) for m in missing]
         facts.append(f"보고서에 없는 세션 {len(missing)} ({', '.join(names[:3])}{' 외' if len(names) > 3 else ''})")
     if not db_known:
-        facts.append("이행 대기: 보드·결정 DB (`orch db cutover-plan 4b`)")
+        facts.append(f"이행 대기: 보드·결정 DB (`{store_db.migrate_command()}`)")
     fleet.external_marked(None, lost := [])
     if lost:
         facts.append(f"인박스 기록 어긋남 {len(lost)} ({', '.join(lost[:3])}{' 외' if len(lost) > 3 else ''}: 마지막 줄로 판정)")
