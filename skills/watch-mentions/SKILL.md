@@ -67,8 +67,7 @@ python3 "$M" plan > <scratchpad>/plan.json     # takes the run lock; prints olde
    and run `python3 "$M" ingest <scratchpad>/candidates.json`. It returns `new` (deduplicated, kinds
    merged) and `dropped` with reasons. If `new` is empty, run `python3 "$M" commit` and stop: send
    nothing.
-3. **Classify.** Read each new item in its thread and give it one category and a one-line summary
-   in the user's language:
+3. **Classify.** Read each new item in its thread and give it one category and a one-line summary:
 
    | category | when |
    |---|---|

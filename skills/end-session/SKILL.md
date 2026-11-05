@@ -101,10 +101,10 @@ channel — the Orca ones kill the process, `EndConversation` seals the conversa
 you planned to say afterwards is never delivered. Never end a turn promising to clean
 up "next turn", and never write anything after `EndConversation`.
 
-The report says, in the language the user writes in: what this session delivered, where the record lives (worklog,
+The report says what this session delivered, where the record lives (worklog,
 ticket, PR), what the user should still check themselves — or plainly that nothing is left,
 never an invented item — and which command is about to run. Write it per `write-plainly`. Its
-layout follows the `brief` skill, which leaves these items and the Korean in place. When the user
+layout follows the `brief` skill, which leaves these items in place. When the user
 writes from Telegram, send the report with the Telegram reply tool before the ending command: text
 left only on the terminal never reaches them.
 
