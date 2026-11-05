@@ -589,7 +589,7 @@ rc, out, err, calls = handoff("ABC-2", "--title", "next step", "--note", "stack 
 assert rc == 0, (rc, err)
 make = creates(calls)[0]
 assert make[make.index("--name") + 1] == "abc-2" and make[make.index("--parent-worktree") + 1] == "id:repo1::/wt/lead"
-assert make[make.index("--prompt") + 1] == f"/goal ABC-2. stack on ABC-1.\n{CLOSE}", make
+assert make[make.index("--prompt") + 1] == f"/goal ABC-2. stack on ABC-1.\n{CLOSE}\n{card.LOAD_LINE}", make
 assert ["worktree", "set", "--worktree", f"path:{CARD_DIR}", "--display-name", "ABC-2 next step", "--json"] in [c["argv"] for c in calls]
 assert json.loads(out)["card"]["start"].startswith("started"), out
 rc, out, err, calls = handoff("ABC-3", mode="trust")
@@ -666,6 +666,29 @@ for bad, why in (("/goal x\n", "no CLOSE or KEEP row"), (f"{CLOSE}\n", "no `/goa
     results = [go(brief(bad, "a5.md"), "--repo", "r", "--name", "a5", *extra) for extra in ([], ["--agent", "codex"])]
     assert [r[0] for r in results] == [2, 2] and why in results[1][2] and not creates(results[1][3]), results
     assert results[0][2] == results[1][2], results
+
+
+# LOAD: a brief's own row is copied (a continuation line with it), a missing one becomes the default for a worker
+# brief, a lead's brief gets none, and a quoted or duplicate row does not stand in for the real one.
+def load_of(text, name="load.md"):
+    return card.compose(brief(text, name))
+
+
+own = "LOAD: none (read-only)\n    nothing to edit\n"
+p = load_of(f"/goal x\n{CLOSE}\n{own}REPORT: r\n")
+assert "LOAD: none (read-only)\n    nothing to edit" in p and card.LOAD_LINE not in p, p
+assert card.LOAD_LINE in load_of(f"/goal x\n{CLOSE}\n"), "an older brief gets the default"
+assert load_of(f"/goal x\n{CLOSE}\n").count("LOAD:") == 2  # the default says `LOAD: none` once more in its own text
+assert card.LOAD_LINE in load_of(f"/goal x\nKEEP: next task\n"), "a KEEP card edits too"
+assert load_of(f"/goal x\n{CLOSE}\nLOAD  none\n").count("LOAD  none") == 1 and card.LOAD_LINE not in load_of(f"/goal x\n{CLOSE}\nLOAD  none\n")
+fenced = f"/goal x\n{CLOSE}\n```\nLOAD: none\n```\n"
+assert card.LOAD_LINE in load_of(fenced) and "LOAD: none\n" not in load_of(fenced).split(card.LOAD_LINE)[0], "a quoted template row"
+two = load_of(f"/goal x\n{CLOSE}\nLOAD: first\nLOAD: none\n")
+assert "LOAD: first" in two and card.LOAD_LINE not in two
+assert card.LOAD_LINE not in load_of(LEAD, "lead-load.md"), "a lead's prompt has no default LOAD"
+# A LOAD row right after FORBIDDEN is its own row, not part of the ban section.
+adj = load_of(f"/goal x\n{CLOSE}\nFORBIDDEN   {card.BEGIN}\n            a ban.\n            {card.END}\nLOAD: none\n")
+assert adj.index("LOAD: none") < adj.index("a ban.") and adj.count("LOAD: none") == 1 and adj.rstrip().endswith(card.END), adj
 
 
 # The session's model.
