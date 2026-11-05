@@ -364,6 +364,8 @@ STORES = [
           ("patrol",), feature="model_autoswitch", rule="one claim per session, made before the first keystroke: "
           "a session is switched at most once"),
     Store("patrollock", "S/patrol.lock", {"card.verdict": LOCK}, ("patrol:round_lock",)),
+    Store("patrolrunlock", "S/patrol-run.lock", {"patrol.round_timing": LOCK}, ("patrol:run_lock",),
+          rule="one patrol round and its cleanup scans at a time, the patrol job and reap-hard's fallback alike"),
     Store("patrolout", "S/patrol.log", {"patrol.output": CANONICAL}, ("reap:spawn_patrol",), ("nobody",)),
     Store("pressure", "S/pressure.json", {"pressure.level": CANONICAL}, ("pressure:save_state",),
           ("pressure", "page", "patrol"), 600, rule="the machine's load level, one round"),
