@@ -759,6 +759,7 @@ def subagent_rows(sessions, every, rows, order, lead_row, now=None, stale_s=None
                          "why": stale and ("세션 꺼짐, 종료 기록 없음" if s.get("phase") == "offline"
                                            else "종료 기록 없음"),
                          "session": None, "pr": None, "reported_at": a.get("started_at"), "parent": parent,
+                         "host_row": host and host["id"],  # the row the group of this one follows (priority rules)
                          # a row of its own takes its host row's section and program, so a program's report keeps it
                          "repo": None if parent else (host or {}).get("repo") or s.get("gh_repo") or s.get("project") or "—",
                          "program": None if parent else (host or {}).get("program")}
@@ -938,13 +939,14 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         """A row's priority group: its own `priority`, else the nearest parent's own or its worktree's rule, else the
         program's rule, else the repository's. A subagent row is first its host's. A fleet row (a lead or card the
         board has no row of) has only rules."""
-        if r.get("host"):  # the host row as subagent_rows() picks it (the last row naming that worktree), else its rule
-            # subagent_rows()' order: a lead's own row, then rows naming the worktree, then the row running in that session
-            host = None
-            for pick in (lambda n: r["host"] in worktrees(n), lambda n: r["host"] in (n.get("worktree"), n.get("linked")),
-                         lambda n: n.get("session") == r["host"]):
-                host = next((n for n in reversed(list(rows.values())) if pick(n)), host)
-            if host is not None and host is not r and (g := prio(host)) or (g := rules["worktree"].get(r["host"])):
+        if r.get("host"):  # a subagent follows the row subagent_rows() found for its host: the host's own row first
+            host = rows.get(r.get("host_row"))  # (that row's own value, then the host worktree's rule), else a row above it
+            mine = host is not None and host is not r and r["host"] in worktrees(host)
+            if mine and host.get("priority"):
+                return host["priority"]
+            if g := rules["worktree"].get(r["host"]):
+                return g
+            if host is not None and host is not r and (g := prio(host)):
                 return g
         n = r
         while n is not None:
