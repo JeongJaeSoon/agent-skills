@@ -271,7 +271,7 @@ class Setup(unittest.TestCase):
 
 
 class Steps(unittest.TestCase):
-    """setup.py in-process with subprocess.run and bootstrap stubbed, so no test runs the real sync."""
+    """setup.py in-process with subprocess.run stubbed, so no test runs the real sync."""
 
     def setUp(self):
         self.home = pathlib.Path(tempfile.mkdtemp(prefix="setup-test-"))
@@ -287,10 +287,8 @@ class Steps(unittest.TestCase):
         self.setup = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.setup)
         self.calls, self.fail = [], set()
-        self.bootstrap = types.SimpleNamespace(scheduler=lambda write: None)
         for p in (mock.patch.object(self.setup.subprocess, "run", self.fake_run),
-                  mock.patch.object(self.setup, "preflight", lambda args: None),
-                  mock.patch.dict(sys.modules, {"bootstrap": self.bootstrap})):
+                  mock.patch.object(self.setup, "preflight", lambda args: None)):
             p.start()
             self.addCleanup(p.stop)
 
@@ -337,16 +335,20 @@ class Steps(unittest.TestCase):
         self.assertFalse(self.cfg.exists())
 
     def test_a_failed_step_is_reported_instead_of_done(self):
-        def scheduler(write):
-            sys.exit("launchctl bootstrap failed")
-        self.bootstrap.scheduler = scheduler
         self.fail.add("automations.py")
         rc, out, err = self.main("--apply", self.plan_hash())
         self.assertEqual(rc, 1)
         self.assertNotIn("done.", out)
-        self.assertIn("launchd sync job (launchctl bootstrap failed)", err)
         self.assertIn("skills-sync setup apply", err)
         self.assertIn("setup_check.py", self.scripts())
+
+    def test_no_step_registers_a_launchagent(self):
+        """The sync job is an Orca automation (`setup apply`), so no planned action or run step names launchd."""
+        _, out, _ = self.main()
+        self.assertNotIn("launchd", out)
+        self.main("--actions-only")
+        self.assertNotIn("launchctl", [c[0] for c in self.calls])
+        self.assertFalse((self.home / "Library" / "LaunchAgents").exists())
 
     def test_actions_only_writes_no_settings(self):
         rc, out, err = self.main("--actions-only")

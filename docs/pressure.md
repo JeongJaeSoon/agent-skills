@@ -2,13 +2,14 @@
 
 `skills/reap-resources/scripts/pressure.py`가 모델 없이 3분마다 머신을 재고, 높으면 reap-resources가 정리 대상으로 올린 것부터 정리한다. 새 무거운 작업은 `hooks/pressure_gate.py`가 시작 전에 막는다. 규칙은 [reap-resources SKILL.md](../skills/reap-resources/SKILL.md)의 "Pressure" 절에 있다.
 
-## 왜 Orca automation이 아니라 LaunchAgent인가
+## 왜 에이전트 없는 Orca automation인가
 
-[automation.md](automation.md)의 기본은 Orca automation + precheck다. 이 감시는 다음 이유로 preview-watch처럼 LaunchAgent로 돌린다.
+예전에는 LaunchAgent였다. 엔드포인트 보안 에이전트가 Orca 터미널 아래에서 도는 `launchctl bootout`을 SIGKILL로 막아 `orch db migrate`가 멈춘 일이 있어, 주기 작업을 Orca automation으로 옮겼다([automation.md](automation.md#에이전트-없이-도는-주기-작업)).
 
 - 할 일이 모두 결정적이다. 측정, `reap.py scan`·`reap --plan`, `orca orchestration send` 한 통이면 끝나고 모델이 판단할 것이 없다.
-- 모델 세션을 띄우는 것 자체가 부하다. 위험 단계에서 Claude 세션을 하나 더 띄우면 막으려던 일을 키운다.
-- 주기가 짧다. 3분 주기 automation은 정상인 회차마다 "건너뜀" 기록을 하루 480개 남긴다.
+- 모델 세션을 띄우는 것 자체가 부하다. 위험 단계에서 Claude 세션을 하나 더 띄우면 막으려던 일을 키운다. 그래서 `orca_job.py`가 precheck 안에서 `round`를 직접 돌리고 항상 exit 1로 끝내, 에이전트는 한 번도 뜨지 않는다.
+- 주기가 짧다. 3분 주기는 하루 480회차인데 Orca는 자동화마다 최근 100개만 남기므로 쌓이지 않는다. 실패는 `skipped_precheck`에 묻히므로 `jobs/pressure-watch.json`과 `setup-pc` 점검으로 본다.
+- Orca 앱이 꺼져 있으면 돌지 않는다. 훅이 보는 `round` 샘플이 오래되면 `sample_fresh_minutes`가 판정에서 뺀다.
 
 ## 판정 규칙
 
