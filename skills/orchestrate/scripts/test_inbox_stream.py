@@ -65,7 +65,6 @@ prog.wake_lines = lambda me: []
 prog.watch_lines = lambda me, unowned: []
 ist._scanned = lambda me: None
 
-# A status batch waits the debounce window for more mail, then both go out in one write, one line per message.
 s, orca, out, clock = stream([{"deliveryId": "dv1", "messages": [{"id": "m1", "type": "status", "body": "PR ready\nsee it"},
                                                                  {"id": "h", "type": "heartbeat"}]},
                               {"deliveryId": "dv2", "messages": [{"id": "m2", "type": "worker_done", "body": "done"}]}])
@@ -77,23 +76,19 @@ assert len(lines) == 3, lines
 assert ("--ack", "dv1") in orca.calls and ("--ack", "dv2") in orca.calls
 assert any("--peek" in c and "--types" not in c for c in orca.calls), "the debounce wait is a peek with no --types"
 
-# A question goes out at once, without the debounce.
 s, orca, out, clock = stream([{"deliveryId": "dv3", "messages": [{"id": "m3", "type": "question", "body": "which?"}]}])
 s.mail(deadline=600)
 assert not any("--peek" in c for c in orca.calls) and "type=question" in out.getvalue()
-# So do worker_done and a status whose subject says READY, BLOCKED or STUCK.
 for m in ({"id": "w", "type": "worker_done"}, {"id": "r", "type": "status", "subject": "acme/app#1 READY"}):
     s, orca, out, clock = stream([{"deliveryId": "dv", "messages": [m]}])
     s.mail(deadline=600)
     assert not any("--peek" in c for c in orca.calls) and f"id={m['id']}" in out.getvalue(), m
 assert not ist.urgent([{"type": "status", "subject": "already merged"}])
 
-# Heartbeats only: nothing printed, the batch still acked.
 s, orca, out, clock = stream([{"deliveryId": "dv4", "messages": [{"id": "h", "type": "heartbeat"}]}])
 assert s.mail(deadline=600) is False and out.getvalue() == "" and ("--ack", "dv4") in orca.calls
 
 
-# The card watch: a finding goes out with a CARDS line and the watch starts again; a quiet round says nothing.
 class Child:
     def __init__(self, text, code=0, err=""):
         self.text, self.returncode, self.err = text, code, err
@@ -112,17 +107,16 @@ spawned = []
 children = [Child("STUCK term_x: a permission prompt\n"), Child("QUIET nothing new; start the watch again\n")]
 s, orca, out, clock = stream([], cards=True, spawn=lambda ms: (spawned.append(ms), children.pop(0) if children else
                                                                                    Child(None))[1])
-s.watch_cards(deadline=600)  # starts the first
-s.watch_cards(deadline=600)  # it ended with a finding: printed, and the next one started
+s.watch_cards(deadline=600)
+s.watch_cards(deadline=600)
 assert out.getvalue().splitlines() == ["STUCK term_x: a permission prompt",
                                        "CARDS: act on the card lines above; the card watch started again by itself"], out.getvalue()
-s.watch_cards(deadline=600)  # the quiet one ended: nothing printed, and a third one started
+s.watch_cards(deadline=600)
 assert out.getvalue().count("CARDS:") == 1 and len(spawned) == 3, spawned
 s.child = Child("", code=1, err="Traceback\nOSError: boom")
 s.watch_cards(deadline=600)
 assert "orch watch-cards exited 1 (OSError: boom); started again" in out.getvalue()
 
-# RESTART DUE: with a batch past the threshold, again only after RESTART_STEP more.
 ctx = {"v": 150_000}
 s, orca, out, clock = stream([{"deliveryId": "d", "messages": [{"id": "q", "type": "question"}]}] * 3,
                              threshold=130_000, ctx=lambda sid: ctx["v"])
@@ -132,35 +126,30 @@ assert out.getvalue().count("RESTART DUE: context 150k > 130k") == 1, out.getval
 ctx["v"] = 176_000
 s.mail(600)
 assert out.getvalue().count("RESTART DUE") == 2
-# Alone it waits for QUIET_S without mail.
 s, orca, out, clock = stream([], threshold=130_000, ctx=lambda sid: 150_000)
 assert s.due() == []
 clock.t += ist.QUIET_S
 assert s.due()[0].startswith("RESTART DUE")
 
-# A restart request for this terminal and session: /clear typed once, never again, whatever the screen said.
 typed = []
 req = ("2026-01-01T00:00:00Z", {"stage": "requested", "handle": ME, "session": "s1"})
 st = Store(req)
 s, orca, out, clock = stream([], store=st, clear=lambda me: typed.append(me) or None)
-s.now = lambda: __import__("time").time() if False else 1767225600.0 + 60  # a minute after the request
+s.now = lambda: __import__("time").time() if False else 1767225600.0 + 60
 s.restart()
 s.restart()
 assert typed == [ME] and st.rows[-1][2]["stage"] == "sent" and st.rows[-1][2]["confirmed"] is True, st.rows
-# Not idle: nothing recorded, tried again next round; expired after REQUEST_TTL_S.
 st = Store(req)
 s, orca, out, clock = stream([], store=st, clear=lambda me: "screen changed between two reads (someone may be typing)")
 s.now = lambda: 1767225600.0 + 60
 assert s.restart() == [] and st.rows == []
 s.now = lambda: 1767225600.0 + ist.REQUEST_TTL_S + 1
 assert s.restart()[0].startswith("RESTART EXPIRED") and st.rows[-1][2]["stage"] == "expired"
-# Another session's or terminal's request is not this stream's.
 for other in ({"stage": "requested", "handle": "term_other", "session": "s1"}, {"stage": "requested", "handle": ME, "session": "s0"}):
     st = Store(("2026-01-01T00:00:00Z", other))
     s, orca, out, clock = stream([], store=st, clear=lambda me: (_ for _ in ()).throw(AssertionError("typed")))
     assert s.restart() == []
 
-# SESSION CLEARED once, when this terminal's session id changes under the stream.
 sid = {"v": "s1"}
 s, orca, out, clock = stream([], session=lambda me: sid["v"])
 assert s.cleared() == []
@@ -168,7 +157,6 @@ sid["v"] = "s2"
 got = s.cleared()
 assert got[0].startswith("SESSION CLEARED") and "agent-skills:reboot --top" in got[0] and s.cleared() == []
 
-# WAKE and watch lines: each at most once per 30 minutes.
 prog.wake_lines = lambda me: ["WAKE term_x: unconfirmed"]
 s, orca, out, clock = stream([])
 s.side()
@@ -178,17 +166,14 @@ s.side()
 assert out.getvalue().count("WAKE term_x") == 2, out.getvalue()
 prog.wake_lines = lambda me: []
 
-# The run ends by itself before Monitor's limit, with the line that says to start it again.
 s, orca, out, clock = stream([], ttl_ms=150_000)
 assert s.run() == 0
 assert out.getvalue().splitlines()[-1].startswith("STREAM END after 2 min: start it again now with the Monitor tool")
-# An Orca error is reported and the stream goes on; ERRORS_MAX in a row end it.
 s, orca, out, clock = stream([], ttl_ms=10_000_000)
 prog.check = lambda *a: (_ for _ in ()).throw(SystemExit("orca down"))
 ist.time.sleep = lambda x: setattr(clock, "t", clock.t + x)
 assert s.run() == 1 and out.getvalue().count("STREAM ERROR") == ist.ERRORS_MAX
 
-# One stream per terminal.
 with ist.only_stream(ME) as got:
     assert got and ist.running(ME)
     with ist.only_stream(ME) as second:

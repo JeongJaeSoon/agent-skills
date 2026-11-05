@@ -269,13 +269,11 @@ def check_waits(role, slug, table, pid):
     start = f"orch wait {slug}" if role == "lead" else "orch inbox --wait"
     how, streamed = "under run_in_background", False
     if role == "top":
-        # The orchestrator's wait is the inbox stream, which runs the card watch as its own child.
         start, how = "orch inbox --stream", "with the Monitor tool, timeout_ms 1800000 (not Bash)"
         streamed = any(STREAM.search(c) for _, c in inbox)
         if inbox and not streamed:
             out.append(("info", "the inbox wait is `orch inbox --wait`: at its next wake, stop it and start "
                                 "`orch inbox --stream` with the Monitor tool instead (one call per wake, not three)"))
-    # A lead's one wait is `orch wait <its slug>`, the orchestrator's an `orch inbox`; any other is a wrong one.
     want = slug if role == "lead" else None
     wrong = [(p, c) for p, c in inbox if role and (WAIT_SLUG.findall(c) or [None])[0] != want]
     right = [w for w in inbox if w not in wrong]

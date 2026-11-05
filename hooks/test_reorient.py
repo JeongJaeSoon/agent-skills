@@ -81,7 +81,6 @@ for handle in ("term_old", "term_new", ""):
     assert hook(session="r1", handle=handle).startswith("ROLE: orchestrator.")
 for source in ("startup", "resume", "compact"):
     assert "top-level orchestrator" in hook(**START, source=source, session="r1", handle="term_new")
-# /clear: same process, new session id. The terminal's previous session's ROLE record carries over, `ROLE: none` too.
 assert "just cleared" in hook(**START, source="clear", session="r1") and "reboot --top" in hook(**START, source="clear", session="r1")
 hook(**START, session="c1", handle="term_c", entrypoint="cli")
 hook(session="c1", handle="term_c", prompt="ROLE: orchestrator")

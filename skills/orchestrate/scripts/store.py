@@ -361,8 +361,6 @@ def decision_record(did):
     return {**d, "answered_by": by} if by else d
 
 
-# ---------------------------------------------------------------- a role session's handoff across a restart
-
 def session_event(key, ev, data, by=None):
     """`orch handoff`: what a role session (key `orchestrator` or `lead:<slug>`) leaves for the next one ('handoff')
     and its restarts ('restart'). Event rows with entity 'session', so the facts need no table and no schema step;

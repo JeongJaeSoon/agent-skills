@@ -36,10 +36,10 @@ import roles  # noqa: E402
 import store  # noqa: E402
 
 FIELDS = ("next", "waiting", "question", "reply", "note")
-SUMMARY_CHARS = 1500  # what the reorient hook adds after a /clear: a summary and the command for the rest
+SUMMARY_CHARS = 1500
 
 
-AUTO_EVERY_S = 600  # a ready session's handoff is saved again at most this often
+AUTO_EVERY_S = 600
 
 
 def auto_clear_on():
@@ -164,7 +164,6 @@ def ready(session, context, asking, now=None, peek=unread, agents=0):
     prev = last[1] if last and isinstance(last[1], dict) else {}
     age = inbox_stream.ts_age(last[0], now) if last else None
     if not (prev.get("auto") and prev.get("session") == session and age is not None and age < AUTO_EVERY_S):
-        # The role's lines, whichever session wrote them: the session after a /clear has not rewritten them yet.
         carried = {f: prev.get(f) for f in FIELDS if prev.get(f)}
         carried.setdefault("next", "act on the mail taken since this handoff, then the open decisions")
         store.session_event(key, "handoff", {**carried, "auto": True, "session": session, "handle": handle,

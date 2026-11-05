@@ -25,7 +25,6 @@ def run(*argv):
     return code, out.getvalue()
 
 
-# No DB: the save stops and says why, and the hook's text is empty instead of failing.
 code, _ = run("save", "--next", "x")
 assert "handoff not stored" in str(code), code
 assert handoff.text("orchestrator") == ""
@@ -39,16 +38,14 @@ code, out = run("show")
 assert code == 0 and "  next: land acme/app#1 after CI" in out and "  waiting: dispatch d1" in out and "run: run_1" in out, out
 text =handoff.text("orchestrator")
 assert text.startswith("The previous session left this handoff") and "land acme/app#1" in text, text
-assert handoff.text("lead:other") == ""  # keyed by role
+assert handoff.text("lead:other") == ""
 
-# --restart is off by default: the human types the /clear the band suggests. Refused before anything is written.
 before = store.last_session_event("orchestrator", "handoff")
 with inbox_stream.only_stream("term_me"):
     code, _ = run("save", "--next", "z", "--restart")
 assert "restart off" in str(code) and store.last_session_event("orchestrator", "handoff") == before, code
 (tmp / "agent-skills.json").write_text('{"orchestrate": {"auto_clear": true, "restart_at": 100000}}')
 
-# --restart needs the inbox stream of this terminal: it is the one that types /clear. Refused, nothing is saved.
 code, _ = run("save", "--next", "y", "--restart")
 assert "no `orch inbox --stream` runs" in str(code) and store.last_session_event("orchestrator", "handoff") == before, code
 roles.record_terminal("term_me", "s1", "/w", 1.0)
@@ -61,13 +58,12 @@ assert "restart " in run("show")[1]
 
 assert store.last_session_event("orchestrator", "handoff")[1]["session"] == "s1"
 
-# ready: the clear band's verdict. Only a declared orchestrator or lead past restart_at is shown at all.
 S = "00000000-0000-4000-8000-000000000001"
 empty = lambda key, handle: []  # noqa: E731
-assert handoff.ready(S, 150_000, False, peek=empty)["show"] is False  # no role
+assert handoff.ready(S, 150_000, False, peek=empty)["show"] is False
 (roles.roles_dir()).mkdir(parents=True, exist_ok=True)
 (roles.roles_dir() / f"{S}.json").write_text('{"role": "orchestrator"}')
-assert handoff.ready(S, 90_000, False, peek=empty)["show"] is False  # under the threshold
+assert handoff.ready(S, 90_000, False, peek=empty)["show"] is False
 got = handoff.ready(S, 150_000, True, peek=empty)
 assert got["show"] and not got["ready"] and "question" in got["reason"], got
 got = handoff.ready(S, 150_000, False, peek=lambda k, h: [{"id": "m", "type": "status"}])
@@ -76,17 +72,13 @@ before = store.last_session_event("orchestrator", "handoff")
 got = handoff.ready(S, 150_000, False, peek=empty)
 ts, saved = store.last_session_event("orchestrator", "handoff")
 assert got["ready"] and saved["auto"] and saved["session"] == S and saved["context"] == 150_000, (got, saved)
-# The role's lines carry over even when another session (the one before a /clear) wrote them.
 assert saved["next"] == "y", saved
-assert not handoff.ready(S, 150_000, False, peek=empty, agents=1)["ready"]  # a subagent's result would be lost
+assert not handoff.ready(S, 150_000, False, peek=empty, agents=1)["ready"]
 assert "saved by the clear band" in run("show")[1]
-# Again within AUTO_EVERY_S: ready, but no new row.
 rows = lambda: __import__("sqlite3").connect(store.path()).execute("select count(*) from event where entity='session'").fetchone()[0]  # noqa: E731
 n = rows()
 assert handoff.ready(S, 152_000, False, peek=empty)["ready"] and rows() == n
-# Past AUTO_EVERY_S it is saved again.
 assert handoff.ready(S, 152_000, False, peek=empty, now=4_000_000_000)["ready"] and rows() == n + 1
-# The session's own fields are carried into the automatic save.
 store.session_event("orchestrator", "handoff", {"next": "land acme/app#2", "reply": "chat", "session": S})
 handoff.ready(S, 160_000, False, peek=empty)
 saved = store.last_session_event("orchestrator", "handoff")[1]

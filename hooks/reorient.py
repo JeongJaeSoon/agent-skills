@@ -143,7 +143,7 @@ def handoff_text(entry):
     try:
         import handoff
         return handoff.text("orchestrator" if entry["role"] == "orchestrator" else f"lead:{entry.get('slug')}")
-    except Exception:  # the role text still goes out without it
+    except Exception:
         return ""
 
 

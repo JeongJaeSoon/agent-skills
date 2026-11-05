@@ -36,7 +36,6 @@ async function bandText($: Parameters<Parameters<typeof test>[1]>[0]): Promise<s
   return text
 }
 
-// One flow in one test: the timer and the question flag are module variables.
 test('asks orch only past the floor, says when /clear is safe, rechecks every minute, hides after a /clear', async ($, on) => {
   const clock = mock.clock(on)
   let tokens: number | undefined = 40_000
@@ -54,14 +53,13 @@ test('asks orch only past the floor, says when /clear is safe, rechecks every mi
   on('turn.complete', (_, e) => ({ text: e.answer }))
   on('ui.render', ($, e) => {
     const { Box } = $.ui.resolve(e)
-    return <Box />  // the engine's own band: empty
+    return <Box />
   })
   on('process.run', (_, e) => {
     argvs.push([...e.argv])
     return results.shift() ?? verdict({ show: false })
   })
 
-  // Under the floor: no process at all, no band.
   await $.turn.complete(turn('done'))
   await clock.settle()
   expect(argvs).toHaveLength(0)
@@ -75,18 +73,15 @@ test('asks orch only past the floor, says when /clear is safe, rechecks every mi
   expect(await bandText($)).toContain('/clear not yet: 2 message(s) in the inbox')
   agents = []
 
-  // The minute timer looks again: the inbox emptied.
   await clock.advance(60_000)
   expect(argvs).toHaveLength(2)
   expect(await bandText($)).toContain('/clear is safe')
 
-  // A turn that ends on a question says so to the script.
   await $.turn.complete(turn('which one should I land first?'))
   await clock.settle()
   expect(argvs[2]?.at(-1)).toBe('--asking')
   expect(await bandText($)).toContain('asks a question')
 
-  // After a /clear the session id is new: the old verdict is not shown.
   session = 'sess-2'
   expect(await bandText($)).toBe('')
 })

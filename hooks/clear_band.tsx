@@ -3,9 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { ClearBandView } from '../types'
 
-// No restart_at worth setting is this low: below it the script is not run at all.
 const FLOOR = 50_000
-// While shown, the inbox is looked at again this often: mail can arrive after the turn ended.
 const PERIOD_MS = 60_000
 const READY_TIMEOUT_MS = 20_000
 
@@ -16,7 +14,6 @@ const view = atom(
   { shape: 'clear-band-1' },
 )
 
-// A reload drops these; the next turn or session.start sets them again.
 let timer: { cancel: () => void } | undefined
 let asking = false
 let running = false

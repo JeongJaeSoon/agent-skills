@@ -18,7 +18,9 @@ own output and cache writes and reads the replayed context instead of the origin
            a call is dropped when every tool in it read a background task's output file or ran only inbox/wait/card
            watch commands (each `&&`/`;`/`|` part). A wake within --debounce seconds of the wake that opened its
            window shares that notice, which saves its closing reply. The stream ends every 29 minutes of wall time,
-           busy or not, and each end costs two calls (the notice and the Monitor started again).
+           busy or not, and each end costs two calls (the notice and the Monitor started again). Without restart, a
+           kept call reads its original context: what the dropped calls added would have been shrunk by the next
+           compaction anyway, so no saving is claimed for it.
   restart  the session is cleared and rebooted at the first turn boundary where its replayed context passed
            --restart-at and at least QUIET_S passed since the turn before, and starts again at --fresh tokens: a cache
            write of all but the cached prefix, plus REBOOT_CALLS calls at it. The replay starts at the first context
@@ -30,14 +32,13 @@ W = {"cache_read_input_tokens": 0.1, "output_tokens": 5, "input_tokens": 1}
 REARM = re.compile(r"^(?:cd\s+\S+|(?:\S*/)?(?:orch|prog\.py)\s+(?:inbox|wait|watch-cards)\b.*|.*\s--ack\s+\S+.*)$")
 PARTS = re.compile(r"&&|\|\||[;|\n]")
 TASK_OUTPUT = re.compile(r"/tasks/[^/]+\.output$")
-# The wake of a background inbox wait or card watcher, by the description the session gave the command.
 INBOX_WAKE = re.compile(r"inbox|re-?arm|card watcher|watch-cards|orchestrat\w* (?:message|wait)", re.I)
-STREAM_TTL_S = 1740  # orch inbox --stream ends a minute before Claude Code's 30-minute Monitor limit
+STREAM_TTL_S = 1740
 REBOOT_CALLS = 6
 QUIET_S = 120
 # A /clear keeps the system prompt and tools, and its first call read them from the cache (29k of 33k, measured).
 CACHED_PREFIX = 29_000
-COMPACTED = 0.6  # a call whose context fell below this share of the previous one follows a compaction
+COMPACTED = 0.6
 
 
 def weight(u):
@@ -172,7 +173,7 @@ def what_if(ts, changes, restart_at=130_000, fresh=77_000, debounce=30):
         if "stream" in changes:
             if at and next_end is None:
                 next_end = at + STREAM_TTL_S
-            while at and next_end and at >= next_end:  # the stream's own end, busy or not
+            while at and next_end and at >= next_end:
                 cost_at = level if level is not None else (prev_ctx or fresh)
                 out_w += 2 * 0.1 * cost_at
                 out_ctx += [cost_at] * 2
@@ -192,11 +193,10 @@ def what_if(ts, changes, restart_at=130_000, fresh=77_000, debounce=30):
             out_ctx += [fresh] * REBOOT_CALLS
         kept_ids = {id(c) for c in keep}
         for c in t["calls"]:
-            # The context a call adds is the step from the previous call; a step down is a compaction, not growth.
             step = c["ctx"] - prev_ctx if prev_ctx is not None and c["ctx"] >= prev_ctx * COMPACTED else 0
             prev_ctx = c["ctx"]
             if level is None:
-                level = c["ctx"]  # the replay starts where the transcript does, not at --fresh
+                level = c["ctx"]
                 step = 0
             if id(c) not in kept_ids:
                 continue
@@ -204,8 +204,6 @@ def what_if(ts, changes, restart_at=130_000, fresh=77_000, debounce=30):
                 level += max(step, 0)
                 read = level
             else:
-                # Without restarts a kept call reads its original context: what the dropped calls added would have
-                # been shrunk by the next compaction anyway, so no saving is claimed for it.
                 read = level = c["ctx"]
             out_w += max(c["weight"] + 0.1 * (read - c["ctx"]), 0)
             out_ctx.append(read)
@@ -223,7 +221,7 @@ def main(argv=None):
     ap.add_argument("--what-if", default="")
     ap.add_argument("--restart-at", type=int, default=130_000)
     ap.add_argument("--fresh", type=int, default=77_000)
-    ap.add_argument("--debounce", type=int, default=300)  # orch inbox --stream's default
+    ap.add_argument("--debounce", type=int, default=300)
     a = ap.parse_args(argv)
     changes = {x for x in a.what_if.split(",") if x}
     if bad := changes - {"stream", "restart"}:

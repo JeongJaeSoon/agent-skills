@@ -41,7 +41,7 @@ import prog  # noqa: E402
 import roles  # noqa: E402
 
 TTL_MS = 1_740_000  # Claude Code kills a Monitor at 30 minutes; end a minute before, never inside a round
-TICK_S = 60  # the longest peek-wait, so the card watch, WAKE and the restart are looked at between mails
+TICK_S = 60
 URGENT = {"question", "escalation", "worker_done"}
 URGENT_SUBJECT = re.compile(r"\b(READY|BLOCKED|STUCK)\b")
 
@@ -123,7 +123,7 @@ class Stream:
                  clock=time.monotonic, now=time.time, session=session_of, ctx=context, spawn=None, clear=type_clear,
                  store=None):
         self.me, self.key, self.debounce, self.ttl, self.cards = me, key, debounce, ttl_ms / 1000, cards
-        if threshold is None:  # without auto_clear the clear band tells the human, and no notice wakes the model
+        if threshold is None:
             import handoff
             threshold = restart_at() if handoff.auto_clear_on() else 0
         self.threshold = threshold
@@ -140,8 +140,6 @@ class Stream:
         if lines:
             self.out.write("\n".join(lines) + "\n")
             self.out.flush()
-
-    # -- mail
 
     def take(self):
         did, msgs = prog.batch(prog.check())
@@ -176,8 +174,6 @@ class Stream:
                 prog.check("--ack", d)
         return bool(work)
 
-    # -- card watch
-
     def _spawn(self, left_ms):
         return subprocess.Popen([sys.executable, str(HERE / "prog.py"), "watch-cards", "--self", self.me or "",
                                  "--timeout-ms", str(left_ms)], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -202,12 +198,9 @@ class Stream:
             self.emit([f"CARDS: orch watch-cards exited {code} ({tail[0][:200]})"
                        + ("; started again" if self.child_fails < 3 else "; not started again until the next stream")])
         elif lines and not lines[0].startswith("QUIET") or any(x.startswith("PARTIAL") for x in lines[1:]):
-            # A finding, or a quiet round that could not see every card: both are the session's to read.
             self.child_fails = 0
             self.emit(lines + ["CARDS: act on the card lines above; the card watch started again by itself"])
         self.watch_cards(deadline)
-
-    # -- restart
 
     def due(self, force=False):
         """RESTART DUE once the context passed the threshold, again for each RESTART_STEP more; with a batch (force),
@@ -234,7 +227,7 @@ class Stream:
             return [f"RESTART EXPIRED: the screen was not idle for {REQUEST_TTL_S // 60} min; ask again with "
                     "`orch handoff save --restart` when the turn is quiet"]
         why = self.clear(self.me)
-        if why is None or "taken" in why:  # typed: a second /clear is never sent, whatever the screen said
+        if why is None or "taken" in why:
             self.store.session_event(self.key, "restart", {**req, "stage": "sent", "confirmed": why is None},
                                      by="orch inbox --stream")
         return []
@@ -273,7 +266,7 @@ class Stream:
                 if not got and self.clock() < deadline:
                     self.wait(min(deadline - self.clock(), TICK_S))
                 errors = 0
-            except SystemExit as e:  # orca_json exits on an Orca error; one bad call must not end the stream
+            except SystemExit as e:
                 errors += 1
                 self.emit([f"STREAM ERROR {errors}/{ERRORS_MAX}: {str(e)[:300]}"])
                 if errors >= ERRORS_MAX:
@@ -298,7 +291,7 @@ def one_line(m):
     """inbox_line with the body's newlines as ' ⏎ ': a message stays whole and on one line, so a long one can never be
     split across two notices."""
     first, *rest = prog.inbox_line(m).split("\n")
-    return " ⏎ ".join([first] + [line[4:] for line in rest])  # inbox_line indents continuation lines by four
+    return " ⏎ ".join([first] + [line[4:] for line in rest])
 
 
 def lock_path(me):

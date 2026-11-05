@@ -202,8 +202,7 @@ def allowed(tool, args):
         return True
     if tool == "Bash":
         return bash_ok(str(args.get("command") or ""), args.get("run_in_background") is True)
-    if tool == "Monitor":  # the inbox stream (`orch inbox --stream`); a ws source or any other command is task work
-        # Not as a background command: the pressure gate's wait stays a Bash run_in_background (its own rule).
+    if tool == "Monitor":
         return "ws" not in args and bash_ok(str(args.get("command") or ""), False)
     path = args.get("file_path")
     if not isinstance(path, str) or not path:

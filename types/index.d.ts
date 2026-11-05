@@ -13,7 +13,7 @@ export type BriefPaneView = {
 export type ClearBandView = {
   // An orchestrator or lead session past orchestrate.restart_at.
   show: boolean
-  // Safe to /clear now: inbox empty, no question asked, handoff saved.
+  // Safe to /clear now: inbox empty, no question asked, no subagent running, handoff saved.
   ready: boolean
   context: number
   threshold: number
