@@ -2086,11 +2086,12 @@ def merge_async(repo, pr, head):
     return r, "pending", details
 
 
-def merge_unit(p, pr, unit, klass, events, onto=None, stacked=False, expect=None):
+def merge_unit(p, pr, unit, klass, events, onto=None, stacked=False, expect=None, verdict_sources=None):
     """Merge a PR (or a stack from its top) after re-checking every layer at its current head.
     `onto`: the lower PR whose branch a `--onto-lower` fold merges into; its ticket has not landed yet.
     `stacked`: the PR is in a GitHub stack, also when it lands alone as a lower layer.
-    `expect`: the land executor's requested head; any other head, or a merge state other than clean, does not merge."""
+    `expect`: the land executor's requested head; any other head, or a merge state other than clean, does not merge.
+    `verdict_sources`: with `expect`, the sources whose pass at exactly that head the merge needs."""
     repo, states, runs = p.cfg["repo"], pr_state(events), []
     no_ci = no_ci_repo(repo)
     for n in unit:
@@ -2126,6 +2127,14 @@ def merge_unit(p, pr, unit, klass, events, onto=None, stacked=False, expect=None
         if threads:
             note_attempt(p, events, pr, "blocked", [f"{threads} unresolved thread(s) on #{n}"])
             return 3, f"act: #{n} has {threads} unresolved review thread(s): answer and resolve them, then land again"
+    if expect:
+        # The verdict the executor checked may have been replaced since: merge only on the one standing now.
+        latest = pr_state(p.events()).get(pr, {}).get("verdict") or {}
+        p.land_verdict = latest
+        if latest.get("sha") != expect or latest.get("result") != "pass" or \
+                (verdict_sources is not None and latest.get("source") not in verdict_sources):
+            return 3, (f"act: #{pr}'s verdict changed during the checks ({latest.get('result')} from"
+                       f" {latest.get('source')} at {(latest.get('sha') or '')[:8]}): review this head, orch verdict, land again")
     head = expect or v["headRefOid"]
     use_async = stacked or len(unit) > 1
     status, details = None, {}
@@ -2207,8 +2216,9 @@ def base_ci_hint(repo, base):
             f" there; start it with gh workflow run <ci workflow file> --repo {repo} --ref {base} and watch that run")
 
 
-def attempt(p, pr, klass, onto_lower=False, expect=None):
-    """One pass: returns (exit_code, message). `expect`: the head the land executor was asked to merge (merge_unit)."""
+def attempt(p, pr, klass, onto_lower=False, expect=None, verdict_sources=None):
+    """One pass: returns (exit_code, message). `expect`: the head the land executor was asked to merge, and
+    `verdict_sources` the sources its verdict must come from (merge_unit)."""
     events, cfg, repo = p.events(), p.cfg, p.cfg["repo"]
     st = pr_state(events).get(pr, {})
     if "landed" in st:
@@ -2230,9 +2240,11 @@ def attempt(p, pr, klass, onto_lower=False, expect=None):
     deps = orca_deps(cfg["run"])
     order = land_order(events, rows, cfg, dt.datetime.now(dt.timezone.utc), stacks, deps)
     stacked = any(pr in members for members in stacks.values())
-    if expect and (stacked or unread or onto_lower):
+    if expect and (stacked or onto_lower):
         # Its checks pin one PR at one sha; the lower layers merge-async would take have no such pin.
-        return 1, f"#{pr} is in a stack (or the stack listing did not answer): the land executor lands single PRs only"
+        return 1, f"#{pr} is in a stack: the land executor lands single PRs only"
+    if expect and unread:
+        return 2, "yield: the stack listing did not answer, so the land executor cannot tell a single PR; land again"
     members = next((m for m in stacks.values() if pr in m), [])
     seen = {r["number"] for r in rows}
     if unseen := [m for m in members[:members.index(pr)] if m not in seen] if members else []:
@@ -2284,12 +2296,10 @@ def attempt(p, pr, klass, onto_lower=False, expect=None):
         if st.get("yield", {}).get("note") != me["reasons"][0]:
             p.append("yield", pr=pr, note=me["reasons"][0])
         return 2, f"yield: {me['reasons'][0]}"
-    if expect and me["reasons"] == [PROTECTED]:
-        # The land executor: every check of ours passed and only GitHub's own rule (a required review or check) is
-        # missing, which can still come. The request waits for it instead of sending the worker back.
-        note_attempt(p, events, pr, "blocked", me["reasons"])
-        return 2, f"yield: GitHub blocks #{pr}: a required review or check is missing; it lands once GitHub allows it"
-    if me["state"] == "blocked":
+    # The land executor waits on GitHub's own rule (a required review or check, which can still come) only once
+    # the checks below that row_state does not cover (evidence, threads) pass too.
+    github_block = bool(expect) and me["reasons"] == [PROTECTED]
+    if me["state"] == "blocked" and not github_block:
         note_attempt(p, events, pr, "blocked", me["reasons"])
         todo = [ADVICE.get(r, r).format(pr=pr, repo=repo) for r in me["reasons"]]
         return 3, "act: " + " | ".join(todo)
@@ -2307,6 +2317,16 @@ def attempt(p, pr, klass, onto_lower=False, expect=None):
     if missing:
         note_attempt(p, events, pr, "blocked", missing)
         return 3, "act: " + " | ".join(missing)
+    if github_block:
+        try:
+            threads = unresolved_threads(repo, pr)
+        except (SystemExit, Exception) as e:
+            return 2, f"yield: #{pr}'s review threads are unreadable ({type(e).__name__}); land again"
+        if threads:
+            note_attempt(p, events, pr, "blocked", [f"{threads} unresolved thread(s) on #{pr}"])
+            return 3, f"act: #{pr} has {threads} unresolved review thread(s): answer and resolve them, then land again"
+        note_attempt(p, events, pr, "blocked", me["reasons"])  # before any lane: a wait must not hold one
+        return 2, f"yield: GitHub blocks #{pr}: a required review or check is missing; it lands once GitHub allows it"
     no_ci = no_ci_repo(repo)
     keep = NO_CI_KEEP if no_ci else KEEP
     touched = is_exclusive(cfg, [f for n in unit for f in pr_files(repo, n)])
@@ -2340,7 +2360,7 @@ def attempt(p, pr, klass, onto_lower=False, expect=None):
         if compare(repo, me["base"] or "main", pr_view(repo, pr)["headRefOid"]).get("behind_by"):
             return 3, (f"act: you hold the exclusive lane and it lands on the latest base only: {update_advice(unit, repo, stacked)},"
                        " let CI run, land again." + keep)
-        code, msg = merge_unit(p, pr, unit, klass, events, onto, stacked, expect)
+        code, msg = merge_unit(p, pr, unit, klass, events, onto, stacked, expect, verdict_sources)
         if code == 0:
             lane.release(pr)
         elif code == 1:  # parked, so exclusive_turn passes it over until `record admitted`
@@ -2359,7 +2379,7 @@ def attempt(p, pr, klass, onto_lower=False, expect=None):
         return 3, (f"act: since your branch point the base changed files you also change ({', '.join(overlap[:5])}):"
                    f" {update_advice(unit, repo, stacked)}, check your contract and test assumptions still hold,"
                    " let CI run, land again." + KEEP)
-    return merge_unit(p, pr, unit, klass, events, onto, stacked, expect)
+    return merge_unit(p, pr, unit, klass, events, onto, stacked, expect, verdict_sources)
 
 
 LAND_HEARTBEAT = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser() \
@@ -2408,7 +2428,7 @@ def land_request(p, pr, klass, argv):
         sys.exit(0 if v["state"] == "MERGED" else 1)
     base = run(["gh", "api", f"repos/{repo}/commits/{v.get('baseRefName') or 'main'}", "--jq", ".sha"], check=False)
     try:
-        row, outcome = store.land_put(p.slug, str(p.dir.parent), repo, pr, v["headRefOid"], base.stdout.strip() or None,
+        row, outcome = store.land_put(p.slug, str(p.dir.parent.resolve()), repo, pr, v["headRefOid"], base.stdout.strip() or None,
                                       klass, os.environ.get("ORCA_TERMINAL_HANDLE"), by=os.environ.get("ORCA_TERMINAL_HANDLE"))
     except store.NotMigrated as e:
         print(f"refused: {e}")

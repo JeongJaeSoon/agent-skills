@@ -20,6 +20,8 @@ import json, os, sys
 a = sys.argv[1:]
 st = json.load(open(os.environ["FAKE_GH_STATE"]))
 if a[:2] == ["api", "user"]:
+    if st.get("user_fail"):
+        sys.exit("Get \"https://api.github.com/user\": net/http: TLS handshake timeout")
     print(st.get("login", "o")); sys.exit()
 if a[:1] == ["api"] and "/commits/" in a[1]:
     print("basesha"); sys.exit()
@@ -279,6 +281,71 @@ class LandExec(unittest.TestCase):
         row = self.request()
         self.round()
         self.settled(row, "refused", 3, "CI failed")
+
+    def test_a_thread_behind_a_github_block_is_still_refused(self):
+        """BLOCKED can be the thread itself (required thread resolution): waiting would never end."""
+        st = self.gh(); st["threads"] = {str(self.n): [[False]]}; self.write(st)
+        self.edit_pr(mergeStateStatus="BLOCKED")
+        row = self.request()
+        self.round()
+        self.settled(row, "refused", 3, "unresolved review thread")
+
+    def test_a_github_wait_holds_no_lane(self):
+        self.edit_pr(mergeStateStatus="BLOCKED")
+        self.request()
+        self.round()
+        self.assertIsNone(prog.ExclusiveLock(self.p, "main").holder())
+
+    def test_an_unanswered_owner_lookup_waits_instead_of_refusing(self):
+        st = self.gh(); st["user_fail"] = True; self.write(st)
+        rows = [self.request()]
+        self.round()
+        self.assertIn("gh api user", self.settled(rows[0], "queued", None)["reason"])
+        st = self.gh(); st["user_fail"] = False; self.write(st)
+        self.round()
+        self.settled(rows[0], "merged", 0)
+
+    def test_an_unread_stack_listing_waits_instead_of_refusing(self):
+        st = self.gh(); st["stacks_fail"] = True; self.write(st)
+        row = self.request()
+        self.round()
+        self.settled(row, "queued", None)
+        st = self.gh(); st["stacks_fail"] = False; self.write(st)
+        self.round()
+        self.settled(row, "merged", 0)
+
+    def test_a_verdict_replaced_during_the_checks_does_not_merge(self):
+        row = self.request()
+        real = prog.pr_view
+
+        def view(repo, n):
+            if sys._getframe(1).f_code.co_name == "merge_unit":  # every check passed; another verdict lands now
+                self.p.append("verdict", pr=self.n, sha=f"h{self.n}", patch_id=pid(self.n), source="review:claude",
+                              result="pass")
+            return real(repo, n)
+        prog.pr_view = view
+        try:
+            self.round()
+        finally:
+            prog.pr_view = real
+        got = self.settled(row, "refused", 3, "verdict changed")
+        self.assertEqual(got["audit"]["verdict"]["source"], "review:claude")
+
+    def test_a_merge_found_after_the_expiry_is_recorded_not_expired(self):
+        config(max_wait_hours=1e-9)  # every request is past it (0 would read as unset, the 24 h default)
+        row = self.request()
+        self.assertTrue(store.land_claim(row["id"]))  # the round died after the merge
+        self.edit_pr(state="MERGED", merge_sha=f"m{self.n}")
+        self.round()
+        self.settled(row, "merged", 0)
+
+    def test_the_same_slug_and_pr_in_two_homes_are_two_requests(self):
+        a, _ = store.land_put(self.slug, "/homes/a", "o/r", self.n, "s1", None, "normal", None)
+        b, outcome = store.land_put(self.slug, "/homes/b", "o/r", self.n, "s1", None, "normal", None)
+        self.assertEqual(outcome, "new")
+        self.assertNotEqual(a["id"], b["id"])
+        _, outcome = store.land_put(self.slug, "/homes/b", "o/r", self.n, "s2", None, "normal", None)
+        self.assertEqual(store.land_get(a["id"])["status"], "queued", "another home's request is not superseded")
 
     def test_human_gate_program(self):
         self.p.update(lambda c: c.update(merge_policy="human-gate"))

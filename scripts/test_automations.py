@@ -317,9 +317,20 @@ class ShellJobs(Base):
         self.assertEqual(j.argv[1:], [str(au.LAND_EXEC), "round"])
         self.assertEqual(j.want()["trigger"], "*/1 * * * *")
         self.orca([])
-        with mock.patch.object(au.subprocess, "run") as run:
+        done = au.subprocess.CompletedProcess([], 0, "created land_request\n", "")
+        with mock.patch.object(au.subprocess, "run", return_value=done) as run:
             self.assertEqual(j.enable(False)[0], 0)
         self.assertEqual(run.call_args[0][0][-2:], [str(au.LAND_EXEC), "setup"])
+
+    def test_land_executor_is_not_turned_on_when_the_queue_setup_fails(self):
+        j = self.jobs["land-executor"]
+        fake = self.orca([])
+        failed = au.subprocess.CompletedProcess([], 1, "", "refused: agent-skills.db is not migrated")
+        with mock.patch.object(au.subprocess, "run", return_value=failed):
+            code, msg = j.enable(False)
+        self.assertEqual(code, 1)
+        self.assertIn("not migrated", msg)
+        self.assertEqual(self.creates(fake), [])
 
     def test_no_job_is_a_launchagent_or_names_launchctl(self):
         for j in self.jobs.values():

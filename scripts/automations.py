@@ -326,9 +326,10 @@ class ShellJob(OrcaJob):
     """A periodic shell job with no agent: an Orca automation whose precheck (scripts/orca_job.py) runs the command,
     records how it ended and exits 1, so Orca skips the agent every time. A job that needs no model must not start one."""
 
-    def __init__(self, name, what, argv, interval, default, ok=(0,), turned_off=None, clear_off=None):
+    def __init__(self, name, what, argv, interval, default, ok=(0,), turned_off=None, clear_off=None, prepare=None):
         self.name, self.job_name, self.what, self.default = name, f"agent-skills {name}", what, default
         self.argv, self.interval, self.ok, self.turned_off, self.clear_off = argv, interval, ok, turned_off, clear_off
+        self.prepare = prepare  # () -> (code, message), run before the job is created or turned on
 
     def disable(self):
         code, msg = super().disable()
@@ -337,6 +338,10 @@ class ShellJob(OrcaJob):
         return code, msg
 
     def enable(self, here):
+        if self.prepare:
+            code, msg = self.prepare()
+            if code:
+                return code, msg
         code, msg = self.enable_job(here)
         if not code and self.clear_off:
             self.clear_off()
@@ -404,8 +409,10 @@ LAND_EXEC = REPO / "skills" / "orchestrate" / "scripts" / "land_exec.py"
 
 
 def land_setup():
-    """The land queue's table, created when the job is turned on so its first round finds it."""
-    subprocess.run([sys.executable, "-I", str(LAND_EXEC), "setup"], check=False)
+    """The land queue's table, created before the job is turned on so its first round finds it."""
+    p = subprocess.run([sys.executable, "-I", str(LAND_EXEC), "setup"], capture_output=True, text=True)
+    return p.returncode, ("" if not p.returncode else
+                          f"land_exec.py setup 실패, 켜지 않음: {(p.stderr or p.stdout).strip()[:200]}")
 
 
 def reap_hard_interval():
@@ -426,7 +433,7 @@ SHELL_JOBS = (
              ["python3", str(REPO / "skills" / "orchestrate" / "scripts" / "dash.py"), "ensure"], 600, False),
     ShellJob("land-executor", "orchestrate.land_executor 가 켜진 repo 에서 `orch land` 가 남긴 머지 요청을 1분마다 모델 없이 다시 "
              "검사해 머지하는 Orca automation(skills/orchestrate/references/landing.md). 설정 키를 켜는 것은 skills-config 로 따로 한다",
-             ["python3", str(LAND_EXEC), "round"], 60, False, clear_off=land_setup),
+             ["python3", str(LAND_EXEC), "round"], 60, False, prepare=land_setup),
 )
 
 

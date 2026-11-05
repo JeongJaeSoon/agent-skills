@@ -65,9 +65,10 @@ class Round:
         self.rev = rev()
 
     def owner_login(self):
+        """The gh account's login, or None when GitHub did not answer (not cached: the next request asks again)."""
         if self.login is None:
             r = prog.run(["gh", "api", "user", "--jq", ".login"], check=False)
-            self.login = r.stdout.strip() if r.returncode == 0 else ""
+            self.login = r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
         return self.login
 
     def process(self, row):
@@ -85,17 +86,6 @@ class Round:
             log(f"request {rid} {row['repo']}#{row['pr']} {status}{f' ({code})' if code is not None else ''}: {why[:300]}")
             return status
 
-        try:
-            ex = prog.land_executor(row["repo"])
-        except SystemExit as e:
-            return settle("refused", 1, f"the settings cannot be read: {e.code}")
-        if not ex:
-            return settle("refused", 1, f"orchestrate.land_executor is off for {row['repo']}: land again (it merges directly)")
-        if row["repo"].split("/")[0].casefold() != self.owner_login().casefold():
-            return settle("refused", 1, f"{row['repo']} is not owned by the gh account '{self.owner_login() or '?'}'")
-        age_h = (now() - prog.parse_ts(row["created_at"])).total_seconds() / 3600
-        if age_h > ex["max_wait_hours"]:
-            return settle("refused", 1, f"expired: queued {age_h:.0f} h, over max_wait_hours {ex['max_wait_hours']:g}")
         prog.HOME = pathlib.Path(row["home"])  # the programs home the request came from; Program and its locks read it
         try:
             p = prog.Program(row["program"])
@@ -103,8 +93,6 @@ class Round:
             return settle("refused", 1, f"program unreadable: {e.code}")
         if p.cfg.get("repo") != row["repo"]:
             return settle("refused", 1, f"program {row['program']} is on {p.cfg.get('repo')}, not the requested {row['repo']}")
-        if p.cfg.get("merge_policy") != "autonomous":
-            return settle("refused", 1, f"merge_policy is {p.cfg.get('merge_policy')}; the executor lands autonomous programs only")
         repo, pr, sha = row["repo"], row["pr"], row["sha"]
         try:
             v = prog.pr_view(repo, pr)
@@ -112,13 +100,30 @@ class Round:
             return settle("queued", None, f"GitHub did not answer: {str(e.code)[:200]}")
         audit["merge_state"] = v.get("mergeStateStatus")
         if v["state"] == "MERGED":
-            # A round that died after the merge, or a merge made elsewhere: record what GitHub shows, once.
+            # A round that died after the merge, or a merge made elsewhere: record what GitHub shows, once. This comes
+            # before the setting and the expiry, which decide whether to merge, not whether a merge happened.
             msha = (v.get("mergeCommit") or {}).get("oid")
             if "landed" not in prog.pr_state(p.events()).get(pr, {}):
                 p.append("landed", pr=pr, sha=msha, note=f"land-exec request {rid}, recorded after the merge")
             same = v["headRefOid"] == sha
             return settle("merged", 0, "merged" if same else
                           f"merged at {v['headRefOid'][:8]}, not the requested {sha[:8]}, outside this request", msha)
+        try:
+            ex = prog.land_executor(repo)
+        except SystemExit as e:
+            return settle("refused", 1, f"the settings cannot be read: {e.code}")
+        if not ex:
+            return settle("refused", 1, f"orchestrate.land_executor is off for {repo}: land again (it merges directly)")
+        login = self.owner_login()
+        if login is None:
+            return settle("queued", None, "GitHub did not answer `gh api user`: the repo's owner is unchecked")
+        if repo.split("/")[0].casefold() != login.casefold():
+            return settle("refused", 1, f"{repo} is not owned by the gh account '{login}'")
+        age_h = (now() - prog.parse_ts(row["created_at"])).total_seconds() / 3600
+        if age_h > ex["max_wait_hours"]:
+            return settle("refused", 1, f"expired: queued {age_h:.0f} h, over max_wait_hours {ex['max_wait_hours']:g}")
+        if p.cfg.get("merge_policy") != "autonomous":
+            return settle("refused", 1, f"merge_policy is {p.cfg.get('merge_policy')}; the executor lands autonomous programs only")
         if v["state"] != "OPEN":
             return settle("refused", 1, f"#{pr} is {v['state']}")
         if v.get("isDraft"):
@@ -148,11 +153,13 @@ class Round:
             return settle("refused", 3, f"#{pr} is behind a base that requires up-to-date branches:"
                                          f" {prog.update_advice([pr], repo)}, then land again")
         try:
-            code, msg = prog.attempt(p, pr, row["klass"], expect=sha)
+            code, msg = prog.attempt(p, pr, row["klass"], expect=sha, verdict_sources=ex["verdict_sources"])
         except SystemExit as e:
             if prog.TRANSIENT.search(str(e.code)):
                 return settle("queued", None, f"GitHub or Orca did not answer: {str(e.code)[:200]}")
             return settle("refused", 1, str(e.code))
+        if getattr(p, "land_verdict", None) is not None:
+            audit["verdict"] = p.land_verdict  # the one standing at the merge call, re-read there
         if code == 0:
             landed = prog.pr_state(p.events()).get(pr, {}).get("landed") or {}
             return settle("merged", 0, msg, landed.get("sha"))

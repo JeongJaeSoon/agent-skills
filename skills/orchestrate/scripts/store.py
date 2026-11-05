@@ -676,7 +676,8 @@ SCHEMA_LAND = (
   told_at TEXT,
   CHECK ((status IN ('merged','refused','superseded')) = (closed_at IS NOT NULL))
 )""",
-    "CREATE UNIQUE INDEX land_request_open ON land_request(program, pr) WHERE status IN ('queued','running')",
+    # Two programs homes may share a slug and a PR number; the home and repo keep their requests apart.
+    "CREATE UNIQUE INDEX land_request_open ON land_request(home, repo, program, pr) WHERE status IN ('queued','running')",
 )
 
 
@@ -717,8 +718,8 @@ def land_put(program, home, repo, pr, sha, base_sha, klass, requester, by=None):
     """(row, outcome): outcome is "same" when an open request names this sha, "busy" when the executor is running an
     open request for another sha (nothing changes), else "new", after superseding a queued one for another sha."""
     with _land_tx() as db:
-        old = db.execute("SELECT * FROM land_request WHERE program=? AND pr=? AND status IN ('queued','running')",
-                         (program, pr)).fetchone()
+        old = db.execute("SELECT * FROM land_request WHERE home=? AND repo=? AND program=? AND pr=? "
+                         "AND status IN ('queued','running')", (home, repo, program, pr)).fetchone()
         if old and old["sha"] == sha:
             if requester and old["requester"] != requester:
                 db.execute("UPDATE land_request SET requester=?, updated_at=? WHERE id=?", (requester, now(), old["id"]))
