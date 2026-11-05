@@ -229,7 +229,7 @@ admitted, parked, approved, gate_opened, stop, resume, predicate_verified, confi
 land_check, yield, lane, lock_acquired, lock_released, reprioritized, signal.
 Tickets come from the tracker adapter (use-tracker/scripts/tracker.py), never from a tracker directly.
 """
-import contextlib, datetime as dt, fcntl, fnmatch, hashlib, heapq, json, os, pathlib, re, shlex, subprocess, sys, tempfile, time
+import contextlib, datetime as dt, fcntl, fnmatch, hashlib, heapq, json, math, os, pathlib, re, shlex, subprocess, sys, tempfile, time
 
 TRACKER = pathlib.Path(__file__).resolve().parents[2] / "use-tracker" / "scripts" / "tracker.py"
 HOME = pathlib.Path(os.environ.get("PROGRAMS_HOME", "~/.claude/programs")).expanduser()
@@ -2411,8 +2411,16 @@ def land_executor(repo=None):
     repos = [r for r in cfg.get("repos") or [] if isinstance(r, str)]
     if repo is not None and repo not in repos:
         return None
-    return {"repos": repos, "verdict_sources": cfg.get("verdict_sources") or ["review:codex"],
-            "max_wait_hours": float(cfg.get("max_wait_hours") or 24)}
+    hours = cfg.get("max_wait_hours")
+    try:
+        hours = 24.0 if hours is None else float(hours)
+    except (TypeError, ValueError):
+        hours = float("nan")
+    if not (math.isfinite(hours) and hours > 0) or isinstance(cfg.get("max_wait_hours"), bool):
+        # A wait that can never end (NaN, inf) or a typo ("24h") would keep requests queued for ever.
+        sys.exit(f"{path}: orchestrate.land_executor.max_wait_hours must be a positive number of hours, "
+                 f"not {cfg.get('max_wait_hours')!r}")
+    return {"repos": repos, "verdict_sources": cfg.get("verdict_sources") or ["review:codex"], "max_wait_hours": hours}
 
 
 LAND_EXIT = {"merged": 0, "superseded": 2}

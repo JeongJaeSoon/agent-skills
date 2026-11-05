@@ -151,7 +151,7 @@ With `orchestrate.land_executor` on for the program's repo, `orch land` merges n
 {"orchestrate": {"land_executor": {"enabled": true, "repos": ["owner/repo"], "verdict_sources": ["review:codex"], "max_wait_hours": 24}}}
 ```
 
-The owner sets the key (`skills-config`) and turns the automation on (`skills-sync setup enable land-executor` from the main checkout, which also records the `5-land-queue` step). With the key off, `orch land` merges in its own process. A settings file that names the key but cannot be parsed stops `land` with exit 1 instead of falling back to a direct merge.
+The owner sets the key (`skills-config`) and turns the automation on (`skills-sync setup enable land-executor` from the main checkout, which also records the `5-land-queue` step). With the key off, `orch land` merges in its own process. A settings file that names the key but cannot be parsed, or whose `max_wait_hours` is not a positive number of hours, stops `land` with exit 1 instead of falling back to a direct merge, and the executor refuses its queued requests the same way.
 
 Each round takes the queued requests oldest first. For each one, the first check that fails leaves the PR unmerged:
 

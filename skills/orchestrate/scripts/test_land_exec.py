@@ -368,6 +368,15 @@ class LandExec(unittest.TestCase):
         self.round()
         self.settled(row, "refused", 1, "expired")
 
+    def test_a_max_wait_that_can_never_end_refuses_instead_of_waiting(self):
+        for bad in ("24h", "NaN", 0, True):
+            with self.subTest(bad=bad):
+                drain()
+                config(max_wait_hours=bad)
+                row = self.request()
+                self.round()
+                self.settled(row, "refused", 1, "positive number of hours")
+
     def test_human_gate_program(self):
         self.p.update(lambda c: c.update(merge_policy="human-gate"))
         row = self.request()
