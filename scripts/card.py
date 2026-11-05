@@ -7,9 +7,11 @@ Usage:
                    [--role impl|verify|review] [--supersede] [--no-forbidden] [--agent claude|codex] [--model <id>]
   skills-sync handoff <TICKET> ...   (handoff() below)
 
-The session's model: --model when the human named one, else `orchestrate.models.lead` for a lead's brief and
-`orchestrate.models.worker` for anything else (agent-skills.json). With neither, no flag goes out, the card runs on the
-account's default and one warning line says so. A Codex card takes only --model: those keys name Claude models.
+The session's model: --model when the human named one, else `orchestrate.models.lead` for a lead's brief, else the
+brief's `KIND: design|edit|lookup — <reason>` row (opus | sonnet | haiku; another kind or no reason is exit 2), else
+`orchestrate.models.worker` (agent-skills.json). With none, no flag goes out, the card runs on the account's default
+and one warning line says so. A Codex card takes only --model: those names are Claude models. The `card` object and
+the cards.jsonl row carry model and model_from (what picked it).
 
 --agent picks the card's CLI (default claude). Every brief check runs the same for either. Codex is a supervised
 worker only: its close-setup gets no agent handle, since that reads Claude's screen and worker-start's receipt says it
@@ -805,18 +807,37 @@ def parse_args(rest):
     return opts, refs
 
 
-def session_model(opts, lead, name):
-    """The model this start names, or None after a warning line. See the module docstring."""
-    if opts.get("--model"):
-        return opts["--model"]
-    if opts["--agent"] != "claude":
+KIND_MODEL = {"design": "opus", "edit": "sonnet", "lookup": "haiku"}
+KIND_ROW = re.compile(r"^`?KIND`?(?:[ \t]*:|[ \t]{2,})[ \t]*(\S*?)[ \t]*(?:—|--?)[ \t]*(\S.*)?$", re.S)
+
+
+def brief_kind(brief_path):
+    """The brief's `KIND: design|edit|lookup — <reason>` row as its kind, None without one, else Refuse(2)."""
+    text = FENCE.sub("", pathlib.Path(brief_path).expanduser().read_text())
+    r = row(text, "KIND")
+    if r is None:
         return None
+    m = KIND_ROW.match(r)
+    if not m or m.group(1) not in KIND_MODEL or not m.group(2):
+        raise Refuse(2, f"[{ME}] {brief_path}: the KIND row is `KIND: design|edit|lookup — <reason>` (found "
+                        f"{r.splitlines()[0]!r}); fix it, or drop the row to use orchestrate.models.worker")
+    return m.group(1)
+
+
+def session_model(opts, lead, name, kind=None):
+    """(model, model_from): what picked it, or (None, None) after a warning line. See the module docstring."""
+    if opts.get("--model"):
+        return opts["--model"], "--model"
+    if opts["--agent"] != "claude":
+        return None, None
+    if kind and not lead:
+        return KIND_MODEL[kind], f"KIND: {kind}"
     role = "lead" if lead else "worker"
     model = orca_settings.role_model(role)
     if not model:
         print(f"[{name}] orchestrate.models.{role} is not set: this card runs on the account's default model",
               file=sys.stderr)
-    return model
+    return model, f"orchestrate.models.{role}" if model else None
 
 
 def refuse_codex(brief, opts):
@@ -847,13 +868,14 @@ def create(argv):
         if not opts.get(k):
             raise Refuse(2, f"{k} is required (dispatch-card §3)")
     prompt = compose(brief)
+    kind = brief_kind(brief)
     if opts["--agent"] == "codex":
         refuse_codex(brief, opts)
     with card_lock():
-        return create_locked(brief, opts, refs, prompt)
+        return create_locked(brief, opts, refs, prompt, kind)
 
 
-def create_locked(brief, opts, refs, prompt):
+def create_locked(brief, opts, refs, prompt, kind=None):
     repo, superseded = check_duplicates(opts["--repo"], refs, opts["--role"], opts.get("--supersede"))
     # A lead's brief has no FORBIDDEN row in its template: the worker paragraph is not its rule set.
     forbidden = ("skipped (--no-forbidden)" if opts.get("--no-forbidden") else "skipped (lead brief)"
@@ -888,7 +910,7 @@ def create_locked(brief, opts, refs, prompt):
         raise Refuse(2, f"[{ME}] {CODEX_GOAL_CARD}")
     parent = None if opts.get("--no-parent") else (
         opts["--parent-worktree"] if opts.get("--parent-worktree") and not worker else caller_worktree())
-    model = session_model(opts, lead, ME)
+    model, model_from = session_model(opts, lead, ME, kind)
     if worker:
         # Orca puts its own preamble before the spec, so the /goal line is not the first thing the session reads and
         # Claude Code may not run it as the slash command. It stays: the line still states the goal, and stripping it
@@ -962,12 +984,13 @@ def create_locked(brief, opts, refs, prompt):
                   if handle and path and opts["--agent"] == "claude" else None)  # /goal is Claude Code's command
     print(json.dumps({**res, "card": {"kind": "worker" if worker else "card", "path": path, "handle": handle,
                                       "run": run_id, "parent": parent, "forbidden": forbidden, "close_setup": setup,
-                                      "model": model, **({"goal_input": goal_input} if goal_input else {})}},
+                                      "model": model, "model_from": model_from,
+                                      **({"goal_input": goal_input} if goal_input else {})}},
                      ensure_ascii=False, indent=1))
     failed = []
     if refs:
         ledger_add(repo=repo, references=refs, role=opts["--role"], path=path, name=opts["--name"],
-                   dispatch=res.get("dispatchId") if worker else None)
+                   dispatch=res.get("dispatchId") if worker else None, model=model, model_from=model_from)
     for old in superseded:
         failed += supersede(old, path, opts.get("--display-name") or opts["--name"])
     if opts.get("--no-forbidden"):
@@ -1056,7 +1079,7 @@ def handoff_locked(ticket, opts, refs, prompt):
     cmd += ["--base-branch", opts["--base-branch"]] if opts.get("--base-branch") else []
     cmd += ["--parent-worktree", parent] if parent else ["--no-parent"]
     cmd += ["--agent", "claude", "--prompt", prompt]
-    model = session_model(opts, False, HANDOFF)
+    model, model_from = session_model(opts, False, HANDOFF)
     cmd += ["--model", model] if model else []
     for r in refs:
         cmd += ["--reference", r]
@@ -1082,7 +1105,8 @@ def handoff_locked(ticket, opts, refs, prompt):
     mark("done")
     handle = handle_of(res)
     failed = []
-    ledger_add(repo=repo, references=keys, role=opts["--role"], path=path, name=name)
+    ledger_add(repo=repo, references=keys, role=opts["--role"], path=path, name=name, model=model,
+               model_from=model_from)
     title = f"{ticket} {opts['--title']}" if opts.get("--title") else ticket
     p, err = run([ORCA, "worktree", "set", "--worktree", f"path:{path}", "--display-name", title, "--json"])
     if not p or p.returncode:
@@ -1099,7 +1123,7 @@ def handoff_locked(ticket, opts, refs, prompt):
     setup = start_close_setup(path, None, name)  # the start was just read; close-setup only closes the setup shell
     goal_input = start_goal_input(handle, prompt.splitlines()[0], name, path) if handle else None
     print(json.dumps({**res, "card": {"kind": "card", "path": path, "handle": handle, "parent": parent,
-                                      "start": detail, "close_setup": setup,
+                                      "start": detail, "close_setup": setup, "model": model, "model_from": model_from,
                                       **({"goal_input": goal_input} if goal_input else {})}},
                      ensure_ascii=False, indent=1))
     if failed:

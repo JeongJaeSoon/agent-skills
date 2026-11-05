@@ -143,6 +143,7 @@ skills-sync card <brief file> \
   # --role verify|review for a second card on the same ticket that checks, not implements (default impl)
   # --agent codex for a Codex card (default claude); only a supervised worker, see below
   # --model <id> when the human named one; otherwise orchestrate.models.lead or .worker from agent-skills.json
+  # without --model, a brief row `KIND: design|edit|lookup — <reason>` picks opus|sonnet|haiku (not for a lead)
 ```
 
 The helper starts `skills-sync close-setup <path> --agent <handle>` in the background itself:

@@ -304,7 +304,7 @@ assert [c["argv"] for c in calls if c["argv"][:2] == ["reference", "add"]] == [[
 assert not any(c["bin"] == "orch" for c in calls) and not any(c["argv"][:2] == ["worktree", "create"] for c in calls)
 assert json.loads(out)["card"] == {"kind": "worker", "path": str(CARD_DIR), "handle": "term_w", "run": {"id": "run_me"},
                                    "parent": "id:repo1::/wt/me", "forbidden": "inserted",
-                                   "close_setup": {"log": "abc-1.log"}, "model": None,
+                                   "close_setup": {"log": "abc-1.log"}, "model": None, "model_from": None,
                                    "goal_input": {"log": "abc-1.goal.log"}}, out
 # The worker's /goal line is not left to the spec: a detached helper types it once the first turn ends.
 assert GOALS == [("term_w", f"/goal ship the helper and open its PR 브리프: {tmp / 'sup.md'}", "abc-1", str(CARD_DIR))], GOALS
@@ -721,8 +721,35 @@ assert rc == 0 and creates(calls)[0][:2] == ["orchestration", "worker-start"] an
 rc, out, err, calls = go(worker_brief, "--repo", "r", "--name", "m7", "--agent", "codex")
 assert rc == 0 and model_of(calls) is None and "is not set" not in err, (rc, err, calls)
 rc, out, err, calls = handoff("ABC-8", "--title", "next", "--note", "x")
-assert model_of(calls) == "sonnet", calls
+assert model_of(calls) == "sonnet" and json.loads(out)["card"]["model_from"] == "orchestrate.models.worker", out
+# A KIND row picks the model by the work's kind; --model wins over it, a lead keeps models.lead, Codex gets none.
+# Its model and where it came from go in the card object and the cards.jsonl row.
+for kind, want in (("design", "opus"), ("edit", "sonnet"), ("lookup", "haiku")):
+    rc, out, err, calls = go(brief(f"{WORKER}KIND: {kind} — the reason\n", f"k-{kind}.md"), "--repo", "r",
+                             "--name", f"k-{kind}", "--no-parent", "--reference", f"KIND-{kind}")
+    got = json.loads(out)["card"]
+    assert rc == 0 and model_of(calls) == want and (got["model"], got["model_from"]) == (want, f"KIND: {kind}"), (rc, err, got)
+    last = json.loads(card.ledger().read_text().splitlines()[-1])
+    assert (last["model"], last["model_from"]) == (want, f"KIND: {kind}"), last
+KINDED = f"{WORKER}KIND: lookup — read two files\n"
+rc, out, err, calls = go(brief(KINDED, "k1.md"), "--repo", "r", "--name", "k1", "--no-parent", "--model", "opus")
+assert rc == 0 and model_of(calls) == "opus" and json.loads(out)["card"]["model_from"] == "--model", (rc, err)
+rc, out, err, calls = go(brief(LEAD + "KIND: lookup — x\n", "k2.md"), "--repo", "r", "--name", "k2", "--no-parent")
+assert rc == 0 and model_of(calls) == "opus" and json.loads(out)["card"]["model_from"] == "orchestrate.models.lead", (rc, err)
+rc, out, err, calls = go(brief(KINDED + "REPORT: orca orchestration send --to run:run_me\n", "k3.md"), "--repo", "r",
+                         "--name", "k3", "--agent", "codex")
+assert rc == 0 and model_of(calls) is None and json.loads(out)["card"]["model_from"] is None, (rc, err, calls)
+rc, out, err, calls = go(brief(WORKER, "k4.md"), "--repo", "r", "--name", "k4", "--no-parent")
+assert rc == 0 and json.loads(out)["card"]["model_from"] == "orchestrate.models.worker", out
+# An unknown kind or a missing reason is refused before anything happens: no create, the brief left as it was.
+for bad in ("KIND: refactor — x", "KIND: edit", "KIND: edit —", "KIND:"):
+    text = f"{WORKER}{bad}\n"
+    rc, out, err, calls = go(brief(text, "k5.md"), "--repo", "r", "--name", "k5", "--no-parent", "--model", "opus")
+    assert rc == 2 and "KIND" in err and "design|edit|lookup" in err and not calls, (bad, rc, err, calls)
+    assert (tmp / "k5.md").read_text() == text, bad
 os.environ["AGENT_SKILLS_CONFIG"] = str(tmp / "none.json")
+rc, out, err, calls = go(brief(WORKER, "k6.md"), "--repo", "r", "--name", "k6", "--no-parent")
+assert rc == 0 and json.loads(out)["card"]["model_from"] is None, out
 
 # ---- the worker's /goal line: typed after the first turn ends, never before, never after a timed-out wait.
 GOALS.clear()
