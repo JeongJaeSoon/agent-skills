@@ -77,6 +77,25 @@ def landed(path, head, run):
     return out.strip() == "0", f"GitHub compare {base}"
 
 
+# "commit", "commit (merge)", "commit (amend)"; not "merge origin/main: Fast-forward" or "rebase (start)", which only
+# move HEAD onto the base's history.
+OWN_COMMIT = re.compile(r"^(commit( \([^)]*\))?|cherry-pick|revert|am):")
+NEW_CARD_S = 24 * 3600
+
+
+def history(path, run):
+    """(has_own_commit, born): from HEAD's reflog, whether this card ever made a commit, and when it began. None when
+    the reflog is unreadable or empty. A card with no commit has HEAD on the base branch without anything having
+    landed, so HEAD on the base proves nothing for it."""
+    # %gd with --date=unix is the time the reflog entry was written (HEAD@{<unix>}); %ct would be the commit's own date.
+    out = run(["git", "-C", path, "reflog", "show", "--date=unix", "--format=%gd%x09%gs", "HEAD"])
+    rows = [(m.group(1), s) for line in (out or "").splitlines()
+            if (m := re.match(r"HEAD@\{(\d+)\}\t(.*)", line)) and (s := m.group(2)) is not None]
+    if not rows or len(rows) != len([line for line in (out or "").splitlines() if line.strip()]):
+        return None, None
+    return any(OWN_COMMIT.match(s) for _, s in rows), min(int(t) for t, _ in rows)
+
+
 def patch_id(path, sha, run):
     diff = run(["git", "-C", path, "show", "--format=", "-p", sha])
     out = diff is not None and run(["git", "patch-id", "--stable"], input=diff)
@@ -196,6 +215,9 @@ def gather(w, m, run=None):
         f["carried"] = bool(ref)
     if not ref or not f["carried"]:
         f["landed"], f["landed_via"] = landed(p, head, run)
+        if not ref and f["landed"]:
+            own, born = history(p, run)
+            f["own_commit"], f["age"] = own, None if born is None else m["now"] - born
     f["unpushed"] = "none" if f.get("landed") else unpushed(p, head, f["pr_head"], run)
     if f["state"] == "OPEN" and f["pr_head"] and head != f["pr_head"] and f["carried"]:
         # HEAD is a step on the way to the PR's head: another card standing exactly at that head carries the PR on.
@@ -291,6 +313,12 @@ def judge(f, idle_s):
         return KEEP, f"PR 없음, HEAD 가 기본 브랜치에 없음({f['landed_via']})", []
     if live and not said_done:
         return KEEP, "PR 없음, Claude 세션이 있음(끝났다는 말 없음)", []
+    # HEAD on the base branch is "landed" only if the card's own commits went in; a card that never committed sits
+    # there from the day it was made (and its PR may come hours later).
+    if f.get("own_commit") is None or f.get("age") is None:
+        return KEEP, "PR 없음, 커밋 이력(reflog)을 읽지 못함", []
+    if not f["own_commit"] and f["age"] < NEW_CARD_S:
+        return KEEP, f"PR 없음, 새 카드, 아직 커밋 없음({int(f['age'] // 3600)}시간 전 생성)", []
     return REMOVE, f"PR 없음, HEAD 가 기본 브랜치에 있음({f['landed_via']}){tail}", handles
 
 
