@@ -363,6 +363,9 @@ def scan(cfg, repo_list=(), notes=None):
         items.append({"path": f["path"], "name": f["name"], "repo": f["repo"], "branch": f["branch"], "pr": f["pr"],
                       "state": f["state"], "verdict": verdict, "why": why, "close": close, "head": f["head"],
                       "ino": reap.dir_ino(f["path"]), "regenerated": f.get("regenerated") or [],
+                      # None: gather() stopped before git status (a protected card, an unreadable one), so not known.
+                      # False also covers a tree whose only untracked files are `regenerated` copies.
+                      "dirty": f.get("dirty"),
                       "release": f.get("release") or []})
     return items, notes
 

@@ -11,6 +11,11 @@ state, prs, the external inbox, the pressure queue, program files and ledgers). 
 Stages and `orch stage show` all read states through snapshot() or judged(); none of them decides a status of its own.
 judged() is judge(), except that before `orch db import` it says the closes and decisions are unknown, which judge's facts
 cannot tell it.
+
+inputs() is the one export of what a reader that joins rows, sessions and PRs needs (the planned units.py): the facts and
+state, the board's rows as stored, the render's session links and its reasons for giving a session no row, every session
+that claimed a PR, each Run's coordinator, and which worktrees have uncommitted changes. It reads them off the same render()
+and decides nothing.
 """
 import fnmatch, json, os, pathlib, re
 
@@ -291,6 +296,16 @@ def patrol_reason(r, stalled, sid):
     return r.get("kind") == "lead" and stalled.get(sid) or stalled.get(r.get("pr"))
 
 
+def session_gone(f, lead, sid):
+    """Whether the session a lead's row runs in is gone: its worktree is missing or offline, else (no worktree known)
+    the lead's terminal handle is not listed. None when the session list cannot be trusted."""
+    if not f["sessions_known"]:
+        return None
+    if sid:
+        return sid not in f["sessions"] or f["sessions"][sid].get("phase") == "offline"
+    return f["live"] is not None and lead.get("handle") not in f["live"]
+
+
 def judge(r, f, lead=None, sid=None):
     """The RowState of one row. lead: the board lead the row hangs under (None for fleet rows with none); sid: the
     worktree the row's work runs in (its own, else its lead's)."""
@@ -401,13 +416,11 @@ def judge(r, f, lead=None, sid=None):
 
     # 5 🔴 its lead's session is gone
     if status == "moving" and lead and not lead.get("closed_at"):
-        if not f["sessions_known"]:  # never 🔴 on a list that cannot be trusted, and never 🔄 either
+        gone = session_gone(f, lead, sid)
+        if gone is None:  # never 🔴 on a list that cannot be trusted, and never 🔄 either
             return gap("세션 목록 모름")
-        else:
-            gone = (sid not in f["sessions"] or f["sessions"][sid].get("phase") == "offline") if sid \
-                else f["live"] is not None and lead.get("handle") not in f["live"]
-            if gone:
-                hit("blocked", "재개·정리")  # the 세션 column already says the session is gone
+        if gone:
+            hit("blocked", "재개·정리")  # the 세션 column already says the session is gone
 
     # 6 ❔ a gap the agent fills
     v = f["verdicts"].get(tid)
@@ -611,6 +624,83 @@ def snapshot(now=None):
     import board  # board imports this module
     out = board.render(now=now, fill=True, periodic=False)
     return {"rows": out["states"], "by_pr": out["now_by_pr"]}
+
+
+# A janitor plan older than this says nothing of a worktree's changes now (the janitor runs every 30 minutes).
+DIRTY_PLAN_MAX_MIN = 90
+
+
+def run_coordinators(state, sessions_known):
+    """{Run id: {"handle", "session", "live"}}: the terminal that coordinates each Run, the worktree listing it, and
+    whether that session is on (None: not known). A Run record without `coordinator` (a collector from before the
+    field) has handle None. sessions_known: gather()'s verdict that the session list is fresh and was read."""
+    src = (state or {}).get("sources") or {}
+    trusted = sessions_known and not (src.get("runs") or {}).get("error")
+    where = {t.get("handle"): s for s in (state or {}).get("sessions") or [] for t in s.get("terminals") or []}
+    out = {}
+    for r in (state or {}).get("runs") or []:
+        handle = r.get("coordinator")
+        s = where.get(handle) if handle else None
+        out[r.get("id")] = {"handle": handle, "session": s and s.get("id"),
+                            "live": (bool(s) and s.get("phase") != "offline") if trusted and handle else None}
+    return out
+
+
+def card_dirty(state, now):
+    """({worktree id: True | False | None}, readable): whether each session's worktree has uncommitted changes, from the
+    janitor's latest plan (reap-resources' cards.scan, which reads git status; nothing is read again here). None is
+    unknown: no plan row for the path, a row whose scan did not get to git status, or a plan too old to say."""
+    sessions = (state or {}).get("sessions") or []
+    home = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()
+    try:
+        plan = json.loads((home / "janitor-plan.json").read_text())
+        at = fleet.parse(plan.get("at"))
+        rows = {os.path.realpath(i["path"]): i for i in plan.get("items") or [] if i.get("kind", "card") == "card" and i.get("path")}
+        old = at is None or (now - at).total_seconds() > DIRTY_PLAN_MAX_MIN * 60  # a time with no zone cannot be subtracted
+    except (OSError, ValueError, AttributeError, TypeError):
+        return {s.get("id"): None for s in sessions}, False
+    if old:
+        return {s.get("id"): None for s in sessions}, False
+    return {s.get("id"): (rows.get(os.path.realpath(s["path"])) or {}).get("dirty") if s.get("path") else None
+            for s in sessions}, True
+
+
+def inputs(now=None):
+    """What a reader that is not the brief (the planned units.py) needs to join the brief's rows to the sessions and
+    PRs, from the same render() the brief and the dashboard run; the report is not changed by asking.
+
+    facts, state, prs: what judge() was given. board_rows: the board's rows as stored, before a card link rewrote
+    their `pr`; rows: the rows as rendered, fleet rows included. session_of: {row id: the worktree its work runs in}.
+    lead: {row id: the lead record judge() checked it against}. states: {row id: RowState}. reasons: {row id:
+    {"raw_status", "also", "unknown", "lead_gone"}}, read off the stored row and the facts, never decided again.
+    omitted: {session id: [why fleet_rows gave it no row: offline, pr_on_board, dispatch_done, linked]}; card: the
+    sessions that count as cards. candidates: {PR key: [every session that claimed it]}. runs: run_coordinators().
+    dirty: card_dirty(). unknown: the names of inputs that could not be read; their values are None or missing."""
+    import board  # board imports this module
+    now = now or fleet.utcnow()
+    box = {}
+    board.render(now=now, fill=True, periodic=False, inputs=box)
+    f, state = box["facts"], box["state"]
+    raw, states, lead = box["board_rows"], box["states"], box["lead"]
+    prs = (state or {}).get("prs") or []
+    runs = run_coordinators(state, f["sessions_known"])
+    dirty, dirty_read = card_dirty(state, now)
+    sources = ((state or {}).get("sources") or {})
+    reasons = {rid: {"raw_status": (raw.get(rid) or {}).get("status"), "also": st["also"], "unknown": st["unknown"],
+                     "lead_gone": session_gone(f, lead[rid], box["session_of"].get(rid)) if rid in lead else None}
+               for rid, st in states.items()}
+    unknown = [name for name, bad in (
+        ("state", state is None),
+        ("sessions", state is not None and not f["sessions_known"]),  # the orca source failed, or state.json is old
+        ("sources.runs", bool((sources.get("runs") or {}).get("error"))),
+        ("candidates", any("candidates" not in p for p in prs)),
+        ("runs.coordinator", any(r["handle"] is None for r in runs.values())),
+        ("dirty", not dirty_read)) if bad]
+    return {"facts": f, "state": state, "prs": box["prs"], "board_rows": raw, "rows": box["rows"],
+            "session_of": box["session_of"], "lead": lead, "states": states, "reasons": reasons,
+            "omitted": box.get("omitted") or {}, "card": box.get("card") or [],
+            "candidates": {p["key"]: list(p["candidates"]) for p in prs if p.get("key") and "candidates" in p},
+            "runs": runs, "dirty": dirty, "unknown": unknown}
 
 
 def check_placement(placement, expected):
