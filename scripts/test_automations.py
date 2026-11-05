@@ -56,7 +56,12 @@ class Base(unittest.TestCase):
         fake = FakeOrca(autos)
         for p in (mock.patch.object(au, "sh", fake), mock.patch.object(au.shutil, "which", return_value="/x/orca"),
                   mock.patch.object(au, "main_checkout", return_value=main),
-                  mock.patch.object(au.Watch, "configured", return_value=configured)):
+                  mock.patch.object(au.Watch, "configured", return_value=configured),
+                  # A real LaunchAgent state on the machine running the tests must never reach an install.
+                  mock.patch.object(au.ReapHard, "status", return_value=("on", "")),
+                  mock.patch.object(au.OrchDash, "status", return_value=("on", "")),
+                  mock.patch.object(au.ReapHard, "stale", return_value=False),
+                  mock.patch.object(au.PressureWatch, "stale", return_value=False)):
             p.start()
             self.addCleanup(p.stop)
         return fake
@@ -417,6 +422,153 @@ class Share(unittest.TestCase):
         self.patch(True, au.ss.spec())
         self.assertEqual(self.s.disable(), (0, "끔"))
         self.uninstall.assert_called_once()
+
+
+class ReapHard(unittest.TestCase):
+    """patrol has no job of its own; it runs inside reap-hard's pass, so this is what installs it."""
+    r = au.ReapHard()
+
+    def patch(self, loaded, spec, protect=True, main=True, rc=0):
+        self.install = mock.Mock(return_value=rc)
+        self.boot = mock.Mock()
+        for p in (mock.patch.object(au, "label_loaded", return_value=loaded),
+                  mock.patch.object(au, "rh_spec", return_value=spec),
+                  mock.patch.object(au.ReapHard, "protect_file", return_value=mock.Mock(is_file=lambda: protect)),
+                  mock.patch.object(au, "main_checkout", return_value=main),
+                  mock.patch.object(au, "bootout", self.boot),
+                  mock.patch.object(au.sys, "platform", "darwin"),
+                  mock.patch.object(au.rh, "cmd_install", self.install)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def current(self):
+        return au.rh.spec(au.rh.config()["interval"])
+
+    def test_default_on_but_only_where_the_protect_file_is(self):
+        self.assertTrue(self.r.default)
+        self.patch(False, None, protect=False)
+        self.assertEqual(self.r.status()[0], "unconfigured")
+        self.assertEqual(self.r.enable(False)[0], 1)
+        self.install.assert_not_called()
+        self.patch(False, None)
+        self.assertEqual(self.r.status()[0], "absent")
+
+    def test_status(self):
+        self.patch(True, self.current())
+        self.assertEqual(self.r.status()[0], "on")
+        self.assertFalse(self.r.stale())
+        self.patch(False, self.current())
+        self.assertEqual(self.r.status()[0], "off")
+        self.patch(True, {"Label": "old"})
+        self.assertTrue(self.r.stale())
+        self.assertIn("다름", self.r.status()[1])
+
+    def test_enable_installs_once_and_refreshes_a_stale_one(self):
+        self.patch(False, None)
+        self.assertEqual(self.r.enable(False), (0, "켬"))
+        self.install.assert_called_once()
+        self.patch(True, self.current())
+        self.assertEqual(self.r.enable(False), (0, "이미 켜져 있음"))
+        self.install.assert_not_called()
+        self.patch(True, {"Label": "old"})
+        self.assertEqual(self.r.enable(False), (0, "켬"))
+        self.install.assert_called_once()
+        self.patch(False, None, main=False)
+        self.assertEqual(self.r.enable(False)[0], 1)
+        self.install.assert_not_called()
+        self.patch(False, None, rc=1)
+        self.assertEqual(self.r.enable(False), (1, "실패 (위 출력)"))
+
+    def test_disable_keeps_the_plist_so_apply_leaves_it_off(self):
+        self.patch(False, self.current())
+        self.assertEqual(self.r.disable(), (0, "이미 꺼져 있음"))
+        self.boot.assert_not_called()
+        self.patch(True, self.current())
+        self.assertEqual(self.r.disable()[0], 0)
+        self.boot.assert_called_once_with(au.rh.LABEL)
+        self.patch(False, self.current())
+        self.assertEqual(au.decide(self.r)[0], "skip")
+
+    def test_other_os(self):
+        self.patch(False, None)
+        with mock.patch.object(au.sys, "platform", "linux"):
+            self.assertEqual(self.r.status()[0], "unsupported")
+            self.assertEqual(self.r.enable(False)[0], 1)
+        self.install.assert_not_called()
+
+
+class Dash(unittest.TestCase):
+    d = au.OrchDash()
+
+    def patch(self, exists, loaded, main=True, rc=0):
+        self.sh = mock.Mock(return_value=subprocess.CompletedProcess([], rc, "wrote x", ""))
+        self.boot = mock.Mock()
+        for p in (mock.patch.object(au, "label_loaded", return_value=loaded),
+                  mock.patch.object(au.OrchDash, "plist", return_value=mock.Mock(exists=lambda: exists)),
+                  mock.patch.object(au, "main_checkout", return_value=main),
+                  mock.patch.object(au, "bootout", self.boot),
+                  mock.patch.object(au, "sh", self.sh),
+                  mock.patch.object(au.sys, "platform", "darwin")):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_default_on_installs_through_dash_py(self):
+        self.assertTrue(self.d.default)
+        self.patch(False, False)
+        self.assertEqual(self.d.status()[0], "absent")
+        self.assertEqual(self.d.enable(False)[0], 0)
+        self.assertEqual(self.sh.call_args[0][0][1:], [str(au.REPO / "skills/orchestrate/scripts/dash.py"), "install-agent"])
+
+    def test_a_loaded_agent_is_never_rewritten(self):
+        # dash.py's plist keeps the installing shell's ORCH_* variables; a rewrite from another shell would drop them.
+        self.patch(True, True)
+        self.assertEqual(self.d.enable(False), (0, "이미 켜져 있음"))
+        self.sh.assert_not_called()
+        self.assertEqual(au.decide(self.d)[0], "skip")
+
+    def test_off_and_worktree(self):
+        self.patch(True, False)
+        self.assertEqual(self.d.status()[0], "off")
+        self.assertEqual(au.decide(self.d)[0], "skip")
+        self.patch(False, False, main=False)
+        self.assertEqual(self.d.enable(False)[0], 1)
+        self.sh.assert_not_called()
+
+    def test_disable(self):
+        self.patch(True, True)
+        self.assertEqual(self.d.disable()[0], 0)
+        self.boot.assert_called_once()
+
+
+class Plan(Base):
+    """What setup.py's dry run lists is what apply does."""
+
+    def test_lists_installs_and_refreshes_and_unconfigured_reasons(self):
+        self.orca([janitor(), load_job()])
+        with mock.patch.object(au.ReapHard, "status", return_value=("unconfigured", "no protect file")), \
+                mock.patch.object(au.OrchDash, "status", return_value=("absent", "")), \
+                mock.patch.object(au.PressureWatch, "status", return_value=("on", "")), \
+                mock.patch.object(au.PressureWatch, "stale", return_value=True), \
+                mock.patch.object(au.PreviewWatch, "status", return_value=("absent", "")), \
+                mock.patch.object(au.ShareServer, "status", return_value=("absent", "")):
+            lines = au.plan()
+        self.assertEqual([l for l in lines if "watch-" not in l.split(":")[0].replace("pressure-watch", "")],
+                         ["automation pressure-watch: refresh the registered job",
+                          "automation reap-hard: 건너뜀, no protect file",
+                          "automation orch-dash: install"])
+
+    def test_apply_makes_the_same_calls(self):
+        self.orca([janitor(), load_job()])
+        with mock.patch.object(au.ReapHard, "status", return_value=("absent", "")), \
+                mock.patch.object(au.ReapHard, "enable", return_value=(0, "켬")) as rh, \
+                mock.patch.object(au.OrchDash, "status", return_value=("absent", "")), \
+                mock.patch.object(au.OrchDash, "enable", return_value=(0, "켬")) as dash, \
+                mock.patch.object(au.PressureWatch, "status", return_value=("on", "")), \
+                mock.patch.object(au.PreviewWatch, "status", return_value=("absent", "")), \
+                mock.patch.object(au.ShareServer, "status", return_value=("absent", "")):
+            self.assertEqual(au.cmd_apply(False), 0)
+        rh.assert_called_once()
+        dash.assert_called_once()
 
 
 class Apply(Base):

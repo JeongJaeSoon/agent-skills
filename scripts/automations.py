@@ -21,6 +21,7 @@ sys.path.insert(0, str(REAP.parent))
 import preview_watch as pw  # noqa: E402
 import pressure  # noqa: E402
 import reap  # noqa: E402
+import reap_hard as rh  # noqa: E402
 import share_server as ss  # noqa: E402
 
 ORCA = os.environ.get("SKILLS_SETUP_ORCA", "orca")
@@ -321,6 +322,9 @@ class PressureWatch:
             detail += f" · 등록된 내용이 이 체크아웃과 다름: {script} (enable 로 다시 씀)"
         return "on", detail
 
+    def stale(self):
+        return main_checkout() and pressure.plist_spec() != pressure.spec(pressure.config()["interval"])
+
     def enable(self, here):
         if sys.platform != "darwin":
             return 1, "macOS LaunchAgent 전용이다. 다른 OS 는 cron 에서 `pressure.py round` 를 주기 실행한다"
@@ -380,6 +384,114 @@ class ShareServer:
         if ss.plist_spec() is None and not ss.loaded():
             return 0, "이미 꺼져 있음"
         return ss.cmd_uninstall(), "끔"
+
+
+# ---------------------------------------------------------------- reap-hard, orch-dash (LaunchAgent)
+
+def label_loaded(label):
+    return sh(["launchctl", "print", f"gui/{os.getuid()}/{label}"]).returncode == 0
+
+
+def bootout(label):
+    sh(["launchctl", "bootout", f"gui/{os.getuid()}/{label}"])
+
+
+class ReapHard:
+    name = "reap-hard"
+    default = True
+    # patrol has no job of its own: each reap-hard pass starts `orch patrol --if-due`, so patrol runs only where this does.
+    what = ("15분마다 끝난 카드·스택·dev server를 모델 없이 닫는 LaunchAgent(docs/reap-hard.md). 세션 순찰(`orch patrol`)도 "
+            "이 회차가 띄운다. 묻지 않고 카드를 지우므로 보호 목록 파일(reap-hard.protect_file)을 쓴 PC에서만 켠다")
+
+    def protect_file(self):
+        return pathlib.Path(rh.config()["protect_file"]).expanduser()
+
+    def status(self):
+        if sys.platform != "darwin":
+            return "unsupported", "macOS LaunchAgent 전용"
+        spec, loaded = rh_spec(), label_loaded(rh.LABEL)
+        if spec is None and not loaded:
+            if not self.protect_file().is_file():
+                return "unconfigured", f"보호 목록 파일 {self.protect_file()} 가 없음 (순찰도 이 job 이 띄우므로 같이 꺼져 있다)"
+            return "absent", "등록 안 됨"
+        if not loaded:
+            return "off", f"{rh.PLIST} 는 있으나 로드 안 됨 (enable 로 다시 로드)"
+        return "on", f"{rh.config()['interval']}초마다" + (" · 등록된 내용이 이 체크아웃과 다름 (enable 로 다시 씀)" if self.stale() else "")
+
+    def stale(self):
+        return main_checkout() and rh_spec() != rh.spec(rh.config()["interval"])
+
+    def enable(self, here):
+        if sys.platform != "darwin":
+            return 1, "macOS LaunchAgent 전용이다. 다른 OS 는 cron 에서 `reap-hard run` 을 주기 실행한다"
+        if not self.protect_file().is_file():
+            return 1, f"보호 목록 파일 {self.protect_file()} 가 없어 켜지 않는다(docs/reap-hard.md 의 보호 목록)"
+        if label_loaded(rh.LABEL) and not self.stale():
+            return 0, "이미 켜져 있음"
+        refusal = worktree_refusal(here)
+        if refusal:
+            return 1, refusal
+        code = rh.cmd_install(here)
+        return code, "실패 (위 출력)" if code else "켬"
+
+    def disable(self):
+        if sys.platform != "darwin":
+            return 0, "macOS LaunchAgent 전용(이 OS 에는 등록된 것이 없다)"
+        if not label_loaded(rh.LABEL):
+            return 0, "이미 꺼져 있음"
+        bootout(rh.LABEL)  # the plist stays, so the state is "off" and apply leaves it
+        return 0, "끔 (plist 는 남겨 apply 가 다시 켜지 않는다)"
+
+
+def rh_spec():
+    try:
+        return plistlib.loads(rh.PLIST.read_bytes())
+    except (OSError, ValueError, plistlib.InvalidFileException):
+        return None
+
+
+class OrchDash:
+    name = "orch-dash"
+    default = True
+    what = ("대시보드 서버(`orch-dash serve`)를 127.0.0.1 에서 로그인·크래시·코드 갱신 뒤에도 띄워 두는 LaunchAgent "
+            "(skills/orchestrate/references/dashboard.md). 읽기 위주이고 아무것도 지우지 않는다")
+
+    def label(self):
+        return os.environ.get("ORCH_DASH_LABEL") or "io.github.jeongjaesoon.orch-dash"
+
+    def plist(self):
+        return pathlib.Path(f"~/Library/LaunchAgents/{self.label()}.plist").expanduser()
+
+    def status(self):
+        if sys.platform != "darwin":
+            return "unsupported", "macOS LaunchAgent 전용"
+        exists, loaded = self.plist().exists(), label_loaded(self.label())
+        if not exists and not loaded:
+            return "absent", "등록 안 됨"
+        if not loaded:
+            return "off", f"{self.plist()} 는 있으나 로드 안 됨 (enable 로 다시 로드)"
+        return "on", str(self.plist())
+
+    def enable(self, here):
+        if sys.platform != "darwin":
+            return 1, "macOS LaunchAgent 전용이다. 다른 OS 는 `orch status` 가 `ensure` 로 서버를 띄운다"
+        if label_loaded(self.label()):
+            return 0, "이미 켜져 있음"
+        refusal = worktree_refusal(here)
+        if refusal:
+            return 1, refusal
+        # dash.py's own installer: its plist carries the ORCH_* variables of the shell that installs, which a refresh
+        # from another shell would drop, so a loaded agent is never rewritten here.
+        p = sh([sys.executable, str(REPO / "skills" / "orchestrate" / "scripts" / "dash.py"), "install-agent"])
+        return p.returncode, (p.stdout + p.stderr).strip()[-300:] or "켬"
+
+    def disable(self):
+        if sys.platform != "darwin":
+            return 0, "macOS LaunchAgent 전용(이 OS 에는 등록된 것이 없다)"
+        if not label_loaded(self.label()):
+            return 0, "이미 꺼져 있음"
+        bootout(self.label())
+        return 0, "끔 (plist 는 남겨 apply 가 다시 켜지 않는다)"
 
 
 # ---------------------------------------------------------------- watch-prs, watch-mentions (Orca automation)
@@ -445,7 +557,7 @@ class ReflectStanding(OrcaJob):
 
 REFLECT = ReflectStanding()
 
-AUTOMATIONS = (Janitor(), JanitorLoad(), PreviewWatch(), PressureWatch(), ShareServer(),
+AUTOMATIONS = (Janitor(), JanitorLoad(), PreviewWatch(), PressureWatch(), ShareServer(), ReapHard(), OrchDash(),
                Watch("watch-prs", "나를 지명한 리뷰 요청과 내 PR 의 리뷰 대기를 오케스트레이터나 리드에게 모아 보내는 Orca automation"),
                Watch("watch-mentions", "공개 채널의 멘션·참여 스레드 답글을 오케스트레이터나 리드에게 모아 보내는 Orca automation"))
 LABEL = {"on": "켜짐", "off": "꺼짐", "absent": "꺼짐(미설정)", "unknown": "확인 불가", "unsupported": "미지원",
@@ -477,18 +589,44 @@ def report(a, code, msg):
     return code
 
 
+def decide(a):
+    """(verb, state, detail) for one automation: what `apply` does, which the dry run lists before it does it.
+    verb is install (never set up), refresh (on, but the registered job differs from this checkout's), skip or fail."""
+    state, detail = a.status()
+    if not a.default:
+        return "skip", state, detail, f"기본 off, 그대로 둠 ({LABEL[state]})"
+    if state == "absent":
+        return "install", state, detail, detail
+    if state == "unknown":
+        return "fail", state, detail, detail
+    if state == "on" and hasattr(a, "stale") and a.stale():
+        return "refresh", state, detail, detail
+    return "skip", state, detail, f"{LABEL[state]}, 그대로 둠" + (" (사용자가 끔)" if state == "off" else "")
+
+
+def plan():
+    """The lines setup.py's dry run shows: one per automation `apply` would install or refresh, and one per default-on
+    automation it cannot (unknown, or unconfigured with the reason). Nothing is written."""
+    out = []
+    for a in AUTOMATIONS:
+        verb, state, detail, _ = decide(a)
+        if verb in ("install", "refresh"):
+            out.append(f"automation {a.name}: {'install' if verb == 'install' else 'refresh the registered job'}")
+        elif verb == "fail" or (a.default and state == "unconfigured"):
+            out.append(f"automation {a.name}: 건너뜀, {detail}")
+    return out
+
+
 def cmd_apply(here):
     code = 0
     for a in AUTOMATIONS:
-        state, detail = a.status()
-        if not a.default:
-            report(a, 0, f"기본 off, 그대로 둠 ({LABEL[state]})")
-        elif state == "absent":
+        verb, state, detail, msg = decide(a)
+        if verb in ("install", "refresh"):
             code |= report(a, *a.enable(here))
-        elif state == "unknown":
+        elif verb == "fail":
             code |= report(a, 1, detail)
         else:
-            report(a, 0, f"{LABEL[state]}, 그대로 둠" + (" (사용자가 끔)" if state == "off" else ""))
+            report(a, 0, msg)
             # Only the model argument: on or off stays as the user left it, and the rest of the job is `enable`'s.
             if isinstance(a, OrcaJob) and state in ("on", "off") and (r := a.refresh_model()):
                 code |= report(a, *r)

@@ -64,7 +64,7 @@ skills-sync setup disable janitor        # 하나 끄기. 어느 것이든 apply
 ## 선택 설정
 
 - `recall`이 지난 세션을 빨리 찾게 하려면 Orca 앱에서 Settings → Agent Session Search → Search inside sessions의 이 컴퓨터(Local Mac) 스위치를 켠다. CLI로는 켤 수 없고, 켜기 전에는 `recall`이 `~/.claude/projects`의 transcript를 grep한다. 켜졌는지는 `orca search --index-status`의 `enabled`로 확인한다.
-- macOS에서 메인 체크아웃에서 `orch-dash install-agent`를 한 번 실행하면 launchd가 대시보드를 로그인·크래시·코드 갱신 뒤에도 띄워 둔다(`uninstall-agent`로 제거). 자세한 동작은 `skills/orchestrate/references/dashboard.md`의 "Start it".
+- macOS에서는 `setup.py --apply`(또는 `skills-sync setup apply`)가 `orch-dash install-agent`를 대신 돌린다. 손으로 하려면 메인 체크아웃에서 한 번 실행하면 launchd가 대시보드를 로그인·크래시·코드 갱신 뒤에도 띄워 둔다(`uninstall-agent`로 제거). 자세한 동작은 `skills/orchestrate/references/dashboard.md`의 "Start it".
 
 ## 사용 시나리오
 

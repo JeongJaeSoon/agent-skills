@@ -313,6 +313,21 @@ class Steps(unittest.TestCase):
     def scripts(self):
         return [s for s, _ in self.calls if s.endswith(".py")]
 
+    def test_dry_run_lists_the_automations_apply_would_install_and_hashes_them(self):
+        sys.path.insert(0, str(HERE))
+        import automations
+        with mock.patch.object(automations, "plan", return_value=["automation reap-hard: install"]):
+            rc, out, _ = self.main()
+            h = self.plan_hash()
+        self.assertEqual(rc, 0)
+        self.assertIn("then    automation reap-hard: install", out)
+        with mock.patch.object(automations, "plan", return_value=[]):
+            self.assertNotEqual(self.plan_hash(), h)
+            self.assertNotIn("automation reap-hard", self.main()[1])
+        # --settings-only plans no step, so no automation either
+        with mock.patch.object(automations, "plan", return_value=["automation reap-hard: install"]):
+            self.assertNotIn("automation reap-hard", self.main("--settings-only")[1])
+
     def test_update_dry_run_does_not_sync(self):
         rc, out, _ = self.main("--update")
         self.assertEqual(rc, 0)
