@@ -453,12 +453,34 @@ function relGraph(st, sessionId) {
 // reap-resources' pressure round (a LaunchAgent, every `interval` s) writes one point per round; /api/fleet/pressure
 // hands back those points, the thresholds the hook judges by and the held queue. Nothing here measures.
 const PRESSURE_LEVEL = { ok: ["ok", "good"], warn: ["warn", "warn"], danger: ["danger", "bad"] };
+// The big number is what a host-metrics dashboard shows, so the two read the same; the pressure round judges by a
+// different metric (`judge`, whose thresholds pressure.py hands back), shown on the sub line. Memory in use is
+// vm_stat active+wired and CPU usage is 100 − idle; GiB is 1024³ bytes, which is what pressure.py divides by.
+//   key: history field drawn · from: turns a history row into the drawn value · judge: [threshold key, how to read]
+//   bad: which direction is worse, said on the tile · line: draw the threshold on the chart (only when judge is the key)
+const pct = (v) => (v == null ? "—" : `${num(v, v < 10 ? 1 : 0)}%`);
+const gib = (v) => (v == null ? "—" : `${num(v, 1)} GiB`);
 const PRESSURE_CHARTS = [
-  ["load_per_cpu", "Load per CPU", (v) => num(v, 2)],
-  ["mem_free_pct", "Memory available", (v) => (v == null ? "—" : `${v}%`)],
-  ["docker_cpu_pct", "Docker CPU", (v) => (v == null ? "—" : `${v}%`)],
-  ["queued", "Held starts", (v) => num(v)],
+  { key: "cpu_used_pct", label: "CPU 사용률", fmt: pct, bad: "높을수록 나쁨", from: (r) => (r.cpu_idle_pct == null ? null : Math.round((100 - r.cpu_idle_pct) * 10) / 10),
+    judge: "load_per_cpu", sub: (m, rep) => `${m.idle_live ? "순간값(회차 간 값 없음)" : `약 ${Math.max(1, Math.round(rep.interval / 60))}분 평균`} · load/CPU ${num(m.load_per_cpu, 2)}` },
+  { key: "mem_active_wired_gb", label: "사용 메모리", fmt: gib, bad: "높을수록 나쁨",
+    judge: "mem_free_pct", sub: (m) => `회수 가능 ${m.mem_free_pct == null ? "—" : `${m.mem_free_pct}%`}` },
+  { key: "disk_free_gb", label: "디스크 여유", fmt: gib, bad: "낮을수록 나쁨", judge: "disk_free_gb", line: true },
+  { key: "docker_cpu_pct", label: "Docker CPU", fmt: pct, bad: "높을수록 나쁨", judge: "docker_cpu_pct", line: true },
 ];
+// Level of one value against pressure.py's thresholds, read the way its check reads them. load_per_cpu reaches danger
+// only while the host is busy (idle at or below load_idle_pct), as in pressure.py.
+function pressureTileLevel(rep, judge, m) {
+  const v = m[judge], [warn, danger] = (rep.thresholds || {})[judge] || [null, null];
+  if (v == null || (warn == null && danger == null)) return null;
+  const hi = (rep.higher_worse || {})[judge] !== false;
+  const past = (t) => t != null && (hi ? v >= t : v <= t);
+  // 10 is pressure.py's default load_idle_pct, for a server older than the field.
+  const idleHolds = judge === "load_per_cpu" && m.cpu_idle_pct != null && m.cpu_idle_pct > (rep.load_idle_pct ?? 10);
+  if (past(danger) && !idleHolds) return "danger";
+  return past(warn) || past(danger) ? "warn" : "ok";
+}
+const PRESSURE_LEVEL_KO = { ok: "정상", warn: "경고", danger: "위험" };
 async function pollPressure() {
   const hours = S.filters.pressure_hours === "24" ? 24 : 6;
   if (F.pressureBusy || (F.pressure && F.pressureHours === hours && Date.now() - F.pressureAt < 60e3)) return;
@@ -472,30 +494,47 @@ async function pollPressure() {
 }
 // One metric over the window. The SVG stretches to its cell (preserveAspectRatio none, strokes kept at 2px), so its
 // text lives in HTML around it. A gap of over three rounds breaks the line instead of drawing across it.
-function pressureChart(rep, key, label, fmt) {
+function pressureChart(rep, c) {
+  const { key, label, fmt, judge } = c;
   const W = 300, H = 56, t1 = rep.now * 1000, t0 = t1 - rep.hours * 3600e3, gap = 3 * rep.interval * 1000;
-  const pts = (rep.series || []).map((r) => [r.t * 1000, r[key]]).filter(([, v]) => v != null);
-  const [warn, danger] = (rep.thresholds || {})[key] || [null, null];
-  const top = Math.max(key === "mem_free_pct" ? 100 : 1, ...pts.map(([, v]) => v), (danger ?? warn ?? 0) * 1.15);
-  const x = (t) => ((t - t0) / (t1 - t0)) * W, y = (v) => H - 2 - (v / top) * (H - 4);
+  const val = (r) => (c.from ? c.from(r) : r[key]);
+  const pts = (rep.series || []).map((r) => [r.t * 1000, val(r)]).filter(([, v]) => v != null);
+  const [warn, danger] = (rep.thresholds || {})[judge] || [null, null];
+  const lower = (rep.higher_worse || {})[judge] === false;
+  // The scale follows the values drawn, never the thresholds: a limit outside it is written under the chart, not
+  // drawn, so a line pinned at the top cannot look like the value touching it. Percent tiles start at 0; GiB tiles
+  // use their own range, or a 200 GiB disk would flatten every move into the top of a 0..450 axis.
+  const vs = pts.map(([, v]) => v), hi = Math.max(...vs, 0), lo = Math.min(...vs, hi);
+  const pad = Math.max((hi - lo) * 0.1, hi * 0.02, 0.5);
+  const ymin = fmt === gib ? Math.max(0, lo - pad) : 0, top = fmt === gib || !vs.length ? hi + pad : Math.max(hi * 1.1, 5);
+  const x = (t) => ((t - t0) / (t1 - t0)) * W, y = (v) => H - 2 - ((v - ymin) / (top - ymin)) * (H - 4);
   let line = "", prev = null;
   for (const [t, v] of pts) { line += `${prev == null || t - prev > gap ? "M" : "L"}${x(t).toFixed(1)},${y(v).toFixed(1)}`; prev = t; }
-  const rule = (v, tone) => v == null || v > top ? "" : `<line x1="0" x2="${W}" y1="${y(v)}" y2="${y(v)}" style="stroke:var(--${tone})" stroke-width="1" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/>`;
+  const inside = (v) => v != null && v >= ymin && v <= top;
+  const rule = (v, tone) => !c.line || !inside(v) ? "" : `<line x1="0" x2="${W}" y1="${y(v)}" y2="${y(v)}" style="stroke:var(--${tone})" stroke-width="1" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/>`;
   const band = W / Math.max(1, (rep.hours * 3600) / rep.interval);
-  const tips = (rep.series || []).filter((r) => r[key] != null).map((r) =>
-    `<rect x="${(x(r.t * 1000) - band / 2).toFixed(1)}" y="0" width="${band.toFixed(2)}" height="${H}" fill="transparent" data-tip="${esc(`<div class="tt">${hhmm(r.t * 1000)}</div><div class="row">${esc(label)}<b>${esc(fmt(r[key]))}</b></div><div class="row">Level<b>${esc((PRESSURE_LEVEL[r.level] || [r.level])[0])}</b></div>`)}"/>`).join("");
-  const now = key === "queued" ? (rep.queue || []).length : (((rep.last || {}).metrics || {})[key]);
-  const said = `${label}: now ${fmt(now)}${warn != null ? `, warn ${warn}` : ""}${danger != null ? `, danger ${danger}` : ""}, ${pts.length} points over ${rep.hours} hours`;
-  const limits = [warn != null && `warn ${(rep.higher_worse || {})[key] === false ? "≤" : "≥"} ${warn}`, danger != null && `danger ${danger}`].filter(Boolean).join(" · ");
+  const tips = (rep.series || []).filter((r) => val(r) != null).map((r) =>
+    `<rect x="${(x(r.t * 1000) - band / 2).toFixed(1)}" y="0" width="${band.toFixed(2)}" height="${H}" fill="transparent" data-tip="${esc(`<div class="tt">${hhmm(r.t * 1000)}</div><div class="row">${esc(label)}<b>${esc(fmt(val(r)))}</b></div><div class="row">전체 수준<b>${esc(PRESSURE_LEVEL_KO[r.level] || r.level)}</b></div>`)}"/>`).join("");
+  const m = (rep.last || {}).metrics || {}, now = val(m);
+  const lv = pressureTileLevel(rep, judge, m);
+  // What the level was judged on, in the unit pressure.py judges it in, so "정상" is not read against the big number.
+  const unit = judge === "disk_free_gb" ? " GiB" : judge === "mem_free_pct" || judge === "docker_cpu_pct" ? "%" : "";
+  const op = lower ? "≤" : "≥";
+  const set = [["경고", warn], ["위험", danger]].filter(([, v]) => v != null);
+  const outOf = (v) => c.line && !inside(v);
+  const limits = !set.length ? "임계값 없음" : set.map(([n, v]) => `${n} ${op} ${v}${unit}${outOf(v) ? " (범위 밖)" : ""}`).join(" · ");
+  const sub = c.sub ? c.sub(m, rep) : "";
+  const said = `${label}: 지금 ${fmt(now)}, ${lv ? PRESSURE_LEVEL_KO[lv] : "수준 없음"}, ${c.bad}, ${limits}, ${rep.hours}시간 동안 ${pts.length}개`;
   return `<div class="pmetric"><div class="pm-head"><span class="eyebrow">${esc(label)}</span><b class="pm-v">${esc(fmt(now))}</b></div>
+    <div class="pm-state"><span class="muted">${esc(c.bad)}</span>${lv ? tag(PRESSURE_LEVEL_KO[lv], PRESSURE_LEVEL[lv][1]) : ""}</div>
     <div class="chart pm-chart"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" height="${H}" role="img" aria-label="${esc(said)}">
       ${rule(warn, "warn")}${rule(danger, "bad")}<path d="${line}" fill="none" style="stroke:var(--accent)" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>${tips}</svg></div>
-    <div class="pm-foot muted">${limits || "no threshold"}</div></div>`;
+    <div class="pm-foot muted">${esc([sub, limits].filter(Boolean).join(" · "))}</div></div>`;
 }
 function pressureCard() {
   pollPressure();
   const rep = F.pressure, hours = S.filters.pressure_hours === "24" ? "24" : "6";
-  const head = (aside) => `<div class="card-head"><h3>PC load</h3><span class="aside">${aside}</span></div>`;
+  const head = (aside) => `<div class="card-head"><h3>PC 부하</h3><span class="aside">${aside}</span></div>`;
   if (!rep) return `<div class="card pressure">${head("")}<div class="empty">Loading…</div></div>`;
   if (rep.error) return `<div class="card pressure">${head("")}<div class="empty">${esc(rep.error)}</div></div>`;
   const last = rep.last, lv = PRESSURE_LEVEL[last && last.level] || ["no round yet", ""];
@@ -507,9 +546,8 @@ function pressureCard() {
     return `<i class="tone-${(PRESSURE_LEVEL[r.level] || ["", "derived"])[1]}" style="left:${l.toFixed(2)}%;width:${w.toFixed(2)}%"></i>`;
   }).join("");
   const m = (last && last.metrics) || {};
-  // "Memory available" (the kernel's level) counts file cache and compressible pages as free, so it reads far above
-  // what is in use; "Memory active+wired" is the in-use figure a host-metrics dashboard shows.
-  const extra = [["CPU idle", m.cpu_idle_pct, "%"], ["Memory active+wired", m.mem_active_wired_gb, " GiB"], ["Swap", m.swap_gb, " GB"], ["Swap-out", m.swapout_pps, "/s"], ["Docker memory", m.docker_mem_pct, "%"], ["Containers", m.containers, ""], ["Disk free", m.disk_free_gb, " GB"]]
+  // Everything the tiles do not show, in the tiles' units. Memory in use and disk free are tiles now.
+  const extra = [["CPU idle", m.cpu_idle_pct, "%"], ["Swap", m.swap_gb, " GiB"], ["Swap-out", m.swapout_pps, "/s"], ["Docker memory", m.docker_mem_pct, "%"], ["Containers", m.containers, ""], ["Held starts", (rep.queue || []).length, ""]]
     .filter(([, v]) => v != null).map(([k, v, u]) => `${k} <b>${esc(String(v))}${u}</b>`).join(" · ");
   const queue = (rep.queue || []).map((e) => `<li>${tag(e.state, e.state === "waiting" ? "warn" : "accent", "")}<span class="grow ellipsis">${esc(e.what)} <span class="muted">${esc(e.why || "")}</span></span><span class="when">until ${hhmm(e.deadline * 1000)}</span></li>`).join("");
   const empty = !(rep.series || []).length;
@@ -518,7 +556,7 @@ function pressureCard() {
       ${last && (last.why || []).length ? `<span class="p-why">${esc(last.why.join(", "))}</span>` : ""}</div>
     ${empty ? `<div class="empty">No points in the last ${rep.hours}h yet: the pressure round records one every ${Math.round(rep.interval / 60)} min.</div>`
       : `<div class="p-strip" role="img" aria-label="Level per round over the last ${rep.hours} hours">${strip}</div>
-    <div class="p-grid">${PRESSURE_CHARTS.map(([k, label, fmt]) => pressureChart(rep, k, label, fmt)).join("")}</div>
+    <div class="p-grid">${PRESSURE_CHARTS.map((c) => pressureChart(rep, c)).join("")}</div>
     <div class="p-axis muted"><span>${rep.hours}h ago</span><span>now</span></div>`}
     ${extra ? `<div class="p-extra muted">${extra}</div>` : ""}
     ${queue ? `<ul class="rows p-queue">${queue}</ul>` : ""}</div>`;

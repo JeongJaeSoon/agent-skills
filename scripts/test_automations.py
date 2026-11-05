@@ -293,85 +293,137 @@ class Preview(unittest.TestCase):
         self.install.assert_not_called()
 
 
-class Pressure(unittest.TestCase):
-    p = au.PressureWatch()
+class ShellJobs(Base):
+    """sync, pressure-watch, reap-hard and orch-dash: Orca automations whose precheck runs the command and skips the agent."""
+    jobs = {j.name: j for j in au.SHELL_JOBS}
 
-    def patch(self, loaded, spec, main=True, rc=0, disabled=False):
-        self.install, self.uninstall = mock.Mock(return_value=rc), mock.Mock(return_value=rc)
-        for p in (mock.patch.object(au.pressure, "loaded", return_value=loaded),
-                  mock.patch.object(au.pressure, "plist_spec", return_value=spec),
-                  mock.patch.object(au.pressure, "disabled", return_value=disabled),
-                  mock.patch.object(au, "main_checkout", return_value=main),
-                  mock.patch.object(au.sys, "platform", "darwin"),
-                  mock.patch.object(au.pressure, "cmd_install", self.install),
-                  mock.patch.object(au.pressure, "cmd_uninstall", self.uninstall)):
-            p.start()
-            self.addCleanup(p.stop)
+    def stored(self, job, enabled=True, **over):
+        w = job.want()
+        a = {"id": f"S-{job.name}", "name": job.job_name, "enabled": enabled, "rrule": w["trigger"],
+             "prompt": w["prompt"], "precheck": {"command": w["precheck"], "timeoutSeconds": w["precheck-timeout"]}}
+        a.update(over)
+        return a
 
-    def current(self):
-        return au.pressure.spec(au.pressure.config()["interval"])
+    def creates(self, fake):
+        return [c for c in fake.calls if c[1:3] == ["automations", "create"]]
 
-    def test_default_on(self):
-        self.assertTrue(self.p.default)
+    def test_defaults(self):
+        self.assertEqual({n: j.default for n, j in self.jobs.items()},
+                         {"sync": True, "pressure-watch": True, "reap-hard": False, "orch-dash": False})
+
+    def test_no_job_is_a_launchagent_or_names_launchctl(self):
+        for j in self.jobs.values():
+            self.assertNotIn("launchctl", " ".join(j.argv))
+            self.assertIn("agent-skills " + j.name, j.job_name)
+
+    def test_periods(self):
+        self.assertEqual(au.cron_every(900), "*/15 * * * *")
+        self.assertEqual(au.cron_every(180), "*/3 * * * *")
+        self.assertEqual(au.cron_every(30), "*/1 * * * *")
+        self.assertEqual(au.cron_every(7200), "0 */2 * * *")
+
+    def test_a_period_cron_cannot_run_evenly_becomes_the_nearest_divisor_below(self):
+        """*/45 fires at :00 and :45, then :00 again; the job must say the period it really runs at."""
+        self.assertEqual(au.cron_every(2700), "*/30 * * * *")
+        self.assertEqual(au.cron_every(5400), "0 */1 * * *")
+        self.assertEqual(au.cron_every(100000), "0 */24 * * *")
+        self.assertEqual(au.cron_period(2700), 1800)
+        self.assertIn("--interval 1800 ", self.jobs["pressure-watch"].__class__(
+            "x", "w", ["a"], 2700, True).want()["precheck"])
+
+    def test_pressure_watch_turned_off_before_stays_off_on_apply(self):
+        self.orca([])
+        j = self.jobs["pressure-watch"]
+        with mock.patch.object(j, "turned_off", return_value=True):
+            self.assertEqual(j.status()[0], "off")
+        with mock.patch.object(j, "turned_off", return_value=False):
+            self.assertEqual(j.status()[0], "absent")
+
+    def test_enable_clears_the_old_off_marker_only_when_it_worked(self):
+        cleared = []
+        j = au.ShellJob("x", "w", ["a"], 900, True, clear_off=lambda: cleared.append(1))
+        self.orca([])
+        self.assertEqual(j.enable(False)[0], 0)
+        self.assertEqual(cleared, [1])
+        self.orca([], main=False)  # a worktree refuses: the marker stays
+        self.assertEqual(j.enable(False)[0], 1)
+        self.assertEqual(cleared, [1])
+
+    def test_disable_of_an_already_off_job_still_drops_a_stale_record(self):
+        j = self.jobs["sync"]
+        self.orca([self.stored(j, enabled=False)])
+        with mock.patch.object(au.orca_job, "forget") as forget:
+            self.assertEqual(j.disable(), (0, "이미 꺼져 있음"))
+        forget.assert_called_once_with("sync")
+
+    def test_disable_drops_the_last_run_record(self):
+        j = self.jobs["sync"]
+        self.orca([self.stored(j)])
+        with mock.patch.object(au.orca_job, "forget") as forget:
+            j.disable()
+        forget.assert_called_once_with("sync")
+
+    def test_precheck_runs_the_command_through_orca_job(self):
+        pre = self.jobs["pressure-watch"].want()["precheck"]
+        self.assertIn("orca_job.py run pressure-watch", pre)
+        self.assertIn("--ok 0,1,2", pre)  # round exits 1 and 2 for warn and danger: results, not failures
+        self.assertTrue(pre.endswith("pressure.py round"), pre)
+        self.assertIn("--ok 0 ", self.jobs["sync"].want()["precheck"])
+
+    def test_enable_creates_one_agentless_automation(self):
+        fake = self.orca([])
+        code, _ = self.jobs["sync"].enable(False)
+        self.assertEqual(code, 0)
+        (c,) = self.creates(fake)
+        arg = dict(zip(c, c[1:]))
+        self.assertEqual(arg["--name"], "agent-skills sync")
+        self.assertEqual(arg["--trigger"], "*/15 * * * *")
+        self.assertEqual(arg["--precheck"], self.jobs["sync"].want()["precheck"])
+        self.assertEqual(arg["--workspace-mode"], "existing")
+
+    def test_enable_from_a_worktree_creates_nothing(self):
+        fake = self.orca([], main=False)
+        self.assertEqual(self.jobs["sync"].enable(False)[0], 1)
+        self.assertEqual(self.creates(fake), [])
 
     def test_status(self):
-        self.patch(False, None)
-        self.assertEqual(self.p.status()[0], "absent")
-        self.patch(True, self.current())
-        self.assertEqual(self.p.status()[0], "on")
-        self.patch(False, self.current())
-        self.assertEqual(self.p.status()[0], "off")
-        self.patch(True, {"ProgramArguments": ["python3", "/elsewhere/pressure.py", "round"]})
-        self.assertIn("/elsewhere/pressure.py", self.p.status()[1])
-        # Turned off with disable: off, which apply leaves alone, not absent, which apply turns on.
-        self.patch(False, None, disabled=True)
-        self.assertEqual(self.p.status()[0], "off")
+        j = self.jobs["orch-dash"]
+        self.orca([])
+        self.assertEqual(j.status()[0], "absent")
+        self.orca([self.stored(j)])
+        self.assertEqual(j.status()[0], "on")
+        self.orca([self.stored(j, enabled=False)])
+        self.assertEqual(j.status()[0], "off")
+        self.orca([self.stored(j, rrule="*/5 * * * *")])
+        self.assertIn("trigger", j.status()[1])
 
-    def test_enable(self):
-        self.patch(False, None, disabled=True)
-        self.assertEqual(self.p.enable(False), (0, "켬"))
-        self.install.assert_called_once()
-        self.patch(True, self.current())
-        self.assertEqual(self.p.enable(False), (0, "이미 켜져 있음"))
-        self.patch(False, None, main=False)
-        self.assertEqual(self.p.enable(False)[0], 1)
-        self.install.assert_not_called()
-        self.patch(False, None)
-        self.assertEqual(self.p.enable(False), (0, "켬"))
-        self.install.assert_called_once()
-        self.patch(False, None, rc=1)
-        self.assertEqual(self.p.enable(False), (1, "실패 (위 출력)"))
+    def test_a_failed_last_run_shows_in_the_status(self):
+        j = self.jobs["sync"]
+        self.orca([self.stored(j)])
+        with mock.patch.object(au.orca_job, "read", return_value={"ok": False, "message": "exit 3: no network"}):
+            self.assertIn("마지막 실행 실패: exit 3: no network", j.status()[1])
 
-    def test_disable(self):
-        self.patch(False, None, disabled=True)
-        self.assertEqual(self.p.disable(), (0, "이미 꺼져 있음"))
-        self.uninstall.assert_not_called()
-        # Never set up: disable still leaves the marker, so a later apply does not turn it on.
-        self.patch(False, None)
-        self.assertEqual(self.p.disable()[0], 0)
-        self.uninstall.assert_called_once()
-        self.patch(True, self.current())
-        self.assertEqual(self.p.disable()[0], 0)
-        self.uninstall.assert_called_once()
+    def test_enable_fixes_only_what_drifted_and_turns_on(self):
+        j = self.jobs["sync"]
+        fake = self.orca([self.stored(j, enabled=False, rrule="*/5 * * * *")])
+        self.assertEqual(j.enable(False)[0], 0)
+        (e,) = fake.edits()
+        self.assertIn("--trigger", e)
+        self.assertIn("--enabled", e)
+        self.assertNotIn("--prompt", e)
+        fake = self.orca([self.stored(j)])
+        self.assertEqual(j.enable(False), (0, "이미 켜져 있음"))
+        self.assertEqual(fake.edits(), [])
 
-    def test_marker_round_trip(self):
-        """uninstall leaves the marker and install clears it, so `pressure.py` by hand and setup agree."""
-        with tempfile.TemporaryDirectory() as d, \
-                mock.patch.object(au.pressure.reap, "STATE", pathlib.Path(d)), \
-                mock.patch.object(au.pressure, "DISABLED", pathlib.Path(d) / "pressure-disabled"), \
-                mock.patch.object(au.pressure, "PLIST", pathlib.Path(d) / "agent.plist"), \
-                mock.patch.object(au.pressure, "HERE", pathlib.Path(d) / "a" / "b" / "c"), \
-                mock.patch.object(au.pressure.sys, "platform", "darwin"), \
-                mock.patch.object(au.pressure, "config", return_value={"interval": 180}), \
-                mock.patch.object(au.pressure.subprocess, "run",
-                                  return_value=subprocess.CompletedProcess([], 0, "", "")), \
-                contextlib.redirect_stdout(io.StringIO()):
-            (pathlib.Path(d) / ".git").mkdir()
-            self.assertFalse(au.pressure.disabled())
-            self.assertEqual(au.pressure.cmd_uninstall(), 0)
-            self.assertTrue(au.pressure.disabled())
-            self.assertEqual(au.pressure.cmd_install(False), 0)
-            self.assertFalse(au.pressure.disabled())
+    def test_disable_keeps_it_registered(self):
+        j = self.jobs["sync"]
+        fake = self.orca([self.stored(j)])
+        self.assertEqual(j.disable()[0], 0)
+        (e,) = fake.edits()
+        self.assertIn("--disabled", e)
+        fake = self.orca([self.stored(j, enabled=False)])
+        self.assertEqual(j.disable(), (0, "이미 꺼져 있음"))
+        self.assertEqual(fake.edits(), [])
 
 
 class Share(unittest.TestCase):
@@ -421,7 +473,7 @@ class Share(unittest.TestCase):
 
 class Apply(Base):
     def setUp(self):
-        for p in (mock.patch.object(au.PressureWatch, "status", return_value=("on", "")),
+        for p in (mock.patch.object(au.ShellJob, "status", return_value=("on", "")),
                   mock.patch.object(au.ShareServer, "status", return_value=("absent", "")),
                   mock.patch.object(au.ShareServer, "enable")):
             self.share_enable = p.start()
@@ -434,11 +486,11 @@ class Apply(Base):
         fake = self.orca([])
         with mock.patch.object(au.PreviewWatch, "status", return_value=("absent", "")), \
                 mock.patch.object(au.PreviewWatch, "enable") as pv, \
-                mock.patch.object(au.PressureWatch, "status", return_value=("absent", "")), \
-                mock.patch.object(au.PressureWatch, "enable", return_value=(0, "켬")) as pr:
+                mock.patch.object(au.ShellJob, "status", return_value=("absent", "")), \
+                mock.patch.object(au.ShellJob, "enable", return_value=(0, "켬")) as sj:
             self.assertEqual(au.cmd_apply(False), 0)
         pv.assert_not_called()
-        pr.assert_called_once()
+        self.assertEqual(sj.call_count, 2)  # sync and pressure-watch; reap-hard and orch-dash are off by default
         self.assertEqual(["--load" in c for c in fake.schedules()], [False, True])
 
     def test_leaves_a_disabled_janitor_off(self):
@@ -447,17 +499,13 @@ class Apply(Base):
             self.assertEqual(au.cmd_apply(False), 0)
         self.assertEqual(fake.edits() + fake.schedules(), [])
 
-    def test_leaves_a_disabled_pressure_watch_off(self):
+    def test_leaves_a_disabled_shell_job_off(self):
         self.orca([janitor(), load_job()])
         with mock.patch.object(au.PreviewWatch, "status", return_value=("on", "")), \
-                mock.patch.object(au.pressure, "loaded", return_value=False), \
-                mock.patch.object(au.pressure, "plist_spec", return_value=None), \
-                mock.patch.object(au.pressure, "disabled", return_value=True), \
-                mock.patch.object(au.sys, "platform", "darwin"), \
-                mock.patch.object(au.PressureWatch, "status", au.PressureWatch.status), \
-                mock.patch.object(au.PressureWatch, "enable") as pr:
+                mock.patch.object(au.ShellJob, "status", return_value=("off", "")), \
+                mock.patch.object(au.ShellJob, "enable") as sj:
             self.assertEqual(au.cmd_apply(False), 0)
-        pr.assert_not_called()
+        sj.assert_not_called()
 
     def test_unknown_janitor_fails(self):
         self.orca(None)
@@ -516,7 +564,7 @@ class Watch(Base):
 
     def test_apply_passes_an_unconfigured_one_by(self):
         fake = self.orca([janitor(), load_job()])
-        with mock.patch.object(au.PressureWatch, "status", return_value=("on", "")):
+        with mock.patch.object(au.ShellJob, "status", return_value=("on", "")):
             self.assertEqual(au.cmd_apply(False), 0)
         self.assertEqual([c for c in fake.calls if "schedule" in c], [])
 
@@ -564,7 +612,7 @@ class Model(Base):
                  self.watch("reflect standing", extraAgentArgs=self.ARGS)]
         fake = self.orca(autos)
         with mock.patch.object(au.PreviewWatch, "status", return_value=("on", "")), \
-                mock.patch.object(au.PressureWatch, "status", return_value=("on", "")):
+                mock.patch.object(au.ShellJob, "status", return_value=("on", "")):
             self.assertEqual(au.cmd_apply(False), 0)
         self.assertEqual({e[e.index("--id") + 1]: e for e in fake.edits()}.keys(),
                          {"J1", "J2", "W-watch-prs", "W-watch-mentions"})
@@ -577,7 +625,7 @@ class Model(Base):
         fake = self.orca([janitor(extraAgentArgs="--model haiku"), load_job(), self.watch("watch-prs"),
                           self.watch("reflect standing", extraAgentArgs="--model haiku")])
         with mock.patch.object(au.PreviewWatch, "status", return_value=("on", "")), \
-                mock.patch.object(au.PressureWatch, "status", return_value=("on", "")):
+                mock.patch.object(au.ShellJob, "status", return_value=("on", "")):
             self.assertEqual(au.cmd_apply(False), 0)
         self.assertEqual(fake.edits(), [])
 
@@ -637,7 +685,7 @@ class Model(Base):
         with mock.patch.object(au, "sh", side_effect=lambda c: subprocess.CompletedProcess(c, 1 if c[1:3] == ["automations", "edit"] else 0,
                                                                                               fake(c).stdout, "boom")), \
                 mock.patch.object(au.PreviewWatch, "status", return_value=("on", "")), \
-                mock.patch.object(au.PressureWatch, "status", return_value=("on", "")):
+                mock.patch.object(au.ShellJob, "status", return_value=("on", "")):
             self.assertEqual(au.cmd_apply(False), 1)
 
 

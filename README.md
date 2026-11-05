@@ -51,7 +51,7 @@ Optional:
 - Obsidian or a plain Markdown folder, for the notes skills
 - tailscale and caddy, for `preview-watch` and `share-server`
 
-On macOS the full setup installs a sync job and the default automations as LaunchAgents. On Linux it prints a cron line for you to add instead.
+The full setup turns on the sync job and the default automations as Orca automations; it creates no LaunchAgent. They run while the Orca app is open. If an older setup left LaunchAgents, `setup-pc` reports them and you remove them yourself.
 
 ## Install
 

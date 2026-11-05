@@ -18,7 +18,9 @@ REPO = HERE.parent
 REAP = REPO / "skills" / "reap-resources" / "scripts" / "reap.py"
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(REAP.parent))
+import orca_job  # noqa: E402
 import preview_watch as pw  # noqa: E402
+import sync  # noqa: E402
 import pressure  # noqa: E402
 import reap  # noqa: E402
 import share_server as ss  # noqa: E402
@@ -297,47 +299,124 @@ class PreviewWatch:
                       else "끔 (watcher 가 연 serve 항목도 닫았다)")
 
 
-# ---------------------------------------------------------------- pressure-watch (LaunchAgent)
+# ---------------------------------------------------------------- sync, pressure-watch, reap-hard, orch-dash (Orca automation, no agent)
 
-class PressureWatch:
-    name = "pressure-watch"
-    default = True
-    what = ("PC 사용량(load·메모리 압박·swap·디스크·컨테이너)을 모델 없이 재고, 높으면 reap 이 올린 안전한 대상만 "
-            "정리해 알리는 LaunchAgent(docs/pressure.md). 아무것도 종료하지 않고, 정리할 것이 없으면 상위 소비자만 알린다")
+SHELL_PROMPT = ("이 자동화는 precheck 가 주기 작업을 직접 실행하고 항상 건너뛰도록 만든 것이라 에이전트가 시작되지 않는다. "
+                "이 프롬프트가 실행됐다면 precheck 가 건너뛰지 않은 것이다: 아무것도 하지 않고 '정기 작업 precheck 이상' 이라고만 "
+                "보고한다.")
+SHELL_TIMEOUT_S = 300
 
-    def status(self):
-        if sys.platform != "darwin":
-            return "unsupported", "macOS LaunchAgent 전용"
-        spec, loaded = pressure.plist_spec(), pressure.loaded()
-        if spec is None and not loaded:
-            if pressure.disabled():
-                return "off", f"disable 로 끔 ({pressure.DISABLED}, enable 로 다시 켬)"
-            return "absent", "등록 안 됨"
-        if not loaded:
-            return "off", f"{pressure.PLIST} 는 있으나 로드 안 됨 (enable 로 다시 로드)"
-        detail = f"{pressure.config()['interval']:g}초마다"
-        if main_checkout() and spec != pressure.spec(pressure.config()["interval"]):
-            script = next((a for a in (spec or {}).get("ProgramArguments", []) if a.endswith(".py")), "?")
-            detail += f" · 등록된 내용이 이 체크아웃과 다름: {script} (enable 로 다시 씀)"
-        return "on", detail
 
-    def enable(self, here):
-        if sys.platform != "darwin":
-            return 1, "macOS LaunchAgent 전용이다. 다른 OS 는 cron 에서 `pressure.py round` 를 주기 실행한다"
-        if pressure.loaded() and pressure.plist_spec() == pressure.spec(pressure.config()["interval"]):
-            return 0, "이미 켜져 있음"
-        refusal = worktree_refusal(here)
-        if refusal:
-            return 1, refusal
-        code = pressure.cmd_install(here)
-        return code, "실패 (위 출력)" if code else "켬"
+def cron_period(seconds):
+    """The period cron can run evenly at, in seconds: a divisor of 60 minutes, or of 24 hours from an hour up (45 min
+    becomes 30, 90 min becomes 1 h). Cron steps that do not divide the field restart at its top and run unevenly."""
+    minutes = max(1, round(float(seconds) / 60))
+    if minutes < 60:
+        return max(d for d in (1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30) if d <= minutes) * 60
+    return max(d for d in (1, 2, 3, 4, 6, 8, 12, 24) if d <= min(24, minutes // 60)) * 3600
+
+
+def cron_every(seconds):
+    """5-field cron for cron_period(seconds)."""
+    p = cron_period(seconds)
+    return f"*/{p // 60} * * * *" if p < 3600 else f"0 */{p // 3600} * * *"
+
+
+class ShellJob(OrcaJob):
+    """A periodic shell job with no agent: an Orca automation whose precheck (scripts/orca_job.py) runs the command,
+    records how it ended and exits 1, so Orca skips the agent every time. A job that needs no model must not start one."""
+
+    def __init__(self, name, what, argv, interval, default, ok=(0,), turned_off=None, clear_off=None):
+        self.name, self.job_name, self.what, self.default = name, f"agent-skills {name}", what, default
+        self.argv, self.interval, self.ok, self.turned_off, self.clear_off = argv, interval, ok, turned_off, clear_off
 
     def disable(self):
-        if sys.platform != "darwin":
-            return 0, "macOS LaunchAgent 전용(이 OS 에는 등록된 것이 없다)"
-        if pressure.plist_spec() is None and not pressure.loaded() and pressure.disabled():
-            return 0, "이미 꺼져 있음"
-        return pressure.cmd_uninstall(), "끔 (표지를 남겨 apply 가 다시 켜지 않는다)"
+        code, msg = super().disable()
+        if not code:
+            orca_job.forget(self.name)  # a stopped job's last run must not turn into a 'late' warning
+        return code, msg
+
+    def enable(self, here):
+        code, msg = self.enable_job(here)
+        if not code and self.clear_off:
+            self.clear_off()
+        return code, msg
+
+    def want(self):
+        secs = cron_period(self.interval() if callable(self.interval) else self.interval)  # what cron really runs at
+        return {"trigger": cron_every(secs), "prompt": SHELL_PROMPT, "precheck-timeout": SHELL_TIMEOUT_S,
+                "precheck": orca_job.command(self.name, self.argv, secs, SHELL_TIMEOUT_S - 20, self.ok)}
+
+    def drift(self, a):
+        pre = a.get("precheck") or {}
+        have = {"trigger": a.get("rrule"), "prompt": a.get("prompt"), "precheck": pre.get("command"),
+                "precheck-timeout": pre.get("timeoutSeconds")}
+        return {k: v for k, v in self.want().items() if have[k] != v}
+
+    def status(self):
+        a, err = self.find()
+        if a is None:
+            return "unknown", err
+        if not a:
+            if self.turned_off and self.turned_off():
+                return "off", "LaunchAgent 시절 `pressure.py uninstall` 로 끈 표지가 있음 (enable 로 다시 켬)"
+            return "absent", "등록 안 됨"
+        detail = f"{a.get('rrule')} · 에이전트 없이 precheck 로 실행"
+        drift = self.drift(a) if main_checkout() else {}  # from a worktree every path differs; that is not drift
+        if drift:
+            detail += f" · 등록된 내용이 이 체크아웃과 다름: {', '.join(drift)} (enable 로 맞춤)"
+        rec = orca_job.read(self.name)
+        if rec and not rec["ok"]:
+            detail += f" · 마지막 실행 실패: {rec['message']}"
+        return ("on" if a.get("enabled") else "off"), detail
+
+    def model(self):
+        return None  # no agent, so no model argument
+
+    def enable_job(self, here):
+        a, err = self.find()
+        if a is None:
+            return 1, err
+        if not a:
+            refusal = worktree_refusal()  # --here never applies: the job points at this checkout's files
+            if refusal:
+                return 1, refusal
+            w = self.want()
+            argv = [ORCA, "automations", "create", "--name", self.job_name, "--trigger", w["trigger"],
+                    "--provider", "claude", "--workspace-mode", "existing", "--workspace", f"path:{REPO}",
+                    "--precheck", w["precheck"], "--precheck-timeout", str(w["precheck-timeout"]),
+                    "--prompt", w["prompt"], "--json"]
+            p = sh(argv)
+            return (1, f"orca automations create 실패: {(p.stderr or p.stdout).strip()[:200]}") if p.returncode \
+                else (0, "켬 (Orca 가 꺼져 있는 동안은 돌지 않는다)")
+        drift = self.drift(a) if main_checkout() else {}
+        if not drift and a.get("enabled"):
+            return 0, "이미 켜져 있음"
+        fields = {"precheck": self.want()["precheck"], **drift} if "precheck-timeout" in drift else drift
+        p = sh([ORCA, "automations", "edit", "--id", a["id"], *[x for k, v in fields.items() for x in edit_flag(k, v)],
+                "--enabled", "--json"])
+        if p.returncode:
+            return 1, f"orca automations edit 실패: {(p.stderr or p.stdout).strip()[:200]}"
+        return 0, "켬" + (f" (맞춘 필드: {', '.join(drift)})" if drift else "")
+
+
+def reap_hard_interval():
+    import reap_hard  # not at import: it pulls in the whole guard stack
+    return reap_hard.config()["interval"]
+
+
+SHELL_JOBS = (
+    ShellJob("sync", "15분마다 체크아웃을 origin 에 맞추는 Orca automation(모델 없음, skills-sync sync). 세션이 읽는 스킬을 최신으로 둔다",
+             ["python3", str(HERE / "sync.py"), "sync"], sync.INTERVAL_S, True),
+    ShellJob("pressure-watch", "PC 사용량(load·메모리 압박·swap·디스크·컨테이너)을 모델 없이 재고, 높으면 reap 이 올린 안전한 대상만 "
+             "정리해 알리는 Orca automation(docs/pressure.md). 아무것도 종료하지 않고, 정리할 것이 없으면 상위 소비자만 알린다",
+             ["python3", str(REAP.parent / "pressure.py"), "round"], lambda: pressure.config()["interval"], True, ok=(0, 1, 2),
+             turned_off=pressure.disabled, clear_off=lambda: pressure.DISABLED.unlink(missing_ok=True)),
+    ShellJob("reap-hard", "15분마다 끝난 세션이 남긴 프로세스·창을 강하게 정리하는 Orca automation(모델 없음, reap_hard.py run)",
+             ["python3", str(HERE / "reap_hard.py"), "run"], reap_hard_interval, False),
+    ShellJob("orch-dash", "10분마다 오케스트레이터 대시보드 서버를 확인해 내려갔으면 올리는 Orca automation(모델 없음, orch-dash ensure)",
+             ["python3", str(REPO / "skills" / "orchestrate" / "scripts" / "dash.py"), "ensure"], 600, False),
+)
 
 
 # ---------------------------------------------------------------- share-server (LaunchAgent)
@@ -445,7 +524,7 @@ class ReflectStanding(OrcaJob):
 
 REFLECT = ReflectStanding()
 
-AUTOMATIONS = (Janitor(), JanitorLoad(), PreviewWatch(), PressureWatch(), ShareServer(),
+AUTOMATIONS = (Janitor(), JanitorLoad(), PreviewWatch(), *SHELL_JOBS, ShareServer(),
                Watch("watch-prs", "나를 지명한 리뷰 요청과 내 PR 의 리뷰 대기를 오케스트레이터나 리드에게 모아 보내는 Orca automation"),
                Watch("watch-mentions", "공개 채널의 멘션·참여 스레드 답글을 오케스트레이터나 리드에게 모아 보내는 Orca automation"))
 LABEL = {"on": "켜짐", "off": "꺼짐", "absent": "꺼짐(미설정)", "unknown": "확인 불가", "unsupported": "미지원",

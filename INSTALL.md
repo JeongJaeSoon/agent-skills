@@ -44,7 +44,7 @@ Run these. All are read-only. Show the human the results in one short table.
 | `python3 --version` | 3.9 or later |
 | `git --version` | any |
 | `gh auth status` | logged in to github.com. Needed for the full setup; the human logs in, not you |
-| `uname -s` | `Darwin` for the full setup. On Linux the sync job is a cron line the human adds, and LaunchAgent automations are unsupported |
+| `uname -s` | `Darwin` for the full setup. On Linux the sync job and the default automations are the same Orca automations; only the LaunchAgent ones (`preview-watch`, `share-server`) are unsupported |
 | `command -v orca` | optional. Without Orca, the multi-session skills and the scheduled automations do nothing |
 | `echo "${CLAUDE_CONFIG_DIR:-unset}"` | when set (an Orca profile, for example), the plugin commands write to that profile only. If it is set, confirm with the human that this is the profile to install into |
 | `claude plugin list` | see below |
