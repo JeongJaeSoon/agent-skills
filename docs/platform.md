@@ -119,11 +119,12 @@ MCP 서버 하나가 끊겼을 때는 재인증이 아니라 `/mcp`에서 그 �
 
 | 방식 | 장점 | 단점 | 판단 |
 |---|---|---|---|
-| launchd (`StartInterval`) | Claude 세션이 없어도 돈다. 다른 설정을 안 건드린다. 사용자 LaunchAgent 여러 개가 이미 같은 방식으로 돈다 | macOS 전용 | **주 방식** |
+| Orca automation + precheck(에이전트 없음, [automation.md](automation.md#에이전트-없이-도는-주기-작업)) | Claude 세션이 없어도 돈다. LaunchAgent를 만들지 않아 `launchctl`을 막는 환경에서도 설치된다 | Orca 앱이 켜져 있을 때만 돈다 | **주 방식** |
+| launchd (`StartInterval`) | Orca 앱과 상관없이 돈다 | macOS 전용. 엔드포인트 보안 에이전트가 Orca 터미널 아래의 `launchctl bootout`을 SIGKILL로 막은 일이 있어 setup은 더 만들지 않는다 | 예전 방식(남은 plist는 오너가 직접 제거) |
 | 플러그인 SessionStart hook | 세션을 열 때마다 최신이 된다. Linux에서도 된다 | 세션 시작을 늦추지 않으려면 백그라운드로 떼어야 한다. hook 추가는 승인 사항 | 선택 사항(아래) |
 | 스킬(지시가 있을 때) | 단순 | 사람이 잊으면 안 돈다 | 수동 경로로만 둔다 |
 
-- **주기:** 15분(`StartInterval 900`) + 로그인 시 1회(`RunAtLoad`). `git fetch` 한 번이 전부라 비용이 거의 없다. 1시간이면 다른 PC에서 고친 것을 쓰기까지 너무 오래 걸린다.
+- **주기:** 15분(cron `*/15 * * * *`). 로그인 시 1회 실행은 없다(Orca 앱을 열면 다음 주기에 돈다). `git fetch` 한 번이 전부라 비용이 거의 없다. 1시간이면 다른 PC에서 고친 것을 쓰기까지 너무 오래 걸린다.
 - **수동:** `skills-sync sync`. orchestrator 스킬은 "스킬 업데이트해줘"를 받으면 이것을 백그라운드로 돌린다.
 - **SessionStart hook (제안, 승인 필요):** launchd가 없는 PC를 위해 `hooks.json`에 SessionStart(`startup`) hook을 추가해 `skills-sync sync --if-older 15m`를 떼어서 돌리는 안. macOS에서는 launchd로 충분하므로 이번 구현에는 넣지 않고, 승인되면 넣는다.
 
@@ -271,7 +272,7 @@ python3 <체크아웃>/scripts/bootstrap.py --write   # 적용
 2. 옛 `install.py` 흔적은 건드리지 않는다. 그 설치를 쓰던 PC는 `migrate.py --write`가 흔적을 걷어 낸 뒤 이 스크립트를 부른다(README).
 3. `settings.json`을 백업하고 `env.CLAUDE_CODE_PLUGIN_DIRS`를 이 체크아웃으로 넣는다. 다른 값이 이미 있으면 덮어쓰지 않고 멈춘다.
 4. `agent-skills@jeongjaesoon`이 설치·활성화되어 있으면 `enabledPlugins`에서 false로 둔다(두 번 로드 방지). 바꾸기 전 값을 출력한다.
-5. macOS면 `~/Library/LaunchAgents/io.github.jeongjaesoon.agent-skills-sync.plist`를 쓰고 `launchctl bootstrap`한다. plist의 `PATH` 앞에는 지금 쓰는 `python3`·`git`·`orca`의 디렉터리를 넣는다. 파일이 같아도 `launchctl print`로 작업이 올라가 있지 않으면 다시 올린다. Linux면 같은 명령을 넣을 crontab 한 줄을 출력만 한다.
+5. 동기화 작업은 LaunchAgent가 아니라 Orca automation `agent-skills sync`다. 6번 뒤 `skills-sync setup apply`가 만든다. 예전 부트스트랩이 쓴 plist가 남아 있으면 건드리지 않고 `legacy` 줄로 알리기만 한다. 지우는 일은 오너가 직접 한다.
 6. `skills-sync sync`를 한 번 돌린다.
 
 새 PC에서 체크아웃 폴더로 처음 `claude`를 띄우면 신뢰 창이 한 번 뜬다(신뢰는 원본 clone 경로에 기록된다, §6.2). 부트스트랩은 이 창을 대신 누르지 않고 "체크아웃에서 claude를 한 번 띄워 신뢰를 수락하라"고 출력한다.
@@ -404,7 +405,7 @@ orchestrator (사용자가 말을 거는 세션 하나, orchestrate의 top-level
 | 바꾼 것 | 되돌리는 법 |
 |---|---|
 | `settings.json` `env.CLAUDE_CODE_PLUGIN_DIRS` | 키를 지우거나 `settings.json.bak-<시각>`을 되돌린다. 떠 있는 세션은 재시작해야 빠진다. 되돌린 뒤에도 떠 있는 세션에 `/reload-plugins`를 치지 말고 재시작한다(§5) |
-| launchd 작업 | `launchctl bootout gui/$(id -u)/io.github.jeongjaesoon.agent-skills-sync` 뒤 plist 삭제 |
+| 동기화 작업 | `skills-sync setup disable sync`(등록은 남아 `apply`가 다시 켜지 않는다). 예전 LaunchAgent가 남았으면 `launchctl bootout gui/$(id -u)/io.github.jeongjaesoon.agent-skills-sync` 뒤 plist 삭제(오너가 직접) |
 | 상태 파일 | `~/.local/state/agent-skills/` 삭제 |
 | `enabledPlugins`의 `agent-skills@jeongjaesoon` | 부트스트랩이 출력한 원래 값으로 되돌린다 |
 | 원격 마켓플레이스로 돌아가기 | 위 넷을 되돌린 뒤 `claude plugin marketplace add JeongJaeSoon/agent-skills && claude plugin install agent-skills@jeongjaesoon` |

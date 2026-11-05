@@ -20,7 +20,7 @@ The outputs shown come from a run in a throwaway environment (temporary `HOME`, 
 | Required | `git` | Install, checkout and sync |
 | Required | `python3` 3.9 or later | Every script. macOS's `/usr/bin/python3` (3.9.6) works |
 | Required for B and C | `gh`, logged in to github.com | The recommended rules about your own repositories, and cloning a private personal repo |
-| For B and C | macOS | The sync job and some automations are LaunchAgents. On Linux, setup prints a cron line for you to add, and those automations show as `unsupported` |
+| For B and C | macOS, Linux | The sync job and the default automations are Orca automations, so Orca must be installed and open for them to run. Setup creates no LaunchAgent. `preview-watch` and `share-server` (off by default) are still LaunchAgents on macOS |
 | Optional | Orca | The multi-session skills (`orchestrate`, `dispatch-card`, `handoff-ticket`) and the scheduled rounds |
 | Optional | Linear or Jira | Tracker skills. Linear unless `tracker.adapter` says otherwise |
 | Optional | Obsidian or a Markdown folder | Notes skills. Off until `notes.adapter` is set |
@@ -163,8 +163,8 @@ A full setup (path B or C) also needs:
 | What setup changed | How to undo it |
 |---|---|
 | `env.CLAUDE_CODE_PLUGIN_DIRS` and the other recommended settings in `settings.json` | Run the rollback line `--apply` printed (`cp settings.json.bak-setup-<time> settings.json`), or delete the keys you do not want. Restart running sessions |
-| The sync job (macOS) | `launchctl bootout gui/$(id -u)/io.github.jeongjaesoon.agent-skills-sync`, then delete `~/Library/LaunchAgents/io.github.jeongjaesoon.agent-skills-sync.plist` |
-| The automations | `<checkout>/bin/skills-sync setup disable <name>` for each; for a LaunchAgent one it also unloads the agent. `<checkout>/bin/reap-hard uninstall` and `<checkout>/bin/orch-dash uninstall-agent` if you installed those by hand |
+| The sync job | `<checkout>/bin/skills-sync setup disable sync`. If an older setup left a LaunchAgent, remove it yourself: `launchctl bootout gui/$(id -u)/io.github.jeongjaesoon.agent-skills-sync`, then delete `~/Library/LaunchAgents/io.github.jeongjaesoon.agent-skills-sync.plist` |
+| The automations | `<checkout>/bin/skills-sync setup disable <name>` for each; for a LaunchAgent one it also unloads the agent. Old LaunchAgents from `reap-hard install`, `orch-dash install-agent` or `pressure.py install` are removed by you, as above |
 | State | Delete `~/.local/state/agent-skills/` |
 
 Two things are left behind: the Orca automation registrations, which `disable` turns off but does not delete, and `~/.claude/agent-skills.json`, which no step deletes; delete it yourself if you want it gone.
@@ -175,4 +175,4 @@ Two things are left behind: the Orca automation registrations, which `disable` t
 - **Setup wrote a different `settings.json` from the one my session reads.** Claude Code reads `$CLAUDE_CONFIG_DIR/settings.json` when that variable is set (Orca sets one per profile), else `~/.claude/settings.json`. The dry run's first line, `target <path>`, says which one setup plans for; `--settings <file>` picks another. With several profiles, do the setup once per profile. `agent-skills.json` is one file for all of them.
 - **`refused: … is a worktree` or `… is on 'feature'`.** Run setup from the main checkout on `main`.
 - **Hooks run twice.** Both the marketplace copy and a checkout are enabled. Run the setup dry run; its diff turns the marketplace copy off.
-- **Linux.** Add the cron line setup prints. LaunchAgent automations are unsupported.
+- **Linux.** The Orca automations work the same. `preview-watch` and `share-server` are LaunchAgents and are unsupported.

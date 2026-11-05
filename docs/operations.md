@@ -16,7 +16,7 @@
 - 티켓 트래커: Linear 또는 Jira 어댑터(`use-tracker`). `tracker.adapter`가 없으면 Linear다.
 - 노트: Obsidian vault 또는 일반 Markdown 폴더(`use-notes`). 설정하지 않으면 노트를 쓰지 않고 멈추거나 묻는다([설정 전환 안내](configuration-migration.md)).
 - Orca: `orchestrate`, `handoff-ticket`, `dispatch-card`, Orca automation(`janitor`, `watch-prs`·`watch-mentions` 회차)이 쓴다. `deliver-ticket`은 Orca 카드 밖에서도 돈다. 스킬마다 Orca를 어디에 쓰는지는 [스킬 카탈로그](skills.md)의 그 스킬 절에 있다.
-- macOS: 동기화 작업과 `pressure-watch`·`preview-watch`·`share-server`·`reap-hard`는 launchd를 쓴다. Linux에서는 `setup.py`가 crontab 줄을 출력한다. 다른 OS의 대안은 [automation.md](automation.md#처음-설치할-때).
+- 동기화 작업과 `pressure-watch`·`reap-hard`·`orch-dash`는 Orca automation으로 돌므로 Orca 앱이 켜져 있는 동안만 돈다. macOS에서 `preview-watch`·`share-server`만 launchd를 쓴다. 예전 setup이 만든 LaunchAgent가 남아 있으면 `setup-pc` 점검이 알리고, 제거는 오너가 직접 한다([automation.md](automation.md#처음-설치할-때)).
 - 독립 리뷰와 브라우저 검증은 사용 가능한 리뷰어와 브라우저 자동화 도구로 한다. 특정 모델이나 별도 모델 플러그인은 필요하지 않다.
 
 ## 설치 보충
@@ -54,7 +54,10 @@ skills-sync setup disable janitor        # 하나 끄기. 어느 것이든 apply
 | `janitor` | on | Orca automation(Orca 필요) | 에이전트가 만든 끝난 리소스를 3시간마다 정리한다(#190 이전 등록은 30분 주기로 남으며 `skills-sync setup enable janitor`로 맞춘다). compose는 down까지만, `-v`·prune·볼륨/이미지 삭제는 하지 않는다 |
 | `janitor-load` | on | Orca automation(Orca 필요) | 30분마다 5분 load만 재고, CPU 수 이상이면 janitor와 같은 정리를 한 번 더 돈다(1시간 안에 돈 회차가 있거나 janitor가 꺼져 있으면 건너뜀) |
 | `preview-watch` | off | macOS LaunchAgent | loopback 웹페이지를 tailnet HTTPS로 자동 공개한다. tailscale CLI가 없으면 켜지 않는다 |
-| `pressure-watch` | on | macOS LaunchAgent | 3분마다 PC 사용량을 재고, 높으면 reap이 올린 안전한 대상만 정리해 알린다. 아무것도 종료하지 않는다([pressure.md](pressure.md)) |
+| `sync` | on | Orca automation(에이전트 없음) | 15분마다 체크아웃을 origin에 맞춘다(`skills-sync sync`) |
+| `pressure-watch` | on | Orca automation(에이전트 없음) | 3분마다 PC 사용량을 재고, 높으면 reap이 올린 안전한 대상만 정리해 알린다. 아무것도 종료하지 않는다([pressure.md](pressure.md)) |
+| `reap-hard` | off | Orca automation(에이전트 없음) | 15분마다 끝난 세션이 남긴 프로세스·창을 규칙으로 정리한다([reap-hard.md](reap-hard.md)) |
+| `orch-dash` | off | Orca automation(에이전트 없음) | 10분마다 대시보드 서버를 확인해 내려갔으면 올린다 |
 | `share-server` | off | macOS LaunchAgent | 공유 폴더를 127.0.0.1에서 Caddy로 읽기 전용 서빙한다. tailnet 공개는 하지 않는다([share-server.md](share-server.md)) |
 | `watch-prs` | on(`prs` 키가 있을 때) | Orca automation | `watch-prs` 스킬의 회차. 설정 키가 없으면 켜지 않는다 |
 | `watch-mentions` | on(`mentions` 키가 있을 때) | Orca automation | `watch-mentions` 스킬의 회차. 설정 키가 없으면 켜지 않는다 |
@@ -64,7 +67,7 @@ skills-sync setup disable janitor        # 하나 끄기. 어느 것이든 apply
 ## 선택 설정
 
 - `recall`이 지난 세션을 빨리 찾게 하려면 Orca 앱에서 Settings → Agent Session Search → Search inside sessions의 이 컴퓨터(Local Mac) 스위치를 켠다. CLI로는 켤 수 없고, 켜기 전에는 `recall`이 `~/.claude/projects`의 transcript를 grep한다. 켜졌는지는 `orca search --index-status`의 `enabled`로 확인한다.
-- macOS에서 메인 체크아웃에서 `orch-dash install-agent`를 한 번 실행하면 launchd가 대시보드를 로그인·크래시·코드 갱신 뒤에도 띄워 둔다(`uninstall-agent`로 제거). 자세한 동작은 `skills/orchestrate/references/dashboard.md`의 "Start it".
+- 대시보드를 늘 띄워 두려면 메인 체크아웃에서 `skills-sync setup enable orch-dash`를 한다. 10분마다 `ensure`를 돌리는 Orca automation이 걸린다(`orch init`·`orch status`도 ensure를 돌린다). 예전 `orch-dash install-agent` LaunchAgent는 setup이 더 만들지 않는다. 자세한 동작은 `skills/orchestrate/references/dashboard.md`의 "Start it".
 
 ## 사용 시나리오
 

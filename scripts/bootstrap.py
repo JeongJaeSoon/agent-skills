@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Set this PC up to load this checkout live, keep it in sync, and turn on the default-on automations
+"""Set this PC up to load this checkout live and turn on the default-on automations, which include the sync job
 (docs/platform.md §5, docs/automation.md).
 
 Usage:
@@ -9,10 +9,7 @@ Usage:
 Run it from the checkout that sessions should load (the main one, on `main`), not a worktree. Running it
 again changes nothing that is already in place.
 """
-import json, os, pathlib, platform, plistlib, shutil, subprocess, sys, time
-
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from sync import INTERVAL_S  # noqa: E402
+import json, os, pathlib, shutil, subprocess, sys, time
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 # The file Claude Code reads, as setup.py picks it: an Orca profile sets CLAUDE_CONFIG_DIR.
@@ -60,50 +57,10 @@ def settings_change():
     return d if changed else None
 
 
-def launchd_path():
-    # launchd starts with a bare PATH. Put the python3, git and orca found now first, so the job runs the
-    # same tools (a pyenv or uv python, a Homebrew git) and never the Command Line Tools stub.
-    dirs = [os.path.dirname(w) for w in map(shutil.which, ("python3", "git", "orca")) if w]
-    dirs += ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
-    return ":".join(dict.fromkeys(dirs))
-
-
-def plist():
-    log = str(STATE / "sync.log")
-    return {
-        "Label": LABEL,
-        "ProgramArguments": ["/usr/bin/env", "python3", str(REPO / "scripts" / "sync.py"), "sync"],
-        "StartInterval": INTERVAL_S,
-        "RunAtLoad": True,
-        "StandardOutPath": log,
-        "StandardErrorPath": log,
-        "EnvironmentVariables": {"PATH": launchd_path()},
-    }
-
-
-def scheduler(write):
-    if platform.system() != "Darwin":
-        print(f"cron    add by hand: */15 * * * * python3 {REPO}/scripts/sync.py sync >> {STATE}/sync.log 2>&1")
-        return
-    want = plistlib.dumps(plist())
-    domain = f"gui/{os.getuid()}"
-    loaded = subprocess.run(["launchctl", "print", f"{domain}/{LABEL}"], capture_output=True).returncode == 0
-    if PLIST.exists() and PLIST.read_bytes() == want and loaded:
-        print(f"ok      launchd {LABEL}")
-        return
-    print(f"write   {PLIST} (every {INTERVAL_S // 60} min and at login)")
-    if write:
-        STATE.mkdir(parents=True, exist_ok=True)
-        PLIST.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["launchctl", "bootout", f"{domain}/{LABEL}"], capture_output=True)
-        PLIST.write_bytes(want)
-        for attempt in range(5):  # bootstrap right after bootout can fail with error 5 until the old job is gone
-            p = subprocess.run(["launchctl", "bootstrap", domain, str(PLIST)], capture_output=True, text=True)
-            if p.returncode == 0:
-                break
-            time.sleep(1)
-        else:
-            sys.exit(f"launchctl bootstrap failed: {p.stderr.strip()}; rerun this script")
+def legacy_agent():
+    """The LaunchAgent plist an older bootstrap wrote, if it is still there. Nothing here creates or removes it:
+    the sync job is the `sync` Orca automation (automations.py), and the owner removes the old plist by hand."""
+    return PLIST if PLIST.exists() else None
 
 
 def main():
@@ -122,7 +79,9 @@ def main():
         if target.exists():
             shutil.copymode(target, tmp)
         tmp.replace(target)
-    scheduler(write)
+    if old := legacy_agent():
+        print(f"legacy  {old} is a LaunchAgent from an older setup; the sync job is now an Orca automation, so remove "
+              f"the old one yourself: launchctl bootout gui/{os.getuid()}/{LABEL} && rm {old}")
     sys.stdout.flush()  # keep this output ahead of the children's
     automations = [sys.executable, str(REPO / "scripts" / "automations.py")]
     if not write:

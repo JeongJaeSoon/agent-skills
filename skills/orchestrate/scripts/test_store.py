@@ -341,7 +341,7 @@ store.shutil.which = lambda name: "/usr/bin/" + name
 
 
 def crontab(code, out, err=""):
-    store._sh = lambda cmd: subprocess.CompletedProcess(cmd, code if cmd[0] == "crontab" else 1, out, err)
+    store._sh = lambda cmd: subprocess.CompletedProcess(cmd, code if cmd[0] == "crontab" else 113, out, err)  # launchctl: no such service
     return [w for w in store.check_launchers() if "crontab" in w]
 
 
@@ -424,6 +424,11 @@ if sys.platform == "darwin":
     store._sh = lambda cmd: subprocess.CompletedProcess(cmd, 0, "state = not running", "")  # loaded, no pid
     try:
         assert "is loaded" in store.check_launchers()[0]
+        # A launchctl that was killed (-9) or never ran (127) is not "not loaded": the answer is missing.
+        store._sh = lambda cmd: subprocess.CompletedProcess(cmd, -9, "", "")
+        assert "killed by signal 9" in store.check_launchers()[0]
+        store._sh = lambda cmd: subprocess.CompletedProcess(cmd, 113, "", "Could not find service")
+        assert not [w for w in store.check_launchers() if "launchctl" in w]
     finally:
         store._sh = real_sh
 # Any reason refuses --apply before it touches anything.

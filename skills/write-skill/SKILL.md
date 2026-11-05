@@ -72,7 +72,7 @@ git -C <main checkout> merge --ff-only <branch>
 
 In this order a rejected push leaves nothing local moved. Fast-forwarding first and losing the push race leaves the loaded checkout with a commit origin replaced, which `skills-sync` then stops on.
 
-Other machines pick it up through `skills-sync sync` (launchd every 15 minutes: fetch, fast-forward only, stops with a notification on a dirty or diverged checkout; `docs/platform.md` §3). Changes under `~/.claude` have no such sync; say so in the report.
+Other machines pick it up through `skills-sync sync` (an Orca automation every 15 minutes: fetch, fast-forward only, stops with a notification on a dirty or diverged checkout; `docs/platform.md` §3). Changes under `~/.claude` have no such sync; say so in the report.
 
 ## 7. Reload
 
