@@ -583,14 +583,15 @@ def stalled_why(s, checks):
     return None if s.get("phase") != "idle" or active and judged and active > judged else why
 
 
-def fleet_rows(state, leads, board_rows, details=None, now=None, stale_s=None, checks=None):
+def fleet_rows(state, leads, board_rows, details=None, now=None, stale_s=None, checks=None, notes=None):
     """Board rows built from the fleet collector's sessions (state.json), for what nobody wrote to the board: each lead
     session whose terminal no board lead holds, the cards under it, and the cards the orchestrator dispatched
     itself. A lead the board holds gets no row of its own, but its cards hang under its board row. Each card carries its
     current PR (fleet.current_pr; details: prs.json's); a card whose PR a board row already has is left to that row.
     Then each session's started subagents (subagent_rows). Returns (rows, order); reported_at is the session's last
     activity, so a quiet one shows its age like a stale board row. checks (patrol_checks) turns the row of a card
-    patrol found stalled, while its turn is still ended, into ❔ with patrol's reason."""
+    patrol found stalled, while its turn is still ended, into ❔ with patrol's reason. notes, when given, is filled with
+    omitted ({session id: why a session gets no row of its own}) and card (the sessions that count as cards)."""
     checks = checks or {}
     state = state or {}
     sessions = state.get("sessions") or []
@@ -628,11 +629,16 @@ def fleet_rows(state, leads, board_rows, details=None, now=None, stale_s=None, c
                      "repo": None if parent else s.get("gh_repo") or s.get("project") or "—", "program": program}
         order.append(rid)
 
-    def shown(s):
+    def omitted(s):
+        """Why a session gets no row of its own, else []."""
         pr = pr_of.get(s.get("id"))
         # A dispatch that completed with no PR has reported to its dispatcher and has nothing left to land.
         over = s.get("dispatch_status") == "completed" and s.get("id") not in had_pr
-        return (s.get("phase") != "offline" or pr) and pr not in on_board and not over and s.get("id") not in linked
+        return [why for why, hit in (("offline", s.get("phase") == "offline" and not pr), ("pr_on_board", pr in on_board),
+                                     ("dispatch_done", over), ("linked", s.get("id") in linked)) if hit]
+
+    def shown(s):
+        return not omitted(s)
 
     for lead in sessions:
         if lead.get("kind") != "orchestration":
@@ -658,6 +664,11 @@ def fleet_rows(state, leads, board_rows, details=None, now=None, stale_s=None, c
             kind.get(s.get("orca_parent")) == "orchestrator" or s.get("report") or s.get("id") in had_pr or s.get("dispatch"))
         if card and kind.get(s.get("parent")) == "orchestrator" and shown(s):
             add(f"fleet:{s['id']}", s, "task")
+        if notes is not None and card:
+            notes.setdefault("card", []).append(s.get("id"))
+    if notes is not None:
+        notes.setdefault("card", [])
+        notes["omitted"] = {s.get("id"): why for s in sessions if (why := omitted(s))}
     subagent_rows(sessions, {**board_rows, **rows}, rows, order, lead_row, now, stale_s)
     return rows, order
 
@@ -790,7 +801,7 @@ def drop_acked(lines, prs, rows, have):
 
 
 def render(scope="top-level", channel="terminal", now=None, headline=None, skipped=None, fill=False, periodic=True,
-           decisions=(), insight=None, fresh=False):
+           decisions=(), insight=None, fresh=False, inputs=None):
     """The brief skill's report as text, with what the caller needs around it. periodic (§1 Periodic report) adds
     the skipped actions, the reap line and a token warning line; the stage table is one line pointing at it (stages.pointer). fill adds
     fleet_rows() for the leads and cards the board does not have; fresh collects the fleet again when its files are
@@ -800,7 +811,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     Returns {"text", "headline_facts", "changed", "stale", "width_ok", "done", "open", "table_rows", "snapshot"}. done is
     drop_acked()'s; table_rows has one list per repository table in the text, in order, one {label, ack, done} per body
     row: the id its Ack or Done button posts, or None (the page has only the text, so it places the buttons by position).
-    snapshot is what commit() saves for the next report to compare against."""
+    snapshot is what commit() saves for the next report to compare against. inputs, when a dict, is filled with what the
+    render read and resolved, for rowstate.inputs(); it changes nothing in the report or the return value."""
     now = now or fleet.utcnow()
     tg = channel == "telegram"
     sd = fleet.state_dir()
@@ -833,6 +845,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     holds, held_by = fleet.held_prs(store, shut, prs, now, cards, hold_why := {}, me=me), {}  # held_by: row id -> the PR a held item covers
     # The PRs a to-do holds and no held item does (that one's text wins): their rows read 📅, not ⏸️.
     todo_held = {k for k, (kind, _) in hold_why.items() if kind == "do"}
+    board_rows = {k: dict(v) for k, v in store["rows"].items()} if inputs is not None else None  # before the card links below
     for rid, r in store["rows"].items():
         # A board row about a card is the card's row: it shows the card's current PR (its own --pr is only the last
         # candidate), so the card is not listed a second time. The card is the one `--worktree` links, else the one
@@ -843,7 +856,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     checks = patrol_checks(now)
     if fill:
         extra, extra_order = fleet_rows(state, store["leads"], store["rows"], prs, now,
-                                        float(limits["subagent_stale_h"]) * 3600, checks)
+                                        float(limits["subagent_stale_h"]) * 3600, checks, notes=inputs)
         store["rows"], store["order"] = {**extra, **store["rows"]}, store["order"] + extra_order
     rows = store["rows"]
 
@@ -1548,6 +1561,10 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     whole = list(out)
     for at, n, lines_ in reversed(swaps):
         whole[at:at + n] = lines_
+    if inputs is not None:
+        inputs.update(facts=facts_in, state=state, prs=prs, board_rows=board_rows, rows=rows, states=states,
+                      session_of={k: session_of(r) for k, r in rows.items()},
+                      lead={k: lead for k, r in rows.items() if (lead := lead_record(r))})
     return {"text": "\n".join(out), "full": "\n".join(whole), "headline_facts": facts, "changed": changed, "stale": stale, "width_ok": width_ok, "done": done,
             "open": opened, "table_rows": table_rows, "list_rows": list_rows, "placement": placement, "now_by_pr": by_pr,
             "states": states,
