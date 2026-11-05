@@ -16,8 +16,8 @@ the vault, for reads as well as writes. Nothing else touches the vault:
 
 `mcp` exists for vaults kept by a sync service: the folder on disk lags the running app, so a
 read taken from it mid-sync is stale, and a file written there can be deleted when the app
-next syncs. Under `mcp` there is no fallback: when the vault tools are connected under neither prefix, stop and
-report it. Neither the instructions nor the key name a path (with `adapter: obsidian`): stop
+next syncs. Under `mcp` there is no fallback: when the vault tools are connected under neither prefix, stop
+the vault access and report it, while the task itself goes on (SKILL.md). Neither the instructions nor the key name a path (with `adapter: obsidian`): stop
 and ask which one the vault uses; never fall back to the filesystem. A delegate returns this
 stop to its caller, which asks the user. Under `cli` or `filesystem`, confirm which copy is
 authoritative when synchronization could lag.
