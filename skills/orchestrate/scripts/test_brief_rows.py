@@ -110,7 +110,7 @@ assert "에이전트 조치 필요: 머지 주체 기록 없음 · 5h 전" in fu
 assert rows["headless-apitoken"] == "check", rows
 assert "에이전트 조치 필요: 초안 · 세션 없음 — 재개하거나 보류로 기록 · 5h 전" in full, full
 # acme/plugins#633: the held item naming #633 holds the row: ⏸️ in the table, one 보류 line with the row's name.
-assert rows["headless-skill"] == "held" and "| ⏸️ | headless-skill | [#633](https://example.test/633) 초안 수정요청 | ↓ 보류 |" in text, text
+assert rows["headless-skill"] == "held" and "| ⏸️ | headless-skill | [#633](https://example.test/633) 초안 수정요청 | ↓ 보류 |" in full, full
 assert f"{soon} prod 전환 확인 후 → headless-skill" in held, held  # the held item itself is counted on the pointer line
 assert not any("headless-skill" in m for m in moving + turn + theirs), (moving, turn, theirs)
 # ...and Needs you demotes the PR on the same rule.
@@ -119,15 +119,15 @@ assert holds == {"acme/plugins#633": f"{soon} prod 전환 확인 후", "acme/plu
                  "acme/api#641": f"{soon} 배포 뒤"}, holds  # #182 is two PRs, so it holds neither
 # acme/plugins#640: a held item names it, but its card is stopped at a prompt only the owner answers: 🙋, not ⏸️.
 assert rows["prompt-stopped"] == "owner", rows
-assert any(t.startswith("확인 대기 · [#640]") and t.endswith("→ prompt-stopped") for t in turn), turn
+assert any(t.startswith("확인 대기 · acme/plugins#640") and t.endswith("→ prompt-stopped") for t in turn), turn
 assert not any("#640" in h for h in held), held  # a queue item, not a ⏸️ row: listed by orch board todo list
 # acme/api#641: the row would be ❔ (수정요청 받음), so its held item holds it, under one 보류 line.
 assert rows["api-cr"] == "held" and f"{soon} 배포 뒤 · 수정 반영 → api-cr" in held, held
 assert not any("api-cr" in m for m in moving + turn + theirs), (moving, turn, theirs)
 # Waiting on a review (a team's counts): the item says whose review, and no next step repeats it.
-assert "team:app-dev · 리뷰 [#630](https://example.test/630) · 12h 전부터 → shared-files-fix" in theirs, theirs
-assert "rev-h, team:app-dev · 리뷰 [#631](https://example.test/631) · 12h 전부터 → eval-migrate" in theirs, theirs
-assert any(t.startswith("team:app-dev · 리뷰 [#182]") and t.endswith("→ flows-revert") for t in theirs), theirs
+assert "team:app-dev · 리뷰 acme/plugins#630 · 12h 전부터 → shared-files-fix" in theirs, theirs
+assert "rev-h, team:app-dev · 리뷰 acme/plugins#631 · 12h 전부터 → eval-migrate" in theirs, theirs
+assert any(t.startswith("team:app-dev · 리뷰 acme/flows#182") and t.endswith("→ flows-revert") for t in theirs), theirs
 assert not any(w in t for t in theirs for w in ("세션 꺼짐", "에이전트 없음")), theirs
 assert any("#182 다시 보기" in k for k in rows) and rows["flows-revert"] == "waiting", rows  # still in the queue
 
@@ -297,8 +297,13 @@ assert "- [" not in text and "…" not in text, text
 assert "payments-migration-worktree 정리** | — | 리뷰 | 작업 중 |" in brief()["full"]
 assert "연결 없음" in text and "연결 없음** | — | 리뷰 | 세션 없음 |" in brief()["full"], text
 (programs / ".dash.json").write_text(json.dumps({"pid": os.getpid(), "port": 4780}))
-text = brief()["text"]
-assert "[작업 중](http://127.0.0.1:4780/#/fleet/session/s-link) · payments-migration-worktree" in text, text
+b = brief()
+text = b["text"]
+# The terminal expands a link to its whole URL, which would bury the row: the text names the session and carries no URL
+# (the dashboard line on top is the way in). The dashboard's copy keeps the link.
+assert "작업 중 · payments-migration-worktree" in text and "127.0.0.1:4780/#/fleet/session" not in text and "](" not in text, text
+assert "[작업 중](http://127.0.0.1:4780/#/fleet/session/s-link) · payments-migration-worktree" in b["full"], b["full"]
+assert not [l for l in text.splitlines() if l.startswith(("- ", "|")) and "http" in l], text  # no row carries a URL
 tg = subprocess.run([sys.executable, str(HERE / "prog.py"), "brief", "render", "--telegram", "--no-refresh"],
                     capture_output=True, text=True, env=env).stdout
 assert any(l.endswith("— 리뷰 · 작업 중 · payments-migration-worktree") and "결제 이행" in l for l in tg.splitlines()) and "127.0.0.1:4780/#/fleet/session" not in tg, tg
@@ -310,7 +315,8 @@ for s in st["sessions"]:
 fleet.write_atomic(sd / "state.json", json.dumps(st))
 out = brief()
 text = out["text"]
-assert "[작업 중](http://127.0.0.1:4780/#/fleet/session/s-link) S! · payments-migration-worktree" in text, text
+assert "작업 중 S! · payments-migration-worktree" in text and "](" not in text, text
+assert "[작업 중](http://127.0.0.1:4780/#/fleet/session/s-link) S! · payments-migration-worktree" in out["full"], out["full"]
 assert "연결 없음** | — | 리뷰 | 세션 없음 |" in out["full"], out["full"]
 assert out["width_ok"] and "…" not in text, "the model mark must not push the table past 78 columns, nor cut a name"
 # The same with a progress bar, a PR and a short session name beside the mark.

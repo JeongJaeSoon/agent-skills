@@ -803,6 +803,15 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     snapshot is what commit() saves for the next report to compare against."""
     now = now or fleet.utcnow()
     tg = channel == "telegram"
+    pr_plain = {}
+
+    def no_links(s):
+        """The terminal text of a line: a PR link as owner/repo#N, any other link as its label."""
+        if tg:  # Telegram text keeps whatever link a caller wrote, such as an --insight
+            return s
+        for link, key in pr_plain.items():
+            s = s.replace(link, key)
+        return re.sub(r"\[([^\]]+)\]\(https?://[^)\s]+\)", r"\1", s)
     sd = fleet.state_dir()
     limits = {**LIMITS, **(fleet.config().get("board") or {})}
     for d in decisions:
@@ -947,7 +956,11 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         if probed and not final and (oldest_probe is None or probed < oldest_probe):
             oldest_probe = probed
         warn = "⚠️" if not final and (not probed or (now - probed).total_seconds() > limits["pr_stale_min"] * 60) else ""
-        return (f"{pr_num(key)}{warn}" if tg or not p.get("url") else f"[{pr_num(key)}]({p['url']}){warn}")
+        if tg or not p.get("url"):
+            return f"{pr_num(key)}{warn}"
+        link = f"[{pr_num(key)}]({p['url']})"
+        pr_plain[link] = key  # the terminal text writes owner/repo#N, which the terminal links itself
+        return f"{link}{warn}"
 
     def pr_status(key, base):
         """The PR's state, and its merge target when that is not the section's base."""
@@ -1473,7 +1486,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             whole = table_rows_of(head, [[dress(i, c, s) for c, s in enumerate(r)] for i, r in enumerate(cells(), 1)])
             table = whole
             head_md = ["| " + " | ".join(head).strip() + " |", "|---" * len(head) + "|"]
-            if table_width.table_width(table) > COLS:
+            if table_width.table_width([[no_links(c) for c in r] for r in table]) > COLS:  # as the terminal draws it
                 # One whole line per row, not a table.
                 swaps.append((len(out) + 1, len(whole) - 1, head_md + [table_width.md_row(row) for row in whole[1:]]))
                 out += [""] + table_width.as_lines(whole[1:], 2)
@@ -1548,7 +1561,9 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     whole = list(out)
     for at, n, lines_ in reversed(swaps):
         whole[at:at + n] = lines_
-    return {"text": "\n".join(out), "full": "\n".join(whole), "headline_facts": facts, "changed": changed, "stale": stale, "width_ok": width_ok, "done": done,
+    # A terminal expands `[label](url)` to label plus the whole URL, so a row is a line of URL. The terminal text drops the
+    # links (a PR as owner/repo#N, which the terminal links by itself; a session word as the word); `full` keeps them.
+    return {"text": no_links("\n".join(out)), "full": "\n".join(whole), "headline_facts": facts, "changed": changed, "stale": stale, "width_ok": width_ok, "done": done,
             "open": opened, "table_rows": table_rows, "list_rows": list_rows, "placement": placement, "now_by_pr": by_pr,
             "states": states,
             "duplicates": dup_ids, "missing": missing_ids + extra_ids,
