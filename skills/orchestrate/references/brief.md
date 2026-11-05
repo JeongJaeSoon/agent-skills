@@ -358,7 +358,7 @@ MERGE       merge_policy autonomous, or merge_policy human-gate when each landin
             works for.
 TASKS       Each unit you start is an Orca task: `task-create --deps '[…]'` with its start-after
             prerequisites, started from `task-list --ready` with `worker-start --task <id>`
-            (SKILL.md Scale). Started as a dispatched worker, you cannot create tasks on the Run
+            (`program.md` Scale). Started as a dispatched worker, you cannot create tasks on the Run
             you work for: start each unit with `worker-start --spec` once its prerequisites have
             landed; until then the unit and what it waits on are a digest line in this brief's
             note, so a restart finds the order. A unit you start as a card instead names why in

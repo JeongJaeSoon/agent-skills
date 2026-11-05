@@ -33,8 +33,10 @@ def term(handle, agent, silent_s, screen=None):
 
 
 def fake(branch_prs=(), terminals=(), local_landed=False, compare=None, ahead="", remote_log="", patches=None,
-         status="", calls=None, behind_pr=False):
-    """A runner answering the commands gather() issues. compare: GitHub's ahead_by, or "404"."""
+         status="", calls=None, behind_pr=False, reflog=None):
+    """A runner answering the commands gather() issues. compare: GitHub's ahead_by, or "404". reflog: HEAD's reflog
+    (`HEAD@{<unix time>}\\t<subject>` per line, newest first); default is a card with a commit of its own, 3 days old."""
+    reflog = f"HEAD@{{{NOW - 3 * 86400:.0f}}}\tcommit: work\n" if reflog is None else reflog
     screens = {t["handle"]: t.pop("_screen") for t in terminals}
     patches = patches or {}
 
@@ -44,6 +46,9 @@ def fake(branch_prs=(), terminals=(), local_landed=False, compare=None, ahead=""
         if cmd[:1] == ["git"] and "patch-id" in cmd:
             return f"{input.strip()} 0000\n"
         if cmd[0] == "git":
+            if "reflog" in cmd:
+                assert "--date=unix" in cmd and "--format=%gd%x09%gs" in cmd, cmd  # the entry's time, not the commit's
+                return None if reflog == "UNREADABLE" else reflog
             if "rev-parse" in cmd and "HEAD" in cmd:
                 return HEAD + "\n"
             if "status" in cmd:
@@ -191,6 +196,31 @@ assert v[0] == cards.KEEP and "기본 브랜치에 없음" in v[1], v
 v = verdict(local_landed=False, compare="404")
 assert v[0] == cards.KEEP and "GitHub 에 없는 커밋" in v[1], v
 assert verdict(local_landed=True)[0] == cards.REMOVE
+
+# Trap 1b: a card just made has no commit, so its HEAD is the base branch's tip and reads as "landed" while nothing
+# has landed. Its PR came hours after the sweep that planned its removal. No commit of its own in HEAD's reflog and
+# a young card is kept; an old commit-less card (an investigation) is still cleaned; an unreadable reflog keeps it.
+born = lambda age, what="checkout: moving from main to feature": f"HEAD@{{{NOW - age:.0f}}}\t{what}\n"
+v = verdict(local_landed=True, reflog=born(2 * 3600))
+assert v[0] == cards.KEEP and "새 카드, 아직 커밋 없음" in v[1], v
+assert verdict(local_landed=True, reflog=born(3 * 86400))[0] == cards.REMOVE
+assert verdict(local_landed=True, reflog=born(2 * 3600) + born(3 * 86400, "commit: work"))[0] == cards.REMOVE
+for made in ("commit (amend): work", "commit (merge): m", "cherry-pick: work", "am: patch"):
+    assert verdict(local_landed=True, reflog=born(3600, made) + born(2 * 3600))[0] == cards.REMOVE, made
+# Following the base branch is not a commit of the card's own.
+for moved in ("merge origin/main: Fast-forward", "rebase (start): checkout origin/main", "pull: Fast-forward",
+              "am --abort"):
+    v = verdict(local_landed=True, reflog=born(3600, moved) + born(2 * 3600))
+    assert v[0] == cards.KEEP and "새 카드" in v[1], (moved, v)
+# The card's age is when its reflog began, not the date of the commit HEAD sits on.
+v = verdict(local_landed=True, reflog=born(60))
+assert v[0] == cards.KEEP and "새 카드" in v[1], v
+# A malformed reflog line is an unreadable one.
+assert verdict(local_landed=True, reflog="garbage\n")[0] == cards.KEEP
+v = verdict(local_landed=True, reflog="UNREADABLE")
+assert v[0] == cards.KEEP and "커밋 이력" in v[1], v
+v = verdict(local_landed=True, reflog="")
+assert v[0] == cards.KEEP and "커밋 이력" in v[1], v
 
 # Trap 2: an unpushed commit whose message is on the remote. Same patch → the same work, removable; another patch →
 # a copy from before a rebase, for a person to decide; no such message → local work, kept.
