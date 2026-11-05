@@ -62,6 +62,12 @@ class Cutover(unittest.TestCase):
         self.assertEqual(cfg["artifact-backup"]["base_url"], "https://files.example.test/a/")
         self.assertEqual(cfg["artifact-backup"]["categories"], [["Infra", "grafana|loki"], ["Docs", "\\bplan\\b|guide"]])
 
+    def test_second_apply_keeps_the_original_backup(self):
+        self.run_script("--apply")
+        first = next(self.dir.glob("settings.json.bak-*"))
+        self.run_script("--apply")
+        self.assertEqual(json.loads(first.read_text()), SETTINGS)
+
     def test_rerun_is_a_no_op_on_hooks(self):
         self.run_script("--apply")
         r = self.run_script()

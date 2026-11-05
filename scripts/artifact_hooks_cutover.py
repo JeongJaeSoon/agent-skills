@@ -46,7 +46,9 @@ def categories(old_hook):
 
 
 def save(path, data, stamp):
-    shutil.copy2(path, f"{path}.bak-{stamp}")
+    bak = pathlib.Path(f"{path}.bak-{stamp}")
+    if not bak.exists():  # never replace an earlier backup with a later state
+        shutil.copy2(path, bak)
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
@@ -74,7 +76,8 @@ def main(argv=None):
     if not args.apply:
         print("dry run; add --apply to write")
         return 0
-    stamp = datetime.date.today().strftime("%Y%m%d")
+    # To the second, so a second run keeps the first run's backup, which holds the original settings.
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     save(settings_path, settings, stamp)
     if config_path.exists():
         save(config_path, config, stamp)

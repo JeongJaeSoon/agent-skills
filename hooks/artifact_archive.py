@@ -8,7 +8,7 @@ The hook tells the model which links to give the owner and queues the same pair 
 that is killed (the hook timeout) leaves an in-flight marker; the next run reports it in errors.log and backs that
 publish up again, so a publish is not silently lost. Any other failure is logged and never blocks the tool result.
 """
-import datetime, fcntl, html, json, os, re, shutil, subprocess, sys, tempfile, time
+import contextlib, datetime, fcntl, filecmp, html, json, os, re, shutil, subprocess, sys, tempfile, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from lib import artifact_links as al, config
@@ -72,11 +72,24 @@ def read_rows(root):
     return al.read_rows(index_path(root))
 
 
-def append_row(root, row):
+@contextlib.contextmanager
+def index_lock():
+    """Serializes changes to the public index across hook runs (a rewrite must not drop a row appended meanwhile)."""
+    os.makedirs(al.state_dir(), exist_ok=True)
+    fd = os.open(os.path.join(al.state_dir(), 'index.lock'), os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
+def append_row(root, row, locked=False):
     path = index_path(root)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'a', encoding='utf-8') as f:
-        f.write(json.dumps(row, ensure_ascii=False) + '\n')
+    with contextlib.nullcontext() if locked or root != al.public_dir() else index_lock():
+        with open(path, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(row, ensure_ascii=False) + '\n')
 
 
 def migrate_served_files():
@@ -98,9 +111,18 @@ def agent_guard():
     return shutil.which('agent-guard')
 
 
-def exclusion_reason(files):
-    """Why this page must stay off the public share, or None. `files` are every local file of the publish; they are
-    scanned together once, so the time spent does not grow with their number."""
+def snapshot(path, stage, n):
+    """Copy one source into the owner-only staging folder. What is scanned and what is published is this copy, so a
+    source edited while the scan runs cannot reach the public folder unscanned."""
+    os.makedirs(os.path.join(stage, str(n)))
+    snap = os.path.join(stage, str(n), os.path.basename(path))
+    shutil.copy2(path, snap)
+    return snap
+
+
+def exclusion_reason(stage, files):
+    """Why this page must stay off the public share, or None. `files` are the snapshots of every local file of the
+    publish; the staging folder is scanned once, so the time spent does not grow with their number."""
     for path in files:
         with open(path, encoding='utf-8', errors='replace') as f:
             if NO_BACKUP_RE.search(f.read()):
@@ -109,18 +131,11 @@ def exclusion_reason(files):
     if not guard:
         log_error('agent-guard not found; kept private')
         return 'agent-guard not found'
-    os.makedirs(al.private_dir(), mode=0o700, exist_ok=True)
-    stage = tempfile.mkdtemp(dir=al.private_dir(), prefix='.scan-')
     try:
-        for n, path in enumerate(files):
-            os.makedirs(os.path.join(stage, str(n)))
-            shutil.copy2(path, os.path.join(stage, str(n), os.path.basename(path)))
         r = subprocess.run([guard, 'scan-path', stage], stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL, timeout=SCAN_TIMEOUT)
     except subprocess.TimeoutExpired:
         return 'agent-guard scan timed out'
-    finally:
-        shutil.rmtree(stage, ignore_errors=True)
     # Non-zero covers both a finding and a scanner failure; either way keep it private.
     return f'agent-guard exit {r.returncode}' if r.returncode else None
 
@@ -142,9 +157,13 @@ def lock_down(path):
 
 
 def make_private(key):
+    with index_lock():
+        move_to_private(key)
+
+
+def move_to_private(key):
     """Move a key's public versions and rows to the private store (a page that once leaked stays private)."""
-    public = al.public_dir()
-    rows = read_rows(public)
+    rows = read_rows(al.public_dir())
     mine = [r for r in rows if r.get('key') == key]
     if not mine:
         return
@@ -244,9 +263,11 @@ def write_index():
 
 
 def index_item(row, versions, public):
-    title = html.escape(row.get('title') or os.path.basename(row.get('dir') or ''))
+    # A private page's title may be what the secret scan caught: the served index names it only by its key.
+    title = html.escape(f'비공개 {row["key"][:8]}' if row['_private']
+                        else row.get('title') or os.path.basename(row.get('dir') or ''))
     links = []
-    if row.get('url'):
+    if row.get('url') and not row['_private']:
         links.append(f'<a href="{html.escape(row["url"])}">claude.ai</a>')
     if row['_private']:
         links.append('<span class="tag">백업 비공개</span>')
@@ -368,24 +389,49 @@ def archive(data):
     m = al.URL_RE.search(resp) or al.URL_RE.search(inp.get('url') or '')
     url = m.group(0) if m else None
 
+    private_folder(al.private_dir())
+    stage = tempfile.mkdtemp(dir=al.private_dir(), prefix='.scan-')
+    try:
+        return store(data, url, src, extras, stage)
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+
+
+def store(data, url, orig, orig_extras, stage):
+    # Everything below reads the snapshots, never the sources again.
+    src = snapshot(orig, stage, 0)
+    extras = [(pub, snapshot(f, stage, n)) for n, (pub, f) in enumerate(orig_extras, 1)]
     now = datetime.datetime.now()
     # One folder per artifact (keyed by URL id when known), one file per publish.
-    key = url.rsplit('/', 1)[1] if url else os.path.splitext(os.path.basename(src))[0]
-    slug = re.sub(r'[^A-Za-z0-9._-]+', '-', os.path.splitext(os.path.basename(src))[0])[:60]
+    key = url.rsplit('/', 1)[1] if url else os.path.splitext(os.path.basename(orig))[0]
+    slug = re.sub(r'[^A-Za-z0-9._-]+', '-', os.path.splitext(os.path.basename(orig))[0])[:60]
     private = any(r.get('key') == key for r in read_rows(al.private_dir()))
-    if not private and exclusion_reason([src] + [f for _, f in extras]):
+    if not private and exclusion_reason(stage, [src] + [f for _, f in extras]):
         make_private(key)
         private = True
     root = al.private_dir() if private else al.public_dir()
-    folder = None
+    last = None
     for row in read_rows(root):
         if row.get('key') == key:
-            folder = row.get('dir')
-    folder = folder or os.path.join(root, f'{now:%Y-%m-%d}-{slug}-{key[:8]}')
+            last = row
+    folder = (last or {}).get('dir') or os.path.join(root, f'{now:%Y-%m-%d}-{slug}-{key[:8]}')
     if private:
         private_folder(folder)
     os.makedirs(folder, exist_ok=True)
-    dest = os.path.join(folder, f'{now:%Y%m%d-%H%M%S}{os.path.splitext(src)[1] or ".html"}')
+    # The same content again (the old settings.json hook and the plugin both run, or a republish changed nothing)
+    # reuses the newest version, so every run announces the same link.
+    same = (last and os.path.isfile(last.get('copy') or '') and filecmp.cmp(src, last['copy'], shallow=False)
+            and all(os.path.isfile(os.path.join(folder, pub)) and filecmp.cmp(f, os.path.join(folder, pub), shallow=False)
+                    for pub, f in extras))
+    if same:
+        out = announce(data, key, url, last['copy'], private)
+        return out
+    stem = f'{now:%Y%m%d-%H%M%S}'
+    ext = os.path.splitext(orig)[1] or '.html'
+    dest, n = os.path.join(folder, stem + ext), 1
+    while os.path.exists(dest):  # two publishes in one second keep both versions
+        n += 1
+        dest = os.path.join(folder, f'{stem}-{n}{ext}')
     shutil.copy2(src, dest)
     os.chmod(dest, 0o600 if private else 0o644)
     # Supporting files land at their published paths so the copy's relative links resolve.
@@ -406,7 +452,7 @@ def archive(data):
     subcategory = next((r['subcategory'] for r in reversed(earlier) if r.get('key') == key and r.get('subcategory')), None)
     subcategory = subcategory or subclassify(title, data.get('cwd'))
     append_row(root, {'time': now.isoformat(timespec='seconds'), 'key': key, 'url': url, 'title': title,
-                      'source': os.path.abspath(src), 'copy': dest, 'dir': folder,
+                      'source': os.path.abspath(orig), 'copy': dest, 'dir': folder,
                       'session': data.get('session_id'), 'cwd': data.get('cwd'), 'category': category,
                       'subcategory': subcategory})
     out = announce(data, key, url, dest, private)
@@ -455,16 +501,22 @@ def recover_killed():
             mark = None
         if mark is not None and alive(mark.get('pid', 0)):
             continue
-        try:
-            os.remove(path)
-        except OSError:
-            continue  # another run took it
-        if not mark or mark['data'].get('_recovered'):
+        if not mark or mark.get('tries', 0) >= 2:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
             continue
+        # The marker stays until the retry finishes, owned by this process meanwhile: a retry that is killed
+        # too is found again, up to twice.
+        mark.update(pid=os.getpid(), tries=mark.get('tries', 0) + 1)
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(mark, f, ensure_ascii=False)
         src = (mark['data'].get('tool_input') or {}).get('file_path')
         log_error(f'previous run was killed before it finished ({src}); backing it up again')
         try:
-            archive(dict(mark['data'], _recovered=True, agent_id=None, session_id=None))
+            archive(dict(mark['data'], agent_id=None, session_id=None))
+            os.remove(path)
         except Exception as e:
             log_error(f'recovery failed: {type(e).__name__}: {e}')
 
@@ -474,9 +526,9 @@ def main():
     if (data.get('tool_input') or {}).get('action', 'publish') != 'publish':
         return
     migrate_served_files()
-    recover_killed()
-    marker = start_marker(data)
+    marker = start_marker(data)  # first, so a run killed during the recovery below is retried too
     try:
+        recover_killed()
         out = archive(data)
     finally:
         try:

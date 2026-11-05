@@ -152,7 +152,7 @@ check('served folder: no errors.log', not os.path.exists(os.path.join(SHARE, 'er
 
 # Republishing the same artifact keeps one pending entry
 time.sleep(1.1)
-out = publish('s1', page('plan.html'), 'aaaa1111-2222-3333-4444-555566667777')
+out = publish('s1', page('plan.html', text='second version'), 'aaaa1111-2222-3333-4444-555566667777')
 check('republish: still one pending entry', len(pending('s1')) == 1, pending('s1'))
 FIRST, BACKUP = BACKUP, latest_url(folder)
 check('republish: link moves to the newest version file', BACKUP != FIRST and pending('s1')[0]['backup'] == BACKUP
@@ -499,6 +499,63 @@ rows = [json.loads(l) for l in open(os.path.join(STATE_ROOT, 'index.jsonl'))]
 check('categories: a configured rule groups a new page', next(r for r in rows if r['key'].startswith('b45f1111'))['category'] == 'Docs', rows[-1])
 check('categories: an earlier category sticks to its key', next(r for r in reversed(rows) if r['key'].startswith('aaaa1111'))['category'] == '기타')
 write_config({'artifact-backup': {'base_url': BASE}})
+
+# --- Codex round 1: leaks, races and lost versions
+index_html = open(os.path.join(SHARE, 'index.html'), encoding='utf-8').read()
+check('served index: a private page shows neither its title nor its claude.ai link',
+      'secret.html' not in index_html and 'noguard.html' not in index_html and 'bbbb1111-2222' not in index_html
+      and '비공개 bbbb1111' in index_html)
+
+SAME = 'bc5f1111-2222-3333-4444-555566667777'
+src_same = page('same.html', text='v1')
+publish('s34', src_same, SAME)
+with open(src_same, 'w') as f:
+    f.write('<title>same.html</title>changed')
+publish('s34', src_same, SAME)
+versions = [f for f in os.listdir(os.path.join(SHARE, next(d for d in os.listdir(SHARE) if d.endswith('-same-bc5f1111')))) if f.endswith('.html')]
+check('same second, changed content: both versions kept', len(versions) == 2, versions)
+
+DELAY = 'bd5f1111-2222-3333-4444-555566667777'
+src_delay = page('delay.html')
+a = publish('s35', src_delay, DELAY)
+time.sleep(1.2)
+b = publish('s35', src_delay, DELAY)
+check('duplicate run a second later: same content reuses the version and announces the same links',
+      al_links(a) == al_links(b), (a, b))
+check('duplicate run a second later: one version file', len([f for f in os.listdir(os.path.join(SHARE, next(
+      d for d in os.listdir(SHARE) if d.endswith('-delay-bd5f1111')))) if f.endswith('.html')]) == 1)
+
+# A source edited while the scanner runs does not reach the public folder: the stub rewrites it mid-scan.
+RACE = 'be5f1111-2222-3333-4444-555566667777'
+src_race = page('race.html', text='clean')
+with open(os.path.join(BIN, 'agent-guard'), 'w') as f:
+    f.write(f'#!/bin/sh\necho "$@" >> "{GUARD_CALLS}"\necho SECRET > "{src_race}"\n! grep -rq SECRET "$2"\n')
+publish('s36', src_race, RACE)
+os.chmod(os.path.join(BIN, 'agent-guard'), 0o755)
+copied = [open(os.path.join(SHARE, d, f)).read() for d in os.listdir(SHARE) if d.endswith('-race-be5f1111')
+          for f in os.listdir(os.path.join(SHARE, d)) if f.endswith('.html')]
+check('scan race: the published copy is the scanned snapshot', copied and all('SECRET' not in c for c in copied), copied)
+with open(os.path.join(BIN, 'agent-guard'), 'w') as f:
+    f.write(f'#!/bin/sh\necho "$@" >> "{GUARD_CALLS}"\n! grep -rq SECRET "$2"\n')
+
+# A retry that is killed again is found again; a marker is dropped after two tries.
+dead2 = subprocess.Popen([sys.executable, '-c', 'pass'])
+dead2.wait()
+RETRY = 'bf5f1111-2222-3333-4444-555566667777'
+mark = os.path.join(STATE_ROOT, 'inflight', f'{dead2.pid}-9.json')
+with open(mark, 'w') as f:
+    json.dump({'pid': dead2.pid, 'tries': 2, 'data': {'cwd': HOME, 'tool_input': {'file_path': page('retry.html')},
+                                                      'tool_response': f'https://claude.ai/code/artifact/{RETRY}'}}, f)
+publish('s37', page('after2.html'), 'c05f1111-2222-3333-4444-555566667777')
+check('marker with two tries: dropped, not retried again', not os.path.exists(mark)
+      and not any(d.endswith('-retry-bf5f1111') for d in os.listdir(SHARE)))
+
+# Parallel publishes of different artifacts keep every row of the public index.
+ids2 = [f'{i:04x}7777-2222-3333-4444-555566667777' for i in range(8)]
+with concurrent.futures.ThreadPoolExecutor(8) as ex:
+    list(ex.map(lambda a: publish('s38', page(f'idx{a[:4]}.html'), a), ids2))
+keys = {json.loads(l)['key'] for l in open(os.path.join(STATE_ROOT, 'index.jsonl'))}
+check('parallel publishes: no public index row lost', all(a in keys for a in ids2), len(keys))
 
 print(f'\n{sum(results)}/{len(results)} passed (HOME={HOME})')
 if all(results):
