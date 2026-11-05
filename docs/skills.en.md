@@ -1,4 +1,4 @@
-<!-- translated-from: 9593cbec594699bb99a82a82c05c33371c2202a4 -->
+<!-- translated-from: 6bccbba78301554054ebb761250201ca8658b856 -->
 # Skill catalog
 
 This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 16 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
@@ -574,6 +574,7 @@ Every rule has a key in `~/.claude/agent-skills.json`. Its value is one of `"den
 | `guard.warn.reset_hard` | warn | `git reset --hard` in a repository with uncommitted changes |
 | `guard.warn.run_download` | warn | `gh run download` without `-D` or `--dir` |
 | `guard.warn.tailscale` | warn | `tailscale serve` or `funnel` from a worker |
+| `guard.deliver_load` | warn | `hooks/lib/skillload.py`. A worker (a Dispatch, or a CLOSE or KEEP card) edits a file inside its working directory (the hook input's `cwd`) with Edit, Write, MultiEdit or NotebookEdit before its main conversation loaded `deliver-ticket`. Each such edit gets one warning line until the skill is loaded (no state file is kept); `deny` blocks it and `ask` asks. Not targets: a read-only card whose first prompt has a `LOAD: none` row, paths under `.git` or outside the working directory, subagents, orchestrators, leads and sessions a human opened. Loaded means a `Skill` result without an error, or a `/deliver-ticket` command. A call with no result yet, or a transcript not read in time, counts as unknown and passes |
 | `orchestrate.ask_user_question` | deny | AskUserQuestion in the main conversation of an orchestrator, lead or worker. Subagents and general sessions are not covered |
 | `orchestrate.wait_foreground` | deny | An orchestrator or lead running `orch wait`, `orch inbox --wait`, `orch watch-cards` or `orca orchestration check\|inbox --wait` without `run_in_background`, or cutting a background wait with `\| tail` or `\| head`. A worker's `check --wait` is not covered |
 | `orchestrate.send_devnull` | deny | An orchestrator, lead or worker sending the output of `orca orchestration send\|reply` to `/dev/null`. `2>/dev/null` alone is not covered |

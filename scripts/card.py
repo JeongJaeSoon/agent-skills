@@ -98,6 +98,9 @@ CODEX_GOAL_CARD = ("--agent codex starts only a supervised worker (no --card, an
 CODEX_LEAD = ("--agent codex cannot start a lead: its ROLE row works through this plugin's Claude Code hooks, "
               "so nothing was created.")
 CLOSE_LINE = "CLOSE: 완료 기준을 채우고 결과를 적으면 end-session §8대로 같은 턴에 스스로 닫는다"
+# hooks/lib/skillload.py reads a `LOAD: none` row as a read-only card; any other LOAD row is only text for the worker.
+LOAD_LINE = ("LOAD: 코드·문서를 바꾸는 카드는 첫 편집 전에 deliver-ticket을 로드한다"
+             "(Claude는 Skill 도구, 다른 CLI는 skills/deliver-ticket/SKILL.md를 읽는다). 읽기 전용 조사 카드는 `LOAD: none`이라 적는다")
 sys.path.insert(0, str(REPO / "hooks"))
 sys.path.insert(0, str(REPO / "skills" / "orchestrate" / "scripts"))
 import guard  # noqa: E402
@@ -111,7 +114,7 @@ GOAL_POLL_S = 10
 GOAL_FATAL = ("orca ", "not a connected", "no rendered screen")  # try_send reasons that waiting will not change
 LEAD_ROWS = ("MODE", "ROLE", "INBOX", "DELEGATE", "PREDICATE", "MERGE", "TASKS", "GATE")
 MERGE_VALUE = re.compile(r"\bmerge_policy (autonomous|human-gate)\b")
-ROWS = ("PROGRAM", "APPROVED", *LEAD_ROWS, "CLOSE", "KEEP", "FORBIDDEN", "REPORT")
+ROWS = ("PROGRAM", "APPROVED", *LEAD_ROWS, "CLOSE", "KEEP", "LOAD", "FORBIDDEN", "REPORT")
 FENCE = re.compile(r"(?ms)^[ \t]*```.*?^[ \t]*```[^\n]*$")
 # dispatch-card §2's prose form of the approval, which carries nothing into the prompt without an APPROVED row
 APPROVED_PROSE = re.compile(r"(?im)^[ \t]*(?:#{1,6}[ \t]*|[-*][ \t]+\*\*)approved\b")
@@ -230,6 +233,8 @@ def compose(brief_path):
                         "stored. Address the reporting session's Run instead (`orca orchestration send --to "
                         "run:<its run id>`; `orca orchestration run-current` prints it, `orch doctor` says when the "
                         "session has none).")
+    if not lead and not rows["LOAD"]:
+        rows["LOAD"] = LOAD_LINE  # an older brief has no LOAD row; a lead does not edit
     head = goal.group(0).rstrip()
     if not any(s in head for s in ("브리프:", str(path), brief_path)):
         head += f" 브리프: {path}"
@@ -988,7 +993,7 @@ def handoff(argv):
         if opts["--agent"] == "codex":
             raise Refuse(2, f"[{HANDOFF}] {CODEX_GOAL_CARD}")
         # CLOSE on a line of its own: roles.py reads a CLOSE card by its row
-        prompt = f"/goal {ticket}." + (f" {opts['--note']}" if opts.get("--note") else "") + f"\n{CLOSE_LINE}"
+        prompt = f"/goal {ticket}." + (f" {opts['--note']}" if opts.get("--note") else "") + f"\n{CLOSE_LINE}\n{LOAD_LINE}"
         if not guard.CLOSE_OR_KEEP.search(prompt):
             raise Refuse(2, f"[{HANDOFF}] the prompt does not pass hooks/guard.py's card check")
         with card_lock():
