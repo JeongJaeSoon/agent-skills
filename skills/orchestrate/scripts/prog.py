@@ -3111,6 +3111,10 @@ def review_lines(p, workers=None, tasks=None, unknown=frozenset()):
 WAKE_DUE_S = 1800  # sync.py's WAKE_PENDING_S
 
 
+class PendingError(SystemExit):
+    """The wait's own request file failed, not Orca: never mistaken for a lost answer."""
+
+
 def pending_request(pending):
     """The consuming request a dead wait left in `pending`: {"retry_request", "ack", "shown"}, or None when there is
     none. Any other read failure stops the wait: guessing "none" would lose a batch or print it twice."""
@@ -3121,10 +3125,30 @@ def pending_request(pending):
     except FileNotFoundError:
         return None
     except (OSError, ValueError) as e:
-        sys.exit(f"wait request {pending} is unreadable ({e}); check it, then remove it to go on")
+        raise PendingError(f"wait request {pending} is unreadable ({e}); check it, then remove it to go on")
     if not isinstance(req, dict) or not req.get("retry_request"):
-        sys.exit(f"wait request {pending} holds no retry_request; check it, then remove it to go on")
+        raise PendingError(f"wait request {pending} holds no retry_request; check it, then remove it to go on")
     return req
+
+
+def write_request(pending, req):
+    try:
+        pending.parent.mkdir(parents=True, exist_ok=True)
+        tmp = pending.with_suffix(".tmp")
+        tmp.write_text(json.dumps(req))
+        os.replace(tmp, pending)
+    except OSError as e:
+        raise PendingError(f"wait request {pending} could not be written ({e})")
+
+
+def next_ack(pending, box, did):
+    """Swap the printed batch's request for the ack of it in one replace, carrying its marks: until the ack request
+    is on disk, the printed batch's request (and what it printed) stays."""
+    import uuid
+    if pending is not None:
+        old = pending_request(pending) or {}
+        write_request(pending, {"retry_request": str(uuid.uuid4()), "ack": did, "shown": old.get("shown") or [],
+                                "box": list(box)})
 
 
 def take(box, pending=None, ack=None):
@@ -3138,10 +3162,7 @@ def take(box, pending=None, ack=None):
     if req is None:
         req = {"retry_request": str(uuid.uuid4()), "ack": ack}
         if pending is not None:
-            pending.parent.mkdir(parents=True, exist_ok=True)
-            tmp = pending.with_suffix(".tmp")
-            tmp.write_text(json.dumps({**req, "box": list(box)}))
-            os.replace(tmp, pending)
+            write_request(pending, {**req, "box": list(box)})
     args = (*box, *(("--ack", req["ack"]) if req.get("ack") else ()), "--retry-request", req["retry_request"])
     try:
         return batch(check(*args))
@@ -3156,10 +3177,7 @@ def mark_shown(pending, mid):
     req = pending_request(pending) if mid is not None else None
     if req is None:
         return
-    req["shown"] = [*(req.get("shown") or []), mid]
-    tmp = pending.with_suffix(".tmp")
-    tmp.write_text(json.dumps(req))
-    os.replace(tmp, pending)
+    write_request(pending, {**req, "shown": [*(req.get("shown") or []), mid]})
 
 
 def done_take(pending):
@@ -3188,6 +3206,8 @@ def wait_take(box, timeout_ms, clock=time.monotonic, out=print, pending=None, se
         if ack_next is not None:
             try:
                 did, got = take(box, pending, ack=ack_next)
+            except PendingError:
+                raise
             except SystemExit:  # both answers lost: the ack stays in `pending`, and the next wait replays it
                 break
             ack_next = None
@@ -3208,7 +3228,7 @@ def wait_take(box, timeout_ms, clock=time.monotonic, out=print, pending=None, se
             try:
                 did, got = take(box, pending)
             except SystemExit as e:
-                if not replayed_ack:
+                if not replayed_ack or isinstance(e, PendingError):
                     raise
                 if '"code"' not in str(e):  # no answer from Orca: the ack may still hold a batch, keep it for later
                     out(f"wait request replay failed ({e}); kept in {pending} for the next wait", flush=True)
@@ -3236,12 +3256,14 @@ def wait_take(box, timeout_ms, clock=time.monotonic, out=print, pending=None, se
                 out(inbox_line(m), flush=True)
                 shown.add(m.get("id"))
                 mark_shown(pending, m.get("id"))
-        done_take(pending)
         if did:
+            next_ack(pending, box, did)
             seen.add(did)
             ack_next = did
-        elif clock() >= end:
-            break
+        else:
+            done_take(pending)
+            if clock() >= end:
+                break
     return dids, msgs, shown, False
 
 

@@ -646,8 +646,8 @@ prog.os.replace = lambda *a: (_ for _ in ()).throw(OSError("disk full"))
 try:
     prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: printed.append(a[0]), pending=pend)
     raise AssertionError("a failed mark must raise")
-except OSError:
-    pass
+except prog.PendingError as e:
+    assert "could not be written" in str(e), e
 finally:
     prog.os.replace = real_replace
 assert len(printed) == 1 and pend.exists(), printed
@@ -700,6 +700,48 @@ with contextlib.redirect_stdout(out):
 prog.done_take = real_done
 assert marks and marks[-1] == ["s1", "s2", "mq"] and "ACTIONABLE delivery=d7" in out.getvalue(), (marks, out.getvalue())
 prog.done_take(_pdir / "wait-request.json")
+# The printed batch's request is swapped for its ack in one write, keeping the marks: a crash before the ack is sent
+# leaves the ack to replay and the marks, never a gap with neither.
+states = []
+prog.orca_json = scripted([("peek", row), ("take", st("s3", "d3")), ("ack", {}), ("peek", {})], [])
+real_take = prog.take
+def watching_take(box, pending=None, ack=None):
+    states.append(json.loads(pending.read_text()) if pending.exists() else None)
+    return real_take(box, pending, ack)
+prog.take = watching_take
+prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: None, pending=pend)
+prog.take = real_take
+assert states[0] is None and states[1]["ack"] == "d3" and states[1]["shown"] == ["s3"], states
+assert not pend.exists()
+# The wait's own file failing on the ack path is reported, not taken for a lost Orca answer.
+pend.write_text("{trunc")  # the file gone bad between the print and the ack
+log = []
+prog.orca_json = scripted([("ack", {})], log)
+try:
+    prog.take(["--run", "r"], pend, ack="d4")
+    raise AssertionError("a bad request file must raise")
+except prog.PendingError:
+    pass
+assert not log, log
+prog.done_take(pend)
+pend.write_text(json.dumps({"retry_request": "r-g", "ack": "d4"}))
+prog.orca_json = scripted([("ack", {})], [])
+real_pr = prog.pending_request
+calls_pr = [0]
+def flaky(pnd):
+    calls_pr[0] += 1
+    if calls_pr[0] > 2:
+        raise prog.PendingError("wait request is unreadable (denied)")
+    return real_pr(pnd)
+prog.pending_request = flaky
+try:
+    prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: None, pending=pend)
+    raise AssertionError("a request file failing mid-replay must stop the wait")
+except prog.PendingError:
+    pass
+finally:
+    prog.pending_request = real_pr
+prog.done_take(pend)
 # A delivery handled in an earlier round and handed out again is neither printed again nor left to replay.
 seen, printed, log = set(), [], []
 prog.orca_json = scripted([("peek", row), ("take", st("s1", "d1")), ("ack", {}), ("peek", {})], log)
