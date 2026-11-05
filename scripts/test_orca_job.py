@@ -74,9 +74,14 @@ class RunTest(unittest.TestCase):
                 f"open({str(pidfile)!r}, 'w').write(str(c.pid)); time.sleep(60)")
         self.run_job(["run", "j", "--timeout", "1", "--", sys.executable, "-c", code])
         pid = int(pidfile.read_text())
-        time.sleep(0.3)
-        with self.assertRaises(ProcessLookupError):
-            os.kill(pid, 0)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.1)
+        self.fail(f"child {pid} outlived the timeout")
 
     def test_a_failure_with_only_stdout_still_names_its_cause(self):
         self.run_job(["run", "j", "--", sys.executable, "-c", "print('docker is not running'); raise SystemExit(2)"])
@@ -91,6 +96,7 @@ class RunTest(unittest.TestCase):
         (oj.JOBS / "a.json").write_text("[]")
         (oj.JOBS / "b.json").write_text(json.dumps({"name": "b"}))
         (oj.JOBS / "c.json").write_text("{not json")
+        self.assertIsNone(oj.read("a") or oj.read("b") or oj.read("c"))  # status and stale() read through the same guard
         self.run_job(["run", "good", "--", sys.executable, "-c", "pass"])
         self.assertEqual([r["name"] for r in oj.records()], ["good"])
         oj.forget("good")

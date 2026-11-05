@@ -21,11 +21,16 @@ def record_path(name):
     return JOBS / f"{name}.json"
 
 
+def valid(rec):
+    return isinstance(rec, dict) and {"name", "at", "ok", "message"} <= rec.keys() and isinstance(rec["at"], (int, float))
+
+
 def read(name):
     try:
-        return json.loads(record_path(name).read_text())
+        rec = json.loads(record_path(name).read_text())
     except (OSError, ValueError):
         return None
+    return rec if valid(rec) else None  # a hand-edited file reads as no record
 
 
 def write(name, rec):
@@ -70,10 +75,11 @@ def run(name, cmd, interval=None, timeout=None, ok_codes=(0,)):
         except subprocess.TimeoutExpired:
             with contextlib.suppress(OSError):
                 os.killpg(proc.pid, signal.SIGKILL)
-            proc.communicate()
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                proc.communicate(timeout=5)  # a child that left the group may still hold the pipes: do not wait on it
             raise
         rc = proc.returncode
-        out = stdout if rc in ok_codes else (last_line(stderr) and stderr) or stdout  # a failure: stderr, else stdout
+        out = stdout if rc in ok_codes else (stderr if last_line(stderr) else stdout)
         message = f"{ended(rc)}: {last_line(out)}" if last_line(out) else ended(rc)
     except subprocess.TimeoutExpired:
         rc, message = -signal.SIGKILL, f"timed out after {timeout:g}s"
@@ -101,7 +107,7 @@ def records(jobs_dir=None):
             rec = json.loads(p.read_text())
         except (OSError, ValueError):
             continue
-        if isinstance(rec, dict) and {"name", "at", "ok", "message"} <= rec.keys():  # a hand-edited file is skipped
+        if valid(rec):
             out.append(rec)
     return out
 

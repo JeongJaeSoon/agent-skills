@@ -326,14 +326,20 @@ class ShellJob(OrcaJob):
     """A periodic shell job with no agent: an Orca automation whose precheck (scripts/orca_job.py) runs the command,
     records how it ended and exits 1, so Orca skips the agent every time. A job that needs no model must not start one."""
 
-    def __init__(self, name, what, argv, interval, default, ok=(0,), turned_off=None):
+    def __init__(self, name, what, argv, interval, default, ok=(0,), turned_off=None, clear_off=None):
         self.name, self.job_name, self.what, self.default = name, f"agent-skills {name}", what, default
-        self.argv, self.interval, self.ok, self.turned_off = argv, interval, ok, turned_off
+        self.argv, self.interval, self.ok, self.turned_off, self.clear_off = argv, interval, ok, turned_off, clear_off
 
     def disable(self):
         code, msg = super().disable()
-        if not code:
+        if not code and not msg.startswith("이미"):  # a job left off after failing keeps its failure record
             orca_job.forget(self.name)  # a stopped job's last run must not turn into a 'late' warning
+        return code, msg
+
+    def enable(self, here):
+        code, msg = self.enable_job(here)
+        if not code and self.clear_off:
+            self.clear_off()
         return code, msg
 
     def want(self):
@@ -352,8 +358,8 @@ class ShellJob(OrcaJob):
         if a is None:
             return "unknown", err
         if not a:
-            if self.turned_off and self.turned_off():  # `pressure.py uninstall` of the LaunchAgent days: apply must not undo it
-                return "off", "이전 disable 로 끔 (enable 로 다시 켬)"
+            if self.turned_off and self.turned_off():
+                return "off", "LaunchAgent 시절 `pressure.py uninstall` 로 끈 표지가 있음 (enable 로 다시 켬)"
             return "absent", "등록 안 됨"
         detail = f"{a.get('rrule')} · 에이전트 없이 precheck 로 실행"
         drift = self.drift(a) if main_checkout() else {}  # from a worktree every path differs; that is not drift
@@ -367,7 +373,7 @@ class ShellJob(OrcaJob):
     def model(self):
         return None  # no agent, so no model argument
 
-    def enable(self, here):
+    def enable_job(self, here):
         a, err = self.find()
         if a is None:
             return 1, err
@@ -405,7 +411,7 @@ SHELL_JOBS = (
     ShellJob("pressure-watch", "PC 사용량(load·메모리 압박·swap·디스크·컨테이너)을 모델 없이 재고, 높으면 reap 이 올린 안전한 대상만 "
              "정리해 알리는 Orca automation(docs/pressure.md). 아무것도 종료하지 않고, 정리할 것이 없으면 상위 소비자만 알린다",
              ["python3", str(REAP.parent / "pressure.py"), "round"], lambda: pressure.config()["interval"], True, ok=(0, 1, 2),
-             turned_off=pressure.disabled),
+             turned_off=pressure.disabled, clear_off=lambda: pressure.DISABLED.unlink(missing_ok=True)),
     ShellJob("reap-hard", "15분마다 끝난 세션이 남긴 프로세스·창을 강하게 정리하는 Orca automation(모델 없음, reap_hard.py run)",
              ["python3", str(HERE / "reap_hard.py"), "run"], reap_hard_interval, False),
     ShellJob("orch-dash", "10분마다 오케스트레이터 대시보드 서버를 확인해 내려갔으면 올리는 Orca automation(모델 없음, orch-dash ensure)",
