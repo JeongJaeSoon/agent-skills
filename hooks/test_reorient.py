@@ -261,25 +261,36 @@ def same_output(label, source="startup"):
 shutil.rmtree(terms)
 terms.write_text("not a directory")
 same_output("terminals is a file")
+same_output("terminals is a file, compact", "compact")
 terms.unlink()
 terms.mkdir()
+# The temp file the record is written through is a directory: the write fails the same way for every user, root too.
+(terms / "term_fi.tmp").mkdir()
+same_output("temp file is a directory")
+same_output("temp file is a directory, compact", "compact")
+(terms / "term_fi.tmp").rmdir()
+# A read-only directory, where this user's permissions are enforced (root and some filesystems ignore the mode).
 terms.chmod(0o500)
 try:
-    same_output("terminals is read-only")
-    assert not (terms / "term_fi.json").exists(), "nothing could be written there"
+    enforced = not os.access(terms, os.W_OK)
+    if enforced:
+        same_output("terminals is read-only")
+        same_output("terminals is read-only, compact", "compact")
+        assert not (terms / "term_fi.json").exists(), "nothing could be written there"
 finally:
     terms.chmod(0o700)
-# 2. A corrupt record, on a startup and on a compaction (which reads the old one to keep its digest).
+# 2. A corrupt record, injected again before each call: a startup rewrites the record, so a compaction after it would
+# read a good one. (A compaction reads the old record to keep its digest.)
 for junk in ("{not json", "[]", '{"session_id": []}', ""):
-    (terms / "term_fi.json").write_text(junk)
-    same_output(f"corrupt record {junk!r}")
-    same_output(f"corrupt record {junk!r} on compact", "compact")
-# 3. A record that is a directory, so reading it fails with an OSError other than "missing".
+    for source in ("startup", "compact"):
+        (terms / "term_fi.json").write_text(junk)
+        same_output(f"corrupt record {junk!r}, {source}", source)
+# 3. A record that is a directory, so reading it fails with an OSError other than "missing" (and replacing it fails).
 (terms / "term_fi.json").unlink()
-(terms / "term_fi.json").mkdir()
-same_output("record is a directory")
-same_output("record is a directory, compact", "compact")
-shutil.rmtree(terms / "term_fi.json")
+for source in ("startup", "compact"):
+    (terms / "term_fi.json").mkdir()
+    same_output(f"record is a directory, {source}", source)
+    shutil.rmtree(terms / "term_fi.json")
 # 4. An unreadable hooks.json (plugin root without one): still the same paragraph, and a warning on stderr only.
 bare = TMP / "bare-root"
 bare.mkdir()
