@@ -4,7 +4,7 @@
 Usage:
   reap-hard run [--dry-run] [--json] [--no-patrol]   one pass; --dry-run decides and logs, and touches nothing (no argument: usage)
   reap-hard last                         the last pass in one line (`orch brief` shows it)
-  reap-hard install [--here] | uninstall | status   macOS LaunchAgent, a pass every `interval` seconds
+  reap-hard install [--here] | uninstall | status   legacy macOS LaunchAgent (setup uses the `reap-hard` Orca automation)
 
 A pass, in order (each later step sees what the earlier ones closed):
   card      an Orca worktree under `workspaces` whose branch PR (its own, never a fork's) is merged or closed and
@@ -604,7 +604,7 @@ def last_line(now=None, interval=None):
     when = time.strftime("%H:%M", time.localtime(s["t"])) + f"({mins}분 전)"
     if s.get("error"):
         return f"🧹 reap-hard {when} 멈춤: {s['error']}"
-    stale = " ⚠️ 주기를 넘김(LaunchAgent 확인)" if now - s["t"] > 3 * interval else ""
+    stale = " ⚠️ 주기를 넘김(Orca 앱·reap-hard 자동화 확인)" if now - s["t"] > 3 * interval else ""
     return f"🧹 reap-hard {when} 닫음 {s['acted']} · 실패 {s['failed']} · 남김 {s['kept']}{stale}"
 
 

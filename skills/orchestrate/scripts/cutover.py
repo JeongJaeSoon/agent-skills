@@ -2,7 +2,8 @@
 """`orch db migrate`: the whole cutover to agent-skills.db in one command, safe to run again.
 
 Run it yourself from a plain terminal, never from a Claude session. It stops what writes the state (the dashboard
-LaunchAgent, agent-skills-sync, a dashboard server nobody manages, the janitor and watch-prs automations), refuses
+LaunchAgent and agent-skills-sync if an older setup left them loaded, a dashboard server nobody manages, the
+janitor, watch-prs, sync and orch-dash automations), refuses
 while a session, process or cron line that runs old code remains (it prints a table and changes nothing), runs the
 import, checks the result, and puts back what it stopped, also when it fails. Already migrated: it says so and
 touches nothing. `--check` lists what it would stop and what stands in the way, and writes nothing.
@@ -21,7 +22,8 @@ import store  # noqa: E402
 ENV_KEYS = ("PROGRAMS_HOME", "ORCH_DASH_LABEL", "ORCH_FLEET", "ORCH_FLEET_STATE", "ORCH_SKILLS", "ORCH_PR_STATS",
             "ORCH_CLAUDE_HOMES")
 RECOVER = "cutover-recover.json"
-JOBS = ("janitor", "janitor-load", "watch-prs")  # the automations whose rounds write while the cutover runs
+# The automations whose rounds write while the cutover runs; sync and orch-dash are what the LaunchAgents became.
+JOBS = ("janitor", "janitor-load", "watch-prs", "sync", "orch-dash")
 
 
 def sh(cmd):
@@ -155,15 +157,26 @@ def _key(s):
     return (s["do"], s.get("label") or s.get("id") or s.get("port"))
 
 
+def _exit(r):
+    """How a command ended, for an error line: a negative code is the signal that killed it (-9: SIGKILL, which
+    an endpoint security agent sends to a blocked process)."""
+    how = f"killed by signal {-r.returncode}" if r.returncode < 0 else f"exit {r.returncode}"
+    err = (r.stderr or "").strip()[:120]
+    return f"{how}{': ' + err if err else ''}"
+
+
 def _stop_one(s):
     """Stop the thing a step puts back, and check that it stopped. Raises Refused when it did not."""
     if s["do"] == "bootstrap":
-        sh(["launchctl", "bootout", f"gui/{_uid()}/{s['label']}"])
+        if not loaded(s["label"]):  # nothing to stop: do not run launchctl at all
+            return
+        r = sh(["launchctl", "bootout", f"gui/{_uid()}/{s['label']}"])
         for _ in range(25):
             if not loaded(s["label"]):
                 return
             time.sleep(0.2)
-        raise store.Refused(f"LaunchAgent {s['label']} is still loaded after bootout")
+        raise store.Refused(f"LaunchAgent {s['label']} is still loaded after bootout ({_exit(r)}): stop it yourself, "
+                            f"then run this again")
     if s["do"] == "enable":
         automations, rec = _jobs().get(s["name"], (None, None))
         if rec is None or rec.get("id") != s["id"]:  # gone or replaced since it was recorded: not this one to stop
@@ -231,7 +244,7 @@ def _undo(s):
             if r.returncode == 0 or loaded(s["label"]):
                 return True, f"{s['label']}: loaded again"
             time.sleep(1)
-        return False, f"{s['label']}: launchctl bootstrap failed: {r.stderr.strip()[:120]}"
+        return False, f"{s['label']}: launchctl bootstrap failed ({_exit(r)})"
     if s["do"] == "server":
         r = sh([sys.executable, str(HERE / "dash.py"), "ensure", "--port", str(s["port"])])
         return r.returncode == 0, f"dashboard server on port {s['port']}: {(r.stdout or r.stderr).strip()[-120:]}"

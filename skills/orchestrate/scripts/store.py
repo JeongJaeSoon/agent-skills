@@ -1057,8 +1057,9 @@ def check_launchers():
             if p.returncode == 0:
                 out.append(f"LaunchAgent {label} is loaded (with or without a pid it restarts old code): "
                            f"launchctl bootout gui/{os.getuid()}/{label}")
-            elif p.returncode == 127:
-                out.append(f"launchctl print {label}: {p.stderr.strip()[:120]}")
+            elif p.returncode != 113:  # 113: no such service. Anything else (127 not run, -9 killed) is not "not loaded"
+                how = f"killed by signal {-p.returncode}" if p.returncode < 0 else f"exit {p.returncode}"
+                out.append(f"launchctl print {label} did not answer ({how}): {p.stderr.strip()[:120]}")
     if not shutil.which("crontab"):
         return out
     p, names = _sh(["crontab", "-l"]), _entry_names()  # cron runs on macOS too
