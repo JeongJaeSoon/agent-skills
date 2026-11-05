@@ -289,6 +289,37 @@ assert status("/api/health", {"Host": f"localhost:{port}"}) == 200
 assert status("/api/health", {"Origin": f"http://127.0.0.1:{port}"}) == 200
 assert status("/", {"Host": f"evil.example:{port}"}) == 200
 assert status("/no-such-page", {"Host": f"evil.example:{port}"}) == 404
+# Only a page saying ?viewed=1 counts as a view of the fleet; a bare read does not keep the fast poll alive.
+dash.FLEET_VIEWED[0] = 0.0
+status("/api/fleet/state", {})
+assert dash.FLEET_VIEWED[0] == 0.0, "a read without ?viewed=1 was counted as a view"
+status("/api/fleet/state?viewed=1", {})
+assert dash.FLEET_VIEWED[0] > 0.0, "?viewed=1 was not counted as a view"
+dash.FLEET_VIEWED[0], dash.FLEET_FORCE[0] = 0.0, False
+dash.FLEET_WAKE.clear()
+# The pressure and sent answers are built once per change of their inputs, not once per poll.
+builds = {"pressure": 0, "sent": 0}
+real_pressure_render, real_sent_render = dash.pressure_render, dash.sent_render
+dash.pressure_render = lambda h: (builds.__setitem__("pressure", builds["pressure"] + 1), real_pressure_render(h))[1]
+dash.sent_render = lambda d: (builds.__setitem__("sent", builds["sent"] + 1), real_sent_render(d))[1]
+try:
+    for _ in range(3):
+        urllib.request.urlopen(f"{base}/api/fleet/pressure?hours=12").read()
+        urllib.request.urlopen(f"{base}/api/fleet/sent?days=2").read()
+    assert builds == {"pressure": 1, "sent": 1}, builds
+    hist = dash.state_root() / "pressure-history.jsonl"
+    hist.parent.mkdir(parents=True, exist_ok=True)
+    with hist.open("a") as f:
+        f.write("\n")
+    urllib.request.urlopen(f"{base}/api/fleet/pressure?hours=12").read()
+    assert builds["pressure"] == 2, "a changed pressure file was not read again"
+    dash.sent.sent_dir().mkdir(parents=True, exist_ok=True)
+    (dash.sent.sent_dir() / "2099-01-01.jsonl").write_text("")
+    urllib.request.urlopen(f"{base}/api/fleet/sent?days=2").read()
+    assert builds["sent"] == 2, "a changed sent log was not read again"
+    (dash.sent.sent_dir() / "2099-01-01.jsonl").unlink()
+finally:
+    dash.pressure_render, dash.sent_render = real_pressure_render, real_sent_render
 # /api/programs revalidates: the same body answers If-None-Match with a 304 and no body.
 etag = urllib.request.urlopen(f"{base}/api/programs").headers["ETag"]
 assert etag, "/api/programs sends an ETag"
@@ -333,10 +364,13 @@ assert next(x for x in wk["rows"] if x["id"] == "docs")["cells"]["dev"]["mark"] 
 sent_api = lambda q: json.loads(urllib.request.urlopen(f"{base}/api/fleet/sent{q}").read())
 assert [sent_api(q)["days"] for q in ("", "?days=99", "?days=0", "?days=7")] == [1, 30, 1, 7]
 real_page, dash.sent.page = dash.sent.page, lambda *a, **k: {}["boom"]
+dash.SENT_CACHES.clear()  # a good answer is kept while the inputs stand; this one has to be built again
 try:
     assert sent_api("?days=1") == {"error": "sent: KeyError: 'boom'"}
+    assert sent_api("?days=1") == {"error": "sent: KeyError: 'boom'"}  # a failure is not kept
 finally:
     dash.sent.page = real_page
+assert "error" not in sent_api("?days=1"), "the failure was served after the page recovered"
 srv.shutdown()
 
 # A ledger backfilled with landings from before the series began rebuilds the series once.
@@ -1082,6 +1116,8 @@ assert "worktree rm" not in app_js
 poll_src = app_js.split("async function pollPrograms()", 1)[1].split("\n}\n", 1)[0]
 assert poll_src.lstrip().startswith("{\n  if (document.hidden || programsBusy) return;"), poll_src[:80]
 assert "if (!document.hidden) { pollState(); pollPrograms(); }" in app_js
+assert 'conditionalFetch("/api/fleet/state", S.fleet, "?viewed=1")' in app_js and 'slug === "fleet" ? "?viewed=1"' in app_js, \
+    "both visible-tab polls of the fleet state must say ?viewed=1"
 assert '"If-None-Match": etag' in app_js and 'r.status === 304' in app_js
 assert "if (changed) renderSidebar();" in poll_src
 assert "POLL_BODY[url] === have" in app_js  # an ETag is sent only for the object it came with
