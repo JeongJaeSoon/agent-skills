@@ -24,7 +24,7 @@ SLASH = re.compile(r"<command-name>/?(?:agent-skills:)?deliver-ticket</command-n
 # `LOAD: none` or the template's `LOAD  none`; not `none-other`, not a LOAD row that only mentions none.
 EXEMPT = re.compile(r"(?m)^[ \t]*`?LOAD`?(?:[ \t]*:|[ \t]{2,})[ \t]*none(?![\w-])")
 BUDGET_S = 1.5
-MAX_LINE = 2 << 20
+MAX_LINE = 8 << 20
 REASON = ("This card edits files but has not loaded deliver-ticket (its brief's LOAD row): load it with the Skill "
           "tool before the next edit. A read-only card says `LOAD: none`. (agent-skills hooks/guard.py, " + KEY + ")")
 
@@ -50,18 +50,17 @@ def result_failed(block):
     return bool(block.get("is_error")) or (isinstance(content, str) and content.lstrip().startswith("Unknown skill"))
 
 
-def loaded(path):
-    """True when the main conversation loaded deliver-ticket, False when it did not, None when that is unknown."""
-    start, pending = time.monotonic(), set()
+def loaded(path, start=None):
+    """True when the main conversation loaded deliver-ticket, False when it did not, None when that is unknown:
+    a record over MAX_LINE (read in pieces, so it never sits in memory whole), a read past BUDGET_S from `start`."""
+    start, pending = start if start is not None else time.monotonic(), set()
     try:
         with open(path, "rb") as f:
-            for raw in f:
-                if time.monotonic() - start > BUDGET_S:
+            while raw := f.readline(MAX_LINE + 1):
+                if time.monotonic() - start > BUDGET_S or len(raw) > MAX_LINE:
                     return None
                 if not (b"deliver-ticket" in raw or any(i.encode() in raw for i in pending)):
                     continue
-                if len(raw) > MAX_LINE:
-                    return None
                 e = json.loads(raw)
                 if not isinstance(e, dict) or e.get("isSidechain"):
                     continue
@@ -95,7 +94,7 @@ def check_write(event, s, cfg):
         return []
     if not inside(args.get("file_path") or args.get("notebook_path"), event.get("cwd")):
         return []
-    transcript = event.get("transcript_path")
-    if EXEMPT.search(roles.first_prompt(transcript)) or loaded(transcript) is not False:
+    start, transcript = time.monotonic(), event.get("transcript_path")
+    if EXEMPT.search(roles.first_prompt(transcript)) or loaded(transcript, start) is not False:
         return []
     return [Finding(KEY, lvl, REASON)]

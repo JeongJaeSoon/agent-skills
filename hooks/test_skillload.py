@@ -1,6 +1,6 @@
 """guard.py with lib/skillload.py: a card's first edit before it loaded deliver-ticket.
 Run: python3 hooks/test_skillload.py"""
-import json, os, pathlib, subprocess, sys, tempfile
+import json, os, pathlib, subprocess, sys, tempfile, time
 
 HERE = pathlib.Path(__file__).resolve().parent
 TMP = pathlib.Path(os.path.realpath(tempfile.mkdtemp()))
@@ -127,6 +127,11 @@ assert skillload.loaded(str(TMP / "absent.jsonl")) is None
 assert skillload.loaded(write_transcript("none", user("hi"))) is False
 huge = write_transcript("huge", user("deliver-ticket " + "x" * (skillload.MAX_LINE + 1)))
 assert skillload.loaded(huge) is None
+unrelated = write_transcript("unrelated", user("x" * (skillload.MAX_LINE + 1)), user("hi"))
+assert skillload.loaded(unrelated) is None, "an oversize record with no keyword is unknown too"
+late = write_transcript("late", user("hi"))
+assert skillload.loaded(late, time.monotonic() - skillload.BUDGET_S - 1) is None, "the budget counts from `start`"
+assert skillload.loaded(late, time.monotonic()) is False
 (TMP / "trunc.jsonl").write_text(json.dumps(user("hi")) + '\n{"type": "assistant", "mess')
 assert skillload.loaded(str(TMP / "trunc.jsonl")) is False, "a half-written last line has no deliver-ticket in it"
 (TMP / "trunc2.jsonl").write_text(json.dumps(user("hi")) + '\n{"type": "assistant", "name": "deliver-ticket", "mess')
