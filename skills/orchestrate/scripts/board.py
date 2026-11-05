@@ -37,7 +37,13 @@ LIMITS = {"row_min": 90, "pr_warn_min": 30, "pr_stale_min": 120, "state_min": 5,
 FILLED = ("fleet:", "agent:")  # the ids of rows derived from the fleet (--fill), not written to the board
 DONE_KEEP_S = 7 * 86400  # a finished lead stays this long with its rows, then leaves the board
 HEADER = ["", "리드/Phase", "PR", "진행", "다음", "세션"]
-SESSION_NAME_W = 12  # the worktree name in a 세션 cell, whose link and Telegram line carry the whole of it
+
+
+def table_rows_of(head, body):
+    """The rows a repository's table is written from, the header first."""
+    return [head] + body
+
+
 PR_LEGEND = (("❗", "사람이 풀 것"), ("✓", "머지 가능"), ("CI✗", "CI 실패"), ("CI…", "CI 진행"), ("?", "PR 상태 없음"))
 SKILLS_CONFIG = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG", "~/.claude/agent-skills.json")).expanduser()
 ASK_WORD = {"request": "의뢰", "remind": "리마인드", "rerequest": "재요청"}
@@ -1220,7 +1226,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     def bar_shown(l):
         return l["progress"] not in ("", "—", None)
 
-    def session_text(l, width=None):
+    def session_text(l):
         """The 세션 cell: the session's state, and the worktree to find it by unless the row's name already says it."""
         s = l["session"]
         if not s:
@@ -1229,11 +1235,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         word = s["word"] + (f" {s['model']}" if s.get("model") else "")  # O, S or H; `!` when off orchestrate.models
         if not name or name.lower() in l["shown"].lower():
             return word
-        if width is not None:
-            width -= len(word) - len(s["word"])  # the mark's columns come out of the name's
-            if width < 1:
-                return word
-        return f"{word} · {name if width is None or len(name) <= width else name[:width] + '…'}"
+        return f"{word} · {name}"
 
     def session_link(l, cell):
         """Its state word as a link to the session's dashboard page while the server runs; a cut cell keeps the word."""
@@ -1452,25 +1454,16 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                 if c == len(head) - 1:
                     return session_link(l, s)
                 return ("└ " if l["depth"] else "") + (f"**{s}**" if l["key"] in changed else s) if c == 1 else s
-            # Only a name or a next step is cut to fit, to its head and `…`, and a name never below the width at which two
-            # different names still differ. A table that cannot be cut that way is written as whole lines, not a table.
-            # The session cell keeps its state word and model mark; only its worktree name gives way, a column at a time,
-            # when the cut name and next step alone do not bring the table to the width. Only then may a cell go
-            # shorter, down to the last of table_width.tiers. Two names never read alike: when no tier fits, the rows
-            # go out whole, one line each.
-            cells = lambda w: [[x for c, x in enumerate(r) if c not in drop] for r in
-                               ([mark(l, l["status"]), l["shown"], l["cell"] or "—", l["progress"], next_cell(l),
-                                 session_text(l, w)] for l in mine)]
-            for keep, floor, name_w in [(k, f, w) for k, f in table_width.tiers((1,)) for w in range(SESSION_NAME_W, -1, -2)]:
-                table = table_width.fit([head] + cells(name_w), COLS, (1, head.index("다음")), floor=floor, deco=dress, keep=keep)
-                if table_width.table_width(table) <= COLS:
-                    break
-            # The dashboard has the page's width: its copy of the report keeps every cell whole.
-            whole = [head] + [[dress(i, c, s) for c, s in enumerate(r)] for i, r in enumerate(cells(None), 1)]
+            # No cell is cut: a name or a reason cut to fit reads alike in every row. A table that is wider than the
+            # width goes out as one whole line per row instead. The dashboard has the page's width and keeps the table.
+            cells = lambda: [[x for c, x in enumerate(r) if c not in drop] for r in
+                             ([mark(l, l["status"]), l["shown"], l["cell"] or "—", l["progress"], next_cell(l),
+                               session_text(l)] for l in mine)]
+            whole = table_rows_of(head, [[dress(i, c, s) for c, s in enumerate(r)] for i, r in enumerate(cells(), 1)])
+            table = whole
             head_md = ["| " + " | ".join(head).strip() + " |", "|---" * len(head) + "|"]
             if table_width.table_width(table) > COLS:
-                # No cut table keeps the names apart in 78 columns: the rows go out as one whole line each, not a table.
-                table = whole
+                # One whole line per row, not a table.
                 swaps.append((len(out) + 1, len(whole) - 1, head_md + [table_width.md_row(row) for row in whole[1:]]))
                 out += [""] + ["- " + " ".join(row[:2]) + (f" — {' · '.join(t)}" if (t := [x for x in row[2:] if x and x != "—"]) else "")
                                for row in whole[1:]]
@@ -1482,17 +1475,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             # table lost is missing and one it wrote twice is a duplicate, whatever the lines handed to it said.
             by_name = {l["shown"]: l for l in mine if l["status"] is not None}
             written = [re.sub(r"^\*\*(.*)\*\*$", r"\1", re.sub(r"^└ ", "", row[1])) for row in table[1:]]
-            # A cut name is what the column's one cap makes of exactly one name that is not written whole. The cap is
-            # the width of the widest cut name or one more (a wide character may leave a column spare).
-            cut_names = [w for w in written if w not in by_name and w.endswith("…")]
-            origin = {}
-            for cap in ((max(map(table_width.text_width, cut_names)) + d for d in (0, 1)) if cut_names else ()):
-                found = {c: [n for n in by_name if n not in written and table_width.shown(n, cap) == c] for c in cut_names}
-                if all(len(v) == 1 for v in found.values()):
-                    origin = {c: v[0] for c, v in found.items()}
-                    break
             for name in written:
-                name = origin.get(name, name)
                 if name in by_name:
                     drawn(by_name[name])
             # Done on every open row the board can close; Ack on a ✅ row not yet acknowledged.

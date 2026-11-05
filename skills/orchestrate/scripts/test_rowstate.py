@@ -66,7 +66,7 @@ ok("board", "later", "add", "octo/app#6 재검토", "--trigger", "10/20 QA 뒤")
 ok("board", "set", "L/gap", "--title", "빈 기록", "--status", "waiting")
 
 out = json.loads(ok("brief", "render", "--periodic", "--now", NOW, "--json", "--no-refresh"))
-text = out["text"]
+text = out["full"]  # the table with every cell whole, whether or not it fits 78 columns
 status = {o["id"]: o["status"] for o in out["open"] if o["kind"] == "row"}
 want = {"row:L/merge": "moving",   # (a) the owner's repository: green and unasked, so the agent merges it
         "row:L/dec": "owner",      # (b) a decision only the owner makes
@@ -283,22 +283,22 @@ assert rolled and any(x["id"] in rolled for x in shown_rows), out["states"]
 assert all(out["now_by_pr"].get(r["pr"]) in (None, out["states"][k]["status"])
            for k, r in board.read()["rows"].items() if k in out["states"] and r.get("pr")), out["now_by_pr"]
 # Placement counts the rows written, not the lines handed to the table: one the table lost is missing.
-real_fit = board.table_width.fit
-board.table_width.fit = lambda rows, *a, **kw: real_fit(rows, *a, **kw)[:-1]
+real_rows_of = board.table_rows_of
+board.table_rows_of = lambda head, body: real_rows_of(head, body)[:-1]
 try:
     lost = board.render(now=T, fill=True, periodic=False)
 finally:
-    board.table_width.fit = real_fit
+    board.table_rows_of = real_rows_of
 assert lost["missing"], lost["missing"]
 # ... and a row written in another's place (same count, same icon) is that other row twice, and this one missing.
-board.table_width.fit = lambda rows, *a, **kw: (lambda t: t[:-1] + [t[-2]])(real_fit(rows, *a, **kw))
+board.table_rows_of = lambda head, body: (lambda t: t[:-1] + [t[-2]])(real_rows_of(head, body))
 try:
     swapped = board.render(now=T, fill=True, periodic=False)
 finally:
-    board.table_width.fit = real_fit
+    board.table_rows_of = real_rows_of
 assert swapped["duplicates"] and swapped["missing"], (swapped["duplicates"], swapped["missing"])
-# Two names too long to keep apart in 78 columns are never cut alike: the repository goes out as whole lines, and both
-# rows are placed once.
+# Two names too long for a 78-column table are never cut: the repository goes out as whole lines, and both rows are
+# placed once.
 HEAD = "shared-prefix-" * 8
 for rid, tail, nxt in (("twin-a", "a", "first"), ("twin-b", "b", "second")):
     board.set_row(rid, title=HEAD + tail, repo="octo/twins", status="moving", next=nxt)
@@ -306,14 +306,7 @@ twin = board.render(now=T, fill=True, periodic=False)
 assert twin["duplicates"] == [] and twin["missing"] == [], (twin["duplicates"], twin["missing"])
 assert [l for l in twin["text"].splitlines() if HEAD + "a" in l and l.startswith("- ")] and \
        [l for l in twin["text"].splitlines() if HEAD + "b" in l and l.startswith("- ")], twin["text"]
-assert twin["width_ok"] is True
-# Names that differ only past a wide character cut to different heads, one a prefix of the other's original: each cut
-# name is placed with its own row.
-for rid, mid in (("odd-a", "가"), ("odd-b", "b")):
-    board.set_row(rid, title="a" * 25 + mid + "x" * 70, repo="octo/odd", status="moving", next="next step " * 20)
-odd = board.render(now=T, fill=True, periodic=False)
-assert odd["duplicates"] == [] and odd["missing"] == [], (odd["duplicates"], odd["missing"])
-# A quiet stage row is kept while its 지금 has work left (⏸️ too), or while the brief's judgment could not be read.
+assert twin["width_ok"] is True# A quiet stage row is kept while its 지금 has work left (⏸️ too), or while the brief's judgment could not be read.
 old = {**stages.table(), "rows": [{**r, "created_at": "2026-01-01T00:00:00Z"} for r in stages.table()["rows"]]}
 assert [r["id"] for r in stages.current(old, T, 60, None, {"octo/app#5": "held"})[0]["rows"]] == ["s1"]
 assert stages.current(old, T, 60, None, {})[0]["rows"] == []

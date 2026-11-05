@@ -215,28 +215,24 @@ PR: ❗ 사람이 풀 것 · CI✗ CI 실패 · CI… CI 진행 · 7자리=머�
 
 **acme/web → feature/notify**
 
-| | 리드/Phase | PR | 진행 | 다음 | 세션 |
-|---|---|---|---|---|---|
-| 🙋 | 알림 정리 | [#50](https://example.test/50) ❗DIRTY→main | ██████░░ 3/4 | ↑ 오너 | 작업 중 |
-| 🔄 | └ 문구 다듬기… | [#54](https://example.test/54) ❗리뷰 CI✗ | ████░░░░ 2/4 | CI 재실… | 작업 중 |
-| ⏳ | └ rev-a 대기 | [#51](https://example.test/51)·#52·#53 | ██████░░ 3/4 | ↓ 대기 | — |
-| 🔄 | 검색 개선 ph3 | — | ███░░░░░ 3/8 | 하위 3… | 작업 중 |
-| 🔄 | └ w2 색인 | — | ██░░░░░░ 2/8 | PR 작성… | 작업 중 |
-| 🔄 | └ 정렬 | [#45](https://example.test/45) CI✗→main | ████░░░░ 4/8 | CI 재실… | 작업 중 |
-| ⏸️ | 검색 개선 ph… | — | ░░░░░░░░ 0/8 | ↓ 보류 | 작업 중 |
-| ✅ | **검색 개선 ph2** | [#42](https://example.test/42) 42c0ffe→main | ████████ 8/8 | — | — |
+- 🙋 알림 정리 — [#50](https://example.test/50) ❗DIRTY→main · ██████░░ 3/4 · ↑ 오너 · 작업 중
+- 🔄 └ 문구 다듬기와 길이 정리 — [#54](https://example.test/54) ❗리뷰 CI✗ · ████░░░░ 2/4 · CI 재실행 뒤 리뷰 의뢰 다시 보내기 · 워커 · 작업 중
+- ⏳ └ rev-a 대기 — [#51](https://example.test/51)·#52·#53 · ██████░░ 3/4 · ↓ 대기
+- 🔄 검색 개선 ph3 — ███░░░░░ 3/8 · 하위 3건 · 워커 · 작업 중
+- 🔄 └ w2 색인 — ██░░░░░░ 2/8 · PR 작성 · 워커 · 작업 중
+- 🔄 └ 정렬 — [#45](https://example.test/45) CI✗→main · ████░░░░ 4/8 · CI 재실행 · 워커 · 작업 중
+- ⏸️ 검색 개선 ph4 · ph5 — ░░░░░░░░ 0/8 · ↓ 보류 · 작업 중
+- ✅ **검색 개선 ph2** — [#42](https://example.test/42) 42c0ffe→main · ████████ 8/8
 
 ✅ 그 전 완료 1건 (대시보드)
 
 **acme/ops → main**
 
-| | 리드/Phase | PR | 진행 | 다음 | 세션 |
-|---|---|---|---|---|---|
-| 🔴 | 정리 작업 | — | ███░░░░░ 1/3 | 재개·정… | 세션 없음 |
-| — | 검색 개선 | — | — | — | — |
-| 🔄 | └ 재색인 | [#88](https://example.test/88)⚠️ ❗리뷰 CI… | ██░░░░░░ 2/8 | 권한 · … | 작업 중 |
-| ⏳ | 분류 | — | — | 에이전트… | 작업 중 |
-| ⏳ | └ rev-b 대… | [#61](https://example.test/61)·#62 | — | ↓ 대기 | — |
+- 🔴 정리 작업 — ███░░░░░ 1/3 · 재개·정리 · 3h 전 · 세션 없음
+- — 검색 개선
+- 🔄 └ 재색인 — [#88](https://example.test/88)⚠️ ❗리뷰 CI… · ██░░░░░░ 2/8 · 권한 · 결정 1 · 작업 중
+- ⏳ 분류 — 에이전트 조치 필요: 누구 대기인지 기록 없음 · 작업 중
+- ⏳ └ rev-b 대기 — [#61](https://example.test/61)·#62 · ↓ 대기
 
 - 🙋 2건 오너 리뷰 — 분야 로그·대시보드
 
@@ -628,14 +624,15 @@ mok("board", "set", "L/ph2", "--kind", "phase", "--status", "moving", "--pr", "a
     "prs": []}))
 merged = json.loads(mok("brief", "render", "--periodic", "--now", NOW, "--json"))
 text = merged["text"]
-assert "| ✅ | ph1 | [#45](https://example.test/45) 45c0ffe | — |" in text, text
-assert "| ✅ | └ 하위 | [#46](https://example.test/46) 46c0ffe | — |" in text, text
-assert "| ⏸️ | ph2 | [#48](https://example.test/48) 닫힘 | ↓ 보류 |" in text and "- PR 닫힘 → L ph2" in text, text
-assert "| ❔ | └ c9 | #47 ? | 에이전트 조치 필요: PR … | 작업 중 |" in text and "- [" not in text and "…[" not in text, text
-# The dashboard's copy of the report keeps the cell whole.
-assert "| ❔ | └ c9 | #47 ? | 에이전트 조치 필요: PR 상태 모름 | 작업 중 |" in merged["full"] and "…" not in merged["full"].split("**acme/web")[1].split("⏸️ **보류**")[0], merged["full"]
+tab = merged["full"]  # the tables with every cell whole, whether or not they fit 78 columns
+assert "| ✅ | ph1 | [#45](https://example.test/45) 45c0ffe | — |" in tab, tab
+assert "| ✅ | └ 하위 | [#46](https://example.test/46) 46c0ffe | — |" in tab, tab
+assert "| ⏸️ | ph2 | [#48](https://example.test/48) 닫힘 | ↓ 보류 |" in tab and "- PR 닫힘 → L ph2" in text, text
+# The row is too wide for 78 columns, so the report has it as a whole line; nothing is cut and nothing is footnoted.
+assert "- ❔ └ c9 — #47 ? · 에이전트 조치 필요: PR 상태 모름 · 작업 중" in text and "- [" not in text and "…" not in text, text
+assert "| ❔ | └ c9 | #47 ? | 에이전트 조치 필요: PR 상태 모름 | 작업 중 |" in tab, tab
 assert "머지 대기" not in text and "ABC-8" not in text and "fleet:lead" not in merged["snapshot"]["rows"], text
-assert "| 🔄 | └ c10 | — | — | 작업 중 |" in text, text
+assert "| 🔄 | └ c10 | — | — | 작업 중 |" in tab, tab
 
 
 class GhDown:  # sessions collected, the PR list not: the headline says the PR states are old
@@ -687,13 +684,14 @@ stamp()
 state = stamp_dir
 text = wok("brief", "render", "--periodic", "--now", NOW)
 mine, theirs, moving = section(text, "🙋 **지금 오너가 할 일**"), section(text, "⏳ **다른 사람 대기**"), section(text, "📌 **카드 없는 일**")
-assert "| 🙋 | └ 내 리뷰 | [#91](https://example.test/91) ❗리뷰 | ↑ 오너 |" in text, text
-assert "| ⏳ | └ 남 리뷰 | [#92](https://example.test/92) ❗리뷰 | ↓ 대기 |" in text, text
-assert "| ⏳ | └ reply 디자인 답변 | — |" in text and "| ❔ | └ ask 누구 대기 | — |" in text, text
+tab = json.loads(wok("brief", "render", "--periodic", "--now", NOW, "--json"))["full"]
+assert "| 🙋 | └ 내 리뷰 | [#91](https://example.test/91) ❗리뷰 | ↑ 오너 |" in tab, tab
+assert "| ⏳ | └ 남 리뷰 | [#92](https://example.test/92) ❗리뷰 | ↓ 대기 |" in tab, tab
+assert "| ⏳ | └ reply 디자인 답변 | — |" in tab and "| ❔ | └ ask 누구 대기 | — |" in tab, tab
 assert mine == ["- 리뷰 · [#91](https://example.test/91) → 내 리뷰"], mine
 assert theirs == ["- rev-x · 리뷰 [#92](https://example.test/92) · 30분 전부터 → 남 리뷰",
                   "- 디자인팀 · 30분 전부터 → reply 디자인 답변 · 다음: 10/15 리마인드"], theirs
-assert "| ❔ | └ ask 누구 대기 | — | 에이전트 조치" in text and not moving, text
+assert "| ❔ | └ ask 누구 대기 | — | 에이전트 조치" in tab and not moving, text
 assert "- [" not in text and "…[" not in text, text
 assert not any(w in l for l in mine + moving for w in ("남 리뷰", "디자인 답변")), (mine, moving)
 assert not any(w in l for l in theirs + moving for w in ("내 리뷰", "캐시 정책")) and "누구 대기" not in "".join(mine + theirs)
@@ -702,7 +700,8 @@ assert "❓ **결정 필요** — 1. (d1) 캐시 정책 → 추천: TTL 1h" in t
 del who_prs["me"]
 (wd / "dashboard" / "prs.json").write_text(json.dumps(who_prs))
 text = wok("brief", "render", "--periodic", "--now", NOW)
-assert "| ❔ | └ 내 리뷰 | [#91](https://example.test/91) ❗리뷰 | 에이전트 조치" in text \
+tab = json.loads(wok("brief", "render", "--periodic", "--now", NOW, "--json"))["full"]
+assert "| ❔ | └ 내 리뷰 | [#91](https://example.test/91) ❗리뷰 | 에이전트 조치" in tab \
     and "- [" not in text and "→ 내 리뷰" not in text, text
 # A waiting row on the owner by name, a check status nobody may set, and 🙋 as a status shorthand.
 assert board.is_owner("오너", None) and board.is_owner("@Octo-Owner", "octo-owner") and not board.is_owner("rev-x", "octo-owner")
@@ -758,9 +757,10 @@ state = stamp_dir
 folded =json.loads(fok("brief", "render", "--periodic", "--now", NOW, "--json"))
 text = folded["text"]
 assert "옛 완료" not in text and "#5" not in text and "acme/old" not in text and "끝난 일" not in text.replace("막 끝난 일", ""), text
-assert "| ✅ | └ 새 완료 | [#2](https://example.test/2) 02c0ffe | — |" in text, text
-assert all(f"| {i} | └ {t} |" in text for i, t in (("🔄", "run 진행"), ("⏳", "wait 대기"), ("⏸️", "hold 보류 행"))), text
-assert "| ✅ | H | — | — |" in text and "| ✅ | └ 막 끝난 일 |" in text, text
+tab = folded["full"]
+assert "| ✅ | └ 새 완료 | [#2](https://example.test/2) 02c0ffe | — |" in tab, tab
+assert all(f"| {i} | └ {t} |" in tab for i, t in (("🔄", "run 진행"), ("⏳", "wait 대기"), ("⏸️", "hold 보류 행"))), tab
+assert "| ✅ | H | — | — |" in tab and "| ✅ | └ 막 끝난 일 |" in tab, tab
 # acme/web counts its old row and card; acme/old (G and its sub-task) is gone whole and counts only in the headline.
 assert text.count("✅ 그 전 완료 2건 (대시보드)") == 1 and "접음 완료 4 (대시보드)" in folded["headline_facts"], text
 assert "F/old" not in folded["snapshot"]["rows"] and "G/t" not in folded["snapshot"]["rows"]
