@@ -4,6 +4,11 @@ import json, os, pathlib, re, shlex, stat, subprocess, sys, tempfile
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import prs as p
 
+# prs.py reads orchestrate.land_executor from $AGENT_SKILLS_CONFIG: point it at a file that does not exist, so no
+# test, subprocesses included, reads the developer's real ~/.claude file.
+ABSENT = str(pathlib.Path(tempfile.mkdtemp()) / "absent.json")
+os.environ["AGENT_SKILLS_CONFIG"] = ABSENT
+
 ME = "owner"
 NOW = 1_800_000_000.0
 DAY = 86400
@@ -878,7 +883,6 @@ assert p.compute(MergeFake([mpr(1)]), ecfg, p.read_json(xtmp / "prs" / "ledger.j
 
 # The executor's repos come from the file `orch land` reads ($AGENT_SKILLS_CONFIG, else the default), not from
 # --config or a prs key; off, or not exactly enabled: true, means none.
-saved_env = os.environ.get("AGENT_SKILLS_CONFIG")
 xconf, envconf = xtmp / "x.json", xtmp / "env.json"
 xconf.write_text(json.dumps({"prs": {"land_executor_repos": ["spoofed/repo"]},
                              "orchestrate": {"land_executor": {"enabled": True, "repos": ["acme/other"]}}}))
@@ -909,10 +913,14 @@ envconf.write_text(json.dumps({"orchestrate": {"land_executor": {"enabled": True
 assert p.compute(MergeFake([mpr(1)]), p.config(mconf) | {"kinds": ["ready_to_merge"]}, {}, NOW)["new"][0].get("cmd") is None
 envconf.unlink()
 assert p.config(xconf)["land_executor_repos"] == [], "no file: the executor is off, as for orch land"
-if saved_env is None:
-    os.environ.pop("AGENT_SKILLS_CONFIG")
-else:
-    os.environ["AGENT_SKILLS_CONFIG"] = saved_env
+# Without $AGENT_SKILLS_CONFIG the default file decides, even under another --config.
+real_default = p.CONFIG
+p.CONFIG = xtmp / "default.json"
+p.CONFIG.write_text(json.dumps({"orchestrate": {"land_executor": {"enabled": True, "repos": ["acme/default"]}}}))
+os.environ.pop("AGENT_SKILLS_CONFIG")
+assert p.config(xconf)["land_executor_repos"] == ["acme/default"]
+p.CONFIG = real_default
+os.environ["AGENT_SKILLS_CONFIG"] = ABSENT
 
 # Kinds share the ledger key shape: the head ready_to_merge recorded is still due as unreleased once merged.
 shared = {"acme/widgets#20@m20": {"at": NOW, "kind": "ready_to_merge", "id": "x"}}
