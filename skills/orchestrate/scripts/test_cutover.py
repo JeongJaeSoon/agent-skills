@@ -348,6 +348,16 @@ with world() as (w, sd):
     finally:
         dash.health = real_health
     assert cutover.load_plan() == [{"do": "server", "port": 4995}]
+# an error while reading the mark must not skip putting the other services back
+with world() as (w, sd):
+    want = w.plan()
+    real_add = cutover.add_yielded_server
+    cutover.add_yielded_server = lambda: (_ for _ in ()).throw(OSError("disk"))
+    try:
+        code, out, err = run()
+    finally:
+        cutover.add_yielded_server = real_add
+    assert code == 1 and "could not read the dashboard's mark" in err and w.plan() == want, (out, err)
 # a run killed after reading the mark and before saving the plan leaves the mark for the next run
 with world() as (w, sd):
     store.mark_dash_yielded(4994)

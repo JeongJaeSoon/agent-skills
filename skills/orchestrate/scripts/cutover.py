@@ -388,7 +388,11 @@ def main(argv):
                     code = run()
             except (Exception, KeyboardInterrupt) as e:  # whatever went wrong, what was stopped is put back below
                 print(f"stopped: {e}" if str(e) else "interrupted", file=sys.stderr)
-            add_yielded_server()  # a server that ended itself under the lock, wherever the probes above fell
+            try:
+                add_yielded_server()  # a server that ended itself under the lock, wherever the probes above fell
+            except (Exception, KeyboardInterrupt) as e:  # the other services are still put back; the mark stays for next time
+                print(f"could not read the dashboard's mark: {e}" if str(e) else "interrupted", file=sys.stderr)
+                code = code or 1
             ok, lines = recover()  # cutover.lock is released: the dashboard may start again now
             for line in lines:
                 print(line)
