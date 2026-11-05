@@ -34,7 +34,7 @@ def term(handle, agent, silent_s, screen=None):
 
 def fake(branch_prs=(), terminals=(), local_landed=False, compare=None, ahead="", remote_log="", patches=None,
          status="", calls=None, behind_pr=False, reflog=None):
-    """A runner answering the commands gather() issues. compare: GitHub's ahead_by, or "404". reflog: HEAD's reflog
+    """A runner answering the commands gather() issues. compare: GitHub's ahead_by, "404", or "fail" (unreadable). reflog: HEAD's reflog
     (`HEAD@{<unix time>}\\t<subject>` per line, newest first); default is a card with a commit of its own, 3 days old."""
     reflog = f"HEAD@{{{NOW - 3 * 86400:.0f}}}\tcommit: work\n" if reflog is None else reflog
     screens = {t["handle"]: t.pop("_screen") for t in terminals}
@@ -81,6 +81,8 @@ def fake(branch_prs=(), terminals=(), local_landed=False, compare=None, ahead=""
             if "compare" in c:
                 if compare == "404":
                     errors is not None and errors.append("gh api: Not Found (HTTP 404)")
+                    return None
+                if compare == "fail":
                     return None
                 return f"{compare}\n"
         if cmd[:3] == ["orca", "terminal", "list"]:
@@ -621,16 +623,13 @@ assert (off["stale_s"], off["close_s"]) == (None, None), off
 f = cards.gather({"path": CARD}, machine(quiet=30 * H), fake(local_landed=True, terminals=[term("a1", True, 30 * H)]))
 assert cards.judge(f, IDLE, off["stale_s"], off["close_s"])[0] == cards.KEEP
 assert idle8b("세션 기록을 읽지 못함", 30 * H, local_landed=True)[0] == cards.KEEP
-# A keep for a reflog that could not be read is not timed out either, however long the card is quiet.
-f = cards.gather({"path": CARD}, machine(quiet=30 * H), fake(local_landed=True, terminals=[term("a1", True, 30 * H)]))
-f["own_commit"] = None
-st = cards.settled(f, ["a1"], False, True, True)
-assert st == (cards.KEEP, cards.REFLOG_UNREAD, []), st
-cards.settled, real_settled = (lambda *a: st), cards.settled
-try:
-    assert cards.judge(f, IDLE, ST["stale_s"], ST["close_s"]) == st
-finally:
-    cards.settled = real_settled
+# Git state that could not be read is not timed out either, whichever keep settled() names first: a live session's
+# LIVE_UNDONE comes before the reflog check, and a merged PR the card moved past needs GitHub's compare.
+assert idle8b(3 * H, 3 * H, local_landed=True)[0] == cards.CLOSE
+assert idle8b(3 * H, 3 * H, local_landed=True, reflog="UNREADABLE")[0] == cards.KEEP
+f = cards.gather({"path": CARD}, machine(quiet=30 * H, prs=CLOSED_OLD), fake(branch_prs=[PR], compare="fail", terminals=[term("a1", True, 30 * H)]))
+assert f["pr"] and not f["carried"] and f["landed"] is None, f
+assert cards.judge(f, IDLE, ST["stale_s"], ST["close_s"])[0] == cards.KEEP
 m = machine(rows=rows3, cwd_of={30: CARD}, quiet=30 * H)
 v = cards.judge(cards.gather({"path": CARD}, m, fake(local_landed=True)), IDLE, ST["stale_s"], ST["close_s"])
 assert v[0] == cards.KEEP, ("a headless session has no terminal to close", v)

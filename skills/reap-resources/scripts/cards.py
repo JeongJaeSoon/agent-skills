@@ -308,8 +308,13 @@ def judge(f, idle_s, stale_s=None, close_s=None):
     verdict = settled(f, handles, live, said_done, agents_idle)
     # 8b: "done" on the screen is no evidence of hours of quiet, and a keep for what could not be read is not timed out.
     limit = close_s if verdict[1] == LIVE_UNDONE else stale_s
-    git_state_known = f.get("unpushed") is not None and (f.get("pr") or f.get("landed") is not None) \
-        and verdict[1] != REFLOG_UNREAD
+    # Judged from what gather() read, not from the verdict's wording: settled() can return an earlier keep (LIVE_UNDONE)
+    # before it reaches the check that would have named what it could not read.
+    if f.get("pr"):
+        read = f.get("carried") or f.get("landed") is not None
+    else:
+        read = f.get("landed") is not None and (not f["landed"] or None not in (f.get("own_commit"), f.get("age")))
+    git_state_known = f.get("unpushed") is not None and read
     if verdict[0] == KEEP and limit and git_state_known and agents and handles and isinstance(quiet, (int, float)) \
             and quiet >= limit and all(t.get("output_known") and t["silent"] >= limit for t in agents):
         where = f" ({f['transcripts']})" if f.get("transcripts") else ""
