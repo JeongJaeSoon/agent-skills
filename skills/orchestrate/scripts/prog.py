@@ -3111,53 +3111,80 @@ def review_lines(p, workers=None, tasks=None, unknown=frozenset()):
 WAKE_DUE_S = 1800  # sync.py's WAKE_PENDING_S
 
 
-def take(box):
-    """The owner's consuming check, under a retry id chosen here: an answer lost on the way is asked for again with
-    the same id, and Orca replays the same batch instead of handing out the next one."""
+def take(box, pending=None):
+    """The owner's consuming check, under a retry id chosen before it: an answer lost on the way is asked for again
+    with the same id, and Orca replays the same batch instead of handing out the next one. With `pending`, the id is
+    written there first, so a wait that died with the answer lost twice replays it on its next start; the caller
+    clears it (`done_take`) once the batch is printed."""
     import uuid
-    rid = str(uuid.uuid4())
+    rid = None
+    if pending is not None:
+        with contextlib.suppress(OSError, ValueError):
+            rid = json.loads(pending.read_text()).get("retry_request")
+    rid = rid or str(uuid.uuid4())
+    if pending is not None:
+        pending.parent.mkdir(parents=True, exist_ok=True)
+        pending.write_text(json.dumps({"retry_request": rid, "box": list(box)}))
     try:
         return batch(check(*box, "--retry-request", rid))
     except SystemExit:
         return batch(check(*box, "--retry-request", rid))
 
 
-WAIT_TAKES = 20  # batches one wait takes before it returns what it has: a bound on an inbox that keeps filling
+def done_take(pending):
+    if pending is not None:
+        with contextlib.suppress(OSError):
+            pending.unlink(missing_ok=True)
 
 
-def wait_take(box, timeout_ms, clock=time.monotonic, out=print):
-    """One lead wait: ([delivery ids], [messages], {ids already printed}) once an ACTIONABLE message is taken, or at
-    the timeout with whatever else was taken.
+def wait_take(box, timeout_ms, clock=time.monotonic, out=print, pending=None):
+    """One lead wait: ([delivery ids], [messages], {ids already printed}, actionable). It returns once an ACTIONABLE
+    message is taken (actionable True; that last batch is neither printed nor acked here, and `pending` stays for the
+    caller to clear after printing it), or at the timeout.
 
     The wait is a peek with no --types: a typed wait leaves Orca's "You have N orchestration message" nudge on, which
     wakes the lead a second time for the same mail. An untyped peek wakes on any unread row, so the owner takes each
     batch it wakes for; status mail is printed at once (a killed wait leaves it in the output file), heartbeats are
-    only acked, and the wait goes on for the time left. Each taken batch is acked as well, for an older Orca."""
+    only acked, and the wait goes on for the time left. Each such batch is acked for an older Orca, whose ack may hand
+    out the next batch: that one is handled like a take."""
     end = clock() + int(timeout_ms) / 1000
     dids, msgs, shown = [], [], set()
-    for _ in range(WAIT_TAKES):
-        left = int((end - clock()) * 1000)
-        _, unread = batch(check(*box, "--peek", "--wait", "--timeout-ms", str(max(left, 1000))))
-        if not unread:  # the timeout: nothing to take
-            break
-        did, got = take(box)
-        if not did and not got:  # rows peeked but none handed out: waiting again would spin on them
+    replay = pending is not None and pending.exists()  # a request a dead wait left: replay it before waiting
+    got_next = None
+    while True:
+        if got_next is not None:
+            did, got = got_next
+            got_next = None
+        else:
+            if not replay:
+                left = int((end - clock()) * 1000)
+                wait = ["--wait", "--timeout-ms", str(max(left, 1000))] if left > 0 else []
+                _, unread = batch(check(*box, "--peek", *wait))
+                if not unread:
+                    break
+            replay = False
+            did, got = take(box, pending)
+            if not did and not got:  # rows peeked but none handed out: waiting again would spin on them
+                break
+        if did and did in dids:  # the same batch again: Orca is not moving, stop rather than spin
             break
         if did:
             dids.append(did)
         msgs += got
         if any(m.get("type") in ACTIONABLE and not revoked_echo(m) for m in got):
-            break
+            return dids, msgs, shown, True
         for m in got:
             if m.get("type") != "heartbeat" and not revoked_echo(m):
                 out(inbox_line(m), flush=True)
                 shown.add(m.get("id"))
+        done_take(pending)
         if did:
             with contextlib.suppress(SystemExit):
-                check(*box, "--ack", did)
-        if clock() >= end:
+                nxt = batch(check(*box, "--ack", did))
+                got_next = nxt if (nxt[0] or nxt[1]) else None
+        if got_next is None and clock() >= end:
             break
-    return dids, msgs, shown
+    return dids, msgs, shown, False
 
 
 def cmd_wait(argv):
@@ -3205,15 +3232,17 @@ def cmd_wait(argv):
         auto = auto_round()  # here too: busy mail returns before the empty branch below and would starve a wake
         if auto.stop:
             return
-        dids, msgs, shown = wait_take(box, auto.timeout_ms(timeout))
+        pending = p.dir / "wait-request.json"
+        dids, msgs, shown, actionable = wait_take(box, auto.timeout_ms(timeout), pending=pending)
         did = dids[-1] if dids else None
         work = [m for m in msgs if m.get("type") != "heartbeat" and not revoked_echo(m)]
         for m in msgs:
             if revoked_echo(m):
                 print(f"ignored: Orca refused a {m.get('type')} from released dispatch {revoked_echo(m)}", flush=True)
-        if work:
+        if actionable:
             if fresh := [m for m in work if m.get("id") not in shown]:
-                print("\n".join(map(inbox_line, fresh)))
+                print("\n".join(map(inbox_line, fresh)), flush=True)
+            done_take(pending)
             closed = {payload_of(m).get("dispatchId") for m in work if m.get("type") == "worker_done"}
             if closed:
                 try:
@@ -3228,9 +3257,10 @@ def cmd_wait(argv):
             print(f"ACTIONABLE delivery={did} ({len(work)} of {len(msgs)}): process every message, then "
                   f"orca orchestration check {' '.join(box)} --ack {did} --json")
             return
-        if did:
-            check(*box, "--ack", did)
-        print(f"wait {i + 1}/{rounds}: nothing actionable ({len(msgs)} heartbeat(s) or refusals acked)", flush=True)
+        # Every batch of this round was acked inside wait_take; status mail in it is printed above.
+        statuses = f", {len(shown)} status message(s) above" if shown else ""
+        print(f"wait {i + 1}/{rounds}: nothing actionable ({len(msgs) - len(shown)} heartbeat(s) or refusals acked"
+              f"{statuses})", flush=True)
         if print_stuck(p, run_id, only_new=True):
             print_sweep(run_id, p.dir / "self-check.json")
             print("STUCK: a worker waits on a prompt nobody sees; answer or escalate it now", flush=True)
