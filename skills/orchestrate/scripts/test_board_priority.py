@@ -260,8 +260,10 @@ try:
                       ("folded match", {**rule, "id": "prio:program:a\tb", "match": "program:a\tb"})):
         (exported / "bad.json").write_text(json.dumps({**saved, "groups": {bad["id"]: bad}}))
         assert any("priority rule" in p for p in store_db._legacy_board(exported / "bad.json")[1]), what
-    (exported / "bad.json").write_text(json.dumps({**saved, "rows": {"x": {"id": "x", "kind": "group"}}}))
-    assert any("kind group" in p for p in store_db._legacy_board(exported / "bad.json")[1]), "a plain row cannot be a rule"
+    for rid, kind in (("x", "group"), ("prio:program:x", "lead")):
+        (exported / "bad.json").write_text(json.dumps({**saved, "rows": {rid: {"id": rid, "kind": kind}}}))
+        assert any("priority rules" in p for p in store_db._legacy_board(exported / "bad.json")[1]), rid
+    assert "cannot start with prio:" in forch("board", "set", "prio:program:x", "--repo", "acme/web", expect=1)
     store_db.load_board(saved)
     assert store_db.board()["groups"] == rules and "prio:repo:acme/web" not in store_db.board()["rows"]
 finally:

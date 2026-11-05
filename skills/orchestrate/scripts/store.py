@@ -1122,8 +1122,8 @@ def _legacy_board(p):
     for rid, r in out["rows"].items():
         if not isinstance(r, dict) or r.get("id") != rid or not r.get("kind"):
             bad.append(f"row {rid}: id does not match its key, or no kind")
-        elif r["kind"] == GROUP_KIND:
-            bad.append(f"row {rid}: kind {GROUP_KIND} is for priority rules, which belong under groups")
+        elif r["kind"] == GROUP_KIND or rid.startswith("prio:"):
+            bad.append(f"row {rid}: kind {GROUP_KIND} and ids starting prio: are for priority rules, which belong under groups")
     for name, l in out["leads"].items():
         if not isinstance(l, dict):
             bad.append(f"lead {name}: not an object")

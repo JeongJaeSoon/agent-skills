@@ -181,6 +181,8 @@ def put(store, rid, fields):
     rows = store["rows"]
     row = rows.get(rid)
     if not row:
+        if rid.startswith("prio:"):  # the ids of the priority rules (board priority set)
+            raise ValueError("a row id cannot start with prio: (those are priority rules)")
         parent = fields.get("parent") or (rid.rsplit("/", 1)[0] if "/" in rid else None)
         if parent and parent not in rows:
             raise ValueError(f"no row {parent} to be the parent; add it first")
@@ -921,11 +923,14 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         store["rows"], store["order"] = {**extra, **store["rows"]}, store["order"] + extra_order
     rows = store["rows"]
 
-    def up(r, field):
+    everyone = rows  # every row, before a --scope report keeps only its program's: a group does not depend on the scope
+
+    def up(r, field, table=None):
+        table = rows if table is None else table
         while r is not None:
             if r.get(field):
                 return r[field]
-            r = rows.get(r.get("parent"))
+            r = table.get(r.get("parent"))
         return None
 
     rules = priority_rules(store.get("groups") or {})
@@ -940,7 +945,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         program's rule, else the repository's. A subagent row is first its host's. A fleet row (a lead or card the
         board has no row of) has only rules."""
         if r.get("host"):  # a subagent follows the row subagent_rows() found for its host: the host's own row first
-            host = rows.get(r.get("host_row"))  # (that row's own value, then the host worktree's rule), else a row above it
+            host = everyone.get(r.get("host_row"))  # (that row's own value, then the host worktree's rule), else a row above it
             mine = host is not None and host is not r and r["host"] in worktrees(host)
             if mine and host.get("priority"):
                 return host["priority"]
@@ -954,8 +959,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                 return n["priority"]
             if g := next((rules["worktree"][w] for w in worktrees(n) if w in rules["worktree"]), None):
                 return g
-            n = rows.get(n.get("parent"))
-        return rules["program"].get(up(r, "program")) or rules["repo"].get(up(r, "repo"))
+            n = everyone.get(n.get("parent"))
+        return rules["program"].get(up(r, "program", everyone)) or rules["repo"].get(up(r, "repo", everyone))
 
     def lead_of(r):
         while r.get("parent") in rows:
