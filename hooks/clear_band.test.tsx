@@ -29,8 +29,8 @@ const turn = (answer: string) => ({
 const verdict = (v: object) =>
   out(JSON.stringify({ show: true, ready: false, context: 150_000, threshold: 130_000, reason: '', ...v }) + '\n')
 
-async function bandText($: Parameters<Parameters<typeof test>[1]>[0]): Promise<string> {
-  const ui = await $.ui.mount(BAND)
+async function bandText($: Parameters<Parameters<typeof test>[1]>[0], isWorking = false): Promise<string> {
+  const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, isWorking } })
   const text = (await ui.findAll({ type: 'Text' })).map(t => t.text).join(' ')
   await ui.unmount()
   return text
@@ -51,11 +51,14 @@ test('asks orch only past the floor, says when /clear is safe, rechecks every mi
   let agents = [{ id: 'a1', description: 'reboot check', type: 'general-purpose', status: 'running' }]
   on('agent.list', () => ({ value: agents }))
   on('turn.complete', (_, e) => ({ text: e.answer }))
+  // What the engine draws there itself stays under the band.
   on('ui.render', ($, e) => {
-    const { Box } = $.ui.resolve(e)
-    return <Box />
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
   })
+  let fail = false
   on('process.run', (_, e) => {
+    if (fail) throw new Error('spawn refused')
     argvs.push([...e.argv])
     return results.shift() ?? verdict({ show: false })
   })
@@ -63,7 +66,7 @@ test('asks orch only past the floor, says when /clear is safe, rechecks every mi
   await $.turn.complete(turn('done'))
   await clock.settle()
   expect(argvs).toHaveLength(0)
-  expect(await bandText($)).toBe('')
+  expect(await bandText($)).toBe('engine')
 
   tokens = 150_000
   await $.turn.complete(turn('done'))
@@ -76,12 +79,25 @@ test('asks orch only past the floor, says when /clear is safe, rechecks every mi
   await clock.advance(60_000)
   expect(argvs).toHaveLength(2)
   expect(await bandText($)).toContain('/clear is safe')
+  expect(await bandText($)).toContain('engine')
+  // While a turn runs, the verdict from before it is not shown as safe.
+  expect(await bandText($, true)).not.toContain('/clear is safe')
 
   await $.turn.complete(turn('which one should I land first?'))
   await clock.settle()
   expect(argvs[2]?.at(-1)).toBe('--asking')
   expect(await bandText($)).toContain('asks a question')
 
+  // A check that throws is shown, not a silent blank, and the minute timer tries again.
+  fail = true
+  await $.turn.complete(turn('done'))
+  await clock.settle()
+  expect(await bandText($)).toContain('clear check: check failed:')
+  expect(await bandText($)).not.toContain('/clear is safe')
+  fail = false
+  await clock.advance(60_000)
+  expect(argvs).toHaveLength(4)
+
   session = 'sess-2'
-  expect(await bandText($)).toBe('')
+  expect(await bandText($)).toBe('engine')
 })

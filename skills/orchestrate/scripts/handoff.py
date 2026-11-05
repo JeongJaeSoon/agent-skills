@@ -103,8 +103,8 @@ def text(key):
 
 
 def role_key(session):
-    """The handoff key of a declared orchestrator or lead session, else None."""
-    entry = roles.declared(session) or {}
+    """The handoff key of an orchestrator or lead session (a ROLE line or `--agent`), else None."""
+    entry = roles.role_of(session) or {}
     if entry.get("role") == "orchestrator":
         return "orchestrator"
     if entry.get("role") == "lead" and entry.get("slug"):
@@ -158,6 +158,9 @@ def ready(session, context, asking, now=None, peek=unread, agents=0):
         return out
     if waiting:
         out["reason"] = f"{len(waiting)} message(s) in the inbox"
+        return out
+    if handle and inbox_stream.holding(handle):
+        out["reason"] = "the inbox stream holds mail it has not shown yet"
         return out
     now = time.time() if now is None else now
     last = store.last_session_event(key, "handoff")

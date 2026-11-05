@@ -209,6 +209,39 @@ def declared(session):
     return record if isinstance(record, dict) else None
 
 
+def resolved_file(session):
+    return state() / "roles-resolved" / f"{session}.json"
+
+
+def record_resolved(session, entry):
+    """What resolve() gave this session at SessionStart (an `--agent` role has no ROLE record), for scripts that have no
+    hook event to resolve from. None removes it."""
+    if not SESSION.fullmatch(session or ""):
+        return
+    path = resolved_file(session)
+    try:
+        if entry:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(entry))
+        else:
+            path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def role_of(session):
+    """The session's orchestrator or lead entry without a hook event: its ROLE record (`ROLE: none` answers None),
+    else what SessionStart resolved."""
+    record = declared(session)
+    if record:
+        return record if record.get("role") in ("orchestrator", "lead") else None
+    try:
+        entry = json.loads(resolved_file(session).read_text())
+    except (OSError, ValueError):
+        return None
+    return entry if isinstance(entry, dict) and entry.get("role") in ("orchestrator", "lead") else None
+
+
 def declare(session, prompt):
     """Records the prompt's last ROLE line and returns the session's record; None when it never declared."""
     found = ROLE_LINE.findall(prompt or "")

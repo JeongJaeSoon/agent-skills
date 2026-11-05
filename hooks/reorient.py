@@ -266,6 +266,7 @@ def main():
             except OSError:
                 pass
         entry = resolve(event, record)
+        roles.record_resolved(session, entry)
         try:
             register(event, session, entry, record)
         except OSError:

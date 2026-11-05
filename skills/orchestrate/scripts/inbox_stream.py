@@ -42,6 +42,7 @@ import roles  # noqa: E402
 
 TTL_MS = 1_740_000  # Claude Code kills a Monitor at 30 minutes; end a minute before, never inside a round
 TICK_S = 60
+DEBOUNCE_S = 300
 URGENT = {"question", "escalation", "worker_done"}
 URGENT_SUBJECT = re.compile(r"\b(READY|BLOCKED|STUCK)\b")
 
@@ -119,7 +120,7 @@ def ts_age(ts, now):
 
 
 class Stream:
-    def __init__(self, me, key="orchestrator", debounce=300, ttl_ms=TTL_MS, cards=True, threshold=None, out=None,
+    def __init__(self, me, key="orchestrator", debounce=DEBOUNCE_S, ttl_ms=TTL_MS, cards=True, threshold=None, out=None,
                  clock=time.monotonic, now=time.time, session=session_of, ctx=context, spawn=None, clear=type_clear,
                  store=None):
         self.me, self.key, self.debounce, self.ttl, self.cards = me, key, debounce, ttl_ms / 1000, cards
@@ -152,15 +153,21 @@ class Stream:
     def mail(self, deadline):
         did, work, revoked = self.take()
         dids = [did] if did else []
+        error = None
         if work and not urgent(work):
+            # Mail taken but not yet printed: the clear band must not call the inbox empty meanwhile.
+            hold(self.me, True)
             until = min(self.clock() + self.debounce, deadline)
-            while self.clock() < until:
-                self.wait(until - self.clock())
-                d2, w2, r2 = self.take()
-                dids += [d2] if d2 else []
-                work, revoked = work + w2, revoked + r2
-                if urgent(w2):
-                    break
+            try:
+                while self.clock() < until:
+                    self.wait(until - self.clock())
+                    d2, w2, r2 = self.take()
+                    dids += [d2] if d2 else []
+                    work, revoked = work + w2, revoked + r2
+                    if urgent(w2):
+                        break
+            except SystemExit as e:  # what was taken goes out now; the error ends this round after it
+                error = e
         lines = [f"ignored: Orca refused a repeat from released dispatch {d}" for d in revoked]
         if work:
             lines += list(map(one_line, work))
@@ -169,9 +176,12 @@ class Stream:
             self.last_mail = self.clock()
             lines += self.due(force=True)
         self.emit(lines)
+        hold(self.me, False)
         for d in dids:  # an older Orca marks a batch read only on --ack; a newer one treats it as a no-op
             with contextlib.suppress(SystemExit):
                 prog.check("--ack", d)
+        if error is not None:
+            raise error
         return bool(work)
 
     def _spawn(self, left_ms):
@@ -220,16 +230,29 @@ class Stream:
         if not last or not isinstance(last[1], dict):
             return []
         ts, req = last
-        if req.get("stage") != "requested" or req.get("handle") != self.me or req.get("session") != self.session:
+        if req.get("stage") != "requested" or req.get("handle") != self.me:
             return []
-        if (age := ts_age(ts, self.now())) is not None and age > REQUEST_TTL_S:
-            self.store.session_event(self.key, "restart", {**req, "stage": "expired"}, by="orch inbox --stream")
+        by = "orch inbox --stream"
+        req = {**req, "requested_at": req.get("requested_at") or ts}
+        import handoff
+        if not handoff.auto_clear_on():
+            self.store.session_event(self.key, "restart", {**req, "stage": "off"}, by=by)
+            return ["RESTART OFF: orchestrate.auto_clear is no longer true, so the /clear asked for is not typed"]
+        if self.session_of(self.me) != req.get("session"):  # the live record: a /clear may have come meanwhile
+            self.store.session_event(self.key, "restart", {**req, "stage": "stale"}, by=by)
+            return []
+        if (age := ts_age(req["requested_at"], self.now())) is not None and age > REQUEST_TTL_S:
+            self.store.session_event(self.key, "restart", {**req, "stage": "expired"}, by=by)
             return [f"RESTART EXPIRED: the screen was not idle for {REQUEST_TTL_S // 60} min; ask again with "
                     "`orch handoff save --restart` when the turn is quiet"]
+        # Claimed before typing: if the claim cannot be written nothing is typed, and once written no later round
+        # types again whatever happens after it.
+        self.store.session_event(self.key, "restart", {**req, "stage": "typing"}, by=by)
         why = self.clear(self.me)
         if why is None or "taken" in why:
-            self.store.session_event(self.key, "restart", {**req, "stage": "sent", "confirmed": why is None},
-                                     by="orch inbox --stream")
+            self.store.session_event(self.key, "restart", {**req, "stage": "sent", "confirmed": why is None}, by=by)
+        else:  # nothing was typed (the screen was busy): ask again next round
+            self.store.session_event(self.key, "restart", {**req, "stage": "requested"}, by=by)
         return []
 
     def cleared(self):
@@ -298,6 +321,29 @@ def lock_path(me):
     return roles.state() / "inbox-stream" / f"{me or 'none'}.lock"
 
 
+def hold_path(me):
+    return roles.state() / "inbox-stream" / f"{me or 'none'}.holding"
+
+
+def hold(me, on):
+    """Mark (or clear) that this terminal's stream holds mail it took and has not printed yet."""
+    path = hold_path(me)
+    with contextlib.suppress(OSError):
+        if on:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(str(time.time()))
+        else:
+            path.unlink(missing_ok=True)
+
+
+def holding(me):
+    """Whether the stream holds unprinted mail; a mark older than a debounce window and a round is a dead stream's."""
+    try:
+        return time.time() - float(hold_path(me).read_text()) < DEBOUNCE_S + TICK_S * 2
+    except (OSError, ValueError):
+        return False
+
+
 @contextlib.contextmanager
 def only_stream(me):
     """One stream per terminal: a second one would take mail the first never shows. Yields False when one runs."""
@@ -334,7 +380,7 @@ def main(argv):
     me = os.environ.get("ORCA_TERMINAL_HANDLE")
     if not me or not roles.SESSION.fullmatch(me):
         sys.exit("orch inbox --stream reads this terminal's inbox: run it in an Orca terminal (ORCA_TERMINAL_HANDLE)")
-    stream = Stream(me, key=prog.opt(argv, "--key", "orchestrator"), debounce=int(prog.opt(argv, "--debounce", "300")),
+    stream = Stream(me, key=prog.opt(argv, "--key", "orchestrator"), debounce=int(prog.opt(argv, "--debounce", str(DEBOUNCE_S))),
                     ttl_ms=int(prog.opt(argv, "--ttl-ms", str(TTL_MS))), cards="--no-cards" not in argv)
 
     def on_term(*_):

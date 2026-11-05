@@ -54,8 +54,12 @@ async function check($: EngineInterface): Promise<void> {
     if (got.show && !timer) timer = $.clock.every(PERIOD_MS, () => void check($))
     if (!got.show) stop()
   } catch (error) {
-    const why = error instanceof Error ? error.message : String(error)
-    await update($, view, old => (old ? { ...old, error: `check failed: ${why}`.slice(0, 160) } : old))
+    const why = `check failed: ${error instanceof Error ? error.message : String(error)}`.slice(0, 160)
+    const session = await $.session.id().catch(() => '')
+    const blank = { show: true, ready: false, context: 0, threshold: 0, reason: '', session }
+    await update($, view, old => ({ ...(old ?? blank), ready: false, error: why }))
+    // The timer is the retry: without it a first failure would leave the band blank until the next turn.
+    if (!timer) timer = $.clock.every(PERIOD_MS, () => void check($))
   } finally {
     running = false
   }
@@ -81,25 +85,26 @@ export const register: Register = on => {
     // After a /clear the session id is new: what the band said belonged to the old session.
     if (!state || !state.show || state.session !== (await $.session.id())) return next(e)
     const { Box, Text } = $.ui.resolve(e)
+    let line
     if (state.error !== '') {
-      return (
-        <Box>
-          <Text dimColor>context {k(state.context)} · clear check: {state.error}</Text>
-        </Box>
+      line = <Text dimColor>clear check: {state.error}</Text>
+    } else if (e.props.isWorking) {
+      // A verdict from before this turn says nothing about the work it started.
+      line = <Text dimColor>context {k(state.context)} · /clear not while a turn runs</Text>
+    } else if (state.ready) {
+      line = <Text color="yellow">context {k(state.context)} · /clear is safe · handoff saved → /clear recommended</Text>
+    } else {
+      line = (
+        <Text dimColor>
+          context {k(state.context)} &gt; {k(state.threshold)} · /clear not yet: {state.reason}
+        </Text>
       )
     }
 
     return (
-      <Box>
-        {state.ready ? (
-          <Text color="yellow">
-            context {k(state.context)} · /clear is safe · handoff saved → /clear recommended
-          </Text>
-        ) : (
-          <Text dimColor>
-            context {k(state.context)} &gt; {k(state.threshold)} · /clear not yet: {state.reason}
-          </Text>
-        )}
+      <Box flexDirection="column">
+        {line}
+        {await next(e)}
       </Box>
     )
   })

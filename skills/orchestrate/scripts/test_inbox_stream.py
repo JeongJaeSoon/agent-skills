@@ -131,24 +131,73 @@ assert s.due() == []
 clock.t += ist.QUIET_S
 assert s.due()[0].startswith("RESTART DUE")
 
-typed = []
+never = lambda me: (_ for _ in ()).throw(AssertionError("typed"))  # noqa: E731
 req = ("2026-01-01T00:00:00Z", {"stage": "requested", "handle": ME, "session": "s1"})
+# auto_clear off (the default): a stored request is disarmed, never typed.
+st = Store(req)
+s, orca, out, clock = stream([], store=st, clear=never)
+assert s.restart()[0].startswith("RESTART OFF") and st.rows[-1][2]["stage"] == "off"
+(root / "none.json").write_text('{"orchestrate": {"auto_clear": true}}')
+
+typed = []
 st = Store(req)
 s, orca, out, clock = stream([], store=st, clear=lambda me: typed.append(me) or None)
-s.now = lambda: __import__("time").time() if False else 1767225600.0 + 60
+s.now = lambda: 1767225600.0 + 60
 s.restart()
 s.restart()
-assert typed == [ME] and st.rows[-1][2]["stage"] == "sent" and st.rows[-1][2]["confirmed"] is True, st.rows
+assert typed == [ME] and [r[2]["stage"] for r in st.rows] == ["typing", "sent"] and st.rows[-1][2]["confirmed"], st.rows
+# The claim is written before typing: if it cannot be written, nothing is typed.
+class Broken(Store):
+    def session_event(self, key, ev, data, by=None):
+        raise OSError("disk full")
+s, orca, out, clock = stream([], store=Broken(req), clear=never)
+s.now = lambda: 1767225600.0 + 60
+try:
+    s.restart()
+    raise AssertionError("a failed claim must stop the restart")
+except OSError:
+    pass
+# A busy screen: nothing typed, the request goes back to requested with its first time, and expires from that.
 st = Store(req)
 s, orca, out, clock = stream([], store=st, clear=lambda me: "screen changed between two reads (someone may be typing)")
 s.now = lambda: 1767225600.0 + 60
-assert s.restart() == [] and st.rows == []
+assert s.restart() == [] and [r[2]["stage"] for r in st.rows] == ["typing", "requested"], st.rows
+assert st.rows[-1][2]["requested_at"] == "2026-01-01T00:00:00Z"
 s.now = lambda: 1767225600.0 + ist.REQUEST_TTL_S + 1
 assert s.restart()[0].startswith("RESTART EXPIRED") and st.rows[-1][2]["stage"] == "expired"
 for other in ({"stage": "requested", "handle": "term_other", "session": "s1"}, {"stage": "requested", "handle": ME, "session": "s0"}):
     st = Store(("2026-01-01T00:00:00Z", other))
-    s, orca, out, clock = stream([], store=st, clear=lambda me: (_ for _ in ()).throw(AssertionError("typed")))
+    s, orca, out, clock = stream([], store=st, clear=never)
     assert s.restart() == []
+# The live session decides, not the one the stream saw last: a /clear typed meanwhile makes the request stale.
+live = {"v": "s1"}
+st = Store(req)
+s, orca, out, clock = stream([], store=st, clear=never, session=lambda me: live["v"])
+live["v"] = "s2"
+assert s.restart() == [] and st.rows[-1][2]["stage"] == "stale"
+(root / "none.json").unlink()
+
+# An Orca error inside the debounce window: what was already taken still goes out, then the error.
+s, orca, out, clock = stream([{"deliveryId": "dv9", "messages": [{"id": "m9", "type": "status", "body": "x"}]}])
+real = prog.check
+def flaky(*args):
+    if "--peek" in args:
+        raise SystemExit("orca down")
+    return real(*args)
+prog.check = flaky
+try:
+    s.mail(deadline=600)
+    raise AssertionError("the error must still end the round")
+except SystemExit:
+    pass
+assert "INBOX id=m9" in out.getvalue() and not ist.holding(ME), out.getvalue()
+# While the window is open the stream marks that it holds mail.
+seen = []
+s, orca, out, clock = stream([{"deliveryId": "dv8", "messages": [{"id": "m8", "type": "status"}]}])
+inner = prog.check
+prog.check = lambda *a: (seen.append(ist.holding(ME)), inner(*a))[1]
+s.mail(deadline=600)
+assert True in seen and not ist.holding(ME), seen
 
 sid = {"v": "s1"}
 s, orca, out, clock = stream([], session=lambda me: sid["v"])

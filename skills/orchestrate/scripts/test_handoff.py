@@ -68,7 +68,21 @@ got = handoff.ready(S, 150_000, True, peek=empty)
 assert got["show"] and not got["ready"] and "question" in got["reason"], got
 got = handoff.ready(S, 150_000, False, peek=lambda k, h: [{"id": "m", "type": "status"}])
 assert not got["ready"] and "1 message" in got["reason"], got
-before = store.last_session_event("orchestrator", "handoff")
+# Mail the stream took but holds in its debounce window is not in the inbox any more, and still not safe to drop.
+hold_handle = os.environ.get("ORCA_TERMINAL_HANDLE") or handoff.terminal_of(S)
+inbox_stream.hold(hold_handle, True)
+got = handoff.ready(S, 150_000, False, peek=empty)
+assert not got["ready"] and "holds mail" in got["reason"], got
+inbox_stream.hold(hold_handle, False)
+# A session with no ROLE record but a role SessionStart resolved (an --agent lead) still gets a key.
+L = "00000000-0000-4000-8000-000000000002"
+roles.record_resolved(L, {"role": "lead", "slug": "app"})
+assert handoff.role_key(L) == "lead:app"
+(roles.roles_dir() / f"{L}.json").write_text('{"role": "worker"}')
+assert handoff.role_key(L) is None, "a declared role other than orchestrator or lead wins over the resolved one"
+roles.record_resolved(L, None)
+assert not roles.resolved_file(L).exists()
+before =store.last_session_event("orchestrator", "handoff")
 got = handoff.ready(S, 150_000, False, peek=empty)
 ts, saved = store.last_session_event("orchestrator", "handoff")
 assert got["ready"] and saved["auto"] and saved["session"] == S and saved["context"] == 150_000, (got, saved)
