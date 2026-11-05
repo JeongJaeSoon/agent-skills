@@ -397,7 +397,17 @@ again = prog.settle_sweep(settled, wts, holds=held.get, asked=asked, now="T1")
 assert "TAKEN OVER t1 (succeeded): self-check asked at T0; wait for its answer" in again and not any("term_t1" in l for l in again), again
 assert prog.close_out([{"type": "worker_done", "payload": {"dispatchId": "t1"}}], settled, wts) == []
 assert prog.settle_sweep([], wts) == []
-rev = ([{"ev": "ready", "pr": n, "ticket": f"R-{n}"} for n in (11, 12, 13, 14, 15, 16)]
+# Orca releases a reclaimable worker by itself at resource.autoReleaseAt: only a row whose release is still ahead
+# leaves the guidance. No field, an unreadable one, a time already past, release_unknown and a taken-over row stay.
+NOW = 1_800_000_000.0
+auto = lambda d, at, state="reclaimable": {"dispatchId": d, "terminalState": state, "workerState": "succeeded",
+                                           "resource": {"worktreeId": "w1", "autoReleaseAt": at}}
+rows = [auto("a1", (NOW + 120) * 1000), auto("a2", "2027-01-15T08:02:00Z"), auto("a3", (NOW - 60) * 1000),
+        auto("a4", None), auto("a5", "soon"), auto("a6", (NOW + 120) * 1000, "release_unknown")]
+lines = prog.settle_sweep(rows, wts, holds=lambda p: None, asked={}, now="T0", clock=lambda: NOW)
+assert [l.split()[1] for l in lines if l.startswith("SETTLED")] == ["a3", "a4", "a5", "a6"], lines
+assert not any("--dispatch a1" in l or "--dispatch a2" in l for l in lines), lines
+rev =([{"ev": "ready", "pr": n, "ticket": f"R-{n}"} for n in (11, 12, 13, 14, 15, 16)]
        + [{"ev": "verdict", "pr": n, "result": "pass"} for n in (11, 12, 13, 14, 15, 16)] + [{"ev": "landed", "pr": 15}])
 green = [{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}]
 ok = {"state": "OPEN", "reviewDecision": "APPROVED", "mergeStateStatus": "CLEAN", "isDraft": False, "labels": [], "statusCheckRollup": green,
