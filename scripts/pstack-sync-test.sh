@@ -38,6 +38,7 @@ out=$(sync --notify); expect "matches upstream" "$out"
 # Upstream moves: a changed, b deleted, a new file in a vendored skill and a new skill. Report only.
 put "$T/up/pstack/skills/a/SKILL.md" '---\nname: a\n---\nline1 up\n'
 put "$T/up/pstack/skills/a/references/r.md" 'new ref\n'
+put "$T/up/pstack/skills/a/references/새 파일.md" 'a new path git quotes unless -z\n'
 put "$T/up/pstack/skills/c/SKILL.md" '---\nname: c\n---\n'
 put "$T/up/pstack/skills/c/notes.md" 'not reported: c is not vendored\n'
 g rm -q pstack/skills/b/SKILL.md
@@ -52,16 +53,16 @@ fi
 out=$(sync --notify)
 expect "changed        skills/a/SKILL.md" "$out"; expect "drift+deleted  skills/b/SKILL.md" "$out"
 expect "new            skills/a/references/r.md" "$out"; expect "new            skills/c/SKILL.md" "$out"
-expect "new            skills/y/SKILL.md" "$out"
+expect "new            skills/y/SKILL.md" "$out"; expect "new            skills/a/references/새 파일.md" "$out"
 if grep -q "notes.md" <<<"$out"; then echo "FAIL: a file of an unvendored skill was reported"; exit 1; fi
-expect "5 file(s) differ" "$out"; expect "notified" "$out"
+expect "6 file(s) differ" "$out"; expect "notified" "$out"
 grep -q "$p2" "$T/state/pstack-upstream.json"
 [ "$(pin)" = "$p1" ] && grep -q '^line1$' "$T/repo/vendor/pstack/skills/a/SKILL.md"
 
 # The same upstream commit is notified once; the summary is still the last line the job records.
 out=$(sync --notify)
 if grep -q "notified" <<<"$out"; then echo "FAIL: notified twice for one commit"; exit 1; fi
-[ "$(tail -n 1 <<<"$out")" = "pstack upstream: 5 file(s) differ from vendor/pstack (pin ${p1:0:7}, upstream ${p2:0:7})" ]
+[ "$(tail -n 1 <<<"$out")" = "pstack upstream: 6 file(s) differ from vendor/pstack (pin ${p1:0:7}, upstream ${p2:0:7})" ]
 
 # A hand refresh rewrites the copies, drops the deleted file, advances the pin and leaves skills/ alone.
 out=$(sync --write); expect "wrote 2 file(s), dropped 1, pin -> ${p2:0:12} (version 1.1.0)" "$out"
@@ -71,11 +72,14 @@ grep -q '^line1 up$' "$T/repo/vendor/pstack/skills/a/SKILL.md"
 # "new" counts from the pin: once the pin moves past them, unvendored files are no longer reported.
 out=$(sync); expect "matches upstream" "$out"
 
-# A blob the cache cannot read (a blob:none clone offline) stops the run; it is never read as a deleted file.
-blob=$(g rev-parse "HEAD:pstack/skills/a/SKILL.md")
-command rm -f "$T/up/.git/objects/${blob:0:2}/${blob:2}"
-out=$(sync --write 2>&1) && { echo "FAIL: a missing blob should stop the run"; exit 1; }
-expect "failed" "$out"
-[ -e "$T/repo/vendor/pstack/skills/a/SKILL.md" ] && [ "$(pin)" = "$p2" ]
-grep -q '"skills/a/SKILL.md"' "$T/repo/vendor/pstack/manifest.json"
+# A blob the cache cannot read (a blob:none clone offline) stops the run before anything is written: first the
+# plugin.json --write reads for the version, then a vendored file, which is never read as a deleted one.
+cp -R "$T/repo/vendor" "$T/before"
+for path in pstack/.cursor-plugin/plugin.json pstack/skills/a/SKILL.md; do
+  blob=$(g rev-parse "HEAD:$path")
+  command rm -f "$T/up/.git/objects/${blob:0:2}/${blob:2}"
+  out=$(sync --write 2>&1) && { echo "FAIL: a missing blob of $path should stop the run"; exit 1; }
+  expect "failed" "$out"
+  diff -r "$T/before" "$T/repo/vendor" || { echo "FAIL: vendor/pstack changed after a failed run"; exit 1; }
+done
 echo "pstack-sync: all cases pass"

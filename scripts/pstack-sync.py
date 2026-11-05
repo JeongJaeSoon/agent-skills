@@ -89,6 +89,8 @@ def notify(text, target):
 
 
 def refresh(m, manifest_path, vendor, fresh, target):
+    plugin = show(target, f"{m['upstream_root']}/.cursor-plugin/plugin.json")  # read before the first write
+    version = json.loads(plugin).get("version", m.get("upstream_version")) if plugin else m.get("upstream_version")
     keep = []
     for f in m["files"]:
         p, data = vendor / f["upstream"], fresh[f["upstream"]]
@@ -101,9 +103,8 @@ def refresh(m, manifest_path, vendor, fresh, target):
             p.chmod(0o755)
         keep.append(f)
     dropped, m["files"], m["pin"] = len(m["files"]) - len(keep), keep, target
-    plugin = show(target, f"{m['upstream_root']}/.cursor-plugin/plugin.json")
-    if plugin:
-        m["upstream_version"] = json.loads(plugin).get("version", m.get("upstream_version"))
+    if version:
+        m["upstream_version"] = version
     manifest_path.write_text(json.dumps(m, indent=2, ensure_ascii=False) + "\n")
     print(f"wrote {len(keep)} file(s), dropped {dropped}, pin -> {target[:12]} (version {m.get('upstream_version', '?')})")
 
