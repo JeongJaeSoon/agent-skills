@@ -27,6 +27,7 @@ SCREEN_LINES = 40
 STALE_HOURS = 24
 CLOSE_HOURS = 2
 LIVE_UNDONE = "PR 없음, Claude 세션이 있음(끝났다는 말 없음)"
+REFLOG_UNREAD = "PR 없음, 커밋 이력(reflog)을 읽지 못함"
 DONE_PATTERNS = (r"닫아도\s*(된|돼|좋|괜찮)", r"종료해도\s*(된|돼|좋|괜찮)", r"(can|may) (now )?be closed",
                  r"safe to close", r"閉じて(も)?(大丈夫|よい|いい|構いません)")
 QUESTION_PATTERNS = cardguard.QUESTION_PATTERNS
@@ -84,6 +85,25 @@ def landed(path, head, run):
         return (False, "GitHub 에 없는 커밋") if any("404" in e or "Not Found" in e for e in errs) else \
             (None, "GitHub compare 를 읽지 못함")
     return out.strip() == "0", f"GitHub compare {base}"
+
+
+# "commit", "commit (merge)", "commit (amend)"; not "merge origin/main: Fast-forward" or "rebase (start)", which only
+# move HEAD onto the base's history.
+OWN_COMMIT = re.compile(r"^(commit( \([^)]*\))?|cherry-pick|revert|am):")
+NEW_CARD_S = 24 * 3600
+
+
+def history(path, run):
+    """(has_own_commit, born): from HEAD's reflog, whether this card ever made a commit, and when it began. None when
+    the reflog is unreadable or empty. A card with no commit has HEAD on the base branch without anything having
+    landed, so HEAD on the base proves nothing for it."""
+    # %gd with --date=unix is the time the reflog entry was written (HEAD@{<unix>}); %ct would be the commit's own date.
+    out = run(["git", "-C", path, "reflog", "show", "--date=unix", "--format=%gd%x09%gs", "HEAD"])
+    rows = [(m.group(1), s) for line in (out or "").splitlines()
+            if (m := re.match(r"HEAD@\{(\d+)\}\t(.*)", line)) and (s := m.group(2)) is not None]
+    if not rows or len(rows) != len([line for line in (out or "").splitlines() if line.strip()]):
+        return None, None
+    return any(OWN_COMMIT.match(s) for _, s in rows), min(int(t) for t, _ in rows)
 
 
 def patch_id(path, sha, run):
@@ -205,6 +225,9 @@ def gather(w, m, run=None):
         f["carried"] = bool(ref)
     if not ref or not f["carried"]:
         f["landed"], f["landed_via"] = landed(p, head, run)
+        if not ref and f["landed"]:
+            own, born = history(p, run)
+            f["own_commit"], f["age"] = own, None if born is None else m["now"] - born
     f["unpushed"] = "none" if f.get("landed") else unpushed(p, head, f["pr_head"], run)
     if f["state"] == "OPEN" and f["pr_head"] and head != f["pr_head"] and f["carried"]:
         # HEAD is a step on the way to the PR's head: another card standing exactly at that head carries the PR on.
@@ -285,7 +308,8 @@ def judge(f, idle_s, stale_s=None, close_s=None):
     verdict = settled(f, handles, live, said_done, agents_idle)
     # 8b: "done" on the screen is no evidence of hours of quiet, and a keep for what could not be read is not timed out.
     limit = close_s if verdict[1] == LIVE_UNDONE else stale_s
-    git_state_known = f.get("unpushed") is not None and (f.get("pr") or f.get("landed") is not None)
+    git_state_known = f.get("unpushed") is not None and (f.get("pr") or f.get("landed") is not None) \
+        and verdict[1] != REFLOG_UNREAD
     if verdict[0] == KEEP and limit and git_state_known and agents and handles and isinstance(quiet, (int, float)) \
             and quiet >= limit and all(t.get("output_known") and t["silent"] >= limit for t in agents):
         where = f" ({f['transcripts']})" if f.get("transcripts") else ""
@@ -317,6 +341,12 @@ def settled(f, handles, live, said_done, agents_idle):
         return KEEP, f"PR 없음, HEAD 가 기본 브랜치에 없음({f['landed_via']})", []
     if live and not said_done:
         return KEEP, LIVE_UNDONE, []
+    # HEAD on the base branch is "landed" only if the card's own commits went in; a card that never committed sits
+    # there from the day it was made (and its PR may come hours later).
+    if f.get("own_commit") is None or f.get("age") is None:
+        return KEEP, REFLOG_UNREAD, []
+    if not f["own_commit"] and f["age"] < NEW_CARD_S:
+        return KEEP, f"PR 없음, 새 카드, 아직 커밋 없음({int(f['age'] // 3600)}시간 전 생성)", []
     return REMOVE, f"PR 없음, HEAD 가 기본 브랜치에 있음({f['landed_via']}){tail}", handles
 
 

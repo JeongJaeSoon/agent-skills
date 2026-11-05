@@ -332,8 +332,10 @@ def same_target(plan, did):
     agrees (a card made again on the same path has another HEAD; a serve entry re-pointed has another local port), and
     a list the plan names (the files of one state-file act) is all inside the act's. A record that does not say is
     not proof."""
+    # The same folder inode is the same card: its HEAD may have moved between the scan and the removal.
+    same_folder = plan.get("ino") is not None and plan.get("ino") == did.get("ino")
     for k in MATCH_IDENTITY:
-        if k not in plan:
+        if k not in plan or (same_folder and k == "head"):
             continue
         if k not in did:
             return False
@@ -344,6 +346,20 @@ def same_target(plan, did):
         elif a != b:
             return False
     return True
+
+
+def gone_card(key):
+    """A card target whose folder no longer exists. Only cards: a path check is proof of removal for them, and for no
+    other kind of target."""
+    if not str(key).startswith("card:"):
+        return False
+    try:
+        os.lstat(str(key).partition(":")[2])
+    except (FileNotFoundError, NotADirectoryError):
+        return True
+    except OSError:  # a permission error does not prove the folder is gone
+        return False
+    return False
 
 
 def diff(hours=48.0, now=None):
@@ -358,7 +374,7 @@ def diff(hours=48.0, now=None):
     for r in rounds:
         r["round_t"] = r["round_t"] if isinstance(r.get("round_t"), (int, float)) else r["t"]
     acted = old_actions(min([since] + [r["round_t"] for r in rounds]))
-    keys, rank = {}, {"matched": 0, "pending": 1, "excess": 2}
+    keys, rank = {}, {"matched": 0, "external": 1, "pending": 2, "excess": 3}
     for r in rounds:
         rt = r["round_t"]
         st = r["seen_t"] if isinstance(r.get("seen_t"), (int, float)) else rt  # the window opens at the scans
@@ -370,6 +386,8 @@ def diff(hours=48.0, now=None):
             opens = max(rt, row["seen_t"]) if finite(row.get("seen_t")) else st
             hit = answers(row, [a for a in acted.get(norm_key(row.get("key")), ()) if opens <= a["t"] <= rt + lag])
             state = "matched" if hit else "pending" if now < rt + lag else "excess"
+            if state == "excess" and gone_card(row["key"]) and not acted.get(norm_key(row["key"])):
+                state = "external"  # nobody the cleaners know of acted on it, and it is gone: cleaned from outside
             k = keys.setdefault(row["key"], {"key": row["key"], "rule": row.get("rule"), "state": state,
                                              "rounds": 0, "first": rt})
             k["rounds"] += 1
@@ -378,12 +396,14 @@ def diff(hours=48.0, now=None):
     rows = sorted(keys.values(), key=lambda k: k["key"])
     by_rule = {}
     for k in rows:
-        by_rule.setdefault(k["rule"], {"matched": 0, "pending": 0, "excess": 0})[k["state"]] += 1
+        if k["state"] != "external":
+            by_rule.setdefault(k["rule"], {"matched": 0, "pending": 0, "excess": 0})[k["state"]] += 1
     decided = sorted(r["round_t"] for r in rounds if not r.get("refused"))
     edges = [since] + decided + [now]
     return {"hours": hours, "rounds": len(rounds), "refused": sum(1 for r in rounds if r.get("refused")),
             "decided": len(decided), "max_gap_s": max(b - a for a, b in zip(edges, edges[1:])),
-            "by_rule": by_rule, "excess": [k for k in rows if k["state"] == "excess"], "rows": rows}
+            "by_rule": by_rule, "excess": [k for k in rows if k["state"] == "excess"],
+            "external": [k for k in rows if k["state"] == "external"], "rows": rows}
 
 
 def verdict(d):
@@ -397,12 +417,14 @@ def verdict(d):
 def print_diff(d):
     print(f"sweep 그림자 비교: 최근 {d['hours']:g}시간, 회차 {d['rounds']}개(거부 {d['refused']}, 판정한 회차 사이 "
           f"가장 긴 공백 {d['max_gap_s'] / 3600:.1f}시간)")
-    if not d["by_rule"]:
+    if not d["by_rule"] and not d.get("external"):
         print("- 처리하겠다고 한 대상 없음")
     for rule_name, c in sorted(d["by_rule"].items()):
         print(f"- {rule_name}: 일치 {c['matched']} · 대기 {c['pending']} · 넘침 {c['excess']}")
     for r in d["excess"]:
         print(f"  넘침 {r['key']} ({r['rule']})")
+    for r in d.get("external") or ():
+        print(f"  외부 정리 {r['key']} ({r['rule']}): 정리기 기록에 없고 이미 사라짐(워커 end-session, lead 의 worktree rm 등)")
     v = verdict(d)
     pending = sum(c["pending"] for c in d["by_rule"].values())
     # Pending plans are inside their lag: the window ending a lag ago is the one they prove.
