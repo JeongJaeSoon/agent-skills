@@ -371,6 +371,9 @@ STORES = [
     Store("pressurelock", "S/pressure*.lock", {"pressure.level": LOCK}, ("pressure:locked", "pressure:queue_change")),
     Store("pressureoff", "S/pressure-disabled", {"pressure.disabled": CANONICAL}, ("pressure:cmd_uninstall",),
           ("pressure",)),
+    Store("automationoff", "S/automation-disabled-*", {"automation.disabled": CANONICAL}, ("automations:turn_off",),
+          ("nobody",), rule="`skills-sync setup disable` for reap-hard and orch-dash; read by automations.py status, "
+          "so `apply` does not install what the user turned off"),
     Store("pressureout", "S/pressure.log", {"pressure.output": CANONICAL}, ("pressure:log",), ("nobody",)),
     Store("reaphard", "S/reap-hard.jsonl", {"reap_hard.pass": CANONICAL}, ("reap_hard:log",), ("brief", "page")),
     Store("reaphardout", "S/reap-hard.log", {"reap_hard.pass": LOG}, ("ext:launchd",), ("nobody",),
