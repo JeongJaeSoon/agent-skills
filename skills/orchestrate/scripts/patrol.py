@@ -586,7 +586,7 @@ def judge(facts, memo):
                 f"and still open: close its terminal (SKILL.md, superseded cards)", hit["handle"])
     # P: a lead that parked itself while nothing runs and nothing on record is what it waits for. Parked alone is a
     # wake-up it armed; what makes it a stall is a still ledger, no worker of its Run, and no hold or waiting row.
-    if not {"workers", "board", "terminals"} & failed:
+    if not {"workers", "board", "terminals", "waits"} & failed:
         board_rows = (facts["board"] or {}).get("rows") or {}
         for name, (lead, worktree) in open_leads(facts["board"]).items():
             s = next((x for x in facts["sessions"] if worktree and x.get("id") == worktree), None)
@@ -600,8 +600,20 @@ def judge(facts, memo):
             going = [w for w in facts["workers"] if (w.get("projection") or {}).get("outcome") == "in_progress"]
             if any(w.get("runId") in (run, None) for w in going):  # a worker whose Run is unknown cannot be ruled out
                 continue
-            waits = lambda r: r.get("status") in ("waiting", "owner") or r.get("owner")  # noqa: E731
-            if waits(lead) or any(r.get("parent") == name and waits(r) for r in board_rows.values()):
+            handle = next((t["handle"] for t in agents if t.get("worktreePath") == path), None)
+            if isinstance(facts["waits"].get(handle), dict):  # at a prompt for a human, which is a wait
+                continue
+
+            def under(r):  # a row below this lead at any depth
+                seen = set()
+                while r.get("parent") and r["parent"] not in seen:
+                    seen.add(r["parent"])
+                    if r["parent"] == name:
+                        return True
+                    r = board_rows.get(r["parent"]) or {}
+                return False
+            waits = lambda r: r.get("status") in ("waiting", "owner", "held") or r.get("owner")  # noqa: E731
+            if waits(lead) or any(under(r) and waits(r) for r in board_rows.values()):
                 continue
             still = lead_still_h(events, tnow)
             if still is not None and still >= PARKED_LEAD_H:
@@ -738,7 +750,7 @@ def sync_needs_you(rows=None):
 DEPENDS = {"I": {"terminals", "workers", "waits"}, "X": {"terminals", "workers"}, "S": {"terminals", "sent"},
            "O": {"state", "terminals", "board"}, "D": {"state", "board"}, "E": {"terminals"}, "L": {"consumers", "terminals", "workers", "waits"},
            "W": {"state"}, "R": {"terminals", "workers", "waits"}, "H": {"terminals", "waits"}, "B": {"terminals", "waits"},
-           "T": {"terminals", "handles"}, "M": {"terminals", "models"}, "P": {"terminals", "workers", "board"}}
+           "T": {"terminals", "handles"}, "M": {"terminals", "models"}, "P": {"terminals", "workers", "board", "waits"}}
 
 
 def write_round(findings, verdicts, dry, now, failed=()):

@@ -205,6 +205,12 @@ assert quiet_lead(board=lboard({"L/a": waits_row})) == [], "a row waiting on som
 assert quiet_lead(board=lboard({"L/a": {**waits_row, "status": "moving", "owner": "someone"}})) == []
 assert quiet_lead(board=lboard({"M/a": {**waits_row, "parent": "M"}})) != [], "another lead's row"
 assert quiet_lead(board=lboard(lead={"status": "waiting", "owner": "someone"})) == [], "the lead's own row records the wait"
+assert quiet_lead(board=lboard(lead={"status": "held"})) == [], "a lead held on purpose"
+deep = {"L/p": {"kind": "phase", "parent": "L", "status": "moving"}, "L/p/t": {**waits_row, "parent": "L/p"}}
+assert quiet_lead(board=lboard(deep)) == [], "a waiting task below a phase is the lead's wait too"
+assert quiet_lead(board=lboard({"L/p": deep["L/p"]})) != [], "a phase with nothing waiting under it"
+assert quiet_lead(waits={"hl": {"kind": "permission"}}) == [], "at a prompt for a human"
+assert quiet_lead(failed={"waits"}) == [], "without Orca's wait list a prompt cannot be ruled out"
 assert quiet_lead(board=lboard(entry={"closed_at": ago(5)})) == [], "a closed lead"
 assert quiet_lead(board=lboard(lead={"done_at": ago(5)})) == [], "a finished lead row"
 # read_ledgers reads program.json's Run and the ledger as files; a missing or broken program is None, not a guess.
