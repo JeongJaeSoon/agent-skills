@@ -381,8 +381,13 @@ def fleet_run(run_id):
         run = next((r for r in runs.get("runs") or [] if r.get("id") == run_id), None)
         if not run or "objective" not in run:
             return None
-        return (run, [w for w in runs.get("workers") or [] if w.get("runId") == run_id],
-                [t for t in runs.get("tasks") or [] if t.get("run_id") == run_id])
+        workers = [w for w in runs.get("workers") or [] if w.get("runId") == run_id]
+        tasks = [t for t in runs.get("tasks") or [] if t.get("run_id") == run_id]
+        # The fleet tick re-reads a settled Run only every fleet.SETTLED_EVERY s yet stamps the whole read fresh, so a
+        # Run with nothing moving carries no age of its own: ask Orca for it.
+        if all(w.get("dispatchStatus") in fleet.SETTLED for w in workers) and all(t.get("status") in fleet.SETTLED for t in tasks):
+            return None
+        return run, workers, tasks
     except (AttributeError, TypeError, ValueError):
         return None
 

@@ -1315,6 +1315,14 @@ try:
     assert dash.fleet_run("run_a") == ({"id": "run_a", "objective": "ship A"}, [{"runId": "run_a", "dispatchId": "d1"}],
                                        [{"id": "t1", "run_id": "run_a"}])
     assert dash.fleet_run("run_zzz") is None, "a Run the snapshot does not list is asked of Orca"
+    settled = RunsFleet(now_iso)
+    settled.runs["workers"][0]["dispatchStatus"] = "completed"
+    settled.runs["tasks"][0]["status"] = "completed"
+    dash.FLEET = settled
+    assert dash.fleet_run("run_a") is None, "a settled Run may sit in the fleet's 900 s cache: asked of Orca"
+    settled.runs["tasks"][0]["status"] = "running"
+    assert dash.fleet_run("run_a") is not None, "one moving task keeps the Run on the snapshot"
+    dash.FLEET = RunsFleet(now_iso)
     dash.FLEET = RunsFleet(dash.iso(dash.utcnow() - dt_mod.timedelta(seconds=dash.FLEET_RUNS_TTL_S + 5)))
     assert dash.fleet_run("run_a") is None, "a stale runs snapshot must not be reused"
     dash.FLEET = RunsFleet(now_iso, err="boom")
