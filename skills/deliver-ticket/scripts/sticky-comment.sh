@@ -8,7 +8,7 @@
 #          sticky-comment.sh --check <pr-number> [marker]
 #
 # --check writes nothing: exit 0 when the marker comment names the PR's current
-# head sha (its first 7 characters or more), 1 when it is missing or stale.
+# head sha (in full or abbreviated to 7 characters or more), 1 when it is missing or stale.
 #
 # Run from inside the repository the PR belongs to.
 set -euo pipefail
@@ -37,12 +37,16 @@ if [ -n "$CHECK" ]; then
   [ -n "$HEAD" ] || { echo "no head sha for #$PR" >&2; exit 1; }
   [ -n "$EXISTING" ] || { echo "missing: #$PR has no $MARKER comment" >&2; exit 1; }
   BODY="$(gh api "repos/$REPO/issues/comments/$EXISTING" --jq .body)"
-  case "$BODY" in
-    *"${HEAD:0:7}"*) echo "ok: the $MARKER comment on #$PR names head ${HEAD:0:8}" ;;
-    *) echo "stale: the $MARKER comment on #$PR does not name head ${HEAD:0:8}; rerun at this head and update it" >&2
-       exit 1 ;;
-  esac
-  exit 0
+  # A whole hex token of 7 to 40 characters that abbreviates the head; a token that only shares its first 7 is another sha.
+  while read -r TOKEN; do
+    if [ "${#TOKEN}" -ge 7 ] && [ "${#TOKEN}" -le 40 ]; then
+      case "$HEAD" in
+        "$TOKEN"*) echo "ok: the $MARKER comment on #$PR names head ${HEAD:0:8}"; exit 0 ;;
+      esac
+    fi
+  done < <(printf '%s\n' "$BODY" | grep -oE '[0-9a-f]+' || true)
+  echo "stale: the $MARKER comment on #$PR does not name head ${HEAD:0:8}; rerun at this head and update it" >&2
+  exit 1
 fi
 
 # A plain assignment, so an unreadable body file stops the script before any write.

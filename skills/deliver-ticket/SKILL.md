@@ -171,8 +171,8 @@ acceptance criteria; never claim a pass from a stale harness.
 
 After the test suite and E2E check, push and open a PR with `gh pr create` in the draft/ready state the user requested.
 Once it returns, run each follow-up the plugin's PR-opened reminder lists (the card's board
-column, the ticket's PR link and state; a CLI without the plugin's hooks reads them in
-`hooks/record_check.py`), each as its own Bash call, never chained to `gh pr create` with `&&`: a
+column, the ticket's PR link and state; without the plugin's hooks, or with `guard.record_check`
+off, read them in `hooks/record_check.py`), each as its own Bash call, never chained to `gh pr create` with `&&`: a
 refusal takes every act in the call with it. A review request is not made until
 `gh pr view <n> --json reviewRequests,assignees` lists the reviewer: `gh pr edit --add-reviewer`
 can exit 0 without adding anyone.

@@ -348,10 +348,13 @@ def main():
     name = event.get("hook_event_name")
     if not (isinstance(cfg.get("tracker"), dict) or isinstance(cfg.get("notes"), dict)):
         # Nothing to record, but an Orca card still moves its board column when its PR opens.
-        cmds = shell.commands(str((event.get("tool_input") or {}).get("command") or ""))
+        raw = str((event.get("tool_input") or {}).get("command") or "")
+        cmds = shell.commands(raw)
         opened = pr_opened(cfg)
-        if name == "PostToolUse" and event.get("tool_name") == "Bash" and opened and any(
-                target(c.words) == "create" for c in cmds):
+        # As in post_tool: a failed call counts only when it held more than one command, or a `!`.
+        ran = name == "PostToolUse" or (name == "PostToolUseFailure" and (
+            len(cmds) > 1 or NEGATION.search(shell.command_text(raw))))
+        if ran and event.get("tool_name") == "Bash" and opened and any(target(c.words) == "create" for c in cmds):
             print(json.dumps({"hookSpecificOutput": {"hookEventName": name, "additionalContext":
                                                      f"record_check: {opened}"}}, ensure_ascii=False))
         return
