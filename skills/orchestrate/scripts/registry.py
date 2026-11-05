@@ -415,8 +415,10 @@ STORES = [
           ("programview", "fleet", "reflect", "skillspage"), rule="one ledger per program"),
     Store("progledgerlock", "P/*/ledger.lock", {"program.event": LOCK}, ("prog:Program.locked",)),
     Store("progwait", "P/*/*.json", {"program.wait_memo": CANONICAL},
-          ("prog:cmd_wait", "prog:print_stuck", "prog:new_stalls", "prog:new_leftovers", "autowake:save_marks"),
-          ("programview",), rule="`orch wait` memos: self-check, stuck, stalls and leftovers seen, auto-wake's first marks"),
+          ("prog:cmd_wait", "prog:print_stuck", "prog:new_stalls", "prog:new_leftovers", "autowake:save_marks",
+           "prog:take"),
+          ("programview",), rule="`orch wait` memos: self-check, stuck, stalls and leftovers seen, auto-wake's first marks,"
+                                 " and the consuming request a dead wait left (wait-request.json)"),
     Store("progstatus", "P/*/status-self-check.json", {"program.status_memo": CANONICAL}, ("prog:cmd_status",),
           ("programview",), rule="`orch status` TAKEN OVER memo: when each self-check was asked, apart from `orch wait`'s"),
     Store("progbackup", "P/*/ledger.jsonl.bak-*", {"program.event": BACKUP}, ("prog:write_backfill",), ("nobody",)),

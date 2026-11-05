@@ -3111,24 +3111,36 @@ def review_lines(p, workers=None, tasks=None, unknown=frozenset()):
 WAKE_DUE_S = 1800  # sync.py's WAKE_PENDING_S
 
 
-def take(box, pending=None):
-    """The owner's consuming check, under a retry id chosen before it: an answer lost on the way is asked for again
-    with the same id, and Orca replays the same batch instead of handing out the next one. With `pending`, the id is
-    written there first, so a wait that died with the answer lost twice replays it on its next start; the caller
-    clears it (`done_take`) once the batch is printed."""
+def pending_request(pending):
+    """The consuming request a dead wait left in `pending`: {"retry_request", "ack"}, or None."""
+    if pending is None:
+        return None
+    with contextlib.suppress(OSError, ValueError, AttributeError):
+        req = json.loads(pending.read_text())
+        return req if req.get("retry_request") else None
+    return None
+
+
+def take(box, pending=None, ack=None):
+    """The owner's consuming check (with `ack`, the ack of that delivery, which an older Orca answers with the next
+    batch), under a retry id chosen before it: an answer lost on the way is asked for again with the same id, and Orca
+    replays the same batch instead of handing out the next one. With `pending`, the request is written there first, so
+    a wait that died with the answer lost twice replays it on its next start; the caller clears it (`done_take`) once
+    the batch is printed."""
     import uuid
-    rid = None
-    if pending is not None:
-        with contextlib.suppress(OSError, ValueError):
-            rid = json.loads(pending.read_text()).get("retry_request")
-    rid = rid or str(uuid.uuid4())
-    if pending is not None:
-        pending.parent.mkdir(parents=True, exist_ok=True)
-        pending.write_text(json.dumps({"retry_request": rid, "box": list(box)}))
+    req = pending_request(pending)
+    if req is None:
+        req = {"retry_request": str(uuid.uuid4()), "ack": ack}
+        if pending is not None:
+            pending.parent.mkdir(parents=True, exist_ok=True)
+            tmp = pending.with_suffix(".tmp")
+            tmp.write_text(json.dumps({**req, "box": list(box)}))
+            os.replace(tmp, pending)
+    args = (*box, *(("--ack", req["ack"]) if req.get("ack") else ()), "--retry-request", req["retry_request"])
     try:
-        return batch(check(*box, "--retry-request", rid))
+        return batch(check(*args))
     except SystemExit:
-        return batch(check(*box, "--retry-request", rid))
+        return batch(check(*args))
 
 
 def done_take(pending):
@@ -3137,7 +3149,7 @@ def done_take(pending):
             pending.unlink(missing_ok=True)
 
 
-def wait_take(box, timeout_ms, clock=time.monotonic, out=print, pending=None):
+def wait_take(box, timeout_ms, clock=time.monotonic, out=print, pending=None, seen=None):
     """One lead wait: ([delivery ids], [messages], {ids already printed}, actionable). It returns once an ACTIONABLE
     message is taken (actionable True; that last batch is neither printed nor acked here, and `pending` stays for the
     caller to clear after printing it), or at the timeout.
@@ -3146,15 +3158,25 @@ def wait_take(box, timeout_ms, clock=time.monotonic, out=print, pending=None):
     wakes the lead a second time for the same mail. An untyped peek wakes on any unread row, so the owner takes each
     batch it wakes for; status mail is printed at once (a killed wait leaves it in the output file), heartbeats are
     only acked, and the wait goes on for the time left. Each such batch is acked for an older Orca, whose ack may hand
-    out the next batch: that one is handled like a take."""
+    out the next batch: that one is handled like a take, and the ack goes under a retry id like a take. `seen` holds
+    the deliveries handled in earlier rounds, so one handed out again is not printed twice."""
     end = clock() + int(timeout_ms) / 1000
     dids, msgs, shown = [], [], set()
-    replay = pending is not None and pending.exists()  # a request a dead wait left: replay it before waiting
-    got_next = None
+    seen = set() if seen is None else seen
+    replay = pending_request(pending) is not None  # a request a dead wait left: replay it before waiting
+    ack_next = None
     while True:
-        if got_next is not None:
-            did, got = got_next
-            got_next = None
+        if ack_next is not None:
+            try:
+                did, got = take(box, pending, ack=ack_next)
+            except SystemExit:  # both answers lost: the ack stays in `pending`, and the next wait replays it
+                break
+            ack_next = None
+            if not did and not got:
+                done_take(pending)
+                if clock() >= end:
+                    break
+                continue
         else:
             if not replay:
                 left = int((end - clock()) * 1000)
@@ -3162,11 +3184,19 @@ def wait_take(box, timeout_ms, clock=time.monotonic, out=print, pending=None):
                 _, unread = batch(check(*box, "--peek", *wait))
                 if not unread:
                     break
-            replay = False
-            did, got = take(box, pending)
+            replayed, replay = replay, False
+            try:
+                did, got = take(box, pending)
+            except SystemExit:
+                if replayed and (pending_request(pending) or {}).get("ack"):  # an ack Orca no longer answers
+                    done_take(pending)
+                    continue
+                raise
             if not did and not got:  # rows peeked but none handed out: waiting again would spin on them
+                done_take(pending)
                 break
-        if did and did in dids:  # the same batch again: Orca is not moving, stop rather than spin
+        if did and (did in dids or did in seen):  # a batch already handled: Orca is not moving, stop, not spin
+            done_take(pending)
             break
         if did:
             dids.append(did)
@@ -3179,10 +3209,9 @@ def wait_take(box, timeout_ms, clock=time.monotonic, out=print, pending=None):
                 shown.add(m.get("id"))
         done_take(pending)
         if did:
-            with contextlib.suppress(SystemExit):
-                nxt = batch(check(*box, "--ack", did))
-                got_next = nxt if (nxt[0] or nxt[1]) else None
-        if got_next is None and clock() >= end:
+            seen.add(did)
+            ack_next = did
+        elif clock() >= end:
             break
     return dids, msgs, shown, False
 
@@ -3226,14 +3255,14 @@ def cmd_wait(argv):
             print("\n".join(r.lines), flush=True)
         return r
 
+    pending, seen = p.dir / "wait-request.json", set()
     for i in range(rounds):
         if wakes := wake_lines(me):  # before the wait: a busy inbox returns early and must not hide these
             print("\n".join(wakes), flush=True)
         auto = auto_round()  # here too: busy mail returns before the empty branch below and would starve a wake
         if auto.stop:
             return
-        pending = p.dir / "wait-request.json"
-        dids, msgs, shown, actionable = wait_take(box, auto.timeout_ms(timeout), pending=pending)
+        dids, msgs, shown, actionable = wait_take(box, auto.timeout_ms(timeout), pending=pending, seen=seen)
         did = dids[-1] if dids else None
         work = [m for m in msgs if m.get("type") != "heartbeat" and not revoked_echo(m)]
         for m in msgs:

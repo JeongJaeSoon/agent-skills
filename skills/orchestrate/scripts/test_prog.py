@@ -516,7 +516,7 @@ assert "SETTLED s7" in out.getvalue() and "SETTLED d1" not in out.getvalue() and
 # wait_take: a peek wait with no --types, then the owner's take under a retry id kept in `pending`.
 def scripted(script, log):
     def orca(*a):
-        kind = "peek" if "--peek" in a else "take" if "--retry-request" in a else "ack" if "--ack" in a else "other"
+        kind = "peek" if "--peek" in a else "ack" if "--ack" in a else "take" if "--retry-request" in a else "other"
         log.append((kind, a))
         step = script.pop(0) if script and script[0][0] == kind else (kind, {})
         if isinstance(step[1], BaseException):
@@ -578,11 +578,38 @@ assert log[0][0] == "take" and log[0][1][log[0][1].index("--retry-request") + 1]
 assert pend.exists()  # kept until the caller has printed the ACTIONABLE batch
 prog.done_take(pend)
 assert not pend.exists()
-# Rows peeked but none handed out end the wait instead of spinning on them.
+# Rows peeked but none handed out end the wait instead of spinning on them, and leave no request to replay.
 log = []
 prog.orca_json = scripted([("peek", row), ("take", {})], log)
-got = prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: None)
-assert got == ([], [], set(), False) and len(log) == 2, log
+got = prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: None, pending=pend)
+assert got == ([], [], set(), False) and len(log) == 2 and not pend.exists(), log
+# The ack goes under a retry id too: lost twice, it stays in `pending`, and the next wait replays the ack (whose
+# older-Orca answer is the next batch) before any peek.
+log = []
+prog.orca_json = scripted([("peek", row), ("take", st("s1", "d1")), ("ack", SystemExit("lost")),
+                           ("ack", SystemExit("lost again"))], log)
+got = prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: None, pending=pend)
+req = json.loads(pend.read_text())
+assert got[3] is False and req["ack"] == "d1" and all("--retry-request" in a for k, a in log if k == "ack"), (got, log)
+log = []
+prog.orca_json = scripted([("ack", q)], log)
+got = prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: None, pending=pend)
+assert log[0][0] == "ack" and req["retry_request"] in log[0][1] and got[3] is True and got[0] == ["dq"], log
+prog.done_take(pend)
+# An old ack Orca no longer answers is dropped, and the wait goes on to peek.
+pend.write_text(json.dumps({"retry_request": "r-old", "ack": "d0"}))
+log = []
+prog.orca_json = scripted([("ack", SystemExit("gone")), ("ack", SystemExit("gone")), ("peek", row), ("take", q)], log)
+got = prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: None, pending=pend)
+assert [k for k, _ in log] == ["ack", "ack", "peek", "take"] and got[3] is True, log
+prog.done_take(pend)
+# A delivery handled in an earlier round and handed out again is neither printed again nor left to replay.
+seen, printed, log = set(), [], []
+prog.orca_json = scripted([("peek", row), ("take", st("s1", "d1")), ("ack", {}), ("peek", {})], log)
+prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: printed.append(a[0]), pending=pend, seen=seen)
+prog.orca_json = scripted([("peek", row), ("take", st("s1", "d1"))], log)
+got = prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: printed.append(a[0]), pending=pend, seen=seen)
+assert len(printed) == 1 and not pend.exists() and got[3] is False, (printed, got)
 def broken(run):
     raise RuntimeError("boom")
 prog.run_workers = broken
