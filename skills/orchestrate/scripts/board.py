@@ -1465,8 +1465,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             if table_width.table_width(table) > COLS:
                 # One whole line per row, not a table.
                 swaps.append((len(out) + 1, len(whole) - 1, head_md + [table_width.md_row(row) for row in whole[1:]]))
-                out += [""] + ["- " + " ".join(row[:2]) + (f" — {' · '.join(t)}" if (t := [x for x in row[2:] if x and x != "—"]) else "")
-                               for row in whole[1:]]
+                out += [""] + table_width.as_lines(whole[1:], 2)
             else:
                 out += [""] + head_md
                 swaps.append((len(out), len(table) - 1, [table_width.md_row(row) for row in whole[1:]]))
@@ -1567,7 +1566,7 @@ def todo_order(items):
 
 def todo_tables(now=None, tg=False, fresh=True):
     """`orch board todo list`: the to-dos (📅 waiting, ⏰ come) and the held queue (its first is next), each a table
-    cut to 78 columns as the report's are, or lines on Telegram. Returns (text, width_ok)."""
+    a table when it fits 78 columns, else one whole line per row, or lines on Telegram. Returns (text, width_ok)."""
     items = render(now=now, fill=True, periodic=False, fresh=fresh and now is None)["open"]
     todos = todo_order([o for o in items if o["kind"] == "do"])
     queue = sorted((o for o in items if o["kind"] == "later"), key=lambda o: o["n"])
@@ -1589,10 +1588,11 @@ def todo_tables(now=None, tg=False, fresh=True):
         if tg:
             out += [""] + [f"{r[0]} " + " · ".join(r[1:]) for r in rows]
             continue
-        table = table_width.fit_best([head] + rows, COLS, (2, 1), keep=(1, 2))
-        ok &= table_width.table_width(table) <= COLS
-        out += ["", ("| " + " | ".join(table[0]) + " |").replace("|  |", "| |"), "|" + "---|" * len(head)]
-        out += [table_width.md_row(row) for row in table[1:]]
+        if table_width.table_width([head] + rows) > COLS:  # nothing is cut: one whole line per row instead of a table
+            out += [""] + table_width.as_lines(rows, 1)
+            continue
+        out += ["", ("| " + " | ".join(head) + " |").replace("|  |", "| |"), "|" + "---|" * len(head)]
+        out += [table_width.md_row(row) for row in rows]
     return "\n".join(out), ok
 
 
