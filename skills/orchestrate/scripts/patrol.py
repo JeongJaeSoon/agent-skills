@@ -413,6 +413,15 @@ def read_ledgers(board):
     return out
 
 
+def row_waits(r, prs):
+    """Whether an open board row records what it waits for: a waiting, owner or held status, a named owner, or an
+    --after PR that is still open (or unknown). A done row waits for nothing."""
+    if r.get("done_at") or r.get("status") == "done":
+        return False
+    return bool(r.get("status") in ("waiting", "owner", "held") or r.get("owner")
+                or r.get("after") and (prs.get(r["after"]) or {}).get("state", "OPEN").upper() == "OPEN")
+
+
 def lead_still_h(events, tnow):
     """Hours since the program ledger's last event, or None when a wait is on record (a PR held by `parked` until
     `admitted`, a ticket whose latest triage is `parked`, or a last event that is itself `parked`) or the ledger has no
@@ -425,6 +434,11 @@ def lead_still_h(events, tnow):
             marks[("ticket", e["ticket"])] = e["ev"]
     if events[-1]["ev"] == "parked" or "parked" in marks.values():
         return None
+    for pr in {e["pr"] for e in events if e.get("pr") is not None}:  # a landing gate opened and not answered is a wait
+        mine = [e["ev"] for e in events if e.get("pr") == pr]
+        opened = [i for i, ev in enumerate(mine) if ev == "gate_opened"]
+        if opened and not any(ev in ("approved", "landed") for ev in mine[opened[-1] + 1:]):
+            return None
     try:
         return (tnow - prog.parse_ts(events[-1]["ts"])).total_seconds() / 3600
     except (KeyError, TypeError, ValueError):
@@ -613,10 +627,7 @@ def judge(facts, memo):
                         return True
                     r = board_rows.get(r["parent"]) or {}
                 return False
-            waits = lambda r: not (r.get("done_at") or r.get("status") == "done") and (  # noqa: E731
-                r.get("status") in ("waiting", "owner", "held") or r.get("owner")
-                or r.get("after") and (facts["prs"].get(r["after"]) or {}).get("state", "OPEN").upper() == "OPEN")  # a merged or closed PR is no wait
-            if waits(lead) or any(under(r) and waits(r) for r in board_rows.values()):
+            if row_waits(lead, facts["prs"]) or any(under(r) and row_waits(r, facts["prs"]) for r in board_rows.values()):
                 continue
             still = lead_still_h(events, tnow)
             if still is not None and still >= PARKED_LEAD_H:
@@ -636,8 +647,9 @@ def judge(facts, memo):
         if s.get("agents") or s.get("path") in agent_paths or (det.get("state") or "").upper() != "OPEN":
             continue
         key = f"O:{s.get('path')}:{pr}"
-        if "board" in failed or pr in held:
-            continue
+        if "board" in failed or pr in held or any(
+                r.get("pr") == pr and row_waits(r, facts["prs"]) for r in ((facts["board"] or {}).get("rows") or {}).values()):
+            continue  # a board row that names the PR and records a wait, hold or owner is the PR's waiting
         if any(r.get("requested") for r in det.get("reviewers") or []):  # someone waits: the day starts over
             continue
         if str(det.get("ci") or "").lower() in ("pending", "running", "in_progress", "queued"):

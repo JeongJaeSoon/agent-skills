@@ -163,6 +163,17 @@ for name, board in (("later", later), ("to-do", todo_w), ("owner to-do past its 
     assert found == [] and kept["first_seen"] == {}, (name, found)
 todo_past = {"todo": [{"id": "b4", "title": "acme/app#1 정리", "who": "writer", "due": "2020-01-01"}]}
 assert codes(patrol.judge({**fd, "now": NOW + 3 * 3600, "board": todo_past}, md)[0]) == [("O", "p")], "a writer's to-do past its date holds nothing"
+# A board row that names the PR and records a hold, a wait or an owner is the PR's waiting; a done row, or one that
+# records nothing, is not.
+for name, row_ in (("held", {"status": "held"}), ("waiting", {"status": "waiting"}), ("owner", {"owner": "someone"}),
+                   ("after an open PR", {"after": "acme/app#9"})):
+    brd = {"rows": {"r1": {"kind": "task", "pr": "acme/app#1", "status": "moving", **row_}}}
+    found, _, _ = patrol.judge({**fd, "now": NOW + 3 * 3600, "board": brd}, md)
+    assert found == [], (name, found)
+for name, row_ in (("done", {"status": "done", "owner": "someone"}), ("nothing", {}), ("a merged PR", {"after": "acme/app#9"})):
+    brd = {"rows": {"r1": {"kind": "task", "pr": "acme/app#1", "status": "moving", **row_}}}
+    ps = {**dirty, "acme/app#9": {"state": "MERGED"}} if name == "a merged PR" else dirty
+    assert codes(patrol.judge({**fd, "now": NOW + 3 * 3600, "board": brd, "prs": ps}, md)[0]) == [("O", "p")], name
 # A board that could not be read: no new finding, and the clock is kept.
 found, _, kept = patrol.judge({**fd, "now": NOW + 3 * 3600, "board": {}, "failed": {"board"}}, md)
 assert found == [] and kept["first_seen"] == md["first_seen"], (found, kept)
@@ -208,6 +219,11 @@ assert quiet_lead(board=lboard(lead={"status": "waiting", "owner": "someone"})) 
 assert quiet_lead(board=lboard(lead={"status": "held"})) == [], "a lead held on purpose"
 assert quiet_lead(tails={"/w/lead": ({**idle(300, parked=True), "state": "tool"}, None)}) == [], "a tool is running: the turn has not ended"
 assert quiet_lead(board=lboard({"L/a": {**waits_row, "status": "moving", "after": "acme/app#9"}})) == [], "a row after an open PR"
+gate_open = [ev("gate_opened", 220, pr=5, gate="g1")]
+assert quiet_lead(ledgers=led(gate_open)) == [], "a landing gate opened and not answered"
+assert quiet_lead(ledgers=led(gate_open + [ev("approved", 200, pr=5)])) != [], "approved: the lead resumes, nothing is left to wait on"
+assert quiet_lead(ledgers=led(gate_open + [ev("landed", 200, pr=5)])) != []
+assert quiet_lead(ledgers=led([ev("gate_opened", 220, pr=5), ev("approved", 210, pr=5), ev("gate_opened", 200, pr=5)])) == [], "the newest gate counts"
 for state in ("MERGED", "CLOSED"):
     assert quiet_lead(board=lboard({"L/a": {**waits_row, "status": "moving", "after": "acme/app#9"}}),
                       prs={"acme/app#9": {"state": state}}) != [], f"a {state} PR is no wait"
