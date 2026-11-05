@@ -385,7 +385,7 @@ def render_md(t):
     at = 1 if now else 0
     body = [[f"**{x}**" if c == at and t["rows"][i].get("group") else x for c, x in enumerate(row)] for i, row in enumerate(body)]
     if table_width.table_width([header] + body) > COLS:
-        lines = lines[:-2] + [""] + table_width.as_lines(body, at + 1)
+        lines = lines[:-2] + table_width.as_lines(body, at + 1)  # the header and its rule give way to the lines
     else:
         lines += [table_width.md_row(row) for row in body]
     if t["next"]:

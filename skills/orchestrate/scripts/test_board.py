@@ -573,24 +573,20 @@ tg_req = rok(*REQUEST, "--telegram")  # the dashboard is on 127.0.0.1 only: Tele
 assert "단계표 1행 · orch stage show --telegram" in tg_req.splitlines() and "127.0.0.1" not in tg_req, tg_req
 (tmp / "programs" / ".dash.json").write_text(json.dumps({"pid": 2 ** 22 + 1, "port": 4799}))  # no such process
 assert "단계표 1행 · `orch stage show`" in rok(*REQUEST).splitlines()
-# The table itself is `orch stage show`'s: a long stage name is cut to its head and `…`, with no list under the table.
+# The table itself is `orch stage show`'s: no cell is cut, so a table past 78 columns is one whole line per row.
 WIDE_TITLE, WIDE_EVIDENCE = "아주 긴 이름의 작업으로 표의 폭을 넘기는 행", "로그로만 확인하고 화면은 아직 보지 않음"
 rok("stage", "add", "wide", "--title", WIDE_TITLE, "--pr", "acme/web#1234")
 code, cut, err = orch_env(renv, "stage", "show")
-assert code == 0 and all(table_width.table_width(t) <= 78 for _, t in table_width.tables(cut)), (code, err, cut)
-assert "| 아주 긴 이름의 작업… |" in cut and "- [" not in cut and "…[" not in cut, cut
-assert "| 작업 |" in cut and "1. v1.7.2 prod 배포 (사람, 미정)" in cut and "단계표 2행 · `orch stage show`" in rok(*REQUEST).splitlines()
-# The stage table's PR is a plain key, so a long one is cut the same way.
+assert code == 0 and "…" not in cut and "- [" not in cut, (code, err, cut)
+assert f"- {WIDE_TITLE} — acme/web#1234" in cut.splitlines() and "1. v1.7.2 prod 배포 (사람, 미정)" in cut and "단계표 2행 · `orch stage show`" in rok(*REQUEST).splitlines()
+# A long PR key stays whole too.
 WIDE_PR = "acme/a-very-long-repository-name-for-the-table#123456"
 rok("stage", "add", "wider", "--title", "넓은 PR", "--pr", WIDE_PR)
 code, cut, err = orch_env(renv, "stage", "show")
-assert code == 0 and "- [" not in cut and "| acme/a-very-long-… |" in cut and "| acme/web#40 |" in cut and WIDE_PR not in cut, (code, err, cut)
-# A stage cell is never cut: a table its stage cells make too wide overflows whole, and show says so. The brief has
-# no table left to overflow.
+assert code == 0 and "…" not in cut and f"- 넓은 PR — {WIDE_PR}" in cut.splitlines(), (code, err, cut)
 rok("stage", "set", "wide", "--col", "dev", "--mark", "partial", "--evidence", WIDE_EVIDENCE)
 code, cut, err = orch_env(renv, "stage", "show")
-assert code == 1 and "wider than 78" in err, (code, err)
-assert f"| {WIDE_TITLE} | acme/web#1234 | – | ⚠️ {WIDE_EVIDENCE} | – |" in cut.splitlines() and "\n- [" not in cut, cut
+assert code == 0 and f"- {WIDE_TITLE} — acme/web#1234 · ⚠️ {WIDE_EVIDENCE}" in cut.splitlines() and "…" not in cut, (code, err, cut)
 assert orch_env(renv, *REQUEST)[0] == 0
 
 # GitHub outranks the board: a phase whose own PR merged is ✅ and leaves 진행 중 whatever its board next says, a PR

@@ -6,7 +6,7 @@ import pathlib, re, subprocess, sys
 
 HERE = pathlib.Path(__file__).parent
 sys.path.insert(0, str(HERE))
-from table_width import apart, fit, fit_best, table_width, tables, text_width
+from table_width import as_lines, table_width, tables, text_width
 
 assert text_width("검색 개선") == 9
 assert text_width("⚠️ 로그만") == 9
@@ -87,27 +87,16 @@ for rows, k in folded:
     assert len(re.findall(r"#\d+", rows[k][2])) >= 2, rows[k]
     assert subtask_runs(rows[:k])[0] == 0 and any(not is_sub(r) for r in rows[1:k]), ("reviewer row without its lead", rows)
 
-# A cut cell is its head and a single `…`, with no mark and no list under the table; a cell that fits stays whole.
-assert fit([["a", "b"], ["x" * 15, "y"]], 20, (0,)) == [["a", "b"], ["x" * 11 + "…", "y"]]
-assert fit([["a", "b"], ["x" * 15, "y"], ["z" * 12, "y"]], 20, (0,))[1:] == [["x" * 11 + "…", "y"], ["z" * 12, "y"]]
-assert fit([["a", "b"], ["x" * 15, "y"], ["z" * 8, "y"]], 20, (0,))[1:] == [["x" * 11 + "…", "y"], ["z" * 8, "y"]]
-# Near the floor no cut gets the table in: the loop ends with the cuttable cells at their floor, still too wide.
-assert fit([["a", "b"], ["x" * 12, "y" * 60]], 40, (0,)) == [["a", "b"], ["x" * 12, "y" * 60]]
-# deco dresses a cell after the cut, so the `…` stays inside the markup.
-assert fit([["a", "b"], ["x" * 15, "y"]], 20, (0,), deco=lambda i, c, s: f"**{s}**" if c == 0 else s)[1][0] == "**" + "x" * 11 + "…**"
-
-# Two long names with one head stay two: keep stops the cut where they would read alike, and the table then stays
-# uncut, for fit_best too: two rows that read alike cannot be told apart.
+# A table wider than the width goes out as one whole line per row: no cell is cut, two names with one head stay two, a
+# reason shared by a long head stays whole, an empty or `—` cell is left out, and no line carries a footnote mark.
+reasons = ["에이전트 조치 필요: 리뷰 두 팀 승인을 확인한 뒤 머지 그리고 배포까지 " + w for w in ("진행", "보고")]
 cards = ["xx-agent-actions-lead", "xx-agent-wizard-lead"]
-assert apart(cards, 6) == 11 and apart(cards + cards, 6) == 11 and apart(["ab", "cd"], 6) == 6
-table = [["name", "n"]] + [[c, "y"] for c in cards]
-out = fit(table, 20, (0,), floor=6, keep=(0,))
-assert [r[0] for r in out[1:]] == ["xx-agent-ac…", "xx-agent-wi…"], out
-out = fit(table, 16, (0,), floor=6, keep=(0,))
-assert [r[0] for r in out[1:]] == cards and table_width(out) > 16, out
-out = fit_best(table, 16, (0,), floor=6, keep=(0,))
-assert [r[0] for r in out[1:]] == cards and table_width(out) > 16, out
-assert fit_best(table, 20, (0,), floor=6, keep=(0,)) == fit(table, 20, (0,), floor=6, keep=(0,))
+rows = [["🔄", c, "—", r, ""] for c, r in zip(cards, reasons)]
+assert table_width([["", "리드", "PR", "다음", "세션"]] + rows) > 78
+lines = as_lines(rows, 2)
+assert lines == [f"- 🔄 {c} — {r}" for c, r in zip(cards, reasons)], lines
+assert not any("…" in l or "[1]" in l for l in lines)
+assert as_lines([["⏰", "내일", "할 일", "—"]], 1) == ["- ⏰ — 내일 · 할 일"] and as_lines([["🔄", "name", "", ""]], 2) == ["- 🔄 name"]
 
 wide = "| " + "가" * 40 + " | b |\n|---|---|\n"
 r = subprocess.run([sys.executable, str(HERE / "table_width.py"), "--cols", "78"], input=wide, capture_output=True, text=True)

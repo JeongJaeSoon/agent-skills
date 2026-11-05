@@ -218,13 +218,24 @@ cards = {"c1": {"id": "c1", "name": "deploy-card", "pr": "acme/app#5"}}
 assert fleet.todo_come({"title": "x", "who": "w", "after": "deploy-card 끝나면"}, fleet.parse(BEFORE), merged, cards)
 assert not fleet.todo_come({"title": "x", "who": "w", "after": "deploy-card 끝나면"}, fleet.parse(BEFORE), {}, cards)
 
-# A long name is cut to fit 78 columns as the report's tables are, to its head and `…`, with no list under the table.
-board.todo_add("아주 긴 할 일 이름이 표 폭을 넘겨서 잘려야 하는 경우를 확인하기 위한 문장 — 끝까지 읽혀야 한다", due="2027-05-01", who="writer")
+# A long name is never cut: the to-do table passes 78 columns, so its rows go out as one whole line each.
+LONG_TODO = "아주 긴 할 일 이름이 표 폭을 넘겨서 잘리면 안 되는 경우를 확인하기 위한 문장 — 끝까지 읽혀야 한다"
+board.todo_add(LONG_TODO, due="2027-05-01", who="writer")
 listed = ok("board", "todo", "list", "--now", BEFORE, "--no-refresh")
-assert "| 아주 긴 할 일 이름이 표 … |" in listed and "- [" not in listed and "…[" not in listed, listed
+assert any(l.startswith("- 📅") and LONG_TODO in l and l.endswith("writer") for l in listed.splitlines()), listed
+assert "…" not in listed and "- [" not in listed, listed
 sys.path.insert(0, str(HERE.parents[1] / "brief" / "scripts"))
 import table_width  # noqa: E402
-assert all(table_width.text_width(l) <= 78 for l in listed.splitlines() if l.startswith("|")), listed
+assert all(table_width.table_width(t) <= 78 for _, t in table_width.tables(listed)), listed
+# Two to-dos with one long head and a trigger that would cut to the same phrase stay whole, one line each.
+SAME = "공통 앞부분이 아주 길게 이어지는 보류 항목 이름 "
+for k in ("가", "나"):
+    board.later_add(SAME + k, trigger="조건이 충족되면 두 팀 승인을 확인한 뒤 배포 " + k)
+listed = ok("board", "todo", "list", "--now", BEFORE, "--no-refresh")
+same = [l for l in listed.splitlines() if "공통 앞부분" in l]
+assert len(same) == 2 and all(SAME + k in l and ("두 팀 승인을 확인한 뒤 배포 " + k) in l and "…" not in l for l, k in zip(same, "가나")), listed
+for _ in same:
+    ok("board", "later", "drop", "2")  # the two sit at 2 and 3; the queue closes up after each drop
 
 assert orch("board", "todo", "drop", "abc")[2].startswith("board todo is the to-do list now: todo add")
 
