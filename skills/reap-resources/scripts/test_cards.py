@@ -568,4 +568,41 @@ planned, _ = cards.scan({})
 assert [(i["verdict"], i["dirty"]) for i in planned] == [(cards.KEEP, None)], planned
 cards.read_machine, cards.cards_listing, cards.gather, reap.run = saved
 
+# Rule 8b: an idle session gives its terminals back. A card kept only because its session never said done (clean, HEAD
+# on the default branch) after idle_close_hours; a card kept for its work after stale_hours, the worktree left.
+ST = cards.settings({})
+assert (ST["stale_s"], ST["close_s"]) == (24 * 3600, 2 * 3600), ST
+H = 3600
+
+
+def idle8b(quiet, silent, **kw):
+    f = cards.gather({"path": CARD}, machine(quiet=quiet), fake(terminals=[term("a1", True, silent)], **kw))
+    return cards.judge(f, IDLE, ST["stale_s"], ST["close_s"])
+
+
+v = idle8b(2 * H, 2 * H, local_landed=True)
+assert v[0] == cards.CLOSE and v[2] == ["a1"] and "claude --resume" in v[1] and "projects" in v[1], v
+assert idle8b(2 * H - 60, 2 * H, local_landed=True)[0] == cards.KEEP, "the transcript not quiet long enough"
+assert idle8b(2 * H, 2 * H - 60, local_landed=True)[0] == cards.KEEP, "a terminal printed within the threshold"
+for kw in ({"local_landed": True, "status": " M a.py\n"}, {"ahead": "c1\n", "remote_log": ""}, {}):
+    assert idle8b(23 * H, 23 * H, **kw)[0] == cards.KEEP, ("work keeps it under a day", kw)
+    v = idle8b(24 * H, 24 * H, **kw)
+    assert v[0] == cards.CLOSE and "worktree 와 변경은 두고" in v[1] and v[2] == ["a1"], (kw, v)
+# Off by config, and never without a numeric transcript quiet, an agent terminal, or past a protection or a question.
+off = cards.settings({"cards": {"stale_hours": 0, "idle_close_hours": "soon"}})
+assert (off["stale_s"], off["close_s"]) == (None, None), off
+f = cards.gather({"path": CARD}, machine(quiet=30 * H), fake(local_landed=True, terminals=[term("a1", True, 30 * H)]))
+assert cards.judge(f, IDLE, off["stale_s"], off["close_s"])[0] == cards.KEEP
+assert idle8b("세션 기록을 읽지 못함", 30 * H, local_landed=True)[0] == cards.KEEP
+m = machine(rows=rows3, cwd_of={30: CARD}, quiet=30 * H)
+v = cards.judge(cards.gather({"path": CARD}, m, fake(local_landed=True)), IDLE, ST["stale_s"], ST["close_s"])
+assert v[0] == cards.KEEP, ("a headless session has no terminal to close", v)
+f = cards.gather({"path": CARD}, machine(quiet=30 * H), fake(local_landed=True, terminals=[term("a1", True, 30 * H, ["다음 단계로 갈까?", "Enter to select · Esc to cancel"])]))
+assert cards.judge(f, IDLE, ST["stale_s"], ST["close_s"])[0] == cards.ASK
+f = cards.gather({"path": CARD}, machine(quiet=30 * H, patrol={CARD: "run"}), fake(local_landed=True, terminals=[term("a1", True, 30 * H)]))
+assert cards.judge(f, IDLE, ST["stale_s"], ST["close_s"])[0] == cards.KEEP, "a protected card stays whatever its quiet"
+f = cards.gather({"path": CARD}, machine(quiet=30 * H), fake(ahead="c1\n", remote_log="r1\0fix: thing\n",
+                                                             patches={"c1": "P", "r1": "Q"}, terminals=[term("a1", True, 30 * H)]))
+assert cards.judge(f, IDLE, ST["stale_s"], ST["close_s"])[0] == cards.ASK, "a question for a person is not a keep"
+
 print("ok")

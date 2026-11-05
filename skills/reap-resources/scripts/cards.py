@@ -23,6 +23,12 @@ import cardguard, reap, rm_refused  # noqa: E402
 REMOVE, CLOSE, KEEP, ASK = "삭제", "터미널만 닫기", "남김", "사람 결정"
 ACTING = (REMOVE, CLOSE)
 SCREEN_LINES = 40
+# Rule 8b: a session idle this long in a card kept for its work (changes, unpushed commits, no PR) gives its terminals
+# back; the worktree, and so the work, stays. A card kept only because its session never said it was done has nothing
+# to lose, so its threshold is shorter.
+STALE_HOURS = 24
+CLOSE_HOURS = 2
+LIVE_UNDONE = "PR 없음, Claude 세션이 있음(끝났다는 말 없음)"
 DONE_PATTERNS = (r"닫아도\s*(된|돼|좋|괜찮)", r"종료해도\s*(된|돼|좋|괜찮)", r"(can|may) (now )?be closed",
                  r"safe to close", r"閉じて(も)?(大丈夫|よい|いい|構いません)")
 QUESTION_PATTERNS = cardguard.QUESTION_PATTERNS
@@ -45,7 +51,12 @@ def sh(cmd, cwd=None, input=None, errors=None):
 
 def settings(cfg):
     c = cfg.get("cards") or {}
+
+    def hours(key, default):  # 0, or a value that is not a positive number, turns that half of rule 8b off
+        v = c.get(key, default)
+        return float(v) * 3600 if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 else None
     return {"idle_s": float(cfg.get("idle_minutes") or 30) * 60,
+            "stale_s": hours("stale_hours", STALE_HOURS), "close_s": hours("idle_close_hours", CLOSE_HOURS),
             "prefixes": tuple(c.get("protect_prefixes") or ("lead-",)),
             "done": [re.compile(p, re.I) for p in c.get("done_patterns") or DONE_PATTERNS],
             "question": [re.compile(p) for p in c.get("question_patterns") or QUESTION_PATTERNS]}
@@ -202,7 +213,8 @@ def gather(w, m, run=None):
         f["handed_to"] = next((q for q, h in (m.get("heads") or {}).items()
                                if q != p and h == f["pr_head"]), None)
     claude, busy, other = processes_in(p, m["rows"], m["cwd_of"])
-    f.update(claude=claude, busy=busy, other=other, quiet=m["quiet"](p))
+    f.update(claude=claude, busy=busy, other=other, quiet=m["quiet"](p),
+             transcripts=str(m["projects"] / re.sub(r"[^A-Za-z0-9]", "-", p)) if m.get("projects") else None)
     terms = run(["orca", "terminal", "list", "--worktree", f"path:{p}", "--json"])
     try:
         res = json.loads(terms)["result"]
@@ -228,8 +240,9 @@ def gather(w, m, run=None):
 
 # ---------------------------------------------------------------- the rule
 
-def judge(f, idle_s):
-    """(verdict, why, handles to close). Pure: every fact comes from gather()."""
+def judge(f, idle_s, stale_s=None, close_s=None):
+    """(verdict, why, handles to close). Pure: every fact comes from gather(). stale_s, close_s: rule 8b's thresholds
+    (a card kept for its work; one kept only for a session that never said done), None off."""
     if f.get("protected"):
         return KEEP, f"보호: {f['protected']}", []
     if f.get("handed"):
@@ -270,6 +283,21 @@ def judge(f, idle_s):
         if agents_idle and handles:
             return CLOSE, f"열린 PR {f['pr']}: worktree 는 두고 idle 터미널 {len(handles)}개만 닫음", handles
         return KEEP, f"열린 PR {f['pr']}" + ("" if agents_idle else ", 세션이 아직 조용하지 않음"), []
+    verdict = settled(f, handles, live, said_done, agents_idle)
+    # 8b: every agent terminal and the transcript quiet past the threshold. "Done" on the screen is no evidence of
+    # hours of quiet, and a Claude process with no agent terminal has nothing here to close.
+    limit = close_s if verdict[1] == LIVE_UNDONE else stale_s
+    if verdict[0] == KEEP and limit and agents and handles and isinstance(quiet, (int, float)) \
+            and quiet >= limit and all(t["silent"] >= limit for t in agents):
+        # Where the session record lives, so the close's ledger line says how to resume it.
+        where = f" ({f['transcripts']})" if f.get("transcripts") else ""
+        return CLOSE, (f"유휴 {quiet / 3600:.1f}시간({verdict[1]}): worktree 와 변경은 두고 터미널 {len(handles)}개만 닫음, "
+                       f"이어서 하려면 claude --resume{where}"), handles
+    return verdict
+
+
+def settled(f, handles, live, said_done, agents_idle):
+    """Rules 9 to 14: a card with no open PR whose agents are not busy, asked or unreadable."""
     if f.get("dirty"):
         return KEEP, "커밋 안 된 변경(추적 안 되는 파일 포함, ignored 제외)", []
     if f.get("unpushed") is None:
@@ -290,7 +318,7 @@ def judge(f, idle_s):
     if not f["landed"]:
         return KEEP, f"PR 없음, HEAD 가 기본 브랜치에 없음({f['landed_via']})", []
     if live and not said_done:
-        return KEEP, "PR 없음, Claude 세션이 있음(끝났다는 말 없음)", []
+        return KEEP, LIVE_UNDONE, []
     return REMOVE, f"PR 없음, HEAD 가 기본 브랜치에 있음({f['landed_via']}){tail}", handles
 
 
@@ -359,7 +387,7 @@ def scan(cfg, repo_list=(), notes=None):
         if w.get("isMainWorktree"):
             continue
         f = gather(w, m)
-        verdict, why, close = judge(f, m["st"]["idle_s"])
+        verdict, why, close = judge(f, m["st"]["idle_s"], m["st"]["stale_s"], m["st"]["close_s"])
         items.append({"path": f["path"], "name": f["name"], "repo": f["repo"], "branch": f["branch"], "pr": f["pr"],
                       "state": f["state"], "verdict": verdict, "why": why, "close": close, "head": f["head"],
                       "ino": reap.dir_ino(f["path"]), "regenerated": f.get("regenerated") or [],
@@ -406,7 +434,7 @@ def reread(path, cfg):
         return None
     m["heads"] = card_heads(rows)  # the verdict is read again from fresh facts, this one too
     f = gather(row, m)
-    return (*judge(f, m["st"]["idle_s"]), f)
+    return (*judge(f, m["st"]["idle_s"], m["st"]["stale_s"], m["st"]["close_s"]), f)
 
 
 def act(item, cfg, wait=5.0, done=None):
