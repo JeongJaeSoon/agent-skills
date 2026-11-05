@@ -3182,8 +3182,10 @@ def mark_shown(pending, mid):
 
 def done_take(pending):
     if pending is not None:
-        with contextlib.suppress(OSError):
+        try:
             pending.unlink(missing_ok=True)
+        except OSError as e:  # a stale request left behind would be replayed in place of the next take
+            raise PendingError(f"wait request {pending} could not be removed ({e}); remove it to go on")
 
 
 def wait_take(box, timeout_ms, clock=time.monotonic, out=print, pending=None, seen=None):

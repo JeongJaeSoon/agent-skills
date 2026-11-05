@@ -742,6 +742,23 @@ except prog.PendingError:
 finally:
     prog.pending_request = real_pr
 prog.done_take(pend)
+# A request that cannot be removed stops the wait; a missing one is fine.
+pend.write_text(json.dumps({"retry_request": "r-h", "ack": "d0"}))
+real_unlink = pathlib.Path.unlink
+pathlib.Path.unlink = lambda self, *a, **k: (_ for _ in ()).throw(PermissionError("denied")) if self == pend \
+    else real_unlink(self, *a, **k)
+log = []
+prog.orca_json = scripted([("ack", {}), ("peek", row), ("take", q)], log)
+try:
+    prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: None, pending=pend)
+    raise AssertionError("a request that cannot be removed must stop the wait")
+except prog.PendingError as e:
+    assert "could not be removed" in str(e), e
+finally:
+    pathlib.Path.unlink = real_unlink
+assert [k for k, _ in log] == ["ack"], log
+prog.done_take(pend)
+prog.done_take(pend)
 # A delivery handled in an earlier round and handed out again is neither printed again nor left to replay.
 seen, printed, log = set(), [], []
 prog.orca_json = scripted([("peek", row), ("take", st("s1", "d1")), ("ack", {}), ("peek", {})], log)
