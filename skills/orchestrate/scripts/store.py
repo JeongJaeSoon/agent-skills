@@ -883,7 +883,7 @@ def check_sessions(procs, since):
         starts = [fleet.ps_time((procs.get(p) or (0, ""))[1]) for p in s.get("pids") or []]
         if not starts or not since or any(t is None or t < since for t in starts):
             out.append(f"session {sid} ({s.get('cwd')}, home {s.get('home')}) started before the update: "
-                       "end or restart it")
+                       "end it and start a new process; /restart keeps the pid and start time, so it does not count")
     return out
 
 

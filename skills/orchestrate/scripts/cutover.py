@@ -277,7 +277,7 @@ def recover():
 def classify(reason):
     """(kind, what to do) for a preflight reason."""
     if reason.startswith("session "):
-        return "session", "end it and start a new one (/reload-plugins does not count: only a process that started after the update passes)"
+        return "session", "end it and start a new process (/reload-plugins and /restart do not count: they keep the pid and start time, and only a process that started after the update passes)"
     if reason.startswith("pid "):
         return "process", "let it end, or end the session that started it; the next run sees it gone"
     if reason.startswith("LaunchAgent "):

@@ -408,6 +408,7 @@ try:
 finally:
     fleet.live_sessions = real_live
 assert len(why) == 1 and "s-old" in why[0], why  # one pid from before the update is enough
+assert "/restart" in why[0] and "does not count" in why[0] and "end or restart" not in why[0], why  # /restart keeps pid and start time
 home = tmp / "home"
 (home / "plugins").mkdir(parents=True)
 (home / "plugins" / "installed_plugins.json").write_text(json.dumps({"plugins": {
