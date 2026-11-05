@@ -150,12 +150,7 @@ def config(path=CONFIG):
             re.compile(x)
         except re.error as e:
             raise ConfigError(f"exclude_title_patterns: invalid regex {x!r}: {e}") from None
-    orch = whole.get("orchestrate")
-    ex = orch.get("land_executor") if isinstance(orch, dict) else None
-    repos = ex.get("repos") if isinstance(ex, dict) and ex.get("enabled") is True else None
-    # Not a prs key: the orchestrate section decides, by the same test prog.land_executor makes.
-    cfg = {**DEFAULTS, **raw, "exclude_title_patterns": pats,
-           "land_executor_repos": [r for r in repos if isinstance(r, str)] if isinstance(repos, list) else []}
+    cfg = {**DEFAULTS, **raw, "exclude_title_patterns": pats, "land_executor_repos": land_executor_repos(whole)}
     profiles = cfg["profiles"]
     if not isinstance(profiles, list) or not all(isinstance(x, dict) and isinstance(x.get("match"), str) for x in profiles):
         raise ConfigError('profiles must be a list of objects, each with a "match" string')
@@ -175,6 +170,28 @@ def config(path=CONFIG):
             if k in c and not (isinstance(c[k], int) and not isinstance(c[k], bool) and 0 <= c[k] <= top):
                 raise ConfigError(f"{where}: {k} must be an hour from 0 to {top}")
     return cfg
+
+
+def land_executor_repos(whole):
+    """The repos orchestrate.land_executor merges, read where `orch land` reads it ($AGENT_SKILLS_CONFIG first),
+    with prog.land_executor's test (enabled exactly true). Not a prs key. A repos value that is not a list stops
+    every command: guessing it empty would print direct merges for repos the executor owns."""
+    env = os.environ.get("AGENT_SKILLS_CONFIG")
+    if env:
+        try:
+            whole = json.loads(pathlib.Path(env).expanduser().read_text())
+        except FileNotFoundError:
+            whole = {}
+        except (OSError, ValueError) as e:
+            raise ConfigError(f"{env}: unreadable ({e}); not merging around orchestrate.land_executor") from None
+    orch = whole.get("orchestrate") if isinstance(whole, dict) else None
+    ex = orch.get("land_executor") if isinstance(orch, dict) else None
+    if not isinstance(ex, dict) or ex.get("enabled") is not True:
+        return []
+    repos = ex.get("repos") or []
+    if not isinstance(repos, list):
+        raise ConfigError("orchestrate.land_executor.repos must be a list of owner/name strings")
+    return [r for r in repos if isinstance(r, str)]
 
 
 def repo_cfg(cfg, repo):

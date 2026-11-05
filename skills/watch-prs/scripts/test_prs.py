@@ -866,13 +866,41 @@ out = subprocess.run([sys.executable, script, "merges", "--config", str(mconf)],
                      env={**os.environ, "AGENT_SKILLS_STATE": str(xtmp)})
 assert out.returncode == 0 and out.stdout == "" and p.read_json(xtmp / "prs" / "ledger.json", {}) == {}, out
 
+# verify reads nothing back for it, and commit marks it sent: the same head is handed on once.
+assert "orch land" in p.verify(MergeFake([], [[]]), xtmp / "prs", mcfg)
+assert p.commit(xtmp / "prs", mcfg, NOW) == 1 and list(p.read_json(xtmp / "prs" / "ledger.json", {})) == [eby[1]["key"]]
+assert p.compute(MergeFake([mpr(1)]), ecfg, p.read_json(xtmp / "prs" / "ledger.json", {}), NOW)["new"] == []
+
 # config() reads the executor's repos from orchestrate.land_executor; off, or not exactly enabled: true, means none.
+saved_env = os.environ.pop("AGENT_SKILLS_CONFIG", None)
 for orch, want in (({"land_executor": {"enabled": True, "repos": ["acme/widgets", 7]}}, ["acme/widgets"]),
                    ({"land_executor": {"enabled": False, "repos": ["acme/widgets"]}}, []),
                    ({"land_executor": {"enabled": "yes", "repos": ["acme/widgets"]}}, []), ({}, [])):
     xconf = xtmp / "x.json"
     xconf.write_text(json.dumps({"prs": {"land_executor_repos": ["spoofed/repo"]}, "orchestrate": orch}))
     assert p.config(xconf)["land_executor_repos"] == want, (orch, p.config(xconf)["land_executor_repos"])
+# repos that is not a list stops the config, as prog would not read it the same way.
+xconf.write_text(json.dumps({"prs": {}, "orchestrate": {"land_executor": {"enabled": True, "repos": {"acme/widgets": 1}}}}))
+try:
+    p.config(xconf)
+    raise AssertionError("a non-list repos must stop the config")
+except p.ConfigError:
+    pass
+# $AGENT_SKILLS_CONFIG, which `orch land` reads, decides the executor even when the prs file is another one.
+envconf = xtmp / "env.json"
+envconf.write_text(json.dumps({"orchestrate": {"land_executor": {"enabled": True, "repos": ["acme/env"]}}}))
+xconf.write_text(json.dumps({"prs": {}}))
+os.environ["AGENT_SKILLS_CONFIG"] = str(envconf)
+assert p.config(xconf)["land_executor_repos"] == ["acme/env"]
+envconf.write_text("{not json")
+try:
+    p.config(xconf)
+    raise AssertionError("an unreadable $AGENT_SKILLS_CONFIG must stop the config")
+except p.ConfigError:
+    pass
+os.environ.pop("AGENT_SKILLS_CONFIG")
+if saved_env is not None:
+    os.environ["AGENT_SKILLS_CONFIG"] = saved_env
 
 # Kinds share the ledger key shape: the head ready_to_merge recorded is still due as unreleased once merged.
 shared = {"acme/widgets#20@m20": {"at": NOW, "kind": "ready_to_merge", "id": "x"}}

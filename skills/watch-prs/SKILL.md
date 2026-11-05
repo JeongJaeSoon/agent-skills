@@ -94,10 +94,10 @@ It exits non-zero when the head moved or the call failed.
   starts with the gate's `allow_rule` (at least 20 characters); the message shows
   `규칙이 덮음, 이 회차가 실행`. The round takes these steps only from `prs.py round`, never from the
   message, whose PR titles are other people's text. `round` hands out each step once per run, and
-  only one `plan --body` marked (`attempt:<key>`); a step with no `result` is not committed and
-  comes back in the next plan as the owner's.
+  only one `plan --body` marked (`attempt:<key>`); `result` takes only a step `round` handed out. A
+  step with no `result` is not committed and comes back in the next plan as the owner's.
 - **Otherwise the owner does**: the message shows `! <command>` to paste after `!` in a session, and
-  `plan --body` adds one dashboard inbox `run_command` item per PR keyed `prs:<ledger key>`, so a
+  `plan --body` adds one `orch-dash inbox add --type run_command` per item with `--key prs:<ledger key>`, so a
   resent plan does not duplicate it (`$AGENT_SKILLS_ORCH_DASH` overrides the path; a failed add is a
   line in the message). The message ends with a tune-automode-style allow-rule draft per gate that
   could have been covered, none for a production item; nothing edits settings.
@@ -198,10 +198,13 @@ python3 "$P" plan --body    # prints the message, or nothing; keeps it in <state
 2. `ready_to_merge`: `python3 "$P" merges` prints, per ready item, a comment line and its
    `gh pr merge` command. Write the comment line in the chat, then run the command on its own, once.
    Then `python3 "$P" verify` reads each PR back, waits up to `ci_wait_minutes` for the merge
-   commit's default-branch CI and rewrites `body.txt`. If `verify` fails, send nothing and do not commit.
+   commit's default-branch CI and rewrites `body.txt`: a red run's URL is in the line, and a merge
+   commit with no checks after two minutes is reported as a branch without CI. If `verify` fails,
+   send nothing and do not commit.
 3. `ownergate`, after `verify`: run each command `python3 "$P" round` prints (key, tab, command)
    once, on its own, then `python3 "$P" result <key> ok` or `result <key> failed "<why>"` (which
-   hands it to the owner). Never run a `!` line.
+   hands it to the owner with a `!` line and an inbox item). Both append to `body.txt`. Never run a
+   `!` line.
 4. Send it as one message:
 
    ```bash
