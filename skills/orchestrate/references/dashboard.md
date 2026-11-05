@@ -152,7 +152,8 @@ A decision the orchestrator or lead reaches in its own analysis, or hears from a
 
 ```sh
 orch decide add --title "Export format for the first release" --body-file /tmp/why.md \
-  --option "CSV::finance opens it in a spreadsheet" --option "JSON::one format for both" --recommend 1 [--link URL]   # prints d7
+  --option "CSV::finance opens it in a spreadsheet" --option "JSON::one format for both" --recommend 1 [--link URL] \
+  --if-no-answer CSV --reason owner-asked   # prints d7; the owner-ask gate (owner-ask-gate.md) refuses it without these
 orch decide list
 orch decide answer d7 --quote-file /tmp/words.md   # answered: the words as given, the time, this session; prints the line to quote
 orch decide answer --title "Ship the beta" --quote "…"   # an order nobody asked for: added and closed at once

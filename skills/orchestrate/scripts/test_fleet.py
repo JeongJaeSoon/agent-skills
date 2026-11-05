@@ -507,8 +507,10 @@ assert orch("list")[0] == 0 and not (dec_state / store.DB_NAME).exists()
 assert orch("import", "--apply", "--rehearsal", cmd="db")[0] == 0
 assert (dec_state / "decisions.json").is_dir()  # the tombstone: older code's write_atomic fails on it
 assert orch("add", "--title", "Export format", "--body-file", str(body_file), "--option", "CSV::finance uses sheets",
-            "--option", "JSON", "--recommend", "1", "--link", "https://example.com/t/1") == (0, "d1", "")
-assert orch("add", "--title", "Second", "--option", "A") == (0, "d2", "")
+            "--option", "JSON", "--recommend", "1", "--link", "https://example.com/t/1",
+            "--if-no-answer", "CSV", "--reason", "owner-asked") == (0, "d1", "")
+assert orch("add", "--title", "Second", "--option", "A::a", "--recommend", "1", "--if-no-answer", "진행 못 함",
+            "--reason", "owner-hands-only") == (0, "d2", "")
 code, out, _ = orch("list")
 assert code == 0 and out.splitlines()[1:3] == ["    1. CSV (recommended) — finance uses sheets", "    2. JSON"], out
 saved = saved_decision("d1")
