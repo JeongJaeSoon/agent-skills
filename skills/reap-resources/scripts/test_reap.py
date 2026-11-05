@@ -764,11 +764,15 @@ with tempfile.TemporaryDirectory() as tmp:
                       item("card:/c", "card", False, verdict="사람 결정"), item("card:/d", "card", False, verdict="남김")]}
     handed, sent = [], []
     def fake_reap(outcome):
-        def f(plan, cfg, scheduled_only, deadline):
+        def f(plan, cfg, scheduled_only, deadline, res):
             assert scheduled_only and deadline is not None
             handed.append(sorted(i["key"] for i in plan["items"]))
-            return {"acted": [], "skipped": [], "failed": [], "left": [], "unchecked": False, "refused": None, "notes": [], **outcome}
+            kinds_handed.append(plan["kinds"])
+            res.update({"acted": [], "skipped": [], "failed": [], "left": [], "unchecked": False, "refused": None, "notes": [], **outcome})
+            if outcome.get("raise"):
+                raise RuntimeError(outcome["raise"])
         return f
+    kinds_handed = []
     send = lambda argv, check: sent.append(argv) or "{}"
     jrow = reap.act_round(data, {}, st, time.monotonic(), "run:r1", send, fake_reap({"failed": ["tmpdir:/a"], "acted": ["tmpdir:/b"]}), now=1000)
     # Never a chrome window: with no agent its act would retire the ledger entry and leave the window open.
@@ -798,6 +802,16 @@ with tempfile.TemporaryDirectory() as tmp:
         data["items"].append(item("card:/g", "card", False, verdict="사람 결정"))
         assert reap.act_round(data, {}, st, time.monotonic(), None, send, fake_reap({}), now=1e6 + 2)["notified"] is False
     assert "card:/g" in out.getvalue() and len(sent) == 2
+    # What was done before the reap raised still lands: the run row and the rest of the target that failed.
+    jrow = reap.act_round(data, {}, st, time.monotonic(), None, send,
+                          fake_reap({"acted": ["tmpdir:/b"], "failed": ["tmpdir:/e"], "raise": "stamp blew up"}), now=1e6 + 2.5)
+    assert jrow["acted"] == ["tmpdir:/b"] and jrow["failed"] == ["tmpdir:/e"] and jrow["error"].startswith("RuntimeError"), jrow
+    assert "tmpdir:/e" in json.loads((st / "janitor-fails.json").read_text())
+    # A daily kind whose target rests is not handed over as a kind, so its day is not stamped while it waits.
+    uf = {**data, "kinds": ["tmpdir", "user-folder"], "items": [item("user-folder:/u", "user-folder")]}
+    (st / "janitor-fails.json").write_text(json.dumps({"user-folder:/u": {"n": 1, "until": 1e6 + 100}}))
+    reap.act_round(uf, {}, st, time.monotonic(), None, send, fake_reap({}), now=1e6 + 3)
+    assert kinds_handed[-1] == ["tmpdir"] and handed[-1] == [], (kinds_handed, handed)
     # A refused reap (protect file unreadable) changes no rest; a crash is still logged.
     reap.act_round(data, {}, st, time.monotonic(), None, send, fake_reap({"refused": "보호 파일", "failed": ["tmpdir:/b"]}), now=1e6 + 3)
     assert "tmpdir:/b" not in json.loads((st / "janitor-fails.json").read_text())
@@ -848,6 +862,12 @@ with tempfile.TemporaryDirectory() as tmp:
                         "--hours", "soon"], env=env, capture_output=True, text=True)
     last = json.loads((pathlib.Path(tmp) / "janitor-runs.jsonl").read_text().splitlines()[-1])
     assert r.returncode == 1 and last["stage"] == "plan" and last["error"].startswith("ValueError"), (r.stderr, last)
+    # An ownership file that cannot be read stops the round before its plan, and says so in the log too.
+    (pathlib.Path(tmp) / "sweep-owner.json").write_text("{not json")
+    r = subprocess.run([sys.executable, str(pathlib.Path(__file__).parent / "reap.py"), "precheck", "--act", "--kinds", "tmpdir"],
+                       env=env, capture_output=True, text=True)
+    last = json.loads((pathlib.Path(tmp) / "janitor-runs.jsonl").read_text().splitlines()[-1])
+    assert r.returncode == 1 and "소유권 파일" in last["error"], (r.stdout, last)
 
 # user-folder: top-level entries untouched for `days`, not open, not a download in progress.
 D = 86400

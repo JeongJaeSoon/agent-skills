@@ -2584,11 +2584,14 @@ class PlanRefused(Exception):
 IDENTITY_KEYS = ("cmd", "start", "tip", "head", "ino", "dir", "verdict", "created")
 
 
-def reap_plan(plan, cfg, scheduled_only=False, deadline=None, out=print):
+def reap_plan(plan, cfg, scheduled_only=False, deadline=None, out=print, res=None):
     """Re-scan the plan's kinds and act on each target still a target with the same identity, inside its lock and
     after guard.keep passes again. {acted, skipped, failed, left, unchecked, refused, notes}: keys per outcome; `left`
-    are those the deadline (time.monotonic()) stopped before, never one cut in the middle of its act."""
-    res = {"acted": [], "skipped": [], "failed": [], "left": [], "unchecked": False, "refused": None, "notes": []}
+    are those the deadline (time.monotonic()) stopped before, never one cut in the middle of its act. `res`, when
+    given, is filled as it goes, so a caller still has what was done when something raises."""
+    if res is None:
+        res = {}
+    res.update(acted=[], skipped=[], failed=[], left=[], unchecked=False, refused=None, notes=[])
     wanted = {i["key"]: i for i in plan["items"] if i["target"]}
     # Before the janitor filter, so a plan naming them is refused whatever its file name. A re-scan finds none of
     # them, which would read as "no longer a target" and reap nothing in silence.
@@ -2651,7 +2654,10 @@ def reap_plan(plan, cfg, scheduled_only=False, deadline=None, out=print):
                 out(f"- {label(new)}: {got}")
     # A daily kind the deadline left keeps its day open, so the next round tries it again.
     for k in set(DAILY) & set(plan.get("kinds") or ()) - {wanted[key]["kind"] for key in res["left"]}:
-        stamp_user_folder(STATE, kind=k)
+        try:
+            stamp_user_folder(STATE, kind=k)
+        except OSError as e:
+            notes.append(f"{k}: 하루 기록을 쓰지 못함({e.strerror}), 다음 회차가 다시 본다")
     for n in notes:
         out(f"- 메모: {n}")
     return res
@@ -2769,17 +2775,26 @@ def act_round(data, cfg, state_dir, started, inbox=None, send=run, reap_fn=reap_
     resting = resting_keys(fails, now)
     items = data["items"]
     run_items = [i for i in items if i["target"] and i["kind"] not in HUMAN_KINDS and i["key"] not in resting]
+    # A daily kind with a target still resting keeps its day open: stamped now, its retry would wait a second day.
+    held = {i["kind"] for i in items if i["target"] and i["key"] in resting} & set(DAILY)
+    plan = {**data, "items": run_items, "kinds": [k for k in data.get("kinds") or () if k not in held]}
     row = {"t": now, "source": "scan", "targets": sum(1 for i in items if i["target"]), "acted": [], "skipped": [],
            "failed": [], "left": [], "resting": sorted(resting & {i["key"] for i in items}), "human": 0, "error": None}
-    res = None
+    res = {}
     try:
-        res = reap_fn({**data, "items": run_items}, cfg, scheduled_only=True, deadline=started + ACT_BUDGET_S)
-        row.update({k: res[k] for k in ("acted", "skipped", "failed", "left")}, refused=res["refused"])
-        if not res["refused"]:
-            write_atomic(fails_path, json.dumps(update_fails(fails, res, now)))
-            # The old precheck's record too, so a job still on the agent round reads the same state.
-            record_reap(state_dir, res["failed"])
-        rows = human_items(items, resting_keys(read_obj(fails_path), now), read_obj(fails_path))
+        try:
+            got = reap_fn(plan, cfg, scheduled_only=True, deadline=started + ACT_BUDGET_S, res=res)
+            if isinstance(got, dict) and got is not res:
+                res.update(got)
+        finally:  # what was done before anything raised is recorded too
+            row.update({k: list(res.get(k) or ()) for k in ("acted", "skipped", "failed", "left")},
+                       refused=res.get("refused"))
+            if res and not res.get("refused"):
+                write_atomic(fails_path, json.dumps(update_fails(fails, row, now)))
+                # The old precheck's record too, so a job still on the agent round reads the same state.
+                record_reap(state_dir, row["failed"])
+        fails = read_obj(fails_path)
+        rows = human_items(items, resting_keys(fails, now), fails)
         row["human"] = len(rows)
         row["notified"] = notify_human(state_dir, inbox, rows, send)
     except BaseException as e:  # recorded whatever it was; the Orca run shows only a skip
@@ -2925,6 +2940,9 @@ def main():
             guard.ownership()
         except guard.Unreadable as e:
             print(f"소유권 파일을 읽지 못함, 이번 회차는 건너뜀: {e}")
+            if act:
+                log_run(STATE, {"t": time.time(), "source": "scan", "error": f"소유권 파일을 읽지 못함: {e}",
+                                "stage": "plan"})
             sys.exit(1)
         # Stamped before the scan, which takes seconds: a precheck starting meanwhile must already see it.
         stamp_round(STATE)
