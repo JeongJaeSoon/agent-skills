@@ -294,7 +294,7 @@ class Preview(unittest.TestCase):
 
 
 class ShellJobs(Base):
-    """sync, pressure-watch, reap-hard and orch-dash: Orca automations whose precheck runs the command and skips the agent."""
+    """sync, pressure-watch, reap-hard, orch-dash and land-executor: Orca automations whose precheck runs the command and skips the agent."""
     jobs = {j.name: j for j in au.SHELL_JOBS}
 
     def stored(self, job, enabled=True, **over):
@@ -309,7 +309,8 @@ class ShellJobs(Base):
 
     def test_defaults(self):
         self.assertEqual({n: j.default for n, j in self.jobs.items()},
-                         {"sync": True, "pressure-watch": True, "reap-hard": True, "orch-dash": True})
+                         {"sync": True, "pressure-watch": True, "reap-hard": True, "orch-dash": True,
+                          "land-executor": False})
 
     def test_reap_hard_waits_for_the_protect_list_and_orch_dash_does_not(self):
         # patrol has no job of its own; each reap-hard pass starts it, so this gate is also patrol's.
@@ -352,6 +353,26 @@ class ShellJobs(Base):
         self.orca([self.stored(p)])
         with mock.patch.object(au, "PLANNED_CONFIG", {"reap": {"pressure": {"interval": 600}}}):
             self.assertTrue(p.stale())
+
+    def test_land_executor_rounds_every_minute_and_enable_sets_up_the_queue(self):
+        j = self.jobs["land-executor"]
+        self.assertEqual(j.argv[1:], [str(au.LAND_EXEC), "round"])
+        self.assertEqual(j.want()["trigger"], "*/1 * * * *")
+        self.orca([])
+        done = au.subprocess.CompletedProcess([], 0, "created land_request\n", "")
+        with mock.patch.object(au.subprocess, "run", return_value=done) as run:
+            self.assertEqual(j.enable(False)[0], 0)
+        self.assertEqual(run.call_args[0][0][-2:], [str(au.LAND_EXEC), "setup"])
+
+    def test_land_executor_is_not_turned_on_when_the_queue_setup_fails(self):
+        j = self.jobs["land-executor"]
+        fake = self.orca([])
+        failed = au.subprocess.CompletedProcess([], 1, "", "refused: agent-skills.db is not migrated")
+        with mock.patch.object(au.subprocess, "run", return_value=failed):
+            code, msg = j.enable(False)
+        self.assertEqual(code, 1)
+        self.assertIn("not migrated", msg)
+        self.assertEqual(self.creates(fake), [])
 
     def test_no_job_is_a_launchagent_or_names_launchctl(self):
         for j in self.jobs.values():
@@ -525,7 +546,8 @@ class Plan(Base):
 
         def status(job):
             return {"sync": ("on", ""), "pressure-watch": ("absent", ""),
-                    "reap-hard": ("unconfigured", "no protect file"), "orch-dash": ("absent", "")}[job.name]
+                    "reap-hard": ("unconfigured", "no protect file"), "orch-dash": ("absent", ""),
+                    "land-executor": ("absent", "")}[job.name]
         with mock.patch.object(au.ShellJob, "status", status), \
                 mock.patch.object(au.PreviewWatch, "status", return_value=("absent", "")), \
                 mock.patch.object(au.ShareServer, "status", return_value=("absent", "")):
