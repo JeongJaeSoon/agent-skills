@@ -44,7 +44,7 @@ A wrong or missing row is fixed in the record, then rendered again: `orch board 
 
 Build a report by hand only in two cases, to the shape in `references/hand-format.md`:
 
-- The render failed: a traceback, an error exit other than the width check, or no output. The headline says `렌더러 실패(<reason>)`, and the time comes from `date`.
+- The render failed: a traceback, or an error exit with no report printed. The headline says `렌더러 실패(<reason>)`, and the time comes from `date`.
 - The report is one session's account of its own work, not of several cards or leads (a card reporting its ticket, `end-session` §6). That one is short and is the session's own.
 
 Call each PR, branch or worker by a name the human already knows. No preamble and no closing offer, and never an invented item. Write your own words per `write-plainly`. A skill that delegates its report here keeps its own required items (`end-session` §6).
