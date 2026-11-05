@@ -293,7 +293,7 @@ assert status("/no-such-page", {"Host": f"evil.example:{port}"}) == 404
 dash.FLEET_VIEWED[0] = 0.0
 status("/api/fleet/state", {})
 assert dash.FLEET_VIEWED[0] == 0.0, "a read without ?viewed=1 was counted as a view"
-for q in ("?viewed=1.0", "?viewed=10", "?viewed=1-no", "?x=?viewed=1", "?viewed=0", "?viewed=1&viewed=2"):
+for q in ("?viewed=1.0", "?viewed=10", "?viewed=1-no", "?x=?viewed=1", "?viewed=0", "?viewed=1&viewed=2", "?viewed=1&viewed=", "?viewed=&viewed=1"):
     status("/api/fleet/state" + q, {})
     assert dash.FLEET_VIEWED[0] == 0.0, f"{q} was counted as a view"
 dash.FLEET_FORCE[0] = False
@@ -311,6 +311,17 @@ os.environ["AGENT_SKILLS_CONFIG"] = str(cfg_file)
 cfg_a = dash.pressure_signature()
 cfg_file.write_text('{"reap": {"pressure": {"interval": 60}}}')
 assert dash.pressure_signature() != cfg_a, "a changed agent-skills.json did not move the pressure signature"
+# pressure.py reads ~/.claude/agent-skills.json whatever AGENT_SKILLS_CONFIG says: the default file counts too.
+fake_home = root / "home-for-pressure"
+(fake_home / ".claude").mkdir(parents=True, exist_ok=True)
+real_home = os.environ.get("HOME")
+os.environ["HOME"] = str(fake_home)
+try:
+    before_home = dash.pressure_signature()
+    (fake_home / ".claude" / "agent-skills.json").write_text('{"reap": {"pressure": {"interval": 30}}}')
+    assert dash.pressure_signature() != before_home, "the default agent-skills.json is not in the pressure signature"
+finally:
+    os.environ["HOME"] = real_home
 if real_cfg is None:
     del os.environ["AGENT_SKILLS_CONFIG"]
 else:

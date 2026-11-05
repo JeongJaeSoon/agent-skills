@@ -1862,7 +1862,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == "/api/fleet/state":
             # Only the page says it is looking (?viewed=1, app.js on a visible tab). A script or a curl reading the file
             # used to count as a view and kept the 10 s Orca poll and the per-tick PR probes running.
-            if urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("viewed") == ["1"]:
+            if urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query, keep_blank_values=True).get("viewed") == ["1"]:
                 if time.monotonic() - FLEET_VIEWED[0] > FLEET_VIEW_S:
                     FLEET_FORCE[0] = True  # the page just opened: runs and every open PR now, not when their turn comes
                     FLEET_WAKE.set()
@@ -2346,9 +2346,11 @@ def keys_of(paths):
 def pressure_signature():
     """pressure.py history reads its own files beside the others in the state root (history, queue, plan, reading), the
     thresholds and interval in agent-skills.json, and whether its LaunchAgent plist is installed."""
-    config = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-skills.json").expanduser()
+    # reap.py reads the default path whatever AGENT_SKILLS_CONFIG says; this server's own settings use the override
+    configs = {pathlib.Path(p).expanduser() for p in ("~/.claude/agent-skills.json", os.environ.get("AGENT_SKILLS_CONFIG") or "")
+               if p}
     plists = sorted(pathlib.Path("~/Library/LaunchAgents").expanduser().glob("*pressure-watch.plist"))
-    return keys_of(sorted(state_root().glob("pressure*")) + [PRESSURE, config] + plists)
+    return keys_of(sorted(state_root().glob("pressure*")) + [PRESSURE, *sorted(configs)] + plists)
 
 
 def sent_signature():
