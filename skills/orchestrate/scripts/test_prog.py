@@ -637,6 +637,21 @@ prog.orca_json = scripted([("peek", row), ("take", st("s9", "d9")), ("ack", {}),
 prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: None, pending=pend)
 prog.mark_shown = real_mark
 assert len(pend_seen) == 1 and pend_seen[0], pend_seen
+# A mark that cannot be written stops the wait before the next print.
+printed = []
+prog.orca_json = scripted([("take", two)], [])
+pend.write_text(json.dumps({"retry_request": "r-d", "ack": None}))
+real_replace = prog.os.replace
+prog.os.replace = lambda *a: (_ for _ in ()).throw(OSError("disk full"))
+try:
+    prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: printed.append(a[0]), pending=pend)
+    raise AssertionError("a failed mark must raise")
+except OSError:
+    pass
+finally:
+    prog.os.replace = real_replace
+assert len(printed) == 1 and pend.exists(), printed
+prog.done_take(pend)
 # A delivery handled in an earlier round and handed out again is neither printed again nor left to replay.
 seen, printed, log = set(), [], []
 prog.orca_json = scripted([("peek", row), ("take", st("s1", "d1")), ("ack", {}), ("peek", {})], log)

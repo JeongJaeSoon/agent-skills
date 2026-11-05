@@ -3145,15 +3145,15 @@ def take(box, pending=None, ack=None):
 
 def mark_shown(pending, mid):
     """Note a message of the pending batch as printed, so a replay after a crash does not print it again. Written
-    after the print: a crash between the two prints it twice rather than never."""
+    after the print: a crash between the two prints it twice rather than never. A failed write raises, so nothing
+    more is printed past the one message it could not note."""
     req = pending_request(pending)
     if req is None or mid is None:
         return
     req["shown"] = [*(req.get("shown") or []), mid]
     tmp = pending.with_suffix(".tmp")
-    with contextlib.suppress(OSError):
-        tmp.write_text(json.dumps(req))
-        os.replace(tmp, pending)
+    tmp.write_text(json.dumps(req))
+    os.replace(tmp, pending)
 
 
 def done_take(pending):
