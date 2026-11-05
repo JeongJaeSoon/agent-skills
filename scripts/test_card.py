@@ -120,7 +120,7 @@ card.start_close_setup = lambda path, handle, name: SETUPS.append((path, handle,
 # The detached /goal helper would outlive the test: recorded instead, and run in-process by the tests of goal_after_idle.
 GOALS = []
 REAL_START_GOAL_INPUT = card.start_goal_input
-card.start_goal_input = lambda handle, line, name: GOALS.append((handle, line, name)) or {"log": f"{name}.goal.log"}
+card.start_goal_input = lambda handle, line, name, worktree=None: GOALS.append((handle, line, name, worktree)) or {"log": f"{name}.goal.log"}
 
 ORCA_DATA = tmp / "orca-data"  # never the real Orca profile store
 os.environ["AGENT_SKILLS_ORCA_DATA_DIR"] = str(ORCA_DATA)
@@ -291,6 +291,7 @@ assert rc == 0 and p.splitlines()[:2] == ["/goal fix X. 브리프: ~/notes/x.md"
 # display name goes on the start, the ticket is linked on that new card only, and no Sent line is written.
 SUPERVISED = WORKER + "REPORT: orca orchestration send --to run:run_me --type status at each milestone\n"
 URL = "https://linear.app/acme/issue/ABC-1"
+GOALS.clear()
 rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "name:acme", "--name", "abc-1", "--display-name", "ABC-1 helper",
                          "--reference", URL)
 assert rc == 0, err
@@ -306,7 +307,7 @@ assert json.loads(out)["card"] == {"kind": "worker", "path": str(CARD_DIR), "han
                                    "close_setup": {"log": "abc-1.log"}, "model": None,
                                    "goal_input": {"log": "abc-1.goal.log"}}, out
 # The worker's /goal line is not left to the spec: a detached helper types it once the first turn ends.
-assert GOALS == [("term_w", f"/goal ship the helper and open its PR 브리프: {tmp / 'sup.md'}", "abc-1")], GOALS
+assert GOALS == [("term_w", f"/goal ship the helper and open its PR 브리프: {tmp / 'sup.md'}", "abc-1", str(CARD_DIR))], GOALS
 # Regression (a): a brief whose REPORT is `run:` goes out as a worker, and the spec it hands worker-start keeps the
 # /goal line as its first line. (b): the FORBIDDEN section (markers included, a stale copy replaced by the current
 # paragraph, a line after a blank line too) and every REPORT row reach the prompt, on both paths.
@@ -727,8 +728,18 @@ os.environ["AGENT_SKILLS_CONFIG"] = str(tmp / "none.json")
 GOALS.clear()
 rc, out, err, calls = go(worker_brief, "--repo", "r", "--name", "g1", "--agent", "codex")
 assert rc == 0 and not GOALS, ("a Codex worker has no /goal command", GOALS)
+# Orca bracketed-pastes a /goal card's first prompt and Claude Code folds a long paste into <pasted_content>, so the
+# line never runs as the command there either: a Claude /goal card and a handoff get the helper too, with the worktree
+# whose transcript it reads.
 rc, out, err, calls = go(brief(WORKER, "g2.md"), "--repo", "r", "--name", "g2", "--card")
-assert rc == 0 and not GOALS and "goal_input" not in json.loads(out)["card"], ("a /goal card gets it as its prompt", GOALS)
+assert rc == 0 and GOALS == [("term_new", f"/goal ship the helper and open its PR 브리프: {tmp / 'g2.md'}", "g2",
+                              str(CARD_DIR))], GOALS
+assert json.loads(out)["card"]["goal_input"] == {"log": "g2.goal.log"}, out
+GOALS.clear()
+rc, out, err, calls = handoff("ABC-7", "--title", "next")
+assert rc == 0 and GOALS == [("term_new", "/goal ABC-7.", "abc-7", str(CARD_DIR))], GOALS
+assert json.loads(out)["card"]["goal_input"] == {"log": "abc-7.goal.log"}, out
+GOALS.clear()
 rc, out, err, calls = go(worker_brief, "--repo", "r", "--name", "g3")
 assert rc == 0 and len(GOALS) == 1 and GOALS[0][0] == "term_w" and GOALS[0][1].startswith("/goal "), GOALS
 assert not any(c["argv"][:2] in (["terminal", "wait"], ["terminal", "send"]) for c in calls), \
@@ -743,14 +754,14 @@ card.time.sleep = lambda s: SLEPT.append(s)
 REAL_TYPE = card.type_when_idle
 
 
-def run_helper(answers, timeout_s=3600):
+def run_helper(answers, timeout_s=3600, worktree=None):
     """goal_after_idle with type_when_idle answering from `answers` in turn: None (typed) or a reason."""
     queue = list(answers)
     SENDS.clear()
     card.type_when_idle = lambda handle, line, deadline=None: SENDS.append((handle, line)) or queue.pop(0)
     err = io.StringIO()
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
-        rc = card.goal_after_idle("term_w", LINE, timeout_s)
+        rc = card.goal_after_idle("term_w", LINE, timeout_s, worktree)
     return rc, err.getvalue()
 
 
@@ -775,9 +786,67 @@ rc, err = run_helper(["orca terminal read failed: terminal_handle_stale"] * 3)
 assert rc == 1 and len(SENDS) == 1 and "not typed into term_w" in err, (rc, SENDS, err)
 rc, err = run_helper([sync.UNCONFIRMED, None])
 assert rc == 1 and len(SENDS) == 1 and "Read the screen before typing it again" in err, (rc, SENDS, err)
+# With the card's worktree, its transcript decides first: the /goal command already ran (the paste was short, or
+# someone typed it), so nothing is typed; no user message yet, so the first prompt has not landed and nothing is
+# typed; any other first message (the folded paste), so the line goes out once the first turn ends.
+PROJECTS = tmp / "projects"
+os.environ["CLAUDE_PROJECTS_DIR"] = str(PROJECTS)
+WT = "/wt/acme.card_1"
+TDIR = PROJECTS / "-wt-acme-card-1"  # Claude Code's folder: every non-alphanumeric character of the path as `-`
+
+
+def session_rows(*rows, name="s1.jsonl"):
+    TDIR.mkdir(parents=True, exist_ok=True)
+    (TDIR / name).write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
+
+
+META = {"type": "user", "isMeta": True, "message": {"role": "user", "content": "<local-command-caveat>x</local-command-caveat>"}}
+PASTED = {"type": "user", "message": {"role": "user", "content": f'\n\n<pasted_content id="a1">\n{LINE}\nCLOSE: x\n</pasted_content>'}}
+RAN = {"type": "user", "message": {"role": "user", "content": "<command-name>/goal</command-name>\n            "
+                                                               "<command-message>goal</command-message>"}}
+ticks = iter([0, 1, 2, 3, 100])
+card.time.monotonic = lambda: next(ticks)
+try:
+    SLEPT.clear()
+    rc, err = run_helper([None], timeout_s=50, worktree=WT)  # no transcript folder at all
+finally:
+    card.time.monotonic = real_monotonic
+assert rc == 1 and not SENDS and len(SLEPT) == 3 and "not typed into term_w" in err, (rc, SENDS, SLEPT, err)
+session_rows({"type": "summary"}, META)
+ticks = iter([0, 1, 100])
+card.time.monotonic = lambda: next(ticks)
+try:
+    rc, err = run_helper([None], timeout_s=50, worktree=WT)  # only a meta row: the first prompt has not landed
+finally:
+    card.time.monotonic = real_monotonic
+assert rc == 1 and not SENDS, (rc, SENDS, err)
+session_rows(META, PASTED)
+rc, err = run_helper([BUSY_REASON, None], worktree=WT)
+assert rc == 0 and SENDS == [("term_w", LINE)] * 2 and not err, (rc, SENDS, err)
+session_rows(META, PASTED, {"type": "assistant", "message": {"content": []}}, RAN)
+rc, err = run_helper([None], worktree=WT)
+assert rc == 0 and not SENDS and not err, ("the command ran: nothing typed", rc, SENDS, err)
+session_rows(RAN)
+rc, err = run_helper([None], worktree=WT)
+assert rc == 0 and not SENDS, ("a /goal first prompt that ran as the command", SENDS)
+# The prompt lands while the helper waits: it starts looking at the screen only then.
+(TDIR / "s1.jsonl").unlink()
+card.time.sleep = lambda s: SLEPT.append(s) or session_rows(META, PASTED)
+try:
+    SLEPT.clear()
+    rc, err = run_helper([None], worktree=WT)
+finally:
+    card.time.sleep = lambda s: SLEPT.append(s)
+assert rc == 0 and SENDS == [("term_w", LINE)] and SLEPT == [card.GOAL_POLL_S], (rc, SENDS, SLEPT)
+# Several sessions in the folder: the newest is the card's.
+session_rows(RAN, name="old.jsonl")
+os.utime(TDIR / "old.jsonl", (1, 1))
+rc, err = run_helper([None], worktree=WT)
+assert rc == 0 and SENDS == [("term_w", LINE)], ("an older session's /goal is not this one's", SENDS)
 card.type_when_idle = lambda handle, line, deadline=None: None
 with contextlib.redirect_stdout(io.StringIO()):
     assert card.main(["goal-after-idle", "term_w", LINE]) == 0  # the entry point start_goal_input launches
+    assert card.main(["goal-after-idle", "term_w", LINE, WT]) == 0  # and with the card's worktree
 card.type_when_idle = REAL_TYPE
 
 # type_when_idle on canned screens, through the real sync.classify. The tab title is the session's topic, not `✳`.
@@ -860,10 +929,12 @@ class FakePopen:
 real_popen, card.subprocess.Popen = card.subprocess.Popen, FakePopen
 try:
     log = card.start_goal_input("term_w", LINE, "g4")
+    card.start_goal_input("term_w", LINE, "g5", "/wt/x")
 finally:
     card.subprocess.Popen = real_popen
 cmd, kw = spawned[0]
 assert cmd[1:] == [str(HERE / "card.py"), "goal-after-idle", "term_w", LINE] and kw["start_new_session"], spawned
+assert spawned[1][0][1:] == [str(HERE / "card.py"), "goal-after-idle", "term_w", LINE, "/wt/x"], spawned
 assert pathlib.Path(log["log"]).parent.name == "goal-input" and log["pid"] == 4242, log
 
 print("ok")

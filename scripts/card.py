@@ -35,12 +35,14 @@ itself a dispatched worker on it (a lead started with worker-start, whose `run-c
 worker (`orca orchestration worker-start --worktree new-child`, so Orca records this session's worktree as its
 parent; `new-top-level` with --no-parent; any other --parent-worktree is ignored, since worker-start takes none): a
 Dispatch, so the card's worker_done, escalation and ask reach this session and Orca watches it for prompts. Its spec
-is the prompt below, `/goal` line included. Orca puts its own preamble before a spec, so that line never runs as the
-slash command there: for a Claude worker a detached helper (`card.py goal-after-idle`, log in
-$AGENT_SKILLS_STATE/goal-input/<name>.log, its path in the `card` object's goal_input) polls `sync.try_send` (the
-reload broadcast's screen checks: no spinner or dialog, an empty prompt box, two equal reads) for at most GOAL_IDLE_S
-until the first turn ends, then types that one line. Past the limit, or when the screen does not confirm the line, it
-types nothing more and logs a warning with the manual command. When this session is bound to no Run, works for another Run than the
+is the prompt below, `/goal` line included. Orca puts its own preamble before a spec, and bracketed-pastes a /goal
+card's prompt, which Claude Code folds into <pasted_content>, so that line does not run as the slash command on
+either path: for any Claude card or worker (a handoff too) a detached helper (`card.py goal-after-idle`, log in
+$AGENT_SKILLS_STATE/goal-input/<name>.log, its path in the `card` object's goal_input) reads the new worktree's
+transcript first: a /goal command row means it ran and nothing is typed, no user row yet means it waits. Otherwise
+it polls `sync.try_send` (the reload broadcast's screen checks: no spinner or dialog, an empty prompt box, two equal
+reads) for at most GOAL_IDLE_S until the first turn ends, then types that one line. Past the limit, or when the screen
+does not confirm the line, it types nothing more and logs a warning with the manual command. When this session is bound to no Run, works for another Run than the
 brief names, or Orca does not answer, nothing is created (exit 6): the lines printed say how to bind it
 (`orca orchestration run-use`) or to make a /goal card on purpose (--card). A refused new-child is not retried as
 new-top-level.
@@ -500,14 +502,15 @@ def start_close_setup(path, handle, name):
         return {"error": str(e)}
 
 
-def start_goal_input(handle, line, name):
-    """Starts `card.py goal-after-idle <handle> <line>` detached: the worker's first turn can last the whole task, and
-    this command must not wait for it. Returns {log, pid} or {error}; a failure to start is printed, never fatal."""
+def start_goal_input(handle, line, name, worktree=None):
+    """Starts `card.py goal-after-idle <handle> <line> [<worktree>]` detached: the first turn can last the whole task,
+    and this command must not wait for it. Returns {log, pid} or {error}; a failure to start is printed, never fatal."""
     log = STATE / "goal-input" / f"{name}.log"
     try:
         log.parent.mkdir(parents=True, exist_ok=True)
         with open(log, "a") as out:
-            p = subprocess.Popen([sys.executable, str(pathlib.Path(__file__).resolve()), "goal-after-idle", handle, line],
+            p = subprocess.Popen([sys.executable, str(pathlib.Path(__file__).resolve()), "goal-after-idle", handle, line,
+                                  *([worktree] if worktree else [])],
                                  stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
         return {"log": str(log), "pid": p.pid}
     except OSError as e:
@@ -568,20 +571,61 @@ def type_when_idle(handle, line, deadline=None):
         return None if sync.turn_started(second, after, line) else sync.UNCONFIRMED
 
 
-def goal_after_idle(handle, line, timeout_s=GOAL_IDLE_S):
-    """Types the /goal line into the worker's terminal once its first turn ended and an empty prompt is back. Orca puts
-    its own preamble before a worker's spec, so the line inside the spec never runs as the slash command. The idle
+GOAL_RAN = "<command-name>/goal</command-name>"
+
+
+def goal_state(worktree):
+    """What the newest session transcript of `worktree` says: "ran" once a user row is the /goal command, "none"
+    before any user row (Orca has not typed the first prompt yet), else "other". The folder is Claude Code's:
+    CLAUDE_PROJECTS_DIR or ~/.claude/projects, then the path with every non-alphanumeric character as `-`."""
+    root = pathlib.Path(os.environ.get("CLAUDE_PROJECTS_DIR", "~/.claude/projects")).expanduser()
+    try:
+        newest = max((root / re.sub(r"[^A-Za-z0-9]", "-", worktree)).glob("*.jsonl"), key=lambda p: p.stat().st_mtime,
+                     default=None)
+        lines = newest.read_text(errors="replace").splitlines() if newest else []
+    except OSError:
+        lines = []
+    seen = False
+    for raw in lines:
+        try:
+            r = json.loads(raw)
+        except ValueError:
+            continue
+        if not isinstance(r, dict) or r.get("type") != "user" or r.get("isMeta"):
+            continue
+        content = (r.get("message") or {}).get("content") if isinstance(r.get("message"), dict) else None
+        texts = [content] if isinstance(content, str) else [
+            b.get("text") for b in content or [] if isinstance(b, dict) and b.get("type") == "text"]
+        texts = [t for t in texts if isinstance(t, str)]
+        if any(t.lstrip().startswith(GOAL_RAN) for t in texts):
+            return "ran"
+        seen = seen or bool(texts)
+    return "other" if seen else "none"
+
+
+def goal_after_idle(handle, line, timeout_s=GOAL_IDLE_S, worktree=None):
+    """Types the /goal line into the session's terminal once its first turn ended and an empty prompt is back. Orca puts
+    its own preamble before a worker's spec, and bracketed-pastes a card's prompt, which Claude Code folds into
+    <pasted_content> when it is long: either way the line inside never runs as the slash command. With `worktree`,
+    goal_state decides first: "ran" types nothing, "none" waits for the first prompt. The idle
     judgement is `type_when_idle`'s, polled until the limit: `orca terminal wait --for tui-idle` is not used, since it
     answered during UserPromptSubmit hooks (docs/platform.md). Nothing is typed while the turn runs or after the
-    limit. 0 sent, 1 not sent (the manual command is printed)."""
+    limit. 0 sent or already run, 1 not sent (the manual command is printed)."""
     import sync
     manual = manual_goal_command(handle, line)
     deadline = time.monotonic() + timeout_s
     while True:
         if time.monotonic() >= deadline:
             print(f"[{ME}] warning: the /goal line was not typed into {handle} (waited up to {timeout_s}s). "
-                  f"Once the worker is idle, run: {manual}", file=sys.stderr)
+                  f"Once the session is idle, run: {manual}", file=sys.stderr)
             return 1
+        state = goal_state(worktree) if worktree else "other"
+        if state == "ran":
+            print(f"[{ME}] {handle} already ran /goal; nothing typed")
+            return 0
+        if state == "none":
+            time.sleep(GOAL_POLL_S)
+            continue
         reason = type_when_idle(handle, line, deadline)
         if reason is None:
             print(f"[{ME}] typed the /goal line into {handle}: {line}")
@@ -913,9 +957,9 @@ def create_locked(brief, opts, refs, prompt):
     handle = handle_of(res)
     # close-setup judges the start from Claude's screen; worker-start's receipt already says a Codex worker is ready.
     setup = start_close_setup(path, handle if opts["--agent"] == "claude" else None, opts["--name"])
-    # A worker's /goal line is typed by a detached helper once the first turn ends; a card gets it as its prompt.
-    goal_input = (start_goal_input(handle, prompt.splitlines()[0], opts["--name"])
-                  if worker and handle and opts["--agent"] == "claude" else None)  # /goal is Claude Code's command
+    # The /goal line is typed by a detached helper once the first turn ends, unless the transcript shows it ran.
+    goal_input = (start_goal_input(handle, prompt.splitlines()[0], opts["--name"], path)
+                  if handle and path and opts["--agent"] == "claude" else None)  # /goal is Claude Code's command
     print(json.dumps({**res, "card": {"kind": "worker" if worker else "card", "path": path, "handle": handle,
                                       "run": run_id, "parent": parent, "forbidden": forbidden, "close_setup": setup,
                                       "model": model, **({"goal_input": goal_input} if goal_input else {})}},
@@ -1053,16 +1097,19 @@ def handoff_locked(ticket, opts, refs, prompt):
     if not started:
         failed.append(f"the start is not confirmed ({detail}); read `orca terminal read --terminal {handle} --screen`")
     setup = start_close_setup(path, None, name)  # the start was just read; close-setup only closes the setup shell
+    goal_input = start_goal_input(handle, prompt.splitlines()[0], name, path) if handle else None
     print(json.dumps({**res, "card": {"kind": "card", "path": path, "handle": handle, "parent": parent,
-                                      "start": detail, "close_setup": setup}}, ensure_ascii=False, indent=1))
+                                      "start": detail, "close_setup": setup,
+                                      **({"goal_input": goal_input} if goal_input else {})}},
+                     ensure_ascii=False, indent=1))
     if failed:
         raise Refuse(5, f"[{HANDOFF}] the card was created but: {'; '.join(failed)}. Do not create it again.")
     return 0
 
 
 def main(argv):
-    if argv[:1] == ["goal-after-idle"] and len(argv) == 3:  # the detached helper start_goal_input starts
-        return goal_after_idle(argv[1], argv[2])
+    if argv[:1] == ["goal-after-idle"] and len(argv) in (3, 4):  # the detached helper start_goal_input starts
+        return goal_after_idle(argv[1], argv[2], worktree=argv[3] if len(argv) == 4 else None)
     try:
         return create(argv)
     except Refuse as e:

@@ -171,8 +171,10 @@ references/top-level.md "Starting a worker".
   its escalation, `ask` and `worker_done` reach your Run, and Orca watches it for a prompt only a
   human can answer. Its spec is the composed prompt, `/goal` line included (Orca delivers a
   spec as the task after its own preamble, so the line is not the first thing the session reads and
-  never runs as the slash command; it still states the goal). So for a Claude worker the card then
-  starts a detached helper that polls the session's screen with the reload broadcast's idle checks (an hour
+  never runs as the slash command; it still states the goal). A `/goal` card's prompt fails the same way:
+  Orca pastes it and Claude Code folds a long paste into `<pasted_content>`. So for every Claude card the
+  card then starts a detached helper that types nothing once the transcript shows `/goal` ran, else polls the
+  session's screen with the reload broadcast's idle checks (an hour
   at most) until the first turn ends and types that one `/goal` line; past the limit it types nothing and
   logs the manual command (the `card` object's `goal_input.log`). Everything else is a `/goal` card from `orca
   worktree create`: a brief with no Run report (fire-and-forget), a lead's brief while Orca's
