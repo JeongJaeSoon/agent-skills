@@ -1402,7 +1402,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                 if table_width.table_width(table) <= COLS:
                     break
             # The dashboard has the page's width: its copy of the report keeps every cell whole.
-            whole = [head] + [[dress(i, c, s) for c, s in enumerate(r)] for i, r in enumerate(cells(SESSION_NAME_W), 1)]
+            whole = [head] + [[dress(i, c, s) for c, s in enumerate(r)] for i, r in enumerate(cells(None), 1)]
             head_md = ["| " + " | ".join(head).strip() + " |", "|---" * len(head) + "|"]
             if table_width.table_width(table) > COLS:
                 # No cut table keeps the names apart in 78 columns: the rows go out as one whole line each, not a table.

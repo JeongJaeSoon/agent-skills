@@ -295,19 +295,16 @@ try:
 finally:
     board.table_width.fit = real_fit
 assert swapped["duplicates"] and swapped["missing"], (swapped["duplicates"], swapped["missing"])
-# Two names that stay alike once cut are told apart by the row's other cells: a copy of the first written in the
-# second's place is the first twice (a duplicate) and the second missing, not read off the row's position.
+# Two names too long to keep apart in 78 columns are never cut alike: the repository goes out as whole lines, and both
+# rows are placed once.
 HEAD = "shared-prefix-" * 8
 for rid, tail, nxt in (("twin-a", "a", "first"), ("twin-b", "b", "second")):
     board.set_row(rid, title=HEAD + tail, repo="octo/twins", status="moving", next=nxt)
-twin = {r["id"]: r["label"] for t in board.render(now=T, fill=True, periodic=False)["table_rows"] for r in t["rows"]}
-copy_first = lambda rows, *a, **kw: (lambda t: t[:-1] + [t[-2]])(real_fit(rows, *a, **kw))
-board.table_width.fit = copy_first
-try:
-    dup = board.render(now=T, fill=True, periodic=False)
-finally:
-    board.table_width.fit = real_fit
-assert "twin-a" in dup["duplicates"] and "twin-b" in dup["missing"], (twin, dup["duplicates"], dup["missing"])
+twin = board.render(now=T, fill=True, periodic=False)
+assert twin["duplicates"] == [] and twin["missing"] == [], (twin["duplicates"], twin["missing"])
+assert [l for l in twin["text"].splitlines() if HEAD + "a" in l and l.startswith("- ")] and \
+       [l for l in twin["text"].splitlines() if HEAD + "b" in l and l.startswith("- ")], twin["text"]
+assert twin["width_ok"] is True
 # A quiet stage row is kept while its 지금 has work left (⏸️ too), or while the brief's judgment could not be read.
 old = {**stages.table(), "rows": [{**r, "created_at": "2026-01-01T00:00:00Z"} for r in stages.table()["rows"]]}
 assert [r["id"] for r in stages.current(old, T, 60, None, {"octo/app#5": "held"})[0]["rows"]] == ["s1"]
