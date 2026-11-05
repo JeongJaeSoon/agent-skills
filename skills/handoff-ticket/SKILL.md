@@ -40,8 +40,8 @@ append it to the running card's prompt or scope.
 
 **Dependent tickets.** When ticket B can only start after A, record it in the tracker (A
 blocks B). Only when B uses A's code is it a stack: B's card starts from A's branch (§3
-`--base-branch`). Same files → B starts after A lands; a deploy order alone → both on the default
-branch (`deliver-ticket` [pull-request.md](../deliver-ticket/references/pull-request.md) "Stacks").
+`--base-branch`). Same files → B starts after A lands, unless they share only a hotspot (a
+`translated-from` line, a generated file); a deploy order alone → both on the default branch (`deliver-ticket` [pull-request.md](../deliver-ticket/references/pull-request.md) "Stacks").
 
 **Who runs it.** A small defect in the code this session just shipped stays here, on its own
 branch and its own PR. A session can ship N PRs this way — one ticket each, one at a time — so
@@ -80,8 +80,8 @@ if unsure.
 
 Parallel requests ("병렬로", "동시에") still mean one card per ticket — repeat step 3 per ticket,
 never two tickets in one prompt. Hold back a ticket that would edit the same files as one already
-running until the first lands, and say what you held — unless it uses the first one's code: a
-stack layer starts now on the lower one's branch.
+running until the first lands, and say what you held — unless they share only a hotspot (parallel),
+or it uses the first one's code: a stack layer starts now on the lower one's branch.
 
 ## 3. Spawn the worktree with its agent
 

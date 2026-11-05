@@ -35,9 +35,9 @@ and decide whether this change belongs on top of one:
   with the land order (`#<lower> → #<this>`). Keep the stack linear and at most 3 layers, with one
   layer on a base: a second PR on the same base is a fan-out, which lands neither as one stack nor
   as two independent PRs.
-- It only touches the same files as an open PR and needs nothing from it: do not stack. Open it
-  after that PR lands, unless the overlap is only a hotspot (a `translated-from` line, a generated
-  file), which stays parallel.
+- It only touches the same files as an open PR and needs nothing from it: do not stack. The work
+  itself waits: start it (not just the PR) after that PR lands, unless the overlap is only a
+  hotspot (a `translated-from` line, a generated file), which stays parallel.
 - It only has to deploy or run after an open PR: base it on the default branch; the order is an
   `orch dep` edge in a program, else a line in the body, never a stack.
 - None of these: base it on the default branch.
@@ -65,8 +65,9 @@ for you; never `gh stack merge` or call merge-async by hand there.
 When a lower layer changes, rebase every layer from the bottom, `gh pr update-branch <n> --rebase`
 one after the other, and re-verify them. A stack merges only as a linear chain: a merge commit,
 or rebasing the lower layer alone, fails the merge with `Stack needs to be rebased`. So a layer
-branch takes no merge commit, `origin/main` included: the exception to SKILL.md §4's "merge main
-in". When `update-branch` is refused, report it rather than merge.
+branch takes no merge commit, `origin/main` included: the exception to every "merge main in"
+(SKILL.md §4 and §6, [review-loop.md](review-loop.md)). When `update-branch` is refused, report it
+rather than merge.
 
 When a lower layer merges on its own, GitHub moves the next one onto the base and rebases it
 ([merging stacked PRs](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/merging-stacked-pull-requests)).
