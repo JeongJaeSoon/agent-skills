@@ -7,7 +7,7 @@
 | 以前 | これから |
 |---|---|
 | カードごとにオーケストレーターが書く board の doing 行 | カードの Orca worktree の欄（`workspaceStatus`、`linkedPR`、`linkedItems`）と、あれば Run の Task。doing 行はカードのない待ちにだけ使う |
-| リードごとの `orch board lead add` | リードの行はセッションから作る。`lead add` は fleet から見えないリードにだけ使う |
+| リードごとの `orch board lead add` | リードの行はセッションから作る。`lead add` は fleet から見えないリードにだけ使い、見えるリードには拒否される（2026-11-04） |
 | カードごとの `orch record spawned` | 台帳は Orca の Task・Dispatch を読む。`spawned` は下位単位のチケットにだけ使う |
 | カードごとの `orch sent add` | Sent 表は Run の Task から作る。`orch sent` には Orca を通らない経路だけを記録する |
 | `orca orchestration send`・`reply` ごとの `orch sent add`(2026-11-02) | Sent 表は Orca の inbox を読む。heartbeat だけは除く |
@@ -21,7 +21,7 @@
 ## 以前のセッションと並べて動かすとき
 
 - **リリース前に立ち上げたカード**は、読み込んだコードのまま動き続けます。そのカードの doing 行は、`orch migrate --apply` か tidy が閉じるまで開いたままです。tidy はカードを表示名か worktree のディレクトリ名から大文字小文字を区別せずに探し、Orca の `linkedPR` が merged であることもマージの根拠として受け付けます。チケット ID だけやブランチ名はキーにしないので、親のチケットを書いた後続の行は開いたまま残ります。
-- **リリース前に立ち上げたリード**は、まだ `orch board lead add` と `orch sent add` を使うことがあります。fleet は board のリードとそのセッションをターミナルの handle でまとめるので、リードは一度だけ表示されます。
+- **リリース前に立ち上げたリード**は、まだ `orch sent add` を使うことがあります。board が `agent-skills.db` に移ったあとは `orch board lead add` が拒否され、代わりに行をつなぐ `orch board set` の行がメッセージに出ます。
 - **`term_` のアドレスに報告するブリーフ**は、新しい `skills-sync card` が拒否します（終了コード 2）。Run の外のターミナルには `worker_done` が届かないためです。その行を `run:<id>` に変えるか、消してカード自身のチャットに報告させます。
 - **`agentWait` を返さない Orca** では、これまでどおり画面を読みます。
 - 古いコードと新しいコードは同じファイルを読み書きします。`orch migrate` は通常の tidy 行を足すだけなので、古いコードもその行を読めます。
@@ -39,13 +39,13 @@
 
 ## 元に戻す
 
-- **状態：** `orch migrate --restore <バックアップのディレクトリ>` は、その実行が閉じた行を開き直し、そのあとオーナーが変えたものはそのままにします。古いコードが読み込まれているときは、代わりに `--apply` が出力した `orch board reopen` の行を実行します。バックアップには実行前の `board.json`・`tidy.jsonl`、まだファイルのうちは `decisions.json`、決定が移ったあとは `agent-skills.db` のコピーが、どれも 0600 のファイルとして入っています。
+- **状態：** `orch migrate --restore <バックアップのディレクトリ>` は、その実行が閉じた行を開き直し、そのあとオーナーが変えたものはそのままにします。古いコードが読み込まれているときは、代わりに `--apply` が出力した `orch board reopen` の行を実行します。バックアップには実行前の `agent-skills.db` のコピーが 0600 のファイルとして入っています。
 - **コード：** 読み込まれるチェックアウトを前のリリースのタグに戻し、もう一度 `/reload-plugins`。
 - **Orca の値：** `workspaceStatus` はカードが自分の欄にだけ書き（PR を開くと `in-review`、閉じるときに `completed`）、リンクは新しいコードが立ち上げたカードにだけ付きます。状態を戻すには `orca worktree set --worktree <sel> --workspace-status in-progress`。
 
 # 決定を agent-skills.db へ移す（2026-11-04）
 
-このリリースから、`orch decide` とダッシュボードの回答は、決定を `decisions.json` ではなく fleet の状態ディレクトリ（`$ORCH_FLEET_STATE`）にある SQLite ファイル `agent-skills.db` に置きます。board と tidy のファイルはまだそのままで、後のリリースで同じファイルへ移します。
+このリリースから、`orch decide` とダッシュボードの回答は、決定を `decisions.json` ではなく fleet の状態ディレクトリ（`$ORCH_FLEET_STATE`）にある SQLite ファイル `agent-skills.db` に置きます。board と tidy のファイルは、次の節で同じファイルへ移します。
 
 ## 変わること
 
@@ -75,4 +75,41 @@
 3. `agent-skills.db` を `-wal`・`-shm` と一緒に状態ディレクトリの外へ移し、空の `decisions.json` ディレクトリを消して、`<dir>/decisions.json` をその場所に置きます。
 4. 前のリリースに戻して fast-forward し、書き手をもう一度起動します。
 
-別の PC へ移すときは、元の PC で `orch db backup <file>`、新しい PC で `orch db restore <file>`。`restore` も `--apply` と同じ検査をし、新しい状態ディレクトリに `decisions.json` のファイルがあれば拒否します。
+別の PC へ移すときは、元の PC で `orch db backup <file>`、新しい PC で `orch db restore <file>`。`restore` も `--apply` と同じ検査をし、新しい状態ディレクトリに `decisions.json`・`board.json`・`tidy.jsonl` のファイルがあれば拒否します。
+
+# board を agent-skills.db へ移す（2026-11-04）
+
+このリリースから、board、やること・保留のリスト、リード、すべての閉じた記録も、`board.json`・`tidy.jsonl` ではなく `agent-skills.db` に置きます。決定をまだ移していない PC は、一度の実行で両方の段階を済ませます。
+
+## 変わること
+
+- doing・保留・やること・いまのリストの項目には、それぞれ安定した id `b<N>` が付きます。言い回しを変えてもリストを移っても変わらず、ほかの仕事に再び使われることはありません。古い `doing:`・`later:`・`do:`・`todo:` の id は、import のときに指していた項目を引き続き指します。
+- リストから外した項目は行が `dropped` として残り、最後の値は `event` に残ります。
+- `board.prev.json` と `tidy.jsonl.1` はなくなります。変更前後の値は `event` にあり、二つのファイルは import がバックアップへ移します。
+- 生きているカードや subagent を指すタイトルの `orch board doing add` は拒否します。それらには自分の行があるからです。`--force --why <理由>` を付けると追加し、理由をイベントに残します。
+- カードにつながった行への `orch board set --pr` と、別のカードを指す `--worktree` は拒否します。行はつながりを保ち、Orca の PR を表示します。つながっていない行は `--worktree` で一度だけつなげます。
+- Orca が知っているリードへの `orch board lead add` は拒否します。行をつなぐには `orch board set <lead> --kind lead --repo <repo> --worktree <worktree>` を使います。Orca から見えないリードには、これまでどおり `lead add` を使います。
+- 受信箱の項目を閉じても `inbox-external.jsonl` には書きません。閉じた記録が見ていた行を覚えているので、そのキーの新しい行ができればその行が決め、開き直すのに新しい行は要りません。ファイルが書き直されてその行がなくなると、最後の行が決め、ブリーフの headline に `인박스 기록 어긋남` が出ます。
+- `orch db import` の前は、board のコマンドが `orch db cutover-plan 4b` を案内して止まり、ブリーフの headline に `이행 대기: 보드·결정 DB` が出て、行はすべて ❔ になります。
+
+## 切り替えの手順
+
+`orch db cutover-plan 4b` が、以下の手順をこの PC で打つコマンドとして出力します。このコマンド自体は何も実行しません。
+
+1. ダッシュボードのサーバーを止め、janitor を切ります。macOS では LaunchAgent を `launchctl bootout` し、`skills-sync setup disable janitor` を実行します。
+2. 読み込まれるメインのチェックアウトを fast-forward します。
+3. 動いている Claude セッションをすべて再起動するか、`/reload-plugins` します。
+4. `orch db import --dry-run` で移す内容を確認します。リストごとの項目数、閉じた記録、行とリード、Orca が持っているので外れるリードと行の PR、そして `--apply` が拒否するかどうかです。
+5. `orch db import --apply`。決定の段階と同じ検査をします。board のバックアップは `backup-db-*` に入り、ファイルごとの sha256 は `migration` テーブルに残ります。`board.json`・`tidy.jsonl` の場所には空のディレクトリを置き、決定のリリースより古いコードの書き込みを失敗させます。決定のリリースのコードは `4b-board` の行を見て止まります。
+6. ダッシュボードのサーバーと janitor をもう一度起動します。
+
+`--apply` は決定のときと同じく、もう一度実行しても安全です。ファイルごとに import のときの sha256 のままであるときだけ空のディレクトリを置き、変わったファイルがあれば衝突を示して止まります。import が失敗しても何も変わりません。段階全体が一つのトランザクションだからです。
+
+## 元に戻す（board）
+
+1. 切り替えの手順 1 と同じく書き手を止め、`orch db backup <file>`。
+2. `orch db export --legacy --target 4a <dir>` が `board.json`、`tidy.jsonl`、閉じた記録を行として書き出した `inbox-external.jsonl`、`export.json` を書きます。同じ言葉が二つの状態にあると古い形式では表せないので、export がその項目を示して止まります。片方を閉じるか言い回しを変えてから実行し直します。
+3. `orch db rollback 4b <dir>` が export のあと DB と受信箱が変わっていないことを確かめ、空のディレクトリの場所に三つのファイルを置き、最後に `4b-board` の行を消します。途中で落ちたら、もう一度実行します。
+4. 前のリリースに戻して fast-forward し、書き手をもう一度起動します。
+
+あとで import すれば、ファイルをもう一度取り込みます。テーブルは置き換わり、番号は続きから振られるので、ロールバック前の `b<N>` が再び使われることはありません。決定の段階まで戻すときは、この節を終えてから「元に戻す（決定）」に従います。
