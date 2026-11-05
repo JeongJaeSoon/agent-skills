@@ -57,11 +57,11 @@ assert cons["mentions"]["state"] == "off" and cons["mentions"]["starved"], cons[
 assert not cons["page"]["starved"] and not cons["brief"]["starved"], cons["brief"]
 assert {c["fact"] for c in rep["conflicts"]} == set(flow.registry.DUAL_CANONICAL), rep["conflicts"]
 rule = cons["brief"]["rule"]
-assert "agent-skills.db" in rule and "tidy.jsonl" in rule and "REPORT" in rule, rule
+assert "agent-skills.db" in rule and "closures" in rule and "REPORT" in rule, rule
 assert "subagents.jsonl" in rule and "board.subagent_stale_h" in rule, rule
 # Every file the rule names is a store the brief reads.
 brief_in = {s.path.rsplit("/", 1)[-1] for s in flow.registry.STORES if "brief" in s.readers}
-assert {"state.json", "prs.json", "board.json", "agent-skills.db", "tidy.jsonl", "subagents.jsonl"} <= brief_in, brief_in
+assert {"state.json", "prs.json", "agent-skills.db", "subagents.jsonl"} <= brief_in, brief_in
 
 # An unreadable directory under a glob is an error, not a store never written.
 (tmp / "state" / "roles").chmod(0)

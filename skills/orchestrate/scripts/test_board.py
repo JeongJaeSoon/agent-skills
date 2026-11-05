@@ -9,7 +9,7 @@ sys.path.insert(0, str(HERE.parents[1] / "brief" / "scripts"))
 import table_width  # noqa: E402
 
 sys.path.insert(0, str(HERE))
-import board  # noqa: E402
+import board, store  # noqa: E402
 
 tmp = pathlib.Path(tempfile.mkdtemp(prefix="test-board-"))
 state = tmp / "dashboard"
@@ -37,16 +37,29 @@ ok("db", "import", "--apply", "--rehearsal")  # decisions live in agent-skills.d
 
 def stamp(at=T0, **older):
     """Every row confirmed at `at`, except the ids given, confirmed at their own time; a wait started then too."""
-    p = state / "board.json"
-    b = json.loads(p.read_text())
-    for k, r in b["rows"].items():
-        r["reported_at"] = older.get(k, at)
-        if "since" in r:
-            r["since"] = r["reported_at"]
-    for d in b["doing"]:
-        if "since" in d:
-            d["since"] = at
-    p.write_text(json.dumps(b, ensure_ascii=False))
+    def go(b):
+        for k, r in b["rows"].items():
+            r["reported_at"] = older.get(k, at)
+            if "since" in r:
+                r["since"] = r["reported_at"]
+        for d in b["doing"]:
+            if "since" in d:
+                d["since"] = at
+    in_state(lambda: store.change_board(go))
+
+
+def in_state(fn):
+    """fn() on the board `state` names now: this process's own store calls follow the variable, as orch's env does."""
+    was = os.environ.get("ORCH_FLEET_STATE")
+    os.environ["ORCH_FLEET_STATE"] = str(state)
+    try:
+        return fn()
+    finally:
+        os.environ["ORCH_FLEET_STATE"] = was or ""
+
+
+def held_titles():
+    return [l["title"] for l in in_state(store.board)["later"]]
 
 
 def orch_env(extra, *args):
@@ -128,9 +141,9 @@ ok("board", "doing", "add", "로그 누락 조사", "--owner", "워커", "--next
 ok("board", "later", "add", "prod 배포 창", "--trigger", "10/16")
 ok("board", "later", "add", "캐시 TTL 다시 보기", "--trigger", "10/20")
 ok("board", "later", "add", "캐시 TTL을 다시 보기", "--trigger", "10/20")
-assert [l["title"] for l in json.loads((state / "board.json").read_text())["later"]] == ["prod 배포 창", "캐시 TTL을 다시 보기"]
+assert held_titles() == ["prod 배포 창", "캐시 TTL을 다시 보기"]
 # The queue's order is the list's: --at puts an item at a position, move takes one to another, a reword keeps its place.
-queue = lambda: [l["title"] for l in json.loads((state / "board.json").read_text())["later"]]
+queue = held_titles
 ok("board", "later", "add", "릴리스 노트", "--trigger", "v2 뒤", "--at", "1", "--who", "writer")
 assert queue() == ["릴리스 노트", "prod 배포 창", "캐시 TTL을 다시 보기"], queue()
 ok("board", "later", "add", "캐시 TTL 다시 한번 보기", "--trigger", "10/20")
@@ -360,8 +373,7 @@ assert board.pr_state({"state": "OPEN", "merge_state": "CLEAN", "ci": "success"}
 assert "지난 보고 없음" in ok("brief", "render", "--periodic", "--now", NOW).splitlines()[0]
 ok("board", "drop", "notify")
 assert "알림 정리" not in ok("brief", "render", "--periodic", "--now", NOW)
-assert "notify/p51" not in json.loads((state / "board.json").read_text())["rows"]
-assert (state / "board.prev.json").exists()
+assert "notify/p51" not in in_state(store.board)["rows"]
 
 # A scope renders one program's rows only.
 scoped = ok("brief", "render", "--periodic", "--now", NOW, "--scope", "검색 개선")
@@ -483,10 +495,9 @@ asked = ok("brief", "render", "--periodic", "--now", NOW)
 assert "요청" not in asked and "⏸️ 보류 큐 2건 · `orch board todo list`" in asked.splitlines(), asked
 
 # A held item stored twice before later add merged them renders once, in its newest words.
-b = json.loads((state / "board.json").read_text())
-b["later"] += [{"title": "콘솔 시안 대비 main에서 누락된 절차 확인", "trigger": "#9 land 뒤"},
-               {"title": "콘솔 시안 대비 main 누락 절차만 확인", "trigger": "#9 land 뒤"}]
-(state / "board.json").write_text(json.dumps(b, ensure_ascii=False))
+in_state(lambda: store.change_board(lambda b: b["later"].extend(
+    [{"title": "콘솔 시안 대비 main에서 누락된 절차 확인", "trigger": "#9 land 뒤"},
+     {"title": "콘솔 시안 대비 main 누락 절차만 확인", "trigger": "#9 land 뒤"}])))
 held = ok("board", "todo", "list", "--now", NOW, "--no-refresh")
 assert held.count("#9 land 뒤") == 1 and "| 3 | 콘솔 시안 대비 main 누락 절차만 확인 | #9 land 뒤 | — |" in held, held  # its place in the queue, as move and drop read it
 
@@ -599,6 +610,7 @@ def mok(*args):
     return out
 
 
+mok("db", "import", "--apply", "--rehearsal")
 mok("board", "lead", "add", "L", "--handle", "term_0FAKEL", "--repo", "acme/web")
 mok("board", "set", "L/ph1", "--kind", "phase", "--status", "waiting", "--pr", "acme/web#45", "--next", "머지 대기")
 mok("board", "set", "L/ph1/t1", "--title", "하위", "--pr", "acme/web#46")
@@ -708,6 +720,7 @@ def fok(*args):
     return out
 
 
+fok("db", "import", "--apply", "--rehearsal")
 fok("board", "lead", "add", "F", "--handle", "term_0FAKEF", "--repo", "acme/web")
 fok("board", "set", "F/old", "--title", "옛 완료", "--pr", "acme/web#1")
 fok("board", "set", "F/new", "--title", "새 완료", "--pr", "acme/web#2")
@@ -722,13 +735,17 @@ fok("board", "set", "H", "--status", "done")
 fok("board", "set", "H/t", "--title", "막 끝난 일", "--pr", "acme/mid#4")
 stamp_dir, state = state, fd / "dashboard"
 stamp()
-b = json.loads((state / "board.json").read_text())
-b["later"] += [{"title": "rollout 카드 재기동", "trigger": "B2 머지"}, {"title": "Rollout  카드 재기동", "trigger": "b2 머지"},
-               {"title": "배포 확인 (acme/app#1)", "trigger": "v1 태그"}, {"title": "배포 확인 (acme/app#2)", "trigger": "다음 분기"},
-               {"title": "A 머지 — dev 확인", "trigger": "dev 배포"}, {"title": "A 머지 — prod 확인", "trigger": "prod 배포"}]
-for k in ("G", "H"):
-    b["rows"][k]["done_at"] = "2026-10-10T00:00:00Z"
-(state / "board.json").write_text(json.dumps(b, ensure_ascii=False))
+
+
+def seed_fold(b):
+    b["later"] += [{"title": "rollout 카드 재기동", "trigger": "B2 머지"}, {"title": "Rollout  카드 재기동", "trigger": "b2 머지"},
+                   {"title": "배포 확인 (acme/app#1)", "trigger": "v1 태그"}, {"title": "배포 확인 (acme/app#2)", "trigger": "다음 분기"},
+                   {"title": "A 머지 — dev 확인", "trigger": "dev 배포"}, {"title": "A 머지 — prod 확인", "trigger": "prod 배포"}]
+    for k in ("G", "H"):
+        b["rows"][k]["done_at"] = "2026-10-10T00:00:00Z"
+
+
+in_state(lambda: store.change_board(seed_fold))
 state = stamp_dir
 (fd / "dashboard" / "prs.json").write_text(json.dumps({"me": "octo", "prs": dict([
     pr("acme/web#1", "MERGED", merged="2026-10-11T00:00:00Z"), pr("acme/web#2", "MERGED", merged="2026-10-13T12:00:00Z"),

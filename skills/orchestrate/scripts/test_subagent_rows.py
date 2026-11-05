@@ -14,8 +14,9 @@ env = {**os.environ, "ORCH_FLEET_STATE": str(tmp / "dashboard"), "ORCH_BRIEF_LAS
        "ORCA_TERMINAL_HANDLE": "term_root"}
 os.environ.update(env)
 sys.path.insert(0, str(HERE))
-import fleet  # noqa: E402
+import fleet, store  # noqa: E402
 
+store.import_apply(checks=False)
 now = fleet.utcnow()
 sd = fleet.state_dir()
 sd.mkdir(parents=True, exist_ok=True)

@@ -1,4 +1,4 @@
-<!-- translated-from: 7669e717c9334757a74620d783895a326ddaf887 -->
+<!-- translated-from: 6bccbba78301554054ebb761250201ca8658b856 -->
 # Skill catalog
 
 This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 16 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
@@ -293,7 +293,7 @@ Reports completed work, current work, decisions and human-only steps with eviden
 - **When:** "할 일 보여줘" (show the to-dos), "보류 큐 보여줘" (show the on-hold queue), `/agent-skills:todo`. `brief` only counts to-dos and the on-hold queue in one line, so call this when the list is needed.
 - **What it does:**
   - Sends the output of `orch board todo list [--telegram]` as printed. Two tables. The to-do table (status ⏰ due / 📅 waiting · when · task · owner) puts due items first, then by date, then undated items in the order they were added. The on-hold queue table (# · task · condition for its turn · owner) is in order, with ▶ (next) on the first row. Numbers count from 1 without closed items, and match the numbers `later move`, `later drop` and `todo from-later` take. The counts in the table header use the same basis as brief's pointer line (due to-dos and on-hold items whose trigger is met, shown as ❔ needs checking, are counted apart). When `--after` repeats the date of `--due`, the when cell shows it once. To fit 78 columns it cuts only long cells to their head and `…`, leaving each name wide enough to tell it from the others. Telegram gets lines, not tables.
-  - Adding and closing: a to-do is `orch board todo add <task> (--due D | --after C) --who W`, closed with `orch board done do:<k>`; an on-hold item becomes a to-do with `todo from-later <n> --who W`. An on-hold item is `orch board later add <task> --trigger <condition for its turn> [--who W] [--at N]`, and `later move <n> --to N` changes its turn.
+  - Adding and closing: a to-do is `orch board todo add <task> (--due D | --after C) --who W`, closed with `orch board done <id>`; an on-hold item becomes a to-do with `todo from-later <n> --who W`. An on-hold item is `orch board later add <task> --trigger <condition for its turn> [--who W] [--at N]`, and `later move <n> --to N` changes its turn.
 - **Related:** Where `brief`'s to-do and on-hold line points. On the dashboard it is the To-do page.
 
 ### map-features

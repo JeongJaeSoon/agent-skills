@@ -12,7 +12,7 @@ env = {**os.environ, "ORCH_FLEET_STATE": str(tmp / "dashboard"), "ORCH_BRIEF_LAS
        "AGENT_SKILLS_CONFIG": str(tmp / "none.json"), "PROGRAMS_HOME": str(tmp / "programs")}
 os.environ.update(env)
 sys.path.insert(0, str(HERE))
-import board, fleet, table_width, tidy  # noqa: E402
+import board, fleet, store, table_width, tidy  # noqa: E402
 
 now = fleet.utcnow()
 sd = fleet.state_dir()
@@ -64,6 +64,7 @@ SESSIONS = [{**card("s-root", "root", "working", "acme/app"), "kind": "orchestra
 OWNER_OF = {"acme/app#363": "s1", "acme/api#550": "s2", "acme/plugins#633": "s3", "acme/plugins#630": "s4",
             "acme/plugins#631": "s5", "acme/flows#182": "s6", "acme/plugins#640": "s7"}
 sd.mkdir(parents=True, exist_ok=True)
+store.import_apply(checks=False)
 fleet.write_atomic(sd / "prs.json", json.dumps({"prs": PRS, "me": "owner-me"}))
 fleet.write_atomic(sd / "state.json", json.dumps({"generated_at": fleet.iso(now), "sessions": SESSIONS, "prs": [
     {"key": k, "session": OWNER_OF.get(k), "state": v["detail"]["state"]} for k, v in PRS.items()]}))
@@ -111,7 +112,7 @@ assert rows["headless-skill"] == "held" and "| ⏸️ | headless-skill | [#633](
 assert f"{soon} prod 전환 확인 후 → headless-skill" in held, held  # the held item itself is counted on the pointer line
 assert not any("headless-skill" in m for m in moving + turn + theirs), (moving, turn, theirs)
 # ...and Needs you demotes the PR on the same rule.
-holds = fleet.held_prs(fleet.read_json(sd / "board.json"), tidy.closed(), {k: v["detail"] for k, v in PRS.items()}, now)
+holds = fleet.held_prs(board.read(), tidy.closed(), {k: v["detail"] for k, v in PRS.items()}, now)
 assert holds == {"acme/plugins#633": f"{soon} prod 전환 확인 후", "acme/plugins#640": f"{soon} 리뷰 뒤",
                  "acme/api#641": f"{soon} 배포 뒤"}, holds  # #182 is two PRs, so it holds neither
 # acme/plugins#640: a held item names it, but its card is stopped at a prompt only the owner answers: 🙋, not ⏸️.
@@ -136,7 +137,7 @@ board.doing_add(LONG, "lead", "수: 머지·릴리스 / 목: 실측 / 금: 전�
 board.set_row("long", title=LONG, repo="acme/app", status="moving", next=LONG)
 stages.add("long", title=LONG)
 stages.set_cell("long", "prod", "partial", evidence=LONG)
-st = fleet.read_json(sd / "board.json")
+st = board.read()
 assert st["later"][-1]["title"] == " ".join(LONG.split()) and st["later"][-1]["trigger"] == " ".join(("목 아침 " * 20).split())
 assert st["doing"][-1]["next"].endswith("금: 전환") and st["rows"]["long"]["title"] == st["rows"]["long"]["next"] == " ".join(LONG.split())
 row = next(r for r in stages.table()["rows"] if r["id"] == "long")
@@ -312,17 +313,26 @@ assert "[작업 중](http://127.0.0.1:4780/#/fleet/session/s-link) S! · payment
 assert "연결 없음** | — | 리뷰 | 세션 없음 |" in text, text
 assert out["width_ok"], "the model mark must not push the table past 78 columns"
 # The same with a progress bar, a PR and a short session name beside the mark: the cut columns give back its width.
+def link_pr(key):
+    """A linked card's PR is Orca's (its linked_pr): board set --pr is refused on such a row, so the fixture says it here."""
+    for s in st["sessions"]:
+        if s["id"] == "s-link":
+            s["linked_pr"] = {"key": key, "state": "OPEN"} if key else None
+    fleet.write_atomic(sd / "state.json", json.dumps(st))
+
+
 for s in st["sessions"]:
     if s["id"] == "s-link":
         s["name"], s["model_tag"] = "pay-mig", "O!"
-fleet.write_atomic(sd / "state.json", json.dumps(st))
-board.set_row("link-row", progress="3/8", pr="acme/links#1")
+board.set_row("link-row", progress="3/8")
+link_pr("acme/links#1")
 out = brief()
 assert "O! · pay-mig" in out["text"] and out["width_ok"], out["text"]
-board.set_row("link-row", progress="3/8", pr="#123→rc-branch")
+link_pr("#123→rc-branch")
 out = brief()
 assert "O!" in out["text"] and out["width_ok"], out["text"]  # a too-wide row loses the name, never the state or the mark
-board.set_row("link-row", progress="", pr="")
+board.set_row("link-row", progress="")
+link_pr(None)
 for s in st["sessions"]:
     if s["id"] == "s-link":
         s["name"] = "payments-migration-worktree"
