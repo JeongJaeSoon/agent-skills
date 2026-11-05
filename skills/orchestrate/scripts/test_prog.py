@@ -608,6 +608,35 @@ prog.orca_json = scripted([("ack", gone), ("ack", gone), ("peek", row), ("take",
 got = prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: None, pending=pend)
 assert [k for k, _ in log] == ["ack", "ack", "peek", "take"] and got[3] is True, log
 prog.done_take(pend)
+# A replayed ack whose answer is empty goes on to the wait, not out of it.
+pend.write_text(json.dumps({"retry_request": "r-a", "ack": "d0"}))
+log = []
+prog.orca_json = scripted([("ack", {}), ("peek", row), ("take", q)], log)
+got = prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: None, pending=pend)
+assert [k for k, _ in log] == ["ack", "peek", "take"] and got[3] is True, log
+prog.done_take(pend)
+# A wait that died after printing part of a batch: the replay prints only the rest, and cmd_wait's ACTIONABLE
+# print skips what was printed.
+two = {"deliveryId": "d5", "messages": [{"id": "a", "type": "status", "body": "a"}, {"id": "b", "type": "status", "body": "b"}]}
+pend.write_text(json.dumps({"retry_request": "r-b", "ack": None, "shown": ["a"]}))
+printed, log = [], []
+prog.orca_json = scripted([("take", two), ("ack", {}), ("peek", {})], log)
+got = prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: printed.append(a[0]), pending=pend)
+assert len(printed) == 1 and "id=b" in printed[0] and got[2] == {"a", "b"} and not pend.exists(), (printed, got)
+mixed = {"deliveryId": "d6", "messages": [{"id": "a", "type": "status", "body": "a"}, q["messages"][0]]}
+pend.write_text(json.dumps({"retry_request": "r-c", "ack": None, "shown": ["a"]}))
+prog.orca_json = scripted([("take", mixed)], [])
+got = prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: None, pending=pend)
+assert got[3] is True and got[2] == {"a"}, got
+prog.done_take(pend)
+# A status printed during a wait is noted in `pending` before the batch is cleared.
+pend_seen = []
+real_mark = prog.mark_shown
+prog.mark_shown = lambda pnd, mid: (pend_seen.append(json.loads(pnd.read_text()).get("retry_request")), real_mark(pnd, mid))
+prog.orca_json = scripted([("peek", row), ("take", st("s9", "d9")), ("ack", {}), ("peek", {})], [])
+prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: None, pending=pend)
+prog.mark_shown = real_mark
+assert len(pend_seen) == 1 and pend_seen[0], pend_seen
 # A delivery handled in an earlier round and handed out again is neither printed again nor left to replay.
 seen, printed, log = set(), [], []
 prog.orca_json = scripted([("peek", row), ("take", st("s1", "d1")), ("ack", {}), ("peek", {})], log)

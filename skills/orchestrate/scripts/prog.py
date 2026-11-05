@@ -3143,6 +3143,19 @@ def take(box, pending=None, ack=None):
         return batch(check(*args))
 
 
+def mark_shown(pending, mid):
+    """Note a message of the pending batch as printed, so a replay after a crash does not print it again. Written
+    after the print: a crash between the two prints it twice rather than never."""
+    req = pending_request(pending)
+    if req is None or mid is None:
+        return
+    req["shown"] = [*(req.get("shown") or []), mid]
+    tmp = pending.with_suffix(".tmp")
+    with contextlib.suppress(OSError):
+        tmp.write_text(json.dumps(req))
+        os.replace(tmp, pending)
+
+
 def done_take(pending):
     if pending is not None:
         with contextlib.suppress(OSError):
@@ -3185,10 +3198,11 @@ def wait_take(box, timeout_ms, clock=time.monotonic, out=print, pending=None, se
                 if not unread:
                     break
             replayed, replay = replay, False
+            replayed_ack = replayed and bool((pending_request(pending) or {}).get("ack"))
             try:
                 did, got = take(box, pending)
             except SystemExit as e:
-                if not (replayed and (pending_request(pending) or {}).get("ack")):
+                if not replayed_ack:
                     raise
                 if '"code"' not in str(e):  # no answer from Orca: the ack may still hold a batch, keep it for later
                     out(f"wait request replay failed ({e}); kept in {pending} for the next wait", flush=True)
@@ -3196,21 +3210,26 @@ def wait_take(box, timeout_ms, clock=time.monotonic, out=print, pending=None, se
                 out(f"wait request dropped: Orca refused the replayed ack ({e})", flush=True)
                 done_take(pending)
                 continue
-            if not did and not got:  # rows peeked but none handed out: waiting again would spin on them
+            if not did and not got:
                 done_take(pending)
-                break
+                if replayed_ack:  # the replayed ack had no next batch: go on to the wait
+                    continue
+                break  # rows peeked but none handed out: waiting again would spin on them
         if did and (did in dids or did in seen):  # a batch already handled: Orca is not moving, stop, not spin
             done_take(pending)
             break
         if did:
             dids.append(did)
         msgs += got
+        printed = set((pending_request(pending) or {}).get("shown") or ())  # a dead wait printed these already
+        shown |= {m.get("id") for m in got} & printed
         if any(m.get("type") in ACTIONABLE and not revoked_echo(m) for m in got):
             return dids, msgs, shown, True
         for m in got:
-            if m.get("type") != "heartbeat" and not revoked_echo(m):
+            if m.get("type") != "heartbeat" and not revoked_echo(m) and (m.get("id") is None or m.get("id") not in shown):
                 out(inbox_line(m), flush=True)
                 shown.add(m.get("id"))
+                mark_shown(pending, m.get("id"))
         done_take(pending)
         if did:
             seen.add(did)
