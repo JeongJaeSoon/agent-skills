@@ -291,6 +291,8 @@ def hard_row(t, kind, id_, result, dry=False, **extra):
 
 
 T0 = NOW - 10 * 3600
+# The cards below are made-up paths that exist nowhere; "gone" is tested further down against real folders.
+real_gone_card, sweep.gone_card = sweep.gone_card, lambda key: False
 shadow_round(T0, [("card:strict", "card:/ws/y", {"head": "h1"}), ("trash:tmpdir", "tmpdir:/t/a"),
                   ("stack:gone", "stack:s9"), ("card:landed", "card:/ws/z", {"head": "z1"}),
                   ("card:strict", "card:/ws/re", {"head": "new"}), ("card:close-idle", "card:/ws/c", {"close": ["A"]}),
@@ -454,6 +456,67 @@ assert sweep.diff(48, now=NOW + 1)["rows"][0]["state"] == "excess"
 (STATE / "reap-actions.jsonl").write_text(json.dumps({"t": T0 + 300, "key": "tmpdir:/t/reused", "ok": True,
                                                       "effect": "trash:tmpdir"}) + "\n")
 assert sweep.diff(48, now=NOW + 1)["rows"][0]["state"] == "matched"
+(STATE / "reap-actions.jsonl").unlink(missing_ok=True)
+
+# The same card (same folder inode) removed at a HEAD other than the plan's is the plan answered: its HEAD moved
+# between the scan and the removal. Another inode, or no inode to compare, still needs the HEAD to agree.
+sweep.shadow_log().unlink()
+shadow_round(T0, [("card:landed", "card:/ws/moved", {"head": "h1", "ino": 7})])
+(STATE / "reap-actions.jsonl").write_text(json.dumps({"t": T0 + 300, "key": "card:/ws/moved", "ok": True,
+                                                      "effect": "card:remove", "identity": {"head": "h2", "ino": 7}}) + "\n")
+assert sweep.diff(48, now=NOW + 1)["rows"][0]["state"] == "matched"
+(STATE / "reap-actions.jsonl").write_text(json.dumps({"t": T0 + 300, "key": "card:/ws/moved", "ok": True,
+                                                      "effect": "card:remove", "identity": {"head": "h2", "ino": 8}}) + "\n")
+assert sweep.diff(48, now=NOW + 1)["rows"][0]["state"] == "excess"
+(STATE / "reap-actions.jsonl").write_text(json.dumps({"t": T0 + 300, "key": "card:/ws/moved", "ok": True,
+                                                      "effect": "card:remove", "identity": {"head": "h2"}}) + "\n")
+assert sweep.diff(48, now=NOW + 1)["rows"][0]["state"] == "excess"
+(STATE / "reap-actions.jsonl").unlink(missing_ok=True)
+
+# A card already gone when the diff runs, with no old cleaner act on it, was cleaned outside the cleaners (a worker's
+# end-session, a lead's `orca worktree rm`): counted apart, not as excess. One still on disk that nobody cleaned is
+# excess as before, and so is a gone card the old cleaner acted on at another HEAD or inode (that is a mismatch).
+sweep.gone_card = real_gone_card
+alive = tmp / "alive-card"
+alive.mkdir()
+sweep.shadow_log().unlink()
+shadow_round(T0, [("card:landed", f"card:{tmp}/gone-card", {"head": "g", "ino": 1}),
+                  ("card:landed", f"card:{alive}", {"head": "a", "ino": 2}),
+                  ("trash:tmpdir", f"tmpdir:{tmp}/gone-dir")])
+d = sweep.diff(48, now=NOW + 1)
+states = {r["key"]: r["state"] for r in d["rows"]}
+assert states == {f"card:{tmp}/gone-card": "external", f"card:{alive}": "excess", f"tmpdir:{tmp}/gone-dir": "excess"}, states
+assert [r["key"] for r in d["excess"]] == [f"card:{alive}", f"tmpdir:{tmp}/gone-dir"], d["excess"]
+assert [r["key"] for r in d["external"]] == [f"card:{tmp}/gone-card"], d["external"]
+assert d["by_rule"]["card:landed"] == {"matched": 0, "pending": 0, "excess": 1}, d["by_rule"]
+assert sweep.verdict(d) == "excess"
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    sweep.print_diff(d)
+assert f"외부 정리 card:{tmp}/gone-card" in out.getvalue() and "넘침 2건" in out.getvalue(), out.getvalue()
+# Only a confirmed absence counts: a stat that fails for another reason (no permission) leaves the excess.
+assert sweep.gone_card(f"card:{tmp}/gone-card") and not sweep.gone_card(f"card:{alive}")
+real_lstat = os.lstat
+def denied(p, *a, **k):
+    raise PermissionError(13, "denied")
+os.lstat = denied
+try:
+    assert not sweep.gone_card(f"card:{tmp}/gone-card")
+finally:
+    os.lstat = real_lstat
+# Only gone cards: no excess, so the verdict is not "excess", and the external one is still reported.
+sweep.shadow_log().unlink()
+shadow_round(T0, [("card:landed", f"card:{tmp}/gone-card", {"head": "g"})])
+d = sweep.diff(48, now=NOW + 1)
+assert not d["excess"] and len(d["external"]) == 1 and sweep.verdict(d) != "excess", d
+# Inside the lag it is still pending, not external: the old cleaner may yet remove it.
+d = sweep.diff(48, now=T0 + 31)
+assert [r["state"] for r in d["rows"]] == ["pending"] and not d["external"], d
+# A gone card the old cleaner did remove is matched, not external.
+(STATE / "reap-actions.jsonl").write_text(json.dumps({"t": T0 + 300, "key": f"card:{tmp}/gone-card", "ok": True,
+                                                      "effect": "card:remove", "identity": {"head": "g"}}) + "\n")
+d = sweep.diff(48, now=NOW + 1)
+assert [r["state"] for r in d["rows"]] == ["matched"] and not d["external"], d
 (STATE / "reap-actions.jsonl").unlink(missing_ok=True)
 
 # A record that does not carry the identity the plan names proves nothing (a log line from before identities).

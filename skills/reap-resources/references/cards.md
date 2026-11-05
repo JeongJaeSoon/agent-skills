@@ -22,7 +22,8 @@ worktree create`, an orchestration worker. The first row that matches decides.
 | 10 | A commit off every remote whose message is on the remote with another patch | 사람 결정 |
 | 11 | A commit off every remote with no such message | 남김 |
 | 12 | Merged or closed PR that carried HEAD (HEAD is its head or behind it), every agent idle | 삭제 |
-| 13 | No PR, HEAD on the remote default branch, no Claude session in the card, or every agent terminal said it is done | 삭제 |
+| 13 | No PR, HEAD on the remote default branch, no Claude session in the card, or every agent terminal said it is done; and HEAD's reflog shows a commit of the card's own, or a card that never committed is over 24 hours old | 삭제 |
+| 13a | No PR, HEAD on the default branch, but HEAD's reflog shows no commit of the card's own and the card is under 24 hours old (`새 카드, 아직 커밋 없음`), or the reflog cannot be read | 남김 |
 | 14 | Anything else (HEAD past a merged PR's head, no PR and HEAD off the default branch, an agent not idle yet) | 남김 |
 
 "Idle" for an agent: its transcript quiet for `reap.idle_minutes` (the terminal's own output time when it has no
@@ -50,6 +51,9 @@ the cleaner never releases one.
 - **A stale `origin/HEAD`.** A failed `git fetch` (an SSO re-authorization, a network error) leaves the local
   default branch behind, so "HEAD is on main" reads false. A local no is asked of GitHub again:
   `gh api repos/<o>/<r>/compare/<base>...<head>` with `ahead_by` 0 is on the base; a 404 is a commit never pushed.
+- **A card made a moment ago.** Its HEAD is the base branch's tip, so "HEAD is on main" is true before any work
+  exists, and the PR may come hours later. HEAD on the base counts as landed only when the card made a commit of its
+  own (HEAD's reflog); a card with none is kept for 24 hours, then judged as an investigation card.
 - **A copy from before a rebase.** An unpushed commit with the same message as one on the remote is the same work
   only when `git patch-id --stable` matches; then it counts as pushed. Another patch goes to a person. A PR that
   carried HEAD needs no such check: after a squash merge and a deleted branch, its commits are on no remote.
