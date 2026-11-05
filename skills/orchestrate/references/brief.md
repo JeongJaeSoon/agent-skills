@@ -11,7 +11,9 @@ PROGRAM: <slug>
 GOAL        One sentence: the outcome, executable by someone with no access to this chat.
 SCOPE       Paths this unit may write and paths it may not. Its own worktree and branch.
             Scratch root: <none, or the one path outside the worktree it may write, e.g. a
-            directory a VM or container mounts>.
+            directory a VM or container mounts>. Never none when VERIFY bind-mounts host files
+            into a container or VM: name a directory the VM really shares (read its mount list),
+            since a worktree or temporary path it does not share mounts as an empty directory.
             Downloaded logs and artifacts go to <approved system temporary directory>, outside
             every git worktree. Resolve the platform temporary root (for example TMPDIR) and
             name a task-specific directory in this SCOPE; do not assume an unset variable is a path.
@@ -116,6 +118,12 @@ VERIFY      Exact commands, or the repo's .claude/skills/verify-<app> feature to
             A read or act already refused follows FORBIDDEN's refused-act paragraph: no plan is
             written here for it afterwards.
 TIMEBOX     Rough cap. When it runs out, report partial findings with --outcome failed and stop.
+LOAD        Before the first edit, load `deliver-ticket` (the Skill tool; a worker on another CLI
+            reads its SKILL.md). Inside a program this brief replaces two of its steps: findings
+            go in the worker_done body, not in new tickets (§2), and LAND and REPORT replace
+            its merge path (§6). Plan, review and commit still apply. A card that only reads
+            and reports writes `LOAD: none` and why. `hooks/guard.py` warns (key
+            `guard.deliver_load`) at each edit a card makes before the load.
 LAND        After review, record the verdict on the reviewed head: orch verdict <slug> --pr <N>
             --sha <head> --source <independent-review, review:<reviewer>, verifier:<reviewer>,
             or live:<feature>; never the implementer>. When this brief has you wait for the
@@ -127,7 +135,10 @@ LAND        After review, record the verdict on the reviewed head: orch verdict 
             `&` or a redirect: the completion notice carries its output and exit code, and
             wakes you, so end your turn to wait; never a sleep loop over its output file). Act on
             exit 3, report on exit 1. Pending checks are waited on the same way, or with a
-            `Monitor` until-loop on `gh pr checks` (deliver-ticket review-loop).
+            `Monitor` until-loop on `gh pr checks` (deliver-ticket review-loop). A run watched
+            by id is `gh run watch <run-id> --interval 30`, in the background like the wait above:
+            the default interval spends GitHub's core limit. A finished watch is not the result;
+            read `gh pr checks` after it.
             A wait on a human review or another outside event reads the PR at most once every
             60 minutes, or not at all: end your turn or `ask`, and the notice comes through
             watch-prs or the lead. GitHub's GraphQL limit (5000 points per hour) is shared
@@ -208,7 +219,8 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             and target only, without its command. Paste
             this paragraph, from "An act refused" through "run it again.", verbatim into every
             subagent prompt you write, including tracker and notes delegates: a summary drops
-            the forms it lists. Taking the path this
+            the forms it lists. That end is the paragraph's last sentence, the one that begins
+            "A failing check"; a copy that stops at "another way" drops half of it. Taking the path this
             brief already names for that act (`orch land` for a merge, in a worker's brief), when no
             human refused the act, is not a retry, nor is doing the act once more after the human added a rule for it or approved it in
             the refused session's own chat. Nor is the restart of a unit whose subagent's Edit or
@@ -292,6 +304,10 @@ ACCEPTANCE  Checkable criteria, one per line.
 VERIFY      Exact commands, and the output that proves each criterion.
             A browser check: `orch hold browser` before opening it, `orch release browser` after.
 TIMEBOX     Rough cap. When it runs out, report partial findings with --outcome failed and stop.
+LOAD        A change: before the first edit, load `deliver-ticket` (the Skill tool; a worker on
+            another CLI reads its SKILL.md). An investigation that only reads and reports:
+            `LOAD: none` and why. `hooks/guard.py` warns (key `guard.deliver_load`) at each edit
+            a card makes before the load.
 FORBIDDEN   Other work. No force-push. Nothing sent outside Orca. The refused-act paragraph of the
             program brief's FORBIDDEN above, pasted verbatim. <unit-specific bans>
 APPROVED    The acts the human already approved for this unit, with their words and date, recorded
