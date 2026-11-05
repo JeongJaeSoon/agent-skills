@@ -410,7 +410,7 @@ assert p.compute(silent, rcfg, {"acme/widgets#20@h20": {"at": NOW, "kind": "unre
 broke = p.compute(Fake([pr(1, reqs=[user(ME)])], merged=[merged(20)], deployed=RuntimeError("exit 1")), rcfg, {}, NOW)
 assert [(i["kind"], i.get("deployed")) for i in broke["new"]] == [("review_request", None), ("unreleased", None)]
 assert broke["new"][1]["why"] == ["dev 리비전 확인 실패: exit 1"] and "dev 리비전 확인 실패" in p.body(broke)
-assert "dev 리비전을 읽지 못함" in p.dispatch_cmds(broke, rcfg)[0][4]
+assert "dev 리비전을 읽지 못함" in p.dispatch_cmds(broke, rcfg)[0][0]
 assert "revision_cmd 없음" in p.compute(Fake([], merged=[merged(20)], deployed="d0"),
                                         {**rcfg, "deploy": {"acme/widgets": {}}}, {}, NOW)["new"][0]["why"][0]
 
@@ -435,22 +435,35 @@ for bad in ("exit 3", "true"):
     except RuntimeError:
         pass
 
-# dispatch: one worker-start per repo; the brief carries the procedure, the declaration and the approval.
+# dispatch: one `skills-sync card` per repo, so the worker is parented under the session that runs the line
+# (card.py's new-child) and reports to the Run, never a new top-level worktree; the brief carries the procedure,
+# the declaration and the approval.
 two = {**rcfg["deploy"], "acme/gadgets": {"revision_cmd": "x"}}
 plan2 = p.compute(Fake([], merged=[merged(20), merged(21), merged(30, repo="acme/gadgets")], deployed="d0", live={"m20"}),
                   {**rcfg, "deploy": two}, {}, NOW)
 cmds = p.dispatch_cmds(plan2, {**rcfg, "deploy": two})
-assert [c[c.index("--repo") + 1] for c in cmds] == ["name:gadgets", "name:widgets"]
-w = cmds[1]
-assert w[:3] == ["orca", "orchestration", "worker-start"] and w[w.index("--run") + 1] == "run_x"
-assert w[w.index("--worktree") + 1] == "new-top-level" and w[w.index("--agent") + 1] == "claude"
-spec = w[w.index("--spec") + 1]
+assert [c[1][c[1].index("--repo") + 1] for c in cmds] == ["name:gadgets", "name:widgets"]
+spec, w = cmds[1]
+assert w[:2] == ["skills-sync", "card"] and w[2] == p.BRIEF_ARG, w
+assert "--worktree" not in w and "new-top-level" not in w and w[w.index("--agent") + 1] == "claude"
+assert w[w.index("--name") + 1] == f"dev-check-widgets-{int(plan2['run'])}"
 for want in ("post-merge-release.md", "#20 ", "merge m20", "dev 에 반영됨", "#21 ", "dev(d0) 에 아직 없음", "- revision_cmd: print-dev-sha",
              "- verify: verify-widgets", "승인: dev 배포 승인됨(테스트)", "사람만: 프로덕션", "다시 시도하지 않는다"):
     assert want in spec, want
+assert spec.startswith("/goal "), "card.py needs the /goal line"
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3] / "scripts"))
+import card  # noqa: E402  (the brief must pass card.py's own row checks)
+assert card.CLOSE_LINE in spec.splitlines()
+assert card.report_to(spec) == ["run:run_x"], "the REPORT row sends to the Run, so card.py starts a supervised worker"
 assert pathlib.Path(spec.split("절차: ")[1].split(" ")[0]).exists(), "the brief points at a reference that exists"
-assert "--run" not in p.dispatch_cmds(plan2, {**rcfg, "deploy": two, "dispatch_run": None})[0]
-assert "승인이 없다" in p.dispatch_cmds(plan2, {**rcfg, "deploy": two, "release_approval": None})[0][4]
+# No dispatch_run: the Run comes from an inbox_to that is a Run address, else dispatch refuses and names the key.
+assert card.report_to(p.dispatch_cmds(plan2, {**rcfg, "deploy": two, "dispatch_run": None, "inbox_to": "run:run_y"})[0][0]) == ["run:run_y"]
+try:
+    p.dispatch_cmds(plan2, {**rcfg, "deploy": two, "dispatch_run": None, "inbox_to": "term_x"})
+    raise AssertionError("a dispatch with no Run must refuse")
+except ValueError as e:
+    assert "prs.dispatch_run" in str(e)
+assert "승인이 없다" in p.dispatch_cmds(plan2, {**rcfg, "deploy": two, "release_approval": None})[0][0]
 assert p.dispatch_cmds(plan, rcfg) == [], "review requests are messaged, never dispatched"
 
 # CLI end to end with a fake gh: exit codes and the --body output.
@@ -491,12 +504,16 @@ assert p.GitHub().pr("acme/gone#1", ME) is None
 assert run("dispatch").returncode != 0
 conf.write_text(json.dumps({"prs": {"deploy": {"acme/widgets": decl}}}))
 p.write_json(tmp / "state" / "prs" / "plan.json", plan2)
+norun = run("dispatch")
+assert norun.returncode != 0 and "prs.dispatch_run" in norun.stderr and not norun.stdout, norun
+conf.write_text(json.dumps({"prs": {"deploy": {"acme/widgets": decl}, "dispatch_run": "run_x"}}))
 d = run("dispatch")
 printed = d.stdout.splitlines()
-assert d.returncode == 0 and len(printed) == 1 and shlex.split(printed[0])[:3] == ["orca", "orchestration", "worker-start"], d
 brief = tmp / "state" / "prs" / f"brief-{int(plan2['run'])}-0.txt"
-assert printed[0].endswith(f'--spec "$(cat {brief})"'), "named by run, so the next round cannot overwrite it"
-assert "#20 " in brief.read_text()
+assert d.returncode == 0 and len(printed) == 1 and shlex.split(printed[0])[:3] == ["skills-sync", "card", str(brief)], d
+assert "#20 " in brief.read_text(), "named by run, so the next round cannot overwrite it"
+# Run in the session that runs the line, the brief passes card.py's checks and the start is a parented worker.
+assert card.compose(str(brief)).startswith("/goal ")
 assert (tmp / "state" / "prs" / "dispatch.txt").read_text() == d.stdout.rstrip("\n")
 (tmp / "state" / "prs" / "plan.json").unlink()
 broken = {**env, "AGENT_SKILLS_GH": "/nonexistent/gh"}
