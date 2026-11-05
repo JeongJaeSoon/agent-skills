@@ -832,20 +832,33 @@ def ask_lint(if_no_answer, reason, recommendation=None):
     return None
 
 
+def ask_line(if_no_answer, reason):
+    """The gate's fields as `orch decide add` puts them on the body's first line, where the page and the report read them."""
+    return f"답이 없으면 {if_no_answer.strip()} · 근거: {reason}"
+
+
+def ask_line_of(body):
+    first = (body or "").split("\n", 1)[0]
+    return first if first.startswith("답이 없으면 ") and "· 근거: " in first else None
+
+
 def decision_lint(item):
     """Why a brief --decision item does not hold DECISION_FORM and the owner-ask gate, or None."""
-    _, sep, tail = item.partition("→ 추천:")
+    question, sep, tail = item.partition("→ 추천:")
     if not sep:
         return "→ 추천: is missing"
-    rec, sep, rest = tail.partition("· 답이 없으면")
-    if not sep:
-        return "· 답이 없으면 is missing"
-    rec, sep, _ = rec.partition(" — ")
-    if not sep:
-        return "the recommendation has no ' — <reason>'"
-    default, sep, tag = rest.partition("· 근거:")
+    if not question.removeprefix("(미등록)").strip():
+        return "the question before → 추천: is empty"
+    # The fixed fields are split off from the right, so a reason may quote them.
+    tail, sep, tag = tail.rpartition("· 근거:")
     if not sep:
         return "· 근거: is missing at the end"
+    rec, sep, default = tail.rpartition("· 답이 없으면")
+    if not sep:
+        return "· 답이 없으면 is missing"
+    rec, sep, why = rec.partition(" — ")
+    if not sep or not rec.strip() or not why.strip():
+        return "the recommendation needs '<X> — <reason>', both filled"
     return ask_lint(default, tag.strip(), rec.strip())
 
 
@@ -1598,6 +1611,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             rec = d.get("recommend") and d["options"][d["recommend"] - 1]
             text = (f"{i}. ({d['id']}) {d['title']}" + (f" → 추천: {rec['label']}" + (f" — {rec['description']}" if rec["description"] else "")
                     if rec else " — 선택지: " + " / ".join(o["label"] for o in d["options"]) if d["options"] else ""))
+            text += f" · {gate}" if (gate := ask_line_of(d.get("body"))) else ""
             items.append(text + (" (지난 보고와 동일)" if d["id"] in repeated else ""))
         items += [f"{i}. {one_line(d)}" for i, d in enumerate(own, len(decisions) + 1)]
         if tg:

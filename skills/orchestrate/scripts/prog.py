@@ -3479,9 +3479,10 @@ def cmd_decide(argv):
             if why := board.ask_lint(default, reason, label):
                 sys.exit(f"decide add needs --if-no-answer <the --recommend label | {board.CANNOT_PROCEED}> and "
                          f"--reason <{' | '.join(board.ASK_REASONS)}>: {why} ({board.ASK_GATE})")
-            # The decision table has no column for these, so the body carries them for the page and the relay.
-            text, gate = (pathlib.Path(body).read_text() if body else "").rstrip(), f"답이 없으면: {default.strip()} · 근거: {reason}"
-            text = f"{text}\n\n{gate}" if text else gate
+            # The decision table has no column for these. The body's first line carries them: the page shows that line,
+            # the report appends it, and a long body loses its end, not them.
+            text = (pathlib.Path(body).read_text() if body else "").strip()
+            text = board.ask_line(default, reason) + (f"\n\n{text}" if text else "")
             d = fleet.decision_add(opt(rest, "--title"), text, options,
                                    int(rec) if rec else None, opt(rest, "--link"), os.environ.get("ORCA_TERMINAL_HANDLE"))
             print(d["id"])

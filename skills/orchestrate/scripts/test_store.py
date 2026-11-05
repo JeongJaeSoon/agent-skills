@@ -90,7 +90,7 @@ with state("import") as sd:
     env = {"ORCA_TERMINAL_HANDLE": "term_0FAKE1"}
     assert orch("decide", "add", "--title", "Next step", "--option", "Go", "--recommend", "1", "--if-no-answer", "Go",
                 "--reason", "owner-asked", env=env) == (0, "d4", "")
-    assert store.decision_record("d4")["body"] == "답이 없으면: Go · 근거: owner-asked"
+    assert store.decision_record("d4")["body"] == "답이 없으면 Go · 근거: owner-asked"
     assert orch("decide", "keep", "d4", env=env)[0] == 0
     assert orch("decide", "done", "d4", "--answer", "Go", env=env) == (0, "d4 done", "")
     code, out, _ = orch("decide", "list")
@@ -689,7 +689,9 @@ with state("register") as sd:
     for bad, why in ((ITEM.replace(" · 근거: owner-asked", ""), "· 근거: is missing"),
                      (ITEM.replace("owner-asked", "just-checking"), "근거 is one of"),
                      (ITEM.replace("답이 없으면 유지", "답이 없으면 나중에"), "답이 없으면 is the recommendation ('유지')"),
-                     (ITEM.replace(" — 무료 한도 안", ""), "no ' — <reason>'"),
+                     (ITEM.replace(" — 무료 한도 안", ""), "'<X> — <reason>', both filled"),
+                     ("캐시를 지울까: 지움 / 유지 → 추천:  —  · 답이 없으면 진행 못 함 · 근거: owner-asked", "both filled"),
+                     ("→ 추천: 유지 — 싸다 · 답이 없으면 유지 · 근거: owner-asked", "question before → 추천: is empty"),
                      (ITEM.replace(" · 답이 없으면 유지", ""), "· 답이 없으면 is missing")):
         code, _, err = brief("--decision", bad)
         assert code == 1 and why in err and len(store.decisions()) == before, (bad, err)
@@ -702,6 +704,18 @@ with state("register") as sd:
                        (("--if-no-answer", "B", "--reason", "owner-asked"), "답이 없으면 is the recommendation ('A')")):
         code, _, err = orch("decide", "add", "--title", "고를까", "--option", "A::싸다", "--option", "B", "--recommend", "1", *extra)
         assert code == 1 and why in err and "--if-no-answer" in err and len(store.decisions()) == before, (extra, err)
+    # Accepted, the gate's fields lead the body, so the page's one-line detail and the report both show them.
+    (sd / "why.md").write_text("A is cheap.\n")
+    code, picked, _ = orch("decide", "add", "--title", "고를까", "--option", "A::싸다", "--option", "B", "--recommend", "1",
+                           "--body-file", str(sd / "why.md"), "--if-no-answer", "A", "--reason", "owner-asked", env=ME)
+    assert code == 0 and store.decision_record(picked)["body"] == "답이 없으면 A · 근거: owner-asked\n\nA is cheap.", picked
+    code, out, _ = brief()
+    assert f"({picked}) 고를까 → 추천: A — 싸다 · 답이 없으면 A · 근거: owner-asked" in out, out
+    fleet.decision_close(picked, "dropped")
+    # A reason may quote a field name: the fields are split off from the right.
+    code, out, err = brief("--decision", ITEM.replace("무료 한도 안", "'· 답이 없으면' 칸을 그대로 둠"))
+    assert code == 0, err
+    before += 2
     # A label is not made up, so an owner's sentence starting with the recommendation closes nothing by itself.
     assert all(not x["options"] for x in fleet.open_decisions())
     # A long item keeps its recommendation in the report, and a skipped one's answer stays out of stderr.
