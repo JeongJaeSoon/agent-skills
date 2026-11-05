@@ -35,9 +35,17 @@
       {
         "matcher": "Bash",
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/decision_relay.py\"", "timeout": 5 }]
+      },
+      {
+        "matcher": "Bash|mcp__.*[Tt]elegram.*|mcp__.*[Ss]lack.*",
+        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/artifact_send_check.py\"", "timeout": 5 }]
       }
     ],
     "PostToolUse": [
+      {
+        "matcher": "Artifact",
+        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/artifact_archive.py\"", "timeout": 30 }]
+      },
       {
         "matcher": "Bash",
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/pressure_gate.py\"", "timeout": 5 }]
@@ -87,6 +95,9 @@
       },
       {
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/owner_check.py\"", "timeout": 5 }]
+      },
+      {
+        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/artifact_links_stop.py\"", "timeout": 5 }]
       }
     ],
     "SubagentStart": [
