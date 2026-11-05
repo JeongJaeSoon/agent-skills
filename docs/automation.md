@@ -7,10 +7,18 @@
 
 `skills-sync setup`(`scripts/automations.py`)이 이 저장소가 거는 정기 자동화의 입구다. 주기 작업(동기화,
 pressure-watch, reap-hard, 대시보드 ensure)은 macOS LaunchAgent가 아니라 Orca automation으로 돈다. 자동화마다
-기본값이 있고, `apply`는 기본 on 중 한 번도 설정하지 않은 것만 켠다. `reap-hard`는 묻지 않고 카드를 지우는 정리라
-보호 목록 파일을 먼저 써야 하므로 기본 off이고, 목록을 쓴 뒤 `skills-sync setup enable reap-hard`로 켠다
-([reap-hard.md](reap-hard.md)). `setup.py`와 `bootstrap.py --write`가 마지막에 `apply`를
-부르므로, 처음 설치한 사람은 따로 할 일이 없다. 바꾸고 싶으면 아래 명령을 메인 체크아웃에서 돌린다.
+기본값이 있고, `apply`는 기본 on 중 한 번도 설정하지 않은 것을 켜며, 이미 켜진 에이전트 없는 job(`sync`,
+`pressure-watch`, `reap-hard`, `orch-dash`)의 등록 내용이 이 체크아웃과 다르면 다시 맞춘다. `setup.py`의 dry run은
+같은 판정으로 `then    automation <이름>: install`·`refresh the registered job` 줄을 미리 보여 주고(plan hash에
+들어간다), 건너뛰는 기본 on에는 이유를 적는다. `--apply`가 쓸 `agent-skills.json`(개인 설정 포함)을 기준으로 판정한다.
+`setup.py`와 `bootstrap.py --write`가 마지막에 `apply`를 부르므로, 처음 설치한 사람은 따로 할 일이 없다.
+바꾸고 싶으면 아래 명령을 메인 체크아웃에서 돌린다.
+
+`reap-hard`는 묻지 않고 카드를 지우는 정리라 보호 목록 파일(`reap-hard.protect_file`)이 있는 PC에서만 켠다. 파일이 없는
+새 PC에서는 상태가 "꺼짐(설정 키 없음)"이고 `apply`가 건너뛰며, 파일을 쓴 뒤 다음 `apply`가 건다
+([reap-hard.md](reap-hard.md)). 세션 순찰(`orch patrol`)은 따로 job이 없고 reap-hard 회차가 띄우므로 같은 조건에서만 돈다
+(pressure 회차가 경고 이상으로 바뀔 때만 예외). `orch-dash`는 대시보드 서버를 확인해 내려갔으면 올릴 뿐 아무것도 지우지
+않아 새 PC에서도 켠다.
 
 ```bash
 skills-sync setup [--json]               # 목록과 상태
@@ -26,8 +34,8 @@ skills-sync setup disable <이름>         # 끄기
 | `preview-watch` | off | LaunchAgent `io.github.jeongjaesoon.preview-watch` | tailscale CLI가 없으면 거부한다. 있으면 `preview_watch.py install` | `preview_watch.py uninstall`(watcher가 연 serve 항목도 닫는다) |
 | `sync` | on | Orca automation `agent-skills sync`(에이전트 없음, [아래](#에이전트-없이-도는-주기-작업)) | 없으면 만든다(15분마다 `sync.py sync`). 있으면 trigger·precheck·timeout·prompt 중 다른 것만 맞추고 켠다 | `orca automations edit --disabled`. 등록은 남겨 `apply`가 다시 켜지 않는다 |
 | `pressure-watch` | on | Orca automation `agent-skills pressure-watch`(에이전트 없음) | `sync`와 같다. 3분마다 `pressure.py round`. `round`가 경고·위험으로 끝나는 exit 1·2는 실패가 아닌 결과로 기록한다 | `sync`와 같다 |
-| `reap-hard` | off | Orca automation `agent-skills reap-hard`(에이전트 없음) | `sync`와 같다. 15분마다 `reap_hard.py run` | `sync`와 같다 |
-| `orch-dash` | off | Orca automation `agent-skills orch-dash`(에이전트 없음) | `sync`와 같다. 10분마다 `dash.py ensure`로 이 스토어의 대시보드 서버를 확인해 내려갔으면 올린다 | `sync`와 같다 |
+| `reap-hard` | on(보호 목록 파일이 있을 때) | Orca automation `agent-skills reap-hard`(에이전트 없음) | `sync`와 같다. 15분마다 `reap_hard.py run`. 파일이 없으면 `apply`가 건너뛴다(`enable`은 받는다) | `sync`와 같다 |
+| `orch-dash` | on | Orca automation `agent-skills orch-dash`(에이전트 없음) | `sync`와 같다. 10분마다 `dash.py ensure`로 이 스토어의 대시보드 서버를 확인해 내려갔으면 올린다 | `sync`와 같다 |
 | `share-server` | off | LaunchAgent(라벨은 설정 `share-server.label`, 기본 `io.github.jeongjaesoon.share-server`) | `share_server.py install`(KeepAlive로 `serve`, 그 안에서 sandbox-exec 아래 caddy. caddy가 없으면 `brew install caddy`부터. 같은 라벨의 다른 plist는 백업 후 교체) | `share_server.py uninstall` |
 | `watch-prs` | on(설정 키가 있을 때) | Orca automation `agent-skills watch-prs` | `agent-skills.json`에 `prs` 키가 없으면 상태는 "꺼짐(설정 키 없음)"이고 `apply`가 건너뛴다. 있으면 `prs.py schedule --write`로 만든다. 이미 등록돼 있으면 키와 상관없이 켜기만 한다. worktree에서는 거부한다 | `orca automations edit --disabled`. 등록은 남긴다 |
 | `watch-mentions` | on(설정 키가 있을 때) | Orca automation `agent-skills watch-mentions` | `watch-prs`와 같다. 키는 `mentions`, 만드는 명령은 `mentions.py schedule --write` | `orca automations edit --disabled`. 등록은 남긴다 |
