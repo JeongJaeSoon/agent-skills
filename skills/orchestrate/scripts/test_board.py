@@ -566,6 +566,9 @@ periodic = rok("brief", "render", "--periodic", "--now", NOW)
 assert "| 작업 |" not in periodic and "> 단계표 1행 · `orch stage show`" in periodic.splitlines(), periodic
 tg_req = rok(*REQUEST, "--telegram")
 assert not any(m in tg_req for m in ("**", "|", "](", "`", "📋 작업별")), tg_req
+# Only the terminal text drops links; a link the caller wrote into the Telegram text stays as written.
+tg_link = rok(*REQUEST[:4], "--insight", "★ [표](https://example.test/t)", "--telegram")
+assert "[표](https://example.test/t)" in tg_link, tg_link
 assert "단계표 1행 · orch stage show --telegram" in tg_req.splitlines() and "🔄 c7 #45 ❗리뷰 CI… — CI 통과 → 리뷰 의뢰 · 워커 · 작업 중" in tg_req.splitlines(), tg_req
 (tmp / "programs").mkdir(exist_ok=True)
 (tmp / "programs" / ".dash.json").write_text(json.dumps({"pid": os.getpid(), "port": 4799}))

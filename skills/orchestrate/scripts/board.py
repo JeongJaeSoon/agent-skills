@@ -807,6 +807,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
 
     def no_links(s):
         """The terminal text of a line: a PR link as owner/repo#N, any other link as its label."""
+        if tg:  # Telegram text keeps whatever link a caller wrote, such as an --insight
+            return s
         for link, key in pr_plain.items():
             s = s.replace(link, key)
         return re.sub(r"\[([^\]]+)\]\(https?://[^)\s]+\)", r"\1", s)
