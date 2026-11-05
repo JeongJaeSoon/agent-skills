@@ -987,6 +987,32 @@ async function pollBrief() {
     }
   } catch (e) { F.brief = { message: String(e.message || e) }; F.briefEtag = null; }
   F.briefBusy = false;
+  if (S.section === "sessions") pollUnits();
+}
+// The server's join of sessions, brief rows, PRs and tickets (/api/fleet/units, units.py). The Sessions page is a column
+// preset of it: a ticket, a PR, a brief row or an owner's turn is read from here, never worked out again on the page.
+async function pollUnits() {
+  if (F.unitsBusy) return;
+  F.unitsBusy = true;
+  try {
+    const r = await fetch("/api/fleet/units", { cache: "no-store", headers: F.unitsEtag ? { "If-None-Match": F.unitsEtag } : {} });
+    if (r.status !== 304) {
+      F.units = r.ok ? await r.json() : { error: `HTTP ${r.status}`, units: [] };
+      F.unitsEtag = r.ok ? r.headers.get("ETag") : null;
+      if (isFleet() && S.section === "sessions") renderView();
+    }
+  } catch (e) {
+    F.units = { error: String(e.message || e), units: [] }; F.unitsEtag = null;
+    if (isFleet() && S.section === "sessions") renderView();
+  }
+  F.unitsBusy = false;
+}
+// The unit of a session, or null until the units are loaded (or when the server could not build them).
+function unitOf(id) {
+  const us = (F.units || {}).units;
+  if (!us) return null;
+  if (F.unitsFor !== F.units) { F.unitsFor = F.units; F.unitIdx = new Map(us.filter((u) => u.session).map((u) => [u.session.id, u])); }
+  return F.unitIdx.get(id) || null;
 }
 // ❔ is a pale outline glyph in most emoji fonts: drawn as a toned mark instead.
 const briefInline = (s) => linkTickets(esc(s).replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, text, url) => link(url, text))
@@ -1540,21 +1566,17 @@ const ticketHref = (k) => { const t = (S.fleet || {}).ticket_url; return t && sa
 const linkTickets = (html) => (S.fleet || {}).ticket_url
   ? html.replace(new RegExp(`(<a\\b[^>]*>[\\s\\S]*?</a>)|(<[^>]+>)|(${TICKET_RE.source})`, "g"),
     (m, a, tag, id) => !id || NOT_TICKET.test(id) ? m : link(ticketHref(id), id)) : html;
-// The card's own ticket links first, then ids in its name, its branch and the labels of its brief rows.
-function ticketIds(s, rows = []) {
-  const out = (s.refs || []).filter((r) => r.type !== "pr" && r.url).map((r) => ({ key: r.key || r.provider || "ticket", url: r.url }));
-  [s.name, s.branch, ...rows.map((x) => x.label)].forEach((t) => (String(t || "").match(TICKET_RE) || []).forEach((k) => {
-    if (!NOT_TICKET.test(k) && !out.some((o) => o.key === k)) out.push({ key: k, url: ticketHref(k) });
-  }));
-  return out;
-}
+// The unit's tickets, which units.py found once: the card's own links, then ids in its name, branch and brief rows.
+const unitTickets = (u) => ((u && u.tickets) || []).map((t) => ({ key: t.id, url: t.url }));
 // An offline worker whose pull request merged has nothing left to do: its row folds into the finished group. The
 // orchestrator and the leads are not workers: sessions hang under them.
 function finished(st, s) {
   if (s.kind === "orchestration" || s.kind === "orchestrator" || s.phase !== "offline") return false;
   // Every PR it has: one merged and none still open (an earlier PR merged while a later one is under review is not done).
-  const states = [...(st.prs || []).filter((p) => p.session === s.id).map((p) => p.state), s.linked_pr && s.linked_pr.state]
-    .filter(Boolean).map((x) => String(x).toUpperCase());
+  // The unit's PRs (a PR several sessions claimed is none of theirs). Without the unit, nothing says it is finished.
+  const u = unitOf(s.id);
+  if (!u) return false;
+  const states = u.prs.map((p) => p.state).filter(Boolean).map((x) => String(x).toUpperCase());
   return states.includes("MERGED") && !states.includes("OPEN");
 }
 // The session's brief rows: what the work is and where it stands, from the same answer the Brief page reads.
@@ -1624,6 +1646,7 @@ function foldSummary(kids) {
 
 function fleetSessions(st) {
   if (!F.brief) pollBrief();
+  if (!F.units) pollUnits();
   const tree = sessionTree(st), kidsOf = leadKids(tree), fold = leadFolds(), doneOpen = !!F.doneOpen;
   const shown = tree.filter(([s]) => inProject(s.project));
   const done = new Set(shown.filter(([s]) => finished(st, s)).map(([s]) => s.id));
@@ -1632,12 +1655,14 @@ function fleetSessions(st) {
   const foldedAway = [...done].map((id) => `row-${domId(id)}`);
   let stale = 0;
   const rows = shown.map(([s, d]) => {
-    const pr = (st.prs || []).find((p) => p.session === s.id);
-    // Orca's own link when the collector holds no PR for the session: number, state and CI as Orca observed them.
-    const lp = !pr && s.linked_pr && s.linked_pr.number ? s.linked_pr : null;
-    const prCell = pr ? link(pr.url, `#${esc(pr.number)}`)
-      : lp ? `${lp.url ? link(lp.url, `#${esc(lp.number)}`) : `#${esc(lp.number)}`} <span class="muted">${esc([lp.state, lp.checksStatus].filter((x) => x && x !== "unknown").join(" · "))}</span>` : "";
-    const ids = ticketIds(s, sessionRowsOf(s.id));
+    const u = unitOf(s.id);
+    // The unit's PRs: the one this session owns, else Orca's own link (number, state and CI as Orca observed them). A PR
+    // several sessions claimed is linked to none of them.
+    const [pr, ...morePrs] = (u && u.prs) || [];
+    const prLink = (p) => (p.url ? link(p.url, `#${esc(p.number)}`) : `#${esc(p.number)}`);
+    const prCell = (pr ? `${prLink(pr)}${pr.via === "orca" ? ` <span class="muted">${esc([pr.state, pr.ci].filter((x) => x && x !== "unknown").join(" · "))}</span>` : ""}${morePrs.length ? ` <span class="muted">+${morePrs.length}</span>` : ""}` : "")
+      + (u && u.pr_unknown.length ? ` <span class="muted" title="${esc(`Claimed by several sessions, so linked to none: ${u.pr_unknown.join(" ")}`)}">PR link unknown</span>` : "");
+    const ids = unitTickets(u);
     const tickets = ids.length ? `<span class="cut" title="${esc(ids.map((t) => t.key).join(" "))}">${ids.map((t) => t.url ? link(t.url, esc(t.key)) : `<span class="mono">${esc(t.key)}</span>`).join(" ")}</span>` : "";
     const board = s.workspace_status && s.workspace_status !== "in-progress" ? ` <span class="tag">${esc(s.workspace_status)}</span>` : "";
     const all = kidsOf.get(s.id), kids = all && live(all), folded = fold.has(s.id) && kids && kids.length > 0;
@@ -1652,14 +1677,15 @@ function fleetSessions(st) {
     }
     return `<tr${away ? " hidden" : ""} id="row-${domId(s.id)}"><td>${name}</td>
       <td>${kindTag(st, s)}</td><td>${esc(s.phase)}${board}${modelCell(s)}${reloadCell(s)}</td>
-      <td>${tickets}</td><td>${prCell}</td><td>${briefCell(s)}</td><td class="num">${badge(s.unread, s.missed)}</td><td class="num when">${relSpan(s.last_activity)}</td>
+      <td>${tickets}</td><td>${prCell}</td><td>${briefCell(s)}</td><td class="num">${u && u.owner_turn ? '<span class="bmark" title="Waits on you">🙋</span> ' : ""}${badge(s.unread, s.missed)}</td><td class="num when">${relSpan(s.last_activity)}</td>
       <td><div class="pb">${projBadge(s.project)}<span class="cut mono dim" title="${esc(s.branch || "")}">${esc(s.branch || "")}</span></div></td></tr>`
       + subagentRows(s, d, away, !doneOpen);
   }).join("");
   const sum = [done.size ? `${done.size} offline with a merged PR` : "", stale ? `${stale} subagent${stale === 1 ? "" : "s"} with no stop recorded` : ""].filter(Boolean).join(" · ");
   const doneRow = sum ? `<tr class="done-row"><td colspan="9" data-ui-review-ignore="a toggle across all columns, not a column's control"><button class="fold-btn" type="button" id="fold-done" data-fold-done aria-expanded="${doneOpen}" aria-controls="${esc(foldedAway.join(" "))}"
       aria-label="${doneOpen ? "Hide" : "Show"} finished sessions and stale subagents"><span class="chev" aria-hidden="true"></span></button><span class="muted">Finished · ${esc(sum)}</span></td></tr>` : "";
-  return `<div class="view-head"><div><h2>Sessions</h2><p>Every Orca worktree, placed under the orchestrator or lead whose run dispatched it, else under its Orca parent, else under the root. A lead is a session under the root with its own run; the sessions under it are its workers. Ticket is the card's own link, else an id in the session name, branch or brief row. Brief is the session's row from the Brief page. PR and the board column (shown when not in-progress) are the card's own Orca fields. A subagent a session started sits under it, dimmed. An offline worker whose PR merged, and a subagent with no stop recorded for hours, wait in the Finished line. The table scrolls sideways; a long value is cut to one line, whole on hover.</p></div>${phaseLegend()}</div>
+  return `<div class="view-head"><div><h2>Sessions</h2><p>Every Orca worktree, placed under the orchestrator or lead whose run dispatched it, else under its Orca parent, else under the root. A lead is a session under the root with its own run; the sessions under it are its workers. Ticket, PR and the owner's-turn mark in Needs you come from the server's units (/api/fleet/units): the ticket is the card's own link, else an id in the session name, branch or brief row; a PR several sessions claimed is linked to none of them. Brief is the session's row from the Brief page. The board column is shown when not in-progress. A subagent a session started sits under it, dimmed. An offline worker whose PR merged, and a subagent with no stop recorded for hours, wait in the Finished line. The table scrolls sideways; a long value is cut to one line, whole on hover.</p></div>${phaseLegend()}</div>
+    ${F.units && F.units.error ? `<div class="ack-note">${tag("units unavailable", "warn", "alert")} ${esc(F.units.error)}. Ticket, PR and the owner's-turn mark stay blank until it loads.</div>` : ""}
     ${projectChips(st)}<div class="card table-wrap"><table class="sess"><colgroup><col class="c-name"><col class="c-kind"><col class="c-phase"><col class="c-tk"><col class="c-pr"><col class="c-brief"><col class="c-need"><col class="c-act"><col class="c-pb"></colgroup>
       <thead><tr><th>Session</th><th>Kind</th><th title="After the phase: the model of the session's last assistant row, O opus, S sonnet, H haiku. A ! means orchestrate.models for its role says another. Then reload: the session loaded older hooks than the checkout has; no record: nothing recorded, so not known.">Phase · model</th><th>Ticket</th><th>PR</th><th>Brief</th><th class="num">Needs you</th><th class="num">Active</th><th>Project · branch</th></tr></thead><tbody>${rows}${doneRow}</tbody></table></div>
     ${holdsCard(st)}`;

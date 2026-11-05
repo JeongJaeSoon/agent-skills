@@ -303,6 +303,11 @@ br = json.loads(urllib.request.urlopen(f"{base}/api/fleet/brief").read())
 assert "| ❔ | 로그인 개편 | #41 ? |" in br["full"] and br["width_ok"] is True and "snapshot" not in br, br
 # Every row and list item is placed once: the page's buttons and the report's text agree.
 assert br["duplicates"] == [] and br["missing"] == [] and br["placement"], br
+# The units endpoint joins the same render: every unit sits in one group, and its rows carry the brief's own states.
+un = json.loads(urllib.request.urlopen(f"{base}/api/fleet/units").read())
+assert "error" not in un and un["counts"]["units"] == len(un["units"]) and un["units"], un
+assert sorted(i for g in un["groups"] for i in g["units"]) == sorted(u["id"] for u in un["units"]), un["groups"]
+assert any(rf["state"] and rf["state"]["status"] for u in un["units"] for rf in u["rows"]), un["units"]
 # The Brief carries the stage table, read on each poll: rows nest under their group with a depth, and a write shows
 # at once. The Work page and its endpoint are gone.
 wk = br["stages"]
