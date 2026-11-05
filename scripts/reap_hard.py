@@ -686,8 +686,9 @@ def main(argv):
         with locked():
             res, code = run_pass("--dry-run" in argv)
         if "--dry-run" not in argv and "--no-patrol" not in argv:
-            # Patrol keeps this beat: it runs itself every other pass (--if-due), apart, so a slow round never holds this one.
-            reap.spawn_patrol("reap-hard")
+            # The Orca job runs patrol; this beat starts a round only when that job missed one (--fallback), apart, so
+            # a slow round never holds this pass.
+            reap.spawn_patrol("reap-hard", fallback=True)
             reap.spawn_sweep_shadow("reap-hard")  # shadow stage: records what the v2 cleaner would do, does nothing
         if "--json" in argv:
             print(json.dumps(res, ensure_ascii=False, indent=1))

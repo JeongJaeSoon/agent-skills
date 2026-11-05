@@ -104,6 +104,9 @@ CONFIG = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-
 REAP_SCRIPTS = pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts"
 
 DUE_S = 25 * 60
+# reap-hard's 15-minute beat starts a round only when the Orca job (every 30 minutes) missed one: past 40 minutes the
+# gap stays under the hour a verdict protects a card for.
+FALLBACK_DUE_S = 40 * 60
 BUDGET_S = 120
 CANDIDATE_BUDGET_S = 240
 AGENTS_MARGIN_S = 15  # agent_signal.read's 10 s, and the round's own writes after it
@@ -117,7 +120,11 @@ ORPHAN_CONFLICT_H = 2  # a conflict only grows: a PR with no session waits no da
 NOREF_H = 24
 ERROR_ROUNDS = 3
 WATCH_DOWN_MIN = 60
-RENOTIFY = dt.timedelta(minutes=30)
+# Each line shown ends the reader's `orch wait`, a whole turn of the orchestrator: an unacked finding comes back after
+# hours, not every round.
+RENOTIFY = dt.timedelta(hours=4)
+HOLD_CODES = {"I"}
+HOLD_ALONE = dt.timedelta(minutes=60)
 SCREEN_READS = 30
 NEEDS_YOU = {"X", "E", "L", "O"}
 LABEL = {"I": "idle", "X": "exited", "S": "superseded", "O": "orphan PR", "D": "no ref", "E": "error loop",
@@ -832,6 +839,10 @@ def pending_lines(me, unowned, now=None):
     seen = shown.get(me or "-") or {}
     due = [f for f in mine if f["id"] not in seen
            or f.get("code") not in SHOW_ONCE and now - fleet.parse(seen[f["id"]]) >= RENOTIFY]
+    # A card that ended its turn and waits (I) is often a worker that just reported and waits on the very session
+    # reading this: alone, it wakes nobody until it has stayed open HOLD_ALONE; beside another line it goes with it.
+    if all(f.get("code") in HOLD_CODES for f in due):
+        due = [f for f in due if not f.get("detected_at") or now - fleet.parse(f["detected_at"]) >= HOLD_ALONE]
     if due:
         keep = {f["id"]: seen.get(f["id"]) for f in mine if seen.get(f["id"])}
         keep.update({f["id"]: fleet.iso(now) for f in due})
@@ -844,9 +855,22 @@ def pending_lines(me, unowned, now=None):
 
 # ---------------------------------------------------------------- round
 
-def due(memo, level, now):
+def due(memo, level, now, every=DUE_S):
     rose = level in ("warn", "danger") and memo.get("level") != level
-    return rose or now - (memo.get("t") or 0) >= DUE_S
+    return rose or now - (memo.get("t") or 0) >= every
+
+
+@contextlib.contextmanager
+def run_lock():
+    """patrol-run.lock without waiting, held across the round and its cleanup scans: True while held."""
+    STATE.mkdir(parents=True, exist_ok=True)
+    with open(STATE / "patrol-run.lock", "w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        yield True
 
 
 class Budget(BaseException):
@@ -1009,11 +1033,11 @@ def switch_round(drifts, rows, notes, path_of, switch):
         return  # one session a round: each takes up to a minute
 
 
-def round_once(dry=False, if_due=False, now=None, gather_fn=gather, rid=None):
+def round_once(dry=False, if_due=False, now=None, gather_fn=gather, rid=None, fallback=False):
     now = now or time.time()
     memo = fleet.read_json(MEMO, {}) or {}
     level, _ = pressure_level()
-    if if_due and not due(memo, level, now):
+    if if_due and not due(memo, level, now, FALLBACK_DUE_S if fallback else DUE_S):
         return None
     t0 = time.monotonic()
     facts, notes = gather_fn(now, time.time() + BUDGET_S, memo)
@@ -1175,33 +1199,45 @@ def main(argv):
             rows = {i: f for i, f in rows.items() if not f.get("owner") or f.get("owner") == me}
         print("\n".join(line(f) + f" (since {f.get('detected_at')})" for f in rows.values()) or "no open finding")
         return
-    if set(argv) - {"--once", "--if-due", "--dry-run", "--json"}:
+    if set(argv) - {"--once", "--if-due", "--dry-run", "--json", "--precheck", "--fallback"}:
         sys.exit(__doc__)
+    patrol_round(argv)
+    if "--precheck" in argv:
+        sys.exit(1)  # an Orca precheck: the round is done here, and no agent starts
+
+
+def patrol_round(argv):
     prog.RUN_TIMEOUT = 60  # one hung orca or gh fails its source, within the round's own budget
-    with round_lock(wait=False) as got:
-        if not got:
+    # The whole round, cleanup scans included: a second round started meanwhile (the Orca job, reap-hard's fallback,
+    # a pressure rise) would overwrite the verdicts file before this one's candidates are written.
+    with run_lock() as running:
+        if not running:
             print("patrol: another round is running")
             return
-        signal.signal(signal.SIGALRM, give_up)
-        signal.alarm(BUDGET_S)
-        rid, t0 = round_id(), time.monotonic()
-        try:
-            res = round_once("--dry-run" in argv, "--if-due" in argv, rid=rid)
-        except Budget:
-            signal.alarm(0)
-            if "--dry-run" not in argv:
-                mark_cut(rid, round(time.monotonic() - t0, 1))
-            print(f"patrol: gave up at {BUDGET_S}s; log rows already written stay, and the next round brings "
-                  "Needs you in step with them")
-            return
-        finally:
-            signal.alarm(0)
-    if res is not None:
-        signal.alarm(CANDIDATE_BUDGET_S)
-        try:
-            candidates_phase(res, "--dry-run" in argv)
-        finally:
-            signal.alarm(0)
+        with round_lock(wait=False) as got:
+            if not got:
+                print("patrol: another round is running")
+                return
+            signal.signal(signal.SIGALRM, give_up)
+            signal.alarm(BUDGET_S)
+            rid, t0 = round_id(), time.monotonic()
+            try:
+                res = round_once("--dry-run" in argv, "--if-due" in argv, rid=rid, fallback="--fallback" in argv)
+            except Budget:
+                signal.alarm(0)
+                if "--dry-run" not in argv:
+                    mark_cut(rid, round(time.monotonic() - t0, 1))
+                print(f"patrol: gave up at {BUDGET_S}s; log rows already written stay, and the next round brings "
+                      "Needs you in step with them")
+                return
+            finally:
+                signal.alarm(0)
+        if res is not None:
+            signal.alarm(CANDIDATE_BUDGET_S)
+            try:
+                candidates_phase(res, "--dry-run" in argv)
+            finally:
+                signal.alarm(0)
     print(json.dumps(res, ensure_ascii=False, indent=1) if "--json" in argv else "\n".join(report(res)))
 
 

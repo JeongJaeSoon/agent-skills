@@ -12,7 +12,7 @@ A candidate keeps the sources it relied on in `needs`; one whose source did not 
 `reports` instead. A scan that returned but noted an unreadable part fails that part's source. Kinds that only a
 model closed today (chrome-window) and kinds with no rule go to `reports` too.
 """
-import copy, json, pathlib, sys, time
+import copy, json, pathlib, sys, threading, time
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -33,6 +33,7 @@ IDENTITY = tuple(dict.fromkeys(reap.ACT_IDENTITY + ("verdict", "close")))
 # How today's scans word a part they could not read.
 UNREAD = ("읽지 못함", "실패", "응답 없음", "not read", "timed out")
 RUN_TIMEOUT_S = 60
+HARD_SOURCES = ("protect", "reap_hard_cards", "reap_hard_rest")
 
 
 def scan_kinds(cfg, pressure_kinds, state_dir, now):
@@ -149,42 +150,81 @@ def collect(sources, now=None, reap_scan=None, hard=None, pressure_kinds=None, s
         repo_list = reap.repos([]) if {"branch", "worktree", "card"} & kinds else []
         return reap.scan(kinds, hours, cfg, repo_list)
 
-    cands = []
-    seen = {}  # source -> when the scan its candidates came from started
+    def reap_part(p):
+        t = p["timings"]
+        try:
+            p["seen"] = time.time()
+            items, more = timed(t, "reap_scan", lambda: (reap_scan or default_scan)(kinds))
+            p["notes"] += more
+            bad = unread_kinds(more, kinds)
+            p["sources"]["reap_scan"] = "failed" if "*" in bad else "ok"
+            p["sources"].update({f"reap_scan:{k}": "failed" if k in bad else "ok" for k in sorted(kinds)})
+            # The pressure round reaps its own kinds only outside a card with a live terminal, on a copy of the scan.
+            pressure_items = [copy.deepcopy(i) for i in items if i["kind"] in pressure_only and i.get("target")]
+            if pressure_items:
+                got = timed(t, "pressure_live", lambda: (live or default_live)(pressure_items, p["notes"]))
+                p["sources"]["pressure_live"] = "failed" if got is None else "ok"
+                by_key = {i["key"]: i for i in pressure_items}
+                items = [by_key.get(i["key"], i) if i["kind"] in pressure_only else i for i in items]
+            c, r, a = from_reap(items, pressure_only)
+            p["cands"] += [{**x, "seen": p["seen"]} for x in c]
+            p["reports"] += r
+            p["alerts"] += a
+        except (Exception, SystemExit) as e:
+            p["sources"]["reap_scan"] = "failed"
+            p["notes"].append(f"reap scan: {type(e).__name__}: {str(e)[:120]}")
+
+    def hard_part(p):
+        t, hard_t = p["timings"], time.time()
+        try:
+            got = (hard or default_hard)(t)
+        except (Exception, SystemExit) as e:
+            got = {"notes": [f"reap-hard scan: {type(e).__name__}: {str(e)[:120]}"]}
+        for s in HARD_SOURCES:
+            p["sources"][s] = got.get(s, "failed")
+        p["notes"] += got.get("notes") or []
+        for source in ("reap_hard_cards", "reap_hard_rest"):
+            st = t.started.get(source, hard_t)  # a stand-in scan that does not time itself: before any of it ran
+            c, r = from_hard(got.get(source + "_items") or [], source)
+            p["cands"] += [{**x, "seen": st} for x in c]
+            p["reports"] += r
+
+    # The two scans wait on gh, git, lsof and orca, so they run side by side. Each part writes only its own dict, and
+    # a part is merged only once its thread has finished: a round cut short (patrol's SIGALRM, which only this thread
+    # receives) merges the finished part, marks the other's sources timed out, and leaves that daemon thread to die
+    # with the process.
+    parts = [dict(fn=fn, owns=owns, sources={}, timings=Timings(), notes=[], cands=[], reports=[], alerts=[])
+             for fn, owns in ((reap_part, ("reap_scan",)), (hard_part, HARD_SOURCES))]
+    threads = [threading.Thread(target=p["fn"], args=(p,), daemon=True) for p in parts]
+    for th in threads:
+        th.start()
+    cands, merged = [], set()
+
+    def merge(final):
+        for n, (p, th) in enumerate(zip(parts, threads)):
+            if n in merged:
+                continue
+            if th.is_alive():
+                if final:
+                    src.update({s: "timeout" for s in p["owns"]})
+                    timings.update(dict(p["timings"]))  # where its time went so far
+                continue
+            merged.add(n)
+            src.update(p["sources"])
+            timings.update(p["timings"])
+            timings.started.update(p["timings"].started)
+            notes.extend(p["notes"])
+            cands.extend(p["cands"])
+            out["reports"] += p["reports"]
+            out["alerts"] += p["alerts"]
+
     try:
-        seen["reap_scan"] = time.time()
-        items, more = timed(timings, "reap_scan", lambda: (reap_scan or default_scan)(kinds))
-        notes += more
-        bad = unread_kinds(more, kinds)
-        src["reap_scan"] = "failed" if "*" in bad else "ok"
-        src.update({f"reap_scan:{k}": "failed" if k in bad else "ok" for k in sorted(kinds)})
-        # The pressure round reaps its own kinds only outside a card with a live terminal, on a copy of the scan.
-        pressure_items = [copy.deepcopy(i) for i in items if i["kind"] in pressure_only and i.get("target")]
-        if pressure_items:
-            got = timed(timings, "pressure_live", lambda: (live or default_live)(pressure_items, notes))
-            src["pressure_live"] = "failed" if got is None else "ok"
-            by_key = {i["key"]: i for i in pressure_items}
-            items = [by_key.get(i["key"], i) if i["kind"] in pressure_only else i for i in items]
-        c, r, a = from_reap(items, pressure_only)
-        cands += [{**x, "seen": seen["reap_scan"]} for x in c]
-        out["reports"] += r
-        out["alerts"] += a
-    except (Exception, SystemExit) as e:
-        src["reap_scan"] = "failed"
-        notes.append(f"reap scan: {type(e).__name__}: {str(e)[:120]}")
-    hard_t = time.time()
-    try:
-        got = (hard or default_hard)(timings)
-    except (Exception, SystemExit) as e:
-        got = {"notes": [f"reap-hard scan: {type(e).__name__}: {str(e)[:120]}"]}
-    for s in ("protect", "reap_hard_cards", "reap_hard_rest"):
-        src[s] = got.get(s, "failed")
-    notes += got.get("notes") or []
-    for source in ("reap_hard_cards", "reap_hard_rest"):
-        t = timings.started.get(source, hard_t)  # a stand-in scan that does not time itself: before any of it ran
-        c, r = from_hard(got.get(source + "_items") or [], source)
-        cands += [{**x, "seen": t} for x in c]
-        out["reports"] += r
+        for th in threads:
+            while th.is_alive():
+                th.join(0.2)
+                merge(False)
+    finally:
+        merge(True)
     for c in cands:
         missing = [n for n in c["needs"] if src.get(n) != "ok"]
         if missing:

@@ -694,10 +694,10 @@ def spawn_sweep_shadow(reason, python=None):
         return False
 
 
-def spawn_patrol(reason, python=None):
+def spawn_patrol(reason, python=None, fallback=False):
     """Start `orch patrol --if-due` detached, so a LaunchAgent pass never waits on it; it prints to
-    <state>/patrol.log and gives up on its own at 120 seconds. False when it could not start, or AGENT_SKILLS_PATROL=off
-    (tests)."""
+    <state>/patrol.log and gives up on its own at 120 seconds. fallback: only when the Orca patrol job missed a round
+    (--fallback). False when it could not start, or AGENT_SKILLS_PATROL=off (tests)."""
     if os.environ.get("AGENT_SKILLS_PATROL") == "off":
         return False
     try:
@@ -705,7 +705,8 @@ def spawn_patrol(reason, python=None):
         with open(STATE / "patrol.log", "a") as out:
             out.write(f"--- {time.strftime('%Y-%m-%dT%H:%M:%S%z')} {reason}\n")
             out.flush()
-            subprocess.Popen([python or sys.executable, str(ORCH), "patrol", "--if-due"], stdout=out, stderr=out,
+            subprocess.Popen([python or sys.executable, str(ORCH), "patrol", "--if-due", *(["--fallback"] if fallback else [])],
+                             stdout=out, stderr=out,
                              stdin=subprocess.DEVNULL, start_new_session=True)
         return True
     except OSError:

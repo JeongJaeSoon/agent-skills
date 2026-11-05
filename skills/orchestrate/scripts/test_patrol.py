@@ -318,9 +318,12 @@ assert [k["key"] for k in fleet.external_items()] == [f"ext:patrol:Xabc:{fleet.i
 new, gone = patrol.write_round([x, i], verd, False, NOW + 60)
 assert new == [] and gone == [], "a finding still there is not new again"
 assert patrol.pending_lines("hl", False, T)[0].startswith("PATROL X Xabc a → hl"), "routed to its owner"
-assert patrol.pending_lines("hl", False, T) == [], "not again within 30 minutes"
-assert patrol.pending_lines("hl", False, T + dt.timedelta(minutes=31))[0].startswith("PATROL X Xabc")
-assert [l.split()[2] for l in patrol.pending_lines("ho", True, T)[:-1]] == ["Iabc"], "the unowned go to the orchestrator"
+assert patrol.pending_lines("hl", False, T) == [], "not again soon after"
+assert patrol.pending_lines("hl", False, T + dt.timedelta(hours=3, minutes=59)) == [], "each line ends a wait: hours apart"
+assert patrol.pending_lines("hl", False, T + dt.timedelta(hours=4))[0].startswith("PATROL X Xabc")
+# An I alone wakes nobody until it has stayed open an hour; the unowned go to the orchestrator.
+assert patrol.pending_lines("ho", True, T + dt.timedelta(minutes=59)) == [], "a fresh I alone is held"
+assert [l.split()[2] for l in patrol.pending_lines("ho", True, T + dt.timedelta(minutes=60))[:-1]] == ["Iabc"]
 assert patrol.pending_lines("hz", False, T) == []
 new, gone = patrol.write_round([x], verd, False, NOW + 90, failed={"workers"})
 assert gone == [], "a finding whose source failed this round is kept, not cleared"

@@ -66,7 +66,8 @@ seen_of = {c["rule"]: c["seen"] for c in got2["candidates"]}
 # time before the hard scans began (never later than the scan, so never after an act it could have seen).
 assert marks["before_cards"] <= seen_of["card:strict"] <= marks["after_cards"], (marks, seen_of)
 assert seen_of["stack:gone"] == seen_of["proc:listener"] <= marks["before_cards"], (marks, seen_of)
-assert seen_of["card:landed"] <= seen_of["stack:gone"], seen_of
+# The janitor scan runs beside the hard scans, so its start is only bounded by the call.
+assert seen_of["card:landed"] <= marks["after_cards"], seen_of
 # Two collect() calls at once keep their own start times.
 import threading  # noqa: E402
 slow_started, release, results = threading.Event(), threading.Event(), {}
@@ -280,5 +281,39 @@ try:
         assert "timed out" in str(e)
 finally:
     reap.RUN_TIMEOUT = None
+
+# The janitor scan and the hard scans run side by side: two 0.6 s scans take well under their sum.
+slow = lambda kinds: (time.sleep(0.6), (REAP_ITEMS, []))[1]
+slow_h = lambda t: (time.sleep(0.6), HARD)[1]
+t0 = time.monotonic()
+got = collect(scan=slow, hard=slow_h)
+assert time.monotonic() - t0 < 1.0 and got["sources"]["reap_scan"] == "ok" and got["candidates"], time.monotonic() - t0
+# A round cut short (patrol's SIGALRM, delivered to the calling thread only) merges the part that finished and marks
+# the one still running as timed out; nothing of the unfinished part leaks into the result.
+import signal
+
+
+class Cut(BaseException):
+    pass
+
+
+def cut(*_):
+    raise Cut()
+
+
+progress = {}
+signal.signal(signal.SIGALRM, cut)
+signal.setitimer(signal.ITIMER_REAL, 0.4)
+try:
+    candidates.collect(OK, now=time.time(), reap_scan=lambda kinds: (REAP_ITEMS, []), hard=lambda t: (time.sleep(3), HARD)[1],
+                       pressure_kinds=["orphan", "compose-stack"], state_dir=tmp, live=lambda targets, notes: targets,
+                       progress=progress)
+    raise AssertionError("not cut")
+except Cut:
+    pass
+finally:
+    signal.setitimer(signal.ITIMER_REAL, 0)
+assert progress["sources"]["reap_scan"] == "ok" and progress["sources"]["reap_hard_cards"] == "timeout", progress["sources"]
+assert progress["sources"]["protect"] == "timeout" and "reap_scan" in progress["timings"], progress
 
 print("test_candidates: ok")
