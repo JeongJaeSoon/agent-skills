@@ -58,7 +58,7 @@ If the record is already written, say so in one line and move on. Do not rewrite
 
 ## 4. Removing a worktree card
 
-§7 and §8 read this table to judge whether a card is done, and leave the removal to the cleaners ("Who cleans up"). Only for `isMainWorktree: false`. Read the state with real output, not memory: run `skills-sync end-check` (no flags; never `--apply` here). It fetches `origin/main` first (a stale ref hides unpushed commits, so a check by hand starts with `git fetch`) and prints `remove`, `keep` or `ask` with its reasons. It does not read the linked ticket (`orca worktree current --json`, `linkedItems`) or the ticket's criteria: check the table's ticket and criterion rows yourself before you act on `remove`.
+§7 and §8 read this table to judge whether a card is done, and leave the removal to the cleaners ("Who cleans up"). Only for `isMainWorktree: false`. Read the state with real output, not memory: run `skills-sync end-check` (no flags; never `--apply` here). It fetches `origin/main` first (a stale ref hides unpushed commits, so a check by hand starts with `git fetch`) and prints `remove`, `keep`, `ask`, or `close-terminal` (the main checkout, or another agent on the card: keep the worktree and close only this session's terminal) with its reasons. It reads which ticket is linked but not its state or criteria: check the table's ticket and criterion rows yourself before you act on `remove`.
 
 | State | Action |
 |---|---|
@@ -104,8 +104,8 @@ left only on the terminal never reaches them.
 Ending the session is not closing the terminal app. If they want the CLI window gone too, that
 is theirs: `/exit` or `Ctrl+D`. One clause, not a paragraph.
 
-A report on several items is the `orch brief render` output pasted whole (`--telegram` for Telegram), with at most
-one line before it, never a rewrite of it (`brief`).
+A report spanning several cards or leads is the `orch brief render` output pasted whole (`--telegram` for
+Telegram), with at most one line before it, never a rewrite of it; `brief` names the cases written by hand.
 
 ## 7. An Orca worker closes itself when it settles
 
@@ -176,7 +176,7 @@ shows the linked ticket completed) prints it and moves its build caches to the t
 | A question waiting on the human, an open PR that is not the deliverable, a dirty tree, or a `KEEP` line | Stay. Say in the report and the note what holds the card. A later wake (a review fix, a message) runs this table again; otherwise the parent's check closes it |
 
 A card whose prompt carries Orca's worker preamble closes by §7, not here. A refused close follows
-§7. When a row keeps the worktree after the brief's whole done (its PRs merged, any release, deploy
+§7, and the note says the terminal is left for the human. When a row keeps the worktree after the brief's whole done (its PRs merged, any release, deploy
 or check it names finished), first set the board column, as its own call: `orca worktree set
 --worktree current --workspace-status completed --json`; not for a superseded card or an open-PR
 deliverable (its column stays `in-review`).
