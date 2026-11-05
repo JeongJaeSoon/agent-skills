@@ -14,12 +14,15 @@ AGENT_SKILLS_CONFIG_DIR (default ~/.config/agent-skills).
 import datetime, importlib.util, json, os, pathlib, re, shutil, subprocess, sys
 
 REPO = pathlib.Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(REPO / "scripts"))
 sys.path.insert(0, str(REPO / "skills" / "orchestrate" / "scripts"))
 import orca_settings  # noqa: E402
 UPSTREAM = "https://github.com/JeongJaeSoon/agent-skills"
 MARKET = "jeongjaesoon"
 MARKET_ID = f"agent-skills@{MARKET}"
-LABEL = "io.github.jeongjaesoon.agent-skills-sync"  # bootstrap.py's launchd job
+# The LaunchAgents older setups wrote for what the sync, pressure-watch, reap-hard and orch-dash Orca automations run now.
+LEGACY_LABELS = tuple(f"io.github.jeongjaesoon.{n}" for n in ("agent-skills-sync", "pressure-watch", "reap-hard", "orch-dash"))
+LEGACY_SCRIPTS = ("sync.py", "pressure.py", "reap_hard.py", "dash.py")
 ENV_KEY = "CLAUDE_CODE_PLUGIN_DIRS"
 TITLE_OFF = "CLAUDE_CODE_DISABLE_TERMINAL_TITLE"  # Orca reads Claude's idle state from the terminal title
 TOOLS = ("git", "python3", "claude", "gh", "orca")
@@ -186,13 +189,48 @@ def check_install(settings, installed, p, run=run, darwin=sys.platform == "darwi
                             "! skills-sync status 로 이유를 보고 고친 뒤 ! skills-sync sync"))
         else:
             rows.append(row("ok", "자동 동기화", f"{sync.get('message')} · {int(age // 60)}분 전"))
-    if darwin:
-        rc, _ = run(["launchctl", "print", f"gui/{os.getuid()}/{LABEL}"])
-        if rc:
-            rows.append(row("missing", "launchd 동기화 작업", "로드 안 됨", f"! python3 {where}/scripts/setup.py --actions-only (사람이 직접 쳐도 되고, setup-pc 는 권한 창 뒤에서 돌린다)"))
-    else:
-        rows.append(row("unsupported", "launchd 동기화 작업", f"macOS 전용 ({sys.platform})",
-                        f"cron 에 손으로: */15 * * * * python3 {where}/scripts/sync.py sync"))
+    return rows
+
+
+def legacy_agents(agents_dir=None):
+    """[(label, plist)] of LaunchAgents an older setup left that run what an Orca automation runs now. Read from the
+    plist files only: no launchctl call, and nothing is changed."""
+    import plistlib
+    out = []
+    for f in sorted((agents_dir or pathlib.Path("~/Library/LaunchAgents").expanduser()).glob("*.plist")):
+        try:
+            spec = plistlib.loads(f.read_bytes())
+        except (OSError, ValueError, plistlib.InvalidFileException):
+            continue
+        args = [str(a) for a in [spec.get("Program") or "", *(spec.get("ProgramArguments") or [])] if a]
+        runs_ours = any(pathlib.PurePath(a).name in LEGACY_SCRIPTS and ("agent-skills" in a or str(REPO) in a) for a in args)
+        if spec.get("Label") in LEGACY_LABELS or runs_ours:
+            out.append((spec.get("Label") or f.stem, f))
+    return out
+
+
+def check_jobs(p, now=None, agents_dir=None):
+    """Rows for the periodic shell jobs (scripts/orca_job.py records): legacy LaunchAgents still there, and jobs whose
+    last run failed or whose record is older than three periods. Only jobs that have run once are looked at."""
+    rows = []
+    old = legacy_agents(agents_dir)
+    if old:
+        rows.append(row("warn", "legacy LaunchAgent", ", ".join(label for label, _ in old),
+                        "주기 작업은 Orca automation 이 한다. 오너가 직접 제거: "
+                        + " ; ".join(f"launchctl bootout gui/{os.getuid()}/{label} 뒤 {f} 삭제" for label, f in old)
+                        + " (자동으로 지우지 않는다)"))
+    import orca_job
+    recs = orca_job.records(p["state"] / "jobs")
+    bad = [f"{r['name']}: {r['message']}" for r in recs if not r["ok"]]
+    late = [r["name"] for r in recs if r["ok"] and orca_job.stale(r, now)]
+    if bad:
+        rows.append(row("warn", "정기 작업 실행", "마지막 실행 실패: " + "; ".join(bad),
+                        f"! python3 {REPO}/scripts/orca_job.py status 로 확인하고 원인을 고친다"))
+    if late:
+        rows.append(row("warn", "정기 작업 실행", f"주기의 3배를 넘게 안 돎: {', '.join(late)}",
+                        "Orca 앱이 꺼져 있었거나 자동화가 꺼져 있다. ! skills-sync setup status"))
+    if recs and not bad and not late:
+        rows.append(row("ok", "정기 작업 실행", ", ".join(r["name"] for r in recs) + " 정상"))
     return rows
 
 
@@ -334,7 +372,7 @@ def check(base=None):
     settings = read_json(p["settings"], {})
     rows = check_tools(run) + check_install(settings, read_json(p["installed"], {}), p, run)
     if install_mode(settings, {})[0] in ("inline", "both"):
-        rows += check_automations(run)
+        rows += check_automations(run) + check_jobs(p)
     if shutil.which("orca"):
         rows += check_orca(settings, run)
     return rows + check_settings(settings, base) + check_drift(settings) + check_config(p, base)

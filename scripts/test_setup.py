@@ -271,7 +271,7 @@ class Setup(unittest.TestCase):
 
 
 class Steps(unittest.TestCase):
-    """setup.py in-process with subprocess.run and bootstrap stubbed, so no test runs the real sync."""
+    """setup.py in-process with subprocess.run stubbed, so no test runs the real sync."""
 
     def setUp(self):
         self.home = pathlib.Path(tempfile.mkdtemp(prefix="setup-test-"))
@@ -287,10 +287,8 @@ class Steps(unittest.TestCase):
         self.setup = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.setup)
         self.calls, self.fail = [], set()
-        self.bootstrap = types.SimpleNamespace(scheduler=lambda write: None)
         for p in (mock.patch.object(self.setup.subprocess, "run", self.fake_run),
-                  mock.patch.object(self.setup, "preflight", lambda args: None),
-                  mock.patch.dict(sys.modules, {"bootstrap": self.bootstrap})):
+                  mock.patch.object(self.setup, "preflight", lambda args: None)):
             p.start()
             self.addCleanup(p.stop)
 
@@ -312,21 +310,6 @@ class Steps(unittest.TestCase):
 
     def scripts(self):
         return [s for s, _ in self.calls if s.endswith(".py")]
-
-    def test_dry_run_lists_the_automations_apply_would_install_and_hashes_them(self):
-        sys.path.insert(0, str(HERE))
-        import automations
-        with mock.patch.object(automations, "plan", return_value=["automation reap-hard: install"]):
-            rc, out, _ = self.main()
-            h = self.plan_hash()
-        self.assertEqual(rc, 0)
-        self.assertIn("then    automation reap-hard: install", out)
-        with mock.patch.object(automations, "plan", return_value=[]):
-            self.assertNotEqual(self.plan_hash(), h)
-            self.assertNotIn("automation reap-hard", self.main()[1])
-        # --settings-only plans no step, so no automation either
-        with mock.patch.object(automations, "plan", return_value=["automation reap-hard: install"]):
-            self.assertNotIn("automation reap-hard", self.main("--settings-only")[1])
 
     def test_update_dry_run_does_not_sync(self):
         rc, out, _ = self.main("--update")
@@ -352,16 +335,20 @@ class Steps(unittest.TestCase):
         self.assertFalse(self.cfg.exists())
 
     def test_a_failed_step_is_reported_instead_of_done(self):
-        def scheduler(write):
-            sys.exit("launchctl bootstrap failed")
-        self.bootstrap.scheduler = scheduler
         self.fail.add("automations.py")
         rc, out, err = self.main("--apply", self.plan_hash())
         self.assertEqual(rc, 1)
         self.assertNotIn("done.", out)
-        self.assertIn("launchd sync job (launchctl bootstrap failed)", err)
         self.assertIn("skills-sync setup apply", err)
         self.assertIn("setup_check.py", self.scripts())
+
+    def test_no_step_registers_a_launchagent(self):
+        """The sync job is an Orca automation (`setup apply`), so no planned action or run step names launchd."""
+        _, out, _ = self.main()
+        self.assertNotIn("launchd", out)
+        self.main("--actions-only")
+        self.assertNotIn("launchctl", [c[0] for c in self.calls])
+        self.assertFalse((self.home / "Library" / "LaunchAgents").exists())
 
     def test_actions_only_writes_no_settings(self):
         rc, out, err = self.main("--actions-only")

@@ -20,7 +20,7 @@
 | 必須 | `git` | インストール、チェックアウト、同期 |
 | 必須 | `python3` 3.9 以上 | すべてのスクリプト。macOS の `/usr/bin/python3`（3.9.6）で動きます |
 | B・C で必須 | github.com にログイン済みの `gh` | 自分のリポジトリに関する推奨ルールと、private な個人設定リポジトリの clone |
-| B・C | macOS | 同期ジョブと一部の自動化は LaunchAgent です。Linux ではセットアップが crontab の行を表示し、それらの自動化は `unsupported` になります |
+| B・C | macOS、Linux | 同期ジョブと既定の自動化は Orca automation なので、Orca をインストールして開いている間だけ動きます。セットアップは LaunchAgent を作りません。`preview-watch` と `share-server`（既定は off）は macOS で引き続き LaunchAgent です |
 | 任意 | Orca | 複数セッションを扱うスキル（`orchestrate`、`dispatch-card`、`handoff-ticket`）と定期ラウンド |
 | 任意 | Linear か Jira | トラッカー系スキル。`tracker.adapter` がなければ Linear |
 | 任意 | Obsidian か Markdown フォルダ | ノート系スキル。`notes.adapter` を決めるまでは無効 |
@@ -163,8 +163,8 @@ claude plugin marketplace remove jeongjaesoon
 | セットアップが変えたもの | 戻し方 |
 |---|---|
 | `settings.json` の `env.CLAUDE_CODE_PLUGIN_DIRS` とほかの推奨設定 | `--apply` が表示した戻しの行（`cp settings.json.bak-setup-<時刻> settings.json`）を実行するか、不要なキーを消す。動いているセッションは再起動する |
-| 同期ジョブ（macOS） | `launchctl bootout gui/$(id -u)/io.github.jeongjaesoon.agent-skills-sync` のあと `~/Library/LaunchAgents/io.github.jeongjaesoon.agent-skills-sync.plist` を削除 |
-| 自動化 | 1 つずつ `<チェックアウト>/bin/skills-sync setup disable <名前>`。LaunchAgent のものはその agent も止める。手で入れた `bin/reap-hard` とダッシュボードの agent は `<チェックアウト>/bin/reap-hard uninstall`、`<チェックアウト>/bin/orch-dash uninstall-agent` |
+| 同期ジョブ | `<チェックアウト>/bin/skills-sync setup disable sync`。以前のセットアップが LaunchAgent を残している場合は自分で削除します。`launchctl bootout gui/$(id -u)/io.github.jeongjaesoon.agent-skills-sync` のあと `~/Library/LaunchAgents/io.github.jeongjaesoon.agent-skills-sync.plist` を削除 |
+| 自動化 | 1 つずつ `<チェックアウト>/bin/skills-sync setup disable <名前>`。LaunchAgent のものはその agent も止める。`reap-hard install`、`orch-dash install-agent`、`pressure.py install` が残した古い LaunchAgent は、上と同じく自分で削除します |
 | 状態ファイル | `~/.local/state/agent-skills/` を削除 |
 
 残るものが 2 つあります。Orca の automation 登録は `disable` で止まるだけで削除はされません。`~/.claude/agent-skills.json` は、どの手順でも削除されません。不要なら自分で削除します。
@@ -175,4 +175,4 @@ claude plugin marketplace remove jeongjaesoon
 - **セットアップが、自分のセッションとは別の `settings.json` に書いた。** Claude Code は `CLAUDE_CONFIG_DIR` があれば `$CLAUDE_CONFIG_DIR/settings.json` を、なければ `~/.claude/settings.json` を読みます（Orca はプロファイルごとに別の値を渡します）。dry run の 1 行目 `target <パス>` がセットアップの対象で、`--settings <ファイル>` で別のものを選べます。プロファイルが複数あれば、プロファイルごとに 1 回ずつ行います。`agent-skills.json` は全プロファイル共通の 1 ファイルです。
 - **`refused: … is a worktree` や `… is on 'feature'` が出る。** `main` のメインチェックアウトから実行します。
 - **hook が 2 回動く。** マーケットプレイス版とチェックアウトの両方が有効です。セットアップの dry run を実行すると、その diff がマーケットプレイス版を無効にします。
-- **Linux。** セットアップが表示した crontab の行を追加します。LaunchAgent の自動化には対応していません。
+- **Linux。** Orca automation は同じように動きます。`preview-watch` と `share-server` は LaunchAgent なので対応していません。

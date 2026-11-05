@@ -51,7 +51,7 @@ https://github.com/user-attachments/assets/206c4624-dca8-448d-8179-69c08ecc511c
 - Obsidian またはただの Markdown フォルダ: ノートのスキル
 - tailscale と caddy: `preview-watch` と `share-server`
 
-macOS ではフルセットアップが同期ジョブと既定の自動化を LaunchAgent として入れます。Linux では代わりに cron の行を表示するので、自分で追加します。
+フルセットアップは同期ジョブと既定の自動化を Orca automation として有効にします。LaunchAgent は作りません。Orca アプリを開いている間に動きます。以前のセットアップが LaunchAgent を残している場合は、`setup-pc` が知らせるので、自分で削除します。
 
 ## インストール
 
