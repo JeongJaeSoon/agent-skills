@@ -24,6 +24,8 @@ KEY = "orchestrate.stack_dependent"
 OPEN_LIMIT = 200
 ORDER = re.compile(r"(?im)^[ \t]*`?ORDER\b.*?\bstacked[ \t]+on\b:?(.*)$")
 NEXT_PART = re.compile(r"·|\b(?:starts|lands)[ \t]+after\b", re.I)
+# A brief written before `stacked on` existed named a stack with `lands after`.
+LEGACY = re.compile(r"(?im)^[ \t]*`?ORDER\b.*?\blands[ \t]+after\b:?(.*)$")
 TICKET = re.compile(r"(?<![\w-])[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+(?![\w-])")
 PR_REF = re.compile(r"(?<![\w/])#(\d+)\b")
 SENTENCE_END = re.compile(r"[.。](?:\s|$)")
@@ -65,9 +67,9 @@ def option(args, long, short):
     return None
 
 
-def named_deps(prompt):
-    """(ticket keys, PR numbers) of the first prompt's ORDER `stacked on`."""
-    m = ORDER.search(prompt)
+def named_deps(prompt, pattern=ORDER):
+    """(ticket keys, PR numbers) of the first prompt's ORDER `stacked on` (or another ORDER part's pattern)."""
+    m = pattern.search(prompt)
     if not m:
         return [], []
     value = NEXT_PART.split(SENTENCE_END.split(m.group(1))[0])[0]
@@ -138,6 +140,12 @@ def verdict(args, here, prompt):
     if missing:
         warnings.append(f"stack_gate: the brief says this is stacked on {', '.join(missing)}, and no open PR answers"
                         " to that. If it has landed, nothing to do; if not, stack on it.")
+    if not ORDER.search(prompt):
+        old = sorted(n for n in resolve(*named_deps(prompt, LEGACY), rows)[0] if n not in chain and n not in deps)
+        if old:
+            warnings.append(f"stack_gate: the brief's ORDER says lands after {', '.join(f'#{n}' for n in old)} and"
+                            " has no `stacked on`, so it may predate the split: a deploy order keeps this base, but"
+                            " if this PR uses that PR's code it is a stack (`--base <its branch>`).")
     return {n: why for n, why in deps.items() if n not in chain}, chain, warnings
 
 
@@ -152,7 +160,7 @@ def message(gaps, base):
             "A PR that uses another's code is a GitHub stack: open it with `--base <the lower PR's branch>` (a linear "
             "stack of at most 3 layers, one layer per base, rebased, never merged into), then link them with "
             "`gh stack link <lower> <this> --base <trunk>` so they land in one merge. If it only edits the same files, "
-            "open it after that PR lands; if it only has to deploy after it, keep the default branch and record the "
+            "the work waits until that PR lands; if it only has to deploy after it, keep the default branch and record the "
             f"order with `orch dep`. ({KEY} in ~/.claude/agent-skills.json: warn, deny or off)")
 
 

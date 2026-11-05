@@ -155,8 +155,11 @@ assert hook("gh pr create --base main", "deny", "ORDER  Stacked on: #7.\n")[0] =
 assert hook("gh pr create --base main", "deny", "ORDER  Starts after: none · stacked on: #7 · lands after: ABC-9\n")[0] == "deny"
 for line in ("ORDER  Starts after <TICKET…> (Orca deps) · stacked on <TICKET|#PR> (stack) · lands after",
              "ORDER  Stacked on: none.", "ORDER  Stacked on: 없음.", "Nothing about order here, stacked on ABC-7",
-             "ORDER  Lands after: #7.", "ORDER  Starts after: #7 · lands after: ABC-7."):
+             "ORDER  Starts after: #7 · stacked on: none · lands after: ABC-7."):
     assert hook("gh pr create --base main", "deny", line) == (None, ""), line
+# A brief from before `stacked on` existed meant a stack by `lands after`: never a deny now, one line naming the choice.
+decision, text = hook("gh pr create --base main", "deny", "ORDER  Lands after: #7.\n")
+assert decision is None and "#7" in text and "stacked on" in text and text.count("\n") == 0, text
 # A named PR that no open PR answers to may have landed since dispatch: one warning line, never a deny.
 rows(row(99, "z", "2" * 40))
 decision, text = hook("gh pr create --base main", "deny", BRIEF)
