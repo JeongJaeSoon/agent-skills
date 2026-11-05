@@ -1,7 +1,7 @@
-<!-- translated-from: 651050361b70f09f6820e1c5187dc3e47a43eb9f -->
+<!-- translated-from: 76135f0633a0e61b13c2c7d9a65a4191939790fa -->
 # スキルカタログ
 
-`agent-skills` プラグインに入っているスキル41個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック15個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
+`agent-skills` プラグインに入っているスキル41個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック16個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
 
 既定値の変更と既存データの保持は[設定移行ガイド](configuration-migration.md)を参照してください。ノート・台帳・個人フォルダーには明示的な設定が必要で、レポートの既定タイムゾーンは UTC です。
 
@@ -186,6 +186,8 @@ PR を受け持つスキルとマージする主体:
   - Run のバインド（`run-current`、未バインドなら `run-use`）と、オーケストレーターのタブ名を見ます。
   - このセッションのプロセスの下で、inbox の待機（`orch wait`、`orch inbox --wait`）と `orch watch-cards` がちょうど1つずつ動いているかを数えます。足りなければ起動コマンドを、2つ以上なら止めるものを示します。
   - 端末を失ったワーカーを見つけ、同じカードで起動し直す `worker-stop` と `worker-start --retry-of` の組を出します。
+  - 再起動で Dispatch が `abandoned` になったワーカーを復旧対象として出します（手順は SKILL.md: `claude --resume` で端末を立て直し、`worker-start --terminal` で新しい Dispatch を付けます）。報告を終えたワーカーは起こさず、区別して扱います。
+  - Dispatch を失った dispatched リードには、親の Run への `run-use` を指示しません。自分の Run を作り、`orch set <slug> run <新しい Run>` でプログラムを移します。
   - この worktree で pressure ゲートが止めた重い起動が、キューに残っていないかを見ます。
   - スクリプトから見えないもの（再起動で終わったバックグラウンドタスクとサブエージェント、プログラムの状態、マシン再起動後のリードの再起動、コンパクション後の順序）は、SKILL.md が順序だけを決め、規則そのものは `orchestrate` の該当する節を指します。
 - **同梱:** `scripts/reboot.py`（読み取り専用の点検）とテスト。
@@ -625,6 +627,15 @@ hook 自身の判定が例外を出したら、その呼び出しは通し、警
 
 ### 記録行の検査
 `hooks/record_check.py`（Bash の PreToolUse・PostToolUse・PostToolUseFailure、Stop、SubagentStop）。モデルを呼ばず、トラッカー・ノートストア・Orca・GitHub を読みません。`~/.claude/agent-skills.json` に `tracker` か `notes` のオブジェクトがなければ無効です。`gh pr merge`（`--auto`・`--disable-auto` を除く）、`gh pr create`、`orch land` が走ると、そのセッション・エージェントに記録の義務を残し、設定された記録先と `references/record.md` を示す案内をモデルのコンテキストに入れます。失敗した呼び出しは、コマンドが二つ以上のときだけ義務を残します。義務を閉じるのは記録行だけです: 行頭の `기록: …` か `기록 못 함: <理由>`（`Recorded:`・`Not recorded:`）で、コードと引用の外にあり、コロンの後が空でないもの。最終応答、単独で送った `worker_done`、終了コマンド直前のこのターンの文から読みます。検査するのは、記録行のない `worker_done` 本文（変数やファイルからの本文はないものと見なす）、記録コマンドと終了コマンド（`orca worktree rm`、`orca terminal close`）を一つの呼び出しに入れたもの、義務が残ったままこのセッションやその経路の下のセッションを閉じるもの、義務を残して終わるターンです。`guard.record_check`: `warn`（既定。送信・終了の前はモデルに知らせ、Stop では人に見える警告と観察行だけ）、`deny`（呼び出しを拒否し、Stop は一度 block）、`ask`、`off`。`$AGENT_SKILLS_STATE/record-check.jsonl` の warn 行を一週間見てから deny に上げます。保証するのは「記録の結果を報告した」ことで、「記録した」ことではありません。真偽はリードの reconcile が確かめます。バックグラウンドで走らせたマージの完了や、id だけで指した終了対象は追いません。
+
+### オーナー項目の記録検査
+
+`hooks/owner_check.py`（Stop・SubagentStop）。モデルを呼ばず、どのストアも読みません。最終返信にしかなく、ボード・決定の登録・ダッシュボードのインボックスにない「オーナー項目」は、次のコンパクションで消えます。このフックは、そうした項目を残したターンを数えます。
+
+- オーナー項目は返信の1行です。`🙋`、「오너 할 일」（オーナーの作業）、オーナーに尋ねる表現（`ask the owner`、`owner approval needed`、`오너에게 묻`、`오너 결정 필요`）が対象です。コード、引用、表の行（状態は記録から導かれる）、「없음」（なし）だけを言う行（`🙋 지금 오너가 할 일 — 없음`）、状態の凡例（`🔄 진행 · 🙋 오너 차례`）は数えません。
+- このターン（人が最後に打ったプロンプトの後）に、拒否されなかった Bash 呼び出しが `orch decide add`、`orch board now`、`orch board set … --owner`、`orch gate`、`orca orchestration gate-create`、`orch-dash inbox add` のどれかを実行していれば通ります。項目と記録は対応づけず、1回の呼び出しが返信全体を覆います。
+- レベル `guard.owner_check`：キーがなければ `warn` です。人に「owner_check: 기록 안 된 오너 항목 N」（記録されていないオーナー項目 N 件）を1行見せ、`$AGENT_SKILLS_STATE/owner-check.jsonl` に行を残します。systemMessage はモデルに届かないので、モデルには何も見えません。誤検知率はこの行から測ります。`deny` はキーでのみ有効になり、claim_check と同じくその停止を一度だけ止めて、モデルに記録させます（`stop_hook_active` なら通過）。`off` と `AGENT_SKILLS_OWNER_CHECK=0` で無効になります。
+- 判定は文言の一致なので、誤検知も見逃しもあります。そのため `warn` から始めます。
 
 ## pstack との違い
 

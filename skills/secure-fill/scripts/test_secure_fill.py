@@ -13,6 +13,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import secure_fill as sf  # noqa: E402
 
 SECRET = 'tok-"quoted"\\back\nline-s3cr3t'
+FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 ORIGIN = "https://dev.example.test"
 ALLOW = {"items": {"dev-token": {"origins": [ORIGIN, "http://127.0.0.1:8765"], "env": "SF_TEST_TOKEN"}}}
 
@@ -20,8 +21,10 @@ ALLOW = {"items": {"dev-token": {"origins": [ORIGIN, "http://127.0.0.1:8765"], "
 class FakeRun:
     """Records every child process; answers like the real tools would."""
 
-    def __init__(self, url=ORIGIN + "/login", js_result="ok", helper_rc=0, keychain=SECRET):
+    def __init__(self, url=ORIGIN + "/login", js_result="ok", helper_rc=0, keychain=SECRET, orca_shape="legacy",
+                 focused=True):
         self.calls, self.url, self.js_result, self.helper_rc, self.keychain = [], url, js_result, helper_rc, keychain
+        self.orca_shape, self.focused = orca_shape, focused
 
     def __call__(self, argv, stdin=None, timeout=120):
         self.calls.append((list(argv), stdin))
@@ -37,15 +40,22 @@ class FakeRun:
         elif argv[0] == "security":
             out, rc = (self.keychain + "\n", 0) if self.keychain else ("", 44)
         elif argv[0] == "orca":
-            if "url" in argv:
-                out = json.dumps({"ok": True, "result": {"value": self.url}})
-            else:
-                out = json.dumps({"ok": True, "result": {"value": True}})
+            out = self.orca_reply("url" in argv)
         elif argv[0] == "xcrun":
             pathlib.Path(argv[argv.index("-o") + 1]).write_text("")
         elif argv[1:2] == ["paste"]:
             rc = self.helper_rc
         return subprocess.CompletedProcess(argv, rc, out, "")
+
+    def orca_reply(self, is_url):
+        if self.orca_shape == "legacy":
+            return json.dumps({"ok": True, "result": {"value": self.url if is_url else self.focused}})
+        # "current": captured from a real `orca ... --json`; only the page URL is swapped in.
+        name = "orca_get_url" if is_url else ("orca_eval_true" if self.focused else "orca_eval_false")
+        data = json.loads((FIXTURES / f"{name}.json").read_text())
+        if is_url:
+            data["result"]["url"] = self.url
+        return json.dumps(data)
 
     def argv_text(self):
         return "\n".join(" ".join(a) for a, _ in self.calls)
@@ -227,6 +237,41 @@ class Flow(unittest.TestCase):
         self.assert_no_secret(run, out, log)
         orca_cmds = [a for a, _ in run.calls if a[0] == "orca"]
         self.assertTrue(any("eval" in a for a in orca_cmds))
+
+    def test_orca_current_shape_fills_and_hides_secret(self):
+        for url in (ORIGIN + "/login", "http://127.0.0.1:8765/index.html"):
+            origin = sf.normalize_origin(url)
+            run = FakeRun(url=url, orca_shape="current")
+            self.gate_calls.clear()
+            rc, out, log = self.go(run, argv=["--item", "dev-token", "--origin", origin, "--target", "orca"])
+            self.assertEqual(rc, 0, out)
+            self.assertEqual(len(self.gate_calls), 1)
+            self.assert_no_secret(run, out, log)
+
+    def test_orca_current_shape_wrong_origin_stops_before_touch_id(self):
+        run = FakeRun(url="https://evil.example/login", orca_shape="current")
+        rc, out, log = self.go(run, argv=["--item", "dev-token", "--origin", ORIGIN, "--target", "orca"])
+        self.assertEqual(rc, sf.EXIT["origin-mismatch"])
+        self.assertEqual(self.gate_calls, [])
+        self.assertEqual(self.source_calls, [])
+        self.assert_no_secret(run, out, log)
+
+    def test_orca_current_shape_unfocused_field(self):
+        run = FakeRun(orca_shape="current", focused=False)
+        rc, out, log = self.go(run, argv=["--item", "dev-token", "--origin", ORIGIN, "--target", "orca"])
+        self.assertEqual(rc, sf.EXIT["no-field"])
+        self.assertFalse([a for a, _ in run.calls if a[1:2] == ["paste"] or "paste" in a])
+        self.assert_no_secret(run, out, log)
+
+    def test_orca_unreadable_replies_fail_closed(self):
+        bad = [{"ok": True, "result": {}}, {"ok": True, "result": {"url": 5}}, {"ok": True},
+               {"ok": True, "result": {"result": "maybe"}}, {"ok": True, "result": "garbage"}]
+        for reply in bad:
+            run = lambda argv, stdin=None, timeout=120, r=reply: subprocess.CompletedProcess(
+                argv, 0, json.dumps(r), "")
+            browser = sf.Orca(run)
+            self.assertIsNone(browser.current_origin(), reply)
+            self.assertFalse(browser.focused_field(), reply)
 
     def test_paste_permission_failure_is_safe(self):
         run = FakeRun(js_result=None, helper_rc=3)
