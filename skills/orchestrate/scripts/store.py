@@ -1358,9 +1358,11 @@ def _import_board(sd):
            f"--pr dropped); backup {backup}; {done}"
 
 
-def _check_sources(sd, upto):
-    """Every reason the pending steps would stop, before either touches anything."""
-    bad, steps = [], migrated_steps()
+def _check_sources(sd, upto, steps=None):
+    """Every reason the pending steps would stop, before either touches anything. `steps` lets a read-only caller pass
+    what peek_steps read, since migrated_steps opens the DB and can create its -wal."""
+    bad = []
+    steps = migrated_steps() if steps is None else steps
     if not path().exists() and DECISION_STEP not in steps:
         bad += _legacy_decisions(sd / "decisions.json")[2]
     if upto == BOARD_STEP and BOARD_STEP not in steps:

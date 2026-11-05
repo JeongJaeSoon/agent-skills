@@ -295,6 +295,13 @@ def check_only():
     why = store.preflight()
     own = [r for r in why if r.startswith("LaunchAgent ")]
     t = table(why, own)
+    try:  # the import refuses on these too, so a --check that skipped them would promise a run that fails
+        store._check_sources(fleet.state_dir(), store.BOARD_STEP, store.peek_steps()[1])
+    except store.Refused as e:
+        print(f"blocked by the data:\n{e}")
+        if t:
+            print("blocked by:\n" + t)
+        return 1
     print("blocked by:\n" + t if t else "nothing stands in the way: `" + store.migrate_command() + "` would run the import")
     return 1 if t else 0
 
@@ -356,6 +363,11 @@ def main(argv):
                 if note_server(seen) and seen:
                     save_plan(seen)
                 with store.cutover_lock():  # the dashboard server stays down while this one is held
+                    # A server that started after the probe above ends itself within the watcher's poll; look again at
+                    # once, before the owner check and the snapshot take seconds.
+                    held = load_plan()
+                    if note_server(held):
+                        save_plan(held)
                     code = run()
             except (Exception, KeyboardInterrupt) as e:  # whatever went wrong, what was stopped is put back below
                 print(f"stopped: {e}" if str(e) else "interrupted", file=sys.stderr)

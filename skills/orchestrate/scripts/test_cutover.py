@@ -141,16 +141,30 @@ with world(reasons=["LaunchAgent t.orch-dash is loaded (...)", "session s1 (/w, 
     assert "blocked by" in out and "session" in out and "this command stops it itself" not in out, out
     assert fingerprint(sd) == before and not [c for c in w.calls if c[1] in ("bootout", "bootstrap") or "edit" in c]
 
-# ---- the import fails half way: the services still come back, and the failure is named
+# ---- --check refuses what the import would refuse on the data, and still writes nothing
 with world() as (w, sd):
-    want, real = w.plan(), store.import_apply
-    store.import_apply = lambda: (_ for _ in ()).throw(store.Refused("the files hold entries the tables cannot"))
+    (sd / "decisions.json").write_text('{"decisions": {"d1": {"id": "x1"}}}')
+    before = fingerprint(sd)
+    code, out, _ = run(["--check"])
+    assert code == 1 and "blocked by the data" in out and "d1: id does not match its key" in out, out
+    assert "nothing stands in the way" not in out and fingerprint(sd) == before and not store.path().exists()
+    code, out, err = run()  # the real run refuses on the same data, so --check told the truth
+    assert code == 1 and "the files hold entries" in err, (out, err)
+
+# ---- the import fails half way (4a committed, 4b raises): services come back, the failure is named, a rerun finishes
+with world() as (w, sd):
+    want, real = w.plan(), store._import_board
+    store._import_board = lambda sd_: (_ for _ in ()).throw(store.Refused("board import broke"))
     try:
         code, out, err = run()
     finally:
-        store.import_apply = real
-    assert code == 1 and "the files hold entries" in err and w.plan() == want and "run it again" in out, (out, err)
-    assert not store.path().exists()
+        store._import_board = real
+    assert code == 1 and "board import broke" in err and w.plan() == want and "run it again" in out, (out, err)
+    steps = store.migrated_steps()
+    assert steps.get("4a-decisions") and "4b-board" not in steps, steps
+    code, out, err = run()
+    assert code == 0 and store.migrated_steps() == {"4a-decisions": "tombstoned", "4b-board": "tombstoned"}, (out, err)
+    assert w.plan() == want
 
 # ---- a service that will not come back stays in the plan file, and the next run puts it back first
 with world() as (w, sd):
@@ -259,6 +273,26 @@ with world(reasons=("old code still runs",)) as (w, sd):
         cutover.note_server = real_note
     assert code == 1 and any(c[1:] == ["ensure", "--port", "4999"] or c[2:] == ["ensure", "--port", "4999"]
                              for c in w.calls if "dash.py" in " ".join(map(str, c))), w.calls
+    assert not (sd / cutover.RECOVER).exists()
+
+# ---- a server that starts after the pre-lock probe is recorded as soon as the lock is held, before the slow steps
+with world(reasons=("old code still runs",)) as (w, sd):
+    slow = {"done": False}
+
+    def late_up(plan):  # visible only in the moments after the lock is taken; the watcher ends it once the owner check ran
+        if slow["done"] or not store.cutover_running():
+            return None
+        if not any(s["do"] == "server" for s in plan):
+            plan.append({"do": "server", "port": 4998})
+        return {"pid": 1}
+    real_note, real_guard = cutover.note_server, cutover.guard_owner
+    cutover.note_server = late_up
+    cutover.guard_owner = lambda: slow.update(done=True)
+    try:
+        code, out, err = run()
+    finally:
+        cutover.note_server, cutover.guard_owner = real_note, real_guard
+    assert code == 1 and any(c[-2:] == ["--port", "4998"] for c in w.calls), w.calls
     assert not (sd / cutover.RECOVER).exists()
 
 # ---- a server that is up when the run starts is recorded before any stop
