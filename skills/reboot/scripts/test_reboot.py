@@ -563,10 +563,17 @@ class Reload(unittest.TestCase):
         self.assertIn("could not be told", text)
 
     def test_own_session_comes_from_the_process_tree(self):
-        sessions = {"s1": {"pids": [CLAUDE]}, "s9": {"pids": [4242]}}
-        with mock.patch.object(fleet, "live_sessions", return_value=sessions):
+        # fleet's own process-table shape (ppid, start, command) and a registration under a config home, unmocked:
+        # reboot's (ppid, command) table does not fit live_sessions.
+        home = self.tmp / "home"
+        (home / "sessions").mkdir(parents=True)
+        for pid, sid in ((CLAUDE, "s1"), (4242, "s9")):
+            (home / "sessions" / f"{pid}.json").write_text(json.dumps(
+                {"pid": pid, "sessionId": sid, "cwd": ROOT, "procStart": "Thu Nov 5 08:00:00 2026"}))
+        procs = {CLAUDE: (1, "Thu Nov 5 08:00:00 2026", "claude --continue"), 4242: (1, "Thu Nov 5 08:00:00 2026", "claude")}
+        with mock.patch.dict("os.environ", {"ORCH_CLAUDE_HOMES": str(home)}), mock.patch.object(fleet, "ps_table", return_value=procs):
             self.assertEqual(reboot.own_session(table(), SELF), "s1")
-        with mock.patch.object(fleet, "live_sessions", side_effect=OSError):
+        with mock.patch.object(fleet, "ps_table", side_effect=OSError):
             self.assertIsNone(reboot.own_session(table(), SELF))
 
     def test_same_sha_is_ok(self):

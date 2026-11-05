@@ -222,7 +222,8 @@ def own_session(table, pid):
     claude = session_pid(table, pid)
     try:
         import fleet  # beside orca_settings, which imports it anyway
-        return next((sid for sid, s in fleet.live_sessions(table).items() if claude in s["pids"]), None)
+        # fleet's process table also carries each start time, which a live session's registration is checked against.
+        return next((sid for sid, s in fleet.live_sessions(fleet.ps_table()).items() if claude in s["pids"]), None)
     except Exception:  # the line then says nothing rather than guess
         return None
 
