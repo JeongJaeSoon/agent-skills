@@ -22,7 +22,10 @@ Read the adapter's reference before the first read or write in a session:
 
 - `obsidian` → `references/obsidian.md`. The path the user's instructions name, else
   `notes.obsidian.access` (`mcp`, `cli` or `filesystem`), is the only path to the vault, reads
-  included; with neither, stop and ask rather than read the folder on disk.
+  included; with neither, stop and ask rather than read the folder on disk. When that path is
+  down (the MCP server is not connected), the folder on disk is still off limits, but the task
+  goes on: finish the work, keep what the note would get in the report, and say which write is
+  pending.
 - `markdown` → `references/markdown.md`
 
 ## The store's rules file comes first
@@ -33,9 +36,8 @@ editing or appending. A new note follows all of it: folder, file name, tags, fir
 level, links, section order, the marker for finished work. A note you edit or append to follows
 its content rules in the part you write; a name or folder that breaks the rules is reported,
 and moved or renamed only with the user's approval. Where the rules file and this skill
-differ, it wins. The names below are defaults for a store without rules: under a rule like
-"titles in the user's language", `worklog-<ticket>` becomes a title in that language that still
-names the ticket.
+differ, it wins. The names below are defaults for a store without rules; a renamed note still
+names its ticket.
 
 What it most often catches, because skill text reads like plain Markdown:
 
@@ -58,8 +60,11 @@ goes stale.
   `program-<slug>` (`orchestrate`).
 - A note is the source of truth; anything shown to the user (an Artifact page, a chat summary)
   is a view re-read from the store at that moment, never from an older copy.
+- A document written for the owner to read (a review, a summary, a design note) is published
+  as an Artifact only: no local `.md` copy beside it, and the report gives its link, not a file
+  path. Read it for secrets (tokens, keys, credentials, personal data) before publishing; one
+  found is removed, never masked and shipped.
 - What to record, and when, is `end-session` [references/record.md](../end-session/references/record.md):
   read it when an investigation or design concludes (the note gets what was chosen, what was
   ruled out and why, the trap; the ticket gets a link to the note) or when the user asks for a note.
-- Prose follows the user's language rule in CLAUDE.md; identifiers stay as they are.
-- Write the prose per `write-plainly`.
+- Write the prose per `write-plainly`; identifiers stay as they are.

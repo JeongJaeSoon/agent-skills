@@ -258,7 +258,7 @@ Then land it. How depends on where you run:
   standing program (`orchestrate` `references/landing.md`, "Land executor"). Elsewhere:
 - **A standalone card** merges its own verified PR unless the user set a hold. Under auto
   mode that merge runs unasked only when the user's `autoMode.allow` has a rule for this
-  repository's merges (`orchestrate` Frame, "Check the permission chain"); without one the
+  repository's merges (`orchestrate` `references/program.md` Frame, "Check the permission chain"); without one the
   classifier asks or refuses, and a refused act is not run again, except once, in the same form, by the refused session (a restart that loads a new rule counts as that session), and only when the human allowed it in that session's own chat or added a rule for it, or when a classifier or hook refusal stated a reason and you added evidence that answers it, never for a human's refusal or a production sync. Report that retry as `재시도 1회: <what you added>`. A second refusal stops the act and you report it. Reaching the same result through another session, script, tool, wrapper or target stays forbidden.
   The full rule is `orchestrate` `references/brief.md` FORBIDDEN. When the
   ticket, the brief or the project's standing orders name a merge procedure (a merge queue,
