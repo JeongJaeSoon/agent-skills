@@ -67,6 +67,21 @@ class ReviewPickTest(unittest.TestCase):
         self.assertEqual((code, out.split()[0]), (0, "claude"))
         self.assertIn("no answer in 1 s", out)
 
+    def test_timeout_holds_when_a_child_of_codex_keeps_its_output_open(self):
+        self.codex(f"{shutil.which('sleep')} 30 & wait")
+        start = time.monotonic()
+        code, out = self.run_pick(None, "--timeout", "1")
+        self.assertLess(time.monotonic() - start, 10)
+        self.assertEqual((code, out.split()[0]), (0, "claude"))
+
+    def test_wrong_config_shape_exits_2_without_calling_codex(self):
+        marker = self.tmp / "called"
+        self.codex(f"echo > {marker}; exit 0")
+        for config in ([], {"review": "off"}, {"review": ["off"]}):
+            code, out = self.run_pick(config)
+            self.assertEqual((code, out.split()[0]), (2, "none"), config)
+        self.assertFalse(marker.exists())
+
     def test_codex_setting_waits_instead_of_falling_back(self):
         self.codex("exit 1")
         code, out = self.run_pick({"review": {"reviewer": "codex"}})

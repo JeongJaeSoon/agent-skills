@@ -20,8 +20,10 @@ import json
 import os
 import pathlib
 import re
+import signal
 import subprocess
 import sys
+import tempfile
 
 DEFAULTS = {"reviewer": "auto"}
 VALUES = ("auto", "codex", "off")
@@ -36,7 +38,11 @@ def load_config():
     except (OSError, ValueError) as e:
         print(f"none {path} cannot be read as JSON ({e}); fix it first")
         sys.exit(2)
-    return data if isinstance(data, dict) else {}
+    # A wrong shape must not quietly become the default: under auto that would send code to Codex.
+    if not isinstance(data, dict) or not isinstance(data.get("review", {}), dict):
+        print(f"none {path} must be a JSON object whose `review` is an object; fix it first")
+        sys.exit(2)
+    return data
 
 
 def repo_of(path):
@@ -51,26 +57,36 @@ def repo_of(path):
 
 
 def codex_ready(timeout):
-    """None when `codex login status` exits 0 within timeout, else why not."""
-    try:
-        r = subprocess.run(["codex", "login", "status"], capture_output=True, text=True, timeout=timeout,
-                           stdin=subprocess.DEVNULL)
-    except FileNotFoundError:
-        return "codex is not on PATH"
-    except subprocess.TimeoutExpired:
-        return f"`codex login status` gave no answer in {timeout:g} s"
-    except OSError as e:
-        return f"codex could not start ({e.strerror})"
-    if r.returncode:
-        detail = (r.stderr or r.stdout).strip().splitlines()
-        return f"`codex login status` exited {r.returncode}" + (f": {detail[0]}" if detail else "")
+    """None when `codex login status` exits 0 within timeout, else why not.
+    Output goes to a file, not a pipe, and the probe runs in its own process group that a timeout kills whole:
+    a child left holding a pipe open would keep the read waiting past the timeout."""
+    with tempfile.TemporaryFile() as out:
+        try:
+            p = subprocess.Popen(["codex", "login", "status"], stdin=subprocess.DEVNULL, stdout=out, stderr=out,
+                                 start_new_session=True)
+        except FileNotFoundError:
+            return "codex is not on PATH"
+        except OSError as e:
+            return f"codex could not start ({e.strerror})"
+        try:
+            code = p.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            p.wait()
+            return f"`codex login status` gave no answer in {timeout:g} s"
+        out.seek(0)
+        detail = out.read().decode(errors="replace").strip().splitlines()
+    if code:
+        return f"`codex login status` exited {code}" + (f": {detail[0]}" if detail else "")
     return None
 
 
 def pick(cfg, repo, timeout):
     """(reviewer, why, exit code)."""
-    section = cfg.get("review") if isinstance(cfg.get("review"), dict) else {}
-    setting = section.get("reviewer", DEFAULTS["reviewer"])
+    setting = cfg.get("review", {}).get("reviewer", DEFAULTS["reviewer"])
     if setting not in VALUES:
         return "none", f"review.reviewer is {setting!r}, not one of {' | '.join(VALUES)}", 2
     repos = cfg.get("repos") if isinstance(cfg.get("repos"), dict) else {}
