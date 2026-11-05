@@ -966,9 +966,10 @@ def judge_remote_branches(entries):
              "why": "판정 미구현(인터페이스만, 보고만)", "target": False, "how": []} for e in latest(entries, "remote-branch")]
 
 
-def judge_orca_worker(rows):
-    """rows: `orca orchestration worker-list --terminal-state reclaimable` workers."""
-    rows = [w for w in rows if w.get("dispatchId")]
+def judge_orca_worker(rows, now=None):
+    """rows: `orca orchestration worker-list --terminal-state reclaimable` workers, less those Orca releases itself."""
+    import auto_release
+    rows = [w for w in rows if w.get("dispatchId") and not auto_release.ahead(w, now)]
     return [{"kind": "orca-worker", "key": f"orca-worker:{w['dispatchId']}", "name": f"{w['dispatchId']} ({w.get('taskId')})",
              "why": "끝난 워커의 터미널(reclaimable)", "target": True,
              "how": [f"orca orchestration worker-release --dispatch {w['dispatchId']} --json"]} for w in rows]

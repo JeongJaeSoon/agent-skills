@@ -429,6 +429,11 @@ assert reap.judge_chrome([tab("tab:5", "acme/app#3", url="http://a"), tab("tab:5
 assert [i["target"] for i in reap.judge_remote_branches([e("remote-branch", "acme/app:feat")])] == [False]
 got = reap.judge_orca_worker([{"dispatchId": "ctx_1", "taskId": "task_1"}])
 assert got[0]["target"] and got[0]["how"] == ["orca orchestration worker-release --dispatch ctx_1 --json"]
+# A worker Orca releases by itself (autoReleaseAt still ahead) is left to Orca; a past or unreadable time is not.
+rel = lambda d, at: {"dispatchId": d, "terminalState": "reclaimable", "resource": {"autoReleaseAt": at}}
+got = reap.judge_orca_worker([rel("w_ahead", 1_800_000_120_000), rel("w_past", 1_799_999_000_000), rel("w_bad", "x")],
+                             now=1_800_000_000)
+assert [i["key"] for i in got] == ["orca-worker:w_past", "orca-worker:w_bad"], got
 
 # Only worktrees a worker made count; a retained row (context-only dispatch, user takeover) marks the user's.
 ws = [{"dispatchId": "d1", "terminalState": "released", "resource": {"worktreeId": "r::/w/made"}},

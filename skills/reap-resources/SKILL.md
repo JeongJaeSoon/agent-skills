@@ -89,7 +89,7 @@ line adds to it and keeps the owner links. `--pid` is recorded, never checked: t
 | Kind | Target when | Kept when | Action |
 |---|---|---|---|
 | card | [references/cards.md](references/cards.md) 삭제 or 터미널만 닫기 | 남김, 사람 결정 (reported, never acted on) | the listed terminals closed one by one; for 삭제, judged again, ignored files to the trash, `orca worktree rm --worktree path:<p> --run-hooks` |
-| orca-worker | a row of `orca orchestration worker-list --terminal-state reclaimable` | - | `orca orchestration worker-release --dispatch <id>` |
+| orca-worker | a row of `orca orchestration worker-list --terminal-state reclaimable`, unless its `resource.autoReleaseAt` is still ahead (Orca releases that one itself) | - | `orca orchestration worker-release --dispatch <id>` |
 | tmpdir | under a temp dir, its link is done, and no process has its cwd or executable under it | outside a temp dir, an open PR, no link, a process in it; a path already gone is not listed | `lsregister -u` each `.app` under it, then the trash |
 | gui-app | the registered pid with the same start time still runs and its link is done | an open PR, no link | `kill -TERM <pid>` |
 | chrome-window | its link is done and its URL is recorded | an open PR, no link, no URL (Chrome reuses ids after a restart, so without the URL the agent cannot tell it is the same tab) | `reap` prints `에이전트가 처리` and retires the id in the ledger, so it is asked once; the agent closes it with its browser tools only when the URL matches, and leaves it otherwise or when it has no browser tools |

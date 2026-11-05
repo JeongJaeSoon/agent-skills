@@ -2803,17 +2803,11 @@ SELF_CHECK = ("Self-check: is any work left on this card? If none, run end-sessi
 
 
 def auto_release_ahead(w, now):
-    """Orca releases this reclaimable worker by itself later (orchestration.worker-auto-release.v1). A time it
-    cannot read, or one already past, is not counted on."""
-    at = (w.get("resource") or {}).get("autoReleaseAt")
-    if w.get("terminalState") != "reclaimable" or at is None or isinstance(at, bool):
-        return False
-    try:
-        t = float(at) / (1000 if float(at) > 1e11 else 1) if isinstance(at, (int, float)) else \
-            dt.datetime.fromisoformat(str(at).replace("Z", "+00:00")).timestamp()
-    except (TypeError, ValueError):
-        return False
-    return t > now
+    scripts = str(pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    import auto_release
+    return auto_release.ahead(w, now)
 
 
 def settle_sweep(workers, worktrees, skip=(), holds=card_holds, asked=None, now=None, clock=time.time):
