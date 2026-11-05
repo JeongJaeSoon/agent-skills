@@ -139,7 +139,7 @@ with state("gate") as sd:
             pass
     assert fleet.relay_decisions() == [] and fleet.decision_items({}, None) == []
     code, _, err = orch("decide", "add", "--title", "x")
-    assert code == 1 and "orch db cutover-plan 4b" in err and not (sd / "decisions.json").exists(), err
+    assert code == 1 and "bin/orch db migrate" in err and not (sd / "decisions.json").exists(), err
     try:
         store.open_db()
         raise AssertionError("opened without 4a-decisions")
@@ -386,7 +386,8 @@ for label, spec in {
 real_home = os.environ["HOME"]
 os.environ["HOME"] = str(tmp / "fakehome")
 try:
-    assert store.launch_labels()[1:] == ["a.orch-dash", "b.program", "c.module", "d.shell"], store.launch_labels()
+    assert store.launch_labels()[1:-1] == ["a.orch-dash", "b.program", "c.module", "d.shell"], store.launch_labels()
+    assert store.launch_labels()[-1] == store.SYNC_LABEL  # the sync agent is always a stop target, plist or not
 finally:
     os.environ["HOME"] = real_home
 # backup never replaces the live DB or its sidecars.

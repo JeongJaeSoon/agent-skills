@@ -351,12 +351,19 @@ class Steps(unittest.TestCase):
     def test_actions_only_writes_no_settings(self):
         rc, out, err = self.main("--actions-only")
         self.assertEqual(rc, 0, err)
-        self.assertEqual(self.scripts(), ["sync.py", "automations.py", "setup_check.py"])
+        # store.py init comes first: a PC with no state has its DB before the scheduler and automations start writing
+        self.assertEqual(self.scripts(), ["store.py", "sync.py", "automations.py", "setup_check.py"])
+        self.assertEqual([c for c in self.calls if c[0] == "store.py"], [("store.py", False)])
         self.assertFalse(self.cfg.exists())
         self.fail.add("automations.py")
         rc, _, err = self.main("--actions-only")
         self.assertEqual(rc, 1)
         self.assertIn("these steps failed: skills-sync setup apply", err)
+        self.fail.discard("automations.py")
+        self.fail.add("store.py")
+        rc, _, err = self.main("--actions-only")
+        self.assertEqual(rc, 1)
+        self.assertIn("these steps failed: orch db init", err)
 
 
 class Spotlight(unittest.TestCase):

@@ -20,8 +20,10 @@ Commands (prog.py `orch db`):
   dump [TABLE]                                 read-only JSON of the tables
   backup FILE | restore FILE [--rehearsal]     a lossless copy (Connection.backup), and putting one back
   cutover-plan 4a|4b                           the commands the owner runs around an import; runs none of them
+  migrate [--check]                            the whole cutover in one rerunnable command (cutover.py); owner only
+  init                                         a new PC: an empty DB with both steps done, only when no state exists
 """
-import contextlib, copy, datetime as dt, fcntl, hashlib, json, os, pathlib, plistlib, re, shutil, sqlite3, subprocess, sys
+import contextlib, copy, datetime as dt, fcntl, functools, hashlib, json, os, pathlib, plistlib, re, shutil, sqlite3, subprocess, sys, tempfile
 
 import fleet
 
@@ -33,6 +35,7 @@ BUSY_MS = 5000
 LEGACY = {DECISION_STEP: ("decisions.json",), BOARD_STEP: ("board.json", "tidy.jsonl")}
 RETIRED = ("board.prev.json", "tidy.jsonl.1")  # no reader left: they move into the backup with the step's files
 LOCKS = ("board.lock", "tidy.lock", "decisions.lock")
+CUTOVER_LOCK, RUN_LOCK = "cutover.lock", "cutover-run.lock"
 SCRIPTS = "skills/orchestrate/scripts"
 BINS = ("orch", "orch-dash", "skills-sync")
 CRON = re.compile(r"\b(?:orch-dash|orch|skills-sync)\b|skills/orchestrate/|hooks/[a-z_]+\.py")
@@ -107,6 +110,20 @@ def path():
     return fleet.state_dir() / DB_NAME
 
 
+@functools.lru_cache(maxsize=1)
+def main_checkout():
+    """The checkout sessions load: the repository's main worktree even when this code runs from a linked one."""
+    p = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                       capture_output=True, text=True)
+    common = pathlib.Path(p.stdout.strip()) if p.returncode == 0 and p.stdout.strip() else None
+    return common.parent if common and common.name == ".git" else REPO
+
+
+def migrate_command():
+    """The one line that finishes a cutover on this PC, with the absolute path of the main checkout."""
+    return f"{main_checkout()}/bin/orch db migrate"
+
+
 def now():
     return fleet.iso(fleet.utcnow())
 
@@ -136,7 +153,7 @@ def open_db(timeout_ms=BUSY_MS):
     """A connection to the migrated DB; NotMigrated when the file, its schema or a needed data step is missing."""
     p = path()
     if not p.is_file():
-        raise NotMigrated(f"no {DB_NAME} in {p.parent}: run orch db import")
+        raise NotMigrated(f"no {DB_NAME} in {p.parent}: run {migrate_command()}")
     try:
         db = _connect(p, timeout_ms)
     except sqlite3.OperationalError as e:  # gone between the check and the open: still never created here
@@ -148,7 +165,7 @@ def open_db(timeout_ms=BUSY_MS):
         raise NotMigrated(f"{p}: {e}") from e
     if why:
         db.close()
-        raise NotMigrated(f"{p}: {why}: run orch db import")
+        raise NotMigrated(f"{p}: {why}: run {migrate_command()}")
     return db
 
 
@@ -171,7 +188,7 @@ def tx(timeout_ms=BUSY_MS):
         db.execute("BEGIN IMMEDIATE")
         try:
             if why := _missing(db):  # a rollback may have taken the step out while this waited for the lock
-                raise NotMigrated(f"{path()}: {why}: run orch db import")
+                raise NotMigrated(f"{path()}: {why}: run {migrate_command()}")
             yield db
         except BaseException:
             db.execute("ROLLBACK")
@@ -638,6 +655,44 @@ def migrated_steps():
         return {}
 
 
+def _steps_of(db):
+    return db.execute("PRAGMA user_version").fetchone()[0], dict(db.execute("SELECT step, stage FROM migration"))
+
+
+def peek_steps():
+    """(user_version, {step: stage}) without touching anything in the state directory: the DB file is opened immutable,
+    which never creates or changes a file. An immutable open ignores a -wal, and while a process holds the DB open its
+    commits sit there; so a -wal with content is read from a copy of the DB and the -wal made in a private temporary
+    directory (the DB first, then the -wal, so a checkpoint in between only shows fewer steps). Nothing opens the live
+    -shm. (0, {}) with no DB; Refused when it cannot be read."""
+    p = path()
+    if not p.is_file():
+        return 0, {}
+    wal = pathlib.Path(f"{p}-wal")
+    try:
+        if wal.is_file() and wal.stat().st_size > 0:
+            with tempfile.TemporaryDirectory(prefix="orch-peek-") as d:
+                q = pathlib.Path(d) / p.name
+                try:
+                    shutil.copyfile(p, q)
+                    shutil.copyfile(wal, f"{q}-wal")
+                except FileNotFoundError:  # the last holder closed and checkpointed between the check and the copy
+                    q = None
+                if q:
+                    db = sqlite3.connect(str(q))
+                    try:
+                        return _steps_of(db)
+                    finally:
+                        db.close()
+        db = sqlite3.connect(f"{p.resolve().as_uri()}?mode=ro&immutable=1", uri=True)
+        try:
+            return _steps_of(db)
+        finally:
+            db.close()
+    except (sqlite3.DatabaseError, OSError) as e:
+        raise Refused(f"{p} cannot be read: {e}") from e
+
+
 def legacy_traces():
     """Legacy files a tombstoned step replaced that are files again or gone: old code wrote after the cutover."""
     out = []
@@ -673,14 +728,23 @@ def head():
     return _sh(["git", "-C", str(REPO), "rev-parse", "HEAD"]).stdout.strip()
 
 
-def launch_labels():
-    """The LaunchAgents whose jobs write the fleet state: the dashboard server (fleet tick, relay, tidy) under this
-    shell's label, and every installed agent whose program runs an entry point (one installed under another label)."""
-    out, names = [os.environ.get("ORCH_DASH_LABEL") or "io.github.jeongjaesoon.orch-dash"], _entry_names()
+SYNC_LABEL = "io.github.jeongjaesoon.agent-skills-sync"  # scripts/bootstrap.py LABEL (test_cutover keeps them equal)
+
+
+def launch_plists():
+    """{label: (plist path or None, its spec)} of the LaunchAgents whose jobs write the fleet state: the dashboard
+    server (fleet tick, relay, tidy) under this shell's label, every installed agent whose program runs an entry point
+    (one installed under another label), and agent-skills-sync, which moves the checkout under every session."""
+    own = os.environ.get("ORCH_DASH_LABEL") or "io.github.jeongjaesoon.orch-dash"
+    out, names = {own: (None, {})}, _entry_names()
     for p in sorted(pathlib.Path("~/Library/LaunchAgents").expanduser().glob("*.plist")):
         try:
             spec = plistlib.loads(p.read_bytes())
         except (OSError, plistlib.InvalidFileException, ValueError):
+            continue
+        label = spec.get("Label")
+        if label == own or label == SYNC_LABEL:
+            out[label] = (p, spec)
             continue
         args = [str(a) for a in [spec.get("Program") or "", *(spec.get("ProgramArguments") or [])] if a]
         cwd = pathlib.Path(str(spec.get("WorkingDirectory") or "/"))
@@ -690,10 +754,15 @@ def launch_labels():
                 hits += [w for w, _ in _words(a, names)]
             else:
                 hits.append(a.replace(".", "/") + ".py" if i and args[i - 1] == "-m" else a)
-        if spec.get("Label") and spec["Label"] not in out and any(
+        if label and label not in out and any(
                 pathlib.PurePath(w).name in names and _ours((cwd / pathlib.Path(w).expanduser()).resolve()) for w in hits):
-            out.append(spec["Label"])
+            out[label] = (p, spec)
+    out.setdefault(SYNC_LABEL, (None, {}))
     return out
+
+
+def launch_labels():
+    return list(launch_plists())
 
 
 def _ancestors(procs):
@@ -889,6 +958,77 @@ def _locks():
             f = stack.enter_context((sd / name).open("a"))
             fcntl.flock(f, fcntl.LOCK_EX)
         yield
+
+
+@contextlib.contextmanager
+def cutover_lock(name=CUTOVER_LOCK):
+    """`orch db migrate` holds two: RUN_LOCK for the whole run, recovery included, so a second run refuses instead of
+    racing it; CUTOVER_LOCK from before the first stop to the end of the import, which keeps the dashboard server down.
+    A second holder is refused, not waited for. The kernel drops them with the process: a killed run leaves nothing stale."""
+    sd = fleet.state_dir()
+    sd.mkdir(parents=True, exist_ok=True)
+    with (sd / name).open("a") as f:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise Refused("another `orch db migrate` is running here; wait for it to end") from None
+        yield
+
+
+def cutover_running():
+    """Whether a migrate holds its lock now: the dashboard server must not start meanwhile. Reads only."""
+    try:
+        fd = os.open(fleet.state_dir() / CUTOVER_LOCK, os.O_RDONLY)
+    except OSError:
+        return False
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return True
+    finally:
+        os.close(fd)
+    return False
+
+
+YIELD_MARK = "dash-yielded.json"
+
+
+def mark_dash_yielded(port):
+    """A dashboard server ends itself because a migrate holds its lock: say so before it goes, so the migrate can start
+    it again even when its own probes ran too early or too late to see it."""
+    sd = fleet.state_dir()
+    sd.mkdir(parents=True, exist_ok=True)
+    tmp = sd / f"{YIELD_MARK}.{os.getpid()}.tmp"
+    tmp.write_text(json.dumps({"port": port}))
+    os.replace(tmp, sd / YIELD_MARK)
+
+
+def dash_yielded():
+    """The port a server left with mark_dash_yielded; None when there is none or it holds no port. Reads only: the
+    caller clears the mark once the port is safely in the recovery plan."""
+    got = fleet.read_json(fleet.state_dir() / YIELD_MARK, None)
+    port = got.get("port") if isinstance(got, dict) else None
+    return port if isinstance(port, int) else None
+
+
+def clear_dash_yielded():
+    (fleet.state_dir() / YIELD_MARK).unlink(missing_ok=True)
+
+
+def init_empty():
+    """`orch db init`, for a PC with no state: an empty DB with both steps done, so the first board or decision write
+    works and no cutover is needed. Does nothing when any state, a DB or a tombstone exists, or a migrate runs; the
+    condition is checked again under the same locks the import takes."""
+    sd = fleet.state_dir()
+    sd.mkdir(parents=True, exist_ok=True)
+    if cutover_running():
+        return "skipped: orch db migrate is running"
+    with _locks():
+        if path().exists() or any((sd / n).exists() for names in LEGACY.values() for n in names):
+            return f"skipped: state exists here; `{migrate_command()}` moves it"
+        _import_decisions(sd)
+        _import_board(sd)
+    return f"created an empty {DB_NAME} (both steps done)"
 
 
 def _legacy_decisions(p):
@@ -1265,9 +1405,11 @@ def _import_board(sd):
            f"--pr dropped); backup {backup}; {done}"
 
 
-def _check_sources(sd, upto):
-    """Every reason the pending steps would stop, before either touches anything."""
-    bad, steps = [], migrated_steps()
+def _check_sources(sd, upto, steps=None):
+    """Every reason the pending steps would stop, before either touches anything. `steps` lets a read-only caller pass
+    what peek_steps read, since migrated_steps opens the DB and can create its -wal."""
+    bad = []
+    steps = migrated_steps() if steps is None else steps
     if not path().exists() and DECISION_STEP not in steps:
         bad += _legacy_decisions(sd / "decisions.json")[2]
     if upto == BOARD_STEP and BOARD_STEP not in steps:
@@ -1296,7 +1438,7 @@ def import_apply(rehearsal=False, checks=True, upto=BOARD_STEP):
 def _raw():
     """The DB without the access gate (dump, backup and export work on any version), never created here."""
     if not path().is_file():
-        raise NotMigrated(f"no {DB_NAME} in {path().parent}: run orch db import")
+        raise NotMigrated(f"no {DB_NAME} in {path().parent}: run {migrate_command()}")
     return _connect(path())
 
 
@@ -1557,11 +1699,14 @@ def cutover_plan(step):
              f"# move {DB_NAME} with its -wal and -shm out of the state directory, remove the empty decisions.json",
              "# directory there, put <dir>/decisions.json in its place, revert the PR, fast-forward, start the writers"])
     lines = [f"# cutover {step}: run these yourself, in order. This command ran none of them.",
+             f"# The same steps in one rerunnable command, from a plain terminal (never from a Claude session): "
+             f"{migrate_command()}   ({migrate_command()} --check changes nothing and lists what stands in the way)",
              "# 1. stop every long-running writer of the state (the dashboard server runs the fleet tick, relay, tidy)",
              *stop,
              "# 2. bring the main checkout to the merged code",
-             f"git -C {REPO} pull --ff-only",
-             "# 3. restart or /reload-plugins every live Claude session (each runs the decision hook), then",
+             f"git -C {main_checkout()} pull --ff-only",
+             "# 3. restart every live Claude session (each runs the decision hook; /reload-plugins does not count: only "
+             "a process that started after the update passes), then",
              "orch db import --dry-run",
              "# 4. it refuses while any old writer, session or loaded LaunchAgent remains; then",
              "orch db import --apply",
@@ -1605,6 +1750,14 @@ def main(argv):
             print(f"restored {restore([a for a in rest if not a.startswith('--')][0], rehearsal)}")
         elif sub == "cutover-plan" and rest:
             print(cutover_plan(rest[0]))
+        elif sub == "migrate":
+            import cutover
+            sys.exit(cutover.main(rest))
+        elif sub == "init":
+            import cutover
+            if why := cutover.ensure_env("init", rest):  # the state a LaunchAgent uses, not this shell's default
+                sys.exit(why)
+            print(init_empty())
         else:
             sys.exit(__doc__)
     except (Refused, NotMigrated, ValueError, OSError, sqlite3.Error) as e:
