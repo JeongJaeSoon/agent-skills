@@ -49,7 +49,7 @@ turn the watch on.
                                      "logs": "<where dev logs are read>", "verify": "<verify-* skill or smoke check>",
                                      "ticket": "<optional>", "orca_repo": "<optional Orca repo selector>",
                                      "lookback_days": 2}},
-         "dispatch_run": "<optional Orca run id the release workers join>", "worker_agent": "claude",
+         "dispatch_run": "<Orca run id the release workers report to; needed unless inbox_to is run:<id>>", "worker_agent": "claude",
          "release_approval": "<the owner's dev-deploy approval, quoted with its date>",
          "merge_repos": ["<owner/name>"], "merge_deny_repos": ["<repo whose merge deploys to production>"],
          "merge_methods": ["squash", "merge", "rebase"], "hold_labels": ["hold", "do-not-merge", "wip"],
@@ -307,13 +307,14 @@ so a broken probe shows up in the message and the worker checks dev itself inste
 aging out of `lookback_days` unseen. They take no `max_items` slot: ranked after older items they would
 starve, and a repo's merges split across rounds would start two release workers. `deploy` alone collects nothing: `kinds` must list `unreleased`.
 
-`dispatch` turns them into one release worker per repo: an `orca orchestration worker-start` line
-whose brief (in `<state>/brief-<run>-<n>.txt`) holds the PRs and merge commits, the declaration, the
+`dispatch` turns them into one release worker per repo: a `skills-sync card` line
+whose brief (in `<state>/brief-<run>-<n>.txt`, reporting to `prs.dispatch_run`, else to an `inbox_to` of the form
+`run:<id>`; with neither, dispatch fails and names the key) holds the PRs and merge commits, the declaration, the
 `release_approval` (without it the worker asks before any release), production and anything outside
 dev as human only, and the rule that a refused act is reported, never retried. The worker follows
 deliver-ticket's [post-merge-release.md](../deliver-ticket/references/post-merge-release.md). The
-round itself starts no worker and releases nothing: `worker-start` works only from the orchestrator or lead
-terminal bound to the Run (from a scheduled round it fails `consumer_fenced`), so the round forwards
+round itself starts no worker and releases nothing: the worker is parented under the session that runs the line
+and reports to its Run (from a scheduled round it fails `consumer_fenced`), so the round forwards
 the lines and the orchestrator or lead starts them.
 
 ## Run
