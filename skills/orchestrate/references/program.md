@@ -1,6 +1,6 @@
 # Program mode: a lead's steps
 
-A lead reads this file now, before its first step. The orchestrator does not need it. What both modes share stays in SKILL.md: the core rules, Roles, Stay answerable, Drain (step 5), Merge policy, Refused acts and What reaches the human.
+A lead reads this file now, before its first step. The orchestrator runs none of these steps; it reads a section here when SKILL.md or `top-level.md` points to it, or when a trap below fits the cards it started. What both modes share stays in SKILL.md: the core rules, Roles, Stay answerable, Drain (step 5), Merge policy, Refused acts and What reaches the human.
 
 ## Who checks what
 
