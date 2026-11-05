@@ -15,6 +15,7 @@ from lib import artifact_links as al, config
 
 NO_BACKUP_RE = re.compile(r'<meta\s+name=["\']backup["\']\s+content=["\']no["\']', re.I)
 SCAN_TIMEOUT = 20
+RECOVER_BEFORE = 5  # seconds a publish may take and still leave room for one retry within the hook timeout
 OTHER = '기타'
 # Sub-heading inside a category, from title then cwd; no match means no sub-heading.
 SUBCATEGORY_RULES = [
@@ -77,6 +78,18 @@ def index_lock():
     """Serializes changes to the public index across hook runs (a rewrite must not drop a row appended meanwhile)."""
     os.makedirs(al.state_dir(), exist_ok=True)
     fd = os.open(os.path.join(al.state_dir(), 'index.lock'), os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
+@contextlib.contextmanager
+def key_lock(key):
+    path = os.path.join(al.state_dir(), 'locks')
+    os.makedirs(path, exist_ok=True)
+    fd = os.open(os.path.join(path, re.sub(r'[^A-Za-z0-9_-]', '_', key)[:100] + '.lock'), os.O_WRONLY | os.O_CREAT, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         yield
@@ -157,14 +170,10 @@ def lock_down(path):
 
 
 def make_private(key):
-    with index_lock():
-        move_to_private(key)
-
-
-def move_to_private(key):
-    """Move a key's public versions and rows to the private store (a page that once leaked stays private)."""
-    rows = read_rows(al.public_dir())
-    mine = [r for r in rows if r.get('key') == key]
+    """Move a key's public versions and rows to the private store (a page that once leaked stays private). The
+    caller holds the key's lock; the global index lock covers only the short rewrite of the public index, never the
+    file moves, which can be a full copy across filesystems."""
+    mine = [r for r in read_rows(al.public_dir()) if r.get('key') == key]
     if not mine:
         return
     folder = mine[-1]['dir']
@@ -179,12 +188,12 @@ def move_to_private(key):
         r['dir'] = target
         r['copy'] = os.path.join(target, os.path.basename(r['copy']))
         append_row(al.private_dir(), r)
-    keep = [r for r in rows if r.get('key') != key]
-    os.makedirs(al.state_dir(), exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=al.state_dir(), prefix='.tmp-')
-    with os.fdopen(fd, 'w', encoding='utf-8') as f:
-        f.writelines(json.dumps(r, ensure_ascii=False) + '\n' for r in keep)
-    os.replace(tmp, al.public_index())
+    with index_lock():
+        keep = [r for r in read_rows(al.public_dir()) if r.get('key') != key]
+        fd, tmp = tempfile.mkstemp(dir=al.state_dir(), prefix='.tmp-')
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            f.writelines(json.dumps(r, ensure_ascii=False) + '\n' for r in keep)
+        os.replace(tmp, al.public_index())
 
 
 PAGE = """<!doctype html>
@@ -411,6 +420,14 @@ def store(data, url, orig, orig_extras, stage):
     # One folder per artifact (keyed by URL id when known), one file per publish.
     key = url.rsplit('/', 1)[1] if url else os.path.splitext(os.path.basename(orig))[0]
     slug = re.sub(r'[^A-Za-z0-9._-]+', '-', os.path.splitext(os.path.basename(orig))[0])[:60]
+    # One run at a time per artifact, from the private check to the index row: a run that read "public" must not
+    # publish after another run moved the page to the private store.
+    with key_lock(key):
+        return save_version(data, url, orig, key, slug, now, src, extras)
+
+
+def save_version(data, url, orig, key, slug, now, src, extras):
+    stage = os.path.dirname(os.path.dirname(src))
     private = any(r.get('key') == key for r in read_rows(al.private_dir()))
     if not private and exclusion_reason(stage, [src] + [f for _, f in extras]):
         make_private(key)
@@ -507,7 +524,7 @@ def alive(pid):
     return True
 
 
-def recover_killed():
+def recover_killed(limit=1):
     """A marker whose process is gone belongs to a run that was killed before it finished: say so, and back that
     publish up again once (the file may have changed since, which is better than no copy)."""
     try:
@@ -542,6 +559,9 @@ def recover_killed():
             os.remove(path)
         except Exception as e:
             log_error(f'recovery failed: {type(e).__name__}: {e}')
+        limit -= 1
+        if limit <= 0:
+            return
 
 
 def main():
@@ -549,9 +569,9 @@ def main():
     if (data.get('tool_input') or {}).get('action', 'publish') != 'publish':
         return
     migrate_served_files()
-    marker = start_marker(data)  # first, so a run killed during the recovery below is retried too
+    began = time.monotonic()
+    marker = start_marker(data)
     try:
-        recover_killed()
         out = archive(data)
     finally:
         try:
@@ -559,7 +579,11 @@ def main():
         except OSError:
             pass
     if out:
-        print(json.dumps(out, ensure_ascii=False))
+        print(json.dumps(out, ensure_ascii=False), flush=True)
+    # This publish comes first. A killed run's retry may be a slow scan, so it runs only when this one was quick,
+    # and the links above are already out.
+    if time.monotonic() - began < RECOVER_BEFORE:
+        recover_killed(limit=1)
 
 
 if __name__ == '__main__':

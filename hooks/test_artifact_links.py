@@ -586,6 +586,45 @@ publish('s47', page('half.html'), 'c35f1111-2222-3333-4444-555566667777')
 check('a marker being written is left alone', os.path.exists(os.path.join(STATE_ROOT, 'inflight', '.tmp-half')))
 os.remove(os.path.join(STATE_ROOT, 'inflight', '.tmp-half'))
 
+# --- Codex round 3: a run that read "public" cannot publish after another run made the page private
+SLOWBIN = os.path.join(HOME, 'slowbin')
+os.makedirs(SLOWBIN)
+with open(os.path.join(SLOWBIN, 'agent-guard'), 'w') as f:
+    f.write('#!/bin/sh\nsleep 2\n! grep -rq SECRET "$2"\n')
+os.chmod(os.path.join(SLOWBIN, 'agent-guard'), 0o755)
+env_slow = dict(ENV, PATH=SLOWBIN + os.pathsep + '/usr/bin:/bin')
+FLIP = 'c55f1111-2222-3333-4444-555566667777'
+with concurrent.futures.ThreadPoolExecutor(2) as ex:
+    slow = ex.submit(publish, 's49', page('flip.html', text='a'), FLIP, env_slow)
+    time.sleep(0.8)
+    fast = ex.submit(publish, 's4a', page('flip2.html', text='b'), FLIP, env_noguard)
+    slow.result(), fast.result()
+public_rows = [l for l in open(os.path.join(STATE_ROOT, 'index.jsonl')) if FLIP in l]
+check('private flip during a slow scan: no public row or copy is left', not public_rows
+      and not any(d.endswith('-flip-c55f1111') or d.endswith('-flip2-c55f1111') for d in os.listdir(SHARE)),
+      (public_rows, os.listdir(SHARE)))
+check('private flip during a slow scan: the served index does not name it',
+      'flip' not in open(os.path.join(SHARE, 'index.html'), encoding='utf-8').read())
+
+# A slow scan leaves no room for a retry: this publish's links come first and the old marker waits.
+STALE = 'c65f1111-2222-3333-4444-555566667777'
+dead3 = subprocess.Popen([sys.executable, '-c', 'pass'])
+dead3.wait()
+mark3 = os.path.join(STATE_ROOT, 'inflight', f'{dead3.pid}-7.json')
+with open(mark3, 'w') as f:
+    json.dump({'pid': dead3.pid, 'data': {'cwd': HOME, 'tool_input': {'file_path': page('stale.html')},
+                                          'tool_response': f'https://claude.ai/code/artifact/{STALE}'}}, f)
+SLOWER = os.path.join(HOME, 'slowerbin')
+os.makedirs(SLOWER)
+with open(os.path.join(SLOWER, 'agent-guard'), 'w') as f:
+    f.write('#!/bin/sh\nsleep 6\n')
+os.chmod(os.path.join(SLOWER, 'agent-guard'), 0o755)
+out = publish('s4b', page('quick.html'), 'c75f1111-2222-3333-4444-555566667777', env=dict(ENV, PATH=SLOWER + os.pathsep + '/usr/bin:/bin'))
+check('slow publish: announced, and the old marker is left for a quicker run', out is not None and os.path.exists(mark3), out)
+publish('s4c', page('quick2.html'), 'c85f1111-2222-3333-4444-555566667777')
+check('quick publish afterwards: the old marker is retried', not os.path.exists(mark3)
+      and any(d.endswith('-stale-c65f1111') for d in os.listdir(SHARE)))
+
 # --- Reported: a reply in a later turn repeats an Artifact link published in an earlier turn
 EARLIER = 'c45f1111-2222-3333-4444-555566667777'
 publish('s48', page('earlier.html'), EARLIER)
