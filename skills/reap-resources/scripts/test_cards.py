@@ -554,4 +554,18 @@ assert "card" in reap.SCHEDULED and "orca-worktree" not in reap.SCHEDULED and "d
 prompt = reap.schedule_prompt(pathlib.Path("/x/reap.py"), pathlib.Path("/s"))
 assert "사람 결정" in prompt, prompt
 
+# The plan row carries the card's uncommitted-changes fact for readers that are not the janitor (rowstate.inputs):
+# True or False once git status was read, None when gather() stopped before it.
+cards.read_machine = lambda cfg: machine(prs=OPEN)
+cards.cards_listing = lambda repo_list=(): [{"path": CARD}]
+for status, want in ((" M file.py", True), ("", False)):
+    cards.gather = lambda w, m, s=status: saved[2](w, m, fake(branch_prs=[{**PR, "state": "OPEN"}], terminals=[term("t1", True, 2 * 3600)], status=s))
+    planned, _ = cards.scan({})
+    assert [i["dirty"] for i in planned] == [want], (status, planned)
+cards.read_machine = lambda cfg: machine(prs=OPEN, patrol=None)  # patrol's file unreadable: gather returns before git status
+cards.gather = lambda w, m: saved[2](w, m, fake(branch_prs=[{**PR, "state": "OPEN"}], terminals=[term("t1", True, 2 * 3600)]))
+planned, _ = cards.scan({})
+assert [(i["verdict"], i["dirty"]) for i in planned] == [(cards.KEEP, None)], planned
+cards.read_machine, cards.cards_listing, cards.gather, reap.run = saved
+
 print("ok")

@@ -2247,4 +2247,18 @@ for bad in (None, {}, {"dashboard": {"ticket_url": "javascript:alert(1)/"}}, {"d
 os.environ.pop("AGENT_SKILLS_CONFIG")
 shutil.rmtree(cfg_file.parent)
 
+# P1a: a PR keeps every session that claimed it (`session` is still the first), and a Run says its coordinator's terminal.
+st = f.tick(force=True)
+assert st["prs"] and all("candidates" in p for p in st["prs"]), st["prs"]
+assert all(p["candidates"][:1] == [p["session"]] for p in st["prs"] if p["session"]), [(p["key"], p["session"], p["candidates"]) for p in st["prs"]]
+assert all("coordinator" in r for r in st["runs"]) and any(r["coordinator"] for r in st["runs"]), st["runs"]
+login = next(w for w in world.worktrees if w["worktreeId"] == "wt-login")
+twin = {**login, "worktreeId": "wt-login-twin", "displayName": "twin of login", "path": "/work/wt-login-twin"}
+world.worktrees.append(twin)
+twin_fleet = world.fleet(clock=lambda: clock[0])
+for label in ("branch asked just now", "branch answer cached"):  # the first tick discovers the branch's PR, the second reuses it
+    pr41 = next(p for p in twin_fleet.tick(force=True)["prs"] if p["key"] == "acme/launchpad#41")
+    assert pr41["session"] == "wt-login" and pr41["candidates"] == ["wt-login", "wt-login-twin"], (label, pr41["session"], pr41["candidates"])
+world.worktrees.remove(twin)
+
 print("test_fleet: ok")

@@ -1690,7 +1690,7 @@ class Fleet:
         self.mem = read_json(d / "memory.json", {}) or {}  # prompt hashes, last states, sticky inbox
         self.last = {"runs": 0.0, "prs": 0.0}
         self.rate = None  # GraphQL points left, from the last query's rateLimit
-        self.state, self.owner_of, self.saved = None, {}, {}
+        self.state, self.owner_of, self.cand_of, self.saved = None, {}, {}, {}
         self.checks = []  # selfcheck.SelfCheck's items: where this state disagreed with a fresh read
         self.events = collections.deque(read_lines(d / "events.jsonl", EVENTS_KEEP), maxlen=EVENTS_KEEP)
 
@@ -1821,20 +1821,26 @@ class Fleet:
             except SourceError:
                 self.me = None
         # 1. Which PR does each session's branch have (cached; a branch without one is re-asked every 10 min).
-        ask, owner_of = [], {}
+        ask, owner_of, cand_of = [], {}, {}
+
+        def claim(key, *sids):
+            """owner_of keeps the first session that claims a PR; cand_of keeps every one, in claim order."""
+            owner_of.setdefault(key, sids[0])
+            have = cand_of.setdefault(key, [])
+            have += [sid for sid in sids if sid not in have]
         for s in sessions.values():
             # Orca's own link first: its url names the PR's repository, which may not be the session's.
             lp = s.get("linked_pr") if isinstance(s.get("linked_pr"), dict) else {}
             if lp.get("key"):
-                owner_of.setdefault(lp["key"], s["id"])
+                claim(lp["key"], s["id"])
             for r in s.get("refs") or []:
                 if r.get("type") == "pr" and r.get("key"):
-                    owner_of.setdefault(r["key"], s["id"])
+                    claim(r["key"], s["id"])
             repo = s["gh_repo"]
             if not repo:
                 continue
             if lp.get("number") and not lp.get("key"):
-                owner_of.setdefault(pr_key(repo, lp["number"]), s["id"])
+                claim(pr_key(repo, lp["number"]), s["id"])
             if not s["branch"] or s["branch"] in BRANCH_SKIP:
                 continue
             bk = f"{repo}@{s['branch']}"
@@ -1844,7 +1850,7 @@ class Fleet:
             if not hit or (not known_open and now - (parse(hit.get("at")) or now) >= dt.timedelta(seconds=DISCOVER_EVERY)):
                 ask.append((repo, s["branch"]))
             elif hit.get("key"):
-                owner_of.setdefault(hit["key"], s["id"])
+                claim(hit["key"], s["id"])
         errors = []
         for i in range(0, len(ask), 40):
             chunk = ask[i:i + 40]
@@ -1858,9 +1864,8 @@ class Fleet:
                 key = pr_key(repo, open_first[0]["number"]) if open_first else None
                 self.branch_pr[f"{repo}@{branch}"] = {"key": key, "at": iso(now)}
                 if key:
-                    owner_of.setdefault(key, next(s["id"] for s in sessions.values()
-                                                  if s.get("gh_repo") == repo and s["branch"] == branch))
-        self.owner_of = owner_of
+                    claim(key, *[s["id"] for s in sessions.values() if s.get("gh_repo") == repo and s["branch"] == branch])
+        self.owner_of, self.cand_of = owner_of, cand_of
         # 2. The search: every PR of mine open, or merged in the last day, whether or not a live worktree still has
         # its branch. A failed search keeps what the last one found rather than emptying the page.
         swept, searched = {}, False
@@ -2140,7 +2145,8 @@ class Fleet:
             prs.append({f: det.get(f) for f in ("key", "repo", "number", "url", "title", "state", "draft", "author", "ci",
                                                 "decision", "merge_state", "coderabbit", "reviewers", "created", "updated",
                                                 "merged_at", "merge_sha", "branch")}
-                       | {"session": sid, "unresolved": sum(not t["resolved"] for t in det["threads"])})
+                       | {"session": sid, "candidates": list(self.cand_of.get(k, ())),
+                          "unresolved": sum(not t["resolved"] for t in det["threads"])})
             if not sid:
                 continue
             for it in pr_items(det, self.me, cfg):
@@ -2216,7 +2222,8 @@ class Fleet:
             held = []
         model_tags(sessions)
         return {"generated_at": iso(now), "root": root, "sessions": sorted(sessions.values(), key=lambda s: s.get("last_activity") or "", reverse=True),
-                "runs": [{"id": r["id"], "objective": mask(r.get("objective"), 200), "updated_at": r.get("updated_at")} for r in self.runs["runs"]],
+                "runs": [{"id": r["id"], "objective": mask(r.get("objective"), 200), "updated_at": r.get("updated_at"),
+                          "coordinator": r.get("coordinator_handle")} for r in self.runs["runs"]],
                 "tasks": [{"id": t["id"], "run": t.get("run_id"), "title": task_name(t),
                            "project": task_project.get(t["id"]),
                            "status": t.get("status"), "deps": t.get("deps")} for t in self.runs["tasks"]],
