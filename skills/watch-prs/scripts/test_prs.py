@@ -521,6 +521,11 @@ for want in ("dev 배포 승인이 없다", "사람만: 프로덕션", card.CLOS
 approved = tmp / "approved.txt"
 approved.write_text(p.dispatch_cmds(plan2, {**rcfg, "deploy": two})[1][0] + "\n")
 assert "APPROVED: dev 배포 승인됨(테스트)" in card.compose(str(approved))
+# The bans survive card.py's FORBIDDEN refresh (create_locked rewrites the file before composing), with or without approval.
+for f in (approved, brief):
+    f.write_text(card.place_forbidden(f.read_text(), card.forbidden_paragraph())[0])
+    after = card.compose(str(f))
+    assert "사람만: 프로덕션" in after and "An act refused" in after, f
 assert "#20 " not in first, "the PR list stays in the brief file the /goal line names"
 assert (tmp / "state" / "prs" / "dispatch.txt").read_text() == d.stdout.rstrip("\n")
 (tmp / "state" / "prs" / "plan.json").unlink()
