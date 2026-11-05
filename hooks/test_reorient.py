@@ -231,6 +231,8 @@ term.write_text(json.dumps(record))
 assert roles.reload_state(["term_t"], "other", {record["session_id"]}) == "stale"
 assert roles.reload_state(["term_t"], "other", {"another-session"}) == "unknown", \
     "the record of a session that is not alive here says nothing about the live ones"
+term.write_text(json.dumps({**record, "session_id": []}))
+assert roles.reload_state(["term_t"], "other", {"x"}) == "unknown", "a session_id that is not a string is not a session"
 term.write_text("{not json")
 assert roles.reload_state(["term_t"], "other") == "unreadable", "an unreadable record is not a missing one"
 hook(session="t2", handle="term_t", source="resume", entrypoint="cli", **START)

@@ -216,15 +216,29 @@ def check_run(role, run, handle, call, lead_dispatch=None, slug=None):
                    "to confirm, and run this check again for the workers")], None, None
 
 
-def check_reload(handle, root=None):
+def own_session(table, pid):
+    """This check's own Claude Code session id, found through the process tree and the sessions Claude Code registers;
+    None when it cannot be told."""
+    claude = session_pid(table, pid)
+    try:
+        import fleet  # beside orca_settings, which imports it anyway
+        return next((sid for sid, s in fleet.live_sessions(table).items() if claude in s["pids"]), None)
+    except Exception:  # the line then says nothing rather than guess
+        return None
+
+
+def check_reload(handle, root=None, session=None):
     """A line when this session loaded another hooks/hooks.json than the checkout has now. `info`, never `do`: the
-    check only reports (the session restarts itself or not), and a missing record is not stale."""
+    check only reports (the session restarts itself or not), and a missing record is not stale. The terminal's record
+    names the session that started last in it, so it counts only when that is this session (`session`)."""
     if not handle:  # the record is keyed by terminal handle; check_handle already says Orca checks are skipped
         return []
     current = roles.hooks_sha(root or SKILLS.parent)
     if not current:
         return [("info", f"{root or SKILLS.parent}/hooks/hooks.json is unreadable: whether this session needs a reload is unknown")]
-    state = roles.reload_state([handle], current)
+    if not session:
+        return [("info", "this session's id could not be told, so its SessionStart record cannot be matched: reload need unknown")]
+    state = roles.reload_state([handle], current, {session})
     if state == "unreadable":
         return [("info", f"the SessionStart record of terminal {handle} is unreadable: reload need unknown")]
     if state == "stale":
@@ -420,12 +434,13 @@ def check_queue(root, read=None):
 def run_checks(role, slug, run, handle, cwd, call=orca, table=None, pid=None, queue=None, reload_root=None):
     root = worktree_root(cwd)
     lines, terminal, live = check_handle(handle, call, root)
-    lines += check_reload(handle, reload_root)
+    tbl = ps_table() if table is None else table
+    lines += check_reload(handle, reload_root, own_session(tbl, os.getpid() if pid is None else pid) if handle else None)
     cfg = program_cfg(slug) if slug else {}
     run_lines, bound, lead_dispatch = check_run(role, run or cfg.get("run"), live, call, cfg.get("lead_dispatch"), slug)
     lines += run_lines
     lines += check_tab(role, terminal, live)
-    lines += check_waits(role, slug, ps_table() if table is None else table, os.getpid() if pid is None else pid)
+    lines += check_waits(role, slug, tbl, os.getpid() if pid is None else pid)
     if live:
         lines += check_workers(bound, call, lead_dispatch, live)
     lines += check_queue(root, queue)

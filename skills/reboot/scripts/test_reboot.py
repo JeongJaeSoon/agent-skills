@@ -5,6 +5,7 @@ from unittest import mock
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import reboot  # noqa: E402
 import roles  # noqa: E402  on sys.path through reboot
+import fleet  # noqa: E402  the sessions Claude Code registers are read there
 os.environ["AGENT_SKILLS_STATE"] = tempfile.mkdtemp()  # the SessionStart record is read from here, never the real one
 import rowstate  # noqa: E402  on sys.path through reboot
 
@@ -546,8 +547,27 @@ class Reload(unittest.TestCase):
     def record(self, sha):
         roles.record_terminal(ME, "s1", ROOT, time.time(), {"plugin_version": None, "hooks_sha": sha})
 
-    def check(self):
-        return reboot.check_reload(ME, self.tmp / "plugin")
+    def check(self, session="s1"):
+        return reboot.check_reload(ME, self.tmp / "plugin", session)
+
+    def test_record_of_another_session_is_not_this_ones(self):
+        self.record("0" * 64)  # s1 started last in the terminal and has since ended; the caller is s2
+        (kind, text), = self.check("s2")
+        self.assertEqual(kind, "info")
+        self.assertNotIn("reload needed", text)
+
+    def test_unknown_own_session_says_so(self):
+        self.record("0" * 64)
+        (kind, text), = self.check(None)
+        self.assertEqual(kind, "info")
+        self.assertIn("could not be told", text)
+
+    def test_own_session_comes_from_the_process_tree(self):
+        sessions = {"s1": {"pids": [CLAUDE]}, "s9": {"pids": [4242]}}
+        with mock.patch.object(fleet, "live_sessions", return_value=sessions):
+            self.assertEqual(reboot.own_session(table(), SELF), "s1")
+        with mock.patch.object(fleet, "live_sessions", side_effect=OSError):
+            self.assertIsNone(reboot.own_session(table(), SELF))
 
     def test_same_sha_is_ok(self):
         self.record(self.sha)
@@ -574,13 +594,14 @@ class Reload(unittest.TestCase):
 
     def test_unreadable_reference_warns_and_does_not_block(self):
         self.record(self.sha)
-        (kind, text), = reboot.check_reload(ME, self.tmp / "missing")
+        (kind, text), = reboot.check_reload(ME, self.tmp / "missing", "s1")
         self.assertEqual(kind, "info")
         self.assertIn("unreadable", text)
 
     def test_exit_stays_zero_on_stale(self):
         self.record("0" * 64)
-        lines = run(reload_root=self.tmp / "plugin")
+        with mock.patch.object(reboot, "own_session", return_value="s1"):
+            lines = run(reload_root=self.tmp / "plugin")
         self.assertFalse(does(lines))
         self.assertTrue(any("reload needed" in t for _, t in lines))
 

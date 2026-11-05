@@ -143,7 +143,9 @@ def reload_state(handles, current, sessions=None):
             record = read_terminal(h)
         except (OSError, ValueError):
             return "unreadable"
-        if not record or (sessions is not None and record.get("session_id") not in sessions):
+        if not record:
+            continue
+        if sessions is not None and not (isinstance(record.get("session_id"), str) and record["session_id"] in sessions):
             continue
         if isinstance(record.get("hooks_sha"), str) and DIGEST.fullmatch(record["hooks_sha"]):
             shas.append(record["hooks_sha"])
