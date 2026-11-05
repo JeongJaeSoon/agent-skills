@@ -510,6 +510,7 @@ def history_report(cfg, hours=6, now=None):
             "thresholds": {k: [t if t is None or math.isfinite(float(t)) else None for t in cfg[k][:2]]
                            for k, _ in CHECKS},
             "higher_worse": {k: higher for k, higher in CHECKS},
+            "load_idle_pct": cfg["load_idle_pct"],
             "queue": [{k: e.get(k) for k in ("id", "what", "why", "state", "added", "deadline")}
                       for e in sorted(q.values(), key=lambda e: e["added"]) if e["state"] in ("waiting", "retrying")],
             "series": history_read(now - hours * 3600)}

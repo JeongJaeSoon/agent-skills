@@ -339,6 +339,7 @@ assert rep["thresholds"]["load_per_cpu"] == [1.3, 2.0] and rep["thresholds"]["sw
 assert rep["higher_worse"]["mem_free_pct"] is False and rep["last"]["level"] == "ok" and rep["queue"] == []
 json.dumps(rep, allow_nan=False)
 assert p.history_report(cfg, hours=999)["hours"] == 24
+assert rep["load_idle_pct"] == cfg["load_idle_pct"] and rep["thresholds"]["disk_free_gb"] == [50, 20]
 
 # Turns in progress, from the shape `orca worktree ps --json` gives (names and paths replaced). Orca keeps an agent at
 # state "working" after its main turn ends while a background wait or subagent lives on: workingMode "monitoring"
