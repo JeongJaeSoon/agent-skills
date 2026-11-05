@@ -103,12 +103,14 @@ def fingerprint(sd):
 
 
 # ---- a refusal stops nothing for good: the table names what stands in the way, and every service comes back
-reasons = ["session s1 (/w/x, home /h) started before the update: end or restart it",
+kind, todo = cutover.classify("session s1 (/w/x, home /h) started before the update: x")
+assert kind == "session" and todo.startswith("end it and start a new process (/reload-plugins and /restart do not count"), todo
+reasons = ["session s1 (/w/x, home /h) started before the update: end it and start a new process",
            "pid 42 started Mon before this checkout's update: python3 prog.py wait"]
 with world(reasons=reasons) as (w, sd):
     before, want = fingerprint(sd), w.plan()
     code, out, err = run()
-    assert code == 1 and "refused" in out and "session" in out and "restart" in out and "/reload-plugins" in out, (out, err)
+    assert code == 1 and "refused" in out and "session" in out and "/restart" in out and "/reload-plugins" in out and "do not count" in out, (out, err)
     assert "process" in out and "Nothing was imported" in out, out
     assert w.plan() == want, (w.plan(), want)  # dashboard, sync, janitor and watch-prs are back as they were
     assert "bootout" in " ".join(" ".join(c) for c in w.calls)  # ...after they were stopped

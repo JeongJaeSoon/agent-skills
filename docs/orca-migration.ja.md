@@ -61,7 +61,7 @@
 
 1. ダッシュボードのサーバーを止めます（ページの回答を届けるのはここです）。macOS ではその LaunchAgent を `launchctl bootout` します。
 2. 読み込まれるメインのチェックアウトを fast-forward します。
-3. 動いている Claude セッションをすべて再起動します（`/reload-plugins` では通りません）。各セッションは自分が読み込んだ decision hook を呼ぶからです。
+3. 動いている Claude セッションをすべて終了し、新しいプロセスとして起動し直します（`/reload-plugins` も `/restart` も pid と開始時刻が変わらないので通りません）。各セッションは自分が読み込んだ decision hook を呼ぶからです。
 4. `orch db import --dry-run` で、移る決定の数と `--apply` が拒否するかどうかを確かめます。
 5. `orch db import --apply`。次のどれか一つでもあれば拒否します。別のチェックアウトのスクリプト・ラッパー・hook を実行しているプロセス、または fast-forward 前からそれらを実行し続けているプロセス、どの Claude home でもそれより前に始まった生きているセッション、別のコミットのコピーを読み込む plugin や `--plugin-dir` で別のチェックアウトを読み込んだセッション、まだ読み込まれている LaunchAgent（pid がなくても）のうち、このシェルの label のダッシュボードか、`~/Library/LaunchAgents` で agent-skills のスクリプト・ラッパー・hook を実行するもの、それらを実行するコメントアウトされていない crontab の行（更新したチェックアウトを指していても該当するので、切り替えの間はコメントアウトします）。確かめられないときも拒否します。`ps` や `crontab -l` が失敗したとき（crontab のないユーザーや `crontab` コマンドがない場合は問題ありません）、プロセスのディレクトリやチェックアウトの更新時刻を読めないときです。通れば board・tidy・decision のロックを取り、`decisions.json` を sha256 と一緒に `backup-db-<時刻>/`（0700、ファイルは 0600）にコピーし、一時的な名前で DB を作って検査してから所定の場所へ rename し、`decisions.json` の場所に空のディレクトリを置いて古いコードの書き込みを失敗させます。
 6. ダッシュボードのサーバーをもう一度起動します（macOS では `orch-dash install-agent`）。
@@ -98,7 +98,7 @@
 
 1. すでに移行済みなら「already migrated」と言って何も変えません。何度実行しても同じです。移行後に古いコードがレガシーファイルを置き直していれば、そう伝えて止まります。
 2. 状態を書くものを止めます。dashboard の LaunchAgent、agent-skills-sync、`ensure` で起動した dashboard サーバー、janitor と watch-prs の automation です。最初に止める前に、戻す手順を `cutover-recover.json` に書きます。LaunchAgent の plist にある `ORCH_*` と `PROGRAMS_HOME` は読むだけで（シェルに無いときだけ実行中の環境変数として使い、plist は書き換えません）、シェルの値と違えば拒否します。
-3. 拒否の理由が残っていれば（古いコードで動くセッション・プロセス・cron の行）、表にして示し、何も移行せずに止めたサービスを戻します。セッションは `/reload-plugins` では通りません。終了して新しく始めたものだけが通ります。
+3. 拒否の理由が残っていれば（古いコードで動くセッション・プロセス・cron の行）、表にして示し、何も移行せずに止めたサービスを戻します。セッションは `/reload-plugins` でも `/restart` でも通りません。終了して新しく始めたものだけが通ります。
 4. `orch db import` と同じ移行を行い、`migration` の各ステップと `orch board show` で確かめます（`orch board open` は移行前でも正常終了するので確認になりません）。
 5. 終わっても、失敗しても、途中で強制終了されても、止めたものを戻します。LaunchAgent は `install-agent` で plist を書き直さず、既存の plist をそのまま `launchctl bootstrap` します。止まっていた automation は起動しません。戻せなかったものは `cutover-recover.json` に残り、次の実行が先に戻します。
 6. 実行中は `cutover.lock` を握っているので、再起動したセッションの `orch wait` や `ensure` が dashboard サーバーを戻すことはできません。
@@ -111,7 +111,7 @@
 
 1. ダッシュボードのサーバーを止め、janitor を切ります。macOS では LaunchAgent を `launchctl bootout` し、`skills-sync setup disable janitor` を実行します。
 2. 読み込まれるメインのチェックアウトを fast-forward します。
-3. 動いている Claude セッションをすべて再起動します（`/reload-plugins` では通りません）。
+3. 動いている Claude セッションをすべて終了し、新しいプロセスとして起動し直します（`/reload-plugins` も `/restart` も通りません）。
 4. `orch db import --dry-run` で移す内容を確認します。リストごとの項目数、閉じた記録、行とリード、Orca が持っているので外れるリードと行の PR、そして `--apply` が拒否するかどうかです。
 5. `orch db import --apply`。決定の段階と同じ検査をします。board のバックアップは `backup-db-*` に入り、ファイルごとの sha256 は `migration` テーブルに残ります。`board.json`・`tidy.jsonl` の場所には空のディレクトリを置き、決定のリリースより古いコードの書き込みを失敗させます。決定のリリースのコードは `4b-board` の行を見て止まります。
 6. ダッシュボードのサーバーと janitor をもう一度起動します。
