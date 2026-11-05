@@ -334,6 +334,13 @@ class Pressure(unittest.TestCase):
         self.patch(False, None, disabled=True)
         self.assertEqual(self.p.status()[0], "off")
 
+    def test_a_new_interval_in_the_config_apply_writes_is_a_refresh(self):
+        self.patch(True, self.current())
+        self.assertFalse(self.p.stale())
+        au.PLANNED_CONFIG = {"reap": {"pressure": {"interval": 600}}}
+        self.addCleanup(setattr, au, "PLANNED_CONFIG", None)
+        self.assertTrue(self.p.stale())
+
     def test_enable(self):
         self.patch(False, None, disabled=True)
         self.assertEqual(self.p.enable(False), (0, "켬"))

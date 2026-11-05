@@ -322,8 +322,11 @@ class PressureWatch:
             detail += f" · 등록된 내용이 이 체크아웃과 다름: {script} (enable 로 다시 씀)"
         return "on", detail
 
+    def interval(self):
+        return (planned("reap").get("pressure") or {}).get("interval") or pressure.config()["interval"]
+
     def stale(self):
-        return main_checkout() and pressure.plist_spec() != pressure.spec(pressure.config()["interval"])
+        return main_checkout() and pressure.plist_spec() != pressure.spec(self.interval())
 
     def enable(self, here):
         if sys.platform != "darwin":
