@@ -49,6 +49,12 @@ assert codes(found) == [("I", "a")], found
 assert v["cards"] == {"/w/a": "idle", "/w/b": "working", "/w/c": "working", "/w/d": "waiting", "/w/e": "run"}, v["cards"]
 assert v["hints"] == {"/w/a": "idle"} and v["failed"] == [], v
 assert patrol.judge(f, {})[0][0]["id"] == found[0]["id"], "the same idle spell is the same finding"
+# Whether the I may wait its hour (pending_lines): only a card whose session was read and has no PR is held.
+assert found[0]["pr_open"] is True, "no session read for the card: unknown"
+read = {**f, "sessions": [{"path": "/w/a"}]}
+assert patrol.judge(read, {})[0][0]["pr_open"] is False
+pr = {**f, "sessions": [{"path": "/w/a", "linked_pr": {"key": "acme/app#1"}}], "prs": {"acme/app#1": {"state": "OPEN"}}}
+assert patrol.judge(pr, {})[0][0]["pr_open"] is True
 bar = ["⏺ Waiting on the inbox.", "❯ ", "  ⏵⏵ auto mode on · 1 shell · ← 1 agent"]
 f2 = {**f, "screens": {}, "read": lambda h: bar}
 assert patrol.judge(f2, {})[0] == [], "a background shell still running is not idle, though the transcript lost it"

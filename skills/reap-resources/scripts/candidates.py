@@ -12,7 +12,7 @@ A candidate keeps the sources it relied on in `needs`; one whose source did not 
 `reports` instead. A scan that returned but noted an unreadable part fails that part's source. Kinds that only a
 model closed today (chrome-window) and kinds with no rule go to `reports` too.
 """
-import contextlib, copy, json, os, pathlib, signal, subprocess, sys, threading, time
+import atexit, contextlib, copy, json, os, pathlib, signal, subprocess, sys, threading, time
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -38,33 +38,40 @@ CUT_WAIT_S = 10  # the most a cut adds to the round
 HARD_SOURCES = ("protect", "reap_hard_cards", "reap_hard_rest")
 
 
-def children():
-    """PIDs of this process's children in its own process group: a detached spawn (start_new_session) is not one."""
+def group_members():
+    """PIDs in this process's own process group, itself left out: every command a scan started, and theirs, whatever
+    path started it. Empty unless this process leads its group (orca_job and spawn_patrol start it with
+    start_new_session); run from a shell, the group is the shell's job. A detached spawn has a group of its own."""
+    pgid = os.getpgrp()
+    if pgid != os.getpid():
+        return set()
     try:
-        out = subprocess.run(["pgrep", "-P", str(os.getpid())], capture_output=True, text=True, timeout=5).stdout
+        out = subprocess.run(["pgrep", "-g", str(pgid)], capture_output=True, text=True, timeout=5).stdout
     except (OSError, subprocess.TimeoutExpired):
         return set()
-    pids = set()
-    for pid in map(int, out.split()):
+    return {int(p) for p in out.split()} - {os.getpid()}
+
+
+def kill_group():
+    for pid in group_members():
         with contextlib.suppress(OSError):
-            if os.getpgid(pid) == os.getpgrp():
-                pids.add(pid)
-    return pids
+            if os.getpgid(pid) == os.getpgrp():  # still ours: not a PID reused since the listing
+                os.kill(pid, signal.SIGKILL)
 
 
-def stop_children(threads, before):
-    """Cut scan threads: start nothing more on them, and after CUT_GRACE_S kill by PID each child started since the
-    scans began until they return, for at most CUT_WAIT_S. One still running after that stays cancelled."""
+def stop_scans(threads):
+    """Cut scan threads: start nothing more on them, and after CUT_GRACE_S kill by PID what the group runs until the
+    threads return, for at most CUT_WAIT_S. The main thread runs no command meanwhile, so the group's commands are the
+    scans'. A thread still running after that is caught at exit."""
     reap.CANCELLED.update(th.ident for th in threads)
+    atexit.register(kill_group)
     start = time.monotonic()
     while any(th.is_alive() for th in threads) and time.monotonic() - start < CUT_WAIT_S:
         if time.monotonic() - start >= CUT_GRACE_S:
-            for pid in children() - before:
-                with contextlib.suppress(ProcessLookupError, PermissionError):
-                    os.kill(pid, signal.SIGKILL)
+            kill_group()
         for th in threads:
             th.join(0.1)
-    reap.CANCELLED.difference_update(th.ident for th in threads if not th.is_alive())
+    reap.CANCELLED.difference_update(th.ident for th in threads if not th.is_alive())  # one that ended before the mark
 
 
 def scan_kinds(cfg, pressure_kinds, state_dir, now):
@@ -224,12 +231,18 @@ def collect(sources, now=None, reap_scan=None, hard=None, pressure_kinds=None, s
     # a part is merged only once its thread has finished: a round cut short (patrol's SIGALRM, which only this thread
     # receives) merges the finished part and marks the other's sources timed out. A signal cannot stop a command a
     # thread waits on, and not every scan path goes through reap.run, so the cut marks the thread cancelled (reap.run
-    # and cards.sh start nothing more on it) and kills the commands it started (stop_children): none is left behind
+    # and cards.sh start nothing more on it) and kills what its process group runs (stop_scans): none is left behind
     # when the process exits.
     parts = [dict(fn=fn, owns=owns, sources={}, timings=Timings(), notes=[], cands=[], reports=[], alerts=[])
              for fn, owns in ((reap_part, ("reap_scan",)), (hard_part, HARD_SOURCES))]
-    before = children()
-    threads = [threading.Thread(target=p["fn"], args=(p,), daemon=True) for p in parts]
+
+    def scan(p):
+        try:
+            p["fn"](p)
+        finally:
+            reap.CANCELLED.discard(threading.get_ident())  # the ident goes back for reuse
+
+    threads = [threading.Thread(target=scan, args=(p,), daemon=True) for p in parts]
     for th in threads:
         th.start()
     cands, merged, cut = [], set(), set()
@@ -260,7 +273,7 @@ def collect(sources, now=None, reap_scan=None, hard=None, pressure_kinds=None, s
     finally:
         cut.update(n for n, th in enumerate(threads) if th.is_alive())
         if cut:
-            stop_children([threads[n] for n in cut], before)
+            stop_scans([threads[n] for n in cut])
         merge(True)
     for c in cands:
         missing = [n for n in c["needs"] if src.get(n) != "ok"]

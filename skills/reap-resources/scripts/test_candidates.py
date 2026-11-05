@@ -316,38 +316,44 @@ finally:
 assert progress["sources"]["reap_scan"] == "ok" and progress["sources"]["reap_hard_cards"] == "timeout", progress["sources"]
 assert progress["sources"]["protect"] == "timeout" and "reap_scan" in progress["timings"], progress
 
-# A cut while a thread waits on real commands, one through reap.run and one past it: each is killed by PID, the thread
-# starts nothing more through reap.run, and collect returns only once the thread has, so no child outlives the
-# process. The part reads as timed out, and the calling thread still runs commands afterwards.
+# A cut while a thread waits on real commands: one through reap.run, one past it whose shell leaves a grandchild
+# holding its pipe. Run as patrol runs (leading its own process group, so this part reruns this file in a new
+# session): each is killed, the thread starts nothing more through reap.run, collect returns once the thread has,
+# and nothing of the group outlives the round. The part reads as timed out; the calling thread still runs commands.
 import subprocess  # noqa: E402
 
-events = []
+if sys.argv[1:] == ["cut-child"]:
+    events = []
 
+    def hung_hard(t):
+        events.append(("first", reap.run(["sleep", "30"], check=False) is None))
+        p = subprocess.run(["sh", "-c", "sleep 31 & sleep 32"], capture_output=True)  # a path that skips reap.run
+        events.append(("bypass", p.returncode))
+        events.append(("second", reap.run(["sleep", "33"], check=False)))
+        return HARD
 
-def hung_hard(t):
-    events.append(("first", reap.run(["sleep", "30"], check=False) is None))
-    events.append(("bypass", subprocess.run(["sleep", "31"]).returncode))  # a scan path that skips reap.run
-    events.append(("second", reap.run(["sleep", "32"], check=False)))
-    return HARD
+    progress = {}
+    signal.setitimer(signal.ITIMER_REAL, 0.3)
+    t0 = time.monotonic()
+    try:
+        candidates.collect(OK, now=time.time(), reap_scan=lambda kinds: (REAP_ITEMS, []), hard=hung_hard,
+                           pressure_kinds=["orphan", "compose-stack"], state_dir=tmp,
+                           live=lambda targets, notes: targets, progress=progress)
+    except Cut:
+        pass
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+    print(json.dumps({"events": events, "took": time.monotonic() - t0, "left": sorted(candidates.group_members()),
+                      "cancelled": len(reap.CANCELLED), "source": progress["sources"]["reap_hard_cards"],
+                      "after": reap.run(["true"], check=False) is not None}))
+    sys.exit(0)
 
-
-progress, before = {}, candidates.children()
-signal.setitimer(signal.ITIMER_REAL, 0.3)
-t0 = time.monotonic()
-try:
-    candidates.collect(OK, now=time.time(), reap_scan=lambda kinds: (REAP_ITEMS, []), hard=hung_hard,
-                       pressure_kinds=["orphan", "compose-stack"], state_dir=tmp, live=lambda targets, notes: targets,
-                       progress=progress)
-    raise AssertionError("not cut")
-except Cut:
-    pass
-finally:
-    signal.setitimer(signal.ITIMER_REAL, 0)
-took = time.monotonic() - t0
-assert events == [("first", True), ("bypass", -signal.SIGKILL), ("second", None)], events
-assert took < candidates.CUT_GRACE_S + 3 < candidates.CUT_WAIT_S, took
-assert candidates.children() == before and not reap.CANCELLED, (candidates.children(), reap.CANCELLED)
-assert progress["sources"]["reap_hard_cards"] == "timeout", progress["sources"]
-assert reap.run(["true"], check=False) is not None, "the calling thread is not cancelled"
+child = subprocess.run([sys.executable, __file__, "cut-child"], capture_output=True, text=True, timeout=60,
+                       start_new_session=True)
+got = json.loads(child.stdout.strip().splitlines()[-1])
+assert got["events"] == [["first", True], ["bypass", -signal.SIGKILL], ["second", None]], got
+assert got["took"] < candidates.CUT_GRACE_S + 3 < candidates.CUT_WAIT_S, got
+assert got["left"] == [] and got["cancelled"] == 0 and got["source"] == "timeout" and got["after"], got
+assert candidates.group_members() == set(), "run from a shell, the group is not this process's to stop"
 
 print("test_candidates: ok")
