@@ -3474,8 +3474,11 @@ def cmd_decide(argv):
                 sys.exit("--recommend is an option number")
             import board
             options = [rest[i + 1] for i, a in enumerate(rest[:-1]) if a == "--option"]
-            label = options[int(rec) - 1].partition("::")[0].strip() if rec and 1 <= int(rec) <= len(options) else None
+            # Both are made one line and cut as decision_add stores a label, so the gate line checked is the one stored.
+            label = fleet._one_line(options[int(rec) - 1].partition("::")[0], 120) \
+                if rec and 1 <= int(rec) <= len(options) else None
             default, reason = opt(rest, "--if-no-answer"), opt(rest, "--reason")
+            default = fleet._one_line(default, 120) if default else default
             if why := board.ask_lint(default, reason, label):
                 sys.exit(f"decide add needs --if-no-answer <the --recommend label | {board.CANNOT_PROCEED}> and "
                          f"--reason <{' | '.join(board.ASK_REASONS)}>: {why} ({board.ASK_GATE})")

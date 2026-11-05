@@ -11,7 +11,7 @@ sys.path.insert(0, str(HERE))
 tmp = pathlib.Path(tempfile.mkdtemp(prefix="test-store-"))
 os.environ.update({"ORCH_FLEET_STATE": str(tmp / "a" / "dashboard"), "ORCH_FLEET_CONFIG": str(tmp / "none.json"),
                    "AGENT_SKILLS_CONFIG": str(tmp / "none.json"), "TZ": "UTC"})
-import fleet, store  # noqa: E402
+import board, fleet, store  # noqa: E402
 
 LEGACY = {"next": 4, "decisions": {
     "d1": {"id": "d1", "title": "Export format", "body": "CSV or JSON", "options": [{"label": "CSV", "description": "sheets"}],
@@ -712,6 +712,14 @@ with state("register") as sd:
     code, out, _ = brief()
     assert f"({picked}) 고를까 → 추천: A — 싸다 · 답이 없으면 A · 근거: owner-asked" in out, out
     fleet.decision_close(picked, "dropped")
+    # A label over two lines or past its 120 characters is checked as stored, so the gate line stays one whole line.
+    for raw in ("CSV\nformat", "x" * 130):
+        code, multi, err = orch("decide", "add", "--title", "형식", "--option", raw + "::싸다", "--recommend", "1",
+                                "--if-no-answer", raw, "--reason", "owner-asked", env=ME)
+        body = store.decision_record(multi)["body"]
+        assert code == 0 and "\n" not in body and board.ask_line_of(body) == body, (raw, body, err)
+        fleet.decision_close(multi, "dropped")
+        before += 1
     # A reason may quote a field name: the fields are split off from the right.
     code, out, err = brief("--decision", ITEM.replace("무료 한도 안", "'· 답이 없으면' 칸을 그대로 둠"))
     assert code == 0, err
