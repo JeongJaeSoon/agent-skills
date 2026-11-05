@@ -316,6 +316,7 @@ th.num .th-sort { justify-content: flex-end; }
 .pmetric { display: grid; gap: var(--s1); min-width: 0; }
 .pm-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); }
 .pm-v { font-size: var(--t-lg); font-variant-numeric: tabular-nums; }
+.pm-state { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); font-size: var(--t-xs, 11px); }
 .pm-chart svg { height: 56px; border-bottom: 1px solid var(--line); }
 .pm-foot { font-size: var(--t-xs, 11px); }
 .p-axis { display: flex; justify-content: space-between; padding: var(--s1) var(--s4) 0; font-size: var(--t-xs, 11px); }
