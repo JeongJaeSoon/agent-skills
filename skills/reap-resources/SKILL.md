@@ -194,7 +194,7 @@ identity, inside its lock, after the guard passes again. A target whose act fail
 (`<state>/janitor-fails.json`); a chrome-window is never acted on, since closing it needs a URL check in a browser.
 What a person has to look at (cards judged 사람 결정, chrome windows, resting targets) goes to `reap.inbox_to` as one
 message, sent again only when a key not in the last sent set appears. Each round leaves one row in
-`<state>/janitor-runs.jsonl` (targets, acted, skipped, failed, left past the 540-second budget, error), the only record
+`<state>/janitor-runs.jsonl` (targets, acted, skipped, failed, left past the 480-second budget, error; an act still running at 570 seconds is cut and recorded as failed), the only record
 of a cleanup: Orca's run history shows a skip either way. `inbox_to` and `reap.pressure.notify_to` are Orca addresses.
 Use `run:<id>`: a `term_` handle changes when its terminal restarts, and `orch patrol` raises one Orca no longer lists
 (T).

@@ -2644,9 +2644,9 @@ def reap_plan(plan, cfg, scheduled_only=False, deadline=None, out=print, res=Non
                 got = act(new, notes, done)
             except BaseException as e:  # logged whatever it was: terminals closed before it are still closed
                 log_action({**new, **(done.get("identity") or {})}, e, False, guard.rule(new), done.get("closed"))
+                res["failed"].append(key)  # before a re-raise too, so the target rests instead of rerunning
                 if not isinstance(e, (RuntimeError, OSError)):
                     raise
-                res["failed"].append(key)
                 out(f"- 실패 {label(new)}: {e}")
             else:
                 log_action({**new, **(done.get("identity") or {})}, got, True, guard.rule(new), done.get("closed"))
@@ -2666,7 +2666,33 @@ def reap_plan(plan, cfg, scheduled_only=False, deadline=None, out=print, res=Non
 # ---------------------------------------------------------------- precheck --act: the janitor round with no agent
 # Orca runs the precheck itself, outside any Claude session, so the reap there meets no permission prompt or
 # classifier; it then exits 1 and Orca starts no agent.
-ACT_BUDGET_S = 540  # under the job's PRECHECK_TIMEOUT, counted from the round's start
+ACT_BUDGET_S = 480  # no new target after this, counted from the round's start
+HARD_STOP_S = 570  # an act still running here is cut, so the round is recorded before Orca's PRECHECK_TIMEOUT kill
+
+
+class RoundCut(Exception):
+    pass
+
+
+@contextlib.contextmanager
+def hard_stop(started):
+    """Raise RoundCut at started + HARD_STOP_S, or on SIGTERM, so the round's finally still records it. subprocess.run
+    kills its child when interrupted this way. A no-op off the main thread, where signals cannot be set."""
+    import threading
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    def cut(signum, _frame):
+        raise RoundCut(f"회차 중단({signal.Signals(signum).name})")
+    old = {s: signal.signal(s, cut) for s in (signal.SIGALRM, signal.SIGTERM)}
+    signal.setitimer(signal.ITIMER_REAL, max(0.01, started + HARD_STOP_S - time.monotonic()))
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        for s, h in old.items():
+            signal.signal(s, h)
 RUNS_KEEP = 500
 HUMAN_KINDS = ("chrome-window",)  # closing one needs a URL check in a browser: a person's, with no agent in the round
 
@@ -2783,7 +2809,8 @@ def act_round(data, cfg, state_dir, started, inbox=None, send=run, reap_fn=reap_
     res = {}
     try:
         try:
-            got = reap_fn(plan, cfg, scheduled_only=True, deadline=started + ACT_BUDGET_S, res=res)
+            with hard_stop(started):
+                got = reap_fn(plan, cfg, scheduled_only=True, deadline=started + ACT_BUDGET_S, res=res)
             if isinstance(got, dict) and got is not res:
                 res.update(got)
         finally:  # what was done before anything raised is recorded too

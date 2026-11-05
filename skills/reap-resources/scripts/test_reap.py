@@ -1,5 +1,5 @@
 """Judgement rules of reap.py, plus one real reap of throwaway processes. Run: python3 test_reap.py"""
-import atexit, contextlib, io, json, os, pathlib, re, shutil, subprocess, sys, tempfile, time
+import atexit, contextlib, io, json, os, pathlib, re, shutil, signal, subprocess, sys, tempfile, time
 
 # reap.py resolves CONFIG, STATE_HOME and PROGRAMS from ~ when it is imported, so the sandbox HOME has to exist before
 # the import. Without it the in-process sections read the owner's agent-skills.json (a "reap.model" there changed the
@@ -844,6 +844,31 @@ res = reap.reap_plan({"hours": 6, "repos": [], "kinds": ["tmpdir"], "items": pla
                      out=lambda s: None)
 reap.scan, reap.act, _guard.keep = saved
 assert res["acted"] == ["tmpdir:/x1"] and res["skipped"] == ["tmpdir:/x0"], res
+# An act that raises something unexpected still marks its target failed before the raise, so it rests.
+def bad_act(item, notes, done=None):
+    raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "bad byte")
+reap.scan, reap.act, _guard.keep = (lambda kinds, hours, cfg, repos: (plan_items[:1], [])), bad_act, (lambda item, protect, notes=None: None)
+res = {}
+try:
+    reap.reap_plan({"hours": 6, "repos": [], "kinds": ["tmpdir"], "items": plan_items[:1]}, {}, scheduled_only=True,
+                   out=lambda s: None, res=res)
+    raise AssertionError("the unexpected error propagates")
+except UnicodeDecodeError:
+    pass
+reap.scan, reap.act, _guard.keep = saved
+assert res["failed"] == ["tmpdir:/x0"], res
+# The hard stop cuts an act still running near the precheck timeout, kills its child, and the round is recorded.
+with tempfile.TemporaryDirectory() as tmp:
+    st = pathlib.Path(tmp)
+    def slow_reap(plan, cfg, scheduled_only, deadline, res):
+        res.update({"acted": ["tmpdir:/done"], "skipped": [], "failed": ["tmpdir:/slow"], "left": [], "refused": None})
+        subprocess.run(["sleep", "5"])
+    t0 = time.monotonic()
+    jrow = reap.act_round({"hours": 6, "repos": [], "kinds": ["tmpdir"], "items": []}, {}, st,
+                          t0 - reap.HARD_STOP_S + 0.3, None, lambda argv, check: None, slow_reap, now=1e6)
+    assert time.monotonic() - t0 < 2 and jrow["error"].startswith("RoundCut"), jrow
+    assert jrow["acted"] == ["tmpdir:/done"] and "tmpdir:/slow" in json.loads((st / "janitor-fails.json").read_text()), jrow
+    assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0) and signal.getsignal(signal.SIGTERM) is signal.SIG_DFL
 # A daily kind the deadline left is not stamped: the next round must still see it as due.
 with tempfile.TemporaryDirectory() as tmp:
     saved_state, reap.STATE = reap.STATE, pathlib.Path(tmp)
