@@ -53,7 +53,7 @@
 
 수준을 정하는 지표 중 `mem_free_pct`, `vm_pressure`, `swapout_pps`, `load_per_cpu`(idle 조건 있음), `disk_free_gb`, `docker_mem_pct`가 danger를 낼 수 있다.
 
-**기록 24시간 재현** (487회차, 3분 간격, 폭주 3번)
+**기록 24시간 재현** (검토 시점 스냅샷 487회차, 3분 간격, 폭주 3번. 기록은 24시간씩 밀려서 다시 세면 수가 조금 달라진다)
 
 - danger 16회차는 모두 `swapout_pps ≥ 1500`이 잡았다. 그 회차의 `mem_free_pct`는 35~61, 88이 2회차였고 20 이하는 0회다. swap은 최대 67.0GB였다.
 - 폭주는 한 회차 안에서 시작됐다(직전 회차 `mem_free_pct` 82·88·79·53, swapout 0). 그래서 `mem_free_pct` 임계를 올려도 `swapout_pps`와 같은 회차에 같은 행을 잡을 뿐 미리 알려 주지 않는다.
