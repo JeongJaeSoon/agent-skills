@@ -401,13 +401,28 @@ def off_marker(name):
     return reap.STATE / f"automation-disabled-{name}"
 
 
-def turn_off(name, label):
+def turn_off(name, label, plist):
+    """Unload the job and delete its plist (RunAtLoad would load it again at the next login), then leave the marker."""
     if label_loaded(label) and bootout(label):
         return 1, "launchctl bootout 실패: job 이 아직 로드돼 있다. 다시 시도한다"
-    marker = off_marker(name)
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.touch()
-    return 0, "끔 (표지를 남겨 apply 가 다시 켜지 않는다)"
+    try:
+        pathlib.Path(plist).unlink(missing_ok=True)
+        marker = off_marker(name)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch()
+    except OSError as e:
+        return 1, f"끄지 못함: {e}"
+    return 0, "끔 (plist 를 지우고 표지를 남겨 apply 가 다시 켜지 않는다)"
+
+
+def planned(key):
+    """The section of agent-skills.json that the run about to write has, else the file as it is now."""
+    if PLANNED_CONFIG is not None:
+        return PLANNED_CONFIG.get(key) or {}
+    try:
+        return json.loads(CONFIG.read_text()).get(key) or {}
+    except (OSError, ValueError, AttributeError):
+        return {}
 
 
 # Set by plan() to the agent-skills.json that --apply is about to write, so the dry run judges what apply will see.
@@ -422,8 +437,10 @@ class ReapHard:
             "이 회차가 띄운다. 묻지 않고 카드를 지우므로 보호 목록 파일(reap-hard.protect_file)을 쓴 PC에서만 켠다")
 
     def protect_file(self):
-        planned = (PLANNED_CONFIG or {}).get("reap-hard") or {}
-        return pathlib.Path(planned.get("protect_file") or rh.config()["protect_file"]).expanduser()
+        return pathlib.Path(planned("reap-hard").get("protect_file") or rh.config()["protect_file"]).expanduser()
+
+    def interval(self):
+        return planned("reap-hard").get("interval") or rh.config()["interval"]
 
     def status(self):
         if sys.platform != "darwin":
@@ -437,10 +454,10 @@ class ReapHard:
             return "absent", "등록 안 됨"
         if not loaded:
             return "off", f"{rh.PLIST} 는 있으나 로드 안 됨 (enable 로 다시 로드)"
-        return "on", f"{rh.config()['interval']}초마다" + (" · 등록된 내용이 이 체크아웃과 다름 (enable 로 다시 씀)" if self.stale() else "")
+        return "on", f"{self.interval()}초마다" + (" · 등록된 내용이 이 체크아웃과 다름 (enable 로 다시 씀)" if self.stale() else "")
 
     def stale(self):
-        return main_checkout() and rh_spec() != rh.spec(rh.config()["interval"])
+        return main_checkout() and rh_spec() != rh.spec(self.interval())
 
     def enable(self, here):
         if sys.platform != "darwin":
@@ -448,6 +465,7 @@ class ReapHard:
         if not self.protect_file().is_file():
             return 1, f"보호 목록 파일 {self.protect_file()} 가 없어 켜지 않는다(docs/reap-hard.md 의 보호 목록)"
         if label_loaded(rh.LABEL) and not self.stale():
+            off_marker(self.name).unlink(missing_ok=True)
             return 0, "이미 켜져 있음"
         refusal = worktree_refusal(here)
         if refusal:
@@ -460,7 +478,7 @@ class ReapHard:
     def disable(self):
         if sys.platform != "darwin":
             return 0, "macOS LaunchAgent 전용(이 OS 에는 등록된 것이 없다)"
-        return turn_off(self.name, rh.LABEL)
+        return turn_off(self.name, rh.LABEL, rh.PLIST)
 
 
 def rh_spec():
@@ -498,6 +516,7 @@ class OrchDash:
         if sys.platform != "darwin":
             return 1, "macOS LaunchAgent 전용이다. 다른 OS 는 `orch status` 가 `ensure` 로 서버를 띄운다"
         if label_loaded(self.label()):
+            off_marker(self.name).unlink(missing_ok=True)
             return 0, "이미 켜져 있음"
         refusal = worktree_refusal(here)
         if refusal:
@@ -512,7 +531,7 @@ class OrchDash:
     def disable(self):
         if sys.platform != "darwin":
             return 0, "macOS LaunchAgent 전용(이 OS 에는 등록된 것이 없다)"
-        return turn_off(self.name, self.label())
+        return turn_off(self.name, self.label(), self.plist())
 
 
 # ---------------------------------------------------------------- watch-prs, watch-mentions (Orca automation)
@@ -528,9 +547,9 @@ class Watch(OrcaJob):
 
     def configured(self):
         try:
-            section = json.loads(CONFIG.read_text()).get(self.key)
+            section = planned(self.key)
             return bool(section) and set(section) != {"model"}  # the round's model alone does not turn the watch on
-        except (OSError, ValueError, AttributeError, TypeError):
+        except (AttributeError, TypeError):
             return False
 
     def model(self):

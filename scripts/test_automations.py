@@ -11,6 +11,7 @@ au.CONFIG = au.reap.CONFIG = NO_CONFIG
 
 WANT = au.janitor_want(f"path:{au.REPO}")
 ORIG_PROTECT_FILE = au.ReapHard.protect_file
+ORIG_CONFIGURED = au.Watch.configured  # Base.orca patches the method; these tests need the real one
 
 
 def janitor(enabled=True, **over):
@@ -435,7 +436,10 @@ class ReapHard(unittest.TestCase):
         if not hasattr(self, "tmp"):
             self.tmp = pathlib.Path(tempfile.mkdtemp())
             self.addCleanup(shutil.rmtree, self.tmp)
+        self.plist = self.tmp / "rh.plist"
+        self.plist.write_text("x")
         for p in (mock.patch.object(au, "off_marker", lambda n: self.tmp / f"off-{n}"),
+                  mock.patch.object(au.rh, "PLIST", self.plist),
                   mock.patch.object(au, "label_loaded", return_value=loaded),
                   mock.patch.object(au, "rh_spec", return_value=spec),
                   mock.patch.object(au.ReapHard, "protect_file", return_value=mock.Mock(is_file=lambda: protect)),
@@ -494,10 +498,25 @@ class ReapHard(unittest.TestCase):
         self.assertEqual(self.r.enable(False), (0, "켬"))  # enable clears it
         self.assertFalse(au.off_marker("reap-hard").exists())
 
-    def test_disable_unloads_a_loaded_job(self):
+    def test_disable_unloads_a_loaded_job_and_deletes_its_plist(self):
+        # RunAtLoad would load a plist that stays at the next login.
         self.patch(True, self.current())
         self.assertEqual(self.r.disable()[0], 0)
         self.boot.assert_called_once_with(au.rh.LABEL)
+        self.assertFalse(self.plist.exists())
+
+    def test_enable_on_a_loaded_job_clears_an_old_marker(self):
+        self.patch(True, self.current())
+        au.off_marker("reap-hard").touch()
+        self.assertEqual(self.r.enable(False), (0, "이미 켜져 있음"))
+        self.assertFalse(au.off_marker("reap-hard").exists())
+
+    def test_a_new_interval_in_the_config_apply_writes_is_a_refresh(self):
+        self.patch(True, self.current())
+        self.assertFalse(self.r.stale())
+        au.PLANNED_CONFIG = {"reap-hard": {"interval": 1800}}
+        self.addCleanup(setattr, au, "PLANNED_CONFIG", None)
+        self.assertTrue(self.r.stale())
 
     def test_a_failed_bootout_is_a_failed_disable(self):
         self.patch(True, self.current(), bootrc=1)
@@ -532,9 +551,13 @@ class Dash(unittest.TestCase):
         if not hasattr(self, "tmp"):
             self.tmp = pathlib.Path(tempfile.mkdtemp())
             self.addCleanup(shutil.rmtree, self.tmp)
+        self.plist = self.tmp / "dash.plist"
+        self.plist.unlink(missing_ok=True)
+        if exists:
+            self.plist.write_text("x")
         for p in (mock.patch.object(au, "off_marker", lambda n: self.tmp / f"off-{n}"),
                   mock.patch.object(au, "label_loaded", return_value=loaded),
-                  mock.patch.object(au.OrchDash, "plist", return_value=mock.Mock(exists=lambda: exists)),
+                  mock.patch.object(au.OrchDash, "plist", return_value=self.plist),
                   mock.patch.object(au, "main_checkout", return_value=main),
                   mock.patch.object(au, "bootout", self.boot),
                   mock.patch.object(au, "sh", self.sh),
@@ -571,12 +594,26 @@ class Dash(unittest.TestCase):
         self.patch(True, True)
         self.assertEqual(self.d.disable()[0], 0)
         self.boot.assert_called_once()
+        self.assertFalse(self.plist.exists())
+        self.patch(True, True)
+        au.off_marker("orch-dash").touch()
+        self.assertEqual(self.d.enable(False), (0, "이미 켜져 있음"))
+        self.assertFalse(au.off_marker("orch-dash").exists())
         self.patch(True, True, bootrc=1)
         self.assertEqual(self.d.disable()[0], 1)
 
 
 class Plan(Base):
     """What setup.py's dry run lists is what apply does."""
+
+    def test_a_watch_key_the_run_is_about_to_write_counts_as_configured(self):
+        w = au.Watch("watch-prs", "x")
+        self.assertFalse(ORIG_CONFIGURED(w))
+        au.PLANNED_CONFIG = {"prs": {"inbox_to": "x"}}
+        self.addCleanup(setattr, au, "PLANNED_CONFIG", None)
+        self.assertTrue(ORIG_CONFIGURED(w))
+        au.PLANNED_CONFIG = {"prs": {"model": "sonnet"}}
+        self.assertFalse(ORIG_CONFIGURED(w))
 
     def test_lists_installs_and_refreshes_and_unconfigured_reasons(self):
         self.orca([janitor(), load_job()])
