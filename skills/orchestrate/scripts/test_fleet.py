@@ -79,6 +79,7 @@ for name in ("state.json", "memory.json"):
 # PRs by branch, plus mine that no worktree has checked out (found by the search, open or merged within a day), and
 # what each one asks of you: only an owned PR raises items.
 prs = {p["number"]: p for p in st["prs"]}
+assert st["prs"] and all(isinstance(p.get("stack"), list) and "base" in p for p in st["prs"]), "every PR carries its stack chain"
 assert {n: prs[n]["session"] for n in prs} == {41: "wt-login", 42: "wt-export", 43: "wt-docs", 44: "wt-invoice", 7: None, 6: None}, prs
 assert (prs[7]["repo"], prs[7]["merge_state"], prs[7]["coderabbit"], prs[6]["state"]) == ("acme/tools", "BEHIND", "rate_limited", "MERGED")
 assert (prs[42]["unresolved"], prs[43]["draft"], prs[43]["author"]) == (1, True, "dev-erin"), prs[42]
