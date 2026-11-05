@@ -146,4 +146,64 @@ assert totals(text) == {"Child": 2, "Solo": 2, "Cross": 1, "Order": 2}, (totals(
 assert "Parent" not in totals(text), "a head with rows under it is not a row"
 assert "다음: k 다른 저장소 작업 — 재개·정리" in text, "the step is judge()'s, not the stored --next: " + text
 
+# Rules: rows the fleet derives (a lead, its cards, a standalone card) have no board row to carry --priority, so a rule
+# gives them a group by worktree, program or repository. Own --priority first, then the nearest worktree rule, then
+# program, then repository. A rule is no row: no report, open list or tidy pass sees it.
+fenv = {**env, "ORCH_FLEET_STATE": str(tmp / "fleet" / "dashboard"), "ORCH_BRIEF_LAST": str(tmp / "fleet" / "brief-last"),
+        "AGENT_SKILLS_STATE": str(tmp / "fleet" / "state")}
+(tmp / "fleet" / "dashboard").mkdir(parents=True)
+
+
+def forch(*args, expect=0):
+    r = subprocess.run([sys.executable, str(HERE / "prog.py"), *args], capture_output=True, text=True, env=fenv)
+    assert r.returncode == expect, (args, r.stdout, r.stderr)
+    return r.stdout.rstrip("\n") if expect == 0 else r.stderr.strip()
+
+
+def session(sid, kind, parent, **more):
+    return {"id": sid, "kind": kind, "parent": parent, "name": sid, "phase": "working", "terminals": [], **more}
+
+
+(tmp / "fleet" / "dashboard" / "state.json").write_text(json.dumps({"generated_at": NOW, "sessions": [
+    session("root", "orchestrator", None),
+    session("lead-a", "orchestration", "root", gh_repo="acme/web"),
+    session("card-1", "task", "lead-a"), session("card-2", "task", "lead-a"),
+    session("card-3", "task", "root", gh_repo="acme/web"), session("card-4", "task", "root", gh_repo="acme/ops"),
+    session("card-5", "task", "root", gh_repo="acme/web")]}))
+forch("db", "import", "--apply", "--rehearsal")
+forch("board", "priority", "set", "program:lead-a", "2:Prog")
+forch("board", "priority", "set", "worktree:card-2", "1:Pin")
+forch("board", "priority", "set", "repo:acme/web", "3:Repo")
+forch("board", "priority", "set", "repo:acme/ops", "3:Repo")
+forch("board", "priority", "set", "worktree:card-5", "4:Moved")
+forch("board", "priority", "set", "worktree:card-5", "1:Pin")  # the same match again replaces its group
+assert forch("board", "priority", "list").splitlines() == [
+    "worktree:card-2  1:Pin", "worktree:card-5  1:Pin", "program:lead-a  2:Prog", "repo:acme/ops  3:Repo", "repo:acme/web  3:Repo"]
+
+
+def fleet_totals():
+    r = subprocess.run([sys.executable, str(HERE / "prog.py"), "brief", "render", "--periodic", "--now", NOW, "--no-refresh"],
+                       capture_output=True, text=True, env=fenv)
+    assert r.returncode == 0, r.stderr
+    return totals(r.stdout), r.stdout
+
+
+got, text = fleet_totals()
+# card-1 (program), card-2 and card-5 (worktree), card-3 and card-4 (repository); the lead is their roll-up.
+assert got == {"Pin": 2, "Prog": 1, "Repo": 2}, (got, text)
+forch("board", "set", "own", "--kind", "task", "--repo", "acme/web", "--title", "직접", "--priority", "9:Own")
+got, text = fleet_totals()
+assert got == {"Pin": 2, "Prog": 1, "Repo": 2, "Own": 1}, "a row's own group beats the repository's rule: " + text
+forch("board", "priority", "drop", "worktree:card-5")
+assert fleet_totals()[0] == {"Pin": 1, "Prog": 1, "Repo": 3, "Own": 1}
+forch("board", "priority", "drop", "worktree:card-5", expect=1)
+for bad in ("lead-a", "team:lead-a", "repo:noslash", "worktree:", "repo:acme/web extra"):
+    assert "the match is worktree:ID, program:NAME or repo:OWNER/NAME" in forch("board", "priority", "set", bad, "1:X", expect=1), bad
+assert forch("board", "priority", "set", "repo:acme/web", "x", expect=1).startswith("--priority is RANK:NAME")
+# The rules are no rows.
+shown = json.loads(forch("board", "show"))
+assert not [k for k in shown["rows"] if k.startswith("prio:")] and len(shown["groups"]) == 4, shown
+assert "prio:" not in forch("board", "open", "--json") and "prio:" not in forch("board", "tidy", "--dry-run", "--json")
+assert "prio:" not in forch("brief", "render", "--periodic", "--now", NOW, "--no-refresh", "--json")
+
 print("ok")

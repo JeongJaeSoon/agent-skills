@@ -91,6 +91,7 @@ TABLES_V2 = ("alias", "closure", "lead", "board_row", "item")  # dropped in this
 LANES = {"todo": ("todo", "do"), "later": ("held", "later"), "doing": ("doing", "doing"), "owner_todo": ("todo", "todo")}
 OPEN = ("todo", "doing", "held")
 OPEN_SQL = "('todo','doing','held')"
+GROUP_KIND, GROUP_POS = "group", 1_000_000  # a priority rule is a board_row of this kind, listed after every row
 ITEM_COLS = ("who", "title", "next", "waiting", "waiting_since", "trig", "due", "after_ref")
 ORPHAN = tuple(f"{prefix}:" for _, prefix in LANES.values())  # a tidy id from before stable ids whose item left the board
 DECISION_COLS = ("id", "status", "title", "body", "options", "recommend", "link", "handle", "created_at", "checked_at",
@@ -430,11 +431,15 @@ def _insert_lead(db, name, lead):
 
 def _board(db):
     """The open board in the shape board.json had: rows, order, leads and the four lanes, each item with its id."""
-    out = {"v": 1, "rows": {}, "order": [], "leads": {}, **{lane: [] for lane in LANES}}
+    out = {"v": 1, "rows": {}, "order": [], "leads": {}, "groups": {}, **{lane: [] for lane in LANES}}
     for r in db.execute(f"SELECT * FROM item WHERE status IN {OPEN_SQL} ORDER BY lane, pos, CAST(substr(id, 2) AS INTEGER)"):
         out[r["lane"]].append(_item(r))
     for r in db.execute("SELECT * FROM board_row ORDER BY pos, id"):
-        out["rows"][r["id"]] = _row_out(r)
+        row = _row_out(r)
+        if row.get("kind") == GROUP_KIND:  # a priority rule (board.priority_set), not a row: no report, tidy or count sees it
+            out["groups"][r["id"]] = row
+            continue
+        out["rows"][r["id"]] = row
         out["order"].append(r["id"])
     for r in db.execute("SELECT * FROM lead ORDER BY name"):
         out["leads"][r["name"]] = {**json.loads(r["data"]), "name": r["name"],
@@ -504,6 +509,20 @@ def _put_rows(db, old, new, by):
         _event(db, "board_row", rid, "drop", by, old["rows"][rid])
 
 
+def _put_groups(db, old, new, by):
+    """The priority rules: board_row rows of kind group, positioned after every row so row order is what it was."""
+    for n, (rid, row) in enumerate(sorted(new["groups"].items())):
+        if rid not in old["groups"]:
+            _insert_row(db, row, GROUP_POS + n)
+            _event(db, "board_row", rid, "add", by, None, row)
+        elif row != old["groups"][rid]:
+            db.execute("UPDATE board_row SET data=? WHERE id=?", (_row_data(row), rid))
+            _event(db, "board_row", rid, "update", by, old["groups"][rid], row)
+    for rid in set(old["groups"]) - set(new["groups"]):
+        db.execute("DELETE FROM board_row WHERE id=?", (rid,))
+        _event(db, "board_row", rid, "drop", by, old["groups"][rid])
+
+
 def _put_leads(db, old, new, by):
     for name, lead in new["leads"].items():
         if name not in old["leads"]:
@@ -525,6 +544,7 @@ def change_board(fn, by=None):
         ts = now()
         _put_items(db, old, new, by, ts)
         _put_rows(db, old, new, by)
+        _put_groups(db, old, new, by)
         _put_leads(db, old, new, by)
         return out
 

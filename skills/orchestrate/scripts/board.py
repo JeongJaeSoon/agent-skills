@@ -251,6 +251,47 @@ def set_row(rid, **fields):
     return change(go)
 
 
+MATCH_KINDS = ("worktree", "program", "repo")  # most specific first: the order a rule is looked up in
+
+
+def match_of(text):
+    """`KIND:VALUE` a priority rule matches by: the Orca worktree a card runs in, a lead's program, or its repository."""
+    kind, _, value = (text or "").strip().partition(":")
+    value = one_line(value)
+    if kind not in MATCH_KINDS or not value or (kind == "repo" and not re.fullmatch(r"[\w.-]+/[\w.-]+", value)):
+        raise ValueError(f"the match is worktree:ID, program:NAME or repo:OWNER/NAME, not {text!r}")
+    return f"{kind}:{value}"
+
+
+def priority_set(match, text):
+    """Rows that match get the group `text` (RANK:NAME) unless they or a nearer row carry their own --priority. This is
+    how work the board has no row of (the fleet's lead and card rows) gets a group."""
+    match, group = match_of(match), priority_of(text)
+
+    def go(store):
+        store["groups"][f"prio:{match}"] = {"id": f"prio:{match}", "kind": store_db.GROUP_KIND, "match": match,
+                                            "priority": group}
+    return change(go)
+
+
+def priority_drop(match):
+    match = match_of(match)
+
+    def go(store):
+        if store["groups"].pop(f"prio:{match}", None) is None:
+            raise ValueError(f"no priority rule for {match}")
+    return change(go)
+
+
+def priority_rules(groups):
+    """{KIND: {VALUE: RANK:NAME}} from the board's rule rows."""
+    out = {k: {} for k in MATCH_KINDS}
+    for g in groups.values():
+        kind, _, value = g["match"].partition(":")
+        out[kind][value] = g["priority"]
+    return out
+
+
 def drop(rid):
     def go(store):
         if rid not in store["rows"]:
@@ -886,6 +927,21 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             r = rows.get(r.get("parent"))
         return None
 
+    rules = priority_rules(store.get("groups") or {})
+
+    def prio(r):
+        """A row's priority group: its own `priority`, else the nearest parent's own or its worktree's rule, else the
+        program's rule, else the repository's. A fleet row (a lead or card the board has no row of) has only rules."""
+        n = r
+        while n is not None:
+            if n.get("priority"):
+                return n["priority"]
+            if g := next((rules["worktree"][w] for w in (n.get("session"), n.get("worktree"), n.get("linked"))
+                          if w in rules["worktree"]), None):
+                return g
+            n = rows.get(n.get("parent"))
+        return rules["program"].get(up(r, "program")) or rules["repo"].get(up(r, "repo"))
+
     def lead_of(r):
         while r.get("parent") in rows:
             r = rows[r["parent"]]
@@ -1109,7 +1165,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     leaf = {k: rows[k] for k in states if k in rows and k not in parents and k not in hidden and k not in as_group}
     tally = {}
     for k, r in leaf.items():
-        if g := up(r, "priority"):
+        if g := prio(r):
             tally.setdefault(g, [0, 0, 0])[{"moving": 0, "done": 2}.get(states[k]["status"], 1)] += 1
 
     # A ✅ row merged (or marked done) over done_fold_h ago leaves the table for one count per section; the dashboard
@@ -1460,7 +1516,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             name, (mv, wt, dn) = g.split(":", 1)[1], tally[g]
             # The first open row of the group in the order the tables are printed: each section's lines, then its bullets.
             def mine(k):
-                return k in leaf and up(leaf[k], "priority") == g and states[k]["status"] != "done"
+                return k in leaf and prio(leaf[k]) == g and states[k]["status"] != "done"
             open_rows = []
             for sec in sections:
                 # A row's own line carries judge()'s step as the table shows it, a doing item's step included.

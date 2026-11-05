@@ -130,6 +130,11 @@ Usage: orch <command> <slug> [options]
                                      it (a row's own wins; groups show in RANK order). The brief opens with one
                                      line per group (진행·대기·완료 counts, the next step); with no group on
                                      any row there is no such section. - clears it.
+  board priority set <MATCH> RANK:NAME | priority drop <MATCH> | priority list
+                                     a rule that gives a group to rows the board has no row of (the fleet's
+                                     lead and card rows). MATCH is worktree:ID (that card and the rows under
+                                     it), program:NAME (a lead's program) or repo:OWNER/NAME; a row takes its
+                                     own --priority, else the nearest worktree rule, else program, else repo.
                                      --worktree: the Orca worktree id whose session works the row (lead add
                                      records the handle's own); the brief's 세션 column and the dashboard
                                      link the row to it by that id, which a terminal restart does not change.
@@ -3586,6 +3591,13 @@ def cmd_board(argv):
                                    "after", "priority")})
         elif sub == "drop" and rid:
             board.drop(rid)
+        elif sub == "priority" and rest[:1] == ["set"] and len(rest) == 3:
+            board.priority_set(rest[1], rest[2])
+        elif sub == "priority" and rest[:1] == ["drop"] and len(rest) == 2:
+            board.priority_drop(rest[1])
+        elif sub == "priority" and rest == ["list"]:
+            for g in sorted(board.read()["groups"].values(), key=lambda g: (g["priority"].split(":", 1)[0].zfill(3), g["match"])):
+                print(f"{g['match']}  {g['priority']}")
         elif sub == "doing" and rest[:1] == ["add"] and len(rest) > 1:
             board.doing_add(rest[1], opt(rest, "--owner"), opt(rest, "--next"), "--waiting" in rest, "--force" in rest, opt(rest, "--why"))
         elif sub == "doing" and rest[:1] == ["drop"] and len(rest) > 1:
@@ -3651,7 +3663,7 @@ def cmd_board(argv):
         else:
             sys.exit("usage: orch board lead add <name> --handle H --repo R [--program P] [--run RUN] [--stale-min N] [--worktree ID] | "
                      "lead close <name> | set <id> [--kind K] [--title T] [--repo R] [--program P] [--parent ID] [--status S] "
-                     "[--progress N/M] [--next T] [--owner W|-] [--after owner/repo#N|-] [--pr owner/repo#N] [--worktree ID] [--priority RANK:NAME|-] | drop <id> | doing add <title> --owner W --next E [--waiting] [--force --why T] | doing drop <n> | later add <title> --trigger T [--due D] | "
+                     "[--progress N/M] [--next T] [--owner W|-] [--after owner/repo#N|-] [--pr owner/repo#N] [--worktree ID] [--priority RANK:NAME|-] | drop <id> | priority set|drop|list | doing add <title> --owner W --next E [--waiting] [--force --why T] | doing drop <n> | later add <title> --trigger T [--due D] | "
                      "later drop <n> | todo add <title> (--due D | --after C) --who W | todo drop <n> | todo from-later <n> [--due D] --who W | "
                      "now [LINE]... | show | open [--json] | done <id>... [--why T] [--json] | reopen <id>... [--json] | "
                      "tidy [--dry-run] [--json] | closed")
