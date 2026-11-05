@@ -28,10 +28,10 @@ A report sent on a schedule (a heartbeat, a cron or `/loop` round, a "report eve
 
 `orch brief render --periodic` prints this shape; by hand it is:
 
-1. The headline, bold and led by the time: `**14:30 · <what changed, one sentence>**`, or `**14:30 · 변화 없음 — <why, a few words>**`. Under it, the pointer lines (§1), then the legend, one line: `🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류 · 막대=단계(추정)`, with `✅ 완료`, `🔴 막힘` and `❔ 확인 필요` added before `막대` when a row uses them, `📅 할 일로 넘김` when a held row's PR is named by a to-do (that row reads 📅, not ⏸️), and `⏰ 도래` when a to-do's time has come. `막대=단계(추정)` goes when no row has a bar.
-2. `🙋 **지금 오너가 할 일**`, a list under the lead line: the `orch board now` lines, then the owner's to-dos whose date or condition came (`⏰ <work> · <when> 도래`), then one reference line per 🙋 row, folded owner review and `doing` item on the owner, `<what> · <where> → <work it unblocks>` (`리뷰 · #70·#71 → 로그·대시보드`); or `— 없음` on the lead line.
-3. `❓ **결정 필요**`, numbered as §1 says, each item one line: `1. <question> → 추천: X — <reason>`. An open decision is asked again in the same words, with `(지난 보고와 동일)` and its `orch decide` id when it has one, until the human answers it.
-4. One section per repository, whatever programs run in it, headed by a bold line, `**owner/repo → main**`, ending in the merge target most of its PRs share. Spellings of an owner/name that differ in case are one repository; a bare project name stays apart. Sections with a 🙋, ❔ or 🔴 row come first, then those with the most 🔄 rows, then by name. Record each lead with its project (epic, program) as `--program`: a program report (`--scope`) covers only those. Each section has one table, headed `| | 리드/Phase | PR | 진행 | 다음 | 세션 |`, with one row per lead, or per phase when a lead works in phases (per item when there are no leads), a phase in a table with another lead's rows named `<lead> <phase>`. Rows go 🙋 → 🔴 → ❔ → 🔄 → ⏳ → ⏸️ → ✅, the same status keeping its order: a head row and its └ rows move as one block at the rank of its best row, and the └ rows sort the same way inside it. Every row goes out every time, changed or not.
+1. The headline, bold and led by the time, with no `#`: `**14:30 · <what changed, one sentence>**`, or `**14:30 · 변화 없음 — <why, a few words>**`. Under it, the pointer lines (§1), then the legend, one line (on the terminal these lines and the PR line below are one `>` quote block, a bare `>` between them): `🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류 · 막대=단계(추정)`, with `✅ 완료`, `🔴 막힘` and `❔ 확인 필요` added before `막대` when a row uses them, `📅 할 일로 넘김` when a held row's PR is named by a to-do (that row reads 📅, not ⏸️), and `⏰ 도래` when a to-do's time has come. `막대=단계(추정)` goes when no row has a bar.
+2. `## 🙋 지금 오너가 할 일`, a list under the title: the `orch board now` lines, then the owner's to-dos whose date or condition came (`⏰ <work> · <when> 도래`), then one reference line per 🙋 row, folded owner review and `doing` item on the owner, `<what> · <where> → <work it unblocks>` (`리뷰 · #70·#71 → 로그·대시보드`); or `— 없음` on the title line.
+3. `## ❓ 결정 필요`, numbered as §1 says, each item one line under the title: `1. <question> → 추천: X — <reason>`. An open decision is asked again in the same words, with `(지난 보고와 동일)` and its `orch decide` id when it has one, until the human answers it.
+4. One section per repository, whatever programs run in it, titled `## owner/repo → main`, ending in the merge target most of its PRs share. Spellings of an owner/name that differ in case are one repository; a bare project name stays apart. Sections with a 🙋, ❔ or 🔴 row come first, then those with the most 🔄 rows, then by name. Record each lead with its project (epic, program) as `--program`: a program report (`--scope`) covers only those. Each section has one table, headed `| | 리드/Phase | PR | 진행 | 다음 | 세션 |`, with one row per lead, or per phase when a lead works in phases (per item when there are no leads), a phase in a table with another lead's rows named `<lead> <phase>`. Rows go 🙋 → 🔴 → ❔ → 🔄 → ⏳ → ⏸️ → ✅, the same status keeping its order: a head row and its └ rows move as one block at the rank of its best row, and the └ rows sort the same way inside it. Every row goes out every time, changed or not.
    - Status, one icon: 🔄 moving · 🙋 waiting on the owner · ⏳ waiting on another person · ❔ waiting on a person nothing names (§1 says how each is decided) · ⏸️ held until something else lands · 🔴 blocked · ✅ done.
    - Name: the lead or phase. Phases waiting in the same state may share a row (`ph4 · ph5`).
    - PR: its PR as a link and the PR's state from the PR list, or `—` when it has none. Merged: the merge commit's first 7 characters (`[#12](https://…) a1b2c3d`); closed: `닫힘`; open: what stands before the merge, in this order — `초안`, `❗DIRTY`, `❗리뷰` (a required review missing), `수정요청`, `CI✗`, `CI…`, `BEHIND`, `BLOCKED` — or `✓` when it can merge (`열림` while GitHub has not computed it). `❗` marks what a person must resolve: bold is kept for changed rows. A PR whose base is not the section's adds its own (`[#50](https://…) ❗DIRTY→main`). Under the legend, one line `PR: ❗ 사람이 풀 것 · …` explains the marks the tables use.
@@ -44,10 +44,10 @@ A report sent on a schedule (a heartbeat, a cron or `/loop` round, a "report eve
 
    Under each lead or phase row, one row per sub-task it owns (each card, worker and open PR), named `└ <short name>` with its PR in the PR column, or `└ <identifier> <short name>` without one (`└ 설정`, `└ w2 발송`, `└ ABC-1 색인`), filling the same four columns. A card, its worker and the PR it opened are one sub-task, one row, named by the furthest of them: PR, then worker, then card. Several PRs never share a cell, except in the reviewer row of item 5. A merged sub-task stays, ✅, until its lead is done. A row with sub-task rows takes the worst of their statuses (🔴, 🙋, ⏳, ❔, ⏸️, 🔄; ✅ only when the lead is done). A sub-task in another repository goes in that repository's section, under a row with only the lead's name and `—` in status and progress. With no leads there are no sub-task rows. The rows come from four reads at each report: the list of leads (`orch status` inside a program), each lead's latest report, one read per repository of the human's open PRs, and the worker list; a merged sub-task comes from the saved last table.
 5. When two or more of a lead's PRs wait only on the same reviewer, they fold into one sub-task row under that lead, `└ <reviewer> 대기` (`└ 오너 리뷰` when the reviewer is the owner) with `#a·#b·#c` in its PR cell, PRs with another base after the others and naming it once (`#a·#c·#b→main`), and the lead row stays. PRs with no lead fold into a bullet under the table, `⏳ N건 <reviewer> 대기 — 분야 a·b·c` (`🙋 N건 오너 리뷰 — …`). A PR returns to its own row when anything else happens to it.
-6. `📌 **카드 없는 일**`, a list under the lead line, only for work that has no row: a doing item (`orch board doing add <title> --owner W --next E`) as `<status> <work> — <next stage> · <who>`, which reads 🔄 only while a live session runs it (its title, next step or owner names that card) and otherwise `❔ <work> — 세션 없음 · <next stage> · <who>`, a later item flagged ❔ (`❔ <work> — <what is missing>`), and each to-do whose date or condition came and whose `--who` is not the owner: `⏰ <work> — <when> 도래 · <who>`. A table row never appears here: its 다음 cell already says what comes next.
+6. `## 📌 카드 없는 일`, a list under the title, only for work that has no row: a doing item (`orch board doing add <title> --owner W --next E`) as `<status> <work> — <next stage> · <who>`, which reads 🔄 only while a live session runs it (its title, next step or owner names that card) and otherwise `❔ <work> — 세션 없음 · <next stage> · <who>`, a later item flagged ❔ (`❔ <work> — <what is missing>`), and each to-do whose date or condition came and whose `--who` is not the owner: `⏰ <work> — <when> 도래 · <who>`. A table row never appears here: its 다음 cell already says what comes next.
 
-   Then `⏳ **다른 사람 대기**`, a list under the lead line, one reference line per ⏳ row, folded reviewer and `--waiting` work: `<who> · <what> · <age>부터 → <work> · 다음: <next step>` (`rev-b · 리뷰 #61·#62 · 3h 전부터 → 분류`), a phase named with its lead (`검색 개선 ph3`).
-7. `⏸️ **보류**`, a list under the lead line, one `<condition> → <row>` reference line per ⏸️ row (its next stage is the condition, less a date that only repeats the hold's). The held queue and a 📅 row, which its to-do holds, are not listed: the pointer line counts them.
+   Then `## ⏳ 다른 사람 대기`, a list under the title, one reference line per ⏳ row, folded reviewer and `--waiting` work: `<who> · <what> · <age>부터 → <work> · 다음: <next step>` (`rev-b · 리뷰 #61·#62 · 3h 전부터 → 분류`), a phase named with its lead (`검색 개선 ph3`).
+7. `## ⏸️ 보류`, a list under the title, one `<condition> → <row>` reference line per ⏸️ row (its next stage is the condition, less a date that only repeats the hold's). The held queue and a 📅 row, which its to-do holds, are not listed: the pointer line counts them.
 8. One line naming the periodic actions this round did not take and why (`21:00 이후라 Slack 미전송 · 머지 가능 PR 없음`). Left out when it took them all.
 
 Items 3, 6 (each of its two lists), 7 and 8 are left out when empty; item 2 is always there (§1 Only you).
@@ -94,7 +94,8 @@ An illustrative shape (the items are made up):
 
 - Markdown tables where items share columns (item, state, evidence). In progress with several items is one table, `| 작업 | 상태 | 다음 |`: 상태 is what is done so far, with its evidence; 다음 is the next event and who moves it. A `진행` column (§1 Progress) goes after 작업 only when the items have a basis for one, and a child item is a row under its parent, named `ㄴ <name>`. Items that ship through PRs and deploys still take this table, with the stage pointer (§1) under the sections; a periodic report has one table per repository (below).
 - A table fits in 78 columns as Claude Code draws it (an 80-column terminal less the 2-column gutter in front of each reply line), or it wraps and the columns break apart. Count Hangul and emoji as two columns each, and add three per column for borders and padding. Never cut a name or a reason to fit (cut to the same head in every row, they tell nothing, and a numbered list under the table breaks the reading); a periodic table wider than 78 is not drawn: write each row as one whole line (`- 🔄 name — PR · next · session`) instead, as the renderer does. In other tables, detail that does not fit goes in a one-line footnote under the table (`¹ …`), not in the cell. `python3 scripts/table_width.py < draft.md` (in this skill's directory) prints each table's width.
-- Decision needed, Only you and Held, and In progress when it is not a table, each start with a bold lead and take one line per item, the first item on the lead line and each further item below it after a blank line: `❓ **결정 필요** — 1. 질문: 선택지 → 추천: X — 이유 · 답이 없으면 …`, `🙋 **지금 오너가 할 일** — 할 일 · 어디서 → 풀리는 작업`, `🔄 **진행 중** — 할 일 · 담당 · 다음: 이벤트`, `⏳ **다른 사람 대기** — 누구 · 무엇 · 언제부터 → 작업 · 다음: 리마인드`, `⏸️ **보류** — 조건 → 할 일`; a periodic report takes the forms in §1 Periodic report, where 카드 없는 일, 다른 사람 대기, 지금 오너가 할 일 and 보류 are lists under their lead line. Leave a blank line between lines that must stay separate; markdown joins adjacent lines.
+- Structure: the headline stays one bold line with no `#`, first in the report. Each big section (Only you, Decision needed, each repository, 카드 없는 일, 다른 사람 대기, Held) opens with a `## ` title and its items follow as lines under it. The guide lines (stage pointer, to-do pointer, legend, PR key) are one `>` quote block, a bare `>` line between them. Put no `---` between sections. A heading adds structure, not lines: do not split a section only to give it a title.
+- Decision needed, Only you and Held, and In progress when it is not a table, take one line per item under the title: `## ❓ 결정 필요` then `1. 질문: 선택지 → 추천: X — 이유 · 답이 없으면 …`, `## 🙋 지금 오너가 할 일` then `- 할 일 · 어디서 → 풀리는 작업`, `## 🔄 진행 중` then `- 할 일 · 담당 · 다음: 이벤트`, `## ⏳ 다른 사람 대기` then `- 누구 · 무엇 · 언제부터 → 작업 · 다음: 리마인드`, `## ⏸️ 보류` then `- 조건 → 할 일`; a periodic report takes the forms in §1 Periodic report. Leave a blank line between lines that must stay separate; markdown joins adjacent lines.
 - `file:line` for code, `owner/repo#123` for PRs and issues, so both are clickable.
 - The same sections and the same numbering of decisions.
 
@@ -103,15 +104,19 @@ An illustrative report on request (the items are made up):
 ```markdown
 **14:45 · 검색 개선 PR 생성, 유료 플랜 하나만 정해 주세요**
 
-🙋 **지금 오너가 할 일** — GitHub acme/web Environments → production → 대기 중인 배포 승인 (규칙상 사람만)
+## 🙋 지금 오너가 할 일
 
-❓ **결정 필요** — 1. 검색 API 유료 플랜(월 $50, 승인 예산 밖): 올림 / 현행 유지 → 추천: 현행 유지 — 무료 한도의 60%만 씀 · 답이 없으면 현행 유지
+- GitHub acme/web Environments → production → 대기 중인 배포 승인 (규칙상 사람만)
 
-✅ **완료**
+## ❓ 결정 필요
+
+1. 검색 API 유료 플랜(월 $50, 승인 예산 밖): 올림 / 현행 유지 → 추천: 현행 유지 — 무료 한도의 60%만 씀 · 답이 없으면 현행 유지
+
+## ✅ 완료
 
 - [acme/web#42](https://example.test/42) 생성 (head a1b2c3d, 테스트 38/38 통과)
 
-🔄 **진행 중**
+## 🔄 진행 중
 
 | 작업 | 상태 | 다음 |
 |---|---|---|
@@ -119,7 +124,7 @@ An illustrative report on request (the items are made up):
 | ㄴ 정렬 | 워커가 구현 중 | PR 생성 · 워커 |
 | 재색인 | 리뷰어 B 대기 | 승인 → 머지 · B |
 
-⏸️ 보류 큐 1건 · `orch board todo list`
+> ⏸️ 보류 큐 1건 · `orch board todo list`
 ```
 
 An illustrative periodic report (the items are made up):
@@ -127,14 +132,22 @@ An illustrative periodic report (the items are made up):
 ```markdown
 **23:45 · 검색 개선 ph2 머지, 나머지는 변화 없음**
 
-🙋 **지금 오너가 할 일**
+> 📅 할 일 1건 · ⏸️ 보류 큐 2건 · `orch board todo list`
+>
+> 🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류 · ✅ 완료 · 막대=단계(추정)
+>
+> PR: ❗ 사람이 풀 것 · CI✗ CI 실패 · CI… CI 진행 · 7자리=머지 sha
+
+## 🙋 지금 오너가 할 일
 
 - 충돌 해소 승인 · [#50](https://example.test/50) → 알림 정리
 - 리뷰 · #70·#71 → 로그·대시보드
 
-❓ **결정 필요** — 1. 재색인 권한(오너가 가진 권한): 서비스 계정 발급 / 개인 토큰 → 추천: 서비스 계정 — 만료 없음 (지난 보고와 동일)
+## ❓ 결정 필요
 
-**acme/web → main**
+1. 재색인 권한(오너가 가진 권한): 서비스 계정 발급 / 개인 토큰 → 추천: 서비스 계정 — 만료 없음 (지난 보고와 동일)
+
+## acme/web → main
 
 | | 리드/Phase | PR | 진행 | 다음 | 세션 |
 |---|---|---|---|---|---|
@@ -150,30 +163,24 @@ An illustrative periodic report (the items are made up):
 
 - 🙋 2건 오너 리뷰 — 분야 로그·대시보드
 
-**acme/ops → main**
+## acme/ops → main
 
 | | 리드/Phase | PR | 진행 | 다음 | 세션 |
 |---|---|---|---|---|---|
 | 🔄 | 재색인 | [#88](https://example.test/88) ❗리뷰 | ██░░░░░░ 2/8 | 권한 | 세션 없음 |
 
-📌 **카드 없는 일**
+## 📌 카드 없는 일
 
 - 🔄 로그 보존 기간 조사 — 결과 정리 · 에이전트
 
-⏳ **다른 사람 대기**
+## ⏳ 다른 사람 대기
 
 - A · 리뷰 [#51](https://example.test/51)·#52·#53 · 14h 전부터 → 설정·발송·로그 · 다음: 10/14 10:00 리마인드
 - 다른 팀 · 1일 전부터 → API 답변 · 다음: 10/14 회신 없으면 리마인드
 
-⏸️ **보류**
+## ⏸️ 보류
 
 - ph3 머지 뒤 → 검색 개선 ph4 · ph5
 
 21:00 이후라 Slack 미전송 · 머지 가능 PR 없음
-
-📅 할 일 1건 · ⏸️ 보류 큐 2건 · `orch board todo list`
-
-🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류 · ✅ 완료 · 막대=단계(추정)
-
-PR: ❗ 사람이 풀 것 · CI✗ CI 실패 · CI… CI 진행 · 7자리=머지 sha
 ```

@@ -1027,7 +1027,8 @@ function briefHtml(text, tableRows = [], placed = new Set(), listRows = {}, clos
           : `<td${repo && !n ? ' class="bmark"' : ""}>${repo && n ? `<div class="slide">${briefInline(c)}</div>` : briefInline(c)}</td>`).join("")}${btns ? act(btns[k]) : ""}</tr>`).join("")}</tbody></table></div>`);
       continue;
     }
-    const sec = line.match(/^(\S+) \*\*(.+?)\*\*(?: — (.*))?$/u);
+    // The terminal text titles a section `## <emoji> name` (older text: `<emoji> **name**`).
+    const sec = line.match(/^## (\S+) (.+?)(?: — (.*))?$/u) || line.match(/^(\S+) \*\*(.+?)\*\*(?: — (.*))?$/u);
     if (sec && (BRIEF_SECTIONS[sec[2]] || sec[3] != null)) {
       const items = sec[3] && sec[3] !== "없음" ? [sec[3]] : [];
       i++;
@@ -1044,7 +1045,11 @@ function briefHtml(text, tableRows = [], placed = new Set(), listRows = {}, clos
       if (items.length) out.push(sectionTable(sec[2], items, ids));
       continue;
     }
-    if (line.trim()) out.push(`<p>${briefInline(line).replace(DASH_URL, (_, url, hash) => `<a class="link" href="${hash}">${location.origin}/${hash}</a>`)}</p>`);
+    // `## repo → main` is a repository's title, `> note` a guide line: drawn as the bold and plain lines they replace.
+    const plain = line.replace(/^> ?/, ""), title = line.match(/^## (.+)$/);
+    if (/^>\s*$/.test(line)) { i++; continue; }
+    if (title) { out.push(`<p>${briefInline(`**${title[1]}**`)}</p>`); i++; continue; }
+    if (line.trim()) out.push(`<p>${briefInline(plain).replace(DASH_URL, (_, url, hash) => `<a class="link" href="${hash}">${location.origin}/${hash}</a>`)}</p>`);
     i++;
   }
   return out.join("");

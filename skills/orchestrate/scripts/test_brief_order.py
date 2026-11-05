@@ -79,14 +79,14 @@ text = ok("brief", "render", "--periodic", "--now", NOW, "--skipped", "건너뜀
 tg = ok("brief", "render", "--periodic", "--now", NOW, "--telegram", "--skipped", "건너뜀", "--insight", "덧붙임")
 
 # 1. One table per repository, whatever the program and the spelling.
-headings = re.findall(r"^\*\*([^*]*)\*\*$", text, re.M)[1:]
+headings = re.findall(r"^## ([A-Za-z0-9].*)$", text, re.M)
 assert [h.split(" →")[0] for h in headings] == ["acme/app", "acme/zed", "aaa"], text
 assert re.findall(r"^📋 (.*)$", tg, re.M) == headings, tg
 
 
 # 2. Rows by status: heads with their sub-rows as one block, the block at the rank of its best row, sub-rows sorted too.
 full = json.loads(ok("brief", "render", "--periodic", "--now", NOW, "--json"))["full"]  # tables with every cell whole
-block = full[full.index("**acme/app"):full.index("**acme/zed")]
+block = full[full.index("## acme/app"):full.index("## acme/zed")]
 rows = [l for l in block.splitlines() if l.startswith("| ") and "리드/Phase" not in l]
 marks = [r.split("|")[1].strip() + " " + r.split("|")[2].strip().removeprefix("└ ") for r in rows]
 assert marks == ["🙋 리드A", "🙋 내일", "❔ gap 빈일", "🔄 move 도는일", "⏳ 남일", "⏸️ held 멈춘일", "✅ 끝난일",
@@ -95,8 +95,8 @@ assert "| ↑ 오너 |" in block and "| ↓ 대기 |" in block and "| ↓ 보류
 
 # 3. Sections in the fixed order: what the owner acts on first, what explains the rest last.
 # The pointer and legend lines open the report, on the lines right under the headline: the owner reads them first.
-ORDER = ("🙋 **지금 오너가 할 일**", "❓ **결정 필요**", "**acme/app", "📌 **카드 없는 일**", "⏳ **다른 사람 대기**",
-         "⏸️ **보류**", "덧붙임", "건너뜀")
+ORDER = ("## 🙋 지금 오너가 할 일", "## ❓ 결정 필요", "## acme/app", "## 📌 카드 없는 일", "## ⏳ 다른 사람 대기",
+         "## ⏸️ 보류", "덧붙임", "건너뜀")
 at = [text.index(s) for s in ORDER]
 assert at == sorted(at), [s for _, s in sorted(zip(at, ORDER))]
 TG_ORDER = ("🙋 지금 오너가 할 일", "❓ 결정 필요", "📋 acme/app", "📌 카드 없는 일", "⏳ 다른 사람 대기", "⏸️ 보류",
@@ -104,11 +104,14 @@ TG_ORDER = ("🙋 지금 오너가 할 일", "❓ 결정 필요", "📋 acme/app
 body = tg[tg.index("🙋 지금 오너가 할 일"):]  # the legend above it names ⏳ and ⏸️ too
 at = [body.index(s) for s in TG_ORDER]
 assert at == sorted(at), [s for _, s in sorted(zip(at, TG_ORDER))]
-for report, owner in ((text, "🙋 **지금 오너가 할 일**"), (tg, "🙋 지금 오너가 할 일")):
+for report, owner, quote in ((text, "## 🙋 지금 오너가 할 일", "> "), (tg, "🙋 지금 오너가 할 일", "")):
     top = [l for l in report.splitlines()[1:] if l]
     top = top[:next(i for i, l in enumerate(top) if l.startswith(owner))]
-    assert [l.split(" ")[0] for l in top] == ["단계표", "📅", "🔄", "PR:"], top
-    assert "진행 · 🙋 오너 차례" in top[2] and report.count("🔄 진행 · 🙋 오너 차례") == 1 and report.count("\nPR: ") == 1, report
+    if quote:  # the terminal's guide lines are one quote block, a bare `>` between them
+        assert all(l == ">" or l.startswith(quote) for l in top), top
+        top = [l for l in top if l != ">"]
+    assert [l.removeprefix(quote).split(" ")[0] for l in top] == ["단계표", "📅", "🔄", "PR:"], top
+    assert "진행 · 🙋 오너 차례" in top[2] and report.count("🔄 진행 · 🙋 오너 차례") == 1 and report.count(f"\n{quote}PR: ") == 1, report
 
 # The lists follow the tables, and every row still shows once.
 out = json.loads(ok("brief", "render", "--periodic", "--now", NOW, "--json"))
@@ -155,8 +158,8 @@ prs["prs"].update(dict([pr(k, reviewers=[{"login": "octo", "requested": True}], 
 for rid, repo, n in (("loose8", "mid/x", 8), ("loose9", "mid/x", 9), ("loose7", "zzz/y", 7)):
     ok("board", "set", rid, "--kind", "task", "--title", f"낱개{n}", "--repo", repo, "--pr", f"{repo}#{n}")
 text = ok("brief", "render", "--periodic", "--now", NOW)
-assert "- 🙋 2건 오너 리뷰 — 분야 낱개8·낱개9" in text and text.index("**mid/x") < text.index("**zzz/y"), text
-mine = text[text.index("🙋 **지금 오너가 할 일**"):text.index("❓ **결정 필요**")]
+assert "- 🙋 2건 오너 리뷰 — 분야 낱개8·낱개9" in text and text.index("## mid/x") < text.index("## zzz/y"), text
+mine = text[text.index("## 🙋 지금 오너가 할 일"):text.index("## ❓ 결정 필요")]
 assert mine.index("#8") < mine.index("#7"), mine
 
 # A row-less report still has its one owner line first.
@@ -164,6 +167,6 @@ empty = tmp / "empty"
 env2 = {**env, "AGENT_SKILLS_STATE": str(empty), "ORCH_FLEET_STATE": str(empty / "d")}
 r = subprocess.run([sys.executable, str(HERE / "prog.py"), "brief", "render", "--now", NOW, "--no-fill"], capture_output=True,
                    text=True, env=env2)
-assert r.returncode == 0 and "🙋 **지금 오너가 할 일** — 없음" in r.stdout, (r.stdout, r.stderr)
+assert r.returncode == 0 and "## 🙋 지금 오너가 할 일 — 없음" in r.stdout, (r.stdout, r.stderr)
 
 print("ok")

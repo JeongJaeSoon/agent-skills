@@ -86,10 +86,10 @@ def brief():
 def section(text, head):
     lines, on = [], False
     for line in text.splitlines():
-        if line and line[0] in "📌⏳⏸🙋❓📝":
-            on = line.startswith(head)
+        if line.startswith("## ") and line[3] in "📌⏳⏸🙋❓📝":
+            on = line.startswith("## " + head)
             continue
-        if line.startswith("**") and " → " in line:  # a repository's heading ends the section; its rows may be lines
+        if line.startswith("## ") and " → " in line:  # a repository's heading ends the section; its rows may be lines
             on = False
         if on and line.startswith("- "):
             lines.append(line[2:])
