@@ -2647,9 +2647,10 @@ def reap_plan(plan, cfg, scheduled_only=False, deadline=None, out=print):
                 out(f"- 실패 {label(new)}: {e}")
             else:
                 log_action({**new, **(done.get("identity") or {})}, got, True, guard.rule(new), done.get("closed"))
-                res["acted"].append(key)
+                res["acted" if acted(got) else "skipped"].append(key)  # an act can still end in "건너뜀: …"
                 out(f"- {label(new)}: {got}")
-    for k in set(DAILY) & set(plan.get("kinds") or ()):
+    # A daily kind the deadline left keeps its day open, so the next round tries it again.
+    for k in set(DAILY) & set(plan.get("kinds") or ()) - {wanted[key]["kind"] for key in res["left"]}:
         stamp_user_folder(STATE, kind=k)
     for n in notes:
         out(f"- 메모: {n}")
@@ -2982,4 +2983,12 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        # act_round logs its own failures; this is the plan before it (scan, plan write), still under janitor.lock.
+        if sys.argv[1:2] == ["precheck"] and "--act" in sys.argv:
+            with contextlib.suppress(OSError):
+                log_run(STATE, {"t": time.time(), "source": "scan", "error": f"{type(e).__name__}: {str(e)[:200]}",
+                                "stage": "plan"})
+        raise

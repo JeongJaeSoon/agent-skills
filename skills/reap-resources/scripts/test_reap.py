@@ -820,6 +820,34 @@ res = reap.reap_plan({"hours": 6, "repos": [], "kinds": [], "items": [{"key": "o
                      {}, scheduled_only=True, out=lambda s: None)
 reap.scan = saved_scan
 assert res["skipped"] == ["orphan:1"], res
+# An act that returns without doing anything ("건너뜀: …", a card the re-check kept) counts as skipped, not acted.
+import guard as _guard
+saved = reap.scan, reap.act, _guard.keep
+reap.scan = lambda kinds, hours, cfg, repos: (plan_items[:2], [])
+reap.act = lambda item, notes, done=None: "건너뜀: 다시 보니 대상 아님" if item["key"].endswith("x0") else "휴지통으로 옮김"
+_guard.keep = lambda item, protect, notes=None: None
+res = reap.reap_plan({"hours": 6, "repos": [], "kinds": ["tmpdir"], "items": plan_items[:2]}, {}, scheduled_only=True,
+                     out=lambda s: None)
+reap.scan, reap.act, _guard.keep = saved
+assert res["acted"] == ["tmpdir:/x1"] and res["skipped"] == ["tmpdir:/x0"], res
+# A daily kind the deadline left is not stamped: the next round must still see it as due.
+with tempfile.TemporaryDirectory() as tmp:
+    saved_state, reap.STATE = reap.STATE, pathlib.Path(tmp)
+    uf = [{"key": "user-folder:/u", "kind": "user-folder", "target": True, "name": "/u"}]
+    reap.scan = lambda kinds, hours, cfg, repos: (uf, [])
+    reap.reap_plan({"hours": 6, "repos": [], "kinds": ["user-folder"], "items": uf}, {}, scheduled_only=True,
+                   deadline=time.monotonic() - 1, out=lambda s: None)
+    assert reap.user_folder_due(reap.STATE, kind="user-folder"), "left by the deadline: still due"
+    reap.reap_plan({"hours": 6, "repos": [], "kinds": ["user-folder"], "items": []}, {}, scheduled_only=True, out=lambda s: None)
+    assert not reap.user_folder_due(reap.STATE, kind="user-folder"), "a round with nothing left stamps the day"
+    reap.scan, reap.STATE = saved_scan, saved_state
+# A round that fails while planning (before act_round) still leaves its row.
+with tempfile.TemporaryDirectory() as tmp:
+    env = {**os.environ, "AGENT_SKILLS_STATE": tmp}
+    r = subprocess.run([sys.executable, str(pathlib.Path(__file__).parent / "reap.py"), "precheck", "--act", "--kinds", "tmpdir",
+                        "--hours", "soon"], env=env, capture_output=True, text=True)
+    last = json.loads((pathlib.Path(tmp) / "janitor-runs.jsonl").read_text().splitlines()[-1])
+    assert r.returncode == 1 and last["stage"] == "plan" and last["error"].startswith("ValueError"), (r.stderr, last)
 
 # user-folder: top-level entries untouched for `days`, not open, not a download in progress.
 D = 86400
