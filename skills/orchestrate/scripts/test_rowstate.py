@@ -55,7 +55,7 @@ assert code != 0 and "Orca already knows lead wt-lead" in err, err  # the row li
 ok("board", "set", "L", "--kind", "lead", "--repo", "octo/app", "--worktree", "wt-lead")
 ok("board", "set", "L/merge", "--title", "머지 대기", "--pr", "octo/app#1", "--status", "waiting", "--next", "머지 대기")
 ok("board", "set", "L/dec", "--title", "결정 대기", "--pr", "octo/app#2", "--next", "구현")
-ok("decide", "add", "--title", "캐시 정책", "--option", "TTL 1h", "--option", "TTL 1d", "--recommend", "1", "--link", "octo/app#2",
+ok("decide", "add", "--title", "캐시 정책", "--option", "TTL 1h::적중률 유지", "--option", "TTL 1d", "--recommend", "1", "--link", "octo/app#2",
    "--if-no-answer", "TTL 1h", "--reason", "hard-after-review")
 ok("board", "set", "L/cls", "--title", "거부된 머지", "--pr", "octo/app#3", "--owner", "오너", "--next", "classifier 거부: 오너가 머지")
 ok("board", "set", "L/rev", "--title", "남 리뷰", "--repo", "acme/lib", "--pr", "acme/lib#4", "--next", "리뷰 대기")

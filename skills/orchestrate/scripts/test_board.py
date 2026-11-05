@@ -677,7 +677,7 @@ wok("board", "set", "W/mine", "--title", "내 리뷰", "--pr", "acme/web#91", "-
 wok("board", "set", "W/theirs", "--title", "남 리뷰", "--pr", "acme/web#92", "--status", "waiting")
 wok("board", "set", "W/reply", "--title", "디자인 답변", "--status", "waiting", "--owner", "디자인팀", "--next", "10/15 리마인드")
 wok("board", "set", "W/ask", "--title", "누구 대기", "--status", "waiting")
-wok("decide", "add", "--title", "캐시 정책", "--option", "TTL 1h", "--option", "TTL 1d", "--recommend", "1",
+wok("decide", "add", "--title", "캐시 정책", "--option", "TTL 1h::적중률 유지", "--option", "TTL 1d", "--recommend", "1",
     "--if-no-answer", "TTL 1h", "--reason", "hard-after-review")
 (wd / "dashboard" / "state.json").write_text(json.dumps({"generated_at": NOW, "sessions": [
     sess("lw", "orchestration", "root", "working", h="term_0FAKEW")]}))

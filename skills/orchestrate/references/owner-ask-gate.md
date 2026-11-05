@@ -14,4 +14,4 @@ Run this before you write a 결정 필요 item, an 오너 할 일 item, an `orch
 The scripts hold the form, so an item that skips the gate is refused with the missing part named:
 
 - `orch brief render --decision "<question>: <options> → 추천: <X> — <reason> · 답이 없으면 <X | 진행 못 함> · 근거: <tag>"`
-- `orch decide add --title T --option … --recommend N --if-no-answer <the recommended label | 진행 못 함> --reason <tag>` (both go on the first line of the decision's body, which the dashboard and the report show)
+- `orch decide add --title T --option "<label>::<its cost or reason>"… --recommend N --if-no-answer <the recommended label | 진행 못 함> --reason <tag>` (both go on the first line of the decision's body, which the dashboard and the report show)

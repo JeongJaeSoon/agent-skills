@@ -88,7 +88,7 @@ with state("import") as sd:
 
     # decide add / close / keep / list through the CLI, all on the DB; a closed one stays (no 7-day delete).
     env = {"ORCA_TERMINAL_HANDLE": "term_0FAKE1"}
-    assert orch("decide", "add", "--title", "Next step", "--option", "Go", "--recommend", "1", "--if-no-answer", "Go",
+    assert orch("decide", "add", "--title", "Next step", "--option", "Go::ships now", "--recommend", "1", "--if-no-answer", "Go",
                 "--reason", "owner-asked", env=env) == (0, "d4", "")
     assert store.decision_record("d4")["body"] == "답이 없으면 Go · 근거: owner-asked"
     assert orch("decide", "keep", "d4", env=env)[0] == 0
@@ -140,7 +140,8 @@ with state("gate") as sd:
         except store.NotMigrated:
             pass
     assert fleet.relay_decisions() == [] and fleet.decision_items({}, None) == []
-    code, _, err = orch("decide", "add", "--title", "x", "--if-no-answer", "진행 못 함", "--reason", "owner-hands-only")
+    code, _, err = orch("decide", "add", "--title", "x", "--option", "a::b", "--recommend", "1", "--if-no-answer", "진행 못 함",
+                        "--reason", "owner-hands-only")
     assert code == 1 and "bin/orch db migrate" in err and not (sd / "decisions.json").exists(), err
     try:
         store.open_db()
@@ -273,7 +274,7 @@ with state("tx") as sd:
     t.join()
     # Many processes adding at once: every id once, every row with its event.
     procs = [subprocess.Popen([sys.executable, str(HERE / "prog.py"), "decide", "add", "--title", f"p{i}",
-                              "--if-no-answer", "진행 못 함", "--reason", "owner-asked"],
+                              "--option", "a::b", "--recommend", "1", "--if-no-answer", "진행 못 함", "--reason", "owner-asked"],
                               stdout=subprocess.PIPE, text=True) for i in range(8)]
     ids = sorted(p.communicate()[0].strip() for p in procs)
     assert all(p.returncode == 0 for p in procs) and ids == sorted(f"d{i}" for i in range(2, 10)), ids
@@ -700,10 +701,17 @@ with state("register") as sd:
     assert code == 0 and "진행 못 함" in out and len(store.decisions()) == before + 1, out
     before += 1
     # decide add holds the same gate before it writes anything.
-    for extra, why in (((), "근거 is missing"),(("--reason", "owner-asked"), "답이 없으면 is missing"),
-                       (("--if-no-answer", "B", "--reason", "owner-asked"), "답이 없으면 is the recommendation ('A')")):
-        code, _, err = orch("decide", "add", "--title", "고를까", "--option", "A::싸다", "--option", "B", "--recommend", "1", *extra)
-        assert code == 1 and why in err and "--if-no-answer" in err and len(store.decisions()) == before, (extra, err)
+    two = ("--option", "A::싸다", "--option", "B")
+    gate = ("--if-no-answer", "진행 못 함", "--reason", "owner-asked")
+    for args, why in (((*two, "--recommend", "1"), "근거 is missing"),
+                      ((*two, "--recommend", "1", "--reason", "owner-asked"), "답이 없으면 is missing"),
+                      ((*two, "--recommend", "1", "--if-no-answer", "B", "--reason", "owner-asked"),
+                       "답이 없으면 is the recommendation ('A')"),
+                      ((*two, *gate), "--recommend N, one of the --option numbers, is missing"),
+                      ((*two, "--recommend", "3", *gate), "--recommend N, one of the --option numbers, is missing"),
+                      ((*two, "--recommend", "2", *gate), "the recommended option needs its reason")):
+        code, _, err = orch("decide", "add", "--title", "고를까", *args)
+        assert code == 1 and why in err and "--if-no-answer" in err and len(store.decisions()) == before, (args, err)
     # Accepted, the gate's fields lead the body, so the page's one-line detail and the report both show them.
     (sd / "why.md").write_text("A is cheap.\n")
     code, picked, _ = orch("decide", "add", "--title", "고를까", "--option", "A::싸다", "--option", "B", "--recommend", "1",
@@ -716,8 +724,10 @@ with state("register") as sd:
     for raw in ("CSV\nformat", "x" * 130):
         code, multi, err = orch("decide", "add", "--title", "형식", "--option", raw + "::싸다", "--recommend", "1",
                                 "--if-no-answer", raw, "--reason", "owner-asked", env=ME)
-        body = store.decision_record(multi)["body"]
-        assert code == 0 and "\n" not in body and board.ask_line_of(body) == body, (raw, body, err)
+        rec = store.decision_record(multi)
+        body = rec["body"]
+        assert code == 0 and body == board.ask_line(rec["options"][0]["label"], "owner-asked") == board.ask_line_of(body), \
+            (raw, body, err)
         fleet.decision_close(multi, "dropped")
         before += 1
     # A reason may quote a field name: the fields are split off from the right.
