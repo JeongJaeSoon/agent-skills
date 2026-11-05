@@ -605,6 +605,7 @@ PR 을 맡는 스킬과 머지 주체:
 | `guard.warn.reset_hard` | warn | 커밋하지 않은 변경이 있는 저장소의 `git reset --hard` |
 | `guard.warn.run_download` | warn | `-D`·`--dir` 없는 `gh run download` |
 | `guard.warn.tailscale` | warn | 워커의 `tailscale serve`·`funnel` |
+| `guard.deliver_load` | warn | `hooks/lib/skillload.py`. 워커(Dispatch 또는 CLOSE·KEEP 카드)의 본 대화가 `deliver-ticket`을 로드하기 전에 작업 폴더(hook 입력의 `cwd`) 안 파일을 Edit·Write·MultiEdit·NotebookEdit한다. 로드하기 전까지 대상 편집마다 경고 한 줄이 붙고(상태 파일은 없다), `deny`는 그 편집을 막고 `ask`는 확인을 묻는다. 첫 프롬프트에 `LOAD: none` 행이 있는 읽기 전용 카드, `.git` 아래와 작업 폴더 밖 경로, 서브에이전트, 오케스트레이터·리드·사람이 연 세션은 대상이 아니다. 로드는 오류 없는 `Skill` 결과 또는 `/deliver-ticket` 명령이다. 결과가 아직 없거나 transcript를 시간 안에 읽지 못하면 모른 것으로 보고 통과시킨다 |
 | `orchestrate.ask_user_question` | deny | 오케스트레이터·리드·워커 본 대화의 AskUserQuestion. 서브에이전트와 일반 세션은 대상이 아니다 |
 | `orchestrate.wait_foreground` | deny | 오케스트레이터·리드가 `orch wait`, `orch inbox --wait`, `orch watch-cards`, `orca orchestration check\|inbox --wait`를 `run_in_background` 없이 실행, 또는 배경 대기를 `\| tail`·`\| head`로 자름. 워커의 `check --wait`는 대상이 아니다 |
 | `orchestrate.send_devnull` | deny | 오케스트레이터·리드·워커가 `orca orchestration send\|reply`의 출력을 `/dev/null`로 보냄. `2>/dev/null`만은 대상이 아니다 |
