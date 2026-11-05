@@ -67,11 +67,17 @@ def ensure_env(sub, argv):
 
 # ---------------------------------------------------------------- what is done already (reads only)
 
-def status():
+def _after_import():
+    """What the import just committed, read through a normal connection: peek_steps opens the file immutable, which
+    ignores a -wal that a reader still holding the DB keeps from being checkpointed, and would call a good import failed."""
+    return store.SCHEMA_VERSION, store.migrated_steps()
+
+
+def status(read=None):
     """("migrated" | "pending" | "conflict", detail), reading the DB without touching it (store.peek_steps)."""
     sd, p = fleet.state_dir(), store.path()
     try:
-        v, steps = store.peek_steps()
+        v, steps = (read or store.peek_steps)()
     except store.Refused as e:
         return "conflict", str(e)
     if v > store.SCHEMA_VERSION:
@@ -330,7 +336,7 @@ def run():
         return 1
     stop_server(plan)  # once more: a server that started between the first check and now is stopped before the import
     print(store.import_apply())
-    state, detail = status()
+    state, detail = status(_after_import)
     if state != "migrated":
         raise store.Refused(f"the import ended but the state reads {state}: {detail}")
     print("migration: " + ", ".join(f"{k} {v}" for k, v in store.migrated_steps().items()))

@@ -166,6 +166,17 @@ with world() as (w, sd):
     assert code == 0 and store.migrated_steps() == {"4a-decisions": "tombstoned", "4b-board": "tombstoned"}, (out, err)
     assert w.plan() == want
 
+# ---- a good import is not called failed because the immutable read cannot see a -wal a lingering reader holds open
+with world() as (w, sd):
+    real_peek = store.peek_steps
+    store.peek_steps = lambda: (0, {})  # what immutable=1 shows while the committed steps still sit in the -wal
+    try:
+        code, out, err = run()
+    finally:
+        store.peek_steps = real_peek
+    assert code == 0 and "orch board show: ok" in out and "the import ended but" not in err, (out, err)
+    assert store.migrated_steps() == {"4a-decisions": "tombstoned", "4b-board": "tombstoned"}
+
 # ---- a service that will not come back stays in the plan file, and the next run puts it back first
 with world() as (w, sd):
     want = w.plan()
