@@ -1482,10 +1482,17 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             # table lost is missing and one it wrote twice is a duplicate, whatever the lines handed to it said.
             by_name = {l["shown"]: l for l in mine if l["status"] is not None}
             written = [re.sub(r"^\*\*(.*)\*\*$", r"\1", re.sub(r"^└ ", "", row[1])) for row in table[1:]]
+            # A cut name is what the column's one cap makes of exactly one name that is not written whole. The cap is
+            # the width of the widest cut name or one more (a wide character may leave a column spare).
+            cut_names = [w for w in written if w not in by_name and w.endswith("…")]
+            origin = {}
+            for cap in ((max(map(table_width.text_width, cut_names)) + d for d in (0, 1)) if cut_names else ()):
+                found = {c: [n for n in by_name if n not in written and table_width.shown(n, cap) == c] for c in cut_names}
+                if all(len(v) == 1 for v in found.values()):
+                    origin = {c: v[0] for c, v in found.items()}
+                    break
             for name in written:
-                if name not in by_name and name.endswith("…"):  # a cut name is the head of one name that is not written whole
-                    heads = [n for n in by_name if n.startswith(name[:-1]) and n not in written]
-                    name = heads[0] if len(heads) == 1 else None
+                name = origin.get(name, name)
                 if name in by_name:
                     drawn(by_name[name])
             # Done on every open row the board can close; Ack on a ✅ row not yet acknowledged.

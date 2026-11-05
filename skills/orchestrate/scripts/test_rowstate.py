@@ -307,6 +307,12 @@ assert twin["duplicates"] == [] and twin["missing"] == [], (twin["duplicates"], 
 assert [l for l in twin["text"].splitlines() if HEAD + "a" in l and l.startswith("- ")] and \
        [l for l in twin["text"].splitlines() if HEAD + "b" in l and l.startswith("- ")], twin["text"]
 assert twin["width_ok"] is True
+# Names that differ only past a wide character cut to different heads, one a prefix of the other's original: each cut
+# name is placed with its own row.
+for rid, mid in (("odd-a", "가"), ("odd-b", "b")):
+    board.set_row(rid, title="a" * 25 + mid + "x" * 70, repo="octo/odd", status="moving", next="next step " * 20)
+odd = board.render(now=T, fill=True, periodic=False)
+assert odd["duplicates"] == [] and odd["missing"] == [], (odd["duplicates"], odd["missing"])
 # A quiet stage row is kept while its 지금 has work left (⏸️ too), or while the brief's judgment could not be read.
 old = {**stages.table(), "rows": [{**r, "created_at": "2026-01-01T00:00:00Z"} for r in stages.table()["rows"]]}
 assert [r["id"] for r in stages.current(old, T, 60, None, {"octo/app#5": "held"})[0]["rows"]] == ["s1"]
