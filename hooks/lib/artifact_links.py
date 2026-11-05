@@ -9,7 +9,7 @@ Settings, under `artifact-backup` in ~/.claude/agent-skills.json ($AGENT_SKILLS_
   - `guard.artifact_links` (a separate top-level key): `warn` (default) tells the sender once, `deny` blocks the reply
     or message that omits the backup link, `off` does nothing. It governs only the stateless check; the Stop hook
     blocks a reply that omits the links of a page this session published this turn whatever the level, because the
-    backup URL is certain right after publishing and a false positive is unlikely.
+    links owed are already fixed right after publishing, so a false positive is unlikely.
   - `categories`: [[name, regex], ...] checked in order against title + cwd; the first match groups the page in the index.
 The public index.jsonl and errors.log are kept in $AGENT_SKILLS_STATE/artifact-backup, outside the served folder: they
 hold session ids and local paths.
