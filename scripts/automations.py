@@ -279,7 +279,7 @@ class PreviewWatch:
                       else "끔 (watcher 가 연 serve 항목도 닫았다)")
 
 
-# ---------------------------------------------------------------- sync, pressure-watch, reap-hard, orch-dash (Orca automation, no agent)
+# ---------------------------------------------------------------- sync, pressure-watch, reap-hard, orch-dash, land-executor (Orca automation, no agent)
 
 SHELL_PROMPT = ("이 자동화는 precheck 가 주기 작업을 직접 실행하고 항상 건너뛰도록 만든 것이라 에이전트가 시작되지 않는다. "
                 "이 프롬프트가 실행됐다면 precheck 가 건너뛰지 않은 것이다: 아무것도 하지 않고 '정기 작업 precheck 이상' 이라고만 "
@@ -307,10 +307,11 @@ class ShellJob(OrcaJob):
     records how it ended and exits 1, so Orca skips the agent every time. A job that needs no model must not start one."""
 
     def __init__(self, name, what, argv, interval, default, ok=(0,), turned_off=None, clear_off=None, gate=None,
-                 timeout=SHELL_TIMEOUT_S):
+                 prepare=None, timeout=SHELL_TIMEOUT_S):
         self.name, self.job_name, self.what, self.default = name, f"agent-skills {name}", what, default
         self.argv, self.interval, self.ok, self.turned_off, self.clear_off = argv, interval, ok, turned_off, clear_off
         self.gate = gate  # () -> why this PC must not get the job yet, or None; checked only while it is unregistered
+        self.prepare = prepare  # () -> (code, message), run before the job is created or turned on
         self.timeout = timeout
 
     def stale(self):
@@ -325,6 +326,10 @@ class ShellJob(OrcaJob):
         return code, msg
 
     def enable(self, here):
+        if self.prepare:
+            code, msg = self.prepare()
+            if code:
+                return code, msg
         code, msg = self.enable_job(here)
         if not code and self.clear_off:
             self.clear_off()
@@ -429,6 +434,16 @@ def planned(key):
 PLANNED_CONFIG = None
 
 
+LAND_EXEC = REPO / "skills" / "orchestrate" / "scripts" / "land_exec.py"
+
+
+def land_setup():
+    """The land queue's table, created before the job is turned on so its first round finds it."""
+    p = subprocess.run([sys.executable, "-I", str(LAND_EXEC), "setup"], capture_output=True, text=True)
+    return p.returncode, ("" if not p.returncode else
+                          f"land_exec.py setup 실패, 켜지 않음: {(p.stderr or p.stdout).strip()[:200]}")
+
+
 def reap_hard_interval():
     import reap_hard  # not at import: it pulls in the whole guard stack
     return planned("reap-hard").get("interval") or reap_hard.config()["interval"]
@@ -458,6 +473,9 @@ SHELL_JOBS = (
     ShellJob("orch-dash", "10분마다 오케스트레이터 대시보드 서버를 확인해 내려갔으면 올리는 Orca automation(모델 없음, orch-dash ensure). "
              "읽기 위주이고 아무것도 지우지 않는다",
              ["python3", str(REPO / "skills" / "orchestrate" / "scripts" / "dash.py"), "ensure"], 600, True),
+    ShellJob("land-executor", "orchestrate.land_executor 가 켜진 repo 에서 `orch land` 가 남긴 머지 요청을 1분마다 모델 없이 다시 "
+             "검사해 머지하는 Orca automation(skills/orchestrate/references/landing.md). 설정 키를 켜는 것은 skills-config 로 따로 한다",
+             ["python3", str(LAND_EXEC), "round"], 60, False, prepare=land_setup),
 )
 
 

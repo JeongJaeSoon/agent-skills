@@ -16,7 +16,7 @@
 - 티켓 트래커: Linear 또는 Jira 어댑터(`use-tracker`). `tracker.adapter`가 없으면 Linear다.
 - 노트: Obsidian vault 또는 일반 Markdown 폴더(`use-notes`). 설정하지 않으면 노트를 쓰지 않고 멈추거나 묻는다([설정 전환 안내](configuration-migration.md)).
 - Orca: `orchestrate`, `handoff-ticket`, `dispatch-card`, Orca automation(`janitor`, `watch-prs`·`watch-mentions` 회차)이 쓴다. `deliver-ticket`은 Orca 카드 밖에서도 돈다. 스킬마다 Orca를 어디에 쓰는지는 [스킬 카탈로그](skills.md)의 그 스킬 절에 있다.
-- 동기화 작업과 `pressure-watch`·`reap-hard`·`orch-dash`는 Orca automation으로 돌므로 Orca 앱이 켜져 있는 동안만 돈다. macOS에서 `preview-watch`·`share-server`만 launchd를 쓴다. 예전 setup이 만든 LaunchAgent가 남아 있으면 `setup-pc` 점검이 알리고, 제거는 오너가 직접 한다([automation.md](automation.md#처음-설치할-때)).
+- 동기화 작업과 `pressure-watch`·`reap-hard`·`orch-dash`·`land-executor`는 Orca automation으로 돌므로 Orca 앱이 켜져 있는 동안만 돈다. macOS에서 `preview-watch`·`share-server`만 launchd를 쓴다. 예전 setup이 만든 LaunchAgent가 남아 있으면 `setup-pc` 점검이 알리고, 제거는 오너가 직접 한다([automation.md](automation.md#처음-설치할-때)).
 - 독립 리뷰와 브라우저 검증은 사용 가능한 리뷰어와 브라우저 자동화 도구로 한다. 특정 모델이나 별도 모델 플러그인은 필요하지 않다.
 
 ## 설치 보충
@@ -59,6 +59,7 @@ skills-sync setup disable janitor        # 하나 끄기. 어느 것이든 apply
 | `reap-hard` | on(보호 목록 파일이 있을 때) | Orca automation(에이전트 없음) | 15분마다 끝난 세션이 남긴 프로세스·창을 규칙으로 정리한다. 세션 순찰도 이 회차가 띄운다([reap-hard.md](reap-hard.md)) |
 | `orch-dash` | on | Orca automation(에이전트 없음) | 10분마다 대시보드 서버를 확인해 내려갔으면 올린다 |
 | `share-server` | off | macOS LaunchAgent | 공유 폴더를 127.0.0.1에서 Caddy로 읽기 전용 서빙한다. tailnet 공개는 하지 않는다([share-server.md](share-server.md)) |
+| `land-executor` | off | Orca automation(에이전트 없음) | `orchestrate.land_executor`가 켜진 repo에서 `orch land`가 남긴 머지 요청을 1분마다 모델 없이 다시 검사해 머지한다. agent 턴에서는 머지하지 않는다([landing.md](../skills/orchestrate/references/landing.md#land-executor)) |
 | `watch-prs` | on(`prs` 키가 있을 때) | Orca automation | `watch-prs` 스킬의 회차. 설정 키가 없으면 켜지 않는다 |
 | `watch-mentions` | on(`mentions` 키가 있을 때) | Orca automation | `watch-mentions` 스킬의 회차. 설정 키가 없으면 켜지 않는다 |
 

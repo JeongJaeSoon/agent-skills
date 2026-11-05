@@ -660,6 +660,146 @@ def view():
         return {"board": _board(db), "latest": latest(db), "decisions": decisions("open", db)}
 
 
+# ---------------------------------------------------------------- land requests (land_exec.py)
+
+# An optional step: NEEDS leaves it out, so nothing else waits on it, and only land_exec reads the table.
+LAND_STEP = "5-land-queue"
+LAND_OPEN = ("queued", "running")
+SCHEMA_LAND = (
+    """CREATE TABLE land_request (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  program TEXT NOT NULL, home TEXT NOT NULL, repo TEXT NOT NULL, pr INTEGER NOT NULL,
+  sha TEXT NOT NULL, base_sha TEXT, klass TEXT NOT NULL, requester TEXT,
+  status TEXT NOT NULL CHECK (status IN ('queued','running','merged','refused','superseded')),
+  code INTEGER, reason TEXT, merge_sha TEXT, audit TEXT, attempts INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, closed_at TEXT,
+  told_at TEXT,
+  CHECK ((status IN ('merged','refused','superseded')) = (closed_at IS NOT NULL))
+)""",
+    # Two programs homes may share a slug and a PR number; the home and repo keep their requests apart.
+    "CREATE UNIQUE INDEX land_request_open ON land_request(home, repo, program, pr) WHERE status IN ('queued','running')",
+)
+
+
+def land_setup_command():
+    return f"{main_checkout()}/bin/orch land-exec setup"
+
+
+def land_ready(db):
+    return db.execute("SELECT 1 FROM migration WHERE step=?", (LAND_STEP,)).fetchone() is not None
+
+
+def land_setup(by="land-exec setup"):
+    """Add the land_request table as a recorded step; a second run changes nothing. Returns what it did."""
+    with tx() as db:
+        if land_ready(db):
+            return "already set up"
+        for s in SCHEMA_LAND:
+            db.execute(s)
+        db.execute("INSERT INTO migration (step, ts, backup, sources, stage) VALUES (?,?,?,?, 'imported')",
+                   (LAND_STEP, now(), "", "[]"))
+        _event(db, "migration", LAND_STEP, "imported", by, None, {"tables": ["land_request"]})
+        return "created land_request"
+
+
+@contextlib.contextmanager
+def _land_tx():
+    with tx() as db:
+        if not land_ready(db):
+            raise NotMigrated(f"{path()}: the land queue is not set up: run {land_setup_command()}")
+        yield db
+
+
+def _land_row(r):
+    return None if r is None else {**dict(r), "audit": json.loads(r["audit"]) if r["audit"] else None}
+
+
+def land_put(program, home, repo, pr, sha, base_sha, klass, requester, by=None):
+    """(row, outcome): outcome is "same" when an open request names this sha, "busy" when the executor is running an
+    open request for another sha (nothing changes), else "new", after superseding a queued one for another sha."""
+    with _land_tx() as db:
+        old = db.execute("SELECT * FROM land_request WHERE home=? AND repo=? AND program=? AND pr=? "
+                         "AND status IN ('queued','running')", (home, repo, program, pr)).fetchone()
+        if old and old["sha"] == sha:
+            if requester and old["requester"] != requester:
+                db.execute("UPDATE land_request SET requester=?, updated_at=? WHERE id=?", (requester, now(), old["id"]))
+                _event(db, "land_request", str(old["id"]), "requester", by, {"requester": old["requester"]},
+                       {"requester": requester})
+            return _land_row(db.execute("SELECT * FROM land_request WHERE id=?", (old["id"],)).fetchone()), "same"
+        if old and old["status"] == "running":
+            return _land_row(old), "busy"
+        ts = now()
+        if old:
+            db.execute("UPDATE land_request SET status='superseded', reason=?, updated_at=?, closed_at=? WHERE id=?",
+                       (f"a request for {sha[:8]} replaced it", ts, ts, old["id"]))
+            _event(db, "land_request", str(old["id"]), "superseded", by, {"sha": old["sha"]}, {"sha": sha})
+        cur = db.execute("INSERT INTO land_request (program, home, repo, pr, sha, base_sha, klass, requester, status, "
+                         "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?, 'queued', ?, ?)",
+                         (program, home, repo, pr, sha, base_sha, klass, requester, ts, ts))
+        row = db.execute("SELECT * FROM land_request WHERE id=?", (cur.lastrowid,)).fetchone()
+        _event(db, "land_request", str(row["id"]), "queued", by, None, dict(row))
+        return _land_row(row), "new"
+
+
+def land_get(rid):
+    with _land_tx() as db:
+        return _land_row(db.execute("SELECT * FROM land_request WHERE id=?", (rid,)).fetchone())
+
+
+def land_rows(statuses=None, limit=200):
+    """Requests, oldest first when filtered by status (the executor's order), else the newest `limit`."""
+    with _land_tx() as db:
+        if statuses:
+            q = ",".join("?" * len(statuses))
+            rows = db.execute(f"SELECT * FROM land_request WHERE status IN ({q}) ORDER BY id", tuple(statuses))
+        else:
+            rows = db.execute("SELECT * FROM (SELECT * FROM land_request ORDER BY id DESC LIMIT ?) ORDER BY id", (limit,))
+        return [_land_row(r) for r in rows.fetchall()]
+
+
+def land_claim(rid, by=None):
+    """queued -> running, only if still queued: a supersede between the read and here wins."""
+    with _land_tx() as db:
+        cur = db.execute("UPDATE land_request SET status='running', attempts=attempts+1, updated_at=? "
+                         "WHERE id=? AND status='queued'", (now(), rid))
+        if cur.rowcount == 1:
+            _event(db, "land_request", str(rid), "running", by)
+        return cur.rowcount == 1
+
+
+def land_finish(rid, status, code=None, reason=None, merge_sha=None, audit=None, by=None):
+    """End a running request (merged, refused) or put it back in the queue (queued, with why it waits)."""
+    if status not in ("queued", "merged", "refused"):
+        raise ValueError(status)
+    with _land_tx() as db:
+        ts = now()
+        cur = db.execute("UPDATE land_request SET status=?, code=?, reason=?, merge_sha=COALESCE(?, merge_sha), "
+                         "audit=COALESCE(?, audit), updated_at=?, closed_at=? WHERE id=? AND status='running'",
+                         (status, code, (reason or "")[:1000] or None, merge_sha,
+                          json.dumps(audit, ensure_ascii=False, sort_keys=True) if audit is not None else None,
+                          ts, None if status == "queued" else ts, rid))
+        if cur.rowcount == 1 and status != "queued":
+            _event(db, "land_request", str(rid), status, by, None,
+                   {"code": code, "reason": reason, "merge_sha": merge_sha})
+        return cur.rowcount == 1
+
+
+def land_requeue_running(by=None):
+    """Put back rows a dead round left running. Only the holder of the round lock calls this."""
+    with _land_tx() as db:
+        ids = [r[0] for r in db.execute("SELECT id FROM land_request WHERE status='running'")]
+        db.execute("UPDATE land_request SET status='queued', updated_at=? WHERE status='running'", (now(),))
+        for rid in ids:
+            _event(db, "land_request", str(rid), "requeued", by)
+        return ids
+
+
+def land_told(rid):
+    """Mark a refusal as put in the dashboard inbox."""
+    with _land_tx() as db:
+        db.execute("UPDATE land_request SET told_at=? WHERE id=? AND told_at IS NULL", (now(), rid))
+
+
 # ---------------------------------------------------------------- what older code left
 
 def migrated_steps():
