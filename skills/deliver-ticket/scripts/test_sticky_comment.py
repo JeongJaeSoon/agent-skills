@@ -76,6 +76,11 @@ class StickyCommentTest(unittest.TestCase):
         p = self.run_script([{"id": 2, "body": f"{MARKER}\n\nhead {other}: ok"}], "--check", "7")
         self.assertEqual(p.returncode, 1, p.stdout)
 
+    def test_check_fails_on_another_sha_in_upper_case(self):
+        other = HEAD[:7] + "F" * 33
+        p = self.run_script([{"id": 2, "body": f"{MARKER}\n\nhead {other}: ok"}], "--check", "7")
+        self.assertEqual(p.returncode, 1, p.stdout)
+
     def test_check_passes_on_full_sha(self):
         p = self.run_script([{"id": 2, "body": f"{MARKER}\n\nhead `{HEAD}`: ok"}], "--check", "7")
         self.assertEqual(p.returncode, 0, p.stderr)

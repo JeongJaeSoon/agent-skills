@@ -44,7 +44,7 @@ if [ -n "$CHECK" ]; then
         "$TOKEN"*) echo "ok: the $MARKER comment on #$PR names head ${HEAD:0:8}"; exit 0 ;;
       esac
     fi
-  done < <(printf '%s\n' "$BODY" | grep -oE '[0-9a-f]+' || true)
+  done < <(printf '%s\n' "$BODY" | tr 'A-F' 'a-f' | grep -oE '[0-9a-f]+' || true)
   echo "stale: the $MARKER comment on #$PR does not name head ${HEAD:0:8}; rerun at this head and update it" >&2
   exit 1
 fi

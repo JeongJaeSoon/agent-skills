@@ -140,6 +140,8 @@ check("create, no config, Orca: in-review only, no obligation",
 check("create, no config, no Orca: silent", post("gh pr create --title x --body y", tid="o4", orca=False) == {})
 out = post("gh pr create --title x --body y; false", tid="o7", failed=True)
 check("create then a failure, no config: in-review still", ctx(out, "PostToolUseFailure") and rows() == [])
+check("negated create failed, no config: in-review still",
+      ctx(post("! gh pr create --title x --body y", tid="o9", failed=True), "PostToolUseFailure"))
 check("create alone failed, no config: silent", post("gh pr create --title x --body y", tid="o8", failed=True) == {})
 check("create --help, no config: silent", post("gh pr create --help", tid="o5") == {})
 reset({"guard": {"record_check": "off"}})
