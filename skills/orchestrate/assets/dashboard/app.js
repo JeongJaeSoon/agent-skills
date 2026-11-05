@@ -976,29 +976,32 @@ function conditionalFetch(url, have) {
   const etag = have ? POLL_ETAG[url] : null;
   return fetch(url, { cache: "no-store", headers: etag ? { "If-None-Match": etag } : {} });
 }
+// Parse first, then store the ETag with its data: an ETag kept for a body that failed to parse would 304 onto stale data.
 async function readConditional(url, r) {
-  if (r.status === 304) return null;
+  const data = await r.json();
   const etag = r.headers.get("ETag");
   if (etag) POLL_ETAG[url] = etag; else delete POLL_ETAG[url];
-  return { data: await r.json() };
+  return data;
 }
 
+let programsBusy = false; // two overlapping polls could commit an older body under a newer ETag
 async function pollPrograms() {
-  if (document.hidden) return; // the visibilitychange handler polls once when the tab comes back
+  if (document.hidden || programsBusy) return; // the visibilitychange handler polls once when the tab comes back
+  programsBusy = true;
   try {
     // A program page still draws the fleet tree in the sidebar; the fleet page polls that state itself.
     const [r, f] = await Promise.all([conditionalFetch("/api/programs", S.programs),
       isFleet() ? null : conditionalFetch("/api/fleet/state", S.fleet)]);
     if (!r.ok && r.status !== 304) throw new Error(r.status);
-    const p = await readConditional("/api/programs", r);
     let changed = false;
-    if (p) { S.programs = p.data; changed = true; }
+    if (r.status !== 304) { S.programs = await readConditional("/api/programs", r); changed = true; }
     if (f && f.status !== 304) {
-      if (f.ok) S.fleet = (await readConditional("/api/fleet/state", f)).data; else { S.fleet = null; delete POLL_ETAG["/api/fleet/state"]; }
+      if (f.ok) S.fleet = await readConditional("/api/fleet/state", f); else { S.fleet = null; delete POLL_ETAG["/api/fleet/state"]; }
       changed = true;
     }
     if (changed) renderSidebar();
   } catch (e) { S.down = true; setLive(); }
+  finally { programsBusy = false; }
 }
 
 // A server started before a merge keeps serving the old code (a new route answers 404) until it is restarted.
