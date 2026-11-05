@@ -2250,6 +2250,39 @@ for bad in (None, {}, {"dashboard": {"ticket_url": "javascript:alert(1)/"}}, {"d
 os.environ.pop("AGENT_SKILLS_CONFIG")
 shutil.rmtree(cfg_file.parent)
 
+# Reload marks: a session whose SessionStart record holds another hooks.json digest than the checkout's is "stale"; no
+# record, an offline row or an unreadable reference is "unknown", never "stale".
+plugin = pathlib.Path(tempfile.mkdtemp(prefix="test-reload-"))
+(plugin / "hooks").mkdir()
+(plugin / "hooks/hooks.json").write_text("{}")
+sha = fleet.roles.hooks_sha(plugin)
+for h, loaded in (("term_same", sha), ("term_old", "0" * 64)):
+    fleet.roles.record_terminal(h, "s-" + h, "/w", 1.0, {"plugin_version": None, "hooks_sha": loaded})
+fleet.roles.record_terminal("term_bare", "s-bare", "/w", 1.0, {})
+fleet.roles.record_terminal("term_other", "s-gone", "/w", 1.0, {"plugin_version": None, "hooks_sha": "0" * 64})
+marks = {k: {"phase": ph, "path": f"/w/{k}", "terminals": [{"handle": h}]} for k, ph, h in (
+    ("same", "idle", "term_same"), ("old", "working", "term_old"), ("bare", "idle", "term_bare"),
+    ("none", "idle", "term_missing"), ("off", "offline", "term_old"), ("shell", "open", "term_old"),
+    ("moved", "idle", "term_other"))}
+# Every row but the shell and the offline one has a live Claude session in its worktree; "moved" runs s-live, while
+# the terminal's record names s-gone, a session that started there earlier.
+live = {"s-term_same": "/w/same", "s-term_old": "/w/old", "s-bare": "/w/bare", "s-x": "/w/none", "s-live": "/w/moved/sub"}
+fleet.reload_marks(marks, live, plugin)
+assert {k: v["reload"] for k, v in marks.items()} == {"same": "ok", "old": "stale", "bare": "unknown", "none": "unknown", "off": "none",
+                                                      "shell": "none", "moved": "unknown"}, marks
+fleet.reload_marks(marks, live, plugin / "missing")
+assert {v["reload"] for v in marks.values()} == {"none"}, "an unreadable reference marks nothing"
+fleet.reload_marks(marks, None, plugin)
+assert {v["reload"] for v in marks.values()} == {"none"}, "no live-session list, no mark"
+fleet.roles.terminal_file("term_same").chmod(0)
+fleet.reload_marks(marks, live, plugin)
+assert marks["same"]["reload"] == "none" and marks["old"]["reload"] == "stale", "an unreadable record leaves its own row unmarked"
+fleet.roles.terminal_file("term_same").chmod(0o644)
+fleet.reload_marks(marks, live, plugin)
+assert marks["same"]["reload"] == "ok"
+assert all(s["reload"] in ("ok", "stale", "unknown", "none") for s in st["sessions"]), "the collector writes the mark on every session"
+shutil.rmtree(plugin)
+
 # P1a: a PR keeps every session that claimed it (`session` is still the first), and a Run says its coordinator's terminal.
 st = f.tick(force=True)
 assert st["prs"] and all("candidates" in p for p in st["prs"]), st["prs"]
@@ -2263,5 +2296,10 @@ for label in ("branch asked just now", "branch answer cached"):  # the first tic
     pr41 = next(p for p in twin_fleet.tick(force=True)["prs"] if p["key"] == "acme/launchpad#41")
     assert pr41["session"] == "wt-login" and pr41["candidates"] == ["wt-login", "wt-login-twin"], (label, pr41["session"], pr41["candidates"])
 world.worktrees.remove(twin)
+
+# #395 and #396 share compose(): one state carries both the session reload mark and the PR candidates / run coordinator.
+both = f.tick(force=True)
+assert all(s["reload"] in ("ok", "stale", "unknown", "none") for s in both["sessions"]), "reload on every session"
+assert both["prs"] and all("candidates" in p for p in both["prs"]) and all("coordinator" in r for r in both["runs"]), "P1a fields kept"
 
 print("test_fleet: ok")

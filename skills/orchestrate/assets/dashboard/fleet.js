@@ -1529,6 +1529,17 @@ function briefCell(s) {
 
 // The one-cell model mark the collector wrote (fleet.py model_tags): O, S or H, with `!` when off orchestrate.models.
 const modelCell = (s) => modelMark(s.model_tag, s.model);
+// The collector's `reload` (fleet.py reload_marks): "stale" is a session that loaded another hooks/hooks.json than the
+// one on disk, so it runs without the newer hooks and cannot say so; "unknown" is no record, which is not stale. An
+// offline row shows neither.
+const RELOAD_MARK = {
+  stale: ["reload", "warn", "Loaded an older hooks/hooks.json than the checkout has now. Restart this session (claude --continue) to get the newer hooks."],
+  unknown: ["no record", "", "No SessionStart record of the hooks this session loaded, so whether it needs a reload is not known."],
+};
+const reloadCell = (s) => {
+  const m = s.phase !== "offline" && RELOAD_MARK[s.reload];
+  return m ? ` <span class="reload-mark" title="${esc(m[2])}">${tag(m[0], m[1])}</span>` : "";
+};
 // A lead's rows fold on the Sessions page. Which leads are folded is this browser's, kept across reloads when storage
 // works; F.leadFold holds it for the page either way, so a redraw keeps it and blocked storage still lets it fold.
 const FOLD_KEY = "orch-dash:lead-fold";
@@ -1602,7 +1613,7 @@ function fleetSessions(st) {
       foldedAway.push(...subRowIds(s).filter((_, i) => s.subagents[i].stale));
     }
     return `<tr${away ? " hidden" : ""} id="row-${domId(s.id)}"><td>${name}</td>
-      <td>${kindTag(st, s)}</td><td>${esc(s.phase)}${board}${modelCell(s)}</td>
+      <td>${kindTag(st, s)}</td><td>${esc(s.phase)}${board}${modelCell(s)}${reloadCell(s)}</td>
       <td>${tickets}</td><td>${prCell}</td><td>${briefCell(s)}</td><td class="num">${badge(s.unread, s.missed)}</td><td class="num when">${relSpan(s.last_activity)}</td>
       <td><div class="pb">${projBadge(s.project)}<span class="cut mono dim" title="${esc(s.branch || "")}">${esc(s.branch || "")}</span></div></td></tr>`
       + subagentRows(s, d, away, !doneOpen);
@@ -1612,7 +1623,7 @@ function fleetSessions(st) {
       aria-label="${doneOpen ? "Hide" : "Show"} finished sessions and stale subagents"><span class="chev" aria-hidden="true"></span></button><span class="muted">Finished · ${esc(sum)}</span></td></tr>` : "";
   return `<div class="view-head"><div><h2>Sessions</h2><p>Every Orca worktree, placed under the orchestrator or lead whose run dispatched it, else under its Orca parent, else under the root. A lead is a session under the root with its own run; the sessions under it are its workers. Ticket is the card's own link, else an id in the session name, branch or brief row. Brief is the session's row from the Brief page. PR and the board column (shown when not in-progress) are the card's own Orca fields. A subagent a session started sits under it, dimmed. An offline worker whose PR merged, and a subagent with no stop recorded for hours, wait in the Finished line. The table scrolls sideways; a long value is cut to one line, whole on hover.</p></div>${phaseLegend()}</div>
     ${projectChips(st)}<div class="card table-wrap"><table class="sess"><colgroup><col class="c-name"><col class="c-kind"><col class="c-phase"><col class="c-tk"><col class="c-pr"><col class="c-brief"><col class="c-need"><col class="c-act"><col class="c-pb"></colgroup>
-      <thead><tr><th>Session</th><th>Kind</th><th title="After the phase: the model of the session's last assistant row, O opus, S sonnet, H haiku. A ! means orchestrate.models for its role says another.">Phase · model</th><th>Ticket</th><th>PR</th><th>Brief</th><th class="num">Needs you</th><th class="num">Active</th><th>Project · branch</th></tr></thead><tbody>${rows}${doneRow}</tbody></table></div>
+      <thead><tr><th>Session</th><th>Kind</th><th title="After the phase: the model of the session's last assistant row, O opus, S sonnet, H haiku. A ! means orchestrate.models for its role says another. Then reload: the session loaded older hooks than the checkout has; no record: nothing recorded, so not known.">Phase · model</th><th>Ticket</th><th>PR</th><th>Brief</th><th class="num">Needs you</th><th class="num">Active</th><th>Project · branch</th></tr></thead><tbody>${rows}${doneRow}</tbody></table></div>
     ${holdsCard(st)}`;
 }
 
