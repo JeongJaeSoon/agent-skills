@@ -266,8 +266,11 @@ def main():
             except OSError:
                 pass
         entry = resolve(event, record)
-        # The agent_type marks an --agent role, which outranks a ROLE line declared later (roles.role_of).
-        roles.record_resolved(session, entry and {**entry, "agent_type": event.get("agent_type")})
+        # What roles.role_of needs to redo resolve() later against a ROLE line declared since: the --agent type and
+        # the lead slug the title named.
+        by_title = roles.title_role(event.get("session_title")) or {}
+        roles.record_resolved(session, entry and {**entry, "agent_type": event.get("agent_type"),
+                                                  "title_slug": by_title.get("slug") if by_title.get("role") == "lead" else None})
         try:
             register(event, session, entry, record)
         except OSError:

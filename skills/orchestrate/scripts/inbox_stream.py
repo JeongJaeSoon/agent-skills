@@ -345,7 +345,10 @@ def hold(me, seconds):
     with contextlib.suppress(OSError):
         if seconds > 0:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(str(time.time() + seconds))
+            # Replaced whole: a write in place is empty for a moment, which holding() would read as no hold.
+            tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+            tmp.write_text(str(time.time() + seconds))
+            os.replace(tmp, path)
         else:
             path.unlink(missing_ok=True)
 

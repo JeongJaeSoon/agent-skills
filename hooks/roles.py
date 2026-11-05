@@ -240,8 +240,10 @@ def role_of(session):
     except (OSError, ValueError):
         saved = None
     saved = saved if isinstance(saved, dict) and saved.get("role") in ("orchestrator", "lead") else None
-    entry = {k: v for k, v in (saved or {}).items() if k != "agent_type"} or None
+    entry = {k: v for k, v in (saved or {}).items() if k not in ("agent_type", "title_slug")} or None
     if saved and AGENTS.get(saved.get("agent_type")):
+        if entry["role"] == "lead":  # resolve()'s slug: the title's, else the ROLE record's as it stands now
+            return {"role": "lead", "slug": saved.get("title_slug") or (record or {}).get("slug")}
         return entry
     if record and record.get("role") in ("orchestrator", "lead"):
         return record

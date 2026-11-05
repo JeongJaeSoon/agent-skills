@@ -76,13 +76,20 @@ assert not got["ready"] and "holds mail" in got["reason"], got
 inbox_stream.hold(hold_handle, 0)
 # A session with no ROLE record but a role SessionStart resolved (an --agent lead) still gets a key.
 L = "00000000-0000-4000-8000-000000000002"
-roles.record_resolved(L, {"role": "lead", "slug": "app", "agent_type": "agent-skills:lead"})
+roles.record_resolved(L, {"role": "lead", "slug": "app", "agent_type": "agent-skills:lead", "title_slug": "app"})
 assert handoff.role_key(L) == "lead:app"
 # resolve()'s order: an --agent role outranks a ROLE line declared later; `ROLE: none` outranks both.
 (roles.roles_dir() / f"{L}.json").write_text('{"role": "orchestrator"}')
 assert handoff.role_key(L) == "lead:app"
 (roles.roles_dir() / f"{L}.json").write_text('{"role": "none"}')
 assert handoff.role_key(L) is None
+# An --agent lead started with no slug in its title takes the slug its ROLE line declares later, as resolve() does.
+roles.record_resolved(L, {"role": "lead", "slug": None, "agent_type": "agent-skills:lead", "title_slug": None})
+(roles.roles_dir() / f"{L}.json").write_text('{"role": "lead", "slug": "web"}')
+assert handoff.role_key(L) == "lead:web"
+assert roles.role_of(L) == roles.resolve({"agent_type": "agent-skills:lead"}, roles.declared(L))
+roles.record_resolved(L, {"role": "lead", "slug": "app", "agent_type": "agent-skills:lead", "title_slug": "app"})
+assert handoff.role_key(L) == "lead:app", "the title's slug wins, as in resolve()"
 # A title role (no agent_type) gives way to a declared orchestrator or lead.
 roles.record_resolved(L, {"role": "lead", "slug": "app", "agent_type": None})
 (roles.roles_dir() / f"{L}.json").write_text('{"role": "orchestrator"}')

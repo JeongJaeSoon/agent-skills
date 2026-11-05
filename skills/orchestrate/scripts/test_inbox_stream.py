@@ -210,6 +210,17 @@ assert ist.holding(ME)
 ist.time.time = lambda: real_time() + 600 + ist.TICK_S * 3
 assert not ist.holding(ME), "a dead stream's mark expires"
 ist.time.time = real_time
+# Extending a mark never leaves the file empty or missing for a reader in between.
+real_write = ist.pathlib.Path.write_text
+seen_mid = []
+def watching(self, data, *a, **kw):
+    self.open("w").close()  # what write_text does first: the file it writes is empty now
+    seen_mid.append(ist.holding(ME))
+    return real_write(self, data, *a, **kw)
+ist.pathlib.Path.write_text = watching
+ist.hold(ME, 60)
+ist.pathlib.Path.write_text = real_write
+assert seen_mid == [True] and ist.holding(ME) and not list(ist.hold_path(ME).parent.glob("*.tmp")), seen_mid
 ist.hold(ME, 0)
 # A take that fails before anything is printed leaves no mark behind.
 s, orca, out, clock = stream([])
