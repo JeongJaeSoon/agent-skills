@@ -85,7 +85,8 @@ assert re.findall(r"^📋 (.*)$", tg, re.M) == headings, tg
 
 
 # 2. Rows by status: heads with their sub-rows as one block, the block at the rank of its best row, sub-rows sorted too.
-block = text[text.index("**acme/app"):text.index("**acme/zed")]
+full = json.loads(ok("brief", "render", "--periodic", "--now", NOW, "--json"))["full"]  # tables with every cell whole
+block = full[full.index("**acme/app"):full.index("**acme/zed")]
 rows = [l for l in block.splitlines() if l.startswith("| ") and "리드/Phase" not in l]
 marks = [r.split("|")[1].strip() + " " + r.split("|")[2].strip().removeprefix("└ ") for r in rows]
 assert marks == ["🙋 리드A", "🙋 내일", "❔ gap 빈일", "🔄 move 도는일", "⏳ 남일", "⏸️ held 멈춘일", "✅ 끝난일",

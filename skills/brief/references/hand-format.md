@@ -36,9 +36,9 @@ A report sent on a schedule (a heartbeat, a cron or `/loop` round, a "report eve
    - Name: the lead or phase. Phases waiting in the same state may share a row (`ph4 · ph5`).
    - PR: its PR as a link and the PR's state from the PR list, or `—` when it has none. Merged: the merge commit's first 7 characters (`[#12](https://…) a1b2c3d`); closed: `닫힘`; open: what stands before the merge, in this order — `초안`, `❗DIRTY`, `❗리뷰` (a required review missing), `수정요청`, `CI✗`, `CI…`, `BEHIND`, `BLOCKED` — or `✓` when it can merge (`열림` while GitHub has not computed it). `❗` marks what a person must resolve: bold is kept for changed rows. A PR whose base is not the section's adds its own (`[#50](https://…) ❗DIRTY→main`). Under the legend, one line `PR: ❗ 사람이 풀 것 · …` explains the marks the tables use.
    - Progress: an 8-cell bar and N/M from the Progress rule above, and nothing else (`██████░░ 6/8`, filled cells = round(8·N/M)). M is the item's own stage count, so it changes with the item (`3/4`); `—` when there is no basis. Nothing fills it but `orch board set --progress`, so a table where no row has a bar leaves the column out (`| | 리드/Phase | PR | 다음 | 세션 |`).
-   - Session: whether a session runs the row now — `작업 중` (its agent works, or its turn ended under 15 minutes ago), `멈춤` (a prompt waits on a person, or its turn ended 15 minutes ago or more) or `세션 없음` (it ended, its agent exited, or no session is linked) — and which: `작업 중 · <worktree name>`, the name cut at 12 characters and left out when the row's name already holds it. While the dashboard runs, the state word links to that session's page, which opens only on this machine. On Telegram the name is whole and there is no link. A row is linked by its Orca worktree, never by a terminal handle, which a restart changes; a phase or sub-task with no session of its own takes its lead's. `—` on a ✅ row and a row folding several PRs.
+   - Session: whether a session runs the row now — `작업 중` (its agent works, or its turn ended under 15 minutes ago), `멈춤` (a prompt waits on a person, or its turn ended 15 minutes ago or more) or `세션 없음` (it ended, its agent exited, or no session is linked) — and which: `작업 중 · <worktree name>`, the whole name, left out when the row's name already holds it. While the dashboard runs, the state word links to that session's page, which opens only on this machine. On Telegram the name is whole and there is no link. A row is linked by its Orca worktree, never by a terminal handle, which a restart changes; a phase or sub-task with no session of its own takes its lead's. `—` on a ✅ row and a row folding several PRs.
 
-   - Next: the row's next stage. A row waiting on the owner, another person or a condition points to the list that names what it waits on: `↑ 오너` (item 2), `↓ 대기` (item 6), `↓ 보류` (item 7); a row its to-do holds reads `→ 📅 할 일`. A 🔴 row reads `재개·정리`. A next that only restates the session (`작업 중`, `턴 종료`) on a row with a session is left to the 세션 column, so the cell keeps only how stale it is, or `—`. The cell is cut to fit like a name, its whole text in the numbered list under the table.
+   - Next: the row's next stage. A row waiting on the owner, another person or a condition points to the list that names what it waits on: `↑ 오너` (item 2), `↓ 대기` (item 6), `↓ 보류` (item 7); a row its to-do holds reads `→ 📅 할 일`. A 🔴 row reads `재개·정리`. A next that only restates the session (`작업 중`, `턴 종료`) on a row with a session is left to the 세션 column, so the cell keeps only how stale it is, or `—`. The cell is never cut.
 
    Every open row shows once, in its table, whatever its status; the lists hold reference lines that point back to it, never a second copy of the row. `orch brief render` decides each row's status and where it goes in one place (`scripts/rowstate.py` in the orchestrate skill), and the dashboard and the stage table read the same result.
 
@@ -93,7 +93,7 @@ An illustrative shape (the items are made up):
 ### Terminal
 
 - Markdown tables where items share columns (item, state, evidence). In progress with several items is one table, `| 작업 | 상태 | 다음 |`: 상태 is what is done so far, with its evidence; 다음 is the next event and who moves it. A `진행` column (§1 Progress) goes after 작업 only when the items have a basis for one, and a child item is a row under its parent, named `ㄴ <name>`. Items that ship through PRs and deploys still take this table, with the stage pointer (§1) under the sections; a periodic report has one table per repository (below).
-- A table fits in 78 columns as Claude Code draws it (an 80-column terminal less the 2-column gutter in front of each reply line), or it wraps and the columns break apart. Count Hangul and emoji as two columns each, and add three per column for borders and padding. In the periodic table only a long name or 다음 cell is cut, to `…[n]` and only where that saves at least the mark's width, with its whole text as `- [n] …` right under the table, and a table its other cells alone make wider than 78 overflows uncut and the render reports it. In other tables, detail that does not fit goes in a one-line footnote under the table (`¹ …`), not in the cell. `python3 scripts/table_width.py < draft.md` (in this skill's directory) prints each table's width.
+- A table fits in 78 columns as Claude Code draws it (an 80-column terminal less the 2-column gutter in front of each reply line), or it wraps and the columns break apart. Count Hangul and emoji as two columns each, and add three per column for borders and padding. Never cut a name or a reason to fit (cut to the same head in every row, they tell nothing, and a numbered list under the table breaks the reading); a periodic table wider than 78 is not drawn: write each row as one whole line (`- 🔄 name — PR · next · session`) instead, as the renderer does. In other tables, detail that does not fit goes in a one-line footnote under the table (`¹ …`), not in the cell. `python3 scripts/table_width.py < draft.md` (in this skill's directory) prints each table's width.
 - Decision needed, Only you and Held, and In progress when it is not a table, each start with a bold lead and take one line per item, the first item on the lead line and each further item below it after a blank line: `❓ **결정 필요** — 1. 질문: 선택지 → 추천: X — 이유 · 답이 없으면 …`, `🙋 **지금 오너가 할 일** — 할 일 · 어디서 → 풀리는 작업`, `🔄 **진행 중** — 할 일 · 담당 · 다음: 이벤트`, `⏳ **다른 사람 대기** — 누구 · 무엇 · 언제부터 → 작업 · 다음: 리마인드`, `⏸️ **보류** — 조건 → 할 일`; a periodic report takes the forms in §1 Periodic report, where 카드 없는 일, 다른 사람 대기, 지금 오너가 할 일 and 보류 are lists under their lead line. Leave a blank line between lines that must stay separate; markdown joins adjacent lines.
 - `file:line` for code, `owner/repo#123` for PRs and issues, so both are clickable.
 - The same sections and the same numbering of decisions.
@@ -139,17 +139,14 @@ An illustrative periodic report (the items are made up):
 | | 리드/Phase | PR | 진행 | 다음 | 세션 |
 |---|---|---|---|---|---|
 | 🙋 | 알림 정리 | [#50](https://example.test/50) ❗DIRTY | ██████░░ 3/4 | ↑ 오너 | 멈춤 |
-| 🔄 | └ 문구 | [#54](https://example.test/54) CI✗→dev | ████░░░░ 2/4 | CI…[1] | 작업 중 |
+| 🔄 | └ 문구 | [#54](https://example.test/54) CI✗→dev | ████░░░░ 2/4 | CI 재실행 | 작업 중 |
 | ⏳ | └ A 대기 | [#51](https://example.test/51)·#52·#53→dev | ██████░░ 3/4 | ↓ 대기 | — |
 | 🔄 | 검색 개선 ph3 | — | ███░░░░░ 3/8 | — | 작업 중 |
 | 🔄 | └ 정렬 | [#45](https://example.test/45) CI… | ████░░░░ 4/8 | CI 대기 | 작업 중 |
 | 🔄 | └ **w2 색인** | — | ██░░░░░░ 2/8 | PR 작성 | 멈춤 |
-| ⏸️ | 검색 개선 …[2] | — | ░░░░░░░░ 0/8 | ↓ 보류 | 작업 중 |
+| ⏸️ | 검색 개선 ph4 | — | ░░░░░░░░ 0/8 | ↓ 보류 | 작업 중 |
 | ✅ | 검색 개선 ph1 | [#40](https://example.test/40) a1b2c3d | ████████ 8/8 | — | — |
 | ✅ | **검색 개선 ph2** | [#42](https://example.test/42) 9f8e7d6 | ████████ 8/8 | — | — |
-
-- [1] CI 재실행
-- [2] 검색 개선 ph4 · ph5
 
 - 🙋 2건 오너 리뷰 — 분야 로그·대시보드
 

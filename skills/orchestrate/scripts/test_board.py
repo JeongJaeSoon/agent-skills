@@ -215,39 +215,24 @@ PR: ❗ 사람이 풀 것 · CI✗ CI 실패 · CI… CI 진행 · 7자리=머�
 
 **acme/web → feature/notify**
 
-| | 리드/Phase | PR | 진행 | 다음 | 세션 |
-|---|---|---|---|---|---|
-| 🙋 | 알림 정리 | [#50](https://example.test/50) ❗DIRTY→main | ██████░░ 3/4 | ↑ 오너 | 작업 중 |
-| 🔄 | └ 문구 다듬…[1] | [#54](https://example.test/54) ❗리뷰 CI✗ | ████░░░░ 2/4 | CI…[2] | 작업 중 |
-| ⏳ | └ rev-a 대기 | [#51](https://example.test/51)·#52·#53 | ██████░░ 3/4 | ↓ 대기 | — |
-| 🔄 | 검색 개선 ph3 | — | ███░░░░░ 3/8 | 하…[3] | 작업 중 |
-| 🔄 | └ w2 색인 | — | ██░░░░░░ 2/8 | PR…[4] | 작업 중 |
-| 🔄 | └ 정렬 | [#45](https://example.test/45) CI✗→main | ████░░░░ 4/8 | CI…[5] | 작업 중 |
-| ⏸️ | 검색 개선 …[6] | — | ░░░░░░░░ 0/8 | ↓ 보류 | 작업 중 |
-| ✅ | **검색 개선 ph2** | [#42](https://example.test/42) 42c0ffe→main | ████████ 8/8 | — | — |
-
-- [1] 문구 다듬기와 길이 정리
-- [2] CI 재실행 뒤 리뷰 의뢰 다시 보내기 · 워커
-- [3] 하위 3건 · 워커
-- [4] PR 작성 · 워커
-- [5] CI 재실행 · 워커
-- [6] 검색 개선 ph4 · ph5
+- 🙋 알림 정리 — [#50](https://example.test/50) ❗DIRTY→main · ██████░░ 3/4 · ↑ 오너 · 작업 중
+- 🔄 └ 문구 다듬기와 길이 정리 — [#54](https://example.test/54) ❗리뷰 CI✗ · ████░░░░ 2/4 · CI 재실행 뒤 리뷰 의뢰 다시 보내기 · 워커 · 작업 중
+- ⏳ └ rev-a 대기 — [#51](https://example.test/51)·#52·#53 · ██████░░ 3/4 · ↓ 대기
+- 🔄 검색 개선 ph3 — ███░░░░░ 3/8 · 하위 3건 · 워커 · 작업 중
+- 🔄 └ w2 색인 — ██░░░░░░ 2/8 · PR 작성 · 워커 · 작업 중
+- 🔄 └ 정렬 — [#45](https://example.test/45) CI✗→main · ████░░░░ 4/8 · CI 재실행 · 워커 · 작업 중
+- ⏸️ 검색 개선 ph4 · ph5 — ░░░░░░░░ 0/8 · ↓ 보류 · 작업 중
+- ✅ **검색 개선 ph2** — [#42](https://example.test/42) 42c0ffe→main · ████████ 8/8
 
 ✅ 그 전 완료 1건 (대시보드)
 
 **acme/ops → main**
 
-| | 리드/Phase | PR | 진행 | 다음 | 세션 |
-|---|---|---|---|---|---|
-| 🔴 | 정리 작업 | — | ███░░░░░ 1/3 | 재개…[1] | 세션 없음 |
-| — | 검색 개선 | — | — | — | — |
-| 🔄 | └ 재색인 | [#88](https://example.test/88)⚠️ ❗리뷰 CI… | ██░░░░░░ 2/8 | 권한…[2] | 작업 중 |
-| ⏳ | 분류 | — | — | 에이…[3] | 작업 중 |
-| ⏳ | └ rev-b 대기 | [#61](https://example.test/61)·#62 | — | ↓ 대기 | — |
-
-- [1] 재개·정리 · 3h 전
-- [2] 권한 · 결정 1
-- [3] 에이전트 조치 필요: 누구 대기인지 기록 없음
+- 🔴 정리 작업 — ███░░░░░ 1/3 · 재개·정리 · 3h 전 · 세션 없음
+- — 검색 개선
+- 🔄 └ 재색인 — [#88](https://example.test/88)⚠️ ❗리뷰 CI… · ██░░░░░░ 2/8 · 권한 · 결정 1 · 작업 중
+- ⏳ 분류 — 에이전트 조치 필요: 누구 대기인지 기록 없음 · 작업 중
+- ⏳ └ rev-b 대기 — [#61](https://example.test/61)·#62 · ↓ 대기
 
 - 🙋 2건 오너 리뷰 — 분야 로그·대시보드
 
@@ -344,19 +329,25 @@ assert out["stale"] == ["ghost"] and out["width_ok"] is True
 
 # A PR whose state moves bolds its row; a saved table from before PR states were kept bolds nothing for them.
 prs_json = json.loads((state / "prs.json").read_text())
+merge_state = prs_json["prs"]["acme/web#45"]["detail"].get("merge_state")
 prs_json["prs"]["acme/web#45"]["detail"]["merge_state"] = "DIRTY"
 (state / "prs.json").write_text(json.dumps(prs_json))
-out = json.loads(ok("brief", "render", "--periodic", "--now", NOW, "--json"))
+out = json.loads(orch("brief", "render", "--periodic", "--now", NOW, "--json")[1])
 assert out["changed"] == ["search/ph3/sort", "search/ph2"], out["changed"]
-assert "| 🔄 | └ **정렬** | [#45](https://example.test/45) ❗DIRTY CI✗→main |" in out["text"], out["text"]
+# The longer PR cell leaves no room to keep `검색 개선 ph3` and `검색 개선 ph4 · ph5` apart, and two names are never cut
+# alike: that section goes out as one whole line per row instead of a table, still within the width check.
+assert out["width_ok"] is True and "| 검색 개선 ph4 · ph5 |" not in out["text"], out["text"]
+assert any(l.startswith("- ") and "검색 개선 ph4 · ph5" in l and "…" not in l for l in out["text"].splitlines()), out["text"]
+assert "- 🔄 └ **정렬** — [#45](https://example.test/45) ❗DIRTY CI✗→main" in out["text"], out["text"]
+assert "| 검색 개선 ph4 · ph5 |" in out["full"], "the dashboard copy stays a table with whole cells"
 # A folded PR keeps a base other than its section's in the cell, and moving it bolds the row. The section's base turns
-# to main here, so a PR cell then names the long branch: too wide to fit, reported, and written whole.
+# to main here, so a PR cell then names the long branch: too wide for a table, so the rows go out as whole lines.
 prs_json["prs"]["acme/web#52"]["detail"]["base"] = "main"
 (state / "prs.json").write_text(json.dumps(prs_json))
 code, raw, err = orch("brief", "render", "--periodic", "--now", NOW, "--json")
-assert code == 1 and "78 columns" in err, (code, err)
+assert code == 0 and err == "", (code, err)
 out = json.loads(raw)
-assert "notify/~rev-a" in out["changed"] and "[#51](https://example.test/51)·#53→feature/notify·#52 |" in out["text"], out["text"]
+assert "notify/~rev-a" in out["changed"] and "[#51](https://example.test/51)·#53→feature/notify·#52" in out["text"], out["text"]
 # The folded rows are placed with the reviewer row that stands for them; the reviewer row itself is no item.
 assert out["duplicates"] == [] and out["missing"] == [], (out["duplicates"], out["missing"])
 last = json.loads((tmp / "brief-last" / "top-level.json").read_text())
@@ -365,6 +356,7 @@ for r in last["rows"].values():
 (tmp / "brief-last" / "top-level.json").write_text(json.dumps(last))
 assert json.loads(orch("brief", "render", "--periodic", "--now", NOW, "--json")[1])["changed"] == ["search/ph2"]
 prs_json["prs"]["acme/web#52"]["detail"]["base"] = "feature/notify"
+prs_json["prs"]["acme/web#45"]["detail"]["merge_state"] = merge_state  # the longer cell was for the two checks above
 (state / "prs.json").write_text(json.dumps(prs_json))
 
 assert board.pr_state({"state": "OPEN", "merge_state": "BLOCKED", "ci": "success"}) == "BLOCKED"
@@ -413,12 +405,15 @@ prs_json["prs"].update(dict([pr("acme/wide#1201", merge_state="DIRTY", decision=
 (state / "prs.json").write_text(json.dumps(prs_json))
 code, wide, err = orch("brief", "render", "--periodic", "--now", NOW, "--json", "--scope", "넓은 표")
 wide = json.loads(wide)
-assert code == 1 and wide["width_ok"] is False and err == "a table is wider than 78 columns", (code, err, wide)
-assert ("| 🔴 | 긴 이름의 리드 작업 | [#1201](https://example.test/1201) ❗DIRTY→release/2026-10 | ████████ 100/100 "
-        "| 재개·정리 | 세션 없음 |") in wide["text"].splitlines(), wide["text"]
-assert "| ⏳ | └ rev-d 대기 | [#1123](https://example.test/1123)·#1125·#1124→feature/long-target | — | ↓ 대기 | — |" \
+assert code == 0 and wide["width_ok"] is True and err == "", (code, err, wide)
+assert ("- 🔴 긴 이름의 리드 작업 — [#1201](https://example.test/1201) ❗DIRTY→release/2026-10 · ████████ 100/100 "
+        "· 재개·정리 · 세션 없음") in wide["text"].splitlines(), wide["text"]
+assert "- ⏳ └ rev-d 대기 — [#1123](https://example.test/1123)·#1125·#1124→feature/long-target · ↓ 대기" \
     in wide["text"].splitlines(), wide["text"]
-assert not any(m in wide["text"] for m in "¹²³…"), wide["text"]
+assert not any(m in wide["text"] for m in "¹²³…") and "\n| " not in wide["text"], wide["text"]
+# The dashboard's copy keeps the table, every cell whole.
+assert "| ⏳ | └ rev-d 대기 | [#1123](https://example.test/1123)·#1125·#1124→feature/long-target | — | ↓ 대기 | — |" \
+    in wide["full"].splitlines(), wide["full"]
 ok("board", "drop", "wide")
 
 # A repository whose only rows are lead-less PRs waiting on one reviewer is a bullet with no table.
@@ -578,24 +573,20 @@ tg_req = rok(*REQUEST, "--telegram")  # the dashboard is on 127.0.0.1 only: Tele
 assert "단계표 1행 · orch stage show --telegram" in tg_req.splitlines() and "127.0.0.1" not in tg_req, tg_req
 (tmp / "programs" / ".dash.json").write_text(json.dumps({"pid": 2 ** 22 + 1, "port": 4799}))  # no such process
 assert "단계표 1행 · `orch stage show`" in rok(*REQUEST).splitlines()
-# The table itself is `orch stage show`'s: a long stage name is cut to fit, its whole text listed under the table.
+# The table itself is `orch stage show`'s: no cell is cut, so a table past 78 columns is one whole line per row.
 WIDE_TITLE, WIDE_EVIDENCE = "아주 긴 이름의 작업으로 표의 폭을 넘기는 행", "로그로만 확인하고 화면은 아직 보지 않음"
 rok("stage", "add", "wide", "--title", WIDE_TITLE, "--pr", "acme/web#1234")
 code, cut, err = orch_env(renv, "stage", "show")
-assert code == 0 and all(table_width.table_width(t) <= 78 for _, t in table_width.tables(cut)), (code, err, cut)
-assert any(l.startswith("- [") and l.endswith(f"] {WIDE_TITLE}") for l in cut.splitlines()), cut
-assert "| 작업 |" in cut and "1. v1.7.2 prod 배포 (사람, 미정)" in cut and "단계표 2행 · `orch stage show`" in rok(*REQUEST).splitlines()
-# The stage table's PR is a plain key, so a long one is cut and listed the same way.
+assert code == 0 and "…" not in cut and "- [" not in cut, (code, err, cut)
+assert f"- {WIDE_TITLE} — acme/web#1234" in cut.splitlines() and "1. v1.7.2 prod 배포 (사람, 미정)" in cut and "단계표 2행 · `orch stage show`" in rok(*REQUEST).splitlines()
+# A long PR key stays whole too.
 WIDE_PR = "acme/a-very-long-repository-name-for-the-table#123456"
 rok("stage", "add", "wider", "--title", "넓은 PR", "--pr", WIDE_PR)
 code, cut, err = orch_env(renv, "stage", "show")
-assert code == 0 and any(l.startswith("- [") and l.endswith(f"] {WIDE_PR}") for l in cut.splitlines()), (code, err, cut)
-# A stage cell is never cut: a table its stage cells make too wide overflows whole, and show says so. The brief has
-# no table left to overflow.
+assert code == 0 and "…" not in cut and f"- 넓은 PR — {WIDE_PR}" in cut.splitlines(), (code, err, cut)
 rok("stage", "set", "wide", "--col", "dev", "--mark", "partial", "--evidence", WIDE_EVIDENCE)
 code, cut, err = orch_env(renv, "stage", "show")
-assert code == 1 and "wider than 78" in err, (code, err)
-assert f"| {WIDE_TITLE} | acme/web#1234 | – | ⚠️ {WIDE_EVIDENCE} | – |" in cut.splitlines() and "\n- [" not in cut, cut
+assert code == 0 and f"- {WIDE_TITLE} — acme/web#1234 · dev ⚠️ {WIDE_EVIDENCE}" in cut.splitlines() and "…" not in cut, (code, err, cut)
 assert orch_env(renv, *REQUEST)[0] == 0
 
 # GitHub outranks the board: a phase whose own PR merged is ✅ and leaves 진행 중 whatever its board next says, a PR
@@ -629,13 +620,15 @@ mok("board", "set", "L/ph2", "--kind", "phase", "--status", "moving", "--pr", "a
     "prs": []}))
 merged = json.loads(mok("brief", "render", "--periodic", "--now", NOW, "--json"))
 text = merged["text"]
-assert "| ✅ | ph1 | [#45](https://example.test/45) 45c0ffe | — |" in text, text
-assert "| ✅ | └ 하위 | [#46](https://example.test/46) 46c0ffe | — |" in text, text
-assert "| ⏸️ | ph2 | [#48](https://example.test/48) 닫힘 | ↓ 보류 |" in text and "- PR 닫힘 → L ph2" in text, text
-assert "| ❔ | └ c9 | #47 ? | 에이전트 조치 필요: P…[1] | 작업 중 |" in text, text
-assert "- [1] 에이전트 조치 필요: PR 상태 모름" in text, text
+tab = merged["full"]  # the tables with every cell whole, whether or not they fit 78 columns
+assert "| ✅ | ph1 | [#45](https://example.test/45) 45c0ffe | — |" in tab, tab
+assert "| ✅ | └ 하위 | [#46](https://example.test/46) 46c0ffe | — |" in tab, tab
+assert "| ⏸️ | ph2 | [#48](https://example.test/48) 닫힘 | ↓ 보류 |" in tab and "- PR 닫힘 → L ph2" in text, text
+# The row is too wide for 78 columns, so the report has it as a whole line; nothing is cut and nothing is footnoted.
+assert "- ❔ └ c9 — #47 ? · 에이전트 조치 필요: PR 상태 모름 · 작업 중" in text and "- [" not in text and "…" not in text, text
+assert "| ❔ | └ c9 | #47 ? | 에이전트 조치 필요: PR 상태 모름 | 작업 중 |" in tab, tab
 assert "머지 대기" not in text and "ABC-8" not in text and "fleet:lead" not in merged["snapshot"]["rows"], text
-assert "| 🔄 | └ c10 | — | — | 작업 중 |" in text, text
+assert "| 🔄 | └ c10 | — | — | 작업 중 |" in tab, tab
 
 
 class GhDown:  # sessions collected, the PR list not: the headline says the PR states are old
@@ -687,14 +680,15 @@ stamp()
 state = stamp_dir
 text = wok("brief", "render", "--periodic", "--now", NOW)
 mine, theirs, moving = section(text, "🙋 **지금 오너가 할 일**"), section(text, "⏳ **다른 사람 대기**"), section(text, "📌 **카드 없는 일**")
-assert "| 🙋 | └ 내 리뷰 | [#91](https://example.test/91) ❗리뷰 | ↑ 오너 |" in text, text
-assert "| ⏳ | └ 남 리뷰 | [#92](https://example.test/92) ❗리뷰 | ↓ 대기 |" in text, text
-assert "| ⏳ | └ reply 디자인 답변 | — |" in text and "| ❔ | └ ask 누구 대기 | — |" in text, text
+tab = json.loads(wok("brief", "render", "--periodic", "--now", NOW, "--json"))["full"]
+assert "| 🙋 | └ 내 리뷰 | [#91](https://example.test/91) ❗리뷰 | ↑ 오너 |" in tab, tab
+assert "| ⏳ | └ 남 리뷰 | [#92](https://example.test/92) ❗리뷰 | ↓ 대기 |" in tab, tab
+assert "| ⏳ | └ reply 디자인 답변 | — |" in tab and "| ❔ | └ ask 누구 대기 | — |" in tab, tab
 assert mine == ["- 리뷰 · [#91](https://example.test/91) → 내 리뷰"], mine
 assert theirs == ["- rev-x · 리뷰 [#92](https://example.test/92) · 30분 전부터 → 남 리뷰",
                   "- 디자인팀 · 30분 전부터 → reply 디자인 답변 · 다음: 10/15 리마인드"], theirs
-assert "| ❔ | └ ask 누구 대기 | — | 에이전트 조치" in text and not moving, text
-assert "- [1] 에이전트 조치 필요: 누구 대기인지 기록 없음" in text, text
+assert "| ❔ | └ ask 누구 대기 | — | 에이전트 조치" in tab and not moving, text
+assert "- [" not in text and "…[" not in text, text
 assert not any(w in l for l in mine + moving for w in ("남 리뷰", "디자인 답변")), (mine, moving)
 assert not any(w in l for l in theirs + moving for w in ("내 리뷰", "캐시 정책")) and "누구 대기" not in "".join(mine + theirs)
 assert "❓ **결정 필요** — 1. (d1) 캐시 정책 → 추천: TTL 1h" in text and "캐시 정책" not in "".join(mine), text
@@ -702,8 +696,9 @@ assert "❓ **결정 필요** — 1. (d1) 캐시 정책 → 추천: TTL 1h" in t
 del who_prs["me"]
 (wd / "dashboard" / "prs.json").write_text(json.dumps(who_prs))
 text = wok("brief", "render", "--periodic", "--now", NOW)
-assert "| ❔ | └ 내 리뷰 | [#91](https://example.test/91) ❗리뷰 | 에이전트 조치" in text \
-    and "- [1] 에이전트 조치 필요: 오너 login 모름" in text and "→ 내 리뷰" not in text, text
+tab = json.loads(wok("brief", "render", "--periodic", "--now", NOW, "--json"))["full"]
+assert "| ❔ | └ 내 리뷰 | [#91](https://example.test/91) ❗리뷰 | 에이전트 조치" in tab \
+    and "- [" not in text and "→ 내 리뷰" not in text, text
 # A waiting row on the owner by name, a check status nobody may set, and 🙋 as a status shorthand.
 assert board.is_owner("오너", None) and board.is_owner("@Octo-Owner", "octo-owner") and not board.is_owner("rev-x", "octo-owner")
 assert board.status_of("🙋") == "owner" and orch("board", "set", "search", "--status", "check")[2].startswith("--status is one of")
@@ -758,9 +753,10 @@ state = stamp_dir
 folded =json.loads(fok("brief", "render", "--periodic", "--now", NOW, "--json"))
 text = folded["text"]
 assert "옛 완료" not in text and "#5" not in text and "acme/old" not in text and "끝난 일" not in text.replace("막 끝난 일", ""), text
-assert "| ✅ | └ 새 완료 | [#2](https://example.test/2) 02c0ffe | — |" in text, text
-assert all(f"| {i} | └ {t} |" in text for i, t in (("🔄", "run 진행"), ("⏳", "wait 대기"), ("⏸️", "hold 보류 행"))), text
-assert "| ✅ | H | — | — |" in text and "| ✅ | └ 막 끝난 일 |" in text, text
+tab = folded["full"]
+assert "| ✅ | └ 새 완료 | [#2](https://example.test/2) 02c0ffe | — |" in tab, tab
+assert all(f"| {i} | └ {t} |" in tab for i, t in (("🔄", "run 진행"), ("⏳", "wait 대기"), ("⏸️", "hold 보류 행"))), tab
+assert "| ✅ | H | — | — |" in tab and "| ✅ | └ 막 끝난 일 |" in tab, tab
 # acme/web counts its old row and card; acme/old (G and its sub-task) is gone whole and counts only in the headline.
 assert text.count("✅ 그 전 완료 2건 (대시보드)") == 1 and "접음 완료 4 (대시보드)" in folded["headline_facts"], text
 assert "F/old" not in folded["snapshot"]["rows"] and "G/t" not in folded["snapshot"]["rows"]
