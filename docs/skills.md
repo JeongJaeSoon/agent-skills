@@ -307,7 +307,7 @@ PR 을 맡는 스킬과 머지 주체:
 ### stage
 - **언제:** "단계표 보여줘", `/agent-skills:stage`. `brief`는 단계표를 한 줄 링크로만 보여 주므로, 표 자체가 필요할 때 부른다.
 - **내용:**
-  - `orch stage show [--program P] [--telegram] [--all]` 출력을 그대로 보낸다. 다 끝났거나 7일(`stage_idle_d`) 동안 바뀌지 않은 행은 접고 개수만 적으며, `--all`이면 다 보인다. 어떤 행의 PR 이 board 행에도 있으면 `지금` 열에 보고서가 그 행에 매긴 상태를 같이 보여서 둘이 어긋나지 않는다. 어떤 칸도 자르지 않으며(번호 각주도 없다), 표가 78열을 넘으면 표 대신 행마다 한 줄(`- 이름 — PR · 머지 · dev · prod`)로 낸다.
+  - `orch stage show [--program P] [--telegram] [--all]` 출력을 그대로 보낸다. 다 끝났거나 7일(`stage_idle_d`) 동안 바뀌지 않은 행은 접고 개수만 적으며, `--all`이면 다 보인다. 어떤 행의 PR 이 board 행에도 있으면 `지금` 열에 보고서가 그 행에 매긴 상태를 같이 보여서 둘이 어긋나지 않는다. 어떤 칸도 자르지 않으며(번호 각주도 없다), 표가 78열을 넘으면 표 대신 행마다 한 줄(`- 이름 — PR · 머지 ✅ · dev ❌ …`, 빈 칸은 빼고 칸 이름을 붙인다)로 낸다.
   - 단계표(작업 / PR 머지 / dev 확인 / prod 확인)는 대시보드의 fleet tick 이 1분마다 만든다. 7일 안에 ledger 가 움직인 프로그램마다 predicate 항목과 Run 의 워커 카드 하나에 한 행, 머지 칸은 머지 sha 가 있을 때만 채우고 dev·prod 칸은 비운다. 사람이나 에이전트가 확인한 칸은 `orch stage set <프로그램>/<항목>` 으로 덧쓰고, 그 값이 생성 값을 이긴다. 대시보드에서는 Stages 화면이다. 활성 프로그램인데 행이 없거나 `board.stage_warn_h`(기본 6) 시간 동안 갱신되지 않으면 reorient hook 이 프롬프트마다 한 줄 경고한다.
 - **관계:** `brief`의 단계표 줄이 가리키는 곳. 기록 규칙은 `orchestrate`의 `references/dashboard.md` "The stage table".
 

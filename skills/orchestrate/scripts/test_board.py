@@ -586,7 +586,7 @@ code, cut, err = orch_env(renv, "stage", "show")
 assert code == 0 and "…" not in cut and f"- 넓은 PR — {WIDE_PR}" in cut.splitlines(), (code, err, cut)
 rok("stage", "set", "wide", "--col", "dev", "--mark", "partial", "--evidence", WIDE_EVIDENCE)
 code, cut, err = orch_env(renv, "stage", "show")
-assert code == 0 and f"- {WIDE_TITLE} — acme/web#1234 · ⚠️ {WIDE_EVIDENCE}" in cut.splitlines() and "…" not in cut, (code, err, cut)
+assert code == 0 and f"- {WIDE_TITLE} — acme/web#1234 · dev ⚠️ {WIDE_EVIDENCE}" in cut.splitlines() and "…" not in cut, (code, err, cut)
 assert orch_env(renv, *REQUEST)[0] == 0
 
 # GitHub outranks the board: a phase whose own PR merged is ✅ and leaves 진행 중 whatever its board next says, a PR

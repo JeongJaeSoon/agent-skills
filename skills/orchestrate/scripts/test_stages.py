@@ -52,12 +52,12 @@ assert lines[0] == "prod: v1.7.2 · dev: v1.8.0" and lines[1].startswith("✅ �
 rows = [l for l in lines if l.startswith("- ")]
 # No cell is cut: the table passes 78 columns, so each row is one whole line, with no `…` and no list under it.
 assert rows[:3] == [
-    "- 검색 개선 — acme/web#42 · ✅ 10/2 · ✅ v1.8.0 · 🔄 확인 중 (QA 리드)",
-    "- ㄴ 인덱스 재구축 — acme/ops#88 · ✅ 10/2 · 해당 없음",
-    "- ㄴ 정렬 버그 — acme/web#45 · ❌ CI 실패 · ⚠️ a|b",
+    "- 검색 개선 — acme/web#42 · 머지 ✅ 10/2 · dev ✅ v1.8.0 · prod 🔄 확인 중 (QA 리드)",
+    "- ㄴ 인덱스 재구축 — acme/ops#88 · 머지 ✅ 10/2 · prod 해당 없음",
+    "- ㄴ 정렬 버그 — acme/web#45 · 머지 ❌ CI 실패 · dev ⚠️ a|b",
 ], rows
 # Every cell ✅: the row has ended, at its latest cell's time, without anyone running `orch stage done`.
-assert rows[3].startswith("- 로그인 개선 (끝남) — acme/web#40 · ✅ 9/28 · ✅ v1.7.2 · ✅ token=") and "…" not in md, md
+assert rows[3].startswith("- 로그인 개선 (끝남) — acme/web#40 · 머지 ✅ 9/28 · dev ✅ v1.7.2 · prod ✅ token=") and "…" not in md, md
 assert not any(l.startswith("- [") for l in lines) and "\n| " not in md, lines
 assert lines[-2:] == ["1. acme/web#45 리뷰 → 머지 (에이전트, 오늘)", "2. v1.8.0 prod 배포 (사람, 미정)"], lines[-2:]
 
@@ -103,7 +103,7 @@ rows = [l for l in orch("show", "--md")[1].splitlines() if l.startswith("- ")]
 assert rows == [
     "- **채팅**",
     "- 본체 — acme/web#60",
-    "- ㄴ 사이드바 접기 아이콘 — ⚠️ 스텁으로만 확인",
+    "- ㄴ 사이드바 접기 아이콘 — dev ⚠️ 스텁으로만 확인",
     "- 티켓 하나",
     "- 단독 작업",
 ], rows
@@ -127,5 +127,11 @@ assert len(same) == 2 and all("…" not in l and ("에이전트 조치 필요: �
 assert all(HEAD + k in l for l, k in zip(same, "가나")) and "\n| " not in md, md
 for k in ("가", "나"):
     assert orch("drop", f"same-{k}")[0] == 0
+# Same title, one failing only in dev and the other only in prod: the column name tells the lines apart.
+for k, col in (("가", "dev"), ("나", "prod")):
+    assert orch("add", f"col-{k}", "--title", HEAD + "같은 제목", "--pr", f"acme/web#8{'1' if k == '가' else '2'}")[0] == 0
+    assert orch("set", f"col-{k}", "--col", col, "--mark", "fail", "--evidence", "배포 실패")[0] == 0
+same = [l for l in orch("show", "--md")[1].splitlines() if "같은 제목" in l]
+assert len(same) == 2 and "dev ❌" in same[0] and "prod ❌" in same[1] and "prod" not in same[0] and "dev" not in same[1], same
 
 print("test_stages: ok")

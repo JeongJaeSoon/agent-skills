@@ -385,7 +385,10 @@ def render_md(t):
     at = 1 if now else 0
     body = [[f"**{x}**" if c == at and t["rows"][i].get("group") else x for c, x in enumerate(row)] for i, row in enumerate(body)]
     if table_width.table_width([header] + body) > COLS:
-        lines = lines[:-2] + table_width.as_lines(body, at + 1)  # the header and its rule give way to the lines
+        # The header and its rule give way to the lines, so each stage cell carries its column name: an empty cell is
+        # dropped, and without the name two rows failing in different columns would read the same.
+        named = [row[:at + 2] + [x if x in ("", "–", "—") else f"{('머지', 'dev', 'prod')[k]} {x}" for k, x in enumerate(row[at + 2:])] for row in body]
+        lines = lines[:-2] + table_width.as_lines(named, at + 1)
     else:
         lines += [table_width.md_row(row) for row in body]
     if t["next"]:
