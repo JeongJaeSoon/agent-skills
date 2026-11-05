@@ -151,6 +151,11 @@ for cmd in (f"python3 {PRESSURE} round", f"python3 {PRESSURE} check", f"python3 
             f"cd {HERE.parent} && python3 skills/reap-resources/scripts/pressure.py queue wait q-66a001f1"):
     assert run("Bash", {"command": cmd, "run_in_background": True}) == "deny", cmd
 assert run("Monitor", {"command": f"python3 {PRESSURE} queue wait q-66a001f1"}) == "deny"
+# Monitor: the inbox stream is coordination; any other command or a ws source is task work.
+assert run("Monitor", {"command": "orch inbox --stream", "description": "inbox", "timeout_ms": 1800000}) == "none"
+for args in ({"command": "tail -f /tmp/x.log"}, {"command": "orch heavy - -- make test"},
+             {"ws": {"url": "wss://example.test/s"}}, {"command": "orch inbox --stream", "ws": {"url": "wss://example.test"}}):
+    assert run("Monitor", args) == "deny", args
 
 # The hook is wired for every tool.
 wired = json.loads((HERE / "hooks.json").read_text())["hooks"]["PreToolUse"]

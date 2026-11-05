@@ -74,6 +74,14 @@ Usage: orch <command> <slug> [options]
                                      print the next batch one line per message with its ack line;
                                      with --wait, acks heartbeat-only batches and waits on; a failed
                                      --ack is reported and the wait still runs
+  inbox --stream [--debounce 30] [--ttl-ms 1740000] [--no-cards]
+                                     no slug, the orchestrator under the Monitor tool: one stdout line
+                                     per message (each line a notification), the card watch as its
+                                     child, RESTART DUE / SESSION CLEARED lines, STREAM END before
+                                     Monitor's 30-minute limit (inbox_stream.py)
+  handoff save --next T [--waiting T] [--question T] [--reply T] [--note T] [--key K] [--restart] | handoff show
+                                     no slug: what the session after a /clear does first, in
+                                     agent-skills.db; --restart has the stream type /clear (handoff.py)
   watch-cards [--interval 180] [--idle-min 30] [--goal-lost-min 15] [--min-free-gb 15] [--timeout-ms 3300000] [--once]
                                      no slug: exit on a new stuck screen in any agent terminal but this
                                      one (cards no Run lists), a lost login or goal, or low disk; never types
@@ -3253,6 +3261,9 @@ def inbox_line(m):
 def cmd_inbox(argv):
     """The inbox wait of a session without a program in one call per wake: the raw peek, take and ack replies are
     whole JSON batches, and a top-level session read each of them in full."""
+    if "--stream" in argv:
+        import inbox_stream
+        return inbox_stream.main(argv)
     acked = opt(argv, "--ack")
     try:
         did, msgs = batch(check(*(["--ack", acked] if acked else [])))
@@ -3810,6 +3821,7 @@ COMMANDS = {"init": cmd_init, "set": cmd_set, "status": cmd_status, "record": cm
             "db": cmd_db, "model": cmd_model,
             "stage": cmd_stage, "board": cmd_board, "brief": cmd_brief, "hold": cmd_hold, "sent": cmd_sent, "release": lambda argv: cmd_hold(argv, release=True),
             "watch-cards": lambda argv: __import__("card_watch").main(argv),
+            "handoff": lambda argv: __import__("handoff").main(argv),
             "patrol": lambda argv: __import__("patrol").main(argv),
             "migrate": lambda argv: __import__("orca_migrate").main(argv),
             "doctor": lambda argv: __import__("orca_settings").main(argv)}

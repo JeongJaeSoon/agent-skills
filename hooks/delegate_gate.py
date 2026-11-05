@@ -21,7 +21,8 @@ Allowed (orchestrate references/top-level.md, "Routing", and SKILL.md "Stay answ
   inbox|ensure|note`, `skills-sync`, `orca` coordination groups and `orca skills get|list` (not browser, computer use
   or emulator), `gh pr merge|ready`, a `gh … --json` read, `git worktree list|remove`, `cd`, `jq <filter>` after
   a pipe, and the pressure gate's wait (`python3 <this plugin>/skills/reap-resources/scripts/pressure.py queue wait
-  q-<id>` or `turns --wait <n>`) with run_in_background, which pressure_gate.py's block names. The only expansions are $ORCA_TERMINAL_HANDLE as an option's whole value and top-level.md's
+  q-<id>` or `turns --wait <n>`) with run_in_background, which pressure_gate.py's block names. Monitor, when
+  its command passes the same check (the inbox stream, `orch inbox --stream`), and never with a ws source. The only expansions are $ORCA_TERMINAL_HANDLE as an option's whole value and top-level.md's
   `--body "$(cat <absolute path>)"` of a file this hook lets the session write; no other substitution, variable, glob, backtick, `$'…'`, line continuation, or
   redirection other than `2>&1` and to /dev/null. guard.py still denies a send or reply to /dev/null
   (`orchestrate.send_devnull`).
@@ -201,6 +202,9 @@ def allowed(tool, args):
         return True
     if tool == "Bash":
         return bash_ok(str(args.get("command") or ""), args.get("run_in_background") is True)
+    if tool == "Monitor":  # the inbox stream (`orch inbox --stream`); a ws source or any other command is task work
+        # Not as a background command: the pressure gate's wait stays a Bash run_in_background (its own rule).
+        return "ws" not in args and bash_ok(str(args.get("command") or ""), False)
     path = args.get("file_path")
     if not isinstance(path, str) or not path:
         return False

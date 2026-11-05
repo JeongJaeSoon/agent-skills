@@ -74,24 +74,42 @@ def terminal_file(handle):
     return state() / "terminals" / f"{handle}.json"
 
 
-def record_terminal(handle, session, cwd, now, loaded=None):
-    """Ties an Orca terminal to the session that just started in it. Orca's own data has no session id, and a cwd
-    match can name another session in the same worktree. `loaded` (loaded_fields) is what that session's process read
-    of the plugin when it started; None keeps what the same session recorded before (a compaction reloads nothing)."""
+def record_terminal(handle, session, cwd, now, loaded=None, same_process=False):
+    """Ties an Orca terminal to the session that just started in it and returns the record it replaced. Orca's own
+    data has no session id, and a cwd match can name another session in the same worktree. `loaded` (loaded_fields)
+    is what that session's process read of the plugin when it started; None keeps what the same session recorded
+    before (a compaction reloads nothing). same_process: a /clear, which gives the process a new session id and
+    reloads nothing either, so the previous session's fields carry over."""
     if not SESSION.fullmatch(handle or "") or not SESSION.fullmatch(session or ""):
-        return
+        return None
     path = terminal_file(handle)
     path.parent.mkdir(parents=True, exist_ok=True)
     entry = {"handle": handle, "session_id": session, "cwd": cwd, "at": now}
+    try:
+        old = read_terminal(handle)
+    except (OSError, ValueError):
+        old = None
     if loaded is None:
-        try:
-            old = read_terminal(handle)
-        except (OSError, ValueError):
-            old = None
-        loaded = {k: old[k] for k in LOADED_KEYS if k in old} if old and old.get("session_id") == session else {}
+        keep = old and (same_process or old.get("session_id") == session)
+        loaded = {k: old[k] for k in LOADED_KEYS if k in old} if keep else {}
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps({**entry, **loaded}))
     tmp.replace(path)
+    return old
+
+
+def carry_role(old_session, new_session):
+    """A /clear starts a new session id in the same process: its ROLE record carries over, unless the new session
+    already has one. Returns the record now in force for new_session, or None."""
+    have = declared(new_session)
+    if have is not None or not SESSION.fullmatch(new_session or ""):
+        return have
+    record = declared(old_session)
+    if record is None:
+        return None
+    roles_dir().mkdir(parents=True, exist_ok=True)
+    (roles_dir() / f"{new_session}.json").write_text(json.dumps(record))
+    return record
 
 
 LOADED_KEYS = ("plugin_version", "hooks_sha")

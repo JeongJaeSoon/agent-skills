@@ -27,7 +27,8 @@ import roles  # noqa: E402  the session's SessionStart record (terminals/<handle
 
 PROGRAMS = pathlib.Path(os.environ.get("PROGRAMS_HOME", "~/.claude/programs")).expanduser()
 GONE = re.compile(r"stale|not_found|not found", re.I)
-INBOX = re.compile(r"(?:\borch|prog\.py)\s+(?:wait\b|inbox\b.*--wait\b)")
+INBOX = re.compile(r"(?:\borch|prog\.py)\s+(?:wait\b|inbox\b.*--(?:wait|stream)\b)")
+STREAM = re.compile(r"(?:\borch|prog\.py)\s+inbox\b.*--stream\b")
 WAIT_SLUG = re.compile(r"(?:\borch|prog\.py)\s+wait\s+([^\s'\"]+)")
 CARDS = re.compile(r"(?:\borch|prog\.py)\s+watch-cards\b(?!.*--once)")
 FINISHED = ("completed", "failed")  # dispatch statuses whose worker reported; "abandoned" is not one, a restart makes it
@@ -79,25 +80,26 @@ def session_pid(table, pid):
 
 
 def waits(table, root):
-    """(inbox waits, card watches) under root as lists of (pid, command): only the innermost match of a chain, so a
-    shell wrapping `orch wait` and the python it runs count once."""
+    """(inbox waits, card watches) under root as lists of (pid, command): only the innermost match of each kind in a
+    chain, so a shell wrapping `orch wait` and the python it runs count once, and an inbox stream counts though the
+    card watch it runs as its child matched below it."""
     kids = {}
     for pid, (ppid, _) in table.items():
         kids.setdefault(ppid, []).append(pid)
     found = {"inbox": [], "cards": []}
 
     def walk(pid):
-        hit = False
+        hit = set()
         for child in kids.get(pid, ()):
-            hit = walk(child) or hit
-        if hit or pid == root:
+            hit |= walk(child)
+        if pid == root:
             return hit
         cmd = table[pid][1]
         for kind, pattern in (("inbox", INBOX), ("cards", CARDS)):
-            if pattern.search(cmd):
+            if kind not in hit and pattern.search(cmd):
                 found[kind].append((pid, cmd))
-                return True
-        return False
+                return hit | {kind}
+        return hit
 
     walk(root)
     return found["inbox"], found["cards"]
@@ -265,12 +267,20 @@ def check_waits(role, slug, table, pid):
     inbox, cards = waits(table, root)
     out = []
     start = f"orch wait {slug}" if role == "lead" else "orch inbox --wait"
-    # A lead's one wait is `orch wait <its slug>`, the orchestrator's `orch inbox --wait`; any other is a wrong one.
+    how, streamed = "under run_in_background", False
+    if role == "top":
+        # The orchestrator's wait is the inbox stream, which runs the card watch as its own child.
+        start, how = "orch inbox --stream", "with the Monitor tool, timeout_ms 1800000 (not Bash)"
+        streamed = any(STREAM.search(c) for _, c in inbox)
+        if inbox and not streamed:
+            out.append(("info", "the inbox wait is `orch inbox --wait`: at its next wake, stop it and start "
+                                "`orch inbox --stream` with the Monitor tool instead (one call per wake, not three)"))
+    # A lead's one wait is `orch wait <its slug>`, the orchestrator's an `orch inbox`; any other is a wrong one.
     want = slug if role == "lead" else None
     wrong = [(p, c) for p, c in inbox if role and (WAIT_SLUG.findall(c) or [None])[0] != want]
     right = [w for w in inbox if w not in wrong]
     if wrong:
-        then = "" if right else f", then start `{start}` under run_in_background"
+        then = "" if right else f", then start `{start}` {how}"
         out.append(("do", f"an inbox wait other than `{start}` runs: stop "
                           + ", ".join(f"pid {p}" for p, _ in wrong) + f" with TaskStop{then}"))
     if len(right) > 1:
@@ -280,12 +290,15 @@ def check_waits(role, slug, table, pid):
     elif right:
         out.append(("ok", "1 inbox wait running"))
     elif role and not wrong:
-        out.append(("do", f"no inbox wait runs: start `{start}` under run_in_background"))
+        out.append(("do", f"no inbox wait runs: start `{start}` {how}"))
     if len(cards) > 1:
         out.append(("do", f"{len(cards)} `orch watch-cards` run: stop all but one with TaskStop ("
                           + ", ".join(f"pid {p}" for p, _ in cards[1:]) + ")"))
     elif cards:
         out.append(("ok", "1 orch watch-cards running"))
+    elif streamed:
+        out.append(("info", "the inbox stream starts its own card watch; none runs this moment (between rounds, or "
+                            "it stopped after three failures: its CARDS: line says which)"))
     elif role == "top":
         out.append(("do", "no `orch watch-cards` runs: start it under run_in_background, no pipe"))
     elif role == "lead":
@@ -432,6 +445,35 @@ def check_queue(root, read=None):
     return out
 
 
+def check_handoff(key, run, call=orca, last=None):
+    """The handoff the previous session left (`orch handoff save`) and the mail of the Run taken since it was written:
+    the stream prints mail as it takes it, so what a restart cut off before it was handled is in Orca's history."""
+    if last is None:
+        try:
+            import store
+            last = store.last_session_event(key, "handoff")
+        except Exception as e:  # noqa: BLE001  the other checks still run
+            return [("info", f"handoff not read ({type(e).__name__}: {e})")]
+    if not last:
+        return [("info", f"no handoff recorded for {key}")]
+    ts, data = last
+    out = [("info", f"handoff {ts}: " + "; ".join(f"{k}={v}" for k, v in (data or {}).items() if v and k != "handle")
+                    + " (`orch handoff show` adds the open decisions)")]
+    if not run:
+        return out
+    try:
+        msgs = call("orchestration", "inbox", "--terminal", f"run:{run}", "--limit", "100", "--full").get("messages") or []
+    except OrcaError as e:
+        return out + [("info", f"mail since the handoff not read ({e})")]
+    since = [m for m in msgs if isinstance(m, dict) and str(m.get("created_at") or "") > ts and m.get("type") != "heartbeat"]
+    for m in since[-10:]:
+        out.append(("info", f"mail since the handoff: {m.get('id')} {m.get('type')} from {m.get('from_handle')}: "
+                            f"{str(m.get('subject') or '')[:80]} (handled before the restart? check before acting twice)"))
+    if len(since) > 10:
+        out.append(("info", f"{len(since) - 10} more since the handoff: orca orchestration inbox --terminal run:{run} --full"))
+    return out
+
+
 def run_checks(role, slug, run, handle, cwd, call=orca, table=None, pid=None, queue=None, reload_root=None):
     root = worktree_root(cwd)
     lines, terminal, live = check_handle(handle, call, root)
@@ -445,6 +487,8 @@ def run_checks(role, slug, run, handle, cwd, call=orca, table=None, pid=None, qu
     if live:
         lines += check_workers(bound, call, lead_dispatch, live)
     lines += check_queue(root, queue)
+    if role:
+        lines += check_handoff("orchestrator" if role == "top" else f"lead:{slug}", bound, call)
     return lines
 
 
