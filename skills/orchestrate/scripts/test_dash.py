@@ -1267,6 +1267,21 @@ other["sources"]["github"] = {"updated_at": "2099-01-01T00:00:00Z", "ok": False,
 sp.write_text(json.dumps(other))
 assert dash.collect(A, sources=())["sources"]["github"]["error"] == "from an external collect", "an external collect was overwritten"
 
+# An external write between this collect's read and its skipped write is not overwritten by the next one either.
+dash.collect(A, sources=())
+sig_state = dash.STATE_WROTE[sp]
+race_key = dash.file_key(sp)
+time_mod.sleep(0.01)
+ext = json.loads(sp.read_text())
+ext["sources"]["github"] = {"updated_at": "2099-01-01T00:00:00Z", "ok": False, "error": "raced"}
+sp.write_text(json.dumps(ext))  # lands after the (stale) read_key was taken
+st_race = json.loads(sp.read_text())
+st_race["sources"] = {"github": {"updated_at": "old", "ok": True}}
+dash.STATE_WROTE[sp] = (dash.settled(st_race), time_mod.monotonic())
+dash.write_state(sp, st_race, race_key)
+assert sp not in dash.STATE_SOURCES, "sources were remembered for a file this state was not built from"
+assert dash.collect(A, sources=())["sources"]["github"].get("error") == "raced"
+
 # The signature follows the patrol file beside a custom fleet dir, and prs.json gets a beat of its own.
 custom = pathlib.Path(tempfile.mkdtemp(prefix="custom-root-"))
 (custom / "dashboard").mkdir()

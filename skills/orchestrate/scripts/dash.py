@@ -1378,6 +1378,7 @@ def _merge(slug, d, cfg, fetched, interval):
     events, bad = dated(rows)
     dash = d / "dashboard"
     dash.mkdir(exist_ok=True)
+    read_key = file_key(dash / "state.json")  # before the read: a file replaced after it is not the one prev came from
     prev = read_json(dash / "state.json", {}) or {}
     kept = STATE_SOURCES.get(dash / "state.json")
     if kept and prev and kept[0] == file_key(dash / "state.json"):
@@ -1531,7 +1532,7 @@ def _merge(slug, d, cfg, fetched, interval):
         "series": series, "series_from": iso(horizon), "activity": activity_of(events, notes), "notes": notes[-100:][::-1],
         "errors": errors, "sources": srcs,
     }
-    write_state(dash / "state.json", state)
+    write_state(dash / "state.json", state, read_key)
     return state
 
 
@@ -1560,13 +1561,18 @@ def settled(state):
     return hashlib.sha1(json.dumps(s, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
-def write_state(path, state):
+def write_state(path, state, read_key):
     """A ~0.5 MB file rewritten per program every 20-30 s was most of this server's disk traffic. Rewrite it when the data
     changed, and otherwise every STATE_BEAT_S so generated_at still says the collector is alive."""
     digest, now = settled(state), time.monotonic()
     last = STATE_WROTE.get(path)
     if last and last[0] == digest and now - last[1] < STATE_BEAT_S and path.exists():
-        STATE_SOURCES[path] = (file_key(path), state["sources"])  # the next collect reads prev from disk: it must still see these times
+        # The next collect reads prev from disk: it must still see these times. Kept only for the file this state was built
+        # from; if another process replaced it since the read, theirs is newer and nothing of ours is remembered.
+        if file_key(path) == read_key:
+            STATE_SOURCES[path] = (read_key, state["sources"])
+        else:
+            STATE_SOURCES.pop(path, None)
         return False
     write_atomic(path, json.dumps(state, ensure_ascii=False, indent=1))
     STATE_WROTE[path] = (digest, now)
