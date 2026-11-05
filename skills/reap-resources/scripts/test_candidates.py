@@ -332,8 +332,15 @@ if sys.argv[1:] == ["cut-child"]:
         events.append(("next", reap.run(["sleep", "33"], check=False)))
         return HARD
 
+    def cut_once_written():  # the cut, once the grandchild exists (at most 10 s)
+        until = time.monotonic() + 10
+        while not (grand.exists() and grand.read_text().strip()) and time.monotonic() < until:
+            time.sleep(0.05)
+        os.kill(os.getpid(), signal.SIGALRM)
+
+    import threading  # noqa: E402
     progress = {}
-    signal.setitimer(signal.ITIMER_REAL, 0.5)
+    threading.Thread(target=cut_once_written, daemon=True).start()
     t0 = time.monotonic()
     try:
         candidates.collect(OK, now=time.time(), reap_scan=lambda kinds: (REAP_ITEMS, []), hard=hung_hard,

@@ -578,6 +578,16 @@ assert reap.patrol_working() == {reap.real("/w/a"), reap.real("/w/c")}
 patrol.VERDICTS.write_text(json.dumps({"t": time.time() - 7200, "cards": {"/w/a": "working"}}))
 assert reap.patrol_working() == set()
 assert reap.spawn_patrol("test") is False, "AGENT_SKILLS_PATROL=off starts nothing"
+# The fallback patrol runs under the shared runner, in a session of its own, so what a cut round leaves ends with it.
+spawned, real_popen, os.environ["AGENT_SKILLS_PATROL"] = [], reap.subprocess.Popen, "on"
+reap.subprocess.Popen = lambda argv, **kw: spawned.append((argv, kw))
+try:
+    assert reap.spawn_patrol("test", fallback=True)
+finally:
+    reap.subprocess.Popen, os.environ["AGENT_SKILLS_PATROL"] = real_popen, "off"
+argv, kw = spawned[0]
+assert argv[2:6] == [str(reap.JOB_RUNNER), "run", "patrol-spawn", "--timeout"] and kw["start_new_session"], spawned
+assert argv[-3:] == ["patrol", "--if-due", "--fallback"], argv
 
 # tidy shows patrol's D as ❔ and never closes on it.
 d = {"id": "b1", "title": "follow up with infra", "owner": "someone", "next": "ask"}

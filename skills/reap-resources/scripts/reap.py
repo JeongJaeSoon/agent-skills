@@ -705,18 +705,24 @@ def spawn_sweep_shadow(reason, python=None):
         return False
 
 
+SPAWN_TIMEOUT_S = 400  # the patrol job's runner limit (scripts/automations.py)
+
+
 def spawn_patrol(reason, python=None, fallback=False):
-    """Start `orch patrol --if-due` detached, so a LaunchAgent pass never waits on it; it prints to
-    <state>/patrol.log and gives up on its own at 120 seconds. fallback: only when the Orca patrol job missed a round
-    (--fallback). False when it could not start, or AGENT_SKILLS_PATROL=off (tests)."""
+    """Start `orch patrol --if-due` detached, so a LaunchAgent pass never waits on it, under the shared runner as the
+    patrol job runs (record <state>/jobs/patrol-spawn.json): it ends what a cut round leaves in its group. The runner's
+    failures go to <state>/patrol.log. fallback: only when the Orca patrol job missed a round (--fallback). False when
+    it could not start, or AGENT_SKILLS_PATROL=off (tests)."""
     if os.environ.get("AGENT_SKILLS_PATROL") == "off":
         return False
+    py = python or sys.executable
     try:
         STATE.mkdir(parents=True, exist_ok=True)
         with open(STATE / "patrol.log", "a") as out:
             out.write(f"--- {time.strftime('%Y-%m-%dT%H:%M:%S%z')} {reason}\n")
             out.flush()
-            subprocess.Popen([python or sys.executable, str(ORCH), "patrol", "--if-due", *(["--fallback"] if fallback else [])],
+            subprocess.Popen([py, "-I", str(JOB_RUNNER), "run", "patrol-spawn", "--timeout", str(SPAWN_TIMEOUT_S), "--",
+                              py, str(ORCH), "patrol", "--if-due", *(["--fallback"] if fallback else [])],
                              stdout=out, stderr=out,
                              stdin=subprocess.DEVNULL, start_new_session=True)
         return True
