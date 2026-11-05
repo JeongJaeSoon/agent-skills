@@ -295,6 +295,9 @@ def plan(args):
         if not args.update:
             actions.append("skills-sync sync --no-broadcast")
         actions.append("skills-sync setup apply")
+        sys.path.insert(0, str(HERE))
+        import automations
+        actions += automations.plan(new_skills)  # the same decisions `apply` makes: what it installs or refreshes, and why it skips
         if args.orca_run:
             actions.append("orca orchestration run-create, if this terminal has no Run")
         actions.append("setup-pc check")

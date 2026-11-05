@@ -122,6 +122,10 @@ class AgentSkillsKeysTest(Base):
         self.assertIn("expected bool", r.stderr)
         r, _ = self.emit({"agent_skills": {"set": {"prs.max_items": True}}})
         self.assertIn("expected int", r.stderr)
+        r, _ = self.emit({"agent_skills": {"set": {"review.reviewer": "gpt"}}})
+        self.assertIn("is not one of auto | codex | off", r.stderr)
+        r, _ = self.emit({"agent_skills": {"set": {"review.reviewer": "off"}}})
+        self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_free_form_map_and_nested_defaults(self):
         r, _ = self.emit({"agent_skills": {"set": {"prs.reviewers.rev-a.slack": "U0FAKE1",

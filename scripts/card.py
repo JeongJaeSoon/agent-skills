@@ -7,9 +7,11 @@ Usage:
                    [--role impl|verify|review] [--supersede] [--no-forbidden] [--agent claude|codex] [--model <id>]
   skills-sync handoff <TICKET> ...   (handoff() below)
 
-The session's model: --model when the human named one, else `orchestrate.models.lead` for a lead's brief and
-`orchestrate.models.worker` for anything else (agent-skills.json). With neither, no flag goes out, the card runs on the
-account's default and one warning line says so. A Codex card takes only --model: those keys name Claude models.
+The session's model: --model when the human named one, else `orchestrate.models.lead` for a lead's brief, else the
+brief's `KIND: design|edit|lookup — <reason>` row (opus | sonnet | haiku; another kind or no reason is exit 2), else
+`orchestrate.models.worker` (agent-skills.json). With none, no flag goes out, the card runs on the account's default
+and one warning line says so. A Codex card takes only --model: those names are Claude models. The `card` object and
+the cards.jsonl row carry model and model_from (what picked it).
 
 --agent picks the card's CLI (default claude). Every brief check runs the same for either. Codex is a supervised
 worker only: its close-setup gets no agent handle, since that reads Claude's screen and worker-start's receipt says it
@@ -35,12 +37,14 @@ itself a dispatched worker on it (a lead started with worker-start, whose `run-c
 worker (`orca orchestration worker-start --worktree new-child`, so Orca records this session's worktree as its
 parent; `new-top-level` with --no-parent; any other --parent-worktree is ignored, since worker-start takes none): a
 Dispatch, so the card's worker_done, escalation and ask reach this session and Orca watches it for prompts. Its spec
-is the prompt below, `/goal` line included. Orca puts its own preamble before a spec, so that line never runs as the
-slash command there: for a Claude worker a detached helper (`card.py goal-after-idle`, log in
-$AGENT_SKILLS_STATE/goal-input/<name>.log, its path in the `card` object's goal_input) polls `sync.try_send` (the
-reload broadcast's screen checks: no spinner or dialog, an empty prompt box, two equal reads) for at most GOAL_IDLE_S
-until the first turn ends, then types that one line. Past the limit, or when the screen does not confirm the line, it
-types nothing more and logs a warning with the manual command. When this session is bound to no Run, works for another Run than the
+is the prompt below, `/goal` line included. Orca puts its own preamble before a spec, and bracketed-pastes a /goal
+card's prompt, which Claude Code folds into <pasted_content>, so that line does not run as the slash command on
+either path: for any Claude card or worker (a handoff too) a detached helper (`card.py goal-after-idle`, log in
+$AGENT_SKILLS_STATE/goal-input/<name>.log, its path in the `card` object's goal_input) reads the new worktree's
+transcript first: a /goal command row means it ran and nothing is typed, no user row yet means it waits. Otherwise
+it polls `sync.try_send` (the reload broadcast's screen checks: no spinner or dialog, an empty prompt box, two equal
+reads) for at most GOAL_IDLE_S until the first turn ends, then types that one line. Past the limit, or when the screen
+does not confirm the line, it types nothing more and logs a warning with the manual command. When this session is bound to no Run, works for another Run than the
 brief names, or Orca does not answer, nothing is created (exit 6): the lines printed say how to bind it
 (`orca orchestration run-use`) or to make a /goal card on purpose (--card). A refused new-child is not retried as
 new-top-level.
@@ -81,7 +85,7 @@ exists but linking, logging or naming it failed, or a started worker's receipt n
 output is still printed; do not create it again); 6 nothing created because the Run or the parent did not check
 out (the choices are printed).
 """
-import contextlib, datetime, fcntl, itertools, json, os, pathlib, re, shlex, subprocess, sys, time
+import contextlib, datetime, fcntl, glob, itertools, json, os, pathlib, re, shlex, subprocess, sys, time
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE", "~/.local/state/agent-skills")).expanduser()
@@ -500,14 +504,15 @@ def start_close_setup(path, handle, name):
         return {"error": str(e)}
 
 
-def start_goal_input(handle, line, name):
-    """Starts `card.py goal-after-idle <handle> <line>` detached: the worker's first turn can last the whole task, and
-    this command must not wait for it. Returns {log, pid} or {error}; a failure to start is printed, never fatal."""
+def start_goal_input(handle, line, name, worktree=None):
+    """Starts `card.py goal-after-idle <handle> <line> [<worktree>]` detached: the first turn can last the whole task,
+    and this command must not wait for it. Returns {log, pid} or {error}; a failure to start is printed, never fatal."""
     log = STATE / "goal-input" / f"{name}.log"
     try:
         log.parent.mkdir(parents=True, exist_ok=True)
         with open(log, "a") as out:
-            p = subprocess.Popen([sys.executable, str(pathlib.Path(__file__).resolve()), "goal-after-idle", handle, line],
+            p = subprocess.Popen([sys.executable, str(pathlib.Path(__file__).resolve()), "goal-after-idle", handle, line,
+                                  *([worktree] if worktree else [])],
                                  stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
         return {"log": str(log), "pid": p.pid}
     except OSError as e:
@@ -568,20 +573,80 @@ def type_when_idle(handle, line, deadline=None):
         return None if sync.turn_started(second, after, line) else sync.UNCONFIRMED
 
 
-def goal_after_idle(handle, line, timeout_s=GOAL_IDLE_S):
-    """Types the /goal line into the worker's terminal once its first turn ended and an empty prompt is back. Orca puts
-    its own preamble before a worker's spec, so the line inside the spec never runs as the slash command. The idle
+GOAL_RAN = "<command-name>/goal</command-name>"
+GOAL_ARGS = re.compile(r"<command-args>(.*?)</command-args>", re.S)
+
+
+def user_texts(path):
+    """The text of each user row in a transcript that is not Claude Code's own (isMeta)."""
+    try:
+        lines = path.read_text(errors="replace").splitlines()
+    except OSError:
+        return []
+    out = []
+    for raw in lines:
+        try:
+            r = json.loads(raw)
+        except ValueError:
+            continue
+        if not isinstance(r, dict) or r.get("type") != "user" or r.get("isMeta") or not isinstance(r.get("message"), dict):
+            continue
+        content = r["message"].get("content")
+        texts = [content] if isinstance(content, str) else [
+            b.get("text") for b in content or [] if isinstance(b, dict) and b.get("type") == "text"]
+        out += [t for t in texts if isinstance(t, str)]
+    return out
+
+
+def goal_state(worktree, line):
+    """What the worktree's sessions say about `line`: "ran" once a user row is the /goal command with this goal as
+    its args, "other" once a user row holds the whole line (the folded paste, a worker's spec), else "none": Orca has
+    not typed the first prompt yet, and a reload broadcast's rows or another session's prompt do not count. No file
+    is picked by its age: another session can share the folder. The folders are Claude Code's under
+    CLAUDE_PROJECTS_DIR, else under each of sync.HOMES (only the Orca profile pattern's `*` is a pattern),
+    named after the path with every non-alphanumeric character as `-`."""
+    import sync
+    line = line.strip()
+    goal = line.split(None, 1)[-1]
+    name = re.sub(r"[^A-Za-z0-9]", "-", worktree)
+    homes = [h for home in sync.HOMES for h in (glob.glob(os.path.expanduser(home)) if "*" in home
+                                                else [os.path.expanduser(home)])]
+    roots = [os.environ["CLAUDE_PROJECTS_DIR"]] if os.environ.get("CLAUDE_PROJECTS_DIR") else [
+        str(pathlib.Path(h) / "projects") for h in homes]
+    state = "none"
+    for root in dict.fromkeys(roots):
+        for path in pathlib.Path(root).expanduser().joinpath(name).glob("*.jsonl"):
+            for t in user_texts(path):
+                if t.lstrip().startswith(GOAL_RAN) and any(a.strip() == goal for a in GOAL_ARGS.findall(t)):
+                    return "ran"
+                if any(l.strip() == line for l in t.splitlines()):  # a whole line: `/goal ABC-7. more` is not it
+                    state = "other"
+    return state
+
+
+def goal_after_idle(handle, line, timeout_s=GOAL_IDLE_S, worktree=None):
+    """Types the /goal line into the session's terminal once its first turn ended and an empty prompt is back. Orca puts
+    its own preamble before a worker's spec, and bracketed-pastes a card's prompt, which Claude Code folds into
+    <pasted_content> when it is long: either way the line inside never runs as the slash command. With `worktree`,
+    goal_state decides first: "ran" types nothing, "none" waits for the first prompt. The idle
     judgement is `type_when_idle`'s, polled until the limit: `orca terminal wait --for tui-idle` is not used, since it
     answered during UserPromptSubmit hooks (docs/platform.md). Nothing is typed while the turn runs or after the
-    limit. 0 sent, 1 not sent (the manual command is printed)."""
+    limit. 0 sent or already run, 1 not sent (the manual command is printed)."""
     import sync
     manual = manual_goal_command(handle, line)
     deadline = time.monotonic() + timeout_s
     while True:
         if time.monotonic() >= deadline:
             print(f"[{ME}] warning: the /goal line was not typed into {handle} (waited up to {timeout_s}s). "
-                  f"Once the worker is idle, run: {manual}", file=sys.stderr)
+                  f"Once the session is idle, run: {manual}", file=sys.stderr)
             return 1
+        state = goal_state(worktree, line) if worktree else "other"
+        if state == "ran":
+            print(f"[{ME}] {handle} already ran /goal; nothing typed")
+            return 0
+        if state == "none":
+            time.sleep(GOAL_POLL_S)
+            continue
         reason = type_when_idle(handle, line, deadline)
         if reason is None:
             print(f"[{ME}] typed the /goal line into {handle}: {line}")
@@ -761,18 +826,38 @@ def parse_args(rest):
     return opts, refs
 
 
-def session_model(opts, lead, name):
-    """The model this start names, or None after a warning line. See the module docstring."""
-    if opts.get("--model"):
-        return opts["--model"]
-    if opts["--agent"] != "claude":
+KIND_MODEL = {"design": "opus", "edit": "sonnet", "lookup": "haiku"}
+# The kind is the whole word before the dash: `edit-typo — x` is the kind `edit-typo`, refused, never `edit`.
+KIND_ROW = re.compile(r"^`?KIND`?(?:[ \t]*:|[ \t]{2,})[ \t]*([^\s—]*)(?:[ \t]*—|[ \t]+--?(?=\s))[ \t]*(\S.*)?$", re.S)
+
+
+def brief_kind(brief_path):
+    """The brief's `KIND: design|edit|lookup — <reason>` row as its kind, None without one, else Refuse(2)."""
+    text = FENCE.sub("", pathlib.Path(brief_path).expanduser().read_text())
+    r = row(text, "KIND")
+    if r is None:
         return None
+    m = KIND_ROW.match(r)
+    if not m or m.group(1) not in KIND_MODEL or not m.group(2):
+        raise Refuse(2, f"[{ME}] {brief_path}: the KIND row is `KIND: design|edit|lookup — <reason>` (found "
+                        f"{r.splitlines()[0]!r}); fix it, or drop the row to use orchestrate.models.worker")
+    return m.group(1)
+
+
+def session_model(opts, lead, name, kind=None):
+    """(model, model_from): what picked it, or (None, None) after a warning line. See the module docstring."""
+    if opts.get("--model"):
+        return opts["--model"], "--model"
+    if opts["--agent"] != "claude":
+        return None, None
+    if kind and not lead:
+        return KIND_MODEL[kind], f"KIND: {kind}"
     role = "lead" if lead else "worker"
     model = orca_settings.role_model(role)
     if not model:
         print(f"[{name}] orchestrate.models.{role} is not set: this card runs on the account's default model",
               file=sys.stderr)
-    return model
+    return model, f"orchestrate.models.{role}" if model else None
 
 
 def refuse_codex(brief, opts):
@@ -803,13 +888,14 @@ def create(argv):
         if not opts.get(k):
             raise Refuse(2, f"{k} is required (dispatch-card §3)")
     prompt = compose(brief)
+    kind = brief_kind(brief)
     if opts["--agent"] == "codex":
         refuse_codex(brief, opts)
     with card_lock():
-        return create_locked(brief, opts, refs, prompt)
+        return create_locked(brief, opts, refs, prompt, kind)
 
 
-def create_locked(brief, opts, refs, prompt):
+def create_locked(brief, opts, refs, prompt, kind=None):
     repo, superseded = check_duplicates(opts["--repo"], refs, opts["--role"], opts.get("--supersede"))
     # A lead's brief has no FORBIDDEN row in its template: the worker paragraph is not its rule set.
     forbidden = ("skipped (--no-forbidden)" if opts.get("--no-forbidden") else "skipped (lead brief)"
@@ -844,7 +930,7 @@ def create_locked(brief, opts, refs, prompt):
         raise Refuse(2, f"[{ME}] {CODEX_GOAL_CARD}")
     parent = None if opts.get("--no-parent") else (
         opts["--parent-worktree"] if opts.get("--parent-worktree") and not worker else caller_worktree())
-    model = session_model(opts, lead, ME)
+    model, model_from = session_model(opts, lead, ME, kind)
     if worker:
         # Orca puts its own preamble before the spec, so the /goal line is not the first thing the session reads and
         # Claude Code may not run it as the slash command. It stays: the line still states the goal, and stripping it
@@ -913,17 +999,18 @@ def create_locked(brief, opts, refs, prompt):
     handle = handle_of(res)
     # close-setup judges the start from Claude's screen; worker-start's receipt already says a Codex worker is ready.
     setup = start_close_setup(path, handle if opts["--agent"] == "claude" else None, opts["--name"])
-    # A worker's /goal line is typed by a detached helper once the first turn ends; a card gets it as its prompt.
-    goal_input = (start_goal_input(handle, prompt.splitlines()[0], opts["--name"])
-                  if worker and handle and opts["--agent"] == "claude" else None)  # /goal is Claude Code's command
+    # The /goal line is typed by a detached helper once the first turn ends, unless the transcript shows it ran.
+    goal_input = (start_goal_input(handle, prompt.splitlines()[0], opts["--name"], path)
+                  if handle and path and opts["--agent"] == "claude" else None)  # /goal is Claude Code's command
     print(json.dumps({**res, "card": {"kind": "worker" if worker else "card", "path": path, "handle": handle,
                                       "run": run_id, "parent": parent, "forbidden": forbidden, "close_setup": setup,
-                                      "model": model, **({"goal_input": goal_input} if goal_input else {})}},
+                                      "model": model, "model_from": model_from,
+                                      **({"goal_input": goal_input} if goal_input else {})}},
                      ensure_ascii=False, indent=1))
     failed = []
     if refs:
         ledger_add(repo=repo, references=refs, role=opts["--role"], path=path, name=opts["--name"],
-                   dispatch=res.get("dispatchId") if worker else None)
+                   dispatch=res.get("dispatchId") if worker else None, model=model, model_from=model_from)
     for old in superseded:
         failed += supersede(old, path, opts.get("--display-name") or opts["--name"])
     if opts.get("--no-forbidden"):
@@ -1012,7 +1099,7 @@ def handoff_locked(ticket, opts, refs, prompt):
     cmd += ["--base-branch", opts["--base-branch"]] if opts.get("--base-branch") else []
     cmd += ["--parent-worktree", parent] if parent else ["--no-parent"]
     cmd += ["--agent", "claude", "--prompt", prompt]
-    model = session_model(opts, False, HANDOFF)
+    model, model_from = session_model(opts, False, HANDOFF)
     cmd += ["--model", model] if model else []
     for r in refs:
         cmd += ["--reference", r]
@@ -1038,7 +1125,8 @@ def handoff_locked(ticket, opts, refs, prompt):
     mark("done")
     handle = handle_of(res)
     failed = []
-    ledger_add(repo=repo, references=keys, role=opts["--role"], path=path, name=name)
+    ledger_add(repo=repo, references=keys, role=opts["--role"], path=path, name=name, model=model,
+               model_from=model_from)
     title = f"{ticket} {opts['--title']}" if opts.get("--title") else ticket
     p, err = run([ORCA, "worktree", "set", "--worktree", f"path:{path}", "--display-name", title, "--json"])
     if not p or p.returncode:
@@ -1053,16 +1141,19 @@ def handoff_locked(ticket, opts, refs, prompt):
     if not started:
         failed.append(f"the start is not confirmed ({detail}); read `orca terminal read --terminal {handle} --screen`")
     setup = start_close_setup(path, None, name)  # the start was just read; close-setup only closes the setup shell
+    goal_input = start_goal_input(handle, prompt.splitlines()[0], name, path) if handle else None
     print(json.dumps({**res, "card": {"kind": "card", "path": path, "handle": handle, "parent": parent,
-                                      "start": detail, "close_setup": setup}}, ensure_ascii=False, indent=1))
+                                      "start": detail, "close_setup": setup, "model": model, "model_from": model_from,
+                                      **({"goal_input": goal_input} if goal_input else {})}},
+                     ensure_ascii=False, indent=1))
     if failed:
         raise Refuse(5, f"[{HANDOFF}] the card was created but: {'; '.join(failed)}. Do not create it again.")
     return 0
 
 
 def main(argv):
-    if argv[:1] == ["goal-after-idle"] and len(argv) == 3:  # the detached helper start_goal_input starts
-        return goal_after_idle(argv[1], argv[2])
+    if argv[:1] == ["goal-after-idle"] and len(argv) in (3, 4):  # the detached helper start_goal_input starts
+        return goal_after_idle(argv[1], argv[2], worktree=argv[3] if len(argv) == 4 else None)
     try:
         return create(argv)
     except Refuse as e:
