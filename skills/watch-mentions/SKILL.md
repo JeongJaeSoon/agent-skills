@@ -1,6 +1,6 @@
 ---
 name: watch-mentions
-description: "Use when the user wants chat that concerns them picked up as work — \"멘션 감시\", \"나한테 온 슬랙 정리해줘\", \"내가 말한 스레드에 새 답글 있어?\", \"watch my mentions\" — and for each round of the watch-mentions automation. Not for posting to Slack (slack-post) or for GitHub review requests (watch-prs)."
+description: "Use to pick up chat that concerns the user as work — \"멘션 감시\", \"나한테 온 슬랙 정리해줘\", \"내가 말한 스레드에 새 답글 있어?\", \"watch my mentions\" — and each watch-mentions round. Posting is slack-post; GitHub reviews are watch-prs."
 ---
 
 # Watch mentions

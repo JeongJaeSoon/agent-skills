@@ -1,6 +1,6 @@
 ---
 name: tune-automode
-description: "Use when the auto-mode classifier denied an action and the user wants that kind allowed from now on, or asks to change what auto mode lets the agent do — \"auto mode 가 막았어\", \"이거 허용되게 규칙 추가해줘\", \"autoMode 규칙 고쳐줘\". Drafts the smallest rule and a script the user runs; never edits settings.json. User permissions.allow belongs to skills-config, hooks to update-config."
+description: "Use when auto mode denied an action and the user wants that kind allowed, or wants auto mode's rules changed — \"auto mode 가 막았어\", \"이거 허용되게 규칙 추가해줘\", \"autoMode 규칙 고쳐줘\". Drafts the smallest rule as a script the user runs; never edits settings.json. permissions.allow is skills-config."
 ---
 
 # tune-automode

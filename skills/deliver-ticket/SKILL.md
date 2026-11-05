@@ -1,6 +1,6 @@
 ---
 name: deliver-ticket
-description: "Use when working a ticket from the first edit to done — multi-file work; opening, updating or merging a PR (\"PR 올려줘\", \"머지해줘\", \"머지까지 진행해줘\", \"머지되면 이어서\"); a release after the merge (\"릴리즈까지 진행해줘\"); review comments (\"리뷰 코멘트 대응해줘\"); proving it works (\"동작확인하고 머지\", \"내가 확인할 거 있어?\"); declaring a ticket done (\"이 티켓 끝내줘\", \"ship it\")."
+description: "Use when working a ticket from first edit to done: a PR opened, updated or merged (\"PR 올려줘\", \"머지해줘\", \"머지까지 진행해줘\", \"머지되면 이어서\"), a release after it (\"릴리즈까지 진행해줘\"), review comments, proof it works (\"동작확인하고 머지\", \"내가 확인할 거 있어?\"), \"이 티켓 끝내줘\", \"ship it\". An orchestrator dispatches it instead."
 ---
 
 # Delivering a ticket

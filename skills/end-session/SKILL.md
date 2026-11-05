@@ -1,6 +1,6 @@
 ---
 name: end-session
-description: "Use when the user asks to end, close or archive this session, card or worktree — \"종료해줘\", \"세션 종료해줘\", \"현재 세션 정리해줘\", \"아카이브해줘\", \"머지하고 종료하자\", \"end this session\" — when handoff-ticket says this session should go, when an Orca worker is about to send worker_done, or when a card's brief says to close itself. Bare \"정리해줘\"/\"마무리해줘\", \"작업 기록 남겨줘\" or \"log this\" leaves the record and keeps the session (references/record.md)."
+description: "Use to end, close or archive this session, card or worktree — \"종료해줘\", \"세션 종료해줘\", \"현재 세션 정리해줘\", \"아카이브해줘\", \"머지하고 종료하자\", \"end this session\" — before an Orca worker's worker_done, or when handoff-ticket or the brief says to close. Bare \"정리해줘\"/\"마무리해줘\" or \"작업 기록 남겨줘\" records and keeps the session."
 allowed-tools: Bash(orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json)
 ---
 

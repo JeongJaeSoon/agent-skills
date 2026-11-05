@@ -1,6 +1,6 @@
 ---
 name: setup-pc
-description: "Use when agent-skills goes onto another PC or an installed PC needs bringing up to date — \"새 PC 세팅해줘\", \"다른 PC 에서도 똑같이 쓰게 해줘\", \"agent-skills 설치 점검\", \"agent-skills 업데이트해줘\", \"플러그인 최신화\", \"set up agent-skills on a new PC\", \"update agent-skills\". Dry-runs `scripts/setup.py` (a diff per file, nothing written) and hands the human its one `--apply <hash>` line, which writes the settings and turns on sync; the check alone is read-only. A single auto-mode denial is tune-automode."
+description: "Use to install agent-skills on another PC or bring an installed PC up to date — \"새 PC 세팅해줘\", \"다른 PC 에서도 똑같이 쓰게 해줘\", \"agent-skills 설치 점검\", \"agent-skills 업데이트해줘\", \"플러그인 최신화\", \"update agent-skills\". Dry-run only; the human runs the one `--apply` line. One auto-mode denial is tune-automode."
 ---
 
 # Set up or update agent-skills on a PC
