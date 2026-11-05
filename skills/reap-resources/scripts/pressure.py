@@ -42,7 +42,7 @@ LOG = reap.STATE / "pressure.log"
 HISTORY = reap.STATE / "pressure-history.jsonl"
 HISTORY_KEEP_S = 24 * 3600
 HISTORY_FIELDS = ("load_per_cpu", "cpu_idle_pct", "mem_free_pct", "swap_gb", "swapout_pps", "containers",
-                  "docker_mem_pct", "docker_cpu_pct", "disk_free_gb")
+                  "docker_mem_pct", "docker_cpu_pct", "disk_free_gb", "mem_active_wired_gb", "mem_anon_wired_gb")
 # Left by uninstall so `skills-sync setup apply` keeps a job the user turned off off; install removes it.
 DISABLED = reap.STATE / "pressure-disabled"
 
@@ -133,7 +133,19 @@ def swap_gb(text):
     return round(float(m[1]) / {"K": 1 << 20, "M": 1 << 10, "G": 1}[m[2]], 2) if m else None
 
 
-CONTAINER_FORMAT = "\t".join(f'{{{{.Label "{k}"}}}}' for k in (
+def vm_used_gb(text):
+    """(active+wired, anonymous+wired) in GiB from `vm_stat`, or (None, None). Observation only: no threshold reads
+    them. kern.memorystatus_level counts file cache and compressible pages as free, so it reads far higher than these."""
+    size = re.search(r"page size of (\d+) bytes", text or "")
+    pages = {k: int(v) for k, v in re.findall(r"^(Pages active|Pages wired down|Anonymous pages):\s+(\d+)\.", text or "", re.M)}
+    if not size or len(pages) < 3:
+        return None, None
+    gib = lambda n: round(n * int(size[1]) / (1 << 30), 1)
+    wired = pages["Pages wired down"]
+    return gib(pages["Pages active"] + wired), gib(pages["Anonymous pages"] + wired)
+
+
+CONTAINER_FORMAT ="\t".join(f'{{{{.Label "{k}"}}}}' for k in (
     "com.docker.compose.project", "io.kubernetes.pod.namespace", "io.kubernetes.pod.uid")) + "\t{{.Names}}"
 
 
@@ -165,6 +177,7 @@ def measure(docker=True, run=sh, always_on=()):
     m["mem_free_pct"] = int(level) if level and level.isdigit() else None
     m["vm_pressure"] = int(pressure) if pressure and pressure.isdigit() else None
     m["swap_gb"] = swap_gb(sysctl("vm.swapusage"))
+    m["mem_active_wired_gb"], m["mem_anon_wired_gb"] = vm_used_gb(run(["vm_stat"], timeout=3))
     m["disk_free_gb"] = round(shutil.disk_usage(pathlib.Path.home()).free / (1 << 30), 1)
     out = run(["docker", "ps", "--format", CONTAINER_FORMAT], timeout=5) if docker and shutil.which("docker") else None
     m["containers"], m["always_on"] = count_containers(out, always_on) if out is not None else (None, None)
