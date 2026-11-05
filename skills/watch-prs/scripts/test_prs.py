@@ -448,7 +448,7 @@ assert w[:2] == ["skills-sync", "card"] and w[2] == p.BRIEF_ARG, w
 assert "--worktree" not in w and "new-top-level" not in w and w[w.index("--agent") + 1] == "claude"
 assert w[w.index("--name") + 1] == f"dev-check-widgets-{int(plan2['run'])}"
 for want in ("post-merge-release.md", "#20 ", "merge m20", "dev 에 반영됨", "#21 ", "dev(d0) 에 아직 없음", "- revision_cmd: print-dev-sha",
-             "- verify: verify-widgets", "승인: dev 배포 승인됨(테스트)", "사람만: 프로덕션", "다시 시도하지 않는다"):
+             "- verify: verify-widgets", "APPROVED: dev 배포 승인됨(테스트)", "사람만: 프로덕션"):
     assert want in spec, want
 assert spec.startswith("/goal "), "card.py needs the /goal line"
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3] / "scripts"))
@@ -513,7 +513,15 @@ brief = tmp / "state" / "prs" / f"brief-{int(plan2['run'])}-0.txt"
 assert d.returncode == 0 and len(printed) == 1 and shlex.split(printed[0])[:3] == ["skills-sync", "card", str(brief)], d
 assert "#20 " in brief.read_text(), "named by run, so the next round cannot overwrite it"
 # Run in the session that runs the line, the brief passes card.py's checks and the start is a parented worker.
-assert card.compose(str(brief)).startswith("/goal ")
+# card.py's first prompt carries only the /goal line and the rows: the approval, the bans and the report must be rows.
+first = card.compose(str(brief))
+assert first.startswith("/goal ") and f"브리프: {brief.resolve()}" in first.splitlines()[0], first
+for want in ("dev 배포 승인이 없다", "사람만: 프로덕션", card.CLOSE_LINE, "--to run:run_x", "worker_done"):
+    assert want in first, want
+approved = tmp / "approved.txt"
+approved.write_text(p.dispatch_cmds(plan2, {**rcfg, "deploy": two})[1][0] + "\n")
+assert "APPROVED: dev 배포 승인됨(테스트)" in card.compose(str(approved))
+assert "#20 " not in first, "the PR list stays in the brief file the /goal line names"
 assert (tmp / "state" / "prs" / "dispatch.txt").read_text() == d.stdout.rstrip("\n")
 (tmp / "state" / "prs" / "plan.json").unlink()
 broken = {**env, "AGENT_SKILLS_GH": "/nonexistent/gh"}

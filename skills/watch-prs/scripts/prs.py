@@ -1288,16 +1288,16 @@ def release_brief(repo, items, cfg, run_id):
               + ("dev 리비전을 읽지 못함, 직접 확인" if i["deployed"] is None else "dev 에 반영됨" if i["deployed"]
                  else f"dev({i['deployed_revision']}) 에 아직 없음") for i in items]
     lines += ["배포 선언:"] + [f"- {k}: {decl[k]}" for k in ("dev_release", "revision_cmd", "logs", "verify", "ticket") if decl.get(k)]
-    lines += [f"승인: {cfg['release_approval']}" if cfg.get("release_approval")
-              else "승인: dev 배포 승인이 없다. 동기화를 기다리는 것 말고 배포가 필요하면 오케스트레이터나 리드에게 묻는다.",
-              "사람만: 프로덕션 배포, dev 밖의 환경, 되돌릴 수 없는 작업. 하지 않고 오케스트레이터나 리드에게 보고한다.",
-              "권한 프롬프트·auto mode 분류기·hook·사람이 거부한 행위는 어떤 형태로도 다시 시도하지 않는다"
-              "(재실행, 스크립트·다른 도구로 옮기기, 대상 이름 바꾸기, 서브에이전트나 다른 세션에 넘기기 모두 금지). "
-              "무엇을 하려던 것인지, 거부 종류, 정확한 명령을 보고한다.",
-              "끝나면 worker_done 한 통에 PR 별 sticky comment URL, 확인한 리비전, 읽은 로그 줄을 담는다.",
+    # card.py copies only the /goal line and the rows (APPROVED, FORBIDDEN, CLOSE, REPORT) into the first prompt; the
+    # body above is read from the brief file. So the approval and the bans are rows, and card.py puts the refused-act
+    # paragraph at the head of the FORBIDDEN row, keeping these lines after it.
+    approval = cfg.get("release_approval")
+    lines += ([f"APPROVED: {approval}"] if approval else []) + ["FORBIDDEN:"] + (
+        [] if approval else ["  dev 배포 승인이 없다. 동기화를 기다리는 것 말고 배포가 필요하면 오케스트레이터나 리드에게 묻는다."])
+    lines += ["  사람만: 프로덕션 배포, dev 밖의 환경, 되돌릴 수 없는 작업. 하지 않고 오케스트레이터나 리드에게 보고한다.",
               card.CLOSE_LINE,
               f'REPORT: 막히면 `orca orchestration send --to run:{run_id} --type escalation --subject "dev 확인" '
-              '--body "<막힌 이유>"`, 끝나면 worker_done']
+              '--body "<막힌 이유>"`. 끝나면 worker_done 한 통에 PR 별 sticky comment URL, 확인한 리비전, 읽은 로그 줄을 담는다.']
     return "\n".join(lines)
 
 
