@@ -5,6 +5,7 @@ Run: python3 test_dash.py
 import datetime as dt_mod, http.server, json, os, pathlib, re, sys, tempfile, threading, urllib.request, urllib.error
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
+import time as dash_time
 import dash, dash_demo
 
 root = pathlib.Path(tempfile.mkdtemp(prefix="test-dash-"))
@@ -298,6 +299,8 @@ for q in ("?viewed=1.0", "?viewed=10", "?viewed=1-no", "?x=?viewed=1", "?viewed=
     assert dash.FLEET_VIEWED[0] == 0.0, f"{q} was counted as a view"
 dash.FLEET_FORCE[0] = False
 dash.FLEET_WAKE.clear()
+# monotonic() starts near zero on a freshly booted runner, so 0.0 would not read as idle there.
+dash.FLEET_VIEWED[0] = dash_time.monotonic() - 10 * dash.FLEET_VIEW_S
 status("/api/fleet/state?viewed=1", {})
 assert dash.FLEET_VIEWED[0] > 0.0, "?viewed=1 was not counted as a view"
 assert dash.FLEET_FORCE[0] and dash.FLEET_WAKE.is_set(), "a page opening after idle must collect at once"
