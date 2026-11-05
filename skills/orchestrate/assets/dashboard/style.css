@@ -244,6 +244,11 @@ details[open] > summary.card-head::before { content: "▾"; }
 .chips { display: flex; gap: var(--s2); flex-wrap: wrap; }
 .chip.proj { height: 18px; padding: 0 6px; margin-right: var(--s1); border-radius: var(--r-sm); font-size: 11px; vertical-align: 1px; display: inline-flex; }
 .proj-chips { margin: 0 0 var(--s3); }
+/* view switch: links to one page's other shapes (fleet.js viewSwitch); the current one reads like a pressed chip */
+.view-switch { display: flex; width: fit-content; max-width: 100%; gap: 2px; padding: 2px; margin: var(--s2) 0 var(--s3); border: 1px solid var(--line); border-radius: var(--r-md); background: var(--panel); }
+.view-switch a { height: 24px; padding: 0 var(--s3); display: inline-flex; align-items: center; border-radius: var(--r-sm); color: var(--ink-2); font-size: var(--t-sm); text-decoration: none; }
+.view-switch a:hover { color: var(--ink); }
+.view-switch a[aria-current="page"] { background: var(--ink); color: var(--bg); }
 .search { height: 28px; border-radius: var(--r-md); border: 1px solid var(--line); background: var(--panel); color: var(--ink); padding: 0 var(--s2); min-width: 200px; font: inherit; font-size: var(--t-sm); }
 .search::placeholder { color: var(--ink-3); }
 
