@@ -3147,9 +3147,9 @@ def mark_shown(pending, mid):
     """Note a message of the pending batch as printed, so a replay after a crash does not print it again. Written
     after the print: a crash between the two prints it twice rather than never. A failed write raises, so nothing
     more is printed past the one message it could not note."""
-    req = pending_request(pending)
-    if req is None or mid is None:
+    if pending is None or mid is None:
         return
+    req = json.loads(pending.read_text())  # strict: an unreadable request stops the output too
     req["shown"] = [*(req.get("shown") or []), mid]
     tmp = pending.with_suffix(".tmp")
     tmp.write_text(json.dumps(req))
@@ -3292,8 +3292,10 @@ def cmd_wait(argv):
             if revoked_echo(m):
                 print(f"ignored: Orca refused a {m.get('type')} from released dispatch {revoked_echo(m)}", flush=True)
         if actionable:
-            if fresh := [m for m in work if m.get("id") not in shown]:
-                print("\n".join(map(inbox_line, fresh)), flush=True)
+            for m in work:
+                if m.get("id") is None or m.get("id") not in shown:
+                    print(inbox_line(m), flush=True)
+                    mark_shown(pending, m.get("id"))
             done_take(pending)
             closed = {payload_of(m).get("dispatchId") for m in work if m.get("type") == "worker_done"}
             if closed:

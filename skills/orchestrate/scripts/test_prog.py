@@ -652,6 +652,33 @@ finally:
     prog.os.replace = real_replace
 assert len(printed) == 1 and pend.exists(), printed
 prog.done_take(pend)
+# An unreadable request stops the output too.
+pend.write_text(json.dumps({"retry_request": "r-e"}))
+real_read = pathlib.Path.read_text
+pathlib.Path.read_text = lambda self, *a, **k: (_ for _ in ()).throw(PermissionError("denied")) if self == pend \
+    else real_read(self, *a, **k)
+try:
+    prog.mark_shown(pend, "x")
+    raise AssertionError("an unreadable pending request must raise")
+except PermissionError:
+    pass
+finally:
+    pathlib.Path.read_text = real_read
+prog.done_take(pend)
+# cmd_wait notes each ACTIONABLE-batch message as it prints it: a replay after a crash prints none of them again.
+batch3 = {"deliveryId": "d7", "messages": [{"id": "s1", "type": "status", "body": "s1"},
+                                           {"id": "s2", "type": "status", "body": "s2"}, q["messages"][0]]}
+prog.run_workers = lambda run: []
+marks = []
+real_done = prog.done_take
+prog.done_take = lambda pnd: marks.append(json.loads(pnd.read_text()).get("shown")) if pnd and pnd.exists() else None
+prog.orca_json = scripted([("peek", row), ("take", batch3)], [])
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    prog.cmd_wait(["s", "--rounds", "1"])
+prog.done_take = real_done
+assert marks and marks[-1] == ["s1", "s2", "mq"] and "ACTIONABLE delivery=d7" in out.getvalue(), (marks, out.getvalue())
+prog.done_take(_pdir / "wait-request.json")
 # A delivery handled in an earlier round and handed out again is neither printed again nor left to replay.
 seen, printed, log = set(), [], []
 prog.orca_json = scripted([("peek", row), ("take", st("s1", "d1")), ("ack", {}), ("peek", {})], log)
