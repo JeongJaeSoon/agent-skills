@@ -18,7 +18,6 @@ import json, os, platform, subprocess, sys, pathlib
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 CACHE = os.path.expanduser(os.environ.get("PSTACK_CACHE", "~/.cache/pstack-upstream"))
-STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()
 
 
 def git(*args, check=True):
@@ -65,14 +64,14 @@ def compare(m, vendor, target):
     return rows, fresh
 
 
+NOTIFIED = "refs/pstack-sync/notified"
+
+
 def notify(text, target):
-    """Once per upstream commit, so a daily job does not repeat itself until someone refreshes the copy."""
-    seen = STATE / "pstack-upstream.json"
-    try:
-        if json.loads(seen.read_text()).get("notified") == target:
-            return
-    except (OSError, ValueError, AttributeError):
-        pass
+    """Once per upstream commit, so a daily job does not repeat itself until someone refreshes the copy. The commit
+    last notified is a ref in the upstream cache, not agent-skills state: losing the cache costs one repeat."""
+    if git("rev-parse", "-q", "--verify", NOTIFIED, check=False).stdout.decode().strip() == target:
+        return
     if platform.system() == "Darwin" and not os.environ.get("SKILLS_SYNC_NO_NOTIFY"):
         script = f"display notification {json.dumps(text)} with title \"agent-skills pstack upstream\""
         try:
@@ -83,8 +82,7 @@ def notify(text, target):
         if rc:
             print("notification failed; the next run tries again")  # no marker, so a failed delivery is retried
             return
-    seen.parent.mkdir(parents=True, exist_ok=True)
-    seen.write_text(json.dumps({"notified": target}) + "\n")
+    git("update-ref", NOTIFIED, target)
     print(f"notified ({target[:12]})")
 
 

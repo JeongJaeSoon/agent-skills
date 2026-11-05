@@ -390,8 +390,6 @@ STORES = [
     Store("reaphardlock", "S/reap-hard.lock", {"reap_hard.pass": LOCK}, ("reap_hard:locked",)),
     Store("periodicjob", "S/jobs/*.json", {"periodic_job.last_run": CANONICAL}, ("orca_job:write", "orca_job:forget"), ("nobody",),
           rule="how the last run of a sync, pressure-watch, reap-hard or orch-dash Orca automation ended; setup-pc reads it"),
-    Store("pstackupstream", "S/pstack-upstream.json", {"pstack.notified": CANONICAL}, ("pstack-sync:notify",),
-          ("nobody",), rule="the upstream commit pstack-upstream last notified about, so it notifies once per commit"),
     Store("preview", "S/preview-watch.json", {"preview.link": CANONICAL}, ("preview_watch:save_state",),
           ("janitor",)),
     Store("previewaux", "S/preview-watch.*", {"preview.link": LOG}, ("preview_watch:log", "preview_watch:locked"),
