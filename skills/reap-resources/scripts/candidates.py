@@ -60,18 +60,19 @@ def kill_group():
                 os.kill(pid, signal.SIGKILL)
 
 
-def stop_scans(threads):
-    """The main thread runs no command meanwhile, so the group's commands are the scans'. A thread still running after
-    CUT_WAIT_S is caught at exit, and what it spawns later by the runner."""
-    reap.CANCELLED.update(th.ident for th in threads)
+def stop_scans(scans):
+    """[(thread, done event)]. The main thread runs no command meanwhile, so the group's commands are the scans'. A
+    thread still running after CUT_WAIT_S is caught at exit, and what it spawns later by the runner. Python 3.12 marks a
+    running thread stopped once a join on it is interrupted (here by the cut), so the scans' own events say who is done."""
+    reap.CANCELLED.update(th.ident for th, _ in scans)
     atexit.register(kill_group)
     start = time.monotonic()
-    while any(th.is_alive() for th in threads) and time.monotonic() - start < CUT_WAIT_S:
+    while not all(done.is_set() for _, done in scans) and time.monotonic() - start < CUT_WAIT_S:
         if time.monotonic() - start >= CUT_GRACE_S:
             kill_group()
-        for th in threads:
-            th.join(0.1)
-    reap.CANCELLED.difference_update(th.ident for th in threads if not th.is_alive())  # one that ended before the mark
+        for _, done in scans:
+            done.wait(0.1)
+    reap.CANCELLED.difference_update(th.ident for th, done in scans if done.is_set())  # one that ended before the mark
 
 
 def scan_kinds(cfg, pressure_kinds, state_dir, now):
@@ -230,7 +231,8 @@ def collect(sources, now=None, reap_scan=None, hard=None, pressure_kinds=None, s
     # Each part writes only its own dict and is merged only once its thread has finished. Patrol's SIGALRM reaches
     # only this thread and cannot stop a command a scan thread waits on, and not every scan path goes through
     # reap.run, so a cut both marks the thread cancelled and kills what its process group runs (stop_scans).
-    parts = [dict(fn=fn, owns=owns, sources={}, timings=Timings(), notes=[], cands=[], reports=[], alerts=[])
+    parts = [dict(fn=fn, owns=owns, sources={}, timings=Timings(), notes=[], cands=[], reports=[], alerts=[],
+                  done=threading.Event())
              for fn, owns in ((reap_part, ("reap_scan",)), (hard_part, HARD_SOURCES))]
 
     def scan(p):
@@ -238,17 +240,16 @@ def collect(sources, now=None, reap_scan=None, hard=None, pressure_kinds=None, s
             p["fn"](p)
         finally:
             reap.CANCELLED.discard(threading.get_ident())  # the ident goes back for reuse
+            p["done"].set()
 
     threads = [threading.Thread(target=scan, args=(p,), daemon=True) for p in parts]
-    for th in threads:
-        th.start()
     cands, merged, cut = [], set(), set()
 
     def merge(final):
-        for n, (p, th) in enumerate(zip(parts, threads)):
+        for n, p in enumerate(parts):
             if n in merged:
                 continue
-            if th.is_alive() or n in cut:
+            if not p["done"].is_set() or n in cut:
                 if final:
                     src.update({s: "timeout" for s in p["owns"]})
                     timings.update(dict(p["timings"]))
@@ -263,14 +264,16 @@ def collect(sources, now=None, reap_scan=None, hard=None, pressure_kinds=None, s
             out["alerts"] += p["alerts"]
 
     try:
-        for th in threads:
-            while th.is_alive():
-                th.join(0.2)
+        for th in threads:  # a cut while starting them is still a cut: the finally marks the unstarted one too
+            th.start()
+        for p in parts:
+            while not p["done"].wait(0.2):
                 merge(False)
+            merge(False)
     finally:
-        cut.update(n for n, th in enumerate(threads) if th.is_alive())
+        cut.update(n for n, p in enumerate(parts) if not p["done"].is_set())
         if cut:
-            stop_scans([threads[n] for n in cut])
+            stop_scans([(threads[n], parts[n]["done"]) for n in cut if threads[n].ident is not None])
         merge(True)
     for c in cands:
         missing = [n for n in c["needs"] if src.get(n) != "ok"]
