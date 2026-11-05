@@ -472,11 +472,13 @@ const PRESSURE_CHARTS = [
 // only while the host is busy (idle at or below load_idle_pct), as in pressure.py.
 function pressureTileLevel(rep, judge, m) {
   const v = m[judge], [warn, danger] = (rep.thresholds || {})[judge] || [null, null];
-  if (v == null || warn == null) return null;
+  if (v == null || (warn == null && danger == null)) return null;
   const hi = (rep.higher_worse || {})[judge] !== false;
   const past = (t) => t != null && (hi ? v >= t : v <= t);
-  if (past(danger) && !(judge === "load_per_cpu" && m.cpu_idle_pct != null && rep.load_idle_pct != null && m.cpu_idle_pct > rep.load_idle_pct)) return "danger";
-  return past(warn) ? "warn" : "ok";
+  // An unknown cap (a server older than load_idle_pct) holds danger back rather than guess pressure.py's default.
+  const idleHolds = judge === "load_per_cpu" && (rep.load_idle_pct == null || (m.cpu_idle_pct != null && m.cpu_idle_pct > rep.load_idle_pct));
+  if (past(danger) && !idleHolds) return "danger";
+  return past(warn) || past(danger) ? "warn" : "ok";
 }
 const PRESSURE_LEVEL_KO = { ok: "정상", warn: "경고", danger: "위험" };
 async function pollPressure() {
@@ -519,8 +521,11 @@ function pressureChart(rep, c) {
   const unit = judge === "disk_free_gb" ? " GiB" : judge === "mem_free_pct" || judge === "docker_cpu_pct" ? "%" : "";
   const op = lower ? "≤" : "≥";
   const set = [["경고", warn], ["위험", danger]].filter(([, v]) => v != null);
-  const out = c.line && set.length && set.every(([, v]) => !inside(v));
-  const limits = set.length ? `${set.map(([n, v]) => `${n} ${op} ${v}`).join(" · ")}${unit}${out ? " (범위 밖)" : ""}` : "임계값 없음";
+  const outOf = (v) => c.line && !inside(v);
+  // One "(범위 밖)" at the end when every limit is outside the scale, else one on each limit that is.
+  const allOut = set.length && set.every(([, v]) => outOf(v));
+  const limits = !set.length ? "임계값 없음"
+    : `${set.map(([n, v]) => `${n} ${op} ${v}${!allOut && outOf(v) ? " (범위 밖)" : ""}`).join(" · ")}${unit}${allOut ? " (범위 밖)" : ""}`;
   const sub = c.sub ? c.sub(m) : "";
   const said = `${label}: 지금 ${fmt(now)}, ${lv ? PRESSURE_LEVEL_KO[lv] : "수준 없음"}, ${c.bad}, ${limits}, ${rep.hours}시간 동안 ${pts.length}개`;
   return `<div class="pmetric"><div class="pm-head"><span class="eyebrow">${esc(label)}</span><b class="pm-v">${esc(fmt(now))}</b></div>
