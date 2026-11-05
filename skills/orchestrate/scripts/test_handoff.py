@@ -90,6 +90,9 @@ assert handoff.role_key(L) == "lead:web"
 assert roles.role_of(L) == roles.resolve({"agent_type": "agent-skills:lead"}, roles.declared(L))
 roles.record_resolved(L, {"role": "lead", "slug": "app", "agent_type": "agent-skills:lead", "title_slug": "app"})
 assert handoff.role_key(L) == "lead:app", "the title's slug wins, as in resolve()"
+(roles.roles_dir() / f"{L}.json").unlink()
+roles.record_resolved(L, {"role": "lead", "slug": "app", "agent_type": "agent-skills:lead"})
+assert handoff.role_key(L) == "lead:app", "a record written before title_slug keeps its slug"
 # A title role (no agent_type) gives way to a declared orchestrator or lead.
 roles.record_resolved(L, {"role": "lead", "slug": "app", "agent_type": None})
 (roles.roles_dir() / f"{L}.json").write_text('{"role": "orchestrator"}')

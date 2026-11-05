@@ -243,7 +243,8 @@ def role_of(session):
     entry = {k: v for k, v in (saved or {}).items() if k not in ("agent_type", "title_slug")} or None
     if saved and AGENTS.get(saved.get("agent_type")):
         if entry["role"] == "lead":  # resolve()'s slug: the title's, else the ROLE record's as it stands now
-            return {"role": "lead", "slug": saved.get("title_slug") or (record or {}).get("slug")}
+            title = saved["title_slug"] if "title_slug" in saved else saved.get("slug")  # a record from before the key
+            return {"role": "lead", "slug": title or (record or {}).get("slug")}
         return entry
     if record and record.get("role") in ("orchestrator", "lead"):
         return record
