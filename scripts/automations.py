@@ -143,7 +143,7 @@ class Janitor(OrcaJob):
     name = "janitor"
     job_name = JANITOR_NAME
     load = False
-    what = ("3시간마다 정리 라운드(Orca automation, reap-resources). 에이전트가 만든 끝난 리소스만 닫거나 휴지통으로 옮긴다. "
+    what = ("30분마다 모델 없는 정리 라운드(Orca automation precheck, reap-resources). 에이전트가 만든 끝난 리소스만 닫거나 휴지통으로 옮긴다. "
             "compose 는 down 까지이고 -v·prune·볼륨/이미지 삭제는 하지 않는다")
 
     def status(self):
