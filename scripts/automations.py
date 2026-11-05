@@ -142,8 +142,6 @@ class OrcaJob:
 
 
 class ReapJob(OrcaJob):
-    """A job `reap.py schedule` creates and compares (janitor-load: it follows the janitor's workspace)."""
-
     def status(self):
         a, err = self.find()
         if a is None:
@@ -214,7 +212,7 @@ class JanitorLoad(ReapJob):
     def disable(self):
         code, msg = OrcaJob.disable(self)
         if not code:
-            orca_job.forget(self.name)  # its runner's record must not turn into a 'late' warning once it is off
+            orca_job.forget(self.name)
         return code, msg
 
 
@@ -385,9 +383,6 @@ class ShellJob(OrcaJob):
 
 
 class Janitor(ShellJob):
-    """reap's janitor round with no agent, through orca_job like the other shell jobs. The load job runs the same
-    round, so turning the janitor off turns it off too, and on again with it."""
-
     def __init__(self):
         super().__init__("janitor", "30분마다 모델 없는 정리 라운드(Orca automation precheck, reap-resources). 에이전트가 만든 끝난 리소스만 "
                          "닫거나 휴지통으로 옮긴다. compose 는 down 까지이고 -v·prune·볼륨/이미지 삭제는 하지 않는다",
