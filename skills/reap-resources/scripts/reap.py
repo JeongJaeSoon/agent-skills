@@ -665,7 +665,7 @@ def log_action(item, result, ok, rule=None, closed=None):
     if closed is not None:
         row["handles"] = sorted(closed)
     if kind == "card" and item.get("why"):  # an idle close (cards rule 8b) names where `claude --resume` finds it
-        row["why"] = str(item["why"])[:300]
+        row["why"] = str(item["why"])[:1000]  # the resume path comes last: room for a long worktree path
     with contextlib.suppress(Exception):  # a log line is never worth an act left half-reported
         line = json.dumps(row, ensure_ascii=False, default=str) + "\n"
         STATE.mkdir(parents=True, exist_ok=True)
