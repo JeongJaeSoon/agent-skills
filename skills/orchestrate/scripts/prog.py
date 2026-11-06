@@ -2087,8 +2087,11 @@ def cmd_verdict(argv):
     recorder = os.environ.get("ORCA_TERMINAL_HANDLE")
     reviewer = (opt(argv, "--reviewer") or (what.strip() if kind in ("review", "verifier") else "")).strip()
     evidence = (opt(argv, "--evidence") or "").strip()
-    authors = author_sessions(view.get("headRefName"))
+    authors = author_sessions(view.get("headRefName")) or worktree_author_sessions(view.get("headRefName"), head, pr)
     fields = dict(author=authors, reviewer=reviewer or None, evidence=evidence or None, recorder=recorder, by=recorder)
+    if not authors:  # no card found: the row says so, and verdict_identity_problem decides whether that can stand
+        fields["author_unverified"] = True
+        print("warning: no card holding this PR's branch was found; the author is recorded as unverified", file=sys.stderr)
     result = opt(argv, "--result", "pass")
     # A fail blocks a landing and needs no independence. A pass that cannot stand as an independent review is not
     # stored at all: a stored pass would let the direct `orch land` path, which reads no identity, merge on it.
@@ -2118,6 +2121,32 @@ def author_sessions(branch):
         return []
 
 
+def worktree_author_sessions(branch, head, pr):
+    """Fallback for a card whose local branch is not the PR's branch (it pushed `local:remote`, or main was merged
+    into a renamed branch): the terminals of the non-main worktrees that hold the branch, sit at the PR's head sha, or
+    link the PR. Empty when Orca does not answer, the list is cut off, or nothing matches."""
+    try:
+        out = orca_json("worktree", "list")
+        rows = out["worktrees"]
+        if out.get("truncated") or not isinstance(rows, list):
+            return []
+        handles = set()
+        for w in rows:
+            linked = w.get("linkedPR")
+            linked = linked.get("number") if isinstance(linked, dict) else linked
+            if w.get("isMainWorktree") or not isinstance(w.get("path"), str) or not (
+                    (branch and (w.get("branch") or "").replace("refs/heads/", "") == branch)
+                    or (head and w.get("head") == head) or (linked is not None and str(linked) == str(pr))):
+                continue
+            terminals = orca_json("terminal", "list", "--worktree", f"path:{w['path']}")
+            if terminals.get("truncated") or not isinstance(terminals["terminals"], list):
+                return []  # a partial author set is no author set
+            handles |= {t["handle"] for t in terminals["terminals"] if isinstance(t.get("handle"), str) and t["handle"]}
+        return sorted(handles)
+    except (SystemExit, ValueError, KeyError, TypeError, AttributeError, OSError):
+        return []
+
+
 def verdict_identity_problem(v):
     """Why this verdict record cannot stand as an independent review, else None. `author` is the PR's sessions as
     seen when it was recorded, `reviewer` who reviewed, `evidence` a link or sha of the review, `recorder` the
@@ -2127,8 +2156,9 @@ def verdict_identity_problem(v):
     authors = v.get("author")
     # A row is JSON anyone can append: a wrong type must refuse, not raise and leave the request queued forever.
     if not all(v.get(k) is None or isinstance(v.get(k), str) for k in ("reviewer", "evidence", "recorder")) \
-            or not (authors is None or isinstance(authors, list) and all(isinstance(a, str) and a for a in authors)):
-        return "the identity fields are malformed (author is a list of handles, the rest are strings)"
+            or not (authors is None or isinstance(authors, list) and all(isinstance(a, str) and a for a in authors)) \
+            or not (v.get("author_unverified") is None or isinstance(v.get("author_unverified"), bool)):
+        return "the identity fields are malformed (author is a list of handles, author_unverified a boolean, the rest strings)"
     if not (v.get("reviewer") or "").strip():
         return "no reviewer named (--reviewer, or a review:<reviewer> or verifier:<reviewer> source)"
     if not (v.get("evidence") or "").strip():
@@ -2138,7 +2168,12 @@ def verdict_identity_problem(v):
     if self_review(v):
         return self_review(v)
     if not v.get("author"):
-        return "the PR's author session could not be identified (no card holds its branch)"
+        # No card was found (its branch can differ from the PR's). The row may stand only when it says so and the
+        # reviewer is not the session that recorded it; a row without the mark predates this rule and is refused.
+        if v.get("author_unverified") is not True:
+            return "the PR's author session could not be identified (no card holds its branch)"
+        if v["reviewer"].strip() == v["recorder"]:
+            return "the author is unverified and the reviewer is the recorder: another session records the review"
     return None
 
 

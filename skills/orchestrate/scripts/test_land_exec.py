@@ -341,8 +341,7 @@ class LandExec(unittest.TestCase):
 
     def test_a_pass_without_reviewer_or_evidence_is_refused_and_not_stored(self):
         for extra, authors in ((["--source", "independent-review", "--evidence", "e"], ("term_author",)),  # no reviewer
-                               (["--source", "review:codex"], ("term_author",)),  # no evidence
-                               (["--source", "review:codex", "--evidence", "e"], ())):  # no author session found
+                               (["--source", "review:codex"], ("term_author",))):  # no evidence
             with self.subTest(extra=extra, authors=authors), self.assertRaises(SystemExit) as ctx:
                 self.record(*extra, authors=authors)
             self.assertIn("nothing recorded", str(ctx.exception.code))
@@ -389,6 +388,74 @@ class LandExec(unittest.TestCase):
         config(enabled=False)  # executor off: the direct path reads no identity, so land-check does not either
         self.verdict(evidence=None)
         self.assertNotIn("independent review", self.land_check()[1])
+
+    def fake_orca(self, worktrees, terminals, truncated=False):
+        """prog.orca_json over an Orca with `worktrees` rows and `terminals` {path: [handles]}; a branch selector that
+        matches no worktree's branch fails the way Orca does (selector_not_found)."""
+        def answer(*a):
+            if a[:2] == ("worktree", "list"):
+                return {"worktrees": worktrees, "truncated": truncated}
+            sel = a[a.index("--worktree") + 1]
+            if sel.startswith("branch:") and sel[7:] not in [w["branch"].replace("refs/heads/", "") for w in worktrees]:
+                raise SystemExit('orca terminal list: {"code": "selector_not_found"}')
+            path = sel[5:] if sel.startswith("path:") else next(w["path"] for w in worktrees if w["branch"].endswith(sel[7:]))
+            return {"terminals": [{"handle": h} for h in terminals.get(path, [])], "truncated": False}
+        real = prog.orca_json
+        prog.orca_json = answer
+        self.addCleanup(setattr, prog, "orca_json", real)
+
+    CARD = {"path": "/w/card", "branch": "refs/heads/card-local", "head": "abc", "isMainWorktree": False, "linkedPR": None}
+    MAIN = {"path": "/w/main", "branch": "refs/heads/main", "head": "abc", "isMainWorktree": True, "linkedPR": None}
+
+    def test_author_is_found_when_the_card_branch_differs_from_the_pr_branch(self):
+        # The card works on `card-local` and pushes it to the PR branch `feature`: no worktree holds `feature`.
+        self.fake_orca([self.CARD, self.MAIN], {"/w/card": ["term_author"], "/w/main": ["term_main"]})
+        self.assertEqual(prog.author_sessions("feature"), [])
+        self.assertEqual(prog.worktree_author_sessions("feature", "abc", 7), ["term_author"])  # by head sha, never the main checkout
+        self.fake_orca([{**self.CARD, "head": "zzz", "linkedPR": {"number": 7}}], {"/w/card": ["term_author"]})
+        self.assertEqual(prog.worktree_author_sessions("feature", "abc", 7), ["term_author"])  # by the linked PR
+        self.fake_orca([{**self.CARD, "head": "zzz", "branch": "refs/heads/feature"}], {"/w/card": ["term_author"]})
+        self.assertEqual(prog.worktree_author_sessions("feature", "abc", 7), ["term_author"])  # by the branch name
+        self.fake_orca([{**self.CARD, "head": "zzz"}], {"/w/card": ["term_other"]})
+        self.assertEqual(prog.worktree_author_sessions("feature", "abc", 7), [])  # nothing matches
+        self.fake_orca([self.CARD], {"/w/card": ["term_author"]}, truncated=True)
+        self.assertEqual(prog.worktree_author_sessions("feature", "abc", 7), [])  # a cut-off list proves nothing
+
+    def record_unverified(self, *extra, handle="term_orchestrator"):
+        before = len([e for e in self.p.events() if e["ev"] == "verdict"])
+        os.environ["ORCA_TERMINAL_HANDLE"] = handle
+        real = prog.author_sessions, prog.worktree_author_sessions
+        prog.author_sessions = prog.worktree_author_sessions = lambda *a, **kw: []
+        try:
+            prog.cmd_verdict([self.slug, "--pr", str(self.n), "--sha", f"h{self.n}", *extra])
+        finally:
+            prog.author_sessions, prog.worktree_author_sessions = real
+            os.environ.pop("ORCA_TERMINAL_HANDLE")
+            self.added = len([e for e in self.p.events() if e["ev"] == "verdict"]) - before
+
+    def test_a_pass_is_recorded_as_unverified_when_no_card_is_found_and_the_reviewer_is_not_the_recorder(self):
+        row = self.request()
+        self.record_unverified("--source", "review:codex", "--evidence", "https://example.test/r")
+        v = prog.pr_state(self.p.events())[self.n]["verdict"]
+        self.assertEqual((self.added, v["author"], v["author_unverified"]), (1, [], True))
+        self.round()
+        self.settled(row, "merged", 0)
+
+    def test_an_unverified_author_still_refuses_what_it_can_see(self):
+        for extra in (["--source", "independent-review", "--reviewer", "term_orchestrator", "--evidence", "e"],  # reviewer is the recorder
+                      ["--source", "independent-review", "--reviewer", "self", "--evidence", "e"],  # a self alias
+                      ["--source", "review:codex"]):  # no evidence
+            with self.subTest(extra=extra), self.assertRaises(SystemExit):
+                self.record_unverified(*extra)
+            self.assertEqual(self.added, 0)
+
+    def test_a_stored_row_with_no_author_needs_the_unverified_mark(self):
+        for who, ok in (({"author": []}, False), ({"author": [], "author_unverified": True}, True),
+                        ({"author": [], "author_unverified": "yes"}, False),
+                        ({"author": [], "author_unverified": True, "recorder": "codex"}, False)):  # recorder is the reviewer
+            with self.subTest(who=who):
+                self.assertEqual(prog.verdict_identity_problem(
+                    {"reviewer": "codex", "evidence": "e", "recorder": "term_orchestrator", **who}) is None, ok)
 
     def test_land_check_and_the_executor_agree_on_a_verdict_for_another_sha(self):
         self.verdict(sha="hother")  # same patch-id as the head, a different sha
