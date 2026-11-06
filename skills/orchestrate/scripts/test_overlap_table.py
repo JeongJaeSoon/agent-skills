@@ -1,5 +1,5 @@
 """orch overlap --table: the hot files of the open PRs and the order to land them in. Run: python3 test_overlap_table.py"""
-import json, pathlib, sys, tempfile
+import json, os, pathlib, sys, tempfile
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 from overlap_table import hot_table
 import prog
@@ -101,6 +101,20 @@ with tempfile.TemporaryDirectory() as tmp:
     program("badts", "acme/ts", [verdict(6, H, "pass", "bad timestamp")])
     found, unknown = prog.repo_verdicts("acme/ts", home)
     assert 6 not in found and unknown == ["program ledger badts"], (found, unknown)
+    # A ledger that fails halfway adds none of its verdicts, the ones before the bad line included, and a
+    # timestamp without a zone is a bad one.
+    program("half-a", "acme/half", [verdict(1, H, "pass", T), verdict(2, H, "pass", T)])
+    program("half-b", "acme/half", [verdict(3, H, "pass", T), verdict(2, H, "fail", "2026-11-06T00:00:00")])
+    found, unknown = prog.repo_verdicts("acme/half", home)
+    assert set(found) == {1, 2} and found[2]["result"] == "pass" and unknown == ["program ledger half-b"], (found, unknown)
+    # A program.json that cannot be read is named, not skipped.
+    program("locked", "acme/lock", [])
+    (home / "locked" / "program.json").chmod(0)
+    try:
+        found, unknown = prog.repo_verdicts("acme/lock", home)
+    finally:
+        (home / "locked" / "program.json").chmod(0o644)
+    assert unknown == ["program ledger locked"] or os.geteuid() == 0, unknown
 
 # An empty rollup is pending even when the repo declares no CI.
 assert prog.table_facts([dict(listing[2], statusCheckRollup=[])], {})[3]["ci"] == "pending"

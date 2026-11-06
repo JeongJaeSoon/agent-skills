@@ -1034,23 +1034,31 @@ def repo_verdicts(repo, home=None):
     except OSError:
         return best, ["program ledgers"]
     for d in dirs:
-        if d.name.startswith((".", "_")) or not (d / "program.json").is_file():
+        if d.name.startswith((".", "_")):
             continue
         try:
-            if json.loads((d / "program.json").read_text())["repo"].lower() != repo.lower():
+            cfg = (d / "program.json").read_text()
+        except (FileNotFoundError, NotADirectoryError):
+            continue  # not a program directory
+        except OSError:
+            unknown.append(f"program ledger {d.name}")
+            continue
+        try:
+            if json.loads(cfg)["repo"].lower() != repo.lower():
                 continue
             led = d / "ledger.jsonl"
             events = [json.loads(l) for l in led.read_text().splitlines() if l.strip()] if led.exists() else []
-            found = {}
+            mine = dict(best)  # merged into `best` only when this whole ledger read, so a bad one adds nothing
             for e in events:
                 if e.get("ev") == "verdict" and type(e.get("pr")) is int:
-                    found.setdefault(e["pr"], []).append((parse_ts(e["ts"]), e))
-            for n, cands in found.items():
-                for ts, e in cands:
-                    old = best.get(n)
+                    ts = parse_ts(e["ts"])
+                    if ts.tzinfo is None:
+                        raise ValueError("timestamp without a zone")
+                    old = mine.get(e["pr"])
                     if old is None or ts > old[0] or (ts == old[0] and e.get("result") != "pass"):
-                        best[n] = (ts, e)
-        except (OSError, ValueError, AttributeError, TypeError, KeyError):
+                        mine[e["pr"]] = (ts, e)
+            best = mine
+        except (OSError, ValueError, AttributeError, TypeError, KeyError):  # UnicodeDecodeError is a ValueError
             unknown.append(f"program ledger {d.name}")
     return {n: e for n, (_, e) in best.items()}, unknown
 
@@ -1088,7 +1096,7 @@ def cmd_overlap_table(p, argv):
     for r in rows:
         try:
             changed = rest_files(repo, r["number"])
-        except OSError:
+        except (OSError, ValueError):
             changed = None
         # A listing that stops at the REST cap may have dropped files, so it counts as unread.
         if changed is None or len(changed) >= REST_FILES_CAP:
