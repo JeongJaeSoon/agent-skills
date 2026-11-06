@@ -346,7 +346,7 @@ PR 을 맡는 스킬과 머지 주체:
 - **내용:**
   - 대상부터 고른다. 공개 저장소는 worktree 브랜치에서 고치고 사내 이름을 넣지 않는다. 개인 파일은 git이 없으므로 `~/.claude` 밖에 백업한 뒤 그 자리에서 고치고, 사내 이름을 써도 된다.
   - 새 스킬이나 열 줄이 넘는 절을 더하기 전에 기존 스킬을 목록과 grep으로 훑어 들어갈 집을 찾는다. 집이 없고 되풀이되는 필요일 때만 새 스킬을 만든다.
-  - 고친 뒤에는 순서대로: `claude-api`의 `prompt-audit`을 바뀐 파일에 돌려 반영, 로컬 목록으로 사내 이름 grep 0건(공개 저장소), README 테스트와 `claude plugin validate`, 카탈로그와 `translated-from`, description을 바꿨으면 `claude plugin eval`, 서명 커밋, 메인 체크아웃 fast-forward와 push.
+  - 고친 뒤에는 순서대로: `claude-api`의 `prompt-audit`을 바뀐 파일에 돌려 반영, 로컬 목록으로 사내 이름 grep 0건(공개 저장소), `scripts/check.sh`(시험 전부, pstack 동기화 시험, `claude plugin validate`), 카탈로그와 `translated-from`, description을 바꿨으면 `scripts/eval_desc.sh`(`claude plugin eval`을 옛·새 체크아웃에), 서명 커밋, 메인 체크아웃 fast-forward와 push.
   - 재사용하는 스킬에는 회사·팀·채널·사람·티켓 키·사내 저장소나 서비스 이름, 한 프로젝트에만 맞는 사실을 넣지 않는다. 변경은 끝낼 때 바로 커밋·push한다(다른 PC는 `skills-sync sync`로 받는다).
   - 로드되는 체크아웃에 들어간 뒤 `skills-sync broadcast --skills`(SKILL.md·참조 파일) 또는 `--plugins`(hook·manifest)를 돌린다. 빈 입력칸에서 쉬는 세션에만 `orca terminal send`로 리로드를 보내고, 작업 중인 세션은 쉴 때까지 대기로 남긴다. `orca terminal send`로 직접 보내지 않는다(권한 창이 Enter를 답으로 받는다). 세션은 자기 입력칸에 칠 수 없으므로 보고 끝에서 사용자에게 이 세션의 리로드를 청한다.
 - **관계:** `reflect`, `orchestrate`의 flow improver 브리프가 가리킨다. 새 스킬 초안과 description 조정은 `skill-creator`에 맡기고, 그 뒤 단계는 이 스킬이 맡는다.
