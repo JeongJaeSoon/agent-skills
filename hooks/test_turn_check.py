@@ -39,9 +39,9 @@ def bash(cmd, **kw):
     return call("Bash", {"command": cmd}, **kw)[0]
 
 
-def notice(tid, status="completed"):
+def notice(tid, status="completed", task="x"):
     return {"type": "queue-operation", "operation": "enqueue", "content":
-            f"<task-notification> <task-id>x</task-id> <tool-use-id>{tid}</tool-use-id> <status>{status}</status> </task-notification>"}
+            f"<task-notification> <task-id>{task}</task-id> <tool-use-id>{tid}</tool-use-id> <status>{status}</status> </task-notification>"}
 
 
 def flat(*parts):
@@ -118,6 +118,9 @@ bg, bid = call("Bash", {"command": "orch wait prog", "run_in_background": True},
 assert fired(flat(prompt("go"), bg, say("ok")), "wait_alive", event=LEAD)[0] is None
 stop_wait, _ = call("TaskStop", {"task_id": "bk1"})
 assert fired(flat(prompt("go"), bg, stop_wait, say("ok")), "wait_alive", event=LEAD)[1] == ["wait_alive"]
+# A notice that names only the task id (no tool-use id of ours) ends the wait it belongs to.
+assert fired(flat(prompt("go"), bg, notice("other", task="bk1"), say("ok")), "wait_alive", event=LEAD)[1] == ["wait_alive"]
+assert fired(flat(prompt("go"), bg, notice("other", task="bk2"), say("ok")), "wait_alive", event=LEAD)[0] is None
 fg, _ = call("Bash", {"command": "orch wait prog"})  # a foreground wait is no standing wait
 assert fired(flat(prompt("go"), fg, say("ok")), "wait_alive", event=LEAD)[1] == ["wait_alive"]
 assert fired(flat(prompt("go"), say("ok")), "wait_alive", first=PREAMBLE)[0] is None  # a worker keeps no wait
@@ -132,6 +135,10 @@ assert fired(flat(prompt("go"), up, bash("docker compose -p demo down"), say("ok
 assert fired(flat(prompt("go"), up, bash("python3 reap.py ledger add --kind compose-stack --id demo --keep why --until x"),
                   say("ok")), "stacks_down")[0] is None
 assert fired(flat(prompt("go"), up, bash("docker compose -p other down"), say("ok")), "stacks_down")[1] == ["stacks_down"]
+assert fired(flat(prompt("go"), up, bash("docker compose -p demo down", error="Error: no such project"), say("ok")),
+             "stacks_down")[1] == ["stacks_down"]  # a failed down took nothing down
+assert fired(flat(prompt("go"), bash("echo compose -p demo up"), say("ok")), "stacks_down")[0] is None  # text, not a command
+assert fired(flat(prompt("go"), up, bash("echo docker compose -p demo down"), say("ok")), "stacks_down")[1] == ["stacks_down"]
 assert fired(flat(prompt("go"), bash("docker compose ps"), say("ok")), "stacks_down")[0] is None
 assert fired(flat(prompt("go"), bash("docker compose -p demo up -d", error="Permission for this Bash was denied"),
                   say("ok")), "stacks_down")[0] is None
@@ -141,6 +148,8 @@ assert fired(flat(prompt("go"), up, say("ok")), "stacks_down", event={"agent_id"
 acts = bash('python3 "$P/prs.py" actions', result='{"key":"a"}\n{"key":"b"}')
 assert fired(flat(prompt("go"), acts, say("ok")), "prs_actions")[1] == ["prs_actions"]
 assert fired(flat(prompt("go"), acts, bash("python3 prs.py log --key a --source x"), say("ok")), "prs_actions")[0] is None
+assert fired(flat(prompt("go"), acts, bash("python3 prs.py log --key a --source x", error="disk full"), say("ok")),
+             "prs_actions")[1] == ["prs_actions"]  # a log that failed recorded nothing
 assert fired(flat(prompt("go"), bash("python3 prs.py actions", result=""), say("ok")), "prs_actions")[0] is None
 assert fired(flat(prompt("go"), say("ok")), "prs_actions")[0] is None
 
@@ -154,8 +163,12 @@ assert fired(flat(prompt("go"), review, bash("git commit -m x"), say("fixed")), 
 assert fired(flat(prompt("go"), other, say("ok")), "review_idle", first=PREAMBLE)[0] is None
 assert fired(flat(prompt("go"), review, say("x")), "review_idle")[0] is None  # a general main session
 assert fired(flat(prompt("go"), review, say("x")), "review_idle", event={"agent_id": "a"})[1] == ["review_idle"]
-codex = bash("codex exec --sandbox read-only - < /tmp/p.md", result="Act-on 0")
+codex = bash("codex exec review --base main", result="Act-on 0")
 assert fired(flat(prompt("go"), codex, say("done")), "review_idle", first=PREAMBLE)[1] == ["review_idle"]
+plain = bash("codex exec --sandbox read-only - < /tmp/p.md", result="notes")
+assert fired(flat(prompt("go"), plain, say("done")), "review_idle", first=PREAMBLE)[0] is None  # not a review
+bad_review = bash("codex exec review --base main", error="codex: not logged in")
+assert fired(flat(prompt("go"), bad_review, say("done")), "review_idle", first=PREAMBLE)[0] is None  # a failed review
 note = prompt("<task-notification> <tool-use-id>t9</tool-use-id> <status>completed</status> </task-notification>")
 assert fired([note, say("알겠습니다")], "review_idle", first=PREAMBLE)[1] == ["review_idle"]
 assert fired(flat(note, bash("gh pr view 1"), say("ok")), "review_idle", first=PREAMBLE)[0] is None
@@ -201,10 +214,28 @@ assert tc.end_check_verdict("worker", False, str(TMP)) is None
 turn_check = tc
 boom = lambda *a: 1 / 0  # noqa: E731
 tc.check_offer = boom
-out, rows = run(BAD, {"offer_phrase": True, "stacks_down": True})
-assert out is None and not rows
+out, rows = run(flat(prompt("go"), ASK), {"offer_phrase": True, "decision_registered": True}, event=ORCH)
+assert out and [r["check"] for r in rows] == ["decision_registered"], (out, rows)  # the other check still warns
 assert "turn_check.offer_phrase" in (STATE / "guard-errors.jsonl").read_text()
 tc = importlib.reload(turn_check)
+# A timeout of end-check and a warning row that cannot be written are logged, not swallowed.
+(STATE / "guard-errors.jsonl").unlink()
+tc.END_CHECK = TMP / "hang.py"
+(TMP / "hang.py").write_text("import time\ntime.sleep(60)\n")
+real_run = subprocess.run
+subprocess.run = lambda *a, **k: (_ for _ in ()).throw(subprocess.TimeoutExpired("x", 1))
+try:
+    assert tc.end_check_verdict("card", False, str(TMP)) is None
+finally:
+    subprocess.run = real_run
+assert "turn_check.end_check" in (STATE / "guard-errors.jsonl").read_text()
+tc = importlib.reload(turn_check)
+(STATE / "guard-errors.jsonl").unlink()
+(STATE / "turn-warnings.jsonl").unlink(missing_ok=True)
+os.environ["AGENT_SKILLS_STATE"] = "/dev/null/nope"
+tc.config.append_warning({"check": "x"})
+os.environ["AGENT_SKILLS_STATE"] = str(STATE)
+assert not (STATE / "turn-warnings.jsonl").exists()
 
 # ---- Telegram PreToolUse: telegram_render --------------------------------------------------------------------------
 tg = {"hook_event_name": "PreToolUse", "tool_name": "mcp__plugin_telegram_telegram__reply",

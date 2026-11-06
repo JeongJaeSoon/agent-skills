@@ -37,10 +37,11 @@ TRANSCRIPT_MAX = 64 << 20
 WAIT = re.compile(r"\borch(?:\.py)?\s+(?:inbox|wait|watch-cards)\b")
 TASK_END = re.compile(r"<status>\s*(?:completed|failed|killed|stopped|cancelled)\b")
 TASK_ID = re.compile(r"<tool-use-id>([^<\s]+)</tool-use-id>")
-BG_ID = re.compile(r"background with ID:\s*(\w+)")
+NOTICE_TASK = re.compile(r"<task-id>([^<\s]+)</task-id>")
+BG_ID = re.compile(r"(?:background with ID:|[Tt]ask(?: ID)?[: ])\s*([\w-]+)")
 REVIEW_SKILLS = {"code-review", "review", "security-review", "interrogate", "blast-radius", "ui-review", "simplify"}
 REVIEW_TEXT = re.compile(r"review|리뷰|audit|interrogate|adversarial", re.I)
-CODEX = re.compile(r"\bcodex(?:-companion)?\b.*\b(?:review|exec|adversarial)\b|\bcodex-companion\b", re.S)
+CODEX = re.compile(r"\bcodex(?:-companion)?\b.*\b(?:review|adversarial)\b", re.S)
 DECISION = re.compile(
     r"(?:결정|선택|승인|판단)\S{0,6}\s*(?:이\s*|가\s*)?(?:필요|부탁|해\s*주세요|바랍니다)|어느\s*(?:쪽|안)[^\n]{0,30}[?？]"
     r"|(?:할까요|드릴까요|갈까요|좋을까요|괜찮을까요)\s*[?？]|\bwhich (?:option|one|approach)\b[^\n]*\?"
@@ -162,10 +163,11 @@ def check_wait_alive(path):
                        "background with ID"))
     if got is None:
         return None
-    started, ended, task_of, stopped = {}, set(), {}, set()
+    started, ended, ended_tasks, task_of, stopped = {}, set(), set(), {}, set()
     for raw, entry in got:
         if "<task-notification>" in raw and TASK_END.search(raw):
             ended |= set(TASK_ID.findall(raw))
+            ended_tasks |= set(NOTICE_TASK.findall(raw))
         for b in claim_check.blocks(entry or {}) if (entry or {}).get("type") in ("assistant", "user") else []:
             if b.get("type") == "tool_result":
                 text, err = results([entry]).get(b.get("tool_use_id"), ("", False))
@@ -180,7 +182,7 @@ def check_wait_alive(path):
                 elif (b.get("name") == "Monitor" or b.get("name") == "Bash" and inp.get("run_in_background")) \
                         and WAIT.search(str(inp.get("command") or "")):
                     started[b.get("id")] = inp.get("command")
-    alive = [i for i in started if i not in ended and task_of.get(i) not in stopped]
+    alive = [i for i in started if i not in ended and task_of.get(i) not in stopped | ended_tasks]
     if alive:
         return None
     return "백그라운드 inbox 대기·watch-cards가 없다 (orchestrate Drain: 턴을 끝내기 전에 다시 띄운다)"
@@ -213,7 +215,8 @@ def end_check_verdict(mode, keep, cwd):
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=20, cwd=cwd or None, stdin=subprocess.DEVNULL)
         doc, _ = json.JSONDecoder().raw_decode(p.stdout.lstrip())
-    except (OSError, ValueError, subprocess.TimeoutExpired):
+    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        config.log_error("turn_check.end_check", exc)
         return None
     return doc.get("verdict") if isinstance(doc, dict) else None
 
@@ -244,7 +247,7 @@ def reviewish(name, inp):
 
 
 def check_review_idle(start, entries):
-    called = uses(entries)
+    called, res = uses(entries), results(entries)
     last = None  # the last tool result's id
     for e in entries:
         if e.get("type") == "assistant" and any(b.get("type") == "tool_use" for b in claim_check.blocks(e)):
@@ -252,7 +255,8 @@ def check_review_idle(start, entries):
         for b in claim_check.blocks(e) if e.get("type") == "user" else []:
             if b.get("type") == "tool_result":
                 last = b.get("tool_use_id")
-    if last is not None and reviewish(*called.get(last, ("", {}))):
+    # A review call that failed produced no report to act on.
+    if last is not None and not res.get(last, ("", False))[1] and reviewish(*called.get(last, ("", {}))):
         return "리뷰 보고를 받고 다음 행동 없이 턴이 끝났다 (deliver-ticket §3: 같은 턴에 반영하고 이어 간다)"
     notice = start and "<task-notification>" in json.dumps(start.get("message") or "", ensure_ascii=False)
     if notice and TASK_END.search(json.dumps(start["message"], ensure_ascii=False)) and not called:
@@ -288,8 +292,11 @@ def compose_action(words):
     if "reap.py" in base and "ledger" in words and "add" in words and option(words, "--kind") == "compose-stack" \
             and option(words, "--keep"):
         return "keep", option(words, "--id")
-    i = next((k for k, w in enumerate(words) if w == "docker-compose" or w == "compose"), None)
-    if i is None or not (project := project_of(words)):
+    # The command itself is docker compose, bare or under `orch heavy`: `echo compose up` is text.
+    runs = base[0] in ("docker", "docker-compose") or base[0] in ("orch", "orch.py") and "heavy" in words[1:3]
+    i = next((k for k, w in enumerate(words) if os.path.basename(w) == "docker-compose"
+              or w == "compose" and k and os.path.basename(words[k - 1]) == "docker"), None)
+    if i is None or not runs or not (project := project_of(words)):
         return None
     rest = words[i + 1:]
     if "up" in rest:
@@ -304,17 +311,18 @@ def check_stacks(path):
     if got is None:
         return None
     entries = [e for _, e in got if e]
-    skip = claim_check.refused(entries)
+    skip, res = claim_check.refused(entries), results(entries)
     up = {}
     for e in entries:
         for b in claim_check.blocks(e) if e.get("type") == "assistant" else []:
             if b.get("type") != "tool_use" or b.get("name") != "Bash" or b.get("id") in skip:
                 continue
+            failed = res.get(b.get("id"), ("", False))[1]
             for c in commands((b.get("input") or {}).get("command")):
                 act = compose_action(c.words)
                 if act and act[0] == "up":
-                    up[act[1]] = True
-                elif act:
+                    up[act[1]] = True  # a failed `up` may still have started containers
+                elif act and not failed:  # a `down` or keep that failed took nothing down
                     up.pop(act[1], None)
     if up:
         return f"띄운 compose 스택이 내려가지 않았다: {', '.join(sorted(up))} (`docker compose -p <project> down`)"
@@ -348,7 +356,7 @@ def check_prs_actions(entries):
                 continue
             if "actions" in w and i in res and not res[i][1]:
                 lines += sum(1 for l in res[i][0].splitlines() if l.strip())
-            elif "log" in w:
+            elif "log" in w and i in res and not res[i][1]:
                 logged = True
     if lines and not logged:
         return f"`prs.py actions`가 {lines}줄을 냈는데 `prs.py log`로 기록한 것이 없다 (watch-prs review-wait)"

@@ -172,7 +172,12 @@ def main():
         print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
     elif config.level(config.load(), "claim_check.subagent", "off") != "off":
         # A warning only (`claim_check.subagent`, off until set): a line for the human and a turn-warnings row.
-        if warning := subagent_claim(entries, event.get("last_assistant_message")):
+        try:
+            warning = subagent_claim(entries, event.get("last_assistant_message"))
+        except Exception as exc:
+            config.log_error("claim_check.subagent", exc)
+            return
+        if warning:
             now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
             config.append_warning({"at": now, "event": event.get("hook_event_name"), "session": event.get("session_id"),
                                    "agent": event.get("agent_id") or "", "check": "claim_subagent", "level": "warn"})
