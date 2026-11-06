@@ -290,7 +290,7 @@ def delegations(tool, args):
 def unlinked(delegation):
     kind, text, flagged = delegation
     if kind == "subagent":
-        return not ORDER_LINE.search(text)
+        return not ORDER_LINE.search(FENCE.sub("", text))
     if flagged:
         return False
     try:  # a quoted template in a ``` fence is not the brief's own row, as skills-sync card reads it

@@ -1021,8 +1021,9 @@ def create(argv):
 
 
 def create_locked(brief, opts, refs, prompt, kind=None, order=None):
-    if order:  # the lock may have waited behind another start: the order can have closed since create() looked
-        order = order_of(brief, opts)
+    # The lock may have waited behind another start: the brief can have gained an ORDER row, or the order closed, since
+    # create() looked. The card is made from the brief as it is now.
+    order = order_of(brief, opts)
     repo, superseded = check_duplicates(opts["--repo"], refs, opts["--role"], opts.get("--supersede"))
     # A lead's brief has no FORBIDDEN row in its template: the worker paragraph is not its rule set.
     forbidden = ("skipped (--no-forbidden)" if opts.get("--no-forbidden") else "skipped (lead brief)"

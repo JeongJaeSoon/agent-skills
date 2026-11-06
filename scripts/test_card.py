@@ -1095,6 +1095,25 @@ assert rc == 5 and "orch order link o7 --unit card:repo1::" in err and "Do not c
 # The order closes while this start waits on the card lock: the start looks again and creates nothing.
 rc, out, err, calls = go(path, "--repo", "name:acme", "--name", "acme-helper", "--order", "o7", mode="order-closes-in-lock")
 assert rc == 2 and "o7 is done" in err and not creates(calls), (rc, err)
+# The brief gains an ORDER row while this start waits on the lock: the card is made from the brief as it is then.
+late_brief = brief(WORKER, "late-order.md")
+real_lock = card.card_lock
+
+
+@contextlib.contextmanager
+def lock_adding_order():
+    with real_lock():
+        with open(late_brief, "a") as f:
+            f.write("ORDER: o7\n")
+        yield
+
+
+card.card_lock = lock_adding_order
+try:
+    rc, out, err, calls = go(late_brief, "--repo", "name:acme", "--name", "acme-helper")
+finally:
+    card.card_lock = real_lock
+assert rc == 0 and "ORDER: o7\n오너 지시 o7" in prompt_of(calls) and any(c[:2] == ["order", "link"] for c in order_calls(calls)), (err, order_calls(calls))
 # The default comment is what fleet.report_target reads: the bare path of a brief whose REPORT names a Run.
 import fleet  # noqa: E402
 run_brief = brief(WORKER + "REPORT      orca orchestration send --to run:run_me --type question\n", "report-run.md")

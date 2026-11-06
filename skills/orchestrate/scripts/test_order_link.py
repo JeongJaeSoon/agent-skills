@@ -167,6 +167,9 @@ subagent(f"일을 한다.\nORDER: {oid}\n끝.", "a1", "SubagentStop")
 assert links(oid) == ["agent:a1"], links(oid)
 subagent(f"{oid} 를 참고해서 일을 한다 (ORDER {oid} in prose, ORDER: {oid} extra)", "a2")
 assert links(oid) == ["agent:a1"], "a mention is not a line of its own"
+ok("order", "add", "펜스 시험")  # o7 below is this one; the fenced example names o6
+subagent("예시:\n```\nORDER: o6\n```\nORDER: o7\n일", "a5")
+assert links("o7") == ["agent:a5"] and "agent:a5" not in links("o6"), (links("o7"), links("o6"))
 subagent("ORDER: o99", "a3")
 subagent("ORDER: o2", "a4")  # o2 is done
 assert "agent:a4" not in links("o2"), links("o2")
@@ -185,11 +188,11 @@ def hook(event):
 
 
 hook("SubagentStart")
-assert links("o7") == [], "no transcript yet"
-(tdir / "agent-late.jsonl").write_text(json.dumps({"type": "user", "message": {"role": "user", "content": "ORDER: o7\n일"}}) + "\n")
-ok("order", "done", "o7")
+assert links("o8") == [], "no transcript yet"
+(tdir / "agent-late.jsonl").write_text(json.dumps({"type": "user", "message": {"role": "user", "content": "ORDER: o8\n일"}}) + "\n")
+ok("order", "done", "o8")
 hook("SubagentStart")
-assert links("o7") == [], "a closed order is not linked at the start"
+assert links("o8") == [], "a closed order is not linked at the start"
 hook("SubagentStop")
-assert links("o7") == ["agent:late"], links("o7")
+assert links("o8") == ["agent:late"], links("o8")
 print("ok")

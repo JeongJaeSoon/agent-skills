@@ -203,6 +203,8 @@ for tool, args in (("Agent", {"prompt": "look at the logs\nORDER: o3\nthen repor
 BRIEF_FENCED = TMP / "fenced.md"
 BRIEF_FENCED.write_text("/goal x\n```\nORDER: o3\n```\nCLOSE: x\n")
 assert "carries no owner order" in note("Bash", card_cmd(str(BRIEF_FENCED))), "a quoted row is not the brief's own"
+assert "carries no owner order" in note("Agent", {"prompt": "example:\n```\nORDER: o3\n```\nlook at the logs"}), "a fenced example is not an order"
+assert note("Agent", {"prompt": "example:\n```\nORDER: o3\n```\nORDER: o7\nlook"}) == "none"
 assert note("Agent", {"prompt": "see ORDER: o3 in prose, ORDER o3 too"}).startswith("[gate:delegate]"), "a mention is not a line"
 assert note("Agent", AGENT, agent=None) == "none" and note("Agent", AGENT, agent_id="a1") == "none", "only the orchestrator's own call"
 assert bash("rm -rf x") == "deny", "a denied call stays denied"

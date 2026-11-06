@@ -65,6 +65,7 @@ def main():
 
 # A line of its own, so a prompt that only mentions an order id in prose links nothing.
 ORDER_LINE = re.compile(r"(?im)^[ \t]*`?ORDER`?[ \t]*:[ \t]*(o\d+)[ \t]*$")
+FENCE = re.compile(r"(?ms)^[ \t]*```.*?^[ \t]*```[^\n]*$")
 
 
 def link_order(event, handle):
@@ -79,7 +80,7 @@ def link_order(event, handle):
     if isinstance(event.get("transcript_path"), str):
         paths.append(str(pathlib.Path(event["transcript_path"]).with_suffix("") / "subagents" / f"agent-{aid}.jsonl"))
     for path in paths:
-        if m := ORDER_LINE.search(roles.first_prompt(path)):
+        if m := ORDER_LINE.search(FENCE.sub("", roles.first_prompt(path))):  # an example in a fence is not the order
             break
     else:
         return
