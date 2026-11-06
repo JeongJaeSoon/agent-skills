@@ -10,15 +10,18 @@ HOME = TMP / "home"
 CONFIG = HOME / ".claude" / "agent-skills.json"
 STATE = TMP / "state"
 BIN = TMP / "bin"
+TMPROOT = TMP / "tmproot"
 (HOME / ".claude").mkdir(parents=True)
 BIN.mkdir()
+TMPROOT.mkdir()
 
 
 def env(**extra):
     base = {k: v for k, v in os.environ.items()
             if not k.startswith(("CLAUDE_", "AGENT_SKILLS_", "XDG_")) and k != "ORCA_TERMINAL_HANDLE"}
+    # TMPDIR is a folder of its own, so TMP's other folders (HOME, the repositories) count as outside it.
     base.update(HOME=str(HOME), AGENT_SKILLS_STATE=str(STATE), AGENT_SKILLS_CONFIG=str(CONFIG),
-                PATH=f"{BIN}:/usr/bin:/bin", ORCA_TERMINAL_HANDLE="term_me")
+                PATH=f"{BIN}:/usr/bin:/bin", ORCA_TERMINAL_HANDLE="term_me", TMPDIR=str(TMPROOT))
     base.update(extra)
     return base
 
@@ -71,6 +74,13 @@ git("-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-qm", "a"
 CLEAN = TMP / "clean"
 CLEAN.mkdir()
 git("init", "-q", cwd=CLEAN)
+# Repositories on a named branch: the default branch, a PR branch, and one whose default branch is origin/HEAD's.
+ON_MAIN, ON_FEAT, ON_DEV = TMP / "on-main", TMP / "on-feat", TMP / "on-dev"
+for repo, branch in ((ON_MAIN, "main"), (ON_FEAT, "feat/x"), (ON_DEV, "dev")):
+    repo.mkdir()
+    git("init", "-q", "-b", branch, cwd=repo)
+git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop", cwd=ON_DEV)
+git("checkout", "-q", "-b", "develop", cwd=ON_DEV)
 # A stand-in `orca` that says the current worktree is the main one.
 (BIN / "orca").write_text("#!/bin/sh\necho '{\"result\": {\"worktree\": {\"isMainWorktree\": true}}}'\n")
 (BIN / "orca").chmod(0o755)
@@ -190,6 +200,55 @@ CASES = [
                                           "export AGENT_SKILLS_PRESSURE_GATE=0"],
      ["AGENT_SKILLS_PRESSURE_GATE=1 orch heavy p -- npm test", "echo AGENT_SKILLS_PRESSURE_GATE",
       "echo AGENT_SKILLS_PRESSURE_GATE=0"]),
+    ("guard.deny.default_force_push", "deny",
+     ["git push --force origin main", "git push -f origin main", "git push --force-with-lease origin main",
+      "git push --force-with-lease=main:abc123 origin main", "git push origin +main", "git push origin +HEAD:main",
+      "git push -f origin HEAD:refs/heads/master", "git push --force origin feat:main", "git push -fu origin main",
+      "git push origin --force main", "git push -o ci.skip -f origin main", "git -C /x push -f origin main",
+      "git push --all --force origin", "git push --force-if-includes --force-with-lease origin main",
+      "git push --force origin main:main", "cd /x && git push -f origin master",
+      ("git push -f", ON_MAIN), ("git push -f origin HEAD", ON_MAIN), ("git push -f origin", ON_MAIN),
+      ("git push -f origin HEAD", ON_DEV),
+      "gh api -X PATCH repos/a/b/git/refs/heads/main -F force=true",
+      "gh api --method PATCH repos/a/b/git/refs/heads/master -f force=true -f sha=abc"],
+     ["git push origin main", "git push --force-with-lease origin feat/x", "git push --force-with-lease=feat:abc origin feat",
+      "git push origin +feat/x", "git push -f origin feat:main-fix", "git push origin :old-branch",
+      "git push --force origin refs/heads/maintenance", "git push -o main -f origin feat", "git -C /x push -f origin feat",
+      "echo git push -f origin main", "git fetch -f origin main:main", "git log --force main",
+      ("git push -f origin HEAD", ON_FEAT), ("git push -f", ON_FEAT), ("git push --force-with-lease", ON_FEAT),
+      ("git push -f origin HEAD", ON_DEV.parent), "git push --tags origin",
+      "gh api repos/a/b/git/refs/heads/main", "gh api -X PATCH repos/a/b/git/refs/heads/feat -F force=true",
+      "gh api -X PATCH repos/a/b/git/refs/heads/main -f sha=abc"]),
+    ("guard.deny.protection_write", "deny",
+     ["gh api -X PUT repos/a/b/branches/main/protection -f enforce_admins=true",
+      "gh api --method=DELETE repos/a/b/branches/main/protection", "gh api repos/a/b/rulesets -f name=x",
+      "gh api -X PUT repos/a/b/rulesets/12 --input r.json", "gh api orgs/a/rulesets -X POST",
+      "gh api -X PATCH repos/a/b/branches/feat%2Fx/protection/required_status_checks -f strict=true",
+      "gh api -X DELETE repos/a/b/branches/main/protection/enforce_admins",
+      "gh api graphql -f query='mutation { createBranchProtectionRule(input: {}) { clientMutationId } }'",
+      "gh api graphql -f query='mutation { deleteRepositoryRuleset(input: {}) { clientMutationId } }'"],
+     ["gh api repos/a/b/branches/main/protection", "gh api repos/a/b/rulesets", "gh api -X GET repos/a/b/rulesets/12",
+      "gh api repos/a/b/rules/branches/main", "gh api repos/a/b/branches/main/protection --jq .enforce_admins",
+      "gh api graphql -f query='query { viewer { login } }'", "gh api -X POST repos/a/b/issues -f title=x",
+      "echo gh api -X PUT repos/a/b/branches/main/protection", "gh pr view 3"]),
+    ("guard.deny.rm_outside", "deny",
+     ["rm -rf /usr/local/lib/x", "rm -r /Users/someone/proj", "rm -Rf /var/lib/x", "rm --recursive --force /opt/x",
+      "rm -rf ~/projects", "rm -rf -- /usr/x", "sudo rm -rf /usr/x", "rm -rf /tmp", "rm -rf /", "rm -fr /opt",
+      "rm -rf /tmp/../usr/x", "rm -rf $HOME/.cache/x", "rm -rf ~/x /tmp/y", "ls && rm -rf /usr/x",
+      ("rm -rf ../clean", REPOX), ("rm -rf .", REPOX), ("cd /usr && rm -rf local", REPOX),
+      ("rm -rf build", CLEAN.parent), ("rm -rf node_modules", HOME)],
+     ["rm -rf /tmp/x", "rm -rf /private/tmp/x", f"rm -rf {TMPROOT}/job",
+      ("rm -rf build", REPOX), ("rm -rf build dist", REPOX), ("rm -rf node_modules/.cache", REPOX),
+      ("cd build && rm -rf out", REPOX), ("rm -rf ./dist", REPOX), (f"rm -rf {REPOX}/build", REPOX),
+      "rm /usr/x/file.txt", "rm -f /usr/local/x.log", "echo rm -rf /usr/x", "git rm -r --cached x",
+      'rm -rf "${DIR:?}/build"', "rm -ri", "rmdir /usr/x"]),
+    ("guard.deny.trash_empty", "deny",
+     ["rm -rf ~/.Trash/*", "rm -rf ~/.Trash", "rm -f ~/.Trash/*", "rm -rf $HOME/.Trash/old", "sudo rm -rf ~/.Trash/*",
+      "rm -r ~/.Trash/a.txt", "rm -rf ~/.local/share/Trash/files", "rm -rf /Volumes/Disk/.Trashes/501",
+      "osascript -e 'tell application \"Finder\" to empty trash'",
+      "osascript -e 'tell application \"Finder\" to empty the trash'", "trash-empty"],
+     ["ls ~/.Trash", "echo rm -rf ~/.Trash", "mv x ~/.Trash/", "rm ~/.Trash/a.txt", "trash-list", "echo trash-empty",
+      "osascript -e 'tell application \"Finder\" to get name'"]),
     ("guard.warn.rm_expansion", "warn", ["rm -rf $DIR/build", "rm *.log", "rm -f /tmp/x/*"],
      ['rm -rf "${DIR:?}/build"', "rm -rf ${DIR:?}/build", "rm -f /tmp/x/a.log", 'rm "$F"']),
     ("guard.warn.reset_hard", "warn", [("git reset --hard origin/main", REPOX)],

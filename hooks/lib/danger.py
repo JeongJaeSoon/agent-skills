@@ -28,6 +28,10 @@ RULES = {
     "guard.deny.self_exempt_label": "deny",
     "guard.deny.owner_only": "deny",
     "guard.deny.external_review": "deny",
+    "guard.deny.default_force_push": "deny",
+    "guard.deny.protection_write": "deny",
+    "guard.deny.rm_outside": "deny",
+    "guard.deny.trash_empty": "deny",
     "guard.ask.pressure_bypass": "ask",
     "guard.warn.rm_expansion": "warn",
     "guard.warn.reset_hard": "warn",
@@ -54,6 +58,7 @@ DOCKER_OPTS = {"-H", "--host", "-c", "--context", "--config", "-l", "--log-level
 COMPOSE_OPTS = {"-f", "--file", "-p", "--project-name", "--profile", "--env-file", "--project-directory", "--ansi",
                 "--progress", "--parallel"}
 GIT_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"}
+PUSH_VALUED = {"-o", "--push-option", "--repo", "--receive-pack", "--exec"}
 
 
 def level(cfg, key):
@@ -245,6 +250,24 @@ def check_command(c, masked, cfg, cwd, session, here=None):
         if label_add(w):
             out.append(("guard.deny.self_exempt_label", "The `no-visual-change` label exempts a PR from visual review; "
                                                         "an agent never adds it to its own PR. Ask the human."))
+    if name in ("git", "gh") and force_push_default(c, here):
+        out.append(("guard.deny.default_force_push", "A force push rewrites the default branch every worker and "
+                                                     "reviewer builds on. Push your own PR branch (`git push "
+                                                     "--force-with-lease=<branch>:<sha> origin <branch>`); a bad "
+                                                     "commit on main is undone with a revert PR."))
+    if name == "gh" and protection_write(w):
+        out.append(("guard.deny.protection_write", "This writes branch protection or a ruleset, the rules that "
+                                                   "gate merges. The repository owner changes them, not an agent."))
+    if name == "rm":
+        trash, outside = rm_outside(w, here, cwd)
+        if trash:
+            out.append(("guard.deny.trash_empty", TRASH_EMPTY))
+        if outside:
+            out.append(("guard.deny.rm_outside", "A recursive `rm` is limited to this checkout and the temporary "
+                                                 "folders. Move anything else to the trash (`mv <path> ~/.Trash/`) "
+                                                 "or ask the human."))
+    if name == "trash-empty" or name == "osascript" and re.search(r"empty\s+(the\s+)?trash", " ".join(w), re.I):
+        out.append(("guard.deny.trash_empty", TRASH_EMPTY))
     if name == "orch" and w[1:2] == ["exempt"]:
         out.append(("guard.deny.owner_only", f"`orch {' '.join(w[1:3])}` is the human's to run, as a `!` line in their "
                                              "own chat."))
@@ -269,6 +292,8 @@ def check_command(c, masked, cfg, cwd, session, here=None):
     return out
 
 
+TRASH_EMPTY = ("This empties a trash folder, where the human keeps what they can still undo. Leave it; move your "
+               "own files there instead.")
 USER_SETTINGS = ("This writes the user's own settings (Claude Code user settings, ~/.claude/agent-skills.json or "
                  "secure-fill's allowlist). The user changes them: agent-skills:skills-config or tune-automode emits "
                  "a script the user runs.")
@@ -312,6 +337,13 @@ def label_add(w):
         return False
     # Only a request that adds labels: POST/PUT/PATCH (a field without --method means POST) to …/labels, with the
     # label in a field. A GET that filters on it or a DELETE of it is not one.
+    method, endpoint, fields = api_call(w)
+    return (method in ("POST", "PUT", "PATCH") and re.search(r"/labels/?$", endpoint) is not None
+            and has(f.split("=", 1)[-1] for f in fields))
+
+
+def api_call(w):
+    """(METHOD, endpoint, [field]) of a `gh api` command. A field or --input without --method means POST."""
     method = next((w[i + 1] for i, x in enumerate(w[:-1]) if x in ("-X", "--method")), None)
     method = next((x.split("=", 1)[1] for x in w if x.startswith("--method=")), method)
     fields = [w[i + 1] for i, x in enumerate(w[:-1]) if x in ("-f", "-F", "--field", "--raw-field")]
@@ -319,8 +351,114 @@ def label_add(w):
     method = (method or ("POST" if fields or "--input" in w else "GET")).upper()
     endpoint = verb(w[2:], {"-X", "--method", "-f", "-F", "--field", "--raw-field", "-H", "--header", "--input",
                             "-q", "--jq", "-t", "--template", "--hostname", "--cache", "-p", "--preview"})[0] or ""
-    return (method in ("POST", "PUT", "PATCH") and re.search(r"/labels/?$", endpoint) is not None
-            and has(f.split("=", 1)[-1] for f in fields))
+    return method, endpoint, fields
+
+
+def protection_write(w):
+    """A `gh api` call that writes branch protection or a ruleset; GETs read them and pass."""
+    if w[1:2] != ["api"]:
+        return False
+    method, endpoint, fields = api_call(w)
+    if endpoint.strip("/") == "graphql":
+        return any(re.search(r"mutation[^{]*\{.*(create|update|delete)\w*(ProtectionRule|Ruleset)", f, re.S)
+                   for f in fields)
+    return method != "GET" and re.search(r"/branches/.+/protection(/|$)|(^|/)rulesets(/|$)", endpoint) is not None
+
+
+def git_out(args, where):
+    """Stdout of a git command in `where`; "" when it fails or `where` is not a folder."""
+    try:
+        return run(["git", *args], where).stdout.strip()
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return ""
+
+
+def force_push_default(c, here):
+    """Whether this `git push` or `gh api` command force-updates a default branch: main, master or the branch
+    origin/HEAD names. A push with no refspec, or `HEAD`, is judged by the branch checked out in `here`; when that
+    cannot be read, only main and master count."""
+    w = c.words
+    if c.name == "gh":
+        method, endpoint, fields = api_call(w) if w[1:2] == ["api"] else ("", "", [])
+        return (method == "PATCH" and re.search(r"/git/refs/heads/(main|master)$", endpoint) is not None
+                and "force=true" in fields)
+    sub, rest = verb(w[1:], GIT_OPTS)
+    if sub != "push":
+        return False
+    where = here
+    for i, x in enumerate(w[:-1]):
+        if x == "-C":
+            where = expand(w[i + 1], here) or here
+    opts, pos, i = [], [], 0
+    while i < len(rest):
+        x = rest[i]
+        i += 1
+        if x == "--":
+            pos += rest[i:]
+            break
+        if x.startswith("-") and len(x) > 1:
+            opts.append(x)
+            i += x in PUSH_VALUED
+        else:
+            pos.append(x)
+    forced = any(o in ("--force", "--force-if-includes") or o.startswith("--force-with-lease")
+                 or re.fullmatch(r"-[a-zA-Z]*f[a-zA-Z]*", o) for o in opts)
+    if forced and ("--all" in opts or "--mirror" in opts):
+        return True
+    head = git_out(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], where)
+    names = {"main", "master"} | ({head.split("/", 1)[1]} if "/" in head else set())
+    for spec in pos[1:] or ["HEAD"]:
+        src, _, dst = spec.lstrip("+").partition(":")
+        dst = (dst if ":" in spec else src).removeprefix("refs/heads/")
+        if dst == "HEAD":
+            dst = git_out(["symbolic-ref", "--short", "HEAD"], where)
+        if (forced or spec.startswith("+")) and dst in names:
+            return True
+    return False
+
+
+def rm_targets(w):
+    """(options, operands) of an `rm` command."""
+    opts, operands, end = [], [], False
+    for x in w[1:]:
+        if not end and x == "--":
+            end = True
+        elif not end and x.startswith("-") and len(x) > 1:
+            opts.append(x)
+        else:
+            operands.append(x)
+    return opts, operands
+
+
+def trash_dirs():
+    home = pathlib.Path.home()
+    return [os.path.realpath(home / ".Trash"), os.path.realpath(home / ".local" / "share" / "Trash")]
+
+
+def in_trash(path):
+    return any(path == t or path.startswith(t + os.sep) for t in trash_dirs()) or "/.Trashes/" in path + "/"
+
+
+def rm_outside(w, here, cwd):
+    """(trash, outside): the recursive-rm or glob targets that empty a trash folder, and the ones that lie outside
+    the checkout the session runs in and the temporary folders. A path with an unresolved `$` is not judged."""
+    opts, operands = rm_targets(w)
+    recursive = any(o == "--recursive" or re.fullmatch(r"-[a-zA-Z]*[rR][a-zA-Z]*", o) for o in opts)
+    roots = {os.path.realpath(p) for p in ("/tmp", "/private/tmp", os.environ.get("TMPDIR") or "/tmp")}
+    top = git_out(["rev-parse", "--show-toplevel"], cwd)
+    if top:
+        roots.add(os.path.realpath(top))
+    trash, outside = [], []
+    for x in operands:
+        path = expand(x, here)
+        if not path or "$" in path or "`" in path:
+            continue
+        if in_trash(path):
+            if recursive or re.search(r"[*?\[]", x) or path in trash_dirs():
+                trash.append(x)
+        elif recursive and not any(path.startswith(r + os.sep) for r in roots):
+            outside.append(x)
+    return trash, outside
 
 
 def run(argv, cwd, timeout=3):

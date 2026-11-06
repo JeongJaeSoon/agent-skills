@@ -600,6 +600,10 @@ PR 을 맡는 스킬과 머지 주체:
 | `guard.deny.self_exempt_label` | deny | `gh`로 `no-visual-change` 라벨 붙이기(`pr create --label`, `pr edit --add-label`, `issue edit`, `gh api …/labels`) |
 | `guard.deny.owner_only` | deny | `orch exempt`. 사람이 자기 채팅에서 `!`로 친다. 키를 끄면 다른 `orch` 명령처럼 허용된다 |
 | `guard.deny.external_review` | deny | `codex` 호출인데 작업 폴더(또는 `-C`)의 origin 저장소가 `repos.<owner/repo>.external_llm: false`. 그 키가 없으면 판정하지 않는다 |
+| `guard.deny.default_force_push` | deny | 기본 브랜치(`main`, `master`, origin/HEAD가 가리키는 브랜치)로 가는 `git push`의 `--force`·`-f`·`--force-with-lease`·`--force-if-includes`·`+refspec`, `--all`·`--mirror`와 함께 쓴 force, `gh api -X PATCH …/git/refs/heads/main -F force=true`. refspec이 없거나 `HEAD`면 체크아웃된 브랜치로 판정한다. 자기 PR 브랜치의 `--force-with-lease`는 막지 않는다 |
+| `guard.deny.protection_write` | deny | 브랜치 보호(`…/branches/<b>/protection`)와 ruleset(`…/rulesets`)에 쓰는 `gh api`(GET 이외, 필드를 주면 POST), 보호 규칙·ruleset을 바꾸는 GraphQL mutation. 읽기는 막지 않는다 |
+| `guard.deny.rm_outside` | deny | 현재 체크아웃(git toplevel)과 `/tmp`·`$TMPDIR` 밖을 가리키는 재귀 `rm`(`-r`·`-R`·`--recursive`). 체크아웃 루트 자신과 `/tmp` 자신도 대상이다. 풀리지 않는 `$` 변수가 든 경로는 판정하지 않고 `rm_expansion` 경고에 맡긴다 |
+| `guard.deny.trash_empty` | deny | `~/.Trash`·`~/.local/share/Trash`·`.Trashes`를 재귀나 glob으로 지우는 `rm`, `trash-empty`, Finder의 `empty trash` AppleScript. 파일 하나를 지정한 `rm`은 대상이 아니다 |
 | `guard.ask.pressure_bypass` | ask | 명령 앞이나 `env`·`export`의 `AGENT_SKILLS_PRESSURE_GATE=0` 대입. 그 글자를 출력하는 `echo`는 대상이 아니다 |
 | `guard.warn.rm_expansion` | warn | 따옴표 없는 glob이나 변수로 만든 `rm` 경로. `${VAR:?}`는 제외 |
 | `guard.warn.reset_hard` | warn | 커밋하지 않은 변경이 있는 저장소의 `git reset --hard` |
