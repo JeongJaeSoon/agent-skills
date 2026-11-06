@@ -284,6 +284,8 @@ for blank in (" ", "\x0b"):
     assert bash(HELPER.format(f"{blank}worker.md")) == "deny", repr(blank)  # the blank leads the word
 assert bash(HELPER.format("\\x" + str(H / "worker.md"))) == "deny"  # bash passes the relative `x/…`, the masked text shows `/…`
 assert bash(f"skills-sync card \\ {H / 'worker.md'} --repo name:app --name app-x") == "deny"  # bash passes " /…", relative
+assert bash("skills-sync card \\x--brief --repo name:app --name app-x") == "deny"  # an escape before what looks like an option
+assert bash(HELPER.format("--help")) == "none"
 # Round 4: a later argument can rebind HOME, and a cd has spellings no scan of earlier text catches.
 assert bash(HELPER.format("'~/worker.md'") + ' --x "$((HOME=0))"', session="joined") == "deny"
 assert bash(HELPER.format("$HOME/worker.md") + " --x `true`") == "deny"

@@ -181,8 +181,6 @@ def expand_path(token, first):
 def helper_card(brief, cwd, cmd, start):
     """(the prompt the helper would send, None) or (None, the deny reason): the helper's own checks on that file.
     `start`: where the brief's argument begins in `cmd`."""
-    if not re.search(r"card[ \t]+\Z", cmd[:start]):  # the masked text blanks escapes (`card \x/p`, `card \ /p`), which shift the word
-        return None, "Write `skills-sync card <brief>` with the brief as a plain word after one blank; this hook cannot read that spelling."
     try:
         # A later argument can still rebind HOME (`"$((HOME=0))"`), so HOME is read only when none expands.
         first = bool(FIRST_STATEMENT.fullmatch(cmd[:start])) and not re.search(r"[$`]", cmd[start + len(brief):])
@@ -245,6 +243,8 @@ def bash(cmd, background, who, cwd=None):
         if lead and lead_session(who):
             return decide("deny", LEAD_FROM_LEAD)
     for helper in CARD_HELPER.finditer(command_text(cmd)):
+        if not re.search(r"card[ \t]+\Z", cmd[:helper.start(1)]):  # the masked text blanks escapes (`card \x/p`, `card \ /p`), which shift the word
+            return decide("deny", "Write `skills-sync card <brief>` with the brief as a plain word after one blank; this hook cannot read that spelling.")
         brief = BASH_WORD.match(cmd, helper.start(1))[0]  # the masked text blanks a quoted path
         if brief.startswith("-"):  # `--help` or no brief: the helper prints its usage and creates nothing
             continue
