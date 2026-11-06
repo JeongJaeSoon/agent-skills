@@ -250,6 +250,7 @@ def test_sync():
         check("failing again after a recovery is told again", told() == 2, notes.read_text())
         (tmp / "state-step.rc").unlink()
 
+    commit(other, "docs/z.md", "z\n"); git(other, "push", "-q", "origin", "main")  # the syncs above caught live up; diverge it again
     commit(live, "skills/b/SKILL.md", "local\n")
     code, out = run_sync(live, env, "sync", "--no-broadcast")
     check("stops when diverged, without rebasing", code == 1 and "diverged" in out, out)
