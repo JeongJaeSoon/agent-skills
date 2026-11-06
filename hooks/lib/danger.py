@@ -60,7 +60,7 @@ COMPOSE_OPTS = {"-f", "--file", "-p", "--project-name", "--profile", "--env-file
 GIT_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"}
 # Any curl short flag but the ones that take a value (and so swallow the rest of the cluster): in `-sG` or `-qX` the
 # letter is a flag, in `-AGitHub` it is part of the User-Agent.
-NO_VALUE = r"[^-\sAbcCdDeEFHKmoPQrtTuUwxXyYzZ]"
+NO_VALUE = r"[^-\sAbcCdDeEFHKmoPQrtTuUwxXyYz:]"
 PUSH_VALUED ={"-o", "--push-option", "--repo", "--receive-pack", "--exec"}
 
 
@@ -394,7 +394,7 @@ def curl_calls(w):
     each api.github.com URL it names (`--url=` ones too) and the transfer's words as text."""
     out, part = [], []
     for x in w[1:] + ["--next"]:
-        if x not in ("--next", "-:"):
+        if x != "--next" and not x.startswith("-:"):  # `-:` and clusters such as `-:XGET` start the next transfer
             part.append(x)
             continue
         method = last_method(part, "--request")
