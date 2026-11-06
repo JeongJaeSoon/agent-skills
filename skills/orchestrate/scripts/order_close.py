@@ -115,10 +115,17 @@ def card_closure(ident, db):
     return "open", f"card {ident} has no PR and no done close"
 
 
+def row_done(r):
+    """A finished board row keeps its owner and next step as a record; neither is a turn or a step that is left."""
+    return r.get("status") == "done" or bool(r.get("done_at"))
+
+
 def steps_left(ident, F):
     """Whether a board line about the card still names a step after the merge: a row (its `--worktree`, else the card its
     id and title name, as the board links it) or a doing item (the card its title or next step names)."""
     for rid, r in F["rows"].items():
+        if row_done(r):
+            continue
         card = F["cards"].get(r.get("worktree")) or tidy.named(f"{rid} {r.get('title') or ''}", F["cards"])
         if card and card["id"] == ident and tidy.POST_MERGE.search(r.get("next") or ""):
             return True
@@ -138,6 +145,8 @@ def db_turn(real, cards_all, me, decisions, board_now):
         if d.get("handle") in handles or set(fleet.pr_refs(f"{d.get('link')} {d.get('title')} {d.get('body')}")) & prs:
             return "owner_turn", "an open decision about a linked card or PR waits for an answer"
     for rid, r in (board_now.get("rows") or {}).items():
+        if row_done(r):
+            continue
         card = cards_all.get(r.get("worktree")) or tidy.named(f"{rid} {r.get('title') or ''}", cards_all)
         if card and card["id"] in cards and (r.get("status") == "owner" or rowstate.is_owner(r.get("owner"), me)):
             return "owner_turn", "an open board row waits on the owner at a linked card"

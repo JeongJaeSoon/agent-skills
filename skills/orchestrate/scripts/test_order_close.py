@@ -334,6 +334,14 @@ assert v["close"]
 board.set_row("s-r12", title="행", repo="acme/app", status="moving", next="머지 → 배포", worktree="s-r12")
 assert store.order_auto(step, v["snapshot"], v["units"], v["links"], close=True, recheck=order_close.recheck(v)) is False
 assert row(step)["status"] == "open" and why(step)["why"] == "partial"
+# A finished row keeps its owner and its next step as a record: neither holds the order.
+PRS["acme/app#13"] = pr("acme/app#13", "MERGED", "mmm1313")
+OWNER_OF["acme/app#13"] = "s-r13"
+MORE = MORE + [card("s-r13", "offline")]
+write_state(sessions=MORE)
+board.set_row("s-r13", title="끝난 행", repo="acme/app", status="done", next="머지 → 배포", worktree="s-r13", owner="오너")
+finished = make("끝난 행만 남음", ["card:s-r13"])
+assert why(finished)["close"], why(finished)
 # A ledger line the reader skips after an agent's last run may be its restart: the older stop is not evidence.
 ledger_path = sd / fleet.SUBAGENTS
 with open(ledger_path, "a") as f:
