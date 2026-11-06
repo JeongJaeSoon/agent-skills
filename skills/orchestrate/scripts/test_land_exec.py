@@ -324,7 +324,7 @@ class LandExec(unittest.TestCase):
                 if a[:2] == ("worktree", "list"):
                     return {"worktrees": worktrees, **listing}
                 answer = terminals[a[-1]]
-                if isinstance(answer, Exception):
+                if isinstance(answer, BaseException):
                     raise answer
                 return answer
             return orca
