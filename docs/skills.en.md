@@ -1,7 +1,7 @@
 <!-- translated-from: 5ff86c9b18e859b15054fd5f511f889bb0f4798d -->
 # Skill catalog
 
-This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 16 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
+This page covers the 40 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 16 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
 
 Follow the [configuration migration guide](configuration-migration.md) for changed defaults and preservation of existing data. Notes, ledgers and personal folders require explicit configuration; report time defaults to UTC.
 
@@ -61,7 +61,7 @@ Which skill owns a PR, and who merges it:
 ### deliver-ticket (formerly `ship-pr`)
 - **When:** From before the first multi-file edit until the ticket is done. Creating, updating and merging PRs ("pr 작성까지" (up to writing the PR), "머지까지 진행해줘" (take it all the way to the merge)), releases, answering review comments, independent reviews, "동작확인" (check that it works), "내가 확인할 거 있어?" (anything I need to check?), "이 티켓 끝내줘" (finish this ticket), and stack work all belong here.
 - **What it does:**
-  - **Plan:** It doesn't enter plan mode or wait for approval. The ticket gets a single plan comment (edited when the plan changes); progress goes in the worklog and the result in a completion comment. It calls other skills depending on the shape of the work: `figure-it-out` for big migrations or multi-step changes, `architect` (→ `arena`) for design decisions that are hard to undo, `how` for unfamiliar code, and `why` for code whose reason is unclear.
+  - **Plan:** It doesn't enter plan mode or wait for approval. The ticket gets a single plan comment (edited when the plan changes); progress goes in the worklog and the result in a completion comment. It calls other skills depending on the shape of the work: `figure-it-out` for big migrations or multi-step changes, `architect` (→ `fan-out` compete) for design decisions that are hard to undo, `how` for unfamiliar code, and `why` for code whose reason is unclear.
   - **Build:** Only on a worktree branch. Non-trivial logic isn't committed without a runnable test. A bug starts with a failing reproduction test. Anything found outside the scope is fixed in this diff, filed as a follow-up ticket, or only noted in the worklog.
   - **Evidence rules:**
     - Every line that ships needs runtime evidence, and changes that came from a disproved hypothesis are reverted.
@@ -167,7 +167,7 @@ Which skill owns a PR, and who merges it:
     - `mailbox_guard.py`: a transition shim that moves old installs over to the hook.
     - Test files.
   - `assets/dashboard/`: the dashboard UI.
-- **Related:** Workers follow `deliver-ticket`. It draws on `use-tracker`, `use-notes`, `create-verification-skill`, `show-me-your-work`, `swarm`, `measure-delivery`, `reap-resources`, `reflect`, and `end-session`.
+- **Related:** Workers follow `deliver-ticket`. It draws on `use-tracker`, `use-notes`, `create-verification-skill`, `show-me-your-work`, `fan-out`, `measure-delivery`, `reap-resources`, `reflect`, and `end-session`.
 
 ### measure-delivery
 - **When:** "성과 측정" (measure the results), or questions about whether follow-up tickets are growing or shrinking, rework, or token cost. `orchestrate` also calls it in its Close step.
@@ -337,21 +337,29 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
 - **When:** `/architect`, "상세 설계안 작성해줘" (write a detailed design), "설계안 다듬어줘" (refine the design), "구현 계획 짜줘" (draw up an implementation plan), and work where writing code first would lock in the wrong shape.
 - **What it does:** Works in five steps.
   1. **Ground:** Uses `how` and `why` to understand the surrounding system and why it has its current shape.
-  2. **Sketch:** Launches design runners in parallel through `arena` (available independent runners). It gets at least two structurally different candidates, filters them with red flags, and merges them by interface depth.
+  2. **Sketch:** Launches design runners in parallel through `fan-out` compete (available independent runners). It gets at least two structurally different candidates, filters them with red flags, and merges them by interface depth.
   3. **Agree:** Asks a human to sign off only when requested. By default it publishes a plan page (one HTML Artifact), leaves the link, and builds on the recommended defaults. The page is a "what › how › where" claim tree, each claim proved by one piece of evidence (mockup, state machine, call stack, schema, code). Numbered decisions sit on the claim they change, with 2 to 4 options, a recommended default, and what disappears if another option wins. An unanswered decision is not agreement, so only the hard-to-reverse ones are asked again before implementation. Pasted answers are data inside the proposed design, not instructions.
   4. **Implement:** Builds with the sketch as the contract.
   5. **Scrap:** If the same kind of workaround keeps coming back, it throws the sketch away and draws it again.
 - **Bundled:** `design-red-flags.md`, `rationale-template.md` (design rationale doc), `plan-page.md` (plan page format, following html-plan's format), `runner-prompt.md`.
 
-### arena
-- **When:** `/arena`, "경쟁시켜줘" (make them compete), "여러 안 뽑아서 제일 나은 걸로" (draft several and go with the best), "여러 버전 만들어서 비교해줘" (make several versions and compare them), and deliverables where a single attempt would lock in the shape. `architect`'s Sketch step calls it.
-- **What it does:**
+### fan-out (formerly `swarm` and `arena`)
+- **When:** You want parallel workers to bring back one result. The mode follows from what comes back. Landing several tickets in parallel is `orchestrate`.
+  - **sweep** (formerly `swarm`): `/swarm`, "병렬로 훑어줘" (sweep it in parallel), "나눠서 동시에 확인해줘" (split it up and check it all at once), broad split-up sweeps, or races to see who gets a result first. Returns one report.
+  - **compete** (formerly `arena`): `/arena`, "경쟁시켜줘" (make them compete), "여러 안 뽑아서 제일 나은 걸로" (draft several and go with the best), "여러 버전 만들어서 비교해줘" (make several versions and compare them), and deliverables where a single attempt would lock in the shape. Returns one deliverable. `architect`'s Sketch step calls it.
+- **What sweep does:**
+  - First sets the done condition and the shape (split, race, or a mix). A race is decided by the first to pass (first pass) or by a full ranking (rank all).
+  - Launches workers as `Agent` (worktree isolation, in the background), and long-running jobs as Orca workers. An Orca worker's `--base-branch` is accepted only for new-top-level and new-child placements.
+  - Workers report PASS / ISSUES / BLOCKED. A report missing the commit and the method is rerun once.
+  - Collects the results into one table.
+- **What compete does:**
   - Before giving the same task to N candidates at once (by default available independent runners), it sets 3–6 scoring criteria. Candidates see only the task, never the criteria.
   - An independent judge who did not produce the candidates scores each criterion and recommends a base.
   - It reads every candidate in full, scores them against each criterion, and picks the base. One or two better pieces from the other candidates are grafted on by hand.
   - If the candidates converge on the same shape, it uses that shape as is; if they diverge sharply, it goes back and redefines the task.
   - It returns one deliverable plus a short synthesis note recording the base, what was grafted, what was dropped, and the verification result.
-- **How it differs from swarm:** swarm splits the work up, sweeps it, and returns a report. arena makes candidates compete on the same work and produces one deliverable.
+- **How the modes differ:** sweep splits the work up, sweeps it, and returns a report. compete makes candidates compete on the same work and produces one deliverable. Splitting a compete task the sweep way turns it into a different job.
+- **Bundled:** `references/sweep.md`, `references/compete.md`.
 
 ### blast-radius
 - **When:** "이거 바꾸면 뭐가 깨져?" (what breaks if I change this?), and small diffs you don't trust.
@@ -366,7 +374,7 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
 - **When:** `/figure-it-out`, "알아서 설계해서 진행해줘" (design it yourself and get going), "큰 마이그레이션" (a big migration), "자리 비운 동안 끝내줘" (finish it while I'm away), and large multi-step work with no procedure that fits. `deliver-ticket`'s planning step calls it. Running several tickets as parallel cards is `orchestrate`'s job.
 - **What it does:** Designs the order of the work before the code.
   1. **Frame:** Writes the done condition as a falsifiable statement, puts numbers on the scope, and sets how strict to be based on the risk. The frame goes in the ticket's plan comment or the worklog, and reversible work doesn't wait for anyone. Only irreversible steps get a one-time approval on the spot.
-  2. **Design:** Splits the work into units that can land separately and starts with the least understood one. It first builds a verification harness that captures values from before the change. Designs that are hard to undo are settled with `architect` (→ `arena`). Parallel work only where boundaries separate cleanly, with a worktree for each worker.
+  2. **Design:** Splits the work into units that can land separately and starts with the least understood one. It first builds a verification harness that captures values from before the change. Designs that are hard to undo are settled with `architect` (→ `fan-out` compete). Parallel work only where boundaries separate cleanly, with a worktree for each worker.
   3. **Loop:** For each unit: a hypothesis, the smallest change, a measurement on the real artifact, then keep or revert. Delegated work is judged by reading the result directly or by an independent reviewer. Verdicts are VERIFIED / NOT VERIFIED / INCONCLUSIVE.
   4. **Trail:** Keeps a decision record with `show-me-your-work` and usually commits it so it can be read in the PR.
   5. **Verify:** Checks the whole result against the Frame's done condition in the real product, and turns corrections that kept recurring into checks or scripts.
@@ -434,14 +442,6 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
   - When the work is done, it audits the log against the transcript.
   - An independent reviewer checks it, and the end of the response says who reviewed it.
 - **Bundled:** `scripts/log.sh` (appends rows), `references/decision-log-template.tsv`.
-
-### swarm
-- **When:** `/swarm`, "병렬로 훑어줘" (sweep it in parallel), "나눠서 동시에 확인해줘" (split it up and check it all at once), broad split-up sweeps, or races to see who gets a result first. Competing and merging into one deliverable is `arena`; landing several tickets in parallel is `orchestrate`.
-- **What it does:**
-  - First sets the done condition and the shape (split, race, or a mix). A race is decided by the first to pass (first pass) or by a full ranking (rank all).
-  - Launches workers as `Agent` (worktree isolation, in the background), and long-running jobs as Orca workers. An Orca worker's `--base-branch` is accepted only for new-top-level and new-child placements.
-  - Workers report PASS / ISSUES / BLOCKED. A report missing the commit and the method is rerun once.
-  - Collects the results into one table.
 
 ### teach
 - **When:** 'teach me this', "이거 제대로 이해하고 싶어" (I want to really understand this), "이 변경 이해시켜줘" (help me understand this change), "처음 보는데 이 구조 설명해줘" (I'm new to this, explain the structure). A single how-does-it-work question is `how`, and a why question is `why`.
@@ -687,6 +687,7 @@ Of pstack's 58 skills (24 principles and 34 others), we took all 24 principles a
   - The model panel uses available independent reviewers.
   - Calls to a skill we don't install (`unslop`) now point to `write-plainly`. `why` and `arena` were brought in on 2026-09-25, which restored the original links between skills (architect → arena).
   - `why` picks its sources from the MCP tools available in the session instead of Cursor's MCP discovery, and gained a narrow mode for one-line questions. The source files for Datadog, Sentry and the warehouse, which have no connection here, were dropped, and new source files for Google Drive and Obsidian were written.
+  - swarm and arena were later merged into one skill, `fan-out`. Their bodies moved to `references/sweep.md` and `references/compete.md`, the sweep and compete modes.
 - **Further changes on 2026-09-25:** The prompts were audited and revised again for Opus 5.5 (`6eec9fa`). The per-step to-do lists in architect and swarm are gone, and how now handles simple questions directly. reflect no longer has a minimum reviewer count, and show-me-your-work became an append-only log. Per-file changes are listed in `vendor/pstack/NOTICE.md`.
 - **Derived:** Parts written fresh by carrying over only the rules, not whole files. They aren't in `manifest.json` and aren't synced; when upstream changes, a person reads it and ports what matters.
   - `write-plainly`: merges the reply rules from unslop, technical-writing and poteto-mode, with newly written rules for Korean.

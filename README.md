@@ -111,9 +111,18 @@ When each skill fires, what it does and the files it ships are in the [skill cat
 | [Chat and reviews](docs/skills.en.md#chat-and-reviews) | `watch-mentions`, `watch-prs` | Turn chat and PRs that concern you into work |
 | [Adapters](docs/skills.en.md#adapters) | `use-tracker`, `use-notes` | Linear and Jira tickets, Obsidian and Markdown notes |
 | [Writing](docs/skills.en.md#writing) | `brief`, `stage`, `todo`, `map-features`, `write-plainly`, `prune-comments`, `write-skill` | Status reports, stage tables, to-do and hold queues, feature maps, plain prose, comment cleanup, skill authoring checks |
-| [pstack](docs/skills.en.md#pstack-skills-lauren-tan-mit) | `architect`, `arena`, `blast-radius`, `create-verification-skill`, `figure-it-out`, `how`, `interrogate`, `maintain-verification-skill`, `principles`, `recall`, `reflect`, `show-me-your-work`, `swarm`, `tdd`, `teach`, `why` | Design, comparison, impact analysis, verification, explanation, retrospectives |
+| [pstack](docs/skills.en.md#pstack-skills-lauren-tan-mit) | `architect`, `blast-radius`, `create-verification-skill`, `fan-out`, `figure-it-out`, `how`, `interrogate`, `maintain-verification-skill`, `principles`, `recall`, `reflect`, `show-me-your-work`, `tdd`, `teach`, `why` | Design, comparison, impact analysis, verification, explanation, retrospectives |
 
 The pstack group comes from Lauren Tan's [pstack](https://github.com/cursor/plugins) (MIT). These skills are now maintained here on their own: `vendor/pstack` keeps the original files as upstream had them, and an optional daily job reports upstream changes, which are ported by hand when worth it. With several sessions, two layers sit above the workers: the orchestrator (one top-level session) and leads (one per project). See the [Roles table in orchestrate](skills/orchestrate/SKILL.md#roles).
+
+### Renamed skills
+
+Breaking change: these names were merged into another skill and no longer exist, so `/agent-skills:<old name>` no longer runs anything. Use the new command, and say the mode when you want one; the old trigger phrases still fire the new skill.
+
+| Old command | New command / mode |
+|---|---|
+| `/agent-skills:swarm` | `/agent-skills:fan-out`, sweep mode |
+| `/agent-skills:arena` | `/agent-skills:fan-out`, compete mode |
 
 ## Configuration
 

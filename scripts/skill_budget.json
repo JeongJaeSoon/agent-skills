@@ -2,14 +2,9 @@
   "approx": "chars-v1",
   "skills": {
     "architect": {
-      "skill_md_tokens": 1493,
+      "skill_md_tokens": 1500,
       "tokens": 69,
       "width": 239
-    },
-    "arena": {
-      "skill_md_tokens": 873,
-      "tokens": 55,
-      "width": 197
     },
     "blast-radius": {
       "skill_md_tokens": 886,
@@ -27,7 +22,7 @@
       "width": 299
     },
     "deliver-ticket": {
-      "skill_md_tokens": 4965,
+      "skill_md_tokens": 4967,
       "tokens": 122,
       "width": 377
     },
@@ -41,8 +36,13 @@
       "tokens": 114,
       "width": 368
     },
+    "fan-out": {
+      "skill_md_tokens": 268,
+      "tokens": 90,
+      "width": 303
+    },
     "figure-it-out": {
-      "skill_md_tokens": 996,
+      "skill_md_tokens": 1000,
       "tokens": 76,
       "width": 272
     },
@@ -77,7 +77,7 @@
       "width": 269
     },
     "orchestrate": {
-      "skill_md_tokens": 11661,
+      "skill_md_tokens": 11739,
       "tokens": 101,
       "width": 332
     },
@@ -135,11 +135,6 @@
       "skill_md_tokens": 242,
       "tokens": 41,
       "width": 147
-    },
-    "swarm": {
-      "skill_md_tokens": 748,
-      "tokens": 57,
-      "width": 206
     },
     "tdd": {
       "skill_md_tokens": 729,
@@ -208,8 +203,8 @@
     }
   },
   "totals": {
-    "always_tokens": 3290,
-    "always_width": 11817,
-    "skills_width": 10937
+    "always_tokens": 3268,
+    "always_width": 11717,
+    "skills_width": 10837
   }
 }

@@ -167,6 +167,8 @@ for cmd, n in [("git blame a.py", 1), ("git --no-pager blame a.py", 1), ("git --
     assert su.git_history_cmds(cmd) == n, (cmd, su.git_history_cmds(cmd))
 foreign = [[ts(1), "other-plugin:architect", "auto", "s9", "h"], [ts(1), "agent-skills:arena", "auto", "s9", "h"]]
 assert su.denominators(foreign, [], NOW)["7d"]["architect_sessions"] == 0, su.denominators(foreign, [], NOW)
+renamed = [[ts(1), "agent-skills:architect", "auto", "s9", "h"], [ts(1), "agent-skills:fan-out", "auto", "s9", "h"]]
+assert su.denominators(renamed, [], NOW)["7d"]["architect_sessions_with_arena"] == 1, su.denominators(renamed, [], NOW)
 # A subagent prompt carrying a trigger counts apart from human misses and raises no flag of its own.
 assert ship["subagent_misses_30d"] == 1 and tidy["subagent_misses_30d"] == 0, (ship, tidy)
 assert su.flags({**ship, "misses_30d": 0, "subagent_misses_30d": 9}, 1) == [], "subagent misses alone are not flagged"

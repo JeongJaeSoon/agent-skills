@@ -111,9 +111,18 @@ https://github.com/JeongJaeSoon/agent-skills 의 Claude Code 플러그인을 설
 | [채팅·GitHub](docs/skills.md#채팅) | `watch-mentions`, `watch-prs` | 나와 관련된 채팅과 PR을 작업으로 모은다 |
 | [어댑터](docs/skills.md#어댑터) | `use-tracker`, `use-notes` | Linear·Jira 티켓, Obsidian·Markdown 노트 |
 | [글쓰기](docs/skills.md#글쓰기) | `brief`, `stage`, `todo`, `map-features`, `write-plainly`, `prune-comments`, `write-skill` | 현황 보고, 단계표, 할 일·보류 큐, 제품 기능 지도, 문체, diff 주석 정리, 스킬 작성 점검 |
-| [pstack](docs/skills.md#pstack-스킬-lauren-tan-mit) | `architect`, `arena`, `blast-radius`, `create-verification-skill`, `figure-it-out`, `how`, `interrogate`, `maintain-verification-skill`, `principles`, `recall`, `reflect`, `show-me-your-work`, `swarm`, `tdd`, `teach`, `why` | 설계, 비교, 영향 범위, 검증, 설명, 회고 |
+| [pstack](docs/skills.md#pstack-스킬-lauren-tan-mit) | `architect`, `blast-radius`, `create-verification-skill`, `fan-out`, `figure-it-out`, `how`, `interrogate`, `maintain-verification-skill`, `principles`, `recall`, `reflect`, `show-me-your-work`, `tdd`, `teach`, `why` | 설계, 비교, 영향 범위, 검증, 설명, 회고 |
 
 pstack 묶음은 Lauren Tan의 [pstack](https://github.com/cursor/plugins)(MIT)에서 가져왔고, 지금은 이 저장소에서 따로 관리한다. 원본 파일은 upstream 그대로 `vendor/pstack`에 두고, 원할 때 켜는 하루 한 번짜리 작업이 upstream 변경을 알려 주면 필요한 것만 손으로 옮긴다. 여러 세션이 함께 일할 때 워커 위의 층은 오케스트레이터(최상위 세션 하나)와 리드(프로젝트 하나를 맡은 세션) 둘이다. 자세한 것은 [orchestrate의 Roles 표](skills/orchestrate/SKILL.md#roles)(영어).
+
+### 이름이 바뀐 스킬
+
+호환되지 않는 변경이다. 아래 이름은 다른 스킬에 합쳐져 더는 없으므로 `/agent-skills:<옛 이름>`을 쳐도 아무것도 돌지 않는다. 새 명령을 쓰고, 모드를 고르고 싶으면 그 모드를 말한다. 옛 트리거 문구는 새 스킬을 그대로 부른다.
+
+| 옛 명령 | 새 명령 / 모드 |
+|---|---|
+| `/agent-skills:swarm` | `/agent-skills:fan-out`, sweep 모드 |
+| `/agent-skills:arena` | `/agent-skills:fan-out`, compete 모드 |
 
 ## 설정
 

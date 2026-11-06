@@ -446,16 +446,18 @@ def collect(projects_dir=None, inv=None, cache_path=None, now=None, miss_thresho
 
 
 def denominators(events, probes, now):
-    """Moments where how, why or arena could have run, per window: the base their use counts are read against."""
+    """Moments where how, why or fan-out compete could have run, per window: the base their use counts are read against."""
     def within(ts, days):
         t = parse_ts(ts)
         return bool(t) and (now - t).days < days
 
-    architect_skill, arena_skill = f"{REPO_PLUGIN}:architect", f"{REPO_PLUGIN}:arena"
+    architect_skill = f"{REPO_PLUGIN}:architect"
+    # arena became fan-out; transcripts from before the merge still name arena.
+    arena_skills = {f"{REPO_PLUGIN}:fan-out", f"{REPO_PLUGIN}:arena"}
     out = {}
     for label, days in ((f"{SHORT}d", SHORT), (f"{LONG}d", LONG)):
         architect = {e[3] for e in events if e[1] == architect_skill and within(e[0], days)}
-        arena = {e[3] for e in events if e[1] == arena_skill and within(e[0], days)}
+        arena = {e[3] for e in events if e[1] in arena_skills and within(e[0], days)}
         out[label] = {"explore_calls": sum(p[1] == "explore" and within(p[0], days) for p in probes),
                       "git_history_cmds": sum(p[1] == "git_history" and within(p[0], days) for p in probes),
                       "architect_sessions": len(architect), "architect_sessions_with_arena": len(architect & arena)}
@@ -781,7 +783,7 @@ def main(argv):
           + (f" · {rep['signals']['added']} new signals" if rep.get("signals") else ""))
     d = rep["denominators"][f"{SHORT}d"]
     print(f"last {SHORT} days: {d['explore_calls']} Explore calls, {d['git_history_cmds']} git history commands, "
-          f"{d['architect_sessions_with_arena']} of {d['architect_sessions']} architect sessions ran arena")
+          f"{d['architect_sessions_with_arena']} of {d['architect_sessions']} architect sessions ran fan-out or arena")
 
 
 if __name__ == "__main__":
