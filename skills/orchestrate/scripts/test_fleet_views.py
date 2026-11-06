@@ -176,7 +176,8 @@ const out = {{}};
 out.stats = [await race("#/fleet/prs?view=stats", "#/fleet/prs?view=stats", fleetStats), await race("#/fleet/prs?view=stats", "#/fleet/prs", fleetStats)];
 out.skills = [await race("#/fleet/skills", "#/fleet/skills", fleetSkills), await race("#/fleet/skills", "#/fleet/skills?view=changes", fleetSkills)];
 out.changes = [await race("#/fleet/skills?view=changes", "#/fleet/skills?view=changes", fleetChanges), await race("#/fleet/skills?view=changes", "#/fleet/skills", fleetChanges)];
-out.jobs = [await race("#/fleet/automations", "#/fleet/automations", internalJobs), await race("#/fleet/automations", "#/fleet/automations?view=monitors", internalJobs)];
+const automations = () => fleetAutomations({{}});
+out.jobs = [await race("#/fleet/automations", "#/fleet/automations", automations), await race("#/fleet/automations", "#/fleet/automations?view=monitors", automations)];
 go("#/fleet/prs?view=stats"); renders = 0; redrawCharts(); out.resizeStats = renders;
 go("#/fleet/prs"); renders = 0; redrawCharts(); out.resizeTable = renders;
 process.stdout.write(JSON.stringify(out));"""

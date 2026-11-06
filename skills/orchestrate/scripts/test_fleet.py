@@ -694,22 +694,31 @@ process.stdout.write(JSON.stringify({{on, off: briefInline(cell)}}));"""
 {(assets / "fleet.js").read_text()}
 const old = new Date(Date.now() - 3 * 3600e3).toISOString(), soon = new Date(Date.now() + 600e3).toISOString();
 const st = {{sessions: [{{id: "wt-coord", name: "<b>coord</b>", phase: "idle"}}], sources: {{automations: {{ok: true}}}},
-  automations: [{{id: "a1", name: "<script>x</script>", rrule: "17 */3 * * *", enabled: true, next_run_at: soon, last_run_at: old,
+  automations: [{{id: "a1", key: "k1", name: "<script>x</script>", rrule: "17 */3 * * *", enabled: true, next_run_at: soon, last_run_at: old,
                   recent: [{{status: "completed", at: old, summary: "<img src=x> " + "lastsum ".repeat(60) + "END"}}, {{status: "skipped_precheck", at: old}}]}},
-                {{id: "a2", name: "late", rrule: "0 9 * * *", enabled: true, next_run_at: old, recent: []}},
-                {{id: "a3", name: "broken", rrule: "*/20 * * * *", enabled: true, next_run_at: soon, recent: [{{status: "failed", at: old}}]}},
-                {{id: "a4", name: "off", rrule: "x", enabled: false, next_run_at: old, recent: [{{status: "failed", at: old}}]}}],
+                {{id: "a2", key: "k2", name: "late", rrule: "0 9 * * *", enabled: true, next_run_at: old, recent: []}},
+                {{id: "a3", key: "k3", name: "broken", rrule: "*/20 * * * *", enabled: true, next_run_at: soon, recent: [{{status: "failed", at: old}}]}},
+                {{id: "a4", key: "k4", name: "off", rrule: "x", enabled: false, next_run_at: old, recent: [{{status: "failed", at: old}}]}},
+                {{id: "a5", key: "orch-dash", name: "agent-skills orch-dash", rrule: "*/10 * * * *", enabled: true, next_run_at: soon, recent: []}},
+                {{id: "a9", key: null, name: "somebody else's failing job", rrule: "x", enabled: true, next_run_at: soon, recent: [{{status: "failed", at: old}}]}}],
   holds: [{{kind: "resource", resource: "browser", by: "term_coord", session: "wt-coord", note: "<i>login</i>", at: old}},
           {{kind: "lane", resource: "acme/app@main", by: "#7", note: null, at: soon}}]}};
 F.jobsAt = Date.now();  // as /api/fleet/jobs answered it a moment ago
-F.jobs = {{jobs: [{{key: "tidy", name: "Self-clean", cadence: "after each fleet collect", runs_in: "orch-dash",
-                   record: {{at: old, ok: true, n: 0, result: "closed 0", acted_at: old, acted_n: 3, next_at: soon}}}},
-                 {{key: "pr-stats", name: "PR stats", cadence: "every 6h", runs_in: "orch-dash",
-                   record: {{at: old, ok: false, error: "<b>HTTP 502</b> " + "x".repeat(400), failed_at: old, warned_at: old, next_at: null}}}},
-                 {{key: "skill-usage", name: "Skill usage", cadence: "every 15m", runs_in: "orch-dash", record: null}},
-                 {{key: "reap-hard", name: "reap-hard", cadence: null, runs_in: "launchd", record: null, error: "<b>ValueError</b>('bad interval')"}}],
+const entry = (a, extra = {{}}) => ({{key: a.key, job_name: "agent-skills " + a.key, default: true, what: "", registered: true, orca: a, record: null, jobs: [], ...extra}});
+const own = [{{key: "tidy", name: "Self-clean", cadence: "after each fleet collect", runs_in: "orch-dash",
+               record: {{at: old, ok: true, n: 0, result: "closed 0", acted_at: old, acted_n: 3, next_at: soon}}}},
+             {{key: "pr-stats", name: "PR stats", cadence: "every 6h", runs_in: "orch-dash",
+               record: {{at: old, ok: false, error: "<b>HTTP 502</b> " + "x".repeat(400), failed_at: old, warned_at: old, next_at: null}}}},
+             {{key: "skill-usage", name: "Skill usage", cadence: "every 15m", runs_in: "orch-dash", record: null}},
+             {{key: "patrol", name: "Session patrol", cadence: "started by reap-hard", runs_in: "reap-hard", record: null, error: "<b>ValueError</b>('bad file')"}}];
+F.jobs = {{automations: [...st.automations.filter((a) => a.key).map((a) => entry(a, a.key === "orch-dash" ? {{jobs: own}} : {{}})),
+                         entry({{key: "pstack-upstream"}}, {{orca: null, registered: false}}),
+                         {{key: "share-server", job_name: null, default: false, what: "", registered: null, orca: null, record: null, jobs: []}},
+                         entry({{key: "sync"}}, {{orca: null, registered: true, record: {{at: old, ok: false, error: "<b>rebase</b> conflict", n: null, next_at: null}}}})],
           rules: [{{name: "Inbox item expiry", rule: "7 days <i>after</i>", applied: "each fleet collect"}}]}};
-process.stdout.write(JSON.stringify({{autos: fleetAutomations(st), holds: holdsCard(st), troubled: autoTroubled(st).map((a) => a.name)}}));"""
+const out = {{closed: fleetAutomations(st)}};
+F.jobOpen.add("orch-dash"); out.open = fleetAutomations(st); F.jobOpen.delete("orch-dash");
+process.stdout.write(JSON.stringify({{autos: out.closed, open: out.open, holds: holdsCard(st), troubled: autoTroubled(st).map((a) => a.name), nav: listed(st).length}}));"""
     got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
     for raw in ("<script", "<img", "<i>", "<b>coord"):
         assert raw not in got["autos"] + got["holds"], raw
@@ -719,10 +728,18 @@ process.stdout.write(JSON.stringify({{autos: fleetAutomations(st), holds: holdsC
     assert got["autos"].count('class="run tone-good"') == 2 and 'class="run "' in got["autos"], "a completed and a skipped block"
     assert got["holds"].index("browser") < got["holds"].index("acme/app@main") and "landing lane" in got["holds"], got["holds"]
     # A long last result wraps whole in its cell instead of being cut with an ellipsis.
-    autos_html = got["autos"][:got["autos"].index("orch-dash jobs")]
+    autos_html = got["autos"]
     assert "lastsum " * 60 + "END" in autos_html and "ellipsis" not in autos_html, autos_html
-    # orch-dash's own jobs under them: a record as written, a failure whole with its link to the timeline, no record said.
-    jobs_html = got["autos"][got["autos"].index("orch-dash jobs"):]
+    # One list: a row per registry entry, an Orca automation the registry lacks (no key) is not listed or counted.
+    assert "somebody else" not in autos_html and "somebody else" not in got["open"] and got["nav"] == 5, got["nav"]
+    assert autos_html.count("<b title=") == 8, "one row for each of the 8 registry entries, none twice"
+    assert "not registered" in autos_html and "skills-sync setup enable pstack-upstream" in autos_html
+    assert "LaunchAgent" in autos_html and "its state is not read here" in autos_html
+    assert "&lt;b&gt;rebase&lt;/b&gt; conflict" in autos_html and "<b>rebase" not in autos_html, "a job's own file stands in when Orca has no run"
+    assert "closed 0" not in autos_html and "Self-clean" not in autos_html and "▸ 4 jobs" in autos_html, "its jobs stay folded until opened"
+    # The jobs that run inside an automation open under its row: a record as written, a failure whole with its link to the timeline, no record said.
+    jobs_html = got["open"]
+    assert "▾ 4 jobs" in jobs_html and "Session patrol" in jobs_html
     assert "closed 0" in jobs_html and "3 · " in jobs_html, jobs_html
     assert "▲ failed" in jobs_html and "x" * 400 in jobs_html and 'href="#/fleet/timeline"' in jobs_html and "Timeline warning" in jobs_html
     assert "<b>HTTP" not in jobs_html and "<i>after" not in jobs_html, "job text is escaped"
@@ -738,26 +755,35 @@ process.stdout.write(JSON.stringify({{autos: fleetAutomations(st), holds: holdsC
 {take("hhmm")}
 {(assets / "fleet.js").read_text()}
 F.jobsAt = Date.now(); const old = new Date(Date.now() - 3 * 3600e3).toISOString();
-F.jobs = {{jobs: [{{key: "fleet-tick", name: "Fleet tick", every: "10s", cadence: "every 10s while a page is open", runs_in: "orch-dash", group: null, record: {json.dumps(tick)}}},
-                 {{key: "tidy", name: "Self-clean", every: null, cadence: "after each fleet collect", runs_in: "orch-dash", group: "fleet-tick",
-                   record: {{at: old, ok: true, n: 0, result: "closed 0", next_at: null}}}},
-                 {{key: "relay", name: "Relay", every: null, cadence: "after each fleet collect", runs_in: "orch-dash", group: "fleet-tick",
-                   record: {{at: old, ok: true, n: 2, result: "answers relayed 2", next_at: null}}}},
-                 {{key: "brief-rows", name: "Brief rows", every: null, cadence: "after each fleet collect", runs_in: "orch-dash", group: "fleet-tick", record: null}},
-                 {{key: "reap-hard", name: "reap-hard", every: "10m", cadence: "every 10m", runs_in: "launchd", record: null, why: "agent not installed"}}],
-          rules: []}};
-const out = {{closed: internalJobs()}};
-F.jobOpen.add("fleet-tick"); out.open = internalJobs(); F.jobOpen.delete("fleet-tick");
-F.jobs.jobs[2].record.n = 0; out.quiet = internalJobs();
+const st = {{sources: {{automations: {{ok: true}}}}, automations: []}};
+const dash = {{key: "orch-dash", job_name: "agent-skills orch-dash", default: true, what: "", registered: true, orca: null, record: null, jobs: [
+  {{key: "fleet-tick", name: "Fleet tick", every: "10s", cadence: "every 10s while a page is open", runs_in: "orch-dash", group: null, record: {json.dumps(tick)}}},
+  {{key: "tidy", name: "Self-clean", every: null, cadence: "after each fleet collect", runs_in: "orch-dash", group: "fleet-tick",
+    record: {{at: old, ok: true, n: 0, result: "closed 0", next_at: null}}}},
+  {{key: "relay", name: "Relay", every: null, cadence: "after each fleet collect", runs_in: "orch-dash", group: "fleet-tick",
+    record: {{at: old, ok: true, n: 2, result: "answers relayed 2", next_at: null}}}},
+  {{key: "brief-rows", name: "Brief rows", every: null, cadence: "after each fleet collect", runs_in: "orch-dash", group: "fleet-tick", record: null}},
+  {{key: "patrol", name: "Session patrol", every: null, cadence: "started by reap-hard", runs_in: "reap-hard", group: null, record: null, why: "no round yet"}}]}};
+F.jobs = {{automations: [dash], rules: []}};
+const out = {{closed: fleetAutomations(st)}};
+F.jobOpen.add("orch-dash"); out.top = fleetAutomations(st);
+F.jobOpen.add("fleet-tick"); out.open = fleetAutomations(st); F.jobOpen.delete("fleet-tick");
+F.jobs.automations[0].jobs[2].record.n = 0; out.quiet = fleetAutomations(st);
+F.jobOpen.delete("orch-dash"); F.jobs.automations[0].jobs[1].record = {{at: old, ok: false, error: "boom", failed_at: old, next_at: null}};
+out.rider = fleetAutomations(st);
 process.stdout.write(JSON.stringify(out));"""
     got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
-    assert got["closed"].count("<tr") == 4 and "▸ 3 more" in got["closed"] and "Relay: <b>answers relayed 2</b>" in got["closed"], got["closed"]
-    assert ">10s<" in got["closed"] and "Self-clean</b>" not in got["closed"], got["closed"]
+    # Closed, the automation's row says in one line what its jobs did; opened, a line for each job that is not a rider.
+    assert "▸ 5 jobs" in got["closed"] and "Fleet tick" not in got["closed"] and "Self-clean" not in got["closed"], got["closed"]
+    assert "▾ 5 jobs" in got["top"] and ">10s<" in got["top"] and "Session patrol" in got["top"], got["top"]
+    assert "▸ 3 more" in got["top"] and "Relay: <b>answers relayed 2</b>" in got["top"] and "Self-clean</b>" not in got["top"], got["top"]
     # A rider with no record is counted as such, not as no change.
-    assert "Relay: <b>answers relayed 2</b> · <span class=\"muted\">1 no change · 1 no record</span>" in got["closed"], got["closed"]
-    assert "3 more: 2 no change · 1 no record" in got["quiet"], got["quiet"]
-    assert got["open"].count("<tr") == 7 and 'class="jsub"' in got["open"] and "Self-clean</b>" in got["open"], got["open"]
-    assert "no record · agent not installed" in got["closed"] and 'class="is-done"' in got["closed"], got["closed"]
+    assert "Relay: <b>answers relayed 2</b> · <span class=\"muted\">1 no change · 1 no record</span>" in got["top"], got["top"]
+    assert "3 more: 2 no change · 1 no record" in got["quiet"] or "2 no change · 1 no record" in got["quiet"], got["quiet"]
+    assert 'class="jsub"' in got["open"] and "Self-clean</b>" in got["open"], got["open"]
+    # A rider that failed shows on the closed automation row, though the job it rides on ran fine.
+    assert "Self-clean: " in got["rider"] and "▲ failed" in got["rider"] and "▸ 5 jobs" in got["rider"], got["rider"]
+    assert "no record · no round yet" in got["top"] and 'class="is-done"' in got["top"], got["top"]
 
     # A brief row's session shows its model tag like the Sessions table's model cell, in the brief table's 세션 cell and in
     # the session page's brief-rows card: a tag after the word, a warn tag when it ends in `!`, nothing without a model.
@@ -803,8 +829,8 @@ process.stdout.write(JSON.stringify({{html: fleetMonitors(st), troubled: monTrou
     js = f"""{helpers}
 {(assets / "fleet.js").read_text()}
 const el = {{}}, $ = (sel) => (el[sel] = el[sel] || {{}}), S = {{}}, old = new Date(Date.now() - 3600e3).toISOString();
-const ok = {{id: "a1", name: "ok", enabled: true, recent: [{{status: "completed", at: old}}]}}, out = {{}};
-for (const [k, st] of Object.entries({{calm: {{sessions: [], automations: [ok, ok]}}, none: {{sessions: []}},
+const ok = {{id: "a1", key: "sync", name: "ok", enabled: true, recent: [{{status: "completed", at: old}}]}}, out = {{}};
+for (const [k, st] of Object.entries({{calm: {{sessions: [], automations: [ok, ok, {{...ok, key: null, recent: [{{status: "failed", at: old}}]}}]}}, none: {{sessions: []}},
     bad: {{sessions: [], automations: [ok, {{...ok, recent: [{{status: "failed", at: old}}]}}], monitors: [{{status: "lost"}}, {{status: "running"}}]}}}})) {{
   S.state = st; fleetHeader(); out[k] = $("#top-right").innerHTML;
 }}
@@ -1809,7 +1835,7 @@ assert fleet.classify("Shall I merge it?") == "approval"
 assert fleet.classify("Refactored the parser.") == "fyi"
 
 # Automations: Orca's list, each with its last six runs newest first, output masked to its first line.
-assert [a["name"] for a in st["automations"]] == ["janitor", "pr-sweeper", "weekly-digest"] and st["sources"]["automations"]["ok"], st["automations"]
+assert [a["name"] for a in st["automations"]] == ["agent-skills janitor", "agent-skills watch-prs", "agent-skills pstack-upstream", "agent-skills orch-dash", "agent-skills reap-hard", "my own nightly note"] and st["sources"]["automations"]["ok"], st["automations"]
 secret_out = "## posted with xoxb-" + "1" * 12 + "-" + "a" * 24 + "\nsecond line"
 
 
@@ -1831,6 +1857,17 @@ try:
 finally:
     fleet.orca = real_orca
 assert [r["status"] for r in autos[0]["recent"]] == ["failed"] + ["completed"] * 5, autos
+# The registry name rides on the row; an Orca name the registry lacks has none (the page lists only the registry's).
+assert autos[0]["key"] is None, "a name that is not 'agent-skills <registry name>' belongs to no registry row"
+_list = fake_orca
+fake_orca = lambda *a, **k: ({"automations": [{"id": "a1", "name": "agent-skills watch-mentions", "rrule": "x", "enabled": True},
+                                               {"id": "a2", "name": "someone else's", "rrule": "x", "enabled": True}]}
+                             if a[1] == "list" else {"runs": []})
+fleet.orca = fake_orca
+try:
+    assert {a["name"]: a["key"] for a in fleet.fetch_automations()} == {"agent-skills watch-mentions": "watch-mentions", "someone else's": None}
+finally:
+    fleet.orca, fake_orca = real_orca, _list
 # Only the newest page is asked for (twice what is shown): without --limit Orca reads an automation's whole history.
 assert ("automations", "runs", "--id", "a1", "--limit", str(2 * fleet.AUTOMATION_RECENT)) in auto_calls, auto_calls
 
