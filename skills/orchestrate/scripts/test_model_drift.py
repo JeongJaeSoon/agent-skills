@@ -130,10 +130,7 @@ patrol.model_round(facts, findings, verdicts, notes)
 check("patrol adds an M finding and a check reason", [f["code"] for f in findings] == ["M"]
       and findings[0]["title"].startswith("❔ ") and verdicts["check"] == {"/w/card": "모델 불일치: " + OPUS + " (설정 sonnet)"},
       (findings, verdicts))
-patrol.model_round(facts, [], {"check": {}}, [])
-inbox = [json.loads(l) for l in (tmp / "dashboard" / "inbox-external.jsonl").read_text().splitlines()]
-check("the drift reaches the inbox once, however many rounds see it",
-      len(inbox) == 1 and inbox[0]["key"].startswith("model-drift:s-worker:") and inbox[0]["source"] == "patrol", inbox)
+check("an M finding is shown once, not every renotify", "M" in patrol.SHOW_ONCE)
 (tmp / "cfg.json").write_text("{}")
 findings, verdicts, notes = [], {"check": {}}, []
 patrol.model_round(facts, findings, verdicts, notes)

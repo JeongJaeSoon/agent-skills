@@ -704,6 +704,18 @@ patrol.write_round([r], {"cards": {}}, False, NOW + 200)
 assert patrol.pending_lines("hr", False, T)[0].startswith("PATROL R"), "shown to its owner"
 assert patrol.pending_lines("hr", False, T + dt.timedelta(hours=3)) == [], "R is shown once, not every 30 minutes"
 
+# M (a model drift) is shown once per drift; a different model is a new finding, and so is the first drift again once the
+# finding in between closed.
+def drift(have):
+    return {"id": patrol.fid("M", "s9", "sonnet", have), "code": "M", "card": "c", "title": "x", "owner": "hm"}
+patrol.write_round([drift("opus")], {"cards": {}}, False, NOW + 300)
+assert patrol.pending_lines("hm", False, T)[0].startswith("PATROL M"), "the drift is shown to its owner"
+assert patrol.pending_lines("hm", False, T + dt.timedelta(hours=3)) == [], "and not again every 30 minutes"
+patrol.write_round([drift("haiku")], {"cards": {}}, False, NOW + 400)
+assert patrol.pending_lines("hm", False, T + dt.timedelta(hours=4))[0].startswith("PATROL M"), "another model is news"
+patrol.write_round([drift("opus")], {"cards": {}}, False, NOW + 500)
+assert patrol.pending_lines("hm", False, T + dt.timedelta(hours=5))[0].startswith("PATROL M"), "so is the first one again"
+
 # H: an ended turn whose screen shows a hook error in its last turn or Claude Code's restart notice. Run workers too;
 # a screen without that wording, a turn still running, a prompt waiting on a human or an unread screen is not judged.
 RULE = "─" * 40

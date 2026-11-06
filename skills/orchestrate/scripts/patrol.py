@@ -131,7 +131,9 @@ VERDICT_OF = {"I": "idle", "X": "exited", "S": "superseded", "O": "pr_open_no_se
 STALE_WHAT = {"hook": ("a hook error blocks its tools", "hook 오류로 도구가 막힘"),
               "restart": ("a Claude Code update waits on /restart", "업데이트가 /restart 를 기다림")}
 REPEAT_WORD = {"error": "에러", "assistant": "답", "user": "입력", "reload": "reload"}
-SHOW_ONCE = {"R"}  # pending_lines shows these once, not every RENOTIFY
+# pending_lines shows these once, not every RENOTIFY. M's id holds the session and both models, so a drift to another
+# model (or back to an earlier one, once its finding closed) is a new id and is shown again.
+SHOW_ONCE = {"R", "M"}
 # A stalled card loses patrol's protection, so reap closes it within days; no session stays open this long.
 REPEATS_KEEP_DAYS = 90
 ACTIVE = ("run", "waiting", "working")  # what a card's activity verdict keeps; reap.PATROL_KEEP reads the same three
@@ -895,20 +897,6 @@ def signal_round(facts, findings, verdicts, memo, memo2, notes, dry, rid):
     return "; ".join(parts)
 
 
-def tell_drift(d, name, notes):
-    """Put a model drift in the orchestrator's inbox once. The key holds the session and both models, so a round that
-    sees the same drift again adds nothing, and a session that drifts to another model is news."""
-    key = f"model-drift:{d['session']}:{d['role']}:{d['have']}:{d['want']}"
-    try:
-        if key in fleet.inbox_lines():
-            return
-        fleet.inbox_add("approval", f"모델 어긋남: {name} ({d['role']}) {d['have']}, 설정은 {d['want']}. 실행 중인 "
-                        "세션에 /model을 입력하지 말고 다시 시작할 때 바로잡는다", session=d["session"], key=key,
-                        source="patrol")
-    except OSError as e:
-        notes.append(f"model drift: the inbox notice could not be written: {type(e).__name__}")
-
-
 def model_round(facts, findings, verdicts, notes, run=None, dry=False, switch=None):
     """M: sessions off their role's model (model_drift.py). Needs the rows signal_round read; adds findings, the
     brief's ❔ reasons and notes. A round that could not look (no listing, a transcript unread) marks "models" failed,
@@ -954,8 +942,6 @@ def model_round(facts, findings, verdicts, notes, run=None, dry=False, switch=No
                          "title": f"❔ {d['line']}"})
         if path:
             verdicts["check"][path] = f"모델 불일치: {d['have']} (설정 {d['want']})"
-        if not dry:
-            tell_drift(d, card_name(path) or d["handle"], notes)
     if not dry and model_drift.autoswitch_on():
         switch_round(drifts, rows, notes, path_of, switch or model_drift.autoswitch)
 

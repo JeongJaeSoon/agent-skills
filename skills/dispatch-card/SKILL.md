@@ -110,7 +110,7 @@ carries the `MODE`, `ROLE: lead <slug>`, `INBOX`, `DELEGATE`, `PREDICATE`, `MERG
 line or a `<project>: lead` head) that lacks `MODE`, `ROLE`, `DELEGATE` or `PREDICATE`. The `ROLE` line binds the
 lead role to the card's session, so the reorient hook reminds it of its program on every prompt. It is also what makes
 `skills-sync card` start the card on `orchestrate.models.lead`: a brief without it is a worker's, so the helper refuses
-a brief that has `DELEGATE`, `PREDICATE`, `INBOX`, `TASKS` or `GATE` rows, or a card named `lead`, `lead:<slug>` or `<slug>-lead`, and no `ROLE` line. It stands
+a brief that has both `DELEGATE` and `PREDICATE` rows, or a card named `lead`, `lead:<slug>` or `<slug>-lead`, and no `ROLE` line. It stands
 in for `claude --agent agent-skills:lead`: `orca worktree create --agent` takes an Orca agent id, not CLI flags. Without these lines a lead reports done and waits for an order that never comes.
 
 Exceptions. A task that fits in three or four lines goes inline in `--prompt` after `/goal`, no

@@ -898,7 +898,8 @@ def brief_kind(brief_path):
 
 # `lead`, `lead:<slug>`, `<slug>-lead`: a name that calls the card a lead. `lead-<topic>` is a worker about leads.
 LEAD_NAME = re.compile(r"(?i)^(?:lead(?::.*)?|.*[-:\s]lead)$")
-LEAD_ONLY_ROWS = ("INBOX", "DELEGATE", "PREDICATE", "TASKS", "GATE")
+# TASKS, INBOX and GATE are words a worker brief uses too; only a brief with both of these is a program's.
+LEAD_ONLY_ROWS = ("DELEGATE", "PREDICATE")
 
 
 def lead_shaped(text, opts):
@@ -907,9 +908,8 @@ def lead_shaped(text, opts):
     named = [opts[k] for k in ("--name", "--display-name") if LEAD_NAME.match(opts.get(k) or "")]
     if named:
         return f"the card is named {named[0]!r} but the brief has no lead rows"
-    have = [k for k in LEAD_ONLY_ROWS if row(text, k)]
-    if have:
-        return f"the brief has {', '.join(have)} but no ROLE row"
+    if all(row(text, k) for k in LEAD_ONLY_ROWS):
+        return f"the brief has {' and '.join(LEAD_ONLY_ROWS)} rows but no ROLE row"
     return None
 
 

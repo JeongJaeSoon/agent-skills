@@ -1149,7 +1149,8 @@ assert pathlib.Path(log["log"]).parent.name == "goal-input" and log["pid"] == 42
 for label, argv, body in (
         ("lead-named", ("--name", "backlog-lead"), WORKER),
         ("lead: prefix", ("--name", "x", "--display-name", "lead:backlog"), WORKER),
-        ("lead rows", ("--name", "x1"), WORKER + "DELEGATE    You do not implement yourself.\n"),
+        ("lead rows", ("--name", "x1"),
+         WORKER + "DELEGATE    You do not implement yourself.\nPREDICATE   3 PRs merged.\n"),
 ):
     rc, out, err, calls = go(brief(body, "nr.md"), "--repo", "r", "--no-parent", *argv)
     assert rc == 2 and not creates(calls) and "ROLE: lead" in err, (label, rc, err)
@@ -1157,6 +1158,9 @@ for label, argv, body in (
 models.write_text(json.dumps({"orchestrate": {"models": {"lead": "opus", "worker": "sonnet"}}}))
 os.environ["AGENT_SKILLS_CONFIG"] = str(models)
 rc, out, err, calls = go(brief(WORKER, "nw.md"), "--repo", "r", "--no-parent", "--name", "lead-model-role")
+assert rc == 0 and model_of(calls) == "sonnet", (rc, err)
+rc, out, err, calls = go(brief(WORKER + "TASKS: add pagination and verify it\nGATE: none\n", "nt.md"), "--repo", "r",
+                         "--no-parent", "--name", "inbox-pagination")
 assert rc == 0 and model_of(calls) == "sonnet", (rc, err)
 rc, out, err, calls = go(brief(LEAD, "nl.md"), "--repo", "r", "--no-parent", "--name", "backlog-lead")
 assert rc == 0 and model_of(calls) == "opus", (rc, err)
