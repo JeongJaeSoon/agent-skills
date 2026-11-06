@@ -492,7 +492,7 @@ PR 을 맡는 스킬과 머지 주체:
   - 주요 기능 3~5개의 기능 지도를 함께 만든다.
   - 직접 끝까지 한 번 돌려 증명한다.
   - `deliver-ticket`과 `orchestrate`는 범위 내에서 재사용할 검증 도구가 유용할 때 호출할 수 있다. 같은 수용 기준을 입증하는 직접 검사도 유효하다. upstream은 사용자 호출 전용이며 이 fork는 모델 호출도 허용한다.
-- **동봉:** `references/feature-map-example/`(예시 앱의 기능 지도).
+- **동봉:** `references/feature-map-example/`(예시 앱의 기능 지도), `scripts/verify_skill_lint.py`(생성한 스킬을 파일만 읽어 점검한다. frontmatter·섹션, 상태 파일 이름, 공용 `latest` 링크, cleanup 인자 필수, 패턴 종료, helper 실행 권한·문서화, 기능 지도 색인. `maintain-verification-skill`도 같은 스크립트를 쓴다).
 
 ### maintain-verification-skill
 - **내용:**
