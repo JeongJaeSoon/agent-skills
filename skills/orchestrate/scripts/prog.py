@@ -3188,10 +3188,49 @@ PROMPTS = [(re.compile(r"Enter to select"), "a select menu"),
            (re.compile(r"Waiting for API response · will retry"), "an API retry loop")]
 
 
+# A file diff Claude Code drew: a run of line-number gutter lines (a number, then +, - or a context space) with at
+# least one + or -. It quotes code, so an ENOSPC in it is the reviewed text, not the machine. Other output keeps
+# counting: a real "npm ERR! ENOSPC" has no gutter, and "28  No space left" alone has no + or - line beside it.
+GUTTER = re.compile(r"^\s*\d+(?:\s([+\-])|\s\s)")
+
+
+DIFF_HEAD = re.compile(r"\b(?:Update|Edit|Write|MultiEdit)\(|\b(?:Added|Removed) \d+ lines?\b|\bUpdated .* with \d+ (?:addition|removal)")
+
+
+def without_diffs(lines, tail=25):
+    """The last `tail` lines minus the drawn diffs: a gutter run with a + or - line that follows a diff header. Shape
+    alone is not enough: a command can print "27 - step" and "28  No space left". A run with no header is kept, so a
+    real disk error is never dropped. The whole screen is walked so a header is seen even when the tail cut it off,
+    but only lines that were in the tail come back. A diff line too long for the terminal wraps onto a line with no
+    gutter; that line stays, because no rule for it told it apart from command output right after a diff."""
+    out, run, head, in_diff = [], [], False, False
+    first = len(lines) - tail
+    for i, l in enumerate([*lines, None]):
+        m = GUTTER.match(l) if l is not None else None
+        if m:
+            run.append((i, l, bool(m.group(1))))
+            continue
+        if run:
+            in_diff = head and any(marked for _, _, marked in run)
+            if not in_diff:
+                out += [(j, x) for j, x, _ in run]
+            run = []
+        if l is None:
+            continue
+        out.append((i, l))
+        # A wrapped tail has no mark and leaves the header standing for the gutter lines after it.
+        if DIFF_HEAD.search(l):
+            head = True
+        elif l.lstrip().startswith(("⏺", "❯", "⎿", "✻")):
+            head = False
+    return [l for i, l in out if i >= first]
+
+
 def screen_prompt(lines, activity=None):
     tail = lines[-25:]
+    text = "\n".join(without_diffs(lines))
     for rx, kind in PROMPTS:
-        if rx.search("\n".join(tail)):
+        if rx.search(text):
             return kind, next((l.strip() for l in reversed(tail) if l.strip().endswith("?")), "")
     return ("waiting for input", "") if activity == "waiting" else None
 
@@ -4350,6 +4389,8 @@ def cmd_sent(argv):
                 print(json.dumps(rows, ensure_ascii=False, indent=1))
             for r in [] if "--json" in rest else rows:
                 print(f"{r['ts']}  {r.get('from') or '?'} → {r.get('to') or '?'}  [{r['source']}] {(r.get('subject') or r['text'] or '?').splitlines()[0][:100]}")
+                if r.get("warn"):
+                    print(f"    ! {r['warn']}")
         else:
             sys.exit(usage)
     except (ValueError, OSError) as e:

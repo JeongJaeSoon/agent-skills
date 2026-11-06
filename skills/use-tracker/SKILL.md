@@ -174,7 +174,7 @@ Report one line per ticket changed: `<ID>: <old state_type> → <new> (<evidence
 
 Every body of work has one, on its top ticket. A finding the work did not ask for is classified
 NOW / LATER / DROP against it; only NOW becomes a ticket, in the follow-up shape that
-`measure-delivery` and the dashboard count. The classes, where the exit condition lives, its
+`reflect`'s measure mode and the dashboard count. The classes, where the exit condition lives, its
 checklist form and the follow-up ticket's label, first lines and relations are in
 [references/exit-condition.md](references/exit-condition.md): read it before you classify a
 finding, file a follow-up or write an epic's exit items.

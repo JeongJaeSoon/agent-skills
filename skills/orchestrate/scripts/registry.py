@@ -86,7 +86,7 @@ CONSUMERS = {
     "tokenspage": "dashboard · Tokens",
     "sentpage": "dashboard · Sent",
     "fleet": "fleet collector (its own inputs)",
-    "programview": "dashboard · program views, orch status/wait, measure-delivery",
+    "programview": "dashboard · program views, orch status/wait, reflect measure mode",
     "reflect": "reflect precheck · improvement loop",
     "watchprs": "watch-prs round",
     "mentions": "watch-mentions round",
@@ -359,7 +359,8 @@ STORES = [
                "reads before it goes to deny"),
     Store("turnwarnings", "S/turn-warnings.jsonl", {"turn.warning": CANONICAL}, ("config:append_warning",), ("nobody",),
           feature="turn_check", rule="one row per end-of-turn check that fired as a warning (turn_check.py, "
-                                     "claim_check.subagent): the false-positive count read before any key is raised"),
+                                     "claim_check.subagent) and per work-discipline check (lib/discipline.py, "
+                                     "worker.* keys): the false-positive count read before any key is raised"),
     Store("artifactbackup", "S/artifact-backup/*", {"artifact.backup": CANONICAL},
           ("artifact_archive:log_error", "artifact_archive:append_row", "artifact_archive:migrate_served_files",
            "artifact_archive:exclusion_reason", "artifact_archive:render_index",
@@ -409,6 +410,7 @@ STORES = [
     Store("sweepowner", "S/sweep-owner.json", {"sweep.owner": CANONICAL}, ("sweep:set_owner",), ("janitor",),
           rule="which rules the sweep owns (`sweep own` and `release`); reap-hard and the janitor read it inside each target's lock"),
     Store("sweeplock", "S/sweep.lock", {"sweep.shadow": LOCK}, ("sweep:run_lock",)),
+    Store("sweepticklock", "S/sweep-tick.lock", {"sweep.shadow": LOCK}, ("sweep:tick",)),
     Store("sweepout", "S/sweep.log", {"sweep.output": CANONICAL}, ("reap:spawn_sweep_shadow",), ("nobody",),
           rule="the detached sweep run's stdout"),
     Store("patrollog", "S/patrol.jsonl", {"patrol.finding": CANONICAL}, ("patrol:write_round", "patrol:ack"),
