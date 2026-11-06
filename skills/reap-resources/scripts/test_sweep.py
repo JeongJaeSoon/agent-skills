@@ -928,45 +928,55 @@ stub.write_text(f'#!/bin/sh\necho "$@" >> {stub_log}\n[ "$1" = bootstrap ] && [ 
 stub.chmod(0o755)
 saved_plat, saved_lc, saved_sleep = sweep.PLATFORM, sweep.LAUNCHCTL, time.sleep
 sweep.LAUNCHCTL = str(stub)
+# install turns on the Orca automation (scripts/automations.py SWEEP, the same as `skills-sync setup enable sweep`) and
+# writes no LaunchAgent; a stub orca records what it is asked. uninstall still takes down an earlier LaunchAgent.
+sys.path.insert(0, str(HERE.parents[2] / "scripts"))
+import automations  # noqa: E402
+orca_log = tmp / "orca.log"
+orca_stub = tmp / "orca-stub"
+orca_stub.write_text(f'#!/bin/sh\necho "$@" >> {orca_log}\n'
+                     '[ "$2" = list ] && echo \'{"ok":true,"result":{"automations":[]}}\'\nexit 0\n')
+orca_stub.chmod(0o755)
+automations.ORCA = str(orca_stub)
+automations.main_checkout = lambda: True  # this test runs from a worktree
 err = io.StringIO()
 with contextlib.redirect_stderr(err):
-    sweep.PLATFORM = "linux"
-    assert sweep.cmd_install(["--here"]) == 1 and "launchd" in err.getvalue()
-    sweep.PLATFORM = "darwin"
-    real_here = sweep.HERE
-    sweep.HERE = tmp / "no-checkout" / "skills" / "reap-resources" / "scripts"  # no .git beside it
-    assert sweep.cmd_install([]) == 1 and "메인 git 체크아웃이 아님" in err.getvalue()
-    sweep.HERE = real_here
     saved_pf = PROTECT.read_text()
-    PROTECT.rename(tmp / "protect.gone")  # without the protect file every pass stops: nothing is installed over reap-hard
-    assert sweep.cmd_install(["--here"]) == 1 and "install 중단" in err.getvalue()
+    PROTECT.rename(tmp / "protect.gone")  # without the protect file every tick stops: nothing is registered
+    assert sweep.cmd_install([]) == 1 and "켜지 않는다" in err.getvalue()
     (tmp / "protect.gone").rename(PROTECT)
-assert not sweep.plist_path().exists() and not stub_log.exists()
+assert not sweep.plist_path().exists() and not orca_log.exists()
 buf = io.StringIO()
 with contextlib.redirect_stdout(buf):
-    assert sweep.cmd_install(["--here", "--dry-run"]) == 0
-assert "[dry-run]" in buf.getvalue() and not sweep.plist_path().exists() and not stub_log.exists()
+    assert sweep.cmd_install(["--dry-run"]) == 0
+assert "[dry-run]" in buf.getvalue() and "agent-skills sweep" in buf.getvalue() and "*/15 * * * *" in buf.getvalue()
+assert not sweep.plist_path().exists() and not orca_log.exists() and not stub_log.exists()
 (tmp / "config.json").write_text(json.dumps({"reap-hard": {"protect_file": str(PROTECT), "interval": 600}}))
 buf = io.StringIO()
 with contextlib.redirect_stdout(buf):
-    assert sweep.cmd_install(["--here"]) == 0
-plist = plistlib.loads(sweep.plist_path().read_bytes())
-assert plist["Label"] == sweep.LABEL and plist["StartInterval"] == 600 and plist["ProgramArguments"][-1] == "tick"
-assert plist["ProgramArguments"][-2].endswith("sweep.py") and plist["EnvironmentVariables"]["HOME"] == str(home)
-assert plist["StandardOutPath"] == str(STATE / "sweep.log") and plist["RunAtLoad"] is True
-asked = stub_log.read_text().splitlines()
-assert asked[0].startswith("bootout gui/") and asked[1].startswith("bootstrap gui/") and asked[1].endswith("plist"), asked
-assert '"sweep": {' in buf.getvalue() and "reap-hard.json" not in buf.getvalue()
+    assert sweep.cmd_install([]) == 0
+asked = orca_log.read_text().splitlines()
+assert asked[0] == "automations list --json" and asked[1].startswith("automations create --name agent-skills sweep "), asked
+assert "*/10 * * * *" in asked[1] and "sweep.py tick" in asked[1] and "--provider claude" in asked[1], asked[1]
+assert '"sweep": {' in buf.getvalue() and "sweep-tick.lock" in buf.getvalue()
+assert not sweep.plist_path().exists()  # no LaunchAgent written
+sweep.PLATFORM, sweep.LAUNCHCTL = "linux", str(tmp / "no-launchctl")  # a PC without launchctl still installs
+with contextlib.redirect_stdout(io.StringIO()):
+    assert sweep.cmd_install([]) == 0
+sweep.PLATFORM, sweep.LAUNCHCTL = saved_plat, str(stub)
+assert not any(l.startswith(("bootstrap", "bootout")) for l in stub_log.read_text().splitlines())
 assert str(home) in str(sweep.plist_path())  # nothing went to the real LaunchAgents folder
-os.environ["STUB_FAIL"] = "1"
-time.sleep = lambda s: None
-err = io.StringIO()
-with contextlib.redirect_stderr(err):
-    assert sweep.cmd_install(["--here"]) == 1 and "bootstrap 실패" in err.getvalue()
-del os.environ["STUB_FAIL"]
-time.sleep = saved_sleep
-assert sweep.cmd_uninstall() == 0 and not sweep.plist_path().exists()
+# uninstall: the LaunchAgent of an earlier install goes, the automation stays
+sweep.PLATFORM, sweep.LAUNCHCTL = "darwin", str(stub)
+sweep.plist_path().parent.mkdir(parents=True, exist_ok=True)
+sweep.plist_path().write_bytes(plistlib.dumps({"Label": sweep.LABEL}))
+orca_log.unlink()
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    assert sweep.cmd_uninstall() == 0
+assert not sweep.plist_path().exists() and "내리고" in buf.getvalue()
 assert stub_log.read_text().splitlines()[-1].startswith("bootout gui/")
+assert not orca_log.exists()  # uninstall never touches Orca
 sweep.PLATFORM, sweep.LAUNCHCTL = saved_plat, saved_lc
 if saved_home is None:
     del os.environ["HOME"]
@@ -1012,6 +1022,46 @@ code = run_tick(run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0))
 assert code == 0 and steps == ["shadow", "real"], (code, steps)
 code = run_tick(run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 2 if "reap_hard.py" in cmd[1] else 0))
 assert code == 2 and "real" in steps, (code, steps)
+signal.alarm(0)
+
+# two schedulers at once (the old LaunchAgent and the Orca automation during a switch): another process holds the tick
+# lock, so this tick does nothing and exits 0; once it lets go, the next tick runs every step
+holder = subprocess.Popen([sys.executable, "-c",
+                           "import sys; sys.path.insert(0, sys.argv[1]); import sweep\n"
+                           "with sweep.file_lock('sweep-tick.lock') as got:\n"
+                           "    print('held' if got else 'busy', flush=True); sys.stdin.readline()", str(HERE)],
+                          stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=os.environ)
+assert holder.stdout.readline().strip() == "held"
+code = run_tick()
+assert code == 0 and steps == [], (code, steps)  # no patrol, no shadow, no reap-hard, no real round
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    assert sweep.tick() == 0
+assert "건너뜀" in out.getvalue()
+holder.communicate("\n")
+code = run_tick(run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0))
+assert code == 0 and steps == ["shadow", "real"], (code, steps)
+# the lock is still held while a step runs (a tick that let go right after taking it would pass the cases above)
+def busy_during_step(*a, **k):
+    with sweep.file_lock("sweep-tick.lock") as got:
+        steps.append("locked" if not got else "UNLOCKED")
+    return {"round": "r"}
+
+
+run_tick(shadow=busy_during_step, run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0))
+assert "locked" in steps and "UNLOCKED" not in steps, steps
+# the lock is released when a tick ends, also when run_tick itself raises
+saved_rt = sweep.run_tick
+sweep.run_tick = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
+try:
+    sweep.tick()
+    raise AssertionError("tick swallowed the error")
+except RuntimeError:
+    pass
+finally:
+    sweep.run_tick = saved_rt
+with sweep.file_lock("sweep-tick.lock") as free_again:
+    assert free_again
 signal.alarm(0)
 
 # the CLI: own and release go through main, an unknown rule is refused with the list
