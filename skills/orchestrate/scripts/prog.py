@@ -3201,18 +3201,23 @@ def without_diffs(lines):
     """lines minus the drawn diffs: a gutter run with a + or - line that follows a diff header. Shape alone is not
     enough: a command can print "27 - step" and "28  No space left". A run with no header in `lines` is kept, so a
     real disk error is never dropped; callers pass the whole screen so a header is seen before the tail is cut."""
-    out, run, head = [], [], False
+    out, run, head, in_diff = [], [], False, False
     for l in [*lines, None]:
         m = GUTTER.match(l) if l is not None else None
         if m:
             run.append((l, bool(m.group(1))))
             continue
-        if run and not (head and any(marked for _, marked in run)):
-            out += [x for x, _ in run]
-        run = []
-        if l is not None:
-            out.append(l)
-            head = bool(DIFF_HEAD.search(l))
+        if run:
+            in_diff = head and any(marked for _, marked in run)
+            if not in_diff:
+                out += [x for x, _ in run]
+            run = []
+        # A long diff line wraps onto lines with no gutter; they belong to it until a blank line or the next turn mark.
+        if l is None or (in_diff and l.strip() and not l.lstrip().startswith(("⏺", "❯", "⎿", "✻"))):
+            continue
+        in_diff = False
+        out.append(l)
+        head = bool(DIFF_HEAD.search(l))
     return out
 
 
