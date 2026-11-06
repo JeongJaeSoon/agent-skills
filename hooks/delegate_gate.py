@@ -36,6 +36,10 @@ Allowed (orchestrate references/top-level.md, "Routing", and SKILL.md "Stay answ
 Everything else, other MCP tools included, is denied.
 
 A guardrail against the orchestrator's habit, not a sandbox: an allowed command's arguments are not checked.
+
+One thing is checked on an allowed call, and only warned about: a delegation with no owner order behind it. A
+`skills-sync card` with neither `--order` nor an `ORDER: oN` row in its brief, or an Agent call whose prompt has no
+`ORDER: oN` line, gets a note in the model's context once `orch order setup` has run. Nothing is blocked.
 """
 import json, os, pathlib, re, shlex, sys
 
@@ -261,6 +265,62 @@ def reason(tool):
             "human to run that exact command as a `!` line in this chat.")
 
 
+# A line of its own: `ORDER: o12` in a subagent prompt or a brief. The brief template's `ORDER  Starts after …` row has no
+# order id after the colon, so it does not count.
+ORDER_LINE = re.compile(r"(?im)^[ \t]*`?ORDER`?[ \t]*:[ \t]*o\d+[ \t]*$")
+
+
+def delegations(tool, args):
+    """What this allowed call hands to another session, as ("subagent", prompt) or ("card", brief path, has --order):
+    one entry per delegation in it."""
+    if tool in ("Agent", "Task"):
+        return [("subagent", str(args.get("prompt") or ""), False)]
+    if tool != "Bash":
+        return []
+    out = []
+    for _, words in segments(str(args.get("command") or "")) or []:
+        if os.path.basename(words[0]) == "skills-sync" and words[1:2] == ["card"]:
+            rest = words[2:]
+            brief = next((w for w in rest if not w.startswith("-")), "")
+            out.append(("card", brief, "--order" in rest))
+    return out
+
+
+def unlinked(delegation):
+    kind, text, flagged = delegation
+    if kind == "subagent":
+        return not ORDER_LINE.search(text)
+    if flagged:
+        return False
+    try:
+        return not ORDER_LINE.search(pathlib.Path(text).expanduser().read_text())
+    except OSError:
+        return True
+
+
+def orders_set_up():
+    """Whether `orch order setup` ran: without the tables there is nothing to link to, so nothing to warn about."""
+    try:
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "skills" / "orchestrate" / "scripts"))
+        import store
+        return store.ORDER_STEP in store.migrated_steps()
+    except Exception:
+        return False
+
+
+def should_warn(tool, args):
+    try:  # a warning never costs the call
+        return any(unlinked(d) for d in delegations(tool, args)) and orders_set_up()
+    except Exception:
+        return False
+
+
+NOTE = ("[gate:delegate] (agent-skills hooks/delegate_gate.py) This delegation carries no owner order, so nothing ties "
+        "it to the instruction that started it. If it carries one, record it with `orch order add` and name it: "
+        "`skills-sync card --order oN` or an `ORDER: oN` row in the brief, an `ORDER: oN` line in a subagent prompt. "
+        "A warning, not a block: work with no order behind it needs nothing.")
+
+
 def main():
     try:
         event = json.load(sys.stdin)
@@ -272,6 +332,9 @@ def main():
     if not isinstance(args, dict) or not allowed(tool, args):
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                                  "permissionDecisionReason": reason(tool)}}))
+    elif should_warn(tool, args):
+        # No permissionDecision: the call goes on to the same permission check it would without this hook.
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": NOTE}}))
     return 0
 
 

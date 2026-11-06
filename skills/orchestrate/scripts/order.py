@@ -9,6 +9,10 @@ carries yet. A session that accepts an instruction as work writes it here before
                                        replaced). It is shown, but does not carry the order: the brief still counts it
                                        as unlinked, and a closed stand-in is never evidence the order was done
   done oN | drop oN                    close it by hand; nothing closes one by itself yet
+  reopen oN                            a closed order is open again, and its links-complete mark is cleared
+  links-complete oN [--undo]           say every unit the order needs is linked (needs one real link). PR 5c's automatic
+                                       close waits for this mark; nothing reads it before then
+  show oN [--json]                     the order's text and links; the card start reads it with --json
   list [--status open|done|dropped] [--json]
   import FILE [--skip REGEX] [--dry-run | --check]   numbered lines of a hand list (`## section` then `1. text`) become
                                        kind=feedback rows, once each: the row keeps the line's key as its source, so a
@@ -106,6 +110,17 @@ def main(argv):
         elif sub in ("done", "drop") and oid:
             r = store.order_close(oid, "done" if sub == "done" else "dropped", _by())
             print(f"{r['id']} {r['status']}")
+        elif sub == "reopen" and oid:
+            r = store.order_reopen(oid, _by())
+            print(f"{r['id']} {r['status']}")
+        elif sub == "links-complete" and oid:
+            r = store.order_links_complete(oid, _by(), undo="--undo" in rest)
+            print(f"{r['id']} links {'complete at ' + r['links_complete_at'] if r['links_complete_at'] else 'not marked complete'}")
+        elif sub == "show" and oid:
+            r = store.order_get(oid)
+            if "--json" in rest:
+                return print(json.dumps(r, ensure_ascii=False, indent=1))
+            print(f"{r['id']}  {r['kind']}  {r['status']}  {' '.join(r['links']) or 'no link'}\n{r['text']}")
         elif sub == "list":
             cmd_list(rest)
         elif sub == "import":

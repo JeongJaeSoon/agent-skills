@@ -2,7 +2,7 @@
 """Create an Orca card from a brief file, with the lines the card's first prompt must carry written out.
 
 Usage:
-  skills-sync card <brief.md> --repo <selector> --name <name> [--display-name <title>] [--comment <text>]
+  skills-sync card <brief.md> --repo <selector> --name <name> [--display-name <title>] [--comment <text>] [--order oN]
                    [--reference <ticket URL or Jira key>]... [--parent-worktree <selector> | --no-parent] [--card]
                    [--role impl|verify|review] [--supersede] [--no-forbidden] [--agent claude|codex] [--model <id>]
   skills-sync handoff <TICKET> ...   (handoff() below)
@@ -73,6 +73,12 @@ Every prompt, a handoff's too, carries the fixed TEARDOWN and DOCS rows (FIXED_L
 An APPROVED row (a handoff's --note too) cites the owner's words by the `orch decide` id that recorded them, as
 `오너(d150, <date>)`: an id the store does not hold as answered, or a store it cannot read, is exit 2; a row that cites
 none gets a warning.
+
+--order oN, or a brief row `ORDER: oN` (not the template's `ORDER  Starts after …` row), ties the card to the owner's
+order (`orch order`): the order must be open, its text is appended to the prompt as a copy of what it said at the start,
+and the new worktree is linked to it as `card:<worktree id>`. An unknown or closed order is exit 2 before anything is
+created; a link that fails after the start is exit 5 with the command to run. The brief and the order row are not
+rewritten. Without --comment, the card's comment is `브리프: <brief path>`.
 
 `--prompt "$(cat brief.md)"` hides those lines from the guard hook, which reads only the command text; this reads
 the file and checks them itself, with the hook's own patterns. The card is created from a subprocess, so no hook
@@ -853,7 +859,7 @@ def handle_of(res):
 def parse_args(rest):
     opts, refs = {}, []
     valued = {"--repo", "--name", "--display-name", "--comment", "--parent-worktree", "--role", "--title", "--note",
-              "--base-branch", "--agent", "--model"}
+              "--base-branch", "--agent", "--model", "--order"}
     i = 0
     while i < len(rest):
         if rest[i] == "--reference" and i + 1 < len(rest):
@@ -925,6 +931,77 @@ def refuse_codex(brief, opts):
         raise Refuse(2, f"[{ME}] {CODEX_GOAL_CARD} {unsent_run_note(text)}".rstrip())
 
 
+# `ORDER: o12` names the owner's order the card carries. The template's own `ORDER  Starts after …` row is another
+# thing (the start order of tickets); only a value that is an order id counts here.
+ORDER_ROW = re.compile(r"(?im)^[ \t]*`?ORDER`?[ \t]*:[ \t]*(\S+)[ \t]*$")
+ORDER_ID = re.compile(r"o\d+")
+
+
+def order_of(brief, opts):
+    """(order id, its text) for the order this card carries: `--order oN` or the brief's `ORDER: oN` row, read from the
+    order table before anything is created. None when neither names one. Refuse(2) for two different orders, an
+    order that is unknown or closed, or a table that cannot be read: a card that was asked to carry an order must not
+    start without it."""
+    text = FENCE.sub("", pathlib.Path(brief).expanduser().read_text())
+    named = {v for v in ORDER_ROW.findall(text) if ORDER_ID.fullmatch(v)}
+    if opts.get("--order"):
+        named.add(opts["--order"])
+    if not named:
+        return None
+    if len(named) > 1 or not all(ORDER_ID.fullmatch(v) for v in named):
+        raise Refuse(2, f"[{ME}] --order and the brief's ORDER row must name one order id (oN), found "
+                        f"{', '.join(sorted(named))}")
+    oid = named.pop()
+    p, err = run([ORCH, "order", "show", oid, "--json"], timeout=30)
+    try:
+        row = json.loads(p.stdout) if p and not p.returncode else None
+    except ValueError:
+        row = None
+    if not isinstance(row, dict) or row.get("id") != oid:
+        raise Refuse(2, f"[{ME}] nothing was created: order {oid} cannot be read ({err or 'no answer'}). "
+                        "Record it with `orch order add` first, or leave out --order and the ORDER row.")
+    if row.get("status") != "open":
+        raise Refuse(2, f"[{ME}] nothing was created: {oid} is {row.get('status')}. "
+                        f"`orch order reopen {oid}` if more work belongs to it.")
+    return oid, str(row.get("text") or "")
+
+
+def order_block(oid, text):
+    """The prompt lines that give the card its order: the id, then the order's words as they stood when the card
+    started (a copy: the table row stays the source)."""
+    quoted = "\n".join(f"> {line}" if line else ">" for line in text.splitlines())
+    return f"ORDER: {oid}\n오너 지시 {oid} 원문(카드를 시작한 시점의 사본):\n{quoted}"
+
+
+def worktree_id(res):
+    """The new card's Orca worktree id (`<repo id>::<path>`) from a create or worker-start receipt, else None."""
+    if isinstance(res, dict):
+        w = res.get("worktree")
+        if isinstance(w, dict) and isinstance(w.get("id"), str) and "::" in w["id"]:
+            return w["id"]
+        if res.get("kind") == "worktree" and isinstance(res.get("id"), str) and "::" in res["id"]:
+            return res["id"]
+        for k in ("worktreeId", "workspace"):
+            if isinstance(res.get(k), str) and "::" in res[k]:
+                return res[k]
+        for v in res.values():
+            if isinstance(v, (dict, list)) and (found := worktree_id(v)):
+                return found
+    elif isinstance(res, list):
+        return next(filter(None, map(worktree_id, res)), None)
+    return None
+
+
+def link_order(oid, res, path, repo_selector, repo):
+    """An error text, or None when the order now carries the new card. The id comes from the receipt; failing that, the
+    repo id and the path, which is how Orca spells it."""
+    wid = worktree_id(res) or (f"{repo or repo_id(repo_selector)}::{path}" if path and (repo or repo_id(repo_selector)) else None)
+    if not wid:
+        return f"orch order link: the receipt names no worktree id, link it with `orch order link {oid} --unit card:<worktree id>`"
+    p, err = run([ORCH, "order", "link", oid, "--unit", f"card:{wid}"], timeout=30)
+    return None if p and not p.returncode else f"orch order link {oid} card:{wid}: {err or 'no answer'}"
+
+
 def create(argv):
     if not argv or argv[0].startswith("-"):
         raise Refuse(2, __doc__)
@@ -937,16 +1014,19 @@ def create(argv):
     kind = brief_kind(brief)
     if opts["--agent"] == "codex":
         refuse_codex(brief, opts)
+    order = order_of(brief, opts)
     with card_lock():
-        return create_locked(brief, opts, refs, prompt, kind)
+        return create_locked(brief, opts, refs, prompt, kind, order)
 
 
-def create_locked(brief, opts, refs, prompt, kind=None):
+def create_locked(brief, opts, refs, prompt, kind=None, order=None):
     repo, superseded = check_duplicates(opts["--repo"], refs, opts["--role"], opts.get("--supersede"))
     # A lead's brief has no FORBIDDEN row in its template: the worker paragraph is not its rule set.
     forbidden = ("skipped (--no-forbidden)" if opts.get("--no-forbidden") else "skipped (lead brief)"
                  if guard.is_lead(pathlib.Path(brief).expanduser().read_text()) else refresh_forbidden(brief))
     prompt = compose(brief)  # again: the refresh may have rewritten the FORBIDDEN section the prompt carries
+    if order:
+        prompt += "\n" + order_block(*order)
     text = FENCE.sub("", pathlib.Path(brief).expanduser().read_text())
     wanted = {a[len("run:"):] for a in report_to(text) if a.startswith("run:")}
     to_run = bool(wanted)
@@ -995,8 +1075,8 @@ def create_locked(brief, opts, refs, prompt, kind=None):
         cmd += ["--agent", opts["--agent"], "--prompt", prompt]
         for r in refs:
             cmd += ["--reference", r]
-    if opts.get("--comment"):
-        cmd += ["--comment", opts["--comment"]]
+    # A comment of the caller's is left alone; without one the card's comment says where its brief is.
+    cmd += ["--comment", opts.get("--comment") or f"브리프: {pathlib.Path(brief).expanduser().resolve()}"]
     cmd += ["--model", model] if model else []
     cmd.append("--json")
     check_approved(text, brief)  # after the codex and parent refusals, so those stay one-line errors
@@ -1055,6 +1135,8 @@ def create_locked(brief, opts, refs, prompt, kind=None):
                                       **({"goal_input": goal_input} if goal_input else {})}},
                      ensure_ascii=False, indent=1))
     failed = []
+    if order and (why := link_order(order[0], res, path, opts["--repo"], repo)):
+        failed.append(why)
     if refs:
         ledger_add(repo=repo, references=refs, role=opts["--role"], path=path, name=opts["--name"],
                    dispatch=res.get("dispatchId") if worker else None, model=model, model_from=model_from)
