@@ -278,8 +278,8 @@ def compose(brief_path):
 
 def check_approved(text, where, me=ME):
     """The APPROVED row's `orch decide` citations (`오너(d150, <date>)`) against the store: Refuse(2) for an id it does not
-    hold as answered or cannot be read for, a warning for a row that cites none (orchestrate references/brief.md
-    "Single worker", APPROVED)."""
+    hold as answered or cannot be read for, a warning for a row that cites none other than `APPROVED: none`
+    (orchestrate references/brief.md "Single worker", APPROVED)."""
     approved = row(FENCE.sub("", text), "APPROVED")
     if not approved:
         return
@@ -1219,14 +1219,18 @@ def handoff(argv):
         opts, refs = parse_args(argv[1:])
         if opts["--agent"] == "codex":
             raise Refuse(2, f"[{HANDOFF}] {CODEX_GOAL_CARD}")
-        # CLOSE on a line of its own: roles.py reads a CLOSE card by its row
+        # The note's first line joins /goal only when it is prose: a row or a fence there must stay one.
+        note = opts.get("--note") or ""
+        first = note.splitlines()[0] if note else ""
+        sep = "\n" if any(starts_row(first, k) for k in ROWS) or first.lstrip().startswith("```") else " "
+        head = f"/goal {ticket}." + (sep + note if note else "")
         # A note without its own APPROVED row hands over no approved act, and says so as the row a brief needs.
-        approved = [] if row(FENCE.sub("", opts.get("--note") or ""), "APPROVED") else ["APPROVED: none"]
-        prompt = "\n".join([f"/goal {ticket}." + (f" {opts['--note']}" if opts.get("--note") else ""),
-                            *approved, CLOSE_LINE, LOAD_LINE, *FIXED_LINES])
+        approved = [] if row(FENCE.sub("", head), "APPROVED") else ["APPROVED: none"]
+        # CLOSE on a line of its own: roles.py reads a CLOSE card by its row
+        prompt = "\n".join([head, *approved, CLOSE_LINE, LOAD_LINE, *FIXED_LINES])
         if not guard.CLOSE_OR_KEEP.search(prompt):
             raise Refuse(2, f"[{HANDOFF}] the prompt does not pass hooks/guard.py's card check")
-        check_approved(opts.get("--note") or "", "--note", HANDOFF)  # the note itself: its first line joins /goal
+        check_approved(prompt, "--note", HANDOFF)  # the prompt as the card reads it, not the note alone
         with card_lock():
             return handoff_locked(ticket, opts, refs, prompt)
     except Refuse as e:
