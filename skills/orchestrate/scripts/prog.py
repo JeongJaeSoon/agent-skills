@@ -3371,13 +3371,22 @@ SELF_CHECK = ("Self-check: is any work left on this card? If none, run end-sessi
               "If some, say what it is and keep it.")
 
 
-def settle_sweep(workers, worktrees, skip=(), holds=card_holds, asked=None, now=None):
+def auto_release_ahead(w, now):
+    scripts = str(pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    import auto_release
+    return auto_release.ahead(w, now)
+
+
+def settle_sweep(workers, worktrees, skip=(), holds=card_holds, asked=None, now=None, clock=time.time):
     path = {w["id"]: w.get("path") for w in worktrees if not w.get("isMainWorktree")}
     asked = {} if asked is None else asked
     seen, out, kept = {}, [], []
     for w in workers:
         d, res, taken = w.get("dispatchId"), w.get("resource") or {}, taken_over(w)
-        if not d or (not taken and (w.get("terminalState") not in ("reclaimable", "release_unknown") or d in skip)):
+        if not d or (not taken and (w.get("terminalState") not in ("reclaimable", "release_unknown") or d in skip
+                                    or auto_release_ahead(w, clock()))):
             continue
         p = path.get(res.get("worktreeId"))
         if p and p not in seen:

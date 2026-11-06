@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PR watcher for the Monitor tool: one line when a PR needs a turn, nothing otherwise.
 
-Usage: pr_watch.py --repo OWNER/REPO [--repo ...] [--branch REGEX] [--land-check SLUG]
+Usage: pr-watch --repo OWNER/REPO [--repo ...] [--branch REGEX] [--land-check SLUG]
                    [--interval 300] [--limit 100] [--once]
 
 Each round lists the PRs of every --repo whose head branch matches --branch and prints a line only for:
@@ -117,7 +117,7 @@ def watch(read, interval, emit, sleep, rounds=None, old=None):
 
 
 def parse(argv):
-    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap = argparse.ArgumentParser(prog="pr-watch", description=__doc__.split("\n\n")[0])
     ap.add_argument("--repo", action="append", required=True, help="OWNER/REPO, repeatable")
     ap.add_argument("--branch", default="", help="regex a head branch must match (default: all)")
     ap.add_argument("--land-check", dest="land_check", help="program slug; turns on the READY line")

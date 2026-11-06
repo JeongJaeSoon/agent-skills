@@ -27,7 +27,13 @@ python3 "$C" apply --plan <scratchpad>/cards-plan.json   # after the person has 
 ```
 
 Show the table and stop before `apply`: the person running it confirms. A 사람 결정 row is theirs to settle; `apply`
-never touches it. From a shell the same two lines work with the checkout's path in place of `${CLAUDE_SKILL_DIR}`.
+never touches it. `apply` takes only the plan file `scan --plan` just wrote: it records the plan's digest in
+`~/.local/state/agent-skills/card-plan-seals.json` (the account's home, which `--state` does not move), and a plan written or edited since, or one with an acting row that is not a card Orca
+lists (the main checkout included), is refused whole, with nothing closed. So is a plan with any acting card that has
+changed since the scan (verdict, HEAD, folder, a guard now holding it back, or another cleaner holding its lock):
+`apply` takes every acting card's lock and judges every card again before it closes the first, and the fix is a new
+`scan --plan`. It runs only in the account's default state directory (`--state` and `$AGENT_SKILLS_STATE` are
+refused), because the locks live there. A card that changes after that is skipped alone. From a shell the same two lines work with the checkout's path in place of `${CLAUDE_SKILL_DIR}`.
 The janitor's `card` kind is this same code, so the scheduled round closes what `scan` would.
 
 ## Run
@@ -89,7 +95,7 @@ line adds to it and keeps the owner links. `--pid` is recorded, never checked: t
 | Kind | Target when | Kept when | Action |
 |---|---|---|---|
 | card | [references/cards.md](references/cards.md) 삭제 or 터미널만 닫기 | 남김, 사람 결정 (reported, never acted on) | the listed terminals closed one by one; for 삭제, judged again, ignored files to the trash, `orca worktree rm --worktree path:<p> --run-hooks` |
-| orca-worker | a row of `orca orchestration worker-list --terminal-state reclaimable` | - | `orca orchestration worker-release --dispatch <id>` |
+| orca-worker | a row of `orca orchestration worker-list --terminal-state reclaimable`, unless its `resource.autoReleaseAt` is still ahead (Orca releases that one itself) | - | `orca orchestration worker-release --dispatch <id>` |
 | tmpdir | under a temp dir, its link is done, and no process has its cwd or executable under it | outside a temp dir, an open PR, no link, a process in it; a path already gone is not listed | `lsregister -u` each `.app` under it, then the trash |
 | gui-app | the registered pid with the same start time still runs and its link is done | an open PR, no link | `kill -TERM <pid>` |
 | chrome-window | its link is done and its URL is recorded | an open PR, no link, no URL (Chrome reuses ids after a restart, so without the URL the agent cannot tell it is the same tab) | `reap` prints `에이전트가 처리` and retires the id in the ledger, so it is asked once; the agent closes it with its browser tools only when the URL matches, and leaves it otherwise or when it has no browser tools |
