@@ -819,6 +819,9 @@ ro = ro[ro.index("--prompt") + 1]
 assert "merges" not in ro and "감지하고 넘기기만" in ro
 assert "코멘트·재요청도 하지 않는다" in mprompt
 assert no_env(mline) and "`python3 /repo/skills/watch-prs/scripts/prs.py merges`" in mprompt, mprompt
+# A land executor repo's item gets no command, so an empty merges output skips verify: nothing to read back or wait on.
+assert "출력이 없으면 verify 없이" in mprompt, mprompt
+assert mprompt.index("출력이 없으면 verify 없이") < mprompt.index(" verify`"), mprompt
 # With review_wait too, merging still precedes the send and the actions step follows it.
 both = p.schedule_cmd(pathlib.Path("/x/prs.py"), {**mcfg, "kinds": ["ready_to_merge", "review_wait"], "inbox_to": "t"}, "path:/x")
 both = both[both.index("--prompt") + 1]

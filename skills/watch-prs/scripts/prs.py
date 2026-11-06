@@ -1437,7 +1437,8 @@ def schedule_cmd(script, cfg, workspace, provider="claude", edit=None):
     merging = "ready_to_merge" in cfg["kinds"]
     gate = "ownergate" in cfg["kinds"]
     # Merging comes before the send so the bundle carries each merge's result and its default-branch CI.
-    merge_step = (f"`{run('merges')}` 가 출력하는 머지 대상마다, 주석 줄(PR, CLEAN, 체크, 리뷰, 머지 방식)을 채팅에 그대로 적은 뒤 "
+    merge_step = (f"`{run('merges')}` 를 한 번 실행한다. 출력이 없으면 verify 없이 다음 단계로 간다(land executor 저장소의 "
+                  f"항목에는 머지 명령이 없다). 출력이 있으면 머지 대상마다, 주석 줄(PR, CLEAN, 체크, 리뷰, 머지 방식)을 채팅에 그대로 적은 뒤 "
                   f"그 아래 `gh pr merge` 명령을 단독 명령으로 한 번씩 실행한다(--admin·--auto 를 붙이지 않는다). 거부되거나 실패한 "
                   f"머지는 다시 시도하지 않고 다른 형태로 바꾸지도 않으며, 그 PR 과 거부·실패 내용, 정확한 명령을 본문 끝에 덧붙여 보고한다. "
                   f"그다음 `{run('verify')}` 로 MERGED 와 기본 브랜치 CI 를 확인해 본문을 다시 쓴다. verify 가 실패하면 보내지도 "
