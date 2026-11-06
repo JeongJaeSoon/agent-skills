@@ -12,7 +12,7 @@ scripts/skill_tokens.py의 display_width를 len()으로 바꾸려고 해. 이거
 def display_width(text):
     return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in text)
 
-# listing(): each skill's description line, measured for the skill listing budget
+# measure(): each skill's and agent's listing line, measured for the listing budget
 skills.append({"name": name, "tokens": count(line), "width": display_width(line)})
 agents.append({"name": name, "tokens": count(line), "width": display_width(line), "body_tokens": count(body)})
 ```
