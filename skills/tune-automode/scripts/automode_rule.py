@@ -9,7 +9,13 @@ HASH is the spec hash printed with the diff; a spec edited after review no longe
 
 SPEC: {"add": {"allow": [...], "soft_deny": [...], "environment": [...]},
        "replace": [{"section": "allow", "old": "...", "new": "..."}],
-       "remove": [{"section": "allow", "rule": "..."}]}
+       "remove": [{"section": "allow", "rule": "..."}],
+       "refusal_category": "..."}
+
+emit also lints the spec. It refuses a spec without refusal_category (the classifier's category quoted as given, or
+`user-request`; `no-verdict` is refused) and an allow rule without `Not covered:`. It warns, above the diff, on
+blanket wording (all, any, every, *), ticket or PR numbers, token-like strings, and a rule that nearly repeats one
+already in the settings. Applying an emitted copy does not lint again.
 """
 import argparse
 import difflib
@@ -17,6 +23,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import shlex
 import shutil
 import sys
@@ -36,8 +43,10 @@ class Refused(Exception):
 
 
 def check_spec(spec):
-    if not isinstance(spec, dict) or set(spec) - {"add", "replace", "remove"}:
-        raise Refused("spec must be an object with only 'add', 'replace' and 'remove'")
+    if not isinstance(spec, dict) or set(spec) - {"add", "replace", "remove", "refusal_category"}:
+        raise Refused("spec must be an object with only 'add', 'replace', 'remove' and 'refusal_category'")
+    if "refusal_category" in spec and (not isinstance(spec["refusal_category"], str) or not spec["refusal_category"].strip()):
+        raise Refused("refusal_category must be a non-empty string")
     add, replace, remove = spec.get("add", {}), spec.get("replace", []), spec.get("remove", [])
     if not isinstance(add, dict) or not isinstance(replace, list) or not isinstance(remove, list):
         raise Refused("'add' must be an object, 'replace' and 'remove' lists")
@@ -76,6 +85,55 @@ def check_rule(rule):
         raise Refused(f"a rule is not valid UTF-8 text: {rule!r}")
     if rule == DEFAULTS:
         raise Refused(f"{DEFAULTS} is kept as is; a spec may not add, remove or replace it")
+
+
+NOT_COVERED = "Not covered:"
+NO_VERDICT = ("no-verdict", "no verdict", "none")
+BLANKET = re.compile(r"\b(?:all|any|every|anything|everything|anywhere)\b|모든|어떤|\*", re.I)
+TICKET = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b|(?:^|[\s(])#\d+\b|\b[\w.-]+/[\w.-]+#\d+\b")
+TOKEN = re.compile(r"\b(?:gh[pousr]_\w{20,}|github_pat_\w{20,}|sk-[\w-]{20,}|xox[abprs]-[\w-]{10,}|AKIA[0-9A-Z]{16}"
+                   r"|eyJ[\w-]{10,}\.[\w-]{10,}|[0-9a-fA-F]{32,}|(?=[\w-]*\d)(?=[\w-]*[A-Za-z])[\w-]{32,})\b")
+SIMILAR = 0.5
+
+
+def new_rules(spec):
+    """(section, rule) for each rule the spec writes: added ones and the new text of a replacement."""
+    for section, rules in spec.get("add", {}).items():
+        for rule in rules:
+            yield section, rule
+    for item in spec.get("replace", []):
+        yield item["section"], item["new"]
+
+
+def words(rule):
+    return set(re.findall(r"[a-z][a-z0-9_-]{3,}", rule.lower()))
+
+
+def lint(spec, automode):
+    """(refusals, warnings) for an emit. A refusal stops it; a warning is printed above the diff."""
+    refuse, warn = [], []
+    category = spec.get("refusal_category", "")
+    if not category.strip() or category.strip().lower() in NO_VERDICT:
+        refuse.append("refusal_category is required: the classifier's category quoted as given, or `user-request` when "
+                      "the user asked for the rule without a denial; a denial with no verdict is no input for a rule")
+    gone = {i["old"] for i in spec.get("replace", [])} | {i["rule"] for i in spec.get("remove", [])}
+    for section, rule in new_rules(spec):
+        head = rule.split(NOT_COVERED)[0]
+        label = f"{section}: {rule[:60]}"
+        if section == "allow" and NOT_COVERED not in rule:
+            refuse.append(f"allow rule has no `{NOT_COVERED}` part for the nearby actions that stay blocked: {label}")
+        if BLANKET.search(head):
+            warn.append(f"blanket wording ({BLANKET.search(head).group(0)!r}) before `{NOT_COVERED}`; name the narrower class: {label}")
+        if TICKET.search(rule):
+            warn.append(f"ticket or PR number in the rule; state the lasting condition instead: {label}")
+        if TOKEN.search(rule):
+            warn.append(f"token-like string in the rule; a secret never belongs in a rule: {label}")
+        for other in automode.get(section, []):
+            if isinstance(other, str) and other not in (DEFAULTS, rule) and other not in gone:
+                a, b = words(rule), words(other)
+                if a and b and len(a & b) / len(a | b) >= SIMILAR:
+                    warn.append(f"near-duplicate of an existing {section} rule; `replace` it instead of adding: {other[:70]}")
+    return refuse, warn
 
 
 def spec_hash(spec):
@@ -199,6 +257,11 @@ def emit(spec, out, settings):
     if out.resolve() == settings.resolve() or out.resolve().is_relative_to(CONFIG_DIR.resolve()):
         raise Refused(f"--out must be outside {CONFIG_DIR}; the agent does not write there")
     body = source.replace(marker, f"SPEC = {json.dumps(spec, ensure_ascii=False, indent=2)}\n", 1)
+    refuse, warn = lint(spec, load(settings)[1])
+    if refuse:
+        raise Refused("lint: " + "; ".join(refuse))
+    for w in warn:
+        print(f"warning: {w}")
     run(spec, settings, apply=False)
     out.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)

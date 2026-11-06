@@ -241,16 +241,29 @@ class SpecValidationTest(Base):
         self.refused({"add": {"allow": [42]}})
 
 
+EMIT_SPEC = {**SPEC, "refusal_category": "Interfere With Workloads"}
+
+
 class EmitTest(Base):
+    def setUp(self):
+        super().setUp()
+        self.spec.write_text(json.dumps(EMIT_SPEC))
+
     def emit(self, out):
         return run(SCRIPT, "emit", "--spec", self.spec, "--out", out, "--settings", self.settings)
+
+    def emit_spec(self, spec):
+        self.spec.write_text(json.dumps(spec))
+        out = self.dir / "lint-rule.py"
+        return self.emit(out), out
 
     def test_emitted_script_runs_standalone(self):
         out = self.dir / "elsewhere" / "rule.py"
         r = self.emit(out)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("dev-restart", r.stdout)
-        digest = automode_rule.spec_hash(SPEC)
+        self.assertNotIn("warning:", r.stdout)
+        digest = automode_rule.spec_hash(EMIT_SPEC)
         self.assertIn(f"! python3 -I {out} --settings {self.settings} --apply {digest}", r.stdout)
         self.assertFalse(self.backups())
 
@@ -273,9 +286,60 @@ class EmitTest(Base):
         self.emit(out)
         out.write_text(out.read_text().replace("shared or remote servers", "anything"))
         before = self.settings.read_bytes()
-        r = run(out, "--settings", self.settings, "--apply", automode_rule.spec_hash(SPEC))
+        r = run(out, "--settings", self.settings, "--apply", automode_rule.spec_hash(EMIT_SPEC))
         self.assertNotEqual(r.returncode, 0)
         self.assertEqual(self.settings.read_bytes(), before)
+
+    def test_emit_requires_a_refusal_category(self):
+        for spec in (SPEC, {**SPEC, "refusal_category": "no-verdict"}, {**SPEC, "refusal_category": "No verdict"},
+                     {**SPEC, "refusal_category": "  "}):
+            r, out = self.emit_spec(spec)
+            self.assertNotEqual(r.returncode, 0, spec)
+            self.assertIn("refusal_category", r.stderr)
+            self.assertFalse(out.exists())
+        r, out = self.emit_spec({**SPEC, "refusal_category": "user-request"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_emit_refuses_an_allow_rule_without_not_covered(self):
+        r, out = self.emit_spec({"add": {"allow": ["Restarting the local dev server this session started."]},
+                                 "refusal_category": "user-request"})
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("Not covered:", r.stderr)
+        self.assertFalse(out.exists())
+        r, _ = self.emit_spec({"add": {"soft_deny": ["Pushing to the default branch."]}, "refusal_category": "user-request"})
+        self.assertEqual(r.returncode, 0, r.stderr)  # only allow rules need the part
+
+    def test_emit_refuses_a_replacement_that_drops_not_covered(self):
+        old = json.loads(self.settings.read_text())["autoMode"]["allow"][-1]
+        r, out = self.emit_spec({"replace": [{"section": "allow", "old": old, "new": "Restarting the dev server."}],
+                                 "refusal_category": "user-request"})
+        self.assertNotEqual(r.returncode, 0)
+        self.assertFalse(out.exists())
+
+    def test_emit_warns_but_writes_for_wording_problems(self):
+        rule = ("Restarting any local server for ABC-123 and PR #45 with ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3 in the env. "
+                "Not covered: shared servers, anything remote.")
+        r, out = self.emit_spec({"add": {"allow": [rule]}, "refusal_category": "user-request"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(out.exists())
+        for want in ("blanket wording ('any')", "ticket or PR number", "token-like string"):
+            self.assertIn(want, r.stdout)
+        self.assertEqual(r.stdout.count("blanket wording"), 1)  # "anything" after Not covered: is the exclusion, not the grant
+
+    def test_emit_warns_on_a_near_duplicate_of_an_existing_rule(self):
+        existing = RULE
+        self.settings.write_text(json.dumps({"autoMode": {"allow": ["$defaults", existing]}}))
+        near = existing.replace("Not covered:", "Not covered: production hosts,")
+        r, _ = self.emit_spec({"add": {"allow": [near]}, "refusal_category": "user-request"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("near-duplicate of an existing allow rule", r.stdout)
+        # replacing that rule is the fix, so it is no duplicate of itself
+        r, _ = self.emit_spec({"replace": [{"section": "allow", "old": existing, "new": near}], "refusal_category": "user-request"})
+        self.assertNotIn("near-duplicate", r.stdout)
+
+    def test_apply_does_not_lint(self):
+        spec = {"add": {"allow": ["No part here."]}}
+        self.assertEqual(self.apply(spec).returncode, 0)
 
     def test_emit_refuses_out_onto_settings(self):
         before = self.settings.read_bytes()
