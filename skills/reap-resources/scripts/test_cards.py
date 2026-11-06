@@ -552,7 +552,7 @@ saved_listing = cards.cards_listing
 cards.cards_listing = lambda repo_list=(): [{"path": CARD}]
 guard.ownership = lambda: None
 saved_pre, cards.preflight = cards.preflight, lambda *a: None  # these cases are about the per-card loop; preflight is tested below
-saved_home, reap.STATE_HOME = reap.STATE_HOME, reap.STATE  # this test's state directory stands for the account's
+saved_home, cards.ACCOUNT_STATE = cards.ACCOUNT_STATE, reap.STATE  # this test's state directory stands for the account's
 cards.act = lambda *a, **k: "acted"
 sys.argv = ["cards.py", "apply", "--plan", str(plan)]
 for why, code in (("검사를 마치지 못함(PermissionError: x)", 1), ("보호 목록의 경로", 0), (None, 0)):
@@ -705,9 +705,14 @@ cards.reread, cards.cardguard.guard, reap.dir_ino = saved_reread, saved_cg, save
 
 # Card locks live under the state directory, so apply runs only in the account's own: another state would not see a
 # card a cleaner holds there.
-reap.STATE_HOME = pathlib.Path(tmp) / "somewhere-else"
+cards.ACCOUNT_STATE = pathlib.Path(tmp) / "somewhere-else"
 assert "기본 상태 디렉터리" in refuses(TWO, listing=BOTH, seal=True)
-reap.STATE_HOME = saved_home
+cards.ACCOUNT_STATE = saved_home
+# $HOME moves reap's default state but not the account's: with HOME changed and no state variable, apply still refuses.
+child_env = {k: v for k, v in os.environ.items() if k != "AGENT_SKILLS_STATE"}
+child = subprocess.run([sys.executable, "cards.py", "apply", "--plan", "none.json"], cwd=os.path.dirname(os.path.abspath(cards.__file__)),
+                       env={**child_env, "HOME": other_home}, capture_output=True, text=True)
+assert child.returncode != 0 and "기본 상태 디렉터리" in child.stderr, (child.returncode, child.stderr[-300:])
 
 cards.cards_listing = saved_listing
 guard.keep, guard.ownership, cards.act, sys.argv = saved_keep, saved_own, saved_act, saved_argv

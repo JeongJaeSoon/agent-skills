@@ -505,8 +505,9 @@ def act_locked(item, cfg, wait, done=None):
 
 SEALS, SEALS_KEPT = "card-plan-seals.json", 20
 # Fixed by the account, not by --state, $AGENT_SKILLS_STATE or $HOME: a caller that can pick the directory can put a
-# seal list of its own there and have a hand-written plan accepted.
-SEAL_DIR = pathlib.Path(pwd.getpwuid(os.getuid()).pw_dir) / ".local/state/agent-skills"
+# seal list of its own there and have a hand-written plan accepted, or lock cards where no other cleaner looks.
+ACCOUNT_STATE = pathlib.Path(pwd.getpwuid(os.getuid()).pw_dir) / ".local/state/agent-skills"
+SEAL_DIR = ACCOUNT_STATE
 
 
 def seal_plan(text):
@@ -610,7 +611,7 @@ def main(argv):
     cfg = reap.config()
     if cmd == "apply":
         # The card locks live under the state directory: another one would not see a card a cleaner holds in the account's.
-        if reap.STATE.resolve() != reap.STATE_HOME.resolve():
+        if reap.STATE.resolve() != ACCOUNT_STATE.resolve():
             sys.exit("아무것도 닫지 않았다: apply 는 기본 상태 디렉터리에서만 돈다(--state·AGENT_SKILLS_STATE 로 옮기면 "
                      "다른 정리가 잡은 카드 잠금이 보이지 않는다)")
         # Bytes, not read_text(): its newline translation would hash a CRLF-edited file as the sealed text.
