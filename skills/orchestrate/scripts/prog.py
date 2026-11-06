@@ -3218,7 +3218,11 @@ def without_diffs(lines, tail=25):
         if l is None:
             continue
         out.append((i, l))
-        head = bool(DIFF_HEAD.search(l))
+        # A wrapped tail has no mark and leaves the header standing for the gutter lines after it.
+        if DIFF_HEAD.search(l):
+            head = True
+        elif l.lstrip().startswith(("⏺", "❯", "⎿", "✻")):
+            head = False
     return [l for i, l in out if i >= first]
 
 

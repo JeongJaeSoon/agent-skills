@@ -258,6 +258,9 @@ screens["h1"] = ["npm ERR! ENOSPC: no space left on device, write", "⏺ Disk sp
 assert scan({}) == [], "a message that scrolled past the 25-line tail is not read again after a long diff"
 screens["h1"] = ["⏺ Update(src/errors.ts)", "     41 +  x = 1", "⏺ Bash(make)", "  ⎿  npm ERR! ENOSPC: no space left", "❯ "]
 assert scan({})[0] == "STUCK card-a (a full disk): read its screen", "the next turn after a diff is not part of it"
+screens["h1"] = ["⏺ Update(src/errors.ts)", "  ⎿  Added 2 lines", '     41 +  const m = "a long ordinary message',
+                  '       continues here";', '     42 +  const d = "ENOSPC";', "❯ "]
+assert scan({}) == [], "a wrapped tail leaves the diff header standing for the lines after it"
 long_build = ["⏺ Bash(build)"] + [f"     {i} - writing output" for i in range(1, 25)] + ["     25  No space left on device", "❯ "]
 screens["h1"] = long_build
 assert scan({})[0] == "STUCK card-a (a full disk): read its screen", "a long numbered log pushes its header out of the tail"
