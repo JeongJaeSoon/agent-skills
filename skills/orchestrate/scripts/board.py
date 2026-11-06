@@ -33,7 +33,7 @@ ALIASES = {v: k for k, v in ICON.items() if k != "check"} | {"⏸": "held"}  # V
 OWNER_NAMES = ("오너", "owner")
 COLS = 78
 LIMITS = {"row_min": 90, "pr_warn_min": 30, "pr_stale_min": 120, "state_min": 5, "done_fold_h": 24, "stage_idle_d": 7,
-          "decision_stale_h": 12, "subagent_stale_h": fleet.SUBAGENT_STALE_H}  # overridden by the dashboard config's "board" key
+          "decision_stale_h": 12, "order_unlinked_min": 10, "subagent_stale_h": fleet.SUBAGENT_STALE_H}  # overridden by the dashboard config's "board" key
 FILLED = ("fleet:", "agent:")  # the ids of rows derived from the fleet (--fill), not written to the board
 DONE_KEEP_S = 7 * 86400  # a finished lead stays this long with its rows, then leaves the board
 HEADER = ["", "리드/Phase", "PR", "진행", "다음", "세션"]
@@ -936,9 +936,11 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     try:  # one snapshot, so a close and the open list cannot disagree within a report
         seen = store_db.view()
         store, open_dec, db_known = seen["board"], seen["decisions"], True
+        order_open = seen["orders_unlinked"] or []  # None until `orch order setup`: no line
         shut = {k: r for k, r in seen["latest"].items() if r["ev"] == "done"}
     except store_db.NotMigrated:
         store, db_known, shut = {"rows": {}, "order": [], "leads": {}, **{l: [] for l in store_db.LANES}}, False, {}
+        order_open = []
         try:  # decisions are in decisions.json until the import, and `--decision` has registered there: list them
             open_dec = fleet.open_decisions()
         except store_db.NotMigrated:  # a DB that is not imported: unknown, and the headline and the ❔ rows say so
@@ -1372,6 +1374,13 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
            and (now - at).total_seconds() > limits["decision_stale_h"] * 3600]
     if old:
         facts.append(f"오래된 결정 {len(old)} ({', '.join(d['id'] for d in old)} · `orch decide keep|drop`)")
+    # An order is only a lead until a card, PR or decision carries it: one still unlinked after the grace is work nobody has.
+    loose = [o for o in order_open if (at := fleet.parse(o["created_at"]))
+             and (now - at).total_seconds() > limits["order_unlinked_min"] * 60]
+    if loose:
+        first = loose[0]  # oldest first
+        facts.append(f"연결 없는 오너 지시 {len(loose)} (가장 오래된 {first['id']} "
+                     f"{ago((now - fleet.parse(first['created_at'])).total_seconds())} · `orch order link`)")
     # Judged as the relay judges it: the registering terminal, else the root's writable agent terminal, else nowhere.
     # A decision added outside Orca has no handle and always goes to the root, so only a missing root terminal counts.
     # The relay types into the target as it is; a terminal whose agent exited refuses the line, so that is no route.

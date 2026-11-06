@@ -304,4 +304,25 @@ for delim, raw in (("$'E\\x4fF'", "E\\x4fF"), ('"E\\OF"', "E\\OF")):
 # A directory is named as one, not as an unreadable file.
 assert bash("skills-sync card /") == "deny" and "names a directory" in reason("skills-sync card /")
 assert "skills-sync card <brief>" in reason(f'{NEW} --prompt "/goal fix X"'), "the deny names the helper"
+# skills-sync subcommands: read-only and fixed-text ones are allowed, the rest go to the classifier (no decision).
+for cmd in ("skills-sync status", "skills-sync broadcast", "skills-sync broadcast --skills", "skills-sync broadcast --plugins --dry-run",
+            "skills-sync broadcast --skills --terminal term_x", "skills-sync broadcast --retry",
+            "skills-sync broadcast --skills --terminal $ORCA_TERMINAL_HANDLE",
+            "skills-sync end-check --card --outcome succeeded --keep", "skills-sync end-check --worker --outcome failed --no-keep --json"):
+    assert bash(cmd) == "allow", cmd
+for cmd in ("skills-sync sync", "skills-sync sync --no-broadcast", "skills-sync setup --apply", "skills-sync setup enable x",
+            "skills-sync nudge term_x hello", "skills-sync card --supersede x", "skills-sync status extra",
+            "skills-sync end-check --card --apply", "skills-sync end-check --apply", "skills-sync end-check --card --trash-caches",
+            "skills-sync end-check -x", "skills-sync broadcast --text hi", "skills-sync broadcast /reload-skills",
+            "skills-sync broadcast --terminal", "skills-sync broadcast --terminal --skills",
+            "skills-sync wake-reset term_x", "skills-sync", "skills-sync status; rm x", "skills-sync status && skills-sync sync",
+            "skills-sync end-check --card > out", "skills-sync broadcast --skills $(id)",
+            "skills-sync end-check --brief --apply", "skills-sync end-check --dispatch --apply",
+            "/tmp/skills-sync end-check --apply", "./bin/skills-sync status"):
+    assert bash(cmd) == "none", cmd
+# What an allowed broadcast can type is this closed set (sync.py RELOAD and STALE_COMMAND); a new command there must be
+# reviewed against the allow in guard.sync_allowed before this test is changed.
+sys.path.insert(0, str(HERE.parent / "scripts"))
+import sync
+assert set(sync.RELOAD.values()) | set(sync.STALE_COMMAND.values()) == {"/reload-skills", "/reload-plugins", "/restart"}
 print("guard: all pass")
