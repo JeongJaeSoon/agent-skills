@@ -105,6 +105,16 @@ def same_to(a, b):
 
 
 MESSAGE_FIELDS = ("message", "thread", "run")
+# Orca keeps a send to a terminal bound to a Run under `run:<id>`; one left under `term_…` was stored for a terminal
+# bound to no Run, which nobody reads, and Orca prints no error for it.
+TERMINAL_ONLY = ("sent to a terminal address, not run:<id> or dispatch:<id>: the receiver gets it only while that "
+                 "terminal is bound to a Run; confirm it arrived or resend to its Run or Dispatch")
+
+
+def terminal_only(row):
+    """The warning for an `orchestration` message addressed to a terminal handle; None for any other row."""
+    return TERMINAL_ONLY if str(row.get("to")).startswith("term_") and str(row.get("channel")).startswith("orca ") \
+        and row.get("channel") not in ("orca terminal send", "orca worktree create") else None
 
 
 def page(rows, days=1, now=None, limit=LIMIT, inbox_since=None):
@@ -133,12 +143,14 @@ def page(rows, days=1, now=None, limit=LIMIT, inbox_since=None):
             for k in MESSAGE_FIELDS:
                 if r.get(k) is not None:
                     twin.setdefault(k, r[k])
+            if terminal_only(r):  # the log line may carry no channel, so the message's own is read before it folds
+                twin.setdefault("warn", TERMINAL_ONLY)
         else:
             out.append(r)
             if r.get("message"):
                 by_key.setdefault(key(r.get("text")), []).append(r)
     out.sort(key=lambda r: r.get("ts") or "", reverse=True)
-    shown = [{**r, "text": fleet.mask(r.get("text"), TEXT_MAX),
+    shown = [{**r, **({"warn": w} if (w := terminal_only(r)) else {}), "text": fleet.mask(r.get("text"), TEXT_MAX),
               **{k: fleet.mask(r.get(k), n) or None for k, n in (("subject", 200), ("to", 120), ("from", 120),
                                                                    ("channel", 120), ("repo", 120), ("cwd", 300))}}
              for r in out[:limit]]

@@ -2380,6 +2380,21 @@ assert sorted(got, key=str) == sorted([("orca", "dispatch:ctx_1", ["transcript"]
 assert p["inbox_since"] is None, p["inbox_since"]
 # The rows given are not changed: a second poll of the same rows gives the same page.
 assert sent.page([copy, elsewhere, unread] + rows, days=1, now=later)["rows"] == p["rows"]
+# A message left under a terminal handle was stored for a terminal bound to no Run: the row says so. Run and Dispatch
+# addresses, and a typed `orca terminal send`, carry no warning.
+tmsgs = fleet.orca_messages_sent([{"id": "t1", "type": "status", "from_handle": "term_a", "to_handle": "term_goal",
+                                   "subject": "s", "body": "hello", "created_at": fleet.iso(now)}])
+tp = sent.page(tmsgs + rows + [{"ts": fleet.iso(now), "to": "term_goal", "text": "typed", "channel": "orca terminal send",
+                               "source": "transcript"}], days=1, now=later)["rows"]
+assert {r["text"]: r.get("warn") for r in tp if r["text"] in ("hello", "do (c)", "typed")} == {
+    "hello": sent.TERMINAL_ONLY, "do (c)": None, "typed": None}, tp
+# A log line with no channel that the message folds into keeps the warning.
+sent.add("term_goal", "folded hello", sender="term_a", now=now)
+fm = fleet.orca_messages_sent([{"id": "t2", "type": "status", "from_handle": "term_a", "to_handle": "term_goal",
+                                "subject": "s", "body": "folded hello", "created_at": fleet.iso(now)}])
+fp = sent.page(fm, days=1, now=later)["rows"]
+assert [(r["source"], r.get("also"), r.get("warn")) for r in fp if r["text"] == "folded hello"] == [
+    ("log", ["orca"], sent.TERMINAL_ONLY)], fp
 # Two Orca messages never fold, even with the same text, receiver and minute (two workers reporting "done").
 twins = fleet.orca_messages_sent([{"id": i, "type": "worker_done", "from_handle": f, "to_handle": "run:run_1", "subject": "done",
                                    "created_at": fleet.iso(now)} for i, f in (("w1", "term_x"), ("w2", "term_y"))])

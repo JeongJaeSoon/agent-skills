@@ -218,16 +218,23 @@ def check_run(role, run, handle, call, lead_dispatch=None, slug=None):
                    "to confirm, and run this check again for the workers")], None, None
 
 
-def own_session(table, pid):
-    """This check's own Claude Code session id, found through the process tree and the sessions Claude Code registers;
-    None when it cannot be told."""
+def own_record(table, pid):
+    """This check's own Claude Code session record (id, name, ...), found through the process tree and the sessions
+    Claude Code registers; None when it cannot be told."""
     claude = session_pid(table, pid)
     try:
         import fleet  # beside orca_settings, which imports it anyway
         # fleet's process table also carries each start time, which a live session's registration is checked against.
-        return next((sid for sid, s in fleet.live_sessions(fleet.ps_table()).items() if claude in s["pids"]), None)
+        s = next((s for s in fleet.live_sessions(fleet.ps_table()).values() if claude in s["pids"]), None)
+        # A session resumed in a second terminal has two registrations; live_sessions keeps the first one's name.
+        return {**s, **(fleet.read_json(s["home"] / "sessions" / f"{claude}.json", {}) or {})} if s else None
     except Exception:  # the line then says nothing rather than guess
         return None
+
+
+def own_session(table, pid):
+    """The id of own_record's session, None when it cannot be told."""
+    return (own_record(table, pid) or {}).get("sessionId")
 
 
 def check_reload(handle, root=None, session=None):
@@ -252,12 +259,34 @@ def check_reload(handle, root=None, session=None):
     return [("ok", "hooks/hooks.json is the one this session loaded")]
 
 
+STATUS_GLYPHS = "◐◑◒◓·✢✳✶✻✽"  # Claude Code's spinner frames; a braille frame is matched by range
+
+
+def plain_title(title):
+    """A tab title without the status glyph Claude Code puts in front of it (◐ ◑ ✳ or a braille spinner frame)."""
+    t = (title or "").lstrip()
+    while t and (t[0] in STATUS_GLYPHS or "⠀" <= t[0] <= "⣿"):
+        t = t[1:].lstrip("️ \t")
+    return t
+
+
 def check_tab(role, terminal, handle):
     if role != "top" or terminal is None:
         return []
-    if terminal.get("title") == "orchestrator":
+    if plain_title(terminal.get("title")) == "orchestrator":
         return [("ok", "tab titled orchestrator")]
     return [("do", f"`orca terminal rename --terminal {handle} --title orchestrator`")]
+
+
+def check_name(role, record):
+    """The orchestrator is the session named `orchestrator` (how the human tells which session routes). A session
+    resumed without `--name` loses it. No record, or one without a name field, says nothing."""
+    if role != "top" or not record or "name" not in record:
+        return []
+    if (record["name"] or "") == "orchestrator":
+        return [("ok", "session named orchestrator")]
+    return [("do", f"session is named {record['name'] or 'nothing'!r}, not orchestrator: type `/rename orchestrator` "
+                   "(a restart starts it with `claude --continue --name orchestrator`)")]
 
 
 def check_waits(role, slug, table, pid):
@@ -481,6 +510,7 @@ def run_checks(role, slug, run, handle, cwd, call=orca, table=None, pid=None, qu
     run_lines, bound, lead_dispatch = check_run(role, run or cfg.get("run"), live, call, cfg.get("lead_dispatch"), slug)
     lines += run_lines
     lines += check_tab(role, terminal, live)
+    lines += check_name(role, own_record(tbl, os.getpid() if pid is None else pid) if role == "top" else None)
     lines += check_waits(role, slug, tbl, os.getpid() if pid is None else pid)
     if live:
         lines += check_workers(bound, call, lead_dispatch, live)

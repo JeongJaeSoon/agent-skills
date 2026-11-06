@@ -64,12 +64,14 @@ class Orca:
         raise AssertionError(f"unexpected orca call {argv}")
 
 
-def run(role=None, slug=None, run_id=None, handle=ME, orca=None, procs=(), queue=None, reload_root=None):
+def run(role=None, slug=None, run_id=None, handle=ME, orca=None, procs=(), queue=None, reload_root=None, record=None):
+    """record: the session record own_record finds (None: not found), so a test never reads the live session's."""
     orig = reboot.worktree_root
     reboot.worktree_root = lambda cwd: ROOT
     try:
-        return reboot.run_checks(role, slug, run_id, handle, ROOT, call=orca or Orca(), table=table(*procs), pid=SELF,
-                                 queue=lambda: queue or {}, reload_root=reload_root)
+        with mock.patch.object(reboot, "own_record", return_value=record):
+            return reboot.run_checks(role, slug, run_id, handle, ROOT, call=orca or Orca(), table=table(*procs), pid=SELF,
+                                     queue=lambda: queue or {}, reload_root=reload_root)
     finally:
         reboot.worktree_root = orig
 
@@ -199,6 +201,30 @@ class Handle(unittest.TestCase):
         procs = wait_proc(200, "orch inbox --wait") + wait_proc(300, "orch watch-cards")
         out = does(run("top", run_id="run_1", orca=Orca(run="run_1", title="claude"), procs=procs))
         self.assertEqual(out, [f"`orca terminal rename --terminal {ME} --title orchestrator`"])
+
+    def test_spinner_prefix_on_the_tab_title_is_ignored(self):
+        procs = wait_proc(200, "orch inbox --stream") + wait_proc(300, "orch watch-cards")
+        for title in ("◐ orchestrator", "◑ orchestrator", "✳ orchestrator", "⠐ orchestrator"):
+            out = does(run("top", run_id="run_1", orca=Orca(run="run_1", title=title), procs=procs))
+            self.assertEqual(out, [], title)
+        self.assertEqual(reboot.plain_title("◐ orchestrator-2"), "orchestrator-2")
+        self.assertEqual(reboot.plain_title("✳️ orchestrator"), "orchestrator")
+        # a symbol that is not a status glyph is part of the title
+        for title in ("★ orchestrator", "+ orchestrator"):
+            self.assertEqual(reboot.plain_title(title), title)
+            out = does(run("top", run_id="run_1", orca=Orca(run="run_1", title=title), procs=procs))
+            self.assertEqual(len(out), 1, title)
+
+    def test_session_not_named_orchestrator_gets_a_rename_line(self):
+        procs = wait_proc(200, "orch inbox --stream") + wait_proc(300, "orch watch-cards")
+        for record, expect in (({"name": "mailbox"}, 1), ({"name": None}, 1), ({"name": "orchestrator"}, 0), ({}, 0), (None, 0)):
+            out = does(run("top", run_id="run_1", orca=Orca(run="run_1"), procs=procs, record=record))
+            self.assertEqual(len(out), expect, record)
+            if expect:
+                self.assertIn("`/rename orchestrator`", out[0])
+        # a lead is not the orchestrator
+        self.assertEqual(does(run("lead", "acme", "run_1", orca=Orca(run="run_1", title="lead"),
+                                  procs=wait_proc(200, "orch wait acme"), record={"name": "mailbox"})), [])
 
 
 class Run(unittest.TestCase):
@@ -614,6 +640,18 @@ class Reload(unittest.TestCase):
             self.assertEqual(reboot.own_session(table(), SELF), "s1")
         with mock.patch.object(fleet, "ps_table", side_effect=OSError):
             self.assertIsNone(reboot.own_session(table(), SELF))
+
+    def test_own_record_names_the_caller_not_the_first_registration_of_its_session(self):
+        # One session id resumed in two terminals: live_sessions keeps the first registration's name for both.
+        home = self.tmp / "home2"
+        (home / "sessions").mkdir(parents=True)
+        for pid, name in ((4242, "mailbox"), (CLAUDE, "orchestrator")):
+            (home / "sessions" / f"{pid}.json").write_text(json.dumps(
+                {"pid": pid, "sessionId": "s1", "cwd": ROOT, "procStart": "Thu Nov 5 08:00:00 2026", "name": name}))
+        stamp = "Thu Nov 5 08:00:00 2026"
+        procs = {CLAUDE: (1, stamp, "claude"), 4242: (1, stamp, "claude")}
+        with mock.patch.dict("os.environ", {"ORCH_CLAUDE_HOMES": str(home)}), mock.patch.object(fleet, "ps_table", return_value=procs):
+            self.assertEqual(reboot.own_record(table(), SELF)["name"], "orchestrator")
 
     def test_same_sha_is_ok(self):
         self.record(self.sha)
