@@ -53,8 +53,8 @@ Patrol records and shows; it never types into a terminal, closes one, stops a wo
 least of all: it writes the user's default model). Findings
 go to <state>/patrol.jsonl with detected_at, are cleared there when a later round no longer sees them, and are acked
 by whoever dealt with them (`orch patrol ack`). `orch inbox` and `orch wait` show the unacked ones routed to them
-(the card's parent session, else the orchestrator) every 30 minutes. X, E, L and O also go to the dashboard's
-Needs you until cleared or acked. Card verdicts go to <state>/patrol-verdicts.json: `cards` holds each card's activity
+(the card's parent session, else the orchestrator) every 30 minutes. X, E, L and O also show in the dashboard's
+Needs you, read straight from the log (fleet.patrol_items), until cleared or acked. Card verdicts go to <state>/patrol-verdicts.json: `cards` holds each card's activity
 (run, waiting, working, idle, exited, stalled), `hints` what a finding said of it (superseded, pr_open_no_session,
 idle, exited, stalled), `check` the cards H, B and R found, each with the reason the brief shows on its ❔ row, and
 `failed` the sources this round could not read. A finding never overwrites run, waiting or working in
@@ -124,7 +124,7 @@ RENOTIFY = dt.timedelta(hours=4)
 HOLD_CODES = {"I"}
 HOLD_ALONE = dt.timedelta(minutes=60)
 SCREEN_READS = 30
-NEEDS_YOU = {"X", "E", "L", "O"}
+NEEDS_YOU = fleet.PATROL_NEEDS_YOU
 LABEL = {"I": "idle", "X": "exited", "S": "superseded", "O": "orphan PR", "D": "no ref", "E": "error loop",
          "L": "load", "W": "watcher down", "R": "repeat", "H": "stale", "B": "background wait",
          "T": "dead handle", "M": "model"}
@@ -745,39 +745,14 @@ def log_rows():
 
 def standing(rows=None):
     """id -> finding row for each occurrence not yet cleared, acked ones with "acked" set. An ack covers the
-    occurrence: once its condition clears, the same id can be found again."""
-    out = {}
-    for r in rows if rows is not None else log_rows():
-        if r.get("op") == "found":
-            out[r["id"]] = r
-        elif r.get("op") in ("owner", "ack") and r["id"] in out:
-            out[r["id"]] = {**out[r["id"]], **({"owner": r.get("owner")} if r["op"] == "owner" else {"acked": True})}
-        elif r.get("op") == "pr" and r["id"] in out:
-            out[r["id"]] = {**out[r["id"]], "pr_open": r.get("pr_open")}
-        elif r.get("op") == "clear":
-            out.pop(r["id"], None)
-    return out
+    occurrence: once its condition clears, the same id can be found again. The dashboard reads the same log through
+    fleet.patrol_standing."""
+    return fleet.patrol_standing(rows if rows is not None else log_rows())
 
 
 def open_findings(rows=None):
     """id -> finding row, for those neither cleared nor acked."""
     return {i: r for i, r in standing(rows).items() if not r.get("acked")}
-
-
-def sync_needs_you(rows=None):
-    """Bring the dashboard's patrol items in step with the log: one cut short by the budget is added, one acked or
-    cleared elsewhere is resolved. An item once added and dismissed on the dashboard is not added again."""
-    # One key per occurrence, so a recurrence after a clear is a new item.
-    want = {f"patrol:{i}:{f.get('detected_at')}": f for i, f in open_findings(rows).items() if f.get("code") in NEEDS_YOU}
-    added = {r.get("key") for r in fleet.read_lines(fleet.state_dir() / "inbox-external.jsonl")
-             if r.get("op") == "add" and str(r.get("key", "")).startswith("patrol:")}
-    shown = {i["key"][4:] for i in fleet.external_items() if i["key"].startswith("ext:patrol:")}
-    for key, f in want.items():
-        if key not in added:
-            fleet.inbox_add("patrol", f"순찰 {f['code']} {f['card']}: {f['title']}", session=f.get("session"),
-                            command=f"orch patrol ack {f['id']}", key=key, source="patrol")
-    for key in shown - set(want):
-        fleet.inbox_resolve(key)
 
 
 # The sources each rule reads: a finding whose source failed this round is kept, not cleared.
@@ -788,7 +763,7 @@ DEPENDS = {"I": {"terminals", "workers", "waits"}, "X": {"terminals", "workers"}
 
 
 def write_round(findings, verdicts, dry, now, failed=()):
-    """Append what is new, clear what went away, keep Needs you in step, and move a finding to its current owner
+    """Append what is new, clear what went away, and move a finding to its current owner
     (the session that started its card, or nobody once that session is gone). (new, cleared)."""
     rows = log_rows()
     live = standing(rows)
@@ -808,7 +783,6 @@ def write_round(findings, verdicts, dry, now, failed=()):
         fleet.append_line(LOG, {"op": "found", **f, "title": fleet.mask(f["title"], 300), "detected_at": at})
     for r in gone:
         fleet.append_line(LOG, {"op": "clear", "id": r["id"], "at": at})
-    sync_needs_you()
     fleet.write_atomic(VERDICTS, json.dumps({"at": at, "t": now, **verdicts}, ensure_ascii=False))
     return new, gone
 
@@ -822,7 +796,6 @@ def ack(ids, now=None):
             continue
         fleet.append_line(LOG, {"op": "ack", "id": i, "at": at})
         done.append(i)
-    sync_needs_you()
     return done
 
 
@@ -1240,8 +1213,8 @@ def patrol_round(argv):
                 signal.alarm(0)
                 if "--dry-run" not in argv:
                     mark_cut(rid, round(time.monotonic() - t0, 1))
-                print(f"patrol: gave up at {BUDGET_S}s; log rows already written stay, and the next round brings "
-                      "Needs you in step with them")
+                print(f"patrol: gave up at {BUDGET_S}s; log rows already written stay, and the dashboard reads "
+                      "them from the log")
                 sys.exit(1)  # a cut round is not a clean one: the job record must say so
             finally:
                 signal.alarm(0)

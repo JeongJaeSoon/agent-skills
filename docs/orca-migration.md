@@ -126,3 +126,23 @@ Running `--apply` again is safe, as it is for decisions: the tombstone is laid o
 4. Revert to the previous release, fast-forward, and start the writers again.
 
 A later import takes the files back in. The tables are replaced, and numbering carries on from where it was: a `b<N>` from before the rollback is never reused. To go back past the decisions step as well, finish this first, then follow "Undoing it" for decisions.
+
+# Needs you and Sent read their sources (2026-11-06)
+
+## What changes
+
+- Needs you reads `pressure-queue.json` and `patrol.jsonl` itself. The held commands that wait or retry are one item ("기계 대기 N건"); one that gave up or failed, and each open patrol finding, is an item of its own. Neither writes to `inbox-external.jsonl` any more. Dismissing and closing work per queue id and per finding (`patrol:<id>:<detected_at>`), as before.
+- A line typed from the dashboard is a row of the `orch sent` log (`kind: dashboard`). Sent shows the log and Orca's own records. A send found only in a live session's transcript is not a row: a warning counts it ("N sends match no log or Orca row").
+- PR events are written to `events.jsonl` only (`kind: pr_*`, with the owner, checks and head `pr-events.jsonl` carried).
+
+## Switch-over order
+
+1. Fast-forward the loaded checkout. The dashboard restarts itself; new code needs no state change to start.
+2. `orch-dash migrate-inputs` prints what it would do and writes nothing. Check the counts.
+3. `orch-dash migrate-inputs --apply` appends a `resolve` line (reason `migrated`) after each open patrol and pressure-queue line in `inbox-external.jsonl`, copies the typed lines of `sends.jsonl` into the sent log and keeps that file read-only as `sends.archive.jsonl`, and makes `pr-events.jsonl` read-only. It deletes nothing, and running it again finds nothing left.
+
+Until step 3 the old lines are already hidden, and the sent log lacks the lines typed before the move.
+
+## Undoing it
+
+Revert to the previous release and fast-forward. The old code adds its own pressure and patrol lines again on its next round. To read the archived files again, make them writable (`chmod u+w`) and move `sends.archive.jsonl` back to `sends.jsonl`.
