@@ -92,6 +92,8 @@ def check_row_write(rid, row, fields):
     """A card's PR and worktree are Orca's: a linked row shows them without storing them. An unlinked row may name its
     card with --worktree, and that is all it stores."""
     pr, worktree = fields.get("pr"), fields.get("worktree")
+    if pr is not None and not fleet.FULL_PR_KEY_RE.fullmatch(pr):
+        raise ValueError(f"--pr is OWNER/REPO#N (e.g. acme/app#441), not {pr!r}")
     if pr is None and worktree is None and not fields.get("title"):
         return
     state = fleet_view()
