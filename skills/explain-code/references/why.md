@@ -1,11 +1,6 @@
----
-name: why
-description: "Use before deleting or loosening code whose reason is not written down, or to find the change behind a regression: why code is this way, from history, PRs, tickets and chat — \"왜 이렇게 됐어\", \"이 결정 배경이 뭐야\", \"why did we do X\". What code does is how."
----
+# Why mode
 
-# Why
-
-Investigate the motivation and intent behind code. The companion `how` skill answers what the code does and how it works. `why` answers what forces led to its shape.
+Investigate the motivation and intent behind code. The companion how mode ([how.md](how.md)) answers what the code does and how it works. The why mode answers what forces led to its shape.
 
 ## Operating Posture
 

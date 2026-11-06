@@ -1,7 +1,7 @@
 <!-- translated-from: 5ff86c9b18e859b15054fd5f511f889bb0f4798d -->
 # Skill catalog
 
-This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 16 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
+This page covers the 38 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 16 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
 
 Follow the [configuration migration guide](configuration-migration.md) for changed defaults and preservation of existing data. Notes, ledgers and personal folders require explicit configuration; report time defaults to UTC.
 
@@ -61,7 +61,7 @@ Which skill owns a PR, and who merges it:
 ### deliver-ticket (formerly `ship-pr`)
 - **When:** From before the first multi-file edit until the ticket is done. Creating, updating and merging PRs ("pr 작성까지" (up to writing the PR), "머지까지 진행해줘" (take it all the way to the merge)), releases, answering review comments, independent reviews, "동작확인" (check that it works), "내가 확인할 거 있어?" (anything I need to check?), "이 티켓 끝내줘" (finish this ticket), and stack work all belong here.
 - **What it does:**
-  - **Plan:** It doesn't enter plan mode or wait for approval. The ticket gets a single plan comment (edited when the plan changes); progress goes in the worklog and the result in a completion comment. It calls other skills depending on the shape of the work: `figure-it-out` for big migrations or multi-step changes, `architect` (→ `arena`) for design decisions that are hard to undo, `how` for unfamiliar code, and `why` for code whose reason is unclear.
+  - **Plan:** It doesn't enter plan mode or wait for approval. The ticket gets a single plan comment (edited when the plan changes); progress goes in the worklog and the result in a completion comment. It calls other skills depending on the shape of the work: `figure-it-out` for big migrations or multi-step changes, `architect` (→ `arena`) for design decisions that are hard to undo, `explain-code`'s how mode for unfamiliar code, and its why mode for code whose reason is unclear.
   - **Build:** Only on a worktree branch. Non-trivial logic isn't committed without a runnable test. A bug starts with a failing reproduction test. Anything found outside the scope is fixed in this diff, filed as a follow-up ticket, or only noted in the worklog.
   - **Evidence rules:**
     - Every line that ships needs runtime evidence, and changes that came from a disproved hypothesis are reverted.
@@ -85,7 +85,7 @@ Which skill owns a PR, and who merges it:
     - Standalone card: in a repo with the land executor on, it does not merge. It reports READY with the head sha, the CI run and the review verdict, and the orchestrator merges. In a repo with the executor off, or in a session the user opened, it squash-merges on its own unless the user put it on hold.
     - After leaving the completion comment, it moves on to `handoff-ticket` in the same turn.
 - **Bundled:** `scripts/sticky-comment.sh` (keeps PR test results in a single comment; `--check` confirms that comment names the current head sha), `scripts/review_pick.py` (picks the independent reviewer). The skill body keeps only the rules that decide what ships; procedures are split into references: `evidence.md` (bug, refactor and existing-fix procedures), `independent-review.md` (independent review procedures), `pull-request.md` (PR body sections and stacks), `review-loop.md` (the loop from opening the PR to ready, and watching when someone else merges), `review-bot-triage.md` (how to sort review threads into fix / dismiss / ask; used for CodeRabbit, Copilot and human reviews).
-- **Related:** `figure-it-out`, `architect`, `how`, `why`, `tdd`, `prune-comments`, the verdict framework from `interrogate`, `write-plainly`, `blast-radius`, `write-ticket`, `use-tracker`, `use-notes`, `orchestrate` (`orch land`, `orch heavy`), `handoff-ticket`.
+- **Related:** `figure-it-out`, `architect`, `explain-code`, `tdd`, `prune-comments`, the verdict framework from `interrogate`, `write-plainly`, `blast-radius`, `write-ticket`, `use-tracker`, `use-notes`, `orchestrate` (`orch land`, `orch heavy`), `handoff-ticket`.
 
 ### ui-review
 - **When:** before a mockup, a screen or a UI PR is shown to a person ("UI 리뷰해줘", "시안 점검해줘"), and after a person points out a UI problem, to add the rule.
@@ -296,16 +296,6 @@ Reports completed work, current work, decisions and human-only steps with eviden
   - Adding and closing: a to-do is `orch board todo add <task> (--due D | --after C) --who W`, closed with `orch board done <id>`; an on-hold item becomes a to-do with `todo from-later <n> --who W`. An on-hold item is `orch board later add <task> --trigger <condition for its turn> [--who W] [--at N]`, and `later move <n> --to N` changes its turn.
 - **Related:** Where `brief`'s to-do and on-hold line points. On the dashboard it is the To-do page.
 
-### map-features
-- **When:** People need a map of what a product does today: a PRD, a roadmap, onboarding, a status doc. "feature map 만들어줘" (make a feature map), "기능 지도 그려줘" (draw a feature map), "지금 뭐가 구현돼 있는지 정리해줘" (list what is built now). A map that a verify skill uses to drive features is `create-verification-skill`; how one subsystem works is `how`.
-- **What it does:**
-  - The first line names the baseline (repo, ref, short sha, commit date), and every row is true as of that commit.
-  - It finds the deployable units (apps) from build and deploy config and puts them in a table; apps a reader would expect but which don't exist go in a list with what exists in their place.
-  - From the public surfaces (routes or OpenAPI, CLI, UI menus, config flags) it writes one row per thing a user can do, grouped by area. Features that only plans or docs promise get rows too.
-  - Status is one of five fixed values: works, partial, documented only, absent, unknown. Every row carries evidence a reader can open (a path, endpoint, flag, `owner/repo#N`). A row without evidence is not "works".
-  - The doc goes baseline line, plain-words summary, apps table, feature map, limits. It is saved via `use-notes` or where the user says, and goes into the product repo only on request.
-- **Related:** When a verify skill's `features/` exists, it reads it as a source for the feature list and doesn't edit it. Prose follows `write-plainly`.
-
 ### write-plainly
 - **When:** Writing or revising tickets, PR bodies, commit messages, design docs, notes, worklogs, standalone reports and skill text. Code comments only when asked to edit them. Ordinary per-turn replies don't count. "문서 다듬어줘" (polish the doc), "읽기 쉽게 고쳐줘" (make it easier to read), "AI 티 안 나게" (so it doesn't sound like AI), "번역투 고쳐줘" (fix the translationese), "unslop".
 - **What it does:**
@@ -322,7 +312,7 @@ Reports completed work, current work, decisions and human-only steps with eviden
   - The scope is the files or diff the caller passes, or the current branch's diff if none. Even inside the diff, it looks only at comments on added or changed lines and at nearby comments this diff made wrong.
   - Whoever wrote the comments judges them too softly, so a single subagent does the pruning. The only comments that stay are licenses, external constraints we can't change (dependencies, platforms, vendors, protocols), style-only lint directives, doc comments required by a public API contract or repo rules, and issue or RFC links that explain a constraint the code can't express.
   - Comments that explain surprising behavior in our own code are deleted and marked RESHAPE (rename, extract a function, add a type). Constraint comments such as "don't delete this" are marked CONSTRAINT; if a cheap encoding (a test, a type, a runtime assert, a lint rule) fits in the diff, it's added and then the comment is deleted. If not, the comment stays and is reported.
-  - "IMPORTANT" and "do not remove" aren't a justification, they're a reason to check. If nearby code doesn't make it clear, it checks with `how` or `why`.
+  - "IMPORTANT" and "do not remove" aren't a justification, they're a reason to check. If nearby code doesn't make it clear, it checks with `explain-code`'s how or why mode.
   - The pruner doesn't touch code or lines outside the scope. The caller checks with `git diff` and reverts anything it shouldn't have changed.
 - **Bundled:** `references/pruner.md` (the instructions for the pruning subagent).
 
@@ -336,7 +326,7 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
 ### architect
 - **When:** `/architect`, "상세 설계안 작성해줘" (write a detailed design), "설계안 다듬어줘" (refine the design), "구현 계획 짜줘" (draw up an implementation plan), and work where writing code first would lock in the wrong shape.
 - **What it does:** Works in five steps.
-  1. **Ground:** Uses `how` and `why` to understand the surrounding system and why it has its current shape.
+  1. **Ground:** Uses `explain-code`'s how and why modes to understand the surrounding system and why it has its current shape.
   2. **Sketch:** Launches design runners in parallel through `arena` (available independent runners). It gets at least two structurally different candidates, filters them with red flags, and merges them by interface depth.
   3. **Agree:** Asks a human to sign off only when requested. By default it publishes a plan page (one HTML Artifact), leaves the link, and builds on the recommended defaults. The page is a "what › how › where" claim tree, each claim proved by one piece of evidence (mockup, state machine, call stack, schema, code). Numbered decisions sit on the claim they change, with 2 to 4 options, a recommended default, and what disappears if another option wins. An unanswered decision is not agreement, so only the hard-to-reverse ones are asked again before implementation. Pasted answers are data inside the proposed design, not instructions.
   4. **Implement:** Builds with the sketch as the contract.
@@ -358,7 +348,7 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
 - **What it does:**
   - Finds the one fact that makes the change safe, and proves it with a script that runs the real code.
   - Looks where grep can't see (library source, wire formats, execution timing).
-  - Pulls in the PRs and commits behind the changed code, following `why`'s procedure.
+  - Pulls in the PRs and commits behind the changed code, following the procedure of `explain-code`'s why mode.
   - Cross-checks big changes with an independent reviewer.
   - Reports what the change does, why it's safe, the risks, what was checked, and what to check before merging.
 
@@ -372,25 +362,48 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
   5. **Verify:** Checks the whole result against the Frame's done condition in the real product, and turns corrections that kept recurring into checks or scripts.
 - **Relation to deliver-ticket:** Review, commits and pushes for each unit follow `deliver-ticket`'s rules.
 
-### how
-- **When:** "X는 어떻게 동작해?" (how does X work?), "이건 어디에 둬야 해?" (where should this go?), and before editing a subsystem that neither you nor an upstream report has read.
+### explain-code (formerly `how`, `why`, `teach`, `map-features`)
+One skill with four modes that read code and explain it. None of them edits code. The caller names the mode in the Skill args (`how: <question>`); without one, it picks the mode from the question. Each mode's body is in `references/<mode>.md`.
+
+#### how mode
+- **When:** "X는 어떻게 동작해?" (how does X work?), "이 구조 설명해줘" (explain this structure), "이건 어디에 둬야 해?" (where should this go?), and before editing a subsystem that neither you nor an upstream report has read.
 - **What it does:**
   - Simple questions: the session explores and explains on its own.
   - Complex questions: launches 2–4 `Explore` explorers in parallel, then one opus synthesizes their findings.
   - Explanations follow the order Overview, Key Concepts, How It Works, Where Things Live, Gotchas.
-- **Bundled:** `explorer-prompt.md`, `explainer-prompt.md`.
-- **Related:** Motivation and history ("왜 이렇게 됐어" (how did it end up like this?)) go to `why`.
+- **Bundled:** `references/how.md`, `explorer-prompt.md`, `explainer-prompt.md`.
 
-### why
-- **When:** "왜 이렇게 됐어" (how did it end up like this?), "이거 왜 이렇게 짰어" (why was this written this way?), "이 결정 배경이 뭐야" (what's the background to this decision?), "이유가 뭐야" (what's the reason?), "이 값은 어디서 나왔어" (where did this value come from?), before deleting, inverting or loosening code whose reason is not in a comment, test or the brief, and when looking for the change that introduced a regression. How something works is `how`'s job.
+#### why mode
+- **When:** "왜 이렇게 됐어" (how did it end up like this?), "이거 왜 이렇게 짰어" (why was this written this way?), "이 결정 배경이 뭐야" (what's the background to this decision?), "why did we do X", "이유가 뭐야" (what's the reason?), "이 값은 어디서 나왔어" (where did this value come from?), before deleting, inverting or loosening code whose reason is not in a comment, test or the brief, and when looking for the change that introduced a regression. Explaining what the code does does not answer why.
 - **What it does:**
   - A question about one line or one commit ends in narrow mode, answered from git blame → commit → PR alone, and the answer names the sources it didn't search.
   - Otherwise it launches one investigator per source in parallel (git and `gh`, Linear/Jira, Notion, Google Drive, Obsidian, Slack). Each investigator digs only in its own source and just notes leads that point elsewhere. Empty results are recorded as findings too.
   - Sources with no connection in the session, such as Datadog, Sentry and the warehouse, are recorded as "no access". Calendar is used only to narrow a date range.
   - The synthesis sorts findings into five levels, Direct / Supported / Inferred / Speculative / Unknown, with citations. Code is never taken as evidence of its own intent, and hypotheses built into the question are treated only as candidates.
   - The answer goes What We Found, Reasonably Infer, Competing Hypotheses, What We Don't Know, Sources Consulted. If the question is about changing code, it adds Preserve / Change / Avoid / Risk.
-- **Bundled:** `epistemics.md` (confidence criteria), `investigator-prompt.md`, `synthesizer-prompt.md`, `source-playbook.md`, `sources/` (code-archaeology, linear, notion, google-drive, obsidian, slack, incident-postmortem).
-- **Related:** The counterpart of `how`. Called by `blast-radius` and `architect`. Reads trackers through `use-tracker` and notes through `use-notes`.
+- **Bundled:** `references/why.md`, `epistemics.md` (confidence criteria), `investigator-prompt.md`, `synthesizer-prompt.md`, `source-playbook.md`, `sources/` (code-archaeology, linear, notion, google-drive, obsidian, slack, incident-postmortem).
+
+#### teach mode
+- **When:** 'teach me this', "이거 제대로 이해하고 싶어" (I want to really understand this), "이 변경 이해시켜줘" (help me understand this change), "처음 보는데 이 구조 설명해줘" (I'm new to this, explain the structure). A single how-does-it-work question is the how mode, and a why question is the why mode.
+- **What it does:**
+  - Depending on why you're asking (you want to change it, you're reviewing it, or it's your first look), it settles on a few takeaways, runs the how and why modes in parallel, and weaves them into one explanation. The why mode's confidence wording is kept as is.
+  - It starts from the general definition and then connects it to the code at hand. It gives the smallest complete answer first and goes deeper when asked.
+  - With three or more moving parts, it draws diagrams that add one piece at a time (mermaid, ASCII).
+  - The writing follows `write-plainly`.
+- **Bundled:** `references/teach.md`.
+
+#### map mode
+- **When:** People need a map of what a product does today: a PRD, a roadmap, onboarding, a status doc. "feature map 만들어줘" (make a feature map), "기능 지도 그려줘" (draw a feature map), "지금 뭐가 구현돼 있는지 정리해줘" (list what is built now). A map that a verify skill uses to drive features is `create-verification-skill`; how one subsystem works is the how mode. An orchestrator hands it off instead of running it.
+- **What it does:**
+  - The first line names the baseline (repo, ref, short sha, commit date), and every row is true as of that commit.
+  - It finds the deployable units (apps) from build and deploy config and puts them in a table; apps a reader would expect but which don't exist go in a list with what exists in their place.
+  - From the public surfaces (routes or OpenAPI, CLI, UI menus, config flags) it writes one row per thing a user can do, grouped by area. Features that only plans or docs promise get rows too.
+  - Status is one of five fixed values: works, partial, documented only, absent, unknown. Every row carries evidence a reader can open (a path, endpoint, flag, `owner/repo#N`). A row without evidence is not "works".
+  - The doc goes baseline line, plain-words summary, apps table, feature map, limits. It is saved via `use-notes` or where the user says, and goes into the product repo only on request.
+- **Bundled:** `references/map.md`.
+- **Related:** When a verify skill's `features/` exists, it reads it as a source for the feature list and doesn't edit it. Prose follows `write-plainly`.
+
+`explain-code` is called by `blast-radius`, `architect` and `deliver-ticket`. It reads trackers through `use-tracker` and notes through `use-notes`.
 
 ### interrogate
 - **When:** "적대적 리뷰" (adversarial review), "빈틈 찾아줘" (find the gaps). PRs headed for main are covered by `deliver-ticket`'s independent review instead.
@@ -411,7 +424,7 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
   - States the scope first (period, 7 days by default; topic; repo). Sessions from other repos are neither asked about nor read.
   - Past sessions are found under `~/.claude/projects/<encoded path>/`. Orca cards have a different path for each worktree, so it checks the main checkout, `git worktree list`, and cards that were already removed (same parent folder). If the `orca search` index is on, it uses that first. The index can only be turned on in the Orca app, under Settings → Agent Session Search → Search inside sessions, with the switch for this computer (there's no CLI). If it's off, it searches with grep and mentions this setting in one line at the end of the answer.
   - With many sessions, haiku subagents split the reading and return, for each session, the goal, decisions, remaining work, blockers and outputs. The raw text stays inside the subagents.
-  - If the topic points at a feature, file or bug, it also checks `why`'s source investigation, the worklog (`use-notes`) and tickets (`use-tracker`). That's where reverted fixes and symptoms that keep being reported turn up.
+  - If the topic points at a feature, file or bug, it also checks the source investigation of `explain-code`'s why mode, the worklog (`use-notes`) and tickets (`use-tracker`). That's where reverted fixes and symptoms that keep being reported turn up.
   - It checks the current state of PRs, branches, tickets and cards with `git`, `gh`, the tracker, and `orca worktree list`.
   - The answer is a short summary, a status tag for each thread (`[merged #N]`, `[open PR #N]`, `[in flight <branch>]`, and so on), the recurring problems, and one next step.
 
@@ -442,14 +455,6 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
   - Launches workers as `Agent` (worktree isolation, in the background), and long-running jobs as Orca workers. An Orca worker's `--base-branch` is accepted only for new-top-level and new-child placements.
   - Workers report PASS / ISSUES / BLOCKED. A report missing the commit and the method is rerun once.
   - Collects the results into one table.
-
-### teach
-- **When:** 'teach me this', "이거 제대로 이해하고 싶어" (I want to really understand this), "이 변경 이해시켜줘" (help me understand this change), "처음 보는데 이 구조 설명해줘" (I'm new to this, explain the structure). A single how-does-it-work question is `how`, and a why question is `why`.
-- **What it does:**
-  - Depending on why you're asking (you want to change it, you're reviewing it, or it's your first look), it settles on a few takeaways, calls `how` and `why` in parallel, and weaves them into one explanation. `why`'s confidence wording is kept as is.
-  - It starts from the general definition and then connects it to the code at hand. It gives the smallest complete answer first and goes deeper when asked.
-  - With three or more moving parts, it draws diagrams that add one piece at a time (mermaid, ASCII).
-  - The writing follows `write-plainly`.
 
 ### tdd
 - **When:** Fixing a bug that has a cheap local test target, or when TDD, a failing test or a regression test is requested.
@@ -681,7 +686,7 @@ Of pstack's 58 skills (24 principles and 34 others), we took all 24 principles a
 
 - **Taken almost unchanged:** the 24 principles, the review and exploration prompts, the design red flags, and the feature map example.
   - In pstack the principles were 24 separate skills; here they are bundled as reference files of a single `principles` skill. The index (`principles/SKILL.md`) was written fresh here.
-- **Taken with changes:** architect, arena, blast-radius, figure-it-out, how, why, interrogate, recall, reflect, show-me-your-work, swarm, tdd, teach, create-verification-skill, maintain-verification-skill. Four changes apply to all of them.
+- **Taken with changes:** architect, arena, blast-radius, figure-it-out, how, why, interrogate, recall, reflect, show-me-your-work, swarm, tdd, teach, create-verification-skill, maintain-verification-skill (how, why and teach are now modes of `explain-code`). Four changes apply to all of them.
   - The model can invoke them on its own.
   - Cursor-specific pieces were replaced with their Claude Code equivalents: paths `.cursor/` → `.claude/`, workers `generalPurpose`/cloud → `Agent`/Orca workers, transcripts `agent-transcripts` → `~/.claude/projects`.
   - The model panel uses available independent reviewers.

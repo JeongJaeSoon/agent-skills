@@ -237,67 +237,67 @@
     },
     {
       "upstream": "skills/how/SKILL.md",
-      "local": "skills/how/SKILL.md",
+      "local": "skills/explain-code/references/how.md",
       "mode": "adapted"
     },
     {
       "upstream": "skills/how/references/explorer-prompt.md",
-      "local": "skills/how/references/explorer-prompt.md",
+      "local": "skills/explain-code/references/explorer-prompt.md",
       "mode": "verbatim"
     },
     {
       "upstream": "skills/how/references/explainer-prompt.md",
-      "local": "skills/how/references/explainer-prompt.md",
+      "local": "skills/explain-code/references/explainer-prompt.md",
       "mode": "verbatim"
     },
     {
       "upstream": "skills/why/SKILL.md",
-      "local": "skills/why/SKILL.md",
+      "local": "skills/explain-code/references/why.md",
       "mode": "adapted"
     },
     {
       "upstream": "skills/why/references/epistemics.md",
-      "local": "skills/why/references/epistemics.md",
+      "local": "skills/explain-code/references/epistemics.md",
       "mode": "verbatim"
     },
     {
       "upstream": "skills/why/references/investigator-prompt.md",
-      "local": "skills/why/references/investigator-prompt.md",
+      "local": "skills/explain-code/references/investigator-prompt.md",
       "mode": "verbatim"
     },
     {
       "upstream": "skills/why/references/synthesizer-prompt.md",
-      "local": "skills/why/references/synthesizer-prompt.md",
+      "local": "skills/explain-code/references/synthesizer-prompt.md",
       "mode": "verbatim"
     },
     {
       "upstream": "skills/why/references/source-playbook.md",
-      "local": "skills/why/references/source-playbook.md",
+      "local": "skills/explain-code/references/source-playbook.md",
       "mode": "adapted"
     },
     {
       "upstream": "skills/why/references/sources/code-archaeology.md",
-      "local": "skills/why/references/sources/code-archaeology.md",
+      "local": "skills/explain-code/references/sources/code-archaeology.md",
       "mode": "adapted"
     },
     {
       "upstream": "skills/why/references/sources/linear.md",
-      "local": "skills/why/references/sources/linear.md",
+      "local": "skills/explain-code/references/sources/linear.md",
       "mode": "adapted"
     },
     {
       "upstream": "skills/why/references/sources/notion.md",
-      "local": "skills/why/references/sources/notion.md",
+      "local": "skills/explain-code/references/sources/notion.md",
       "mode": "verbatim"
     },
     {
       "upstream": "skills/why/references/sources/slack.md",
-      "local": "skills/why/references/sources/slack.md",
+      "local": "skills/explain-code/references/sources/slack.md",
       "mode": "adapted"
     },
     {
       "upstream": "skills/why/references/sources/incident-postmortem.md",
-      "local": "skills/why/references/sources/incident-postmortem.md",
+      "local": "skills/explain-code/references/sources/incident-postmortem.md",
       "mode": "adapted"
     },
     {
@@ -327,7 +327,7 @@
     },
     {
       "upstream": "skills/teach/SKILL.md",
-      "local": "skills/teach/SKILL.md",
+      "local": "skills/explain-code/references/teach.md",
       "mode": "adapted"
     },
     {

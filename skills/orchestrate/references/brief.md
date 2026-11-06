@@ -20,8 +20,8 @@ SCOPE       Paths this unit may write and paths it may not. Its own worktree and
             Base: origin/main | origin/feat/<topic> | stacked on #<PR> (gh stack link <lower> <this> --base main).
 CONTEXT     Ticket URL. Files and PRs to read. Upstream reports pasted in full when this
             unit depends on them. When the unit changes a subsystem no upstream report
-            covers, name `how` (simple mode) for the worker; when it deletes or loosens
-            code whose reason is unknown, name `why` (narrow mode). A fact you state here (something is absent from the base,
+            covers, name `explain-code` how (simple) for the worker; when it deletes or loosens
+            code whose reason is unknown, name `explain-code` why (narrow mode). A fact you state here (something is absent from the base,
             an evidence id) comes from a check that could have come out the other way:
             `git merge-base --is-ancestor <commit> <base>`, or a search that also finds a
             symbol known to exist. An empty `git grep -E` proves nothing (`\b` is a GNU
@@ -44,7 +44,7 @@ CONTEXT     Ticket URL. Files and PRs to read. Upstream reports pasted in full w
             that fails holds the dispatch. A fact left unchecked is marked unverified.
 DESIGN      Only when later units will build on a contract this unit sets (a function boundary,
             a schema, a config key, a message format): name the contract and those units. Before
-            the first edit, run `how` (simple mode) on the existing code paths the contract
+            the first edit, run `explain-code` how (simple) on the existing code paths the contract
             changes or plugs into (skip what an upstream report covers), then `architect` on the
             contract. Put the sketch in the ticket's plan comment (deliver-ticket §1); the units
             that build on it get that sketch in CONTEXT.

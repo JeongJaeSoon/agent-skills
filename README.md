@@ -9,7 +9,7 @@ Claude Code skills that take a ticket to a merged PR, with you deciding where a 
 
 ## What it is
 
-agent-skills is a Claude Code plugin: 41 skills, 4 agent definitions, 16 hooks and a few commands. It covers two flows. One takes a single ticket from the first edit to a merged PR and a closed ticket. The other runs a whole project on several Orca workers at once, one ticket each, and lands their PRs in order.
+agent-skills is a Claude Code plugin: 38 skills, 4 agent definitions, 16 hooks and a few commands. It covers two flows. One takes a single ticket from the first edit to a merged PR and a closed ticket. The other runs a whole project on several Orca workers at once, one ticket each, and lands their PRs in order.
 
 It is for developers who hand ticket work in GitHub repositories to Claude Code and want to choose, point by point, whether a human approves each step (human in the loop, HITL) or the agent goes ahead while the human watches and steps in on exceptions (human on the loop, HOTL). Writes to your user settings and irreversible actions always wait for you.
 
@@ -110,10 +110,21 @@ When each skill fires, what it does and the files it ships are in the [skill cat
 | [One machine](docs/skills.en.md#one-machine) | `reap-resources`, `secure-fill`, `tune-automode`, `skills-config`, `setup-pc` | Clean up leftovers, fill secrets the agent never sees, draft autoMode rules, change config keys, install and update |
 | [Chat and reviews](docs/skills.en.md#chat-and-reviews) | `watch-mentions`, `watch-prs` | Turn chat and PRs that concern you into work |
 | [Adapters](docs/skills.en.md#adapters) | `use-tracker`, `use-notes` | Linear and Jira tickets, Obsidian and Markdown notes |
-| [Writing](docs/skills.en.md#writing) | `brief`, `stage`, `todo`, `map-features`, `write-plainly`, `prune-comments`, `write-skill` | Status reports, stage tables, to-do and hold queues, feature maps, plain prose, comment cleanup, skill authoring checks |
-| [pstack](docs/skills.en.md#pstack-skills-lauren-tan-mit) | `architect`, `arena`, `blast-radius`, `create-verification-skill`, `figure-it-out`, `how`, `interrogate`, `maintain-verification-skill`, `principles`, `recall`, `reflect`, `show-me-your-work`, `swarm`, `tdd`, `teach`, `why` | Design, comparison, impact analysis, verification, explanation, retrospectives |
+| [Writing](docs/skills.en.md#writing) | `brief`, `stage`, `todo`, `write-plainly`, `prune-comments`, `write-skill` | Status reports, stage tables, to-do and hold queues, plain prose, comment cleanup, skill authoring checks |
+| [pstack](docs/skills.en.md#pstack-skills-lauren-tan-mit) | `architect`, `arena`, `blast-radius`, `create-verification-skill`, `explain-code`, `figure-it-out`, `interrogate`, `maintain-verification-skill`, `principles`, `recall`, `reflect`, `show-me-your-work`, `swarm`, `tdd` | Design, comparison, impact analysis, verification, explaining code and feature maps, retrospectives |
 
 The pstack group comes from Lauren Tan's [pstack](https://github.com/cursor/plugins) (MIT). These skills are now maintained here on their own: `vendor/pstack` keeps the original files as upstream had them, and an optional daily job reports upstream changes, which are ported by hand when worth it. With several sessions, two layers sit above the workers: the orchestrator (one top-level session) and leads (one per project). See the [Roles table in orchestrate](skills/orchestrate/SKILL.md#roles).
+
+## Renamed skills
+
+Some skills were merged into one skill with modes. The old names are gone, with no alias: `/agent-skills:<old>` no longer resolves, so call the new command and name the mode.
+
+| Old command | New command and mode |
+|---|---|
+| `/agent-skills:how` | `/agent-skills:explain-code` how |
+| `/agent-skills:why` | `/agent-skills:explain-code` why |
+| `/agent-skills:teach` | `/agent-skills:explain-code` teach |
+| `/agent-skills:map-features` | `/agent-skills:explain-code` map |
 
 ## Configuration
 

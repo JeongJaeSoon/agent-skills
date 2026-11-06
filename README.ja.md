@@ -9,7 +9,7 @@
 
 ## これは何か
 
-agent-skills は Claude Code のプラグインで、スキル 41 個、エージェント定義 4 個、フック 16 個といくつかのコマンドでできています。扱う流れは二つあります。一つはチケット1件を最初の修正からマージ、チケットのクローズまで進める流れ。もう一つは Orca のワーカーを複数同時に動かし、1ワーカーに1チケットずつ渡して、PR を順番にマージしていく流れです。
+agent-skills は Claude Code のプラグインで、スキル 38 個、エージェント定義 4 個、フック 16 個といくつかのコマンドでできています。扱う流れは二つあります。一つはチケット1件を最初の修正からマージ、チケットのクローズまで進める流れ。もう一つは Orca のワーカーを複数同時に動かし、1ワーカーに1チケットずつ渡して、PR を順番にマージしていく流れです。
 
 GitHub リポジトリのチケット作業を Claude Code に任せたい開発者向けです。各ステップを人が承認する方式(Human-in-the-loop、HITL)と、エージェントが進めて人は見守り、例外のときだけ割って入る方式(Human-on-the-loop、HOTL)を、地点ごとに選べます。ユーザー設定への書き込みと取り消せない操作は、常に人の承認を待ちます。
 
@@ -110,10 +110,21 @@ https://github.com/JeongJaeSoon/agent-skills の Claude Code プラグインを�
 | [マシン1台](docs/skills.ja.md#マシン1台) | `reap-resources`, `secure-fill`, `tune-automode`, `skills-config`, `setup-pc` | 残り物の片付け、エージェントが見ない秘密値の入力、autoMode ルールの下書き、設定キーの変更、インストールと更新 |
 | [チャットとレビュー](docs/skills.ja.md#チャットとレビュー) | `watch-mentions`, `watch-prs` | 自分に関係するチャットと PR を作業として集める |
 | [アダプター](docs/skills.ja.md#アダプター) | `use-tracker`, `use-notes` | Linear と Jira のチケット、Obsidian と Markdown のノート |
-| [文章](docs/skills.ja.md#文章) | `brief`, `stage`, `todo`, `map-features`, `write-plainly`, `prune-comments`, `write-skill` | 状況報告、段階表、やること・保留のキュー、機能マップ、文体、コメント整理、スキル作成のチェック |
-| [pstack](docs/skills.ja.md#pstack-スキルlauren-tanmit) | `architect`, `arena`, `blast-radius`, `create-verification-skill`, `figure-it-out`, `how`, `interrogate`, `maintain-verification-skill`, `principles`, `recall`, `reflect`, `show-me-your-work`, `swarm`, `tdd`, `teach`, `why` | 設計、比較、影響範囲、検証、説明、振り返り |
+| [文章](docs/skills.ja.md#文章) | `brief`, `stage`, `todo`, `write-plainly`, `prune-comments`, `write-skill` | 状況報告、段階表、やること・保留のキュー、文体、コメント整理、スキル作成のチェック |
+| [pstack](docs/skills.ja.md#pstack-スキルlauren-tanmit) | `architect`, `arena`, `blast-radius`, `create-verification-skill`, `explain-code`, `figure-it-out`, `interrogate`, `maintain-verification-skill`, `principles`, `recall`, `reflect`, `show-me-your-work`, `swarm`, `tdd` | 設計、比較、影響範囲、検証、コードの説明と機能マップ、振り返り |
 
 pstack グループは Lauren Tan の [pstack](https://github.com/cursor/plugins)(MIT)から取り込んだもので、いまはこのリポジトリで独自に手入れしています。元のファイルは upstream のまま `vendor/pstack` に残し、upstream の変更は任意で有効にする日次ジョブが知らせるので、必要なものだけ手で取り込みます。複数のセッションで働くとき、ワーカーの上にはオーケストレーター(最上位のセッション1つ)とリード(プロジェクトごとに1つ)の2層があります。詳しくは [orchestrate の Roles 表](skills/orchestrate/SKILL.md#roles)(英語)を見てください。
+
+## 名前が変わったスキル
+
+いくつかのスキルは、モードを持つ一つのスキルにまとめました。古い名前は別名を残さずになくなったので、`/agent-skills:<古い名前>` はもう呼べません。新しいコマンドを呼び、モードを伝えてください。
+
+| 古いコマンド | 新しいコマンドとモード |
+|---|---|
+| `/agent-skills:how` | `/agent-skills:explain-code` how |
+| `/agent-skills:why` | `/agent-skills:explain-code` why |
+| `/agent-skills:teach` | `/agent-skills:explain-code` teach |
+| `/agent-skills:map-features` | `/agent-skills:explain-code` map |
 
 ## 設定
 
