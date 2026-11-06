@@ -276,7 +276,7 @@ def ignored_note(t):
 
 
 def finished(row, cells, close=None):
-    """The row's end as the table reads it. A stopped row a recorded merge ✅ now covers is not stopped: its end falls
+    """The row's end as the table reads it. A stopped row whose merge ✅ has since appeared is not stopped: its end falls
     back to its program's Close (close). A work row every column of which is ✅ or 해당 없음 ends at its latest cell's
     time, or the earlier end the row already has (`orch stage done`, a program's Close). {} when nothing changes."""
     base = {"stopped": None, "done_at": close} if row.get("stopped") and (cells.get("merge") or {}).get("mark") == "ok" else {}
