@@ -30,8 +30,8 @@ report with its §4 record line:
   latest comment already says this, do not repeat it.
 - The project's worklog (`use-notes`) → one line on what this session did, if not already
   written.
-- An orchestrator or lead → `orch handoff save --next "<first step for the next session>"` (a
-  lead adds `--key lead:<slug>`) with every `--waiting`, `--question` and `--reply` that still
+- An orchestrator or lead → `orch handoff save --next "<first step for the next session>"` (the
+  key comes from the session's role; a lead's lands on `lead:<slug>`) with every `--waiting`, `--question` and `--reply` that still
   holds, since each save replaces the last; `agent-skills:reboot` reads it back (`orchestrate`
   `references/top-level.md`, "Restart with a handoff").
 - No ticket (a local diagnosis, a probe) → the worklog line is enough. Do not file a ticket
