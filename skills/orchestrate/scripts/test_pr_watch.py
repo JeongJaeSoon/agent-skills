@@ -1,6 +1,6 @@
 """pr_watch.py: only the five changes that need a turn print; every other state change prints nothing.
 Run: python3 test_pr_watch.py"""
-import json, pathlib, sys
+import json, os, pathlib, sys, tempfile
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import pr_watch
 
@@ -139,5 +139,43 @@ for bad in (["--repo", "a/b", "--interval", "60"], ["--repo", "a/b", "--repo", "
         assert e.code == 2
     else:
         raise AssertionError(f"must be refused: {bad}")
-assert pr_watch.parse(["--repo", "a/b", "--land-check", "prog"]).land_check == "prog"
+
+# --land-check judges the program's repo, so a watched repo that differs (or a program that is missing) is refused.
+with tempfile.TemporaryDirectory() as home:
+    os.environ["PROGRAMS_HOME"] = home
+    (pathlib.Path(home) / "prog").mkdir()
+    (pathlib.Path(home) / "prog" / "program.json").write_text(json.dumps({"repo": "a/b"}))
+    (pathlib.Path(home) / "broken").mkdir()
+    (pathlib.Path(home) / "broken" / "program.json").write_text("{not json")
+    assert pr_watch.parse(["--repo", "a/b", "--land-check", "prog"]).land_check == "prog"
+    assert pr_watch.parse(["--repo", "A/B", "--land-check", "prog"]).land_check == "prog", "repo names compare case-blind"
+    for bad in (["--repo", "a/other", "--land-check", "prog"], ["--repo", "a/b", "--land-check", "missing"],
+                ["--repo", "a/b", "--land-check", "broken"]):
+        try:
+            pr_watch.parse(bad)
+        except SystemExit as e:
+            assert e.code == 2
+        else:
+            raise AssertionError(f"must be refused: {bad}")
+
+# A rerun that started later is the latest run even when the older run finished after it began.
+slow_old = {"workflowName": "ci", "name": "tests", "conclusion": "FAILURE",
+            "startedAt": "2026-11-06T01:00:00Z", "completedAt": "2026-11-06T03:00:00Z"}
+fast_new = {"workflowName": "ci", "name": "tests", "conclusion": "SUCCESS",
+            "startedAt": "2026-11-06T02:00:00Z", "completedAt": "2026-11-06T02:30:00Z"}
+assert pr_watch.failing([slow_old, fast_new]) is False and pr_watch.failing([fast_new, slow_old]) is False
+
+# A PR missing from one listing keeps its last state: it does not reopen, and a merge seen after it returns prints.
+gone = [json.dumps([gh_pr(1)]), json.dumps([]), json.dumps([gh_pr(1)])]
+assert replay(gone) == [], "OPEN, missing, OPEN is not a new PR"
+gone = [json.dumps([gh_pr(1)]), json.dumps([]), json.dumps([gh_pr(1, state="MERGED")])]
+assert replay(gone) == ["a/b#1 MERGED"], "a merge seen after a missing round still prints"
+
+# Only a READY or HOLD line is a verdict: a note alone must not reset READY.
+verdicts = iter(["HOLD: x\n", "READY: ok\n", "note: main CI for the last landing has not reported yet\n", "READY: ok\n"])
+out, listings = [], iter([json.dumps([gh_pr(1, "BLOCKED")])] * 4)
+pr_watch.watch(lambda: pr_watch.snapshot(["a/b"], "", "prog", 50,
+                                         lambda a: next(listings) if a[0] == "gh" else next(verdicts)),
+               300, out.append, lambda s: None, rounds=4)
+assert out == ["a/b#1 land-check READY"], out
 print("test_pr_watch: ok")

@@ -164,6 +164,10 @@ def loop_around(text, pos):
     blanked). The loop's condition counts: `until gh pr view …; do sleep 30; done` polls in it."""
     starts, best = [], None
     for m in re.finditer(r"(?<![\w.-])(until|while|for|done)(?![\w.-])", text):
+        # A keyword only counts where a command may start: `echo done` and `grep for` are plain words.
+        before = text[:m.start()].rstrip(" \t")
+        if before and before[-1] not in ";&|(){\n" and not re.search(r"(?<![\w.-])(do|then|else|elif)$", before):
+            continue
         if m[1] != "done":
             starts.append(m.start())
         elif starts:
@@ -178,14 +182,22 @@ def check_monitor(cmd, cfg):
     state change, most of them with nothing to do. The shared watcher prints only the changes that need a turn."""
     cmds, text = shell.commands(cmd), shell.command_text(cmd)
     # The wait that counts is the one inside the loop around a poll (a sleep before the loop is a one-off), and the
-    # sleeps there add up (`sleep 150; sleep 150` waits 300 s). A sleep whose argument is a variable cannot be
-    # judged, so that loop passes without a warning. Any one short loop warns.
+    # sleeps there add up (`sleep 150; sleep 150` waits 300 s). A sleep put in the background (`sleep 300 &`) waits
+    # for nobody, so it counts as 0. Where the loop branches (if/else/case/`||`) only one sleep may run, so the
+    # shortest one stands for the loop. A sleep whose argument is a variable cannot be judged, so that loop passes
+    # without a warning. Any one short loop warns.
     for poll in (c for c in cmds if c.name == "gh" and pr_verb(c.words) in PR_POLLS):
         region = loop_around(text, poll.span[1] - 1)  # a span starts at the blank before the word
         scope = [c for c in cmds if region is None or region[0] < c.span[1] <= region[1]]
-        sleeps = [sleep_seconds(c) for c in scope if c.name == "sleep"]
-        wait = sum(s for s in sleeps if s is not None)
-        if sleeps and None not in sleeps and wait < PR_POLL_MIN:
+        sleeps = [c for c in scope if c.name == "sleep"]
+        secs = [sleep_seconds(c) for c in sleeps]
+        if not secs or None in secs:
+            continue
+        secs = [0 if re.match(r"\s*&(?!&)", text[c.span[1]:]) else s for c, s in zip(sleeps, secs)]
+        span = text[region[0]:region[1]] if region else text
+        branches = re.search(r"(?<![\w.-])(if|case|else|elif)(?![\w.-])|\|\|", span)
+        wait = min(secs) if branches else sum(secs)
+        if wait < PR_POLL_MIN:
             break
     else:
         return []

@@ -215,6 +215,17 @@ for cmd in ("until gh pr view 5 --json state | grep -q MERGED; do sleep 300; don
             "until gh pr view 5 | grep -q MERGED; do sleep $N; done",
             "echo 'gh pr view 5; sleep 60'"):
     assert monitor(cmd) == ("none", ""), "no warning: " + cmd
+# A word that spells a loop keyword is not one; exclusive branches and a background sleep are not added up.
+for cmd in ("while true; do gh pr view 1; echo done; sleep 60; done",
+            "while true; do gh pr view 1; echo for; sleep 60; done",
+            "while true; do gh pr view 1; if false; then sleep 300; else sleep 60; fi; done",
+            "while true; do gh pr view 1; sleep 300 & sleep 60; done",
+            "while true; do gh pr view 1; sleep 300 || sleep 60; done"):
+    assert "pr_watch.py" in monitor(cmd)[1], "must warn: " + cmd
+for cmd in ("while true; do gh pr view 1; echo done; sleep 600; done",
+            "while true; do gh pr view 1 && sleep 150 && sleep 150; done",
+            "while true; do if gh pr view 1 | grep -q OPEN; then sleep 600; else sleep 900; fi; done"):
+    assert monitor(cmd) == ("none", ""), "no warning: " + cmd
 # Only Monitor: the same loop in a background Bash call is not a watcher the session keeps.
 assert bash("until gh pr view 5 | grep -q MERGED; do sleep 60; done", "general", background=True) == "none"
 assert LAST["warning"] == ""

@@ -7,12 +7,13 @@ Usage: pr_watch.py --repo OWNER/REPO [--repo ...] [--branch REGEX] [--land-check
 Each round lists the PRs of every --repo whose head branch matches --branch and prints a line only for:
   MERGED or CLOSED, CI turning to failure, `orch land-check` turning READY (with --land-check),
   a conflict (DIRTY) appearing or clearing, a new PR opening.
+--land-check SLUG must name a program whose repo is the one watched (read from its program.json).
 BLOCKED, UNKNOWN, CLEAN, UNSTABLE and pending checks come and go without a line. The first round only records
 the current state, in memory: a restarted watcher starts silent again, so give Monitor a long timeout_ms.
 A round where `gh` fails or prints something unreadable is skipped. --interval is 300 s or more: a shorter one wakes the session for
 changes nobody can act on. Run it as `Monitor` with `timeout_ms` set; it stops when the Monitor does.
 """
-import argparse, json, pathlib, re, shutil, subprocess, sys, time
+import argparse, json, os, pathlib, re, shutil, subprocess, sys, time
 
 MIN_INTERVAL = 300
 FAILED = ("FAILURE", "ERROR", "TIMED_OUT")
@@ -46,8 +47,10 @@ def snapshot(repos, branch, land_slug, limit, run=sh):
             ready = False
             if land_slug and p["state"] == "OPEN" and not dirty and not fail:
                 lines = run(["orch", "land-check", land_slug, "--pr", str(p["number"])]).strip().splitlines()
-                # land-check prints "HOLD: PR state unknown …" when gh gave it nothing: that is no verdict.
-                ready = None if not lines or "state unknown" in lines[-1] else lines[-1].startswith("READY")
+                # Only a READY or HOLD line is a verdict: a bare note, or "HOLD: PR state unknown …" (gh gave it
+                # nothing), says nothing about readiness.
+                verdict = [ln for ln in lines if ln.startswith(("READY", "HOLD"))]
+                ready = None if not verdict or "state unknown" in verdict[-1] else verdict[-1].startswith("READY")
             cur[f"{repo}#{p['number']}"] = {"state": p["state"], "dirty": dirty, "fail": fail, "ready": ready}
     return cur
 
@@ -57,8 +60,9 @@ def failing(checks):
     latest = {}
     for c in checks:
         key = (c.get("workflowName") or "", c.get("name") or c.get("context") or "")
-        # gh prints a run that has not finished with completedAt 0001-01-01: that is no time, so startedAt orders it.
-        stamp = next((s for s in (c.get("completedAt"), c.get("startedAt")) if s and not s.startswith("0001")), "")
+        # Order by when a run started: an older run can finish after its rerun began. A status context has no
+        # startedAt, and gh prints 0001-01-01 for a time that does not exist yet, so those fall back to completedAt.
+        stamp = next((s for s in (c.get("startedAt"), c.get("completedAt")) if s and not s.startswith("0001")), "")
         if key not in latest or stamp >= latest[key][0]:
             latest[key] = (stamp, c)
     return any((c.get("conclusion") or c.get("state") or "").upper() in FAILED for _, c in latest.values())
@@ -66,7 +70,10 @@ def failing(checks):
 
 def carry(old, new):
     """None means "could not tell" (mergeability still UNKNOWN, a failed land-check): keep what was last known, so a
-    blip never reads as a change and back."""
+    blip never reads as a change and back. A PR that left the list (older than --limit, or a short read) keeps its
+    last state too, so it neither reopens as "new" nor loses a merge seen after it returns."""
+    for key, o in old.items():
+        new.setdefault(key, o)
     for key, n in new.items():
         for field in ("dirty", "ready"):
             if n[field] is None:
@@ -123,7 +130,26 @@ def parse(argv):
         ap.error(f"--interval must be {MIN_INTERVAL} seconds or more")
     if args.land_check and len(args.repo) != 1:
         ap.error("--land-check names one program, which belongs to one repo: pass exactly one --repo")
+    if args.land_check:
+        owned = program_repo(args.land_check)
+        if owned is None:
+            ap.error(f"--land-check {args.land_check}: no readable program.json under {programs_home()}")
+        if owned.lower() != args.repo[0].lower():
+            ap.error(f"--land-check {args.land_check} belongs to {owned}, not {args.repo[0]}: land-check would judge another repo's PR")
     return args
+
+
+def programs_home():
+    return pathlib.Path(os.environ.get("PROGRAMS_HOME") or "~/.claude/programs").expanduser()
+
+
+def program_repo(slug):
+    """The repo a program was initialised for, or None when program.json is missing or unreadable."""
+    try:
+        repo = json.loads((programs_home() / slug / "program.json").read_text()).get("repo")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return repo if isinstance(repo, str) else None
 
 
 def main(argv):
