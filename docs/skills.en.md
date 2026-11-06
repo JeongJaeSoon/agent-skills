@@ -1,4 +1,4 @@
-<!-- translated-from: a3b59e3c08224e9acd827f3257b531832a37f6c0 -->
+<!-- translated-from: 83d838a9d793b03405e684180ea6b8da4a934018 -->
 # Skill catalog
 
 This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 16 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
@@ -636,6 +636,28 @@ Supervision (the preamble), CLOSE and KEEP are attributes, not roles. Orca's exe
 - The reply passes when a Bash call this turn (after the last prompt a person typed) that was not refused ran `orch decide add`, `orch board now`, `orch board set … --owner`, `orch gate`, `orca orchestration gate-create` or `orch-dash inbox add`. Items are not matched to records: one call covers the whole reply.
 - Level `guard.owner_check`: `warn` when the key is unset. The human sees one line, "owner_check: 기록 안 된 오너 항목 N" (N unrecorded owner items), and a row goes to `$AGENT_SKILLS_STATE/owner-check.jsonl`; the model sees nothing, because a systemMessage does not reach it. The false-positive rate is measured from those rows. `deny` is turned on only by the key and blocks that stop once, as claim_check does, so the model records the items (`stop_hook_active` passes). `off` and `AGENT_SKILLS_OWNER_CHECK=0` turn it off.
 - The judgment matches phrases, so it has false positives and misses. That is why it starts at `warn`.
+
+### End-of-turn checks
+
+`hooks/turn_check.py` (Stop, SubagentStop, and PreToolUse on the Telegram reply tool) and the subagent check in `hooks/claim_check.py`. They read the transcript for turn-end habits that only skill prose asked for. They call no model, and every check only warns; none blocks.
+
+| Key | Reaches | Warns when |
+|---|---|---|
+| `turn_check.wait_alive` | orchestrator, lead | the turn ends and no background `orch inbox`, `orch wait` or `orch watch-cards` is alive |
+| `turn_check.self_close` | worker, CLOSE card | a successful `worker_done` was sent, or the card is a CLOSE card, and `skills-sync end-check` says the card may go (`close-terminal` or `remove`) |
+| `turn_check.review_idle` | worker, subagent | the last tool result is a review report (a code-review-family skill, a review subagent, `codex`) or the turn opened on a background-task notice, and it ends with no next call |
+| `turn_check.decision_registered` | orchestrator, lead | the reply asks for a decision and the turn ran no `orch decide add`, `orch gate` or `orca orchestration gate-create` |
+| `turn_check.offer_phrase` | any main session | the last three lines of the reply hand the work back ("말씀 주시면 …", "want me to file …") |
+| `turn_check.stacks_down` | any main session | a project this session brought up with `docker compose -p <project> up` has no `down` and no `reap.py ledger add --kind compose-stack --keep` |
+| `turn_check.brief_render` | orchestrator, lead | the reply has a status report's shape (two or more of `🙋 지금 오너가 할 일`, `⏳ 다른 사람 대기`, `🧭 우선순위`, `## 보류`, `🔄 진행`, `## 요약`) and the turn ran no `orch brief render` |
+| `turn_check.prs_actions` | any main session | `prs.py actions` printed lines and the turn ran no `prs.py log` |
+| `turn_check.telegram_render` | orchestrator, lead | a Telegram reply, checked before it is sent, has a status report's shape and the turn ran no `orch brief render` |
+| `claim_check.subagent` | any session | the reply claims completion on a subagent's report alone: this session ran no Bash call after it started that subagent |
+
+- An unset key, `false` or `"off"` does nothing and prints nothing. `true` or `"warn"` (`"ask"` and `"deny"` are read as warn) shows the human one `turn_check: <what>` line and writes one row per check to `$AGENT_SKILLS_STATE/turn-warnings.jsonl`. The model sees nothing. This hook has no deny.
+- `hooks/roles.py` MATRIX (`turn_*`) decides which roles a check reaches. A subagent gets only `review_idle`.
+- `wait_alive` and `stacks_down` read the whole transcript (a file over 64 MB is not read); the rest read only this turn. A wait or compose call wrapped under another name goes unseen.
+- The judgment matches text and tool names, so it has false positives and misses. After a week of `turn-warnings.jsonl`, count each check's false positives, then turn the key on.
 
 ## Differences from pstack
 
