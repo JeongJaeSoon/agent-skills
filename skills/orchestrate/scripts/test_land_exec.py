@@ -7,7 +7,7 @@ BIN = ROOT / "bin"
 os.environ.pop("CLAUDECODE", None)
 os.environ.update(PROGRAMS_HOME=str(ROOT / "programs"), ORCH_FLEET_STATE=str(ROOT / "fleet"),
                   AGENT_SKILLS_STATE=str(ROOT / "state"), AGENT_SKILLS_CONFIG=str(ROOT / "agent-skills.json"),
-                  ORCH_DASH="off", AGENT_SKILLS_LEDGER=str(ROOT / "reap-ledger.jsonl"),
+                  ORCH_DASH="off", AGENT_SKILLS_PATROL="off",AGENT_SKILLS_LEDGER=str(ROOT / "reap-ledger.jsonl"),
                   PATH=f"{BIN}:{os.environ['PATH']}")
 os.environ.pop("ORCA_TERMINAL_HANDLE", None)
 

@@ -734,7 +734,7 @@ assert "전 것" in out["refused"] and json.loads((STATE / "sweep-last.json").re
 assert sweep.set_owner("trash:tmpdir", True)[0] == 2  # not a rule of this stage
 code, msg = sweep.set_owner("serve:dark", True)
 own = json.loads((STATE / "sweep-owner.json").read_text())
-assert code == 0 and own == {"generation": 1, "rules": {"serve:dark": "sweep"}, "interval": 900.0}, (msg, own)
+assert code == 0 and own == {"generation": 1, "rules": {"serve:dark": "sweep"}, "interval": 1800.0}, (msg, own)
 assert "첫 정상 회차" not in msg  # sweep-last.json exists already
 assert sweep.set_owner("serve:dark", True) == (0, "serve:dark: 이미 sweep 소유(세대 1), 바꾼 것 없음")
 assert json.loads((STATE / "sweep-owner.json").read_text())["generation"] == 1
@@ -896,7 +896,7 @@ reap_hard.act = saved_act
 (tmp / "config.json").write_text(json.dumps({"reap-hard": {"idle_minutes": 45, "serve_ranges": [[1, 2]],
                                                            "protect_file": str(PROTECT)}}))
 block = sweep.carried_config()["sweep"]
-assert block["idle_minutes"] == 45 and block["serve_ranges"] == [[1, 2]] and block["interval"] == 900, block
+assert block["idle_minutes"] == 45 and block["serve_ranges"] == [[1, 2]] and block["interval"] == 1800, block
 assert block["workspaces"] == "~/orca/workspaces" and block["max_per_round"] == 50 and block["protect_file"] == str(PROTECT)
 other = tmp / "other-protect.txt"
 other.write_text("port 1\n")
@@ -950,7 +950,7 @@ assert not sweep.plist_path().exists() and not orca_log.exists()
 buf = io.StringIO()
 with contextlib.redirect_stdout(buf):
     assert sweep.cmd_install(["--dry-run"]) == 0
-assert "[dry-run]" in buf.getvalue() and "agent-skills sweep" in buf.getvalue() and "*/15 * * * *" in buf.getvalue()
+assert "[dry-run]" in buf.getvalue() and "agent-skills sweep" in buf.getvalue() and "*/30 * * * *" in buf.getvalue()
 assert not sweep.plist_path().exists() and not orca_log.exists() and not stub_log.exists()
 (tmp / "config.json").write_text(json.dumps({"reap-hard": {"protect_file": str(PROTECT), "interval": 600}}))
 buf = io.StringIO()

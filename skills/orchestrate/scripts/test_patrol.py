@@ -748,6 +748,35 @@ patrol.write_round([r], {"cards": {}}, False, NOW + 200)
 assert patrol.pending_lines("hr", False, T)[0].startswith("PATROL R"), "shown to its owner"
 assert patrol.pending_lines("hr", False, T + dt.timedelta(hours=3)) == [], "R is shown once, not every 30 minutes"
 
+# M (a model drift) is shown once per drift; a different model is a new finding, and so is the first drift again once the
+# finding in between closed.
+def drift(have):
+    return {"id": patrol.fid("M", "s9", "sonnet", have), "code": "M", "card": "c", "title": "x", "owner": "hm"}
+patrol.write_round([drift("opus")], {"cards": {}}, False, NOW + 300)
+assert patrol.pending_lines("hm", False, T)[0].startswith("PATROL M"), "the drift is shown to its owner"
+assert patrol.pending_lines("hm", False, T + dt.timedelta(hours=3)) == [], "and not again every 30 minutes"
+patrol.write_round([drift("haiku")], {"cards": {}}, False, NOW + 400)
+assert patrol.pending_lines("hm", False, T + dt.timedelta(hours=4))[0].startswith("PATROL M"), "another model is news"
+patrol.write_round([drift("opus")], {"cards": {}}, False, NOW + 500)
+assert patrol.pending_lines("hm", False, T + dt.timedelta(hours=5))[0].startswith("PATROL M"), "so is the first one again"
+# Polling one terminal with and without the unowned scope does not make an open finding new.
+patrol.write_round([{**drift("opus"), "owner": None}], {"cards": {}}, False, NOW + 550)
+assert patrol.pending_lines("hu", True, T + dt.timedelta(hours=5, minutes=1))[0].startswith("PATROL M")
+assert patrol.pending_lines("hu", False, T + dt.timedelta(hours=5, minutes=2)) == []
+assert patrol.pending_lines("hu", True, T + dt.timedelta(hours=5, minutes=3)) == [], "still the same open drift"
+# A closed drift is forgotten for every terminal, including one nobody polled while it was closed.
+patrol.write_round([{**drift("opus"), "owner": None}], {"cards": {}}, False, NOW + 560)
+assert patrol.pending_lines("ha", True, T + dt.timedelta(hours=5, minutes=4))[0].startswith("PATROL M")
+patrol.write_round([], {"cards": {}}, False, NOW + 570)
+assert patrol.pending_lines("hb", False, T + dt.timedelta(hours=5, minutes=5)) == []
+patrol.write_round([{**drift("opus"), "owner": None}], {"cards": {}}, False, NOW + 580)
+assert patrol.pending_lines("ha", True, T + dt.timedelta(hours=5, minutes=6))[0].startswith("PATROL M"), "new for ha"
+# The same drift back after it closed (opus, back on sonnet, opus), with nothing due in between.
+patrol.write_round([], {"cards": {}}, False, NOW + 600)
+assert patrol.pending_lines("hm", False, T + dt.timedelta(hours=6)) == [], "a closed drift shows nothing"
+patrol.write_round([drift("opus")], {"cards": {}}, False, NOW + 700)
+assert patrol.pending_lines("hm", False, T + dt.timedelta(hours=7))[0].startswith("PATROL M"), "and is new when it returns"
+
 # H: an ended turn whose screen shows a hook error in its last turn or Claude Code's restart notice. Run workers too;
 # a screen without that wording, a turn still running, a prompt waiting on a human or an unread screen is not judged.
 RULE = "─" * 40
@@ -929,11 +958,31 @@ assert fid_t in patrol.standing() and fid_t not in two["cleared"]
 three = patrol.round_once(now=NOW + 7200, gather_fn=lambda now, dl, memo: (fresh(), []))
 assert fid_t in three["cleared"] and fid_t not in patrol.standing()
 
-# --fallback (reap-hard's beat) waits 40 minutes, not 25: while the patrol shell job keeps its 30-minute beat, the two
-# never both run a round. A rise in pressure still starts one at once.
-assert patrol.due({"t": NOW - 26 * 60}, "ok", NOW) and not patrol.due({"t": NOW - 39 * 60}, "ok", NOW, patrol.FALLBACK_DUE_S)
-assert patrol.due({"t": NOW - 41 * 60}, "ok", NOW, patrol.FALLBACK_DUE_S)
+# --fallback (reap-hard's beat) is due on the 25-minute mark, below reap-hard's 30-minute period: with the patrol job
+# off, a round runs at every reap-hard pass, not every second one. Two rounds never come closer than the mark, because
+# each starts only when the last is due. A rise in pressure still starts one at once.
+assert patrol.due({"t": NOW - 26 * 60}, "ok", NOW) and not patrol.due({"t": NOW - 24 * 60}, "ok", NOW, patrol.FALLBACK_DUE_S)
+assert patrol.due({"t": NOW - 26 * 60}, "ok", NOW, patrol.FALLBACK_DUE_S)
 assert patrol.due({"t": NOW - 60, "level": "ok"}, "warn", NOW, patrol.FALLBACK_DUE_S)
+assert patrol.FALLBACK_DUE_S < 1800, "reap-hard's default period"
+last, rounds_at = NOW - 3600, []
+for k in range(1, 7):  # six passes, 30 minutes apart, no patrol job and no pressure change
+    t = NOW + k * 1800
+    if patrol.due({"t": last, "level": "ok"}, "ok", t, patrol.FALLBACK_DUE_S):
+        last = t
+        rounds_at.append(k)
+assert rounds_at == [1, 2, 3, 4, 5, 6], rounds_at
+# With the job on at :00 and :30 and reap-hard's pass at :27, whoever comes first runs the round: two rounds within
+# one job beat never happen.
+t0, runs = NOW, []
+last = t0
+for minute in range(1, 181):
+    now = t0 + minute * 60
+    who = "job" if minute % 30 == 0 else "hard" if minute % 30 == 27 else None
+    if who and patrol.due({"t": last, "level": "ok"}, "ok", now, patrol.DUE_S if who == "job" else patrol.FALLBACK_DUE_S):
+        last = now
+        runs.append(minute)
+assert all(b - a >= 25 for a, b in zip(runs, runs[1:])), runs
 # One round at a time across the round and its cleanup scans: a second one meanwhile does nothing.
 with patrol.run_lock() as first:
     assert first

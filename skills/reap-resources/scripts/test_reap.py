@@ -494,6 +494,69 @@ def failing_git(cmd, cwd=None, check=True):
 facts = reap.worktree_facts("/r-wt", None, None, {}, git=failing_git)
 assert facts["unreadable"] is True, facts
 
+# One listing per repo answers every card of it: gh runs once, not once or twice per card.
+def counting_git(listing, calls):
+    def git(cmd, cwd=None, check=True):
+        if cmd[0] == "gh":
+            calls.append(cmd)
+            return None if listing is None else json.dumps(listing)
+        branch = {"/r-a": "a", "/r-b": "b", "/r-c": "c"}.get(cmd[2], "fix")
+        return {"--git-common-dir": "/r/.git\n", "--show-current": branch + "\n", "HEAD": "h2\n"}.get(cmd[-1], "")
+    return git
+rows = [{**mine, "headRefName": "a", "state": "MERGED", "headRefOid": "ha"},
+        {**fork, "headRefName": "b", "headRefOid": "hb"},
+        {"number": 9, "url": "https://github.com/acme/app/pull/9", "state": "OPEN", "isCrossRepository": False,
+         "headRefName": "other", "headRefOid": "h2"}]
+calls = []
+pm = reap.PrMap(counting_git(rows, calls))
+g = counting_git(rows, calls)
+refs = [reap.branch_pr(p, g, h, pm, "/r") for p, h in (("/r-a", "ha"), ("/r-b", "hb"), ("/r-c", "h2"))]
+assert refs == [("acme/app#2", False), (None, False), ("acme/app#9", False)], refs  # a fork's PR is no one's; c's is by HEAD
+assert len(calls) == 1 and "--limit" in calls[0] and "--search" not in calls[0], calls
+assert reap.worktree_facts("/r-wt", None, None, {}, git=counting_git(rows, calls), pr_map=pm)["pr"] == "acme/app#9"
+assert len(calls) == 1, "the same repo is not listed again"
+# Complete listing, no match: no search. A listing cut at the limit cannot rule a PR out, so gh's own search still runs.
+calls.clear()
+assert reap.branch_pr("/r-c", g, "hx", reap.PrMap(counting_git([], calls)), "/r") == (None, False) and len(calls) == 1
+calls.clear()
+full = [{**mine, "headRefName": f"x{n}", "headRefOid": f"x{n}"} for n in range(reap.PR_LIST_LIMIT)]
+assert reap.branch_pr("/r-c", counting_git([], calls), "hx", reap.PrMap(counting_git(full, calls)), "/r") == (None, False)
+assert len(calls) == 3, calls  # the listing, then --head and --search as before
+# A cut listing never answers, even with a match: its merged PR on HEAD must not hide an older open PR on the branch.
+calls.clear()
+cut = [{**mine, "headRefName": "elsewhere", "headRefOid": "h2", "state": "MERGED"}] + full[1:]
+open_old = {"number": 1, "url": "https://github.com/acme/app/pull/1", "state": "OPEN", "isCrossRepository": False}
+def head_lookup(cmd, cwd=None, check=True):
+    return json.dumps([open_old]) if cmd[0] == "gh" and "--head" in cmd else counting_git(cut, calls)(cmd, cwd, check)
+assert reap.branch_pr("/r-c", head_lookup, "h2", reap.PrMap(counting_git(cut, calls)), "/r") == ("acme/app#1", False)
+# A listing that cannot be read falls back to the per-card lookups, whose failure is still 'unread'.
+calls.clear()
+assert reap.branch_pr("/r-c", counting_git(None, calls), "hx", reap.PrMap(counting_git(None, calls)), "/r") == (None, True)
+
+# An event-started pass: off in tests, and not within min_gap of the last pass (so nothing here starts a real one).
+with tempfile.TemporaryDirectory() as td_hard:
+    saved_hard = reap.STATE, os.environ.get("AGENT_SKILLS_PATROL")
+    reap.STATE = pathlib.Path(td_hard)
+    (reap.STATE / "reap-hard-last.json").write_text(json.dumps({"t": time.time() - 60}))
+    os.environ["AGENT_SKILLS_PATROL"] = "off"
+    assert reap.spawn_hard("test", min_gap=0) is False, "AGENT_SKILLS_PATROL=off starts nothing"
+    del os.environ["AGENT_SKILLS_PATROL"]
+    assert reap.spawn_hard("test", min_gap=300) is False, "a pass a minute ago is not repeated"
+    # An old pass: it starts, under the shared runner with a timeout, never as a bare reap_hard.py a hung call could hold.
+    (reap.STATE / "reap-hard-last.json").write_text(json.dumps({"t": time.time() - 3600}))
+    started = []
+    real_popen, reap.subprocess.Popen = reap.subprocess.Popen, lambda cmd, **kw: started.append(cmd)
+    try:
+        assert reap.spawn_hard("test", min_gap=300) is True
+    finally:
+        reap.subprocess.Popen = real_popen
+    cmd = started[0]
+    assert cmd[2] == str(reap.JOB_RUNNER) and cmd[3:5] == ["run", "reap-hard-kick"], cmd
+    assert cmd[cmd.index("--timeout") + 1] == str(reap.HARD_TIMEOUT_S) and cmd[-3:] == ["-I", str(reap.HARD), "run"], cmd
+    assert cmd[cmd.index("--ok") + 1] == "0,3", "a kick that finds another pass running is not a failure"
+    reap.STATE = saved_hard[0]
+    os.environ.pop("AGENT_SKILLS_PATROL", None) if saved_hard[1] is None else os.environ.__setitem__("AGENT_SKILLS_PATROL", saved_hard[1])
+
 assert reap.automation_workspaces({"automations": [{"workspaceId": "r::/w/run"}, {"workspaceId": None}, {}]}) == {"/w/run"}
 assert reap.automation_workspaces({"worktrees": []}) == set() and reap.automation_workspaces(None) is None
 

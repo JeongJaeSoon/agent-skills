@@ -1322,9 +1322,9 @@ out.none = leadCard({{sessions: st.sessions.filter((s) => s.kind !== "orchestrat
 process.stdout.write(JSON.stringify(out));"""
     got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
     assert got["labels"] == {"wt-root": "orchestrator", "wt-lead": "lead", "wt-a": "worker", "wt-b": "worker",
-                             "wt-c": "standalone", "wt-d": "worker"}, got["labels"]
+                             "wt-c": "worker", "wt-d": "worker"}, got["labels"]
     assert re.findall(r'class="tag[^"]*">(?:<[^>]*>)*([a-z]+)</span>', got["table"]) == \
-        ["orchestrator", "lead", "worker", "worker", "worker", "standalone"], got["table"]
+        ["orchestrator", "lead", "worker", "worker", "worker", "worker"], got["table"]
     assert "billing lead" in got["card"] and "2 sessions · 1 working · 2 open PRs" in got["card"], got["card"]
     assert "1 session · 0 working · 1 open PR<" in got["one"], got["one"]
     assert got["hidden"] == got["none"] == "", "no card without a lead in view"
@@ -1382,7 +1382,7 @@ process.stdout.write(JSON.stringify(out));"""
     heads = re.findall(r'<summary class="nav-item"[^>]*>(.*?)<span class="sb-text">', tree, re.S)
     assert [re.search(r'class="chev ([^"]*)"', h).group(1).strip() for h in heads] == \
         ["ph-waiting", "ph-working", "ph-idle", "ph-offline"] and not any("dot-s" in h or "pulse" in h for h in heads), heads
-    assert 'title="idle one with a long name that the sidebar cuts · standalone · idle"' in tree, "the full name is the tooltip"
+    assert 'title="idle one with a long name that the sidebar cuts · worker · idle"' in tree, "the full name is the tooltip"
     assert '<span class="count">2</span>' in tree.split('data-fold="idle"')[1].split("</summary>")[0], "the idle fold counts its sessions"
     assert opened(got["current"])["idle"] == "open", "the fold holding the page's session opens"
     assert got["redraw"] is None, "a re-render's own toggle is not stored"
