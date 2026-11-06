@@ -953,6 +953,34 @@ with tempfile.TemporaryDirectory() as tmp:
     r = subprocess.run([sys.executable, "-c", code], cwd=pathlib.Path(__file__).parent, env={**os.environ, "AGENT_SKILLS_STATE": tmp},
                        capture_output=True, text=True, timeout=20)
     assert r.returncode == 2 and "검사를 마치지 못한" in r.stdout, (r.returncode, r.stdout, r.stderr)
+# A plan that refuses its own arguments leaves a row and exits 2.
+with tempfile.TemporaryDirectory() as tmp:
+    r = subprocess.run([sys.executable, str(pathlib.Path(__file__).parent / "reap.py"), "precheck", "--act", "--kinds", "typo-kind"],
+                       env={**os.environ, "AGENT_SKILLS_STATE": tmp}, capture_output=True, text=True, timeout=20)
+    rows = (pathlib.Path(tmp) / "janitor-runs.jsonl").read_text().splitlines()
+    assert r.returncode == 2 and len(rows) == 1 and json.loads(rows[0])["stage"] == "plan", (r.returncode, r.stderr, rows)
+# A cut that lands while the final row is written is in the record, not only in the return value.
+with tempfile.TemporaryDirectory() as tmp:
+    st = pathlib.Path(tmp)
+    real_log, calls = reap.log_run, []
+    def cutting_log(state_dir, row, **kw):
+        calls.append(row["error"])
+        if len(calls) == 1:
+            gate_ref[0](signal.SIGALRM, None)
+        return real_log(state_dir, row, **kw)
+    gate_ref, seen = [None], []
+    def capture_reap(plan, cfg, scheduled_only, deadline, res):
+        res.update({"acted": [], "skipped": [], "failed": [], "left": [], "refused": None})
+    g = reap._Gate()
+    gate_ref[0] = g
+    reap.log_run = cutting_log
+    try:
+        jrow = reap.act_round({"hours": 6, "repos": [], "kinds": ["tmpdir"], "items": []}, {}, st, time.monotonic(), None,
+                              lambda argv, check: None, capture_reap, now=1e6, gate=g)
+    finally:
+        reap.log_run = real_log
+    last = json.loads((st / "janitor-runs.jsonl").read_text().splitlines()[-1])
+    assert jrow["error"].startswith("RoundCut") and last["error"].startswith("RoundCut"), (jrow, last)
 # The timer ends with the record: a summary that outlasts the hard stop is not cut into a second row.
 with tempfile.TemporaryDirectory() as tmp:
     code = ("import sys, time, reap; reap.HARD_STOP_S = 1; reap.scan = lambda *a: ([], []); reap.print = lambda *a, **k: a[0].startswith('janitor') and time.sleep(2.5); "
