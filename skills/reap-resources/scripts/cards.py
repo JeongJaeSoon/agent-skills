@@ -551,7 +551,8 @@ def main(argv):
     cmd = argv[1] if len(argv) > 1 else "scan"
     cfg = reap.config()
     if cmd == "apply":
-        text = pathlib.Path(reap.opt("--plan") or sys.exit("apply needs --plan PLAN.json")).read_text()
+        # Bytes, not read_text(): its newline translation would hash a CRLF-edited file as the sealed text.
+        text = pathlib.Path(reap.opt("--plan") or sys.exit("apply needs --plan PLAN.json")).read_bytes().decode()
         if why := refuse_plan(text, cards_listing()):
             sys.exit(f"아무것도 닫지 않았다: {why}")
         plan = json.loads(text)
@@ -592,7 +593,7 @@ def main(argv):
     data = {"at": time.strftime("%Y-%m-%dT%H:%M%z"), "items": items, "notes": notes}
     if reap.opt("--plan"):
         text = json.dumps(data, ensure_ascii=False, indent=1)
-        pathlib.Path(reap.opt("--plan")).write_text(text)
+        pathlib.Path(reap.opt("--plan")).write_bytes(text.encode())
         seal_plan(text)
     if "--json" in argv:
         print(json.dumps(data, ensure_ascii=False, indent=1))

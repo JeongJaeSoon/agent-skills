@@ -596,6 +596,7 @@ plan_text2 = json.dumps({"items": [PLAN_ITEM]}, indent=1)
 cards.seal_plan(plan_text2)
 assert "봉인 없음" in refuses(plan_text2.replace(HEAD, PRHEAD))                           # sealed, then edited
 assert "봉인 없음" in refuses(plan_text2 + "\n")                                           # even whitespace
+assert "봉인 없음" in refuses(plan_text2.replace("\n", "\r\n"))                            # even line endings (read_text would hide them)
 assert "카드가 아님" in refuses([PLAN_ITEM, OTHER], seal=True)                             # one foreign row stops all
 assert "카드가 아님" in refuses([PLAN_ITEM], listing=[{"path": CARD, "isMainWorktree": True}], seal=True)
 cards.cards_listing = lambda repo_list=(): None
@@ -622,6 +623,13 @@ threads = [threading.Thread(target=cards.seal_plan, args=(t,)) for t in texts]
 import hashlib  # noqa: E402
 kept = reap.read_obj(cards.SEAL_DIR / cards.SEALS)
 assert all(hashlib.sha256(t.encode()).hexdigest() in kept for t in texts), len(kept)
+
+# The default SEAL_DIR is the account's home whatever $HOME, $AGENT_SKILLS_STATE and the working directory say.
+import pwd, subprocess  # noqa: E402
+other_home = tempfile.mkdtemp(prefix="test-cards-home-")
+shown = subprocess.run([sys.executable, "-c", "import cards; print(cards.SEAL_DIR)"], cwd=os.path.dirname(os.path.abspath(cards.__file__)),
+                       env={**os.environ, "HOME": other_home, "AGENT_SKILLS_STATE": other_home}, capture_output=True, text=True, check=True).stdout.strip()
+assert shown == str(pathlib.Path(pwd.getpwuid(os.getuid()).pw_dir) / ".local/state/agent-skills"), shown
 
 # A seal list the caller points at does not count: --state and $AGENT_SKILLS_STATE move reap.STATE, not SEAL_DIR.
 forged_text = json.dumps({"items": [{**PLAN_ITEM, "name": "forged"}]}, ensure_ascii=False, indent=1)
