@@ -58,7 +58,7 @@ def gather(db, state, prs_file, board_now, now, merged_fn=gh_merged):
     except (OSError, ValueError):
         owner_items = None  # not read: no order is called free of the owner's turn
     try:
-        agents = fleet._fold(read_bytes(fleet.state_dir() / fleet.SUBAGENTS).decode(errors="replace").splitlines())
+        agents = ledger(read_bytes(fleet.state_dir() / fleet.SUBAGENTS).decode(errors="replace").splitlines())
     except OSError:
         agents = None
     if owner_items is not None:  # the collector's own items, human-gate waits among them
@@ -68,6 +68,24 @@ def gather(db, state, prs_file, board_now, now, merged_fn=gh_merged):
             "rows": board_now.get("rows") or {}, "agents": agents, "me": prs_file.get("me"),
             "board": {lane: board_now.get(lane) or [] for lane in ("doing", "todo", "owner_todo")}, "board_now": board_now,
             "decisions": store.decisions("open", db=db)}
+
+
+def ledger(lines):
+    """(runs, unsure): the subagent ledger folded as fleet.subagents does, and the agent ids whose latest run cannot be
+    told: a line the reader skips (cut off by a crash, not a v1 row) that comes after the agent's last good line may be
+    its restart, so the older stop in the ledger is not evidence."""
+    last, bad = {}, []
+    for i, line in enumerate(lines):
+        try:
+            r = json.loads(line)
+        except ValueError:
+            r = None
+        if (isinstance(r, dict) and r.get("v") == 1 and r.get("event") in ("start", "stop") and isinstance(r.get("agent"), str)
+                and isinstance(r.get("at"), str) and fleet.parse(r["at"])):
+            last[r["agent"]] = i
+        elif line.strip():
+            bad.append(i)
+    return fleet._fold(lines), {a for a, i in last.items() if any(b > i for b in bad)}
 
 
 def read_bytes(path):
@@ -168,7 +186,10 @@ def unit_end(unit, F):
     if kind == "agent":
         if F["agents"] is None:
             return "unknown", "the subagent ledger could not be read"
-        a = F["agents"].get(ident)
+        runs, unsure = F["agents"]
+        if ident in unsure:
+            return "unknown", f"agent {ident}: an unreadable ledger line follows its last run"
+        a = runs.get(ident)
         if not a or not a.get("started_at"):
             return "unknown", f"agent {ident} has no run in the ledger"
         return ("done", {"agent": ident, "run": a["started_at"], "ended": "stopped"}) if a.get("stopped_at") \
@@ -236,8 +257,13 @@ def recheck(v, F):
             now = unit_end(u, {"db": db}) if kind in ("board", "decision") else card_closure(ident, db) if "closure" in ev else None
             if now and now != ("done", ev):
                 raise ValueError(f"{u} changed while it was judged")
-        if db_turn(v["links"], F["cards"], F["me"], store.decisions("open", db=db), store.board(db)):
+        board_now = store.board(db)
+        if db_turn(v["links"], F["cards"], F["me"], store.decisions("open", db=db), board_now):
             raise ValueError("the owner has a turn at its units")
+        now = {**F, "rows": board_now.get("rows") or {}, "board": {"doing": board_now.get("doing") or []}}
+        for u, ev in v["units"].items():
+            if u.startswith("card:") and "pr" in ev and steps_left(ev["card"], now):
+                raise ValueError(f"{u} has a step after the merge")
     return check
 
 

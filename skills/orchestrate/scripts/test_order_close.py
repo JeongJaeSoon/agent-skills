@@ -329,7 +329,28 @@ with store.tx() as c:
     store.close_unit(c, {"id": "card:s-nopr", "ts": fleet.iso(now), "by": "auto", "rule": "manual", "evidence": "x", "label": "x"})
 nopr = make("PR 없는 카드", ["card:s-nopr"])
 assert why(nopr)["why"] == "owner_turn" and "board row" in why(nopr)["detail"], why(nopr)
-# One would_close per evidence, also when the evidence goes A, B, A.
+# A step added after the merge between the judgement and the write: the transaction reads the board lines again.
+PRS["acme/app#12"] = pr("acme/app#12", "MERGED", "lll1212")
+OWNER_OF["acme/app#12"] = "s-r12"
+MORE = MORE + [card("s-r12", "offline")]
+write_state(sessions=MORE)
+step = make("머지 뒤 단계가 늦게 붙음", ["card:s-r12"])
+v = why(step)
+assert v["close"]
+board.set_row("s-r12", title="행", repo="acme/app", status="moving", next="머지 → 배포", worktree="s-r12")
+assert store.order_auto(step, v["snapshot"], v["units"], v["links"], close=True, recheck=order_close.recheck(v, F_now())) is False
+assert row(step)["status"] == "open" and why(step)["why"] == "partial"
+# A ledger line the reader skips after an agent's last run may be its restart: the older stop is not evidence.
+ledger_path = sd / fleet.SUBAGENTS
+with open(ledger_path, "a") as f:
+    f.write('{"v":1,"event":"start","at":"' + fleet.iso(now) + '","agent":"ag-cut"\n')   # cut off mid-line
+for ev in ("start", "stop"):
+    fleet.append_line(ledger_path, {"v": 1, "event": ev, "at": fleet.iso(now), "agent": "ag-after", "claude_session": None,
+                                    "type": None, "handle": None, "cwd": None, "desc": None})
+cut = make("잘린 줄", ["agent:ag-ok"])
+assert why(cut)["why"] == "unread" and "unreadable ledger line" in why(cut)["detail"], why(cut)
+assert why(make("잘린 줄 뒤의 실행", ["agent:ag-after"]))["close"], "a run recorded after the bad line is certain"
+
 flip = make("A B A", ["pr:acme/app#1"])
 for snap in ("A", "B", "A", "B"):
     store.order_auto(flip, snap, {}, ["pr:acme/app#1"])
