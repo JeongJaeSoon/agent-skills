@@ -56,8 +56,9 @@ skills-sync setup disable janitor        # 하나 끄기. 어느 것이든 apply
 | `preview-watch` | off | macOS LaunchAgent | loopback 웹페이지를 tailnet HTTPS로 자동 공개한다. tailscale CLI가 없으면 켜지 않는다 |
 | `sync` | on | Orca automation(에이전트 없음) | 15분마다 체크아웃을 origin에 맞춘다(`skills-sync sync`) |
 | `pressure-watch` | on | Orca automation(에이전트 없음) | 3분마다 PC 사용량을 재고, 높으면 reap이 올린 안전한 대상만 정리해 알린다. 아무것도 종료하지 않는다([pressure.md](pressure.md)) |
-| `reap-hard` | on(보호 목록 파일이 있을 때) | Orca automation(에이전트 없음) | 15분마다 끝난 세션이 남긴 프로세스·창을 규칙으로 정리한다. 세션 순찰도 이 회차가 띄운다([reap-hard.md](reap-hard.md)) |
+| `reap-hard` | on(보호 목록 파일이 있을 때) | Orca automation(에이전트 없음) | 30분마다(PR 머지 직후에도) 끝난 세션이 남긴 프로세스·창을 규칙으로 정리한다. `patrol`이 꺼져 있으면 세션 순찰도 이 회차가 띄운다([reap-hard.md](reap-hard.md)) |
 | `orch-dash` | on | Orca automation(에이전트 없음) | 10분마다 대시보드 서버를 확인해 내려갔으면 올린다 |
+| `patrol` | off | Orca automation(에이전트 없음) | 30분마다 모든 에이전트 카드를 모델 없이 순찰한다(`orch patrol --if-due`). 꺼져 있으면 reap-hard가 대신 돈다 |
 | `share-server` | off | macOS LaunchAgent | 공유 폴더를 127.0.0.1에서 Caddy로 읽기 전용 서빙한다. tailnet 공개는 하지 않는다([share-server.md](share-server.md)) |
 | `land-executor` | off | Orca automation(에이전트 없음) | `orchestrate.land_executor`가 켜진 repo에서 `orch land`가 남긴 머지 요청을 1분마다 모델 없이 다시 검사해 머지한다. agent 턴에서는 머지하지 않는다([landing.md](../skills/orchestrate/references/landing.md#land-executor)) |
 | `watch-prs` | on(`prs` 키가 있을 때) | Orca automation | `watch-prs` 스킬의 회차. 설정 키가 없으면 켜지 않는다 |
@@ -84,7 +85,7 @@ skills-sync setup disable janitor        # 하나 끄기. 어느 것이든 apply
 
 **3. 프로젝트 하나를 여러 워커로: 「PM 겸 오케스트레이터로 끝까지」 → `orchestrate`**
 
-이렇게 부탁받은 세션은 이름과 달리 리드다(`ROLE: lead <slug>`). 리드가 티켓마다 Orca 워커를 띄우고, 워커는 `deliver-ticket`으로 일한 뒤 자기 PR을 `orch land`로 착지시킨다. migration·CI 설정 같은 공유 파일은 독점 레인에서 하나씩 머지된다. 사람은 `orch-dash serve` 대시보드에서 목표·완료 조건·착지 순서·워커·토큰을 보고, 결정과 권한 창에 거기서 답한다. 머지 정책 기본값은 `autonomous`(워커가 착지)다. `human-gate`로 정하면 워커는 READY에서 멈추고 사람이 게이트를 풀어야 착지한다. 끝나면 `measure-delivery`가 후속 티켓 증가·재작업·토큰을 잰다.
+이렇게 부탁받은 세션은 이름과 달리 리드다(`ROLE: lead <slug>`). 리드가 티켓마다 Orca 워커를 띄우고, 워커는 `deliver-ticket`으로 일한 뒤 자기 PR을 `orch land`로 착지시킨다. migration·CI 설정 같은 공유 파일은 독점 레인에서 하나씩 머지된다. 사람은 `orch-dash serve` 대시보드에서 목표·완료 조건·착지 순서·워커·토큰을 보고, 결정과 권한 창에 거기서 답한다. 머지 정책 기본값은 `autonomous`(워커가 착지)다. `human-gate`로 정하면 워커는 READY에서 멈추고 사람이 게이트를 풀어야 착지한다. 끝나면 `reflect`가 후속 티켓 증가·재작업·토큰을 재고 교훈을 정리한다.
 
 **4. auto mode가 막았을 때: 「auto mode 가 막았어」, 「이거 허용되게 규칙 추가해줘」 → `tune-automode`**
 
