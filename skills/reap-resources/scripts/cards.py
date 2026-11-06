@@ -547,6 +547,35 @@ def refuse_plan(text, rows):
     return None
 
 
+def preflight(items, cfg):
+    """Why the round must not start, or None. Judges every acting row again, read-only and without the card lock, the
+    way act_locked does before its first close: a card that moved, changed or is held back by a guard stops the whole
+    plan, so no card is closed on a plan that is already out of date. A card that changes after this still gets
+    skipped alone, inside act."""
+    import guard
+    for i in items:
+        if i["verdict"] not in ACTING:
+            continue
+        try:
+            got = reread(i["path"], cfg)
+        except (RuntimeError, OSError) as e:
+            return f"{i['name']}: 다시 판정하지 못함({type(e).__name__}: {str(e)[:120]})"
+        if got is None:
+            return f"{i['name']}: orca worktree list 에서 다시 찾지 못함"
+        verdict, why, _, f = got
+        if verdict != i["verdict"] or f["head"] != i["head"]:
+            return f"{i['name']}: plan 뒤에 바뀜(판정 {i['verdict']}→{verdict}): {why}"
+        ino = reap.dir_ino(i["path"])
+        if i.get("ino") is not None and ino != i["ino"]:
+            return f"{i['name']}: 판정 뒤 카드 폴더가 다시 만들어짐"
+        ok, why = cardguard.guard(i["path"], i["head"], i["close"], ino=ino)
+        if not ok:
+            return f"{i['name']}: {why}"
+        if why := guard.keep({"kind": "card", "verdict": i["verdict"]}, None):
+            return f"{i['name']}: {why}"
+    return None
+
+
 def main(argv):
     cmd = argv[1] if len(argv) > 1 else "scan"
     cfg = reap.config()
@@ -561,6 +590,8 @@ def main(argv):
             guard.ownership()
         except guard.Unreadable as e:
             sys.exit(f"아무것도 하지 않았다: {e}")
+        if why := preflight(plan["items"], cfg):
+            sys.exit(f"아무것도 닫지 않았다: {why}")
         failed = 0
         for item in plan["items"]:
             if item["verdict"] not in ACTING:

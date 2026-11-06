@@ -551,6 +551,7 @@ saved_keep, saved_own, saved_act, saved_argv = guard.keep, guard.ownership, card
 saved_listing = cards.cards_listing
 cards.cards_listing = lambda repo_list=(): [{"path": CARD}]
 guard.ownership = lambda: None
+saved_pre, cards.preflight = cards.preflight, lambda *a: None  # these cases are about the per-card loop; preflight is tested below
 cards.act = lambda *a, **k: "acted"
 sys.argv = ["cards.py", "apply", "--plan", str(plan)]
 for why, code in (("검사를 마치지 못함(PermissionError: x)", 1), ("보호 목록의 경로", 0), (None, 0)):
@@ -642,6 +643,49 @@ try:
     assert "아무것도 닫지 않았다" in refuses(forged_text), "forged seal must close nothing"
 finally:
     reap.STATE = saved_state_dir
+
+# preflight: one row that is out of date stops the whole plan before any card is closed. Each case would otherwise reach
+# cards.act for the first, good row.
+cards.preflight = saved_pre
+cards.cards_listing = lambda repo_list=(): [{"path": CARD}, {"path": OTHER["path"]}]
+BAD = {**OTHER, "head": PRHEAD}
+GOOD_FACTS = {"head": HEAD}
+rereads = {CARD: (cards.REMOVE, "ok", [], GOOD_FACTS), OTHER["path"]: (cards.REMOVE, "ok", [], GOOD_FACTS)}
+saved_reread, saved_cg, saved_ino = cards.reread, cards.cardguard.guard, reap.dir_ino
+cards.reread = lambda path, cfg: rereads.get(path)
+cards.cardguard.guard = lambda *a, **k: (True, "")
+reap.dir_ino = lambda p: 7
+guard.keep = lambda *a, **k: None
+
+
+BOTH = [{"path": CARD}, {"path": OTHER["path"]}]
+TWO = [PLAN_ITEM, {**OTHER, "head": HEAD}]  # row 2 is the one each case breaks, after row 1 would already have been closed
+
+
+def preflight_refuses(rows, **changes):
+    saved = dict(rereads)
+    rereads.update(changes)
+    try:
+        return refuses(rows, listing=BOTH, seal=True)
+    finally:
+        rereads.clear()
+        rereads.update(saved)
+
+
+r_ = refused_apply(TWO, listing=BOTH, seal=True)
+assert r_ == 0 and acted == ["c1", "c2"], (r_, acted)                                        # all current: both run
+assert "plan 뒤에 바뀜" in preflight_refuses([PLAN_ITEM, BAD])                               # head moved on row 2
+assert "plan 뒤에 바뀜" in preflight_refuses(TWO, **{OTHER["path"]: (cards.CLOSE, "x", [], GOOD_FACTS)})
+assert "다시 찾지 못함" in preflight_refuses(TWO, **{OTHER["path"]: None})
+cards.cardguard.guard = lambda path, *a, **k: (path != OTHER["path"], "터미널에서 작업 중")
+assert "터미널에서 작업 중" in preflight_refuses(TWO)                                          # a guard on row 2
+cards.cardguard.guard = lambda *a, **k: (True, "")
+guard.keep = lambda *a, **k: "검사를 마치지 못함(PermissionError: x)"
+assert "검사를 마치지 못함" in preflight_refuses(TWO)
+guard.keep = lambda *a, **k: None
+reap.dir_ino = lambda p: 8
+assert "다시 만들어짐" in preflight_refuses([{**PLAN_ITEM, "ino": 7}, {**TWO[1], "ino": 7}])
+cards.reread, cards.cardguard.guard, reap.dir_ino = saved_reread, saved_cg, saved_ino
 
 cards.cards_listing = saved_listing
 guard.keep, guard.ownership, cards.act, sys.argv = saved_keep, saved_own, saved_act, saved_argv
