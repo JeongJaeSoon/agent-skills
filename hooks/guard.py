@@ -53,13 +53,15 @@ matrix). A deny there wins; a warn rides along with whatever else is decided; an
 Each rule has a key in ~/.claude/agent-skills.json, and `false` puts back the behavior from before it.
 Warn (`guard.deliver_load`): a card's edit inside its working directory before it loaded deliver-ticket
 (lib/skillload.py); `deny` blocks such an edit.
+Warn (`worker.edit_tool`, `worker.chain`, `worker.paths`, `worker.main_checkout`, `worker.memory`, `worker.pre_push`):
+a card's work discipline, lib/discipline.py. Each firing is also a row in turn-warnings.jsonl.
 A check of this hook that raises lets the call through with a warning and a line in
 $AGENT_SKILLS_STATE/guard-errors.jsonl: the hook never stops a session over its own fault.
 """
 import functools, json, os, pathlib, re, shlex, string, sys
 
 import roles
-from lib import config, coordination, danger, shell, skillload
+from lib import config, coordination, danger, discipline, shell, skillload
 
 ROOT = pathlib.Path(os.environ.get("CLAUDE_PLUGIN_ROOT") or pathlib.Path(__file__).resolve().parents[1])
 PLUGIN = "agent-skills"
@@ -326,12 +328,18 @@ def rules(tool, args, event, who):
         cmd = args.get("command") or ""
         if not isinstance(cmd, str):
             raise TypeError(f"{tool} command is not a string")
-        return (danger.check_bash(cmd, cfg, event.get("cwd"), who())
-                + coordination.check_bash(cmd, background(tool, args), who(), cfg))
+        found = (danger.check_bash(cmd, cfg, event.get("cwd"), who())
+                 + coordination.check_bash(cmd, background(tool, args), who(), cfg))
+        try:  # its own fault never drops the findings above
+            found += discipline.check_bash(cmd, event, who(), cfg)
+        except Exception as e:
+            config.log_error("guard.discipline", e)
+        return found
     if tool in WRITE_TOOLS:
         found = danger.check_write(args.get("file_path") or args.get("notebook_path"), cfg)
-        try:  # its own fault never drops the danger findings above
+        try:
             found += skillload.check_write(event, who(), cfg)
+            found += discipline.check_write(args, event, who(), cfg)
         except Exception as e:
             config.log_error("guard", e)
         return found
