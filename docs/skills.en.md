@@ -1,4 +1,4 @@
-<!-- translated-from: 8a7c584f4c823bb021fc39cb13f5fd569d787071 -->
+<!-- translated-from: 5ac65a0e62bb64e6539052de09f31728b138749f -->
 # Skill catalog
 
 This page covers the 40 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 16 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
@@ -215,7 +215,7 @@ Which skill owns a PR, and who merges it:
 
 ### tune-automode
 - **When:** the auto-mode classifier denied an action and the user wants that kind of action allowed from now on, or the user wants to change what auto mode lets the agent do. "auto mode 가 막았어" ("auto mode blocked it"), "이거 허용되게 규칙 추가해줘" ("add a rule so this is allowed").
-- **What it does:** From the denial category and the denied action, it drafts the smallest allow, soft_deny or environment rule that covers that action class. A rule carries the action class, the conditions that make it safe, and `Not covered:`. After a review checklist (no blanket allows, no production-destructive verbs the user did not name, only the user's own chat counts as authorization), `scripts/automode_rule.py emit` shows the diff and writes a standalone script with the spec embedded under the home directory. The user applies it with `! python3 -I <path> --apply <spec hash>`; the hash must match the spec whose diff the user saw. The script takes a timestamped backup, merges idempotently, validates the JSON and prints the rollback command. The agent never edits settings.json, never runs that script, and never works around the denial while waiting.
+- **What it does:** From the denial category and the denied action, it drafts the smallest allow, soft_deny or environment rule that covers that action class. A rule carries the action class, the conditions that make it safe, and `Not covered:`. After a review checklist (no blanket allows, no production-destructive verbs the user did not name, only the user's own chat counts as authorization), `scripts/automode_rule.py emit` lints the spec (it refuses a spec whose `refusal_category` is missing or `no-verdict`, and an allow rule without `Not covered:`; it warns on blanket wording, ticket or PR numbers, token-like strings and a rule that nearly repeats an existing one), shows the diff and writes a standalone script with the spec embedded under the home directory. The user applies it with `! python3 -I <path> --apply <spec hash>`; the hash must match the spec whose diff the user saw. The script takes a timestamped backup, merges idempotently, validates the JSON and prints the rollback command. The agent never edits settings.json, never runs that script, and never works around the denial while waiting.
 - **Ships with:** `scripts/automode_rule.py`, its tests, `references/example-settings.json`.
 - **Related:** `permissions.allow` in the user settings and `agent-skills.json` keys belong to `skills-config` (which shares this skill's engine when it carries autoMode rules too); project settings and hooks belong to the built-in `update-config`; a first draft for a whole project belongs to the built-in `/auto-mode-setup`. `orchestrate`'s Frame and Refused acts use this skill for a repo's standing merge and deploy rules ("프로젝트 지속 승인" (standing project approval)).
 
@@ -489,7 +489,7 @@ Program state lives in `~/.claude/programs/<slug>/`: `program.json`, the append-
 | `land-check` | Diagnoses readiness without merging |
 | `landed` | Records a merge that happened elsewhere |
 | `backfill` | Adds PRs merged before registration, and their main CI, to the ledger |
-| `heavy` | Runs heavy commands (compose, image builds) limited to 2 slots across the machine |
+| `heavy` | Runs heavy commands (compose, image builds) limited to machine-wide slots. The count is `landing.heavy_slots`, then `orchestrate.heavy_slots` in `agent-skills.json`, then a quarter of the CPUs (at least 2) |
 | `wait` | Lead only. Waits until there's a message to handle and prints `CLOSE OUT` lines |
 | `decide` | Registers (`add`), lists (`list`) and closes (`done`, `drop`) a decision the orchestrator or lead is waiting on the user for. It shows in the dashboard's Needs you with a button per option; a button records the answer and closes the decision, then sends one line, `decision <id>: <answer>`, to the orchestrator's or lead's terminal, once it is idle if it is busy |
 
