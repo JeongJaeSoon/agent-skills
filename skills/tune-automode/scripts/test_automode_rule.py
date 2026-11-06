@@ -345,6 +345,12 @@ class EmitTest(Base):
         r, _ = self.emit_spec({"add": {"allow": ["Merging pull requests. Not covered: a.", ]}, "refusal_category": "user-request"})
         self.assertNotIn("near-duplicate", r.stdout)
 
+    def test_short_korean_words_still_count_for_duplicates(self):
+        old = "로컬 서버 종료. Not covered: 원격 서버."
+        self.settings.write_text(json.dumps({"autoMode": {"allow": ["$defaults", old]}}))
+        r, _ = self.emit_spec({"add": {"allow": ["로컬 서버 종료. Not covered: 원격 서버, 운영 서버."]}, "refusal_category": "user-request"})
+        self.assertIn("near-duplicate of an existing allow rule", r.stdout)
+
     def test_apply_does_not_lint(self):
         spec = {"add": {"allow": ["No part here."]}}
         self.assertEqual(self.apply(spec).returncode, 0)
