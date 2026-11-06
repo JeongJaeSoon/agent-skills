@@ -25,25 +25,32 @@ def q(i, state, **kw):
 
 # --- pressure: every waiting entry is one item, whatever the number; gave_up and failed ask the human one by one.
 queue(q(1, "waiting"), q(2, "retrying"), q(3, "done"), q(4, "gave_up", ended=T), q(5, "failed", error="Exit code 1", ended=T))
-dismissed = {}
-items = fleet.pressure_items({}, dismissed)
+mem = {}
+items = fleet.pressure_items({}, mem)
 by_key = {i["key"]: i for i in items}
 assert sorted(by_key) == ["ext:pressure:queue", "ext:pressure:queue:q-4", "ext:pressure:queue:q-5"], sorted(by_key)
 assert by_key["ext:pressure:queue"]["title"].startswith("기계 대기 2건"), by_key["ext:pressure:queue"]["title"]
 assert "포기" in by_key["ext:pressure:queue:q-4"]["title"] and "재시도 실패: Exit code 1" in by_key["ext:pressure:queue:q-5"]["title"]
 assert all(i["type"] == "pc_pressure" and i["command"].endswith("pressure.py queue") for i in items)
 assert not (D / "inbox-external.jsonl").exists(), "reading the queue writes nothing"
+assert mem["pressure_shown"] == ["q-1", "q-2"]
 
-# --- suppression is by queue id. A closure of one entry lowers the count; dismissing the one item dismisses the entries it
-# counted, so an entry that arrives later shows again ("기계 대기 2건": one closed, one open, a new one).
+# --- suppression is by queue id. A closure of one entry lowers the count; dismissing the one item dismisses the entries the
+# page last drew in it, so an entry that arrives later shows again ("기계 대기 2건": one closed, one open, a new one).
 items = fleet.pressure_items({"pressure:queue:q-1": {"state": "done", "ts": fleet.iso(NOW)}}, {})
 assert next(i for i in items if i["key"] == "ext:pressure:queue")["title"].startswith("기계 대기 1건")
-dismissed = {"ext:pressure:queue": "2026-11-06T11:00:00Z"}
-items = fleet.pressure_items({}, dismissed)
+mem = {"dismissed": {"ext:pressure:queue": "2026-11-06T11:00:00Z"}, "pressure_shown": ["q-1", "q-2"]}
+items = fleet.pressure_items({}, mem)
 assert [i["key"] for i in items] == ["ext:pressure:queue:q-4", "ext:pressure:queue:q-5"], items
-assert dismissed == {"ext:pressure:queue:q-1": "2026-11-06T11:00:00Z", "ext:pressure:queue:q-2": "2026-11-06T11:00:00Z"}, dismissed
+assert mem["dismissed"] == {"ext:pressure:queue:q-1": "2026-11-06T11:00:00Z", "ext:pressure:queue:q-2": "2026-11-06T11:00:00Z"}, mem
+# B joins the queue after the page drew only A, and A's item is dismissed before the next collect: B was never seen, so it shows.
+queue(q(1, "waiting"), q(6, "waiting"))
+mem = {"dismissed": {"ext:pressure:queue": "2026-11-06T11:00:00Z"}, "pressure_shown": ["q-1"]}
+items = fleet.pressure_items({}, mem)
+assert list(mem["dismissed"]) == ["ext:pressure:queue:q-1"] and len(items) == 1 and items[0]["title"].startswith("기계 대기 1건"), (mem, items)
+assert mem["pressure_shown"] == ["q-6"]
 queue(q(1, "waiting"), q(2, "retrying"), q(6, "waiting"))
-items = fleet.pressure_items({"pressure:queue:q-1": {"state": "done", "ts": fleet.iso(NOW)}}, dismissed)
+items = fleet.pressure_items({"pressure:queue:q-1": {"state": "done", "ts": fleet.iso(NOW)}}, {"dismissed": {"ext:pressure:queue:q-2": "x"}})
 assert len(items) == 1 and items[0]["title"].startswith("기계 대기 1건") and "docker compose up" in items[0]["title"], items
 fleet.write_atomic(tmp / "pressure-queue.json", json.dumps({"a": q(1, "waiting"), "b": {"id": 7, "what": "x", "state": "waiting"}, "c": "junk"}))
 assert fleet.pressure_items({}, {})[0]["title"].startswith("기계 대기 1건"), "a row that is no whole entry costs only itself"
@@ -68,6 +75,13 @@ fleet.append_line(log, {"op": "clear", "id": "Xa", "at": "2026-11-06T10:30:00Z"}
 fleet.append_line(log, {"op": "found", "id": "Xa", "code": "X", "card": "/w/a", "title": "again", "detected_at": "2026-11-06T11:00:00Z"})
 assert [i["key"] for i in fleet.patrol_items({})][0] == "ext:patrol:Lc:2026-11-06T10:05:00Z" and \
     "ext:patrol:Xa:2026-11-06T11:00:00Z" in [i["key"] for i in fleet.patrol_items({})], "after a clear, the same id is a new occurrence"
+
+# --- a closed item can be reopened while its source still holds it (no inbox line is needed or written).
+import tidy  # noqa: E402
+assert tidy.no_reopen("ext:patrol:Lc:2026-11-06T10:05:00Z") is None and tidy.no_reopen("ext:patrol:Gone:2026-11-01T00:00:00Z")
+queue(q(1, "waiting"))
+assert tidy.no_reopen("ext:pressure:queue:q-1") is None and tidy.no_reopen("ext:pressure:queue:q-404")
+(tmp / "pressure-queue.json").unlink()
 
 # --- the old copies in inbox-external.jsonl: not shown, and `migrate-inputs` resolves the open ones (reason migrated).
 inbox = D / "inbox-external.jsonl"
@@ -102,16 +116,24 @@ assert archive.exists() and not sends.exists() and stat.S_IMODE(archive.stat().s
 fleet.append_line(sends, {"at": at, "session": "wt-x", "handle": "term_x", "text": "use CSV", "ok": True, "typed": True, "code": 200})
 assert sent.import_sends(apply=True) == {"typed": 1, "added": 0, "skipped": 1}, "a line already in the log is not added twice"
 assert archive.exists() and sends.exists(), "an archive already there is not replaced"
+# A typed line the page appended after the rename (its log write failed) is in the new sends.jsonl: the next run takes it.
+at2 = fleet.iso(NOW - dt.timedelta(minutes=3))
+fleet.append_line(sends, {"at": at2, "session": "wt-x", "handle": "term_x", "text": "late fallback", "ok": True, "typed": True, "code": 200})
+assert sent.import_sends(apply=True) == {"typed": 2, "added": 1, "skipped": 1}
+assert [r["text"] for r in sent.read_log(NOW - dt.timedelta(days=1))] == ["use CSV", "late fallback"]
+assert archive.read_text().count("use CSV") == 1, "the archive was not touched"
 rows = sent.read_log(NOW - dt.timedelta(days=1))
 assert [(r["from"], r["to"], r["kind"], r["channel"], r["text"], r["ts"]) for r in rows] == [
-    ("dashboard", "wt-x", "dashboard", "term_x", "use CSV", at)], rows
+    ("dashboard", "wt-x", "dashboard", "term_x", "use CSV", at),
+    ("dashboard", "wt-x", "dashboard", "term_x", "late fallback", at2)], rows
 
 # --- Sent: the log and Orca make rows; a transcript copy folds in or is only counted.
 tr = {"ts": at, "to": "wt-x", "text": "use CSV", "channel": "Agent", "source": "transcript"}
 lost = {"ts": at, "to": "card-q", "text": "nobody logged this", "channel": "Agent", "source": "transcript"}
 page = sent.page([tr, lost], days=1, now=NOW)
-assert [(r["source"], r.get("also")) for r in page["rows"]] == [("log", ["transcript"])], page["rows"]
-assert page["unrecorded"] == 1 and page["total"] == 1, page
+assert [(r["text"], r["source"], r.get("also")) for r in page["rows"]] == [
+    ("late fallback", "log", None), ("use CSV", "log", ["transcript"])], page["rows"]
+assert page["unrecorded"] == 1 and page["total"] == 2, page
 assert sent.page([], days=1, now=NOW)["unrecorded"] == 0
 
 # --- pr-events.jsonl: nothing writes it; `migrate-inputs` makes the old file read-only.

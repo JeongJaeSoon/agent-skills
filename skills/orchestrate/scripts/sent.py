@@ -78,32 +78,48 @@ def read_log(since):
 
 def import_sends(apply=False):
     """Move the typed lines of the old sends.jsonl into the log as kind=dashboard rows, then keep the file read-only as
-    sends.archive.jsonl. Safe to run again: a row already in the log (same ts, to, text) is skipped, and an archive
-    already there is not replaced.
-    Returns {"typed", "added", "skipped"}; nothing is written unless apply."""
+    sends.archive.jsonl. Safe to run again, and by two runs at once: under a lock, the file is renamed first, so a
+    typed line the page appends meanwhile (when the log was unwritable) lands in a new sends.jsonl, which a later
+    run reads too. A row already in the log (same ts, to, text) is skipped, and an archive already there is never
+    replaced. Returns {"typed", "added", "skipped"}; nothing is written unless apply."""
     path = fleet.state_dir() / "sends.jsonl"
-    out = {"typed": 0, "added": 0, "skipped": 0}
-    if not path.is_file():
-        return out
-    have = {(r["ts"], r["to"], r["text"]) for p in sorted(sent_dir().glob("*.jsonl")) for r in fleet.read_lines(p)
-            if isinstance(r, dict) and all(isinstance(r.get(k), str) for k in ("ts", "to", "text"))}
-    for r in fleet.read_lines(path):
-        if not (isinstance(r, dict) and r.get("typed") and isinstance(r.get("at"), str) and isinstance(r.get("text"), str)
-                and r["text"].strip() and isinstance(r.get("session"), str) and fleet.parse(r["at"])):
-            continue
-        out["typed"] += 1
-        if (r["at"], r["session"], r["text"]) in have:
-            out["skipped"] += 1
-            continue
-        if apply:
-            add(r["session"], r["text"], kind="dashboard", channel=r.get("handle"), sender="dashboard",
-                now=fleet.parse(r["at"]))
-            have.add((r["at"], r["session"], r["text"]))
-        out["added"] += 1
     archive = path.with_name("sends.archive.jsonl")
-    if apply and not archive.exists():  # the page's other actions start a fresh sends.jsonl
-        os.replace(path, archive)
-        os.chmod(archive, 0o400)
+    out = {"typed": 0, "added": 0, "skipped": 0}
+    if not (path.is_file() or archive.is_file()):
+        return out
+
+    def run():
+        if apply and path.is_file() and not archive.exists():  # the page's other actions start a fresh sends.jsonl
+            os.replace(path, archive)
+            os.chmod(archive, 0o400)
+        have = {(r["ts"], r["to"], r["text"]) for p in sorted(sent_dir().glob("*.jsonl")) for r in fleet.read_lines(p)
+                if isinstance(r, dict) and all(isinstance(r.get(k), str) for k in ("ts", "to", "text"))}
+        seen = set()
+        for p in (archive, path):
+            for r in fleet.read_lines(p) if p.is_file() else ():
+                if not (isinstance(r, dict) and r.get("typed") and isinstance(r.get("at"), str) and isinstance(r.get("text"), str)
+                        and r["text"].strip() and isinstance(r.get("session"), str) and fleet.parse(r["at"])):
+                    continue
+                k = (r["at"], r["session"], r["text"])
+                if k in seen:
+                    continue
+                seen.add(k)
+                out["typed"] += 1
+                if k in have:
+                    out["skipped"] += 1
+                    continue
+                if apply:
+                    add(r["session"], r["text"], kind="dashboard", channel=r.get("handle"), sender="dashboard",
+                        now=fleet.parse(r["at"]))
+                    have.add(k)
+                out["added"] += 1
+
+    if not apply:
+        run()
+        return out
+    with open(path.with_name("sends.lock"), "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        run()
     return out
 
 

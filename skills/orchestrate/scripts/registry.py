@@ -235,6 +235,7 @@ STORES = [
           ("fleet:log_page_send", "fleet:open_session", "fleet:answer_prompt"), ("nobody",),
           rule="what the page did that is not an instruction: opens, prompt answers, refused or failed attempts. "
                "A line typed into a session is a sent-log row (kind=dashboard)"),
+    Store("sendslock", "D/sends.lock", {"page.action": LOCK}, ("sent:import_sends",)),
     Store("sendsarchive", "D/sends.archive.jsonl", {"send.instruction": BACKUP}, ("sent:import_sends",), ("nobody",),
           rule="sends.jsonl as it was before PR 6, read-only; its typed lines are in the sent log"),
     Store("sent", "D/sent/*.jsonl", {"send.instruction": CANONICAL}, ("sent:add",), ("sentpage", "patrol"),

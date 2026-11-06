@@ -2816,7 +2816,7 @@ def cmd_inbox(argv):
     elif argv[:1] == ["list"]:
         import store as db_store
         # The machine-wait items are not external_items(): the dashboard builds them from the queue, as here.
-        for i in fleet.external_items() + fleet.pressure_items(db_store.ext_closures(), {}):
+        for i in fleet.external_items() + fleet.pressure_items(db_store.ext_closures(), {}):  # a scratch memory: listing dismisses nothing
             print(f"{i['at']}  {i['type']}  {i['key'][4:]}  {i['title']}")
         return
     else:

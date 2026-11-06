@@ -2315,7 +2315,7 @@ class Fleet:
         syncs = [i for i in syncs if i["type"] != "reload_pending" or RELOAD_FAILS.get(i["terminal"], 0) >= tries]
         mem["reload_shown"] = {i["terminal"]: i["title"] for i in syncs if i["type"] == "reload_pending"}
         import store as db_store
-        pressure = pressure_items(db_store.ext_closures(), mem.setdefault("dismissed", {}))
+        pressure = pressure_items(db_store.ext_closures(), mem)
         items += kept + pressure + syncs + watcher_items(sessions, now) + list(self.checks)
         for it in sticky.values():
             if it.get("open"):
@@ -2529,11 +2529,13 @@ def patrol_items(closures):
     return out
 
 
-def pressure_items(closures, dismissed):
+def pressure_items(closures, mem):
     """Needs you from pressure-queue.json. A held command that waits or retries is the machine's to wait on, so all of
     them are one item, "기계 대기 N건"; one that gave up or failed asks the human and is its own item. Suppressing
-    (a closure, or a dismissal on the page) is by queue id: dismissing the one item dismisses the entries it counted,
-    so an entry that comes later shows again. `dismissed` is the page's dict, changed in place for that."""
+    (a closure, or a dismissal on the page) is by queue id: dismissing the one item dismisses the entries it counted
+    when the page last drew it (`mem["pressure_shown"]`), so an entry that comes later shows again. `mem` is the
+    collector's memory dict, changed in place for that."""
+    dismissed = mem.setdefault("dismissed", {})
     q = read_json(agent_state() / "pressure-queue.json", {})
     entries = [e for e in (q.values() if isinstance(q, dict) else ())
                if isinstance(e, dict) and isinstance(e.get("id"), str) and isinstance(e.get("what"), str)]
@@ -2541,9 +2543,12 @@ def pressure_items(closures, dismissed):
     shut = lambda e: (closures.get(key(e)) or {}).get("state") == "done" or f"ext:{key(e)}" in dismissed
     waiting = [e for e in entries if e.get("state") in ("waiting", "retrying") and not shut(e)]
     if (at := dismissed.pop(PRESSURE_WAIT_KEY, None)):
+        seen = set(mem.get("pressure_shown") or ())
         for e in waiting:
-            dismissed[f"ext:{key(e)}"] = at
-        waiting = []
+            if e["id"] in seen:
+                dismissed[f"ext:{key(e)}"] = at
+        waiting = [e for e in waiting if e["id"] not in seen]
+    mem["pressure_shown"] = [e["id"] for e in waiting]
     hhmm = lambda t: time.strftime("%H:%M", time.localtime(t)) if isinstance(t, (int, float)) else "?"
     when = lambda t: iso(dt.datetime.fromtimestamp(t, dt.timezone.utc)) if isinstance(t, (int, float)) else None
     out = []
@@ -2562,6 +2567,17 @@ def pressure_items(closures, dismissed):
                     "url": None, "command": f"python3 {PRESSURE_SCRIPT} queue",
                     "at": when(max(e.get("added") or 0 for e in waiting)), "source": "pressure-watch"})
     return out
+
+
+def source_item_alive(key):
+    """Whether the source still holds the item of a READ_FROM_SOURCE key (without ext:), open or closed: a patrol
+    finding that is not acked or cleared, a queue entry still in pressure-queue.json. A closed one can be reopened only
+    while this holds."""
+    if key.startswith("pressure:queue:"):
+        q = read_json(agent_state() / "pressure-queue.json", {})
+        return isinstance(q, dict) and any(isinstance(e, dict) and e.get("id") == key[len("pressure:queue:"):] for e in q.values())
+    rows = [r for r in read_lines(agent_state() / "patrol.jsonl") if isinstance(r, dict) and r.get("id")]
+    return any(not f.get("acked") and f"patrol:{i}:{f.get('detected_at')}" == key for i, f in patrol_standing(rows).items())
 
 
 def external_marked(now=None, lost=None):
