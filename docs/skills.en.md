@@ -1,7 +1,7 @@
-<!-- translated-from: dd19e47c36343f14bd6ccd583356d3f63e3f0947 -->
+<!-- translated-from: 950ab10c4ec571632d40db0b225a89cf472ccf57 -->
 # Skill catalog
 
-This page covers the 40 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 16 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
+This page covers the 38 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 16 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
 
 Follow the [configuration migration guide](configuration-migration.md) for changed defaults and preservation of existing data. Notes, ledgers and personal folders require explicit configuration; report time defaults to UTC.
 
@@ -10,7 +10,7 @@ Even small changes need a reviewer other than the author. Trivial means about 20
 ## Flow
 
 ```text
-One ticket  write-ticket → deliver-ticket → handoff-ticket → end-session
+One ticket  write-ticket → deliver-ticket → dispatch-card next-ticket mode → end-session
               (dispatch-card: send work elsewhere while this session keeps working)
 Project     orchestrate ─ deliver-ticket in each worker ─ orch land
               ─ main guardian · QA lead ─ dashboard
@@ -35,12 +35,12 @@ Which skill owns a PR, and who merges it:
 | deliver-ticket | My PR this session is working: writing, review replies, merge, release | The session, per §5 (`gh pr merge`; a stack lands with `gh stack merge`) |
 | watch-prs | Waiting PRs a scheduled round collects: review requests naming me, my PRs waiting on review (requests, reminders), my PRs ready to merge | Only my PRs that pass every `merge_repos` gate |
 | orchestrate | A program worker's PRs | `orch land`, or a plain merge the human approved |
-| handoff-ticket | Opens no PR: picks the next card | Never |
+| dispatch-card next-ticket mode | Opens no PR: picks the next card | Never |
 
 - deliver-ticket ↔ watch-prs: a PR whose branch is checked out in a live worktree is merged by that session; watch-prs skips it.
 - orchestrate ↔ watch-prs: a PR in a program ledger is merged by `orch land`; watch-prs does not merge it even after the program stops, and only sends its reminders. A program whose ledger has no event within `stale_days` counts as abandoned, and its PRs go back to watch-prs for reminders and merges.
 - orchestrate ↔ deliver-ticket: workers run deliver-ticket but merge with `orch land` instead of §5.
-- handoff-ticket's "머지하고 다음 진행해줘" (merge, then go on): deliver-ticket merges; handoff-ticket only opens the next card after.
+- The next-ticket mode's "머지하고 다음 진행해줘" (merge, then go on): deliver-ticket merges; dispatch-card only opens the next card after.
 
 ## One ticket
 
@@ -83,25 +83,17 @@ Which skill owns a PR, and who merges it:
   - **Done:** Done means every acceptance criterion is met.
     - Inside a program: a card whose first prompt approves the merge lands its own PR with `orch land` and closes. It stops at READY, with a `READY-WAIT:` line, only for a wait on a person or another PR, and under human-gate.
     - Standalone card: in a repo with the land executor on, it does not merge. It reports READY with the head sha, the CI run and the review verdict, and the orchestrator merges. In a repo with the executor off, or in a session the user opened, it squash-merges on its own unless the user put it on hold.
-    - After leaving the completion comment, it moves on to `handoff-ticket` in the same turn.
+    - After leaving the completion comment, it moves on to `dispatch-card`'s next-ticket mode in the same turn.
 - **Bundled:** `scripts/sticky-comment.sh` (keeps PR test results in a single comment; `--check` confirms that comment names the current head sha), `scripts/review_pick.py` (picks the independent reviewer). The skill body keeps only the rules that decide what ships; procedures are split into references: `evidence.md` (bug, refactor and existing-fix procedures), `independent-review.md` (independent review procedures), `pull-request.md` (PR body sections and stacks), `review-loop.md` (the loop from opening the PR to ready, and watching when someone else merges), `review-bot-triage.md` (how to sort review threads into fix / dismiss / ask; used for CodeRabbit, Copilot and human reviews).
-- **Related:** `figure-it-out`, `architect`, `how`, `why`, `tdd`, `prune-comments`, the verdict framework from `interrogate`, `write-plainly`, `blast-radius`, `write-ticket`, `use-tracker`, `use-notes`, `orchestrate` (`orch land`, `orch heavy`), `handoff-ticket`.
+- **Related:** `figure-it-out`, `architect`, `how`, `why`, `tdd`, `prune-comments`, the verdict framework from `interrogate`, `write-plainly`, `blast-radius`, `write-ticket`, `use-tracker`, `use-notes`, `orchestrate` (`orch land`, `orch heavy`), `dispatch-card` (next-ticket mode).
 
 ### ui-review
 - **When:** before a mockup, a screen or a UI PR is shown to a person ("UI 리뷰해줘", "시안 점검해줘"), and after a person points out a UI problem, to add the rule.
 - **What:** measures the page in headless Chrome at 1280 and 390 (row heights, button widths in a column, edge alignment, vertical centers, 4px grid, overflow, link underlines, component consistency against an existing screen) with `scripts/ui_measure.py`, and walks the user's scenario for system steps, duplicated options and grouping (`references/walkthrough.md`). The product's design system comes first. A FAIL left without a stated exception means the mockup is not sent. Rules and evidence: `references/rules.md`.
 - **Related:** `deliver-ticket` §3 and visual-evidence, `orchestrate` leads before a mockup goes to the human.
 
-### handoff-ticket
-- **When:** "핸드오프" (handoff), "다음 작업으로 넘어가자" (let's move on to the next task), "남은 작업 있어?" (is there work left?), "머지하고 다음 진행해줘" (merge and go on to the next one), and the moment a ticket is done. "병렬로 진행" (run in parallel) belongs here only when it means ticket cards in the same repo; if it could mean subagents or side-branch cards, that is settled first. If this session has to keep working, use `dispatch-card`.
-- **What it does:**
-  - Picks what to do next on its own. Loose ends are handled here, and independent work becomes a ticket. Next tickets are ranked by priority, dependencies and file conflicts. The only thing it may ask is "which ticket is next".
-  - A program worker (one whose brief has a `PROGRAM:` line) sends worker_done and then waits for the lead's decision.
-  - After confirming the ticket is done, it opens a new card with `orca worktree create --prompt "/goal <ID>. CLOSE: …"`. Even for a parallel request, it's one card per ticket.
-  - It confirms the new card started with `orca terminal wait` and `read`, then closes this session with `end-session`.
-- **Related:** The step after `deliver-ticket`. It always ends with `end-session`.
-
-### dispatch-card (formerly `dispatch-work`)
+### dispatch-card (formerly `dispatch-work`, `handoff-ticket`)
+One skill for both ways of starting a new Orca card. If this session keeps working, it's dispatch (§0–§4); if this ticket is done and this session closes, it's the next-ticket mode (§5, body in `references/next-ticket.md`).
 - **When:** "별도의 세션을 만들어서 ~ 해줘" (spin up a separate session and do ~), "~ repo에 작업 지시해줘" (give the ~ repo a task): sending work to another repo or a side branch while this session keeps working.
 - **What it does:**
   - Confirms the target repo with `orca repo list`.
@@ -109,10 +101,16 @@ Which skill owns a PR, and who merges it:
   - Checks for duplicate cards, then creates the card.
   - Puts a `CLOSE` line in the brief, so the card closes itself through `end-session` §8 once its done criteria are met.
   - Confirms the start just once and goes back to its own work. It doesn't wait for the result and doesn't call `end-session`.
-- **Related:** `use-notes`, `write-ticket`. Closing this session and handing over is `handoff-ticket`'s job.
+- **Next-ticket mode:**
+  - **When:** "핸드오프" (handoff), "다음 작업으로 넘어가자" (let's move on to the next task), "남은 작업 있어?" (is there work left?), "머지하고 다음 진행해줘" (merge and go on to the next one), and the moment a ticket is done. "병렬로 진행" (run in parallel) belongs here only when it means ticket cards in the same repo; if it could mean subagents or side-branch cards, that is settled first. If this session has to keep working, it's dispatch.
+  - Picks what to do next on its own. Loose ends are handled here, and independent work becomes a ticket. Next tickets are ranked by priority, dependencies and file conflicts. The only thing it may ask is "which ticket is next".
+  - A program worker (one whose brief has a `PROGRAM:` line) sends worker_done and then waits for the lead's decision.
+  - After confirming the ticket is done, it opens a new card with `orca worktree create --prompt "/goal <ID>. CLOSE: …"`. Even for a parallel request, it's one card per ticket.
+  - It confirms the new card started with `orca terminal wait` and `read`, then closes this session with `end-session`.
+- **Related:** `use-notes`, `write-ticket`. The next-ticket mode is the step after `deliver-ticket`, and it always ends with `end-session`.
 
 ### end-session
-- **When:** "세션 종료해줘" (end the session), "현재 세션 정리해줘" (wrap up this session), "아카이브해줘" (archive it), "머지하고 종료하자" (merge and let's finish), the last step of `handoff-ticket`, and an Orca worker about to send `worker_done` (no user phrase needed). A bare "정리해줘" (tidy up) with no object only records the state and keeps the conversation going.
+- **When:** "세션 종료해줘" (end the session), "현재 세션 정리해줘" (wrap up this session), "아카이브해줘" (archive it), "머지하고 종료하자" (merge and let's finish), the last step of `dispatch-card`'s next-ticket mode, and an Orca worker about to send `worker_done` (no user phrase needed). A bare "정리해줘" (tidy up) with no object only records the state and keeps the conversation going.
 - **What it does:**
   - First records the ticket's final state, the completion comment, the worklog and memory.
   - Picks how to close based on the output of `orca worktree current --json`.
@@ -254,7 +252,7 @@ Monitors configured public channels for mentions and replies when requested. Use
   - Inside a session, ticket reads and writes go through `orca linear` / `orca jira` (plain text output, `--json` only when parsing the result), and through MCP only for what Orca lacks (documents, uploads, diff review, releases, milestones and cycles, and a few more). The `tracker_gate` hook denies an MCP call Orca can run as written and prints the matching command. Scripts always use `tracker.py`. The `tracker.py` commands are list, get, children, create, label, comment, attach, transition, reconcile. reconcile reads a ticket and the PRs that deliver it (a PR attached to the ticket, the ID in a title or branch, or after a closing keyword in the body) and only prints which state fits (`started`, `review`, check the criteria, report) and the milestone lines to run; it writes nothing. transition reads the current state first and leaves a ticket alone if it's already at that stage or further along. `--to review` moves a ticket to the state named by `tracker.<adapter>.review_status` when the config sets it, else to In Review, or, if that state doesn't exist, to the one started state whose name contains review.
   - The state vocabulary is triage, backlog, unstarted, started, completed, canceled.
   - The follow-up format is a `follow-up` label, a first line of `파생: <ID> · 원인: <분류>` (derived from: <ID> · cause: <category>), and a related relation.
-  - The one source for NOW, LATER and DROP, the exit condition and the follow-up format is `references/exit-condition.md`. `deliver-ticket`, `write-ticket`, `handoff-ticket`, `end-session` and `task-tracker` point to it.
+  - The one source for NOW, LATER and DROP, the exit condition and the follow-up format is `references/exit-condition.md`. `deliver-ticket`, `write-ticket`, `dispatch-card` (next-ticket mode), `end-session` and `task-tracker` point to it.
   - Ticket bodies are treated as untrusted data.
   - A fixed milestone (a state move, the PR link, the completion comment) is one `tracker.py` line (`transition`, `attach`, `comment`) run in the session, with no MCP call and no delegate. Every other write goes to a delegate agent; reads stay in the session. The delegate is the user's instructions, else `tracker.delegate_agent` in the config, else the plugin agent `agent-skills:task-tracker`; `"none"` writes in the session. `task-tracker` reads the site's own rules (project, status and transition ids, labels, language) on every run from the Markdown file `tracker.rules_file` names, and stops instead of guessing when the key is set but the file is missing or unreadable.
 - **Bundled:** `scripts/tracker.py` (a stdlib-only adapter for Linear and Jira, with a fixture mode), `references/exit-condition.md`, `references/linear.md`, `references/jira.md` (with the Jira setup).
@@ -318,7 +316,7 @@ Reports completed work, current work, decisions and human-only steps with eviden
 - **Bundled:** `references/pruner.md` (the instructions for the pruning subagent).
 
 ### write-skill
-Checks a skill edit for overlapping triggers, unnecessary policy, prompt quality, private names, runnable tests and plugin validity. Edits the authorized source checkout; installed copies and unrelated global settings are not the target.
+Checks a skill edit for overlapping triggers, unnecessary policy, prompt quality, private names, runnable tests and plugin validity. The tests, the pstack sync test and `claude plugin validate` run as one `scripts/check.sh`; a description change runs `claude plugin eval` on the old and new checkout through `scripts/eval_desc.sh`. Edits the authorized source checkout; installed copies and unrelated global settings are not the target.
 
 ## pstack skills (Lauren Tan, MIT)
 
@@ -717,7 +715,7 @@ Of pstack's 58 skills (24 principles and 34 others), we took all 24 principles a
 | statechart, create-formal-verification-skill, maintain-formal-verification-skill | TLA+ models drawn as state charts, and creating and maintaining formal verification skills | Many files and a TLA+ toolchain. Revisit when a project needs it |
 
 ### Not in pstack
-- **Ticket flow:** `write-ticket`, `deliver-ticket`, `handoff-ticket`, `dispatch-card`, `end-session`. One ticket from start to finish, built around Orca cards and a tracker.
+- **Ticket flow:** `write-ticket`, `deliver-ticket`, `dispatch-card`, `end-session`. One ticket from start to finish, built around Orca cards and a tracker.
 - **Running projects:** `orchestrate`'s `orch` ledger, the landing gate and exclusive lane, human-gate, the main guardian, the QA lead, and the `orch-dash` dashboard. The shape follows pstack's playbooks, but it was built fresh on top of Orca Runs and GitHub stacks.
 - **Measurement and adapters:** `reflect`'s measure mode, `use-tracker`, `use-notes`.
 - **Machine upkeep:** `reap-resources`, `tune-automode`, `skills-config`, `setup-pc`.

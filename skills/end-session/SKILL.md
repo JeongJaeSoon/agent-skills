@@ -1,6 +1,6 @@
 ---
 name: end-session
-description: "Use to end, close or archive this session, card or worktree — \"종료해줘\", \"세션 종료해줘\", \"현재 세션 정리해줘\", \"아카이브해줘\", \"머지하고 종료하자\", \"end this session\" — before an Orca worker's worker_done, or when handoff-ticket or the brief says to close. Bare \"정리해줘\"/\"마무리해줘\" or \"작업 기록 남겨줘\" records and keeps the session."
+description: "Use to end, close or archive this session, card or worktree — \"종료해줘\", \"세션 종료해줘\", \"현재 세션 정리해줘\", \"아카이브해줘\", \"머지하고 종료하자\", \"end this session\" — before an Orca worker's worker_done, or when a handoff or the brief says to close. Bare \"정리해줘\"/\"마무리해줘\" or \"작업 기록 남겨줘\" records and keeps the session."
 allowed-tools: Bash(orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json)
 ---
 
@@ -15,7 +15,7 @@ a task that finished, stalled or went badly does not.
 | The user asked ("종료해줘", "세션 정리해줘", "종료해도 될까?") | [`references/user-ending.md`](references/user-ending.md) first: §1 (is it a request to end), §2 (what `orca worktree current` says this session is), §5 (`EndConversation`), then §3, §4, §6 here |
 | An Orca worker settling its task | §7 here, no user phrase needed |
 | A card whose brief has a `CLOSE` line, at the brief's done | §8 here, no user phrase needed |
-| `handoff-ticket` §5, once its successor card has started | §3 and §6, then `orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json`; the card stays for "Who cleans up" |
+| `dispatch-card` next-ticket mode §5, once its successor card has started | §3 and §6, then `orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json`; the card stays for "Who cleans up" |
 
 ## 3. Leave the record before anything dies
 
