@@ -3188,10 +3188,16 @@ PROMPTS = [(re.compile(r"Enter to select"), "a select menu"),
            (re.compile(r"Waiting for API response · will retry"), "an API retry loop")]
 
 
+# A file diff Claude Code drew: a line-number gutter, then +, - or a context space. It quotes code, so an ENOSPC in it
+# is the reviewed text, not the machine. Other tool output keeps counting: a real "npm ERR! ENOSPC" has no gutter.
+DIFF_LINE = re.compile(r"^[\s⎿]*\d+(?:\s[+\-]|\s\s)")
+
+
 def screen_prompt(lines, activity=None):
     tail = lines[-25:]
+    text = "\n".join(l for l in tail if not DIFF_LINE.match(l))
     for rx, kind in PROMPTS:
-        if rx.search("\n".join(tail)):
+        if rx.search(text):
             return kind, next((l.strip() for l in reversed(tail) if l.strip().endswith("?")), "")
     return ("waiting for input", "") if activity == "waiting" else None
 
