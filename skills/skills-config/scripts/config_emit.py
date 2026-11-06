@@ -52,7 +52,8 @@ AUTOMODE_PATH = REPO / "skills" / "tune-automode" / "scripts" / "automode_rule.p
 # Where each agent-skills.json section is documented (key names, "a | b | c" values) and where its DEFAULTS live
 # (types). A dotted prefix maps a nested section to its own DEFAULTS.
 SECTIONS = {
-    "prs": (["skills/watch-prs/SKILL.md"],
+    "prs": (["skills/watch-prs/SKILL.md", "skills/watch-prs/references/config.md",
+             "skills/watch-prs/references/review-wait.md", "skills/watch-prs/references/notify.md"],
             {"": "skills/watch-prs/scripts/prs.py", "notify": "skills/watch-prs/scripts/notify.py"}),
     "mentions": (["skills/watch-mentions/SKILL.md"], {"": "skills/watch-mentions/scripts/mentions.py"}),
     "reap": (["skills/reap-resources/SKILL.md", "docs/pressure.md"],
