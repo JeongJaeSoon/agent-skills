@@ -269,6 +269,15 @@ for attempt in ("fails", "sends"):
 assert not (roundstate / "mentions" / "lock.json").exists()
 assert sh("plan").returncode == 0 and json.loads(sh("ingest", str(hit)).stdout)["new"] == [], "a sent item is not resent"
 
+# A missing or corrupt items file must not become an empty round that moves the cursor.
+(roundstate / "mentions" / "lock.json").write_text(json.dumps({"run": NOW}))
+bad = state.parent / "bad.json"
+bad.write_text("{not json")
+for arg in (str(state.parent / "nope.json"), str(bad)):
+    r = sh("send", arg)
+    assert r.returncode != 0 and "not a readable JSON list" in r.stderr and (roundstate / "mentions" / "lock.json").exists(), r
+(roundstate / "mentions" / "lock.json").unlink()
+
 # send edge cases: a dead inbox sends nothing (exit 2); a worker (--from) skips the check and omits --to; no run, no send.
 sstate = pathlib.Path(tempfile.mkdtemp()) / "mentions"
 sstate.mkdir()

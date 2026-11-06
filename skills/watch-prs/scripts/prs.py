@@ -1316,6 +1316,8 @@ def send(state, cfg, sender=None, run=subprocess.run):
     except ValueError as e:
         return 2, str(e)
     done = sent_marker(state, plan)
+    if done.get("done"):
+        return 0, "already sent for this plan; commit next"
     if not done.get("body"):
         if err := orca_send(f"watch-prs: {len(plan['new'])}건", text, cfg.get("inbox_to"), sender, run):
             return 1, f"send failed, nothing committed: {err}"

@@ -371,7 +371,14 @@ def main():
         items = read_json(path, []) if path else []
         print(f"commit: {commit(items, cfg, STATE, now)} items marked seen")
     elif cmd == "send":
-        code, why = send(read_json(positional(), None) or [], cfg, STATE, now, sender=opt("--from"))
+        path = positional()
+        try:
+            items = json.loads(pathlib.Path(path).read_text())
+            if not isinstance(items, list):
+                raise ValueError(path)
+        except (OSError, ValueError):
+            sys.exit(f"send: {path} is not a readable JSON list; nothing sent or committed")
+        code, why = send(items, cfg, STATE, now, sender=opt("--from"))
         print(why, file=sys.stderr if code else sys.stdout)
         sys.exit(code)
     elif cmd == "annotate":

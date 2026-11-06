@@ -1078,6 +1078,7 @@ try:
     fail_at.clear()
     code, _ = p.send(sst, scfg, run=fake_run)
     assert code == 0 and len(sent_calls) == 3, "the rerun resends only the dispatch message"
+    assert p.send(sst, scfg, run=fake_run)[0] == 0 and len(sent_calls) == 3, "a completed send is never repeated"
     first, second = sent_calls[0], sent_calls[2]
     assert second[second.index("--subject") + 1] == "watch-prs: dev 확인 시작", second
     body_lines = second[second.index("--body") + 1].splitlines()
