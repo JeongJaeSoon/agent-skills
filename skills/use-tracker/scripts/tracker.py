@@ -728,11 +728,19 @@ def _detect(cwd, branch):
     linear = key_set(teams, "teams")
     connection = orca_result("jira", "connection")
     jira = None
+    jira_failed = connection is None and bool(linear)  # a failed probe is not "Jira is not connected"
     if isinstance(connection, dict) and connection.get("connected"):
-        jira = key_set(orca_result("jira", "project", "list"), "projects")
+        projects = orca_result("jira", "project", "list")
+        if projects is None:
+            jira_failed = True
+        else:
+            jira = key_set(projects, "projects")
 
     def out(adapter, source, evidence, ambiguous=False):
         return {"adapter": adapter, "source": source, "evidence": evidence, "ambiguous": ambiguous}
+
+    if jira_failed:
+        return out("linear", "ambiguous", "the Jira probe failed, so Jira may be connected", True)
 
     if not linear and jira is None:
         return out("linear", "default", "no Orca Linear or Jira connection")

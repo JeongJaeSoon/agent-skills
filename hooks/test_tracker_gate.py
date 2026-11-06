@@ -91,12 +91,15 @@ denied(LIN + "list_issue_statuses", {"team": "ABC"}, "orca linear team states --
 denied(LIN + "list_teams", {}, "orca linear team list")
 for tool in ("list_users", "list_issue_labels", "list_issue_statuses"):
     passed(LIN + tool, {}, "pass-unsupported-key")  # the CLI needs --team
-t = denied(LIN + "save_issue", {"id": "ABC-1", "state": "Done", "title": "T", "addLabels": ["bug"], "blockedBy": ["ABC-2"],
+t = denied(LIN + "save_issue", {"id": "ABC-1", "title": "T", "addLabels": ["bug"], "blockedBy": ["ABC-2"],
                                 "priority": 2, "links": [{"url": "https://e.test/pr/1", "title": "PR"}]},
-           "orca linear status set ABC-1 --to Done", "orca linear save-issue ABC-1 --title T --priority high",
+           "orca linear save-issue ABC-1 --title T --priority high",
            "orca linear label add ABC-1 --label bug", "orca linear relation add ABC-1 --related ABC-2 --type blocked-by",
            "orca linear attach ABC-1 --url https://e.test/pr/1 --title PR")
 denied(LIN + "save_issue", {"id": "ABC-1", "removeBlocks": ["ABC-3"]}, "relation remove ABC-1 --related ABC-3 --type blocks")
+# The MCP state takes a name, type or id; the CLI's --to only an exact name, so a call with `state` passes whole.
+passed(LIN + "save_issue", {"id": "ABC-1", "state": "started"}, "pass-unsupported-key")
+passed(LIN + "save_issue", {"team": "ABC", "title": "New", "state": "Todo"}, "pass-unsupported-key")
 denied(LIN + "save_issue", {"team": "ABC", "title": "New", "description": "d", "labels": ["x"], "parentId": "ABC-5"},
        "orca linear create --title New --team ABC", "--body-file <file>", "--label x", "--parent ABC-5")
 
@@ -180,7 +183,7 @@ denied(*call, transcript=transcript(*bash_pair("a", "orca linear issue ABC-2")))
 denied(*call, transcript=transcript(*bash_pair("a", "orca jira issue ABC-1")))
 denied(*call, transcript=transcript(*bash_pair("a", "python3 tracker.py get ABC-1")))
 denied(*call, transcript=transcript(*bash_pair("a", "orca linear issue ABC-1", ago=3600)))
-denied(*call, transcript=TMP / "missing.jsonl")
+passed(*call, "pass-transcript-unreadable", transcript=TMP / "missing.jsonl")  # it can never show the attempt
 denied(*call, transcript=transcript(*bash_pair("a", "orca linear issue ABC-10")))  # ABC-10 is not ABC-1
 passed(*call, "pass-evidence", transcript=transcript(*bash_pair("a", "orca linear issue https://linear.app/x/issue/ABC-1/slug")))
 bad = bash_pair("a", "orca linear issue ABC-1")

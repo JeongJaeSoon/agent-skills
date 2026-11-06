@@ -661,6 +661,10 @@ if a[:3] == ["linear", "team", "list"] and mode["linear"] is None:
     sys.exit(1)
 if a[:3] == ["linear", "team", "list"]:
     ok({"teams": [{"key": k} for k in mode["linear"]]})
+if a[:2] == ["jira", "connection"] and mode.get("jira_fail") == "connection":
+    sys.exit(1)
+if a[:3] == ["jira", "project", "list"] and mode.get("jira_fail") == "projects":
+    sys.exit(1)
 if a[:2] == ["jira", "connection"]:
     ok({"connected": mode["jira"] is not None, "sites": []})
 if a[:3] == ["jira", "project", "list"]:
@@ -697,9 +701,9 @@ class Detect(unittest.TestCase):
     def git(self, *args):
         subprocess.run(["git", *args], cwd=self.repo, env=self.env, check=True, capture_output=True)
 
-    def connect(self, linear, jira):
+    def connect(self, linear, jira, jira_fail=None):
         with open(self.mode, "w") as fh:
-            json.dump({"linear": linear, "jira": jira}, fh)
+            json.dump({"linear": linear, "jira": jira, "jira_fail": jira_fail}, fh)
         state = os.path.join(self.tmp.name, "state", "tracker-detect.json")
         if os.path.exists(state):
             os.remove(state)
@@ -721,6 +725,17 @@ class Detect(unittest.TestCase):
         self.connect([], ["ENG"])
         r = self.detect()
         self.assertEqual((r["adapter"], r["source"]), ("jira", "orca-connection"))
+
+    def test_failed_jira_probe_is_ambiguous_not_linear(self):
+        # Both trackers hold ABC and the branch names it: a failed Jira probe must not turn that into a Linear write.
+        self.git("checkout", "-q", "-b", "abc-1-fix")
+        for fail in ("projects", "connection"):
+            self.connect(["ABC"], ["ABC"], jira_fail=fail)
+            r = self.detect()
+            self.assertEqual((r["adapter"], r["source"], r["ambiguous"]), ("linear", "ambiguous", True), fail)
+            self.assertIn("probe failed", r["evidence"])
+        self.connect(["ABC"], None)  # Jira answered "not connected": Linear alone is a real answer
+        self.assertFalse(self.detect()["ambiguous"])
 
     def test_failed_linear_probe_never_selects_jira(self):
         self.connect(None, ["ENG"])

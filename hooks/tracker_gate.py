@@ -151,12 +151,14 @@ def lin_save_comment(a):
 
 def lin_save_issue(a):
     if "id" not in a:
-        only(a, {"team", "title", "description", "state", "assignee", "priority", "estimate", "dueDate", "labels",
+        # `state` is absent from both allowlists: the MCP takes a name, a type or an id, and the CLI's --to only
+        # an exact name, so the call is not provably the same and passes whole.
+        only(a, {"team", "title", "description", "assignee", "priority", "estimate", "dueDate", "labels",
                  "project", "parentId"})
         if "title" not in a:
             raise Pass("pass-unsupported-key")
         parts = [f"--title {q(scalar(a['title']))}"]
-        for k, flag in (("team", "--team"), ("state", "--state"), ("assignee", "--assignee"), ("project", "--project"),
+        for k, flag in (("team", "--team"), ("assignee", "--assignee"), ("project", "--project"),
                         ("estimate", "--estimate"), ("dueDate", "--due-date")):
             if k in a:
                 parts.append(f"{flag} {q(scalar(a[k]))}")
@@ -170,13 +172,11 @@ def lin_save_issue(a):
         if "parentId" in a:
             parts.append(f"--parent {q(issue_key(a['parentId']))}")
         return ["orca linear create " + " ".join(parts)]
-    only(a, {"id", "title", "description", "state", "assignee", "priority", "estimate", "dueDate", "labels",
+    only(a, {"id", "title", "description", "assignee", "priority", "estimate", "dueDate", "labels",
              "addLabels", "removeLabels", "project", "parentId", "relatedTo", "blockedBy", "blocks", "removeRelatedTo",
              "removeBlocks", "removeBlockedBy", "links"})
     ident = q(issue_key(a["id"]))
     cmds, save = [], []
-    if "state" in a:
-        cmds.append(f"orca linear status set {ident} --to {q(scalar(a['state']))}")
     for k, flag in (("title", "--title"), ("assignee", "--assignee"), ("project", "--project"),
                     ("estimate", "--estimate"), ("dueDate", "--due-date")):
         if k in a:
@@ -384,7 +384,7 @@ def orca_attempted(event, provider, keys, subs):
             f.seek(max(0, size - TAIL_BYTES))
             raw = f.read().decode("utf-8", "replace")
     except OSError:
-        return False
+        raise Pass("pass-transcript-unreadable")  # a named transcript that cannot be read can never show the attempt
     lines = raw.splitlines()[1:] if size > TAIL_BYTES else raw.splitlines()
     uses, done = {}, set()
     for line in lines:
