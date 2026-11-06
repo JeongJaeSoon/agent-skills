@@ -173,7 +173,7 @@ MCP 서버 하나가 끊겼을 때는 재인증이 아니라 `/mcp`에서 그 �
 |---|---|
 | Claude가 떠 있다 | `agentIdentity == "claude"`이고, `read --screen`에 Claude 입력창(위아래 `────` 가로줄 사이의 `❯` 줄)이 있다 |
 | 빈 프롬프트에서 대기 중 | **마지막** `────` 두 줄 사이의 입력칸이 `❯` 하나뿐이거나, 빈 입력칸의 안내 문구(`❯ Try "…"`)만 있다. 그 위 history에 찍힌 `❯ <이미 보낸 프롬프트>`는 입력칸이 아니다. `read` 결과에 `draft`가 있으면 비어 있어야 한다. `draft`는 Orca 앱 자체 입력창의 글이라 화면(`tail`)에는 없다. 화면의 입력칸이 빈 `❯`여도 `draft`가 있으면 사람이 앱에 쓰다 둔 글이 있는 것이고, 건너뛴 이유에 그 앞부분을 적는다 |
-| 턴이 진행 중이 아니다 | 화면에 스피너 줄도 `esc to interrupt`도 없다. 스피너 줄은 `✶ Contemplating… (32s · ↓ 912 tokens)`, `· Crunching… (running UserPromptSubmit hooks…)`, `✶ Compacting conversation… (12s)`처럼 스피너 글자 하나로 시작하고 `…`를 품는다. 끝난 턴의 요약 줄(`✻ Worked for 2m 7s · done 5:48 AM`)에는 `…`가 없다. 턴 진행 중에도 빈 `❯` 입력칸은 보이므로 입력칸만으로는 판정하지 않는다. 탭 제목의 `✳`는 필요조건으로만 쓴다(`◑` 등 다른 글자면 작업 중). `✳`는 AskUserQuestion 대기 세션에도 붙기 때문에 충분조건이 아니다. 제목은 목록에서 한 번 읽지 않고 화면을 읽을 때마다 `orca terminal show`로 다시 읽는다. 세션마다 4.5초 넘게 걸려서 목록의 제목은 금방 낡는다 |
+| 턴이 진행 중이 아니다 | 화면에 스피너 줄도 `esc to interrupt`도 없다. 스피너 줄은 `✶ Contemplating… (32s · ↓ 912 tokens)`, `· Crunching… (running UserPromptSubmit hooks…)`, `✶ Compacting conversation… (12s)`처럼 스피너 글자 하나로 시작하고 `…`를 품는다. 끝난 턴의 요약 줄(`✻ Worked for 2m 7s · done 5:48 AM`)에는 `…`가 없다. 턴 진행 중에도 빈 `❯` 입력칸은 보이므로 입력칸만으로는 판정하지 않는다. 탭 제목은 스피너 글자(`⠂` 같은 점자 프레임, `◑` 등)로 시작할 때만 작업 중이라는 증거로 쓰고 그때는 보내지 않는다. 제목이 그 밖의 글자면(`✳`, `--display-name`으로 Orca가 덮어쓴 이름, 빈 제목) 제목은 아무것도 말해 주지 않으므로 화면이 판정한다. `✳`는 AskUserQuestion 대기 세션에도 붙기 때문에 충분조건이 아니다. 제목은 목록에서 한 번 읽지 않고 화면을 읽을 때마다 `orca terminal show`로 다시 읽는다. 세션마다 4.5초 넘게 걸려서 목록의 제목은 금방 낡는다 |
 | 권한·신뢰·질문 창이 없다 | 화면에 이런 문구가 하나도 없다: `Do you want to proceed?`, `❯ 1.`처럼 번호 선택지에 커서가 있는 줄, `Esc to cancel`, `Tab to amend`, `Enter to confirm`, `trust this folder`, `Enter to select`, `↑/↓ to navigate`, `Chat about this`, `Press Enter`, `Esc to close`, `Esc to exit`, `(y/n)` |
 | 사용자가 입력 중이 아니다 | 1.5초 간격으로 두 번 읽은 화면이 같다 |
 | 셸이 아니라 Claude다 | 입력칸 아래에는 Claude의 상태 줄(두 칸 들여 쓴 줄)만 있다. 들여 쓰지 않은 줄(Claude가 끝나고 돌아온 셸 프롬프트), `Resume this session with`, bracketed paste 잔해(`^[[200~`)가 있으면 보내지 않는다. 상태 줄은 `Weekly: 94.0%`처럼 `%`로 끝나기도 해서 끝 글자로는 셸 프롬프트를 가리지 않는다 |
@@ -206,7 +206,7 @@ README의 옛 문장("작업 중인 세션이면 대기열에 들어갔다가 �
 
 스킬을 고친 세션도 사람에게 `/reload-skills`를 부탁하지 않고 스스로 받는다. `run_in_background`로 30초씩 기다리며 `skills-sync broadcast --skills --terminal "$ORCA_TERMINAL_HANDLE"`를 되풀이하는 루프를 걸고 턴을 끝낸다. 루프 본문은 `write-skill` §7에 있다.
 
-- 턴이 도는 동안에는 제목이 `✳`가 아니라서 broadcast가 보내지 않는다. 턴이 끝나면 백그라운드 작업이 남아 있어도 제목이 `✳`로 돌아온다(실측: 턴 종료 25초 뒤 `--dry-run`이 `would send /reload-skills`).
+- 턴이 도는 동안에는 제목이 스피너 글자라서 broadcast가 보내지 않는다(표시 이름을 붙인 card는 제목이 늘 이름이라 화면의 스피너 줄이 이 일을 한다). 턴이 끝나면 백그라운드 작업이 남아 있어도 제목이 `✳`로 돌아온다(실측: 턴 종료 25초 뒤 `--dry-run`이 `would send /reload-skills`).
 - 성공은 exit 0뿐이다. `--dry-run`은 바쁠 때도 0을 돌려주고, 사유 문자열로 성공을 고르면 아래 실패를 성공으로 센다.
 - `sent, but the screen does not show it was taken`이면 다시 보내지 않는다. 실측(2026-10-23)에서 이 사유가 난 전송은 명령이 아니라 앞에 개행이 붙은 평문 사용자 메시지(`\n/reload-plugins`)로 들어가 턴을 하나 시작했고, reload는 일어나지 않았다. 원인은 아직 확인하지 못했다. Claude에는 Orca의 재제출(`submitRetryDelayMs`)이 없어서 두 번째 Enter 때문은 아니다. 이 기기의 transcript에서 명령으로 실행된 reload는 수천 건이고 이 실패는 1건이다. 이렇게 끝나면 사람에게 그 세션에서 직접 치라고 부탁한다.
 - Orca 밖 세션은 `$ORCA_TERMINAL_HANDLE`이 없으니 예전처럼 사람에게 부탁한다.

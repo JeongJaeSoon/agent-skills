@@ -3,15 +3,22 @@
 
   shots.py capture --url URL --name SUBJECT --out DIR [--widths 1440,390] [--themes light,dark]
   shots.py upload --repo OWNER/REPO --pr N --out urls.json FILE...
+  shots.py check urls.json --repo OWNER/REPO --pr N
   shots.py table urls.json
+
+`upload` refuses files or an --out inside a git worktree, or an --out inside the image directory
+(the janitor removes only directories of images), and registers the image directories in the reap
+ledger once the URLs are saved. `check` runs after the sticky comment is posted: an uploaded
+URL answers 404 until a comment references it.
 
 Both browser steps run through `ego-browser nodejs`, which uses the browser's own signed-in
 session: no token or cookie goes through argv, the generated script or this script's output.
 The browser runtime does not see the shell environment, so inputs are embedded in the generated
 script as one JSON literal. EGO_BROWSER overrides the binary (tests use a stub).
 """
-import argparse, json, os, pathlib, re, subprocess, sys
+import argparse, json, os, pathlib, re, subprocess, sys, urllib.error, urllib.request
 
+REAP = pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts" / "reap.py"
 RESULT_TAG = "SHOTS_RESULT "
 # Greedy subject: the last -<width>-<theme> is the shot's own, so a subject may contain one too.
 NAME_RE = re.compile(r"^(?P<subject>.+)-(?P<width>\d{3,4})-(?P<theme>light|dark)(?:-(?P<tag>[A-Za-z0-9_-]+))?$")
@@ -148,6 +155,15 @@ def upload(a):
     stems = [f.stem for f in files]
     if len(set(stems)) != len(stems):
         sys.exit("two files share a name; the URLs are keyed by file name")
+    out = pathlib.Path(a.out).resolve()
+    dirs = sorted({str(f.parent) for f in files})
+    for d in dirs:
+        if out == pathlib.Path(d) or pathlib.Path(d) in out.parents:
+            # The janitor reports, and never removes, a directory that holds a non-image file.
+            sys.exit(f"--out {out} is inside the image directory {d}: keep urls.json outside it")
+    for d in [*dirs, str(out.parent)]:
+        if in_worktree(pathlib.Path(d)):
+            sys.exit(f"{d} is inside a git worktree: keep evidence in a scratchpad or temporary directory")
     res = run_browser(UPLOAD_JS, {
         "space": f"visual-evidence upload {a.repo} {a.pr}",
         "prUrl": f"https://github.com/{a.repo}/pull/{a.pr}",
@@ -156,14 +172,83 @@ def upload(a):
     if res.get("draft"):
         sys.exit("the PR's comment box holds an unsent draft: post or clear it in the browser, then rerun")
     urls = {s: res["urls"].get(s) for s in stems}
-    pathlib.Path(a.out).write_text(json.dumps(urls, indent=2) + "\n")
+    out.write_text(json.dumps(urls, indent=2) + "\n")
     missing = [s for s, u in urls.items() if not u]
     print(f"uploaded {len(stems) - len(missing)} of {len(stems)}, failed {res['failed']}, draft cleared {res['cleared']}")
     for s in missing:
         print(f"missing: {s}", file=sys.stderr)
     if not res["cleared"]:
         print("the comment box still holds text: clear it in the browser before leaving the page", file=sys.stderr)
-    return 1 if missing or res["failed"] or not res["cleared"] else 0
+    registered = all([register(d, a.repo, a.pr) for d in dirs])
+    return 1 if missing or res["failed"] or not res["cleared"] or not registered else 0
+
+
+def in_worktree(path):
+    d = path
+    while not d.is_dir():
+        d = d.parent
+    # GIT_DIR and friends would pick another repository, and a localized message would hide the reason.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")} | {"LC_ALL": "C"}
+    proc = subprocess.run(["git", "-C", str(d), "rev-parse", "--show-toplevel"], capture_output=True, text=True, env=env)
+    if proc.returncode == 0:
+        return True
+    if "not a git repository" in proc.stderr:
+        return False
+    sys.exit(f"cannot tell whether {d} is inside a git worktree: {proc.stderr.strip()[:200]}")
+
+
+def register(directory, repo, pr):
+    """Put the evidence directory in the reap ledger so the janitor removes it after the PR closes."""
+    proc = subprocess.run([sys.executable, str(REAP), "ledger", "add", "--kind", "evidence",
+                           "--path", directory, "--pr", f"{repo}#{pr}"], capture_output=True, text=True)
+    if proc.returncode:
+        print(f"could not register {directory} in the reap ledger: {proc.stderr.strip() or proc.stdout.strip()}", file=sys.stderr)
+    return proc.returncode == 0
+
+
+def gh(*args):
+    proc = subprocess.run(["gh", *args], capture_output=True, text=True)
+    if proc.returncode:
+        sys.exit(f"gh {' '.join(args[:2])} failed: {proc.stderr.strip()[:200]}")
+    return proc.stdout
+
+
+def head_status(url):
+    """Return (HTTP status, content type); status 0 means the request itself failed."""
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, method="HEAD"), timeout=15) as r:
+            return r.status, r.headers.get("Content-Type", "")
+    except urllib.error.HTTPError as e:
+        return e.code, ""
+    except (urllib.error.URLError, OSError):
+        return 0, ""
+
+
+def check(a):
+    if not re.fullmatch(r"[\w.-]+/[\w.-]+", a.repo):
+        sys.exit(f"--repo must be owner/repo: {a.repo!r}")
+    urls = json.loads(pathlib.Path(a.urls).read_text())
+    bodies = gh("api", "--paginate", f"repos/{a.repo}/issues/{a.pr}/comments", "--jq", ".[].body")
+    private = gh("api", f"repos/{a.repo}", "--jq", ".private").strip() == "true"
+    verdicts = set()
+    for name, url in urls.items():
+        if not url:
+            verdict, why = "NOT VERIFIED", "no URL; upload it first"
+        elif not re.search(r"(?<![\w/%~=&?#:.-])" + re.escape(url) + r"(?![\w/%~-]|\.[\w/%~-])", bodies):
+            # A bare substring test would count .../abc as posted when only .../abcdef is.
+            verdict, why = "NOT VERIFIED", "no PR comment references it, so GitHub answers 404"
+        else:
+            status, ctype = head_status(url)
+            if status == 200 and ctype.startswith("image/"):
+                verdict, why = "VERIFIED", ctype
+            elif private and status in (0, 401, 403, 404):
+                verdict, why = "INCONCLUSIVE", f"private repo: HTTP {status} without a signed-in session"
+            else:
+                verdict, why = "NOT VERIFIED", f"HTTP {status} {ctype}".strip()
+        print(f"{verdict}  {name}: {why}")
+        verdicts.add(verdict)
+    # Exit 1 when any image failed, 2 when none failed but some could not be judged.
+    return 1 if "NOT VERIFIED" in verdicts else 2 if "INCONCLUSIVE" in verdicts else 0
 
 
 def img(name, url, width):
@@ -224,6 +309,10 @@ def main(argv=None):
     u.add_argument("--out", required=True, help="JSON file of name -> user-attachments URL")
     u.add_argument("--polls", type=int, default=60, help="2-second polls to wait for the uploads")
     u.add_argument("files", nargs="+")
+    k = sub.add_parser("check")
+    k.add_argument("urls")
+    k.add_argument("--repo", required=True)
+    k.add_argument("--pr", type=int, required=True)
     t = sub.add_parser("table")
     t.add_argument("urls")
     a = p.parse_args(argv)
@@ -231,6 +320,8 @@ def main(argv=None):
         return capture(a)
     if a.cmd == "upload":
         return upload(a)
+    if a.cmd == "check":
+        return check(a)
     sys.stdout.write(table(json.loads(pathlib.Path(a.urls).read_text())))
     return 0
 
