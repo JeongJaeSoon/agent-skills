@@ -9,6 +9,7 @@ os.environ["AGENT_SKILLS_SWEEP"] = os.environ["AGENT_SKILLS_PATROL"] = "off"
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import cards, reap
 assert str(reap.STATE) == _STATE, reap.STATE
+cards.SEAL_DIR = pathlib.Path(tempfile.mkdtemp(prefix="test-cards-seals-"))  # never the account's real seal list
 
 NOW = 2_000_000_000.0
 IDLE = 30 * 60
@@ -545,9 +546,16 @@ cards.read_machine, cards.cards_listing, cards.gather, reap.run = saved
 # apply's exit code follows reap's: a pre-act check that could not run leaves the card and the round ends 1 (after the
 # others ran); a guard that decides to leave a card is a normal 0.
 plan = pathlib.Path(tmp) / "plan.json"
-plan.write_text(json.dumps({"items": [{"name": "c1", "path": CARD, "verdict": cards.REMOVE, "head": HEAD, "close": []}]}))
+PLAN_ITEM = {"name": "c1", "path": CARD, "verdict": cards.REMOVE, "head": HEAD, "close": []}
+plan_text = json.dumps({"items": [PLAN_ITEM]}, ensure_ascii=False, indent=1)
+plan.write_text(plan_text)
+cards.seal_plan(plan_text)  # what scan --plan does after it writes the file
 saved_keep, saved_own, saved_act, saved_argv = guard.keep, guard.ownership, cards.act, sys.argv
+saved_listing = cards.cards_listing
+cards.cards_listing = lambda repo_list=(): [{"path": CARD}]
 guard.ownership = lambda: None
+saved_pre, cards.preflight = cards.preflight, lambda *a: None  # these cases are about the per-card loop; preflight is tested below
+saved_home, cards.ACCOUNT_STATE = cards.ACCOUNT_STATE, reap.STATE  # this test's state directory stands for the account's
 cards.act = lambda *a, **k: "acted"
 sys.argv = ["cards.py", "apply", "--plan", str(plan)]
 for why, code in (("검사를 마치지 못함(PermissionError: x)", 1), ("보호 목록의 경로", 0), (None, 0)):
@@ -558,6 +566,158 @@ for why, code in (("검사를 마치지 못함(PermissionError: x)", 1), ("보�
         assert e.code == code, (why, e.code)
     else:
         raise AssertionError("apply must exit")
+
+# T7c: apply refuses the whole plan, and acts on nothing, unless scan sealed that exact text and every acting row is a
+# card Orca lists. Each case below would otherwise reach cards.act.
+guard.keep = lambda *a, **k: None
+acted = []
+cards.act = lambda item, *a, **k: acted.append(item["name"]) or "acted"
+OTHER = {**PLAN_ITEM, "name": "c2", "path": str(pathlib.Path(tmp) / "elsewhere")}
+
+
+def refused_apply(items_or_text, listing=None, seal=False):
+    text = items_or_text if isinstance(items_or_text, str) else json.dumps({"items": items_or_text}, indent=1)
+    if seal:
+        cards.seal_plan(text)
+    plan.write_text(text)
+    cards.cards_listing = lambda repo_list=(): [{"path": CARD}] if listing is None else listing
+    acted.clear()
+    try:
+        cards.main(["cards.py", "apply", "--plan", str(plan)])
+    except SystemExit as e:
+        return e.code
+    raise AssertionError("apply must exit")
+
+
+def refuses(*a, **k):
+    msg = str(refused_apply(*a, **k))
+    assert acted == [], (msg, acted)  # a refused plan closes nothing
+    return msg
+
+
+assert refused_apply([PLAN_ITEM], seal=True) == 0 and acted == ["c1"]                     # sealed and owned: runs
+assert "봉인 없음" in refuses([{**PLAN_ITEM, "name": "hand-written"}])                    # never sealed
+plan_text2 = json.dumps({"items": [PLAN_ITEM]}, indent=1)
+cards.seal_plan(plan_text2)
+assert "봉인 없음" in refuses(plan_text2.replace(HEAD, PRHEAD))                           # sealed, then edited
+assert "봉인 없음" in refuses(plan_text2 + "\n")                                           # even whitespace
+assert "봉인 없음" in refuses(plan_text2.replace("\n", "\r\n"))                            # even line endings (read_text would hide them)
+assert "카드가 아님" in refuses([PLAN_ITEM, OTHER], seal=True)                             # one foreign row stops all
+assert "카드가 아님" in refuses([PLAN_ITEM], listing=[{"path": CARD, "isMainWorktree": True}], seal=True)
+cards.cards_listing = lambda repo_list=(): None
+plan.write_text(plan_text2)
+try:
+    cards.main(["cards.py", "apply", "--plan", str(plan)])
+except SystemExit as e:
+    assert "소유를 확인할 수 없음" in str(e.code) and acted == [], (e.code, acted)
+else:
+    raise AssertionError("an unreadable listing must refuse")
+for bad in ('{"items": [{"verdict": "삭제"}]}', '{"items": 3}', "not json", '{"items": [{"name": "c", "path": 1, "verdict": "삭제", "head": "h", "close": []}]}'):
+    assert "아무것도 닫지 않았다" in refuses(bad, seal=True), bad
+# a plan with only 남김 rows has nothing to own, and still has to be sealed
+keep_only = [{**PLAN_ITEM, "verdict": cards.KEEP}]
+assert "아무것도 닫지 않았다" in refuses(keep_only)
+assert refused_apply(keep_only, seal=True) == 0 and acted == []
+
+# Concurrent scans keep every seal (the list is read, changed and written under one lock).
+import threading  # noqa: E402
+texts = [json.dumps({"items": [], "n": n}) for n in range(8)]
+threads = [threading.Thread(target=cards.seal_plan, args=(t,)) for t in texts]
+[t.start() for t in threads]
+[t.join() for t in threads]
+import hashlib  # noqa: E402
+kept = reap.read_obj(cards.SEAL_DIR / cards.SEALS)
+assert all(hashlib.sha256(t.encode()).hexdigest() in kept for t in texts), len(kept)
+
+# The default SEAL_DIR is the account's home whatever $HOME, $AGENT_SKILLS_STATE and the working directory say.
+import pwd, subprocess  # noqa: E402
+other_home = tempfile.mkdtemp(prefix="test-cards-home-")
+shown = subprocess.run([sys.executable, "-c", "import cards; print(cards.SEAL_DIR)"], cwd=os.path.dirname(os.path.abspath(cards.__file__)),
+                       env={**os.environ, "HOME": other_home, "AGENT_SKILLS_STATE": other_home}, capture_output=True, text=True, check=True).stdout.strip()
+assert shown == str(pathlib.Path(pwd.getpwuid(os.getuid()).pw_dir) / ".local/state/agent-skills"), shown
+
+# A seal list the caller points at does not count: --state and $AGENT_SKILLS_STATE move reap.STATE, not SEAL_DIR.
+forged_text = json.dumps({"items": [{**PLAN_ITEM, "name": "forged"}]}, ensure_ascii=False, indent=1)
+forged_dir = pathlib.Path(tempfile.mkdtemp(prefix="test-cards-forged-"))
+(forged_dir / cards.SEALS).write_text(json.dumps({hashlib.sha256(forged_text.encode()).hexdigest(): 1}))
+saved_state_dir = reap.STATE
+reap.STATE = forged_dir
+try:
+    assert "봉인 없음" in (cards.refuse_plan(forged_text, [{"path": CARD}]) or ""), "a seal list under --state must not count"
+    assert "아무것도 닫지 않았다" in refuses(forged_text), "forged seal must close nothing"
+finally:
+    reap.STATE = saved_state_dir
+
+# preflight: one row that is out of date stops the whole plan before any card is closed. Each case would otherwise reach
+# cards.act for the first, good row.
+cards.preflight = saved_pre
+cards.cards_listing = lambda repo_list=(): [{"path": CARD}, {"path": OTHER["path"]}]
+BAD = {**OTHER, "head": PRHEAD}
+GOOD_FACTS = {"head": HEAD}
+rereads = {CARD: (cards.REMOVE, "ok", [], GOOD_FACTS), OTHER["path"]: (cards.REMOVE, "ok", [], GOOD_FACTS)}
+saved_reread, saved_cg, saved_ino = cards.reread, cards.cardguard.guard, reap.dir_ino
+cards.reread = lambda path, cfg: rereads.get(path)
+cards.cardguard.guard = lambda *a, **k: (True, "")
+reap.dir_ino = lambda p: 7
+guard.keep = lambda *a, **k: None
+
+
+BOTH = [{"path": CARD}, {"path": OTHER["path"]}]
+TWO = [PLAN_ITEM, {**OTHER, "head": HEAD}]  # row 2 is the one each case breaks, after row 1 would already have been closed
+
+
+def preflight_refuses(rows, **changes):
+    saved = dict(rereads)
+    rereads.update(changes)
+    try:
+        return refuses(rows, listing=BOTH, seal=True)
+    finally:
+        rereads.clear()
+        rereads.update(saved)
+
+
+r_ = refused_apply(TWO, listing=BOTH, seal=True)
+assert r_ == 0 and acted == ["c1", "c2"], (r_, acted)                                        # all current: both run
+assert "plan 뒤에 바뀜" in preflight_refuses([PLAN_ITEM, BAD])                               # head moved on row 2
+assert "plan 뒤에 바뀜" in preflight_refuses(TWO, **{OTHER["path"]: (cards.CLOSE, "x", [], GOOD_FACTS)})
+assert "다시 찾지 못함" in preflight_refuses(TWO, **{OTHER["path"]: None})
+cards.cardguard.guard = lambda path, *a, **k: (path != OTHER["path"], "터미널에서 작업 중")
+assert "터미널에서 작업 중" in preflight_refuses(TWO)                                          # a guard on row 2
+cards.cardguard.guard = lambda *a, **k: (True, "")
+keep_calls = []
+guard.keep = lambda *a, **k: keep_calls.append(1) or ("검사를 마치지 못함(PermissionError: x)" if len(keep_calls) == 2 else None)
+assert "검사를 마치지 못함" in preflight_refuses(TWO) and len(keep_calls) == 2               # only row 2 fails
+guard.keep = lambda *a, **k: None
+reap.dir_ino = lambda p: 7 if p == CARD else 8
+assert "다시 만들어짐" in preflight_refuses([{**PLAN_ITEM, "ino": 7}, {**TWO[1], "ino": 7}])  # only row 2's folder moved
+reap.dir_ino = lambda p: 7
+reread_fails = lambda path, cfg: (_ for _ in ()).throw(ValueError("bad json")) if path == OTHER["path"] else rereads[path]
+cards.reread = reread_fails
+assert "다시 판정하지 못함" in refuses(TWO, listing=BOTH, seal=True)                           # a parse error is a refusal, not a traceback
+cards.reread = lambda path, cfg: rereads.get(path)
+
+# A card another cleaner holds stops the plan before the cards ahead of it are closed.
+import fcntl  # noqa: E402
+lockfile = guard.lock_file("card", reap.real(OTHER["path"]))
+lockfile.parent.mkdir(parents=True, exist_ok=True)
+with open(lockfile, "w") as other_cleaner:
+    fcntl.flock(other_cleaner, fcntl.LOCK_EX)
+    assert guard.LOCK_BUSY in refuses(TWO, listing=BOTH, seal=True)
+assert refused_apply(TWO, listing=BOTH, seal=True) == 0 and acted == ["c1", "c2"]            # released: runs
+cards.reread, cards.cardguard.guard, reap.dir_ino = saved_reread, saved_cg, saved_ino
+
+# Card locks live under the state directory, so apply runs only in the account's own: another state would not see a
+# card a cleaner holds there.
+cards.ACCOUNT_STATE = pathlib.Path(tmp) / "somewhere-else"
+assert "기본 상태 디렉터리" in refuses(TWO, listing=BOTH, seal=True)
+cards.ACCOUNT_STATE = saved_home
+# $HOME moves reap's default state but not the account's: with HOME changed and no state variable, apply still refuses.
+child_env = {k: v for k, v in os.environ.items() if k != "AGENT_SKILLS_STATE"}
+child = subprocess.run([sys.executable, "cards.py", "apply", "--plan", "none.json"], cwd=os.path.dirname(os.path.abspath(cards.__file__)),
+                       env={**child_env, "HOME": other_home}, capture_output=True, text=True)
+assert child.returncode != 0 and "기본 상태 디렉터리" in child.stderr, (child.returncode, child.stderr[-300:])
+
+cards.cards_listing = saved_listing
 guard.keep, guard.ownership, cards.act, sys.argv = saved_keep, saved_own, saved_act, saved_argv
 
 # A restart abandons the Dispatches whose terminals it took; their cards wait for a resume, so the janitor must not
