@@ -222,6 +222,16 @@ class LintTest(unittest.TestCase):
         self.assertEqual(self.lint_rules_with("scripts/doctor.sh", '#!/usr/bin/env bash\ncat "$1/pids" | xargs -r kill\n')[0], 0)
         self.assertEqual(self.lint_rules_with("scripts/doctor.sh", "#!/usr/bin/env bash\nlsof -ti :3000 | xargs -r kill\n"), (1, ["pattern-kill"]))
 
+    def test_quoted_pid_lookup_and_split_pipeline_are_flagged(self):
+        quoted = '#!/usr/bin/env bash\npids="$(pgrep -f demo)"\nkill "$pids"\n'
+        split = "#!/usr/bin/env bash\nlsof -ti :3000 |\n  xargs -r kill\n"
+        for text in (quoted, split):
+            self.assertEqual(self.lint_rules_with("scripts/doctor.sh", text), (1, ["pattern-kill"]), text)
+
+    def test_set_u_does_not_make_a_defaulted_argument_required(self):
+        text = '#!/usr/bin/env bash\nset -euo pipefail\nstate="${1:-/tmp/verify/current.state}"\nsource "$state"\n'
+        self.assertEqual(self.lint_rules_with("scripts/cleanup.sh", text), (1, ["cleanup-arg"]))
+
     def test_python_subprocess_pkill_is_flagged(self):
         text = 'import subprocess\nsubprocess.run(["pkill", "-f", "demo"], check=False)\n'
         self.assertEqual(self.lint_rules_with("scripts/stop.py", text, skill_extra="\n`stop.py`\n"), (1, ["pattern-kill"]))

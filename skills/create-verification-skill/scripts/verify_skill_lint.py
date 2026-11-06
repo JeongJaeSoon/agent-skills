@@ -29,7 +29,7 @@ SECRET_NAMES = (".env*", "*.env", "*secret*", "*credential*", "*token*", "*passw
 SCRIPT_SUFFIXES = (".sh", ".py")
 INTERPRETED_SUFFIXES = (".js", ".mjs", ".cjs", ".ts")  # run as `node x.mjs`, so no executable bit is required
 CLEANUP_WORDS = ("cleanup", "clean-up", "clean_up", "teardown")
-SHELL_ARG_GUARD = re.compile(r"\$\{1:\?|\$#\"?\s*-(?:lt|eq|ne|le)\b|-[zn]\s+\"?\$\{?1\b|\bset\s+-[a-z]*u[a-z]*\b[\s\S]*\$\{?1\b")
+SHELL_ARG_GUARD = re.compile(r"\$\{1:\?|\$#\"?\s*-(?:lt|eq|ne|le)\b|-[zn]\s+\"?\$\{?1\b|\bset\s+-[a-z]*u[a-z]*\b[\s\S]*\$(?:1\b|\{1\})")
 SHELL_ARG_COPY = re.compile(r"\b(\w+)=\"?\$\{?1\b")
 PY_ADD_ARGUMENT = re.compile(r"add_argument\(([^)]*)\)")
 ARGV_USE = {"py": re.compile(r"sys\.argv\[1\]"), "js": re.compile(r"process\.argv\[2\]")}
@@ -38,7 +38,7 @@ AT_COMMAND = r"(?:^|[;&|(`{]|\$\(|\b(?:then|do|else)\b)\s*(?:sudo\s+)?"
 KILL_AT_COMMAND = re.compile(AT_COMMAND + r"(?:pkill|killall)\b|(?:pgrep|lsof)\b[^\n]*\|\s*xargs\s+(?:-\S+\s+)*kill\b|\bkill\b[^\n]*\$\(\s*(?:pgrep|lsof)|[\[(]\s*[\"'](?:pkill|killall)[\"']")
 KILL_PLAIN = re.compile(AT_COMMAND + r"kill\b([^\n]*)")
 PID_DISCOVERY = re.compile(r"\bpgrep\b|\blsof\b[^\n]*\s-\w*t")
-PID_VARIABLE = re.compile(r"\b(\w+)=\$\([^\n]*(?:\bpgrep\b|\blsof\b)")
+PID_VARIABLE = re.compile(r"\b(\w+)=\"?\$\([^\n]*(?:\bpgrep\b|\blsof\b)")
 STATE_CONTEXT = re.compile(r"state|\bRUN_?(?:DIR|ID|FILE)\b|\$RUN", re.I)
 LATEST = re.compile(r"\bln\b[^\n]*[\s/]latest\b|\blatest\.(?:json|env|state|txt|pid)\b|\w=\S*/latest\b")
 LATEST_PATH = re.compile(r"/latest\b")
@@ -111,10 +111,23 @@ def is_script(path):
         return False
 
 
+def join_continuations(lines):
+    """Merge a line that ends in `|` or a backslash with the next one, so a split pipeline reads as one command."""
+    out = []
+    for i, ln in lines:
+        if out and out[-1][1].rstrip().endswith(("|", "\\")):
+            out[-1] = (out[-1][0], out[-1][1].rstrip().rstrip("\\") + " " + ln.strip())
+        else:
+            out.append((i, ln))
+    return out
+
+
 def code_lines(path, text):
     if is_script(path):
-        return [(i, ln) for i, ln in enumerate(text.splitlines(), 1) if not ln.lstrip().startswith(("#", "//"))]
-    return list(fenced_lines(text))
+        lines = [(i, ln) for i, ln in enumerate(text.splitlines(), 1) if not ln.lstrip().startswith(("#", "//"))]
+    else:
+        lines = list(fenced_lines(text))
+    return join_continuations(lines)
 
 
 def file_like_tokens(line):
