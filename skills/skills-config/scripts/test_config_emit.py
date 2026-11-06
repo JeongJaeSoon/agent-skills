@@ -616,6 +616,24 @@ class HashAndOutTest(Base):
         self.assertIn(f"python3 -I {base / (stem + '-2.py')}", second.stdout.strip().splitlines()[-1])
         self.assertNotEqual(digest_before, second.stdout.strip().splitlines()[-1])
 
+    def test_parallel_default_emits_each_keep_their_own_script(self):
+        specs = []
+        for i in range(8):
+            spec = self.home / f"p{i}" / "spec.json"
+            spec.parent.mkdir()
+            spec.write_text(json.dumps({"permissions": {"add": [f"mcp__srv__tool{i}"]}}))
+            specs.append(spec)
+        procs = [subprocess.Popen([sys.executable, "-I", str(SCRIPT), "emit", "--spec", str(s)],
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=self.env)
+                 for s in specs]
+        results = [p.communicate() + (p.returncode,) for p in procs]
+        self.assertEqual([r[2] for r in results], [0] * 8, [r[1] for r in results])
+        files = list((self.home / ".local/state/agent-skills/config-scripts").glob("*.py"))
+        self.assertEqual(len(files), 8)
+        for i in range(8):
+            self.assertEqual(sum(f"mcp__srv__tool{i}'" in f.read_text() for f in files), 1)
+        self.assertTrue(all("replaced" not in r[0] for r in results))
+
     def test_explicit_out_replaces_an_existing_file_and_says_so(self):
         r, out = self.emit(self.SPEC)
         self.assertNotIn("replaced", r.stdout)

@@ -137,7 +137,7 @@ STORES = [
     Store("settings", "C/settings.json", {"config.claude": CANONICAL},
           ("ext:human", "setup:main", "bootstrap:main", "migrate:main", "config_emit:run",
            "automode_rule:main"), ("reorient",), rule="Claude Code settings, through emitted scripts"),
-    Store("configscripts", "S/config-scripts/*-*.py", {"config.emitted": CANONICAL}, ("config_emit:main",), ("nobody",),
+    Store("configscripts", "S/config-scripts/*-*.py", {"config.emitted": CANONICAL}, ("config_emit:main", "config_emit:open_new"), ("nobody",),
           rule="a settings change emitted by skills-config, for the user to review and run once"),
     Store("configbak", "C/*.bak-*", {"config.claude": BACKUP, "config.skills": BACKUP},
           ("bootstrap:main", "migrate:main", "setup:write"), ("nobody",), rule="a settings file before setup changed it"),
