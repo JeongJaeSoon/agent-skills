@@ -131,7 +131,7 @@ assert out.endswith("0 added, 2 already there"), out
 out = ok("order", "import", str(src))
 assert out.endswith("1 added, 2 already there"), out
 imported = [r for r in json.loads(ok("order", "list", "--json")) if (r["source"] or "").startswith("import:")]
-assert {r["source"].split("@")[0] for r in imported} == {"import:list.md"} and len({r["source"] for r in imported}) == 3
+assert len({r["source"] for r in imported}) == 3 and all(r["source"].startswith("import:") for r in imported)
 assert all(r["kind"] == "feedback" for r in imported)
 # Another directory's list.md with the same section and number is a different list, not a repeat.
 (tmp / "b").mkdir()
@@ -148,6 +148,9 @@ assert "ghp_" not in ok("order", "import", str(leak), "--dry-run")
 out = ok("order", "import", str(leak))
 assert "ghp_" not in out and out.endswith("2 added, 0 already there"), out
 assert "ghp_" not in ok("order", "import", str(leak))
+named = tmp / "password=demo.md"  # a file name masking would cut at, and two headings whose short hashes could clash
+named.write_text("## Section 470\n1. First\n## Section 3561\n1. Second\n2. Third\n")
+assert ok("order", "import", str(named)).endswith("3 added, 0 already there")
 assert "not a regular expression" in fails("order", "import", str(leak), "--skip", "[")
 db = sqlite3.connect(str(store.path()))
 assert not db.execute("SELECT 1 FROM order_ WHERE source LIKE '%ghp_%' OR text LIKE '%ghp_%'").fetchone()

@@ -33,8 +33,8 @@ def parse_list(text, name):
         if m := re.match(r"#{1,3}\s+(.+?)\s*$", line):
             section = m.group(1)
         elif m := re.match(r"(\d+)\.\s+(.+?)\s*$", line):
-            # The key holds a hash of the heading, not its words: masking a heading must not eat the number after it.
-            tag = hashlib.sha1(section.encode()).hexdigest()[:6]
+            # The key holds hashes, not words: masking a heading or a file name must not eat the number after it.
+            tag = hashlib.sha1(section.encode()).hexdigest()[:12]
             out.append((f"import:{name}:{tag}#{m.group(1)}", f"{section}: {m.group(2)}" if section else m.group(2)))
     return out
 
@@ -48,7 +48,7 @@ def cmd_import(rest):
     except re.error as e:
         sys.exit(f"--skip is not a regular expression: {e}")
     p = pathlib.Path(path).resolve()
-    name = f"{p.name}@{hashlib.sha1(str(p).encode()).hexdigest()[:8]}"
+    name = hashlib.sha1(str(p).encode()).hexdigest()[:12]  # no file name: masking would eat what follows it
     items = [(s, t) for s, t in parse_list(p.read_text(), name) if not (skip and skip.search(t))]
     if not items:
         sys.exit(f"{path}: no numbered lines to import")
