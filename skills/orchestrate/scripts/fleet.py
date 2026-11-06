@@ -189,9 +189,9 @@ def mask(text, limit=None):
 
 # ---------------------------------------------------------------- CLI sources
 
-def run_json(cmd, timeout=30):
+def run_json(cmd, timeout=30, env=None):
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL, env=env)
     except FileNotFoundError:
         raise SourceError(f"{cmd[0]} not found")
     except subprocess.TimeoutExpired:
@@ -716,10 +716,14 @@ def orca_messages_sent(messages):
             and isinstance(m.get("created_at"), str) and (m.get("body") or m.get("subject"))]
 
 
-def graphql(query):
+def graphql(query, app=None):
     """(data, errors). gh exits non-zero when any alias errors, even with the rest of the data present, so one
-    inaccessible PR must not blank the others."""
-    out = run_json(["gh", "api", "graphql", "-f", f"query={query}"], timeout=60)
+    inaccessible PR must not blank the others. With `app`, gh runs under that ghtkn app's token (handed to the child
+    only, as GH_TOKEN); without it, under whatever login gh has."""
+    cmd, env = ["gh", "api", "graphql", "-f", f"query={query}"], None
+    if app:
+        cmd, env = ["ghtkn", "exec", "-e", "GH_TOKEN", "--", *cmd], {**os.environ, "GHTKN_APP": app}
+    out = run_json(cmd, timeout=60, env=env)
     data = out.get("data") if isinstance(out, dict) else None
     errors = [mask(e.get("message", "")[:200]) for e in (out.get("errors") or [])] if isinstance(out, dict) else []
     if data is None:
