@@ -393,6 +393,7 @@ STORES = [
     Store("sweepowner", "S/sweep-owner.json", {"sweep.owner": CANONICAL}, ("sweep:set_owner",), ("janitor",),
           rule="which rules the sweep owns (`sweep own` and `release`); reap-hard and the janitor read it inside each target's lock"),
     Store("sweeplock", "S/sweep.lock", {"sweep.shadow": LOCK}, ("sweep:run_lock",)),
+    Store("sweepticklock", "S/sweep-tick.lock", {"sweep.shadow": LOCK}, ("sweep:tick",)),
     Store("sweepout", "S/sweep.log", {"sweep.output": CANONICAL}, ("reap:spawn_sweep_shadow",), ("nobody",),
           rule="the detached sweep run's stdout"),
     Store("patrollog", "S/patrol.jsonl", {"patrol.finding": CANONICAL}, ("patrol:write_round", "patrol:ack"),
