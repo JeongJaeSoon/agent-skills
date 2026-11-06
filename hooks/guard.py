@@ -73,7 +73,7 @@ REBINDS = re.compile(r"(?<![$\w{])ORCA_TERMINAL_HANDLE=(?!=)|\$\{ORCA_TERMINAL_H
 # In command position only: a grep or echo that quotes the words is not a card being made.
 CARD = re.compile(r"(?:^|[;&|(])\s*orca\s+worktree\s+create\b", re.M)
 # The helper reads its brief from a file this hook can open, so the card checks run on that file (dispatch-card §3).
-CARD_HELPER = re.compile(r"(?:^|[;&|(`])\s*(?:\S*/)?skills-sync\s+card\s+(\S+)", re.M)
+CARD_HELPER = re.compile(r"(?:^|[;&|(`])\s*(?:\S*/)?skills-sync\s+card[ \t]+([^ \t\n]+)", re.M)
 LEAD_FROM_LEAD = ("This session is a lead, and a lead does not start another lead. Give the card a "
                   "worker brief (the one at the top of orchestrate references/brief.md, or its \"Single worker\") "
                   "without the Lead's MODE or ROLE line or `<project>: lead` head; only the human or the "
