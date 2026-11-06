@@ -1516,6 +1516,14 @@ def board_open():
         return {}
 
 
+def owner_todo_items(b, shut):
+    """The owner's now-list (`orch board now`) as Needs you items, so the Brief and Needs you show one set. The key is the
+    board item's id, the one `orch board done` closes; shut is tidy.closed(), for a close the board has not applied."""
+    return [{"key": t["id"], "type": "owner_todo", "session": None, "title": mask(t["title"], 200),
+             "at": t.get("updated_at"), "source": "board"}
+            for t in b.get("owner_todo") or [] if t["id"] not in shut]
+
+
 def board_prs():
     """The PR keys the open board's rows name, and every full owner/repo#N in its doing, later, todo and owner_todo text and
     in the external inbox: a closed item no longer holds its PR in prs.json."""
@@ -2308,7 +2316,8 @@ class Fleet:
                             "text": f"{'reload_delivered' if h in terms else 'reload_dropped'}: {title}"})
         syncs = [i for i in syncs if i["type"] != "reload_pending" or RELOAD_FAILS.get(i["terminal"], 0) >= tries]
         mem["reload_shown"] = {i["terminal"]: i["title"] for i in syncs if i["type"] == "reload_pending"}
-        items += kept + syncs + watcher_items(sessions, now) + list(self.checks)
+        import tidy
+        items += kept + syncs + watcher_items(sessions, now) + list(self.checks) + owner_todo_items(board_open(), tidy.closed())
         for it in sticky.values():
             if it.get("open"):
                 items.append(it)

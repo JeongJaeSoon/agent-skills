@@ -51,6 +51,7 @@ const ITEM = {
   selfcheck: ["Dashboard self-check", "bad", "alert"],
   watcher_down: ["Card watch down", "bad", "alert"],
   patrol: ["Patrol finding", "warn", "alert"],
+  owner_todo: ["Your to-do", "accent", "note"],
 };
 const itemMeta = (t) => ITEM[t] || [t, "", "dot"];
 // What a session's kind reads as on screen -> [label, tone, icon]. kind itself stays as fleet.py wrote it (sort, adopt).
