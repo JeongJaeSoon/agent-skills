@@ -1,8 +1,3 @@
----
-name: create-verification-skill
-description: "Generate a project-local verify-* skill that drives the app like a user. Use for /create-verification-skill, \"verify 스킬 만들어줘\", or when a reusable verification harness is in scope; checking one change is not this. An orchestrator dispatches it instead."
----
-
 # Create a verification skill
 
 Every serious project needs a scripted way to drive the real app and prove behavior: launch it, exercise a feature the way a user would, and capture evidence. This skill generates that as a project-local skill (`.claude/skills/verify-<app>/`) tailored to the repo. You write the generator's output for the next agent, not for a human: it will be read cold, mid-task, by an agent that has never seen the app.
@@ -34,7 +29,7 @@ Write `.claude/skills/verify-<app>/SKILL.md` with YAML frontmatter (`name: verif
 
 ## 3. Seed the feature map
 
-Create `.claude/skills/verify-<app>/features/README.md` plus one file per user-facing feature you can identify (aim for the top 3-5 to start, from routes, commands, menus, or docs). Follow the shape in [`references/feature-map-example/`](references/feature-map-example/), with a README index and one file per feature. Each file answers, from the user's point of view: what the feature is, how to reach it, how to drive it with the harness, and what observable end state proves it works. The four H2s are `Sub-features`, `How to get to it (user POV)`, `Driving it with <harness>`, and `Gotchas`. If the seed data lacks a precondition that a journey needs, the journey reports a failure and the reason goes in that feature's `Gotchas`. Never weaken the journey to make it pass. The map is the repo's maintained verification source; a proof that drives one convenient entry point is incomplete when the map lists others.
+Create `.claude/skills/verify-<app>/features/README.md` plus one file per user-facing feature you can identify (aim for the top 3-5 to start, from routes, commands, menus, or docs). Follow the shape in [`references/feature-map-example/`](feature-map-example/), with a README index and one file per feature. Each file answers, from the user's point of view: what the feature is, how to reach it, how to drive it with the harness, and what observable end state proves it works. The four H2s are `Sub-features`, `How to get to it (user POV)`, `Driving it with <harness>`, and `Gotchas`. If the seed data lacks a precondition that a journey needs, the journey reports a failure and the reason goes in that feature's `Gotchas`. Never weaken the journey to make it pass. The map is the repo's maintained verification source; a proof that drives one convenient entry point is incomplete when the map lists others.
 
 ## 4. Prove the generated skill before handing it over
 
@@ -42,4 +37,4 @@ Run its own instructions end to end once: launch, doctor, drive ONE mapped featu
 
 ## 5. Offer the maintenance loop
 
-Point the user at `maintain-verification-skill` for keeping the map honest as the app changes. Suggest a cadence only if they ask. If the repo ignores `.claude/`, say so: the skill then stays on this machine unless the ignore rule lets `.claude/skills/` through.
+Point the user at `verification-skill`'s maintain mode for keeping the map honest as the app changes. Suggest a cadence only if they ask. If the repo ignores `.claude/`, say so: the skill then stays on this machine unless the ignore rule lets `.claude/skills/` through.

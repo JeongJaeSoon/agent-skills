@@ -115,6 +115,15 @@ https://github.com/JeongJaeSoon/agent-skills 의 Claude Code 플러그인을 설
 
 pstack 묶음은 Lauren Tan의 [pstack](https://github.com/cursor/plugins)(MIT)에서 가져왔고, 지금은 이 저장소에서 따로 관리한다. 원본 파일은 upstream 그대로 `vendor/pstack`에 두고, 원할 때 켜는 하루 한 번짜리 작업이 upstream 변경을 알려 주면 필요한 것만 손으로 옮긴다. 여러 세션이 함께 일할 때 워커 위의 층은 오케스트레이터(최상위 세션 하나)와 리드(프로젝트 하나를 맡은 세션) 둘이다. 자세한 것은 [orchestrate의 Roles 표](skills/orchestrate/SKILL.md#roles)(영어).
 
+## 이름이 바뀐 스킬
+
+몇몇 스킬은 다른 스킬의 모드로 합쳐졌다. 옛 이름은 없어졌으므로 `/agent-skills:<옛 이름>`은 더 이상 아무것도 실행하지 않는다. 새 명령을 쓴다.
+
+| 옛 명령 | 새 명령 / 모드 |
+|---|---|
+| `/agent-skills:create-verification-skill` | `/agent-skills:verification-skill`의 create 모드 |
+| `/agent-skills:maintain-verification-skill` | `/agent-skills:verification-skill`의 maintain 모드 |
+
 ## 설정
 
 필수 설정은 없다. 스킬은 `~/.claude/agent-skills.json`의 스킬별 섹션에서 키를 읽고, 목록과 비밀값은 `~/.config/agent-skills/`에서 읽는다. 키가 없으면 그 기능은 꺼지거나 스킬이 행동 전에 묻는다. 트래커 어댑터는 `tracker.adapter`가 없으면 Linear다. `skills-config` 스킬에 맡기면 키를 쓰는 스크립트를 만들어 주고, 실행은 사람이 한다. 키와 기본값은 [docs/configuration-migration.md](docs/configuration-migration.md).

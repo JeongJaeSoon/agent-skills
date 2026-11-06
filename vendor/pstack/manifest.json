@@ -7,27 +7,27 @@
   "files": [
     {
       "upstream": "skills/create-verification-skill/SKILL.md",
-      "local": "skills/create-verification-skill/SKILL.md",
+      "local": "skills/verification-skill/references/create.md",
       "mode": "adapted"
     },
     {
       "upstream": "skills/create-verification-skill/references/feature-map-example/README.md",
-      "local": "skills/create-verification-skill/references/feature-map-example/README.md",
+      "local": "skills/verification-skill/references/feature-map-example/README.md",
       "mode": "verbatim"
     },
     {
       "upstream": "skills/create-verification-skill/references/feature-map-example/search.md",
-      "local": "skills/create-verification-skill/references/feature-map-example/search.md",
+      "local": "skills/verification-skill/references/feature-map-example/search.md",
       "mode": "verbatim"
     },
     {
       "upstream": "skills/create-verification-skill/references/feature-map-example/create-note.md",
-      "local": "skills/create-verification-skill/references/feature-map-example/create-note.md",
+      "local": "skills/verification-skill/references/feature-map-example/create-note.md",
       "mode": "verbatim"
     },
     {
       "upstream": "skills/maintain-verification-skill/SKILL.md",
-      "local": "skills/maintain-verification-skill/SKILL.md",
+      "local": "skills/verification-skill/references/maintain.md",
       "mode": "adapted"
     },
     {

@@ -115,6 +115,15 @@ When each skill fires, what it does and the files it ships are in the [skill cat
 
 The pstack group comes from Lauren Tan's [pstack](https://github.com/cursor/plugins) (MIT). These skills are now maintained here on their own: `vendor/pstack` keeps the original files as upstream had them, and an optional daily job reports upstream changes, which are ported by hand when worth it. With several sessions, two layers sit above the workers: the orchestrator (one top-level session) and leads (one per project). See the [Roles table in orchestrate](skills/orchestrate/SKILL.md#roles).
 
+## Renamed skills
+
+Some skills were merged into another skill as a mode. The old name is gone, so `/agent-skills:<old name>` no longer runs anything: use the new command.
+
+| Old command | New command / mode |
+|---|---|
+| `/agent-skills:create-verification-skill` | `/agent-skills:verification-skill`, create mode |
+| `/agent-skills:maintain-verification-skill` | `/agent-skills:verification-skill`, maintain mode |
+
 ## Configuration
 
 Nothing is required. Skills read their keys from `~/.claude/agent-skills.json`, one section per skill, and lists and secrets from `~/.config/agent-skills/`. When a key is missing, the feature is off or the skill asks before acting. The tracker adapter is Linear unless `tracker.adapter` says otherwise. The `skills-config` skill writes keys for you as a script you run. Keys and their defaults are in [docs/configuration-migration.md](docs/configuration-migration.md) (Korean).
