@@ -43,7 +43,7 @@ The last line exits non-zero when any test failed, and each failing file is name
 Also run:
 
 - `claude plugin validate .` for the manifests.
-- `claude plugin test .` for the hooks module (`hooks/brief_pane.test.tsx`, the `/brief-pane` panel). CI does not run it yet: its validate step is pinned to an older Claude Code that may not know `modules`.
+- `claude plugin test .` for the hooks module (`hooks/mods.tsx`, which registers `hooks/brief_pane.tsx`, the `/brief-pane` panel, and `hooks/clear_band.tsx`, the band that says when `/clear` is safe; each has its `.test.tsx`). CI does not run it yet: its validate step is pinned to an older Claude Code that may not know `modules`.
 - `tsc -p .` type-checks the hooks module once Claude Code has loaded the plugin and written `.claude-plugin/types/` (self-ignored). The root `tsconfig.json` that extends it is committed on purpose: the engine writes it whenever it is missing, so an untracked copy blocks `skills-sync` with "checkout has uncommitted changes".
 - `python3 scripts/catalog/build.py /tmp/skill-catalog.html` when you change `docs/skills.md`, `docs/skills.en.md` or `docs/skills.ja.md`. It fails when the three catalogs have a different number of headings or skills, and warns when the English or Japanese catalog lags the Korean one.
 

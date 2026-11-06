@@ -237,6 +237,8 @@ def test_classify():
     idle = "✳ some task"
     check("idle empty prompt is sendable", sync.classify(IDLE, idle) is None)
     check("fresh placeholder prompt is sendable", sync.classify(FRESH, idle) is None)
+    named = [RULE[:-12] + " orchestrator ─" if l == RULE and i == 1 else l for i, l in enumerate(IDLE)]
+    check("a session started with --name, its name in the top rule, is sendable", sync.classify(named, idle) is None)
     for name, lines in [("turn in progress", BUSY), ("hooks running", HOOKS), ("permission dialog", PERMISSION),
                         ("trust dialog", TRUST), ("AskUserQuestion", ASK), ("typed draft", TYPING), ("shell", SHELL),
                         ("compacting", COMPACTING), ("a custom spinner verb", CUSTOM_VERB),

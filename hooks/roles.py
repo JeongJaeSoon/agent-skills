@@ -74,24 +74,42 @@ def terminal_file(handle):
     return state() / "terminals" / f"{handle}.json"
 
 
-def record_terminal(handle, session, cwd, now, loaded=None):
-    """Ties an Orca terminal to the session that just started in it. Orca's own data has no session id, and a cwd
-    match can name another session in the same worktree. `loaded` (loaded_fields) is what that session's process read
-    of the plugin when it started; None keeps what the same session recorded before (a compaction reloads nothing)."""
+def record_terminal(handle, session, cwd, now, loaded=None, same_process=False):
+    """Ties an Orca terminal to the session that just started in it and returns the record it replaced. Orca's own
+    data has no session id, and a cwd match can name another session in the same worktree. `loaded` (loaded_fields)
+    is what that session's process read of the plugin when it started; None keeps what the same session recorded
+    before (a compaction reloads nothing). same_process: a /clear, which gives the process a new session id and
+    reloads nothing either, so the previous session's fields carry over."""
     if not SESSION.fullmatch(handle or "") or not SESSION.fullmatch(session or ""):
-        return
+        return None
     path = terminal_file(handle)
     path.parent.mkdir(parents=True, exist_ok=True)
     entry = {"handle": handle, "session_id": session, "cwd": cwd, "at": now}
+    try:
+        old = read_terminal(handle)
+    except (OSError, ValueError):
+        old = None
     if loaded is None:
-        try:
-            old = read_terminal(handle)
-        except (OSError, ValueError):
-            old = None
-        loaded = {k: old[k] for k in LOADED_KEYS if k in old} if old and old.get("session_id") == session else {}
+        keep = old and (same_process or old.get("session_id") == session)
+        loaded = {k: old[k] for k in LOADED_KEYS if k in old} if keep else {}
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps({**entry, **loaded}))
     tmp.replace(path)
+    return old
+
+
+def carry_role(old_session, new_session):
+    """A /clear starts a new session id in the same process: its ROLE record carries over, unless the new session
+    already has one. Returns the record now in force for new_session, or None."""
+    have = declared(new_session)
+    if have is not None or not SESSION.fullmatch(new_session or ""):
+        return have
+    record = declared(old_session)
+    if record is None:
+        return None
+    roles_dir().mkdir(parents=True, exist_ok=True)
+    (roles_dir() / f"{new_session}.json").write_text(json.dumps(record))
+    return record
 
 
 LOADED_KEYS = ("plugin_version", "hooks_sha")
@@ -189,6 +207,48 @@ def declared(session):
     except (OSError, ValueError):
         return None
     return record if isinstance(record, dict) else None
+
+
+def resolved_file(session):
+    return state() / "roles-resolved" / f"{session}.json"
+
+
+def record_resolved(session, entry):
+    """What resolve() gave this session at SessionStart (an `--agent` role has no ROLE record), for scripts that have no
+    hook event to resolve from. None removes it."""
+    if not SESSION.fullmatch(session or ""):
+        return
+    path = resolved_file(session)
+    try:
+        if entry:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(entry))
+        else:
+            path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def role_of(session):
+    """The session's orchestrator or lead entry without a hook event, in resolve()'s order: `ROLE: none`, the
+    `--agent` role SessionStart saw, a ROLE record declared since, then the title role SessionStart resolved."""
+    record = declared(session)
+    if record and record.get("role") == "none":
+        return None
+    try:
+        saved = json.loads(resolved_file(session).read_text())
+    except (OSError, ValueError):
+        saved = None
+    saved = saved if isinstance(saved, dict) and saved.get("role") in ("orchestrator", "lead") else None
+    entry = {k: v for k, v in (saved or {}).items() if k not in ("agent_type", "title_slug")} or None
+    if saved and AGENTS.get(saved.get("agent_type")):
+        if entry["role"] == "lead":  # resolve()'s slug: the title's, else the ROLE record's as it stands now
+            title = saved["title_slug"] if "title_slug" in saved else saved.get("slug")  # a record from before the key
+            return {"role": "lead", "slug": title or (record or {}).get("slug")}
+        return entry
+    if record and record.get("role") in ("orchestrator", "lead"):
+        return record
+    return entry
 
 
 def declare(session, prompt):
