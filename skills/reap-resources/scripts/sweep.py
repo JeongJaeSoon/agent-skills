@@ -799,6 +799,39 @@ def tick():
         return run_tick()
 
 
+def run_patrol(timeout, cmd=None):
+    """`patrol --if-due` in a session of its own, so that it can cut its scans by their group. What the round leaves in
+    that group ends with it, on a timeout too: subprocess.run would stop only the direct child. Its exit code."""
+    proc = subprocess.Popen(cmd or [sys.executable, str(reap.ORCH), "patrol", "--if-due"],
+                            stdin=subprocess.DEVNULL, start_new_session=True)
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(OSError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            proc.wait(timeout=5)
+        raise
+    with contextlib.suppress(OSError):
+        os.killpg(proc.pid, signal.SIGKILL)
+    return proc.returncode
+
+
+PATROL_IDLE_POLL_S = 2
+
+
+def wait_patrol_idle(deadline):
+    """True once no patrol round holds its run lock (<state>/patrol-run.lock, held until the candidate scans end),
+    whoever started the round; False when `deadline` (a time.monotonic() value) passes first."""
+    while True:
+        with file_lock("patrol-run.lock") as free:
+            if free:
+                return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(PATROL_IDLE_POLL_S)
+
+
 def run_tick():
     """In order, each step on its own so one failing leaves the next:
     patrol (due rounds only), the shadow, reap-hard for the rules the sweep does not own (it leaves an owned one by
@@ -806,11 +839,16 @@ def run_tick():
     the sweep has not written yet, is still its old cleaner's in that pass: the real round writes sweep-last.json
     after it. The worst exit code."""
     code = 0
+    started = time.monotonic()
     try:
-        r = subprocess.run([sys.executable, str(reap.ORCH), "patrol", "--if-due"], stdin=subprocess.DEVNULL,
-                           timeout=PATROL_WAIT_S, start_new_session=True)  # patrol cuts its scans by its own group
-        print(f"patrol 종료 코드 {r.returncode}")
-        code = max(code, 1 if r.returncode else 0)
+        rc = run_patrol(PATROL_WAIT_S)
+        print(f"patrol 종료 코드 {rc}")
+        code = max(code, 1 if rc else 0)
+        # A round the patrol automation already runs makes the call above leave at once with 0; the shadow and the real
+        # round refuse a round that is not complete, so wait for it inside the same budget instead of missing it.
+        if not wait_patrol_idle(started + PATROL_WAIT_S):
+            print("patrol 라운드가 예산 안에 끝나지 않음", file=sys.stderr)
+            code = max(code, 1)
     except (OSError, subprocess.SubprocessError) as e:
         print(f"patrol 을 돌리지 못함: {type(e).__name__}", file=sys.stderr)
         code = max(code, 1)

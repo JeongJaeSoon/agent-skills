@@ -16,7 +16,7 @@ pressure-watch, reap-hard, 대시보드 ensure)은 macOS LaunchAgent가 아니�
 
 `reap-hard`는 묻지 않고 카드를 지우는 정리라 보호 목록 파일(`reap-hard.protect_file`)이 있는 PC에서만 켠다. 파일이 없는
 새 PC에서는 상태가 "꺼짐(설정 키 없음)"이고 `apply`가 건너뛰며, 파일을 쓴 뒤 다음 `apply`가 건다
-([reap-hard.md](reap-hard.md)). 세션 순찰(`orch patrol`)의 job `patrol`은 기본 off다. 꺼져 있는 동안은 reap-hard 회차가 대신 띄우므로 같은 조건에서만 돈다
+([reap-hard.md](reap-hard.md)). 세션 순찰(`orch patrol`)의 job `patrol`은 기본 off다. 꺼져 있는 동안은 reap-hard 회차와 켜져 있는 `sweep`의 tick이 대신 띄우므로 같은 조건에서만 돈다
 (pressure 회차가 경고 이상으로 바뀔 때만 예외). `orch-dash`는 대시보드 서버를 확인해 내려갔으면 올릴 뿐 아무것도 지우지
 않아 새 PC에서도 켠다.
 
@@ -75,7 +75,7 @@ precheck 안에서 작업을 직접 하고 항상 exit 1로 끝나므로(`script
   마지막 실행이 실패했거나 주기의 3배를 넘게 안 돈 작업을 warn 행으로 보인다.
 - **run history:** Orca는 자동화마다 최근 100회차만 남긴다(실측: runNumber 108~207이 한 번에 읽힘). 3분 주기라도
   쌓이지 않는다. 그만큼 Orca 쪽 기록은 최근 5시간뿐이라 길게 볼 때는 위의 `jobs/*.json`을 쓴다.
-- **시간 제한:** precheck는 300초에서 끊기고, 작업은 280초에서 먼저 끊어 `timed out`으로 기록한다.
+- **시간 제한:** 기본은 precheck 300초, 작업 280초에서 먼저 끊어 `timed out`으로 기록한다. 라운드가 긴 작업은 따로 정한다(`patrol`은 420/400초, `sweep`은 2700/2680초).
 
 ## 장치별 성질
 
@@ -173,7 +173,7 @@ orca automations edit <id> --prompt "<schedule 이 출력한 --prompt 값>"   # 
 
 ## 세션 순찰 (`orch patrol`)
 
-모델 없이 도는 한 라운드다. 주기는 에이전트 없는 주기 작업 `patrol`(위 "에이전트 없이 도는 주기 작업", `*/30 * * * *`, precheck 420초, 기본 off라 `skills-sync setup enable patrol`로 켠다)이 `orch patrol --if-due`로 잡는다. reap-hard는 회차를 마칠 때마다 `orch patrol --if-due --fallback`을 공용 실행기 아래 별도 프로세스로 띄우는데(`orca_job.py run patrol-spawn`, 기록은 `jobs/patrol-spawn.json`), 이것은 마지막 라운드가 40분 넘게 지났을 때만 돈다. 그래서 patrol 작업이 돌고 있으면 reap-hard 쪽은 돌지 않고, 꺼져 있거나 실패하면 reap-hard가 45분 박자로 이어받는다. pressure 회차가 경고나 위험으로 바뀌면 그 회차도 같은 명령을 띄워 바로 한 번 더 돈다. 라운드와 그 뒤의 정리 후보 단계는 `<state>/patrol-run.lock`으로 한 번에 하나만 돈다. 한 라운드는 120초, 정리 후보 단계는 240초가 지나면 그 자리에서 멈춘다. 후보 단계의 janitor scan과 reap-hard scan은 스레드 두 개로 함께 돈다. 시간 안에 못 끝난 scan은 새 명령을 시작하지 않는다. 1초 뒤에도 남아 있으면 patrol이 이끄는 프로세스 그룹(orca_job과 reap-hard가 새 세션으로 띄운다)에서 자기 말고 도는 프로세스를 PID 하나씩 끝내고, 스레드가 돌아오면 회차를 닫는다(최대 10초). 그 뒤에도 남은 스레드가 띄운 것은 프로세스가 끝날 때 한 번 더 끝내고, 그 뒤에 생긴 것은 orca_job이 그룹째 끝낸다. 그래서 회차가 끝난 뒤 남는 자식·손자 프로세스가 없다. 셸에서 손으로 돌린 patrol은 그룹이 셸의 것이라 끝내지 않는다. 그때까지 쓴 발견 기록은 남고, 대시보드 Needs you 항목은 다음 라운드가 기록에 맞춘다.
+모델 없이 도는 한 라운드다. 주기는 에이전트 없는 주기 작업 `patrol`(위 "에이전트 없이 도는 주기 작업", `*/30 * * * *`, precheck 420초, 기본 off라 `skills-sync setup enable patrol`로 켠다)이 `orch patrol --if-due`로 잡는다. reap-hard는 회차를 마칠 때마다 `orch patrol --if-due --fallback`을 공용 실행기 아래 별도 프로세스로 띄우는데(`orca_job.py run patrol-spawn`, 기록은 `jobs/patrol-spawn.json`), 이것은 마지막 라운드가 40분 넘게 지났을 때만 돈다. 그래서 patrol 작업이 돌고 있으면 reap-hard 쪽은 돌지 않고, 꺼져 있거나 실패하면 reap-hard가 45분 박자로 이어받는다. `sweep`이 켜져 있으면 그 tick도 같은 `--if-due`로 patrol을 띄우고, 이미 도는 라운드가 있으면 그 라운드가 끝나길 같은 예산 안에서 기다린다(그림자와 실제 정리는 끝나지 않은 라운드를 거부하기 때문이다). pressure 회차가 경고나 위험으로 바뀌면 그 회차도 같은 명령을 띄워 바로 한 번 더 돈다. 라운드와 그 뒤의 정리 후보 단계는 `<state>/patrol-run.lock`으로 한 번에 하나만 돈다. 한 라운드는 120초, 정리 후보 단계는 240초가 지나면 그 자리에서 멈춘다. 후보 단계의 janitor scan과 reap-hard scan은 스레드 두 개로 함께 돈다. 시간 안에 못 끝난 scan은 새 명령을 시작하지 않는다. 1초 뒤에도 남아 있으면 patrol이 이끄는 프로세스 그룹(orca_job과 reap-hard가 새 세션으로 띄운다)에서 자기 말고 도는 프로세스를 PID 하나씩 끝내고, 스레드가 돌아오면 회차를 닫는다(최대 10초). 그 뒤에도 남은 스레드가 띄운 것은 프로세스가 끝날 때 한 번 더 끝내고, 그 뒤에 생긴 것은 orca_job이 그룹째 끝낸다. 그래서 회차가 끝난 뒤 남는 자식·손자 프로세스가 없다. 셸에서 손으로 돌린 patrol은 그룹이 셸의 것이라 끝내지 않는다. 그때까지 쓴 발견 기록은 남고, 대시보드 Needs you 항목은 다음 라운드가 기록에 맞춘다.
 
 읽는 순서는 Orca 명령이 먼저다(`orca terminal list`, `orca worktree ps --agent-wait`, 모든 Run의 `orca orchestration worker-list`). 그다음 collector의 `state.json`(카드의 부모, 연결 PR, 보드), 카드별 세션 기록 끝부분, `orch sent` 기록, 직전 pressure 회차를 읽는다. PR은 collector가 모은 것을 쓰고 `gh`를 새로 부르지 않는다. 화면은 직전 라운드 뒤로 출력이 생긴 에이전트 터미널만 읽는다.
 
@@ -197,7 +197,7 @@ orca automations edit <id> --prompt "<schedule 이 출력한 --prompt 값>"   # 
 
 `orch watch-cards`와 순찰은 `claude agents --json`의 세션 상태(busy, idle, blocked)를 두 번째 신호로 함께 기록한다. 터미널과 세션은 SessionStart 기록(`hooks/roles.py`)으로만 잇는다. 화면 검사는 줄지 않았고, 이 신호는 관찰만 한다. 어떤 판정, 발견, `cards`, `failed`, `sources`도 이 신호로 바뀌지 않고 어긋나도 아무도 깨우지 않는다. 조회 실패, 모르는 상태, 목록에 없음, 기록 없음은 `신호 없음`으로 적고, Codex 카드는 화면만 본다. 한 라운드가 못 본 것이 있으면 머리말이 `OK`가 아니라 `PARTIAL`이고 무엇을 못 봤는지 적는다. busy는 턴이 끝났어도 백그라운드 셸이 돌면 나오고, 권한 프롬프트·선택 메뉴·중단을 구분하지 못한다. 양쪽 판정은 `<state>/agent-signal.jsonl`에 남는다. `round`는 회차마다, `card`는 판정이 바뀔 때와 새 파일의 기준 행, `gone`은 터미널이 사라질 때 쓴다. 32 MB에서 `.1`로 한 세대 옮긴다. 1–2주 뒤 `differs`와 `finding`을 읽어 어느 쪽이 무엇을 놓쳤는지 비교한다. 순찰은 같은 값을 `patrol-verdicts.json`의 `signals`에도 쓴다.
 
-같은 파일에는 정리 체계 v2의 그림자 필드도 함께 쓴다. 아직 아무도 읽지 않고, 위 필드의 이름과 타입은 그대로다. `round`는 회차 id, `sources`는 소스별 ok·failed·skipped, `activity`는 `cards`가 담지 못하는 상태(parked, unknown)다. `candidates`는 지금 정리 주체들(janitor의 `reap.py scan`, reap-hard, pressure의 안전 종류)이 이번 회차에 대상으로 판정한 것을 규칙 이름(`card:landed`, `card:strict`, `stack:gone` 같은 것)과 함께 옮긴 목록이다. 새로 판정하지 않으므로 지금 대상보다 많아지지 않는다. 기댄 소스를 이번 회차에 읽지 못한 후보와 모델이 닫던 Chrome 창은 `reports`(보고만)로, 사람이 정할 카드는 `alerts`로 간다. 후보 단계는 본 회차가 잠금을 놓은 뒤 240초 예산으로 돌고, 끝까지 가야 `complete: true`가 된다. 스캔을 시작한 시각은 `candidates_t`에, 후보마다 그 후보를 낸 스캔이 시작한 시각은 `seen`에 남는다. 위험 단계에서는 건너뛴다. 회차마다 소스별 시간이 `<state>/patrol-rounds.jsonl`에 남고 `orch patrol timing`이 p50·p95를 보여 준다.
+같은 파일에는 정리 체계 v2의 필드(`candidates` 등)도 함께 쓰고 `sweep`이 읽는다. 위 필드의 이름과 타입은 그대로다. `round`는 회차 id, `sources`는 소스별 ok·failed·skipped, `activity`는 `cards`가 담지 못하는 상태(parked, unknown)다. `candidates`는 지금 정리 주체들(janitor의 `reap.py scan`, reap-hard, pressure의 안전 종류)이 이번 회차에 대상으로 판정한 것을 규칙 이름(`card:landed`, `card:strict`, `stack:gone` 같은 것)과 함께 옮긴 목록이다. 새로 판정하지 않으므로 지금 대상보다 많아지지 않는다. 기댄 소스를 이번 회차에 읽지 못한 후보와 모델이 닫던 Chrome 창은 `reports`(보고만)로, 사람이 정할 카드는 `alerts`로 간다. 후보 단계는 본 회차가 잠금을 놓은 뒤 240초 예산으로 돌고, 끝까지 가야 `complete: true`가 된다. 스캔을 시작한 시각은 `candidates_t`에, 후보마다 그 후보를 낸 스캔이 시작한 시각은 `seen`에 남는다. 위험 단계에서는 건너뛴다. 회차마다 소스별 시간이 `<state>/patrol-rounds.jsonl`에 남고 `orch patrol timing`이 p50·p95를 보여 준다.
 
 ```bash
 orch patrol --once --dry-run   # 한 라운드를 판정만 하고 아무것도 쓰지 않는다
