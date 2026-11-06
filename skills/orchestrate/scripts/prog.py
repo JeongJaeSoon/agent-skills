@@ -1559,7 +1559,12 @@ def note_file(cfg, slug):
     if (mine.get("adapter") or user.get("adapter")) != "markdown":
         return None, "the notes store is not a markdown root"
     root = mine.get("root") or (user.get("markdown") or {}).get("root") or "~/notes"
+    named = pathlib.Path(str(cfg.get("note") or "")).expanduser()  # `orch init --note`: the note the lead named
+    if cfg.get("note") and named.is_file():
+        return named, None
     found = sorted(pathlib.Path(root).expanduser().rglob(f"program-{slug}.md"))
+    if len(found) > 1:
+        return None, f"{len(found)} files named program-{slug}.md under {root}; `orch set {slug} note <path>` names one"
     return (found[0], None) if found else (None, f"no program-{slug}.md under {root}")
 
 
@@ -1585,9 +1590,9 @@ def note_values(text):
                 except ValueError:
                     pass
     section = re.search(r"^## 완료 조건.*?$(.*?)(?=^## |\Z)", text, re.M | re.S)
-    tickets = re.findall(r"^\s*- \[[ xX]\]\s+([A-Z][A-Z0-9]*-\d+)\b", section.group(1), re.M) if section else []
-    if tickets:
-        out["predicate"] = tickets
+    if section:  # a section with no ticket is a predicate emptied in the note, not a value left out
+        out["predicate"] = re.findall(r"^\s*- \[[ xX]\]\s+([A-Z0-9]*[A-Z][A-Z0-9]*-\d+(?:-[A-Z0-9]+)*)\b",
+                                      section.group(1), re.M)
     return out
 
 

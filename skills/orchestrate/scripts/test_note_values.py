@@ -80,7 +80,31 @@ for want in ("note values: DIFFER from program.json", "merge_policy: note autono
              "ceiling: note 4, program.json 6", "deadline: note 2026-12-01T00:00:00Z, program.json none",
              "predicate: note only ABC-9, program.json only ABC-2", "program.json is the source"):
     assert want in out, (want, out)
-assert f.read_text() != before  # the note is the test's own copy; prog never wrote it
+differing = note(SAME.replace("human-gate", "autonomous"))
+text_before, json_before = differing.read_text(), (prog.HOME / "demo" / "program.json").read_text()
+prog.note_lines(program())
+assert differing.read_text() == text_before and (prog.HOME / "demo" / "program.json").read_text() == json_before, \
+    "note_lines wrote a file"
+
+# A sub-unit id (ABC-1-K2) is one id, not ABC-1 with a tail cut off.
+note(SAME.replace("ABC-2 second", "ABC-1-K2 sub"))
+(out,) = prog.note_lines(program(predicate=["ABC-1", "ABC-1-K2"]))
+assert out.startswith("note values: match"), out
+
+# A predicate section emptied in the note is a difference, not a value left out.
+note(SAME.replace("- [ ] ABC-1 first\n- [x] ABC-2 second\n", ""))
+(out,) = prog.note_lines(program())
+assert "predicate: program.json only ABC-1 ABC-2" in out, out
+note(SAME)
+
+# Two notes with the program's file name: the one `note` names wins; with none named nothing is guessed.
+(NOTES / "Archive").mkdir(exist_ok=True)
+(NOTES / "Archive" / "program-demo.md").write_text(SAME.replace("천장 6", "천장 1"))
+(out,) = prog.note_lines(program())
+assert out.startswith("note values: not compared") and "2 files named program-demo.md" in out, out
+(out,) = prog.note_lines(program(note=str(NOTES / "Project" / "acme" / "program-demo.md")))
+assert out.startswith("note values: match"), out
+(NOTES / "Archive" / "program-demo.md").unlink()
 
 # The same instant written two ways is no difference.
 note(SAME.replace("마감 없음", "마감 2026-12-01T09:00:00+09:00"))
