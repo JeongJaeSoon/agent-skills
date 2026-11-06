@@ -106,6 +106,11 @@ class AgentSkillsKeysTest(Base):
                                            "allow_unknown": ["prs.assign_reviewer"]}})
         self.assertEqual(r.returncode, 0, r.stderr)
 
+    def test_keys_documented_only_in_a_reference(self):
+        # prs.model is in no DEFAULTS; only watch-prs references/config.md documents it.
+        r, _ = self.emit({"agent_skills": {"set": {"prs.model": "sonnet"}}})
+        self.assertEqual(r.returncode, 0, r.stderr)
+
     def test_file_extension_is_not_a_documented_key(self):
         for key in ("prs.py", "prs.json", "brief.md"):
             r, _ = self.emit({"agent_skills": {"set": {key: "x"}}})

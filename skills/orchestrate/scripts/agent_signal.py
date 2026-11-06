@@ -20,6 +20,8 @@ LOG = STATE / "agent-signal.jsonl"
 LOCK = STATE / "agent-signal.lock"
 NO_SIGNAL = "신호 없음"
 KNOWN = {"busy", "idle", "blocked"}
+# Claude Code's `waiting` carries `waitingFor` (seen: "dialog open"): the session is parked on a prompt for a person.
+ALIASES = {"waiting": "blocked"}
 ROTATE_BYTES = 32 * 2**20
 LOCK_WAIT_S = 2
 RAW_LIMIT = 500
@@ -62,6 +64,8 @@ def reading_of(handle, rows, problem):
     value = state_of(row)
     if isinstance(value, str) and value in KNOWN:
         return {"agents": value, "raw": value, "why": None}
+    if isinstance(value, str) and value in ALIASES:
+        return {"agents": ALIASES[value], "raw": value, "why": None}
     return {"agents": None, "raw": _raw(value), "why": f"unknown state {_raw(value)[:40]}"}
 
 

@@ -105,6 +105,12 @@ drift가 없는 홈은 `no change`로 끝난다. 실제로 쓰는 홈만 고쳐�
 
 특정 PC와 똑같이 맞추고 싶으면 `setup-pc`의 "Compare with another PC"(원래 PC에서 `setup_check.py export`, 여기서 `check --baseline`)를 쓴다. 기본 경로는 아니다.
 
+## 점검 표
+
+`python3 skills/setup-pc/scripts/setup_check.py check [--json]`은 읽기만 하고 표를 출력한다. `setup.py`의 적용 줄도 마지막에 같은 표를 낸다. 보는 항목은 PATH의 도구, `gh auth`, 커밋 서명, agent-skills를 읽는 방식과 `origin/main`과 같은지, 동기화 작업과 그 마지막 결과, 기본 on 자동화, Orca Run 연결과 터미널 제목, `language`, `outputStyle`, `permissions.defaultMode`, autoMode 규칙, `permissions.allow`, 없으면 기능이 꺼지는 `agent-skills.json` 키, 개인 파일이다.
+
+행 상태는 `ok`, `missing`, `differs`, `warn`, `info`(설정 안 됨. 그 값을 쓰는 스킬이 없을 때 어떻게 되는지 적는다), `disabled`(사용자가 끈 자동화), `unsupported`(macOS 전용 항목을 다른 OS에서 본 것)다. 남은 일로 치는 것은 `missing`, `differs`, `warn`뿐이다.
+
 ## 확인
 
 1. `setup.py --apply`가 끝에 낸 표(또는 `python3 skills/setup-pc/scripts/setup_check.py check`)에 `missing`·`differs`·`warn`이 없다.

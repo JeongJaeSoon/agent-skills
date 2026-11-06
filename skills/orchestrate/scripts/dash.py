@@ -38,7 +38,7 @@ Store: $PROGRAMS_HOME or ~/.claude/programs. The dashboard writes only under <sl
 Fleet state: $ORCH_FLEET_STATE or ~/.local/state/agent-skills/dashboard (see fleet.py). ORCH_FLEET=off disables it,
 ORCH_SKILLS=off disables only the skill usage collect, and ORCH_PR_STATS=off only the PR stats collect.
 """
-import concurrent.futures, datetime as dt, fcntl, hashlib, http.server, itertools, json, os, pathlib, plistlib, re, shutil, signal, socket, subprocess, sys, tempfile, threading, time, urllib.request
+import concurrent.futures, copy, datetime as dt, fcntl, functools, hashlib, http.server, itertools, json, os, pathlib, plistlib, re, shutil, signal, socket, subprocess, sys, tempfile, threading, time, urllib.parse, urllib.request
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -270,6 +270,59 @@ PR_FIELDS = "number,title,url,state,isDraft,headRefOid,headRefName,baseRefName,m
 CHECK_FIELDS = ",statusCheckRollup,reviews"
 
 
+WINDOW_LIMIT = 500
+REPO_NAMES = {}  # the name a program wrote -> the name GitHub answers to now; a rename keeps the old name working
+ROUND_PRS = [None]  # during a slow_round: canonical repo -> {"open": rows, "window": [(since, rows)]}
+ROUND_LOCK = threading.Lock()
+
+
+def canonical_repo(repo):
+    """The repo's current owner/name. Programs started before a rename still carry the old name and GitHub redirects it,
+    so without this the same repo is listed once per name. Lower-cased when GitHub does not answer: names are
+    case-insensitive."""
+    key = repo.lower()
+    if key not in REPO_NAMES:
+        try:
+            REPO_NAMES[key] = sh(["gh", "api", f"repos/{repo}", "--jq", "{n: .full_name}"], timeout=20)["n"].lower()
+        except (SourceError, KeyError, TypeError, AttributeError):
+            return key  # not remembered: asked again next time
+    return REPO_NAMES[key]
+
+
+def round_prs(repo, kind, since, ask):
+    """ask() once per repo and round: a dozen programs on one repo shared one `gh pr list` each time. Outside a round
+    (`orch-dash collect`, a first read) ROUND_PRS is None and every caller asks. A window that began no later than
+    this program's, and was not cut at its limit, holds everything this one would have listed. A failure is kept for
+    the round too, so a repo gh cannot answer is asked once, not once per program."""
+    with ROUND_LOCK:
+        if ROUND_PRS[0] is None:
+            return ask()
+        mine = ROUND_PRS[0].setdefault(repo, {"open": None, "window": []})
+        if kind == "open":
+            if mine["open"] is None:
+                mine["open"] = _try(ask)
+            return _unwrap(mine["open"], lambda rows: rows)
+        for s, got in mine["window"]:
+            if s <= since and (isinstance(got, Exception) or len(got) < WINDOW_LIMIT or s == since):
+                return _unwrap(got, lambda rows: [p for p in rows if (p.get("createdAt") or "")[:10] >= since])
+        got = _try(ask)
+        mine["window"].append((since, got))
+        return _unwrap(got, lambda rows: rows)
+
+
+def _try(ask):
+    try:
+        return ask()
+    except SourceError as e:
+        return e
+
+
+def _unwrap(got, narrow):
+    if isinstance(got, Exception):
+        raise got
+    return narrow(copy.deepcopy(got))
+
+
 def fetch_prs(cfg):
     """Every open PR with its checks and reviews (the land order needs them all), plus closed and merged ones
     from the program window without them.
@@ -277,10 +330,12 @@ def fetch_prs(cfg):
     gh asks GraphQL for 100 PRs a page; with rollups and reviews, a page of a repo with 200 PRs timed out
     (HTTP 504) on every collect. A closed PR keeps the CI and rounds it had when a collect saw it open.
     """
-    base = ["gh", "pr", "list", "--repo", cfg["repo"]]
-    open_ = sh(base + ["--json", PR_FIELDS + CHECK_FIELDS, "--state", "open", "--limit", "100"])
+    repo = canonical_repo(cfg["repo"])
+    base = ["gh", "pr", "list", "--repo", repo]
+    open_ = round_prs(repo, "open", None, lambda: sh(base + ["--json", PR_FIELDS + CHECK_FIELDS, "--state", "open", "--limit", "100"]))
     since = (prog.parse_ts(cfg["created_at"]) - dt.timedelta(days=1)).date().isoformat()
-    window = sh(base + ["--json", PR_FIELDS, "--state", "all", "--search", f"created:>={since}", "--limit", "500"])
+    window = round_prs(repo, "window", since, lambda: sh(
+        base + ["--json", PR_FIELDS, "--state", "all", "--search", f"created:>={since}", "--limit", str(WINDOW_LIMIT)]))
     seen = {p["number"] for p in open_}
     return open_ + [p for p in window if p["number"] not in seen]
 
@@ -292,20 +347,73 @@ def orca_result(*args):
     return out.get("result", out) if isinstance(out, dict) else {}
 
 
+FLEET_SNAPSHOT_TTL_S = 30  # the fleet tick reads worktrees every 10-60 s; older than this, ask Orca directly
+
+
+def fleet_worktrees():
+    """The fleet tick's `worktree ps` rows in `worktree list`'s shape (id, path, isMainWorktree: all landed_but_open reads),
+    or None when there is no tick younger than FLEET_SNAPSHOT_TTL_S. Ownership stays with the fleet tick: this reads."""
+    f = FLEET
+    try:
+        at = ((f.sources.get("orca") or {}).get("updated_at")) if f else None
+        rows = (f.fast or {}).get("worktrees") if f else None
+        if rows is None or not at or (utcnow() - prog.parse_ts(at)).total_seconds() > FLEET_SNAPSHOT_TTL_S:
+            return None
+        return [{**w, "id": w.get("worktreeId") or w.get("id")} for w in rows]
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+FLEET_RUNS_TTL_S = 150  # the fleet tick reads runs every 120 s (fleet.RUNS_EVERY); a snapshot older than one round plus slack is not trusted
+
+
+def fleet_run(run_id):
+    """(run record, workers, tasks) of one Run from the fleet tick's runs snapshot, or None when that snapshot is older
+    than FLEET_RUNS_TTL_S, failed, or does not list the Run with its objective (run-list holds the newest page only, and
+    an Orca from before --full lists no objective): the caller then asks Orca. Ownership stays with the fleet tick."""
+    f = FLEET
+    try:
+        src = (f.sources.get("runs") or {}) if f else {}
+        at = src.get("updated_at")
+        if not at or src.get("error") or (utcnow() - prog.parse_ts(at)).total_seconds() > FLEET_RUNS_TTL_S:
+            return None
+        runs = f.runs or {}
+        run = next((r for r in runs.get("runs") or [] if r.get("id") == run_id), None)
+        if not run or "objective" not in run:
+            return None
+        workers = [w for w in runs.get("workers") or [] if w.get("runId") == run_id]
+        tasks = [t for t in runs.get("tasks") or [] if t.get("run_id") == run_id]
+        # The fleet tick re-reads a settled Run only every fleet.SETTLED_EVERY s yet stamps the whole read fresh, so a
+        # Run with nothing moving carries no age of its own: ask Orca for it.
+        if all(w.get("dispatchStatus") in fleet.SETTLED for w in workers) and all(t.get("status") in fleet.SETTLED for t in tasks):
+            return None
+        return run, workers, tasks
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
 def fetch_orca(cfg):
-    """Workers, tasks, the Run's objective and the worktrees (cards) still on disk: local, read-only CLI calls."""
-    wts = sh(["orca", "worktree", "list", "--json"])
+    """Workers, tasks, the Run's objective and the worktrees (cards) still on disk: local, read-only CLI calls. The
+    Run and the worktrees come from the fleet tick's snapshots while they are fresh, so a collect does not list them a
+    second time (the fleet tick already reads every Run's workers and tasks)."""
+    shared = fleet_worktrees()
+    wts = {"worktrees": shared} if shared is not None else sh(["orca", "worktree", "list", "--json"])
     import orca_settings  # a lead started as a worker shares its coordinator's Run: only the units under it
 
     def call(*argv):
         return orca_result(*argv[1:])
-    # worker-list pages at 100 rows; one run passed 86 in two days
-    workers = orca_settings.all_workers(call, "--run", cfg["run"], "--limit", "100", error=SourceError)
-    tasks = orca_result("task-list", "--run", cfg["run"]).get("tasks", [])
+    snap = fleet_run(cfg["run"])
+    if snap:
+        run, workers, tasks = snap
+    else:
+        # worker-list pages at 100 rows; one run passed 86 in two days
+        workers = orca_settings.all_workers(call, "--run", cfg["run"], "--limit", "100", error=SourceError)
+        tasks = orca_result("task-list", "--run", cfg["run"]).get("tasks", [])
+        run = orca_settings.with_full(call, "orchestration", "run-show", "--id", cfg["run"]).get("run") or {}
     workers = orca_settings.lead_scope(workers, cfg.get("lead_dispatch"))
     return {"workers": workers,
             "tasks": orca_settings.scope_tasks(tasks, workers, cfg.get("lead_dispatch")),
-            "run": orca_settings.with_full(call, "orchestration", "run-show", "--id", cfg["run"]).get("run") or {},
+            "run": run,
             "worktrees": (wts.get("result", wts) if isinstance(wts, dict) else {}).get("worktrees", [])}
 
 
@@ -1304,7 +1412,11 @@ def _merge(slug, d, cfg, fetched, interval):
     events, bad = dated(rows)
     dash = d / "dashboard"
     dash.mkdir(exist_ok=True)
+    read_key = file_key(dash / "state.json")  # before the read: a file replaced after it is not the one prev came from
     prev = read_json(dash / "state.json", {}) or {}
+    kept = STATE_SOURCES.get(dash / "state.json")
+    if kept and prev and kept[0] == file_key(dash / "state.json"):
+        prev["sources"] = kept[1]  # successes a skipped write left only in memory; a file another process wrote since wins
     srcs = {k: dict(v) for k, v in (prev.get("sources") or {}).items() if isinstance(v, dict)}
     # The ledger is read on every collect, so its error is recomputed rather than carried over.
     errors = [e for e in prev.get("errors") or [] if e.split(":", 1)[0] not in fetched and not e.startswith("ledger:")]
@@ -1454,8 +1566,52 @@ def _merge(slug, d, cfg, fetched, interval):
         "series": series, "series_from": iso(horizon), "activity": activity_of(events, notes), "notes": notes[-100:][::-1],
         "errors": errors, "sources": srcs,
     }
-    write_atomic(dash / "state.json", json.dumps(state, ensure_ascii=False, indent=1))
+    write_state(dash / "state.json", state, read_key)
     return state
+
+
+STATE_BEAT_S = 90  # longest an unchanged state.json goes unwritten: prog.py reads one older than 3 minutes as stale
+STATE_WROTE = {}   # path -> (digest of the state without what moves by itself, monotonic time of the write)
+STATE_SOURCES = {}  # path -> (file_key of the file then on disk, the `sources` of a state that was not written)
+
+
+def file_key(path):
+    try:
+        s = path.stat()
+        return (s.st_mtime_ns, s.st_size)
+    except OSError:
+        return None
+
+
+def settled(state):
+    """The state minus what changes on its own between two collects: when it ran, each source's last good time, and
+    the start of the series window (a moving 30-day horizon). Everything else is data."""
+    s = {k: v for k, v in state.items() if k not in ("generated_at", "series_from")}
+    s["sources"] = {n: {k: v for k, v in src.items() if k != "updated_at"} for n, src in (state.get("sources") or {}).items()}
+    s["series"] = [{**r, "t": None} if r.get("t") == state.get("series_from") else r for r in state.get("series") or []]
+    s["land_order"] = [{k: v for k, v in e.items() if k != "age_h"} for e in state.get("land_order") or []]  # a clock, not data
+    if isinstance(s.get("summary"), dict) and isinstance(s["summary"].get("oldest_open_pr"), dict):
+        s["summary"] = {**s["summary"], "oldest_open_pr": {k: v for k, v in s["summary"]["oldest_open_pr"].items() if k != "age_h"}}
+    return hashlib.sha1(json.dumps(s, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+
+
+def write_state(path, state, read_key):
+    """A ~0.5 MB file rewritten per program every 20-30 s was most of this server's disk traffic. Rewrite it when the data
+    changed, and otherwise every STATE_BEAT_S so generated_at still says the collector is alive."""
+    digest, now = settled(state), time.monotonic()
+    last = STATE_WROTE.get(path)
+    if last and last[0] == digest and now - last[1] < STATE_BEAT_S and path.exists():
+        # The next collect reads prev from disk: it must still see these times. Kept only for the file this state was built
+        # from; if another process replaced it since the read, theirs is newer and nothing of ours is remembered.
+        if file_key(path) == read_key:
+            STATE_SOURCES[path] = (read_key, state["sources"])
+        else:
+            STATE_SOURCES.pop(path, None)
+        return False
+    write_atomic(path, json.dumps(state, ensure_ascii=False, indent=1))
+    STATE_WROTE[path] = (digest, now)
+    STATE_SOURCES.pop(path, None)
+    return True
 
 
 # ---------------------------------------------------------------- serve
@@ -1528,15 +1684,21 @@ def log(msg):
 
 
 def slow_round(interval, first):
-    for slug in programs():
-        try:  # one program's failure, closed() and its directory vanishing included, must not end the round
-            if not first and closed(slug):
-                continue
-            st = collect(slug, SOURCES if first else ("tracker", "stages", "github"), interval)
-            if st["errors"]:
-                log(f"{slug}: " + " | ".join(st["errors"]))
-        except Exception as e:  # keep serving; the next round retries
-            log(f"{slug}: collect failed: {e!r}")
+    with ROUND_LOCK:
+        ROUND_PRS[0] = {}  # the PR lists programs on one repo share, for this round only
+    try:
+        for slug in programs():
+            try:  # one program's failure, closed() and its directory vanishing included, must not end the round
+                if not first and closed(slug):
+                    continue
+                st = collect(slug, SOURCES if first else ("tracker", "stages", "github"), interval)
+                if st["errors"]:
+                    log(f"{slug}: " + " | ".join(st["errors"]))
+            except Exception as e:  # keep serving; the next round retries
+                log(f"{slug}: collect failed: {e!r}")
+    finally:
+        with ROUND_LOCK:
+            ROUND_PRS[0] = None
 
 
 # The GitHub stage (tracker, PRs, compare) runs every GITHUB_EVERY_S, set by `dashboard.github_every_s` in
@@ -1703,7 +1865,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                              "summary": st.get("summary"), "errors": len(st.get("errors") or []),
                              # the sidebar folds a program away once it is closed or quiet with no lead on screen
                              "closed": done, "last_event": last_event})
-            return self.send(200, json.dumps(rows, ensure_ascii=False).encode())
+            return self.send_cached(json.dumps(rows, ensure_ascii=False).encode())
         m = re.fullmatch(r"/api/([^/]+)/state", path)
         if m:
             slug = m.group(1)
@@ -1732,10 +1894,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def fleet_get(self, path):
         if path == "/api/fleet/state":
-            if time.monotonic() - FLEET_VIEWED[0] > FLEET_VIEW_S:
-                FLEET_FORCE[0] = True  # the page just opened: runs and every open PR now, not when their turn comes
-                FLEET_WAKE.set()
-            FLEET_VIEWED[0] = time.monotonic()
+            # Only the page says it is looking (?viewed=1, app.js on a visible tab). A script or a curl reading the file
+            # used to count as a view and kept the 10 s Orca poll and the per-tick PR probes running.
+            if urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query, keep_blank_values=True).get("viewed") == ["1"]:
+                if time.monotonic() - FLEET_VIEWED[0] > FLEET_VIEW_S:
+                    FLEET_FORCE[0] = True  # the page just opened: runs and every open PR now, not when their turn comes
+                    FLEET_WAKE.set()
+                FLEET_VIEWED[0] = time.monotonic()
             f = fleet.state_dir() / "state.json"
             if not f.exists():
                 return self.send(503, b'{"error":"first fleet collect has not finished"}')
@@ -1770,12 +1935,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == "/api/fleet/sent":
             # The `orch sent` log is read on every poll, like the brief: a send shows on the next poll, not the next collect.
             days = re.search(r"[?&]days=(\d{1,2})\b", self.path)
-            try:
-                body = sent.page(FLEET.sent if FLEET else [], max(1, min(int(days.group(1)), sent.DAYS_MAX)) if days else 1,
-                                 inbox_since=getattr(FLEET, "sent_inbox_since", None))
-            except Exception as e:  # the page says what failed (fleet.js shows "error") instead of never loading
-                body = {"error": f"sent: {type(e).__name__}: {e}"}
-            return self.send_cached(json.dumps(body, ensure_ascii=False).encode())
+            n = max(1, min(int(days.group(1)), sent.DAYS_MAX)) if days else 1
+            cache = SENT_CACHES.setdefault(n, RenderCache(lambda v: "error" not in v, sent_signature))
+            return self.send_cached(json.dumps(cache.get(lambda: sent_render(n)), ensure_ascii=False).encode())
         if path == "/api/fleet/token":
             return self.send(200, json.dumps({"token": TOKEN}).encode())
         m = re.fullmatch(r"/api/fleet/avatar/([A-Za-z0-9-]{1,39}(?:\[bot\])?)", path)
@@ -1830,6 +1992,50 @@ FLEET = None
 FLEET_VIEWED, FLEET_WAKE, FLEET_FORCE = [0.0], threading.Event(), [False]
 FLEET_VIEW_S, FLEET_IDLE_EVERY = 300, 60  # poll Orca every 10 s only while a page has polled in the last 5 min
 CHECK = selfcheck.SelfCheck()
+
+
+# Longest each fleet file goes unwritten while only its clocks moved, and the clock fields themselves. board.py reads
+# state.json's age in minutes; stage_auto.warning reads memory.json's stage_auto_at against an hours-long limit, and
+# flow.py shows a store stale by its mtime.
+# registry.py judges fleetmem stale at 300 s and prs at 1800 s, by mtime
+FLEET_BEAT_S = {"state.json": 30, "memory.json": 120, "prs.json": 600}
+FLEET_CLOCKS = {"state.json": ("generated_at",), "memory.json": ("stage_auto_at",)}
+
+
+def fleet_digest(name, text):
+    """The text of one fleet file without the fields that only record when it was built: those move every tick."""
+    if name not in FLEET_CLOCKS:
+        return text
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return text
+    built = data.get("generated_at")
+    for k in FLEET_CLOCKS[name]:
+        data.pop(k, None)
+    if name == "state.json":
+        data["sources"] = {n: {k: v for k, v in s.items() if k != "updated_at"} for n, s in (data.get("sources") or {}).items()}
+        # An item with no time of its own is stamped with the tick's: that is the clock again, not news.
+        data["items"] = [{k: v for k, v in i.items() if not (k == "at" and v == built)} if isinstance(i, dict) else i
+                         for i in data.get("items") or []]
+    return hashlib.sha1(json.dumps(data, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+
+
+def quiet_save(f, **files):
+    """Fleet.save for the served process. The text it compares differs on every tick (generated_at, each source's
+    updated_at, stage_auto_at), so a 0.7 MB state.json and a 0.8 MB memory.json were rewritten every 10-16 s with nothing new
+    in them. Written when the data changed, else every FLEET_BEAT_S[name]."""
+    wrote, now = f.__dict__.setdefault("wrote", {}), time.monotonic()
+    for name, text in files.items():
+        digest = fleet_digest(name, text)
+        last = wrote.get(name)
+        # Only a file that carries a clock needs the beat; the others hold the same bytes until their data changes.
+        if last and last[0] == digest and now - last[1] < FLEET_BEAT_S.get(name, float("inf")) \
+                and (fleet.state_dir() / name).exists():
+            continue
+        fleet.write_atomic(fleet.state_dir() / name, text)
+        wrote[name] = (digest, now)
+        f.saved[name] = text
 
 
 def fleet_wait():
@@ -2107,6 +2313,7 @@ def serve(host, port, interval, make_fleet=None):
     threading.Thread(target=watch_migrate, kwargs={"port": port}, daemon=True).start()
     if os.environ.get("ORCH_FLEET") != "off":
         FLEET = (make_fleet or fleet.Fleet)()
+        FLEET.save = functools.partial(quiet_save, FLEET)
         threading.Thread(target=fleet_loop, daemon=True).start()
         if os.environ.get("ORCH_SKILLS") != "off":
             threading.Thread(target=skills_loop, daemon=True).start()
@@ -2145,9 +2352,99 @@ def brief_report():
     return rep | {"stages": stage_report(rep.get("now_by_pr"), "now_by_pr" in rep and rep["now_by_pr"] is not None)}
 
 
+RENDER_MAX_AGE_S = 30  # a render prints ages ("3 min ago"): never serve one older than this, whatever the inputs say
+# The files the brief and units renders read, outside the store: the fleet's own, and the state root's beside it
+# (janitor plan, patrol verdicts, pressure queue, pending reloads). A file the render starts reading goes here, or it
+# shows up to RENDER_MAX_AGE_S late.
+RENDER_FILES = ("state.json", "prs.json", "inbox-external.jsonl", "stages.json", "stages-auto.json", "tokens.json")
+RENDER_ROOT_FILES = ("janitor-plan.json", "patrol-verdicts.json", "pressure-queue.json", "reload-pending.json")
+def db_version():
+    """The store's change mark: mtime and size of the DB and its -wal. A commit lands in the -wal (or in the DB itself
+    without one), so `orch board set`, `decide add` or any other process moves it. No connection is opened here:
+    registry.py lets store.py alone import sqlite3."""
+    try:
+        p = store_db.path()
+    except OSError:
+        return None
+    return tuple(file_key(pathlib.Path(f"{p}{suffix}")) for suffix in ("", "-wal"))
+
+
+def state_root():
+    return pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()
+
+
+def keys_of(paths):
+    return tuple(file_key(p) for p in paths)
+
+
+def pressure_signature():
+    """pressure.py history reads its own files beside the others in the state root (history, queue, plan, reading), the
+    thresholds and interval in agent-skills.json, and whether its LaunchAgent plist is installed."""
+    # reap.py reads the default path whatever AGENT_SKILLS_CONFIG says; this server's own settings use the override
+    configs = {pathlib.Path(p).expanduser() for p in ("~/.claude/agent-skills.json", os.environ.get("AGENT_SKILLS_CONFIG") or "")
+               if p}
+    plists = sorted(pathlib.Path("~/Library/LaunchAgents").expanduser().glob("*pressure-watch.plist"))
+    return keys_of(sorted(state_root().glob("pressure*")) + [PRESSURE, *sorted(configs)] + plists)
+
+
+def sent_signature():
+    """What /api/fleet/sent is built from: the fleet's sent rows (replaced once a runs cycle), and the `orch sent` log files."""
+    f = FLEET
+    log = sorted(sent.sent_dir().glob("*.jsonl")) + [fleet.state_dir() / "sends.jsonl"]
+    return (id(getattr(f, "sent", None)), len(getattr(f, "sent", None) or []), getattr(f, "sent_inbox_since", None), keys_of(log))
+
+
+def render_signature():
+    """What the brief's render reads, cheaply: the collector's files by mtime and size, the store by db_version."""
+    out = [db_version()]
+    root = state_root()
+    # board.py reads patrol-verdicts.json beside the fleet's dir, rowstate.py reads the janitor's under AGENT_SKILLS_STATE
+    roots = [root] + ([fleet.state_dir().parent] if fleet.state_dir().parent != root else [])
+    paths = [fleet.state_dir() / n for n in RENDER_FILES] + [r / n for r in roots for n in RENDER_ROOT_FILES]
+    try:  # every program's ledger and config: the render reads them through the board and the stage table
+        paths += [home() / s / n for s in programs() for n in ("ledger.jsonl", "program.json")]
+    except OSError:
+        pass
+    for p in paths:
+        try:
+            s = p.stat()
+            out.append((s.st_mtime_ns, s.st_size))
+        except OSError:
+            out.append(None)
+    return tuple(out)
+
+
+class RenderCache:
+    """One rendered answer, kept while its inputs' signature is unchanged and it is younger than RENDER_MAX_AGE_S.
+    Only a good answer is kept: a timeout or a missing renderer is asked again on the next request."""
+
+    def __init__(self, ok, signature=None):
+        self.ok, self.signature, self.lock, self.sig, self.at, self.value = ok, signature, threading.Lock(), None, 0.0, None
+
+    def get(self, build):
+        with self.lock:  # a second request waits for the first render instead of starting its own child
+            sig, now = (self.signature or render_signature)(), time.monotonic()
+            if self.value is not None and sig == self.sig and now - self.at < RENDER_MAX_AGE_S:
+                return self.value
+            value = build()
+            if self.ok(value):
+                self.sig, self.at, self.value = sig, now, value
+            else:
+                self.value = None
+            return value
+
+
+BRIEF_CACHE = RenderCache(lambda v: "text" in v)
+UNITS_CACHE = RenderCache(lambda v: "error" not in v)
+
+
 def units_report():
-    """units.py's build of the brief's own render, run per request like the brief (a child process, so a slow render times
-    out here and not in the server). Nothing is cached or kept: the units are a join, not a second source."""
+    """units.py's build of the brief's own render, in a child process so a slow render times out here and not in the
+    server. Rendered again only when its inputs changed (RenderCache): the units are a join, not a second source."""
+    return UNITS_CACHE.get(units_render)
+
+
+def units_render():
     try:
         r = subprocess.run([sys.executable, str(HERE / "units.py")], capture_output=True, text=True, timeout=30)
     except subprocess.TimeoutExpired:
@@ -2159,9 +2456,13 @@ def units_report():
 
 
 def periodic_report():
+    return BRIEF_CACHE.get(periodic_render)
+
+
+def periodic_render():
     """The periodic report exactly as `orch brief render` prints it: the renderer is the one implementation of
-    the table rules, so the page shows its output and never builds a second copy. Run per request (well under a
-    second) so a `orch board set` shows on the next poll. A lead or card that never wrote to the board still shows,
+    the table rules, so the page shows its output and never builds a second copy. Rendered again when the board, the
+    collector's files or RENDER_MAX_AGE_S say so (RenderCache), so a `orch board set` shows on the next poll. A lead or card that never wrote to the board still shows,
     from its session and its report file. --no-refresh: this server's collector is what keeps state.json fresh, and a
     collect per poll while its orca source is down would hit the timeout on every one."""
     try:
@@ -2181,9 +2482,28 @@ def periodic_report():
 PRESSURE = HERE.parents[1] / "reap-resources" / "scripts" / "pressure.py"
 
 
+SENT_CACHES = {}  # days -> RenderCache, keyed by the fleet's sent rows and the log files
+
+
+def sent_render(days):
+    try:
+        return sent.page(FLEET.sent if FLEET else [], days, inbox_since=getattr(FLEET, "sent_inbox_since", None))
+    except Exception as e:  # the page says what failed (fleet.js shows "error") instead of never loading
+        return {"error": f"sent: {type(e).__name__}: {e}"}
+
+
+PRESSURE_CACHES = {}  # hours -> RenderCache: the page asks for 6, 24 and so on, each answer is its own
+
+
 def pressure_report(hours=6):
-    """reap-resources' pressure history, run per request like the brief: its files, thresholds and config are that
-    script's, so this server keeps no copy of them. It reads files only; the LaunchAgent's round does the measuring."""
+    """reap-resources' pressure history, in a child process: its files, thresholds and config are that script's, so this
+    server keeps no copy of them. It reads files only; the LaunchAgent's round does the measuring. Run again only when
+    one of those files changed (RenderCache), else the page's poll re-read a day of history for nothing."""
+    cache = PRESSURE_CACHES.setdefault(hours, RenderCache(lambda v: "error" not in v, pressure_signature))
+    return cache.get(lambda: pressure_render(hours))
+
+
+def pressure_render(hours):
     try:
         r = subprocess.run([sys.executable, str(PRESSURE), "history", "--hours", str(hours)], capture_output=True,
                            text=True, timeout=15)

@@ -224,7 +224,8 @@ def sync(broadcast_after=True):
 
 # --- broadcast -------------------------------------------------------------------------------------
 
-RULE = re.compile(r"^─{10,}$")
+# A session started with `--name` draws its name into the prompt box's top rule: `──── orchestrator ─`.
+RULE = re.compile(r"^─{10,}(?: [^─]+ ─+)?$")
 # "✶ Contemplating… (32s", "· Crunching… (running hooks", "✶ Compacting conversation… (12s"
 SPINNER = re.compile(r"^[·✢✳✶✻✽*] .*…")
 BUSY = ("esc to interrupt",)

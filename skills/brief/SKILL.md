@@ -1,6 +1,6 @@
 ---
 name: brief
-description: "Use when the human asks where the work stands — \"현황 보고해줘\", \"상태 보고해줘\", \"브리핑해줘\", \"진행 상황 알려줘\", \"진행상황 표로\", \"status update\", `/brief` — or a turn for the human ends with a report spanning several items. \"어디까지 했지\" is recall; \"남은 작업 있어?\" is handoff-ticket."
+description: "Use when the human asks where work stands — \"현황 보고해줘\", \"상태 보고해줘\", \"브리핑해줘\", \"진행 상황 알려줘\", \"진행상황 표로\", `/brief` — or a turn ends with a report over several items. \"어디까지 했지\" is recall."
 ---
 
 # Brief
