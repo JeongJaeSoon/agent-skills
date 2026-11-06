@@ -1,4 +1,4 @@
-<!-- translated-from: 44701bcab10ef3dbfe37f3285706101a89b7de74 -->
+<!-- translated-from: ffe6631aff7116d1924d8cf9324c25be02cf92e6 -->
 # スキルカタログ
 
 `agent-skills` プラグインに入っているスキル40個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック16個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
@@ -563,7 +563,7 @@ PR を受け持つスキルとマージする主体:
 | `guard.deny.keychain` | deny | `security find-*-password` の `-w`・`-g`、`security dump-keychain` |
 | `guard.deny.url_credentials` | deny | 引数に `scheme://user:secret@` を含む URL |
 | `guard.deny.user_settings` | deny | ユーザー自身の設定への書き込み：`~/.claude/settings.json`・`settings.local.json`（`$CLAUDE_CONFIG_DIR` も）、`~/.claude/agent-skills.json`、secure-fill の `allow.json`。Edit・Write・MultiEdit・NotebookEdit と、Bash のリダイレクト・`tee`・`cp`・`mv`・`sed -i`・`rm` など。プロジェクトの `.claude/settings.json` は対象外です |
-| `guard.deny.plugin_apply` | deny | このプラグインの `setup.py`・`config_emit.py`・`automode_rule.py` とその書き出しコピーの `--apply`、`bootstrap.py --write`。コピーは「runs --apply, never the agent」の一文で見分けます。他のリポジトリの `setup.py` は対象外です |
+| `guard.deny.plugin_apply` | deny | このプラグインの `setup.py`・`config_emit.py`・`automode_rule.py` とその書き出しコピーの `--apply`、`bootstrap.py --write`。コピーは「runs --apply, never the agent」の一文で見分けます。他のリポジトリの `setup.py` は対象外です。リハーサルは通します。同じコマンドで `CLAUDE_CONFIG_DIR` と `AGENT_SKILLS_CONFIG` を自分で指定し、どちらもリンクや `..` を解いた実パスが現在の worktree の下にあり、実際のユーザー設定ではない場合です。`setup.py` は `--settings-only` も必要です |
 | `guard.deny.slash_send` | deny | `orca terminal send` での `/reload…`・`/model` の入力 |
 | `guard.deny.prompt_substitution` | deny | `orca worktree create --prompt` のコマンド置換（`$(…)`、バッククォート） |
 | `guard.deny.self_exempt_label` | deny | `gh` で `no-visual-change` ラベルを付けること（`pr create --label`、`pr edit --add-label`、`issue edit`、`gh api …/labels`） |

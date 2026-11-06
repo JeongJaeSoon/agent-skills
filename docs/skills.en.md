@@ -1,4 +1,4 @@
-<!-- translated-from: 44701bcab10ef3dbfe37f3285706101a89b7de74 -->
+<!-- translated-from: ffe6631aff7116d1924d8cf9324c25be02cf92e6 -->
 # Skill catalog
 
 This page covers the 40 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 16 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
@@ -561,7 +561,7 @@ Every rule has a key in `~/.claude/agent-skills.json`. Its value is one of `"den
 | `guard.deny.keychain` | deny | `security find-*-password` with `-w` or `-g`; `security dump-keychain` |
 | `guard.deny.url_credentials` | deny | A URL with `scheme://user:secret@` in an argument |
 | `guard.deny.user_settings` | deny | Writes to the user's own settings: `~/.claude/settings.json` and `settings.local.json` (also under `$CLAUDE_CONFIG_DIR`), `~/.claude/agent-skills.json`, and secure-fill's `allow.json`. Covers Edit, Write, MultiEdit and NotebookEdit, and Bash redirections, `tee`, `cp`, `mv`, `sed -i`, `rm` and the like. A project's `.claude/settings.json` is not covered |
-| `guard.deny.plugin_apply` | deny | `--apply` of this plugin's `setup.py`, `config_emit.py`, `automode_rule.py` and their emitted copies, and `bootstrap.py --write`. A copy is recognized by the line "runs --apply, never the agent". Another repository's `setup.py` is not covered |
+| `guard.deny.plugin_apply` | deny | `--apply` of this plugin's `setup.py`, `config_emit.py`, `automode_rule.py` and their emitted copies, and `bootstrap.py --write`. A copy is recognized by the line "runs --apply, never the agent". Another repository's `setup.py` is not covered. A rehearsal passes: the same command names both `CLAUDE_CONFIG_DIR` and `AGENT_SKILLS_CONFIG` itself, and both resolve (links and `..` followed) under the current worktree and away from the user's real settings. `setup.py` also needs `--settings-only` |
 | `guard.deny.slash_send` | deny | Typing `/reload…` or `/model` with `orca terminal send` |
 | `guard.deny.prompt_substitution` | deny | A command substitution (`$(…)`, backticks) in `orca worktree create --prompt` |
 | `guard.deny.self_exempt_label` | deny | Adding the `no-visual-change` label with `gh` (`pr create --label`, `pr edit --add-label`, `issue edit`, `gh api …/labels`) |
