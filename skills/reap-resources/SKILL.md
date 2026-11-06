@@ -203,9 +203,8 @@ starts an agent that runs `reap --plan`; `orca automations list` shows a prechec
 to date with `skills-sync setup enable janitor`, and again with `enable janitor-load` when that job is registered (one
 `enable` does not touch the other), then read both prechecks back, before an auto-mode rule for `reap --plan` is removed.
 What a person has to look at (cards judged 사람 결정, chrome windows, resting targets) goes to `reap.inbox_to` as one
-message, sent again only when a key not in the last sent set appears. Each round leaves one row in
-`<state>/janitor-runs.jsonl` (targets, acted, skipped, failed, left past the 480-second budget, error; an act still running at 570 seconds is cut and recorded as failed), the only record
-of a cleanup: Orca's run history shows a skip either way. `inbox_to` and `reap.pressure.notify_to` are Orca addresses.
+message, sent again only when a key not in the last sent set appears. A round that ran leaves one summary row in
+`<state>/janitor-runs.jsonl` (targets, acted, skipped, failed, left past the 480-second budget, error; an act still running at 570 seconds is cut and recorded as failed), and a stop signal that lands while that row is written can leave a corrected second row; a round that finds the lock held or the load condition unmet leaves none, and each target's own result also goes to `reap-actions.jsonl`. Orca's run history shows a skip either way. `inbox_to` and `reap.pressure.notify_to` are Orca addresses.
 Use `run:<id>`: a `term_` handle changes when its terminal restarts, and `orch patrol` raises one Orca no longer lists
 (T).
 
