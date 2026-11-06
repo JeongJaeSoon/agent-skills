@@ -17,7 +17,7 @@
       "width": 373
     },
     "create-verification-skill": {
-      "skill_md_tokens": 2028,
+      "skill_md_tokens": 2094,
       "tokens": 76,
       "width": 299
     },
@@ -27,7 +27,7 @@
       "width": 377
     },
     "dispatch-card": {
-      "skill_md_tokens": 4643,
+      "skill_md_tokens": 4739,
       "tokens": 71,
       "width": 262
     },
@@ -47,7 +47,7 @@
       "width": 272
     },
     "handoff-ticket": {
-      "skill_md_tokens": 2259,
+      "skill_md_tokens": 2279,
       "tokens": 83,
       "width": 285
     },
@@ -62,7 +62,7 @@
       "width": 188
     },
     "maintain-verification-skill": {
-      "skill_md_tokens": 1216,
+      "skill_md_tokens": 1255,
       "tokens": 73,
       "width": 291
     },
@@ -72,7 +72,7 @@
       "width": 279
     },
     "orchestrate": {
-      "skill_md_tokens": 11770,
+      "skill_md_tokens": 11856,
       "tokens": 101,
       "width": 332
     },
@@ -87,7 +87,7 @@
       "width": 198
     },
     "reap-resources": {
-      "skill_md_tokens": 10487,
+      "skill_md_tokens": 10733,
       "tokens": 107,
       "width": 370
     },
@@ -112,12 +112,12 @@
       "width": 293
     },
     "setup-pc": {
-      "skill_md_tokens": 2694,
+      "skill_md_tokens": 2726,
       "tokens": 103,
       "width": 346
     },
     "show-me-your-work": {
-      "skill_md_tokens": 1504,
+      "skill_md_tokens": 1507,
       "tokens": 56,
       "width": 223
     },
@@ -137,7 +137,7 @@
       "width": 240
     },
     "tune-automode": {
-      "skill_md_tokens": 3241,
+      "skill_md_tokens": 3406,
       "tokens": 91,
       "width": 333
     },
@@ -152,7 +152,7 @@
       "width": 242
     },
     "use-tracker": {
-      "skill_md_tokens": 2823,
+      "skill_md_tokens": 2877,
       "tokens": 64,
       "width": 243
     },
@@ -177,7 +177,7 @@
       "width": 268
     },
     "write-skill": {
-      "skill_md_tokens": 2766,
+      "skill_md_tokens": 2881,
       "tokens": 58,
       "width": 207
     },
