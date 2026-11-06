@@ -1,6 +1,6 @@
 ---
 name: handoff-ticket
-description: "Use when handing the next ticket to a fresh Orca worktree card — \"핸드오프\", \"다음 티켓 진행해줘\", \"남은 작업 있어?\", \"머지하고 다음 진행해줘\", \"handoff\" — and when this session's ticket is done, to decide what runs next. Another repo, or this session keeps working, is dispatch-card."
+description: "Use to hand the next ticket to a fresh Orca card — \"핸드오프\", \"다음 티켓 진행해줘\", \"남은 작업 있어?\", \"머지하고 다음 진행해줘\" — and when this ticket is done, to pick what runs next. Another repo is dispatch-card. An orchestrator dispatches it instead."
 ---
 
 # Orca handoff

@@ -1,6 +1,6 @@
 ---
 name: reflect
-description: "Review the active transcript or a finished program with three parallel reviewers, record the learnings in the lessons ledger, and route each to an edit on an existing skill. Use for reflect, \"스킬에 반영해줘\", \"스킬이 왜 안 떴어\", \"이 세션 돌아보고 스킬 개선해줘\", \"개선 이력 보여줘\"; at orchestrate's Close; and each flow-improver or /loop round."
+description: "Review this transcript or a finished program with three reviewers, record learnings in the lessons ledger and route each to a skill edit. Use for reflect, \"스킬에 반영해줘\", \"스킬이 왜 안 떴어\", \"이 세션 돌아보고 스킬 개선해줘\", \"개선 이력 보여줘\", orchestrate's Close and flow-improver rounds."
 ---
 
 # Reflect

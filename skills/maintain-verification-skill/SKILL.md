@@ -1,6 +1,6 @@
 ---
 name: maintain-verification-skill
-description: "Periodic pass that keeps a project's verify-* skill and feature map true to the app, ending in at most one PR of proven fixes. Use for /maintain-verification-skill, \"verify 스킬 점검해줘\", the weekly verify-skill round, or when a verify-* skill could not drive a feature or described it wrongly."
+description: "Keep a project's verify-* skill and feature map true to the app, ending in at most one PR of proven fixes. Use for \"verify 스킬 점검해줘\", the weekly round, or a verify-* skill that failed to drive a feature. An orchestrator dispatches it instead."
 ---
 
 # Maintain a verification skill
