@@ -269,26 +269,42 @@ ANNOT_FIELDS = ("phase", "progress", "after", "owner", "next")  # what Orca, Git
 ANNOT_RENDERED = True
 
 
-def annot_overlay(rows, annots):
-    """Lay each card annotation over the one row that stands for its card (a row's session, worktree or linked card is the
-    annotation's). Returns {worktree: [row ids]} for cards with two or more rows: the annotation goes on the first, and the
-    render lists the rest as `중복 N건`. rows are changed in place."""
-    dupes = {}
-    by_card = {}
-    for rid, r in rows.items():
-        for wt in {r.get("session"), r.get("worktree"), r.get("linked")} - {None}:
-            by_card.setdefault(wt, []).append(rid)
+def annot_overlay(rows, annots, gone=None):
+    """Lay each card annotation over the rows that stand for its card (a row's session, worktree or linked card is the
+    annotation's). gone: the rows `annot-migrate` dropped, {id: row}. A dropped row stays hidden while another row shows its
+    card (that row takes its program); with none, the dropped row is shown again, so the move never makes a card or its
+    owner block vanish. Returns {worktree: [row ids]} for cards with two or more rows (`중복 N건`). rows change in place."""
+    gone = gone or {}
+
+    def by_card():
+        out = {}
+        for rid, r in rows.items():
+            for wt in {r.get("session"), r.get("worktree"), r.get("linked")} - {None}:
+                out.setdefault(wt, []).append(rid)
+        return out
+    cards = by_card()
     for key, a in annots.items():
         wt = key[len(ANNOT_PREFIX):]
-        ids = by_card.get(wt, [])
-        if not ids:
-            continue
-        r = rows[ids[0]]
-        for k in ("progress", "after", "owner", "next"):
-            if a.get(k):
-                r[k] = a[k]
-        if a.get("phase"):
-            r["title"] = f"{r['title']} ({a['phase']})"
+        back = [g for g in (x[len("row:"):] for x in a.get("aliases") or () if x.startswith("row:")) if g in gone]
+        if cards.get(wt):
+            for g in back:  # the replacement is in the dropped row's program, so a program report keeps the card
+                for rid in cards[wt]:
+                    if gone[g].get("program") and not rows[rid].get("program") and not rows[rid].get("parent"):
+                        rows[rid]["program"] = gone[g]["program"]
+        elif back:
+            rows[back[0]] = {**gone[back[0]], "status": "moving"}  # the annotation's owner block, if any, is laid on below
+    dupes = {}
+    for key, a in annots.items():
+        wt = key[len(ANNOT_PREFIX):]
+        ids = by_card().get(wt, [])
+        for rid in ids:
+            r = rows[rid]
+            for k in ("progress", "after", "owner", "next"):
+                if a.get(k):
+                    r[k] = a[k]
+            if a.get("phase"):
+                r["title"] = f"{r['title']} ({a['phase']})"
+                r["phase_note"] = a["phase"]
         if len(ids) > 1:
             dupes[wt] = ids
     return dupes
@@ -1152,7 +1168,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         except store_db.NotMigrated:  # a DB that is not imported: unknown, and the headline and the ❔ rows say so
             open_dec = []
     # A row `annot-migrate` moved into a card annotation is dropped: it neither shows nor hides the card's own row.
-    store["rows"] = {k: r for k, r in store["rows"].items() if r.get("status") != "dropped"}
+    moved_rows = {k: r for k, r in store["rows"].items() if r.get("status") == "dropped"}
+    store["rows"] = {k: r for k, r in store["rows"].items() if k not in moved_rows}
     prs_file = fleet.read_json(sd / "prs.json", {}) or {}
     me = prs_file.get("me")
     prs = {k: {**v["detail"], "probed_at": v.get("probed_at")} for k, v in (prs_file.get("prs") or {}).items() if v.get("detail")}
@@ -1180,7 +1197,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         extra, extra_order = fleet_rows(state, store["leads"], store["rows"], prs, now,
                                         float(limits["subagent_stale_h"]) * 3600, checks, notes=inputs)
         store["rows"], store["order"] = {**extra, **store["rows"]}, store["order"] + extra_order
-    card_dupes = annot_overlay(store["rows"], store.get("annots") or {})
+    card_dupes = annot_overlay(store["rows"], store.get("annots") or {}, moved_rows)
     rows = store["rows"]
 
     everyone = rows  # every row, before a --scope report keeps only its program's: a group does not depend on the scope
@@ -1247,6 +1264,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
 
     if scope != "top-level":
         rows = {k: r for k, r in rows.items() if up(r, "program") == scope}
+    card_dupes = {wt: kept for wt, ids in card_dupes.items() if len(kept := [i for i in ids if i in rows]) > 1}
     order = [k for k in store["order"] if k in rows]
     repo_name = rowstate.repo_names(up(r, "repo") for r in rows.values())
 
@@ -1436,7 +1454,12 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             states[h["id"]] = rowstate.roll_up(states[h["id"]], kid_status)
             lines[at]["status"] = states[h["id"]]["status"]
 
-    lines, done, hidden = drop_acked(lines, prs, rows, acks.acked())
+    have = acks.acked()
+    for key, a in (store.get("annots") or {}).items():  # an ack of a moved row stands for the card's row
+        for alias in a.get("aliases") or ():
+            if f"board:{alias[len('row:'):]}" in have:
+                have[f"board:fleet:{key[len(ANNOT_PREFIX):]}"] = have[f"board:{alias[len('row:'):]}"]
+    lines, done, hidden = drop_acked(lines, prs, rows, have)
 
     # Per group: how many rows move, wait on a person or a condition, or are done. Counted from the rows themselves, so
     # a reviewer fold, a bullet and a ✅ row folded away still count once each; a row with rows under it is their
@@ -1533,7 +1556,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     for l in lines:
         name = l["sid"] and one_line(sessions[l["sid"]].get("name") or "")
         if name and l["session"] and on_session[l["sid"]] == 1 and name.lower() not in l["name"].lower():
-            l.update(name=name, orca_name=True)
+            phase = (rows.get(l["key"]) or {}).get("phase_note")
+            l.update(name=f"{name} ({phase})" if phase else name, orca_name=True)
 
     # Bold: a row the last report did not have, or whose status, progress, next, PR state or session changed.
     snap = {}
