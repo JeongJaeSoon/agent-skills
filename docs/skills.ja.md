@@ -1,4 +1,4 @@
-<!-- translated-from: d8da7ce087b2b395440d446855d2ffc85b747eb0 -->
+<!-- translated-from: e6a0fb905c930dc23a055cd3dcd91e26b01cb848 -->
 # スキルカタログ
 
 `agent-skills` プラグインに入っているスキル41個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック16個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
@@ -637,6 +637,28 @@ hook 自身の判定が例外を出したら、その呼び出しは通し、警
 - このターン（人が最後に打ったプロンプトの後）に、拒否されなかった Bash 呼び出しが `orch decide add`、`orch board now`、`orch board set … --owner`、`orch gate`、`orca orchestration gate-create`、`orch-dash inbox add` のどれかを実行していれば通ります。項目と記録は対応づけず、1回の呼び出しが返信全体を覆います。
 - レベル `guard.owner_check`：キーがなければ `warn` です。人に「owner_check: 기록 안 된 오너 항목 N」（記録されていないオーナー項目 N 件）を1行見せ、`$AGENT_SKILLS_STATE/owner-check.jsonl` に行を残します。systemMessage はモデルに届かないので、モデルには何も見えません。誤検知率はこの行から測ります。`deny` はキーでのみ有効になり、claim_check と同じくその停止を一度だけ止めて、モデルに記録させます（`stop_hook_active` なら通過）。`off` と `AGENT_SKILLS_OWNER_CHECK=0` で無効になります。
 - 判定は文言の一致なので、誤検知も見逃しもあります。そのため `warn` から始めます。
+
+### ターン終了時の検査
+
+`hooks/turn_check.py`（Stop・SubagentStop、Telegram 返信ツールの PreToolUse）と、`hooks/claim_check.py` のサブエージェント検査。スキルの文章にしか書かれていなかったターン終了時の習慣を、transcript から確かめます。モデルは呼ばず、どの検査も警告を出すだけでブロックしません。
+
+| キー | 対象 | 警告する場面 |
+|---|---|---|
+| `turn_check.wait_alive` | orchestrator・lead | ターンが終わるのに、動いているバックグラウンドの `orch inbox`・`orch wait`・`orch watch-cards` がない |
+| `turn_check.self_close` | worker、CLOSE カード | 成功の `worker_done` を送った、または CLOSE カードで、`skills-sync end-check` がカードを閉じてよい（`close-terminal`・`remove`）と言っている |
+| `turn_check.review_idle` | worker、サブエージェント | 最後のツール結果がレビュー報告（code-review 系スキル、レビューのサブエージェント、`codex`）か、ターンがバックグラウンド完了通知で始まったのに、次の呼び出しなしで終わる |
+| `turn_check.decision_registered` | orchestrator・lead | 返信が決定を求めているのに、このターンに `orch decide add`・`orch gate`・`orca orchestration gate-create` がない |
+| `turn_check.offer_phrase` | すべてのメインセッション | 返信の最後の3行が「말씀 주시면 …」「want me to file …」のように仕事を相手に返している |
+| `turn_check.stacks_down` | すべてのメインセッション | このセッションが `docker compose -p <project> up` で上げたプロジェクトに、`down` も `reap.py ledger add --kind compose-stack --keep` もない |
+| `turn_check.brief_render` | orchestrator・lead | 返信が状況報告の形（`🙋 지금 오너가 할 일`・`⏳ 다른 사람 대기`・`🧭 우선순위`・`## 보류`・`🔄 진행`・`## 요약` のうち二つ以上）なのに、このターンに `orch brief render` がない |
+| `turn_check.prs_actions` | すべてのメインセッション | `prs.py actions` が行を出したのに、このターンに `prs.py log` がない |
+| `turn_check.telegram_render` | orchestrator・lead | Telegram 返信（送信前に検査）が状況報告の形なのに、このターンに `orch brief render` がない |
+| `claim_check.subagent` | すべてのセッション | サブエージェントの報告だけを根拠に完了を言い、そのサブエージェントを起動した後にこのセッション自身の Bash 呼び出しがない |
+
+- キーがない、または `false`・`"off"` なら何もせず、出力もありません。`true`・`"warn"`（`"ask"`・`"deny"` も warn として読む）なら、人に `turn_check: <内容>` を1行見せ、検査ごとに1行を `$AGENT_SKILLS_STATE/turn-warnings.jsonl` に残します。モデルには届きません。このフックに deny はありません。
+- どの役割に届くかは `hooks/roles.py` の MATRIX（`turn_*`）が決めます。サブエージェントが受けるのは `review_idle` だけです。
+- `wait_alive` と `stacks_down` は transcript 全体を読みます（64MB を超えると読みません）。ほかはこのターンだけを見ます。別の名前で包んだ待機や compose 呼び出しは見逃します。
+- 判定はテキストとツール名の一致なので、誤検知も見逃しもあります。`turn-warnings.jsonl` を一週間見て検査ごとの誤検知を数えてから、キーを有効にします。
 
 ## pstack との違い
 
