@@ -18,11 +18,13 @@ Usage: land_exec.py <command>   (also `orch land-exec <command>`)
   queue [--json]           requests, newest last: status, sha, reason, merge sha
   setup                    add the land_request table to agent-skills.db (a recorded step; enabling the automation runs it)
   status                   the last round and the queue counts
+  drift                    one warning line per gap between the scope and the repos in use (`skills-sync setup status`)
 """
 import contextlib, datetime as dt, fcntl, json, os, pathlib, subprocess, sys, time
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))  # run with -I, this file's directory is not on sys.path
+import land_scope  # noqa: E402
 import prog  # noqa: E402
 import store  # noqa: E402
 
@@ -131,6 +133,20 @@ class Round:
             return unanswered("GitHub did not answer `gh api user`: the repo's owner is unchecked")
         if repo.split("/")[0].casefold() != login.casefold():
             return settle("refused", 1, f"{repo} is not owned by the gh account '{login}'")
+        # GitHub follows a rename or a transfer from the recorded name: scope and owner are judged on the repo it is now.
+        try:
+            meta = prog.gh_json("repo", "view", repo, "--json", "nameWithOwner,isFork,isArchived")
+        except SystemExit as e:
+            return unanswered(f"GitHub did not answer `gh repo view {repo}`: {str(e.code)[:160]}")
+        current = meta.get("nameWithOwner") or "?"
+        if current.casefold() != repo.casefold():
+            if not land_scope.how(ex["scope"], current) or land_scope.excluded(ex["scope"], repo):
+                return settle("refused", 1, f"{repo} is {current} on GitHub now, which orchestrate.land_executor does"
+                                            " not cover")
+            if current.split("/")[0].casefold() != login.casefold():
+                return settle("refused", 1, f"{repo} is {current} on GitHub now, not owned by the gh account '{login}'")
+        if why := land_scope.wildcard_only(ex["scope"], current, meta):
+            return settle("refused", 1, why)
         if age_h > ex["max_wait_hours"]:
             return settle("refused", 1, f"expired: queued {age_h:.0f} h, over max_wait_hours {ex['max_wait_hours']:g}")
         if p.cfg.get("merge_policy") != "autonomous":
@@ -286,7 +302,70 @@ def cmd_status(argv):
     return 0
 
 
-COMMANDS = {"round": cmd_round, "queue": cmd_queue, "setup": cmd_setup, "status": cmd_status}
+DRIFT_DAYS = 7
+
+
+def drift_lines(today=None):
+    """One warning line per gap between the executor's scope and the repos in use: an owned repo with a PR of yours from
+    the last DRIFT_DAYS days that the scope leaves out, a repos entry GitHub now names differently, and a covered repo
+    with no `<name>-standalone` program. [] with the executor off; one line when GitHub or the settings do not answer."""
+    try:
+        ex = prog.land_executor()
+    except SystemExit as e:
+        return [f"경고: land executor 설정을 읽지 못해 범위를 점검하지 못함: {e.code}"]
+    if not ex:
+        return []
+    since = (today or dt.date.today()) - dt.timedelta(days=DRIFT_DAYS)
+    try:
+        login = prog.run(["gh", "api", "user", "--jq", ".login"]).stdout.strip()
+        found = prog.gh_json("search", "prs", "--author", "@me", "--created", f">={since.isoformat()}", "--limit", "1000",
+                             "--json", "repository")
+    except SystemExit as e:
+        return [f"경고: GitHub가 답하지 않아 land executor 범위를 점검하지 못함: {str(e.code)[:160]}"]
+    scope, out, covered, seen = ex["scope"], [], {}, {}
+    for p in found:
+        name = (p.get("repository") or {}).get("nameWithOwner")
+        if name:
+            seen.setdefault(name.casefold(), name)
+    for repo in sorted(seen.values(), key=str.casefold):
+        if repo.split("/")[0].casefold() != login.casefold() or land_scope.excluded(scope, repo):
+            continue
+        if land_scope.how(scope, repo):
+            covered.setdefault(repo.casefold(), repo)
+        else:
+            out.append(f"경고: {repo}는 최근 {DRIFT_DAYS}일 PR이 있는 소유 repo인데 land executor 범위 밖이다"
+                       " (skills-config로 orchestrate.land_executor.repos에 넣는다)")
+    for owner, name in sorted(scope["names"]):
+        entry = f"{owner}/{name}"
+        try:
+            now_named = prog.gh_json("repo", "view", entry, "--json", "nameWithOwner")["nameWithOwner"]
+        except (SystemExit, KeyError, TypeError) as e:
+            out.append(f"경고: repos의 {entry}를 GitHub에서 확인하지 못함: {str(getattr(e, 'code', e))[:120]}")
+            continue
+        if now_named.casefold() != entry:
+            out.append(f"경고: repos의 {entry}는 GitHub에서 {now_named}로 이름이 바뀌어 범위에서 빠졌다"
+                       " (skills-config로 새 이름을 넣는다)")
+        else:
+            covered.setdefault(entry, now_named)
+    for repo in sorted(covered.values(), key=str.casefold):
+        slug = f"{repo.split('/')[-1]}-standalone"
+        try:
+            ok = json.loads((prog.HOME / slug / "program.json").read_text())["repo"].casefold() == repo.casefold()
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            ok = False
+        if not ok:
+            out.append(f"경고: {repo}는 범위 안인데 {slug} program이 없다"
+                       f" (`orch verdict|land {slug} --repo {repo}`가 처음 부를 때 만든다)")
+    return out
+
+
+def cmd_drift(argv):
+    for line in drift_lines():
+        print(line)
+    return 0
+
+
+COMMANDS = {"round": cmd_round, "queue": cmd_queue, "setup": cmd_setup, "status": cmd_status, "drift": cmd_drift}
 
 
 def main(argv):

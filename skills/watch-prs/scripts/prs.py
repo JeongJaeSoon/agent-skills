@@ -47,7 +47,9 @@ category review with a `pr`); a missing ledger means GitHub only.
 import datetime as dt, fnmatch, json, os, pathlib, re, shlex, subprocess, sys, time, zoneinfo
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3] / "scripts"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "orchestrate" / "scripts"))
 import card  # noqa: E402  (a release brief carries card.py's CLOSE row)
+import land_scope  # noqa: E402
 
 
 def opt(name, default=None):
@@ -149,7 +151,9 @@ def config(path=CONFIG):
             re.compile(x)
         except re.error as e:
             raise ConfigError(f"exclude_title_patterns: invalid regex {x!r}: {e}") from None
-    cfg = {**DEFAULTS, **raw, "exclude_title_patterns": pats, "land_executor_repos": land_executor_repos()}
+    ex_repos, ex_exclude = land_executor_repos()
+    cfg = {**DEFAULTS, **raw, "exclude_title_patterns": pats, "land_executor_repos": ex_repos,
+           "land_executor_exclude": ex_exclude}
     profiles = cfg["profiles"]
     if not isinstance(profiles, list) or not all(isinstance(x, dict) and isinstance(x.get("match"), str) for x in profiles):
         raise ConfigError('profiles must be a list of objects, each with a "match" string')
@@ -172,27 +176,31 @@ def config(path=CONFIG):
 
 
 def land_executor_repos():
-    """The repos orchestrate.land_executor merges, read from the file `orch land` reads ($AGENT_SKILLS_CONFIG, else
+    """(repos, exclude) of orchestrate.land_executor, read from the file `orch land` reads ($AGENT_SKILLS_CONFIG, else
     ~/.claude/agent-skills.json, whatever --config says), with prog.land_executor's test (enabled exactly true).
-    Not a prs key. An unreadable file or a repos value that is not a list stops every command: guessing it empty
+    Not a prs key. An unreadable file or a scope land_scope rejects stops every command: guessing it empty
     would print direct merges for repos the executor owns."""
     path = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or CONFIG).expanduser()
     try:
         whole = json.loads(path.read_text())
     except FileNotFoundError:
-        return []
+        return [], []
     except (OSError, ValueError) as e:
         raise ConfigError(f"{path}: unreadable ({e}); not merging around orchestrate.land_executor") from None
     orch = whole.get("orchestrate") if isinstance(whole, dict) else None
     ex = orch.get("land_executor") if isinstance(orch, dict) else None
     if not isinstance(ex, dict) or ex.get("enabled") is not True:
-        return []
-    repos = ex.get("repos")
-    if repos is None:
-        return []
-    if not isinstance(repos, list):
-        raise ConfigError("orchestrate.land_executor.repos must be a list of owner/name strings")
-    return [r for r in repos if isinstance(r, str)]
+        return [], []
+    try:
+        land_scope.parse(ex)
+    except land_scope.ScopeError as e:
+        raise ConfigError(str(e)) from None
+    return [r for r in ex.get("repos") or [] if isinstance(r, str)], list(ex.get("exclude") or [])
+
+
+def land_executor_covers(cfg, repo):
+    scope = {"repos": cfg.get("land_executor_repos") or [], "exclude": cfg.get("land_executor_exclude") or []}
+    return bool(land_scope.how(land_scope.parse(scope), repo))
 
 
 def repo_cfg(cfg, repo):
@@ -725,7 +733,7 @@ def collect_ready_to_merge(gh, me, cfg, ledger, now):
                 "size": pr["additions"] + pr["deletions"], "method": method,
                 "why": [f"CLEAN, 체크 green, {review}, {method}"]}
         # The executor merges this repo: no command, so merges and verify skip it and the message hands it on.
-        if repo in cfg.get("land_executor_repos", ()):
+        if land_executor_covers(cfg, repo):
             item["land"] = "executor"
         else:
             item["cmd"] = merge_cmd(pr, method)
