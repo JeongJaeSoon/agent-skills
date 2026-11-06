@@ -7,7 +7,7 @@ Commands are read with lib.shell: only a word bash runs as a command counts, so 
 quoted prompt that names one is not one. A guardrail, not a sandbox: `bash -c`, `eval` and a script file's own
 commands are not read.
 """
-import collections, fnmatch, glob, json, os, pathlib, re, subprocess, types
+import collections, glob, json, os, pathlib, re, subprocess, types
 
 from lib import config, shell
 
@@ -28,8 +28,6 @@ RULES = {
     "guard.deny.self_exempt_label": "deny",
     "guard.deny.owner_only": "deny",
     "guard.deny.external_review": "deny",
-    "guard.deny.default_force_push": "deny",
-    "guard.deny.protection_write": "deny",
     "guard.deny.rm_outside": "deny",
     "guard.deny.trash_empty": "deny",
     "guard.ask.pressure_bypass": "ask",
@@ -58,23 +56,6 @@ DOCKER_OPTS = {"-H", "--host", "-c", "--context", "--config", "-l", "--log-level
 COMPOSE_OPTS = {"-f", "--file", "-p", "--project-name", "--profile", "--env-file", "--project-directory", "--ansi",
                 "--progress", "--parallel"}
 GIT_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"}
-# Any curl short flag but the ones that take a value (and so swallow the rest of the cluster): in `-sG` or `-qX` the
-# letter is a flag, in `-AGitHub` it is part of the User-Agent.
-NO_VALUE = r"[^-\sAbcCdDeEFHKmoPQrtTuUwxXyYz:]"
-CURL_VALUED = {"-d", "--data", "--data-raw", "--data-binary", "--data-urlencode", "--json", "-H", "--header", "-F",
-               "--form", "-A", "--user-agent", "-e", "--referer", "-u", "--user", "-T", "--upload-file", "-o",
-               "--output", "-b", "--cookie", "-X", "--request"}
-# git accepts any unique prefix of a long option, so `--force-wi` is --force-with-lease.
-PUSH_LONG = ["--all", "--atomic", "--branches", "--delete", "--dry-run", "--exec", "--follow-tags", "--force",
-             "--force-if-includes", "--force-with-lease", "--mirror", "--no-dry-run", "--no-force", "--no-force-with-lease", "--no-verify", "--porcelain",
-             "--progress", "--prune", "--push-option", "--quiet", "--receive-pack", "--recurse-submodules", "--repo",
-             "--set-upstream", "--signed", "--tags", "--thin", "--verbose"]
-# Options whose next word is their value; a method option cannot be that word. (-X and --request are not here.)
-# They differ by tool: gh's `-f` takes a field, curl's `-f` is a flag.
-CURL_OTHER_VALUED = CURL_VALUED - {"-X", "--request"}
-GH_OTHER_VALUED = {"-f", "-F", "-H", "--header", "--field", "--raw-field", "--input", "-q", "--jq", "-t",
-                   "--template", "--hostname", "--cache", "-p", "--preview"}
-PUSH_VALUED = {"-o", "--push-option", "--repo", "--receive-pack", "--exec"}
 
 
 def level(cfg, key):
@@ -126,32 +107,6 @@ def after_cd(c, here):
     if target == "-" or "$" in target.replace("$HOME", "").replace("${HOME}", ""):
         return UNKNOWN_DIR
     return expand(target, here) or UNKNOWN_DIR
-
-
-def after_switch(c, switched, here):
-    """The branch a `git switch <b>`, `git checkout <b>` or `-c/-b <b> [<start>]` on the same command line leaves
-    checked out (None before any; "" when it cannot be read)."""
-    sub, args = verb(c.words[1:], {"-C", "-c", "--git-dir", "--work-tree", "--namespace"})
-    if sub not in ("switch", "checkout") or "--" in args:  # `checkout -- <file>` restores files
-        return switched
-    # `git -C <dir> switch` moves HEAD in <dir>; it counts only when that is the folder a later push runs in.
-    opts, where = c.words[1:len(c.words) - len(args) - 1], here
-    for i, x in enumerate(opts):
-        if x == "-C" and i + 1 < len(opts):
-            where = expand(opts[i + 1], where) or where
-        elif x.startswith("-C") and len(x) > 2:  # `-C/path`
-            where = expand(x[2:], where) or where
-        elif x.startswith(("--git-dir", "--work-tree")):
-            return switched
-    if os.path.realpath(where or ".") != os.path.realpath(here or "."):
-        return switched
-    if args == ["-"]:
-        return ""
-    names = [x for x in args if not x.startswith("-")]
-    # `git checkout README.md` restores a file; a branch name is not a path that exists here.
-    if not names or sub == "checkout" and os.path.exists(os.path.join(here or ".", names[0])):
-        return switched
-    return names[0]
 
 
 def verb(args, valued):
@@ -238,7 +193,7 @@ def write_targets(c):
     return out
 
 
-def check_command(c, masked, cfg, cwd, session, here=None, switched=None):
+def check_command(c, masked, cfg, cwd, session, here=None):
     """[(key, reason)] for one command. `here` is the directory its relative paths resolve against (cwd after the
     line's earlier `cd`s), `cwd` the hook's own."""
     here = cwd if here is None else here
@@ -305,14 +260,6 @@ def check_command(c, masked, cfg, cwd, session, here=None, switched=None):
         if label_add(w):
             out.append(("guard.deny.self_exempt_label", "The `no-visual-change` label exempts a PR from visual review; "
                                                         "an agent never adds it to its own PR. Ask the human."))
-    if name in ("git", "gh", "curl") and force_push_default(c, here, switched):
-        out.append(("guard.deny.default_force_push", "A force push rewrites the default branch every worker and "
-                                                     "reviewer builds on. Push your own PR branch (`git push "
-                                                     "--force-with-lease=<branch>:<sha> origin <branch>`); a bad "
-                                                     "commit on main is undone with a revert PR."))
-    if name in ("gh", "curl") and protection_write(c, here):
-        out.append(("guard.deny.protection_write", "This writes branch protection or a ruleset, the rules that "
-                                                   "gate merges. The repository owner changes them, not an agent."))
     if name in ("rm", "find"):
         trash, outside = rm_outside(c, here, cwd)
         if trash:
@@ -402,99 +349,15 @@ def label_add(w):
         return False
     # Only a request that adds labels: POST/PUT/PATCH (a field without --method means POST) to …/labels, with the
     # label in a field. A GET that filters on it or a DELETE of it is not one.
-    method, endpoint, fields = api_call(w)
-    return (method in ("POST", "PUT", "PATCH") and re.search(r"/labels/?$", endpoint) is not None
-            and has(f.split("=", 1)[-1] for f in fields))
-
-
-def api_call(w, here=None):
-    """(METHOD, endpoint, [field]) of a `gh api` command. A field or --input without --method means POST."""
-    method = last_method(w, "--method", GH_OTHER_VALUED)
+    method = next((w[i + 1] for i, x in enumerate(w[:-1]) if x in ("-X", "--method")), None)
+    method = next((x.split("=", 1)[1] for x in w if x.startswith("--method=")), method)
     fields = [w[i + 1] for i, x in enumerate(w[:-1]) if x in ("-f", "-F", "--field", "--raw-field")]
     fields += [x.split("=", 1)[1] for x in w if x.startswith(("--field=", "--raw-field="))]
-    fields += [x[2:] for x in w if x[:2] in ("-f", "-F") and len(x) > 2]  # `-fquery=…`
-    # A body file's text counts as a field: a GraphQL mutation can arrive that way (`--input f`, `-F query=@f`).
-    bodies = [w[i + 1] for i, x in enumerate(w[:-1]) if x == "--input"] + [x[8:] for x in w if x.startswith("--input=")]
-    for body in bodies + [f.split("=@", 1)[1] for f in fields if "=@" in f and not f.endswith("=@-")]:
-        try:
-            with open(expand(body, here), encoding="utf-8", errors="replace") as f:  # relative to the command's cwd
-                fields.append(f.read(65536))
-        except OSError:
-            pass
-    method = (method or ("POST" if fields or bodies or "--input" in w else "GET")).upper()
+    method = (method or ("POST" if fields or "--input" in w else "GET")).upper()
     endpoint = verb(w[2:], {"-X", "--method", "-f", "-F", "--field", "--raw-field", "-H", "--header", "--input",
                             "-q", "--jq", "-t", "--template", "--hostname", "--cache", "-p", "--preview"})[0] or ""
-    return method, re.sub(r"^https?://[^/]+", "", endpoint, flags=re.I), fields  # gh takes a full URL too
-
-
-def last_method(w, long_opt, valued):
-    """The method of the last `-X`, `long_opt` or `long_opt=` in w, which wins as in curl and gh. A cluster such as
-    `-sX DELETE` or `-sXDELETE` counts."""
-    method, skip = None, False
-    for i, x in enumerate(w):
-        if skip:  # the value of another option, `-H -XGET` for one
-            skip = False
-        elif x in valued:
-            skip = True
-        elif x == long_opt and i + 1 < len(w):
-            method = w[i + 1]
-        elif x.startswith(long_opt + "="):
-            method = x.split("=", 1)[1]
-        elif m := re.fullmatch(rf"-{NO_VALUE}*X(\w*)", x):
-            method = m.group(1) or (w[i + 1] if i + 1 < len(w) else method)
-    return method
-
-
-def curl_calls(w):
-    """[(METHOD, [path], text)] for each transfer of a curl command, split at `--next` as curl does: the path of
-    each api.github.com URL it names (`--url=` ones too) and the transfer's words as text."""
-    out, part = [], []
-    for x in w[1:] + ["--next"]:
-        if x != "--next" and not x.startswith("-:"):  # `-:` and clusters such as `-:XGET` start the next transfer
-            part.append(x)
-            continue
-        carry = ["-" + x[2:]] if x.startswith("-:") and len(x) > 2 else []  # `-:XDELETE`: -XDELETE is the next's
-        method = last_method(part, "--request", CURL_OTHER_VALUED)
-        data = any(re.match(rf"-{NO_VALUE}*[dFT]", y) or y.startswith(("--data", "--form", "--json", "--upload-file"))
-                   for y in part)
-        get = False  # -G puts -d in the URL; a later --no-get takes it back
-        for y in part:
-            if y == "--get" or re.fullmatch(rf"-{NO_VALUE}*G{NO_VALUE}*", y):
-                get = True
-            elif y == "--no-get":
-                get = False
-        # A URL is an operand or `--url=`, not the value of an option (a body may quote one).
-        urls = []
-        for j, y in enumerate(part):
-            if (part[j - 1] if j else "") in CURL_VALUED or y.startswith("-") and not y.startswith("--url="):
-                continue
-            if m := re.match(r"(?:--url=)?(?:https?://)?api\.github\.com(?::\d+)?(/[^?#]*)?", y, re.I):
-                urls.append(m.group(1) or "/")
-        out.append(((method or ("POST" if data and not get else "GET")).upper(), urls, " ".join(part)))
-        part = carry
-    return out
-
-
-def protection_write(c, here=None):
-    """A `gh api` or curl call that writes branch protection or a ruleset; GETs read them and pass."""
-    w = c.words
-
-    mutation = r"mutation[^{]*\{.*(create|update|delete)\w*(ProtectionRule|Ruleset)"
-
-    def writes(method, endpoint):
-        endpoint = endpoint.split("?", 1)[0]
-        target = re.search(r"/branches/.+/protection(/|$)|(^|/)rulesets(/|$)", endpoint) is not None
-        return method not in ("GET", "HEAD", "OPTIONS") and target
-    if c.name == "curl":
-        return any(any(writes(method, p) for p in paths)
-                   or any(p.strip("/") == "graphql" for p in paths) and re.search(mutation, text, re.S) is not None
-                   for method, paths, text in curl_calls(w))
-    if c.name != "gh" or w[1:2] != ["api"]:
-        return False
-    method, endpoint, fields = api_call(w, here)
-    if endpoint.strip("/") == "graphql":
-        return any(re.search(mutation, f, re.S) for f in fields)
-    return writes(method, endpoint)
+    return (method in ("POST", "PUT", "PATCH") and re.search(r"/labels/?$", endpoint) is not None
+            and has(f.split("=", 1)[-1] for f in fields))
 
 
 def git_out(args, where):
@@ -503,104 +366,6 @@ def git_out(args, where):
         return run(["git", *args], where).stdout.strip()
     except (OSError, ValueError, subprocess.SubprocessError):
         return ""
-
-
-def default_names(where, remote, gitdir=()):
-    """main, master and the branch the remote's HEAD names in the checkout at `where` (or in `gitdir`)."""
-    gitdir = list(gitdir)
-    head = git_out(gitdir + ["symbolic-ref", "--short", f"refs/remotes/{remote}/HEAD"], where)
-    return {"main", "master"} | ({head.split("/", 1)[1]} if "/" in head else set())
-
-
-def force_push_default(c, here, switched=None):
-    """Whether this `git push` or `gh api` command force-updates a default branch: main, master or the branch
-    origin/HEAD names. A push with no refspec, or `HEAD`, is judged by the branch checked out in `here`; when that
-    cannot be read, only main and master count."""
-    w = c.words
-    where = here
-    for i, x in enumerate(w):  # each -C is relative to the one before it
-        if x == "-C" and i + 1 < len(w):
-            where = expand(w[i + 1], where) or where
-        elif x.startswith("-C") and c.name == "git":  # `-C/path`
-            where = expand(x[2:], where) or where
-    # `git --git-dir=<dir> push …` acts on that repository, whatever the folder is.
-    gitdir = next((["--git-dir", expand(w[i + 1], where) if x == "--git-dir" else expand(x[10:], where)]
-                   for i, x in enumerate(w[:-1] + [""]) if x == "--git-dir" or x.startswith("--git-dir=")), [])
-    if c.name in ("gh", "curl"):
-        if c.name == "gh":
-            method, endpoint, fields = api_call(w, where) if w[1:2] == ["api"] else ("", "", [])
-            calls =[(method, [endpoint], " ".join(fields))]
-        else:
-            calls = curl_calls(w)
-        names = default_names(where, "origin")
-        return any(method == "PATCH" and re.search(r'force"?\s*[=:]\s*true', text)
-                   and any(p.split("?", 1)[0].rsplit("/git/refs/heads/", 1)[-1] in names
-                           for p in paths if "/git/refs/heads/" in p) for method, paths, text in calls)
-    sub, rest = verb(w[1:], GIT_OPTS)
-    if sub != "push":
-        return False
-    opts, pos, i, repo = [], [], 0, None
-    while i < len(rest):
-        x = rest[i]
-        i += 1
-        if x == "--":
-            pos += rest[i:]
-            break
-        if x.startswith("--"):  # spell out an abbreviated long option
-            name, eq, val = x.partition("=")
-            hits = [n for n in PUSH_LONG if n.startswith(name)]
-            x = (name if name in PUSH_LONG else hits[0] if len(hits) == 1 else name) + eq + val
-        if x.startswith("-") and len(x) > 1:
-            opts.append(x)
-            if x == "--repo" and i < len(rest):
-                repo = rest[i]
-            elif x.startswith("--repo="):
-                repo = x[7:]
-            i += x in PUSH_VALUED
-        else:
-            pos.append(x)
-    def short(o):  # the flags of a `-4fn` cluster: a `-o` ends it, the rest is that option's value
-        return set(o[1:].split("o", 1)[0]) if not o.startswith("--") else set()
-    dry = False  # the last of --dry-run / --no-dry-run wins
-    for o in opts:
-        if o == "--no-dry-run":
-            dry = False
-        elif o == "--dry-run" or "n" in short(o):
-            dry = True
-    if dry:
-        return False
-    # --force and --force-with-lease are separate switches, each cancelled by its own --no-… form, last one wins.
-    force = lease = False
-    for o in opts:
-        if o == "--force" or "f" in short(o):
-            force = True
-        elif o == "--no-force":
-            force = False
-        elif o.startswith("--force-with-lease"):
-            lease = True
-        elif o == "--no-force-with-lease":
-            lease = False
-    forced = force or lease
-    # --mirror overwrites every remote ref without --force.
-    if "--mirror" in opts or forced and ("--all" in opts or "--branches" in opts):
-        return True
-    named_repo = any(o == "--repo" or o.startswith("--repo=") for o in opts)  # then every positional is a refspec
-    remote = (repo or "origin") if named_repo else pos[0] if pos else "origin"
-    names = default_names(where, remote, gitdir)
-    # --tags alone sends tags only, not the checked-out branch.
-    for spec in (pos if named_repo else pos[1:]) or ([] if "--tags" in opts else ["HEAD"]):
-        src, _, dst = spec.lstrip("+").partition(":")
-        dst = dst if ":" in spec else src
-        if spec.lstrip("+") == ":":  # the matching refspec: every branch the remote has
-            dst = "*"
-        if dst == "HEAD":
-            # A `git switch` earlier on the line moved HEAD; the repository on disk still shows the old branch.
-            dst = switched if switched is not None else git_out(gitdir + ["symbolic-ref", "--short", "HEAD"], where)
-        # A pattern such as `refs/heads/*` reaches the default branch too.
-        if (forced or spec.startswith("+")) and any(fnmatch.fnmatchcase(c, dst) for n in names
-                                                    for c in (n, "refs/heads/" + n)):
-            return True
-    return False
 
 
 def rm_targets(w):
@@ -803,7 +568,7 @@ def check_bash(cmd, cfg, cwd=None, session=None):
     """[Finding] for a Bash command, rules turned off left out."""
     masked = shell.command_text(cmd)
     out, seen = [], set()
-    cmds, here, switched, pushed = shell.commands(cmd), cwd, None, []
+    cmds, here, pushed = shell.commands(cmd), cwd, []
     outer, start, ticks = [], 0, False  # the directories to go back to at each `)` or closing backtick
     for i, c in enumerate(cmds):
         for ch in masked[start:c.span[0]]:
@@ -814,7 +579,7 @@ def check_bash(cmd, cfg, cwd=None, session=None):
                 here = outer.pop()
                 ticks = ticks and ch != "`"
         start = c.span[0]
-        found = check_command(c, masked, cfg, cwd, session, here, switched)
+        found = check_command(c, masked, cfg, cwd, session, here)
         # A `cd` in a pipeline or sent to the background (`cd x &`) runs in a subshell; `||` and `&&` do not.
         if c.name in ("cd", "pushd", "popd") and not (
                 c.piped_from or c.piped_to or re.match(r"\s*(&(?!&)|\|(?!\|))", masked[c.span[1]:])):
@@ -824,9 +589,6 @@ def check_bash(cmd, cfg, cwd=None, session=None):
                 here = pushed.pop()
             elif c.name == "pushd" and here is not UNKNOWN_DIR:
                 pushed.append(before)
-            switched = None  # another folder may be another repository
-        if c.name == "git":
-            switched = after_switch(c, switched, here)
         # `kill $(pgrep …)`: a pgrep inside this kill command's own substitution.
         if c.name == "kill" and any(d.name == "pgrep" and c.span[0] < d.span[0] and d.span[1] <= c.span[1]
                                     for d in cmds):

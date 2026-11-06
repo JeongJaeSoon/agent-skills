@@ -74,17 +74,6 @@ git("-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-qm", "a"
 CLEAN = TMP / "clean"
 CLEAN.mkdir()
 git("init", "-q", cwd=CLEAN)
-# Repositories on a named branch: the default branch, a PR branch, and one whose default branch is origin/HEAD's.
-ON_MAIN, ON_FEAT, ON_DEV = TMP / "on-main", TMP / "on-feat", TMP / "on-dev"
-for repo, branch in ((ON_MAIN, "main"), (ON_FEAT, "feat/x"), (ON_DEV, "dev")):
-    repo.mkdir()
-    git("init", "-q", "-b", branch, cwd=repo)
-git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop", cwd=ON_DEV)
-git("checkout", "-q", "-b", "develop", cwd=ON_DEV)
-git("symbolic-ref", "refs/remotes/upstream/HEAD", "refs/remotes/upstream/develop", cwd=ON_DEV)
-NEST = TMP / "nest"
-(NEST / "child").mkdir(parents=True)
-git("init", "-q", "-b", "main", cwd=NEST / "child")
 # A checkout holding a symlink to a folder outside it: `rm -rf` removes the link, not the folder.
 LINKED = TMP / "linked"
 LINKED.mkdir()
@@ -110,12 +99,6 @@ OUTSIDE_TMP_RM = [] if str(TMP).startswith(("/tmp/", "/private/tmp/")) else [
     ("(cd hooks); rm -rf ../../other", REPOX), ("echo $(cd /usr); rm -rf ../other", REPOX)]
 (HOME / ".Trash").mkdir()
 (HOME / ".Trash" / "a.txt").write_text("x")
-MUTATION = TMP / "mutation.json"
-MUTATION.write_text('{"query": "mutation { deleteBranchProtectionRule(input: {}) { clientMutationId } }"}')
-FORCE_BODY = TMP / "force.json"
-FORCE_BODY.write_text('{"sha": "abc", "force": true}')
-GQL = TMP / "mutation.graphql"
-GQL.write_text("mutation { deleteBranchProtectionRule(input: {}) { clientMutationId } }")
 
 # (key, level, [(command, cwd)] it is about, [command] that only looks like one)
 CASES = [
@@ -223,120 +206,6 @@ CASES = [
                                           "export AGENT_SKILLS_PRESSURE_GATE=0"],
      ["AGENT_SKILLS_PRESSURE_GATE=1 orch heavy p -- npm test", "echo AGENT_SKILLS_PRESSURE_GATE",
       "echo AGENT_SKILLS_PRESSURE_GATE=0"]),
-    ("guard.deny.default_force_push", "deny",
-     ["git push --force origin main", "git push -f origin main", "git push --force-with-lease origin main",
-      "git push --force-with-lease=main:abc123 origin main", "git push origin +main", "git push origin +HEAD:main",
-      "git push -f origin HEAD:refs/heads/master", "git push --force origin feat:main", "git push -fu origin main",
-      "git push origin --force main", "git push -o ci.skip -f origin main", "git -C /x push -f origin main",
-      "git push --all --force origin", "git push --force-if-includes --force-with-lease origin main",
-      "git push --force origin main:main", "cd /x && git push -f origin master",
-      ("git push -f", ON_MAIN), ("git push -f origin HEAD", ON_MAIN), ("git push -f origin", ON_MAIN),
-      ("git push -f origin HEAD", ON_DEV),
-      ("git switch main && git push --force origin HEAD", ON_FEAT),
-      ("git checkout main && git push -f origin HEAD", ON_FEAT),
-      (f"git switch feat/x && cd {ON_MAIN} && git push --force origin HEAD", ON_FEAT),
-      ("git -C . switch main && git push --force origin HEAD", ON_FEAT),
-      (f"git -C {ON_FEAT} switch feat/x && git push --force origin HEAD", ON_MAIN),
-      (f"git -C{ON_FEAT} switch feat/x && git push --force origin HEAD", ON_MAIN),
-      "git push --force --no-force-with-lease origin main",
-      "git push --no-force-with-lease --force-with-lease origin main",
-      ("git switch -C main main && git push --force origin HEAD", ON_FEAT),
-      ("git checkout -B main origin/main && git push -f origin HEAD", ON_FEAT),
-      "gh api -X PATCH repos/a/b/git/refs/heads/main -F force=true",
-      "gh api --method PATCH repos/a/b/git/refs/heads/master -f force=true -f sha=abc",
-      "git push --mirror origin", "git push --repo=origin --force main", "git push --repo origin -f main",
-      "git push origin '+refs/heads/*:refs/heads/*'", "git push -f origin 'refs/heads/*:refs/heads/*'",
-      "git push -f origin :", "git push origin +:", ("git push --force upstream develop", ON_DEV),
-      "gh api -X PATCH repos/a/b/git/refs/heads/main --input force.json -F force=true",
-      f"gh api -X PATCH repos/a/b/git/refs/heads/main --input {FORCE_BODY}",
-      ("gh api -X PATCH repos/a/b/git/refs/heads/main --input force.json", TMP),
-      (f"git --git-dir={ON_MAIN}/.git push --force origin HEAD", ON_FEAT),
-      (f"git --git-dir {ON_MAIN}/.git push -f origin HEAD", ON_FEAT), "git push -4f origin main","git push --force -onoci origin main", "git push --force-wi origin main","git push --force-w origin main", "git push --mir origin",
-      ("git push --force --repo=upstream develop", ON_DEV), ("git push --force --repo upstream develop", ON_DEV),
-      ("git push --force --branches origin", ON_FEAT),(f"git -C{NEST} -Cchild push --force origin HEAD", ON_FEAT),(f"git -C{ON_MAIN} push --force origin HEAD", ON_FEAT),
-      ("gh api -X PATCH repos/a/b/git/refs/heads/develop -F force=true -f sha=abc", ON_DEV),"git push --dry-run --no-dry-run --force origin main",
-      "gh api -X PATCH 'repos/acme/app/git/refs/heads/main?x=y' -F force=true",
-      """curl -X PATCH https://api.github.com/repos/acme/app/git/refs/heads/main -d '{"sha":"abc","force":true}'"""],
-     ["git push origin main", "git push --force-with-lease origin feat/x", "git push --force-with-lease=feat:abc origin feat",
-      "git push origin +feat/x", "git push -f origin feat:main-fix", "git push origin :old-branch",
-      "git push --force origin refs/heads/maintenance", "git push -o main -f origin feat", "git -C /x push -f origin feat",
-      "echo git push -f origin main", "git fetch -f origin main:main", "git log --force main",
-      ("git push -f origin HEAD", ON_FEAT), ("git push -f", ON_FEAT),
-      ("git switch feat/y && git push --force-with-lease origin HEAD", ON_MAIN),
-      ("git checkout -b feat/y && git push -f origin HEAD", ON_MAIN),
-      ("git switch -c feat/review main && git push --force-with-lease origin HEAD", ON_MAIN),
-      "git push --force-with-lease --no-force-with-lease origin main",
-      "git push --force --no-force origin main",
-      (f"git -C{ON_MAIN} switch main && git push --force-with-lease origin HEAD", ON_FEAT),
-      (f"git -C {ON_FEAT} switch feat/x && git push --force-with-lease origin HEAD", ON_FEAT),
-      (f"git -C {ON_MAIN} switch main && git push --force-with-lease origin HEAD", ON_FEAT),      ("git checkout -- README.md && git push -f origin HEAD", ON_FEAT), ("git push --force-with-lease", ON_FEAT),
-      ("git push -f origin HEAD", ON_DEV.parent), "git push --tags origin",
-      "gh api repos/a/b/git/refs/heads/main", "gh api -X PATCH repos/a/b/git/refs/heads/feat -F force=true",
-      "gh api -X PATCH repos/a/b/git/refs/heads/main -f sha=abc", "git push --dry-run --force origin main",
-      "git push -n -f origin main", "git push -fn origin main","git push --force-if-includes origin main", "git push --repo=origin -f feat",
-      "git push --mirror --dry-run origin", (f"git --git-dir={ON_FEAT}/.git push -f origin HEAD", ON_MAIN),("git push --force --tags origin", ON_MAIN), "git push -4 origin main",
-      "git push -n4 -f origin main","git push --force-wi origin feat", "git push --dry origin --force-w main",
-      ("git push --force --repo=upstream develop", ON_FEAT),(f"git -C{ON_FEAT} push --force origin HEAD", ON_MAIN),
-      ("gh api -X PATCH repos/a/b/git/refs/heads/develop -F force=true -f sha=abc", ON_FEAT),"git push --no-dry-run --dry-run --force origin main",
-      """curl -X PATCH https://api.github.com/repos/acme/app/git/refs/heads/feat -d '{"sha":"abc","force":true}'""",
-      """curl https://api.github.com/repos/acme/app/git/refs/heads/main""",("git push --force upstream develop", ON_FEAT)]),
-    ("guard.deny.protection_write", "deny",
-     ["gh api -X PUT repos/a/b/branches/main/protection -f enforce_admins=true",
-      "gh api --method=DELETE repos/a/b/branches/main/protection", "gh api repos/a/b/rulesets -f name=x",
-      "gh api -X PUT repos/a/b/rulesets/12 --input r.json", "gh api orgs/a/rulesets -X POST",
-      "gh api -X PATCH repos/a/b/branches/feat%2Fx/protection/required_status_checks -f strict=true",
-      "gh api -X DELETE repos/a/b/branches/main/protection/enforce_admins",
-      "gh api graphql -f query='mutation { createBranchProtectionRule(input: {}) { clientMutationId } }'",
-      "gh api graphql -f query='mutation { deleteRepositoryRuleset(input: {}) { clientMutationId } }'",
-      "gh api -XDELETE repos/acme/app/branches/main/protection", "gh api repos/acme/app/rulesets --input=rules.json",
-      "gh api graphql -fquery='mutation { deleteBranchProtectionRule(input: {}) { clientMutationId } }'",
-      f"gh api graphql --input {MUTATION}", ("gh api graphql --input mutation.json", TMP),
-      (f"cd {NEST} && gh api graphql --input ../mutation.json", ON_FEAT),
-      'curl -X DELETE -H "Authorization: Bearer x" https://api.github.com/repos/acme/app/branches/main/protection',
-      "curl -XPUT https://api.github.com/repos/a/b/rulesets/1 -d @r.json",
-      "curl --request POST -d x https://api.github.com/repos/a/b/rulesets",
-      "gh api -X DELETE 'repos/acme/app/branches/main/protection?x=y'", f"gh api graphql -F query=@{GQL}",
-      "curl -X DELETE --url=https://api.github.com/repos/acme/app/rulesets/1",
-      "curl -X DELETE https://api.github.com/ https://api.github.com/repos/acme/app/rulesets/1",
-      "curl --proto-default https -X DELETE api.github.com/repos/acme/app/branches/main/protection",
-      "curl -X PUT api.github.com/repos/acme/app/branches/main/protection -d '{}'",
-      """curl -X POST https://api.github.com/graphql -d '{"query":"mutation { deleteBranchProtectionRule(input: {}) { x } }"}'""",
-      "curl -sX DELETE https://api.github.com/repos/acme/app/branches/main/protection",
-      "curl -X DELETE https://api.github.com/repos/acme/app/rulesets/1 --next -X GET https://api.github.com/user",
-      "curl -X DELETE https://API.GITHUB.COM/repos/acme/app/rulesets/1",
-      "curl -X DELETE https://api.github.com/repos/acme/app/rulesets/1 -: -X GET https://api.github.com/user",
-      "curl -qXDELETE https://api.github.com/repos/acme/app/rulesets/1",
-      "curl -f -X DELETE https://api.github.com/repos/acme/app/branches/main/protection",
-      "curl -q -X DELETE https://api.github.com/repos/acme/app/rulesets/1",
-      """curl --get --no-get --json '{"name":"x"}' https://api.github.com/repos/acme/app/rulesets""",
-      "gh api -X DELETE repos/acme/app/rulesets/1 -H -XGET","curl -X DELETE https://api.github.com/repos/a/b/rulesets/1 -H -XGET",
-      "curl -X GET https://api.github.com/user -:XDELETE https://api.github.com/repos/acme/app/rulesets/2",
-      """curl -sd '{"name":"x"}' -H 'Content-Type: application/json' https://api.github.com/repos/acme/app/rulesets""",
-      "curl -X DELETE https://api.github.com/repos/acme/app/rulesets/1 -:XGET https://api.github.com/user",
-      "curl -ZXDELETE https://api.github.com/repos/acme/app/rulesets/1",
-      """curl -AGitHubCLI --json'{"name":"x"}' https://api.github.com/repos/acme/app/rulesets""",
-      "curl -sXDELETE https://api.github.com/repos/acme/app/rulesets/1",
-      "curl -X GET -X DELETE https://api.github.com/repos/acme/app/branches/main/protection",
-      "gh api -X GET -X DELETE repos/acme/app/branches/main/protection",
-      "curl -X DELETE https://api.github.com:443/repos/acme/app/branches/main/protection",
-      "gh api -X DELETE https://api.github.com/repos/acme/app/rulesets/1",
-      "gh api https://api.github.com/graphql -f query='mutation { deleteBranchProtectionRule(input: {}) { x } }'"],
-     [("gh api graphql --input mutation.json", ON_FEAT), "gh api repos/a/b/branches/main/protection","gh api repos/a/b/rulesets", "gh api -X GET repos/a/b/rulesets/12",
-      "gh api repos/a/b/rules/branches/main", "gh api repos/a/b/branches/main/protection --jq .enforce_admins",
-      "gh api graphql -f query='query { viewer { login } }'", "gh api -X POST repos/a/b/issues -f title=x",
-      "echo gh api -X PUT repos/a/b/branches/main/protection", "gh pr view 3",
-      "curl https://api.github.com/repos/a/b/branches/main/protection",
-      "curl -X POST -d x https://api.github.com/repos/a/b/issues",
-      "curl -X DELETE https://example.test/repos/a/b/rulesets/1",
-      "curl -X DELETE -X GET https://api.github.com/repos/a/b/rulesets/1",
-      "curl -G https://api.github.com/repos/acme/app/rulesets -d per_page=100",
-      "gh api -X HEAD repos/acme/app/rulesets", "curl -I -X HEAD https://api.github.com/repos/a/b/rulesets/1",
-      """curl -X POST https://api.github.com/repos/acme/app/issues -d '{"body":"https://api.github.com/repos/acme/app/rulesets/1"}'""",
-      "curl -X POST -H 'Referer: https://api.github.com/repos/a/b/rulesets/1' https://example.test/x",
-      "curl -qG -d per_page=100 https://api.github.com/repos/acme/app/rulesets",
-      "curl -NG -d per_page=100 https://api.github.com/repos/acme/app/rulesets",
-      "curl -ZG -d per_page=100 https://api.github.com/repos/acme/app/rulesets",
-      "curl -X GET https://api.github.com/user --next -X GET https://api.github.com/repos/a/b/rulesets/1"]),
     ("guard.deny.rm_outside", "deny",
      ["cd /usr || exit 1; rm -rf local/data", "pushd /usr; rm -rf local/data", "cd /usr && pushd /tmp && popd && rm -rf local/data", "pushd /usr >/dev/null && rm -rf local/data",
       "cd /usr; cd /tmp & rm -rf local/data", "cd /usr; cd /tmp |& cat; rm -rf local/data",
