@@ -1401,6 +1401,43 @@ def skills_version(root):
     return (git("rev-parse", "--short", base) if base else head) + "+local"
 
 
+STANDALONE_RUN = "standalone"  # a standalone card has no Orca Run; Run lookups on it answer empty
+
+
+def standalone_program(argv):
+    """The `<name>-standalone` program of the repo `orch land --repo OWNER/NAME` names, created when missing.
+
+    Only where the land executor lists the repo: elsewhere a standalone card merges itself and needs no program.
+    """
+    repo = opt(argv, "--repo")
+    slug = f"{repo.split('/')[-1]}-standalone" if repo and "/" in repo else None
+    if slug != argv[0]:
+        sys.exit(f"no program '{argv[0]}'; a standalone PR lands as `orch land <name>-standalone --repo OWNER/NAME`")
+    if not land_executor(repo):
+        sys.exit(f"no program '{slug}', and orchestrate.land_executor is off for {repo}: a standalone card merges its own PR")
+    d = HOME / slug
+    cfg = {"slug": slug, "repo": repo, "run": opt(argv, "--run", STANDALONE_RUN), "tracker": {}, "predicate": [],
+           "merge_policy": "autonomous", "ceiling": 6, "deadline": None, "created_at": now(),
+           "skills_commit": skills_version(pathlib.Path(__file__).resolve().parents[3]), "note": "standalone cards",
+           "final_check": None}
+    try:
+        write_program(d, cfg, cfg["run"], "autonomous")
+        print(f"created standing program {slug} for {repo} (merge_policy autonomous)")
+    except FileExistsError:  # another card created it between the check and here
+        pass
+
+
+def standalone_target(argv):
+    """The Program for argv[0], created first when `--repo` is given and it is missing. A program that exists must
+    belong to that repo: `--repo` is what the executor setting was checked against."""
+    if "--repo" in argv and not (HOME / argv[0] / "program.json").exists():
+        standalone_program(argv)
+    p = Program(argv[0])
+    if "--repo" in argv and p.cfg["repo"] != opt(argv, "--repo"):
+        sys.exit(f"program '{argv[0]}' is for {p.cfg['repo']}, not {opt(argv, '--repo')}")
+    return p
+
+
 def cmd_init(argv):
     slug = argv[0]
     d = HOME / slug
@@ -1424,9 +1461,19 @@ def cmd_init(argv):
         "deadline": opt(argv, "--deadline"), "created_at": now(), "skills_commit": skills_commit,
         "note": opt(argv, "--note"), "final_check": opt(argv, "--final-check"),
     }
+    try:
+        write_program(d, cfg, run_id, policy)
+    except FileExistsError:  # a standalone `orch land` created it after the check above
+        sys.exit(f"{d}/program.json exists; programs are resumed, not re-initialised")
+    print(f"initialised {d}")
+    print("\n".join(dashboard_lines(slug)))
+
+
+def write_program(d, cfg, run_id, policy):
+    """Create program.json for cmd_init and standalone_program; FileExistsError when another caller got there first."""
     me = os.environ.get("ORCA_TERMINAL_HANDLE")
     try:
-        mine = own_worker(all_workers(run_id), me) if me else None
+        mine = own_worker(all_workers(run_id), me) if me and run_id != STANDALONE_RUN else None
     except SystemExit as e:  # guessing "coordinating lead" would scope a worker lead's program to the whole Run
         sys.exit(f"orch init: could not list {run_id}'s workers to tell whether this terminal is a dispatched lead"
                  f" ({e}). Retry when `orca orchestration worker-list --run {run_id}` answers.")
@@ -1441,9 +1488,13 @@ def cmd_init(argv):
         print(f"lead is dispatch {cfg['lead_dispatch']} on {run_id}: `orch wait` reads its own mailbox; start units "
               "with worker-start --spec (Orca refuses a worker's task-create and gate-create on this Run)")
     (d / "briefs").mkdir(parents=True, exist_ok=True)
-    (d / "program.json").write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
-    print(f"initialised {d}")
-    print("\n".join(dashboard_lines(slug)))
+    # A reader must never see a half-written file: write whole, then link it into place (link fails if one exists).
+    tmp = d / f"program.json.{os.getpid()}.tmp"
+    tmp.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
+    try:
+        os.link(tmp, d / "program.json")
+    finally:
+        tmp.unlink()
 
 
 STALL_TEXT = {
@@ -1544,6 +1595,93 @@ def ensure_dash():
         return ((r.stdout or r.stderr).strip().splitlines() or ["dashboard: ensure printed nothing"])[-1]
     except subprocess.TimeoutExpired:
         return "dashboard: `orch-dash ensure` timed out; the lines below may be stale"
+
+
+def note_file(cfg, slug):
+    """(path, why not) of the program note when it sits in a markdown notes root this process may read. An Obsidian
+    vault is read only through its MCP or CLI path (use-notes), so it is never opened from here."""
+    try:
+        user = json.loads(pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-skills.json")
+                          .expanduser().read_text()).get("notes")
+    except (OSError, ValueError, AttributeError):
+        user = None
+    user = user if isinstance(user, dict) else {}
+    mine = cfg.get("notes") if isinstance(cfg.get("notes"), dict) else {}
+    if (mine.get("adapter") or user.get("adapter")) != "markdown":
+        return None, "the notes store is not a markdown root"
+    root = mine.get("root") or (user.get("markdown") or {}).get("root") or "~/notes"
+    if cfg.get("note"):  # `orch init --note`: the note the lead named, or nothing; never another copy
+        named = pathlib.Path(str(cfg["note"])).expanduser()
+        return (named, None) if named.is_file() else (None, f"the note named in program.json is not a file: {cfg['note']}")
+    found = sorted(pathlib.Path(root).expanduser().rglob(f"program-{slug}.md"))
+    if len(found) > 1:
+        return None, f"{len(found)} files named program-{slug}.md under {root}; `orch set {slug} note <path>` names one"
+    return (found[0], None) if found else (None, f"no program-{slug}.md under {root}")
+
+
+def note_values(text):
+    """The values a program note spells in the template's own shape, as {key: value}. A line in another shape, a
+    template placeholder (`<…>`) and a deadline that is no timestamp are left out: only a fixed format is compared."""
+    out = {}
+    head = re.search(r"^- 머지 정책:(.*)$", text, re.M)
+    if head:
+        line = head.group(1)
+        if m := re.match(r"\s*(autonomous|human-gate)\s*(?:·|$)", line):
+            out["merge_policy"] = m.group(1)
+        if m := re.search(r"동시성 천장\s*(\d+)", line):
+            out["ceiling"] = int(m.group(1))
+        if m := re.search(r"마감\s+(\S+)", line):
+            v = m.group(1)
+            if v == "없음":
+                out["deadline"] = None
+            elif not v.startswith("<"):
+                try:
+                    parse_ts(v)
+                    out["deadline"] = v
+                except ValueError:
+                    pass
+    section = re.search(r"^## 완료 조건.*?$(.*?)(?=^## |\Z)", text, re.M | re.S)
+    if section:  # a section with no ticket is a predicate emptied in the note, not a value left out
+        out["predicate"] = re.findall(r"^\s*- \[[ xX]\]\s+([A-Z0-9]*[A-Z][A-Z0-9]*-\d+(?:-[A-Z0-9]+)*)\b",
+                                      section.group(1), re.M)
+    return out
+
+
+def note_lines(p):
+    """Step 5 of `status`: the program note is a copy of program.json's values, so say when a value in it differs.
+    Reads the note, writes nothing; program.json stays the source and `orch set` is the only way to change it."""
+    path, why = note_file(p.cfg, p.slug)
+    if path is None:
+        return [f"note values: not compared ({why})"]
+    try:
+        have = note_values(path.read_text())
+    except OSError as e:
+        return [f"note values: not compared ({path.name} not read: {type(e).__name__})"]
+    if not have:
+        return ["note values: none in the note (values come from `orch status`)"]
+    diffs = []
+    cfg = p.cfg
+    for key in ("merge_policy", "ceiling"):
+        if key in have and have[key] != cfg.get(key):
+            diffs.append(f"{key}: note {have[key]}, program.json {cfg.get(key)}")
+    if "deadline" in have:
+        mine = cfg.get("deadline")
+        same = (have["deadline"] is None and not mine) or (
+            have["deadline"] and mine and parse_ts(have["deadline"]) == parse_ts(mine))
+        if not same:
+            diffs.append(f"deadline: note {have['deadline'] or 'none'}, program.json {mine or 'none'}")
+    if "predicate" in have:
+        note_only = [t for t in have["predicate"] if t not in cfg.get("predicate", [])]
+        json_only = [t for t in cfg.get("predicate", []) if t not in have["predicate"]]
+        if note_only or json_only:
+            diffs.append("predicate: " + ", ".join(
+                x for x in (f"note only {' '.join(note_only)}" if note_only else "",
+                            f"program.json only {' '.join(json_only)}" if json_only else "") if x))
+    if diffs:
+        return ["note values: DIFFER from program.json — " + "; ".join(diffs)
+                + " (program.json is the source; the note is a copy, so correct the note, and `orch set` only if "
+                  "program.json is the stale one)"]
+    return [f"note values: match program.json ({', '.join(have)})"]
 
 
 def dashboard_lines(slug):
@@ -1763,6 +1901,7 @@ def cmd_status(argv):
                           leftover=sum(active is False for _, _, active, _ in leftover))
     budget_note = f" (budget {used:.0%} used)" if used is not None else ""
     lines.append(f"next: {nxt}{budget_note}")
+    lines += note_lines(p)
     print("\n".join(lines + dashboard_lines(p.slug)))
     if not wait_ok:
         sys.exit(1)
@@ -1891,7 +2030,7 @@ def cmd_set(argv):
 
 
 def cmd_verdict(argv):
-    p = Program(argv[0])
+    p = standalone_target(argv)
     pr, sha, src = int(opt(argv, "--pr")), opt(argv, "--sha"), opt(argv, "--source")
     if not src or not sha:
         sys.exit("verdict needs --sha (the head that was reviewed) and --source (who reviewed: independent-review, "
@@ -2496,7 +2635,7 @@ def land_request(p, pr, klass, argv):
 
 
 def cmd_land(argv):
-    p = Program(argv[0])
+    p = standalone_target(argv)
     pr, klass = int(opt(argv, "--pr")), opt(argv, "--class")
     if klass and klass not in KLASS:
         sys.exit(f"--class is one of {', '.join(KLASS)}")
