@@ -445,7 +445,8 @@ def protection_write(c, here=None):
 
     def writes(method, endpoint):
         endpoint = endpoint.split("?", 1)[0]
-        return method != "GET" and re.search(r"/branches/.+/protection(/|$)|(^|/)rulesets(/|$)", endpoint) is not None
+        target = re.search(r"/branches/.+/protection(/|$)|(^|/)rulesets(/|$)", endpoint) is not None
+        return method not in ("GET", "HEAD", "OPTIONS") and target
     if c.name == "curl":
         return any(any(writes(method, p) for p in paths)
                    or any(p.strip("/") == "graphql" for p in paths) and re.search(mutation, text, re.S) is not None
@@ -466,9 +467,10 @@ def git_out(args, where):
         return ""
 
 
-def default_names(where, remote):
-    """main, master and the branch the remote's HEAD names in the checkout at `where`."""
-    head = git_out(["symbolic-ref", "--short", f"refs/remotes/{remote}/HEAD"], where)
+def default_names(where, remote, gitdir=()):
+    """main, master and the branch the remote's HEAD names in the checkout at `where` (or in `gitdir`)."""
+    gitdir = list(gitdir)
+    head = git_out(gitdir + ["symbolic-ref", "--short", f"refs/remotes/{remote}/HEAD"], where)
     return {"main", "master"} | ({head.split("/", 1)[1]} if "/" in head else set())
 
 
@@ -483,6 +485,9 @@ def force_push_default(c, here):
             where = expand(w[i + 1], where) or where
         elif x.startswith("-C") and c.name == "git":  # `-C/path`
             where = expand(x[2:], where) or where
+    # `git --git-dir=<dir> push …` acts on that repository, whatever the folder is.
+    gitdir = next((["--git-dir", expand(w[i + 1], where) if x == "--git-dir" else expand(x[10:], where)]
+                   for i, x in enumerate(w[:-1] + [""]) if x == "--git-dir" or x.startswith("--git-dir=")), [])
     if c.name in ("gh", "curl"):
         if c.name == "gh":
             method, endpoint, fields = api_call(w, where) if w[1:2] == ["api"] else ("", "", [])
@@ -532,7 +537,7 @@ def force_push_default(c, here):
         return True
     named_repo = any(o == "--repo" or o.startswith("--repo=") for o in opts)  # then every positional is a refspec
     remote = (repo or "origin") if named_repo else pos[0] if pos else "origin"
-    names = default_names(where, remote)
+    names = default_names(where, remote, gitdir)
     # --tags alone sends tags only, not the checked-out branch.
     for spec in (pos if named_repo else pos[1:]) or ([] if "--tags" in opts else ["HEAD"]):
         src, _, dst = spec.lstrip("+").partition(":")
@@ -540,7 +545,7 @@ def force_push_default(c, here):
         if spec.lstrip("+") == ":":  # the matching refspec: every branch the remote has
             dst = "*"
         if dst == "HEAD":
-            dst = git_out(["symbolic-ref", "--short", "HEAD"], where)
+            dst = git_out(gitdir + ["symbolic-ref", "--short", "HEAD"], where)
         # A pattern such as `refs/heads/*` reaches the default branch too.
         if (forced or spec.startswith("+")) and any(fnmatch.fnmatchcase(c, dst) for n in names
                                                     for c in (n, "refs/heads/" + n)):
@@ -594,7 +599,9 @@ def rm_outside(c, here, cwd):
     else:
         execs = []
         opts, operands = rm_targets(c.words)
-        recursive = any(o == "--recursive" or re.fullmatch(r"-[a-zA-Z]*[rR][a-zA-Z]*", o) for o in opts)
+        # GNU rm takes `--recurs` for --recursive: any prefix long enough to be unique.
+        recursive = any(len(o) > 2 and "--recursive".startswith(o) and o != "--" or
+                        re.fullmatch(r"-[a-zA-Z]*[rR][a-zA-Z]*", o) for o in opts)
     roots = {os.path.realpath(p) for p in ("/tmp", "/private/tmp", os.environ.get("TMPDIR") or "/tmp")}
     top = git_out(["rev-parse", "--show-toplevel"], cwd)
     if top:
@@ -747,7 +754,7 @@ def check_bash(cmd, cfg, cwd=None, session=None):
                 here = outer.pop()
         start = c.span[0]
         found = check_command(c, masked, cfg, cwd, session, here)
-        if c.name == "cd":
+        if c.name == "cd" and not (c.piped_from or c.piped_to):  # a pipeline's `cd` runs in a subshell
             here = after_cd(c, here)
         # `kill $(pgrep …)`: a pgrep inside this kill command's own substitution.
         if c.name == "kill" and any(d.name == "pgrep" and c.span[0] < d.span[0] and d.span[1] <= c.span[1]
