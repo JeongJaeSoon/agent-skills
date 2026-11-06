@@ -3198,9 +3198,10 @@ DIFF_HEAD = re.compile(r"\b(?:Update|Edit|Write|MultiEdit)\(|\b(?:Added|Removed)
 
 
 def without_diffs(lines):
-    """lines minus the drawn diffs: a gutter run with a + or - line that follows a diff header (or opens the tail,
-    its header scrolled off). Shape alone is not enough: a command can print "27 - step" and "28  No space left"."""
-    out, run, head = [], [], True
+    """lines minus the drawn diffs: a gutter run with a + or - line that follows a diff header. Shape alone is not
+    enough: a command can print "27 - step" and "28  No space left". A run with no header in `lines` is kept, so a
+    real disk error is never dropped; callers pass the whole screen so a header is seen before the tail is cut."""
+    out, run, head = [], [], False
     for l in [*lines, None]:
         m = GUTTER.match(l) if l is not None else None
         if m:
@@ -3217,7 +3218,7 @@ def without_diffs(lines):
 
 def screen_prompt(lines, activity=None):
     tail = lines[-25:]
-    text = "\n".join(without_diffs(tail))
+    text = "\n".join(without_diffs(lines)[-25:])
     for rx, kind in PROMPTS:
         if rx.search(text):
             return kind, next((l.strip() for l in reversed(tail) if l.strip().endswith("?")), "")
