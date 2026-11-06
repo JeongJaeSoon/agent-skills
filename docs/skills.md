@@ -579,7 +579,7 @@ PR 을 맡는 스킬과 머지 주체:
 허용은 셸 연산자, 리다이렉션, 치환, 변수가 없는 단일 명령에만 준다. 변수는 `$ORCA_TERMINAL_HANDLE` 하나만 예외다. 명령 이름 바로 뒤에 하위 명령이 와야 하고, 플래그가 먼저 오면 판정하지 않는다. 판정하지 않은 호출은 평소 권한 흐름(auto mode 분류기, 사용자의 규칙)을 탄다.
 
 ### 위험 명령과 역할 세션 규칙
-같은 `guard.py`가 `hooks/lib/danger.py`와 `hooks/lib/coordination.py`의 규칙을 먼저 본다. 명령은 bash가 실제로 실행하는 단어만 명령으로 읽고(따옴표 안, heredoc 본문, 주석은 글), 그 명령의 인자는 원문을 `shlex`로 나눠 읽는다. 그래서 `echo pkill`, 커밋 메시지, 따옴표 안의 프롬프트는 걸리지 않는다. `bash -c`, `eval`, 스크립트 파일 안의 명령은 보지 않는다. 가드레일이지 샌드박스가 아니다. 스크립트는 같은 판정 함수(`danger.check_bash`, `danger.external_review`)를 직접 부를 수 있다.
+같은 `guard.py`가 `hooks/lib/danger.py`와 `hooks/lib/coordination.py`의 규칙을 먼저 본다. 명령은 bash가 실제로 실행하는 단어만 명령으로 읽고(따옴표 안, heredoc 본문, 주석은 글), 그 명령의 인자는 원문을 `shlex`로 나눠 읽는다. 그래서 `echo pkill`, 커밋 메시지, 따옴표 안의 프롬프트는 걸리지 않는다. `bash -c`, `eval`, 스크립트 파일 안의 명령은 보지 않는다. 중괄호 확장, 변수에 담긴 경로, stdin으로 넘기는 본문도 읽지 못한다. 가드레일이지 샌드박스가 아니다. 스크립트는 같은 판정 함수(`danger.check_bash`, `danger.external_review`)를 직접 부를 수 있다.
 
 규칙마다 `~/.claude/agent-skills.json`에 키가 있다. 값은 `"deny"`·`"ask"`·`"warn"`·`"off"` 가운데 하나이고, `false`는 `"off"`, `true`는 기본값이다. 끄면 그 규칙이 생기기 전 동작으로 돌아간다. warn은 막지 않고 사람에게 보이는 알림(`systemMessage`)과 모델에 주는 맥락으로 남는다.
 
@@ -598,6 +598,8 @@ PR 을 맡는 스킬과 머지 주체:
 | `guard.deny.self_exempt_label` | deny | `gh`로 `no-visual-change` 라벨 붙이기(`pr create --label`, `pr edit --add-label`, `issue edit`, `gh api …/labels`) |
 | `guard.deny.owner_only` | deny | `orch exempt`. 사람이 자기 채팅에서 `!`로 친다. 키를 끄면 다른 `orch` 명령처럼 허용된다 |
 | `guard.deny.external_review` | deny | `codex` 호출인데 작업 폴더(또는 `-C`)의 origin 저장소가 `repos.<owner/repo>.external_llm: false`. 그 키가 없으면 판정하지 않는다 |
+| `guard.deny.rm_outside` | deny | 현재 체크아웃(git toplevel)과 `/tmp`·`$TMPDIR` 밖을 가리키는 재귀 `rm`(`-r`·`-R`·`--recursive`). 체크아웃 루트 자신과 `/tmp` 자신도 대상이다. 풀리지 않는 `$` 변수가 든 경로는 판정하지 않고 `rm_expansion` 경고에 맡긴다 |
+| `guard.deny.trash_empty` | deny | `~/.Trash`·`~/.local/share/Trash`·`.Trashes`를 재귀나 glob으로 지우는 `rm`, `trash-empty`, `gio trash --empty`, Finder의 `empty trash` AppleScript. 파일 하나를 지정한 `rm`은 대상이 아니다 |
 | `guard.ask.pressure_bypass` | ask | 명령 앞이나 `env`·`export`의 `AGENT_SKILLS_PRESSURE_GATE=0` 대입. 그 글자를 출력하는 `echo`는 대상이 아니다 |
 | `guard.warn.rm_expansion` | warn | 따옴표 없는 glob이나 변수로 만든 `rm` 경로. `${VAR:?}`는 제외 |
 | `guard.warn.reset_hard` | warn | 커밋하지 않은 변경이 있는 저장소의 `git reset --hard` |
