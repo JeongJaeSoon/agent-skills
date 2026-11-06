@@ -171,4 +171,25 @@ subagent("ORDER: o99", "a3")
 subagent("ORDER: o2", "a4")  # o2 is done
 assert "agent:a4" not in links("o2"), links("o2")
 assert not any("agent:a3" in x or "agent:a4" in x for r in json.loads(ok("order", "list", "--json")) for x in r["links"])
+# A transcript that does not exist at the start is read at the stop, and an order that closed meanwhile still gets the link.
+ok("order", "add", "늦은 transcript")
+tdir = tmp / "claude" / "sess" / "subagents"
+(tdir / "agent-late.jsonl").unlink(missing_ok=True)
+late = {"agent_id": "late", "session_id": "s1", "transcript_path": str(tmp / "claude" / "sess.jsonl")}
+
+
+def hook(event):
+    r = subprocess.run([sys.executable, str(HOOKS / "subagent_log.py")], input=json.dumps({**late, "hook_event_name": event}),
+                       capture_output=True, text=True, env=env)
+    assert r.returncode == 0 and r.stdout == "", r
+
+
+hook("SubagentStart")
+assert links("o7") == [], "no transcript yet"
+(tdir / "agent-late.jsonl").write_text(json.dumps({"type": "user", "message": {"role": "user", "content": "ORDER: o7\n일"}}) + "\n")
+ok("order", "done", "o7")
+hook("SubagentStart")
+assert links("o7") == [], "a closed order is not linked at the start"
+hook("SubagentStop")
+assert links("o7") == ["agent:late"], links("o7")
 print("ok")

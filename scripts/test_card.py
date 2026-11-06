@@ -15,7 +15,9 @@ if a[:2] == ["repo", "show"]:
 if a[:2] == ["order", "show"]:
     if mode == "order-unknown":
         print("no order " + a[2], file=sys.stderr); sys.exit(1)
-    print(json.dumps({"id": a[2], "status": "done" if mode == "order-closed" else "open", "links": [],
+    seen = sum(json.loads(l)["argv"][:2] == ["order", "show"] for l in open(os.environ["FAKE_CARD_CALLS"]))
+    closed = mode == "order-closed" or (mode == "order-closes-in-lock" and seen > 1)
+    print(json.dumps({"id": a[2], "status": "done" if closed else "open", "links": [],
                       "text": "첫 줄을 한다\n\n둘째 줄도 한다"})); sys.exit(0)
 if a[:2] == ["order", "link"] and mode == "link-fails":
     print("orders are not available", file=sys.stderr); sys.exit(1)
@@ -1046,7 +1048,7 @@ spawned = []
 # The card's comment says where its brief is, unless the caller gave one.
 rc, out, err, calls = go(path, "--repo", "name:acme", "--name", "acme-helper")
 create = creates(calls)[0]
-assert rc == 0 and create[create.index("--comment") + 1] == f"브리프: {pathlib.Path(path).resolve()}", create
+assert rc == 0 and create[create.index("--comment") + 1] == str(pathlib.Path(path).resolve()), create
 rc, out, err, calls = go(path, "--repo", "name:acme", "--name", "acme-helper", "--comment", "내 댓글")
 assert rc == 0 and creates(calls)[0][creates(calls)[0].index("--comment") + 1] == "내 댓글", err
 
@@ -1061,7 +1063,8 @@ assert rc == 0, err
 p = prompt_of(calls)
 assert p.endswith("ORDER: o7\n오너 지시 o7 원문(카드를 시작한 시점의 사본):\n> 첫 줄을 한다\n>\n> 둘째 줄도 한다"), p
 assert p.splitlines()[0].startswith("/goal ship the helper") and CLOSE in p
-assert order_calls(calls) == [["order", "show", "o7", "--json"], ["order", "link", "o7", "--unit", f"card:repo1::{CARD_DIR}"]], calls
+# show twice: before the lock, and again inside it
+assert order_calls(calls) == [["order", "show", "o7", "--json"]] * 2 + [["order", "link", "o7", "--unit", f"card:repo1::{CARD_DIR}"]], order_calls(calls)
 assert "ORDER" not in pathlib.Path(path).read_text() and "첫 줄을 한다" not in pathlib.Path(path).read_text(), "the order is not written into the brief"
 sent = next(c for c in calls if c["argv"][:2] == ["sent", "add"])
 assert "ORDER: o7" in sent["stdin"], "the Sent log keeps the copy"
@@ -1088,7 +1091,15 @@ rc, out, err, calls = go(path, "--repo", "name:acme", "--name", "acme-helper", "
 assert rc == 2 and "o7 is done" in err and not creates(calls), (rc, err)
 # A link that fails after the start: the card exists (exit 5), and the error names the command to run.
 rc, out, err, calls = go(path, "--repo", "name:acme", "--name", "acme-helper", "--order", "o7", mode="link-fails")
-assert rc == 5 and "orch order link o7" in err and "Do not create it again" in err and creates(calls), (rc, err)
+assert rc == 5 and "orch order link o7 --unit card:repo1::" in err and "Do not create it again" in err and creates(calls), (rc, err)
+# The order closes while this start waits on the card lock: the start looks again and creates nothing.
+rc, out, err, calls = go(path, "--repo", "name:acme", "--name", "acme-helper", "--order", "o7", mode="order-closes-in-lock")
+assert rc == 2 and "o7 is done" in err and not creates(calls), (rc, err)
+# The default comment is what fleet.report_target reads: the bare path of a brief whose REPORT names a Run.
+import fleet  # noqa: E402
+run_brief = brief(WORKER + "REPORT      orca orchestration send --to run:run_me --type question\n", "report-run.md")
+rc, out, err, calls = go(run_brief, "--repo", "name:acme", "--name", "acme-helper", "--card")
+assert rc == 0 and fleet.report_target(creates(calls)[0][creates(calls)[0].index("--comment") + 1]) == ("run", "run_me"), (err, calls)
 
 # A supervised worker (REPORT to a Run) gets the same: the id comes from worker-start's worktree effect.
 WORKER_RUN = WORKER + "REPORT      orca orchestration send --to run:run_me --type question\n"

@@ -78,7 +78,7 @@ none gets a warning.
 order (`orch order`): the order must be open, its text is appended to the prompt as a copy of what it said at the start,
 and the new worktree is linked to it as `card:<worktree id>`. An unknown or closed order is exit 2 before anything is
 created; a link that fails after the start is exit 5 with the command to run. The brief and the order row are not
-rewritten. Without --comment, the card's comment is `브리프: <brief path>`.
+rewritten. Without --comment, the card's comment is the brief's path alone (the form fleet.report_target reads).
 
 `--prompt "$(cat brief.md)"` hides those lines from the guard hook, which reads only the command text; this reads
 the file and checks them itself, with the hook's own patterns. The card is created from a subprocess, so no hook
@@ -999,7 +999,8 @@ def link_order(oid, res, path, repo_selector, repo):
     if not wid:
         return f"orch order link: the receipt names no worktree id, link it with `orch order link {oid} --unit card:<worktree id>`"
     p, err = run([ORCH, "order", "link", oid, "--unit", f"card:{wid}"], timeout=30)
-    return None if p and not p.returncode else f"orch order link {oid} card:{wid}: {err or 'no answer'}"
+    return None if p and not p.returncode else (f"orch order link {oid} --unit card:{wid} failed ({err or 'no answer'}); "
+                                                 "run it again")
 
 
 def create(argv):
@@ -1020,6 +1021,8 @@ def create(argv):
 
 
 def create_locked(brief, opts, refs, prompt, kind=None, order=None):
+    if order:  # the lock may have waited behind another start: the order can have closed since create() looked
+        order = order_of(brief, opts)
     repo, superseded = check_duplicates(opts["--repo"], refs, opts["--role"], opts.get("--supersede"))
     # A lead's brief has no FORBIDDEN row in its template: the worker paragraph is not its rule set.
     forbidden = ("skipped (--no-forbidden)" if opts.get("--no-forbidden") else "skipped (lead brief)"
@@ -1076,7 +1079,8 @@ def create_locked(brief, opts, refs, prompt, kind=None, order=None):
         for r in refs:
             cmd += ["--reference", r]
     # A comment of the caller's is left alone; without one the card's comment says where its brief is.
-    cmd += ["--comment", opts.get("--comment") or f"브리프: {pathlib.Path(brief).expanduser().resolve()}"]
+    # fleet.report_target reads a comment that is the bare path to find the card's REPORT address: nothing else in it.
+    cmd += ["--comment", opts.get("--comment") or str(pathlib.Path(brief).expanduser().resolve())]
     cmd += ["--model", model] if model else []
     cmd.append("--json")
     check_approved(text, brief)  # after the codex and parent refusals, so those stay one-line errors

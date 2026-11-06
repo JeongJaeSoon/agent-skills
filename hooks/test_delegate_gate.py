@@ -200,6 +200,9 @@ for tool, args in (("Agent", {"prompt": "look at the logs\nORDER: o3\nthen repor
                    ("Bash", card_cmd(str(BRIEF_ORDER))), ("Bash", card_cmd(str(BRIEF_PLAIN), "--order o3")),
                    ("Bash", {"command": "orch status p"}), ("Read", {"file_path": str(BRIEF_PLAIN)})):
     assert note(tool, args) == "none", (tool, args)
+BRIEF_FENCED = TMP / "fenced.md"
+BRIEF_FENCED.write_text("/goal x\n```\nORDER: o3\n```\nCLOSE: x\n")
+assert "carries no owner order" in note("Bash", card_cmd(str(BRIEF_FENCED))), "a quoted row is not the brief's own"
 assert note("Agent", {"prompt": "see ORDER: o3 in prose, ORDER o3 too"}).startswith("[gate:delegate]"), "a mention is not a line"
 assert note("Agent", AGENT, agent=None) == "none" and note("Agent", AGENT, agent_id="a1") == "none", "only the orchestrator's own call"
 assert bash("rm -rf x") == "deny", "a denied call stays denied"

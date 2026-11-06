@@ -85,7 +85,8 @@ def link_order(event, handle):
         return
     import store
     try:
-        store.order_get(m.group(1), require_open=True)
+        # An order that closed while the subagent ran still gets the link at its stop: the work started under it.
+        store.order_get(m.group(1), require_open=event.get("hook_event_name") != "SubagentStop")
         store.order_link(m.group(1), f"agent:{aid}", handle)
     except (ValueError, store.NotMigrated):
         pass

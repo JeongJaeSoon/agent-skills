@@ -268,6 +268,7 @@ def reason(tool):
 # A line of its own: `ORDER: o12` in a subagent prompt or a brief. The brief template's `ORDER  Starts after …` row has no
 # order id after the colon, so it does not count.
 ORDER_LINE = re.compile(r"(?im)^[ \t]*`?ORDER`?[ \t]*:[ \t]*o\d+[ \t]*$")
+FENCE = re.compile(r"(?ms)^[ \t]*```.*?^[ \t]*```[^\n]*$")
 
 
 def delegations(tool, args):
@@ -292,8 +293,8 @@ def unlinked(delegation):
         return not ORDER_LINE.search(text)
     if flagged:
         return False
-    try:
-        return not ORDER_LINE.search(pathlib.Path(text).expanduser().read_text())
+    try:  # a quoted template in a ``` fence is not the brief's own row, as skills-sync card reads it
+        return not ORDER_LINE.search(FENCE.sub("", pathlib.Path(text).expanduser().read_text()))
     except OSError:
         return True
 
