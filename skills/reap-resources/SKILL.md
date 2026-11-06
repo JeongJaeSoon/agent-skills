@@ -240,7 +240,7 @@ are who removes a finished card (`end-session`, "Who cleans up"). Which device f
 
 The janitor only sees what was registered and waits on its half-hourly round and on the card's own session to close.
 `bin/reap-hard` is the last sweep: fixed rules, no model, every Orca card under
-`~/orca/workspaces` whatever made it, run by a LaunchAgent every 15 minutes.
+`~/orca/workspaces` whatever made it, run by an Orca automation every 30 minutes, and once more when a PR lands.
 
 ```bash
 bin/reap-hard run --dry-run      # decide and log, touch nothing
@@ -312,7 +312,7 @@ taken while the load is at or above the limit is not evidence: measure again onc
 
 `scripts/pressure.py` watches the machine without a model and reaps what is safe before anyone notices.
 A round whose level turns warn or danger also starts `orch patrol --if-due` detached, which ties the top consumers
-to the state of the card behind each (its `L` rule); reap-hard starts it every other pass. Patrol verdicts only keep.
+to the state of the card behind each (its `L` rule); reap-hard starts it every pass. Patrol verdicts only keep.
 
 ```bash
 P="${CLAUDE_SKILL_DIR}/scripts/pressure.py"

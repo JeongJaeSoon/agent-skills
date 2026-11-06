@@ -522,6 +522,13 @@ calls.clear()
 full = [{**mine, "headRefName": f"x{n}", "headRefOid": f"x{n}"} for n in range(reap.PR_LIST_LIMIT)]
 assert reap.branch_pr("/r-c", counting_git([], calls), "hx", reap.PrMap(counting_git(full, calls)), "/r") == (None, False)
 assert len(calls) == 3, calls  # the listing, then --head and --search as before
+# A cut listing never answers, even with a match: its merged PR on HEAD must not hide an older open PR on the branch.
+calls.clear()
+cut = [{**mine, "headRefName": "elsewhere", "headRefOid": "h2", "state": "MERGED"}] + full[1:]
+open_old = {"number": 1, "url": "https://github.com/acme/app/pull/1", "state": "OPEN", "isCrossRepository": False}
+def head_lookup(cmd, cwd=None, check=True):
+    return json.dumps([open_old]) if cmd[0] == "gh" and "--head" in cmd else counting_git(cut, calls)(cmd, cwd, check)
+assert reap.branch_pr("/r-c", head_lookup, "h2", reap.PrMap(counting_git(cut, calls)), "/r") == ("acme/app#1", False)
 # A listing that cannot be read falls back to the per-card lookups, whose failure is still 'unread'.
 calls.clear()
 assert reap.branch_pr("/r-c", counting_git(None, calls), "hx", reap.PrMap(counting_git(None, calls)), "/r") == (None, True)

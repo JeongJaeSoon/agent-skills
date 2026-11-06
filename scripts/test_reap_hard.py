@@ -350,9 +350,34 @@ rh.scan_rest = lambda *a: ([], [], set())
 rh.read_protect, rh.guard.ownership, rh.write_last, rh.log = (lambda f: P), (lambda: None), (lambda s: None), (lambda r: None)
 rh.run_pass(True, cfg_i, NOW)
 assert not rh.INVENTORY.exists(), "a dry run writes no inventory"
+# A protect file edited while the pass ran: the verdicts were taken under the old one, so no inventory is kept.
+rh.scan_rest = lambda *a: (pf.write_text("# edited during the scan\n"), ([], [], set()))[1]
+rh.run_pass(False, cfg_i, NOW)
+assert not rh.INVENTORY.exists(), "settings changed during the pass"
+pf.write_text("# keep\n")
+rh.scan_rest = lambda *a: ([], [], set())
 rh.run_pass(False, cfg_i, NOW)
 assert [i["id"] for i in rh.read_inventory(cfg_i, NOW + 1)["cards"]] == [str(live)]
 rh.scan_cards, rh.scan_rest, rh.read_protect, rh.guard.ownership, rh.write_last, rh.log = saved_rp
+
+# A listener verdict from an inventory minutes old is judged again before SIGTERM: the process may have moved into a live card.
+killed_l = []
+saved_l = rh.reap.processes, rh.reap.cwds, rh.reap.human_owned, rh.os.kill
+live_card = inv_dir / "live-card"
+live_card.mkdir()
+lis = {"kind": "listener", "id": "42:4600", "pid": 42, "start": "S"}
+rh.reap.processes = lambda: {42: {"pid": 42, "ppid": 1, "start": "S", "cmd": "node x", "age": 99999}}
+rh.reap.human_owned = lambda pid, rows: False
+rh.os.kill = lambda pid, sig: killed_l.append(pid)
+lcfg = {**rh.DEFAULTS, "workspaces": str(inv_dir)}
+(live_card / "web").mkdir()
+rh.reap.cwds = lambda inodes=False: {42: (str(live_card / "web"), os.stat(live_card / "web").st_ino)}
+assert rh.act(lis, lcfg, P).startswith("건너뜀") and not killed_l, "its cwd is in a live card now"
+rh.reap.cwds = lambda inodes=False: None
+assert rh.act(lis, lcfg, P).startswith("건너뜀") and not killed_l, "cwd not readable"
+rh.reap.cwds = lambda inodes=False: {42: ("/nonexistent/gone-dir", 1)}
+assert rh.act(lis, lcfg, P) == "SIGTERM" and killed_l == [42]
+rh.reap.processes, rh.reap.cwds, rh.reap.human_owned, rh.os.kill = saved_l
 
 # Stopped containers and labeled volumes: off without their settings, one exact target each, the shared rules of reap.py.
 saved_lo = rh.reap.leftovers, rh.reap.remove_leftover, rh.reap.compose_stacks, rh.pw.tailscale_cli, rh.guard.settings, rh.always_on

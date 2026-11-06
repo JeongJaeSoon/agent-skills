@@ -1116,7 +1116,9 @@ def branch_pr(path, git=run, head=None, pr_map=None, key=None):
         own = [p for p in mine if branch and p.get("headRefName") == branch]
         if not own and head:
             own = [p for p in mine if p.get("headRefOid") == head]
-        if own or complete:
+        # Only a complete listing rules a PR out or in: a cut one may hold a merged PR on HEAD while the open one on
+        # the branch is older than the cut, and a merged PR alone would let the card go.
+        if complete:
             return pr_ref(own), False
     prs = branch and git(["gh", "pr", "list", "--head", branch, "--state", "all", "--json", "number,url,state,isCrossRepository"],
                           cwd=path, check=False)
