@@ -272,6 +272,31 @@ class LandExec(unittest.TestCase):
                          (["term_author"], "codex", "https://example.test/r", "term_author"))
         self.assertIsNone(prog.verdict_identity_problem(v))
 
+    def test_malformed_identity_rows_are_refused_not_retried(self):
+        for bad in ({"author": 42}, {"author": "term_author"}, {"reviewer": 42}, {"evidence": ["x"]}, {"author": [42]}):
+            with self.subTest(bad=bad):
+                LandExec.seq += 1
+                self.n = self.seq
+                self.write({"prs": {str(self.n): pr(self.n)}, "stacks": []})
+                self.p = prog.Program(self.slug)
+                self.verdict(**bad)
+                row = self.request()
+                self.round()
+                self.settled(row, "refused", 3, "malformed")
+                self.assertEqual(self.merges(), [])
+
+    def test_verifier_source_names_the_reviewer(self):
+        os.environ["ORCA_TERMINAL_HANDLE"] = "term_author"
+        real = prog.author_sessions
+        prog.author_sessions = lambda branch: ["term_other"]
+        try:
+            prog.cmd_verdict([self.slug, "--pr", str(self.n), "--sha", f"h{self.n}", "--source", "verifier:codex",
+                              "--evidence", "e"])
+        finally:
+            prog.author_sessions = real
+            os.environ.pop("ORCA_TERMINAL_HANDLE")
+        self.assertEqual(prog.pr_state(self.p.events())[self.n]["verdict"]["reviewer"], "codex")
+
     def test_a_verdict_recorded_by_cmd_verdict_for_an_orchestrator_merges(self):
         row = self.request()
         os.environ["ORCA_TERMINAL_HANDLE"] = "term_orchestrator"

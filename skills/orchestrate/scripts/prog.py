@@ -1911,7 +1911,7 @@ def cmd_verdict(argv):
     if not head.startswith(sha):
         sys.exit(f"head is {head[:8]}, not the reviewed {sha[:8]}: the new head has not been reviewed")
     recorder = os.environ.get("ORCA_TERMINAL_HANDLE")
-    reviewer = (opt(argv, "--reviewer") or (what.strip() if kind == "review" else "")).strip()
+    reviewer = (opt(argv, "--reviewer") or (what.strip() if kind in ("review", "verifier") else "")).strip()
     evidence = (opt(argv, "--evidence") or "").strip()
     authors = author_sessions(view.get("headRefName"))
     fields = dict(author=authors, reviewer=reviewer or None, evidence=evidence or None, recorder=recorder, by=recorder)
@@ -1943,7 +1943,7 @@ def author_sessions(branch):
         # A cut-off list can miss the author, and a reviewer equal to the missing one would pass.
         if out.get("truncated") or not isinstance(rows, list):
             return []
-        return sorted({t["handle"] for t in rows if t.get("handle")})
+        return sorted({t["handle"] for t in rows if isinstance(t.get("handle"), str) and t["handle"]})
     except (SystemExit, ValueError, KeyError, TypeError, AttributeError, OSError):
         return []
 
@@ -1954,8 +1954,13 @@ def verdict_identity_problem(v):
     terminal that wrote the row (an orchestrator may record a review someone else ran). The recorder's handle is an
     environment value, so this proves nothing against a forged one: it stops the honest mistake and the plain
     self-review, and leaves the rest to the review evidence."""
+    authors = v.get("author")
+    # A row is JSON anyone can append: a wrong type must refuse, not raise and leave the request queued forever.
+    if not all(v.get(k) is None or isinstance(v.get(k), str) for k in ("reviewer", "evidence", "recorder")) \
+            or not (authors is None or isinstance(authors, list) and all(isinstance(a, str) and a for a in authors)):
+        return "the identity fields are malformed (author is a list of handles, the rest are strings)"
     if not (v.get("reviewer") or "").strip():
-        return "no reviewer named (--reviewer, or a review:<reviewer> source)"
+        return "no reviewer named (--reviewer, or a review:<reviewer> or verifier:<reviewer> source)"
     if not (v.get("evidence") or "").strip():
         return "no evidence (--evidence: a link to the review or the reviewed sha)"
     if not v.get("recorder"):
@@ -1969,7 +1974,8 @@ def verdict_identity_problem(v):
 
 def self_review(v):
     """The reason the reviewer is the PR's own author, else None."""
-    authors, reviewer = v.get("author") or [], (v.get("reviewer") or "").strip()
+    authors, reviewer = v.get("author") or [], v.get("reviewer")
+    reviewer = reviewer.strip() if isinstance(reviewer, str) else ""
     if reviewer and (reviewer.casefold() in SELF_REVIEWERS or reviewer in authors):
         return f"reviewer '{reviewer}' is the PR's author session"
     return None
