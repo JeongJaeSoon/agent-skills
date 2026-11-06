@@ -483,7 +483,7 @@ function redrawCharts() {
   if (!S.state) return;
   if (["overview", "workers", "issues"].includes(S.section)) drawCharts(S.state);
   if (S.section === "tasks") drawDag(S.state);
-  if (isFleet() && S.section === "stats") renderView();
+  if (onView("prs", "stats", PRS_VIEWS)) renderView();
 }
 
 // ------------------------------------------------------------ dependency graph
@@ -974,9 +974,10 @@ function render() { renderSidebar(); renderHeader(); renderFresh(); renderView()
 // POLL_BODY holds the object that ETag came with: when another path (pollState writes S.fleet too) replaced it,
 // the ETag no longer describes what is on screen and is not sent.
 const POLL_ETAG = {}, POLL_BODY = {};
-function conditionalFetch(url, have) {
+// The ETag belongs to the URL without `query`: ?viewed=1 only tells the server a visible page is polling.
+function conditionalFetch(url, have, query = "") {
   const etag = have && POLL_BODY[url] === have ? POLL_ETAG[url] : null;
-  return fetch(url, { cache: "no-store", headers: etag ? { "If-None-Match": etag } : {} });
+  return fetch(url + query, { cache: "no-store", headers: etag ? { "If-None-Match": etag } : {} });
 }
 // Parse first, then store the ETag with its data: an ETag kept for a body that failed to parse would 304 onto stale data.
 async function readConditional(url, r) {
@@ -993,7 +994,7 @@ async function pollPrograms() {
   try {
     // A program page still draws the fleet tree in the sidebar; the fleet page polls that state itself.
     const [r, f] = await Promise.all([conditionalFetch("/api/programs", S.programs),
-      isFleet() ? null : conditionalFetch("/api/fleet/state", S.fleet)]);
+      isFleet() ? null : conditionalFetch("/api/fleet/state", S.fleet, "?viewed=1")]);
     if (!r.ok && r.status !== 304) throw new Error(r.status);
     let changed = false;
     if (r.status !== 304) { S.programs = await readConditional("/api/programs", r); changed = true; }
@@ -1040,7 +1041,8 @@ async function pollState() {
   const slug = S.slug;
   if (!slug || document.hidden) return;
   try {
-    const r = await fetch(`/api/${encodeURIComponent(slug)}/state`, { cache: "no-store", headers: S.etag ? { "If-None-Match": S.etag } : {} });
+    // The fleet page is a visible page polling (pollState returns on a hidden tab): the server keeps its fast poll for it.
+    const r = await fetch(`/api/${encodeURIComponent(slug)}/state${slug === "fleet" ? "?viewed=1" : ""}`, { cache: "no-store", headers: S.etag ? { "If-None-Match": S.etag } : {} });
     if (versionChanged(r.headers.get("X-Dash-Version"))) { location.reload(); return; }
     if (slug !== S.slug) return;
     S.down = false; S.lastOk = Date.now();

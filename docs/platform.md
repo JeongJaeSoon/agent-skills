@@ -307,7 +307,7 @@ The human must get an answer from you within seconds, at any time. You route; yo
   the answer's shape.
 ```
 
-`principles`에는 Delegation 묶음에 한 줄을 더하는 안을 제안한다: "**Stay Answerable** — the session the human talks to routes and answers; every piece of work runs in a background subagent or another session." 다만 `principles`는 pstack upstream을 따라가는 스킬이라, 구현할 때 `scripts/pstack-sync-test.sh`로 upstream 동기화가 깨지지 않는지 먼저 본다. 깨지면 `orchestrate`에만 둔다.
+`principles`에는 Delegation 묶음에 한 줄을 더하는 안을 제안한다: "**Stay Answerable** — the session the human talks to routes and answers; every piece of work runs in a background subagent or another session." `principles`는 pstack에서 가져왔지만 이제 이 저장소가 따로 관리하므로(`vendor/pstack/NOTICE.md`) 바로 고쳐도 upstream 원본과 부딪히지 않는다.
 
 ### 6.2 실측 근거 (2026-09-24~25 리드 세션 한 개의 트랜스크립트)
 
@@ -353,7 +353,7 @@ orchestrator (사용자가 말을 거는 세션 하나, orchestrate의 top-level
 | 같은 파일 "Asking the human" 절 | AskUserQuestion은 orchestrator 턴을 막는다. 결정이 필요한 것은 답변 텍스트와 인박스에 모아 두고 턴을 끝낸다. 사용자가 고르면 다음 턴에 반영한다. 배포·머지·kill처럼 사용자가 직접 하거나 허락해야 하는 것은 인박스에 "명령 실행" 유형으로 올린다 | 44분 AskUserQuestion, `!` 명령 6분 대기 |
 | 같은 파일 "Injected notices" 절 | 사용자 메시지 끝에 `You have N orchestration message(s)…`가 붙어 있으면 그 앞까지가 사용자 문장이다. 잘렸을 수 있으니 "문장이 … 에서 끊겼다"고 한 줄로 알리고, 알림 처리는 백그라운드로 넘긴다 | 알림 끼어듦 21회 |
 | 같은 파일 "Skills changed" 절 | 스킬을 고쳤으면 `skills-sync broadcast`(§4). 직접 `terminal send "/reload-plugins"`를 치지 않는다 | §4 |
-| `principles` | Delegation에 "Stay Answerable" 한 줄 (pstack 동기화가 깨지지 않을 때만) | §6.1 |
+| `principles` | Delegation에 "Stay Answerable" 한 줄 | §6.1 |
 | README, `docs/skills.md`와 번역본 `docs/skills.{en,ja}.md` | README 설치 절을 로컬 체크아웃 + 부트스트랩으로, reload 문장을 §4 규칙으로 바꾼다. 카탈로그에 `orchestrate`의 top-level 모드와 `skills-sync` 명령을 더하고, 번역본도 같은 커밋에서 고쳐 첫 줄 `translated-from`을 올린다(안 올리면 `scripts/catalog/build.py`가 원문보다 오래됐다고 표시한다). 카탈로그 페이지 재생성은 README 링크의 artifact라 이 작업 범위 밖이고, 결과 보고에 남긴다 | §1, §4 |
 
 **두는 것**

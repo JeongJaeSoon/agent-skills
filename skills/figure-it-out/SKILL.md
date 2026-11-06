@@ -1,6 +1,6 @@
 ---
 name: figure-it-out
-description: "Design an auditable playbook before code for a large migration, an ambitious multi-part change, or work the human reviews after stepping away — /figure-it-out, \"알아서 설계해서 진행해줘\", \"자리 비운 동안 끝내줘\", or deliver-ticket's Plan finding work that size. Several tickets on parallel cards are orchestrate."
+description: "Design an auditable playbook before code for a large migration or multi-part change, or work reviewed after the human steps away — /figure-it-out, \"알아서 설계해서 진행해줘\", \"자리 비운 동안 끝내줘\". Parallel tickets on cards are orchestrate."
 ---
 
 # Figure it out

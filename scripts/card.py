@@ -69,6 +69,10 @@ colon (`CLOSE: …`, `` `CLOSE`: … ``) or the template's wide gap (`DELEGATE  
 A lead's brief (a MODE row, a `ROLE: lead <slug>` row or a `<project>: lead` head) needs every row of orchestrate
 references/brief.md "Lead", its MERGE row naming exactly one merge_policy; any brief needs CLOSE or KEEP, and one with an Approved heading or bullet needs its
 `APPROVED:` row. The brief is a local file; a note only the notes store can reach is copied to one first.
+Every prompt, a handoff's too, carries the fixed TEARDOWN and DOCS rows (FIXED_LINES) after LOAD, whatever the brief says.
+An APPROVED row (a handoff's --note too) cites the owner's words by the `orch decide` id that recorded them, as
+`오너(d150, <date>)`: an id the store does not hold as answered, or a store it cannot read, is exit 2; a row that cites
+none gets a warning.
 
 `--prompt "$(cat brief.md)"` hides those lines from the guard hook, which reads only the command text; this reads
 the file and checks them itself, with the hook's own patterns. The card is created from a subprocess, so no hook
@@ -105,6 +109,14 @@ CLOSE_LINE = "CLOSE: 완료 기준을 채우고 결과를 적으면 end-session 
 # hooks/lib/skillload.py reads a `LOAD: none` row as a read-only card; any other LOAD row is only text for the worker.
 LOAD_LINE = ("LOAD: 코드·문서를 바꾸는 카드는 첫 편집 전에 deliver-ticket을 로드한다"
              "(Claude는 Skill 도구, 다른 CLI는 skills/deliver-ticket/SKILL.md를 읽는다). 읽기 전용 조사 카드는 `LOAD: none`이라 적는다")
+# Rows no brief writer has to remember: every card's prompt carries them.
+FIXED_LINES = (
+    "TEARDOWN: 검증·프리뷰로 띄운 compose stack은 확인이 끝난 같은 턴에 내린다(`docker compose -p <project> down`, "
+    "`-v`는 붙이지 않는다). 프로세스는 이 카드가 띄우고 PID를 기록한 것만 그 PID로 kill한다. pkill·killall 같은 패턴 kill은 쓰지 않는다",
+    "DOCS: 오너가 읽을 문서(리뷰·요약·설계 메모)는 Artifact로만 게시한다. 로컬 .md 사본을 만들지 않고, 보고에 파일 경로를 적지 않는다",
+)
+# Only the cite form `(d150, <date>)` or `(d150)`: a bare `d3` in an APPROVED row can be a library or a path.
+DECIDE_ID = re.compile(r"\((d\d+)\s*[,)]")
 sys.path.insert(0, str(REPO / "hooks"))
 sys.path.insert(0, str(REPO / "skills" / "orchestrate" / "scripts"))
 import guard  # noqa: E402
@@ -120,7 +132,7 @@ LEAD_ROWS = ("MODE", "ROLE", "INBOX", "DELEGATE", "PREDICATE", "MERGE", "TASKS",
 MERGE_VALUE = re.compile(r"\bmerge_policy (autonomous|human-gate)\b")
 ROWS = ("PROGRAM", "APPROVED", *LEAD_ROWS, "CLOSE", "KEEP", "LOAD", "FORBIDDEN", "REPORT")
 FENCE = re.compile(r"(?ms)^[ \t]*```.*?^[ \t]*```[^\n]*$")
-# dispatch-card §2's prose form of the approval, which carries nothing into the prompt without an APPROVED row
+# An Approved heading or bullet: the prose form of the approval, which carries nothing into the prompt without an APPROVED row
 APPROVED_PROSE = re.compile(r"(?im)^[ \t]*(?:#{1,6}[ \t]*|[-*][ \t]+\*\*)approved\b")
 ME = "skills-sync card"
 
@@ -244,12 +256,44 @@ def compose(brief_path):
         head += f" 브리프: {path}"
     # FORBIDDEN (markers included) and every REPORT row go in whole: the worker gets its bans and where to report from
     # no other place than this first prompt, and a path to the brief file is not a substitute for them.
-    prompt = "\n".join([head, *(r for k in ROWS for r in (all_rows(text, k) if k == "REPORT" else [rows[k]]) if r)])
+    def lines(k):  # the fixed rows follow LOAD, ahead of the long FORBIDDEN section
+        return all_rows(text, k) if k == "REPORT" else [rows[k], *(FIXED_LINES if k == "LOAD" else ())]
+    prompt = "\n".join([head, *(r for k in ROWS for r in lines(k) if r)])
     # The hook's own test on the result: if its patterns move, this refuses instead of creating what it would refuse.
     if not guard.CLOSE_OR_KEEP.search(prompt) or guard.is_lead(prompt) != lead or lead and (
             not guard.LEAD_ROLE.search(prompt) or any(not re.search(rf"\b{w}\b", prompt) for w in guard.LEAD_LINES)):
         raise Refuse(2, "the composed prompt does not pass hooks/guard.py's card check; fix the brief's rows")
     return prompt
+
+
+def check_approved(text, where, me=ME):
+    """The APPROVED row's `orch decide` citations (`오너(d150, <date>)`) against the store: Refuse(2) for an id it does not
+    hold as answered or cannot be read for, a warning for a row that cites none (orchestrate references/brief.md
+    "Single worker", APPROVED)."""
+    approved = row(FENCE.sub("", text), "APPROVED")
+    if not approved:
+        return
+    ids = list(dict.fromkeys(DECIDE_ID.findall(approved)))
+    if not ids:
+        print(f"[{me}] warning: the APPROVED row cites no `orch decide` id. Record the owner's words with `orch decide "
+              "answer <id> --quote \"<verbatim>\"` and cite the id it prints as `오너(<id>, <date>)`, so the approval "
+              "is checkable.", file=sys.stderr)
+        return
+    import store
+    bad = []
+    for did in ids:
+        try:
+            d = store.decision_record(did)
+        except (store.NotMigrated, OSError, ValueError) as e:
+            raise Refuse(2, f"[{me}] {where}: the APPROVED row cites {', '.join(ids)}, but the decision store cannot "
+                            f"be read ({e}), so the approval is unchecked and nothing was created.")
+        if not d:
+            bad.append(f"{did} (no such decision)")
+        elif d.get("status") != "done" or not (d.get("answer") or "").strip():
+            bad.append(f"{did} ({d.get('status')}, no recorded answer)")
+    if bad:
+        raise Refuse(2, f"[{me}] {where}: the APPROVED row cites {', '.join(bad)}. Cite the id `orch decide answer` "
+                        "printed for the owner's words (`orch decide show <id>` reads it back), or record them first.")
 
 
 def fenced_lines(lines):
@@ -525,12 +569,12 @@ def manual_goal_command(handle, line):
     return shlex.join([ORCA, "terminal", "send", "--terminal", handle, "--text", line, "--enter"])
 
 
-def type_when_idle(handle, line, deadline=None):
+def type_when_idle(handle, line, deadline=None, still=None):
     """None once `line` was typed into an idle Claude session and the screen shows it was taken, else the reason it
     was not (sync.UNCONFIRMED when it may have been typed). This is `sync.send_to` with the tab title left out of the
     judgement: a worker's title is the session's topic (`GOAL-DEMO-OK …`), never the `✳` that `sync.classify` wants,
     so the title would read every worker as busy. The screen checks (spinner, dialog, empty prompt box, two equal
-    reads) stay."""
+    reads) stay. `still`, when given, runs under the lock just before the send: a reason it returns stops the send."""
     import sync
 
     def look():
@@ -561,6 +605,8 @@ def type_when_idle(handle, line, deadline=None):
             return str(e)
         if deadline is not None and time.monotonic() >= deadline:
             return "time limit reached while waiting"
+        if still is not None and (why := still()):
+            return why
         try:
             sync.orca("terminal", "send", "--terminal", handle, "--text", line, "--enter")
         except sync.Stop:  # Orca may have taken the input and lost the answer: typing it again could set the goal twice
@@ -953,6 +999,7 @@ def create_locked(brief, opts, refs, prompt, kind=None):
         cmd += ["--comment", opts["--comment"]]
     cmd += ["--model", model] if model else []
     cmd.append("--json")
+    check_approved(text, brief)  # after the codex and parent refusals, so those stay one-line errors
     reason, mark = pressure_check(shlex.join(["orca", *cmd[1:]]))
     if reason:
         raise Refuse(3, f"[{ME}] not created, the pressure gate refused it (for `queue wait`, run this same "
@@ -1080,9 +1127,11 @@ def handoff(argv):
         if opts["--agent"] == "codex":
             raise Refuse(2, f"[{HANDOFF}] {CODEX_GOAL_CARD}")
         # CLOSE on a line of its own: roles.py reads a CLOSE card by its row
-        prompt = f"/goal {ticket}." + (f" {opts['--note']}" if opts.get("--note") else "") + f"\n{CLOSE_LINE}\n{LOAD_LINE}"
+        prompt = "\n".join([f"/goal {ticket}." + (f" {opts['--note']}" if opts.get("--note") else ""),
+                            CLOSE_LINE, LOAD_LINE, *FIXED_LINES])
         if not guard.CLOSE_OR_KEEP.search(prompt):
             raise Refuse(2, f"[{HANDOFF}] the prompt does not pass hooks/guard.py's card check")
+        check_approved(opts.get("--note") or "", "--note", HANDOFF)  # the note itself: its first line joins /goal
         with card_lock():
             return handoff_locked(ticket, opts, refs, prompt)
     except Refuse as e:

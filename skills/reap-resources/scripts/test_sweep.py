@@ -293,6 +293,7 @@ def hard_row(t, kind, id_, result, dry=False, **extra):
 T0 = NOW - 10 * 3600
 # The cards below are made-up paths that exist nowhere; "gone" is tested further down against real folders.
 real_gone_card, sweep.gone_card = sweep.gone_card, lambda key: False
+real_gone_volume, sweep.gone_volume = sweep.gone_volume, lambda key: False
 shadow_round(T0, [("card:strict", "card:/ws/y", {"head": "h1"}), ("trash:tmpdir", "tmpdir:/t/a"),
                   ("stack:gone", "stack:s9"), ("card:landed", "card:/ws/z", {"head": "z1"}),
                   ("card:strict", "card:/ws/re", {"head": "new"}), ("card:close-idle", "card:/ws/c", {"close": ["A"]}),
@@ -518,6 +519,63 @@ assert [r["state"] for r in d["rows"]] == ["pending"] and not d["external"], d
 d = sweep.diff(48, now=NOW + 1)
 assert [r["state"] for r in d["rows"]] == ["matched"] and not d["external"], d
 (STATE / "reap-actions.jsonl").unlink(missing_ok=True)
+
+# A stack volume that is gone when the diff runs, with no old cleaner act on it, was removed by its stack's owner
+# (a teardown or purge that ran between the round and the janitor): external, like a gone card. One docker still lists
+# is excess as before, and so is one docker cannot be asked about.
+sweep.gone_volume = real_gone_volume
+real_inspect = sweep.volume_inspect
+sweep.volume_inspect = lambda name: {"vol-gone": (1, "Error response from daemon: get vol-gone: no such volume"),
+                                     "vol-here": (0, ""), "vol-down": (1, "Cannot connect to the Docker daemon")
+                                     }.get(name, (124, ""))
+assert sweep.gone_volume("stack-volume:vol-gone")
+assert not sweep.gone_volume("stack-volume:vol-here")  # still there: a real leftover
+assert not sweep.gone_volume("stack-volume:vol-down")  # another failure proves nothing
+assert not sweep.gone_volume("stack-volume:vol-timeout")
+assert not sweep.gone_volume("card:/ws/x") and not sweep.gone_volume("volume:vol-gone")  # only stack volumes
+sweep.shadow_log().unlink()
+shadow_round(T0, [("volume:prefixed", "stack-volume:vol-gone", {"created": 1}),
+                  ("volume:prefixed", "stack-volume:vol-here", {"created": 2}),
+                  ("volume:prefixed", "stack-volume:vol-down", {"created": 3})])
+d = sweep.diff(48, now=NOW + 1)
+states = {r["key"]: r["state"] for r in d["rows"]}
+assert states == {"stack-volume:vol-gone": "external", "stack-volume:vol-here": "excess",
+                  "stack-volume:vol-down": "excess"}, states
+assert [r["key"] for r in d["external"]] == ["stack-volume:vol-gone"], d["external"]
+assert d["by_rule"]["volume:prefixed"] == {"matched": 0, "pending": 0, "excess": 2}, d["by_rule"]
+# Inside the lag it is pending, not external; one the old cleaner removed is matched.
+d = sweep.diff(48, now=T0 + 31)
+assert {r["state"] for r in d["rows"]} == {"pending"} and not d["external"], d
+(STATE / "reap-actions.jsonl").write_text(json.dumps({"t": T0 + 300, "key": "stack-volume:vol-gone", "ok": True,
+                                                      "effect": "volume:prefixed", "identity": {"created": 1}}) + "\n")
+d = sweep.diff(48, now=NOW + 1)
+assert {r["key"]: r["state"] for r in d["rows"]}["stack-volume:vol-gone"] == "matched" and not d["external"], d
+(STATE / "reap-actions.jsonl").unlink(missing_ok=True)
+# Docker is asked once per target however many rounds named it, and never for one that is matched or pending.
+asked = []
+sweep.volume_inspect = lambda name: asked.append(name) or (0, "")
+sweep.shadow_log().unlink()
+for k in range(5):
+    shadow_round(T0 + k * 60, [("volume:prefixed", "stack-volume:vol-here", {"created": 2})])
+sweep.diff(48, now=NOW + 1)
+assert asked == ["vol-here"], asked
+asked.clear()
+sweep.diff(48, now=T0 + 31)
+assert asked == [], asked
+# The real call: a timeout or a missing docker is "could not ask", not "gone".
+sweep.volume_inspect = real_inspect
+real_run = sweep.subprocess.run
+def slow(cmd, **k):
+    assert k["timeout"] == sweep.CMD_TIMEOUT_S, k
+    raise sweep.subprocess.TimeoutExpired(cmd, k["timeout"])
+sweep.subprocess.run = slow
+try:
+    assert sweep.volume_inspect("v") == (124, "") and not sweep.gone_volume("stack-volume:v")
+    sweep.subprocess.run = lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError("docker"))
+    assert sweep.volume_inspect("v") == (124, "") and not sweep.gone_volume("stack-volume:v")
+finally:
+    sweep.subprocess.run = real_run
+sweep.gone_volume = lambda key: False
 
 # A record that does not carry the identity the plan names proves nothing (a log line from before identities).
 assert not sweep.same_target({"head": "new"}, {}) and sweep.same_target({}, {"head": "x"})

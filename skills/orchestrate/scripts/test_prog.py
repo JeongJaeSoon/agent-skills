@@ -498,7 +498,7 @@ assert prog.revoked_echo({"payload": "not json"}) is None and prog.revoked_echo(
 calls = []
 def fake_orca(*a):
     calls.append(a)
-    if "--wait" in a:
+    if "--wait" in a or "--retry-request" in a:  # the peek wait sees the batch, the owner's take gets it
         return {"deliveryId": "dv1", "messages": [{"type": "worker_done", "payload": rej("Dispatch d1 capability is revoked.")}]}
     return {}
 saved = prog.orca_json, prog.Program, prog.run_workers
@@ -518,11 +518,264 @@ with contextlib.redirect_stdout(out):
     prog.cmd_wait(["s", "--rounds", "1"])
 assert "SETTLED s7 (succeeded): release it" in out.getvalue(), out.getvalue()
 prog.orca_json = lambda *a: {"deliveryId": "dv2", "messages": [{"type": "worker_done", "payload": {"dispatchId": "d1"}}]} \
-    if "--wait" in a else {}
+    if "--wait" in a or "--retry-request" in a else {}
 out = io.StringIO()
 with contextlib.redirect_stdout(out):
     prog.cmd_wait(["s", "--rounds", "1"])
 assert "SETTLED s7" in out.getvalue() and "SETTLED d1" not in out.getvalue() and "CLOSE OUT d1" in out.getvalue(), out.getvalue()
+# wait_take: a peek wait with no --types, then the owner's take under a retry id kept in `pending`.
+def scripted(script, log):
+    def orca(*a):
+        kind = "peek" if "--peek" in a else "ack" if "--ack" in a else "take" if "--retry-request" in a else "other"
+        log.append((kind, a))
+        step = script.pop(0) if script and script[0][0] == kind else (kind, {})
+        if isinstance(step[1], BaseException):
+            raise step[1]
+        return step[1]
+    return orca
+st = lambda i, d: {"deliveryId": d, "messages": [{"id": i, "type": "status", "body": i}]}
+q = {"deliveryId": "dq", "messages": [{"id": "mq", "type": "question", "body": "which base?"}]}
+row = {"messages": [{"id": "x"}]}
+# An older Orca's ack hands out the next batch: its question ends the wait, with no peek in between.
+log, printed = [], []
+prog.orca_json = scripted([("peek", row), ("take", st("s1", "d1")), ("ack", q)], log)
+got = prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: printed.append(a[0]))
+assert got[0] == ["d1", "dq"] and got[3] is True and [m["id"] for m in got[1]] == ["s1", "mq"], got
+assert [k for k, _ in log] == ["peek", "take", "ack"] and len(printed) == 1 and got[2] == {"s1"}, (log, printed)
+# Thirty status batches do not end the wait early; the question after them does.
+log, printed = [], []
+many = [s for i in range(30) for s in (("peek", row), ("take", st(f"s{i}", f"d{i}")), ("ack", {}))]
+prog.orca_json = scripted(many + [("peek", row), ("take", q)], log)
+got = prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: printed.append(a[0]))
+assert got[3] is True and len(printed) == 30 and got[0][-1] == "dq", (got, len(printed))
+# A status-only timeout is not ACTIONABLE, and cmd_wait gives no ack for the batch wait_take already acked.
+t = [0]
+def tick():
+    t[0] += 40
+    return t[0]
+log = []
+prog.orca_json = scripted([("peek", row), ("take", st("s1", "d1")), ("ack", {})], log)
+got = prog.wait_take(["--run", "r"], 60000, clock=tick, out=lambda *a, **k: None)
+assert got[3] is False and got[0] == ["d1"], got
+prog.run_workers = lambda run: []
+log = []
+prog.orca_json = scripted([("peek", row), ("take", st("s1", "d1")), ("ack", {})], log)
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    prog.cmd_wait(["s", "--rounds", "1", "--timeout-ms", "10"])
+assert "ACTIONABLE" not in out.getvalue() and "nothing actionable" in out.getvalue() and "1 status message(s)" in out.getvalue(), out.getvalue()
+assert [k for k, _ in log].count("ack") == 1, log
+# No wait is asked for once the deadline is past: the peek goes without --wait.
+log = []
+prog.orca_json = scripted([("peek", {})], log)
+prog.wait_take(["--run", "r"], 0, clock=lambda: 0, out=lambda *a, **k: None)
+assert log and "--wait" not in log[0][1], log
+# An answer lost twice exits, and the retry id stays in `pending`; the next wait replays it before any peek.
+pend = pathlib.Path(tempfile.mkdtemp()) / "wait-request.json"
+log = []
+prog.orca_json = scripted([("peek", row), ("take", SystemExit("lost")), ("take", SystemExit("lost again"))], log)
+try:
+    prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: None, pending=pend)
+    raise AssertionError("a take lost twice must exit")
+except SystemExit:
+    pass
+rid = json.loads(pend.read_text())["retry_request"]
+assert [a[a.index("--retry-request") + 1] for k, a in log if k == "take"] == [rid, rid], log
+log = []
+prog.orca_json = scripted([("take", q)], log)
+got = prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: None, pending=pend)
+assert log[0][0] == "take" and log[0][1][log[0][1].index("--retry-request") + 1] == rid and got[3] is True, log
+assert pend.exists()  # kept until the caller has printed the ACTIONABLE batch
+prog.done_take(pend)
+assert not pend.exists()
+# Rows peeked but none handed out end the wait instead of spinning on them, and leave no request to replay.
+log = []
+prog.orca_json = scripted([("peek", row), ("take", {})], log)
+got = prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: None, pending=pend)
+assert got == ([], [], set(), False) and len(log) == 2 and not pend.exists(), log
+# The ack goes under a retry id too: lost twice, it stays in `pending`, and the next wait replays the ack (whose
+# older-Orca answer is the next batch) before any peek.
+log = []
+prog.orca_json = scripted([("peek", row), ("take", st("s1", "d1")), ("ack", SystemExit("lost")),
+                           ("ack", SystemExit("lost again"))], log)
+got = prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: None, pending=pend)
+req = json.loads(pend.read_text())
+assert got[3] is False and req["ack"] == "d1" and all("--retry-request" in a for k, a in log if k == "ack"), (got, log)
+log = []
+prog.orca_json = scripted([("ack", q)], log)
+got = prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: None, pending=pend)
+assert log[0][0] == "ack" and req["retry_request"] in log[0][1] and got[3] is True and got[0] == ["dq"], log
+prog.done_take(pend)
+# A replayed ack with no answer from Orca stays for the next wait; one Orca refuses is dropped and the wait goes on.
+pend.write_text(json.dumps({"retry_request": "r-old", "ack": "d0"}))
+log = []
+prog.orca_json = scripted([("ack", SystemExit("timed out")), ("ack", SystemExit("timed out"))], log)
+got = prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: None, pending=pend)
+assert [k for k, _ in log] == ["ack", "ack"] and got[3] is False and pend.exists(), log
+gone = SystemExit('orca orchestration: {"code": "delivery_not_found"}')
+log = []
+prog.orca_json = scripted([("ack", gone), ("ack", gone), ("peek", row), ("take", q)], log)
+got = prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: None, pending=pend)
+assert [k for k, _ in log] == ["ack", "ack", "peek", "take"] and got[3] is True, log
+prog.done_take(pend)
+# A replayed ack whose answer is empty goes on to the wait, not out of it.
+pend.write_text(json.dumps({"retry_request": "r-a", "ack": "d0"}))
+log = []
+prog.orca_json = scripted([("ack", {}), ("peek", row), ("take", q)], log)
+got = prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: None, pending=pend)
+assert [k for k, _ in log] == ["ack", "peek", "take"] and got[3] is True, log
+prog.done_take(pend)
+# A wait that died after printing part of a batch: the replay prints only the rest, and cmd_wait's ACTIONABLE
+# print skips what was printed.
+two = {"deliveryId": "d5", "messages": [{"id": "a", "type": "status", "body": "a"}, {"id": "b", "type": "status", "body": "b"}]}
+pend.write_text(json.dumps({"retry_request": "r-b", "ack": None, "shown": ["a"]}))
+printed, log = [], []
+prog.orca_json = scripted([("take", two), ("ack", {}), ("peek", {})], log)
+got = prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: printed.append(a[0]), pending=pend)
+assert len(printed) == 1 and "id=b" in printed[0] and got[2] == {"a", "b"} and not pend.exists(), (printed, got)
+mixed = {"deliveryId": "d6", "messages": [{"id": "a", "type": "status", "body": "a"}, q["messages"][0]]}
+pend.write_text(json.dumps({"retry_request": "r-c", "ack": None, "shown": ["a"]}))
+prog.orca_json = scripted([("take", mixed)], [])
+got = prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: None, pending=pend)
+assert got[3] is True and got[2] == {"a"}, got
+prog.done_take(pend)
+# A status printed during a wait is noted in `pending` before the batch is cleared.
+pend_seen = []
+real_mark = prog.mark_shown
+prog.mark_shown = lambda pnd, mid: (pend_seen.append(json.loads(pnd.read_text()).get("retry_request")), real_mark(pnd, mid))
+prog.orca_json = scripted([("peek", row), ("take", st("s9", "d9")), ("ack", {}), ("peek", {})], [])
+prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: None, pending=pend)
+prog.mark_shown = real_mark
+assert len(pend_seen) == 1 and pend_seen[0], pend_seen
+# A mark that cannot be written stops the wait before the next print.
+printed = []
+prog.orca_json = scripted([("take", two)], [])
+pend.write_text(json.dumps({"retry_request": "r-d", "ack": None}))
+real_replace = prog.os.replace
+prog.os.replace = lambda *a: (_ for _ in ()).throw(OSError("disk full"))
+try:
+    prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: printed.append(a[0]), pending=pend)
+    raise AssertionError("a failed mark must raise")
+except prog.PendingError as e:
+    assert "could not be written" in str(e), e
+finally:
+    prog.os.replace = real_replace
+assert len(printed) == 1 and pend.exists(), printed
+prog.done_take(pend)
+# An unreadable request stops the output too.
+pend.write_text(json.dumps({"retry_request": "r-e"}))
+real_read = pathlib.Path.read_text
+pathlib.Path.read_text = lambda self, *a, **k: (_ for _ in ()).throw(PermissionError("denied")) if self == pend \
+    else real_read(self, *a, **k)
+try:
+    prog.mark_shown(pend, "x")
+    raise AssertionError("an unreadable pending request must raise")
+except SystemExit as e:
+    assert "unreadable" in str(e), e
+finally:
+    pathlib.Path.read_text = real_read
+# A replay whose request cannot be read stops before any take or print; only a missing file means "none".
+pend.write_text(json.dumps({"retry_request": "r-f", "shown": ["s1"]}))
+pathlib.Path.read_text = lambda self, *a, **k: (_ for _ in ()).throw(PermissionError("denied")) if self == pend \
+    else real_read(self, *a, **k)
+log, printed = [], []
+prog.orca_json = scripted([("take", st("s1", "d1"))], log)
+try:
+    prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: printed.append(a[0]), pending=pend)
+    raise AssertionError("an unreadable request must stop the wait")
+except SystemExit:
+    pass
+finally:
+    pathlib.Path.read_text = real_read
+assert not log and not printed, (log, printed)
+pend.write_text("{trunc")
+try:
+    prog.pending_request(pend)
+    raise AssertionError("a broken request must stop the wait")
+except SystemExit as e:
+    assert "unreadable" in str(e), e
+prog.done_take(pend)
+assert prog.pending_request(pend) is None
+# cmd_wait notes each ACTIONABLE-batch message as it prints it: a replay after a crash prints none of them again.
+batch3 = {"deliveryId": "d7", "messages": [{"id": "s1", "type": "status", "body": "s1"},
+                                           {"id": "s2", "type": "status", "body": "s2"}, q["messages"][0]]}
+prog.run_workers = lambda run: []
+marks = []
+real_done = prog.done_take
+prog.done_take = lambda pnd: marks.append(json.loads(pnd.read_text()).get("shown")) if pnd and pnd.exists() else None
+prog.orca_json = scripted([("peek", row), ("take", batch3)], [])
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    prog.cmd_wait(["s", "--rounds", "1"])
+prog.done_take = real_done
+assert marks and marks[-1] == ["s1", "s2", "mq"] and "ACTIONABLE delivery=d7" in out.getvalue(), (marks, out.getvalue())
+prog.done_take(_pdir / "wait-request.json")
+# The printed batch's request is swapped for its ack in one write, keeping the marks: a crash before the ack is sent
+# leaves the ack to replay and the marks, never a gap with neither.
+states = []
+prog.orca_json = scripted([("peek", row), ("take", st("s3", "d3")), ("ack", {}), ("peek", {})], [])
+real_take = prog.take
+def watching_take(box, pending=None, ack=None):
+    states.append(json.loads(pending.read_text()) if pending.exists() else None)
+    return real_take(box, pending, ack)
+prog.take = watching_take
+prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: None, pending=pend)
+prog.take = real_take
+assert states[0] is None and states[1]["ack"] == "d3" and states[1]["shown"] == ["s3"], states
+assert not pend.exists()
+# The wait's own file failing on the ack path is reported, not taken for a lost Orca answer.
+pend.write_text("{trunc")  # the file gone bad between the print and the ack
+log = []
+prog.orca_json = scripted([("ack", {})], log)
+try:
+    prog.take(["--run", "r"], pend, ack="d4")
+    raise AssertionError("a bad request file must raise")
+except prog.PendingError:
+    pass
+assert not log, log
+prog.done_take(pend)
+pend.write_text(json.dumps({"retry_request": "r-g", "ack": "d4"}))
+prog.orca_json = scripted([("ack", {})], [])
+real_pr = prog.pending_request
+calls_pr = [0]
+def flaky(pnd):
+    calls_pr[0] += 1
+    if calls_pr[0] > 2:
+        raise prog.PendingError("wait request is unreadable (denied)")
+    return real_pr(pnd)
+prog.pending_request = flaky
+try:
+    prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: None, pending=pend)
+    raise AssertionError("a request file failing mid-replay must stop the wait")
+except prog.PendingError:
+    pass
+finally:
+    prog.pending_request = real_pr
+prog.done_take(pend)
+# A request that cannot be removed stops the wait; a missing one is fine.
+pend.write_text(json.dumps({"retry_request": "r-h", "ack": "d0"}))
+real_unlink = pathlib.Path.unlink
+pathlib.Path.unlink = lambda self, *a, **k: (_ for _ in ()).throw(PermissionError("denied")) if self == pend \
+    else real_unlink(self, *a, **k)
+log = []
+prog.orca_json = scripted([("ack", {}), ("peek", row), ("take", q)], log)
+try:
+    prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: None, pending=pend)
+    raise AssertionError("a request that cannot be removed must stop the wait")
+except prog.PendingError as e:
+    assert "could not be removed" in str(e), e
+finally:
+    pathlib.Path.unlink = real_unlink
+assert [k for k, _ in log] == ["ack"], log
+prog.done_take(pend)
+prog.done_take(pend)
+# A delivery handled in an earlier round and handed out again is neither printed again nor left to replay.
+seen, printed, log = set(), [], []
+prog.orca_json = scripted([("peek", row), ("take", st("s1", "d1")), ("ack", {}), ("peek", {})], log)
+prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: printed.append(a[0]), pending=pend, seen=seen)
+prog.orca_json = scripted([("peek", row), ("take", st("s1", "d1"))], log)
+got = prog.wait_take(["--run", "r"], 60000, clock=lambda: 0, out=lambda *a, **k: printed.append(a[0]), pending=pend, seen=seen)
+assert len(printed) == 1 and not pend.exists() and got[3] is False, (printed, got)
 def broken(run):
     raise RuntimeError("boom")
 prog.run_workers = broken
@@ -590,6 +843,13 @@ assert prog.stuck_sweep(live, "s", seen, read=read) == [] and seen == {}
 waits = {"h1": {"evidence": "hook", "prompt": "Allow the edit?"}, "h2": None}
 got = prog.stuck_sweep(live, "s", {}, read=read, waits=waits)
 assert got[0].startswith('STUCK a1 (waiting on a prompt (Orca agentWait, hook)): "Allow the edit?"'), got
+# Only a wait Orca found spares the screen read; None (looked, no wait) and never looked still read it.
+read_of = []
+prog.stuck_sweep(live, "s", {}, read=lambda h: (read_of.append(h), read(h))[1], waits=waits)
+assert "h1" not in read_of and "h2" in read_of, read_of
+read_of.clear()
+prog.stuck_sweep(live, "s", {}, read=lambda h: (read_of.append(h), read(h))[1], waits={})
+assert "h1" in read_of and "h2" in read_of, read_of
 screens["h2"] = menu
 assert not any(l.startswith("STUCK a2") for l in prog.stuck_sweep(live, "s", {}, read=read, waits=waits))
 screens["h2"] = ["npm ERR! ENOSPC: no space left", "❯ "]
@@ -1235,7 +1495,8 @@ try:
     me_was = os.environ.get("ORCA_TERMINAL_HANDLE")
     os.environ["ORCA_TERMINAL_HANDLE"] = "term_me"
     real_wait = prog.orca_json, prog.Program, prog.run_workers, prog.own_worker, prog.all_workers, prog.print_stuck
-    prog.orca_json = lambda *a: {"deliveryId": "dv", "messages": [{"type": "escalation", "payload": "{}"}]} if "--wait" in a else {}
+    prog.orca_json = lambda *a: {"deliveryId": "dv", "messages": [{"type": "escalation", "payload": "{}"}]} \
+        if "--wait" in a or "--retry-request" in a else {}
     prog.run_workers = prog.all_workers = lambda run: []
     prog.print_stuck = lambda *a, **k: []
     prog.Program = lambda slug: type("P", (), {"cfg": {"run": "run_x", "repo": "o/r"}, "slug": slug, "events": lambda self: [],
