@@ -1,4 +1,4 @@
-<!-- translated-from: c37d56fce8a4fb31b1198617603cf36259a6d1e3 -->
+<!-- translated-from: ae65129c0d59f2e609e0712adbeeffa0e1bdfd4c -->
 # スキルカタログ
 
 `agent-skills` プラグインに入っているスキル41個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック16個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
@@ -261,8 +261,8 @@ PR を受け持つスキルとマージする主体:
 - **使う場面:** チケットを読む、探す、作る、ラベルやコメントを付ける、状態を変えるとき、そしてスクリプトがチケットのデータを使うとき。
 - **内容:**
   - トラッカーは、プログラムの設定 → `~/.claude/agent-skills.json` → 既定値の linear の順に決めます。
-  - セッションでは MCP（Linear なら `orca linear`）を優先し、スクリプトは常に `tracker.py` を使います。`tracker.py` のコマンドは list、get、children、create、label、comment、transition です。transition はまず現在の状態を読み、すでにその段階かそれより先に進んでいるチケットは変えません。`--to review` は設定の `tracker.<adapter>.review_status` があればその名前の状態へ、なければ In Review へ、それもなければ名前に review を含む唯一の started 状態へ移します。
-  - 書き込みはすべて担当エージェントに任せ、読み取りだけをセッションで行います。担当はユーザーの指示 → 設定の `tracker.delegate_agent` → プラグイン agent `agent-skills:task-tracker` の順に決め、`"none"` ならセッションで直接書きます。`task-tracker` はトラッカーサイト固有の規則（プロジェクト、状態・遷移 id、ラベル、言語）を `tracker.rules_file` が指すユーザーの Markdown から毎回読み、キーがあるのにファイルがない・読めないときは推測せずに止まります。
+  - セッションでは、Linear はまず `orca linear` を使い（既定のテキスト出力。結果をパースするときだけ `--json`）、`orca linear` にない機能（ドキュメント、ファイル・画像のアップロード、diff レビュー、release、milestone・cycle など）だけを Linear MCP で行います。Jira は接続されていれば MCP を使います。スクリプトは常に `tracker.py` を使います。`tracker.py` のコマンドは list、get、children、create、label、comment、attach、transition です。transition はまず現在の状態を読み、すでにその段階かそれより先に進んでいるチケットは変えません。`--to review` は設定の `tracker.<adapter>.review_status` があればその名前の状態へ、なければ In Review へ、それもなければ名前に review を含む唯一の started 状態へ移します。
+  - 決まった milestone（状態の遷移、PR リンク、完了コメント）は `tracker.py` の 1 行（`transition`、`attach`、`comment`）でセッションから直接行い、MCP も担当エージェントも通しません。それ以外の書き込みはすべて担当エージェントに任せ、読み取りだけをセッションで行います。担当はユーザーの指示 → 設定の `tracker.delegate_agent` → プラグイン agent `agent-skills:task-tracker` の順に決め、`"none"` ならセッションで直接書きます。`task-tracker` はトラッカーサイト固有の規則（プロジェクト、状態・遷移 id、ラベル、言語）を `tracker.rules_file` が指すユーザーの Markdown から毎回読み、キーがあるのにファイルがない・読めないときは推測せずに止まります。
   - 値を伏せる読み取り経路（`<PERSON>` のようなエンティティのプレースホルダーや `****`）で読んだ値はデータではありません。判断や書き戻しの前に伏せない経路で読み直し、伏せた値をフィールドに書き戻しません。
   - 状態の語彙は triage、backlog、unstarted、started、completed、canceled です。
   - 完了条件は上位チケットの本文（`✅ 완료 조건`、`🚫 범위 밖`、`⏸️ 보류`）に、親のないチケットは受け入れ条件に置きます。NOW に分類したものだけがチケットになります。
