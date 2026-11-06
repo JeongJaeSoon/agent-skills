@@ -4389,6 +4389,8 @@ def cmd_sent(argv):
                 print(json.dumps(rows, ensure_ascii=False, indent=1))
             for r in [] if "--json" in rest else rows:
                 print(f"{r['ts']}  {r.get('from') or '?'} → {r.get('to') or '?'}  [{r['source']}] {(r.get('subject') or r['text'] or '?').splitlines()[0][:100]}")
+                if r.get("warn"):
+                    print(f"    ! {r['warn']}")
         else:
             sys.exit(usage)
     except (ValueError, OSError) as e:

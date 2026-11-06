@@ -25,6 +25,7 @@ It only reads: `orca status` first, then Orca's terminal, Run and worker records
 
 - **A stale handle.** Until this session speaks for a live terminal (`--from` or `--terminal` on every `orca` call, or `claude --continue` in that terminal), the check skips the Run and worker checks.
 - **A dispatched lead.** One started as a dispatched worker binds nothing; the check reads its Run from its own Dispatch. One that lost its Dispatch gets a Run of its own, never `run-use` on its coordinator's Run, which would take that Run's binding from the coordinator. Units it started under the old Dispatch stay on the old Run, which its check no longer reads: list them with `worker-list --run <old Run>` and resume the abandoned ones as below.
+- **The session name** (the orchestrator's only): the tab title is compared without Claude Code's status glyph (`◐`, `✳`, a braille frame). A session resumed without `--name` has no name; the line asks for `/rename orchestrator`, and a restart is `claude --continue --name orchestrator`. A name the check cannot read gives no line.
 - **`reload needed`** (`info`): restart this session with `claude --continue` in this terminal. It never sets exit 1.
 - **Waits** are counted against `orchestrate` core rule 6. Stop an extra one with `TaskStop` on the background task that started it; the pids in the line only tell them apart.
 - **A worker that lost its terminal** under another lead is that lead's to restart (`orchestrate` core rule 4). When Orca refuses a retry, follow `orca skills get orchestration --reference recovery-and-cleanup`.
