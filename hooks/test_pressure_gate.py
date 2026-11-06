@@ -315,6 +315,8 @@ def orca_shapes(current, listing):
 two = [{"dispatchId": "d1"}, {"dispatchId": "d2"}]
 assert pressure.run_workers(run=orca_shapes({"run": {"id": "run_a"}}, {"workers": two})) == 2, "full run-current record"
 assert pressure.run_workers(run=orca_shapes({"run": None}, {"workers": two})) == 0, "run: null is unbound"
+for no_id in ({"run": {}}, {"run": {"status": "active"}}, {"run": {"id": 7}}, {"runId": 7}):
+    assert pressure.run_workers(run=orca_shapes(no_id, {"workers": two})) is None, no_id
 assert pressure.run_workers(run=orca_shapes({"runId": "run_a"}, {"workers": two, "page": {"hasMore": True}})) is None
 assert pressure.run_workers(run=orca_shapes({"runId": "run_a"}, {"workers": two, "page": {"nextCursor": "c"}})) is None
 assert pressure.run_workers(run=orca_shapes({"runId": "run_a"}, {"workers": two, "hasMore": True})) is None

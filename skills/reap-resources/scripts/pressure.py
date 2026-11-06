@@ -309,11 +309,15 @@ def run_workers(run=sh):
         res = json.loads(run(["orca", "orchestration", "run-current", "--json"], timeout=5) or "")["result"]
         if "runId" not in res and "run" not in res:
             return None  # neither key is not "unbound", it is an answer we cannot read
-        run_id = res.get("runId") or (res.get("run") or {}).get("id")  # concise view, or the full record (null: unbound)
+        rec = res.get("runId")  # the concise view, or `run`, the full record; null is unbound
+        rec = res.get("run") if rec is None else rec
+        run_id = rec.get("id") if isinstance(rec, dict) else rec
     except (ValueError, KeyError, TypeError, AttributeError):
         return None
-    if not run_id:
+    if rec is None:
         return 0
+    if not isinstance(run_id, str) or not run_id:
+        return None  # a Run record without an id is an answer we cannot use, not an unbound caller
     out = run(["orca", "orchestration", "worker-list", "--run", str(run_id), "--terminal-state", "active",
                "--limit", "100", "--json"], timeout=10)
     try:
