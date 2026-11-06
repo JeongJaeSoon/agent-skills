@@ -7,7 +7,7 @@ Commands are read with lib.shell: only a word bash runs as a command counts, so 
 quoted prompt that names one is not one. A guardrail, not a sandbox: `bash -c`, `eval` and a script file's own
 commands are not read.
 """
-import collections, json, os, pathlib, re, subprocess
+import collections, fnmatch, glob, json, os, pathlib, re, subprocess
 
 from lib import config, shell
 
@@ -255,7 +255,7 @@ def check_command(c, masked, cfg, cwd, session, here=None):
                                                      "reviewer builds on. Push your own PR branch (`git push "
                                                      "--force-with-lease=<branch>:<sha> origin <branch>`); a bad "
                                                      "commit on main is undone with a revert PR."))
-    if name == "gh" and protection_write(w):
+    if name in ("gh", "curl") and protection_write(c):
         out.append(("guard.deny.protection_write", "This writes branch protection or a ruleset, the rules that "
                                                    "gate merges. The repository owner changes them, not an agent."))
     if name == "rm":
@@ -346,23 +346,51 @@ def api_call(w):
     """(METHOD, endpoint, [field]) of a `gh api` command. A field or --input without --method means POST."""
     method = next((w[i + 1] for i, x in enumerate(w[:-1]) if x in ("-X", "--method")), None)
     method = next((x.split("=", 1)[1] for x in w if x.startswith("--method=")), method)
+    method = next((x[2:] for x in w if re.fullmatch(r"-X\w+", x)), method)
     fields = [w[i + 1] for i, x in enumerate(w[:-1]) if x in ("-f", "-F", "--field", "--raw-field")]
     fields += [x.split("=", 1)[1] for x in w if x.startswith(("--field=", "--raw-field="))]
-    method = (method or ("POST" if fields or "--input" in w else "GET")).upper()
+    fields += [x[2:] for x in w if x[:2] in ("-f", "-F") and len(x) > 2]  # `-fquery=…`
+    # The body file's text counts as a field: a GraphQL mutation can arrive that way.
+    bodies = [w[i + 1] for i, x in enumerate(w[:-1]) if x == "--input"] + [x[8:] for x in w if x.startswith("--input=")]
+    for body in bodies:
+        try:
+            with open(body, encoding="utf-8", errors="replace") as f:
+                fields.append(f.read(65536))
+        except OSError:
+            pass
+    method = (method or ("POST" if fields or bodies or "--input" in w else "GET")).upper()
     endpoint = verb(w[2:], {"-X", "--method", "-f", "-F", "--field", "--raw-field", "-H", "--header", "--input",
                             "-q", "--jq", "-t", "--template", "--hostname", "--cache", "-p", "--preview"})[0] or ""
     return method, endpoint, fields
 
 
-def protection_write(w):
-    """A `gh api` call that writes branch protection or a ruleset; GETs read them and pass."""
-    if w[1:2] != ["api"]:
+def curl_call(w):
+    """(METHOD, path) of a curl command to api.github.com; path is None for any other URL."""
+    method = next((w[i + 1] for i, x in enumerate(w[:-1]) if x in ("-X", "--request")), None)
+    method = next((x[2:] for x in w if re.fullmatch(r"-X\w+", x)), method)
+    method = next((x.split("=", 1)[1] for x in w if x.startswith("--request=")), method)
+    data = any(x[:2] in ("-d", "-F", "-T") or x.startswith(("--data", "--form", "--json", "--upload-file"))
+               for x in w[1:])
+    path = next((m.group(1) or "/" for x in w[1:] if (m := re.match(r"https?://api\.github\.com(/[^?#]*)?", x))), None)
+    return (method or ("POST" if data else "GET")).upper(), path
+
+
+def protection_write(c):
+    """A `gh api` or curl call that writes branch protection or a ruleset; GETs read them and pass."""
+    w = c.words
+
+    def writes(method, endpoint):
+        return method != "GET" and re.search(r"/branches/.+/protection(/|$)|(^|/)rulesets(/|$)", endpoint) is not None
+    if c.name == "curl":
+        method, path = curl_call(w)
+        return path is not None and writes(method, path)
+    if c.name != "gh" or w[1:2] != ["api"]:
         return False
     method, endpoint, fields = api_call(w)
     if endpoint.strip("/") == "graphql":
         return any(re.search(r"mutation[^{]*\{.*(create|update|delete)\w*(ProtectionRule|Ruleset)", f, re.S)
                    for f in fields)
-    return method != "GET" and re.search(r"/branches/.+/protection(/|$)|(^|/)rulesets(/|$)", endpoint) is not None
+    return writes(method, endpoint)
 
 
 def git_out(args, where):
@@ -401,18 +429,23 @@ def force_push_default(c, here):
             i += x in PUSH_VALUED
         else:
             pos.append(x)
-    forced = any(o in ("--force", "--force-if-includes") or o.startswith("--force-with-lease")
-                 or re.fullmatch(r"-[a-zA-Z]*f[a-zA-Z]*", o) for o in opts)
-    if forced and ("--all" in opts or "--mirror" in opts):
+    if "--dry-run" in opts or "-n" in opts:
+        return False
+    forced = any(o == "--force" or o.startswith("--force-with-lease") or re.fullmatch(r"-[a-zA-Z]*f[a-zA-Z]*", o)
+                 for o in opts)
+    if "--mirror" in opts or forced and "--all" in opts:  # --mirror overwrites every remote ref on its own
         return True
     head = git_out(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], where)
     names = {"main", "master"} | ({head.split("/", 1)[1]} if "/" in head else set())
-    for spec in pos[1:] or ["HEAD"]:
+    named_repo = any(o == "--repo" or o.startswith("--repo=") for o in opts)  # then every positional is a refspec
+    for spec in (pos if named_repo else pos[1:]) or ["HEAD"]:
         src, _, dst = spec.lstrip("+").partition(":")
-        dst = (dst if ":" in spec else src).removeprefix("refs/heads/")
+        dst = dst if ":" in spec else src
         if dst == "HEAD":
             dst = git_out(["symbolic-ref", "--short", "HEAD"], where)
-        if (forced or spec.startswith("+")) and dst in names:
+        # A pattern such as `refs/heads/*` reaches the default branch too.
+        if (forced or spec.startswith("+")) and any(fnmatch.fnmatchcase(c, dst) for n in names
+                                                    for c in (n, "refs/heads/" + n)):
             return True
     return False
 
@@ -453,11 +486,15 @@ def rm_outside(w, here, cwd):
         path = expand(x, here)
         if not path or "$" in path or "`" in path:
             continue
-        if in_trash(path):
-            if recursive or re.search(r"[*?\[]", x) or path in trash_dirs():
-                trash.append(x)
-        elif recursive and not any(path.startswith(r + os.sep) for r in roots):
-            outside.append(x)
+        globbed = re.search(r"[*?\[]", path) is not None
+        # bash expands a glob before rm sees it; `~/.Tra[s]h/*` is the trash.
+        matches = [os.path.realpath(m) for m in glob.glob(path)] if globbed else []
+        for p in matches or [path]:
+            if in_trash(p):
+                if recursive or globbed or p in trash_dirs():
+                    trash.append(x)
+            elif recursive and not any(p.startswith(r + os.sep) for r in roots):
+                outside.append(x)
     return trash, outside
 
 

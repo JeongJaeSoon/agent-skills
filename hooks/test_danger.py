@@ -94,6 +94,15 @@ SETTINGS = HOME / ".claude" / "settings.json"
 
 configure({"repos": {"acme/app": {"external_llm": False}}})
 
+# Where the test folder sits decides these: under /tmp (a Linux runner) HOME and the repositories count as inside it.
+OUTSIDE_TMP_RM = [] if str(TMP).startswith(("/tmp/", "/private/tmp/")) else [
+    "rm -rf ~/projects", "rm -rf $HOME/.cache/x", "rm -rf ~/x /tmp/y", ("rm -rf ../clean", REPOX),
+    ("rm -rf build", CLEAN.parent), ("rm -rf node_modules", HOME), ("rm -rf .", REPOX)]
+(HOME / ".Trash").mkdir()
+(HOME / ".Trash" / "a.txt").write_text("x")
+MUTATION = TMP / "mutation.json"
+MUTATION.write_text('{"query": "mutation { deleteBranchProtectionRule(input: {}) { clientMutationId } }"}')
+
 # (key, level, [(command, cwd)] it is about, [command] that only looks like one)
 CASES = [
     ("guard.deny.pattern_kill", "deny",
@@ -210,7 +219,9 @@ CASES = [
       ("git push -f", ON_MAIN), ("git push -f origin HEAD", ON_MAIN), ("git push -f origin", ON_MAIN),
       ("git push -f origin HEAD", ON_DEV),
       "gh api -X PATCH repos/a/b/git/refs/heads/main -F force=true",
-      "gh api --method PATCH repos/a/b/git/refs/heads/master -f force=true -f sha=abc"],
+      "gh api --method PATCH repos/a/b/git/refs/heads/master -f force=true -f sha=abc",
+      "git push --mirror origin", "git push --repo=origin --force main", "git push --repo origin -f main",
+      "git push origin '+refs/heads/*:refs/heads/*'", "git push -f origin 'refs/heads/*:refs/heads/*'"],
      ["git push origin main", "git push --force-with-lease origin feat/x", "git push --force-with-lease=feat:abc origin feat",
       "git push origin +feat/x", "git push -f origin feat:main-fix", "git push origin :old-branch",
       "git push --force origin refs/heads/maintenance", "git push -o main -f origin feat", "git -C /x push -f origin feat",
@@ -218,7 +229,9 @@ CASES = [
       ("git push -f origin HEAD", ON_FEAT), ("git push -f", ON_FEAT), ("git push --force-with-lease", ON_FEAT),
       ("git push -f origin HEAD", ON_DEV.parent), "git push --tags origin",
       "gh api repos/a/b/git/refs/heads/main", "gh api -X PATCH repos/a/b/git/refs/heads/feat -F force=true",
-      "gh api -X PATCH repos/a/b/git/refs/heads/main -f sha=abc"]),
+      "gh api -X PATCH repos/a/b/git/refs/heads/main -f sha=abc", "git push --dry-run --force origin main",
+      "git push -n -f origin main", "git push --force-if-includes origin main", "git push --repo=origin -f feat",
+      "git push --mirror --dry-run origin"]),
     ("guard.deny.protection_write", "deny",
      ["gh api -X PUT repos/a/b/branches/main/protection -f enforce_admins=true",
       "gh api --method=DELETE repos/a/b/branches/main/protection", "gh api repos/a/b/rulesets -f name=x",
@@ -226,17 +239,24 @@ CASES = [
       "gh api -X PATCH repos/a/b/branches/feat%2Fx/protection/required_status_checks -f strict=true",
       "gh api -X DELETE repos/a/b/branches/main/protection/enforce_admins",
       "gh api graphql -f query='mutation { createBranchProtectionRule(input: {}) { clientMutationId } }'",
-      "gh api graphql -f query='mutation { deleteRepositoryRuleset(input: {}) { clientMutationId } }'"],
+      "gh api graphql -f query='mutation { deleteRepositoryRuleset(input: {}) { clientMutationId } }'",
+      "gh api -XDELETE repos/acme/app/branches/main/protection", "gh api repos/acme/app/rulesets --input=rules.json",
+      "gh api graphql -fquery='mutation { deleteBranchProtectionRule(input: {}) { clientMutationId } }'",
+      f"gh api graphql --input {MUTATION}",
+      'curl -X DELETE -H "Authorization: Bearer x" https://api.github.com/repos/acme/app/branches/main/protection',
+      "curl -XPUT https://api.github.com/repos/a/b/rulesets/1 -d @r.json",
+      "curl --request POST -d x https://api.github.com/repos/a/b/rulesets"],
      ["gh api repos/a/b/branches/main/protection", "gh api repos/a/b/rulesets", "gh api -X GET repos/a/b/rulesets/12",
       "gh api repos/a/b/rules/branches/main", "gh api repos/a/b/branches/main/protection --jq .enforce_admins",
       "gh api graphql -f query='query { viewer { login } }'", "gh api -X POST repos/a/b/issues -f title=x",
-      "echo gh api -X PUT repos/a/b/branches/main/protection", "gh pr view 3"]),
+      "echo gh api -X PUT repos/a/b/branches/main/protection", "gh pr view 3",
+      "curl https://api.github.com/repos/a/b/branches/main/protection",
+      "curl -X POST -d x https://api.github.com/repos/a/b/issues",
+      "curl -X DELETE https://example.test/repos/a/b/rulesets/1"]),
     ("guard.deny.rm_outside", "deny",
      ["rm -rf /usr/local/lib/x", "rm -r /Users/someone/proj", "rm -Rf /var/lib/x", "rm --recursive --force /opt/x",
-      "rm -rf ~/projects", "rm -rf -- /usr/x", "sudo rm -rf /usr/x", "rm -rf /tmp", "rm -rf /", "rm -fr /opt",
-      "rm -rf /tmp/../usr/x", "rm -rf $HOME/.cache/x", "rm -rf ~/x /tmp/y", "ls && rm -rf /usr/x",
-      ("rm -rf ../clean", REPOX), ("rm -rf .", REPOX), ("cd /usr && rm -rf local", REPOX),
-      ("rm -rf build", CLEAN.parent), ("rm -rf node_modules", HOME)],
+      "rm -rf -- /usr/x", "sudo rm -rf /usr/x", "rm -rf /tmp", "rm -rf /", "rm -fr /opt",
+      "rm -rf /tmp/../usr/x", "ls && rm -rf /usr/x", "rm -rf /usr/*", ("cd /usr && rm -rf local", REPOX)] + OUTSIDE_TMP_RM,
      ["rm -rf /tmp/x", "rm -rf /private/tmp/x", f"rm -rf {TMPROOT}/job",
       ("rm -rf build", REPOX), ("rm -rf build dist", REPOX), ("rm -rf node_modules/.cache", REPOX),
       ("cd build && rm -rf out", REPOX), ("rm -rf ./dist", REPOX), (f"rm -rf {REPOX}/build", REPOX),
@@ -244,7 +264,7 @@ CASES = [
       'rm -rf "${DIR:?}/build"', "rm -ri", "rmdir /usr/x"]),
     ("guard.deny.trash_empty", "deny",
      ["rm -rf ~/.Trash/*", "rm -rf ~/.Trash", "rm -f ~/.Trash/*", "rm -rf $HOME/.Trash/old", "sudo rm -rf ~/.Trash/*",
-      "rm -r ~/.Trash/a.txt", "rm -rf ~/.local/share/Trash/files", "rm -rf /Volumes/Disk/.Trashes/501",
+      "rm -r ~/.Trash/a.txt", "rm -f ~/.Tra[s]h/*", "rm -rf ~/.local/share/Trash/files", "rm -rf /Volumes/Disk/.Trashes/501",
       "osascript -e 'tell application \"Finder\" to empty trash'",
       "osascript -e 'tell application \"Finder\" to empty the trash'", "trash-empty"],
      ["ls ~/.Trash", "echo rm -rf ~/.Trash", "mv x ~/.Trash/", "rm ~/.Trash/a.txt", "trash-list", "echo trash-empty",
