@@ -10,7 +10,7 @@ recorded.
   opens an obligation for this session and agent and adds a reminder to the model's context. PostToolUseFailure opens
   one only when the call held more than one command, since the target may have run before a later one failed.
   After a `gh pr create` the reminder also lists deliver-ticket §5's follow-ups: the Orca card's `in-review` column
-  (in an Orca terminal), the Linear attach (a `linear` tracker) and the ticket's milestone move (any tracker).
+  (in an Orca terminal), and for any tracker the PR link (`tracker.py attach`) and the ticket's milestone move.
 - An obligation closes on a record line: `기록: …`, `기록 못 함: <reason>`, `Recorded: …` or `Not recorded: …` at the
   start of a line with text after it (emphasis marks alone are not text), outside code blocks and quotes. Read from the final reply at Stop, from the body of a
   `worker_done` sent as the only command of its call (closed when the send succeeded, as of the moment it was
@@ -41,6 +41,7 @@ KEY = "guard.record_check"
 STATE_FILE = "record-check.jsonl"
 ROOT = pathlib.Path(os.environ.get("CLAUDE_PLUGIN_ROOT") or pathlib.Path(__file__).resolve().parents[1])
 RECORD_MD = ROOT / "skills" / "end-session" / "references" / "record.md"
+TRACKER = ROOT / "skills" / "use-tracker" / "scripts" / "tracker.py"
 LINE = re.compile(r"^[ \t]*(?:[-*+][ \t]+)?[*_]*(?:기록[ \t]*못[ \t]*함|기록|not recorded|recorded)[*_]*[ \t]*[:：](.*)$",
                   re.I | re.M)
 EMPHASIS = re.compile(r"[*_~\s]+")
@@ -197,12 +198,12 @@ def pr_opened(cfg):
         out.append("In an Orca card: `orca worktree set --worktree current --workspace-status in-review --json` (the "
                    "card's board column; Orca links the PR from the branch, so no `--pr`).")
     tracker = cfg.get("tracker") if isinstance(cfg.get("tracker"), dict) else None
-    if tracker and tracker.get("adapter") == "linear":
-        out.append("A Linear ticket ignores `Closes #n`: `orca linear attach --current --url <pr> --title \"PR\"` when "
-                   "the card links the issue (`linkedItems` in `orca worktree current --json`), else "
-                   "`orca linear attach <ID> --url <pr>`.")
     if tracker:
-        out.append("Move the ticket as use-tracker \"Milestones\" says: its `PR:` line now, `review` once "
+        where = (" (in an Orca card, <ID> is the ticket in `linkedItems` of `orca worktree current --json`)"
+                 if os.environ.get("ORCA_TERMINAL_HANDLE") else "")
+        out.append(f"Link the PR to the ticket, which ignores `Closes #n`: `python3 {TRACKER} attach <ID> --url <pr>`"
+                   f"{where}.")
+        out.append("Move the ticket as use-tracker \"Milestones\" says: `started` now, `review` once "
                    "`gh pr view <n> --json reviewRequests` lists the reviewer you requested.")
     if not out:
         return ""
