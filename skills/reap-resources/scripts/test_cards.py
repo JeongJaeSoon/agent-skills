@@ -581,8 +581,9 @@ assert v[0] == cards.CLOSE, v
 
 # janitor integration: card is the scheduled kind, the old card kinds are not.
 assert "card" in reap.SCHEDULED and "orca-worktree" not in reap.SCHEDULED and "done-card" not in reap.SCHEDULED
+# Run now's prompt runs the agentless round once and reports what a person has to look at (사람 결정 cards among it).
 prompt = reap.schedule_prompt(pathlib.Path("/x/reap.py"), pathlib.Path("/s"))
-assert "사람 결정" in prompt, prompt
+assert "precheck --act" in prompt and "사람이 볼 것" in prompt, prompt
 
 # The plan row carries the card's uncommitted-changes fact for readers that are not the janitor (rowstate.inputs):
 # True or False once git status was read, None when gather() stopped before it.

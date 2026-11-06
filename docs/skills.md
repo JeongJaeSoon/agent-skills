@@ -47,7 +47,7 @@ PR 을 맡는 스킬과 머지 주체:
   - 골격은 설정의 트래커 템플릿(`tracker.<adapter>.templates`)을 먼저 쓰고, 없으면 동봉 템플릿을 쓴다. 템플릿을 읽다 실패하면 멈춘다.
   - `🛠 구현 힌트`에는 실제로 열어 본 경로만 적는다.
   - 제목은 동사로 시작하고, 수용 기준에는 확인 방법을 붙이고, `🚫 범위 밖`은 반드시 적는다.
-  - 제목과 본문의 언어는 설정의 `tracker.<adapter>.language`, 없으면 그 트래커에 대한 사용자 규칙, 그것도 없으면 사용자가 쓰는 언어다.
+  - 제목과 본문의 언어는 사이트 규칙 파일(`tracker.rules_file`), 그다음 설정의 `tracker.<adapter>.language`가 정한다. 둘 다 없으면 스킬은 언어를 정하지 않고 Claude 언어 설정을 따른다.
   - 의존은 트래커 relation으로 걸고, 1티켓 = 1PR로 나눈다. 서로 의존하는 PR은 GitHub stack으로 계획한다.
   - 초안 전체를 한 번 보여 주고 승인받은 뒤 등록한다. 사용자 지시가 묻지 않고 등록하라고 하면, 그리고 섞인 요청과 세션이 스스로 올리는 NOW follow-up은 먼저 등록하고 URL을 보여 준다. 상위 티켓 본문은 `✅ 완료 조건`, `🚫 범위 밖`, `⏸️ 보류`를 갖는다.
 - **동봉:** `references/templates.md`(개발 티켓과 조사 티켓 골격).
@@ -213,12 +213,12 @@ PR 을 맡는 스킬과 머지 주체:
   - **worktree:** 임시 디렉터리에 있다가 사라진 worktree(Orca 것은 제외)와, 세션 transcript가 N시간 조용한 Claude scratchpad의 깨끗하고 push된 detached worktree. 둘 다 `git worktree remove <경로>`로 그 항목만 지운다. Orca worktree는 resource steward의 몫이다.
   - **load:** `reap.py load`는 읽기만 한다. CPU 상위 소비자(Claude 세션과 그 자식, 잔재 트리, 그 밖의 프로세스)를 ours-idle·ours-working·leftover·system으로 나누고, 5분 부하가 한도(기본 CPU 수) 이상이면 분류별 조치를 낸다: 조용한 세션에는 남은 일을 묻고 없으면 스스로 닫게 하고, 잔재는 `reap`으로, 일하는 것은 두고 새 dispatch를 멈추며, system은 우리 것이 아니라고 보고만 한다. 한도 위에서 잰 벤치마크는 증거가 아니다.
   - **card:** Orca 카드 전부(앱·CLI·워커 어느 쪽이 만들었든)를 `scripts/cards.py scan`이 카드마다 삭제·터미널만 닫기(열린 PR)·남김·사람 결정 중 하나로 판정해 표로 낸다. 사람이 표를 보고 `apply --plan`으로 실행하고, janitor 회차도 같은 코드를 쓴다. 규칙과 함정(낡은 `origin/HEAD`는 GitHub compare로 다시 확인, rebase 전 사본은 patch-id로 가름, 프롬프트에 멈춘 셸, "끝났다"고 쓴 idle 화면)은 `references/cards.md` 한 곳에 있다.
-  - **janitor:** 에이전트가 ledger(`~/.local/state/agent-skills/ledger.jsonl`)에 올린 tmpdir·GUI 앱·브라우저 창과, Orca 오케스트레이션 워커가 만든 worktree·끝난 워커 터미널만 본다. `reap --plan`이 대상을 다시 확인한 뒤 닫거나 휴지통으로 옮긴다. 아래 볼륨·컨테이너 종류의 `docker` 삭제 말고는 영구 삭제도 휴지통 비우기도 하지 않는다. OS가 휴지통을 자동으로 비우는 설정이면 경보로 알린다. 브라우저 창은 에이전트가 브라우저 도구로 닫는다.
+  - **janitor:** 에이전트가 ledger(`~/.local/state/agent-skills/ledger.jsonl`)에 올린 tmpdir·GUI 앱·브라우저 창과, Orca 오케스트레이션 워커가 만든 worktree·끝난 워커 터미널만 본다. `reap --plan`이 대상을 다시 확인한 뒤 닫거나 휴지통으로 옮긴다. 아래 볼륨·컨테이너 종류의 `docker` 삭제 말고는 영구 삭제도 휴지통 비우기도 하지 않는다. OS가 휴지통을 자동으로 비우는 설정이면 경보로 알린다. 브라우저 창은 URL을 확인해야 해서 정기 회차가 닫지 않고 사람에게 알린다.
   - **stopped-container·labeled-volume:** 설정을 적어야 켜진다. janitor와 reap-hard가 같은 규칙으로 본다. `reap.stopped_containers.prefixes`로 시작하는 이름에 compose가 만들지 않은 멈춘(exited·created) 컨테이너와, `<namespace>.origin` 라벨 값이 `reap.labeled_volumes.origins`에 있고 어떤 컨테이너도 참조하지 않는 볼륨이다. 하나씩 ID나 이름으로 지우고 기록을 남긴다. 볼륨 규칙은 어느 것이든 소유 카드가 닫혔다고 증명될 때만 지운다. ledger에 소유 기록이 없거나, 카드 worktree가 남아 있거나, 열린 PR이 있거나, 카드 목록을 읽지 못하면 남긴다. 이 라벨은 출처 표시이자 폐기 허가다. 라벨 없는 익명 볼륨은 지우지 않고, `reap.py inventory --unlabeled-volumes`가 읽기 전용으로 목록만 낸다.
   - **user-folder:** `reap.user_folders`에 명시한 폴더만 정리한다. 설정이 없으면 끈다. 기간·열린 파일·다운로드 중 파일 검사와 휴지통 보관은 유지한다.
   - **program:** `~/.claude/programs`(`PROGRAMS_HOME`)에서 닫힌 프로그램(최종 확인 `predicate_verified` 뒤에 착지·predicate 변경·admitted 후속이 없는 것) 중 기록(대시보드 캐시를 뺀 ledger·decisions·reflect 등)이 7일(`reap.program_days`) 넘게 안 바뀐 것을 `_archive/`로 옮긴다. 지우지 않는다. 이름에 `resume`이나 `handoff`가 든 재개 노트가 있으면 닫혔어도 남긴다.
   - **state-file:** reorient hook의 세션 파일(`<state>/reorient/*.json`) 중 7일(`reap.state_days`) 지난 것을 한 폴더로 묶어 휴지통으로, 512KB(`reap.log_max_kb`)를 넘은 `sync.log`는 `sync.log.1`로 회전한다(이전 `.1`은 휴지통). program과 함께 정기 실행에서 하루 한 번만 본다.
-  - **정기 실행:** `precheck`는 대상이 있으면 exit 0이고, 지난 `reap`이 실패한 대상과 똑같으면 하루 동안 건너뛴다. 3시간 주기 Orca automation의 precheck로 쓰고, PC 부하가 높으면 `precheck --load` job이 그 사이에 한 번 더 돈다. `schedule`은 그 등록 명령을 출력만 한다([automation.md](automation.md)).
+  - **정기 실행:** 30분 주기 Orca automation의 precheck가 에이전트 없는 주기 작업 실행기(`orca_job.py`) 안에서 `precheck --act`로 계획과 정리를 모델 없이 끝내고, 실행기가 결과를 남긴 뒤 늘 exit 1이라 에이전트가 뜨지 않는다. 실패한 대상은 그것만 하루 쉬고, 사람이 볼 것(사람 결정 카드, chrome-window)은 `reap.inbox_to`로 한 통에 묶는다. PC 부하가 높으면 `precheck --load --act` job이 그 사이에 한 번 더 돈다. `schedule`은 그 등록 명령을 출력만 한다([automation.md](automation.md)).
   - **pressure:** `scripts/pressure.py`가 모델 없이 3분마다(LaunchAgent) load·CPU idle·메모리 압박·swap·디스크·Docker VM의 CPU·메모리 사용을 잰다(컨테이너 수는 보여 주기만 한다). 경고면 안전 종류(`orphan`, `compose-stack`, `gui-app`, `orca-worker`)만 `reap --plan`으로 정리하고 정리한 것이 있을 때 오케스트레이터에 한 줄 보낸다. 터미널이 살아 있는 카드 안의 대상은 남긴다. 위험인데 정리할 것이 없으면 상위 소비자(프로세스·compose 프로젝트와 그 카드)를 알리고 멈춘다. 남의 것은 종료하지 않는다. 임계값과 근거는 [pressure.md](pressure.md).
   - `pkill`, `docker system prune`, `--force`는 쓰지 않는다. 누적 수치(고아 프로세스, dangling volume, 정리할 브랜치·worktree)가 설정의 임계를 넘으면 `경보`로 표시한다.
 - **동봉:** `scripts/reap.py`, `scripts/pressure.py`, 테스트 파일.
@@ -480,7 +480,7 @@ PR 을 맡는 스킬과 머지 주체:
   - 왜 묻는지(바꾸려는지, 리뷰하는지, 처음인지)에 맞춰 가져갈 것 몇 가지를 정하고, `how`와 `why`를 병렬로 불러 하나의 설명으로 엮는다. `why`의 확신도 표현은 그대로 둔다.
   - 일반적인 정의부터 말하고 지금 코드에 잇는다. 가장 작은 완결된 답을 먼저 주고, 물으면 더 들어간다.
   - 움직이는 부분이 셋 이상이면 그림을 한 장씩 늘려 가며 그린다(mermaid, ASCII).
-  - 글은 `write-plainly`로, 사용자의 언어로 쓴다.
+  - 글은 `write-plainly`로 쓴다.
 
 ### tdd
 - **언제:** 싼 로컬 테스트 대상이 있는 버그를 고칠 때, 또는 TDD·실패 테스트·회귀 테스트를 요청받았을 때.
@@ -732,7 +732,7 @@ Bash의 `sed`나 heredoc으로 고친 파일은 수정으로 세지 않는다. �
 | 프로젝트 운영 | orchestrate, autopilot, shipping 플레이북과 `orch.ts`(bun, TSV 원장) | `orchestrate` 스킬, `orch`(Python, JSONL 원장), 착지 게이트, 독점 레인, main 가디언, QA 리드, 대시보드 |
 | 티켓·노트 | 전제 없음 | `use-tracker`(Linear, Jira), `use-notes`(Obsidian, Markdown) |
 | 권한 | Cursor 설정 | `hooks/guard.py`가 대신 결정 |
-| 언어 | 영어, unslop 문체 규칙 | 스킬 본문은 영어, 문서·티켓·PR은 한국어. 문체는 `write-plainly`(한국어·영어) |
+| 언어 | 영어, unslop 문체 규칙 | 스킬 본문은 영어. 문서·티켓·PR의 언어는 Claude의 언어 설정을 따른다. 문체는 `write-plainly`(한국어·영어) |
 
 ### 가져온 것
 pstack 스킬 58개(원칙 24개와 나머지 34개) 가운데 원칙 24개 전부와 나머지 중 16개를 가져왔다. 16개 가운데 benchmark-checklist는 스킬이 아니라 `principles`의 참조 파일로 넣었다. 고정 커밋은 `99b609a`(0.15.32)이고 파일 목록은 `vendor/pstack/manifest.json`에 있다.
