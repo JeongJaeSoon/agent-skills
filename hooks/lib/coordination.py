@@ -176,7 +176,9 @@ def loop_around(text, cmds, pos):
     argument by where it stands."""
     marks = [(m.start(), "open") for m in re.finditer(r"(?<![\w.-])(until|while|for)(?![\w.-])", text)
              if at_command_start(text, m.start())]
-    marks += [(c.span[1], "close") for c in cmds if c.name == "done" and c.words == ["done"]]
+    # text has quoted words blanked, so a quoted "done" (an ordinary command) does not close the loop.
+    marks += [(c.span[1], "close") for c in cmds
+              if c.name == "done" and c.words == ["done"] and text[c.span[1] - 4:c.span[1]] == "done"]
     starts, best = [], None
     for at, kind in sorted(marks):
         if kind == "open":
@@ -208,7 +210,7 @@ def check_monitor(cmd, cfg):
         secs = [sleep_seconds(c) for c in sleeps]
         if not secs or None in secs:
             continue
-        if not any(c.name == "wait" for c in scope):
+        if not any(c.words == ["wait"] for c in scope):  # `wait $!` waits for one job, not for the sleep
             secs = [0 if re.match(r"\s*&(?!&)", text[c.span[1]:]) else s for c, s in zip(sleeps, secs)]
         span = text[region[0]:region[1]]
         branches = re.search(r"(?<![\w.-])(if|case|else|elif)(?![\w.-])|\|\|", span)
