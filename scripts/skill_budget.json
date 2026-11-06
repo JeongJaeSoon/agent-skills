@@ -17,7 +17,7 @@
       "width": 237
     },
     "create-verification-skill": {
-      "skill_md_tokens": 2028,
+      "skill_md_tokens": 2094,
       "tokens": 76,
       "width": 299
     },
@@ -62,7 +62,7 @@
       "width": 188
     },
     "maintain-verification-skill": {
-      "skill_md_tokens": 1216,
+      "skill_md_tokens": 1255,
       "tokens": 73,
       "width": 291
     },
