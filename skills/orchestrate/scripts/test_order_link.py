@@ -198,6 +198,35 @@ assert ok("order", "drop", drop_me, "--reason", "이미 규칙에 있다") == f"
 ev = json.loads(db.execute("SELECT after FROM event WHERE entity='order' AND id=? AND ev='dropped'", (drop_me,)).fetchone()[0])
 db.close()
 assert ev["reason"] == "이미 규칙에 있다", ev
+# A reopen between close()'s read and its write is refused, not closed without evidence (done) or without a reason (drop).
+import order  # noqa: E402
+stale = store.order_get(fb)
+assert stale["status"] == "done"
+ok("order", "reopen", fb)
+real_get = order.store.order_get
+order.store.order_get = lambda oid, require_open=False: stale
+try:
+    for sub in ("done", "drop"):
+        try:
+            order.close(fb, sub, None)
+            raise SystemExit(f"{sub} closed a reopened feedback row without its evidence")
+        except ValueError:
+            pass
+finally:
+    order.store.order_get = real_get
+assert store.order_get(fb)["status"] == "open"
+# gh that fails, times out or prints nothing proves nothing: the row stays open and gains no close event.
+os.environ["ORCH_GH"] = "/nonexistent/gh"
+assert order.merged("acme/app#5") is None
+db = sqlite3.connect(str(store.path()))
+n = db.execute("SELECT count(*) FROM event WHERE entity='order' AND id=?", (fb,)).fetchone()[0]
+db.close()
+env["ORCH_GH"] = "/nonexistent/gh"
+assert "is merged" in fails("order", "done", fb)
+db = sqlite3.connect(str(store.path()))
+assert db.execute("SELECT count(*) FROM event WHERE entity='order' AND id=?", (fb,)).fetchone()[0] == n
+db.close()
+assert store.order_get(fb)["status"] == "open"
 plain = ok("order", "add", "그냥 지시")
 assert ok("order", "drop", plain) == f"{plain} dropped", "an order (not feedback) needs no reason"
 

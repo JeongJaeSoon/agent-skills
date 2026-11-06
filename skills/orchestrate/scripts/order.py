@@ -113,24 +113,29 @@ def close(oid, sub, reason):
     """done or drop. A feedback row is not closed on the session's word: `done` needs a PR linked to it (a real link,
     not a stand-in) that GitHub shows merged, and `drop` needs --reason. The merge commit goes in the close event."""
     row = store.order_get(oid)
+    if row["kind"] != "feedback":
+        return store.order_close(oid, "dropped" if sub == "drop" else "done", _by(), reason=reason)
+    # The checks below run inside the close transaction, and only on a row that is open there. A row read as closed
+    # carries none, so a reopen between the read and the write is refused instead of closed without evidence.
     if sub == "drop":
-        if row["kind"] == "feedback" and row["status"] == "open" and not (reason or "").strip():
-            raise ValueError(f"{oid} is feedback: drop it with --reason TEXT (why it needs no change)")
-        return store.order_close(oid, "dropped", _by(), reason=reason)
-    if row["kind"] != "feedback" or row["status"] != "open":
-        return store.order_close(oid, "done", _by(), reason=reason)
-    prs = [u[3:] for u in row["links"] if u.startswith("pr:") and u not in row["stand_ins"]]
-    if not prs:
-        raise ValueError(f"{oid} is feedback: link the PR that fixed it first "
-                         f"(orch order link {oid} --unit pr:<owner/repo#number>); a to-do or card is not evidence")
-    evidence = {pr: sha for pr in prs if (sha := merged(pr))}
-    if not evidence:
-        raise ValueError(f"{oid} is feedback: none of {', '.join(prs)} is merged (per gh); done waits for the merge")
+        def need_reason(_):
+            if not (reason or "").strip():
+                raise ValueError(f"{oid} is feedback: drop it with --reason TEXT (why it needs no change)")
+        return store.order_close(oid, "dropped", _by(), reason=reason, check=need_reason)
+    evidence = {}
+    if row["status"] == "open":
+        prs = [u[3:] for u in row["links"] if u.startswith("pr:") and u not in row["stand_ins"]]
+        if not prs:
+            raise ValueError(f"{oid} is feedback: link the PR that fixed it first "
+                             f"(orch order link {oid} --unit pr:<owner/repo#number>); a to-do or card is not evidence")
+        evidence = {pr: sha for pr in prs if (sha := merged(pr))}
+        if not evidence:
+            raise ValueError(f"{oid} is feedback: none of {', '.join(prs)} is merged (per gh); done waits for the merge")
 
     def still(now_row):  # the links as written, not as read before the network call
         if not any(f"pr:{pr}" in now_row["links"] and f"pr:{pr}" not in now_row["stand_ins"] for pr in evidence):
-            raise ValueError(f"{oid}: the merged PR link changed while closing; run it again")
-    return store.order_close(oid, "done", _by(), evidence={"merged_prs": evidence}, reason=reason, check=still)
+            raise ValueError(f"{oid}: the merged PR link changed, or the order was reopened, while closing; run it again")
+    return store.order_close(oid, "done", _by(), evidence={"merged_prs": evidence} if evidence else None, reason=reason, check=still)
 
 
 def main(argv):
