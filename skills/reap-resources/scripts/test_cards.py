@@ -542,8 +542,13 @@ cards.read_machine, cards.cards_listing, cards.gather, reap.run = saved
 # apply's exit code follows reap's: a pre-act check that could not run leaves the card and the round ends 1 (after the
 # others ran); a guard that decides to leave a card is a normal 0.
 plan = pathlib.Path(tmp) / "plan.json"
-plan.write_text(json.dumps({"items": [{"name": "c1", "path": CARD, "verdict": cards.REMOVE, "head": HEAD, "close": []}]}))
+PLAN_ITEM = {"name": "c1", "path": CARD, "verdict": cards.REMOVE, "head": HEAD, "close": []}
+plan_text = json.dumps({"items": [PLAN_ITEM]}, ensure_ascii=False, indent=1)
+plan.write_text(plan_text)
+cards.seal_plan(plan_text)  # what scan --plan does after it writes the file
 saved_keep, saved_own, saved_act, saved_argv = guard.keep, guard.ownership, cards.act, sys.argv
+saved_listing = cards.cards_listing
+cards.cards_listing = lambda repo_list=(): [{"path": CARD}]
 guard.ownership = lambda: None
 cards.act = lambda *a, **k: "acted"
 sys.argv = ["cards.py", "apply", "--plan", str(plan)]
@@ -555,6 +560,59 @@ for why, code in (("검사를 마치지 못함(PermissionError: x)", 1), ("보�
         assert e.code == code, (why, e.code)
     else:
         raise AssertionError("apply must exit")
+
+# T7c: apply refuses the whole plan, and acts on nothing, unless scan sealed that exact text and every acting row is a
+# card Orca lists. Each case below would otherwise reach cards.act.
+guard.keep = lambda *a, **k: None
+acted = []
+cards.act = lambda item, *a, **k: acted.append(item["name"]) or "acted"
+OTHER = {**PLAN_ITEM, "name": "c2", "path": str(pathlib.Path(tmp) / "elsewhere")}
+
+
+def refused_apply(items_or_text, listing=None, seal=False):
+    text = items_or_text if isinstance(items_or_text, str) else json.dumps({"items": items_or_text}, indent=1)
+    if seal:
+        cards.seal_plan(text)
+    plan.write_text(text)
+    cards.cards_listing = lambda repo_list=(): [{"path": CARD}] if listing is None else listing
+    acted.clear()
+    try:
+        cards.main(["cards.py", "apply", "--plan", str(plan)])
+    except SystemExit as e:
+        return e.code
+    raise AssertionError("apply must exit")
+
+
+def refuses(*a, **k):
+    msg = str(refused_apply(*a, **k))
+    assert acted == [], (msg, acted)  # a refused plan closes nothing
+    return msg
+
+
+assert refused_apply([PLAN_ITEM], seal=True) == 0 and acted == ["c1"]                     # sealed and owned: runs
+assert "봉인 없음" in refuses([{**PLAN_ITEM, "name": "hand-written"}])                    # never sealed
+plan_text2 = json.dumps({"items": [PLAN_ITEM]}, indent=1)
+cards.seal_plan(plan_text2)
+assert "봉인 없음" in refuses(plan_text2.replace(HEAD, PRHEAD))                           # sealed, then edited
+assert "봉인 없음" in refuses(plan_text2 + "\n")                                           # even whitespace
+assert "카드가 아님" in refuses([PLAN_ITEM, OTHER], seal=True)                             # one foreign row stops all
+assert "카드가 아님" in refuses([PLAN_ITEM], listing=[{"path": CARD, "isMainWorktree": True}], seal=True)
+cards.cards_listing = lambda repo_list=(): None
+plan.write_text(plan_text2)
+try:
+    cards.main(["cards.py", "apply", "--plan", str(plan)])
+except SystemExit as e:
+    assert "소유를 확인할 수 없음" in str(e.code) and acted == [], (e.code, acted)
+else:
+    raise AssertionError("an unreadable listing must refuse")
+for bad in ('{"items": [{"verdict": "삭제"}]}', '{"items": 3}', "not json", '{"items": [{"name": "c", "path": 1, "verdict": "삭제", "head": "h", "close": []}]}'):
+    assert "아무것도 닫지 않았다" in refuses(bad, seal=True), bad
+# a plan with only 남김 rows has nothing to own, and still has to be sealed
+keep_only = [{**PLAN_ITEM, "verdict": cards.KEEP}]
+assert "아무것도 닫지 않았다" in refuses(keep_only)
+assert refused_apply(keep_only, seal=True) == 0 and acted == []
+
+cards.cards_listing = saved_listing
 guard.keep, guard.ownership, cards.act, sys.argv = saved_keep, saved_own, saved_act, saved_argv
 
 # A restart abandons the Dispatches whose terminals it took; their cards wait for a resume, so the janitor must not

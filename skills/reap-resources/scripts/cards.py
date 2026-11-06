@@ -8,14 +8,16 @@ Usage:
 Each card gets one verdict: 삭제 (close its listed terminals, ignored files to the trash, `orca worktree rm
 --run-hooks`), 터미널만 닫기 (an open PR: the worktree stays, its idle terminals go), 남김, or 사람 결정 (nothing is
 done; the reason says what to decide). The rules are in ../references/cards.md and in judge() below.
-`apply` reads the card again and acts only when the verdict and HEAD are what the plan says, before closing its
-terminals and again before removing it, holding the card's lock and passing cardguard.guard() each time. What cannot be read keeps the card: an agent's screen, the worktree,
-worker or automation list, process cwds.
+`apply` first refuses the whole plan, closing nothing, unless this module's scan sealed that exact text and every acting
+row names a card Orca lists (not the main checkout). Then it reads the card again and acts only when the verdict and
+HEAD are what the plan says, before closing its terminals and again before removing it, holding the card's lock and
+passing cardguard.guard() each time. What cannot be read keeps the card: an agent's screen, the worktree, worker or
+automation list, process cwds.
 The janitor's `card` kind (reap.py) is this module.
 Config: ~/.claude/agent-skills.json → "reap": {"idle_minutes": 30, "cards": {"protect_prefixes": ["lead-"],
 "done_patterns": [...], "question_patterns": [...]}}.
 """
-import json, os, pathlib, re, shlex, subprocess, sys, time
+import hashlib, json, os, pathlib, re, shlex, subprocess, sys, time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import cardguard, reap, rm_refused  # noqa: E402
@@ -501,11 +503,52 @@ def act_locked(item, cfg, wait, done=None):
     return (f"터미널 {len(close)}개 닫음, " if close else "") + out
 
 
+SEALS, SEALS_KEPT = "card-plan-seals.json", 20
+
+
+def seal_plan(text):
+    """scan calls this with the exact text it wrote: apply accepts only a plan whose digest is here, so a plan written
+    or edited by hand (or by an agent) after the scan is refused. The file sits beside the other state files; whoever
+    can write it can forge a seal, which this does not stop."""
+    path = reap.STATE / SEALS
+    seals = reap.read_obj(path) or {}
+    seals[hashlib.sha256(text.encode()).hexdigest()] = time.time()
+    newest = sorted(seals.items(), key=lambda kv: kv[1], reverse=True)[:SEALS_KEPT]
+    reap.STATE.mkdir(parents=True, exist_ok=True)
+    reap.write_atomic(path, json.dumps(dict(newest)))
+
+
+def refuse_plan(text, rows):
+    """Why apply must not act on this plan, or None. Checked for every row before the first card is touched, so a
+    plan that fails closes nothing. rows: the cards Orca lists now (cards_listing), None when unreadable."""
+    if hashlib.sha256(text.encode()).hexdigest() not in (reap.read_obj(reap.STATE / SEALS) or {}):
+        return "이 계획은 cards.py scan 이 만든 것이 아니거나 만든 뒤 고쳐졌다(봉인 없음): scan --plan 으로 다시 만든다"
+    try:
+        items = json.loads(text)["items"]
+        acting = [i for i in items if i["verdict"] in ACTING]
+        for i in acting:
+            if not (isinstance(i["path"], str) and isinstance(i["name"], str) and isinstance(i["head"], str)
+                    and isinstance(i["close"], list) and all(isinstance(h, str) for h in i["close"])):
+                return f"계획 행 모양이 잘못됨: {i.get('name')}"
+    except (KeyError, TypeError, ValueError):
+        return "계획 모양이 잘못됨"
+    if acting:
+        if rows is None:
+            return "orca worktree 목록을 읽지 못해 대상의 소유를 확인할 수 없음"
+        cards = {reap.real(w["path"]) for w in rows if not w.get("isMainWorktree")}
+        if outside := [i["name"] for i in acting if reap.real(i["path"]) not in cards]:
+            return f"Orca 가 나열하는 카드가 아님(main 체크아웃이거나 없음): {', '.join(outside)}"
+    return None
+
+
 def main(argv):
     cmd = argv[1] if len(argv) > 1 else "scan"
     cfg = reap.config()
     if cmd == "apply":
-        plan = json.loads(pathlib.Path(reap.opt("--plan") or sys.exit("apply needs --plan PLAN.json")).read_text())
+        text = pathlib.Path(reap.opt("--plan") or sys.exit("apply needs --plan PLAN.json")).read_text()
+        if why := refuse_plan(text, cards_listing()):
+            sys.exit(f"아무것도 닫지 않았다: {why}")
+        plan = json.loads(text)
         import guard
         try:
             guard.ownership()
@@ -542,7 +585,9 @@ def main(argv):
     items, notes = scan(cfg, repo_list)
     data = {"at": time.strftime("%Y-%m-%dT%H:%M%z"), "items": items, "notes": notes}
     if reap.opt("--plan"):
-        pathlib.Path(reap.opt("--plan")).write_text(json.dumps(data, ensure_ascii=False, indent=1))
+        text = json.dumps(data, ensure_ascii=False, indent=1)
+        pathlib.Path(reap.opt("--plan")).write_text(text)
+        seal_plan(text)
     if "--json" in argv:
         print(json.dumps(data, ensure_ascii=False, indent=1))
     else:

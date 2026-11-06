@@ -27,7 +27,9 @@ python3 "$C" apply --plan <scratchpad>/cards-plan.json   # after the person has 
 ```
 
 Show the table and stop before `apply`: the person running it confirms. A 사람 결정 row is theirs to settle; `apply`
-never touches it. From a shell the same two lines work with the checkout's path in place of `${CLAUDE_SKILL_DIR}`.
+never touches it. `apply` takes only the plan file `scan --plan` just wrote: it records the plan's digest in
+`<state>/card-plan-seals.json`, and a plan written or edited since, or one with an acting row that is not a card Orca
+lists (the main checkout included), is refused whole, with nothing closed. From a shell the same two lines work with the checkout's path in place of `${CLAUDE_SKILL_DIR}`.
 The janitor's `card` kind is this same code, so the scheduled round closes what `scan` would.
 
 ## Run
