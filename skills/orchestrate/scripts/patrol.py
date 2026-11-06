@@ -809,9 +809,10 @@ def pending_lines(me, unowned, now=None):
     seen = shown.get(me or "-") or {}
     due = [f for f in mine if f["id"] not in seen
            or f.get("code") not in SHOW_ONCE and now - fleet.parse(seen[f["id"]]) >= RENOTIFY]
-    if due:
-        keep = {f["id"]: seen.get(f["id"]) for f in mine if seen.get(f["id"])}
-        keep.update({f["id"]: fleet.iso(now) for f in due})
+    # Pruned every call, not only when something is due: a finding that closed must be new when it comes back.
+    keep = {f["id"]: seen.get(f["id"]) for f in mine if seen.get(f["id"])}
+    keep.update({f["id"]: fleet.iso(now) for f in due})
+    if keep != seen:
         shown[me or "-"] = keep
         with contextlib.suppress(OSError):
             fleet.write_atomic(SHOWN, json.dumps(shown))

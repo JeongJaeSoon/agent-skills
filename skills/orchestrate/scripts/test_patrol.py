@@ -715,6 +715,11 @@ patrol.write_round([drift("haiku")], {"cards": {}}, False, NOW + 400)
 assert patrol.pending_lines("hm", False, T + dt.timedelta(hours=4))[0].startswith("PATROL M"), "another model is news"
 patrol.write_round([drift("opus")], {"cards": {}}, False, NOW + 500)
 assert patrol.pending_lines("hm", False, T + dt.timedelta(hours=5))[0].startswith("PATROL M"), "so is the first one again"
+# The same drift back after it closed (opus, back on sonnet, opus), with nothing due in between.
+patrol.write_round([], {"cards": {}}, False, NOW + 600)
+assert patrol.pending_lines("hm", False, T + dt.timedelta(hours=6)) == [], "a closed drift shows nothing"
+patrol.write_round([drift("opus")], {"cards": {}}, False, NOW + 700)
+assert patrol.pending_lines("hm", False, T + dt.timedelta(hours=7))[0].startswith("PATROL M"), "and is new when it returns"
 
 # H: an ended turn whose screen shows a hook error in its last turn or Claude Code's restart notice. Run workers too;
 # a screen without that wording, a turn still running, a prompt waiting on a human or an unread screen is not judged.
