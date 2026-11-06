@@ -10,15 +10,18 @@ HOME = TMP / "home"
 CONFIG = HOME / ".claude" / "agent-skills.json"
 STATE = TMP / "state"
 BIN = TMP / "bin"
+TMPROOT = TMP / "tmproot"
 (HOME / ".claude").mkdir(parents=True)
 BIN.mkdir()
+TMPROOT.mkdir()
 
 
 def env(**extra):
     base = {k: v for k, v in os.environ.items()
             if not k.startswith(("CLAUDE_", "AGENT_SKILLS_", "XDG_")) and k != "ORCA_TERMINAL_HANDLE"}
+    # TMPDIR is a folder of its own, so TMP's other folders (HOME, the repositories) count as outside it.
     base.update(HOME=str(HOME), AGENT_SKILLS_STATE=str(STATE), AGENT_SKILLS_CONFIG=str(CONFIG),
-                PATH=f"{BIN}:/usr/bin:/bin", ORCA_TERMINAL_HANDLE="term_me")
+                PATH=f"{BIN}:/usr/bin:/bin", ORCA_TERMINAL_HANDLE="term_me", TMPDIR=str(TMPROOT))
     base.update(extra)
     return base
 
@@ -71,6 +74,11 @@ git("-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-qm", "a"
 CLEAN = TMP / "clean"
 CLEAN.mkdir()
 git("init", "-q", cwd=CLEAN)
+# A checkout holding a symlink to a folder outside it: `rm -rf` removes the link, not the folder.
+LINKED = TMP / "linked"
+LINKED.mkdir()
+git("init", "-q", cwd=LINKED)
+(LINKED / "cache-link").symlink_to("/usr")
 # A stand-in `orca` that says the current worktree is the main one.
 (BIN / "orca").write_text("#!/bin/sh\necho '{\"result\": {\"worktree\": {\"isMainWorktree\": true}}}'\n")
 (BIN / "orca").chmod(0o755)
@@ -83,6 +91,14 @@ OTHER_SETUP.write_text("print('another project')\n")
 SETTINGS = HOME / ".claude" / "settings.json"
 
 configure({"repos": {"acme/app": {"external_llm": False}}})
+
+# Where the test folder sits decides these: under /tmp (a Linux runner) HOME and the repositories count as inside it.
+OUTSIDE_TMP_RM = [] if str(TMP).startswith(("/tmp/", "/private/tmp/")) else [
+    "rm -rf ~/projects", "rm -rf $HOME/.cache/x", "rm -rf ~/x /tmp/y", ("rm -rf ../clean", REPOX),
+    ("rm -rf build", CLEAN.parent), ("rm -rf node_modules", HOME), ("rm -rf .", REPOX),
+    ("find -mindepth 1 -delete", HOME), ("(cd hooks); rm -rf ../../other", REPOX), ("echo $(cd /usr); rm -rf ../other", REPOX)]
+(HOME / ".Trash").mkdir()
+(HOME / ".Trash" / "a.txt").write_text("x")
 
 # (key, level, [(command, cwd)] it is about, [command] that only looks like one)
 CASES = [
@@ -190,6 +206,50 @@ CASES = [
                                           "export AGENT_SKILLS_PRESSURE_GATE=0"],
      ["AGENT_SKILLS_PRESSURE_GATE=1 orch heavy p -- npm test", "echo AGENT_SKILLS_PRESSURE_GATE",
       "echo AGENT_SKILLS_PRESSURE_GATE=0"]),
+    ("guard.deny.rm_outside", "deny",
+     ["cd /usr || exit 1; rm -rf local/data", "cd /usr && cd /tmp && cd - && rm -rf local/data", "pushd /usr; rm -rf local/data", "cd /usr && pushd /tmp && popd && rm -rf local/data", "pushd /usr >/dev/null && rm -rf local/data",
+      "cd /usr; cd /tmp & rm -rf local/data", "cd /usr; cd /tmp |& cat; rm -rf local/data",
+      "cd /usr; echo `cd /tmp` `rm -rf local/data`", "rm --recurs --force /usr/local/data","rm --r /usr/local/data", ("cd /usr; cd /tmp | cat; rm -rf local", REPOX),
+      "find /usr/local -name '*.old' -delete","find /opt -exec rm -rf {} +", "find -L /opt -delete", "find -d /usr/local -exec rm -rf {} +", "find -f /opt -delete",
+      ("find -L cache-link -mindepth 1 -type d -exec rm -rf {} +", LINKED),
+      ("find -d /usr/local/x -delete", REPOX),
+      "find -- /usr/local -name '*.old' -delete", "find /usr/local -type d -exec sudo rm -rf {} +",
+      ("find -execdir rm -rf /usr/x ;", REPOX),
+      ("find -L . -mindepth 1 -exec rm -rf {} +", LINKED),
+      ("find -E -L cache-link -name '*.old' -delete", LINKED), ("find -H cache-* -name '*.old' -delete", LINKED),
+      ("find . -exec rm -rf /opt/data {} ;", REPOX), ("find build -execdir rm -r /usr/x ;", REPOX),
+"rm -rf /usr/local/lib/x", "rm -r /Users/someone/proj", "rm -Rf /var/lib/x", "rm --recursive --force /opt/x",
+      "rm -rf -- /usr/x", "sudo rm -rf /usr/x", "rm -rf /tmp", "rm -rf /", "rm -fr /opt",
+      "rm -rf /tmp/../usr/x", "ls && rm -rf /usr/x", "rm -rf /usr/*", ("cd /usr && rm -rf local", REPOX)] + OUTSIDE_TMP_RM,
+     ["rm -rf /tmp/x", "rm -rf /private/tmp/x", f"rm -rf {TMPROOT}/job",
+      ("rm -rf build", REPOX), ("rm -rf build dist", REPOX), ("rm -rf node_modules/.cache", REPOX),
+      ("cd build && rm -rf out", REPOX), ("rm -rf cache-link", LINKED), ("find . -name '*.pyc' -delete", REPOX),
+      ("find build -delete", REPOX), ("(cd /usr); rm -rf build", REPOX), ("(cd /usr && ls); rm -rf build", REPOX),
+      ("find . -exec rm -f {} ;", REPOX),("find cache-link -type l -delete", LINKED),
+      ("find build -type f -execdir rm -rf ../cache ;", REPOX), ("find -H . -name '*.pyc' -delete", LINKED),
+      ("find -name '*.pyc' -delete", REPOX), ("find -- build -name '*.o' -delete", REPOX),
+      ("find -L -P cache-link -type l -delete", LINKED), "find /tmp/x -name '*.log' -delete", "find /usr/local -name '*.old'",
+      ("find . -name '*.tmp' -exec rm {} ;", REPOX), "find /usr/local -exec ls {} ;", ("rm -rf ./dist", REPOX), (f"rm -rf {REPOX}/build", REPOX),
+      "rm /usr/x/file.txt", "rm -f /usr/local/x.log", "echo rm -rf /usr/x", "git rm -r --cached x",
+      'rm -rf "${DIR:?}/build"', "rm -ri", "rmdir /usr/x"]),
+    ("guard.deny.trash_empty", "deny",
+     ["rm -rf ~/.Trash/*", "rm -rf ~/.Trash", "rm -f ~/.Trash/*", "rm -rf $HOME/.Trash/old", "sudo rm -rf ~/.Trash/*",
+      "rm -r ~/.Trash/a.txt", "rm -f ~/.Tra[s]h/*", "rm -rf ~/.local/share/Trash/files", "rm -rf /Volumes/Disk/.Trashes/501",
+      "osascript -e 'tell application \"Finder\" to empty trash'",
+      "osascript -e 'tell application \"Finder\" to empty the trash'", "trash-empty", "gio trash --empty",
+      "osascript -l JavaScript -e 'Application(\"Finder\").empty()'",
+      "osascript -e 'tell application \"Finder\" to empty'",
+      "osascript -e 'tell application \"Finder\"' -e 'empty' -e 'end tell'", "find ~/.Trash -mindepth 1 -delete",
+      "osascript -e'tell application \"Finder\"' -e 'empty' -e 'end tell'",
+      "osascript -e 'tell application \"Finder\"' -e 'empty (trash)' -e 'end tell'",
+      "osascript -e 'tell application \"Finder\"' -e 'empty -- cleanup' -e 'end tell'",
+      "osascript -e 'tell application \"Finder\"' -e 'empty without security' -e 'end tell'",
+      "osascript -e 'tell application \"Finder\"' -e 'empty (the trash)' -e 'end tell'",
+      ("find -mindepth 1 -delete", HOME / ".Trash"), "find -- ~/.Trash -mindepth 1 -delete",
+      "find ~/.Trash -mindepth 1 -exec rm -rf {} +"],
+     ["ls ~/.Trash", "echo rm -rf ~/.Trash", "mv x ~/.Trash/", "rm ~/.Trash/a.txt", "trash-list", "echo trash-empty", "gio trash somefile", "gio trash --list",
+      "osascript -e 'tell application \"Finder\" to get name'",
+      "osascript -e 'tell application \"Finder\" to get name of every disk whose name is \"empty\"'"]),
     ("guard.warn.rm_expansion", "warn", ["rm -rf $DIR/build", "rm *.log", "rm -f /tmp/x/*"],
      ['rm -rf "${DIR:?}/build"', "rm -rf ${DIR:?}/build", "rm -f /tmp/x/a.log", 'rm "$F"']),
     ("guard.warn.reset_hard", "warn", [("git reset --hard origin/main", REPOX)],
