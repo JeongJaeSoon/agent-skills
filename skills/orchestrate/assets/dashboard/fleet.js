@@ -269,7 +269,7 @@ function itemRow(st, it, { showSession = true } = {}) {
     <span class="acts">${it.missed ? tag("missed", "bad", "alert") : ""}<span class="when">${it.at ? relSpan(it.at) : ""}</span>
       <span class="slot">${safeUrl(it.url) ? link(it.url, icon("link"), "icon-btn") : ""}</span>
       <span class="slot">${copy ? `<button class="icon-btn" data-copy="${esc(copy)}" title="Copy">${icon("copy")}</button>` : ""}</span>
-      <span class="slot"><button class="icon-btn" data-dismiss="${esc(it.key)}" title="Dismiss">${icon("x")}</button></span></span></li>`;
+      <span class="slot">${it.type === "owner_todo" ? "" : `<button class="icon-btn" data-dismiss="${esc(it.key)}" title="Dismiss">${icon("x")}</button>`}</span></span></li>`;
 }
 
 // Approve and Deny take a second click (the list re-renders under the pointer every tick); Open does not.
