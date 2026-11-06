@@ -729,6 +729,37 @@ def spawn_patrol(reason, python=None, fallback=False):
         return False
 
 
+HARD = pathlib.Path(__file__).resolve().parents[3] / "scripts" / "reap_hard.py"
+HARD_TIMEOUT_S = 900  # a pass takes about a minute; this only ends a hung one
+
+
+def spawn_hard(reason, min_gap=300, python=None):
+    """Start a reap-hard pass detached, for an event that frees a card (a PR landed) between its 30-minute beats. Not
+    within min_gap seconds of the last pass; reap-hard's own lock keeps two passes from running at once. False when
+    nothing started, or AGENT_SKILLS_PATROL=off (tests)."""
+    if os.environ.get("AGENT_SKILLS_PATROL") == "off":
+        return False
+    try:
+        if time.time() - json.loads((STATE / "reap-hard-last.json").read_text())["t"] < min_gap:
+            return False
+    except (OSError, ValueError, KeyError, TypeError):
+        pass  # no readable last pass: run one
+    py = python or sys.executable
+    try:
+        STATE.mkdir(parents=True, exist_ok=True)
+        with open(STATE / "reap-hard.log", "a") as out:
+            out.write(f"--- {time.strftime('%Y-%m-%dT%H:%M:%S%z')} {reason}\n")
+            out.flush()
+            # Under the shared runner (record <state>/jobs/reap-hard-kick.json): a hung gh, docker or orca call ends with
+            # the pass's process group at the timeout instead of holding reap-hard.lock for good.
+            subprocess.Popen([py, "-I", str(JOB_RUNNER), "run", "reap-hard-kick", "--timeout", str(HARD_TIMEOUT_S),
+                              "--ok", "0,3", "--", py, "-I", str(HARD), "run"], stdout=out, stderr=out,
+                             stdin=subprocess.DEVNULL, start_new_session=True)
+        return True
+    except OSError:
+        return False
+
+
 LSREGISTER = ("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister")
 
 
@@ -1064,10 +1095,53 @@ def regenerated_copies(path, git=run):
     return sorted(f".agents/skills/{n}" for n in names)
 
 
-def branch_pr(path, git=run, head=None):
+PR_LIST_LIMIT = 1000  # one busy repo here has ~480 PRs: at 300 its list was cut and 38 cards fell back to per-card calls
+
+
+class PrMap:
+    """The PRs of each repo, listed once per instance: a pass asks gh once per repo, not once or twice per card.
+    One instance lives for one machine read, so the act-time re-judgement (which reads the machine again) sees new PRs."""
+
+    def __init__(self, git=run):
+        self.git, self.repos = git, {}
+
+    def get(self, key, path):
+        """(rows, complete) for the repo keyed key, listed from path; None when gh could not list them. A listing as long
+        as the limit may have cut older PRs off, so it is not complete: a miss in it still needs gh's own search."""
+        if key not in self.repos:
+            out = self.git(["gh", "pr", "list", "--state", "all", "--limit", str(PR_LIST_LIMIT), "--json",
+                            "number,url,state,headRefName,headRefOid,isCrossRepository"], cwd=path, check=False)
+            try:
+                rows = json.loads(out) if out else None
+            except ValueError:
+                rows = None
+            self.repos[key] = None if rows is None else (rows, len(rows) < PR_LIST_LIMIT)
+        return self.repos[key]
+
+
+def pr_ref(own):
+    """owner/repo#N of the PR to report among a card's own, an open one first; None for no PR."""
+    own = sorted(own, key=lambda p: p.get("state") != "OPEN")
+    m = own and re.search(r"github\.com/([^/]+/[^/]+)/pull/(\d+)", own[0]["url"])
+    return (m and f"{m.group(1)}#{m.group(2)}") or None
+
+
+def branch_pr(path, git=run, head=None, pr_map=None, key=None):
     """(owner/repo#N or None, unread) for the branch checked out at path, else for a PR whose head commit is HEAD:
-    a card that pushed HEAD under another branch name has its PR only there."""
+    a card that pushed HEAD under another branch name has its PR only there. pr_map (a PrMap) and key (the repo) answer
+    from one listing per repo; gh is asked per card only for what that listing cannot rule out."""
     branch = (git(["git", "-C", path, "branch", "--show-current"], check=False) or "").strip()
+    listing = pr_map.get(key, path) if pr_map is not None and key else None
+    if listing:
+        rows, complete = listing
+        mine = [p for p in rows if not p.get("isCrossRepository")]
+        own = [p for p in mine if branch and p.get("headRefName") == branch]
+        if not own and head:
+            own = [p for p in mine if p.get("headRefOid") == head]
+        # Only a complete listing rules a PR out or in: a cut one may hold a merged PR on HEAD while the open one on
+        # the branch is older than the cut, and a merged PR alone would let the card go.
+        if complete:
+            return pr_ref(own), False
     prs = branch and git(["gh", "pr", "list", "--head", branch, "--state", "all", "--json", "number,url,state,isCrossRepository"],
                           cwd=path, check=False)
     # A failed lookup is not an empty answer: a card with an open PR would pass as one without.
@@ -1080,12 +1154,10 @@ def branch_pr(path, git=run, head=None):
         unread = found is None
         # The search also matches a PR that only contains the commit; the one that carried HEAD is the card's.
         own = [p for p in json.loads(found or "[]") if not p.get("isCrossRepository") and p.get("headRefOid") == head]
-    own.sort(key=lambda p: p.get("state") != "OPEN")
-    m = own and re.search(r"github\.com/([^/]+/[^/]+)/pull/(\d+)", own[0]["url"])
-    return (m and f"{m.group(1)}#{m.group(2)}") or None, unread
+    return pr_ref(own), unread
 
 
-def worktree_facts(path, ledger_pr, live_turn, users_cwd, git=run):
+def worktree_facts(path, ledger_pr, live_turn, users_cwd, git=run, pr_map=None):
     common = git(["git", "-C", path, "rev-parse", "--path-format=absolute", "--git-common-dir"], check=False)
     if common is None:
         return None
@@ -1101,7 +1173,7 @@ def worktree_facts(path, ledger_pr, live_turn, users_cwd, git=run):
         landed = None if not default else git(["git", "-C", path, "merge-base", "--is-ancestor", "HEAD", default.strip()],
                                               check=False) is not None
     # A HEAD already on the default branch is the head of any PR merged by fast-forward, a fresh lead card's included.
-    ref, pr_unread = (ledger_pr, False) if ledger_pr else branch_pr(path, git, None if landed else head)
+    ref, pr_unread = (ledger_pr, False) if ledger_pr else branch_pr(path, git, None if landed else head, pr_map, main)
     if ref:
         landed = None
     # Untracked files count: `orca worktree rm` would take new, never-added work with it.
