@@ -1,4 +1,4 @@
-<!-- translated-from: c53d63bd45bb7f46c67fe087262ed5aa147cc45e -->
+<!-- translated-from: fc55134ee4cf64f99bd976bb5173c67226090bb7 -->
 # スキルカタログ
 
 `agent-skills` プラグインに入っているスキル41個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック16個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
@@ -460,20 +460,20 @@ PR を受け持つスキルとマージする主体:
   - まず失敗するテストを回して失敗の理由を確かめ、最小限に直してから通ることを確かめます。
   - テストが非現実的なら理由を明らかにし、いちばん近い実行可能なチェックを使います。既存の assertion は弱めません。
 
-### create-verification-skill
-- **内容:**
+### verification-skill
+- **使う場面:** 再利用する verify スキルを新しく作るとき（「verify 스킬 만들어줘」（verify スキルを作って）、`/create-verification-skill`）は create モード、既存の verify スキルを点検・修理するとき（「verify 스킬 점검해줘」（verify スキルを点検して）、週1回の点検、機能を動かせなかった verify スキル）は maintain モードです。変更一つが動くかの確認は `deliver-ticket` です。
+- **create モード:**
   - リポジトリを調べ、アプリをユーザーのように起動し、操作し、観察するリポジトリ専用のスキル `.claude/skills/verify-<app>/` を作ります。Launch、Doctor、Drive、Evidence、Cleanup の段階を置きます。
   - 主な機能3〜5個の機能マップも一緒に作ります。
   - 自分で最後まで一度回して証明します。
   - `deliver-ticket` と `orchestrate` は、範囲内で再利用する検証が役立つ場合に呼び出せます。同じ受け入れ基準を実証する直接チェックも有効です。upstream はユーザー呼び出し専用で、この fork はモデルからも呼び出せます。
-- **同梱:** `references/feature-map-example/`（サンプルアプリの機能マップ）。
-
-### maintain-verification-skill
-- **内容:**
+- **maintain モード:**
   - 機能ごとにソースを読み、すべての機能を実際に動かして機能マップと照らし合わせます。
   - 問題を、文書のずれ、ハーネスの欠陥、製品の欠陥に分けます。製品の欠陥は報告するだけです。
   - 結果は clean、changed（証明された修正だけの PR 一つ）、blocked のいずれかです。
   - flow improver が週に一度回します。verify スキルが機能を扱えなかった、または誤って説明していたと `deliver-ticket` や QA lead が報告すると、リードがワーカーに任せます。
+  - 点検する verify スキルがなければ止まり、create モードを案内します。
+- **同梱:** `references/create.md`、`references/maintain.md`、`references/feature-map-example/`（サンプルアプリの機能マップ）。
 
 ## コマンド
 

@@ -1,4 +1,4 @@
-<!-- translated-from: c53d63bd45bb7f46c67fe087262ed5aa147cc45e -->
+<!-- translated-from: fc55134ee4cf64f99bd976bb5173c67226090bb7 -->
 # Skill catalog
 
 This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 16 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
@@ -458,20 +458,20 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
   - Runs the failing test first to confirm why it fails, makes the smallest fix, and confirms it passes.
   - If a test would be unrealistic, it says why and uses the closest runnable check. It never weakens existing assertions.
 
-### create-verification-skill
-- **What it does:**
+### verification-skill
+- **When:** Create mode builds a reusable verify skill ("verify 스킬 만들어줘" (make a verify skill), `/create-verification-skill`); maintain mode checks and repairs an existing one ("verify 스킬 점검해줘" (check the verify skill), the weekly round, a verify skill that failed to drive a feature). Checking that one change works is `deliver-ticket`.
+- **Create mode:**
   - Surveys the repo and builds a repo-specific skill, `.claude/skills/verify-<app>/`, that launches, drives and observes the app the way a user would. It has Launch, Doctor, Drive, Evidence and Cleanup steps.
   - Also builds a feature map of the 3–5 main features.
   - Proves the skill by running it end to end once itself.
   - `deliver-ticket` and `orchestrate` may use it when a reusable harness is useful within scope; direct checks remain sufficient when they prove the same acceptance criteria. Upstream keeps it user-invoked; this fork allows model invocation.
-- **Bundled:** `references/feature-map-example/` (the feature map of an example app).
-
-### maintain-verification-skill
-- **What it does:**
+- **Maintain mode:**
   - Reads the source for each feature, actually drives every feature, and compares the results with the feature map.
   - Sorts problems into doc drift, harness defects and product defects. Product defects are only reported.
   - The result is one of clean, changed (a single PR with only proven fixes), or blocked.
   - The flow improver runs it once a week, and the lead hands it to a worker when `deliver-ticket` or the QA lead reports that the verify skill couldn't drive a feature or described it wrongly.
+  - With no verify skill to check, it stops and points at create mode.
+- **Bundled:** `references/create.md`, `references/maintain.md`, `references/feature-map-example/` (the feature map of an example app).
 
 ## Commands
 
