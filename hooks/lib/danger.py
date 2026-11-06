@@ -332,7 +332,7 @@ def scratch_apply(script, c, cwd, here, masked):
     toks = c.raw.split()
     if len(toks) < 7 or not all(ASSIGN_WORD.match(t) for t in toks[:6]) or toks[6] != w[0]:
         return False
-    if re.search(r"(?<![\w./-])(?:cd|pushd|popd)(?![\w./-])", masked):  # `cd . && …` also leaves `here` equal to `cwd`
+    if re.search(r"(?<![\w./@+-])(?:cd|pushd|popd)(?![\w./@+-])", masked):  # `cd . && …` also leaves `here` equal to `cwd`
         return False
     given = dict(a.split("=", 1) for a in c.assigns)
     if set(given) != SCRATCH_VARS or len(c.assigns) != len(given):

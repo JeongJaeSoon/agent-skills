@@ -184,6 +184,7 @@ CASES = [
       (rehearsal(), REPOX), (rehearsal(tail="--settings-only --apply=abc"), REPOX),
       # Look-alikes of the refused shapes: `cd` inside a path, and a link beside a target that is no backup.
       (rehearsal(CLAUDE_CONFIG_DIR=f"{REPOX}/scratch/cd/home"), REPOX),
+      (rehearsal(CLAUDE_CONFIG_DIR=f"{REPOX}/scratch/@cd+home"), REPOX),
       (rehearsal(CLAUDE_SETTINGS=f"{REPOX}/unrelated/settings.json"), REPOX)]),
     # Not a rehearsal: a target inherited or outside the checkout, reaching the real settings through a link (also
     # a file inside the scratch folder), `..`, a quoted word or a variable, a wrapper that can undo an assignment,
