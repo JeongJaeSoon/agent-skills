@@ -221,7 +221,9 @@ def check_monitor(cmd, cfg):
                 everything = True
             elif w.words == ["wait", "$!"]:
                 prior = [c for c in scope if backgrounded(c) and c.span[1] < w.span[0]]
-                if prior:
+                # Only a job started right before the wait is surely `$!`: an assignment or a subshell in between
+                # (`sleep 300 & x=1 & wait $!`, `(sleep 300 &); wait $!`) points `$!` somewhere else.
+                if prior and re.fullmatch(r"\s*&\s*;?\s*", text[prior[-1].span[1]:w.span[0]]):
                     waited.add(id(prior[-1]))
         if not everything:
             secs = [0 if backgrounded(c) and id(c) not in waited else s for c, s in zip(sleeps, secs)]

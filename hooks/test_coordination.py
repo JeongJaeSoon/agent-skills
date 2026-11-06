@@ -228,6 +228,8 @@ for cmd in ("while true; do gh pr view 1; echo done; sleep 60; done",
             "while true; do gh pr view 1; sleep 60; done > /dev/null",
             "while true; do gh pr view 1; sleep 60; done # keep",
             "while true; do gh pr view 1; sleep 300 & sleep 1 & wait $!; done",
+            "while true; do gh pr view 1; sleep 300 & x=1 & wait $!; done",
+            "while true; do gh pr view 1; (sleep 300 &); wait $!; done",
             "! while true; do gh pr view 1; sleep 60; done",
             "!while true; do gh pr view 1; sleep 60; done"):
     assert "pr_watch.py" in monitor(cmd)[1], "must warn: " + cmd
