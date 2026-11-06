@@ -33,17 +33,29 @@ From the open PR to ready: all CI checks green and all review threads resolved.
 - A verdict describes one head. After merging main in or rebasing, re-run the suite and the E2E
   check at the new head before landing, and update the sticky comment; a green check from the
   old head says nothing about the new one.
-- Wait with `Monitor` running an until-loop on `gh pr checks` / `gh pr view`, not a
-  hand-written watcher script or a sleep loop.
+- Wait with one watcher per run or PR, never two: `gh run watch <id> --exit-status --interval 60`
+  under `run_in_background` (never the default 3 s interval), or a `Monitor` until-loop on
+  `gh pr checks` / `gh pr view` that sleeps 60 s or more between calls. Before starting one, check
+  that none of yours already watches that run or PR. Every wait has an upper bound (the Monitor
+  timeout; for `gh run watch`, about twice the run's usual length): past it, stop the watcher,
+  read the state once and report; never start a second one. No hand-written watcher script, no foreground sleep loop.
+
+## CI logs
+
+- Read a run's log with `gh run view <id> --log`, a failed run's with `gh run view <id> --log-failed`
+  first.
+- Download logs and artifacts into an explicitly scoped system temporary directory, outside git
+  worktrees (`gh run download -D <temporary-directory>`). A standalone card also resolves the
+  platform temporary root and names its task-specific download directory before use; never expand
+  an unset temporary-root variable into an absolute destination.
 
 ## When someone else merges
 
 A fork PR to a repo you can only read, or a maintainer who lands it themselves. Once the PR is
-ready, do not end the turn waiting. Watch it: a `Monitor` until-loop on
+ready, do not end the turn waiting. Watch it once (the wait rule above): a `Monitor` until-loop on
 `gh pr view <n> --json state,mergedAt,mergeCommit,reviewDecision,latestReviews`, or
 `ScheduleWakeup` under `/loop`, no more often than the wait rule in `orchestrate`'s
-`references/brief.md` LAND allows ("A wait on a human review"). Give the watch a timeout and stop it
-when the session ends. Wake on a merge, a close, or a new review; `CHANGES_REQUESTED` sends you
+`references/brief.md` LAND allows ("A wait on a human review"). Stop it when the session ends. Wake on a merge, a close, or a new review; `CHANGES_REQUESTED` sends you
 back to the loop above.
 
 A merge detected this way is where §6 continues, not the end: confirm the merge commit, read

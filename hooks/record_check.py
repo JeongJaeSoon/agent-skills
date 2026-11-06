@@ -9,6 +9,8 @@ recorded.
 - PostToolUse (Bash): a `gh pr merge` (not `--auto`/`--disable-auto`), `gh pr create` or `orch land` in the call
   opens an obligation for this session and agent and adds a reminder to the model's context. PostToolUseFailure opens
   one only when the call held more than one command, since the target may have run before a later one failed.
+  After a `gh pr create` the reminder also lists deliver-ticket §5's follow-ups: the Orca card's `in-review` column
+  (in an Orca terminal), the Linear attach (a `linear` tracker) and the ticket's milestone move (any tracker).
 - An obligation closes on a record line: `기록: …`, `기록 못 함: <reason>`, `Recorded: …` or `Not recorded: …` at the
   start of a line with text after it (emphasis marks alone are not text), outside code blocks and quotes. Read from the final reply at Stop, from the body of a
   `worker_done` sent as the only command of its call (closed when the send succeeded, as of the moment it was
@@ -22,7 +24,8 @@ recorded.
 Levels: `warn` (default) reminds the model before a send or a close and writes a `warn` row at Stop, where it is only
 telemetry (a systemMessage reaches the human, not the model); `deny` refuses the call and blocks the Stop once (with
 `stop_hook_active` it passes and the obligation stays open); `ask` shows a dialog on PreToolUse and acts as `warn` at
-Stop; `off` does nothing. The hook is off unless ~/.claude/agent-skills.json has a `tracker` or `notes` object.
+Stop; `off` does nothing. The hook is off unless ~/.claude/agent-skills.json has a `tracker` or `notes` object, except
+that an Orca terminal still gets the `in-review` line after a `gh pr create` (no obligation opens).
 
 It checks that the outcome of recording was reported, never that the record was written: the line is the agent's own
 word, and the lead's reconcile checks it. It reads no tracker, notes store, Orca or GitHub state, so a merge started
@@ -187,12 +190,33 @@ def destinations(cfg):
     return out
 
 
+def pr_opened(cfg):
+    """deliver-ticket §5's follow-ups to `gh pr create`, each its own Bash call so a refusal takes only that act."""
+    out = []
+    if os.environ.get("ORCA_TERMINAL_HANDLE"):
+        out.append("In an Orca card: `orca worktree set --worktree current --workspace-status in-review --json` (the "
+                   "card's board column; Orca links the PR from the branch, so no `--pr`).")
+    tracker = cfg.get("tracker") if isinstance(cfg.get("tracker"), dict) else None
+    if tracker and tracker.get("adapter") == "linear":
+        out.append("A Linear ticket ignores `Closes #n`: `orca linear attach --current --url <pr> --title \"PR\"` when "
+                   "the card links the issue (`linkedItems` in `orca worktree current --json`), else "
+                   "`orca linear attach <ID> --url <pr>`.")
+    if tracker:
+        out.append("Move the ticket as use-tracker \"Milestones\" says: its `PR:` line now, `review` once "
+                   "`gh pr view <n> --json reviewRequests` lists the reviewer you requested.")
+    if not out:
+        return ""
+    return "PR opened: run each of these as its own Bash call, never chained to `gh pr create`. " + " ".join(out)
+
+
 def reminder(cfg, kinds):
-    return (f"record_check: {', '.join(sorted(kinds))} ran. Read {RECORD_MD} and record it now in "
+    text = (f"record_check: {', '.join(sorted(kinds))} ran. Read {RECORD_MD} and record it now in "
             f"{' and '.join(destinations(cfg))}, where this workflow authorizes the write. Then put a record line in "
             f"the report (and in any worker_done body): `기록: <ticket and transition> · <note path>`, "
             f"`기록: 없음 (<why>)`, or `기록 못 함: <reason>` when a store is not connected, the write is not "
             f"authorized, or the command is still running in the background.")
+    opened = pr_opened(cfg) if "create" in kinds else ""
+    return f"{text} {opened}" if opened else text
 
 
 def turn_text_since(path, at):
@@ -318,12 +342,22 @@ def stop(event, cfg, lvl):
 def main():
     event = json.load(sys.stdin)
     cfg = config.load()
-    if not (isinstance(cfg.get("tracker"), dict) or isinstance(cfg.get("notes"), dict)):
-        return
     lvl = config.level(cfg, KEY, "warn")
     if lvl == "off":
         return
     name = event.get("hook_event_name")
+    if not (isinstance(cfg.get("tracker"), dict) or isinstance(cfg.get("notes"), dict)):
+        # Nothing to record, but an Orca card still moves its board column when its PR opens.
+        raw = str((event.get("tool_input") or {}).get("command") or "")
+        cmds = shell.commands(raw)
+        opened = pr_opened(cfg)
+        # As in post_tool: a failed call counts only when it held more than one command, or a `!`.
+        ran = name == "PostToolUse" or (name == "PostToolUseFailure" and (
+            len(cmds) > 1 or NEGATION.search(shell.command_text(raw))))
+        if ran and event.get("tool_name") == "Bash" and opened and any(target(c.words) == "create" for c in cmds):
+            print(json.dumps({"hookSpecificOutput": {"hookEventName": name, "additionalContext":
+                                                     f"record_check: {opened}"}}, ensure_ascii=False))
+        return
     if name in ("PostToolUse", "PostToolUseFailure") and event.get("tool_name") == "Bash":
         out = post_tool(event, cfg, name == "PostToolUseFailure")
     elif name == "PreToolUse" and event.get("tool_name") == "Bash":
