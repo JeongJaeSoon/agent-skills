@@ -251,7 +251,8 @@ Then land it. How depends on where you run:
 - **A standalone card** (no `PROGRAM:` line) in a repo with the land executor on
   (`orchestrate.land_executor`) does not merge: it sends READY to its REPORT line with the head
   sha, the CI run ids whose logs it read and the review verdict with its source, stops watching
-  CI, and the orchestrator lands it (`orchestrate` `references/landing.md`, "Land executor").
+  CI, and the orchestrator lands it through the repo's `<name>-standalone` program, which
+  `orch land --repo` creates when missing (`orchestrate` `references/landing.md`, "Land executor").
 - **Merging it yourself** (a standalone card whose repo has the executor off, or a session the
   user started): merge your own verified PR unless the user set a hold, as
   [references/merge.md](references/merge.md) says (when it is ready, the checks before it, the

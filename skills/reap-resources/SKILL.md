@@ -16,7 +16,7 @@ command you run by hand runs alone (`end-session` §4).
 ## Cards: take stock of every Orca card
 
 "끝난 카드 정리해줘", or `/agent-skills:reap-resources` with it: every Orca card on this host, whatever made it,
-gets one verdict: 삭제, 터미널만 닫기 (open PR), 남김, or 사람 결정. The rule and the traps it covers (a stale
+gets one verdict: 삭제, 터미널만 닫기 (open PR, or a session idle for hours), 남김, or 사람 결정. The rule and the traps it covers (a stale
 `origin/HEAD`, a pre-rebase copy, idle shells holding the card, a screen that says "done"):
 [references/cards.md](references/cards.md), the only place it is written.
 

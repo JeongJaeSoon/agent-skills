@@ -796,21 +796,31 @@ class FakeFleetWorld:
                                       "   2. Yes, and don't ask again for npm publish commands in /work/wt-docs", "   3. No", "",
                                       " Esc to cancel · Tab to amend"]}
         self.automations = [
-            {"id": "auto-janitor", "name": "janitor", "rrule": "17 */3 * * *", "timezone": "UTC", "enabled": True,
+            {"id": "auto-janitor", "key": "janitor", "name": "agent-skills janitor", "rrule": "17 */3 * * *", "timezone": "UTC", "enabled": True,
              "next_run_at": _ago(now, -19 / 60), "last_run_at": _ago(now, 41 / 60),
              "recent": [{"status": s, "trigger": "scheduled", "at": _ago(now, (41 + 180 * i) / 60),
                          "summary": "cleaned 3, kept 1" if i else "cleaned 3 merged worktrees (wt-docs, wt-api, wt-billing) and"
                          " their idle terminals; kept wt-coord because its session still holds the browser lane and has an"
                          " unanswered question in its inbox"}
                         for i, s in enumerate(["completed", "completed", "skipped_precheck", "completed", "completed", "completed"])]},
-            {"id": "auto-sweep", "name": "pr-sweeper", "rrule": "*/30 9-18 * * 1-5", "timezone": "UTC", "enabled": True,
+            {"id": "auto-sweep", "key": "watch-prs", "name": "agent-skills watch-prs", "rrule": "*/30 9-18 * * 1-5", "timezone": "UTC", "enabled": True,
              "next_run_at": _ago(now, -12 / 60), "last_run_at": _ago(now, 18 / 60),
              "recent": [{"status": s, "trigger": "scheduled", "at": _ago(now, (18 + 30 * i) / 60),
                          "summary": "gh: rate limit exceeded" if s == "failed" else "2 PRs nudged"}
                         for i, s in enumerate(["failed", "completed", "completed", "skipped_precheck", "completed", "completed"])]},
-            {"id": "auto-digest", "name": "weekly-digest", "rrule": "0 9 * * 1", "timezone": "UTC", "enabled": False,
+            {"id": "auto-digest", "key": "pstack-upstream", "name": "agent-skills pstack-upstream", "rrule": "0 9 * * 1", "timezone": "UTC", "enabled": False,
              "next_run_at": None, "last_run_at": _ago(now, 72), "recent": [{"status": "completed", "trigger": "scheduled",
                                                                              "at": _ago(now, 72), "summary": "digest posted"}]},
+            {"id": "auto-dash", "key": "orch-dash", "name": "agent-skills orch-dash", "rrule": "*/10 * * * *", "timezone": "UTC",
+             "enabled": True, "next_run_at": _ago(now, -4 / 60), "last_run_at": _ago(now, 6 / 60),
+             "recent": [{"status": "skipped_precheck", "trigger": "scheduled", "at": _ago(now, (6 + 10 * i) / 60),
+                         "summary": "dashboard already up"} for i in range(6)]},
+            {"id": "auto-reap", "key": "reap-hard", "name": "agent-skills reap-hard", "rrule": "*/15 * * * *", "timezone": "UTC",
+             "enabled": True, "next_run_at": _ago(now, -8 / 60), "last_run_at": _ago(now, 7 / 60),
+             "recent": [{"status": "skipped_precheck", "trigger": "scheduled", "at": _ago(now, (7 + 15 * i) / 60),
+                         "summary": "closed 2 · kept 5"} for i in range(6)]},
+            {"id": "auto-other", "key": None, "name": "my own nightly note", "rrule": "0 22 * * *", "timezone": "UTC",
+             "enabled": True, "next_run_at": _ago(now, -5), "last_run_at": _ago(now, 19), "recent": []},
         ]
         # Background watches: two inbox waits and a CI Monitor running, one wait that died, one stopped without a record,
         # and a failed run watch its session already received.
