@@ -104,9 +104,11 @@ CONFIG = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-
 REAP_SCRIPTS = pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts"
 
 DUE_S = 25 * 60
-# Under the hour a patrol verdict protects a card for (reap.patrol_working), so a card stays protected while the
-# patrol job is off.
-FALLBACK_DUE_S = 40 * 60
+# reap-hard's `--fallback` beat. Under the hour a patrol verdict protects a card for (reap.patrol_working), so a card
+# stays protected while the patrol job is off. Below reap-hard's own period (1800 s), or a pass that comes 30 minutes
+# after the last round would find it not yet due and skip: the fallback would then run every second pass. With the job
+# on, whichever of the two comes first runs the round and the other finds it not due.
+FALLBACK_DUE_S = DUE_S
 BUDGET_S = 120
 CANDIDATE_BUDGET_S = 240
 AGENTS_MARGIN_S = 15  # agent_signal.read's 10 s, and the round's own writes after it

@@ -437,8 +437,11 @@ STORES = [
     Store("landout", "S/land-exec.log", {"land.output": CANONICAL}, ("land_exec:log",), ("nobody",),
           rule="each settled request, one line"),
     Store("reaphard", "S/reap-hard.jsonl", {"reap_hard.pass": CANONICAL}, ("reap_hard:log",), ("brief", "page")),
-    Store("reaphardout", "S/reap-hard.log", {"reap_hard.pass": LOG}, ("ext:launchd",), ("nobody",),
-          rule="launchd stdout; the jsonl rows again"),
+    Store("reaphardout", "S/reap-hard.log", {"reap_hard.pass": LOG}, ("ext:launchd", "reap:spawn_hard"), ("nobody",),
+          rule="launchd stdout, and the output of a pass a landed PR started; the jsonl rows again"),
+    Store("inventory", "S/inventory.json", {"reap_hard.inventory": CANONICAL}, ("reap_hard:write_inventory",), ("patrol",),
+          rule="the last real reap-hard pass's judgements, read by patrol's candidate stage for 10 minutes instead of "
+               "scanning again; removed by a pass that could not read a part"),
     Store("reaphardlock", "S/reap-hard.lock", {"reap_hard.pass": LOCK}, ("reap_hard:locked",)),
     Store("periodicjob", "S/jobs/*.json", {"periodic_job.last_run": CANONICAL}, ("orca_job:write", "orca_job:forget"), ("nobody",),
           rule="how the last run of a sync, pressure-watch, reap-hard, orch-dash, patrol or sweep Orca automation ended; setup-pc reads it"),
