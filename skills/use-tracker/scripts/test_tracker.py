@@ -79,6 +79,8 @@ if cmd == "team":
         {"name": "Duplicate", "type": "duplicate", "position": 5}]})
 if cmd in ("label", "comment", "status", "relation"):
     ok({"issue": {"identifier": rest[1]}})
+if cmd == "attach":
+    ok({"attachment": {"url": val("--url"), "title": val("--title")}})
 fail("unknown", "fake orca: unhandled " + " ".join(args))
 '''
 
@@ -216,6 +218,8 @@ class FakeJira:
                     return self._reply(204)
                 if m == "POST" and p.endswith("/comment"):
                     return self._reply(201, {"id": "c1"})
+                if m == "POST" and p.endswith("/remotelink"):
+                    return self._reply(201, {"id": 10000})
                 if p.startswith("/rest/api/3/issue/"):
                     key = p.rsplit("/", 1)[1]
                     if m == "PUT":
@@ -399,10 +403,28 @@ class LinearCli(unittest.TestCase):
         self.assertIn("review_status 'Waiting'", proc.stderr)
         self.assertFalse([c for c in self.env.orca_calls()[before:] if c[1] == "status"])
 
+    def test_attach_pr_link(self):
+        url = "https://github.com/acme/app/pull/1"
+        proc, out = self.env.run("attach", "ENG-10", "--url", url)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(out, {"ok": True, "op": "attach", "id": "ENG-10", "url": url})
+        self.assertEqual(self.env.orca_calls()[-1][:7], ["linear", "attach", "ENG-10", "--url", url, "--title", "PR"])
+        self.env.run("attach", "ENG-10", "--url", url, "--title", "PR #1")
+        self.assertEqual(self.env.orca_calls()[-1][6], "PR #1")
+        before = len(self.env.orca_calls())
+        for bad in ("ftp://example.test/x", "github.com/acme/app/pull/1", "https://:443", "https://[bad",
+                    "https://example.test:99999/x"):
+            proc, _ = self.env.run("attach", "ENG-10", "--url", bad)
+            self.assertEqual(proc.returncode, 1)
+            self.assertIn("http(s)", proc.stderr)
+        self.assertEqual(len(self.env.orca_calls()), before)
+
     def test_writes_refuse_ids_orca_cannot_parse(self):
         proc, _ = self.env.run("label", "9X-5", "--add", "bug")
         self.assertEqual(proc.returncode, 1)
         self.assertIn("MCP", proc.stderr)
+        proc, _ = self.env.run("attach", "9X-5", "--url", "https://github.com/acme/app/pull/1")
+        self.assertEqual(proc.returncode, 1)
         self.assertEqual(self.env.orca_calls(), [])
 
     def test_create_relation_failure_still_reports_new_id(self):
@@ -498,6 +520,14 @@ class JiraCli(unittest.TestCase):
         proc, out = self.env.run("comment", "ABC-2", "--body-file", body)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(self.jira.requests[-1][2]["body"]["type"], "doc")
+
+        url = "https://github.com/acme/app/pull/1"
+        proc, out = self.env.run("attach", "ABC-2", "--url", url)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(out, {"ok": True, "op": "attach", "id": "ABC-2", "url": url})
+        # globalId makes a re-run update the same link instead of adding a second one.
+        self.assertEqual(self.jira.requests[-1], ("POST", "/rest/api/3/issue/ABC-2/remotelink",
+                                                  {"globalId": url, "object": {"url": url, "title": "PR"}}))
 
         for target, tid in (("started", "11"), ("completed", "31"), ("canceled", "21")):
             proc, out = self.env.run("transition", "ABC-2", "--to", target)
@@ -601,9 +631,10 @@ class ConfigAndFixtures(unittest.TestCase):
         self.assertEqual(out["id"], "F-2")
         proc, out = self.env.run("children", "--project", "any", TRACKER_FIXTURES=fixtures)
         self.assertEqual([i["id"] for i in out], ["F-1", "F-2", "F-3"])
-        proc, _ = self.env.run("label", "F-2", "--add", "x", TRACKER_FIXTURES=fixtures)
-        self.assertEqual(proc.returncode, 1)
-        self.assertIn("write operations are disabled", proc.stderr)
+        for write in (("label", "F-2", "--add", "x"), ("attach", "F-2", "--url", "https://example.test/pr/1")):
+            proc, _ = self.env.run(*write, TRACKER_FIXTURES=fixtures)
+            self.assertEqual(proc.returncode, 1)
+            self.assertIn("write operations are disabled", proc.stderr)
         self.assertEqual(self.env.orca_calls(), [])
 
 
