@@ -337,6 +337,14 @@ class EmitTest(Base):
         r, _ = self.emit_spec({"replace": [{"section": "allow", "old": existing, "new": near}], "refusal_category": "user-request"})
         self.assertNotIn("near-duplicate", r.stdout)
 
+    def test_unrelated_rules_in_another_script_are_no_duplicates(self):
+        self.settings.write_text(json.dumps({"autoMode": {"allow": ["$defaults", "로컬 워커를 종료한다. Not covered: 원격 호스트."]}}))
+        r, _ = self.emit_spec({"add": {"allow": ["풀 리퀘스트를 병합한다. Not covered: 보호 설정 변경."]}, "refusal_category": "user-request"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("near-duplicate", r.stdout)
+        r, _ = self.emit_spec({"add": {"allow": ["Merging pull requests. Not covered: a.", ]}, "refusal_category": "user-request"})
+        self.assertNotIn("near-duplicate", r.stdout)
+
     def test_apply_does_not_lint(self):
         spec = {"add": {"allow": ["No part here."]}}
         self.assertEqual(self.apply(spec).returncode, 0)

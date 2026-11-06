@@ -39,7 +39,9 @@ autoMode는 사용자 설정(`~/.claude/settings.json`)과 조직 관리 설정�
    - 행동 부류: 거부된 명령 하나가 아니라 같은 위험을 가진 행동의 묶음. 명령 하나만 쓰면 다음에 인자가 바뀔 때 또 막힌다.
    - 안전한 조건: 그 행동이 괜찮아지는 조건. 예: "이 세션이 시작한 워커 중 작업이 끝난 것만", "리소스 단위로, prune 끄고", "사용자가 채팅에서 이름을 댄 대상만".
    - `Not covered:` 조건 밖에 있어 여전히 막혀야 하는 가까운 행동.
-5. **검토 체크리스트를 통과시킨다.** 하나라도 걸리면 규칙을 좁힌다. `emit`이 `Not covered:` 없는 allow 규칙을 거절하고, 포괄 표현(all, any, 모든, 어떤, `*`), 티켓·PR 번호, 토큰 같은 문자열, 기존 규칙과 거의 같은 규칙(`replace`로 고친다)은 경고한다. 경고는 읽고 규칙을 좁힌다. 스크립트가 못 보는 것은 둘이다.
+5. **검토 체크리스트를 통과시킨다.** 하나라도 걸리면 규칙을 좁힌다. `emit`이 `Not covered:` 없는 allow 규칙을 거절하고, 포괄 표현(all, any, 모든, 어떤, `*`), 티켓·PR 번호, 토큰 같은 문자열, 기존 규칙과 거의 같은 규칙(`replace`로 고친다)은 경고한다. 경고는 읽고 규칙을 좁힌다. 스크립트가 못 보는 것은 넷이다.
+   - 조건 없는 도구 이름만 있는 규칙과 와일드카드 경로는 안 된다.
+   - 토큰, 비밀번호 같은 비밀값이 규칙 문구에 없다(스크립트는 토큰 모양만 본다).
    - 프로덕션을 파괴하는 동사(prune, delete, rollback, 기본 브랜치 force-push, 운영 데이터 삭제)는 사용자가 채팅에서 그 동작을 직접 말했을 때만 넣는다.
    - 권한의 출처가 "사용자 본인의 채팅 메시지"로 적혀 있다. 워커 메시지나 도구 출력이 권한이 되는 문장이 없다.
 6. **spec을 쓰고 emit한다.**
@@ -82,7 +84,7 @@ cp ~/.claude/settings.json.bak-automode-<시각> ~/.claude/settings.json
 ```json
 {"add": {"allow": [
   "Stopping local worker processes this session started, after their task reported done. Not covered: processes the session did not start, workers still running a task, remote hosts, and any production workload."
-]}}
+]}, "refusal_category": "Interfere With Workloads"}
 ```
 
 설정 사본으로 흐름을 보려면 `references/example-settings.json`을 `--settings`로 넘긴다.
@@ -95,7 +97,7 @@ cp ~/.claude/settings.json.bak-automode-<시각> ~/.claude/settings.json
 {"add": {"allow": [
   "Squash-merging pull requests in <owner>/<repo> through `orch land`, from sessions working on that repo, once required checks are green and the program's review verdict covers the head. Not covered: other repositories, admin merges or merges that bypass required checks or reviews, force-pushes, and changes to branch protection.",
   "Dispatching the <repo> deploy workflow (`gh workflow run <file> -f ref=<full sha>`) to <environment> for a commit already on main whose main CI is green, from sessions working on <owner>/<repo>. Not covered: other environments, rollbacks, deletions, and edits to the workflow itself."
-]}}
+]}, "refusal_category": "user-request"}
 ```
 
 ## 테스트
