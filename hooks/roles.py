@@ -47,6 +47,14 @@ MATRIX = {
     "agent_forbidden": ({"main", "subagent"}, {"orchestrator", "lead", "worker"}),
     "decision_relay": ({"main"}, {"orchestrator", "lead"}),
     "deliver_load": ({"main"}, {"worker"}),
+    # turn_check.py (design M3): the end-of-turn checks and who each one reaches
+    "turn_wait": ({"main"}, {"orchestrator", "lead"}),
+    "turn_decision": ({"main"}, {"orchestrator", "lead"}),
+    "turn_brief": ({"main"}, {"orchestrator", "lead"}),
+    "turn_close": ({"main"}, {"worker"}),
+    "turn_review": ({"main"}, {"worker"}),
+    "turn_review_sub": ({"subagent"}, set(ROLES)),
+    "turn_main": ({"main"}, set(ROLES)),
 }
 
 
