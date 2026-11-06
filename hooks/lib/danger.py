@@ -69,6 +69,9 @@ PUSH_LONG = ["--all", "--atomic", "--branches", "--delete", "--dry-run", "--exec
              "--force-if-includes", "--force-with-lease", "--mirror", "--no-dry-run", "--no-verify", "--porcelain",
              "--progress", "--prune", "--push-option", "--quiet", "--receive-pack", "--recurse-submodules", "--repo",
              "--set-upstream", "--signed", "--tags", "--thin", "--verbose"]
+# Options whose next word is their value; a method option cannot be that word. (-X and --request are not here.)
+OTHER_VALUED = (CURL_VALUED - {"-X", "--request"}) | {"-f", "--field", "--raw-field", "--input", "-q", "--jq", "-t",
+                                                      "--template", "--hostname", "--cache", "-p", "--preview"}
 PUSH_VALUED = {"-o", "--push-option", "--repo", "--receive-pack", "--exec"}
 
 
@@ -287,7 +290,7 @@ def check_command(c, masked, cfg, cwd, session, here=None):
             out.append(("guard.deny.rm_outside", "A recursive `rm` is limited to this checkout and the temporary "
                                                  "folders. Move anything else to the trash (`mv <path> ~/.Trash/`) "
                                                  "or ask the human."))
-    if name == "trash-empty" or name == "osascript" and re.search(r"\bFinder\b.*?(?:\bto\s+empty\b|\bempty\s+(?:the\s+)?trash\b)", " ".join(w), re.I | re.S):
+    if name == "trash-empty" or name == "osascript" and finder_empties(w):
         out.append(("guard.deny.trash_empty", TRASH_EMPTY))
     if name == "orch" and w[1:2] == ["exempt"]:
         out.append(("guard.deny.owner_only", f"`orch {' '.join(w[1:3])}` is the human's to run, as a `!` line in their "
@@ -311,6 +314,14 @@ def check_command(c, masked, cfg, cwd, session, here=None):
         out.append(("guard.warn.tailscale", f"`tailscale {w[1]}` from a worker changes what this machine publishes "
                                             "for every session. Leave it to the human or the lead."))
     return out
+
+
+def finder_empties(w):
+    """Whether an osascript command tells Finder to empty the trash: `to empty`, `empty trash`, or an `empty` line
+    (several -e options are lines of one script)."""
+    script = "\n".join(w[i + 1] for i, x in enumerate(w[:-1]) if x == "-e") or " ".join(w)
+    return re.search(r"\bFinder\b.*?(?:\bto\s+empty\b|\bempty\s+(?:the\s+)?trash\b|^\s*empty\s*$)", script,
+                     re.I | re.S | re.M) is not None
 
 
 TRASH_EMPTY = ("This empties a trash folder, where the human keeps what they can still undo. Leave it; move your "
@@ -386,9 +397,13 @@ def api_call(w, here=None):
 def last_method(w, long_opt):
     """The method of the last `-X`, `long_opt` or `long_opt=` in w, which wins as in curl and gh. A cluster such as
     `-sX DELETE` or `-sXDELETE` counts."""
-    method = None
+    method, skip = None, False
     for i, x in enumerate(w):
-        if x == long_opt and i + 1 < len(w):
+        if skip:  # the value of another option, `-H -XGET` for one
+            skip = False
+        elif x in OTHER_VALUED:
+            skip = True
+        elif x == long_opt and i + 1 < len(w):
             method = w[i + 1]
         elif x.startswith(long_opt + "="):
             method = x.split("=", 1)[1]
@@ -405,6 +420,7 @@ def curl_calls(w):
         if x != "--next" and not x.startswith("-:"):  # `-:` and clusters such as `-:XGET` start the next transfer
             part.append(x)
             continue
+        carry = ["-" + x[2:]] if x.startswith("-:") and len(x) > 2 else []  # `-:XDELETE`: -XDELETE is the next's
         method = last_method(part, "--request")
         data = any(re.match(rf"-{NO_VALUE}*[dFT]", y) or y.startswith(("--data", "--form", "--json", "--upload-file"))
                    for y in part)
@@ -417,7 +433,7 @@ def curl_calls(w):
             if m := re.match(r"(?:--url=)?https?://api\.github\.com(?::\d+)?(/[^?#]*)?", y, re.I):
                 urls.append(m.group(1) or "/")
         out.append(((method or ("POST" if data and not get else "GET")).upper(), urls, " ".join(part)))
-        part = []
+        part = carry
     return out
 
 
@@ -500,23 +516,25 @@ def force_push_default(c, here):
             i += x in PUSH_VALUED
         else:
             pos.append(x)
+    def short(o):  # the flags of a `-4fn` cluster: a `-o` ends it, the rest is that option's value
+        return set(o[1:].split("o", 1)[0]) if not o.startswith("--") else set()
     dry = False  # the last of --dry-run / --no-dry-run wins
     for o in opts:
         if o == "--no-dry-run":
             dry = False
-        elif o == "--dry-run" or re.fullmatch(r"-[a-zA-Z]*n[a-zA-Z]*", o):
+        elif o == "--dry-run" or "n" in short(o):
             dry = True
     if dry:
         return False
-    forced = any(o == "--force" or o.startswith("--force-with-lease") or re.fullmatch(r"-[a-zA-Z]*f[a-zA-Z]*", o)
-                 for o in opts)
+    forced = any(o == "--force" or o.startswith("--force-with-lease") or "f" in short(o) for o in opts)
     # --mirror overwrites every remote ref without --force.
     if "--mirror" in opts or forced and ("--all" in opts or "--branches" in opts):
         return True
     named_repo = any(o == "--repo" or o.startswith("--repo=") for o in opts)  # then every positional is a refspec
     remote = (repo or "origin") if named_repo else pos[0] if pos else "origin"
     names = default_names(where, remote)
-    for spec in (pos if named_repo else pos[1:]) or ["HEAD"]:
+    # --tags alone sends tags only, not the checked-out branch.
+    for spec in (pos if named_repo else pos[1:]) or ([] if "--tags" in opts else ["HEAD"]):
         src, _, dst = spec.lstrip("+").partition(":")
         dst = dst if ":" in spec else src
         if spec.lstrip("+") == ":":  # the matching refspec: every branch the remote has
@@ -604,10 +622,29 @@ def rm_outside(c, here, cwd):
                     trash.append(x)
             elif recursive and not any(p.startswith(r + os.sep) or p == r and c.name == "find" for r in roots):
                 outside.append(x)
+            elif walks_links and link_escapes(p, roots):
+                outside.append(x)
     for t, o in execs:
         trash += t
         outside += o
     return trash, outside
+
+
+def link_escapes(root, roots, limit=20000):
+    """Whether a symlink under root points outside roots: `find -L` walks through it. Looks at the first `limit`
+    entries."""
+    seen = 0
+    for dirpath, dirs, files in os.walk(root):
+        for name in dirs + files:
+            full = os.path.join(dirpath, name)
+            if os.path.islink(full):
+                target = os.path.realpath(full)
+                if not any(target == r or target.startswith(r + os.sep) for r in roots):
+                    return True
+        seen += len(dirs) + len(files)
+        if seen > limit:
+            break
+    return False
 
 
 def exec_rms(w):
