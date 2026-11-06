@@ -81,6 +81,12 @@ for repo, branch in ((ON_MAIN, "main"), (ON_FEAT, "feat/x"), (ON_DEV, "dev")):
     git("init", "-q", "-b", branch, cwd=repo)
 git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop", cwd=ON_DEV)
 git("checkout", "-q", "-b", "develop", cwd=ON_DEV)
+git("symbolic-ref", "refs/remotes/upstream/HEAD", "refs/remotes/upstream/develop", cwd=ON_DEV)
+# A checkout holding a symlink to a folder outside it: `rm -rf` removes the link, not the folder.
+LINKED = TMP / "linked"
+LINKED.mkdir()
+git("init", "-q", cwd=LINKED)
+(LINKED / "cache-link").symlink_to("/usr")
 # A stand-in `orca` that says the current worktree is the main one.
 (BIN / "orca").write_text("#!/bin/sh\necho '{\"result\": {\"worktree\": {\"isMainWorktree\": true}}}'\n")
 (BIN / "orca").chmod(0o755)
@@ -102,6 +108,8 @@ OUTSIDE_TMP_RM = [] if str(TMP).startswith(("/tmp/", "/private/tmp/")) else [
 (HOME / ".Trash" / "a.txt").write_text("x")
 MUTATION = TMP / "mutation.json"
 MUTATION.write_text('{"query": "mutation { deleteBranchProtectionRule(input: {}) { clientMutationId } }"}')
+GQL = TMP / "mutation.graphql"
+GQL.write_text("mutation { deleteBranchProtectionRule(input: {}) { clientMutationId } }")
 
 # (key, level, [(command, cwd)] it is about, [command] that only looks like one)
 CASES = [
@@ -221,7 +229,8 @@ CASES = [
       "gh api -X PATCH repos/a/b/git/refs/heads/main -F force=true",
       "gh api --method PATCH repos/a/b/git/refs/heads/master -f force=true -f sha=abc",
       "git push --mirror origin", "git push --repo=origin --force main", "git push --repo origin -f main",
-      "git push origin '+refs/heads/*:refs/heads/*'", "git push -f origin 'refs/heads/*:refs/heads/*'"],
+      "git push origin '+refs/heads/*:refs/heads/*'", "git push -f origin 'refs/heads/*:refs/heads/*'",
+      "git push -f origin :", "git push origin +:", ("git push --force upstream develop", ON_DEV)],
      ["git push origin main", "git push --force-with-lease origin feat/x", "git push --force-with-lease=feat:abc origin feat",
       "git push origin +feat/x", "git push -f origin feat:main-fix", "git push origin :old-branch",
       "git push --force origin refs/heads/maintenance", "git push -o main -f origin feat", "git -C /x push -f origin feat",
@@ -231,7 +240,7 @@ CASES = [
       "gh api repos/a/b/git/refs/heads/main", "gh api -X PATCH repos/a/b/git/refs/heads/feat -F force=true",
       "gh api -X PATCH repos/a/b/git/refs/heads/main -f sha=abc", "git push --dry-run --force origin main",
       "git push -n -f origin main", "git push --force-if-includes origin main", "git push --repo=origin -f feat",
-      "git push --mirror --dry-run origin"]),
+      "git push --mirror --dry-run origin", ("git push --force upstream develop", ON_FEAT)]),
     ("guard.deny.protection_write", "deny",
      ["gh api -X PUT repos/a/b/branches/main/protection -f enforce_admins=true",
       "gh api --method=DELETE repos/a/b/branches/main/protection", "gh api repos/a/b/rulesets -f name=x",
@@ -245,7 +254,11 @@ CASES = [
       f"gh api graphql --input {MUTATION}",
       'curl -X DELETE -H "Authorization: Bearer x" https://api.github.com/repos/acme/app/branches/main/protection',
       "curl -XPUT https://api.github.com/repos/a/b/rulesets/1 -d @r.json",
-      "curl --request POST -d x https://api.github.com/repos/a/b/rulesets"],
+      "curl --request POST -d x https://api.github.com/repos/a/b/rulesets",
+      "gh api -X DELETE 'repos/acme/app/branches/main/protection?x=y'", f"gh api graphql -F query=@{GQL}",
+      "curl -X DELETE --url=https://api.github.com/repos/acme/app/rulesets/1",
+      "curl -X DELETE https://api.github.com/ https://api.github.com/repos/acme/app/rulesets/1",
+      """curl -X POST https://api.github.com/graphql -d '{"query":"mutation { deleteBranchProtectionRule(input: {}) { x } }"}'"""],
      ["gh api repos/a/b/branches/main/protection", "gh api repos/a/b/rulesets", "gh api -X GET repos/a/b/rulesets/12",
       "gh api repos/a/b/rules/branches/main", "gh api repos/a/b/branches/main/protection --jq .enforce_admins",
       "gh api graphql -f query='query { viewer { login } }'", "gh api -X POST repos/a/b/issues -f title=x",
@@ -259,14 +272,15 @@ CASES = [
       "rm -rf /tmp/../usr/x", "ls && rm -rf /usr/x", "rm -rf /usr/*", ("cd /usr && rm -rf local", REPOX)] + OUTSIDE_TMP_RM,
      ["rm -rf /tmp/x", "rm -rf /private/tmp/x", f"rm -rf {TMPROOT}/job",
       ("rm -rf build", REPOX), ("rm -rf build dist", REPOX), ("rm -rf node_modules/.cache", REPOX),
-      ("cd build && rm -rf out", REPOX), ("rm -rf ./dist", REPOX), (f"rm -rf {REPOX}/build", REPOX),
+      ("cd build && rm -rf out", REPOX), ("rm -rf cache-link", LINKED), ("rm -rf ./dist", REPOX), (f"rm -rf {REPOX}/build", REPOX),
       "rm /usr/x/file.txt", "rm -f /usr/local/x.log", "echo rm -rf /usr/x", "git rm -r --cached x",
       'rm -rf "${DIR:?}/build"', "rm -ri", "rmdir /usr/x"]),
     ("guard.deny.trash_empty", "deny",
      ["rm -rf ~/.Trash/*", "rm -rf ~/.Trash", "rm -f ~/.Trash/*", "rm -rf $HOME/.Trash/old", "sudo rm -rf ~/.Trash/*",
       "rm -r ~/.Trash/a.txt", "rm -f ~/.Tra[s]h/*", "rm -rf ~/.local/share/Trash/files", "rm -rf /Volumes/Disk/.Trashes/501",
       "osascript -e 'tell application \"Finder\" to empty trash'",
-      "osascript -e 'tell application \"Finder\" to empty the trash'", "trash-empty"],
+      "osascript -e 'tell application \"Finder\" to empty the trash'", "trash-empty",
+      "osascript -e 'tell application \"Finder\" to empty'"],
      ["ls ~/.Trash", "echo rm -rf ~/.Trash", "mv x ~/.Trash/", "rm ~/.Trash/a.txt", "trash-list", "echo trash-empty",
       "osascript -e 'tell application \"Finder\" to get name'"]),
     ("guard.warn.rm_expansion", "warn", ["rm -rf $DIR/build", "rm *.log", "rm -f /tmp/x/*"],

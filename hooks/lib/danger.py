@@ -77,8 +77,16 @@ def user_files():
     return {os.path.realpath(f) for f in files}
 
 
-def expand(word, cwd):
-    """A path word as bash would mostly expand it: `~`, $HOME and $CLAUDE_CONFIG_DIR, relative to cwd."""
+def keep_name(path):
+    """path with its folder resolved and its last name kept as written: rm removes a symlink, not its target."""
+    if path.endswith("/") or os.path.basename(path) in ("", ".", ".."):
+        return os.path.realpath(path)
+    return os.path.join(os.path.realpath(os.path.dirname(path)), os.path.basename(path))
+
+
+def expand(word, cwd, follow=True):
+    """A path word as bash would mostly expand it: `~`, $HOME and $CLAUDE_CONFIG_DIR, relative to cwd. With
+    follow=False a symlink named last is not resolved."""
     home = str(pathlib.Path.home())
     for var in ("HOME", "CLAUDE_CONFIG_DIR", "XDG_CONFIG_HOME", "AGENT_SKILLS_CONFIG", "AGENT_SKILLS_STATE"):
         value = os.environ.get(var) or (home if var == "HOME" else "")
@@ -86,8 +94,10 @@ def expand(word, cwd):
             word = word.replace("${" + var + "}", value).replace("$" + var, value)
     word = os.path.expanduser(word)
     if cwd is UNKNOWN_DIR:  # after a `cd` this reader cannot follow, only an absolute path is known
-        return os.path.realpath(word) if os.path.isabs(word) else ""
-    return os.path.realpath(os.path.join(cwd or ".", word))
+        word = word if os.path.isabs(word) else ""
+    elif word:
+        word = os.path.join(cwd or ".", word)
+    return (os.path.realpath(word) if follow else keep_name(word)) if word else ""
 
 
 def after_cd(c, here):
@@ -266,7 +276,7 @@ def check_command(c, masked, cfg, cwd, session, here=None):
             out.append(("guard.deny.rm_outside", "A recursive `rm` is limited to this checkout and the temporary "
                                                  "folders. Move anything else to the trash (`mv <path> ~/.Trash/`) "
                                                  "or ask the human."))
-    if name == "trash-empty" or name == "osascript" and re.search(r"empty\s+(the\s+)?trash", " ".join(w), re.I):
+    if name == "trash-empty" or name == "osascript" and re.search(r"\bFinder\b.*\bempty\b", " ".join(w), re.I | re.S):
         out.append(("guard.deny.trash_empty", TRASH_EMPTY))
     if name == "orch" and w[1:2] == ["exempt"]:
         out.append(("guard.deny.owner_only", f"`orch {' '.join(w[1:3])}` is the human's to run, as a `!` line in their "
@@ -350,9 +360,9 @@ def api_call(w):
     fields = [w[i + 1] for i, x in enumerate(w[:-1]) if x in ("-f", "-F", "--field", "--raw-field")]
     fields += [x.split("=", 1)[1] for x in w if x.startswith(("--field=", "--raw-field="))]
     fields += [x[2:] for x in w if x[:2] in ("-f", "-F") and len(x) > 2]  # `-fquery=…`
-    # The body file's text counts as a field: a GraphQL mutation can arrive that way.
+    # A body file's text counts as a field: a GraphQL mutation can arrive that way (`--input f`, `-F query=@f`).
     bodies = [w[i + 1] for i, x in enumerate(w[:-1]) if x == "--input"] + [x[8:] for x in w if x.startswith("--input=")]
-    for body in bodies:
+    for body in bodies + [f.split("=@", 1)[1] for f in fields if "=@" in f and not f.endswith("=@-")]:
         try:
             with open(body, encoding="utf-8", errors="replace") as f:
                 fields.append(f.read(65536))
@@ -365,31 +375,35 @@ def api_call(w):
 
 
 def curl_call(w):
-    """(METHOD, path) of a curl command to api.github.com; path is None for any other URL."""
+    """(METHOD, [path]) of a curl command: the path of each api.github.com URL it names, `--url=` ones too."""
     method = next((w[i + 1] for i, x in enumerate(w[:-1]) if x in ("-X", "--request")), None)
     method = next((x[2:] for x in w if re.fullmatch(r"-X\w+", x)), method)
     method = next((x.split("=", 1)[1] for x in w if x.startswith("--request=")), method)
     data = any(x[:2] in ("-d", "-F", "-T") or x.startswith(("--data", "--form", "--json", "--upload-file"))
                for x in w[1:])
-    path = next((m.group(1) or "/" for x in w[1:] if (m := re.match(r"https?://api\.github\.com(/[^?#]*)?", x))), None)
-    return (method or ("POST" if data else "GET")).upper(), path
+    urls = [m.group(1) or "/" for x in w[1:] if (m := re.search(r"https?://api\.github\.com(/[^?#]*)?", x))]
+    return (method or ("POST" if data else "GET")).upper(), urls
 
 
 def protection_write(c):
     """A `gh api` or curl call that writes branch protection or a ruleset; GETs read them and pass."""
     w = c.words
 
+    mutation = r"mutation[^{]*\{.*(create|update|delete)\w*(ProtectionRule|Ruleset)"
+
     def writes(method, endpoint):
+        endpoint = endpoint.split("?", 1)[0]
         return method != "GET" and re.search(r"/branches/.+/protection(/|$)|(^|/)rulesets(/|$)", endpoint) is not None
     if c.name == "curl":
-        method, path = curl_call(w)
-        return path is not None and writes(method, path)
+        method, paths = curl_call(w)
+        body = " ".join(w[1:])
+        return any(writes(method, p) for p in paths) or (any(p.strip("/") == "graphql" for p in paths)
+                                                         and re.search(mutation, body, re.S) is not None)
     if c.name != "gh" or w[1:2] != ["api"]:
         return False
     method, endpoint, fields = api_call(w)
     if endpoint.strip("/") == "graphql":
-        return any(re.search(r"mutation[^{]*\{.*(create|update|delete)\w*(ProtectionRule|Ruleset)", f, re.S)
-                   for f in fields)
+        return any(re.search(mutation, f, re.S) for f in fields)
     return writes(method, endpoint)
 
 
@@ -435,12 +449,15 @@ def force_push_default(c, here):
                  for o in opts)
     if "--mirror" in opts or forced and "--all" in opts:  # --mirror overwrites every remote ref on its own
         return True
-    head = git_out(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], where)
-    names = {"main", "master"} | ({head.split("/", 1)[1]} if "/" in head else set())
     named_repo = any(o == "--repo" or o.startswith("--repo=") for o in opts)  # then every positional is a refspec
+    remote = "origin" if named_repo or not pos else pos[0]
+    head = git_out(["symbolic-ref", "--short", f"refs/remotes/{remote}/HEAD"], where)
+    names = {"main", "master"} | ({head.split("/", 1)[1]} if "/" in head else set())
     for spec in (pos if named_repo else pos[1:]) or ["HEAD"]:
         src, _, dst = spec.lstrip("+").partition(":")
         dst = dst if ":" in spec else src
+        if spec.lstrip("+") == ":":  # the matching refspec: every branch the remote has
+            dst = "*"
         if dst == "HEAD":
             dst = git_out(["symbolic-ref", "--short", "HEAD"], where)
         # A pattern such as `refs/heads/*` reaches the default branch too.
@@ -483,12 +500,12 @@ def rm_outside(w, here, cwd):
         roots.add(os.path.realpath(top))
     trash, outside = [], []
     for x in operands:
-        path = expand(x, here)
+        path = expand(x, here, follow=False)
         if not path or "$" in path or "`" in path:
             continue
         globbed = re.search(r"[*?\[]", path) is not None
         # bash expands a glob before rm sees it; `~/.Tra[s]h/*` is the trash.
-        matches = [os.path.realpath(m) for m in glob.glob(path)] if globbed else []
+        matches = [keep_name(m) for m in glob.glob(path)] if globbed else []
         for p in matches or [path]:
             if in_trash(p):
                 if recursive or globbed or p in trash_dirs():
