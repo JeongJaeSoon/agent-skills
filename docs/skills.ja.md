@@ -1,4 +1,4 @@
-<!-- translated-from: 258a0b0632b025c7b2d53f51234f431a0cc13030 -->
+<!-- translated-from: 17cd7875204007d804bfc752f9b7338486cfc691 -->
 # スキルカタログ
 
 `agent-skills` プラグインに入っているスキル40個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック16個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
@@ -463,7 +463,7 @@ PR を受け持つスキルとマージする主体:
   - 主な機能3〜5個の機能マップも一緒に作ります。
   - 自分で最後まで一度回して証明します。
   - `deliver-ticket` と `orchestrate` は、範囲内で再利用する検証が役立つ場合に呼び出せます。同じ受け入れ基準を実証する直接チェックも有効です。upstream はユーザー呼び出し専用で、この fork はモデルからも呼び出せます。
-- **同梱:** `references/feature-map-example/`（サンプルアプリの機能マップ）。
+- **同梱:** `references/feature-map-example/`（サンプルアプリの機能マップ）、`scripts/verify_skill_lint.py`（生成したスキルをファイルだけ読んで点検する。frontmatter とセクション、状態ファイル名、共有の `latest` リンク、cleanup の必須引数、パターン kill、helper の実行権限と記載、機能マップの索引。`maintain-verification-skill` も同じスクリプトを使う）。
 
 ### maintain-verification-skill
 - **内容:**
