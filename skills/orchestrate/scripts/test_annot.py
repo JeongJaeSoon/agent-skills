@@ -218,6 +218,7 @@ board.set_row("gone", repo="acme/app", title="docs work")
 assert "gone" not in [r for r, _, _ in board.annot_plan()[1]] and all(r != "gone" for r, _ in board.annot_plan()[0].values())
 # a 🙋 row with no owner named is blocked on the owner
 assert board.annot_fields({"status": "owner", "next": "승인"}, {}) == {"owner": "오너", "next": "승인"}
+assert board.annot_fields({"status": "owner", "next": ""}, {}) == {"owner": "오너", "next": "오너 확인"}, "the block is not lost with its next"
 assert board.annot_fields({"status": "moving", "owner": "Alice", "next": "승인"}, {}) == {}
 
 print("test_annot: ok")

@@ -324,8 +324,9 @@ def annot_fields(r, rows, me=None):
         out["phase"] = parent["title"]
     out.update({k: r[k] for k in ("progress", "after") if r.get(k)})
     owner, nxt = (r.get("owner") or "").strip(), (r.get("next") or "").strip()
-    if nxt and (r.get("status") == "owner" or owner and rowstate.is_owner(owner, me)):
-        out.update(owner=owner if owner and rowstate.is_owner(owner, me) else "오너", next=nxt)  # 🙋 with no owner named is the owner's
+    if r.get("status") == "owner" or nxt and owner and rowstate.is_owner(owner, me):
+        # 🙋 with no owner named is the owner's; with no next either, the pair still has to say what is asked of them
+        out.update(owner=owner if owner and rowstate.is_owner(owner, me) else "오너", next=nxt or "오너 확인")
     elif nxt and rowstate.POST_MERGE.search(nxt):
         out["next"] = nxt
     return out
