@@ -156,13 +156,14 @@ def page(rows, days=1, now=None, limit=LIMIT, inbox_since=None):
         by_key.setdefault(key(r.get("text")), []).append(r)
     out = list(logged)
     recent = [dict(r) for r in rows if (r.get("ts") or "9") >= fleet.iso(since)]
-    messages = [r for r in recent if r.get("message")]
+    def from_orca(r):  # a message, or a Run Task's spec: Orca's own record
+        return bool(r.get("message") or r.get("source") == "orca")
     unrecorded = 0
-    for r in messages + [r for r in recent if not r.get("message")]:
+    for r in [r for r in recent if from_orca(r)] + [r for r in recent if not from_orca(r)]:
         t = fleet.parse(r.get("ts"))
         twin = next((x for x in by_key.get(key(r.get("text")), []) if t and fleet.parse(x.get("ts"))
                      and abs(fleet.parse(x["ts"]) - t) <= SAME_SEND and same_to(x.get("to"), r.get("to"))
-                     and not (x.get("message") and r.get("message"))), None)
+                     and not (from_orca(x) and from_orca(r))), None)
         if twin:
             twin["also"] = [*twin.get("also", []), r["source"]]
             twin.setdefault("claude_session", r.get("claude_session"))
@@ -173,7 +174,7 @@ def page(rows, days=1, now=None, limit=LIMIT, inbox_since=None):
             unrecorded += 1  # the sender skipped `orch sent add`; a transcript is a witness, not a record
         else:
             out.append(r)
-            if r.get("message"):
+            if from_orca(r):
                 by_key.setdefault(key(r.get("text")), []).append(r)
     out.sort(key=lambda r: r.get("ts") or "", reverse=True)
     shown = [{**r, "text": fleet.mask(r.get("text"), TEXT_MAX),

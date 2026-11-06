@@ -28,27 +28,39 @@ queue(q(1, "waiting"), q(2, "retrying"), q(3, "done"), q(4, "gave_up", ended=T),
 mem = {}
 items = fleet.pressure_items({}, mem)
 by_key = {i["key"]: i for i in items}
-assert sorted(by_key) == ["ext:pressure:queue", "ext:pressure:queue:q-4", "ext:pressure:queue:q-5"], sorted(by_key)
-assert by_key["ext:pressure:queue"]["title"].startswith("기계 대기 2건"), by_key["ext:pressure:queue"]["title"]
+wait_key = next(k for k in by_key if k.startswith(fleet.PRESSURE_WAIT_PREFIX))
+assert sorted(by_key) == sorted([wait_key, "ext:pressure:queue:q-4", "ext:pressure:queue:q-5"]), sorted(by_key)
+assert by_key[wait_key]["title"].startswith("기계 대기 2건"), by_key[wait_key]["title"]
 assert "포기" in by_key["ext:pressure:queue:q-4"]["title"] and "재시도 실패: Exit code 1" in by_key["ext:pressure:queue:q-5"]["title"]
 assert all(i["type"] == "pc_pressure" and i["command"].endswith("pressure.py queue") for i in items)
 assert not (D / "inbox-external.jsonl").exists(), "reading the queue writes nothing"
-assert mem["pressure_shown"] == ["q-1", "q-2"]
+assert list(mem["pressure_sets"].values()) == [["q-1", "q-2"]]
 
-# --- suppression is by queue id. A closure of one entry lowers the count; dismissing the one item dismisses the entries the
-# page last drew in it, so an entry that arrives later shows again ("기계 대기 2건": one closed, one open, a new one).
+# --- suppression is by queue id. A closure of one entry lowers the count; dismissing the one item dismisses exactly the
+# entries it counted, so an entry that arrives later shows ("기계 대기 2건": one closed, one open, a new one).
 items = fleet.pressure_items({"pressure:queue:q-1": {"state": "done", "ts": fleet.iso(NOW)}}, {})
-assert next(i for i in items if i["key"] == "ext:pressure:queue")["title"].startswith("기계 대기 1건")
-mem = {"dismissed": {"ext:pressure:queue": "2026-11-06T11:00:00Z"}, "pressure_shown": ["q-1", "q-2"]}
+assert next(i for i in items if i["key"].startswith(fleet.PRESSURE_WAIT_PREFIX))["title"].startswith("기계 대기 1건")
+at = "2026-11-06T11:00:00Z"
+mem["dismissed"] = {wait_key: at}
 items = fleet.pressure_items({}, mem)
 assert [i["key"] for i in items] == ["ext:pressure:queue:q-4", "ext:pressure:queue:q-5"], items
-assert mem["dismissed"] == {"ext:pressure:queue:q-1": "2026-11-06T11:00:00Z", "ext:pressure:queue:q-2": "2026-11-06T11:00:00Z"}, mem
-# B joins the queue after the page drew only A, and A's item is dismissed before the next collect: B was never seen, so it shows.
+assert mem["dismissed"] == {"ext:pressure:queue:q-1": at, "ext:pressure:queue:q-2": at} and mem["pressure_sets"] == {}, mem
+# B joins after the page drew {A}; the collector draws {A, B} (another key) before the click on {A} is handled: B shows.
+queue(q(1, "waiting"))
+mem = {}
+key_a = fleet.pressure_items({}, mem)[0]["key"]
 queue(q(1, "waiting"), q(6, "waiting"))
-mem = {"dismissed": {"ext:pressure:queue": "2026-11-06T11:00:00Z"}, "pressure_shown": ["q-1"]}
+fleet.pressure_items({}, mem)
+mem["dismissed"] = {key_a: at}
 items = fleet.pressure_items({}, mem)
 assert list(mem["dismissed"]) == ["ext:pressure:queue:q-1"] and len(items) == 1 and items[0]["title"].startswith("기계 대기 1건"), (mem, items)
-assert mem["pressure_shown"] == ["q-6"]
+# A, drawn then dismissed, moved on to gave_up meanwhile: its dismissal still follows the set, so it does not come back alone.
+queue(q(1, "waiting"))
+mem = {}
+key_a = fleet.pressure_items({}, mem)[0]["key"]
+queue(q(1, "gave_up", ended=T))
+mem["dismissed"] = {key_a: at}
+assert fleet.pressure_items({}, mem) == [] and mem["dismissed"] == {"ext:pressure:queue:q-1": at}
 queue(q(1, "waiting"), q(2, "retrying"), q(6, "waiting"))
 items = fleet.pressure_items({"pressure:queue:q-1": {"state": "done", "ts": fleet.iso(NOW)}}, {"dismissed": {"ext:pressure:queue:q-2": "x"}})
 assert len(items) == 1 and items[0]["title"].startswith("기계 대기 1건") and "docker compose up" in items[0]["title"], items
@@ -135,6 +147,10 @@ assert [(r["text"], r["source"], r.get("also")) for r in page["rows"]] == [
     ("late fallback", "log", None), ("use CSV", "log", ["transcript"])], page["rows"]
 assert page["unrecorded"] == 1 and page["total"] == 2, page
 assert sent.page([], days=1, now=NOW)["unrecorded"] == 0
+# A Run Task's spec is Orca's record too: the transcript copy of the same brief folds into it.
+task = {"ts": at, "from": "term_c", "to": "task:t1", "kind": "worker", "text": "brief for the worker", "source": "orca"}
+page = sent.page([task, {**tr, "to": "task:t1", "text": "brief for the worker"}], days=1, now=NOW)
+assert page["unrecorded"] == 0 and [r["also"] for r in page["rows"] if r["to"] == "task:t1"] == [["transcript"]], page
 
 # --- pr-events.jsonl: nothing writes it; `migrate-inputs` makes the old file read-only.
 old = D / "pr-events.jsonl"

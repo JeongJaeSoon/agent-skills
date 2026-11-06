@@ -2487,7 +2487,7 @@ def ext_state(rows, closure):
 
 PATROL_NEEDS_YOU = {"X", "E", "L", "O"}  # the patrol codes that ask the human
 READ_FROM_SOURCE = ("patrol:", "pressure:queue:")  # keys read from patrol.jsonl and pressure-queue.json; old inbox lines of them are not shown
-PRESSURE_WAIT_KEY = "ext:pressure:queue"
+PRESSURE_WAIT_PREFIX = "ext:pressure:wait:"  # + a short hash of the waiting ids the item counts
 PRESSURE_SCRIPT = pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts" / "pressure.py"
 
 
@@ -2532,9 +2532,10 @@ def patrol_items(closures):
 def pressure_items(closures, mem):
     """Needs you from pressure-queue.json. A held command that waits or retries is the machine's to wait on, so all of
     them are one item, "기계 대기 N건"; one that gave up or failed asks the human and is its own item. Suppressing
-    (a closure, or a dismissal on the page) is by queue id: dismissing the one item dismisses the entries it counted
-    when the page last drew it (`mem["pressure_shown"]`), so an entry that comes later shows again. `mem` is the
-    collector's memory dict, changed in place for that."""
+    (a closure, or a dismissal on the page) is by queue id. The one item's key names the set of ids it counts, and
+    `mem["pressure_sets"]` remembers each set, so dismissing the item dismisses exactly those entries, whatever state
+    they are in by now; an entry that comes later makes a new set and shows. `mem` is the collector's memory dict,
+    changed in place for that."""
     dismissed = mem.setdefault("dismissed", {})
     q = read_json(agent_state() / "pressure-queue.json", {})
     entries = [e for e in (q.values() if isinstance(q, dict) else ())
@@ -2542,13 +2543,19 @@ def pressure_items(closures, mem):
     key = lambda e: f"pressure:queue:{e['id']}"
     shut = lambda e: (closures.get(key(e)) or {}).get("state") == "done" or f"ext:{key(e)}" in dismissed
     waiting = [e for e in entries if e.get("state") in ("waiting", "retrying") and not shut(e)]
-    if (at := dismissed.pop(PRESSURE_WAIT_KEY, None)):
-        seen = set(mem.get("pressure_shown") or ())
-        for e in waiting:
-            if e["id"] in seen:
-                dismissed[f"ext:{key(e)}"] = at
-        waiting = [e for e in waiting if e["id"] not in seen]
-    mem["pressure_shown"] = [e["id"] for e in waiting]
+    sets = mem.setdefault("pressure_sets", {})
+    for k in [k for k in dismissed if k.startswith(PRESSURE_WAIT_PREFIX)]:
+        at = dismissed.pop(k)
+        for qid in sets.pop(k[len(PRESSURE_WAIT_PREFIX):], ()):
+            dismissed[f"ext:pressure:queue:{qid}"] = at
+    waiting = [e for e in waiting if f"ext:{key(e)}" not in dismissed]
+    ids = sorted(e["id"] for e in waiting)
+    set_id = hashlib.sha1("\0".join(ids).encode()).hexdigest()[:8]
+    if ids:
+        sets.pop(set_id, None)
+        sets[set_id] = ids  # newest last; the oldest sets (never dismissed) are dropped
+        for old in list(sets)[:-50]:
+            del sets[old]
     hhmm = lambda t: time.strftime("%H:%M", time.localtime(t)) if isinstance(t, (int, float)) else "?"
     when = lambda t: iso(dt.datetime.fromtimestamp(t, dt.timezone.utc)) if isinstance(t, (int, float)) else None
     out = []
@@ -2562,7 +2569,7 @@ def pressure_items(closures, mem):
                     "source": "pressure-watch"})
     if waiting:
         what = ", ".join(sorted({e["what"] for e in waiting}))
-        out.append({"key": PRESSURE_WAIT_KEY, "type": "pc_pressure", "session": None,
+        out.append({"key": PRESSURE_WAIT_PREFIX + set_id, "type": "pc_pressure", "session": None,
                     "title": mask(f"기계 대기 {len(waiting)}건(PC 사용량 위험으로 멈춘 명령, 부하가 내려가면 요청한 세션이 다시 실행): {what}", 200),
                     "url": None, "command": f"python3 {PRESSURE_SCRIPT} queue",
                     "at": when(max(e.get("added") or 0 for e in waiting)), "source": "pressure-watch"})
