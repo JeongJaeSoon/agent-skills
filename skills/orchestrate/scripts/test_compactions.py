@@ -134,6 +134,10 @@ for name, damage in (
     ("open without a window", lambda: cache.write_text(json.dumps({**json.loads(cache.read_text()), "items": [],
                                                                     "open": True}))),
     ("bad sha", lambda: cache.write_text(json.dumps({**json.loads(cache.read_text()), "tail_sha": None}))),
+    ("item types", lambda: cache.write_text(json.dumps({**json.loads(cache.read_text()), "items": [[1.0, 343000, 5.5, "true"]]}))),
+    ("closed window with no usage", lambda: cache.write_text(json.dumps({**json.loads(cache.read_text()),
+                                                                          "items": [[1.0, 343000, None, True]],
+                                                                          "open": False}))),
 ):
     write(boundary(0), usage(60_000), boundary(100), usage(60_000))
     cx.history(S)
@@ -230,6 +234,11 @@ cfg('{"orchestrate": {"compact_restart": {"after": 0.5, "stuck_ratio": 1e999, "m
 assert cx.policy() == P(), "a fraction or a non-finite number is a wrong type, not 0"
 cfg('{"orchestrate": {"compact_restart": {"after": 1e999}}}')
 assert cx.policy() == P()
+big = "1" + "0" * 400  # a JSON integer no float can hold
+cfg('{"orchestrate": {"compact_restart": {"stuck_ratio": %s, "min_gap_min": %s}}}' % (big, big))
+assert cx.policy() == P(), "an integer too large for a float is the default, not an OverflowError"
+cfg('{"orchestrate": {"compact_restart": {"after": %s}, "restart_at": %s}}' % (big, big))
+assert cx.policy().after == 10**400 and cx.policy().ceiling == 10**400
 cfg('{"orchestrate": {"compact_restart": {"after": 2, "stuck_ratio": 1, "min_gap_min": 7.5}}}')
 assert cx.policy() == P(True, 2, 1.0, 7.5)
 cfg('{"orchestrate": {"compact_restart": "yes", "restart_at": true}}')
@@ -244,6 +253,8 @@ assert P(ceiling=9, auto_compact=True).streamed() == P(ceiling=0, auto_compact=T
 
 # 12. usage_context counts the three fields and skips a subagent's row.
 assert cx.usage_context(json.loads(usage(1000))) == 1000
+three = {"message": {"usage": {"input_tokens": 1, "cache_read_input_tokens": 20, "cache_creation_input_tokens": 300}}}
+assert cx.usage_context(three) == 321, "all three fields count, each with its own value"
 assert cx.usage_context(json.loads(usage(1000, agentId="a"))) is None
 assert cx.usage_context(json.loads(usage(1000, isSidechain=True))) is None
 assert cx.usage_context({"message": {"usage": {}}}) is None and cx.usage_context({"message": "x"}) is None

@@ -57,8 +57,12 @@ class Policy:
 
 def _number(v, default, kind=float):
     """A positive finite number of the kind (an int for a count); anything else is the default."""
-    ok = isinstance(v, kind if kind is int else (int, float)) and not isinstance(v, bool)
-    return kind(v) if ok and math.isfinite(v) and v > 0 else default
+    if isinstance(v, bool) or not isinstance(v, int if kind is int else (int, float)):
+        return default
+    try:  # an int too large for a float is out of range for a ratio or minutes, not an error
+        return kind(v) if v > 0 and (kind is int or math.isfinite(float(v))) else default
+    except OverflowError:
+        return default
 
 
 def policy():
@@ -168,11 +172,14 @@ def _load(session, path, st):
     """The cached (items, offset, open, tail_sha), or None when it does not describe this file as it is now."""
     try:
         c = json.loads(cache_path(session).read_text())
-        items = [[float(a), int(b), None if c_ is None else int(c_), d is True] for a, b, c_, d in c["items"]]
+        items = [[a, b, c_, d] for a, b, c_, d in c["items"]]
         offset, sha, open_ = c["offset"], c["tail_sha"], c["open"]
+        num = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool)  # noqa: E731
+        whole = lambda x: type(x) is int  # noqa: E731
         ok = (c["v"] == CACHE_VERSION and c["path"] == str(path) and c["dev"] == st.st_dev and c["ino"] == st.st_ino
-              and type(offset) is int and 0 <= offset <= st.st_size and isinstance(sha, str) and type(open_) is bool
-              and (not open_ or (items and items[-1][2] is None)))
+              and whole(offset) and 0 <= offset <= st.st_size and isinstance(sha, str) and type(open_) is bool
+              and all(num(a) and whole(b) and (c_ is None or whole(c_)) and type(d) is bool for a, b, c_, d in items)
+              and open_ == bool(items and items[-1][2] is None))  # a window is open exactly while the last has no usage yet
         return (items, offset, open_, sha) if ok else None
     except (OSError, ValueError, KeyError, TypeError, OverflowError):
         return None
