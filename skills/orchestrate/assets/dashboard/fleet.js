@@ -1473,7 +1473,7 @@ function automationRow(e) {
     : standIn ? recordResult(e, { ok: rec.ok !== false, ...rec })
     : `<span class="muted">${!e.job_name ? "its state is not read here" : e.registered === false ? "not set up on this PC · skills-sync setup enable " + esc(e.key) : "no runs yet"}</span>`;
   const lastAt = a && a.last_run_at ? a.last_run_at : standIn && rec.at;
-  const sub = kids.length && !open ? jobsSummary(kids.filter((k) => !k.group || !kids.some((p) => p.key === k.group))) : "";
+  const sub = kids.length && !open ? jobsSummary(kids) : "";  // every job, riders too: a failure must show while closed
   const head = `<tr class="${on && e.registered !== false ? "" : "is-done"}"><td><b title="${esc(e.what || "")}">${esc(e.key)}</b> ${state}${issue ? ` ${tag(`▲ ${issue}`, "bad", "")}` : ""}${toggle}</td>
       <td class="nowrap">${a ? esc(cadence(a.rrule)) : '<span class="muted">–</span>'}</td><td class="nowrap ${issue === AUTO_OVERDUE ? "toned tone-bad" : ""}">${a && a.enabled ? relSpan(a.next_run_at) : '<span class="muted">–</span>'}</td>
       <td class="nowrap muted">${lastAt ? relSpan(lastAt) : "–"}</td><td class="runs nowrap">${[...((a || {}).recent || [])].reverse().map(runBlock).join("")}</td>

@@ -92,6 +92,12 @@ rec = patrol_row()["record"]
 assert rec["ok"] and rec["result"] == "1 alerts · 0 reports" and rec["at"] == "2026-11-06T07:01:21Z", rec
 (root / "patrol-verdicts.json").write_text(json.dumps({"t": 1793948481, "sources": {"round": "timeout"}}))
 assert not patrol_row()["record"]["ok"] and "cut short" in patrol_row()["record"]["error"]
+# The candidate phase giving up is a failure too, not an empty result; a file in the wrong shape is that row's no-news, not the page's error.
+(root / "patrol-verdicts.json").write_text(json.dumps({"t": 1793948481, "complete": False, "sources": {"round": "ok", "candidates": "timeout"}}))
+rec = patrol_row()["record"]
+assert not rec["ok"] and "candidates: timeout" in rec["error"] and rec["result"] is None, rec
+(root / "patrol-verdicts.json").write_text(json.dumps({"t": 1793948481, "sources": ["bad"], "alerts": "x"}))
+assert patrol_row()["record"]["ok"] and patrol_row()["record"]["result"] == "0 alerts · 0 reports"
 (root / "patrol-verdicts.json").unlink()
 
 # sync: Orca's runs are the record; its own file (the demo's sync.json: ok, 900 s) stands in only when Orca has none.

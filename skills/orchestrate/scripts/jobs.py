@@ -154,10 +154,12 @@ def patrol_job():
     v = fleet.read_json(fleet.state_dir().parent / "patrol-verdicts.json")
     if isinstance(v, dict) and isinstance(v.get("t"), (int, float)):
         at = dt.datetime.fromtimestamp(v["t"], dt.timezone.utc)
-        cut = (v.get("sources") or {}).get("round") == "timeout"
-        job["record"] = {"at": fleet.iso(at), "ok": not cut, "n": None, "next_at": None,
-                         "result": None if cut else f"{len(v.get('alerts') or [])} alerts · {len(v.get('reports') or [])} reports",
-                         "error": "the round ran out of time and was cut short" if cut else None}
+        src = v.get("sources") if isinstance(v.get("sources"), dict) else {}
+        bad = sorted(f"{k}: {s}" for k, s in src.items() if s in ("timeout", "failed"))  # a source or phase that gave up
+        count = lambda k: len(v[k]) if isinstance(v.get(k), list) else 0
+        job["record"] = {"at": fleet.iso(at), "ok": not bad, "n": None, "next_at": None,
+                         "result": None if bad else f"{count('alerts')} alerts · {count('reports')} reports",
+                         "error": fleet.mask(f"the round was cut short ({', '.join(bad)})") if bad else None}
     return job
 
 

@@ -755,6 +755,8 @@ const out = {{closed: fleetAutomations(st)}};
 F.jobOpen.add("orch-dash"); out.top = fleetAutomations(st);
 F.jobOpen.add("fleet-tick"); out.open = fleetAutomations(st); F.jobOpen.delete("fleet-tick");
 F.jobs.automations[0].jobs[2].record.n = 0; out.quiet = fleetAutomations(st);
+F.jobOpen.delete("orch-dash"); F.jobs.automations[0].jobs[1].record = {{at: old, ok: false, error: "boom", failed_at: old, next_at: null}};
+out.rider = fleetAutomations(st);
 process.stdout.write(JSON.stringify(out));"""
     got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
     # Closed, the automation's row says in one line what its jobs did; opened, a line for each job that is not a rider.
@@ -765,6 +767,8 @@ process.stdout.write(JSON.stringify(out));"""
     assert "Relay: <b>answers relayed 2</b> · <span class=\"muted\">1 no change · 1 no record</span>" in got["top"], got["top"]
     assert "3 more: 2 no change · 1 no record" in got["quiet"] or "2 no change · 1 no record" in got["quiet"], got["quiet"]
     assert 'class="jsub"' in got["open"] and "Self-clean</b>" in got["open"], got["open"]
+    # A rider that failed shows on the closed automation row, though the job it rides on ran fine.
+    assert "Self-clean: " in got["rider"] and "▲ failed" in got["rider"] and "▸ 5 jobs" in got["rider"], got["rider"]
     assert "no record · no round yet" in got["top"] and 'class="is-done"' in got["top"], got["top"]
 
     # A brief row's session shows its model tag like the Sessions table's model cell, in the brief table's 세션 cell and in
