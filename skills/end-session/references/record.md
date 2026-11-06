@@ -50,13 +50,12 @@ still investigating. Record when one of these happened:
   report or a green badge is not evidence. No evidence → say so and leave the state where it is.
 - **Do it, then report it.** When the selected workflow authorizes these writes, perform them without asking again. Ask only when the evidence points two ways, the ticket is
   someone else's (comment only), or the change touches another team's epic. Filing a new
-  ticket keeps `write-ticket`'s approval rule, which the user's own instructions may waive.
-- **Follow-ups against the exit condition.** Classify each one NOW / LATER / DROP (principle
-  **Work to an Exit Condition**, `use-tracker` "Exit condition"): only NOW becomes a ticket,
-  LATER goes on the deferred list with its revisit trigger, DROP gets its reason. An epic with
-  no exit condition gets one written first. Each NOW item added since the last report names the
-  exit item it serves, or moves to LATER (the principle's step 5). Report epics as
-  "N/M 완료 조건 충족", never as tickets filed.
+  ticket follows `write-ticket` §4.
+- **Follow-ups against the exit condition.** Classify each one NOW / LATER / DROP as `use-tracker`
+  [references/exit-condition.md](../../use-tracker/references/exit-condition.md) says (principle
+  **Work to an Exit Condition**). An epic with no exit condition gets one written first. Each
+  NOW item added since the last report names the exit item it serves, or moves to LATER (the
+  principle's step 5).
 - **Epic upkeep is part of the job** outside a program. A ticket with no parent that belongs under an epic gets
   one; an epic whose exit condition is met gets closed, even with deferred lines left. List
   each change in the report so it can be undone.

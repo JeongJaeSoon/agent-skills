@@ -93,7 +93,9 @@ for title, owner, nxt, waiting in [
         ("acme/app#7 오너 확인", "오너", "확인", False),
         ("청구 화면 (card-review 카드)", "card", "리뷰 반영 → 머지", False),
         ("설정 화면 (card-quiet 카드)", "card", "머지 대기", False)]:
-    board.doing_add(title, owner, nxt, waiting, force=True, why="lines from before the write ban")
+    # a line from before the write ban
+    board.change(lambda s: s["doing"].append({"title": title, "owner": owner, "next": nxt,
+                                              **({"waiting": True, "since": fleet.iso(now)} if waiting else {})}))
 board.later_add("다음 일 시작", "card-done PR 머지")
 board.later_add("다른 일", "acme/app#9 머지 뒤")
 board.later_add("열린 PR 뒤의 일", "acme/app#8 머지 뒤")
@@ -103,7 +105,7 @@ LONG_TODO = "acme/app#7 리뷰 " + "긴 설명 " * 30  # over the 120 characters
 board.set_now([LONG_TODO, "acme/app#8 리뷰", "회의 준비"])
 board.set_row("stale-row", title="오래된 일", repo="acme/app", status="moving", next="조사")
 board.set_row("fresh-row", title="새 일", repo="acme/app", status="moving", next="조사")
-board.set_row("card-dup", title="중복 카드 작업", repo="acme/app", status="moving", next="정리")
+board.change(lambda s: board.put(s, "card-dup", dict(title="중복 카드 작업", repo="acme/app", status="moving", next="정리")))  # from before the ban
 store.change_board(lambda s: s["rows"]["stale-row"].update(reported_at=ago(12)))
 # Inbox items.
 fleet.inbox_add("review", "acme/app#7 리뷰 요청", key="k-merged")

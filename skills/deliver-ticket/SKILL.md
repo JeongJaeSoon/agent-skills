@@ -65,18 +65,10 @@ bug, a missing validation, a contract inconsistency. Decide yourself, at the mom
 it, and never end a turn on "말씀 주시면 티켓으로 만들겠습니다":
 
 - Fixable in this diff and inside the ticket's scope → fix it here.
-- Otherwise classify it against the exit condition: the parent epic's `✅ 완료 조건`, or this
-  ticket's acceptance criteria when it has no parent (`use-tracker`, "Exit condition";
-  principle **Work to an Exit Condition**).
-  - NOW (an exit item needs it, or a reproduced correctness, security or data defect in what
-    this work shipped) → file it with `write-ticket` as a follow-up (its approval gate does
-    not apply, its follow-up format does); search the tracker first so you do not duplicate
-    one. One ticket per independent diff; findings that must land together share one.
-  - LATER → one line on the deferred list with its revisit trigger. No ticket.
-  - DROP (speculative, not reproduced, already covered, out of scope) → one line with the
-    reason in the worklog. No ticket.
-- Inside a program (the brief has a `PROGRAM:` line), file nothing: put each finding with
-  your proposed class in the `worker_done` body, and the lead classifies and files.
+- Otherwise classify it NOW / LATER / DROP against the parent epic's `✅ 완료 조건`, or this
+  ticket's acceptance criteria when it has no parent, as `use-tracker`
+  [references/exit-condition.md](../use-tracker/references/exit-condition.md) says: only NOW
+  becomes a follow-up ticket (`write-ticket`), and inside a program you file nothing.
 
 Report "N/M 완료 조건 충족" for the parent when there is one, name every ticket you filed with
 the exit item it serves, and list the LATER and DROP lines. The user's review happens on the
@@ -251,7 +243,8 @@ Then land it. How depends on where you run:
 - **A standalone card** (no `PROGRAM:` line) in a repo with the land executor on
   (`orchestrate.land_executor`) does not merge: it sends READY to its REPORT line with the head
   sha, the CI run ids whose logs it read and the review verdict with its source, stops watching
-  CI, and the orchestrator lands it (`orchestrate` `references/landing.md`, "Land executor").
+  CI, and the orchestrator lands it through the repo's `<name>-standalone` program, which
+  `orch land --repo` creates when missing (`orchestrate` `references/landing.md`, "Land executor").
 - **Merging it yourself** (a standalone card whose repo has the executor off, or a session the
   user started): merge your own verified PR unless the user set a hold, as
   [references/merge.md](references/merge.md) says (when it is ready, the checks before it, the

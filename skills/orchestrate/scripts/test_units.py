@@ -66,9 +66,9 @@ fleet.write_atomic(sd / "state.json", json.dumps(STATE))
 fleet.write_atomic(sd.parent / "patrol-verdicts.json", json.dumps({"t": now.timestamp(), "check": {"/work/s-idle": "stalled on a prompt"}}))
 board.set_row("r-pr", title="XYZ-7 ship it", repo="acme/app", status="moving", pr="acme/app#2", next="작업")
 board.set_row("r-prog", title="no session", repo="acme/app", status="moving", next="작업", program="prog-a")
-board.set_row("r-wt", title="on a worktree", repo="acme/app", status="moving", worktree="s-off", next="작업")
-board.set_row("r-prog2", title="prog card", repo="acme/app", status="moving", worktree="s-prog", next="작업", program="prog-b")
-board.set_row("r-amb",title="amb", repo="acme/app", status="moving", worktree="s-amb", next="작업")  # the board refuses a --pr here: Orca knows it
+for rid, f in (("r-wt", dict(title="on a worktree", worktree="s-off")), ("r-prog2", dict(title="prog card", worktree="s-prog", program="prog-b")),
+               ("r-amb", dict(title="amb", worktree="s-amb"))):  # as before A-ANNOT: set_row refuses a new row for a card now
+    board.change(lambda s, rid=rid, f=f: board.put(s, rid, dict(repo="acme/app", status="moving", next="작업", **f)))
 
 inp = rowstate.inputs(now)
 assert units.build(inp, TICKETS) == units.build(inp, TICKETS) and units.build(inp)["units"][0]["tickets"] is not None

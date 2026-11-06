@@ -235,7 +235,7 @@ function fleetHeader() {
   const missed = (st.items || []).filter((i) => i.missed).length;
   const errs = Object.entries(st.sources || {}).filter(([, v]) => v.ok === false).length, troubled = autoTroubled(st).length, lost = monTroubled(st).length;
   $("#top-right").innerHTML = [missed ? `<a href="#/fleet/inbox">${tag(`${missed} missed`, "bad", "alert")}</a>` : "",
-    `<a href="#/fleet/automations">${troubled ? tag(`Automations ▲${troubled}`, "bad", "alert") : tag(`Automations ${(st.automations || []).length}`, "", "clock")}</a>`,
+    `<a href="#/fleet/automations">${troubled ? tag(`Automations ▲${troubled}`, "bad", "alert") : tag(`Automations ${listed(st).length}`, "", "clock")}</a>`,
     lost ? `<a href="#/fleet/automations?view=monitors">${tag(`Monitors ▲${lost}`, "bad", "alert")}</a>` : "",
     errs ? tag(`${errs} source error${errs > 1 ? "s" : ""}`, "warn", "alert") : ""].join("");
 }
@@ -1389,7 +1389,9 @@ function autoIssue(a) {
   if (/fail|error/.test(((a.recent || [])[0] || {}).status || "")) return "last run failed";
   return a.next_run_at && Date.now() - ms(a.next_run_at) > AUTO_STALL ? AUTO_OVERDUE : "";
 }
-const autoTroubled = (st) => (st.automations || []).filter(autoIssue);
+// Only the ones scripts/automations.py lists (they carry a key): the page lists no other.
+const listed = (st) => (st.automations || []).filter((a) => a.key);
+const autoTroubled = (st) => listed(st).filter(autoIssue);
 // The few cron shapes automations use, in words; anything else stays as written.
 function cadence(rrule) {
   const r = (rrule || "").trim(), m = (re) => r.match(re), pad = (x) => x.padStart(2, "0");
@@ -1409,61 +1411,81 @@ const AUTO_VIEWS = [["automations", "자동화"], ["monitors", "모니터"]];
 function fleetAutomations(st) {
   const sw = viewSwitch("automations", AUTO_VIEWS);
   if (viewOf(AUTO_VIEWS) === "monitors") return fleetMonitors(st, sw);
-  const autos = st.automations || [], src = (st.sources || {}).automations || {};
+  const src = (st.sources || {}).automations || {};
   const legend = [AUTO_RUN.completed, AUTO_RUN.failed, AUTO_RUN.running, AUTO_RUN.skipped]
     .map(([g, tone, l]) => `<span><span class="run ${tone ? "tone-" + tone : ""}">${g}</span>${l}</span>`).join("");
-  const headHtml = `<div class="view-head"><div><h2>Automations</h2><p>Each Orca automation with its cadence, next and last run, and its last 6 results (oldest on the left). A last run that failed, or a run 10 minutes past its time, gets a ▲. The janitor and its precheck are Orca automations, so they are here once registered. Below it, the jobs orch-dash runs on its own and the rules it applies as it reads. CronCreate jobs inside sessions are not collected, and of launchd jobs only the two that keep a record.</p></div>
+  const headHtml = `<div class="view-head"><div><h2>Automations</h2><p>One row for each automation agent-skills sets up (scripts/automations.py, <code>skills-sync setup</code>), and no other: its cadence, next and last run, and its last 6 results (oldest on the left). A last run that failed, or a run 10 minutes past its time, gets a ▲. One that is not set up on this PC says so. orch-dash's own jobs and the session patrol open under the automation that runs them, and the rules it applies as it reads are below. An Orca automation outside that list, CronCreate jobs inside sessions and the state of a LaunchAgent are not collected.</p></div>
     <div class="legend">${legend}</div></div>${sw}`;
   const failed = src.ok === false ? `<div class="card"><div class="empty-chart">${tag("collection failed", "warn", "alert")} Could not read the Orca automation list: ${esc(src.error || "")}. Below is from ${rel(src.updated_at)}.</div></div>` : "";
-  const rows = autos.map((a) => {
-    const issue = autoIssue(a), last = (a.recent || [])[0];
-    return `<tr class="${a.enabled ? "" : "is-done"}"><td><b>${esc(a.name)}</b>${a.enabled ? "" : ` ${tag("off")}`}${issue ? ` ${tag(`▲ ${issue}`, "bad", "")}` : ""}</td>
-      <td class="nowrap">${esc(cadence(a.rrule))}</td><td class="nowrap ${issue === AUTO_OVERDUE ? "toned tone-bad" : ""}">${a.enabled ? relSpan(a.next_run_at) : '<span class="muted">–</span>'}</td>
-      <td class="nowrap muted">${a.last_run_at ? relSpan(a.last_run_at) : "–"}</td><td class="runs nowrap">${[...(a.recent || [])].reverse().map(runBlock).join("")}</td>
-      <td class="dim"><span class="full">${last ? esc(last.summary || last.status || "") : '<span class="muted">no runs yet</span>'}</span></td></tr>`;
-  }).join("");
-  const table = autos.length ? `<div class="card table-wrap" data-src="automations"><table class="autos"><thead><tr><th>Name</th><th>Cadence</th><th>Next</th><th>Last</th><th>Last 6</th><th>Last result</th></tr></thead><tbody>${rows}</tbody></table></div>`
-    : '<div class="card"><div class="empty-chart">No Orca automations registered.</div></div>';
-  return headHtml + failed + table + internalJobs();
-}
-
-// orch-dash's own jobs (/api/fleet/jobs, jobs.py): each row is the record the job wrote when it last ran, read on every
-// poll, so a fleet tick that keeps failing still shows here. A job with no record says so; nothing here is estimated.
-function internalJobs() {
+  // One list: /api/fleet/jobs (jobs.py) has a row for each name in scripts/automations.py and no other, with what Orca says
+  // about it and the jobs that run inside it. Read on every poll, so a fleet tick that keeps failing still shows here.
   pollJson("jobs", "/api/fleet/jobs", 10e3, () => onView("automations", "automations", AUTO_VIEWS));
   const rep = F.jobs;
-  if (!rep) return '<div class="card"><div class="empty-chart">Loading orch-dash jobs…</div></div>';
-  if (rep.error) return `<div class="card"><div class="empty-chart">${tag("not loaded", "warn", "alert")} Could not read orch-dash's jobs: ${esc(rep.error)}</div></div>`;
-  // A job whose `group` names another runs inside that job's tick: it folds into that row, which opens to one line each.
-  const riders = (j) => rep.jobs.filter((k) => k.group === j.key);
-  const line = (j, sub) => {
-    const r = j.record, kids = sub ? [] : riders(j), open = F.jobOpen.has(j.key);
-    const toggle = kids.length ? ` <button class="chip mini" type="button" data-job-open="${esc(j.key)}" aria-expanded="${open}">${open ? "▾" : "▸"} ${kids.length} more</button>` : "";
-    const name = `<td class="${sub ? "jsub" : ""}"><b>${esc(j.name)}</b> <span class="src">${esc(j.runs_in)}</span>${toggle}</td>`;
-    const every = `<td class="nowrap" title="${esc(j.cadence || "")}">${esc(j.every || (j.group ? "each tick" : "?"))}</td>`;
-    if (j.error) return `<tr>${name}${every}<td colspan="3">${tag("not read", "warn", "alert")} ${esc(j.error)}</td></tr>`;
-    if (!r) return `<tr class="is-done">${name}${every}<td colspan="3" class="muted">no record · ${esc(j.why || "It has not recorded a run in this store.")}</td></tr>`;
-    const warned = r.warned_at ? ` <a href="#/fleet/timeline" title="The timeline line written when it started failing">Timeline warning ${esc(hhmm(r.warned_at))} ${icon("arrow")}</a>` : "";
-    // A count of 0 is "no change", its words under it in grey; only a run that changed something stands out.
-    const said = r.n === 0 ? `<span class="muted">no change</span>${r.result ? `<div class="muted">${esc(r.result)}</div>` : ""}` : r.n > 0 ? `<b>${esc(r.result || "ran")}</b>` : esc(r.result || "ran");
-    const busy = kids.filter((k) => k.error || (k.record && (!k.record.ok || k.record.n > 0)));
-    const unrecorded = kids.filter((k) => !k.error && !k.record).length, unchanged = kids.length - busy.length - unrecorded;
-    const quiet = [unchanged && `${unchanged} no change`, unrecorded && `${unrecorded} no record`].filter(Boolean).join(" · ");
-    const parts = busy.map((k) => `${esc(k.name)}: ${k.error || !k.record.ok ? tag("▲ failed", "bad", "") : `<b>${esc(k.record.result || "ran")}</b>`}`);
-    if (quiet) parts.push(`<span class="muted">${busy.length ? quiet : `${kids.length} more: ${quiet}`}</span>`);
-    const sum = kids.length ? `<div class="jsum">${parts.join(" · ")}</div>` : "";
-    const res = r.ok ? `${said}${warned ? `<div class="muted">last failure ${relSpan(r.failed_at)}${warned}</div>` : ""}`
-      : `${tag("▲ failed", "bad", "")}${expandable(`job|${j.key}`, r.error)}<div class="muted">failing since ${relSpan(r.failed_at)}${warned}</div>`;
-    const acted = r.acted_at ? `<div class="muted">last acted: ${esc(String(r.acted_n))} · ${relSpan(r.acted_at)}</div>` : "";
-    const next = r.next_at ? relSpan(r.next_at) : `<span class="muted">${j.group ? "with the next tick" : "–"}</span>`;
-    return `<tr>${name}${every}<td class="nowrap">${relSpan(r.at)}</td><td>${res}${acted}${sum}</td><td class="nowrap">${next}</td></tr>`
-      + (open ? kids.map((k) => line(k, true)).join("") : "");
-  };
-  const rows = rep.jobs.filter((j) => !j.group || !rep.jobs.some((k) => k.key === j.group)).map((j) => line(j, false)).join("");
+  if (!rep) return headHtml + failed + '<div class="card"><div class="empty-chart">Loading the automation list…</div></div>';
+  if (!rep.automations) return headHtml + failed + `<div class="card"><div class="empty-chart">${tag("not loaded", "warn", "alert")} Could not read the automation list: ${esc(rep.error || "")}</div></div>`;
+  const rows = rep.automations.map(automationRow).join("");
+  const table = `<div class="card table-wrap" data-src="automations"><table class="autos"><thead><tr><th>Name</th><th>Cadence</th><th>Next</th><th>Last</th><th>Last 6</th><th>Last result</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  return headHtml + failed + table + rulesCard(rep);
+}
+
+// A job's summary under its parent's result while the parent is closed: what changed or failed, the rest counted.
+function jobsSummary(kids) {
+  const busy = kids.filter((k) => k.error || (k.record && (!k.record.ok || k.record.n > 0)));
+  const unrecorded = kids.filter((k) => !k.error && !k.record).length, unchanged = kids.length - busy.length - unrecorded;
+  const quiet = [unchanged && `${unchanged} no change`, unrecorded && `${unrecorded} no record`].filter(Boolean).join(" · ");
+  const parts = busy.map((k) => `${esc(k.name)}: ${k.error || !k.record.ok ? tag("▲ failed", "bad", "") : `<b>${esc(k.record.result || "ran")}</b>`}`);
+  if (quiet) parts.push(`<span class="muted">${busy.length ? quiet : `${kids.length} more: ${quiet}`}</span>`);
+  return `<div class="jsum">${parts.join(" · ")}</div>`;
+}
+
+// What one record says, for the Last result cell: a failure whole (it opens in place), else the words it wrote.
+function recordResult(j, r) {
+  const warned = r.warned_at ? ` <a href="#/fleet/timeline" title="The timeline line written when it started failing">Timeline warning ${esc(hhmm(r.warned_at))} ${icon("arrow")}</a>` : "";
+  // A count of 0 is "no change", its words under it in grey; only a run that changed something stands out.
+  const said = r.n === 0 ? `<span class="muted">no change</span>${r.result ? `<div class="muted">${esc(r.result)}</div>` : ""}` : r.n > 0 ? `<b>${esc(r.result || "ran")}</b>` : esc(r.result || "ran");
+  const res = r.ok ? `${said}${warned ? `<div class="muted">last failure ${relSpan(r.failed_at)}${warned}</div>` : ""}`
+    : `${tag("▲ failed", "bad", "")}${expandable(`job|${j.key}`, r.error)}${r.failed_at ? `<div class="muted">failing since ${relSpan(r.failed_at)}${warned}</div>` : ""}`;
+  return res + (r.acted_at ? `<div class="muted">last acted: ${esc(String(r.acted_n))} · ${relSpan(r.acted_at)}</div>` : "");
+}
+
+// A job that runs inside an automation (orch-dash's own, the patrol round) in the list's columns. A job whose `group`
+// names another runs inside that job's tick: it folds into that row, which opens to one line each.
+function jobLine(j, all, sub) {
+  const r = j.record, kids = sub ? [] : all.filter((k) => k.group === j.key), open = F.jobOpen.has(j.key);
+  const toggle = kids.length ? ` <button class="chip mini" type="button" data-job-open="${esc(j.key)}" aria-expanded="${open}">${open ? "▾" : "▸"} ${kids.length} more</button>` : "";
+  const name = `<td class="${sub ? "jsub" : ""}"><b>${esc(j.name)}</b>${toggle}</td>`;
+  const every = `<td class="nowrap" title="${esc(j.cadence || "")}">${esc(j.every || (j.group ? "each tick" : j.cadence || "?"))}</td>`;
+  const runs = '<td class="runs nowrap"></td>';
+  if (j.error) return `<tr>${name}${every}<td class="muted">–</td><td class="muted">–</td>${runs}<td>${tag("not read", "warn", "alert")} ${esc(j.error)}</td></tr>`;
+  if (!r) return `<tr class="is-done">${name}${every}<td class="muted">–</td><td class="muted">–</td>${runs}<td class="muted">no record · ${esc(j.why || "It has not recorded a run in this store.")}</td></tr>`;
+  const next = r.next_at ? relSpan(r.next_at) : `<span class="muted">${j.group ? "with the next tick" : "–"}</span>`;
+  return `<tr>${name}${every}<td class="nowrap">${next}</td><td class="nowrap">${relSpan(r.at)}</td>${runs}<td>${recordResult(j, r)}${kids.length ? jobsSummary(kids) : ""}</td></tr>`
+    + (open ? kids.map((k) => jobLine(k, all, true)).join("") : "");
+}
+
+// One registry name: its Orca automation when it has one, else the file the job writes for itself, else what is missing.
+function automationRow(e) {
+  const a = e.orca, rec = e.record, issue = a ? autoIssue(a) : "", last = a && (a.recent || [])[0];
+  const kids = e.jobs || [], open = F.jobOpen.has(e.key), on = !a || a.enabled;
+  const toggle = kids.length ? ` <button class="chip mini" type="button" data-job-open="${esc(e.key)}" aria-expanded="${open}">${open ? "▾" : "▸"} ${kids.length} jobs</button>` : "";
+  const state = !e.job_name ? tag("LaunchAgent") : e.registered === false ? tag("not registered", "warn", "") : a && !a.enabled ? tag("off") : "";
+  const standIn = !last && rec && (rec.at || rec.error);
+  const result = last ? esc(last.summary || last.status || "")
+    : standIn ? recordResult(e, { ok: rec.ok !== false, ...rec })
+    : `<span class="muted">${!e.job_name ? "its state is not read here" : e.registered === false ? "not set up on this PC · skills-sync setup enable " + esc(e.key) : "no runs yet"}</span>`;
+  const lastAt = a && a.last_run_at ? a.last_run_at : standIn && rec.at;
+  const sub = kids.length && !open ? jobsSummary(kids) : "";  // every job, riders too: a failure must show while closed
+  const head = `<tr class="${on && e.registered !== false ? "" : "is-done"}"><td><b title="${esc(e.what || "")}">${esc(e.key)}</b> ${state}${issue ? ` ${tag(`▲ ${issue}`, "bad", "")}` : ""}${toggle}</td>
+      <td class="nowrap">${a ? esc(cadence(a.rrule)) : '<span class="muted">–</span>'}</td><td class="nowrap ${issue === AUTO_OVERDUE ? "toned tone-bad" : ""}">${a && a.enabled ? relSpan(a.next_run_at) : '<span class="muted">–</span>'}</td>
+      <td class="nowrap muted">${lastAt ? relSpan(lastAt) : "–"}</td><td class="runs nowrap">${[...((a || {}).recent || [])].reverse().map(runBlock).join("")}</td>
+      <td class="dim"><span class="full">${result}</span>${sub}</td></tr>`;
+  return head + (open ? kids.filter((k) => !k.group || !kids.some((p) => p.key === k.group)).map((k) => jobLine(k, kids, false)).join("") : "");
+}
+
+// Rules applied whenever the data is read or drawn: no run of their own, so apart from the list.
+function rulesCard(rep) {
   const rules = rep.rules.map((r) => `<tr><td><b>${esc(r.name)}</b></td><td>${esc(r.rule)}</td><td class="nowrap muted">${esc(r.applied)}</td></tr>`).join("");
-  return `<div class="card table-wrap"><div class="card-head"><h3>orch-dash jobs</h3><span class="aside">${rep.jobs.length}</span></div>
-      <table class="jobs"><thead><tr><th>Name</th><th>Every</th><th>Last run</th><th>Result</th><th>Next</th></tr></thead><tbody>${rows}</tbody></table></div>
-    <div class="card table-wrap"><div class="card-head"><h3>Rules applied on read</h3><span class="aside">no run of their own</span></div>
+  return `<div class="card table-wrap"><div class="card-head"><h3>Rules applied on read</h3><span class="aside">no run of their own</span></div>
       <table class="jobs"><thead><tr><th>Name</th><th>Rule</th><th>Applied</th></tr></thead><tbody>${rules}</tbody></table></div>`;
 }
 
@@ -1494,9 +1516,10 @@ function fleetMonitors(st, sw = "") {
   return headHtml + failed + table;
 }
 
-// Instructions sent out of a session (sent.py via /api/fleet/sent): the `orch sent add` log, lines typed on the
-// dashboard, and what live sessions sent by Agent, SendMessage or orca. Read on every poll while the page is open.
-const SENT_SRC = { log: ["log", "accent"], transcript: ["transcript", ""], dashboard: ["dashboard", "good"] };
+// Instructions sent out of a session (sent.py via /api/fleet/sent): the `orch sent add` log (lines typed on the
+// dashboard are in it) and what Orca keeps. Transcripts are witnesses only: a send found there that the log and Orca
+// lack is counted in `unrecorded`. Read on every poll while the page is open.
+const SENT_SRC = { log: ["log", "accent"], orca: ["orca", ""], transcript: ["transcript", ""] };
 const SENT_DAYS = [["1", "1d"], ["7", "7d"], ["30", "30d"]];
 const SENT_SHOWN = 300;
 const sentDays = () => (SENT_DAYS.some(([d]) => d === S.filters.sent_days) ? S.filters.sent_days : "1");
@@ -1520,7 +1543,7 @@ const sentKey = (r) => `${r.ts}|${r.source}|${r.to}|${(r.text || "").length}`;
 function fleetSent(st) {
   if (!F.sent || F.sentDays !== sentDays()) pollSent();
   const d = F.sent, src = (st && st.sources || {}).sent || {};
-  const headHtml = `<div class="view-head"><div><h2>Sent</h2><p>Instructions sessions sent to other sessions, cards, subagents, inboxes, Slack or the tracker, with the full text. Three sources: the log written with <span class="mono">orch sent add</span> at send time, lines typed into a session from this dashboard, and the Agent, SendMessage, <span class="mono">orca terminal send</span>, <span class="mono">orca worktree create --prompt</span> and <span class="mono">orca orchestration send</span> calls in live Claude Code session transcripts. An instruction in both the log and a transcript shows as one row. What an ended session sent survives only in the log. Tokens and passwords are masked.</p></div>
+  const headHtml = `<div class="view-head"><div><h2>Sent</h2><p>Instructions sessions sent to other sessions, cards, subagents, inboxes, Slack or the tracker, with the full text. Two sources: the log written with <span class="mono">orch sent add</span> at send time (lines typed into a session from this dashboard are written there too), and what Orca keeps itself (messages and Run Task specs). Live session transcripts are only checked against them: a send found there that neither has is not a row but a warning, since its sender skipped <span class="mono">orch sent add</span>. What an ended session sent survives only in the log. Tokens and passwords are masked.</p></div>
     <div class="legend">${Object.values(SENT_SRC).map(([l, tone]) => tag(l, tone)).join(" ")}</div></div>`;
   if (!d) return headHtml + '<div class="loading">Loading…</div>';
   if (d.error) return headHtml + `<div class="card"><div class="empty-chart">${esc(d.error)}</div></div>`;
@@ -1529,7 +1552,8 @@ function fleetSent(st) {
   const bySrc = (r) => f === "all" || r.source === f || (r.also || []).includes(f);
   const hit = (r) => !q || [r.from, r.to, r.kind, r.channel, r.repo, r.subject, r.text].some((v) => (v || "").toLowerCase().includes(q));
   const shown = rows.filter((r) => bySrc(r) && hit(r));
-  const failed = src.ok === false ? `<div class="card"><div class="empty-chart">${tag("collection failed", "warn", "alert")} Could not read transcripts: ${esc(src.error || "")}. Only the log and dashboard sources are shown.</div></div>` : "";
+  const failed = src.ok === false ? `<div class="card"><div class="empty-chart">${tag("collection failed", "warn", "alert")} Could not read transcripts: ${esc(src.error || "")}. Only the log and Orca rows are shown, and sends missing from them cannot be counted.</div></div>` : "";
+  const unrecorded = d.unrecorded > 0 ? `<div class="card"><p class="warn-note">${tag("unrecorded sends", "warn", "alert")} ${d.unrecorded} send${d.unrecorded === 1 ? "" : "s"} in live session transcripts match no log or Orca row: the sender skipped <span class="mono">orch sent add</span>. They are not listed here.</p></div>` : "";
   const body = shown.slice(0, SENT_SHOWN).map((r) => {
     const text = r.text || "", long = text.split("\n").length > 6 || text.length > 480, k = sentKey(r);
     const srcs = [r.source, ...(r.also || [])].map((x) => tag((SENT_SRC[x] || [x])[0], (SENT_SRC[x] || [, ""])[1])).join(" ");
@@ -1549,7 +1573,7 @@ function fleetSent(st) {
   const note = cut || more ? `<p class="muted">${cut}${more}Narrow with search or source.</p>` : "";
   const table = shown.length ? `<div class="card table-wrap" data-src="sent"><table class="sent"><thead><tr><th>When</th><th>From → to</th><th>Text</th><th>Source</th></tr></thead><tbody>${body}</tbody></table></div>`
     : `<div class="card"><div class="empty-chart">${rows.length ? "No matching instructions." : "Nothing sent in this period."}</div></div>`;
-  return headHtml + failed + toolbar + note + table;
+  return headHtml + failed + unrecorded + toolbar + note + table;
 }
 document.addEventListener("input", (e) => { if (e.target.id === "sent-search") { S.filters.sent_q = e.target.value; renderView(); } });
 document.addEventListener("toggle", (e) => {

@@ -218,7 +218,17 @@ after = fleet_totals()[0]
 assert after["Pin"] == before["Pin"] + 1 and after["Prog"] == before["Prog"], (before, after)
 
 # A board row that names the card's worktree is that card's row: the subagent follows it, over the worktree rule.
-forch("board", "set", "man", "--kind", "task", "--repo", "acme/web", "--worktree", "card-2", "--priority", "9:Man")
+# (A new row for a card is refused; this one is written the way a row from before A-ANNOT was.)
+assert "would be card card-2's" in forch("board", "set", "man", "--kind", "task", "--repo", "acme/web", "--worktree", "card-2", expect=1)
+import board as board_old  # noqa: E402
+
+_saved = {k: os.environ.get(k) for k in ("ORCH_FLEET_STATE", "AGENT_SKILLS_STATE")}
+os.environ.update(ORCH_FLEET_STATE=fenv["ORCH_FLEET_STATE"], AGENT_SKILLS_STATE=fenv["AGENT_SKILLS_STATE"])
+try:
+    board_old.change(lambda s: board_old.put(s, "man", dict(kind="task", repo="acme/web", worktree="card-2", priority="9:Man")))
+finally:
+    for k, v in _saved.items():
+        os.environ[k] = v or ""
 assert fleet_totals()[0].get("Man") == 2, fleet_totals()
 
 # Its host card is gone from the report (a completed dispatch with no PR), but the host's worktree rule still holds.
