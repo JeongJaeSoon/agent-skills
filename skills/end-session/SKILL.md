@@ -30,11 +30,9 @@ report with its §4 record line:
   latest comment already says this, do not repeat it.
 - The project's worklog (`use-notes`) → one line on what this session did, if not already
   written.
-- An orchestrator or lead (a declared `ROLE`) → `orch handoff save --next "<what the next
-  session does first>"` (a lead adds `--key lead:<slug>`), with `--waiting` and `--question`
-  when they hold: the session that
-  takes over reads it through `agent-skills:reboot` (`orchestrate` `references/top-level.md`,
-  "Restart with a handoff"). Write only what no store holds.
+- An orchestrator or lead → `orch handoff save --next "<first step for the next session>"` (a
+  lead adds `--key lead:<slug>`), which `agent-skills:reboot` reads back (`orchestrate`
+  `references/top-level.md`, "Restart with a handoff").
 - No ticket (a local diagnosis, a probe) → the worklog line is enough. Do not file a ticket
   just to close it.
 - The ticket has a parent epic → re-check its exit condition (principle **Work to an Exit
