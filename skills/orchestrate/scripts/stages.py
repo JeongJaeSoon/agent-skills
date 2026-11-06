@@ -144,10 +144,18 @@ def set_next(lines):
     return change(lambda store: store.update(next=[fleet.mask(" ".join(l.split())) for l in lines if l.strip()]))
 
 
-def finish(rid, drop=False):
+def finish(rid, drop=False, evidence=None):
+    """Mark a row finished, or drop it. A generated work row has no recorded row to mark, so `done` writes the overlay
+    row `set_cell` writes over one (same keys), carrying done_at; its evidence is required and returned for the caller's
+    own record, since the row has no field for it."""
     def go(store):
         if rid not in store["rows"]:
-            raise ValueError(f"no row {rid}")
+            made = stage_auto.read()["rows"].get(rid)
+            if drop or not made or made.get("group"):
+                raise ValueError(f"no row {rid}")
+            if not (evidence or "").strip():
+                raise ValueError(f"{rid} is a generated row; `stage done` needs --evidence, one line on why it is done")
+            store["rows"][rid] = {"id": rid, "cells": {}, "overlay": True, "created_at": fleet.iso(fleet.utcnow())}
         if drop:
             gone = with_descendants(store["rows"], {rid})
             store["rows"] = {k: r for k, r in store["rows"].items() if k not in gone}

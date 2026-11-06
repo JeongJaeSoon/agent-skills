@@ -59,4 +59,40 @@ table = {r["id"]: r for r in stages.table(state)["rows"]}
 assert table["kappa/K-1"]["done_at"], "merged, dev and prod 해당 없음: the row ends"
 assert not table["kappa/K-2"].get("done_at") and not table["kappa/K-3"].get("done_at")
 
+# `orch stage done` takes a generated row: the same overlay row `orch stage set` writes over one, now with done_at. The
+# schema gains no key, and the recorded-row path does not change.
+def refused(fn, *a, **kw):
+    try:
+        fn(*a, **kw)
+    except ValueError as e:
+        return str(e)
+    raise AssertionError("expected ValueError")
+
+
+assert refused(stages.finish, "kappa/K-2").startswith("kappa/K-2 is a generated row"), "a generated row needs its evidence"
+assert refused(stages.finish, "kappa", evidence="x").startswith("no row kappa"), "a group has no work to finish"
+assert refused(stages.finish, "kappa/K-2", drop=True, evidence="x").startswith("no row kappa/K-2")
+assert refused(stages.finish, "kappa/nope", evidence="x").startswith("no row kappa/nope")
+assert not stages.read()["rows"], "refusals write nothing"
+
+stages.finish("kappa/K-2", evidence="tracker Done, #22 and #23 merged")
+stored = stages.read()["rows"]["kappa/K-2"]
+assert set(stored) == {"id", "cells", "overlay", "created_at", "done_at"} and stored["cells"] == {} and stored["overlay"], stored
+table = {r["id"]: r for r in stages.table(state)["rows"]}
+assert table["kappa/K-2"]["done_at"] == stored["done_at"] and table["kappa/K-2"]["pr"] == "acme/app#23", "title, PR and place stay the tick's"
+
+stages.add("hand", "recorded by hand")
+stages.finish("hand")
+assert set(stages.read()["rows"]["hand"]) == {"id", "cells", "created_at", "title", "pr", "parent", "done_at"}, "no overlay flag"
+stages.finish("hand", drop=True)
+assert "hand" not in stages.read()["rows"]
+
+import subprocess  # noqa: E402
+cli = lambda *a: subprocess.run([sys.executable, str(HERE / "prog.py"), "stage", *a], capture_output=True, text=True)  # noqa: E731
+out = cli("done", "kappa/K-3")
+assert out.returncode != 0 and "needs --evidence" in out.stderr, out
+out = cli("done", "kappa/K-3", "--evidence", "tracker Done, no PR")
+assert out.returncode == 0 and out.stdout.strip() == "kappa/K-3: done — tracker Done, no PR", out
+assert stages.read()["rows"]["kappa/K-3"]["done_at"]
+
 print("test_stage_auto_title: ok")

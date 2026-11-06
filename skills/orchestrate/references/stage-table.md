@@ -81,6 +81,7 @@ orch stage env --prod v1.7.2 --dev v1.8.0
 orch stage next "acme/web#45 review → merge (agent, today)"
 orch stage show [--program P] [--all] [--md | --telegram | --json]   # without --all, as the brief's line counts
 orch stage done search    # stays marked finished for 7 days; `drop` removes a row and its children
+orch stage done <slug>/ABC-1 --evidence "tracker Done, #12 merged"   # a generated row: needs the evidence line; `drop` refuses it
 ```
 
 A `--group` row is the feature or epic a few rows belong to. It takes no `--pr`, no `--parent` and no cells; `--parent` the rows to it. A row under a group may hold children of its own, as a top-level row does. A row without `--pr` is a full row whose PR cell stays empty; its merge cell is empty until someone records one with `--evidence` (work that ended outside GitHub). Marks are `ok`, `fail`, `partial`, `checking` and `na` (or ✅ ❌ ⚠️ 🔄). The merge cell of a row with `--pr` is not written: `show` fills it from `state.json`'s PR list (merged with its date, else CI failure, changes requested, draft or waiting for review). The fleet dashboard's Stages page shows the table in full, generated rows first. It lives in the fleet state directory rather than a program's ledger because work outside a program needs rows too.
