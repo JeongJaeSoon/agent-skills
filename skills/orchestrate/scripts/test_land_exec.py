@@ -377,10 +377,16 @@ class LandExec(unittest.TestCase):
         up = self.n + 100
         self.stack(self.n, up)
         st = self.gh()
-        st["prs"][str(self.n)]["baseRefName"] = "release"  # also when open_rows' page of PRs does not list it
+        st["prs"][str(self.n)]["baseRefName"] = "release"
         self.write(st)
         row = self.request()
-        self.round()
+        real = prog.open_rows
+        # The page of open PRs the executor reads can be short of the bottom PR (OPEN_LIMIT); pr view still has it.
+        prog.open_rows = lambda repo: [r for r in real(repo) if r["number"] != self.n]
+        try:
+            self.round()
+        finally:
+            prog.open_rows = real
         self.settled(row, "refused", 1, f"gh pr edit {up} --base release --repo o/r")
 
     def test_an_unreadable_base_withholds_the_command_instead_of_guessing_main(self):
