@@ -8,14 +8,16 @@ Usage:
 Each card gets one verdict: 삭제 (close its listed terminals, ignored files to the trash, `orca worktree rm
 --run-hooks`), 터미널만 닫기 (an open PR: the worktree stays, its idle terminals go), 남김, or 사람 결정 (nothing is
 done; the reason says what to decide). The rules are in ../references/cards.md and in judge() below.
-`apply` reads the card again and acts only when the verdict and HEAD are what the plan says, before closing its
-terminals and again before removing it, holding the card's lock and passing cardguard.guard() each time. What cannot be read keeps the card: an agent's screen, the worktree,
-worker or automation list, process cwds.
+`apply` first refuses the whole plan, closing nothing, unless this module's scan sealed that exact text and every acting
+row names a card Orca lists (not the main checkout). Then it reads the card again and acts only when the verdict and
+HEAD are what the plan says, before closing its terminals and again before removing it, holding the card's lock and
+passing cardguard.guard() each time. What cannot be read keeps the card: an agent's screen, the worktree, worker or
+automation list, process cwds.
 The janitor's `card` kind (reap.py) is this module.
 Config: ~/.claude/agent-skills.json → "reap": {"idle_minutes": 30, "cards": {"protect_prefixes": ["lead-"],
 "done_patterns": [...], "question_patterns": [...]}}.
 """
-import json, os, pathlib, re, shlex, subprocess, sys, time
+import fcntl, hashlib, json, os, pathlib, pwd, re, shlex, subprocess, sys, time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import cardguard, reap, rm_refused  # noqa: E402
@@ -538,41 +540,137 @@ def act_locked(item, cfg, wait, done=None):
     return (f"터미널 {len(close)}개 닫음, " if close else "") + out
 
 
+SEALS, SEALS_KEPT = "card-plan-seals.json", 20
+# Fixed by the account, not by --state, $AGENT_SKILLS_STATE or $HOME: a caller that can pick the directory can put a
+# seal list of its own there and have a hand-written plan accepted, or lock cards where no other cleaner looks.
+ACCOUNT_STATE = pathlib.Path(pwd.getpwuid(os.getuid()).pw_dir) / ".local/state/agent-skills"
+SEAL_DIR = ACCOUNT_STATE
+
+
+def seal_plan(text):
+    """scan calls this with the exact text it wrote: apply accepts only a plan whose digest is here, so a plan written
+    or edited by hand (or by an agent) after the scan is refused. The file is in SEAL_DIR, which no flag or variable
+    moves; a caller that can write that directory itself can still forge a seal."""
+    path = SEAL_DIR / SEALS
+    SEAL_DIR.mkdir(parents=True, exist_ok=True)
+    # Two scans must not each read the old list and write back only their own seal.
+    with open(path.with_name(SEALS + ".lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        seals = reap.read_obj(path) or {}
+        seals[hashlib.sha256(text.encode()).hexdigest()] = time.time()
+        newest = sorted(seals.items(), key=lambda kv: kv[1], reverse=True)[:SEALS_KEPT]
+        reap.write_atomic(path, json.dumps(dict(newest)))
+
+
+def refuse_plan(text, rows):
+    """Why apply must not act on this plan, or None. Checked for every row before the first card is touched, so a
+    plan that fails closes nothing. rows: the cards Orca lists now (cards_listing), None when unreadable."""
+    if hashlib.sha256(text.encode()).hexdigest() not in (reap.read_obj(SEAL_DIR / SEALS) or {}):
+        return "이 계획은 cards.py scan 이 만든 것이 아니거나 만든 뒤 고쳐졌다(봉인 없음): scan --plan 으로 다시 만든다"
+    try:
+        items = json.loads(text)["items"]
+        acting = [i for i in items if i["verdict"] in ACTING]
+        for i in acting:
+            if not (isinstance(i["path"], str) and isinstance(i["name"], str) and isinstance(i["head"], str)
+                    and isinstance(i["close"], list) and all(isinstance(h, str) for h in i["close"])):
+                return f"계획 행 모양이 잘못됨: {i.get('name')}"
+    except (KeyError, TypeError, ValueError):
+        return "계획 모양이 잘못됨"
+    if acting:
+        if rows is None:
+            return "orca worktree 목록을 읽지 못해 대상의 소유를 확인할 수 없음"
+        cards = {reap.real(w["path"]) for w in rows if not w.get("isMainWorktree")}
+        if outside := [i["name"] for i in acting if reap.real(i["path"]) not in cards]:
+            return f"Orca 가 나열하는 카드가 아님(main 체크아웃이거나 없음): {', '.join(outside)}"
+    return None
+
+
+def preflight(items, cfg):
+    """Why the round must not start, or None. Judges every acting row again, read-only, the way act_locked does before
+    its first close; main holds every card's lock around it. A card that moved, changed or is held back by a guard
+    stops the whole plan, so no card is closed on a plan that is already out of date. A card that changes after this
+    still gets skipped alone, inside act."""
+    import guard
+    for i in items:
+        if i["verdict"] not in ACTING:
+            continue
+        try:
+            got = reread(i["path"], cfg)
+        except (RuntimeError, OSError, ValueError) as e:
+            return f"{i['name']}: 다시 판정하지 못함({type(e).__name__}: {str(e)[:120]})"
+        if got is None:
+            return f"{i['name']}: orca worktree list 에서 다시 찾지 못함"
+        verdict, why, _, f = got
+        if verdict != i["verdict"] or f["head"] != i["head"]:
+            return f"{i['name']}: plan 뒤에 바뀜(판정 {i['verdict']}→{verdict}): {why}"
+        ino = reap.dir_ino(i["path"])
+        if i.get("ino") is not None and ino != i["ino"]:
+            return f"{i['name']}: 판정 뒤 카드 폴더가 다시 만들어짐"
+        ok, why = cardguard.guard(i["path"], i["head"], i["close"], ino=ino)
+        if not ok:
+            return f"{i['name']}: {why}"
+        if why := guard.keep({"kind": "card", "verdict": i["verdict"]}, None):
+            return f"{i['name']}: {why}"
+    return None
+
+
+def apply_rows(acting, cfg):
+    """Act on each acting row of a plan that passed refuse_plan and preflight, inside the card locks main holds.
+    Returns how many rows failed or could not be checked."""
+    import guard
+    failed = 0
+    for item in acting:
+        with guard.hold(guard.targets({"kind": "card", "path": item["path"]})) as got:
+            if why := guard.keep({"kind": "card", "verdict": item["verdict"]}, None) if got else guard.LOCK_BUSY:
+                print(f"- 건너뜀 {item['name']}: {why}")
+                if guard.check_error(why):  # left, not decided: the others run, then the round ends non-zero
+                    failed += 1
+                continue
+            done = {}
+            logged = {"key": f"card:{item['path']}", "kind": "card", "head": item.get("head"), "ino": item.get("ino"),
+                      "why": item.get("why")}
+            rule = guard.rule({"kind": "card", "verdict": item["verdict"]})
+            try:
+                got = act(item, cfg, done=done)
+            except BaseException as e:  # logged whatever it was: terminals closed before it are still closed
+                reap.log_action({**logged, **(done.get("identity") or {})}, e, False, rule, done.get("closed"))
+                if not isinstance(e, (RuntimeError, OSError)):
+                    raise
+                failed += 1
+                print(f"- 실패 {item['name']}: {e}")
+            else:
+                reap.log_action({**logged, **(done.get("identity") or {})}, got, True, rule, done.get("closed"))
+                print(f"- {item['name']}: {got}")
+    return failed
+
+
 def main(argv):
     cmd = argv[1] if len(argv) > 1 else "scan"
     cfg = reap.config()
     if cmd == "apply":
-        plan = json.loads(pathlib.Path(reap.opt("--plan") or sys.exit("apply needs --plan PLAN.json")).read_text())
+        # The card locks live under the state directory: another one would not see a card a cleaner holds in the account's.
+        if reap.STATE.resolve() != ACCOUNT_STATE.resolve():
+            sys.exit("아무것도 닫지 않았다: apply 는 기본 상태 디렉터리에서만 돈다(--state·AGENT_SKILLS_STATE 로 옮기면 "
+                     "다른 정리가 잡은 카드 잠금이 보이지 않는다)")
+        # Bytes, not read_text(): its newline translation would hash a CRLF-edited file as the sealed text.
+        text = pathlib.Path(reap.opt("--plan") or sys.exit("apply needs --plan PLAN.json")).read_bytes().decode()
+        if why := refuse_plan(text, cards_listing()):
+            sys.exit(f"아무것도 닫지 않았다: {why}")
+        plan = json.loads(text)
         import guard
         try:
             guard.ownership()
         except guard.Unreadable as e:
             sys.exit(f"아무것도 하지 않았다: {e}")
-        failed = 0
-        for item in plan["items"]:
-            if item["verdict"] not in ACTING:
-                continue
-            with guard.hold(guard.targets({"kind": "card", "path": item["path"]})) as got:
-                if why := guard.keep({"kind": "card", "verdict": item["verdict"]}, None) if got else guard.LOCK_BUSY:
-                    print(f"- 건너뜀 {item['name']}: {why}")
-                    if guard.check_error(why):  # left, not decided: the others run, then the round ends non-zero
-                        failed += 1
-                    continue
-                done = {}
-                logged = {"key": f"card:{item['path']}", "kind": "card", "head": item.get("head"), "ino": item.get("ino"),
-                          "why": item.get("why")}
-                rule = guard.rule({"kind": "card", "verdict": item["verdict"]})
-                try:
-                    got = act(item, cfg, done=done)
-                except BaseException as e:  # logged whatever it was: terminals closed before it are still closed
-                    reap.log_action({**logged, **(done.get("identity") or {})}, e, False, rule, done.get("closed"))
-                    if not isinstance(e, (RuntimeError, OSError)):
-                        raise
-                    failed += 1
-                    print(f"- 실패 {item['name']}: {e}")
-                else:
-                    reap.log_action({**logged, **(done.get("identity") or {})}, got, True, rule, done.get("closed"))
-                    print(f"- {item['name']}: {got}")
+        # Every acting card's lock is taken before the first close and kept until the round ends, so a card another
+        # cleaner holds stops the plan here instead of after the cards before it were closed.
+        acting = [i for i in plan["items"] if i["verdict"] in ACTING]
+        with guard.hold([t for i in acting for t in guard.targets({"kind": "card", "path": i["path"]})]) as held:
+            if not held:
+                sys.exit(f"아무것도 닫지 않았다: {guard.LOCK_BUSY}")
+            if why := preflight(plan["items"], cfg):
+                sys.exit(f"아무것도 닫지 않았다: {why}")
+            failed = apply_rows(acting, cfg)
         sys.exit(1 if failed else 0)
     if cmd != "scan":
         sys.exit(__doc__)
@@ -580,7 +678,9 @@ def main(argv):
     items, notes = scan(cfg, repo_list)
     data = {"at": time.strftime("%Y-%m-%dT%H:%M%z"), "items": items, "notes": notes}
     if reap.opt("--plan"):
-        pathlib.Path(reap.opt("--plan")).write_text(json.dumps(data, ensure_ascii=False, indent=1))
+        text = json.dumps(data, ensure_ascii=False, indent=1)
+        pathlib.Path(reap.opt("--plan")).write_bytes(text.encode())
+        seal_plan(text)
     if "--json" in argv:
         print(json.dumps(data, ensure_ascii=False, indent=1))
     else:

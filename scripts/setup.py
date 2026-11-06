@@ -26,7 +26,9 @@ HASH is printed with the diff and covers every planned write and action, so anyt
 review no longer matches. Merging adds only what is missing and never overwrites a value, except that an enabled
 marketplace copy of agent-skills is turned off; a recommended item applied once and later removed by the user is
 not offered again (the record is in the agent-skills state dir), nor is an autoMode rule whose label was offered
-before when a release rewrites its text.
+before when a release rewrites its text. A rule that took over earlier recommended rules (the bundle's
+replaced_rules) is not offered to a PC that was offered any of them: the dry run names it with a `skipped` line,
+and swapping is left to the user, so a removed rule never returns inside it.
 
 An autoMode rule is drifted when it starts with the same label as a recommended rule (the text before the first
 colon, e.g. "Scheduled janitor round:") but its text differs, as when a release rewrote the recommended one.
@@ -207,7 +209,13 @@ def drift_plan(automode, rec, notes, replace):
     return swap, {(name, rule) for name, rule, _ in drift}
 
 
-def merge_settings(current, rec, skip, notes):
+def superseded(rule, replaced, prior):
+    """The earlier recommended rules (labels, or texts of unlabelled ones) `rule` took over that `prior` holds."""
+    return [old for entry in replaced if entry.get("starts") and rule.startswith(entry["starts"])
+            for old in entry.get("replaces") or [] if old in prior]
+
+
+def merge_settings(current, rec, skip, notes, replaced=()):
     """Return (new settings, item ids now present). Never overwrites; `skip` holds ids offered before."""
     new, offered = json.loads(json.dumps(current)), set()
     env = new.setdefault("env", {})
@@ -240,6 +248,8 @@ def merge_settings(current, rec, skip, notes):
     if not isinstance(automode, dict):
         raise Refused("autoMode in settings is not an object")
     labelled = drift_plan(automode, rec.get("autoMode") or {}, notes, None)[1]
+    # A rule that merged earlier ones would bring back any of them the user removed, or sit beside those kept.
+    prior = {x for i in skip if i.startswith("autoMode.") for t in [i.partition("\t")[2]] for x in (t, label(t)) if x}
     add = {}
     for name in SECTIONS:
         rules = (rec.get("autoMode") or {}).get(name) or []
@@ -247,6 +257,12 @@ def merge_settings(current, rec, skip, notes):
         seen = {label(i.partition("\t")[2]) for i in skip if i.startswith(f"autoMode.{name}\t")} - {None}
         add[name] = [r for r in rules if f"autoMode.{name}\t{r}" not in skip and label(r) not in seen
                      and (name, r) not in labelled]
+        for r in [r for r in add[name] if superseded(r, replaced, prior)]:
+            add[name].remove(r)
+            if r not in (automode.get(name) or []):
+                olds = ", ".join(repr(o[:50]) for o in superseded(r, replaced, prior))
+                notes.append(f"skipped autoMode.{name} {r[:50]!r}…: it replaces recommended rules this PC was "
+                             f"offered before ({olds}); swap them by hand (tune-automode)")
         offered |= {f"autoMode.{name}\t{r}" for r in rules}
     if any(add.values()):
         new["autoMode"], _ = automode_merge(automode, {"add": add})
@@ -285,7 +301,7 @@ def plan(args):
     settings = read_json(p["settings"], {})
     if args.replace_drifted is not None:
         return replace_plan(args, p, settings, rec, notes)
-    new_settings, offered = merge_settings(settings, rec, skip, notes)
+    new_settings, offered = merge_settings(settings, rec, skip, notes, fill(bundle.get("replaced_rules") or [], values))
     skills_json = read_json(p["skills_json"], None)
     new_skills, offered_keys = merge_keys(skills_json or {}, keys, skip, notes, personal)
     files = []

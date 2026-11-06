@@ -15,6 +15,11 @@ tail of each card's session transcript, the `orch sent` log and the last pressur
                on a human (that is `orch watch-cards`'s)
   X  exited    a Run worker Orca sees as exited with its task still in progress; a card outside a Run with no
                agent left whose transcript ends on an API error or an error notice
+  Q  quiet     a Run worker with its task in progress whose liveness Orca reports as unverifiable and has not
+               observed for 2h+, whose transcript shows an ended turn (idle): one line to its lead, the card's
+               parent session, shown once (SHOW_ONCE) until it clears and comes back. Raised only while the lead's
+               agent terminal is known: an ownerless finding would go to the orchestrator, which this is not for.
+               The lead asks the worker or closes the dispatch
   S  superseded  a card an `orch sent add --kind supersede --to <handle|card>` named 30+ min ago that still has an
                agent terminal
   O  orphan PR  a card with no agent and an open PR, 24h so (2h when it has a merge conflict), with no review
@@ -133,6 +138,17 @@ LABEL = {"I": "idle", "X": "exited", "S": "superseded", "O": "orphan PR", "D": "
 BGWAIT_WHY = "백그라운드 작업을 기다리지만 깨울 작업이 없음"  # B's reason on the brief's ❔ row
 LEAD_WAIT_WHY = "워커 없이 대기 · 대상 기록 없음"  # P's
 PARKED_LEAD_H = 2
+QUIET_DISPATCH_H = 2  # Q: how long Orca may have gone without observing an in-progress worker it cannot verify
+
+
+def quiet_hours(projection, now):
+    """Hours since Orca last observed a worker whose liveness it cannot verify; 0 for any other worker or when the
+    observation time is missing or not a number (observedAt is epoch milliseconds)."""
+    live = projection.get("liveness") or {}
+    at = live.get("observedAt")
+    if live.get("verdict") != "unverifiable" or isinstance(at, bool) or not isinstance(at, (int, float)) or at <= 0:
+        return 0.0
+    return max(0.0, (now - at / 1000) / 3600)
 VERDICT_OF = {"I": "idle", "X": "exited", "S": "superseded", "O": "pr_open_no_session", "R": "stalled", "H": "stalled"}
 # H's two kinds: what the owner's line says, and the reason on the brief's ❔ row (Korean, as the brief is).
 STALE_WHAT = {"hook": ("a hook error blocks its tools", "hook 오류로 도구가 막힘"),
@@ -140,7 +156,13 @@ STALE_WHAT = {"hook": ("a hook error blocks its tools", "hook 오류로 도구�
 REPEAT_WORD = {"error": "에러", "assistant": "답", "user": "입력", "reload": "reload"}
 # pending_lines shows these once, not every RENOTIFY. M's id holds the session and both models, so a drift to another
 # model (or back to an earlier one, once its finding closed) is a new id and is shown again.
-SHOW_ONCE = {"R", "M"}
+SHOW_ONCE = {"R", "M", "Q"}
+PER_OCCURRENCE = {"Q"}  # shown once per detection, polled while closed or not (a new code: no older record keyed by id)
+
+
+def key(f):
+    """The shown record's key: the finding id, plus when it was detected for a PER_OCCURRENCE code."""
+    return f"{f['id']}@{f['detected_at']}" if f.get("code") in PER_OCCURRENCE and f.get("detected_at") else f["id"]
 # A stalled card loses patrol's protection, so reap closes it within days; no session stays open this long.
 REPEATS_KEEP_DAYS = 90
 ACTIVE = ("run", "waiting", "working")  # what a card's activity verdict keeps; reap.PATROL_KEEP reads the same three
@@ -535,6 +557,14 @@ def judge(facts, memo):
                 add("X", path, (w.get("dispatchId"),), f"worker {w.get('dispatchId')} exited with its task in progress: "
                     f"worker-read --source transcript, then worker-stop or worker-abandon on positive evidence only",
                     prog.worker_terminal(w))  # its card stays "run": the lead decides, not a cleaner
+            elif quiet_hours(pj, now) >= QUIET_DISPATCH_H and own.get(path, (None, None))[1] \
+                    and ((facts["tails"].get(path) or (None, None))[0] or {}).get("state") == "idle":
+                # Orca can no longer say whether it lives, and its transcript shows an ended turn. One line to its lead
+                # (the parent session's agent terminal). Without a known lead nothing is raised: a finding with no
+                # owner is shown to the orchestrator, which this one is not for.
+                add("Q", path, (w.get("dispatchId"),), f"❔ worker {w.get('dispatchId')} is in progress but Orca has not "
+                    f"seen it for {quiet_hours(pj, now):.0f}h and cannot verify it: ask it or close the dispatch "
+                    f"(worker-read, then worker-stop or worker-abandon on positive evidence only)", prog.worker_terminal(w))
     # H: an ended turn whose screen says the session runs on what changed under it. A Run worker too: one whose
     # every tool call a hook blocks cannot send worker_done.
     stale_paths = set()  # H's: an I found on the same card keeps them stalled, the more telling verdict
@@ -767,7 +797,8 @@ def open_findings(rows=None):
 DEPENDS = {"I": {"terminals", "workers", "waits"}, "X": {"terminals", "workers"}, "S": {"terminals", "sent"},
            "O": {"state", "terminals", "board"}, "D": {"state", "board"}, "E": {"terminals"}, "L": {"consumers", "terminals", "workers", "waits"},
            "W": {"state"}, "R": {"terminals", "workers", "waits"}, "H": {"terminals", "waits"}, "B": {"terminals", "waits"},
-           "T": {"terminals", "handles"}, "M": {"terminals", "models"}, "P": {"terminals", "workers", "board", "waits"}}
+           "T": {"terminals", "handles"}, "M": {"terminals", "models"}, "P": {"terminals", "workers", "board", "waits"},
+           "Q": {"terminals", "workers", "state"}}  # state: the sessions that name the lead, and the transcript paths
 
 
 def write_round(findings, verdicts, dry, now, failed=()):
@@ -834,8 +865,8 @@ def pending_lines(me, unowned, now=None):
     mine = [f for f in opened.values() if f.get("owner") == me or (unowned and not f.get("owner"))]
     shown = fleet.read_json(SHOWN, {}) or {}
     seen = shown.get(me or "-") or {}
-    due = [f for f in mine if f["id"] not in seen
-           or f.get("code") not in SHOW_ONCE and now - fleet.parse(seen[f["id"]]) >= RENOTIFY]
+    due = [f for f in mine if key(f) not in seen
+           or f.get("code") not in SHOW_ONCE and now - fleet.parse(seen[key(f)]) >= RENOTIFY]
     # A card that ended its turn and waits (I) is often a worker that just reported and waits on the very session
     # reading this: alone, it wakes nobody until it has stayed open HOLD_ALONE; beside another line it goes with it.
     if all(f.get("code") in HOLD_CODES for f in due):
@@ -845,8 +876,9 @@ def pending_lines(me, unowned, now=None):
     # comes back, whoever polls next. Closed means in no one's open set; one only outside this call's scope (unowned or
     # not) keeps its record.
     before = shown
-    shown = {t: {i: at for i, at in rec.items() if i in opened and at} for t, rec in before.items() if isinstance(rec, dict)}
-    shown.setdefault(me or "-", {}).update({f["id"]: fleet.iso(now) for f in due})
+    live_keys = {key(f) for f in opened.values()}
+    shown = {t: {i: at for i, at in rec.items() if i in live_keys and at} for t, rec in before.items() if isinstance(rec, dict)}
+    shown.setdefault(me or "-", {}).update({key(f): fleet.iso(now) for f in due})
     shown = {t: rec for t, rec in shown.items() if rec}
     if shown != before:
         with contextlib.suppress(OSError):
