@@ -17,7 +17,8 @@ says how. They name Linear only for things outside the adapter (a `--linear-issu
 ## How to do an operation
 
 - **Agent in a session:** Linear: `orca linear` first, in its plain text output (`--json` only
-  when you parse the result); the Linear MCP tools only for what `orca linear` lacks
+  when you parse the result); the Linear MCP tools (`mcp__linear__*`, or the claude.ai
+  connector's `mcp__claude_ai_Linear__*`) only for what `orca linear` lacks
   ([references/linear.md](references/linear.md), "Not in `orca linear`"). Jira: an Atlassian MCP
   server when connected, else `tracker.py`.
 - **Scripts:** always `tracker.py`, never an MCP tool, a tracker CLI, or a tracker API.
