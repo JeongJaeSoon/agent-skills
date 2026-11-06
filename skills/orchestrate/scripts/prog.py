@@ -2726,30 +2726,37 @@ def cmd_land_check(argv):
         print(f"warning: gh returned no {','.join(unread)} for #{pr}: {json.dumps(v)[:400]}", file=sys.stderr)
         print(f"HOLD: PR state unknown (no {','.join(unread)} from gh); run land-check again")
         sys.exit(1)
+    import landjudge
     problems = []
     main = main_state(events)
-    if main == "red" and "--main-fix" not in argv:
-        problems.append("safety stop: main is red (only the repairing PR lands, with land --class main-fix)")
-    if stopped(events):
-        problems.append("STOP line active")
-    if on_hold(events, pr):
-        problems.append(f"on hold (record parked); `orch record {p.slug} admitted --pr {pr}` releases it")
-    if main == "pending":
-        print("note: main CI for the last landing has not reported yet")
-    if v["state"] != "OPEN" or v["isDraft"]:
-        problems.append(f"PR is {v['state']}{' draft' if v['isDraft'] else ''}")
     no_ci = no_ci_repo(repo)
     verdict = st.get("verdict")
-    if not verdict or verdict.get("result") != "pass":
+    passing = bool(verdict) and verdict.get("result") == "pass"
+    if main == "pending":
+        print("note: main CI for the last landing has not reported yet")
+    cur = patch_id(repo, pr) if passing else None  # only a passing verdict is compared with the patch
+    facts = {
+        "state": v["state"], "draft": v["isDraft"], "merge_state": v["mergeStateStatus"], "head": v["headRefOid"],
+        "stopped": stopped(events), "held": on_hold(events, pr), "no_ci": no_ci,
+        "verdict": {"pass": passing, "sha": (verdict or {}).get("sha") or ""} if verdict else None,
+        "patch_match": cur == verdict.get("patch_id") if passing else landjudge.NOT_COMPUTED}
+    why = landjudge.judge(facts, "check").why
+    if main == "red" and "--main-fix" not in argv:
+        problems.append("safety stop: main is red (only the repairing PR lands, with land --class main-fix)")
+    if "stopped" in why:
+        problems.append("STOP line active")
+    if "held" in why:
+        problems.append(f"on hold (record parked); `orch record {p.slug} admitted --pr {pr}` releases it")
+    if "not_open" in why:
+        problems.append(f"PR is {v['state']}{' draft' if v['isDraft'] else ''}")
+    if "no_verdict" in why:
         problems.append("no passing verdict recorded (orch verdict)")
-    else:
-        cur = patch_id(repo, pr)
-        if cur != verdict.get("patch_id"):
-            problems.append(f"patch changed since verdict ({verdict.get('patch_id', '')[:10]} -> {cur[:10]}): re-review")
-        elif no_ci and v["headRefOid"] != verdict.get("sha"):
-            problems.append(f"no-CI lane: verdict is for {verdict['sha'][:8]}, not the head {v['headRefOid'][:8]}: re-review")
-        elif v["headRefOid"] != verdict.get("sha"):
-            print(f"note: head moved {verdict['sha'][:8]} -> {v['headRefOid'][:8]} with the same patch-id; verdict holds, CI must pass at the new head")
+    if "patch_changed" in why:
+        problems.append(f"patch changed since verdict ({verdict.get('patch_id', '')[:10]} -> {cur[:10]}): re-review")
+    if "no_ci_sha" in why:
+        problems.append(f"no-CI lane: verdict is for {verdict['sha'][:8]}, not the head {v['headRefOid'][:8]}: re-review")
+    if "head_moved" in why:
+        print(f"note: head moved {verdict['sha'][:8]} -> {v['headRefOid'][:8]} with the same patch-id; verdict holds, CI must pass at the new head")
     if p.cfg["merge_policy"] == "human-gate" and (hold := gate_hold(p, events, pr)):
         problems.append(hold)
     try:
@@ -2769,17 +2776,19 @@ def cmd_land_check(argv):
     elif gaps and level != "off":
         print(f"warning: {gap_text(repo, gaps, v.get('baseRefName') or 'main')}")
     mss = v["mergeStateStatus"]
-    if mss == "DIRTY":
+    if "dirty" in why:
         problems.append("conflicts with base: fix task in the PR's worktree")
-    elif mss == "BEHIND":
+    elif "behind" in why:
         unit = members[:members.index(pr) + 1] if members else [pr]
         problems.append(f"behind base: {update_advice(unit, repo, bool(members))}, then wait for CI")
+    # CI is read here, after the stack lookups, as it always was: a run that finishes meanwhile is seen as finished.
     failed, pending, runs = ci_summary(v.get("statusCheckRollup"), no_ci)
     if not failed and not pending:
         pending = runs_unfinished(repo, v["headRefOid"], no_ci)
-    if failed:
+    why = landjudge.judge({**facts, "ci_failed": failed, "ci_pending": pending}, "check").why
+    if "ci_failed" in why:
         problems.append("CI failed: " + ", ".join(failed))
-    if pending:
+    if "ci_pending" in why:
         problems.append("CI pending: " + ", ".join(pending[:5]))
     if no_ci and compare(repo, v.get("baseRefName") or "main", v["headRefOid"]).get("behind_by") != 0:
         problems.append("no-CI lane: the head does not contain its base")

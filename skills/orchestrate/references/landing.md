@@ -10,6 +10,8 @@ This design replaced three that failed:
 
 "CI green is not a verdict." A verdict holds across a rebase only while the patch-id is unchanged.
 
+One PR's own facts (state, draft, merge state, CI, verdict against the patch, STOP, hold) are classified in one place, `scripts/landjudge.py`. `land-check` lists its reasons and the brief's "next" cell shows its first state. The program-wide checks below (main red, stacks, threads, evidence) stay with `land-check` and `land`.
+
 ## Repository settings this assumes
 
 - Branch protection keeps the required checks, with **"require branches to be up to date" off**. No admin bypass.
