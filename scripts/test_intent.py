@@ -28,7 +28,10 @@ def writes_plist(source):
             funcs |= {a.asname or a.name for a in n.names if a.name in ("dump", "dumps")}
     # Any reference counts, called or passed on (`map(plistlib.dumps, ...)`, `w = plistlib.dumps`), and so do the
     # indirect routes (`from plistlib import *`, getattr on the module, importlib): a reader uses loads and none of these.
+    dotted = {id(n.value) for n in ast.walk(tree) if isinstance(n, ast.Attribute)}  # names used as `mod.attr`
     for n in ast.walk(tree):
+        if isinstance(n, ast.Name) and n.id in mods and isinstance(n.ctx, ast.Load) and id(n) not in dotted:
+            return True  # the module itself passed on or assigned (`p = plistlib`): what it is used for is out of sight
         if isinstance(n, ast.Attribute) and n.attr in ("dump", "dumps") and isinstance(n.value, ast.Name) \
                 and n.value.id in mods:
             return True
@@ -70,7 +73,8 @@ for yes in ("import plistlib\nplistlib.dumps (spec)", "from plistlib import dump
             "from plistlib import dump as d\nd(spec, f)", "import plistlib as pl\npl.dump(spec, f)", "def broken(:",
             "import plistlib\nserialize = plistlib.dumps", "import plistlib\nlist(map(plistlib.dumps, [s]))",
             "import plistlib\ngetattr(plistlib, 'du' + 'mps')(s)", "from plistlib import *\ndumps(s)",
-            "import importlib\nimportlib.import_module('plistlib').dumps(s)"):
+            "import importlib\nimportlib.import_module('plistlib').dumps(s)",
+            "import plistlib\np = plistlib\np.dumps(s)", "import plistlib\nuse(plistlib)"):
     assert writes_plist(yes), yes
 for no in ("import plistlib\n# plistlib.dumps(spec)\nplistlib.loads(b)", "x = 'plistlib.dumps(spec)'", "dumps(spec)",
            "import json\njson.dumps(spec)"):
