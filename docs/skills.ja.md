@@ -1,4 +1,4 @@
-<!-- translated-from: ec06b240ed5d08476ba55c74bc8921319a222185 -->
+<!-- translated-from: 3c65b98e51625aa4e64d47eb9c2807d1115cf83b -->
 # スキルカタログ
 
 `agent-skills` プラグインに入っているスキル38個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック16個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
@@ -215,7 +215,7 @@ PR を受け持つスキルとマージする主体:
 - **いつ:** auto mode の分類器が行動を拒否し、ユーザーがその種の行動を今後許可したいとき。または auto mode がエージェントに許す範囲を変えたいとき。「auto mode 가 막았어」（auto mode に止められた）、「이거 허용되게 규칙 추가해줘」（これを許可するルールを足して）。
 - **内容:** 拒否カテゴリと拒否された行動から、その行動の種類だけを覆う最小の allow・soft_deny・environment ルールを作ります。ルールには行動の種類、安全になる条件、`Not covered:` を入れます。レビューチェックリスト（包括的な許可をしない、ユーザーが名指ししていない本番破壊系の操作を入れない、ユーザー本人のチャットだけを権限とみなす）を通したあと、`scripts/automode_rule.py emit` が spec を点検し（`refusal_category` がない、または `no-verdict` の spec と、`Not covered:` のない allow ルールは拒否します。包括的な表現、チケット・PR 番号、トークンのような文字列、既存ルールとほぼ同じルールは警告します）、diff を表示し、spec を埋め込んだ単体スクリプトをホーム配下に書きます。ユーザーが `! python3 -I <パス> --apply <spec ハッシュ>` で適用します。ハッシュはユーザーが見た diff の spec と一致する必要があります。スクリプトはタイムスタンプ付きバックアップ、冪等なマージ、JSON 検証を行い、戻すコマンドを出力します。エージェントは settings.json を編集せず、そのスクリプトを実行せず、待つあいだ拒否を回避しません。
 - **同梱:** `scripts/automode_rule.py`、テスト、`references/example-settings.json`。
-- **関係:** ユーザー設定の `permissions.allow` と `agent-skills.json` のキーは `skills-config`（autoMode ルールを一緒に入れるときはこのスキルのエンジンを共有）、プロジェクト設定と hooks は組み込みの `update-config`、プロジェクト全体の初期案は組み込みの `/auto-mode-setup` が担当します。`orchestrate` の Frame と Refused acts が、リポジトリのマージ・デプロイの継続承認ルール（「프로젝트 지속 승인」）をこのスキルで作ります。
+- **関係:** ユーザー設定の `permissions.allow` と `agent-skills.json` のキーは `skills-config`（autoMode ルールを一緒に入れるときはこのスキルのエンジンを共有）、プロジェクト設定と hooks は組み込みの `update-config`、プロジェクト全体の初期案は組み込みの `/auto-mode-setup` が担当します。`orchestrate` の Frame と Refused acts が、リポジトリのマージ・デプロイの継続承認ルール（「Standing project approval」）をこのスキルで作ります。
 
 ### skills-config
 - **いつ:** `~/.claude/agent-skills.json` の値を変えるとき、ユーザーの `settings.json` の `permissions.allow` にルールを足したり外したりするとき。「agent-skills 설정 바꿔줘」（agent-skills の設定を変えて）、「allow 규칙 추가해줘」（allow ルールを足して）。
@@ -587,6 +587,7 @@ PR を受け持つスキルとマージする主体:
 | `orchestrate.model_flag` | warn | `orchestrate.models` を設定しているのに、`orca orchestration worker-start`・`orca worktree create`・`orca agent launch` が `--model` なしで Claude を起動した。`--terminal` は対象外 |
 | `orchestrate.pr_poll` | warn | Monitor のコマンドが `gh pr list\|view\|checks` を 300 秒未満の sleep で回している。警告は `pr-watch` コマンド(`bin/pr-watch`)を指す。deny には上がらない |
 | `orchestrate.self_land` | warn | `hooks/self_land_gate.py`。最初のプロンプトに `PROGRAM` と `orch land` を書いた `APPROVED` があるカードが、自分の PR を開いたまま `worker_done` や `orca worktree rm` を呼ぶこと。`READY-WAIT:` の行、`--outcome failed`、human-gate のプログラムは通します。`deny` にすると止めます |
+| `orchestrate.land_route` | deny | `hooks/land_route_gate.py`。オーケストレーター・リード・ワーカー（サブエージェントを含む）や `PROGRAM` ブリーフのセッションが、land executor の範囲内の repo で `gh pr merge` を呼ぶこと。拒否の文面には、その PR の `orch land` の行と、その head の独立レビューの後にだけ使う `orch verdict` の行を入れます。`OWNER/*` が対象にするのは `gh` アカウント本人の repo だけで、org の repo は名前で書いたものだけが範囲に入ります。範囲外の自分の repo は止めず、範囲に加える skills-config の spec を添えて通します。`exclude` の repo、範囲外の org や他人の repo、executor がオフの状態は何も言わずに通します |
 | `orchestrate.stack_dependent` | warn | 依存する PR がスタックになっていないこと。`hooks/stack_gate.py` が `gh pr create` でブリーフの `Lands after` とブランチの履歴を見て、`orch land`・`land-check` が land-after の依存と実際のスタックを比べます。`deny` にすると両方が止めます。読めないときは警告 1 行で通します |
 | `orchestrate.auto_wake_min` | なし(オフ)。setup の推奨バンドル: 10 | 正の整数 N。`orch wait` が idle と最初に表示したワーカーを N 分後に 1 回起こします(`skills/orchestrate/references/waking.md` の "Automatic wake")。キーがなければ表示だけで、オフだという警告を 1 行出します。同じ dispatch は 2 回起こさず、2 回目の停止は Needs you に上げます |
 | `orchestrate.model_autoswitch` | なし(オフ) | `true` のときだけ有効。patrol の M 検出(役割の設定と違うモデル)で、idle の worker を `/exit` のあと同じ端末で `claude --resume <id> --model <alias>` として一度だけ切り替えます。lead・orchestrator、実行中のターン、未回答の質問、画面に見える background 作業があるセッションは飛ばし、失敗は再試行せず Needs you に上げます(`docs/automation.md`、検出 M) |
@@ -720,7 +721,7 @@ pstack のスキル58個（原則24個と、その他34個）のうち、原則2
 - **プロジェクト運営:** `orchestrate` の `orch` 台帳、着地ゲートと専有レーン、human-gate、main ガーディアン、QA リード、`orch-dash` ダッシュボード。形は pstack のプレイブックに倣いましたが、Orca の Run と GitHub stack の上で新しく作りました。
 - **測定とアダプター:** `reflect` の測定モード、`use-tracker`、`use-notes`。
 - **マシンの手入れ:** `reap-resources`、`tune-automode`、`skills-config`、`setup-pc`。
-- **フック:** 権限の判定（`guard.py`）、オーケストレーター・リードの再確認（`reorient.py`）、未設定の PC での設定の提案（`onboard.py`）、ダッシュボードから答える権限ダイアログの記録（`permission.py`）、ターミナルで答えた決定のクローズ（`decision.py`）、記録のないオーナーの言葉の転送の警告（`decision_relay.py`）、完了主張の検査（`claim_check.py`）、重い開始の前の負荷確認（`pressure_gate.py`）、文体の検査（`prose_check.py`）、依存する PR のスタック確認（`stack_gate.py`）、プログラムのカードが自分の PR を開いたまま閉じるときの警告（`self_land_gate.py`）。
+- **フック:** 権限の判定（`guard.py`）、オーケストレーター・リードの再確認（`reorient.py`）、未設定の PC での設定の提案（`onboard.py`）、ダッシュボードから答える権限ダイアログの記録（`permission.py`）、ターミナルで答えた決定のクローズ（`decision.py`）、記録のないオーナーの言葉の転送の警告（`decision_relay.py`）、完了主張の検査（`claim_check.py`）、重い開始の前の負荷確認（`pressure_gate.py`）、文体の検査（`prose_check.py`）、依存する PR のスタック確認（`stack_gate.py`）、プログラムのカードが自分の PR を開いたまま閉じるときの警告（`self_land_gate.py`）、land executor の範囲内の repo での `gh pr merge` を `orch land` へ回すこと（`land_route_gate.py`）。
 
 ### upstream との同期状況
 - **最後の同期:** 2026-10-26、`b42effe`（0.15.3）から `99b609a`（0.15.32）へ。その間に upstream は pstack に74個のコミットを積みました。

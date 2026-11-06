@@ -224,7 +224,7 @@ PR 을 맡는 스킬과 머지 주체:
 - **언제:** auto mode 분류기가 행동을 거부했고 사용자가 그런 행동을 앞으로 허용하고 싶을 때, 또는 auto mode가 에이전트에게 허용하는 범위를 바꾸려 할 때. "auto mode 가 막았어", "이거 허용되게 규칙 추가해줘".
 - **내용:** 거부 카테고리와 거부된 행동에서 그 행동 부류만 덮는 가장 작은 allow·soft_deny·environment 규칙을 만든다. 규칙에는 행동 부류, 안전한 조건, `Not covered:`가 들어간다. 검토 체크리스트(포괄 허용 금지, 사용자가 말하지 않은 프로덕션 파괴 동사 금지, 사용자 본인 채팅만 권한)를 통과시킨 뒤 `scripts/automode_rule.py emit`이 spec을 점검하고(spec의 `refusal_category`가 없거나 `no-verdict`면, `Not covered:` 없는 allow 규칙이면 거절한다. 포괄 표현, 티켓·PR 번호, 토큰 같은 문자열, 기존 규칙과 거의 같은 규칙은 경고한다) diff를 보여 주고 spec을 박은 독립 스크립트를 홈 아래에 쓴다. 사용자가 `! python3 -I <경로> --apply <spec 해시>`로 적용한다. 해시는 사용자가 본 diff의 spec과 맞아야 한다. 스크립트는 타임스탬프 백업, 멱등 병합, JSON 검증을 하고 되돌리는 명령을 출력한다. 에이전트는 settings.json을 고치지 않고, 그 스크립트를 실행하지 않고, 기다리는 동안 거부를 우회하지 않는다.
 - **동봉:** `scripts/automode_rule.py`, 테스트 파일, `references/example-settings.json`.
-- **관계:** 사용자 설정의 `permissions.allow`와 `agent-skills.json` 키는 `skills-config`(autoMode 규칙을 함께 넣을 때 이 스킬의 엔진을 공유), 프로젝트 설정과 hooks는 내장 `update-config`, 프로젝트 전체 초안은 내장 `/auto-mode-setup`이 맡는다. `orchestrate`의 Frame과 Refused acts가 저장소 머지·배포의 지속 승인 규칙("프로젝트 지속 승인")을 이 스킬로 만든다.
+- **관계:** 사용자 설정의 `permissions.allow`와 `agent-skills.json` 키는 `skills-config`(autoMode 규칙을 함께 넣을 때 이 스킬의 엔진을 공유), 프로젝트 설정과 hooks는 내장 `update-config`, 프로젝트 전체 초안은 내장 `/auto-mode-setup`이 맡는다. `orchestrate`의 Frame과 Refused acts가 저장소 머지·배포의 지속 승인 규칙("Standing project approval")을 이 스킬로 만든다.
 
 ### skills-config
 - **언제:** `~/.claude/agent-skills.json`의 값을 바꾸거나, 사용자 `settings.json`의 `permissions.allow`에 규칙을 넣고 빼려 할 때. "agent-skills 설정 바꿔줘", "allow 규칙 추가해줘".
@@ -616,6 +616,7 @@ PR 을 맡는 스킬과 머지 주체:
 | `orchestrate.model_flag` | warn | `orchestrate.models`가 설정돼 있는데 `orca orchestration worker-start`·`orca worktree create`·`orca agent launch`가 `--model` 없이 Claude를 띄움. `--terminal`은 대상이 아니다 |
 | `orchestrate.pr_poll` | warn | Monitor 명령이 `gh pr list\|view\|checks`를 300초보다 짧은 sleep으로 돌림. 경고는 `pr-watch` 명령(`bin/pr-watch`)을 가리킨다. 거부로 올라가지 않는다 |
 | `orchestrate.self_land` | warn | `hooks/self_land_gate.py`. 첫 프롬프트에 `PROGRAM`과 `orch land`를 적은 `APPROVED`가 있는 카드가 자기 PR이 열린 채 `worker_done`이나 `orca worktree rm`을 부름. `READY-WAIT:` 줄, `--outcome failed`, human-gate 프로그램은 통과한다. `deny`로 올리면 막는다 |
+| `orchestrate.land_route` | deny | `hooks/land_route_gate.py`. 오케스트레이터·리드·워커(서브에이전트 포함)나 `PROGRAM` 브리프 세션이 land executor 범위 안 repo에 `gh pr merge`를 부름. 거부 문구에 그 PR의 `orch land` 줄과, 그 head를 독립 리뷰한 뒤에만 쓰는 `orch verdict` 줄을 넣는다. `OWNER/*`는 `gh` 계정 본인 소유만 덮고, org repo는 이름으로 넣은 것만 범위다. 범위 밖인 본인 repo는 막지 않고, 범위에 넣는 skills-config spec을 함께 알린다. `exclude`의 repo, org나 다른 사람의 범위 밖 repo, executor가 꺼진 상태는 그냥 통과한다 |
 | `orchestrate.stack_dependent` | warn | 의존 PR이 스택이 아니다. `hooks/stack_gate.py`가 `gh pr create`에서 브리프의 `Lands after`와 브랜치 이력을 보고, `orch land`·`land-check`가 land-after 간선과 실제 스택을 비교한다. `deny`로 올리면 둘 다 막는다. 못 읽으면 통과 + 경고 한 줄 |
 | `orchestrate.auto_wake_min` | 없음(꺼짐). setup 권장 묶음: 10 | 양의 정수 N. `orch wait`가 idle로 처음 표시한 워커를 N분 뒤 한 번 깨운다(`skills/orchestrate/references/waking.md`, "Automatic wake"). 키가 없으면 표시만 하고 꺼져 있다는 경고를 한 줄 낸다. 같은 dispatch를 두 번 깨우지 않고, 두 번째 멈춤은 Needs you로 올린다 |
 | `orchestrate.model_autoswitch` | 없음(꺼짐) | `true`일 때만 켜진다. patrol의 M 발견(역할 설정과 다른 모델)에서 idle worker를 `/exit` 뒤 같은 터미널의 `claude --resume <id> --model <alias>`로 한 번 전환한다. lead·orchestrator, 진행 중인 턴, 열린 질문, 화면의 background 작업이 있는 세션은 건너뛰고, 실패하면 재시도 없이 Needs you로 올린다(`docs/automation.md`, 발견 M) |
@@ -777,7 +778,7 @@ pstack 스킬 58개(원칙 24개와 나머지 34개) 가운데 원칙 24개 전�
 - **프로젝트 운영:** `orchestrate`의 `orch` 원장, 착지 게이트와 독점 레인, human-gate, main 가디언, QA 리드, `orch-dash` 대시보드. 모양은 pstack 플레이북을 따랐지만 Orca Run과 GitHub stack 위에서 새로 만들었다.
 - **측정과 어댑터:** `reflect`의 측정 모드, `use-tracker`, `use-notes`.
 - **머신 관리:** `reap-resources`, `tune-automode`, `skills-config`, `setup-pc`.
-- **hook:** 권한 결정(`guard.py`), 오케스트레이터·리드 재정렬(`reorient.py`), 미설정 PC의 설정 제안(`onboard.py`), 대시보드에서 답하는 권한 창 기록(`permission.py`), 터미널에서 답한 결정 닫기(`decision.py`), 기록 없는 오너 말 전달 경고(`decision_relay.py`), 완료 주장 검사(`claim_check.py`), 무거운 시작 전 사용량 확인(`pressure_gate.py`), 문체 검사(`prose_check.py`), 의존 PR의 스택 확인(`stack_gate.py`), 프로그램 카드의 PR을 연 채 닫는 일 경고(`self_land_gate.py`).
+- **hook:** 권한 결정(`guard.py`), 오케스트레이터·리드 재정렬(`reorient.py`), 미설정 PC의 설정 제안(`onboard.py`), 대시보드에서 답하는 권한 창 기록(`permission.py`), 터미널에서 답한 결정 닫기(`decision.py`), 기록 없는 오너 말 전달 경고(`decision_relay.py`), 완료 주장 검사(`claim_check.py`), 무거운 시작 전 사용량 확인(`pressure_gate.py`), 문체 검사(`prose_check.py`), 의존 PR의 스택 확인(`stack_gate.py`), 프로그램 카드의 PR을 연 채 닫는 일 경고(`self_land_gate.py`), land executor 범위 repo의 `gh pr merge`를 `orch land`로 돌리기(`land_route_gate.py`).
 
 ### upstream 동기화 상태
 - **마지막 동기화:** 2026-10-26, `b42effe`(0.15.3)에서 `99b609a`(0.15.32)로. 그 사이 upstream은 pstack에 커밋 74개를 쌓았다.

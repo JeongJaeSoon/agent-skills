@@ -281,6 +281,9 @@ Tickets come from the tracker adapter (use-tracker/scripts/tracker.py), never fr
 """
 import contextlib, datetime as dt, fcntl, fnmatch, hashlib, heapq, json, math, os, pathlib, re, shlex, subprocess, sys, tempfile, time
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))  # loaded by path or run with -I, this dir is not on it
+import land_scope  # noqa: E402
+
 TRACKER = pathlib.Path(__file__).resolve().parents[2] / "use-tracker" / "scripts" / "tracker.py"
 HOME = pathlib.Path(os.environ.get("PROGRAMS_HOME", "~/.claude/programs")).expanduser()
 GIT_CACHE = pathlib.Path(os.environ.get("XDG_CACHE_HOME", "~/.cache")).expanduser() / "agent-skills" / "orchestrate" / "git"
@@ -1555,25 +1558,60 @@ def skills_version(root):
 STANDALONE_RUN = "standalone"  # a standalone card has no Orca Run; Run lookups on it answer empty
 
 
+def repo_meta(repo):
+    """{"nameWithOwner", "isFork", "isArchived"} of the repo GitHub serves under `repo` now (a rename or a transfer
+    redirects). REST, not `gh repo view`: the executor asks every round, and GraphQL's budget is the one that runs out."""
+    v = gh_json("api", f"repos/{repo}")
+    return {"nameWithOwner": v["full_name"], "isFork": bool(v.get("fork")), "isArchived": bool(v.get("archived"))}
+
+
+def standalone_run():
+    """The Run the existing `*-standalone` programs share, else the placeholder. Programs that disagree, or none,
+    give the placeholder: guessing one of several Runs would file a repo's PRs under the wrong coordinator."""
+    runs = set()
+    for f in HOME.glob("*-standalone/program.json"):
+        try:
+            runs.add(json.loads(f.read_text()).get("run"))
+        except (OSError, ValueError, AttributeError):
+            return STANDALONE_RUN
+    runs.discard(STANDALONE_RUN)
+    return runs.pop() if len(runs) == 1 and all(isinstance(r, str) and r for r in runs) else STANDALONE_RUN
+
+
 def standalone_program(argv):
     """The `<name>-standalone` program of the repo `orch land --repo OWNER/NAME` names, created when missing.
 
-    Only where the land executor lists the repo: elsewhere a standalone card merges itself and needs no program.
+    Only where the land executor covers the repo under the name GitHub gives it now (a renamed repo answers with its
+    new name): elsewhere a standalone card merges itself and needs no program.
     """
-    repo = opt(argv, "--repo")
-    slug = f"{repo.split('/')[-1]}-standalone" if repo and "/" in repo else None
-    if slug != argv[0]:
+    asked = opt(argv, "--repo")
+    if not asked or asked.count("/") != 1 or not argv[0].endswith("-standalone"):
         sys.exit(f"no program '{argv[0]}'; a standalone PR lands as `orch land <name>-standalone --repo OWNER/NAME`")
-    if not land_executor(repo):
-        sys.exit(f"no program '{slug}', and orchestrate.land_executor is off for {repo}: a standalone card merges its own PR")
+    ex = land_executor()
+    if not ex:
+        sys.exit(f"no program '{argv[0]}', and orchestrate.land_executor is off: a standalone card merges its own PR")
+    meta = repo_meta(asked)
+    repo = meta["nameWithOwner"]
+    if not land_scope.how(ex["scope"], repo) or land_scope.excluded(ex["scope"], asked):
+        now_named = "" if repo.casefold() == asked.casefold() else f" ({repo} on GitHub now)"
+        sys.exit(f"no program '{argv[0]}', and orchestrate.land_executor is off for {asked}{now_named}: a standalone"
+                 " card merges its own PR")
+    if land_scope.how(ex["scope"], repo) == "owner":
+        login = run(["gh", "api", "user", "--jq", ".login"]).stdout.strip()
+        if why := land_scope.owner_refused(ex["scope"], repo, login) or land_scope.wildcard_only(ex["scope"], repo, meta):
+            sys.exit(f"{why}; nothing created")
+    slug = f"{repo.split('/')[-1]}-standalone"
+    if slug.casefold() != argv[0].casefold():
+        sys.exit(f"{asked} is {repo} on GitHub now: name its program {slug} (`orch land {slug} --repo {repo} …`)")
+    slug = argv[0]
     d = HOME / slug
-    cfg = {"slug": slug, "repo": repo, "run": opt(argv, "--run", STANDALONE_RUN), "tracker": {}, "predicate": [],
+    cfg = {"slug": slug, "repo": repo, "run": opt(argv, "--run") or standalone_run(), "tracker": {}, "predicate": [],
            "merge_policy": "autonomous", "ceiling": 6, "deadline": None, "created_at": now(),
            "skills_commit": skills_version(pathlib.Path(__file__).resolve().parents[3]), "note": "standalone cards",
            "final_check": None}
     try:
-        write_program(d, cfg, cfg["run"], "autonomous")
-        print(f"created standing program {slug} for {repo} (merge_policy autonomous)")
+        write_program(d, cfg, cfg["run"], "autonomous", lead=False)
+        print(f"created standing program {slug} for {repo} (merge_policy autonomous, Run {cfg['run']})")
     except FileExistsError:  # another card created it between the check and here
         pass
 
@@ -1584,8 +1622,11 @@ def standalone_target(argv):
     if "--repo" in argv and not (HOME / argv[0] / "program.json").exists():
         standalone_program(argv)
     p = Program(argv[0])
-    if "--repo" in argv and p.cfg["repo"] != opt(argv, "--repo"):
-        sys.exit(f"program '{argv[0]}' is for {p.cfg['repo']}, not {opt(argv, '--repo')}")
+    asked = opt(argv, "--repo")
+    # An old name reaches the program GitHub's current name made; only a mismatch costs the lookup.
+    if asked and p.cfg["repo"].casefold() != asked.casefold() \
+            and repo_meta(asked)["nameWithOwner"].casefold() != p.cfg["repo"].casefold():
+        sys.exit(f"program '{argv[0]}' is for {p.cfg['repo']}, not {asked}")
     return p
 
 
@@ -1620,11 +1661,12 @@ def cmd_init(argv):
     print("\n".join(dashboard_lines(slug)))
 
 
-def write_program(d, cfg, run_id, policy):
-    """Create program.json for cmd_init and standalone_program; FileExistsError when another caller got there first."""
+def write_program(d, cfg, run_id, policy, lead=True):
+    """Create program.json for cmd_init and standalone_program; FileExistsError when another caller got there first.
+    lead=False skips the dispatched-lead lookup: a standalone program belongs to no lead, whichever card creates it."""
     me = os.environ.get("ORCA_TERMINAL_HANDLE")
     try:
-        mine = own_worker(all_workers(run_id), me) if me and run_id != STANDALONE_RUN else None
+        mine = own_worker(all_workers(run_id), me) if lead and me and run_id != STANDALONE_RUN else None
     except SystemExit as e:  # guessing "coordinating lead" would scope a worker lead's program to the whole Run
         sys.exit(f"orch init: could not list {run_id}'s workers to tell whether this terminal is a dispatched lead"
                  f" ({e}). Retry when `orca orchestration worker-list --run {run_id}` answers.")
@@ -2938,9 +2980,13 @@ def land_executor(repo=None):
         return None
     if not isinstance(cfg, dict) or cfg.get("enabled") is not True:
         return None
-    repos = [r for r in cfg.get("repos") or [] if isinstance(r, str)]
-    if repo is not None and repo not in repos:
+    try:
+        scope = land_scope.parse(cfg)
+    except land_scope.ScopeError as e:
+        sys.exit(f"{path}: {e}; land stops rather than guess the executor's repos")
+    if repo is not None and not land_scope.how(scope, repo):
         return None
+    repos = [r for r in cfg.get("repos") or [] if isinstance(r, str)]
     hours = cfg.get("max_wait_hours")
     try:
         hours = 24.0 if hours is None else float(hours)
@@ -2950,9 +2996,34 @@ def land_executor(repo=None):
         # A wait that can never end (NaN, inf) or a typo ("24h") would keep requests queued for ever.
         sys.exit(f"{path}: orchestrate.land_executor.max_wait_hours must be a positive number of hours, "
                  f"not {cfg.get('max_wait_hours')!r}")
+    sources = cfg.get("verdict_sources") or ["review:codex"]
+    if not isinstance(sources, list) or not all(isinstance(s, str) and s for s in sources):
+        # A bare string would match by substring ("review:codex" in "review:codex-old") and index by letter.
+        sys.exit(f"{path}: orchestrate.land_executor.verdict_sources must be a list of sources, not {sources!r}")
     import autoqueue
-    return {"repos": repos, "verdict_sources": cfg.get("verdict_sources") or ["review:codex"], "max_wait_hours": hours,
+    return {"repos": repos, "scope": scope, "verdict_sources": sources, "max_wait_hours": hours,
             "auto_queue": autoqueue.config(cfg.get("auto_queue"))}
+
+
+def executor_for(repo):
+    """(land_executor(), repo_meta) when the executor covers the repo GitHub serves under `repo` now, else (None, meta).
+    The recorded name alone cannot choose the direct merge: a program made before a rename still names the old one.
+    An exclusion under either name keeps the repo out. A GitHub that does not answer exits; never a guessed direct merge."""
+    ex = land_executor()
+    if not ex:
+        return None, None
+    meta = repo_meta(repo)
+    now_named = meta["nameWithOwner"]
+    if land_scope.excluded(ex["scope"], repo) or land_scope.excluded(ex["scope"], now_named):
+        return None, meta
+    if not land_scope.how(ex["scope"], now_named):
+        if land_scope.how(ex["scope"], repo):
+            # Covered under the recorded name, not under GitHub's: a rename or transfer moved it out. Merging it directly
+            # would route around the executor exactly when the repo's owner or name changed.
+            sys.exit(f"refused: {repo} is {now_named} on GitHub now, which orchestrate.land_executor does not cover;"
+                     " list the new name (skills-config) or exclude it, then land again")
+        return None, meta
+    return ex, meta
 
 
 LAND_EXIT = {"merged": 0, "superseded": 2}
@@ -3008,7 +3079,14 @@ def cmd_land(argv):
     pr, klass = int(opt(argv, "--pr")), opt(argv, "--class")
     if klass and klass not in KLASS:
         sys.exit(f"--class is one of {', '.join(KLASS)}")
-    executor = land_executor(p.cfg["repo"])
+    try:
+        executor = executor_for(p.cfg["repo"])[0]
+    except (SystemExit, KeyError, TypeError, ValueError) as e:
+        if isinstance(e, SystemExit) and not TRANSIENT.search(str(e.code)):
+            raise
+        print(f"yield: GitHub did not say which repo {p.cfg['repo']} is now, so executor or direct merge is undecided"
+              f" ({str(getattr(e, 'code', e))[:160]}); land again")
+        sys.exit(2)
     events = p.events()
     st = pr_state(events).get(pr, {})
     if not claimed(events, pr) or (klass and klass != st["ready"].get("klass", "normal")):
