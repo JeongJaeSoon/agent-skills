@@ -120,9 +120,24 @@ def after_cd(c, here):
     """The directory a `cd` command leaves the shell in: UNKNOWN_DIR when it cannot be read from the words."""
     args = [x for x in c.words[1:] if not x.startswith("-") or x == "-"]
     target = args[0] if args else "~"
+    # `popd`, a bare `pushd` and `pushd +1` take the directory from a stack this reader does not keep.
+    if c.name == "popd" or c.name == "pushd" and (not args or args[0][0] in "+-"):
+        return UNKNOWN_DIR
     if target == "-" or "$" in target.replace("$HOME", "").replace("${HOME}", ""):
         return UNKNOWN_DIR
     return expand(target, here) or UNKNOWN_DIR
+
+
+def after_switch(c, switched):
+    """The branch a `git switch <b>`, `git checkout <b>` or `-c/-b <b>` on the same command line leaves checked out
+    (None before any; "" when it cannot be read)."""
+    sub, args = (c.words[1], c.words[2:]) if len(c.words) > 1 else ("", [])
+    if sub not in ("switch", "checkout") or "--" in args:  # `checkout -- <file>` restores files
+        return switched
+    if args == ["-"]:
+        return ""
+    names = [x for x in args if not x.startswith("-")]
+    return names[0] if len(names) == 1 else switched
 
 
 def verb(args, valued):
@@ -209,7 +224,7 @@ def write_targets(c):
     return out
 
 
-def check_command(c, masked, cfg, cwd, session, here=None):
+def check_command(c, masked, cfg, cwd, session, here=None, switched=None):
     """[(key, reason)] for one command. `here` is the directory its relative paths resolve against (cwd after the
     line's earlier `cd`s), `cwd` the hook's own."""
     here = cwd if here is None else here
@@ -276,7 +291,7 @@ def check_command(c, masked, cfg, cwd, session, here=None):
         if label_add(w):
             out.append(("guard.deny.self_exempt_label", "The `no-visual-change` label exempts a PR from visual review; "
                                                         "an agent never adds it to its own PR. Ask the human."))
-    if name in ("git", "gh", "curl") and force_push_default(c, here):
+    if name in ("git", "gh", "curl") and force_push_default(c, here, switched):
         out.append(("guard.deny.default_force_push", "A force push rewrites the default branch every worker and "
                                                      "reviewer builds on. Push your own PR branch (`git push "
                                                      "--force-with-lease=<branch>:<sha> origin <branch>`); a bad "
@@ -292,7 +307,8 @@ def check_command(c, masked, cfg, cwd, session, here=None):
             out.append(("guard.deny.rm_outside", "A recursive `rm` is limited to this checkout and the temporary "
                                                  "folders. Move anything else to the trash (`mv <path> ~/.Trash/`) "
                                                  "or ask the human."))
-    if name == "trash-empty" or name == "osascript" and finder_empties(w):
+    if name == "trash-empty" or name == "gio" and w[1:2] == ["trash"] and "--empty" in w \
+            or name == "osascript" and finder_empties(w):
         out.append(("guard.deny.trash_empty", TRASH_EMPTY))
     if name == "orch" and w[1:2] == ["exempt"]:
         out.append(("guard.deny.owner_only", f"`orch {' '.join(w[1:3])}` is the human's to run, as a `!` line in their "
@@ -481,7 +497,7 @@ def default_names(where, remote, gitdir=()):
     return {"main", "master"} | ({head.split("/", 1)[1]} if "/" in head else set())
 
 
-def force_push_default(c, here):
+def force_push_default(c, here, switched=None):
     """Whether this `git push` or `gh api` command force-updates a default branch: main, master or the branch
     origin/HEAD names. A push with no refspec, or `HEAD`, is judged by the branch checked out in `here`; when that
     cannot be read, only main and master count."""
@@ -552,7 +568,8 @@ def force_push_default(c, here):
         if spec.lstrip("+") == ":":  # the matching refspec: every branch the remote has
             dst = "*"
         if dst == "HEAD":
-            dst = git_out(gitdir + ["symbolic-ref", "--short", "HEAD"], where)
+            # A `git switch` earlier on the line moved HEAD; the repository on disk still shows the old branch.
+            dst = switched if switched is not None else git_out(gitdir + ["symbolic-ref", "--short", "HEAD"], where)
         # A pattern such as `refs/heads/*` reaches the default branch too.
         if (forced or spec.startswith("+")) and any(fnmatch.fnmatchcase(c, dst) for n in names
                                                     for c in (n, "refs/heads/" + n)):
@@ -751,7 +768,7 @@ def check_bash(cmd, cfg, cwd=None, session=None):
     """[Finding] for a Bash command, rules turned off left out."""
     masked = shell.command_text(cmd)
     out, seen = [], set()
-    cmds, here = shell.commands(cmd), cwd
+    cmds, here, switched = shell.commands(cmd), cwd, None
     outer, start, ticks = [], 0, False  # the directories to go back to at each `)` or closing backtick
     for i, c in enumerate(cmds):
         for ch in masked[start:c.span[0]]:
@@ -762,10 +779,13 @@ def check_bash(cmd, cfg, cwd=None, session=None):
                 here = outer.pop()
                 ticks = ticks and ch != "`"
         start = c.span[0]
-        found = check_command(c, masked, cfg, cwd, session, here)
-        # A `cd` in a pipeline or sent to the background (`cd x &`) runs in a subshell.
-        if c.name == "cd" and not (c.piped_from or c.piped_to or re.match(r"\s*(&(?!&)|\|)", masked[c.span[1]:])):
+        found = check_command(c, masked, cfg, cwd, session, here, switched)
+        # A `cd` in a pipeline or sent to the background (`cd x &`) runs in a subshell; `||` and `&&` do not.
+        if c.name in ("cd", "pushd", "popd") and not (
+                c.piped_from or c.piped_to or re.match(r"\s*(&(?!&)|\|(?!\|))", masked[c.span[1]:])):
             here = after_cd(c, here)
+        if c.name == "git":
+            switched = after_switch(c, switched)
         # `kill $(pgrep …)`: a pgrep inside this kill command's own substitution.
         if c.name == "kill" and any(d.name == "pgrep" and c.span[0] < d.span[0] and d.span[1] <= c.span[1]
                                     for d in cmds):
