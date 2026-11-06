@@ -954,8 +954,10 @@ def order_link(oid, unit, by=None, stand_in=False):
         return False
 
 
-def order_close(oid, status, by=None):
-    """Open -> done or dropped. Returns the row; a closed order keeps its first close."""
+def order_close(oid, status, by=None, evidence=None, reason=None, check=None):
+    """Open -> done or dropped. Returns the row; a closed order keeps its first close. evidence and reason go into the
+    close event. check(row) runs inside the write transaction on an open order and raises ValueError to refuse the
+    close, and may return the evidence to record: the close is judged on the links as they are when it is written."""
     if status not in ("done", "dropped"):
         raise ValueError(status)
     with _order_tx() as db:
@@ -963,8 +965,57 @@ def order_close(oid, status, by=None):
         if not r:
             raise ValueError(f"no order {oid}")
         if r["status"] == "open":
+            if check:
+                evidence = check(_order_out(db, r)) or evidence
             db.execute("UPDATE order_ SET status=?, closed_at=?, close_by=? WHERE id=?", (status, now(), by, oid))
-            _event(db, "order", oid, status, by, {"status": "open"}, {"status": status})
+            _event(db, "order", oid, status, by, {"status": "open"},
+                   {"status": status, **({"evidence": evidence} if evidence else {}),
+                    **({"reason": fleet.mask(reason)} if reason else {})})
+        return _order_out(db, db.execute("SELECT * FROM order_ WHERE id=?", (oid,)).fetchone())
+
+
+def order_get(oid, require_open=False):
+    """The order with its links. require_open: a closed one is a ValueError, so a unit is never started for an order
+    that no longer asks for work."""
+    with _order_tx() as db:
+        r = db.execute("SELECT * FROM order_ WHERE id=?", (oid,)).fetchone()
+        if not r:
+            raise ValueError(f"no order {oid}")
+        if require_open and r["status"] != "open":
+            raise ValueError(f"{oid} is {r['status']}: reopen it (orch order reopen {oid}) before linking new work to it")
+        return _order_out(db, r)
+
+
+def order_reopen(oid, by=None):
+    """Done or dropped -> open. The receiving session must say again that every unit is linked, so the mark goes with
+    the close. The snapshot of the evidence at close is PR 5c's; reopen_evidence is left as it is."""
+    with _order_tx() as db:
+        r = db.execute("SELECT * FROM order_ WHERE id=?", (oid,)).fetchone()
+        if not r:
+            raise ValueError(f"no order {oid}")
+        if r["status"] != "open":
+            db.execute("UPDATE order_ SET status='open', closed_at=NULL, close_by=NULL, links_complete_at=NULL WHERE id=?", (oid,))
+            _event(db, "order", oid, "reopen", by, {"status": r["status"], "closed_at": r["closed_at"],
+                                                    "links_complete_at": r["links_complete_at"]}, {"status": "open"})
+        return _order_out(db, db.execute("SELECT * FROM order_ WHERE id=?", (oid,)).fetchone())
+
+
+def order_links_complete(oid, by=None, undo=False):
+    """The receiving session says every unit the order needs is linked; PR 5c reads the mark before it may close the
+    order. Needs an open order with a real link: a stand-in carries nothing. undo clears the mark."""
+    with _order_tx() as db:
+        r = db.execute("SELECT * FROM order_ WHERE id=?", (oid,)).fetchone()
+        if not r:
+            raise ValueError(f"no order {oid}")
+        if r["status"] != "open":
+            raise ValueError(f"{oid} is {r['status']}")
+        if not undo and not db.execute("SELECT 1 FROM order_link WHERE order_id=? AND resolves=1", (oid,)).fetchone():
+            raise ValueError(f"{oid} has no unit linked yet: link the card, board item, decision or PR first")
+        if bool(r["links_complete_at"]) != (not undo):
+            at = None if undo else now()
+            db.execute("UPDATE order_ SET links_complete_at=? WHERE id=?", (at, oid))
+            _event(db, "order", oid, "links_open" if undo else "links_complete", by, {"links_complete_at": r["links_complete_at"]},
+                   {"links_complete_at": at})
         return _order_out(db, db.execute("SELECT * FROM order_ WHERE id=?", (oid,)).fetchone())
 
 
