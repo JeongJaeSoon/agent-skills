@@ -185,7 +185,10 @@ def test_sync():
         f.write("skills/orchestrate/\n")  # like scripts/: present in the loaded checkout, not part of this fixture's history
     store_py.write_text("import pathlib, sys\n"
                         f"pathlib.Path({str(tmp / 'state-step.log')!r}).open('a').write(' '.join(sys.argv[1:]) + '\\n')\n"
-                        "print('tombstoned acks.jsonl, stages.json')\n")
+                        f"out = pathlib.Path({str(tmp / 'state-step.out')!r})\n"
+                        "print(out.read_text() if out.exists() else 'tombstoned acks.jsonl, stages.json')\n"
+                        f"rc = pathlib.Path({str(tmp / 'state-step.rc')!r})\n"
+                        "sys.exit(int(rc.read_text()) if rc.exists() else 0)\n")
     commit(other, "docs/y.md", "y\n"); git(other, "push", "-q", "origin", "main")
     code, out = run_sync(live, env, "sync", "--no-broadcast")
     log = tmp / "state-step.log"
@@ -193,6 +196,14 @@ def test_sync():
     check("the state step's output is shown", "tombstoned acks.jsonl, stages.json" in out, out)
     check("the state step is recorded", json.loads((state / "sync.json").read_text()).get("state") == "ok",
           (state / "sync.json").read_text())
+    (tmp / "state-step.out").write_text("already imported and tombstoned")
+    code, out = run_sync(live, env, "sync", "--no-broadcast")
+    check("a no-op step stays out of the log", "already imported" not in out and "up to date" in out, out)
+    (tmp / "state-step.out").unlink()
+    (tmp / "state-step.rc").write_text("1")
+    code, out = run_sync(live, env, "sync", "--no-broadcast")
+    check("a failing step is recorded and does not fail the sync",
+          code == 0 and json.loads((state / "sync.json").read_text()).get("state") == "failed", out)
 
     commit(other, "hooks/hooks.json", "{}\n"); git(other, "push", "-q", "origin", "main")
     run_sync(live, env, "sync", "--no-broadcast")
@@ -202,10 +213,14 @@ def test_sync():
     (live / "skills/a/SKILL.md").write_text("local edit\n")
     commit(other, "docs/x.md", "x\n"); git(other, "push", "-q", "origin", "main")
     head = git(live, "rev-parse", "HEAD")
+    steps_before = log.read_text().count("\n")
     code, out = run_sync(live, env, "sync", "--no-broadcast")
     check("stops on uncommitted changes", code == 1 and "uncommitted" in out and git(live, "rev-parse", "HEAD") == head, out)
     st = json.loads((state / "sync.json").read_text())
     check("the stop is recorded", st["ok"] is False and "uncommitted" in st["message"], st)
+    check("a stopped sync does not run the state step", log.read_text().count("\n") == steps_before, log.read_text())
+    check("a stopped sync keeps the last state, so a repeat failure is not told again", st.get("state") == "failed", st)
+    (tmp / "state-step.rc").unlink()
     git(live, "checkout", "-q", "--", ".")
 
     commit(live, "skills/b/SKILL.md", "local\n")
