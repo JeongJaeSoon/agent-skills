@@ -386,12 +386,14 @@ Each collect appends one row per flag other than `unused_30d`, per skill, per IS
 
 ## PR stats
 
-`scripts/pr_stats.py` (`orch-dash prstats`) searches GitHub with `gh api graphql` for every pull request created since `since`, one search per source per month (a month at the 1,000-hit search cap is split in halves until each part fits), and writes counts to `<fleet state>/pr-stats.json`. `serve` runs it when the file is missing or 6 hours old, and an hour after a failed collect, which keeps the last counts and adds the error the page shows above them. `serve`'s collect also fails when a source lost more than a quarter of its PRs since the last report with the same `since` and sources, since search drops an organization whose SSO authorization lapsed without any error; `orch-dash prstats` by hand saves such a drop. The page reads `/api/fleet/stats`. `ORCH_PR_STATS=off` turns it off.
+`scripts/pr_stats.py` (`orch-dash prstats`) searches GitHub with `gh api graphql` for every pull request created since `since`, one search per source per month (a month at the 1,000-hit search cap is split in halves until each part fits), and writes counts to `<fleet state>/pr-stats.json`. `serve` runs it when the file is missing or 6 hours old, and an hour after a failed collect, which keeps the last counts and adds the error the page shows above them. `serve`'s collect also fails when a source lost more than a quarter of its PRs since the last report with the same `since` and sources, since search leaves out what the token cannot reach (an organization whose SAML SSO blocks it, a GitHub App installed on fewer repositories) without any error; the message names the source. `orch-dash prstats` by hand saves such a drop.
+
+Every search runs once per ghtkn app (`ghtkn exec -e GH_TOKEN -- gh api graphql`, `GHTKN_APP` set for that child only) and the hits are united by URL, because no one app reaches everything: an organization app misses personal repositories and the personal app misses the organization. `pr_stats.apps` lists the apps (unset or `[]` searches under gh's own login as before). An app that gets no token (agent locked, app not authorized) fails the collect with its name; it never falls back to gh's login, which would drop the organization silently. A search costs one call per app, so a collect takes as many times longer as there are apps. The page reads `/api/fleet/stats`. `ORCH_PR_STATS=off` turns it off.
 
 The first source is always the PRs I authored (`author:@me`). Agents that open PRs on my behalf are added under `pr_stats` in the fleet config:
 
 ```json
-{"pr_stats": {"since": "2025-01-01", "sources": [
+{"pr_stats": {"since": "2025-01-01", "apps": ["acme/write", "me/personal"], "sources": [
   {"name": "Devin", "query": "author:devin-ai-integration[bot] involves:@me"},
   {"name": "Claude", "query": "in:body \"Requested by Your Name\"", "author": "claude"}]}}
 ```

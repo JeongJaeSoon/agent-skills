@@ -6,8 +6,10 @@ Usage:
   orch handoff show [--key KEY]
   orch handoff ready --session ID --context TOKENS [--agents N] [--asking]
 
-KEY is `orchestrator` (default) or `lead:<slug>`: the role, not the session or the terminal, since a /clear gives a
-new session id and a role can move to another terminal. The record is an event row in agent-skills.db
+KEY is `orchestrator` or `lead:<slug>`, taken from the session's role (key_for); a different --key is refused, and so is
+a session with no role. The key is the role, not the session or the terminal, since a /clear gives a
+new session id and a role can move to another terminal. Outside an Orca terminal only `--key lead:<slug>` is accepted.
+`show` without --key reads the session's own key. The record is an event row in agent-skills.db
 (store.session_event); the reorient hook adds it to the context of the session that starts after a /clear, and
 `reboot.py --top` prints it with the mail taken since.
 
@@ -17,17 +19,18 @@ channel), --note. The rest is filled from the stores when the session reads it: 
 the open `orch decide` items.
 
 `ready` is what the plugin's clear band (hooks/clear_band.tsx) runs after each turn of a session whose context passed
-`orchestrate.restart_at`: it prints one JSON line saying whether a /clear is safe now (an orchestrator or lead, its
-inbox empty, its last answer not a question, no subagent running) and, when it is, saves a handoff from the stores with no model turn,
-carrying the fields this session saved itself. The band then tells the human `/clear` is safe; the reorient hook gives
+`orchestrate.restart_at`: it prints one JSON line saying whether a /clear is safe now (an orchestrator session only;
+leads rely on auto-compact; its inbox empty, its last answer not a question, no subagent running) and, when it is, saves
+a handoff from the stores with no model turn (store.save_auto_handoff), carrying the fields of the newest handoff. A
+handoff another terminal saved for the same key in the last 10 minutes stops the save. The band then tells the human `/clear` is safe; the reorient hook gives
 the next session the handoff.
 
---restart asks the terminal's `orch inbox --stream` to type `/clear` once the screen is idle; it is refused when no
+--restart is the orchestrator's only (the stream reads requests under that key) and asks the terminal's `orch inbox --stream` to type `/clear` once the screen is idle; it is refused when no
 stream runs for this terminal. The stream then prints `SESSION CLEARED`, whose notice starts the new session's first
 turn (agent-skills:reboot). Off unless `orchestrate.auto_clear: true` in ~/.claude/agent-skills.json: by default the
 human types the /clear the band suggests.
 """
-import json, os, pathlib, subprocess, sys
+import json, os, pathlib, re, subprocess, sys
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -99,7 +102,7 @@ def text(key):
     body = "\n".join(got)
     if len(body) > SUMMARY_CHARS:
         body = body[:SUMMARY_CHARS] + " …"
-    return f"The previous session left this handoff (`orch handoff show` prints it whole):\n{body}"
+    return f"The previous session left this handoff (`orch handoff show --key {key}` prints it whole):\n{body}"
 
 
 def role_key(session):
@@ -110,6 +113,25 @@ def role_key(session):
     if entry.get("role") == "lead" and entry.get("slug"):
         return f"lead:{entry['slug']}"
     return None
+
+
+LEAD_KEY = re.compile(r"lead:[\w.-]+")
+
+
+def key_for(session, asked):
+    """(key, error). The key comes from the session's role; an asked key that differs is refused, so a lead cannot
+    write the orchestrator's record. With no known session (outside an Orca terminal) only a well-formed
+    `lead:<slug>` is taken. Shared by save, show and ready."""
+    if session:
+        key = role_key(session)
+        if not key:
+            return None, "this session has no orchestrator or lead role, so it has no handoff key"
+        if asked and asked != key:
+            return None, f"this session's handoff key is {key}; --key {asked} is refused"
+        return key, ""
+    if asked and LEAD_KEY.fullmatch(asked):
+        return asked, ""
+    return None, "the session is unknown, so only --key lead:<slug> is accepted"
 
 
 def terminal_of(session):
@@ -137,11 +159,10 @@ def unread(key, handle):
 def ready(session, context, asking, now=None, peek=unread, agents=0):
     """The clear band's verdict for this session, as a dict; saves the handoff when a /clear is safe."""
     import inbox_stream
-    import time
-    key = role_key(session)
+    key = key_for(session, None)[0]
     threshold = inbox_stream.restart_at()
     out = {"show": False, "ready": False, "context": context, "threshold": threshold, "key": key, "reason": ""}
-    if not key or not threshold or context <= threshold:
+    if key != "orchestrator" or not threshold or context <= threshold:  # leads rely on auto-compact
         return out
     out["show"] = True
     if asking:
@@ -162,15 +183,13 @@ def ready(session, context, asking, now=None, peek=unread, agents=0):
     if handle and inbox_stream.holding(handle):
         out["reason"] = "the inbox stream holds mail it has not shown yet"
         return out
-    now = time.time() if now is None else now
-    last = store.last_session_event(key, "handoff")
-    prev = last[1] if last and isinstance(last[1], dict) else {}
-    age = inbox_stream.ts_age(last[0], now) if last else None
-    if not (prev.get("auto") and prev.get("session") == session and age is not None and age < AUTO_EVERY_S):
-        carried = {f: prev.get(f) for f in FIELDS if prev.get(f)}
-        carried.setdefault("next", "act on the mail taken since this handoff, then the open decisions")
-        store.session_event(key, "handoff", {**carried, "auto": True, "session": session, "handle": handle,
-                                             "context": context}, by="orch handoff ready")
+    verdict, other = store.save_auto_handoff(
+        key, {"auto": True, "session": session, "handle": handle, "context": context}, handle, session, AUTO_EVERY_S,
+        FIELDS, "act on the mail taken since this handoff, then the open decisions", at=now)
+    if verdict == "conflict":
+        out["reason"] = (f"another terminal ({other}) saved this key's handoff in the last {AUTO_EVERY_S // 60} min: "
+                         "two sessions share the orchestrator role")
+        return out
     out.update(ready=True, reason="handoff saved")
     return out
 
@@ -178,7 +197,9 @@ def ready(session, context, asking, now=None, peek=unread, agents=0):
 def main(argv):
     if not argv or argv[0] not in ("save", "show", "ready"):
         sys.exit(__doc__)
-    key = opt(argv, "--key") or "orchestrator"
+    asked = opt(argv, "--key")
+    handle = os.environ.get("ORCA_TERMINAL_HANDLE")
+    session = (roles.read_terminal(handle) or {}).get("session_id") if handle else None
     try:
         if argv[0] == "ready":
             session, context = opt(argv, "--session"), opt(argv, "--context")
@@ -188,14 +209,20 @@ def main(argv):
             print(json.dumps(ready(session, int(context), "--asking" in argv,
                                    agents=int(agents) if agents.isdigit() else 0)))
             return
-        if argv[0] == "show":
+        if argv[0] == "show":  # reading is harmless: a session with no key of its own reads the orchestrator's
+            key = asked or key_for(session, None)[0] or "orchestrator"
             print("\n".join(lines(key)) or f"no handoff recorded for {key}")
             return
         data = {f: opt(argv, f"--{f}") for f in FIELDS}
         if not data["next"]:
             sys.exit("orch handoff save needs --next: what the session after the restart does first")
-        handle = os.environ.get("ORCA_TERMINAL_HANDLE")
+        key, err = key_for(session, asked)
+        if err:
+            sys.exit(f"{err}. Nothing saved")
         restart = "--restart" in argv
+        if restart and key != "orchestrator":  # the stream reads restart requests under the orchestrator key only
+            sys.exit(f"--restart is for the orchestrator; this key is {key}, and no stream would type its /clear. "
+                     "Nothing saved")
         if restart:
             import inbox_stream
             if not auto_clear_on():
@@ -206,7 +233,6 @@ def main(argv):
             if not inbox_stream.running(handle):
                 sys.exit("no `orch inbox --stream` runs for this terminal, and it is what types the /clear: start it "
                          "with the Monitor tool first. Nothing saved")
-        session = (roles.read_terminal(handle) or {}).get("session_id") if handle else None
         store.session_event(key, "handoff", {**data, "handle": handle, "session": session}, by=key)
         print(f"handoff saved for {key}")
         if restart:
