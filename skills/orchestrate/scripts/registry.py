@@ -86,7 +86,7 @@ CONSUMERS = {
     "tokenspage": "dashboard · Tokens",
     "sentpage": "dashboard · Sent",
     "fleet": "fleet collector (its own inputs)",
-    "programview": "dashboard · program views, orch status/wait, measure-delivery",
+    "programview": "dashboard · program views, orch status/wait, reflect measure mode",
     "reflect": "reflect precheck · improvement loop",
     "watchprs": "watch-prs round",
     "mentions": "watch-mentions round",

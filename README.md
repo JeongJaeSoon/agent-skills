@@ -107,7 +107,7 @@ When each skill fires, what it does and the files it ships are in the [skill cat
 | Group | Skills | What they do |
 |---|---|---|
 | [One ticket](docs/skills.en.md#one-ticket) | `write-ticket`, `deliver-ticket`, `ui-review`, `handoff-ticket`, `dispatch-card`, `end-session` | Write a ticket, deliver it, hand the next one to a fresh card, record progress and close the session |
-| [One project](docs/skills.en.md#one-project-several-orca-workers) | `orchestrate`, `reboot`, `measure-delivery` | Land many tickets in parallel on Orca workers, put back what a restart dropped, then measure how it actually went |
+| [One project](docs/skills.en.md#one-project-several-orca-workers) | `orchestrate`, `reboot` | Land many tickets in parallel on Orca workers, put back what a restart dropped, then measure how it actually went (`reflect`'s measure mode) |
 | [One machine](docs/skills.en.md#one-machine) | `reap-resources`, `secure-fill`, `tune-automode`, `skills-config`, `setup-pc` | Clean up leftovers, fill secrets the agent never sees, draft autoMode rules, change config keys, install and update |
 | [Chat and reviews](docs/skills.en.md#chat-and-reviews) | `watch-mentions`, `watch-prs` | Turn chat and PRs that concern you into work |
 | [Adapters](docs/skills.en.md#adapters) | `use-tracker`, `use-notes` | Linear and Jira tickets, Obsidian and Markdown notes |
@@ -115,6 +115,14 @@ When each skill fires, what it does and the files it ships are in the [skill cat
 | [pstack](docs/skills.en.md#pstack-skills-lauren-tan-mit) | `architect`, `arena`, `blast-radius`, `create-verification-skill`, `figure-it-out`, `how`, `interrogate`, `maintain-verification-skill`, `principles`, `recall`, `reflect`, `show-me-your-work`, `swarm`, `tdd`, `teach`, `why` | Design, comparison, impact analysis, verification, explanation, retrospectives |
 
 The pstack group comes from Lauren Tan's [pstack](https://github.com/cursor/plugins) (MIT). These skills are now maintained here on their own: `vendor/pstack` keeps the original files as upstream had them, and an optional daily job reports upstream changes, which are ported by hand when worth it. With several sessions, two layers sit above the workers: the orchestrator (one top-level session) and leads (one per project). See the [Roles table in orchestrate](skills/orchestrate/SKILL.md#roles).
+
+## Renamed skills
+
+Some skills were merged into another skill as a mode. The old name is gone, so `/agent-skills:<old name>` no longer runs anything: use the new command.
+
+| Old command | New command / mode |
+|---|---|
+| `/agent-skills:measure-delivery` | `/agent-skills:reflect`, measure mode |
 
 ## Configuration
 
@@ -141,7 +149,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for setting up a checkout and the rules f
 There is no CI. Run every test file before sending a change:
 
 ```bash
-for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/measure-delivery/scripts/test_measure.py skills/reap-resources/scripts/test_reap.py skills/reap-resources/scripts/test_cards.py skills/reap-resources/scripts/test_pressure.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/watch-prs/scripts/test_review_wait.py skills/watch-prs/scripts/test_notify.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py skills/skills-config/scripts/test_config_emit.py skills/setup-pc/scripts/test_setup_check.py scripts/test_setup.py skills/brief/scripts/test_table_width.py skills/reflect/scripts/test_lesson_ids.py skills/deliver-ticket/scripts/test_shots.py skills/deliver-ticket/scripts/test_review_pick.py skills/ui-review/scripts/test_ui_measure.py skills/reboot/scripts/test_reboot.py hooks/test_*.py scripts/test_sync.py scripts/test_card.py scripts/test_preview_watch.py scripts/test_automations.py scripts/test_share_server.py scripts/test_reap_hard.py scripts/test_public_shapes.py scripts/test_skill_tokens.py scripts/test_allowed_tools.py; do python3 "$t"; done
+for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/reflect/scripts/test_measure.py skills/reap-resources/scripts/test_reap.py skills/reap-resources/scripts/test_cards.py skills/reap-resources/scripts/test_pressure.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/watch-prs/scripts/test_review_wait.py skills/watch-prs/scripts/test_notify.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py skills/skills-config/scripts/test_config_emit.py skills/setup-pc/scripts/test_setup_check.py scripts/test_setup.py skills/brief/scripts/test_table_width.py skills/reflect/scripts/test_lesson_ids.py skills/deliver-ticket/scripts/test_shots.py skills/deliver-ticket/scripts/test_review_pick.py skills/ui-review/scripts/test_ui_measure.py skills/reboot/scripts/test_reboot.py hooks/test_*.py scripts/test_sync.py scripts/test_card.py scripts/test_preview_watch.py scripts/test_automations.py scripts/test_share_server.py scripts/test_reap_hard.py scripts/test_public_shapes.py scripts/test_skill_tokens.py scripts/test_allowed_tools.py; do python3 "$t"; done
 bash scripts/pstack-sync-test.sh
 ```
 

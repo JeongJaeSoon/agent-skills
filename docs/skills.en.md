@@ -1,4 +1,4 @@
-<!-- translated-from: 6625936bf92e8cf77b2d51bd773ddb8180043021 -->
+<!-- translated-from: 01fb4f288a883cf8ba070442941509983aeffd98 -->
 # Skill catalog
 
 This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 16 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
@@ -14,7 +14,7 @@ One ticket  write-ticket → deliver-ticket → handoff-ticket → end-session
               (dispatch-card: send work elsewhere while this session keeps working)
 Project     orchestrate ─ deliver-ticket in each worker ─ orch land
               ─ main guardian · QA lead ─ dashboard
-              └ measure-delivery when it's done
+              └ reflect when it's done (measures and reviews in one run)
               └ reboot first after a restart or compaction
 Machine     reap-resources (clears processes, Docker leftovers and branches that dead sessions
               left; the resource steward runs it on a schedule)
@@ -56,7 +56,7 @@ Which skill owns a PR, and who merges it:
   - Dependencies are set as tracker relations, and work is split so that one ticket = one PR. PRs that depend on each other are planned as a GitHub stack.
   - Files without asking, then reports each URL with a one-line summary: the request, or a NOW finding, is the approval. It asks first only for a large epic or another team's tracker or project, through the owner-ask gate, and shows drafts first when the user's own instructions say so.
 - **Bundled:** `references/templates.md` (skeletons for development and investigation tickets).
-- **Related:** Every tracker operation goes through `use-tracker`. `orchestrate` and `measure-delivery` count tickets in the follow-up format.
+- **Related:** Every tracker operation goes through `use-tracker`. `orchestrate` and `reflect`'s measure mode count tickets in the follow-up format.
 
 ### deliver-ticket (formerly `ship-pr`)
 - **When:** From before the first multi-file edit until the ticket is done. Creating, updating and merging PRs ("pr 작성까지" (up to writing the PR), "머지까지 진행해줘" (take it all the way to the merge)), releases, answering review comments, independent reviews, "동작확인" (check that it works), "내가 확인할 거 있어?" (anything I need to check?), "이 티켓 끝내줘" (finish this ticket), and stack work all belong here.
@@ -144,7 +144,7 @@ Which skill owns a PR, and who merges it:
   5. **Triage:** The predicate is the done condition. Workers only report what they find, with a proposed class, and the lead sorts it: NOW (blocks the predicate or is a reproduced defect; filed as a ticket, then admitted), LATER (the program note's `보류` (on hold) list, no ticket), DROP (one line of reason). NOW tickets are linked as related, not as children of a parent. Orca defaults to parent, but then the counts and stage bars treat them as planned work of the original ticket.
   6. **Land:** Workers land their own PRs with `orch land`. Ordinary PRs merge in parallel; shared files such as migrations, CI, Dockerfiles and compose merge one at a time per base in an exclusive lane.
   7. **Main verification:** When main goes red, the guardian first checks whether it's a flake, then picks a hotfix or a revert; until main is fixed, only fixes for main land. The QA lead handles ticket verification, periodic E2E runs and design-consistency audits.
-  8. **Close:** Does a final check on the new main and records it with `record predicate_verified`. Then it releases the roles, runs `measure-delivery`, and runs `reflect` in program mode. It isn't finished until `worker-list --terminal-state reclaimable` is empty.
+  8. **Close:** Does a final check on the new main and records it with `record predicate_verified`. Then it releases the roles and runs `reflect` in program mode once. The delivery measurement runs once inside it. It isn't finished until `worker-list --terminal-state reclaimable` is empty.
   - Under human-gate, `orch land` closes the "Land #N" Task as completed when the PR lands, and as failed when it is put on hold or the PR is closed. `orch land` never merges a PR that was decided to be held.
   - For a worker that has ended its turn, the content goes through `orchestration send --to dispatch:<id>`, and the terminal gets just one line: "run orchestration check". Workers without a terminal follow Orca's recovery procedure.
   - Standing roles send routine reports with `--type status`. Escalation is only for when the lead needs to step in.
@@ -167,17 +167,7 @@ Which skill owns a PR, and who merges it:
     - `mailbox_guard.py`: a transition shim that moves old installs over to the hook.
     - Test files.
   - `assets/dashboard/`: the dashboard UI.
-- **Related:** Workers follow `deliver-ticket`. It draws on `use-tracker`, `use-notes`, `create-verification-skill`, `show-me-your-work`, `swarm`, `measure-delivery`, `reap-resources`, `reflect`, and `end-session`.
-
-### measure-delivery
-- **When:** "성과 측정" (measure the results), or questions about whether follow-up tickets are growing or shrinking, rework, or token cost. `orchestrate` also calls it in its Close step.
-- **What it does:** `scripts/measure.py` only reads from the tracker and GitHub, and writes a report in Korean.
-  - Checks how fast derived tickets grew against the baseline, and whether the backlog is converging.
-  - Counts merged PRs.
-  - Measures rework (commits after the PR was opened, and CI reruns).
-  - Finds escaped-defect candidates (Bug labels, main CI failures, reverts).
-  - Counts tokens from available local transcripts per PR. Unmeasured sessions are not assumed to have zero usage.
-  - When exact close times are needed from Linear, it uses a file exported through MCP. It shows the requested numbers first and saves the report to the notes.
+- **Related:** Workers follow `deliver-ticket`. It draws on `use-tracker`, `use-notes`, `create-verification-skill`, `show-me-your-work`, `swarm`, `reap-resources`, `reflect`, and `end-session`.
 
 ### reboot
 - **When:** Right after the session, Orca or the machine restarted, or after a compaction, before any other work: "재시작했어" (I restarted), "Orca 재시작했어" (Orca restarted), "세션 다시 띄웠어" (I brought the session back up), "복구 점검해줘" (check the recovery). Recalling what the work was is `recall`.
@@ -315,7 +305,7 @@ Reports completed work, current work, decisions and human-only steps with eviden
   - Replies lead with the answer. Each claim says whether it was measured, inferred or guessed. Links and quotes are never made up. "No" is an answer too.
   - It reads the per-language reference before drafting. Polishing after the fact misses most problems.
 - **Bundled:** `references/korean.md` (before-and-after examples for fixing clichés, translationese, hedging, dropped subjects, noun stacks, the "~다" register, and banned formatting), `references/english.md` (rules for English prose, code comments and skill text).
-- **Related:** Pointed to by `write-ticket`, `deliver-ticket` (PR bodies), `use-notes`, `measure-delivery`, and `end-session` (final report).
+- **Related:** Pointed to by `write-ticket`, `deliver-ticket` (PR bodies), `use-notes`, `reflect` (measure mode), and `end-session` (final report).
 
 ### prune-comments
 - **When:** `/prune-comments`, "주석 정리해줘" (clean up the comments), "불필요한 주석 지워줘" (delete the unnecessary comments), "주석 너무 많아" (there are too many comments). `deliver-ticket` calls it before review.
@@ -417,9 +407,16 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
   - The answer is a short summary, a status tag for each thread (`[merged #N]`, `[open PR #N]`, `[in flight <branch>]`, and so on), the recurring problems, and one next step.
 
 ### reflect
-- **When:** "reflect", "스킬에 반영해줘" (put this into the skills), "스킬이 왜 안 떴어" (why didn't the skill trigger?), "이 세션 돌아보고 스킬 개선해줘" (look back on this session and improve the skills), "개선 이력 보여줘" (show me the improvement history). It's called automatically in program mode from `orchestrate`'s Close, and in session mode from `end-session` when a human corrected how the work was done.
+- **When:** "reflect", "스킬에 반영해줘" (put this into the skills), "스킬이 왜 안 떴어" (why didn't the skill trigger?), "이 세션 돌아보고 스킬 개선해줘" (look back on this session and improve the skills), "개선 이력 보여줘" (show me the improvement history). It's called automatically in program mode from `orchestrate`'s Close, and in session mode from `end-session` when a human corrected how the work was done. Measure mode is for "성과 측정" (measure the results), or questions about whether follow-up tickets are growing or shrinking, rework, escaped defects, or tokens per PR.
 - **What it does:**
-  - Session mode reads this session's transcript. Program mode reads an evidence bundle: the ledger's `signal` entries, merge failures, main reds, failed verdicts, decision records, and the `measure-delivery` results. There are three reviewers (judgment, tooling, divergent thinking).
+  - Measure mode only measures and reports. It calls no reviewers and leaves the lessons ledger alone. `scripts/measure.py` only reads from the tracker and GitHub, and writes a report in Korean.
+    - Checks how fast derived tickets grew against the baseline, and whether the backlog is converging.
+    - Counts merged PRs.
+    - Measures rework (commits after the PR was opened, and CI reruns).
+    - Finds escaped-defect candidates (Bug labels, main CI failures, reverts).
+    - Counts tokens from available local transcripts per PR. Unmeasured sessions are not assumed to have zero usage.
+    - When exact close times are needed from Linear, it uses a file exported through MCP. It shows the requested numbers first and saves the report to the notes.
+  - Session mode reads this session's transcript. Program mode reads an evidence bundle: the ledger's `signal` entries, merge failures, main reds, failed verdicts, decision records, and the result of one measure-mode run at this Close. There are three reviewers (judgment, tooling, divergent thinking).
   - A synthesizer sorts the learnings into Accepted / Rejected / Backlog. Every one of them gets a line in the learnings ledger (`reflect.ledger` in the notes store). For each learning, the ledger records the signal, evidence pointers, how often it happened, what was fixed, the change (PR or commit), the verification numbers a script produced, and whether it recurred later.
   - A skill changes only after two or more distinct cases (reproduced security or data defects are the exception). A single occurrence stays a candidate until it happens again.
   - Session mode applies changes after the user approves. Program mode has no human around, so it fixes and verifies in a worktree, opens a single draft PR, and leaves an approval request in the digest. A human does the merge. Description changes are checked for triggering with `claude plugin eval`; body and script changes are checked for behavior with tests that exercise the changed path or by reproducing the case. Without any verification it records `none`.
@@ -718,7 +715,7 @@ Of pstack's 58 skills (24 principles and 34 others), we took all 24 principles a
 ### Not in pstack
 - **Ticket flow:** `write-ticket`, `deliver-ticket`, `handoff-ticket`, `dispatch-card`, `end-session`. One ticket from start to finish, built around Orca cards and a tracker.
 - **Running projects:** `orchestrate`'s `orch` ledger, the landing gate and exclusive lane, human-gate, the main guardian, the QA lead, and the `orch-dash` dashboard. The shape follows pstack's playbooks, but it was built fresh on top of Orca Runs and GitHub stacks.
-- **Measurement and adapters:** `measure-delivery`, `use-tracker`, `use-notes`.
+- **Measurement and adapters:** `reflect`'s measure mode, `use-tracker`, `use-notes`.
 - **Machine upkeep:** `reap-resources`, `tune-automode`, `skills-config`, `setup-pc`.
 - **Hooks:** permission decisions (`guard.py`), re-orienting the orchestrator and leads (`reorient.py`), offering setup on a PC that was never set up (`onboard.py`), recording permission prompts for the dashboard to answer (`permission.py`), closing decisions answered in the terminal (`decision.py`), a warning on relaying the owner's words with no record (`decision_relay.py`), completion claim checks (`claim_check.py`), a load check before a heavy start (`pressure_gate.py`), prose checks (`prose_check.py`), the stack check on dependent PRs (`stack_gate.py`), and a warning when a program card closes over its own open PR (`self_land_gate.py`).
 

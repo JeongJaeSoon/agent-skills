@@ -84,7 +84,7 @@ skills-sync setup disable janitor        # 하나 끄기. 어느 것이든 apply
 
 **3. 프로젝트 하나를 여러 워커로: 「PM 겸 오케스트레이터로 끝까지」 → `orchestrate`**
 
-이렇게 부탁받은 세션은 이름과 달리 리드다(`ROLE: lead <slug>`). 리드가 티켓마다 Orca 워커를 띄우고, 워커는 `deliver-ticket`으로 일한 뒤 자기 PR을 `orch land`로 착지시킨다. migration·CI 설정 같은 공유 파일은 독점 레인에서 하나씩 머지된다. 사람은 `orch-dash serve` 대시보드에서 목표·완료 조건·착지 순서·워커·토큰을 보고, 결정과 권한 창에 거기서 답한다. 머지 정책 기본값은 `autonomous`(워커가 착지)다. `human-gate`로 정하면 워커는 READY에서 멈추고 사람이 게이트를 풀어야 착지한다. 끝나면 `measure-delivery`가 후속 티켓 증가·재작업·토큰을 잰다.
+이렇게 부탁받은 세션은 이름과 달리 리드다(`ROLE: lead <slug>`). 리드가 티켓마다 Orca 워커를 띄우고, 워커는 `deliver-ticket`으로 일한 뒤 자기 PR을 `orch land`로 착지시킨다. migration·CI 설정 같은 공유 파일은 독점 레인에서 하나씩 머지된다. 사람은 `orch-dash serve` 대시보드에서 목표·완료 조건·착지 순서·워커·토큰을 보고, 결정과 권한 창에 거기서 답한다. 머지 정책 기본값은 `autonomous`(워커가 착지)다. `human-gate`로 정하면 워커는 READY에서 멈추고 사람이 게이트를 풀어야 착지한다. 끝나면 `reflect`가 후속 티켓 증가·재작업·토큰을 재고 교훈을 정리한다.
 
 **4. auto mode가 막았을 때: 「auto mode 가 막았어」, 「이거 허용되게 규칙 추가해줘」 → `tune-automode`**
 
