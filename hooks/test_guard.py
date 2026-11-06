@@ -304,4 +304,18 @@ for delim, raw in (("$'E\\x4fF'", "E\\x4fF"), ('"E\\OF"', "E\\OF")):
 # A directory is named as one, not as an unreadable file.
 assert bash("skills-sync card /") == "deny" and "names a directory" in reason("skills-sync card /")
 assert "skills-sync card <brief>" in reason(f'{NEW} --prompt "/goal fix X"'), "the deny names the helper"
+# skills-sync subcommands: read-only and fixed-text ones are allowed, the rest go to the classifier (no decision).
+for cmd in ("skills-sync status", "skills-sync broadcast", "skills-sync broadcast --skills", "skills-sync broadcast --plugins --dry-run",
+            "skills-sync broadcast --skills --terminal term_x", "skills-sync broadcast --retry",
+            "skills-sync broadcast --skills --terminal $ORCA_TERMINAL_HANDLE",
+            "skills-sync end-check --card --outcome succeeded --keep", "skills-sync end-check --worker --outcome failed --no-keep --json"):
+    assert bash(cmd) == "allow", cmd
+for cmd in ("skills-sync sync", "skills-sync sync --no-broadcast", "skills-sync setup --apply", "skills-sync setup enable x",
+            "skills-sync nudge term_x hello", "skills-sync card --supersede x", "skills-sync status extra",
+            "skills-sync end-check --card --apply", "skills-sync end-check --apply", "skills-sync end-check --card --trash-caches",
+            "skills-sync end-check -x", "skills-sync broadcast --text hi", "skills-sync broadcast /reload-skills",
+            "skills-sync broadcast --terminal", "skills-sync broadcast --terminal --skills",
+            "skills-sync wake-reset term_x", "skills-sync", "skills-sync status; rm x", "skills-sync status && skills-sync sync",
+            "skills-sync end-check --card > out", "skills-sync broadcast --skills $(id)"):
+    assert bash(cmd) == "none", cmd
 print("guard: all pass")
