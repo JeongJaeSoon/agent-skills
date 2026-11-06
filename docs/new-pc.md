@@ -65,7 +65,7 @@ git -C ~/.config/agent-skills/personal pull --ff-only   # 개인 설정 폴더�
 python3 <체크아웃>/scripts/setup.py --update     # 지금 체크아웃과 개인 설정 폴더 기준으로 새로 생긴 값만 diff
 ```
 
-dry run은 여기서도 아무것도 쓰지 않고 fetch도 하지 않는다. fast-forward는 `first` 줄로만 보인다. 출력한 `--apply` 줄을 그대로 치면 먼저 체크아웃을 fast-forward하고(`skills-sync sync`, 더러운 체크아웃이나 갈라진 체크아웃이면 멈춘다) 계획을 다시 맞춰 본다. 새 릴리스가 권장값을 더했으면 해시가 맞지 않아 거절하는데, 그때는 이미 fast-forward된 상태이니 dry run을 다시 한다. 파일에 바뀔 것이 없으면 `no change`이고 그 줄은 fast-forward·launchd 작업·자동화만 돌린다.
+dry run은 여기서도 아무것도 쓰지 않고 fetch도 하지 않는다. 개인 설정 폴더가 마지막으로 가져온 upstream보다 뒤처졌거나 7일 넘게 fetch하지 않았으면 `personal:` 줄로 경고만 한다(당기지는 않는다). fast-forward는 `first` 줄로만 보인다. 출력한 `--apply` 줄을 그대로 치면 먼저 체크아웃을 fast-forward하고(`skills-sync sync`, 더러운 체크아웃이나 갈라진 체크아웃이면 멈춘다) 계획을 다시 맞춰 본다. 새 릴리스가 권장값을 더했으면 해시가 맞지 않아 거절하는데, 그때는 이미 fast-forward된 상태이니 dry run을 다시 한다. 파일에 바뀔 것이 없으면 `no change`이고 그 줄은 fast-forward·launchd 작업·자동화만 돌린다.
 
 ### 본문이 바뀐 autoMode 규칙 (drift)
 

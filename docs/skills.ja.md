@@ -1,4 +1,4 @@
-<!-- translated-from: 8a7c584f4c823bb021fc39cb13f5fd569d787071 -->
+<!-- translated-from: 5ac65a0e62bb64e6539052de09f31728b138749f -->
 # スキルカタログ
 
 `agent-skills` プラグインに入っているスキル40個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック16個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
@@ -215,7 +215,7 @@ PR を受け持つスキルとマージする主体:
 
 ### tune-automode
 - **いつ:** auto mode の分類器が行動を拒否し、ユーザーがその種の行動を今後許可したいとき。または auto mode がエージェントに許す範囲を変えたいとき。「auto mode 가 막았어」（auto mode に止められた）、「이거 허용되게 규칙 추가해줘」（これを許可するルールを足して）。
-- **内容:** 拒否カテゴリと拒否された行動から、その行動の種類だけを覆う最小の allow・soft_deny・environment ルールを作ります。ルールには行動の種類、安全になる条件、`Not covered:` を入れます。レビューチェックリスト（包括的な許可をしない、ユーザーが名指ししていない本番破壊系の操作を入れない、ユーザー本人のチャットだけを権限とみなす）を通したあと、`scripts/automode_rule.py emit` が diff を表示し、spec を埋め込んだ単体スクリプトをホーム配下に書きます。ユーザーが `! python3 -I <パス> --apply <spec ハッシュ>` で適用します。ハッシュはユーザーが見た diff の spec と一致する必要があります。スクリプトはタイムスタンプ付きバックアップ、冪等なマージ、JSON 検証を行い、戻すコマンドを出力します。エージェントは settings.json を編集せず、そのスクリプトを実行せず、待つあいだ拒否を回避しません。
+- **内容:** 拒否カテゴリと拒否された行動から、その行動の種類だけを覆う最小の allow・soft_deny・environment ルールを作ります。ルールには行動の種類、安全になる条件、`Not covered:` を入れます。レビューチェックリスト（包括的な許可をしない、ユーザーが名指ししていない本番破壊系の操作を入れない、ユーザー本人のチャットだけを権限とみなす）を通したあと、`scripts/automode_rule.py emit` が spec を点検し（`refusal_category` がない、または `no-verdict` の spec と、`Not covered:` のない allow ルールは拒否します。包括的な表現、チケット・PR 番号、トークンのような文字列、既存ルールとほぼ同じルールは警告します）、diff を表示し、spec を埋め込んだ単体スクリプトをホーム配下に書きます。ユーザーが `! python3 -I <パス> --apply <spec ハッシュ>` で適用します。ハッシュはユーザーが見た diff の spec と一致する必要があります。スクリプトはタイムスタンプ付きバックアップ、冪等なマージ、JSON 検証を行い、戻すコマンドを出力します。エージェントは settings.json を編集せず、そのスクリプトを実行せず、待つあいだ拒否を回避しません。
 - **同梱:** `scripts/automode_rule.py`、テスト、`references/example-settings.json`。
 - **関係:** ユーザー設定の `permissions.allow` と `agent-skills.json` のキーは `skills-config`（autoMode ルールを一緒に入れるときはこのスキルのエンジンを共有）、プロジェクト設定と hooks は組み込みの `update-config`、プロジェクト全体の初期案は組み込みの `/auto-mode-setup` が担当します。`orchestrate` の Frame と Refused acts が、リポジトリのマージ・デプロイの継続承認ルール（「Standing project approval」）をこのスキルで作ります。
 
@@ -491,7 +491,7 @@ PR を受け持つスキルとマージする主体:
 | `land-check` | マージせずに、準備の状態だけを診断します |
 | `landed` | 外で行ったマージを記録します |
 | `backfill` | 登録前にマージされた PR と、その main CI を台帳に入れます |
-| `heavy` | 重いコマンド（compose、イメージのビルド）を、マシン全体で2スロットに制限して実行します |
+| `heavy` | 重いコマンド（compose、イメージのビルド）を、マシン全体のスロットに制限して実行します。スロット数は `landing.heavy_slots`、`agent-skills.json` の `orchestrate.heavy_slots`、CPU数の4分の1（最小2）の順で決まります |
 | `wait` | リード専用。処理すべきメッセージが来るまで待ち、`CLOSE OUT` 行を出します |
 | `decide` | オーケストレーターかリードがユーザーの決定を待っている事項を登録（`add`）・一覧（`list`）・クローズ（`done`、`drop`）します。ダッシュボードの Needs you に選択肢ボタン付きで表示され、ボタンは答えを記録して決定をクローズしてから、`decision <id>: <答え>` の 1 行をオーケストレーターかリードのターミナルに送ります（忙しいときは手が空いてから送ります） |
 

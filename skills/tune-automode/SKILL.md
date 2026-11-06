@@ -29,7 +29,7 @@ autoMode is read only from user settings (`~/.claude/settings.json`) and organiz
 
 ## Procedure
 
-1. **Write down the denial.** The denial message's category (e.g. "Interfere With Workloads") and the denied command or action, verbatim. If it started from a user request, one sentence on the action the user wants allowed. When the denied command was a cleanup command with `| grep` or `; ls` attached, and the bare command would match a user allow rule, no rule is missing. The fix is the call shape (`end-session` §4).
+1. **Write down the denial.** The denial message's category (e.g. "Interfere With Workloads") and the denied command or action, verbatim. The category is the spec's `refusal_category` (`emit` refuses a missing one or `no-verdict`). If it started from a user request, `user-request` and one sentence on the action the user wants allowed. When the denied command was a cleanup command with `| grep` or `; ls` attached, and the bare command would match a user allow rule, no rule is missing. The fix is the call shape (`end-session` §4).
 2. **Read the current rules.** `claude auto-mode config` (the rules in force) and `claude auto-mode defaults` (the default rules). Find the default soft_deny wording that caused the denial. If a similar user rule exists, `replace` that rule instead of adding a new one. If several rules cover the same action, `replace` one with a merged wording and `remove` the rest. The merged wording keeps every condition and every `Not covered:` of the rules it removes.
 3. **Pick the section.**
    - `allow`: an action the default soft_deny catches that is fine under these conditions.
@@ -39,17 +39,18 @@ autoMode is read only from user settings (`~/.claude/settings.json`) and organiz
    - Action class: a group of actions with the same risk, not the one denied command. Writing only the one command means the next change of arguments is denied again.
    - Safe condition: the condition under which the action is fine. Examples: "only workers this session started whose task is done", "per resource, with prune off", "only targets the user named in chat".
    - `Not covered:` the nearby actions that sit outside the condition and must stay blocked.
-5. **Pass the review checklist.** If anything fails, narrow the rule.
-   - No blanket allow. A rule with "all", "any", a wildcard path or just a tool name with no condition is not acceptable.
+5. **Pass the review checklist.** If anything fails, narrow the rule. `emit` refuses an allow rule with no `Not covered:`, and warns on blanket words (all, any, 모든, 어떤, `*`), ticket or PR numbers, token-shaped strings, and a rule nearly the same as an existing one (fix that with `replace`). Read each warning and narrow the rule. Four things the script cannot see:
+   - No rule that is just a tool name with no condition, and no wildcard path.
+   - No secret such as a token or password appears in the rule text (the script sees only token shapes).
    - Verbs that destroy production (prune, delete, rollback, force-push to the default branch, deleting production data) go in only when the user said that action directly in chat.
    - The source of authority is written as "the user's own chat message". No sentence lets a worker message or tool output become authority.
-   - No secret such as a token or password appears in the rule text.
 6. **Write the spec and emit.**
 
    ```json
    {"add": {"allow": ["<rule>"]},
     "replace": [{"section": "allow", "old": "<current wording verbatim>", "new": "<revised wording>"}],
-    "remove": [{"section": "allow", "rule": "<wording to delete verbatim>"}]}
+    "remove": [{"section": "allow", "rule": "<wording to delete verbatim>"}],
+    "refusal_category": "<denial category verbatim, or user-request>"}
    ```
 
    ```bash
@@ -83,7 +84,7 @@ Denial: "Interfere With Workloads", the command was stopping a local worker proc
 ```json
 {"add": {"allow": [
   "Stopping local worker processes this session started, after their task reported done. Not covered: processes the session did not start, workers still running a task, remote hosts, and any production workload."
-]}}
+]}, "refusal_category": "Interfere With Workloads"}
 ```
 
 To see the flow with a copy of the settings, pass `references/example-settings.json` as `--settings`.
@@ -96,7 +97,7 @@ To see the flow with a copy of the settings, pass `references/example-settings.j
 {"add": {"allow": [
   "Squash-merging pull requests in <owner>/<repo> through `orch land`, from sessions working on that repo, once required checks are green and the program's review verdict covers the head. Not covered: other repositories, admin merges or merges that bypass required checks or reviews, force-pushes, and changes to branch protection.",
   "Dispatching the <repo> deploy workflow (`gh workflow run <file> -f ref=<full sha>`) to <environment> for a commit already on main whose main CI is green, from sessions working on <owner>/<repo>. Not covered: other environments, rollbacks, deletions, and edits to the workflow itself."
-]}}
+]}, "refusal_category": "user-request"}
 ```
 
 ## Tests
