@@ -6,13 +6,14 @@
 `check --peek --wait`, which reads no screen: such cards sat for hours on a prompt only a human could answer.
 
 Usage: orch watch-cards [--interval 180] [--idle-min 30] [--goal-lost-min 15] [--min-free-gb 15]
-                        [--timeout-ms 3300000] [--once] [--self HANDLE] [--state PATH]
+                        [--timeout-ms 3300000] [--once] [--self HANDLE] [--state PATH] [--handle HANDLE ...]
        orch watch-cards --card HANDLE [--within 240]
 
 Each round reads every agent terminal but this session's own and exits on a new finding: a lost login or a
 stopped goal (auth), a select menu, a permission prompt or an interrupted turn (Orca's agentWait decides whether
 it waits on a human; the screen only where Orca has no verdict), a full disk, an API retry loop,
-a `/goal` card with no output for --idle-min minutes, a card once seen under `/goal` that sits on an empty
+a `/goal` card with no output for --idle-min minutes (not while it is busy: a running shell or `claude agents` busy),
+a card once seen under `/goal` that sits on an empty
 prompt without it for --goal-lost-min minutes, or free disk under --min-free-gb. A finding still on screen is
 not reported again, also across restarts (--state); once it clears, the next one is new. Each round stamps
 `last_scan_at` in --state, which `orch inbox`, `orch wait`, `orch patrol` and the dashboard read to tell a watcher
@@ -55,8 +56,10 @@ except ImportError:  # an install without the repo's scripts/
     AGENT_PANEL, BACKGROUND = FALLBACK_AGENT_PANEL, FALLBACK_BACKGROUND
 
 
-def agent_terminals(listing, self_handle):
-    return [t for t in listing if t.get("agentIdentity") and t.get("connected", True) and t.get("handle") != self_handle]
+def agent_terminals(listing, self_handle, only=()):
+    """Agent terminals but this session's own; with `only`, just those handles (a lead's own cards)."""
+    return [t for t in listing if t.get("agentIdentity") and t.get("connected", True) and t.get("handle") != self_handle
+            and (not only or t.get("handle") in only)]
 
 
 def auth_line(tail):
@@ -102,6 +105,12 @@ def screen_view(t, lines, waited, now_ms):
     hit = prog.judge_wait(waited, lines)
     finding = "auth" if quiet >= AUTH_QUIET_MIN and auth_line(tail) else hit[0] if hit else ""
     return (*screen_state(tail, quiet, finding), finding)
+
+
+def busy_now(h, state, agents):
+    """A card working on something that writes no output (a long build, a background shell) is not silent-stuck:
+    `claude agents` says busy, or its status bar lists a running shell or agent."""
+    return state == "busy" or (agents or {}).get(h, {}).get("agents") == "busy"
 
 
 def card_name(t):
@@ -152,7 +161,7 @@ def scan(terms, seen, read, now_ms, idle_min, free_gb, min_free_gb, goal_lost_mi
         elif hit:
             kind, question = hit
             key = kind + ":" + hashlib.sha1("\n".join(prog.prompt_block(tail)).encode()).hexdigest()[:12]
-        elif goal and idle > idle_min:
+        elif goal and idle > idle_min and not busy_now(h, state, agents):
             kind, question, key = f"a /goal card silent {int(idle)} min", "", f"idle:{t.get('lastOutputAt')}"
         elif not goal and h in goals and idle > goal_lost_min and any(l.strip() == "❯" for l in tail):
             kind, question, key = f"goal lost, idle {int(idle)} min", "", f"lost:{t.get('lastOutputAt')}"
@@ -318,10 +327,12 @@ def main(argv):
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--self", dest="self_handle", default=os.environ.get("ORCA_TERMINAL_HANDLE"))
     ap.add_argument("--state", type=pathlib.Path)
+    ap.add_argument("--handle", action="append", default=[],
+                    help="watch only this terminal handle (repeatable): a finding on any other card cannot end the watch")
     ap.add_argument("--card", help="the agentTerminalHandle of a card just created: check its start only")
     ap.add_argument("--within", type=int, default=240, help="--card: seconds before judging the start")
     a = ap.parse_args(argv)
-    listing = lambda: agent_terminals(prog.orca_json("terminal", "list").get("terminals", []), a.self_handle)
+    listing = lambda: agent_terminals(prog.orca_json("terminal", "list").get("terminals", []), a.self_handle, a.handle)
     if a.card:
         print("\n".join(check_start(a.card, prog.read_screen, listing, a.within, min(a.interval, 30))), flush=True)
         return
