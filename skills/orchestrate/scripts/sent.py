@@ -141,6 +141,16 @@ def same_to(a, b):
 
 
 MESSAGE_FIELDS = ("message", "thread", "run")
+# Orca keeps a send to a terminal bound to a Run under `run:<id>`; one left under `term_…` was stored for a terminal
+# bound to no Run, which nobody reads, and Orca prints no error for it.
+TERMINAL_ONLY = ("sent to a terminal address, not run:<id> or dispatch:<id>: the receiver gets it only while that "
+                 "terminal is bound to a Run; confirm it arrived or resend to its Run or Dispatch")
+
+
+def terminal_only(row):
+    """The warning for an `orchestration` message addressed to a terminal handle; None for any other row."""
+    return TERMINAL_ONLY if str(row.get("to")).startswith("term_") and str(row.get("channel")).startswith("orca ") \
+        and row.get("channel") not in ("orca terminal send", "orca worktree create") else None
 
 
 def page(rows, days=1, now=None, limit=LIMIT, inbox_since=None):
@@ -175,6 +185,8 @@ def page(rows, days=1, now=None, limit=LIMIT, inbox_since=None):
             for k in MESSAGE_FIELDS:
                 if r.get(k) is not None:
                     twin.setdefault(k, r[k])
+            if r.get("message"):  # Orca's address is the stored one: the log line's own `to` may be a card or a handle
+                twin["warn"] = terminal_only(r)
         elif r.get("source") == "transcript":
             unrecorded += 1  # the sender skipped `orch sent add`; a transcript is a witness, not a record
         else:
@@ -182,7 +194,8 @@ def page(rows, days=1, now=None, limit=LIMIT, inbox_since=None):
             if from_orca(r):
                 by_key.setdefault(key(r.get("text")), []).append(r)
     out.sort(key=lambda r: r.get("ts") or "", reverse=True)
-    shown = [{**r, "text": fleet.mask(r.get("text"), TEXT_MAX),
+    shown = [{**r, **({"warn": w} if (w := r.get("warn") if r.get("message") and r.get("source") == "log"
+                                   else terminal_only(r)) else {}), "text": fleet.mask(r.get("text"), TEXT_MAX),
               **{k: fleet.mask(r.get(k), n) or None for k, n in (("subject", 200), ("to", 120), ("from", 120),
                                                                    ("channel", 120), ("repo", 120), ("cwd", 300))}}
              for r in out[:limit]]

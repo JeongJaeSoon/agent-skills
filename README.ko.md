@@ -87,13 +87,14 @@ https://github.com/JeongJaeSoon/agent-skills 의 Claude Code 플러그인을 설
 
 - 「ABC-1 끝내줘」라고 하면 `deliver-ticket`이 계획부터 머지, 티켓 닫기까지 한다. 트래커가 있어야 한다(기본은 Linear, 바꾸려면 `tracker.adapter`, [설정](#설정) 참고).
 - 「현황 보고해줘」라고 하면 `brief`가 돈다. Claude Code에 내장 `/brief`가 있어서 직접 부를 때는 `/agent-skills:brief`다. `/brief-pane`은 같은 보고를 채팅 옆 패널로 연다. 패널이 열려 있는 동안만 30초마다 갱신된다(110열 이상이면 옆에 붙고, 더 좁으면 프롬프트 위에 뜬다).
-- Orca 안에서 `claude --agent agent-skills:orchestrator --name orchestrator`로 최상위 세션을 띄우고 모든 세션을 맡긴다. 오케스트레이터가 프로젝트마다 리드 세션을 띄우고, 리드가 워커를 돌린다. 오케스트레이터 세션의 맥락이 `orchestrate.restart_at`(기본 130k 토큰)을 넘고 기다리는 일이 없으면, 입력창 위 band가 지금 `/clear`해도 된다고 알린다. 다음 세션은 역할과 저장된 handoff를 이어받는다. 리드는 자동 컴팩션에 맡기므로 band가 뜨지 않는다. 리드의 `orch handoff save`는 `lead:<slug>`에 저장되고, 오케스트레이터 키에 저장하려 하면 거부된다. `/clear`는 사람이 친다. `orchestrate.auto_clear: true`로 두면 세션이 스스로 친다.
+- Orca 안에서 `claude --agent agent-skills:orchestrator --name orchestrator`로 최상위 세션을 띄우고 모든 세션을 맡긴다. 오케스트레이터가 프로젝트마다 리드 세션을 띄우고, 리드가 워커를 돌린다. 오케스트레이터 세션이 자동 컴팩션을 3번 거쳤거나, 컴팩션해도 맥락이 줄지 않거나, 두 번이 30분 안에 이어지고(`orchestrate.compact_restart`, 기본 켜짐; `restart_at`은 토큰 상한이고 지정해야만 켜진다) 기다리는 일이 없으면, 입력창 위 band가 지금 `/clear`해도 된다고 알린다. `restart_at` 기본값 130k는 없어졌으므로, 그 기본값에 기대던 설정은 이제 컴팩션 이력으로 안내를 받는다. 다음 세션은 역할과 저장된 handoff를 이어받는다. 리드는 자동 컴팩션에 맡기므로 band가 뜨지 않는다. 리드의 `orch handoff save`는 `lead:<slug>`에 저장되고, 오케스트레이터 키에 저장하려 하면 거부된다. `/clear`는 사람이 친다. `orchestrate.auto_clear: true`는 상한을 넘었을 때, `orchestrate.compact_restart.auto_clear: true`는 컴팩션 규칙에 걸렸을 때 세션이 스스로 친다.
 
 ## 사람이 결정권을 쥐는 지점
 
 - **내 설정.** `setup-pc`, `tune-automode`, `skills-config`는 diff와 `!` 줄만 만들고, 실행은 사람이 한다. 이 동작은 바꿀 수 없다.
 - **권한 창과 거부.** 권한 창은 사람의 응답을 기다린다. auto mode 분류기가 행동을 거부하면 에이전트는 보고하고 멈춘다. 어떤 부류의 행동을 이후 통과시키려면 사람이 `permissions.allow` 항목이나 `tune-automode`가 초안을 쓴 autoMode 규칙을 더한다.
 - **되돌릴 수 없는 행동.** 파괴적 migration, 공유 브랜치 force push, 프로덕션 배포, 바깥으로 보내기는 늘 멈추고 묻는다.
+- **카드의 작업 습관.** Dispatch로 띄운 카드가 Bash로 파일을 쓰거나(`sed -i`, 리다이렉트), 커밋·`rm`을 다른 명령과 한 호출에 묶거나, worktree 밖이나 main checkout을 고치거나, auto-memory에 쓰거나, 테스트 없이 push하면 경고 한 줄이 붙고 `turn-warnings.jsonl`에 기록된다. 막지는 않는다. `docs/skills.md`의 `worker.*` 키로 점검마다 끄거나 `deny`로 올린다.
 - **머지.** `orchestrate` 카드는 첫 프롬프트가 머지를 승인했으면 `orch land`로 자기 PR을 머지하고 스스로 닫는다. CI가 없는 저장소는 먼저 `orchestrate.no_ci_repos`에 넣어야 한다. 프로그램 밖의 `deliver-ticket`이 스스로 머지하는 것은 그 저장소의 머지를 허용하는 autoMode 규칙이 있을 때뿐이고, 없으면 묻는다. `human-gate` 정책으로 두거나 직접 보겠다고 하면 머지마다 그 앞에서 멈춘다.
 - **정기 정리.** `janitor`와 `pressure-watch`가 끝난 에이전트의 잔여물을 정기적으로 치운다. 끄려면 `skills-sync setup disable <이름>`. `watch-prs`의 내 PR 자동 승인·자동 머지는 설정하기 전까지 꺼져 있다.
 
