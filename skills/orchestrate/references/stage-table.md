@@ -27,7 +27,7 @@ The collector runs `tidy.run()` after each tick, so nobody has to ask. It closes
 | A to-do (`orch board todo`) | never: when its date or condition comes it moves to 지금 오너가 할 일 or 카드 없는 일 and waits for Done | — |
 | An inbox item from `orch-dash inbox add`, of a type the owner does not act on | every PR it names merged or closed, or its session is gone from Orca's list | — |
 | A held item | never: a fired trigger means the work is due | its trigger says merge and every PR or card it names merged; it moves from 보류 to 카드 없는 일 |
-| A moving board row | the PR it names, or its card's PR, merged | its card still works, or its next step has a step after the merge (a release, a deploy, an apply); also no word for 8 hours, no PR, and no card that has one or still works |
+| A moving board row with no owner and no child rows | the PR it names, or its card's PR, merged | its card still works, or its next step has a step after the merge (a release, a deploy, an apply); also no word for 8 hours, no PR, and no card that has one or still works |
 
 What the owner or another person acts on is never closed by the tick: a doing item waiting on a person (`--waiting`) or the owner's, a decision, an added inbox item of type `approval`, `run_command`, `login`, `verify_failed`, `question` or `decision` (whatever its PR or session), and a row whose status is the owner's turn or another person's wait. Anything less certain stays, marked 확인 필요 at most, since closing something still open costs more than listing something finished. A decision closes when it is answered and a Needs you item backed by a live condition (a prompt, mail, a gate, a PR) leaves when the condition clears. A `run_command` item stays until resolved: nothing here can tell that a command was run.
 
