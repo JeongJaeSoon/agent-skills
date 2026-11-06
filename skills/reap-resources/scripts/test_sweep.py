@@ -939,6 +939,7 @@ orca_stub.write_text(f'#!/bin/sh\necho "$@" >> {orca_log}\n'
 orca_stub.chmod(0o755)
 automations.ORCA = str(orca_stub)
 automations.main_checkout = lambda: True  # this test runs from a worktree
+sweep.PLATFORM = "darwin"  # the host may be Linux (CI); launchctl is the stub either way
 err = io.StringIO()
 with contextlib.redirect_stderr(err):
     saved_pf = PROTECT.read_text()
