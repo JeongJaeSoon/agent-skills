@@ -238,12 +238,20 @@ def settings():
     return data if isinstance(data, dict) else None
 
 
+def hard_cfg(data):
+    """The reap-hard settings with the `sweep` key laid over them (`sweep config` prints the same names, so a person can
+    move them across). None when the file is not an object or either key is something else."""
+    if not isinstance(data, dict):
+        return None
+    old, new = data.get("reap-hard", {}), data.get("sweep", {})
+    return {**old, **new} if isinstance(old, dict) and isinstance(new, dict) else None
+
+
 def protect_file():
     """The protect file the cleaners share: reap-hard's `protect_file` setting, or its default path. A settings file
     that cannot be read, or a setting of the wrong shape, raises NoProtect: guessing which file was meant could skip
     the person's list."""
-    data = settings()
-    cfg = data.get("reap-hard", {}) if isinstance(data, dict) else None
+    cfg = hard_cfg(settings())
     path = cfg.get("protect_file", "~/.config/agent-skills/reap-protect.txt") if isinstance(cfg, dict) else None
     if not isinstance(path, str) or not path:
         raise NoProtect("설정 reap-hard.protect_file 을 읽지 못함: 아무것도 하지 않는다")

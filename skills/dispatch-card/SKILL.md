@@ -84,11 +84,11 @@ session as not the human's, so an approval sent afterwards is refused. The brief
   `ask` and `--type escalation` from a session with no Dispatch, so the card sends
   `orca orchestration send --to run:<id> --type question --subject … --body …`; a status wakes
   no inbox wait and stays off the dashboard's Needs you. The answer is the `reply` to it: a
-  `status` message whose `thread_id` is the question's id, read with `orca orchestration check
-  --wait --types status --timeout-ms 1800000` once nothing else can move, again after each empty
-  wait. A card that coordinates a Run of its own (a lead) gets the reply in that Run's inbox:
-  read it in the one inbox wait it already runs (`orch wait` or `orch inbox`, the line with
-  `thread=<question id>`), never in a second check loop beside it.
+  `status` message whose `thread_id` is the question's id. Once nothing else can move, wait for
+  it with `orch inbox --wait` under `run_in_background`: it prints each message as one line (the
+  reply's carries `thread=<question id>`) and the next command, which acks that batch and waits
+  again. A card that coordinates a Run of its own (a lead) reads the reply in the one inbox wait
+  it already runs, never in a second check loop beside it.
   To look again, `check --all` and match `thread_id`; never a list you sort or cut yourself (a
   card sorting by a field the rows do not have, `createdAt` for `created_at`, missed two replies).
   A supervised worker needs no such line: its preamble's `ask` does this.
@@ -222,7 +222,7 @@ A worker (`card.kind` worker) needs no start check: `worker-start` exits 0 only 
 ready. Read it with `orca orchestration worker-show --dispatch <id>` and `worker-read --dispatch
 <id> --source auto` (a worker may have no terminal, and terminal verbs refuse such a handle), talk
 to it with `orca orchestration send --to dispatch:<id>`, and wait for its `worker_done` in your
-inbox wait (`orch inbox --wait`, or `orch wait` in a program). `orch watch-cards` judges its
+one inbox wait (`orchestrate` Drain, "One inbox wait, always"). `orch watch-cards` judges its
 prompts from Orca's `agentWait`. A `/goal` card (`card.kind` card):
 
 ```bash
