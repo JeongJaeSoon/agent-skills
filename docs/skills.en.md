@@ -1,4 +1,4 @@
-<!-- translated-from: 950ab10c4ec571632d40db0b225a89cf472ccf57 -->
+<!-- translated-from: ec06b240ed5d08476ba55c74bc8921319a222185 -->
 # Skill catalog
 
 This page covers the 38 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 16 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
@@ -559,7 +559,7 @@ Every rule has a key in `~/.claude/agent-skills.json`. Its value is one of `"den
 | `guard.deny.keychain` | deny | `security find-*-password` with `-w` or `-g`; `security dump-keychain` |
 | `guard.deny.url_credentials` | deny | A URL with `scheme://user:secret@` in an argument |
 | `guard.deny.user_settings` | deny | Writes to the user's own settings: `~/.claude/settings.json` and `settings.local.json` (also under `$CLAUDE_CONFIG_DIR`), `~/.claude/agent-skills.json`, and secure-fill's `allow.json`. Covers Edit, Write, MultiEdit and NotebookEdit, and Bash redirections, `tee`, `cp`, `mv`, `sed -i`, `rm` and the like. A project's `.claude/settings.json` is not covered |
-| `guard.deny.plugin_apply` | deny | `--apply` of this plugin's `setup.py`, `config_emit.py`, `automode_rule.py` and their emitted copies, and `bootstrap.py --write`. A copy is recognized by the line "runs --apply, never the agent". Another repository's `setup.py` is not covered |
+| `guard.deny.plugin_apply` | deny | `--apply` of this plugin's `setup.py`, `config_emit.py`, `automode_rule.py` and their emitted copies, and `bootstrap.py --write`. A copy is recognized by the line "runs --apply, never the agent". Another repository's `setup.py` is not covered. Only a narrow rehearsal passes: this plugin's `scripts/setup.py --apply <hash> --settings-only`, run with no wrapper such as `env`, with `HOME`, `CLAUDE_CONFIG_DIR`, `CLAUDE_SETTINGS`, `AGENT_SKILLS_CONFIG`, `AGENT_SKILLS_STATE` and `AGENT_SKILLS_CONFIG_DIR` all given in that command as absolute paths, each resolving (links and `..` followed) under the current worktree and away from the user's real settings. A missing or inherited variable, another option or another script is denied |
 | `guard.deny.slash_send` | deny | Typing `/reload…` or `/model` with `orca terminal send` |
 | `guard.deny.prompt_substitution` | deny | A command substitution (`$(…)`, backticks) in `orca worktree create --prompt` |
 | `guard.deny.self_exempt_label` | deny | Adding the `no-visual-change` label with `gh` (`pr create --label`, `pr edit --add-label`, `issue edit`, `gh api …/labels`) |

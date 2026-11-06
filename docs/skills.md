@@ -590,7 +590,7 @@ PR 을 맡는 스킬과 머지 주체:
 | `guard.deny.keychain` | deny | `security find-*-password`의 `-w`·`-g`, `security dump-keychain` |
 | `guard.deny.url_credentials` | deny | 인자에 `scheme://user:secret@`가 든 URL |
 | `guard.deny.user_settings` | deny | 사용자 설정 쓰기: `~/.claude/settings.json`·`settings.local.json`(`$CLAUDE_CONFIG_DIR`도), `~/.claude/agent-skills.json`, secure-fill의 `allow.json`. Edit·Write·MultiEdit·NotebookEdit와 Bash의 리다이렉션·`tee`·`cp`·`mv`·`sed -i`·`rm` 등. 프로젝트의 `.claude/settings.json`은 대상이 아니다 |
-| `guard.deny.plugin_apply` | deny | 이 플러그인의 `setup.py`·`config_emit.py`·`automode_rule.py`와 그 사본의 `--apply`, `bootstrap.py --write`. 사본은 "runs --apply, never the agent" 문장으로 알아본다. 다른 저장소의 `setup.py`는 대상이 아니다 |
+| `guard.deny.plugin_apply` | deny | 이 플러그인의 `setup.py`·`config_emit.py`·`automode_rule.py`와 그 사본의 `--apply`, `bootstrap.py --write`. 사본은 "runs --apply, never the agent" 문장으로 알아본다. 다른 저장소의 `setup.py`는 대상이 아니다. 검증용 적용만 좁게 통과시킨다. 이 플러그인의 `scripts/setup.py --apply <해시> --settings-only`를 `env` 같은 래퍼 없이 실행하고, `HOME`·`CLAUDE_CONFIG_DIR`·`CLAUDE_SETTINGS`·`AGENT_SKILLS_CONFIG`·`AGENT_SKILLS_STATE`·`AGENT_SKILLS_CONFIG_DIR`를 그 명령에 절대 경로로 직접 적고, 모두 현재 worktree 아래(링크·`..`를 푼 실제 경로)이며 실제 사용자 설정이 아닐 때다. 하나라도 빠지거나 상속되거나 다른 옵션·스크립트면 거부한다 |
 | `guard.deny.slash_send` | deny | `orca terminal send`로 `/reload…`·`/model` 입력 |
 | `guard.deny.prompt_substitution` | deny | `orca worktree create --prompt`의 명령 치환(`$(…)`, 백틱) |
 | `guard.deny.self_exempt_label` | deny | `gh`로 `no-visual-change` 라벨 붙이기(`pr create --label`, `pr edit --add-label`, `issue edit`, `gh api …/labels`) |

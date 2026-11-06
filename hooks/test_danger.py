@@ -74,6 +74,33 @@ git("-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-qm", "a"
 CLEAN = TMP / "clean"
 CLEAN.mkdir()
 git("init", "-q", cwd=CLEAN)
+# Scratch targets for a rehearsal --apply: a folder inside the checkout, and a link inside it to the real ~/.claude.
+(REPOX / "scratch").mkdir()
+(REPOX / "to-real").symlink_to(HOME / ".claude")
+(REPOX / "planted").mkdir()
+(REPOX / "planted" / "settings.json.bak-setup-20260101").symlink_to(TMP / "outside" / "x")
+(REPOX / "alias.json").symlink_to(REPOX / "planted" / "settings.json")
+# A settings child that is a link to a file inside the tree, with a planted backup link beside the resolved file.
+(REPOX / "data").mkdir()
+(REPOX / "data" / "record.json").write_text("{}")
+(REPOX / "data" / "record.json.bak-setup-20260101").symlink_to(TMP / "outside" / "z")
+(REPOX / "childlink").mkdir()
+(REPOX / "childlink" / "setup-applied.json").symlink_to(REPOX / "data" / "record.json")
+(REPOX / "unrelated").mkdir()
+(REPOX / "unrelated" / "notes").symlink_to(TMP / "outside" / "y")
+(REPOX / "linked").mkdir()
+(REPOX / "linked" / "settings.json").symlink_to(HOME / ".claude" / "settings.json")
+
+
+def rehearsal(script="scripts/setup.py", tail="--apply abc --settings-only", pre="", drop=None, **over):
+    """A setup.py command with every target variable assigned to a folder in the checkout; `over` replaces some,
+    `drop` omits one."""
+    scratch = REPOX / "scratch"
+    names = ("HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_SETTINGS", "AGENT_SKILLS_CONFIG", "AGENT_SKILLS_STATE",
+             "AGENT_SKILLS_CONFIG_DIR")
+    values = {n: over.get(n, str(scratch / n.lower())) for n in names if n != drop}
+    return pre + " ".join(f"{n}={v}" for n, v in values.items()) + f" python3 {REPO}/{script} {tail}"
+
 # A checkout holding a symlink to a folder outside it: `rm -rf` removes the link, not the folder.
 LINKED = TMP / "linked"
 LINKED.mkdir()
@@ -174,7 +201,44 @@ CASES = [
       f"python3 {REPO}/skills/skills-config/scripts/config_emit.py --spec s.json --apply 12ab",
       f"python3 {EMITTED} --apply 12ab", f"python3 {REPO}/skills/tune-automode/scripts/automode_rule.py --apply=1"],
      [f"python3 {REPO}/scripts/setup.py", f"python3 {EMITTED}", f"python3 {OTHER_SETUP} --apply x",
-      f"python3 {REPO}/scripts/bootstrap.py", "echo --apply"]),
+      f"python3 {REPO}/scripts/bootstrap.py", "echo --apply",
+      # A rehearsal: the plugin's setup.py, exactly --apply HASH --settings-only, every target assigned in the
+      # command to an absolute path inside the checkout.
+      (rehearsal(), REPOX), (rehearsal(tail="--settings-only --apply=abc"), REPOX),
+      # Look-alikes of the refused shapes: `cd` inside a path, and a link beside a target that is no backup.
+      (rehearsal(CLAUDE_CONFIG_DIR=f"{REPOX}/scratch/cd/home"), REPOX),
+      (rehearsal(CLAUDE_CONFIG_DIR=f"{REPOX}/scratch/@cd+home"), REPOX),
+      (rehearsal(CLAUDE_SETTINGS=f"{REPOX}/unrelated/settings.json"), REPOX)]),
+    # Not a rehearsal: a target inherited or outside the checkout, reaching the real settings through a link (also
+    # a file inside the scratch folder), `..`, a quoted word or a variable, a wrapper that can undo an assignment,
+    # an option or script the allowlist does not name, or a full setup that also syncs and schedules.
+    ("guard.deny.plugin_apply", "deny",
+     [(rehearsal(drop="AGENT_SKILLS_STATE"), REPOX), (rehearsal(drop="CLAUDE_SETTINGS"), REPOX),
+      (rehearsal(drop="HOME"), REPOX), (rehearsal(CLAUDE_CONFIG_DIR=f"{HOME}/.claude"), REPOX),
+      (rehearsal(CLAUDE_CONFIG_DIR=f"{REPOX}/to-real"), REPOX),
+      (rehearsal(CLAUDE_CONFIG_DIR=f"{REPOX}/scratch/../../home/.claude"), REPOX),
+      (rehearsal(CLAUDE_CONFIG_DIR=f"{REPOX}/linked"), REPOX),
+      (rehearsal(CLAUDE_CONFIG_DIR="$HOME/.claude"), REPOX), (rehearsal(CLAUDE_CONFIG_DIR='"~/.claude"'), REPOX),
+      (rehearsal(CLAUDE_CONFIG_DIR="scratch"), REPOX), (rehearsal(CLAUDE_CONFIG_DIR=f"{TMP}/outside"), REPOX),
+      (rehearsal(tail=f"--apply abc --settings-only --settings {HOME}/.claude/settings.json"), REPOX),
+      (rehearsal(tail=f"--apply abc --settings-only --setting {HOME}/.claude/settings.json"), REPOX),
+      (rehearsal(tail="--apply abc"), REPOX), (rehearsal(tail="--apply abc --settings-only --update"), REPOX),
+      (rehearsal(pre="env -u CLAUDE_CONFIG_DIR "), REPOX), (rehearsal(pre="env -i "), REPOX),
+      (rehearsal(script="scripts/bootstrap.py", tail="--write"), REPOX),
+      (rehearsal(script="skills/skills-config/scripts/config_emit.py", tail="--spec s.json --apply abc"), REPOX),
+      (rehearsal(script="skills/tune-automode/scripts/automode_rule.py", tail="--apply=1"), REPOX),
+      (rehearsal(), TMP), (f"cd {TMP} && " + rehearsal(), REPOX), ("cd . && " + rehearsal(), REPOX),
+      (f"cd {TMP}; cd {REPOX}; " + rehearsal(), REPOX), ("if true; then cd .; fi; " + rehearsal(), REPOX),
+      ("X=1 cd . && " + rehearsal(), REPOX), ("(cd . && " + rehearsal() + ")", REPOX),
+      (rehearsal(CLAUDE_SETTINGS=f"{REPOX}/alias.json"), REPOX),
+      (rehearsal(CLAUDE_CONFIG_DIR=f"{REPOX}/planted"), REPOX),
+      (rehearsal(AGENT_SKILLS_STATE=f"{REPOX}/childlink"), REPOX),
+      # A wrapper after the assignments undoes them as well as one before.
+      (rehearsal().replace(" python3 ", " env -i python3 "), REPOX),
+      (rehearsal().replace(" python3 ", " command python3 "), REPOX),
+      # A link planted beside a target: the backup setup.py writes next to it would follow it out of the tree.
+      (rehearsal(CLAUDE_SETTINGS=f"{REPOX}/planted/settings.json"), REPOX)],
+     []),
     ("guard.deny.slash_send", "deny",
      ["orca terminal send --terminal t1 --text '/reload-plugins'", 'orca terminal send --terminal t1 --text "/model opus"',
       "orca terminal send --terminal t1 --text /reload"],
