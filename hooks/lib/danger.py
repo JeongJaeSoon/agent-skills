@@ -58,9 +58,9 @@ DOCKER_OPTS = {"-H", "--host", "-c", "--context", "--config", "-l", "--log-level
 COMPOSE_OPTS = {"-f", "--file", "-p", "--project-name", "--profile", "--env-file", "--project-directory", "--ansi",
                 "--progress", "--parallel"}
 GIT_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"}
-# curl's short flags that take no value, the only ones a cluster like `-sG` or `-sX` can hold before its letter:
-# `-AGitHub` is a User-Agent, not -G.
-NO_VALUE = "[sSvkLiIgfO#]"
+# Any curl short flag but the ones that take a value (and so swallow the rest of the cluster): in `-sG` or `-qX` the
+# letter is a flag, in `-AGitHub` it is part of the User-Agent.
+NO_VALUE = r"[^-\sAbcCdDeEFHKmoPQrtTuUwxXyYzZ]"
 PUSH_VALUED ={"-o", "--push-option", "--repo", "--receive-pack", "--exec"}
 
 
