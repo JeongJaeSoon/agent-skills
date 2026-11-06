@@ -172,6 +172,10 @@ for cat in m.CATEGORIES:
 empty = full.index("`new` 가 비어 있으면")
 assert full.index(f"`{P} commit`", empty) < full.index("`work`"), "the empty round commits without a file and stops"
 assert "보내지도 commit 하지도 않" in full and "전송이 성공했을 때만" in full, "a failed send leaves the items for a retry"
+order = [full.index(s) for s in (f"`{P} inbox`", "orca orchestration send", "전송이 실패하면", f"`{P} commit <scratchpad>/items.json`")]
+assert order == sorted(order), "inbox check, then the send, then its failure branch, and commit last"
+# The owner's own message that opened a thread can be older than oldest; only the replies are cut by it.
+assert "본인 글이 oldest 보다 오래돼도 cursor 를 따라가며" in full and "max_threads 개 모일 때까지" in full
 assert "Slack 에 쓰지 않는다" in full and "다시 시도하지 않" in full
 assert "--state '/scratch dir'" in prompt.split("ingest")[1] and "--state '/scratch dir'" in prompt.split("commit")[-1]
 # --edit keeps an automation's id and rewrites what this script owns; a removed mentions.model clears the stored extras.

@@ -260,9 +260,10 @@ ROUND = (
     "출력 JSON 의 oldest·searches·read_private·max_threads·inbox_to·file_tickets·tracker_project 를 회차 내내 쓴다. "
     "2. 찾는 것은 셋이다: 사용자 멘션(mention), 멘션 없이 쓴 사용자 이름(name, 본인 글 제외), 사용자가 글을 쓴 스레드의 "
     "새 답글(thread). searches 의 항목마다 slack_search_public 을 keywords, filters, 항목에 after 가 있으면 그 after, "
-    "sort: timestamp, include_context: false 로 부르고, 결과가 oldest 보다 새로운 동안 cursor 를 따라간다. thread 항목은 "
-    "permalink 에서 서로 다른 (channel id, thread_ts) 쌍을 최신순으로 max_threads 개까지 모아 각각 slack_read_thread 로 "
-    "plan 의 oldest 와 detailed 형식(concise 에는 답글별 ts 가 없다)으로 읽는다. read_private 가 true 가 아니면 "
+    "sort: timestamp, include_context: false 로 부른다. mention·name 항목은 결과가 oldest 보다 새로운 동안 cursor 를 "
+    "따라간다. thread 항목은 본인 글이 oldest 보다 오래돼도 cursor 를 따라가며 permalink 에서 서로 다른 (channel id, thread_ts) "
+    "쌍을 최신순으로 max_threads 개 모일 때까지 모으고, 각각 slack_read_thread 로 plan 의 oldest 와 detailed 형식(concise 에는 "
+    "답글별 ts 가 없다)으로 읽는다. read_private 가 true 가 아니면 "
     "slack_search_public_and_private 를 부르지 않고 DM·그룹 DM·비공개 채널을 읽지 않는다(다른 Slack 서버면 공개 채널만 "
     "돌려주는 그 서버의 검색을 쓴다). "
     '3. 모든 결과를 <scratchpad>/candidates.json 에 [{{"channel_id", "ts", "thread_ts", "permalink", "author_id", '
