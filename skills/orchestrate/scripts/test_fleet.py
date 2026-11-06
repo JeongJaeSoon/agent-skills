@@ -137,6 +137,20 @@ ss = {s["id"]: s for s in st["sessions"]}
 assert ss["wt-export"]["unread"] == 3 and not items(st, "ci_failed"), (ss["wt-export"], items(st, "ci_failed"))
 badges_agree(st)
 
+# The owner's now-list shows in Needs you through the collector, and a dismiss does not hide it: only `orch board done` does.
+real_open = fleet.board_open
+fleet.board_open = lambda: {"owner_todo": [{"id": "b9", "title": "acme/app#3 리뷰", "updated_at": "2026-10-30T09:00:00Z"}]}
+st = f.tick(force=True)
+assert [i["title"] for i in items(st, "owner_todo")] == ["acme/app#3 리뷰"], items(st, "owner_todo")
+fleet.dismiss(f, "b9")
+st = f.tick(force=True)
+assert [i["key"] for i in items(st, "owner_todo")] == ["b9"], items(st, "owner_todo")
+fleet.board_open = lambda: {}
+st = f.tick(force=True)
+assert not items(st, "owner_todo")
+fleet.board_open = real_open
+badges_agree(st)
+
 # Needs you order: what only the owner settles, then a merge call waiting on them, then the rest; newest first in each.
 ranks = [fleet.needs_rank(i) for i in items(st)]
 assert ranks == sorted(ranks) and ranks.count(0) == 5 and ranks.count(1) == 1, [(i["type"], r) for i, r in zip(items(st), ranks)]

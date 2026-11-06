@@ -120,6 +120,7 @@ The **Sessions** screen is the preset of these columns: name (tree), kind, phase
 | `login`, `run_command`, `verify_failed`, `verify_ok` | A finished turn that ends asking you to log in, to run something yourself, or reports a verification that failed or passed |
 | `changes_requested`, `review_comment_received`, `ci_failed`, `approval_stale`, `ready_to_merge` | A PR owned by a session has a change request, unresolved review threads from a person (bots are left out unless `bots_in_inbox`), failing CI, only approvals on an older commit, or a current approval with passing CI |
 | `sync_stalled`, `reload_pending` | Skill sync reported failure or went quiet for two intervals, or a reload the dashboard's retries could not send to an idle session (below) |
+| `owner_todo` | An open item of the owner's now-list (`orch board now`), the same set the Brief's 📅 list shows. Its key is the board item's id, so `orch board done` closes it and the next read drops it |
 | `selfcheck` | The dashboard's own state disagrees with a fresh read of Orca and GitHub (below) |
 | anything else | Added by the orchestrator with `orch-dash inbox add` |
 

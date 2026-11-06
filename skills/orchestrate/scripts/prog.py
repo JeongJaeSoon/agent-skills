@@ -3921,7 +3921,7 @@ def cmd_stage(argv):
                 return print(json.dumps(t, ensure_ascii=False, indent=1))
             text = (stages.render_telegram if "--telegram" in rest else stages.render_md)(t)
             fold = f"접음 {gone}행 (끝남 또는 {idle_d}일 그대로) · --all 로 전부" if gone else ""
-            print("\n\n".join(filter(None, (text, fold))) or "기록된 단계 없음")
+            print("\n\n".join(filter(None, (text, fold, stages.ignored_note(t)))) or "기록된 단계 없음")
             if "--telegram" not in rest and any(table_width.table_width(x) > stages.COLS for _, x in table_width.tables(text)):
                 sys.exit("a table is wider than 78 columns")
         else:
