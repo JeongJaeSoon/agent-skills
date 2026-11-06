@@ -467,7 +467,7 @@ One skill with four modes that read code and explain it. None of them edits code
   - Also builds a feature map of the 3–5 main features.
   - Proves the skill by running it end to end once itself.
   - `deliver-ticket` and `orchestrate` may use it when a reusable harness is useful within scope; direct checks remain sufficient when they prove the same acceptance criteria. Upstream keeps it user-invoked; this fork allows model invocation.
-- **Bundled:** `references/feature-map-example/` (the feature map of an example app).
+- **Bundled:** `references/feature-map-example/` (the feature map of an example app), and `scripts/verify_skill_lint.py`, which lints a generated skill by reading files only: frontmatter and sections, state-file names, a shared `latest` link, a required cleanup argument, pattern kills, helper modes and documentation, and the feature-map index. `maintain-verification-skill` runs the same script.
 
 ### maintain-verification-skill
 - **What it does:**
