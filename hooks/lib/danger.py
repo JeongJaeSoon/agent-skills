@@ -234,7 +234,7 @@ def check_command(c, masked, cfg, cwd, session, here=None):
                                                   "an authenticated CLI (`gh`) instead."))
     if PYTHON.fullmatch(name) or name.endswith(".py"):
         script = name_script(w)
-        if script and plugin_apply(script, w, here):
+        if script and plugin_apply(script, w, here) and not scratch_apply(script, c, here):
             out.append(("guard.deny.plugin_apply", f"`{os.path.basename(script)}` with --apply/--write changes the "
                                                    "user's settings or scheduled jobs; the user runs that line, never "
                                                    "the agent. Hand them the exact command."))
@@ -299,6 +299,35 @@ def plugin_apply(script, w, cwd):
             return bool(APPLY_MARK.search(f.read(4096)))
     except OSError:
         return False
+
+
+def scratch_apply(script, c, cwd):
+    """True when an --apply is a rehearsal: every place it writes (the Claude profile and agent-skills.json, named
+    in this command itself, not inherited) resolves, symlinks and `..` followed, under this checkout's worktree and
+    away from the user's real settings. An unset target means the default, the real one, so it is not a rehearsal."""
+    if cwd is UNKNOWN_DIR or cwd is None:
+        return False
+    top = run(["git", "rev-parse", "--show-toplevel"], cwd).stdout.strip() if os.path.isdir(cwd) else ""
+    if not top:
+        return False
+    root = pathlib.Path(os.path.realpath(top))
+    real = {pathlib.Path(p) for p in user_files()}
+
+    def inside(value):
+        if not value or re.search(r"[$`~]", value):  # a word this reader cannot expand is not known to be scratch
+            return False
+        p = pathlib.Path(os.path.realpath(os.path.join(cwd, value)))
+        return p.is_relative_to(root) and not any(f.is_relative_to(p) or p.is_relative_to(f.parent) for f in real)
+
+    given = dict(a.split("=", 1) for a in c.assigns)
+    targets = [given.get("CLAUDE_CONFIG_DIR"), given.get("AGENT_SKILLS_CONFIG")]
+    targets += [given[k] for k in ("CLAUDE_SETTINGS", "AGENT_SKILLS_CONFIG_DIR", "XDG_CONFIG_HOME", "HOME") if k in given]
+    w = c.words
+    targets += [w[i + 1] if i + 1 < len(w) else "" for i, x in enumerate(w) if x == "--settings"]
+    targets += [x.split("=", 1)[1] for x in w if x.startswith("--settings=")]
+    if os.path.basename(script) == "setup.py" and not {"--settings-only", "--here"} & set(w):
+        return False  # a full setup also syncs, schedules automations and talks to Orca: not files in a scratch dir
+    return all(inside(t) for t in targets)
 
 
 def label_add(w):

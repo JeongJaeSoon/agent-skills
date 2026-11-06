@@ -71,6 +71,9 @@ git("-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-qm", "a"
 CLEAN = TMP / "clean"
 CLEAN.mkdir()
 git("init", "-q", cwd=CLEAN)
+# Scratch targets for a rehearsal --apply: a folder inside the checkout, and a link inside it to the real ~/.claude.
+(REPOX / "scratch").mkdir()
+(REPOX / "to-real").symlink_to(HOME / ".claude")
 # A stand-in `orca` that says the current worktree is the main one.
 (BIN / "orca").write_text("#!/bin/sh\necho '{\"result\": {\"worktree\": {\"isMainWorktree\": true}}}'\n")
 (BIN / "orca").chmod(0o755)
@@ -158,7 +161,35 @@ CASES = [
       f"python3 {REPO}/skills/skills-config/scripts/config_emit.py --spec s.json --apply 12ab",
       f"python3 {EMITTED} --apply 12ab", f"python3 {REPO}/skills/tune-automode/scripts/automode_rule.py --apply=1"],
      [f"python3 {REPO}/scripts/setup.py", f"python3 {EMITTED}", f"python3 {OTHER_SETUP} --apply x",
-      f"python3 {REPO}/scripts/bootstrap.py", "echo --apply"]),
+      f"python3 {REPO}/scripts/bootstrap.py", "echo --apply",
+      # A rehearsal: both targets named in the command, inside the checkout, away from the real settings.
+      (f"CLAUDE_CONFIG_DIR={REPOX}/scratch AGENT_SKILLS_CONFIG={REPOX}/scratch/a.json "
+       f"python3 {REPO}/scripts/setup.py --apply abc --settings-only", REPOX),
+      (f"CLAUDE_CONFIG_DIR=scratch AGENT_SKILLS_CONFIG=scratch/a.json "
+       f"python3 {REPO}/skills/skills-config/scripts/config_emit.py --spec s.json --apply 12ab", REPOX),
+      (f"env CLAUDE_CONFIG_DIR=scratch AGENT_SKILLS_CONFIG=scratch/a.json "
+       f"python3 {REPO}/skills/tune-automode/scripts/automode_rule.py --apply=1", REPOX)]),
+    # Not a rehearsal: a target left to its default, outside the checkout, reaching the real settings through a
+    # link, `..`, a variable or --settings, or a full setup that also syncs and schedules.
+    ("guard.deny.plugin_apply", "deny",
+     [(f"python3 {REPO}/scripts/setup.py --apply abc --settings-only", REPOX),
+      (f"CLAUDE_CONFIG_DIR=scratch python3 {REPO}/scripts/setup.py --apply abc --settings-only", REPOX),
+      (f"AGENT_SKILLS_CONFIG=scratch/a.json python3 {REPO}/scripts/setup.py --apply abc --settings-only", REPOX),
+      (f"CLAUDE_CONFIG_DIR={HOME}/.claude AGENT_SKILLS_CONFIG=scratch/a.json "
+       f"python3 {REPO}/scripts/setup.py --apply abc --settings-only", REPOX),
+      (f"CLAUDE_CONFIG_DIR=to-real AGENT_SKILLS_CONFIG=scratch/a.json "
+       f"python3 {REPO}/scripts/setup.py --apply abc --settings-only", REPOX),
+      (f"CLAUDE_CONFIG_DIR=scratch/../../home/.claude AGENT_SKILLS_CONFIG=scratch/a.json "
+       f"python3 {REPO}/scripts/setup.py --apply abc --settings-only", REPOX),
+      (f"CLAUDE_CONFIG_DIR=$HOME/.claude AGENT_SKILLS_CONFIG=scratch/a.json "
+       f"python3 {REPO}/scripts/setup.py --apply abc --settings-only", REPOX),
+      (f"CLAUDE_CONFIG_DIR=scratch AGENT_SKILLS_CONFIG=scratch/a.json "
+       f"python3 {REPO}/scripts/setup.py --apply abc --settings-only --settings {HOME}/.claude/settings.json", REPOX),
+      (f"CLAUDE_CONFIG_DIR=scratch AGENT_SKILLS_CONFIG=scratch/a.json "
+       f"python3 {REPO}/scripts/setup.py --apply abc", REPOX),
+      (f"CLAUDE_CONFIG_DIR={TMP}/outside AGENT_SKILLS_CONFIG=scratch/a.json "
+       f"python3 {REPO}/scripts/setup.py --apply abc --settings-only", REPOX)],
+     []),
     ("guard.deny.slash_send", "deny",
      ["orca terminal send --terminal t1 --text '/reload-plugins'", 'orca terminal send --terminal t1 --text "/model opus"',
       "orca terminal send --terminal t1 --text /reload"],
