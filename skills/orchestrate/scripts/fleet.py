@@ -20,10 +20,12 @@ import collections, concurrent.futures, contextlib, datetime as dt, fcntl, glob,
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[3] / "hooks"))
 import roles  # noqa: E402  the plugin's one role resolution
+import stacks  # noqa: E402  beside this file; stdlib only, so no cycle
 
 ORCA_EVERY = 10          # worktree ps, terminal list, inbox: three local calls, ~0.5 s together
 INBOX_LIMIT = 2000       # every message Orca keeps: at 100, heartbeats pushed unanswered questions out of view
 RUNS_EVERY = 120         # runs, workers, tasks, gates
+STACKS_EVERY = 60        # test stacks (stacks.py); only read when `dashboard.stacks` is set
 PR_TICK = 90             # PR probe tick; each PR is due per its tier below
 SEARCH_PAGES = 3         # 100 PRs a page
 PR_TICK_VIEWED = 30      # the same while a page is open: the search finds a new or merged PR within this
@@ -1745,8 +1747,10 @@ class Fleet:
 
     def __init__(self, fetch_fast=fetch_fast, fetch_runs=fetch_runs, graphql=graphql, now=utcnow, read_screen=read_screen,
                  fetch_automations=fetch_automations, fetch_monitors=fetch_monitors, fetch_sent=fetch_sent, ps_table=ps_table,
-                 declared_roles=declared_roles, live_sessions=live_sessions):
+                 declared_roles=declared_roles, live_sessions=live_sessions, fetch_stacks=None):
         self.fetch_fast, self.fetch_runs, self.graphql, self.now = fetch_fast, fetch_runs, graphql, now
+        self.fetch_stacks, self.stacks = fetch_stacks or stacks.collect, []  # (now iso, entries) -> rows
+        self.stacks_key = None  # the entries the rows were read for
         self.ps_table = ps_table  # read once a runs cycle for both monitors and sent
         self.fetch_automations, self.automations = fetch_automations, []
         self.fetch_monitors, self.monitors = fetch_monitors, []
@@ -1764,7 +1768,7 @@ class Fleet:
         self.branch_pr = saved.get("branch_pr", {})  # "repo@branch" -> {"key": key|None, "at": iso}
         self.me = saved.get("me")
         self.mem = read_json(d / "memory.json", {}) or {}  # prompt hashes, last states, sticky inbox
-        self.last = {"runs": 0.0, "prs": 0.0}
+        self.last = {"runs": 0.0, "prs": 0.0, "stacks": 0.0}
         self.rate = None  # GraphQL points left, from the last query's rateLimit
         self.state, self.owner_of, self.cand_of, self.saved = None, {}, {}, {}
         self.checks = []  # selfcheck.SelfCheck's items: where this state disagreed with a fresh read
@@ -1866,12 +1870,29 @@ class Fleet:
                 except SourceError as e:
                     self.ok("github", str(e))
                 self.last["prs"] = mono
+            self.refresh_stacks(mono, force)
             self.state = self.compose(sessions, root, cfg)
             self.stage_rows()
             self.save(**{"state.json": json.dumps(self.state, ensure_ascii=False),
                          "prs.json": json.dumps({"prs": self.prs, "branch_pr": self.branch_pr, "me": self.me}),
                          "memory.json": json.dumps(self.mem, ensure_ascii=False)})
             return self.state
+
+    def refresh_stacks(self, mono, force=False):
+        """state.stacks: one row per `dashboard.stacks` entry (stacks.py), read at most every STACKS_EVERY seconds; []
+        and no network call while the key is unset."""
+        entries = stacks.configured()
+        key = json.dumps(entries, sort_keys=True)
+        if not entries:
+            self.stacks, self.last["stacks"], self.stacks_key = [], 0.0, None
+        elif (force or key != self.stacks_key or not self.last["stacks"]
+              or mono - self.last["stacks"] >= STACKS_EVERY):  # a changed entry is read now, not in a minute
+            try:
+                self.stacks = self.fetch_stacks(iso(self.now()), entries)
+            except Exception as e:  # collect() does not raise; this keeps a broken fetcher from stopping the tick
+                at = iso(self.now())
+                self.stacks = [stacks.failed(x, at, f"collect: {type(e).__name__}") for x in entries]
+            self.last["stacks"], self.stacks_key = mono, key
 
     def stage_rows(self):
         """The stage table's generated rows, from this state and the program ledgers (stage_auto.py). Runs before
@@ -2310,6 +2331,7 @@ class Fleet:
                            "status": t.get("status"), "deps": t.get("deps")} for t in self.runs["tasks"]],
                 "prs": sorted(prs, key=lambda p: p.get("updated") or "", reverse=True), "items": items,
                 "timeline": timeline[:300], "holds": held, "automations": self.automations, "monitors": monitors, "sources": self.sources, "me": self.me,
+                "stacks": self.stacks,
                 "ticket_url": ticket_url(),
                 "counts": {t: sum(1 for i in items if i["type"] == t) for t in {i["type"] for i in items}}}
 

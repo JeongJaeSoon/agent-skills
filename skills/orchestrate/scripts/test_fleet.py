@@ -32,6 +32,27 @@ def items(st, t=None):
 st = f.tick(force=True)
 ss = {s["id"]: s for s in st["sessions"]}
 assert st["root"] == "wt-coord", st["root"]
+
+# Test stacks (stacks.py): off without `dashboard.stacks`; with it, one row per stack, read at most once a minute.
+assert st["stacks"] == [], "no key, no stacks, no network"
+_cfg = pathlib.Path(os.environ["AGENT_SKILLS_CONFIG"])
+_cfg.write_text(json.dumps({"dashboard": {"stacks": [{"name": "stg", "url": "https://stack.example.test", "repo": "acme/app"}]}}))
+_asked = []
+f.fetch_stacks = lambda at, entries: _asked.append(at) or [{"name": e["name"], "ready": True} for e in entries]
+st = f.tick(force=True)
+assert st["stacks"] == [{"name": "stg", "ready": True}] and len(_asked) == 1, st["stacks"]
+f.tick()
+assert len(_asked) == 1, "within STACKS_EVERY the rows are kept, not read again"
+_cfg.write_text(json.dumps({"dashboard": {"stacks": [{"name": "other", "url": "https://other.example.test", "repo": "acme/app"}]}}))
+assert f.tick()["stacks"] == [{"name": "other", "ready": True}] and len(_asked) == 2, "a changed entry is read at once"
+_cfg.unlink()
+assert f.tick(force=True)["stacks"] == [] and len(_asked) == 2, "removing the key turns it off"
+_cfg.write_text(json.dumps({"dashboard": {"stacks": [{"name": "other", "url": "https://other.example.test", "repo": "acme/app"}]}}))
+assert f.tick()["stacks"] == [{"name": "other", "ready": True}] and len(_asked) == 3, "and setting it again reads at once"
+f.fetch_stacks = lambda at, entries: 1 / 0
+assert f.tick(force=True)["stacks"][0]["error"] == "collect: ZeroDivisionError", "a broken fetcher does not stop the tick"
+_cfg.unlink()
+f.tick(force=True)
 assert ss["wt-coord"]["kind"] == "orchestrator" and ss["wt-coord"]["parent"] is None
 assert all(ss[w]["kind"] == "task" and ss[w]["parent"] == "wt-coord" for w in ("wt-login", "wt-export", "wt-docs"))
 assert ss["wt-scratch"]["kind"] == "standalone" and ss["wt-scratch"]["parent"] == "wt-coord"
