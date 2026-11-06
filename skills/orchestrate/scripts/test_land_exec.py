@@ -51,9 +51,11 @@ if a[:2] == ["orchestration", "send"]:
     st["sent"] = st.get("sent", []) + [a[a.index("--to") + 1]]; json.dump(st, open(path, "w")); sys.exit()
 if a[:2] == ["worktree", "list"]:  # a card holds each PR's branch (b<n>): orch verdict asks its terminals by id
     st = json.load(open(os.environ["FAKE_GH_STATE"]))
-    print(json.dumps({"worktrees": [{"id": "w" + n, "hostId": "local", "branch": f"refs/heads/b{n}"} for n in st["prs"]]})); sys.exit()
+    print(json.dumps({"worktrees": [{"id": "w" + n, "hostId": "local", "branch": f"refs/heads/b{n}", "head": "",
+                                     "isMainWorktree": False} for n in st["prs"]],
+                      "hostScope": {"hostIds": ["local"], "omittedHostIds": []}, "truncated": False})); sys.exit()
 if a[:2] == ["terminal", "list"]:  # the card holding the PR's branch: orch verdict records it as the author
-    print(json.dumps({"terminals": [{"handle": "term_author"}],
+    print(json.dumps({"terminals": [{"handle": "term_author"}], "truncated": False,
                       "hostScope": {"hostIds": ["local"], "omittedHostIds": []}})); sys.exit()
 os.execv(sys.executable, [sys.executable, os.environ["FAKE_ORCA_INNER"], *a])
 '''
@@ -338,7 +340,116 @@ class LandExec(Fixture):
             os.environ.pop("ORCA_TERMINAL_HANDLE")
         self.settled(row, "merged", 0)
 
-    def test_author_sessions_is_empty_when_orca_cannot_vouch_for_the_list(self):
+    def test_a_worktree_row_that_cannot_be_matched_is_not_a_missing_card(self):
+        """An incomplete row ({}, no head, no id) was skipped as "does not match", so a partial answer read as "Orca
+        answered and no card holds the PR" and opened the unverified-author path."""
+        real = prog.orca_json
+        good = {"id": "w1", "hostId": "local", "branch": "refs/heads/b", "head": "abc", "isMainWorktree": False}
+        scope = {"hostIds": ["local"], "omittedHostIds": []}
+        terminals = {"terminals": [{"handle": "term_b"}], "hostScope": scope, "truncated": False}
+
+        def orca(rows):
+            return lambda *a: ({"worktrees": rows, "hostScope": scope, "truncated": False}
+                               if a[:2] == ("worktree", "list") else terminals)
+
+        try:
+            for broken in ({}, {"id": "w9"}, {**good, "head": None}, {**good, "branch": None}, {**good, "id": 7},
+                           {**good, "hostId": ""}, "w9", None):
+                with self.subTest(broken=broken):
+                    prog.orca_json = orca([broken])
+                    self.assertIsNone(prog.author_sessions("b"))
+                    self.assertIsNone(prog.worktree_author_sessions("abc"))
+                    # One unreadable row beside a readable match: the match alone is not the whole picture.
+                    prog.orca_json = orca([good, broken])
+                    self.assertIsNone(prog.author_sessions("b"))
+                    self.assertIsNone(prog.worktree_author_sessions("abc"))
+            prog.orca_json = orca([good])
+            self.assertEqual(prog.author_sessions("b"), ["term_b"])
+            self.assertEqual(prog.worktree_author_sessions("abc"), ["term_b"])
+            prog.orca_json = orca([{**good, "branch": "refs/heads/other", "head": "def"}])
+            self.assertEqual(prog.author_sessions("b"), [])
+            self.assertEqual(prog.worktree_author_sessions("abc"), [])
+            # Real Orca lists detached worktrees with an empty branch and unborn ones with an empty head: readable
+            # rows that simply hold nothing, so they must not turn every lookup into "cannot tell".
+            prog.orca_json = orca([good, {**good, "id": "w2", "branch": "", "head": ""}])
+            self.assertEqual(prog.author_sessions("b"), ["term_b"])
+            self.assertEqual(prog.worktree_author_sessions("abc"), ["term_b"])
+        finally:
+            prog.orca_json = real
+
+    def test_an_answer_that_does_not_vouch_for_itself_is_not_a_missing_card(self):
+        """The envelope fields that say "this answer is complete" count only when present and well typed. A missing or
+        mistyped one was read as the empty default, so a partial answer became [] and opened the unverified path."""
+        real = prog.orca_json
+        scope = {"hostIds": ["local"], "omittedHostIds": []}
+        row = {"id": "w1", "hostId": "local", "branch": "refs/heads/b", "head": "abc", "isMainWorktree": False}
+        wt = {"worktrees": [row], "hostScope": scope, "truncated": False}
+        tm = {"terminals": [{"handle": "term_b"}], "hostScope": scope, "truncated": False}
+
+        def orca(w, t):
+            return lambda *a: w if a[:2] == ("worktree", "list") else t
+
+        def without(d, key):
+            return {k: v for k, v in d.items() if k != key}
+
+        def check(w, t, label):
+            prog.orca_json = orca(w, t)
+            self.assertIsNone(prog.author_sessions("b"), label)
+            self.assertIsNone(prog.worktree_author_sessions("abc"), label)
+
+        try:
+            prog.orca_json = orca(wt, tm)
+            self.assertEqual(prog.author_sessions("b"), ["term_b"])
+            self.assertEqual(prog.worktree_author_sessions("abc"), ["term_b"])
+            for key in ("truncated", "hostScope"):  # a missing field is not a complete answer
+                check(without(wt, key), tm, f"worktree list without {key}")
+                check(wt, without(tm, key), f"terminal list without {key}")
+            for bad in (None, 0, "", [], {}, "false"):
+                check({**wt, "truncated": bad}, tm, f"worktree truncated={bad!r}")
+                check(wt, {**tm, "truncated": bad}, f"terminal truncated={bad!r}")
+            bad_scopes = (None, False, [], {}, {"hostIds": "local", "omittedHostIds": []},
+                          {"hostIds": [], "omittedHostIds": []}, {"hostIds": ["other"], "omittedHostIds": []},
+                          {"hostIds": ["local", None], "omittedHostIds": []},
+                          {"hostIds": ["local", 7], "omittedHostIds": []},
+                          {"hostIds": {"local": 1}, "omittedHostIds": []},
+                          {"hostIds": ["local"]}, {"hostIds": ["local"], "omittedHostIds": None},
+                          {"hostIds": ["local"], "omittedHostIds": False},
+                          {"hostIds": ["local"], "omittedHostIds": ""},
+                          {"hostIds": ["local"], "omittedHostIds": {}},
+                          {"hostIds": ["local"], "omittedHostIds": [None]},
+                          {"hostIds": ["local"], "omittedHostIds": [7]})
+            for bad in bad_scopes:
+                check({**wt, "hostScope": bad}, tm, f"worktree hostScope={bad!r}")
+                check(wt, {**tm, "hostScope": bad}, f"terminal hostScope={bad!r}")
+            # "local-other" contains "local" as a substring: membership must be of a list, not of a string.
+            check(wt, {**tm, "hostScope": {"hostIds": "local-other", "omittedHostIds": []}}, "substring host")
+            # The main-worktree flag decides which rows may stand in for the author: it must be a real boolean.
+            for bad in ("false", "true", 1, 0, None, [], {}):
+                check({**wt, "worktrees": [{**row, "isMainWorktree": bad}]}, tm, f"isMainWorktree={bad!r}")
+            check({**wt, "worktrees": [without(row, "isMainWorktree")]}, tm, "isMainWorktree missing")
+            # No branch or head to look for is "cannot tell", not "nothing holds it".
+            for bad in (None, "", 7, [], {}):
+                prog.orca_json = orca(wt, tm)
+                self.assertIsNone(prog.author_sessions(bad), bad)
+                self.assertIsNone(prog.worktree_author_sessions(bad), bad)
+        finally:
+            prog.orca_json = real
+
+    def test_an_unverified_row_must_carry_an_explicit_empty_author(self):
+        """author_unverified vouches for "Orca answered and found no card", which is the list []; a row with no
+        author field at all, or null, says nothing was looked up."""
+        row = {"reviewer": "codex", "evidence": "https://example.test/r", "recorder": "term_x", "author_unverified": True}
+        self.assertIsNone(prog.verdict_identity_problem({**row, "author": []}))
+        for author in (None, "missing"):
+            v = {**row} if author == "missing" else {**row, "author": author}
+            self.assertTrue(prog.verdict_identity_problem(v), v)
+        # The mark and a found author contradict each other; the author branch would skip the mark and the
+        # reviewer-is-recorder check, so a row carrying both must be refused, not read as an ordinary reviewed row.
+        both = {**row, "author": ["term_author"], "reviewer": "codex", "recorder": "codex", "source": "review:codex"}
+        self.assertIn("malformed", prog.verdict_identity_problem(both) or "", both)
+        self.assertIsNone(prog.verdict_identity_problem({**both, "author_unverified": None, "recorder": "term_x"}))
+
+    def test_author_sessions_tells_no_card_from_a_lookup_that_cannot_vouch(self):
         real = prog.orca_json
 
         def fake(worktrees, terminals, **listing):
@@ -346,23 +457,35 @@ class LandExec(Fixture):
             covered that host, unless the case sets its own."""
             def orca(*a):
                 if a[:2] == ("worktree", "list"):
-                    return {"worktrees": [{"hostId": "local", **w} for w in worktrees], **listing}
+                    rows = [{"hostId": "local", "branch": "", "head": "", "isMainWorktree": False, **w} for w in worktrees]
+                    hosts = sorted({r["hostId"] for r in rows if isinstance(r["hostId"], str)})
+                    return {"worktrees": rows, "hostScope": {"hostIds": hosts, "omittedHostIds": []}, "truncated": False,
+                            **listing}
                 answer = terminals[a[-1]]
                 if isinstance(answer, BaseException):
                     raise answer
-                return {"hostScope": {"hostIds": ["local"], "omittedHostIds": []}, **answer}
+                return {"hostScope": {"hostIds": ["local"], "omittedHostIds": []}, "truncated": False, **answer}
             return orca
 
         held = [{"id": "w1", "branch": "refs/heads/b"}, {"id": "w2", "branch": "refs/heads/b"},
                 {"id": "w3", "branch": "refs/heads/other"}]
         try:
+            # None: Orca did not give a complete answer, so the author is unknown, not absent.
             for answer in ({"terminals": [{"handle": "term_other"}], "truncated": True}, {"terminals": None}, {}):
                 prog.orca_json = fake(held[:1], {"id:w1": answer})
-                self.assertEqual(prog.author_sessions("b"), [], answer)
-            prog.orca_json = fake(held[:1], {"id:w1": {"terminals": [{"handle": "term_b"}, {"handle": "term_a"}, {}]}})
+                self.assertIsNone(prog.author_sessions("b"), answer)
+            prog.orca_json = fake(held[:1], {"id:w1": {"terminals": [{"handle": "term_b"}, {"handle": "term_a"}]}})
             self.assertEqual(prog.author_sessions("b"), ["term_a", "term_b"])
+            # A terminal row without a usable handle may be the author's own: dropping it would read as "no card".
+            for row in ({}, {"handle": ""}, {"handle": 7}, {"handle": None}, "term_a", None):
+                prog.orca_json = fake(held[:1], {"id:w1": {"terminals": [{"handle": "term_b"}, row]}})
+                self.assertIsNone(prog.author_sessions("b"), row)
+            prog.orca_json = fake([{**held[0], "head": "abc"}], {"id:w1": {"terminals": [{}]}})
+            self.assertIsNone(prog.worktree_author_sessions("abc"))
             prog.orca_json = fake(held[:1], {"id:w1": ValueError("not json")})
-            self.assertEqual(prog.author_sessions("b"), [])
+            self.assertIsNone(prog.author_sessions("b"))
+            prog.orca_json = fake(held[:1], {"id:w1": SystemExit("orca terminal list: connection refused")})
+            self.assertIsNone(prog.author_sessions("b"))
             # Two worktrees hold the branch and only the successor has a terminal: its handle is the author.
             prog.orca_json = fake(held, {"id:w1": {"terminals": []}, "id:w2": {"terminals": [{"handle": "term_new"}]}})
             self.assertEqual(prog.author_sessions("b"), ["term_new"])
@@ -375,7 +498,7 @@ class LandExec(Fixture):
             for bad in (SystemExit("orca terminal list: selector_ambiguous"),
                         {"terminals": [{"handle": "term_new"}], "truncated": True}):
                 prog.orca_json = fake(held, {"id:w1": first, "id:w2": bad})
-                self.assertEqual(prog.author_sessions("b"), [], bad)
+                self.assertIsNone(prog.author_sessions("b"), bad)
             # A terminal answer is trusted only when it covered the worktree's own host: an empty answer from a host
             # Orca did not reach proves nothing. Another host being left out is an ordinary scope limit.
             old, new = {"terminals": [{"handle": "term_old"}]}, {"terminals": []}
@@ -386,20 +509,21 @@ class LandExec(Fixture):
                           {"hostIds": ["h1"]},                                  # not covered, nothing omitted
                           {"hostIds": []}, {}):                                 # no host scope at all
                 prog.orca_json = fake(on, {"id:w1": {**old, "hostScope": covered}, "id:w2": {**new, "hostScope": scope}})
-                self.assertEqual(prog.author_sessions("b"), [], scope)
+                self.assertIsNone(prog.author_sessions("b"), scope)
             prog.orca_json = fake(on, {"id:w1": {**old, "hostScope": covered},
                                        "id:w2": {**new, "hostScope": {"hostIds": ["h1", "h2"], "omittedHostIds": ["h9"]}}})
             self.assertEqual(prog.author_sessions("b"), ["term_old"])
             hostless = [{**held[0], "hostId": "h1"}, {**held[1], "hostId": None}]
             for scope in (covered, {"hostIds": ["h1", None], "omittedHostIds": []}):  # the second lists the missing host
                 prog.orca_json = fake(hostless, {"id:w1": {**old, "hostScope": covered}, "id:w2": {**new, "hostScope": scope}})
-                self.assertEqual(prog.author_sessions("b"), [], scope)
-            # A truncated worktree list or an unanswered host may hide a holder.
+                self.assertIsNone(prog.author_sessions("b"), scope)
+            # A truncated worktree list or an unanswered host may hide a holder: not "no card".
             ok = {"id:w1": {"terminals": [{"handle": "term_new"}]}}
             prog.orca_json = fake(held[:1], ok, truncated=True)
-            self.assertEqual(prog.author_sessions("b"), [])
+            self.assertIsNone(prog.author_sessions("b"))
             prog.orca_json = fake(held[:1], ok, hostScope={"omittedHostIds": ["remote"]})
-            self.assertEqual(prog.author_sessions("b"), [])
+            self.assertIsNone(prog.author_sessions("b"))
+            # []: Orca answered completely and no worktree holds the branch.
             prog.orca_json = fake(held[2:], ok)
             self.assertEqual(prog.author_sessions("b"), [])
         finally:
@@ -410,7 +534,7 @@ class LandExec(Fixture):
         before = len([e for e in self.p.events() if e["ev"] == "verdict"])
         os.environ["ORCA_TERMINAL_HANDLE"] = handle
         real = prog.author_sessions
-        prog.author_sessions = lambda branch: list(authors)
+        prog.author_sessions = lambda branch: authors if authors is None else list(authors)
         try:
             prog.cmd_verdict([self.slug, "--pr", str(self.n), "--sha", f"h{self.n}", *extra])
         finally:
@@ -420,8 +544,7 @@ class LandExec(Fixture):
 
     def test_a_pass_without_reviewer_or_evidence_is_refused_and_not_stored(self):
         for extra, authors in ((["--source", "independent-review", "--evidence", "e"], ("term_author",)),  # no reviewer
-                               (["--source", "review:codex"], ("term_author",)),  # no evidence
-                               (["--source", "review:codex", "--evidence", "e"], ())):  # no author session found
+                               (["--source", "review:codex"], ("term_author",))):  # no evidence
             with self.subTest(extra=extra, authors=authors), self.assertRaises(SystemExit) as ctx:
                 self.record(*extra, authors=authors)
             self.assertIn("nothing recorded", str(ctx.exception.code))
@@ -468,6 +591,139 @@ class LandExec(Fixture):
         config(enabled=False)  # executor off: the direct path reads no identity, so land-check does not either
         self.verdict(evidence=None)
         self.assertNotIn("independent review", self.land_check()[1])
+
+    def test_land_check_judges_a_renamed_repo_on_the_name_github_serves_now(self):
+        """`orch land` asks executor_for (the name GitHub serves now); land-check asked the recorded name. A program
+        made before a rename then read the executor as off, and passed a verdict the executor refuses."""
+        old_sha = "oldsha"  # a stale pass for an earlier head with the same patch-id: the executor wants this head
+        config(repos=["o/renamed"])  # the executor lists the new name only
+        self.github_names("o/renamed")
+        self.verdict(sha=old_sha)
+        code, out = self.land_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("is not a pass at", out)
+        # The same stale verdict is fine when the executor does not cover the repo: the direct path takes it.
+        config(repos=["o/elsewhere"])
+        code, out = self.land_check()
+        self.assertNotIn("is not a pass at", out)
+        # Listed under the recorded name only, GitHub names it differently: orch land refuses, so land-check holds.
+        config(repos=["o/r"])
+        code, out = self.land_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("o/renamed on GitHub now", out)
+        # GitHub not answering is not "the executor is off": hold, as orch land yields.
+        config(repos=["o/renamed"])
+        st = self.gh(); st["repo_fail"] = True; self.write(st)
+        code, out = self.land_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("502", out)
+
+    def test_land_check_asks_github_only_when_the_executor_is_on(self):
+        """executor_for asks GitHub for the repo's name; a repo the executor is off for must not pay (or fail) for it."""
+        config(enabled=False)
+        st = self.gh(); st["repo_fail"] = True; self.write(st)
+        self.verdict()
+        code, out = self.land_check()
+        self.assertNotIn("502", out)
+
+    def fake_orca(self, worktrees, terminals, truncated=False, terminals_truncated=False):
+        """prog.orca_json over one Orca host with `worktrees` rows and `terminals` {worktree id: [handles]}; a terminal
+        answer says it covered the host, as Orca's does."""
+        def answer(*a):
+            if a[:2] == ("worktree", "list"):
+                return {"worktrees": worktrees, "truncated": truncated,
+                        "hostScope": {"hostIds": ["local"], "omittedHostIds": []}}
+            sel = a[a.index("--worktree") + 1]
+            return {"terminals": [{"handle": h} for h in terminals.get(sel[3:], [])], "truncated": terminals_truncated,
+                    "hostScope": {"hostIds": ["local"], "omittedHostIds": []}}
+        real = prog.orca_json
+        prog.orca_json = answer
+        self.addCleanup(setattr, prog, "orca_json", real)
+
+    CARD = {"id": "wc", "hostId": "local", "path": "/w/card", "branch": "refs/heads/card-local", "head": "abc",
+            "isMainWorktree": False, "linkedPR": None}
+    MAIN = {"id": "wm", "hostId": "local", "path": "/w/main", "branch": "refs/heads/main", "head": "abc",
+            "isMainWorktree": True, "linkedPR": None}
+
+    def test_author_is_found_when_the_card_branch_differs_from_the_pr_branch(self):
+        # The card works on `card-local` and pushes it to the PR branch `feature`: no worktree holds `feature`.
+        self.fake_orca([self.CARD, self.MAIN], {"wc": ["term_author"], "wm": ["term_main"]})
+        self.assertEqual(prog.author_sessions("feature"), [])  # Orca answered completely: no worktree holds the branch
+        self.assertEqual(prog.worktree_author_sessions("abc"), ["term_author"])  # by head sha, never the main checkout
+        # A PR number is not read: the listing spans repositories, so another repository's card linking #7 would
+        # stand in for this PR's author. Neither is the branch name, which the first lookup already used.
+        self.fake_orca([{**self.CARD, "head": "zzz", "linkedPR": {"number": 7}, "branch": "refs/heads/feature"}],
+                       {"wc": ["term_author"]})
+        self.assertEqual(prog.worktree_author_sessions("abc"), [])
+        # None is not "no card": a partial or malformed answer cannot show who the author is.
+        self.fake_orca([self.CARD], {"wc": ["term_author"]}, truncated=True)
+        self.assertIsNone(prog.worktree_author_sessions("abc"))
+        self.fake_orca([self.CARD], {"wc": ["term_author"]}, terminals_truncated=True)
+        self.assertIsNone(prog.worktree_author_sessions("abc"))
+        self.fake_orca([{k: v for k, v in self.CARD.items() if k != "id"}], {})
+        self.assertIsNone(prog.worktree_author_sessions("abc"))  # the matching card cannot be read
+        self.fake_orca([self.CARD, "not a row"], {"wc": ["term_author"]})
+        self.assertIsNone(prog.worktree_author_sessions("abc"))
+
+    def test_a_lookup_that_cannot_vouch_stores_nothing_even_if_the_card_exists(self):
+        row_head = f"h{self.n}"
+        card = {**self.CARD, "head": row_head}
+        os.environ["ORCA_TERMINAL_HANDLE"] = "term_orchestrator"
+        try:
+            for case in (dict(terminals_truncated=True), dict(truncated=True)):
+                self.fake_orca([card], {"wc": ["term_author"]}, **case)
+                before = len([e for e in self.p.events() if e["ev"] == "verdict"])
+                with self.subTest(case=case), self.assertRaises(SystemExit) as ctx:
+                    prog.cmd_verdict([self.slug, "--pr", str(self.n), "--sha", row_head, "--source", "review:codex",
+                                      "--evidence", "e"])
+                self.assertIn("nothing recorded", str(ctx.exception.code))
+                self.assertEqual(len([e for e in self.p.events() if e["ev"] == "verdict"]), before)
+        finally:
+            os.environ.pop("ORCA_TERMINAL_HANDLE")
+
+    def record_unverified(self, *extra, handle="term_orchestrator"):
+        before = len([e for e in self.p.events() if e["ev"] == "verdict"])
+        os.environ["ORCA_TERMINAL_HANDLE"] = handle
+        real = prog.author_sessions, prog.worktree_author_sessions
+        prog.author_sessions = prog.worktree_author_sessions = lambda *a, **kw: []  # Orca answered: no card
+        try:
+            prog.cmd_verdict([self.slug, "--pr", str(self.n), "--sha", f"h{self.n}", *extra])
+        finally:
+            prog.author_sessions, prog.worktree_author_sessions = real
+            os.environ.pop("ORCA_TERMINAL_HANDLE")
+            self.added = len([e for e in self.p.events() if e["ev"] == "verdict"]) - before
+
+    def test_a_pass_is_recorded_as_unverified_when_no_card_is_found_and_the_reviewer_is_not_the_recorder(self):
+        row = self.request()
+        self.record_unverified("--source", "review:codex", "--evidence", "https://example.test/r")
+        v = prog.pr_state(self.p.events())[self.n]["verdict"]
+        self.assertEqual((self.added, v["author"], v["author_unverified"]), (1, [], True))
+        self.round()
+        self.settled(row, "merged", 0)
+
+    def test_an_unverified_author_still_refuses_what_it_can_see(self):
+        for extra in (["--source", "independent-review", "--reviewer", "term_orchestrator", "--evidence", "e"],  # reviewer is the recorder
+                      ["--source", "independent-review", "--reviewer", "self", "--evidence", "e"],  # a self alias
+                      ["--source", "review:codex"]):  # no evidence
+            with self.subTest(extra=extra), self.assertRaises(SystemExit):
+                self.record_unverified(*extra)
+            self.assertEqual(self.added, 0)
+
+    def test_an_unreadable_author_lookup_refuses_the_pass(self):
+        with self.assertRaises(SystemExit) as ctx:
+            self.record("--source", "review:codex", "--evidence", "e", authors=None)
+        self.assertIn("nothing recorded", str(ctx.exception.code))
+        self.assertEqual(self.added, 0)
+
+    def test_a_stored_row_with_no_author_needs_the_unverified_mark(self):
+        for who, ok in (({"author": []}, False), ({"author": [], "author_unverified": True}, True),
+                        ({"author": [], "author_unverified": "yes"}, False),
+                        ({"author": [], "author_unverified": True, "recorder": "codex"}, False),  # recorder is the reviewer
+                        # the recorder named only in the source: its own review
+                        ({"author": [], "author_unverified": True, "recorder": "term_x", "source": "review:term_x"}, False)):
+            with self.subTest(who=who):
+                self.assertEqual(prog.verdict_identity_problem(
+                    {"reviewer": "codex", "evidence": "e", "recorder": "term_orchestrator", **who}) is None, ok)
 
     def test_land_check_and_the_executor_agree_on_a_verdict_for_another_sha(self):
         self.verdict(sha="hother")  # same patch-id as the head, a different sha
