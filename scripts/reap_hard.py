@@ -383,9 +383,7 @@ def scan_rest(cfg, protect, dark_before, closed, m, now):
             kind = "container" if i["kind"] == "stopped-container" else "volume"
             items.append({**i, "kind": kind, "id": i.get("cid") or i["name"]})
 
-    alive = {reap.real(os.path.join(root, r, c)) for r in (os.listdir(root) if os.path.isdir(root) else ())
-             if os.path.isdir(os.path.join(root, r)) for c in os.listdir(os.path.join(root, r))
-             if os.path.isdir(os.path.join(root, r, c))} - set(closed)
+    alive = alive_cards(root) - set(closed)
     stopping = set()
     rows, cwd_pairs = m["rows"], m["cwd_pairs"]
     for port, pid in sorted((m["listening"] or {}).items()):
@@ -417,6 +415,12 @@ def scan_rest(cfg, protect, dark_before, closed, m, now):
         items.append({"kind": "serve", "id": f"{e[0]}={e[1]}", "flag": e[0], "port": e[1], "local": e[2],
                       "target": ok, "why": why})
     return items, notes, dark
+
+
+def alive_cards(root):
+    return {reap.real(os.path.join(root, r, c)) for r in (os.listdir(root) if os.path.isdir(root) else ())
+            if os.path.isdir(os.path.join(root, r)) for c in os.listdir(os.path.join(root, r))
+            if os.path.isdir(os.path.join(root, r, c))}
 
 
 def stack_gone(closed):
@@ -489,13 +493,18 @@ def act(item, cfg, protect, done=None):
             return "건너뜀: 사라졌거나 다른 프로세스"
         if reap.human_owned(item["pid"], rows):
             return "건너뜀: 사람이 띄운 셸의 자식"
-        # The verdict may come from an inventory minutes old: the process may have moved into a live card since.
+        # The verdict may come from an inventory minutes old: judge the process again, as a fresh scan would. An
+        # escaped (lsof \xNN) path is no proof that a card is gone.
         pairs = reap.cwds(inodes=True)
         cwd = None if pairs is None else pairs.get(item["pid"])
         root = reap.real(os.path.expanduser(cfg["workspaces"]))
-        card = cwd and card_dir(reap.real(cwd[0]), root)
-        if not cwd or not (reap.cwd_gone(*cwd) or (card and not os.path.isdir(card))):
-            return "건너뜀: 판정 뒤 cwd 가 살아 있는 곳이거나 읽지 못함"
+        if cwd is None or "\\x" in cwd[0]:
+            return "건너뜀: cwd 를 읽지 못함"
+        ok, why = judge_listener(r, int(item["id"].rpartition(":")[2]), cwd, lambda c: reap.cwd_gone(*c),
+                                 lambda c: card_dir(reap.real(c), root), alive_cards(root),
+                                 float(cfg["idle_minutes"]) * 60, protect, rows)
+        if not ok:
+            return f"건너뜀: 판정 뒤 달라짐: {why}"
         os.kill(item["pid"], signal.SIGTERM)
         return "SIGTERM"
     if k == "serve":
@@ -544,13 +553,13 @@ def fingerprint(cfg):
     return hashlib.sha256(json.dumps(knobs, sort_keys=True, default=str).encode() + protect).hexdigest()
 
 
-def write_inventory(items, notes, cfg, now, dark, scanned_fp=None):
+def write_inventory(items, notes, cfg, now, dark, scanned_fp=...):
     """<state>/inventory.json: this pass's judgements, for a reader that would scan the same machine again (patrol's
     candidate stage). Written by a pass that is not a dry run and read everything, never by a reader. What the pass
     already closed is left out; a pass that could not read a part, or whose settings or protect file changed while it
     ran (scanned_fp, taken before the scan, differs), removes the file, so no reader takes it for whole or current."""
     fp = fingerprint(cfg)
-    if notes or fp is None or (scanned_fp is not None and scanned_fp != fp):
+    if notes or fp is None or (scanned_fp is not ... and scanned_fp != fp):
         INVENTORY.unlink(missing_ok=True)
         return
     left = [i for i in items if not (i.get("result") and not i["result"].startswith(("건너뜀", "실패")))]
@@ -577,7 +586,9 @@ def read_inventory(cfg=None, now=None, ttl=INVENTORY_TTL):
 
 
 def run_pass(dry, cfg=None, now=None):
+    injected = cfg is not None
     cfg = cfg or config()
+    scanned_fp = fingerprint(cfg)  # before the protect file is read: a change from here on is seen at the end
     now = now or time.time()
     run_id = uuid.uuid4().hex[:8]
     stamp = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(now))
@@ -591,7 +602,6 @@ def run_pass(dry, cfg=None, now=None):
         log([{**summary, "kind": "pass"}])
         return summary, 2
     last = read_last() or {}
-    scanned_fp = fingerprint(cfg)
     rows = []
 
     def do(batch):
@@ -648,7 +658,7 @@ def run_pass(dry, cfg=None, now=None):
                "kept": sum(1 for i in items if not i["target"]), "notes": notes, "dark": sorted(dark)}
     if not dry:
         write_last(summary)
-        write_inventory(items, notes, cfg, now, dark, scanned_fp)
+        write_inventory(items, notes, cfg if injected else config(), now, dark, scanned_fp)  # the settings now in force
     return {**summary, "items": items}, 1 if summary["failed"] else 0
 
 

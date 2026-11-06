@@ -355,6 +355,12 @@ rh.scan_rest = lambda *a: (pf.write_text("# edited during the scan\n"), ([], [],
 rh.run_pass(False, cfg_i, NOW)
 assert not rh.INVENTORY.exists(), "settings changed during the pass"
 pf.write_text("# keep\n")
+# ... or right after it was read, before the scan began.
+rh.read_protect = lambda f: (pf.write_text("# edited after the read\n"), P)[1]
+rh.run_pass(False, cfg_i, NOW)
+assert not rh.INVENTORY.exists(), "settings changed after the protect file was read"
+pf.write_text("# keep\n")
+rh.read_protect = lambda f: P
 rh.scan_rest = lambda *a: ([], [], set())
 rh.run_pass(False, cfg_i, NOW)
 assert [i["id"] for i in rh.read_inventory(cfg_i, NOW + 1)["cards"]] == [str(live)]
@@ -365,18 +371,22 @@ killed_l = []
 saved_l = rh.reap.processes, rh.reap.cwds, rh.reap.human_owned, rh.os.kill
 live_card = inv_dir / "live-card"
 live_card.mkdir()
-lis = {"kind": "listener", "id": "42:4600", "pid": 42, "start": "S"}
-rh.reap.processes = lambda: {42: {"pid": 42, "ppid": 1, "start": "S", "cmd": "node x", "age": 99999}}
+lis = {"kind": "listener", "id": "43:4600", "pid": 43, "start": "S"}
+rh.reap.processes = lambda: {43: {"pid": 43, "ppid": 1, "start": "S", "cmd": "node x", "age": 99999}}
 rh.reap.human_owned = lambda pid, rows: False
 rh.os.kill = lambda pid, sig: killed_l.append(pid)
 lcfg = {**rh.DEFAULTS, "workspaces": str(inv_dir)}
 (live_card / "web").mkdir()
-rh.reap.cwds = lambda inodes=False: {42: (str(live_card / "web"), os.stat(live_card / "web").st_ino)}
+rh.reap.cwds = lambda inodes=False: {43: (str(live_card / "web"), os.stat(live_card / "web").st_ino)}
 assert rh.act(lis, lcfg, P).startswith("건너뜀") and not killed_l, "its cwd is in a live card now"
 rh.reap.cwds = lambda inodes=False: None
 assert rh.act(lis, lcfg, P).startswith("건너뜀") and not killed_l, "cwd not readable"
-rh.reap.cwds = lambda inodes=False: {42: ("/nonexistent/gone-dir", 1)}
-assert rh.act(lis, lcfg, P) == "SIGTERM" and killed_l == [42]
+rh.reap.cwds = lambda inodes=False: {43: (str(inv_dir / "app" / "caf\\xc3\\xa9"), 1)}
+assert rh.act(lis, lcfg, P).startswith("건너뜀") and not killed_l, "an escaped path proves nothing"
+rh.reap.cwds = lambda inodes=False: {43: ("/x/lead/gone-dir", 1)}
+assert rh.act(lis, lcfg, P).startswith("건너뜀") and not killed_l, "a protected path stays"
+rh.reap.cwds = lambda inodes=False: {43: ("/nonexistent/gone-dir", 1)}
+assert rh.act(lis, lcfg, P) == "SIGTERM" and killed_l == [43]
 rh.reap.processes, rh.reap.cwds, rh.reap.human_owned, rh.os.kill = saved_l
 
 # Stopped containers and labeled volumes: off without their settings, one exact target each, the shared rules of reap.py.
