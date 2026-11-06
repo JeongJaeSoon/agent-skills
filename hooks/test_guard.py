@@ -316,6 +316,13 @@ for cmd in ("skills-sync sync", "skills-sync sync --no-broadcast", "skills-sync 
             "skills-sync end-check -x", "skills-sync broadcast --text hi", "skills-sync broadcast /reload-skills",
             "skills-sync broadcast --terminal", "skills-sync broadcast --terminal --skills",
             "skills-sync wake-reset term_x", "skills-sync", "skills-sync status; rm x", "skills-sync status && skills-sync sync",
-            "skills-sync end-check --card > out", "skills-sync broadcast --skills $(id)"):
+            "skills-sync end-check --card > out", "skills-sync broadcast --skills $(id)",
+            "skills-sync end-check --brief --apply", "skills-sync end-check --dispatch --apply",
+            "/tmp/skills-sync end-check --apply", "./bin/skills-sync status"):
     assert bash(cmd) == "none", cmd
+# What an allowed broadcast can type is this closed set (sync.py RELOAD and STALE_COMMAND); a new command there must be
+# reviewed against the allow in guard.sync_allowed before this test is changed.
+sys.path.insert(0, str(HERE.parent / "scripts"))
+import sync
+assert set(sync.RELOAD.values()) | set(sync.STALE_COMMAND.values()) == {"/reload-skills", "/reload-plugins", "/restart"}
 print("guard: all pass")

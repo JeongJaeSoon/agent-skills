@@ -246,7 +246,8 @@ def sync_allowed(args):
             return None
         return "end-check (verdict only)"
     if args[:1] == ["broadcast"]:
-        # broadcast types only /reload-skills or /reload-plugins (sync.py RELOAD); no argument becomes text.
+        # No argument becomes text: broadcast types only RELOAD and STALE_COMMAND values (sync.py), the latter
+        # (/restart, /reload-plugins) only into an idle session that shows the update notice. test_guard pins that set.
         rest, i = args[1:], 0
         while i < len(rest):
             if rest[i] == "--terminal" and i + 1 < len(rest) and not rest[i + 1].startswith("-"):
