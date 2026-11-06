@@ -300,10 +300,20 @@ def annot_overlay(rows, annots, gone=None):
             for g in back:  # the replacement is in the dropped row's program, so a program report keeps the card
                 program = next((p["program"] for p in chain(g) if p.get("program")), None)
                 for rid in cards[wt]:
-                    if program and not rows[rid].get("program"):
-                        rows[rid]["program"] = program
-        elif back:  # nothing else shows the card: the dropped row does, as it was, linked to the card by the annotation
-            rows[back[0]] = {**gone[back[0]], "status": gone[back[0]].get("was") or "moving", "worktree": wt}
+                    r = rows[rid]
+                    if program and not r.get("program"):
+                        r["program"] = program
+                        above = [p for p in chain(rid)][1:]
+                        if any(p.get("program") not in (None, program) for p in above):
+                            # the card sits under another program's lead: it moves out, so a report of its program still
+                            # draws it (a child whose parent is out of scope is not drawn)
+                            r["repo"] = r.get("repo") or next((p["repo"] for p in above if p.get("repo")), None)
+                            r["parent"] = None
+        elif back:  # nothing else shows the card: the dropped row does, linked to the card by the annotation
+            was = gone[back[0]].get("was") or "moving"
+            # the annotation owns progress, after, owner and next: a field it cleared stays cleared
+            kept = {k: v for k, v in gone[back[0]].items() if k not in ("progress", "after", "owner", "next")}
+            rows[back[0]] = {**kept, "next": "", "status": "moving" if was == "owner" else was, "worktree": wt}
     dupes = {}
     for key, a in annots.items():
         wt = key[len(ANNOT_PREFIX):]

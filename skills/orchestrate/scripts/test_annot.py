@@ -276,6 +276,16 @@ under_phase = {"P": {"id": "P", "kind": "phase", "program": "ProgA", "title": "P
 rows_now = {"P": under_phase["P"], "fleet:lead/wt-x": {"id": "fleet:lead/wt-x", "title": "c", "session": "wt-x", "parent": "lead"}}
 board.annot_overlay(rows_now, ann, {"old": {**old, "program": None, "parent": "P"}})
 assert rows_now["fleet:lead/wt-x"]["program"] == "ProgA", "the program above the dropped row is the replacement's"
+rows_now = {}
+board.annot_overlay(rows_now, {"card:wt-x": {"id": "card:wt-x", "kind": "annot", "phase": "P1", "aliases": ["row:old"]}},
+                    {"old": {**old, "was": "owner", "owner": "오너", "next": "Approve", "progress": [1, 2]}})
+assert rows_now["old"]["status"] == "moving" and not {"owner", "progress"} & set(rows_now["old"]) and rows_now["old"]["next"] == "", \
+    "a field the annotation cleared stays cleared on a restored row"
+rows_now = {"fleet:lead": {"id": "fleet:lead", "program": "ProgB", "repo": "acme/app", "title": "lead"},
+            "fleet:lead/wt-x": {"id": "fleet:lead/wt-x", "title": "c", "session": "wt-x", "parent": "fleet:lead"}}
+board.annot_overlay(rows_now, ann, {"old": {**old, "program": "ProgA"}})
+assert rows_now["fleet:lead/wt-x"]["parent"] is None and rows_now["fleet:lead/wt-x"]["repo"] == "acme/app" \
+    and rows_now["fleet:lead/wt-x"]["program"] == "ProgA", "under another program's lead the card moves out into its own program"
 # an ack of the moved row stands for the card's row, under the id that can be un-acked
 line = {"key": "fleet:lead/wt-x", "pr": None, "status": "done", "depth": 0, "name": "c"}
 _, done, hidden = board.drop_acked([line], {}, {"fleet:lead/wt-x": {}}, {"board:old": "t"}, {"fleet:lead/wt-x": ["board:old"]})
