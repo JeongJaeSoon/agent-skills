@@ -1,5 +1,5 @@
 """The land executor (land_exec.py) and `orch land`'s request path against a fake gh and orca. Run: python3 test_land_exec.py"""
-import ast, json, os, pathlib, shutil, subprocess, sys, tempfile, unittest
+import ast, contextlib, io, json, os, pathlib, shutil, subprocess, sys, tempfile, unittest
 
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = pathlib.Path(tempfile.mkdtemp(prefix="land-exec-test-"))
@@ -46,6 +46,7 @@ for name, text in (("gh", WRAP_GH), ("orca", WRAP_ORCA), ("gh-inner", FAKES["FAK
 os.environ.update(FAKE_GH_INNER=str(BIN / "gh-inner"), FAKE_ORCA_INNER=str(BIN / "orca-inner"))
 
 sys.path.insert(0, str(HERE))
+import autoqueue  # noqa: E402
 import prog  # noqa: E402
 import store  # noqa: E402
 import land_exec  # noqa: E402
@@ -89,12 +90,13 @@ def config(**over):
     pathlib.Path(os.environ["AGENT_SKILLS_CONFIG"]).write_text(json.dumps({"orchestrate": {"land_executor": cfg}}))
 
 
-class LandExec(unittest.TestCase):
+class Fixture(unittest.TestCase):
+    """One program on o/r with one open PR; the verdict is the test's to record."""
     seq = 0
 
     def setUp(self):
         drain()
-        LandExec.seq += 1
+        Fixture.seq += 1
         self.slug = f"p{self.seq}"
         self.n = self.seq
         self.state = ROOT / f"gh-{self.slug}.json"
@@ -104,7 +106,6 @@ class LandExec(unittest.TestCase):
         subprocess.run([sys.executable, HERE / "prog.py", "init", self.slug, "--repo", "o/r", "--run", "run_x"],
                        check=True, capture_output=True)
         self.p = prog.Program(self.slug)
-        self.verdict()
 
     def write(self, st):
         self.state.write_text(json.dumps(st))
@@ -143,6 +144,12 @@ class LandExec(unittest.TestCase):
         if status != "merged":
             self.assertEqual(self.merges(), [], "a refused or waiting request must not merge")
         return got
+
+
+class LandExec(Fixture):
+    def setUp(self):
+        super().setUp()
+        self.verdict()
 
     # -- merges
 
@@ -238,7 +245,7 @@ class LandExec(unittest.TestCase):
     def test_verdict_without_identity_fields_is_refused(self):
         for gap in ({"author": []}, {"reviewer": None}, {"evidence": None}, {"recorder": None}):
             with self.subTest(gap=gap):
-                LandExec.seq += 1
+                Fixture.seq += 1
                 self.n = self.seq  # a fresh PR per gap, so each round sees one request
                 self.write({"prs": {str(self.n): pr(self.n)}, "stacks": []})
                 self.p = prog.Program(self.slug)
@@ -277,7 +284,7 @@ class LandExec(unittest.TestCase):
     def test_malformed_identity_rows_are_refused_not_retried(self):
         for bad in ({"author": 42}, {"author": "term_author"}, {"reviewer": 42}, {"evidence": ["x"]}, {"author": [42]}):
             with self.subTest(bad=bad):
-                LandExec.seq += 1
+                Fixture.seq += 1
                 self.n = self.seq
                 self.write({"prs": {str(self.n): pr(self.n)}, "stacks": []})
                 self.p = prog.Program(self.slug)
@@ -603,6 +610,7 @@ class LandExec(unittest.TestCase):
         for members in ((self.n + 100, self.n), (self.n + 100, self.n, self.n + 200)):
             with self.subTest(members=members):
                 self.stack(*members)
+                self.p.append("ready", pr=self.n, ticket=f"T-{self.n}")  # the new `orch land` that makes the request
                 row = self.request()
                 self.round()
                 got = self.settled(row, "refused", 1, f"Land #{members[0]} first")
@@ -695,8 +703,8 @@ class Request(unittest.TestCase):
 
     def setUp(self):
         drain()
-        LandExec.seq += 1
-        self.slug, self.n = f"r{LandExec.seq}", LandExec.seq
+        Fixture.seq += 1
+        self.slug, self.n = f"r{Fixture.seq}", Fixture.seq
         self.state = ROOT / f"gh-{self.slug}.json"
         self.state.write_text(json.dumps({"prs": {str(self.n): pr(self.n)}, "stacks": []}))
         os.environ["FAKE_GH_STATE"] = str(self.state)
@@ -750,8 +758,8 @@ class Standalone(unittest.TestCase):
 
     def setUp(self):
         drain()
-        LandExec.seq += 1
-        self.n = LandExec.seq + 100
+        Fixture.seq += 1
+        self.n = Fixture.seq + 100
         self.state = ROOT / f"gh-standalone-{self.n}.json"
         self.state.write_text(json.dumps({"prs": {str(self.n): pr(self.n)}, "stacks": []}))
         os.environ["FAKE_GH_STATE"] = str(self.state)
@@ -826,6 +834,375 @@ class Standalone(unittest.TestCase):
         code, out = self.orch("land", "other", "--repo", "o/r", "--pr", str(self.n))
         self.assertNotEqual(code, 0, out)
         self.assertFalse((prog.HOME / "other").exists())
+
+
+class AutoQueue(Fixture):
+    """orchestrate.land_executor.auto_queue: ready PRs get a request without anyone calling `orch land`."""
+
+    def setUp(self):
+        super().setUp()
+        self.head = f"head{self.n:04d}x"
+        self.sticky = f"{RESULTS}\nhead {self.head}"
+        self.edit_pr(headRefOid=self.head, comments=[self.sticky])
+        self.mode("on")
+        self.vrd()
+
+    def mode(self, mode, **more):
+        config(auto_queue={"mode": mode, **more} if mode else None)
+
+    def vrd(self, pr_=None, sha=None, **over):
+        """A verdict without `ready`: nobody has called `orch land` for this PR."""
+        n = pr_ or self.n
+        row = {"pr": n, "sha": sha or (self.head if n == self.n else f"head{n:04d}x"), "patch_id": pid(n),
+               "source": "review:codex", "result": "pass", "author": ["term_author"], "reviewer": "codex",
+               "evidence": "https://example.test/review/1", "recorder": "term_orchestrator", **over}
+        self.p.append("verdict", **row)
+
+    def add_pr(self, m):
+        st = self.gh()
+        st["prs"][str(m)] = dict(pr(m), headRefOid=f"head{m:04d}x", comments=[f"{RESULTS}\nhead head{m:04d}x"])
+        self.write(st)
+        self.vrd(m)
+
+    def auto(self):
+        land_exec.auto_round()
+
+    def mine(self):
+        return [r for r in store.land_rows() if r["program"] == self.slug]
+
+    def events(self, ev):
+        return [e for e in self.p.events() if e["ev"] == ev and e.get("pr") == self.n]
+
+    def log(self):
+        return land_exec.LOG.read_text() if land_exec.LOG.exists() else ""
+
+    def report(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self.assertEqual(land_exec.cmd_auto([]), 0)
+        return buf.getvalue()
+
+    def skipped(self, why):
+        self.auto()
+        self.assertEqual(self.mine(), [], "a PR that is not ready must not be requested")
+        self.assertIn(why, self.report())
+
+    # -- the setting
+
+    def test_the_setting_is_off_unless_it_says_otherwise(self):
+        for raw in (None, {}, {"mode": "yes"}, {"mode": "on", "max_new_per_round": 0},
+                    {"mode": "on", "max_new_per_round": "2"}, {"mode": "on", "max_new_per_round": True}, "on", 7):
+            self.assertEqual(autoqueue.config(raw)["mode"], "off", raw)
+        self.assertEqual(autoqueue.config({"mode": "on"}), {"mode": "on", "max_new_per_round": 1})
+        self.assertEqual(autoqueue.config({"mode": "shadow", "max_new_per_round": 3}),
+                         {"mode": "shadow", "max_new_per_round": 3})
+        self.mode(None)
+        self.auto()
+        self.mode("off")
+        self.auto()
+        self.assertEqual((self.mine(), self.events("ready")), ([], []))
+
+    def test_shadow_logs_what_on_would_do_and_writes_nothing(self):
+        self.mode("shadow")
+        self.auto()
+        self.assertEqual((self.mine(), self.events("ready")), ([], []))
+        self.assertIn(f"would queue o/r#{self.n} {self.head[:8]}", self.log())
+
+    def test_the_report_never_writes_even_in_mode_on(self):
+        out = self.report()
+        self.assertIn("auto_queue is on", out)
+        self.assertIn(f"would queue o/r#{self.n}", out)
+        self.assertEqual((self.mine(), self.events("ready")), ([], []))
+
+    def test_a_repo_outside_the_executor_list_is_left_alone(self):
+        config(repos=["o/other"], auto_queue={"mode": "on"})
+        self.auto()
+        self.assertEqual(self.mine(), [])
+
+    # -- queueing
+
+    def test_on_requests_the_head_and_the_round_lands_it(self):
+        self.auto()
+        [row] = self.mine()
+        self.assertEqual((row["sha"], row["status"], row["klass"]), (self.head, "queued", "normal"))
+        self.assertEqual(len(self.events("ready")), 1, "the same `ready` event `orch land` writes")
+        self.assertIn(f"queued o/r#{self.n}", self.log())
+        self.assertEqual(self.merges(), [], "queueing merges nothing")
+        self.round()
+        self.assertEqual(store.land_get(row["id"])["status"], "merged")
+        self.assertEqual(len(self.merges()), 1)
+
+    def test_a_live_land_call_keeps_its_ready_event(self):
+        self.p.append("ready", pr=self.n, ticket="T-1", klass="urgent")
+        self.auto()
+        [row] = self.mine()
+        self.assertEqual(len(self.events("ready")), 1)
+        self.assertEqual(row["klass"], "urgent", "the class the agent gave stays")
+
+    def test_each_head_is_requested_once(self):
+        self.auto()
+        [row] = self.mine()
+        self.assertTrue(store.land_claim(row["id"]))
+        store.land_finish(row["id"], "refused", 3, "the executor refused it")
+        self.auto()
+        self.assertEqual(len(self.mine()), 1, "a refused request is not asked for again at the same head")
+        self.assertIn("a land request for this head exists already", self.report())
+
+    def test_a_pr_the_executor_stopped_waits_for_a_new_verdict(self):
+        self.auto()
+        [row] = self.mine()
+        self.assertTrue(store.land_claim(row["id"]))
+        store.land_finish(row["id"], "refused", 1, "refused")
+        prog.stop_land(self.p, self.n, "refused")
+        self.auto()
+        self.assertEqual(len(self.mine()), 1)
+        self.assertTrue(autoqueue.withdrawn(self.p.events(), self.n))
+        self.vrd()  # a review at the same head, recorded again
+        self.assertFalse(autoqueue.withdrawn(self.p.events(), self.n))
+        self.auto()
+        self.assertEqual(len(self.mine()), 1, "the earlier request for this head still counts")
+        new = f"{self.head}2"  # a new head with its own verdict
+        self.edit_pr(headRefOid=new, comments=[f"{RESULTS}\nhead {new}"])
+        self.vrd(sha=new)
+        self.auto()
+        self.assertEqual([r["sha"] for r in self.mine()][-1], new)
+
+    def test_a_stop_without_a_request_is_a_withdrawal_too(self):
+        self.p.append("land_check", pr=self.n, outcome="stopped", note="a person stopped it")
+        self.skipped("its land was stopped")
+        self.vrd()
+        self.auto()
+        self.assertEqual(len(self.mine()), 1)
+
+    def test_at_most_max_new_per_round_new_requests(self):
+        self.add_pr(self.n + 1000)
+        self.mode("on", max_new_per_round=1)
+        self.auto()
+        self.assertEqual(len(self.mine()), 1)
+        self.assertIn("over max_new_per_round 1", self.log())
+        self.auto()
+        self.assertEqual(sorted(r["pr"] for r in self.mine()), [self.n, self.n + 1000])
+        self.mode("on", max_new_per_round=5)
+        self.auto()
+        self.assertEqual(len(self.mine()), 2, "nothing is requested twice")
+
+    # -- what keeps a PR out
+
+    def test_no_verdict(self):
+        st = self.gh()
+        st["prs"][str(self.n + 2000)] = dict(pr(self.n + 2000), headRefOid="head-no-verdict", comments=[])
+        self.write(st)
+        self.p.append("ready", pr=self.n + 2000, ticket="T-x")
+        self.auto()
+        self.assertEqual([r for r in self.mine() if r["pr"] == self.n + 2000], [])
+        self.assertIn("is not a pass", self.report())
+
+    def test_a_verdict_for_an_older_head(self):
+        self.edit_pr(headRefOid=f"{self.head}2", comments=[f"{RESULTS}\nhead {self.head}2"])
+        self.skipped("is not a pass")
+
+    def test_a_failed_verdict_a_foreign_source_and_a_self_review(self):
+        for over in ({"result": "fail"}, {"source": "review:human"}, {"reviewer": "author"}):
+            self.vrd(**over)
+            self.skipped("verdict")
+
+    def test_failed_and_pending_ci(self):
+        self.edit_pr(statusCheckRollup=[{"name": "check", "status": "COMPLETED", "conclusion": "FAILURE"}])
+        self.skipped("ci_failed")
+        self.edit_pr(statusCheckRollup=[{"name": "check", "status": "IN_PROGRESS", "conclusion": ""}])
+        self.skipped("ci_pending")
+        self.edit_pr(statusCheckRollup=[])
+        self.skipped("ci_pending")
+
+    def test_the_test_results_comment_must_name_this_head(self):
+        self.edit_pr(comments=[RESULTS])
+        self.skipped("no test-results comment names this head")
+        self.edit_pr(comments=[f"{RESULTS}\nhead head9999x"])
+        self.skipped("no test-results comment names this head")
+        self.edit_pr(comments=[f"no marker, but head {self.head}"])
+        self.skipped("no test-results comment names this head")
+
+    def test_a_draft_a_conflict_and_a_blocked_merge_state(self):
+        self.edit_pr(isDraft=True)
+        self.skipped("not_open")
+        self.edit_pr(isDraft=False, mergeStateStatus="DIRTY")
+        self.skipped("dirty")
+        self.edit_pr(mergeStateStatus="BLOCKED")
+        self.skipped("merge state BLOCKED")
+
+    def test_a_stop_line(self):
+        self.p.append("stop", why="test")
+        self.skipped("stopped")
+        self.p.append("resume")
+        self.auto()
+        self.assertEqual(len(self.mine()), 1)
+
+    def test_a_program_that_is_not_autonomous(self):
+        self.p.update(lambda c: c.update(merge_policy="human-gate"))
+        self.skipped("is not an autonomous program")
+
+    def test_two_programs_naming_the_pr_leave_it_to_a_person(self):
+        subprocess.run([sys.executable, HERE / "prog.py", "init", f"{self.slug}b", "--repo", "o/r", "--run", "run_x"],
+                       check=True, capture_output=True)
+        prog.Program(f"{self.slug}b").append("verdict", pr=self.n, sha=self.head, result="pass", source="review:codex")
+        self.skipped("2 programs name it")
+
+    def test_a_program_that_cannot_be_read_hides_its_owner(self):
+        broken = prog.HOME / f"{self.slug}z"
+        broken.mkdir()
+        (broken / "program.json").write_text("{not json")
+        try:
+            self.skipped("a program ledger could not be read")
+        finally:
+            shutil.rmtree(broken)
+
+    def test_github_not_answering_for_one_pr_skips_only_that_pr(self):
+        self.add_pr(self.n + 1000)
+        real = prog.gh_json
+
+        def flaky(*args, **kw):
+            if args[:3] == ("pr", "view", str(self.n)) and "comments" in args:
+                sys.exit("gh: HTTP 502")
+            return real(*args, **kw)
+
+        prog.gh_json = flaky
+        try:
+            self.auto()
+            out = self.report()
+        finally:
+            prog.gh_json = real
+        self.assertEqual([r["pr"] for r in self.mine()], [self.n + 1000])
+        self.assertIn("GitHub did not answer", out)
+
+    # -- races, unreadable inputs, limits
+
+    def test_a_directory_with_a_ledger_but_no_config_hides_its_owner(self):
+        stray = prog.HOME / f"{self.slug}y"
+        stray.mkdir()
+        (stray / "ledger.jsonl").write_text("")
+        try:
+            self.skipped("a program ledger could not be read")
+        finally:
+            shutil.rmtree(stray)
+        empty = prog.HOME / f"{self.slug}e"
+        empty.mkdir()  # nothing in it: not a program
+        try:
+            self.auto()
+            self.assertEqual(len(self.mine()), 1)
+        finally:
+            shutil.rmtree(empty)
+
+    def test_a_stop_that_lands_after_the_decision_wins(self):
+        self.p.append("land_check", pr=self.n, outcome="stopped", note="a person stopped it")
+        row = {"number": self.n, "headRefOid": self.head, "baseRefName": "main"}
+        self.assertIsNone(land_exec.queue_pr(self.slug, self.p, "o/r", row))
+        self.assertEqual((self.mine(), self.events("ready")), ([], []))
+
+    def test_a_stop_that_lands_during_the_decision_is_not_written_over(self):
+        row = {"number": self.n, "headRefOid": self.head, "baseRefName": "main"}
+        real = store.land_seen
+
+        def seen_then_stopped(*a):
+            got = real(*a)
+            self.p.append("land_check", pr=self.n, outcome="stopped", note="a person stopped it")  # after the look
+            return got
+
+        store.land_seen = seen_then_stopped
+        try:
+            self.assertIsNone(land_exec.queue_pr(self.slug, self.p, "o/r", row))
+        finally:
+            store.land_seen = real
+        self.assertEqual((self.mine(), self.events("ready")), ([], []))
+        self.assertTrue(autoqueue.withdrawn(self.p.events(), self.n), "the stop still stands")
+
+    def test_a_stop_after_the_request_keeps_the_executor_from_merging(self):
+        """ready, then the request, then a stop before the round: the old call must not merge."""
+        self.auto()
+        [row] = self.mine()
+        prog.stop_land(self.p, self.n, "a person withdrew the call")
+        self.round()
+        got = store.land_get(row["id"])
+        self.assertEqual((got["status"], got["code"]), ("refused", 3), got)
+        self.assertIn("was stopped after this request", got["reason"])
+        self.assertEqual(self.merges(), [])
+        self.vrd()  # a review at the head again brings the PR back, with a request of its own
+        self.assertFalse(autoqueue.withdrawn(self.p.events(), self.n))
+
+    def test_a_stop_during_the_checks_keeps_the_executor_from_merging(self):
+        self.auto()
+        [row] = self.mine()
+        real = prog.gh_json
+
+        def stop_then_answer(*args, **kw):
+            if "comments" in args:  # a check made after the executor's own look at the withdrawal
+                prog.stop_land(self.p, self.n, "a person withdrew the call")
+            return real(*args, **kw)
+
+        prog.gh_json = stop_then_answer
+        try:
+            self.round()
+        finally:
+            prog.gh_json = real
+        got = store.land_get(row["id"])
+        self.assertEqual((got["status"], got["code"]), ("refused", 3), got)
+        self.assertIn("stopped during the checks", got["reason"])
+        self.assertEqual(self.merges(), [])
+
+    def test_a_request_for_the_head_is_not_inserted_again_after_the_queue_moved_on(self):
+        home = str(prog.HOME)
+        put = lambda sha, **kw: store.land_put(self.slug, home, "o/r", self.n, sha, "b", "normal", None, **kw)
+        put("A")
+        put("B")  # an `orch land` for a newer head superseded A
+        before = len(self.mine())
+        row, outcome = put("A", only_new=True)
+        self.assertEqual((outcome, len(self.mine())), ("seen", before))
+        self.assertEqual(put("C", only_new=True)[1], "new")
+
+    def test_the_report_writes_no_log_line_when_a_listing_fails(self):
+        st = self.gh()
+        st["hard_fail"] = "pr list"
+        self.write(st)
+        before = self.log()
+        out = self.report()
+        self.assertIn("the open PR listing failed", out)
+        self.assertEqual(self.log(), before)
+
+    def test_a_full_listing_is_said_out_loud(self):
+        real, prog.OPEN_LIMIT = prog.OPEN_LIMIT, 1
+        try:
+            out = self.report()
+        finally:
+            prog.OPEN_LIMIT = real
+        self.assertIn("is the listing's limit", out)
+
+    def test_a_bad_settings_value_or_a_bad_cache_never_stops_the_queue(self):
+        row, _ = store.land_put(self.slug, str(self.p.dir.parent.resolve()), "o/r", self.n, self.head, "b", "normal", None)
+        config(repos=7, auto_queue={"mode": "on"})
+        self.round()  # the settings are unusable: the auto-queue says so and the queue is still walked
+        self.assertIn("auto-queue", self.log())
+        self.assertIn("executor error", store.land_get(row["id"])["reason"])
+        self.assertEqual(store.land_get(row["id"])["status"], "queued")
+        config(auto_queue={"mode": "on"})
+        for junk in ("null", "1", '[["x"]]', "{not json"):
+            land_exec.AUTO_LAST.write_text(junk)
+            self.auto()
+        self.assertEqual(len(self.mine()), 1)
+        land_exec.AUTO_LAST.write_text("[1, null]")
+        self.round()  # a damaged cache and a good setting: the queued request is settled
+        self.assertEqual(store.land_get(row["id"])["status"], "merged")
+
+    def test_the_report_survives_a_listing_it_cannot_parse(self):
+        real = prog.open_rows
+        prog.open_rows = lambda repo: (_ for _ in ()).throw(ValueError("not json"))
+        try:
+            buf, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(err):
+                code = land_exec.cmd_auto([])
+        finally:
+            prog.open_rows = real
+        self.assertEqual(code, 1)
+        self.assertIn("refused: not json", err.getvalue())
+        self.assertEqual(self.mine(), [])
 
 
 class Setup(unittest.TestCase):
