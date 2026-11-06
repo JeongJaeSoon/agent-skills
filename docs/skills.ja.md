@@ -1,4 +1,4 @@
-<!-- translated-from: 6d61ececf208e2639b14032e95ec2649235a939c -->
+<!-- translated-from: 0f8932b8cfb80fbf3d5fc454cbdade59ef9b2dc2 -->
 # スキルカタログ
 
 `agent-skills` プラグインに入っているスキル41個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック16個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
@@ -586,7 +586,7 @@ PR を受け持つスキルとマージする主体:
 | `orchestrate.send_devnull` | deny | オーケストレーター・リード・ワーカーが `orca orchestration send\|reply` の出力を `/dev/null` に捨てること。`2>/dev/null` だけなら対象外です |
 | `orchestrate.model_flag` | warn | `orchestrate.models` を設定しているのに、`orca orchestration worker-start`・`orca worktree create`・`orca agent launch` が `--model` なしで Claude を起動した。`--terminal` は対象外 |
 | `orchestrate.self_land` | warn | `hooks/self_land_gate.py`。最初のプロンプトに `PROGRAM` と `orch land` を書いた `APPROVED` があるカードが、自分の PR を開いたまま `worker_done` や `orca worktree rm` を呼ぶこと。`READY-WAIT:` の行、`--outcome failed`、human-gate のプログラムは通します。`deny` にすると止めます |
-| `orchestrate.land_route` | deny | `hooks/land_route_gate.py`。オーケストレーター・リード・ワーカー（サブエージェントを含む）や `PROGRAM` ブリーフのセッションが、land executor の範囲内の repo で `gh pr merge` を呼ぶこと。拒否の文面には、その PR の `orch land` の行と、その head の独立レビューの後にだけ使う `orch verdict` の行を入れます。同じオーナーで範囲外の repo には、範囲に加える skills-config の spec を案内します。`exclude` の repo、別のオーナーの repo、executor がオフの状態は通します |
+| `orchestrate.land_route` | deny | `hooks/land_route_gate.py`。オーケストレーター・リード・ワーカー（サブエージェントを含む）や `PROGRAM` ブリーフのセッションが、land executor の範囲内の repo で `gh pr merge` を呼ぶこと。拒否の文面には、その PR の `orch land` の行と、その head の独立レビューの後にだけ使う `orch verdict` の行を入れます。`OWNER/*` が対象にするのは `gh` アカウント本人の repo だけで、org の repo は名前で書いたものだけが範囲に入ります。範囲外の自分の repo は止めず、範囲に加える skills-config の spec を添えて通します。`exclude` の repo、範囲外の org や他人の repo、executor がオフの状態は何も言わずに通します |
 | `orchestrate.stack_dependent` | warn | 依存する PR がスタックになっていないこと。`hooks/stack_gate.py` が `gh pr create` でブリーフの `Lands after` とブランチの履歴を見て、`orch land`・`land-check` が land-after の依存と実際のスタックを比べます。`deny` にすると両方が止めます。読めないときは警告 1 行で通します |
 | `orchestrate.auto_wake_min` | なし(オフ)。setup の推奨バンドル: 10 | 正の整数 N。`orch wait` が idle と最初に表示したワーカーを N 分後に 1 回起こします(`skills/orchestrate/references/waking.md` の "Automatic wake")。キーがなければ表示だけで、オフだという警告を 1 行出します。同じ dispatch は 2 回起こさず、2 回目の停止は Needs you に上げます |
 | `orchestrate.model_autoswitch` | なし(オフ) | `true` のときだけ有効。patrol の M 検出(役割の設定と違うモデル)で、idle の worker を `/exit` のあと同じ端末で `claude --resume <id> --model <alias>` として一度だけ切り替えます。lead・orchestrator、実行中のターン、未回答の質問、画面に見える background 作業があるセッションは飛ばし、失敗は再試行せず Needs you に上げます(`docs/automation.md`、検出 M) |
