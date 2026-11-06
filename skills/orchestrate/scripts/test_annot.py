@@ -80,11 +80,15 @@ def refused(call, *words):
     raise AssertionError(words)
 
 
-def screen():
+def render_json():
     r = subprocess.run([sys.executable, str(HERE / "prog.py"), "brief", "render", "--json", "--no-refresh"],
                        capture_output=True, text=True, env=env)
     assert r.returncode == 0, (r.stdout, r.stderr)
-    return json.loads(r.stdout)["snapshot"]["rows"]
+    return json.loads(r.stdout)
+
+
+def screen():
+    return render_json()["snapshot"]["rows"]
 
 
 store.import_apply(checks=False)
@@ -120,7 +124,12 @@ code, _, err = orch("board", "set", "card:wt-card", "--status", "done")
 assert code == 1 and "--status" in err, err
 
 # ---- until the renderer reads annotations the screen does not change, and an annotation is no row
-assert "card:wt-card" not in board.read()["rows"] and screen() == before, "an annotation shows nowhere yet"
+assert "card:wt-card" not in board.read()["rows"], "an annotation is no row"
+board.set_row("card:wt-third", phase="단계 9", progress="3/4")
+shown = render_json()
+assert "단계 9" in shown["text"] and "3/4" in shown["text"], "the annotation shows on the card's row"
+assert "카드 중복 2건" in shown["text"] and "wt-third: d1, d2" in shown["text"], shown["text"]  # wt-card has three rows
+board.set_row("card:wt-third", phase="-", progress="-")
 
 # ---- a new row for a card is refused; a row about no card is not
 refused(lambda: board.set_row("fresh", repo="acme/app", worktree="wt-card"), "would be card wt-card's", "card:wt-card")
@@ -154,20 +163,22 @@ rows_before = json.dumps(board.read()["rows"], sort_keys=True)
 code, out, err = orch("board", "annot-migrate")
 assert code == 0 and out.startswith("would move 3 row(s)") and "중복 5건" in out and "orch board drop gone" in out, (out, err)
 assert json.dumps(board.read()["rows"], sort_keys=True) == rows_before, "a dry run writes nothing"
-# the apply waits for the renderer: a moved row would leave the screen with nothing in its place
-refused(lambda: board.annot_migrate(apply=True), "A-ANNOT-b")
-code, _, err = orch("board", "annot-migrate", "--apply")
-assert code == 1 and "A-ANNOT-b" in err and json.dumps(board.read()["rows"], sort_keys=True) == rows_before, err
-
-# ---- the apply, with the gate open: annotation, alias, dropped original (kept in the event), the old close
-board.ANNOT_RENDERED = True
+before_apply = screen()
+# ---- the apply: annotation, alias, dropped original (kept in the event), the old close
 assert board.annot_migrate(apply=True)[0] == move
+after_apply = screen()
+assert "mine" in before_apply and "mine" not in after_apply, "the moved row leaves the screen"
+assert "P/moved" in before_apply and "P/moved" not in after_apply
+assert after_apply["fleet:wt-mine"]["status"] == "owner", "the owner block moved with the row, onto the card's own row"
+assert after_apply["fleet:wt-mine"]["next"] == "Approve the change", after_apply["fleet:wt-mine"]
+assert "other-card (수동)" in render_json()["text"], "the phase survives the session-name rename"
 annots = board.read()["annots"]
 assert annots["card:wt-card"]["aliases"] == ["row:P/one"] and annots["card:wt-card"]["owner"] == "오너" \
     and annots["card:wt-card"]["next"] == "직접 머지", annots  # the owner block moves as a pair
 assert annots["card:wt-other"]["phase"] == "수동", "the written field won"
 rows = board.read()["rows"]
 assert rows["P/one"]["status"] == "dropped" and rows["P/moved"]["status"] == "dropped" and rows["free"]["status"] == "moving", rows
+assert rows["P/one"]["was"] == "owner" and rows["P/moved"]["was"] == "moving", "the dropped row keeps the status it had (store round trip)"
 db = store.open_db()
 try:
     orig = json.loads(db.execute("SELECT before FROM event WHERE entity='board_row' AND id='P/one' AND ev='update' ORDER BY seq DESC"
@@ -240,5 +251,48 @@ try:
     assert order_close.card_closure("wt-other", db)[0] == "open"
 finally:
     db.close()
+
+# ---- annot_overlay on its own: no replacement row brings the dropped row back; a replacement takes its program;
+# every row of a duplicated card carries the annotation, so a program report sees it
+ann = {"card:wt-x": {"id": "card:wt-x", "kind": "annot", "owner": "오너", "next": "Approve", "phase": "P9", "aliases": ["row:old"]}}
+old = {"id": "old", "title": "old", "status": "dropped", "worktree": "wt-x", "program": "ProgA", "next": ""}
+rows_now = {}
+assert board.annot_overlay(rows_now, ann, {"old": old}) == {}
+assert rows_now["old"]["status"] == "moving" and rows_now["old"]["owner"] == "오너" and rows_now["old"]["title"] == "old (P9)", rows_now
+rows_now = {"fleet:wt-x": {"id": "fleet:wt-x", "title": "card", "session": "wt-x", "status": "moving"}}
+board.annot_overlay(rows_now, ann, {"old": old})
+assert rows_now["fleet:wt-x"]["program"] == "ProgA" and "old" not in rows_now and rows_now["fleet:wt-x"]["phase_note"] == "P9"
+rows_now = {"a": {"id": "a", "title": "a", "worktree": "wt-x", "program": "ProgA"}, "b": {"id": "b", "title": "b", "worktree": "wt-x", "program": "ProgB"}}
+assert board.annot_overlay(rows_now, ann) == {"wt-x": ["a", "b"]}
+assert rows_now["a"]["owner"] == rows_now["b"]["owner"] == "오너", "each row of a duplicated card shows the annotation"
+
+# the restored row is linked to the card by the annotation and keeps the status it had; a program above the dropped row counts
+held = {**old, "was": "held"}
+rows_now = {}
+board.annot_overlay(rows_now, {"card:wt-x": {"id": "card:wt-x", "kind": "annot", "owner": "오너", "next": "Approve", "aliases": ["row:old"]}},
+                    {"old": {**held, "worktree": None}})
+assert rows_now["old"]["status"] == "held" and rows_now["old"]["worktree"] == "wt-x" and rows_now["old"]["owner"] == "오너", rows_now
+under_phase = {"P": {"id": "P", "kind": "phase", "program": "ProgA", "title": "P"}}
+rows_now = {"P": under_phase["P"], "fleet:lead/wt-x": {"id": "fleet:lead/wt-x", "title": "c", "session": "wt-x", "parent": "lead"}}
+board.annot_overlay(rows_now, ann, {"old": {**old, "program": None, "parent": "P"}})
+assert rows_now["fleet:lead/wt-x"]["program"] == "ProgA", "the program above the dropped row is the replacement's"
+rows_now = {}
+board.annot_overlay(rows_now, {"card:wt-x": {"id": "card:wt-x", "kind": "annot", "phase": "P1", "aliases": ["row:old"]}},
+                    {"old": {**old, "was": "owner", "owner": "오너", "next": "Approve", "progress": [1, 2]}})
+assert rows_now["old"]["status"] == "moving" and not {"owner", "progress"} & set(rows_now["old"]) and rows_now["old"]["next"] == "", \
+    "a field the annotation cleared stays cleared on a restored row"
+rows_now = {"fleet:lead": {"id": "fleet:lead", "program": "ProgB", "repo": "acme/app", "title": "lead"},
+            "fleet:lead/wt-x": {"id": "fleet:lead/wt-x", "title": "c", "session": "wt-x", "parent": "fleet:lead"}}
+board.annot_overlay(rows_now, ann, {"old": {**old, "program": "ProgA"}})
+assert rows_now["fleet:lead/wt-x"]["parent"] is None and rows_now["fleet:lead/wt-x"]["repo"] == "acme/app" \
+    and rows_now["fleet:lead/wt-x"]["program"] == "ProgA", "under another program's lead the card moves out into its own program"
+rows_now = {"lead": {"id": "lead", "repo": "acme/app", "title": "lead"},
+            "fleet:wt-lead/wt-x": {"id": "fleet:wt-lead/wt-x", "title": "c", "session": "wt-x", "parent": "lead"}}
+board.annot_overlay(rows_now, ann, {"old": {**old, "program": "ProgA"}})
+assert rows_now["fleet:wt-lead/wt-x"]["parent"] is None, "a parent with no program is out of the program's report too"
+# an ack of the moved row stands for the card's row, under the id that can be un-acked
+line = {"key": "fleet:lead/wt-x", "pr": None, "status": "done", "depth": 0, "name": "c"}
+_, done, hidden = board.drop_acked([line], {}, {"fleet:lead/wt-x": {}}, {"board:old": "t"}, {"fleet:lead/wt-x": ["board:old"]})
+assert done[0]["id"] == "board:old" and done[0]["acked"] and hidden == {"fleet:lead/wt-x"}, done
 
 print("test_annot: ok")
