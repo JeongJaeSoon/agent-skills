@@ -12,9 +12,9 @@
       "width": 228
     },
     "brief": {
-      "skill_md_tokens": 2704,
-      "tokens": 76,
-      "width": 237
+      "skill_md_tokens": 2958,
+      "tokens": 122,
+      "width": 373
     },
     "create-verification-skill": {
       "skill_md_tokens": 2028,
@@ -72,7 +72,7 @@
       "width": 279
     },
     "orchestrate": {
-      "skill_md_tokens": 11768,
+      "skill_md_tokens": 11770,
       "tokens": 101,
       "width": 332
     },
@@ -126,11 +126,6 @@
       "tokens": 94,
       "width": 350
     },
-    "stage": {
-      "skill_md_tokens": 242,
-      "tokens": 41,
-      "width": 147
-    },
     "tdd": {
       "skill_md_tokens": 729,
       "tokens": 50,
@@ -140,11 +135,6 @@
       "skill_md_tokens": 1084,
       "tokens": 65,
       "width": 240
-    },
-    "todo": {
-      "skill_md_tokens": 288,
-      "tokens": 44,
-      "width": 147
     },
     "tune-automode": {
       "skill_md_tokens": 3241,
@@ -187,7 +177,7 @@
       "width": 268
     },
     "write-skill": {
-      "skill_md_tokens": 2696,
+      "skill_md_tokens": 2766,
       "tokens": 58,
       "width": 207
     },
@@ -198,8 +188,8 @@
     }
   },
   "totals": {
-    "always_tokens": 3205,
-    "always_width": 11469,
-    "skills_width": 10589
+    "always_tokens": 3166,
+    "always_width": 11311,
+    "skills_width": 10431
   }
 }
