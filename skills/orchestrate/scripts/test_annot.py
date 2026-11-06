@@ -223,4 +223,22 @@ assert board.annot_fields({"status": "moving", "owner": "오너", "next": ""}, {
 assert board.annot_fields({"status": "moving", "owner": "me-login", "next": ""}, {}, "me-login") == {"owner": "me-login", "next": "오너 확인"}
 assert board.annot_fields({"status": "moving", "owner": "Alice", "next": "승인"}, {}) == {}
 
+# ---- the order close reads annotations: a step after merge or an owner block on the card keeps the order open
+import order_close  # noqa: E402
+
+annots = {"card:wt-card": {"id": "card:wt-card", "kind": "annot", "next": "머지 → 배포"}}
+F = {"rows": {}, "cards": {}, "board": {"doing": []}, "board_now": {"annots": annots}}
+assert order_close.steps_left("wt-card", F) is True and order_close.steps_left("wt-other", F) is False
+owned = {"annots": {"card:wt-card": {"id": "card:wt-card", "kind": "annot", "owner": "오너", "next": "승인"}}}
+cards_all = {"wt-card": {"id": "wt-card", "terminals": []}}
+assert order_close.db_turn({"card:wt-card"}, cards_all, "me-login", [], owned)[0] == "owner_turn"
+assert order_close.db_turn({"card:wt-other"}, {**cards_all, "wt-other": {"id": "wt-other", "terminals": []}}, "me-login", [], owned) is None
+assert tidy.write(["row:P/one"], can={"row:P/one": "x"})[0] == ["row:P/one"]
+db = store.open_db()
+try:
+    assert order_close.card_closure("wt-card", db)[0] == "done", "the alias's close is the card's"
+    assert order_close.card_closure("wt-other", db)[0] == "open"
+finally:
+    db.close()
+
 print("test_annot: ok")
