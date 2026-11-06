@@ -19,7 +19,7 @@ Level `tracker.orca_first` in ~/.claude/agent-skills.json: deny (default), ask, 
 turns it off. Every decision adds a row to $AGENT_SKILLS_STATE/tracker-gate.jsonl with a code, so a fallback and a
 hook fault can be told apart. Any error passes silently.
 """
-import json, os, pathlib, re, shlex, subprocess, sys, tempfile, time
+import datetime, json, os, re, shlex, subprocess, sys, tempfile, time
 
 from lib import config, shell
 
@@ -127,7 +127,9 @@ def lin_list_issues(a):
 def lin_team_read(sub):
     def handler(a):
         only(a, {"team"})
-        return [f"orca linear team {sub} --team {q(scalar(a['team']))}"] if a else [f"orca linear team {sub}"]
+        if "team" not in a:  # the CLI needs a team; an all-teams read has no Orca form
+            raise Pass("pass-unsupported-key")
+        return [f"orca linear team {sub} --team {q(scalar(a['team']))}"]
     return handler
 
 
@@ -261,12 +263,11 @@ def jira_comment(a):
 
 
 def jira_create(a):
-    only(a, {"cloudId", "projectKey", "issueTypeName", "summary", "description", "contentFormat",
-             "additional_fields", "assignee_account_id"})
+    only(a, {"cloudId", "projectKey", "issueTypeName", "summary", "description", "contentFormat", "additional_fields"})
     if a.get("contentFormat", "markdown") != "markdown":
         raise Pass("pass-unsupported-key")
     project = q(scalar(a["projectKey"]))
-    types = f"orca jira project types --project {project}   # the id of {a.get('issueTypeName', 'the issue type')!r}"
+    types = f"orca jira project types --project {project}"
     cmd = f"orca jira create --project {project} --type <issueTypeId> --title {q(scalar(a['summary']))}"
     if "description" in a:
         scalar(a["description"])
@@ -275,9 +276,6 @@ def jira_create(a):
         if not isinstance(a["additional_fields"], dict):
             raise Pass("pass-unsupported-key")
         cmd += f" --fields-json {q(json.dumps(a['additional_fields'], separators=(',', ':')))}"
-    if "assignee_account_id" in a:
-        scalar(a["assignee_account_id"])
-        cmd += " --user-field assignee"
     return [types, cmd]
 
 
@@ -396,7 +394,8 @@ def orca_attempted(event, provider, keys, subs):
             entry = json.loads(line)
         except ValueError:
             continue
-        content = (entry.get("message") or {}).get("content")
+        message = entry.get("message") if isinstance(entry, dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
         if not isinstance(content, list):
             continue
         for block in content:
@@ -407,6 +406,7 @@ def orca_attempted(event, provider, keys, subs):
             elif block.get("type") == "tool_result":
                 done.add(block.get("tool_use_id"))
     wanted = {k.lower() for k in keys}
+    names = [re.compile(rf"(?:^|/){re.escape(k)}(?:[/?#]|$)") for k in wanted]
     for tid in done & set(uses):
         stamp, command = uses[tid]
         if not isinstance(command, str) or not recent(stamp):
@@ -414,8 +414,7 @@ def orca_attempted(event, provider, keys, subs):
         for c in shell.commands(command):
             w = c.words
             if len(w) > 2 and w[0] == "orca" and w[1] == provider:
-                text = " ".join(w[2:]).lower()
-                if wanted and not any(k in text for k in wanted):
+                if names and not any(rx.search(word.lower()) for rx in names for word in w[2:]):
                     continue
                 if not wanted and w[2] not in subs:
                     continue
@@ -424,14 +423,11 @@ def orca_attempted(event, provider, keys, subs):
 
 
 def recent(stamp):
-    if not stamp:
-        return True
     try:
-        import datetime
         t = datetime.datetime.fromisoformat(str(stamp).replace("Z", "+00:00")).timestamp()
     except ValueError:
-        return True
-    return time.time() - t <= EVIDENCE_WINDOW
+        return False
+    return 0 <= time.time() - t <= EVIDENCE_WINDOW
 
 
 # ---- decision
@@ -507,4 +503,5 @@ if __name__ == "__main__":
         main()
     except Exception as e:
         config.log_error("tracker_gate", e)
+        log("", "", "pass", "pass-error")
     sys.exit(0)

@@ -686,6 +686,8 @@ def detect_adapter(cwd=None):
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         cache = {}
     result = _detect(cwd, branch)
+    if result["source"] == "ambiguous" and "probe failed" in result["evidence"]:
+        return result  # a failure may be gone in a minute; do not keep it for ten
     try:
         os.makedirs(state_dir(), exist_ok=True)
         cache = {k: v for k, v in cache.items() if isinstance(v, dict) and
@@ -701,7 +703,8 @@ def detect_adapter(cwd=None):
 
 
 def _detect(cwd, branch):
-    linear = key_set(orca_result("linear", "team", "list"), "teams")
+    teams = orca_result("linear", "team", "list")
+    linear = key_set(teams, "teams")
     connection = orca_result("jira", "connection")
     jira = None
     if isinstance(connection, dict) and connection.get("connected"):
@@ -715,6 +718,8 @@ def _detect(cwd, branch):
     if jira is None:
         return out("linear", "orca-connection", f"only Linear is connected (teams {sorted(linear)})")
     if not linear:
+        if teams is None:  # a failed Linear probe is not "Linear is not connected": never pick Jira on it
+            return out("linear", "ambiguous", "Jira is connected but the Linear probe failed", True)
         return out("jira", "orca-connection", "only Jira is connected")
     both = linear & jira
     for label, text in (("branch", branch), ("commits", git_out(cwd, "log", "-10", "--format=%s"))):

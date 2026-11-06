@@ -650,6 +650,8 @@ with open(os.environ["FAKE_ORCA_LOG"], "a") as fh:
     fh.write(json.dumps(sys.argv[1:]) + "\n")
 a = sys.argv[1:]
 def ok(r): print(json.dumps({"ok": True, "result": r})); sys.exit(0)
+if a[:3] == ["linear", "team", "list"] and mode["linear"] is None:
+    sys.exit(1)
 if a[:3] == ["linear", "team", "list"]:
     ok({"teams": [{"key": k} for k in mode["linear"]]})
 if a[:2] == ["jira", "connection"]:
@@ -712,6 +714,14 @@ class Detect(unittest.TestCase):
         self.connect([], ["ENG"])
         r = self.detect()
         self.assertEqual((r["adapter"], r["source"]), ("jira", "orca-connection"))
+
+    def test_failed_linear_probe_never_selects_jira(self):
+        self.connect(None, ["ENG"])
+        r = self.detect()
+        self.assertEqual((r["adapter"], r["source"], r["ambiguous"]), ("linear", "ambiguous", True))
+        self.assertIn("probe failed", r["evidence"])
+        self.connect([], ["ENG"])  # the probe answered "no teams": Jira is the one
+        self.assertEqual(self.detect()["adapter"], "jira")
 
     def test_both_connected_branch_key_decides(self):
         self.connect(["ABC"], ["ENG"])

@@ -89,6 +89,8 @@ denied(LIN + "list_comments", {"issueId": "ABC-1"}, "orca linear issue ABC-1 --c
 denied(LIN + "save_comment", {"issueId": "ABC-1", "body": "hi"}, "orca linear comment add ABC-1 --body-file <file>")
 denied(LIN + "list_issue_statuses", {"team": "ABC"}, "orca linear team states --team ABC")
 denied(LIN + "list_teams", {}, "orca linear team list")
+for tool in ("list_users", "list_issue_labels", "list_issue_statuses"):
+    passed(LIN + tool, {}, "pass-unsupported-key")  # the CLI needs --team
 t = denied(LIN + "save_issue", {"id": "ABC-1", "state": "Done", "title": "T", "addLabels": ["bug"], "blockedBy": ["ABC-2"],
                                 "priority": 2, "links": [{"url": "https://e.test/pr/1", "title": "PR"}]},
            "orca linear status set ABC-1 --to Done", "orca linear save-issue ABC-1 --title T --priority high",
@@ -145,7 +147,11 @@ passed(JIRA + "transitionJiraIssue", {"issueIdOrKey": "ENG-1", "transition": {"i
        "pass-unsupported-key")
 denied(JIRA + "createJiraIssue", {"projectKey": "ENG", "issueTypeName": "Task", "summary": "S", "description": "d",
                                   "additional_fields": {"parent": {"key": "ENG-2"}}},
-       "orca jira project types --project ENG", "orca jira create --project ENG --type <issueTypeId> --title S --body-file <file> --fields-json")
+       "orca jira project types --project ENG\n", "orca jira create --project ENG --type <issueTypeId> --title S --body-file <file> --fields-json")
+denied(JIRA + "createJiraIssue", {"projectKey": "ENG", "issueTypeName": "Task", "summary": "S", "cloudId": "cloud-1"},
+       "orca jira project types --project ENG --site site-1\n", "--title S --site site-1")
+passed(JIRA + "createJiraIssue", {"projectKey": "ENG", "issueTypeName": "Task", "summary": "S", "assignee_account_id": "u"},
+       "pass-unsupported-key")
 passed(JIRA + "createJiraIssue", {"projectKey": "ENG", "issueTypeName": "Task", "summary": "S", "parent": "x"},
        "pass-unsupported-key")
 denied(JIRA + "editJiraIssue", {"issueIdOrKey": "ENG-1", "fields": {"labels": ["a", "b"]}}, "orca jira label set ENG-1 --label a --label b")
@@ -172,6 +178,14 @@ denied(*call, transcript=transcript(*bash_pair("a", "orca jira issue ABC-1")))
 denied(*call, transcript=transcript(*bash_pair("a", "python3 tracker.py get ABC-1")))
 denied(*call, transcript=transcript(*bash_pair("a", "orca linear issue ABC-1", ago=3600)))
 denied(*call, transcript=TMP / "missing.jsonl")
+denied(*call, transcript=transcript(*bash_pair("a", "orca linear issue ABC-10")))  # ABC-10 is not ABC-1
+passed(*call, "pass-evidence", transcript=transcript(*bash_pair("a", "orca linear issue https://linear.app/x/issue/ABC-1/slug")))
+bad = bash_pair("a", "orca linear issue ABC-1")
+bad[0].pop("timestamp")
+denied(*call, transcript=transcript(*bad))  # no timestamp is no proof of recency
+t = transcript(*bash_pair("a", "orca linear issue ABC-1"))
+t.write_text("[]\n3\n" + '{"message": []}\n' + t.read_text())  # malformed rows are skipped, not fatal
+passed(*call, "pass-evidence", transcript=t)
 passed(LIN + "list_issues", {"project": "P"}, "pass-evidence", transcript=transcript(*bash_pair("a", "orca linear list-issues --team ABC")))
 denied(LIN + "list_issues", {"project": "P"}, transcript=transcript(*bash_pair("a", "orca linear issue ABC-1")))
 
