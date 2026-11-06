@@ -5,7 +5,7 @@ configured (`tracker.<adapter>.templates` in `~/.claude/agent-skills.json`, see 
 When templates are configured, the tracker's copy is the source and this file is not read.
 
 Italic lines are hints for the writer: strip them from the filed body. The headings below are in
-Korean; the title and the prose follow `tracker.<adapter>.language` (`write-ticket`, "Language").
+Korean; the title and the prose follow `write-ticket`, "Language".
 
 ## 개발 티켓 (Feature, Bug, Improvement)
 

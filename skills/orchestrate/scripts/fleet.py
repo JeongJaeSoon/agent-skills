@@ -189,9 +189,9 @@ def mask(text, limit=None):
 
 # ---------------------------------------------------------------- CLI sources
 
-def run_json(cmd, timeout=30):
+def run_json(cmd, timeout=30, env=None):
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL, env=env)
     except FileNotFoundError:
         raise SourceError(f"{cmd[0]} not found")
     except subprocess.TimeoutExpired:
@@ -402,7 +402,9 @@ def scan_line(c, raw):
     if not isinstance(d, dict):
         return
     if d.get("type") == "continued-in":
-        c["continued"] = True  # the session goes on in a new transcript, which repeats what this one started
+        # The session goes on in a new transcript, which repeats what this one started: remember which, so the old one
+        # is skipped only while that one is alive to show them. "" when the record names none.
+        c["continued"] = d.get("continuedInSessionId") or ""
         return
     text = notice_text(d)
     if text:
@@ -534,11 +536,13 @@ def live_transcripts(procs, warn):
 
 def collect_monitors(procs, now, warn):
     out, scanned = [], set()
-    for sid, s, path in live_transcripts(procs, warn):
+    live = live_transcripts(procs, warn)
+    live_ids = {sid for sid, _, _ in live}
+    for sid, s, path in live:
         scanned.add(str(path))
         tasks = scan_transcript(path)
-        if MONITOR_SCAN[str(path)]["continued"]:
-            continue
+        if MONITOR_SCAN[str(path)]["continued"] in live_ids:
+            continue  # a successor that is not live (or not named) shows nothing, so this transcript is the only record
         # Only the session's own shells: a $(…) inside one forks a shell with the same command line.
         free = {}
         for pid, (ppid, start, cmd) in procs.items():
@@ -716,10 +720,14 @@ def orca_messages_sent(messages):
             and isinstance(m.get("created_at"), str) and (m.get("body") or m.get("subject"))]
 
 
-def graphql(query):
+def graphql(query, app=None):
     """(data, errors). gh exits non-zero when any alias errors, even with the rest of the data present, so one
-    inaccessible PR must not blank the others."""
-    out = run_json(["gh", "api", "graphql", "-f", f"query={query}"], timeout=60)
+    inaccessible PR must not blank the others. With `app`, gh runs under that ghtkn app's token (handed to the child
+    only, as GH_TOKEN); without it, under whatever login gh has."""
+    cmd, env = ["gh", "api", "graphql", "-f", f"query={query}"], None
+    if app:
+        cmd, env = ["ghtkn", "exec", "-e", "GH_TOKEN", "--", *cmd], {**os.environ, "GHTKN_APP": app}
+    out = run_json(cmd, timeout=60, env=env)
     data = out.get("data") if isinstance(out, dict) else None
     errors = [mask(e.get("message", "")[:200]) for e in (out.get("errors") or [])] if isinstance(out, dict) else []
     if data is None:
@@ -1516,6 +1524,14 @@ def board_open():
         return {}
 
 
+def owner_todo_items(b, shut):
+    """The owner's now-list (`orch board now`) as Needs you items, so the Brief and Needs you show one set. The key is the
+    board item's id, the one `orch board done` closes; shut is tidy.closed(), for a close the board has not applied."""
+    return [{"key": t["id"], "type": "owner_todo", "session": None, "title": mask(t["title"], 200),
+             "at": t.get("updated_at"), "source": "board"}
+            for t in b.get("owner_todo") or [] if t["id"] not in shut]
+
+
 def board_prs():
     """The PR keys the open board's rows name, and every full owner/repo#N in its doing, later, todo and owner_todo text and
     in the external inbox: a closed item no longer holds its PR in prs.json."""
@@ -1534,8 +1550,12 @@ def board_prs():
 def program_prs(now):
     """The PR keys named in the ledgers of the programs the stage table shows (stage_auto.py)."""
     import stage_auto  # beside this file; it imports this module
-    return {pr_key(cfg["repo"], e["pr"]) for cfg, events in stage_auto.load_programs()
+    keys = {pr_key(cfg["repo"], e["pr"]) for cfg, events in stage_auto.load_programs()
             if cfg.get("repo") and stage_auto.recent(cfg, events, now) for e in events if e.get("pr") is not None}
+    # A ledger's repo or pr is free text too: "tools#441" reached pr_query and stopped every tick before it saved.
+    for k in sorted(k for k in keys if not FULL_PR_KEY_RE.fullmatch(k)):
+        print(f"fleet: skipped ledger PR {k!r}: not owner/repo#N", file=sys.stderr)
+    return {k for k in keys if FULL_PR_KEY_RE.fullmatch(k)}
 
 
 def pr_query(keys, body):
@@ -2032,6 +2052,9 @@ class Fleet:
         # mine (a hundred or more, 5 s per 25) keep their tier, which is there for CI moves that leave updatedAt alone.
         due = []
         for k in list(owner_of) + [k for k in swept if k not in owner_of] + sorted(named):
+            if not FULL_PR_KEY_RE.fullmatch(k):  # whatever source slipped one in, it costs that key, not the tick
+                errors.append(f"skipped PR key {k!r}")
+                continue
             sid, entry = owner_of.get(k), self.prs.get(k)
             det = (entry or {}).get("detail")
             # A detail read before "base" or "branch" was collected is read again now, so a merged PR does not wait a
@@ -2309,6 +2332,8 @@ class Fleet:
         items = [it if it.get("project") else {**it, "project": (sessions.get(it.get("session")) or {}).get("project")}
                  for it in items if it["key"] not in dismissed]
         import tidy
+        # The now-list is not dismissed here: it stays until `orch board done`, as in the Brief.
+        items += owner_todo_items(board_open(), tidy.closed())
         details = {k: e["detail"] for k, e in self.prs.items() if e.get("detail")}
         held = held_prs(board_open(), tidy.closed(), details, now,
                         tidy.cards_of(read_json(state_dir() / "state.json", {}), details), why := {}, me=self.me)

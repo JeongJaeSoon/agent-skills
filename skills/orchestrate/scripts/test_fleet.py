@@ -2,7 +2,7 @@
 
 Run: python3 test_fleet.py
 """
-import contextlib, datetime as dt, json, os, pathlib, re, shutil, subprocess, sys, tempfile
+import contextlib, datetime as dt, io, json, os, pathlib, re, shutil, subprocess, sys, tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import dash_demo
@@ -135,6 +135,20 @@ fleet.dismiss(f, next(i["key"] for i in items(st, "ci_failed")))
 st = f.tick(force=True)
 ss = {s["id"]: s for s in st["sessions"]}
 assert ss["wt-export"]["unread"] == 3 and not items(st, "ci_failed"), (ss["wt-export"], items(st, "ci_failed"))
+badges_agree(st)
+
+# The owner's now-list shows in Needs you through the collector, and a dismiss does not hide it: only `orch board done` does.
+real_open = fleet.board_open
+fleet.board_open = lambda: {"owner_todo": [{"id": "b9", "title": "acme/app#3 리뷰", "updated_at": "2026-10-30T09:00:00Z"}]}
+st = f.tick(force=True)
+assert [i["title"] for i in items(st, "owner_todo")] == ["acme/app#3 리뷰"], items(st, "owner_todo")
+fleet.dismiss(f, "b9")
+st = f.tick(force=True)
+assert [i["key"] for i in items(st, "owner_todo")] == ["b9"], items(st, "owner_todo")
+fleet.board_open = lambda: {}
+st = f.tick(force=True)
+assert not items(st, "owner_todo")
+fleet.board_open = real_open
 badges_agree(st)
 
 # Needs you order: what only the owner settles, then a merge call waiting on them, then the rest; newest first in each.
@@ -1433,6 +1447,19 @@ prog_dir.mkdir(parents=True)
 assert fleet.program_prs(clock[0]) == {"acme/tools#8"}
 assert next(p for p in pr_tick(viewed=True)["prs"] if p["number"] == 8)["state"] == "CLOSED"
 shutil.rmtree(prog_dir)
+# A ledger pr or program repo that is not a full owner/repo#N (a bare repo "tools") is skipped with one warning line;
+# the other entries still count and the tick still saves.
+prog_dir.mkdir(parents=True)
+(prog_dir / "program.json").write_text(json.dumps({"repo": "tools", "created_at": fleet.iso(clock[0])}))
+(prog_dir / "ledger.jsonl").write_text(json.dumps({"ts": fleet.iso(clock[0]), "ev": "landed", "pr": 441, "sha": "8" * 40}) + "\n")
+warned = io.StringIO()
+with contextlib.redirect_stderr(warned):
+    assert fleet.program_prs(clock[0]) == set()
+assert "tools#441" in warned.getvalue(), warned.getvalue()
+before = f.state["generated_at"]
+clock[0] += dt.timedelta(seconds=30)
+assert pr_tick(viewed=True)["generated_at"] != before, "a ledger with a bare repo still saves a fresh state"
+shutil.rmtree(prog_dir)
 # A program file it cannot read (a ledger ts without a zone, a program.json that is not an object) costs the stage
 # table its rows, not the tick: prs.json is still written and the error is kept once.
 for program, row in [({"repo": "acme/tools", "created_at": fleet.iso(clock[0])},
@@ -2001,7 +2028,19 @@ lines.append({"type": "continued-in", "timestamp": at(26), "sessionId": "s-old",
 fleet.write_atomic(old_transcript, "".join(json.dumps(l) + "\n" for l in lines))
 mons = fleet.fetch_monitors({**procs, 102: (1, lstart(0), "claude")}, now=now)
 assert "gone" not in {m["id"] for m in mons} and fleet.MONITOR_SCAN[str(old_transcript)]["offset"] == old_transcript.stat().st_size, mons
+# A continued-in whose new session is not alive (the machine restarted, or the new one was never resumed) hands the tasks
+# to nobody: the old transcript is the only record of them, so they show.
+orphan_transcript = home / "projects" / "-work-wt-lead" / "s-orphan.jsonl"
+fleet.write_atomic(home / "sessions" / "103.json", json.dumps({"pid": 103, "sessionId": "s-orphan", "cwd": "/work/wt-lead",
+                                                                "procStart": lstart(0), "name": "lead:orphan"}))
+lines.clear()
+started("orphan", "orch wait orphan", 25)
+lines.append({"type": "continued-in", "timestamp": at(26), "sessionId": "s-orphan", "continuedInSessionId": "s-nowhere"})
+fleet.write_atomic(orphan_transcript, "".join(json.dumps(l) + "\n" for l in lines))
+mons = fleet.fetch_monitors({**procs, 103: (1, lstart(0), "claude")}, now=now)
+assert "orphan" in {m["id"] for m in mons}, mons
 (home / "sessions" / "102.json").unlink()
+(home / "sessions" / "103.json").unlink()
 # Hours later the failures and the lost one drop off; with no live Claude process there is nothing to show.
 assert [m["id"] for m in fleet.fetch_monitors(procs, now=now + dt.timedelta(hours=7))] == ["wait"]
 assert fleet.fetch_monitors({}, now=now) == []

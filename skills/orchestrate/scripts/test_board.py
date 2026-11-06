@@ -97,6 +97,9 @@ assert orch("board", "set", "search", "--status", "maybe")[2].startswith("--stat
 assert board.status_of("⏸️") == board.status_of("⏸") == "held"
 assert orch("board", "set", "search", "--progress", "9/8")[2] == "--progress N/M needs 0 <= N <= M and M > 0"
 assert orch("board", "set", "search", "--progress", "half")[2].startswith("--progress is N/M")
+for bad_pr in ("441", "#441", "tools#441", "https://example.test/x"):
+    code, _, err = orch("board", "set", "search", "--pr", bad_pr)
+    assert code == 1 and err.startswith("--pr is OWNER/REPO#N"), (bad_pr, code, err)
 assert orch("board", "later", "add", "캐시 TTL")[2].startswith("board later add needs")
 assert orch("board", "doing", "add", "다른 팀 답변", "--owner", "사람")[2].startswith("board doing add needs")
 
@@ -373,6 +376,7 @@ assert "지난 보고 없음" in ok("brief", "render", "--periodic", "--now", NO
 ok("board", "drop", "notify")
 assert "알림 정리" not in ok("brief", "render", "--periodic", "--now", NOW)
 assert "notify/p51" not in in_state(store.board)["rows"]
+assert in_state(store.board)["leads"]["notify"].get("dropped_at"), "a dropped lead is marked, so it never reads as aged off"
 
 # A scope renders one program's rows only.
 scoped = ok("brief", "render", "--periodic", "--now", NOW, "--scope", "검색 개선")
