@@ -373,6 +373,27 @@ class LandExec(unittest.TestCase):
         self.assertIn(f"orch land {self.slug} --pr {self.n}", got["reason"])
         self.assertEqual(self.gh().get("log", []), [], "the executor only says it: nothing is retargeted")
 
+    def test_the_do_line_uses_the_bottom_layers_own_base(self):
+        up = self.n + 100
+        self.stack(self.n, up)
+        st = self.gh()
+        st["prs"][str(self.n)]["baseRefName"] = "release"  # also when open_rows' page of PRs does not list it
+        self.write(st)
+        row = self.request()
+        self.round()
+        self.settled(row, "refused", 1, f"gh pr edit {up} --base release --repo o/r")
+
+    def test_an_unreadable_base_withholds_the_command_instead_of_guessing_main(self):
+        up = self.n + 100
+        self.stack(self.n, up)
+        st = self.gh()
+        st["prs"][str(self.n)]["drop"] = ["baseRefName"]
+        self.write(st)
+        row = self.request()
+        self.round()
+        got = self.settled(row, "refused", 1, f"#{up}")
+        self.assertNotIn("--base", got["reason"])
+
     def test_the_bottom_of_three_names_only_the_layer_above_it(self):
         mid, top = self.n + 100, self.n + 200
         self.stack(self.n, mid, top)

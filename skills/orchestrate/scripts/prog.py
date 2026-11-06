@@ -2240,7 +2240,7 @@ def base_ci_hint(repo, base):
             f" there; start it with gh workflow run <ci workflow file> --repo {repo} --ref {base} and watch that run")
 
 
-def stack_refusal(p, pr, stacks, rows):
+def stack_refusal(p, pr, stacks):
     """The land executor's refusal of a PR in a stack. Only the bottom layer has a way in: once the layer above
     stands on the base, `pr` is a single PR. Retargeting rewrites that layer's diff, so its verdict is stale; the
     layers further up stay on it. Any other layer waits for the ones below."""
@@ -2252,7 +2252,10 @@ def stack_refusal(p, pr, stacks, rows):
         return f"{why}. Land #{members[0]} first, then the layers above it in order"
     if len(members) < 2:
         return why
-    base = next((r.get("baseRefName") for r in rows if r["number"] == pr), None) or "main"
+    # Read here, not from open_rows (one page of PRs): a guessed base would send the retarget to the wrong branch.
+    base = pr_view(p.cfg["repo"], pr).get("baseRefName")
+    if not base:
+        return f"{why}. #{pr} is the bottom layer; retarget #{members[1]} onto #{pr}'s base (it could not be read), then land again"
     return (f"{why}. #{pr} is the bottom layer; do: gh pr edit {members[1]} --base {base} --repo {p.cfg['repo']},"
             f" then orch land {p.slug} --pr {pr} (#{members[1]} needs a new review: its diff changed)")
 
@@ -2285,7 +2288,7 @@ def attempt(p, pr, klass, onto_lower=False, expect=None, verdict_sources=None):
     stacked = any(pr in members for members in stacks.values())
     if expect and (stacked or onto_lower):
         # Its checks pin one PR at one sha; the lower layers merge-async would take have no such pin.
-        return 1, stack_refusal(p, pr, stacks, rows)
+        return 1, stack_refusal(p, pr, stacks)
     if expect and unread:
         return 2, "yield: the stack listing did not answer, so the land executor cannot tell a single PR; land again"
     members = next((m for m in stacks.values() if pr in m), [])
