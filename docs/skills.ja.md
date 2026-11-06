@@ -1,4 +1,4 @@
-<!-- translated-from: d9b225260898dbdb72144323dd25184d921374cc -->
+<!-- translated-from: 5ac65a0e62bb64e6539052de09f31728b138749f -->
 # スキルカタログ
 
 `agent-skills` プラグインに入っているスキル40個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック16個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
@@ -491,7 +491,7 @@ PR を受け持つスキルとマージする主体:
 | `land-check` | マージせずに、準備の状態だけを診断します |
 | `landed` | 外で行ったマージを記録します |
 | `backfill` | 登録前にマージされた PR と、その main CI を台帳に入れます |
-| `heavy` | 重いコマンド（compose、イメージのビルド）を、マシン全体で2スロットに制限して実行します |
+| `heavy` | 重いコマンド（compose、イメージのビルド）を、マシン全体のスロットに制限して実行します。スロット数は `landing.heavy_slots`、`agent-skills.json` の `orchestrate.heavy_slots`、CPU数の4分の1（最小2）の順で決まります |
 | `wait` | リード専用。処理すべきメッセージが来るまで待ち、`CLOSE OUT` 行を出します |
 | `decide` | オーケストレーターかリードがユーザーの決定を待っている事項を登録（`add`）・一覧（`list`）・クローズ（`done`、`drop`）します。ダッシュボードの Needs you に選択肢ボタン付きで表示され、ボタンは答えを記録して決定をクローズしてから、`decision <id>: <答え>` の 1 行をオーケストレーターかリードのターミナルに送ります（忙しいときは手が空いてから送ります） |
 
