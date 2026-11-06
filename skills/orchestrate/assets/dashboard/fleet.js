@@ -3,22 +3,20 @@
 // Loaded before app.js and only called after it, so it may use app.js helpers ($, esc, icon, tag, relSpan, kpi, S...).
 // Everything comes from /api/fleet/state, written by fleet.py.
 
-// Three groups, a rule before each `sep`: the work in flight, what runs unattended, how the skills and PRs fare.
+// Three groups: the work in flight (under the "Sections" title), what runs unattended, and diagnostics. A `group` is
+// the heading drawn before that row. Pages that are one subject in several shapes are views of one row (viewSwitch).
 const FLEET_SECTIONS = [
   { id: "overview", label: "Overview", icon: "overview" },
   { id: "inbox", label: "Inbox", icon: "inbox" },
-  { id: "prs", label: "Pull requests", icon: "prs" },
   { id: "brief", label: "Brief", icon: "note" },
-  { id: "stages", label: "Stages", icon: "flag" },
   { id: "todo", label: "To-do", icon: "check" },
+  { id: "prs", label: "Pull requests", icon: "prs" },
+  { id: "stages", label: "Stages", icon: "flag" },
   { id: "sent", label: "Sent", icon: "chat" },
   { id: "timeline", label: "Timeline", icon: "list" },
-  { id: "automations", label: "Automations", icon: "clock", sep: true },
-  { id: "monitors", label: "Monitors", icon: "activity" },
-  { id: "skills", label: "Skills", icon: "spark", sep: true },
-  { id: "changes", label: "Skill changes", icon: "merge" },
+  { id: "automations", label: "Automations", icon: "clock", group: "무인" },
+  { id: "skills", label: "Skills", icon: "spark", group: "진단" },
   { id: "tokens", label: "Tokens", icon: "coins" },
-  { id: "stats", label: "PR stats", icon: "chart" },
   { id: "flow", label: "Data flow", icon: "link" },
 ];
 
@@ -79,7 +77,10 @@ const F = { token: null, draft: {}, confirm: null, chat: {}, arm: null, prompt: 
 // route() hands over "#/fleet/<section>[/<arg>]"; the only argument is a session id.
 // The Work page's stage table is the Stages page now: an old #/fleet/work link opens it.
 // A page that folded into another is [section, view]: the old address opens that view of the new page.
-const MOVED = { work: "stages", graph: ["prs", "graph"], sessions: ["brief", "sessions"] };
+const MOVED = {
+  work: "stages", graph: ["prs", "graph"], sessions: ["brief", "sessions"], stats: ["prs", "stats"],
+  monitors: ["automations", "monitors"], changes: ["skills", "changes"],
+};
 function fleetSection(section, arg, hash = location.hash) {
   F.sessionId = section === "session" && arg ? arg : null;
   const moved = MOVED[section];
@@ -90,6 +91,8 @@ function fleetSection(section, arg, hash = location.hash) {
 // One page, several shapes of the same thing: `#/fleet/<section>?view=<id>`. views is [[id, label], ...], the first
 // the default (its link carries no query). A view the address names but the page lacks falls back to the default.
 const viewOf = (views) => (views.some(([id]) => id === F.view) ? F.view : views[0][0]);
+// Whether this view of this page is the one on screen: what a poll checks before it redraws.
+const onView = (section, view, views) => isFleet() && S.section === section && viewOf(views) === view;
 function viewSwitch(section, views) {
   const cur = viewOf(views);
   return `<nav class="view-switch" aria-label="보기">${views.map(([id, label], i) =>
@@ -138,8 +141,8 @@ function sessionTree(st) {
 function fleetSidebar() {
   const st = S.state;
   const counts = st ? { inbox: (st.items || []).length || null,
-    prs: (st.prs || []).filter((p) => p.state === "OPEN").length || null, stages: stageOpen() || null, todo: todoCount() || null, automations: autoTroubled(st).length || null, monitors: monTroubled(st).length || null } : {};
-  $("#section-list").innerHTML = FLEET_SECTIONS.map((s) => `${s.sep ? '<li class="sb-sep" aria-hidden="true"></li>' : ""}<li><a class="nav-item" href="#/fleet/${s.id}"
+    prs: (st.prs || []).filter((p) => p.state === "OPEN").length || null, stages: stageOpen() || null, todo: todoCount() || null, automations: autoTroubled(st).length + monTroubled(st).length || null } : {};
+  $("#section-list").innerHTML = FLEET_SECTIONS.map((s) => `${s.group ? `<li class="sb-title eyebrow sb-text sb-heading">${s.group}</li>` : ""}<li><a class="nav-item" href="#/fleet/${s.id}"
       ${s.id === S.section ? 'aria-current="page"' : ""} title="${s.label}">${icon(s.icon)}<span class="sb-text">${s.label}</span>
       ${counts[s.id] != null ? `<span class="count">${counts[s.id]}</span>` : ""}</a></li>`).join("");
 }
@@ -232,7 +235,7 @@ function fleetHeader() {
   const errs = Object.entries(st.sources || {}).filter(([, v]) => v.ok === false).length, troubled = autoTroubled(st).length, lost = monTroubled(st).length;
   $("#top-right").innerHTML = [missed ? `<a href="#/fleet/inbox">${tag(`${missed} missed`, "bad", "alert")}</a>` : "",
     `<a href="#/fleet/automations">${troubled ? tag(`Automations ▲${troubled}`, "bad", "alert") : tag(`Automations ${(st.automations || []).length}`, "", "clock")}</a>`,
-    lost ? `<a href="#/fleet/monitors">${tag(`Monitors ▲${lost}`, "bad", "alert")}</a>` : "",
+    lost ? `<a href="#/fleet/automations?view=monitors">${tag(`Monitors ▲${lost}`, "bad", "alert")}</a>` : "",
     errs ? tag(`${errs} source error${errs > 1 ? "s" : ""}`, "warn", "alert") : ""].join("");
 }
 
@@ -711,13 +714,14 @@ function prTable(st, list) {
   return `<table><thead><tr>${head.map(([c, l, cls]) => th("fleet_prs", c, l, cls)).join("")}</tr></thead><tbody>${rows}</tbody></table>`;
 }
 
-const PRS_VIEWS = [["table", "테이블"], ["graph", "그래프"]];
+const PRS_VIEWS = [["table", "테이블"], ["graph", "그래프"], ["stats", "통계"]];
 const PRS_INFO = {
   table: "Every open PR you authored, in any repository, and every PR a session's branch has. GitHub is read every 30 s while this page is open; a column head sorts.",
   graph: "Session → pull request → reviewer. Edge colour is the reviewer's latest state; the bar on each PR is its CI. Only sessions with a linked pull request are drawn; a PR that is merged or closed is dimmed.",
 };
 function fleetPrs(st) {
   const view = viewOf(PRS_VIEWS);
+  if (view === "stats") return fleetStats(viewSwitch("prs", PRS_VIEWS));
   return `<div class="view-head"><div><h2>Pull requests</h2><p>${PRS_INFO[view]}</p></div>
     <div class="aside muted">Updated ${prUpdated(st)}</div></div>
     ${viewSwitch("prs", PRS_VIEWS)}${view === "graph" ? prsGraph(st) : prsTable(st)}`;
@@ -775,8 +779,8 @@ async function pollSkills() {
     F.skills = r.ok ? await r.json() : { error: r.status === 503 ? "The first skill usage collect has not finished." : `HTTP ${r.status}` };
   } catch (e) { F.skills = { error: String(e.message || e) }; }
   F.skillsAt = Date.now(); F.skillsBusy = false;
-  if (F.skills.error) setTimeout(() => { if (S.section === "skills") renderView(); }, 5e3);
-  if (S.section === "skills") renderView();
+  if (F.skills.error) setTimeout(() => { if (onView("skills", "usage", SKILLS_VIEWS)) renderView(); }, 5e3);
+  if (onView("skills", "usage", SKILLS_VIEWS)) renderView();
 }
 const skillMix = (r) => {
   const n = r.uses_30d || 1, seg = (v, cls, label) => v ? `<span class="${cls}" style="flex:${v / n}" title="${v} ${label}"></span>` : "";
@@ -795,11 +799,14 @@ function skillTable(list) {
       <td>${r.shown.map((f) => flagChip(r, f)).join(" ")}${r.flags.length > r.shown.length ? `<span class="muted" title="${esc(r.flags.join(", "))}: not editable here">${r.flags.length - r.shown.length} hidden</span>` : ""}</td></tr>`).join("");
   return `<table><thead><tr>${head.map(([c, l, cls]) => th("fleet_skills", c, l, cls)).join("")}</tr></thead><tbody>${rows}</tbody></table>`;
 }
+const SKILLS_VIEWS = [["usage", "사용"], ["changes", "변경"]];
 function fleetSkills() {
+  const sw = viewSwitch("skills", SKILLS_VIEWS);
+  if (viewOf(SKILLS_VIEWS) === "changes") return fleetChanges(sw);
   pollSkills();
   const rep = F.skills;
   const headHtml = `<div class="view-head"><div><h2>Skills</h2><p>How often each installed skill ran in local Claude Code transcripts, and how it was triggered: on its own (auto), loaded by another skill (chained), or typed as /name (slash). Misses are prompts that carried a quoted trigger phrase from the skill's description while it did not fire: a heuristic, flagged past 3 in 30 days when they are at least a fifth of the prompts that carried the phrase. Hover a miss for the phrase and the command that lists the sessions. Flags on sources not editable here are hidden by default. No prompt text is kept.</p></div>
-    ${rep && !rep.error ? `<div class="aside muted">Collected ${relSpan(rep.generated_at)} · ${rep.files} transcripts</div>` : ""}</div>`;
+    ${rep && !rep.error ? `<div class="aside muted">Collected ${relSpan(rep.generated_at)} · ${rep.files} transcripts</div>` : ""}</div>${sw}`;
   if (!rep) return headHtml + '<div class="loading">Loading…</div>';
   if (rep.error) return headHtml + `<div class="card"><div class="empty-chart">${esc(rep.error)}</div></div>`;
   const editable = new Set(rep.editable || []);
@@ -871,7 +878,7 @@ async function pollJson(key, url, keepMs, view = key) {
     F[key] = r.ok ? await r.json() : { error: `HTTP ${r.status}` };
   } catch (e) { F[key] = { error: String(e.message || e) }; }
   F[key + "At"] = Date.now(); F[key + "Busy"] = false;
-  if (S.section === view) renderView();
+  if (typeof view === "function" ? view() : S.section === view) renderView();
 }
 const isoOf = (sec) => sec ? new Date(sec * 1000).toISOString() : null;
 const bytes = (n) => n == null ? "" : n < 1024 ? `${n} B` : n < 1 << 20 ? `${(n / 1024).toFixed(1)} KB` : `${(n / (1 << 20)).toFixed(1)} MB`;
@@ -955,11 +962,12 @@ function fleetFlow() {
 
 const CHANGE_STATUS = { proposed: "accent", applied: "good", "in PR": "warn", merged: "good" };
 const CHANGE_FILTERS = ["all", "proposed", "in PR", "applied", "merged"];
-function fleetChanges() {
-  pollJson("changes", "/api/fleet/changes", 60e3);
+// The changes view of Skills; sw is the view switch fleetSkills draws under the head.
+function fleetChanges(sw = "") {
+  pollJson("changes", "/api/fleet/changes", 60e3, () => onView("skills", "changes", SKILLS_VIEWS));
   const rep = F.changes;
-  const head = `<div class="view-head"><div><h2>Skill changes</h2><p>What agent-skills changed about itself: improvement signals from skill usage (proposed), open PRs (in PR), commits on this checkout pushed straight to main (applied) or merged by PR (merged). From git log, the collector's PR list and the signals ledger only.</p></div>
-    ${rep && !rep.error ? `<div class="aside muted">Last ${rep.days} days · ${relSpan(rep.generated_at)}</div>` : ""}</div>`;
+  const head = `<div class="view-head"><div><h2>Skills</h2><p>What agent-skills changed about itself: improvement signals from skill usage (proposed), open PRs (in PR), commits on this checkout pushed straight to main (applied) or merged by PR (merged). From git log, the collector's PR list and the signals ledger only.</p></div>
+    ${rep && !rep.error ? `<div class="aside muted">Last ${rep.days} days · ${relSpan(rep.generated_at)}</div>` : ""}</div>${sw}`;
   if (!rep) return head + '<div class="loading">Loading…</div>';
   if (rep.error) return head + `<div class="card"><div class="empty-chart">${esc(rep.error)}</div></div>`;
   const f = CHANGE_FILTERS.includes(S.filters.fleet_changes) ? S.filters.fleet_changes : "all";
@@ -1396,12 +1404,15 @@ function runBlock(r) {
   const title = [label, r.status, r.at && new Date(r.at).toLocaleString(), r.summary].filter(Boolean).join(" · ");
   return `<span class="run ${tone ? "tone-" + tone : ""}" title="${esc(title)}">${glyph}</span>`;
 }
+const AUTO_VIEWS = [["automations", "자동화"], ["monitors", "모니터"]];
 function fleetAutomations(st) {
+  const sw = viewSwitch("automations", AUTO_VIEWS);
+  if (viewOf(AUTO_VIEWS) === "monitors") return fleetMonitors(st, sw);
   const autos = st.automations || [], src = (st.sources || {}).automations || {};
   const legend = [AUTO_RUN.completed, AUTO_RUN.failed, AUTO_RUN.running, AUTO_RUN.skipped]
     .map(([g, tone, l]) => `<span><span class="run ${tone ? "tone-" + tone : ""}">${g}</span>${l}</span>`).join("");
   const headHtml = `<div class="view-head"><div><h2>Automations</h2><p>Each Orca automation with its cadence, next and last run, and its last 6 results (oldest on the left). A last run that failed, or a run 10 minutes past its time, gets a ▲. The janitor and its precheck are Orca automations, so they are here once registered. Below it, the jobs orch-dash runs on its own and the rules it applies as it reads. CronCreate jobs inside sessions are not collected, and of launchd jobs only the two that keep a record.</p></div>
-    <div class="legend">${legend}</div></div>`;
+    <div class="legend">${legend}</div></div>${sw}`;
   const failed = src.ok === false ? `<div class="card"><div class="empty-chart">${tag("collection failed", "warn", "alert")} Could not read the Orca automation list: ${esc(src.error || "")}. Below is from ${rel(src.updated_at)}.</div></div>` : "";
   const rows = autos.map((a) => {
     const issue = autoIssue(a), last = (a.recent || [])[0];
@@ -1418,7 +1429,7 @@ function fleetAutomations(st) {
 // orch-dash's own jobs (/api/fleet/jobs, jobs.py): each row is the record the job wrote when it last ran, read on every
 // poll, so a fleet tick that keeps failing still shows here. A job with no record says so; nothing here is estimated.
 function internalJobs() {
-  pollJson("jobs", "/api/fleet/jobs", 10e3, "automations");
+  pollJson("jobs", "/api/fleet/jobs", 10e3, () => onView("automations", "automations", AUTO_VIEWS));
   const rep = F.jobs;
   if (!rep) return '<div class="card"><div class="empty-chart">Loading orch-dash jobs…</div></div>';
   if (rep.error) return `<div class="card"><div class="empty-chart">${tag("not loaded", "warn", "alert")} Could not read orch-dash's jobs: ${esc(rep.error)}</div></div>`;
@@ -1460,11 +1471,12 @@ function internalJobs() {
 const MON = { running: ["●", "good", "running"], dead: ["▲", "bad", "dead"], seen: ["○", "", "dead, seen"], lost: ["▲", "bad", "unknown"] };
 const monStatus = (m) => (m.status === "dead" && m.seen ? "seen" : m.status);
 const monTroubled = (st) => (st.monitors || []).filter((m) => !["running", "seen"].includes(monStatus(m)));
-function fleetMonitors(st) {
+// The monitors view of Automations; sw is the view switch fleetAutomations draws under the head.
+function fleetMonitors(st, sw = "") {
   const mons = st.monitors || [], src = (st.sources || {}).monitors || {};
   const legend = Object.values(MON).map(([g, tone, l]) => `<span><span class="toned tone-${tone}">${g}</span> ${l}</span>`).join("");
-  const headHtml = `<div class="view-head"><div><h2>Monitors</h2><p>Background commands (run_in_background) and Monitors started by live Claude Code sessions, matching each session transcript's start and end records against the process list. A failed exit is "dead"; no end record and no process is "unknown". Both get a ▲ and drop off after 6 hours or once the same command runs again. A failure the session already received is "dead, seen", listed without a ▲. A normal exit, a deliberate stop (TaskStop included) and a transcript continued in a new session are not shown. Tasks inside subagents, CronCreate and launchd jobs are not collected.</p></div>
-    <div class="legend">${legend}</div></div>`;
+  const headHtml = `<div class="view-head"><div><h2>Automations</h2><p>Background commands (run_in_background) and Monitors started by live Claude Code sessions, matching each session transcript's start and end records against the process list. A failed exit is "dead"; no end record and no process is "unknown". Both get a ▲ and drop off after 6 hours or once the same command runs again. A failure the session already received is "dead, seen", listed without a ▲. A normal exit, a deliberate stop (TaskStop included) and a transcript continued in a new session are not shown. Tasks inside subagents, CronCreate and launchd jobs are not collected.</p></div>
+    <div class="legend">${legend}</div></div>${sw}`;
   const failed = src.ok === false ? `<div class="card"><div class="empty-chart">${tag("collection failed", "warn", "alert")} Could not read the monitor list: ${esc(src.error || "")}. Below is from ${rel(src.updated_at)}.</div></div>`
     : src.warning ? `<div class="card"><div class="empty-chart">${tag("partial", "warn", "alert")} Sessions whose transcript was not found are left out: ${esc(src.warning)}</div></div>` : "";
   const rows = mons.map((m) => {
@@ -1796,8 +1808,8 @@ async function pollStats() {
     F.stats = r.ok ? await r.json() : { error: r.status === 503 ? "The first PR stats collect has not finished (it runs dozens of GitHub searches)." : `HTTP ${r.status}` };
   } catch (e) { F.stats = { error: String(e.message || e) }; }
   F.statsAt = Date.now(); F.statsBusy = false;
-  if (failed(F.stats)) setTimeout(() => { if (S.section === "stats") renderView(); }, 5e3);
-  if (S.section === "stats") renderView();
+  if (failed(F.stats)) setTimeout(() => { if (onView("prs", "stats", PRS_VIEWS)) renderView(); }, 5e3);
+  if (onView("prs", "stats", PRS_VIEWS)) renderView();
 }
 const STAT_STATE = [["merged", "Merged", "var(--accent)"], ["open", "Open", "var(--good)"], ["closed", "Closed", "var(--bad)"]];
 // The newest month runs to hundreds while the first ones hold a handful, so the charts open on a recent window and the
@@ -1841,11 +1853,12 @@ function statBars({ labels, titles, series, lines = [], height = 220, every }) {
 }
 const statLegend = (items) => `<div class="legend">${items.map(([name, color, line]) => `<span><span class="key ${line ? "" : "sq"}" style="background:${color}"></span>${esc(name)}</span>`).join("")}</div>`;
 const statMonth = (s) => (s.endsWith("-01") ? `${s.slice(2, 4)}/1` : String(+s.slice(5)));
-function fleetStats() {
+// The stats view of Pull requests; sw is the view switch fleetPrs draws under the head.
+function fleetStats(sw = "") {
   pollStats();
   const rep = F.stats;
-  const headHtml = `<div class="view-head"><div><h2>PR stats</h2><p>Pull requests I opened, and those the agents in the config opened for me, by when they were created. Searched on GitHub every 6 hours from <span class="mono">${esc(rep && rep.since || "since")}</span>; days and hours are this machine's time zone. A campaign is one title on ${rep && rep.batch_min || 10} or more PRs.</p></div>
-    ${rep && rep.views ? `<div class="aside muted">Collected ${relSpan(rep.generated_at)}</div>` : ""}</div>`;
+  const headHtml = `<div class="view-head"><div><h2>Pull requests</h2><p>Pull requests I opened, and those the agents in the config opened for me, by when they were created. Searched on GitHub every 6 hours from <span class="mono">${esc(rep && rep.since || "since")}</span>; days and hours are this machine's time zone. A campaign is one title on ${rep && rep.batch_min || 10} or more PRs.</p></div>
+    ${rep && rep.views ? `<div class="aside muted">Collected ${relSpan(rep.generated_at)}</div>` : ""}</div>${sw}`;
   if (!rep) return headHtml + '<div class="loading">Loading…</div>';
   if (!rep.views) return headHtml + `<div class="card"><div class="empty-chart">${esc(rep.error || "No report yet.")}</div></div>`;
   const failure = rep.error ? `<div class="card"><div class="sub" style="color:var(--bad)">Last collect failed ${relSpan(rep.failed_at)}: ${esc(rep.error)}. Showing the counts from ${relSpan(rep.generated_at)}; retried hourly.</div></div>` : "";
@@ -1893,7 +1906,7 @@ document.addEventListener("pointermove", (e) => {
   else if (F.statTip) { hideTip(); F.statTip = false; }
 });
 document.addEventListener("pointerout", (e) => { if (!e.relatedTarget && F.statTip) { hideTip(); F.statTip = false; } });
-const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, prs: fleetPrs, brief: fleetBrief, stages: fleetStages, todo: fleetTodo, automations: fleetAutomations, monitors: fleetMonitors, sent: fleetSent, skills: fleetSkills, changes: fleetChanges, tokens: fleetTokens, flow: fleetFlow, stats: fleetStats, sessions: fleetSessions, session: fleetSession, timeline: fleetTimeline };
+const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, prs: fleetPrs, brief: fleetBrief, stages: fleetStages, todo: fleetTodo, automations: fleetAutomations, sent: fleetSent, skills: fleetSkills, tokens: fleetTokens, flow: fleetFlow, session: fleetSession, timeline: fleetTimeline };
 
 document.addEventListener("input", (e) => {
   const key = e.target.id === "chat-input" ? F.sessionId : e.target.dataset.decideInput;

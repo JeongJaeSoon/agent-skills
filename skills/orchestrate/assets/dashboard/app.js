@@ -483,7 +483,7 @@ function redrawCharts() {
   if (!S.state) return;
   if (["overview", "workers", "issues"].includes(S.section)) drawCharts(S.state);
   if (S.section === "tasks") drawDag(S.state);
-  if (isFleet() && S.section === "stats") renderView();
+  if (onView("prs", "stats", PRS_VIEWS)) renderView();
 }
 
 // ------------------------------------------------------------ dependency graph
