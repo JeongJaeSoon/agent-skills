@@ -4,6 +4,7 @@
 Usage:
   python3 scripts/skill_tokens.py static [--json] [--top N] [--listing-budget N] [--base REF | --baseline FILE]
                                          [--exact [--model M]] [--root DIR]
+  python3 scripts/skill_tokens.py budget [--json] [--root DIR]
   python3 scripts/skill_tokens.py calibrate [--model M]
   python3 scripts/skill_tokens.py usage [--days N] [--json] [--no-collect]
 
@@ -16,6 +17,9 @@ static measures the checkout this script lives in (or --root DIR):
   dups      sentences of 60+ characters repeated in two or more files
 --base REF measures where HEAD branched from REF (`git merge-base`, from `git archive`, no checkout) and prints the
 difference; --baseline FILE compares with an earlier --json output.
+budget compares the always-loaded listing with the committed baseline scripts/skill_budget.json (per skill: listing
+tokens and width, and SKILL.md tokens as a record) and names what grew past it, exit 1. --json prints the new baseline;
+a change that grows the listing redirects it into that file in the same diff.
 usage is real use from local transcripts, attributed to automations, roles, subagents and skills
 (skills/orchestrate/scripts/token_usage.py; the dashboard runs the same collect every 15 minutes).
 
@@ -295,6 +299,39 @@ def measure_ref(ref, count=None, repo=REPO):
         return measure(root, count)
 
 
+# ---- budget ----
+
+BUDGET_KEYS = ("always_tokens", "always_width", "skills_width")
+
+
+def budget_file(root=REPO):
+    return pathlib.Path(root) / "scripts" / "skill_budget.json"
+
+
+def budget_snapshot(rep):
+    """The part of measure() the committed baseline keeps."""
+    body = {x["skill"]: x["tokens"] for x in rep["invoke"]}
+    return {"approx": rep["approx"], "totals": {k: rep["totals"][k] for k in BUDGET_KEYS},
+            "skills": {s["name"]: {"tokens": s["tokens"], "width": s["width"], "skill_md_tokens": body.get(s["name"], 0)}
+                       for s in rep["skills"]}}
+
+
+def budget_over(snap, baseline):
+    """What grew past the baseline: an always-loaded total, or one skill's listing line. SKILL.md tokens are
+    recorded, not capped: a merge grows the body of the skill that takes the other in."""
+    if snap["approx"] != baseline.get("approx"):
+        return [f"baseline counts are {baseline.get('approx')}, these are {snap['approx']}: rewrite it with `budget --json`"]
+    out = [f"{k} {fmt(v)} > baseline {fmt(baseline['totals'].get(k, 0))}"
+           for k, v in snap["totals"].items() if v > baseline["totals"].get(k, 0)]
+    for name, s in snap["skills"].items():
+        b = baseline["skills"].get(name)
+        if b is None:
+            out.append(f"{name}: not in the baseline (listing width {s['width']}, {s['tokens']} tokens)")
+        elif s["width"] > b["width"] or s["tokens"] > b["tokens"]:
+            out.append(f"{name}: listing width {b['width']} -> {s['width']}, tokens {b['tokens']} -> {s['tokens']}")
+    return out
+
+
 # ---- output ----
 
 def fmt(n):
@@ -448,6 +485,18 @@ def main(argv):
     if cmd == "calibrate":
         print(json.dumps(calibrate(root, count), indent=2))
         return 0
+    if cmd == "budget":
+        snap, path = budget_snapshot(measure(root)), budget_file(root)
+        if "--json" in args:
+            print(json.dumps(snap, ensure_ascii=False, indent=2, sort_keys=True))
+            return 0
+        try:
+            baseline = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            raise SystemExit(f"cannot read {path}: {e}; `budget --json > {path}` creates it") from None
+        over = budget_over(snap, baseline)
+        print("\n".join(over) if over else f"within {path.name}: {len(snap['skills'])} skills")
+        return 1 if over else 0
     if cmd != "static":
         print(__doc__, file=sys.stderr)
         return 2
