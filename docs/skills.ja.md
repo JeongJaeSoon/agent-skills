@@ -1,4 +1,4 @@
-<!-- translated-from: 5bdefd94e6ac8793bf73f86c59ca9502f21840f2 -->
+<!-- translated-from: 6625936bf92e8cf77b2d51bd773ddb8180043021 -->
 # スキルカタログ
 
 `agent-skills` プラグインに入っているスキル41個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック16個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
@@ -578,6 +578,12 @@ PR を受け持つスキルとマージする主体:
 | `guard.warn.run_download` | warn | `-D`・`--dir` のない `gh run download` |
 | `guard.warn.tailscale` | warn | ワーカーの `tailscale serve`・`funnel` |
 | `guard.deliver_load` | warn | `hooks/lib/skillload.py`。ワーカー(Dispatch、または CLOSE・KEEP のカード)のメイン会話が `deliver-ticket` を読み込む前に、作業ディレクトリ(hook 入力の `cwd`)内のファイルを Edit・Write・MultiEdit・NotebookEdit する。読み込むまで、対象の編集ごとに警告が 1 行付く(状態ファイルは持たない)。`deny` はその編集を止め、`ask` は確認を求める。最初のプロンプトに `LOAD: none` 行がある読み取り専用カード、`.git` 配下と作業ディレクトリ外のパス、サブエージェント、オーケストレーター・リード・人が開いたセッションは対象外。読み込み済みとは、エラーのない `Skill` 結果か `/deliver-ticket` コマンドのこと。結果がまだない、または transcript を時間内に読めないときは不明として通す |
+| `worker.edit_tool` | warn | `hooks/lib/discipline.py`。ワーカー(Dispatch、または CLOSE・KEEP のカード)とそのサブエージェントが Bash でファイルを書く。`>`・`>>`・`&>`・`tee`・`sed -i`、ファイルを書き込みで開く `python -c` と python の heredoc。一時ディレクトリ(`TMPDIR`・`/tmp`・scratchpad)、`/dev/null`、`orch-refusal` は除く。worktree の内外は問わない。正当なログのリダイレクトにも反応するため warn に置く |
+| `worker.chain` | warn | カードの Bash 1 回の呼び出しで、`rm`・`mv`・`git commit`・`git push`・`worker_done` が `&&`・`;`・改行で他のコマンドと繋がっている。パイプラインと `$(…)` の中は 1 つのコマンドと数える |
+| `worker.paths` | warn | カードの Edit・Write が自分の worktree・一時ディレクトリ・`orch-refusal` の外、または `~/.claude/plugins/cache/` の中 |
+| `worker.main_checkout` | warn | カードの Edit・Write の対象が main checkout(`git rev-parse --absolute-git-dir` と `--git-common-dir` が同じ)にある。リポジトリを判定できなければ通す |
+| `worker.memory` | warn | カードが `~/.claude/projects/*/memory/` に書く(Edit 系、Bash のリダイレクト・`tee`・`sed -i` の対象) |
+| `worker.pre_push` | warn | すでに origin にあるブランチの `git rebase`、テストコマンドを一度も実行していないセッションでの最初の `git push`、テストファイルなしでコードだけをステージした `git commit`(テストを実行していない間のみ)。transcript を読めなければ通す |
 | `orchestrate.ask_user_question` | deny | オーケストレーター・リード・ワーカーの本会話の AskUserQuestion。サブエージェントと一般セッションは対象外です |
 | `orchestrate.wait_foreground` | deny | オーケストレーター・リードが `orch wait`、`orch inbox --wait`、`orch watch-cards`、`orca orchestration check\|inbox --wait` を `run_in_background` なしで実行すること、またはバックグラウンドの待機を `\| tail`・`\| head` で切ること。ワーカーの `check --wait` は対象外です |
 | `orchestrate.send_devnull` | deny | オーケストレーター・リード・ワーカーが `orca orchestration send\|reply` の出力を `/dev/null` に捨てること。`2>/dev/null` だけなら対象外です |
@@ -589,6 +595,8 @@ PR を受け持つスキルとマージする主体:
 | `orchestrate.stall_idle_min` | 15 | 正の整数。ワーカーのターンが終わってから STALLED `idle` と表示するまでの分数。短い実測で減らすときに使います |
 
 hook 自身の判定が例外を出したら、その呼び出しは通し、警告とともに `$AGENT_SKILLS_STATE/guard-errors.jsonl` に時刻・hook・例外の種類・発生位置だけを残します（コマンドの原文は残しません）。設定ファイルが読めなければ既定値を使います。
+
+`worker.*` のキーは、反応するたびにチェック名とレベルを `$AGENT_SKILLS_STATE/turn-warnings.jsonl`（ターン終了チェックと同じファイル）に 1 行残します。1 週間そこで誤検知を数えたあと、まず `worker.edit_tool` を `deny` に上げます。判定はテキストと git の状態を読むヒューリスティックで、`bash -c` やスクリプトファイルの中のコマンドは見ません。
 
 拒否された行動を hook が記録して再び止めることはありません。拒否されたセッションが同じ形で一度だけやり直し、迂回しないという規則は、スキルの文（`orchestrate` の "Refused acts"、`tune-automode`）が守ります。以前のバージョンが残した `$AGENT_SKILLS_STATE/refusals.jsonl` はもう読まず、消しもしません。不要なら人が消します。
 
