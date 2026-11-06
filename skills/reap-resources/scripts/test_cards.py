@@ -612,6 +612,16 @@ keep_only = [{**PLAN_ITEM, "verdict": cards.KEEP}]
 assert "아무것도 닫지 않았다" in refuses(keep_only)
 assert refused_apply(keep_only, seal=True) == 0 and acted == []
 
+# Concurrent scans keep every seal (the list is read, changed and written under one lock).
+import threading  # noqa: E402
+texts = [json.dumps({"items": [], "n": n}) for n in range(8)]
+threads = [threading.Thread(target=cards.seal_plan, args=(t,)) for t in texts]
+[t.start() for t in threads]
+[t.join() for t in threads]
+import hashlib  # noqa: E402
+kept = reap.read_obj(reap.STATE / cards.SEALS)
+assert all(hashlib.sha256(t.encode()).hexdigest() in kept for t in texts), len(kept)
+
 cards.cards_listing = saved_listing
 guard.keep, guard.ownership, cards.act, sys.argv = saved_keep, saved_own, saved_act, saved_argv
 

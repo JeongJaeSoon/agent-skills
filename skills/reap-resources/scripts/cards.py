@@ -17,7 +17,7 @@ The janitor's `card` kind (reap.py) is this module.
 Config: ~/.claude/agent-skills.json → "reap": {"idle_minutes": 30, "cards": {"protect_prefixes": ["lead-"],
 "done_patterns": [...], "question_patterns": [...]}}.
 """
-import hashlib, json, os, pathlib, re, shlex, subprocess, sys, time
+import fcntl, hashlib, json, os, pathlib, re, shlex, subprocess, sys, time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import cardguard, reap, rm_refused  # noqa: E402
@@ -511,11 +511,14 @@ def seal_plan(text):
     or edited by hand (or by an agent) after the scan is refused. The file sits beside the other state files; whoever
     can write it can forge a seal, which this does not stop."""
     path = reap.STATE / SEALS
-    seals = reap.read_obj(path) or {}
-    seals[hashlib.sha256(text.encode()).hexdigest()] = time.time()
-    newest = sorted(seals.items(), key=lambda kv: kv[1], reverse=True)[:SEALS_KEPT]
     reap.STATE.mkdir(parents=True, exist_ok=True)
-    reap.write_atomic(path, json.dumps(dict(newest)))
+    # Two scans must not each read the old list and write back only their own seal.
+    with open(path.with_name(SEALS + ".lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        seals = reap.read_obj(path) or {}
+        seals[hashlib.sha256(text.encode()).hexdigest()] = time.time()
+        newest = sorted(seals.items(), key=lambda kv: kv[1], reverse=True)[:SEALS_KEPT]
+        reap.write_atomic(path, json.dumps(dict(newest)))
 
 
 def refuse_plan(text, rows):
