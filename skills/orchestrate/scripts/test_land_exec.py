@@ -37,7 +37,7 @@ if a[:2] == ["orchestration", "send"]:
     st["sent"] = st.get("sent", []) + [a[a.index("--to") + 1]]; json.dump(st, open(path, "w")); sys.exit()
 if a[:2] == ["worktree", "list"]:  # a card holds each PR's branch (b<n>): orch verdict asks its terminals by id
     st = json.load(open(os.environ["FAKE_GH_STATE"]))
-    print(json.dumps({"worktrees": [{"id": "w" + n, "hostId": "local", "branch": f"refs/heads/b{n}"} for n in st["prs"]]})); sys.exit()
+    print(json.dumps({"worktrees": [{"id": "w" + n, "hostId": "local", "branch": f"refs/heads/b{n}", "head": ""} for n in st["prs"]]})); sys.exit()
 if a[:2] == ["terminal", "list"]:  # the card holding the PR's branch: orch verdict records it as the author
     print(json.dumps({"terminals": [{"handle": "term_author"}],
                       "hostScope": {"hostIds": ["local"], "omittedHostIds": []}})); sys.exit()
@@ -324,6 +324,41 @@ class LandExec(Fixture):
             os.environ.pop("ORCA_TERMINAL_HANDLE")
         self.settled(row, "merged", 0)
 
+    def test_a_worktree_row_that_cannot_be_matched_is_not_a_missing_card(self):
+        """An incomplete row ({}, no head, no id) was skipped as "does not match", so a partial answer read as "Orca
+        answered and no card holds the PR" and opened the unverified-author path."""
+        real = prog.orca_json
+        good = {"id": "w1", "hostId": "local", "branch": "refs/heads/b", "head": "abc", "isMainWorktree": False}
+        terminals = {"terminals": [{"handle": "term_b"}], "hostScope": {"hostIds": ["local"], "omittedHostIds": []}}
+
+        def orca(rows):
+            return lambda *a: {"worktrees": rows} if a[:2] == ("worktree", "list") else terminals
+
+        try:
+            for broken in ({}, {"id": "w9"}, {**good, "head": None}, {**good, "branch": None}, {**good, "id": 7},
+                           {**good, "hostId": ""}, "w9", None):
+                with self.subTest(broken=broken):
+                    prog.orca_json = orca([broken])
+                    self.assertIsNone(prog.author_sessions("b"))
+                    self.assertIsNone(prog.worktree_author_sessions("abc"))
+                    # One unreadable row beside a readable match: the match alone is not the whole picture.
+                    prog.orca_json = orca([good, broken])
+                    self.assertIsNone(prog.author_sessions("b"))
+                    self.assertIsNone(prog.worktree_author_sessions("abc"))
+            prog.orca_json = orca([good])
+            self.assertEqual(prog.author_sessions("b"), ["term_b"])
+            self.assertEqual(prog.worktree_author_sessions("abc"), ["term_b"])
+            prog.orca_json = orca([{**good, "branch": "refs/heads/other", "head": "def"}])
+            self.assertEqual(prog.author_sessions("b"), [])
+            self.assertEqual(prog.worktree_author_sessions("abc"), [])
+            # Real Orca lists detached worktrees with an empty branch and unborn ones with an empty head: readable
+            # rows that simply hold nothing, so they must not turn every lookup into "cannot tell".
+            prog.orca_json = orca([good, {**good, "id": "w2", "branch": "", "head": ""}])
+            self.assertEqual(prog.author_sessions("b"), ["term_b"])
+            self.assertEqual(prog.worktree_author_sessions("abc"), ["term_b"])
+        finally:
+            prog.orca_json = real
+
     def test_author_sessions_tells_no_card_from_a_lookup_that_cannot_vouch(self):
         real = prog.orca_json
 
@@ -332,7 +367,7 @@ class LandExec(Fixture):
             covered that host, unless the case sets its own."""
             def orca(*a):
                 if a[:2] == ("worktree", "list"):
-                    return {"worktrees": [{"hostId": "local", **w} for w in worktrees], **listing}
+                    return {"worktrees": [{"hostId": "local", "branch": "", "head": "", **w} for w in worktrees], **listing}
                 answer = terminals[a[-1]]
                 if isinstance(answer, BaseException):
                     raise answer

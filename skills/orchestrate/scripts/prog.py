@@ -2257,6 +2257,12 @@ def worktree_holders(matches):
         rows = worktree_rows()
         if rows is None:
             return None
+        # A row that cannot say which worktree it is, where, or what it holds could be the one that wrote the PR:
+        # skipping it as "no match" would turn a partial answer into "no card". An empty branch or head is a real
+        # state (detached HEAD, no commit yet), so only a missing or non-string field marks a row unreadable.
+        if not all(isinstance(w, dict) and all(isinstance(w.get(k), str) for k in ("id", "hostId", "branch", "head"))
+                   and w["id"] and w["hostId"] for w in rows):
+            return None
         handles = set()
         for w in rows:
             if not matches(w):
