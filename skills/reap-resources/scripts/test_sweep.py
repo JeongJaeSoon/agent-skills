@@ -734,7 +734,7 @@ assert "전 것" in out["refused"] and json.loads((STATE / "sweep-last.json").re
 assert sweep.set_owner("trash:tmpdir", True)[0] == 2  # not a rule of this stage
 code, msg = sweep.set_owner("serve:dark", True)
 own = json.loads((STATE / "sweep-owner.json").read_text())
-assert code == 0 and own == {"generation": 1, "rules": {"serve:dark": "sweep"}, "interval": 900.0}, (msg, own)
+assert code == 0 and own == {"generation": 1, "rules": {"serve:dark": "sweep"}, "interval": 1800.0}, (msg, own)
 assert "첫 정상 회차" not in msg  # sweep-last.json exists already
 assert sweep.set_owner("serve:dark", True) == (0, "serve:dark: 이미 sweep 소유(세대 1), 바꾼 것 없음")
 assert json.loads((STATE / "sweep-owner.json").read_text())["generation"] == 1
@@ -896,7 +896,7 @@ reap_hard.act = saved_act
 (tmp / "config.json").write_text(json.dumps({"reap-hard": {"idle_minutes": 45, "serve_ranges": [[1, 2]],
                                                            "protect_file": str(PROTECT)}}))
 block = sweep.carried_config()["sweep"]
-assert block["idle_minutes"] == 45 and block["serve_ranges"] == [[1, 2]] and block["interval"] == 900, block
+assert block["idle_minutes"] == 45 and block["serve_ranges"] == [[1, 2]] and block["interval"] == 1800, block
 assert block["workspaces"] == "~/orca/workspaces" and block["max_per_round"] == 50 and block["protect_file"] == str(PROTECT)
 other = tmp / "other-protect.txt"
 other.write_text("port 1\n")
@@ -950,7 +950,7 @@ assert not sweep.plist_path().exists() and not orca_log.exists()
 buf = io.StringIO()
 with contextlib.redirect_stdout(buf):
     assert sweep.cmd_install(["--dry-run"]) == 0
-assert "[dry-run]" in buf.getvalue() and "agent-skills sweep" in buf.getvalue() and "*/15 * * * *" in buf.getvalue()
+assert "[dry-run]" in buf.getvalue() and "agent-skills sweep" in buf.getvalue() and "*/30 * * * *" in buf.getvalue()
 assert not sweep.plist_path().exists() and not orca_log.exists() and not stub_log.exists()
 (tmp / "config.json").write_text(json.dumps({"reap-hard": {"protect_file": str(PROTECT), "interval": 600}}))
 buf = io.StringIO()
@@ -997,14 +997,19 @@ def fake_run(cmd, **kw):
 
 
 def run_tick(shadow=lambda *a, **k: steps.append("shadow") or {"round": "r"},
-             real=lambda *a, **k: steps.append("real") or {"round": "r"}, run=fake_run):
+             real=lambda *a, **k: steps.append("real") or {"round": "r"}, run=fake_run, idle=lambda deadline: True):
     steps.clear()
+    saved_patrol = sweep.run_patrol, sweep.wait_patrol_idle
+    # The patrol call goes through `run` here (its real form is tested below on real processes).
+    sweep.run_patrol = lambda timeout: run([sys.executable, str(reap.ORCH), "patrol", "--if-due"], timeout=timeout).returncode
+    sweep.wait_patrol_idle = idle
     subprocess.run, sweep.run_shadow, sweep.run_round = run, shadow, real
     try:
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             return sweep.tick()
     finally:
         subprocess.run, sweep.run_shadow, sweep.run_round = saved
+        sweep.run_patrol, sweep.wait_patrol_idle = saved_patrol
 
 
 # reap-hard goes before the real round, so a rule just handed over is still reap-hard's in that pass
@@ -1023,7 +1028,51 @@ code = run_tick(run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0))
 assert code == 0 and steps == ["shadow", "real"], (code, steps)
 code = run_tick(run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 2 if "reap_hard.py" in cmd[1] else 0))
 assert code == 2 and "real" in steps, (code, steps)
+# a patrol round that the patrol automation is still running (the idle wait runs out) shows in the exit code, and the
+# rest still runs
+code = run_tick(run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0), idle=lambda deadline: False)
+assert code == 1 and steps == ["shadow", "real"], (code, steps)
 signal.alarm(0)
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def gone(pid):
+    for _ in range(50):  # a killed orphan is reaped by its new parent a moment later
+        if not alive(pid):
+            return True
+        time.sleep(0.1)
+    return False
+
+
+# patrol runs in a session of its own, and what it leaves in that group ends with it: after a normal exit, and on a
+# timeout (subprocess.run would stop only the direct child)
+kid = tmp / "kid.pid"
+assert sweep.run_patrol(10, ["sh", "-c", f"sleep 60 & echo $! > {kid}; exit 3"]) == 3
+assert gone(int(kid.read_text())), "a child left in patrol's group outlived it"
+try:
+    sweep.run_patrol(1, ["sh", "-c", f"sleep 60 & echo $! > {kid}; sleep 60"])
+    raise AssertionError("a patrol that outlives its budget must time out")
+except subprocess.TimeoutExpired:
+    pass
+assert gone(int(kid.read_text())), "a timed out patrol's group was not ended"
+
+# the idle wait: a held patrol run lock is waited for, up to the deadline
+reap.STATE.mkdir(parents=True, exist_ok=True)
+sweep.PATROL_IDLE_POLL_S = 0.05
+import fcntl, threading  # noqa: E402
+with open(reap.STATE / "patrol-run.lock", "w") as held:
+    fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    assert sweep.wait_patrol_idle(time.monotonic() + 0.3) is False
+    threading.Timer(0.3, lambda: fcntl.flock(held, fcntl.LOCK_UN)).start()
+    assert sweep.wait_patrol_idle(time.monotonic() + 10) is True
+assert sweep.wait_patrol_idle(time.monotonic() - 1) is True, "no round running: free at once, whatever the deadline"
 
 # two schedulers at once (the old LaunchAgent and the Orca automation during a switch): another process holds the tick
 # lock, so this tick does nothing and exits 0; once it lets go, the next tick runs every step

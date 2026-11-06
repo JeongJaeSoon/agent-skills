@@ -89,7 +89,7 @@ line adds to it and keeps the owner links. `--pid` is recorded, never checked: t
 | Kind | Target when | Kept when | Action |
 |---|---|---|---|
 | card | [references/cards.md](references/cards.md) 삭제 or 터미널만 닫기 | 남김, 사람 결정 (reported, never acted on) | the listed terminals closed one by one; for 삭제, judged again, ignored files to the trash, `orca worktree rm --worktree path:<p> --run-hooks` |
-| orca-worker | a row of `orca orchestration worker-list --terminal-state reclaimable` | - | `orca orchestration worker-release --dispatch <id>` |
+| orca-worker | a row of `orca orchestration worker-list --terminal-state reclaimable`, unless its `resource.autoReleaseAt` is still ahead (Orca releases that one itself) | - | `orca orchestration worker-release --dispatch <id>` |
 | tmpdir | under a temp dir, its link is done, and no process has its cwd or executable under it | outside a temp dir, an open PR, no link, a process in it; a path already gone is not listed | `lsregister -u` each `.app` under it, then the trash |
 | gui-app | the registered pid with the same start time still runs and its link is done | an open PR, no link | `kill -TERM <pid>` |
 | chrome-window | its link is done and its URL is recorded | an open PR, no link, no URL (Chrome reuses ids after a restart, so without the URL the agent cannot tell it is the same tab) | `reap` prints `에이전트가 처리` and retires the id in the ledger, so it is asked once; the agent closes it with its browser tools only when the URL matches, and leaves it otherwise or when it has no browser tools |
@@ -203,9 +203,8 @@ starts an agent that runs `reap --plan`; `orca automations list` shows a prechec
 to date with `skills-sync setup enable janitor`, and again with `enable janitor-load` when that job is registered (one
 `enable` does not touch the other), then read both prechecks back, before an auto-mode rule for `reap --plan` is removed.
 What a person has to look at (cards judged 사람 결정, chrome windows, resting targets) goes to `reap.inbox_to` as one
-message, sent again only when a key not in the last sent set appears. Each round leaves one row in
-`<state>/janitor-runs.jsonl` (targets, acted, skipped, failed, left past the 480-second budget, error; an act still running at 570 seconds is cut and recorded as failed), the only record
-of a cleanup: Orca's run history shows a skip either way. `inbox_to` and `reap.pressure.notify_to` are Orca addresses.
+message, sent again only when a key not in the last sent set appears. A round that ran leaves one summary row in
+`<state>/janitor-runs.jsonl` (targets, acted, skipped, failed, left past the 480-second budget, error; an act still running at 570 seconds is cut and recorded as failed), and a stop signal that lands while that row is written can leave a corrected second row; a round that finds the lock held or the load condition unmet leaves none, and the result of each `act()` call (its return value or exception) also goes to `reap-actions.jsonl`; a target skipped by the budget, a changed identity or the guard has no such line. Orca's run history shows a skip either way. `inbox_to` and `reap.pressure.notify_to` are Orca addresses.
 Use `run:<id>`: a `term_` handle changes when its terminal restarts, and `orch patrol` raises one Orca no longer lists
 (T).
 
@@ -248,7 +247,7 @@ are who removes a finished card (`end-session`, "Who cleans up"). Which device f
 
 The janitor only sees what was registered and waits on its half-hourly round and on the card's own session to close.
 `bin/reap-hard` is the last sweep: fixed rules, no model, every Orca card under
-`~/orca/workspaces` whatever made it, run by a LaunchAgent every 15 minutes.
+`~/orca/workspaces` whatever made it, run by an Orca automation every 30 minutes, and once more when a PR lands.
 
 ```bash
 bin/reap-hard run --dry-run      # decide and log, touch nothing
@@ -320,7 +319,8 @@ taken while the load is at or above the limit is not evidence: measure again onc
 
 `scripts/pressure.py` watches the machine without a model and reaps what is safe before anyone notices.
 A round whose level turns warn or danger also starts `orch patrol --if-due` detached, which ties the top consumers
-to the state of the card behind each (its `L` rule); reap-hard starts it every other pass. Patrol verdicts only keep.
+to the state of the card behind each (its `L` rule); the `patrol` shell job runs it every 30 minutes, and reap-hard's
+pass starts one only when no round ran for 25 minutes (`--fallback`), so with the job off it starts one every pass. Patrol verdicts only keep.
 
 ```bash
 P="${CLAUDE_SKILL_DIR}/scripts/pressure.py"
@@ -404,6 +404,10 @@ a subagent does not count; an Orca that gives no `workingMode` or `mainAgent` is
 `Monitor` on `python3 "$P" turns --wait 15`, which exits 0 once under the cap and 3 after the wait (2 when `--wait` has no minute count: it never skips the wait). A count Orca cannot
 give (no answer, a cut-short list) holds like a full one, in the hook and in `turns`/`turns --wait` alike (`turn_hold`):
 the wait polls until the count is readable and exits 3 with "cannot count" if it never is; only `null` turns the cap off.
+`max_sessions` (`reap.pressure`, unset = off) is a second cap on the same start: Orca's listed agent sessions, working or
+idle, the caller's own left out. Idle sessions hold memory the turn count never sees. It holds, waits and exits 3 the same
+way (`session_hold`, shared by the hook, `turns` and `turns --wait`); a count Orca cannot give holds like a full one.
+The default is no cap because the right number depends on the machine.
 The caller's own turn is left out of the count (its pane key comes from `$ORCA_TERMINAL_HANDLE`), so the wait, which runs
 while the caller's turn is over, and the hook, which runs inside it, give one verdict; a caller that cannot be identified
 is counted like any other turn and the output carries a warning line.

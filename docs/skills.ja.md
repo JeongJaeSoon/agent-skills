@@ -215,7 +215,7 @@ PR を受け持つスキルとマージする主体:
 
 ### tune-automode
 - **いつ:** auto mode の分類器が行動を拒否し、ユーザーがその種の行動を今後許可したいとき。または auto mode がエージェントに許す範囲を変えたいとき。「auto mode 가 막았어」（auto mode に止められた）、「이거 허용되게 규칙 추가해줘」（これを許可するルールを足して）。
-- **内容:** 拒否カテゴリと拒否された行動から、その行動の種類だけを覆う最小の allow・soft_deny・environment ルールを作ります。ルールには行動の種類、安全になる条件、`Not covered:` を入れます。レビューチェックリスト（包括的な許可をしない、ユーザーが名指ししていない本番破壊系の操作を入れない、ユーザー本人のチャットだけを権限とみなす）を通したあと、`scripts/automode_rule.py emit` が diff を表示し、spec を埋め込んだ単体スクリプトをホーム配下に書きます。ユーザーが `! python3 -I <パス> --apply <spec ハッシュ>` で適用します。ハッシュはユーザーが見た diff の spec と一致する必要があります。スクリプトはタイムスタンプ付きバックアップ、冪等なマージ、JSON 検証を行い、戻すコマンドを出力します。エージェントは settings.json を編集せず、そのスクリプトを実行せず、待つあいだ拒否を回避しません。
+- **内容:** 拒否カテゴリと拒否された行動から、その行動の種類だけを覆う最小の allow・soft_deny・environment ルールを作ります。ルールには行動の種類、安全になる条件、`Not covered:` を入れます。レビューチェックリスト（包括的な許可をしない、ユーザーが名指ししていない本番破壊系の操作を入れない、ユーザー本人のチャットだけを権限とみなす）を通したあと、`scripts/automode_rule.py emit` が spec を点検し（`refusal_category` がない、または `no-verdict` の spec と、`Not covered:` のない allow ルールは拒否します。包括的な表現、チケット・PR 番号、トークンのような文字列、既存ルールとほぼ同じルールは警告します）、diff を表示し、spec を埋め込んだ単体スクリプトをホーム配下に書きます。ユーザーが `! python3 -I <パス> --apply <spec ハッシュ>` で適用します。ハッシュはユーザーが見た diff の spec と一致する必要があります。スクリプトはタイムスタンプ付きバックアップ、冪等なマージ、JSON 検証を行い、戻すコマンドを出力します。エージェントは settings.json を編集せず、そのスクリプトを実行せず、待つあいだ拒否を回避しません。
 - **同梱:** `scripts/automode_rule.py`、テスト、`references/example-settings.json`。
 - **関係:** ユーザー設定の `permissions.allow` と `agent-skills.json` のキーは `skills-config`（autoMode ルールを一緒に入れるときはこのスキルのエンジンを共有）、プロジェクト設定と hooks は組み込みの `update-config`、プロジェクト全体の初期案は組み込みの `/auto-mode-setup` が担当します。`orchestrate` の Frame と Refused acts が、リポジトリのマージ・デプロイの継続承認ルール（「프로젝트 지속 승인」）をこのスキルで作ります。
 
@@ -250,8 +250,8 @@ PR を受け持つスキルとマージする主体:
 ### use-tracker
 - **使う場面:** チケットを読む、探す、作る、ラベルやコメントを付ける、状態を変えるとき、そしてスクリプトがチケットのデータを使うとき。
 - **内容:**
-  - トラッカーは、プログラムの設定 → `~/.claude/agent-skills.json` → 既定値の linear の順に決めます。
-  - セッションでは、Linear はまず `orca linear` を使い（既定のテキスト出力。結果をパースするときだけ `--json`）、`orca linear` にない機能（ドキュメント、ファイル・画像のアップロード、diff レビュー、release、milestone・cycle など）だけを Linear MCP で行います。Jira は接続されていれば MCP を使います。スクリプトは常に `tracker.py` を使います。`tracker.py` のコマンドは list、get、children、create、label、comment、attach、transition、reconcile です。reconcile はチケットと、それを届ける PR（チケットに添付された PR、タイトル・ブランチの ID、本文の closing keyword）を読み、どの状態が合うか（`started`、`review`、基準の確認、報告）と実行する milestone の行を出力するだけで、書き込みはしません。transition はまず現在の状態を読み、すでにその段階かそれより先に進んでいるチケットは変えません。`--to review` は設定の `tracker.<adapter>.review_status` があればその名前の状態へ、なければ In Review へ、それもなければ名前に review を含む唯一の started 状態へ移します。
+  - トラッカーは、プログラムの設定 → `~/.claude/agent-skills.json` → Orca の接続からの自動判別の順に決めます。接続が一つならそれ、両方ならいまのブランチと最近のコミットにあるチケットキーの形で選び、接続がなければ linear です。判別結果は設定に書かず、`tracker.py detect` で根拠を見られます。
+  - セッションでのチケットの参照・操作は `orca linear` / `orca jira` で行います（既定のテキスト出力。結果をパースするときだけ `--json`）。Orca にない機能（ドキュメント、アップロード、diff レビュー、release、milestone・cycle など）だけを MCP で行います。Orca がそのまま実行できる MCP 呼び出しは `tracker_gate` フックが拒否し、対応するコマンドを示します。スクリプトは常に `tracker.py` を使います。`tracker.py` のコマンドは list、get、children、create、label、comment、attach、transition、reconcile です。reconcile はチケットと、それを届ける PR（チケットに添付された PR、タイトル・ブランチの ID、本文の closing keyword）を読み、どの状態が合うか（`started`、`review`、基準の確認、報告）と実行する milestone の行を出力するだけで、書き込みはしません。transition はまず現在の状態を読み、すでにその段階かそれより先に進んでいるチケットは変えません。`--to review` は設定の `tracker.<adapter>.review_status` があればその名前の状態へ、なければ In Review へ、それもなければ名前に review を含む唯一の started 状態へ移します。
   - 決まった milestone（状態の遷移、PR リンク、完了コメント）は `tracker.py` の 1 行（`transition`、`attach`、`comment`）でセッションから直接行い、MCP も担当エージェントも通しません。それ以外の書き込みはすべて担当エージェントに任せ、読み取りだけをセッションで行います。担当はユーザーの指示 → 設定の `tracker.delegate_agent` → プラグイン agent `agent-skills:task-tracker` の順に決め、`"none"` ならセッションで直接書きます。`task-tracker` はトラッカーサイト固有の規則（プロジェクト、状態・遷移 id、ラベル、言語）を `tracker.rules_file` が指すユーザーの Markdown から毎回読み、キーがあるのにファイルがない・読めないときは推測せずに止まります。
   - 値を伏せる読み取り経路（`<PERSON>` のようなエンティティのプレースホルダーや `****`）で読んだ値はデータではありません。判断や書き戻しの前に伏せない経路で読み直し、伏せた値をフィールドに書き戻しません。
   - 状態の語彙は triage、backlog、unstarted、started、completed、canceled です。
@@ -463,7 +463,7 @@ PR を受け持つスキルとマージする主体:
   - 主な機能3〜5個の機能マップも一緒に作ります。
   - 自分で最後まで一度回して証明します。
   - `deliver-ticket` と `orchestrate` は、範囲内で再利用する検証が役立つ場合に呼び出せます。同じ受け入れ基準を実証する直接チェックも有効です。upstream はユーザー呼び出し専用で、この fork はモデルからも呼び出せます。
-- **同梱:** `references/feature-map-example/`（サンプルアプリの機能マップ）。
+- **同梱:** `references/feature-map-example/`（サンプルアプリの機能マップ）、`scripts/verify_skill_lint.py`（生成したスキルをファイルだけ読んで点検する。frontmatter とセクション、状態ファイル名、共有の `latest` リンク、cleanup の必須引数、パターン kill、helper の実行権限と記載、機能マップの索引。`maintain-verification-skill` も同じスクリプトを使う）。
 
 ### maintain-verification-skill
 - **内容:**
@@ -491,7 +491,7 @@ PR を受け持つスキルとマージする主体:
 | `land-check` | マージせずに、準備の状態だけを診断します |
 | `landed` | 外で行ったマージを記録します |
 | `backfill` | 登録前にマージされた PR と、その main CI を台帳に入れます |
-| `heavy` | 重いコマンド（compose、イメージのビルド）を、マシン全体で2スロットに制限して実行します |
+| `heavy` | 重いコマンド（compose、イメージのビルド）を、マシン全体のスロットに制限して実行します。スロット数は `landing.heavy_slots`、`agent-skills.json` の `orchestrate.heavy_slots`、CPU数の4分の1（最小2）の順で決まります |
 | `wait` | リード専用。処理すべきメッセージが来るまで待ち、`CLOSE OUT` 行を出します |
 | `decide` | オーケストレーターかリードがユーザーの決定を待っている事項を登録（`add`）・一覧（`list`）・クローズ（`done`、`drop`）します。ダッシュボードの Needs you に選択肢ボタン付きで表示され、ボタンは答えを記録して決定をクローズしてから、`decision <id>: <答え>` の 1 行をオーケストレーターかリードのターミナルに送ります（忙しいときは手が空いてから送ります） |
 
@@ -585,6 +585,7 @@ PR を受け持つスキルとマージする主体:
 | `orchestrate.wait_foreground` | deny | オーケストレーター・リードが `orch wait`、`orch inbox --wait`、`orch watch-cards`、`orca orchestration check\|inbox --wait` を `run_in_background` なしで実行すること、またはバックグラウンドの待機を `\| tail`・`\| head` で切ること。ワーカーの `check --wait` は対象外です |
 | `orchestrate.send_devnull` | deny | オーケストレーター・リード・ワーカーが `orca orchestration send\|reply` の出力を `/dev/null` に捨てること。`2>/dev/null` だけなら対象外です |
 | `orchestrate.model_flag` | warn | `orchestrate.models` を設定しているのに、`orca orchestration worker-start`・`orca worktree create`・`orca agent launch` が `--model` なしで Claude を起動した。`--terminal` は対象外 |
+| `orchestrate.pr_poll` | warn | Monitor のコマンドが `gh pr list\|view\|checks` を 300 秒未満の sleep で回している。警告は `skills/orchestrate/scripts/pr_watch.py` を指す。deny には上がらない |
 | `orchestrate.self_land` | warn | `hooks/self_land_gate.py`。最初のプロンプトに `PROGRAM` と `orch land` を書いた `APPROVED` があるカードが、自分の PR を開いたまま `worker_done` や `orca worktree rm` を呼ぶこと。`READY-WAIT:` の行、`--outcome failed`、human-gate のプログラムは通します。`deny` にすると止めます |
 | `orchestrate.stack_dependent` | warn | 依存する PR がスタックになっていないこと。`hooks/stack_gate.py` が `gh pr create` でブリーフの `Lands after` とブランチの履歴を見て、`orch land`・`land-check` が land-after の依存と実際のスタックを比べます。`deny` にすると両方が止めます。読めないときは警告 1 行で通します |
 | `orchestrate.auto_wake_min` | なし(オフ)。setup の推奨バンドル: 10 | 正の整数 N。`orch wait` が idle と最初に表示したワーカーを N 分後に 1 回起こします(`skills/orchestrate/references/waking.md` の "Automatic wake")。キーがなければ表示だけで、オフだという警告を 1 行出します。同じ dispatch は 2 回起こさず、2 回目の停止は Needs you に上げます |

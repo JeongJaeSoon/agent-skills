@@ -397,7 +397,17 @@ again = prog.settle_sweep(settled, wts, holds=held.get, asked=asked, now="T1")
 assert "TAKEN OVER t1 (succeeded): self-check asked at T0; wait for its answer" in again and not any("term_t1" in l for l in again), again
 assert prog.close_out([{"type": "worker_done", "payload": {"dispatchId": "t1"}}], settled, wts) == []
 assert prog.settle_sweep([], wts) == []
-rev = ([{"ev": "ready", "pr": n, "ticket": f"R-{n}"} for n in (11, 12, 13, 14, 15, 16)]
+# Orca releases a reclaimable worker by itself at resource.autoReleaseAt: only a row whose release is still ahead
+# leaves the guidance. No field, an unreadable one, a time already past, release_unknown and a taken-over row stay.
+NOW = 1_800_000_000.0
+auto = lambda d, at, state="reclaimable": {"dispatchId": d, "terminalState": state, "workerState": "succeeded",
+                                           "resource": {"worktreeId": "w1", "autoReleaseAt": at}}
+rows = [auto("a1", (NOW + 120) * 1000), auto("a2", "2027-01-15T08:02:00Z"), auto("a3", (NOW - 60) * 1000),
+        auto("a4", None), auto("a5", "soon"), auto("a6", (NOW + 120) * 1000, "release_unknown")]
+lines = prog.settle_sweep(rows, wts, holds=lambda p: None, asked={}, now="T0", clock=lambda: NOW)
+assert [l.split()[1] for l in lines if l.startswith("SETTLED")] == ["a3", "a4", "a5", "a6"], lines
+assert not any("--dispatch a1" in l or "--dispatch a2" in l for l in lines), lines
+rev =([{"ev": "ready", "pr": n, "ticket": f"R-{n}"} for n in (11, 12, 13, 14, 15, 16)]
        + [{"ev": "verdict", "pr": n, "result": "pass"} for n in (11, 12, 13, 14, 15, 16)] + [{"ev": "landed", "pr": 15}])
 green = [{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}]
 ok = {"state": "OPEN", "reviewDecision": "APPROVED", "mergeStateStatus": "CLEAN", "isDraft": False, "labels": [], "statusCheckRollup": green,
@@ -1361,10 +1371,15 @@ for bad in ("self-review", "claude-code-review", "verifier:", "verifier:self", "
         raise AssertionError(f"verdict accepted --source {bad}")
     except SystemExit as e:
         assert "--source is" in str(e), e
+real_authors = prog.author_sessions
+prog.author_sessions = lambda branch: ["term_author"]  # a stored pass needs an identified author and another recorder
+os.environ["ORCA_TERMINAL_HANDLE"] = "term_orchestrator"
 for good in ("independent-review", "subagent-review", "review:person", "verifier:claude-opus", "verifier:local", "live:checkout"):
     with contextlib.redirect_stdout(io.StringIO()):
-        prog.cmd_verdict(["gt", "--pr", "1", "--sha", "h1", "--source", good])
+        prog.cmd_verdict(["gt", "--pr", "1", "--sha", "h1", "--source", good, "--reviewer", "person", "--evidence", "e"])
     assert prog.Program("gt").events()[-1]["source"] == good
+prog.author_sessions = real_authors
+os.environ.pop("ORCA_TERMINAL_HANDLE")
 # Historical sources remain opaque input: reading a ledger must not migrate or reject them.
 p = prog.Program("gt")
 p.append("verdict", pr=1, sha="h1", patch_id="p1", source="retired-provider-review", result="pass")

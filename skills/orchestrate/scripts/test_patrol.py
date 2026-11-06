@@ -1,6 +1,6 @@
 """patrol.py rules, its log and delivery, and the watcher-down signals in card_watch and fleet.
 Run: python3 test_patrol.py"""
-import datetime as dt, json, os, pathlib, signal, sys, tempfile, time
+import contextlib, datetime as dt, io, json, os, pathlib, signal, sys, tempfile, time
 
 tmp = pathlib.Path(tempfile.mkdtemp())
 os.environ["AGENT_SKILLS_STATE"] = str(tmp)
@@ -49,6 +49,12 @@ assert codes(found) == [("I", "a")], found
 assert v["cards"] == {"/w/a": "idle", "/w/b": "working", "/w/c": "working", "/w/d": "waiting", "/w/e": "run"}, v["cards"]
 assert v["hints"] == {"/w/a": "idle"} and v["failed"] == [], v
 assert patrol.judge(f, {})[0][0]["id"] == found[0]["id"], "the same idle spell is the same finding"
+# Whether the I may wait its hour (pending_lines): only a card whose session was read and has no PR is held.
+assert found[0]["pr_open"] is True, "no session read for the card: unknown"
+read = {**f, "sessions": [{"path": "/w/a"}]}
+assert patrol.judge(read, {})[0][0]["pr_open"] is False
+pr = {**f, "sessions": [{"path": "/w/a", "linked_pr": {"key": "acme/app#1"}}], "prs": {"acme/app#1": {"state": "OPEN"}}}
+assert patrol.judge(pr, {})[0][0]["pr_open"] is True
 bar = ["⏺ Waiting on the inbox.", "❯ ", "  ⏵⏵ auto mode on · 1 shell · ← 1 agent"]
 f2 = {**f, "screens": {}, "read": lambda h: bar}
 assert patrol.judge(f2, {})[0] == [], "a background shell still running is not idle, though the transcript lost it"
@@ -310,7 +316,7 @@ assert own["/w/a"] == ("c", "hl") and own["/w/b"] == ("d", None)
 
 # Log: new findings once, cleared when gone, acked by id; Needs you follows X/E/L/O only.
 x = {"id": "Xabc", "code": "X", "card": "a", "path": "/w/a", "handle": "h1", "session": "s1", "owner": "hl", "title": "t"}
-i = {"id": "Iabc", "code": "I", "card": "b", "path": "/w/b", "handle": "h2", "session": "s2", "owner": None, "title": "t"}
+i = {"id": "Iabc", "code": "I", "card": "b", "path": "/w/b", "handle": "h2", "session": "s2", "owner": None, "title": "t", "pr_open": False}
 verd = {"cards": {"/w/a": "exited"}, "doing_noref": [], "load": []}
 new, gone = patrol.write_round([x, i], verd, False, NOW)
 assert [f["id"] for f in new] == ["Xabc", "Iabc"] and gone == []
@@ -318,10 +324,38 @@ assert [k["key"] for k in fleet.external_items()] == [f"ext:patrol:Xabc:{fleet.i
 new, gone = patrol.write_round([x, i], verd, False, NOW + 60)
 assert new == [] and gone == [], "a finding still there is not new again"
 assert patrol.pending_lines("hl", False, T)[0].startswith("PATROL X Xabc a → hl"), "routed to its owner"
-assert patrol.pending_lines("hl", False, T) == [], "not again within 30 minutes"
-assert patrol.pending_lines("hl", False, T + dt.timedelta(minutes=31))[0].startswith("PATROL X Xabc")
-assert [l.split()[2] for l in patrol.pending_lines("ho", True, T)[:-1]] == ["Iabc"], "the unowned go to the orchestrator"
+assert patrol.pending_lines("hl", False, T) == [], "not again soon after"
+assert patrol.pending_lines("hl", False, T + dt.timedelta(hours=3, minutes=59)) == [], "each line ends a wait: hours apart"
+assert patrol.pending_lines("hl", False, T + dt.timedelta(hours=4))[0].startswith("PATROL X Xabc")
+# An I alone wakes nobody until it has stayed open an hour; the unowned go to the orchestrator.
+assert patrol.pending_lines("ho", True, T + dt.timedelta(minutes=59)) == [], "a fresh I alone is held"
+assert [l.split()[2] for l in patrol.pending_lines("ho", True, T + dt.timedelta(minutes=60))[:-1]] == ["Iabc"]
 assert patrol.pending_lines("hz", False, T) == []
+# An I on a card with an open PR is shown at once: the janitor closes that card's idle terminals (cards rule 8) before
+# the hour is up, and the finding would clear unseen.
+ip = {**i, "id": "Ipr", "card": "p", "path": "/w/p", "owner": "hp", "pr_open": True}
+patrol.write_round([x, i, ip], verd, False, NOW + 70)
+assert [l.split()[2] for l in patrol.pending_lines("hp", False, T + dt.timedelta(minutes=2))[:-1]] == ["Ipr"]
+sess = [{"path": "/w/p", "linked_pr": {"key": "acme/app#1"}}, {"path": "/w/q", "linked_pr": {"key": "acme/app#2"}}]
+prs = {"acme/app#1": {"state": "OPEN"}, "acme/app#2": {"state": "MERGED"}}
+assert patrol.pr_open({"sessions": sess, "prs": prs}, "/w/p") and not patrol.pr_open({"sessions": sess, "prs": prs}, "/w/q")
+assert patrol.pr_open({"sessions": sess, "prs": {}}, "/w/p"), "a PR whose state was not read counts as open"
+assert not patrol.pr_open({"sessions": sess + [{"path": "/w/none"}], "prs": prs}, "/w/none"), "a read session, no PR"
+assert patrol.pr_open({"sessions": sess, "prs": prs}, "/w/none"), "no session read for the card: unknown, not held"
+assert patrol.pr_open({"prs": prs}, "/w/p"), "the collector gave no sessions at all"
+by_branch = [{"id": "wt-a", "path": "/w/a"}, {"id": "wt-b", "path": "/w/b"}]
+assert patrol.pr_open({"sessions": by_branch, "prs": {"k1": {"session": "wt-a", "state": "OPEN"}}}, "/w/a"), "PR found by branch"
+assert not patrol.pr_open({"sessions": by_branch, "prs": {"k1": {"session": "wt-a", "state": "OPEN"}}}, "/w/b"), "another card's PR"
+assert not patrol.pr_open({"sessions": by_branch, "prs": {"k1": {"session": "wt-a", "state": "MERGED"}}}, "/w/a"), "merged by branch"
+assert patrol.pr_open({"sessions": by_branch, "prs": {"k1": {"session": "wt-a"}}}, "/w/a"), "state not read: unknown, not held"
+# A PR linked after the I was held: the logged finding follows (op "pr"), and the line goes out without the hour.
+late = {**i, "id": "Ilate", "card": "l", "path": "/w/l", "owner": "hq", "pr_open": False}
+patrol.write_round([x, i, ip, late], verd, False, NOW + 72)
+assert patrol.pending_lines("hq", False, T + dt.timedelta(minutes=3)) == [], "held while the card has no PR"
+patrol.write_round([x, i, ip, {**late, "pr_open": True}], verd, False, NOW + 74)
+assert patrol.standing()["Ilate"]["pr_open"] is True
+assert [l.split()[2] for l in patrol.pending_lines("hq", False, T + dt.timedelta(minutes=3))[:-1]] == ["Ilate"]
+new, gone = patrol.write_round([x, i], verd, False, NOW + 80)
 new, gone = patrol.write_round([x], verd, False, NOW + 90, failed={"workers"})
 assert gone == [], "a finding whose source failed this round is kept, not cleared"
 new, gone = patrol.write_round([{**x, "owner": None}, i], verd, False, NOW + 100)
@@ -553,6 +587,16 @@ assert reap.patrol_working() == {reap.real("/w/a"), reap.real("/w/c")}
 patrol.VERDICTS.write_text(json.dumps({"t": time.time() - 7200, "cards": {"/w/a": "working"}}))
 assert reap.patrol_working() == set()
 assert reap.spawn_patrol("test") is False, "AGENT_SKILLS_PATROL=off starts nothing"
+# The fallback patrol runs under the shared runner, in a session of its own, so what a cut round leaves ends with it.
+spawned, real_popen, os.environ["AGENT_SKILLS_PATROL"] = [], reap.subprocess.Popen, "on"
+reap.subprocess.Popen = lambda argv, **kw: spawned.append((argv, kw))
+try:
+    assert reap.spawn_patrol("test", fallback=True)
+finally:
+    reap.subprocess.Popen, os.environ["AGENT_SKILLS_PATROL"] = real_popen, "off"
+argv, kw = spawned[0]
+assert argv[2:6] == [str(reap.JOB_RUNNER), "run", "patrol-spawn", "--timeout"] and kw["start_new_session"], spawned
+assert argv[-3:] == ["patrol", "--if-due", "--fallback"], argv
 
 # tidy shows patrol's D as ❔ and never closes on it.
 d = {"id": "b1", "title": "follow up with infra", "owner": "someone", "next": "ask"}
@@ -703,6 +747,35 @@ r = {**found[0], "owner": "hr"}
 patrol.write_round([r], {"cards": {}}, False, NOW + 200)
 assert patrol.pending_lines("hr", False, T)[0].startswith("PATROL R"), "shown to its owner"
 assert patrol.pending_lines("hr", False, T + dt.timedelta(hours=3)) == [], "R is shown once, not every 30 minutes"
+
+# M (a model drift) is shown once per drift; a different model is a new finding, and so is the first drift again once the
+# finding in between closed.
+def drift(have):
+    return {"id": patrol.fid("M", "s9", "sonnet", have), "code": "M", "card": "c", "title": "x", "owner": "hm"}
+patrol.write_round([drift("opus")], {"cards": {}}, False, NOW + 300)
+assert patrol.pending_lines("hm", False, T)[0].startswith("PATROL M"), "the drift is shown to its owner"
+assert patrol.pending_lines("hm", False, T + dt.timedelta(hours=3)) == [], "and not again every 30 minutes"
+patrol.write_round([drift("haiku")], {"cards": {}}, False, NOW + 400)
+assert patrol.pending_lines("hm", False, T + dt.timedelta(hours=4))[0].startswith("PATROL M"), "another model is news"
+patrol.write_round([drift("opus")], {"cards": {}}, False, NOW + 500)
+assert patrol.pending_lines("hm", False, T + dt.timedelta(hours=5))[0].startswith("PATROL M"), "so is the first one again"
+# Polling one terminal with and without the unowned scope does not make an open finding new.
+patrol.write_round([{**drift("opus"), "owner": None}], {"cards": {}}, False, NOW + 550)
+assert patrol.pending_lines("hu", True, T + dt.timedelta(hours=5, minutes=1))[0].startswith("PATROL M")
+assert patrol.pending_lines("hu", False, T + dt.timedelta(hours=5, minutes=2)) == []
+assert patrol.pending_lines("hu", True, T + dt.timedelta(hours=5, minutes=3)) == [], "still the same open drift"
+# A closed drift is forgotten for every terminal, including one nobody polled while it was closed.
+patrol.write_round([{**drift("opus"), "owner": None}], {"cards": {}}, False, NOW + 560)
+assert patrol.pending_lines("ha", True, T + dt.timedelta(hours=5, minutes=4))[0].startswith("PATROL M")
+patrol.write_round([], {"cards": {}}, False, NOW + 570)
+assert patrol.pending_lines("hb", False, T + dt.timedelta(hours=5, minutes=5)) == []
+patrol.write_round([{**drift("opus"), "owner": None}], {"cards": {}}, False, NOW + 580)
+assert patrol.pending_lines("ha", True, T + dt.timedelta(hours=5, minutes=6))[0].startswith("PATROL M"), "new for ha"
+# The same drift back after it closed (opus, back on sonnet, opus), with nothing due in between.
+patrol.write_round([], {"cards": {}}, False, NOW + 600)
+assert patrol.pending_lines("hm", False, T + dt.timedelta(hours=6)) == [], "a closed drift shows nothing"
+patrol.write_round([drift("opus")], {"cards": {}}, False, NOW + 700)
+assert patrol.pending_lines("hm", False, T + dt.timedelta(hours=7))[0].startswith("PATROL M"), "and is new when it returns"
 
 # H: an ended turn whose screen shows a hook error in its last turn or Claude Code's restart notice. Run workers too;
 # a screen without that wording, a turn still running, a prompt waiting on a human or an unread screen is not judged.
@@ -884,5 +957,67 @@ two = patrol.round_once(now=NOW + 7100, gather_fn=lambda now, dl, memo: (fresh(f
 assert fid_t in patrol.standing() and fid_t not in two["cleared"]
 three = patrol.round_once(now=NOW + 7200, gather_fn=lambda now, dl, memo: (fresh(), []))
 assert fid_t in three["cleared"] and fid_t not in patrol.standing()
+
+# --fallback (reap-hard's beat) is due on the 25-minute mark, below reap-hard's 30-minute period: with the patrol job
+# off, a round runs at every reap-hard pass, not every second one. Two rounds never come closer than the mark, because
+# each starts only when the last is due. A rise in pressure still starts one at once.
+assert patrol.due({"t": NOW - 26 * 60}, "ok", NOW) and not patrol.due({"t": NOW - 24 * 60}, "ok", NOW, patrol.FALLBACK_DUE_S)
+assert patrol.due({"t": NOW - 26 * 60}, "ok", NOW, patrol.FALLBACK_DUE_S)
+assert patrol.due({"t": NOW - 60, "level": "ok"}, "warn", NOW, patrol.FALLBACK_DUE_S)
+assert patrol.FALLBACK_DUE_S < 1800, "reap-hard's default period"
+last, rounds_at = NOW - 3600, []
+for k in range(1, 7):  # six passes, 30 minutes apart, no patrol job and no pressure change
+    t = NOW + k * 1800
+    if patrol.due({"t": last, "level": "ok"}, "ok", t, patrol.FALLBACK_DUE_S):
+        last = t
+        rounds_at.append(k)
+assert rounds_at == [1, 2, 3, 4, 5, 6], rounds_at
+# With the job on at :00 and :30 and reap-hard's pass at :27, whoever comes first runs the round: two rounds within
+# one job beat never happen.
+t0, runs = NOW, []
+last = t0
+for minute in range(1, 181):
+    now = t0 + minute * 60
+    who = "job" if minute % 30 == 0 else "hard" if minute % 30 == 27 else None
+    if who and patrol.due({"t": last, "level": "ok"}, "ok", now, patrol.DUE_S if who == "job" else patrol.FALLBACK_DUE_S):
+        last = now
+        runs.append(minute)
+assert all(b - a >= 25 for a, b in zip(runs, runs[1:])), runs
+# One round at a time across the round and its cleanup scans: a second one meanwhile does nothing.
+with patrol.run_lock() as first:
+    assert first
+    with patrol.run_lock() as second:
+        assert not second
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        patrol.patrol_round(["--once", "--dry-run"])
+    assert "another round is running" in out.getvalue(), out.getvalue()
+
+# A round cut by its budget, or whose candidate scans were cut, exits 1: the Orca job record must not read it as clean.
+saved_round_once, saved_phase = patrol.round_once, patrol.candidates_phase
+try:
+    def cut_round(*a, **k):
+        raise patrol.Budget()
+    patrol.round_once = cut_round
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            patrol.patrol_round(["--once", "--dry-run"])
+        raise AssertionError("a cut round exits non-zero")
+    except SystemExit as e:
+        assert e.code == 1, e.code
+    patrol.round_once = lambda *a, **k: {"verdicts": {}, "notes": []}
+    patrol.candidates_phase = lambda res, dry=False, collect=None: {"sources": {"candidates": "timeout"}}
+    patrol.report = lambda res: ["report"]
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            patrol.patrol_round(["--once", "--dry-run"])
+        raise AssertionError("cut candidate scans exit non-zero")
+    except SystemExit as e:
+        assert e.code == 1, e.code
+    patrol.candidates_phase = lambda res, dry=False, collect=None: {"sources": {"candidates": "ok"}}
+    with contextlib.redirect_stdout(io.StringIO()):
+        patrol.patrol_round(["--once", "--dry-run"])  # a clean round returns
+finally:
+    patrol.round_once, patrol.candidates_phase = saved_round_once, saved_phase
 
 print("test_patrol: ok")

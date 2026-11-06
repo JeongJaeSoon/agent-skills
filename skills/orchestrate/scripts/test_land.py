@@ -63,7 +63,7 @@ elif a[:1] == ["api"] and "/compare/" in a[1]:
     if left == "mb":
         print(json.dumps({"files": [{"filename": f} for f in st.get("base_changed", [])]}))
     else:
-        p = pr(right[1:])
+        p = next((q for q in st["prs"].values() if q.get("headRefOid") == right), None) or pr(right[1:])
         print(json.dumps({"behind_by": p.get("behind", 0), "merge_base_commit": {"sha": "mb"},
                           "files": [{"filename": f} for f in p["files"]]}))
 elif a[:2] == ["run", "list"] and "--branch" in a:
@@ -933,6 +933,46 @@ code, out = prog(env, "heavy", "t", "--wait-minutes", "0", "--", "true")
 assert code == 0 and not (d / "programs" / "_heavy" / "slot-0").exists(), out
 code, out = prog(env, "heavy", "-", "--", "true")
 assert code == 0, out
+# A run that holds a slot past a lowered limit keeps it; the new run takes a slot within the limit.
+(d / "programs" / "_heavy" / "slot-1").write_text(json.dumps({"pid": os.getpid()}))
+code, out = prog(env, "heavy", "t", "--wait-minutes", "0", "--", "true")
+assert code == 0 and (d / "programs" / "_heavy" / "slot-1").exists(), out
+(d / "programs" / "_heavy" / "slot-1").write_text(json.dumps({"pid": os.getpid()}))
+(d / "programs" / "_heavy" / "slot-0").write_text(json.dumps({"pid": os.getpid()}))
+code, out = prog(env, "heavy", "t", "--wait-minutes", "0", "--", "true")
+assert code == 1 and "every slot busy" in out, out  # the out-of-range holder is no free slot
+for n in ("slot-0", "slot-1"):
+    (d / "programs" / "_heavy" / n).unlink()
+
+# heavy_slots: program.json, then agent-skills.json `orchestrate.heavy_slots`, then a quarter of the CPUs (at least 2).
+user_cfg = d / "user-skills.json"
+outer_cfg = os.environ.get("AGENT_SKILLS_CONFIG")
+os.environ["AGENT_SKILLS_CONFIG"] = str(user_cfg)
+real_cpus = os.cpu_count
+try:
+    os.cpu_count = lambda: 18
+    assert prog_module.heavy_slots({}) == 4  # no user file at all
+    user_cfg.write_text(json.dumps({"orchestrate": {"heavy_slots": 6}}))
+    assert prog_module.heavy_slots({}) == 6
+    assert prog_module.heavy_slots({"landing": {"heavy_slots": 1}}) == 1  # the program wins over the user file
+    for bad in (0, -1, True, "3", 2.5, None):  # unusable values fall through to the next layer
+        user_cfg.write_text(json.dumps({"orchestrate": {"heavy_slots": bad}}))
+        assert prog_module.heavy_slots({}) == 4, bad
+        assert prog_module.heavy_slots({"landing": {"heavy_slots": bad}}) == 4, bad
+    user_cfg.write_text(json.dumps({"orchestrate": {"heavy_slots": 6}}))
+    for bad in (0, "3", None):  # a bad program value still falls through to a valid user value
+        assert prog_module.heavy_slots({"landing": {"heavy_slots": bad}}) == 6, bad
+    assert prog_module.heavy_slots({"landing": "invalid"}) == 6
+    user_cfg.write_text("not json")
+    assert prog_module.heavy_slots({}) == 4
+    for cpus, want in ((None, 2), (2, 2), (8, 2), (12, 3), (18, 4), (64, 16)):
+        os.cpu_count = lambda cpus=cpus: cpus
+        assert prog_module.heavy_slots({}) == want, (cpus, want)
+finally:
+    os.cpu_count = real_cpus
+    os.environ.pop("AGENT_SKILLS_CONFIG")
+    if outer_cfg is not None:
+        os.environ["AGENT_SKILLS_CONFIG"] = outer_cfg
 
 # heavy registers the compose projects its command left, with a config file in this worktree, in the reap ledger.
 wt = d / "card"

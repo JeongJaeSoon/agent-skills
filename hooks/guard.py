@@ -31,8 +31,9 @@ Allow, so workers never stall on a prompt hours after they loaded a skill:
 - this plugin's skills
 - `orca orchestration <verb>`, except reset, worker-abandon and gate-resolve
 - `orch <subcommand>` (the program ledger and the landing gate), except heavy, which runs any command,
-  set and init, which can change a program's merge policy, backfill, which rewrites the ledger, and land-exec,
-  the land executor, whose round merges and belongs to its LaunchAgent
+  set and init, which can change a program's merge policy, backfill, which rewrites the ledger, verdict, whose row
+  the land executor merges on (the classifier judges it), and land-exec, the land executor, whose round merges and
+  belongs to its LaunchAgent
 
 - `skills-sync status`, `skills-sync broadcast` (only its reload flags) and `skills-sync end-check` without `--apply`
   or `--trash-caches`. `card` is denied or left to the classifier by its brief check; sync, setup, nudge and the rest
@@ -93,7 +94,7 @@ SLEEP_MARK = "[gate:sleep-loop]"
 SLEEP_SOURCE = "(agent-skills hooks/guard.py)"
 SLEEP_LOOP = re.compile(r"(?:^|[;&|(\s])(?:until|while|for)\b[\s\S]*?\bdo\b[\s\S]*?\bsleep\s+(\$|\d+)")
 ORCA_ASK = {"reset", "worker-abandon", "gate-resolve"}
-ORCH_ASK = {"heavy", "set", "init", "backfill", "land-exec"}
+ORCH_ASK = {"heavy", "set", "init", "backfill", "land-exec", "verdict"}
 BROADCAST_FLAGS = {"--plugins", "--skills", "--dry-run", "--retry"}
 SETUP_ASK = (f"{PLUGIN} setup: install the 15-minute sync job, turn on the default-on automations (janitor, pressure-watch, "
              "and watch-prs/watch-mentions when their keys are set) and print the check table. It writes no Claude settings.")
@@ -268,6 +269,8 @@ def bash(cmd, background, who, cwd=None):
         return decide("allow", f"{PLUGIN}: orca orchestration {words[2]}")
     if words[0] == "orch" and len(words) > 1 and words[1] not in ORCH_ASK and words[1][:1].isalpha():
         return decide("allow", f"{PLUGIN}: orch {words[1]} (the program ledger and landing gate)")
+    if words[:2] == ["orch", "verdict"] and verdict_allowed(words[2:]):
+        return decide("allow", f"{PLUGIN}: orch verdict (names a reviewer and evidence; prog.py checks independence)")
     if words[0] == "skills-sync":
         reason = sync_allowed(words[1:])
         if reason:
@@ -276,6 +279,28 @@ def bash(cmd, background, who, cwd=None):
     if reason:
         return decide("ask", reason)
     return None, None
+
+
+VERDICT_FLAGS = {"--pr", "--sha", "--source", "--reviewer", "--evidence", "--result", "--note"}
+
+
+def verdict_allowed(args):
+    """`orch verdict` is the review gate's record, so only the attributable form skips the classifier: one program,
+    each flag once with a value, and --reviewer, --evidence and --result pass|fail all present. Who wrote the PR and
+    whether the reviewer is independent are checked by prog.py, not here; a bare or partial call still goes to the
+    classifier, as does --repo (it creates a program)."""
+    if not args or args[0].startswith("-") or not args[0].strip():
+        return False
+    flags = {}
+    rest = args[1:]
+    if len(rest) % 2:
+        return False
+    for name, value in zip(rest[::2], rest[1::2]):
+        if name not in VERDICT_FLAGS or name in flags or value.startswith("--") or not value.strip():
+            return False
+        flags[name] = value
+    return (flags.get("--result") in ("pass", "fail") and "--reviewer" in flags and "--evidence" in flags
+            and flags.get("--pr", "").isdigit() and "--sha" in flags and "--source" in flags)
 
 
 def sync_allowed(args):
@@ -330,6 +355,8 @@ def rules(tool, args, event, who):
             raise TypeError(f"{tool} command is not a string")
         found = (danger.check_bash(cmd, cfg, event.get("cwd"), who())
                  + coordination.check_bash(cmd, background(tool, args), who(), cfg))
+        if tool == "Monitor":
+            found += [f._replace(level="warn") for f in coordination.check_monitor(cmd, cfg)]
         try:  # its own fault never drops the findings above
             found += discipline.check_bash(cmd, event, who(), cfg)
         except Exception as e:

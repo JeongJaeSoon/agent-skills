@@ -817,10 +817,18 @@ def _land_row(r):
     return None if r is None else {**dict(r), "audit": json.loads(r["audit"]) if r["audit"] else None}
 
 
-def land_put(program, home, repo, pr, sha, base_sha, klass, requester, by=None):
+def land_put(program, home, repo, pr, sha, base_sha, klass, requester, by=None, only_new=False):
     """(row, outcome): outcome is "same" when an open request names this sha, "busy" when the executor is running an
-    open request for another sha (nothing changes), else "new", after superseding a queued one for another sha."""
+    open request for another sha (nothing changes), else "new", after superseding a queued one for another sha.
+    only_new: the auto-queue's rule, checked in the same transaction as the insert: when a request of any status
+    already names this sha, nothing changes and the outcome is "seen" (a concurrent `orch land` may have moved the
+    queue from this sha to another and back since the caller looked)."""
     with _land_tx() as db:
+        if only_new:
+            seen = db.execute("SELECT * FROM land_request WHERE home=? AND repo=? AND program=? AND pr=? AND sha=? "
+                              "ORDER BY id DESC LIMIT 1", (home, repo, program, pr, sha)).fetchone()
+            if seen:
+                return _land_row(seen), "seen"
         old = db.execute("SELECT * FROM land_request WHERE home=? AND repo=? AND program=? AND pr=? "
                          "AND status IN ('queued','running')", (home, repo, program, pr)).fetchone()
         if old and old["sha"] == sha:
@@ -842,6 +850,14 @@ def land_put(program, home, repo, pr, sha, base_sha, klass, requester, by=None):
         row = db.execute("SELECT * FROM land_request WHERE id=?", (cur.lastrowid,)).fetchone()
         _event(db, "land_request", str(row["id"]), "queued", by, None, dict(row))
         return _land_row(row), "new"
+
+
+def land_seen(program, home, repo, pr, sha):
+    """Has a request of any status ever named this program's PR at this head? A refused or merged one counts: the
+    auto-queue asks once per head."""
+    with _land_tx() as db:
+        return db.execute("SELECT 1 FROM land_request WHERE home=? AND repo=? AND program=? AND pr=? AND sha=? LIMIT 1",
+                          (home, repo, program, pr, sha)).fetchone() is not None
 
 
 def land_get(rid):
