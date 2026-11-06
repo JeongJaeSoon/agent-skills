@@ -162,6 +162,15 @@ program("newprog", repo="acme/new", prs=(3,))
 text = reason(run("gh pr merge 3 --repo acme/new", gh=NEW))
 assert "belongs to program newprog" in text and "`orch land newprog --pr 3" in text and "skills-config" not in text, text
 shutil.rmtree(PROGRAMS / "newprog")
+# ... but a program whose recorded name is listed while GitHub's current name is not: orch land refuses it, so the
+# denial gives the spec that lists the new name, never "merges directly".
+config(repos=["acme/old-name"])
+program("moved", repo="acme/old-name", prs=(7,))
+text = reason(run("gh pr merge 7 --repo acme/app", api='{"full_name": "acme/app"}'))
+assert "refuses it until the new name is in scope" in text and "merges it directly" not in text, text
+assert '{"agent_skills": {"set": {"orchestrate.land_executor.repos": ["acme/old-name", "acme/app"]}}}' in text, text
+assert "`orch land moved --pr 7" in text, text
+shutil.rmtree(PROGRAMS / "moved")
 
 # Excluded on purpose, another owner, the executor off or absent: pass.
 config(repos=["acme/*"], exclude=["acme/legacy"])

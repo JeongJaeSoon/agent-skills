@@ -213,7 +213,7 @@ def holders(repo, pr, asked, cwd):
         except (OSError, ValueError, AttributeError):
             continue
         if same_repo(str(cfg.get("repo", "")), repo, asked, cwd):
-            out.append((f.parent.name, cfg.get("merge_policy")))
+            out.append((f.parent.name, cfg.get("merge_policy"), str(cfg.get("repo", ""))))
     return out
 
 
@@ -226,20 +226,21 @@ def brief_program(first, repo, asked, cwd):
         cfg = json.loads((programs_home() / m[1] / "program.json").read_text())
     except (OSError, ValueError):
         return None
-    return m[1] if same_repo(str(cfg.get("repo", "")), repo, asked, cwd) else None
+    recorded = str(cfg.get("repo", ""))
+    return (m[1], recorded) if same_repo(recorded, repo, asked, cwd) else None
 
 
 def route(repo, pr, first, asked=None, cwd=None):
     """(slug, needs --repo, merge_policy) of the program `orch land` should use for this PR."""
     held = holders(repo, pr, asked, cwd) if pr else []
     if len(held) > 1:
-        raise Refuse(f"{repo}#{pr} is in more than one program ({', '.join(s for s, _ in held)}): land it from the one"
+        raise Refuse(f"{repo}#{pr} is in more than one program ({', '.join(h[0] for h in held)}): land it from the one"
                      " that owns it with `orch land <slug> --pr N`")
     if held:
-        return held[0][0], False, held[0][1]
-    if slug := brief_program(first, repo, asked, cwd):
-        return slug, False, None
-    return f"{repo.split('/')[-1]}-standalone", True, None
+        return held[0][0], False, held[0][1], held[0][2]
+    if found := brief_program(first, repo, asked, cwd):
+        return found[0], False, None, found[1]
+    return f"{repo.split('/')[-1]}-standalone", True, None, None
 
 
 def land_lines(repo, pr, head, slug, with_repo, policy, sources):
@@ -286,19 +287,28 @@ def check(event, cmd):
         if asked and land_scope.excluded(scope, asked):  # an exclusion under the old name still holds
             continue
         if land_scope.how(scope, repo):
-            slug, with_repo, policy = route(repo, pr, first, asked, cwd)
+            slug, with_repo, policy, _ = route(repo, pr, first, asked, cwd)
             return (f"{MARK} {SOURCE} {repo} is in orchestrate.land_executor's scope: its PRs merge through the land "
                     f"executor, not `gh pr merge`. {land_lines(repo, pr, head, slug, with_repo, policy, sources)} "
                     "Do not hand a `gh pr merge` line to the owner. A fork or an archived repo that only OWNER/* "
                     "covers is refused by the executor: list it by name.")
         if land_scope.excluded(scope, repo) or repo.split("/")[0].casefold() not in land_scope.owners(scope):
             continue
-        slug, with_repo, policy = route(repo, pr, first, asked, cwd)
-        if not with_repo:  # a program's PR: `orch land` merges it directly while the executor leaves the repo out
+        slug, with_repo, policy, recorded = route(repo, pr, first, asked, cwd)
+        moved = bool(recorded) and recorded.casefold() != repo.casefold() and bool(land_scope.how(scope, recorded))
+        if not with_repo and not moved:  # a program's PR: `orch land` merges it directly while the repo is out
             return (f"{MARK} {SOURCE} {repo} is outside orchestrate.land_executor's scope, and {repo}#{pr or '<N>'} "
                     f"belongs to program {slug}: `orch land` merges it directly. "
                     f"{land_lines(repo, pr, head, slug, False, policy, sources)}")
         one, owner = scope_spec(cfg, repo)
+        if moved:  # prog.executor_for refuses it: covered under the recorded name only
+            return (f"{MARK} {SOURCE} program {slug} records {recorded}, which GitHub calls {repo} now, and the scope "
+                    f"covers only the old name, so `orch land` refuses it until the new name is in scope. Put it in "
+                    f"with skills-config: write the spec {one} to a file, run `python3 {EMIT} emit --spec <that file> "
+                    "--out <script file>`, and give the owner the run line it prints (or the owner adds "
+                    f"{repo} to orchestrate.land_executor.exclude to merge it directly). Then: "
+                    f"{land_lines(repo, pr, head, slug, False, policy, sources)} Never hand a `gh pr merge` line to "
+                    "the owner.")
         return (f"{MARK} {SOURCE} {repo} is outside orchestrate.land_executor's scope, so this merge has no reviewed "
                 f"route. Put it in scope with skills-config: write the spec {one} to a file (or {owner} for every repo "
                 f"of {repo.split('/')[0]}, including ones made later), run `python3 {EMIT} emit --spec <that file> "
