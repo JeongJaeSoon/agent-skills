@@ -23,7 +23,7 @@ Commands (prog.py `orch db`):
   migrate [--check]                            the whole cutover in one rerunnable command (cutover.py); owner only
   init                                         a new PC: an empty DB with both steps done, only when no state exists
 """
-import contextlib, copy, datetime as dt, fcntl, functools, hashlib, json, os, pathlib, plistlib, re, shutil, sqlite3, subprocess, sys, tempfile
+import contextlib, copy, datetime as dt, fcntl, functools, hashlib, json, os, pathlib, plistlib, re, shutil, sqlite3, subprocess, sys, tempfile, time
 
 import fleet
 
@@ -367,6 +367,36 @@ def session_event(key, ev, data, by=None):
     the newest row of a kind is the one in force."""
     with tx() as db:
         _event(db, "session", key, ev, by=by, after=data)
+
+
+def save_auto_handoff(key, meta, handle, session, within_s, fields, default_next, at=None):
+    """The clear band's save, decided and written in one transaction so two terminals cannot both pass the check.
+    The newest handoff row of `key` that is auto (a manual save between does not hide it): from another handle within
+    within_s -> ("conflict", that handle), nothing written; from this session within within_s -> ("skipped", None);
+    else the judgment fields of the newest handoff row, manual or auto, are copied into a new auto row with `meta`
+    -> ("saved", None). `at` is the clock, epoch seconds."""
+    at = time.time() if at is None else at
+    with tx() as db:
+        last = db.execute("SELECT ts, after FROM event WHERE entity='session' AND id=? AND ev='handoff' "
+                          "AND json_extract(after, '$.auto') = 1 ORDER BY seq DESC LIMIT 1", (key,)).fetchone()
+        if last:
+            prev = json.loads(last["after"] or "null")
+            prev = prev if isinstance(prev, dict) else {}
+            try:
+                age = at - dt.datetime.fromisoformat(last["ts"].replace("Z", "+00:00")).timestamp()
+            except (AttributeError, ValueError):
+                age = None
+            if age is not None and age < within_s:
+                if prev.get("handle") and handle and prev["handle"] != handle:
+                    return "conflict", prev["handle"]
+                if prev.get("session") == session:
+                    return "skipped", None
+        newest = last_session_event(key, "handoff", db)
+        base = newest[1] if newest and isinstance(newest[1], dict) else {}
+        carried = {f: base.get(f) for f in fields if base.get(f)}
+        carried.setdefault("next", default_next)
+        _event(db, "session", key, "handoff", by="orch handoff ready", after={**carried, **meta})
+    return "saved", None
 
 
 def last_session_event(key, ev, db=None):

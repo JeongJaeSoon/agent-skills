@@ -125,8 +125,12 @@ def ts_age(ts, now):
 class Stream:
     def __init__(self, me, key="orchestrator", debounce=DEBOUNCE_S, ttl_ms=TTL_MS, cards=True, threshold=None, out=None,
                  clock=time.monotonic, now=time.time, session=session_of, ctx=context, spawn=None, clear=type_clear,
-                 store=None):
+                 store=None, role_key=None):
         self.me, self.key, self.debounce, self.ttl, self.cards = me, key, debounce, ttl_ms / 1000, cards
+        if role_key is None:
+            import handoff
+            role_key = handoff.role_key
+        self.role_key = role_key
         if threshold is None:
             import handoff
             threshold = restart_at() if handoff.auto_clear_on() else 0
@@ -227,7 +231,10 @@ class Stream:
         or alone once the inbox was quiet QUIET_S."""
         if not self.threshold or not (force or self.clock() - self.last_mail >= QUIET_S):
             return []
-        ctx = self.ctx(self.session) if self.session else None
+        # The live session's role, since a /clear can start another one: only the orchestrator is asked to restart.
+        if not self.session or self.role_key(self.session) != "orchestrator":
+            return []
+        ctx = self.ctx(self.session)
         if not ctx or ctx <= self.threshold or ctx < self.announced.get(self.session, 0) + RESTART_STEP:
             return []
         self.announced[self.session] = ctx
