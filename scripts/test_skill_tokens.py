@@ -149,11 +149,14 @@ with contextlib.redirect_stdout(out):
     assert st.main(["static", "--root", str(root), "--baseline", str(tmp / "base.json")]) == 0
 assert "no change" in out.getvalue(), out.getvalue()
 
-# Budget: --write keeps the listing per skill; a grown listing line, a new skill and a grown total are named, a grown
+# Budget: --json is the baseline, per skill; a grown listing line, a new skill and a grown total are named, a grown
 # SKILL.md body alone is not, and counts of another approximation ask for a rewrite.
 out = io.StringIO()
 with contextlib.redirect_stdout(out):
-    assert st.main(["budget", "--root", str(root), "--write"]) == 0
+    assert st.main(["budget", "--root", str(root), "--json"]) == 0
+write(root, "scripts/skill_budget.json", out.getvalue())
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
     assert st.main(["budget", "--root", str(root)]) == 0
 saved_budget = json.loads(st.budget_file(root).read_text())
 assert set(saved_budget["skills"]) == {"alpha", "beta", "other"} and "within skill_budget.json" in out.getvalue()
@@ -167,7 +170,7 @@ out = io.StringIO()
 with contextlib.redirect_stdout(out):
     assert st.main(["budget", "--root", str(root)]) == 1
 assert "other: listing width" in out.getvalue(), out.getvalue()
-assert "rerun `budget --write`" in st.budget_over(st.budget_snapshot(st.measure(root)), {**saved_budget, "approx": "x"})[0]
+assert "rewrite it with `budget --json`" in st.budget_over(st.budget_snapshot(st.measure(root)), {**saved_budget, "approx": "x"})[0]
 shutil.rmtree(root / "skills/gamma")
 write(root, "skills/other/SKILL.md", "---\nname: other\ndescription: Other\n---\nb\n")
 shutil.rmtree(root / "skills/beta")  # a skill merged away, and the rest back to their size: nothing to report
@@ -177,7 +180,7 @@ try:
     st.main(["budget", "--root", str(root)])
     raise AssertionError("budget ran without a baseline")
 except SystemExit as e:
-    assert "`budget --write` creates it" in str(e), e
+    assert "skill_budget.json` creates it" in str(e), e
 
 # --exact needs a key and never falls back to the approximation.
 saved = os.environ.pop("ANTHROPIC_API_KEY", None)
@@ -220,7 +223,7 @@ for p in sorted(st.REPO.glob("skills/*/SKILL.md")) + sorted(st.REPO.glob("agents
         wide.append((fm.get("name"), w))
 assert not wide, f"descriptions wider than {DESC_WIDTH_CAP}: {wide}"
 # Under the cap, no listing line and no always-loaded total grows past scripts/skill_budget.json unless the same diff
-# rewrites it (`skill_tokens.py budget --write`). A warning until BUDGET_FAIL is turned on.
+# rewrites it (`skill_tokens.py budget --json > scripts/skill_budget.json`). A warning until BUDGET_FAIL is turned on.
 BUDGET_FAIL = False
 over = st.budget_over(st.budget_snapshot(here), json.loads(st.budget_file().read_text()))
 if over:

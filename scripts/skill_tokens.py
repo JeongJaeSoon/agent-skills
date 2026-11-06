@@ -4,7 +4,7 @@
 Usage:
   python3 scripts/skill_tokens.py static [--json] [--top N] [--listing-budget N] [--base REF | --baseline FILE]
                                          [--exact [--model M]] [--root DIR]
-  python3 scripts/skill_tokens.py budget [--write] [--root DIR]
+  python3 scripts/skill_tokens.py budget [--json] [--root DIR]
   python3 scripts/skill_tokens.py calibrate [--model M]
   python3 scripts/skill_tokens.py usage [--days N] [--json] [--no-collect]
 
@@ -18,8 +18,8 @@ static measures the checkout this script lives in (or --root DIR):
 --base REF measures where HEAD branched from REF (`git merge-base`, from `git archive`, no checkout) and prints the
 difference; --baseline FILE compares with an earlier --json output.
 budget compares the always-loaded listing with the committed baseline scripts/skill_budget.json (per skill: listing
-tokens and width, and SKILL.md tokens as a record) and names what grew past it, exit 1; --write rewrites the baseline,
-which a change that grows the listing does in the same diff.
+tokens and width, and SKILL.md tokens as a record) and names what grew past it, exit 1. --json prints the new baseline;
+a change that grows the listing redirects it into that file in the same diff.
 usage is real use from local transcripts, attributed to automations, roles, subagents and skills
 (skills/orchestrate/scripts/token_usage.py; the dashboard runs the same collect every 15 minutes).
 
@@ -319,7 +319,7 @@ def budget_over(snap, baseline):
     """What grew past the baseline: an always-loaded total, or one skill's listing line. SKILL.md tokens are
     recorded, not capped: a merge grows the body of the skill that takes the other in."""
     if snap["approx"] != baseline.get("approx"):
-        return [f"baseline counts are {baseline.get('approx')}, these are {snap['approx']}: rerun `budget --write`"]
+        return [f"baseline counts are {baseline.get('approx')}, these are {snap['approx']}: rewrite it with `budget --json`"]
     out = [f"{k} {fmt(v)} > baseline {fmt(baseline['totals'].get(k, 0))}"
            for k, v in snap["totals"].items() if v > baseline["totals"].get(k, 0)]
     for name, s in snap["skills"].items():
@@ -486,15 +486,13 @@ def main(argv):
         return 0
     if cmd == "budget":
         snap, path = budget_snapshot(measure(root)), budget_file(root)
-        if "--write" in args:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(snap, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-            print(f"wrote {path}: {len(snap['skills'])} skills, always {fmt(snap['totals']['always_tokens'])} tokens")
+        if "--json" in args:
+            print(json.dumps(snap, ensure_ascii=False, indent=2, sort_keys=True))
             return 0
         try:
             baseline = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as e:
-            raise SystemExit(f"cannot read {path}: {e}; `budget --write` creates it") from None
+            raise SystemExit(f"cannot read {path}: {e}; `budget --json > {path}` creates it") from None
         over = budget_over(snap, baseline)
         print("\n".join(over) if over else f"within {path.name}: {len(snap['skills'])} skills")
         return 1 if over else 0
