@@ -51,33 +51,72 @@ fleet.append_line(fleet.state_dir() / "events.jsonl", events[-1])  # and it fits
 reg = (("tidy", "Self-clean (tidy)", None, "after each fleet collect", "fleet-tick"),
        ("skill-usage", "Skill usage collect", "15m", "every 15m", None))
 snap = jobs.snapshot(reg)
-by = {j["key"]: j for j in snap["jobs"]}
+rows = {r["key"]: r for r in snap["automations"]}
+by = {j["key"]: j for j in rows["orch-dash"]["jobs"]}
 assert by["tidy"]["record"] == jobs.records()["tidy"] and by["tidy"]["runs_in"] == "orch-dash" and by["tidy"]["group"] == "fleet-tick"
 assert by["skill-usage"]["record"] is None and by["skill-usage"]["cadence"] == "every 15m" and by["skill-usage"]["every"] == "15m"
 assert [jobs.short(s) for s in (10, 90, 300, 900, 6 * 3600)] == ["10s", "90s", "5m", "15m", "6h"]
 
-# skills-sync: the demo's sync.json (ok, 900 s) maps to its record; a stopped sync is an error.
-sync = by["skills-sync"]
-assert sync["runs_in"] == "launchd" and sync["cadence"] == "every 15m" and sync["record"]["ok"] and sync["record"]["result"] == "up to date"
-at = fleet.parse(sync["record"]["at"])
-assert fleet.parse(sync["record"]["next_at"]) - at == dt.timedelta(seconds=900)
+# One list. The names are the registry's (scripts/automations.py AUTOMATIONS), each once and in its order, and no other:
+# not the ones Orca lists beyond them, and not a second row for a job that has its own file (sync, reap-hard).
+import automations  # noqa: E402
+want = [a.name for a in automations.AUTOMATIONS]
+assert [r["key"] for r in snap["automations"]] == want and len(set(want)) == len(want), [r["key"] for r in snap["automations"]]
+assert {"janitor", "sync", "reap-hard", "orch-dash", "watch-prs", "preview-watch", "share-server"} <= set(want)
+orca = [{"id": "o1", "name": "agent-skills sync", "enabled": True, "rrule": "*/15 * * * *"},
+        {"id": "o2", "name": "someone's own automation", "enabled": True},
+        {"id": "o3", "name": "sync", "enabled": True}]  # not the registered name: agent-skills sync
+got = jobs.snapshot(reg, orca)
+rows = {r["key"]: r for r in got["automations"]}
+assert [r["key"] for r in got["automations"]] == want and "someone's own" not in json.dumps(got["automations"])
+assert rows["sync"]["registered"] is True and rows["sync"]["orca"]["id"] == "o1", rows["sync"]
+assert rows["janitor"]["registered"] is False and rows["janitor"]["orca"] is None, "the registry lists it, Orca does not"
+assert rows["share-server"]["registered"] is None and rows["share-server"]["job_name"] is None, "a LaunchAgent has no Orca row"
+assert all(r["registered"] is None for r in jobs.snapshot(reg, None)["automations"]), "an Orca list not read says nothing is unregistered"
+# orch-dash's own jobs open under the automation that runs them, the patrol round under reap-hard; nowhere else.
+assert {k for k, r in rows.items() if r["jobs"]} == {"reap-hard", "orch-dash"}
+assert [j["key"] for j in rows["reap-hard"]["jobs"]] == ["patrol"] and [j["key"] for j in rows["orch-dash"]["jobs"]] == [k for k, *_ in reg]
+# Without scripts/automations.py beside this install there is no list to show, and the page is told why.
+real_registry = jobs.registry
+jobs.registry = lambda: (_ for _ in ()).throw(ImportError("No module named 'automations'"))
+gone = jobs.snapshot(reg, orca)
+jobs.registry = real_registry
+assert gone["automations"] is None and "automations.py" in gone["error"] and gone["rules"], gone
+
+# patrol: a reap-hard pass starts it, and its verdicts file keeps when the last round ran and whether it was cut short.
+def patrol_row():
+    return {j["key"]: j for j in jobs.snapshot(reg)["automations"] if j["key"] == "reap-hard"}["reap-hard"]["jobs"][0]
+assert patrol_row()["record"] is None and "No round" in patrol_row()["why"]
+(root / "patrol-verdicts.json").write_text(json.dumps({"t": 1793948481, "alerts": [1], "reports": [], "sources": {"round": "ok"}}))
+rec = patrol_row()["record"]
+assert rec["ok"] and rec["result"] == "1 alerts · 0 reports" and rec["at"] == "2026-11-06T07:01:21Z", rec
+(root / "patrol-verdicts.json").write_text(json.dumps({"t": 1793948481, "sources": {"round": "timeout"}}))
+assert not patrol_row()["record"]["ok"] and "cut short" in patrol_row()["record"]["error"]
+(root / "patrol-verdicts.json").unlink()
+
+# sync: Orca's runs are the record; its own file (the demo's sync.json: ok, 900 s) stands in only when Orca has none.
+sync = rows["sync"]["record"]
+assert sync["ok"] and sync["result"] == "up to date" and jobs.sync_job()["cadence"] == "every 15m"
+at = fleet.parse(sync["at"])
+assert fleet.parse(sync["next_at"]) - at == dt.timedelta(seconds=900)
 (root / "sync.json").write_text(json.dumps({"at": "2026-10-27T18:00:00+0900", "ok": False, "interval": 600, "message": "rebase conflict"}))
-sync = {j["key"]: j for j in jobs.snapshot(reg)["jobs"]}["skills-sync"]
-assert sync["record"]["at"] == "2026-10-27T09:00:00Z" and sync["record"]["error"] == "rebase conflict" and not sync["record"]["ok"]
-assert sync["cadence"] == "every 10m" and sync["record"]["next_at"] == "2026-10-27T09:10:00Z"
+sync = {j["key"]: j for j in jobs.snapshot(reg)["automations"]}["sync"]["record"]
+assert sync["at"] == "2026-10-27T09:00:00Z" and sync["error"] == "rebase conflict" and not sync["ok"]
+assert jobs.sync_job()["cadence"] == "every 10m" and sync["next_at"] == "2026-10-27T09:10:00Z"
 (root / "sync.json").unlink()
-assert {j["key"]: j for j in jobs.snapshot(reg)["jobs"]}["skills-sync"]["record"] is None
+assert {j["key"]: j for j in jobs.snapshot(reg)["automations"]}["sync"]["record"] is None
 
 # reap-hard: its last pass as reap_hard wrote it; none written, no record.
 sys.path.insert(0, str(HERE.parents[1] / "scripts"))
 import reap_hard  # noqa: E402
 assert reap_hard.LAST.parent == root
 reap_hard.LAST.unlink()  # the demo's pass
-reap = {j["key"]: j for j in jobs.snapshot(reg)["jobs"]}["reap-hard"]
-assert reap["record"] is None and reap["cadence"] == f"every {reap_hard.config()['interval'] // 60}m" and "launchd agent" in reap["why"]
+reap = jobs.reap_hard_job()
+assert reap["record"] is None and reap["cadence"] == f"every {reap_hard.config()['interval'] // 60}m" and "not set up" in reap["why"]
+assert {j["key"]: j for j in jobs.snapshot(reg)["automations"]}["reap-hard"]["record"] is None
 t = time.time()
 reap_hard.write_last({"t": t, "at": "x", "acted": 3, "skipped": 0, "failed": 1, "kept": 4, "notes": ["/private/path"], "dark": []})
-reap = {j["key"]: j for j in jobs.snapshot(reg)["jobs"]}["reap-hard"]["record"]
+reap = {j["key"]: j for j in jobs.snapshot(reg)["automations"]}["reap-hard"]["record"]
 assert reap["n"] == 3 and reap["result"] == "closed 3 · kept 4" and reap["error"] == "1 failed" and not reap["ok"]
 assert "/private/path" not in json.dumps(reap)  # its notes name local paths; the page never gets them
 
@@ -96,10 +135,10 @@ assert "/api/fleet/jobs" in (HERE.parent / "assets" / "dashboard" / "fleet.js").
 # A reap-hard whose config cannot be read is an error on its own row; the rest of the page still loads.
 real_config = reap_hard.config
 reap_hard.config = lambda: (_ for _ in ()).throw(ValueError("bad interval"))
-by = {j["key"]: j for j in jobs.snapshot(reg)["jobs"]}
+rows = {j["key"]: j for j in jobs.snapshot(reg)["automations"]}
 reap_hard.config = real_config
-assert by["reap-hard"]["record"] is None and "bad interval" in by["reap-hard"]["error"], by["reap-hard"]
-assert by["tidy"]["record"] == jobs.records()["tidy"] and "error" not in by["tidy"] and "error" not in by["skills-sync"]
+assert not rows["reap-hard"]["record"]["ok"] and "bad interval" in rows["reap-hard"]["record"]["error"], rows["reap-hard"]
+assert rows["sync"]["record"] is None and rows["orch-dash"]["jobs"][0]["record"] == jobs.records()["tidy"]
 
 # A long error in any script stays under append_line's 4 KiB (it counts bytes, not characters); the record keeps it whole.
 wide = "가" * 3000

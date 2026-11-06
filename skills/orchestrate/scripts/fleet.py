@@ -303,10 +303,16 @@ def recent_runs(automation_id):
 def fetch_automations():
     """Orca's scheduled automations, each with its last runs newest first. Only Orca's scheduler is visible here: a
     session's own loop (CronCreate) or a launchd job leaves nothing to collect."""
+    import jobs  # here: jobs imports this module
+    try:
+        keys = {r["job_name"]: r["key"] for r in jobs.registry() if r["job_name"]}
+    except ImportError:  # an install without the repository's scripts/: no automation is the registry's
+        keys = {}
     out = []
     for a in orca("automations", "list").get("automations", []):
         runs = sorted(recent_runs(a["id"]), key=lambda r: r.get("runNumber") or 0, reverse=True)[:AUTOMATION_RECENT]
-        out.append({"id": a["id"], "name": mask(a.get("name"), 80), "rrule": a.get("rrule"), "timezone": a.get("timezone"),
+        # key: the registry name (scripts/automations.py), None for an Orca automation the registry does not list
+        out.append({"id": a["id"], "key": keys.get(a.get("name")), "name": mask(a.get("name"), 80), "rrule": a.get("rrule"), "timezone": a.get("timezone"),
                     "enabled": bool(a.get("enabled")), "next_run_at": ms_iso(a.get("nextRunAt")),
                     "last_run_at": ms_iso(a.get("lastRunAt")),
                     # The output can name people and channels: masked, first line only, never cut short.
