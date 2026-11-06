@@ -23,9 +23,10 @@ Usage: orch <command> <slug> [options]
   verdict <slug> --pr N --sha REVIEWED_HEAD --source WHO [--reviewer NAME] [--evidence LINK_OR_SHA]
                  [--result pass|fail] [--note TEXT]
                                      the row keeps the PR's author sessions, the reviewer, the evidence and the
-                                     recorder; the land executor merges only on a row that names all four, and a
-                                     pass naming the author as reviewer is refused. An orchestrator records a review
-                                     someone else ran with --reviewer <who ran it>.
+                                     recorder. A pass is stored only when all four are named and neither the
+                                     reviewer, the --source reviewer nor the recorder is the author; otherwise it
+                                     is refused and nothing is written. An orchestrator records a review someone
+                                     else ran with --reviewer <who ran it>.
   gate <slug> --pr N [--parent TASK_ID]
                                      human-gate: open an Orca decision gate "land PR N?" on a
                                      lead-owned landing Task; the user resolves it in Orca
@@ -1916,17 +1917,13 @@ def cmd_verdict(argv):
     authors = author_sessions(view.get("headRefName"))
     fields = dict(author=authors, reviewer=reviewer or None, evidence=evidence or None, recorder=recorder, by=recorder)
     result = opt(argv, "--result", "pass")
-    # A fail blocks a landing and needs no independence. A pass naming the author as its reviewer is refused here;
-    # a pass lacking evidence or an identified author is written (the direct `orch land` path never read them) and
-    # the land executor refuses it.
-    if result == "pass" and self_review(fields):
-        sys.exit(f"verdict refused: {self_review(fields)}")
-    bad = verdict_identity_problem(fields)
+    # A fail blocks a landing and needs no independence. A pass that cannot stand as an independent review is not
+    # stored at all: a stored pass would let the direct `orch land` path, which reads no identity, merge on it.
+    if result == "pass" and (bad := verdict_identity_problem({**fields, "source": src})):
+        sys.exit(f"verdict refused, nothing recorded: {bad}")
     row = p.append("verdict", pr=pr, sha=head, patch_id=patch_id(p.cfg["repo"], pr),
                    source=src, result=result, note=opt(argv, "--note"), **fields)
     print(json.dumps(row, ensure_ascii=False))
-    if bad:
-        print(f"warning: the land executor will not merge on this verdict: {bad}", file=sys.stderr)
 
 
 SELF_REVIEWERS = {"self", "implementer", "author"}
@@ -1973,11 +1970,18 @@ def verdict_identity_problem(v):
 
 
 def self_review(v):
-    """The reason the reviewer is the PR's own author, else None."""
-    authors, reviewer = v.get("author") or [], v.get("reviewer")
-    reviewer = reviewer.strip() if isinstance(reviewer, str) else ""
-    if reviewer and (reviewer.casefold() in SELF_REVIEWERS or reviewer in authors):
-        return f"reviewer '{reviewer}' is the PR's author session"
+    """The reason the review is the PR's own author's, else None. Every identity the row states counts: --reviewer, the
+    reviewer inside a review:/verifier: source (so `--source review:author --reviewer codex` does not pass), and the
+    recorder, since an author who records its own pass wrote the verdict it will be merged on."""
+    authors = v.get("author") or []
+    kind, _, what = str(v.get("source") or "").partition(":")
+    named = [("reviewer", v.get("reviewer")), ("source reviewer", what if kind in ("review", "verifier") else None)]
+    for role, name in named:
+        name = name.strip() if isinstance(name, str) else ""
+        if name and (name.casefold() in SELF_REVIEWERS or name in authors):
+            return f"{role} '{name}' is the PR's author session"
+    if isinstance(v.get("recorder"), str) and v["recorder"] in authors:
+        return f"recorder '{v['recorder']}' is the PR's author session: another session records the review"
     return None
 
 
@@ -2629,6 +2633,8 @@ def cmd_land_check(argv):
             problems.append(f"no-CI lane: verdict is for {verdict['sha'][:8]}, not the head {v['headRefOid'][:8]}: re-review")
         elif v["headRefOid"] != verdict.get("sha"):
             print(f"note: head moved {verdict['sha'][:8]} -> {v['headRefOid'][:8]} with the same patch-id; verdict holds, CI must pass at the new head")
+        if land_executor(repo) and (bad := verdict_identity_problem(verdict)):  # the executor would refuse it: say so now
+            problems.append(f"verdict cannot stand as an independent review: {bad} (orch verdict --reviewer --evidence)")
     if p.cfg["merge_policy"] == "human-gate" and (hold := gate_hold(p, events, pr)):
         problems.append(hold)
     try:
