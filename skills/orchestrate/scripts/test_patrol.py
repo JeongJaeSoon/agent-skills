@@ -316,7 +316,7 @@ assert own["/w/a"] == ("c", "hl") and own["/w/b"] == ("d", None)
 
 # Log: new findings once, cleared when gone, acked by id; Needs you follows X/E/L/O only.
 x = {"id": "Xabc", "code": "X", "card": "a", "path": "/w/a", "handle": "h1", "session": "s1", "owner": "hl", "title": "t"}
-i = {"id": "Iabc", "code": "I", "card": "b", "path": "/w/b", "handle": "h2", "session": "s2", "owner": None, "title": "t"}
+i = {"id": "Iabc", "code": "I", "card": "b", "path": "/w/b", "handle": "h2", "session": "s2", "owner": None, "title": "t", "pr_open": False}
 verd = {"cards": {"/w/a": "exited"}, "doing_noref": [], "load": []}
 new, gone = patrol.write_round([x, i], verd, False, NOW)
 assert [f["id"] for f in new] == ["Xabc", "Iabc"] and gone == []
@@ -343,6 +343,11 @@ assert patrol.pr_open({"sessions": sess, "prs": {}}, "/w/p"), "a PR whose state 
 assert not patrol.pr_open({"sessions": sess + [{"path": "/w/none"}], "prs": prs}, "/w/none"), "a read session, no PR"
 assert patrol.pr_open({"sessions": sess, "prs": prs}, "/w/none"), "no session read for the card: unknown, not held"
 assert patrol.pr_open({"prs": prs}, "/w/p"), "the collector gave no sessions at all"
+by_branch = [{"id": "wt-a", "path": "/w/a"}, {"id": "wt-b", "path": "/w/b"}]
+assert patrol.pr_open({"sessions": by_branch, "prs": {"k1": {"session": "wt-a", "state": "OPEN"}}}, "/w/a"), "PR found by branch"
+assert not patrol.pr_open({"sessions": by_branch, "prs": {"k1": {"session": "wt-a", "state": "OPEN"}}}, "/w/b"), "another card's PR"
+assert not patrol.pr_open({"sessions": by_branch, "prs": {"k1": {"session": "wt-a", "state": "MERGED"}}}, "/w/a"), "merged by branch"
+assert patrol.pr_open({"sessions": by_branch, "prs": {"k1": {"session": "wt-a"}}}, "/w/a"), "state not read: unknown, not held"
 # A PR linked after the I was held: the logged finding follows (op "pr"), and the line goes out without the hour.
 late = {**i, "id": "Ilate", "card": "l", "path": "/w/l", "owner": "hq", "pr_open": False}
 patrol.write_round([x, i, ip, late], verd, False, NOW + 72)
