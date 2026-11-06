@@ -831,7 +831,7 @@ def run(argv):
     if args.cmd == "reconcile":
         return reconcile(adapter, args.id, args.repo, args.head,
                          (["--adapter", args.adapter] if args.adapter else [])
-                         + (["--config", os.path.abspath(args.config)] if args.config else []))
+                         + (["--config", os.path.abspath(os.path.expanduser(args.config))] if args.config else []))
     return adapter.transition(args.id, args.to)
 
 

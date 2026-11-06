@@ -762,7 +762,15 @@ class Reconcile(unittest.TestCase):
         cfg = self.env.file("other cfg.json", {"tracker": {"adapter": "linear"}})
         proc, out = self.run_rc("--repo", "acme/app", pre=("--config", cfg))
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(out["next"][0], f"python3 {TRACKER} --config '{cfg}' transition ENG-12 --to started")
+        me = f"python3 {TRACKER} --config '{cfg}'"
+        self.assertEqual(out["next"], [f"{me} transition ENG-12 --to started",
+                                       f"{me} attach ENG-12 --url https://github.com/acme/app/pull/1"])
+        # A `~` path names the file load_config read, not one under the working directory.
+        home_cfg = os.path.join(self.env.home, ".claude", "agent-skills.json")
+        self.env.config({"tracker": {"adapter": "linear"}})
+        proc, out = self.run_rc("--repo", "acme/app", pre=("--config", "~/.claude/agent-skills.json"))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue(out["next"][0].startswith(f"python3 {TRACKER} --config {home_cfg} "), out["next"][0])
 
     def test_next_keeps_the_adapter_flag(self):
         self.ticket("unstarted")
