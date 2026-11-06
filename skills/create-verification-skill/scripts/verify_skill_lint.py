@@ -27,15 +27,18 @@ REQUIRED_SECTIONS = ("launch", "doctor", "drive", "evidence", "cleanup")
 FEATURE_H2 = ("sub-features", "how to get to it", "driving it with", "gotchas")
 SECRET_NAMES = (".env*", "*.env", "*secret*", "*credential*", "*token*", "*password*", "*.pem", "*.key", "id_rsa*")
 SCRIPT_SUFFIXES = (".sh", ".py")
+INTERPRETED_SUFFIXES = (".js", ".mjs", ".cjs", ".ts")  # run as `node x.mjs`, so no executable bit is required
 CLEANUP_WORDS = ("cleanup", "clean-up", "clean_up", "teardown")
 SHELL_ARG_GUARD = re.compile(r"\$\{1:\?|\$#\s*-(?:lt|eq|ne|le)\b|-z\s+\"?\$\{?1\b|\bset\s+-[a-z]*u[a-z]*\b[\s\S]*\$\{?1\b")
-PY_ARG_GUARD = re.compile(r"required=True|add_argument\(\s*[\"'][^-\"']|sys\.argv\[1\]|len\(sys\.argv\)")
-PY_OPTIONAL_ARG = re.compile(r"nargs\s*=\s*[\"']\?[\"']")
-KILL_AT_COMMAND = re.compile(r"(?:^|[;&|(`]|\$\()\s*(?:sudo\s+)?(?:pkill|killall)\b|\|\s*xargs\s+(?:-\S+\s+)*kill\b")
-KILL_PLAIN = re.compile(r"(?:^|[;&|(`]|\$\()\s*(?:sudo\s+)?kill\b")
+PY_ADD_ARGUMENT = re.compile(r"add_argument\(([^)]*)\)")
+PY_ARG_GUARD = re.compile(r"sys\.argv\[1\]|len\(sys\.argv\)")
+AT_COMMAND = r"(?:^|[;&|(`{]|\$\(|\b(?:then|do|else)\b)\s*(?:sudo\s+)?"
+KILL_AT_COMMAND = re.compile(AT_COMMAND + r"(?:pkill|killall)\b|\|\s*xargs\s+(?:-\S+\s+)*kill\b|\bkill\b[^\n]*\$\(\s*(?:pgrep|lsof)")
+KILL_PLAIN = re.compile(AT_COMMAND + r"kill\b([^\n]*)")
 PID_DISCOVERY = re.compile(r"\bpgrep\b|\blsof\b[^\n]*\s-\w*t")
+PID_VARIABLE = re.compile(r"\b(\w+)=\$\([^\n]*(?:\bpgrep\b|\blsof\b)")
 STATE_CONTEXT = re.compile(r"state|\bRUN_?(?:DIR|ID|FILE)\b|\$RUN", re.I)
-LATEST = re.compile(r"\bln\b[^\n]*[\s/]latest\b|\blatest\.(?:json|env|state|txt|pid)\b|\w=\S*\blatest\b")
+LATEST = re.compile(r"\bln\b[^\n]*[\s/]latest\b|\blatest\.(?:json|env|state|txt|pid)\b|\w=\S*/latest\b")
 LATEST_PATH = re.compile(r"/latest\b")
 LATEST_SKIP = re.compile(r"https?://|\b(?:never|not|no|avoid|don't|without)\b", re.I)
 
@@ -56,11 +59,19 @@ def frontmatter(text):
     if not m:
         return None
     out = {}
-    for ln in m.group(1).splitlines():
+    lines = m.group(1).splitlines()
+    for n, ln in enumerate(lines):
         k, sep, v = ln.partition(":")
         if sep and k.strip() and not ln.startswith(" "):
             v = re.sub(r"\s#.*$", "", v).strip().strip("\"'")
-            out[k.strip()] = "" if v in ("null", "~", ">", "|", ">-", "|-") else v
+            if v in (">", "|", ">-", "|-", ">+", "|+"):
+                block = []
+                for c in lines[n + 1:]:
+                    if c.strip() and not c.startswith(" "):
+                        break
+                    block.append(c.strip())
+                v = " ".join(b for b in block if b)
+            out[k.strip()] = "" if v in ("null", "~") else v
     return out
 
 
@@ -89,7 +100,7 @@ def headings(text):
 
 
 def is_script(path):
-    if path.suffix in SCRIPT_SUFFIXES:
+    if path.suffix in SCRIPT_SUFFIXES + INTERPRETED_SUFFIXES:
         return True
     try:
         with open(path, "rb") as f:
@@ -100,7 +111,7 @@ def is_script(path):
 
 def code_lines(path, text):
     if is_script(path):
-        return [(i, ln) for i, ln in enumerate(text.splitlines(), 1) if not ln.lstrip().startswith("#")]
+        return [(i, ln) for i, ln in enumerate(text.splitlines(), 1) if not ln.lstrip().startswith(("#", "//"))]
     return list(fenced_lines(text))
 
 
@@ -141,21 +152,35 @@ def check_text_rules(path, rel, text):
                 if base and any(fnmatch.fnmatch(base, p) for p in SECRET_NAMES):
                     out.append(finding(rel, i, "state-secret", f"{tok} matches a secret-file name; name the state file after its run id"))
                     break
-        shared = LATEST.search(ln) or (LATEST_PATH.search(ln) and STATE_CONTEXT.search(ln))
-        if shared and not LATEST_SKIP.search(ln):
+        run = re.sub(r"\s#.*$", "", ln)  # a trailing comment is not what runs
+        shared = LATEST.search(run) or (LATEST_PATH.search(run) and STATE_CONTEXT.search(run))
+        if shared and not LATEST_SKIP.search(run):
             out.append(finding(rel, i, "shared-latest", "a shared `latest` link resolves to another agent's instance"))
-    discovered = False
+    found_pids = set()
     for i, ln in code_lines(path, text):
-        discovered = discovered or bool(PID_DISCOVERY.search(ln))
-        if KILL_AT_COMMAND.search(ln) or (discovered and KILL_PLAIN.search(ln)):
+        found_pids |= set(PID_VARIABLE.findall(ln))
+        kill = KILL_PLAIN.search(ln)
+        from_found = kill and any(re.search(r"\$\{?" + v + r"\b", kill.group(1)) for v in found_pids)
+        if KILL_AT_COMMAND.search(ln) or from_found:
             out.append(finding(rel, i, "pattern-kill", "kill what this run started, by the recorded PID or ID"))
     return out
+
+
+def python_requires_argument(code):
+    if PY_ARG_GUARD.search(code):
+        return True
+    for args in PY_ADD_ARGUMENT.findall(code):
+        first = args.split(",")[0].strip().strip("\"'")
+        optional = re.search(r"nargs\s*=\s*[\"'][?*]", args)
+        if (re.search(r"required\s*=\s*True", args) or not first.startswith("-")) and not optional:
+            return True
+    return False
 
 
 def check_cleanup_script(path, rel, text):
     code = "\n".join(ln for _, ln in code_lines(path, text))
     if path.suffix == ".py" or code.startswith("import") or "python" in text.split("\n", 1)[0]:
-        ok = PY_ARG_GUARD.search(code) and not PY_OPTIONAL_ARG.search(code)
+        ok = python_requires_argument(code)
     else:
         ok = SHELL_ARG_GUARD.search(code)
     if ok:
@@ -178,7 +203,7 @@ def check_helpers(root, skill_text):
         if not is_script(p):
             continue
         rel = str(p.relative_to(root))
-        if not os.access(p, os.X_OK):
+        if p.suffix not in INTERPRETED_SUFFIXES and not os.access(p, os.X_OK):
             out.append(finding(rel, 1, "helper-mode", "not executable"))
         if not shown(p.name, skill_text):
             out.append(finding(rel, 1, "helper-mode", "SKILL.md never shows how to invoke it in a code span or block"))
@@ -207,7 +232,7 @@ def check_features(root):
         out.append(finding("features/README.md", 1, "feature-index", f"does not list {name}"))
     for name in sorted(present):
         body = read(feats / name) or ""
-        h2 = [m.lower() for m in re.findall(r"^##\s+(.*)$", body, re.M)]
+        h2 = [m.group(1).lower() for _, ln in outside_fences(body) if (m := re.match(r"##\s+(.*)$", ln))]
         for want in FEATURE_H2:
             if not any(h.startswith(want) for h in h2):
                 out.append(finding(f"features/{name}", 1, "feature-index", f"no '{want}' H2 section"))

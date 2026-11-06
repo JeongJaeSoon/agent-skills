@@ -173,9 +173,46 @@ class LintTest(unittest.TestCase):
         text = "#!/usr/bin/env bash\nlsof -ti :3000 | xargs -r kill\n"
         self.assertEqual(self.lint_rules_with("scripts/doctor.sh", text), (1, ["pattern-kill"]))
 
-    def test_kill_of_a_recorded_pid_passes_and_a_kill_after_any_pgrep_is_flagged(self):
+    def test_kill_inside_a_conditional_is_flagged(self):
+        for text in ('#!/usr/bin/env bash\nif [ -n "$1" ]; then pkill -f demo; fi\n',
+                     '#!/usr/bin/env bash\npids=$(pgrep -f demo)\nif [ -n "$pids" ]; then kill "$pids"; fi\n'):
+            self.assertEqual(self.lint_rules_with("scripts/doctor.sh", text), (1, ["pattern-kill"]))
+
+    def test_image_tag_latest_is_not_a_shared_state_link(self):
+        self.assertEqual(self.lint_rules_with("scripts/launch.sh", "#!/usr/bin/env bash\nIMAGE=postgres:latest\n")[0], 0)
+
+    def test_negation_in_a_trailing_comment_does_not_hide_a_shared_link(self):
+        text = '#!/usr/bin/env bash\nln -sfn "$RUN_DIR" /tmp/verify/latest # no overwrite\n'
+        self.assertEqual(self.lint_rules_with("scripts/launch.sh", text), (1, ["shared-latest"]))
+
+    def test_folded_description_with_content_passes(self):
+        self.put("SKILL.md", SKILL.replace('description: "Drive the demo CLI. Use when verifying demo changes."',
+                                           "description: >\n  Drive the demo CLI.\n  Use when verifying demo changes."))
+        self.assertEqual(self.run_lint()[0], 0)
+
+    def test_python_cleanup_arguments_are_judged_one_by_one(self):
+        head = "#!/usr/bin/env python3\nimport argparse\np = argparse.ArgumentParser()\n"
+        extra = "\n`cleanup.py <run>`\n"
+        cases = [("p.add_argument('run', nargs='*')\n", 1),
+                 ("p.add_argument('state')\np.add_argument('--mode', nargs='?')\n", 0),
+                 ("p.add_argument('--run', required=True)\n", 0)]
+        for body, want in cases:
+            self.put("SKILL.md", SKILL + extra)
+            self.assertEqual(self.lint_rules_with("scripts/cleanup.py", head + body)[0], want, body)
+
+    def test_javascript_helper_without_shebang_is_checked(self):
+        self.put("scripts/drive.mjs", 'import { chromium } from "playwright";\n', 0o644)
+        self.assertEqual(self.rules(), (1, ["helper-mode"]))
+        self.put("SKILL.md", SKILL + "\nRun `node scripts/drive.mjs`.\n")
+        self.assertEqual(self.run_lint()[0], 0)
+
+    def test_feature_h2_inside_a_code_fence_does_not_count(self):
+        self.put("features/feat.md", "# Feat\n\n```markdown\n" + FEATURE.split("\n\n", 1)[1] + "```\n")
+        self.assertEqual(self.rules(), (1, ["feature-index"]))
+
+    def test_kill_of_a_recorded_pid_passes_after_a_read_only_pgrep(self):
         text = '#!/usr/bin/env bash\npgrep -f demo >/dev/null\nkill "$(cat "$1/pid")"\n'
-        self.assertEqual(self.lint_rules_with("scripts/doctor.sh", text)[0], 1)  # conservative: the script cannot tell the PID source
+        self.assertEqual(self.lint_rules_with("scripts/doctor.sh", text)[0], 0)
         text = '#!/usr/bin/env bash\nkill "$(cat "$1/pid")"\necho "Do not use pkill"\n'
         self.assertEqual(self.lint_rules_with("scripts/doctor.sh", text)[0], 0)
 
