@@ -250,6 +250,48 @@ ticks = iter([0.0, 0.0, 901.0])
 assert pressure.turns_wait({**cfg, "active_turns_per_cpu": 0.5}, 15, now_fn=lambda: next(ticks), sleep=lambda s: None,
                            count=lambda: 10**6, out=said.append) == 3 and "1000000개" in said[-1]
 
+# Session cap: every listed agent counts, idle ones too, the caller's own does not; unset (the default) is off.
+os.environ["ORCA_TERMINAL_HANDLE"] = "term_me"
+idle_ps = lambda others: lambda cmd, **k: (json.dumps({"result": {"terminal": {"tabId": "tab-me", "leafId": "leaf-me"}}})
+                                           if cmd[:3] == ["orca", "terminal", "show"] else json.dumps({"result": {"worktrees": [
+                                               {"agents": [{"paneKey": f"t{i}:l{i}", "state": "idle"} for i in range(others)]
+                                                + [{"paneKey": ME, "state": "working"}]}]}}))
+assert pressure.live_sessions(run=idle_ps(5)) == 5 and pressure.active_turns(run=idle_ps(5)) == 0
+assert pressure.live_sessions(run=lambda *a, **k: None) is None
+for bad in (None, 0, -1, True, "3", 2.5):
+    assert pressure.session_cap({**cfg, "max_sessions": bad}) is None, bad
+assert pressure.session_cap({**cfg, "max_sessions": 16}) == 16
+assert pressure.session_hold({**cfg, "max_sessions": None}, sessions=lambda: 10**6) == (None, None, False)  # off: never counted
+for n, hold in ((15, False), (16, True), (None, True)):  # unreadable holds like a full one
+    assert pressure.session_hold({**cfg, "max_sessions": 16}, sessions=lambda n=n: n) == (n, 16, hold), n
+assert pressure.config([("max_sessions", "4")])["max_sessions"] == 4  # the CLI form reaches session_cap as an int
+assert pressure.config([("max_sessions", "none")])["max_sessions"] is None
+assert pressure.session_cap(pressure.config([("max_sessions", "4")])) == 4
+def never_counted():
+    raise AssertionError("no cap configured: sessions must not be counted")
+assert pressure.session_hold(cfg, sessions=never_counted) == (None, None, False)
+real_sessions = pressure.live_sessions
+pressure.active_turns = lambda: 0
+scfg = {**cfg, "max_sessions": 4}
+pressure.live_sessions = lambda run=None: 4
+verdict = g.gate("orca worktree create --repo x", OK, {}, scfg, now=1.0, p=pressure)
+assert verdict[0] == "deny" and "max_sessions" in verdict[1], verdict
+pressure.live_sessions = lambda run=None: 3
+assert g.gate("orca worktree create --repo x", OK, {}, scfg, now=1.0, p=pressure) is None
+pressure.live_sessions = lambda run=None: 4
+assert g.gate("orca worktree create --repo x", OK, {}, cfg, now=1.0, p=pressure) is None  # no cap configured
+ticks = iter([0.0, 0.0, 901.0])
+assert pressure.turns_wait(scfg, 15, now_fn=lambda: next(ticks), sleep=lambda s: None, count=lambda: 0,
+                           sessions=lambda: 4, out=said.append) == 3 and "세션 4개 ≥ 상한 4" in said[-1]
+ticks = iter([0.0, 0.0, 0.0])
+assert pressure.turns_wait(scfg, 15, now_fn=lambda: next(ticks), sleep=lambda s: None, count=lambda: 0,
+                           sessions=iter([4, 3]).__next__, out=said.append) == 0 and "세션 3개 / 상한 4" in said[-1]
+pressure.live_sessions, pressure.active_turns = real_sessions, real_turns
+if real_handle is not None:
+    os.environ["ORCA_TERMINAL_HANDLE"] = real_handle
+else:
+    del os.environ["ORCA_TERMINAL_HANDLE"]
+
 # ok: nothing. warn: denied until a sweep ran in gate_fresh_minutes. danger: denied either way.
 assert gate("docker compose up -d", OK) == "none"
 assert gate("docker compose up -d", WARN) == "deny"
