@@ -3188,14 +3188,30 @@ PROMPTS = [(re.compile(r"Enter to select"), "a select menu"),
            (re.compile(r"Waiting for API response · will retry"), "an API retry loop")]
 
 
-# A file diff Claude Code drew: a line-number gutter, then +, - or a context space. It quotes code, so an ENOSPC in it
-# is the reviewed text, not the machine. Other tool output keeps counting: a real "npm ERR! ENOSPC" has no gutter.
-DIFF_LINE = re.compile(r"^[\s⎿]*\d+(?:\s[+\-]|\s\s)")
+# A file diff Claude Code drew: a run of line-number gutter lines (a number, then +, - or a context space) with at
+# least one + or -. It quotes code, so an ENOSPC in it is the reviewed text, not the machine. Other output keeps
+# counting: a real "npm ERR! ENOSPC" has no gutter, and "28  No space left" alone has no + or - line beside it.
+GUTTER = re.compile(r"^[\s⎿]*\d+(?:\s([+\-])|\s\s)")
+
+
+def without_diffs(lines):
+    out, run = [], []
+    for l in [*lines, None]:
+        m = GUTTER.match(l) if l is not None else None
+        if m:
+            run.append((l, bool(m.group(1))))
+            continue
+        if run and not any(marked for _, marked in run):
+            out += [x for x, _ in run]
+        run = []
+        if l is not None:
+            out.append(l)
+    return out
 
 
 def screen_prompt(lines, activity=None):
     tail = lines[-25:]
-    text = "\n".join(l for l in tail if not DIFF_LINE.match(l))
+    text = "\n".join(without_diffs(tail))
     for rx, kind in PROMPTS:
         if rx.search(text):
             return kind, next((l.strip() for l in reversed(tail) if l.strip().endswith("?")), "")

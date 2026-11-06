@@ -241,11 +241,15 @@ screens = {"h1": diff, "h2": idle, "h3": idle, "h4": idle}
 assert scan({}) == [], "ENOSPC inside a drawn diff is not a full disk"
 screens["h1"] = diff + ["npm ERR! ENOSPC: no space left on device, write", "❯ "]
 assert scan({})[0] == "STUCK card-a (a full disk): read its screen", "a real ENOSPC beside a diff still counts"
+screens["h1"] = ["⏺ Bash(make)", "  ⎿  28  No space left on device", "❯ "]
+assert scan({})[0] == "STUCK card-a (a full disk): read its screen", "numbered command output with no +/- line is not a diff"
 
 # A /goal card silent past --idle-min is stuck unless it is busy: a background shell, or claude agents says busy.
-shell = ["⏺ Waiting on the build.", "❯ ", "  ⏵⏵ auto mode on · 1 shell still running"]
+shell = ["⏺ Waiting on the build.", "❯ ", "  ⏵⏵ auto mode on · 1 shell still running", "  ◎ /goal active (2h)"]
 screens = {"h1": idle, "h2": idle, "h3": shell, "h4": idle}
 assert scan({}) == [], "a silent card with a shell running is busy"
+screens["h3"] = shell[:2] + shell[3:]
+assert scan({})[0].startswith("STUCK card-c (a /goal card silent 31 min)"), "the shell line is what suppresses it"
 screens["h3"] = goal
 assert scan({})[0].startswith("STUCK card-c (a /goal card silent 31 min)"), "silent and nothing running is stuck"
 assert card_watch.scan(terms, {}, read, NOW, 30, 100.0, 15, agents={"h3": {"agents": "busy"}}) == [], \
