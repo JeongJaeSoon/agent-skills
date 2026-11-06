@@ -30,7 +30,8 @@ actions prints the Slack and bot actions plan.json holds; log records one of the
 (sendlog.jsonl), which is what decides them, not the ledger. policy prints one repository's resolved
 business-hours, after_hours and assign_reviewers values (profiles applied) for a request sent by hand.
 merges prints the `gh pr merge` command for each ready_to_merge item in plan.json; the round runs
-them itself. verify then checks each is MERGED, waits for the merge commit's CI and rewrites body.txt.
+them itself. A repo under orchestrate.land_executor gets no command: its item only goes in the message, for orch land.
+verify then checks each is MERGED, waits for the merge commit's CI and rewrites body.txt.
 dispatch reads plan.json and prints one
 `skills-sync card <brief-<run>-<n>.txt>` line per repo with due unreleased items (the brief's REPORT names
 prs.dispatch_run, else an inbox_to of the form run:<id>; with neither it exits non-zero); it runs nothing, and the round
@@ -148,7 +149,7 @@ def config(path=CONFIG):
             re.compile(x)
         except re.error as e:
             raise ConfigError(f"exclude_title_patterns: invalid regex {x!r}: {e}") from None
-    cfg = {**DEFAULTS, **raw, "exclude_title_patterns": pats}
+    cfg = {**DEFAULTS, **raw, "exclude_title_patterns": pats, "land_executor_repos": land_executor_repos()}
     profiles = cfg["profiles"]
     if not isinstance(profiles, list) or not all(isinstance(x, dict) and isinstance(x.get("match"), str) for x in profiles):
         raise ConfigError('profiles must be a list of objects, each with a "match" string')
@@ -168,6 +169,30 @@ def config(path=CONFIG):
             if k in c and not (isinstance(c[k], int) and not isinstance(c[k], bool) and 0 <= c[k] <= top):
                 raise ConfigError(f"{where}: {k} must be an hour from 0 to {top}")
     return cfg
+
+
+def land_executor_repos():
+    """The repos orchestrate.land_executor merges, read from the file `orch land` reads ($AGENT_SKILLS_CONFIG, else
+    ~/.claude/agent-skills.json, whatever --config says), with prog.land_executor's test (enabled exactly true).
+    Not a prs key. An unreadable file or a repos value that is not a list stops every command: guessing it empty
+    would print direct merges for repos the executor owns."""
+    path = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or CONFIG).expanduser()
+    try:
+        whole = json.loads(path.read_text())
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError) as e:
+        raise ConfigError(f"{path}: unreadable ({e}); not merging around orchestrate.land_executor") from None
+    orch = whole.get("orchestrate") if isinstance(whole, dict) else None
+    ex = orch.get("land_executor") if isinstance(orch, dict) else None
+    if not isinstance(ex, dict) or ex.get("enabled") is not True:
+        return []
+    repos = ex.get("repos")
+    if repos is None:
+        return []
+    if not isinstance(repos, list):
+        raise ConfigError("orchestrate.land_executor.repos must be a list of owner/name strings")
+    return [r for r in repos if isinstance(r, str)]
 
 
 def repo_cfg(cfg, repo):
@@ -695,10 +720,16 @@ def collect_ready_to_merge(gh, me, cfg, ledger, now):
             excluded.append({"pr": f"{repo}#{pr['number']}", "kind": "ready_to_merge", "why": why})
             continue
         review = "승인됨" if pr.get("reviewDecision") == "APPROVED" else "리뷰 불요, head 리뷰 기록 있음"
-        items.append({"kind": "ready_to_merge", "key": key(pr), "id": pr["id"], "repo": repo, "number": pr["number"],
-                      "title": pr["title"], "url": pr["url"], "age_days": days(pr["createdAt"], now),
-                      "size": pr["additions"] + pr["deletions"], "method": method, "cmd": merge_cmd(pr, method),
-                      "why": [f"CLEAN, 체크 green, {review}, {method}"]})
+        item = {"kind": "ready_to_merge", "key": key(pr), "id": pr["id"], "repo": repo, "number": pr["number"],
+                "title": pr["title"], "url": pr["url"], "age_days": days(pr["createdAt"], now),
+                "size": pr["additions"] + pr["deletions"], "method": method,
+                "why": [f"CLEAN, 체크 green, {review}, {method}"]}
+        # The executor merges this repo: no command, so merges and verify skip it and the message hands it on.
+        if repo in cfg.get("land_executor_repos", ()):
+            item["land"] = "executor"
+        else:
+            item["cmd"] = merge_cmd(pr, method)
+        items.append(item)
     return items, excluded
 
 
@@ -1102,6 +1133,11 @@ def body(plan):
         if i.get("cmd"):
             lines.append(f"{n}. [{LABELS[i['kind']]}] {i['repo']}#{i['number']} {i['title']} — "
                          f"{i.get('result') or i['method'] + ' 로 머지 예정'} — {i['url']}")
+            continue
+        if i.get("land") == "executor":
+            lines.append(f"{n}. [{LABELS[i['kind']]}] {i['repo']}#{i['number']} {i['title']} — {', '.join(i['why'])} — "
+                         f"land executor 저장소라 이 회차는 머지하지 않음: 저장소의 standing program 에서 orch verdict 뒤 "
+                         f"orch land — {i['url']}")
             continue
         tag = {"new_commits": "새 커밋, 재요청 없음", "slack": "Slack 리뷰 요청"}.get(i["reason"], LABELS[i["kind"]])
         if i["kind"] != "ownergate":

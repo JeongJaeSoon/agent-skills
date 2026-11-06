@@ -1,5 +1,5 @@
 {
-  "modules": ["./brief_pane.tsx"],
+  "modules": ["./mods.tsx"],
   "hooks": {
     "PreToolUse": [
       {
@@ -81,7 +81,7 @@
     ],
     "SessionStart": [
       {
-        "matcher": "startup|resume|compact|fork",
+        "matcher": "startup|resume|compact|fork|clear",
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/reorient.py\"", "timeout": 10 }]
       },
       {

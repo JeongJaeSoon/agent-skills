@@ -1,6 +1,6 @@
 ---
 name: handoff-ticket
-description: "Use when handing the next ticket to a fresh Orca worktree card — \"핸드오프\", \"다음 티켓 진행해줘\", \"남은 작업 있어?\", \"머지하고 다음 진행해줘\", \"handoff\" — and when this session's ticket is done, to decide what runs next. Another repo, or this session keeps working, is dispatch-card."
+description: "Use to hand the next ticket to a fresh Orca card — \"핸드오프\", \"다음 티켓 진행해줘\", \"남은 작업 있어?\", \"머지하고 다음 진행해줘\" — and when this ticket is done, to pick what runs next. Another repo is dispatch-card. An orchestrator dispatches it instead."
 ---
 
 # Orca handoff
@@ -39,9 +39,9 @@ or PR that is already running, file it as its own ticket and hand it off (or que
 append it to the running card's prompt or scope.
 
 **Dependent tickets.** When ticket B can only start after A, record it in the tracker (A
-blocks B) and, when both will be PRs, plan them as a GitHub stack: B's card starts from A's
-branch (§3 `--base-branch`), and the two land in one merge from the top (`deliver-ticket` §5,
-`orchestrate` `references/landing.md` "GitHub stacks").
+blocks B). Only when B uses A's code is it a stack: B's card starts from A's branch (§3
+`--base-branch`). Same files → B starts after A lands, unless they share only a hotspot (a
+`translated-from` line, a generated file); a deploy order alone → both on the default branch (`deliver-ticket` [pull-request.md](../deliver-ticket/references/pull-request.md) "Stacks").
 
 **Who runs it.** A small defect in the code this session just shipped stays here, on its own
 branch and its own PR. A session can ship N PRs this way — one ticket each, one at a time — so
@@ -80,8 +80,8 @@ if unsure.
 
 Parallel requests ("병렬로", "동시에") still mean one card per ticket — repeat step 3 per ticket,
 never two tickets in one prompt. Hold back a ticket that would edit the same files as one already
-running until the first lands, and say what you held — unless it is a dependent layer, which
-starts now as a stack on the lower one's branch.
+running until the first lands, and say what you held — unless they share only a hotspot (parallel),
+or it uses the first one's code: a stack layer starts now on the lower one's branch.
 
 ## 3. Spawn the worktree with its agent
 
@@ -90,7 +90,7 @@ skills-sync handoff <TICKET-ID> \
   --title "<short title>" \
   --reference "<ticket URL, or a Jira key>" \
   --note "<what the ticket does not say: decisions, gotchas, approvals>" \
-  --base-branch "<branch this ticket must stack on, else omit>"
+  --base-branch "<lower branch whose code this ticket uses, else omit>"
 ```
 
 It runs `orca worktree create` with `--name <ticket-id-lowercase>`, the parent below, `--agent
@@ -118,7 +118,7 @@ again.
 - The name, the ticket id in lowercase, becomes the branch name (with the user's branch prefix,
   if Orca adds one).
 - Stacked work: pass the lower ticket's branch as `--base-branch` and say in `--note`
-  "stack on <lower ticket> (`gh stack link <lower PR> <this PR> --base main`)".
+  "stack on <lower ticket> (`gh stack link <lower PR> <this PR> --base main`); rebase only".
 - Do not use `orca terminal create`: that adds a tab to this worktree instead of a new card.
 - The prompt is the whole context the new session gets. It knows nothing from here, so put
   anything non-derivable from the ticket (decisions, base branch, gotchas) in `--note`.

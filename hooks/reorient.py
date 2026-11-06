@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
-"""SessionStart (startup, resume, compact, fork) and UserPromptSubmit hook of the agent-skills plugin: tells an
+"""SessionStart (startup, resume, compact, fork, clear) and UserPromptSubmit hook of the agent-skills plugin: tells an
 orchestrator or a lead what it runs.
+
+A /clear keeps the process and gives it a new session id (`agent_type` and the title stay, measured): the ROLE record
+of the terminal's previous session carries over (roles.carry_role, `ROLE: none` included), the core rules come back as
+text as after a compaction, and the handoff the previous session left (`orch handoff save`) is added.
 
 After an automatic compaction a lead kept draining its inbox but dropped a step it had run for hours
 (removing each landed card), and eight cards stayed open. An orchestrator never loaded orchestrate for days
@@ -111,7 +115,8 @@ def with_core_rules(text):
     return (f"{text}\nThese core rules of agent-skills:orchestrate hold now, before you reload it:\n{rules}")
 
 
-def role_long(entry, compacted):
+def role_long(entry, compacted, cleared=False):
+    """cleared: a /clear, which empties the context like a compaction but leaves no summary, so the handoff stands in."""
     if entry["role"] == "lead":
         slug = entry.get("slug")
         if not slug:
@@ -119,12 +124,27 @@ def role_long(entry, compacted):
                     "declare it with a prompt line `ROLE: lead <slug>`. Load agent-skills:orchestrate in program mode.")
         text = program_message(slug, program_for(slug), compacted)
         return with_core_rules(text) if compacted else text
+    if cleared:
+        return with_core_rules("Your context was just cleared. You are the top-level orchestrator. Run "
+                               "agent-skills:reboot --top first; your inbox stream and card watch keep running "
+                               "across the clear. Load agent-skills:orchestrate (references/top-level.md) for any step "
+                               "these rules do not cover.")
     if compacted:
         return with_core_rules("Your context was just compacted. You are the top-level orchestrator. Load "
                                "agent-skills:orchestrate (references/top-level.md) for any step these rules do not "
                                "cover.")
     return ("You are the top-level orchestrator. Load agent-skills:orchestrate now. " + DELEGATE + " Status reports "
             "go through agent-skills:brief.")
+
+
+def handoff_text(entry):
+    """The handoff the previous session left (`orch handoff save`), "" without one or when it cannot be read."""
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "skills" / "orchestrate" / "scripts"))
+    try:
+        import handoff
+        return handoff.text("orchestrator" if entry["role"] == "orchestrator" else f"lead:{entry.get('slug')}")
+    except Exception:
+        return ""
 
 
 def name_check(event):
@@ -224,28 +244,43 @@ def main():
             text = role_line(entry)
         if text and entry and (warn := stage_warning(entry)):
             text += " " + warn
-    elif kind == "SessionStart" and event.get("source") in ("startup", "resume", "compact", "fork"):
+    elif kind == "SessionStart" and event.get("source") in ("startup", "resume", "compact", "fork", "clear"):
+        source, before = event.get("source"), None
         # A `claude -p` run from a card's shell inherits the handle and is not the terminal's session.
         if os.environ.get("CLAUDE_CODE_ENTRYPOINT") == "cli":
-            # A compaction keeps the process, so it keeps what the process loaded (record_terminal's None).
+            # A compaction and a /clear keep the process, so they keep what the process loaded.
             root = os.environ.get("CLAUDE_PLUGIN_ROOT") or pathlib.Path(__file__).resolve().parents[1]
-            loaded = None if event.get("source") == "compact" else roles.loaded_fields(root)
+            loaded = None if source in ("compact", "clear") else roles.loaded_fields(root)
             if loaded is not None and not loaded["hooks_sha"]:
                 print(f"reorient: {root}/hooks/hooks.json is unreadable; this session records no reload digest", file=sys.stderr)
             try:
-                roles.record_terminal(os.environ.get("ORCA_TERMINAL_HANDLE"), session, event.get("cwd"), time.time(), loaded)
+                before = roles.record_terminal(os.environ.get("ORCA_TERMINAL_HANDLE"), session, event.get("cwd"),
+                                               time.time(), loaded, same_process=source == "clear")
             except OSError:
                 pass
         record = declared(session)
+        if source == "clear" and before and before.get("session_id") != session:
+            # The new session id has no ROLE record of its own; `--agent` and the title carry over by themselves.
+            try:
+                record = roles.carry_role(before.get("session_id"), session)
+            except OSError:
+                pass
         entry = resolve(event, record)
+        # What roles.role_of needs to redo resolve() later against a ROLE line declared since: the --agent type and
+        # the lead slug the title named.
+        by_title = roles.title_role(event.get("session_title")) or {}
+        roles.record_resolved(session, entry and {**entry, "agent_type": event.get("agent_type"),
+                                                  "title_slug": by_title.get("slug") if by_title.get("role") == "lead" else None})
         try:
             register(event, session, entry, record)
         except OSError:
             pass
         if entry:
-            text = role_long(entry, event.get("source") == "compact")
+            text = role_long(entry, source in ("compact", "clear"), cleared=source == "clear")
             if entry["role"] == "orchestrator":
                 text += name_check(event)
+            if source == "clear" and (note := handoff_text(entry)):
+                text += "\n" + note
     if text:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": kind, "additionalContext": text}}))
     return 0

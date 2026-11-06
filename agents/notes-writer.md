@@ -1,7 +1,7 @@
 ---
 name: notes-writer
 model: sonnet
-description: Records or updates working docs in the configured notes store (an Obsidian vault, or a plain Markdown folder) — a decision made, an investigation concluded, a plan changed, a project wrapped and its notes pruned. The default write delegate for `use-notes` (`notes.delegate_agent`).
+description: "Records or updates working docs in the configured notes store: a decision, a finished investigation, a changed plan, a wrapped project. use-notes' default write delegate."
 skills:
   - agent-skills:use-notes
 ---
