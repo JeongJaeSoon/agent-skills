@@ -87,13 +87,14 @@ https://github.com/JeongJaeSoon/agent-skills の Claude Code プラグインを�
 
 - 「ABC-1 を終わらせて」と頼むと、`deliver-ticket` が計画からマージ、チケットのクローズまで進めます。トラッカーが必要です(既定は Linear。変えるには `tracker.adapter`、[設定](#設定)を参照)。
 - 「状況を報告して」と頼むと `brief` が動きます。Claude Code には組み込みの `/brief` があるので、直接呼ぶときは `/agent-skills:brief` です。`/brief-pane` でチャットの横にパネルを開くと、開いている間だけ 30 秒ごとに同じ報告を更新します(110 列以上なら横に固定、それより狭いとプロンプトの上に出ます)。
-- Orca の中で `claude --agent agent-skills:orchestrator --name orchestrator` を実行して最上位セッションを立て、全セッションの管理を頼みます。オーケストレーターはプロジェクトごとにリードのセッションを立て、リードがワーカーを動かします。オーケストレーターやリードのコンテキストが `orchestrate.restart_at`(既定 130k トークン)を超え、待っている用事がなければ、プロンプトの上の帯に「いま `/clear` して大丈夫」と出ます。次のセッションは役割と保存済みの handoff を引き継ぎます。`/clear` を打つのは人です。`orchestrate.auto_clear: true` にするとセッションが自分で打ちます。
+- Orca の中で `claude --agent agent-skills:orchestrator --name orchestrator` を実行して最上位セッションを立て、全セッションの管理を頼みます。オーケストレーターはプロジェクトごとにリードのセッションを立て、リードがワーカーを動かします。オーケストレーターのセッションが自動コンパクトを 3 回経た、コンパクトしてもコンテキストが縮まない、または 2 回が 30 分以内に続いた(`orchestrate.compact_restart`、既定でオン。`restart_at` はトークン上限で、指定したときだけ効く)うえで、待っている用事がなければ、プロンプトの上の帯に「いま `/clear` して大丈夫」と出ます。`restart_at` の既定値 130k はなくなったので、その既定値に頼っていた設定は、今後はコンパクトの履歴で案内されます。次のセッションは役割と保存済みの handoff を引き継ぎます。リードは自動コンパクトに任せるので帯は出ません。リードの `orch handoff save` は `lead:<slug>` に保存され、オーケストレーターのキーへの保存は拒否されます。`/clear` を打つのは人です。`orchestrate.auto_clear: true` は上限を超えたとき、`orchestrate.compact_restart.auto_clear: true` はコンパクトの規則に当たったときに、セッションが自分で打ちます。
 
 ## 人が決定権を持つ地点
 
 - **自分の設定。** `setup-pc`、`tune-automode`、`skills-config` は diff と `!` の行を作るだけで、実行するのは人です。この動作は変えられません。
 - **権限ダイアログと拒否。** 権限ダイアログは人の応答を待ちます。auto mode の分類器が操作を拒否すると、エージェントは報告して止まります。ある種類の操作を以後通すには、`permissions.allow` の項目か、`tune-automode` が下書きする autoMode ルールを人が追加します。
 - **取り消せない操作。** 破壊的なマイグレーション、共有ブランチへの force push、本番デプロイ、外部への送信は、常に止まって聞きます。
+- **カードの作業習慣。** Dispatch で起動したカードが、Bash でファイルを書く(`sed -i`、リダイレクト)、コミットや `rm` を他のコマンドと 1 回の呼び出しにまとめる、worktree の外や main checkout を編集する、auto-memory に書く、テストを実行せずに push する、のいずれかをすると、警告が 1 行出て `turn-warnings.jsonl` に記録されます。止めはしません。`docs/skills.ja.md` の `worker.*` キーで、チェックごとにオフにするか `deny` に上げられます。
 - **マージ。** `orchestrate` のカードは、最初のプロンプトがマージを承認していれば `orch land` で自分の PR をマージし、自分で閉じます。CI のないリポジトリは先に `orchestrate.no_ci_repos` に入れます。プログラムの外の `deliver-ticket` が自分でマージするのは、そのリポジトリでのマージを許す autoMode ルールがあるときだけで、なければ聞きます。`human-gate` ポリシーにするか、先に自分で見ると伝えると、毎回マージの前で止まります。
 - **定期的な片付け。** `janitor` と `pressure-watch` は、終わったエージェントの後始末を定期的に行います。止めるには `skills-sync setup disable <名前>` を使います。`watch-prs` で自分の PR を自動承認、自動マージする機能は、設定するまでオフです。
 
@@ -106,7 +107,7 @@ https://github.com/JeongJaeSoon/agent-skills の Claude Code プラグインを�
 | グループ | スキル | 役割 |
 |---|---|---|
 | [チケット1件](docs/skills.ja.md#チケット1件) | `write-ticket`, `deliver-ticket`, `ui-review`, `handoff-ticket`, `dispatch-card`, `end-session` | チケットを書き、届け、次のチケットを新しいカードに渡し、進捗を記録してセッションを閉じる |
-| [プロジェクト1件](docs/skills.ja.md#プロジェクト1件orca-ワーカー複数) | `orchestrate`, `reboot`, `measure-delivery` | 複数のチケットを Orca のワーカーで並行してマージし、再起動で落ちた待機やバインドを戻し、終わったあと実際どうだったかを測る |
+| [プロジェクト1件](docs/skills.ja.md#プロジェクト1件orca-ワーカー複数) | `orchestrate`, `reboot` | 複数のチケットを Orca のワーカーで並行してマージし、再起動で落ちた待機やバインドを戻し、終わったあと実際どうだったかを測る(`reflect` の測定モード) |
 | [マシン1台](docs/skills.ja.md#マシン1台) | `reap-resources`, `secure-fill`, `tune-automode`, `skills-config`, `setup-pc` | 残り物の片付け、エージェントが見ない秘密値の入力、autoMode ルールの下書き、設定キーの変更、インストールと更新 |
 | [チャットとレビュー](docs/skills.ja.md#チャットとレビュー) | `watch-mentions`, `watch-prs` | 自分に関係するチャットと PR を作業として集める |
 | [アダプター](docs/skills.ja.md#アダプター) | `use-tracker`, `use-notes` | Linear と Jira のチケット、Obsidian と Markdown のノート |
@@ -114,6 +115,14 @@ https://github.com/JeongJaeSoon/agent-skills の Claude Code プラグインを�
 | [pstack](docs/skills.ja.md#pstack-スキルlauren-tanmit) | `architect`, `arena`, `blast-radius`, `create-verification-skill`, `figure-it-out`, `how`, `interrogate`, `maintain-verification-skill`, `principles`, `recall`, `reflect`, `show-me-your-work`, `swarm`, `tdd`, `teach`, `why` | 設計、比較、影響範囲、検証、説明、振り返り |
 
 pstack グループは Lauren Tan の [pstack](https://github.com/cursor/plugins)(MIT)から取り込んだもので、いまはこのリポジトリで独自に手入れしています。元のファイルは upstream のまま `vendor/pstack` に残し、upstream の変更は任意で有効にする日次ジョブが知らせるので、必要なものだけ手で取り込みます。複数のセッションで働くとき、ワーカーの上にはオーケストレーター(最上位のセッション1つ)とリード(プロジェクトごとに1つ)の2層があります。詳しくは [orchestrate の Roles 表](skills/orchestrate/SKILL.md#roles)(英語)を見てください。
+
+## 名前が変わったスキル
+
+いくつかのスキルは別のスキルのモードにまとめました。古い名前はもうないので、`/agent-skills:<古い名前>` は何も実行しません。新しいコマンドを使ってください。
+
+| 古いコマンド | 新しいコマンド / モード |
+|---|---|
+| `/agent-skills:measure-delivery` | `/agent-skills:reflect` の測定モード |
 
 ## 設定
 
@@ -140,7 +149,7 @@ pstack グループは Lauren Tan の [pstack](https://github.com/cursor/plugins
 CI はありません。変更を送る前に、全テストファイルを実行します。
 
 ```bash
-for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/measure-delivery/scripts/test_measure.py skills/reap-resources/scripts/test_reap.py skills/reap-resources/scripts/test_cards.py skills/reap-resources/scripts/test_pressure.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/watch-prs/scripts/test_review_wait.py skills/watch-prs/scripts/test_notify.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py skills/skills-config/scripts/test_config_emit.py skills/setup-pc/scripts/test_setup_check.py scripts/test_setup.py skills/brief/scripts/test_table_width.py skills/reflect/scripts/test_lesson_ids.py skills/deliver-ticket/scripts/test_shots.py skills/deliver-ticket/scripts/test_review_pick.py skills/ui-review/scripts/test_ui_measure.py skills/reboot/scripts/test_reboot.py hooks/test_*.py scripts/test_sync.py scripts/test_card.py scripts/test_preview_watch.py scripts/test_automations.py scripts/test_share_server.py scripts/test_reap_hard.py scripts/test_public_shapes.py scripts/test_skill_tokens.py scripts/test_allowed_tools.py; do python3 "$t"; done
+for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/reflect/scripts/test_measure.py skills/reap-resources/scripts/test_reap.py skills/reap-resources/scripts/test_cards.py skills/reap-resources/scripts/test_pressure.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/watch-prs/scripts/test_review_wait.py skills/watch-prs/scripts/test_notify.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py skills/skills-config/scripts/test_config_emit.py skills/setup-pc/scripts/test_setup_check.py scripts/test_setup.py skills/brief/scripts/test_table_width.py skills/reflect/scripts/test_lesson_ids.py skills/deliver-ticket/scripts/test_shots.py skills/deliver-ticket/scripts/test_review_pick.py skills/ui-review/scripts/test_ui_measure.py skills/reboot/scripts/test_reboot.py hooks/test_*.py scripts/test_sync.py scripts/test_card.py scripts/test_preview_watch.py scripts/test_automations.py scripts/test_share_server.py scripts/test_reap_hard.py scripts/test_public_shapes.py scripts/test_skill_tokens.py scripts/test_allowed_tools.py; do python3 "$t"; done
 bash scripts/pstack-sync-test.sh
 ```
 

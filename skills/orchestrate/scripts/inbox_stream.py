@@ -21,10 +21,11 @@ Beside the inbox:
 - `orch watch-cards --self <handle>` runs as a child; a round's findings are printed with a `CARDS:` line and the
   watch starts again by itself, so no "restart the card watcher" turn is left.
 - `orch wait`'s WAKE lines and watch_lines (WATCH-CARDS DOWN, PATROL) are printed, each line at most every 30 minutes.
-- With `orchestrate.auto_clear: true` only, `RESTART DUE` when this session's context passed `orchestrate.restart_at`
-  in ~/.claude/agent-skills.json (default 130000, 0 turns it off): with a batch, or alone after five quiet minutes;
-  again for each 25k more. Without it nothing here wakes the model for a restart: the clear band (hooks/clear_band.tsx)
-  tells the human.
+- `RESTART DUE` when compactions.due says this orchestrator session should restart, with a batch or alone after five
+  quiet minutes, once for each reason (a new session, one more auto compaction, the ceiling passed). The context
+  ceiling `orchestrate.restart_at` counts only with `orchestrate.auto_clear: true`, the compaction rules
+  (`orchestrate.compact_restart`) only with `compact_restart.auto_clear: true`. With neither nothing here wakes the
+  model for a restart: the clear band (hooks/clear_band.tsx) tells the human.
 - A restart the session asked for (`orch handoff save --restart`) is typed here: `/clear` once the screen is idle by
   the reload broadcast's checks (scripts/card.py type_when_idle), never twice. Expired after 30 minutes unsent.
 - `SESSION CLEARED` when this terminal's session id changes under the stream (that /clear, or one the human typed):
@@ -37,6 +38,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parents[2] / "hooks"))
 sys.path.insert(0, str(HERE.parents[2] / "scripts"))
+import compactions  # noqa: E402
 import prog  # noqa: E402
 import roles  # noqa: E402
 
@@ -51,30 +53,15 @@ def urgent(msgs):
     """Mail that goes out at once, without the debounce: someone waits on the answer or the next step."""
     return any(m.get("type") in URGENT or URGENT_SUBJECT.search(str(m.get("subject") or "")) for m in msgs)
 QUIET_S = 300
-RESTART_AT = 130_000
-RESTART_STEP = 25_000
 REQUEST_TTL_S = 1800
 REPEAT_S = 1800
 ERRORS_MAX = 5
 TAIL_BYTES = 400_000
-
-
-def restart_at():
-    path = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-skills.json").expanduser()
-    try:
-        v = (json.loads(path.read_text()).get("orchestrate") or {}).get("restart_at", RESTART_AT)
-    except (OSError, ValueError, AttributeError):
-        return RESTART_AT
-    return v if isinstance(v, int) and not isinstance(v, bool) else RESTART_AT
-
-
-def transcript(session):
-    root = pathlib.Path(os.environ.get("CLAUDE_PROJECTS_DIR") or "~/.claude/projects").expanduser()
-    return next(iter(root.glob(f"*/{session}.jsonl")), None) if roles.SESSION.fullmatch(session or "") else None
+transcript = compactions.transcript
 
 
 def context_of(path):
-    """Tokens the newest model call of the transcript read (input + cache read + cache write), or None."""
+    """Tokens the newest main-chain model call of the transcript read (input + cache read + cache write), or None."""
     try:
         with open(path, "rb") as f:
             f.seek(max(f.seek(0, 2) - TAIL_BYTES, 0))
@@ -85,11 +72,11 @@ def context_of(path):
         if '"usage"' not in line:
             continue
         try:
-            u = (json.loads(line).get("message") or {}).get("usage") or {}
-        except ValueError:
+            got = compactions.usage_context(json.loads(line))
+        except (ValueError, AttributeError):
             continue
-        if u:
-            return sum(u.get(k) or 0 for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+        if got is not None:
+            return got
     return None
 
 
@@ -123,14 +110,15 @@ def ts_age(ts, now):
 
 
 class Stream:
-    def __init__(self, me, key="orchestrator", debounce=DEBOUNCE_S, ttl_ms=TTL_MS, cards=True, threshold=None, out=None,
+    def __init__(self, me, key="orchestrator", debounce=DEBOUNCE_S, ttl_ms=TTL_MS, cards=True, out=None,
                  clock=time.monotonic, now=time.time, session=session_of, ctx=context, spawn=None, clear=type_clear,
-                 store=None):
+                 store=None, role_key=None, policy=compactions.policy, hist=compactions.history):
         self.me, self.key, self.debounce, self.ttl, self.cards = me, key, debounce, ttl_ms / 1000, cards
-        if threshold is None:
+        if role_key is None:
             import handoff
-            threshold = restart_at() if handoff.auto_clear_on() else 0
-        self.threshold = threshold
+            role_key = handoff.role_key
+        self.role_key = role_key
+        self.policy, self.hist = policy, hist
         self.out, self.clock, self.now = out or sys.stdout, clock, now
         self.session_of, self.ctx, self.clear = session, ctx, clear
         self.spawn = spawn or self._spawn
@@ -223,15 +211,28 @@ class Stream:
         self.watch_cards(deadline)
 
     def due(self, force=False):
-        """RESTART DUE once the context passed the threshold, again for each RESTART_STEP more; with a batch (force),
-        or alone once the inbox was quiet QUIET_S."""
-        if not self.threshold or not (force or self.clock() - self.last_mail >= QUIET_S):
+        """RESTART DUE when compactions.due says so under the rules whose own auto_clear switch is on, once per reason
+        (a new session, one more auto compaction, or the ceiling passed); with a batch (force), or alone once the
+        inbox was quiet QUIET_S."""
+        try:
+            p = self.policy().streamed()
+        except Exception:  # noqa: BLE001  a judgment that cannot be made is skipped, never fatal
             return []
-        ctx = self.ctx(self.session) if self.session else None
-        if not ctx or ctx <= self.threshold or ctx < self.announced.get(self.session, 0) + RESTART_STEP:
+        if not (p.ceiling or p.compact) or not (force or self.clock() - self.last_mail >= QUIET_S):
             return []
-        self.announced[self.session] = ctx
-        return [f"RESTART DUE: context {ctx // 1000}k > {self.threshold // 1000}k. Once nothing waits on you in this "
+        # The live session, not the one seen last (mail can arrive before cleared() notices a /clear): only the
+        # orchestrator is asked to restart.
+        session = self.session_of(self.me)
+        if not session or self.role_key(session) != "orchestrator":
+            return []
+        try:
+            key, why = compactions.explain(session, self.ctx(session) or 0, p, self.hist)
+        except Exception:  # noqa: BLE001
+            return []
+        if not why or self.announced.get(session) == key:
+            return []
+        self.announced[session] = key
+        return [f"RESTART DUE: {why}. Once nothing waits on you in this "
                 "turn (a question, a subagent, a reply), end it with `orch handoff save --next \"<what to do first>\" "
                 "--restart` (orchestrate references/top-level.md, \"Restart\")"]
 

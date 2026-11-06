@@ -1,5 +1,5 @@
 """The land executor (land_exec.py) and `orch land`'s request path against a fake gh and orca. Run: python3 test_land_exec.py"""
-import ast, json, os, pathlib, subprocess, sys, tempfile, unittest
+import ast, json, os, pathlib, shutil, subprocess, sys, tempfile, unittest
 
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = pathlib.Path(tempfile.mkdtemp(prefix="land-exec-test-"))
@@ -353,6 +353,71 @@ class LandExec(unittest.TestCase):
         self.round()
         self.settled(row, "refused", 1, "single PRs only")
 
+    def stack(self, *members):
+        """Open PRs `members` (bottom first, one of them the PR under test) as one GitHub stack on main."""
+        st = self.gh()
+        for below, n in zip((None, *members), members):
+            st["prs"][str(n)] = dict(pr(n), baseRefName=f"b{below}" if below else "main")
+        st["stacks"] = [{"id": 900, "number": 100, "open": True, "base": {"ref": "main"},
+                         "pull_requests": [{"number": n, "state": "open", "draft": False, "merged_at": None,
+                                            "head": {"ref": f"b{n}", "sha": f"h{n}"}} for n in members]}]
+        self.write(st)
+
+    def test_the_bottom_layer_is_refused_with_the_retarget_that_opens_the_way(self):
+        up = self.n + 100
+        self.stack(self.n, up)
+        row = self.request()
+        self.round()
+        got = self.settled(row, "refused", 1, "single PRs only")
+        self.assertIn(f"gh pr edit {up} --base main --repo o/r", got["reason"])
+        self.assertIn(f"orch land {self.slug} --pr {self.n}", got["reason"])
+        self.assertEqual(self.gh().get("log", []), [], "the executor only says it: nothing is retargeted")
+
+    def test_the_do_line_uses_the_bottom_layers_own_base(self):
+        up = self.n + 100
+        self.stack(self.n, up)
+        st = self.gh()
+        st["prs"][str(self.n)]["baseRefName"] = "release"
+        self.write(st)
+        row = self.request()
+        real = prog.open_rows
+        # The page of open PRs the executor reads can be short of the bottom PR (OPEN_LIMIT); pr view still has it.
+        prog.open_rows = lambda repo: [r for r in real(repo) if r["number"] != self.n]
+        try:
+            self.round()
+        finally:
+            prog.open_rows = real
+        self.settled(row, "refused", 1, f"gh pr edit {up} --base release --repo o/r")
+
+    def test_an_unreadable_base_withholds_the_command_instead_of_guessing_main(self):
+        up = self.n + 100
+        self.stack(self.n, up)
+        st = self.gh()
+        st["prs"][str(self.n)]["drop"] = ["baseRefName"]
+        self.write(st)
+        row = self.request()
+        self.round()
+        got = self.settled(row, "refused", 1, f"#{up}")
+        self.assertNotIn("--base", got["reason"])
+
+    def test_the_bottom_of_three_names_only_the_layer_above_it(self):
+        mid, top = self.n + 100, self.n + 200
+        self.stack(self.n, mid, top)
+        row = self.request()
+        self.round()
+        got = self.settled(row, "refused", 1, f"gh pr edit {mid} --base main --repo o/r")
+        self.assertNotIn(f"gh pr edit {top}", got["reason"])
+
+    def test_a_layer_above_the_bottom_is_told_to_wait_for_the_layers_below(self):
+        for members in ((self.n + 100, self.n), (self.n + 100, self.n, self.n + 200)):
+            with self.subTest(members=members):
+                self.stack(*members)
+                row = self.request()
+                self.round()
+                got = self.settled(row, "refused", 1, f"Land #{members[0]} first")
+                self.assertNotIn("gh pr edit", got["reason"])
+                drain()
+
     def test_a_github_wait_releases_a_lane_taken_in_an_earlier_round(self):
         lane = prog.ExclusiveLock(self.p, "main")
         self.assertTrue(lane.take(self.n))
@@ -486,6 +551,89 @@ class Request(unittest.TestCase):
         self.assertIn("land_executor", out)
         self.assertEqual(self.merged(), [])
         config()
+
+
+class Standalone(unittest.TestCase):
+    """A standalone card's PR in a repo with no program: `orch verdict` / `orch land --repo` create `<name>-standalone`."""
+    SLUG = "r-standalone"
+
+    def setUp(self):
+        drain()
+        LandExec.seq += 1
+        self.n = LandExec.seq + 100
+        self.state = ROOT / f"gh-standalone-{self.n}.json"
+        self.state.write_text(json.dumps({"prs": {str(self.n): pr(self.n)}, "stacks": []}))
+        os.environ["FAKE_GH_STATE"] = str(self.state)
+        shutil.rmtree(prog.HOME / self.SLUG, ignore_errors=True)
+        config()
+
+    def orch(self, *args):
+        r = subprocess.run([sys.executable, HERE / "prog.py", *args], capture_output=True, text=True)
+        return r.returncode, r.stdout + r.stderr
+
+    def test_land_creates_the_program_and_the_next_round_merges(self):
+        land_exec.beat(phase="done")
+        self.assertFalse((prog.HOME / self.SLUG).exists())
+        code, out = self.orch("land", self.SLUG, "--repo", "o/r", "--pr", str(self.n))  # no program, no verdict yet
+        self.assertEqual(code, 2, out)
+        self.assertIn("queued land request", out)
+        cfg = json.loads((prog.HOME / self.SLUG / "program.json").read_text())
+        self.assertEqual((cfg["repo"], cfg["merge_policy"]), ("o/r", "autonomous"))
+        self.assertEqual(store.land_rows(("queued",))[-1]["pr"], self.n)
+        code, out = self.orch("verdict", self.SLUG, "--repo", "o/r", "--pr", str(self.n), "--sha", f"h{self.n}",
+                              "--source", "review:codex")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(land_exec.cmd_round([]), 0)
+        merged = [a for a in json.loads(self.state.read_text()).get("log", []) if a[:2] == ["pr", "merge"]]
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(store.land_rows(("merged",))[-1]["pr"], self.n)
+
+    def test_an_existing_program_is_left_alone(self):
+        self.orch("verdict", self.SLUG, "--repo", "o/r", "--pr", str(self.n), "--sha", f"h{self.n}",
+                  "--source", "review:codex")
+        path = prog.HOME / self.SLUG / "program.json"
+        before = path.read_text()
+        self.orch("land", self.SLUG, "--repo", "o/r", "--pr", str(self.n))
+        self.assertEqual(path.read_text(), before)
+
+    def test_an_existing_program_of_another_repo_is_refused(self):
+        subprocess.run([sys.executable, HERE / "prog.py", "init", self.SLUG, "--repo", "other/r", "--run", "run_x"],
+                       check=True, capture_output=True)
+        for cmd in ("land", "verdict"):
+            code, out = self.orch(cmd, self.SLUG, "--repo", "o/r", "--pr", str(self.n), "--sha", f"h{self.n}",
+                                  "--source", "review:codex")
+            self.assertNotEqual(code, 0, out)
+            self.assertIn("is for other/r, not o/r", out)
+        self.assertNotIn(self.n, [r["pr"] for r in store.land_rows(("queued",))])
+
+    def test_a_second_creation_loses_without_touching_the_first(self):
+        args = [self.SLUG, "--repo", "o/r"]
+        prog.standalone_program(args)
+        path = prog.HOME / self.SLUG / "program.json"
+        first = path.read_text()
+        prog.standalone_program(args)
+        self.assertEqual(path.read_text(), first)
+        self.assertEqual(list(path.parent.glob("program.json.*")), [], "no temporary file is left")
+
+    def test_init_that_loses_the_race_does_not_overwrite(self):
+        prog.standalone_program([self.SLUG, "--repo", "o/r"])
+        path = prog.HOME / self.SLUG / "program.json"
+        first = path.read_text()
+        with self.assertRaises(FileExistsError):  # init passed its exists() check before the card created it
+            prog.write_program(path.parent, {"repo": "other/r"}, "run_x", "human-gate")
+        self.assertEqual(path.read_text(), first)
+
+    def test_executor_off_creates_nothing(self):
+        config(enabled=False)
+        code, out = self.orch("land", self.SLUG, "--repo", "o/r", "--pr", str(self.n))
+        self.assertNotEqual(code, 0, out)
+        self.assertIn("land_executor is off", out)
+        self.assertFalse((prog.HOME / self.SLUG).exists())
+
+    def test_a_slug_that_is_not_the_repos_standalone_program_creates_nothing(self):
+        code, out = self.orch("land", "other", "--repo", "o/r", "--pr", str(self.n))
+        self.assertNotEqual(code, 0, out)
+        self.assertFalse((prog.HOME / "other").exists())
 
 
 class Setup(unittest.TestCase):

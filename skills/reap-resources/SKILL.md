@@ -16,7 +16,7 @@ command you run by hand runs alone (`end-session` §4).
 ## Cards: take stock of every Orca card
 
 "끝난 카드 정리해줘", or `/agent-skills:reap-resources` with it: every Orca card on this host, whatever made it,
-gets one verdict: 삭제, 터미널만 닫기 (open PR), 남김, or 사람 결정. The rule and the traps it covers (a stale
+gets one verdict: 삭제, 터미널만 닫기 (open PR, or a session idle for hours), 남김, or 사람 결정. The rule and the traps it covers (a stale
 `origin/HEAD`, a pre-rebase copy, idle shells holding the card, a screen that says "done"):
 [references/cards.md](references/cards.md), the only place it is written.
 
@@ -56,7 +56,7 @@ made, or an agent made with `orca worktree create`, with or without `--parent-wo
 main checkout never show up; anything not registered shows up
 only as the unregistered-media lines of `evidence`, never as a target. Three kinds go by what the user listed instead of
 the ledger, and each is off until listed. `stack-volume`: only stacks whose names start with a prefix in
-`reap.stack_volumes.prefixes` (each ends in `-`, at least 4 characters; `label` is the extra owner label, never a
+`reap.stack_volumes.prefixes` (each ends in `-`, at least 4 characters; `label` is the extra owner label key, or a list of them (a string still works), never a
 `com.docker.*` key; `protect` lists owners it never touches). `stopped-container`: containers named under
 `reap.stopped_containers.prefixes` (the same shape; no wildcard) that compose did not make. `labeled-volume`: volumes
 whose provenance label (below) is in `reap.labeled_volumes.origins`. `reap --plan` re-checks each
@@ -194,6 +194,14 @@ it scans the janitor kinds (user-folder, program and state-file at most once a d
 own path on it in the same process: the scheduled kinds only, each target re-scanned and acted on only with the same
 identity, inside its lock, after the guard passes again. A target whose act failed rests a day, on its own
 (`<state>/janitor-fails.json`); a chrome-window is never acted on, since closing it needs a URL check in a browser.
+Nothing a janitor turn used to run through an auto-mode allow rule is left to an agent: the file moves, renames, the
+GUI-app SIGTERM, `docker compose down`, the stack-volume and leftover removals, worker release, the card's terminal
+closes and removal, and the round's own records all run in this process. The one effect that stays outside is a browser
+window: closing it, and retiring its ledger line, go to the person. (The Run now prompt asks an agent to run
+`precheck --act`, not `reap --plan`.) A job registered before `--act` existed still runs the plan-only `precheck` and
+starts an agent that runs `reap --plan`; `orca automations list` shows a precheck without `--act` for it. Bring it up
+to date with `skills-sync setup enable janitor`, and again with `enable janitor-load` when that job is registered (one
+`enable` does not touch the other), then read both prechecks back, before an auto-mode rule for `reap --plan` is removed.
 What a person has to look at (cards judged 사람 결정, chrome windows, resting targets) goes to `reap.inbox_to` as one
 message, sent again only when a key not in the last sent set appears. Each round leaves one row in
 `<state>/janitor-runs.jsonl` (targets, acted, skipped, failed, left past the 480-second budget, error; an act still running at 570 seconds is cut and recorded as failed), the only record
@@ -371,8 +379,9 @@ draws its PC load panel from it.
 while the level is danger, and at warn until a round ran its scan in the last `gate_fresh_minutes` (15; a failed scan
 counts, so warn never holds for good). At danger the deny puts the command in a queue
 (`<state>/pressure-queue.json`, one entry per session and command, a repeat deny counting the same entry) with a
-deadline `queue_minutes` (15) away, and on the dashboard's Needs-you list (key `pressure:queue:<id>`, its copy button
-`pressure.py queue`, never the held command). The deny names the wait: `round` first unless one is fresh, then
+deadline `queue_minutes` (15) away. The dashboard reads that file itself: the waiting and retrying entries are one
+Needs-you item ("기계 대기 N건"), one that gave up or failed is an item of its own (key `pressure:queue:<id>`, its copy
+button `pressure.py queue`, never the held command). Nothing is copied to `inbox-external.jsonl`. The deny names the wait: `round` first unless one is fresh, then
 `Monitor` on `queue wait <id>`, which exits 0 once the hook would let that command through, so the session runs the
 same command again, and 3 when it must not run (deadline passed, recorded as given up; or already retried). The queue
 never runs a command itself: the retry is the asking session's own tool call, through the same hooks and permission
@@ -432,7 +441,7 @@ Paths of a particular project's test cache stay here, not in this repo:
           "program_days": 7, "state_days": 7, "log_max_kb": 512,
           "inbox_to": "run:<id>", "plan_repeat": 2, "idle_minutes": 30, "load_cooldown_minutes": 60,
           "user_folders": [], "preview_ports": [4500, 4599],
-          "stack_volumes": {"prefixes": ["<throwaway project prefix>-"], "label": "<owner label key>", "protect": ["<project>"]},
+          "stack_volumes": {"prefixes": ["<throwaway project prefix>-"], "label": ["<owner label key>"], "protect": ["<project>"]},
           "stopped_containers": {"prefixes": ["<throwaway container prefix>-"], "protect": ["<project or container>"]},
           "labeled_volumes": {"namespace": "<label namespace>", "origins": ["verify-<app>"], "protect": ["<project>"]}, "alert": {"orphan_procs": 5,
                     "dangling_volumes": 50, "stale_branches": 30, "stale_worktrees": 10},

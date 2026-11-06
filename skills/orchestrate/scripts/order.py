@@ -8,12 +8,19 @@ carries yet. A session that accepts an instruction as work writes it here before
                                        --stand-in: the unit only stands for the order (the temporary to-do an import
                                        replaced). It is shown, but does not carry the order: the brief still counts it
                                        as unlinked, and a closed stand-in is never evidence the order was done
-  done oN | drop oN [--reason TEXT]    close it by hand; nothing closes one by itself yet. For kind=feedback, done needs
-                                       a real pr: link whose PR gh shows merged (the merge commit is kept in the event;
-                                       a stand-in, to-do or card is not evidence) and drop needs --reason
-  reopen oN                            a closed order is open again, and its links-complete mark is cleared
-  links-complete oN [--undo]           say every unit the order needs is linked (needs one real link). PR 5c's automatic
-                                       close waits for this mark; nothing reads it before then
+  done oN | drop oN [--reason TEXT]    close it by hand. For kind=feedback, done needs a real pr: link whose PR gh shows
+                                       merged (the merge commit is kept in the event; a stand-in, to-do or card is not
+                                       evidence) and drop needs --reason. tidy closes one itself only with
+                                       orchestrate.order_auto_close true (off by default); until then it records a
+                                       would_close event for each order it would have closed (see shadow)
+  reopen oN                            a closed order is open again, and its links-complete mark is cleared; tidy does
+                                       not close it again on the evidence it was closed on
+  links-complete oN [--undo]           say every unit the order needs is linked (needs one real link). Only an order with
+                                       this mark is a candidate for the automatic close. A real link added later clears
+                                       it: say it again
+  shadow                               the orders tidy would have closed, set against what the sessions did (agree,
+                                       pending, differs, reopened) and the ones closed by hand that were never a
+                                       candidate (missed, with what holds them now). Exits 1 on differs or reopened
   show oN [--json]                     the order's text and links; the card start reads it with --json
   list [--status open|done|dropped] [--json]
   import FILE [--skip REGEX] [--dry-run | --check]   numbered lines of a hand list (`## section` then `1. text`) become
@@ -23,7 +30,7 @@ carries yet. A session that accepts an instruction as work writes it here before
 """
 import hashlib, json, os, pathlib, re, subprocess, sys
 
-import fleet, store
+import fleet, order_close, store
 
 USAGE = __doc__.split("\n\n", 1)[0] + "\n" + __doc__.split("\n\n", 1)[1]
 
@@ -113,15 +120,24 @@ def close(oid, sub, reason):
     """done or drop. A feedback row is not closed on the session's word: `done` needs a PR linked to it (a real link,
     not a stand-in) that GitHub shows merged, and `drop` needs --reason. The merge commit goes in the close event."""
     row = store.order_get(oid)
+    # The units as they are now go in the close event, so a Reopen can keep them (tidy does not close the order again
+    # on the same evidence). None when a unit is not ended or cannot be read: Reopen then reads them again.
+    snap = order_close.snapshot_now(row) if row["status"] == "open" else None
+
+    def same_links(now_row):  # the snapshot is of the links read above; a link added since is another order's evidence
+        real = lambda r: sorted(u for u in r["links"] if u not in r["stand_ins"])  # noqa: E731
+        if real(now_row) != real(row):
+            raise ValueError(f"{oid}: its links changed while closing; run it again")
     if row["kind"] != "feedback":
-        return store.order_close(oid, "dropped" if sub == "drop" else "done", _by(), reason=reason)
+        return store.order_close(oid, "dropped" if sub == "drop" else "done", _by(), reason=reason, check=same_links, snapshot=snap)
     # The checks below run inside the close transaction, and only on a row that is open there. A row read as closed
     # carries none, so a reopen between the read and the write is refused instead of closed without evidence.
     if sub == "drop":
-        def need_reason(_):
+        def need_reason(now_row):
             if not (reason or "").strip():
                 raise ValueError(f"{oid} is feedback: drop it with --reason TEXT (why it needs no change)")
-        return store.order_close(oid, "dropped", _by(), reason=reason, check=need_reason)
+            same_links(now_row)
+        return store.order_close(oid, "dropped", _by(), reason=reason, check=need_reason, snapshot=snap)
     evidence = {}
     if row["status"] == "open":
         prs = [u[3:] for u in row["links"] if u.startswith("pr:") and u not in row["stand_ins"]]
@@ -133,9 +149,11 @@ def close(oid, sub, reason):
             raise ValueError(f"{oid} is feedback: none of {', '.join(prs)} is merged (per gh); done waits for the merge")
 
     def still(now_row):  # the links as written, not as read before the network call
+        same_links(now_row)
         if not any(f"pr:{pr}" in now_row["links"] and f"pr:{pr}" not in now_row["stand_ins"] for pr in evidence):
             raise ValueError(f"{oid}: the merged PR link changed, or the order was reopened, while closing; run it again")
-    return store.order_close(oid, "done", _by(), evidence={"merged_prs": evidence} if evidence else None, reason=reason, check=still)
+    return store.order_close(oid, "done", _by(), evidence={"merged_prs": evidence} if evidence else None, reason=reason,
+                             check=still, snapshot=snap)
 
 
 def main(argv):
@@ -155,8 +173,13 @@ def main(argv):
             r = close(oid, sub, opt(rest, "--reason"))
             print(f"{r['id']} {r['status']}")
         elif sub == "reopen" and oid:
-            r = store.order_reopen(oid, _by())
+            # A close by hand keeps no snapshot of its units, so read them now: tidy then waits for them to change.
+            r = store.order_reopen(oid, _by(), snapshot=order_close.snapshot_now(store.order_get(oid)))
             print(f"{r['id']} {r['status']}")
+        elif sub == "shadow":
+            lines, wrong = order_close.compare()
+            print("\n".join(lines))
+            sys.exit(1 if wrong else 0)
         elif sub == "links-complete" and oid:
             r = store.order_links_complete(oid, _by(), undo="--undo" in rest)
             print(f"{r['id']} links {'complete at ' + r['links_complete_at'] if r['links_complete_at'] else 'not marked complete'}")

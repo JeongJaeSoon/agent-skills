@@ -56,7 +56,7 @@ store.import_apply(checks=False)
 fleet.write_atomic(sd / "prs.json", json.dumps({"prs": PRS, "me": "owner-me"}))
 write_state(STATE)
 board.set_row("r-pr", title="r-pr", repo="acme/app", status="moving", pr="acme/app#2", next="작업")
-board.set_row("r-wt", title="r-wt", repo="acme/app", status="moving", worktree="s-linked", next="작업")
+board.change(lambda s: board.put(s, "r-wt", dict(title="r-wt", repo="acme/app", status="moving", worktree="s-linked", next="작업")))  # as before A-ANNOT
 
 got = rowstate.inputs(now)
 

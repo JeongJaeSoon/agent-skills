@@ -87,13 +87,14 @@ https://github.com/JeongJaeSoon/agent-skills 의 Claude Code 플러그인을 설
 
 - 「ABC-1 끝내줘」라고 하면 `deliver-ticket`이 계획부터 머지, 티켓 닫기까지 한다. 트래커가 있어야 한다(기본은 Linear, 바꾸려면 `tracker.adapter`, [설정](#설정) 참고).
 - 「현황 보고해줘」라고 하면 `brief`가 돈다. Claude Code에 내장 `/brief`가 있어서 직접 부를 때는 `/agent-skills:brief`다. `/brief-pane`은 같은 보고를 채팅 옆 패널로 연다. 패널이 열려 있는 동안만 30초마다 갱신된다(110열 이상이면 옆에 붙고, 더 좁으면 프롬프트 위에 뜬다).
-- Orca 안에서 `claude --agent agent-skills:orchestrator --name orchestrator`로 최상위 세션을 띄우고 모든 세션을 맡긴다. 오케스트레이터가 프로젝트마다 리드 세션을 띄우고, 리드가 워커를 돌린다. 오케스트레이터나 리드 세션의 맥락이 `orchestrate.restart_at`(기본 130k 토큰)을 넘고 기다리는 일이 없으면, 입력창 위 band가 지금 `/clear`해도 된다고 알린다. 다음 세션은 역할과 저장된 handoff를 이어받는다. `/clear`는 사람이 친다. `orchestrate.auto_clear: true`로 두면 세션이 스스로 친다.
+- Orca 안에서 `claude --agent agent-skills:orchestrator --name orchestrator`로 최상위 세션을 띄우고 모든 세션을 맡긴다. 오케스트레이터가 프로젝트마다 리드 세션을 띄우고, 리드가 워커를 돌린다. 오케스트레이터 세션이 자동 컴팩션을 3번 거쳤거나, 컴팩션해도 맥락이 줄지 않거나, 두 번이 30분 안에 이어지고(`orchestrate.compact_restart`, 기본 켜짐; `restart_at`은 토큰 상한이고 지정해야만 켜진다) 기다리는 일이 없으면, 입력창 위 band가 지금 `/clear`해도 된다고 알린다. `restart_at` 기본값 130k는 없어졌으므로, 그 기본값에 기대던 설정은 이제 컴팩션 이력으로 안내를 받는다. 다음 세션은 역할과 저장된 handoff를 이어받는다. 리드는 자동 컴팩션에 맡기므로 band가 뜨지 않는다. 리드의 `orch handoff save`는 `lead:<slug>`에 저장되고, 오케스트레이터 키에 저장하려 하면 거부된다. `/clear`는 사람이 친다. `orchestrate.auto_clear: true`는 상한을 넘었을 때, `orchestrate.compact_restart.auto_clear: true`는 컴팩션 규칙에 걸렸을 때 세션이 스스로 친다.
 
 ## 사람이 결정권을 쥐는 지점
 
 - **내 설정.** `setup-pc`, `tune-automode`, `skills-config`는 diff와 `!` 줄만 만들고, 실행은 사람이 한다. 이 동작은 바꿀 수 없다.
 - **권한 창과 거부.** 권한 창은 사람의 응답을 기다린다. auto mode 분류기가 행동을 거부하면 에이전트는 보고하고 멈춘다. 어떤 부류의 행동을 이후 통과시키려면 사람이 `permissions.allow` 항목이나 `tune-automode`가 초안을 쓴 autoMode 규칙을 더한다.
 - **되돌릴 수 없는 행동.** 파괴적 migration, 공유 브랜치 force push, 프로덕션 배포, 바깥으로 보내기는 늘 멈추고 묻는다.
+- **카드의 작업 습관.** Dispatch로 띄운 카드가 Bash로 파일을 쓰거나(`sed -i`, 리다이렉트), 커밋·`rm`을 다른 명령과 한 호출에 묶거나, worktree 밖이나 main checkout을 고치거나, auto-memory에 쓰거나, 테스트 없이 push하면 경고 한 줄이 붙고 `turn-warnings.jsonl`에 기록된다. 막지는 않는다. `docs/skills.md`의 `worker.*` 키로 점검마다 끄거나 `deny`로 올린다.
 - **머지.** `orchestrate` 카드는 첫 프롬프트가 머지를 승인했으면 `orch land`로 자기 PR을 머지하고 스스로 닫는다. CI가 없는 저장소는 먼저 `orchestrate.no_ci_repos`에 넣어야 한다. 프로그램 밖의 `deliver-ticket`이 스스로 머지하는 것은 그 저장소의 머지를 허용하는 autoMode 규칙이 있을 때뿐이고, 없으면 묻는다. `human-gate` 정책으로 두거나 직접 보겠다고 하면 머지마다 그 앞에서 멈춘다.
 - **정기 정리.** `janitor`와 `pressure-watch`가 끝난 에이전트의 잔여물을 정기적으로 치운다. 끄려면 `skills-sync setup disable <이름>`. `watch-prs`의 내 PR 자동 승인·자동 머지는 설정하기 전까지 꺼져 있다.
 
@@ -106,7 +107,7 @@ https://github.com/JeongJaeSoon/agent-skills 의 Claude Code 플러그인을 설
 | 묶음 | 스킬 | 하는 일 |
 |---|---|---|
 | [티켓 하나](docs/skills.md#티켓-하나) | `write-ticket`, `deliver-ticket`, `ui-review`, `handoff-ticket`, `dispatch-card`, `end-session` | 티켓 쓰기부터 완료, 다음 티켓 넘기기, 진행 기록과 세션 정리까지 |
-| [프로젝트 하나](docs/skills.md#프로젝트-하나-orca-워커-여러-개) | `orchestrate`, `reboot`, `measure-delivery` | 여러 티켓을 Orca 워커로 병렬 처리해 머지하고, 재시작으로 떨어진 대기·바인딩을 되살리고, 끝난 뒤 실제로 어땠는지 잰다 |
+| [프로젝트 하나](docs/skills.md#프로젝트-하나-orca-워커-여러-개) | `orchestrate`, `reboot` | 여러 티켓을 Orca 워커로 병렬 처리해 머지하고, 재시작으로 떨어진 대기·바인딩을 되살리고, 끝난 뒤 실제로 어땠는지 잰다(`reflect`의 측정 모드) |
 | [머신 하나](docs/skills.md#머신-하나) | `reap-resources`, `secure-fill`, `tune-automode`, `skills-config`, `setup-pc` | 끝난 세션의 잔여물 정리, 에이전트가 보지 않는 비밀값 입력, autoMode 규칙 초안, 설정 키 변경, PC 설치·갱신 |
 | [채팅·GitHub](docs/skills.md#채팅) | `watch-mentions`, `watch-prs` | 나와 관련된 채팅과 PR을 작업으로 모은다 |
 | [어댑터](docs/skills.md#어댑터) | `use-tracker`, `use-notes` | Linear·Jira 티켓, Obsidian·Markdown 노트 |
@@ -114,6 +115,14 @@ https://github.com/JeongJaeSoon/agent-skills 의 Claude Code 플러그인을 설
 | [pstack](docs/skills.md#pstack-스킬-lauren-tan-mit) | `architect`, `arena`, `blast-radius`, `create-verification-skill`, `figure-it-out`, `how`, `interrogate`, `maintain-verification-skill`, `principles`, `recall`, `reflect`, `show-me-your-work`, `swarm`, `tdd`, `teach`, `why` | 설계, 비교, 영향 범위, 검증, 설명, 회고 |
 
 pstack 묶음은 Lauren Tan의 [pstack](https://github.com/cursor/plugins)(MIT)에서 가져왔고, 지금은 이 저장소에서 따로 관리한다. 원본 파일은 upstream 그대로 `vendor/pstack`에 두고, 원할 때 켜는 하루 한 번짜리 작업이 upstream 변경을 알려 주면 필요한 것만 손으로 옮긴다. 여러 세션이 함께 일할 때 워커 위의 층은 오케스트레이터(최상위 세션 하나)와 리드(프로젝트 하나를 맡은 세션) 둘이다. 자세한 것은 [orchestrate의 Roles 표](skills/orchestrate/SKILL.md#roles)(영어).
+
+## 이름이 바뀐 스킬
+
+몇몇 스킬은 다른 스킬의 모드로 합쳐졌다. 옛 이름은 없어졌으므로 `/agent-skills:<옛 이름>`은 더 이상 아무것도 실행하지 않는다. 새 명령을 쓴다.
+
+| 옛 명령 | 새 명령 / 모드 |
+|---|---|
+| `/agent-skills:measure-delivery` | `/agent-skills:reflect`의 측정 모드 |
 
 ## 설정
 
@@ -142,7 +151,7 @@ pstack 묶음은 Lauren Tan의 [pstack](https://github.com/cursor/plugins)(MIT)�
 CI가 없다. 변경을 보내기 전에 테스트 파일을 모두 돌린다.
 
 ```bash
-for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/measure-delivery/scripts/test_measure.py skills/reap-resources/scripts/test_reap.py skills/reap-resources/scripts/test_cards.py skills/reap-resources/scripts/test_pressure.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/watch-prs/scripts/test_review_wait.py skills/watch-prs/scripts/test_notify.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py skills/skills-config/scripts/test_config_emit.py skills/setup-pc/scripts/test_setup_check.py scripts/test_setup.py skills/brief/scripts/test_table_width.py skills/reflect/scripts/test_lesson_ids.py skills/deliver-ticket/scripts/test_shots.py skills/deliver-ticket/scripts/test_review_pick.py skills/ui-review/scripts/test_ui_measure.py skills/reboot/scripts/test_reboot.py hooks/test_*.py scripts/test_sync.py scripts/test_card.py scripts/test_preview_watch.py scripts/test_automations.py scripts/test_share_server.py scripts/test_reap_hard.py scripts/test_public_shapes.py scripts/test_skill_tokens.py scripts/test_allowed_tools.py; do python3 "$t"; done
+for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/reflect/scripts/test_measure.py skills/reap-resources/scripts/test_reap.py skills/reap-resources/scripts/test_cards.py skills/reap-resources/scripts/test_pressure.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/watch-prs/scripts/test_review_wait.py skills/watch-prs/scripts/test_notify.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py skills/skills-config/scripts/test_config_emit.py skills/setup-pc/scripts/test_setup_check.py scripts/test_setup.py skills/brief/scripts/test_table_width.py skills/reflect/scripts/test_lesson_ids.py skills/deliver-ticket/scripts/test_shots.py skills/deliver-ticket/scripts/test_review_pick.py skills/ui-review/scripts/test_ui_measure.py skills/reboot/scripts/test_reboot.py hooks/test_*.py scripts/test_sync.py scripts/test_card.py scripts/test_preview_watch.py scripts/test_automations.py scripts/test_share_server.py scripts/test_reap_hard.py scripts/test_public_shapes.py scripts/test_skill_tokens.py scripts/test_allowed_tools.py; do python3 "$t"; done
 bash scripts/pstack-sync-test.sh
 ```
 

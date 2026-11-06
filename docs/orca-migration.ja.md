@@ -86,8 +86,10 @@
 - doing・保留・やること・いまのリストの項目には、それぞれ安定した id `b<N>` が付きます。言い回しを変えてもリストを移っても変わらず、ほかの仕事に再び使われることはありません。古い `doing:`・`later:`・`do:`・`todo:` の id は、import のときに指していた項目を引き続き指します。
 - リストから外した項目は行が `dropped` として残り、最後の値は `event` に残ります。
 - `board.prev.json` と `tidy.jsonl.1` はなくなります。変更前後の値は `event` にあり、二つのファイルは import がバックアップへ移します。
-- 生きているカードや subagent を指すタイトルの `orch board doing add` は拒否します。それらには自分の行があるからです。`--force --why <理由>` を付けると追加し、理由をイベントに残します。
-- カードにつながった行への `orch board set --pr` と、別のカードを指す `--worktree` は拒否します。行はつながりを保ち、Orca の PR を表示します。つながっていない行は `--worktree` で一度だけつなげます。
+- 生きているカードや subagent を指すタイトルの `orch board doing add` は拒否します。それらには自分の行があるからです。回避フラグはありません。オーケストレーター自身の次の行動は `orch board todo add`、カードがやることはカードへのメッセージ、名前が重なるだけの別の仕事はタイトルを変えて書き直します。
+- カードにつながった行への `orch board set --pr` と、別のカードを指す `--worktree` は拒否します。行はつながりを保ち、Orca の PR を表示します。
+- カードにつながる新しい行（`--worktree` で、または id・タイトルに含まれる名前で）は拒否します。カードについて Orca が知らないことはカード注釈に書きます: `orch board set card:<worktree> [--phase P] [--progress N/M] [--after owner/repo#N] [--owner W --next T]`。ほかの項目は拒否します。`--owner` と `--next` はオーナー待ちの記録、`--next` だけならマージ後の段階（リリース・デプロイ）、`-` は項目を空にします。注釈は id が `card:<worktree>` で、タイトル・PR・worktree を持たない `board_row` の行です。ブリーフにはまだ表示されません。
+- `orch board annot-migrate` は既存のカードにつながった行を注釈へ移します（`--apply` がなければ試行のみ）。import が残した worktree、行が持つ worktree、id・タイトルの名前が、Orca が表示するカードちょうど一つを指すときに移します。元の行は `dropped` になり（元の値は `event` に残ります）、`row:<id>` は `card:<worktree>` の別名になって、古い「閉じた」記録が引き継がれます。指すカードがない行、二つを指す行、ほかの行とカードを共有する行はそのまま残り、対処コマンドとともに `중복 N건` に出ます。再実行しても安全です。ブリーフが注釈を読むようになるまで `--apply` は拒否します。
 - Orca が知っているリードへの `orch board lead add` は拒否します。行をつなぐには `orch board set <lead> --kind lead --repo <repo> --worktree <worktree>` を使います。Orca から見えないリードには、これまでどおり `lead add` を使います。
 - 受信箱の項目を閉じても `inbox-external.jsonl` には書きません。閉じた記録が見ていた行を覚えているので、そのキーの新しい行ができればその行が決め、開き直すのに新しい行は要りません。ファイルが書き直されてその行がなくなると、最後の行が決め、ブリーフの headline に `인박스 기록 어긋남` が出ます。
 - `orch db import` の前は、board のコマンドが `orch db migrate`（メインチェックアウトの絶対パス）を案内して止まり、`orch board open` も同じ行を stderr に出し、ブリーフの headline に `이행 대기: 보드·결정 DB` が出て、行はすべて ❔ になります。
@@ -126,3 +128,23 @@
 4. 前のリリースに戻して fast-forward し、書き手をもう一度起動します。
 
 あとで import すれば、ファイルをもう一度取り込みます。テーブルは置き換わり、番号は続きから振られるので、ロールバック前の `b<N>` が再び使われることはありません。決定の段階まで戻すときは、この節を終えてから「元に戻す（決定）」に従います。
+
+# Needs you と Sent が元のデータを直接読む（2026-11-06）
+
+## 何が変わるか
+
+- Needs you が `pressure-queue.json` と `patrol.jsonl` を直接読みます。待機中・再試行中の保留コマンドは「기계 대기 N건」（機械の待機 N 件）の 1 項目、諦めたものと失敗したもの、開いている巡回の発見はそれぞれ別の項目です。どちらも `inbox-external.jsonl` には書かなくなります。非表示と閉じるは、これまでどおり queue id と発見（`patrol:<id>:<detected_at>`）の単位です。
+- ダッシュボードから打った行は `orch sent` ログの行（`kind: dashboard`）です。Sent にはログと Orca 自身の記録が出ます。生きているセッションの transcript にしか見つからない送信は行にならず、警告（「ログにも Orca にも合わない送信 N 件」）として数えます。
+- PR イベントは `events.jsonl` だけに書きます（`kind: pr_*`。`pr-events.jsonl` が持っていた owner・checks・head を含みます）。
+
+## 切り替えの順序
+
+1. 読み込まれるチェックアウトを fast-forward します。ダッシュボードは自分で再起動し、新しいコードは状態を変えなくても動き出します。
+2. `orch-dash migrate-inputs` は行うことを表示するだけで、何も書きません。件数を確認します。
+3. `orch-dash migrate-inputs --apply` は、`inbox-external.jsonl` の開いている巡回・pressure 待機列の行ごとに `resolve` 行（理由 `migrated`）を足し、`sends.jsonl` の打った行を sent ログへ移して、そのファイルを読み取り専用の `sends.archive.jsonl` として残し、`pr-events.jsonl` を読み取り専用にします。消すものはなく、もう一度実行しても残りはありません。
+
+手順 3 の前でも古い行はすでに表示されず、移す前に打った行だけが sent ログにまだありません。
+
+## 元に戻す
+
+前のリリースに戻して fast-forward します。古いコードが次の回で pressure と巡回の行を自分で書き直します。保管したファイルをまた読むときは書き込み権限を戻し（`chmod u+w`）、`sends.archive.jsonl` を `sends.jsonl` に戻します。

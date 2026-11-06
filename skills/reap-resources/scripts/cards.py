@@ -23,6 +23,11 @@ import cardguard, reap, rm_refused  # noqa: E402
 REMOVE, CLOSE, KEEP, ASK = "삭제", "터미널만 닫기", "남김", "사람 결정"
 ACTING = (REMOVE, CLOSE)
 SCREEN_LINES = 40
+# Rule 8b. A card kept only because its session never said it was done has no work to lose, so it closes sooner.
+STALE_HOURS = 24
+CLOSE_HOURS = 2
+LIVE_UNDONE = "PR 없음, Claude 세션이 있음(끝났다는 말 없음)"
+REFLOG_UNREAD = "PR 없음, 커밋 이력(reflog)을 읽지 못함"
 DONE_PATTERNS = (r"닫아도\s*(된|돼|좋|괜찮)", r"종료해도\s*(된|돼|좋|괜찮)", r"(can|may) (now )?be closed",
                  r"safe to close", r"閉じて(も)?(大丈夫|よい|いい|構いません)")
 QUESTION_PATTERNS = cardguard.QUESTION_PATTERNS
@@ -45,7 +50,12 @@ def sh(cmd, cwd=None, input=None, errors=None):
 
 def settings(cfg):
     c = cfg.get("cards") or {}
+
+    def hours(key, default):
+        v = c.get(key, default)
+        return float(v) * 3600 if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 else None
     return {"idle_s": float(cfg.get("idle_minutes") or 30) * 60,
+            "stale_s": hours("stale_hours", STALE_HOURS), "close_s": hours("idle_close_hours", CLOSE_HOURS),
             "prefixes": tuple(c.get("protect_prefixes") or ("lead-",)),
             "done": [re.compile(p, re.I) for p in c.get("done_patterns") or DONE_PATTERNS],
             "question": [re.compile(p) for p in c.get("question_patterns") or QUESTION_PATTERNS]}
@@ -57,6 +67,19 @@ def gh_repo(path, run):
     url = (run(["git", "-C", path, "remote", "get-url", "origin"]) or "").strip()
     m = re.search(r"github\.com[:/]([^/]+/[^/]+?)(\.git)?$", url)
     return m and m.group(1)
+
+
+def under_pr_head(path, head, pr_head, run):
+    """HEAD is the PR head or a step on the way to it. `is-ancestor` fails the same way for "no" (exit 1) and for a
+    head commit this clone never had (exit 128: the remote branch was deleted at merge), so only the first is a "no";
+    for the second GitHub is asked. Unreadable counts as no: the card is kept."""
+    if run(["git", "-C", path, "merge-base", "--is-ancestor", head, pr_head]) is not None:
+        return True
+    if run(["git", "-C", path, "cat-file", "-e", pr_head + "^{commit}"]) is not None:
+        return False
+    repo = gh_repo(path, run)
+    out = repo and run(["gh", "api", f"repos/{repo}/compare/{head}...{pr_head}", "--jq", ".status"])
+    return (out or "").strip() in ("ahead", "identical")
 
 
 def landed(path, head, run):
@@ -210,7 +233,7 @@ def gather(w, m, run=None):
         return {**f, "protected": f"복구 전 워커({d})의 카드: 미커밋 변경, 열린 PR 또는 PR 없는 조사 카드"}
     if ref and f["pr_head"] and head != f["pr_head"]:
         # HEAD behind the PR's head is the PR's work; HEAD past it is new work on a reused branch name.
-        f["carried"] = run(["git", "-C", p, "merge-base", "--is-ancestor", head, f["pr_head"]]) is not None
+        f["carried"] = under_pr_head(p, head, f["pr_head"], run)
     else:
         f["carried"] = bool(ref)
     if not ref or not f["carried"]:
@@ -224,7 +247,8 @@ def gather(w, m, run=None):
         f["handed_to"] = next((q for q, h in (m.get("heads") or {}).items()
                                if q != p and h == f["pr_head"]), None)
     claude, busy, other = processes_in(p, m["rows"], m["cwd_of"])
-    f.update(claude=claude, busy=busy, other=other, quiet=m["quiet"](p))
+    f.update(claude=claude, busy=busy, other=other, quiet=m["quiet"](p),
+             transcripts=str(m["projects"] / re.sub(r"[^A-Za-z0-9]", "-", p)) if m.get("projects") else None)
     terms = run(["orca", "terminal", "list", "--worktree", f"path:{p}", "--json"])
     try:
         res = json.loads(terms)["result"]
@@ -242,7 +266,8 @@ def gather(w, m, run=None):
                 screen = classify_screen(json.loads(out)["result"]["terminal"]["tail"], m["st"])
             except (TypeError, ValueError, KeyError):
                 screen = "unreadable"
-        f["terminals"].append({"handle": t["handle"], "agent": agent, "silent": silent, "screen": screen})
+        f["terminals"].append({"handle": t["handle"], "agent": agent, "silent": silent, "screen": screen,
+                               "output_known": bool(t.get("lastOutputAt"))})
     if stale and (f["terminals"] or f["claude"]):  # a Claude process is the session too, terminal or not
         return {**f, "protected": reap.patrol_hold(stale)}
     return f
@@ -250,8 +275,9 @@ def gather(w, m, run=None):
 
 # ---------------------------------------------------------------- the rule
 
-def judge(f, idle_s):
-    """(verdict, why, handles to close). Pure: every fact comes from gather()."""
+def judge(f, idle_s, stale_s=None, close_s=None):
+    """(verdict, why, handles to close). Pure: every fact comes from gather(). stale_s, close_s: rule 8b's thresholds,
+    None off."""
     if f.get("protected"):
         return KEEP, f"보호: {f['protected']}", []
     if f.get("handed"):
@@ -292,6 +318,26 @@ def judge(f, idle_s):
         if agents_idle and handles:
             return CLOSE, f"열린 PR {f['pr']}: worktree 는 두고 idle 터미널 {len(handles)}개만 닫음", handles
         return KEEP, f"열린 PR {f['pr']}" + ("" if agents_idle else ", 세션이 아직 조용하지 않음"), []
+    verdict = settled(f, handles, live, said_done, agents_idle)
+    # 8b: "done" on the screen is no evidence of hours of quiet, and a keep for what could not be read is not timed out.
+    limit = close_s if verdict[1] == LIVE_UNDONE else stale_s
+    # Judged from what gather() read, not from the verdict's wording: settled() can return an earlier keep (LIVE_UNDONE)
+    # before it reaches the check that would have named what it could not read.
+    if f.get("pr"):
+        read = f.get("carried") or f.get("landed") is not None
+    else:
+        read = f.get("landed") is not None and (not f["landed"] or None not in (f.get("own_commit"), f.get("age")))
+    git_state_known = f.get("unpushed") is not None and read
+    if verdict[0] == KEEP and limit and git_state_known and agents and handles and isinstance(quiet, (int, float)) \
+            and quiet >= limit and all(t.get("output_known") and t["silent"] >= limit for t in agents):
+        where = f" ({f['transcripts']})" if f.get("transcripts") else ""
+        return CLOSE, (f"유휴 {quiet / 3600:.1f}시간({verdict[1]}): worktree 와 변경은 두고 터미널 {len(handles)}개만 닫음, "
+                       f"이어서 하려면 claude --resume{where}"), handles
+    return verdict
+
+
+def settled(f, handles, live, said_done, agents_idle):
+    """Rules 9 to 14: a card with no open PR whose agents are not busy, asked or unreadable."""
     if f.get("dirty"):
         return KEEP, "커밋 안 된 변경(추적 안 되는 파일 포함, ignored 제외)", []
     if f.get("unpushed") is None:
@@ -312,11 +358,11 @@ def judge(f, idle_s):
     if not f["landed"]:
         return KEEP, f"PR 없음, HEAD 가 기본 브랜치에 없음({f['landed_via']})", []
     if live and not said_done:
-        return KEEP, "PR 없음, Claude 세션이 있음(끝났다는 말 없음)", []
+        return KEEP, LIVE_UNDONE, []
     # HEAD on the base branch is "landed" only if the card's own commits went in; a card that never committed sits
     # there from the day it was made (and its PR may come hours later).
     if f.get("own_commit") is None or f.get("age") is None:
-        return KEEP, "PR 없음, 커밋 이력(reflog)을 읽지 못함", []
+        return KEEP, REFLOG_UNREAD, []
     if not f["own_commit"] and f["age"] < NEW_CARD_S:
         return KEEP, f"PR 없음, 새 카드, 아직 커밋 없음({int(f['age'] // 3600)}시간 전 생성)", []
     return REMOVE, f"PR 없음, HEAD 가 기본 브랜치에 있음({f['landed_via']}){tail}", handles
@@ -387,7 +433,7 @@ def scan(cfg, repo_list=(), notes=None):
         if w.get("isMainWorktree"):
             continue
         f = gather(w, m)
-        verdict, why, close = judge(f, m["st"]["idle_s"])
+        verdict, why, close = judge(f, m["st"]["idle_s"], m["st"]["stale_s"], m["st"]["close_s"])
         items.append({"path": f["path"], "name": f["name"], "repo": f["repo"], "branch": f["branch"], "pr": f["pr"],
                       "state": f["state"], "verdict": verdict, "why": why, "close": close, "head": f["head"],
                       "ino": reap.dir_ino(f["path"]), "regenerated": f.get("regenerated") or [],
@@ -434,7 +480,7 @@ def reread(path, cfg):
         return None
     m["heads"] = card_heads(rows)  # the verdict is read again from fresh facts, this one too
     f = gather(row, m)
-    return (*judge(f, m["st"]["idle_s"]), f)
+    return (*judge(f, m["st"]["idle_s"], m["st"]["stale_s"], m["st"]["close_s"]), f)
 
 
 def act(item, cfg, wait=5.0, done=None):
@@ -509,7 +555,8 @@ def main(argv):
                         failed += 1
                     continue
                 done = {}
-                logged = {"key": f"card:{item['path']}", "kind": "card", "head": item.get("head"), "ino": item.get("ino")}
+                logged = {"key": f"card:{item['path']}", "kind": "card", "head": item.get("head"), "ino": item.get("ino"),
+                          "why": item.get("why")}
                 rule = guard.rule({"kind": "card", "verdict": item["verdict"]})
                 try:
                     got = act(item, cfg, done=done)

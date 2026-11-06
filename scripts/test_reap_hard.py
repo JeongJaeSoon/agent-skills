@@ -68,6 +68,62 @@ cases = {
 for want, (ok, why) in cases.items():
     assert ok is False and want in why, (want, why)
 
+# A merged PR whose head moved past the card's HEAD still carried it: the card is done. Every other guard stays.
+behind = {"state": "MERGED", "headRefOid": "later"}
+assert card_says(pr=behind)[0] is False and "HEAD 가 바뀜" in card_says(pr=behind)[1]
+ok, why = rh.judge_card(card, facts, behind, quiet_terms, 40 * M, NOW, 30 * M, P, [], [], ancestor=True)
+assert ok is True and "PR acme/app#1 merged" in why, (ok, why)
+for pr_, f_, want in ((dict(behind, state="OPEN"), facts, "열린 PR"), (behind, {**facts, "dirty": True}, "커밋 안 된 변경")):
+    ok, why = rh.judge_card(card, f_, pr_, quiet_terms, 40 * M, NOW, 30 * M, P, [], [], ancestor=True)
+    assert ok is False and want in why, (want, why)
+
+# The ancestor fact is read from a real repo: same head, ancestor, a local commit the PR lacks, and uncommitted work.
+import subprocess  # noqa: E402
+
+
+def sh(*a, cwd):
+    return subprocess.run(a, cwd=cwd, check=True, capture_output=True, text=True,
+                          env={**os.environ, "HOME": str(tmp), "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_AUTHOR_NAME": "t",
+                                "GIT_AUTHOR_EMAIL": "t@example.test", "GIT_COMMITTER_NAME": "t",
+                                "GIT_COMMITTER_EMAIL": "t@example.test"}).stdout.strip()
+
+
+repo = tmp / "repo"
+repo.mkdir()
+sh("git", "init", "-q", cwd=repo)
+for n in "123":
+    (repo / n).write_text(n)
+    sh("git", "add", n, cwd=repo)
+    sh("git", "commit", "-qm", n, cwd=repo)
+h1, h2, h3 = sh("git", "rev-list", "--reverse", "HEAD", cwd=repo).split()
+sh("git", "checkout", "-q", "-b", "local", h2, cwd=repo)
+(repo / "local").write_text("x")
+sh("git", "add", "local", cwd=repo)
+sh("git", "commit", "-qm", "local only", cwd=repo)
+local = sh("git", "rev-parse", "HEAD", cwd=repo)
+verdicts = {}
+for name, head, pr_head, dirty in (("same head", h3, h3, False), ("ancestor", h2, h3, False),
+                                   ("local commit ahead", local, h3, False), ("uncommitted", h2, h3, True)):
+    anc = rh.head_in_pr(str(repo), head, pr_head)
+    verdicts[name] = rh.judge_card(card, {**facts, "head": head, "dirty": dirty}, {"state": "MERGED", "headRefOid": pr_head},
+                                   quiet_terms, 40 * M, NOW, 30 * M, P, [], [], ancestor=anc)
+    print(f"{name}: ancestor={anc} -> {verdicts[name]}")
+assert [verdicts[k][0] for k in verdicts] == [True, True, False, False], verdicts
+assert "HEAD 가 바뀜" in verdicts["local commit ahead"][1] and "커밋 안 된 변경" in verdicts["uncommitted"][1]
+# A fresh card that reuses a merged branch's name sits on an old ancestor without ever committing: it stays.
+fresh = tmp / "fresh"
+sh("git", "clone", "-q", str(repo), str(fresh), cwd=tmp)
+sh("git", "checkout", "-q", "-b", "reused", h2, cwd=fresh)
+assert rh.head_in_pr(str(fresh), h2, h3) is False and rh.head_in_pr(str(fresh), h3, h3) is True
+def reflog_fails(cmd, **kw):  # ancestor read succeeds, then the reflog read raises as reap.run does with check=True
+    if "reflog" in cmd:
+        raise RuntimeError("reflog read failed")
+    return ""
+
+
+assert rh.head_in_pr(str(repo), h2, h3, git=reflog_fails) is False  # no exception: the card stays, the pass goes on
+assert rh.head_in_pr(str(repo), h2, "0" * 40) is False and rh.head_in_pr(str(repo), "", h3) is False  # unfetched / unread
+
 # Stacks: down only when every working directory is gone; protected projects and ports stay.
 stack = {"ports": {5173}, "dirs": {"/ws/app/done"}}
 assert rh.judge_stack("v1", stack, lambda d: True, P, set()) == (True, "소유 worktree 가 없어짐: /ws/app/done")

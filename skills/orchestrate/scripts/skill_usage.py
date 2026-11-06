@@ -33,8 +33,8 @@ RULED_OUT_SENTENCE_RE = re.compile(r"(?:not|don't|do not|never)\b", re.I)
 SUGGEST = {"slash_only": ["rewrite-description"], "misses": ["rewrite-description"],
            "retire_candidate": ["merge", "retire"]}
 RETIRE_WINDOWS = 3  # long windows a skill must stay unused, counted from its last use or from when it was first seen
-# Skills whose normal rate is a few uses a quarter: program Close, setup and onboarding, incident response.
-RARE = {"agent-skills:measure-delivery", "agent-skills:create-verification-skill", "agent-skills:tune-automode"}
+# Skills whose normal rate is a few uses a quarter: setup and onboarding, incident response.
+RARE = {"agent-skills:create-verification-skill", "agent-skills:tune-automode"}
 RARE_CONFIG = "~/.config/agent-skills/skill-usage.json"  # {"rare": ["<skill>", ...]} for the user's own skills
 FINDINGS = ("signal", "land_failed", "main_red")  # plus a verdict whose result is not pass
 LOCK_STALE_HOURS = 4
@@ -540,14 +540,39 @@ def write_atomic(path, text):
     os.replace(tmp, path)
 
 
+def derive_signals(path, week):
+    """What skills.json shows of the signals ledger, counted from its rows: `rows` skill_usage signals in all and
+    `week` of them for the ISO week (`YYYY-Www`). The ledger is the source; nothing here is kept apart from it."""
+    seen = {"week": 0, "rows": 0}
+    try:
+        lines = pathlib.Path(path).read_text(errors="replace").splitlines()
+    except OSError:
+        return seen
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and row.get("ev") == "signal" and row.get("kind") == "skill_usage":
+            seen["rows"] += 1
+            seen["week"] += str(row.get("evidence") or "").endswith(f"@{week}")
+    return seen
+
+
 def refresh(out=None, signals=True, miss_threshold=MISS_THRESHOLD):
     rep = collect(miss_threshold=miss_threshold)
     out = pathlib.Path(out or state_dir() / "skills.json")
     out.parent.mkdir(parents=True, exist_ok=True)
+    saved = rep
     if signals:
         path = signals_path() if signals is True else pathlib.Path(signals)
-        rep["signals"] = {"added": len(write_signals(path, rep, parse_ts(rep["generated_at"])))}
-    write_atomic(out, json.dumps(rep, ensure_ascii=False))
+        now = parse_ts(rep["generated_at"])
+        added = len(write_signals(path, rep, now))
+        y, w, _ = now.isocalendar()
+        derived = derive_signals(path, f"{y}-W{w:02d}")
+        rep = {**rep, "signals": {**derived, "added": added}}  # `added` is this collect's return value, not a stored fact
+        saved = {**rep, "signals": derived}
+    write_atomic(out, json.dumps(saved, ensure_ascii=False))
     return rep
 
 
