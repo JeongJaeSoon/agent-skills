@@ -1,6 +1,6 @@
 # 스킬 카탈로그
 
-`agent-skills` 플러그인이 싣는 스킬 41개(`skills/*/SKILL.md`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 16개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
+`agent-skills` 플러그인이 싣는 스킬 40개(`skills/*/SKILL.md`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 16개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
 
 설정 기본값 변경과 기존 데이터 보존 방법은 [설정 전환 안내](configuration-migration.md)를 따른다. 노트·원장·개인 폴더는 명시 설정이 필요하고, 성과 보고 기본 시간대는 UTC다.
 
@@ -12,7 +12,7 @@
 티켓 하나   write-ticket → deliver-ticket → handoff-ticket → end-session
               (이 세션은 계속 일하면서 다른 저장소·곁가지로 보낼 때는 dispatch-card)
 프로젝트    orchestrate ─ 워커마다 deliver-ticket ─ orch land ─ main 가디언·QA 리드 ─ 대시보드
-              └ 끝나면 measure-delivery
+              └ 끝나면 reflect(성과 측정과 회고를 한 번에)
               └ 재시작·컴팩션 뒤에는 먼저 reboot
 머신 하나   reap-resources(죽은 세션이 남긴 프로세스·Docker·브랜치 정리, resource steward가 주기로)
               secure-fill(브라우저 인증 칸에 비밀값을, 에이전트가 값을 보지 않고)
@@ -51,12 +51,12 @@ PR 을 맡는 스킬과 머지 주체:
   - 의존은 트래커 relation으로 걸고, 1티켓 = 1PR로 나눈다. 서로 의존하는 PR은 GitHub stack으로 계획한다.
   - 묻지 않고 등록한 뒤 URL과 한 줄 요약을 보고한다. 요청이나 NOW 발견이 곧 승인이다. 큰 에픽이나 다른 팀 트래커·프로젝트일 때만 owner-ask gate를 거쳐 먼저 묻고, 사용자 지시가 초안을 먼저 보여 달라고 하면 그대로 한다. 상위 티켓 본문은 `✅ 완료 조건`, `🚫 범위 밖`, `⏸️ 보류`를 갖는다.
 - **동봉:** `references/templates.md`(개발 티켓과 조사 티켓 골격).
-- **관계:** 트래커 조작은 모두 `use-tracker`로 한다. follow-up 형식은 `orchestrate`와 `measure-delivery`가 센다.
+- **관계:** 트래커 조작은 모두 `use-tracker`로 한다. follow-up 형식은 `orchestrate`와 `reflect`의 측정 모드가 센다.
 
 ### deliver-ticket (옛 이름 `ship-pr`)
 - **언제:** 여러 파일을 고치기 전부터 완료까지 쓴다. PR 생성·갱신·머지("pr 작성까지", "머지까지 진행해줘"), 릴리즈, 리뷰 코멘트 대응, 독립 리뷰, "동작확인", "내가 확인할 거 있어?", "이 티켓 끝내줘", stack 작업도 여기에 들어간다.
 - **내용:**
-  - **계획:** plan mode에 들어가지 않고 승인도 기다리지 않는다. 티켓에는 계획 댓글 하나만 남기고(바뀌면 고친다), 진행은 worklog에, 결과는 완료 댓글에 적는다. 일의 모양에 따라 스킬을 부른다. 큰 마이그레이션이나 여러 단계짜리 변경은 `figure-it-out`, 되돌리기 어려운 설계 결정은 `architect`(→ `arena`), 낯선 코드는 `how`, 이유를 모르는 코드는 `why`.
+  - **계획:** plan mode에 들어가지 않고 승인도 기다리지 않는다. 티켓에는 계획 댓글 하나만 남기고(바뀌면 고친다), 진행은 worklog에, 결과는 완료 댓글에 적는다. 일의 모양에 따라 스킬을 부른다. 큰 마이그레이션이나 여러 단계짜리 변경은 `figure-it-out`, 되돌리기 어려운 설계 결정은 `architect`(→ `fan-out` compete), 낯선 코드는 `how`, 이유를 모르는 코드는 `why`.
   - **구현:** worktree 브랜치에서만 한다. 사소하지 않은 로직은 실행 가능한 테스트 없이 커밋하지 않는다. 버그는 실패하는 재현 테스트부터 쓴다. 범위 밖에서 발견한 것은 이 diff에서 고치거나, 완료 조건에 대어 NOW(follow-up 티켓)·LATER(`⏸️ 보류` 한 줄)·DROP(이유 한 줄)으로 나눈다. 프로그램 안에서는 티켓을 만들지 않고 worker_done에 제안 분류를 적는다.
   - **증거 규칙:**
     - 배포하는 줄마다 런타임 증거가 있어야 하고, 반박된 가설이 낳은 변경은 되돌린다.
@@ -153,7 +153,7 @@ PR 을 맡는 스킬과 머지 주체:
   5. **Triage:** predicate가 완료 조건이다. 워커는 발견을 제안 분류와 함께 보고만 하고, 리드가 NOW(predicate를 막거나 재현된 결함, 티켓 등록 후 admitted), LATER(프로그램 노트 `보류`, 티켓 없음), DROP(이유 한 줄)으로 나눈다. NOW 티켓은 parent가 아닌 related로 잇는다. Orca 기본은 parent지만, 그러면 집계와 단계 막대가 원래 티켓의 계획된 일로 센다.
   6. **Land:** 워커가 `orch land`로 직접 착지한다. 일반 PR은 병렬로 머지되고, migration·CI·Dockerfile·compose 같은 공유 파일은 독점 레인에서 base당 하나씩 머지된다.
   7. **main 검증:** red가 되면 가디언이 flake 여부부터 보고 hotfix나 revert를 고르며, 그동안은 main 수정만 착지한다. QA 리드는 티켓 검증, 주기적 E2E, 설계 정합성 감사를 맡는다.
-  8. **Close:** 새 main에서 최종 확인을 하고 `record predicate_verified`로 기록한다. 이어서 역할을 풀고 `measure-delivery`를 돌린 뒤 `reflect`를 프로그램 모드로 돌린다. `worker-list --terminal-state reclaimable`이 빌 때까지는 끝내지 않는다.
+  8. **Close:** 새 main에서 최종 확인을 하고 `record predicate_verified`로 기록한다. 이어서 역할을 풀고 `reflect`를 프로그램 모드로 한 번 돌린다. 성과 측정은 그 안에서 한 번 돈다. `worker-list --terminal-state reclaimable`이 빌 때까지는 끝내지 않는다.
   - human-gate의 "Land #N" Task는 `orch land`가 착지 때 completed로, 보류나 PR 닫힘 때 failed로 닫는다. 보류로 결정된 PR은 `orch land`가 머지하지 않는다.
   - 턴을 끝낸 워커에게는 내용을 `orchestration send --to dispatch:<id>`로 보내고, 터미널에는 "orchestration check를 돌려라" 한 줄만 보낸다. 터미널이 없는 워커는 Orca의 복구 절차를 따른다.
   - 상시 역할의 평상시 보고는 `--type status`로 보낸다. escalation은 리드가 나서야 할 때만 쓴다.
@@ -176,17 +176,7 @@ PR 을 맡는 스킬과 머지 주체:
     - `mailbox_guard.py`: 옛 설치에서 hook으로 넘어가는 전환용 shim.
     - 테스트 파일.
   - `assets/dashboard/`: 대시보드 화면.
-- **관계:** 워커는 `deliver-ticket`을 따른다. `use-tracker`, `use-notes`, `create-verification-skill`, `show-me-your-work`, `swarm`, `measure-delivery`, `reap-resources`, `reflect`, `end-session`을 가져다 쓴다.
-
-### measure-delivery
-- **언제:** "성과 측정", 후속 티켓이 늘었는지 줄었는지, 재작업, 토큰 비용을 물을 때. `orchestrate`의 Close 단계에서도 부른다.
-- **내용:** `scripts/measure.py`가 트래커와 GitHub에서 읽기만 해서 한국어 보고서를 낸다.
-  - 기준선 대비 파생 티켓 증가율과 수렴 여부를 본다.
-  - 머지된 PR 수를 센다.
-  - 재작업(PR을 연 뒤의 커밋과 CI 재실행)을 본다.
-  - 새어 나간 결함 후보(Bug 라벨, main CI 실패, revert)를 찾는다.
-  - PR당 사용 가능한 로컬 transcript의 토큰을 집계한다. 측정하지 못한 세션은 0으로 단정하지 않는다.
-  - Linear에서 정확한 종료 시각이 필요하면 MCP로 뽑은 파일을 쓴다. 요청받은 숫자를 먼저 보여 주고 보고서는 노트에 저장한다.
+- **관계:** 워커는 `deliver-ticket`을 따른다. `use-tracker`, `use-notes`, `create-verification-skill`, `show-me-your-work`, `fan-out`, `reap-resources`, `reflect`, `end-session`을 가져다 쓴다.
 
 ### reboot
 - **언제:** 세션·Orca·머신이 재시작됐거나 컴팩션이 일어난 직후, 다른 일보다 먼저. "재시작했어", "Orca 재시작했어", "세션 다시 띄웠어", "복구 점검해줘". 무슨 일을 하던 중이었는지 되짚는 것은 `recall`이다.
@@ -339,7 +329,7 @@ PR 을 맡는 스킬과 머지 주체:
   - 원칙 가운데 역할로 부르기, 아는 사실 유지, 빠뜨린 것 밝히기는 [anti-slop](https://github.com/dmmulroy/anti-slop)(Dillon Mulroy, MIT)의 lint 규칙 설명(`no-shape-in-symbol-names`, `no-known-value-widening`·`no-widen-then-assert`, `no-conditional-empty-object-spread`)을 글에 맞게 옮겼다.
   - 초안을 쓰기 전에 언어별 참조를 읽는다. 다 쓴 뒤에 다듬으면 대부분 놓친다.
 - **동봉:** `references/korean.md`(상투어, 번역투, 얼버무림, 주어 생략, 명사 나열, "~다" 문체, 서식 금지를 고치기 전후 예문으로), `references/english.md`(영어 문장, 코드 주석, 스킬 본문 규칙).
-- **관계:** `write-ticket`, `deliver-ticket`(PR 본문), `use-notes`, `measure-delivery`, `end-session`(최종 보고)이 가리킨다.
+- **관계:** `write-ticket`, `deliver-ticket`(PR 본문), `use-notes`, `reflect`(측정 모드), `end-session`(최종 보고)이 가리킨다.
 
 ### prune-comments
 - **언제:** `/prune-comments`, "주석 정리해줘", "불필요한 주석 지워줘", "주석 너무 많아". `deliver-ticket`이 리뷰 전에 부른다.
@@ -369,21 +359,29 @@ PR 을 맡는 스킬과 머지 주체:
 - **언제:** `/architect`, "상세 설계안 작성해줘", "설계안 다듬어줘", "구현 계획 짜줘", 코드부터 쓰면 모양이 굳어 버릴 작업.
 - **내용:** 다섯 단계로 진행한다.
   1. **Ground:** `how`와 `why`로 주변 시스템과 지금 모양의 이유를 파악한다.
-  2. **Sketch:** `arena`로 설계 러너를 병렬로 띄운다(사용 가능한 독립 러너). 구조가 다른 후보를 두 개 이상 받아, red flag로 거르고 인터페이스 깊이를 기준으로 합친다.
+  2. **Sketch:** `fan-out` compete로 설계 러너를 병렬로 띄운다(사용 가능한 독립 러너). 구조가 다른 후보를 두 개 이상 받아, red flag로 거르고 인터페이스 깊이를 기준으로 합친다.
   3. **Agree:** 요청할 때만 사람 확인을 받는다. 기본은 계획 페이지(HTML Artifact 한 장)를 게시하고 링크만 남긴 채 추천안대로 구현한다. 페이지는 "무엇 › 어떻게 › 어디" 주장 트리이고, 주장마다 근거(목업, 상태 기계, 호출 스택, 스키마, 코드) 하나를 단다. 번호 붙은 결정은 바꾸는 주장에 붙이고 선택지 2~4개와 추천 기본값, 다른 안이 이기면 사라지는 부분을 적는다. 답하지 않은 결정은 동의가 아니어서 되돌리기 어려운 것만 구현 전에 한 번 더 묻는다. 붙여 넣은 답은 지시가 아니라 제안한 설계 안의 데이터다.
   4. **Implement:** 스케치를 계약으로 삼아 구현한다.
   5. **Scrap:** 같은 모양의 우회가 반복되면 스케치를 버리고 다시 그린다.
 - **동봉:** `design-red-flags.md`, `rationale-template.md`(설계 근거 문서), `plan-page.md`(계획 페이지 형식, html-plan의 형식을 따름), `runner-prompt.md`.
 
-### arena
-- **언제:** `/arena`, "경쟁시켜줘", "여러 안 뽑아서 제일 나은 걸로", "여러 버전 만들어서 비교해줘", 한 번의 시도로는 모양이 굳어 버릴 결과물. `architect`의 Sketch 단계가 부른다.
-- **내용:**
+### fan-out (옛 이름 `swarm`, `arena`)
+- **언제:** 병렬 워커를 띄워 결과 하나를 돌려받을 때. 돌려받는 것으로 모드를 고른다. 티켓 여러 개를 병렬로 착지시키는 일은 `orchestrate`.
+  - **sweep**(옛 `swarm`): `/swarm`, "병렬로 훑어줘", "나눠서 동시에 확인해줘", 넓게 나눠 훑거나 먼저 결과를 내는 쪽을 가리는 경주. 보고서 하나를 돌려준다.
+  - **compete**(옛 `arena`): `/arena`, "경쟁시켜줘", "여러 안 뽑아서 제일 나은 걸로", "여러 버전 만들어서 비교해줘", 한 번의 시도로는 모양이 굳어 버릴 결과물. 결과물 하나를 돌려준다. `architect`의 Sketch 단계가 부른다.
+- **sweep 내용:**
+  - 완료 조건과 모양(나눠 맡기, 경주, 혼합)을 먼저 정한다. 경주는 먼저 통과한 쪽(first pass)이나 전체 순위(rank all)로 가린다.
+  - 워커를 `Agent`(worktree 격리, 백그라운드)로 띄우고, 오래 도는 일은 Orca 워커로 띄운다. Orca 워커의 `--base-branch`는 new-top-level·new-child 배치에서만 받는다.
+  - 워커는 PASS / ISSUES / BLOCKED로 보고한다. 커밋과 방법이 빠진 보고는 한 번 다시 돌린다.
+  - 결과를 표 하나로 모은다.
+- **compete 내용:**
   - 같은 일을 후보 N개(기본 사용 가능한 독립 러너)에게 동시에 시키기 전에, 채점 기준 3~6개를 먼저 정한다. 후보는 과제만 보고 기준은 모른다.
   - 후보를 만들지 않은 독립 심판이 기준별로 채점하고 기반안을 추천한다.
   - 모든 후보를 끝까지 읽고 기준별로 채점해 기반안을 고른다. 나머지 후보에서 나은 한두 가지를 손으로 접붙인다.
   - 후보들이 같은 모양으로 모이면 그대로 쓰고, 크게 갈리면 과제 정의부터 다시 한다.
   - 결과물 하나와, 기반안·접붙인 것·버린 것·검증 결과를 적은 짧은 종합 노트를 돌려준다.
-- **swarm과의 차이:** swarm은 일을 나눠 훑고 보고서를 돌려준다. arena는 같은 일을 경쟁시켜 결과물 하나를 만든다.
+- **두 모드의 차이:** sweep은 일을 나눠 훑고 보고서를 돌려준다. compete는 같은 일을 경쟁시켜 결과물 하나를 만든다. compete 과제를 sweep처럼 나누면 다른 일이 된다.
+- **동봉:** `references/sweep.md`, `references/compete.md`.
 
 ### blast-radius
 - **언제:** "이거 바꾸면 뭐가 깨져?", 작지만 믿기 어려운 diff.
@@ -398,7 +396,7 @@ PR 을 맡는 스킬과 머지 주체:
 - **언제:** `/figure-it-out`, "알아서 설계해서 진행해줘", "큰 마이그레이션", "자리 비운 동안 끝내줘", 맞는 절차가 따로 없는 크고 여러 단계인 일. `deliver-ticket`의 계획 단계가 부른다. 티켓 여러 개를 병렬 카드로 돌릴 일은 `orchestrate`.
 - **내용:** 코드보다 먼저 일하는 순서를 설계한다.
   1. **Frame:** 완료 조건을 반증 가능한 문장으로 쓰고, 범위를 수로 적고, 위험에 맞춰 엄격함을 정한다. 틀은 티켓 계획 댓글이나 worklog에 쓰고, 되돌릴 수 있는 일은 기다리지 않는다. 되돌릴 수 없는 단계만 그 자리에서 한 번 승인을 받는다.
-  2. **Design:** 따로 착지할 수 있는 단위로 쪼개고, 가장 모르는 것부터 한다. 바뀌기 전 값을 잡아 두는 검증 장치를 먼저 만든다. 되돌리기 어려운 설계는 `architect`(→ `arena`)로 정한다. 병렬은 경계가 나뉘는 곳에서만, 워커마다 worktree를 준다.
+  2. **Design:** 따로 착지할 수 있는 단위로 쪼개고, 가장 모르는 것부터 한다. 바뀌기 전 값을 잡아 두는 검증 장치를 먼저 만든다. 되돌리기 어려운 설계는 `architect`(→ `fan-out` compete)로 정한다. 병렬은 경계가 나뉘는 곳에서만, 워커마다 worktree를 준다.
   3. **Loop:** 단위마다 가설, 가장 작은 변경, 실제 결과물에서 측정, 유지 또는 되돌리기. 위임한 일은 결과물을 직접 읽거나 독립 리뷰어가 판정한다. 판정은 VERIFIED / NOT VERIFIED / INCONCLUSIVE.
   4. **Trail:** `show-me-your-work`로 결정 기록을 남기고, 보통은 커밋해 PR에서 읽게 한다.
   5. **Verify:** 전체를 Frame의 완료 조건으로 실제 제품에서 확인하고, 되풀이된 교정은 검사나 스크립트로 굳힌다.
@@ -448,9 +446,16 @@ PR 을 맡는 스킬과 머지 주체:
   - 답은 짧은 요약, 스레드마다 상태 태그(`[merged #N]`, `[open PR #N]`, `[in flight <branch>]` 등), 반복된 문제, 다음 할 일 하나다.
 
 ### reflect
-- **언제:** "reflect", "스킬에 반영해줘", "스킬이 왜 안 떴어", "이 세션 돌아보고 스킬 개선해줘", "개선 이력 보여줘". `orchestrate`의 Close에서 프로그램 모드로, `end-session`에서 사람이 일하는 방식을 고쳐 준 세션이면 세션 모드로 자동 호출된다.
+- **언제:** "reflect", "스킬에 반영해줘", "스킬이 왜 안 떴어", "이 세션 돌아보고 스킬 개선해줘", "개선 이력 보여줘". `orchestrate`의 Close에서 프로그램 모드로, `end-session`에서 사람이 일하는 방식을 고쳐 준 세션이면 세션 모드로 자동 호출된다. 측정 모드는 "성과 측정", 후속 티켓이 늘었는지 줄었는지, 재작업, 새어 나간 결함, PR당 토큰을 물을 때다.
 - **내용:**
-  - 세션 모드는 이 세션의 transcript를, 프로그램 모드는 원장의 `signal`·머지 실패·main red·실패 판정과 결정 기록, `measure-delivery` 결과를 묶은 증거 묶음을 읽는다. 리뷰어는 셋(판단, 도구 사용, 다른 관점)이다.
+  - 측정 모드는 재고 보고만 한다. 리뷰어를 부르지 않고 교훈 장부도 건드리지 않는다. `scripts/measure.py`가 트래커와 GitHub에서 읽기만 해서 한국어 보고서를 낸다.
+    - 기준선 대비 파생 티켓 증가율과 수렴 여부를 본다.
+    - 머지된 PR 수를 센다.
+    - 재작업(PR을 연 뒤의 커밋과 CI 재실행)을 본다.
+    - 새어 나간 결함 후보(Bug 라벨, main CI 실패, revert)를 찾는다.
+    - PR당 사용 가능한 로컬 transcript의 토큰을 집계한다. 측정하지 못한 세션은 0으로 단정하지 않는다.
+    - Linear에서 정확한 종료 시각이 필요하면 MCP로 뽑은 파일을 쓴다. 요청받은 숫자를 먼저 보여 주고 보고서는 노트에 저장한다.
+  - 세션 모드는 이 세션의 transcript를, 프로그램 모드는 원장의 `signal`·머지 실패·main red·실패 판정과 결정 기록, 이번 Close에서 측정 모드를 한 번 돌린 결과를 묶은 증거 묶음을 읽는다. 리뷰어는 셋(판단, 도구 사용, 다른 관점)이다.
   - 종합자가 배운 점을 Accepted / Rejected / Backlog로 나눈다. 모두 교훈 장부(노트 저장소의 `reflect.ledger`)에 한 줄씩 남는다. 장부는 교훈마다 신호, 근거 포인터, 발생 횟수, 고친 대상, 변경(PR·커밋), 스크립트가 낸 검증 수치, 이후 재발 여부를 적는다.
   - 스킬을 바꾸는 건 서로 다른 사례가 두 번 이상일 때만이다(재현된 보안·데이터 결함은 예외). 한 번뿐이면 후보로 남겨 두고 다음 발생을 기다린다.
   - 세션 모드는 사용자 승인 뒤 반영한다. 프로그램 모드는 사람이 없으므로 worktree에서 고치고 검증한 뒤 draft PR 하나만 열고, digest에 승인 요청을 남긴다. 머지는 사람이 한다. description 변경은 `claude plugin eval`로 발동을, 본문·스크립트 변경은 바뀐 경로를 도는 테스트나 사례 재현으로 동작을 확인한다. 검증이 없으면 `none`으로 적는다.
@@ -466,14 +471,6 @@ PR 을 맡는 스킬과 머지 주체:
   - 끝나면 transcript와 대조해 감사한다.
   - 독립 리뷰어가 교차 검토하고, 응답 끝에 누가 검토했는지 적는다.
 - **동봉:** `scripts/log.sh`(행 추가), `references/decision-log-template.tsv`.
-
-### swarm
-- **언제:** `/swarm`, "병렬로 훑어줘", "나눠서 동시에 확인해줘", 넓게 나눠 훑거나 먼저 결과를 내는 쪽을 가리는 경주. 경쟁시켜 결과물 하나로 합치는 일은 `arena`, 티켓 여러 개를 병렬로 착지시키는 일은 `orchestrate`.
-- **내용:**
-  - 완료 조건과 모양(나눠 맡기, 경주, 혼합)을 먼저 정한다. 경주는 먼저 통과한 쪽(first pass)이나 전체 순위(rank all)로 가린다.
-  - 워커를 `Agent`(worktree 격리, 백그라운드)로 띄우고, 오래 도는 일은 Orca 워커로 띄운다. Orca 워커의 `--base-branch`는 new-top-level·new-child 배치에서만 받는다.
-  - 워커는 PASS / ISSUES / BLOCKED로 보고한다. 커밋과 방법이 빠진 보고는 한 번 다시 돌린다.
-  - 결과를 표 하나로 모은다.
 
 ### teach
 - **언제:** 'teach me this', "이거 제대로 이해하고 싶어", "이 변경 이해시켜줘", "처음 보는데 이 구조 설명해줘". 한 가지 동작 질문은 `how`, 이유 질문은 `why`.
@@ -495,7 +492,7 @@ PR 을 맡는 스킬과 머지 주체:
   - 주요 기능 3~5개의 기능 지도를 함께 만든다.
   - 직접 끝까지 한 번 돌려 증명한다.
   - `deliver-ticket`과 `orchestrate`는 범위 내에서 재사용할 검증 도구가 유용할 때 호출할 수 있다. 같은 수용 기준을 입증하는 직접 검사도 유효하다. upstream은 사용자 호출 전용이며 이 fork는 모델 호출도 허용한다.
-- **동봉:** `references/feature-map-example/`(예시 앱의 기능 지도).
+- **동봉:** `references/feature-map-example/`(예시 앱의 기능 지도), `scripts/verify_skill_lint.py`(생성한 스킬을 파일만 읽어 점검한다. frontmatter·섹션, 상태 파일 이름, 공용 `latest` 링크, cleanup 인자 필수, 패턴 종료, helper 실행 권한·문서화, 기능 지도 색인. `maintain-verification-skill`도 같은 스크립트를 쓴다).
 
 ### maintain-verification-skill
 - **내용:**
@@ -755,6 +752,7 @@ pstack 스킬 58개(원칙 24개와 나머지 34개) 가운데 원칙 24개 전�
   - 모델 패널을 독립 리뷰어로 바꿨다.
   - 설치하지 않은 스킬(`unslop`)을 부르던 곳을 `write-plainly`로 바꿨다. `why`와 `arena`는 2026-09-25에 들여와 원래 연결을 되살렸다(architect → arena).
   - `why`는 Cursor MCP 탐색 대신 세션에 있는 MCP 도구로 출처를 고르고, 한 줄 질문용 narrow mode를 더했다. 연결 없는 Datadog·Sentry·warehouse 출처 파일은 빼고 Google Drive·Obsidian 출처를 새로 썼다.
+  - swarm과 arena는 나중에 `fan-out` 한 스킬로 합쳤다. 본문은 각각 sweep·compete 모드의 `references/sweep.md`·`references/compete.md`로 옮겼다.
 - **2026-09-25 추가 수정:** Opus 5.5에 맞춰 프롬프트를 감사하고 더 고쳤다(`6eec9fa`). architect와 swarm의 단계별 할 일 목록을 없앴고, how의 단순 질문은 직접 처리한다. reflect 리뷰어의 개수 하한을 없앴고, show-me-your-work는 추가만 하는 기록으로 바꿨다. 파일별 수정 내역은 `vendor/pstack/NOTICE.md`에 있다.
 - **옮겨 쓴 것(derived):** 파일을 통째로 가져오지 않고 규칙만 옮겨 새로 쓴 부분이다. `manifest.json`에 없어 동기화하지 않고, upstream이 바뀌면 사람이 읽고 반영한다.
   - `write-plainly`: unslop, technical-writing, poteto-mode의 답변 규칙을 합치고 한국어 규칙을 새로 썼다.
@@ -777,7 +775,7 @@ pstack 스킬 58개(원칙 24개와 나머지 34개) 가운데 원칙 24개 전�
 ### pstack에 없는 것
 - **티켓 흐름:** `write-ticket`, `deliver-ticket`, `handoff-ticket`, `dispatch-card`, `end-session`. Orca 카드와 트래커를 전제로 한 티켓 하나의 처음부터 끝까지다.
 - **프로젝트 운영:** `orchestrate`의 `orch` 원장, 착지 게이트와 독점 레인, human-gate, main 가디언, QA 리드, `orch-dash` 대시보드. 모양은 pstack 플레이북을 따랐지만 Orca Run과 GitHub stack 위에서 새로 만들었다.
-- **측정과 어댑터:** `measure-delivery`, `use-tracker`, `use-notes`.
+- **측정과 어댑터:** `reflect`의 측정 모드, `use-tracker`, `use-notes`.
 - **머신 관리:** `reap-resources`, `tune-automode`, `skills-config`, `setup-pc`.
 - **hook:** 권한 결정(`guard.py`), 오케스트레이터·리드 재정렬(`reorient.py`), 미설정 PC의 설정 제안(`onboard.py`), 대시보드에서 답하는 권한 창 기록(`permission.py`), 터미널에서 답한 결정 닫기(`decision.py`), 기록 없는 오너 말 전달 경고(`decision_relay.py`), 완료 주장 검사(`claim_check.py`), 무거운 시작 전 사용량 확인(`pressure_gate.py`), 문체 검사(`prose_check.py`), 의존 PR의 스택 확인(`stack_gate.py`), 프로그램 카드의 PR을 연 채 닫는 일 경고(`self_land_gate.py`).
 

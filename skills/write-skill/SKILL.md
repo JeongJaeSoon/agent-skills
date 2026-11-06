@@ -27,6 +27,8 @@ Before a new skill, or a new section longer than about ten lines, look for its h
 
 Say in the report which skills you checked and why the change went where it did. Drafting a new skill from scratch, or tuning a description that fails to fire, goes through a skill-creator skill's draft and test loop when this session lists one (its plugin prefix varies); without one, draft here and use the §5 eval as the test loop. This skill's steps 3 to 7 follow either way.
 
+A skill or script that adds a periodic job, a daemon or a LaunchAgent follows `intent.md` at the repository root first: Orca features, then Claude Code native ones, then our own script. A LaunchAgent is an exception row in its table with a reason (`scripts/test_intent.py` fails otherwise).
+
 ## 2. Edit
 
 Match the target's conventions: frontmatter `name` and `description` (the description carries the user's trigger phrases), and the body in the language the file already uses. Every description shares one listing budget (§5), so a longer one can push another skill's description out of the listing; add a trigger phrase only when it is needed. A command, flag or term you change gets grepped across the whole target, and every copy changes in the same commit. Cut any sentence the change makes redundant; prefer rewriting a sentence to adding one.

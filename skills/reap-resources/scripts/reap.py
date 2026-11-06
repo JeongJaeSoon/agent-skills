@@ -48,7 +48,7 @@ within reap.load_cooldown_minutes (default 60). precheck --act is the scheduled 
 whose last act failed less than a day ago are left), sends one message to reap.inbox_to when what a person has to look
 at gained a key, logs <state>/janitor-runs.jsonl and always exits 1, so Orca starts no agent. schedule prints the `orca automations create` command (--load: the load job); only --write runs it.
 """
-import contextlib, datetime as dt, functools, hashlib, json, os, pathlib, re, shlex, shutil, signal, stat, subprocess, sys, time, traceback, unicodedata
+import contextlib, datetime as dt, functools, hashlib, json, os, pathlib, re, shlex, shutil, signal, stat, subprocess, sys, threading, time, traceback, unicodedata
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[3] / "scripts"))
 try:
@@ -73,10 +73,19 @@ def opt(name, default=None):
 # None waits for every command; patrol's candidate round sets seconds, so one hung command fails its source instead
 # of the round.
 RUN_TIMEOUT = None
+CANCELLED = set()
+
+
+def cancelled():
+    return threading.get_ident() in CANCELLED
 
 
 def run(cmd, cwd=None, check=True, env=None, timeout=None):
     timeout = timeout or RUN_TIMEOUT
+    if cancelled():
+        if check:
+            raise RuntimeError(f"{' '.join(cmd[:4])}: not started, the round was cut")
+        return None
     try:
         r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=env or ENV, timeout=timeout)
     except FileNotFoundError:
@@ -696,18 +705,24 @@ def spawn_sweep_shadow(reason, python=None):
         return False
 
 
-def spawn_patrol(reason, python=None):
-    """Start `orch patrol --if-due` detached, so a LaunchAgent pass never waits on it; it prints to
-    <state>/patrol.log and gives up on its own at 120 seconds. False when it could not start, or AGENT_SKILLS_PATROL=off
-    (tests)."""
+SPAWN_TIMEOUT_S = 400  # the patrol job's runner limit (scripts/automations.py)
+
+
+def spawn_patrol(reason, python=None, fallback=False):
+    """Start `orch patrol --if-due` detached under the shared runner (record <state>/jobs/patrol-spawn.json), so a
+    LaunchAgent pass never waits on it; output goes to <state>/patrol.log. False when it could not start, or
+    AGENT_SKILLS_PATROL=off (tests)."""
     if os.environ.get("AGENT_SKILLS_PATROL") == "off":
         return False
+    py = python or sys.executable
     try:
         STATE.mkdir(parents=True, exist_ok=True)
         with open(STATE / "patrol.log", "a") as out:
             out.write(f"--- {time.strftime('%Y-%m-%dT%H:%M:%S%z')} {reason}\n")
             out.flush()
-            subprocess.Popen([python or sys.executable, str(ORCH), "patrol", "--if-due"], stdout=out, stderr=out,
+            subprocess.Popen([py, "-I", str(JOB_RUNNER), "run", "patrol-spawn", "--timeout", str(SPAWN_TIMEOUT_S), "--",
+                              py, str(ORCH), "patrol", "--if-due", *(["--fallback"] if fallback else [])],
+                             stdout=out, stderr=out,
                              stdin=subprocess.DEVNULL, start_new_session=True)
         return True
     except OSError:

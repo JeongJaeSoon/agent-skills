@@ -221,15 +221,17 @@ assert reason(f"while [ ! -s {O} ]; do sleep 5; done").startswith("[gate:sleep-l
 assert "[gate:" not in reason(f"{CHECK} --terminal term_other --json")
 # `skills-sync card <brief>`: the hook opens the brief and applies the helper's checks and the lead test to it.
 H = pathlib.Path(HOME)
-(H / "worker.md").write_text("/goal fix X\nCLOSE: §8\n")
-(H / "noclose.md").write_text("/goal fix X\n## Close\n§8\n")
+(H / "worker.md").write_text("/goal fix X\nAPPROVED: none\nCLOSE: §8\n")
+(H / "noclose.md").write_text("/goal fix X\nAPPROVED: none\n## Close\n§8\n")
+(H / "noapproved.md").write_text("/goal fix X\nCLOSE: §8\n")
 (H / "lead.md").write_text("app: lead\n/goal run app\nMODE: orchestrate\nROLE: lead app\nINBOX  orch wait app\n"
                            "DELEGATE  nothing yourself\nPREDICATE  ENG-1 Done\nMERGE  merge_policy autonomous\n"
-                           "TASKS  task-create --deps\nGATE  gate-create\nCLOSE: §8\n")
+                           "TASKS  task-create --deps\nGATE  gate-create\nAPPROVED: none\nCLOSE: §8\n")
 HELPER = "skills-sync card {} --repo name:app --name app-x"
 assert bash(HELPER.format("worker.md")) == "none"  # relative to the event's cwd
 assert bash(HELPER.format(H / "worker.md"), session="joined") == "none"
 assert bash(HELPER.format("noclose.md")) == "deny" and "CLOSE or KEEP" in reason(HELPER.format("noclose.md"))
+assert bash(HELPER.format("noapproved.md")) == "deny" and "`APPROVED:` row" in reason(HELPER.format("noapproved.md"))
 assert bash(HELPER.format("absent.md")) == "deny"
 assert bash(HELPER.format("$BRIEF")) == "deny"
 assert bash(HELPER.format("lead.md")) == "none"
