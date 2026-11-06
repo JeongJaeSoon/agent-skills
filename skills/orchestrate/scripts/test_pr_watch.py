@@ -1,6 +1,6 @@
 """pr_watch.py: only the five changes that need a turn print; every other state change prints nothing.
 Run: python3 test_pr_watch.py"""
-import json, os, pathlib, sys, tempfile
+import json, pathlib, sys
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import pr_watch
 
@@ -39,31 +39,21 @@ assert lines({"a/b#1": pr("MERGED")}, {"a/b#1": pr("MERGED")}) == []
 # Several changes at once keep a stable order.
 assert lines(BASE, {"a/b#1": pr(fail=True), "a/b#2": pr("MERGED")}) == ["a/b#1 CI failed", "a/b#2 MERGED"]
 
-# An hour of mid-state churn (12 rounds at 300 s) is 0 lines; the old watcher printed one per change.
+# An hour of churn (12 rounds at 300 s): the old watcher printed one line per status change, this one only the
+# single CI failure.
 rounds = [pr(), pr(dirty=False), pr(fail=False), pr(), pr(), pr(fail=True), pr(fail=True), pr(), pr(), pr(), pr(), pr()]
 printed = sum(len(lines({"a/b#1": a}, {"a/b#1": b})) for a, b in zip(rounds, rounds[1:]))
 assert printed == 1, "only the one CI failure in the churn above prints"
 
-# Round loop: the first round saves and prints nothing; a gh failure keeps the old state.
+# Round loop: the first round only records and prints nothing; a gh failure (None) keeps the old state.
+snaps = iter([{"a/b#1": pr("MERGED")}, None, {"a/b#1": pr("MERGED")}])
+printed, slept = [], []
+pr_watch.watch(lambda: next(snaps), 300, printed.append, slept.append, rounds=3)
+assert printed == [], "first round silent, and a failed round does not turn the next one into a first round"
+assert slept == [300, 300], "sleeps between rounds, never after the last"
 snaps = iter([{"a/b#1": pr()}, None, {"a/b#1": pr("MERGED")}, {"a/b#1": pr("MERGED")}])
-printed, saved, slept = [], [], []
-pr_watch.watch(lambda: next(snaps), 300, printed.append, saved.append, slept.append, rounds=4)
-assert printed == ["a/b#1 MERGED"], printed
-assert saved[0] == {"a/b#1": pr()} and len(saved) == 3, "one save per good round, none for the failed one"
-assert slept == [300, 300, 300], "sleeps between rounds, never after the last"
-
-# A saved state file carries the first round of a restarted watcher: its changes print, a missing file prints nothing.
-with tempfile.TemporaryDirectory() as d:
-    path = pathlib.Path(d) / "state.json"
-    assert pr_watch.load(path) is None
-    pr_watch.save(path, {"a/b#1": pr()})
-    assert pr_watch.load(path) == {"a/b#1": pr()}
-    path.write_text("{not json")
-    assert pr_watch.load(path) is None, "a damaged file is a first round"
-    printed.clear()
-    pr_watch.watch(lambda: {"a/b#1": pr("MERGED")}, 300, printed.append, lambda s: None, lambda s: None, rounds=1,
-                   old={"a/b#1": pr()})
-    assert printed == ["a/b#1 MERGED"]
+pr_watch.watch(lambda: next(snaps), 300, printed.append, slept.append, rounds=4)
+assert printed == ["a/b#1 MERGED"], "the change after a failed round still prints, once"
 
 # snapshot() reads gh's JSON; branches outside --branch and PRs it cannot read are left out.
 GH = json.dumps([

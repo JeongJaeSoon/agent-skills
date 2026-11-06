@@ -2,17 +2,17 @@
 """PR watcher for the Monitor tool: one line when a PR needs a turn, nothing otherwise.
 
 Usage: pr_watch.py --repo OWNER/REPO [--repo ...] [--branch REGEX] [--land-check SLUG]
-                   [--interval 300] [--limit 50] [--state PATH] [--once]
+                   [--interval 300] [--limit 50] [--once]
 
 Each round lists the PRs of every --repo whose head branch matches --branch and prints a line only for:
   MERGED or CLOSED, CI turning to failure, `orch land-check` turning READY (with --land-check),
   a conflict (DIRTY) appearing or clearing, a new PR opening.
 BLOCKED, UNKNOWN, CLEAN, UNSTABLE and pending checks come and go without a line. The first round only records
-the current state; with --state a restarted watcher compares against the file instead. A round where `gh` fails
-or prints something unreadable is skipped. --interval is 300 s or more: a shorter one wakes the session for
+the current state, in memory: a restarted watcher starts silent again, so give Monitor a long timeout_ms.
+A round where `gh` fails or prints something unreadable is skipped. --interval is 300 s or more: a shorter one wakes the session for
 changes nobody can act on. Run it as `Monitor` with `timeout_ms` set; it stops when the Monitor does.
 """
-import argparse, json, os, pathlib, re, shutil, subprocess, sys, time
+import argparse, json, pathlib, re, shutil, subprocess, sys, time
 
 MIN_INTERVAL = 300
 FAILED = ("FAILURE", "ERROR", "TIMED_OUT")
@@ -71,23 +71,7 @@ def events(old, new):
             yield f"{key} land-check READY"
 
 
-def load(path):
-    try:
-        data = json.loads(pathlib.Path(path).read_text())
-    except (OSError, ValueError):
-        return None
-    return data if isinstance(data, dict) else None
-
-
-def save(path, state):
-    path = pathlib.Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(state))
-    os.replace(tmp, path)
-
-
-def watch(read, interval, emit, store, sleep, rounds=None, old=None):
+def watch(read, interval, emit, sleep, rounds=None, old=None):
     n = 0
     while True:
         new = read()
@@ -96,7 +80,6 @@ def watch(read, interval, emit, store, sleep, rounds=None, old=None):
                 for line in events(old, new):
                     emit(line)
             old = new
-            store(new)
         n += 1
         if rounds is not None and n >= rounds:
             return
@@ -110,8 +93,7 @@ def parse(argv):
     ap.add_argument("--land-check", dest="land_check", help="program slug; turns on the READY line")
     ap.add_argument("--interval", type=int, default=MIN_INTERVAL, help=f"seconds between rounds, {MIN_INTERVAL} or more")
     ap.add_argument("--limit", type=int, default=50, help="PRs read per repo")
-    ap.add_argument("--state", help="file that keeps the state across restarts")
-    ap.add_argument("--once", action="store_true", help="one round, then exit")
+    ap.add_argument("--once", action="store_true", help="one round (nothing prints), then exit")
     args = ap.parse_args(argv)
     if args.interval < MIN_INTERVAL:
         ap.error(f"--interval must be {MIN_INTERVAL} seconds or more")
@@ -120,11 +102,9 @@ def parse(argv):
 
 def main(argv):
     args = parse(argv)
-    old = load(args.state) if args.state else None
-    store = (lambda s: save(args.state, s)) if args.state else (lambda s: None)
     try:
         watch(lambda: snapshot(args.repo, args.branch, args.land_check, args.limit), args.interval,
-              lambda line: print(line, flush=True), store, time.sleep, rounds=1 if args.once else None, old=old)
+              lambda line: print(line, flush=True), time.sleep, rounds=1 if args.once else None)
     except KeyboardInterrupt:
         pass
     return 0
