@@ -137,8 +137,12 @@ class Round:
         # by the rule `orch land` used to send the request here (prog.executor_for).
         try:
             ex, meta = prog.executor_for(repo)
-        except (SystemExit, KeyError, TypeError, ValueError) as e:
-            return unanswered(f"GitHub did not answer `gh api repos/{repo}`: {str(getattr(e, 'code', e))[:160]}")
+        except SystemExit as e:
+            if str(e.code).startswith("refused: "):
+                return settle("refused", 1, str(e.code)[len("refused: "):])
+            return unanswered(f"GitHub did not answer `gh api repos/{repo}`: {str(e.code)[:160]}")
+        except (KeyError, TypeError, ValueError) as e:
+            return unanswered(f"GitHub did not answer `gh api repos/{repo}`: {e}"[:200])
         current = meta["nameWithOwner"]
         renamed = "" if current.casefold() == repo.casefold() else f" ({repo} is {current} on GitHub now)"
         if not ex:
@@ -338,6 +342,8 @@ def drift_lines(today=None):
                        " (skills-config로 orchestrate.land_executor.repos에 넣는다)")
     for owner, name in sorted(scope["names"]):
         entry = f"{owner}/{name}"
+        if land_scope.excluded(scope, entry):
+            continue
         try:
             now_named = prog.repo_meta(entry)["nameWithOwner"]
         except (SystemExit, KeyError, TypeError, ValueError) as e:

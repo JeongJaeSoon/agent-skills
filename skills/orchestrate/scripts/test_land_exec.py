@@ -504,6 +504,22 @@ class LandExec(unittest.TestCase):
         self.round()
         self.assertEqual(len(self.merges()), 1)
 
+    def test_a_repo_moved_out_of_the_scope_is_refused_never_merged_directly(self):
+        for repos, now in ((["o/*"], "elsewhere/r"), (["o/r"], "o/renamed")):
+            with self.subTest(repos=repos, now=now):
+                config(repos=repos)
+                self.github_names(now)
+                r = subprocess.run([sys.executable, HERE / "prog.py", "land", self.slug, "--pr", str(self.n)],
+                                   capture_output=True, text=True)
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+                self.assertIn(f"o/r is {now} on GitHub now", r.stderr)
+                self.assertEqual(self.merges(), [])
+
+    def test_an_exclusion_under_the_new_name_merges_directly(self):
+        config(repos=["o/*"], exclude=["o/renamed"])
+        self.github_names("o/renamed")
+        self.assertEqual(prog.executor_for("o/r")[0], None)
+
     def test_an_unanswered_rename_lookup_yields_instead_of_merging_directly(self):
         st = self.gh(); st["repo_fail"] = True; self.write(st)
         r = subprocess.run([sys.executable, HERE / "prog.py", "land", self.slug, "--pr", str(self.n)],
@@ -878,6 +894,11 @@ class Drift(unittest.TestCase):
         lines = land_exec.drift_lines()
         self.assertEqual(lines, ["경고: 범위 안인데 <name>-standalone program이 없는 repo 3개: o/listed, o/quiet, o/w"
                                  " (`orch verdict|land <name>-standalone --repo OWNER/NAME`가 처음 부를 때 만든다)"])
+
+    def test_an_excluded_named_entry_is_not_warned(self):
+        config(repos=["o/*", "o/r"], exclude=["o/r"])
+        self.write(owned={"o": ["o/r"]})
+        self.assertEqual(land_exec.drift_lines(), [])
 
     def test_a_standalone_program_on_its_repo_silences_the_warning(self):
         config(repos=["o/*"])

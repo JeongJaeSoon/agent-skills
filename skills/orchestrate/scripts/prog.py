@@ -2674,7 +2674,15 @@ def executor_for(repo):
     if not ex:
         return None, None
     meta = repo_meta(repo)
-    if land_scope.excluded(ex["scope"], repo) or not land_scope.how(ex["scope"], meta["nameWithOwner"]):
+    now_named = meta["nameWithOwner"]
+    if land_scope.excluded(ex["scope"], repo) or land_scope.excluded(ex["scope"], now_named):
+        return None, meta
+    if not land_scope.how(ex["scope"], now_named):
+        if land_scope.how(ex["scope"], repo):
+            # Covered under the recorded name, not under GitHub's: a rename or transfer moved it out. Merging it directly
+            # would route around the executor exactly when the repo's owner or name changed.
+            sys.exit(f"refused: {repo} is {now_named} on GitHub now, which orchestrate.land_executor does not cover;"
+                     " list the new name (skills-config) or exclude it, then land again")
         return None, meta
     return ex, meta
 

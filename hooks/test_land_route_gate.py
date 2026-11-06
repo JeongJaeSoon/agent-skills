@@ -13,6 +13,10 @@ for d in (BIN, CARD, HOME / ".claude"):
 FAKE_GH = """#!/bin/sh
 echo "$PWD $@" >> "$FAKE_GH_LOG"
 [ -n "$FAKE_GH_FAIL" ] && exit 1
+if [ "$1" = api ]; then
+  [ -s "$FAKE_GH_API" ] || exit 1
+  cat "$FAKE_GH_API"; exit 0
+fi
 cat "$FAKE_GH_PR"
 """
 (BIN / "gh").write_text(FAKE_GH)
@@ -47,11 +51,15 @@ def program(slug, repo="acme/app", policy="autonomous", prs=()):
     (PROGRAMS / slug / "ledger.jsonl").write_text("".join(json.dumps({"ev": "ready", "pr": n}) + "\n" for n in prs))
 
 
-def run(cmd, prompt=CARD_BRIEF, gh=APP, fail=False, **fields):
+API = TMP / "api.json"
+
+
+def run(cmd, prompt=CARD_BRIEF, gh=APP, fail=False, api="", **fields):
     PR.write_text(gh)
+    API.write_text(api)
     LOG.write_text("")
     env = {"PATH": f"{BIN}:/usr/bin:/bin", "HOME": str(HOME), "AGENT_SKILLS_CONFIG": str(CONFIG),
-           "PROGRAMS_HOME": str(PROGRAMS), "FAKE_GH_PR": str(PR), "FAKE_GH_LOG": str(LOG),
+           "PROGRAMS_HOME": str(PROGRAMS), "FAKE_GH_PR": str(PR), "FAKE_GH_LOG": str(LOG), "FAKE_GH_API": str(API),
            "AGENT_SKILLS_STATE": str(TMP / "state")}
     if fail:
         env["FAKE_GH_FAIL"] = "1"
@@ -122,9 +130,22 @@ shutil.rmtree(PROGRAMS / "held")
 text = reason(run("gh pr merge 7 --repo acme/app"))
 assert "`orch land gated --pr 7" in text and "human-gate" in text and "READY-WAIT: owner-merge" in text, text
 program("other-repo", repo="acme/web", prs=(7,))
-assert "`orch land gated --pr 7" in reason(run("gh pr merge 7 --repo acme/app")), "a program on another repo is not it"
+text = reason(run("gh pr merge 7 --repo acme/app", api='{"full_name": "acme/web"}'))
+assert "`orch land gated --pr 7" in text, "a program on another repo is not it: " + text
+# ... and when GitHub cannot say where that other name leads, nothing is guessed.
+assert "could not tell whether acme/web" in reason(run("gh pr merge 7 --repo acme/app"))
 for slug in ("gated", "other-repo", "demo"):
     shutil.rmtree(PROGRAMS / slug)
+# A program made before a rename keeps the old name: it still holds the PR, gate and all; no fresh standalone.
+program("gated-old", repo="acme/old-name", policy="human-gate", prs=(7,))
+text = reason(run("gh pr merge 7 --repo acme/app", api='{"full_name": "acme/app"}'))
+assert "`orch land gated-old --pr 7" in text and "READY-WAIT: owner-merge" in text, text
+assert "app-standalone" not in text, text
+shutil.rmtree(PROGRAMS / "gated-old")
+program("demo", repo="acme/old-name")
+text = reason(run("gh pr merge 7 --repo acme/app", prompt=PROGRAM_BRIEF, api='{"full_name": "acme/app"}'))
+assert "`orch land demo --pr 7" in text, "the brief's program under the old name: " + text
+shutil.rmtree(PROGRAMS / "demo")
 
 # Same owner, outside the scope: denied with the spec that adds the one repo (or the owner) and the emit line.
 config(repos=["acme/app"])

@@ -188,23 +188,36 @@ def programs_home():
     return pathlib.Path(os.environ.get("PROGRAMS_HOME") or "~/.claude/programs").expanduser()
 
 
-def holders(repo, pr):
-    """[(slug, merge_policy)] of the programs on `repo` whose ledger records `pr`."""
+def same_repo(recorded, repo, asked, cwd):
+    """A program's recorded repo is this one: by either name given, else by where GitHub sends the recorded name now
+    (a program made before a rename keeps the old one). A lookup that fails refuses: guessing "another repo" would
+    hand out a fresh standalone program over a program's own gate."""
+    if recorded.casefold() in {repo.casefold(), (asked or repo).casefold()}:
+        return True
+    try:
+        return str(gh(["api", f"repos/{recorded}"], cwd).get("full_name", "")).casefold() == repo.casefold()
+    except Unread:
+        raise Refuse(f"could not tell whether {recorded}, which a program records, is {repo} now: name the program,"
+                     " `orch land <slug> --pr N`")
+
+
+def holders(repo, pr, asked, cwd):
+    """[(slug, merge_policy)] of the programs on `repo` (under any of its names) whose ledger records `pr`."""
     out = []
     for f in sorted(programs_home().glob("*/program.json")):
         try:
             cfg = json.loads(f.read_text())
-            if str(cfg.get("repo", "")).casefold() != repo.casefold():
-                continue
             with open(f.parent / "ledger.jsonl", encoding="utf-8") as led:
-                if any(json.loads(l).get("pr") == pr for l in led if l.strip()):
-                    out.append((f.parent.name, cfg.get("merge_policy")))
+                if not any(json.loads(l).get("pr") == pr for l in led if l.strip()):
+                    continue
         except (OSError, ValueError, AttributeError):
             continue
+        if same_repo(str(cfg.get("repo", "")), repo, asked, cwd):
+            out.append((f.parent.name, cfg.get("merge_policy")))
     return out
 
 
-def brief_program(first, repo):
+def brief_program(first, repo, asked, cwd):
     """The brief's PROGRAM slug when that program is on `repo`, else None."""
     m = PROGRAM_LINE.search(first or "")
     if not m:
@@ -213,18 +226,18 @@ def brief_program(first, repo):
         cfg = json.loads((programs_home() / m[1] / "program.json").read_text())
     except (OSError, ValueError):
         return None
-    return m[1] if str(cfg.get("repo", "")).casefold() == repo.casefold() else None
+    return m[1] if same_repo(str(cfg.get("repo", "")), repo, asked, cwd) else None
 
 
-def route(repo, pr, first):
+def route(repo, pr, first, asked=None, cwd=None):
     """(slug, needs --repo, merge_policy) of the program `orch land` should use for this PR."""
-    held = holders(repo, pr) if pr else []
+    held = holders(repo, pr, asked, cwd) if pr else []
     if len(held) > 1:
         raise Refuse(f"{repo}#{pr} is in more than one program ({', '.join(s for s, _ in held)}): land it from the one"
                      " that owns it with `orch land <slug> --pr N`")
     if held:
         return held[0][0], False, held[0][1]
-    if slug := brief_program(first, repo):
+    if slug := brief_program(first, repo, asked, cwd):
         return slug, False, None
     return f"{repo.split('/')[-1]}-standalone", True, None
 
@@ -273,14 +286,14 @@ def check(event, cmd):
         if asked and land_scope.excluded(scope, asked):  # an exclusion under the old name still holds
             continue
         if land_scope.how(scope, repo):
-            slug, with_repo, policy = route(repo, pr, first)
+            slug, with_repo, policy = route(repo, pr, first, asked, cwd)
             return (f"{MARK} {SOURCE} {repo} is in orchestrate.land_executor's scope: its PRs merge through the land "
                     f"executor, not `gh pr merge`. {land_lines(repo, pr, head, slug, with_repo, policy, sources)} "
                     "Do not hand a `gh pr merge` line to the owner. A fork or an archived repo that only OWNER/* "
                     "covers is refused by the executor: list it by name.")
         if land_scope.excluded(scope, repo) or repo.split("/")[0].casefold() not in land_scope.owners(scope):
             continue
-        slug, with_repo, policy = route(repo, pr, first)
+        slug, with_repo, policy = route(repo, pr, first, asked, cwd)
         if not with_repo:  # a program's PR: `orch land` merges it directly while the executor leaves the repo out
             return (f"{MARK} {SOURCE} {repo} is outside orchestrate.land_executor's scope, and {repo}#{pr or '<N>'} "
                     f"belongs to program {slug}: `orch land` merges it directly. "
