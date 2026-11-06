@@ -87,7 +87,7 @@ https://github.com/JeongJaeSoon/agent-skills 의 Claude Code 플러그인을 설
 
 - 「ABC-1 끝내줘」라고 하면 `deliver-ticket`이 계획부터 머지, 티켓 닫기까지 한다. 트래커가 있어야 한다(기본은 Linear, 바꾸려면 `tracker.adapter`, [설정](#설정) 참고).
 - 「현황 보고해줘」라고 하면 `brief`가 돈다. Claude Code에 내장 `/brief`가 있어서 직접 부를 때는 `/agent-skills:brief`다. `/brief-pane`은 같은 보고를 채팅 옆 패널로 연다. 패널이 열려 있는 동안만 30초마다 갱신된다(110열 이상이면 옆에 붙고, 더 좁으면 프롬프트 위에 뜬다).
-- Orca 안에서 `claude --agent agent-skills:orchestrator --name orchestrator`로 최상위 세션을 띄우고 모든 세션을 맡긴다. 오케스트레이터가 프로젝트마다 리드 세션을 띄우고, 리드가 워커를 돌린다. 오케스트레이터 세션의 맥락이 `orchestrate.restart_at`(기본 130k 토큰)을 넘고 기다리는 일이 없으면, 입력창 위 band가 지금 `/clear`해도 된다고 알린다. 다음 세션은 역할과 저장된 handoff를 이어받는다. 리드는 자동 컴팩션에 맡기므로 band가 뜨지 않는다. 리드의 `orch handoff save`는 `lead:<slug>`에 저장되고, 오케스트레이터 키에 저장하려 하면 거부된다. `/clear`는 사람이 친다. `orchestrate.auto_clear: true`로 두면 세션이 스스로 친다.
+- Orca 안에서 `claude --agent agent-skills:orchestrator --name orchestrator`로 최상위 세션을 띄우고 모든 세션을 맡긴다. 오케스트레이터가 프로젝트마다 리드 세션을 띄우고, 리드가 워커를 돌린다. 오케스트레이터 세션이 자동 컴팩션을 3번 거쳤거나, 컴팩션해도 맥락이 줄지 않거나, 두 번이 30분 안에 이어지고(`orchestrate.compact_restart`, 기본 켜짐; `restart_at`은 토큰 상한이고 지정해야만 켜진다) 기다리는 일이 없으면, 입력창 위 band가 지금 `/clear`해도 된다고 알린다. `restart_at` 기본값 130k는 없어졌으므로, 그 기본값에 기대던 설정은 이제 컴팩션 이력으로 안내를 받는다. 다음 세션은 역할과 저장된 handoff를 이어받는다. 리드는 자동 컴팩션에 맡기므로 band가 뜨지 않는다. 리드의 `orch handoff save`는 `lead:<slug>`에 저장되고, 오케스트레이터 키에 저장하려 하면 거부된다. `/clear`는 사람이 친다. `orchestrate.auto_clear: true`는 상한을 넘었을 때, `orchestrate.compact_restart.auto_clear: true`는 컴팩션 규칙에 걸렸을 때 세션이 스스로 친다.
 
 ## 사람이 결정권을 쥐는 지점
 
