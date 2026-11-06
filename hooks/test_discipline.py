@@ -145,6 +145,8 @@ assert bash("python3 -c \"import builtins; builtins.open('w','r').read()\"") == 
 assert bash("python3 -c \"import tokenize; tokenize.open('w').read()\"") == []
 assert bash("python3 <<'A' <<'B'\nopen('probe.py','w')\nA\nprint('ok')\nB") == []  # the last heredoc is the program
 assert bash("python3 <<'A' <<'B'\nprint('ok')\nA\nopen('probe.py','w')\nB") == EDIT
+assert bash("python3 -c \"from pathlib import Path; p: Path = Path('probe.txt'); p.open('w').write('x')\"") == EDIT
+assert bash("python3 -c \"from pathlib import Path; p = Path.cwd() / 'probe.txt'; p.open('w').write('x')\"") == EDIT
 # a `cd` moves where a relative target lands
 assert bash("cd /tmp && echo x > a.py") == []
 assert bash(f"cd {TREE} && echo x > a.py", cwd=SCRATCH) == EDIT
