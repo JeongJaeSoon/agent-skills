@@ -206,7 +206,9 @@ assert not any(r["kind"] == "lead" for r in rows_.values()) and all(r.get("paren
 # A board lead whose rows aged off the board (a finished lead leaves after DONE_KEEP_S) stays hidden while its session
 # is idle with nothing under it, but not while the session is working or has a card to show: the lead and its cards
 # were dropped from the board together with the rows, though work went on (a restored session after a reboot).
-aged = {"계보": {"handle": "term_old", "worktree": "lead1"}}
+aged = {"계보": {"handle": "term_old", "worktree": "lead1", "closed_at": "2026-10-01T00:00:00Z"}}
+dropped = {"계보": {"handle": "term_old", "worktree": "lead1"}}  # `board drop`: hidden on purpose, whatever its session does
+assert board.fleet_rows(probe_state, dropped, {})[0] == {}, "a lead the owner dropped stays dropped"
 rows_, _ = board.fleet_rows(probe_state, aged, {})
 assert {r["session"] for r in rows_.values()} >= {"lead1", "probe-live", "w-titled"}, rows_
 assert rows_["fleet:lead1"]["kind"] == "lead" and rows_["fleet:lead1/w-titled"]["parent"] == "fleet:lead1", rows_
