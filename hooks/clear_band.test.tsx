@@ -176,7 +176,7 @@ test('drops a verdict begun before a turn, and shows a failure after a hidden st
 test('a session that is not an orchestrator is not asked again for ten minutes, a new session at once', async ($, on) => {
   const clock = mock.clock(on)
   let session = 'sess-lead'
-  let key = 'lead:app'
+  let key: string | null = 'lead:app'
   const argvs: string[][] = []
   on('session.usage', () => ({ value: { startedAt: 0, context: { tokens: 80_000, window: 200_000 }, rateLimits: {}, cost: {} } }))
   on('session.id', () => ({ value: session }))
@@ -209,4 +209,20 @@ test('a session that is not an orchestrator is not asked again for ten minutes, 
   await clock.settle()
   expect(argvs).toHaveLength(2)
   expect(await bandText($)).toContain('context 80k · 3 auto-compactions · /clear not yet')
+
+  // A session with no role yet may declare ROLE: orchestrator in a later turn: it is asked at each turn, not skipped.
+  session = 'sess-late'
+  key = null
+  const turnOf = async (id: string) => {
+    await $.turn.start({ text: '', turnId: id })
+    await $.turn.complete({ ...turn('done'), turnId: id })
+    await clock.settle()
+  }
+  await turnOf('t1')
+  expect(argvs).toHaveLength(3)
+  expect(await bandText($)).toBe('engine')
+  key = 'orchestrator'
+  await turnOf('t2')
+  expect(argvs).toHaveLength(4)
+  expect(await bandText($)).toContain('3 auto-compactions')
 })

@@ -14,14 +14,14 @@ the hash of the 4 KB before it. It is dropped and rebuilt from byte 0 when the t
 the offset, or its last 4 KB changed. It assumes the transcript is append-only, as Claude Code writes it. A cache that
 cannot be written costs only the next read.
 """
-import dataclasses, datetime as dt, hashlib, json, os, pathlib, sys
+import dataclasses, datetime as dt, hashlib, json, math, os, pathlib, sys
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parents[2] / "hooks"))
 import roles  # noqa: E402
 
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 CHUNK = 1 << 20
 TAIL = 4096
 USAGE_KEYS = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
@@ -36,6 +36,7 @@ class Compaction:
     ts: float                # boundary timestamp, epoch seconds (0.0 when the row had none)
     pre: int                 # compactMetadata.preTokens
     after: "int | None"      # context of the first main-chain call after it and before the next boundary
+    auto: bool = True        # False for a manual /compact: it is measured, but counts toward no count or gap
 
 
 @dataclasses.dataclass(frozen=True)
@@ -54,9 +55,10 @@ class Policy:
                                    ceiling=self.ceiling if self.auto_clear else 0)
 
 
-def _number(v, floor, default, kind=float):
-    ok = isinstance(v, (int, float)) and not isinstance(v, bool) and v > floor
-    return kind(v) if ok else default
+def _number(v, default, kind=float):
+    """A positive finite number of the kind (an int for a count); anything else is the default."""
+    ok = isinstance(v, kind if kind is int else (int, float)) and not isinstance(v, bool)
+    return kind(v) if ok and math.isfinite(v) and v > 0 else default
 
 
 def policy():
@@ -73,8 +75,8 @@ def policy():
     if cr is False:
         return Policy(compact=False, ceiling=ceiling, auto_clear=auto_clear)
     if isinstance(cr, dict):
-        return Policy(True, _number(cr.get("after"), 0, d.after, int), _number(cr.get("stuck_ratio"), 0, d.stuck_ratio),
-                      _number(cr.get("min_gap_min"), 0, d.min_gap_min), ceiling, auto_clear, cr.get("auto_clear") is True)
+        return Policy(True, _number(cr.get("after"), d.after, int), _number(cr.get("stuck_ratio"), d.stuck_ratio),
+                      _number(cr.get("min_gap_min"), d.min_gap_min), ceiling, auto_clear, cr.get("auto_clear") is True)
     # No usable compact_restart: on, except for an explicit `restart_at: 0`, which has always meant "no suggestion".
     off = isinstance(raw, int) and not isinstance(raw, bool) and raw == 0 and cr is None
     return Policy(compact=not off, ceiling=ceiling, auto_clear=auto_clear)
@@ -124,10 +126,11 @@ def _feed(line, items, open_):
             return open_
         meta = rec.get("compactMetadata") if isinstance(rec.get("compactMetadata"), dict) else {}
         pre = meta.get("preTokens")
-        if meta.get("trigger") == "auto":  # any main-chain boundary closes the window; only auto opens one
-            items.append([_epoch(rec.get("timestamp")), pre if isinstance(pre, int) and not isinstance(pre, bool) else 0, None])
-            return True
-        return False
+        # Any main-chain boundary closes the previous window and opens its own, so what a manual compaction left is
+        # what `stuck` reads; only the auto ones count.
+        items.append([_epoch(rec.get("timestamp")), pre if isinstance(pre, int) and not isinstance(pre, bool) else 0,
+                      None, meta.get("trigger") == "auto"])
+        return True
     if open_:
         got = usage_context(rec)
         if got is not None:
@@ -165,11 +168,13 @@ def _load(session, path, st):
     """The cached (items, offset, open, tail_sha), or None when it does not describe this file as it is now."""
     try:
         c = json.loads(cache_path(session).read_text())
-        items = [[float(a), int(b), None if c_ is None else int(c_)] for a, b, c_ in c["items"]]
+        items = [[float(a), int(b), None if c_ is None else int(c_), d is True] for a, b, c_, d in c["items"]]
+        offset, sha, open_ = c["offset"], c["tail_sha"], c["open"]
         ok = (c["v"] == CACHE_VERSION and c["path"] == str(path) and c["dev"] == st.st_dev and c["ino"] == st.st_ino
-              and 0 <= c["offset"] <= st.st_size)
-        return (items, c["offset"], bool(c["open"]), c["tail_sha"]) if ok else None
-    except (OSError, ValueError, KeyError, TypeError):
+              and type(offset) is int and 0 <= offset <= st.st_size and isinstance(sha, str) and type(open_) is bool
+              and (not open_ or (items and items[-1][2] is None)))
+        return (items, offset, open_, sha) if ok else None
+    except (OSError, ValueError, KeyError, TypeError, OverflowError):
         return None
 
 
@@ -189,8 +194,8 @@ def _save(session, path, st, items, offset, open_, sha):
 
 
 def history(session):
-    """The auto compactions of the session's own main chain, in order. Raises TranscriptUnreadable when the transcript
-    is missing or cannot be read."""
+    """The compactions of the session's own main chain, in order, manual ones flagged `auto=False`. Raises
+    TranscriptUnreadable when the transcript is missing or cannot be read."""
     path = transcript(session)
     if path is None:
         raise TranscriptUnreadable(f"no transcript for session {session!r}")
@@ -223,14 +228,15 @@ def explain(session, context, p, hist=history):
         h = hist(session)
     except (TranscriptUnreadable, OSError):
         return (), ""
-    n = len(h)
+    autos = [c for c in h if c.auto]
+    n = len(autos)
     if n >= p.after:
         return ("count", n), f"{n} auto-compactions"
-    last = h[-1] if h else None
+    last = h[-1] if h else None  # the latest of any trigger: what the session holds now is what that one left
     if last and last.after is not None and last.pre > 0 and last.after / last.pre >= p.stuck_ratio:
-        return ("stuck", n), f"compaction left {round(100 * last.after / last.pre)}%"
-    if n >= 2 and h[-1].ts > 0 and h[-2].ts > 0 and (h[-1].ts - h[-2].ts) < p.min_gap_min * 60:
-        return ("gap", n), f"last 2 compactions {round((h[-1].ts - h[-2].ts) / 60)} min apart"
+        return ("stuck", len(h)), f"compaction left {round(100 * last.after / last.pre)}%"
+    if n >= 2 and autos[-1].ts > 0 and autos[-2].ts > 0 and (autos[-1].ts - autos[-2].ts) < p.min_gap_min * 60:
+        return ("gap", n), f"last 2 compactions {round((autos[-1].ts - autos[-2].ts) / 60)} min apart"
     return (), ""
 
 

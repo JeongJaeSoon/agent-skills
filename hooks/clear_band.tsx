@@ -5,8 +5,8 @@ import type { ClearBandView } from '../types'
 
 const PERIOD_MS = 60_000
 const READY_TIMEOUT_MS = 20_000
-// A session `orch handoff ready` said has no orchestrator key (a lead, a worker, a general one) is not asked again
-// for this long; a new session id (a /clear) is asked at once.
+// A lead session (`orch handoff ready` returned its lead key) is not asked again for this long; a new session id
+// (a /clear) is asked at once.
 const NOT_ORCHESTRATOR_MS = 600_000
 
 // Bump the tag when ClearBandView changes: it declines what an earlier version stored.
@@ -17,7 +17,7 @@ const view = atom(
 )
 
 let timer: { cancel: () => void } | undefined
-let skipped: { session: string; until: number } | undefined
+let skipped: { session: string; until: number; roleless: boolean } | undefined
 let asking = false
 let running = false
 let working = false
@@ -62,10 +62,14 @@ async function check($: EngineInterface): Promise<void> {
       const error = `check failed (exit ${run.exitCode}) ${detail}`
       got = { show: true, ready: false, context: tokens, due: '', key: '', reason: '', session, error }
     }
-    if (got.error === '' && got.key !== 'orchestrator') skipped = { session, until: Date.now() + NOT_ORCHESTRATOR_MS }
     if (began !== turn) {
       again = true
       return
+    }
+    // Only a lead is remembered: its role comes with `--agent` and does not change. A session with no role yet may
+    // declare one (ROLE: orchestrator) in a later turn, so it is asked again at the next turn.
+    if (got.error === '' && got.key !== 'orchestrator') {
+      skipped = { session, until: Date.now() + NOT_ORCHESTRATOR_MS, roleless: !got.key }
     }
     await update($, view, () => got)
     if (got.show && !timer) timer = $.clock.every(PERIOD_MS, () => void check($))
@@ -101,6 +105,7 @@ export const register: Register = on => {
     if (e.agentId === undefined) {
       working = true
       turn += 1
+      if (skipped?.roleless) skipped = undefined
       // A turn may take mail or start subagents: the verdict from before it stops counting.
       await update($, view, old => (old ? { ...old, ready: false } : old))
     }

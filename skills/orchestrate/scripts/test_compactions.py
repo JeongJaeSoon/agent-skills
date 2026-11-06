@@ -38,7 +38,11 @@ def write(*rows, mode="w"):
 
 
 def got():
-    return [(c.pre, c.after) for c in cx.history(S)]
+    return [(c.pre, c.after) for c in cx.history(S) if c.auto]
+
+
+def every():
+    return [(c.pre, c.after, c.auto) for c in cx.history(S)]
 
 
 def cfg(text):
@@ -67,6 +71,12 @@ write(boundary(0), boundary(10, agentId="a1"), boundary(20, isSidechain=True), u
 assert got() == [(343_000, 60_000)]
 write(boundary(0), boundary(50, trigger="manual"), usage(200_000))
 assert got() == [(343_000, None)], "auto -> manual -> usage: the usage belongs to no auto window"
+assert every() == [(343_000, None, True), (343_000, 200_000, False)], "it is the manual one's own result"
+# What a manual compaction left is what the session holds now: a stuck auto one before it no longer counts.
+write(boundary(0, pre=300_000), usage(200_000), boundary(50, pre=300_000, trigger="manual"), usage(20_000))
+assert cx.due(S, 1, P()) == "", cx.due(S, 1, P())
+write(boundary(0, pre=300_000), usage(20_000), boundary(50, pre=300_000, trigger="manual"), usage(200_000))
+assert cx.due(S, 1, P()) == "compaction left 67%" and len(got()) == 1, "a stuck manual one is stuck too"
 write(boundary(0), boundary(100), usage(200_000))
 assert got() == [(343_000, None), (343_000, 200_000)], "auto -> auto -> usage: only the last window is measured"
 
@@ -120,6 +130,10 @@ for name, damage in (
     ("same inode regrown", lambda: None),
     ("version", lambda: cache.write_text(json.dumps({**json.loads(cache.read_text()), "v": 0}))),
     ("garbage", lambda: cache.write_text("{not json")),
+    ("float offset", lambda: cache.write_text(json.dumps({**json.loads(cache.read_text()), "offset": 0.5}))),
+    ("open without a window", lambda: cache.write_text(json.dumps({**json.loads(cache.read_text()), "items": [],
+                                                                    "open": True}))),
+    ("bad sha", lambda: cache.write_text(json.dumps({**json.loads(cache.read_text()), "tail_sha": None}))),
 ):
     write(boundary(0), usage(60_000), boundary(100), usage(60_000))
     cx.history(S)
@@ -212,6 +226,12 @@ assert cx.policy() == P(True, 5, 0.7, 10, 300_000, True, True)
 cfg('{"orchestrate": {"compact_restart": {"after": "x", "stuck_ratio": true, "min_gap_min": -1, "auto_clear": "yes"}, '
     '"restart_at": "big", "auto_clear": 1}}')
 assert cx.policy() == P(), cx.policy()
+cfg('{"orchestrate": {"compact_restart": {"after": 0.5, "stuck_ratio": 1e999, "min_gap_min": NaN}}}')
+assert cx.policy() == P(), "a fraction or a non-finite number is a wrong type, not 0"
+cfg('{"orchestrate": {"compact_restart": {"after": 1e999}}}')
+assert cx.policy() == P()
+cfg('{"orchestrate": {"compact_restart": {"after": 2, "stuck_ratio": 1, "min_gap_min": 7.5}}}')
+assert cx.policy() == P(True, 2, 1.0, 7.5)
 cfg('{"orchestrate": {"compact_restart": "yes", "restart_at": true}}')
 assert cx.policy() == P()
 cfg('{"orchestrate": []}')

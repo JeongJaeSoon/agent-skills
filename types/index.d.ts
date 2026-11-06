@@ -18,8 +18,9 @@ export type ClearBandView = {
   context: number
   // Why a restart is due, such as "3 auto-compactions"; empty when it is not.
   due: string
-  // The session's handoff key; anything but "orchestrator" is not asked again for ten minutes.
-  key: string
+  // The session's handoff key, null for a session with no orchestrator or lead role. A lead's is not asked again for
+  // ten minutes; one with no role is asked at each turn, since it may declare a role later.
+  key: string | null
   // Why not ready yet; empty when ready.
   reason: string
   // The session the verdict is for: a /clear starts a new one in the same process.
