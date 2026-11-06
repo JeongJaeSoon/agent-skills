@@ -1531,7 +1531,7 @@ function fleetSent(st) {
   const hit = (r) => !q || [r.from, r.to, r.kind, r.channel, r.repo, r.subject, r.text].some((v) => (v || "").toLowerCase().includes(q));
   const shown = rows.filter((r) => bySrc(r) && hit(r));
   const failed = src.ok === false ? `<div class="card"><div class="empty-chart">${tag("collection failed", "warn", "alert")} Could not read transcripts: ${esc(src.error || "")}. Only the log and Orca rows are shown, and sends missing from them cannot be counted.</div></div>` : "";
-  const unrecorded = d.unrecorded > 0 ? `<div class="card"><div class="empty-chart">${tag("unrecorded sends", "warn", "alert")} ${d.unrecorded} send${d.unrecorded === 1 ? "" : "s"} in live session transcripts match no log or Orca row: the sender skipped <span class="mono">orch sent add</span>. They are not listed here.</div></div>` : "";
+  const unrecorded = d.unrecorded > 0 ? `<div class="card"><p class="warn-note">${tag("unrecorded sends", "warn", "alert")} ${d.unrecorded} send${d.unrecorded === 1 ? "" : "s"} in live session transcripts match no log or Orca row: the sender skipped <span class="mono">orch sent add</span>. They are not listed here.</p></div>` : "";
   const body = shown.slice(0, SENT_SHOWN).map((r) => {
     const text = r.text || "", long = text.split("\n").length > 6 || text.length > 480, k = sentKey(r);
     const srcs = [r.source, ...(r.also || [])].map((x) => tag((SENT_SRC[x] || [x])[0], (SENT_SRC[x] || [, ""])[1])).join(" ");
