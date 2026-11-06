@@ -82,6 +82,14 @@ assert p.live_idle(1.0, ticks=lambda: next(ticks), sleep=slept.append, clock=lam
 ticks, clock = iter([[0, 0, 0, 0], [10, 0, 10, 0]]), iter([10.0, 11.5])
 finish = p.idle_start(2.0, ticks=lambda: next(ticks), sleep=slept.append, clock=lambda: next(clock))
 assert finish() == 50.0 and slept[-1] == 0.5
+# The hook's budget (DEADLINE) cuts the window to what is left, so a 30 s window cannot outlast the hook.
+ticks, slept = iter([[0, 0, 0, 0], [10, 0, 10, 0]]), []
+p.DEADLINE = p.time.time() + 3
+try:
+    assert p.idle_start(30.0, ticks=lambda: next(ticks), sleep=slept.append)() == 50.0
+finally:
+    p.DEADLINE = None
+assert 2 < slept[0] <= 3, slept
 assert p.live_idle(1.0, ticks=lambda: None, sleep=lambda s: None) is None
 ticks = iter([[100, 100, 800, 0], [90, 100, 800, 0]])
 assert p.live_idle(1.0, ticks=lambda: next(ticks), sleep=lambda s: None) is None  # a counter gone backwards

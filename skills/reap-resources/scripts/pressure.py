@@ -499,7 +499,10 @@ def idle_start(seconds, ticks=cpu_ticks, sleep=time.sleep, clock=time.monotonic)
     a, t0 = ticks(), clock()
 
     def finish():
-        sleep(max(0.0, max(1.0, float(seconds)) - (clock() - t0)))
+        wait = max(0.0, max(1.0, float(seconds)) - (clock() - t0))
+        if DEADLINE is not None:  # the hook's budget cuts the window short; a shorter read still gives a figure
+            wait = min(wait, max(0.0, DEADLINE - time.time()))
+        sleep(wait)
         b = ticks()
         if not a or not b:
             return None
