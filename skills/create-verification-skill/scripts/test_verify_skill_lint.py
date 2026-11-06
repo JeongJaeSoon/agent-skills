@@ -210,6 +210,26 @@ class LintTest(unittest.TestCase):
         text = '#!/usr/bin/env bash\nstate="${1:-}"\nif [ -z "$state" ]; then\n  exit 2\nfi\nsource "$state"\n'
         self.assertEqual(self.lint_rules_with("scripts/cleanup.sh", text)[0], 0)
 
+    def test_shell_argument_guards(self):
+        cases = [('if [ "$#" -ne 1 ]; then\n  exit 2\nfi\nsource "$1"\n', 0),
+                 ('state="${1:-}"\n[ -n "$state" ] || exit 2\nsource "$state"\n', 0),
+                 ('if [ -z "$APP_ROOT" ]; then\n  exit 2\nfi\nstate="${1:-/tmp/verify/current.state}"\nsource "$state"\n', 1)]
+        for body, want in cases:
+            text = "#!/usr/bin/env bash\n" + body
+            self.assertEqual(self.lint_rules_with("scripts/cleanup.sh", text)[0], want, body)
+
+    def test_xargs_kill_of_a_recorded_pid_file_passes_and_of_a_lookup_does_not(self):
+        self.assertEqual(self.lint_rules_with("scripts/doctor.sh", '#!/usr/bin/env bash\ncat "$1/pids" | xargs -r kill\n')[0], 0)
+        self.assertEqual(self.lint_rules_with("scripts/doctor.sh", "#!/usr/bin/env bash\nlsof -ti :3000 | xargs -r kill\n"), (1, ["pattern-kill"]))
+
+    def test_python_subprocess_pkill_is_flagged(self):
+        text = 'import subprocess\nsubprocess.run(["pkill", "-f", "demo"], check=False)\n'
+        self.assertEqual(self.lint_rules_with("scripts/stop.py", text, skill_extra="\n`stop.py`\n"), (1, ["pattern-kill"]))
+
+    def test_numbered_section_headings_count(self):
+        self.put("SKILL.md", SKILL.replace("## Launch", "## 1. Launch").replace("## Cleanup", "## 5) Cleanup"))
+        self.assertEqual(self.run_lint()[0], 0)
+
     def test_javascript_cleanup_is_judged_by_process_argv(self):
         refuse = 'const state = process.argv[2];\nif (!state) { process.exit(2); }\n'
         fallback = 'const state = process.argv[2] || "/tmp/verify/current.state";\n'

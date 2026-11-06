@@ -29,14 +29,13 @@ SECRET_NAMES = (".env*", "*.env", "*secret*", "*credential*", "*token*", "*passw
 SCRIPT_SUFFIXES = (".sh", ".py")
 INTERPRETED_SUFFIXES = (".js", ".mjs", ".cjs", ".ts")  # run as `node x.mjs`, so no executable bit is required
 CLEANUP_WORDS = ("cleanup", "clean-up", "clean_up", "teardown")
-SHELL_ARG_GUARD = re.compile(
-    r"\$\{1:\?|\$#\s*-(?:lt|eq|ne|le)\b|-z\s+\"?\$\{?1\b|\bset\s+-[a-z]*u[a-z]*\b[\s\S]*\$\{?1\b"
-    r"|-z\s+\"?\$\{?\w+\}?\"?\s*\]+[;\s]*(?:then\b)?[\s\S]{0,80}?\bexit\b")  # `[ -z "$state" ]` followed by an exit
+SHELL_ARG_GUARD = re.compile(r"\$\{1:\?|\$#\"?\s*-(?:lt|eq|ne|le)\b|-[zn]\s+\"?\$\{?1\b|\bset\s+-[a-z]*u[a-z]*\b[\s\S]*\$\{?1\b")
+SHELL_ARG_COPY = re.compile(r"\b(\w+)=\"?\$\{?1\b")
 PY_ADD_ARGUMENT = re.compile(r"add_argument\(([^)]*)\)")
 ARGV_USE = {"py": re.compile(r"sys\.argv\[1\]"), "js": re.compile(r"process\.argv\[2\]")}
 ARGV_DEFAULT = re.compile(r"\bif\b|\blen\(|\.length|\?|\|\|")  # a line that falls back instead of refusing
 AT_COMMAND = r"(?:^|[;&|(`{]|\$\(|\b(?:then|do|else)\b)\s*(?:sudo\s+)?"
-KILL_AT_COMMAND = re.compile(AT_COMMAND + r"(?:pkill|killall)\b|\|\s*xargs\s+(?:-\S+\s+)*kill\b|\bkill\b[^\n]*\$\(\s*(?:pgrep|lsof)")
+KILL_AT_COMMAND = re.compile(AT_COMMAND + r"(?:pkill|killall)\b|(?:pgrep|lsof)\b[^\n]*\|\s*xargs\s+(?:-\S+\s+)*kill\b|\bkill\b[^\n]*\$\(\s*(?:pgrep|lsof)|[\[(]\s*[\"'](?:pkill|killall)[\"']")
 KILL_PLAIN = re.compile(AT_COMMAND + r"kill\b([^\n]*)")
 PID_DISCOVERY = re.compile(r"\bpgrep\b|\blsof\b[^\n]*\s-\w*t")
 PID_VARIABLE = re.compile(r"\b(\w+)=\$\([^\n]*(?:\bpgrep\b|\blsof\b)")
@@ -98,8 +97,8 @@ def fenced_lines(text):
 
 
 def headings(text):
-    return [m.group(1).strip().strip("*").lower() for _, ln in outside_fences(text)
-            if (m := re.match(r"#{2,3}\s+(.*)", ln))]
+    found = [m.group(1).strip().strip("*").lower() for _, ln in outside_fences(text) if (m := re.match(r"#{2,3}\s+(.*)", ln))]
+    return [re.sub(r"^\d+[.)]\s*", "", h) for h in found]
 
 
 def is_script(path):
@@ -173,6 +172,13 @@ def uses_argv_without_default(code, kind):
     return any(ARGV_USE[kind].search(ln) and not ARGV_DEFAULT.search(ln) for ln in code.splitlines())
 
 
+def shell_requires_argument(code):
+    if SHELL_ARG_GUARD.search(code):
+        return True
+    # state="${1:-}" is no refusal until a check on that variable ends in an exit
+    return any(re.search(r"-[zn]\s+\"?\$\{?" + v + r"\b[\s\S]{0,80}?\bexit\b", code) for v in SHELL_ARG_COPY.findall(code))
+
+
 def python_requires_argument(code):
     if uses_argv_without_default(code, "py"):
         return True
@@ -191,7 +197,7 @@ def check_cleanup_script(path, rel, text):
     elif path.suffix in INTERPRETED_SUFFIXES:
         ok = uses_argv_without_default(code, "js") or bool(re.search(r"if\s*\(\s*!\s*process\.argv\[2\]", code))
     else:
-        ok = SHELL_ARG_GUARD.search(code)
+        ok = shell_requires_argument(code)
     if ok:
         return []
     return [finding(rel, 1, "cleanup-arg", "cleanup must require the instance to remove (run id or state file) and refuse without it")]
