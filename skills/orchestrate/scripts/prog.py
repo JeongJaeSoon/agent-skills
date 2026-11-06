@@ -146,9 +146,11 @@ Usage: orch <command> <slug> [options]
                                      sessions closed by hand
   db import [--dry-run | --apply] [--rehearsal] | export --legacy --target 4a|pre-4a DIR | dump [TABLE]
   db backup FILE | restore FILE [--rehearsal] | rollback 4b|state DIR [--rehearsal] | cutover-plan 4a|4b
-  db state [--auto]                  acks.jsonl and stages.json -> tables, after a backup, with tombstones in their place
-                                     (setup runs it with --auto after an update; a rerun changes nothing);
-                                     export --legacy --target state DIR writes both files back for rollback state DIR
+  db state [--auto]                  acks.jsonl and stages.json, then watch-prs's prs/sendlog.jsonl -> tables, after a backup,
+                                     with tombstones in their place (setup runs it with --auto after an update; a rerun
+                                     changes nothing); export --legacy --target state|sendlog DIR writes the files back
+                                     for rollback state|sendlog DIR
+  ask add OWNER/REPO#N REVIEWER | list [--status S] [--json] | cancel ID   the review-ask queue watch-prs sends from
   db migrate [--check] | init        migrate is the whole cutover in one rerunnable command, run by the owner from a
                                      plain terminal (cutover.py); init is for a PC with no state (setup runs it)
                                      no slug: agent-skills.db (store.py). import moves decisions.json,
@@ -4850,6 +4852,7 @@ COMMANDS = {"init": cmd_init, "set": cmd_set, "status": cmd_status, "record": cm
             "stage": cmd_stage, "board": cmd_board, "brief": cmd_brief, "hold": cmd_hold, "sent": cmd_sent, "release": lambda argv: cmd_hold(argv, release=True),
             "land-exec": lambda argv: __import__("land_exec").main(argv),
             "order": lambda argv: __import__("order").main(argv),
+            "ask": lambda argv: __import__("ask").main(argv),
             "watch-cards": lambda argv: __import__("card_watch").main(argv),
             "handoff": lambda argv: __import__("handoff").main(argv),
             "patrol": lambda argv: __import__("patrol").main(argv),

@@ -747,13 +747,18 @@ def last_asks():
     keys. Read from the send-log agent-skills.json → "brief" → "sendlog" names (watch-prs writes one); {} without the
     key or the file. A row written by hand has no action, and a `date` or `slack_ts` for its time: a request."""
     try:
-        lines = pathlib.Path(json.loads(SKILLS_CONFIG.read_text())["brief"]["sendlog"]).expanduser().read_text().splitlines()
-    except (OSError, ValueError, KeyError, TypeError):
+        file = pathlib.Path(json.loads(SKILLS_CONFIG.read_text())["brief"]["sendlog"]).expanduser()
+        # Once `orch db state` moved that file in, the rows are in the DB and the file is a tombstone.
+        if file.resolve() == store_db.sendlog_file() and store_db.sendlog_ready():
+            lines = store_db.send_rows()
+        else:
+            lines = file.read_text().splitlines()
+    except (OSError, ValueError, KeyError, TypeError, store_db.NotMigrated):
         return {}
     out = {}
     for line in lines:
         try:
-            r = json.loads(line)
+            r = line if isinstance(line, dict) else json.loads(line)
             action = r.get("action", "request")
             if action not in ASK_WORD or r.get("source", "sent") not in ASK_GONE:
                 continue
