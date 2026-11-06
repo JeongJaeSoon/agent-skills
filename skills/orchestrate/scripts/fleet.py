@@ -2348,7 +2348,8 @@ class Fleet:
         cutoff = iso(now - dt.timedelta(days=7))
         for k in [k for k, v in sticky.items() if not v.get("open") and (v.get("at") or "") < cutoff]:
             del sticky[k]
-        for k in [k for k, at in dismissed.items() if at < cutoff and k not in raw_keys]:
+        held = {f"ext:pressure:queue:{e['id']}" for e in pressure_entries()}  # hidden, so not in raw_keys, yet still to hide
+        for k in [k for k, at in dismissed.items() if at < cutoff and k not in raw_keys and k not in held]:
             del dismissed[k]
         panes = {a["pane"] or s["id"] for s in sessions.values() for a in s["agents"]}
         for store in (prompts, phases):
@@ -2488,7 +2489,10 @@ def ext_state(rows, closure):
 PATROL_NEEDS_YOU = {"X", "E", "L", "O"}  # the patrol codes that ask the human
 READ_FROM_SOURCE = ("patrol:", "pressure:queue:")  # keys read from patrol.jsonl and pressure-queue.json; old inbox lines of them are not shown
 PRESSURE_WAIT_PREFIX = "ext:pressure:wait:"  # + a short hash of the waiting ids the item counts
+PRESSURE_SET_KEEP_S = 7 * 86400  # how long a drawn set stays dismissable; a queue entry is kept as long
 PRESSURE_SCRIPT = pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts" / "pressure.py"
+# The copy button gets the list, never the held command: run from anywhere else it would skip its session's checks.
+PRESSURE_COPY = shlex.join(["python3", str(PRESSURE_SCRIPT), "queue"])
 
 
 def agent_state():
@@ -2529,6 +2533,13 @@ def patrol_items(closures):
     return out
 
 
+def pressure_entries():
+    """The whole entries of pressure-queue.json; a row that is not one costs only itself."""
+    q = read_json(agent_state() / "pressure-queue.json", {})
+    return [e for e in (q.values() if isinstance(q, dict) else ())
+            if isinstance(e, dict) and isinstance(e.get("id"), str) and isinstance(e.get("what"), str)]
+
+
 def pressure_items(closures, mem):
     """Needs you from pressure-queue.json. A held command that waits or retries is the machine's to wait on, so all of
     them are one item, "기계 대기 N건"; one that gave up or failed asks the human and is its own item. Suppressing
@@ -2536,26 +2547,22 @@ def pressure_items(closures, mem):
     `mem["pressure_sets"]` remembers each set, so dismissing the item dismisses exactly those entries, whatever state
     they are in by now; an entry that comes later makes a new set and shows. `mem` is the collector's memory dict,
     changed in place for that."""
-    dismissed = mem.setdefault("dismissed", {})
-    q = read_json(agent_state() / "pressure-queue.json", {})
-    entries = [e for e in (q.values() if isinstance(q, dict) else ())
-               if isinstance(e, dict) and isinstance(e.get("id"), str) and isinstance(e.get("what"), str)]
+    dismissed, entries = mem.setdefault("dismissed", {}), pressure_entries()
     key = lambda e: f"pressure:queue:{e['id']}"
     shut = lambda e: (closures.get(key(e)) or {}).get("state") == "done" or f"ext:{key(e)}" in dismissed
     waiting = [e for e in entries if e.get("state") in ("waiting", "retrying") and not shut(e)]
-    sets = mem.setdefault("pressure_sets", {})
+    sets, now = mem.setdefault("pressure_sets", {}), time.time()
     for k in [k for k in dismissed if k.startswith(PRESSURE_WAIT_PREFIX)]:
         at = dismissed.pop(k)
-        for qid in sets.pop(k[len(PRESSURE_WAIT_PREFIX):], ()):
+        for qid in (sets.pop(k[len(PRESSURE_WAIT_PREFIX):], None) or {}).get("ids", ()):
             dismissed[f"ext:pressure:queue:{qid}"] = at
     waiting = [e for e in waiting if f"ext:{key(e)}" not in dismissed]
     ids = sorted(e["id"] for e in waiting)
     set_id = hashlib.sha1("\0".join(ids).encode()).hexdigest()[:8]
     if ids:
-        sets.pop(set_id, None)
-        sets[set_id] = ids  # newest last; the oldest sets (never dismissed) are dropped
-        for old in list(sets)[:-50]:
-            del sets[old]
+        sets[set_id] = {"ids": ids, "t": now}
+    for old in [h for h, s in sets.items() if now - s.get("t", 0) > PRESSURE_SET_KEEP_S]:  # a page left open this long is gone
+        del sets[old]
     hhmm = lambda t: time.strftime("%H:%M", time.localtime(t)) if isinstance(t, (int, float)) else "?"
     when = lambda t: iso(dt.datetime.fromtimestamp(t, dt.timezone.utc)) if isinstance(t, (int, float)) else None
     out = []
@@ -2565,13 +2572,13 @@ def pressure_items(closures, mem):
         title = (f"{e['what']} 재시도 실패: {e.get('error') or '?'}" if e["state"] == "failed" else
                  f"{e['what']} 포기: 기한 {hhmm(e.get('deadline'))}까지 PC 사용량 위험이 이어짐({e.get('why')})")
         out.append({"key": f"ext:{key(e)}", "type": "pc_pressure", "session": None, "title": mask(f"[{e['id']}] {title}", 200),
-                    "url": None, "command": f"python3 {PRESSURE_SCRIPT} queue", "at": when(e.get("ended") or e.get("added")),
+                    "url": None, "command": PRESSURE_COPY, "at": when(e.get("ended") or e.get("added")),
                     "source": "pressure-watch"})
     if waiting:
         what = ", ".join(sorted({e["what"] for e in waiting}))
         out.append({"key": PRESSURE_WAIT_PREFIX + set_id, "type": "pc_pressure", "session": None,
                     "title": mask(f"기계 대기 {len(waiting)}건(PC 사용량 위험으로 멈춘 명령, 부하가 내려가면 요청한 세션이 다시 실행): {what}", 200),
-                    "url": None, "command": f"python3 {PRESSURE_SCRIPT} queue",
+                    "url": None, "command": PRESSURE_COPY,
                     "at": when(max(e.get("added") or 0 for e in waiting)), "source": "pressure-watch"})
     return out
 

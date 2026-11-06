@@ -34,7 +34,18 @@ assert by_key[wait_key]["title"].startswith("기계 대기 2건"), by_key[wait_k
 assert "포기" in by_key["ext:pressure:queue:q-4"]["title"] and "재시도 실패: Exit code 1" in by_key["ext:pressure:queue:q-5"]["title"]
 assert all(i["type"] == "pc_pressure" and i["command"].endswith("pressure.py queue") for i in items)
 assert not (D / "inbox-external.jsonl").exists(), "reading the queue writes nothing"
-assert list(mem["pressure_sets"].values()) == [["q-1", "q-2"]]
+assert [s["ids"] for s in mem["pressure_sets"].values()] == [["q-1", "q-2"]]
+# A page left open while the set changed many times can still dismiss what it drew: sets are kept by age, not by count.
+old = wait_key
+for n in range(60):
+    queue(q(1, "waiting"), q(2, "retrying"), *[q(100 + i, "waiting") for i in range(n)])
+    fleet.pressure_items({}, mem)
+queue(q(1, "waiting"), q(2, "retrying"), q(3, "done"), q(4, "gave_up", ended=T), q(5, "failed", error="Exit code 1", ended=T))
+mem["dismissed"] = {old: "2026-11-06T11:00:00Z"}
+fleet.pressure_items({}, mem)
+assert set(mem["dismissed"]) == {"ext:pressure:queue:q-1", "ext:pressure:queue:q-2"}, mem["dismissed"]
+mem = {}
+fleet.pressure_items({}, mem)
 
 # --- suppression is by queue id. A closure of one entry lowers the count; dismissing the one item dismisses exactly the
 # entries it counted, so an entry that arrives later shows ("기계 대기 2건": one closed, one open, a new one).
