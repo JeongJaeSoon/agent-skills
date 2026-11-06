@@ -275,6 +275,12 @@ for arg in ('"worker.md lead.md"', "\"worker.md'\"", "brief{1..1}.md", "brief[1]
     assert bash(HELPER.format(arg)) == "deny", arg
 assert bash("HOME=/other;bin/" + HELPER.format('"$HOME/worker.md"')) == "deny"  # `\S*/` once swallowed the earlier statement
 assert bash("bin/" + HELPER.format('"$HOME/worker.md"')) == "none"
+# Round 4: a later argument can rebind HOME, and a cd has spellings no scan of earlier text catches.
+assert bash(HELPER.format("'~/worker.md'") + ' --x "$((HOME=0))"', session="joined") == "deny"
+assert bash(HELPER.format("$HOME/worker.md") + " --x `true`") == "deny"
+for pre in ("! cd /x; ", 'c"d" /x && ', "f() { cd /x; }; f; ", "echo hi; "):
+    assert "absolute path" in reason(pre + HELPER.format("worker.md")), pre
+    assert bash(pre + HELPER.format(H / "worker.md")) == "none", pre
 (H / "physical" / "child").mkdir(parents=True)
 (H / "physical" / "brief2.md").write_text((H / "lead.md").read_text())
 (H / "brief2.md").write_text("/goal fix X\nCLOSE: §8\n")

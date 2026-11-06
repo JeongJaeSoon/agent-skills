@@ -74,7 +74,6 @@ REBINDS = re.compile(r"(?<![$\w{])ORCA_TERMINAL_HANDLE=(?!=)|\$\{ORCA_TERMINAL_H
 CARD = re.compile(r"(?:^|[;&|(])\s*orca\s+worktree\s+create\b", re.M)
 # The helper reads its brief from a file this hook can open, so the card checks run on that file (dispatch-card §3).
 CARD_HELPER = re.compile(r"(?:^|[;&|(`])\s*(?:\S*/)?skills-sync\s+card\s+(\S+)", re.M)
-CHDIR = re.compile(r"(?:^|[;&|(])\s*(?:cd|pushd)\b", re.M)
 LEAD_FROM_LEAD = ("This session is a lead, and a lead does not start another lead. Give the card a "
                   "worker brief (the one at the top of orchestrate references/brief.md, or its \"Single worker\") "
                   "without the Lead's MODE or ROLE line or `<project>: lead` head; only the human or the "
@@ -150,6 +149,7 @@ HOME_REF = re.compile(r"\$HOME\b|\$\{HOME\}")
 SAFE_HOME = re.compile(r"/[\w./+-]*")
 # A literal `cd X &&` may come first: cd changes PWD, never HOME.
 FIRST_STATEMENT = re.compile(r"\s*(?:(?:cd|pushd)\s+(?:--\s+)?[\w./+-]+\s*&&\s*)?(?:[\w./~+-]*/)?skills-sync\s+card\s+")
+ALONE = re.compile(r"\s*(?:[\w./~+-]*/)?skills-sync\s+card\s+")
 BRIEF_TOKEN = re.compile(r"'([^']*)'|\"([^\"]*)\"|([^'\"]+)")
 PLAIN_PATH = re.compile(r"[\w./+:@%=,-]*")
 
@@ -181,15 +181,19 @@ def helper_card(brief, cwd, cmd, start):
     """(the prompt the helper would send, None) or (None, the deny reason): the helper's own checks on that file.
     `start`: where the brief's argument begins in `cmd`."""
     try:
-        path = expand_path(brief, bool(FIRST_STATEMENT.fullmatch(cmd[:start])))
+        # A later argument can still rebind HOME (`"$((HOME=0))"`), so HOME is read only when none expands.
+        first = bool(FIRST_STATEMENT.fullmatch(cmd[:start])) and not re.search(r"[$`]", cmd[start + len(brief):])
+        path = expand_path(brief, first)
         base = pathlib.Path(cwd or ".")
-        moves = bool(CHDIR.search(cmd[:start]))
+        # A relative path means the event's cwd only when nothing runs before the helper: a cd can be spelled
+        # `! cd`, `c"d"` or inside a function, so no scan of earlier text proves there is none.
+        alone = bool(ALONE.fullmatch(cmd[:start]))
     except Exception as e:  # a check that cannot run does not let the card through
         return None, f"The guard hook could not read the brief path of `skills-sync card` ({type(e).__name__}: {e})."
     if path is None:
         return None, "Write the brief's path out in `skills-sync card <brief>` (or `~`/`$HOME` plus a literal path); this hook reads that file and cannot expand it."
-    if moves and not path.is_absolute():
-        return None, "This command changes directory, so give `skills-sync card` the brief's absolute path."
+    if not alone and not path.is_absolute():
+        return None, "Something runs before `skills-sync card` (a cd could move it), so give the brief's absolute path."
     full = (base / path).resolve()  # physical resolution, as opening the file does: a symlink's `..` is its target's parent
     if full.is_dir():
         return None, f"`skills-sync card {brief}` names a directory, not a brief file; give it the brief's file path."
