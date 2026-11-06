@@ -190,6 +190,7 @@ class Round:
         verdict = prog.pr_state(p.events()).get(pr, {}).get("verdict")
         audit["verdict"] = verdict
         if why := prog.executor_verdict_problem(verdict, sha, ex["verdict_sources"]):
+            prog.release_own_lanes(p, pr)  # this refusal precedes attempt, so a lane taken in an earlier round would idle
             return settle("refused", 3, why)
         try:
             comments = prog.gh_json("pr", "view", str(pr), "--repo", repo, "--json", "comments").get("comments") or []
