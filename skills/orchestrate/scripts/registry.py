@@ -194,9 +194,11 @@ STORES = [
     Store("alias", "db:alias.id", {"board.alias": CANONICAL}, ("store:_fill_board", "store:restore"), ("tidy",),
           rule="an old content-hash id -> the b<N> the import gave its item"),
     Store("boardrow", "db:board_row.data", {"board.row": CANONICAL},
-          ("store:_insert_row", "store:_put_rows", "store:_put_groups", "store:restore"), ("brief", "tidy", "patrol", "fleet"),
+          ("store:_insert_row", "store:_put_rows", "store:_put_groups", "store:_put_annots", "store:restore"),
+          ("brief", "tidy", "patrol", "fleet"),
           rule="rows' phase and progress; a row linked to a card stores no PR of its own (Orca's); kind group rows are "
-               "priority rules (`orch board priority`), kept apart from the rows"),
+               "priority rules (`orch board priority`), kind annot rows (id card:<worktree>) are card annotations "
+               "(`orch board set card:<worktree>`), both kept apart from the rows"),
     Store("lead", "db:lead.data", {"board.lead": CANONICAL},
           ("store:_insert_lead", "store:_put_leads", "store:restore"), ("brief", "fleet"),
           rule="leads Orca cannot see"),

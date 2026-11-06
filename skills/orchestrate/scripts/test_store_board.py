@@ -192,19 +192,23 @@ with state("writes", None, None) as sd:
 # ---- the write bans
 with state("bans", None, None, STATE) as sd:
     store.import_apply(checks=False)
-    refused(lambda: board.doing_add("abc-1-login 후속", "a", "n"), "card wt-card", "--force")
+    refused(lambda: board.doing_add("abc-1-login 후속", "a", "n"), "card wt-card", "reworded title")
     refused(lambda: board.doing_add("Read the login flow 확인", "a", "n"), "subagent ag1")
-    refused(lambda: board.doing_add("abc-1-login 후속", "a", "n", force=True), "--why")
+    try:
+        board.doing_add("abc-1-login 후속", "a", "n", force=True)
+        raise AssertionError("doing add has no override")
+    except TypeError:
+        pass
     assert board.read()["doing"] == []
-    board.doing_add("abc-1-login 후속", "a", "n", force=True, why="오너 지시로 따로 추적")
-    iid = board.read()["doing"][0]["id"]
-    after = json.loads(raw().execute("SELECT after FROM event WHERE entity='item' AND id=?", (iid,)).fetchone()[0])
-    assert after["forced"] == "오너 지시로 따로 추적"
     board.doing_add("카드와 무관한 일", "a", "n")
-    # A row names its card: no PR of its own, by name or by --worktree; an unlinked row links once.
-    refused(lambda: board.set_row("abc-1-login", repo="acme/app", pr="acme/app#9"), "linked to card wt-card")
-    refused(lambda: board.set_row("L", repo="acme/app", pr="acme/app#9", worktree="wt-card"), "linked to card wt-card")
-    board.set_row("L", repo="acme/app", worktree="wt-card")
+    # A new row for a card is refused, by name or by --worktree; a lead row is no card's.
+    refused(lambda: board.set_row("abc-1-login", repo="acme/app", pr="acme/app#9"), "would be card wt-card's", "card:wt-card")
+    refused(lambda: board.set_row("L", repo="acme/app", pr="acme/app#9", worktree="wt-card"), "would be card wt-card's")
+    refused(lambda: board.set_row("L", repo="acme/app", worktree="wt-card"), "would be card wt-card's")
+    board.set_row("L", repo="acme/app", kind="lead", worktree="wt-lead")
+    # Rows from before the ban (written as the old code did): no PR of its own, and one card.
+    board.change(lambda s: board.put(s, "L", dict(worktree="wt-card")))
+    refused(lambda: board.set_row("L", pr="acme/app#9"), "linked to card wt-card")
     refused(lambda: board.set_row("L", worktree="wt-other"), "drop the row")
     refused(lambda: board.set_row("L", pr="acme/app#9"), "linked to card wt-card")
     board.set_row("L", next="다음")  # everything else on the row still writes
@@ -224,7 +228,8 @@ with state("bans", None, None, STATE) as sd:
     # Through orch: the refusal is a plain message and exit 1, and --force --why pass.
     code, _, err = orch("board", "doing", "add", "abc-1-login 또", "--owner", "a", "--next", "n")
     assert code == 1 and "already shows this work" in err, err
-    assert orch("board", "doing", "add", "abc-1-login 또", "--owner", "a", "--next", "n", "--force", "--why", "w")[0] == 0
+    code, _, err = orch("board", "doing", "add", "abc-1-login 또", "--owner", "a", "--next", "n", "--force", "--why", "w")
+    assert code == 1 and "no --force" in err and board.read()["doing"][-1]["title"] == "카드와 무관한 일", err
     # No fleet state: nothing to check against, so the write goes through with one warning line.
     (sd / "state.json").unlink()
     code, _, err = orch("board", "doing", "add", "abc-1-login 셋", "--owner", "a", "--next", "n")
