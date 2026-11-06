@@ -115,9 +115,12 @@ class LandExec(unittest.TestCase):
         st["prs"][str(self.n)].update(fields)
         self.write(st)
 
-    def verdict(self, sha=None, source="review:codex", result="pass"):
+    def verdict(self, sha=None, source="review:codex", result="pass", **who):
         self.p.append("ready", pr=self.n, ticket=f"T-{self.n}")
-        self.p.append("verdict", pr=self.n, sha=sha or f"h{self.n}", patch_id=pid(self.n), source=source, result=result)
+        ident = {"author": ["term_author"], "reviewer": "codex", "evidence": "https://example.test/review/1",
+                 "recorder": "term_author", **who}
+        self.p.append("verdict", pr=self.n, sha=sha or f"h{self.n}", patch_id=pid(self.n), source=source, result=result,
+                      **ident)
 
     def request(self, sha=None):
         row, outcome = store.land_put(self.slug, str(prog.HOME), "o/r", self.n, sha or f"h{self.n}", "basesha", "normal",
@@ -222,6 +225,64 @@ class LandExec(unittest.TestCase):
         row = self.request()
         self.round()
         self.settled(row, "refused", 3, "review:claude")
+
+    def test_verdict_naming_the_author_as_reviewer_is_refused(self):
+        self.verdict(reviewer="term_author")
+        row = self.request()
+        self.round()
+        self.settled(row, "refused", 3, "author session")
+        self.assertEqual(self.merges(), [])
+
+    def test_verdict_without_identity_fields_is_refused(self):
+        for gap in ({"author": []}, {"reviewer": None}, {"evidence": None}, {"recorder": None}):
+            with self.subTest(gap=gap):
+                LandExec.seq += 1
+                self.n = self.seq  # a fresh PR per gap, so each round sees one request
+                self.write({"prs": {str(self.n): pr(self.n)}, "stacks": []})
+                self.p = prog.Program(self.slug)
+                self.verdict(**gap)
+                row = self.request()
+                self.round()
+                self.settled(row, "refused", 3, "independent review")
+                self.assertEqual(self.merges(), [])
+
+    def test_an_orchestrator_may_record_a_review_someone_else_ran(self):
+        self.verdict(recorder="term_orchestrator", reviewer="codex")
+        row = self.request()
+        self.round()
+        self.settled(row, "merged", 0)
+
+    def test_cmd_verdict_records_four_roles_and_refuses_self_review(self):
+        os.environ["ORCA_TERMINAL_HANDLE"] = "term_author"
+        real = prog.author_sessions
+        prog.author_sessions = lambda branch: ["term_author"]
+        base = [self.slug, "--pr", str(self.n), "--sha", f"h{self.n}"]
+        try:
+            for extra in (["--source", "review:term_author", "--evidence", "e"], ["--source", "independent-review",
+                          "--reviewer", "self", "--evidence", "e"]):
+                with self.assertRaises(SystemExit) as ctx:
+                    prog.cmd_verdict([*base, *extra])
+                self.assertIn("author session", str(ctx.exception.code))
+            prog.cmd_verdict([*base, "--source", "review:codex", "--evidence", "https://example.test/r"])
+        finally:
+            prog.author_sessions = real
+            os.environ.pop("ORCA_TERMINAL_HANDLE")
+        v = prog.pr_state(self.p.events())[self.n]["verdict"]
+        self.assertEqual((v["author"], v["reviewer"], v["evidence"], v["recorder"]),
+                         (["term_author"], "codex", "https://example.test/r", "term_author"))
+        self.assertIsNone(prog.verdict_identity_problem(v))
+
+    def test_a_failing_verdict_needs_no_independence(self):
+        os.environ["ORCA_TERMINAL_HANDLE"] = "term_author"
+        real = prog.author_sessions
+        prog.author_sessions = lambda branch: ["term_author"]
+        try:
+            prog.cmd_verdict([self.slug, "--pr", str(self.n), "--sha", f"h{self.n}", "--source", "review:term_author",
+                              "--result", "fail"])
+        finally:
+            prog.author_sessions = real
+            os.environ.pop("ORCA_TERMINAL_HANDLE")
+        self.assertEqual(prog.pr_state(self.p.events())[self.n]["verdict"]["result"], "fail")
 
     def test_latest_verdict_fail_wins_over_an_older_pass(self):
         self.verdict(result="fail")
