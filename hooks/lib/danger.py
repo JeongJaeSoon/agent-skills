@@ -302,7 +302,7 @@ def finder_empties(w):
              or x.startswith("-e") and len(x) > 2]
     script = "\n".join(lines) or " ".join(w)
     # The last alternative is JXA: `Application("Finder").empty()`.
-    return re.search(r"\bFinder\b.*?(?:\bto\s+empty\b|\bempty\s+(?:the\s+)?trash\b|^\s*empty\s*$|\.empty\s*\()", script,
+    return re.search(r"\bFinder\b.*?(?:\bto\s+empty\b|\bempty\s+(?:the\s+)?\(?trash\b\)?|^\s*empty\s*$|\.empty\s*\()", script,
                      re.I | re.S | re.M) is not None
 
 
@@ -439,7 +439,7 @@ def rm_outside(c, here, cwd):
     for y in c.words[1:] if c.name == "find" else []:
         if y in ("-L", "-H", "-P"):
             walks_links, deep = y != "-P", y == "-L"
-        else:
+        elif y not in ("-d", "-E", "-X", "-x", "-s", "--"):  # the other options before the paths
             break
     for x in operands:
         if x == "{}":  # find's placeholder: the paths find walked, already judged
@@ -449,7 +449,7 @@ def rm_outside(c, here, cwd):
             continue
         globbed = re.search(r"[*?\[]", path) is not None
         # bash expands a glob before rm sees it; `~/.Tra[s]h/*` is the trash.
-        matches = [keep_name(m) for m in glob.glob(path)] if globbed else []
+        matches = [os.path.realpath(m) if walks_links else keep_name(m) for m in glob.glob(path)] if globbed else []
         for p in matches or [path]:
             if in_trash(p):
                 if recursive or globbed or p in trash_dirs():
