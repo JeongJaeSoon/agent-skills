@@ -117,14 +117,14 @@ The pstack group comes from Lauren Tan's [pstack](https://github.com/cursor/plug
 
 ## Renamed skills
 
-Some skills were merged into one skill with modes. The old names are gone, with no alias: `/agent-skills:<old>` no longer resolves, so call the new command and name the mode.
+Some skills were merged into another skill as a mode. The old name is gone, so `/agent-skills:<old name>` no longer runs anything: use the new command.
 
-| Old command | New command and mode |
+| Old command | New command / mode |
 |---|---|
-| `/agent-skills:how` | `/agent-skills:explain-code` how |
-| `/agent-skills:why` | `/agent-skills:explain-code` why |
-| `/agent-skills:teach` | `/agent-skills:explain-code` teach |
-| `/agent-skills:map-features` | `/agent-skills:explain-code` map |
+| `/agent-skills:how` | `/agent-skills:explain-code`, how mode |
+| `/agent-skills:why` | `/agent-skills:explain-code`, why mode |
+| `/agent-skills:teach` | `/agent-skills:explain-code`, teach mode |
+| `/agent-skills:map-features` | `/agent-skills:explain-code`, map mode |
 
 ## Configuration
 

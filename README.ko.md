@@ -117,14 +117,14 @@ pstack 묶음은 Lauren Tan의 [pstack](https://github.com/cursor/plugins)(MIT)�
 
 ## 이름이 바뀐 스킬
 
-몇 스킬은 모드를 가진 스킬 하나로 합쳤다. 옛 이름은 별칭 없이 없어져서 `/agent-skills:<옛 이름>`은 더 이상 불리지 않는다. 새 명령을 부르고 모드를 말한다.
+몇몇 스킬은 다른 스킬의 모드로 합쳐졌다. 옛 이름은 없어졌으므로 `/agent-skills:<옛 이름>`은 더 이상 아무것도 실행하지 않는다. 새 명령을 쓴다.
 
-| 옛 명령 | 새 명령과 모드 |
+| 옛 명령 | 새 명령 / 모드 |
 |---|---|
-| `/agent-skills:how` | `/agent-skills:explain-code` how |
-| `/agent-skills:why` | `/agent-skills:explain-code` why |
-| `/agent-skills:teach` | `/agent-skills:explain-code` teach |
-| `/agent-skills:map-features` | `/agent-skills:explain-code` map |
+| `/agent-skills:how` | `/agent-skills:explain-code`의 how 모드 |
+| `/agent-skills:why` | `/agent-skills:explain-code`의 why 모드 |
+| `/agent-skills:teach` | `/agent-skills:explain-code`의 teach 모드 |
+| `/agent-skills:map-features` | `/agent-skills:explain-code`의 map 모드 |
 
 ## 설정
 

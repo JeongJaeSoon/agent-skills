@@ -117,14 +117,14 @@ pstack グループは Lauren Tan の [pstack](https://github.com/cursor/plugins
 
 ## 名前が変わったスキル
 
-いくつかのスキルは、モードを持つ一つのスキルにまとめました。古い名前は別名を残さずになくなったので、`/agent-skills:<古い名前>` はもう呼べません。新しいコマンドを呼び、モードを伝えてください。
+いくつかのスキルは別のスキルのモードにまとめました。古い名前はもうないので、`/agent-skills:<古い名前>` は何も実行しません。新しいコマンドを使ってください。
 
-| 古いコマンド | 新しいコマンドとモード |
+| 古いコマンド | 新しいコマンド / モード |
 |---|---|
-| `/agent-skills:how` | `/agent-skills:explain-code` how |
-| `/agent-skills:why` | `/agent-skills:explain-code` why |
-| `/agent-skills:teach` | `/agent-skills:explain-code` teach |
-| `/agent-skills:map-features` | `/agent-skills:explain-code` map |
+| `/agent-skills:how` | `/agent-skills:explain-code` の how モード |
+| `/agent-skills:why` | `/agent-skills:explain-code` の why モード |
+| `/agent-skills:teach` | `/agent-skills:explain-code` の teach モード |
+| `/agent-skills:map-features` | `/agent-skills:explain-code` の map モード |
 
 ## 設定
 
