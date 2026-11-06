@@ -121,8 +121,8 @@ Some skills were merged into another skill as a mode. The old name is gone, so `
 
 | Old command | New command / mode |
 |---|---|
-| `/agent-skills:stage` | `/agent-skills:brief`, stage table mode |
-| `/agent-skills:todo` | `/agent-skills:brief`, to-do mode |
+| `/agent-skills:stage` | `/agent-skills:brief`, stage table mode (`/agent-skills:brief 단계표 보여줘`) |
+| `/agent-skills:todo` | `/agent-skills:brief`, to-do mode (`/agent-skills:brief 할 일 보여줘`) |
 
 ## Configuration
 

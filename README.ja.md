@@ -121,8 +121,8 @@ pstack グループは Lauren Tan の [pstack](https://github.com/cursor/plugins
 
 | 古いコマンド | 新しいコマンド / モード |
 |---|---|
-| `/agent-skills:stage` | `/agent-skills:brief` の段階表モード |
-| `/agent-skills:todo` | `/agent-skills:brief` のやることモード |
+| `/agent-skills:stage` | `/agent-skills:brief` の段階表モード(`/agent-skills:brief 단계표 보여줘`) |
+| `/agent-skills:todo` | `/agent-skills:brief` のやることモード(`/agent-skills:brief 할 일 보여줘`) |
 
 ## 設定
 

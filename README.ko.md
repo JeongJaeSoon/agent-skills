@@ -121,8 +121,8 @@ pstack 묶음은 Lauren Tan의 [pstack](https://github.com/cursor/plugins)(MIT)�
 
 | 옛 명령 | 새 명령 / 모드 |
 |---|---|
-| `/agent-skills:stage` | `/agent-skills:brief`의 단계표 모드 |
-| `/agent-skills:todo` | `/agent-skills:brief`의 할 일 모드 |
+| `/agent-skills:stage` | `/agent-skills:brief`의 단계표 모드(`/agent-skills:brief 단계표 보여줘`) |
+| `/agent-skills:todo` | `/agent-skills:brief`의 할 일 모드(`/agent-skills:brief 할 일 보여줘`) |
 
 ## 설정
 
