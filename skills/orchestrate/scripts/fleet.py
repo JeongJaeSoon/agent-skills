@@ -1520,6 +1520,14 @@ def board_open():
         return {}
 
 
+def owner_todo_items(b, shut):
+    """The owner's now-list (`orch board now`) as Needs you items, so the Brief and Needs you show one set. The key is the
+    board item's id, the one `orch board done` closes; shut is tidy.closed(), for a close the board has not applied."""
+    return [{"key": t["id"], "type": "owner_todo", "session": None, "title": mask(t["title"], 200),
+             "at": t.get("updated_at"), "source": "board"}
+            for t in b.get("owner_todo") or [] if t["id"] not in shut]
+
+
 def board_prs():
     """The PR keys the open board's rows name, and every full owner/repo#N in its doing, later, todo and owner_todo text and
     in the external inbox: a closed item no longer holds its PR in prs.json."""
@@ -2320,6 +2328,8 @@ class Fleet:
         items = [it if it.get("project") else {**it, "project": (sessions.get(it.get("session")) or {}).get("project")}
                  for it in items if it["key"] not in dismissed]
         import tidy
+        # The now-list is not dismissed here: it stays until `orch board done`, as in the Brief.
+        items += owner_todo_items(board_open(), tidy.closed())
         details = {k: e["detail"] for k, e in self.prs.items() if e.get("detail")}
         held = held_prs(board_open(), tidy.closed(), details, now,
                         tidy.cards_of(read_json(state_dir() / "state.json", {}), details), why := {}, me=self.me)
