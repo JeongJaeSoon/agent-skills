@@ -20,7 +20,13 @@ Usage: orch <command> <slug> [options]
                                      question the brief should have answered, a stall the process
                                      caused, a skill or script defect. PTR points at the proof (message
                                      id, PR comment URL, transcript path:line); nothing is copied in
-  verdict <slug> --pr N --sha REVIEWED_HEAD --source WHO [--result pass|fail] [--note TEXT]
+  verdict <slug> --pr N --sha REVIEWED_HEAD --source WHO [--reviewer NAME] [--evidence LINK_OR_SHA]
+                 [--result pass|fail] [--note TEXT]
+                                     the row keeps the PR's author sessions, the reviewer, the evidence and the
+                                     recorder. A pass is stored only when all four are named and neither the
+                                     reviewer, the --source reviewer nor the recorder is the author; otherwise it
+                                     is refused and nothing is written. An orchestrator records a review someone
+                                     else ran with --reviewer <who ran it>.
   gate <slug> --pr N [--parent TASK_ID]
                                      human-gate: open an Orca decision gate "land PR N?" on a
                                      lead-owned landing Task; the user resolves it in Orca
@@ -2153,13 +2159,99 @@ def cmd_verdict(argv):
              what.strip().casefold() not in ("self", "implementer"))):
         sys.exit("--source is independent-review, subagent-review, review:<reviewer>, "
                  "verifier:<reviewer> or live:<feature>; never the implementer")
-    head = pr_view(p.cfg["repo"], pr)["headRefOid"]
+    view = pr_view(p.cfg["repo"], pr)
+    head = view["headRefOid"]
     if not head.startswith(sha):
         sys.exit(f"head is {head[:8]}, not the reviewed {sha[:8]}: the new head has not been reviewed")
+    recorder = os.environ.get("ORCA_TERMINAL_HANDLE")
+    reviewer = (opt(argv, "--reviewer") or (what.strip() if kind in ("review", "verifier") else "")).strip()
+    evidence = (opt(argv, "--evidence") or "").strip()
+    authors = author_sessions(view.get("headRefName"))
+    fields = dict(author=authors, reviewer=reviewer or None, evidence=evidence or None, recorder=recorder, by=recorder)
+    result = opt(argv, "--result", "pass")
+    # A fail blocks a landing and needs no independence. A pass that cannot stand as an independent review is not
+    # stored at all: a stored pass would let the direct `orch land` path, which reads no identity, merge on it.
+    if result == "pass" and (bad := verdict_identity_problem({**fields, "source": src})):
+        sys.exit(f"verdict refused, nothing recorded: {bad}")
     row = p.append("verdict", pr=pr, sha=head, patch_id=patch_id(p.cfg["repo"], pr),
-                   source=src, result=opt(argv, "--result", "pass"), note=opt(argv, "--note"),
-                   by=os.environ.get("ORCA_TERMINAL_HANDLE"))
+                   source=src, result=result, note=opt(argv, "--note"), **fields)
     print(json.dumps(row, ensure_ascii=False))
+
+
+SELF_REVIEWERS = {"self", "implementer", "author"}
+
+
+def author_sessions(branch):
+    """Terminal handles of the card whose worktree holds the PR's branch: the sessions that wrote it. Empty when Orca
+    does not answer or no card holds the branch, which leaves the author unverified."""
+    if not branch:
+        return []
+    try:
+        out = orca_json("terminal", "list", "--worktree", f"branch:{branch}")
+        rows = out["terminals"]
+        # A cut-off list can miss the author, and a reviewer equal to the missing one would pass.
+        if out.get("truncated") or not isinstance(rows, list):
+            return []
+        return sorted({t["handle"] for t in rows if isinstance(t.get("handle"), str) and t["handle"]})
+    except (SystemExit, ValueError, KeyError, TypeError, AttributeError, OSError):
+        return []
+
+
+def verdict_identity_problem(v):
+    """Why this verdict record cannot stand as an independent review, else None. `author` is the PR's sessions as
+    seen when it was recorded, `reviewer` who reviewed, `evidence` a link or sha of the review, `recorder` the
+    terminal that wrote the row (an orchestrator may record a review someone else ran). The recorder's handle is an
+    environment value, so this proves nothing against a forged one: it stops the honest mistake and the plain
+    self-review, and leaves the rest to the review evidence."""
+    authors = v.get("author")
+    # A row is JSON anyone can append: a wrong type must refuse, not raise and leave the request queued forever.
+    if not all(v.get(k) is None or isinstance(v.get(k), str) for k in ("reviewer", "evidence", "recorder")) \
+            or not (authors is None or isinstance(authors, list) and all(isinstance(a, str) and a for a in authors)):
+        return "the identity fields are malformed (author is a list of handles, the rest are strings)"
+    if not (v.get("reviewer") or "").strip():
+        return "no reviewer named (--reviewer, or a review:<reviewer> or verifier:<reviewer> source)"
+    if not (v.get("evidence") or "").strip():
+        return "no evidence (--evidence: a link to the review or the reviewed sha)"
+    if not v.get("recorder"):
+        return "no recorder (ORCA_TERMINAL_HANDLE is unset)"
+    if self_review(v):
+        return self_review(v)
+    if not v.get("author"):
+        return "the PR's author session could not be identified (no card holds its branch)"
+    return None
+
+
+def executor_verdict_problem(verdict, head, sources):
+    """Why the land executor would refuse this verdict at `head`, else None. The executor and `land-check` both call
+    it, so READY and a refusal never disagree: the verdict must be a pass for exactly this head (a matching patch-id
+    is not enough, the executor merges the sha it was asked about), from an allowed source, and attributable."""
+    if not verdict or verdict.get("sha") != head or verdict.get("result") != "pass" \
+            or verdict.get("source") not in sources:
+        got = (f"{verdict.get('result')} from {verdict.get('source')} at {(verdict.get('sha') or '')[:8]}"
+               if verdict else "none")
+        return (f"the latest verdict ({got}) is not a pass at {head[:8]} from {', '.join(sources)}:"
+                " review this head, orch verdict, land again")
+    bad = verdict_identity_problem(verdict)
+    if bad:  # the executor merges on a review it can attribute: who wrote, who reviewed, the proof, who recorded
+        return (f"the verdict cannot stand as an independent review: {bad}."
+                " Record it again with orch verdict --reviewer <who> --evidence <link or sha>")
+    return None
+
+
+def self_review(v):
+    """The reason the review is the PR's own author's, else None. Every identity the row states counts: --reviewer, the
+    reviewer inside a review:/verifier: source (so `--source review:author --reviewer codex` does not pass), and the
+    recorder, since an author who records its own pass wrote the verdict it will be merged on."""
+    authors = v.get("author") or []
+    kind, _, what = str(v.get("source") or "").partition(":")
+    named = [("reviewer", v.get("reviewer")), ("source reviewer", what if kind in ("review", "verifier") else None)]
+    for role, name in named:
+        name = name.strip() if isinstance(name, str) else ""
+        if name and (name.casefold() in SELF_REVIEWERS or name in authors):
+            return f"{role} '{name}' is the PR's author session"
+    if isinstance(v.get("recorder"), str) and v["recorder"] in authors:
+        return f"recorder '{v['recorder']}' is the PR's author session: another session records the review"
+    return None
 
 
 def cmd_dep(argv):
@@ -2406,7 +2498,8 @@ def merge_unit(p, pr, unit, klass, events, onto=None, stacked=False, expect=None
         latest = pr_state(p.events()).get(pr, {}).get("verdict") or {}
         p.land_verdict = latest
         if latest.get("sha") != expect or latest.get("result") != "pass" or \
-                (verdict_sources is not None and latest.get("source") not in verdict_sources):
+                (verdict_sources is not None and (latest.get("source") not in verdict_sources
+                                                  or verdict_identity_problem(latest))):
             return 3, (f"act: #{pr}'s verdict changed during the checks ({latest.get('result')} from"
                        f" {latest.get('source')} at {(latest.get('sha') or '')[:8]}): review this head, orch verdict, land again")
     head = expect or v["headRefOid"]
@@ -2836,6 +2929,9 @@ def cmd_land_check(argv):
         problems.append(f"no-CI lane: verdict is for {verdict['sha'][:8]}, not the head {v['headRefOid'][:8]}: re-review")
     if "head_moved" in why:
         print(f"note: head moved {verdict['sha'][:8]} -> {v['headRefOid'][:8]} with the same patch-id; verdict holds, CI must pass at the new head")
+    if passing and (ex := land_executor(repo)) and \
+            (executor_why := executor_verdict_problem(verdict, v["headRefOid"], ex["verdict_sources"])):
+        problems.append(executor_why)  # the executor would refuse it: say so now
     if p.cfg["merge_policy"] == "human-gate" and (hold := gate_hold(p, events, pr)):
         problems.append(hold)
     try:

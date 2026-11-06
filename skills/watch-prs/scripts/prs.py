@@ -1328,7 +1328,7 @@ def release_brief(repo, items, cfg, run_id):
     # body above is read from the brief file. So the approval and the bans are rows, and card.py puts the refused-act
     # paragraph at the head of the FORBIDDEN row, keeping these lines after it.
     approval = cfg.get("release_approval")
-    lines += ([f"APPROVED: {approval}"] if approval else []) + ["FORBIDDEN:"] + (
+    lines += [f"APPROVED: {approval or 'none'}", "FORBIDDEN:"] + (
         [] if approval else ["  dev 배포 승인이 없다. 동기화를 기다리는 것 말고 배포가 필요하면 오케스트레이터나 리드에게 묻는다."])
     lines += ["  사람만: 프로덕션 배포, dev 밖의 환경, 되돌릴 수 없는 작업. 하지 않고 오케스트레이터나 리드에게 보고한다.",
               card.CLOSE_LINE,
