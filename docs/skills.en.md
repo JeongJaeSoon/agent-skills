@@ -1,4 +1,4 @@
-<!-- translated-from: 6625936bf92e8cf77b2d51bd773ddb8180043021 -->
+<!-- translated-from: 146d490df8051d251345c3fb53eaecb375a56d26 -->
 # Skill catalog
 
 This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 16 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
@@ -464,7 +464,7 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
   - Also builds a feature map of the 3–5 main features.
   - Proves the skill by running it end to end once itself.
   - `deliver-ticket` and `orchestrate` may use it when a reusable harness is useful within scope; direct checks remain sufficient when they prove the same acceptance criteria. Upstream keeps it user-invoked; this fork allows model invocation.
-- **Bundled:** `references/feature-map-example/` (the feature map of an example app).
+- **Bundled:** `references/feature-map-example/` (the feature map of an example app), and `scripts/verify_skill_lint.py`, which lints a generated skill by reading files only: frontmatter and sections, state-file names, a shared `latest` link, a required cleanup argument, pattern kills, helper modes and documentation, and the feature-map index. `maintain-verification-skill` runs the same script.
 
 ### maintain-verification-skill
 - **What it does:**
