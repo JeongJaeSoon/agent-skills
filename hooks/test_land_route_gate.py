@@ -101,7 +101,8 @@ assert decision(out) == "deny", out
 text = reason(out)
 assert text.startswith("[gate:land-route]"), text
 assert "`orch land app-standalone --repo acme/app --pr 7 --wait-minutes 50`" in text, text
-assert f"`orch verdict app-standalone --repo acme/app --pr 7 --sha {HEAD} --source <who reviewed>`" in text, text
+assert (f"`orch verdict app-standalone --repo acme/app --pr 7 --sha {HEAD} --source <who reviewed> "
+        "--evidence <link to that review>`") in text, text
 assert "only then" in text and "review:codex" in text, "the verdict line is never a ready-made receipt"
 assert "Do not hand a `gh pr merge` line to the owner" in text, text
 assert f"{TMP}/card pr view 7 --repo acme/app --json number,headRefOid,url" in LOG.read_text(), LOG.read_text()

@@ -939,7 +939,7 @@ class Standalone(unittest.TestCase):
                        check=True, capture_output=True)
         for cmd in ("land", "verdict"):
             code, out = self.orch(cmd, self.SLUG, "--repo", "o/r", "--pr", str(self.n), "--sha", f"h{self.n}",
-                                  "--source", "review:codex")
+                                  "--source", "review:codex", "--evidence", "https://example.test/review/1")
             self.assertNotEqual(code, 0, out)
             self.assertIn("is for other/r, not o/r", out)
         self.assertNotIn(self.n, [r["pr"] for r in store.land_rows(("queued",))])
@@ -986,7 +986,7 @@ class Standalone(unittest.TestCase):
     def test_owner_wildcard_creates_the_program(self):
         config(repos=["o/*"])
         code, out = self.orch("verdict", self.SLUG, "--repo", "o/r", "--pr", str(self.n), "--sha", f"h{self.n}",
-                              "--source", "review:codex")
+                              "--source", "review:codex", "--evidence", "https://example.test/review/1")
         self.assertEqual(code, 0, out)
         self.assertEqual(self.cfg()["repo"], "o/r")
 
@@ -1014,7 +1014,7 @@ class Standalone(unittest.TestCase):
         self.assertIn(f"orch land {self.SLUG} --repo o/r", out)
         self.assertFalse((prog.HOME / "old-standalone").exists())
         code, out = self.orch("verdict", self.SLUG, "--repo", "o/old", "--pr", str(self.n), "--sha", f"h{self.n}",
-                              "--source", "review:codex")
+                              "--source", "review:codex", "--evidence", "https://example.test/review/1")
         self.assertEqual(self.cfg()["repo"], "o/r", out)
         self.assertEqual(code, 0, "the old name reaches the program made under the new one: " + out)
         code, out = self.orch("land", self.SLUG, "--repo", "o/old", "--pr", str(self.n))
@@ -1034,7 +1034,7 @@ class Standalone(unittest.TestCase):
     def test_a_case_variant_of_an_existing_program_is_the_same_repo(self):
         self.orch("land", self.SLUG, "--repo", "o/r", "--pr", str(self.n))
         code, out = self.orch("verdict", self.SLUG, "--repo", "O/R", "--pr", str(self.n), "--sha", f"h{self.n}",
-                              "--source", "review:codex")
+                              "--source", "review:codex", "--evidence", "https://example.test/review/1")
         self.assertEqual(code, 0, out)
 
     def test_a_fork_the_wildcard_alone_covers_creates_nothing(self):

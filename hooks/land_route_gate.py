@@ -251,7 +251,8 @@ def land_lines(repo, pr, head, slug, with_repo, policy, sources):
     n = pr or "<N>"
     text = (f"Land it with `orch land {slug}{at} --pr {n} --wait-minutes 50`. That lands only on a pass verdict at the "
             f"head ({(head or '<head sha>')[:12]}) from {' or '.join(sources)}: after that review, and only then, record "
-            f"it with `orch verdict {slug}{at} --pr {n} --sha {head or '<head sha>'} --source <who reviewed>`. With no "
+            f"it with `orch verdict {slug}{at} --pr {n} --sha {head or '<head sha>'} --source <who reviewed> "
+            "--evidence <link to that review>`. With no "
             "review of this head, get it first (deliver-ticket §3).")
     if policy == "human-gate":
         text += f" {slug} is human-gate: `orch land` asks the human, so report READY with READY-WAIT: owner-merge."
