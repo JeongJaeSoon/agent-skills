@@ -25,7 +25,7 @@ EDITABLE = (REPO_PLUGIN, "user")
 SHORT, LONG = 7, 30
 MISS_THRESHOLD = 3
 MISS_SHARE = 0.2  # misses as a share of the prompts that carried a trigger phrase (misses + auto + chained fires)
-SCAN_VERSION = 7  # raise when scan_file counts differently, so cached transcripts are read again
+SCAN_VERSION = 8  # raise when scan_file counts differently, so cached transcripts are read again
 PHRASE_RE = re.compile(r'"([^"\n]{2,80})"|「([^」\n]{2,80})」|(?:^|[\s(,])\'([^\'\n]{2,80})\'')
 RULED_OUT_SENTENCE_RE = re.compile(r"(?:not|don't|do not|never)\b", re.I)
 # Only these flags become signals. unused_30d alone stays on the dashboard: zero uses in one window is not a reason
@@ -33,8 +33,8 @@ RULED_OUT_SENTENCE_RE = re.compile(r"(?:not|don't|do not|never)\b", re.I)
 SUGGEST = {"slash_only": ["rewrite-description"], "misses": ["rewrite-description"],
            "retire_candidate": ["merge", "retire"]}
 RETIRE_WINDOWS = 3  # long windows a skill must stay unused, counted from its last use or from when it was first seen
-# Skills whose normal rate is a few uses a quarter: program Close, setup and onboarding, incident response.
-RARE = {"agent-skills:measure-delivery", "agent-skills:create-verification-skill", "agent-skills:tune-automode"}
+# Skills whose normal rate is a few uses a quarter: setup and onboarding, incident response.
+RARE = {"agent-skills:verification-skill", "agent-skills:tune-automode"}
 RARE_CONFIG = "~/.config/agent-skills/skill-usage.json"  # {"rare": ["<skill>", ...]} for the user's own skills
 FINDINGS = ("signal", "land_failed", "main_red")  # plus a verdict whose result is not pass
 LOCK_STALE_HOURS = 4
@@ -290,7 +290,7 @@ def scan_file(path, inv, resolve):
     with open(path, errors="replace") as f:
         for line in f:
             if '"Skill"' not in line and "<command-name>" not in line and '"Explore"' not in line and not (
-                    '"Bash"' in line and "git" in line) and not ('"type":"user"' in line and '"tool_use_id"' not in line):
+                    '"Bash"' in line and "git" in line) and "compete.md" not in line and not ('"type":"user"' in line and '"tool_use_id"' not in line):
                 continue
             try:
                 d = json.loads(line)
@@ -323,6 +323,9 @@ def scan_file(path, inv, resolve):
                     probes.append([ts, "explore", session])
                 elif b.get("name") == "Bash":
                     probes.extend([ts, "git_history", session] for _ in range(git_history_cmds(str(inp.get("command") or ""))))
+                elif b.get("name") == "Read" and str(inp.get("file_path") or "").endswith("fan-out/references/compete.md"):
+                    # fan-out has two modes and only compete is what arena did; the Skill call does not say which.
+                    probes.append([ts, "compete", session])
                 if b.get("name") != "Skill":
                     continue
                 name = resolve((b.get("input") or {}).get("skill"))
@@ -446,16 +449,18 @@ def collect(projects_dir=None, inv=None, cache_path=None, now=None, miss_thresho
 
 
 def denominators(events, probes, now):
-    """Moments where how, why or arena could have run, per window: the base their use counts are read against."""
+    """Moments where how, why or fan-out compete could have run, per window: the base their use counts are read against."""
     def within(ts, days):
         t = parse_ts(ts)
         return bool(t) and (now - t).days < days
 
+    # arena is now fan-out's compete mode; transcripts from before the merge still name arena.
     architect_skill, arena_skill = f"{REPO_PLUGIN}:architect", f"{REPO_PLUGIN}:arena"
     out = {}
     for label, days in ((f"{SHORT}d", SHORT), (f"{LONG}d", LONG)):
         architect = {e[3] for e in events if e[1] == architect_skill and within(e[0], days)}
-        arena = {e[3] for e in events if e[1] == arena_skill and within(e[0], days)}
+        arena = ({e[3] for e in events if e[1] == arena_skill and within(e[0], days)}
+                 | {p[2] for p in probes if p[1] == "compete" and within(p[0], days)})
         out[label] = {"explore_calls": sum(p[1] == "explore" and within(p[0], days) for p in probes),
                       "git_history_cmds": sum(p[1] == "git_history" and within(p[0], days) for p in probes),
                       "architect_sessions": len(architect), "architect_sessions_with_arena": len(architect & arena)}
@@ -781,7 +786,7 @@ def main(argv):
           + (f" · {rep['signals']['added']} new signals" if rep.get("signals") else ""))
     d = rep["denominators"][f"{SHORT}d"]
     print(f"last {SHORT} days: {d['explore_calls']} Explore calls, {d['git_history_cmds']} git history commands, "
-          f"{d['architect_sessions_with_arena']} of {d['architect_sessions']} architect sessions ran arena")
+          f"{d['architect_sessions_with_arena']} of {d['architect_sessions']} architect sessions ran compete (arena)")
 
 
 if __name__ == "__main__":

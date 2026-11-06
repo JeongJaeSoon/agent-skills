@@ -229,6 +229,8 @@ RULE = re.compile(r"^─{10,}(?: [^─]+ ─+)?$")
 # "✶ Contemplating… (32s", "· Crunching… (running hooks", "✶ Compacting conversation… (12s"
 SPINNER = re.compile(r"^[·✢✳✶✻✽*] .*…")
 BUSY = ("esc to interrupt",)
+# Claude's terminal title while a turn runs: a braille frame (⠂, ⠐) or a circle quarter (◑); idle is "✳".
+TITLE_SPINNER = re.compile(r"^[⠀-⣿◐◑◒◓]")
 DIALOG = ("Do you want to proceed?", "Esc to cancel", "Tab to amend", "Enter to confirm", "trust this folder",
           "Enter to select", "↑/↓ to navigate", "Chat about this", "Press Enter", "Esc to close", "Esc to exit",
           "(y/n)", "Resume this session with")
@@ -274,7 +276,9 @@ def classify(lines, title, draft=""):
     Anything not positively recognized is a reason: a stray Enter answers whatever dialog is open."""
     lines = norm(lines)
     body = [l.strip() for l in lines if l.strip()]
-    if not title.startswith("✳"):
+    # Only a spinner glyph proves busy. Orca replaces the title of a terminal that has a display name, so any other
+    # title says nothing and the screen below decides.
+    if TITLE_SPINNER.match(title):
         return "title shows the agent is busy"
     if draft:
         # Orca's own composer, not the terminal: the screen's prompt box can be empty while it holds text.

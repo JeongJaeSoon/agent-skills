@@ -12,6 +12,8 @@ which session they reach is roles.applies' matrix, how hard they hold is a key i
   create` or `orca agent launch` of Claude from any session with no `--model`. `--terminal` reuses a running session,
   which takes no model. A `worker-start` whose `--model` differs from `orchestrate.models.worker` also warns, and
   one warning says the value was not compared when that key is unset. These never go above warn.
+- orchestrate.pr_poll (warn): a Monitor command that polls `gh pr list|view|checks` in a loop with a sleep under 300 s.
+  The warning points at the `pr-watch` command (bin/pr-watch). It never goes above warn.
 """
 import re
 
@@ -20,7 +22,7 @@ from lib import config, shell
 from lib.danger import Finding
 
 RULES = {"orchestrate.ask_user_question": "deny", "orchestrate.wait_foreground": "deny",
-         "orchestrate.send_devnull": "deny", "orchestrate.model_flag": "warn"}
+         "orchestrate.send_devnull": "deny", "orchestrate.model_flag": "warn", "orchestrate.pr_poll": "warn"}
 LAUNCHES = (["orchestration", "worker-start"], ["worktree", "create"], ["agent", "launch"])
 SOURCE = "(agent-skills hooks/guard.py, {key})"
 
@@ -129,6 +131,114 @@ def same_model(have, want):
             # `claude-sonnet-4-6` and `claude-3-7-sonnet-…` are the family; `opusplan` and the like are not
             return other == fam or re.fullmatch(rf"claude-(\d+(-\d+)*-)?{fam}(-.*)?", other) is not None
     return have == want
+
+
+PR_POLLS = (["pr", "list"], ["pr", "view"], ["pr", "checks"])
+PR_POLL_MIN = 300
+SLEEP_UNITS = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}
+
+
+def sleep_seconds(c):
+    """Seconds a `sleep` command waits; None when it is not one or its argument is not a plain number."""
+    if c.name != "sleep":
+        return None
+    total = 0.0
+    for x in c.words[1:]:
+        m = re.fullmatch(r"(\d+\.?\d*|\.\d+)([smhd]?)", x)
+        if not m:
+            return None
+        total += float(m[1]) * SLEEP_UNITS[m[2]]
+    return total
+
+
+def pr_verb(words):
+    """['pr', 'view'] for `gh [-R repo] pr view …`: gh's global repo option may come before the subcommand."""
+    rest, i = words[1:], 0
+    while i < len(rest) and rest[i].startswith("-"):
+        i += 2 if rest[i] in ("-R", "--repo") else 1
+    return rest[i:i + 2]
+
+
+def at_command_start(text, idx):
+    """True when the word at idx can begin a command: after a separator, or after `do|then|else|elif` that itself
+    begins one. In `echo do for` the `for` is an argument."""
+    before = text[:idx].rstrip(" \t")
+    if not before or before[-1] in ";&|(){\n":
+        return True
+    if before[-1] == "!" and not re.search(r"[^\s!]!$", before):  # `! while …` negates the loop's status
+        return at_command_start(text, len(before) - 1)
+    m = re.search(r"(?<![\w.-])(do|then|else|elif)$", before)
+    return bool(m) and at_command_start(text, m.start())
+
+
+def loop_around(text, cmds, pos):
+    """(start, end) of the innermost `until|while|for … done` that holds offset pos in text (quoted words already
+    blanked). The loop's condition counts: `until gh pr view …; do sleep 30; done` polls in it. The parser hands
+    back each closing `done` as a command of its own, so those are exact; an opening keyword is told from an
+    argument by where it stands."""
+    marks = [(m.start(), "open") for m in re.finditer(r"(?<![\w.-])(until|while|for)(?![\w.-])", text)
+             if at_command_start(text, m.start())]
+    # text has quoted words blanked, so a quoted "done" (an ordinary command) does not close the loop.
+    marks += [(c.span[1], "close") for c in cmds
+              if c.name == "done" and c.words == ["done"] and text[c.span[0]:c.span[1]].split()[:1] == ["done"]]
+    starts, best = [], None
+    for at, kind in sorted(marks):
+        if kind == "open":
+            starts.append(at)
+        elif starts:
+            start = starts.pop()
+            if start <= pos < at and (best is None or start > best[0]):
+                best = (start, at)
+    return best
+
+
+def check_monitor(cmd, cfg):
+    """A Monitor loop that polls `gh pr list|view|checks` with a sleep under 300 s wakes the session on every
+    state change, most of them with nothing to do. The shared watcher prints only the changes that need a turn."""
+    cmds, text = shell.commands(cmd), shell.command_text(cmd)
+    # The wait that counts is the one inside the loop around a poll (a sleep before the loop is a one-off), and the
+    # sleeps there add up (`sleep 150; sleep 150` waits 300 s). A sleep put in the background (`sleep 300 &`) waits
+    # for nobody, so it counts as 0. Where the loop branches (if/else/case/`||`) only one sleep may run, so the
+    # shortest one stands for the loop (a heuristic: it can warn on a loop that branches yet always waits long
+    # enough, which costs a warning, never a block). A `wait` (or `wait $!` on the latest job) makes a background
+    # sleep a real wait. A
+    # sleep whose argument is a variable cannot be judged, so that loop passes without a warning. A poll outside any
+    # loop runs once and is no watcher. Any one short loop warns.
+    for poll in (c for c in cmds if c.name == "gh" and pr_verb(c.words) in PR_POLLS):
+        region = loop_around(text, cmds, poll.span[1] - 1)  # a span starts at the blank before the word
+        if region is None:
+            continue
+        scope = [c for c in cmds if region[0] < c.span[1] <= region[1]]
+        sleeps = [c for c in scope if c.name == "sleep"]
+        secs = [sleep_seconds(c) for c in sleeps]
+        if not secs or None in secs:
+            continue
+        backgrounded = lambda c: bool(re.match(r"\s*&(?!&)", text[c.span[1]:]))
+        # A bare `wait` waits for every background job; `wait $!` for the latest one started before it.
+        waited, everything = set(), False
+        for w in (c for c in scope if c.name == "wait"):
+            if w.words == ["wait"]:
+                everything = True
+            elif w.words == ["wait", "$!"]:
+                prior = [c for c in scope if backgrounded(c) and c.span[1] < w.span[0]]
+                # Only a job started right before the wait is surely `$!`: an assignment or a subshell in between
+                # (`sleep 300 & x=1 & wait $!`, `(sleep 300 &); wait $!`) points `$!` somewhere else.
+                if prior and re.fullmatch(r"\s*&\s*;?\s*", text[prior[-1].span[1]:w.span[0]]):
+                    waited.add(id(prior[-1]))
+        if not everything:
+            secs = [0 if backgrounded(c) and id(c) not in waited else s for c, s in zip(sleeps, secs)]
+        span = text[region[0]:region[1]]
+        branches = re.search(r"(?<![\w.-])(if|case|else|elif)(?![\w.-])|\|\|", span)
+        wait = min(secs) if branches else sum(secs)
+        if wait < PR_POLL_MIN:
+            break
+    else:
+        return []
+    return finding(cfg, "orchestrate.pr_poll",
+                   f"This Monitor polls `gh pr` every {wait:g} s, and each state change wakes the session. Use "
+                   "`pr-watch --repo OWNER/REPO` (the plugin's bin/ is on PATH, so it runs from any repo): it checks every "
+                   "300 s or more and prints only a merge or close, a CI failure, READY, a conflict appearing or "
+                   "clearing, and a new PR.")
 
 
 def check_bash(cmd, background, s, cfg):

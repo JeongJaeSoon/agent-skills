@@ -1,13 +1,13 @@
 ---
 name: map-features
-description: "Use for a map of what a product does today, read from its code at one commit — \"feature map 만들어줘\", \"기능 지도 그려줘\", \"지금 뭐가 구현돼 있는지 정리해줘\". A map for verification is create-verification-skill. An orchestrator dispatches it instead."
+description: "Use for a map of what a product does today, read from its code at one commit — \"feature map 만들어줘\", \"기능 지도 그려줘\", \"지금 뭐가 구현돼 있는지 정리해줘\". A map for verification is verification-skill. An orchestrator dispatches it instead."
 ---
 
 # Map features
 
 A product feature map answers one question for a reader who will plan, write or decide: what can a user do with this product today, and how do we know. Every row is read from the code at one commit, and every status carries evidence a reader can open.
 
-This is not the verification map that `create-verification-skill` writes under `.claude/skills/verify-<app>/features/`. That one is for an agent driving the app. When it exists, read it as a source for the feature list, and do not edit it from here.
+This is not the verification map that `verification-skill` (create mode) writes under `.claude/skills/verify-<app>/features/`. That one is for an agent driving the app. When it exists, read it as a source for the feature list, and do not edit it from here.
 
 ## 1. Pin the baseline
 

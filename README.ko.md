@@ -94,6 +94,7 @@ https://github.com/JeongJaeSoon/agent-skills 의 Claude Code 플러그인을 설
 - **내 설정.** `setup-pc`, `tune-automode`, `skills-config`는 diff와 `!` 줄만 만들고, 실행은 사람이 한다. 이 동작은 바꿀 수 없다.
 - **권한 창과 거부.** 권한 창은 사람의 응답을 기다린다. auto mode 분류기가 행동을 거부하면 에이전트는 보고하고 멈춘다. 어떤 부류의 행동을 이후 통과시키려면 사람이 `permissions.allow` 항목이나 `tune-automode`가 초안을 쓴 autoMode 규칙을 더한다.
 - **되돌릴 수 없는 행동.** 파괴적 migration, 공유 브랜치 force push, 프로덕션 배포, 바깥으로 보내기는 늘 멈추고 묻는다.
+- **카드의 작업 습관.** Dispatch로 띄운 카드가 Bash로 파일을 쓰거나(`sed -i`, 리다이렉트), 커밋·`rm`을 다른 명령과 한 호출에 묶거나, worktree 밖이나 main checkout을 고치거나, auto-memory에 쓰거나, 테스트 없이 push하면 경고 한 줄이 붙고 `turn-warnings.jsonl`에 기록된다. 막지는 않는다. `docs/skills.md`의 `worker.*` 키로 점검마다 끄거나 `deny`로 올린다.
 - **머지.** `orchestrate` 카드는 첫 프롬프트가 머지를 승인했으면 `orch land`로 자기 PR을 머지하고 스스로 닫는다. CI가 없는 저장소는 먼저 `orchestrate.no_ci_repos`에 넣어야 한다. 프로그램 밖의 `deliver-ticket`이 스스로 머지하는 것은 그 저장소의 머지를 허용하는 autoMode 규칙이 있을 때뿐이고, 없으면 묻는다. `human-gate` 정책으로 두거나 직접 보겠다고 하면 머지마다 그 앞에서 멈춘다.
 - **정기 정리.** `janitor`와 `pressure-watch`가 끝난 에이전트의 잔여물을 정기적으로 치운다. 끄려면 `skills-sync setup disable <이름>`. `watch-prs`의 내 PR 자동 승인·자동 머지는 설정하기 전까지 꺼져 있다.
 
@@ -106,12 +107,12 @@ https://github.com/JeongJaeSoon/agent-skills 의 Claude Code 플러그인을 설
 | 묶음 | 스킬 | 하는 일 |
 |---|---|---|
 | [티켓 하나](docs/skills.md#티켓-하나) | `write-ticket`, `deliver-ticket`, `ui-review`, `handoff-ticket`, `dispatch-card`, `end-session` | 티켓 쓰기부터 완료, 다음 티켓 넘기기, 진행 기록과 세션 정리까지 |
-| [프로젝트 하나](docs/skills.md#프로젝트-하나-orca-워커-여러-개) | `orchestrate`, `reboot`, `measure-delivery` | 여러 티켓을 Orca 워커로 병렬 처리해 머지하고, 재시작으로 떨어진 대기·바인딩을 되살리고, 끝난 뒤 실제로 어땠는지 잰다 |
+| [프로젝트 하나](docs/skills.md#프로젝트-하나-orca-워커-여러-개) | `orchestrate`, `reboot` | 여러 티켓을 Orca 워커로 병렬 처리해 머지하고, 재시작으로 떨어진 대기·바인딩을 되살리고, 끝난 뒤 실제로 어땠는지 잰다(`reflect`의 측정 모드) |
 | [머신 하나](docs/skills.md#머신-하나) | `reap-resources`, `secure-fill`, `tune-automode`, `skills-config`, `setup-pc` | 끝난 세션의 잔여물 정리, 에이전트가 보지 않는 비밀값 입력, autoMode 규칙 초안, 설정 키 변경, PC 설치·갱신 |
 | [채팅·GitHub](docs/skills.md#채팅) | `watch-mentions`, `watch-prs` | 나와 관련된 채팅과 PR을 작업으로 모은다 |
 | [어댑터](docs/skills.md#어댑터) | `use-tracker`, `use-notes` | Linear·Jira 티켓, Obsidian·Markdown 노트 |
 | [글쓰기](docs/skills.md#글쓰기) | `brief`, `stage`, `todo`, `map-features`, `write-plainly`, `prune-comments`, `write-skill` | 현황 보고, 단계표, 할 일·보류 큐, 제품 기능 지도, 문체, diff 주석 정리, 스킬 작성 점검 |
-| [pstack](docs/skills.md#pstack-스킬-lauren-tan-mit) | `architect`, `arena`, `blast-radius`, `create-verification-skill`, `figure-it-out`, `how`, `interrogate`, `maintain-verification-skill`, `principles`, `recall`, `reflect`, `show-me-your-work`, `swarm`, `tdd`, `teach`, `why` | 설계, 비교, 영향 범위, 검증, 설명, 회고 |
+| [pstack](docs/skills.md#pstack-스킬-lauren-tan-mit) | `architect`, `blast-radius`, `fan-out`, `figure-it-out`, `how`, `interrogate`, `principles`, `recall`, `reflect`, `show-me-your-work`, `tdd`, `teach`, `verification-skill`, `why` | 설계, 비교, 영향 범위, 검증, 설명, 회고 |
 
 pstack 묶음은 Lauren Tan의 [pstack](https://github.com/cursor/plugins)(MIT)에서 가져왔고, 지금은 이 저장소에서 따로 관리한다. 원본 파일은 upstream 그대로 `vendor/pstack`에 두고, 원할 때 켜는 하루 한 번짜리 작업이 upstream 변경을 알려 주면 필요한 것만 손으로 옮긴다. 여러 세션이 함께 일할 때 워커 위의 층은 오케스트레이터(최상위 세션 하나)와 리드(프로젝트 하나를 맡은 세션) 둘이다. 자세한 것은 [orchestrate의 Roles 표](skills/orchestrate/SKILL.md#roles)(영어).
 
@@ -121,6 +122,9 @@ pstack 묶음은 Lauren Tan의 [pstack](https://github.com/cursor/plugins)(MIT)�
 
 | 옛 명령 | 새 명령 / 모드 |
 |---|---|
+| `/agent-skills:measure-delivery` | `/agent-skills:reflect`의 측정 모드 |
+| `/agent-skills:swarm` | `/agent-skills:fan-out`, sweep 모드 |
+| `/agent-skills:arena` | `/agent-skills:fan-out`, compete 모드 |
 | `/agent-skills:create-verification-skill` | `/agent-skills:verification-skill`의 create 모드 |
 | `/agent-skills:maintain-verification-skill` | `/agent-skills:verification-skill`의 maintain 모드 |
 
@@ -151,7 +155,7 @@ pstack 묶음은 Lauren Tan의 [pstack](https://github.com/cursor/plugins)(MIT)�
 CI가 없다. 변경을 보내기 전에 테스트 파일을 모두 돌린다.
 
 ```bash
-for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/measure-delivery/scripts/test_measure.py skills/reap-resources/scripts/test_reap.py skills/reap-resources/scripts/test_cards.py skills/reap-resources/scripts/test_pressure.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/watch-prs/scripts/test_review_wait.py skills/watch-prs/scripts/test_notify.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py skills/skills-config/scripts/test_config_emit.py skills/setup-pc/scripts/test_setup_check.py scripts/test_setup.py skills/brief/scripts/test_table_width.py skills/reflect/scripts/test_lesson_ids.py skills/deliver-ticket/scripts/test_shots.py skills/deliver-ticket/scripts/test_review_pick.py skills/ui-review/scripts/test_ui_measure.py skills/reboot/scripts/test_reboot.py hooks/test_*.py scripts/test_sync.py scripts/test_card.py scripts/test_preview_watch.py scripts/test_automations.py scripts/test_share_server.py scripts/test_reap_hard.py scripts/test_public_shapes.py scripts/test_skill_tokens.py scripts/test_allowed_tools.py; do python3 "$t"; done
+for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/reflect/scripts/test_measure.py skills/reap-resources/scripts/test_reap.py skills/reap-resources/scripts/test_cards.py skills/reap-resources/scripts/test_pressure.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/watch-prs/scripts/test_review_wait.py skills/watch-prs/scripts/test_notify.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py skills/skills-config/scripts/test_config_emit.py skills/setup-pc/scripts/test_setup_check.py scripts/test_setup.py skills/brief/scripts/test_table_width.py skills/reflect/scripts/test_lesson_ids.py skills/deliver-ticket/scripts/test_shots.py skills/deliver-ticket/scripts/test_review_pick.py skills/ui-review/scripts/test_ui_measure.py skills/reboot/scripts/test_reboot.py hooks/test_*.py scripts/test_sync.py scripts/test_card.py scripts/test_preview_watch.py scripts/test_automations.py scripts/test_share_server.py scripts/test_reap_hard.py scripts/test_public_shapes.py scripts/test_skill_tokens.py scripts/test_allowed_tools.py; do python3 "$t"; done
 bash scripts/pstack-sync-test.sh
 ```
 

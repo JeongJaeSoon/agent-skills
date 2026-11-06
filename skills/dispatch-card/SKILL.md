@@ -73,7 +73,8 @@ session as not the human's, so an approval sent afterwards is refused. The brief
   rows of `orchestrate` `references/brief.md` "Single worker". Only the `APPROVED:` row reaches the
   first prompt (a heading or bullet does not); the card reads the other two in the brief. APPROVED
   cites each owner quote by the `orch decide answer` id that recorded it, as `오너(d150, <date>)`;
-  `skills-sync card` refuses an id the store does not hold as answered. A card
+  `skills-sync card` refuses an id the store does not hold as answered, and a brief with no
+  `APPROVED:` row: write `APPROVED: none` when nothing beyond the normal flow is approved. A card
   that lands its own PR carries the merge there (`APPROVED: required checks green + independent
   review Act-on 0: merge with orch land` plus the human's words and date); without it, it stops at
   READY. Before an item goes into HUMAN ONLY, check for an agent-only path first (a script, an
@@ -108,7 +109,9 @@ A card that will run a project for this session through cards of its own (a lead
 `orchestrate` `references/brief.md` "Lead" instead of the list above, and its `--prompt` also
 carries the `MODE`, `ROLE: lead <slug>`, `INBOX`, `DELEGATE`, `PREDICATE`, `MERGE`, `TASKS` and `GATE` lines; the hook refuses a lead's prompt (a `MODE`
 line or a `<project>: lead` head) that lacks `MODE`, `ROLE`, `DELEGATE` or `PREDICATE`. The `ROLE` line binds the
-lead role to the card's session, so the reorient hook reminds it of its program on every prompt. It stands
+lead role to the card's session, so the reorient hook reminds it of its program on every prompt. It is also what makes
+`skills-sync card` start the card on `orchestrate.models.lead`: a brief without it is a worker's, so the helper refuses
+a brief that has both `DELEGATE` and `PREDICATE` rows, or a card named `lead`, `lead:<slug>` or `<slug>-lead`, and no `ROLE` line. It stands
 in for `claude --agent agent-skills:lead`: `orca worktree create --agent` takes an Orca agent id, not CLI flags. Without these lines a lead reports done and waits for an order that never comes.
 
 Exceptions. A task that fits in three or four lines goes inline in `--prompt` after `/goal`, no

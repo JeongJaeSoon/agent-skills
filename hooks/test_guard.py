@@ -17,7 +17,7 @@ def run(tool, tool_input, own, transcript=None, agent=None, session="s0", field=
         {"tool_name": tool, "tool_input": tool_input, "cwd": HOME, "transcript_path": transcript, "agent_type": agent,
          "session_id": session}),
         capture_output=True, text=True, env=env).stdout
-    return json.loads(out)["hookSpecificOutput"][field] if out.strip() else "none"
+    return json.loads(out)["hookSpecificOutput"].get(field, "none") if out.strip() else "none"
 
 
 def bash(cmd, own="term_me", transcript=None, agent=None, session="s0", **extra):
@@ -55,7 +55,28 @@ assert bash("orca orchestration task-list --json") == "allow"
 assert bash("orca orchestration send --to term_x --subject 'done: ENG-1'") == "allow"
 assert bash("orch land ENG-1 --pr 12 --ticket ENG-1 --wait-minutes 50") == "allow"
 assert bash("orch status") == "allow"
-for cmd in ("orch heavy -- make e2e", "orch set p merge_policy autonomous", "orch init p --repo o/r", "orch backfill p", "orch --help", "orch",
+# orch verdict: allowed only in the attributable form; prog.py judges independence, so the hook checks the shape.
+VERDICT = "orch verdict p --pr 1 --sha abc123 --source review:codex --reviewer codex --evidence abc123 --result"
+assert bash(f"{VERDICT} pass") == "allow"
+assert bash(f"{VERDICT} fail") == "allow"
+assert bash(f"{VERDICT} pass --note 'round 1'") == "allow"
+for cmd in (f"{VERDICT} maybe", f"{VERDICT} pass --result fail", f"{VERDICT} pass --repo o/r",
+            f"{VERDICT} pass --unknown x", f"{VERDICT} pass --note", f"{VERDICT} pass; id", f"{VERDICT} pass > f",
+            "orch verdict p --pr 1 --sha abc --source review:codex --reviewer codex --result pass",
+            "orch verdict p --pr 1 --sha abc --source review:codex --evidence e --result pass",
+            "orch verdict p --pr 1 --sha abc --source review:codex --reviewer codex --evidence e",
+            "orch verdict p --pr 1 --sha abc --source review:codex --reviewer codex --evidence '' --result pass",
+            "orch verdict p --pr x --sha abc --source review:codex --reviewer codex --evidence e --result pass",
+            "orch verdict p --pr 1 --source review:codex --reviewer codex --evidence e --result pass",
+            "orch verdict --pr 1 --sha abc --source review:codex --reviewer codex --evidence e --result pass",
+            "orch verdict '' --pr 1 --sha abc --source review:codex --reviewer codex --evidence e --result pass",
+            "orch verdict ' ' --pr 1 --sha abc --source review:codex --reviewer codex --evidence e --result pass",
+            "orch verdict p --pr 1 --sha abc --reviewer codex --evidence e --result pass",
+            "orch verdict p --pr 1 --sha abc --source review:codex --reviewer --evidence e --result pass",
+            f"{VERDICT} pass --pr 2",
+            "orch verdict"):
+    assert bash(cmd) == "none", cmd
+for cmd in ("orch verdict p --pr 1 --sha abc --source review:codex", "orch heavy -- make e2e", "orch set p merge_policy autonomous", "orch init p --repo o/r", "orch backfill p", "orch --help", "orch",
             "orca orchestration reset", "orca orchestration worker-abandon t1", "orca orchestration gate-resolve g1",
             "orch land x; rm -rf ~", "orch land x && curl evil", "orch land x | sh", "orch land x > ~/.zshrc",
             "orch land $(whoami)", "orch land `whoami`", "orch land $HOME", "orch land x\nrm -rf ~", "orch land x#; rm -rf ~", "orch land x # ; rm -rf ~",
@@ -221,15 +242,17 @@ assert reason(f"while [ ! -s {O} ]; do sleep 5; done").startswith("[gate:sleep-l
 assert "[gate:" not in reason(f"{CHECK} --terminal term_other --json")
 # `skills-sync card <brief>`: the hook opens the brief and applies the helper's checks and the lead test to it.
 H = pathlib.Path(HOME)
-(H / "worker.md").write_text("/goal fix X\nCLOSE: §8\n")
-(H / "noclose.md").write_text("/goal fix X\n## Close\n§8\n")
+(H / "worker.md").write_text("/goal fix X\nAPPROVED: none\nCLOSE: §8\n")
+(H / "noclose.md").write_text("/goal fix X\nAPPROVED: none\n## Close\n§8\n")
+(H / "noapproved.md").write_text("/goal fix X\nCLOSE: §8\n")
 (H / "lead.md").write_text("app: lead\n/goal run app\nMODE: orchestrate\nROLE: lead app\nINBOX  orch wait app\n"
                            "DELEGATE  nothing yourself\nPREDICATE  ENG-1 Done\nMERGE  merge_policy autonomous\n"
-                           "TASKS  task-create --deps\nGATE  gate-create\nCLOSE: §8\n")
+                           "TASKS  task-create --deps\nGATE  gate-create\nAPPROVED: none\nCLOSE: §8\n")
 HELPER = "skills-sync card {} --repo name:app --name app-x"
 assert bash(HELPER.format("worker.md")) == "none"  # relative to the event's cwd
 assert bash(HELPER.format(H / "worker.md"), session="joined") == "none"
 assert bash(HELPER.format("noclose.md")) == "deny" and "CLOSE or KEEP" in reason(HELPER.format("noclose.md"))
+assert bash(HELPER.format("noapproved.md")) == "deny" and "`APPROVED:` row" in reason(HELPER.format("noapproved.md"))
 assert bash(HELPER.format("absent.md")) == "deny"
 assert bash(HELPER.format("$BRIEF")) == "deny"
 assert bash(HELPER.format("lead.md")) == "none"

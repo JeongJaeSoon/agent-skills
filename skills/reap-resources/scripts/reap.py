@@ -24,7 +24,7 @@ the repo of the current directory.
 Config: ~/.claude/agent-skills.json → "reap": {"hours": 6, "orphan_paths": [...], "alert": {...},
 "load_limit": <5-minute load; default the CPU count>, "load_cooldown_minutes": 60, "idle_minutes": 30, "evidence_roots": [...], "user_folders": [], "user_folder_days": 7,
 "user_folder_screenshot_days": 1, "program_days": 7, "state_days": 7, "log_max_kb": 512, "inbox_to": "run:<id>", "plan_repeat": 2,
-"preview_ports": [4500, 4599], "stack_volumes": {"prefixes": [...], "label": "...", "protect": [...]},
+"preview_ports": [4500, 4599], "stack_volumes": {"prefixes": [...], "label": "..." or [...], "protect": [...]},
 "stopped_containers": {"prefixes": [...], "protect": [...]}, "labeled_volumes": {"namespace": "...", "origins": [...], "protect": [...]}}.
 Janitor kinds (card, orca-worker, tmpdir, gui-app, chrome-window, evidence, remote-branch, compose-stack, stack-volume,
 stopped-container, labeled-volume; `--kinds janitor`): card is every Orca card, judged by cards.py; stack-volume only
@@ -48,7 +48,7 @@ within reap.load_cooldown_minutes (default 60). precheck --act is the scheduled 
 whose last act failed less than a day ago are left), sends one message to reap.inbox_to when what a person has to look
 at gained a key, logs <state>/janitor-runs.jsonl and always exits 1, so Orca starts no agent. schedule prints the `orca automations create` command (--load: the load job); only --write runs it.
 """
-import contextlib, datetime as dt, functools, hashlib, json, os, pathlib, re, shlex, shutil, signal, stat, subprocess, sys, time, traceback, unicodedata
+import contextlib, datetime as dt, functools, hashlib, json, os, pathlib, re, shlex, shutil, signal, stat, subprocess, sys, threading, time, traceback, unicodedata
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[3] / "scripts"))
 try:
@@ -73,10 +73,19 @@ def opt(name, default=None):
 # None waits for every command; patrol's candidate round sets seconds, so one hung command fails its source instead
 # of the round.
 RUN_TIMEOUT = None
+CANCELLED = set()
+
+
+def cancelled():
+    return threading.get_ident() in CANCELLED
 
 
 def run(cmd, cwd=None, check=True, env=None, timeout=None):
     timeout = timeout or RUN_TIMEOUT
+    if cancelled():
+        if check:
+            raise RuntimeError(f"{' '.join(cmd[:4])}: not started, the round was cut")
+        return None
     try:
         r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=env or ENV, timeout=timeout)
     except FileNotFoundError:
@@ -268,9 +277,9 @@ def parse_ts(s):
     return dt.datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
 
 
-def judge_volumes(vols, active, hours, now, owner_label=None):
+def judge_volumes(vols, active, hours, now, owner_labels=()):
     """vols: [{name, labels, created}] of dangling volumes; active: compose projects that have any container.
-    owner_label: reap.stack_volumes.label, the other owner label."""
+    owner_labels: reap.stack_volumes.label keys, the other owner labels."""
     out = []
     for v in vols:
         proj = (v["labels"] or {}).get("com.docker.compose.project")
@@ -285,7 +294,7 @@ def judge_volumes(vols, active, hours, now, owner_label=None):
         else:
             why, target = f"컨테이너 없는 project {proj}", True
         out.append({"kind": "docker", "key": f"volume:{v['name']}", "name": f"volume {v['name']}", "age": age,
-                    "owners": volume_owners(v["labels"], (None, owner_label)), "why": why, "target": target})
+                    "owners": volume_owners(v["labels"], (None, owner_labels)), "why": why, "target": target})
     return out
 
 
@@ -331,7 +340,7 @@ def docker_scan(hours, notes):
     for line in (run(["docker", "images", "-f", "dangling=true", "--format", "{{json .}}"]) or "").splitlines():
         i = json.loads(line)
         images.append({"id": i["ID"], "created": parse_ts(i["CreatedAt"]), "size": i.get("Size", "")})
-    return owner_holds(judge_volumes(vols, set(states), hours, now, owner_label(config())), notes) + \
+    return owner_holds(judge_volumes(vols, set(states), hours, now, owner_labels(config())), notes) + \
         judge_images(images, used, hours, now)
 
 
@@ -696,18 +705,55 @@ def spawn_sweep_shadow(reason, python=None):
         return False
 
 
-def spawn_patrol(reason, python=None):
-    """Start `orch patrol --if-due` detached, so a LaunchAgent pass never waits on it; it prints to
-    <state>/patrol.log and gives up on its own at 120 seconds. False when it could not start, or AGENT_SKILLS_PATROL=off
-    (tests)."""
+SPAWN_TIMEOUT_S = 400  # the patrol job's runner limit (scripts/automations.py)
+
+
+def spawn_patrol(reason, python=None, fallback=False):
+    """Start `orch patrol --if-due` detached under the shared runner (record <state>/jobs/patrol-spawn.json), so a
+    LaunchAgent pass never waits on it; output goes to <state>/patrol.log. False when it could not start, or
+    AGENT_SKILLS_PATROL=off (tests)."""
     if os.environ.get("AGENT_SKILLS_PATROL") == "off":
         return False
+    py = python or sys.executable
     try:
         STATE.mkdir(parents=True, exist_ok=True)
         with open(STATE / "patrol.log", "a") as out:
             out.write(f"--- {time.strftime('%Y-%m-%dT%H:%M:%S%z')} {reason}\n")
             out.flush()
-            subprocess.Popen([python or sys.executable, str(ORCH), "patrol", "--if-due"], stdout=out, stderr=out,
+            subprocess.Popen([py, "-I", str(JOB_RUNNER), "run", "patrol-spawn", "--timeout", str(SPAWN_TIMEOUT_S), "--",
+                              py, str(ORCH), "patrol", "--if-due", *(["--fallback"] if fallback else [])],
+                             stdout=out, stderr=out,
+                             stdin=subprocess.DEVNULL, start_new_session=True)
+        return True
+    except OSError:
+        return False
+
+
+HARD = pathlib.Path(__file__).resolve().parents[3] / "scripts" / "reap_hard.py"
+HARD_TIMEOUT_S = 900  # a pass takes about a minute; this only ends a hung one
+
+
+def spawn_hard(reason, min_gap=300, python=None):
+    """Start a reap-hard pass detached, for an event that frees a card (a PR landed) between its 30-minute beats. Not
+    within min_gap seconds of the last pass; reap-hard's own lock keeps two passes from running at once. False when
+    nothing started, or AGENT_SKILLS_PATROL=off (tests)."""
+    if os.environ.get("AGENT_SKILLS_PATROL") == "off":
+        return False
+    try:
+        if time.time() - json.loads((STATE / "reap-hard-last.json").read_text())["t"] < min_gap:
+            return False
+    except (OSError, ValueError, KeyError, TypeError):
+        pass  # no readable last pass: run one
+    py = python or sys.executable
+    try:
+        STATE.mkdir(parents=True, exist_ok=True)
+        with open(STATE / "reap-hard.log", "a") as out:
+            out.write(f"--- {time.strftime('%Y-%m-%dT%H:%M:%S%z')} {reason}\n")
+            out.flush()
+            # Under the shared runner (record <state>/jobs/reap-hard-kick.json): a hung gh, docker or orca call ends with
+            # the pass's process group at the timeout instead of holding reap-hard.lock for good.
+            subprocess.Popen([py, "-I", str(JOB_RUNNER), "run", "reap-hard-kick", "--timeout", str(HARD_TIMEOUT_S),
+                              "--ok", "0,3", "--", py, "-I", str(HARD), "run"], stdout=out, stderr=out,
                              stdin=subprocess.DEVNULL, start_new_session=True)
         return True
     except OSError:
@@ -953,9 +999,10 @@ def judge_remote_branches(entries):
              "why": "판정 미구현(인터페이스만, 보고만)", "target": False, "how": []} for e in latest(entries, "remote-branch")]
 
 
-def judge_orca_worker(rows):
-    """rows: `orca orchestration worker-list --terminal-state reclaimable` workers."""
-    rows = [w for w in rows if w.get("dispatchId")]
+def judge_orca_worker(rows, now=None):
+    """rows: `orca orchestration worker-list --terminal-state reclaimable` workers, less those Orca releases itself."""
+    import auto_release
+    rows = [w for w in rows if w.get("dispatchId") and not auto_release.ahead(w, now)]
     return [{"kind": "orca-worker", "key": f"orca-worker:{w['dispatchId']}", "name": f"{w['dispatchId']} ({w.get('taskId')})",
              "why": "끝난 워커의 터미널(reclaimable)", "target": True,
              "how": [f"orca orchestration worker-release --dispatch {w['dispatchId']} --json"]} for w in rows]
@@ -1049,10 +1096,53 @@ def regenerated_copies(path, git=run):
     return sorted(f".agents/skills/{n}" for n in names)
 
 
-def branch_pr(path, git=run, head=None):
+PR_LIST_LIMIT = 1000  # one busy repo here has ~480 PRs: at 300 its list was cut and 38 cards fell back to per-card calls
+
+
+class PrMap:
+    """The PRs of each repo, listed once per instance: a pass asks gh once per repo, not once or twice per card.
+    One instance lives for one machine read, so the act-time re-judgement (which reads the machine again) sees new PRs."""
+
+    def __init__(self, git=run):
+        self.git, self.repos = git, {}
+
+    def get(self, key, path):
+        """(rows, complete) for the repo keyed key, listed from path; None when gh could not list them. A listing as long
+        as the limit may have cut older PRs off, so it is not complete: a miss in it still needs gh's own search."""
+        if key not in self.repos:
+            out = self.git(["gh", "pr", "list", "--state", "all", "--limit", str(PR_LIST_LIMIT), "--json",
+                            "number,url,state,headRefName,headRefOid,isCrossRepository"], cwd=path, check=False)
+            try:
+                rows = json.loads(out) if out else None
+            except ValueError:
+                rows = None
+            self.repos[key] = None if rows is None else (rows, len(rows) < PR_LIST_LIMIT)
+        return self.repos[key]
+
+
+def pr_ref(own):
+    """owner/repo#N of the PR to report among a card's own, an open one first; None for no PR."""
+    own = sorted(own, key=lambda p: p.get("state") != "OPEN")
+    m = own and re.search(r"github\.com/([^/]+/[^/]+)/pull/(\d+)", own[0]["url"])
+    return (m and f"{m.group(1)}#{m.group(2)}") or None
+
+
+def branch_pr(path, git=run, head=None, pr_map=None, key=None):
     """(owner/repo#N or None, unread) for the branch checked out at path, else for a PR whose head commit is HEAD:
-    a card that pushed HEAD under another branch name has its PR only there."""
+    a card that pushed HEAD under another branch name has its PR only there. pr_map (a PrMap) and key (the repo) answer
+    from one listing per repo; gh is asked per card only for what that listing cannot rule out."""
     branch = (git(["git", "-C", path, "branch", "--show-current"], check=False) or "").strip()
+    listing = pr_map.get(key, path) if pr_map is not None and key else None
+    if listing:
+        rows, complete = listing
+        mine = [p for p in rows if not p.get("isCrossRepository")]
+        own = [p for p in mine if branch and p.get("headRefName") == branch]
+        if not own and head:
+            own = [p for p in mine if p.get("headRefOid") == head]
+        # Only a complete listing rules a PR out or in: a cut one may hold a merged PR on HEAD while the open one on
+        # the branch is older than the cut, and a merged PR alone would let the card go.
+        if complete:
+            return pr_ref(own), False
     prs = branch and git(["gh", "pr", "list", "--head", branch, "--state", "all", "--json", "number,url,state,isCrossRepository"],
                           cwd=path, check=False)
     # A failed lookup is not an empty answer: a card with an open PR would pass as one without.
@@ -1065,12 +1155,10 @@ def branch_pr(path, git=run, head=None):
         unread = found is None
         # The search also matches a PR that only contains the commit; the one that carried HEAD is the card's.
         own = [p for p in json.loads(found or "[]") if not p.get("isCrossRepository") and p.get("headRefOid") == head]
-    own.sort(key=lambda p: p.get("state") != "OPEN")
-    m = own and re.search(r"github\.com/([^/]+/[^/]+)/pull/(\d+)", own[0]["url"])
-    return (m and f"{m.group(1)}#{m.group(2)}") or None, unread
+    return pr_ref(own), unread
 
 
-def worktree_facts(path, ledger_pr, live_turn, users_cwd, git=run):
+def worktree_facts(path, ledger_pr, live_turn, users_cwd, git=run, pr_map=None):
     common = git(["git", "-C", path, "rev-parse", "--path-format=absolute", "--git-common-dir"], check=False)
     if common is None:
         return None
@@ -1086,7 +1174,7 @@ def worktree_facts(path, ledger_pr, live_turn, users_cwd, git=run):
         landed = None if not default else git(["git", "-C", path, "merge-base", "--is-ancestor", "HEAD", default.strip()],
                                               check=False) is not None
     # A HEAD already on the default branch is the head of any PR merged by fast-forward, a fresh lead card's included.
-    ref, pr_unread = (ledger_pr, False) if ledger_pr else branch_pr(path, git, None if landed else head)
+    ref, pr_unread = (ledger_pr, False) if ledger_pr else branch_pr(path, git, None if landed else head, pr_map, main)
     if ref:
         landed = None
     # Untracked files count: `orca worktree rm` would take new, never-added work with it.
@@ -1437,25 +1525,36 @@ def stack_volume_spec(cfg):
     if not isinstance(prefixes, list) or not prefixes or \
             not all(isinstance(p, str) and len(p) >= 4 and p.endswith("-") for p in prefixes):
         return "reap.stack_volumes.prefixes 는 '-' 로 끝나는 4자 이상 문자열 목록이어야 함, 건너뜀"
-    if label is not None and (not isinstance(label, str) or not re.fullmatch(r"[\w.-]+", label)
-                              or label.startswith("com.docker.")):
+    keys = _label_keys(label)
+    if keys is None or not all(re.fullmatch(r"[\w.-]+", k) and not k.startswith("com.docker.") for k in keys):
         return "reap.stack_volumes.label 이 올바르지 않음, 건너뜀"
     if not isinstance(protect, list) or not all(isinstance(p, str) for p in protect):
         return "reap.stack_volumes.protect 는 문자열 목록이어야 함, 건너뜀"
-    return tuple(prefixes), label, frozenset(protect)
+    return tuple(prefixes), keys, frozenset(protect)
+
+
+def _label_keys(label):
+    """reap.stack_volumes.label as a tuple of keys: a string (the old form) or a list of strings; None when it is
+    neither."""
+    if label is None:
+        return ()
+    if isinstance(label, str):
+        return (label,)
+    if isinstance(label, list) and all(isinstance(k, str) for k in label):
+        return tuple(dict.fromkeys(label))
+    return None
 
 
 def volume_owners(labels, spec):
     labels = labels or {}
-    keys = ("com.docker.compose.project", spec[1]) if spec[1] else ("com.docker.compose.project",)
+    keys = (COMPOSE_PROJECT, *spec[1])
     return list(dict.fromkeys(labels[k] for k in keys if labels.get(k)))
 
 
-def owner_label(cfg):
-    """reap.stack_volumes.label, whatever else in that setting is wrong: an owner it names still counts as one."""
+def owner_labels(cfg):
+    """reap.stack_volumes.label keys, whatever else in that setting is wrong: an owner one names still counts as one."""
     spec = cfg.get("stack_volumes")
-    label = spec.get("label") if isinstance(spec, dict) else None
-    return label if isinstance(label, str) else None
+    return _label_keys(spec.get("label")) or () if isinstance(spec, dict) else ()
 
 
 def stack_volume_recheck(item, spec):
@@ -1469,7 +1568,7 @@ def stack_volume_recheck(item, spec):
     if parse_ts(v["CreatedAt"]) != item["created"] or found != item["owners"]:
         return "다시 만들어졌거나 소유자가 바뀐 볼륨"
     for o in found:
-        for key in ["com.docker.compose.project"] + ([spec[1]] if spec[1] else []):
+        for key in (COMPOSE_PROJECT, *spec[1]):
             ids = run(["docker", "ps", "-aq", "--filter", f"label={key}={o}"], check=False)
             if ids is None:
                 return "컨테이너를 다시 읽지 못함"
@@ -1509,11 +1608,11 @@ def judge_stack_volumes(vols, owners, spec, hours, now):
 def stack_volume_scan(spec, hours, notes, now=None):
     if not shutil.which("docker"):
         return []
-    _, label, _ = spec
-    fmt = '{{.Label "com.docker.compose.project"}}' + (f'\t{{{{.Label "{label}"}}}}' if label else "")
+    _, labels, _ = spec
+    fmt = '{{.Label "com.docker.compose.project"}}' + "".join(f'\t{{{{.Label "{k}"}}}}' for k in labels)
     ps = run(["docker", "ps", "-a", "--no-trunc", "--format", fmt], check=False)
     names = set()
-    for f in ["label=com.docker.compose.project"] + ([f"label={label}"] if label else []):
+    for f in [f"label={COMPOSE_PROJECT}", *(f"label={k}" for k in labels)]:
         out = None if ps is None else run(["docker", "volume", "ls", "-q", "--filter", f], check=False)
         if out is None:
             notes.append("stack-volume: docker 를 읽지 못함, 건너뜀")
@@ -1646,10 +1745,10 @@ def judge_stopped_containers(rows, spec, hours, now, keep=frozenset(), ports=fro
     return out
 
 
-def judge_labeled_volumes(vols, rows, spec, hours, now, keep=frozenset(), owner_label=None):
+def judge_labeled_volumes(vols, rows, spec, hours, now, keep=frozenset(), owner_labels=()):
     """vols: [{name, labels, created}]; rows: container_row of every container. The origin label is the proof a
     verification stack made the volume, so a volume without it is never listed: that no container uses a volume, or that
-    one mounted it once, says nothing about who made it. owner_label: reap.stack_volumes.label, the other owner label."""
+    one mounted it once, says nothing about who made it. owner_labels: reap.stack_volumes.label keys, the other owner labels."""
     key, origins, protect = spec
     used = {n for r in rows for n in r["volumes"]}
     stacks = {r["project"] for r in rows if r["project"]}
@@ -1662,7 +1761,7 @@ def judge_labeled_volumes(vols, rows, spec, hours, now, keep=frozenset(), owner_
         project = v["labels"].get(COMPOSE_PROJECT) or ""
         age = now - v["created"]
         item = {"kind": "labeled-volume", "key": f"labeled-volume:{v['name']}", "name": v["name"], "origin": origin,
-                "project": project, "owners": volume_owners(v["labels"], (None, owner_label)), "created": v["created"],
+                "project": project, "owners": volume_owners(v["labels"], (None, owner_labels)), "created": v["created"],
                 "age": age, "target": False, "how": [f"docker volume rm {shlex.quote(v['name'])}"]}
         out.append(item)
         if origin not in origins:
@@ -1719,7 +1818,7 @@ def leftovers(cfg, hours, now, notes, keep=frozenset(), ports=frozenset(), kinds
         if vols is None:
             notes.append("docker 볼륨을 읽지 못함: 라벨 볼륨은 건너뜀")
         else:
-            items += owner_holds(judge_labeled_volumes(vols, rows, spec, hours, now, keep, owner_label(cfg)), notes)
+            items += owner_holds(judge_labeled_volumes(vols, rows, spec, hours, now, keep, owner_labels(cfg)), notes)
     return items
 
 

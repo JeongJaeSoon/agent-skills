@@ -1,7 +1,7 @@
 <!-- translated-from: fc55134ee4cf64f99bd976bb5173c67226090bb7 -->
 # Skill catalog
 
-This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 16 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
+This page covers the 38 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 16 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
 
 Follow the [configuration migration guide](configuration-migration.md) for changed defaults and preservation of existing data. Notes, ledgers and personal folders require explicit configuration; report time defaults to UTC.
 
@@ -14,7 +14,7 @@ One ticket  write-ticket → deliver-ticket → handoff-ticket → end-session
               (dispatch-card: send work elsewhere while this session keeps working)
 Project     orchestrate ─ deliver-ticket in each worker ─ orch land
               ─ main guardian · QA lead ─ dashboard
-              └ measure-delivery when it's done
+              └ reflect when it's done (measures and reviews in one run)
               └ reboot first after a restart or compaction
 Machine     reap-resources (clears processes, Docker leftovers and branches that dead sessions
               left; the resource steward runs it on a schedule)
@@ -56,12 +56,12 @@ Which skill owns a PR, and who merges it:
   - Dependencies are set as tracker relations, and work is split so that one ticket = one PR. PRs that depend on each other are planned as a GitHub stack.
   - Files without asking, then reports each URL with a one-line summary: the request, or a NOW finding, is the approval. It asks first only for a large epic or another team's tracker or project, through the owner-ask gate, and shows drafts first when the user's own instructions say so.
 - **Bundled:** `references/templates.md` (skeletons for development and investigation tickets).
-- **Related:** Every tracker operation goes through `use-tracker`. `orchestrate` and `measure-delivery` count tickets in the follow-up format.
+- **Related:** Every tracker operation goes through `use-tracker`. `orchestrate` and `reflect`'s measure mode count tickets in the follow-up format.
 
 ### deliver-ticket (formerly `ship-pr`)
 - **When:** From before the first multi-file edit until the ticket is done. Creating, updating and merging PRs ("pr 작성까지" (up to writing the PR), "머지까지 진행해줘" (take it all the way to the merge)), releases, answering review comments, independent reviews, "동작확인" (check that it works), "내가 확인할 거 있어?" (anything I need to check?), "이 티켓 끝내줘" (finish this ticket), and stack work all belong here.
 - **What it does:**
-  - **Plan:** It doesn't enter plan mode or wait for approval. The ticket gets a single plan comment (edited when the plan changes); progress goes in the worklog and the result in a completion comment. It calls other skills depending on the shape of the work: `figure-it-out` for big migrations or multi-step changes, `architect` (→ `arena`) for design decisions that are hard to undo, `how` for unfamiliar code, and `why` for code whose reason is unclear.
+  - **Plan:** It doesn't enter plan mode or wait for approval. The ticket gets a single plan comment (edited when the plan changes); progress goes in the worklog and the result in a completion comment. It calls other skills depending on the shape of the work: `figure-it-out` for big migrations or multi-step changes, `architect` (→ `fan-out` compete) for design decisions that are hard to undo, `how` for unfamiliar code, and `why` for code whose reason is unclear.
   - **Build:** Only on a worktree branch. Non-trivial logic isn't committed without a runnable test. A bug starts with a failing reproduction test. Anything found outside the scope is fixed in this diff, filed as a follow-up ticket, or only noted in the worklog.
   - **Evidence rules:**
     - Every line that ships needs runtime evidence, and changes that came from a disproved hypothesis are reverted.
@@ -144,7 +144,7 @@ Which skill owns a PR, and who merges it:
   5. **Triage:** The predicate is the done condition. Workers only report what they find, with a proposed class, and the lead sorts it: NOW (blocks the predicate or is a reproduced defect; filed as a ticket, then admitted), LATER (the program note's `보류` (on hold) list, no ticket), DROP (one line of reason). NOW tickets are linked as related, not as children of a parent. Orca defaults to parent, but then the counts and stage bars treat them as planned work of the original ticket.
   6. **Land:** Workers land their own PRs with `orch land`. Ordinary PRs merge in parallel; shared files such as migrations, CI, Dockerfiles and compose merge one at a time per base in an exclusive lane.
   7. **Main verification:** When main goes red, the guardian first checks whether it's a flake, then picks a hotfix or a revert; until main is fixed, only fixes for main land. The QA lead handles ticket verification, periodic E2E runs and design-consistency audits.
-  8. **Close:** Does a final check on the new main and records it with `record predicate_verified`. Then it releases the roles, runs `measure-delivery`, and runs `reflect` in program mode. It isn't finished until `worker-list --terminal-state reclaimable` is empty.
+  8. **Close:** Does a final check on the new main and records it with `record predicate_verified`. Then it releases the roles and runs `reflect` in program mode once. The delivery measurement runs once inside it. It isn't finished until `worker-list --terminal-state reclaimable` is empty.
   - Under human-gate, `orch land` closes the "Land #N" Task as completed when the PR lands, and as failed when it is put on hold or the PR is closed. `orch land` never merges a PR that was decided to be held.
   - For a worker that has ended its turn, the content goes through `orchestration send --to dispatch:<id>`, and the terminal gets just one line: "run orchestration check". Workers without a terminal follow Orca's recovery procedure.
   - Standing roles send routine reports with `--type status`. Escalation is only for when the lead needs to step in.
@@ -167,17 +167,7 @@ Which skill owns a PR, and who merges it:
     - `mailbox_guard.py`: a transition shim that moves old installs over to the hook.
     - Test files.
   - `assets/dashboard/`: the dashboard UI.
-- **Related:** Workers follow `deliver-ticket`. It draws on `use-tracker`, `use-notes`, `create-verification-skill`, `show-me-your-work`, `swarm`, `measure-delivery`, `reap-resources`, `reflect`, and `end-session`.
-
-### measure-delivery
-- **When:** "성과 측정" (measure the results), or questions about whether follow-up tickets are growing or shrinking, rework, or token cost. `orchestrate` also calls it in its Close step.
-- **What it does:** `scripts/measure.py` only reads from the tracker and GitHub, and writes a report in Korean.
-  - Checks how fast derived tickets grew against the baseline, and whether the backlog is converging.
-  - Counts merged PRs.
-  - Measures rework (commits after the PR was opened, and CI reruns).
-  - Finds escaped-defect candidates (Bug labels, main CI failures, reverts).
-  - Counts tokens from available local transcripts per PR. Unmeasured sessions are not assumed to have zero usage.
-  - When exact close times are needed from Linear, it uses a file exported through MCP. It shows the requested numbers first and saves the report to the notes.
+- **Related:** Workers follow `deliver-ticket`. It draws on `use-tracker`, `use-notes`, `verification-skill`, `show-me-your-work`, `fan-out`, `reap-resources`, `reflect`, and `end-session`.
 
 ### reboot
 - **When:** Right after the session, Orca or the machine restarted, or after a compaction, before any other work: "재시작했어" (I restarted), "Orca 재시작했어" (Orca restarted), "세션 다시 띄웠어" (I brought the session back up), "복구 점검해줘" (check the recovery). Recalling what the work was is `recall`.
@@ -225,7 +215,7 @@ Which skill owns a PR, and who merges it:
 
 ### tune-automode
 - **When:** the auto-mode classifier denied an action and the user wants that kind of action allowed from now on, or the user wants to change what auto mode lets the agent do. "auto mode 가 막았어" ("auto mode blocked it"), "이거 허용되게 규칙 추가해줘" ("add a rule so this is allowed").
-- **What it does:** From the denial category and the denied action, it drafts the smallest allow, soft_deny or environment rule that covers that action class. A rule carries the action class, the conditions that make it safe, and `Not covered:`. After a review checklist (no blanket allows, no production-destructive verbs the user did not name, only the user's own chat counts as authorization), `scripts/automode_rule.py emit` shows the diff and writes a standalone script with the spec embedded under the home directory. The user applies it with `! python3 -I <path> --apply <spec hash>`; the hash must match the spec whose diff the user saw. The script takes a timestamped backup, merges idempotently, validates the JSON and prints the rollback command. The agent never edits settings.json, never runs that script, and never works around the denial while waiting.
+- **What it does:** From the denial category and the denied action, it drafts the smallest allow, soft_deny or environment rule that covers that action class. A rule carries the action class, the conditions that make it safe, and `Not covered:`. After a review checklist (no blanket allows, no production-destructive verbs the user did not name, only the user's own chat counts as authorization), `scripts/automode_rule.py emit` lints the spec (it refuses a spec whose `refusal_category` is missing or `no-verdict`, and an allow rule without `Not covered:`; it warns on blanket wording, ticket or PR numbers, token-like strings and a rule that nearly repeats an existing one), shows the diff and writes a standalone script with the spec embedded under the home directory. The user applies it with `! python3 -I <path> --apply <spec hash>`; the hash must match the spec whose diff the user saw. The script takes a timestamped backup, merges idempotently, validates the JSON and prints the rollback command. The agent never edits settings.json, never runs that script, and never works around the denial while waiting.
 - **Ships with:** `scripts/automode_rule.py`, its tests, `references/example-settings.json`.
 - **Related:** `permissions.allow` in the user settings and `agent-skills.json` keys belong to `skills-config` (which shares this skill's engine when it carries autoMode rules too); project settings and hooks belong to the built-in `update-config`; a first draft for a whole project belongs to the built-in `/auto-mode-setup`. `orchestrate`'s Frame and Refused acts use this skill for a repo's standing merge and deploy rules ("프로젝트 지속 승인" (standing project approval)).
 
@@ -243,7 +233,7 @@ Which skill owns a PR, and who merges it:
 ### setup-pc
 - **When:** agent-skills goes onto another PC, or an installed PC needs bringing up to date. "새 PC 세팅해줘" (set up a new PC), "다른 PC 에서도 똑같이 쓰게 해줘" (make another PC work the same way), "agent-skills 업데이트해줘" (update agent-skills), "플러그인 최신화" (bring the plugin up to date), "set up agent-skills on a new PC", "update agent-skills".
 - **New PC:** The human only runs `/plugin install` inside a session (its install dialog asks for the answer language, the checkout path and a personal config repo) and opens a new session. The plugin's SessionStart hook (`hooks/onboard.py`) notices a PC that was never set up and offers this skill; the skill clones the checkout and the personal repo, then goes on to the dry run and the one line below. The steps that write no settings file (the sync job, the janitor, pressure-watch, watch-prs and watch-mentions automations, the check table) the skill runs as `setup.py --actions-only`, and the guard hook shows a permission dialog for it. Design: [zero-command-setup.md](zero-command-setup.md).
-- **What it does:** The entry point is the checkout's `scripts/setup.py`. The skill asks for the language and whether to bind an Orca Run, runs a dry run that shows a diff per settings file, and hands the human one `! python3 -I … --apply <hash>` line. That line takes a backup, merges idempotently (adds only what is missing, never overwrites a value, except that it turns off an enabled marketplace copy), replaces atomically, reads back and prints a rollback line per file; it then turns on the launchd sync job, a sync and the default-on scheduled automations, and prints the `scripts/setup_check.py check` table. The values come from the repo's recommended defaults (`scripts/recommended-settings.json`: checkout loading, `language`, `outputStyle`, the default permission mode, a generalized autoMode bundle, a `permissions.allow` bundle with only lookups and the dashboard server, minimal `agent-skills.json` keys) and the personal repo's `agent-skills.json` and tracker site rules; internal name lists, personal instructions, agents and autoMode rules are never carried. An item offered once is recorded, so a rule the human removed is not offered again. `--update` is the update mode: its dry run doesn't even fetch and shows only new recommendations, and its `--apply` line fast-forwards the checkout, then checks the plan again. An autoMode rule with a recommended rule's label (the text before its first colon) but older text is reported as `drifted`, never duplicated; `--replace-drifted [LABEL ...]` plans only its replacement with the recommended text. The first output line names the settings.json it plans for (`--settings` picks another). `check --baseline` against a file exported on the old PC is optional. The skill never writes a settings file and never runs `--apply`.
+- **What it does:** The entry point is the checkout's `scripts/setup.py`. The skill asks for the language and whether to bind an Orca Run, runs a dry run that shows a diff per settings file, and hands the human one `! python3 -I … --apply <hash>` line. That line takes a backup, merges idempotently (adds only what is missing, never overwrites a value, except that it turns off an enabled marketplace copy), replaces atomically, reads back and prints a rollback line per file; it then turns on the launchd sync job, a sync and the default-on scheduled automations, and prints the `scripts/setup_check.py check` table. The values come from the repo's recommended defaults (`scripts/recommended-settings.json`: checkout loading, `language`, `outputStyle`, the default permission mode, a generalized autoMode bundle, a `permissions.allow` bundle with only lookups and the dashboard server, minimal `agent-skills.json` keys) and the personal repo's `agent-skills.json` and tracker site rules; internal name lists, personal instructions, agents and autoMode rules are never carried. An item offered once is recorded, so a rule the human removed is not offered again. A rule that merges several older recommended rules is not added on a PC that was offered any of them; the dry run only names it with a `skipped` line, so a removed rule cannot come back inside the merged one. `--update` is the update mode: its dry run doesn't even fetch and shows only new recommendations, and its `--apply` line fast-forwards the checkout, then checks the plan again. An autoMode rule with a recommended rule's label (the text before its first colon) but older text is reported as `drifted`, never duplicated; `--replace-drifted [LABEL ...]` plans only its replacement with the recommended text. The first output line names the settings.json it plans for (`--settings` picks another). `check --baseline` against a file exported on the old PC is optional. The skill never writes a settings file and never runs `--apply`.
 - **Ships with:** `scripts/setup_check.py`, its tests. In the repo: `scripts/setup.py`, `scripts/recommended-settings.json`, `scripts/test_setup.py`.
 - **Related:** A single action blocked after setup goes to `tune-automode`; user `permissions.allow` and `agent-skills.json` keys outside the bundle to `skills-config`; hooks to `update-config`; what the automations do to `reap-resources`; reloading running sessions to `skills-sync broadcast`. `bootstrap.py`, which only loads the checkout, is still there, and `setup.py` rewrites its launchd job.
 
@@ -260,8 +250,8 @@ Monitors configured public channels for mentions and replies when requested. Use
 ### use-tracker
 - **When:** Reading, searching, creating, labeling, commenting on, or changing the state of tickets, and whenever a script needs ticket data.
 - **What it does:**
-  - The tracker is resolved in this order: program config → `~/.claude/agent-skills.json` → the default, linear.
-  - Inside a session, Linear goes through `orca linear` first (plain text output, `--json` only when parsing the result), and through the Linear MCP only for what `orca linear` lacks (documents, file and image uploads, diff review, releases, milestones and cycles, and a few more). Jira uses MCP when it is connected. Scripts always use `tracker.py`. The `tracker.py` commands are list, get, children, create, label, comment, attach, transition, reconcile. reconcile reads a ticket and the PRs that deliver it (a PR attached to the ticket, the ID in a title or branch, or after a closing keyword in the body) and only prints which state fits (`started`, `review`, check the criteria, report) and the milestone lines to run; it writes nothing. transition reads the current state first and leaves a ticket alone if it's already at that stage or further along. `--to review` moves a ticket to the state named by `tracker.<adapter>.review_status` when the config sets it, else to In Review, or, if that state doesn't exist, to the one started state whose name contains review.
+  - The tracker is resolved in this order: program config → `~/.claude/agent-skills.json` → detection from Orca's connections. One connection decides; with both, the ticket keys on the current branch and recent commits do; with none it is linear. The result is never written to the config, and `tracker.py detect` shows why.
+  - Inside a session, ticket reads and writes go through `orca linear` / `orca jira` (plain text output, `--json` only when parsing the result), and through MCP only for what Orca lacks (documents, uploads, diff review, releases, milestones and cycles, and a few more). The `tracker_gate` hook denies an MCP call Orca can run as written and prints the matching command. Scripts always use `tracker.py`. The `tracker.py` commands are list, get, children, create, label, comment, attach, transition, reconcile. reconcile reads a ticket and the PRs that deliver it (a PR attached to the ticket, the ID in a title or branch, or after a closing keyword in the body) and only prints which state fits (`started`, `review`, check the criteria, report) and the milestone lines to run; it writes nothing. transition reads the current state first and leaves a ticket alone if it's already at that stage or further along. `--to review` moves a ticket to the state named by `tracker.<adapter>.review_status` when the config sets it, else to In Review, or, if that state doesn't exist, to the one started state whose name contains review.
   - The state vocabulary is triage, backlog, unstarted, started, completed, canceled.
   - The follow-up format is a `follow-up` label, a first line of `파생: <ID> · 원인: <분류>` (derived from: <ID> · cause: <category>), and a related relation.
   - The one source for NOW, LATER and DROP, the exit condition and the follow-up format is `references/exit-condition.md`. `deliver-ticket`, `write-ticket`, `handoff-ticket`, `end-session` and `task-tracker` point to it.
@@ -298,7 +288,7 @@ Reports completed work, current work, decisions and human-only steps with eviden
 - **Related:** Where `brief`'s to-do and on-hold line points. On the dashboard it is the To-do page.
 
 ### map-features
-- **When:** People need a map of what a product does today: a PRD, a roadmap, onboarding, a status doc. "feature map 만들어줘" (make a feature map), "기능 지도 그려줘" (draw a feature map), "지금 뭐가 구현돼 있는지 정리해줘" (list what is built now). A map that a verify skill uses to drive features is `create-verification-skill`; how one subsystem works is `how`.
+- **When:** People need a map of what a product does today: a PRD, a roadmap, onboarding, a status doc. "feature map 만들어줘" (make a feature map), "기능 지도 그려줘" (draw a feature map), "지금 뭐가 구현돼 있는지 정리해줘" (list what is built now). A map that a verify skill uses to drive features is `verification-skill`'s create mode; how one subsystem works is `how`.
 - **What it does:**
   - The first line names the baseline (repo, ref, short sha, commit date), and every row is true as of that commit.
   - It finds the deployable units (apps) from build and deploy config and puts them in a table; apps a reader would expect but which don't exist go in a list with what exists in their place.
@@ -315,7 +305,7 @@ Reports completed work, current work, decisions and human-only steps with eviden
   - Replies lead with the answer. Each claim says whether it was measured, inferred or guessed. Links and quotes are never made up. "No" is an answer too.
   - It reads the per-language reference before drafting. Polishing after the fact misses most problems.
 - **Bundled:** `references/korean.md` (before-and-after examples for fixing clichés, translationese, hedging, dropped subjects, noun stacks, the "~다" register, and banned formatting), `references/english.md` (rules for English prose, code comments and skill text).
-- **Related:** Pointed to by `write-ticket`, `deliver-ticket` (PR bodies), `use-notes`, `measure-delivery`, and `end-session` (final report).
+- **Related:** Pointed to by `write-ticket`, `deliver-ticket` (PR bodies), `use-notes`, `reflect` (measure mode), and `end-session` (final report).
 
 ### prune-comments
 - **When:** `/prune-comments`, "주석 정리해줘" (clean up the comments), "불필요한 주석 지워줘" (delete the unnecessary comments), "주석 너무 많아" (there are too many comments). `deliver-ticket` calls it before review.
@@ -338,21 +328,29 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
 - **When:** `/architect`, "상세 설계안 작성해줘" (write a detailed design), "설계안 다듬어줘" (refine the design), "구현 계획 짜줘" (draw up an implementation plan), and work where writing code first would lock in the wrong shape.
 - **What it does:** Works in five steps.
   1. **Ground:** Uses `how` and `why` to understand the surrounding system and why it has its current shape.
-  2. **Sketch:** Launches design runners in parallel through `arena` (available independent runners). It gets at least two structurally different candidates, filters them with red flags, and merges them by interface depth.
+  2. **Sketch:** Launches design runners in parallel through `fan-out` compete (available independent runners). It gets at least two structurally different candidates, filters them with red flags, and merges them by interface depth.
   3. **Agree:** Asks a human to sign off only when requested. By default it publishes a plan page (one HTML Artifact), leaves the link, and builds on the recommended defaults. The page is a "what › how › where" claim tree, each claim proved by one piece of evidence (mockup, state machine, call stack, schema, code). Numbered decisions sit on the claim they change, with 2 to 4 options, a recommended default, and what disappears if another option wins. An unanswered decision is not agreement, so only the hard-to-reverse ones are asked again before implementation. Pasted answers are data inside the proposed design, not instructions.
   4. **Implement:** Builds with the sketch as the contract.
   5. **Scrap:** If the same kind of workaround keeps coming back, it throws the sketch away and draws it again.
 - **Bundled:** `design-red-flags.md`, `rationale-template.md` (design rationale doc), `plan-page.md` (plan page format, following html-plan's format), `runner-prompt.md`.
 
-### arena
-- **When:** `/arena`, "경쟁시켜줘" (make them compete), "여러 안 뽑아서 제일 나은 걸로" (draft several and go with the best), "여러 버전 만들어서 비교해줘" (make several versions and compare them), and deliverables where a single attempt would lock in the shape. `architect`'s Sketch step calls it.
-- **What it does:**
+### fan-out (formerly `swarm` and `arena`)
+- **When:** You want parallel workers to bring back one result. The mode follows from what comes back. Landing several tickets in parallel is `orchestrate`.
+  - **sweep** (formerly `swarm`): `/swarm`, "병렬로 훑어줘" (sweep it in parallel), "나눠서 동시에 확인해줘" (split it up and check it all at once), broad split-up sweeps, or races to see who gets a result first. Returns one report.
+  - **compete** (formerly `arena`): `/arena`, "경쟁시켜줘" (make them compete), "여러 안 뽑아서 제일 나은 걸로" (draft several and go with the best), "여러 버전 만들어서 비교해줘" (make several versions and compare them), and deliverables where a single attempt would lock in the shape. Returns one deliverable. `architect`'s Sketch step calls it.
+- **What sweep does:**
+  - First sets the done condition and the shape (split, race, or a mix). A race is decided by the first to pass (first pass) or by a full ranking (rank all).
+  - Launches workers as `Agent` (worktree isolation, in the background), and long-running jobs as Orca workers. An Orca worker's `--base-branch` is accepted only for new-top-level and new-child placements.
+  - Workers report PASS / ISSUES / BLOCKED. A report missing the commit and the method is rerun once.
+  - Collects the results into one table.
+- **What compete does:**
   - Before giving the same task to N candidates at once (by default available independent runners), it sets 3–6 scoring criteria. Candidates see only the task, never the criteria.
   - An independent judge who did not produce the candidates scores each criterion and recommends a base.
   - It reads every candidate in full, scores them against each criterion, and picks the base. One or two better pieces from the other candidates are grafted on by hand.
   - If the candidates converge on the same shape, it uses that shape as is; if they diverge sharply, it goes back and redefines the task.
   - It returns one deliverable plus a short synthesis note recording the base, what was grafted, what was dropped, and the verification result.
-- **How it differs from swarm:** swarm splits the work up, sweeps it, and returns a report. arena makes candidates compete on the same work and produces one deliverable.
+- **How the modes differ:** sweep splits the work up, sweeps it, and returns a report. compete makes candidates compete on the same work and produces one deliverable. Splitting a compete task the sweep way turns it into a different job.
+- **Bundled:** `references/sweep.md`, `references/compete.md`.
 
 ### blast-radius
 - **When:** "이거 바꾸면 뭐가 깨져?" (what breaks if I change this?), and small diffs you don't trust.
@@ -367,7 +365,7 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
 - **When:** `/figure-it-out`, "알아서 설계해서 진행해줘" (design it yourself and get going), "큰 마이그레이션" (a big migration), "자리 비운 동안 끝내줘" (finish it while I'm away), and large multi-step work with no procedure that fits. `deliver-ticket`'s planning step calls it. Running several tickets as parallel cards is `orchestrate`'s job.
 - **What it does:** Designs the order of the work before the code.
   1. **Frame:** Writes the done condition as a falsifiable statement, puts numbers on the scope, and sets how strict to be based on the risk. The frame goes in the ticket's plan comment or the worklog, and reversible work doesn't wait for anyone. Only irreversible steps get a one-time approval on the spot.
-  2. **Design:** Splits the work into units that can land separately and starts with the least understood one. It first builds a verification harness that captures values from before the change. Designs that are hard to undo are settled with `architect` (→ `arena`). Parallel work only where boundaries separate cleanly, with a worktree for each worker.
+  2. **Design:** Splits the work into units that can land separately and starts with the least understood one. It first builds a verification harness that captures values from before the change. Designs that are hard to undo are settled with `architect` (→ `fan-out` compete). Parallel work only where boundaries separate cleanly, with a worktree for each worker.
   3. **Loop:** For each unit: a hypothesis, the smallest change, a measurement on the real artifact, then keep or revert. Delegated work is judged by reading the result directly or by an independent reviewer. Verdicts are VERIFIED / NOT VERIFIED / INCONCLUSIVE.
   4. **Trail:** Keeps a decision record with `show-me-your-work` and usually commits it so it can be read in the PR.
   5. **Verify:** Checks the whole result against the Frame's done condition in the real product, and turns corrections that kept recurring into checks or scripts.
@@ -417,9 +415,16 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
   - The answer is a short summary, a status tag for each thread (`[merged #N]`, `[open PR #N]`, `[in flight <branch>]`, and so on), the recurring problems, and one next step.
 
 ### reflect
-- **When:** "reflect", "스킬에 반영해줘" (put this into the skills), "스킬이 왜 안 떴어" (why didn't the skill trigger?), "이 세션 돌아보고 스킬 개선해줘" (look back on this session and improve the skills), "개선 이력 보여줘" (show me the improvement history). It's called automatically in program mode from `orchestrate`'s Close, and in session mode from `end-session` when a human corrected how the work was done.
+- **When:** "reflect", "스킬에 반영해줘" (put this into the skills), "스킬이 왜 안 떴어" (why didn't the skill trigger?), "이 세션 돌아보고 스킬 개선해줘" (look back on this session and improve the skills), "개선 이력 보여줘" (show me the improvement history). It's called automatically in program mode from `orchestrate`'s Close, and in session mode from `end-session` when a human corrected how the work was done. Measure mode is for "성과 측정" (measure the results), or questions about whether follow-up tickets are growing or shrinking, rework, escaped defects, or tokens per PR.
 - **What it does:**
-  - Session mode reads this session's transcript. Program mode reads an evidence bundle: the ledger's `signal` entries, merge failures, main reds, failed verdicts, decision records, and the `measure-delivery` results. There are three reviewers (judgment, tooling, divergent thinking).
+  - Measure mode only measures and reports. It calls no reviewers and leaves the lessons ledger alone. `scripts/measure.py` only reads from the tracker and GitHub, and writes a report in Korean.
+    - Checks how fast derived tickets grew against the baseline, and whether the backlog is converging.
+    - Counts merged PRs.
+    - Measures rework (commits after the PR was opened, and CI reruns).
+    - Finds escaped-defect candidates (Bug labels, main CI failures, reverts).
+    - Counts tokens from available local transcripts per PR. Unmeasured sessions are not assumed to have zero usage.
+    - When exact close times are needed from Linear, it uses a file exported through MCP. It shows the requested numbers first and saves the report to the notes.
+  - Session mode reads this session's transcript. Program mode reads an evidence bundle: the ledger's `signal` entries, merge failures, main reds, failed verdicts, decision records, and the result of one measure-mode run at this Close. There are three reviewers (judgment, tooling, divergent thinking).
   - A synthesizer sorts the learnings into Accepted / Rejected / Backlog. Every one of them gets a line in the learnings ledger (`reflect.ledger` in the notes store). For each learning, the ledger records the signal, evidence pointers, how often it happened, what was fixed, the change (PR or commit), the verification numbers a script produced, and whether it recurred later.
   - A skill changes only after two or more distinct cases (reproduced security or data defects are the exception). A single occurrence stays a candidate until it happens again.
   - Session mode applies changes after the user approves. Program mode has no human around, so it fixes and verifies in a worktree, opens a single draft PR, and leaves an approval request in the digest. A human does the merge. Description changes are checked for triggering with `claude plugin eval`; body and script changes are checked for behavior with tests that exercise the changed path or by reproducing the case. Without any verification it records `none`.
@@ -435,14 +440,6 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
   - When the work is done, it audits the log against the transcript.
   - An independent reviewer checks it, and the end of the response says who reviewed it.
 - **Bundled:** `scripts/log.sh` (appends rows), `references/decision-log-template.tsv`.
-
-### swarm
-- **When:** `/swarm`, "병렬로 훑어줘" (sweep it in parallel), "나눠서 동시에 확인해줘" (split it up and check it all at once), broad split-up sweeps, or races to see who gets a result first. Competing and merging into one deliverable is `arena`; landing several tickets in parallel is `orchestrate`.
-- **What it does:**
-  - First sets the done condition and the shape (split, race, or a mix). A race is decided by the first to pass (first pass) or by a full ranking (rank all).
-  - Launches workers as `Agent` (worktree isolation, in the background), and long-running jobs as Orca workers. An Orca worker's `--base-branch` is accepted only for new-top-level and new-child placements.
-  - Workers report PASS / ISSUES / BLOCKED. A report missing the commit and the method is rerun once.
-  - Collects the results into one table.
 
 ### teach
 - **When:** 'teach me this', "이거 제대로 이해하고 싶어" (I want to really understand this), "이 변경 이해시켜줘" (help me understand this change), "처음 보는데 이 구조 설명해줘" (I'm new to this, explain the structure). A single how-does-it-work question is `how`, and a why question is `why`.
@@ -471,7 +468,7 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
   - The result is one of clean, changed (a single PR with only proven fixes), or blocked.
   - The flow improver runs it once a week, and the lead hands it to a worker when `deliver-ticket` or the QA lead reports that the verify skill couldn't drive a feature or described it wrongly.
   - With no verify skill to check, it stops and points at create mode.
-- **Bundled:** `references/create.md`, `references/maintain.md`, `references/feature-map-example/` (the feature map of an example app).
+- **Bundled:** `references/create.md`, `references/maintain.md`, `references/feature-map-example/` (the feature map of an example app), and `scripts/verify_skill_lint.py`, which lints a generated skill by reading files only: frontmatter and sections, state-file names, a shared `latest` link, a required cleanup argument, pattern kills, helper modes and documentation, and the feature-map index. Both modes run the same script.
 
 ## Commands
 
@@ -492,7 +489,7 @@ Program state lives in `~/.claude/programs/<slug>/`: `program.json`, the append-
 | `land-check` | Diagnoses readiness without merging |
 | `landed` | Records a merge that happened elsewhere |
 | `backfill` | Adds PRs merged before registration, and their main CI, to the ledger |
-| `heavy` | Runs heavy commands (compose, image builds) limited to 2 slots across the machine |
+| `heavy` | Runs heavy commands (compose, image builds) limited to machine-wide slots. The count is `landing.heavy_slots`, then `orchestrate.heavy_slots` in `agent-skills.json`, then a quarter of the CPUs (at least 2) |
 | `wait` | Lead only. Waits until there's a message to handle and prints `CLOSE OUT` lines |
 | `decide` | Registers (`add`), lists (`list`) and closes (`done`, `drop`) a decision the orchestrator or lead is waiting on the user for. It shows in the dashboard's Needs you with a button per option; a button records the answer and closes the decision, then sends one line, `decision <id>: <answer>`, to the orchestrator's or lead's terminal, once it is idle if it is busy |
 
@@ -576,10 +573,17 @@ Every rule has a key in `~/.claude/agent-skills.json`. Its value is one of `"den
 | `guard.warn.run_download` | warn | `gh run download` without `-D` or `--dir` |
 | `guard.warn.tailscale` | warn | `tailscale serve` or `funnel` from a worker |
 | `guard.deliver_load` | warn | `hooks/lib/skillload.py`. A worker (a Dispatch, or a CLOSE or KEEP card) edits a file inside its working directory (the hook input's `cwd`) with Edit, Write, MultiEdit or NotebookEdit before its main conversation loaded `deliver-ticket`. Each such edit gets one warning line until the skill is loaded (no state file is kept); `deny` blocks it and `ask` asks. Not targets: a read-only card whose first prompt has a `LOAD: none` row, paths under `.git` or outside the working directory, subagents, orchestrators, leads and sessions a human opened. Loaded means a `Skill` result without an error, or a `/deliver-ticket` command. A call with no result yet, or a transcript not read in time, counts as unknown and passes |
+| `worker.edit_tool` | warn | `hooks/lib/discipline.py`. A worker (a Dispatch, or a CLOSE or KEEP card) or its subagent writes a file from Bash: `>`, `>>`, `&>`, `tee`, `sed -i`, `python -c` or a python heredoc that opens a file for writing. Temp directories (`TMPDIR`, `/tmp`, the scratchpad), `/dev/null` and `orch-refusal` are left out. Inside or outside the worktree makes no difference. A legitimate log redirect fires too, which is why it stays at warn |
+| `worker.chain` | warn | One Bash call of a card runs `rm`, `mv`, `git commit`, `git push` or `worker_done` together with another command, joined by `&&`, `;` or a newline. A pipeline and the inside of `$(…)` count as one command |
+| `worker.paths` | warn | A card's Edit or Write lands outside its own worktree, the temp directories and `orch-refusal`, or inside `~/.claude/plugins/cache/` |
+| `worker.main_checkout` | warn | A card's Edit or Write target is in a main checkout (`git rev-parse --absolute-git-dir` equals `--git-common-dir`). When the repository cannot be judged it passes |
+| `worker.memory` | warn | A card writes to `~/.claude/projects/*/memory/` (the Edit tools, and the targets of a Bash redirect, `tee` or `sed -i`) |
+| `worker.pre_push` | warn | A `git rebase` of a branch origin already has; the session's first `git push` with no test command run in it; a `git commit` that stages code and no test file (only while no test has run). It passes when the transcript cannot be read |
 | `orchestrate.ask_user_question` | deny | AskUserQuestion in the main conversation of an orchestrator, lead or worker. Subagents and general sessions are not covered |
 | `orchestrate.wait_foreground` | deny | An orchestrator or lead running `orch wait`, `orch inbox --wait`, `orch watch-cards` or `orca orchestration check\|inbox --wait` without `run_in_background`, or cutting a background wait with `\| tail` or `\| head`. A worker's `check --wait` is not covered |
 | `orchestrate.send_devnull` | deny | An orchestrator, lead or worker sending the output of `orca orchestration send\|reply` to `/dev/null`. `2>/dev/null` alone is not covered |
 | `orchestrate.model_flag` | warn | With `orchestrate.models` set, `orca orchestration worker-start`, `orca worktree create` or `orca agent launch` starting Claude with no `--model`. `--terminal` is out of scope |
+| `orchestrate.pr_poll` | warn | A Monitor command polling `gh pr list\|view\|checks` with a sleep under 300 s. The warning points at the `pr-watch` command (`bin/pr-watch`). It never goes up to deny |
 | `orchestrate.self_land` | warn | `hooks/self_land_gate.py`. A card whose first prompt has `PROGRAM` and an `APPROVED` line naming `orch land` calling `worker_done` or `orca worktree rm` over its own open PR. A `READY-WAIT:` line, `--outcome failed` and a human-gate program pass. `deny` blocks it |
 | `orchestrate.stack_dependent` | warn | A dependent PR that is not a stack. `hooks/stack_gate.py` reads the brief's `Lands after` and the branch's history at `gh pr create`; `orch land` and `land-check` compare land-after edges with the real stacks. `deny` makes both block. What cannot be read passes with one warning line |
 | `orchestrate.auto_wake_min` | none (off); setup bundle: 10 | A positive integer N. `orch wait` wakes a worker once, N minutes after it first marked it idle (`skills/orchestrate/references/waking.md`, "Automatic wake"). With no key it only marks the worker and prints one line saying auto-wake is off. One dispatch is never woken twice; a second stop goes to Needs you |
@@ -587,6 +591,8 @@ Every rule has a key in `~/.claude/agent-skills.json`. Its value is one of `"den
 | `orchestrate.stall_idle_min` | 15 | A positive integer: minutes after a worker's turn ended before it shows as a STALLED `idle`. Lower it for a short live measurement |
 
 When the hook's own check raises, the call goes through with a warning, and `$AGENT_SKILLS_STATE/guard-errors.jsonl` gets the time, the hook, the exception type and where it was raised (never the command text). An unreadable settings file means the defaults.
+
+Each time a `worker.*` key fires it adds one line with the check name and level to `$AGENT_SKILLS_STATE/turn-warnings.jsonl` (the file the end-of-turn checks use). After a week of counting false positives there, `worker.edit_tool` is the first to go to `deny`. The checks are heuristics over text and git state; `bash -c` and the commands inside a script file are not read.
 
 No hook records a refused act to block it again. The rule that a refused session retries once in the same form and never goes around the refusal lives in the skills' text (`orchestrate`'s "Refused acts", `tune-automode`). A `$AGENT_SKILLS_STATE/refusals.jsonl` left by an earlier version is no longer read, and nothing deletes it; the human removes it if they want it gone.
 
@@ -688,6 +694,7 @@ Of pstack's 58 skills (24 principles and 34 others), we took all 24 principles a
   - The model panel uses available independent reviewers.
   - Calls to a skill we don't install (`unslop`) now point to `write-plainly`. `why` and `arena` were brought in on 2026-09-25, which restored the original links between skills (architect → arena).
   - `why` picks its sources from the MCP tools available in the session instead of Cursor's MCP discovery, and gained a narrow mode for one-line questions. The source files for Datadog, Sentry and the warehouse, which have no connection here, were dropped, and new source files for Google Drive and Obsidian were written.
+  - swarm and arena were later merged into one skill, `fan-out`. Their bodies moved to `references/sweep.md` and `references/compete.md`, the sweep and compete modes.
 - **Further changes on 2026-09-25:** The prompts were audited and revised again for Opus 5.5 (`6eec9fa`). The per-step to-do lists in architect and swarm are gone, and how now handles simple questions directly. reflect no longer has a minimum reviewer count, and show-me-your-work became an append-only log. Per-file changes are listed in `vendor/pstack/NOTICE.md`.
 - **Derived:** Parts written fresh by carrying over only the rules, not whole files. They aren't in `manifest.json` and aren't synced; when upstream changes, a person reads it and ports what matters.
   - `write-plainly`: merges the reply rules from unslop, technical-writing and poteto-mode, with newly written rules for Korean.
@@ -710,7 +717,7 @@ Of pstack's 58 skills (24 principles and 34 others), we took all 24 principles a
 ### Not in pstack
 - **Ticket flow:** `write-ticket`, `deliver-ticket`, `handoff-ticket`, `dispatch-card`, `end-session`. One ticket from start to finish, built around Orca cards and a tracker.
 - **Running projects:** `orchestrate`'s `orch` ledger, the landing gate and exclusive lane, human-gate, the main guardian, the QA lead, and the `orch-dash` dashboard. The shape follows pstack's playbooks, but it was built fresh on top of Orca Runs and GitHub stacks.
-- **Measurement and adapters:** `measure-delivery`, `use-tracker`, `use-notes`.
+- **Measurement and adapters:** `reflect`'s measure mode, `use-tracker`, `use-notes`.
 - **Machine upkeep:** `reap-resources`, `tune-automode`, `skills-config`, `setup-pc`.
 - **Hooks:** permission decisions (`guard.py`), re-orienting the orchestrator and leads (`reorient.py`), offering setup on a PC that was never set up (`onboard.py`), recording permission prompts for the dashboard to answer (`permission.py`), closing decisions answered in the terminal (`decision.py`), a warning on relaying the owner's words with no record (`decision_relay.py`), completion claim checks (`claim_check.py`), a load check before a heavy start (`pressure_gate.py`), prose checks (`prose_check.py`), the stack check on dependent PRs (`stack_gate.py`), and a warning when a program card closes over its own open PR (`self_land_gate.py`).
 

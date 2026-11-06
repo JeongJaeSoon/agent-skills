@@ -453,11 +453,34 @@ def reap_hard_gate():
     """No job until the protect list exists: reap-hard closes cards without asking, and without the file it refuses to run."""
     import reap_hard
     path = pathlib.Path(planned("reap-hard").get("protect_file") or reap_hard.config()["protect_file"]).expanduser()
-    return None if path.is_file() else f"보호 목록 파일 {path} 가 없음 (순찰 `orch patrol` 도 이 job 이 띄운다)"
+    return None if path.is_file() else f"보호 목록 파일 {path} 가 없음 (patrol job 이 꺼져 있으면 순찰 `orch patrol` 도 이 job 이 띄운다)"
 
 
 def pressure_interval():
     return (planned("reap").get("pressure") or {}).get("interval") or pressure.config()["interval"]
+
+
+SWEEP_TIMEOUT_S = 2700  # sweep.py tick's own step budgets add up to 2500 s (patrol 400, shadow 600, reap-hard 900, round 600)
+
+
+def sweep_interval():
+    import sweep  # not at import: it pulls in the whole guard stack
+    return sweep.interval()
+
+
+def sweep_protect_problem():
+    """Why a tick would stop at once, or None: without the protect list every pass of the old cleaners refuses too."""
+    import guard
+    try:
+        guard.read_protect(guard.protect_file())
+    except guard.NoProtect as e:
+        return str(e)
+    return None
+
+
+def sweep_prepare():
+    why = sweep_protect_problem()
+    return (1, f"sweep 을 켜지 않는다: {why}") if why else (0, "")
 
 
 SHELL_JOBS = (
@@ -471,16 +494,26 @@ SHELL_JOBS = (
              "정리해 알리는 Orca automation(docs/pressure.md). 아무것도 종료하지 않고, 정리할 것이 없으면 상위 소비자만 알린다",
              ["python3", str(REAP.parent / "pressure.py"), "round"], pressure_interval, True, ok=(0, 1, 2),
              turned_off=pressure.disabled, clear_off=lambda: pressure.DISABLED.unlink(missing_ok=True)),
-    ShellJob("reap-hard", "15분마다 끝난 세션이 남긴 프로세스·창을 강하게 정리하는 Orca automation(모델 없음, reap_hard.py run). "
-             "세션 순찰(`orch patrol`)도 이 회차가 띄운다. 묻지 않고 카드를 지우므로 보호 목록 파일이 있는 PC에서만 켠다",
+    ShellJob("reap-hard", "30분마다 끝난 세션이 남긴 프로세스·창을 강하게 정리하는 Orca automation(모델 없음, reap_hard.py run). "
+             "patrol job 이 꺼져 있으면 세션 순찰(`orch patrol`)도 이 회차가 띄운다. 묻지 않고 카드를 지우므로 보호 목록 파일이 있는 PC에서만 켠다",
              ["python3", str(HERE / "reap_hard.py"), "run"], reap_hard_interval, True, gate=reap_hard_gate),
     ShellJob("orch-dash", "10분마다 오케스트레이터 대시보드 서버를 확인해 내려갔으면 올리는 Orca automation(모델 없음, orch-dash ensure). "
              "읽기 위주이고 아무것도 지우지 않는다",
              ["python3", str(REPO / "skills" / "orchestrate" / "scripts" / "dash.py"), "ensure"], 600, True),
+    ShellJob("patrol", "30분마다 모든 에이전트 카드를 모델 없이 순찰하는 Orca automation(orch patrol --if-due). 발견은 카드를 띄운 세션의 "
+             "inbox 대기에 나타나고, 정리 후보는 기록만 한다. 꺼져 있으면 reap-hard 가 30분 회차마다 대신 돈다",
+             ["python3", str(REPO / "skills" / "orchestrate" / "scripts" / "prog.py"), "patrol", "--if-due"], 1800, False,
+             timeout=420),
     ShellJob("land-executor", "orchestrate.land_executor 가 켜진 repo 에서 `orch land` 가 남긴 머지 요청을 1분마다 모델 없이 다시 "
              "검사해 머지하는 Orca automation(skills/orchestrate/references/landing.md). 설정 키를 켜는 것은 skills-config 로 따로 한다",
              ["python3", str(LAND_EXEC), "round"], 60, False, prepare=land_setup),
+    ShellJob("sweep", "정리기 v2 한 회차를 주기마다 모델 없이 돌리는 Orca automation(sweep.py tick: 순찰 → 그림자 → reap-hard → 소유 규칙 정리). "
+             "`reap-hard` 자동화 자리를 이어받고, 한 번에 하나만 돈다(sweep-tick.lock). 규칙을 넘기는 것은 `sweep.py own` 으로 따로 한다. "
+             "보호 목록 파일이 있는 PC에서만 켠다",
+             ["python3", str(REAP.parent / "sweep.py"), "tick"], sweep_interval, False, gate=lambda: sweep_protect_problem(),
+             prepare=sweep_prepare, timeout=SWEEP_TIMEOUT_S),
 )
+SWEEP = next(j for j in SHELL_JOBS if j.name == "sweep")
 
 
 # ---------------------------------------------------------------- share-server (LaunchAgent)

@@ -1,6 +1,8 @@
 # reap-hard: 모델 없이 끝난 카드·스택·포트를 닫는 정리
 
-`bin/reap-hard`는 규칙이 코드로 고정된 정리 스크립트다. Orca automation(에이전트 없음)이 15분마다 돌리고, 모델이나 카드 세션의 판단을 기다리지 않는다.
+`bin/reap-hard`는 규칙이 코드로 고정된 정리 스크립트다. Orca automation(에이전트 없음)이 30분마다 돌리고(`interval` 기본 1800초), PR이 머지되면(land executor가 확정할 때) 5분 안에 돈 회차가 없을 때 한 번 더 돈다. 모델이나 카드 세션의 판단을 기다리지 않는다.
+
+회차는 끝나면 판정을 `<state>/inventory.json`에 쓴다(dry-run은 쓰지 않는다). 순찰의 후보 단계는 이 파일이 10분 안이고 설정·보호 목록 파일이 그때와 같으면 카드·스택·볼륨을 다시 스캔하지 않고 읽는다(후보의 `seen`은 그 회차가 시작한 시각이다). 회차가 이미 닫은 대상과 그 뒤에 사라진 카드는 읽을 때 빠지고, 읽지 못한 부분이 있던 회차는 파일을 지운다. 지우기 직전의 재확인은 그대로 스캔이다. 카드의 PR은 repo마다 `gh pr list --state all --limit 1000`을 한 번 불러 맵으로 만들어 판정한다. 목록이 1000개에서 잘렸거나 읽지 못했을 때만 카드별 `--head`·`--search`로 돌아간다.
 
 ## 왜 따로 두는가
 
@@ -88,16 +90,17 @@ reap-hard의 네 규칙(`card:strict`, `stack:gone`, `proc:listener`, `serve:dar
 
 ```bash
 python3 skills/reap-resources/scripts/sweep.py run --dry-run [--rule R] [--json]   # 모든 규칙을 소유한 것처럼 판정만. 아무것도 쓰지 않는다
-python3 skills/reap-resources/scripts/sweep.py install [--dry-run] [--here]        # LaunchAgent를 쓰고 올린다. --dry-run은 쓸 내용만 보인다
+python3 skills/reap-resources/scripts/sweep.py install [--dry-run]                 # Orca automation `sweep`을 켠다(= skills-sync setup enable sweep). --dry-run은 등록할 내용만 보인다
 python3 skills/reap-resources/scripts/sweep.py own <rule>                          # 이 규칙을 sweep이 처리한다
 python3 skills/reap-resources/scripts/sweep.py release <rule>                      # 옛 주체(reap-hard)에게 돌려준다
 python3 skills/reap-resources/scripts/sweep.py config                              # 기존 reap-hard 설정을 "sweep" 키로 이어 적은 출력
-python3 skills/reap-resources/scripts/sweep.py uninstall                           # LaunchAgent를 내린다
+python3 skills/reap-resources/scripts/sweep.py uninstall                           # 예전 install이 쓴 LaunchAgent를 내린다(automation은 그대로)
 ```
 
-- **`install`**: `io.github.jeongjaesoon.sweep` LaunchAgent가 reap-hard 자리에서 같은 주기(`interval`, 기본 900초)로 `sweep tick`을 돌린다. `tick`은 순찰(`orch patrol --if-due`) → 그림자 → `reap-hard run --no-patrol` → 실제 회차 순서이고, 한 단계가 실패하거나 예외를 던져도 다음을 돌리며 가장 큰 종료 코드를 돌려준다. reap-hard는 sweep이 소유한 규칙을 스스로 건너뛰므로, 소유하지 않은 규칙은 지금처럼 reap-hard가 처리한다. reap-hard를 실제 회차보다 먼저 두는 것은, 방금 `own`한 규칙의 sweep 첫 정상 회차(`sweep-last.json`)가 아직 없을 때 그 pass에서는 reap-hard가 계속 처리하게 하려는 것이다. 메인 git 체크아웃에서만 설치하고(워크트리는 launchd 아래서 사라진다, `--here`로 넘길 수 있다), 보호 목록 파일을 읽지 못하면 설치하지 않는다(일하던 job을 아무것도 못 하는 job으로 바꾸지 않으려는 것이다). reap-hard의 Orca 자동화와 옛 LaunchAgent는 사람이 끈다. 끄지 않으면 두 곳이 번갈아 돌지만, 둘 다 소유권 파일을 따르므로 같은 대상을 두 번 처리하지는 않는다.
+- **`install`**: Orca automation `agent-skills sweep`(에이전트 없음, [automation.md](automation.md))이 같은 주기(`interval`, 기본 1800초)로 `sweep tick`을 돌린다. `install`은 `skills-sync setup enable sweep`을 부르는 얇은 입구이고 정의는 `scripts/automations.py`의 `SWEEP` 하나뿐이다. LaunchAgent는 더 쓰지 않는다. 예전 install이 올린 LaunchAgent(`io.github.jeongjaesoon.sweep`)는 `uninstall`이 내린다. **한 번에 한 tick**: tick은 `<state>/sweep-tick.lock`을 기다리지 않고 잡고, 이미 잡혀 있으면(전환 중 LaunchAgent와 automation이 겹치거나 느린 tick이 다음 주기까지 간 경우) 아무것도 하지 않고 exit 0으로 끝난다. 그 아래의 reap-hard(`reap-hard.lock`)·그림자와 실제 회차(`sweep.lock`)·대상 잠금은 그대로다. `tick`은 순찰(`orch patrol --if-due`) → 그림자 → `reap-hard run --no-patrol` → 실제 회차 순서이고, 한 단계가 실패하거나 예외를 던져도 다음을 돌리며 가장 큰 종료 코드를 돌려준다. reap-hard는 sweep이 소유한 규칙을 스스로 건너뛰므로, 소유하지 않은 규칙은 지금처럼 reap-hard가 처리한다. reap-hard를 실제 회차보다 먼저 두는 것은, 방금 `own`한 규칙의 sweep 첫 정상 회차(`sweep-last.json`)가 아직 없을 때 그 pass에서는 reap-hard가 계속 처리하게 하려는 것이다. 메인 git 체크아웃에서만 켜고(automation이 이 체크아웃의 파일을 가리킨다), 보호 목록 파일을 읽지 못하면 켜지 않는다(일하던 job을 아무것도 못 하는 job으로 바꾸지 않으려는 것이다). `reap-hard` automation은 사람이 끈다. 끄지 않으면 두 곳이 번갈아 돌지만, 둘 다 소유권 파일과 `reap-hard.lock`을 따르므로 같은 대상을 두 번 처리하지는 않는다.
+- **LaunchAgent에서 automation으로 옮기기**: 켜는 쪽을 먼저 하고 내리는 쪽을 나중에 한다. (1) `skills-sync setup enable sweep`(또는 `sweep.py install`), (2) 첫 tick 확인: `skills-sync setup status`의 `sweep`이 켜짐이고 `orca_job.py status`(또는 `<state>/jobs/sweep.json`)의 마지막 실행이 ok이며 `<state>/sweep-last.json`이 갱신됐는지 본다, (3) `sweep.py uninstall`로 LaunchAgent를 내린다. 둘이 겹친 동안에도 위 tick 잠금이 한쪽만 돌게 한다. 되돌리려면 `skills-sync setup disable sweep`.
 - **설정 이어 적기**: `config`(와 `install`의 끝)는 `{"sweep": {interval, idle_minutes, workspaces, protect_file, serve_ranges, max_per_round}}`를 지금의 실제 값(기본값 포함)으로 출력한다. 설정 파일은 고치지 않는다. 사람이 `~/.claude/agent-skills.json`에 붙인다. 두 키가 모두 있으면 `sweep` 쪽이 이기고, 옛 `reap-hard` 키만 있어도 지금처럼 읽는다.
-- **`own <rule>`**: `sweep-owner.json`에 `{"<rule>": "sweep"}`을 적고 세대를 올린다. 다른 규칙의 줄은 그대로 둔다. 읽지 못하는 소유권 파일은 덮어쓰지 않는다. 같은 값이면 세대도 그대로다. `interval`은 설정의 `interval`을 따라가서, sweep 회차가 멈췄을 때 옛 주체가 되돌려받는 시점(세 주기)이 LaunchAgent 주기와 맞는다. sweep의 첫 정상 회차(`sweep-last.json`)가 생기기 전에는 옛 주체가 그 규칙을 계속 처리하므로 `own`과 첫 회차 사이에 빈틈이 없다.
+- **`own <rule>`**: `sweep-owner.json`에 `{"<rule>": "sweep"}`을 적고 세대를 올린다. 다른 규칙의 줄은 그대로 둔다. 읽지 못하는 소유권 파일은 덮어쓰지 않는다. 같은 값이면 세대도 그대로다. `interval`은 설정의 `interval`을 따라가서, sweep 회차가 멈췄을 때 옛 주체가 되돌려받는 시점(세 주기)이 automation 주기와 맞는다. sweep의 첫 정상 회차(`sweep-last.json`)가 생기기 전에는 옛 주체가 그 규칙을 계속 처리하므로 `own`과 첫 회차 사이에 빈틈이 없다.
 - **실제 회차(`run`)**: 순찰 판정 파일의 가장 최근 회차가 끝났고(`complete`), 한 시간 안이고, 이미 처리하지 않았을 때만 돈다. 후보 중 sweep이 소유한 규칙의 것만 `needs`, 연속 실패 휴식, `sweep.max_per_round`를 거친 뒤 한 대상씩 처리한다. 대상 잠금을 잡고, 잠금 안에서 소유권 파일을 다시 읽어 아직 sweep 소유인지 확인하고, 공용 검사(`guard.item`)를 거친 뒤 `reap_hard.act`를 부른다. `reap_hard.act`가 카드·스택·리스너·serve를 직접 다시 판정하고 판정 때 본 것만 닫는다. 처리 한 건마다 `sweep.jsonl`에 한 줄(`reap-actions.jsonl`과 같은 모양)을 남기고, 회차가 끝나면 `sweep-last.json`을 쓴다. 소유한 규칙이 없거나 처리할 후보가 없어도 쓴다. 옛 주체가 sweep 회차를 기다리는 "마지막 정상 회차"가 이것이다. 소유한 규칙의 후보가 있는데 sweep의 첫 정상 회차가 아직 없어 옛 주체가 쥐고 있던 회차는 처리한 것으로 적지 않는다. 그 회차가 `sweep-last.json`을 쓰고 나면 reap-hard가 그 규칙을 놓으므로, 다음 pass가 같은 회차를 한 시간 안에서 다시 보고 처리한다. 이미 처리한 회차를 한 번 더 보면 처리하지 않고, 회차가 한 시간 안이면 `sweep-last.json`의 시각만 갱신한다. 예산(10분)이 끝나면 처리 중이던 대상의 줄을 남기고 `sweep-last.json`은 쓰지 않는다.
 - **`run --dry-run`**: 같은 판정을 하되 실행 잠금(`sweep.lock`)도 대상 잠금도 기록도 처리도 없다(상태 폴더를 만들지도 않는다). 모든 규칙을 소유한 것처럼 판정하고 `소유`에 지금 누가 가졌는지를 적는다. `own` 전에 `reap-hard run --dry-run`과 같은 시각에 돌려 규칙마다 처리할 대상이 같은지 본다. 순찰 회차가 끝나지 않았거나 한 시간이 지났으면 거부하고 exit 1이다.
 - **이관 순서(규칙 하나씩)**: (1) `install` 뒤 그림자가 48시간 건강하고 `sweep diff`가 통과, (2) 그 규칙의 dry-run 두 개가 같음, (3) `own <rule>`, (4) 다음 회차들에서 `sweep.jsonl`과 `sweep-last.json`의 `failed`가 0, (5) 문제가 생기면 `release <rule>`로 다음 회차부터 reap-hard가 처리. 처리 주체가 바뀌어도 `sweep diff`는 `sweep.jsonl`의 처리를 옛 주체의 처리와 같게 세므로, 소유한 규칙의 그림자 행이 넘침으로 읽히지 않는다.
@@ -127,7 +130,7 @@ bin/reap-hard last            # 마지막 회차 한 줄
 bin/reap-hard install         # 메인 체크아웃에서. status, uninstall
 ```
 
-- `skills-sync setup` 목록에 있고, 보호 목록 파일이 있는 PC에서만 켠다. 파일이 없는 새 PC에서 `apply`가 묻지 않고 카드를 지우는 정리를 켜지 않게 하려는 것이다. 파일을 쓴 PC에서는 `setup.py`의 dry run이 `automation reap-hard: install`을 보여 주고 `--apply`(또는 다음 `skills-sync setup apply`)가 건다. 세션 순찰도 이 회차가 띄우므로 같이 켜진다([automation.md](automation.md#처음-설치할-때)). `reap-hard install`(LaunchAgent)은 남아 있지만 setup이 쓰지 않는다.
+- `skills-sync setup` 목록에 있고, 보호 목록 파일이 있는 PC에서만 켠다. 파일이 없는 새 PC에서 `apply`가 묻지 않고 카드를 지우는 정리를 켜지 않게 하려는 것이다. 파일을 쓴 PC에서는 `setup.py`의 dry run이 `automation reap-hard: install`을 보여 주고 `--apply`(또는 다음 `skills-sync setup apply`)가 건다. `patrol` 주기 작업이 꺼져 있으면 세션 순찰의 대체 실행도 이 회차가 맡는다([automation.md](automation.md#처음-설치할-때)). `reap-hard install`(LaunchAgent)은 남아 있지만 setup이 쓰지 않는다.
 
 - 동작한 것(또는 dry-run에서 동작했을 것)과 실패는 `~/.local/state/agent-skills/reap-hard.jsonl`에 한 줄씩 남는다. 회차 요약은 `reap-hard-last.json`에 남고, `orch brief`가 이 파일을 읽어 `🧹 reap-hard 14:07(3분 전) 닫음 2 · 실패 0 · 남김 41`처럼 보여 준다. 주기의 세 배가 지나도록 새 회차가 없으면 경고를 붙인다.
 - 같은 시각에 회차가 겹치면 뒤에 시작한 쪽이 바로 끝난다.
@@ -138,7 +141,7 @@ bin/reap-hard install         # 메인 체크아웃에서. status, uninstall
 `~/.claude/agent-skills.json`의 `"reap-hard"` 키에 둔다. 모두 선택이다. 컨테이너·볼륨 규칙의 키(`reap.stopped_containers`, `reap.labeled_volumes`, `reap.hours`)는 janitor와 같이 `"reap"` 아래에 있다.
 
 ```json
-{"reap-hard": {"interval": 900, "idle_minutes": 30, "workspaces": "~/orca/workspaces",
+{"reap-hard": {"interval": 1800, "idle_minutes": 30, "workspaces": "~/orca/workspaces",
                "protect_file": "~/.config/agent-skills/reap-protect.txt",
                "serve_ranges": [[4500, 4599], [32768, 60999]]}}
 ```
@@ -147,4 +150,4 @@ bin/reap-hard install         # 메인 체크아웃에서. status, uninstall
 
 ## 세션 순찰과의 연결
 
-회차를 마치면(dry-run이 아닐 때) `orch patrol --if-due`를 별도 프로세스로 띄운다. 순찰이 한 시간 안에 작업 중·사람 대기·Run 워커로 판정한 카드는 정리 대상에서 뺀다. 순찰 판정만으로 새로 닫히는 카드는 없다. 자세한 규칙은 [automation.md](automation.md)의 "세션 순찰". `reap-hard run --no-patrol`은 순찰을 띄우지 않는다.
+회차를 마치면(dry-run이 아닐 때) `orch patrol --if-due --fallback`을 별도 프로세스로 띄운다. 순찰의 주기는 `patrol` 주기 작업이 맡고, 이 호출은 마지막 라운드가 25분 넘게 지났을 때만 돈다(reap-hard 회차가 30분마다라서, 순찰 작업이 꺼져 있으면 회차마다 한 번 돈다). 순찰이 한 시간 안에 작업 중·사람 대기·Run 워커로 판정한 카드는 정리 대상에서 뺀다. 순찰 판정만으로 새로 닫히는 카드는 없다. 자세한 규칙은 [automation.md](automation.md)의 "세션 순찰". `reap-hard run --no-patrol`은 순찰을 띄우지 않는다.

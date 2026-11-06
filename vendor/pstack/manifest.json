@@ -207,7 +207,7 @@
     },
     {
       "upstream": "skills/swarm/SKILL.md",
-      "local": "skills/swarm/SKILL.md",
+      "local": "skills/fan-out/references/sweep.md",
       "mode": "adapted"
     },
     {
@@ -312,7 +312,7 @@
     },
     {
       "upstream": "skills/arena/SKILL.md",
-      "local": "skills/arena/SKILL.md",
+      "local": "skills/fan-out/references/compete.md",
       "mode": "adapted"
     },
     {
