@@ -1604,6 +1604,19 @@ class AutoQueue(Fixture):
         self.auto()
         self.assertEqual(len(self.mine()), 1)
 
+    def test_a_repo_renamed_into_scope_is_found_under_the_name_its_program_holds(self):
+        config(repos=["o/new"], auto_queue={"mode": "on"})
+        st = self.gh()
+        st["repos"] = {"o/r": {"nameWithOwner": "o/new", "isFork": False, "isArchived": False}}
+        self.write(st)
+        self.auto()
+        self.assertEqual(len(self.mine()), 1)
+
+    def test_the_programs_spelling_wins_over_a_differently_cased_entry(self):
+        config(repos=["O/R", "o/*"], auto_queue={"mode": "on"})
+        self.auto()
+        self.assertEqual(len(self.mine()), 1)
+
     def test_a_wildcard_repo_is_left_out_while_its_owner_cannot_be_checked(self):
         config(repos=["o/*"], auto_queue={"mode": "on"})
         st = self.gh()

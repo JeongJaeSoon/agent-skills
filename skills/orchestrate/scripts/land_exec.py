@@ -304,7 +304,8 @@ def auto_repos(ex, say=lambda msg: None):
     the auto-queue never writes a `ready` event or a request the executor would only refuse and withdraw. A wildcard
     repo whose owner cannot be checked (`gh api user` unanswered) is left out."""
     scope, out, seen, login = ex["scope"], [], set(), False
-    candidates = [e for e in ex["repos"] if not e.endswith("/*")] + program_repos()
+    # A program's recorded spelling comes first: programs_on matches it exactly, so a differently cased entry must not win.
+    candidates = program_repos() + [e for e in ex["repos"] if not e.endswith("/*")]
     for repo in candidates:
         if repo.casefold() in seen:
             continue
@@ -312,15 +313,18 @@ def auto_repos(ex, say=lambda msg: None):
         if land_scope.excluded(scope, repo):
             say(f"{repo}: skipped, it is in orchestrate.land_executor.exclude")
             continue
-        if not land_scope.how(scope, repo):
-            continue  # a program's repo the scope does not name: not this executor's
+        # A program's repo the scope does not name may still be covered under the name GitHub gives it now, as the
+        # executor judges it; when it is not, it is another executor's or none, and the round says nothing about it.
+        named = bool(land_scope.how(scope, repo))
         try:
             on, meta = prog.executor_for(repo)
         except SystemExit as e:
-            say(f"{repo}: skipped, the land executor's scope could not be judged: {str(e.code)[:200]}")
+            if named:
+                say(f"{repo}: skipped, the land executor's scope could not be judged: {str(e.code)[:200]}")
             continue
         if not on:
-            say(f"{repo}: skipped, orchestrate.land_executor does not cover it now (excluded, or renamed out of scope)")
+            if named:
+                say(f"{repo}: skipped, orchestrate.land_executor does not cover it now (excluded, or renamed out of scope)")
             continue
         current = meta["nameWithOwner"]
         if land_scope.how(scope, current) == "owner":
