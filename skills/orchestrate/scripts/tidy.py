@@ -19,7 +19,7 @@ it each close checks that the item is still as judged, and that nothing reopened
 inbox-external.jsonl: fleet.external_items reads the file and `closure` together, with `ext_mark` saying which lines came
 before the close or reopen.
 """
-import json, pathlib, re
+import json, pathlib, re, sys
 
 import fleet
 import store
@@ -294,6 +294,13 @@ def run(now=None, dry=False):
         for row, mark in wanted(db):
             store.close_unit(db, row, mark)
             rows.append(row)
+    try:  # owner orders: a would_close event, or the close once orchestrate.order_auto_close is on
+        import order_close  # imports this module, so not at the top
+        order_close.tick(state, prs_file, board_now, now)
+    except store.NotMigrated:
+        pass
+    except Exception as e:  # a bug there never costs the board its closes
+        print(f"tidy: order close pass failed: {e!r}", file=sys.stderr)
     return rows
 
 
