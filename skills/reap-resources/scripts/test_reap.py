@@ -1384,7 +1384,18 @@ for bad in ({"prefixes": ["v-"]}, {"prefixes": ["verify"]}, {"prefixes": []}, {"
     assert isinstance(reap.stack_volume_spec({"stack_volumes": bad}), str), bad
 SPEC = reap.stack_volume_spec({"stack_volumes": {"prefixes": ["verify-x-"], "label": "app.installation",
                                                   "protect": ["verify-x-keep"]}})
-assert SPEC == (("verify-x-",), "app.installation", frozenset({"verify-x-keep"})), SPEC
+assert SPEC == (("verify-x-",), ("app.installation",), frozenset({"verify-x-keep"})), SPEC
+# label takes a string (old form) or a list; both give the same tuple, a bad entry turns the kind off
+LIST_SPEC = reap.stack_volume_spec({"stack_volumes": {"prefixes": ["verify-x-"], "label": ["app.installation", "other.installation", "app.installation"],
+                                                       "protect": ["verify-x-keep"]}})
+assert LIST_SPEC == (("verify-x-",), ("app.installation", "other.installation"), frozenset({"verify-x-keep"})), LIST_SPEC
+assert reap.stack_volume_spec({"stack_volumes": {"prefixes": ["verify-x-"]}})[1] == ()
+for bad_label in ([1], ["ok.label", "com.docker.compose.project"], ["a b"], {"k": 1}, 7):
+    assert isinstance(reap.stack_volume_spec({"stack_volumes": {"prefixes": ["verify-x-"], "label": bad_label}}), str), bad_label
+assert reap.volume_owners({"app.installation": "verify-x-1", "other.installation": "verify-x-2"}, LIST_SPEC) == ["verify-x-1", "verify-x-2"]
+assert reap.volume_owners({"app.installation": "verify-x-1"}, SPEC) == ["verify-x-1"]
+assert reap.owner_labels({"stack_volumes": {"label": ["a.b", "c.d"]}}) == ("a.b", "c.d")
+assert reap.owner_labels({"stack_volumes": {"label": "a.b"}}) == ("a.b",)
 old = NOW - 7 * H
 vol = lambda name, created=old, **labels: {"name": name, "labels": labels, "created": created}
 P = "com.docker.compose.project"
@@ -1758,6 +1769,11 @@ with tempfile.TemporaryDirectory() as tmp:
     items, notes = scanned()
     want = {f"verify-app-{s}_db" for s in CLOSED} | {f"ws-verify-app-{s}-s1" for s in CLOSED} | {f"verify-app-{s}_data" for s in CLOSED}
     assert {i["name"] for i in items if i["target"]} == want, sorted(i["name"] for i in items if i["target"])
+    # T7b: the list form (one key, then an extra unused key) judges exactly like the old string form
+    for label in ([OWNER], [OWNER, "other.installation"], ["other.installation", OWNER]):
+        same, _ = scanned({**CFG2, "stack_volumes": {**SV, "label": label}})
+        key = lambda i: (i["key"], i["target"], i["why"], tuple(i["owners"]))
+        assert sorted(map(key, same)) == sorted(map(key, items)), label
     why = {i["name"]: i["why"] for i in items}
     assert "카드" in why["verify-app-incident_db"] and "카드" in why["ws-verify-app-incident-s1"], why
     assert "카드" in why["verify-app-incident_data"] and "열린 PR" in why["verify-app-pr-open_db"], why
@@ -1889,7 +1905,7 @@ with tempfile.TemporaryDirectory() as tmp:
     labeled.append({**split, "Labels": {**split["Labels"], ORIGIN: "verify-example"}})
     badspec = {**CFG2, "stack_volumes": {"prefixes": [], "label": OWNER}}
     assert not {i["name"] for i in scanned(badspec)[0] if i["target"]} & {"split-owner_db"}
-    assert reap.owner_label({"stack_volumes": ["x"]}) is None and reap.owner_label({"stack_volumes": {"label": 1}}) is None
+    assert reap.owner_labels({"stack_volumes": ["x"]}) == () and reap.owner_labels({"stack_volumes": {"label": 1}}) == ()
     labeled.pop()
     reap.run = world
 
