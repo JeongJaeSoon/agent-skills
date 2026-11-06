@@ -11,12 +11,15 @@ export type BriefPaneView = {
 
 // The verdict of `orch handoff ready` (skills/orchestrate/scripts/handoff.py).
 export type ClearBandView = {
-  // An orchestrator session past orchestrate.restart_at; leads and role-less sessions never show it.
+  // An orchestrator session whose restart is due (compactions.due); leads and role-less sessions never show it.
   show: boolean
   // Safe to /clear now: inbox empty, no question asked, no subagent running, handoff saved.
   ready: boolean
   context: number
-  threshold: number
+  // Why a restart is due, such as "3 auto-compactions"; empty when it is not.
+  due: string
+  // The session's handoff key; anything but "orchestrator" is not asked again for ten minutes.
+  key: string
   // Why not ready yet; empty when ready.
   reason: string
   // The session the verdict is for: a /clear starts a new one in the same process.
