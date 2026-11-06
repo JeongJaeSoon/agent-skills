@@ -60,19 +60,26 @@ def kill_group():
                 os.kill(pid, signal.SIGKILL)
 
 
-def stop_scans(scans):
-    """[(thread, done event)]. The main thread runs no command meanwhile, so the group's commands are the scans'. A
-    thread still running after CUT_WAIT_S is caught at exit, and what it spawns later by the runner. Python 3.12 marks a
-    running thread stopped once a join on it is interrupted (here by the cut), so the scans' own events say who is done."""
-    reap.CANCELLED.update(th.ident for th, _ in scans)
+def stop_scans(parts):
+    """Scan parts of collect() (their gate, ident, cancel and done). The main thread runs no command meanwhile, so the
+    group's commands are the scans'. A thread still running after CUT_WAIT_S is caught at exit, and what it spawns later
+    by the runner. Python 3.12 marks a running thread stopped once a join on it is interrupted (here by the cut), and a
+    start cut short leaves a thread whose ident is not yet known, so each part says itself whether it started and is done."""
+    started = []
+    for p in parts:
+        with p["gate"]:
+            p["cancel"] = True
+            if p["ident"] is not None:
+                reap.CANCELLED.add(p["ident"])
+                started.append(p)
     atexit.register(kill_group)
     start = time.monotonic()
-    while not all(done.is_set() for _, done in scans) and time.monotonic() - start < CUT_WAIT_S:
+    while not all(p["done"].is_set() for p in started) and time.monotonic() - start < CUT_WAIT_S:
         if time.monotonic() - start >= CUT_GRACE_S:
             kill_group()
-        for _, done in scans:
-            done.wait(0.1)
-    reap.CANCELLED.difference_update(th.ident for th, done in scans if done.is_set())  # one that ended before the mark
+        for p in started:
+            p["done"].wait(0.1)
+    reap.CANCELLED.difference_update(p["ident"] for p in started if p["done"].is_set())  # one that ended before the mark
 
 
 def scan_kinds(cfg, pressure_kinds, state_dir, now):
@@ -232,11 +239,15 @@ def collect(sources, now=None, reap_scan=None, hard=None, pressure_kinds=None, s
     # only this thread and cannot stop a command a scan thread waits on, and not every scan path goes through
     # reap.run, so a cut both marks the thread cancelled and kills what its process group runs (stop_scans).
     parts = [dict(fn=fn, owns=owns, sources={}, timings=Timings(), notes=[], cands=[], reports=[], alerts=[],
-                  done=threading.Event())
+                  done=threading.Event(), gate=threading.Lock(), ident=None, cancel=False)
              for fn, owns in ((reap_part, ("reap_scan",)), (hard_part, HARD_SOURCES))]
 
     def scan(p):
         try:
+            with p["gate"]:  # against stop_scans: either it sees this ident, or this thread sees the cut
+                p["ident"] = threading.get_ident()
+                if p["cancel"]:
+                    return
             p["fn"](p)
         finally:
             reap.CANCELLED.discard(threading.get_ident())  # the ident goes back for reuse
@@ -273,7 +284,7 @@ def collect(sources, now=None, reap_scan=None, hard=None, pressure_kinds=None, s
     finally:
         cut.update(n for n, p in enumerate(parts) if not p["done"].is_set())
         if cut:
-            stop_scans([(threads[n], parts[n]["done"]) for n in cut if threads[n].ident is not None])
+            stop_scans([parts[n] for n in cut])
         merge(True)
     for c in cands:
         missing = [n for n in c["needs"] if src.get(n) != "ok"]
