@@ -37,7 +37,7 @@
       "width": 262
     },
     "end-session": {
-      "skill_md_tokens": 4923,
+      "skill_md_tokens": 4911,
       "tokens": 114,
       "width": 368
     },
@@ -67,7 +67,7 @@
       "width": 291
     },
     "map-features": {
-      "skill_md_tokens": 1119,
+      "skill_md_tokens": 1113,
       "tokens": 79,
       "width": 279
     },
@@ -92,7 +92,7 @@
       "width": 198
     },
     "reap-resources": {
-      "skill_md_tokens": 10072,
+      "skill_md_tokens": 10197,
       "tokens": 107,
       "width": 370
     },
@@ -102,7 +102,7 @@
       "width": 329
     },
     "recall": {
-      "skill_md_tokens": 1373,
+      "skill_md_tokens": 1367,
       "tokens": 75,
       "width": 290
     },
@@ -147,7 +147,7 @@
       "width": 213
     },
     "teach": {
-      "skill_md_tokens": 1090,
+      "skill_md_tokens": 1084,
       "tokens": 65,
       "width": 240
     },
@@ -172,12 +172,12 @@
       "width": 242
     },
     "use-tracker": {
-      "skill_md_tokens": 3443,
+      "skill_md_tokens": 3456,
       "tokens": 64,
       "width": 243
     },
     "watch-mentions": {
-      "skill_md_tokens": 2038,
+      "skill_md_tokens": 2032,
       "tokens": 78,
       "width": 265
     },
@@ -192,7 +192,7 @@
       "width": 277
     },
     "write-plainly": {
-      "skill_md_tokens": 1404,
+      "skill_md_tokens": 1386,
       "tokens": 79,
       "width": 268
     },
@@ -202,7 +202,7 @@
       "width": 207
     },
     "write-ticket": {
-      "skill_md_tokens": 1945,
+      "skill_md_tokens": 1952,
       "tokens": 62,
       "width": 219
     }
