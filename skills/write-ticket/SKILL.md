@@ -125,7 +125,7 @@ relationships — and take **one** approval for the batch.
   list, not by a ticket.
 
 A follow-up is marked as one so growth after the initial design can be counted
-(`measure-delivery`, `orchestrate`). Shape it exactly as `use-tracker` "Follow-up (derived)
+(`reflect`'s measure mode, `orchestrate`). Shape it exactly as `use-tracker` "Follow-up (derived)
 tickets" says: label, first body lines, relation and parent; add blocked-by only when it truly
 blocks.
 

@@ -189,7 +189,7 @@ tickets filed.
 
 Only a finding classified NOW against the exit condition becomes a ticket. LATER goes on the
 deferred list above, DROP gets one line with its reason in the report or worklog. A NOW
-follow-up is shaped the same way everywhere so `measure-delivery` and the dashboard can count
+follow-up is shaped the same way everywhere so `reflect`'s measure mode and the dashboard can count
 it:
 
 - label `follow-up`

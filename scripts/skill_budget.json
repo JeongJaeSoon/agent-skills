@@ -71,13 +71,8 @@
       "tokens": 79,
       "width": 279
     },
-    "measure-delivery": {
-      "skill_md_tokens": 1115,
-      "tokens": 69,
-      "width": 269
-    },
     "orchestrate": {
-      "skill_md_tokens": 11661,
+      "skill_md_tokens": 11739,
       "tokens": 101,
       "width": 332
     },
@@ -107,9 +102,9 @@
       "width": 290
     },
     "reflect": {
-      "skill_md_tokens": 4752,
-      "tokens": 92,
-      "width": 318
+      "skill_md_tokens": 4919,
+      "tokens": 111,
+      "width": 384
     },
     "secure-fill": {
       "skill_md_tokens": 2928,
@@ -172,7 +167,7 @@
       "width": 242
     },
     "use-tracker": {
-      "skill_md_tokens": 3456,
+      "skill_md_tokens": 3457,
       "tokens": 64,
       "width": 243
     },
@@ -202,14 +197,14 @@
       "width": 207
     },
     "write-ticket": {
-      "skill_md_tokens": 1952,
+      "skill_md_tokens": 1953,
       "tokens": 62,
       "width": 219
     }
   },
   "totals": {
-    "always_tokens": 3290,
-    "always_width": 11817,
-    "skills_width": 10937
+    "always_tokens": 3240,
+    "always_width": 11614,
+    "skills_width": 10734
   }
 }
