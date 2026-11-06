@@ -82,6 +82,9 @@ for repo, branch in ((ON_MAIN, "main"), (ON_FEAT, "feat/x"), (ON_DEV, "dev")):
 git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop", cwd=ON_DEV)
 git("checkout", "-q", "-b", "develop", cwd=ON_DEV)
 git("symbolic-ref", "refs/remotes/upstream/HEAD", "refs/remotes/upstream/develop", cwd=ON_DEV)
+NEST = TMP / "nest"
+(NEST / "child").mkdir(parents=True)
+git("init", "-q", "-b", "main", cwd=NEST / "child")
 # A checkout holding a symlink to a folder outside it: `rm -rf` removes the link, not the folder.
 LINKED = TMP / "linked"
 LINKED.mkdir()
@@ -235,7 +238,7 @@ CASES = [
       "git push -f origin :", "git push origin +:", ("git push --force upstream develop", ON_DEV),
       "gh api -X PATCH repos/a/b/git/refs/heads/main --input force.json -F force=true",
       f"gh api -X PATCH repos/a/b/git/refs/heads/main --input {FORCE_BODY}",
-      ("git push --force --branches origin", ON_FEAT), (f"git -C{ON_MAIN} push --force origin HEAD", ON_FEAT),
+      ("git push --force --branches origin", ON_FEAT), (f"git -C{NEST} -Cchild push --force origin HEAD", ON_FEAT),(f"git -C{ON_MAIN} push --force origin HEAD", ON_FEAT),
       ("gh api -X PATCH repos/a/b/git/refs/heads/develop -F force=true -f sha=abc", ON_DEV),"git push --dry-run --no-dry-run --force origin main",
       "gh api -X PATCH 'repos/acme/app/git/refs/heads/main?x=y' -F force=true",
       """curl -X PATCH https://api.github.com/repos/acme/app/git/refs/heads/main -d '{"sha":"abc","force":true}'"""],
@@ -273,6 +276,8 @@ CASES = [
       "curl -sX DELETE https://api.github.com/repos/acme/app/branches/main/protection",
       "curl -X DELETE https://api.github.com/repos/acme/app/rulesets/1 --next -X GET https://api.github.com/user",
       "curl -X DELETE https://API.GITHUB.COM/repos/acme/app/rulesets/1",
+      "curl -X DELETE https://api.github.com/repos/acme/app/rulesets/1 -: -X GET https://api.github.com/user",
+      """curl -AGitHubCLI --json '{"name":"x"}' https://api.github.com/repos/acme/app/rulesets""",
       "curl -sXDELETE https://api.github.com/repos/acme/app/rulesets/1",
       "curl -X GET -X DELETE https://api.github.com/repos/acme/app/branches/main/protection",
       "gh api -X GET -X DELETE repos/acme/app/branches/main/protection",
@@ -298,7 +303,8 @@ CASES = [
      ["rm -rf /tmp/x", "rm -rf /private/tmp/x", f"rm -rf {TMPROOT}/job",
       ("rm -rf build", REPOX), ("rm -rf build dist", REPOX), ("rm -rf node_modules/.cache", REPOX),
       ("cd build && rm -rf out", REPOX), ("rm -rf cache-link", LINKED), ("find . -name '*.pyc' -delete", REPOX),
-      ("find build -delete", REPOX), ("find cache-link -type l -delete", LINKED), "find /tmp/x -name '*.log' -delete", "find /usr/local -name '*.old'",
+      ("find build -delete", REPOX), ("find cache-link -type l -delete", LINKED),
+      ("find -L -P cache-link -type l -delete", LINKED), "find /tmp/x -name '*.log' -delete", "find /usr/local -name '*.old'",
       ("find . -name '*.tmp' -exec rm {} ;", REPOX), "find /usr/local -exec ls {} ;", ("rm -rf ./dist", REPOX), (f"rm -rf {REPOX}/build", REPOX),
       "rm /usr/x/file.txt", "rm -f /usr/local/x.log", "echo rm -rf /usr/x", "git rm -r --cached x",
       'rm -rf "${DIR:?}/build"', "rm -ri", "rmdir /usr/x"]),

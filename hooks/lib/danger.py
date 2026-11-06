@@ -58,7 +58,10 @@ DOCKER_OPTS = {"-H", "--host", "-c", "--context", "--config", "-l", "--log-level
 COMPOSE_OPTS = {"-f", "--file", "-p", "--project-name", "--profile", "--env-file", "--project-directory", "--ansi",
                 "--progress", "--parallel"}
 GIT_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"}
-PUSH_VALUED = {"-o", "--push-option", "--repo", "--receive-pack", "--exec"}
+# curl's short flags that take no value, the only ones a cluster like `-sG` or `-sX` can hold before its letter:
+# `-AGitHub` is a User-Agent, not -G.
+NO_VALUE = "[sSvkLiIgfO#]"
+PUSH_VALUED ={"-o", "--push-option", "--repo", "--receive-pack", "--exec"}
 
 
 def level(cfg, key):
@@ -381,7 +384,7 @@ def last_method(w, long_opt):
             method = w[i + 1]
         elif x.startswith(long_opt + "="):
             method = x.split("=", 1)[1]
-        elif m := re.fullmatch(r"-[a-zA-Z]*X(\w*)", x):
+        elif m := re.fullmatch(rf"-{NO_VALUE}*X(\w*)", x):
             method = m.group(1) or (w[i + 1] if i + 1 < len(w) else method)
     return method
 
@@ -391,13 +394,13 @@ def curl_calls(w):
     each api.github.com URL it names (`--url=` ones too) and the transfer's words as text."""
     out, part = [], []
     for x in w[1:] + ["--next"]:
-        if x != "--next":
+        if x not in ("--next", "-:"):
             part.append(x)
             continue
         method = last_method(part, "--request")
         data = any(y[:2] in ("-d", "-F", "-T") or y.startswith(("--data", "--form", "--json", "--upload-file"))
                    for y in part)
-        get = any(y == "--get" or re.fullmatch(r"-[a-zA-Z]*G[a-zA-Z]*", y) for y in part)  # -G puts -d in the URL
+        get = any(y == "--get" or re.fullmatch(rf"-{NO_VALUE}*G{NO_VALUE}*", y) for y in part)  # -G puts -d in the URL
         urls = [m.group(1) or "/" for y in part
                 if (m := re.search(r"https?://api\.github\.com(?::\d+)?(/[^?#]*)?", y, re.I))]
         out.append(((method or ("POST" if data and not get else "GET")).upper(), urls, " ".join(part)))
@@ -446,11 +449,11 @@ def force_push_default(c, here):
     cannot be read, only main and master count."""
     w = c.words
     where = here
-    for i, x in enumerate(w):
+    for i, x in enumerate(w):  # each -C is relative to the one before it
         if x == "-C" and i + 1 < len(w):
-            where = expand(w[i + 1], here) or here
+            where = expand(w[i + 1], where) or where
         elif x.startswith("-C") and c.name == "git":  # `-C/path`
-            where = expand(x[2:], here) or here
+            where = expand(x[2:], where) or where
     if c.name in ("gh", "curl"):
         if c.name == "gh":
             method, endpoint, fields = api_call(w) if w[1:2] == ["api"] else ("", "", [])
@@ -555,9 +558,14 @@ def rm_outside(c, here, cwd):
     if top:
         roots.add(os.path.realpath(top))
     trash, outside = [], []
+    walks_links = False  # `find -L` and `-H` walk through a symlink they start at (the last of -L/-H/-P wins); rm removes the link
+    for y in c.words[1:] if c.name == "find" else []:
+        if y in ("-L", "-H", "-P"):
+            walks_links = y != "-P"
+        else:
+            break
     for x in operands:
-        # `find -L` and `-H` walk through a symlink they start at; rm removes the link itself.
-        path = expand(x, here, follow=c.name == "find" and any(y in ("-L", "-H") for y in c.words[1:3]))
+        path = expand(x, here, follow=walks_links)
         if not path or "$" in path or "`" in path:
             continue
         globbed = re.search(r"[*?\[]", path) is not None
