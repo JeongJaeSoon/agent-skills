@@ -27,7 +27,7 @@
       "width": 377
     },
     "dispatch-card": {
-      "skill_md_tokens": 4670,
+      "skill_md_tokens": 4739,
       "tokens": 71,
       "width": 262
     },
@@ -67,7 +67,7 @@
       "width": 291
     },
     "orchestrate": {
-      "skill_md_tokens": 11788,
+      "skill_md_tokens": 11837,
       "tokens": 101,
       "width": 332
     },
@@ -82,7 +82,7 @@
       "width": 198
     },
     "reap-resources": {
-      "skill_md_tokens": 10588,
+      "skill_md_tokens": 10712,
       "tokens": 107,
       "width": 370
     },
@@ -112,7 +112,7 @@
       "width": 346
     },
     "show-me-your-work": {
-      "skill_md_tokens": 1504,
+      "skill_md_tokens": 1507,
       "tokens": 56,
       "width": 223
     },
@@ -152,7 +152,7 @@
       "width": 242
     },
     "use-tracker": {
-      "skill_md_tokens": 2823,
+      "skill_md_tokens": 2877,
       "tokens": 64,
       "width": 243
     },
@@ -172,7 +172,7 @@
       "width": 268
     },
     "write-skill": {
-      "skill_md_tokens": 2766,
+      "skill_md_tokens": 2881,
       "tokens": 58,
       "width": 207
     },
