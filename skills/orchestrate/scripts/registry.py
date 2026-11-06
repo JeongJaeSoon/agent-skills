@@ -365,7 +365,8 @@ STORES = [
                "keys last sent to a person (janitor-human)"),
     Store("janitorruns", "S/janitor-runs.jsonl", {"janitor.run": CANONICAL}, ("reap:log_run",), ("janitor",),
           rule="one summary row per agentless janitor round that ran (precheck --act): what it acted on, skipped, failed, left; "
-               "none when the lock was held or the load condition unmet"),
+               "none when the lock was held or the load condition unmet, and a stop landing during the final write can add a "
+               "corrected second row"),
     Store("janitorlock", "S/janitor.lock", {"janitor.round": LOCK}, ("reap:janitor_lock",),
           rule="one janitor round at a time, the periodic and the load job alike"),
     Store("sweepstamps", "S/*-last.json", {"janitor.sweep_stamp": CANONICAL},
