@@ -54,7 +54,9 @@ def change(fn):
         store = read()
         out = fn(store)
         cutoff = fleet.iso(fleet.utcnow() - dt.timedelta(seconds=DONE_KEEP_S))
-        gone = {k for k, r in store["rows"].items() if (r.get("done_at") or "9") < cutoff}
+        # An overlay that closes a generated row stays while that row does: dropped, the row would open again.
+        made = stage_auto.read()["rows"]
+        gone = {k for k, r in store["rows"].items() if (r.get("done_at") or "9") < cutoff and not (r.get("overlay") and k in made)}
         store["rows"] = {k: r for k, r in store["rows"].items() if k not in with_descendants(store["rows"], gone)}
         store["order"] = [k for k in store["order"] if k in store["rows"]]
         fleet.write_atomic(path(), json.dumps(store, ensure_ascii=False, indent=1) + "\n")

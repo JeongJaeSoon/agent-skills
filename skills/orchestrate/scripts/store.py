@@ -1332,7 +1332,9 @@ def ack_change(fn, ts):
 
 def _stage_hidden(rows, cutoff):
     """Ids of finished rows older than the cutoff and of the rows under them: stored, not shown."""
-    gone = {k for k, r in rows.items() if r.get("done_at") and r["done_at"] < cutoff}
+    # An overlay over a generated row is not aged out: hidden, the row it closes would open again (it sits on nothing
+    # once that row is gone, and merged_counted ignores it).
+    gone = {k for k, r in rows.items() if r.get("done_at") and r["done_at"] < cutoff and not r.get("overlay")}
     while more := {k for k, r in rows.items() if r.get("parent") in gone} - gone:
         gone |= more
     return gone

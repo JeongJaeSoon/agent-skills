@@ -81,6 +81,23 @@ assert set(stored) == {"id", "cells", "overlay", "created_at", "done_at"} and st
 table = {r["id"]: r for r in stages.table(state)["rows"]}
 assert table["kappa/K-2"]["done_at"] == stored["done_at"] and table["kappa/K-2"]["pr"] == "acme/app#23", "title, PR and place stay the tick's"
 
+# The week a finished row is kept does not reopen a generated row that is still there: its closing overlay stays while
+# the generated row does, in the file and in the DB's hiding of old rows.
+def aged(path):
+    store = json.loads(path.read_text())
+    store["rows"]["kappa/K-2"]["done_at"] = fleet.iso(now - dt.timedelta(days=8))
+    path.write_text(json.dumps(store))
+
+
+aged(stages.path())
+stages.set_next(["unrelated write"])
+assert "kappa/K-2" in stages.read()["rows"], "the write pruned a closing overlay whose generated row is alive"
+assert {r["id"]: r for r in stages.table(state)["rows"]}["kappa/K-2"]["done_at"]
+import store as db_store  # noqa: E402
+cut = fleet.iso(now - dt.timedelta(days=7))
+assert db_store._stage_hidden({"o": {"overlay": True, "done_at": "2020-01-01T00:00:00Z"},
+                               "r": {"done_at": "2020-01-01T00:00:00Z"}}, cut) == {"r"}
+
 stages.add("hand", "recorded by hand")
 stages.finish("hand")
 assert set(stages.read()["rows"]["hand"]) == {"id", "cells", "created_at", "title", "pr", "parent", "done_at"}, "no overlay flag"
