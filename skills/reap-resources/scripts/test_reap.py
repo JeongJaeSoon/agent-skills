@@ -911,6 +911,22 @@ with tempfile.TemporaryDirectory() as tmp:
     reap.reap_plan({"hours": 6, "repos": [], "kinds": ["user-folder"], "items": []}, {}, scheduled_only=True, out=lambda s: None)
     assert not reap.user_folder_due(reap.STATE, kind="user-folder"), "a round with nothing left stamps the day"
     reap.scan, reap.STATE = saved_scan, saved_state
+# The scheduled round runs every effect itself, with no agent: each scheduled kind's targets reach reap_plan, and the
+# only one held back for a person is the browser window (closing it needs a URL check in a browser). The autoMode rule
+# that let a janitor turn run `reap --plan` covered nothing else, so this is what lets it go.
+assert reap.HUMAN_KINDS == ("chrome-window",), reap.HUMAN_KINDS
+with tempfile.TemporaryDirectory() as tmp:
+    every = [{"key": f"{k}:/x", "kind": k, "target": True, "why": "끝남"} for k in reap.SCHEDULED]
+    seen = []
+    def capture(plan, cfg, scheduled_only, deadline, res):
+        seen.extend(i["kind"] for i in plan["items"])
+        res.update({"acted": [], "skipped": [], "failed": [], "left": [], "unchecked": False, "refused": None, "notes": []})
+    reap.act_round({"hours": 6, "repos": [], "kinds": list(reap.SCHEDULED), "items": every}, {}, pathlib.Path(tmp),
+                   time.monotonic(), None, lambda argv, check: "{}", capture, now=1000)
+    # Spelled out on purpose: deriving it from reap.SCHEDULED would pass when a kind is dropped from that list.
+    assert sorted(seen) == sorted(["card", "orca-worker", "tmpdir", "gui-app", "evidence", "remote-branch", "compose-stack",
+                                   "stack-volume", "stopped-container", "labeled-volume", "user-folder", "program",
+                                   "state-file"]), seen
 # A round that fails while planning (before act_round) still leaves its row.
 with tempfile.TemporaryDirectory() as tmp:
     env = {**os.environ, "AGENT_SKILLS_STATE": tmp}

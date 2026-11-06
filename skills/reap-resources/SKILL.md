@@ -194,6 +194,14 @@ it scans the janitor kinds (user-folder, program and state-file at most once a d
 own path on it in the same process: the scheduled kinds only, each target re-scanned and acted on only with the same
 identity, inside its lock, after the guard passes again. A target whose act failed rests a day, on its own
 (`<state>/janitor-fails.json`); a chrome-window is never acted on, since closing it needs a URL check in a browser.
+Nothing a janitor turn used to run through an auto-mode allow rule is left to an agent: the file moves, renames, the
+GUI-app SIGTERM, `docker compose down`, the stack-volume and leftover removals, worker release, the card's terminal
+closes and removal, and the round's own records all run in this process. The one effect that stays outside is a browser
+window: closing it, and retiring its ledger line, go to the person. (The Run now prompt asks an agent to run
+`precheck --act`, not `reap --plan`.) A job registered before `--act` existed still runs the plan-only `precheck` and
+starts an agent that runs `reap --plan`; `orca automations list` shows a precheck without `--act` for it. Bring it up
+to date with `skills-sync setup enable janitor`, and again with `enable janitor-load` when that job is registered (one
+`enable` does not touch the other), then read both prechecks back, before an auto-mode rule for `reap --plan` is removed.
 What a person has to look at (cards judged 사람 결정, chrome windows, resting targets) goes to `reap.inbox_to` as one
 message, sent again only when a key not in the last sent set appears. Each round leaves one row in
 `<state>/janitor-runs.jsonl` (targets, acted, skipped, failed, left past the 480-second budget, error; an act still running at 570 seconds is cut and recorded as failed), the only record
