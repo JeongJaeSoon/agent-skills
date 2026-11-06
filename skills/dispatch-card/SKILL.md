@@ -73,7 +73,8 @@ session as not the human's, so an approval sent afterwards is refused. The brief
   rows of `orchestrate` `references/brief.md` "Single worker". Only the `APPROVED:` row reaches the
   first prompt (a heading or bullet does not); the card reads the other two in the brief. APPROVED
   cites each owner quote by the `orch decide answer` id that recorded it, as `오너(d150, <date>)`;
-  `skills-sync card` refuses an id the store does not hold as answered. A card
+  `skills-sync card` refuses an id the store does not hold as answered, and a brief with no
+  `APPROVED:` row: write `APPROVED: none` when nothing beyond the normal flow is approved. A card
   that lands its own PR carries the merge there (`APPROVED: required checks green + independent
   review Act-on 0: merge with orch land` plus the human's words and date); without it, it stops at
   READY. Before an item goes into HUMAN ONLY, check for an agent-only path first (a script, an
