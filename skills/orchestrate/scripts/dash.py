@@ -38,7 +38,7 @@ Store: $PROGRAMS_HOME or ~/.claude/programs. The dashboard writes only under <sl
 Fleet state: $ORCH_FLEET_STATE or ~/.local/state/agent-skills/dashboard (see fleet.py). ORCH_FLEET=off disables it,
 ORCH_SKILLS=off disables only the skill usage collect, and ORCH_PR_STATS=off only the PR stats collect.
 """
-import concurrent.futures, copy, datetime as dt, fcntl, functools, hashlib, http.server, itertools, json, os, pathlib, plistlib, re, shutil, signal, socket, subprocess, sys, tempfile, threading, time, urllib.request
+import concurrent.futures, copy, datetime as dt, fcntl, functools, hashlib, http.server, itertools, json, os, pathlib, plistlib, re, shutil, signal, socket, subprocess, sys, tempfile, threading, time, urllib.parse, urllib.request
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -1860,10 +1860,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def fleet_get(self, path):
         if path == "/api/fleet/state":
-            if time.monotonic() - FLEET_VIEWED[0] > FLEET_VIEW_S:
-                FLEET_FORCE[0] = True  # the page just opened: runs and every open PR now, not when their turn comes
-                FLEET_WAKE.set()
-            FLEET_VIEWED[0] = time.monotonic()
+            # Only the page says it is looking (?viewed=1, app.js on a visible tab). A script or a curl reading the file
+            # used to count as a view and kept the 10 s Orca poll and the per-tick PR probes running.
+            if urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query, keep_blank_values=True).get("viewed") == ["1"]:
+                if time.monotonic() - FLEET_VIEWED[0] > FLEET_VIEW_S:
+                    FLEET_FORCE[0] = True  # the page just opened: runs and every open PR now, not when their turn comes
+                    FLEET_WAKE.set()
+                FLEET_VIEWED[0] = time.monotonic()
             f = fleet.state_dir() / "state.json"
             if not f.exists():
                 return self.send(503, b'{"error":"first fleet collect has not finished"}')
@@ -1898,12 +1901,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == "/api/fleet/sent":
             # The `orch sent` log is read on every poll, like the brief: a send shows on the next poll, not the next collect.
             days = re.search(r"[?&]days=(\d{1,2})\b", self.path)
-            try:
-                body = sent.page(FLEET.sent if FLEET else [], max(1, min(int(days.group(1)), sent.DAYS_MAX)) if days else 1,
-                                 inbox_since=getattr(FLEET, "sent_inbox_since", None))
-            except Exception as e:  # the page says what failed (fleet.js shows "error") instead of never loading
-                body = {"error": f"sent: {type(e).__name__}: {e}"}
-            return self.send_cached(json.dumps(body, ensure_ascii=False).encode())
+            n = max(1, min(int(days.group(1)), sent.DAYS_MAX)) if days else 1
+            cache = SENT_CACHES.setdefault(n, RenderCache(lambda v: "error" not in v, sent_signature))
+            return self.send_cached(json.dumps(cache.get(lambda: sent_render(n)), ensure_ascii=False).encode())
         if path == "/api/fleet/token":
             return self.send(200, json.dumps({"token": TOKEN}).encode())
         m = re.fullmatch(r"/api/fleet/avatar/([A-Za-z0-9-]{1,39}(?:\[bot\])?)", path)
@@ -2335,10 +2335,35 @@ def db_version():
     return tuple(file_key(pathlib.Path(f"{p}{suffix}")) for suffix in ("", "-wal"))
 
 
+def state_root():
+    return pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()
+
+
+def keys_of(paths):
+    return tuple(file_key(p) for p in paths)
+
+
+def pressure_signature():
+    """pressure.py history reads its own files beside the others in the state root (history, queue, plan, reading), the
+    thresholds and interval in agent-skills.json, and whether its LaunchAgent plist is installed."""
+    # reap.py reads the default path whatever AGENT_SKILLS_CONFIG says; this server's own settings use the override
+    configs = {pathlib.Path(p).expanduser() for p in ("~/.claude/agent-skills.json", os.environ.get("AGENT_SKILLS_CONFIG") or "")
+               if p}
+    plists = sorted(pathlib.Path("~/Library/LaunchAgents").expanduser().glob("*pressure-watch.plist"))
+    return keys_of(sorted(state_root().glob("pressure*")) + [PRESSURE, *sorted(configs)] + plists)
+
+
+def sent_signature():
+    """What /api/fleet/sent is built from: the fleet's sent rows (replaced once a runs cycle), and the `orch sent` log files."""
+    f = FLEET
+    log = sorted(sent.sent_dir().glob("*.jsonl")) + [fleet.state_dir() / "sends.jsonl"]
+    return (id(getattr(f, "sent", None)), len(getattr(f, "sent", None) or []), getattr(f, "sent_inbox_since", None), keys_of(log))
+
+
 def render_signature():
     """What the brief's render reads, cheaply: the collector's files by mtime and size, the store by db_version."""
     out = [db_version()]
-    root = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()
+    root = state_root()
     # board.py reads patrol-verdicts.json beside the fleet's dir, rowstate.py reads the janitor's under AGENT_SKILLS_STATE
     roots = [root] + ([fleet.state_dir().parent] if fleet.state_dir().parent != root else [])
     paths = [fleet.state_dir() / n for n in RENDER_FILES] + [r / n for r in roots for n in RENDER_ROOT_FILES]
@@ -2359,12 +2384,12 @@ class RenderCache:
     """One rendered answer, kept while its inputs' signature is unchanged and it is younger than RENDER_MAX_AGE_S.
     Only a good answer is kept: a timeout or a missing renderer is asked again on the next request."""
 
-    def __init__(self, ok):
-        self.ok, self.lock, self.sig, self.at, self.value = ok, threading.Lock(), None, 0.0, None
+    def __init__(self, ok, signature=None):
+        self.ok, self.signature, self.lock, self.sig, self.at, self.value = ok, signature, threading.Lock(), None, 0.0, None
 
     def get(self, build):
         with self.lock:  # a second request waits for the first render instead of starting its own child
-            sig, now = render_signature(), time.monotonic()
+            sig, now = (self.signature or render_signature)(), time.monotonic()
             if self.value is not None and sig == self.sig and now - self.at < RENDER_MAX_AGE_S:
                 return self.value
             value = build()
@@ -2423,9 +2448,28 @@ def periodic_render():
 PRESSURE = HERE.parents[1] / "reap-resources" / "scripts" / "pressure.py"
 
 
+SENT_CACHES = {}  # days -> RenderCache, keyed by the fleet's sent rows and the log files
+
+
+def sent_render(days):
+    try:
+        return sent.page(FLEET.sent if FLEET else [], days, inbox_since=getattr(FLEET, "sent_inbox_since", None))
+    except Exception as e:  # the page says what failed (fleet.js shows "error") instead of never loading
+        return {"error": f"sent: {type(e).__name__}: {e}"}
+
+
+PRESSURE_CACHES = {}  # hours -> RenderCache: the page asks for 6, 24 and so on, each answer is its own
+
+
 def pressure_report(hours=6):
-    """reap-resources' pressure history, run per request like the brief: its files, thresholds and config are that
-    script's, so this server keeps no copy of them. It reads files only; the LaunchAgent's round does the measuring."""
+    """reap-resources' pressure history, in a child process: its files, thresholds and config are that script's, so this
+    server keeps no copy of them. It reads files only; the LaunchAgent's round does the measuring. Run again only when
+    one of those files changed (RenderCache), else the page's poll re-read a day of history for nothing."""
+    cache = PRESSURE_CACHES.setdefault(hours, RenderCache(lambda v: "error" not in v, pressure_signature))
+    return cache.get(lambda: pressure_render(hours))
+
+
+def pressure_render(hours):
     try:
         r = subprocess.run([sys.executable, str(PRESSURE), "history", "--hours", str(hours)], capture_output=True,
                            text=True, timeout=15)
