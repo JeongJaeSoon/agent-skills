@@ -29,6 +29,10 @@ Usage: orch <command> <slug> [options]
                                      B's branch), or one found after dispatch. Start-after edges are
                                      Orca task deps (task-create --deps), read from the Run
   queue <slug> [--json]              the land order and why each PR is not moving
+  overlap <slug> --table [--max-open N]
+                                     the files two or more open PRs of the repo change (any program), the PRs
+                                     in the order to land them (ready first, then by number; advice only), and an
+                                     OVER line for a file with more than N open PRs
   overlap <slug> [--paths P,P]       open program PRs with no land-after relation that change one file
                                      (or one exclusive_paths glob): stack the later on the earlier. With
                                      --paths, the open PRs a unit not started yet would collide with.
@@ -1016,8 +1020,68 @@ def cross_overlaps(files, theirs, rows, stacks=None, paths=None, unread=()):
     return out
 
 
+def repo_verdicts(repo, home=None):
+    """({PR: its latest verdict event across every program on `repo`}, ["program ledger X" for each unreadable one]).
+    A PR can be in several programs' ledgers; the newest verdict is the one that counts."""
+    home = home or HOME
+    best, unknown = {}, []
+    for d in sorted(home.iterdir()) if home.is_dir() else []:
+        if d.name.startswith((".", "_")) or not (d / "program.json").is_file():
+            continue
+        try:
+            if json.loads((d / "program.json").read_text())["repo"].lower() != repo.lower():
+                continue
+            led = d / "ledger.jsonl"
+            events = [json.loads(l) for l in led.read_text().splitlines() if l.strip()] if led.exists() else []
+            for e in events:
+                if e.get("ev") == "verdict" and type(e.get("pr")) is int:
+                    if e["pr"] not in best or parse_ts(e["ts"]) >= parse_ts(best[e["pr"]]["ts"]):
+                        best[e["pr"]] = e
+        except (OSError, ValueError, AttributeError, TypeError, KeyError):
+            unknown.append(f"program ledger {d.name}")
+    return best, unknown
+
+
+def table_facts(rows, verdicts, no_ci):
+    """{PR: what overlap_table orders by} from the open PR listing and repo_verdicts."""
+    out = {}
+    for r in rows:
+        failed, pending, _ = ci_summary(r.get("statusCheckRollup"), no_ci)
+        v = verdicts.get(r["number"])
+        state = ("none" if not v else "fail" if v.get("result") != "pass"
+                 else "current" if v.get("sha") == r.get("headRefOid") else "stale")
+        out[r["number"]] = {"verdict": state, "ci": "failed" if failed else "pending" if pending else "ok",
+                            "merge_state": r.get("mergeStateStatus"), "draft": bool(r.get("isDraft")),
+                            "base": r.get("baseRefName") or "main"}
+    return out
+
+
+def cmd_overlap_table(p, argv):
+    """The hot files of every open PR on the repo, whichever program owns it, and the order to land them in."""
+    import overlap_table
+    repo = p.cfg["repo"]
+    limit = opt(argv, "--max-open")
+    if limit is not None and not (limit.isdigit() and int(limit) > 0):
+        sys.exit("--max-open takes a positive integer")
+    rows = open_rows(repo)
+    files, unread = {}, []
+    for r in rows:
+        changed = rest_files(repo, r["number"])
+        if changed is None:
+            unread.append(r["number"])
+        else:
+            files[r["number"]] = changed
+    verdicts, unknown = repo_verdicts(repo)
+    if len(rows) >= OPEN_LIMIT:
+        unknown.append(f"open PR listing (stops at {OPEN_LIMIT})")
+    print("\n".join(overlap_table.hot_table(files, table_facts(rows, verdicts, no_ci_repo(repo)),
+                                            int(limit) if limit else None, unread, unknown)))
+
+
 def cmd_overlap(argv):
     p = Program(argv[0])
+    if "--table" in argv:
+        return cmd_overlap_table(p, argv)
     rows, tasks = open_rows(p.cfg["repo"]), run_tasks(p.cfg["run"])
     events = p.events()
     prs, files, theirs, unread = cross_inputs(p.slug, p.cfg["repo"], events, rows,
