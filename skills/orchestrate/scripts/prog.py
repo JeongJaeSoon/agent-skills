@@ -2223,11 +2223,10 @@ def author_sessions(branch):
             rows = out["terminals"]
             if out.get("truncated") or not isinstance(rows, list):
                 return []
-            # An empty or partial answer from a host Orca did not reach says nothing about that worktree's sessions.
-            # Another host being omitted is a normal scope limit and does not matter here.
+            # An answer is trusted only when it says it covered this worktree's host: an empty or partial answer from
+            # a host Orca did not reach says nothing about its sessions. Another host being omitted does not matter.
             scope, host = out.get("hostScope") or {}, w.get("hostId")
-            omitted = scope.get("omittedHostIds") or []
-            if host in omitted or (omitted and host is None) or (scope.get("hostIds") and host not in scope["hostIds"]):
+            if not host or host not in (scope.get("hostIds") or []) or host in (scope.get("omittedHostIds") or []):
                 return []
             handles |= {t["handle"] for t in rows if isinstance(t.get("handle"), str) and t["handle"]}
         return sorted(handles)

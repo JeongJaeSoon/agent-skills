@@ -37,9 +37,10 @@ if a[:2] == ["orchestration", "send"]:
     st["sent"] = st.get("sent", []) + [a[a.index("--to") + 1]]; json.dump(st, open(path, "w")); sys.exit()
 if a[:2] == ["worktree", "list"]:  # a card holds each PR's branch (b<n>): orch verdict asks its terminals by id
     st = json.load(open(os.environ["FAKE_GH_STATE"]))
-    print(json.dumps({"worktrees": [{"id": "w" + n, "branch": f"refs/heads/b{n}"} for n in st["prs"]]})); sys.exit()
+    print(json.dumps({"worktrees": [{"id": "w" + n, "hostId": "local", "branch": f"refs/heads/b{n}"} for n in st["prs"]]})); sys.exit()
 if a[:2] == ["terminal", "list"]:  # the card holding the PR's branch: orch verdict records it as the author
-    print(json.dumps({"terminals": [{"handle": "term_author"}]})); sys.exit()
+    print(json.dumps({"terminals": [{"handle": "term_author"}],
+                      "hostScope": {"hostIds": ["local"], "omittedHostIds": []}})); sys.exit()
 os.execv(sys.executable, [sys.executable, os.environ["FAKE_ORCA_INNER"], *a])
 '''
 BIN.mkdir(parents=True)
@@ -320,13 +321,15 @@ class LandExec(unittest.TestCase):
         real = prog.orca_json
 
         def fake(worktrees, terminals, **listing):
+            """Orca as it answers on one host: worktrees carry hostId "local" and each terminal answer says it
+            covered that host, unless the case sets its own."""
             def orca(*a):
                 if a[:2] == ("worktree", "list"):
-                    return {"worktrees": worktrees, **listing}
+                    return {"worktrees": [{"hostId": "local", **w} for w in worktrees], **listing}
                 answer = terminals[a[-1]]
                 if isinstance(answer, BaseException):
                     raise answer
-                return answer
+                return {"hostScope": {"hostIds": ["local"], "omittedHostIds": []}, **answer}
             return orca
 
         held = [{"id": "w1", "branch": "refs/heads/b"}, {"id": "w2", "branch": "refs/heads/b"},
@@ -352,18 +355,22 @@ class LandExec(unittest.TestCase):
                         {"terminals": [{"handle": "term_new"}], "truncated": True}):
                 prog.orca_json = fake(held, {"id:w1": first, "id:w2": bad})
                 self.assertEqual(prog.author_sessions("b"), [], bad)
-            # A terminal answer that left out the worktree's own host proves nothing about its sessions; another
-            # host being left out is an ordinary scope limit and the union stands.
-            on = [{**held[0], "hostId": "h1"}, {**held[1], "hostId": "h2"}]
+            # A terminal answer is trusted only when it covered the worktree's own host: an empty answer from a host
+            # Orca did not reach proves nothing. Another host being left out is an ordinary scope limit.
             old, new = {"terminals": [{"handle": "term_old"}]}, {"terminals": []}
-            prog.orca_json = fake(on, {"id:w1": old, "id:w2": {**new, "hostScope": {"hostIds": ["h1"], "omittedHostIds": ["h2"]}}})
-            self.assertEqual(prog.author_sessions("b"), [])
-            prog.orca_json = fake(on, {"id:w1": old, "id:w2": {**new, "hostScope": {"hostIds": ["h1"]}}})
-            self.assertEqual(prog.author_sessions("b"), [])
-            prog.orca_json = fake(on, {"id:w1": old, "id:w2": {**new, "hostScope": {"hostIds": ["h2"], "omittedHostIds": ["h9"]}}})
+            on = [{**held[0], "hostId": "h1"}, {**held[1], "hostId": "h2"}]
+            covered = {"hostIds": ["h1", "h2"], "omittedHostIds": []}
+            for scope in ({"hostIds": ["h1", "h2"], "omittedHostIds": ["h2"]},  # listed and omitted
+                          {"hostIds": ["h1"], "omittedHostIds": ["h2"]},        # omitted only
+                          {"hostIds": ["h1"]},                                  # not covered, nothing omitted
+                          {"hostIds": []}, {}):                                 # no host scope at all
+                prog.orca_json = fake(on, {"id:w1": {**old, "hostScope": covered}, "id:w2": {**new, "hostScope": scope}})
+                self.assertEqual(prog.author_sessions("b"), [], scope)
+            prog.orca_json = fake(on, {"id:w1": {**old, "hostScope": covered},
+                                       "id:w2": {**new, "hostScope": {"hostIds": ["h1", "h2"], "omittedHostIds": ["h9"]}}})
             self.assertEqual(prog.author_sessions("b"), ["term_old"])
-            hostless = [{**held[0], "hostId": "h1"}, held[1]]
-            prog.orca_json = fake(hostless, {"id:w1": old, "id:w2": {**new, "hostScope": {"omittedHostIds": ["h9"]}}})
+            hostless = [{**held[0], "hostId": "h1"}, {**held[1], "hostId": None}]
+            prog.orca_json = fake(hostless, {"id:w1": {**old, "hostScope": covered}, "id:w2": {**new, "hostScope": covered}})
             self.assertEqual(prog.author_sessions("b"), [])
             # A truncated worktree list or an unanswered host may hide a holder.
             ok = {"id:w1": {"terminals": [{"handle": "term_new"}]}}
