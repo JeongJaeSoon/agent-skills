@@ -26,13 +26,23 @@ def writes_plist(source):
             mods |= {a.asname or a.name for a in n.names if a.name == "plistlib"}
         elif isinstance(n, ast.ImportFrom) and n.module == "plistlib":
             funcs |= {a.asname or a.name for a in n.names if a.name in ("dump", "dumps")}
+    # Any reference counts, called or passed on (`map(plistlib.dumps, ...)`, `w = plistlib.dumps`), and so do the
+    # indirect routes (`from plistlib import *`, getattr on the module, importlib): a reader uses loads and none of these.
     for n in ast.walk(tree):
+        if isinstance(n, ast.Attribute) and n.attr in ("dump", "dumps") and isinstance(n.value, ast.Name) \
+                and n.value.id in mods:
+            return True
+        if isinstance(n, ast.Name) and n.id in funcs:
+            return True
+        if isinstance(n, ast.ImportFrom) and n.module == "plistlib" and any(a.name == "*" for a in n.names):
+            return True
         if isinstance(n, ast.Call):
-            f = n.func
-            if isinstance(f, ast.Attribute) and f.attr in ("dump", "dumps") and isinstance(f.value, ast.Name) \
-                    and f.value.id in mods:
+            name = n.func.id if isinstance(n.func, ast.Name) else getattr(n.func, "attr", "")
+            args = [a for a in n.args if isinstance(a, ast.Name)]
+            if name == "getattr" and any(a.id in mods for a in args):
                 return True
-            if isinstance(f, ast.Name) and f.id in funcs:
+            if name in ("import_module", "__import__") and any(isinstance(a, ast.Constant) and a.value == "plistlib"
+                                                               for a in n.args):
                 return True
     return False
 
@@ -57,7 +67,10 @@ src = {"a/ok.py": "import plistlib\nplistlib.dumps(x)", "b/new.py": "import plis
        "a/test_ok.py": "import plistlib\nplistlib.dumps(1)", "c/read.py": "import plistlib\nplistlib.loads(b)", "a/old.py": "pass"}
 # spellings that must still count, and mentions that must not
 for yes in ("import plistlib\nplistlib.dumps (spec)", "from plistlib import dumps\ndumps(spec)",
-            "from plistlib import dump as d\nd(spec, f)", "import plistlib as pl\npl.dump(spec, f)", "def broken(:"):
+            "from plistlib import dump as d\nd(spec, f)", "import plistlib as pl\npl.dump(spec, f)", "def broken(:",
+            "import plistlib\nserialize = plistlib.dumps", "import plistlib\nlist(map(plistlib.dumps, [s]))",
+            "import plistlib\ngetattr(plistlib, 'du' + 'mps')(s)", "from plistlib import *\ndumps(s)",
+            "import importlib\nimportlib.import_module('plistlib').dumps(s)"):
     assert writes_plist(yes), yes
 for no in ("import plistlib\n# plistlib.dumps(spec)\nplistlib.loads(b)", "x = 'plistlib.dumps(spec)'", "dumps(spec)",
            "import json\njson.dumps(spec)"):
