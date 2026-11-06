@@ -1361,10 +1361,15 @@ for bad in ("self-review", "claude-code-review", "verifier:", "verifier:self", "
         raise AssertionError(f"verdict accepted --source {bad}")
     except SystemExit as e:
         assert "--source is" in str(e), e
+real_authors = prog.author_sessions
+prog.author_sessions = lambda branch: ["term_author"]  # a stored pass needs an identified author and another recorder
+os.environ["ORCA_TERMINAL_HANDLE"] = "term_orchestrator"
 for good in ("independent-review", "subagent-review", "review:person", "verifier:claude-opus", "verifier:local", "live:checkout"):
     with contextlib.redirect_stdout(io.StringIO()):
-        prog.cmd_verdict(["gt", "--pr", "1", "--sha", "h1", "--source", good])
+        prog.cmd_verdict(["gt", "--pr", "1", "--sha", "h1", "--source", good, "--reviewer", "person", "--evidence", "e"])
     assert prog.Program("gt").events()[-1]["source"] == good
+prog.author_sessions = real_authors
+os.environ.pop("ORCA_TERMINAL_HANDLE")
 # Historical sources remain opaque input: reading a ledger must not migrate or reject them.
 p = prog.Program("gt")
 p.append("verdict", pr=1, sha="h1", patch_id="p1", source="retired-provider-review", result="pass")

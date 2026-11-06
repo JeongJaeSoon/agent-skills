@@ -35,6 +35,8 @@ a = sys.argv[1:]
 if a[:2] == ["orchestration", "send"]:
     path = os.environ["FAKE_GH_STATE"]; st = json.load(open(path))
     st["sent"] = st.get("sent", []) + [a[a.index("--to") + 1]]; json.dump(st, open(path, "w")); sys.exit()
+if a[:2] == ["terminal", "list"]:  # the card holding the PR's branch: orch verdict records it as the author
+    print(json.dumps({"terminals": [{"handle": "term_author"}]})); sys.exit()
 os.execv(sys.executable, [sys.executable, os.environ["FAKE_ORCA_INNER"], *a])
 '''
 BIN.mkdir(parents=True)
@@ -745,7 +747,8 @@ class Standalone(unittest.TestCase):
         config()
 
     def orch(self, *args):
-        r = subprocess.run([sys.executable, HERE / "prog.py", *args], capture_output=True, text=True)
+        env = {**os.environ, "ORCA_TERMINAL_HANDLE": "term_orchestrator"}
+        r = subprocess.run([sys.executable, HERE / "prog.py", *args], capture_output=True, text=True, env=env)
         return r.returncode, r.stdout + r.stderr
 
     def test_land_creates_the_program_and_the_next_round_merges(self):
@@ -758,7 +761,7 @@ class Standalone(unittest.TestCase):
         self.assertEqual((cfg["repo"], cfg["merge_policy"]), ("o/r", "autonomous"))
         self.assertEqual(store.land_rows(("queued",))[-1]["pr"], self.n)
         code, out = self.orch("verdict", self.SLUG, "--repo", "o/r", "--pr", str(self.n), "--sha", f"h{self.n}",
-                              "--source", "review:codex")
+                              "--source", "review:codex", "--evidence", "https://example.test/review/1")
         self.assertEqual(code, 0, out)
         self.assertEqual(land_exec.cmd_round([]), 0)
         merged = [a for a in json.loads(self.state.read_text()).get("log", []) if a[:2] == ["pr", "merge"]]
@@ -767,7 +770,7 @@ class Standalone(unittest.TestCase):
 
     def test_an_existing_program_is_left_alone(self):
         self.orch("verdict", self.SLUG, "--repo", "o/r", "--pr", str(self.n), "--sha", f"h{self.n}",
-                  "--source", "review:codex")
+                  "--source", "review:codex", "--evidence", "https://example.test/review/1")
         path = prog.HOME / self.SLUG / "program.json"
         before = path.read_text()
         self.orch("land", self.SLUG, "--repo", "o/r", "--pr", str(self.n))
