@@ -74,6 +74,8 @@ git("init", "-q", cwd=CLEAN)
 # Scratch targets for a rehearsal --apply: a folder inside the checkout, and a link inside it to the real ~/.claude.
 (REPOX / "scratch").mkdir()
 (REPOX / "to-real").symlink_to(HOME / ".claude")
+(REPOX / "planted").mkdir()
+(REPOX / "planted" / "settings.json.bak-setup-20260101").symlink_to(TMP / "outside" / "x")
 (REPOX / "linked").mkdir()
 (REPOX / "linked" / "settings.json").symlink_to(HOME / ".claude" / "settings.json")
 
@@ -195,7 +197,13 @@ CASES = [
       (rehearsal(script="scripts/bootstrap.py", tail="--write"), REPOX),
       (rehearsal(script="skills/skills-config/scripts/config_emit.py", tail="--spec s.json --apply abc"), REPOX),
       (rehearsal(script="skills/tune-automode/scripts/automode_rule.py", tail="--apply=1"), REPOX),
-      (rehearsal(), TMP), (f"cd {TMP} && " + rehearsal(), REPOX)],
+      (rehearsal(), TMP), (f"cd {TMP} && " + rehearsal(), REPOX), ("cd . && " + rehearsal(), REPOX),
+      (f"cd {TMP}; cd {REPOX}; " + rehearsal(), REPOX),
+      # A wrapper after the assignments undoes them as well as one before.
+      (rehearsal().replace(" python3 ", " env -i python3 "), REPOX),
+      (rehearsal().replace(" python3 ", " command python3 "), REPOX),
+      # A link planted beside a target: the backup setup.py writes next to it would follow it out of the tree.
+      (rehearsal(CLAUDE_SETTINGS=f"{REPOX}/planted/settings.json"), REPOX)],
      []),
     ("guard.deny.slash_send", "deny",
      ["orca terminal send --terminal t1 --text '/reload-plugins'", 'orca terminal send --terminal t1 --text "/model opus"',

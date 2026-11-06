@@ -234,7 +234,7 @@ def check_command(c, masked, cfg, cwd, session, here=None):
                                                   "an authenticated CLI (`gh`) instead."))
     if PYTHON.fullmatch(name) or name.endswith(".py"):
         script = name_script(w)
-        if script and plugin_apply(script, w, here) and not scratch_apply(script, c, cwd, here):
+        if script and plugin_apply(script, w, here) and not scratch_apply(script, c, cwd, here, masked):
             out.append(("guard.deny.plugin_apply", f"`{os.path.basename(script)}` with --apply/--write changes the "
                                                    "user's settings or scheduled jobs; the user runs that line, never "
                                                    "the agent. Hand them the exact command."))
@@ -309,7 +309,7 @@ ASSIGN_WORD = re.compile(r"[A-Za-z_]\w*=")
 ABS_WORD = re.compile(r"/[\w./@+-]+")
 
 
-def scratch_apply(script, c, cwd, here):
+def scratch_apply(script, c, cwd, here, masked):
     """True only for one narrow shape, an allowlist: the plugin's own `scripts/setup.py --apply HASH --settings-only`,
     run with no wrapper, with every variable that picks where it writes assigned in the command itself to an absolute
     path that resolves (symlinks and `..` followed, also for the files it creates inside) under this checkout's
@@ -327,7 +327,12 @@ def scratch_apply(script, c, cwd, here):
     if not (len(rest) == 2 and rest[0] == "--apply" and HASH.fullmatch(rest[1])
             or len(rest) == 1 and re.fullmatch(r"--apply=[0-9a-f]+", rest[0])):
         return False
-    if not ASSIGN_WORD.match(c.raw.lstrip()):  # `env -u X …`, `command …` and the like can undo an assignment
+    # `env -i …`, `command …` and the like, before or after the assignments, can undo them: the words must be six
+    # assignments, then the interpreter.
+    toks = c.raw.split()
+    if len(toks) < 7 or not all(ASSIGN_WORD.match(t) for t in toks[:6]) or toks[6] != w[0]:
+        return False
+    if re.search(r"(?<![\w-])(cd|pushd|popd)(?![\w-])", masked):  # `cd . && …` also leaves `here` equal to `cwd`
         return False
     given = dict(a.split("=", 1) for a in c.assigns)
     if set(given) != SCRATCH_VARS or len(c.assigns) != len(given):
@@ -347,7 +352,16 @@ def scratch_apply(script, c, cwd, here):
                 return False
         return True
 
-    return all(inside(v) for v in given.values())
+    def plain(value):  # setup.py backs a file up next to it; a link planted there would be followed out of the tree
+        for d in {value, os.path.dirname(value)}:
+            try:
+                if any(e.is_symlink() for e in os.scandir(d)):
+                    return False
+            except OSError:
+                pass
+        return True
+
+    return all(inside(v) and plain(v) for v in given.values())
 
 
 def label_add(w):
