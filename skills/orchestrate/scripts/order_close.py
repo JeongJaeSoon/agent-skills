@@ -248,22 +248,21 @@ def judge(o, F):
     return {**out, "close": True, "why": "units_done", "detail": "", "units": units, "snapshot": snap}
 
 
-def recheck(v, F):
-    """A check(db) for store.order_auto, run in its write transaction: what the judgement read from this DB must be as it
-    was: the units that live here (board item, decision, a card's close) and the owner's turn (decisions and board)."""
+def recheck(v):
+    """A check(db) for store.order_auto, run in its write transaction: every fact the judgement read is read again, DB
+    and files alike (session list, subagent ledger, inbox, PR cache), and each unit must still end on the evidence it
+    was judged on and the owner must still have no turn. A PR the judgement got from GitHub is not asked again: a merge
+    does not undo."""
+    known = {ev["pr"]: ev["merge"] for ev in v["units"].values() if "pr" in ev and "merge" in ev}
+
     def check(db):
+        state, prs_file = load()
+        F = gather(db, state, prs_file, store.board(db), fleet.utcnow(), merged_fn=known.get)
         for u, ev in v["units"].items():
-            kind, _, ident = u.partition(":")
-            now = unit_end(u, {"db": db}) if kind in ("board", "decision") else card_closure(ident, db) if "closure" in ev else None
-            if now and now != ("done", ev):
+            if unit_end(u, F) != ("done", ev):
                 raise ValueError(f"{u} changed while it was judged")
-        board_now = store.board(db)
-        if db_turn(v["links"], F["cards"], F["me"], store.decisions("open", db=db), board_now):
+        if F["owner_items"] is None or owner_turn(v["links"], F):
             raise ValueError("the owner has a turn at its units")
-        now = {**F, "rows": board_now.get("rows") or {}, "board": {"doing": board_now.get("doing") or []}}
-        for u, ev in v["units"].items():
-            if u.startswith("card:") and "pr" in ev and steps_left(ev["card"], now):
-                raise ValueError(f"{u} has a step after the merge")
     return check
 
 
@@ -284,7 +283,7 @@ def tick(state, prs_file, board_now, now, merged_fn=gh_merged):
         if v["why"] == "baseline":
             store.order_baseline(o["id"], v["snapshot"], v["links"])
         elif v["close"] and store.order_auto(o["id"], v["snapshot"], v["units"], v["links"], close=on,
-                                             recheck=recheck(v, F)):  # False: it moved, the next pass reads it again
+                                             recheck=recheck(v)):  # False: it moved, the next pass reads it again
             out.append(v)
     return out
 

@@ -292,18 +292,12 @@ assert v["close"]
 db = sqlite3.connect(str(store.path()))
 db.execute("UPDATE item SET status='todo', closed_at=NULL WHERE id=?", (done_b,))
 db.commit()
-def F_now():
-    state, prs_file = order_close.load()
-    with store.read() as c:
-        return order_close.gather(c, state, prs_file, store.board(), fleet.utcnow(), merged_fn=gh)
-
-
-assert store.order_auto(race, v["snapshot"], v["units"], v["links"], close=True, recheck=order_close.recheck(v, F_now())) is False
+assert store.order_auto(race, v["snapshot"], v["units"], v["links"], close=True, recheck=order_close.recheck(v)) is False
 assert row(race)["status"] == "open" and not events(race, "done") and not events(race, "would_close")
 db.execute("UPDATE item SET status='done', closed_at=? WHERE id=?", (fleet.iso(now), done_b))
 db.commit()
 db.close()
-assert store.order_auto(race, v["snapshot"], v["units"], v["links"], close=False, recheck=order_close.recheck(v, F_now()))
+assert store.order_auto(race, v["snapshot"], v["units"], v["links"], close=False, recheck=order_close.recheck(v))
 # The owner's turn is read again too: a decision opened from a linked card after the order was judged.
 late = make("판정 뒤 열린 결정", ["pr:acme/app#1", "card:s-done"])
 v = why(late)
@@ -311,7 +305,7 @@ assert v["close"]
 db = sqlite3.connect(str(store.path()))
 db.execute("INSERT INTO decision (id, status, title, handle, created_at) VALUES ('d10', 'open', '늦은 질문', 'term_s-done', ?)", (fleet.iso(now),))
 db.commit()
-assert store.order_auto(late, v["snapshot"], v["units"], v["links"], close=True, recheck=order_close.recheck(v, F_now())) is False
+assert store.order_auto(late, v["snapshot"], v["units"], v["links"], close=True, recheck=order_close.recheck(v)) is False
 assert row(late)["status"] == "open"
 db.execute("DELETE FROM decision WHERE id='d10'")
 # A decision that points at a linked PR by its link, from another terminal, is the owner's turn as well.
@@ -338,7 +332,7 @@ step = make("머지 뒤 단계가 늦게 붙음", ["card:s-r12"])
 v = why(step)
 assert v["close"]
 board.set_row("s-r12", title="행", repo="acme/app", status="moving", next="머지 → 배포", worktree="s-r12")
-assert store.order_auto(step, v["snapshot"], v["units"], v["links"], close=True, recheck=order_close.recheck(v, F_now())) is False
+assert store.order_auto(step, v["snapshot"], v["units"], v["links"], close=True, recheck=order_close.recheck(v)) is False
 assert row(step)["status"] == "open" and why(step)["why"] == "partial"
 # A ledger line the reader skips after an agent's last run may be its restart: the older stop is not evidence.
 ledger_path = sd / fleet.SUBAGENTS
@@ -350,6 +344,16 @@ for ev in ("start", "stop"):
 cut = make("잘린 줄", ["agent:ag-ok"])
 assert why(cut)["why"] == "unread" and "unreadable ledger line" in why(cut)["detail"], why(cut)
 assert why(make("잘린 줄 뒤의 실행", ["agent:ag-after"]))["close"], "a run recorded after the bad line is certain"
+# The ledger and the session list are read again in the write transaction: the agent resumed after it was judged.
+resumed = make("재개된 서브에이전트", ["agent:ag-after"])
+v = why(resumed)
+assert v["close"]
+fleet.append_line(ledger_path, {"v": 1, "event": "start", "at": fleet.iso(fleet.utcnow()), "agent": "ag-after", "claude_session": None,
+                                "type": None, "handle": None, "cwd": None, "desc": None})
+assert store.order_auto(resumed, v["snapshot"], v["units"], v["links"], close=True, recheck=order_close.recheck(v)) is False
+assert row(resumed)["status"] == "open" and not events(resumed, "would_close")
+fleet.append_line(ledger_path, {"v": 1, "event": "stop", "at": fleet.iso(fleet.utcnow()), "agent": "ag-after", "claude_session": None,
+                                "type": None, "handle": None, "cwd": None, "desc": None})
 
 flip = make("A B A", ["pr:acme/app#1"])
 for snap in ("A", "B", "A", "B"):
