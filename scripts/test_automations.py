@@ -333,7 +333,22 @@ class ShellJobs(Base):
     def test_defaults(self):
         self.assertEqual({n: j.default for n, j in self.jobs.items()},
                          {"pstack-upstream": False, "sync": True, "pressure-watch": True, "reap-hard": True,
-                          "orch-dash": True, "land-executor": False, "sweep": False})
+                          "orch-dash": True, "patrol": False, "land-executor": False, "sweep": False})
+
+    def test_patrol_round_fits_the_runner(self):
+        """The round's two budgets, plus the wait for a cut scan's last command, end before the runner kills the job,
+        which ends before the precheck's limit."""
+        sys.path.insert(0, str(au.REPO / "skills" / "orchestrate" / "scripts"))
+        sys.path.insert(0, str(au.REPO / "skills" / "reap-resources" / "scripts"))
+        import candidates
+        import patrol
+        w = self.jobs["patrol"].want()
+        self.assertEqual((w["trigger"], w["precheck-timeout"]), ("*/30 * * * *", 420))
+        self.assertTrue(w["precheck"].endswith("prog.py patrol --if-due"), w["precheck"])
+        self.assertIn("orca_job.py run patrol --interval 1800 --timeout 400 ", w["precheck"])
+        self.assertEqual(au.reap.SPAWN_TIMEOUT_S, 400, "reap-hard's spawned patrol gets the job's runner limit")
+        self.assertLess(patrol.BUDGET_S + patrol.CANDIDATE_BUDGET_S + candidates.CUT_WAIT_S, 400)
+        self.assertGreater(patrol.FALLBACK_DUE_S, 1800, "reap-hard's fallback never fires while the job keeps its beat")
 
     def test_sweep_is_the_tick_with_room_for_its_steps_and_is_off_by_default(self):
         j = self.jobs["sweep"]
@@ -371,7 +386,7 @@ class ShellJobs(Base):
         au.orca_job.forget.assert_called_with("sweep")
 
     def test_reap_hard_waits_for_the_protect_list_and_orch_dash_does_not(self):
-        # patrol has no job of its own; each reap-hard pass starts it, so this gate is also patrol's.
+        # With the patrol job off, reap-hard's pass starts patrol, so this gate is also patrol's fallback gate.
         self.orca([])
         j = self.jobs["reap-hard"]
         with tempfile.TemporaryDirectory() as d:
@@ -605,7 +620,8 @@ class Plan(Base):
         def status(job):
             return {"janitor": ("on", ""), "sync": ("on", ""), "pressure-watch": ("absent", ""),
                     "reap-hard": ("unconfigured", "no protect file"), "orch-dash": ("absent", ""),
-                    "land-executor": ("absent", ""), "pstack-upstream": ("absent", ""), "sweep": ("absent", "")}[job.name]
+                    "patrol": ("absent", ""), "land-executor": ("absent", ""),
+                    "pstack-upstream": ("absent", ""), "sweep": ("absent", "")}[job.name]
         with mock.patch.object(au.ShellJob, "status", status), \
                 mock.patch.object(au.PreviewWatch, "status", return_value=("absent", "")), \
                 mock.patch.object(au.ShareServer, "status", return_value=("absent", "")):

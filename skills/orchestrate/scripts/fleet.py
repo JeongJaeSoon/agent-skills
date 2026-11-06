@@ -2522,6 +2522,8 @@ def patrol_standing(rows):
             out[r["id"]] = r
         elif r.get("op") in ("owner", "ack") and r["id"] in out:
             out[r["id"]] = {**out[r["id"]], **({"owner": r.get("owner")} if r["op"] == "owner" else {"acked": True})}
+        elif r.get("op") == "pr" and r["id"] in out:
+            out[r["id"]] = {**out[r["id"]], "pr_open": r.get("pr_open")}
         elif r.get("op") == "clear":
             out.pop(r["id"], None)
     return out
