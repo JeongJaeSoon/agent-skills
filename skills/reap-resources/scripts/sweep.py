@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
-"""The v2 cleaner, shadow stage only: reads one patrol round's `candidates` and records what it would do, closing and
-deleting nothing.
+"""The v2 cleaner: reads one patrol round's `candidates`. The shadow records what it would do and closes nothing; the
+real mode acts, only on the rules `sweep own` handed it (reap-hard's four: OWNABLE).
 
   sweep.py run --shadow [--round RID] [--pressure]   decide on the newest complete round (or RID); one line in
                                                     <state>/sweep-shadow.jsonl
-  sweep.py diff [--hours 48] [--json]               the shadow's "would act" against what the old cleaners did
-                                                    (reap-hard.jsonl, reap-actions.jsonl) in the same hours
+  sweep.py run --dry-run [--rule R] [--json]        decide every rule as if owned, print it, write and act on nothing:
+                                                    set it beside `reap-hard run --dry-run`
+  sweep.py run [--round RID]                        act on the owned rules' candidates: sweep.jsonl, sweep-last.json
+  sweep.py own RULE | release RULE                  hand a rule to the sweep, or back to reap-hard (sweep-owner.json)
+  sweep.py install [--dry-run] [--here] | uninstall the LaunchAgent that runs `tick` where reap-hard's ran
+  sweep.py config                                   the "sweep" settings key that carries today's reap-hard values
+  sweep.py tick                                     what the LaunchAgent runs: patrol, shadow, real round, reap-hard
+  sweep.py diff [--hours 48] [--json]               the shadow's "would act" against what the old cleaners (and the
+                                                    sweep itself) did in the same hours
 
-There is no real mode yet: `run` without --shadow refuses. reap-hard starts `run --shadow` detached after each pass
-that is not a dry run. One run at a time (<state>/sweep.lock); a run gives up after RUN_BUDGET_S.
+reap-hard starts `run --shadow` detached after each pass that is not a dry run, unless `tick` runs it. One run at a
+time (<state>/sweep.lock); a run gives up after RUN_BUDGET_S.
 
 A round is used only when it is complete, under an hour old and not already decided (a refused round is tried again).
 Each candidate goes through the checks the real mode will use, in order; the first that fails leaves it:
@@ -22,7 +29,7 @@ Each candidate goes through the checks the real mode will use, in order; the fir
   guard     guard.item (a card: cardguard.guard): the shared keep-only checks, read fresh
 The protect file must be there and readable, as for reap-hard; otherwise the round is refused whole.
 """
-import contextlib, datetime as dt, fcntl, json, math, os, pathlib, signal, subprocess, sys, time
+import contextlib, datetime as dt, fcntl, json, math, os, pathlib, plistlib, signal, subprocess, sys, time
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -34,6 +41,14 @@ REPEAT_FAILS, REST_S = 2, 86400
 DEFAULT_CAP = 50
 RUN_BUDGET_S, CMD_TIMEOUT_S = 600, 60
 HARD_RULES = set(guard.HARD_RULE.values())
+# The rules `sweep own` may hand over in this stage: reap-hard's four patrol-fed rules. The janitor's and the pressure
+# round's come with the stage after.
+OWNABLE = ("card:strict", "stack:gone", "proc:listener", "serve:dark")
+LABEL = "io.github.jeongjaesoon.sweep"
+LAUNCHCTL = "launchctl"
+PLATFORM = sys.platform
+PATROL_WAIT_S = 400  # patrol's own budgets: 120 s for the round, 240 s for the candidate scans
+STEP_TIMEOUT_S = 900
 # How long after a patrol round an old cleaner may take to act on the same target: reap-hard two of its passes and
 # ten minutes (its `interval`, 900 s by default), the janitor 4 hours (every 3 hours, and on load). Never an act
 # that ended before the round: patrol's scans read after it, so what they still saw is not what that act removed
@@ -60,6 +75,14 @@ def shadow_log():
 
 def fails_file():
     return reap.STATE / "sweep-fails.json"
+
+
+def real_log():
+    return reap.STATE / "sweep.jsonl"
+
+
+def last_file():
+    return reap.STATE / "sweep-last.json"
 
 
 def settings():
@@ -154,12 +177,19 @@ def cleaner_of(rule_name):
     return "hard" if rule_name in HARD_RULES else "reap"
 
 
-def lags():
-    interval = 900
+def interval():
+    """Seconds between passes: the `sweep` (else `reap-hard`) setting, 900 by default."""
     with contextlib.suppress(OSError, ValueError, AttributeError, TypeError):
-        n = (json.loads(CONFIG.read_text()).get("reap-hard") or {}).get("interval", 900)  # reap-hard's own file
-        interval = float(n) if not isinstance(n, bool) and float(n) > 0 else 900
-    return {"hard": 2 * interval + 600, "reap": JANITOR_LAG_S}
+        data = json.loads(CONFIG.read_text())
+        n = (guard.hard_cfg({"reap-hard": data.get("reap-hard") or {}, "sweep": data.get("sweep") or {}}) or {}
+             ).get("interval", 900)
+        if not isinstance(n, bool) and math.isfinite(float(n)) and float(n) > 0:
+            return float(n)
+    return 900.0
+
+
+def lags():
+    return {"hard": 2 * interval() + 600, "reap": JANITOR_LAG_S}
 
 
 def shadow_keep(item, protect, cleaner):
@@ -300,7 +330,8 @@ def old_actions(since):
         if r.get("handles"):  # the terminals it really closed, whether the removal then went through or not
             out.setdefault(key, []).append({"t": t, "effect": "card:close", "identity": ident,
                                             "handles": r["handles"]})
-    for r in read_jsonl(reap.STATE / "reap-actions.jsonl"):
+    # The sweep's own acts (a rule it owns) count as an act on the target, in the same shape as reap.py's.
+    for r in read_jsonl(reap.STATE / "reap-actions.jsonl") + read_jsonl(real_log()):
         t = r.get("t")
         if not isinstance(t, (int, float)) or t < since:
             continue
@@ -456,6 +487,338 @@ def print_diff(d):
                     f"아직 판정 못 함(판정한 회차가 {MAX_GAP_S // 3600}시간 넘게 빈 구간이 있음)"))
 
 
+# ---------------------------------------------------------------- real mode
+
+ALREADY = "이미 판정함"
+
+
+def opt(argv, name):
+    return argv[argv.index(name) + 1] if name in argv and argv.index(name) + 1 < len(argv) else None
+
+
+def stamp(t):
+    return time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(t))
+
+
+def save_json(path, obj):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(obj, ensure_ascii=False))
+    tmp.replace(path)
+
+
+def read_last():
+    try:
+        d = json.loads(last_file().read_text())
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def act_item(c, protect, row):
+    """Act on one candidate of a rule the sweep owns. Inside the target's lock: the owner read again (the rule may have
+    gone back to its old cleaner, or the sweep's rounds stopped), the shared guards, then reap-hard's own act, which
+    judges the target again and closes only what the scan saw. Fills `row` as it goes, so a budget that ends the run
+    mid-act still leaves what was closed."""
+    rule_name, item = c["rule"], c["item"]
+    with guard.hold(guard.targets(item)) as got:
+        if not got:
+            row["result"] = f"건너뜀: {guard.LOCK_BUSY}"
+            return
+        try:
+            go, why = guard.old_acts(rule_name, guard.ownership(), time.time())
+        except guard.Unreadable as e:
+            row["result"] = f"건너뜀: {guard.OWNER_UNREADABLE}: {e}"
+            return
+        if go:
+            row["result"] = f"건너뜀: {why or rule_name + ' 이 옛 주체로 돌아감'}"
+            return
+        try:
+            why = guard.item(item, protect, "hard")
+        except Exception as e:
+            why = f"{guard.CHECK_FAILED}({type(e).__name__}: {str(e)[:120]})"
+        if why:
+            row["result"] = f"건너뜀: {why}"
+            return
+        sys.path.insert(0, str(HERE.parents[2] / "scripts"))
+        import reap_hard  # noqa: E402
+        done = {}
+        try:
+            row["result"] = reap_hard.act(item, reap_hard.config(), protect, done)
+        except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as e:
+            row["error"] = str(e)[:300]
+        except BaseException as e:  # the run's budget: recorded with what it closed first, then let go up
+            row["error"] = f"{type(e).__name__}: {str(e)[:300]}"
+            raise
+        finally:
+            if done.get("closed"):
+                row["handles"] = done["closed"]
+            if done.get("identity"):
+                row["identity"] = done["identity"]
+
+
+def log_act(c, row, rid):
+    """One line in sweep.jsonl per act, shaped like reap-actions.jsonl, which `sweep diff` matches against. Returns
+    whether it really did something."""
+    item = c["item"]
+    ok = "error" not in row and reap.acted(row.get("result"))
+    rec = {"t": time.time(), "round": rid, "key": c["key"], "kind": item["kind"], "rule": c["rule"],
+           "identity": row.get("identity") or reap.act_identity(item),
+           "result": str(row.get("result") or "실패: " + row.get("error", ""))[:200], "ok": ok,
+           "effect": reap.act_effect(c["rule"], item["kind"], row.get("result")) if ok else None}
+    if row.get("handles"):
+        rec["handles"] = sorted(row["handles"])
+    with contextlib.suppress(OSError):  # a log line is never worth an act left half-reported
+        append_keep(real_log(), rec)
+    return ok
+
+
+def run_round(rid=None, pressure=False, dry=False, now=None, acter=None):
+    """Decide on the newest complete patrol round and, unless dry, act on its candidates of the rules the sweep owns.
+    dry decides every rule as if owned, takes no lock and writes nothing, so it can be compared with a reap-hard
+    --dry-run at the same moment. A real round writes sweep-last.json when it is decided, even with nothing owned: that
+    is the "last good round" an owner's old cleaner waits on before it takes a rule back. A round already acted on
+    refreshes it too, while that round is still fresh."""
+    now = now or time.time()
+    acter = acter or act_item
+    with run_lock() as got:
+        if not got:
+            return {"refused": "다른 sweep 회차가 도는 중"}
+        last = read_last()
+        out = {"t": now, "mode": "dry-run" if dry else "real", "pressure": pressure, "round": rid}
+        try:
+            v = json.loads((reap.STATE / "patrol-verdicts.json").read_text())
+        except (OSError, ValueError):
+            v = None
+        out["refused"] = refuse_round(v, rid, set() if dry or not last.get("round") else {last["round"]}, now)
+        if out["refused"]:
+            if out["refused"].endswith(ALREADY) and not dry:
+                save_json(last_file(), {**last, "t": now, "at": stamp(now)})
+            return out
+        out.update(round=v["round"], round_t=float(v["t"]))
+        try:
+            own = guard.ownership()
+            protect = guard.read_protect(guard.protect_file())
+        except (guard.Unreadable, guard.NoProtect) as e:
+            out["refused"] = str(e)
+            return out
+        cap, fails = settings()["max_per_round"], read_fails()
+        if dry:
+            rows = decide(v, protect, now, pressure, own, fails, cap)
+            out.update(rows=rows, acts=sum(r["decision"] == "act" for r in rows),
+                       skips=sum(r["decision"] == "skip" for r in rows))
+            return out
+        mine = [c for c in v.get("candidates") or () if isinstance(c, dict) and c.get("rule") in OWNABLE
+                and not guard.old_acts(c["rule"], own, now)[0]]
+        # The guards run inside each target's lock (act_item), so decide only counts the cap and the rest here.
+        rows = decide({**v, "candidates": mine}, protect, now, pressure, own, fails, cap, keep=lambda *a: None)
+        rested = []
+        try:
+            for c, row in zip(mine, rows):
+                if row["decision"] != "act":
+                    continue
+                res = {}
+                try:
+                    acter(c, protect, res)
+                finally:
+                    row["ok"] = log_act(c, res, v["round"])
+                row["result"] = res.get("result") or "실패: " + res.get("error", "")
+                if "error" in res:
+                    row["failed"] = True
+                    if record_result(fails, c["key"], False, now):
+                        rested.append(c["key"])
+                elif row["ok"]:
+                    record_result(fails, c["key"], True, now)
+        finally:
+            save_json(fails_file(), fails)
+        out.update(rows=rows, acted=sum(bool(r.get("ok")) for r in rows), failed=sum(bool(r.get("failed")) for r in rows),
+                   skipped=sum(r["decision"] == "act" and not r.get("ok") and not r.get("failed") for r in rows),
+                   kept=sum(r["decision"] == "skip" for r in rows), rested=rested)
+        save_json(last_file(), {"t": now, "at": stamp(now), "round": v["round"],
+                                "owned": sorted(r for r in OWNABLE if ((own or {}).get("rules") or {}).get(r) == "sweep"),
+                                **{k: out[k] for k in ("acted", "failed", "skipped", "kept", "rested")}})
+        return out
+
+
+def print_run(out, rule_filter=None):
+    dry = out.get("mode") == "dry-run"
+    head = "dry-run(아무것도 하지 않음)" if dry else "실행"
+    if out.get("refused"):
+        print(f"sweep {head}: 거부 — {out['refused']}")
+        return
+    print(f"sweep {head} 회차 {out['round']}")
+    counts = {}
+    for r in out["rows"]:
+        if r.get("rule") not in OWNABLE or (rule_filter and r["rule"] != rule_filter):
+            continue
+        c = counts.setdefault(r["rule"], [0, 0])
+        c[r["decision"] != "act"] += 1
+        tail = f" → {r['result']}" if r.get("result") else ""
+        print(f"- {r['rule']} {r['key']}: {'처리' if r['decision'] == 'act' else '남김'} — {r.get('why')}{tail}"
+              f"  [소유 {r.get('owner')}]")
+    for rule_name, (a, k) in sorted(counts.items()):
+        print(f"규칙 {rule_name}: 처리 {a} · 남김 {k}")
+    if not counts:
+        print("reap-hard 규칙에 해당하는 후보 없음")
+
+
+# ---------------------------------------------------------------- ownership
+
+def set_owner(rule_name, owned):
+    """Hand a rule to the sweep (`own`) or back to its old cleaner (`release`): the ownership file rewritten whole and
+    its generation raised, only when something changes. (exit code, message)."""
+    if rule_name not in OWNABLE:
+        return 2, f"{rule_name!r} 은 이 단계에서 넘길 수 있는 규칙이 아님. 가능: {', '.join(OWNABLE)}"
+    with run_lock() as got:
+        if not got:
+            return 1, "다른 sweep 회차가 도는 중: 끝난 뒤 다시"
+        try:
+            own = guard.ownership()  # a file that cannot be read is left as it is, whatever it says
+        except guard.Unreadable as e:
+            return 1, f"소유권 파일을 읽지 못해 바꾸지 않음: {e}"
+        own = own or {"generation": 0, "rules": {}}
+        rules = dict(own.get("rules") or {})
+        if (rules.get(rule_name) == "sweep") == owned:
+            return 0, f"{rule_name}: 이미 {'sweep' if owned else '옛 주체'} 소유(세대 {own.get('generation', 0)}), 바꾼 것 없음"
+        if owned:
+            rules[rule_name] = "sweep"
+        else:
+            rules.pop(rule_name)
+        gen = own.get("generation", 0) + 1
+        save_json(reap.STATE / "sweep-owner.json", {**own, "generation": gen, "rules": rules, "interval": interval()})
+    if owned:
+        note = "" if read_last().get("t") else (
+            " sweep 의 첫 정상 회차(sweep-last.json)가 생길 때까지는 옛 주체가 이 규칙을 계속 처리한다.")
+        return 0, f"{rule_name}: sweep 소유로 바꿈(세대 {gen}). 다음 옛 회차부터 건너뛴다.{note}"
+    return 0, f"{rule_name}: 옛 주체에게 돌려줌(세대 {gen}). 다음 회차부터 reap-hard 가 처리한다."
+
+
+# ---------------------------------------------------------------- install, config, tick
+
+SWEEP_SCRIPT = pathlib.Path(__file__).resolve()
+LEGACY_LABEL = "io.github.jeongjaesoon.reap-hard"
+
+
+def plist_path():
+    return pathlib.Path.home() / "Library" / "LaunchAgents" / f"{LABEL}.plist"
+
+
+def agent_target(label=LABEL):
+    return f"gui/{os.getuid()}/{label}"
+
+
+def launchctl(*args):
+    return subprocess.run([LAUNCHCTL, *args], capture_output=True, text=True)
+
+
+def carried_config():
+    """The `sweep` settings key that keeps today's reap-hard values (defaults written out), for a person to merge in."""
+    sys.path.insert(0, str(HERE.parents[2] / "scripts"))
+    import reap_hard  # noqa: E402
+    cfg = reap_hard.config()
+    block = {k: cfg[k] for k in ("interval", "idle_minutes", "workspaces", "protect_file", "serve_ranges")}
+    return {"sweep": {**block, "max_per_round": settings()["max_per_round"]}}
+
+
+def print_config():
+    print("~/.claude/agent-skills.json 의 최상위에 아래 \"sweep\" 키를 더하면 reap-hard 설정이 그대로 이어진다"
+          "(이 명령은 설정 파일을 고치지 않는다. 옛 \"reap-hard\" 키는 두어도 된다: 같은 이름이면 \"sweep\" 쪽이 이긴다).")
+    print(json.dumps(carried_config(), ensure_ascii=False, indent=2))
+
+
+def cmd_install(argv):
+    """Write the LaunchAgent that runs `sweep tick` where reap-hard's ran, at the same interval, and load it."""
+    if PLATFORM != "darwin":
+        print("이 OS 에는 launchd 가 없음: cron 으로 `sweep.py tick` 을 돌린다", file=sys.stderr)
+        return 1
+    if not (HERE.parents[2] / ".git").is_dir() and "--here" not in argv:  # a worktree goes away under launchd
+        print(f"{HERE.parents[2]} 은 메인 git 체크아웃이 아님: 세션이 로드하는 체크아웃에서 설치(또는 --here)",
+              file=sys.stderr)
+        return 1
+    try:
+        guard.read_protect(guard.protect_file())  # without it every pass stops: do not replace a working job with that
+    except guard.NoProtect as e:
+        print(f"sweep install 중단: {e}", file=sys.stderr)
+        return 1
+    sys.path.insert(0, str(HERE.parents[2] / "scripts"))
+    import reap_hard  # noqa: E402
+    plist = reap_hard.spec(interval(), LABEL, SWEEP_SCRIPT, ("tick",), reap.STATE / "sweep.log")
+    path = plist_path()
+    if "--dry-run" in argv:
+        print(f"[dry-run] {path} 에 쓸 것(쓰지도 올리지도 않음): {' '.join(plist['ProgramArguments'])} "
+              f"(StartInterval {plist['StartInterval']}초)")
+        print_config()
+        return 0
+    reap.STATE.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    launchctl("bootout", agent_target())
+    path.write_bytes(plistlib.dumps(plist))
+    for _ in range(5):  # bootstrap right after bootout can fail with error 5 until the old job is gone
+        p = launchctl("bootstrap", f"gui/{os.getuid()}", str(path))
+        if p.returncode == 0:
+            print(f"{path} 를 쓰고 {agent_target()} 를 올림({plist['StartInterval']}초마다 sweep tick)")
+            print_config()
+            legacy = launchctl("print", agent_target(LEGACY_LABEL)).returncode == 0
+            print("tick 은 순찰 → 그림자 → 소유 규칙 정리 → reap-hard(소유 안 한 규칙) 순으로 한 번씩 돈다. "
+                  "그래서 reap-hard 의 자동화(Orca)와 옛 LaunchAgent 는 끈다: 두 곳이 번갈아 돌면 같은 일을 두 번 시도한다"
+                  "(둘 다 소유권 파일을 따르므로 이중 처리는 아님).")
+            if legacy:
+                print(f"옛 LaunchAgent {LEGACY_LABEL} 가 아직 올라 있음: bin/reap-hard uninstall")
+            return 0
+        time.sleep(1)
+    print(f"launchctl bootstrap 실패: {p.stderr.strip()}", file=sys.stderr)
+    return 1
+
+
+def cmd_uninstall():
+    launchctl("bootout", agent_target())
+    plist_path().unlink(missing_ok=True)
+    print(f"{agent_target()} 를 내리고 plist 를 지움. reap-hard 의 자동화를 다시 켠다.")
+    return 0
+
+
+def budgeted(fn):
+    """fn() under the run budget; None when the budget ran out."""
+    reap.RUN_TIMEOUT = CMD_TIMEOUT_S
+    signal.signal(signal.SIGALRM, give_up)
+    signal.alarm(RUN_BUDGET_S)
+    try:
+        return fn()
+    except Budget:
+        print(f"sweep: {RUN_BUDGET_S}초 안에 끝나지 않아 그만둠", file=sys.stderr)
+        return None
+    finally:
+        signal.alarm(0)
+
+
+def tick():
+    """What the LaunchAgent runs each interval, in order, each step on its own so one failing leaves the next:
+    patrol (due rounds only), the shadow, the sweep's real round for the rules it owns, then reap-hard for the rest
+    (it leaves a sweep-owned rule by itself). The worst exit code."""
+    code = 0
+    try:
+        r = subprocess.run([sys.executable, str(reap.ORCH), "patrol", "--if-due"], stdin=subprocess.DEVNULL,
+                           timeout=PATROL_WAIT_S)
+        print(f"patrol 종료 코드 {r.returncode}")
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"patrol 을 돌리지 못함: {type(e).__name__}", file=sys.stderr)
+    for name, fn in (("shadow", run_shadow), ("real", run_round)):
+        res = budgeted(fn)
+        if res is None:
+            code = max(code, 4)
+            continue
+        print(name, json.dumps({k: res.get(k) for k in ("round", "refused", "acts", "acted", "failed")}, ensure_ascii=False))
+        code = max(code, 1 if res.get("failed") else 0)
+    try:
+        r = subprocess.run([sys.executable, str(HERE.parents[2] / "scripts" / "reap_hard.py"), "run", "--no-patrol"],
+                           stdin=subprocess.DEVNULL, timeout=STEP_TIMEOUT_S)
+        code = max(code, r.returncode)
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"reap-hard 를 돌리지 못함: {type(e).__name__}", file=sys.stderr)
+        code = max(code, 1)
+    return code
+
+
 class Budget(BaseException):
     """The run's budget ran out. Not SystemExit or Exception, which the guards' own reads catch as "could not see"."""
 
@@ -467,21 +830,37 @@ def give_up(*_):
 def main(argv):
     cmd = argv[1] if len(argv) > 1 else ""
     if cmd == "run":
-        if "--shadow" not in argv:
-            print("sweep 실제 모드는 아직 없다(그림자 단계): run --shadow 만 쓴다", file=sys.stderr)
-            return 2
-        reap.RUN_TIMEOUT = CMD_TIMEOUT_S
-        signal.signal(signal.SIGALRM, give_up)
-        signal.alarm(RUN_BUDGET_S)
-        try:
-            res = run_shadow(reap.opt("--round"), "--pressure" in argv)
-        except Budget:
-            print(f"sweep: {RUN_BUDGET_S}초 안에 끝나지 않아 그만둠", file=sys.stderr)
+        if "--shadow" in argv:
+            res = budgeted(lambda: run_shadow(opt(argv, "--round"), "--pressure" in argv))
+            if res is None:
+                return 4
+            print(json.dumps({k: res.get(k) for k in ("round", "refused", "acts", "skips")}, ensure_ascii=False))
+            return 0
+        dry = "--dry-run" in argv
+        res = budgeted(lambda: run_round(opt(argv, "--round"), "--pressure" in argv, dry))
+        if res is None:
             return 4
-        finally:
-            signal.alarm(0)
-        print(json.dumps({k: res.get(k) for k in ("round", "refused", "acts", "skips")}, ensure_ascii=False))
+        if "--json" in argv:
+            print(json.dumps(res, ensure_ascii=False, indent=1))
+        elif dry:
+            print_run(res, opt(argv, "--rule"))
+        else:
+            print(json.dumps({k: res.get(k) for k in ("round", "refused", "acted", "failed", "skipped", "kept")},
+                             ensure_ascii=False))
+        return 1 if res.get("failed") or (dry and res.get("refused")) else 0
+    if cmd in ("own", "release"):
+        code, msg = set_owner(argv[2] if len(argv) > 2 else "", cmd == "own")
+        print(msg, file=sys.stderr if code else sys.stdout)
+        return code
+    if cmd == "config":
+        print_config()
         return 0
+    if cmd == "install":
+        return cmd_install(argv)
+    if cmd == "uninstall":
+        return cmd_uninstall()
+    if cmd == "tick":
+        return tick()
     if cmd == "diff":
         d = diff(float(reap.opt("--hours") or 48))
         if "--json" in argv:

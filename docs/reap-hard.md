@@ -52,7 +52,7 @@ reap-hard, janitor의 `reap.py reap --plan`, `cards.py apply`, preview-watch의 
 
 ## sweep 그림자 실행
 
-정리 v2의 정리 주체 `skills/reap-resources/scripts/sweep.py`는 지금 그림자 단계다. reap-hard가 dry-run이 아닌 회차를 마칠 때마다 `sweep.py run --shadow`를 따로 띄운다. 한 번에 하나만 돌고(`<state>/sweep.lock`), 10분 안에 못 끝나면 그만둔다.
+정리 v2의 정리 주체 `skills/reap-resources/scripts/sweep.py`는 그림자와 실제 모드(다음 절)를 가진다. 그림자는 reap-hard가 dry-run이 아닌 회차를 마칠 때마다 `sweep.py run --shadow`로 따로 뜬다(`sweep tick`이 reap-hard를 부르면 tick이 대신 돌린다). 한 번에 하나만 돌고(`<state>/sweep.lock`), 10분 안에 못 끝나면 그만둔다.
 
 sweep은 순찰 판정 파일의 가장 최근 회차만 읽는다. 그 회차가 끝났고(`complete`), 한 시간 안의 것이고, 아직 판정하지 않았을 때만이다. 거부한 회차는 판정한 것으로 치지 않으므로 다음 실행이 다시 본다. 그 회차의 `candidates`는 다음 순서로 거른다.
 
@@ -67,7 +67,7 @@ sweep은 순찰 판정 파일의 가장 최근 회차만 읽는다. 그 회차�
 - 대상 잠금은 실제 모드에서만 잡는다. 그림자는 잠금을 잡지 않으므로 옛 주체가 그 때문에 대상을 건너뛰는 일이 없다.
 - 그림자는 모든 규칙을 자기가 가진 것처럼 판정하고, 지금 누가 가졌는지를 함께 적는다.
 - 보호 목록 파일이 없거나 못 읽으면 reap-hard처럼 회차 전체를 거부한다.
-- `run`에 `--shadow`가 없으면 거부한다.
+- `run --shadow`는 어떤 규칙도 소유권이 있는 것처럼 판정한다. 실제 처리는 아래 실제 모드가 소유한 규칙에서만 한다.
 
 `python3 skills/reap-resources/scripts/sweep.py diff --hours 48`은 그림자가 회차마다 처리하겠다고 한 대상을 옛 주체의 실제 처리와 맞춘다.
 
@@ -81,6 +81,26 @@ sweep은 순찰 판정 파일의 가장 최근 회차만 읽는다. 그 회차�
 - 한계: 카드가 아닌 경로 대상(tmpdir, 증거 폴더 같은 것)은 identity가 경로뿐이다. 그래서 한 스캔이 도는 몇 초 사이에 다른 주체가 같은 경로를 지우고 다시 만들면, 옛 것을 지운 처리가 새 것의 계획과 일치할 수 있다. 이 비교는 보고일 뿐이라 정리 동작에는 영향이 없다. 이 경우는 실제 모드 전환(PR D)에서 처리 직전 재판정이 막는다.
 
 판정한 회차가 없거나, 판정한 회차 없이 2시간 넘게 빈 구간이 있으면 `아직 판정 못 함`(exit 3)이다. 넘침이 있으면 exit 1, 통과면 exit 0이다. 전환(PR D) 전에는 48시간 넘게 넘침이 0이어야 한다.
+
+## sweep 실제 모드와 규칙 이관 (PR D)
+
+reap-hard의 네 규칙(`card:strict`, `stack:gone`, `proc:listener`, `serve:dark`)을 sweep으로 하나씩 넘긴다. 컨테이너·볼륨 규칙과 janitor·pressure 규칙은 이 단계에서 넘기지 않는다(`own`이 거부한다). 설치와 `own`은 사람이 실행하고, 코드는 둘 다 스스로 하지 않는다.
+
+```bash
+python3 skills/reap-resources/scripts/sweep.py run --dry-run [--rule R] [--json]   # 모든 규칙을 소유한 것처럼 판정만. 아무것도 쓰지 않는다
+python3 skills/reap-resources/scripts/sweep.py install [--dry-run] [--here]        # LaunchAgent를 쓰고 올린다. --dry-run은 쓸 내용만 보인다
+python3 skills/reap-resources/scripts/sweep.py own <rule>                          # 이 규칙을 sweep이 처리한다
+python3 skills/reap-resources/scripts/sweep.py release <rule>                      # 옛 주체(reap-hard)에게 돌려준다
+python3 skills/reap-resources/scripts/sweep.py config                              # 기존 reap-hard 설정을 "sweep" 키로 이어 적은 출력
+python3 skills/reap-resources/scripts/sweep.py uninstall                           # LaunchAgent를 내린다
+```
+
+- **`install`**: `io.github.jeongjaesoon.sweep` LaunchAgent가 reap-hard 자리에서 같은 주기(`interval`, 기본 900초)로 `sweep tick`을 돌린다. `tick`은 순찰(`orch patrol --if-due`) → 그림자 → 실제 회차 → `reap-hard run --no-patrol` 순서이고, 한 단계가 실패해도 다음을 돌린다. reap-hard는 sweep이 소유한 규칙을 스스로 건너뛰므로, 소유하지 않은 규칙은 지금처럼 reap-hard가 처리한다. 메인 git 체크아웃에서만 설치하고(워크트리는 launchd 아래서 사라진다, `--here`로 넘길 수 있다), 보호 목록 파일을 읽지 못하면 설치하지 않는다(일하던 job을 아무것도 못 하는 job으로 바꾸지 않으려는 것이다). reap-hard의 Orca 자동화와 옛 LaunchAgent는 사람이 끈다. 끄지 않으면 두 곳이 번갈아 돌지만, 둘 다 소유권 파일을 따르므로 같은 대상을 두 번 처리하지는 않는다.
+- **설정 이어 적기**: `config`(와 `install`의 끝)는 `{"sweep": {interval, idle_minutes, workspaces, protect_file, serve_ranges, max_per_round}}`를 지금의 실제 값(기본값 포함)으로 출력한다. 설정 파일은 고치지 않는다. 사람이 `~/.claude/agent-skills.json`에 붙인다. 두 키가 모두 있으면 `sweep` 쪽이 이기고, 옛 `reap-hard` 키만 있어도 지금처럼 읽는다.
+- **`own <rule>`**: `sweep-owner.json`에 `{"<rule>": "sweep"}`을 적고 세대를 올린다. 다른 규칙의 줄은 그대로 둔다. 읽지 못하는 소유권 파일은 덮어쓰지 않는다. 같은 값이면 세대도 그대로다. `interval`은 설정의 `interval`을 따라가서, sweep 회차가 멈췄을 때 옛 주체가 되돌려받는 시점(세 주기)이 LaunchAgent 주기와 맞는다. sweep의 첫 정상 회차(`sweep-last.json`)가 생기기 전에는 옛 주체가 그 규칙을 계속 처리하므로 `own`과 첫 회차 사이에 빈틈이 없다.
+- **실제 회차(`run`)**: 순찰 판정 파일의 가장 최근 회차가 끝났고(`complete`), 한 시간 안이고, 이미 처리하지 않았을 때만 돈다. 후보 중 sweep이 소유한 규칙의 것만 `needs`, 연속 실패 휴식, `sweep.max_per_round`를 거친 뒤 한 대상씩 처리한다. 대상 잠금을 잡고, 잠금 안에서 소유권 파일을 다시 읽어 아직 sweep 소유인지 확인하고, 공용 검사(`guard.item`)를 거친 뒤 `reap_hard.act`를 부른다. `reap_hard.act`가 카드·스택·리스너·serve를 직접 다시 판정하고 판정 때 본 것만 닫는다. 처리 한 건마다 `sweep.jsonl`에 한 줄(`reap-actions.jsonl`과 같은 모양)을 남기고, 회차가 끝나면 `sweep-last.json`을 쓴다. 소유한 규칙이 없거나 처리할 후보가 없어도 쓴다. 옛 주체가 sweep 회차를 기다리는 "마지막 정상 회차"가 이것이다. 같은 회차를 한 번 더 보면 처리하지 않고, 회차가 한 시간 안이면 `sweep-last.json`의 시각만 갱신한다. 예산(10분)이 끝나면 처리 중이던 대상의 줄을 남기고 `sweep-last.json`은 쓰지 않는다.
+- **`run --dry-run`**: 같은 판정을 하되 잠금도 기록도 처리도 없다. 모든 규칙을 소유한 것처럼 판정하고 `소유`에 지금 누가 가졌는지를 적는다. `own` 전에 `reap-hard run --dry-run`과 같은 시각에 돌려 규칙마다 처리할 대상이 같은지 본다. 순찰 회차가 끝나지 않았거나 한 시간이 지났으면 거부하고 exit 1이다.
+- **이관 순서(규칙 하나씩)**: (1) `install` 뒤 그림자가 48시간 건강하고 `sweep diff`가 통과, (2) 그 규칙의 dry-run 두 개가 같음, (3) `own <rule>`, (4) 다음 회차들에서 `sweep.jsonl`과 `sweep-last.json`의 `failed`가 0, (5) 문제가 생기면 `release <rule>`로 다음 회차부터 reap-hard가 처리. 처리 주체가 바뀌어도 `sweep diff`는 `sweep.jsonl`의 처리를 옛 주체의 처리와 같게 세므로, 소유한 규칙의 그림자 행이 넘침으로 읽히지 않는다.
 
 ## 보호
 
@@ -122,6 +142,8 @@ bin/reap-hard install         # 메인 체크아웃에서. status, uninstall
                "protect_file": "~/.config/agent-skills/reap-protect.txt",
                "serve_ranges": [[4500, 4599], [32768, 60999]]}}
 ```
+
+같은 이름의 값은 `"sweep"` 키에도 둘 수 있고, 둘 다 있으면 `"sweep"`이 이긴다(`sweep.py config`가 출력하는 모양). `sweep.max_per_round`(기본 50)는 `"sweep"` 키에만 있다.
 
 ## 세션 순찰과의 연결
 
