@@ -77,6 +77,12 @@ git("init", "-q", cwd=CLEAN)
 (REPOX / "planted").mkdir()
 (REPOX / "planted" / "settings.json.bak-setup-20260101").symlink_to(TMP / "outside" / "x")
 (REPOX / "alias.json").symlink_to(REPOX / "planted" / "settings.json")
+# A settings child that is a link to a file inside the tree, with a planted backup link beside the resolved file.
+(REPOX / "data").mkdir()
+(REPOX / "data" / "record.json").write_text("{}")
+(REPOX / "data" / "record.json.bak-setup-20260101").symlink_to(TMP / "outside" / "z")
+(REPOX / "childlink").mkdir()
+(REPOX / "childlink" / "setup-applied.json").symlink_to(REPOX / "data" / "record.json")
 (REPOX / "unrelated").mkdir()
 (REPOX / "unrelated" / "notes").symlink_to(TMP / "outside" / "y")
 (REPOX / "linked").mkdir()
@@ -209,6 +215,7 @@ CASES = [
       ("X=1 cd . && " + rehearsal(), REPOX), ("(cd . && " + rehearsal() + ")", REPOX),
       (rehearsal(CLAUDE_SETTINGS=f"{REPOX}/alias.json"), REPOX),
       (rehearsal(CLAUDE_CONFIG_DIR=f"{REPOX}/planted"), REPOX),
+      (rehearsal(AGENT_SKILLS_STATE=f"{REPOX}/childlink"), REPOX),
       # A wrapper after the assignments undoes them as well as one before.
       (rehearsal().replace(" python3 ", " env -i python3 "), REPOX),
       (rehearsal().replace(" python3 ", " command python3 "), REPOX),

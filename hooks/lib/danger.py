@@ -353,13 +353,16 @@ def scratch_apply(script, c, cwd, here, masked):
         return True
 
     def plain(value):  # setup.py backs a file up next to it; a link planted there would be followed out of the tree
-        real = os.path.realpath(value)  # setup.py backs up beside the resolved file, not beside the link to it
-        for d in {value, os.path.dirname(value), real, os.path.dirname(real)}:
-            try:
-                if any(e.is_symlink() and ".bak" in e.name for e in os.scandir(d)):
-                    return False
-            except OSError:
-                pass
+        # setup.py backs up beside the resolved file, not beside the link to it: check the value and each settings
+        # file inside it, as given and as resolved.
+        for p in (value, *(os.path.join(value, n) for n in SETTINGS_CHILDREN)):
+            real = os.path.realpath(p)
+            for d in {p, os.path.dirname(p), real, os.path.dirname(real)}:
+                try:
+                    if any(e.is_symlink() and ".bak" in e.name for e in os.scandir(d)):
+                        return False
+                except OSError:
+                    pass
         return True
 
     return all(inside(v) and plain(v) for v in given.values())
