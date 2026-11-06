@@ -1408,6 +1408,15 @@ world.prs[8] = dict(world.prs[7], number=8, state="CLOSED", url="https://github.
 store.load_board({"rows": {"x": {"id": "x", "pr": "acme/tools#8"}}, "later": [{"title": "t", "trigger": "acme/tools#7 머지"}]})
 assert fleet.board_prs() == {"acme/tools#8", "acme/tools#7"}, fleet.board_prs()
 assert next(p for p in pr_tick(viewed=True)["prs"] if p["number"] == 8)["state"] == "CLOSED"
+# A row whose --pr is a bare number (a coordinator report wrote "441") names no repository to probe. It used to reach
+# pr_query's `repo, n = k.split("#")`, raise out of every tick and freeze state.json's generated_at.
+store.load_board({"rows": {"x": {"id": "x", "pr": "acme/tools#8"}, "bare": {"id": "bare", "pr": "441"}},
+                  "later": [{"title": "t", "trigger": "acme/tools#7 머지"}]})
+assert fleet.board_prs() == {"acme/tools#8", "acme/tools#7"}, fleet.board_prs()
+before = f.state["generated_at"]
+clock[0] += dt.timedelta(seconds=30)
+assert pr_tick(viewed=True)["generated_at"] != before, "a tick with a bare-number row still saves a fresh state"
+store.load_board({"rows": {"x": {"id": "x", "pr": "acme/tools#8"}}, "later": [{"title": "t", "trigger": "acme/tools#7 머지"}]})
 # A closed board item no longer holds its PR: prs.json drops it on the next PR tick.
 import tidy  # noqa: E402
 held = {"row:x": "x", store.board()["later"][0]["id"]: "t"}

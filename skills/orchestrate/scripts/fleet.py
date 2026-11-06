@@ -1490,6 +1490,9 @@ PR_REF_RE = re.compile(r"github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)|\b([\w.-]+/[\w
 BARE_REF_RE = re.compile(r"(?<![\w/#])#(\d+)\b")
 
 
+FULL_PR_KEY_RE = re.compile(r"[\w.-]+/[\w.-]+#\d+")
+
+
 def pr_refs(text):
     return sorted({pr_key(m[1], m[2]) if m[1] else pr_key(m[3], m[4]) for m in PR_REF_RE.finditer(text or "")})
 
@@ -1524,7 +1527,8 @@ def board_prs():
     text += [f"{t.get('title')} {t.get('after') or ''}" for t in b.get("todo") or []]
     text += [f"{i.get('title')} {i.get('url')} {i.get('command')}" for i in external_items({})]
     rows = {r.get("pr") for k, r in (b.get("rows") or {}).items() if f"row:{k}" not in shut}
-    return (rows | set(pr_refs(" ".join(text)))) - {None}
+    # A row's --pr is free text. Only a full owner/repo#N can be probed; a bare "441" reached pr_query and killed every tick.
+    return {k for k in rows | set(pr_refs(" ".join(text))) if isinstance(k, str) and FULL_PR_KEY_RE.fullmatch(k)}
 
 
 def program_prs(now):
