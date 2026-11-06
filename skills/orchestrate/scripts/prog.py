@@ -35,6 +35,10 @@ Usage: orch <command> <slug> [options]
                                      B's branch), or one found after dispatch. Start-after edges are
                                      Orca task deps (task-create --deps), read from the Run
   queue <slug> [--json]              the land order and why each PR is not moving
+  overlap <slug> --table [--max-open N]
+                                     the files two or more open PRs of the repo change (any program), the PRs
+                                     in the order to land them (ready first, then by number; advice only), and an
+                                     OVER line for a file with more than N open PRs
   overlap <slug> [--paths P,P]       open program PRs with no land-after relation that change one file
                                      (or one exclusive_paths glob): stack the later on the earlier. With
                                      --paths, the open PRs a unit not started yet would collide with.
@@ -864,6 +868,9 @@ def is_exclusive(cfg, files):
     return sorted(f for f in files if any(fnmatch.fnmatch(f, g) for g in pats))
 
 
+REST_FILES_CAP = 3000
+
+
 def rest_files(repo, pr):
     # pr view stops at 100 files; the REST listing pages up to 3000.
     out = run(["gh", "api", f"repos/{repo}/pulls/{pr}/files", "--paginate", "--jq", ".[].filename"], check=False)
@@ -1042,8 +1049,100 @@ def cross_overlaps(files, theirs, rows, stacks=None, paths=None, unread=()):
     return out
 
 
+def repo_verdicts(repo, home=None):
+    """({PR: its latest verdict event across every program on `repo`}, ["program ledger X" for each unreadable one]).
+    A PR can be in several programs' ledgers; the newest verdict is the one that counts, and at the same second a
+    failing one wins over a passing one, so the table never reads ready on a coin flip."""
+    home = home or HOME
+    best, unknown = {}, []
+    try:
+        dirs = sorted(home.iterdir())
+    except FileNotFoundError:
+        return best, unknown
+    except OSError:
+        return best, ["program ledgers"]
+    for d in dirs:
+        if d.name.startswith((".", "_")):
+            continue
+        try:
+            cfg = (d / "program.json").read_text()
+        except (FileNotFoundError, NotADirectoryError):
+            continue  # not a program directory
+        except (OSError, ValueError):
+            unknown.append(f"program ledger {d.name}")
+            continue
+        try:
+            if json.loads(cfg)["repo"].lower() != repo.lower():
+                continue
+            led = d / "ledger.jsonl"
+            try:
+                text = led.read_text()
+            except FileNotFoundError:
+                text = ""  # a program that has not recorded anything yet
+            events = [json.loads(l) for l in text.splitlines() if l.strip()]
+            mine = dict(best)  # merged into `best` only when this whole ledger read, so a bad one adds nothing
+            for e in events:
+                if e.get("ev") == "verdict" and type(e.get("pr")) is int:
+                    ts = parse_ts(e["ts"])
+                    if ts.tzinfo is None:
+                        raise ValueError("timestamp without a zone")
+                    old = mine.get(e["pr"])
+                    if old is None or ts > old[0] or (ts == old[0] and e.get("result") != "pass"):
+                        mine[e["pr"]] = (ts, e)
+            best = mine
+        except (OSError, ValueError, AttributeError, TypeError, KeyError):  # UnicodeDecodeError is a ValueError
+            unknown.append(f"program ledger {d.name}")
+    return {n: e for n, (_, e) in best.items()}, unknown
+
+
+def table_facts(rows, verdicts):
+    """{PR: what overlap_table orders by} from the open PR listing and repo_verdicts."""
+    out = {}
+    for r in rows:
+        failed, pending, _ = ci_summary(r.get("statusCheckRollup"))  # no checks reads pending, even on a no-CI repo
+        v = verdicts.get(r["number"])
+        state = ("none" if not v else "fail" if v.get("result") != "pass"
+                 else "current" if v.get("sha") == r.get("headRefOid") else "stale")
+        out[r["number"]] = {"verdict": state, "ci": "failed" if failed else "pending" if pending else "ok",
+                            "merge_state": r.get("mergeStateStatus"), "draft": bool(r.get("isDraft")),
+                            "base": r.get("baseRefName") or "main"}
+    return out
+
+
+def cmd_overlap_table(p, argv):
+    """The hot files of every open PR on the repo, whichever program owns it, and the order to land them in."""
+    import overlap_table
+    repo = p.cfg["repo"]
+    limit = opt(argv, "--max-open")
+    if limit is not None and not (limit.isdigit() and int(limit) > 0):
+        sys.exit("--max-open takes a positive integer")
+    verdicts, unknown = repo_verdicts(repo)
+    try:
+        rows = open_rows(repo)
+    except (SystemExit, Exception):
+        rows = []
+        unknown.append("open PR listing")
+    if len(rows) >= OPEN_LIMIT:
+        unknown.append(f"open PR listing (stops at {OPEN_LIMIT})")
+    files, unread = {}, []
+    for r in rows:
+        try:
+            changed = rest_files(repo, r["number"])
+        except (OSError, ValueError):
+            changed = None
+        # A listing that stops at the REST cap may have dropped files, so it counts as unread.
+        if changed is None or len(changed) >= REST_FILES_CAP:
+            unread.append(r["number"])
+        else:
+            files[r["number"]] = changed
+    print("\n".join(overlap_table.hot_table(files, table_facts(rows, verdicts),
+                                            int(limit) if limit else None, unread, unknown)))
+
+
 def cmd_overlap(argv):
     p = Program(argv[0])
+    if "--table" in argv:
+        return cmd_overlap_table(p, argv)
     rows, tasks = open_rows(p.cfg["repo"]), run_tasks(p.cfg["run"])
     events = p.events()
     prs, files, theirs, unread = cross_inputs(p.slug, p.cfg["repo"], events, rows,

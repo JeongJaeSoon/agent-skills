@@ -1,4 +1,4 @@
-<!-- translated-from: 0d766010b935d8fd79084db0789edb3523897673 -->
+<!-- translated-from: 44701bcab10ef3dbfe37f3285706101a89b7de74 -->
 # スキルカタログ
 
 `agent-skills` プラグインに入っているスキル40個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック16個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
@@ -250,8 +250,8 @@ PR を受け持つスキルとマージする主体:
 ### use-tracker
 - **使う場面:** チケットを読む、探す、作る、ラベルやコメントを付ける、状態を変えるとき、そしてスクリプトがチケットのデータを使うとき。
 - **内容:**
-  - トラッカーは、プログラムの設定 → `~/.claude/agent-skills.json` → 既定値の linear の順に決めます。
-  - セッションでは、Linear はまず `orca linear` を使い（既定のテキスト出力。結果をパースするときだけ `--json`）、`orca linear` にない機能（ドキュメント、ファイル・画像のアップロード、diff レビュー、release、milestone・cycle など）だけを Linear MCP で行います。Jira は接続されていれば MCP を使います。スクリプトは常に `tracker.py` を使います。`tracker.py` のコマンドは list、get、children、create、label、comment、attach、transition、reconcile です。reconcile はチケットと、それを届ける PR（チケットに添付された PR、タイトル・ブランチの ID、本文の closing keyword）を読み、どの状態が合うか（`started`、`review`、基準の確認、報告）と実行する milestone の行を出力するだけで、書き込みはしません。transition はまず現在の状態を読み、すでにその段階かそれより先に進んでいるチケットは変えません。`--to review` は設定の `tracker.<adapter>.review_status` があればその名前の状態へ、なければ In Review へ、それもなければ名前に review を含む唯一の started 状態へ移します。
+  - トラッカーは、プログラムの設定 → `~/.claude/agent-skills.json` → Orca の接続からの自動判別の順に決めます。接続が一つならそれ、両方ならいまのブランチと最近のコミットにあるチケットキーの形で選び、接続がなければ linear です。判別結果は設定に書かず、`tracker.py detect` で根拠を見られます。
+  - セッションでのチケットの参照・操作は `orca linear` / `orca jira` で行います（既定のテキスト出力。結果をパースするときだけ `--json`）。Orca にない機能（ドキュメント、アップロード、diff レビュー、release、milestone・cycle など）だけを MCP で行います。Orca がそのまま実行できる MCP 呼び出しは `tracker_gate` フックが拒否し、対応するコマンドを示します。スクリプトは常に `tracker.py` を使います。`tracker.py` のコマンドは list、get、children、create、label、comment、attach、transition、reconcile です。reconcile はチケットと、それを届ける PR（チケットに添付された PR、タイトル・ブランチの ID、本文の closing keyword）を読み、どの状態が合うか（`started`、`review`、基準の確認、報告）と実行する milestone の行を出力するだけで、書き込みはしません。transition はまず現在の状態を読み、すでにその段階かそれより先に進んでいるチケットは変えません。`--to review` は設定の `tracker.<adapter>.review_status` があればその名前の状態へ、なければ In Review へ、それもなければ名前に review を含む唯一の started 状態へ移します。
   - 決まった milestone（状態の遷移、PR リンク、完了コメント）は `tracker.py` の 1 行（`transition`、`attach`、`comment`）でセッションから直接行い、MCP も担当エージェントも通しません。それ以外の書き込みはすべて担当エージェントに任せ、読み取りだけをセッションで行います。担当はユーザーの指示 → 設定の `tracker.delegate_agent` → プラグイン agent `agent-skills:task-tracker` の順に決め、`"none"` ならセッションで直接書きます。`task-tracker` はトラッカーサイト固有の規則（プロジェクト、状態・遷移 id、ラベル、言語）を `tracker.rules_file` が指すユーザーの Markdown から毎回読み、キーがあるのにファイルがない・読めないときは推測せずに止まります。
   - 値を伏せる読み取り経路（`<PERSON>` のようなエンティティのプレースホルダーや `****`）で読んだ値はデータではありません。判断や書き戻しの前に伏せない経路で読み直し、伏せた値をフィールドに書き戻しません。
   - 状態の語彙は triage、backlog、unstarted、started、completed、canceled です。
@@ -585,6 +585,7 @@ PR を受け持つスキルとマージする主体:
 | `orchestrate.wait_foreground` | deny | オーケストレーター・リードが `orch wait`、`orch inbox --wait`、`orch watch-cards`、`orca orchestration check\|inbox --wait` を `run_in_background` なしで実行すること、またはバックグラウンドの待機を `\| tail`・`\| head` で切ること。ワーカーの `check --wait` は対象外です |
 | `orchestrate.send_devnull` | deny | オーケストレーター・リード・ワーカーが `orca orchestration send\|reply` の出力を `/dev/null` に捨てること。`2>/dev/null` だけなら対象外です |
 | `orchestrate.model_flag` | warn | `orchestrate.models` を設定しているのに、`orca orchestration worker-start`・`orca worktree create`・`orca agent launch` が `--model` なしで Claude を起動した。`--terminal` は対象外 |
+| `orchestrate.pr_poll` | warn | Monitor のコマンドが `gh pr list\|view\|checks` を 300 秒未満の sleep で回している。警告は `skills/orchestrate/scripts/pr_watch.py` を指す。deny には上がらない |
 | `orchestrate.self_land` | warn | `hooks/self_land_gate.py`。最初のプロンプトに `PROGRAM` と `orch land` を書いた `APPROVED` があるカードが、自分の PR を開いたまま `worker_done` や `orca worktree rm` を呼ぶこと。`READY-WAIT:` の行、`--outcome failed`、human-gate のプログラムは通します。`deny` にすると止めます |
 | `orchestrate.stack_dependent` | warn | 依存する PR がスタックになっていないこと。`hooks/stack_gate.py` が `gh pr create` でブリーフの `Lands after` とブランチの履歴を見て、`orch land`・`land-check` が land-after の依存と実際のスタックを比べます。`deny` にすると両方が止めます。読めないときは警告 1 行で通します |
 | `orchestrate.auto_wake_min` | なし(オフ)。setup の推奨バンドル: 10 | 正の整数 N。`orch wait` が idle と最初に表示したワーカーを N 分後に 1 回起こします(`skills/orchestrate/references/waking.md` の "Automatic wake")。キーがなければ表示だけで、オフだという警告を 1 行出します。同じ dispatch は 2 回起こさず、2 回目の停止は Needs you に上げます |
