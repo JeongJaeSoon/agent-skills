@@ -36,6 +36,8 @@ PYTHON_MODE = re.compile(rf"""\s*{MODE}""")
 # Calls in python source (strings and comments masked out): `.write_text(`, `Path(p).open("w")`, `open(path, "w")`.
 PYTHON_CALL = re.compile(r"\.write_(?:text|bytes)\(|\.open\(|\bopen\(")
 OPEN_SCAN = 400
+# Modules whose `.open(path, mode)` is not `Path.open(mode)`: their first argument is the path.
+OPEN_MODULES = {"io", "os", "codecs", "gzip", "bz2", "lzma", "tarfile", "zipfile", "shelve", "dbm", "webbrowser"}
 SED_INPLACE = re.compile(r"-[A-Za-z]*i|--in-place(?:=.*)?$")
 SED_VALUE_OPTS = {"-e", "-f", "--expression", "--file"}
 MEMORY = re.compile(r"/\.claude/projects/[^/]+/memory(?:/|$)")
@@ -225,7 +227,8 @@ def python_writes(code):
         if name.startswith("write_"):
             opens = True
         elif text.startswith("."):  # Path(p).open("w"): the mode is the first argument, the receiver a call
-            opens = mask[m.start() - 1:m.start()] in (")", "]") and bool(PYTHON_MODE.match(code, m.end()))
+            receiver = code[receiver_start(mask, m.start()):m.start()]
+            opens = receiver not in OPEN_MODULES and bool(PYTHON_MODE.match(code, m.end()))
         else:  # open(path, "w"): the mode follows a top-level comma
             comma, more = first_arg_end(mask, m.end())
             opens = more and bool(PYTHON_MODE.match(code, comma + 1))
@@ -263,7 +266,7 @@ def python_heredocs(cmds, cmd):
         reads_stdin = not {"-c", "-m"} & set(c.words[1:]) and [w for w in c.words[1:] if not w.startswith("-") or w == "-"] in ([], ["-"])
         if PYTHON.fullmatch(c.name) and reads_stdin:
             stdin = [r for r in c.redirects if r[0] in ("", "0") and r[1] in ("<", "<<", "<<-", "<>")]
-            for fd, op, delim in stdin if len(stdin) == 1 else ():  # a second stdin redirect replaces the heredoc
+            for fd, op, delim in stdin[-1:]:  # the last stdin redirect is the one the program reads
                 if op in ("<<", "<<-") and (body := heredoc_body(cmd, c.span[1], delim, op == "<<-")) is not None \
                         and python_writes(body):
                     out.append(("python heredoc file write", None))
@@ -284,9 +287,9 @@ def cd_targets(cmds, cwd, cmd):
     out, stack, pos = {}, [cwd], 0  # one directory per open parenthesis: a `(` copies, a `)` drops
     for c in sorted(cmds, key=lambda c: c.span[0]):
         for at in range(pos, c.span[0]):
-            if masked[at] == "(":
+            if no_case[at] == "(":  # no_case has the patterns, optional `(` included, blanked
                 stack.append(stack[-1])
-            elif masked[at] == ")" and len(stack) > 1 and at not in case_close:
+            elif no_case[at] == ")" and len(stack) > 1 and at not in case_close:
                 stack.pop()
         pos = c.span[0]
         out[id(c)] = stack[-1]
@@ -394,13 +397,19 @@ def flag_given(words, flag):
     """The word is an option of its own, not the value of `-m` and the like."""
     def value_of_previous(i):
         prev = words[i - 1] if i else ""
-        return prev in COMMIT_VALUE_OPTS or re.fullmatch(VALUE_CLUSTER, prev) is not None
+        return prev in COMMIT_VALUE_OPTS or takes_next(prev)
 
     return any(w == flag and not value_of_previous(i) for i, w in enumerate(words))
 
 
-FLAG_CLUSTER = r"-[aenqsSuvzioPp]*"  # git commit's short flags that take no value
-VALUE_CLUSTER = FLAG_CLUSTER + r"[mFCct]"  # the same, ending in one that takes the next word
+SHORT_CLUSTER = re.compile(r"-([aenqsSuvzioPp]*)(?:([mFCct])(.*))?")  # flags, then a flag taking a value, its text
+
+
+def takes_next(word):
+    """A `git commit` short-option word such as `-m` or `-am` whose last flag takes the next word as its value;
+    `-mtext` carries its value and `-a` takes none."""
+    m = SHORT_CLUSTER.fullmatch(word) if word != "-" else None
+    return bool(m and m.group(2) and not m.group(3))
 COMMIT_VALUE_OPTS = {"-m", "-F", "-C", "-c", "-t", "--message", "--file", "--author", "--date", "--template",
                      "--reuse-message", "--reedit-message", "--cleanup", "--fixup", "--squash", "--trailer"}
 
@@ -419,9 +428,9 @@ def commit_names(words, cwd):
             skip = True
         elif w == "--all":
             all_tracked = True
-        elif re.fullmatch(FLAG_CLUSTER + r"[mFCct]?", w):  # `-am` is flags and a message; `-mtext` carries its own
-            all_tracked = all_tracked or "a" in w
-            skip = w[-1] in "mFCct"
+        elif w != "-" and (m := SHORT_CLUSTER.fullmatch(w)):  # `-am` is flags and a message; `-amtext` carries its own
+            all_tracked = all_tracked or "a" in m.group(1)
+            skip = takes_next(w)
         elif not w.startswith("-"):
             paths.append(w)
     if paths:

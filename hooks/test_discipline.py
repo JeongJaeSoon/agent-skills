@@ -138,6 +138,9 @@ assert "worker.pre_push" not in bash("git commit -mtext --dry-run -a") and "work
 transcript("echo " + "$(" * 1000 + "echo pytest" + ")" * 1000)
 assert bash("git push origin HEAD") == ["worker.pre_push"]  # an unparsable past command is no evidence, no crash
 transcript("ls")
+assert bash("python3 -c \"from pathlib import Path; p=Path('probe.txt'); p.open('w').write('x')\"") == EDIT
+assert bash("python3 < /dev/null <<'PY'\nopen('probe.txt','w').write('x')\nPY") == EDIT  # the heredoc is the last stdin
+assert bash("(cd /tmp; case x in (x) :;; esac); echo x > probe.txt") == EDIT
 # a `cd` moves where a relative target lands
 assert bash("cd /tmp && echo x > a.py") == []
 assert bash(f"cd {TREE} && echo x > a.py", cwd=SCRATCH) == EDIT
@@ -237,6 +240,7 @@ sh("git", "commit", "-q", "-m", "code", cwd=TREE)
 (TREE / "code.py").write_text("x = 2\n")
 assert bash("git commit -am fix") == PUSH  # -a takes the tracked change the index does not hold yet
 assert bash("git commit code.py -m fix") == PUSH  # so does a pathspec
+assert bash("git commit -amtext") == PUSH  # -a survives a message attached to the cluster
 assert bash("git commit --dry-run -am fix") == []
 assert bash("git commit -m --dry-run -a") == PUSH  # `--dry-run` as a message is no flag
 assert bash("git commit -C HEAD -a") == PUSH  # `-C <commit>` after the verb is no directory
