@@ -1,4 +1,4 @@
-<!-- translated-from: 870645721c8a9c76a651282ea6c2c6918a28c297 -->
+<!-- translated-from: 5ac65a0e62bb64e6539052de09f31728b138749f -->
 # Skill catalog
 
 This page covers the 40 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 16 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
@@ -489,7 +489,7 @@ Program state lives in `~/.claude/programs/<slug>/`: `program.json`, the append-
 | `land-check` | Diagnoses readiness without merging |
 | `landed` | Records a merge that happened elsewhere |
 | `backfill` | Adds PRs merged before registration, and their main CI, to the ledger |
-| `heavy` | Runs heavy commands (compose, image builds) limited to 2 slots across the machine |
+| `heavy` | Runs heavy commands (compose, image builds) limited to machine-wide slots. The count is `landing.heavy_slots`, then `orchestrate.heavy_slots` in `agent-skills.json`, then a quarter of the CPUs (at least 2) |
 | `wait` | Lead only. Waits until there's a message to handle and prints `CLOSE OUT` lines |
 | `decide` | Registers (`add`), lists (`list`) and closes (`done`, `drop`) a decision the orchestrator or lead is waiting on the user for. It shows in the dashboard's Needs you with a button per option; a button records the answer and closes the decision, then sends one line, `decision <id>: <answer>`, to the orchestrator's or lead's terminal, once it is idle if it is busy |
 
