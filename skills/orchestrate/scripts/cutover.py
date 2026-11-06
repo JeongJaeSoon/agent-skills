@@ -378,6 +378,7 @@ def run():
     if r.returncode:
         raise store.Refused(f"`orch board show` fails after the import: {(r.stderr or r.stdout).strip()[:200]}")
     print(f"orch board show: ok ({len(r.stdout.splitlines())} lines)")
+    print("state step: " + store.state_setup(auto=True))  # acks and the stage table, so a fresh migration ends in one place
     return 0
 
 

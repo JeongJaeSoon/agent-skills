@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Change the user's agent-skills.json keys, permissions.allow and autoMode rules. The user runs --apply, never the agent.
 
-  config_emit.py emit --spec SPEC --out FILE   check SPEC, print the diff, write a standalone copy with SPEC embedded
+  config_emit.py emit --spec SPEC [--out FILE]   check SPEC, print the diff, write a standalone copy with SPEC embedded
+                                                 (default FILE: ~/.local/state/agent-skills/config-scripts/<spec name>-<YYYYMMDD>.py)
   config_emit.py --spec SPEC [--apply HASH]    dry run (default) or apply
   FILE [--apply HASH]                          the emitted copy: same, with its embedded spec
 
@@ -45,6 +46,8 @@ CONFIG_DIR = pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR") or HOME_DIR).expan
 SETTINGS = {"profile": CONFIG_DIR / "settings.json", "home": HOME_DIR / "settings.json"}
 SKILLS_JSON = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-skills.json").expanduser()
 HERE = pathlib.Path(__file__).resolve()
+# Default home of emitted scripts. Scripts left in the old ~/agent-skills-config/ are not moved or deleted.
+OUT_DIR = pathlib.Path.home() / ".local" / "state" / "agent-skills" / "config-scripts"
 # An emitted copy can sit anywhere, even at /tmp/x.py; it never reads the repo.
 REPO = HERE.parents[3] if len(HERE.parents) > 3 else HERE.parent
 AUTOMODE_PATH = REPO / "skills" / "tune-automode" / "scripts" / "automode_rule.py"
@@ -465,7 +468,7 @@ def run(spec, settings_override, skills_json, apply, digest=None):
     print("Settings changes reach sessions started after this; restart a session that still sees the old ones.")
 
 
-def emit(spec, out, settings_override, skills_json):
+def emit(spec, out, settings_override, skills_json, exclusive=False):
     source = pathlib.Path(__file__).read_text()
     markers = ("SPEC = None  # emit replaces this line\n", "AUTOMODE_SOURCE = None  # emit replaces this line\n")
     if not all(m in source for m in markers):
@@ -478,7 +481,12 @@ def emit(spec, out, settings_override, skills_json):
     body = source.replace(markers[0], f"SPEC = {pprint.pformat(spec, width=110, sort_dicts=False)}\n", 1)
     body = body.replace(markers[1], f"AUTOMODE_SOURCE = {AUTOMODE_PATH.read_text()!r}\n", 1)
     out.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    if exclusive:
+        fd, out = open_new(out)
+        replaced = ""
+    else:
+        replaced = " (replaced an existing file)" if out.exists() else ""
+        fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
         f.write(body)
     out.chmod(0o600)
@@ -487,8 +495,20 @@ def emit(spec, out, settings_override, skills_json):
         extra += f" --skills-json {shlex.quote(str(skills_json.absolute()))}"
     digest = script_hash(out)
     check = shlex.quote(f"{digest}  {out}")
-    print(f"\nwrote {out}\nThe user reviews it and runs:\n"
+    print(f"\nwrote {out}{replaced}\nThe user reviews it and runs:\n"
           f"  ! echo {check} | shasum -a 256 -c - && python3 -I {shlex.quote(str(out))}{extra} --apply {digest[:12]}")
+
+
+def open_new(first):
+    """Create `first`, or `-2`, `-3` ... beside it, with O_EXCL so a script whose run line the user may hold,
+    or one a parallel emit just made, is never replaced."""
+    n = 1
+    while True:
+        path = first if n == 1 else first.with_name(f"{first.stem}-{n}{first.suffix}")
+        try:
+            return os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), path
+        except FileExistsError:
+            n += 1
 
 
 def prepare(spec):
@@ -519,9 +539,10 @@ def main(argv):
         else:
             p.error("--spec is required")
         if a.command == "emit":
-            if not a.out or a.apply or not a.spec:
-                p.error("emit needs --spec and --out and never takes --apply")
-            emit(spec, a.out, a.settings, a.skills_json)
+            if a.apply or not a.spec:
+                p.error("emit needs --spec and never takes --apply")
+            out = a.out or OUT_DIR / f"{a.spec.stem}-{time.strftime('%Y%m%d')}.py"
+            emit(spec, out, a.settings, a.skills_json, exclusive=not a.out)
         else:
             run(spec, a.settings, a.skills_json, a.apply, script_hash(HERE, spec if a.spec else None)[:12])
     except Refused as e:
