@@ -1,6 +1,6 @@
 # 스킬 카탈로그
 
-`agent-skills` 플러그인이 싣는 스킬 38개(`skills/*/SKILL.md`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 16개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
+`agent-skills` 플러그인이 싣는 스킬 37개(`skills/*/SKILL.md`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 16개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
 
 설정 기본값 변경과 기존 데이터 보존 방법은 [설정 전환 안내](configuration-migration.md)를 따른다. 노트·원장·개인 폴더는 명시 설정이 필요하고, 성과 보고 기본 시간대는 UTC다.
 
@@ -174,7 +174,7 @@ PR 을 맡는 스킬과 머지 주체:
     - `mailbox_guard.py`: 옛 설치에서 hook으로 넘어가는 전환용 shim.
     - 테스트 파일.
   - `assets/dashboard/`: 대시보드 화면.
-- **관계:** 워커는 `deliver-ticket`을 따른다. `use-tracker`, `use-notes`, `create-verification-skill`, `show-me-your-work`, `fan-out`, `reap-resources`, `reflect`, `end-session`을 가져다 쓴다.
+- **관계:** 워커는 `deliver-ticket`을 따른다. `use-tracker`, `use-notes`, `verification-skill`, `show-me-your-work`, `fan-out`, `reap-resources`, `reflect`, `end-session`을 가져다 쓴다.
 
 ### reboot
 - **언제:** 세션·Orca·머신이 재시작됐거나 컴팩션이 일어난 직후, 다른 일보다 먼저. "재시작했어", "Orca 재시작했어", "세션 다시 띄웠어", "복구 점검해줘". 무슨 일을 하던 중이었는지 되짚는 것은 `recall`이다.
@@ -308,7 +308,7 @@ PR 을 맡는 스킬과 머지 주체:
 - **관계:** `brief`의 할 일·보류 큐 줄이 가리키는 곳. 대시보드에서는 To-do 페이지.
 
 ### map-features
-- **언제:** 제품이 지금 무엇을 하는지 사람이 읽을 지도가 필요할 때. PRD, 로드맵, 온보딩, 현황 문서. "feature map 만들어줘", "기능 지도 그려줘", "지금 뭐가 구현돼 있는지 정리해줘". verify 스킬이 기능을 구동하는 지도는 `create-verification-skill`, 한 하위 시스템의 동작은 `how`.
+- **언제:** 제품이 지금 무엇을 하는지 사람이 읽을 지도가 필요할 때. PRD, 로드맵, 온보딩, 현황 문서. "feature map 만들어줘", "기능 지도 그려줘", "지금 뭐가 구현돼 있는지 정리해줘". verify 스킬이 기능을 구동하는 지도는 `verification-skill`의 create 모드, 한 하위 시스템의 동작은 `how`.
 - **내용:**
   - 첫 줄에 기준(저장소, ref, 짧은 sha, 커밋 날짜)을 적고 모든 행을 그 커밋 기준으로 쓴다.
   - 배포 단위(앱)를 빌드·배포 설정에서 찾아 표로, 기대되지만 없는 앱은 대신 있는 것과 함께 목록으로 적는다.
@@ -484,20 +484,20 @@ PR 을 맡는 스킬과 머지 주체:
   - 실패 테스트를 먼저 돌려 실패 이유를 확인하고, 최소한으로 고친 뒤 통과를 확인한다.
   - 테스트가 비현실적이면 이유를 밝히고 가장 가까운 실행 가능한 검사를 쓴다. 기존 assertion은 약하게 만들지 않는다.
 
-### create-verification-skill
-- **내용:**
+### verification-skill
+- **언제:** 재사용할 verify 스킬을 새로 만들 때("verify 스킬 만들어줘", `/agent-skills:verification-skill create`, 옛 `/create-verification-skill`)는 create 모드, 있는 verify 스킬을 점검·보수할 때("verify 스킬 점검해줘", 주 1회 점검, 기능을 구동하지 못한 verify 스킬)는 maintain 모드. 변경 하나가 동작하는지 확인하는 것은 `deliver-ticket`이다.
+- **create 모드:**
   - 저장소를 조사해 앱을 사용자처럼 띄우고 조작하고 관찰하는 저장소 전용 스킬 `.claude/skills/verify-<app>/`을 만든다. Launch, Doctor, Drive, Evidence, Cleanup 단계를 둔다.
   - 주요 기능 3~5개의 기능 지도를 함께 만든다.
   - 직접 끝까지 한 번 돌려 증명한다.
   - `deliver-ticket`과 `orchestrate`는 범위 내에서 재사용할 검증 도구가 유용할 때 호출할 수 있다. 같은 수용 기준을 입증하는 직접 검사도 유효하다. upstream은 사용자 호출 전용이며 이 fork는 모델 호출도 허용한다.
-- **동봉:** `references/feature-map-example/`(예시 앱의 기능 지도), `scripts/verify_skill_lint.py`(생성한 스킬을 파일만 읽어 점검한다. frontmatter·섹션, 상태 파일 이름, 공용 `latest` 링크, cleanup 인자 필수, 패턴 종료, helper 실행 권한·문서화, 기능 지도 색인. `maintain-verification-skill`도 같은 스크립트를 쓴다).
-
-### maintain-verification-skill
-- **내용:**
+- **maintain 모드:**
   - 기능마다 소스를 읽고, 모든 기능을 실제로 구동해 기능 지도와 대조한다.
   - 문제는 문서 drift, 하니스 결함, 제품 결함으로 나눈다. 제품 결함은 보고만 한다.
   - 결과는 clean, changed(증명된 수정만 PR 하나), blocked 중 하나다.
   - flow improver가 일주일에 한 번 돌리고, verify 스킬이 기능을 못 다루거나 잘못 설명했다는 보고(`deliver-ticket`, QA lead)가 오면 리드가 워커에 맡긴다.
+  - 점검할 verify 스킬이 없으면 멈추고 create 모드를 안내한다.
+- **동봉:** `references/create.md`, `references/maintain.md`, `references/feature-map-example/`(예시 앱의 기능 지도), `scripts/verify_skill_lint.py`(생성한 스킬을 파일만 읽어 점검한다. frontmatter·섹션, 상태 파일 이름, 공용 `latest` 링크, cleanup 인자 필수, 패턴 종료, helper 실행 권한·문서화, 기능 지도 색인. 두 모드가 같은 스크립트를 쓴다).
 
 ## 명령
 
