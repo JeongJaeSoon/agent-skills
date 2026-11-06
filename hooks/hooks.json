@@ -30,6 +30,10 @@
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/prose_check.py\"", "timeout": 5 }]
       },
       {
+        "matcher": "mcp__.*([Ll]inear|[Jj]ira|[Aa]tlassian).*",
+        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/tracker_gate.py\"", "timeout": 5 }]
+      },
+      {
         "matcher": "Bash",
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/stack_gate.py\"", "timeout": 10 }]
       },

@@ -224,7 +224,7 @@ PR 을 맡는 스킬과 머지 주체:
 
 ### tune-automode
 - **언제:** auto mode 분류기가 행동을 거부했고 사용자가 그런 행동을 앞으로 허용하고 싶을 때, 또는 auto mode가 에이전트에게 허용하는 범위를 바꾸려 할 때. "auto mode 가 막았어", "이거 허용되게 규칙 추가해줘".
-- **내용:** 거부 카테고리와 거부된 행동에서 그 행동 부류만 덮는 가장 작은 allow·soft_deny·environment 규칙을 만든다. 규칙에는 행동 부류, 안전한 조건, `Not covered:`가 들어간다. 검토 체크리스트(포괄 허용 금지, 사용자가 말하지 않은 프로덕션 파괴 동사 금지, 사용자 본인 채팅만 권한)를 통과시킨 뒤 `scripts/automode_rule.py emit`이 diff를 보여 주고 spec을 박은 독립 스크립트를 홈 아래에 쓴다. 사용자가 `! python3 -I <경로> --apply <spec 해시>`로 적용한다. 해시는 사용자가 본 diff의 spec과 맞아야 한다. 스크립트는 타임스탬프 백업, 멱등 병합, JSON 검증을 하고 되돌리는 명령을 출력한다. 에이전트는 settings.json을 고치지 않고, 그 스크립트를 실행하지 않고, 기다리는 동안 거부를 우회하지 않는다.
+- **내용:** 거부 카테고리와 거부된 행동에서 그 행동 부류만 덮는 가장 작은 allow·soft_deny·environment 규칙을 만든다. 규칙에는 행동 부류, 안전한 조건, `Not covered:`가 들어간다. 검토 체크리스트(포괄 허용 금지, 사용자가 말하지 않은 프로덕션 파괴 동사 금지, 사용자 본인 채팅만 권한)를 통과시킨 뒤 `scripts/automode_rule.py emit`이 spec을 점검하고(spec의 `refusal_category`가 없거나 `no-verdict`면, `Not covered:` 없는 allow 규칙이면 거절한다. 포괄 표현, 티켓·PR 번호, 토큰 같은 문자열, 기존 규칙과 거의 같은 규칙은 경고한다) diff를 보여 주고 spec을 박은 독립 스크립트를 홈 아래에 쓴다. 사용자가 `! python3 -I <경로> --apply <spec 해시>`로 적용한다. 해시는 사용자가 본 diff의 spec과 맞아야 한다. 스크립트는 타임스탬프 백업, 멱등 병합, JSON 검증을 하고 되돌리는 명령을 출력한다. 에이전트는 settings.json을 고치지 않고, 그 스크립트를 실행하지 않고, 기다리는 동안 거부를 우회하지 않는다.
 - **동봉:** `scripts/automode_rule.py`, 테스트 파일, `references/example-settings.json`.
 - **관계:** 사용자 설정의 `permissions.allow`와 `agent-skills.json` 키는 `skills-config`(autoMode 규칙을 함께 넣을 때 이 스킬의 엔진을 공유), 프로젝트 설정과 hooks는 내장 `update-config`, 프로젝트 전체 초안은 내장 `/auto-mode-setup`이 맡는다. `orchestrate`의 Frame과 Refused acts가 저장소 머지·배포의 지속 승인 규칙("프로젝트 지속 승인")을 이 스킬로 만든다.
 
@@ -261,8 +261,8 @@ PR 을 맡는 스킬과 머지 주체:
 ### use-tracker
 - **언제:** 티켓을 읽기, 찾기, 만들기, 라벨·댓글 달기, 상태 바꾸기 할 때와 스크립트가 티켓 데이터를 쓸 때.
 - **내용:**
-  - 트래커는 프로그램 설정 → `~/.claude/agent-skills.json` → 기본값 linear 순서로 정한다.
-  - 세션에서 Linear는 `orca linear`를 먼저 쓰고(기본 텍스트 출력, 결과를 파싱할 때만 `--json`), `orca linear`에 없는 기능(문서, 파일·이미지 업로드, diff 리뷰, release, milestone·cycle 등)만 Linear MCP로 한다. Jira는 연결돼 있으면 MCP를 쓴다. 스크립트는 항상 `tracker.py`를 쓴다. `tracker.py` 명령은 list, get, children, create, label, comment, attach, transition, reconcile이다. reconcile은 티켓과 그 티켓을 배달하는 PR(티켓에 첨부된 PR, 제목·브랜치의 ID, 본문의 closing keyword)을 읽어 어느 상태가 맞는지(`started`, `review`, 기준 확인, 보고)와 실행할 milestone 줄을 출력만 하고 쓰지 않는다. transition은 현재 상태를 먼저 읽어 이미 그 단계이거나 더 나아간 티켓은 바꾸지 않는다. `--to review`는 설정의 `tracker.<adapter>.review_status`가 있으면 그 이름의 상태로, 없으면 In Review로, 그것도 없으면 이름에 review가 든 유일한 started 상태로 옮긴다.
+  - 트래커는 프로그램 설정 → `~/.claude/agent-skills.json` → Orca 연결 자동 판별 순서로 정한다. 연결이 하나면 그것, 둘이면 현재 브랜치와 최근 커밋의 티켓 키 모양으로 가르고, 연결이 없으면 linear다. 판별 결과는 설정에 쓰지 않고 `tracker.py detect`로 근거를 본다.
+  - 세션에서 티켓 조회·관리는 `orca linear` / `orca jira`로 한다(기본 텍스트 출력, 결과를 파싱할 때만 `--json`). Orca에 없는 기능(문서, 업로드, diff 리뷰, release, milestone·cycle 등)만 MCP로 한다. Orca가 그대로 실행할 수 있는 MCP 호출은 `tracker_gate` hook이 거부하고 대응 명령을 알려 준다. 스크립트는 항상 `tracker.py`를 쓴다. `tracker.py` 명령은 list, get, children, create, label, comment, attach, transition, reconcile이다. reconcile은 티켓과 그 티켓을 배달하는 PR(티켓에 첨부된 PR, 제목·브랜치의 ID, 본문의 closing keyword)을 읽어 어느 상태가 맞는지(`started`, `review`, 기준 확인, 보고)와 실행할 milestone 줄을 출력만 하고 쓰지 않는다. transition은 현재 상태를 먼저 읽어 이미 그 단계이거나 더 나아간 티켓은 바꾸지 않는다. `--to review`는 설정의 `tracker.<adapter>.review_status`가 있으면 그 이름의 상태로, 없으면 In Review로, 그것도 없으면 이름에 review가 든 유일한 started 상태로 옮긴다.
   - 정해진 milestone(상태 전이, PR 링크, 완료 코멘트)은 `tracker.py` 한 줄(`transition`, `attach`, `comment`)로 세션에서 직접 하고 MCP나 담당 에이전트를 거치지 않는다. 그 밖의 쓰기는 모두 담당 에이전트에 맡기고 읽기만 여기서 한다. 담당은 사용자 지시 → 설정의 `tracker.delegate_agent` → 플러그인 agent `agent-skills:task-tracker` 순서로 정하고, `"none"`이면 세션에서 직접 쓴다. `task-tracker`는 트래커 사이트 고유 규칙(프로젝트, 상태·전이 id, 라벨, 언어)을 `tracker.rules_file`이 가리키는 사용자 Markdown에서 매번 읽는다. 키가 있는데 파일이 없거나 읽지 못하면 추측하지 않고 멈춘다.
   - 값을 가리는 읽기 경로(`<PERSON>` 같은 개체 자리표시자나 `****`)에서 읽은 값은 데이터가 아니다. 판단·되쓰기 전에 가리지 않는 경로로 다시 읽고, 가려진 값을 필드에 되쓰지 않는다.
   - 상태 어휘는 triage, backlog, unstarted, started, completed, canceled다.
@@ -520,7 +520,7 @@ PR 을 맡는 스킬과 머지 주체:
 | `land-check` | 머지 없이 준비 상태만 진단 |
 | `landed` | 밖에서 한 머지를 기록 |
 | `backfill` | 등록 전에 머지된 PR과 main CI를 원장에 넣는다 |
-| `heavy` | 무거운 명령(compose, 이미지 빌드)을 머신 전체 2슬롯으로 제한해 실행 |
+| `heavy` | 무거운 명령(compose, 이미지 빌드)을 머신 전체 슬롯으로 제한해 실행. 슬롯 수는 `landing.heavy_slots`, `agent-skills.json`의 `orchestrate.heavy_slots`, CPU 수의 4분의 1(최소 2) 순으로 정한다 |
 | `wait` | 리드 전용. 처리할 메시지가 올 때까지 기다리고 `CLOSE OUT` 줄을 낸다 |
 | `decide` | 오케스트레이터나 리드가 사용자 결정을 기다리는 일을 등록(`add`)·조회(`list`)·닫기(`done`, `drop`). 대시보드 Needs you에 선택지 버튼과 함께 뜨고, 버튼은 답을 기록해 결정을 닫은 뒤 `decision <id>: <답>` 한 줄을 오케스트레이터나 리드 터미널에 보낸다. 오케스트레이터나 리드가 바쁘면 한가해질 때 보낸다 |
 

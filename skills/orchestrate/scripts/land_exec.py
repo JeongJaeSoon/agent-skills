@@ -49,6 +49,15 @@ def log(msg):
             f.write(line + "\n")
 
 
+def kick_reap_hard():
+    """A landed PR frees its card: ask for a reap-hard pass now rather than at its next 30-minute beat. Best effort; a
+    pass the beat started a few minutes ago is not repeated."""
+    with contextlib.suppress(Exception):
+        sys.path.insert(1, str(HERE.parent.parent / "reap-resources" / "scripts"))
+        import reap  # noqa: E402
+        reap.spawn_hard("land")
+
+
 def beat(**fields):
     STATE.mkdir(parents=True, exist_ok=True)
     tmp = prog.LAND_HEARTBEAT.with_suffix(".tmp")
@@ -85,6 +94,8 @@ class Round:
             if status == "refused" and p is not None and code == 1:
                 prog.stop_land(p, row["pr"], why)  # releases its lanes, withdraws the land call (cmd_land does the same)
             store.land_finish(rid, status, code, why, merge_sha, {**audit, "message": why[:500]}, by=BY)
+            if status == "merged":
+                kick_reap_hard()
             log(f"request {rid} {row['repo']}#{row['pr']} {status}{f' ({code})' if code is not None else ''}: {why[:300]}")
             return status
 

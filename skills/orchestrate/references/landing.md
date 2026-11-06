@@ -219,6 +219,7 @@ The guardian, or with none running whoever is about to record `main_red`, reads 
 - Merges you did not make: `land` records a PR that was merged outside it.
 - `orchestrate.self_land` in `~/.claude/agent-skills.json` (`warn` by default, `deny` to enforce, `off`) sets what `hooks/self_land_gate.py` does when a card with a `PROGRAM` row and an APPROVED line naming `orch land` closes over its open PR.
 - Tune a program in `program.json` under `"landing"`: `aging_hours`, `stale_hours`, `max_backlog_hours`, `land_interval_minutes` (only the backlog estimate before two landings exist, never a pacing limit), `exclusive_stale_minutes`, `exclusive_paths`, `visual_paths` (`orch set <slug> visual_paths a/*,b/*`), `heavy_slots`.
+- `orch heavy` takes `heavy_slots` from `landing.heavy_slots`, else `orchestrate.heavy_slots` in `~/.claude/agent-skills.json` (a positive integer; `orch heavy -` passes no program, so a bare card follows the user file), else `max(2, CPUs // 4)`: 4 on 18 CPUs, 2 on 8 or fewer. After a lowering, a run that holds a slot past the new count keeps it until it ends; only new runs follow the smaller count.
 - Shared state is append-only (`ledger.jsonl`) or replaced whole: write a temp file and rename it, since a shared JSON file overwritten in place can be read empty mid-write.
 
 ## human-gate
