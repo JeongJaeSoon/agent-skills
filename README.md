@@ -87,13 +87,14 @@ Skills fire on their own when the situation in their description comes up. You c
 
 - "Finish ABC-1" runs `deliver-ticket` from the plan to the merge and the closed ticket. This needs a tracker: Linear by default, or set `tracker.adapter` (see [Configuration](#configuration)).
 - "Give me a status report" runs `brief`. Claude Code has a built-in `/brief`, so call this one directly as `/agent-skills:brief`. `/brief-pane` opens the same report in a panel beside the chat that refreshes every 30 seconds while it is open (it docks at 110+ columns; narrower terminals show it above the prompt).
-- In Orca, start a top-level session with `claude --agent agent-skills:orchestrator --name orchestrator` and ask it to take over every session. The orchestrator hands each project to a lead session, and each lead runs its workers. Once the orchestrator session's context passes `orchestrate.restart_at` (130k tokens by default) and nothing waits on it, a band above the prompt says `/clear` is safe; the next session picks up its role and a saved handoff. Leads rely on auto-compact and get no band; a lead's `orch handoff save` goes to `lead:<slug>`, and the orchestrator's key is refused to it. Typing `/clear` stays yours unless you set `orchestrate.auto_clear: true`.
+- In Orca, start a top-level session with `claude --agent agent-skills:orchestrator --name orchestrator` and ask it to take over every session. The orchestrator hands each project to a lead session, and each lead runs its workers. Once the orchestrator session has auto-compacted 3 times, a compaction stopped shrinking its context, or two came less than 30 minutes apart (`orchestrate.compact_restart`, on by default; `restart_at` is an optional token ceiling, off unless set), and nothing waits on it, a band above the prompt says `/clear` is safe; the next session picks up its role and a saved handoff. `restart_at` no longer defaults to 130k, so a setup that relied on that default is now prompted by compaction history instead. Leads rely on auto-compact and get no band; a lead's `orch handoff save` goes to `lead:<slug>`, and the orchestrator's key is refused to it. Typing `/clear` stays yours: `orchestrate.auto_clear: true` lets the session type it when the ceiling is passed, and `orchestrate.compact_restart.auto_clear: true` when the compaction rules fire.
 
 ## Where you stay in charge
 
 - **Your settings.** `setup-pc`, `tune-automode` and `skills-config` produce a diff and a `!` command. You run it. This cannot be turned off.
 - **Prompts and denials.** A permission prompt waits for you. When the auto-mode classifier denies an action, the agent reports and stops. To let a kind of action through from then on, you add a `permissions.allow` entry or an autoMode rule that `tune-automode` drafts.
 - **Irreversible actions.** Destructive migrations, force-pushing a shared branch, production deploys and sending anything outside always stop and ask.
+- **Card work habits.** A dispatched card that writes a file from Bash (`sed -i`, a redirect), chains a commit or `rm` with other commands, edits outside its worktree or in a main checkout, writes your auto-memory, or pushes before any test ran gets a warning line and a row in `turn-warnings.jsonl`. Nothing is blocked; the `worker.*` keys in `docs/skills.en.md` turn each check off or up to `deny`.
 - **Merges.** An `orchestrate` card lands its own PR through `orch land` when its first prompt approves the merge, then closes itself; a repo with no CI needs `orchestrate.no_ci_repos` first. `deliver-ticket` outside a program merges on its own only when an autoMode rule allows merging in that repo. Without one it asks. The `human-gate` policy, or saying you will look first, makes them stop before every merge.
 - **Scheduled cleanup.** `janitor` and `pressure-watch` clean up after finished agents on a schedule. Turn either off with `skills-sync setup disable <name>`. Auto-approving or auto-merging your PRs in `watch-prs` stays off until you configure it.
 
@@ -106,14 +107,24 @@ When each skill fires, what it does and the files it ships are in the [skill cat
 | Group | Skills | What they do |
 |---|---|---|
 | [One ticket](docs/skills.en.md#one-ticket) | `write-ticket`, `deliver-ticket`, `ui-review`, `handoff-ticket`, `dispatch-card`, `end-session` | Write a ticket, deliver it, hand the next one to a fresh card, record progress and close the session |
-| [One project](docs/skills.en.md#one-project-several-orca-workers) | `orchestrate`, `reboot`, `measure-delivery` | Land many tickets in parallel on Orca workers, put back what a restart dropped, then measure how it actually went |
+| [One project](docs/skills.en.md#one-project-several-orca-workers) | `orchestrate`, `reboot` | Land many tickets in parallel on Orca workers, put back what a restart dropped, then measure how it actually went (`reflect`'s measure mode) |
 | [One machine](docs/skills.en.md#one-machine) | `reap-resources`, `secure-fill`, `tune-automode`, `skills-config`, `setup-pc` | Clean up leftovers, fill secrets the agent never sees, draft autoMode rules, change config keys, install and update |
 | [Chat and reviews](docs/skills.en.md#chat-and-reviews) | `watch-mentions`, `watch-prs` | Turn chat and PRs that concern you into work |
 | [Adapters](docs/skills.en.md#adapters) | `use-tracker`, `use-notes` | Linear and Jira tickets, Obsidian and Markdown notes |
 | [Writing](docs/skills.en.md#writing) | `brief`, `stage`, `todo`, `map-features`, `write-plainly`, `prune-comments`, `write-skill` | Status reports, stage tables, to-do and hold queues, feature maps, plain prose, comment cleanup, skill authoring checks |
-| [pstack](docs/skills.en.md#pstack-skills-lauren-tan-mit) | `architect`, `arena`, `blast-radius`, `create-verification-skill`, `figure-it-out`, `how`, `interrogate`, `maintain-verification-skill`, `principles`, `recall`, `reflect`, `show-me-your-work`, `swarm`, `tdd`, `teach`, `why` | Design, comparison, impact analysis, verification, explanation, retrospectives |
+| [pstack](docs/skills.en.md#pstack-skills-lauren-tan-mit) | `architect`, `blast-radius`, `create-verification-skill`, `fan-out`, `figure-it-out`, `how`, `interrogate`, `maintain-verification-skill`, `principles`, `recall`, `reflect`, `show-me-your-work`, `tdd`, `teach`, `why` | Design, comparison, impact analysis, verification, explanation, retrospectives |
 
 The pstack group comes from Lauren Tan's [pstack](https://github.com/cursor/plugins) (MIT). These skills are now maintained here on their own: `vendor/pstack` keeps the original files as upstream had them, and an optional daily job reports upstream changes, which are ported by hand when worth it. With several sessions, two layers sit above the workers: the orchestrator (one top-level session) and leads (one per project). See the [Roles table in orchestrate](skills/orchestrate/SKILL.md#roles).
+
+## Renamed skills
+
+Some skills were merged into another skill as a mode. The old name is gone, so `/agent-skills:<old name>` no longer runs anything: use the new command.
+
+| Old command | New command / mode |
+|---|---|
+| `/agent-skills:measure-delivery` | `/agent-skills:reflect`, measure mode |
+| `/agent-skills:swarm` | `/agent-skills:fan-out`, sweep mode |
+| `/agent-skills:arena` | `/agent-skills:fan-out`, compete mode |
 
 ## Configuration
 
@@ -140,7 +151,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for setting up a checkout and the rules f
 There is no CI. Run every test file before sending a change:
 
 ```bash
-for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/measure-delivery/scripts/test_measure.py skills/reap-resources/scripts/test_reap.py skills/reap-resources/scripts/test_cards.py skills/reap-resources/scripts/test_pressure.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/watch-prs/scripts/test_review_wait.py skills/watch-prs/scripts/test_notify.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py skills/skills-config/scripts/test_config_emit.py skills/setup-pc/scripts/test_setup_check.py scripts/test_setup.py skills/brief/scripts/test_table_width.py skills/reflect/scripts/test_lesson_ids.py skills/deliver-ticket/scripts/test_shots.py skills/deliver-ticket/scripts/test_review_pick.py skills/ui-review/scripts/test_ui_measure.py skills/reboot/scripts/test_reboot.py hooks/test_*.py scripts/test_sync.py scripts/test_card.py scripts/test_preview_watch.py scripts/test_automations.py scripts/test_share_server.py scripts/test_reap_hard.py scripts/test_public_shapes.py scripts/test_skill_tokens.py scripts/test_allowed_tools.py; do python3 "$t"; done
+for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/reflect/scripts/test_measure.py skills/reap-resources/scripts/test_reap.py skills/reap-resources/scripts/test_cards.py skills/reap-resources/scripts/test_pressure.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/watch-prs/scripts/test_review_wait.py skills/watch-prs/scripts/test_notify.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py skills/skills-config/scripts/test_config_emit.py skills/setup-pc/scripts/test_setup_check.py scripts/test_setup.py skills/brief/scripts/test_table_width.py skills/reflect/scripts/test_lesson_ids.py skills/deliver-ticket/scripts/test_shots.py skills/deliver-ticket/scripts/test_review_pick.py skills/ui-review/scripts/test_ui_measure.py skills/reboot/scripts/test_reboot.py hooks/test_*.py scripts/test_sync.py scripts/test_card.py scripts/test_preview_watch.py scripts/test_automations.py scripts/test_share_server.py scripts/test_reap_hard.py scripts/test_public_shapes.py scripts/test_skill_tokens.py scripts/test_allowed_tools.py; do python3 "$t"; done
 bash scripts/pstack-sync-test.sh
 ```
 

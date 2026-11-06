@@ -3,18 +3,21 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { ClearBandView } from '../types'
 
-const FLOOR = 50_000
 const PERIOD_MS = 60_000
 const READY_TIMEOUT_MS = 20_000
+// A lead session (`orch handoff ready` returned its lead key) is not asked again for this long; a new session id
+// (a /clear) is asked at once.
+const NOT_ORCHESTRATOR_MS = 600_000
 
 // Bump the tag when ClearBandView changes: it declines what an earlier version stored.
 const view = atom(
   { plugin: 'agent-skills', key: 'clear-band' } as const,
   null as ClearBandView | null,
-  { shape: 'clear-band-1' },
+  { shape: 'clear-band-2' },
 )
 
 let timer: { cancel: () => void } | undefined
+let skipped: { session: string; until: number; roleless: boolean } | undefined
 let asking = false
 let running = false
 let working = false
@@ -37,12 +40,12 @@ async function check($: EngineInterface): Promise<void> {
   const began = turn
   try {
     const tokens = (await $.session.usage()).context.tokens ?? 0
-    if (tokens < FLOOR) {
+    const session = await $.session.id()
+    if (skipped?.session === session && Date.now() < skipped.until) {
       stop()
       await update($, view, () => null)
       return
     }
-    const session = await $.session.id()
     // A subagent's result would land in the cleared session, which knows nothing of it.
     const agents = (await $.agent.list()).filter(a => a.status === 'running').length
     // The module's process has no plugin bin/ on PATH, so name orch by path.
@@ -57,11 +60,16 @@ async function check($: EngineInterface): Promise<void> {
     } catch {
       const detail = (run.stderr.trim().split('\n').pop() ?? '').slice(0, 120)
       const error = `check failed (exit ${run.exitCode}) ${detail}`
-      got = { show: true, ready: false, context: tokens, threshold: 0, reason: '', session, error }
+      got = { show: true, ready: false, context: tokens, due: '', key: '', reason: '', session, error }
     }
     if (began !== turn) {
       again = true
       return
+    }
+    // Only a lead is remembered: its role comes with `--agent` and does not change. A session with no role yet may
+    // declare one (ROLE: orchestrator) in a later turn, so it is asked again at the next turn.
+    if (got.error === '' && got.key !== 'orchestrator') {
+      skipped = { session, until: Date.now() + NOT_ORCHESTRATOR_MS, roleless: !got.key }
     }
     await update($, view, () => got)
     if (got.show && !timer) timer = $.clock.every(PERIOD_MS, () => void check($))
@@ -69,7 +77,7 @@ async function check($: EngineInterface): Promise<void> {
   } catch (error) {
     const why = `check failed: ${error instanceof Error ? error.message : String(error)}`.slice(0, 160)
     const session = await $.session.id().catch(() => '')
-    const blank = { show: true, ready: false, context: 0, threshold: 0, reason: '', session }
+    const blank = { show: true, ready: false, context: 0, due: '', key: '', reason: '', session }
     await update($, view, old => ({
       ...(old && old.session === session ? old : blank),
       show: true,
@@ -97,6 +105,7 @@ export const register: Register = on => {
     if (e.agentId === undefined) {
       working = true
       turn += 1
+      if (skipped?.roleless) skipped = undefined
       // A turn may take mail or start subagents: the verdict from before it stops counting.
       await update($, view, old => (old ? { ...old, ready: false } : old))
     }
@@ -125,13 +134,21 @@ export const register: Register = on => {
       line = <Text dimColor>clear check: {state.error}</Text>
     } else if (e.props.isWorking) {
       // A verdict from before this turn says nothing about the work it started.
-      line = <Text dimColor>context {k(state.context)} · /clear not while a turn runs</Text>
+      line = (
+        <Text dimColor>
+          context {k(state.context)} · {state.due} · /clear not while a turn runs
+        </Text>
+      )
     } else if (state.ready) {
-      line = <Text color="yellow">context {k(state.context)} · /clear is safe · handoff saved → /clear recommended</Text>
+      line = (
+        <Text color="yellow">
+          context {k(state.context)} · {state.due} · /clear is safe · handoff saved → /clear recommended
+        </Text>
+      )
     } else {
       line = (
         <Text dimColor>
-          context {k(state.context)} &gt; {k(state.threshold)} · /clear not yet: {state.reason}
+          context {k(state.context)} · {state.due} · /clear not yet: {state.reason}
         </Text>
       )
     }

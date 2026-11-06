@@ -17,9 +17,9 @@ Skip Phase A only when the work is genuinely greenfield with no surrounding syst
 
 ## Phase B: Sketch
 
-Run the **arena** skill with the design-sketch task and the Phase A grounding artifacts. Pass `references/runner-prompt.md` as each runner's prompt, with the absolute paths of this `SKILL.md` and `references/rationale-template.md` so a runner can read them. Each candidate produces a design package shaped per `references/rationale-template.md`. Use the available independent runners selected for this task; a runner writing sketch files into the repo needs its own worktree.
+Run the **fan-out** skill in compete mode with the design-sketch task and the Phase A grounding artifacts. Pass `references/runner-prompt.md` as each runner's prompt, with the absolute paths of this `SKILL.md` and `references/rationale-template.md` so a runner can read them. Each candidate produces a design package shaped per `references/rationale-template.md`. Use the available independent runners selected for this task; a runner writing sketch files into the repo needs its own worktree.
 
-When the caller limits model calls (a brief's MODEL CALLS line) and the contract is one boundary inside one system, write the candidates yourself instead of spawning runners, and say so in the rationale; spawn the arena when the contract crosses systems or the caller asks for it.
+When the caller limits model calls (a brief's MODEL CALLS line) and the contract is one boundary inside one system, write the candidates yourself instead of spawning runners, and say so in the rationale; spawn the compete round when the contract crosses systems or the caller asks for it.
 
 Design it twice. Require at least two structurally distinct candidates before synthesis, even when the first looks sufficient. This is the **exhaust-the-design-space** principle skill made concrete. Whole-shape alternatives, not point fixes inside one shape.
 
@@ -27,11 +27,11 @@ Screen every candidate against [`references/design-red-flags.md`](references/des
 
 Compare viable candidates on interface depth. Prefer the design that hides more complexity behind a smaller, simpler public surface. A rich interface can keep call chains short by concentrating capability instead of scattering it across layers.
 
-Arena returns one synthesized design package. Its synthesis decision fills the rationale's "Synthesis decision" section.
+Compete returns one synthesized design package. Its synthesis decision fills the rationale's "Synthesis decision" section.
 
 ## Phase C: Agree (opt-in)
 
-Default: proceed directly to implementation with the synthesized design. No human checkpoint. After synthesis (arena runners stop at their rationale), publish the plan page per [`references/plan-page.md`](references/plan-page.md), give its link with the numbered decisions and their defaults, and implement on the defaults. An unanswered decision is not agreement: that file says which ones to ask again and how to treat the answers.
+Default: proceed directly to implementation with the synthesized design. No human checkpoint. After synthesis (compete runners stop at their rationale), publish the plan page per [`references/plan-page.md`](references/plan-page.md), give its link with the numbered decisions and their defaults, and implement on the defaults. An unanswered decision is not agreement: that file says which ones to ask again and how to treat the answers.
 
 Opt in to a checkpoint when the invoker explicitly asks: "/architect with checkpoint," "stop and show me before implementing," or similar. Then surface the synthesized design and pause for sign-off.
 
