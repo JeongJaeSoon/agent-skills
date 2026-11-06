@@ -807,7 +807,7 @@ def tick():
     code = 0
     try:
         r = subprocess.run([sys.executable, str(reap.ORCH), "patrol", "--if-due"], stdin=subprocess.DEVNULL,
-                           timeout=PATROL_WAIT_S)
+                           timeout=PATROL_WAIT_S, start_new_session=True)  # patrol cuts its scans by its own group
         print(f"patrol 종료 코드 {r.returncode}")
         code = max(code, 1 if r.returncode else 0)
     except (OSError, subprocess.SubprocessError) as e:

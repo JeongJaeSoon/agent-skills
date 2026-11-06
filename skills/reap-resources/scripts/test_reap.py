@@ -936,6 +936,23 @@ with tempfile.TemporaryDirectory() as tmp:
     assert r.returncode == 2 and time.monotonic() - t0 < 10, (r.returncode, r.stderr)
     assert last["stage"] == "plan" and last["error"].startswith("RoundCut"), last
 
+# A target whose guard check could not run is failed and the round exits 2, not 0.
+with tempfile.TemporaryDirectory() as tmp:
+    st = pathlib.Path(tmp)
+    def unchecked_reap(plan, cfg, scheduled_only, deadline, res):
+        res.update({"acted": [], "skipped": [], "failed": ["tmpdir:/t"], "left": [], "refused": None, "unchecked": True})
+    jrow = reap.act_round({"hours": 6, "repos": [], "kinds": ["tmpdir"], "items": []}, {}, st, time.monotonic(), None,
+                          lambda argv, check: None, unchecked_reap, now=1e6)
+    assert jrow["unchecked"] is True and jrow["failed"] == ["tmpdir:/t"], jrow
+    assert json.loads((st / "janitor-runs.jsonl").read_text().splitlines()[-1])["unchecked"] is True
+with tempfile.TemporaryDirectory() as tmp:
+    unchecked_row = {"targets": 1, "acted": [], "skipped": [], "failed": ["tmpdir:/t"], "left": [], "resting": [], "human": 0,
+           "error": None, "refused": None, "unchecked": True, "seconds": 0}
+    code = ("import sys, reap; reap.scan = lambda *a: ([], []); reap.act_round = lambda *a, **k: " + repr(unchecked_row) + "; "
+            "sys.argv = ['reap.py', 'precheck', '--act', '--kinds', 'tmpdir']; reap.cli()")
+    r = subprocess.run([sys.executable, "-c", code], cwd=pathlib.Path(__file__).parent, env={**os.environ, "AGENT_SKILLS_STATE": tmp},
+                       capture_output=True, text=True, timeout=20)
+    assert r.returncode == 2 and "검사를 마치지 못한" in r.stdout, (r.returncode, r.stdout, r.stderr)
 # The timer ends with the record: a summary that outlasts the hard stop is not cut into a second row.
 with tempfile.TemporaryDirectory() as tmp:
     code = ("import sys, time, reap; reap.HARD_STOP_S = 1; reap.scan = lambda *a: ([], []); reap.print = lambda *a, **k: a[0].startswith('janitor') and time.sleep(2.5); "

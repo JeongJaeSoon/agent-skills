@@ -2846,7 +2846,8 @@ def act_round(data, cfg, state_dir, started, inbox=None, send=run, reap_fn=reap_
     held = {i["kind"] for i in items if i["target"] and i["key"] in resting} & set(DAILY)
     plan = {**data, "items": run_items, "kinds": [k for k in data.get("kinds") or () if k not in held]}
     row = {"t": now, "source": "scan", "targets": sum(1 for i in items if i["target"]), "acted": [], "skipped": [],
-           "failed": [], "left": [], "resting": sorted(resting & {i["key"] for i in items}), "human": 0, "error": None}
+           "failed": [], "left": [], "resting": sorted(resting & {i["key"] for i in items}), "human": 0, "error": None,
+           "unchecked": False}
     res = {}
     with (contextlib.nullcontext(gate) if gate else hard_stop(started)) as gate:
         try:
@@ -2860,7 +2861,7 @@ def act_round(data, cfg, state_dir, started, inbox=None, send=run, reap_fn=reap_
                     if (cur := res.get("current")) and not any(cur in (res.get(k) or ()) for k in ("acted", "skipped", "failed")):
                         res.setdefault("failed", []).append(cur)
                     row.update({k: list(res.get(k) or ()) for k in ("acted", "skipped", "failed", "left")},
-                               refused=res.get("refused"))
+                               refused=res.get("refused"), unchecked=bool(res.get("unchecked")))
                     if res and not res.get("refused"):
                         write_atomic(fails_path, json.dumps(update_fails(fails, row, now)))
                         # The old precheck's record too, so a job still on the agent round reads the same state.
@@ -3056,8 +3057,9 @@ def main():
         print(f"janitor 회차: 대상 {row['targets']}개, 정리 {len(row['acted'])} · 건너뜀 {len(row['skipped'])} · "
               f"실패 {len(row['failed'])} · 예산 초과로 남김 {len(row['left'])} · 쉬는 중 {len(row['resting'])} · "
               f"사람이 볼 것 {row['human']}" + (f" · 오류 {row['error']}" if row["error"] else "") +
-              (f" · 거부 {row['refused']}" if row.get("refused") else "") + f" ({row['seconds']}초)")
-        sys.exit(2 if row["error"] or row.get("refused") else 0)
+              (f" · 거부 {row['refused']}" if row.get("refused") else "") +
+              (" · 검사를 마치지 못한 대상 있음" if row.get("unchecked") else "") + f" ({row['seconds']}초)")
+        sys.exit(2 if row["error"] or row.get("refused") or row.get("unchecked") else 0)  # a check that could not run is no clean round
     if cmd == "precheck":
         (STATE / "janitor-plan.json").write_text(json.dumps(data, ensure_ascii=False, indent=1))
         command = round_cmd(pathlib.Path(__file__).resolve(), STATE, ledger_path(), "reap", "--plan", str(STATE / "janitor-plan.json"))
