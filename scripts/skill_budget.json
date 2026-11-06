@@ -87,17 +87,17 @@
       "width": 198
     },
     "reap-resources": {
-      "skill_md_tokens": 10246,
+      "skill_md_tokens": 10487,
       "tokens": 107,
       "width": 370
     },
     "reboot": {
-      "skill_md_tokens": 2477,
-      "tokens": 96,
-      "width": 329
+      "skill_md_tokens": 1831,
+      "tokens": 83,
+      "width": 284
     },
     "recall": {
-      "skill_md_tokens": 1367,
+      "skill_md_tokens": 1340,
       "tokens": 75,
       "width": 290
     },
@@ -203,8 +203,8 @@
     }
   },
   "totals": {
-    "always_tokens": 3240,
-    "always_width": 11614,
-    "skills_width": 10734
+    "always_tokens": 3227,
+    "always_width": 11569,
+    "skills_width": 10689
   }
 }
