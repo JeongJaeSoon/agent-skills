@@ -206,6 +206,25 @@ class LintTest(unittest.TestCase):
         self.put("SKILL.md", SKILL + "\nRun `node scripts/drive.mjs`.\n")
         self.assertEqual(self.run_lint()[0], 0)
 
+    def test_cleanup_that_validates_a_variable_then_exits_passes(self):
+        text = '#!/usr/bin/env bash\nstate="${1:-}"\nif [ -z "$state" ]; then\n  exit 2\nfi\nsource "$state"\n'
+        self.assertEqual(self.lint_rules_with("scripts/cleanup.sh", text)[0], 0)
+
+    def test_javascript_cleanup_is_judged_by_process_argv(self):
+        refuse = 'const state = process.argv[2];\nif (!state) { process.exit(2); }\n'
+        fallback = 'const state = process.argv[2] || "/tmp/verify/current.state";\n'
+        self.put("SKILL.md", SKILL + "\n`node scripts/cleanup.mjs <run>`\n")
+        self.assertEqual(self.lint_rules_with("scripts/cleanup.mjs", refuse, 0o644)[0], 0)
+        self.assertEqual(self.lint_rules_with("scripts/cleanup.mjs", fallback, 0o644), (1, ["cleanup-arg"]))
+
+    def test_python_cleanup_with_a_fallback_on_argv_is_not_required(self):
+        text = '#!/usr/bin/env python3\nimport sys\nstate = sys.argv[1] if len(sys.argv) > 1 else "/tmp/verify/current.state"\n'
+        self.assertEqual(self.lint_rules_with("scripts/cleanup.py", text, skill_extra="\n`cleanup.py <run>`\n"), (1, ["cleanup-arg"]))
+
+    def test_feature_index_may_link_back_to_the_skill(self):
+        self.put("features/README.md", "# Map\n\n- [Feat](feat.md)\n- [How to verify](../SKILL.md)\n")
+        self.assertEqual(self.run_lint()[0], 0)
+
     def test_feature_h2_inside_a_code_fence_does_not_count(self):
         self.put("features/feat.md", "# Feat\n\n```markdown\n" + FEATURE.split("\n\n", 1)[1] + "```\n")
         self.assertEqual(self.rules(), (1, ["feature-index"]))

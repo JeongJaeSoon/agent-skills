@@ -29,9 +29,12 @@ SECRET_NAMES = (".env*", "*.env", "*secret*", "*credential*", "*token*", "*passw
 SCRIPT_SUFFIXES = (".sh", ".py")
 INTERPRETED_SUFFIXES = (".js", ".mjs", ".cjs", ".ts")  # run as `node x.mjs`, so no executable bit is required
 CLEANUP_WORDS = ("cleanup", "clean-up", "clean_up", "teardown")
-SHELL_ARG_GUARD = re.compile(r"\$\{1:\?|\$#\s*-(?:lt|eq|ne|le)\b|-z\s+\"?\$\{?1\b|\bset\s+-[a-z]*u[a-z]*\b[\s\S]*\$\{?1\b")
+SHELL_ARG_GUARD = re.compile(
+    r"\$\{1:\?|\$#\s*-(?:lt|eq|ne|le)\b|-z\s+\"?\$\{?1\b|\bset\s+-[a-z]*u[a-z]*\b[\s\S]*\$\{?1\b"
+    r"|-z\s+\"?\$\{?\w+\}?\"?\s*\]+[;\s]*(?:then\b)?[\s\S]{0,80}?\bexit\b")  # `[ -z "$state" ]` followed by an exit
 PY_ADD_ARGUMENT = re.compile(r"add_argument\(([^)]*)\)")
-PY_ARG_GUARD = re.compile(r"sys\.argv\[1\]|len\(sys\.argv\)")
+ARGV_USE = {"py": re.compile(r"sys\.argv\[1\]"), "js": re.compile(r"process\.argv\[2\]")}
+ARGV_DEFAULT = re.compile(r"\bif\b|\blen\(|\.length|\?|\|\|")  # a line that falls back instead of refusing
 AT_COMMAND = r"(?:^|[;&|(`{]|\$\(|\b(?:then|do|else)\b)\s*(?:sudo\s+)?"
 KILL_AT_COMMAND = re.compile(AT_COMMAND + r"(?:pkill|killall)\b|\|\s*xargs\s+(?:-\S+\s+)*kill\b|\bkill\b[^\n]*\$\(\s*(?:pgrep|lsof)")
 KILL_PLAIN = re.compile(AT_COMMAND + r"kill\b([^\n]*)")
@@ -166,8 +169,12 @@ def check_text_rules(path, rel, text):
     return out
 
 
+def uses_argv_without_default(code, kind):
+    return any(ARGV_USE[kind].search(ln) and not ARGV_DEFAULT.search(ln) for ln in code.splitlines())
+
+
 def python_requires_argument(code):
-    if PY_ARG_GUARD.search(code):
+    if uses_argv_without_default(code, "py"):
         return True
     for args in PY_ADD_ARGUMENT.findall(code):
         first = args.split(",")[0].strip().strip("\"'")
@@ -181,6 +188,8 @@ def check_cleanup_script(path, rel, text):
     code = "\n".join(ln for _, ln in code_lines(path, text))
     if path.suffix == ".py" or code.startswith("import") or "python" in text.split("\n", 1)[0]:
         ok = python_requires_argument(code)
+    elif path.suffix in INTERPRETED_SUFFIXES:
+        ok = uses_argv_without_default(code, "js") or bool(re.search(r"if\s*\(\s*!\s*process\.argv\[2\]", code))
     else:
         ok = SHELL_ARG_GUARD.search(code)
     if ok:
@@ -225,6 +234,7 @@ def check_features(root):
     text = read(index) or ""
     linked = set(re.findall(r"\]\((?:\./)?([^)#\s]+\.md)", text))
     linked |= set(re.findall(r"^\s*\[[^\]]+\]:\s*(?:\./)?(\S+\.md)", text, re.M))
+    linked = {n for n in linked if "/" not in n}  # a link out of features/ (../SKILL.md) is navigation, not an entry
     present = {p.name for p in feats.glob("*.md")} - {"README.md"}
     for name in sorted(linked - present):
         out.append(finding("features/README.md", 1, "feature-index", f"links {name}, which does not exist"))
