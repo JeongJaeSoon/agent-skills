@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """scripts/setup.py against a throwaway HOME. Every --apply here writes only under a temp dir."""
-import contextlib, importlib.util, io, json, os, pathlib, re, shutil, subprocess, sys, tempfile, types, unittest
+import contextlib, importlib.util, io, json, os, pathlib, re, shutil, subprocess, sys, tempfile, time, types, unittest
 from unittest import mock
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -154,6 +154,58 @@ class Setup(unittest.TestCase):
     def test_marketplace_change_is_shown(self):
         self.settings.write_text(json.dumps({"enabledPlugins": {"agent-skills@jeongjaesoon": True}}))
         self.assertIn("changed enabledPlugins.agent-skills@jeongjaesoon = false", self.run_setup().stdout)
+
+    def git(self, *args, cwd):
+        env = {**os.environ, "HOME": str(self.home), "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null",
+               "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.test",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.test"}
+        subprocess.run(["git", "-c", "commit.gpgsign=false", *args], cwd=cwd, env=env, check=True, capture_output=True)
+
+    def personal_clone(self):
+        """A personal folder cloned from a bare origin, as setup-pc leaves it; a second clone pushes to the origin."""
+        origin, mine, other = self.home / "origin.git", self.home / "personal", self.home / "other"
+        self.git("init", "--bare", "-b", "main", str(origin), cwd=self.home)
+        self.git("clone", str(origin), str(other), cwd=self.home)
+        (other / "agent-skills.json").write_text('{"notes": {"adapter": "markdown"}}')
+        self.git("add", ".", cwd=other)
+        self.git("commit", "-m", "keys", cwd=other)
+        self.git("push", "origin", "HEAD:main", cwd=other)
+        self.git("clone", str(origin), str(mine), cwd=self.home)
+        self.env["AGENT_SKILLS_CONFIG_DIR"] = str(self.home)
+        return mine, other
+
+    def test_update_dry_run_warns_when_personal_folder_is_behind_its_fetched_upstream(self):
+        mine, other = self.personal_clone()
+        self.assertNotIn("personal:", self.run_setup("--settings-only", "--update").stdout)
+        (other / "more.md").write_text("x")
+        self.git("add", ".", cwd=other)
+        self.git("commit", "-m", "more", cwd=other)
+        self.git("push", "origin", "HEAD:main", cwd=other)
+        self.assertNotIn("personal:", self.run_setup("--settings-only", "--update").stdout)  # not fetched yet: nothing to compare
+        self.git("fetch", cwd=mine)
+        before = self.snapshot()
+        out = self.run_setup("--settings-only", "--update").stdout
+        self.assertIn("personal: 1 commits behind its last-fetched upstream", out)
+        self.assertIn("pull --ff-only", out)
+        self.assertEqual(self.snapshot(), before)  # a warning, not a pull
+        self.assertNotIn("personal:", self.run_setup("--settings-only").stdout)  # only --update warns
+
+    def test_update_dry_run_warns_when_personal_folder_was_fetched_long_ago(self):
+        mine, _ = self.personal_clone()
+        self.git("fetch", cwd=mine)
+        fetch_head = mine / ".git" / "FETCH_HEAD"
+        old = time.time() - 30 * 86400
+        os.utime(fetch_head, (old, old))
+        self.assertIn("personal: not fetched for 30 days", self.run_setup("--settings-only", "--update").stdout)
+        os.utime(fetch_head, None)
+        self.assertNotIn("personal:", self.run_setup("--settings-only", "--update").stdout)
+
+    def test_update_dry_run_ignores_a_personal_folder_without_git(self):
+        mine = self.home / "personal"
+        mine.mkdir()
+        self.env["AGENT_SKILLS_CONFIG_DIR"] = str(self.home)
+        (mine / "agent-skills.json").write_text('{"notes": {"adapter": "markdown"}}')
+        self.assertNotIn("personal:", self.run_setup("--settings-only", "--update").stdout)
 
     def test_personal_keys_join_the_plan_without_overwriting(self):
         mine = self.home / "personal"
