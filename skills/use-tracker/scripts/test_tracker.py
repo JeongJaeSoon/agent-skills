@@ -53,6 +53,8 @@ if cmd == "issue":
     if os.environ.get("FAKE_ORCA_STATE"):
         name, kind = os.environ["FAKE_ORCA_STATE"].split(":")
         issue["state"] = {"name": name, "type": kind}
+    if "--attachments" in args and os.environ.get("FAKE_ORCA_ATTACH"):
+        issue["attachments"] = [{"title": "PR", "url": os.environ["FAKE_ORCA_ATTACH"]}]
     ok({"issue": issue})
 if cmd == "search":
     if rest[0] == "94S-1":
@@ -220,6 +222,9 @@ class FakeJira:
                     return self._reply(201, {"id": "c1"})
                 if m == "POST" and p.endswith("/remotelink"):
                     return self._reply(201, {"id": 10000})
+                if m == "GET" and p.endswith("/remotelink"):
+                    return self._reply(200, [{"id": 1, "object": {"url": "https://github.com/acme/app/pull/5",
+                                                                  "title": "PR"}}])
                 if p.startswith("/rest/api/3/issue/"):
                     key = p.rsplit("/", 1)[1]
                     if m == "PUT":
@@ -644,6 +649,11 @@ import json, os, sys
 args = sys.argv[1:]
 with open(os.environ["FAKE_GH_LOG"], "a") as fh:
     fh.write(json.dumps(args) + "\n")
+if args[:2] == ["pr", "view"]:
+    owner, repo, _, number = args[2].split("/")[-4:]
+    prs = json.load(open(os.path.join(os.environ["FAKE_GH_DIR"], f"{owner}_{repo}.json")))
+    print(json.dumps([p for p in prs if p["number"] == int(number)][0]))
+    sys.exit(0)
 if args[:2] != ["pr", "list"]:
     sys.exit("fake gh: unhandled " + " ".join(args))
 val = lambda f: args[args.index(f) + 1] if f in args else None
@@ -657,8 +667,8 @@ print(json.dumps(prs))
 '''
 
 
-def pr(number, title="", branch="b", body="", state="OPEN", requests=(), reviews=()):
-    return {"number": number, "url": f"https://github.com/acme/app/pull/{number}", "title": title,
+def pr(number, title="", branch="b", body="", state="OPEN", requests=(), reviews=(), repo="acme/app"):
+    return {"number": number, "url": f"https://github.com/{repo}/pull/{number}", "title": title,
             "headRefName": branch, "body": body, "state": state,
             "reviewRequests": [{"login": r} for r in requests],
             "latestReviews": [{"author": {"login": r}} for r in reviews]}
@@ -680,17 +690,61 @@ class Reconcile(unittest.TestCase):
     def tearDown(self):
         self.env.close()
 
-    def ticket(self, state_type):
+    def ticket(self, state_type, **extra):
         with open(os.path.join(self.fixtures, "issues.json"), "w") as fh:
-            json.dump([dict(tracker.issue_template(), id="ENG-12", state_type=state_type)], fh)
+            json.dump([dict(tracker.issue_template(), id="ENG-12", state_type=state_type, **extra)], fh)
 
     def repo(self, name, prs):
         with open(os.path.join(self.ghdir, name.replace("/", "_") + ".json"), "w") as fh:
             json.dump(prs, fh)
 
-    def run_rc(self, *argv):
-        return self.env.run("reconcile", "ENG-12", *argv, TRACKER_FIXTURES=self.fixtures,
+    def run_rc(self, *argv, pre=()):
+        return self.env.run(*pre, "reconcile", "ENG-12", *argv, TRACKER_FIXTURES=self.fixtures,
                             FAKE_GH_DIR=self.ghdir, FAKE_GH_LOG=self.gh_log)
+
+    def test_attached_pr_counts_without_the_id(self):
+        # A PR attached to the ticket delivers it even when its title, branch and body never name the ID,
+        # and even in a repo the run did not name.
+        self.ticket("unstarted", attachments=[{"url": "https://github.com/acme/api/pull/8", "title": "PR"}])
+        self.repo("acme/app", [])
+        self.repo("acme/api", [pr(8, title="unrelated", repo="acme/api")])
+        proc, out = self.run_rc("--repo", "acme/app")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual([(p["repo"], p["number"]) for p in out["prs"]], [("acme/api", 8)])
+        self.assertEqual(out["target"], "started")
+
+    def test_live_adapters_read_attached_prs(self):
+        self.repo("acme/app", [pr(5, title="unrelated")])
+        self.repo("acme/other", [])
+        env = dict(FAKE_GH_DIR=self.ghdir, FAKE_GH_LOG=self.gh_log)
+        proc, out = self.env.run("reconcile", "ENG-12", "--repo", "acme/other",
+                                 FAKE_ORCA_ATTACH="https://github.com/acme/app/pull/5", **env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual([p["number"] for p in out["prs"]], [5])
+        self.assertIn(["linear", "issue", "ENG-12", "--attachments", "--json"], self.env.orca_calls())
+        jira = FakeJira()
+        self.addCleanup(jira.close)
+        self.env.config({"tracker": {"adapter": "jira", "jira": {"base_url": jira.url}}})
+        proc, out = self.env.run("reconcile", "ABC-2", "--repo", "acme/other", JIRA_EMAIL=JIRA_EMAIL,
+                                 JIRA_API_TOKEN=JIRA_TOKEN, **env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual([p["number"] for p in out["prs"]], [5])
+
+    def test_next_keeps_the_adapter_flag(self):
+        self.ticket("unstarted")
+        self.repo("acme/app", [pr(1, title="ENG-12")])
+        proc, out = self.run_rc("--repo", "acme/app", pre=("--adapter", "jira"))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(out["next"][0], f"python3 {TRACKER} --adapter jira transition ENG-12 --to started")
+
+    def test_id_boundaries_and_a_full_page(self):
+        self.ticket("unstarted")
+        self.repo("acme/app", [pr(1, body="Closes x-ENG-12suffix"), pr(2, branch="feat/eng-12_x")]
+                  + [pr(n, title="noise") for n in range(3, 101)])
+        proc, out = self.run_rc("--repo", "acme/app")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual([p["number"] for p in out["prs"]], [2])
+        self.assertEqual(out["search_truncated"], ["acme/app"])
 
     def test_matching_prs_and_rows(self):
         self.ticket("unstarted")

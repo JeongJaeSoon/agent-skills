@@ -150,11 +150,13 @@ compares each open ticket in scope with GitHub and the deploy, and makes the tic
 python3 <tracker.py> reconcile ID --repo OWNER/REPO [--repo ...] [--head <branch>]
 ```
 
-It reads the ticket and the PRs that deliver it: the ID in a PR's title or branch (any case), or
-after a closing keyword in its body; a PR that names it only in passing does not count, and one
-closed without merging is left out. Name every repo the work spans, since a run sees only those.
-The search does not match branch names, so pass the ticket's branch as `--head` when you know it
-(also for a PR attached to the ticket that the search misses). It writes nothing, so the
+It reads the ticket and the PRs that deliver it: a PR attached to the ticket, the ID in a PR's
+title or branch (any case), or the ID after a closing keyword in its body; a PR that names it
+only in passing does not count, and one closed without merging is left out. Name every repo the
+work spans, since the search sees only those. The search does not match branch names, so pass
+the ticket's branch as `--head` when you know it. A repo listed in `search_truncated` returned a
+full page, so an older PR may be missing, and `attachments_read: false` means attached PRs were
+not read; check those by hand. It writes nothing, so the
 orchestrator's delegate gate lets it through in this shape, and it prints the first row that
 holds as `target`:
 
