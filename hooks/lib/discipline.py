@@ -224,8 +224,8 @@ def python_writes(code):
         text, name = m.group(), m.group().lstrip(".")
         if name.startswith("write_"):
             opens = True
-        elif text.startswith("."):  # Path(p).open("w"): the mode is the first argument
-            opens = bool(PYTHON_MODE.match(code, m.end()))
+        elif text.startswith("."):  # Path(p).open("w"): the mode is the first argument, the receiver a call
+            opens = mask[m.start() - 1:m.start()] in (")", "]") and bool(PYTHON_MODE.match(code, m.end()))
         else:  # open(path, "w"): the mode follows a top-level comma
             comma, more = first_arg_end(mask, m.end())
             opens = more and bool(PYTHON_MODE.match(code, comma + 1))
@@ -262,8 +262,9 @@ def python_heredocs(cmds, cmd):
         # Stdin is the program only without `-c`/`-m` and a script operand (`python3 -` or bare).
         reads_stdin = not {"-c", "-m"} & set(c.words[1:]) and [w for w in c.words[1:] if not w.startswith("-") or w == "-"] in ([], ["-"])
         if PYTHON.fullmatch(c.name) and reads_stdin:
-            for fd, op, delim in c.redirects:
-                if fd in ("", "0") and op in ("<<", "<<-") and (body := heredoc_body(cmd, c.span[1], delim, op == "<<-")) is not None \
+            stdin = [r for r in c.redirects if r[0] in ("", "0") and r[1] in ("<", "<<", "<<-", "<>")]
+            for fd, op, delim in stdin if len(stdin) == 1 else ():  # a second stdin redirect replaces the heredoc
+                if op in ("<<", "<<-") and (body := heredoc_body(cmd, c.span[1], delim, op == "<<-")) is not None \
                         and python_writes(body):
                     out.append(("python heredoc file write", None))
     return out
@@ -274,14 +275,18 @@ def cd_targets(cmds, cwd, cmd):
     shell it runs in: inside `( … )` it holds until the closing parenthesis, and one in a `$(…)` or a pipeline moves
     nothing."""
     masked = shell.read(cmd)[0]
+    # The `)` that ends a `case` pattern closes nothing: leave it out of the parenthesis count.
+    no_case = shell.case_patterns(masked)
+    case_close = {masked.find(")", i + 1) for i in range(len(masked) - 1)
+                  if masked[i] != no_case[i] and masked[i + 1] == no_case[i + 1]}
     nested = {id(c) for c in cmds if any(o is not c and o.span[0] <= c.span[0] and c.span[1] <= o.span[1]
                                          and o.span != c.span for o in cmds)}
     out, stack, pos = {}, [cwd], 0  # one directory per open parenthesis: a `(` copies, a `)` drops
     for c in sorted(cmds, key=lambda c: c.span[0]):
-        for ch in masked[pos:c.span[0]]:
-            if ch == "(":
+        for at in range(pos, c.span[0]):
+            if masked[at] == "(":
                 stack.append(stack[-1])
-            elif ch == ")" and len(stack) > 1:
+            elif masked[at] == ")" and len(stack) > 1 and at not in case_close:
                 stack.pop()
         pos = c.span[0]
         out[id(c)] = stack[-1]
@@ -355,7 +360,15 @@ def history(transcript, current_id):
     except (OSError, AttributeError, TypeError):  # a record shaped otherwise is a transcript this cannot read
         return None
     # Claude Code gives a PreToolUse event the call's tool_use_id; without one the transcript is taken as it stands.
-    return [shell.commands(c) for i, c in calls if not current_id or i != current_id]
+    past = []
+    for i, c in calls:
+        if current_id and i == current_id:
+            continue
+        try:
+            past.append(shell.commands(c))
+        except Exception:  # a command the reader cannot parse (nesting deeper than recursion allows) is no evidence
+            past.append([])
+    return past
 
 
 def ran_test(past):
@@ -381,11 +394,13 @@ def flag_given(words, flag):
     """The word is an option of its own, not the value of `-m` and the like."""
     def value_of_previous(i):
         prev = words[i - 1] if i else ""
-        return prev in COMMIT_VALUE_OPTS or re.fullmatch(r"-[A-Za-z]*[mFCct]", prev) is not None
+        return prev in COMMIT_VALUE_OPTS or re.fullmatch(VALUE_CLUSTER, prev) is not None
 
     return any(w == flag and not value_of_previous(i) for i, w in enumerate(words))
 
 
+FLAG_CLUSTER = r"-[aenqsSuvzioPp]*"  # git commit's short flags that take no value
+VALUE_CLUSTER = FLAG_CLUSTER + r"[mFCct]"  # the same, ending in one that takes the next word
 COMMIT_VALUE_OPTS = {"-m", "-F", "-C", "-c", "-t", "--message", "--file", "--author", "--date", "--template",
                      "--reuse-message", "--reedit-message", "--cleanup", "--fixup", "--squash", "--trailer"}
 
@@ -402,10 +417,10 @@ def commit_names(words, cwd):
             break
         elif w in COMMIT_VALUE_OPTS:
             skip = True
-        elif w == "--all" or re.fullmatch(r"-[A-Za-z]*a[A-Za-z]*", w):
+        elif w == "--all":
             all_tracked = True
-            skip = w[-1] in "mFCct" and not w.startswith("--")
-        elif re.fullmatch(r"-[A-Za-z]+", w):
+        elif re.fullmatch(FLAG_CLUSTER + r"[mFCct]?", w):  # `-am` is flags and a message; `-mtext` carries its own
+            all_tracked = all_tracked or "a" in w
             skip = w[-1] in "mFCct"
         elif not w.startswith("-"):
             paths.append(w)

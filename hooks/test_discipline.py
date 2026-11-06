@@ -130,6 +130,14 @@ assert bash("python3 -c 'from pathlib import Path; print(\"/tmp/x\", Path(\"a.py
 assert bash("python3 -c 'from pathlib import Path; Path(\"/tmp/x\").write_text(\"x\")'") == []
 assert bash("echo x > ~a_user_that_does_not_exist_999/file") == EDIT  # an unknown home is left as written
 assert "worker.chain" in bash("git status; git commit -am --dry-run")  # the message of -am, no flag
+assert bash("python3 -c \"import io; print(io.open('w', 'r').read())\"") == []  # a module's open, not Path.open
+assert bash("python3 <<'PY' < /dev/null\nopen('a.py', 'w')\nPY") == []  # a later stdin replaces the heredoc
+assert bash("(cd /tmp; case x in x) echo x > probe.txt;; esac)") == []  # a case pattern's `)` closes no subshell
+assert bash("(cd /tmp; case x in x) :;; esac); echo x > a.py") == EDIT
+assert "worker.pre_push" not in bash("git commit -mtext --dry-run -a") and "worker.chain" not in bash("ls; git commit -mtext --dry-run")
+transcript("echo " + "$(" * 1000 + "echo pytest" + ")" * 1000)
+assert bash("git push origin HEAD") == ["worker.pre_push"]  # an unparsable past command is no evidence, no crash
+transcript("ls")
 # a `cd` moves where a relative target lands
 assert bash("cd /tmp && echo x > a.py") == []
 assert bash(f"cd {TREE} && echo x > a.py", cwd=SCRATCH) == EDIT
