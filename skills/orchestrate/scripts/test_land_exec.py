@@ -592,6 +592,40 @@ class LandExec(Fixture):
         self.verdict(evidence=None)
         self.assertNotIn("independent review", self.land_check()[1])
 
+    def test_land_check_judges_a_renamed_repo_on_the_name_github_serves_now(self):
+        """`orch land` asks executor_for (the name GitHub serves now); land-check asked the recorded name. A program
+        made before a rename then read the executor as off, and passed a verdict the executor refuses."""
+        old_sha = "oldsha"  # a stale pass for an earlier head with the same patch-id: the executor wants this head
+        config(repos=["o/renamed"])  # the executor lists the new name only
+        self.github_names("o/renamed")
+        self.verdict(sha=old_sha)
+        code, out = self.land_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("is not a pass at", out)
+        # The same stale verdict is fine when the executor does not cover the repo: the direct path takes it.
+        config(repos=["o/elsewhere"])
+        code, out = self.land_check()
+        self.assertNotIn("is not a pass at", out)
+        # Listed under the recorded name only, GitHub names it differently: orch land refuses, so land-check holds.
+        config(repos=["o/r"])
+        code, out = self.land_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("o/renamed on GitHub now", out)
+        # GitHub not answering is not "the executor is off": hold, as orch land yields.
+        config(repos=["o/renamed"])
+        st = self.gh(); st["repo_fail"] = True; self.write(st)
+        code, out = self.land_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("502", out)
+
+    def test_land_check_asks_github_only_when_the_executor_is_on(self):
+        """executor_for asks GitHub for the repo's name; a repo the executor is off for must not pay (or fail) for it."""
+        config(enabled=False)
+        st = self.gh(); st["repo_fail"] = True; self.write(st)
+        self.verdict()
+        code, out = self.land_check()
+        self.assertNotIn("502", out)
+
     def fake_orca(self, worktrees, terminals, truncated=False, terminals_truncated=False):
         """prog.orca_json over one Orca host with `worktrees` rows and `terminals` {worktree id: [handles]}; a terminal
         answer says it covered the host, as Orca's does."""

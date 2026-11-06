@@ -3152,9 +3152,16 @@ def cmd_land_check(argv):
         problems.append(f"no-CI lane: verdict is for {verdict['sha'][:8]}, not the head {v['headRefOid'][:8]}: re-review")
     if "head_moved" in why:
         print(f"note: head moved {verdict['sha'][:8]} -> {v['headRefOid'][:8]} with the same patch-id; verdict holds, CI must pass at the new head")
-    if passing and (ex := land_executor(repo)) and \
-            (executor_why := executor_verdict_problem(verdict, v["headRefOid"], ex["verdict_sources"])):
-        problems.append(executor_why)  # the executor would refuse it: say so now
+    if passing:
+        # The same decision `orch land` makes, on the repo GitHub serves now: the recorded name alone reads a renamed
+        # repo as one the executor does not cover, and passes a verdict the executor then refuses.
+        try:
+            ex = executor_for(repo)[0]
+        except SystemExit as e:  # a repo renamed out of the executor's scope, or GitHub not answering: orch land stops too
+            problems.append(str(e.code)[:300])
+            ex = None
+        if ex and (executor_why := executor_verdict_problem(verdict, v["headRefOid"], ex["verdict_sources"])):
+            problems.append(executor_why)  # the executor would refuse it: say so now
     if p.cfg["merge_policy"] == "human-gate" and (hold := gate_hold(p, events, pr)):
         problems.append(hold)
     try:
