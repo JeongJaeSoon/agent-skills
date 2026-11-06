@@ -348,7 +348,9 @@ class ShellJobs(Base):
         self.assertIn("orca_job.py run patrol --interval 1800 --timeout 400 ", w["precheck"])
         self.assertEqual(au.reap.SPAWN_TIMEOUT_S, 400, "reap-hard's spawned patrol gets the job's runner limit")
         self.assertLess(patrol.BUDGET_S + patrol.CANDIDATE_BUDGET_S + candidates.CUT_WAIT_S, 400)
-        self.assertGreater(patrol.FALLBACK_DUE_S, 1800, "reap-hard's fallback never fires while the job keeps its beat")
+        import reap_hard
+        self.assertLess(patrol.FALLBACK_DUE_S, reap_hard.DEFAULTS["interval"],
+                        "reap-hard's fallback is due at every pass of its own period")
 
     def test_sweep_is_the_tick_with_room_for_its_steps_and_is_off_by_default(self):
         j = self.jobs["sweep"]
@@ -356,7 +358,7 @@ class ShellJobs(Base):
         self.assertEqual(j.job_name, "agent-skills sweep")
         self.assertEqual(j.argv[1:], [str(au.REAP.parent / "sweep.py"), "tick"])
         w = j.want()
-        self.assertEqual((w["trigger"], w["precheck-timeout"], w["prompt"]), ("*/15 * * * *", au.SWEEP_TIMEOUT_S, au.SHELL_PROMPT))
+        self.assertEqual((w["trigger"], w["precheck-timeout"], w["prompt"]), ("*/30 * * * *", au.SWEEP_TIMEOUT_S, au.SHELL_PROMPT))
         self.assertIn("orca_job.py run sweep ", w["precheck"])
         self.assertIn(f"--timeout {au.SWEEP_TIMEOUT_S - 20} ", w["precheck"])
         import sweep
@@ -420,7 +422,7 @@ class ShellJobs(Base):
         j = self.jobs["reap-hard"]
         self.orca([self.stored(j)])
         self.assertFalse(j.stale())
-        with mock.patch.object(au, "PLANNED_CONFIG", {"reap-hard": {"interval": 1800}}):
+        with mock.patch.object(au, "PLANNED_CONFIG", {"reap-hard": {"interval": 3600}}):
             self.assertTrue(j.stale())
         p = self.jobs["pressure-watch"]
         self.orca([self.stored(p)])
