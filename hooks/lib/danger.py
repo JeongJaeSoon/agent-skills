@@ -7,7 +7,7 @@ Commands are read with lib.shell: only a word bash runs as a command counts, so 
 quoted prompt that names one is not one. A guardrail, not a sandbox: `bash -c`, `eval` and a script file's own
 commands are not read.
 """
-import collections, fnmatch, glob, json, os, pathlib, re, subprocess
+import collections, fnmatch, glob, json, os, pathlib, re, subprocess, types
 
 from lib import config, shell
 
@@ -61,7 +61,15 @@ GIT_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env
 # Any curl short flag but the ones that take a value (and so swallow the rest of the cluster): in `-sG` or `-qX` the
 # letter is a flag, in `-AGitHub` it is part of the User-Agent.
 NO_VALUE = r"[^-\sAbcCdDeEFHKmoPQrtTuUwxXyYz:]"
-PUSH_VALUED ={"-o", "--push-option", "--repo", "--receive-pack", "--exec"}
+CURL_VALUED = {"-d", "--data", "--data-raw", "--data-binary", "--data-urlencode", "--json", "-H", "--header", "-F",
+               "--form", "-A", "--user-agent", "-e", "--referer", "-u", "--user", "-T", "--upload-file", "-o",
+               "--output", "-b", "--cookie", "-X", "--request"}
+# git accepts any unique prefix of a long option, so `--force-wi` is --force-with-lease.
+PUSH_LONG = ["--all", "--atomic", "--branches", "--delete", "--dry-run", "--exec", "--follow-tags", "--force",
+             "--force-if-includes", "--force-with-lease", "--mirror", "--no-dry-run", "--no-verify", "--porcelain",
+             "--progress", "--prune", "--push-option", "--quiet", "--receive-pack", "--recurse-submodules", "--repo",
+             "--set-upstream", "--signed", "--tags", "--thin", "--verbose"]
+PUSH_VALUED = {"-o", "--push-option", "--repo", "--receive-pack", "--exec"}
 
 
 def level(cfg, key):
@@ -279,7 +287,7 @@ def check_command(c, masked, cfg, cwd, session, here=None):
             out.append(("guard.deny.rm_outside", "A recursive `rm` is limited to this checkout and the temporary "
                                                  "folders. Move anything else to the trash (`mv <path> ~/.Trash/`) "
                                                  "or ask the human."))
-    if name == "trash-empty" or name == "osascript" and re.search(r"\bFinder\b.*\bempty\b", " ".join(w), re.I | re.S):
+    if name == "trash-empty" or name == "osascript" and re.search(r"\bFinder\b.*?(?:\bto\s+empty\b|\bempty\s+(?:the\s+)?trash\b)", " ".join(w), re.I | re.S):
         out.append(("guard.deny.trash_empty", TRASH_EMPTY))
     if name == "orch" and w[1:2] == ["exempt"]:
         out.append(("guard.deny.owner_only", f"`orch {' '.join(w[1:3])}` is the human's to run, as a `!` line in their "
@@ -398,11 +406,16 @@ def curl_calls(w):
             part.append(x)
             continue
         method = last_method(part, "--request")
-        data = any(y[:2] in ("-d", "-F", "-T") or y.startswith(("--data", "--form", "--json", "--upload-file"))
+        data = any(re.match(rf"-{NO_VALUE}*[dFT]", y) or y.startswith(("--data", "--form", "--json", "--upload-file"))
                    for y in part)
         get = any(y == "--get" or re.fullmatch(rf"-{NO_VALUE}*G{NO_VALUE}*", y) for y in part)  # -G puts -d in the URL
-        urls = [m.group(1) or "/" for y in part
-                if (m := re.search(r"https?://api\.github\.com(?::\d+)?(/[^?#]*)?", y, re.I))]
+        # A URL is an operand or `--url=`, not the value of an option (a body may quote one).
+        urls = []
+        for j, y in enumerate(part):
+            if (part[j - 1] if j else "") in CURL_VALUED or y.startswith("-") and not y.startswith("--url="):
+                continue
+            if m := re.match(r"(?:--url=)?https?://api\.github\.com(?::\d+)?(/[^?#]*)?", y, re.I):
+                urls.append(m.group(1) or "/")
         out.append(((method or ("POST" if data and not get else "GET")).upper(), urls, " ".join(part)))
         part = []
     return out
@@ -467,15 +480,23 @@ def force_push_default(c, here):
     sub, rest = verb(w[1:], GIT_OPTS)
     if sub != "push":
         return False
-    opts, pos, i = [], [], 0
+    opts, pos, i, repo = [], [], 0, None
     while i < len(rest):
         x = rest[i]
         i += 1
         if x == "--":
             pos += rest[i:]
             break
+        if x.startswith("--"):  # spell out an abbreviated long option
+            name, eq, val = x.partition("=")
+            hits = [n for n in PUSH_LONG if n.startswith(name)]
+            x = (name if name in PUSH_LONG else hits[0] if len(hits) == 1 else name) + eq + val
         if x.startswith("-") and len(x) > 1:
             opts.append(x)
+            if x == "--repo" and i < len(rest):
+                repo = rest[i]
+            elif x.startswith("--repo="):
+                repo = x[7:]
             i += x in PUSH_VALUED
         else:
             pos.append(x)
@@ -493,7 +514,7 @@ def force_push_default(c, here):
     if "--mirror" in opts or forced and ("--all" in opts or "--branches" in opts):
         return True
     named_repo = any(o == "--repo" or o.startswith("--repo=") for o in opts)  # then every positional is a refspec
-    remote = "origin" if named_repo or not pos else pos[0]
+    remote = (repo or "origin") if named_repo else pos[0] if pos else "origin"
     names = default_names(where, remote)
     for spec in (pos if named_repo else pos[1:]) or ["HEAD"]:
         src, _, dst = spec.lstrip("+").partition(":")
@@ -551,7 +572,9 @@ def rm_outside(c, here, cwd):
     is not judged."""
     if c.name == "find":
         operands, recursive = find_roots(c.words), True
+        execs = [rm_outside(types.SimpleNamespace(name="rm", words=seg), here, cwd) for seg in exec_rms(c.words)]
     else:
+        execs = []
         opts, operands = rm_targets(c.words)
         recursive = any(o == "--recursive" or re.fullmatch(r"-[a-zA-Z]*[rR][a-zA-Z]*", o) for o in opts)
     roots = {os.path.realpath(p) for p in ("/tmp", "/private/tmp", os.environ.get("TMPDIR") or "/tmp")}
@@ -567,6 +590,8 @@ def rm_outside(c, here, cwd):
         else:
             break
     for x in operands:
+        if x == "{}":  # find's placeholder: the paths find walked, already judged
+            continue
         path = expand(x, here, follow=walks_links)
         if not path or "$" in path or "`" in path:
             continue
@@ -579,7 +604,24 @@ def rm_outside(c, here, cwd):
                     trash.append(x)
             elif recursive and not any(p.startswith(r + os.sep) or p == r and c.name == "find" for r in roots):
                 outside.append(x)
+    for t, o in execs:
+        trash += t
+        outside += o
     return trash, outside
+
+
+def exec_rms(w):
+    """The words of each `rm` that `find` runs with -exec, -execdir, -ok or -okdir, up to its `;` or `+`."""
+    out = []
+    for i, x in enumerate(w[:-1]):
+        if x in ("-exec", "-execdir", "-ok", "-okdir") and os.path.basename(w[i + 1]) == "rm":
+            seg = []
+            for y in w[i + 1:]:
+                if y in (";", "+"):
+                    break
+                seg.append(y)
+            out.append(seg)
+    return out
 
 
 def run(argv, cwd, timeout=3):
@@ -659,7 +701,14 @@ def check_bash(cmd, cfg, cwd=None, session=None):
     masked = shell.command_text(cmd)
     out, seen = [], set()
     cmds, here = shell.commands(cmd), cwd
+    outer, start = [], 0  # the directories to go back to at each `)`: a subshell's `cd` ends with it
     for i, c in enumerate(cmds):
+        for ch in masked[start:c.span[0]]:
+            if ch == "(":
+                outer.append(here)
+            elif ch == ")" and outer:
+                here = outer.pop()
+        start = c.span[0]
         found = check_command(c, masked, cfg, cwd, session, here)
         if c.name == "cd":
             here = after_cd(c, here)
