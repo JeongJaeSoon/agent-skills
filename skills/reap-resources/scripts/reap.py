@@ -24,7 +24,7 @@ the repo of the current directory.
 Config: ~/.claude/agent-skills.json → "reap": {"hours": 6, "orphan_paths": [...], "alert": {...},
 "load_limit": <5-minute load; default the CPU count>, "load_cooldown_minutes": 60, "idle_minutes": 30, "evidence_roots": [...], "user_folders": [], "user_folder_days": 7,
 "user_folder_screenshot_days": 1, "program_days": 7, "state_days": 7, "log_max_kb": 512, "inbox_to": "run:<id>", "plan_repeat": 2,
-"preview_ports": [4500, 4599], "stack_volumes": {"prefixes": [...], "label": "...", "protect": [...]},
+"preview_ports": [4500, 4599], "stack_volumes": {"prefixes": [...], "label": "..." or [...], "protect": [...]},
 "stopped_containers": {"prefixes": [...], "protect": [...]}, "labeled_volumes": {"namespace": "...", "origins": [...], "protect": [...]}}.
 Janitor kinds (card, orca-worker, tmpdir, gui-app, chrome-window, evidence, remote-branch, compose-stack, stack-volume,
 stopped-container, labeled-volume; `--kinds janitor`): card is every Orca card, judged by cards.py; stack-volume only
@@ -277,9 +277,9 @@ def parse_ts(s):
     return dt.datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
 
 
-def judge_volumes(vols, active, hours, now, owner_label=None):
+def judge_volumes(vols, active, hours, now, owner_labels=()):
     """vols: [{name, labels, created}] of dangling volumes; active: compose projects that have any container.
-    owner_label: reap.stack_volumes.label, the other owner label."""
+    owner_labels: reap.stack_volumes.label keys, the other owner labels."""
     out = []
     for v in vols:
         proj = (v["labels"] or {}).get("com.docker.compose.project")
@@ -294,7 +294,7 @@ def judge_volumes(vols, active, hours, now, owner_label=None):
         else:
             why, target = f"컨테이너 없는 project {proj}", True
         out.append({"kind": "docker", "key": f"volume:{v['name']}", "name": f"volume {v['name']}", "age": age,
-                    "owners": volume_owners(v["labels"], (None, owner_label)), "why": why, "target": target})
+                    "owners": volume_owners(v["labels"], (None, owner_labels)), "why": why, "target": target})
     return out
 
 
@@ -340,7 +340,7 @@ def docker_scan(hours, notes):
     for line in (run(["docker", "images", "-f", "dangling=true", "--format", "{{json .}}"]) or "").splitlines():
         i = json.loads(line)
         images.append({"id": i["ID"], "created": parse_ts(i["CreatedAt"]), "size": i.get("Size", "")})
-    return owner_holds(judge_volumes(vols, set(states), hours, now, owner_label(config())), notes) + \
+    return owner_holds(judge_volumes(vols, set(states), hours, now, owner_labels(config())), notes) + \
         judge_images(images, used, hours, now)
 
 
@@ -1453,25 +1453,36 @@ def stack_volume_spec(cfg):
     if not isinstance(prefixes, list) or not prefixes or \
             not all(isinstance(p, str) and len(p) >= 4 and p.endswith("-") for p in prefixes):
         return "reap.stack_volumes.prefixes 는 '-' 로 끝나는 4자 이상 문자열 목록이어야 함, 건너뜀"
-    if label is not None and (not isinstance(label, str) or not re.fullmatch(r"[\w.-]+", label)
-                              or label.startswith("com.docker.")):
+    keys = _label_keys(label)
+    if keys is None or not all(re.fullmatch(r"[\w.-]+", k) and not k.startswith("com.docker.") for k in keys):
         return "reap.stack_volumes.label 이 올바르지 않음, 건너뜀"
     if not isinstance(protect, list) or not all(isinstance(p, str) for p in protect):
         return "reap.stack_volumes.protect 는 문자열 목록이어야 함, 건너뜀"
-    return tuple(prefixes), label, frozenset(protect)
+    return tuple(prefixes), keys, frozenset(protect)
+
+
+def _label_keys(label):
+    """reap.stack_volumes.label as a tuple of keys: a string (the old form) or a list of strings; None when it is
+    neither."""
+    if label is None:
+        return ()
+    if isinstance(label, str):
+        return (label,)
+    if isinstance(label, list) and all(isinstance(k, str) for k in label):
+        return tuple(dict.fromkeys(label))
+    return None
 
 
 def volume_owners(labels, spec):
     labels = labels or {}
-    keys = ("com.docker.compose.project", spec[1]) if spec[1] else ("com.docker.compose.project",)
+    keys = (COMPOSE_PROJECT, *spec[1])
     return list(dict.fromkeys(labels[k] for k in keys if labels.get(k)))
 
 
-def owner_label(cfg):
-    """reap.stack_volumes.label, whatever else in that setting is wrong: an owner it names still counts as one."""
+def owner_labels(cfg):
+    """reap.stack_volumes.label keys, whatever else in that setting is wrong: an owner one names still counts as one."""
     spec = cfg.get("stack_volumes")
-    label = spec.get("label") if isinstance(spec, dict) else None
-    return label if isinstance(label, str) else None
+    return _label_keys(spec.get("label")) or () if isinstance(spec, dict) else ()
 
 
 def stack_volume_recheck(item, spec):
@@ -1485,7 +1496,7 @@ def stack_volume_recheck(item, spec):
     if parse_ts(v["CreatedAt"]) != item["created"] or found != item["owners"]:
         return "다시 만들어졌거나 소유자가 바뀐 볼륨"
     for o in found:
-        for key in ["com.docker.compose.project"] + ([spec[1]] if spec[1] else []):
+        for key in (COMPOSE_PROJECT, *spec[1]):
             ids = run(["docker", "ps", "-aq", "--filter", f"label={key}={o}"], check=False)
             if ids is None:
                 return "컨테이너를 다시 읽지 못함"
@@ -1525,11 +1536,11 @@ def judge_stack_volumes(vols, owners, spec, hours, now):
 def stack_volume_scan(spec, hours, notes, now=None):
     if not shutil.which("docker"):
         return []
-    _, label, _ = spec
-    fmt = '{{.Label "com.docker.compose.project"}}' + (f'\t{{{{.Label "{label}"}}}}' if label else "")
+    _, labels, _ = spec
+    fmt = '{{.Label "com.docker.compose.project"}}' + "".join(f'\t{{{{.Label "{k}"}}}}' for k in labels)
     ps = run(["docker", "ps", "-a", "--no-trunc", "--format", fmt], check=False)
     names = set()
-    for f in ["label=com.docker.compose.project"] + ([f"label={label}"] if label else []):
+    for f in [f"label={COMPOSE_PROJECT}", *(f"label={k}" for k in labels)]:
         out = None if ps is None else run(["docker", "volume", "ls", "-q", "--filter", f], check=False)
         if out is None:
             notes.append("stack-volume: docker 를 읽지 못함, 건너뜀")
@@ -1662,10 +1673,10 @@ def judge_stopped_containers(rows, spec, hours, now, keep=frozenset(), ports=fro
     return out
 
 
-def judge_labeled_volumes(vols, rows, spec, hours, now, keep=frozenset(), owner_label=None):
+def judge_labeled_volumes(vols, rows, spec, hours, now, keep=frozenset(), owner_labels=()):
     """vols: [{name, labels, created}]; rows: container_row of every container. The origin label is the proof a
     verification stack made the volume, so a volume without it is never listed: that no container uses a volume, or that
-    one mounted it once, says nothing about who made it. owner_label: reap.stack_volumes.label, the other owner label."""
+    one mounted it once, says nothing about who made it. owner_labels: reap.stack_volumes.label keys, the other owner labels."""
     key, origins, protect = spec
     used = {n for r in rows for n in r["volumes"]}
     stacks = {r["project"] for r in rows if r["project"]}
@@ -1678,7 +1689,7 @@ def judge_labeled_volumes(vols, rows, spec, hours, now, keep=frozenset(), owner_
         project = v["labels"].get(COMPOSE_PROJECT) or ""
         age = now - v["created"]
         item = {"kind": "labeled-volume", "key": f"labeled-volume:{v['name']}", "name": v["name"], "origin": origin,
-                "project": project, "owners": volume_owners(v["labels"], (None, owner_label)), "created": v["created"],
+                "project": project, "owners": volume_owners(v["labels"], (None, owner_labels)), "created": v["created"],
                 "age": age, "target": False, "how": [f"docker volume rm {shlex.quote(v['name'])}"]}
         out.append(item)
         if origin not in origins:
@@ -1735,7 +1746,7 @@ def leftovers(cfg, hours, now, notes, keep=frozenset(), ports=frozenset(), kinds
         if vols is None:
             notes.append("docker 볼륨을 읽지 못함: 라벨 볼륨은 건너뜀")
         else:
-            items += owner_holds(judge_labeled_volumes(vols, rows, spec, hours, now, keep, owner_label(cfg)), notes)
+            items += owner_holds(judge_labeled_volumes(vols, rows, spec, hours, now, keep, owner_labels(cfg)), notes)
     return items
 
 
