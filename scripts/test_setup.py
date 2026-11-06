@@ -112,6 +112,22 @@ class Setup(unittest.TestCase):
         self.assertNotIn(dropped, s["autoMode"]["soft_deny"])
         self.assertNotIn("outputStyle", s)
 
+    def test_a_removed_autoMode_rule_stays_removed_when_a_release_rewrites_its_text(self):
+        self.run_setup("--apply", self.plan_hash())
+        s = json.loads(self.settings.read_text())
+        removed = s["autoMode"]["allow"].pop(1)
+        label = removed.partition(":")[0] + ":"
+        self.settings.write_text(json.dumps(s))
+        bundle = json.loads(BUNDLE.read_text())
+        rules = bundle["settings"]["autoMode"]["allow"]
+        rules[[i for i, r in enumerate(rules) if r.startswith(label)][0]] = label + " rewritten in a later release."
+        newer = self.home / "newer.json"
+        newer.write_text(json.dumps(bundle))
+        out = self.run_setup("--bundle", str(newer)).stdout
+        self.assertNotIn("rewritten in a later release", out)
+        self.run_setup("--bundle", str(newer), "--apply", self.plan_hash("--bundle", str(newer)))
+        self.assertFalse([r for r in self.allow() if r.startswith(label)])
+
     def test_repository_rules_wait_for_a_gh_login(self):
         out = self.run_setup().stdout
         self.assertIn("gh: not logged in", out)

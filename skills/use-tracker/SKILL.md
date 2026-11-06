@@ -16,15 +16,18 @@ says how. They name Linear only for things outside the adapter (a `--linear-issu
 
 ## How to do an operation
 
-- **Agent in a session:** prefer the tracker's MCP tools when connected (Linear: a local
-  server, `mcp__linear__*`, or the claude.ai connector, `mcp__claude_ai_Linear__*`, the same
-  tools under either prefix; Jira: an Atlassian MCP server). For Linear without MCP, use
-  `orca linear ... --json`. Otherwise use `tracker.py`.
+- **Agent in a session:** Linear: `orca linear` first, in its plain text output (`--json` only
+  when you parse the result); the Linear MCP tools (`mcp__linear__*`, or the claude.ai
+  connector's `mcp__claude_ai_Linear__*`) only for what `orca linear` lacks
+  ([references/linear.md](references/linear.md), "Not in `orca linear`"). Jira: an Atlassian MCP
+  server when connected, else `tracker.py`.
 - **Scripts:** always `tracker.py`, never an MCP tool, a tracker CLI, or a tracker API.
-- **A write delegate:** hand every write (create, comment, label, transition, relate) to the
-  agent the user's own instructions name, else `tracker.delegate_agent` in the config, else
-  `agent-skills:task-tracker`, with the facts and the evidence. Reads stay here. `"none"` writes
-  in this session; so does the delegate itself, which never hands a write on.
+- **A milestone** (a state move, the PR link or a comment line from "Milestones") is the one
+  `tracker.py` line that section names, run in this session: no delegate, no MCP tool.
+- **A write delegate:** hand every other write (create, label, relate, any other comment or move)
+  to the agent the user's own instructions name, else `tracker.delegate_agent` in the config,
+  else `agent-skills:task-tracker`, with the facts and the evidence. Reads stay here. `"none"`
+  writes in this session; so does the delegate itself, which never hands a write on.
 - **Site rules:** `tracker.rules_file` in `~/.claude/agent-skills.json` names a Markdown file of
   what holds for one tracker site only (project, status and transition ids, issue types, labels,
   fields, language, footer, gateway quirks). An agent that writes reads it (`~` expanded) before
@@ -61,6 +64,7 @@ python3 $T children [ID] [--project P]   # ID's direct children; no ID: P's top-
 python3 $T create --project P --title T --body-file F [--label L ...] [--parent ID] [--related ID]
 python3 $T label ID --add L [--add L2]
 python3 $T comment ID --body-file F
+python3 $T attach ID --url URL [--title T]   # a link such as the PR; title defaults to "PR"
 python3 $T transition ID --to started|review|completed|canceled
 ```
 
@@ -73,7 +77,7 @@ Global flags: `--adapter linear|jira` (overrides config), `--config PATH`.
  "labels": ["follow-up"], "parent": null, "description": "...", "assignee": "alice", "priority": 0}
 ```
 
-`create` returns the new issue the same way; `label`/`comment`/`transition` return
+`create` returns the new issue the same way; `label`/`comment`/`attach`/`transition` return
 `{"ok": true, "op": ..., "id": ...}`. If `create` succeeds but the relation fails, stdout still
 carries the new issue and the exit is 1, so never re-run a create blindly.
 
@@ -111,9 +115,25 @@ names, with its evidence, so the ticket shows why it moved:
 | Moment | `transition --to` | Comment line |
 |---|---|---|
 | The first edit | `started` | the plan comment, if the work has one (`deliver-ticket` §1) |
-| A PR opened | `started` | `PR: <url>`, or the PR attached to the ticket |
+| A PR opened | `started` | the PR attached to the ticket, or `PR: <url>` |
 | A review requested | `review` | `리뷰 요청: <url> · <reviewers>` |
 | The ticket's own definition of done verified | `completed` | the completion comment: PR link, merge commit, each criterion with its evidence (`deliver-ticket` §6) |
+
+Each cell is one line, with this skill's `scripts/tracker.py` by its absolute path and no
+`--config`; write a comment's body first to a `.md` or `.txt` file and pass its absolute path:
+
+```bash
+python3 <tracker.py> transition ID --to started     # also review, completed
+python3 <tracker.py> attach ID --url <pr url>       # the PR link
+python3 <tracker.py> comment ID --body-file <file>  # a comment line, the completion comment
+```
+
+The orchestrator's delegate gate lets the `transition` and `comment` lines through in exactly
+this shape, with the body file in a place it may write (its temp directory, `~/.local/state`);
+there, the PR link is `orca linear attach ID --url <pr url>`. A Linear ID that `tracker.py`
+refuses (a team key that starts with a digit) takes that milestone through the MCP tools
+([references/linear.md](references/linear.md), "Orca CLI limits"); the orchestrator, whose gate
+denies MCP writes, hands it to the write delegate instead.
 
 `completed` waits for what the ticket calls done, which is often "deployed and verified", not
 "merged". A merge by itself moves nothing. A late milestone (a review re-requested after changes)
