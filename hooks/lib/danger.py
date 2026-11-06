@@ -489,7 +489,8 @@ def force_push_default(c, here):
         return False
     forced = any(o == "--force" or o.startswith("--force-with-lease") or re.fullmatch(r"-[a-zA-Z]*f[a-zA-Z]*", o)
                  for o in opts)
-    if "--mirror" in opts or forced and ("--all" in opts or "--branches" in opts):  # --mirror overwrites every remote ref on its own
+    # --mirror overwrites every remote ref without --force.
+    if "--mirror" in opts or forced and ("--all" in opts or "--branches" in opts):
         return True
     named_repo = any(o == "--repo" or o.startswith("--repo=") for o in opts)  # then every positional is a refspec
     remote = "origin" if named_repo or not pos else pos[0]
@@ -558,7 +559,8 @@ def rm_outside(c, here, cwd):
     if top:
         roots.add(os.path.realpath(top))
     trash, outside = [], []
-    walks_links = False  # `find -L` and `-H` walk through a symlink they start at (the last of -L/-H/-P wins); rm removes the link
+    # `find -L`/`-H` walk through a symlink they start at (the last of -L/-H/-P wins); rm removes the link itself.
+    walks_links = False
     for y in c.words[1:] if c.name == "find" else []:
         if y in ("-L", "-H", "-P"):
             walks_links = y != "-P"
