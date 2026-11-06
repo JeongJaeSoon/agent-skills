@@ -286,6 +286,10 @@ rows_now = {"fleet:lead": {"id": "fleet:lead", "program": "ProgB", "repo": "acme
 board.annot_overlay(rows_now, ann, {"old": {**old, "program": "ProgA"}})
 assert rows_now["fleet:lead/wt-x"]["parent"] is None and rows_now["fleet:lead/wt-x"]["repo"] == "acme/app" \
     and rows_now["fleet:lead/wt-x"]["program"] == "ProgA", "under another program's lead the card moves out into its own program"
+rows_now = {"lead": {"id": "lead", "repo": "acme/app", "title": "lead"},
+            "fleet:wt-lead/wt-x": {"id": "fleet:wt-lead/wt-x", "title": "c", "session": "wt-x", "parent": "lead"}}
+board.annot_overlay(rows_now, ann, {"old": {**old, "program": "ProgA"}})
+assert rows_now["fleet:wt-lead/wt-x"]["parent"] is None, "a parent with no program is out of the program's report too"
 # an ack of the moved row stands for the card's row, under the id that can be un-acked
 line = {"key": "fleet:lead/wt-x", "pr": None, "status": "done", "depth": 0, "name": "c"}
 _, done, hidden = board.drop_acked([line], {}, {"fleet:lead/wt-x": {}}, {"board:old": "t"}, {"fleet:lead/wt-x": ["board:old"]})

@@ -304,7 +304,7 @@ def annot_overlay(rows, annots, gone=None):
                     if program and not r.get("program"):
                         r["program"] = program
                         above = [p for p in chain(rid)][1:]
-                        if any(p.get("program") not in (None, program) for p in above):
+                        if above and next((p["program"] for p in above if p.get("program")), None) != program:
                             # the card sits under another program's lead: it moves out, so a report of its program still
                             # draws it (a child whose parent is out of scope is not drawn)
                             r["repo"] = r.get("repo") or next((p["repo"] for p in above if p.get("repo")), None)
