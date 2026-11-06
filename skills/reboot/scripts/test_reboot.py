@@ -656,6 +656,15 @@ class Reload(unittest.TestCase):
             with mock.patch.dict("os.environ", {"ORCH_CLAUDE_HOMES": os.pathsep.join(dict.fromkeys(paths))}), \
                     mock.patch.object(fleet, "ps_table", return_value=procs):
                 self.assertEqual(reboot.own_record(table(), SELF)["name"], "orchestrator", homes)
+        # an older process of the same pid left a file in another home, read first: it is not this session's
+        stale = self.tmp / "multi" / "stale"
+        (stale / "sessions").mkdir(parents=True, exist_ok=True)
+        (stale / "sessions" / f"{CLAUDE}.json").write_text(json.dumps(
+            {"pid": CLAUDE, "sessionId": "old", "cwd": ROOT, "procStart": "Mon Oct 1 08:00:00 2026", "name": "mailbox"}))
+        fresh = self.tmp / "multi" / "h1-h1" / "h1"
+        with mock.patch.dict("os.environ", {"ORCH_CLAUDE_HOMES": os.pathsep.join((str(stale), str(fresh)))}), \
+                mock.patch.object(fleet, "ps_table", return_value=procs):
+            self.assertEqual(reboot.own_record(table(), SELF)["name"], "orchestrator")
 
     def test_same_sha_is_ok(self):
         self.record(self.sha)

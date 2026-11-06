@@ -225,11 +225,17 @@ def own_record(table, pid):
     try:
         import fleet  # beside orca_settings, which imports it anyway
         # fleet's process table also carries each start time, which a live session's registration is checked against.
-        s = next((s for s in fleet.live_sessions(fleet.ps_table()).values() if claude in s["pids"]), None)
+        procs = fleet.ps_table()
+        s = next((s for s in fleet.live_sessions(procs).values() if claude in s["pids"]), None)
+        if not s:
+            return None
         # A session resumed in a second terminal has two registrations (maybe under two homes); live_sessions keeps the
-        # first one's name, so the caller's own file is read.
-        own = next((r for h in fleet.claude_homes() if (r := fleet.read_json(h / "sessions" / f"{claude}.json", {}))), {})
-        return {**s, **own} if s else None
+        # first one's name, so the caller's own file is read. A file an older process of the same pid left is not it:
+        # the session id and this process's start time must match.
+        started = procs[claude][1]
+        own = next((r for h in fleet.claude_homes() if isinstance(r := fleet.read_json(h / "sessions" / f"{claude}.json", {}), dict)
+                    and r.get("sessionId") == s["sessionId"] and " ".join(str(r.get("procStart")).split()) == started), {})
+        return {**s, **own}
     except Exception:  # the line then says nothing rather than guess
         return None
 
