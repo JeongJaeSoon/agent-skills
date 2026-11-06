@@ -353,6 +353,44 @@ class LandExec(unittest.TestCase):
         self.round()
         self.settled(row, "refused", 1, "single PRs only")
 
+    def stack(self, *members):
+        """Open PRs `members` (bottom first, one of them the PR under test) as one GitHub stack on main."""
+        st = self.gh()
+        for below, n in zip((None, *members), members):
+            st["prs"][str(n)] = dict(pr(n), baseRefName=f"b{below}" if below else "main")
+        st["stacks"] = [{"id": 900, "number": 100, "open": True, "base": {"ref": "main"},
+                         "pull_requests": [{"number": n, "state": "open", "draft": False, "merged_at": None,
+                                            "head": {"ref": f"b{n}", "sha": f"h{n}"}} for n in members]}]
+        self.write(st)
+
+    def test_the_bottom_layer_is_refused_with_the_retarget_that_opens_the_way(self):
+        up = self.n + 100
+        self.stack(self.n, up)
+        row = self.request()
+        self.round()
+        got = self.settled(row, "refused", 1, "single PRs only")
+        self.assertIn(f"gh pr edit {up} --base main --repo o/r", got["reason"])
+        self.assertIn(f"orch land {self.slug} --pr {self.n}", got["reason"])
+        self.assertEqual(self.gh().get("log", []), [], "the executor only says it: nothing is retargeted")
+
+    def test_the_bottom_of_three_names_only_the_layer_above_it(self):
+        mid, top = self.n + 100, self.n + 200
+        self.stack(self.n, mid, top)
+        row = self.request()
+        self.round()
+        got = self.settled(row, "refused", 1, f"gh pr edit {mid} --base main --repo o/r")
+        self.assertNotIn(f"gh pr edit {top}", got["reason"])
+
+    def test_a_layer_above_the_bottom_is_told_to_wait_for_the_layers_below(self):
+        for members in ((self.n + 100, self.n), (self.n + 100, self.n, self.n + 200)):
+            with self.subTest(members=members):
+                self.stack(*members)
+                row = self.request()
+                self.round()
+                got = self.settled(row, "refused", 1, f"Land #{members[0]} first")
+                self.assertNotIn("gh pr edit", got["reason"])
+                drain()
+
     def test_a_github_wait_releases_a_lane_taken_in_an_earlier_round(self):
         lane = prog.ExclusiveLock(self.p, "main")
         self.assertTrue(lane.take(self.n))
