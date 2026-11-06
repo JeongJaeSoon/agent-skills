@@ -918,6 +918,26 @@ except p.ConfigError:
 # End to end: a ready plan for an executor repo, under the same config, prints no merge command.
 envconf.write_text(json.dumps({"orchestrate": {"land_executor": {"enabled": True, "repos": ["acme/widgets"]}}}))
 assert p.compute(MergeFake([mpr(1)]), p.config(mconf) | {"kinds": ["ready_to_merge"]}, {}, NOW)["new"][0].get("cmd") is None
+# OWNER/* covers your own repos in any case; an excluded one keeps its merge command.
+envconf.write_text(json.dumps({"orchestrate": {"land_executor": {"enabled": True, "repos": [f"{ME.upper()}/*"],
+                                                                 "exclude": [f"{ME}/tools"]}}}))
+wplan = p.compute(MergeFake([mpr(1, repo=f"{ME}/widgets"), mpr(40, repo=f"{ME}/tools")]),
+                  p.config(mconf) | {"kinds": ["ready_to_merge"], "merge_repos": [f"{ME}/widgets", f"{ME}/tools"]},
+                  {}, NOW)
+wby = {i["number"]: i for i in wplan["new"]}
+assert wby[1].get("land") == "executor" and "cmd" not in wby[1], wby[1]
+assert wby[40]["cmd"].startswith(f"gh pr merge 40 -R {ME}/tools"), wby[40]
+# An org's OWNER/* covers nothing, as the executor refuses it: the PR keeps its merge command.
+envconf.write_text(json.dumps({"orchestrate": {"land_executor": {"enabled": True, "repos": ["acme/*"]}}}))
+oplan = p.compute(MergeFake([mpr(1)]), p.config(mconf) | {"kinds": ["ready_to_merge"]}, {}, NOW)
+assert oplan["new"][0]["cmd"].startswith("gh pr merge 1 -R acme/widgets"), oplan["new"][0]
+for bad in (["*/*"], ["acme/wid*"]):
+    envconf.write_text(json.dumps({"orchestrate": {"land_executor": {"enabled": True, "repos": bad}}}))
+    try:
+        p.config(mconf)
+        raise AssertionError(f"a wildcard land_scope refuses must stop the config: {bad}")
+    except p.ConfigError:
+        pass
 envconf.unlink()
 assert p.config(xconf)["land_executor_repos"] == [], "no file: the executor is off, as for orch land"
 # Without $AGENT_SKILLS_CONFIG the default file decides, even under another --config.

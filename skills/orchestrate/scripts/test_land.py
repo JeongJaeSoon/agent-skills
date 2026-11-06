@@ -171,7 +171,8 @@ def setup(prs, stacks=()):
     (d / "state.json").write_text(json.dumps({"prs": prs, "stacks": stack_rows(stacks)}))
     env = dict(os.environ, PATH=f"{d / 'bin'}:{os.environ['PATH']}", FAKE_GH_STATE=str(d / "state.json"),
                PROGRAMS_HOME=str(d / "programs"), ORCH_DASH="off",
-               AGENT_SKILLS_LEDGER=str(d / "reap-ledger.jsonl"))
+               AGENT_SKILLS_LEDGER=str(d / "reap-ledger.jsonl"),
+               AGENT_SKILLS_CONFIG=str(d / "no-agent-skills.json"))  # the user's land_executor never leaks in
     subprocess.run([sys.executable, HERE / "prog.py", "init", "t", "--repo", "o/r", "--run", "run_x"], env=env, check=True,
                    capture_output=True)
     return d, env
