@@ -381,7 +381,9 @@ STORES = [
           rule="last plan, last round and repeat guard; the agentless round's per-target rest (janitor-fails) and the "
                "keys last sent to a person (janitor-human)"),
     Store("janitorruns", "S/janitor-runs.jsonl", {"janitor.run": CANONICAL}, ("reap:log_run",), ("janitor",),
-          rule="one row per agentless janitor round (precheck --act): what it acted on, skipped, failed, left"),
+          rule="one summary row per agentless janitor round that ran (precheck --act): what it acted on, skipped, failed, left; "
+               "none when the lock was held or the load condition unmet, and a stop landing during the final write can add a "
+               "corrected second row"),
     Store("janitorlock", "S/janitor.lock", {"janitor.round": LOCK}, ("reap:janitor_lock",),
           rule="one janitor round at a time, the periodic and the load job alike"),
     Store("sweepstamps", "S/*-last.json", {"janitor.sweep_stamp": CANONICAL},
@@ -421,6 +423,9 @@ STORES = [
           ("patrol",), feature="model_autoswitch", rule="one claim per session, made before the first keystroke: "
           "a session is switched at most once"),
     Store("patrollock", "S/patrol.lock", {"card.verdict": LOCK}, ("patrol:round_lock",)),
+    Store("patrolrunlock", "S/patrol-run.lock", {"patrol.round_timing": LOCK}, ("patrol:run_lock", "sweep:wait_patrol_idle"),
+          rule="one patrol round and its cleanup scans at a time, the patrol job and reap-hard's fallback alike; "
+               "the sweep tick only probes it, to wait for a round already running"),
     Store("patrolout", "S/patrol.log", {"patrol.output": CANONICAL}, ("reap:spawn_patrol",), ("nobody",)),
     Store("pressure", "S/pressure.json", {"pressure.level": CANONICAL}, ("pressure:save_state",),
           ("pressure", "page", "patrol"), 600, rule="the machine's load level, one round"),
@@ -440,11 +445,14 @@ STORES = [
     Store("landout", "S/land-exec.log", {"land.output": CANONICAL}, ("land_exec:log",), ("nobody",),
           rule="each settled request, one line"),
     Store("reaphard", "S/reap-hard.jsonl", {"reap_hard.pass": CANONICAL}, ("reap_hard:log",), ("brief", "page")),
-    Store("reaphardout", "S/reap-hard.log", {"reap_hard.pass": LOG}, ("ext:launchd",), ("nobody",),
-          rule="launchd stdout; the jsonl rows again"),
+    Store("reaphardout", "S/reap-hard.log", {"reap_hard.pass": LOG}, ("ext:launchd", "reap:spawn_hard"), ("nobody",),
+          rule="launchd stdout, and the output of a pass a landed PR started; the jsonl rows again"),
+    Store("inventory", "S/inventory.json", {"reap_hard.inventory": CANONICAL}, ("reap_hard:write_inventory",), ("patrol",),
+          rule="the last real reap-hard pass's judgements, read by patrol's candidate stage for 10 minutes instead of "
+               "scanning again; removed by a pass that could not read a part"),
     Store("reaphardlock", "S/reap-hard.lock", {"reap_hard.pass": LOCK}, ("reap_hard:locked",)),
     Store("periodicjob", "S/jobs/*.json", {"periodic_job.last_run": CANONICAL}, ("orca_job:write", "orca_job:forget"), ("nobody",),
-          rule="how the last run of a sync, pressure-watch, reap-hard or orch-dash Orca automation ended; setup-pc reads it"),
+          rule="how the last run of a sync, pressure-watch, reap-hard, orch-dash, patrol or sweep Orca automation ended; setup-pc reads it"),
     Store("preview", "S/preview-watch.json", {"preview.link": CANONICAL}, ("preview_watch:save_state",),
           ("janitor",)),
     Store("previewaux", "S/preview-watch.*", {"preview.link": LOG}, ("preview_watch:log", "preview_watch:locked"),
@@ -531,7 +539,7 @@ OUTSIDE = {
     "pressure:cmd_install": "a launch agent plist",
     "preview_watch:cmd_install": "a launch agent plist",
     "reap_hard:cmd_install": "a launch agent plist",
-    "sweep:cmd_install": "a launch agent plist",
+    "sweep:cmd_install": "turns on the sweep Orca automation (no plist is written any more)",
     "share_server:cmd_install": "a launch agent plist and its backup",
     "config_emit:backup": "a backup of the settings file it changes",
     "automode_rule:backup": "a backup of the settings file it changes",

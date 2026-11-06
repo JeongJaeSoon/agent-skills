@@ -66,7 +66,8 @@ seen_of = {c["rule"]: c["seen"] for c in got2["candidates"]}
 # time before the hard scans began (never later than the scan, so never after an act it could have seen).
 assert marks["before_cards"] <= seen_of["card:strict"] <= marks["after_cards"], (marks, seen_of)
 assert seen_of["stack:gone"] == seen_of["proc:listener"] <= marks["before_cards"], (marks, seen_of)
-assert seen_of["card:landed"] <= seen_of["stack:gone"], seen_of
+# The janitor scan runs beside the hard scans, so its start is only bounded by the call.
+assert seen_of["card:landed"] <= marks["after_cards"], seen_of
 # Two collect() calls at once keep their own start times.
 import threading  # noqa: E402
 slow_started, release, results = threading.Event(), threading.Event(), {}
@@ -268,6 +269,30 @@ hard_cands = {c["key"] for c in got["candidates"]}
 assert hard_cands == hard_targets - {"stack:s-c1"}, (hard_cands, hard_targets)
 assert {c["rule"] for c in got["candidates"]} == set(candidates.HARD_RULE.values())
 
+# A young inventory.json from reap-hard's own pass stands in for the scans: the same candidates, no scan, and each
+# one "seen" when the pass that judged it began.
+fresh = time.time()
+reap_hard.INVENTORY = tmp / "inventory.json"
+reap_hard.write_inventory([{k: v for k, v in i.items() if k != "result"} for i in dry["items"]], [], reap_hard.config(),
+                          fresh - 30, set())
+saved_scans = reap_hard.scan_cards, reap_hard.scan_rest
+
+
+def scanned(*a, **k):
+    raise AssertionError("scanned the machine again")
+
+
+reap_hard.scan_cards = reap_hard.scan_rest = scanned
+via_inventory = candidates.collect(OK, pressure_kinds=[], state_dir=tmp, reap_scan=lambda kinds: ([], []))
+reap_hard.scan_cards, reap_hard.scan_rest = saved_scans
+assert {c["key"] for c in via_inventory["candidates"]} == hard_targets, via_inventory["candidates"]
+assert {c["seen"] for c in via_inventory["candidates"] if c["key"] in hard_targets} == {fresh - 30}
+assert via_inventory["sources"]["reap_hard_cards"] == via_inventory["sources"]["reap_hard_rest"] == "ok"
+# Past the TTL the file is not trusted: the scans run again.
+reap_hard.write_inventory([], [], reap_hard.config(), fresh - reap_hard.INVENTORY_TTL - 5, set())
+assert reap_hard.read_inventory() is None
+reap_hard.INVENTORY.unlink()
+
 # reap.run's timeout is off unless a caller sets it; set, a hung command is a failure, not a hang.
 assert reap.RUN_TIMEOUT is None
 reap.RUN_TIMEOUT = 0.2
@@ -280,5 +305,122 @@ try:
         assert "timed out" in str(e)
 finally:
     reap.RUN_TIMEOUT = None
+
+# The janitor scan and the hard scans run side by side: two 0.6 s scans take well under their sum.
+slow = lambda kinds: (time.sleep(0.6), (REAP_ITEMS, []))[1]
+slow_h = lambda t: (time.sleep(0.6), HARD)[1]
+t0 = time.monotonic()
+got = collect(scan=slow, hard=slow_h)
+assert time.monotonic() - t0 < 1.0 and got["sources"]["reap_scan"] == "ok" and got["candidates"], time.monotonic() - t0
+# A round cut short (patrol's SIGALRM, delivered to the calling thread only) merges the part that finished and marks
+# the one still running as timed out; nothing of the unfinished part leaks into the result.
+import signal
+
+
+class Cut(BaseException):
+    pass
+
+
+def cut(*_):
+    raise Cut()
+
+
+progress = {}
+signal.signal(signal.SIGALRM, cut)
+signal.setitimer(signal.ITIMER_REAL, 0.4)
+try:
+    candidates.collect(OK, now=time.time(), reap_scan=lambda kinds: (REAP_ITEMS, []), hard=lambda t: (time.sleep(3), HARD)[1],
+                       pressure_kinds=["orphan", "compose-stack"], state_dir=tmp, live=lambda targets, notes: targets,
+                       progress=progress)
+    raise AssertionError("not cut")
+except Cut:
+    pass
+finally:
+    signal.setitimer(signal.ITIMER_REAL, 0)
+assert progress["sources"]["reap_scan"] == "ok" and progress["sources"]["reap_hard_cards"] == "timeout", progress["sources"]
+assert progress["sources"]["protect"] == "timeout" and "reap_scan" in progress["timings"], progress
+# A start cut short: the hard part's thread exists but has not run when the cut comes. It is marked, not waited on,
+# and once it runs it sees the mark and runs no scan; its sources stay timed out.
+class LateStart(threading.Thread):
+    held = []
+
+    def start(self):
+        if self._args[0]["owns"] == candidates.HARD_SOURCES:
+            LateStart.held.append(self)
+            raise Cut()
+        super().start()
+
+
+hard_calls, progress = [], {}
+real_thread, candidates.threading.Thread = candidates.threading.Thread, LateStart
+t0 = time.monotonic()
+try:
+    candidates.collect(OK, now=time.time(), reap_scan=lambda kinds: (REAP_ITEMS, []),
+                       hard=lambda t: (hard_calls.append(1), HARD)[1], pressure_kinds=["orphan"], state_dir=tmp,
+                       live=lambda targets, notes: targets, progress=progress)
+    raise AssertionError("not cut")
+except Cut:
+    pass
+finally:
+    candidates.threading.Thread = real_thread
+assert time.monotonic() - t0 < candidates.CUT_GRACE_S and progress["sources"]["reap_hard_cards"] == "timeout", progress
+late = LateStart.held[0]
+late._target(*late._args)  # the thread runs only now
+assert hard_calls == [] and late._args[0]["done"].is_set(), hard_calls
+
+# A cut while a thread waits on real commands: one through reap.run, one past it whose shell leaves a grandchild
+# holding its pipe. Run as patrol runs (leading its own process group, so this part reruns this file in a new
+# session): each is killed, the thread starts nothing more through reap.run, collect returns once the thread has,
+# and nothing of the group outlives the round. The part reads as timed out; the calling thread still runs commands.
+import subprocess  # noqa: E402
+
+if sys.argv[1:] == ["cut-child"]:
+    events, grand = [], tmp / "grandchild.pid"
+
+    def hung_hard(t):
+        # A path that skips reap.run, its shell's child holding the pipe.
+        p = subprocess.run(["sh", "-c", f"sleep 31 & echo $! > {grand}; wait"], capture_output=True)
+        events.append(("bypass", p.returncode))
+        events.append(("next", reap.run(["sleep", "33"], check=False)))
+        return HARD
+
+    def cut_once_written():
+        until = time.monotonic() + 10
+        while not (grand.exists() and grand.read_text().strip()) and time.monotonic() < until:
+            time.sleep(0.05)
+        cut_at.append(time.monotonic())
+        os.kill(os.getpid(), signal.SIGALRM)
+
+    import threading  # noqa: E402
+    progress, cut_at = {}, []
+    threading.Thread(target=cut_once_written, daemon=True).start()
+    try:
+        candidates.collect(OK, now=time.time(), reap_scan=lambda kinds: (REAP_ITEMS, []), hard=hung_hard,
+                           pressure_kinds=["orphan", "compose-stack"], state_dir=tmp,
+                           live=lambda targets, notes: targets, progress=progress)
+    except Cut:
+        pass
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+    pid = int(grand.read_text())
+    try:
+        os.kill(pid, 0)
+        grand_alive = True
+    except ProcessLookupError:
+        grand_alive = False
+    print(json.dumps({"events": events, "took": time.monotonic() - cut_at[0], "left": sorted(candidates.group_members()),
+                      "grand_alive": grand_alive,
+                      "cancelled": len(reap.CANCELLED), "source": progress["sources"]["reap_hard_cards"],
+                      "after": reap.run(["true"], check=False) is not None}))
+    sys.exit(0)
+
+child = subprocess.run([sys.executable, __file__, "cut-child"], capture_output=True, text=True, timeout=60,
+                       start_new_session=True)
+got = json.loads(child.stdout.strip().splitlines()[-1])
+assert got["events"] == [["bypass", -signal.SIGKILL], ["next", None]], got
+assert got["took"] < candidates.CUT_GRACE_S + 3 < candidates.CUT_WAIT_S, got
+assert got["left"] == [] and not got["grand_alive"], got
+assert got["cancelled"] == 0 and got["source"] == "timeout" and got["after"], got
+assert candidates.group_members() == set(), "run from a shell, the group is not this process's to stop"
 
 print("test_candidates: ok")
