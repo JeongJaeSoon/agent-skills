@@ -35,7 +35,7 @@ says how. They name Linear only for things outside the adapter (a `--linear-issu
   `tracker.*` config keys. Scripts read only the config keys, so a value `tracker.py` needs
   (`tracker.<adapter>.review_status`, `tracker.jira.issue_type`) also goes there. Set but
   missing or unreadable: stop and report; never guess the values. Absent: take them from the
-  handoff and sibling tickets.
+  handoff and sibling tickets, except the language, which is never inferred from them.
 - **Ticket links:** `dashboard.ticket_url` in `~/.claude/agent-skills.json` is an issue URL prefix
   (`https://tracker.example.test/team/issue/`); the orchestrate dashboard appends a ticket id to it
   to link the id. Unset or not an http(s) URL: ids stay plain text and the server logs one line.
