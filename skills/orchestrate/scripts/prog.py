@@ -1938,10 +1938,14 @@ def author_sessions(branch):
     if not branch:
         return []
     try:
-        rows = orca_json("terminal", "list", "--worktree", f"branch:{branch}").get("terminals", [])
-    except SystemExit:
+        out = orca_json("terminal", "list", "--worktree", f"branch:{branch}")
+        rows = out["terminals"]
+        # A cut-off list can miss the author, and a reviewer equal to the missing one would pass.
+        if out.get("truncated") or not isinstance(rows, list):
+            return []
+        return sorted({t["handle"] for t in rows if t.get("handle")})
+    except (SystemExit, ValueError, KeyError, TypeError, AttributeError, OSError):
         return []
-    return sorted({t["handle"] for t in rows if t.get("handle")})
 
 
 def verdict_identity_problem(v):

@@ -272,6 +272,33 @@ class LandExec(unittest.TestCase):
                          (["term_author"], "codex", "https://example.test/r", "term_author"))
         self.assertIsNone(prog.verdict_identity_problem(v))
 
+    def test_a_verdict_recorded_by_cmd_verdict_for_an_orchestrator_merges(self):
+        row = self.request()
+        os.environ["ORCA_TERMINAL_HANDLE"] = "term_orchestrator"
+        real = prog.author_sessions
+        prog.author_sessions = lambda branch: ["term_author"]
+        try:
+            prog.cmd_verdict([self.slug, "--pr", str(self.n), "--sha", f"h{self.n}", "--source", "review:codex",
+                              "--evidence", "https://example.test/r"])
+            self.round()
+        finally:
+            prog.author_sessions = real
+            os.environ.pop("ORCA_TERMINAL_HANDLE")
+        self.settled(row, "merged", 0)
+
+    def test_author_sessions_is_empty_when_orca_cannot_vouch_for_the_list(self):
+        real = prog.orca_json
+        try:
+            for answer in ({"terminals": [{"handle": "term_other"}], "truncated": True}, {"terminals": None}, {}):
+                prog.orca_json = lambda *a, answer=answer: answer
+                self.assertEqual(prog.author_sessions("b"), [], answer)
+            prog.orca_json = lambda *a: {"terminals": [{"handle": "term_b"}, {"handle": "term_a"}, {}]}
+            self.assertEqual(prog.author_sessions("b"), ["term_a", "term_b"])
+            prog.orca_json = lambda *a: (_ for _ in ()).throw(ValueError("not json"))
+            self.assertEqual(prog.author_sessions("b"), [])
+        finally:
+            prog.orca_json = real
+
     def test_a_failing_verdict_needs_no_independence(self):
         os.environ["ORCA_TERMINAL_HANDLE"] = "term_author"
         real = prog.author_sessions
