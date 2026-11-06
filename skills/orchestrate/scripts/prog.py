@@ -515,7 +515,8 @@ def slot_count(value):
 def heavy_slots(cfg):
     """program.json `landing.heavy_slots`, else `orchestrate.heavy_slots` of agent-skills.json, else a quarter of the
     CPUs (at least 2). `orch heavy -` passes no program, so the user file is what a bare card tunes."""
-    n = slot_count((cfg.get("landing") or {}).get("heavy_slots"))
+    landing = cfg.get("landing")
+    n = slot_count(landing.get("heavy_slots")) if isinstance(landing, dict) else None
     if n is None:
         path = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-skills.json").expanduser()
         try:

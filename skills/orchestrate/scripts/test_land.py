@@ -959,6 +959,10 @@ try:
         user_cfg.write_text(json.dumps({"orchestrate": {"heavy_slots": bad}}))
         assert prog_module.heavy_slots({}) == 4, bad
         assert prog_module.heavy_slots({"landing": {"heavy_slots": bad}}) == 4, bad
+    user_cfg.write_text(json.dumps({"orchestrate": {"heavy_slots": 6}}))
+    for bad in (0, "3", None):  # a bad program value still falls through to a valid user value
+        assert prog_module.heavy_slots({"landing": {"heavy_slots": bad}}) == 6, bad
+    assert prog_module.heavy_slots({"landing": "invalid"}) == 6
     user_cfg.write_text("not json")
     assert prog_module.heavy_slots({}) == 4
     for cpus, want in ((None, 2), (2, 2), (8, 2), (12, 3), (18, 4), (64, 16)):
