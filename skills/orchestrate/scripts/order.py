@@ -122,16 +122,22 @@ def close(oid, sub, reason):
     row = store.order_get(oid)
     # The units as they are now go in the close event, so a Reopen can keep them (tidy does not close the order again
     # on the same evidence). None when a unit is not ended or cannot be read: Reopen then reads them again.
-    snap = order_close.snapshot_now(oid) if sub != "drop" and row["status"] == "open" else None
+    snap = order_close.snapshot_now(row) if row["status"] == "open" else None
+
+    def same_links(now_row):  # the snapshot is of the links read above; a link added since is another order's evidence
+        real = lambda r: sorted(u for u in r["links"] if u not in r["stand_ins"])  # noqa: E731
+        if real(now_row) != real(row):
+            raise ValueError(f"{oid}: its links changed while closing; run it again")
     if row["kind"] != "feedback":
-        return store.order_close(oid, "dropped" if sub == "drop" else "done", _by(), reason=reason, snapshot=snap)
+        return store.order_close(oid, "dropped" if sub == "drop" else "done", _by(), reason=reason, check=same_links, snapshot=snap)
     # The checks below run inside the close transaction, and only on a row that is open there. A row read as closed
     # carries none, so a reopen between the read and the write is refused instead of closed without evidence.
     if sub == "drop":
-        def need_reason(_):
+        def need_reason(now_row):
             if not (reason or "").strip():
                 raise ValueError(f"{oid} is feedback: drop it with --reason TEXT (why it needs no change)")
-        return store.order_close(oid, "dropped", _by(), reason=reason, check=need_reason)
+            same_links(now_row)
+        return store.order_close(oid, "dropped", _by(), reason=reason, check=need_reason, snapshot=snap)
     evidence = {}
     if row["status"] == "open":
         prs = [u[3:] for u in row["links"] if u.startswith("pr:") and u not in row["stand_ins"]]
@@ -143,6 +149,7 @@ def close(oid, sub, reason):
             raise ValueError(f"{oid} is feedback: none of {', '.join(prs)} is merged (per gh); done waits for the merge")
 
     def still(now_row):  # the links as written, not as read before the network call
+        same_links(now_row)
         if not any(f"pr:{pr}" in now_row["links"] and f"pr:{pr}" not in now_row["stand_ins"] for pr in evidence):
             raise ValueError(f"{oid}: the merged PR link changed, or the order was reopened, while closing; run it again")
     return store.order_close(oid, "done", _by(), evidence={"merged_prs": evidence} if evidence else None, reason=reason,
@@ -167,7 +174,7 @@ def main(argv):
             print(f"{r['id']} {r['status']}")
         elif sub == "reopen" and oid:
             # A close by hand keeps no snapshot of its units, so read them now: tidy then waits for them to change.
-            r = store.order_reopen(oid, _by(), snapshot=order_close.snapshot_now(oid))
+            r = store.order_reopen(oid, _by(), snapshot=order_close.snapshot_now(store.order_get(oid)))
             print(f"{r['id']} {r['status']}")
         elif sub == "shadow":
             lines, wrong = order_close.compare()

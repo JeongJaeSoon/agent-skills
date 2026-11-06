@@ -292,12 +292,43 @@ assert v["close"]
 db = sqlite3.connect(str(store.path()))
 db.execute("UPDATE item SET status='todo', closed_at=NULL WHERE id=?", (done_b,))
 db.commit()
-assert store.order_auto(race, v["snapshot"], v["units"], v["links"], close=True, recheck=order_close.recheck(v["units"])) is False
+def F_now():
+    state, prs_file = order_close.load()
+    with store.read() as c:
+        return order_close.gather(c, state, prs_file, store.board(), fleet.utcnow(), merged_fn=gh)
+
+
+assert store.order_auto(race, v["snapshot"], v["units"], v["links"], close=True, recheck=order_close.recheck(v, F_now())) is False
 assert row(race)["status"] == "open" and not events(race, "done") and not events(race, "would_close")
 db.execute("UPDATE item SET status='done', closed_at=? WHERE id=?", (fleet.iso(now), done_b))
 db.commit()
 db.close()
-assert store.order_auto(race, v["snapshot"], v["units"], v["links"], close=False, recheck=order_close.recheck(v["units"]))
+assert store.order_auto(race, v["snapshot"], v["units"], v["links"], close=False, recheck=order_close.recheck(v, F_now()))
+# The owner's turn is read again too: a decision opened from a linked card after the order was judged.
+late = make("판정 뒤 열린 결정", ["pr:acme/app#1", "card:s-done"])
+v = why(late)
+assert v["close"]
+db = sqlite3.connect(str(store.path()))
+db.execute("INSERT INTO decision (id, status, title, handle, created_at) VALUES ('d10', 'open', '늦은 질문', 'term_s-done', ?)", (fleet.iso(now),))
+db.commit()
+assert store.order_auto(late, v["snapshot"], v["units"], v["links"], close=True, recheck=order_close.recheck(v, F_now())) is False
+assert row(late)["status"] == "open"
+db.execute("DELETE FROM decision WHERE id='d10'")
+# A decision that points at a linked PR by its link, from another terminal, is the owner's turn as well.
+db.execute("INSERT INTO decision (id, status, title, handle, link, created_at) VALUES ('d11', 'open', '링크로 이은 결정', 'term_other', "
+           "'https://github.com/acme/app/pull/1', ?)", (fleet.iso(now),))
+db.commit()
+assert why(late)["why"] == "owner_turn", why(late)
+db.execute("DELETE FROM decision WHERE id='d11'")
+# An open board row the owner holds at a linked card (here a card with no PR and a done close).
+db.commit()
+db.close()
+board.set_row("s-nopr", title="확인 대기", repo="acme/app", status="owner", next="확인", worktree="s-nopr", owner="오너")
+store.change_board(lambda b: b)
+with store.tx() as c:
+    store.close_unit(c, {"id": "card:s-nopr", "ts": fleet.iso(now), "by": "auto", "rule": "manual", "evidence": "x", "label": "x"})
+nopr = make("PR 없는 카드", ["card:s-nopr"])
+assert why(nopr)["why"] == "owner_turn" and "board row" in why(nopr)["detail"], why(nopr)
 # One would_close per evidence, also when the evidence goes A, B, A.
 flip = make("A B A", ["pr:acme/app#1"])
 for snap in ("A", "B", "A", "B"):
@@ -328,6 +359,32 @@ want = json.dumps({"pr:acme/app#97": {"pr": "acme/app#97", "merge": "jjj9797"}},
 assert json.loads(closed_ev["after"])["snapshot"] == want, closed_ev
 code, out, err = orch("order", "reopen", seen)
 assert code == 0 and row(seen)["reopen_evidence"] == want, (out, err)
+# So does a drop: the evidence it stood on, not what the units say when it is reopened.
+gone = make("거두는 지시", ["pr:acme/app#97"])
+code, out, err = orch("order", "drop", gone)
+assert code == 0 and out == f"{gone} dropped", (out, err)
+assert json.loads(events(gone, "dropped")[0]["after"])["snapshot"] == want
+# A link added while the close reads the units: the snapshot is of other links, so the close is refused.
+import order  # noqa: E402
+racing_for = make("읽는 사이 늘어난 연결", ["pr:acme/app#97"])
+real_snapshot = order_close.snapshot_now
+
+
+def racing(o, now=None):
+    snap = real_snapshot(o, now)
+    store.order_link(o["id"], "pr:acme/app#2", "term_root")
+    return snap
+
+
+order_close.snapshot_now = racing
+try:
+    order.close(racing_for, "done", None)
+    raise AssertionError("closed on a snapshot of other links")
+except ValueError as e:
+    assert "links changed while closing" in str(e), e
+finally:
+    order_close.snapshot_now = real_snapshot
+assert row(racing_for)["status"] == "open"
 
 # A malformed key is off, not on.
 for bad in ('{"orchestrate": {"order_auto_close": "yes"}}', "not json"):

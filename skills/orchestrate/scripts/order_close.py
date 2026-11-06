@@ -66,7 +66,7 @@ def gather(db, state, prs_file, board_now, now, merged_fn=gh_merged):
     board_now = board_now or {}
     return {"db": db, "prs": prs, "cards": cards, "fresh": fresh, "owner_items": owner_items, "merged_fn": merged_fn,
             "rows": board_now.get("rows") or {}, "agents": agents, "me": prs_file.get("me"),
-            "board": {lane: board_now.get(lane) or [] for lane in ("doing", "todo", "owner_todo")},
+            "board": {lane: board_now.get(lane) or [] for lane in ("doing", "todo", "owner_todo")}, "board_now": board_now,
             "decisions": store.decisions("open", db=db)}
 
 
@@ -108,27 +108,38 @@ def steps_left(ident, F):
                for d in F["board"]["doing"])
 
 
-def owner_turn(real, F):
-    """(code, why) when something at the order's units waits on the owner, else None: an inbox item or human-gate wait on
-    a linked card's session, an open decision from its terminals, an open board item owned by the owner that names a
-    linked card or PR. A PR's requested reviewer or a closed item's assignee is history, not a turn."""
-    if not F["me"]:
-        return "owner_unread", "the owner's login is unknown"
-    cards = {u[5:]: F["cards"].get(u[5:]) for u in real if u.startswith("card:")}
+def db_turn(real, cards_all, me, decisions, board_now):
+    """(code, why) when something kept in the DB waits on the owner at the order's units, else None: an open decision
+    from a linked card's terminals or about a linked PR (its link, title or body), an open board row the owner holds at
+    a linked card, an open board item the owner holds that names a linked card or PR. A PR's requested reviewer or a
+    closed item's assignee is history, not a turn. Also read again inside the close transaction."""
+    cards = {u[5:]: cards_all.get(u[5:]) for u in real if u.startswith("card:")}
     handles = {t.get("handle") for c in cards.values() if c for t in c.get("terminals") or []}
     prs = {u[3:] for u in real if u.startswith("pr:")} | {c["pr"] for c in cards.values() if c and c.get("pr")}
-    if any(i.get("session") in cards for i in F["owner_items"]):
-        return "owner_turn", "an inbox item waits on the owner at a linked card"
-    if any(d.get("handle") in handles for d in F["decisions"]):
-        return "owner_turn", "an open decision from a linked card waits for an answer"
-    for lane, items in F["board"].items():
-        for it in items:
-            who = it.get("owner") or it.get("who")
+    for d in decisions:
+        if d.get("handle") in handles or set(fleet.pr_refs(f"{d.get('link')} {d.get('title')} {d.get('body')}")) & prs:
+            return "owner_turn", "an open decision about a linked card or PR waits for an answer"
+    for rid, r in (board_now.get("rows") or {}).items():
+        card = cards_all.get(r.get("worktree")) or tidy.named(f"{rid} {r.get('title') or ''}", cards_all)
+        if card and card["id"] in cards and (r.get("status") == "owner" or rowstate.is_owner(r.get("owner"), me)):
+            return "owner_turn", "an open board row waits on the owner at a linked card"
+    for lane in ("doing", "todo", "owner_todo"):
+        for it in board_now.get(lane) or []:
             text = f"{it.get('title') or ''} {it.get('next') or ''}"
-            names = (c := tidy.named(text, F["cards"])) and c["id"] in cards or set(fleet.pr_refs(text)) & prs
-            if names and (lane == "owner_todo" or rowstate.is_owner(who, F["me"])):
+            names = (c := tidy.named(text, cards_all)) and c["id"] in cards or set(fleet.pr_refs(text)) & prs
+            if names and (lane == "owner_todo" or rowstate.is_owner(it.get("owner") or it.get("who"), me)):
                 return "owner_turn", f"an open {lane} item owned by the owner names a linked card or PR"
     return None
+
+
+def owner_turn(real, F):
+    """(code, why) when the owner has a turn at the order's units, else None; unreadable evidence counts as a turn."""
+    if not F["me"]:
+        return "owner_unread", "the owner's login is unknown"
+    cards = {u[5:] for u in real if u.startswith("card:")}
+    if any(i.get("session") in cards for i in F["owner_items"]):  # an inbox item or a human-gate wait on the session
+        return "owner_turn", "an inbox item waits on the owner at a linked card"
+    return db_turn(real, F["cards"], F["me"], F["decisions"], F["board_now"])
 
 
 def unit_end(unit, F):
@@ -216,16 +227,17 @@ def judge(o, F):
     return {**out, "close": True, "why": "units_done", "detail": "", "units": units, "snapshot": snap}
 
 
-def recheck(units):
-    """A check(db) for store.order_auto, run in its write transaction: the units that live in this DB (board item,
-    decision, a card's close) must still be as they were read."""
+def recheck(v, F):
+    """A check(db) for store.order_auto, run in its write transaction: what the judgement read from this DB must be as it
+    was: the units that live here (board item, decision, a card's close) and the owner's turn (decisions and board)."""
     def check(db):
-        F = {"db": db}
-        for u, ev in units.items():
+        for u, ev in v["units"].items():
             kind, _, ident = u.partition(":")
-            now = unit_end(u, F) if kind in ("board", "decision") else card_closure(ident, db) if "closure" in ev else None
+            now = unit_end(u, {"db": db}) if kind in ("board", "decision") else card_closure(ident, db) if "closure" in ev else None
             if now and now != ("done", ev):
                 raise ValueError(f"{u} changed while it was judged")
+        if db_turn(v["links"], F["cards"], F["me"], store.decisions("open", db=db), store.board(db)):
+            raise ValueError("the owner has a turn at its units")
     return check
 
 
@@ -246,17 +258,16 @@ def tick(state, prs_file, board_now, now, merged_fn=gh_merged):
         if v["why"] == "baseline":
             store.order_baseline(o["id"], v["snapshot"], v["links"])
         elif v["close"] and store.order_auto(o["id"], v["snapshot"], v["units"], v["links"], close=on,
-                                             recheck=recheck(v["units"])):  # False: it moved, the next pass reads it again
+                                             recheck=recheck(v, F)):  # False: it moved, the next pass reads it again
             out.append(v)
     return out
 
 
-def snapshot_now(oid, now=None):
-    """The normalized evidence of an order's units as they are, for a Reopen of a close by hand; None when any is
-    not ended or unread."""
+def snapshot_now(o, now=None):
+    """The normalized evidence of the units of order row `o` as they are, for the close event of a close by hand (done or
+    drop) and for a Reopen that finds none there; None when any unit is not ended or cannot be read."""
     state, prs_file = load()
     now = now or fleet.utcnow()
-    o = store.order_get(oid)
     try:
         board_now = store.board()
     except store.NotMigrated:
