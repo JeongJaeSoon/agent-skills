@@ -456,7 +456,7 @@ PR を受け持つスキルとマージする主体:
   - テストが非現実的なら理由を明らかにし、いちばん近い実行可能なチェックを使います。既存の assertion は弱めません。
 
 ### verification-skill
-- **使う場面:** 再利用する verify スキルを新しく作るとき（「verify 스킬 만들어줘」（verify スキルを作って）、`/create-verification-skill`）は create モード、既存の verify スキルを点検・修理するとき（「verify 스킬 점검해줘」（verify スキルを点検して）、週1回の点検、機能を動かせなかった verify スキル）は maintain モードです。変更一つが動くかの確認は `deliver-ticket` です。
+- **使う場面:** 再利用する verify スキルを新しく作るとき（「verify 스킬 만들어줘」（verify スキルを作って）、`/agent-skills:verification-skill create`、旧 `/create-verification-skill`）は create モード、既存の verify スキルを点検・修理するとき（「verify 스킬 점검해줘」（verify スキルを点検して）、週1回の点検、機能を動かせなかった verify スキル）は maintain モードです。変更一つが動くかの確認は `deliver-ticket` です。
 - **create モード:**
   - リポジトリを調べ、アプリをユーザーのように起動し、操作し、観察するリポジトリ専用のスキル `.claude/skills/verify-<app>/` を作ります。Launch、Doctor、Drive、Evidence、Cleanup の段階を置きます。
   - 主な機能3〜5個の機能マップも一緒に作ります。

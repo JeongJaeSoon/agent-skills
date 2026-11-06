@@ -454,7 +454,7 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
   - If a test would be unrealistic, it says why and uses the closest runnable check. It never weakens existing assertions.
 
 ### verification-skill
-- **When:** Create mode builds a reusable verify skill ("verify 스킬 만들어줘" (make a verify skill), `/create-verification-skill`); maintain mode checks and repairs an existing one ("verify 스킬 점검해줘" (check the verify skill), the weekly round, a verify skill that failed to drive a feature). Checking that one change works is `deliver-ticket`.
+- **When:** Create mode builds a reusable verify skill ("verify 스킬 만들어줘" (make a verify skill), `/agent-skills:verification-skill create`, the old `/create-verification-skill`); maintain mode checks and repairs an existing one ("verify 스킬 점검해줘" (check the verify skill), the weekly round, a verify skill that failed to drive a feature). Checking that one change works is `deliver-ticket`.
 - **Create mode:**
   - Surveys the repo and builds a repo-specific skill, `.claude/skills/verify-<app>/`, that launches, drives and observes the app the way a user would. It has Launch, Doctor, Drive, Evidence and Cleanup steps.
   - Also builds a feature map of the 3–5 main features.

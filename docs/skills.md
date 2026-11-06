@@ -485,7 +485,7 @@ PR 을 맡는 스킬과 머지 주체:
   - 테스트가 비현실적이면 이유를 밝히고 가장 가까운 실행 가능한 검사를 쓴다. 기존 assertion은 약하게 만들지 않는다.
 
 ### verification-skill
-- **언제:** 재사용할 verify 스킬을 새로 만들 때("verify 스킬 만들어줘", `/create-verification-skill`)는 create 모드, 있는 verify 스킬을 점검·보수할 때("verify 스킬 점검해줘", 주 1회 점검, 기능을 구동하지 못한 verify 스킬)는 maintain 모드. 변경 하나가 동작하는지 확인하는 것은 `deliver-ticket`이다.
+- **언제:** 재사용할 verify 스킬을 새로 만들 때("verify 스킬 만들어줘", `/agent-skills:verification-skill create`, 옛 `/create-verification-skill`)는 create 모드, 있는 verify 스킬을 점검·보수할 때("verify 스킬 점검해줘", 주 1회 점검, 기능을 구동하지 못한 verify 스킬)는 maintain 모드. 변경 하나가 동작하는지 확인하는 것은 `deliver-ticket`이다.
 - **create 모드:**
   - 저장소를 조사해 앱을 사용자처럼 띄우고 조작하고 관찰하는 저장소 전용 스킬 `.claude/skills/verify-<app>/`을 만든다. Launch, Doctor, Drive, Evidence, Cleanup 단계를 둔다.
   - 주요 기능 3~5개의 기능 지도를 함께 만든다.
