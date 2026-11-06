@@ -351,7 +351,13 @@ import cards  # noqa: E402
 
 def cards_apply(items):
     plan = tmp / "cards.json"
-    plan.write_text(json.dumps({"items": items}))
+    text = json.dumps({"items": items})
+    plan.write_text(text)
+    cards.SEAL_DIR = tmp / "seals"
+    cards.seal_plan(text)  # as scan --plan does
+    cards.cards_listing = lambda repo_list=(): [{"path": CARD}]
+    cards.ACCOUNT_STATE = reap.STATE  # this test's state directory stands for the account's
+    cards.preflight = lambda items, cfg: None  # the preflight is tested in test_cards.py; these cases are the per-card loop
     out, argv = io.StringIO(), sys.argv
     sys.argv = ["cards.py", "apply", "--plan", str(plan)]
     try:
@@ -375,7 +381,7 @@ logged = [json.loads(l) for l in (STATE / "reap-actions.jsonl").read_text().spli
 assert (logged[-1]["key"], logged[-1]["ok"]) == (f"card:{CARD}", True), logged[-1]
 with other_process_holds("card", CARD):
     out, code = cards_apply([ROW])
-assert "대상 잠금" in out and done_paths == [CARD], out
+assert "대상 잠금" in str(code) and code != 0 and done_paths == [CARD], (out, code)  # a held card stops the round before any act
 OWN.write_text(json.dumps({"generation": 3, "rules": {"card:close-idle": "sweep"}}))
 LAST.write_text(json.dumps({"t": time.time()}))
 out, code = cards_apply([ROW])
