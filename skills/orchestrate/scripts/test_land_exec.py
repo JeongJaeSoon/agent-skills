@@ -370,8 +370,9 @@ class LandExec(unittest.TestCase):
                                        "id:w2": {**new, "hostScope": {"hostIds": ["h1", "h2"], "omittedHostIds": ["h9"]}}})
             self.assertEqual(prog.author_sessions("b"), ["term_old"])
             hostless = [{**held[0], "hostId": "h1"}, {**held[1], "hostId": None}]
-            prog.orca_json = fake(hostless, {"id:w1": {**old, "hostScope": covered}, "id:w2": {**new, "hostScope": covered}})
-            self.assertEqual(prog.author_sessions("b"), [])
+            for scope in (covered, {"hostIds": ["h1", None], "omittedHostIds": []}):  # the second lists the missing host
+                prog.orca_json = fake(hostless, {"id:w1": {**old, "hostScope": covered}, "id:w2": {**new, "hostScope": scope}})
+                self.assertEqual(prog.author_sessions("b"), [], scope)
             # A truncated worktree list or an unanswered host may hide a holder.
             ok = {"id:w1": {"terminals": [{"handle": "term_new"}]}}
             prog.orca_json = fake(held[:1], ok, truncated=True)
