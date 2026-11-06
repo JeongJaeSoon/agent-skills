@@ -48,8 +48,8 @@ SESSIONS = [card("s-done", "offline"), card("s-busy", "working"), card("s-post",
 OWNER_OF = {"acme/app#1": "s-done", "acme/app#2": "s-post", "acme/app#3": "s-busy"}
 
 
-def write_state(generated=None, sessions=SESSIONS):
-    fleet.write_atomic(sd / "prs.json", json.dumps({"prs": PRS, "me": "owner-me"}))
+def write_state(generated=None, sessions=SESSIONS, me="owner-me"):
+    fleet.write_atomic(sd / "prs.json", json.dumps({"prs": PRS, "me": me}))
     fleet.write_atomic(sd / "state.json", json.dumps({"generated_at": generated or fleet.iso(now), "sessions": sessions, "prs": [
         {"key": k, "session": OWNER_OF.get(k), "state": v["detail"]["state"]} for k, v in PRS.items()]}))
 
@@ -77,12 +77,12 @@ for ev, aid in (("start", "ag-ok"), ("stop", "ag-ok"), ("start", "ag-run")):
     fleet.append_line(sd / fleet.SUBAGENTS, {"v": 1, "event": ev, "at": fleet.iso(now), "agent": aid, "claude_session": None,
                                               "type": None, "handle": None, "cwd": None, "desc": None})
 
-ASKED = []
+ASKED, GH = [], {}
 
 
 def gh(key):
     ASKED.append(key)
-    return None
+    return GH.get(key)
 
 
 def make(text, links, *, confirm=True, kind="order", owner=False, stand_in=()):
@@ -219,11 +219,11 @@ auto = make("자동으로 닫힘", ["pr:acme/app#5"])
 shadowed = {o["id"] for o in tick()}
 assert auto in shadowed and row(auto)["status"] == "done" and row(auto)["close_by"] == "auto"
 (done_ev,) = events(auto, "done")
-assert json.loads(done_ev["after"])["evidence"]["snapshot"] == json.dumps({"pr:acme/app#5": {"pr": "acme/app#5", "merge": "ccc5555"}}, sort_keys=True, separators=(",", ":"))
+assert json.loads(done_ev["after"])["snapshot"] == json.dumps({"pr:acme/app#5": {"pr": "acme/app#5", "merge": "ccc5555"}}, sort_keys=True, separators=(",", ":"))
 assert tick() == [] and len(events(auto, "done")) == 1
 assert row(cases["partial"])["status"] == "open" and row(cases["scope"])["status"] == "open", "the boundary cases still stay"
 store.order_reopen(auto, "term_root")
-assert row(auto)["reopen_evidence"] == json.loads(done_ev["after"])["evidence"]["snapshot"], "the snapshot moves to reopen_evidence"
+assert row(auto)["reopen_evidence"] == json.loads(done_ev["after"])["snapshot"], "the snapshot moves to reopen_evidence"
 store.order_links_complete(auto, "term_root")
 assert why(auto)["why"] == "same_evidence" and auto not in {o["id"] for o in tick()} and row(auto)["status"] == "open"
 PRS["acme/app#6"] = pr("acme/app#6", "MERGED", "ddd6666")
@@ -240,6 +240,95 @@ assert code == 0 and out == f"{hand} open", (out, err)
 assert json.loads(row(hand)["reopen_evidence"]) == {"pr:acme/app#1": {"pr": "acme/app#1", "merge": "abc1234def"}}
 store.order_links_complete(hand, "term_root")
 assert why(hand)["why"] == "same_evidence"
+# ---- review round 1: what the first version let through
+cfg.write_text("{}")
+for n, sha in ((7, "eee7777"), (8, "fff8888"), (9, "ggg9999"), (10, "hhh1010")):
+    PRS[f"acme/app#{n}"] = pr(f"acme/app#{n}", "MERGED", sha)
+    OWNER_OF[f"acme/app#{n}"] = f"s-r{n}"
+MORE = SESSIONS + [card(f"s-r{n}", "offline") for n in (7, 8, 9, 10)]
+write_state(sessions=MORE)
+# A board line about the card that names it but has no --worktree, and a doing item that does, still hold it.
+r_row = make("이름으로만 이은 행", ["card:s-r7"])
+assert why(r_row)["close"]
+board.set_row("s-r7", title="행", repo="acme/app", status="moving", next="머지 → 배포")
+assert why(r_row)["why"] == "partial" and "step after the merge" in why(r_row)["detail"]
+r_doing = make("doing 항목", ["card:s-r8"])
+assert why(r_doing)["close"]
+board.doing_add("s-r8 마무리", "card", "머지 → 릴리스", force=True, why="fixture")
+assert why(r_doing)["why"] == "partial"
+# Something waits on the owner at a linked card that the order does not name as a unit.
+r_dec = make("오너 결정", ["card:s-r9"])
+assert why(r_dec)["close"]
+db = sqlite3.connect(str(store.path()))
+db.execute("INSERT INTO decision (id, status, title, handle, created_at) VALUES ('d9', 'open', '고르기', 'term_s-r9', ?)", (fleet.iso(now),))
+db.commit()
+db.close()
+assert why(r_dec)["why"] == "owner_turn" and "decision" in why(r_dec)["detail"]
+r_own = make("오너의 열린 항목", ["card:s-r10"])
+assert why(r_own)["close"]
+board.doing_add("s-r10 확인", "오너", "확인", force=True, why="fixture")
+assert why(r_own)["why"] == "owner_turn" and "open doing item" in why(r_own)["detail"], why(r_own)
+write_state(sessions=MORE, me=None)
+assert why(r_own)["why"] == "owner_unread", "without the owner's login nothing says the owner has no turn"
+write_state(sessions=MORE)
+# An inbox or a subagent ledger that cannot be read is not an empty one.
+if os.geteuid() != 0:
+    inbox, ledger = sd / "inbox-external.jsonl", sd / fleet.SUBAGENTS
+    fleet.inbox_add("approval", "읽을 수 없는 칸", session="s-nowhere", key="k-unread")
+    inbox.chmod(0)
+    assert why(r_doing)["why"] == "owner_unread", why(r_doing)
+    inbox.chmod(0o600)
+    fleet.inbox_resolve("k-unread")
+    agent_order = make("서브에이전트", ["agent:ag-ok"])
+    assert why(agent_order)["close"]
+    ledger.chmod(0)
+    assert why(agent_order)["why"] == "unread" and "could not be read" in why(agent_order)["detail"]
+    ledger.chmod(0o600)
+    assert why(agent_order)["close"]
+# The write transaction reads the units that live in the DB again: a board item reopened after it was judged.
+race = make("판정 뒤 다시 열린 보드", [f"board:{done_b}"])
+v = why(race)
+assert v["close"]
+db = sqlite3.connect(str(store.path()))
+db.execute("UPDATE item SET status='todo', closed_at=NULL WHERE id=?", (done_b,))
+db.commit()
+assert store.order_auto(race, v["snapshot"], v["units"], v["links"], close=True, recheck=order_close.recheck(v["units"])) is False
+assert row(race)["status"] == "open" and not events(race, "done") and not events(race, "would_close")
+db.execute("UPDATE item SET status='done', closed_at=? WHERE id=?", (fleet.iso(now), done_b))
+db.commit()
+db.close()
+assert store.order_auto(race, v["snapshot"], v["units"], v["links"], close=False, recheck=order_close.recheck(v["units"]))
+# One would_close per evidence, also when the evidence goes A, B, A.
+flip = make("A B A", ["pr:acme/app#1"])
+for snap in ("A", "B", "A", "B"):
+    store.order_auto(flip, snap, {}, ["pr:acme/app#1"])
+assert [json.loads(e["after"])["snapshot"] for e in events(flip, "would_close")] == ["A", "B"]
+# A close and a reopen that could not read the units: the first readable pass is the baseline, not a close.
+GH.pop("acme/app#98", None)
+blind = make("읽지 못한 채 닫고 연다", ["pr:acme/app#98"])
+store.order_close(blind, "done", "term_root")
+store.order_reopen(blind, "term_root")
+assert row(blind)["reopen_evidence"] == store.EVIDENCE_UNKNOWN
+store.order_links_complete(blind, "term_root")
+assert blind not in {o["id"] for o in tick()} and row(blind)["reopen_evidence"] == store.EVIDENCE_UNKNOWN, "still unread: nothing to compare"
+GH["acme/app#98"] = "iii9898"
+assert why(blind)["why"] == "baseline"
+assert blind not in {o["id"] for o in tick()} and row(blind)["status"] == "open" and events(blind, "baseline")
+assert not events(blind, "would_close")
+assert json.loads(row(blind)["reopen_evidence"]) == {"pr:acme/app#98": {"pr": "acme/app#98", "merge": "iii9898"}}
+assert why(blind)["why"] == "same_evidence"
+# A close by hand keeps the units it saw, so a Reopen after them needs no second reading.
+PRS["acme/app#97"] = pr("acme/app#97", "MERGED", "jjj9797")
+write_state(sessions=MORE)
+seen = make("본 채 닫는다", ["pr:acme/app#97"])
+code, out, err = orch("order", "done", seen)
+assert code == 0 and out == f"{seen} done", (out, err)
+(closed_ev,) = events(seen, "done")
+want = json.dumps({"pr:acme/app#97": {"pr": "acme/app#97", "merge": "jjj9797"}}, sort_keys=True, separators=(",", ":"))
+assert json.loads(closed_ev["after"])["snapshot"] == want, closed_ev
+code, out, err = orch("order", "reopen", seen)
+assert code == 0 and row(seen)["reopen_evidence"] == want, (out, err)
+
 # A malformed key is off, not on.
 for bad in ('{"orchestrate": {"order_auto_close": "yes"}}', "not json"):
     cfg.write_text(bad)

@@ -16,9 +16,8 @@ order a Reopen undid is closed again only when that evidence changed.
 """
 import json, os, pathlib, subprocess, sys
 
-import fleet, store, tidy
+import fleet, rowstate, store, tidy
 
-RULE = "order_units_done"
 STATE_MAX_MIN = 15  # a session list older than this says nothing about who is working
 
 
@@ -51,12 +50,32 @@ def gather(db, state, prs_file, board_now, now, merged_fn=gh_merged):
     at = fleet.parse((state or {}).get("generated_at"))
     orca = ((state or {}).get("sources") or {}).get("orca") or {}
     fresh = bool(at) and (now - at).total_seconds() <= STATE_MAX_MIN * 60 and not orca.get("error")
+    # fleet.inbox_lines and fleet.subagents turn an unreadable file into an empty or an older answer; an order is
+    # closed on neither, so each file is opened here first and a failure is "not read".
     try:
+        read_bytes(fleet.state_dir() / "inbox-external.jsonl")
         owner_items = [i for i in fleet.external_items(now) if i["type"] in tidy.OWNER_TYPES and i.get("session")]
     except (OSError, ValueError):
         owner_items = None  # not read: no order is called free of the owner's turn
+    try:
+        agents = fleet._fold(read_bytes(fleet.state_dir() / fleet.SUBAGENTS).decode(errors="replace").splitlines())
+    except OSError:
+        agents = None
+    if owner_items is not None:  # the collector's own items, human-gate waits among them
+        owner_items += [i for i in (state or {}).get("items") or [] if i.get("type") in tidy.OWNER_TYPES and i.get("session")]
+    board_now = board_now or {}
     return {"db": db, "prs": prs, "cards": cards, "fresh": fresh, "owner_items": owner_items, "merged_fn": merged_fn,
-            "rows": (board_now or {}).get("rows") or {}, "agents": fleet.subagents()}
+            "rows": board_now.get("rows") or {}, "agents": agents, "me": prs_file.get("me"),
+            "board": {lane: board_now.get(lane) or [] for lane in ("doing", "todo", "owner_todo")},
+            "decisions": store.decisions("open", db=db)}
+
+
+def read_bytes(path):
+    """The file's bytes, b"" when it does not exist; any other failure to read is an OSError."""
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        return b""
 
 
 def pr_end(key, F):
@@ -68,6 +87,48 @@ def pr_end(key, F):
     sha = d.get("merge_sha") if d else None
     sha = sha or F["merged_fn"](key)
     return ("done", sha) if sha else ("unknown", f"{key} not shown merged")
+
+
+def card_closure(ident, db):
+    """A card with no PR ends only on a done close that was not tidy's "PR closed" (that one is no merge)."""
+    done = db.execute("SELECT state, rule FROM closure WHERE unit=?", (f"card:{ident}",)).fetchone()
+    if done and done["state"] == "done" and done["rule"] != "pr_closed":
+        return "done", {"card": ident, "closure": "done"}
+    return "open", f"card {ident} has no PR and no done close"
+
+
+def steps_left(ident, F):
+    """Whether a board line about the card still names a step after the merge: a row (its `--worktree`, else the card its
+    id and title name, as the board links it) or a doing item (the card its title or next step names)."""
+    for rid, r in F["rows"].items():
+        card = F["cards"].get(r.get("worktree")) or tidy.named(f"{rid} {r.get('title') or ''}", F["cards"])
+        if card and card["id"] == ident and tidy.POST_MERGE.search(r.get("next") or ""):
+            return True
+    return any((c := tidy.doing_card(d, F["cards"])) and c["id"] == ident and tidy.POST_MERGE.search(d.get("next") or "")
+               for d in F["board"]["doing"])
+
+
+def owner_turn(real, F):
+    """(code, why) when something at the order's units waits on the owner, else None: an inbox item or human-gate wait on
+    a linked card's session, an open decision from its terminals, an open board item owned by the owner that names a
+    linked card or PR. A PR's requested reviewer or a closed item's assignee is history, not a turn."""
+    if not F["me"]:
+        return "owner_unread", "the owner's login is unknown"
+    cards = {u[5:]: F["cards"].get(u[5:]) for u in real if u.startswith("card:")}
+    handles = {t.get("handle") for c in cards.values() if c for t in c.get("terminals") or []}
+    prs = {u[3:] for u in real if u.startswith("pr:")} | {c["pr"] for c in cards.values() if c and c.get("pr")}
+    if any(i.get("session") in cards for i in F["owner_items"]):
+        return "owner_turn", "an inbox item waits on the owner at a linked card"
+    if any(d.get("handle") in handles for d in F["decisions"]):
+        return "owner_turn", "an open decision from a linked card waits for an answer"
+    for lane, items in F["board"].items():
+        for it in items:
+            who = it.get("owner") or it.get("who")
+            text = f"{it.get('title') or ''} {it.get('next') or ''}"
+            names = (c := tidy.named(text, F["cards"])) and c["id"] in cards or set(fleet.pr_refs(text)) & prs
+            if names and (lane == "owner_todo" or rowstate.is_owner(who, F["me"])):
+                return "owner_turn", f"an open {lane} item owned by the owner names a linked card or PR"
+    return None
 
 
 def unit_end(unit, F):
@@ -89,14 +150,13 @@ def unit_end(unit, F):
             verdict, sha = pr_end(c["pr"], F)
             if verdict != "done":
                 return verdict, sha
-            if any(r.get("worktree") == ident and tidy.POST_MERGE.search(r.get("next") or "") for r in F["rows"].values()):
+            if steps_left(ident, F):
                 return "open", f"card {ident} has a step after the merge"
             return "done", {"card": ident, "pr": c["pr"], "merge": sha}
-        done = db.execute("SELECT state, rule FROM closure WHERE unit=?", (f"card:{ident}",)).fetchone()
-        if done and done["state"] == "done" and done["rule"] != "pr_closed":
-            return "done", {"card": ident, "closure": "done"}
-        return "open", f"card {ident} has no PR and no done close"
+        return card_closure(ident, db)
     if kind == "agent":
+        if F["agents"] is None:
+            return "unknown", "the subagent ledger could not be read"
         a = F["agents"].get(ident)
         if not a or not a.get("started_at"):
             return "unknown", f"agent {ident} has no run in the ledger"
@@ -132,11 +192,10 @@ def judge(o, F):
         return no("scope_unconfirmed", "the receiving session has not said every unit is linked")
     if o["owner_action"]:
         return no("owner_action", "marked --owner-action: closed by the session only")
-    cards = {u[5:] for u in real if u.startswith("card:")}
     if F["owner_items"] is None:
         return no("owner_unread", "the owner's inbox could not be read")
-    if turn := [i for i in F["owner_items"] if i.get("session") in cards]:
-        return no("owner_turn", f"{len(turn)} inbox item(s) wait on the owner at a linked card")
+    if turn := owner_turn(real, F):
+        return no(*turn)
     units, held = {}, []
     for u in real:
         verdict, ev = unit_end(u, F)
@@ -150,9 +209,24 @@ def judge(o, F):
     if o["kind"] == "feedback" and not any(u.startswith("pr:") for u in real):
         return no("feedback_needs_pr", "feedback closes on a merged PR, a to-do or card is not evidence")
     snap = json.dumps(units, sort_keys=True, separators=(",", ":"))
+    if o["reopen_evidence"] == store.EVIDENCE_UNKNOWN:  # reopened with its units unread: this reading is the baseline
+        return {**no("baseline", "reopened while its units could not be read"), "units": units, "snapshot": snap}
     if snap == o["reopen_evidence"]:
         return no("same_evidence", "a Reopen undid a close on this same evidence")
     return {**out, "close": True, "why": "units_done", "detail": "", "units": units, "snapshot": snap}
+
+
+def recheck(units):
+    """A check(db) for store.order_auto, run in its write transaction: the units that live in this DB (board item,
+    decision, a card's close) must still be as they were read."""
+    def check(db):
+        F = {"db": db}
+        for u, ev in units.items():
+            kind, _, ident = u.partition(":")
+            now = unit_end(u, F) if kind in ("board", "decision") else card_closure(ident, db) if "closure" in ev else None
+            if now and now != ("done", ev):
+                raise ValueError(f"{u} changed while it was judged")
+    return check
 
 
 def tick(state, prs_file, board_now, now, merged_fn=gh_merged):
@@ -169,17 +243,11 @@ def tick(state, prs_file, board_now, now, merged_fn=gh_merged):
         F = gather(db, state, prs_file, board_now, now, merged_fn)
         verdicts = [(o, judge(o, F)) for o in orders]
     for o, v in verdicts:
-        if not v["close"]:
-            continue
-        try:
-            if on:
-                store.order_close(o["id"], "done", "auto", evidence={"rule": RULE, "units": v["units"], "snapshot": v["snapshot"]},
-                                  check=lambda row, v=v: store.auto_still(row, v["links"], v["snapshot"]))
-            elif not store.order_shadow(o["id"], v["snapshot"], v["units"], v["links"]):
-                continue
-        except ValueError:
-            continue  # moved while it was judged: the next pass reads it again
-        out.append(v)
+        if v["why"] == "baseline":
+            store.order_baseline(o["id"], v["snapshot"], v["links"])
+        elif v["close"] and store.order_auto(o["id"], v["snapshot"], v["units"], v["links"], close=on,
+                                             recheck=recheck(v["units"])):  # False: it moved, the next pass reads it again
+            out.append(v)
     return out
 
 

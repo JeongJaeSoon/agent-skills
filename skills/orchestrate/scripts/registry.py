@@ -209,7 +209,7 @@ STORES = [
            "store:order_add"), ("fleet",),
           rule="the next d<N>, b<N> and o<N>; never reused"),
     Store("order", "db:order_.status", {"order.item": CANONICAL}, ("store:order_add", "store:order_close", "store:order_reopen", "store:order_links_complete",
-                                                  "store:order_shadow", "store:_unmark"),
+                                                  "store:order_auto", "store:order_baseline", "store:_unmark"),
           ("brief",), rule="the owner's instructions and feedback (`orch order`, step 5a-order); closed ones stay"),
     Store("orderlink", "db:order_link.unit", {"order.link": CANONICAL}, ("store:order_link",), ("brief",),
           rule="which card, agent, board item, decision or PR carries an order; it outlives the unit"),

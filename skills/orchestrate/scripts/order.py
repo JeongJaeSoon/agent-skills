@@ -120,8 +120,11 @@ def close(oid, sub, reason):
     """done or drop. A feedback row is not closed on the session's word: `done` needs a PR linked to it (a real link,
     not a stand-in) that GitHub shows merged, and `drop` needs --reason. The merge commit goes in the close event."""
     row = store.order_get(oid)
+    # The units as they are now go in the close event, so a Reopen can keep them (tidy does not close the order again
+    # on the same evidence). None when a unit is not ended or cannot be read: Reopen then reads them again.
+    snap = order_close.snapshot_now(oid) if sub != "drop" and row["status"] == "open" else None
     if row["kind"] != "feedback":
-        return store.order_close(oid, "dropped" if sub == "drop" else "done", _by(), reason=reason)
+        return store.order_close(oid, "dropped" if sub == "drop" else "done", _by(), reason=reason, snapshot=snap)
     # The checks below run inside the close transaction, and only on a row that is open there. A row read as closed
     # carries none, so a reopen between the read and the write is refused instead of closed without evidence.
     if sub == "drop":
@@ -142,7 +145,8 @@ def close(oid, sub, reason):
     def still(now_row):  # the links as written, not as read before the network call
         if not any(f"pr:{pr}" in now_row["links"] and f"pr:{pr}" not in now_row["stand_ins"] for pr in evidence):
             raise ValueError(f"{oid}: the merged PR link changed, or the order was reopened, while closing; run it again")
-    return store.order_close(oid, "done", _by(), evidence={"merged_prs": evidence} if evidence else None, reason=reason, check=still)
+    return store.order_close(oid, "done", _by(), evidence={"merged_prs": evidence} if evidence else None, reason=reason,
+                             check=still, snapshot=snap)
 
 
 def main(argv):
