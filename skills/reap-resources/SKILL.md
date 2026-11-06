@@ -56,7 +56,7 @@ made, or an agent made with `orca worktree create`, with or without `--parent-wo
 main checkout never show up; anything not registered shows up
 only as the unregistered-media lines of `evidence`, never as a target. Three kinds go by what the user listed instead of
 the ledger, and each is off until listed. `stack-volume`: only stacks whose names start with a prefix in
-`reap.stack_volumes.prefixes` (each ends in `-`, at least 4 characters; `label` is the extra owner label, never a
+`reap.stack_volumes.prefixes` (each ends in `-`, at least 4 characters; `label` is the extra owner label key, or a list of them (a string still works), never a
 `com.docker.*` key; `protect` lists owners it never touches). `stopped-container`: containers named under
 `reap.stopped_containers.prefixes` (the same shape; no wildcard) that compose did not make. `labeled-volume`: volumes
 whose provenance label (below) is in `reap.labeled_volumes.origins`. `reap --plan` re-checks each
@@ -432,7 +432,7 @@ Paths of a particular project's test cache stay here, not in this repo:
           "program_days": 7, "state_days": 7, "log_max_kb": 512,
           "inbox_to": "run:<id>", "plan_repeat": 2, "idle_minutes": 30, "load_cooldown_minutes": 60,
           "user_folders": [], "preview_ports": [4500, 4599],
-          "stack_volumes": {"prefixes": ["<throwaway project prefix>-"], "label": "<owner label key>", "protect": ["<project>"]},
+          "stack_volumes": {"prefixes": ["<throwaway project prefix>-"], "label": ["<owner label key>"], "protect": ["<project>"]},
           "stopped_containers": {"prefixes": ["<throwaway container prefix>-"], "protect": ["<project or container>"]},
           "labeled_volumes": {"namespace": "<label namespace>", "origins": ["verify-<app>"], "protect": ["<project>"]}, "alert": {"orphan_procs": 5,
                     "dangling_volumes": 50, "stale_branches": 30, "stale_worktrees": 10},
