@@ -149,6 +149,26 @@ with contextlib.redirect_stdout(out):
     assert st.main(["static", "--root", str(root), "--baseline", str(tmp / "base.json")]) == 0
 assert "no change" in out.getvalue(), out.getvalue()
 
+# Budget: --write keeps the listing per skill; a grown listing line, a new skill and a grown total are named, a grown
+# SKILL.md body alone is not, and counts of another approximation ask for a rewrite.
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    assert st.main(["budget", "--root", str(root), "--write"]) == 0
+    assert st.main(["budget", "--root", str(root)]) == 0
+saved_budget = json.loads(st.budget_file(root).read_text())
+assert set(saved_budget["skills"]) == {"alpha", "beta", "other"} and "within skill_budget.json" in out.getvalue()
+write(root, "skills/beta/SKILL.md", "---\nname: beta\ndescription: Beta skill\n---\nshort, and a longer body now\n")
+assert st.budget_over(st.budget_snapshot(st.measure(root)), saved_budget) == []
+write(root, "skills/gamma/SKILL.md", "---\nname: gamma\ndescription: Gamma\n---\n")
+write(root, "skills/other/SKILL.md", "---\nname: other\ndescription: Other skill, its description grown again\n---\nb\n")
+over = st.budget_over(st.budget_snapshot(st.measure(root)), saved_budget)
+assert [o.split(" ")[0] for o in over] == ["always_tokens", "always_width", "skills_width", "gamma:", "other:"], over
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    assert st.main(["budget", "--root", str(root)]) == 1
+assert "other: listing width" in out.getvalue(), out.getvalue()
+assert "rerun `budget --write`" in st.budget_over(st.budget_snapshot(st.measure(root)), {**saved_budget, "approx": "x"})[0]
+
 # --exact needs a key and never falls back to the approximation.
 saved = os.environ.pop("ANTHROPIC_API_KEY", None)
 try:
@@ -189,4 +209,11 @@ for p in sorted(st.REPO.glob("skills/*/SKILL.md")) + sorted(st.REPO.glob("agents
     if w > DESC_WIDTH_CAP and fm.get("name") not in DESC_CAP_EXEMPT:
         wide.append((fm.get("name"), w))
 assert not wide, f"descriptions wider than {DESC_WIDTH_CAP}: {wide}"
+# Under the cap, no listing line and no always-loaded total grows past scripts/skill_budget.json unless the same diff
+# rewrites it (`skill_tokens.py budget --write`). A warning until BUDGET_FAIL is turned on.
+BUDGET_FAIL = False
+over = st.budget_over(st.budget_snapshot(here), json.loads(st.budget_file().read_text()))
+if over:
+    print("WARN: past scripts/skill_budget.json:\n  " + "\n  ".join(over), file=sys.stderr)
+assert not (BUDGET_FAIL and over), over
 print("ok")
