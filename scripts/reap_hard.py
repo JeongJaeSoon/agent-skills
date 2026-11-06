@@ -32,7 +32,7 @@ compose projects in reap.pressure.always_on and anything a person's shell starte
 Each decision that acts, or would act under --dry-run, and each failure is one JSON line in
 <state>/reap-hard.jsonl; the pass's summary is <state>/reap-hard-last.json.
 After a pass that is not a dry run, `orch patrol --if-due --fallback` starts detached; it runs only when the patrol
-job has not run a round for 40 minutes, or the machine's pressure level rose. A card it judged working within the hour is kept, and nothing it judged becomes
+job has not run a round for 25 minutes (so every 30-minute pass when the job is off), or the machine's pressure level rose. A card it judged working within the hour is kept, and nothing it judged becomes
 a target.
 A pass that is not a dry run also writes <state>/inventory.json, its own judgements; patrol's candidate stage reads
 them for 10 minutes instead of scanning the machine again (read_inventory). One `gh pr list` per repo answers every

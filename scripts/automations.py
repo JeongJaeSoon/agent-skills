@@ -501,7 +501,7 @@ SHELL_JOBS = (
              "읽기 위주이고 아무것도 지우지 않는다",
              ["python3", str(REPO / "skills" / "orchestrate" / "scripts" / "dash.py"), "ensure"], 600, True),
     ShellJob("patrol", "30분마다 모든 에이전트 카드를 모델 없이 순찰하는 Orca automation(orch patrol --if-due). 발견은 카드를 띄운 세션의 "
-             "inbox 대기에 나타나고, 정리 후보는 기록만 한다. 꺼져 있으면 reap-hard 가 40분마다 대신 돈다",
+             "inbox 대기에 나타나고, 정리 후보는 기록만 한다. 꺼져 있으면 reap-hard 가 30분 회차마다 대신 돈다",
              ["python3", str(REPO / "skills" / "orchestrate" / "scripts" / "prog.py"), "patrol", "--if-due"], 1800, False,
              timeout=420),
     ShellJob("land-executor", "orchestrate.land_executor 가 켜진 repo 에서 `orch land` 가 남긴 머지 요청을 1분마다 모델 없이 다시 "
