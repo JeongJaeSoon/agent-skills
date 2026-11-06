@@ -92,7 +92,7 @@ def render(src, prefix):
             body.append('<div class="scroll"><pre><code>' + html.escape("\n".join(lines[i + 1:j])) + "</code></pre></div>")
             i = j + 1
             continue
-        m = re.match(r"^(#{1,3}) (.*)", ln)
+        m = re.match(r"^(#{1,4}) (.*)", ln)
         if m:
             level, text = len(m.group(1)), m.group(2)
             if level == 1:
@@ -100,6 +100,11 @@ def render(src, prefix):
                 continue
             hid = prefix + slug(text)
             heads.append(hid)
+            if level == 4:
+                # A mode inside one skill: an anchor, but not a contents entry or a skill.
+                body.append(f'<h4 id="{hid}" data-k="{len(heads)}">{inline(text)}</h4>')
+                i += 1
+                continue
             note = re.search(r"\((.*?)\)", text)
             name = re.sub(r"\s*\(.*?\)", "", text) if level == 3 else text
             badge = ""
