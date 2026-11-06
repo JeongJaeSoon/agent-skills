@@ -143,14 +143,15 @@ def page(rows, days=1, now=None, limit=LIMIT, inbox_since=None):
             for k in MESSAGE_FIELDS:
                 if r.get(k) is not None:
                     twin.setdefault(k, r[k])
-            if r.get("message") and terminal_only(r):  # Orca's address is the stored one; a log line may carry no channel
-                twin.setdefault("warn", TERMINAL_ONLY)
+            if r.get("message"):  # Orca's address is the stored one: the log line's own `to` may be a card or a handle
+                twin["warn"] = terminal_only(r)
         else:
             out.append(r)
             if r.get("message"):
                 by_key.setdefault(key(r.get("text")), []).append(r)
     out.sort(key=lambda r: r.get("ts") or "", reverse=True)
-    shown = [{**r, **({"warn": w} if (w := terminal_only(r)) else {}), "text": fleet.mask(r.get("text"), TEXT_MAX),
+    shown = [{**r, **({"warn": w} if (w := r.get("warn") if r.get("message") and r.get("source") == "log"
+                                   else terminal_only(r)) else {}), "text": fleet.mask(r.get("text"), TEXT_MAX),
               **{k: fleet.mask(r.get(k), n) or None for k, n in (("subject", 200), ("to", 120), ("from", 120),
                                                                    ("channel", 120), ("repo", 120), ("cwd", 300))}}
              for r in out[:limit]]

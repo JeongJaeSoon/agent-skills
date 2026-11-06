@@ -2399,7 +2399,12 @@ assert [(r["source"], r.get("also"), r.get("warn")) for r in fp if r["text"] == 
 bound = fleet.orca_messages_sent([{"id": "t3", "type": "status", "from_handle": "term_a", "to_handle": "run:run_1",
                                    "subject": "s", "body": "bound hello", "created_at": fleet.iso(now)}])
 tcopy = {"ts": fleet.iso(now), "to": "term_goal", "text": "bound hello", "channel": "orca orchestration send", "source": "transcript"}
+sent.add("term_goal", "bound logged", "inbox", "orca orchestration send", sender="term_a", now=now)
+bound += fleet.orca_messages_sent([{"id": "t4", "type": "status", "from_handle": "term_a", "to_handle": "run:run_1",
+                                    "subject": "s", "body": "bound logged", "created_at": fleet.iso(now)}])
 bp = sent.page(bound + [tcopy], days=1, now=later)["rows"]
+assert [(r["source"], r["to"], r.get("also"), r.get("warn")) for r in bp if r["text"] == "bound logged"] == [
+    ("log", "term_goal", ["orca"], None)], bp
 assert [(r["to"], r.get("also"), r.get("warn")) for r in bp if r["text"] == "bound hello"] == [("run:run_1", ["transcript"], None)], bp
 # Two Orca messages never fold, even with the same text, receiver and minute (two workers reporting "done").
 twins = fleet.orca_messages_sent([{"id": i, "type": "worker_done", "from_handle": f, "to_handle": "run:run_1", "subject": "done",
