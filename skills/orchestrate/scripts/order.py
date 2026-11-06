@@ -8,7 +8,9 @@ carries yet. A session that accepts an instruction as work writes it here before
                                        --stand-in: the unit only stands for the order (the temporary to-do an import
                                        replaced). It is shown, but does not carry the order: the brief still counts it
                                        as unlinked, and a closed stand-in is never evidence the order was done
-  done oN | drop oN                    close it by hand; nothing closes one by itself yet
+  done oN | drop oN [--reason TEXT]    close it by hand; nothing closes one by itself yet. For kind=feedback, done needs
+                                       a real pr: link whose PR gh shows merged (the merge commit is kept in the event;
+                                       a stand-in, to-do or card is not evidence) and drop needs --reason
   reopen oN                            a closed order is open again, and its links-complete mark is cleared
   links-complete oN [--undo]           say every unit the order needs is linked (needs one real link). PR 5c's automatic
                                        close waits for this mark; nothing reads it before then
@@ -19,7 +21,7 @@ carries yet. A session that accepts an instruction as work writes it here before
                                        second run skips what it already took. The file is only read.
                                        --check lists the lines not taken yet and exits 1 while there are any
 """
-import hashlib, json, os, pathlib, re, sys
+import hashlib, json, os, pathlib, re, subprocess, sys
 
 import fleet, store
 
@@ -94,6 +96,43 @@ def cmd_list(rest):
               f"{' '.join(o['links']) or 'no link'}  {o['text'].splitlines()[0][:100]}")
 
 
+def merged(pr):
+    """The merge commit of `owner/repo#N` when GitHub says it is merged, else None (also when gh cannot say)."""
+    repo, _, num = pr.partition("#")
+    try:
+        p = subprocess.run([os.environ.get("ORCH_GH", "gh"), "pr", "view", num, "--repo", repo, "--json", "state,mergeCommit"],
+                           capture_output=True, text=True, timeout=30)
+        d = json.loads(p.stdout) if p.returncode == 0 else {}
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None
+    sha = (d.get("mergeCommit") or {}).get("oid")
+    return sha if d.get("state") == "MERGED" and sha else None
+
+
+def close(oid, sub, reason):
+    """done or drop. A feedback row is not closed on the session's word: `done` needs a PR linked to it (a real link,
+    not a stand-in) that GitHub shows merged, and `drop` needs --reason. The merge commit goes in the close event."""
+    row = store.order_get(oid)
+    if sub == "drop":
+        if row["kind"] == "feedback" and row["status"] == "open" and not (reason or "").strip():
+            raise ValueError(f"{oid} is feedback: drop it with --reason TEXT (why it needs no change)")
+        return store.order_close(oid, "dropped", _by(), reason=reason)
+    if row["kind"] != "feedback" or row["status"] != "open":
+        return store.order_close(oid, "done", _by(), reason=reason)
+    prs = [u[3:] for u in row["links"] if u.startswith("pr:") and u not in row["stand_ins"]]
+    if not prs:
+        raise ValueError(f"{oid} is feedback: link the PR that fixed it first "
+                         f"(orch order link {oid} --unit pr:<owner/repo#number>); a to-do or card is not evidence")
+    evidence = {pr: sha for pr in prs if (sha := merged(pr))}
+    if not evidence:
+        raise ValueError(f"{oid} is feedback: none of {', '.join(prs)} is merged (per gh); done waits for the merge")
+
+    def still(now_row):  # the links as written, not as read before the network call
+        if not any(f"pr:{pr}" in now_row["links"] and f"pr:{pr}" not in now_row["stand_ins"] for pr in evidence):
+            raise ValueError(f"{oid}: the merged PR link changed while closing; run it again")
+    return store.order_close(oid, "done", _by(), evidence={"merged_prs": evidence}, reason=reason, check=still)
+
+
 def main(argv):
     sub, rest = (argv or ["help"])[0], argv[1:]
     oid = rest[0] if rest and not rest[0].startswith("--") else None
@@ -108,7 +147,7 @@ def main(argv):
             print(f"{oid} {'linked' if store.order_link(oid, opt(rest, '--unit'), _by(), stand_in) else 'already linked'} "
                   f"{opt(rest, '--unit')}{' (stand-in)' if stand_in else ''}")
         elif sub in ("done", "drop") and oid:
-            r = store.order_close(oid, "done" if sub == "done" else "dropped", _by())
+            r = close(oid, sub, opt(rest, "--reason"))
             print(f"{r['id']} {r['status']}")
         elif sub == "reopen" and oid:
             r = store.order_reopen(oid, _by())

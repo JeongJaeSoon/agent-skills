@@ -954,8 +954,10 @@ def order_link(oid, unit, by=None, stand_in=False):
         return False
 
 
-def order_close(oid, status, by=None):
-    """Open -> done or dropped. Returns the row; a closed order keeps its first close."""
+def order_close(oid, status, by=None, evidence=None, reason=None, check=None):
+    """Open -> done or dropped. Returns the row; a closed order keeps its first close. evidence and reason go into the
+    close event. check(row) runs inside the write transaction on an open order and raises ValueError to refuse the
+    close, and may return the evidence to record: the close is judged on the links as they are when it is written."""
     if status not in ("done", "dropped"):
         raise ValueError(status)
     with _order_tx() as db:
@@ -963,8 +965,12 @@ def order_close(oid, status, by=None):
         if not r:
             raise ValueError(f"no order {oid}")
         if r["status"] == "open":
+            if check:
+                evidence = check(_order_out(db, r)) or evidence
             db.execute("UPDATE order_ SET status=?, closed_at=?, close_by=? WHERE id=?", (status, now(), by, oid))
-            _event(db, "order", oid, status, by, {"status": "open"}, {"status": status})
+            _event(db, "order", oid, status, by, {"status": "open"},
+                   {"status": status, **({"evidence": evidence} if evidence else {}),
+                    **({"reason": fleet.mask(reason)} if reason else {})})
         return _order_out(db, db.execute("SELECT * FROM order_ WHERE id=?", (oid,)).fetchone())
 
 

@@ -174,8 +174,35 @@ subagent("ORDER: o99", "a3")
 subagent("ORDER: o2", "a4")  # o2 is done
 assert "agent:a4" not in links("o2"), links("o2")
 assert not any("agent:a3" in x or "agent:a4" in x for r in json.loads(ok("order", "list", "--json")) for x in r["links"])
+# ---- feedback is closed on evidence: a real PR link that gh shows merged; drop needs a reason
+gh = tmp / "gh"
+gh.write_text('#!/usr/bin/env python3\nimport json, sys\na = sys.argv[1:]\nn = a[2]\n'
+              'print(json.dumps({"state": "MERGED", "mergeCommit": {"oid": "abc123"}} if n == "5" else {"state": "OPEN", "mergeCommit": None}))\n')
+gh.chmod(0o755)
+env["ORCH_GH"] = str(gh)
+fb = ok("order", "add", "피드백 시험", "--kind", "feedback")
+assert "link the PR that fixed it" in fails("order", "done", fb)
+ok("order", "link", fb, "--unit", "card:wt-9")
+ok("order", "link", fb, "--unit", "pr:acme/app#5", "--stand-in")
+assert "link the PR that fixed it" in fails("order", "done", fb), "a stand-in PR is not evidence"
+ok("order", "link", fb, "--unit", "pr:acme/app#6")
+assert "is merged" in fails("order", "done", fb), "an open PR is not evidence"
+assert "--reason TEXT" in fails("order", "drop", fb)
+ok("order", "link", fb, "--unit", "pr:acme/app#5")  # the same unit as a real link turns the stand-in real
+assert ok("order", "done", fb) == f"{fb} done"
+db = sqlite3.connect(str(store.path()))
+ev = json.loads(db.execute("SELECT after FROM event WHERE entity='order' AND id=? AND ev='done'", (fb,)).fetchone()[0])
+assert ev["evidence"] == {"merged_prs": {"acme/app#5": "abc123"}}, ev
+drop_me = ok("order", "add", "버릴 피드백", "--kind", "feedback")
+assert ok("order", "drop", drop_me, "--reason", "이미 규칙에 있다") == f"{drop_me} dropped"
+ev = json.loads(db.execute("SELECT after FROM event WHERE entity='order' AND id=? AND ev='dropped'", (drop_me,)).fetchone()[0])
+db.close()
+assert ev["reason"] == "이미 규칙에 있다", ev
+plain = ok("order", "add", "그냥 지시")
+assert ok("order", "drop", plain) == f"{plain} dropped", "an order (not feedback) needs no reason"
+
 # A transcript that does not exist at the start is read at the stop, and an order that closed meanwhile still gets the link.
-ok("order", "add", "늦은 transcript")
+LATE = ok("order", "add", "늦은 transcript")
 tdir = tmp / "claude" / "sess" / "subagents"
 (tdir / "agent-late.jsonl").unlink(missing_ok=True)
 late = {"agent_id": "late", "session_id": "s1", "transcript_path": str(tmp / "claude" / "sess.jsonl")}
@@ -188,11 +215,11 @@ def hook(event):
 
 
 hook("SubagentStart")
-assert links("o8") == [], "no transcript yet"
-(tdir / "agent-late.jsonl").write_text(json.dumps({"type": "user", "message": {"role": "user", "content": "ORDER: o8\n일"}}) + "\n")
-ok("order", "done", "o8")
+assert links(LATE) == [], "no transcript yet"
+(tdir / "agent-late.jsonl").write_text(json.dumps({"type": "user", "message": {"role": "user", "content": f"ORDER: {LATE}\n일"}}) + "\n")
+ok("order", "done", LATE)
 hook("SubagentStart")
-assert links("o8") == [], "a closed order is not linked at the start"
+assert links(LATE) == [], "a closed order is not linked at the start"
 hook("SubagentStop")
-assert links("o8") == ["agent:late"], links("o8")
+assert links(LATE) == ["agent:late"], links(LATE)
 print("ok")
