@@ -17,7 +17,7 @@ def run(tool, tool_input, own, transcript=None, agent=None, session="s0", field=
         {"tool_name": tool, "tool_input": tool_input, "cwd": HOME, "transcript_path": transcript, "agent_type": agent,
          "session_id": session}),
         capture_output=True, text=True, env=env).stdout
-    return json.loads(out)["hookSpecificOutput"][field] if out.strip() else "none"
+    return json.loads(out)["hookSpecificOutput"].get(field, "none") if out.strip() else "none"
 
 
 def bash(cmd, own="term_me", transcript=None, agent=None, session="s0", **extra):

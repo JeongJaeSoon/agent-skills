@@ -284,8 +284,11 @@ def rules(tool, args, event, who):
         cmd = args.get("command") or ""
         if not isinstance(cmd, str):
             raise TypeError(f"{tool} command is not a string")
-        return (danger.check_bash(cmd, cfg, event.get("cwd"), who())
-                + coordination.check_bash(cmd, background(tool, args), who(), cfg))
+        found = (danger.check_bash(cmd, cfg, event.get("cwd"), who())
+                 + coordination.check_bash(cmd, background(tool, args), who(), cfg))
+        if tool == "Monitor":
+            found += [f._replace(level="warn") for f in coordination.check_monitor(cmd, cfg)]
+        return found
     if tool in WRITE_TOOLS:
         found = danger.check_write(args.get("file_path") or args.get("notebook_path"), cfg)
         try:  # its own fault never drops the danger findings above

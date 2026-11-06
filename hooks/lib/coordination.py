@@ -12,6 +12,8 @@ which session they reach is roles.applies' matrix, how hard they hold is a key i
   create` or `orca agent launch` of Claude from any session with no `--model`. `--terminal` reuses a running session,
   which takes no model. A `worker-start` whose `--model` differs from `orchestrate.models.worker` also warns, and
   one warning says the value was not compared when that key is unset. These never go above warn.
+- orchestrate.pr_poll (warn): a Monitor command that polls `gh pr list|view|checks` in a loop with a sleep under 300 s.
+  The warning points at scripts/pr_watch.py. It never goes above warn.
 """
 import re
 
@@ -20,7 +22,7 @@ from lib import config, shell
 from lib.danger import Finding
 
 RULES = {"orchestrate.ask_user_question": "deny", "orchestrate.wait_foreground": "deny",
-         "orchestrate.send_devnull": "deny", "orchestrate.model_flag": "warn"}
+         "orchestrate.send_devnull": "deny", "orchestrate.model_flag": "warn", "orchestrate.pr_poll": "warn"}
 LAUNCHES = (["orchestration", "worker-start"], ["worktree", "create"], ["agent", "launch"])
 SOURCE = "(agent-skills hooks/guard.py, {key})"
 
@@ -129,6 +131,38 @@ def same_model(have, want):
             # `claude-sonnet-4-6` and `claude-3-7-sonnet-…` are the family; `opusplan` and the like are not
             return other == fam or re.fullmatch(rf"claude-(\d+(-\d+)*-)?{fam}(-.*)?", other) is not None
     return have == want
+
+
+PR_POLLS = (["pr", "list"], ["pr", "view"], ["pr", "checks"])
+PR_POLL_MIN = 300
+SLEEP_UNITS = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}
+
+
+def sleep_seconds(c):
+    """Seconds a `sleep` command waits; None when it is not one or its argument is not a plain number."""
+    if c.name != "sleep":
+        return None
+    total = 0.0
+    for x in c.words[1:]:
+        m = re.fullmatch(r"(\d+(?:\.\d+)?)([smhd]?)", x)
+        if not m:
+            return None
+        total += float(m[1]) * SLEEP_UNITS[m[2]]
+    return total or None
+
+
+def check_monitor(cmd, cfg):
+    """A Monitor loop that polls `gh pr list|view|checks` with a sleep under 300 s wakes the session on every
+    state change, most of them with nothing to do. The shared watcher prints only the changes that need a turn."""
+    cmds = shell.commands(cmd)
+    polls = any(c.name == "gh" and c.words[1:3] in PR_POLLS for c in cmds)
+    short = [s for c in cmds if (s := sleep_seconds(c)) is not None and s < PR_POLL_MIN]
+    if not (polls and short):
+        return []
+    return finding(cfg, "orchestrate.pr_poll",
+                   f"This Monitor polls `gh pr` every {min(short):g} s, and each state change wakes the session. Use "
+                   "skills/orchestrate/scripts/pr_watch.py: it checks every 300 s or more and prints only a merge or "
+                   "close, a CI failure, READY, a conflict appearing or clearing, and a new PR.")
 
 
 def check_bash(cmd, background, s, cfg):
