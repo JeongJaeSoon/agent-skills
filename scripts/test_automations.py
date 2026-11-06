@@ -397,6 +397,26 @@ class ShellJobs(Base):
         self.assertIn("not migrated", msg)
         self.assertEqual(self.creates(fake), [])
 
+    def test_status_text_ends_with_the_land_scope_drift_lines(self):
+        warn = au.subprocess.CompletedProcess([], 0, "경고: o/new는 ... 범위 밖이다\n", "")
+        with mock.patch.object(au.subprocess, "run", return_value=warn) as run:
+            self.assertEqual(au.land_drift(), ["경고: o/new는 ... 범위 밖이다"])
+        self.assertEqual(run.call_args[0][0][-2:], [str(au.LAND_EXEC), "drift"])
+        broke = au.subprocess.CompletedProcess([], 1, "", "Traceback: boom")
+        with mock.patch.object(au.subprocess, "run", return_value=broke):
+            self.assertEqual(au.land_drift(), ["경고: land executor 범위 점검 실패: Traceback: boom"])
+        with mock.patch.object(au.subprocess, "run", side_effect=au.subprocess.TimeoutExpired("x", 90)):
+            self.assertIn("90초", au.land_drift()[0])
+        with mock.patch.object(au, "rows", return_value=[]), mock.patch.object(au, "land_drift", return_value=["경고: x"]):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                au.cmd_status(True)
+            self.assertEqual(json.loads(out.getvalue()), [], "--json stays the rows alone")
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                au.cmd_status(False)
+            self.assertIn("경고: x", out.getvalue())
+
     def test_no_job_is_a_launchagent_or_names_launchctl(self):
         for j in self.jobs.values():
             self.assertNotIn("launchctl", " ".join(j.argv))
