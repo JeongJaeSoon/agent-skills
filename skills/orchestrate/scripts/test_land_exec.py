@@ -1612,6 +1612,14 @@ class AutoQueue(Fixture):
         self.auto()
         self.assertEqual(len(self.mine()), 1)
 
+    def test_programs_recording_the_same_repo_in_another_case_are_both_found(self):
+        other = f"{self.slug}-case"
+        subprocess.run([sys.executable, HERE / "prog.py", "init", other, "--repo", "O/R", "--run", "run_y"],
+                       check=True, capture_output=True)
+        self.addCleanup(shutil.rmtree, prog.HOME / other, True)
+        found = {s for s, _, _ in land_exec.programs_on("o/r")[0]}
+        self.assertLessEqual({self.slug, other}, found)
+
     def test_the_programs_spelling_wins_over_a_differently_cased_entry(self):
         config(repos=["O/R", "o/*"], auto_queue={"mode": "on"})
         self.auto()

@@ -268,7 +268,7 @@ def programs_on(repo):
             continue
         if not isinstance(cfg, dict):
             unread = True
-        elif cfg.get("repo") == repo:
+        elif isinstance(cfg.get("repo"), str) and cfg["repo"].casefold() == repo.casefold():  # GitHub names ignore case
             try:
                 p = prog.Program(d.name)
                 found.append((d.name, p, p.events()))
