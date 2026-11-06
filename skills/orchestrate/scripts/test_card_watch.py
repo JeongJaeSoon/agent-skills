@@ -246,9 +246,15 @@ assert scan({})[0] == "STUCK card-a (a full disk): read its screen", "numbered c
 screens["h1"] = ["⏺ Bash(build)", "  ⎿  27 - writing output", "     28  No space left on device", "❯ "]
 assert scan({})[0] == "STUCK card-a (a full disk): read its screen", "numbered output beside a '-' line, no diff header"
 screens["h1"] = ["⏺ Update(src/errors.ts)", "  ⎿  Added 1 line", '     41 +  const m = "the filesystem returned',
-                  'ENOSPC: No space left on device";', "❯ "]
-assert scan({}) == [], "a wrapped diff line, with no gutter of its own, is part of the diff"
-screens["h1"] = screens["h1"][:4] + ["⏺ Bash(make)", "  ⎿  npm ERR! ENOSPC: no space left", "❯ "]
+                  '       ENOSPC: No space left on device";', "❯ "]
+assert scan({}) == [], "a wrapped diff line, indented under the gutter, is part of the diff"
+screens["h1"] = ["⏺ Update(src/main.py)", "  ⎿  Added 1 line", "     41 +  enabled = True",
+                  "npm ERR! ENOSPC: no space left on device, write", "❯ "]
+assert scan({})[0] == "STUCK card-a (a full disk): read its screen", "output right after a diff is not part of it"
+screens["h1"] = ["npm ERR! ENOSPC: no space left on device, write", "⏺ Disk space recovered.", "⏺ Update(src/app.ts)",
+                  *[f"     {i} +  line {i}" for i in range(1, 31)], "❯ "]
+assert scan({}) == [], "a message that scrolled past the 25-line tail is not read again after a long diff"
+screens["h1"] = ["⏺ Update(src/errors.ts)", "     41 +  x = 1", "⏺ Bash(make)", "  ⎿  npm ERR! ENOSPC: no space left", "❯ "]
 assert scan({})[0] == "STUCK card-a (a full disk): read its screen", "the next turn after a diff is not part of it"
 long_build = ["⏺ Bash(build)"] + [f"     {i} - writing output" for i in range(1, 25)] + ["     25  No space left on device", "❯ "]
 screens["h1"] = long_build

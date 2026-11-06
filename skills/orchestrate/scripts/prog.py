@@ -3197,33 +3197,38 @@ GUTTER = re.compile(r"^[\s⎿]*\d+(?:\s([+\-])|\s\s)")
 DIFF_HEAD = re.compile(r"\b(?:Update|Edit|Write|MultiEdit)\(|\b(?:Added|Removed) \d+ lines?\b|\bUpdated .* with \d+ (?:addition|removal)")
 
 
-def without_diffs(lines):
-    """lines minus the drawn diffs: a gutter run with a + or - line that follows a diff header. Shape alone is not
-    enough: a command can print "27 - step" and "28  No space left". A run with no header in `lines` is kept, so a
-    real disk error is never dropped; callers pass the whole screen so a header is seen before the tail is cut."""
+WRAPPED = re.compile(r"^ {5,}\S")  # Claude Code indents a wrapped diff line under its gutter; command output sits under ⎿ or at the margin
+
+
+def without_diffs(lines, tail=25):
+    """The last `tail` lines minus the drawn diffs: a gutter run with a + or - line that follows a diff header. Shape
+    alone is not enough: a command can print "27 - step" and "28  No space left". A run with no header is kept, so a
+    real disk error is never dropped. The whole screen is walked so a header is seen even when the tail cut it off,
+    but only lines that were in the tail come back."""
     out, run, head, in_diff = [], [], False, False
-    for l in [*lines, None]:
+    first = len(lines) - tail
+    for i, l in enumerate([*lines, None]):
         m = GUTTER.match(l) if l is not None else None
         if m:
-            run.append((l, bool(m.group(1))))
+            run.append((i, l, bool(m.group(1))))
             continue
         if run:
-            in_diff = head and any(marked for _, marked in run)
+            in_diff = head and any(marked for _, _, marked in run)
             if not in_diff:
-                out += [x for x, _ in run]
+                out += [(j, x) for j, x, _ in run]
             run = []
-        # A long diff line wraps onto lines with no gutter; they belong to it until a blank line or the next turn mark.
-        if l is None or (in_diff and l.strip() and not l.lstrip().startswith(("⏺", "❯", "⎿", "✻"))):
+        # A long diff line wraps onto indented lines with no gutter; they belong to the diff.
+        if l is None or (in_diff and WRAPPED.match(l) and not l.lstrip().startswith(("⏺", "❯", "⎿", "✻"))):
             continue
         in_diff = False
-        out.append(l)
+        out.append((i, l))
         head = bool(DIFF_HEAD.search(l))
-    return out
+    return [l for i, l in out if i >= first]
 
 
 def screen_prompt(lines, activity=None):
     tail = lines[-25:]
-    text = "\n".join(without_diffs(lines)[-25:])
+    text = "\n".join(without_diffs(lines))
     for rx, kind in PROMPTS:
         if rx.search(text):
             return kind, next((l.strip() for l in reversed(tail) if l.strip().endswith("?")), "")
