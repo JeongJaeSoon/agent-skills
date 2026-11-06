@@ -246,6 +246,16 @@ def test_classify():
                         ("a press-enter screen", PRESS_ENTER)]:
         check(f"{name} is not sendable", sync.classify(lines, idle) is not None)
     check("busy title is not sendable", sync.classify(IDLE, "◑ some task") is not None)
+    check("a braille spinner title is not sendable", sync.classify(IDLE, "⠂ some task") is not None)
+    # Orca overwrites the title of a terminal with a display name: it says nothing, so the screen decides.
+    shown = "agent-skills #462~#464 T7 권한 수정"
+    check("a display-name title with an empty prompt is sendable", sync.classify(IDLE, shown) is None)
+    check("a display-name title without any title is judged by the screen", sync.classify(IDLE, "") is None)
+    for name, lines in [("a turn in progress", BUSY), ("a permission dialog", PERMISSION), ("a trust dialog", TRUST),
+                        ("a typed draft", TYPING), ("a shell", SHELL), ("an exited claude", EXITED)]:
+        check(f"a display-name title with {name} is not sendable", sync.classify(lines, shown) is not None)
+    check("a display-name title with an Orca composer draft is not sendable",
+          "'hi'" in (sync.classify(IDLE, shown, draft="hi") or ""))
     check("a composer draft is not sendable and the reason shows it",
           "'hi'" in (sync.classify(IDLE, idle, draft="hi") or ""))
     check("the real screen after a reload is sendable", sync.classify(RELOAD_DONE, idle) is None)

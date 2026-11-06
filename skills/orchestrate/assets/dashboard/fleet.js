@@ -60,6 +60,9 @@ function kindLabel(st, s) {
   if (s.kind === "orchestrator") return ["orchestrator", "accent", ""];
   if (s.kind === "orchestration") return ["lead", "accent", "workers"];
   if (s.kind === "task" || (byId(st)[s.parent] || {}).kind === "orchestration") return ["worker", "", ""];
+  // A card with no Dispatch (kind "standalone", which the land executor needs) is still a worker; the role column
+  // reads orchestrator, lead or worker only.
+  if (s.kind === "standalone") return ["worker", "", ""];
   return [s.kind, "", ""];
 }
 const kindTag = (st, s) => tag(...kindLabel(st, s));

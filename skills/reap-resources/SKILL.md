@@ -247,7 +247,7 @@ are who removes a finished card (`end-session`, "Who cleans up"). Which device f
 
 The janitor only sees what was registered and waits on its half-hourly round and on the card's own session to close.
 `bin/reap-hard` is the last sweep: fixed rules, no model, every Orca card under
-`~/orca/workspaces` whatever made it, run by a LaunchAgent every 15 minutes.
+`~/orca/workspaces` whatever made it, run by an Orca automation every 30 minutes, and once more when a PR lands.
 
 ```bash
 bin/reap-hard run --dry-run      # decide and log, touch nothing
@@ -320,7 +320,7 @@ taken while the load is at or above the limit is not evidence: measure again onc
 `scripts/pressure.py` watches the machine without a model and reaps what is safe before anyone notices.
 A round whose level turns warn or danger also starts `orch patrol --if-due` detached, which ties the top consumers
 to the state of the card behind each (its `L` rule); the `patrol` shell job runs it every 30 minutes, and reap-hard's
-pass starts one only when no round ran for 40 minutes (`--fallback`). Patrol verdicts only keep.
+pass starts one only when no round ran for 25 minutes (`--fallback`), so with the job off it starts one every pass. Patrol verdicts only keep.
 
 ```bash
 P="${CLAUDE_SKILL_DIR}/scripts/pressure.py"
@@ -404,6 +404,10 @@ a subagent does not count; an Orca that gives no `workingMode` or `mainAgent` is
 `Monitor` on `python3 "$P" turns --wait 15`, which exits 0 once under the cap and 3 after the wait (2 when `--wait` has no minute count: it never skips the wait). A count Orca cannot
 give (no answer, a cut-short list) holds like a full one, in the hook and in `turns`/`turns --wait` alike (`turn_hold`):
 the wait polls until the count is readable and exits 3 with "cannot count" if it never is; only `null` turns the cap off.
+`max_sessions` (`reap.pressure`, unset = off) is a second cap on the same start: Orca's listed agent sessions, working or
+idle, the caller's own left out. Idle sessions hold memory the turn count never sees. It holds, waits and exits 3 the same
+way (`session_hold`, shared by the hook, `turns` and `turns --wait`); a count Orca cannot give holds like a full one.
+The default is no cap because the right number depends on the machine.
 The caller's own turn is left out of the count (its pane key comes from `$ORCA_TERMINAL_HANDLE`), so the wait, which runs
 while the caller's turn is over, and the hook, which runs inside it, give one verdict; a caller that cannot be identified
 is counted like any other turn and the output carries a warning line.
