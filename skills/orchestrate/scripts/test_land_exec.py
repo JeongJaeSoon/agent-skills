@@ -342,10 +342,16 @@ class LandExec(unittest.TestCase):
             # Two worktrees hold the branch and only the successor has a terminal: its handle is the author.
             prog.orca_json = fake(held, {"id:w1": {"terminals": []}, "id:w2": {"terminals": [{"handle": "term_new"}]}})
             self.assertEqual(prog.author_sessions("b"), ["term_new"])
-            # One of them failing to answer leaves the author unverified, never the other's partial list.
-            prog.orca_json = fake(held, {"id:w1": SystemExit("orca terminal list: selector_ambiguous"),
+            # Both hold terminals: the union, each handle once.
+            prog.orca_json = fake(held, {"id:w1": {"terminals": [{"handle": "term_old"}, {"handle": "term_new"}]},
                                          "id:w2": {"terminals": [{"handle": "term_new"}]}})
-            self.assertEqual(prog.author_sessions("b"), [])
+            self.assertEqual(prog.author_sessions("b"), ["term_new", "term_old"])
+            # A later one failing or truncated leaves the author unverified, never the earlier one's partial list.
+            first = {"terminals": [{"handle": "term_old"}]}
+            for bad in (SystemExit("orca terminal list: selector_ambiguous"),
+                        {"terminals": [{"handle": "term_new"}], "truncated": True}):
+                prog.orca_json = fake(held, {"id:w1": first, "id:w2": bad})
+                self.assertEqual(prog.author_sessions("b"), [], bad)
             # A truncated worktree list or an unanswered host may hide a holder.
             ok = {"id:w1": {"terminals": [{"handle": "term_new"}]}}
             prog.orca_json = fake(held[:1], ok, truncated=True)
