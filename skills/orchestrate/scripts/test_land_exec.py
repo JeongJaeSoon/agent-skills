@@ -1,5 +1,5 @@
 """The land executor (land_exec.py) and `orch land`'s request path against a fake gh and orca. Run: python3 test_land_exec.py"""
-import ast, json, os, pathlib, subprocess, sys, tempfile, unittest
+import ast, json, os, pathlib, shutil, subprocess, sys, tempfile, unittest
 
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = pathlib.Path(tempfile.mkdtemp(prefix="land-exec-test-"))
@@ -486,6 +486,61 @@ class Request(unittest.TestCase):
         self.assertIn("land_executor", out)
         self.assertEqual(self.merged(), [])
         config()
+
+
+class Standalone(unittest.TestCase):
+    """A standalone card's PR in a repo with no program: `orch verdict` / `orch land --repo` create `<name>-standalone`."""
+    SLUG = "r-standalone"
+
+    def setUp(self):
+        drain()
+        LandExec.seq += 1
+        self.n = LandExec.seq + 100
+        self.state = ROOT / f"gh-standalone-{self.n}.json"
+        self.state.write_text(json.dumps({"prs": {str(self.n): pr(self.n)}, "stacks": []}))
+        os.environ["FAKE_GH_STATE"] = str(self.state)
+        shutil.rmtree(prog.HOME / self.SLUG, ignore_errors=True)
+        config()
+
+    def orch(self, *args):
+        r = subprocess.run([sys.executable, HERE / "prog.py", *args], capture_output=True, text=True)
+        return r.returncode, r.stdout + r.stderr
+
+    def test_land_creates_the_program_and_the_next_round_merges(self):
+        code, out = self.orch("verdict", self.SLUG, "--repo", "o/r", "--pr", str(self.n), "--sha", f"h{self.n}",
+                              "--source", "review:codex")
+        self.assertEqual(code, 0, out)
+        land_exec.beat(phase="done")
+        code, out = self.orch("land", self.SLUG, "--repo", "o/r", "--pr", str(self.n))
+        self.assertEqual(code, 2, out)
+        self.assertIn("queued land request", out)
+        cfg = json.loads((prog.HOME / self.SLUG / "program.json").read_text())
+        self.assertEqual((cfg["repo"], cfg["merge_policy"]), ("o/r", "autonomous"))
+        self.assertEqual(store.land_rows(("queued",))[-1]["pr"], self.n)
+        self.assertEqual(land_exec.cmd_round([]), 0)
+        merged = [a for a in json.loads(self.state.read_text()).get("log", []) if a[:2] == ["pr", "merge"]]
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(store.land_rows(("merged",))[-1]["pr"], self.n)
+
+    def test_an_existing_program_is_left_alone(self):
+        self.orch("verdict", self.SLUG, "--repo", "o/r", "--pr", str(self.n), "--sha", f"h{self.n}",
+                  "--source", "review:codex")
+        path = prog.HOME / self.SLUG / "program.json"
+        before = path.read_text()
+        self.orch("land", self.SLUG, "--repo", "o/r", "--pr", str(self.n))
+        self.assertEqual(path.read_text(), before)
+
+    def test_executor_off_creates_nothing(self):
+        config(enabled=False)
+        code, out = self.orch("land", self.SLUG, "--repo", "o/r", "--pr", str(self.n))
+        self.assertNotEqual(code, 0, out)
+        self.assertIn("land_executor is off", out)
+        self.assertFalse((prog.HOME / self.SLUG).exists())
+
+    def test_a_slug_that_is_not_the_repos_standalone_program_creates_nothing(self):
+        code, out = self.orch("land", "other", "--repo", "o/r", "--pr", str(self.n))
+        self.assertNotEqual(code, 0, out)
+        self.assertFalse((prog.HOME / "other").exists())
 
 
 class Setup(unittest.TestCase):

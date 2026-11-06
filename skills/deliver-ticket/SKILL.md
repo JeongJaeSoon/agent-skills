@@ -255,7 +255,8 @@ Then land it. How depends on where you run:
   (`end-session` §7).
 - **A standalone card in a repo with the land executor on** (`orchestrate.land_executor`) does
   not merge: it reports READY with the head sha, and the orchestrator lands it through the repo's
-  standing program (`orchestrate` `references/landing.md`, "Land executor"). Elsewhere:
+  `<name>-standalone` program, which `orch land --repo` creates when missing (`orchestrate`
+  `references/landing.md`, "Land executor"). Elsewhere:
 - **A standalone card** merges its own verified PR unless the user set a hold. Under auto
   mode that merge runs unasked only when the user's `autoMode.allow` has a rule for this
   repository's merges (`orchestrate` `references/program.md` Frame, "Check the permission chain"); without one the

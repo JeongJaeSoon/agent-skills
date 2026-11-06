@@ -150,7 +150,8 @@ nothing is merged.
 
 With `orchestrate.land_executor` on for the repository, the round merges nothing there: a ready
 item carries no command, and the message hands it to `inbox_to`, whose orchestrator records the PR's
-review verdict (`orch verdict`) in the repository's standing program and runs `orch land`
+review verdict (`orch verdict`) in the repository's program (a standalone PR: `<name>-standalone`,
+created by `orch verdict`/`orch land --repo OWNER/NAME` when missing) and runs `orch land`
 (`orchestrate` [references/landing.md](../orchestrate/references/landing.md), "Land executor"). The
 executor's checks at the requested sha (verdict, `<!-- test-results -->` comment, CI, threads) are
 then the merge gate; the gates above only decide when the PR is handed on.
