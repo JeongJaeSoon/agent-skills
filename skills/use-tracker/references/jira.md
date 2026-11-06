@@ -10,9 +10,11 @@ it, and always from scripts, use `tracker.py --adapter jira` (Jira Cloud REST v3
 | Read one | `getJiraIssue` | `get ABC-1` |
 | File | `createJiraIssue` | `create --project P --title T --body-file F [--label L] [--parent ID] [--related ID]` |
 | Add labels | `editJiraIssue` (`update.labels: [{add: L}]`) | `label ABC-1 --add L` |
-| Comment | `addCommentToJiraIssue` | `comment ABC-1 --body-file F` |
-| Move | `getTransitionsForJiraIssue`, then `transitionJiraIssue` | `transition ABC-1 --to started\|review\|completed\|canceled` |
+| Comment | `addOrEditJiraIssueComment` | `comment ABC-1 --body-file F` |
+| Move | `listJiraIssueTransitions`, then `transitionJiraIssue` | `transition ABC-1 --to started\|review\|completed\|canceled` |
 | Relate | issue-link tool if the server has one, else `tracker.py` | `create --related ID` (link type "Relates") |
+
+`getJiraIssue` returns only the comment count; read comment bodies with `listJiraIssueComments`.
 
 With the MCP server, a child's epic goes in `additional_fields: {"parent": {"id": "<numeric id>"}}`. Its `parent` argument returns 400 and creates nothing.
 
@@ -39,3 +41,16 @@ With the MCP server, a child's epic goes in `additional_fields: {"parent": {"id"
 - `list` uses `/rest/api/3/search/jql` with `nextPageToken`, and falls back to `/rest/api/3/search`
   with `startAt` on sites that lack it. `--since` becomes `created >= "YYYY-MM-DD HH:mm"`, which Jira
   reads in the API user's timezone; results are then re-filtered in UTC.
+
+## Switching to Jira
+
+```json
+{"tracker": {"adapter": "jira",
+             "jira": {"base_url": "https://acme.atlassian.net", "email_env": "JIRA_EMAIL", "token_env": "JIRA_API_TOKEN"}}}
+```
+
+Put that in `~/.claude/agent-skills.json`, export `JIRA_EMAIL` and `JIRA_API_TOKEN` (an Atlassian API
+token), then check it with `python3 <tracker.py> list --project KEY --limit 1`. Optional:
+`"issue_type": "Task"` for `create`, `"review_status": "<status name>"` for `--to review`, and
+`team`, `project`, `templates`, `language` as for Linear ([linear.md](linear.md), "Config").
+Tokens are read from the environment only and never printed.

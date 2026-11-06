@@ -274,9 +274,35 @@ assert su.write_signals(ledger, rep4, NOW) == []
 # refresh() keeps the signals path and the store location out of skills.json.
 os.environ["CLAUDE_PROJECTS_DIR"], os.environ["ORCH_FLEET_STATE"] = str(projects), str(root / "state2")
 real_inventory, su.inventory = su.inventory, lambda: inv
-rep7 = su.refresh(out=root / "state2" / "skills.json", signals=ledger)
-su.inventory = real_inventory
-assert str(root) not in (root / "state2" / "skills.json").read_text() and set(rep7["signals"]) == {"added"}, rep7["signals"]
+real_collect = su.collect
+# The clock is pinned: refresh() collects as of NOW (rep4's flagged skills), or as of an ISO year boundary.
+su.collect = lambda miss_threshold=su.MISS_THRESHOLD: json.loads(json.dumps(rep4))
+fresh = root / "refresh-ledger.jsonl"
+rep7 = su.refresh(out=root / "state2" / "skills.json", signals=fresh)
+rows7 = fresh.read_text().splitlines()
+assert rep7["signals"]["added"] == len(rows7) == 3, (rep7["signals"], rows7)  # the 3 flagged skills of rep4
+rep7b = su.refresh(out=root / "state2" / "skills.json", signals=fresh)
+assert rep7b["signals"]["added"] == 0 and fresh.read_text().splitlines() == rows7, "same week: nothing new"
+saved7 = json.loads((root / "state2" / "skills.json").read_text())
+assert str(root) not in (root / "state2" / "skills.json").read_text()
+# skills.json carries no count of its own: `signals` is read back from the ledger (the source), so a second record
+# of "how many" cannot drift from the rows. Only the returned report says what this collect added.
+assert saved7["signals"] == {"week": 3, "rows": 3} and "added" not in saved7["signals"], saved7["signals"]
+assert rep7["signals"] == {"week": 3, "rows": 3, "added": 3}, rep7["signals"]
+# 2027-01-01 belongs to ISO week 2026-W53: the week count uses the ISO year, not the calendar year.
+newyear = root / "newyear-ledger.jsonl"
+su.collect = lambda miss_threshold=su.MISS_THRESHOLD: {**json.loads(json.dumps(rep4)), "generated_at": "2027-01-01T12:00:00Z"}
+rep8 = su.refresh(out=root / "state2" / "skills.json", signals=newyear)
+assert rep8["signals"] == {"week": 3, "rows": 3, "added": 3}, rep8["signals"]
+assert all(json.loads(l)["evidence"].endswith("@2026-W53") for l in newyear.read_text().splitlines())
+su.collect, su.inventory = real_collect, real_inventory
+# derive_signals() is the whole derivation: rows of other kinds and unreadable lines do not count.
+junk = root / "junk.jsonl"
+junk.write_text('{"ev":"signal","kind":"skill_usage","evidence":"skill-usage:a:misses@2026-W39"}\n'
+                '{"ev":"signal","kind":"skill_usage","evidence":"skill-usage:a:misses@2026-W38"}\n'
+                '{"ev":"signal","kind":"lesson","evidence":"x@2026-W39"}\nnot json\n[]\n')
+assert su.derive_signals(junk, "2026-W39") == {"week": 1, "rows": 2}
+assert su.derive_signals(root / "absent.jsonl", "2026-W39") == {"week": 0, "rows": 0}
 
 # The collector remembers first sight and the last use across collects, so a transcript Claude Code deleted
 # does not make a skill look unused for longer than it is.
