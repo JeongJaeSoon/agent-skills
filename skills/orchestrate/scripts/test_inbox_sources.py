@@ -130,6 +130,8 @@ at = fleet.iso(NOW - dt.timedelta(minutes=5))
 fleet.append_line(sends, {"at": at, "session": "wt-x", "handle": "term_x", "text": "use CSV", "ok": True, "typed": True, "code": 200})
 fleet.append_line(sends, {"at": at, "session": "wt-x", "handle": "term_x", "text": "no", "ok": False, "typed": False, "code": 200})
 fleet.append_line(sends, {"at": at, "session": "wt-x", "handle": None, "text": "open", "ok": True, "code": 200})
+fleet.append_line(sends, {"at": at, "session": "wt-x", "handle": "term_x", "text": "prompt approve", "ok": True, "typed": True,
+                          "key": "1", "fallback": None, "code": 200})  # a permission-prompt answer is an action, not an instruction
 fleet.append_line(sends, {"typed": True, "at": 5, "text": "x"})
 fleet.append_line(sends, {"typed": True, "at": at, "session": "wt-x", "text": None})
 assert sent.import_sends() == {"typed": 1, "added": 1, "skipped": 0} and not (D / "sent").exists(), "dry run"
@@ -166,7 +168,8 @@ assert page["unrecorded"] == 0 and [r["also"] for r in page["rows"] if r["to"] =
 # --- pr-events.jsonl: nothing writes it; `migrate-inputs` makes the old file read-only.
 old = D / "pr-events.jsonl"
 old.write_text('{"v": 1}\n')
-assert fleet.migrate_inputs()["archived"] == ["pr-events.jsonl"] and stat.S_IMODE(old.stat().st_mode) == 0o644
+old.chmod(0o444)  # read-only, but still readable by others
+assert fleet.migrate_inputs()["archived"] == ["pr-events.jsonl"] and stat.S_IMODE(old.stat().st_mode) == 0o444
 fleet.migrate_inputs(apply=True)
 assert stat.S_IMODE(old.stat().st_mode) == 0o400 and fleet.migrate_inputs(apply=True)["archived"] == []
 print("test_inbox_sources: ok")

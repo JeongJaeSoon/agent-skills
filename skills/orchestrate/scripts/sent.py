@@ -97,7 +97,8 @@ def import_sends(apply=False):
         seen = set()
         for p in (archive, path):
             for r in fleet.read_lines(p) if p.is_file() else ():
-                if not (isinstance(r, dict) and r.get("typed") and isinstance(r.get("at"), str) and isinstance(r.get("text"), str)
+                # A permission-prompt answer (fleet.answer_prompt) is typed too, but carries a `key` and is no instruction.
+                if not (isinstance(r, dict) and r.get("typed") and "key" not in r and isinstance(r.get("at"), str) and isinstance(r.get("text"), str)
                         and r["text"].strip() and isinstance(r.get("session"), str) and fleet.parse(r["at"])):
                     continue
                 k = (r["at"], r["session"], r["text"])

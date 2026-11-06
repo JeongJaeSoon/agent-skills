@@ -3051,7 +3051,7 @@ def migrate_inputs(apply=False):
             append_line(state_dir() / "inbox-external.jsonl",
                         {"v": 1, "op": "resolve", "key": k, "at": iso(utcnow()), "reason": "migrated"})
     archives = [p for n in ("pr-events.jsonl", "pr-events.jsonl.1") if (p := state_dir() / n).is_file()
-                and p.stat().st_mode & 0o222]
+                and p.stat().st_mode & 0o777 != 0o400]
     if apply:
         for p in archives:
             os.chmod(p, 0o400)
