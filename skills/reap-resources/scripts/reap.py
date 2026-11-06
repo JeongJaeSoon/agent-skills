@@ -48,7 +48,7 @@ within reap.load_cooldown_minutes (default 60). precheck --act is the scheduled 
 whose last act failed less than a day ago are left), sends one message to reap.inbox_to when what a person has to look
 at gained a key, logs <state>/janitor-runs.jsonl and always exits 1, so Orca starts no agent. schedule prints the `orca automations create` command (--load: the load job); only --write runs it.
 """
-import contextlib, datetime as dt, functools, hashlib, json, os, pathlib, re, shlex, shutil, signal, stat, subprocess, sys, time, unicodedata
+import contextlib, datetime as dt, functools, hashlib, json, os, pathlib, re, shlex, shutil, signal, stat, subprocess, sys, time, traceback, unicodedata
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[3] / "scripts"))
 try:
@@ -3036,6 +3036,7 @@ def main():
         for m in msgs:
             print(f"경보: {m}", file=sys.stderr)
         row = act_round(data, cfg, STATE, started, cfg.get("inbox_to"), gate=gate)
+        held.close()  # the round is recorded: no timer or handler may outlive it and cut the summary into a second row
         print(f"janitor 회차: 대상 {row['targets']}개, 정리 {len(row['acted'])} · 건너뜀 {len(row['skipped'])} · "
               f"실패 {len(row['failed'])} · 예산 초과로 남김 {len(row['left'])} · 쉬는 중 {len(row['resting'])} · "
               f"사람이 볼 것 {row['human']}" + (f" · 오류 {row['error']}" if row["error"] else "") +
@@ -3073,7 +3074,10 @@ def cli():
             with contextlib.suppress(OSError):
                 log_run(STATE, {"t": time.time(), "source": "scan", "error": f"{type(e).__name__}: {str(e)[:200]}",
                                 "stage": "plan"})
-        if isinstance(e, RoundCut):
+            # Under --act the exit is the round's own: a failure is 2, whatever stopped the plan.
+            if isinstance(e, RoundCut):
+                sys.exit(2)
+            traceback.print_exc()
             sys.exit(2)
         raise
 
