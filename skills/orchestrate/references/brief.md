@@ -138,7 +138,9 @@ LOAD        Before the first edit, load `deliver-ticket` (the Skill tool; a work
 LAND        After review, record the verdict on the reviewed head: orch verdict <slug> --pr <N>
             --sha <head> --source <independent-review, review:<reviewer>, verifier:<reviewer>,
             or live:<feature>; never the implementer> --reviewer <who reviewed, if the source
-            does not name them> --evidence <link or sha of the review>. When this brief has you wait for the
+            does not name them> --evidence <link or sha of the review>. A session that wrote the PR is
+            refused as the recorder: send the reviewed head, the reviewer and the evidence to the lead or
+            orchestrator, who records it. When this brief has you wait for the
             lead's OK before landing, record the verdict and run `orch land` only after
             that OK names the same head. Then the one-minute self-check: `git diff --name-only <CI base>..origin/main`; if any
             of it touches a contract or test premise this PR relies on, merge main in and let CI
