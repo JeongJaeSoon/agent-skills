@@ -164,6 +164,12 @@ assert sent.page([], days=1, now=NOW)["unrecorded"] == 0
 task = {"ts": at, "from": "term_c", "to": "task:t1", "kind": "worker", "text": "brief for the worker", "source": "orca"}
 page = sent.page([task, {**tr, "to": "task:t1", "text": "brief for the worker"}], days=1, now=NOW)
 assert page["unrecorded"] == 0 and [r["also"] for r in page["rows"] if r["to"] == "task:t1"] == [["transcript"]], page
+# Two Tasks with one brief and one log line: the log line holds the first; the second stays its own row.
+sent.add("worker", "same brief twice", kind="card", now=NOW - dt.timedelta(minutes=5))
+page = sent.page([{**task, "to": f"task:t{i}", "text": "same brief twice", "ts": fleet.iso(NOW - dt.timedelta(minutes=5))} for i in (1, 2)],
+                 days=1, now=NOW)
+twice = [r for r in page["rows"] if r["text"] == "same brief twice"]
+assert len(twice) == 2 and sorted(r["source"] for r in twice) == ["log", "orca"], twice
 
 # --- pr-events.jsonl: nothing writes it; `migrate-inputs` makes the old file read-only.
 old = D / "pr-events.jsonl"

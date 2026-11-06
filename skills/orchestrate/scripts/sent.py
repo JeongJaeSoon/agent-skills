@@ -157,8 +157,10 @@ def page(rows, days=1, now=None, limit=LIMIT, inbox_since=None):
         by_key.setdefault(key(r.get("text")), []).append(r)
     out = list(logged)
     recent = [dict(r) for r in rows if (r.get("ts") or "9") >= fleet.iso(since)]
+    holds_orca = set()  # ids of log rows an Orca row folded into: they stand for that Orca record now
+
     def from_orca(r):  # a message, or a Run Task's spec: Orca's own record
-        return bool(r.get("message") or r.get("source") == "orca")
+        return bool(r.get("message") or r.get("source") == "orca" or id(r) in holds_orca)
     unrecorded = 0
     for r in [r for r in recent if from_orca(r)] + [r for r in recent if not from_orca(r)]:
         t = fleet.parse(r.get("ts"))
@@ -166,6 +168,8 @@ def page(rows, days=1, now=None, limit=LIMIT, inbox_since=None):
                      and abs(fleet.parse(x["ts"]) - t) <= SAME_SEND and same_to(x.get("to"), r.get("to"))
                      and not (from_orca(x) and from_orca(r))), None)
         if twin:
+            if from_orca(r):
+                holds_orca.add(id(twin))
             twin["also"] = [*twin.get("also", []), r["source"]]
             twin.setdefault("claude_session", r.get("claude_session"))
             for k in MESSAGE_FIELDS:
