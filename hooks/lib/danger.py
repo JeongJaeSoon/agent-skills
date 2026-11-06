@@ -268,8 +268,8 @@ def check_command(c, masked, cfg, cwd, session, here=None):
     if name in ("gh", "curl") and protection_write(c):
         out.append(("guard.deny.protection_write", "This writes branch protection or a ruleset, the rules that "
                                                    "gate merges. The repository owner changes them, not an agent."))
-    if name == "rm":
-        trash, outside = rm_outside(w, here, cwd)
+    if name in ("rm", "find"):
+        trash, outside = rm_outside(c, here, cwd)
         if trash:
             out.append(("guard.deny.trash_empty", TRASH_EMPTY))
         if outside:
@@ -354,9 +354,7 @@ def label_add(w):
 
 def api_call(w):
     """(METHOD, endpoint, [field]) of a `gh api` command. A field or --input without --method means POST."""
-    method = next((w[i + 1] for i, x in enumerate(w[:-1]) if x in ("-X", "--method")), None)
-    method = next((x.split("=", 1)[1] for x in w if x.startswith("--method=")), method)
-    method = next((x[2:] for x in w if re.fullmatch(r"-X\w+", x)), method)
+    method = last_method(w, "--method")
     fields = [w[i + 1] for i, x in enumerate(w[:-1]) if x in ("-f", "-F", "--field", "--raw-field")]
     fields += [x.split("=", 1)[1] for x in w if x.startswith(("--field=", "--raw-field="))]
     fields += [x[2:] for x in w if x[:2] in ("-f", "-F") and len(x) > 2]  # `-fquery=…`
@@ -371,17 +369,29 @@ def api_call(w):
     method = (method or ("POST" if fields or bodies or "--input" in w else "GET")).upper()
     endpoint = verb(w[2:], {"-X", "--method", "-f", "-F", "--field", "--raw-field", "-H", "--header", "--input",
                             "-q", "--jq", "-t", "--template", "--hostname", "--cache", "-p", "--preview"})[0] or ""
-    return method, endpoint, fields
+    return method, re.sub(r"^https?://[^/]+", "", endpoint), fields  # gh takes a full URL too
+
+
+def last_method(w, long_opt):
+    """The method of the last `-X`, `long_opt` or `long_opt=` in w, which wins as in curl and gh. A cluster such as
+    `-sX DELETE` or `-sXDELETE` counts."""
+    method = None
+    for i, x in enumerate(w):
+        if x == long_opt and i + 1 < len(w):
+            method = w[i + 1]
+        elif x.startswith(long_opt + "="):
+            method = x.split("=", 1)[1]
+        elif m := re.fullmatch(r"-[a-zA-Z]*X(\w*)", x):
+            method = m.group(1) or (w[i + 1] if i + 1 < len(w) else method)
+    return method
 
 
 def curl_call(w):
     """(METHOD, [path]) of a curl command: the path of each api.github.com URL it names, `--url=` ones too."""
-    method = next((w[i + 1] for i, x in enumerate(w[:-1]) if x in ("-X", "--request")), None)
-    method = next((x[2:] for x in w if re.fullmatch(r"-X\w+", x)), method)
-    method = next((x.split("=", 1)[1] for x in w if x.startswith("--request=")), method)
+    method = last_method(w, "--request")
     data = any(x[:2] in ("-d", "-F", "-T") or x.startswith(("--data", "--form", "--json", "--upload-file"))
                for x in w[1:])
-    urls = [m.group(1) or "/" for x in w[1:] if (m := re.search(r"https?://api\.github\.com(/[^?#]*)?", x))]
+    urls = [m.group(1) or "/" for x in w[1:] if (m := re.search(r"https?://api\.github\.com(?::\d+)?(/[^?#]*)?", x))]
     return (method or ("POST" if data else "GET")).upper(), urls
 
 
@@ -423,7 +433,7 @@ def force_push_default(c, here):
     if c.name == "gh":
         method, endpoint, fields = api_call(w) if w[1:2] == ["api"] else ("", "", [])
         return (method == "PATCH" and re.search(r"/git/refs/heads/(main|master)$", endpoint) is not None
-                and "force=true" in fields)
+                and any(re.search(r'force"?\s*[=:]\s*true', f) for f in fields))
     sub, rest = verb(w[1:], GIT_OPTS)
     if sub != "push":
         return False
@@ -443,7 +453,7 @@ def force_push_default(c, here):
             i += x in PUSH_VALUED
         else:
             pos.append(x)
-    if "--dry-run" in opts or "-n" in opts:
+    if "--dry-run" in opts or any(re.fullmatch(r"-[a-zA-Z]*n[a-zA-Z]*", o) for o in opts):
         return False
     forced = any(o == "--force" or o.startswith("--force-with-lease") or re.fullmatch(r"-[a-zA-Z]*f[a-zA-Z]*", o)
                  for o in opts)
@@ -489,11 +499,27 @@ def in_trash(path):
     return any(path == t or path.startswith(t + os.sep) for t in trash_dirs()) or "/.Trashes/" in path + "/"
 
 
-def rm_outside(w, here, cwd):
-    """(trash, outside): the recursive-rm or glob targets that empty a trash folder, and the ones that lie outside
-    the checkout the session runs in and the temporary folders. A path with an unresolved `$` is not judged."""
-    opts, operands = rm_targets(w)
-    recursive = any(o == "--recursive" or re.fullmatch(r"-[a-zA-Z]*[rR][a-zA-Z]*", o) for o in opts)
+def find_roots(w):
+    """The start paths of a `find` command that has -delete; [] without it."""
+    if "-delete" not in w:
+        return []
+    out = []
+    for x in w[1:]:
+        if x.startswith(("-", "(", "!")) and x not in ("-H", "-L", "-P"):
+            break
+        out += [x] if x not in ("-H", "-L", "-P") else []
+    return out
+
+
+def rm_outside(c, here, cwd):
+    """(trash, outside): the recursive-rm (or `find -delete`) or glob targets that empty a trash folder, and the
+    ones that lie outside the checkout the session runs in and the temporary folders. A path with an unresolved `$`
+    is not judged."""
+    if c.name == "find":
+        operands, recursive = find_roots(c.words), True
+    else:
+        opts, operands = rm_targets(c.words)
+        recursive = any(o == "--recursive" or re.fullmatch(r"-[a-zA-Z]*[rR][a-zA-Z]*", o) for o in opts)
     roots = {os.path.realpath(p) for p in ("/tmp", "/private/tmp", os.environ.get("TMPDIR") or "/tmp")}
     top = git_out(["rev-parse", "--show-toplevel"], cwd)
     if top:
@@ -510,7 +536,7 @@ def rm_outside(w, here, cwd):
             if in_trash(p):
                 if recursive or globbed or p in trash_dirs():
                     trash.append(x)
-            elif recursive and not any(p.startswith(r + os.sep) for r in roots):
+            elif recursive and not any(p.startswith(r + os.sep) or p == r and c.name == "find" for r in roots):
                 outside.append(x)
     return trash, outside
 

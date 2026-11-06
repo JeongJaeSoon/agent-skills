@@ -581,7 +581,7 @@ PR 을 맡는 스킬과 머지 주체:
 허용은 셸 연산자, 리다이렉션, 치환, 변수가 없는 단일 명령에만 준다. 변수는 `$ORCA_TERMINAL_HANDLE` 하나만 예외다. 명령 이름 바로 뒤에 하위 명령이 와야 하고, 플래그가 먼저 오면 판정하지 않는다. 판정하지 않은 호출은 평소 권한 흐름(auto mode 분류기, 사용자의 규칙)을 탄다.
 
 ### 위험 명령과 역할 세션 규칙
-같은 `guard.py`가 `hooks/lib/danger.py`와 `hooks/lib/coordination.py`의 규칙을 먼저 본다. 명령은 bash가 실제로 실행하는 단어만 명령으로 읽고(따옴표 안, heredoc 본문, 주석은 글), 그 명령의 인자는 원문을 `shlex`로 나눠 읽는다. 그래서 `echo pkill`, 커밋 메시지, 따옴표 안의 프롬프트는 걸리지 않는다. `bash -c`, `eval`, 스크립트 파일 안의 명령은 보지 않는다. 가드레일이지 샌드박스가 아니다. 스크립트는 같은 판정 함수(`danger.check_bash`, `danger.external_review`)를 직접 부를 수 있다.
+같은 `guard.py`가 `hooks/lib/danger.py`와 `hooks/lib/coordination.py`의 규칙을 먼저 본다. 명령은 bash가 실제로 실행하는 단어만 명령으로 읽고(따옴표 안, heredoc 본문, 주석은 글), 그 명령의 인자는 원문을 `shlex`로 나눠 읽는다. 그래서 `echo pkill`, 커밋 메시지, 따옴표 안의 프롬프트는 걸리지 않는다. `bash -c`, `eval`, 스크립트 파일 안의 명령은 보지 않는다. 중괄호 확장, 변수에 담긴 경로, stdin으로 넘기는 본문, git config에 적힌 push refspec도 읽지 못한다. 가드레일이지 샌드박스가 아니다. 스크립트는 같은 판정 함수(`danger.check_bash`, `danger.external_review`)를 직접 부를 수 있다.
 
 규칙마다 `~/.claude/agent-skills.json`에 키가 있다. 값은 `"deny"`·`"ask"`·`"warn"`·`"off"` 가운데 하나이고, `false`는 `"off"`, `true`는 기본값이다. 끄면 그 규칙이 생기기 전 동작으로 돌아간다. warn은 막지 않고 사람에게 보이는 알림(`systemMessage`)과 모델에 주는 맥락으로 남는다.
 
