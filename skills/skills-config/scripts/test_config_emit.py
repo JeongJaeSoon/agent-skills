@@ -602,6 +602,27 @@ class HashAndOutTest(Base):
         self.assertIn(f"python3 -I {out}", r.stdout.strip().splitlines()[-1])
         self.assertFalse((self.home / "agent-skills-config").exists())
 
+    def test_second_default_emit_same_day_keeps_the_first_script(self):
+        self.write_spec(self.SPEC)
+        first = self.run_script("emit", "--spec", self.spec)
+        digest_before = first.stdout.strip().splitlines()[-1]
+        self.write_spec({"permissions": {"add": ["mcp__srv__other"]}})
+        second = self.run_script("emit", "--spec", self.spec)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        base = self.home / ".local/state/agent-skills/config-scripts"
+        stem = f"spec-{time.strftime('%Y%m%d')}"
+        self.assertIn("mcp__srv__tool", (base / f"{stem}.py").read_text())
+        self.assertIn("mcp__srv__other", (base / f"{stem}-2.py").read_text())
+        self.assertIn(f"python3 -I {base / (stem + '-2.py')}", second.stdout.strip().splitlines()[-1])
+        self.assertNotEqual(digest_before, second.stdout.strip().splitlines()[-1])
+
+    def test_explicit_out_replaces_an_existing_file_and_says_so(self):
+        r, out = self.emit(self.SPEC)
+        self.assertNotIn("replaced", r.stdout)
+        r, _ = self.emit({"permissions": {"add": ["mcp__srv__other"]}})
+        self.assertIn(f"wrote {out} (replaced an existing file)", r.stdout)
+        self.assertIn("mcp__srv__other", out.read_text())
+
     def test_default_out_refused_when_home_state_is_inside_a_config_dir(self):
         self.write_spec(self.SPEC)
         env = {**self.env, "HOME": str(self.profile)}

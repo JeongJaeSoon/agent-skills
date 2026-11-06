@@ -481,6 +481,7 @@ def emit(spec, out, settings_override, skills_json):
     body = source.replace(markers[0], f"SPEC = {pprint.pformat(spec, width=110, sort_dicts=False)}\n", 1)
     body = body.replace(markers[1], f"AUTOMODE_SOURCE = {AUTOMODE_PATH.read_text()!r}\n", 1)
     out.parent.mkdir(parents=True, exist_ok=True)
+    replaced = " (replaced an existing file)" if out.exists() else ""
     fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
         f.write(body)
@@ -490,8 +491,19 @@ def emit(spec, out, settings_override, skills_json):
         extra += f" --skills-json {shlex.quote(str(skills_json.absolute()))}"
     digest = script_hash(out)
     check = shlex.quote(f"{digest}  {out}")
-    print(f"\nwrote {out}\nThe user reviews it and runs:\n"
+    print(f"\nwrote {out}{replaced}\nThe user reviews it and runs:\n"
           f"  ! echo {check} | shasum -a 256 -c - && python3 -I {shlex.quote(str(out))}{extra} --apply {digest[:12]}")
+
+
+def free_default_out(slug):
+    """The default path, with -2, -3 ... added when the user may still hold the earlier script's run line."""
+    base = f"{slug}-{time.strftime('%Y%m%d')}"
+    out = OUT_DIR / f"{base}.py"
+    n = 2
+    while out.exists():
+        out = OUT_DIR / f"{base}-{n}.py"
+        n += 1
+    return out
 
 
 def prepare(spec):
@@ -524,7 +536,7 @@ def main(argv):
         if a.command == "emit":
             if a.apply or not a.spec:
                 p.error("emit needs --spec and never takes --apply")
-            out = a.out or OUT_DIR / f"{a.spec.stem}-{time.strftime('%Y%m%d')}.py"
+            out = a.out or free_default_out(a.spec.stem)
             emit(spec, out, a.settings, a.skills_json)
         else:
             run(spec, a.settings, a.skills_json, a.apply, script_hash(HERE, spec if a.spec else None)[:12])

@@ -49,7 +49,7 @@ One entry point for the user-level settings agent-skills depends on: keys in `~/
    python3 "${CLAUDE_SKILL_DIR}/scripts/config_emit.py" emit --spec <slug>.json
    ```
 
-   It checks the spec, reads the target files, prints a diff per file (for `settings.json` only the `permissions` and `autoMode` parts), and writes a standalone copy with the spec embedded to `~/.local/state/agent-skills/config-scripts/<slug>-<YYYYMMDD>.py`. `--out` overrides the path but must be outside `~/.claude` and `$CLAUDE_CONFIG_DIR`. Scripts an older version left in `~/agent-skills-config/` stay where they are; the user can delete that folder.
+   It checks the spec, reads the target files, prints a diff per file (for `settings.json` only the `permissions` and `autoMode` parts), and writes a standalone copy with the spec embedded to `~/.local/state/agent-skills/config-scripts/<slug>-<YYYYMMDD>.py`. A second emit with the same name on the same day gets `-2`, `-3` ... so an earlier run line stays valid. `--out` overrides the path (an existing file there is replaced, and the output says so) but must be outside `~/.claude` and `$CLAUDE_CONFIG_DIR`. Scripts an older version left in `~/agent-skills-config/` stay where they are; the user can delete that folder.
 5. **Hand it over.** Post the diff and the run line `emit` printed last, as is:
 
    ```
