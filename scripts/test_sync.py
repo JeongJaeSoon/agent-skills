@@ -228,8 +228,8 @@ def test_reload_kind():
     check("docs need no reload", sync.reload_kind(["docs/a.md", "README.md"]) is None)
     check("scripts and references are read live", sync.reload_kind(
         ["skills/orchestrate/scripts/prog.py", "skills/orchestrate/references/landing.md", "bin/orch"]) is None)
-    check("SKILL.md needs /reload-skills", sync.reload_kind(["skills/why/SKILL.md"]) == "skills")
-    check("hook wiring needs /reload-plugins", sync.reload_kind(["skills/why/SKILL.md", "hooks/hooks.json"]) == "plugins")
+    check("SKILL.md needs /reload-skills", sync.reload_kind(["skills/explain-code/SKILL.md"]) == "skills")
+    check("hook wiring needs /reload-plugins", sync.reload_kind(["skills/explain-code/SKILL.md", "hooks/hooks.json"]) == "plugins")
     check("hook scripts are read live", sync.reload_kind(["hooks/guard.py", "hooks/test_guard.py"]) is None)
 
 
