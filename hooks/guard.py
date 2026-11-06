@@ -146,32 +146,31 @@ def lead_session(who):
     return who().role == "lead"
 
 
-# Only a cd that is the first statement and gates the helper with `&&` is followed; any other cd (a subshell,
-# `;`, `||`, popd after pushd, a cd inside quotes) leaves only an absolute path readable.
-LEADING_CD = re.compile(r"\s*(?:cd|pushd)\s+(?:--\s+)?(\"[^\"$`\\]*\"|'[^']*'|[\w./+:@%,=-]+)\s*&&\s*(?:\S*/)?skills-sync\s+card\s+")
 HOME_REF = re.compile(r"\$HOME\b|\$\{HOME\}")
-SAFE_HOME = re.compile(r"/[\w./+:@%,=-]*")
+SAFE_HOME = re.compile(r"/[\w./+-]*")
+# A literal `cd X &&` may come first: cd changes PWD, never HOME.
+FIRST_STATEMENT = re.compile(r"\s*(?:(?:cd|pushd)\s+(?:--\s+)?[\w./+-]+\s*&&\s*)?(?:\S*/)?skills-sync\s+card\s+")
 
 
-def expand_path(token, cmd):
-    """The path as the shell would pass it, or None. Beyond a literal path only `~`, `~/…` and `$HOME`/`${HOME}`
-    are expanded, and only when HOME is a plain absolute path here and nothing else in the command mentions HOME
-    (an assignment, `+=`, `unset`, `read` ... could rebind it). Single quotes pass the text through literally."""
+def expand_path(token, first):
+    """The path the helper will open, or None when the hook cannot be sure. A literal path is read as written
+    (single quotes pass it through). `~` and `~/…` are expanded even in quotes, as the helper does itself.
+    `$HOME`/`${HOME}` is expanded only when the helper is the command's first statement (`first`): nothing can
+    have rebound HOME before it, which no scan of earlier text could prove (quotes, `+=`, `IFS`) -- and only when
+    HOME is a plain absolute path. Any other variable, substitution or glob is not read."""
     quote = token[0] if token[:1] in ("'", '"') else ""
     text = token.strip("'\"")
-    if quote == "'":
-        return pathlib.Path(text)
-    if set(text) & set("`*?\\") or "$(" in text:
-        return None
+    home = os.environ.get("HOME", "")
     if text == "~" or text.startswith("~/"):
-        if quote:
-            return pathlib.Path(text)
         text = "$HOME" + text[1:]
     elif text.startswith("~"):
         return None
+    elif quote == "'":
+        return pathlib.Path(text)
+    if set(text) & set("`*?\\") or "$(" in text:
+        return None
     if "$" in text:
-        home = os.environ.get("HOME", "")
-        if not SAFE_HOME.fullmatch(home) or re.search(r"\bHOME\b", HOME_REF.sub("", cmd)):
+        if not first or not SAFE_HOME.fullmatch(home):
             return None
         text = HOME_REF.sub(lambda _: home, text)
         if "$" in text:
@@ -183,14 +182,9 @@ def helper_card(brief, cwd, cmd, start):
     """(the prompt the helper would send, None) or (None, the deny reason): the helper's own checks on that file.
     `start`: where the brief's argument begins in `cmd`."""
     try:
-        path = expand_path(brief, cmd)
+        path = expand_path(brief, bool(FIRST_STATEMENT.fullmatch(cmd[:start])))
         base = pathlib.Path(cwd or ".")
         moves = bool(CHDIR.search(cmd[:start]))
-        lead = LEADING_CD.fullmatch(cmd[:start]) if moves else None
-        if lead:
-            moved = expand_path(lead[1], cmd) if not lead[1].lstrip("'\"").startswith("-") else None
-            moves = moved is None
-            base = base / moved if moved else base
     except Exception as e:  # a check that cannot run does not let the card through
         return None, f"The guard hook could not read the brief path of `skills-sync card` ({type(e).__name__}: {e})."
     if path is None:
