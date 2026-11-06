@@ -677,7 +677,8 @@ def closing_events(keep=200):
 def view():
     """The board, every close and the open decisions from one read snapshot: what one render reads."""
     with read() as db:
-        return {"board": _board(db), "latest": latest(db), "decisions": decisions("open", db)}
+        return {"board": _board(db), "latest": latest(db), "decisions": decisions("open", db),
+                "orders_unlinked": orders_unlinked(db)}
 
 
 # ---------------------------------------------------------------- land requests (land_exec.py)
@@ -818,6 +819,145 @@ def land_told(rid):
     """Mark a refusal as put in the dashboard inbox."""
     with _land_tx() as db:
         db.execute("UPDATE land_request SET told_at=? WHERE id=? AND told_at IS NULL", (now(), rid))
+
+
+# ---------------------------------------------------------------- owner orders (order.py)
+
+# An optional step like the land queue: NEEDS leaves it out, and the brief skips its line until `orch order setup` ran.
+# The table is order_ because ORDER is an SQL keyword.
+ORDER_STEP = "5a-order"
+ORDER_KINDS = ("order", "feedback")
+SCHEMA_ORDER = (
+    """CREATE TABLE order_ (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('order','feedback')),
+  status TEXT NOT NULL CHECK (status IN ('open','done','dropped')),
+  text TEXT NOT NULL,
+  source TEXT,
+  owner_action INTEGER NOT NULL DEFAULT 0 CHECK (owner_action IN (0,1)),
+  by TEXT,
+  created_at TEXT NOT NULL,
+  closed_at TEXT, close_by TEXT,
+  CHECK ((status = 'open') = (closed_at IS NULL))
+)""",
+    # The link outlives its unit: nothing here points at a row of item, decision or the fleet.
+    """CREATE TABLE order_link (
+  order_id TEXT NOT NULL REFERENCES order_(id),
+  unit TEXT NOT NULL,
+  ts TEXT NOT NULL, by TEXT,
+  PRIMARY KEY (order_id, unit)
+)""",
+)
+UNIT = re.compile(r"(?:card|agent):\S+|board:b\d+|decision:d\d+|pr:[\w.-]+/[\w.-]+#\d+")
+
+
+def order_setup_command():
+    return f"{main_checkout()}/bin/orch order setup"
+
+
+def order_ready(db):
+    return db.execute("SELECT 1 FROM migration WHERE step=?", (ORDER_STEP,)).fetchone() is not None
+
+
+def order_setup(by="order setup"):
+    """Add the order tables as a recorded step; a second run changes nothing. Returns what it did."""
+    with tx() as db:
+        if order_ready(db):
+            return "already set up"
+        for s in SCHEMA_ORDER:
+            db.execute(s)
+        db.execute("INSERT INTO migration (step, ts, backup, sources, stage) VALUES (?,?,?,?, 'imported')",
+                   (ORDER_STEP, now(), "", "[]"))
+        _event(db, "migration", ORDER_STEP, "imported", by, None, {"tables": ["order_", "order_link"]})
+        return "created order_, order_link"
+
+
+@contextlib.contextmanager
+def _order_tx():
+    with tx() as db:
+        if not order_ready(db):
+            raise NotMigrated(f"{path()}: orders are not set up: run {order_setup_command()}")
+        yield db
+
+
+def _order_out(db, r):
+    return {**dict(r), "owner_action": bool(r["owner_action"]),
+            "links": [x[0] for x in db.execute("SELECT unit FROM order_link WHERE order_id=? ORDER BY ts, unit", (r["id"],))]}
+
+
+def order_add(text, kind="order", source=None, owner_action=False, by=None, dedupe=False):
+    """(order, True) for a new one. With dedupe, a row that already has this source comes back as (row, False)."""
+    if kind not in ORDER_KINDS:
+        raise ValueError(f"kind is one of {', '.join(ORDER_KINDS)}")
+    text = text.strip()
+    if not text:
+        raise ValueError("an order needs its text")
+    with _order_tx() as db:
+        if dedupe and source:
+            old = db.execute("SELECT * FROM order_ WHERE source=?", (source,)).fetchone()
+            if old:
+                return _order_out(db, old), False
+        n = _counter(db, "o")
+        db.execute("INSERT INTO counter (name, next) VALUES ('o', ?) ON CONFLICT(name) DO UPDATE SET next=excluded.next", (n + 1,))
+        oid = f"o{n}"
+        db.execute("INSERT INTO order_ (id, kind, status, text, source, owner_action, by, created_at) "
+                   "VALUES (?,?, 'open', ?,?,?,?,?)", (oid, kind, fleet.mask(text), source, int(bool(owner_action)), by, now()))
+        row = _order_out(db, db.execute("SELECT * FROM order_ WHERE id=?", (oid,)).fetchone())
+        _event(db, "order", oid, "add", by, None, {k: row[k] for k in ("kind", "source", "owner_action", "text")})
+        return row, True
+
+
+def order_link(oid, unit, by=None):
+    """True when the link is new. The unit is checked for form, and a board item or decision for existing."""
+    if not UNIT.fullmatch(unit):
+        raise ValueError("unit is card:<worktree> | agent:<id> | board:<bN> | decision:<dN> | pr:<owner/repo#number>")
+    with _order_tx() as db:
+        if not db.execute("SELECT 1 FROM order_ WHERE id=?", (oid,)).fetchone():
+            raise ValueError(f"no order {oid}")
+        kind, _, ident = unit.partition(":")
+        if kind == "board" and not db.execute("SELECT 1 FROM item WHERE id=?", (ident,)).fetchone():
+            raise ValueError(f"no board item {ident}")
+        if kind == "decision" and not db.execute("SELECT 1 FROM decision WHERE id=?", (ident,)).fetchone():
+            raise ValueError(f"no decision {ident}")
+        cur = db.execute("INSERT OR IGNORE INTO order_link (order_id, unit, ts, by) VALUES (?,?,?,?)", (oid, unit, now(), by))
+        if cur.rowcount:
+            _event(db, "order", oid, "link", by, None, {"unit": unit})
+        return bool(cur.rowcount)
+
+
+def order_close(oid, status, by=None):
+    """Open -> done or dropped. Returns the row; a closed order keeps its first close."""
+    if status not in ("done", "dropped"):
+        raise ValueError(status)
+    with _order_tx() as db:
+        r = db.execute("SELECT * FROM order_ WHERE id=?", (oid,)).fetchone()
+        if not r:
+            raise ValueError(f"no order {oid}")
+        if r["status"] == "open":
+            db.execute("UPDATE order_ SET status=?, closed_at=?, close_by=? WHERE id=?", (status, now(), by, oid))
+            _event(db, "order", oid, status, by, {"status": "open"}, {"status": status})
+        return _order_out(db, db.execute("SELECT * FROM order_ WHERE id=?", (oid,)).fetchone())
+
+
+def orders(status=None, db=None):
+    """Orders oldest first with their links; None while the tables are not set up."""
+    if db is None:
+        with read() as db:
+            return orders(status, db)
+    if not order_ready(db):
+        return None
+    q, args = ("WHERE status=?", (status,)) if status else ("", ())
+    return [_order_out(db, r) for r in db.execute(f"SELECT * FROM order_ {q} ORDER BY created_at, CAST(substr(id,2) AS INTEGER)", args)]
+
+
+def orders_unlinked(db):
+    """Open orders with no link, oldest first; None while the tables are not set up. The brief ages them."""
+    if not order_ready(db):
+        return None
+    return [dict(r) for r in db.execute(
+        "SELECT id, kind, created_at, text FROM order_ WHERE status='open' "
+        "AND NOT EXISTS (SELECT 1 FROM order_link WHERE order_id=order_.id) "
+        "ORDER BY created_at, CAST(substr(id,2) AS INTEGER)")]
 
 
 # ---------------------------------------------------------------- what older code left
