@@ -867,6 +867,10 @@ out = subprocess.run([sys.executable, script, "merges", "--config", str(mconf)],
                      env={**os.environ, "AGENT_SKILLS_STATE": str(mtmp)})
 assert out.returncode == 0 and out.stdout.splitlines()[1] == mplan["new"][0]["cmd"], out
 assert list(p.read_json(mtmp / "prs" / "ledger.json", {})) == [mplan["new"][0]["key"]]
+# A rerun of the same plan prints no command again, but still a line, so the round does not skip verify for it.
+out = subprocess.run([sys.executable, script, "merges", "--config", str(mconf)], capture_output=True, text=True,
+                     env={**os.environ, "AGENT_SKILLS_STATE": str(mtmp)})
+assert out.returncode == 0 and out.stdout.startswith("#") and "gh pr merge" not in out.stdout, out
 # An executor item in plan.json: merges prints nothing and records nothing, so commit, not merges, marks it sent.
 xtmp = pathlib.Path(tempfile.mkdtemp())
 p.write_json(xtmp / "prs" / "plan.json", {**eplan, "new": [eby[1]]})

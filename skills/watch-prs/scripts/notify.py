@@ -8,7 +8,8 @@ Usage:
 
 stream polls the same way but prints each poll's lines as they arrive and keeps going, so each item is one
 Monitor notification with nothing to restart; after STREAM_MINUTES it prints a STREAM END line and exits 0
-(start it again), and it exits 2 with the error where watch would.
+(start it again). It exits 2 with the error where watch would, and also when it ends after STREAM_FAILURES
+or more such errors in a row, since a restart would reset the count.
 watch polls `gh api notifications` until a new relevant notification appears, prints one line per item
 (reason, repo, title, web URL; tab-separated) and exits 0. It exits 1 when max_minutes pass with nothing
 new (restart it) and 2 when it cannot work: no "prs" key in the config, or `gh` failing max_failures
@@ -46,6 +47,7 @@ TRANSIENT = re.compile(r"HTTP (5\d\d|429)|rate limit|dial tcp|no such host|conne
 LOOKUP_ERRORS = (RuntimeError, ValueError, TypeError, subprocess.TimeoutExpired)
 # Monitor stops its command at 30 minutes; the stream ends itself first, between polls.
 STREAM_MINUTES = 29
+STREAM_FAILURES = 3
 
 
 def config(path=CONFIG):
@@ -180,8 +182,9 @@ def seed(fetch, path, cfg):
 def watch(fetch, cfg, path, sleep=time.sleep, clock=time.monotonic, emit=None):
     """Returns (exit code, output lines). With emit (stream), each poll's lines go to emit and the watch goes on,
     so it returns only (1, []) at its deadline or (2, [error])."""
-    failures, streak, me, seen = 0, 0, None, None
+    failures, streak, me, seen, last = 0, 0, None, None, None
     deadline = clock() + (min(cfg["max_minutes"], STREAM_MINUTES) if emit else cfg["max_minutes"]) * 60
+    wait = lambda s: sleep(max(0, min(s, deadline - clock())))
     while clock() < deadline:
         try:
             if me is None:
@@ -196,10 +199,10 @@ def watch(fetch, cfg, path, sleep=time.sleep, clock=time.monotonic, emit=None):
         except (*LOOKUP_ERRORS, KeyError, OSError) as e:
             streak += 1
             if not (isinstance(e, subprocess.TimeoutExpired) or TRANSIENT.search(str(e))):
-                failures += 1
+                failures, last = failures + 1, e
                 if failures >= cfg["max_failures"]:
                     return 2, [f"notify: {failures} failures in a row; last: {e}"]
-            sleep(min(cfg["backoff_s"] * 2 ** (streak - 1), cfg["max_backoff_s"]))
+            wait(min(cfg["backoff_s"] * 2 ** (streak - 1), cfg["max_backoff_s"]))
             continue
         failures = streak = 0
         if keys:
@@ -209,7 +212,11 @@ def watch(fetch, cfg, path, sleep=time.sleep, clock=time.monotonic, emit=None):
             if emit is None:
                 return 0, lines
             emit(lines)
-        sleep(cfg["interval_s"])
+        wait(cfg["interval_s"])
+    # Backoff fits only a few tries into one stream and a restart resets the count, so max_failures would never be
+    # reached: a stream that ends still failing that way reports it instead of asking for a restart.
+    if emit and failures >= min(STREAM_FAILURES, cfg["max_failures"]):
+        return 2, [f"notify: {failures} failures in a row; last: {last}"]
     return 1, []
 
 

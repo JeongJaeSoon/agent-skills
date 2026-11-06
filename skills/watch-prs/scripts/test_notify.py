@@ -271,6 +271,20 @@ class NotifyTest(unittest.TestCase):
         self.assertLessEqual(self.clock.t, n.STREAM_MINUTES * 60 + CFG["interval_s"])
         self.assertEqual(n.read_seen(self.seen)[-2:], ["2@2026-01-01T00:00:00Z", "3@2026-01-01T00:00:00Z"])
 
+    def test_stream_backoff_never_outlasts_its_cap(self):
+        n.write_seen(self.seen, [], 10)
+        code, out = n.watch(Fake([[]], fail=999), CFG, self.seen, sleep=self.clock.sleep, clock=self.clock, emit=lambda ls: None)
+        self.assertEqual((code, out), (1, []))
+        self.assertLessEqual(self.clock.t, n.STREAM_MINUTES * 60)
+
+    def test_stream_reports_an_error_a_retry_cannot_fix_before_max_failures(self):
+        # Backoff allows only a few tries in one stream, and a restart would reset the count: report it, do not restart.
+        n.write_seen(self.seen, [], 10)
+        code, out = n.watch(Fake([[]], fail=999, error="gh: Bad credentials (HTTP 401)"), CFG, self.seen,
+                            sleep=self.clock.sleep, clock=self.clock, emit=lambda ls: None)
+        self.assertEqual(code, 2)
+        self.assertIn("HTTP 401", out[0])
+
     def test_stream_stops_on_a_persistent_failure(self):
         n.write_seen(self.seen, [], 10)
         code, out = n.watch(Fake([[]], fail=99, error="gh: Bad credentials (HTTP 401)"), {**CFG, "max_failures": 2},

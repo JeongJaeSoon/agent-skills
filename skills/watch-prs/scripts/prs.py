@@ -1515,12 +1515,14 @@ def main():
         # Recorded before the round runs them: a refused or failed merge is never retried at that head, even
         # when verify or commit never happens.
         ledger = read_json(STATE / "ledger.json", {})
-        acts = [i for i in read_json(STATE / "plan.json", {}).get("new", [])
-                if i.get("cmd") and not delivered(ledger, i["key"], i["kind"])]
+        cmds = [i for i in read_json(STATE / "plan.json", {}).get("new", []) if i.get("cmd")]
+        acts = [i for i in cmds if not delivered(ledger, i["key"], i["kind"])]
         ledger.update({i["key"]: {"at": now, "kind": i["kind"], "id": i["id"]} for i in acts})
         write_json(STATE / "ledger.json", ledger)
-        for i in acts:
-            print(f"# {i['repo']}#{i['number']} {i['why'][0]}\n{i['cmd']}")
+        for i in cmds:
+            # An earlier run of this plan already tried it: no command, but a line, so the round still runs verify.
+            print(f"# {i['repo']}#{i['number']} {i['why'][0]}\n{i['cmd']}" if i in acts else
+                  f"# {i['repo']}#{i['number']} 이 head 는 이미 시도함: 다시 실행하지 않고 verify 로 결과만 읽는다")
     elif cmd == "verify":
         print(verify(GitHub(), STATE, cfg))
     elif cmd == "actions":

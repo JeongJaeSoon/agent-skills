@@ -194,7 +194,8 @@ python3 "$P" plan --body    # prints the message, or nothing; keeps it in <state
 
 1. Empty output: stop, send nothing, do not commit.
 2. `ready_to_merge`: `python3 "$P" merges` prints a comment line and a `gh pr merge` command per
-   item the round merges itself; a land executor repo's items get none. No output: go to step 3.
+   item the round merges itself (only the line when a rerun of the plan already tried it); a land
+   executor repo's items get none. No output: go to step 3.
    Otherwise write each comment line in the chat, run its command on its own, once, then
    `python3 "$P" verify`, which reads each PR back, waits up to `ci_wait_minutes` for the merge
    commit's default-branch CI and rewrites `body.txt`: a red run's URL is in the line, and a merge
