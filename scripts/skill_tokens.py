@@ -57,6 +57,7 @@ HOOKS = {
     "artifact_links_stop.py": "no additionalContext; only its reason when it blocks a reply that omits an Artifact's links",
     "artifact_send_check.py": "a message that names a backed-up Artifact without its backup link (the denial, or one warning line)",
     "owner_check.py": "no additionalContext; only its reason when `guard.owner_check` is `deny` and it blocks",
+    "turn_check.py": "no additionalContext; one systemMessage line for the human, only for a `turn_check.*` key that is on",
     "record_check.py": "a PR opened, merged or landed (a reminder); a worker_done, card close or turn end that owes a "
                        "record line (the warning or the denial)",
 }
