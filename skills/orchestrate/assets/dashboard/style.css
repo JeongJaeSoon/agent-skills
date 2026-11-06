@@ -120,7 +120,6 @@ svg.i > * { vector-effect: non-scaling-stroke; }
 .sb-group + .sb-group { margin-top: var(--s4); }
 .sb-title { padding: 0 var(--s2) var(--s1); }
 .sb-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s1); }
-.sb-sep { height: 1px; margin: 0 var(--s2); background: var(--line); }
 .sb-heading { margin: var(--s2) var(--s2) 0; padding: var(--s3) 0 var(--s1); border-top: 1px solid var(--line); }
 [data-sb="icons"] .sb-heading { margin: var(--s2) var(--s2); padding: 0; border-top: 0; }
 .nav-item {
