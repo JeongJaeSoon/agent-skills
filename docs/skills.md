@@ -607,6 +607,12 @@ PR 을 맡는 스킬과 머지 주체:
 | `guard.warn.run_download` | warn | `-D`·`--dir` 없는 `gh run download` |
 | `guard.warn.tailscale` | warn | 워커의 `tailscale serve`·`funnel` |
 | `guard.deliver_load` | warn | `hooks/lib/skillload.py`. 워커(Dispatch 또는 CLOSE·KEEP 카드)의 본 대화가 `deliver-ticket`을 로드하기 전에 작업 폴더(hook 입력의 `cwd`) 안 파일을 Edit·Write·MultiEdit·NotebookEdit한다. 로드하기 전까지 대상 편집마다 경고 한 줄이 붙고(상태 파일은 없다), `deny`는 그 편집을 막고 `ask`는 확인을 묻는다. 첫 프롬프트에 `LOAD: none` 행이 있는 읽기 전용 카드, `.git` 아래와 작업 폴더 밖 경로, 서브에이전트, 오케스트레이터·리드·사람이 연 세션은 대상이 아니다. 로드는 오류 없는 `Skill` 결과 또는 `/deliver-ticket` 명령이다. 결과가 아직 없거나 transcript를 시간 안에 읽지 못하면 모른 것으로 보고 통과시킨다 |
+| `worker.edit_tool` | warn | `hooks/lib/discipline.py`. 워커(Dispatch 또는 CLOSE·KEEP 카드)와 그 서브에이전트가 Bash로 파일을 쓴다: `>`·`>>`·`&>`·`tee`·`sed -i`·파일을 쓰기로 여는 `python -c`와 python heredoc. 임시 디렉터리(`TMPDIR`·`/tmp`·scratchpad)·`/dev/null`·`orch-refusal`은 제외한다. worktree 안팎을 가리지 않는다. 정당한 로그 리다이렉트도 걸리므로 warn에 둔다 |
+| `worker.chain` | warn | 같은 카드의 Bash 한 호출에서 `rm`·`mv`·`git commit`·`git push`·`worker_done`이 `&&`·`;`·줄바꿈으로 다른 명령과 묶임. 파이프라인과 `$(…)` 안은 한 명령으로 센다 |
+| `worker.paths` | warn | 카드의 Edit·Write가 자기 worktree·임시 디렉터리·`orch-refusal` 밖이거나 `~/.claude/plugins/cache/` 안 |
+| `worker.main_checkout` | warn | 카드의 Edit·Write 대상이 main checkout(`git rev-parse --absolute-git-dir`과 `--git-common-dir`이 같음)에 있다. 저장소를 판정하지 못하면 통과한다 |
+| `worker.memory` | warn | 카드가 `~/.claude/projects/*/memory/`에 쓴다(Edit 계열, Bash의 리다이렉트·`tee`·`sed -i` 대상) |
+| `worker.pre_push` | warn | 이미 origin에 올린 브랜치의 `git rebase`, 이 세션에 테스트 명령이 없는데 하는 첫 `git push`, 테스트 파일 없이 코드만 스테이지한 `git commit`(테스트를 돌린 적이 없을 때만). transcript를 못 읽으면 통과한다 |
 | `orchestrate.ask_user_question` | deny | 오케스트레이터·리드·워커 본 대화의 AskUserQuestion. 서브에이전트와 일반 세션은 대상이 아니다 |
 | `orchestrate.wait_foreground` | deny | 오케스트레이터·리드가 `orch wait`, `orch inbox --wait`, `orch watch-cards`, `orca orchestration check\|inbox --wait`를 `run_in_background` 없이 실행, 또는 배경 대기를 `\| tail`·`\| head`로 자름. 워커의 `check --wait`는 대상이 아니다 |
 | `orchestrate.send_devnull` | deny | 오케스트레이터·리드·워커가 `orca orchestration send\|reply`의 출력을 `/dev/null`로 보냄. `2>/dev/null`만은 대상이 아니다 |
@@ -619,6 +625,8 @@ PR 을 맡는 스킬과 머지 주체:
 | `orchestrate.stall_idle_min` | 15 | 양의 정수. 턴이 끝난 워커를 STALLED `idle`로 표시하기까지의 분. 짧은 실측에서 줄일 때 쓴다 |
 
 hook 자신의 판정이 예외를 내면 그 호출은 통과시키고, 경고와 함께 `$AGENT_SKILLS_STATE/guard-errors.jsonl`에 시각·hook·예외 종류·위치만 남긴다(명령 원문은 남기지 않는다). 설정 파일을 읽지 못하면 기본값을 쓴다.
+
+`worker.*` 키는 발동할 때마다 점검 이름과 수준을 `$AGENT_SKILLS_STATE/turn-warnings.jsonl`에 한 줄씩 남긴다(턴 끝 점검과 같은 파일). 한 주 동안 이 기록으로 오탐을 센 뒤 `worker.edit_tool`부터 `deny`로 올린다. 판정은 텍스트와 git 상태를 읽는 휴리스틱이고, `bash -c`와 스크립트 파일 안의 명령은 보지 않는다.
 
 거부된 행동을 hook이 기록해 다시 막는 일은 없다. 거부된 세션이 같은 형태로 한 번만 다시 하고 우회하지 않는다는 규칙은 스킬 문장(`orchestrate`의 "Refused acts", `tune-automode`)이 지킨다. 이전 버전이 남긴 `$AGENT_SKILLS_STATE/refusals.jsonl`은 아무것도 읽지 않으며 지우지도 않는다. 필요 없으면 사람이 지운다.
 

@@ -2391,6 +2391,26 @@ def base_ci_hint(repo, base):
             f" there; start it with gh workflow run <ci workflow file> --repo {repo} --ref {base} and watch that run")
 
 
+def stack_refusal(p, pr, stacks):
+    """The land executor's refusal of a PR in a stack. Only the bottom layer has a way in: once the layer above
+    stands on the base, `pr` is a single PR. Retargeting rewrites that layer's diff, so its verdict is stale; the
+    layers further up stay on it. Any other layer waits for the ones below."""
+    why = f"#{pr} is in a stack: the land executor lands single PRs only"
+    members = next((m for m in stacks.values() if pr in m), [])
+    if not members:
+        return why
+    if members[0] != pr:
+        return f"{why}. Land #{members[0]} first, then the layers above it in order"
+    if len(members) < 2:
+        return why
+    # Read here, not from open_rows (one page of PRs): a guessed base would send the retarget to the wrong branch.
+    base = pr_view(p.cfg["repo"], pr).get("baseRefName")
+    if not base:
+        return f"{why}. #{pr} is the bottom layer; retarget #{members[1]} onto #{pr}'s base (it could not be read), then land again"
+    return (f"{why}. #{pr} is the bottom layer; do: gh pr edit {members[1]} --base {base} --repo {p.cfg['repo']},"
+            f" then orch land {p.slug} --pr {pr} (#{members[1]} needs a new review: its diff changed)")
+
+
 def attempt(p, pr, klass, onto_lower=False, expect=None, verdict_sources=None):
     """One pass: returns (exit_code, message). `expect`: the head the land executor was asked to merge, and
     `verdict_sources` the sources its verdict must come from (merge_unit)."""
@@ -2419,7 +2439,7 @@ def attempt(p, pr, klass, onto_lower=False, expect=None, verdict_sources=None):
     stacked = any(pr in members for members in stacks.values())
     if expect and (stacked or onto_lower):
         # Its checks pin one PR at one sha; the lower layers merge-async would take have no such pin.
-        return 1, f"#{pr} is in a stack: the land executor lands single PRs only"
+        return 1, stack_refusal(p, pr, stacks)
     if expect and unread:
         return 2, "yield: the stack listing did not answer, so the land executor cannot tell a single PR; land again"
     members = next((m for m in stacks.values() if pr in m), [])
@@ -4330,6 +4350,8 @@ def cmd_sent(argv):
                 print(json.dumps(rows, ensure_ascii=False, indent=1))
             for r in [] if "--json" in rest else rows:
                 print(f"{r['ts']}  {r.get('from') or '?'} → {r.get('to') or '?'}  [{r['source']}] {(r.get('subject') or r['text'] or '?').splitlines()[0][:100]}")
+                if r.get("warn"):
+                    print(f"    ! {r['warn']}")
         else:
             sys.exit(usage)
     except (ValueError, OSError) as e:
