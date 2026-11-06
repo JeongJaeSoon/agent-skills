@@ -1073,6 +1073,68 @@ class AutoQueue(Fixture):
         self.assertEqual([r["pr"] for r in self.mine()], [self.n + 1000])
         self.assertIn("GitHub did not answer", out)
 
+    # -- races, unreadable inputs, limits
+
+    def test_a_directory_with_a_ledger_but_no_config_hides_its_owner(self):
+        stray = prog.HOME / f"{self.slug}y"
+        stray.mkdir()
+        (stray / "ledger.jsonl").write_text("")
+        try:
+            self.skipped("a program ledger could not be read")
+        finally:
+            shutil.rmtree(stray)
+        empty = prog.HOME / f"{self.slug}e"
+        empty.mkdir()  # nothing in it: not a program
+        try:
+            self.auto()
+            self.assertEqual(len(self.mine()), 1)
+        finally:
+            shutil.rmtree(empty)
+
+    def test_a_stop_that_lands_after_the_decision_wins(self):
+        self.p.append("land_check", pr=self.n, outcome="stopped", note="a person stopped it")
+        row = {"number": self.n, "headRefOid": self.head, "baseRefName": "main"}
+        self.assertIsNone(land_exec.queue_pr(self.slug, self.p, "o/r", row))
+        self.assertEqual((self.mine(), self.events("ready")), ([], []))
+
+    def test_a_request_for_the_head_is_not_inserted_again_after_the_queue_moved_on(self):
+        home = str(prog.HOME)
+        put = lambda sha, **kw: store.land_put(self.slug, home, "o/r", self.n, sha, "b", "normal", None, **kw)
+        put("A")
+        put("B")  # an `orch land` for a newer head superseded A
+        before = len(self.mine())
+        row, outcome = put("A", only_new=True)
+        self.assertEqual((outcome, len(self.mine())), ("seen", before))
+        self.assertEqual(put("C", only_new=True)[1], "new")
+
+    def test_the_report_writes_no_log_line_when_a_listing_fails(self):
+        st = self.gh()
+        st["hard_fail"] = "pr list"
+        self.write(st)
+        before = self.log()
+        out = self.report()
+        self.assertIn("the open PR listing failed", out)
+        self.assertEqual(self.log(), before)
+
+    def test_a_full_listing_is_said_out_loud(self):
+        real, prog.OPEN_LIMIT = prog.OPEN_LIMIT, 1
+        try:
+            out = self.report()
+        finally:
+            prog.OPEN_LIMIT = real
+        self.assertIn("is the listing's limit", out)
+
+    def test_a_bad_settings_value_or_a_bad_cache_never_stops_the_queue(self):
+        store.land_put(self.slug, str(self.p.dir.parent.resolve()), "o/r", self.n, self.head, "b", "normal", None)
+        config(repos=7, auto_queue={"mode": "on"})
+        self.round()
+        self.assertIn("auto-queue", self.log())
+        config(auto_queue={"mode": "on"})
+        for junk in ("null", "1", '[["x"]]', "{not json"):
+            land_exec.AUTO_LAST.write_text(junk)
+            self.auto()
+        self.assertEqual(len(self.mine()), 1)
+
 
 class Setup(unittest.TestCase):
     def test_the_step_is_recorded_once_and_others_do_not_need_it(self):

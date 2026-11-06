@@ -220,7 +220,11 @@ def programs_on(repo):
             continue
         try:
             cfg = json.loads((d / "program.json").read_text())
-        except (FileNotFoundError, NotADirectoryError):
+        except FileNotFoundError:
+            # A directory with a ledger but no config was a program once: it may own a PR, and nobody can say which.
+            unread = unread or (d / "ledger.jsonl").exists()
+            continue
+        except NotADirectoryError:
             continue
         except (OSError, ValueError):
             unread = True
@@ -236,15 +240,18 @@ def programs_on(repo):
     return found, unread
 
 
-def auto_decisions(ex):
-    """[(repo, row, program or None, queue?, reasons)] for each open PR of the executor's repos, oldest PR first."""
+def auto_decisions(ex, say=lambda msg: None):
+    """[(repo, row, program or None, queue?, reasons)] for each open PR of the executor's repos, oldest PR first.
+    say: where a problem with a whole repo goes (the round's log; `auto` prints it and writes nothing)."""
     out = []
     for repo in ex["repos"]:
         try:
             rows = prog.open_rows(repo)
         except SystemExit as e:
-            log(f"auto-queue {repo}: the open PR listing failed: {str(e.code)[:200]}")
+            say(f"{repo}: the open PR listing failed: {str(e.code)[:200]}")
             continue
+        if len(rows) >= prog.OPEN_LIMIT:
+            say(f"{repo}: {len(rows)} open PRs is the listing's limit; PRs beyond it are not considered")
         programs, unread = programs_on(repo)
         no_ci = prog.no_ci_repo(repo)
         for r in sorted(rows, key=lambda r: r["number"]):
@@ -282,20 +289,24 @@ def auto_decisions(ex):
 
 
 def queue_pr(slug, p, repo, r):
-    """What `orch land` records for a PR, minus the wait: the `ready` event when no land call is live, then the request."""
+    """What `orch land` records for a PR, minus the wait: the `ready` event when no land call is live, then the request.
+    None when the ledger or the request table changed since the decision: a stop or a request made meanwhile wins."""
     pr = r["number"]
-    if not prog.claimed(p.events(), pr):
+    events = p.events()
+    if autoqueue.withdrawn(events, pr) or store.land_seen(slug, str(p.dir.parent.resolve()), repo, pr, r["headRefOid"]):
+        return None
+    if not prog.claimed(events, pr):
         p.append("ready", pr=pr, ticket=None, klass=None)
     klass = next((e["klass"] for e in reversed(p.events()) if e.get("pr") == pr and e.get("klass")), "normal")
     base = prog.run(["gh", "api", f"repos/{repo}/commits/{r.get('baseRefName') or 'main'}", "--jq", ".sha"], check=False)
     return store.land_put(slug, str(p.dir.parent.resolve()), repo, pr, r["headRefOid"], base.stdout.strip() or None, klass,
-                          None, by=BY)
+                          None, by=BY, only_new=True)
 
 
-def auto_lines(ex, write):
+def auto_lines(ex, write, say=lambda msg: None):
     """One line per open PR: what the auto-queue did (write) or would do. Mode "on" writes up to max_new_per_round."""
     cap, made, lines = ex["auto_queue"]["max_new_per_round"], 0, []
-    for repo, r, owner, ok, why in auto_decisions(ex):
+    for repo, r, owner, ok, why in auto_decisions(ex, say):
         tag = f"{repo}#{r['number']} {r['headRefOid'][:8]}"
         if not ok:
             lines.append(f"skip {tag}: {'; '.join(why)}")
@@ -304,10 +315,13 @@ def auto_lines(ex, write):
         elif made >= cap:
             lines.append(f"ready {tag} ({owner[0]}): over max_new_per_round {cap}, next round")
         else:
-            row, outcome = queue_pr(*owner, repo, r)
-            made += outcome == "new"
-            lines.append(f"queued {tag} ({owner[0]}) as request {row['id']}" if outcome == "new" else
-                         f"not queued {tag} ({owner[0]}): outcome {outcome}")
+            got = queue_pr(*owner, repo, r)
+            if got is None or got[1] != "new":
+                lines.append(f"not queued {tag} ({owner[0]}): stopped or requested meanwhile"
+                             if got is None or got[1] == "seen" else f"not queued {tag} ({owner[0]}): {got[1]}")
+                continue
+            made += 1
+            lines.append(f"queued {tag} ({owner[0]}) as request {got[0]['id']}")
     return lines
 
 
@@ -315,21 +329,18 @@ def auto_round():
     """Before the queue is read: request the PRs that are ready. A failure here never stops the queue behind it."""
     try:
         ex = prog.land_executor()
-    except SystemExit as e:
-        log(f"auto-queue: the settings cannot be read: {str(e.code)[:200]}")
-        return
-    mode = (ex or {}).get("auto_queue", {}).get("mode", "off")
-    if mode == "off":
-        return
-    try:
-        lines = auto_lines(ex, write=mode == "on")
+        mode = (ex or {}).get("auto_queue", {}).get("mode", "off")
+        if mode == "off":
+            return
+        lines = auto_lines(ex, write=mode == "on", say=lambda msg: log(f"auto-queue {msg}"))
     except store.NotMigrated:
         raise
-    except Exception as e:
-        log(f"auto-queue: {type(e).__name__}: {e}")
+    except (SystemExit, Exception) as e:
+        log(f"auto-queue: {type(e).__name__}: {getattr(e, 'code', e)}"[:300])
         return
     try:
-        last = set(json.loads(AUTO_LAST.read_text()))
+        data = json.loads(AUTO_LAST.read_text())
+        last = {x for x in data if isinstance(x, str)} if isinstance(data, list) else set()
     except (OSError, ValueError):
         last = set()
     for line in lines:
@@ -404,8 +415,8 @@ def cmd_queue(argv):
 def cmd_auto(argv):
     try:
         ex = prog.land_executor()
-    except SystemExit as e:
-        print(f"refused: {e.code}", file=sys.stderr)
+    except (SystemExit, Exception) as e:
+        print(f"refused: {getattr(e, 'code', e)}", file=sys.stderr)
         return 1
     if not ex:
         print("the land executor is off: nothing to queue")
@@ -413,7 +424,7 @@ def cmd_auto(argv):
     print(f"auto_queue is {ex['auto_queue']['mode']} (max_new_per_round {ex['auto_queue']['max_new_per_round']}); "
           "this report writes nothing")
     try:
-        print("\n".join(auto_lines(ex, write=False)) or "no open PR")
+        print("\n".join(auto_lines(ex, write=False, say=lambda msg: print(f"warning: {msg}"))) or "no open PR")
     except store.NotMigrated as e:
         print(f"refused: {e}", file=sys.stderr)
         return 1

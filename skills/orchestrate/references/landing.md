@@ -178,14 +178,14 @@ Without it, a PR that is ready waits until an agent calls `orch land`. `land_exe
 {"orchestrate": {"land_executor": {"auto_queue": {"mode": "shadow", "max_new_per_round": 1}}}}
 ```
 
-`mode` is `off` (the default, and what a missing or malformed value means), `shadow` or `on`. `shadow` writes nothing: it logs to `land-exec.log` what `on` would do, once per reason, not every minute. `on` writes what `orch land` writes, the `ready` event (only when no land call is live) and the request, for at most `max_new_per_round` PRs per round (default 1; the others wait for the next round). It runs inside the round lock, before the queued requests are read, so a PR queued this round is checked this round. `land_exec.py auto` prints the same decisions for every open PR of the listed repos and writes nothing, whatever the mode says: run it before turning `shadow` into `on`.
+`mode` is `off` (the default, and what a missing or malformed value means), `shadow` or `on`. `shadow` writes no request and no ledger event: it logs to `land-exec.log` what `on` would do, once per reason, not every minute (the last round's lines are kept in `land-exec-auto.last` for that). `on` writes what `orch land` writes, the `ready` event (only when no land call is live) and the request, for at most `max_new_per_round` PRs per round (default 1; the others wait for the next round). It runs inside the round lock, before the queued requests are read, so a PR queued this round is checked this round. `land_exec.py auto` prints the same decisions for the open PRs of the listed repos (the newest 200 per repo; it warns when the listing is full) and writes nothing, no log line included, whatever the mode says: run it before turning `shadow` into `on`.
 
 A PR is queued only when all of these hold; the first that fails is the reason shown:
 
 | Condition | Why |
 |---|---|
-| Exactly one program names the PR in its ledger, it is `autonomous`, and no program ledger of the repo was unreadable | an owner that is ambiguous or unknown is a person's call |
-| No request of any status exists for this program, PR and head | a refused request is not asked for again at the same head |
+| Exactly one program names the PR in its ledger, it is `autonomous`, and no program of the repo was unreadable (a config or ledger that cannot be read, or a directory with a ledger but no `program.json`) | an owner that is ambiguous or unknown is a person's call |
+| No request of any status exists for this program, PR and head (checked again in the transaction that inserts, and the stop check again right before the `ready` event) | a refused request is not asked for again at the same head, and a stop or `orch land` that lands between the decision and the write wins |
 | The land was not stopped since the last verdict or `ready` | the executor's exit-1 refusal (`stop_land`) withdraws the call; a new verdict (a new head needs one anyway) or `orch land` brings it back. `record admitted` does not |
 | A pass verdict at exactly this head from a `verdict_sources` source with the four identity fields (the executor's own `executor_verdict_problem`) | the executor would refuse anything else |
 | Not a draft, not DIRTY or BEHIND, merge state CLEAN or HAS_HOOKS, no STOP line, no hold, main not red | `landjudge.judge` (the `check` policy) plus the merge state |
