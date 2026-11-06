@@ -353,6 +353,7 @@ def cards_apply(items):
     plan = tmp / "cards.json"
     text = json.dumps({"items": items})
     plan.write_text(text)
+    cards.SEAL_DIR = tmp / "seals"
     cards.seal_plan(text)  # as scan --plan does
     cards.cards_listing = lambda repo_list=(): [{"path": CARD}]
     out, argv = io.StringIO(), sys.argv

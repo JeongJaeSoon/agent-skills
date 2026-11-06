@@ -17,7 +17,7 @@ The janitor's `card` kind (reap.py) is this module.
 Config: ~/.claude/agent-skills.json → "reap": {"idle_minutes": 30, "cards": {"protect_prefixes": ["lead-"],
 "done_patterns": [...], "question_patterns": [...]}}.
 """
-import fcntl, hashlib, json, os, pathlib, re, shlex, subprocess, sys, time
+import fcntl, hashlib, json, os, pathlib, pwd, re, shlex, subprocess, sys, time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import cardguard, reap, rm_refused  # noqa: E402
@@ -504,14 +504,17 @@ def act_locked(item, cfg, wait, done=None):
 
 
 SEALS, SEALS_KEPT = "card-plan-seals.json", 20
+# Fixed by the account, not by --state, $AGENT_SKILLS_STATE or $HOME: a caller that can pick the directory can put a
+# seal list of its own there and have a hand-written plan accepted.
+SEAL_DIR = pathlib.Path(pwd.getpwuid(os.getuid()).pw_dir) / ".local/state/agent-skills"
 
 
 def seal_plan(text):
     """scan calls this with the exact text it wrote: apply accepts only a plan whose digest is here, so a plan written
-    or edited by hand (or by an agent) after the scan is refused. The file sits beside the other state files; whoever
-    can write it can forge a seal, which this does not stop."""
-    path = reap.STATE / SEALS
-    reap.STATE.mkdir(parents=True, exist_ok=True)
+    or edited by hand (or by an agent) after the scan is refused. The file is in SEAL_DIR, which no flag or variable
+    moves; a caller that can write that directory itself can still forge a seal."""
+    path = SEAL_DIR / SEALS
+    SEAL_DIR.mkdir(parents=True, exist_ok=True)
     # Two scans must not each read the old list and write back only their own seal.
     with open(path.with_name(SEALS + ".lock"), "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -524,7 +527,7 @@ def seal_plan(text):
 def refuse_plan(text, rows):
     """Why apply must not act on this plan, or None. Checked for every row before the first card is touched, so a
     plan that fails closes nothing. rows: the cards Orca lists now (cards_listing), None when unreadable."""
-    if hashlib.sha256(text.encode()).hexdigest() not in (reap.read_obj(reap.STATE / SEALS) or {}):
+    if hashlib.sha256(text.encode()).hexdigest() not in (reap.read_obj(SEAL_DIR / SEALS) or {}):
         return "이 계획은 cards.py scan 이 만든 것이 아니거나 만든 뒤 고쳐졌다(봉인 없음): scan --plan 으로 다시 만든다"
     try:
         items = json.loads(text)["items"]

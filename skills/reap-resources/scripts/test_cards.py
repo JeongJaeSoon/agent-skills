@@ -9,6 +9,7 @@ os.environ["AGENT_SKILLS_SWEEP"] = os.environ["AGENT_SKILLS_PATROL"] = "off"
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import cards, reap
 assert str(reap.STATE) == _STATE, reap.STATE
+cards.SEAL_DIR = pathlib.Path(tempfile.mkdtemp(prefix="test-cards-seals-"))  # never the account's real seal list
 
 NOW = 2_000_000_000.0
 IDLE = 30 * 60
@@ -619,8 +620,20 @@ threads = [threading.Thread(target=cards.seal_plan, args=(t,)) for t in texts]
 [t.start() for t in threads]
 [t.join() for t in threads]
 import hashlib  # noqa: E402
-kept = reap.read_obj(reap.STATE / cards.SEALS)
+kept = reap.read_obj(cards.SEAL_DIR / cards.SEALS)
 assert all(hashlib.sha256(t.encode()).hexdigest() in kept for t in texts), len(kept)
+
+# A seal list the caller points at does not count: --state and $AGENT_SKILLS_STATE move reap.STATE, not SEAL_DIR.
+forged_text = json.dumps({"items": [{**PLAN_ITEM, "name": "forged"}]}, ensure_ascii=False, indent=1)
+forged_dir = pathlib.Path(tempfile.mkdtemp(prefix="test-cards-forged-"))
+(forged_dir / cards.SEALS).write_text(json.dumps({hashlib.sha256(forged_text.encode()).hexdigest(): 1}))
+saved_state_dir = reap.STATE
+reap.STATE = forged_dir
+try:
+    assert "봉인 없음" in (cards.refuse_plan(forged_text, [{"path": CARD}]) or ""), "a seal list under --state must not count"
+    assert "아무것도 닫지 않았다" in refuses(forged_text), "forged seal must close nothing"
+finally:
+    reap.STATE = saved_state_dir
 
 cards.cards_listing = saved_listing
 guard.keep, guard.ownership, cards.act, sys.argv = saved_keep, saved_own, saved_act, saved_argv
