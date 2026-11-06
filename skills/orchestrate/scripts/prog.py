@@ -2137,6 +2137,7 @@ def cmd_record(argv):
                    role=opt(argv, "--role"), note=opt(argv, "--note"), kind=kind, evidence=evidence)
     print(json.dumps(row, ensure_ascii=False))
 
+
 def set_run(p, run_id):
     """Move the program to the Run this terminal is bound to, for a dispatched lead whose restart cost it the Dispatch it
     worked under: the old Run belongs to its coordinator, and `lead_dispatch` names a Dispatch that no longer answers.
