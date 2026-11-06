@@ -404,6 +404,17 @@ class Program:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
         return row
 
+    def append_if(self, ev, ok, **fields):
+        """append, unless ok(events) is false; None then. One lock over the read and the write, so a row another
+        process appends in between is seen by ok, not overwritten in effect."""
+        row = {"ts": now(), "ev": ev, **{k: v for k, v in fields.items() if v is not None}}
+        with self.locked():
+            if not ok(self.events()):
+                return None
+            with self.ledger_path.open("a") as f:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        return row
+
     def append_once(self, ev, seen, **fields):
         """append, unless a row already satisfies seen; None then. One lock over both, or two rounds both pass."""
         row = {"ts": now(), "ev": ev, **{k: v for k, v in fields.items() if v is not None}}

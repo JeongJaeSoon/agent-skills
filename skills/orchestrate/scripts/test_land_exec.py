@@ -1097,6 +1097,23 @@ class AutoQueue(Fixture):
         self.assertIsNone(land_exec.queue_pr(self.slug, self.p, "o/r", row))
         self.assertEqual((self.mine(), self.events("ready")), ([], []))
 
+    def test_a_stop_that_lands_during_the_decision_is_not_written_over(self):
+        row = {"number": self.n, "headRefOid": self.head, "baseRefName": "main"}
+        real = store.land_seen
+
+        def seen_then_stopped(*a):
+            got = real(*a)
+            self.p.append("land_check", pr=self.n, outcome="stopped", note="a person stopped it")  # after the look
+            return got
+
+        store.land_seen = seen_then_stopped
+        try:
+            self.assertIsNone(land_exec.queue_pr(self.slug, self.p, "o/r", row))
+        finally:
+            store.land_seen = real
+        self.assertEqual((self.mine(), self.events("ready")), ([], []))
+        self.assertTrue(autoqueue.withdrawn(self.p.events(), self.n), "the stop still stands")
+
     def test_a_request_for_the_head_is_not_inserted_again_after_the_queue_moved_on(self):
         home = str(prog.HOME)
         put = lambda sha, **kw: store.land_put(self.slug, home, "o/r", self.n, sha, "b", "normal", None, **kw)
@@ -1125,15 +1142,33 @@ class AutoQueue(Fixture):
         self.assertIn("is the listing's limit", out)
 
     def test_a_bad_settings_value_or_a_bad_cache_never_stops_the_queue(self):
-        store.land_put(self.slug, str(self.p.dir.parent.resolve()), "o/r", self.n, self.head, "b", "normal", None)
+        row, _ = store.land_put(self.slug, str(self.p.dir.parent.resolve()), "o/r", self.n, self.head, "b", "normal", None)
         config(repos=7, auto_queue={"mode": "on"})
-        self.round()
+        self.round()  # the settings are unusable: the auto-queue says so and the queue is still walked
         self.assertIn("auto-queue", self.log())
+        self.assertIn("executor error", store.land_get(row["id"])["reason"])
+        self.assertEqual(store.land_get(row["id"])["status"], "queued")
         config(auto_queue={"mode": "on"})
         for junk in ("null", "1", '[["x"]]', "{not json"):
             land_exec.AUTO_LAST.write_text(junk)
             self.auto()
         self.assertEqual(len(self.mine()), 1)
+        land_exec.AUTO_LAST.write_text("[1, null]")
+        self.round()  # a damaged cache and a good setting: the queued request is settled
+        self.assertEqual(store.land_get(row["id"])["status"], "merged")
+
+    def test_the_report_survives_a_listing_it_cannot_parse(self):
+        real = prog.open_rows
+        prog.open_rows = lambda repo: (_ for _ in ()).throw(ValueError("not json"))
+        try:
+            buf, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(err):
+                code = land_exec.cmd_auto([])
+        finally:
+            prog.open_rows = real
+        self.assertEqual(code, 1)
+        self.assertIn("refused: not json", err.getvalue())
+        self.assertEqual(self.mine(), [])
 
 
 class Setup(unittest.TestCase):

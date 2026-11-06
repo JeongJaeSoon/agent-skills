@@ -292,11 +292,20 @@ def queue_pr(slug, p, repo, r):
     """What `orch land` records for a PR, minus the wait: the `ready` event when no land call is live, then the request.
     None when the ledger or the request table changed since the decision: a stop or a request made meanwhile wins."""
     pr = r["number"]
-    events = p.events()
-    if autoqueue.withdrawn(events, pr) or store.land_seen(slug, str(p.dir.parent.resolve()), repo, pr, r["headRefOid"]):
+    if store.land_seen(slug, str(p.dir.parent.resolve()), repo, pr, r["headRefOid"]):
         return None
-    if not prog.claimed(events, pr):
-        p.append("ready", pr=pr, ticket=None, klass=None)
+    stopped = []
+
+    def ok(events):
+        """Read under the ledger lock, so a stop recorded after the decision is seen here, not written over."""
+        if autoqueue.withdrawn(events, pr):
+            stopped.append(pr)
+            return False
+        return not prog.claimed(events, pr)  # a live land call keeps its own `ready`
+
+    p.append_if("ready", ok, pr=pr, ticket=None, klass=None)
+    if stopped:
+        return None
     klass = next((e["klass"] for e in reversed(p.events()) if e.get("pr") == pr and e.get("klass")), "normal")
     base = prog.run(["gh", "api", f"repos/{repo}/commits/{r.get('baseRefName') or 'main'}", "--jq", ".sha"], check=False)
     return store.land_put(slug, str(p.dir.parent.resolve()), repo, pr, r["headRefOid"], base.stdout.strip() or None, klass,
@@ -425,8 +434,8 @@ def cmd_auto(argv):
           "this report writes nothing")
     try:
         print("\n".join(auto_lines(ex, write=False, say=lambda msg: print(f"warning: {msg}"))) or "no open PR")
-    except store.NotMigrated as e:
-        print(f"refused: {e}", file=sys.stderr)
+    except (SystemExit, Exception) as e:  # NotMigrated included: a report says what it could not read and writes nothing
+        print(f"refused: {getattr(e, 'code', e)}", file=sys.stderr)
         return 1
     return 0
 
