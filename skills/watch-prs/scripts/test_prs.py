@@ -521,7 +521,7 @@ assert "#20 " in brief.read_text(), "named by run, so the next round cannot over
 # card.py's first prompt carries only the /goal line and the rows: the approval, the bans and the report must be rows.
 first = card.compose(str(brief))
 assert first.startswith("/goal ") and f"브리프: {brief.resolve()}" in first.splitlines()[0], first
-for want in ("dev 배포 승인이 없다", "사람만: 프로덕션", card.CLOSE_LINE, "--to run:run_x", "worker_done"):
+for want in ("APPROVED: none", "dev 배포 승인이 없다", "사람만: 프로덕션", card.CLOSE_LINE, "--to run:run_x", "worker_done"):
     assert want in first, want
 approved = tmp / "approved.txt"
 approved.write_text(p.dispatch_cmds(plan2, {**rcfg, "deploy": two})[1][0] + "\n")

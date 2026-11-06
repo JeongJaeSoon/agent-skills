@@ -1,9 +1,4 @@
----
-name: arena
-description: "Run several candidates at one task, pick a base, graft in the best of the rest. Use for /arena, \"경쟁시켜줘\", \"여러 버전 만들어서 비교해줘\". A report from split work is swarm."
----
-
-# Arena
+# Compete
 
 Fan out N parallel attempts at the same task. Read every candidate end to end. Pick the strongest as the base. Graft the best ideas from the others into it. Verify the synthesized result.
 
@@ -44,7 +39,7 @@ If the candidates converge on one shape, that is strong agreement. Note it and s
 
 ## Phase F: Verify
 
-Verify the synthesized artifact like any other output, per the **prove-it-works** principle skill. If verification finds a problem the arena missed, either Phase A was wrong (re-frame and re-run) or a candidate caught it and you missed the graft (go back to Phase E). Don't paper over it.
+Verify the synthesized artifact like any other output, per the **prove-it-works** principle skill. If verification finds a problem the compete round missed, either Phase A was wrong (re-frame and re-run) or a candidate caught it and you missed the graft (go back to Phase E). Don't paper over it.
 
 ## Outputs
 
