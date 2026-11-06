@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Change the user's agent-skills.json keys, permissions.allow and autoMode rules. The user runs --apply, never the agent.
 
-  config_emit.py emit --spec SPEC --out FILE   check SPEC, print the diff, write a standalone copy with SPEC embedded
+  config_emit.py emit --spec SPEC [--out FILE]   check SPEC, print the diff, write a standalone copy with SPEC embedded
+                                                 (default FILE: ~/.local/state/agent-skills/config-scripts/<spec name>-<YYYYMMDD>.py)
   config_emit.py --spec SPEC [--apply HASH]    dry run (default) or apply
   FILE [--apply HASH]                          the emitted copy: same, with its embedded spec
 
@@ -45,6 +46,8 @@ CONFIG_DIR = pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR") or HOME_DIR).expan
 SETTINGS = {"profile": CONFIG_DIR / "settings.json", "home": HOME_DIR / "settings.json"}
 SKILLS_JSON = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-skills.json").expanduser()
 HERE = pathlib.Path(__file__).resolve()
+# Default home of emitted scripts. Scripts left in the old ~/agent-skills-config/ are not moved or deleted.
+OUT_DIR = pathlib.Path.home() / ".local" / "state" / "agent-skills" / "config-scripts"
 # An emitted copy can sit anywhere, even at /tmp/x.py; it never reads the repo.
 REPO = HERE.parents[3] if len(HERE.parents) > 3 else HERE.parent
 AUTOMODE_PATH = REPO / "skills" / "tune-automode" / "scripts" / "automode_rule.py"
@@ -519,9 +522,10 @@ def main(argv):
         else:
             p.error("--spec is required")
         if a.command == "emit":
-            if not a.out or a.apply or not a.spec:
-                p.error("emit needs --spec and --out and never takes --apply")
-            emit(spec, a.out, a.settings, a.skills_json)
+            if a.apply or not a.spec:
+                p.error("emit needs --spec and never takes --apply")
+            out = a.out or OUT_DIR / f"{a.spec.stem}-{time.strftime('%Y%m%d')}.py"
+            emit(spec, out, a.settings, a.skills_json)
         else:
             run(spec, a.settings, a.skills_json, a.apply, script_hash(HERE, spec if a.spec else None)[:12])
     except Refused as e:

@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -590,6 +591,23 @@ class HashAndOutTest(Base):
             r = self.run_script("emit", "--spec", self.spec, "--out", target)
             self.assertIn("--out must be outside", r.stderr)
             self.assertFalse(target.exists())
+
+    def test_default_out_is_state_dir_and_run_line_points_there(self):
+        self.write_spec(self.SPEC)
+        r = self.run_script("emit", "--spec", self.spec)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = self.home / ".local/state/agent-skills/config-scripts" / f"spec-{time.strftime('%Y%m%d')}.py"
+        self.assertTrue(out.is_file())
+        self.assertEqual(out.stat().st_mode & 0o777, 0o600)
+        self.assertIn(f"python3 -I {out}", r.stdout.strip().splitlines()[-1])
+        self.assertFalse((self.home / "agent-skills-config").exists())
+
+    def test_default_out_refused_when_home_state_is_inside_a_config_dir(self):
+        self.write_spec(self.SPEC)
+        env = {**self.env, "HOME": str(self.profile)}
+        r = subprocess.run([sys.executable, "-I", str(SCRIPT), "emit", "--spec", str(self.spec)],
+                           capture_output=True, text=True, env={**env, "CLAUDE_CONFIG_DIR": str(self.profile)})
+        self.assertIn("--out must be outside", r.stderr)
 
     def test_dry_run_of_emitted_copy_writes_nothing(self):
         r, out = self.emit(self.SPEC)
