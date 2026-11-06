@@ -731,11 +731,12 @@ def fleet_rows(state, leads, board_rows, details=None, now=None, stale_s=None, c
         board_lead = next((held[t.get("handle")] for t in lead.get("terminals") or [] if t.get("handle") in held),
                           lead_wt.get(lead.get("id")))  # a restarted terminal has a new handle, the same worktree
         if board_lead and board_lead not in board_rows:
-            # `board drop` removed its rows on purpose: that stays hidden. A lead closed and aged off the board
-            # (DONE_KEEP_S) is hidden while its session is idle with nothing to show; one that works on, or has a card, is live
-            # work and gets a fleet row.
-            closed = bool((leads.get(board_lead) or {}).get("closed_at"))
-            if not closed or (lead.get("phase") not in ("working", "waiting")
+            # `board drop` removed its rows on purpose: that stays hidden, also after a `lead close`. A lead closed longer
+            # ago than DONE_KEEP_S aged off the board by itself (change()); it is hidden while its session is idle with
+            # nothing to show, but one that works on, or has a card, is live work and gets a fleet row.
+            closed_at = fleet.parse((leads.get(board_lead) or {}).get("closed_at"))
+            aged_off = bool(closed_at and ((now or fleet.utcnow()) - closed_at).total_seconds() > DONE_KEEP_S)
+            if not aged_off or (lead.get("phase") not in ("working", "waiting")
                               and not any(shown(s) for s in under.get(lead["id"], []))):
                 continue
             board_lead = None
