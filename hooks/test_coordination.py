@@ -192,6 +192,12 @@ for cmd in ("while true; do gh pr list --state all --json number; sleep 120; don
 for cmd in ("while true; do gh pr view 5; sleep .5; done", "while true; do gh pr view 5; sleep 0; done",
             "while true; do sleep 60; gh pr view 5; done"):
     assert "pr_watch.py" in monitor(cmd)[1], cmd
+for cmd in ("while true; do gh --repo a/b pr view 1; sleep 60; done", "while true; do gh -R a/b pr list; sleep 60; done",
+            "while true; do gh --repo=a/b pr checks 1; sleep 60; done",
+            "while true; do gh pr view 1; sleep 300; done & while true; do gh pr view 2; sleep 60; done; wait"):
+    assert "pr_watch.py" in monitor(cmd)[1], "any short poll warns: " + cmd
+assert monitor("while true; do gh -R a/b pr view 1; sleep 300; done") == ("none", "")
+assert monitor("gh -R a/b run list; sleep 60") == ("none", "")
 for cmd in ("sleep 300; while true; do gh pr view 5; sleep 60; done",
             "sleep 300; until gh pr view 5 | grep -q MERGED; do sleep 30; done; echo merged"):
     assert "pr_watch.py" in monitor(cmd)[1], "a sleep outside the loop is a one-off: " + cmd
