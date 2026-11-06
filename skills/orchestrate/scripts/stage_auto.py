@@ -22,8 +22,9 @@ Cells, each from evidence or left empty, never inferred:
   `onto`, is not a landing) or the PR's merge commit in the collector's list. An open or closed PR leaves it empty.
 - dev, prod: `na` (해당 없음) unless program.json `stages` names that column (`orch set <slug> stages dev,prod`); a named
   column stays empty, since no source the tick reads records a deploy, and `orch stage set` adds that evidence.
-A manual cell (`orch stage set` on the generated row's id) wins over the generated one: the orchestrator or lead writes a cell
-only after checking something the tick cannot see, or to correct it, and the tick rewrites its rows every minute.
+A manual dev or prod cell (`orch stage set` on the generated row's id) wins over the generated one: the orchestrator or lead
+writes a cell only after checking something the tick cannot see, or to correct it, and the tick rewrites its rows every
+minute. The merge cell is never manual here: `orch stage set --col merge` is refused, and a recorded one is ignored.
 
 Each row ends on its own (`done_at`):
 - every cell ✅ or 해당 없음: stages.table() stamps the latest cell's time, after the manual cells are laid over;
