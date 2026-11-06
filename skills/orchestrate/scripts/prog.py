@@ -2728,7 +2728,9 @@ def land_executor(repo=None):
         # A wait that can never end (NaN, inf) or a typo ("24h") would keep requests queued for ever.
         sys.exit(f"{path}: orchestrate.land_executor.max_wait_hours must be a positive number of hours, "
                  f"not {cfg.get('max_wait_hours')!r}")
-    return {"repos": repos, "verdict_sources": cfg.get("verdict_sources") or ["review:codex"], "max_wait_hours": hours}
+    import autoqueue
+    return {"repos": repos, "verdict_sources": cfg.get("verdict_sources") or ["review:codex"], "max_wait_hours": hours,
+            "auto_queue": autoqueue.config(cfg.get("auto_queue"))}
 
 
 LAND_EXIT = {"merged": 0, "superseded": 2}

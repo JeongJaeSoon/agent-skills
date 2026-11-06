@@ -18,17 +18,25 @@ Usage: land_exec.py <command>   (also `orch land-exec <command>`)
   queue [--json]           requests, newest last: status, sha, reason, merge sha
   setup                    add the land_request table to agent-skills.db (a recorded step; enabling the automation runs it)
   status                   the last round and the queue counts
+  auto                     read-only: what auto_queue would queue and why not for the rest, whatever its mode says
+
+With `land_executor.auto_queue` = {"mode": "shadow" | "on", "max_new_per_round": 1}, each round first looks at every open
+PR of the repos above and requests the ones that are ready without anyone calling `orch land`. Mode "off" (also a
+missing or malformed value) does nothing; "shadow" only logs what "on" would do; "on" writes the same `ready` event and
+request `orch land` does, at most max_new_per_round new ones per round. See references/landing.md, "Auto-queue".
 """
 import contextlib, datetime as dt, fcntl, json, os, pathlib, subprocess, sys, time
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))  # run with -I, this file's directory is not on sys.path
+import autoqueue  # noqa: E402
 import prog  # noqa: E402
 import store  # noqa: E402
 
 STATE = prog.LAND_HEARTBEAT.parent
 LOCK = STATE / "land-exec.lock"
 LOG = STATE / "land-exec.log"
+AUTO_LAST = STATE / "land-exec-auto.last"
 INTERVAL_S = 60
 BY = "land-executor"
 TELL_DAYS = 7
@@ -197,6 +205,140 @@ class Round:
             store.land_told(r["id"])
 
 
+def programs_on(repo):
+    """([(slug, Program, events)], unread): every program under the programs home that is on `repo`. unread: one could
+    not be read, so it might own a PR the others do not."""
+    found, unread = [], False
+    try:
+        dirs = sorted(prog.HOME.iterdir())
+    except FileNotFoundError:
+        return found, False
+    except OSError:
+        return found, True
+    for d in dirs:
+        if d.name.startswith((".", "_")):
+            continue
+        try:
+            cfg = json.loads((d / "program.json").read_text())
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        except (OSError, ValueError):
+            unread = True
+            continue
+        if not isinstance(cfg, dict):
+            unread = True
+        elif cfg.get("repo") == repo:
+            try:
+                p = prog.Program(d.name)
+                found.append((d.name, p, p.events()))
+            except (SystemExit, Exception):
+                unread = True
+    return found, unread
+
+
+def auto_decisions(ex):
+    """[(repo, row, program or None, queue?, reasons)] for each open PR of the executor's repos, oldest PR first."""
+    out = []
+    for repo in ex["repos"]:
+        try:
+            rows = prog.open_rows(repo)
+        except SystemExit as e:
+            log(f"auto-queue {repo}: the open PR listing failed: {str(e.code)[:200]}")
+            continue
+        programs, unread = programs_on(repo)
+        no_ci = prog.no_ci_repo(repo)
+        for r in sorted(rows, key=lambda r: r["number"]):
+            pr, head = r["number"], r["headRefOid"]
+            known = {slug: (p, ev) for slug, p, ev in programs if pr in prog.pr_state(ev)}
+            slug = next(iter(known)) if len(known) == 1 else None
+            p, events = known[slug] if slug else (None, [])
+            st = prog.pr_state(events).get(pr, {})
+            verdict = st.get("verdict")
+            c = {"owners": list(known), "programs_unread": unread,
+                 "owner_autonomous": bool(p and p.cfg.get("merge_policy") == "autonomous"),
+                 "requested": bool(p) and store.land_seen(slug, str(p.dir.parent.resolve()), repo, pr, head),
+                 "withdrawn": autoqueue.withdrawn(events, pr), "main_red": bool(p) and prog.main_state(events) == "red",
+                 "verdict_problem": prog.executor_verdict_problem(verdict, head, ex["verdict_sources"]),
+                 "facts": {"state": "OPEN", "draft": bool(r.get("isDraft")), "merge_state": r.get("mergeStateStatus"),
+                           "head": head, "stopped": bool(p) and prog.stopped(events),
+                           "held": bool(p) and prog.on_hold(events, pr), "no_ci": no_ci,
+                           "verdict": {"pass": verdict.get("result") == "pass", "sha": verdict.get("sha") or ""}
+                           if verdict else None}}
+
+            def late(r=r, head=head, pr=pr):
+                failed, pending, _ = prog.ci_summary(r.get("statusCheckRollup"), no_ci)
+                if not failed and not pending:
+                    pending = prog.runs_unfinished(repo, head, no_ci)
+                comments = prog.gh_json("pr", "view", str(pr), "--repo", repo, "--json", "comments").get("comments") or []
+                return {"ci_failed": failed, "ci_pending": pending, "sticky": any(
+                    prog.TEST_RESULTS in (x.get("body") or "") and autoqueue.names_head(x.get("body"), head) for x in comments)}
+
+            try:
+                ok, why = autoqueue.decide(c, late)
+            except SystemExit as e:
+                ok, why = False, [f"GitHub did not answer: {str(e.code)[:120]}"]
+            out.append((repo, r, (slug, p) if slug else None, ok, why))
+    return out
+
+
+def queue_pr(slug, p, repo, r):
+    """What `orch land` records for a PR, minus the wait: the `ready` event when no land call is live, then the request."""
+    pr = r["number"]
+    if not prog.claimed(p.events(), pr):
+        p.append("ready", pr=pr, ticket=None, klass=None)
+    klass = next((e["klass"] for e in reversed(p.events()) if e.get("pr") == pr and e.get("klass")), "normal")
+    base = prog.run(["gh", "api", f"repos/{repo}/commits/{r.get('baseRefName') or 'main'}", "--jq", ".sha"], check=False)
+    return store.land_put(slug, str(p.dir.parent.resolve()), repo, pr, r["headRefOid"], base.stdout.strip() or None, klass,
+                          None, by=BY)
+
+
+def auto_lines(ex, write):
+    """One line per open PR: what the auto-queue did (write) or would do. Mode "on" writes up to max_new_per_round."""
+    cap, made, lines = ex["auto_queue"]["max_new_per_round"], 0, []
+    for repo, r, owner, ok, why in auto_decisions(ex):
+        tag = f"{repo}#{r['number']} {r['headRefOid'][:8]}"
+        if not ok:
+            lines.append(f"skip {tag}: {'; '.join(why)}")
+        elif not write:
+            lines.append(f"would queue {tag} ({owner[0]})")
+        elif made >= cap:
+            lines.append(f"ready {tag} ({owner[0]}): over max_new_per_round {cap}, next round")
+        else:
+            row, outcome = queue_pr(*owner, repo, r)
+            made += outcome == "new"
+            lines.append(f"queued {tag} ({owner[0]}) as request {row['id']}" if outcome == "new" else
+                         f"not queued {tag} ({owner[0]}): outcome {outcome}")
+    return lines
+
+
+def auto_round():
+    """Before the queue is read: request the PRs that are ready. A failure here never stops the queue behind it."""
+    try:
+        ex = prog.land_executor()
+    except SystemExit as e:
+        log(f"auto-queue: the settings cannot be read: {str(e.code)[:200]}")
+        return
+    mode = (ex or {}).get("auto_queue", {}).get("mode", "off")
+    if mode == "off":
+        return
+    try:
+        lines = auto_lines(ex, write=mode == "on")
+    except store.NotMigrated:
+        raise
+    except Exception as e:
+        log(f"auto-queue: {type(e).__name__}: {e}")
+        return
+    try:
+        last = set(json.loads(AUTO_LAST.read_text()))
+    except (OSError, ValueError):
+        last = set()
+    for line in lines:
+        if line not in last:  # a PR that stays skipped for the same reason is logged once, not every minute
+            log(f"auto-queue {mode}: {line}")
+    with contextlib.suppress(OSError):
+        AUTO_LAST.write_text(json.dumps(lines))
+
+
 @contextlib.contextmanager
 def round_lock():
     STATE.mkdir(parents=True, exist_ok=True)
@@ -223,6 +365,7 @@ def cmd_round(argv):
         try:
             if stale := store.land_requeue_running(by=BY):
                 log(f"requeued {stale}: left running by a round that did not finish")
+            auto_round()
             rows = store.land_rows(("queued",))
         except store.NotMigrated as e:
             beat(phase="error", error=str(e)[:300])
@@ -258,6 +401,25 @@ def cmd_queue(argv):
     return 0
 
 
+def cmd_auto(argv):
+    try:
+        ex = prog.land_executor()
+    except SystemExit as e:
+        print(f"refused: {e.code}", file=sys.stderr)
+        return 1
+    if not ex:
+        print("the land executor is off: nothing to queue")
+        return 0
+    print(f"auto_queue is {ex['auto_queue']['mode']} (max_new_per_round {ex['auto_queue']['max_new_per_round']}); "
+          "this report writes nothing")
+    try:
+        print("\n".join(auto_lines(ex, write=False)) or "no open PR")
+    except store.NotMigrated as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_setup(argv):
     try:
         print(store.land_setup())
@@ -282,7 +444,7 @@ def cmd_status(argv):
     return 0
 
 
-COMMANDS = {"round": cmd_round, "queue": cmd_queue, "setup": cmd_setup, "status": cmd_status}
+COMMANDS = {"round": cmd_round, "queue": cmd_queue, "setup": cmd_setup, "status": cmd_status, "auto": cmd_auto}
 
 
 def main(argv):

@@ -844,6 +844,14 @@ def land_put(program, home, repo, pr, sha, base_sha, klass, requester, by=None):
         return _land_row(row), "new"
 
 
+def land_seen(program, home, repo, pr, sha):
+    """Has a request of any status ever named this program's PR at this head? A refused or merged one counts: the
+    auto-queue asks once per head."""
+    with _land_tx() as db:
+        return db.execute("SELECT 1 FROM land_request WHERE home=? AND repo=? AND program=? AND pr=? AND sha=? LIMIT 1",
+                          (home, repo, program, pr, sha)).fetchone() is not None
+
+
 def land_get(rid):
     with _land_tx() as db:
         return _land_row(db.execute("SELECT * FROM land_request WHERE id=?", (rid,)).fetchone())
