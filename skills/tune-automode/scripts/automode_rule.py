@@ -107,7 +107,8 @@ def new_rules(spec):
 
 def words(rule):
     """Words of the part that grants, in any script; `Not covered:` is shared boilerplate and would make unrelated rules alike."""
-    return set(re.findall(r"[^\W\d_][\w-]+", rule.split(NOT_COVERED)[0].lower()))
+    # Three letters for ASCII words (so "in" and "if" carry nothing), two for other scripts, where a word is short.
+    return set(re.findall(r"[a-z][\w-]{2,}|[^\x00-\x7f\W\d_][\w-]+", rule.split(NOT_COVERED)[0].lower()))
 
 
 def lint(spec, automode):

@@ -345,6 +345,14 @@ class EmitTest(Base):
         r, _ = self.emit_spec({"add": {"allow": ["Merging pull requests. Not covered: a.", ]}, "refusal_category": "user-request"})
         self.assertNotIn("near-duplicate", r.stdout)
 
+    def test_english_function_words_do_not_make_rules_alike(self):
+        old = "Delete branches in CI if checks pass. Not covered: protected branches."
+        self.settings.write_text(json.dumps({"autoMode": {"allow": ["$defaults", old]}}))
+        r, _ = self.emit_spec({"add": {"allow": ["Restart services in CI if checks pass. Not covered: production services."]},
+                               "refusal_category": "user-request"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("near-duplicate", r.stdout)
+
     def test_short_korean_words_still_count_for_duplicates(self):
         old = "로컬 서버 종료. Not covered: 원격 서버."
         self.settings.write_text(json.dumps({"autoMode": {"allow": ["$defaults", old]}}))
