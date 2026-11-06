@@ -161,6 +161,11 @@ class Round:
         if v["headRefOid"] != sha:
             return settle("refused", 3, f"the head moved from {sha[:8]} to {v['headRefOid'][:8]} since the request:"
                                          " review the new head, orch verdict, land again")
+        if autoqueue.withdrawn(p.events(), pr):
+            # `orch land` writes a fresh `ready` before every request and the auto-queue checks this before it writes,
+            # so a request that meets a standing withdrawal is one a stop outran: it must not merge on the old call.
+            return settle("refused", 3, f"#{pr}'s land was stopped after this request was made: record a verdict at"
+                                        " the head or land again")
         verdict = prog.pr_state(p.events()).get(pr, {}).get("verdict")
         audit["verdict"] = verdict
         if why := prog.executor_verdict_problem(verdict, sha, ex["verdict_sources"]):

@@ -610,6 +610,7 @@ class LandExec(Fixture):
         for members in ((self.n + 100, self.n), (self.n + 100, self.n, self.n + 200)):
             with self.subTest(members=members):
                 self.stack(*members)
+                self.p.append("ready", pr=self.n, ticket=f"T-{self.n}")  # the new `orch land` that makes the request
                 row = self.request()
                 self.round()
                 got = self.settled(row, "refused", 1, f"Land #{members[0]} first")
@@ -1113,6 +1114,19 @@ class AutoQueue(Fixture):
             store.land_seen = real
         self.assertEqual((self.mine(), self.events("ready")), ([], []))
         self.assertTrue(autoqueue.withdrawn(self.p.events(), self.n), "the stop still stands")
+
+    def test_a_stop_after_the_request_keeps_the_executor_from_merging(self):
+        """ready, then the request, then a stop before the round: the old call must not merge."""
+        self.auto()
+        [row] = self.mine()
+        prog.stop_land(self.p, self.n, "a person withdrew the call")
+        self.round()
+        got = store.land_get(row["id"])
+        self.assertEqual((got["status"], got["code"]), ("refused", 3), got)
+        self.assertIn("was stopped after this request", got["reason"])
+        self.assertEqual(self.merges(), [])
+        self.vrd()  # a review at the head again brings the PR back, with a request of its own
+        self.assertFalse(autoqueue.withdrawn(self.p.events(), self.n))
 
     def test_a_request_for_the_head_is_not_inserted_again_after_the_queue_moved_on(self):
         home = str(prog.HOME)
