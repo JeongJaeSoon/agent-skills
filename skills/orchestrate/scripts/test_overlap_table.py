@@ -115,6 +115,21 @@ with tempfile.TemporaryDirectory() as tmp:
     finally:
         (home / "locked" / "program.json").chmod(0o644)
     assert unknown == ["program ledger locked"] or os.geteuid() == 0, unknown
+    # Bytes that are not text in program.json or the ledger: the program is unknown, the command goes on.
+    program("binary", "acme/bin", [])
+    (home / "binary" / "program.json").write_bytes(b"\xff\xfe\x00")
+    assert prog.repo_verdicts("acme/bin", home)[1] == ["program ledger binary"]
+    program("binled", "acme/binled", [])
+    (home / "binled" / "ledger.jsonl").write_bytes(b"\xff\xfe\x00")
+    got = prog.repo_verdicts("acme/binled", home)[1]
+    # The program whose config cannot be read stays unknown for every repo asked about: its repo is not known.
+    assert got == ["program ledger binary", "program ledger binled"], got
+    # A program with no ledger yet is fine; a missing programs directory is an empty answer.
+    program("fresh", "acme/fresh", [])
+    (home / "fresh" / "ledger.jsonl").unlink()
+    found, unknown = prog.repo_verdicts("acme/fresh", home)
+    assert found == {} and "program ledger fresh" not in unknown, (found, unknown)
+assert prog.repo_verdicts("acme/app", pathlib.Path("/nonexistent-orch-home")) == ({}, [])
 
 # An empty rollup is pending even when the repo declares no CI.
 assert prog.table_facts([dict(listing[2], statusCheckRollup=[])], {})[3]["ci"] == "pending"

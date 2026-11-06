@@ -1030,7 +1030,9 @@ def repo_verdicts(repo, home=None):
     home = home or HOME
     best, unknown = {}, []
     try:
-        dirs = sorted(home.iterdir()) if home.is_dir() else []
+        dirs = sorted(home.iterdir())
+    except (FileNotFoundError, NotADirectoryError):
+        return best, unknown
     except OSError:
         return best, ["program ledgers"]
     for d in dirs:
@@ -1040,14 +1042,18 @@ def repo_verdicts(repo, home=None):
             cfg = (d / "program.json").read_text()
         except (FileNotFoundError, NotADirectoryError):
             continue  # not a program directory
-        except OSError:
+        except (OSError, ValueError):
             unknown.append(f"program ledger {d.name}")
             continue
         try:
             if json.loads(cfg)["repo"].lower() != repo.lower():
                 continue
             led = d / "ledger.jsonl"
-            events = [json.loads(l) for l in led.read_text().splitlines() if l.strip()] if led.exists() else []
+            try:
+                text = led.read_text()
+            except FileNotFoundError:
+                text = ""  # a program that has not recorded anything yet
+            events = [json.loads(l) for l in text.splitlines() if l.strip()]
             mine = dict(best)  # merged into `best` only when this whole ledger read, so a bad one adds nothing
             for e in events:
                 if e.get("ev") == "verdict" and type(e.get("pr")) is int:
