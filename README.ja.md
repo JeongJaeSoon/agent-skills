@@ -94,6 +94,7 @@ https://github.com/JeongJaeSoon/agent-skills の Claude Code プラグインを�
 - **自分の設定。** `setup-pc`、`tune-automode`、`skills-config` は diff と `!` の行を作るだけで、実行するのは人です。この動作は変えられません。
 - **権限ダイアログと拒否。** 権限ダイアログは人の応答を待ちます。auto mode の分類器が操作を拒否すると、エージェントは報告して止まります。ある種類の操作を以後通すには、`permissions.allow` の項目か、`tune-automode` が下書きする autoMode ルールを人が追加します。
 - **取り消せない操作。** 破壊的なマイグレーション、共有ブランチへの force push、本番デプロイ、外部への送信は、常に止まって聞きます。
+- **カードの作業習慣。** Dispatch で起動したカードが、Bash でファイルを書く(`sed -i`、リダイレクト)、コミットや `rm` を他のコマンドと 1 回の呼び出しにまとめる、worktree の外や main checkout を編集する、auto-memory に書く、テストを実行せずに push する、のいずれかをすると、警告が 1 行出て `turn-warnings.jsonl` に記録されます。止めはしません。`docs/skills.ja.md` の `worker.*` キーで、チェックごとにオフにするか `deny` に上げられます。
 - **マージ。** `orchestrate` のカードは、最初のプロンプトがマージを承認していれば `orch land` で自分の PR をマージし、自分で閉じます。CI のないリポジトリは先に `orchestrate.no_ci_repos` に入れます。プログラムの外の `deliver-ticket` が自分でマージするのは、そのリポジトリでのマージを許す autoMode ルールがあるときだけで、なければ聞きます。`human-gate` ポリシーにするか、先に自分で見ると伝えると、毎回マージの前で止まります。
 - **定期的な片付け。** `janitor` と `pressure-watch` は、終わったエージェントの後始末を定期的に行います。止めるには `skills-sync setup disable <名前>` を使います。`watch-prs` で自分の PR を自動承認、自動マージする機能は、設定するまでオフです。
 
