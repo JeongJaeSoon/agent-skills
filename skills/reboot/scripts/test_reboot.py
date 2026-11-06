@@ -665,6 +665,12 @@ class Reload(unittest.TestCase):
         with mock.patch.dict("os.environ", {"ORCH_CLAUDE_HOMES": os.pathsep.join((str(stale), str(fresh)))}), \
                 mock.patch.object(fleet, "ps_table", return_value=procs):
             self.assertEqual(reboot.own_record(table(), SELF)["name"], "orchestrator")
+        # same session id, old start time: only the start-time guard rejects it
+        (stale / "sessions" / f"{CLAUDE}.json").write_text(json.dumps(
+            {"pid": CLAUDE, "sessionId": "s1", "cwd": ROOT, "procStart": "Mon Oct 1 08:00:00 2026", "name": "mailbox"}))
+        with mock.patch.dict("os.environ", {"ORCH_CLAUDE_HOMES": os.pathsep.join((str(stale), str(fresh)))}), \
+                mock.patch.object(fleet, "ps_table", return_value=procs):
+            self.assertEqual(reboot.own_record(table(), SELF)["name"], "orchestrator")
 
     def test_same_sha_is_ok(self):
         self.record(self.sha)
