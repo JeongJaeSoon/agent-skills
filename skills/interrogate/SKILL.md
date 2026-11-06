@@ -1,6 +1,6 @@
 ---
 name: interrogate
-description: "Use for \"interrogate\", \"adversarial review\", \"challenge this\", or \"find blind spots\" on a design, plan or decision: several LLM reviewers challenge it from independent angles. A PR on its way to main is deliver-ticket's independent review."
+description: "Use for \"interrogate\", \"adversarial review\", \"challenge this\", \"find blind spots\" on a design, plan or decision. A PR headed to main is deliver-ticket's review."
 ---
 
 # Interrogate

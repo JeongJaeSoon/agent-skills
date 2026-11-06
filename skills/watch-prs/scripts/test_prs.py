@@ -4,6 +4,11 @@ import json, os, pathlib, re, shlex, stat, subprocess, sys, tempfile
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import prs as p
 
+# prs.py reads orchestrate.land_executor from $AGENT_SKILLS_CONFIG: point it at a file that does not exist, so no
+# test, subprocesses included, reads the developer's real ~/.claude file.
+ABSENT = str(pathlib.Path(tempfile.mkdtemp()) / "absent.json")
+os.environ["AGENT_SKILLS_CONFIG"] = ABSENT
+
 ME = "owner"
 NOW = 1_800_000_000.0
 DAY = 86400
@@ -759,6 +764,17 @@ p.owned_elsewhere = broken_orca
 assert {e["why"] for e in p.compute(MergeFake([mpr(1)]), mcfg, {}, NOW)["excluded"]} == {"프로그램 소유 여부 확인 불가"}
 p.owned_elsewhere = lambda c, now: owned
 
+# With orchestrate.land_executor on for the repo, a ready PR carries no merge command: the message hands it to the
+# orchestrator's `orch land`, and the round merges nothing there. Another repo still gets its command.
+ecfg = {**mcfg, "land_executor_repos": ["acme/widgets"]}
+eplan = p.compute(MergeFake([mpr(1), mpr(40, repo="acme/tools")]), {**ecfg, "merge_repos": ["acme/widgets", "acme/tools"]},
+                  {}, NOW)
+eby = {i["number"]: i for i in eplan["new"]}
+assert "cmd" not in eby[1] and eby[1]["land"] == "executor", eby[1]
+assert eby[40]["cmd"].startswith("gh pr merge 40 -R acme/tools"), eby[40]
+ebody = p.body(eplan)
+assert "acme/widgets#1" in ebody and "orch land" in ebody and "gh pr merge 1 " not in ebody, ebody
+
 # verify: MERGED plus the merge commit's CI, waiting while it is pending; a red run and a refused merge go in the body.
 mstate = pathlib.Path(tempfile.mkdtemp()) / "prs"
 two = {**mplan, "new": mplan["new"][:2]}
@@ -848,6 +864,63 @@ out = subprocess.run([sys.executable, script, "merges", "--config", str(mconf)],
                      env={**os.environ, "AGENT_SKILLS_STATE": str(mtmp)})
 assert out.returncode == 0 and out.stdout.splitlines()[1] == mplan["new"][0]["cmd"], out
 assert list(p.read_json(mtmp / "prs" / "ledger.json", {})) == [mplan["new"][0]["key"]]
+# An executor item in plan.json: merges prints nothing and records nothing, so commit, not merges, marks it sent.
+xtmp = pathlib.Path(tempfile.mkdtemp())
+p.write_json(xtmp / "prs" / "plan.json", {**eplan, "new": [eby[1]]})
+out = subprocess.run([sys.executable, script, "merges", "--config", str(mconf)], capture_output=True, text=True,
+                     env={**os.environ, "AGENT_SKILLS_STATE": str(xtmp)})
+assert out.returncode == 0 and out.stdout == "" and p.read_json(xtmp / "prs" / "ledger.json", {}) == {}, out
+
+# verify reads nothing back for it, and commit marks it sent: the same head is handed on once.
+class NoLookup(MergeFake):
+    def merge_state(self, ids, me):
+        raise AssertionError(f"verify looked up an executor item: {ids}")
+
+
+assert "orch land" in p.verify(NoLookup([]), xtmp / "prs", mcfg)
+assert p.commit(xtmp / "prs", mcfg, NOW) == 1 and list(p.read_json(xtmp / "prs" / "ledger.json", {})) == [eby[1]["key"]]
+assert p.compute(MergeFake([mpr(1)]), ecfg, p.read_json(xtmp / "prs" / "ledger.json", {}), NOW)["new"] == []
+
+# The executor's repos come from the file `orch land` reads ($AGENT_SKILLS_CONFIG, else the default), not from
+# --config or a prs key; off, or not exactly enabled: true, means none.
+xconf, envconf = xtmp / "x.json", xtmp / "env.json"
+xconf.write_text(json.dumps({"prs": {"land_executor_repos": ["spoofed/repo"]},
+                             "orchestrate": {"land_executor": {"enabled": True, "repos": ["acme/other"]}}}))
+os.environ["AGENT_SKILLS_CONFIG"] = str(envconf)
+for orch, want in (({"land_executor": {"enabled": True, "repos": ["acme/widgets", 7]}}, ["acme/widgets"]),
+                   ({"land_executor": {"enabled": False, "repos": ["acme/widgets"]}}, []),
+                   ({"land_executor": {"enabled": "yes", "repos": ["acme/widgets"]}}, []),
+                   ({"land_executor": {"enabled": True}}, []), ({}, [])):
+    envconf.write_text(json.dumps({"orchestrate": orch}))
+    assert p.config(xconf)["land_executor_repos"] == want, (orch, p.config(xconf)["land_executor_repos"])
+# A repos value that is not a list, or an unreadable file, stops the config rather than merge around the executor.
+for bad in (json.dumps({"orchestrate": {"land_executor": {"enabled": True, "repos": bad_repos}}})
+            for bad_repos in ({"acme/widgets": 1}, {}, "", 0, False)):
+    envconf.write_text(bad)
+    try:
+        p.config(xconf)
+        raise AssertionError(f"must stop: {bad}")
+    except p.ConfigError:
+        pass
+envconf.write_text("{not json")
+try:
+    p.config(xconf)
+    raise AssertionError("an unreadable executor config must stop the config")
+except p.ConfigError:
+    pass
+# End to end: a ready plan for an executor repo, under the same config, prints no merge command.
+envconf.write_text(json.dumps({"orchestrate": {"land_executor": {"enabled": True, "repos": ["acme/widgets"]}}}))
+assert p.compute(MergeFake([mpr(1)]), p.config(mconf) | {"kinds": ["ready_to_merge"]}, {}, NOW)["new"][0].get("cmd") is None
+envconf.unlink()
+assert p.config(xconf)["land_executor_repos"] == [], "no file: the executor is off, as for orch land"
+# Without $AGENT_SKILLS_CONFIG the default file decides, even under another --config.
+real_default = p.CONFIG
+p.CONFIG = xtmp / "default.json"
+p.CONFIG.write_text(json.dumps({"orchestrate": {"land_executor": {"enabled": True, "repos": ["acme/default"]}}}))
+os.environ.pop("AGENT_SKILLS_CONFIG")
+assert p.config(xconf)["land_executor_repos"] == ["acme/default"]
+p.CONFIG = real_default
+os.environ["AGENT_SKILLS_CONFIG"] = ABSENT
 
 # Kinds share the ledger key shape: the head ready_to_merge recorded is still due as unreleased once merged.
 shared = {"acme/widgets#20@m20": {"at": NOW, "kind": "ready_to_merge", "id": "x"}}

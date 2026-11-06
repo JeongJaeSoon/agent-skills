@@ -309,7 +309,7 @@ PR 을 맡는 스킬과 머지 주체:
 - **내용:**
   - `orch stage show [--program P] [--telegram] [--all]` 출력을 그대로 보낸다. 다 끝났거나 7일(`stage_idle_d`) 동안 바뀌지 않은 행은 접고 개수만 적으며, `--all`이면 다 보인다. 어떤 행의 PR 이 board 행에도 있으면 `지금` 열에 보고서가 그 행에 매긴 상태를 같이 보여서 둘이 어긋나지 않는다. 어떤 칸도 자르지 않으며(번호 각주도 없다), 표가 78열을 넘으면 표 대신 행마다 한 줄(`- 이름 — PR · 머지 ✅ · dev ❌ …`, 빈 칸은 빼고 칸 이름을 붙인다)로 낸다.
   - 단계표(작업 / PR 머지 / dev 확인 / prod 확인)는 대시보드의 fleet tick 이 1분마다 만든다. 7일 안에 ledger 가 움직인 프로그램마다 predicate 항목과 Run 의 워커 카드 하나에 한 행, 머지 칸은 머지 sha 가 있을 때만 채우고 dev·prod 칸은 비운다. 사람이나 에이전트가 확인한 칸은 `orch stage set <프로그램>/<항목>` 으로 덧쓰고, 그 값이 생성 값을 이긴다. 대시보드에서는 Stages 화면이다. 활성 프로그램인데 행이 없거나 `board.stage_warn_h`(기본 6) 시간 동안 갱신되지 않으면 reorient hook 이 프롬프트마다 한 줄 경고한다.
-- **관계:** `brief`의 단계표 줄이 가리키는 곳. 기록 규칙은 `orchestrate`의 `references/dashboard.md` "The stage table".
+- **관계:** `brief`의 단계표 줄이 가리키는 곳. 기록 규칙은 `orchestrate`의 `references/stage-table.md` "The stage table".
 
 ### todo
 - **언제:** "할 일 보여줘", "보류 큐 보여줘", `/agent-skills:todo`. `brief`는 할 일과 보류 큐를 한 줄로 세기만 하므로, 목록이 필요할 때 부른다.
@@ -755,4 +755,4 @@ pstack 스킬 58개(원칙 24개와 나머지 34개) 가운데 원칙 24개 전�
 - **받은 것:** 대부분 지시를 줄인 커밋(#538, #571, #634)이다. 원문 그대로 가져온 파일은 upstream과 같게 맞췄다. 고쳐서 가져온 파일은 3-way 병합으로 문장 압축과 새 규칙을 받았다. 새 규칙은 show-me-your-work의 run별 `start` 행, create-verification-skill의 "준비됨은 쓸 수 있는 상태"와 대역 환경 검증의 한계, architect의 "다음 기여자는 에이전트" 기준, arena 후보가 기각한 안을 적는 규칙 들이다. 새 원칙 Explain the Number와 그 측정 점검표를 `principles`에 더했다.
 - **크게 줄어든 원칙 다섯 개:** encode-lessons-in-structure, laziness-protocol, guard-the-context-window, exhaust-the-design-space, migrate-callers-then-delete-legacy-apis는 upstream이 글이 없어도 에이전트가 따르는 절을 지워(#571, #634) 몇 줄만 남았다. 원문 그대로(verbatim) 가져오는 파일은 upstream을 바이트 단위로 따르는 것이 동기화 정책이라 그대로 받았다. 언제 적용하는지는 같은 파일의 frontmatter description이 여전히 말하고, 파일과 함께 읽힌다. reflect의 압축을 받지 않은 것은 고쳐서 가져온(adapted) 파일이고 병합 결과가 이 저장소의 절 구조를 덮었기 때문이다.
 - **받지 않은 것:** Cursor 모델 규칙 줄(`pstack-models.mdc`, 모델 slug, `generalPurpose`, `readonly`), 서브에이전트 effort를 poteto-mode에 맞추라는 줄(#613), reflect 본문 재구성. reflect는 이 저장소의 모드 구조를 그대로 둔다. 옮겨 쓴(derived) 파일의 upstream 변경(opening-a-pr의 PR 본문 절 구성, shipping의 착지 순서)은 반영하지 않았다.
-- **다음 동기화:** `python3 scripts/pstack-sync.py`(dry-run)로 시작한다. 고쳐서 가져온 파일은 대부분 충돌하니 손으로 병합한다. 충돌 없이 합쳐진 구간에도 Cursor 줄이 섞여 들어오므로 denylist 결과와 diff 전체를 읽는다.
+- **2026-11-06부터:** 더는 병합으로 따라가지 않는다. 가져온 스킬은 이 저장소가 따로 관리하고, upstream 원본은 `vendor/pstack`에 pin 시점 그대로 둔다. `python3 scripts/pstack-sync.py`가 원본과 upstream의 차이를 파일마다 한 줄로 보여 주고, `pstack-upstream` 자동화(기본 off)가 하루 한 번 같은 비교를 돌려 차이가 있으면 알린다. 옮길 것은 diff를 읽고 `skills/`에 손으로 고친다.

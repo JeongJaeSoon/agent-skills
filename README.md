@@ -87,7 +87,7 @@ Skills fire on their own when the situation in their description comes up. You c
 
 - "Finish ABC-1" runs `deliver-ticket` from the plan to the merge and the closed ticket. This needs a tracker: Linear by default, or set `tracker.adapter` (see [Configuration](#configuration)).
 - "Give me a status report" runs `brief`. Claude Code has a built-in `/brief`, so call this one directly as `/agent-skills:brief`. `/brief-pane` opens the same report in a panel beside the chat that refreshes every 30 seconds while it is open (it docks at 110+ columns; narrower terminals show it above the prompt).
-- In Orca, start a top-level session with `claude --agent agent-skills:orchestrator --name orchestrator` and ask it to take over every session. The orchestrator hands each project to a lead session, and each lead runs its workers.
+- In Orca, start a top-level session with `claude --agent agent-skills:orchestrator --name orchestrator` and ask it to take over every session. The orchestrator hands each project to a lead session, and each lead runs its workers. Once an orchestrator or lead session's context passes `orchestrate.restart_at` (130k tokens by default) and nothing waits on it, a band above the prompt says `/clear` is safe; the next session picks up its role and a saved handoff. Typing `/clear` stays yours unless you set `orchestrate.auto_clear: true`.
 
 ## Where you stay in charge
 
@@ -113,7 +113,7 @@ When each skill fires, what it does and the files it ships are in the [skill cat
 | [Writing](docs/skills.en.md#writing) | `brief`, `stage`, `todo`, `map-features`, `write-plainly`, `prune-comments`, `write-skill` | Status reports, stage tables, to-do and hold queues, feature maps, plain prose, comment cleanup, skill authoring checks |
 | [pstack](docs/skills.en.md#pstack-skills-lauren-tan-mit) | `architect`, `arena`, `blast-radius`, `create-verification-skill`, `figure-it-out`, `how`, `interrogate`, `maintain-verification-skill`, `principles`, `recall`, `reflect`, `show-me-your-work`, `swarm`, `tdd`, `teach`, `why` | Design, comparison, impact analysis, verification, explanation, retrospectives |
 
-The pstack group comes from Lauren Tan's [pstack](https://github.com/cursor/plugins) (MIT) and keeps the upstream names so it can follow upstream changes. With several sessions, two layers sit above the workers: the orchestrator (one top-level session) and leads (one per project). See the [Roles table in orchestrate](skills/orchestrate/SKILL.md#roles).
+The pstack group comes from Lauren Tan's [pstack](https://github.com/cursor/plugins) (MIT). These skills are now maintained here on their own: `vendor/pstack` keeps the original files as upstream had them, and an optional daily job reports upstream changes, which are ported by hand when worth it. With several sessions, two layers sit above the workers: the orchestrator (one top-level session) and leads (one per project). See the [Roles table in orchestrate](skills/orchestrate/SKILL.md#roles).
 
 ## Configuration
 

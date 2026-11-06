@@ -1,0 +1,96 @@
+"""turn_cost.py: turns, kinds and the --what-if replay on a small synthetic transcript; no real transcript is read.
+
+Run: python3 test_turn_cost.py
+"""
+import json, pathlib, sys, tempfile
+
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+import turn_cost as tc  # noqa: E402
+
+N = [0]
+
+
+def user(ts, text, origin=None):
+    return {"type": "user", "timestamp": ts, "message": {"content": text}, **({"turnOrigin": origin} if origin else {})}
+
+
+def call(ts, ctx, tools=(), out=100):
+    N[0] += 1
+    content = [{"type": "tool_use", "name": n, "input": {"command" if n == "Bash" else "file_path": a}} for n, a in tools]
+    return {"type": "assistant", "timestamp": ts, "message": {"id": f"m{N[0]}", "content": content, "usage": {
+        "input_tokens": 0, "cache_read_input_tokens": ctx - 1000, "cache_creation_input_tokens": 1000,
+        "cache_creation": {"ephemeral_1h_input_tokens": 1000}, "output_tokens": out}}}
+
+
+def note(ts, summary):
+    return user(ts, f"<task-notification>\n<output-file>/tmp/x/tasks/b1.output</output-file>\n<summary>{summary}</summary>",
+                "task_notification")
+
+
+def write(rows):
+    f = tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False)
+    f.write("\n".join(json.dumps(r) for r in rows) + "\n")
+    f.close()
+    return f.name
+
+
+rows = [user("2026-01-01T00:00:00Z", "hi", "human"), call("2026-01-01T00:00:01Z", 200_000),
+        note("2026-01-01T00:10:00Z", 'Background command "Ack inbox message and re-arm the wait" completed'),
+        call("2026-01-01T00:10:01Z", 201_000, [("Read", "/tmp/x/tasks/b1.output")]),
+        call("2026-01-01T00:10:02Z", 202_000, [("Bash", "orch inbox --ack dv1 --wait")]),
+        call("2026-01-01T00:10:03Z", 203_000)]
+p = write(rows)
+ts = tc.turns(p)
+assert [tc.kind(t) for t in ts] == ["human", "notification_rearm_only"], [tc.kind(t) for t in ts]
+assert tc.summarize(ts)["calls"] == 4
+w = tc.what_if(ts, {"stream"})
+assert w["calls"] == 2, w
+
+assert tc.rearm(("Read", "/tmp/x/tasks/b1.output")) and not tc.rearm(("Read", "/repo/SKILL.md"))
+assert tc.rearm(("Bash", "cd /w && orch inbox --ack dv1 --wait")) and tc.rearm(("Bash", "orch watch-cards --self term_a"))
+assert not tc.rearm(("Bash", "gh pr merge 1 --squash && orch inbox --ack dv1 --wait"))
+assert not tc.rearm(("Grep", "inbox"))
+
+first = tc.what_if(tc.turns(write([user("2026-01-01T00:00:00Z", "hi", "human"), call("2026-01-01T00:00:01Z", 200_000)])),
+                   {"restart"}, restart_at=130_000, fresh=62_000)
+assert first["restarts"] == 0 and first["ctx_median"] == 200_000, first
+
+rows = [user("2026-01-01T00:00:00Z", "a", "human"), call("2026-01-01T00:00:01Z", 140_000),
+        user("2026-01-01T00:00:30Z", "b", "human"), call("2026-01-01T00:00:31Z", 141_000),
+        user("2026-01-01T00:10:00Z", "c", "human"), call("2026-01-01T00:10:01Z", 142_000)]
+r = tc.what_if(tc.turns(write(rows)), {"restart"}, restart_at=130_000, fresh=62_000)
+assert r["restarts"] == 1 and r["calls"] == 3 + tc.REBOOT_CALLS, r
+base = tc.summarize(tc.turns(write(rows)))["weight"]
+assert r["weight"] > 0 and r["weight"] != base
+
+rows = [user("2026-01-01T00:00:00Z", "a", "human"), call("2026-01-01T00:00:01Z", 100_000),
+        user("2026-01-01T01:00:00Z", "b", "human"), call("2026-01-01T01:00:01Z", 100_000)]
+s = tc.what_if(tc.turns(write(rows)), {"stream"})
+assert s["calls"] == 2 + 2 * 2, s
+
+wake = 'Background command "Ack inbox message and re-arm the wait" completed'
+rows = [note("2026-01-01T00:00:00Z", wake), call("2026-01-01T00:00:01Z", 100_000, [("Bash", "gh pr view 1 --json state")]),
+        call("2026-01-01T00:00:02Z", 100_000),
+        note("2026-01-01T00:00:20Z", wake), call("2026-01-01T00:00:21Z", 100_000, [("Bash", "gh pr view 2 --json state")]),
+        call("2026-01-01T00:00:22Z", 100_000),
+        note("2026-01-01T00:00:40Z", wake), call("2026-01-01T00:00:41Z", 100_000, [("Bash", "gh pr view 3 --json state")]),
+        call("2026-01-01T00:00:42Z", 100_000)]
+d = tc.what_if(tc.turns(write(rows)), {"stream"}, debounce=30)
+assert d["calls"] == 5, d
+
+assert tc.main([p, "--json", "--what-if", "stream,restart"]) == 0
+import contextlib, io, json  # noqa: E402
+for args in ([p], [p, p]):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        tc.main(args + ["--json", "--what-if", "stream"])
+    got = json.loads(buf.getvalue())
+    if args == [p]:
+        one = got
+assert got["calls"] == 2 * one["calls"] and got["what_if"]["weight"] == 2 * one["what_if"]["weight"], (one, got)
+try:
+    tc.main([p, "--what-if", "nope"])
+    raise AssertionError("an unknown --what-if must fail")
+except SystemExit as e:
+    assert e.code == 2
+print("test_turn_cost: ok")

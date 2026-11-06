@@ -54,9 +54,20 @@ CHANGES     Optional, like the next two rows: write what you already know and le
 PITFALLS    What has already gone wrong here: an approach that failed, an order that matters,
             what the tests miss.
 EXAMPLES    An input with its expected output, or a command with what it should print.
-ORDER       Starts after <TICKET…> (Orca deps) · lands after <TICKET…> (stack / orch dep).
-            `Lands after` means a stack: the unit's Base is then `stacked on #<PR>`. The order
-            with another program's PR is no stack (PARENT settles it): write it in PEERS.
+ORDER       Starts after <TICKET…> (Orca deps) · stacked on <TICKET|#PR> (stack) · lands after
+            <TICKET…> (orch dep). Pick by what ties the two:
+            - code (this uses the lower one's symbols or schema): `stacked on`, one ticket. The
+              card starts from the lower branch; the stack is linear, at most 3 layers, one layer
+              per base (no fan-out), and a layer takes no merge commit (rebase only).
+            - the same files or exclusive_paths, no code: `starts after`, so it begins once the
+              earlier PR has landed. An overlap only in a hotspot (a `translated-from` line, a
+              generated file) stays parallel.
+            - only a deploy or run order, no shared files: `lands after`. Base stays the default
+              branch; the order is an `orch dep` edge, never a stack.
+            - none: nothing here; it runs in parallel.
+            These rules win where `orch overlap` output, the orchestrate Steps or `landing.md`
+            "GitHub stacks" still say otherwise (they follow once the stack-flow change lands). The order with another program's PR is no stack (PARENT
+            settles it): write it in PEERS.
             Class: normal | urgent | gate.
             Lane: normal, or exclusive when it touches migrations, CI, Dockerfile, compose or the
             program's exclusive_paths (land handles it; say it here so the worker expects it).
@@ -358,7 +369,7 @@ MERGE       merge_policy autonomous, or merge_policy human-gate when each landin
             works for.
 TASKS       Each unit you start is an Orca task: `task-create --deps '[…]'` with its start-after
             prerequisites, started from `task-list --ready` with `worker-start --task <id>`
-            (SKILL.md Scale). Started as a dispatched worker, you cannot create tasks on the Run
+            (`program.md` Scale). Started as a dispatched worker, you cannot create tasks on the Run
             you work for: start each unit with `worker-start --spec` once its prerequisites have
             landed; until then the unit and what it waits on are a digest line in this brief's
             note, so a restart finds the order. A unit you start as a card instead names why in
@@ -432,7 +443,7 @@ CLOSE       Once the predicate holds and the program's Close is done: `end-sessi
 - The worker runs the user's normal flow (`deliver-ticket`) for implementation and review. LAND, ORDER, PEERS and REPORT are what change inside a program, and so do browser checks: VERIFY sends them to the host's own browser (Orca's `orca tab` commands), not a browser extension. An extension may be disconnected, and that is not a blocker. Lanes share that browser and its logins, so a worker takes it with `orch hold browser --note "<what it checks>"` before driving it and `orch release browser` when done (the VERIFY line in both templates). `hold` refuses while another lane has it and names the holder: wait for it or ask that lane, never drive over its session.
 - A unit whose result a person opens as a live page (a mockup, a branch preview) gets in VERIFY: its own free port in the preview watcher's range, the server bound to 127.0.0.1, and the tailnet link fetched for 200 before it is reported, by `deliver-ticket` `references/visual-evidence.md` ("A live page for a person"). Two lanes on one port show each other's page. The card never runs `tailscale serve` and never asks for a port to be opened.
 - **Name the card.** Orca's automatic title comes from the first prompt and can be meaningless, unrelated to the ticket. Pass `worker-start --display-name "<ID> <short title>"`. That name sticks; the terminal tab title belongs to the agent, which overwrites a rename.
-- **Plan chains as stacks.** A unit that has to land after another unit's PR builds on that branch (`Base: stacked on #N`), so the chain lands in one merge. Set Base from `gh pr list --state open`, not memory: an open PR the unit needs, or one already doing its scope, is its base. Record it with `orch dep`, not as an Orca dep: an Orca dep would keep this unit from starting until the lower PR had landed. An open PR that changes one of the paths in this unit's SCOPE is its base too, even when the unit needs nothing from it: `orch overlap <slug> --paths <SCOPE paths>` names it (`OVERLAP plan #N`).
+- **Stack only a code dependency.** A unit that uses another unit's code builds on that branch (`Base: stacked on #N`), so the chain lands in one merge; record it with `orch dep`, not as an Orca dep, which would keep it from starting until the lower PR had landed. Keep the chain linear and at most 3 layers, with one layer per base. Set Base from `gh pr list --state open`, not memory: an open PR the unit needs, or one already doing its scope, is its base. An open PR that only changes one of the paths in this unit's SCOPE (`orch overlap <slug> --paths <SCOPE paths>` prints `OVERLAP plan #N`) is not a base: start the unit after it lands (an Orca dep), unless the overlap is only a hotspot such as a `translated-from` line. A unit that only has to deploy after another keeps the default branch as Base and gets an `orch dep` edge (ORDER).
 - **A worker's question is an `ask`** (the end of PEERS, or WAITING), resumed after each timeout. Only a dispatched worker can `ask` or escalate; Orca refuses both from a `/goal` card, which asks by `dispatch-card` §2 "Questions". "One inbox wait, always" (SKILL.md Drain) is the rule of the layers above a worker, not a worker's.
 - An agent that will use a write tool whose host asks it to load a policy skill before the first write gets, in its brief or prompt, an instruction to load that skill before its first write; otherwise the confirmation comes back in every session and stops it on a dialog.
 - Keep every write inside the worker's worktree except SCOPE's named temporary download directory. A write elsewhere can stop the worker on a permission prompt while Orca still reports it `live`. Anything kept outside it (logs, notes, program files, auto-memory lessons) comes back in the worker's message, and the session that wrote the brief writes it.

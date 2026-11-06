@@ -361,6 +361,26 @@ def decision_record(did):
     return {**d, "answered_by": by} if by else d
 
 
+def session_event(key, ev, data, by=None):
+    """`orch handoff`: what a role session (key `orchestrator` or `lead:<slug>`) leaves for the next one ('handoff')
+    and its restarts ('restart'). Event rows with entity 'session', so the facts need no table and no schema step;
+    the newest row of a kind is the one in force."""
+    with tx() as db:
+        _event(db, "session", key, ev, by=by, after=data)
+
+
+def last_session_event(key, ev, db=None):
+    """(ts, data) of the newest `ev` row for key, or None."""
+    def newest(db):
+        r = db.execute("SELECT ts, after FROM event WHERE entity='session' AND id=? AND ev=? ORDER BY seq DESC LIMIT 1",
+                       (key, ev)).fetchone()
+        return (r["ts"], json.loads(r["after"] or "null")) if r else None
+    if db is not None:
+        return newest(db)
+    with read() as db:
+        return newest(db)
+
+
 # ---------------------------------------------------------------- the board: items, rows, leads
 
 def legacy_id(lane, item):
