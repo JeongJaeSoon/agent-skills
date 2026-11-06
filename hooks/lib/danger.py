@@ -301,8 +301,9 @@ def finder_empties(w):
     lines = [w[i + 1] if x == "-e" else x[2:] for i, x in enumerate(w) if x == "-e" and i + 1 < len(w)
              or x.startswith("-e") and len(x) > 2]
     script = "\n".join(lines) or " ".join(w)
-    # The last alternative is JXA: `Application("Finder").empty()`.
-    return re.search(r"\bFinder\b.*?(?:\bto\s+empty\b|\bempty\s+\(?(?:the\s+)?trash\b\)?|^\s*empty\s*(?:--.*|#.*)?$|\.empty\s*\()", script,
+    # A script line that starts with `empty` is the command, whatever follows (`empty without security`); the last
+    # alternative is JXA: `Application("Finder").empty()`.
+    return re.search(r"\bFinder\b.*?(?:\bto\s+empty\b|\bempty\s+\(?(?:the\s+)?trash\b\)?|^\s*empty\b|\.empty\s*\()", script,
                      re.I | re.S | re.M) is not None
 
 

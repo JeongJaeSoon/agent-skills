@@ -243,6 +243,7 @@ CASES = [
       "osascript -e'tell application \"Finder\"' -e 'empty' -e 'end tell'",
       "osascript -e 'tell application \"Finder\"' -e 'empty (trash)' -e 'end tell'",
       "osascript -e 'tell application \"Finder\"' -e 'empty -- cleanup' -e 'end tell'",
+      "osascript -e 'tell application \"Finder\"' -e 'empty without security' -e 'end tell'",
       "osascript -e 'tell application \"Finder\"' -e 'empty (the trash)' -e 'end tell'",
       ("find -mindepth 1 -delete", HOME / ".Trash"), "find -- ~/.Trash -mindepth 1 -delete",
       "find ~/.Trash -mindepth 1 -exec rm -rf {} +"],
