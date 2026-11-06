@@ -2218,17 +2218,34 @@ SELF_REVIEWERS = {"self", "implementer", "author"}
 
 
 def author_sessions(branch):
-    """Terminal handles of the card whose worktree holds the PR's branch: the sessions that wrote it. Empty when Orca
-    does not answer or no card holds the branch, which leaves the author unverified."""
+    """Terminal handles of every card whose worktree holds the PR's branch: the sessions that wrote it. Empty when Orca
+    does not answer for any one of them or no card holds the branch, which leaves the author unverified.
+    A branch selector is rejected as ambiguous once a closed card's worktree and its successor both hold the branch,
+    so the worktrees are listed and each is asked by id."""
     if not branch:
         return []
     try:
-        out = orca_json("terminal", "list", "--worktree", f"branch:{branch}")
-        rows = out["terminals"]
+        listing = orca_json("worktree", "list")
+        wts = listing["worktrees"]
         # A cut-off list can miss the author, and a reviewer equal to the missing one would pass.
-        if out.get("truncated") or not isinstance(rows, list):
+        if listing.get("truncated") or not isinstance(wts, list) \
+                or (listing.get("hostScope") or {}).get("omittedHostIds"):
             return []
-        return sorted({t["handle"] for t in rows if isinstance(t.get("handle"), str) and t["handle"]})
+        handles = set()
+        for w in wts:
+            if w.get("branch") not in (branch, f"refs/heads/{branch}"):
+                continue
+            out = orca_json("terminal", "list", "--worktree", f"id:{w['id']}")
+            rows = out["terminals"]
+            if out.get("truncated") or not isinstance(rows, list):
+                return []
+            # An answer is trusted only when it says it covered this worktree's host: an empty or partial answer from
+            # a host Orca did not reach says nothing about its sessions. Another host being omitted does not matter.
+            scope, host = out.get("hostScope") or {}, w.get("hostId")
+            if not host or host not in (scope.get("hostIds") or []) or host in (scope.get("omittedHostIds") or []):
+                return []
+            handles |= {t["handle"] for t in rows if isinstance(t.get("handle"), str) and t["handle"]}
+        return sorted(handles)
     except (SystemExit, ValueError, KeyError, TypeError, AttributeError, OSError):
         return []
 
