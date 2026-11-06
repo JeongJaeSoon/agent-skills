@@ -838,12 +838,19 @@ SCHEMA_ORDER = (
   by TEXT,
   created_at TEXT NOT NULL,
   closed_at TEXT, close_by TEXT,
+  links_complete_at TEXT,
+  reopen_evidence TEXT,
   CHECK ((status = 'open') = (closed_at IS NULL))
 )""",
+    # links_complete_at (the receiving session said every unit is linked) and reopen_evidence (the snapshot a Reopen
+    # keeps) are the places PR 5c's automatic close reads; nothing writes them yet.
     # The link outlives its unit: nothing here points at a row of item, decision or the fleet.
+    # resolves 0 marks a stand-in (the temporary to-do an import replaced): it shows where the order came from and is
+    # never evidence that the order was carried out.
     """CREATE TABLE order_link (
   order_id TEXT NOT NULL REFERENCES order_(id),
   unit TEXT NOT NULL,
+  resolves INTEGER NOT NULL DEFAULT 1 CHECK (resolves IN (0,1)),
   ts TEXT NOT NULL, by TEXT,
   PRIMARY KEY (order_id, unit)
 )""",
@@ -881,8 +888,9 @@ def _order_tx():
 
 
 def _order_out(db, r):
+    links = db.execute("SELECT unit, resolves FROM order_link WHERE order_id=? ORDER BY ts, unit", (r["id"],)).fetchall()
     return {**dict(r), "owner_action": bool(r["owner_action"]),
-            "links": [x[0] for x in db.execute("SELECT unit FROM order_link WHERE order_id=? ORDER BY ts, unit", (r["id"],))]}
+            "links": [x[0] for x in links], "stand_ins": [x[0] for x in links if not x[1]]}
 
 
 def order_add(text, kind="order", source=None, owner_action=False, by=None, dedupe=False):
@@ -910,8 +918,9 @@ def order_add(text, kind="order", source=None, owner_action=False, by=None, dedu
         return row, True
 
 
-def order_link(oid, unit, by=None):
-    """True when the link is new. The unit is checked for form, and a board item or decision for existing."""
+def order_link(oid, unit, by=None, stand_in=False):
+    """True when the link is new. The unit is checked for form, and a board item or decision for existing. A stand-in
+    link does not count as carrying the order; linking the same unit again as real turns it real."""
     if not UNIT.fullmatch(unit):
         raise ValueError("unit is card:<worktree> | agent:<id> | board:<bN> | decision:<dN> | pr:<owner/repo#number>")
     with _order_tx() as db:
@@ -922,10 +931,16 @@ def order_link(oid, unit, by=None):
             raise ValueError(f"no board item {ident}")
         if kind == "decision" and not db.execute("SELECT 1 FROM decision WHERE id=?", (ident,)).fetchone():
             raise ValueError(f"no decision {ident}")
-        cur = db.execute("INSERT OR IGNORE INTO order_link (order_id, unit, ts, by) VALUES (?,?,?,?)", (oid, unit, now(), by))
+        cur = db.execute("INSERT OR IGNORE INTO order_link (order_id, unit, resolves, ts, by) VALUES (?,?,?,?,?)",
+                         (oid, unit, 0 if stand_in else 1, now(), by))
         if cur.rowcount:
-            _event(db, "order", oid, "link", by, None, {"unit": unit})
-        return bool(cur.rowcount)
+            _event(db, "order", oid, "link", by, None, {"unit": unit, "stand_in": bool(stand_in)})
+            return True
+        if not stand_in and db.execute("UPDATE order_link SET resolves=1 WHERE order_id=? AND unit=? AND resolves=0",
+                                       (oid, unit)).rowcount:
+            _event(db, "order", oid, "link", by, {"stand_in": True}, {"unit": unit, "stand_in": False})
+            return True
+        return False
 
 
 def order_close(oid, status, by=None):
@@ -953,13 +968,23 @@ def orders(status=None, db=None):
     return [_order_out(db, r) for r in db.execute(f"SELECT * FROM order_ {q} ORDER BY created_at, CAST(substr(id,2) AS INTEGER)", args)]
 
 
+def order_sources(sources):
+    """The subset of `sources` an order already carries: what an import took, so what is left is not migrated."""
+    with read() as db:
+        if not order_ready(db):
+            raise NotMigrated(f"{path()}: orders are not set up: run {order_setup_command()}")
+        want = {fleet.mask(s) for s in sources}  # stored masked, as order_add stores them
+        return {s for (s,) in db.execute("SELECT source FROM order_ WHERE source IS NOT NULL") if s in want}
+
+
 def orders_unlinked(db):
-    """Open orders with no link, oldest first; None while the tables are not set up. The brief ages them."""
+    """Open orders no real unit carries (no link, or only stand-ins), oldest first; None while the tables are not set
+    up. The brief ages them."""
     if not order_ready(db):
         return None
     return [dict(r) for r in db.execute(
         "SELECT id, kind, created_at, text FROM order_ WHERE status='open' "
-        "AND NOT EXISTS (SELECT 1 FROM order_link WHERE order_id=order_.id) "
+        "AND NOT EXISTS (SELECT 1 FROM order_link WHERE order_id=order_.id AND resolves=1) "
         "ORDER BY created_at, CAST(substr(id,2) AS INTEGER)")]
 
 

@@ -157,6 +157,43 @@ assert not db.execute("SELECT 1 FROM order_ WHERE source LIKE '%ghp_%' OR text L
 assert not db.execute("SELECT 1 FROM event WHERE entity='order' AND after LIKE '%ghp_%'").fetchone()
 db.close()
 assert any(r["text"] == "나: 다른 곳의 첫째" for r in imported), imported
+# --check names what the original still holds that the table does not, and exits 1 while there is any.
+code, out, _ = orch("order", "import", str(src), "--check")
+assert code == 0 and out.endswith("0 not migrated of 3"), out
+src.write_text(src.read_text() + "3. 나중에 붙은 줄\n")
+code, out, _ = orch("order", "import", str(src), "--check")
+assert code == 1 and "unmigrated" in out and "나중에 붙은 줄" in out and out.endswith("1 not migrated of 4"), out
+before = src.read_text()
+ok("order", "import", str(src))
+assert src.read_text() == before, "the original is only read"
+assert orch("order", "import", str(src), "--check")[0] == 0
+
+# ---- a stand-in link (the temporary to-do an import replaced) shows but does not carry the order
+fb = next(r for r in json.loads(ok("order", "list", "--json")) if r["text"] == "나: 다른 곳의 첫째")
+backdate(fb["id"], 60)
+ok("board", "todo", "add", "임시 피드백 todo", "--who", "owner", "--due", "2099-01-01")
+tmp_b = json.loads(ok("board", "show"))["todo"][-1]["id"]
+assert ok("order", "link", fb["id"], "--unit", f"board:{tmp_b}", "--stand-in") == f"{fb['id']} linked board:{tmp_b} (stand-in)"
+row = next(r for r in json.loads(ok("order", "list", "--json")) if r["id"] == fb["id"])
+assert row["links"] == [f"board:{tmp_b}"] and row["stand_ins"] == [f"board:{tmp_b}"], row
+assert f"board:{tmp_b} (stand-in)" in ok("order", "list")
+loose = f"연결 없는 오너 지시 1 (가장 오래된 {fb['id']} "  # the only open order older than the grace
+assert any(f.startswith(loose) for f in facts()), facts()
+# Closing the stand-in does not turn into evidence: the order stays open and unlinked for the brief.
+ok("board", "done", tmp_b)
+assert any(f.startswith(loose) for f in facts()), facts()
+# A real link makes the same unit count.
+assert ok("order", "link", fb["id"], "--unit", f"board:{tmp_b}") == f"{fb['id']} linked board:{tmp_b}"
+row = next(r for r in json.loads(ok("order", "list", "--json")) if r["id"] == fb["id"])
+assert row["stand_ins"] == [] and row["links"] == [f"board:{tmp_b}"], row
+
+# ---- the places PR 5c reads exist and are empty
+db = sqlite3.connect(str(store.path()))
+cols = {r[1] for r in db.execute("PRAGMA table_info(order_)")}
+assert {"links_complete_at", "reopen_evidence"} <= cols, cols
+assert db.execute("SELECT count(*) FROM order_ WHERE links_complete_at IS NOT NULL OR reopen_evidence IS NOT NULL").fetchone()[0] == 0
+db.close()
+
 empty = tmp / "empty.md"
 empty.write_text("nothing numbered\n")
 assert "no numbered lines" in fails("order", "import", str(empty))

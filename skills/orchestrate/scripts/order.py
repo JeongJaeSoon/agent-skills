@@ -4,11 +4,16 @@ carries yet. A session that accepts an instruction as work writes it here before
 
   setup                                add the tables to agent-skills.db (a recorded step); a second run changes nothing
   add TEXT [--kind order|feedback] [--source S] [--owner-action]   prints the new id (oN)
-  link oN --unit card:<worktree>|agent:<id>|board:<bN>|decision:<dN>|pr:<owner/repo#number>
+  link oN --unit card:<worktree>|agent:<id>|board:<bN>|decision:<dN>|pr:<owner/repo#number> [--stand-in]
+                                       --stand-in: the unit only stands for the order (the temporary to-do an import
+                                       replaced). It is shown, but does not carry the order: the brief still counts it
+                                       as unlinked, and a closed stand-in is never evidence the order was done
   done oN | drop oN                    close it by hand; nothing closes one by itself yet
   list [--status open|done|dropped] [--json]
-  import FILE [--skip REGEX] [--dry-run]   numbered lines of a hand list (`## section` then `1. text`) become
-                                       kind=feedback rows, once each: a second run skips what it already took
+  import FILE [--skip REGEX] [--dry-run | --check]   numbered lines of a hand list (`## section` then `1. text`) become
+                                       kind=feedback rows, once each: the row keeps the line's key as its source, so a
+                                       second run skips what it already took. The file is only read.
+                                       --check lists the lines not taken yet and exits 1 while there are any
 """
 import hashlib, json, os, pathlib, re, sys
 
@@ -42,7 +47,7 @@ def parse_list(text, name):
 def cmd_import(rest):
     path = rest[0] if rest and not rest[0].startswith("--") else None
     if not path:
-        sys.exit("usage: orch order import FILE [--skip REGEX] [--dry-run]")
+        sys.exit("usage: orch order import FILE [--skip REGEX] [--dry-run | --check]")
     try:
         skip = re.compile(opt(rest, "--skip")) if opt(rest, "--skip") else None
     except re.error as e:
@@ -52,9 +57,14 @@ def cmd_import(rest):
     items = [(s, t) for s, t in parse_list(p.read_text(), name) if not (skip and skip.search(t))]
     if not items:
         sys.exit(f"{path}: no numbered lines to import")
-    if "--dry-run" in rest:
-        for s, t in items:
-            print(f"would add  {fleet.mask(s)}  {fleet.mask(t)[:100]}")
+    if "--dry-run" in rest or "--check" in rest:
+        taken = store.order_sources([s for s, _ in items])
+        left = [(s, t) for s, t in items if fleet.mask(s) not in taken]
+        for s, t in left:
+            print(f"{'unmigrated' if '--check' in rest else 'would add '}  {fleet.mask(s)}  {fleet.mask(t)[:100]}")
+        print(f"{len(left)} not migrated of {len(items)}")
+        if left and "--check" in rest:
+            sys.exit(1)  # the original still holds orders the table does not
         return
     added = 0
     for s, t in items:
@@ -72,6 +82,7 @@ def cmd_list(rest):
         return print(json.dumps(rows, ensure_ascii=False, indent=1))
     for o in rows:
         flags = f"{o['status']}{' owner' if o['owner_action'] else ''}"
+        o["links"] = [u + (" (stand-in)" if u in o["stand_ins"] else "") for u in o["links"]]
         print(f"{o['id']}  {o['created_at']}  {o['kind']}  {flags}  "
               f"{' '.join(o['links']) or 'no link'}  {o['text'].splitlines()[0][:100]}")
 
@@ -86,8 +97,9 @@ def main(argv):
             row, _ = store.order_add(oid, opt(rest, "--kind", "order"), opt(rest, "--source"), "--owner-action" in rest, _by())
             print(row["id"])
         elif sub == "link" and oid and opt(rest, "--unit"):
-            print(f"{oid} {'linked' if store.order_link(oid, opt(rest, '--unit'), _by()) else 'already linked'} "
-                  f"{opt(rest, '--unit')}")
+            stand_in = "--stand-in" in rest
+            print(f"{oid} {'linked' if store.order_link(oid, opt(rest, '--unit'), _by(), stand_in) else 'already linked'} "
+                  f"{opt(rest, '--unit')}{' (stand-in)' if stand_in else ''}")
         elif sub in ("done", "drop") and oid:
             r = store.order_close(oid, "done" if sub == "done" else "dropped", _by())
             print(f"{r['id']} {r['status']}")
