@@ -33,8 +33,8 @@ RULED_OUT_SENTENCE_RE = re.compile(r"(?:not|don't|do not|never)\b", re.I)
 SUGGEST = {"slash_only": ["rewrite-description"], "misses": ["rewrite-description"],
            "retire_candidate": ["merge", "retire"]}
 RETIRE_WINDOWS = 3  # long windows a skill must stay unused, counted from its last use or from when it was first seen
-# Skills whose normal rate is a few uses a quarter: program Close, setup and onboarding, incident response.
-RARE = {"agent-skills:measure-delivery", "agent-skills:create-verification-skill", "agent-skills:tune-automode"}
+# Skills whose normal rate is a few uses a quarter: setup and onboarding, incident response.
+RARE = {"agent-skills:create-verification-skill", "agent-skills:tune-automode"}
 RARE_CONFIG = "~/.config/agent-skills/skill-usage.json"  # {"rare": ["<skill>", ...]} for the user's own skills
 FINDINGS = ("signal", "land_failed", "main_red")  # plus a verdict whose result is not pass
 LOCK_STALE_HOURS = 4

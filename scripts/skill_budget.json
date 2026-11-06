@@ -2,9 +2,14 @@
   "approx": "chars-v1",
   "skills": {
     "architect": {
-      "skill_md_tokens": 1500,
+      "skill_md_tokens": 1493,
       "tokens": 69,
       "width": 239
+    },
+    "arena": {
+      "skill_md_tokens": 873,
+      "tokens": 55,
+      "width": 197
     },
     "blast-radius": {
       "skill_md_tokens": 886,
@@ -22,7 +27,7 @@
       "width": 299
     },
     "deliver-ticket": {
-      "skill_md_tokens": 4847,
+      "skill_md_tokens": 4844,
       "tokens": 122,
       "width": 377
     },
@@ -36,13 +41,8 @@
       "tokens": 114,
       "width": 368
     },
-    "fan-out": {
-      "skill_md_tokens": 268,
-      "tokens": 90,
-      "width": 303
-    },
     "figure-it-out": {
-      "skill_md_tokens": 1000,
+      "skill_md_tokens": 996,
       "tokens": 76,
       "width": 272
     },
@@ -70,11 +70,6 @@
       "skill_md_tokens": 1113,
       "tokens": 79,
       "width": 279
-    },
-    "measure-delivery": {
-      "skill_md_tokens": 1115,
-      "tokens": 69,
-      "width": 269
     },
     "orchestrate": {
       "skill_md_tokens": 11739,
@@ -107,9 +102,9 @@
       "width": 290
     },
     "reflect": {
-      "skill_md_tokens": 4752,
-      "tokens": 92,
-      "width": 318
+      "skill_md_tokens": 4919,
+      "tokens": 111,
+      "width": 384
     },
     "secure-fill": {
       "skill_md_tokens": 2928,
@@ -135,6 +130,11 @@
       "skill_md_tokens": 242,
       "tokens": 41,
       "width": 147
+    },
+    "swarm": {
+      "skill_md_tokens": 748,
+      "tokens": 57,
+      "width": 206
     },
     "tdd": {
       "skill_md_tokens": 729,
@@ -167,7 +167,7 @@
       "width": 242
     },
     "use-tracker": {
-      "skill_md_tokens": 2822,
+      "skill_md_tokens": 2823,
       "tokens": 64,
       "width": 243
     },
@@ -197,14 +197,14 @@
       "width": 207
     },
     "write-ticket": {
-      "skill_md_tokens": 1997,
+      "skill_md_tokens": 1998,
       "tokens": 62,
       "width": 219
     }
   },
   "totals": {
-    "always_tokens": 3255,
-    "always_width": 11672,
-    "skills_width": 10792
+    "always_tokens": 3227,
+    "always_width": 11569,
+    "skills_width": 10689
   }
 }
