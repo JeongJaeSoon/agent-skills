@@ -34,7 +34,7 @@ TIER_EVERY = {"hot": 90, "warm": 300, "cold": 900, "done": 86400}  # while no pa
                                                                    # every OPEN PR each PR tick (one query per 50)
 RATE_FLOOR = 300         # GraphQL points left below which only a forced PR tick runs, until the hour resets
 EVENTS_KEEP = 400
-ROTATE_BYTES = 5 * 1024 * 1024  # events.jsonl and pr-events.jsonl move to *.1 past this
+ROTATE_BYTES = 5 * 1024 * 1024  # events.jsonl moves to *.1 past this
 STICKY_TYPES = ("approval", "run_command", "login", "verify_failed", "question")
 SETTLED = ("completed", "failed", "abandoned")  # dispatch statuses whose worker has stopped
 AGENT_GONE_S = 600       # a session without an agent this long closes its turn items
@@ -303,10 +303,16 @@ def recent_runs(automation_id):
 def fetch_automations():
     """Orca's scheduled automations, each with its last runs newest first. Only Orca's scheduler is visible here: a
     session's own loop (CronCreate) or a launchd job leaves nothing to collect."""
+    import jobs  # here: jobs imports this module
+    try:
+        keys = {r["job_name"]: r["key"] for r in jobs.registry() if r["job_name"]}
+    except ImportError:  # an install without the repository's scripts/: no automation is the registry's
+        keys = {}
     out = []
     for a in orca("automations", "list").get("automations", []):
         runs = sorted(recent_runs(a["id"]), key=lambda r: r.get("runNumber") or 0, reverse=True)[:AUTOMATION_RECENT]
-        out.append({"id": a["id"], "name": mask(a.get("name"), 80), "rrule": a.get("rrule"), "timezone": a.get("timezone"),
+        # key: the registry name (scripts/automations.py), None for an Orca automation the registry does not list
+        out.append({"id": a["id"], "key": keys.get(a.get("name")), "name": mask(a.get("name"), 80), "rrule": a.get("rrule"), "timezone": a.get("timezone"),
                     "enabled": bool(a.get("enabled")), "next_run_at": ms_iso(a.get("nextRunAt")),
                     "last_run_at": ms_iso(a.get("lastRunAt")),
                     # The output can name people and channels: masked, first line only, never cut short.
@@ -2101,7 +2107,7 @@ class Fleet:
                     continue
                 cur = shape_pr(k.split("#")[0], pr, self.me)
                 prev = self.prs[k].get("detail")
-                # Events (the timeline, pr-events.jsonl) stay with the PRs a session owns.
+                # Events (the timeline) stay with the PRs a session owns.
                 for e in pr_events(prev, cur, self.me) if k in owner_of else ():
                     self.emit_pr_event(cur, e, sessions.get(owner_of.get(k)), now)
                 self.prs[k]["detail"], self.prs[k]["probe"] = cur, new_sig[k]
@@ -2125,15 +2131,13 @@ class Fleet:
                 owner, kind = term, "human_session"
             elif term:
                 owner, kind = term, "terminal"
-        row = {"v": 1, "id": digest(pr["key"], e["kind"], e["source"]), "at": iso(now), "repo": pr["repo"],
-               "pr": pr["number"], "kind": e["kind"], "url": e["url"], "owner": owner, "owner_kind": kind,
-               "actor": e.get("actor"), "checks": pr["ci"], "head": pr["head"]}
-        path = state_dir() / "pr-events.jsonl"
-        rotate(path)
-        append_line(path, row)
-        self.event({"at": row["at"], "kind": f"pr_{e['kind']}", "session": session and session["id"],
+        # pr-events.jsonl is no longer written (kept as an archive): this row carries what it did, so that a reader of
+        # PR events (references/top-level.md) finds id, owner, owner_kind, checks and head in events.jsonl.
+        self.event({"at": iso(now), "kind": f"pr_{e['kind']}", "session": session and session["id"],
                     "pr": pr["key"], "actor": e.get("actor"), "url": e["url"],
-                    "text": f"#{pr['number']} {pr['title'] or ''}" + (f" · {e['actor']}" if e.get("actor") else "")})
+                    "text": f"#{pr['number']} {pr['title'] or ''}" + (f" · {e['actor']}" if e.get("actor") else ""),
+                    "id": digest(pr["key"], e["kind"], e["source"]), "repo": pr["repo"], "number": pr["number"],
+                    "owner": owner, "owner_kind": kind, "checks": pr["ci"], "head": pr["head"]})
 
     def fetch_avatars(self, pr):
         d = state_dir() / "avatars"
@@ -2324,7 +2328,9 @@ class Fleet:
                             "text": f"{'reload_delivered' if h in terms else 'reload_dropped'}: {title}"})
         syncs = [i for i in syncs if i["type"] != "reload_pending" or RELOAD_FAILS.get(i["terminal"], 0) >= tries]
         mem["reload_shown"] = {i["terminal"]: i["title"] for i in syncs if i["type"] == "reload_pending"}
-        items += kept + syncs + watcher_items(sessions, now) + list(self.checks)
+        import store as db_store
+        pressure = pressure_items(db_store.ext_closures(), mem)
+        items += kept + pressure + syncs + watcher_items(sessions, now) + list(self.checks)
         for it in sticky.values():
             if it.get("open"):
                 items.append(it)
@@ -2356,7 +2362,8 @@ class Fleet:
         cutoff = iso(now - dt.timedelta(days=7))
         for k in [k for k, v in sticky.items() if not v.get("open") and (v.get("at") or "") < cutoff]:
             del sticky[k]
-        for k in [k for k, at in dismissed.items() if at < cutoff and k not in raw_keys]:
+        held = {f"ext:pressure:queue:{e['id']}" for e in pressure_entries()}  # hidden, so not in raw_keys, yet still to hide
+        for k in [k for k, at in dismissed.items() if at < cutoff and k not in raw_keys and k not in held]:
             del dismissed[k]
         panes = {a["pane"] or s["id"] for s in sessions.values() for a in s["agents"]}
         for store in (prompts, phases):
@@ -2493,12 +2500,123 @@ def ext_state(rows, closure):
     return add and {**add, "at": closure["ts"]}, False
 
 
+PATROL_NEEDS_YOU = {"X", "E", "L", "O"}  # the patrol codes that ask the human
+READ_FROM_SOURCE = ("patrol:", "pressure:queue:")  # keys read from patrol.jsonl and pressure-queue.json; old inbox lines of them are not shown
+PRESSURE_WAIT_PREFIX = "ext:pressure:wait:"  # + a short hash of the waiting ids the item counts
+PRESSURE_SET_KEEP_S = 7 * 86400  # how long a drawn set stays dismissable; a queue entry is kept as long
+PRESSURE_SCRIPT = pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts" / "pressure.py"
+# The copy button gets the list, never the held command: run from anywhere else it would skip its session's checks.
+PRESSURE_COPY = shlex.join(["python3", str(PRESSURE_SCRIPT), "queue"])
+
+
+def agent_state():
+    """The root patrol and pressure-watch write under (AGENT_SKILLS_STATE), beside the dashboard's own directory."""
+    return pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()
+
+
+def patrol_standing(rows):
+    """id -> finding row for each occurrence in patrol.jsonl's rows not yet cleared, acked ones with "acked" set."""
+    out = {}
+    for r in rows:
+        if r.get("op") == "found":
+            out[r["id"]] = r
+        elif r.get("op") in ("owner", "ack") and r["id"] in out:
+            out[r["id"]] = {**out[r["id"]], **({"owner": r.get("owner")} if r["op"] == "owner" else {"acked": True})}
+        elif r.get("op") == "clear":
+            out.pop(r["id"], None)
+    return out
+
+
+def patrol_items(closures):
+    """The open patrol findings that ask the human, read from patrol.jsonl as Needs you items. One key per occurrence
+    (`patrol:<id>:<detected_at>`), so a recurrence after a clear is a new item. A closure decides as for any ext: item:
+    done hides it, a reopen shows it from the reopen's time."""
+    rows = [r for r in read_lines(agent_state() / "patrol.jsonl") if isinstance(r, dict) and r.get("id")]
+    out = []
+    for i, f in patrol_standing(rows).items():
+        if f.get("acked") or f.get("code") not in PATROL_NEEDS_YOU:
+            continue
+        key, at = f"patrol:{i}:{f.get('detected_at')}", f.get("detected_at")
+        if (c := closures.get(key)):
+            if c["state"] == "done":
+                continue
+            at = c["ts"]
+        out.append({"key": f"ext:{key}", "type": "patrol", "session": f.get("session"),
+                    "title": mask(f"순찰 {f['code']} {f.get('card')}: {f.get('title')}", 200), "url": None,
+                    "command": f"orch patrol ack {i}", "at": at, "source": "patrol", "mark": None})
+    return out
+
+
+def pressure_entries():
+    """The whole entries of pressure-queue.json; a row that is not one costs only itself."""
+    q = read_json(agent_state() / "pressure-queue.json", {})
+    return [e for e in (q.values() if isinstance(q, dict) else ())
+            if isinstance(e, dict) and isinstance(e.get("id"), str) and isinstance(e.get("what"), str)]
+
+
+def pressure_items(closures, mem):
+    """Needs you from pressure-queue.json. A held command that waits or retries is the machine's to wait on, so all of
+    them are one item, "기계 대기 N건"; one that gave up or failed asks the human and is its own item. Suppressing
+    (a closure, or a dismissal on the page) is by queue id. The one item's key names the set of ids it counts, and
+    `mem["pressure_sets"]` remembers each set, so dismissing the item dismisses exactly those entries, whatever state
+    they are in by now; an entry that comes later makes a new set and shows. `mem` is the collector's memory dict,
+    changed in place for that."""
+    dismissed, entries = mem.setdefault("dismissed", {}), pressure_entries()
+    key = lambda e: f"pressure:queue:{e['id']}"
+    shut = lambda e: (closures.get(key(e)) or {}).get("state") == "done" or f"ext:{key(e)}" in dismissed
+    waiting = [e for e in entries if e.get("state") in ("waiting", "retrying") and not shut(e)]
+    sets, now = mem.setdefault("pressure_sets", {}), time.time()
+    for k in [k for k in dismissed if k.startswith(PRESSURE_WAIT_PREFIX)]:
+        at = dismissed.pop(k)
+        for qid in (sets.pop(k[len(PRESSURE_WAIT_PREFIX):], None) or {}).get("ids", ()):
+            dismissed[f"ext:pressure:queue:{qid}"] = at
+    waiting = [e for e in waiting if f"ext:{key(e)}" not in dismissed]
+    ids = sorted(e["id"] for e in waiting)
+    set_id = hashlib.sha1("\0".join(ids).encode()).hexdigest()[:8]
+    if ids:
+        sets[set_id] = {"ids": ids, "t": now}
+    for old in [h for h, s in sets.items() if now - s.get("t", 0) > PRESSURE_SET_KEEP_S]:  # a page left open this long is gone
+        del sets[old]
+    hhmm = lambda t: time.strftime("%H:%M", time.localtime(t)) if isinstance(t, (int, float)) else "?"
+    when = lambda t: iso(dt.datetime.fromtimestamp(t, dt.timezone.utc)) if isinstance(t, (int, float)) else None
+    out = []
+    for e in entries:
+        if e.get("state") not in ("gave_up", "failed") or shut(e):
+            continue
+        title = (f"{e['what']} 재시도 실패: {e.get('error') or '?'}" if e["state"] == "failed" else
+                 f"{e['what']} 포기: 기한 {hhmm(e.get('deadline'))}까지 PC 사용량 위험이 이어짐({e.get('why')})")
+        out.append({"key": f"ext:{key(e)}", "type": "pc_pressure", "session": None, "title": mask(f"[{e['id']}] {title}", 200),
+                    "url": None, "command": PRESSURE_COPY, "at": when(e.get("ended") or e.get("added")),
+                    "source": "pressure-watch"})
+    if waiting:
+        what = ", ".join(sorted({e["what"] for e in waiting}))
+        out.append({"key": PRESSURE_WAIT_PREFIX + set_id, "type": "pc_pressure", "session": None,
+                    "title": mask(f"기계 대기 {len(waiting)}건(PC 사용량 위험으로 멈춘 명령, 부하가 내려가면 요청한 세션이 다시 실행): {what}", 200),
+                    "url": None, "command": PRESSURE_COPY,
+                    "at": when(max(e.get("added") or 0 for e in waiting)), "source": "pressure-watch"})
+    return out
+
+
+def source_item_alive(key):
+    """Whether the source still holds the item of a READ_FROM_SOURCE key (without ext:), open or closed: a patrol
+    finding that is not acked or cleared, a queue entry still in pressure-queue.json. A closed one can be reopened only
+    while this holds."""
+    if key.startswith("pressure:queue:"):
+        q = read_json(agent_state() / "pressure-queue.json", {})
+        return isinstance(q, dict) and any(isinstance(e, dict) and e.get("id") == key[len("pressure:queue:"):] for e in q.values())
+    rows = [r for r in read_lines(agent_state() / "patrol.jsonl") if isinstance(r, dict) and r.get("id")]
+    return any(not f.get("acked") and f"patrol:{i}:{f.get('detected_at')}" == key for i, f in patrol_standing(rows).items())
+
+
 def external_marked(now=None, lost=None):
-    """external_items(), each with "mark", the last line of its key in this same read of the file. lost, a list, gets the
-    keys whose closure mark no line matches."""
+    """external_items(), each with "mark", the last line of its key in this same read of the file (None for a patrol
+    finding, which has no line). lost, a list, gets the keys whose closure mark no line matches."""
     import store as db_store
     closures, items = db_store.ext_closures(), []
+    items += patrol_items(closures)
     for key, rows in inbox_lines().items():
+        if str(key).startswith(READ_FROM_SOURCE):
+            continue
         row, gone = ext_state(rows, closures.get(key))
         if gone and lost is not None:
             lost.append(key)
@@ -2772,8 +2890,22 @@ def send(session_id, text, handle=None, sender=None):
             # This one reason means the line was typed and Enter pressed: a retry would send it twice.
             typed = ok or (reason or "").startswith("sent, but")
             code, out = 200, {"ok": ok, "reason": reason, "typed": typed, "fallback": None if typed else "copy"}
-    append_line(state_dir() / "sends.jsonl", {**row, **out, "code": code})
+    log_page_send(row, out, code, text)
     return code, out
+
+
+def log_page_send(row, out, code, text):
+    """A line the page typed into a session is an instruction, so it goes to the `orch sent` log (kind=dashboard), the one
+    record of what was sent. Every other attempt (refused, failed, a prompt answer, an open) is an action and stays in
+    sends.jsonl; so does a typed line the log could not take, so that it is not lost."""
+    if out.get("typed"):
+        import sent
+        try:
+            sent.add(row["session"], text, kind="dashboard", channel=row["handle"], sender="dashboard")
+            return
+        except OSError:
+            pass
+    append_line(state_dir() / "sends.jsonl", {**row, **out, "code": code})
 
 
 def session_terminal(s):
@@ -2915,6 +3047,29 @@ def inbox_resolve(key):
     row = {"v": 1, "op": "resolve", "key": key, "at": iso(utcnow())}
     append_line(state_dir() / "inbox-external.jsonl", row)
     return row
+
+
+def migrate_inputs(apply=False):
+    """Retire what the Inbox and Sent no longer read, and say what was (or, without apply, would be) done. Safe to run
+    again: each step finds nothing left once done. Nothing is deleted.
+    - inbox: a `resolve` line (reason migrated) after each still-open `add` of a patrol or pressure-queue key, which
+      the dashboard now reads from patrol.jsonl and pressure-queue.json.
+    - sends: the typed lines of sends.jsonl become `orch sent` rows (kind=dashboard); the file is kept read-only as
+      sends.archive.jsonl.
+    - pr-events: pr-events.jsonl and its .1 stay as read-only archives; nothing writes them any more."""
+    import sent
+    open_keys = [k for k, rows in inbox_lines().items()
+                 if str(k).startswith(READ_FROM_SOURCE) and rows[-1][0].get("op") == "add"]
+    if apply:
+        for k in open_keys:
+            append_line(state_dir() / "inbox-external.jsonl",
+                        {"v": 1, "op": "resolve", "key": k, "at": iso(utcnow()), "reason": "migrated"})
+    archives = [p for n in ("pr-events.jsonl", "pr-events.jsonl.1") if (p := state_dir() / n).is_file()
+                and p.stat().st_mode & 0o777 != 0o400]
+    if apply:
+        for p in archives:
+            os.chmod(p, 0o400)
+    return {"inbox_resolved": len(open_keys), "sends": sent.import_sends(apply), "archived": [p.name for p in archives]}
 
 
 # ------------------------------------------------------- decisions the orchestrator or lead waits on the human for

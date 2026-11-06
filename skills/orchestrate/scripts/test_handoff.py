@@ -174,6 +174,32 @@ for sid, rec in (("sid-lead", {"role": "lead", "slug": "app", "agent_type": "age
     assert got["show"] is False and got["ready"] is False, (sid, got)
 assert handoff.ready("sid-unknown", 400_000, False, peek=empty)["show"] is False
 
+# The verdict decides, not the context size: due at 40k shows (no floor), not due at 400k does not, and the reason is
+# reported. The saved handoff is the same as when the ceiling made it due.
+import compactions  # noqa: E402
+seen = []
+def verdict(session, context, policy):
+    seen.append((session, context))
+    return "3 auto-compactions"
+got = handoff.ready(S, 40_000, False, peek=empty, verdict=verdict, now=4_400_000_000)
+assert got["show"] and got["ready"] and got["due"] == "3 auto-compactions" and got["key"] == "orchestrator", got
+assert seen == [(S, 40_000)] and "threshold" not in got
+n = rows()
+got = handoff.ready(S, 400_000, False, peek=empty, verdict=lambda *a: "", now=4_500_000_000)
+assert got["show"] is False and got["due"] == "" and rows() == n, got
+assert handoff.ready("sid-lead", 40_000, False, peek=empty, verdict=verdict)["show"] is False and len(seen) == 1
+# The default verdict is compactions.due: with this config's ceiling (100k) and no transcript for the session.
+assert handoff.ready(S, 99_000, False, peek=empty)["show"] is False
+assert "ceiling 100k" in handoff.ready(S, 101_000, True, peek=empty)["due"]
+# auto_clear_on: the ceiling's switch, or the compaction rules' own.
+cfg = tmp / "agent-skills.json"
+for text, want in (('{"orchestrate": {"auto_clear": true}}', True), ('{"orchestrate": {}}', False),
+                   ('{"orchestrate": {"compact_restart": {"auto_clear": true}}}', True),
+                   ('{"orchestrate": {"compact_restart": false}}', False)):
+    cfg.write_text(text)
+    assert handoff.auto_clear_on() is want, text
+cfg.write_text('{"orchestrate": {"auto_clear": true, "restart_at": 100000}}')
+
 # key_for and save: a lead session saves under lead:<slug>; the orchestrator key and others' keys are refused.
 roles.record_terminal("term_lead", "sl", "/w", 1.0)
 roles.record_resolved("sl", {"role": "lead", "slug": "app", "agent_type": "agent-skills:lead", "title_slug": "app"})

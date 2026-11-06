@@ -7,6 +7,7 @@ import reboot  # noqa: E402
 import roles  # noqa: E402  on sys.path through reboot
 import fleet  # noqa: E402  the sessions Claude Code registers are read there
 os.environ["AGENT_SKILLS_STATE"] = tempfile.mkdtemp()  # the SessionStart record is read from here, never the real one
+os.environ["ORCH_FLEET_STATE"] = tempfile.mkdtemp()  # the handoff store too: a real handoff would add an inbox read
 import rowstate  # noqa: E402  on sys.path through reboot
 
 ROOT = "/work/app"
@@ -37,8 +38,11 @@ class Orca:
         self.live, self.run, self.workers, self.title, self.here = set(live), run, list(workers), title, list(here)
         self.runs, self.runs_fail, self.list_fails, self.truncated = list(runs), False, False, False
         self.concise = concise
+        self.status = {"app": {"running": True}, "runtime": {"state": "ready", "reachable": True, "appVersion": "1.4.247"}}
 
     def __call__(self, *argv):
+        if argv == ("status",):
+            return self.status
         if argv[:2] == ("terminal", "show"):
             h = argv[argv.index("--terminal") + 1]
             if h not in self.live:
@@ -183,6 +187,37 @@ class Handoff(unittest.TestCase):
         self.assertEqual(reboot.check_handoff("orchestrator", None, last=()), [("info", "no handoff recorded for orchestrator")])
 
 
+class Status(unittest.TestCase):
+    def test_first_line_is_orca_status(self):
+        lines = run()
+        self.assertEqual(lines[0], ("ok", "Orca 1.4.247 is ready"))
+
+    def test_orca_not_ready_stops_before_any_terminal_read(self):
+        orca = Orca()
+        orca.status = {"app": {"running": False}, "runtime": {"state": "stopped", "reachable": False}}
+        with self.assertRaises(reboot.OrcaError) as e:
+            run(orca=orca)
+        self.assertIn("app running: False", str(e.exception))
+
+    def test_not_ready_ends_the_cli_with_exit_2(self):
+        with tempfile.TemporaryDirectory() as d:
+            fake = pathlib.Path(d) / "orca"
+            fake.write_text("#!/bin/sh\necho '" + json.dumps({"ok": True, "result": {
+                "runtime": {"state": "starting", "reachable": False}}}) + "'\n")
+            fake.chmod(0o755)
+            with mock.patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": ME, "SKILLS_SYNC_ORCA": str(fake)}), \
+                    mock.patch("sys.stderr"):
+                self.assertEqual(reboot.main([]), 2)
+
+    def test_no_orca_terminal_reports_a_down_orca_without_exit_2(self):
+        def down(*argv):
+            raise reboot.OrcaError("no_answer", "orca not found")
+        lines = run(handle=None, orca=down)
+        self.assertEqual(lines[0][0], "info")
+        self.assertIn("not ready", lines[0][1])
+        self.assertFalse(does(lines))
+
+
 class Handle(unittest.TestCase):
     def test_stale_handle_names_the_live_terminals_of_this_worktree(self):
         here = [{"handle": "term_new", "title": "lead", "worktreePath": ROOT},
@@ -195,7 +230,7 @@ class Handle(unittest.TestCase):
 
     def test_no_orca_terminal_skips_orca_checks(self):
         lines = run(handle=None, orca=Orca(live=()))
-        self.assertEqual([k for k, _ in lines], ["info"])
+        self.assertEqual([k for k, _ in lines], ["ok", "info"])  # orca status, then the skip
 
     def test_orchestrator_tab_title(self):
         procs = wait_proc(200, "orch inbox --wait") + wait_proc(300, "orch watch-cards")
@@ -707,6 +742,58 @@ class Reload(unittest.TestCase):
             lines = run(reload_root=self.tmp / "plugin")
         self.assertFalse(does(lines))
         self.assertTrue(any("reload needed" in t for _, t in lines))
+
+
+class Sessions(unittest.TestCase):
+    def setUp(self):
+        self.root = pathlib.Path(tempfile.mkdtemp())
+        now = time.time()
+        for folder, cwd, sid, prompt, age in (
+                ("-work-app", "/work/app", "s-old", "old brief", 3600), ("-work-app", "/work/app", "s-new", "new brief", 60),
+                ("-work-app-2", "/work/app/2", "s-gone", "removed card", 120),
+                ("-work-app-x", "/work/app-x", "s-sibling", "a sibling, not below", 90),
+                ("-work-other", "/work/other", "s-else", "elsewhere", 30)):
+            d = self.root / folder
+            d.mkdir(exist_ok=True)
+            f = d / f"{sid}.jsonl"
+            f.write_text(json.dumps({"type": "mode"}) + "\n"
+                         + json.dumps({"type": "user", "isMeta": True, "cwd": cwd, "message": {"content": "meta"}}) + "\n"
+                         + json.dumps({"type": "user", "cwd": cwd,
+                                       "message": {"content": [{"type": "text", "text": prompt}]}}) + "\n")
+            os.utime(f, (now - age, now - age))
+        (self.root / "-work-app" / "s-new").mkdir()
+        (self.root / "-work-app" / "s-new" / "agent-1.jsonl").write_text("{}\n")  # a subagent's, not a session
+
+    def test_newest_first_with_first_prompt_and_only_this_path(self):
+        rows = reboot.sessions(["/work/app"], root=self.root)
+        self.assertEqual([(sid, prompt) for _, sid, _, prompt in rows], [("s-new", "new brief"), ("s-old", "old brief")])
+
+    def test_under_adds_the_paths_below_but_not_a_sibling(self):
+        rows = reboot.sessions(["/work/app/"], under=True, root=self.root)
+        self.assertEqual([sid for _, sid, _, _ in rows], ["s-new", "s-gone", "s-old"])  # /work/app-x is not below
+
+    def test_an_exact_folder_of_another_path_is_left_out(self):
+        (self.root / "-work-app" / "s-new.jsonl").write_text(json.dumps({"type": "user", "cwd": "/work/app.", "message": {
+            "content": "same folder name, another path"}}) + "\n")
+        self.assertEqual([r[1] for r in reboot.sessions(["/work/app"], root=self.root)], ["s-old"])
+
+    def test_since_and_limit(self):
+        self.assertEqual([r[1] for r in reboot.sessions(["/work/app"], since=time.time() - 600, root=self.root)], ["s-new"])
+        self.assertEqual([r[1] for r in reboot.sessions(["/work/app"], limit=1, root=self.root)], ["s-new"])
+
+    def test_no_limit_lists_every_session(self):
+        for i in range(25):
+            (self.root / "-work-app" / f"s-{i}.jsonl").write_text(json.dumps({"type": "user", "cwd": "/work/app"}) + "\n")
+        self.assertEqual(len(reboot.sessions(["/work/app"], root=self.root)), 27)
+
+    def test_cli_exit_says_whether_any_was_found(self):
+        with mock.patch.dict(os.environ, {"CLAUDE_PROJECTS_DIR": str(self.root)}), mock.patch("sys.stdout"), \
+                mock.patch("sys.stderr"):
+            self.assertEqual(reboot.main(["sessions", "/work/app", "--limit", "1"]), 0)
+            self.assertEqual(reboot.main(["sessions", "/work/none"]), 1)
+            self.assertEqual(reboot.main(["sessions"]), 2)
+            self.assertEqual(reboot.main(["sessions", "/work/app", "--limit", "0"]), 2)
+            self.assertEqual(reboot.main(["sessions", "/work/app", "--since", "yesterday"]), 2)
 
 
 class Cli(unittest.TestCase):
