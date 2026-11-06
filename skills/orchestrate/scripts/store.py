@@ -92,6 +92,9 @@ LANES = {"todo": ("todo", "do"), "later": ("held", "later"), "doing": ("doing", 
 OPEN = ("todo", "doing", "held")
 OPEN_SQL = "('todo','doing','held')"
 GROUP_KIND, GROUP_POS = "group", 1_000_000  # a priority rule is a board_row of this kind, listed after every row
+# A card annotation (board.annot_set) is a board_row of this kind with the id card:<worktree>. Like a rule it is kept out of
+# board["rows"], so no report, tidy or count sees it until the renderer reads board["annots"].
+ANNOT_KIND, ANNOT_POS = "annot", 2_000_000
 GROUP_MATCH = re.compile(r"(?:worktree|program):\S.*|repo:[\w.-]+/[\w.-]+")  # what board.match_of() lets in
 GROUP_PRIORITY = re.compile(r"\d{1,3}:(?!.* — )\S.*")  # RANK:NAME, as board.priority_of() writes it
 ITEM_COLS = ("who", "title", "next", "waiting", "waiting_since", "trig", "due", "after_ref")
@@ -453,13 +456,16 @@ def _insert_lead(db, name, lead):
 
 def _board(db):
     """The open board in the shape board.json had: rows, order, leads and the four lanes, each item with its id."""
-    out = {"v": 1, "rows": {}, "order": [], "leads": {}, "groups": {}, **{lane: [] for lane in LANES}}
+    out = {"v": 1, "rows": {}, "order": [], "leads": {}, "groups": {}, "annots": {}, **{lane: [] for lane in LANES}}
     for r in db.execute(f"SELECT * FROM item WHERE status IN {OPEN_SQL} ORDER BY lane, pos, CAST(substr(id, 2) AS INTEGER)"):
         out[r["lane"]].append(_item(r))
     for r in db.execute("SELECT * FROM board_row ORDER BY pos, id"):
         row = _row_out(r)
         if row.get("kind") == GROUP_KIND:  # a priority rule (board.priority_set), not a row: no report, tidy or count sees it
             out["groups"][r["id"]] = row
+            continue
+        if row.get("kind") == ANNOT_KIND:  # a card annotation (board.annot_set): the same
+            out["annots"][r["id"]] = row
             continue
         out["rows"][r["id"]] = row
         out["order"].append(r["id"])
@@ -482,7 +488,6 @@ def _put_items(db, old, new, by, ts):
     for lane in LANES:
         kept = []
         for pos, d in enumerate(new[lane]):
-            forced = d.pop("forced", None)
             iid = d.get("id")
             if iid in seen or iid and iid not in known:
                 raise ValueError(f"{iid} is listed twice or is not an open item")
@@ -490,7 +495,7 @@ def _put_items(db, old, new, by, ts):
                 iid = d["id"] = _next_b(db)
                 cols = _item_cols(lane, d)
                 _insert_item(db, iid, lane, LANES[lane][0], pos, cols, d.get("added") or ts, ts)
-                _event(db, "item", iid, "add", by, None, {**d, "lane": lane, **({"forced": forced} if forced else {})})
+                _event(db, "item", iid, "add", by, None, {**d, "lane": lane})
                 continue
             seen.add(iid)
             kept.append(iid)
@@ -545,6 +550,28 @@ def _put_groups(db, old, new, by):
         _event(db, "board_row", rid, "drop", by, old["groups"][rid])
 
 
+def _put_annots(db, old, new, by):
+    """The card annotations: board_row rows of kind annot, positioned after the rules. An annotation with no field left
+    is deleted with its last value in the event."""
+    for n, (rid, row) in enumerate(sorted(new["annots"].items())):
+        if rid not in old["annots"]:
+            _insert_row(db, row, ANNOT_POS + n)
+            _event(db, "board_row", rid, "add", by, None, row)
+        elif row != old["annots"][rid]:
+            db.execute("UPDATE board_row SET data=? WHERE id=?", (_row_data(row), rid))
+            _event(db, "board_row", rid, "update", by, old["annots"][rid], row)
+    for rid in set(old["annots"]) - set(new["annots"]):
+        db.execute("DELETE FROM board_row WHERE id=?", (rid,))
+        _event(db, "board_row", rid, "drop", by, old["annots"][rid])
+
+
+def row_origins():
+    """{row id: the row as the import event kept it}: the original worktree and PR of a row the import cut."""
+    with read() as c:
+        return {r["id"]: json.loads(r["before"]) for r in
+                c.execute("SELECT id, before FROM event WHERE entity='board_row' AND ev='import' AND before IS NOT NULL ORDER BY seq")}
+
+
 def _put_leads(db, old, new, by):
     for name, lead in new["leads"].items():
         if name not in old["leads"]:
@@ -567,6 +594,7 @@ def change_board(fn, by=None):
         _put_items(db, old, new, by, ts)
         _put_rows(db, old, new, by)
         _put_groups(db, old, new, by)
+        _put_annots(db, old, new, by)
         _put_leads(db, old, new, by)
         return out
 
@@ -593,6 +621,11 @@ def latest(db=None):
             done = r["state"] == "done"
             out[r["unit"]] = {"ev": r["state"], "id": r["unit"], "ts": r["ts"], "by": r["by"], "rule": r["rule"],
                               "label": r["label"], "evidence": r["evidence"] if done else r["undone_evidence"]}
+        # row:<id> is an alias of the card an annotation took the row's place in: a close of the old row is the card's.
+        for r in c.execute("SELECT id, data FROM board_row WHERE id LIKE 'card:%'"):
+            for old in json.loads(r["data"]).get("aliases") or ():
+                if old in out and r["id"] not in out:
+                    out[r["id"]] = {**out[old], "id": r["id"]}
         return out
     if db is not None:
         return run(db)

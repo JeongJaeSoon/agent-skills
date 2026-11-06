@@ -167,7 +167,14 @@ Usage: orch <command> <slug> [options]
                                      link the row to it by that id, which a terminal restart does not change.
                                      A row linked to a card takes neither --pr nor another --worktree: Orca
                                      knows them. lead add refuses a lead Orca knows; board set links a row
-  board drop <id> | doing add <title> --owner W --next E [--waiting] [--force --why T] [--order oN] | doing drop <n>
+  board set card:<worktree> [--phase TEXT] [--progress N/M] [--after owner/repo#N] [--owner WHO --next TEXT] | annot-migrate [--apply]
+                                     A card's annotation: what Orca, GitHub and the card's report do not
+                                     know. A new row for a card is refused; `-` clears a field. --owner
+                                     with --next is the owner block (what the owner does); --next alone is
+                                     a step after merge. annot-migrate moves card-linked rows into their
+                                     card's annotation (dry run unless --apply) and lists the rest as
+                                     중복 N건 with a command each.
+  board drop <id> | doing add <title> --owner W --next E [--waiting] [--order oN] | doing drop <n>
         | later add <title> --trigger T [--due D] [--who W] [--at N] [--order oN] | later move <n> --to N | later drop <n>
         | todo add <title> (--due D | --after C) --who W [--order oN] | todo drop <n> | todo from-later <n> [--due D] --who W
           --order oN (on the three adds): the new item carries the owner's order oN (orch order); an unknown or closed
@@ -3951,7 +3958,16 @@ def cmd_board(argv):
         elif sub == "set" and rid:
             board.set_row(rid, **{f: opt(rest, f"--{f}") for f in
                                   ("kind", "title", "repo", "program", "parent", "status", "progress", "next", "owner", "pr", "worktree",
-                                   "after", "priority")})
+                                   "after", "priority", "phase")})
+        elif sub == "annot-migrate":
+            move, left = board.annot_migrate("--apply" in rest)
+            print(f"{'moved' if '--apply' in rest else 'would move'} {len(move)} row(s) into card annotations"
+                  + ("" if "--apply" in rest else "  (dry run; --apply writes)"))
+            for wt, (row, fields) in move.items():
+                print(f"  row:{row} -> card:{wt}  " + (" ".join(f"{k}={v}" for k, v in fields.items()) or "(no field to carry)"))
+            print(f"중복 {len(left)}건" + (": 옮기지 않았다. 처리 명령을 쓴 뒤 다시 돌린다" if left else ""))
+            for row, why, cmd in left:
+                print(f"  row:{row}  {why}  → {cmd}")
         elif sub == "drop" and rid:
             board.drop(rid)
         elif sub == "priority" and rest[:1] == ["set"] and len(rest) == 3:
@@ -3962,8 +3978,10 @@ def cmd_board(argv):
             for g in sorted(board.read()["groups"].values(), key=lambda g: (g["priority"].split(":", 1)[0].zfill(3), g["match"])):
                 print(f"{g['match']}  {g['priority']}")
         elif sub == "doing" and rest[:1] == ["add"] and len(rest) > 1:
+            if "--force" in rest:
+                sys.exit("board doing add has no --force: reword a title that only shares a name with live work")
             say_linked(opt(rest, "--order"), board.doing_add(rest[1], opt(rest, "--owner"), opt(rest, "--next"), "--waiting" in rest,
-                                                              "--force" in rest, opt(rest, "--why"), opt(rest, "--order")))
+                                                              opt(rest, "--order")))
         elif sub == "doing" and rest[:1] == ["drop"] and len(rest) > 1:
             board.doing_drop(int(rest[1]))
         elif sub == "later" and rest[:1] == ["add"] and len(rest) > 1:
@@ -4029,7 +4047,7 @@ def cmd_board(argv):
         else:
             sys.exit("usage: orch board lead add <name> --handle H --repo R [--program P] [--run RUN] [--stale-min N] [--worktree ID] | "
                      "lead close <name> | set <id> [--kind K] [--title T] [--repo R] [--program P] [--parent ID] [--status S] "
-                     "[--progress N/M] [--next T] [--owner W|-] [--after owner/repo#N|-] [--pr owner/repo#N] [--worktree ID] [--priority RANK:NAME|-] | drop <id> | priority set|drop|list | doing add <title> --owner W --next E [--waiting] [--force --why T] [--order oN] | doing drop <n> | later add <title> --trigger T [--due D] [--order oN] | "
+                     "[--progress N/M] [--next T] [--owner W|-] [--after owner/repo#N|-] [--pr owner/repo#N] [--worktree ID] [--priority RANK:NAME|-] | drop <id> | priority set|drop|list | set card:<worktree> [--phase P] [--progress N/M] [--after PR] [--owner W --next T] | annot-migrate [--apply] | doing add <title> --owner W --next E [--waiting] [--order oN] | doing drop <n> | later add <title> --trigger T [--due D] [--order oN] | "
                      "later drop <n> | todo add <title> (--due D | --after C) --who W [--order oN] | todo drop <n> | todo from-later <n> [--due D] --who W | "
                      "now [LINE]... | show | open [--json] | done <id>... [--why T] [--json] | reopen <id>... [--json] | "
                      "tidy [--dry-run] [--json] | closed")

@@ -86,8 +86,10 @@
 - doing・保留・やること・いまのリストの項目には、それぞれ安定した id `b<N>` が付きます。言い回しを変えてもリストを移っても変わらず、ほかの仕事に再び使われることはありません。古い `doing:`・`later:`・`do:`・`todo:` の id は、import のときに指していた項目を引き続き指します。
 - リストから外した項目は行が `dropped` として残り、最後の値は `event` に残ります。
 - `board.prev.json` と `tidy.jsonl.1` はなくなります。変更前後の値は `event` にあり、二つのファイルは import がバックアップへ移します。
-- 生きているカードや subagent を指すタイトルの `orch board doing add` は拒否します。それらには自分の行があるからです。`--force --why <理由>` を付けると追加し、理由をイベントに残します。
-- カードにつながった行への `orch board set --pr` と、別のカードを指す `--worktree` は拒否します。行はつながりを保ち、Orca の PR を表示します。つながっていない行は `--worktree` で一度だけつなげます。
+- 生きているカードや subagent を指すタイトルの `orch board doing add` は拒否します。それらには自分の行があるからです。回避フラグはありません。オーケストレーター自身の次の行動は `orch board todo add`、カードがやることはカードへのメッセージ、名前が重なるだけの別の仕事はタイトルを変えて書き直します。
+- カードにつながった行への `orch board set --pr` と、別のカードを指す `--worktree` は拒否します。行はつながりを保ち、Orca の PR を表示します。
+- カードにつながる新しい行（`--worktree` で、または id・タイトルに含まれる名前で）は拒否します。カードについて Orca が知らないことはカード注釈に書きます: `orch board set card:<worktree> [--phase P] [--progress N/M] [--after owner/repo#N] [--owner W --next T]`。ほかの項目は拒否します。`--owner` と `--next` はオーナー待ちの記録、`--next` だけならマージ後の段階（リリース・デプロイ）、`-` は項目を空にします。注釈は id が `card:<worktree>` で、タイトル・PR・worktree を持たない `board_row` の行です。ブリーフにはまだ表示されません。
+- `orch board annot-migrate` は既存のカードにつながった行を注釈へ移します（`--apply` がなければ試行のみ）。import が残した worktree、行が持つ worktree、id・タイトルの名前が、Orca が表示するカードちょうど一つを指すときに移します。元の行は `dropped` になり（元の値は `event` に残ります）、`row:<id>` は `card:<worktree>` の別名になって、古い「閉じた」記録が引き継がれます。指すカードがない行、二つを指す行、ほかの行とカードを共有する行はそのまま残り、対処コマンドとともに `중복 N건` に出ます。再実行しても安全です。ブリーフが注釈を読むようになるまで `--apply` は拒否します。
 - Orca が知っているリードへの `orch board lead add` は拒否します。行をつなぐには `orch board set <lead> --kind lead --repo <repo> --worktree <worktree>` を使います。Orca から見えないリードには、これまでどおり `lead add` を使います。
 - 受信箱の項目を閉じても `inbox-external.jsonl` には書きません。閉じた記録が見ていた行を覚えているので、そのキーの新しい行ができればその行が決め、開き直すのに新しい行は要りません。ファイルが書き直されてその行がなくなると、最後の行が決め、ブリーフの headline に `인박스 기록 어긋남` が出ます。
 - `orch db import` の前は、board のコマンドが `orch db migrate`（メインチェックアウトの絶対パス）を案内して止まり、`orch board open` も同じ行を stderr に出し、ブリーフの headline に `이행 대기: 보드·결정 DB` が出て、行はすべて ❔ になります。

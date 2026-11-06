@@ -86,8 +86,10 @@
 - doing·보류·할 일·지금 목록의 항목마다 안정 id `b<N>`이 붙는다. 문구를 고치거나 목록을 옮겨도 그대로이고, 다른 일에 다시 쓰이지 않는다. 옛 `doing:`·`later:`·`do:`·`todo:` id는 import 때 가리키던 항목을 계속 찾는다.
 - 목록에서 뺀 항목은 행이 `dropped`로 남고, 마지막 값은 `event`에 있다.
 - `board.prev.json`과 `tidy.jsonl.1`은 없어진다. 바뀌기 전후 값은 `event`에 있고, 두 파일은 import가 백업으로 옮긴다.
-- 살아 있는 카드나 subagent를 가리키는 제목의 `orch board doing add`는 거부한다. 그것들은 자기 행이 있기 때문이다. `--force --why <이유>`를 주면 추가하고 이유를 이벤트에 남긴다.
-- 카드에 이어진 행의 `orch board set --pr`와 다른 카드를 가리키는 `--worktree`는 거부한다. 행은 링크를 유지하고 Orca의 PR을 보여 준다. 이어지지 않은 행은 `--worktree`로 한 번 이을 수 있다.
+- 살아 있는 카드나 subagent를 가리키는 제목의 `orch board doing add`는 거부한다. 그것들은 자기 행이 있기 때문이다. 우회 플래그는 없다. 오케스트레이터 자신의 다음 행동은 `orch board todo add`, 카드가 할 일은 카드에 보내는 메시지, 이름만 겹치는 다른 일은 제목을 바꿔 다시 적는다.
+- 카드에 이어진 행의 `orch board set --pr`와 다른 카드를 가리키는 `--worktree`는 거부한다. 행은 링크를 유지하고 Orca의 PR을 보여 준다.
+- 카드와 이어지는 새 행(`--worktree`로, 또는 id·제목에 든 이름으로)은 거부한다. 카드에 대해 Orca가 모르는 사실은 카드 주석에 적는다: `orch board set card:<worktree> [--phase P] [--progress N/M] [--after owner/repo#N] [--owner W --next T]`. 다른 칸은 거부한다. `--owner`와 `--next`는 오너 차단 기록이고, `--next`만 쓰면 머지 뒤 단계(릴리스·배포)이며, `-`는 칸을 비운다. 주석은 id가 `card:<worktree>`이고 제목·PR·worktree가 없는 `board_row` 행이다. brief는 아직 보이지 않는다.
+- `orch board annot-migrate`는 기존 카드 연결 행을 주석으로 옮긴다(`--apply`가 없으면 시험 실행). import가 남긴 worktree, 행이 가진 worktree, id·제목의 이름이 Orca가 보여 주는 카드 하나만 가리키면 옮긴다. 원래 행은 `dropped`가 되고(원형은 `event`에 남는다) `row:<id>`는 `card:<worktree>`의 별칭이 되어 옛 닫힘이 이어진다. 가리키는 카드가 없거나 둘이거나 다른 행과 카드를 나눠 쓰는 행은 그대로 두고 처리 명령과 함께 `중복 N건`으로 보인다. 다시 돌려도 안전하다. brief가 주석을 읽기 전에는 `--apply`를 거부한다.
 - Orca가 아는 리드의 `orch board lead add`는 거부한다. 행을 이으려면 `orch board set <lead> --kind lead --repo <repo> --worktree <worktree>`를 쓴다. Orca가 못 보는 리드에는 `lead add`를 그대로 쓴다.
 - 인박스 항목을 닫아도 `inbox-external.jsonl`에 쓰지 않는다. 닫기 기록이 본 줄을 적어 두므로 그 키의 새 줄이 생기면 그 줄이 결정하고, 다시 열 때 새 줄이 필요 없다. 파일이 다시 쓰여 그 줄이 없어지면 마지막 줄이 결정하고 brief headline에 `인박스 기록 어긋남`이 보인다.
 - `orch db import` 전에는 보드 명령이 `orch db migrate`(메인 체크아웃 절대 경로)를 안내하고 멈추며, `orch board open`도 같은 줄을 stderr에 보이고, brief headline에 `이행 대기: 보드·결정 DB`가 보이고 행은 모두 ❔로 나온다.
