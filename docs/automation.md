@@ -151,7 +151,7 @@ precheck 안에서 작업을 직접 하고 항상 exit 1로 끝나므로(`script
 identity만, 대상 잠금 안에서 guard 재확인)로 정리한다. 이 명령은 위의 공용 실행기 `orca_job.py run janitor -- …` 안에서
 돌아 그 결과(exit 0, 돌지 못한 회차는 2)가 `jobs/janitor.json`에 남고, 실행기가 늘 exit 1로 끝나서 Orca가 에이전트를 띄우지
 않는다(실행 기록은 `skipped_precheck`). 480초 뒤에는 새 대상을 시작하지 않고, 570초가 되면 진행 중인 대상을 끊어 실패로
-기록한다(실행기의 시간 제한 580초, precheck 600초보다 앞). 실제로 한 일은 `<state>/janitor-runs.jsonl`에 회차마다 한 줄 남는다. 실패한 대상은 그 대상만 하루
+기록한다(실행기의 시간 제한 580초, precheck 600초보다 앞). 실제로 한 일은 실행된 회차마다 `<state>/janitor-runs.jsonl`에 요약 한 줄이 남는다(잠금이 잡혀 있거나 부하 조건이 맞지 않으면 남지 않고, 기록 중 중단이 도착하면 고친 줄이 하나 더 붙을 수 있다). 실패한 대상은 그 대상만 하루
 쉬고(`janitor-fails.json`), chrome-window는 브라우저에서 URL을 확인해야 하므로 손대지 않는다. 사람 결정 카드, chrome-window,
 쉬는 대상은 `reap.inbox_to`로 한 통에 묶어 보내고, 지난번에 보낸 목록에 없던 것이 생겼을 때만 다시 보낸다. 도구는 영구 삭제도
 휴지통 비우기도 하지 않지만, OS 설정(Finder의 "30일 후 휴지통에서 항목 제거")이 켜져 있으면 휴지통으로 옮긴 것은
