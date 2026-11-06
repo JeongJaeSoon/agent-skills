@@ -147,7 +147,7 @@ LAND        After review, record the verdict on the reviewed head: orch verdict 
             wakes you, so end your turn to wait; never a sleep loop over its output file). Act on
             exit 3, report on exit 1. Pending checks are waited on the same way, or with a
             `Monitor` until-loop on `gh pr checks` (deliver-ticket review-loop). A run watched
-            by id is `gh run watch <run-id> --interval 30`, in the background like the wait above:
+            by id is `gh run watch <run-id> --interval 60`, one watcher per run, in the background:
             the default interval spends GitHub's core limit. A finished watch is not the result;
             read `gh pr checks` after it.
             A wait on a human review or another outside event reads the PR at most once every

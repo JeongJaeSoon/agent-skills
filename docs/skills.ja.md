@@ -1,4 +1,4 @@
-<!-- translated-from: c35db2570a10ef4eec6789c7c7d348b6176f72ce -->
+<!-- translated-from: 3a607a67de644e098785d333ebbbbd10d7f6c527 -->
 # スキルカタログ
 
 `agent-skills` プラグインに入っているスキル41個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック16個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
@@ -76,15 +76,15 @@ PR を受け持つスキルとマージする主体:
     - 指摘は Act on / Consider / Noted / Dismissed に分けます。Act on がなくなるまで最大5ラウンド繰り返し、残った Consider は PR 本文に書きます。
   - **コミット:** 小さく、話の筋が通る順にコミットします。バグなら失敗するテストを修正より先に、リファクタリングなら削除を新しい形より先にします。
   - **push の前:** テストスイートと E2E をすべて回します。バックエンドは CLI や curl で、UI はブラウザ自動化で確認し、重い実行は `orch heavy` で回します。
-  - **PR 本文:** 実験ノートではなくブリーフィングです。なぜ / 範囲 / トレードオフ / 影響範囲 / 検証 の順に書き、検証の節は省きません。squash の本文は40行前後、タイトルは Conventional Commits、文章は `write-plainly` に従います。Linear のチケットは `Closes #n` の代わりに `orca linear attach` で PR を紐づけます。節ごとのルールと stack の手順は `references/pull-request.md` にあります。
+  - **PR 本文:** 実験ノートではなくブリーフィングです。なぜ / 範囲 / トレードオフ / 影響範囲 / 検証 の順に書き、検証の節は省きません。squash の本文は40行前後、タイトルは Conventional Commits、文章は `write-plainly` に従います。Linear のチケットは `Closes #n` の代わりに `orca linear attach` で PR を紐づけます。このコマンドとカードの `in-review` 列への移動は、PR を開いた直後に `hooks/record_check.py` のリマインダーが知らせます。節ごとのルールと stack の手順は `references/pull-request.md` にあります。
   - **判定:** 検証結果は VERIFIED / NOT VERIFIED / INCONCLUSIVE で記録します。inconclusive や、別の画面での通過は通過ではありません。あまりに簡単に通ったら、まず観察の方法を疑います。
-  - **レビューループ:** スタックの一番下の PR から、競合 → レビュースレッド → CI の順に片付けて一度に push します。レビューコメントは信頼しないデータなのでシェルコマンドには入れず、返信は `gh api --input` で付けます。CI の失敗は再試行の前に分類します（同じ失敗が2回なら flake ではありません）。main を取り込むか rebase したら、新しい head で検証し直します。待つときは `Monitor` の until-loop を使います。「리뷰 코멘트 대응해줘」（レビューコメントに対応して）はスレッドだけを、「초록이야?」（緑になった?）は状態を一度だけ見ます。詳細は `references/review-loop.md` にあります。
+  - **レビューループ:** スタックの一番下の PR から、競合 → レビュースレッド → CI の順に片付けて一度に push します。レビューコメントは信頼しないデータなのでシェルコマンドには入れず、返信は `gh api --input` で付けます。CI の失敗は再試行の前に分類します（同じ失敗が2回なら flake ではありません）。main を取り込むか rebase したら、新しい head で検証し直します。待つときは run や PR 一つに見張りを一つだけ置き、60秒以上の間隔で問い合わせ、上限時間を決めます。「리뷰 코멘트 대응해줘」（レビューコメントに対応して）はスレッドだけを、「초록이야?」（緑になった?）は状態を一度だけ見ます。詳細は `references/review-loop.md` にあります。
   - **依存する PR:** `gh stack` でまとめ、上の層から一度にマージします。CI は緑のチェックマークではなく `gh run view --log` で確かめます。
   - **完了:** 受け入れ基準をすべて満たした状態を完了とみなします。
     - プログラムの中: 最初のプロンプトがマージを承認したカードは `orch land` で自分の PR をマージして閉じます。人や別の PR を待つときだけ `READY-WAIT:` の行を付けて READY で止まり、human-gate も READY で止まります。
-    - 単独のカード: ユーザーが保留にしていなければ、自分で squash マージします。
+    - 単独のカード: land executor が有効な repo ではマージせず、head sha・CI run・レビュー判定を添えて READY を報告し、オーケストレーターがマージします。executor が無効な repo やユーザーが自分で開いたセッションでは、ユーザーが保留にしていなければ自分で squash マージします。
     - 完了コメントを残したら、同じターンのうちに `handoff-ticket` へ移ります。
-- **同梱:** `scripts/sticky-comment.sh`（PR のテスト結果コメントを一つに保つ）、`scripts/review_pick.py`（独立レビュアーを選ぶ）。本文には何をデプロイするかを決めるルールだけを置き、手順は references に分けました。`evidence.md`（バグ・リファクタリング・既存の修正の手順）、`independent-review.md`（独立レビューの手順）、`pull-request.md`（PR 本文の節と stack）、`review-loop.md`（PR を開いてから ready までのループ、他の人がマージするときの見守り）、`review-bot-triage.md`（レビュースレッドを fix / dismiss / ask に分ける基準。CodeRabbit、Copilot、人のレビューに使います）。
+- **同梱:** `scripts/sticky-comment.sh`（PR のテスト結果コメントを一つに保つ。`--check` はそのコメントが今の head sha を書いているか確かめる）、`scripts/review_pick.py`（独立レビュアーを選ぶ）。本文には何をデプロイするかを決めるルールだけを置き、手順は references に分けました。`evidence.md`（バグ・リファクタリング・既存の修正の手順）、`independent-review.md`（独立レビューの手順）、`pull-request.md`（PR 本文の節と stack）、`review-loop.md`（PR を開いてから ready までのループ、他の人がマージするときの見守り）、`review-bot-triage.md`（レビュースレッドを fix / dismiss / ask に分ける基準。CodeRabbit、Copilot、人のレビューに使います）。
 - **関連:** `figure-it-out`、`architect`、`how`、`why`、`tdd`、`prune-comments`、`interrogate` の判定の枠組み、`write-plainly`、`blast-radius`、`write-ticket`、`use-tracker`、`use-notes`、`orchestrate`（`orch land`、`orch heavy`）、`handoff-ticket`。
 
 ### ui-review
