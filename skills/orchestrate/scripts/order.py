@@ -33,7 +33,9 @@ def parse_list(text, name):
         if m := re.match(r"#{1,3}\s+(.+?)\s*$", line):
             section = m.group(1)
         elif m := re.match(r"(\d+)\.\s+(.+?)\s*$", line):
-            out.append((f"import:{name}:{section}#{m.group(1)}", f"{section}: {m.group(2)}" if section else m.group(2)))
+            # The key holds a hash of the heading, not its words: masking a heading must not eat the number after it.
+            tag = hashlib.sha1(section.encode()).hexdigest()[:6]
+            out.append((f"import:{name}:{tag}#{m.group(1)}", f"{section}: {m.group(2)}" if section else m.group(2)))
     return out
 
 
@@ -41,7 +43,10 @@ def cmd_import(rest):
     path = rest[0] if rest and not rest[0].startswith("--") else None
     if not path:
         sys.exit("usage: orch order import FILE [--skip REGEX] [--dry-run]")
-    skip = re.compile(opt(rest, "--skip")) if opt(rest, "--skip") else None
+    try:
+        skip = re.compile(opt(rest, "--skip")) if opt(rest, "--skip") else None
+    except re.error as e:
+        sys.exit(f"--skip is not a regular expression: {e}")
     p = pathlib.Path(path).resolve()
     name = f"{p.name}@{hashlib.sha1(str(p).encode()).hexdigest()[:8]}"
     items = [(s, t) for s, t in parse_list(p.read_text(), name) if not (skip and skip.search(t))]
@@ -55,7 +60,7 @@ def cmd_import(rest):
     for s, t in items:
         row, new = store.order_add(t, "feedback", s, by=_by(), dedupe=True)
         added += new
-        print(f"{row['id']}  {'added' if new else 'kept '}  {s}")
+        print(f"{row['id']}  {'added' if new else 'kept '}  {row['source']}")
     print(f"{added} added, {len(items) - added} already there")
 
 

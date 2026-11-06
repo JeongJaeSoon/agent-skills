@@ -143,9 +143,12 @@ other.write_text("## 가\n1. 고쳐 쓴 첫째\n")
 assert "other text" in fails("order", "import", str(other))
 # A secret in a heading or a line is masked on screen, in the source and in the event.
 leak = tmp / "leak.md"
-leak.write_text("## token=ghp_" + "b" * 36 + "\n1. 평범한 줄\n")
+leak.write_text("## token=ghp_" + "b" * 36 + "\n1. 평범한 줄\n2. 둘째 줄\n")
 assert "ghp_" not in ok("order", "import", str(leak), "--dry-run")
-ok("order", "import", str(leak))
+out = ok("order", "import", str(leak))
+assert "ghp_" not in out and out.endswith("2 added, 0 already there"), out
+assert "ghp_" not in ok("order", "import", str(leak))
+assert "not a regular expression" in fails("order", "import", str(leak), "--skip", "[")
 db = sqlite3.connect(str(store.path()))
 assert not db.execute("SELECT 1 FROM order_ WHERE source LIKE '%ghp_%' OR text LIKE '%ghp_%'").fetchone()
 assert not db.execute("SELECT 1 FROM event WHERE entity='order' AND after LIKE '%ghp_%'").fetchone()
