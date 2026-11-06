@@ -80,7 +80,7 @@ assert {s["id"]: s["project"] for s in st["sessions"]} == {"wt-coord": "platform
                                                          "wt-docs": "launchpad", "wt-scratch": "tools", "wt-old": "tools",
                                                          "wt-lead": "platform", "wt-invoice": "launchpad", "wt-tax": "launchpad"}
 assert [(i["project"], i["session"]) for i in items(st, "approval") if i["source"] == "orca-gate"] == [("launchpad", "wt-coord")]
-assert [i["project"] for i in items(st, "decision")] == ["platform"] and all(i["project"] for i in items(st))
+assert [i["project"] for i in items(st, "decision")] == ["platform"] and all(i["project"] for i in items(st) if i["type"] != "pc_pressure")  # the machine's wait names no project
 assert {t["id"]: t["project"] for t in st["tasks"]} == {"task_login": "launchpad", "task_export": "launchpad", "task_docs": "launchpad",
                                                        "task_lead": "platform", "task_invoice": "launchpad",
                                                        **{t: None for t, _ in dash_demo.PLUGIN_TASKS}}  # cards with no worktree left
@@ -114,7 +114,8 @@ got = sorted((i["type"], i["session"]) for i in items(st))
 assert got == sorted([("prompt", "wt-docs"), ("question", "wt-export"), ("approval", "wt-coord"), ("login", "wt-scratch"),
                       ("decision", "wt-coord"), ("ready_to_merge", "wt-login"), ("changes_requested", "wt-export"),
                       ("review_comment_received", "wt-export"), ("ci_failed", "wt-export"),
-                      ("watcher_down", "wt-coord")]), got  # the demo orchestrator never ran `orch watch-cards`
+                      ("watcher_down", "wt-coord"),  # the demo orchestrator never ran `orch watch-cards`
+                      ("pc_pressure", None)]), got  # the fixture's pressure-queue.json: one held command, read directly
 
 # A session's badge is the number of Needs you items on it: the badges plus the sessionless items are the inbox.
 def badges_agree(st):
@@ -269,11 +270,13 @@ assert delivered(f.tick(force=True)) == n + 1, "once"
 world.advance()
 clock[0] = now + dt.timedelta(minutes=10)
 st = f.tick(force=True)
-rows = [json.loads(l) for l in (state_dir / "pr-events.jsonl").read_text().splitlines()]
-assert sorted((r["pr"], r["kind"]) for r in rows) == [(41, "approval_stale"), (41, "head_pushed"), (42, "checks_recovered")], rows
-r41 = next(r for r in rows if r["pr"] == 41)
-assert r41["owner"] == "ctx_login" and r41["owner_kind"] == "dispatch" and r41["repo"] == "acme/launchpad", r41
-assert all(len(json.dumps(r)) < 4096 for r in rows)
+assert not (state_dir / "pr-events.jsonl").exists()  # PR 6: the rows live in events.jsonl (the timeline) only
+rows = [e for e in st["timeline"] if e["kind"].startswith("pr_")]
+assert sorted((e["pr"], e["kind"]) for e in rows) == [("acme/launchpad#41", "pr_approval_stale"), ("acme/launchpad#41", "pr_head_pushed"),
+                                                      ("acme/launchpad#42", "pr_checks_recovered")], rows
+r41 = next(e for e in rows if e["pr"] == "acme/launchpad#41" and e["kind"] == "pr_head_pushed")
+assert r41["owner"] == "ctx_login" and r41["owner_kind"] == "dispatch" and r41["repo"] == "acme/launchpad" and r41["id"], r41  # what pr-events.jsonl carried
+assert all(len(json.dumps(e)) < 4096 for e in rows)
 assert [i["session"] for i in items(st, "approval_stale")] == ["wt-login"] and not items(st, "ready_to_merge"), items(st)
 assert {e["kind"] for e in st["timeline"]} >= {"pr_approval_stale", "pr_checks_recovered"}
 
@@ -313,7 +316,10 @@ code, out = fleet.send("wt-export", f"token {secret}")
 fleet.load_sync = real_load
 assert out == {"ok": False, "reason": "safety check unavailable (scripts/sync.py not found)", "fallback": "copy"}, out
 log = (state_dir / "sends.jsonl").read_text()
-assert len(log.splitlines()) == 8 and secret not in log, log
+assert len(log.splitlines()) == 6 and secret not in log, log  # the two typed lines are instructions: they are in the sent log
+typed = [r for p in sorted((state_dir / "sent").glob("*.jsonl")) for r in fleet.read_lines(p)]
+assert [(r["from"], r["to"], r["kind"], r["channel"], r["text"]) for r in typed] == [
+    ("dashboard", "wt-export", "dashboard", "term_export", "use CSV"), ("dashboard", "wt-export", "dashboard", "term_export", "x")], typed
 
 # The brief's Orca button names a session by its worktree id: the handle is the one its agent terminal has now.
 # `orca terminal switch` moves only the desktop on the machine that runs it, so a switch Orca confirms is still the
@@ -475,7 +481,7 @@ fleet.orca, real_orca = (lambda *a, **k: opened.append(a) or {}), fleet.orca
 assert fleet.answer_prompt("wt-docs", "p-bash", "open") == (200, {"ok": True, "reason": None})
 fleet.orca = real_orca
 assert opened == [("terminal", "switch", "--terminal", "term_docs")]
-rows = [json.loads(l) for l in (state_dir / "sends.jsonl").read_text().splitlines()[8:]]
+rows = [json.loads(l) for l in (state_dir / "sends.jsonl").read_text().splitlines()[6:]]
 assert len(rows) == 15 and all(r["text"].startswith("prompt ") and "code" in r for r in rows), rows
 
 # Adoption: a dry run by default, a write only with the config flag, and undo restores the logged previous value.
@@ -2146,8 +2152,10 @@ far = {**twin, "ts": fleet.iso(now + dt.timedelta(hours=1))}
 other = {**twin, "text": "something else"}
 p = sent.page([twin, far, other], days=1, now=now + dt.timedelta(hours=2))
 srcs = [(r["source"], r.get("also"), r["to"]) for r in p["rows"]]
-assert ("log", ["transcript"], "card-x") in srcs and srcs.count(("transcript", None, "card-x")) == 2, srcs
-assert ("dashboard", None, "wt-export") in srcs and not any(r["to"] == "ABC-1" for r in p["rows"]), "typed dashboard lines in, a 3-day-old log row out"
+assert ("log", ["transcript"], "card-x") in srcs and not any(s[0] == "transcript" for s in srcs), srcs
+assert p["unrecorded"] == 2, "a transcript send the log lacks is a warning (here the one an hour later and the other text), not a row"
+assert ("log", None, "wt-export") in srcs and not any(r["to"] == "ABC-1" for r in p["rows"]), "typed dashboard lines in, a 3-day-old log row out"
+assert next(r for r in p["rows"] if r["to"] == "wt-export")["kind"] == "dashboard"
 assert secret not in json.dumps(p) and p["total"] == len(p["rows"]), p
 assert any(r["to"] == "ABC-1" for r in sent.page([], days=7, now=now)["rows"])
 assert len(sent.page([twin, far, other], days=1, now=now + dt.timedelta(hours=2), limit=2)["rows"]) == 2
@@ -2186,13 +2194,11 @@ os.chmod(log_file, 0o644)
 os.chmod(state_dir / "sent", 0o755)
 sent.add("card-y", "again", now=now)
 assert (stat.S_IMODE(log_file.stat().st_mode), stat.S_IMODE((state_dir / "sent").stat().st_mode)) == (0o600, 0o700)
-# A line of the wrong shape, in the log or the dashboard's sends, is skipped instead of failing the whole page.
+# A line of the wrong shape in the log is skipped instead of failing the whole page.
 with open(log_file, "a") as fh:
     fh.write('{"ts": 5}\n' + json.dumps({"ts": fleet.iso(now), "to": "x", "text": 7}) + "\n[1]\n")
-fleet.append_line(state_dir / "sends.jsonl", {"typed": True, "at": 5, "text": "x"})
-fleet.append_line(state_dir / "sends.jsonl", {"typed": True, "at": fleet.iso(now), "session": "wt-x", "text": None})
 p = sent.page([], days=1, now=now + dt.timedelta(minutes=1))
-assert "card-y" in [r["to"] for r in p["rows"]] and "wt-x" not in [r["to"] for r in p["rows"]], p["rows"]
+assert "card-y" in [r["to"] for r in p["rows"]] and "x" not in [r["to"] for r in p["rows"]], p["rows"]
 # Each poll reads only what was appended since the last one; a day file out of the window leaves the cache.
 size = log_file.stat().st_size
 assert sent.LOG_SCAN[str(log_file)]["offset"] == size
@@ -2209,9 +2215,10 @@ os.environ["CLAUDE_CONFIG_DIR"] = str(home)
 assert len(fleet.fetch_sent(procs, now=now)) == 2
 assert fleet.fetch_sent(procs, now=now + dt.timedelta(days=31)) == [] and fleet.SENT_SCAN[str(transcript)]["rows"] == []
 # orch sent list survives a row with no text to show.
-fleet.append_line(state_dir / "sends.jsonl", {"typed": True, "at": fleet.iso(fleet.utcnow()), "session": "wt-empty", "text": ""})
+with open(log_file, "a") as fh:
+    fh.write(json.dumps({"ts": fleet.iso(fleet.utcnow()), "from": "dashboard", "to": "wt-empty", "kind": "dashboard", "text": ""}) + "\n")
 out = subprocess.run([sys.executable, "prog.py", "sent", "list"], capture_output=True, text=True, cwd=pathlib.Path(__file__).parent)
-assert out.returncode == 0 and "wt-empty  [dashboard] ?" in out.stdout, out.stderr + out.stdout
+assert out.returncode == 0 and "dashboard → wt-empty  [log] ?" in out.stdout, out.stderr + out.stdout
 del os.environ["CLAUDE_CONFIG_DIR"]
 
 # Shared resources: a hold by a terminal handle sits on that terminal's session.
@@ -2357,14 +2364,14 @@ rows = fleet.orca_messages_sent(msgs)
 assert [(r["to"], r["kind"], r["channel"], r["text"], r["message"], r["thread"]) for r in rows] == [
     ("dispatch:ctx_1", "inbox", "orca status", "do (c)", "m1", "m0"), ("run:run_1", "report", "orca worker_done", "done", "m3", None)], rows
 later = now + dt.timedelta(minutes=1)
-# A transcript's copy of a message folds into it only with the same receiver; one with other text or receiver stays.
+# A transcript's copy of a message folds into it only with the same receiver; one with other text or receiver is no row,
+# only a count of sends with no record.
 copy = {"ts": fleet.iso(now), "to": "dispatch:ctx_1", "text": "do (c)", "channel": "orca orchestration send", "source": "transcript"}
 elsewhere = {**copy, "to": "dispatch:ctx_2"}
 unread = {**copy, "text": "$(cat f)"}
 p = sent.page([copy, elsewhere, unread] + rows, days=1, now=later)
 got = [(r["source"], r["to"], r.get("also")) for r in p["rows"] if r["to"] in ("dispatch:ctx_1", "dispatch:ctx_2")]
-assert sorted(got, key=str) == sorted([("orca", "dispatch:ctx_1", ["transcript"]), ("transcript", "dispatch:ctx_2", None),
-                                       ("transcript", "dispatch:ctx_1", None)], key=str), got
+assert got == [("orca", "dispatch:ctx_1", ["transcript"])] and p["unrecorded"] == 2, (got, p["unrecorded"])
 assert p["inbox_since"] is None, p["inbox_since"]
 # The rows given are not changed: a second poll of the same rows gives the same page.
 assert sent.page([copy, elsewhere, unread] + rows, days=1, now=later)["rows"] == p["rows"]

@@ -1,15 +1,17 @@
 """Instructions sent out of a session: to another session or card, a subagent, an inbox, Slack or a tracker. The
 dashboard's Sent page shows them so the human can read what was asked of whom.
 
-Four sources, each row tagged with its own:
+Two sources make rows, each tagged with its own:
 - log: `orch sent add`, written by the sender at the moment it sends. One file a day (UTC) under
   <fleet state>/sent/YYYY-MM-DD.jsonl, one JSON object a line: ts, from, to, kind, channel, repo, subject, text.
   With Orca's own, the only record that outlives the sending session, and the only one for Slack, tracker and
-  other non-shell sends.
-- dashboard: a line typed from the dashboard's session page (sends.jsonl, fleet.send).
-- transcript: what the live Claude Code sessions sent by Agent, SendMessage or an orca send in Bash (fleet.fetch_sent).
+  other non-shell sends. A line typed from the dashboard's session page is written there too (kind=dashboard,
+  fleet.send).
 - orca: what Orca keeps itself — every inbox message but heartbeats (fleet.orca_messages_sent) and each Run Task's
   spec (fleet.orca_sent). An `orchestration send` or `reply` therefore needs no log line.
+The transcripts of live Claude Code sessions (Agent, SendMessage, an orca send in Bash; fleet.fetch_sent) make no
+rows. A send found there that matches a log or Orca row folds into it, naming "transcript" in `also`; one that matches
+neither is counted in `unrecorded`: its sender skipped `orch sent add`.
 A send seen in two sources shows once, as its log row or else its Orca message, naming both sources.
 The log keeps the text as sent, so its files are owner-only (0600 in a 0700 directory); everything shown goes
 through fleet.mask.
@@ -19,7 +21,7 @@ import datetime as dt, fcntl, json, os, re, threading
 import fleet
 
 # supersede: the receiver's work was replaced; `orch patrol` flags its card while an agent is still on it.
-KINDS = ("card", "terminal", "inbox", "subagent", "agent", "slack", "tracker", "supersede", "other")
+KINDS = ("card", "terminal", "inbox", "subagent", "agent", "slack", "tracker", "supersede", "dashboard", "other")
 TEXT_MAX = 20000  # shown in full under a fold; longer is cut
 SAME_SEND = dt.timedelta(minutes=10)  # a logged send and its transcript copy are this close
 DAYS_MAX = fleet.SENT_KEEP.days
@@ -74,18 +76,35 @@ def read_log(since):
     return rows
 
 
-def dashboard_sends(since):
-    rows, path = [], fleet.state_dir() / "sends.jsonl"
-    for line in path.read_text().splitlines() if path.exists() else []:
-        try:
-            r = json.loads(line)
-        except ValueError:
+def import_sends(apply=False):
+    """Move the typed lines of the old sends.jsonl into the log as kind=dashboard rows, then keep the file read-only as
+    sends.archive.jsonl. Safe to run again: a row already in the log (same ts, to, text) is skipped, and an archive
+    already there is not replaced.
+    Returns {"typed", "added", "skipped"}; nothing is written unless apply."""
+    path = fleet.state_dir() / "sends.jsonl"
+    out = {"typed": 0, "added": 0, "skipped": 0}
+    if not path.is_file():
+        return out
+    have = {(r["ts"], r["to"], r["text"]) for p in sorted(sent_dir().glob("*.jsonl")) for r in fleet.read_lines(p)
+            if isinstance(r, dict) and all(isinstance(r.get(k), str) for k in ("ts", "to", "text"))}
+    for r in fleet.read_lines(path):
+        if not (isinstance(r, dict) and r.get("typed") and isinstance(r.get("at"), str) and isinstance(r.get("text"), str)
+                and r["text"].strip() and isinstance(r.get("session"), str) and fleet.parse(r["at"])):
             continue
-        if (isinstance(r, dict) and r.get("typed") and isinstance(r.get("at"), str) and isinstance(r.get("text"), str)
-                and r["at"] >= fleet.iso(since)):
-            rows.append({"ts": r["at"], "from": "dashboard", "to": r.get("session"), "kind": "terminal",
-                         "channel": "dashboard", "text": r["text"], "source": "dashboard"})
-    return rows
+        out["typed"] += 1
+        if (r["at"], r["session"], r["text"]) in have:
+            out["skipped"] += 1
+            continue
+        if apply:
+            add(r["session"], r["text"], kind="dashboard", channel=r.get("handle"), sender="dashboard",
+                now=fleet.parse(r["at"]))
+            have.add((r["at"], r["session"], r["text"]))
+        out["added"] += 1
+    archive = path.with_name("sends.archive.jsonl")
+    if apply and not archive.exists():  # the page's other actions start a fresh sends.jsonl
+        os.replace(path, archive)
+        os.chmod(archive, 0o400)
+    return out
 
 
 def key(text):
@@ -108,12 +127,12 @@ MESSAGE_FIELDS = ("message", "thread", "run")
 
 
 def page(rows, days=1, now=None, limit=LIMIT, inbox_since=None):
-    """{"rows", "total", "days", "inbox_since"}: the sent instructions of the last `days` days, newest first, one row
-    per send, masked, at most `limit` of them. `rows` are the transcript and Orca rows (fleet.fetch_sent,
+    """{"rows", "total", "days", "inbox_since", "unrecorded"}: the sent instructions of the last `days` days, newest
+    first, one row per send, masked, at most `limit` of them. `rows` are the transcript and Orca rows (fleet.fetch_sent,
     fleet.orca_messages_sent, fleet.orca_sent); they are not changed. An Orca message is a record of its own, like a
-    log line: a copy from a transcript or the dashboard folds into it, and it folds into a log line, which then
-    carries its ids. Two Orca messages never fold. inbox_since (fleet.inbox_cut): where a full inbox read starts,
-    None when the read held every message."""
+    log line: a copy from a transcript folds into it, and it folds into a log line, which then carries its ids. Two
+    Orca messages never fold. A transcript row that folds into neither is no row: `unrecorded` counts them.
+    inbox_since (fleet.inbox_cut): where a full inbox read starts, None when the read held every message."""
     since = (now or fleet.utcnow()) - dt.timedelta(days=days)
     logged = read_log(since)
     by_key = {}
@@ -122,7 +141,8 @@ def page(rows, days=1, now=None, limit=LIMIT, inbox_since=None):
     out = list(logged)
     recent = [dict(r) for r in rows if (r.get("ts") or "9") >= fleet.iso(since)]
     messages = [r for r in recent if r.get("message")]
-    for r in messages + dashboard_sends(since) + [r for r in recent if not r.get("message")]:
+    unrecorded = 0
+    for r in messages + [r for r in recent if not r.get("message")]:
         t = fleet.parse(r.get("ts"))
         twin = next((x for x in by_key.get(key(r.get("text")), []) if t and fleet.parse(x.get("ts"))
                      and abs(fleet.parse(x["ts"]) - t) <= SAME_SEND and same_to(x.get("to"), r.get("to"))
@@ -133,6 +153,8 @@ def page(rows, days=1, now=None, limit=LIMIT, inbox_since=None):
             for k in MESSAGE_FIELDS:
                 if r.get(k) is not None:
                     twin.setdefault(k, r[k])
+        elif r.get("source") == "transcript":
+            unrecorded += 1  # the sender skipped `orch sent add`; a transcript is a witness, not a record
         else:
             out.append(r)
             if r.get("message"):
@@ -142,4 +164,4 @@ def page(rows, days=1, now=None, limit=LIMIT, inbox_since=None):
               **{k: fleet.mask(r.get(k), n) or None for k, n in (("subject", 200), ("to", 120), ("from", 120),
                                                                    ("channel", 120), ("repo", 120), ("cwd", 300))}}
              for r in out[:limit]]
-    return {"rows": shown, "total": len(out), "days": days, "inbox_since": inbox_since}
+    return {"rows": shown, "total": len(out), "days": days, "inbox_since": inbox_since, "unrecorded": unrecorded}

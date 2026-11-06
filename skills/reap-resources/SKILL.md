@@ -367,8 +367,9 @@ draws its PC load panel from it.
 while the level is danger, and at warn until a round ran its scan in the last `gate_fresh_minutes` (15; a failed scan
 counts, so warn never holds for good). At danger the deny puts the command in a queue
 (`<state>/pressure-queue.json`, one entry per session and command, a repeat deny counting the same entry) with a
-deadline `queue_minutes` (15) away, and on the dashboard's Needs-you list (key `pressure:queue:<id>`, its copy button
-`pressure.py queue`, never the held command). The deny names the wait: `round` first unless one is fresh, then
+deadline `queue_minutes` (15) away. The dashboard reads that file itself: the waiting and retrying entries are one
+Needs-you item ("기계 대기 N건"), one that gave up or failed is an item of its own (key `pressure:queue:<id>`, its copy
+button `pressure.py queue`, never the held command). Nothing is copied to `inbox-external.jsonl`. The deny names the wait: `round` first unless one is fresh, then
 `Monitor` on `queue wait <id>`, which exits 0 once the hook would let that command through, so the session runs the
 same command again, and 3 when it must not run (deadline passed, recorded as given up; or already retried). The queue
 never runs a command itself: the retry is the asking session's own tool call, through the same hooks and permission

@@ -24,6 +24,9 @@ Usage: orch-dash <command> [options]
   skills [--no-signals]              one collect of skill usage from local transcripts (skill_usage.py), prints a summary
   prstats [--out PATH]               one collect of my PR counts from GitHub search (pr_stats.py), prints a summary;
                                      saves even a drop the scheduled collect held back as suspicious
+  migrate-inputs [--apply]           retire what Needs you and Sent stopped reading (resolve the old patrol and
+                                     pressure-queue inbox lines, move sends.jsonl's typed lines into the sent log,
+                                     make pr-events.jsonl read-only); a dry run without --apply, safe to run again
   inbox add --type T --title TEXT [--session ID] [--url URL] [--command CMD] [--key KEY]
   inbox resolve --key KEY            put an item in (or take it out of) the fleet inbox
   ack <id>... | ack --done-before AGE [--kind stage|board]... | unack <id>... | acks [--all] [--json]
@@ -2390,7 +2393,7 @@ def pressure_signature():
 def sent_signature():
     """What /api/fleet/sent is built from: the fleet's sent rows (replaced once a runs cycle), and the `orch sent` log files."""
     f = FLEET
-    log = sorted(sent.sent_dir().glob("*.jsonl")) + [fleet.state_dir() / "sends.jsonl"]
+    log = sorted(sent.sent_dir().glob("*.jsonl"))
     return (id(getattr(f, "sent", None)), len(getattr(f, "sent", None) or []), getattr(f, "sent_inbox_since", None), keys_of(log))
 
 
@@ -2811,7 +2814,9 @@ def cmd_inbox(argv):
     elif argv[:1] == ["resolve"] and prog.opt(argv, "--key"):
         row = fleet.inbox_resolve(prog.opt(argv, "--key"))
     elif argv[:1] == ["list"]:
-        for i in fleet.external_items():
+        import store as db_store
+        # The machine-wait items are not external_items(): the dashboard builds them from the queue, as here.
+        for i in fleet.external_items() + fleet.pressure_items(db_store.ext_closures(), {}):
             print(f"{i['at']}  {i['type']}  {i['key'][4:]}  {i['title']}")
         return
     else:
@@ -2850,12 +2855,19 @@ def cmd_acks(argv):
     print(f"{len(have)} acked" + (f" · {len(set(can) - set(have))} more can be acked" if "--all" in argv else ""))
 
 
+def cmd_migrate_inputs(argv):
+    done = "--apply" in argv
+    print(("applied" if done else "dry run (add --apply to write)") + ": "
+          + json.dumps(fleet.migrate_inputs(done), ensure_ascii=False))
+
+
 def cmd_adopt(argv):
     sys.exit(fleet.adopt("--apply" in argv, prog.opt(argv, "--undo")))
 
 
 COMMANDS = {"collect": cmd_collect, "serve": cmd_serve, "ensure": cmd_ensure, "note": cmd_note, "demo": cmd_demo,
             "fleet": cmd_fleet, "skills": cmd_skills, "prstats": cmd_prstats, "inbox": cmd_inbox, "adopt": cmd_adopt,
+            "migrate-inputs": cmd_migrate_inputs,
             "ack": cmd_ack, "unack": lambda argv: cmd_ack(argv, undo=True), "acks": cmd_acks,
             "install-agent": cmd_install_agent, "uninstall-agent": cmd_uninstall_agent}
 

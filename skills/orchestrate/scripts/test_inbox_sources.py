@@ -1,0 +1,123 @@
+"""SSOT PR 6: the Inbox reads pressure-queue.json and patrol.jsonl itself, `migrate-inputs` retires the old copies, the
+dashboard's typed lines are sent-log rows, and a transcript send with no record is a warning. Everything runs under
+a throwaway state directory."""
+import datetime as dt, json, os, pathlib, stat, sys, tempfile
+
+HERE = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+tmp = pathlib.Path(tempfile.mkdtemp(prefix="test-inbox-sources-"))
+os.environ.update(AGENT_SKILLS_STATE=str(tmp), ORCH_FLEET_STATE=str(tmp / "dashboard"), HOME=str(tmp / "home"))
+import fleet, sent  # noqa: E402
+
+D = tmp / "dashboard"
+NOW = dt.datetime(2026, 11, 6, 12, 0, tzinfo=dt.timezone.utc)
+T = NOW.timestamp()
+
+
+def queue(*entries):
+    fleet.write_atomic(tmp / "pressure-queue.json", json.dumps({e["id"]: e for e in entries}))
+
+
+def q(i, state, **kw):
+    return {"id": f"q-{i}", "session": f"s{i}", "command": "docker compose up", "what": "docker compose up", "why": "load 2.3",
+            "added": T - 60 * i, "deadline": T + 600, "attempts": 1, "state": state, **kw}
+
+
+# --- pressure: every waiting entry is one item, whatever the number; gave_up and failed ask the human one by one.
+queue(q(1, "waiting"), q(2, "retrying"), q(3, "done"), q(4, "gave_up", ended=T), q(5, "failed", error="Exit code 1", ended=T))
+dismissed = {}
+items = fleet.pressure_items({}, dismissed)
+by_key = {i["key"]: i for i in items}
+assert sorted(by_key) == ["ext:pressure:queue", "ext:pressure:queue:q-4", "ext:pressure:queue:q-5"], sorted(by_key)
+assert by_key["ext:pressure:queue"]["title"].startswith("기계 대기 2건"), by_key["ext:pressure:queue"]["title"]
+assert "포기" in by_key["ext:pressure:queue:q-4"]["title"] and "재시도 실패: Exit code 1" in by_key["ext:pressure:queue:q-5"]["title"]
+assert all(i["type"] == "pc_pressure" and i["command"].endswith("pressure.py queue") for i in items)
+assert not (D / "inbox-external.jsonl").exists(), "reading the queue writes nothing"
+
+# --- suppression is by queue id. A closure of one entry lowers the count; dismissing the one item dismisses the entries it
+# counted, so an entry that arrives later shows again ("기계 대기 2건": one closed, one open, a new one).
+items = fleet.pressure_items({"pressure:queue:q-1": {"state": "done", "ts": fleet.iso(NOW)}}, {})
+assert next(i for i in items if i["key"] == "ext:pressure:queue")["title"].startswith("기계 대기 1건")
+dismissed = {"ext:pressure:queue": "2026-11-06T11:00:00Z"}
+items = fleet.pressure_items({}, dismissed)
+assert [i["key"] for i in items] == ["ext:pressure:queue:q-4", "ext:pressure:queue:q-5"], items
+assert dismissed == {"ext:pressure:queue:q-1": "2026-11-06T11:00:00Z", "ext:pressure:queue:q-2": "2026-11-06T11:00:00Z"}, dismissed
+queue(q(1, "waiting"), q(2, "retrying"), q(6, "waiting"))
+items = fleet.pressure_items({"pressure:queue:q-1": {"state": "done", "ts": fleet.iso(NOW)}}, dismissed)
+assert len(items) == 1 and items[0]["title"].startswith("기계 대기 1건") and "docker compose up" in items[0]["title"], items
+fleet.write_atomic(tmp / "pressure-queue.json", json.dumps({"a": q(1, "waiting"), "b": {"id": 7, "what": "x", "state": "waiting"}, "c": "junk"}))
+assert fleet.pressure_items({}, {})[0]["title"].startswith("기계 대기 1건"), "a row that is no whole entry costs only itself"
+(tmp / "pressure-queue.json").unlink()
+assert fleet.pressure_items({}, {}) == []
+
+# --- patrol: the open, unacked X/E/L/O findings, one key per occurrence; a closure decides as for any ext: item.
+log = tmp / "patrol.jsonl"
+for r in ({"op": "found", "id": "Xa", "code": "X", "card": "/w/a", "title": "exited", "session": "wt-a", "detected_at": "2026-11-06T10:00:00Z"},
+          {"op": "found", "id": "Ib", "code": "I", "card": "/w/b", "title": "idle", "detected_at": "2026-11-06T10:00:00Z"},
+          {"op": "found", "id": "Lc", "code": "L", "card": "/w/c", "title": "load", "detected_at": "2026-11-06T10:05:00Z"},
+          {"op": "found", "id": "Od", "code": "O", "card": "/w/d", "title": "orphan", "detected_at": "2026-11-06T10:06:00Z"},
+          {"op": "ack", "id": "Od", "at": "2026-11-06T10:07:00Z"}):
+    fleet.append_line(log, r)
+pi = fleet.patrol_items({})
+assert [i["key"] for i in pi] == ["ext:patrol:Xa:2026-11-06T10:00:00Z", "ext:patrol:Lc:2026-11-06T10:05:00Z"], pi
+assert pi[0]["session"] == "wt-a" and pi[0]["command"] == "orch patrol ack Xa" and pi[0]["at"] == "2026-11-06T10:00:00Z"
+assert [i["key"] for i in fleet.patrol_items({"patrol:Xa:2026-11-06T10:00:00Z": {"state": "done", "ts": "x"}})] == [pi[1]["key"]]
+re = fleet.patrol_items({"patrol:Xa:2026-11-06T10:00:00Z": {"state": "reopen", "ts": "2026-11-06T11:30:00Z"}})
+assert re[0]["at"] == "2026-11-06T11:30:00Z", "a reopen shows it from the reopen's time"
+fleet.append_line(log, {"op": "clear", "id": "Xa", "at": "2026-11-06T10:30:00Z"})
+fleet.append_line(log, {"op": "found", "id": "Xa", "code": "X", "card": "/w/a", "title": "again", "detected_at": "2026-11-06T11:00:00Z"})
+assert [i["key"] for i in fleet.patrol_items({})][0] == "ext:patrol:Lc:2026-11-06T10:05:00Z" and \
+    "ext:patrol:Xa:2026-11-06T11:00:00Z" in [i["key"] for i in fleet.patrol_items({})], "after a clear, the same id is a new occurrence"
+
+# --- the old copies in inbox-external.jsonl: not shown, and `migrate-inputs` resolves the open ones (reason migrated).
+inbox = D / "inbox-external.jsonl"
+for key in ("pressure:queue:q-9", "patrol:Gone:2026-11-01T00:00:00Z", "pressure:danger"):
+    fleet.inbox_add("pc_pressure" if key.startswith("pressure") else "patrol", f"old {key}", key=key, source="x")
+fleet.inbox_resolve("pressure:queue:q-9")
+fleet.inbox_add("pc_pressure", "old again", key="pressure:queue:q-9", source="x")
+before = inbox.read_text()
+shown = [i["key"] for i in fleet.external_items()]
+assert "ext:pressure:danger" in shown and not any(k.startswith(("ext:pressure:queue", "ext:patrol:Gone")) for k in shown), shown
+dry = fleet.migrate_inputs()
+assert dry["inbox_resolved"] == 2 and inbox.read_text() == before, "a dry run writes nothing"
+done = fleet.migrate_inputs(apply=True)
+rows = [json.loads(l) for l in inbox.read_text().splitlines()[len(before.splitlines()):]]
+assert done["inbox_resolved"] == 2 and sorted(r["key"] for r in rows) == ["patrol:Gone:2026-11-01T00:00:00Z", "pressure:queue:q-9"], rows
+assert all(r["op"] == "resolve" and r["reason"] == "migrated" for r in rows), rows
+assert fleet.migrate_inputs(apply=True)["inbox_resolved"] == 0, "run again: nothing left"
+assert "ext:pressure:danger" in [i["key"] for i in fleet.external_items()], "other external items are untouched"
+
+# --- sends.jsonl: typed lines become sent-log rows, the rest stays an action record, the file is archived read-only.
+sends = D / "sends.jsonl"
+at = fleet.iso(NOW - dt.timedelta(minutes=5))
+fleet.append_line(sends, {"at": at, "session": "wt-x", "handle": "term_x", "text": "use CSV", "ok": True, "typed": True, "code": 200})
+fleet.append_line(sends, {"at": at, "session": "wt-x", "handle": "term_x", "text": "no", "ok": False, "typed": False, "code": 200})
+fleet.append_line(sends, {"at": at, "session": "wt-x", "handle": None, "text": "open", "ok": True, "code": 200})
+fleet.append_line(sends, {"typed": True, "at": 5, "text": "x"})
+fleet.append_line(sends, {"typed": True, "at": at, "session": "wt-x", "text": None})
+assert sent.import_sends() == {"typed": 1, "added": 1, "skipped": 0} and not (D / "sent").exists(), "dry run"
+assert sent.import_sends(apply=True) == {"typed": 1, "added": 1, "skipped": 0}
+archive = D / "sends.archive.jsonl"
+assert archive.exists() and not sends.exists() and stat.S_IMODE(archive.stat().st_mode) == 0o400
+fleet.append_line(sends, {"at": at, "session": "wt-x", "handle": "term_x", "text": "use CSV", "ok": True, "typed": True, "code": 200})
+assert sent.import_sends(apply=True) == {"typed": 1, "added": 0, "skipped": 1}, "a line already in the log is not added twice"
+assert archive.exists() and sends.exists(), "an archive already there is not replaced"
+rows = sent.read_log(NOW - dt.timedelta(days=1))
+assert [(r["from"], r["to"], r["kind"], r["channel"], r["text"], r["ts"]) for r in rows] == [
+    ("dashboard", "wt-x", "dashboard", "term_x", "use CSV", at)], rows
+
+# --- Sent: the log and Orca make rows; a transcript copy folds in or is only counted.
+tr = {"ts": at, "to": "wt-x", "text": "use CSV", "channel": "Agent", "source": "transcript"}
+lost = {"ts": at, "to": "card-q", "text": "nobody logged this", "channel": "Agent", "source": "transcript"}
+page = sent.page([tr, lost], days=1, now=NOW)
+assert [(r["source"], r.get("also")) for r in page["rows"]] == [("log", ["transcript"])], page["rows"]
+assert page["unrecorded"] == 1 and page["total"] == 1, page
+assert sent.page([], days=1, now=NOW)["unrecorded"] == 0
+
+# --- pr-events.jsonl: nothing writes it; `migrate-inputs` makes the old file read-only.
+old = D / "pr-events.jsonl"
+old.write_text('{"v": 1}\n')
+assert fleet.migrate_inputs()["archived"] == ["pr-events.jsonl"] and stat.S_IMODE(old.stat().st_mode) == 0o644
+fleet.migrate_inputs(apply=True)
+assert stat.S_IMODE(old.stat().st_mode) == 0o400 and fleet.migrate_inputs(apply=True)["archived"] == []
+print("test_inbox_sources: ok")
