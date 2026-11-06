@@ -1559,9 +1559,9 @@ def note_file(cfg, slug):
     if (mine.get("adapter") or user.get("adapter")) != "markdown":
         return None, "the notes store is not a markdown root"
     root = mine.get("root") or (user.get("markdown") or {}).get("root") or "~/notes"
-    named = pathlib.Path(str(cfg.get("note") or "")).expanduser()  # `orch init --note`: the note the lead named
-    if cfg.get("note") and named.is_file():
-        return named, None
+    if cfg.get("note"):  # `orch init --note`: the note the lead named, or nothing; never another copy
+        named = pathlib.Path(str(cfg["note"])).expanduser()
+        return (named, None) if named.is_file() else (None, f"the note named in program.json is not a file: {cfg['note']}")
     found = sorted(pathlib.Path(root).expanduser().rglob(f"program-{slug}.md"))
     if len(found) > 1:
         return None, f"{len(found)} files named program-{slug}.md under {root}; `orch set {slug} note <path>` names one"

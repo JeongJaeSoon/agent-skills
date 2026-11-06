@@ -104,6 +104,9 @@ note(SAME)
 assert out.startswith("note values: not compared") and "2 files named program-demo.md" in out, out
 (out,) = prog.note_lines(program(note=str(NOTES / "Project" / "acme" / "program-demo.md")))
 assert out.startswith("note values: match"), out
+# A named note that is missing is not replaced by another copy that happens to be there.
+(out,) = prog.note_lines(program(note=str(NOTES / "Project" / "acme" / "custom.md")))
+assert out.startswith("note values: not compared") and "custom.md" in out, out
 (NOTES / "Archive" / "program-demo.md").unlink()
 
 # The same instant written two ways is no difference.

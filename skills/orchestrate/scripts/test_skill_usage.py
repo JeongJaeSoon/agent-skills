@@ -274,13 +274,19 @@ assert su.write_signals(ledger, rep4, NOW) == []
 # refresh() keeps the signals path and the store location out of skills.json.
 os.environ["CLAUDE_PROJECTS_DIR"], os.environ["ORCH_FLEET_STATE"] = str(projects), str(root / "state2")
 real_inventory, su.inventory = su.inventory, lambda: inv
+rows_before = len(ledger.read_text().splitlines())
 rep7 = su.refresh(out=root / "state2" / "skills.json", signals=ledger)
+rows_after = len(ledger.read_text().splitlines())
+rep7b = su.refresh(out=root / "state2" / "skills.json", signals=ledger)
 su.inventory = real_inventory
+assert rep7["signals"]["added"] == rows_after - rows_before, (rep7["signals"], rows_before, rows_after)
+assert rep7b["signals"]["added"] == 0 and len(ledger.read_text().splitlines()) == rows_after, "same week: nothing new"
 saved7 = json.loads((root / "state2" / "skills.json").read_text())
 assert str(root) not in (root / "state2" / "skills.json").read_text()
 # skills.json carries no count of its own: `signals` is read back from the ledger (the source), so a second record
 # of "how many" cannot drift from the rows. Only the returned report says what this collect added.
-week7 = f"@{rep7['generated_at'][:4]}-W{su.parse_ts(rep7['generated_at']).isocalendar()[1]:02d}"
+iso7 = su.parse_ts(rep7["generated_at"]).isocalendar()  # the ISO year, not the calendar year: 2027-01-01 is 2026-W53
+week7 = f"@{iso7[0]}-W{iso7[1]:02d}"
 in_ledger = [json.loads(l) for l in ledger.read_text().splitlines() if l.startswith("{")]
 want7 = {"week": sum(r.get("kind") == "skill_usage" and r["evidence"].endswith(week7) for r in in_ledger),
          "rows": sum(r.get("kind") == "skill_usage" for r in in_ledger)}
