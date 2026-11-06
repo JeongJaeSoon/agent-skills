@@ -47,7 +47,7 @@ PR 을 맡는 스킬과 머지 주체:
   - 골격은 설정의 트래커 템플릿(`tracker.<adapter>.templates`)을 먼저 쓰고, 없으면 동봉 템플릿을 쓴다. 템플릿을 읽다 실패하면 멈춘다.
   - `🛠 구현 힌트`에는 실제로 열어 본 경로만 적는다.
   - 제목은 동사로 시작하고, 수용 기준에는 확인 방법을 붙이고, `🚫 범위 밖`은 반드시 적는다.
-  - 제목과 본문의 언어는 설정의 `tracker.<adapter>.language`, 없으면 그 트래커에 대한 사용자 규칙, 그것도 없으면 사용자가 쓰는 언어다.
+  - 제목과 본문의 언어는 사이트 규칙 파일(`tracker.rules_file`), 그다음 설정의 `tracker.<adapter>.language`가 정한다. 둘 다 없으면 스킬은 언어를 정하지 않고 Claude 언어 설정을 따른다.
   - 의존은 트래커 relation으로 걸고, 1티켓 = 1PR로 나눈다. 서로 의존하는 PR은 GitHub stack으로 계획한다.
   - 초안 전체를 한 번 보여 주고 승인받은 뒤 등록한다. 사용자 지시가 묻지 않고 등록하라고 하면, 그리고 섞인 요청과 세션이 스스로 올리는 NOW follow-up은 먼저 등록하고 URL을 보여 준다. 상위 티켓 본문은 `✅ 완료 조건`, `🚫 범위 밖`, `⏸️ 보류`를 갖는다.
 - **동봉:** `references/templates.md`(개발 티켓과 조사 티켓 골격).
@@ -480,7 +480,7 @@ PR 을 맡는 스킬과 머지 주체:
   - 왜 묻는지(바꾸려는지, 리뷰하는지, 처음인지)에 맞춰 가져갈 것 몇 가지를 정하고, `how`와 `why`를 병렬로 불러 하나의 설명으로 엮는다. `why`의 확신도 표현은 그대로 둔다.
   - 일반적인 정의부터 말하고 지금 코드에 잇는다. 가장 작은 완결된 답을 먼저 주고, 물으면 더 들어간다.
   - 움직이는 부분이 셋 이상이면 그림을 한 장씩 늘려 가며 그린다(mermaid, ASCII).
-  - 글은 `write-plainly`로, 사용자의 언어로 쓴다.
+  - 글은 `write-plainly`로 쓴다.
 
 ### tdd
 - **언제:** 싼 로컬 테스트 대상이 있는 버그를 고칠 때, 또는 TDD·실패 테스트·회귀 테스트를 요청받았을 때.
@@ -732,7 +732,7 @@ Bash의 `sed`나 heredoc으로 고친 파일은 수정으로 세지 않는다. �
 | 프로젝트 운영 | orchestrate, autopilot, shipping 플레이북과 `orch.ts`(bun, TSV 원장) | `orchestrate` 스킬, `orch`(Python, JSONL 원장), 착지 게이트, 독점 레인, main 가디언, QA 리드, 대시보드 |
 | 티켓·노트 | 전제 없음 | `use-tracker`(Linear, Jira), `use-notes`(Obsidian, Markdown) |
 | 권한 | Cursor 설정 | `hooks/guard.py`가 대신 결정 |
-| 언어 | 영어, unslop 문체 규칙 | 스킬 본문은 영어, 문서·티켓·PR은 한국어. 문체는 `write-plainly`(한국어·영어) |
+| 언어 | 영어, unslop 문체 규칙 | 스킬 본문은 영어. 문서·티켓·PR의 언어는 Claude의 언어 설정을 따른다. 문체는 `write-plainly`(한국어·영어) |
 
 ### 가져온 것
 pstack 스킬 58개(원칙 24개와 나머지 34개) 가운데 원칙 24개 전부와 나머지 중 16개를 가져왔다. 16개 가운데 benchmark-checklist는 스킬이 아니라 `principles`의 참조 파일로 넣었다. 고정 커밋은 `99b609a`(0.15.32)이고 파일 목록은 `vendor/pstack/manifest.json`에 있다.

@@ -1,4 +1,4 @@
-<!-- translated-from: c8889468a4308123682fa2ab4600fca8dd69a8b6 -->
+<!-- translated-from: ad056fc57b262515859f38e2a263e6542c712f7a -->
 # Skill catalog
 
 This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 16 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
@@ -52,7 +52,7 @@ Which skill owns a PR, and who merges it:
   - For the skeleton it uses the tracker template from the config (`tracker.<adapter>.templates`) first, and the bundled template if there is none. If reading a template fails, it stops.
   - The `🛠 구현 힌트` (implementation hints) section lists only paths it actually opened.
   - Titles start with a verb, every acceptance criterion says how to check it, and `🚫 범위 밖` (out of scope) is always filled in.
-  - The title and body language comes from `tracker.<adapter>.language` in the config, else the user's rules for that tracker, else the language the user writes in.
+  - The title and body language comes from the site rules file (`tracker.rules_file`), then `tracker.<adapter>.language` in the config. Without either, the skill sets no language and Claude's language setting applies.
   - Dependencies are set as tracker relations, and work is split so that one ticket = one PR. PRs that depend on each other are planned as a GitHub stack.
   - Shows the whole draft once and files it after approval. Mixed-in requests and follow-ups the session raises on its own are filed first.
 - **Bundled:** `references/templates.md` (skeletons for development and investigation tickets).
@@ -449,7 +449,7 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
   - Depending on why you're asking (you want to change it, you're reviewing it, or it's your first look), it settles on a few takeaways, calls `how` and `why` in parallel, and weaves them into one explanation. `why`'s confidence wording is kept as is.
   - It starts from the general definition and then connects it to the code at hand. It gives the smallest complete answer first and goes deeper when asked.
   - With three or more moving parts, it draws diagrams that add one piece at a time (mermaid, ASCII).
-  - The writing follows `write-plainly`, in the user's language.
+  - The writing follows `write-plainly`.
 
 ### tdd
 - **When:** Fixing a bug that has a cheap local test target, or when TDD, a failing test or a regression test is requested.
@@ -674,7 +674,7 @@ Supervision (the preamble), CLOSE and KEEP are attributes, not roles. Orca's exe
 | Running projects | The orchestrate, autopilot and shipping playbooks, and `orch.ts` (bun, TSV ledger) | The `orchestrate` skill, `orch` (Python, JSONL ledger), landing gate, exclusive lane, main guardian, QA lead, dashboard |
 | Tickets and notes | No assumptions | `use-tracker` (Linear, Jira), `use-notes` (Obsidian, Markdown) |
 | Permissions | Cursor settings | `hooks/guard.py` decides instead |
-| Language | English, with the unslop style rules | Skill text in English; docs, tickets and PRs in Korean. Style follows `write-plainly` (Korean and English) |
+| Language | English, with the unslop style rules | Skill text in English; docs, tickets and PRs follow Claude's language setting. Style follows `write-plainly` (Korean and English) |
 
 ### What we took
 Of pstack's 58 skills (24 principles and 34 others), we took all 24 principles and 16 of the others. One of the 16, benchmark-checklist, went in as a reference file of `principles`, not as a skill. The pinned commit is `99b609a` (0.15.32), and the file list is in `vendor/pstack/manifest.json`.
