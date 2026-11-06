@@ -819,6 +819,9 @@ ro = ro[ro.index("--prompt") + 1]
 assert "merges" not in ro and "감지하고 넘기기만" in ro
 assert "코멘트·재요청도 하지 않는다" in mprompt
 assert no_env(mline) and "`python3 /repo/skills/watch-prs/scripts/prs.py merges`" in mprompt, mprompt
+# A land executor repo's item gets no command, so an empty merges output skips verify: nothing to read back or wait on.
+assert "출력이 없으면 verify 없이" in mprompt, mprompt
+assert mprompt.index("출력이 없으면 verify 없이") < mprompt.index(" verify`"), mprompt
 # With review_wait too, merging still precedes the send and the actions step follows it.
 both = p.schedule_cmd(pathlib.Path("/x/prs.py"), {**mcfg, "kinds": ["ready_to_merge", "review_wait"], "inbox_to": "t"}, "path:/x")
 both = both[both.index("--prompt") + 1]
@@ -864,6 +867,10 @@ out = subprocess.run([sys.executable, script, "merges", "--config", str(mconf)],
                      env={**os.environ, "AGENT_SKILLS_STATE": str(mtmp)})
 assert out.returncode == 0 and out.stdout.splitlines()[1] == mplan["new"][0]["cmd"], out
 assert list(p.read_json(mtmp / "prs" / "ledger.json", {})) == [mplan["new"][0]["key"]]
+# A rerun of the same plan prints no command again, but still a line, so the round does not skip verify for it.
+out = subprocess.run([sys.executable, script, "merges", "--config", str(mconf)], capture_output=True, text=True,
+                     env={**os.environ, "AGENT_SKILLS_STATE": str(mtmp)})
+assert out.returncode == 0 and out.stdout.startswith("#") and "gh pr merge" not in out.stdout, out
 # An executor item in plan.json: merges prints nothing and records nothing, so commit, not merges, marks it sent.
 xtmp = pathlib.Path(tempfile.mkdtemp())
 p.write_json(xtmp / "prs" / "plan.json", {**eplan, "new": [eby[1]]})

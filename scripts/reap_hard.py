@@ -67,8 +67,9 @@ DEV_SERVERS = ("node", "bun", "deno", "vite")
 
 def config():
     try:
-        mine = json.loads(CONFIG.read_text()).get("reap-hard") or {}
-    except (OSError, ValueError):
+        data = json.loads(CONFIG.read_text())
+        mine = guard.hard_cfg({"reap-hard": data.get("reap-hard") or {}, "sweep": data.get("sweep") or {}}) or {}
+    except (OSError, ValueError, AttributeError):
         mine = {}
     return {**DEFAULTS, **mine}
 
@@ -642,17 +643,18 @@ def agent_target():
     return f"gui/{os.getuid()}/{LABEL}"
 
 
-def spec(interval):
+def spec(interval, label=LABEL, script=None, args=("run",), out=OUT):
     # `claude` is what patrol's `claude agents` needs; the installer's shell finds it where launchd's PATH does not.
     tools = [os.path.dirname(t) for t in map(shutil.which, ("claude", "orca", "gh", "docker", "lsof")) if t]  # claude first: an older copy beside another tool must not win
     home_bin = pathlib.Path.home() / ".local" / "bin"  # the standard user install dir, if the shell did not have it
     extra = [str(home_bin)] if (home_bin / "claude").exists() else []
     path = ":".join(dict.fromkeys(tools + extra + ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin"]))
-    return {"Label": LABEL,
-            "ProgramArguments": [shutil.which("python3") or sys.executable, "-I", str(pathlib.Path(__file__).resolve()), "run"],
+    return {"Label": label,
+            "ProgramArguments": [shutil.which("python3") or sys.executable, "-I",
+                                 str(pathlib.Path(script or __file__).resolve()), *args],
             "StartInterval": int(interval), "RunAtLoad": True, "ProcessType": "Background", "LowPriorityIO": True,
             "EnvironmentVariables": {"PATH": path, "HOME": str(pathlib.Path.home())},
-            "StandardOutPath": str(OUT), "StandardErrorPath": str(OUT)}
+            "StandardOutPath": str(out), "StandardErrorPath": str(out)}
 
 
 def cmd_install(here_ok):
