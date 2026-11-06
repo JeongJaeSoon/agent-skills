@@ -2201,7 +2201,7 @@ def merge_unit(p, pr, unit, klass, events, onto=None, stacked=False, expect=None
                    f" commands at {sha}, then orch record {p.slug} main_green|main_red --pr {pr} --sha {sha}")
     return 0, (f"landed {' '.join('#' + str(n) for n in unit)} (merge commit {sha[:8]}; CI runs {' '.join(runs) or '-'}; read their logs in the report). "
                f"Watch main: gh run list --repo {repo} --commit {sha} --json databaseId,workflowName,status, "
-               f"then gh run watch <id> --repo {repo} --exit-status and orch record {p.slug} main_green|main_red --pr {pr} --sha {sha}"
+               f"then gh run watch <id> --repo {repo} --exit-status --interval 60 (one watcher per run) and orch record {p.slug} main_green|main_red --pr {pr} --sha {sha}"
                + base_ci_hint(repo, merged[pr].get("baseRefName")))
 
 
@@ -2612,7 +2612,7 @@ def cmd_landed(argv):
     close_gate_task(p, pr, "completed")
     print(f"landed #{pr} as {sha[:8]}. Watch main CI in the background, then record main_green or main_red:")
     print(f"  gh run list --repo {repo} --commit {sha} --json databaseId,workflowName,status")
-    print(f"  gh run watch <databaseId> --repo {repo} --exit-status")
+    print(f"  gh run watch <databaseId> --repo {repo} --exit-status --interval 60   # one watcher per run")
     if hint := base_ci_hint(repo, v.get("baseRefName")):
         print(" " + hint.lstrip(". "))
 
