@@ -2,12 +2,12 @@
   "approx": "chars-v1",
   "skills": {
     "architect": {
-      "skill_md_tokens": 1500,
+      "skill_md_tokens": 1507,
       "tokens": 69,
       "width": 239
     },
     "blast-radius": {
-      "skill_md_tokens": 886,
+      "skill_md_tokens": 909,
       "tokens": 62,
       "width": 228
     },
@@ -22,7 +22,7 @@
       "width": 299
     },
     "deliver-ticket": {
-      "skill_md_tokens": 4847,
+      "skill_md_tokens": 4854,
       "tokens": 122,
       "width": 377
     },
@@ -35,6 +35,11 @@
       "skill_md_tokens": 4920,
       "tokens": 114,
       "width": 368
+    },
+    "explain-code": {
+      "skill_md_tokens": 543,
+      "tokens": 126,
+      "width": 388
     },
     "fan-out": {
       "skill_md_tokens": 268,
@@ -51,11 +56,6 @@
       "tokens": 83,
       "width": 285
     },
-    "how": {
-      "skill_md_tokens": 527,
-      "tokens": 72,
-      "width": 255
-    },
     "interrogate": {
       "skill_md_tokens": 1000,
       "tokens": 48,
@@ -65,11 +65,6 @@
       "skill_md_tokens": 1216,
       "tokens": 73,
       "width": 291
-    },
-    "map-features": {
-      "skill_md_tokens": 1113,
-      "tokens": 79,
-      "width": 279
     },
     "orchestrate": {
       "skill_md_tokens": 11768,
@@ -97,7 +92,7 @@
       "width": 284
     },
     "recall": {
-      "skill_md_tokens": 1340,
+      "skill_md_tokens": 1347,
       "tokens": 75,
       "width": 290
     },
@@ -136,11 +131,6 @@
       "tokens": 50,
       "width": 213
     },
-    "teach": {
-      "skill_md_tokens": 1084,
-      "tokens": 65,
-      "width": 240
-    },
     "todo": {
       "skill_md_tokens": 288,
       "tokens": 44,
@@ -176,18 +166,13 @@
       "tokens": 100,
       "width": 333
     },
-    "why": {
-      "skill_md_tokens": 1827,
-      "tokens": 73,
-      "width": 277
-    },
     "write-plainly": {
       "skill_md_tokens": 1386,
       "tokens": 79,
       "width": 268
     },
     "write-skill": {
-      "skill_md_tokens": 2696,
+      "skill_md_tokens": 2766,
       "tokens": 58,
       "width": 207
     },
@@ -198,8 +183,8 @@
     }
   },
   "totals": {
-    "always_tokens": 3205,
-    "always_width": 11469,
-    "skills_width": 10589
+    "always_tokens": 3042,
+    "always_width": 10806,
+    "skills_width": 9926
   }
 }
