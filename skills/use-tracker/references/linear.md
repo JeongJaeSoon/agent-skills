@@ -37,7 +37,7 @@ replaces the template body rather than merging with it, so passing both discards
 | File | `save_issue` (`team`, `project`, `title`, `description`, `labels`, `parentId`, `relatedTo`) | `create --title T --project P --team K --body-file F [--label L] [--parent ID]` | `create ...` |
 | Add labels | `save_issue` (`id`, `addLabels`) | `label add ID --label L` | `label ID --add L` |
 | Comment | `save_comment` | `comment add ID --body-file F` | `comment ID --body-file F` |
-| Link a PR | `create_attachment` | `attach ID --url U --title PR` | `attach ID --url U` |
+| Link a PR | `save_issue` (`id`, `links: [{url, title}]`) | `attach ID --url U --title PR` | `attach ID --url U` |
 | Move | `save_issue` (`id`, `state` = type or name) | `status set ID --to "<exact state name>"` | `transition ID --to started\|review\|completed\|canceled` |
 | Relate | `save_issue` (`id`, `relatedTo`) | `relation add ID --related OTHER --type related` | `create --related OTHER` |
 | Block (dependency) | `save_issue` (`id`, `blockedBy` / `blocks`) | `relation add ID --related OTHER --type blocked-by\|blocks` | — |
@@ -61,8 +61,12 @@ Use the MCP tools for these; `orca linear --help` and each command's `--help` li
   `list-issues --cycle` filter.
 - Projects beyond the list: `get_project`, `save_project`, project labels, status updates. The CLI
   has `project list`.
-- Templates (`get_template`, `list_templates`) and new or retired labels (`save_issue_label`). The
-  CLI adds, removes and sets labels that exist.
+- Issue fields `save-issue` has no flag for, all through `save_issue`: putting an issue in a cycle,
+  milestone or release (`cycle`, `milestone`, `addReleases`), its agent delegate (`delegate`), its
+  SLA (`slaBreachesAt`, `slaType`), and a partial description edit (`patch`; the CLI replaces the
+  whole body).
+- Templates (`get_template`, `list_templates`); creating or editing labels (`save_issue_label`) and
+  retiring them (`retire_issue_label`). The CLI adds, removes and sets labels that exist.
 - Users outside a team's members (`list_users`, `get_user`), notifications, sharing an issue.
 - The exact close times and parents the CLI's issue JSON lacks (below).
 

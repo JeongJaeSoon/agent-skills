@@ -120,7 +120,7 @@ names, with its evidence, so the ticket shows why it moved:
 | The ticket's own definition of done verified | `completed` | the completion comment: PR link, merge commit, each criterion with its evidence (`deliver-ticket` §6) |
 
 Each cell is one line, with this skill's `scripts/tracker.py` by its absolute path and no
-`--config`; write a comment's body to a file first:
+`--config`; write a comment's body first to a `.md` or `.txt` file and pass its absolute path:
 
 ```bash
 python3 <tracker.py> transition ID --to started     # also review, completed
@@ -129,9 +129,11 @@ python3 <tracker.py> comment ID --body-file <file>  # a comment line, the comple
 ```
 
 The orchestrator's delegate gate lets the `transition` and `comment` lines through in exactly
-this shape; there, the PR link is `orca linear attach ID --url <pr url>`. A Linear ID that
-`tracker.py` refuses (a team key that starts with a digit) takes that milestone through the MCP
-tools ([references/linear.md](references/linear.md), "Orca CLI limits").
+this shape, with the body file in a place it may write (its temp directory, `~/.local/state`);
+there, the PR link is `orca linear attach ID --url <pr url>`. A Linear ID that `tracker.py`
+refuses (a team key that starts with a digit) takes that milestone through the MCP tools
+([references/linear.md](references/linear.md), "Orca CLI limits"); the orchestrator, whose gate
+denies MCP writes, hands it to the write delegate instead.
 
 `completed` waits for what the ticket calls done, which is often "deployed and verified", not
 "merged". A merge by itself moves nothing. A late milestone (a review re-requested after changes)
