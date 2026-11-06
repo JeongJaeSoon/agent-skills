@@ -1,6 +1,6 @@
 ---
 name: prune-comments
-description: "Use to cut comments in a diff down to what the code cannot say: /prune-comments, a request to clean up or remove comments (\"주석 정리해줘\"), and deliver-ticket's step before review. Scoped to the diff or the files the caller names; for prose in docs and PR bodies, use write-plainly."
+description: "Use to cut comments in a diff to what the code cannot say: /prune-comments, \"주석 정리해줘\", and deliver-ticket's pre-review step. Docs and PR prose are write-plainly."
 ---
 
 # Prune comments

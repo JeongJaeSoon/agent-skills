@@ -1,6 +1,6 @@
 ---
 name: dispatch-card
-description: "Use when sending work to another repo, or a side branch of this one, as a new Orca card while this session keeps going — \"별도 세션으로 진행해줘\", \"현재 세션은 두고 ~\", \"~ repo 에 작업 지시해줘\", \"dispatch to another repository\". Not the next ticket (handoff-ticket), subagents."
+description: "Use to send work to another repo, or a side branch here, as a new Orca card while this session goes on — \"별도 세션으로 진행해줘\", \"~ repo 에 작업 지시해줘\" — and for an orchestrator's change work. The next ticket is handoff-ticket."
 ---
 
 # Orca dispatch

@@ -22,7 +22,7 @@ def take(name):
 
 
 helpers = "\n".join(take(n) for n in ("ICON", "ESC", "esc", "safeUrl", "icon", "ms", "rel", "relSpan", "tag", "link", "store",
-                                      "chips", "sorted", "th", "num", "ago"))
+                                      "chips", "sorted", "th", "num", "ago", "isFleet", "route"))
 SESSIONS = [
     {"id": "sa", "name": "alpha work", "kind": "task", "phase": "working", "project": "alpha"},
     {"id": "sb", "name": "beta work", "kind": "task", "phase": "idle", "project": "beta"},
@@ -34,7 +34,7 @@ PRS = [
     {"key": "o/beta#4", "repo": "o/beta", "number": 4, "title": "no session", "state": "OPEN", "ci": "success", "url": "https://example.test/4"},
 ]
 js = f"""{helpers}
-const S = {{filters: {{}}, state: null, fleet: null, sort: {{}}}};
+const S = {{slug: "fleet", filters: {{}}, state: null, fleet: null, sort: {{}}}};
 {(assets / "fleet.js").read_text()}
 const st = {{sessions: {json.dumps(SESSIONS)}, prs: {json.dumps(PRS)}}};
 const out = {{}};
@@ -45,6 +45,20 @@ out.routes = {{
   suffixed: open("prs", "#/fleet/prs?view=graph-extra"), digit: open("prs", "#/fleet/prs?view=graph1"), more: open("prs", "#/fleet/prs?view=graph&x=1"),
 }};
 out.suffixedView = (F.view = "graph-extra", viewOf(PRS_VIEWS));
+out.briefRoutes = {{ sessions: open("sessions", "#/fleet/sessions"), plain: open("brief", "#/fleet/brief"), queried: open("brief", "#/fleet/brief?view=sessions") }};
+F.brief = {{message: "Nothing to report."}}; F.units = {{units: []}};
+F.view = null; out.brief = fleetBrief(st);
+F.view = "sessions"; out.sessions = fleetBrief(st);
+F.view = "nope"; out.briefFallback = fleetBrief(st);
+S.section = "brief"; F.view = "sessions"; out.onSessions = [isFleet(), onSessions()];
+F.view = null; out.offSessions = onSessions();
+S.section = "prs"; F.view = "sessions"; out.otherPage = onSessions();
+// The real route() from app.js over real addresses: what the sidebar and the view switch link to.
+const VIEWS = {{}}, render = () => {{}}, pollState = () => {{}};
+document.querySelector = () => ({{ scrollTo() {{}} }});
+const through = (hash) => {{ location.hash = hash; route(); return [S.section, F.view, viewOf(PRS_VIEWS), viewOf(BRIEF_VIEWS)]; }};
+out.real = Object.fromEntries(["#/fleet/prs", "#/fleet/prs?view=graph", "#/fleet/graph", "#/fleet/prs?view=graph-extra", "#/fleet/brief",
+  "#/fleet/brief?view=sessions", "#/fleet/sessions", "#/fleet/work"].map((h) => [h, through(h)]));
 out.ids = FLEET_SECTIONS.map((s) => s.id);
 F.view = null; out.table = fleetPrs(st);
 F.view = "graph"; out.graph = fleetPrs(st);
@@ -53,7 +67,7 @@ S.filters.fleet_project = "alpha"; F.view = "graph"; out.alpha = fleetPrs(st);
 S.filters.fleet_project = "beta"; out.beta = fleetPrs(st);
 process.stdout.write(JSON.stringify(out));"""
 sandbox = ("const vm = require('vm'); vm.runInNewContext(require('fs').readFileSync(0, 'utf8'), "
-           "{document: {addEventListener() {}}, process, location: {hash: '#/fleet/prs'}, window: {}, fetch() { throw new Error('no fetch'); }});")
+           "{document: {addEventListener() {}}, process, location: {hash: '#/fleet/prs', replace() {}}, window: {}, fetch() { throw new Error('no fetch'); }});")
 r = subprocess.run(["node", "-e", sandbox], input=js, capture_output=True, text=True)
 assert r.returncode == 0, r.stderr[-1500:]
 out = json.loads(r.stdout)
@@ -64,6 +78,13 @@ assert out["routes"] == {"graph": ["prs", "graph"], "work": ["stages", None], "p
                          "suffixed": ["prs", "graph-extra"], "digit": ["prs", "graph1"], "more": ["prs", "graph"]}, out["routes"]
 assert out["suffixedView"] == "table", "a value that only starts like a view is not that view"
 assert "graph" not in out["ids"] and "prs" in out["ids"], out["ids"]
+
+# the same addresses through app.js route(): [section, view, PRS view, Brief view]
+assert out["real"] == {
+    "#/fleet/prs": ["prs", None, "table", "brief"], "#/fleet/prs?view=graph": ["prs", "graph", "graph", "brief"],
+    "#/fleet/graph": ["prs", "graph", "graph", "brief"], "#/fleet/prs?view=graph-extra": ["prs", "graph-extra", "table", "brief"],
+    "#/fleet/brief": ["brief", None, "table", "brief"], "#/fleet/brief?view=sessions": ["brief", "sessions", "table", "sessions"],
+    "#/fleet/sessions": ["brief", "sessions", "table", "sessions"], "#/fleet/work": ["stages", None, "table", "brief"]}, out["real"]
 
 # the switch: the table is the default and carries no query; the current view is marked
 for page, cur, other in ((out["table"], "테이블", "그래프"), (out["fallback"], "테이블", "그래프"), (out["graph"], "그래프", "테이블")):
@@ -80,6 +101,20 @@ def prs_in(page):
 
 assert prs_in(out["graph"]) == {"1": False, "2": True, "3": True}, prs_in(out["graph"])  # #4 has no session
 assert prs_in(out["alpha"]) == {"1": False, "2": True} and prs_in(out["beta"]) == {"3": True}, (prs_in(out["alpha"]), prs_in(out["beta"]))
-assert 'data-group="fleet_project" data-val="alpha"' in out["graph"] and 'aria-pressed="true"' in out["alpha"].split('aria-label="Project"')[1]
+assert 'data-group="fleet_project" data-val="alpha"' in out["graph"]
+# the chip of the chosen project is the pressed one, and "All projects" is not
+chips_alpha = out["alpha"].split('aria-label="Project"')[1]
+assert 'data-val="alpha" aria-pressed="true"' in chips_alpha and 'data-val="all" aria-pressed="false"' in chips_alpha, chips_alpha[:400]
+assert 'data-val="all" aria-pressed="true"' in out["graph"].split('aria-label="Project"')[1]
+
+# Brief | Sessions: the old Sessions address opens the Sessions view; the poll for units follows the view, not a section
+assert out["briefRoutes"] == {"sessions": ["brief", "sessions"], "plain": ["brief", None], "queried": ["brief", "sessions"]}, out["briefRoutes"]
+assert "sessions" not in out["ids"] and "brief" in out["ids"], out["ids"]
+assert out["onSessions"] == [True, True] and out["offSessions"] is False and out["otherPage"] is False, (out["onSessions"], out["offSessions"], out["otherPage"])
+for page, cur, other in ((out["brief"], "Brief", "Sessions"), (out["briefFallback"], "Brief", "Sessions"), (out["sessions"], "Sessions", "Brief")):
+    sw = page.split('<nav class="view-switch"')[1].split("</nav>")[0]
+    assert f'aria-current="page">{cur}</a>' in sw and f'aria-current="page">{other}</a>' not in sw, sw
+assert 'href="#/fleet/brief"' in out["brief"] and 'href="#/fleet/brief?view=sessions"' in out["brief"]
+assert '<table class="sess">' in out["sessions"] and 'class="sess"' not in out["brief"] and "Nothing to report." in out["brief"]
 
 print("test_fleet_views: ok")

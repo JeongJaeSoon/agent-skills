@@ -7,7 +7,6 @@
 const FLEET_SECTIONS = [
   { id: "overview", label: "Overview", icon: "overview" },
   { id: "inbox", label: "Inbox", icon: "inbox" },
-  { id: "sessions", label: "Sessions", icon: "workers" },
   { id: "prs", label: "Pull requests", icon: "prs" },
   { id: "brief", label: "Brief", icon: "note" },
   { id: "stages", label: "Stages", icon: "flag" },
@@ -80,7 +79,7 @@ const F = { token: null, draft: {}, confirm: null, chat: {}, arm: null, prompt: 
 // route() hands over "#/fleet/<section>[/<arg>]"; the only argument is a session id.
 // The Work page's stage table is the Stages page now: an old #/fleet/work link opens it.
 // A page that folded into another is [section, view]: the old address opens that view of the new page.
-const MOVED = { work: "stages", graph: ["prs", "graph"] };
+const MOVED = { work: "stages", graph: ["prs", "graph"], sessions: ["brief", "sessions"] };
 function fleetSection(section, arg, hash = location.hash) {
   F.sessionId = section === "session" && arg ? arg : null;
   const moved = MOVED[section];
@@ -138,7 +137,7 @@ function sessionTree(st) {
 
 function fleetSidebar() {
   const st = S.state;
-  const counts = st ? { inbox: (st.items || []).length || null, sessions: (st.sessions || []).length,
+  const counts = st ? { inbox: (st.items || []).length || null,
     prs: (st.prs || []).filter((p) => p.state === "OPEN").length || null, stages: stageOpen() || null, todo: todoCount() || null, automations: autoTroubled(st).length || null, monitors: monTroubled(st).length || null } : {};
   $("#section-list").innerHTML = FLEET_SECTIONS.map((s) => `${s.sep ? '<li class="sb-sep" aria-hidden="true"></li>' : ""}<li><a class="nav-item" href="#/fleet/${s.id}"
       ${s.id === S.section ? 'aria-current="page"' : ""} title="${s.label}">${icon(s.icon)}<span class="sb-text">${s.label}</span>
@@ -991,7 +990,9 @@ function fleetChanges() {
 
 // The periodic report as `orch brief render --periodic` prints it (via /api/fleet/brief), re-rendered on every poll
 // while this view is open. The renderer owns rows, order, icons and bold; this only turns its Markdown into HTML.
-const BRIEF_FED = ["brief", "stages", "todo", "session", "sessions"];  // the Stages and To-do pages read the same answer's `stages` and `open`, Sessions its marks
+const BRIEF_FED = ["brief", "stages", "todo", "session"];  // the Stages and To-do pages read the same answer's `stages` and `open`, the Sessions view its marks
+const BRIEF_VIEWS = [["brief", "Brief"], ["sessions", "Sessions"]];
+const onSessions = () => isFleet() && S.section === "brief" && viewOf(BRIEF_VIEWS) === "sessions";
 async function pollBrief() {
   if (F.briefBusy) return;
   F.briefBusy = true;
@@ -1006,7 +1007,7 @@ async function pollBrief() {
     }
   } catch (e) { F.brief = { message: String(e.message || e) }; F.briefEtag = null; }
   F.briefBusy = false;
-  if (S.section === "sessions") pollUnits();
+  if (onSessions()) pollUnits();
 }
 // The server's join of sessions, brief rows, PRs and tickets (/api/fleet/units, units.py). The Sessions page is a column
 // preset of it: a ticket, a PR, a brief row or an owner's turn is read from here, never worked out again on the page.
@@ -1018,11 +1019,11 @@ async function pollUnits() {
     if (r.status !== 304) {
       F.units = r.ok ? await r.json() : { error: `HTTP ${r.status}`, units: [] };
       F.unitsEtag = r.ok ? r.headers.get("ETag") : null;
-      if (isFleet() && S.section === "sessions") renderView();
+      if (onSessions()) renderView();
     }
   } catch (e) {
     F.units = { error: String(e.message || e), units: [] }; F.unitsEtag = null;
-    if (isFleet() && S.section === "sessions") renderView();
+    if (onSessions()) renderView();
   }
   F.unitsBusy = false;
 }
@@ -1201,11 +1202,13 @@ async function openSession(t) {
   showOpenNote();
 }
 
-function fleetBrief() {
+function fleetBrief(st) {
+  const sw = viewSwitch("brief", BRIEF_VIEWS);
+  if (viewOf(BRIEF_VIEWS) === "sessions") return fleetSessions(st, sw);
   if (!F.brief) pollBrief();
   const b = F.brief;
   const headHtml = `<div class="view-head"><div><h2>Brief</h2><p>The periodic report as <span class="mono">orch brief render --periodic</span> builds it from the board, the sessions, the PR list and open decisions. A lead or card with no board rows shows from its session, with the next step from the report file its brief names; rows written with <span class="mono">orch board set</span> replace those. Bold rows changed since the last report sent.</p></div>
-    ${b && b.text ? `<div class="aside muted">${(b.changed || []).length} changed · ${(b.stale || []).length} stale${b.width_ok === false ? ` · ${tag("over 78 columns", "warn", "")}` : ""}${F.briefAt ? ` · updated ${relSpan(F.briefAt)}` : ""}</div>` : ""}</div>`;
+    ${b && b.text ? `<div class="aside muted">${(b.changed || []).length} changed · ${(b.stale || []).length} stale${b.width_ok === false ? ` · ${tag("over 78 columns", "warn", "")}` : ""}${F.briefAt ? ` · updated ${relSpan(F.briefAt)}` : ""}</div>` : ""}</div>${sw}`;
   if (!b) return headHtml + '<div class="loading">Loading…</div>';
   const stage = b.stages ? `<a class="card stage-link" href="#/fleet/stages">${icon("flag")}<b>Stages</b><span class="muted">${stageOpen()} in progress</span>${icon("arrow")}</a>` : "";
   if (!b.text) return headHtml + ackNote() + stage + `<div class="card"><div class="empty-chart">${esc(b.message || "Nothing to report.")}</div></div>`;
@@ -1663,7 +1666,8 @@ function foldSummary(kids) {
   return `<span class="fold-sum muted" title="Most urgent status under this lead">${kids.length} session${kids.length === 1 ? "" : "s"}${mark ? ` · ${briefInline(mark)}` : ""}</span>`;
 }
 
-function fleetSessions(st) {
+// The Sessions view of Brief; sw is the view switch fleetBrief draws under the head.
+function fleetSessions(st, sw = "") {
   if (!F.brief) pollBrief();
   if (!F.units) pollUnits();
   const tree = sessionTree(st), kidsOf = leadKids(tree), fold = leadFolds(), doneOpen = !!F.doneOpen;
@@ -1703,7 +1707,7 @@ function fleetSessions(st) {
   const sum = [done.size ? `${done.size} offline with a merged PR` : "", stale ? `${stale} subagent${stale === 1 ? "" : "s"} with no stop recorded` : ""].filter(Boolean).join(" · ");
   const doneRow = sum ? `<tr class="done-row"><td colspan="9" data-ui-review-ignore="a toggle across all columns, not a column's control"><button class="fold-btn" type="button" id="fold-done" data-fold-done aria-expanded="${doneOpen}" aria-controls="${esc(foldedAway.join(" "))}"
       aria-label="${doneOpen ? "Hide" : "Show"} finished sessions and stale subagents"><span class="chev" aria-hidden="true"></span></button><span class="muted">Finished · ${esc(sum)}</span></td></tr>` : "";
-  return `<div class="view-head"><div><h2>Sessions</h2><p>Every Orca worktree, placed under the orchestrator or lead whose run dispatched it, else under its Orca parent, else under the root. A lead is a session under the root with its own run; the sessions under it are its workers. Ticket, PR and the owner's-turn mark in Needs you come from the server's units (/api/fleet/units): the ticket is the card's own link, else an id in the session name, branch or brief row; a PR several sessions claimed is linked to none of them. Brief is the session's row from the Brief page. The board column is shown when not in-progress. A subagent a session started sits under it, dimmed. An offline worker whose PR merged, and a subagent with no stop recorded for hours, wait in the Finished line. The table scrolls sideways; a long value is cut to one line, whole on hover.</p></div>${phaseLegend()}</div>
+  return `<div class="view-head"><div><h2>Brief</h2><p>Every Orca worktree, placed under the orchestrator or lead whose run dispatched it, else under its Orca parent, else under the root. A lead is a session under the root with its own run; the sessions under it are its workers. Ticket, PR and the owner's-turn mark in Needs you come from the server's units (/api/fleet/units): the ticket is the card's own link, else an id in the session name, branch or brief row; a PR several sessions claimed is linked to none of them. Brief is the session's row from the Brief page. The board column is shown when not in-progress. A subagent a session started sits under it, dimmed. An offline worker whose PR merged, and a subagent with no stop recorded for hours, wait in the Finished line. The table scrolls sideways; a long value is cut to one line, whole on hover.</p></div>${phaseLegend()}</div>${sw}
     ${F.units && F.units.error ? `<div class="ack-note">${tag("units unavailable", "warn", "alert")} ${esc(F.units.error)}. Ticket, PR and the owner's-turn mark stay blank until it loads.</div>` : ""}
     ${projectChips(st)}<div class="card table-wrap"><table class="sess"><colgroup><col class="c-name"><col class="c-kind"><col class="c-phase"><col class="c-tk"><col class="c-pr"><col class="c-brief"><col class="c-need"><col class="c-act"><col class="c-pb"></colgroup>
       <thead><tr><th>Session</th><th>Kind</th><th title="After the phase: the model of the session's last assistant row, O opus, S sonnet, H haiku. A ! means orchestrate.models for its role says another. Then reload: the session loaded older hooks than the checkout has; no record: nothing recorded, so not known.">Phase · model</th><th>Ticket</th><th>PR</th><th>Brief</th><th class="num">Needs you</th><th class="num">Active</th><th>Project · branch</th></tr></thead><tbody>${rows}${doneRow}</tbody></table></div>
@@ -1712,7 +1716,7 @@ function fleetSessions(st) {
 
 function fleetSession(st) {
   const s = byId(st)[F.sessionId];
-  if (!s) return `<div class="loading">This session is gone from Orca. <a class="link" href="#/fleet/sessions">All sessions</a></div>`;
+  if (!s) return `<div class="loading">This session is gone from Orca. <a class="link" href="#/fleet/brief?view=sessions">All sessions</a></div>`;
   const parent = byId(st)[s.parent];
   const agents = (s.agents || []).map((a) => `<li class="agent"><div class="row">${tag(a.state, a.state === "waiting" ? "warn" : a.state === "working" ? "accent" : "good")}
       <span class="mono dim">${esc(a.type || "")}${a.mode ? ` · ${esc(a.mode)}` : ""}</span><span class="grow"></span>${relSpan(a.updated || a.since)}</div>
