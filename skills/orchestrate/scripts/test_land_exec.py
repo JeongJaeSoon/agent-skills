@@ -695,21 +695,36 @@ class LandExec(Fixture):
         self.assertIsNone(lane.holder())
         self.assertTrue(prog.ExclusiveLock(self.p, "main").take(self.n + 1000), "the next PR proceeds without a yield")
 
-    def test_parking_a_pr_releases_the_lane_it_held(self):
+    def test_a_parked_pr_whose_request_is_refused_releases_its_lane(self):
+        """Parked, then refused for a verdict reason before attempt: the lane must not wait out the stale window."""
         lane = prog.ExclusiveLock(self.p, "main")
         self.addCleanup(lane.release, self.n + 1000)
         self.assertTrue(lane.take(self.n))
-        with contextlib.redirect_stdout(io.StringIO()):
-            prog.cmd_record([self.slug, "parked", "--pr", str(self.n), "--note", "waits on a person"])
+        self.p.append("parked", pr=self.n, note="waits on a person")
+        self.verdict(sha="hother")
+        row = self.request()
+        self.round()
+        self.settled(row, "refused", 3, "latest verdict")
         self.assertIsNone(lane.holder())
         self.assertTrue(prog.ExclusiveLock(self.p, "main").take(self.n + 1000), "the next PR proceeds without a yield")
 
-    def test_parking_leaves_another_prs_lane_alone(self):
+    def test_a_parked_pr_refused_by_attempt_releases_its_lane(self):
+        lane = prog.ExclusiveLock(self.p, "main")
+        self.assertTrue(lane.take(self.n))
+        self.p.append("parked", pr=self.n, note="waits on a person")
+        row = self.request()
+        self.round()
+        self.settled(row, "refused", 1, "on hold")
+        self.assertIsNone(lane.holder())
+
+    def test_a_verdict_refusal_leaves_another_prs_lane_alone(self):
         lane = prog.ExclusiveLock(self.p, "main")
         self.addCleanup(lane.release, self.n + 1000)
         self.assertTrue(lane.take(self.n + 1000))
-        with contextlib.redirect_stdout(io.StringIO()):
-            prog.cmd_record([self.slug, "parked", "--pr", str(self.n)])
+        self.verdict(sha="hother")
+        row = self.request()
+        self.round()
+        self.settled(row, "refused", 3, "latest verdict")
         self.assertEqual(lane.holder()["pr"], self.n + 1000)
 
     def test_a_github_that_never_answers_expires_the_request(self):
