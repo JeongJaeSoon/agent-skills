@@ -153,7 +153,7 @@ Every call of a long session rereads its whole context, so past about 130k token
 
 ## PR events
 
-The dashboard's collector watches the PRs of every session on the roster and appends one line per event to `~/.local/state/agent-skills/dashboard/pr-events.jsonl`: `{"v":1,"id","at","repo","pr","kind","url","owner","owner_kind","actor","checks","head"}`, links and ids only. You react to them; you do not poll GitHub yourself. Wake on them the way you wake on worker mail: one background wait that exits when the file grows, then its completion notification. Skip kinds not in the table below (the collector may add more), and skip ids you already handled.
+The dashboard's collector watches the PRs of every session on the roster and appends one line per event to `~/.local/state/agent-skills/dashboard/events.jsonl`, the rows whose `kind` starts with `pr_` (strip the prefix for the event name): `{"at","kind","id","repo","pr","number","url","owner","owner_kind","actor","checks","head","session","text"}`, links and ids only. You react to them; you do not poll GitHub yourself. Wake on them the way you wake on worker mail: one background wait that exits when the file grows, then its completion notification, and read only the `pr_` rows past the last one you handled. Skip kinds not in the table below (the collector may add more), and skip ids you already handled. (`pr-events.jsonl` is an archive and no longer grows.)
 
 | Event | Owner of the PR | You do |
 |---|---|---|

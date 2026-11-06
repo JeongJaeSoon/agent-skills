@@ -330,6 +330,7 @@ th.num .th-sort { justify-content: flex-end; }
 .p-extra b { color: var(--ink); font-weight: 600; }
 .p-queue { border-top: 1px solid var(--line); }
 @media (max-width: 960px) { .p-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.warn-note { margin: 0; padding: var(--s4); color: var(--ink-3); font-size: var(--t-sm); line-height: 1.6; }
 .empty-chart { height: 160px; display: grid; place-items: center; color: var(--ink-3); font-size: var(--t-sm); }
 
 /* dependency graph */
