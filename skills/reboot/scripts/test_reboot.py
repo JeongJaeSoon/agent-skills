@@ -643,15 +643,19 @@ class Reload(unittest.TestCase):
 
     def test_own_record_names_the_caller_not_the_first_registration_of_its_session(self):
         # One session id resumed in two terminals: live_sessions keeps the first registration's name for both.
-        home = self.tmp / "home2"
-        (home / "sessions").mkdir(parents=True)
-        for pid, name in ((4242, "mailbox"), (CLAUDE, "orchestrator")):
-            (home / "sessions" / f"{pid}.json").write_text(json.dumps(
-                {"pid": pid, "sessionId": "s1", "cwd": ROOT, "procStart": "Thu Nov 5 08:00:00 2026", "name": name}))
         stamp = "Thu Nov 5 08:00:00 2026"
         procs = {CLAUDE: (1, stamp, "claude"), 4242: (1, stamp, "claude")}
-        with mock.patch.dict("os.environ", {"ORCH_CLAUDE_HOMES": str(home)}), mock.patch.object(fleet, "ps_table", return_value=procs):
-            self.assertEqual(reboot.own_record(table(), SELF)["name"], "orchestrator")
+        for homes in (("h1", "h1"), ("h1", "h2"), ("h2", "h1")):  # the two registrations in one home, and in two
+            paths = []
+            for (pid, name), h in zip(((4242, "mailbox"), (CLAUDE, "orchestrator")), homes):
+                home = self.tmp / "multi" / "-".join(homes) / h
+                (home / "sessions").mkdir(parents=True, exist_ok=True)
+                (home / "sessions" / f"{pid}.json").write_text(json.dumps(
+                    {"pid": pid, "sessionId": "s1", "cwd": ROOT, "procStart": stamp, "name": name}))
+                paths.append(str(home))
+            with mock.patch.dict("os.environ", {"ORCH_CLAUDE_HOMES": os.pathsep.join(dict.fromkeys(paths))}), \
+                    mock.patch.object(fleet, "ps_table", return_value=procs):
+                self.assertEqual(reboot.own_record(table(), SELF)["name"], "orchestrator", homes)
 
     def test_same_sha_is_ok(self):
         self.record(self.sha)

@@ -226,8 +226,10 @@ def own_record(table, pid):
         import fleet  # beside orca_settings, which imports it anyway
         # fleet's process table also carries each start time, which a live session's registration is checked against.
         s = next((s for s in fleet.live_sessions(fleet.ps_table()).values() if claude in s["pids"]), None)
-        # A session resumed in a second terminal has two registrations; live_sessions keeps the first one's name.
-        return {**s, **(fleet.read_json(s["home"] / "sessions" / f"{claude}.json", {}) or {})} if s else None
+        # A session resumed in a second terminal has two registrations (maybe under two homes); live_sessions keeps the
+        # first one's name, so the caller's own file is read.
+        own = next((r for h in fleet.claude_homes() if (r := fleet.read_json(h / "sessions" / f"{claude}.json", {}))), {})
+        return {**s, **own} if s else None
     except Exception:  # the line then says nothing rather than guess
         return None
 

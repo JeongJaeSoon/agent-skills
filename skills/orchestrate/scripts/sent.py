@@ -143,7 +143,7 @@ def page(rows, days=1, now=None, limit=LIMIT, inbox_since=None):
             for k in MESSAGE_FIELDS:
                 if r.get(k) is not None:
                     twin.setdefault(k, r[k])
-            if terminal_only(r):  # the log line may carry no channel, so the message's own is read before it folds
+            if r.get("message") and terminal_only(r):  # Orca's address is the stored one; a log line may carry no channel
                 twin.setdefault("warn", TERMINAL_ONLY)
         else:
             out.append(r)
