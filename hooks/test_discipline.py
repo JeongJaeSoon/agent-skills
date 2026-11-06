@@ -147,6 +147,7 @@ assert bash("python3 <<'A' <<'B'\nopen('probe.py','w')\nA\nprint('ok')\nB") == [
 assert bash("python3 <<'A' <<'B'\nprint('ok')\nA\nopen('probe.py','w')\nB") == EDIT
 assert bash("python3 -c \"from pathlib import Path; p: Path = Path('probe.txt'); p.open('w').write('x')\"") == EDIT
 assert bash("python3 -c \"from pathlib import Path; p = Path.cwd() / 'probe.txt'; p.open('w').write('x')\"") == EDIT
+assert bash("python3 -c 'import io\nreader = io  # Path.open alternative\nreader.open(\"w\").read()'") == []  # a comment binds nothing
 # a `cd` moves where a relative target lands
 assert bash("cd /tmp && echo x > a.py") == []
 assert bash(f"cd {TREE} && echo x > a.py", cwd=SCRATCH) == EDIT

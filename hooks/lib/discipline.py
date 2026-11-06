@@ -228,7 +228,7 @@ def python_writes(code):
             receiver = code[receiver_start(mask, m.start()):m.start()]
             # A call (`Path(p).open`) or a name the code bound to a Path; `io.open(path, mode)` and its kin are not it.
             is_path = receiver[-1:] in (")", "]") or re.search(
-                rf"\b{re.escape(receiver)}\s*(?::[^=;\n]+)?=(?!=)[^;\n]*\bPath\b", code) is not None if receiver.isidentifier() or receiver[-1:] in (")", "]") else False
+                rf"\b{re.escape(receiver)}\s*(?::[^=;\n]+)?=(?!=)[^;\n]*\bPath\b", mask) is not None if receiver.isidentifier() or receiver[-1:] in (")", "]") else False
             opens = is_path and bool(PYTHON_MODE.match(code, m.end()))
         else:  # open(path, "w"): the mode follows a top-level comma
             comma, more = first_arg_end(mask, m.end())
