@@ -271,7 +271,7 @@ bin/reap-hard install            # from the main checkout; `status`, `uninstall`
   pass. `run --dry-run [--rule R]` decides every rule as if owned and writes nothing, so it can be set beside
   `reap-hard run --dry-run` before `own`. A real `run` acts only on owned rules' candidates, inside each target's lock
   with the owner read again, and reap-hard's own act judges the target once more. `install` writes the LaunchAgent that
-  runs `tick` (patrol, shadow, real round, then reap-hard for the rules not owned) at reap-hard's interval; `config`
+  runs `tick` (patrol, shadow, reap-hard for the rules not owned, then the real round) at reap-hard's interval; `config`
   prints the `sweep` settings key that carries today's `reap-hard` values (the `sweep` key wins where both are set).
   Neither edits the settings file or a rule's owner by itself. Details and the hand-over order:
   [docs/reap-hard.md](../../docs/reap-hard.md).

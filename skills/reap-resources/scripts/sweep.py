@@ -10,7 +10,7 @@ real mode acts, only on the rules `sweep own` handed it (reap-hard's four: OWNAB
   sweep.py own RULE | release RULE                  hand a rule to the sweep, or back to reap-hard (sweep-owner.json)
   sweep.py install [--dry-run] [--here] | uninstall the LaunchAgent that runs `tick` where reap-hard's ran
   sweep.py config                                   the "sweep" settings key that carries today's reap-hard values
-  sweep.py tick                                     what the LaunchAgent runs: patrol, shadow, real round, reap-hard
+  sweep.py tick                                     what the LaunchAgent runs: patrol, shadow, reap-hard, real round
   sweep.py diff [--hours 48] [--json]               the shadow's "would act" against what the old cleaners (and the
                                                     sweep itself) did in the same hours
 
@@ -581,7 +581,8 @@ def run_round(rid=None, pressure=False, dry=False, now=None, acter=None):
     refreshes it too, while that round is still fresh."""
     now = now or time.time()
     acter = acter or act_item
-    with run_lock() as got:
+    # A dry-run reads only: no lock file, no state folder made, and a real round or `own` is not held up by it.
+    with (contextlib.nullcontext(True) if dry else run_lock()) as got:
         if not got:
             return {"refused": "다른 sweep 회차가 도는 중"}
         last = read_last()
@@ -634,7 +635,13 @@ def run_round(rid=None, pressure=False, dry=False, now=None, acter=None):
         out.update(rows=rows, acted=sum(bool(r.get("ok")) for r in rows), failed=sum(bool(r.get("failed")) for r in rows),
                    skipped=sum(r["decision"] == "act" and not r.get("ok") and not r.get("failed") for r in rows),
                    kept=sum(r["decision"] == "skip" for r in rows), rested=rested)
-        save_json(last_file(), {"t": now, "at": stamp(now), "round": v["round"],
+        # A candidate of a rule the file gives the sweep but that its old cleaner still holds (no good round of the
+        # sweep's yet, or a stale one): this write is that good round, so reap-hard leaves the rule from now on. The round
+        # is then not recorded as done, and the next pass acts on it while it is fresh.
+        deferred = any(isinstance(c, dict) and c.get("rule") in OWNABLE and guard.old_acts(c["rule"], own, now)[0]
+                       and ((own or {}).get("rules") or {}).get(c["rule"]) == "sweep" for c in v.get("candidates") or ())
+        out["deferred"] = deferred
+        save_json(last_file(), {"t": now, "at": stamp(now), "round": last.get("round") if deferred else v["round"],
                                 "owned": sorted(r for r in OWNABLE if ((own or {}).get("rules") or {}).get(r) == "sweep"),
                                 **{k: out[k] for k in ("acted", "failed", "skipped", "kept", "rested")}})
         return out
@@ -793,29 +800,37 @@ def budgeted(fn):
 
 def tick():
     """What the LaunchAgent runs each interval, in order, each step on its own so one failing leaves the next:
-    patrol (due rounds only), the shadow, the sweep's real round for the rules it owns, then reap-hard for the rest
-    (it leaves a sweep-owned rule by itself). The worst exit code."""
+    patrol (due rounds only), the shadow, reap-hard for the rules the sweep does not own (it leaves an owned one by
+    itself), then the sweep's real round. reap-hard goes first so that a rule just handed over, whose first good round
+    the sweep has not written yet, is still its old cleaner's in that pass: the real round writes sweep-last.json
+    after it. The worst exit code."""
     code = 0
     try:
         r = subprocess.run([sys.executable, str(reap.ORCH), "patrol", "--if-due"], stdin=subprocess.DEVNULL,
                            timeout=PATROL_WAIT_S)
         print(f"patrol 종료 코드 {r.returncode}")
+        code = max(code, 1 if r.returncode else 0)
     except (OSError, subprocess.SubprocessError) as e:
         print(f"patrol 을 돌리지 못함: {type(e).__name__}", file=sys.stderr)
-    for name, fn in (("shadow", run_shadow), ("real", run_round)):
-        res = budgeted(fn)
+        code = max(code, 1)
+
+    def hard():
+        r = subprocess.run([sys.executable, str(HERE.parents[2] / "scripts" / "reap_hard.py"), "run", "--no-patrol"],
+                           stdin=subprocess.DEVNULL, timeout=STEP_TIMEOUT_S)
+        return {"code": r.returncode}
+
+    for name, fn in (("shadow", run_shadow), ("reap-hard", hard), ("real", run_round)):
+        try:
+            res = budgeted(fn)
+        except Exception as e:  # one step's failure (a log that cannot be written, a hung child) leaves the others
+            print(f"{name}: {type(e).__name__}: {str(e)[:200]}", file=sys.stderr)
+            code = max(code, 1)
+            continue
         if res is None:
             code = max(code, 4)
             continue
         print(name, json.dumps({k: res.get(k) for k in ("round", "refused", "acts", "acted", "failed")}, ensure_ascii=False))
-        code = max(code, 1 if res.get("failed") else 0)
-    try:
-        r = subprocess.run([sys.executable, str(HERE.parents[2] / "scripts" / "reap_hard.py"), "run", "--no-patrol"],
-                           stdin=subprocess.DEVNULL, timeout=STEP_TIMEOUT_S)
-        code = max(code, r.returncode)
-    except (OSError, subprocess.SubprocessError) as e:
-        print(f"reap-hard 를 돌리지 못함: {type(e).__name__}", file=sys.stderr)
-        code = max(code, 1)
+        code = max(code, res.get("code") or (1 if res.get("failed") else 0))
     return code
 
 

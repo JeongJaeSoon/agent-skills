@@ -712,6 +712,11 @@ with contextlib.redirect_stdout(buf):
     sweep.main(["sweep.py", "run", "--dry-run", "--rule", "stack:gone"])
 assert "stack:gone" in buf.getvalue() and "serve:dark" not in buf.getvalue()
 assert no_state_files()  # a dry-run twice on the same round: still nothing decided, nothing recorded
+# It takes no run lock: no lock file is made, and a round holding the lock does not stop it.
+(STATE / "sweep.lock").unlink(missing_ok=True)
+assert sweep.run_round(dry=True, now=NOW)["acts"] == 4 and not (STATE / "sweep.lock").exists()
+with sweep.run_lock() as held_by_other:
+    assert held_by_other and sweep.run_round(dry=True, now=NOW)["acts"] == 4
 sweep.shadow_keep = saved_keep
 
 # real, nothing owned: no act, and sweep-last.json is still written (the "last good round" an owner waits on)
@@ -763,7 +768,16 @@ assert last["round"] == "r3" and last["acted"] == 1 and last["owned"] == ["serve
 calls.clear()
 (STATE / "sweep-last.json").write_text(json.dumps({"t": NOW - 10 * 3600}))
 round_("r4", t=NOW + 200)
-assert sweep.run_round(now=NOW + 220, acter=fake_act)["acted"] == 0 and calls == []
+out = sweep.run_round(now=NOW + 220, acter=fake_act)
+assert out["acted"] == 0 and calls == [] and out["deferred"] is True
+# ...but that pass wrote the sweep's first good round, so reap-hard leaves the rule now, and the same round is not
+# recorded as done: the next pass acts on it instead of leaving it to nobody until the next patrol round.
+assert guard.old_acts("serve:dark", guard.ownership(), NOW + 230)[0] is False
+assert json.loads((STATE / "sweep-last.json").read_text())["round"] != "r4"
+out = sweep.run_round(now=NOW + 240, acter=fake_act)
+assert calls == ["serve:--https=8443"] and out["acted"] == 1 and out["deferred"] is False, out
+assert json.loads((STATE / "sweep-last.json").read_text())["round"] == "r4"
+calls.clear()
 
 # the diff counts the sweep's own acts, so an owned rule's shadow rows do not read as excess
 sweep.shadow_log().unlink(missing_ok=True)
@@ -971,15 +985,33 @@ def fake_run(cmd, **kw):
     return subprocess.CompletedProcess(cmd, 0)
 
 
-subprocess.run = fake_run
-sweep.run_shadow = lambda *a, **k: steps.append("shadow") or {"round": "r"}
-sweep.run_round = lambda *a, **k: steps.append("real") or {"round": "r", "failed": 1}
-out = io.StringIO()
-with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
-    code = sweep.tick()
-subprocess.run, sweep.run_shadow, sweep.run_round = saved
-assert code == 1 and len(steps) == 4 and steps[0][-2:] == ["patrol", "--if-due"] and steps[1:3] == ["shadow", "real"], steps
-assert steps[-1][-2:] == ["run", "--no-patrol"] and steps[-1][0].endswith("reap_hard.py"), steps
+def run_tick(shadow=lambda *a, **k: steps.append("shadow") or {"round": "r"},
+             real=lambda *a, **k: steps.append("real") or {"round": "r"}, run=fake_run):
+    steps.clear()
+    subprocess.run, sweep.run_shadow, sweep.run_round = run, shadow, real
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            return sweep.tick()
+    finally:
+        subprocess.run, sweep.run_shadow, sweep.run_round = saved
+
+
+# reap-hard goes before the real round, so a rule just handed over is still reap-hard's in that pass
+code = run_tick()
+assert code == 1, code  # the patrol that timed out shows in the exit code
+assert len(steps) == 4 and steps[0][-2:] == ["patrol", "--if-due"] and steps[1] == "shadow" and steps[3] == "real", steps
+assert steps[2][-2:] == ["run", "--no-patrol"] and steps[2][0].endswith("reap_hard.py"), steps
+# a step that raises, or fails, leaves the others
+code = run_tick(shadow=lambda *a, **k: (_ for _ in ()).throw(PermissionError("log")),
+                run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0))
+assert code == 1 and "real" in steps, (code, steps)
+code = run_tick(real=lambda *a, **k: steps.append("real") or {"round": "r", "failed": 1},
+                run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0))
+assert code == 1 and steps == ["shadow", "real"], steps
+code = run_tick(run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0))
+assert code == 0 and steps == ["shadow", "real"], (code, steps)
+code = run_tick(run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 2 if "reap_hard.py" in cmd[1] else 0))
+assert code == 2 and "real" in steps, (code, steps)
 signal.alarm(0)
 
 # the CLI: own and release go through main, an unknown rule is refused with the list
