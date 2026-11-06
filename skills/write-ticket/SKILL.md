@@ -125,7 +125,7 @@ what is left goes with the full draft and a recommendation, and while it waits i
 answer" holds.
 
 A follow-up is marked as one so growth after the initial design can be counted
-(`measure-delivery`, `orchestrate`). Shape it exactly as `use-tracker`
+(`reflect`'s measure mode, `orchestrate`). Shape it exactly as `use-tracker`
 `references/exit-condition.md` "Follow-up (derived) tickets" says: label, first body lines,
 relation and parent; add blocked-by only when it truly blocks.
 

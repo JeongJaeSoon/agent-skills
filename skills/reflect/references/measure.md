@@ -1,9 +1,4 @@
----
-name: measure-delivery
-description: Use when asked how a project or autonomous run went — "성과 측정", derived-ticket growth, backlog convergence, rework, escaped defects, tokens per merged PR — and at an orchestrate program's Close. An orchestrator dispatches it instead.
----
-
-# Measure delivery
+# Measure mode
 
 Numbers for one repo and one tracker project over a window, computed from the tracker, GitHub
 and this machine's transcripts. The script only reads. Run it in a subagent that returns only
