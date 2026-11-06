@@ -31,8 +31,9 @@ Before any rule, the protect file is read; without it nothing runs (exit 2). It 
 compose projects in reap.pressure.always_on and anything a person's shell started are always kept.
 Each decision that acts, or would act under --dry-run, and each failure is one JSON line in
 <state>/reap-hard.jsonl; the pass's summary is <state>/reap-hard-last.json.
-After a pass that is not a dry run, `orch patrol --if-due` starts detached (a round is due 25 minutes after the last,
-so one per 30-minute pass); a card it judged working within the hour is kept, and nothing it judged becomes a target.
+After a pass that is not a dry run, `orch patrol --if-due --fallback` starts detached; it runs only when the patrol
+job has not run a round for 40 minutes. A card it judged working within the hour is kept, and nothing it judged becomes
+a target.
 A pass that is not a dry run also writes <state>/inventory.json, its own judgements; patrol's candidate stage reads
 them for 10 minutes instead of scanning the machine again (read_inventory). One `gh pr list` per repo answers every
 card's PR (reap.PrMap). A landed PR starts a pass between beats (reap.spawn_hard, not within 5 minutes of the last).

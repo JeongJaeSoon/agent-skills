@@ -730,6 +730,7 @@ def spawn_patrol(reason, python=None, fallback=False):
 
 
 HARD = pathlib.Path(__file__).resolve().parents[3] / "scripts" / "reap_hard.py"
+HARD_TIMEOUT_S = 900  # a pass takes about a minute; this only ends a hung one
 
 
 def spawn_hard(reason, min_gap=300, python=None):
@@ -743,12 +744,16 @@ def spawn_hard(reason, min_gap=300, python=None):
             return False
     except (OSError, ValueError, KeyError, TypeError):
         pass  # no readable last pass: run one
+    py = python or sys.executable
     try:
         STATE.mkdir(parents=True, exist_ok=True)
         with open(STATE / "reap-hard.log", "a") as out:
             out.write(f"--- {time.strftime('%Y-%m-%dT%H:%M:%S%z')} {reason}\n")
             out.flush()
-            subprocess.Popen([python or sys.executable, "-I", str(HARD), "run"], stdout=out, stderr=out,
+            # Under the shared runner (record <state>/jobs/reap-hard-kick.json): a hung gh, docker or orca call ends with
+            # the pass's process group at the timeout instead of holding reap-hard.lock for good.
+            subprocess.Popen([py, "-I", str(JOB_RUNNER), "run", "reap-hard-kick", "--timeout", str(HARD_TIMEOUT_S), "--",
+                              py, "-I", str(HARD), "run"], stdout=out, stderr=out,
                              stdin=subprocess.DEVNULL, start_new_session=True)
         return True
     except OSError:

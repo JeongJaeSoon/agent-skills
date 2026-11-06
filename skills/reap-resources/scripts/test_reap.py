@@ -542,6 +542,17 @@ with tempfile.TemporaryDirectory() as td_hard:
     assert reap.spawn_hard("test", min_gap=0) is False, "AGENT_SKILLS_PATROL=off starts nothing"
     del os.environ["AGENT_SKILLS_PATROL"]
     assert reap.spawn_hard("test", min_gap=300) is False, "a pass a minute ago is not repeated"
+    # An old pass: it starts, under the shared runner with a timeout, never as a bare reap_hard.py a hung call could hold.
+    (reap.STATE / "reap-hard-last.json").write_text(json.dumps({"t": time.time() - 3600}))
+    started = []
+    real_popen, reap.subprocess.Popen = reap.subprocess.Popen, lambda cmd, **kw: started.append(cmd)
+    try:
+        assert reap.spawn_hard("test", min_gap=300) is True
+    finally:
+        reap.subprocess.Popen = real_popen
+    cmd = started[0]
+    assert cmd[2] == str(reap.JOB_RUNNER) and cmd[3:5] == ["run", "reap-hard-kick"], cmd
+    assert cmd[cmd.index("--timeout") + 1] == str(reap.HARD_TIMEOUT_S) and cmd[-3:] == ["-I", str(reap.HARD), "run"], cmd
     reap.STATE = saved_hard[0]
     os.environ.pop("AGENT_SKILLS_PATROL", None) if saved_hard[1] is None else os.environ.__setitem__("AGENT_SKILLS_PATROL", saved_hard[1])
 
