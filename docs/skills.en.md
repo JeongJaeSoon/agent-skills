@@ -52,7 +52,7 @@ Which skill owns a PR, and who merges it:
   - For the skeleton it uses the tracker template from the config (`tracker.<adapter>.templates`) first, and the bundled template if there is none. If reading a template fails, it stops.
   - The `🛠 구현 힌트` (implementation hints) section lists only paths it actually opened.
   - Titles start with a verb, every acceptance criterion says how to check it, and `🚫 범위 밖` (out of scope) is always filled in.
-  - The title and body language comes from `tracker.<adapter>.language` in the config. Without it, the skill sets no language.
+  - The title and body language comes from the site rules file (`tracker.rules_file`), then `tracker.<adapter>.language` in the config. Without either, the skill sets no language and Claude's language setting applies.
   - Dependencies are set as tracker relations, and work is split so that one ticket = one PR. PRs that depend on each other are planned as a GitHub stack.
   - Shows the whole draft once and files it after approval. Mixed-in requests and follow-ups the session raises on its own are filed first.
 - **Bundled:** `references/templates.md` (skeletons for development and investigation tickets).
