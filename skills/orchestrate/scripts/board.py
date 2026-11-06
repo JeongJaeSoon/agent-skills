@@ -264,9 +264,34 @@ def set_row(rid, **fields):
 
 ANNOT_PREFIX = "card:"
 ANNOT_FIELDS = ("phase", "progress", "after", "owner", "next")  # what Orca, GitHub and a card's report do not know
-# Whether the renderer reads board["annots"]. Until it does (A-ANNOT-b flips this), a migrated row would vanish from the
-# screen and its annotation would not show, so `annot_migrate(apply=True)` refuses.
-ANNOT_RENDERED = False
+# Whether the renderer reads board["annots"] (annot_overlay). A migrated row leaves the screen and its annotation shows on
+# the card's row instead; `annot_migrate(apply=True)` refuses while this is False.
+ANNOT_RENDERED = True
+
+
+def annot_overlay(rows, annots):
+    """Lay each card annotation over the one row that stands for its card (a row's session, worktree or linked card is the
+    annotation's). Returns {worktree: [row ids]} for cards with two or more rows: the annotation goes on the first, and the
+    render lists the rest as `중복 N건`. rows are changed in place."""
+    dupes = {}
+    by_card = {}
+    for rid, r in rows.items():
+        for wt in {r.get("session"), r.get("worktree"), r.get("linked")} - {None}:
+            by_card.setdefault(wt, []).append(rid)
+    for key, a in annots.items():
+        wt = key[len(ANNOT_PREFIX):]
+        ids = by_card.get(wt, [])
+        if not ids:
+            continue
+        r = rows[ids[0]]
+        for k in ("progress", "after", "owner", "next"):
+            if a.get(k):
+                r[k] = a[k]
+        if a.get("phase"):
+            r["title"] = f"{r['title']} ({a['phase']})"
+        if len(ids) > 1:
+            dupes[wt] = ids
+    return dupes
 
 
 def annot_set(rid, **fields):
@@ -1126,6 +1151,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             open_dec = fleet.open_decisions()
         except store_db.NotMigrated:  # a DB that is not imported: unknown, and the headline and the ❔ rows say so
             open_dec = []
+    # A row `annot-migrate` moved into a card annotation is dropped: it neither shows nor hides the card's own row.
+    store["rows"] = {k: r for k, r in store["rows"].items() if r.get("status") != "dropped"}
     prs_file = fleet.read_json(sd / "prs.json", {}) or {}
     me = prs_file.get("me")
     prs = {k: {**v["detail"], "probed_at": v.get("probed_at")} for k, v in (prs_file.get("prs") or {}).items() if v.get("detail")}
@@ -1153,6 +1180,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         extra, extra_order = fleet_rows(state, store["leads"], store["rows"], prs, now,
                                         float(limits["subagent_stale_h"]) * 3600, checks, notes=inputs)
         store["rows"], store["order"] = {**extra, **store["rows"]}, store["order"] + extra_order
+    card_dupes = annot_overlay(store["rows"], store.get("annots") or {})
     rows = store["rows"]
 
     everyone = rows  # every row, before a --scope report keeps only its program's: a group does not depend on the scope
@@ -1893,6 +1921,10 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     # Only the ⏸️ rows: the held items are a queue the pointer line counts (todo_tables lists it).
     if held := list(dict.fromkeys(held)):
         out += ["", heading("⏸️ 보류"), ""] + [it if tg else f"- {it}" for it in held]
+    if card_dupes:
+        out += ["", heading(f"🔁 카드 중복 {len(card_dupes)}건"), ""] + [
+            (it if tg else f"- {it}") for it in (f"{wt}: {', '.join(ids)} → 하나만 남긴다 (`orch board drop <id>`)"
+                                                for wt, ids in card_dupes.items())]
     if insight:
         out += ["", insight.strip()]
     if periodic and skipped:

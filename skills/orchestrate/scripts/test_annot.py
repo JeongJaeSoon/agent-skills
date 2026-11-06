@@ -80,11 +80,15 @@ def refused(call, *words):
     raise AssertionError(words)
 
 
-def screen():
+def render_json():
     r = subprocess.run([sys.executable, str(HERE / "prog.py"), "brief", "render", "--json", "--no-refresh"],
                        capture_output=True, text=True, env=env)
     assert r.returncode == 0, (r.stdout, r.stderr)
-    return json.loads(r.stdout)["snapshot"]["rows"]
+    return json.loads(r.stdout)
+
+
+def screen():
+    return render_json()["snapshot"]["rows"]
 
 
 store.import_apply(checks=False)
@@ -120,7 +124,12 @@ code, _, err = orch("board", "set", "card:wt-card", "--status", "done")
 assert code == 1 and "--status" in err, err
 
 # ---- until the renderer reads annotations the screen does not change, and an annotation is no row
-assert "card:wt-card" not in board.read()["rows"] and screen() == before, "an annotation shows nowhere yet"
+assert "card:wt-card" not in board.read()["rows"], "an annotation is no row"
+board.set_row("card:wt-third", phase="단계 9", progress="3/4")
+shown = render_json()
+assert "단계 9" in shown["text"] and "3/4" in shown["text"], "the annotation shows on the card's row"
+assert "카드 중복 2건" in shown["text"] and "wt-third: d1, d2" in shown["text"], shown["text"]  # wt-card has three rows
+board.set_row("card:wt-third", phase="-", progress="-")
 
 # ---- a new row for a card is refused; a row about no card is not
 refused(lambda: board.set_row("fresh", repo="acme/app", worktree="wt-card"), "would be card wt-card's", "card:wt-card")
@@ -154,14 +163,14 @@ rows_before = json.dumps(board.read()["rows"], sort_keys=True)
 code, out, err = orch("board", "annot-migrate")
 assert code == 0 and out.startswith("would move 3 row(s)") and "중복 5건" in out and "orch board drop gone" in out, (out, err)
 assert json.dumps(board.read()["rows"], sort_keys=True) == rows_before, "a dry run writes nothing"
-# the apply waits for the renderer: a moved row would leave the screen with nothing in its place
-refused(lambda: board.annot_migrate(apply=True), "A-ANNOT-b")
-code, _, err = orch("board", "annot-migrate", "--apply")
-assert code == 1 and "A-ANNOT-b" in err and json.dumps(board.read()["rows"], sort_keys=True) == rows_before, err
-
-# ---- the apply, with the gate open: annotation, alias, dropped original (kept in the event), the old close
-board.ANNOT_RENDERED = True
+before_apply = screen()
+# ---- the apply: annotation, alias, dropped original (kept in the event), the old close
 assert board.annot_migrate(apply=True)[0] == move
+after_apply = screen()
+assert "mine" in before_apply and "mine" not in after_apply, "the moved row leaves the screen"
+assert "P/moved" in before_apply and "P/moved" not in after_apply
+assert after_apply["fleet:wt-mine"]["status"] == "owner", "the owner block moved with the row, onto the card's own row"
+assert after_apply["fleet:wt-mine"]["next"] == "Approve the change", after_apply["fleet:wt-mine"]
 annots = board.read()["annots"]
 assert annots["card:wt-card"]["aliases"] == ["row:P/one"] and annots["card:wt-card"]["owner"] == "오너" \
     and annots["card:wt-card"]["next"] == "직접 머지", annots  # the owner block moves as a pair
