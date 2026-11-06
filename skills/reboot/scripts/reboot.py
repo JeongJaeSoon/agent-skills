@@ -13,7 +13,7 @@ Usage:
 
 One line per finding: `ok …`, `info …`, or `do …` with the command to run. Nothing is started, stopped or changed.
 The first check is `orca status`. Exit 0 when no line says `do`, 1 when one does, 2 when Orca did not answer or is
-not ready.
+not ready (outside an Orca terminal, a not-ready Orca is an `info` line and the rest is checked).
 
 `sessions` lists the Claude Code sessions that ran in each PATH, newest first: last write, session id, transcript, and
 the first prompt. --under also takes the paths below each PATH (removed cards of a worktree root). Exit 1 when none.
