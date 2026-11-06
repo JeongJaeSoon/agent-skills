@@ -17,7 +17,7 @@ A body of work ends when its exit condition holds, not when the ticket list runs
    - **Out of scope:** what this work will not do, even if it comes up. Write "none" rather than leaving it blank.
    - **Deferred:** empty at first. LATER items go here.
 
-   Where these live: `use-tracker`, "Exit condition". Inside a program, the predicate is the exit items (`orchestrate` Frame).
+   Where these live: `use-tracker` `references/exit-condition.md`. Inside a program, the predicate is the exit items (`orchestrate` Frame).
 
 2. **Classify every follow-up now.** At the moment a finding turns up, give it one class:
 

@@ -26,7 +26,8 @@ last criterion, not the merge commit, is the decision point.
 runs next. Nothing else makes a session a program worker. The rest of this skill is for sessions without that line.
 
 **Loose ends.** A review comment, or a fix that lands right here, is just work: do it. Anything
-else is classified as `deliver-ticket` §2 "Findings outside the ticket" says; only a NOW finding
+else is classified NOW / LATER / DROP (`use-tracker`
+[references/exit-condition.md](../use-tracker/references/exit-condition.md)); only a NOW finding
 becomes a ticket (`write-ticket`), and then it is the next ticket, not this one.
 
 **Feedback on in-flight work is a new ticket.** When the user says "이거 더 낫게" about a card
@@ -62,8 +63,7 @@ A standing instruction is that permission, already given: "작업 끝나면 다�
 ticket comes next and whether to close this session are decided above. A question that still
 seems needed goes through the owner-ask gate
 ([owner-ask-gate.md](../orchestrate/references/owner-ask-gate.md)) first. File the NOW loose-end
-tickets before the next card starts, so the findings survive; `write-ticket` skips its approval
-gate for exactly this case.
+tickets before the next card starts, so the findings survive.
 
 ## 1. Confirm this work is actually done
 
