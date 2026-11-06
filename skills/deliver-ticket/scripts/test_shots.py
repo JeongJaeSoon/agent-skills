@@ -19,7 +19,8 @@ print("[ego-browser:notice] noise", file=sys.stderr)
 print("SHOTS_RESULT " + pathlib.Path({str(tmp / 'reply.json')!r}).read_text(), file=sys.stderr)
 """)
 stub.chmod(0o755)
-env = {**os.environ, "EGO_BROWSER": str(stub)}
+ledger = tmp / "ledger.jsonl"
+env = {**os.environ, "EGO_BROWSER": str(stub), "AGENT_SKILLS_LEDGER": str(ledger)}
 
 
 def run(*args, reply=None):
@@ -54,9 +55,11 @@ for bad in (["--name", "../x"], ["--name", "card.final"], ["--name", "ok", "--th
     assert r.returncode != 0 and r.stderr, (bad, r.stderr)
 
 # upload: files are checked before the browser opens.
-img = tmp / "card-1440-light.png"
+shots_dir = tmp / "shots"
+shots_dir.mkdir()
+img = shots_dir / "card-1440-light.png"
 img.write_bytes(b"\x89PNG\r\n\x1a\n")
-other = tmp / "card-390-dark.png"
+other = shots_dir / "card-390-dark.png"
 other.write_bytes(b"\x89PNG\r\n\x1a\n")
 (tmp / "script.js").unlink()
 for files, why in (([str(tmp / "nope.png")], "not a file"), ([str(SHOTS)], "not an image")):
@@ -208,5 +211,104 @@ r = run("upload", "--repo", "acme/app", "--pr", "1", "--out", str(tmp / "u.json"
 assert r.returncode != 0 and "unsent draft" in r.stderr, r.stderr
 c = calls()
 assert not any(x[0] in ("fill", "setInputFiles") for x in c), c
+del env["FAKE_DRAFT"]
+
+# upload registers its evidence directory in the reap ledger.
+rows = [json.loads(l) for l in ledger.read_text().splitlines()]
+assert rows and all(r["kind"] == "evidence" and r["links"]["pr"] == "acme/app#1" and r["id"] == str(shots_dir) for r in rows), rows
+
+# The janitor only removes a directory of images, so urls.json may not sit inside it.
+calls()
+for out in (shots_dir / "u.json", shots_dir / "sub" / "u.json"):
+    r = run("upload", "--repo", "acme/app", "--pr", "1", "--out", str(out), str(img))
+    assert r.returncode != 0 and "keep urls.json outside" in r.stderr, (out, r.stderr)
+assert calls() == [], "browser ran with urls.json inside the image directory"
+
+# upload refuses evidence inside a git worktree, before the browser opens.
+wt = tmp / "wt"
+wt.mkdir()
+subprocess.run(["git", "init", "-q", str(wt)], check=True)
+inside = wt / "card-390-dark.png"
+inside.write_bytes(b"\x89PNG\r\n\x1a\n")
+calls()
+r = run("upload", "--repo", "acme/app", "--pr", "1", "--out", str(tmp / "u.json"), str(inside))
+assert r.returncode != 0 and "inside a git worktree" in r.stderr, r.stderr
+r = run("upload", "--repo", "acme/app", "--pr", "1", "--out", str(wt / "sub" / "u.json"), str(img))
+assert r.returncode != 0 and "inside a git worktree" in r.stderr, r.stderr
+assert calls() == [], "browser ran for evidence inside a worktree"
+# GIT_DIR must not redirect the check to another repository and let the file through.
+env["GIT_DIR"] = str(tmp / "no-such.git")
+r = run("upload", "--repo", "acme/app", "--pr", "1", "--out", str(tmp / "u.json"), str(inside))
+assert r.returncode != 0 and "inside a git worktree" in r.stderr, r.stderr
+del env["GIT_DIR"]
+assert calls() == []
+
+# check: HEAD each URL, require an image type and a PR comment that references it.
+import http.server, threading
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_HEAD(self):
+        status, ctype = {"/ok": (200, "image/png"), "/page": (200, "text/html")}.get(self.path, (404, "text/plain"))
+        self.send_response(status)
+        self.send_header("Content-Type", ctype)
+        self.end_headers()
+
+    def log_message(self, *args):
+        pass
+
+
+server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+threading.Thread(target=server.serve_forever, daemon=True).start()
+base = f"http://127.0.0.1:{server.server_port}"
+bindir = tmp / "bin"
+bindir.mkdir()
+gh = bindir / "gh"
+gh.write_text("""#!/bin/sh
+case "$*" in
+  *issues/*/comments*) cat "$FAKE_GH_BODIES" ;;
+  *"--jq .private"*) echo "$FAKE_GH_PRIVATE" ;;
+  *) echo "unexpected: $*" >&2; exit 1 ;;
+esac
+""")
+gh.chmod(0o755)
+env["PATH"] = f"{bindir}{os.pathsep}{env['PATH']}"
+env["FAKE_GH_BODIES"] = str(tmp / "bodies.txt")
+
+
+def check_run(urls, posted, private):
+    (tmp / "c.json").write_text(json.dumps(urls))
+    (tmp / "bodies.txt").write_text("\n".join(posted) + "\n")
+    env["FAKE_GH_PRIVATE"] = "true" if private else "false"
+    return run("check", str(tmp / "c.json"), "--repo", "acme/app", "--pr", "1")
+
+
+good, html, gone = base + "/ok", base + "/page", base + "/gone"
+r = check_run({"a-390-dark": good}, [f'<img src="{good}">'], private=False)
+assert r.returncode == 0 and "VERIFIED  a-390-dark: image/png" in r.stdout, (r.stdout, r.stderr)
+r = check_run({"a": html}, [html], private=False)
+assert r.returncode == 1 and "NOT VERIFIED  a: HTTP 200 text/html" in r.stdout, r.stdout
+# A URL that is only the start of a longer posted one is not posted.
+r = check_run({"a": good}, [f'<img src="{good}def">'], private=False)
+assert r.returncode == 1 and "no PR comment references it" in r.stdout, r.stdout
+r = check_run({"a": good}, [f'<img src="{good}.png">'], private=False)
+assert r.returncode == 1 and "no PR comment references it" in r.stdout, r.stdout
+r = check_run({"a": good}, [f"![a](https://example.test/redirect?next={good})"], private=False)
+assert r.returncode == 1 and "no PR comment references it" in r.stdout, r.stdout
+for posted in (f"![a]({good}) and more", f"see {good}.", f"{good}, and {good}", f"<{good}>", f"x\n{good}"):
+    r = check_run({"a": good}, [posted], private=False)
+    assert r.returncode == 0, (posted, r.stdout)
+r = check_run({"a": good}, ["no images here"], private=False)
+assert r.returncode == 1 and "no PR comment references it" in r.stdout, r.stdout
+r = check_run({"a": gone}, [gone], private=False)
+assert r.returncode == 1 and "NOT VERIFIED  a: HTTP 404" in r.stdout, r.stdout
+r = check_run({"a": None}, [], private=False)
+assert r.returncode == 1 and "upload it first" in r.stdout, r.stdout
+# A private repo's images answer 404 without a session: inconclusive, not a failure, unless another one failed.
+r = check_run({"a": gone}, [gone], private=True)
+assert r.returncode == 2 and r.stdout.startswith("INCONCLUSIVE  a: private repo"), (r.returncode, r.stdout)
+r = check_run({"a": gone, "b": good}, [gone], private=True)
+assert r.returncode == 1 and "INCONCLUSIVE  a" in r.stdout and "NOT VERIFIED  b" in r.stdout, r.stdout
+server.shutdown()
 
 print("test_shots: ok")
