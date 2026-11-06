@@ -720,6 +720,13 @@ patrol.write_round([{**drift("opus"), "owner": None}], {"cards": {}}, False, NOW
 assert patrol.pending_lines("hu", True, T + dt.timedelta(hours=5, minutes=1))[0].startswith("PATROL M")
 assert patrol.pending_lines("hu", False, T + dt.timedelta(hours=5, minutes=2)) == []
 assert patrol.pending_lines("hu", True, T + dt.timedelta(hours=5, minutes=3)) == [], "still the same open drift"
+# A closed drift is forgotten for every terminal, including one nobody polled while it was closed.
+patrol.write_round([{**drift("opus"), "owner": None}], {"cards": {}}, False, NOW + 560)
+assert patrol.pending_lines("ha", True, T + dt.timedelta(hours=5, minutes=4))[0].startswith("PATROL M")
+patrol.write_round([], {"cards": {}}, False, NOW + 570)
+assert patrol.pending_lines("hb", False, T + dt.timedelta(hours=5, minutes=5)) == []
+patrol.write_round([{**drift("opus"), "owner": None}], {"cards": {}}, False, NOW + 580)
+assert patrol.pending_lines("ha", True, T + dt.timedelta(hours=5, minutes=6))[0].startswith("PATROL M"), "new for ha"
 # The same drift back after it closed (opus, back on sonnet, opus), with nothing due in between.
 patrol.write_round([], {"cards": {}}, False, NOW + 600)
 assert patrol.pending_lines("hm", False, T + dt.timedelta(hours=6)) == [], "a closed drift shows nothing"

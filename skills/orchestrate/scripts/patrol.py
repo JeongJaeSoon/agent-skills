@@ -810,12 +810,14 @@ def pending_lines(me, unowned, now=None):
     seen = shown.get(me or "-") or {}
     due = [f for f in mine if f["id"] not in seen
            or f.get("code") not in SHOW_ONCE and now - fleet.parse(seen[f["id"]]) >= RENOTIFY]
-    # Pruned every call, not only when something is due: a finding that closed must be new when it comes back. Closed
-    # means in no one's open set; one only outside this call's scope (unowned or not) keeps its record.
-    keep = {i: t for i, t in seen.items() if i in opened and t}
-    keep.update({f["id"]: fleet.iso(now) for f in due})
-    if keep != seen:
-        shown[me or "-"] = keep
+    # Pruned every call, for every terminal, not only when something is due: a finding that closed must be new when it
+    # comes back, whoever polls next. Closed means in no one's open set; one only outside this call's scope (unowned or
+    # not) keeps its record.
+    before = shown
+    shown = {t: {i: at for i, at in rec.items() if i in opened and at} for t, rec in before.items() if isinstance(rec, dict)}
+    shown.setdefault(me or "-", {}).update({f["id"]: fleet.iso(now) for f in due})
+    shown = {t: rec for t, rec in shown.items() if rec}
+    if shown != before:
         with contextlib.suppress(OSError):
             fleet.write_atomic(SHOWN, json.dumps(shown))
     return [line(f) for f in due] + ([f"  after dealing with each: orch patrol ack <id> (all {len(due)}: "
