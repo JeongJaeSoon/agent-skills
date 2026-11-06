@@ -1242,16 +1242,19 @@ def patrol_round(argv):
                     mark_cut(rid, round(time.monotonic() - t0, 1))
                 print(f"patrol: gave up at {BUDGET_S}s; log rows already written stay, and the next round brings "
                       "Needs you in step with them")
-                return
+                sys.exit(1)  # a cut round is not a clean one: the job record must say so
             finally:
                 signal.alarm(0)
+        scanned = None
         if res is not None:
             signal.alarm(CANDIDATE_BUDGET_S)
             try:
-                candidates_phase(res, "--dry-run" in argv)
+                scanned = candidates_phase(res, "--dry-run" in argv)
             finally:
                 signal.alarm(0)
     print(json.dumps(res, ensure_ascii=False, indent=1) if "--json" in argv else "\n".join(report(res)))
+    if scanned and scanned["sources"].get("candidates") == "timeout":
+        sys.exit(1)  # the scans were cut: recorded in the round, and no clean exit for the job record
 
 
 if __name__ == "__main__":

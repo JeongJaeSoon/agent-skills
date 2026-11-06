@@ -935,4 +935,31 @@ with patrol.run_lock() as first:
         patrol.patrol_round(["--once", "--dry-run"])
     assert "another round is running" in out.getvalue(), out.getvalue()
 
+# A round cut by its budget, or whose candidate scans were cut, exits 1: the Orca job record must not read it as clean.
+saved_round_once, saved_phase = patrol.round_once, patrol.candidates_phase
+try:
+    def cut_round(*a, **k):
+        raise patrol.Budget()
+    patrol.round_once = cut_round
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            patrol.patrol_round(["--once", "--dry-run"])
+        raise AssertionError("a cut round exits non-zero")
+    except SystemExit as e:
+        assert e.code == 1, e.code
+    patrol.round_once = lambda *a, **k: {"verdicts": {}, "notes": []}
+    patrol.candidates_phase = lambda res, dry=False, collect=None: {"sources": {"candidates": "timeout"}}
+    patrol.report = lambda res: ["report"]
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            patrol.patrol_round(["--once", "--dry-run"])
+        raise AssertionError("cut candidate scans exit non-zero")
+    except SystemExit as e:
+        assert e.code == 1, e.code
+    patrol.candidates_phase = lambda res, dry=False, collect=None: {"sources": {"candidates": "ok"}}
+    with contextlib.redirect_stdout(io.StringIO()):
+        patrol.patrol_round(["--once", "--dry-run"])  # a clean round returns
+finally:
+    patrol.round_once, patrol.candidates_phase = saved_round_once, saved_phase
+
 print("test_patrol: ok")
