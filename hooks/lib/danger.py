@@ -7,7 +7,7 @@ Commands are read with lib.shell: only a word bash runs as a command counts, so 
 quoted prompt that names one is not one. A guardrail, not a sandbox: `bash -c`, `eval` and a script file's own
 commands are not read.
 """
-import collections, json, os, pathlib, re, subprocess
+import collections, glob, json, os, pathlib, re, subprocess, types
 
 from lib import config, shell
 
@@ -28,6 +28,8 @@ RULES = {
     "guard.deny.self_exempt_label": "deny",
     "guard.deny.owner_only": "deny",
     "guard.deny.external_review": "deny",
+    "guard.deny.rm_outside": "deny",
+    "guard.deny.trash_empty": "deny",
     "guard.ask.pressure_bypass": "ask",
     "guard.warn.rm_expansion": "warn",
     "guard.warn.reset_hard": "warn",
@@ -72,8 +74,16 @@ def user_files():
     return {os.path.realpath(f) for f in files}
 
 
-def expand(word, cwd):
-    """A path word as bash would mostly expand it: `~`, $HOME and $CLAUDE_CONFIG_DIR, relative to cwd."""
+def keep_name(path):
+    """path with its folder resolved and its last name kept as written: rm removes a symlink, not its target."""
+    if path.endswith("/") or os.path.basename(path) in ("", ".", ".."):
+        return os.path.realpath(path)
+    return os.path.join(os.path.realpath(os.path.dirname(path)), os.path.basename(path))
+
+
+def expand(word, cwd, follow=True):
+    """A path word as bash would mostly expand it: `~`, $HOME and $CLAUDE_CONFIG_DIR, relative to cwd. With
+    follow=False a symlink named last is not resolved."""
     home = str(pathlib.Path.home())
     for var in ("HOME", "CLAUDE_CONFIG_DIR", "XDG_CONFIG_HOME", "AGENT_SKILLS_CONFIG", "AGENT_SKILLS_STATE"):
         value = os.environ.get(var) or (home if var == "HOME" else "")
@@ -81,14 +91,22 @@ def expand(word, cwd):
             word = word.replace("${" + var + "}", value).replace("$" + var, value)
     word = os.path.expanduser(word)
     if cwd is UNKNOWN_DIR:  # after a `cd` this reader cannot follow, only an absolute path is known
-        return os.path.realpath(word) if os.path.isabs(word) else ""
-    return os.path.realpath(os.path.join(cwd or ".", word))
+        word = word if os.path.isabs(word) else ""
+    elif word:
+        word = os.path.join(cwd or ".", word)
+    return (os.path.realpath(word) if follow else keep_name(word)) if word else ""
 
 
-def after_cd(c, here):
-    """The directory a `cd` command leaves the shell in: UNKNOWN_DIR when it cannot be read from the words."""
+def after_cd(c, here, prev=UNKNOWN_DIR):
+    """The directory a `cd` command leaves the shell in: UNKNOWN_DIR when it cannot be read from the words.
+    `prev` is the directory before the last directory change, which `cd -` returns to."""
     args = [x for x in c.words[1:] if not x.startswith("-") or x == "-"]
     target = args[0] if args else "~"
+    # `popd`, a bare `pushd` and `pushd +1` take the directory from a stack this reader does not keep.
+    if c.name == "popd" or c.name == "pushd" and (not args or args[0][0] in "+-"):
+        return UNKNOWN_DIR
+    if target == "-" and c.name == "cd":
+        return prev
     if target == "-" or "$" in target.replace("$HOME", "").replace("${HOME}", ""):
         return UNKNOWN_DIR
     return expand(target, here) or UNKNOWN_DIR
@@ -245,6 +263,17 @@ def check_command(c, masked, cfg, cwd, session, here=None):
         if label_add(w):
             out.append(("guard.deny.self_exempt_label", "The `no-visual-change` label exempts a PR from visual review; "
                                                         "an agent never adds it to its own PR. Ask the human."))
+    if name in ("rm", "find"):
+        trash, outside = rm_outside(c, here, cwd)
+        if trash:
+            out.append(("guard.deny.trash_empty", TRASH_EMPTY))
+        if outside:
+            out.append(("guard.deny.rm_outside", "A recursive `rm` is limited to this checkout and the temporary "
+                                                 "folders. Move anything else to the trash (`mv <path> ~/.Trash/`) "
+                                                 "or ask the human."))
+    if name == "trash-empty" or name == "gio" and w[1:2] == ["trash"] and "--empty" in w \
+            or name == "osascript" and finder_empties(w):
+        out.append(("guard.deny.trash_empty", TRASH_EMPTY))
     if name == "orch" and w[1:2] == ["exempt"]:
         out.append(("guard.deny.owner_only", f"`orch {' '.join(w[1:3])}` is the human's to run, as a `!` line in their "
                                              "own chat."))
@@ -269,6 +298,20 @@ def check_command(c, masked, cfg, cwd, session, here=None):
     return out
 
 
+def finder_empties(w):
+    """Whether an osascript command tells Finder to empty the trash: `to empty`, `empty trash`, or an `empty` line
+    (several -e options are lines of one script)."""
+    lines = [w[i + 1] if x == "-e" else x[2:] for i, x in enumerate(w) if x == "-e" and i + 1 < len(w)
+             or x.startswith("-e") and len(x) > 2]
+    script = "\n".join(lines) or " ".join(w)
+    # A script line that starts with `empty` is the command, whatever follows (`empty without security`); the last
+    # alternative is JXA: `Application("Finder").empty()`.
+    return re.search(r"\bFinder\b.*?(?:\bto\s+empty\b|\bempty\s+\(?(?:the\s+)?trash\b\)?|^\s*empty\b|\.empty\s*\()", script,
+                     re.I | re.S | re.M) is not None
+
+
+TRASH_EMPTY = ("This empties a trash folder, where the human keeps what they can still undo. Leave it; move your "
+               "own files there instead.")
 USER_SETTINGS = ("This writes the user's own settings (Claude Code user settings, ~/.claude/agent-skills.json or "
                  "secure-fill's allowlist). The user changes them: agent-skills:skills-config or tune-automode emits "
                  "a script the user runs.")
@@ -321,6 +364,144 @@ def label_add(w):
                             "-q", "--jq", "-t", "--template", "--hostname", "--cache", "-p", "--preview"})[0] or ""
     return (method in ("POST", "PUT", "PATCH") and re.search(r"/labels/?$", endpoint) is not None
             and has(f.split("=", 1)[-1] for f in fields))
+
+
+def git_out(args, where):
+    """Stdout of a git command in `where`; "" when it fails or `where` is not a folder."""
+    try:
+        return run(["git", *args], where).stdout.strip()
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return ""
+
+
+def rm_targets(w):
+    """(options, operands) of an `rm` command."""
+    opts, operands, end = [], [], False
+    for x in w[1:]:
+        if not end and x == "--":
+            end = True
+        elif not end and x.startswith("-") and len(x) > 1:
+            opts.append(x)
+        else:
+            operands.append(x)
+    return opts, operands
+
+
+def trash_dirs():
+    home = pathlib.Path.home()
+    return [os.path.realpath(home / ".Trash"), os.path.realpath(home / ".local" / "share" / "Trash")]
+
+
+def in_trash(path):
+    return any(path == t or path.startswith(t + os.sep) for t in trash_dirs()) or "/.Trashes/" in path + "/"
+
+
+def find_roots(w):
+    """The start paths of a `find` command that deletes (-delete, or -exec rm); [] without it."""
+    if "-delete" not in w and not exec_rms(w):
+        return []
+    out = []
+    # -H -L -P, and the BSD/macOS -d -E -X -x -s, come before the paths; BSD `-f <path>` names one.
+    flags = ("-H", "-L", "-P", "-d", "-E", "-X", "-x", "-s", "--")
+    take = False
+    for x in w[1:]:
+        if take:
+            out.append(x)
+            take = False
+        elif x == "-f":
+            take = True
+        elif x.startswith(("-", "(", "!")) and x not in flags:
+            break
+        elif x not in flags:
+            out.append(x)
+    return out or ["."]  # GNU find searches `.` when it is given no path
+
+
+def rm_outside(c, here, cwd):
+    """(trash, outside): the recursive-rm (or `find -delete`) or glob targets that empty a trash folder, and the
+    ones that lie outside the checkout the session runs in and the temporary folders. A path with an unresolved `$`
+    is not judged."""
+    if c.name == "find":
+        operands, recursive = find_roots(c.words), True
+        # -execdir runs in the found file's folder, so a relative operand is not readable from here.
+        execs = [rm_outside(types.SimpleNamespace(name="rm", words=seg), UNKNOWN_DIR if dirwise else here, cwd)
+                 for seg, dirwise in exec_rms(c.words)]
+    else:
+        execs = []
+        opts, operands = rm_targets(c.words)
+        # GNU rm takes `--recurs` for --recursive: any prefix long enough to be unique.
+        recursive = any(len(o) > 2 and "--recursive".startswith(o) and o != "--" or
+                        re.fullmatch(r"-[a-zA-Z]*[rR][a-zA-Z]*", o) for o in opts)
+    roots = {os.path.realpath(p) for p in ("/tmp", "/private/tmp", os.environ.get("TMPDIR") or "/tmp")}
+    top = git_out(["rev-parse", "--show-toplevel"], cwd)
+    if top:
+        roots.add(os.path.realpath(top))
+    trash, outside = [], []
+    # `find -L`/`-H` walk through a symlink they start at (the last of -L/-H/-P wins); rm removes the link itself.
+    # -H follows only the start paths, -L every link below them.
+    walks_links = deep = False
+    for y in c.words[1:] if c.name == "find" else []:
+        if y in ("-L", "-H", "-P"):
+            walks_links, deep = y != "-P", y == "-L"
+        elif y not in ("-d", "-E", "-X", "-x", "-s", "--"):  # the other options before the paths
+            break
+    for x in operands:
+        if x == "{}":  # find's placeholder: the paths find walked, already judged
+            continue
+        path = expand(x, here, follow=walks_links)
+        if not path or "$" in path or "`" in path:
+            continue
+        globbed = re.search(r"[*?\[]", path) is not None
+        # bash expands a glob before rm sees it; `~/.Tra[s]h/*` is the trash.
+        matches = [os.path.realpath(m) if walks_links else keep_name(m) for m in glob.glob(path)] if globbed else []
+        for p in matches or [path]:
+            if in_trash(p):
+                if recursive or globbed or p in trash_dirs():
+                    trash.append(x)
+            elif recursive and not any(p.startswith(r + os.sep) or p == r and c.name == "find" for r in roots):
+                outside.append(x)
+            elif deep and link_escapes(p, roots):
+                outside.append(x)
+    for t, o in execs:
+        trash += t
+        outside += o
+    return trash, outside
+
+
+def link_escapes(root, roots, limit=20000):
+    """Whether a symlink under root points outside roots: `find -L` walks through it. Looks at the first `limit`
+    entries."""
+    seen = 0
+    for dirpath, dirs, files in os.walk(root):
+        for name in dirs + files:
+            full = os.path.join(dirpath, name)
+            if os.path.islink(full):
+                target = os.path.realpath(full)
+                if not any(target == r or target.startswith(r + os.sep) for r in roots):
+                    return True
+        seen += len(dirs) + len(files)
+        if seen > limit:
+            break
+    return False
+
+
+def exec_rms(w):
+    """[(words, in_dir)] of each `rm` that `find` runs with -exec, -execdir, -ok or -okdir, up to its `;` or `+`,
+    after a wrapper such as `sudo` or `env`. in_dir: it runs in the found file's folder (-execdir, -okdir)."""
+    out = []
+    for i, x in enumerate(w[:-1]):
+        if x in ("-exec", "-execdir", "-ok", "-okdir"):
+            seg = []
+            for y in w[i + 1:]:
+                if y in (";", "+"):
+                    break
+                seg.append(y)
+            while seg and (os.path.basename(seg[0]) in ("sudo", "doas", "env", "command", "nice", "nohup", "time")
+                           or seg[0].startswith("-") or "=" in seg[0]):
+                seg = seg[1:]
+            if seg and os.path.basename(seg[0]) == "rm":
+                out.append((seg, x in ("-execdir", "-okdir")))
+    return out
 
 
 def run(argv, cwd, timeout=3):
@@ -399,11 +580,28 @@ def check_bash(cmd, cfg, cwd=None, session=None):
     """[Finding] for a Bash command, rules turned off left out."""
     masked = shell.command_text(cmd)
     out, seen = [], set()
-    cmds, here = shell.commands(cmd), cwd
+    cmds, here, pushed, prev = shell.commands(cmd), cwd, [], UNKNOWN_DIR  # prev: where `cd -` goes
+    outer, start, ticks = [], 0, False  # the directories to go back to at each `)` or closing backtick
     for i, c in enumerate(cmds):
+        for ch in masked[start:c.span[0]]:
+            if ch == "(" or ch == "`" and not ticks:
+                outer.append(here)
+                ticks = ticks or ch == "`"
+            elif (ch == ")" or ch == "`" and ticks) and outer:
+                here = outer.pop()
+                ticks = ticks and ch != "`"
+        start = c.span[0]
         found = check_command(c, masked, cfg, cwd, session, here)
-        if c.name == "cd":
-            here = after_cd(c, here)
+        # A `cd` in a pipeline or sent to the background (`cd x &`) runs in a subshell; `||` and `&&` do not.
+        if c.name in ("cd", "pushd", "popd") and not (
+                c.piped_from or c.piped_to or re.match(r"\s*(&(?!&)|\|(?!\|))", masked[c.span[1]:])):
+            before = here
+            here = after_cd(c, here, prev)
+            prev = before
+            if c.name == "popd" and pushed:  # the directory the matching `pushd` left
+                here = pushed.pop()
+            elif c.name == "pushd" and here is not UNKNOWN_DIR:
+                pushed.append(before)
         # `kill $(pgrep …)`: a pgrep inside this kill command's own substitution.
         if c.name == "kill" and any(d.name == "pgrep" and c.span[0] < d.span[0] and d.span[1] <= c.span[1]
                                     for d in cmds):
