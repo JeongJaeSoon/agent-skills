@@ -204,7 +204,7 @@ STORES = [
           ("store:_fill_board", "store:close_unit", "store:reopen_unit", "store:restore"), ("brief", "fleet", "tidy"),
           rule="the close of a row, card or inbox item, and of ids from before stable ids; ext_mark says which inbox lines came "
                "before it"),
-    Store("counter", "db:counter.next", {"decision.id": CANONICAL, "board.item_id": CANONICAL},
+    Store("counter", "db:counter.next", {"decision.id": CANONICAL, "board.item_id": CANONICAL, "order.id": CANONICAL},
           ("store:change_decisions", "store:_fill_decisions", "store:_next_b", "store:_fill_board", "store:restore",
            "store:order_add"), ("fleet",),
           rule="the next d<N>, b<N> and o<N>; never reused"),
@@ -222,7 +222,7 @@ STORES = [
           ("programview",), feature="orchestrate.land_executor",
           rule="`orch land`'s merge requests and the land executor's result for each (step 5-land-queue, `orch land-exec setup`)"),
     Store("dbevent", "db:event.seq", {"decision.item": LOG, "board.item": LOG, "board.closure": LOG, "db.migration": LOG,
-                                      "land.request": LOG, "order.item": LOG, "session.handoff": CANONICAL},
+                                      "land.request": LOG, "order.item": LOG, "order.link": LOG, "session.handoff": CANONICAL},
           ("store:_event", "store:restore"),
           ("reorient", "programview"), rule="each change's before and after, in the same transaction; import keeps the "
                                             "legacy original. Entity 'session' rows are a role session's handoff and "

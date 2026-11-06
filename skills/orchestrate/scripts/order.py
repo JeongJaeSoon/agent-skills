@@ -59,9 +59,12 @@ def cmd_import(rest):
         sys.exit(f"{path}: no numbered lines to import")
     if "--dry-run" in rest or "--check" in rest:
         taken = store.order_sources([s for s, _ in items])
-        left = [(s, t) for s, t in items if fleet.mask(s) not in taken]
+        # A line taken under the same key but with other words is changed: the table holds the old one, and a real
+        # import would refuse it, so it is not migrated either.
+        left = [(s, t) for s, t in items if taken.get(fleet.mask(s)) != fleet.mask(t.strip())]
         for s, t in left:
-            print(f"{'unmigrated' if '--check' in rest else 'would add '}  {fleet.mask(s)}  {fleet.mask(t)[:100]}")
+            word = "changed   " if fleet.mask(s) in taken else "unmigrated" if "--check" in rest else "would add "
+            print(f"{word}  {fleet.mask(s)}  {fleet.mask(t)[:100]}")
         print(f"{len(left)} not migrated of {len(items)}")
         if left and "--check" in rest:
             sys.exit(1)  # the original still holds orders the table does not

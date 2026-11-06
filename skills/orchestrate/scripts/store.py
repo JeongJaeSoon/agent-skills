@@ -855,6 +855,9 @@ SCHEMA_ORDER = (
   PRIMARY KEY (order_id, unit)
 )""",
 )
+# Columns the first 5a-order DBs lacked, as setup adds them to a DB that already has the step.
+ORDER_COLUMNS = (("order_", "links_complete_at", "TEXT"), ("order_", "reopen_evidence", "TEXT"),
+                 ("order_link", "resolves", "INTEGER NOT NULL DEFAULT 1 CHECK (resolves IN (0,1))"))
 UNIT = re.compile(r"(?:card|agent):\S+|board:b\d+|decision:d\d+|pr:[\w.-]+/[\w.-]+#\d+")
 
 
@@ -870,7 +873,15 @@ def order_setup(by="order setup"):
     """Add the order tables as a recorded step; a second run changes nothing. Returns what it did."""
     with tx() as db:
         if order_ready(db):
-            return "already set up"
+            # A DB set up before these columns existed gets them; the links it already has stay real.
+            added = []
+            for t, c, ddl in ORDER_COLUMNS:
+                if c not in {r[1] for r in db.execute(f"PRAGMA table_info({t})")}:
+                    db.execute(f"ALTER TABLE {t} ADD COLUMN {c} {ddl}")
+                    added.append(f"{t}.{c}")
+            if added:
+                _event(db, "migration", ORDER_STEP, "upgraded", by, None, {"columns": added})
+            return f"added {', '.join(added)}" if added else "already set up"
         for s in SCHEMA_ORDER:
             db.execute(s)
         db.execute("INSERT INTO migration (step, ts, backup, sources, stage) VALUES (?,?,?,?, 'imported')",
@@ -969,12 +980,13 @@ def orders(status=None, db=None):
 
 
 def order_sources(sources):
-    """The subset of `sources` an order already carries: what an import took, so what is left is not migrated."""
+    """{source: stored text} for those of `sources` an order already carries: what an import took, so what is left is
+    not migrated."""
     with read() as db:
         if not order_ready(db):
             raise NotMigrated(f"{path()}: orders are not set up: run {order_setup_command()}")
         want = {fleet.mask(s) for s in sources}  # stored masked, as order_add stores them
-        return {s for (s,) in db.execute("SELECT source FROM order_ WHERE source IS NOT NULL") if s in want}
+        return {s: t for s, t in db.execute("SELECT source, text FROM order_ WHERE source IS NOT NULL") if s in want}
 
 
 def orders_unlinked(db):

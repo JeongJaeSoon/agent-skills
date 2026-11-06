@@ -194,6 +194,38 @@ assert {"links_complete_at", "reopen_evidence"} <= cols, cols
 assert db.execute("SELECT count(*) FROM order_ WHERE links_complete_at IS NOT NULL OR reopen_evidence IS NOT NULL").fetchone()[0] == 0
 db.close()
 
+# A line reworded after it was taken is not migrated: the table holds the old words, and a real import would refuse it.
+src.write_text(before.replace("첫째 항목: 진행", "첫째 항목: 끝남"))
+code, out, _ = orch("order", "import", str(src), "--check")
+assert code == 1 and "changed" in out and "끝남" in out and out.endswith("1 not migrated of 4"), out
+assert "changed" in ok("order", "import", str(src), "--dry-run")
+assert "other text" in fails("order", "import", str(src))
+src.write_text(before)
+
+# ---- a DB set up by the first 5a-order head (no resolves, no 5c columns) is upgraded by setup, its links kept real
+was = os.environ["ORCH_FLEET_STATE"]
+os.environ["ORCH_FLEET_STATE"] = str(tmp / "old" / "dashboard")
+try:
+    fleet.state_dir().mkdir(parents=True, exist_ok=True)
+    store.init_empty()
+    db = sqlite3.connect(str(store.path()))
+    db.executescript(
+        "CREATE TABLE order_ (id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, text TEXT NOT NULL, source TEXT,"
+        " owner_action INTEGER NOT NULL DEFAULT 0, by TEXT, created_at TEXT NOT NULL, closed_at TEXT, close_by TEXT);"
+        "CREATE TABLE order_link (order_id TEXT NOT NULL, unit TEXT NOT NULL, ts TEXT NOT NULL, by TEXT, PRIMARY KEY (order_id, unit));"
+        "INSERT INTO order_ (id, kind, status, text, created_at) VALUES ('o1','order','open','old','2026-01-01T00:00:00Z');"
+        "INSERT INTO order_link VALUES ('o1','card:wt-old','2026-01-01T00:00:00Z',NULL);"
+        f"INSERT INTO migration VALUES ('{store.ORDER_STEP}','2026-01-01T00:00:00Z','','[]','imported');")
+    db.commit()
+    db.close()
+    assert store.order_setup() == "added order_.links_complete_at, order_.reopen_evidence, order_link.resolves"
+    assert store.order_setup() == "already set up"
+    assert store.orders("open")[0]["links"] == ["card:wt-old"] and store.orders("open")[0]["stand_ins"] == []
+    with store.read() as rdb:
+        assert store.orders_unlinked(rdb) == []
+finally:
+    os.environ["ORCH_FLEET_STATE"] = was
+
 empty = tmp / "empty.md"
 empty.write_text("nothing numbered\n")
 assert "no numbered lines" in fails("order", "import", str(empty))
