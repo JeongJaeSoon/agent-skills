@@ -30,7 +30,7 @@ Pick the procedure by the shape of the work:
   away → run `figure-it-out` first. It designs the phases, the baseline harness and the decision
   trail; each unit it produces still goes through §2–§6.
 - A one-way-door design decision (a public contract, a schema, a module boundary others will
-  build on) → `architect`, which runs `arena` and publishes its plan page without waiting for
+  build on) → `architect`, which runs `fan-out` compete and publishes its plan page without waiting for
   answers.
 - An unfamiliar subsystem → `explain-code` how before the first edit. Code whose reason you do
   not know → `explain-code` why before you change it. When either ran, the constraints it found (what to preserve,

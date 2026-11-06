@@ -362,7 +362,7 @@ footer { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--line);
           <li class="cycle"><span class="dot">6</span><div class="body"><b>Triage</b><span data-lang="ko">새로 생긴 티켓은 기본 보류(<code>follow-up</code> 라벨, <code>record parked</code>). 완료 조건 항목을 막거나, 이 프로그램이 머지한 코드의 재현된 결함일 때만 편입</span><span data-lang="en">New tickets are parked by default (<code>follow-up</code> label, <code>record parked</code>). One is pulled in only if it blocks a done-condition item or is a reproduced defect in code this program merged</span><span data-lang="ja">新しく生まれたチケットは既定で保留（<code>follow-up</code> ラベル、<code>record parked</code>）。完了条件の項目を妨げるか、このプログラムがマージしたコードで再現した欠陥のときだけ取り込む</span></div></li>
           <li class="cycle"><span class="dot">7</span><div class="body"><b><span data-lang="ko">Land 감독</span><span data-lang="en">Land oversight</span><span data-lang="ja">Land の監督</span></b><span data-lang="ko">착지는 워커가 한다. 리드는 의존·stack·우선순위를 바로잡고 멈춘 PR을 푼다</span><span data-lang="en">Workers do the landing. The lead straightens out dependencies, stacks and priorities, and unsticks stalled PRs</span><span data-lang="ja">ランディングはワーカーが行う。リードは依存・stack・優先度を正し、止まった PR をほどく</span></div></li>
           <li class="cycle"><span class="dot">▸</span><div class="body"><b><code>orch status</code> → <span data-lang="ko">next 한 줄</span><span data-lang="en">the next line</span><span data-lang="ja">次の 1 行</span></b><span data-lang="ko">모든 drain의 끝. 아래 규칙표 중 처음 맞는 한 줄이 다음 행동이고, 다시 <code>orch wait</code>로</span><span data-lang="en">The end of every drain. The first matching row in the table below is the next action; then back to <code>orch wait</code></span><span data-lang="ja">すべての drain の最後。下の規則表で最初に当てはまる 1 行が次の行動で、その後また <code>orch wait</code> へ</span></div></li>
-          <li><span class="dot ok">✓</span><div class="body"><b>Close</b><span data-lang="ko">완료 조건 충족 + 최종 검증 기록(<code>predicate_verified</code>) → 워커 정리, measure-delivery 보고, 교훈 반영</span><span data-lang="en">Done condition met + final check recorded (<code>predicate_verified</code>) → clean up workers, report with measure-delivery, fold in the lessons</span><span data-lang="ja">完了条件を満たし最終検証を記録（<code>predicate_verified</code>）→ ワーカーの片付け、measure-delivery で報告、教訓を反映</span></div></li>
+          <li><span class="dot ok">✓</span><div class="body"><b>Close</b><span data-lang="ko">완료 조건 충족 + 최종 검증 기록(<code>predicate_verified</code>) → 워커 정리, reflect 한 번으로 성과 측정과 교훈 반영</span><span data-lang="en">Done condition met + final check recorded (<code>predicate_verified</code>) → clean up workers, one reflect run that measures delivery and folds in the lessons</span><span data-lang="ja">完了条件を満たし最終検証を記録（<code>predicate_verified</code>）→ ワーカーの片付け、reflect 1 回で成果測定と教訓の反映</span></div></li>
         </ol>
         <aside class="edges">
           <h3><span data-lang="ko">상한(cap)은 이렇게 움직인다</span><span data-lang="en">How the cap moves</span><span data-lang="ja">上限（cap）の動き方</span></h3>
@@ -553,10 +553,6 @@ const SKILLS = [
     T("한 세션이 여러 워커로 마일스톤을 끝낼 때, 남의 프로그램을 이어받을 때, PR이 왜 안 움직이는지 물을 때", "When one session drives a milestone to done with several workers, takes over someone else's program, or asks why PRs aren't moving", "1 つのセッションが複数のワーカーでマイルストーンを終えるとき、他人のプログラムを引き継ぐとき、PR がなぜ動かないのかを尋ねるとき"),
     T("완료 조건·상시 지시·원장·브리프 관리, 동시 실행 상한, 착지 순서와 독점 레인, 가디언·QA 리드, 대시보드", "Manages the done condition, standing orders, ledger and briefs; the concurrency cap; landing order and exclusive lanes; the guardian and QA lead; the dashboard", "完了条件・常時指示・台帳・ブリーフの管理、同時実行の上限、ランディング順と専有レーン、ガーディアン・QA リード、ダッシュボード"),
     ["orch", "orch-dash", "references/brief.md", "landing.md", "roles.md", "program-note.md", "dashboard.md"]],
-  ["program", "measure-delivery",
-    T("\"성과 측정\", 후속 티켓이 늘었는지, 재작업·토큰 비용, 프로그램 종료 시", "\"성과 측정\" (\"measure delivery\"), whether follow-up tickets are piling up, rework and token cost, or at the close of a program", "\"성과 측정\"（成果測定）、後続チケットが増えたか、手戻り・トークンコスト、プログラム終了時"),
-    T("트래커 이슈로 후속 티켓 증가·수렴·재작업·PR당 토큰을 계산해 보고", "Computes follow-up ticket growth, convergence, rework and tokens per PR from tracker issues, and reports them", "トラッカーの issue から後続チケットの増加・収束・手戻り・PR あたりのトークンを計算して報告"),
-    ["scripts/measure.py"]],
   ["machine", "reap-resources",
     T("\"방치 리소스 정리해줘\", 고아 프로세스가 쌓였을 때, resource steward의 주기 점검", "\"방치 리소스 정리해줘\" (\"clean up leftover resources\"), when orphaned processes pile up, or the resource steward's periodic round", "\"방치 리소스 정리해줘\"（放置リソースを片付けて）、孤児のプロセスがたまったとき、resource steward の定期点検"),
     T("죽은 세션이 남긴 고아 테스트 프로세스·Docker 잔여물·머지된 브랜치·scratchpad worktree를 점검하고, 목록에 올린 것만 정리. 누적치가 임계를 넘으면 경보", "Inventories orphaned test processes, Docker leftovers, merged branches and scratchpad worktrees that dead sessions left, and removes only what it listed. Raises an alert when a running total crosses its limit", "終わったセッションが残した 孤児のテストプロセス・Docker の残り・マージ済みブランチ・scratchpad の worktree を点検し、一覧に載せたものだけを片付ける。累積が閾値を超えると警報"),
@@ -590,24 +586,20 @@ const SKILLS = [
     T("25개 원칙(근본 원인 수정, 동작을 테스트, 빼고 나서 더하기 등) 중 맞는 것을 인용", "Cites the right one of 25 principles (fix the root cause, test the behavior, subtract before you add, and more)", "25 の原則（根本原因を直す、振る舞いをテストする、足す前に引く など）から合うものを引用"),
     ["references/principle-*.md (25)", "benchmark-checklist.md"]],
   ["pstack", "reflect",
-    T("\"reflect\"", "\"reflect\"", "\"reflect\""),
-    T("세션 transcript나 프로그램 원장의 증거 묶음을 리뷰어 셋이 읽고 교훈 장부에 기록. 두 번 발생한 것만 스킬 수정으로(세션은 승인 뒤 적용, 프로그램은 draft PR). Backlog는 트래커로", "Three reviewers read a session transcript or an evidence bundle from a program ledger and record lessons in a lessons ledger. Only lessons seen twice become skill edits (applied after approval for a session, as a draft PR for a program). Backlog goes to the tracker", "セッションの transcript やプログラム台帳の証拠をレビュアー 3 人が読み、教訓台帳に記録。2 回起きたものだけをスキルの修正に（セッションは承認後に適用、プログラムは draft PR）。Backlog はトラッカーへ"),
-    ["references/*-reviewer.md", "synthesizer.md"]],
+    T("\"reflect\", \"성과 측정\"", "\"reflect\", \"성과 측정\" (\"measure delivery\")", "\"reflect\"、\"성과 측정\"（成果測定）"),
+    T("세션 transcript나 프로그램 원장의 증거 묶음을 리뷰어 셋이 읽고 교훈 장부에 기록. 두 번 발생한 것만 스킬 수정으로(세션은 승인 뒤 적용, 프로그램은 draft PR). Backlog는 트래커로. 측정 모드는 후속 티켓 증가·수렴·재작업·PR당 토큰을 계산해 보고만 함", "Three reviewers read a session transcript or an evidence bundle from a program ledger and record lessons in a lessons ledger. Only lessons seen twice become skill edits (applied after approval for a session, as a draft PR for a program). Backlog goes to the tracker. Measure mode only computes and reports follow-up ticket growth, convergence, rework and tokens per PR", "セッションの transcript やプログラム台帳の証拠をレビュアー 3 人が読み、教訓台帳に記録。2 回起きたものだけをスキルの修正に（セッションは承認後に適用、プログラムは draft PR）。Backlog はトラッカーへ。測定モードは後続チケットの増加・収束・手戻り・PR あたりのトークンを計算して報告するだけ"),
+    ["references/*-reviewer.md", "synthesizer.md", "measure.md", "scripts/measure.py"]],
   ["pstack", "show-me-your-work",
     T("오래 걸리거나 사람이 자리를 비운 작업", "Long-running work, or work that runs while nobody is watching", "長くかかる作業、または人が席を外している間の作業"),
     T("결정마다 무엇·왜·증거·결과를 TSV 한 줄로 남기고 끝에 감사", "Logs each decision as one TSV row — what, why, evidence, result — and audits the log at the end", "決定ごとに何を・なぜ・証拠・結果を TSV 1 行で残し、最後に監査"),
     ["scripts/log.sh"]],
-  ["pstack", "swarm",
-    T("\"병렬로 훑어줘\", 경쟁 조건·탐색을 넓게", "\"병렬로 훑어줘\" (\"sweep this in parallel\"), or wide coverage of races and exploration", "\"병렬로 훑어줘\"（並列でざっと見て）、競合状態や探索を広く"),
-    T("워커 N개로 나눠 훑거나 경주(먼저 통과 또는 전체 순위)시켜 보고서 하나로. 결과물 하나로 합치는 경쟁은 arena", "Fans out N workers to split a sweep or run a race (first to pass, or rank all), and returns one report. Competing to merge into one deliverable is arena", "ワーカー N 個で分担して調べるか競争（先に通過、または全体順位）させ、レポート 1 つに。成果物一つにまとめる競争は arena"),
-    []],
+  ["pstack", "fan-out",
+    T("sweep: \"병렬로 훑어줘\", 경쟁 조건·탐색을 넓게. compete: \"경쟁시켜줘\", \"여러 안 뽑아서 제일 나은 걸로\", 한 번의 시도로는 모양이 굳어 버릴 결과물", "sweep: \"병렬로 훑어줘\" (\"sweep this in parallel\"), or wide coverage of races and exploration. compete: \"경쟁시켜줘\" (\"make them compete\"), \"여러 안 뽑아서 제일 나은 걸로\" (\"draft several and go with the best\"), or a deliverable a single attempt would lock into one shape", "sweep: \"병렬로 훑어줘\"（並列でざっと見て）、競合状態や探索を広く。compete: \"경쟁시켜줘\"（競わせて）、\"여러 안 뽑아서 제일 나은 걸로\"（いくつか案を出して一番良いものに）、一度の試みでは形が固まってしまう成果物"),
+    T("sweep(옛 swarm)은 워커 N개로 나눠 훑거나 경주(먼저 통과 또는 전체 순위)시켜 보고서 하나로. compete(옛 arena)는 채점 기준을 먼저 정하고 후보 N개에게 같은 일을 시킨 뒤, 독립 심판과 함께 골라 합쳐 결과물 하나로. architect가 compete를 부름", "sweep (formerly swarm) fans out N workers to split a sweep or run a race (first to pass, or rank all), and returns one report. compete (formerly arena) sets scoring criteria first, gives the same task to N candidates, then picks and merges with an independent judge into one deliverable. architect calls compete", "sweep（旧 swarm）はワーカー N 個で分担して調べるか競争（先に通過、または全体順位）させ、レポート 1 つに。compete（旧 arena）は採点基準を先に決め、候補 N 個に同じ仕事をさせ、独立の審判とともに選んでまとめ、成果物 1 つに。architect が compete を呼ぶ"),
+    ["references/sweep.md", "compete.md"]],
   ["pstack", "tdd",
     T("TDD·실패 테스트를 명시적으로 요청했거나, 싼 로컬 테스트 대상이 뻔한 버그", "TDD or a failing test was asked for explicitly, or a bug with an obvious cheap local test target", "TDD や失敗するテストを明示的に頼まれたとき、または安いローカルのテスト対象が明らかなバグ"),
     T("실패 테스트 → 수정 → 통과", "Failing test → fix → pass", "失敗するテスト → 修正 → 通過"),
-    []],
-  ["pstack", "arena",
-    T("\"경쟁시켜줘\", \"여러 안 뽑아서 제일 나은 걸로\", 한 번의 시도로는 모양이 굳어 버릴 결과물", "\"경쟁시켜줘\" (\"make them compete\"), \"여러 안 뽑아서 제일 나은 걸로\" (\"draft several and go with the best\"), or a deliverable a single attempt would lock into one shape", "\"경쟁시켜줘\"（競わせて）、\"여러 안 뽑아서 제일 나은 걸로\"（いくつか案を出して一番良いものに）、一度の試みでは形が固まってしまう成果物"),
-    T("채점 기준을 먼저 정하고 후보 N개에게 같은 일을 시킨 뒤, 독립 검토자 심판이 골라 합침. architect가 부름", "Sets scoring criteria first, gives the same task to N candidates , then a judge from anindependent reviewer picks and merges. Called by architect", "採点基準を先に決め、候補 N 個に同じ仕事をさせ、独立の審判が選んでまとめる。architect が呼ぶ"),
     []],
   ["pstack", "figure-it-out",
     T("\"알아서 설계해서 진행해줘\", \"큰 마이그레이션\", \"자리 비운 동안 끝내줘\"", "\"알아서 설계해서 진행해줘\" (\"design it yourself and get going\"), \"큰 마이그레이션\" (\"a big migration\"), \"자리 비운 동안 끝내줘\" (\"finish it while I'm away\")", "\"알아서 설계해서 진행해줘\"（自分で設計して進めて）、\"큰 마이그레이션\"（大きなマイグレーション）、\"자리 비운 동안 끝내줘\"（席を外している間に終わらせて）"),

@@ -6,13 +6,8 @@
       "tokens": 69,
       "width": 239
     },
-    "arena": {
-      "skill_md_tokens": 873,
-      "tokens": 55,
-      "width": 197
-    },
     "blast-radius": {
-      "skill_md_tokens": 909,
+      "skill_md_tokens": 886,
       "tokens": 62,
       "width": 228
     },
@@ -27,7 +22,7 @@
       "width": 299
     },
     "deliver-ticket": {
-      "skill_md_tokens": 4851,
+      "skill_md_tokens": 4847,
       "tokens": 122,
       "width": 377
     },
@@ -41,13 +36,13 @@
       "tokens": 114,
       "width": 368
     },
-    "explain-code": {
-      "skill_md_tokens": 543,
-      "tokens": 126,
-      "width": 388
+    "fan-out": {
+      "skill_md_tokens": 268,
+      "tokens": 90,
+      "width": 303
     },
     "figure-it-out": {
-      "skill_md_tokens": 996,
+      "skill_md_tokens": 1000,
       "tokens": 76,
       "width": 272
     },
@@ -55,6 +50,11 @@
       "skill_md_tokens": 2259,
       "tokens": 83,
       "width": 285
+    },
+    "how": {
+      "skill_md_tokens": 527,
+      "tokens": 72,
+      "width": 255
     },
     "interrogate": {
       "skill_md_tokens": 1000,
@@ -66,13 +66,13 @@
       "tokens": 73,
       "width": 291
     },
-    "measure-delivery": {
-      "skill_md_tokens": 1115,
-      "tokens": 69,
-      "width": 269
+    "map-features": {
+      "skill_md_tokens": 1113,
+      "tokens": 79,
+      "width": 279
     },
     "orchestrate": {
-      "skill_md_tokens": 11739,
+      "skill_md_tokens": 11768,
       "tokens": 101,
       "width": 332
     },
@@ -97,14 +97,14 @@
       "width": 284
     },
     "recall": {
-      "skill_md_tokens": 1347,
+      "skill_md_tokens": 1340,
       "tokens": 75,
       "width": 290
     },
     "reflect": {
-      "skill_md_tokens": 4752,
-      "tokens": 92,
-      "width": 318
+      "skill_md_tokens": 4919,
+      "tokens": 111,
+      "width": 384
     },
     "secure-fill": {
       "skill_md_tokens": 2928,
@@ -131,15 +131,15 @@
       "tokens": 41,
       "width": 147
     },
-    "swarm": {
-      "skill_md_tokens": 748,
-      "tokens": 57,
-      "width": 206
-    },
     "tdd": {
       "skill_md_tokens": 729,
       "tokens": 50,
       "width": 213
+    },
+    "teach": {
+      "skill_md_tokens": 1084,
+      "tokens": 65,
+      "width": 240
     },
     "todo": {
       "skill_md_tokens": 288,
@@ -162,7 +162,7 @@
       "width": 242
     },
     "use-tracker": {
-      "skill_md_tokens": 2822,
+      "skill_md_tokens": 2823,
       "tokens": 64,
       "width": 243
     },
@@ -176,6 +176,11 @@
       "tokens": 100,
       "width": 333
     },
+    "why": {
+      "skill_md_tokens": 1827,
+      "tokens": 73,
+      "width": 277
+    },
     "write-plainly": {
       "skill_md_tokens": 1386,
       "tokens": 79,
@@ -187,14 +192,14 @@
       "width": 207
     },
     "write-ticket": {
-      "skill_md_tokens": 1997,
+      "skill_md_tokens": 1998,
       "tokens": 62,
       "width": 219
     }
   },
   "totals": {
-    "always_tokens": 3114,
-    "always_width": 11109,
-    "skills_width": 10229
+    "always_tokens": 3205,
+    "always_width": 11469,
+    "skills_width": 10589
   }
 }
