@@ -3194,18 +3194,24 @@ PROMPTS = [(re.compile(r"Enter to select"), "a select menu"),
 GUTTER = re.compile(r"^[\s⎿]*\d+(?:\s([+\-])|\s\s)")
 
 
+DIFF_HEAD = re.compile(r"\b(?:Update|Edit|Write|MultiEdit)\(|\b(?:Added|Removed) \d+ lines?\b|\bUpdated .* with \d+ (?:addition|removal)")
+
+
 def without_diffs(lines):
-    out, run = [], []
+    """lines minus the drawn diffs: a gutter run with a + or - line that follows a diff header (or opens the tail,
+    its header scrolled off). Shape alone is not enough: a command can print "27 - step" and "28  No space left"."""
+    out, run, head = [], [], True
     for l in [*lines, None]:
         m = GUTTER.match(l) if l is not None else None
         if m:
             run.append((l, bool(m.group(1))))
             continue
-        if run and not any(marked for _, marked in run):
+        if run and not (head and any(marked for _, marked in run)):
             out += [x for x, _ in run]
         run = []
         if l is not None:
             out.append(l)
+            head = bool(DIFF_HEAD.search(l))
     return out
 
 

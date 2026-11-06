@@ -243,6 +243,10 @@ screens["h1"] = diff + ["npm ERR! ENOSPC: no space left on device, write", "❯ 
 assert scan({})[0] == "STUCK card-a (a full disk): read its screen", "a real ENOSPC beside a diff still counts"
 screens["h1"] = ["⏺ Bash(make)", "  ⎿  28  No space left on device", "❯ "]
 assert scan({})[0] == "STUCK card-a (a full disk): read its screen", "numbered command output with no +/- line is not a diff"
+screens["h1"] = ["⏺ Bash(build)", "  ⎿  27 - writing output", "     28  No space left on device", "❯ "]
+assert scan({})[0] == "STUCK card-a (a full disk): read its screen", "numbered output beside a '-' line, no diff header"
+screens["h1"] = ["     41 +- ENOSPC quoted", "     42      context ENOSPC", "❯ "]
+assert scan({}) == [], "a diff whose header scrolled off the tail is still a diff"
 
 # A /goal card silent past --idle-min is stuck unless it is busy: a background shell, or claude agents says busy.
 shell = ["⏺ Waiting on the build.", "❯ ", "  ⏵⏵ auto mode on · 1 shell still running", "  ◎ /goal active (2h)"]
