@@ -129,8 +129,10 @@ class RunTest(unittest.TestCase):
 
     def test_the_command_gets_a_usable_path(self):
         with mock.patch.dict(os.environ, {"PATH": "/nowhere"}):
-            self.run_job(["run", "j", "--", sys.executable, "-c", "import os; print(os.environ['PATH'])"])
-        self.assertIn("/usr/bin", oj.read("j")["message"])
+            # The stored message keeps 200 characters: print the answer, not the whole PATH (a long PATH pushes /usr/bin past it).
+            self.run_job(["run", "j", "--", sys.executable, "-c",
+                          "import os; print('/usr/bin' in os.environ['PATH'].split(':'))"])
+        self.assertEqual(oj.read("j")["message"], "ok: True")
 
     def test_bad_usage_never_exits_0_and_runs_nothing(self):
         """Exit 0 would let Orca start the agent."""

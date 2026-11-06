@@ -17,7 +17,7 @@
       "width": 237
     },
     "deliver-ticket": {
-      "skill_md_tokens": 4858,
+      "skill_md_tokens": 4930,
       "tokens": 122,
       "width": 377
     },
@@ -92,7 +92,7 @@
       "width": 384
     },
     "secure-fill": {
-      "skill_md_tokens": 2928,
+      "skill_md_tokens": 2449,
       "tokens": 77,
       "width": 293
     },
@@ -132,7 +132,7 @@
       "width": 147
     },
     "tune-automode": {
-      "skill_md_tokens": 3406,
+      "skill_md_tokens": 2733,
       "tokens": 91,
       "width": 333
     },

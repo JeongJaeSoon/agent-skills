@@ -43,6 +43,7 @@ MATRIX = {
     "wait_foreground": ({"main"}, {"orchestrator", "lead"}),
     "send_devnull": ({"main"}, {"orchestrator", "lead", "worker"}),
     "worker_only": ({"main"}, {"worker"}),
+    "land_route": ({"main", "subagent"}, {"orchestrator", "lead", "worker"}),  # land_route_gate.py
     "exit_order": ({"main"}, set(ROLES)),  # lifecycle.py also needs a Dispatch, CLOSE or KEEP on the card
     "agent_forbidden": ({"main", "subagent"}, {"orchestrator", "lead", "worker"}),
     "decision_relay": ({"main"}, {"orchestrator", "lead"}),

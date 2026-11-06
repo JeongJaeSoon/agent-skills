@@ -281,6 +281,9 @@ Tickets come from the tracker adapter (use-tracker/scripts/tracker.py), never fr
 """
 import contextlib, datetime as dt, fcntl, fnmatch, hashlib, heapq, json, math, os, pathlib, re, shlex, subprocess, sys, tempfile, time
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))  # loaded by path or run with -I, this dir is not on it
+import land_scope  # noqa: E402
+
 TRACKER = pathlib.Path(__file__).resolve().parents[2] / "use-tracker" / "scripts" / "tracker.py"
 HOME = pathlib.Path(os.environ.get("PROGRAMS_HOME", "~/.claude/programs")).expanduser()
 GIT_CACHE = pathlib.Path(os.environ.get("XDG_CACHE_HOME", "~/.cache")).expanduser() / "agent-skills" / "orchestrate" / "git"
@@ -1555,25 +1558,60 @@ def skills_version(root):
 STANDALONE_RUN = "standalone"  # a standalone card has no Orca Run; Run lookups on it answer empty
 
 
+def repo_meta(repo):
+    """{"nameWithOwner", "isFork", "isArchived"} of the repo GitHub serves under `repo` now (a rename or a transfer
+    redirects). REST, not `gh repo view`: the executor asks every round, and GraphQL's budget is the one that runs out."""
+    v = gh_json("api", f"repos/{repo}")
+    return {"nameWithOwner": v["full_name"], "isFork": bool(v.get("fork")), "isArchived": bool(v.get("archived"))}
+
+
+def standalone_run():
+    """The Run the existing `*-standalone` programs share, else the placeholder. Programs that disagree, or none,
+    give the placeholder: guessing one of several Runs would file a repo's PRs under the wrong coordinator."""
+    runs = set()
+    for f in HOME.glob("*-standalone/program.json"):
+        try:
+            runs.add(json.loads(f.read_text()).get("run"))
+        except (OSError, ValueError, AttributeError):
+            return STANDALONE_RUN
+    runs.discard(STANDALONE_RUN)
+    return runs.pop() if len(runs) == 1 and all(isinstance(r, str) and r for r in runs) else STANDALONE_RUN
+
+
 def standalone_program(argv):
     """The `<name>-standalone` program of the repo `orch land --repo OWNER/NAME` names, created when missing.
 
-    Only where the land executor lists the repo: elsewhere a standalone card merges itself and needs no program.
+    Only where the land executor covers the repo under the name GitHub gives it now (a renamed repo answers with its
+    new name): elsewhere a standalone card merges itself and needs no program.
     """
-    repo = opt(argv, "--repo")
-    slug = f"{repo.split('/')[-1]}-standalone" if repo and "/" in repo else None
-    if slug != argv[0]:
+    asked = opt(argv, "--repo")
+    if not asked or asked.count("/") != 1 or not argv[0].endswith("-standalone"):
         sys.exit(f"no program '{argv[0]}'; a standalone PR lands as `orch land <name>-standalone --repo OWNER/NAME`")
-    if not land_executor(repo):
-        sys.exit(f"no program '{slug}', and orchestrate.land_executor is off for {repo}: a standalone card merges its own PR")
+    ex = land_executor()
+    if not ex:
+        sys.exit(f"no program '{argv[0]}', and orchestrate.land_executor is off: a standalone card merges its own PR")
+    meta = repo_meta(asked)
+    repo = meta["nameWithOwner"]
+    if not land_scope.how(ex["scope"], repo) or land_scope.excluded(ex["scope"], asked):
+        now_named = "" if repo.casefold() == asked.casefold() else f" ({repo} on GitHub now)"
+        sys.exit(f"no program '{argv[0]}', and orchestrate.land_executor is off for {asked}{now_named}: a standalone"
+                 " card merges its own PR")
+    if land_scope.how(ex["scope"], repo) == "owner":
+        login = run(["gh", "api", "user", "--jq", ".login"]).stdout.strip()
+        if why := land_scope.owner_refused(ex["scope"], repo, login) or land_scope.wildcard_only(ex["scope"], repo, meta):
+            sys.exit(f"{why}; nothing created")
+    slug = f"{repo.split('/')[-1]}-standalone"
+    if slug.casefold() != argv[0].casefold():
+        sys.exit(f"{asked} is {repo} on GitHub now: name its program {slug} (`orch land {slug} --repo {repo} …`)")
+    slug = argv[0]
     d = HOME / slug
-    cfg = {"slug": slug, "repo": repo, "run": opt(argv, "--run", STANDALONE_RUN), "tracker": {}, "predicate": [],
+    cfg = {"slug": slug, "repo": repo, "run": opt(argv, "--run") or standalone_run(), "tracker": {}, "predicate": [],
            "merge_policy": "autonomous", "ceiling": 6, "deadline": None, "created_at": now(),
            "skills_commit": skills_version(pathlib.Path(__file__).resolve().parents[3]), "note": "standalone cards",
            "final_check": None}
     try:
-        write_program(d, cfg, cfg["run"], "autonomous")
-        print(f"created standing program {slug} for {repo} (merge_policy autonomous)")
+        write_program(d, cfg, cfg["run"], "autonomous", lead=False)
+        print(f"created standing program {slug} for {repo} (merge_policy autonomous, Run {cfg['run']})")
     except FileExistsError:  # another card created it between the check and here
         pass
 
@@ -1584,8 +1622,11 @@ def standalone_target(argv):
     if "--repo" in argv and not (HOME / argv[0] / "program.json").exists():
         standalone_program(argv)
     p = Program(argv[0])
-    if "--repo" in argv and p.cfg["repo"] != opt(argv, "--repo"):
-        sys.exit(f"program '{argv[0]}' is for {p.cfg['repo']}, not {opt(argv, '--repo')}")
+    asked = opt(argv, "--repo")
+    # An old name reaches the program GitHub's current name made; only a mismatch costs the lookup.
+    if asked and p.cfg["repo"].casefold() != asked.casefold() \
+            and repo_meta(asked)["nameWithOwner"].casefold() != p.cfg["repo"].casefold():
+        sys.exit(f"program '{argv[0]}' is for {p.cfg['repo']}, not {asked}")
     return p
 
 
@@ -1620,11 +1661,12 @@ def cmd_init(argv):
     print("\n".join(dashboard_lines(slug)))
 
 
-def write_program(d, cfg, run_id, policy):
-    """Create program.json for cmd_init and standalone_program; FileExistsError when another caller got there first."""
+def write_program(d, cfg, run_id, policy, lead=True):
+    """Create program.json for cmd_init and standalone_program; FileExistsError when another caller got there first.
+    lead=False skips the dispatched-lead lookup: a standalone program belongs to no lead, whichever card creates it."""
     me = os.environ.get("ORCA_TERMINAL_HANDLE")
     try:
-        mine = own_worker(all_workers(run_id), me) if me and run_id != STANDALONE_RUN else None
+        mine = own_worker(all_workers(run_id), me) if lead and me and run_id != STANDALONE_RUN else None
     except SystemExit as e:  # guessing "coordinating lead" would scope a worker lead's program to the whole Run
         sys.exit(f"orch init: could not list {run_id}'s workers to tell whether this terminal is a dispatched lead"
                  f" ({e}). Retry when `orca orchestration worker-list --run {run_id}` answers.")
@@ -2201,8 +2243,18 @@ def cmd_verdict(argv):
     reviewer = (opt(argv, "--reviewer") or (what.strip() if kind in ("review", "verifier") else "")).strip()
     evidence = (opt(argv, "--evidence") or "").strip()
     authors = author_sessions(view.get("headRefName"))
-    fields = dict(author=authors, reviewer=reviewer or None, evidence=evidence or None, recorder=recorder, by=recorder)
+    if authors == []:  # Orca answered: no worktree holds the branch name. Look for the card by the PR's head sha.
+        authors = worktree_author_sessions(head)
     result = opt(argv, "--result", "pass")
+    if authors is None:  # Orca did not give a complete answer: not "no card", so a pass cannot be judged
+        if result == "pass":
+            sys.exit("verdict refused, nothing recorded: Orca's terminal or worktree list could not show who wrote this"
+                     " PR (failed, cut off or unreadable): run it again")
+        authors = []
+    fields = dict(author=authors, reviewer=reviewer or None, evidence=evidence or None, recorder=recorder, by=recorder)
+    if not authors:  # Orca answered and no card was found: the row says so, and verdict_identity_problem decides
+        fields["author_unverified"] = True
+        print("warning: no card holding this PR was found; the author is recorded as unverified", file=sys.stderr)
     # A fail blocks a landing and needs no independence. A pass that cannot stand as an independent review is not
     # stored at all: a stored pass would let the direct `orch land` path, which reads no identity, merge on it.
     if result == "pass" and (bad := verdict_identity_problem({**fields, "source": src})):
@@ -2215,20 +2267,100 @@ def cmd_verdict(argv):
 SELF_REVIEWERS = {"self", "implementer", "author"}
 
 
-def author_sessions(branch):
-    """Terminal handles of the card whose worktree holds the PR's branch: the sessions that wrote it. Empty when Orca
-    does not answer or no card holds the branch, which leaves the author unverified."""
-    if not branch:
-        return []
+def complete_answer(out, key):
+    """(rows, hostIds, omittedHostIds) of an Orca list answer that says it is complete, else None. Each of the three
+    must be present and well typed: a missing or mistyped `truncated` or host list was read as its empty default, so
+    a partial answer passed for a complete one ("no card")."""
+    if not isinstance(out, dict) or not isinstance(out.get(key), list) or out.get("truncated") is not False:
+        return None
+    scope = out.get("hostScope")
+    if not isinstance(scope, dict):
+        return None
+    hosts = []
+    for field in ("hostIds", "omittedHostIds"):
+        ids = scope.get(field)
+        if not isinstance(ids, list) or not all(isinstance(h, str) and h for h in ids):
+            return None
+        hosts.append(ids)
+    return out[key], hosts[0], hosts[1]
+
+
+def worktree_rows():
+    """Orca's worktree list when it can be trusted to be complete and every row is readable, else None: a cut-off
+    list, a host Orca did not reach, or a row that cannot say which worktree it is, where, or what it holds can hide
+    the very worktree that wrote the PR, and skipping it as "no match" would turn a partial answer into "no card".
+    An empty branch or head is a real state (detached HEAD, no commit yet): only a missing or mistyped field fails."""
+    answer = complete_answer(orca_json("worktree", "list"), "worktrees")
+    if answer is None:
+        return None
+    rows, hosts, omitted = answer
+    if omitted:
+        return None
+    for w in rows:
+        if not (isinstance(w, dict) and all(isinstance(w.get(k), str) for k in ("id", "hostId", "branch", "head"))
+                and w["id"] and w["hostId"] in hosts and isinstance(w.get("isMainWorktree"), bool)):
+            return None
+    return rows
+
+
+def worktree_sessions(w):
+    """Terminal handles of one worktree row, or None when Orca's answer cannot be trusted for it. An answer counts only
+    when it says it covered this worktree's host: an empty or partial answer from a host Orca did not reach says
+    nothing about its sessions. Another host being left out is an ordinary scope limit."""
+    answer = complete_answer(orca_json("terminal", "list", "--worktree", f"id:{w['id']}"), "terminals")
+    if answer is None:
+        return None
+    rows, hosts, omitted = answer
+    if w["hostId"] not in hosts or w["hostId"] in omitted:
+        return None
+    # A terminal row with no usable handle could be the author's own: dropping it would read as "no card".
+    if not all(isinstance(t, dict) and isinstance(t.get("handle"), str) and t["handle"] for t in rows):
+        return None
+    return {t["handle"] for t in rows}
+
+
+def worktree_holders(matches):
+    """Sorted handles of the sessions in every worktree row `matches` picks, [] when it picks none (Orca answered and
+    no card is there), None when the list or any picked row's answer cannot show who is there. A partial union is
+    never returned: the missing worktree may be the one that wrote the PR."""
     try:
-        out = orca_json("terminal", "list", "--worktree", f"branch:{branch}")
-        rows = out["terminals"]
-        # A cut-off list can miss the author, and a reviewer equal to the missing one would pass.
-        if out.get("truncated") or not isinstance(rows, list):
-            return []
-        return sorted({t["handle"] for t in rows if isinstance(t.get("handle"), str) and t["handle"]})
+        rows = worktree_rows()
+        if rows is None:
+            return None
+        handles = set()
+        for w in rows:
+            if not matches(w):
+                continue
+            part = worktree_sessions(w)
+            if part is None:
+                return None
+            handles |= part
+        return sorted(handles)
     except (SystemExit, ValueError, KeyError, TypeError, AttributeError, OSError):
-        return []
+        return None
+
+
+def author_sessions(branch):
+    """Terminal handles of every card whose worktree holds the PR's branch: the sessions that wrote it. [] when Orca
+    answered completely and no worktree holds the branch; None when the answer cannot show who the author is (Orca
+    failed, a list or a host is missing or cut off). Only [] leaves the author unverified: None must refuse, since a
+    cut-off list can miss the very card that wrote the PR. A branch selector is rejected as ambiguous once a closed
+    card's worktree and its successor both hold the branch, so the worktrees are listed and each is asked by id.
+    A PR with no branch name to look for is None too: nothing was looked up, which is not "no worktree holds it"."""
+    if not isinstance(branch, str) or not branch:
+        return None
+    return worktree_holders(lambda w: w.get("branch") in (branch, f"refs/heads/{branch}"))
+
+
+def worktree_author_sessions(head):
+    """Fallback for a card whose local branch is not the PR's branch (it pushed `local:remote`, or was renamed): the
+    terminals of the non-main worktrees sitting at the PR's head sha. The PR number is not matched, because the listing
+    spans repositories and another repository's card linking the same number would stand in for the author. [] when
+    Orca answered and no worktree sits there; None when the answer cannot show it, which must refuse, not pass as an
+    unverified author. A matching row that cannot be read is None too, and so is a head that is not a sha to look for."""
+    if not isinstance(head, str) or not head:
+        return None
+    return worktree_holders(lambda w: not w["isMainWorktree"] and w["head"] == head)
 
 
 def verdict_identity_problem(v):
@@ -2240,8 +2372,13 @@ def verdict_identity_problem(v):
     authors = v.get("author")
     # A row is JSON anyone can append: a wrong type must refuse, not raise and leave the request queued forever.
     if not all(v.get(k) is None or isinstance(v.get(k), str) for k in ("reviewer", "evidence", "recorder")) \
-            or not (authors is None or isinstance(authors, list) and all(isinstance(a, str) and a for a in authors)):
-        return "the identity fields are malformed (author is a list of handles, the rest are strings)"
+            or not (authors is None or isinstance(authors, list) and all(isinstance(a, str) and a for a in authors)) \
+            or not (v.get("author_unverified") is None or isinstance(v.get("author_unverified"), bool)) \
+            or (v.get("author_unverified") is True and authors != []):
+        # `author_unverified` vouches for a lookup that answered "no card", which is exactly the list []: a missing or
+        # null author says nothing was looked up, and a found author contradicts the mark.
+        return ("the identity fields are malformed (author is a list of handles, author_unverified a boolean that"
+                " needs author == [], the rest strings)")
     if not (v.get("reviewer") or "").strip():
         return "no reviewer named (--reviewer, or a review:<reviewer> or verifier:<reviewer> source)"
     if not (v.get("evidence") or "").strip():
@@ -2251,7 +2388,13 @@ def verdict_identity_problem(v):
     if self_review(v):
         return self_review(v)
     if not v.get("author"):
-        return "the PR's author session could not be identified (no card holds its branch)"
+        # No card was found (its branch can differ from the PR's). The row may stand only when it says so and the
+        # reviewer is not the session that recorded it; a row without the mark predates this rule and is refused.
+        if v.get("author_unverified") is not True:
+            return "the PR's author session could not be identified (no card holds its branch)"
+        for role, name in stated_reviewers(v):  # either name, so a review:<recorder> source cannot hide it
+            if name == v["recorder"]:
+                return f"the author is unverified and the {role} is the recorder: another session records the review"
     return None
 
 
@@ -2272,16 +2415,20 @@ def executor_verdict_problem(verdict, head, sources):
     return None
 
 
+def stated_reviewers(v):
+    """(role, name) for every reviewer the row names: --reviewer and the one inside a review:/verifier: source."""
+    kind, _, what = str(v.get("source") or "").partition(":")
+    named = [("reviewer", v.get("reviewer")), ("source reviewer", what if kind in ("review", "verifier") else None)]
+    return [(role, name.strip()) for role, name in named if isinstance(name, str) and name.strip()]
+
+
 def self_review(v):
     """The reason the review is the PR's own author's, else None. Every identity the row states counts: --reviewer, the
     reviewer inside a review:/verifier: source (so `--source review:author --reviewer codex` does not pass), and the
     recorder, since an author who records its own pass wrote the verdict it will be merged on."""
     authors = v.get("author") or []
-    kind, _, what = str(v.get("source") or "").partition(":")
-    named = [("reviewer", v.get("reviewer")), ("source reviewer", what if kind in ("review", "verifier") else None)]
-    for role, name in named:
-        name = name.strip() if isinstance(name, str) else ""
-        if name and (name.casefold() in SELF_REVIEWERS or name in authors):
+    for role, name in stated_reviewers(v):
+        if name.casefold() in SELF_REVIEWERS or name in authors:
             return f"{role} '{name}' is the PR's author session"
     if isinstance(v.get("recorder"), str) and v["recorder"] in authors:
         return f"recorder '{v['recorder']}' is the PR's author session: another session records the review"
@@ -2833,9 +2980,13 @@ def land_executor(repo=None):
         return None
     if not isinstance(cfg, dict) or cfg.get("enabled") is not True:
         return None
-    repos = [r for r in cfg.get("repos") or [] if isinstance(r, str)]
-    if repo is not None and repo not in repos:
+    try:
+        scope = land_scope.parse(cfg)
+    except land_scope.ScopeError as e:
+        sys.exit(f"{path}: {e}; land stops rather than guess the executor's repos")
+    if repo is not None and not land_scope.how(scope, repo):
         return None
+    repos = [r for r in cfg.get("repos") or [] if isinstance(r, str)]
     hours = cfg.get("max_wait_hours")
     try:
         hours = 24.0 if hours is None else float(hours)
@@ -2845,9 +2996,34 @@ def land_executor(repo=None):
         # A wait that can never end (NaN, inf) or a typo ("24h") would keep requests queued for ever.
         sys.exit(f"{path}: orchestrate.land_executor.max_wait_hours must be a positive number of hours, "
                  f"not {cfg.get('max_wait_hours')!r}")
+    sources = cfg.get("verdict_sources") or ["review:codex"]
+    if not isinstance(sources, list) or not all(isinstance(s, str) and s for s in sources):
+        # A bare string would match by substring ("review:codex" in "review:codex-old") and index by letter.
+        sys.exit(f"{path}: orchestrate.land_executor.verdict_sources must be a list of sources, not {sources!r}")
     import autoqueue
-    return {"repos": repos, "verdict_sources": cfg.get("verdict_sources") or ["review:codex"], "max_wait_hours": hours,
+    return {"repos": repos, "scope": scope, "verdict_sources": sources, "max_wait_hours": hours,
             "auto_queue": autoqueue.config(cfg.get("auto_queue"))}
+
+
+def executor_for(repo):
+    """(land_executor(), repo_meta) when the executor covers the repo GitHub serves under `repo` now, else (None, meta).
+    The recorded name alone cannot choose the direct merge: a program made before a rename still names the old one.
+    An exclusion under either name keeps the repo out. A GitHub that does not answer exits; never a guessed direct merge."""
+    ex = land_executor()
+    if not ex:
+        return None, None
+    meta = repo_meta(repo)
+    now_named = meta["nameWithOwner"]
+    if land_scope.excluded(ex["scope"], repo) or land_scope.excluded(ex["scope"], now_named):
+        return None, meta
+    if not land_scope.how(ex["scope"], now_named):
+        if land_scope.how(ex["scope"], repo):
+            # Covered under the recorded name, not under GitHub's: a rename or transfer moved it out. Merging it directly
+            # would route around the executor exactly when the repo's owner or name changed.
+            sys.exit(f"refused: {repo} is {now_named} on GitHub now, which orchestrate.land_executor does not cover;"
+                     " list the new name (skills-config) or exclude it, then land again")
+        return None, meta
+    return ex, meta
 
 
 LAND_EXIT = {"merged": 0, "superseded": 2}
@@ -2903,7 +3079,14 @@ def cmd_land(argv):
     pr, klass = int(opt(argv, "--pr")), opt(argv, "--class")
     if klass and klass not in KLASS:
         sys.exit(f"--class is one of {', '.join(KLASS)}")
-    executor = land_executor(p.cfg["repo"])
+    try:
+        executor = executor_for(p.cfg["repo"])[0]
+    except (SystemExit, KeyError, TypeError, ValueError) as e:
+        if isinstance(e, SystemExit) and not TRANSIENT.search(str(e.code)):
+            raise
+        print(f"yield: GitHub did not say which repo {p.cfg['repo']} is now, so executor or direct merge is undecided"
+              f" ({str(getattr(e, 'code', e))[:160]}); land again")
+        sys.exit(2)
     events = p.events()
     st = pr_state(events).get(pr, {})
     if not claimed(events, pr) or (klass and klass != st["ready"].get("klass", "normal")):
@@ -2969,9 +3152,16 @@ def cmd_land_check(argv):
         problems.append(f"no-CI lane: verdict is for {verdict['sha'][:8]}, not the head {v['headRefOid'][:8]}: re-review")
     if "head_moved" in why:
         print(f"note: head moved {verdict['sha'][:8]} -> {v['headRefOid'][:8]} with the same patch-id; verdict holds, CI must pass at the new head")
-    if passing and (ex := land_executor(repo)) and \
-            (executor_why := executor_verdict_problem(verdict, v["headRefOid"], ex["verdict_sources"])):
-        problems.append(executor_why)  # the executor would refuse it: say so now
+    if passing:
+        # The same decision `orch land` makes, on the repo GitHub serves now: the recorded name alone reads a renamed
+        # repo as one the executor does not cover, and passes a verdict the executor then refuses.
+        try:
+            ex = executor_for(repo)[0]
+        except SystemExit as e:  # a repo renamed out of the executor's scope, or GitHub not answering: orch land stops too
+            problems.append(str(e.code)[:300])
+            ex = None
+        if ex and (executor_why := executor_verdict_problem(verdict, v["headRefOid"], ex["verdict_sources"])):
+            problems.append(executor_why)  # the executor would refuse it: say so now
     if p.cfg["merge_policy"] == "human-gate" and (hold := gate_hold(p, events, pr)):
         problems.append(hold)
     try:
