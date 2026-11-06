@@ -149,33 +149,32 @@ def lead_session(who):
 HOME_REF = re.compile(r"\$HOME\b|\$\{HOME\}")
 SAFE_HOME = re.compile(r"/[\w./+-]*")
 # A literal `cd X &&` may come first: cd changes PWD, never HOME.
-FIRST_STATEMENT = re.compile(r"\s*(?:(?:cd|pushd)\s+(?:--\s+)?[\w./+-]+\s*&&\s*)?(?:\S*/)?skills-sync\s+card\s+")
+FIRST_STATEMENT = re.compile(r"\s*(?:(?:cd|pushd)\s+(?:--\s+)?[\w./+-]+\s*&&\s*)?(?:[\w./~+-]*/)?skills-sync\s+card\s+")
+BRIEF_TOKEN = re.compile(r"'([^']*)'|\"([^\"]*)\"|([^'\"]+)")
+PLAIN_PATH = re.compile(r"[\w./+:@%=,-]*")
 
 
 def expand_path(token, first):
-    """The path the helper will open, or None when the hook cannot be sure. A literal path is read as written
-    (single quotes pass it through). `~` and `~/…` are expanded even in quotes, as the helper does itself.
-    `$HOME`/`${HOME}` is expanded only when the helper is the command's first statement (`first`): nothing can
-    have rebound HOME before it, which no scan of earlier text could prove (quotes, `+=`, `IFS`) -- and only when
-    HOME is a plain absolute path. Any other variable, substitution or glob is not read."""
-    quote = token[0] if token[:1] in ("'", '"') else ""
-    text = token.strip("'\"")
+    """The path the helper will open, or None when the hook cannot be sure. The token is one quoted or plain word
+    and the result must be plain characters: spaces, quotes, braces, brackets, globs and escapes are not read.
+    `~` and `~/…` are expanded even in quotes, as the helper does itself. `$HOME`/`${HOME}` is expanded only when
+    the helper is the command's first statement (`first`): nothing can have rebound HOME before it, which no scan
+    of earlier text could prove (quotes, `+=`, `IFS`) -- and only when HOME is a plain absolute path."""
+    m = BRIEF_TOKEN.fullmatch(token)
+    if not m:
+        return None
+    text = next(g for g in m.groups() if g is not None)
     home = os.environ.get("HOME", "")
-    if text == "~" or text.startswith("~/"):
+    tilde = text == "~" or text.startswith("~/")
+    if tilde:
         text = "$HOME" + text[1:]
     elif text.startswith("~"):
         return None
-    elif quote == "'":
-        return pathlib.Path(text)
-    if set(text) & set("`*?\\") or "$(" in text:
-        return None
-    if "$" in text:
+    if "$" in text and (tilde or m[1] is None):  # single quotes pass `$` through literally, and a literal `$` is refused below
         if not first or not SAFE_HOME.fullmatch(home):
             return None
         text = HOME_REF.sub(lambda _: home, text)
-        if "$" in text:
-            return None
-    return pathlib.Path(text)
+    return pathlib.Path(text) if PLAIN_PATH.fullmatch(text) else None
 
 
 def helper_card(brief, cwd, cmd, start):

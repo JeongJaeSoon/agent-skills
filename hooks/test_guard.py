@@ -268,6 +268,13 @@ assert bash(HELPER.format("'$HOME/worker.md'")) == "deny"  # single quotes pass 
 assert bash(HELPER.format("'~/worker.md'"), session="joined") == "none"  # HOME's worker, not the literal ~/worker.md
 assert bash(HELPER.format('"~/worker.md"'), session="joined") == "none"
 assert bash(HELPER.format("~/worker.md"), session="joined") == "none" and bash(HELPER.format('"${HOME}/worker.md"')) == "none"
+# The brief is one plain word: a quoted space, a quote inside the name, braces and brackets are not read (round 3).
+(H / "worker.md lead.md").write_text((H / "lead.md").read_text())
+(H / "brief1.md").write_text((H / "lead.md").read_text())
+for arg in ('"worker.md lead.md"', "\"worker.md'\"", "brief{1..1}.md", "brief[1].md", '"worker.md\tlead.md"'):
+    assert bash(HELPER.format(arg)) == "deny", arg
+assert bash("HOME=/other;bin/" + HELPER.format('"$HOME/worker.md"')) == "deny"  # `\S*/` once swallowed the earlier statement
+assert bash("bin/" + HELPER.format('"$HOME/worker.md"')) == "none"
 (H / "physical" / "child").mkdir(parents=True)
 (H / "physical" / "brief2.md").write_text((H / "lead.md").read_text())
 (H / "brief2.md").write_text("/goal fix X\nCLOSE: §8\n")
