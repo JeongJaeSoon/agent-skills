@@ -369,7 +369,7 @@ def api_call(w):
     method = (method or ("POST" if fields or bodies or "--input" in w else "GET")).upper()
     endpoint = verb(w[2:], {"-X", "--method", "-f", "-F", "--field", "--raw-field", "-H", "--header", "--input",
                             "-q", "--jq", "-t", "--template", "--hostname", "--cache", "-p", "--preview"})[0] or ""
-    return method, re.sub(r"^https?://[^/]+", "", endpoint), fields  # gh takes a full URL too
+    return method, re.sub(r"^https?://[^/]+", "", endpoint, flags=re.I), fields  # gh takes a full URL too
 
 
 def last_method(w, long_opt):
@@ -386,13 +386,23 @@ def last_method(w, long_opt):
     return method
 
 
-def curl_call(w):
-    """(METHOD, [path]) of a curl command: the path of each api.github.com URL it names, `--url=` ones too."""
-    method = last_method(w, "--request")
-    data = any(x[:2] in ("-d", "-F", "-T") or x.startswith(("--data", "--form", "--json", "--upload-file"))
-               for x in w[1:])
-    urls = [m.group(1) or "/" for x in w[1:] if (m := re.search(r"https?://api\.github\.com(?::\d+)?(/[^?#]*)?", x))]
-    return (method or ("POST" if data else "GET")).upper(), urls
+def curl_calls(w):
+    """[(METHOD, [path], text)] for each transfer of a curl command, split at `--next` as curl does: the path of
+    each api.github.com URL it names (`--url=` ones too) and the transfer's words as text."""
+    out, part = [], []
+    for x in w[1:] + ["--next"]:
+        if x != "--next":
+            part.append(x)
+            continue
+        method = last_method(part, "--request")
+        data = any(y[:2] in ("-d", "-F", "-T") or y.startswith(("--data", "--form", "--json", "--upload-file"))
+                   for y in part)
+        get = any(y == "--get" or re.fullmatch(r"-[a-zA-Z]*G[a-zA-Z]*", y) for y in part)  # -G puts -d in the URL
+        urls = [m.group(1) or "/" for y in part
+                if (m := re.search(r"https?://api\.github\.com(?::\d+)?(/[^?#]*)?", y, re.I))]
+        out.append(((method or ("POST" if data and not get else "GET")).upper(), urls, " ".join(part)))
+        part = []
+    return out
 
 
 def protection_write(c):
@@ -405,10 +415,9 @@ def protection_write(c):
         endpoint = endpoint.split("?", 1)[0]
         return method != "GET" and re.search(r"/branches/.+/protection(/|$)|(^|/)rulesets(/|$)", endpoint) is not None
     if c.name == "curl":
-        method, paths = curl_call(w)
-        body = " ".join(w[1:])
-        return any(writes(method, p) for p in paths) or (any(p.strip("/") == "graphql" for p in paths)
-                                                         and re.search(mutation, body, re.S) is not None)
+        return any(any(writes(method, p) for p in paths)
+                   or any(p.strip("/") == "graphql" for p in paths) and re.search(mutation, text, re.S) is not None
+                   for method, paths, text in curl_calls(w))
     if c.name != "gh" or w[1:2] != ["api"]:
         return False
     method, endpoint, fields = api_call(w)
@@ -425,27 +434,36 @@ def git_out(args, where):
         return ""
 
 
+def default_names(where, remote):
+    """main, master and the branch the remote's HEAD names in the checkout at `where`."""
+    head = git_out(["symbolic-ref", "--short", f"refs/remotes/{remote}/HEAD"], where)
+    return {"main", "master"} | ({head.split("/", 1)[1]} if "/" in head else set())
+
+
 def force_push_default(c, here):
     """Whether this `git push` or `gh api` command force-updates a default branch: main, master or the branch
     origin/HEAD names. A push with no refspec, or `HEAD`, is judged by the branch checked out in `here`; when that
     cannot be read, only main and master count."""
     w = c.words
+    where = here
+    for i, x in enumerate(w):
+        if x == "-C" and i + 1 < len(w):
+            where = expand(w[i + 1], here) or here
+        elif x.startswith("-C") and c.name == "git":  # `-C/path`
+            where = expand(x[2:], here) or here
     if c.name in ("gh", "curl"):
         if c.name == "gh":
             method, endpoint, fields = api_call(w) if w[1:2] == ["api"] else ("", "", [])
-            paths = [endpoint]
+            calls = [(method, [endpoint], " ".join(fields))]
         else:
-            (method, paths), fields = curl_call(w), [" ".join(w[1:])]
-        return (method == "PATCH" and any(re.search(r"/git/refs/heads/(main|master)$", p.split("?", 1)[0])
-                                          for p in paths)
-                and any(re.search(r'force"?\s*[=:]\s*true', f) for f in fields))
+            calls = curl_calls(w)
+        names = default_names(where, "origin")
+        return any(method == "PATCH" and re.search(r'force"?\s*[=:]\s*true', text)
+                   and any(p.split("?", 1)[0].rsplit("/git/refs/heads/", 1)[-1] in names
+                           for p in paths if "/git/refs/heads/" in p) for method, paths, text in calls)
     sub, rest = verb(w[1:], GIT_OPTS)
     if sub != "push":
         return False
-    where = here
-    for i, x in enumerate(w[:-1]):
-        if x == "-C":
-            where = expand(w[i + 1], here) or here
     opts, pos, i = [], [], 0
     while i < len(rest):
         x = rest[i]
@@ -472,8 +490,7 @@ def force_push_default(c, here):
         return True
     named_repo = any(o == "--repo" or o.startswith("--repo=") for o in opts)  # then every positional is a refspec
     remote = "origin" if named_repo or not pos else pos[0]
-    head = git_out(["symbolic-ref", "--short", f"refs/remotes/{remote}/HEAD"], where)
-    names = {"main", "master"} | ({head.split("/", 1)[1]} if "/" in head else set())
+    names = default_names(where, remote)
     for spec in (pos if named_repo else pos[1:]) or ["HEAD"]:
         src, _, dst = spec.lstrip("+").partition(":")
         dst = dst if ":" in spec else src
@@ -539,7 +556,8 @@ def rm_outside(c, here, cwd):
         roots.add(os.path.realpath(top))
     trash, outside = [], []
     for x in operands:
-        path = expand(x, here, follow=False)
+        # `find -L` and `-H` walk through a symlink they start at; rm removes the link itself.
+        path = expand(x, here, follow=c.name == "find" and any(y in ("-L", "-H") for y in c.words[1:3]))
         if not path or "$" in path or "`" in path:
             continue
         globbed = re.search(r"[*?\[]", path) is not None
