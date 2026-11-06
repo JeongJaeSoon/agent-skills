@@ -165,6 +165,10 @@ def pr_open(facts, path):
         if key := (s.get("linked_pr") or {}).get("key"):
             state = ((facts.get("prs") or {}).get(key) or {}).get("state")
             return state is None or str(state).upper() == "OPEN"
+        # The collector also pairs a PR found by the card's branch with the session (prs[].session).
+        owned = [p for p in (facts.get("prs") or {}).values() if s.get("id") and p.get("session") == s["id"]]
+        if owned:
+            return any(p.get("state") is None or str(p["state"]).upper() == "OPEN" for p in owned)
     return not sessions
 
 
@@ -830,7 +834,7 @@ def pending_lines(me, unowned, now=None):
     # A card that ended its turn and waits (I) is often a worker that just reported and waits on the very session
     # reading this: alone, it wakes nobody until it has stayed open HOLD_ALONE; beside another line it goes with it.
     if all(f.get("code") in HOLD_CODES for f in due):
-        due = [f for f in due if f.get("pr_open") or not f.get("detected_at")
+        due = [f for f in due if f.get("pr_open") is not False or not f.get("detected_at")
                or now - fleet.parse(f["detected_at"]) >= HOLD_ALONE]
     if due:
         keep = {f["id"]: seen.get(f["id"]) for f in mine if seen.get(f["id"])}
