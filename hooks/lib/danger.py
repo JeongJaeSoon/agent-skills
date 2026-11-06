@@ -70,8 +70,10 @@ PUSH_LONG = ["--all", "--atomic", "--branches", "--delete", "--dry-run", "--exec
              "--progress", "--prune", "--push-option", "--quiet", "--receive-pack", "--recurse-submodules", "--repo",
              "--set-upstream", "--signed", "--tags", "--thin", "--verbose"]
 # Options whose next word is their value; a method option cannot be that word. (-X and --request are not here.)
-OTHER_VALUED = (CURL_VALUED - {"-X", "--request"}) | {"-f", "--field", "--raw-field", "--input", "-q", "--jq", "-t",
-                                                      "--template", "--hostname", "--cache", "-p", "--preview"}
+# They differ by tool: gh's `-f` takes a field, curl's `-f` is a flag.
+CURL_OTHER_VALUED = CURL_VALUED - {"-X", "--request"}
+GH_OTHER_VALUED = {"-f", "-F", "-H", "--header", "--field", "--raw-field", "--input", "-q", "--jq", "-t",
+                   "--template", "--hostname", "--cache", "-p", "--preview"}
 PUSH_VALUED = {"-o", "--push-option", "--repo", "--receive-pack", "--exec"}
 
 
@@ -376,7 +378,7 @@ def label_add(w):
 
 def api_call(w, here=None):
     """(METHOD, endpoint, [field]) of a `gh api` command. A field or --input without --method means POST."""
-    method = last_method(w, "--method")
+    method = last_method(w, "--method", GH_OTHER_VALUED)
     fields = [w[i + 1] for i, x in enumerate(w[:-1]) if x in ("-f", "-F", "--field", "--raw-field")]
     fields += [x.split("=", 1)[1] for x in w if x.startswith(("--field=", "--raw-field="))]
     fields += [x[2:] for x in w if x[:2] in ("-f", "-F") and len(x) > 2]  # `-fquery=…`
@@ -394,14 +396,14 @@ def api_call(w, here=None):
     return method, re.sub(r"^https?://[^/]+", "", endpoint, flags=re.I), fields  # gh takes a full URL too
 
 
-def last_method(w, long_opt):
+def last_method(w, long_opt, valued):
     """The method of the last `-X`, `long_opt` or `long_opt=` in w, which wins as in curl and gh. A cluster such as
     `-sX DELETE` or `-sXDELETE` counts."""
     method, skip = None, False
     for i, x in enumerate(w):
         if skip:  # the value of another option, `-H -XGET` for one
             skip = False
-        elif x in OTHER_VALUED:
+        elif x in valued:
             skip = True
         elif x == long_opt and i + 1 < len(w):
             method = w[i + 1]
@@ -421,10 +423,15 @@ def curl_calls(w):
             part.append(x)
             continue
         carry = ["-" + x[2:]] if x.startswith("-:") and len(x) > 2 else []  # `-:XDELETE`: -XDELETE is the next's
-        method = last_method(part, "--request")
+        method = last_method(part, "--request", CURL_OTHER_VALUED)
         data = any(re.match(rf"-{NO_VALUE}*[dFT]", y) or y.startswith(("--data", "--form", "--json", "--upload-file"))
                    for y in part)
-        get = any(y == "--get" or re.fullmatch(rf"-{NO_VALUE}*G{NO_VALUE}*", y) for y in part)  # -G puts -d in the URL
+        get = False  # -G puts -d in the URL; a later --no-get takes it back
+        for y in part:
+            if y == "--get" or re.fullmatch(rf"-{NO_VALUE}*G{NO_VALUE}*", y):
+                get = True
+            elif y == "--no-get":
+                get = False
         # A URL is an operand or `--url=`, not the value of an option (a body may quote one).
         urls = []
         for j, y in enumerate(part):
@@ -745,16 +752,19 @@ def check_bash(cmd, cfg, cwd=None, session=None):
     masked = shell.command_text(cmd)
     out, seen = [], set()
     cmds, here = shell.commands(cmd), cwd
-    outer, start = [], 0  # the directories to go back to at each `)`: a subshell's `cd` ends with it
+    outer, start, ticks = [], 0, False  # the directories to go back to at each `)` or closing backtick
     for i, c in enumerate(cmds):
         for ch in masked[start:c.span[0]]:
-            if ch == "(":
+            if ch == "(" or ch == "`" and not ticks:
                 outer.append(here)
-            elif ch == ")" and outer:
+                ticks = ticks or ch == "`"
+            elif (ch == ")" or ch == "`" and ticks) and outer:
                 here = outer.pop()
+                ticks = ticks and ch != "`"
         start = c.span[0]
         found = check_command(c, masked, cfg, cwd, session, here)
-        if c.name == "cd" and not (c.piped_from or c.piped_to):  # a pipeline's `cd` runs in a subshell
+        # A `cd` in a pipeline or sent to the background (`cd x &`) runs in a subshell.
+        if c.name == "cd" and not (c.piped_from or c.piped_to or re.match(r"\s*(&(?!&)|\|)", masked[c.span[1]:])):
             here = after_cd(c, here)
         # `kill $(pgrep …)`: a pgrep inside this kill command's own substitution.
         if c.name == "kill" and any(d.name == "pgrep" and c.span[0] < d.span[0] and d.span[1] <= c.span[1]
