@@ -1,15 +1,10 @@
----
-name: swarm
-description: "Fan out parallel workers on one question and return one report. Use for /swarm, \"병렬로 훑어줘\", \"나눠서 동시에 확인해줘\". Landing tickets is orchestrate; one merged artifact is arena."
----
+# Sweep
 
-# Swarm
-
-Fan out N parallel workers. They may cover separate slices, race the same brief, or mix both. The parent waits, aggregates, and returns one report. When the goal is one artifact built from the best of competing attempts, run the **arena** skill instead.
+Fan out N parallel workers. They may cover separate slices, race the same brief, or mix both. The parent waits, aggregates, and returns one report. When the goal is one artifact built from the best of competing attempts, use [compete](compete.md) instead.
 
 ## Phase A: Frame
 
-1. State the done predicate and the artifact or report the swarm must return.
+1. State the done predicate and the artifact or report the sweep must return.
 2. Choose the shape. Partition into slices, race N workers on identical briefs, or mix both. For a race or mixed shape, declare `first pass` or `rank all` before spawning.
 3. Set N from the user or derive it from the shape. N is total workers, not the concurrency limit.
 4. Use the host's configured worker defaults, or the user's explicit model choice. For a comparison experiment, record each candidate's configuration before launch.
