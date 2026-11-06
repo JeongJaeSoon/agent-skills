@@ -1,7 +1,7 @@
 <!-- translated-from: 5ac65a0e62bb64e6539052de09f31728b138749f -->
 # スキルカタログ
 
-`agent-skills` プラグインに入っているスキル40個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック16個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
+`agent-skills` プラグインに入っているスキル38個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック16個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
 
 既定値の変更と既存データの保持は[設定移行ガイド](configuration-migration.md)を参照してください。ノート・台帳・個人フォルダーには明示的な設定が必要で、レポートの既定タイムゾーンは UTC です。
 
@@ -10,7 +10,7 @@
 ## 流れ
 
 ```text
-チケット1件   write-ticket → deliver-ticket → handoff-ticket → end-session
+チケット1件   write-ticket → deliver-ticket → dispatch-card の次のチケットモード → end-session
               （作業を続けつつ別の場所へ送るときは dispatch-card）
 プロジェクト  orchestrate ─ 各ワーカーで deliver-ticket ─ orch land
               ─ main ガーディアン・QA リード ─ ダッシュボード
@@ -35,12 +35,12 @@ PR を受け持つスキルとマージする主体:
 | deliver-ticket | このセッションが作業中の自分の PR: 作成、レビュー対応、マージ、リリース | セッションが §5 どおり（`gh pr merge`、スタックは `gh stack merge`） |
 | watch-prs | 定期の回が集めた待ち PR: 自分を指名したレビュー依頼、レビュー待ちの自分の PR（依頼・リマインド）、マージ準備ができた自分の PR | `merge_repos` のゲートをすべて通った自分の PR だけ |
 | orchestrate | プログラムのワーカーの PR | `orch land`、または人が承認した plain merge |
-| handoff-ticket | PR を作らない。次のカードを決める | しない |
+| dispatch-card の次のチケットモード | PR を作らない。次のカードを決める | しない |
 
 - deliver-ticket ↔ watch-prs: 生きている worktree にブランチがチェックアウトされた PR はそのセッションがマージする。watch-prs は飛ばす。
 - orchestrate ↔ watch-prs: プログラム台帳にある PR は `orch land` がマージする。watch-prs は止まったプログラムの PR もマージせず、リマインドだけ送る。台帳に `stale_days` のあいだ記録がないプログラムは放棄されたとみなし、その PR は再び watch-prs のリマインド・マージの対象になる。
 - orchestrate ↔ deliver-ticket: ワーカーは deliver-ticket で働くが、マージは §5 ではなく `orch land`。
-- handoff-ticket の「머지하고 다음 진행해줘」（マージして次へ）: マージは deliver-ticket、handoff-ticket はその後に次のカードを開くだけ。
+- 次のチケットモードの「머지하고 다음 진행해줘」（マージして次へ）: マージは deliver-ticket、dispatch-card はその後に次のカードを開くだけ。
 
 ## チケット1件
 
@@ -83,25 +83,17 @@ PR を受け持つスキルとマージする主体:
   - **完了:** 受け入れ基準をすべて満たした状態を完了とみなします。
     - プログラムの中: 最初のプロンプトがマージを承認したカードは `orch land` で自分の PR をマージして閉じます。人や別の PR を待つときだけ `READY-WAIT:` の行を付けて READY で止まり、human-gate も READY で止まります。
     - 単独のカード: land executor が有効な repo ではマージせず、head sha・CI run・レビュー判定を添えて READY を報告し、オーケストレーターがマージします。executor が無効な repo やユーザーが自分で開いたセッションでは、ユーザーが保留にしていなければ自分で squash マージします。
-    - 完了コメントを残したら、同じターンのうちに `handoff-ticket` へ移ります。
+    - 完了コメントを残したら、同じターンのうちに `dispatch-card` の次のチケットモードへ移ります。
 - **同梱:** `scripts/sticky-comment.sh`（PR のテスト結果コメントを一つに保つ。`--check` はそのコメントが今の head sha を書いているか確かめる）、`scripts/review_pick.py`（独立レビュアーを選ぶ）。本文には何をデプロイするかを決めるルールだけを置き、手順は references に分けました。`evidence.md`（バグ・リファクタリング・既存の修正の手順）、`independent-review.md`（独立レビューの手順）、`pull-request.md`（PR 本文の節と stack）、`review-loop.md`（PR を開いてから ready までのループ、他の人がマージするときの見守り）、`review-bot-triage.md`（レビュースレッドを fix / dismiss / ask に分ける基準。CodeRabbit、Copilot、人のレビューに使います）。
-- **関連:** `figure-it-out`、`architect`、`how`、`why`、`tdd`、`prune-comments`、`interrogate` の判定の枠組み、`write-plainly`、`blast-radius`、`write-ticket`、`use-tracker`、`use-notes`、`orchestrate`（`orch land`、`orch heavy`）、`handoff-ticket`。
+- **関連:** `figure-it-out`、`architect`、`how`、`why`、`tdd`、`prune-comments`、`interrogate` の判定の枠組み、`write-plainly`、`blast-radius`、`write-ticket`、`use-tracker`、`use-notes`、`orchestrate`（`orch land`、`orch heavy`）、`dispatch-card`（次のチケットモード）。
 
 ### ui-review
 - **いつ:** 試作・画面・UI を変える PR を人に見せる前（「UI 리뷰해줘」（UI をレビューして）、「시안 점검해줘」（試作を点検して）、「화면 밸런스 봐줘」（画面のバランスを見て））。人が UI の問題を指摘したあとは、直してから規則を足します。スクリーンショットを撮って載せるのは `deliver-ticket` の visual-evidence です。
 - **内容:** 製品のデザインシステムがこのスキルの既定値より優先し、同じ種類の既存画面を基準（baseline）に選びます。`scripts/ui_measure.py` が headless Chrome で 1280・390 のページを測ります（行の高さ、同じ列のボタン幅、揃え線、縦の中心、4px グリッド、はみ出し、リンクの下線、表の見出しと入力コントロールの一貫性、名前のない記号、基準画面とのコンポーネント一致）。1行の値の折り返しや色のない画面などは警告です。測れないもの（画面に出るシステム側の手順、同じものを変える重複したオプション、設定のまとまり）は `references/walkthrough.md` のシナリオ表で実際に操作して判定します。理由のある例外なしに FAIL が残っていれば試作は送りません。規則と根拠は `references/rules.md` にあり、新しい指摘は一般的な規則ならこのスキルに、一つの製品の規則ならそのリポジトリか `~/.config/agent-skills/ui-review/rules.md` に足します。
 - **関係:** `deliver-ticket` §3 のレビューと visual-evidence の判定、`orchestrate` のリードが試作や画面を人に送る前。
 
-### handoff-ticket
-- **使う場面:** 「핸드오프」（ハンドオフ）、「다음 작업으로 넘어가자」（次の作業に移ろう）、「남은 작업 있어?」（残りの作業はある?）、「머지하고 다음 진행해줘」（マージして次に進めて）、そしてチケットが終わった瞬間。「병렬로 진행」（並列で進めて）は同じリポジトリのチケットカードのときだけ該当し、サブエージェントや脇ブランチのカードの可能性があれば先に見分けます。このセッションで作業を続ける必要があるなら `dispatch-card` を使います。
-- **内容:**
-  - 次にやることを自分で選びます。細かい残りはここで片付け、独立した作業はチケットにします。次のチケットは優先度、依存、ファイルの衝突で順位を付けます。尋ねてよいのは「次はどのチケットか」だけです。
-  - プログラムのワーカー（ブリーフに `PROGRAM:` 行があるもの）は、worker_done を送ったあとリードの判断を待ちます。
-  - 完了を確認したら `orca worktree create --prompt "/goal <ID>. CLOSE: …"` で新しいカードを立ち上げます。並列の依頼でも、カードはチケットごとに一つです。
-  - `orca terminal wait` と `read` で開始を確認し、`end-session` でこのセッションを閉じます。
-- **関連:** `deliver-ticket` の次の段階です。最後は必ず `end-session` で締めます。
-
-### dispatch-card (旧名 `dispatch-work`)
+### dispatch-card (旧名 `dispatch-work`、`handoff-ticket`)
+新しい Orca カードを立ち上げる二つの場合を一つのスキルにまとめました。このセッションが作業を続けるなら dispatch（§0–§4）、このチケットが終わってこのセッションを閉じるなら次のチケットモード（§5、本文は `references/next-ticket.md`）です。
 - **使う場面:** 「별도의 세션을 만들어서 ~ 해줘」（別のセッションを作って〜して）、「~ repo에 작업 지시해줘」（〜のリポジトリに作業を指示して）のように、別のリポジトリや脇ブランチに作業を送りつつ、このセッションは作業を続けるとき。
 - **内容:**
   - 対象のリポジトリを `orca repo list` で確認します。
@@ -109,10 +101,16 @@ PR を受け持つスキルとマージする主体:
   - 重複するカードがないか確かめてから、カードを作ります。
   - ブリーフに `CLOSE` 行を入れ、カードが完了条件を満たしたら `end-session` §8 で自分で閉じるようにします。
   - 開始を一度だけ確認して元の作業に戻ります。結果は待たず、`end-session` も呼びません。
-- **関連:** `use-notes`、`write-ticket`。このセッションを閉じて引き継ぐ場合は `handoff-ticket` が担当します。
+- **次のチケットモード:**
+  - **使う場面:** 「핸드오프」（ハンドオフ）、「다음 작업으로 넘어가자」（次の作業に移ろう）、「남은 작업 있어?」（残りの作業はある?）、「머지하고 다음 진행해줘」（マージして次に進めて）、そしてチケットが終わった瞬間。「병렬로 진행」（並列で進めて）は同じリポジトリのチケットカードのときだけ該当し、サブエージェントや脇ブランチのカードの可能性があれば先に見分けます。このセッションで作業を続ける必要があるなら dispatch です。
+  - 次にやることを自分で選びます。細かい残りはここで片付け、独立した作業はチケットにします。次のチケットは優先度、依存、ファイルの衝突で順位を付けます。尋ねてよいのは「次はどのチケットか」だけです。
+  - プログラムのワーカー（ブリーフに `PROGRAM:` 行があるもの）は、worker_done を送ったあとリードの判断を待ちます。
+  - 完了を確認したら `orca worktree create --prompt "/goal <ID>. CLOSE: …"` で新しいカードを立ち上げます。並列の依頼でも、カードはチケットごとに一つです。
+  - `orca terminal wait` と `read` で開始を確認し、`end-session` でこのセッションを閉じます。
+- **関連:** `use-notes`、`write-ticket`。次のチケットモードは `deliver-ticket` の次の段階で、最後は必ず `end-session` で締めます。
 
 ### end-session
-- **使う場面:** 「세션 종료해줘」（セッションを終了して）、「현재 세션 정리해줘」（今のセッションを片付けて）、「아카이브해줘」（アーカイブして）、「머지하고 종료하자」（マージして終わろう）、`handoff-ticket` の最後の段階、そして Orca ワーカーが `worker_done` を送る時点（ユーザーの言葉なしで）。対象なしに「정리해줘」（片付けて）とだけ言われたら、記録だけを残して会話を続けます。
+- **使う場面:** 「세션 종료해줘」（セッションを終了して）、「현재 세션 정리해줘」（今のセッションを片付けて）、「아카이브해줘」（アーカイブして）、「머지하고 종료하자」（マージして終わろう）、`dispatch-card` の次のチケットモードの最後の段階、そして Orca ワーカーが `worker_done` を送る時点（ユーザーの言葉なしで）。対象なしに「정리해줘」（片付けて）とだけ言われたら、記録だけを残して会話を続けます。
 - **内容:**
   - まずチケットの最終状態、完了コメント、worklog、メモリを残します。
   - `orca worktree current --json` の結果で閉じ方を選びます。
@@ -257,7 +255,7 @@ PR を受け持つスキルとマージする主体:
   - 状態の語彙は triage、backlog、unstarted、started、completed、canceled です。
   - 完了条件は上位チケットの本文（`✅ 완료 조건`、`🚫 범위 밖`、`⏸️ 보류`）に、親のないチケットは受け入れ条件に置きます。NOW に分類したものだけがチケットになります。
   - follow-up の形式は、`follow-up` ラベル、1行目の `파생: <ID> · 원인: <분류>`（派生元: <ID> · 原因: <分類>）、2行目の `완료 조건: <항목>`（完了条件: <項目>）、related relation です。
-  - NOW・LATER・DROP の分類、完了条件、follow-up の形式の正本は `references/exit-condition.md` 一つです。`deliver-ticket`、`write-ticket`、`handoff-ticket`、`end-session`、`task-tracker` はこのファイルを指します。
+  - NOW・LATER・DROP の分類、完了条件、follow-up の形式の正本は `references/exit-condition.md` 一つです。`deliver-ticket`、`write-ticket`、`dispatch-card`（次のチケットモード）、`end-session`、`task-tracker` はこのファイルを指します。
   - チケットの本文は、信頼しないデータとして扱います。
 - **同梱:** `scripts/tracker.py`（標準ライブラリだけを使う Linear・Jira のアダプター、fixture モード付き）、`references/exit-condition.md`、`references/linear.md`、`references/jira.md`（Jira の設定を含む）。
 
@@ -715,7 +713,7 @@ pstack のスキル58個（原則24個と、その他34個）のうち、原則2
 | statechart、create-formal-verification-skill、maintain-formal-verification-skill | TLA+ モデルの状態図と、形式検証スキルの作成・保守 | ファイルが多く、TLA+ のツールが必要です。使うプロジェクトができたら見直します |
 
 ### pstack にないもの
-- **チケットの流れ:** `write-ticket`、`deliver-ticket`、`handoff-ticket`、`dispatch-card`、`end-session`。Orca のカードとトラッカーを前提にした、チケット一つの最初から最後までです。
+- **チケットの流れ:** `write-ticket`、`deliver-ticket`、`dispatch-card`、`end-session`。Orca のカードとトラッカーを前提にした、チケット一つの最初から最後までです。
 - **プロジェクト運営:** `orchestrate` の `orch` 台帳、着地ゲートと専有レーン、human-gate、main ガーディアン、QA リード、`orch-dash` ダッシュボード。形は pstack のプレイブックに倣いましたが、Orca の Run と GitHub stack の上で新しく作りました。
 - **測定とアダプター:** `reflect` の測定モード、`use-tracker`、`use-notes`。
 - **マシンの手入れ:** `reap-resources`、`tune-automode`、`skills-config`、`setup-pc`。

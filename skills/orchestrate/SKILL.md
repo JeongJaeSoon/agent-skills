@@ -40,7 +40,7 @@ Where a unit runs is one of three placements, named this way everywhere:
 |---|---|---|
 | child card (하위 카드) | `worker-start --worktree new-child`, or `orca worktree create --parent-worktree <selector>` | Its own worktree, branch and PR, listed under the session that made it (Orca's lineage, `parentWorktreeId`) |
 | child terminal (자식 터미널) | `worker-start --worktree current` | A new terminal in your own worktree: no branch or card of its own, so only for work that writes nothing |
-| `/goal` card | `dispatch-card` / `handoff-ticket` (`orca worktree create --prompt "/goal …"`) | Its own worktree and session, unsupervised by a Run; under its parent when created with `--parent-worktree` |
+| `/goal` card | `dispatch-card` (dispatch or next ticket) (`orca worktree create --prompt "/goal …"`) | Its own worktree and session, unsupervised by a Run; under its parent when created with `--parent-worktree` |
 
 Which of the two takes a piece of work (one PR: the orchestrator and a card; related PRs, an order, deploy stages or a predicate: a lead) is `references/top-level.md` "Starting a lead".
 
@@ -72,8 +72,8 @@ The human must get an answer from you within seconds, at any time. **Decide up, 
 
 ## When not to use
 
-- One agent could finish inside the budget → do it in this session, or give it to one card with `handoff-ticket`. A program costs a lead.
-- A single ticket handed to another session → `handoff-ticket`.
+- One agent could finish inside the budget → do it in this session, or give it to one card with `dispatch-card`'s next-ticket mode. A program costs a lead.
+- A single ticket handed to another session → `dispatch-card`'s next-ticket mode.
 
 ## Where each fact lives
 

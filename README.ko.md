@@ -106,7 +106,7 @@ https://github.com/JeongJaeSoon/agent-skills 의 Claude Code 플러그인을 설
 
 | 묶음 | 스킬 | 하는 일 |
 |---|---|---|
-| [티켓 하나](docs/skills.md#티켓-하나) | `write-ticket`, `deliver-ticket`, `ui-review`, `handoff-ticket`, `dispatch-card`, `end-session` | 티켓 쓰기부터 완료, 다음 티켓 넘기기, 진행 기록과 세션 정리까지 |
+| [티켓 하나](docs/skills.md#티켓-하나) | `write-ticket`, `deliver-ticket`, `ui-review`, `dispatch-card`, `end-session` | 티켓 쓰기부터 완료, 다음 티켓 넘기기, 진행 기록과 세션 정리까지 |
 | [프로젝트 하나](docs/skills.md#프로젝트-하나-orca-워커-여러-개) | `orchestrate`, `reboot` | 여러 티켓을 Orca 워커로 병렬 처리해 머지하고, 재시작으로 떨어진 대기·바인딩을 되살리고, 끝난 뒤 실제로 어땠는지 잰다(`reflect`의 측정 모드) |
 | [머신 하나](docs/skills.md#머신-하나) | `reap-resources`, `secure-fill`, `tune-automode`, `skills-config`, `setup-pc` | 끝난 세션의 잔여물 정리, 에이전트가 보지 않는 비밀값 입력, autoMode 규칙 초안, 설정 키 변경, PC 설치·갱신 |
 | [채팅·GitHub](docs/skills.md#채팅) | `watch-mentions`, `watch-prs` | 나와 관련된 채팅과 PR을 작업으로 모은다 |
@@ -125,6 +125,7 @@ pstack 묶음은 Lauren Tan의 [pstack](https://github.com/cursor/plugins)(MIT)�
 | `/agent-skills:measure-delivery` | `/agent-skills:reflect`의 측정 모드 |
 | `/agent-skills:swarm` | `/agent-skills:fan-out`, sweep 모드 |
 | `/agent-skills:arena` | `/agent-skills:fan-out`, compete 모드 |
+| `/agent-skills:handoff-ticket` | `/agent-skills:dispatch-card`의 다음 티켓 모드 |
 
 ## 설정
 
