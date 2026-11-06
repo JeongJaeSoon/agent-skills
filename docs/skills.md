@@ -523,7 +523,7 @@ PR 을 맡는 스킬과 머지 주체:
 | `land-check` | 머지 없이 준비 상태만 진단 |
 | `landed` | 밖에서 한 머지를 기록 |
 | `backfill` | 등록 전에 머지된 PR과 main CI를 원장에 넣는다 |
-| `heavy` | 무거운 명령(compose, 이미지 빌드)을 머신 전체 2슬롯으로 제한해 실행 |
+| `heavy` | 무거운 명령(compose, 이미지 빌드)을 머신 전체 슬롯으로 제한해 실행. 슬롯 수는 `landing.heavy_slots`, `agent-skills.json`의 `orchestrate.heavy_slots`, CPU 수의 4분의 1(최소 2) 순으로 정한다 |
 | `wait` | 리드 전용. 처리할 메시지가 올 때까지 기다리고 `CLOSE OUT` 줄을 낸다 |
 | `decide` | 오케스트레이터나 리드가 사용자 결정을 기다리는 일을 등록(`add`)·조회(`list`)·닫기(`done`, `drop`). 대시보드 Needs you에 선택지 버튼과 함께 뜨고, 버튼은 답을 기록해 결정을 닫은 뒤 `decision <id>: <답>` 한 줄을 오케스트레이터나 리드 터미널에 보낸다. 오케스트레이터나 리드가 바쁘면 한가해질 때 보낸다 |
 

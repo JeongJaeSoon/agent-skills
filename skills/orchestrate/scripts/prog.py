@@ -65,7 +65,8 @@ Usage: orch <command> <slug> [options]
                                      to the first of them. Rerun to add CI results that came in since
   heavy <slug|-> [--wait-minutes 60] [--pr owner/repo#N] -- <command…>
                                      run a heavy local command (compose stack, image build, local
-                                     E2E) holding one of heavy_slots (2) machine-wide slots; `-`
+                                     E2E) holding one of heavy_slots machine-wide slots (a
+                                     quarter of the CPUs, at least 2); `-`
                                      outside a program. A compose project it leaves behind, with a
                                      config file in this worktree, goes to the reap ledger
                                      (compose-stack) so the janitor downs it once the card is done
@@ -495,7 +496,7 @@ def stopped(events):
 
 KLASS = {"main-fix": 0, "gate": 1, "urgent": 2, "normal": 3}
 LANDING = {"aging_hours": 2.0, "stale_hours": 3.0, "max_backlog_hours": 2.0, "land_interval_minutes": 25,
-           "exclusive_stale_minutes": 90, "heavy_slots": 2,
+           "exclusive_stale_minutes": 90,
            # Changes that can break a merge they do not textually touch land one at a time, on the latest base.
            "exclusive_paths": ["*migrations/*", ".github/*", "*Dockerfile*", "*compose*.yml", "*compose*.yaml"],
            # A PR touching these changes what a person sees; fnmatch's * also crosses "/".
@@ -504,6 +505,24 @@ LANDING = {"aging_hours": 2.0, "stale_hours": 3.0, "max_backlog_hours": 2.0, "la
 
 def knob(cfg, key):
     return (cfg.get("landing") or {}).get(key, LANDING[key])
+
+
+def slot_count(value):
+    """A usable slot count (a positive int, not a bool) or None, so a typo in a config falls through to the next layer."""
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def heavy_slots(cfg):
+    """program.json `landing.heavy_slots`, else `orchestrate.heavy_slots` of agent-skills.json, else a quarter of the
+    CPUs (at least 2). `orch heavy -` passes no program, so the user file is what a bare card tunes."""
+    n = slot_count((cfg.get("landing") or {}).get("heavy_slots"))
+    if n is None:
+        path = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-skills.json").expanduser()
+        try:
+            n = slot_count((json.loads(path.read_text()).get("orchestrate") or {}).get("heavy_slots"))
+        except (OSError, ValueError, AttributeError):
+            n = None
+    return n or max(2, (os.cpu_count() or 1) // 4)
 
 
 def pr_ticket(events):
@@ -3892,7 +3911,10 @@ def cmd_heavy(argv):
     deadline = time.monotonic() + 60 * float(opt(argv[:cut], "--wait-minutes", "60"))
     waited = False
     while True:
-        for i in range(int(knob(cfg, "heavy_slots"))):
+        # Read each pass so a raised or lowered limit reaches a waiting caller. Slot files past a lowered limit are
+        # left alone: their holders run to the end, and only new runs follow the smaller count.
+        limit = heavy_slots(cfg)
+        for i in range(limit):
             path = slots / f"slot-{i}"
             try:
                 held = json.loads(path.read_text() or "{}")
@@ -3927,7 +3949,7 @@ def cmd_heavy(argv):
         if time.monotonic() >= deadline:
             sys.exit(f"heavy: every slot busy after waiting: {json.dumps(holders, ensure_ascii=False)}")
         if not waited:
-            print(f"heavy: 슬롯 {len(holders)}개가 모두 사용 중이라 빌 때까지 기다린다(최대 {opt(argv[:cut], '--wait-minutes', '60')}분): "
+            print(f"heavy: 슬롯 {limit}개가 모두 사용 중이라 빌 때까지 기다린다(최대 {opt(argv[:cut], '--wait-minutes', '60')}분): "
                   + "; ".join(f"pid {h.get('pid')} {h.get('cmd', '')[:80]}" for h in holders), file=sys.stderr, flush=True)
             waited = True
         time.sleep(15)
