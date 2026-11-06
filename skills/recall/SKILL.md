@@ -1,6 +1,6 @@
 ---
 name: recall
-description: "Rebuild recent working context from past sessions, live state and the shared record (tracker, PRs, worklogs) into a short current-state brief. Use for \"어디까지 했지\", \"이번 주에 뭐 했지\", 'catch me up', or resuming work in a fresh or restarted session. A status report on work in flight is brief."
+description: "Rebuild recent working context from past sessions, live state and the shared record into a short brief. Use for \"어디까지 했지\", \"이번 주에 뭐 했지\", 'catch me up', or resuming after a restart. Status of work in flight is brief. An orchestrator dispatches it instead."
 ---
 
 # Recall

@@ -86,8 +86,26 @@ class Waits(unittest.TestCase):
     def test_none_running_orchestrator_needs_inbox_and_card_watch(self):
         out = does(run("top", run_id="run_1", orca=Orca(run="run_1")))
         self.assertEqual(len(out), 2)
-        self.assertIn("orch inbox --wait", out[0])
+        self.assertIn("start `orch inbox --stream` with the Monitor tool", out[0])
         self.assertIn("orch watch-cards", out[1])
+
+    def test_a_stream_counts_with_the_card_watch_it_runs_as_its_child(self):
+        procs = wait_proc(200, "orch inbox --stream") + [(202, 201, "/usr/bin/python3 /x/prog.py watch-cards --self t")]
+        lines = run("top", run_id="run_1", orca=Orca(run="run_1"), procs=procs)
+        self.assertEqual(does(lines), [])
+        self.assertIn(("ok", "1 inbox wait running"), lines)
+        self.assertIn(("ok", "1 orch watch-cards running"), lines)
+
+    def test_a_stream_between_card_rounds_is_not_told_to_start_a_watch(self):
+        lines = run("top", run_id="run_1", orca=Orca(run="run_1"), procs=wait_proc(200, "orch inbox --stream"))
+        self.assertEqual(does(lines), [])
+        self.assertTrue(any(k == "info" and "starts its own card watch" in t for k, t in lines), lines)
+
+    def test_the_old_wait_still_counts_and_is_told_to_switch(self):
+        procs = wait_proc(200, "orch inbox --wait") + wait_proc(300, "orch watch-cards")
+        lines = run("top", run_id="run_1", orca=Orca(run="run_1"), procs=procs)
+        self.assertEqual(does(lines), [])
+        self.assertTrue(any(k == "info" and "orch inbox --stream" in t for k, t in lines), lines)
 
     def test_two_inbox_waits_name_the_extra_python_pid_once(self):
         procs = wait_proc(200, "orch wait acme") + wait_proc(300, "orch wait acme")
@@ -136,10 +154,31 @@ class Waits(unittest.TestCase):
         out = does(run("top", run_id="run_1", orca=Orca(run="run_1"), procs=procs))
         self.assertEqual(len(out), 1)
         self.assertIn("stop pid 201", out[0])
-        self.assertIn("then start `orch inbox --wait`", out[0])
+        self.assertIn("then start `orch inbox --stream` with the Monitor tool", out[0])
 
     def test_a_worker_is_not_asked_to_wait(self):
         self.assertEqual(does(run()), [])
+
+
+class Handoff(unittest.TestCase):
+    def test_lists_the_handoff_and_the_mail_taken_after_it(self):
+        mail = {"messages": [{"id": "m1", "type": "status", "created_at": "2026-01-01T00:00:00Z", "subject": "old"},
+                             {"id": "m2", "type": "worker_done", "created_at": "2026-01-02T00:00:00Z", "subject": "done",
+                              "from_handle": "dispatch:d1"},
+                             {"id": "m3", "type": "heartbeat", "created_at": "2026-01-02T00:00:01Z"}]}
+        seen = []
+        call = lambda *a: (seen.append(a), mail)[1]  # noqa: E731
+        lines = reboot.check_handoff("orchestrator", "run_1", call,
+                                     last=("2026-01-01T12:00:00Z", {"next": "land acme/app#1", "handle": "term_x"}))
+        self.assertEqual(seen[0][:4], ("orchestration", "inbox", "--terminal", "run:run_1"))
+        self.assertTrue(lines[0][1].startswith("handoff 2026-01-01T12:00:00Z: next=land acme/app#1"), lines)
+        self.assertNotIn("term_x", lines[0][1])
+        self.assertEqual([t for _, t in lines[1:]],
+                         ["mail since the handoff: m2 worker_done from dispatch:d1: done (handled before the restart? "
+                          "check before acting twice)"])
+
+    def test_no_handoff_is_info_only(self):
+        self.assertEqual(reboot.check_handoff("orchestrator", None, last=()), [("info", "no handoff recorded for orchestrator")])
 
 
 class Handle(unittest.TestCase):

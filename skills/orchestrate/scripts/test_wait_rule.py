@@ -14,7 +14,8 @@ home = "**One inbox wait, always.**"
 assert skill.count(home) == 1, "SKILL.md Drain lost its one-wait rule"
 rule = skill[skill.index(home):].split("\n", 1)[0]
 for phrase in ("orch inbox --wait", "run_in_background", "orch inbox --ack <delivery> --wait", "orch wait <slug>", "Never both", "same turn",
-               "compaction", "claude --continue", "restart", "sleep loop"):
+               "compaction", "claude --continue", "restart", "sleep loop", "orch inbox --stream", "Monitor tool",
+               "STREAM END"):
     assert phrase in rule, f"one-wait rule lost {phrase!r}"
 
 for name, n in (("SKILL.md", 1), ("top-level.md", 1), ("brief.md", 0)):
