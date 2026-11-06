@@ -2,9 +2,10 @@
 """PreToolUse hook of the agent-skills plugin: a PR that depends on another open PR is a GitHub stack.
 
 On Bash `gh pr create`, the PRs this one depends on are:
-- the open PRs its brief names (the `Lands after` value of the session's first prompt's ORDER line), by `#N` or by a
+- the open PRs its brief names (the `stacked on` value of the session's first prompt's ORDER line), by `#N` or by a
   ticket key in the PR's title or head branch. A brief is fixed at dispatch: a name that no open PR answers to may
-  have landed since, so it warns instead of enforcing.
+  have landed since, so it warns instead of enforcing. ORDER's `lands after` is a deploy order (base on the default
+  branch, an `orch dep` edge), not a stack, and is not read.
 - the open PRs whose head is in this branch and not yet on its base.
 A dependency that is not among the PRs below the base (the base's PR, that PR's base's PR, …) is a gap: the call gets
 a warning, or a deny under `orchestrate.stack_dependent: deny` in ~/.claude/agent-skills.json (`off` reads nothing).
@@ -21,7 +22,10 @@ from lib import config, shell
 
 KEY = "orchestrate.stack_dependent"
 OPEN_LIMIT = 200
-ORDER = re.compile(r"(?im)^[ \t]*`?ORDER\b.*?\blands[ \t]+after\b:?(.*)$")
+ORDER = re.compile(r"(?im)^[ \t]*`?ORDER\b.*?\bstacked[ \t]+on\b:?(.*)$")
+NEXT_PART = re.compile(r"·|\b(?:starts|lands)[ \t]+after\b", re.I)
+# A brief written before `stacked on` existed named a stack with `lands after`.
+LEGACY = re.compile(r"(?im)^[ \t]*`?ORDER\b.*?\blands[ \t]+after\b:?(.*)$")
 TICKET = re.compile(r"(?<![\w-])[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+(?![\w-])")
 PR_REF = re.compile(r"(?<![\w/])#(\d+)\b")
 SENTENCE_END = re.compile(r"[.。](?:\s|$)")
@@ -63,12 +67,12 @@ def option(args, long, short):
     return None
 
 
-def named_deps(prompt):
-    """(ticket keys, PR numbers) of the first prompt's ORDER `Lands after`."""
-    m = ORDER.search(prompt)
+def named_deps(prompt, pattern=ORDER):
+    """(ticket keys, PR numbers) of the first prompt's ORDER `stacked on` (or another ORDER part's pattern)."""
+    m = pattern.search(prompt)
     if not m:
         return [], []
-    value = SENTENCE_END.split(m.group(1))[0]
+    value = NEXT_PART.split(SENTENCE_END.split(m.group(1))[0])[0]
     return TICKET.findall(value), [int(n) for n in PR_REF.findall(value)]
 
 
@@ -78,11 +82,11 @@ def resolve(keys, numbers, rows):
     for key in keys:
         hits = [r["number"] for r in rows if re.search(rf"(?<![A-Z0-9]){re.escape(key)}(?!\d)",
                                                         f"{r.get('headRefName')} {r.get('title')}".upper())]
-        found.update({n: f"brief: lands after {key}" for n in hits})
+        found.update({n: f"brief: stacked on {key}" for n in hits})
         missing += [] if hits else [key]
     for n in numbers:
         if any(r["number"] == n for r in rows):
-            found[n] = f"brief: lands after #{n}"
+            found[n] = f"brief: stacked on #{n}"
         else:
             missing.append(f"#{n}")
     return found, missing
@@ -134,8 +138,14 @@ def verdict(args, here, prompt):
     if len(rows) >= OPEN_LIMIT - 1:
         warnings.append(f"stack_gate: only the first {OPEN_LIMIT} open PRs were read.")
     if missing:
-        warnings.append(f"stack_gate: the brief says this lands after {', '.join(missing)}, and no open PR answers to"
-                        " that. If it has landed, nothing to do; if not, stack on it.")
+        warnings.append(f"stack_gate: the brief says this is stacked on {', '.join(missing)}, and no open PR answers"
+                        " to that. If it has landed, nothing to do; if not, stack on it.")
+    if not ORDER.search(prompt):
+        old = sorted(n for n in resolve(*named_deps(prompt, LEGACY), rows)[0] if n not in chain and n not in deps)
+        if old:
+            warnings.append(f"stack_gate: the brief's ORDER says lands after {', '.join(f'#{n}' for n in old)} and"
+                            " has no `stacked on`, so it may predate the split: a deploy order keeps this base, but"
+                            " if this PR uses that PR's code it is a stack (`--base <its branch>`).")
     return {n: why for n, why in deps.items() if n not in chain}, chain, warnings
 
 
@@ -147,9 +157,11 @@ def transcript_unread(event):
 def message(gaps, base):
     named = "; ".join(f"#{n} ({why})" for n, why in sorted(gaps.items()))
     return (f"This PR depends on open {named}, but its base `{base or 'the default branch'}` does not build on it. "
-            "Dependent PRs are a GitHub stack: open it with `--base <the lower PR's branch>`, then link them with "
-            "`gh stack link <lower> <this> --base <trunk>` so CI runs on every layer and they land in one merge. "
-            f"({KEY} in ~/.claude/agent-skills.json: warn, deny or off)")
+            "A PR that uses another's code is a GitHub stack: open it with `--base <the lower PR's branch>` (a linear "
+            "stack of at most 3 layers, one layer per base, rebased, never merged into), then link them with "
+            "`gh stack link <lower> <this> --base <trunk>` so they land in one merge. If it only edits the same files, "
+            "the work waits until that PR lands; if it only has to deploy after it, keep the default branch and record the "
+            f"order with `orch dep`. ({KEY} in ~/.claude/agent-skills.json: warn, deny or off)")
 
 
 def emit(deny, warnings):

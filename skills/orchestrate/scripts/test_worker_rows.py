@@ -233,7 +233,10 @@ def mailbox(version):
             if "--ack" in a:
                 acks.append(a[a.index("--ack") + 1])
                 return {}
-            msgs = queue.pop(0) if queue else []
+            if "--peek" in a:  # a peek shows unread rows and takes none
+                msgs = queue[0] if queue else []
+            else:
+                msgs = queue.pop(0) if queue else []
             if full or version == "old":
                 return {"deliveryId": "delivery_1" if msgs else None, "messages": msgs, "count": len(msgs)}
             return {"messages": [{"id": m["id"], "type": m["type"], "from": m["from_handle"], "subject": m["subject"],

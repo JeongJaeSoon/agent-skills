@@ -1,6 +1,6 @@
 ---
 name: show-me-your-work
-description: "Keep a reviewable decision trail for long or unattended work: a TSV log, one row per decision (what, why, evidence, result), local unless a reviewer needs it committed. Use for /show-me-your-work, autonomous or multi-phase runs, or work a human reviews after stepping away."
+description: "Keep a reviewable decision trail (what, why, evidence, result per decision) for long, unattended or multi-phase work. Use for /show-me-your-work or work a human reviews after stepping away."
 ---
 
 # Show me your work

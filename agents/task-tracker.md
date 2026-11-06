@@ -1,7 +1,7 @@
 ---
 name: task-tracker
 model: sonnet
-description: Creates and updates tickets in the configured tracker (Linear, Jira) so work state matches reality — a PR opened, review requested, merged or deployed; follow-up work from an investigation; a status that no longer matches what happened; grouping under an epic or the current cycle/sprint. The default write delegate for `use-tracker` (`tracker.delegate_agent`).
+description: "Creates and updates tickets in the configured tracker so their state matches reality: PR opened, merged or deployed, follow-ups, stale status. use-tracker's default write delegate."
 skills:
   - agent-skills:use-tracker
 ---

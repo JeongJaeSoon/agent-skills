@@ -1,6 +1,6 @@
 ---
 name: create-verification-skill
-description: "Generate a project-local verify-* skill that drives the app the way a user does, in any stack. Use for /create-verification-skill, \"verify 스킬 만들어줘\", or when a reusable app verification harness is part of the agreed scope. Checking one change in a running app is not this skill."
+description: "Generate a project-local verify-* skill that drives the app like a user. Use for /create-verification-skill, \"verify 스킬 만들어줘\", or when a reusable verification harness is in scope; checking one change is not this. An orchestrator dispatches it instead."
 ---
 
 # Create a verification skill
