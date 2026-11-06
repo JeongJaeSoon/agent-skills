@@ -1795,8 +1795,28 @@ try:
 finally:
     fleet.orca = real_orca
 assert [r["status"] for r in autos[0]["recent"]] == ["failed"] + ["completed"] * 5, autos
-# Only the newest page is asked for: without --limit Orca reads an automation's whole history.
-assert ("automations", "runs", "--id", "a1", "--limit", str(fleet.AUTOMATION_RECENT)) in auto_calls, auto_calls
+# Only the newest page is asked for (twice what is shown): without --limit Orca reads an automation's whole history.
+assert ("automations", "runs", "--id", "a1", "--limit", str(2 * fleet.AUTOMATION_RECENT)) in auto_calls, auto_calls
+
+# Pages are ordered by createdAt, not runNumber, and Orca halves a page whose reply is too large and hands back a cursor:
+# the cursor is followed until twice the shown count is in, then the newest runNumbers are kept.
+pages = {None: ([{"runNumber": n} for n in (7, 5, 6)], "c1"), "c1": ([{"runNumber": n} for n in (4, 3, 8)], "c2"),
+         "c2": ([{"runNumber": n} for n in (2, 1)], None)}
+page_calls = []
+def paged_orca(*args, timeout=30):
+    cursor = args[args.index("--cursor") + 1] if "--cursor" in args else None
+    page_calls.append((int(args[args.index("--limit") + 1]), cursor))
+    rows, nxt = pages[cursor]
+    return {"runs": rows, "nextCursor": nxt}
+
+
+real_orca, fleet.orca = fleet.orca, paged_orca
+try:
+    got_rows = fleet.recent_runs("a1")
+finally:
+    fleet.orca = real_orca
+assert page_calls == [(12, None), (9, "c1"), (6, "c2")], page_calls
+assert sorted((r["runNumber"] for r in got_rows), reverse=True)[:fleet.AUTOMATION_RECENT] == [8, 7, 6, 5, 4, 3], got_rows
 assert autos[0]["next_run_at"] == "2026-10-09T11:40:00Z" and "xoxb" not in json.dumps(autos), autos
 assert autos[0]["recent"][0]["summary"] == "posted with [masked]", autos[0]["recent"][0]
 # A long first line reaches the page whole: the table wraps it, nothing here cuts it.

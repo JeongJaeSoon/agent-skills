@@ -279,14 +279,28 @@ def fetch_run(r, full):
 AUTOMATION_RECENT = 6  # runs kept per automation: the dashboard's Automations page draws them as a row of blocks
 
 
+def recent_runs(automation_id):
+    """The newest runs of one automation, from the first pages only: without --limit Orca reads the whole history. Orca
+    orders a page by createdAt then id, not by runNumber, so two runs sharing a createdAt can swap at the page edge, and
+    it halves a page whose reply is too large and returns a cursor: ask for twice what is shown and follow the cursor
+    until that many rows are in (or the history ends), then the caller sorts by runNumber."""
+    want, rows, cursor = 2 * AUTOMATION_RECENT, [], None
+    for _ in range(want):  # each page holds at least one row, so this bounds the loop
+        page = orca("automations", "runs", "--id", automation_id, "--limit", str(want - len(rows)),
+                    *(("--cursor", str(cursor)) if cursor else ()))
+        rows += page.get("runs") or []
+        cursor = page.get("nextCursor")
+        if not cursor or len(rows) >= want:
+            return rows
+    return rows
+
+
 def fetch_automations():
     """Orca's scheduled automations, each with its last runs newest first. Only Orca's scheduler is visible here: a
     session's own loop (CronCreate) or a launchd job leaves nothing to collect."""
     out = []
     for a in orca("automations", "list").get("automations", []):
-        # --limit makes Orca return one page of the newest runs; without it the whole history is read page by page
-        runs = sorted(orca("automations", "runs", "--id", a["id"], "--limit", str(AUTOMATION_RECENT)).get("runs", []),
-                      key=lambda r: r.get("runNumber") or 0, reverse=True)[:AUTOMATION_RECENT]
+        runs = sorted(recent_runs(a["id"]), key=lambda r: r.get("runNumber") or 0, reverse=True)[:AUTOMATION_RECENT]
         out.append({"id": a["id"], "name": mask(a.get("name"), 80), "rrule": a.get("rrule"), "timezone": a.get("timezone"),
                     "enabled": bool(a.get("enabled")), "next_run_at": ms_iso(a.get("nextRunAt")),
                     "last_run_at": ms_iso(a.get("lastRunAt")),
