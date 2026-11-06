@@ -145,7 +145,10 @@ Usage: orch <command> <slug> [options]
                                      orchestrate.order_auto_close is true. shadow sets those events against what the
                                      sessions closed by hand
   db import [--dry-run | --apply] [--rehearsal] | export --legacy --target 4a|pre-4a DIR | dump [TABLE]
-  db backup FILE | restore FILE [--rehearsal] | rollback 4b DIR [--rehearsal] | cutover-plan 4a|4b
+  db backup FILE | restore FILE [--rehearsal] | rollback 4b|state DIR [--rehearsal] | cutover-plan 4a|4b
+  db state [--auto]                  acks.jsonl and stages.json -> tables, after a backup, with tombstones in their place
+                                     (setup runs it with --auto after an update; a rerun changes nothing);
+                                     export --legacy --target state DIR writes both files back for rollback state DIR
   db migrate [--check] | init        migrate is the whole cutover in one rerunnable command, run by the owner from a
                                      plain terminal (cutover.py); init is for a PC with no state (setup runs it)
                                      no slug: agent-skills.db (store.py). import moves decisions.json,
