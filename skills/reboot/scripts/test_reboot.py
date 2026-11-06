@@ -7,6 +7,7 @@ import reboot  # noqa: E402
 import roles  # noqa: E402  on sys.path through reboot
 import fleet  # noqa: E402  the sessions Claude Code registers are read there
 os.environ["AGENT_SKILLS_STATE"] = tempfile.mkdtemp()  # the SessionStart record is read from here, never the real one
+os.environ["ORCH_FLEET_STATE"] = tempfile.mkdtemp()  # the handoff store too: a real handoff would add an inbox read
 import rowstate  # noqa: E402  on sys.path through reboot
 
 ROOT = "/work/app"
@@ -37,8 +38,11 @@ class Orca:
         self.live, self.run, self.workers, self.title, self.here = set(live), run, list(workers), title, list(here)
         self.runs, self.runs_fail, self.list_fails, self.truncated = list(runs), False, False, False
         self.concise = concise
+        self.status = {"app": {"running": True}, "runtime": {"state": "ready", "reachable": True, "appVersion": "1.4.247"}}
 
     def __call__(self, *argv):
+        if argv == ("status",):
+            return self.status
         if argv[:2] == ("terminal", "show"):
             h = argv[argv.index("--terminal") + 1]
             if h not in self.live:
@@ -64,12 +68,14 @@ class Orca:
         raise AssertionError(f"unexpected orca call {argv}")
 
 
-def run(role=None, slug=None, run_id=None, handle=ME, orca=None, procs=(), queue=None, reload_root=None):
+def run(role=None, slug=None, run_id=None, handle=ME, orca=None, procs=(), queue=None, reload_root=None, record=None):
+    """record: the session record own_record finds (None: not found), so a test never reads the live session's."""
     orig = reboot.worktree_root
     reboot.worktree_root = lambda cwd: ROOT
     try:
-        return reboot.run_checks(role, slug, run_id, handle, ROOT, call=orca or Orca(), table=table(*procs), pid=SELF,
-                                 queue=lambda: queue or {}, reload_root=reload_root)
+        with mock.patch.object(reboot, "own_record", return_value=record):
+            return reboot.run_checks(role, slug, run_id, handle, ROOT, call=orca or Orca(), table=table(*procs), pid=SELF,
+                                     queue=lambda: queue or {}, reload_root=reload_root)
     finally:
         reboot.worktree_root = orig
 
@@ -181,6 +187,37 @@ class Handoff(unittest.TestCase):
         self.assertEqual(reboot.check_handoff("orchestrator", None, last=()), [("info", "no handoff recorded for orchestrator")])
 
 
+class Status(unittest.TestCase):
+    def test_first_line_is_orca_status(self):
+        lines = run()
+        self.assertEqual(lines[0], ("ok", "Orca 1.4.247 is ready"))
+
+    def test_orca_not_ready_stops_before_any_terminal_read(self):
+        orca = Orca()
+        orca.status = {"app": {"running": False}, "runtime": {"state": "stopped", "reachable": False}}
+        with self.assertRaises(reboot.OrcaError) as e:
+            run(orca=orca)
+        self.assertIn("app running: False", str(e.exception))
+
+    def test_not_ready_ends_the_cli_with_exit_2(self):
+        with tempfile.TemporaryDirectory() as d:
+            fake = pathlib.Path(d) / "orca"
+            fake.write_text("#!/bin/sh\necho '" + json.dumps({"ok": True, "result": {
+                "runtime": {"state": "starting", "reachable": False}}}) + "'\n")
+            fake.chmod(0o755)
+            with mock.patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": ME, "SKILLS_SYNC_ORCA": str(fake)}), \
+                    mock.patch("sys.stderr"):
+                self.assertEqual(reboot.main([]), 2)
+
+    def test_no_orca_terminal_reports_a_down_orca_without_exit_2(self):
+        def down(*argv):
+            raise reboot.OrcaError("no_answer", "orca not found")
+        lines = run(handle=None, orca=down)
+        self.assertEqual(lines[0][0], "info")
+        self.assertIn("not ready", lines[0][1])
+        self.assertFalse(does(lines))
+
+
 class Handle(unittest.TestCase):
     def test_stale_handle_names_the_live_terminals_of_this_worktree(self):
         here = [{"handle": "term_new", "title": "lead", "worktreePath": ROOT},
@@ -193,12 +230,36 @@ class Handle(unittest.TestCase):
 
     def test_no_orca_terminal_skips_orca_checks(self):
         lines = run(handle=None, orca=Orca(live=()))
-        self.assertEqual([k for k, _ in lines], ["info"])
+        self.assertEqual([k for k, _ in lines], ["ok", "info"])  # orca status, then the skip
 
     def test_orchestrator_tab_title(self):
         procs = wait_proc(200, "orch inbox --wait") + wait_proc(300, "orch watch-cards")
         out = does(run("top", run_id="run_1", orca=Orca(run="run_1", title="claude"), procs=procs))
         self.assertEqual(out, [f"`orca terminal rename --terminal {ME} --title orchestrator`"])
+
+    def test_spinner_prefix_on_the_tab_title_is_ignored(self):
+        procs = wait_proc(200, "orch inbox --stream") + wait_proc(300, "orch watch-cards")
+        for title in ("◐ orchestrator", "◑ orchestrator", "✳ orchestrator", "⠐ orchestrator"):
+            out = does(run("top", run_id="run_1", orca=Orca(run="run_1", title=title), procs=procs))
+            self.assertEqual(out, [], title)
+        self.assertEqual(reboot.plain_title("◐ orchestrator-2"), "orchestrator-2")
+        self.assertEqual(reboot.plain_title("✳️ orchestrator"), "orchestrator")
+        # a symbol that is not a status glyph is part of the title
+        for title in ("★ orchestrator", "+ orchestrator"):
+            self.assertEqual(reboot.plain_title(title), title)
+            out = does(run("top", run_id="run_1", orca=Orca(run="run_1", title=title), procs=procs))
+            self.assertEqual(len(out), 1, title)
+
+    def test_session_not_named_orchestrator_gets_a_rename_line(self):
+        procs = wait_proc(200, "orch inbox --stream") + wait_proc(300, "orch watch-cards")
+        for record, expect in (({"name": "mailbox"}, 1), ({"name": None}, 1), ({"name": "orchestrator"}, 0), ({}, 0), (None, 0)):
+            out = does(run("top", run_id="run_1", orca=Orca(run="run_1"), procs=procs, record=record))
+            self.assertEqual(len(out), expect, record)
+            if expect:
+                self.assertIn("`/rename orchestrator`", out[0])
+        # a lead is not the orchestrator
+        self.assertEqual(does(run("lead", "acme", "run_1", orca=Orca(run="run_1", title="lead"),
+                                  procs=wait_proc(200, "orch wait acme"), record={"name": "mailbox"})), [])
 
 
 class Run(unittest.TestCase):
@@ -615,6 +676,37 @@ class Reload(unittest.TestCase):
         with mock.patch.object(fleet, "ps_table", side_effect=OSError):
             self.assertIsNone(reboot.own_session(table(), SELF))
 
+    def test_own_record_names_the_caller_not_the_first_registration_of_its_session(self):
+        # One session id resumed in two terminals: live_sessions keeps the first registration's name for both.
+        stamp = "Thu Nov 5 08:00:00 2026"
+        procs = {CLAUDE: (1, stamp, "claude"), 4242: (1, stamp, "claude")}
+        for homes in (("h1", "h1"), ("h1", "h2"), ("h2", "h1")):  # the two registrations in one home, and in two
+            paths = []
+            for (pid, name), h in zip(((4242, "mailbox"), (CLAUDE, "orchestrator")), homes):
+                home = self.tmp / "multi" / "-".join(homes) / h
+                (home / "sessions").mkdir(parents=True, exist_ok=True)
+                (home / "sessions" / f"{pid}.json").write_text(json.dumps(
+                    {"pid": pid, "sessionId": "s1", "cwd": ROOT, "procStart": stamp, "name": name}))
+                paths.append(str(home))
+            with mock.patch.dict("os.environ", {"ORCH_CLAUDE_HOMES": os.pathsep.join(dict.fromkeys(paths))}), \
+                    mock.patch.object(fleet, "ps_table", return_value=procs):
+                self.assertEqual(reboot.own_record(table(), SELF)["name"], "orchestrator", homes)
+        # an older process of the same pid left a file in another home, read first: it is not this session's
+        stale = self.tmp / "multi" / "stale"
+        (stale / "sessions").mkdir(parents=True, exist_ok=True)
+        (stale / "sessions" / f"{CLAUDE}.json").write_text(json.dumps(
+            {"pid": CLAUDE, "sessionId": "old", "cwd": ROOT, "procStart": "Mon Oct 1 08:00:00 2026", "name": "mailbox"}))
+        fresh = self.tmp / "multi" / "h1-h1" / "h1"
+        with mock.patch.dict("os.environ", {"ORCH_CLAUDE_HOMES": os.pathsep.join((str(stale), str(fresh)))}), \
+                mock.patch.object(fleet, "ps_table", return_value=procs):
+            self.assertEqual(reboot.own_record(table(), SELF)["name"], "orchestrator")
+        # same session id, old start time: only the start-time guard rejects it
+        (stale / "sessions" / f"{CLAUDE}.json").write_text(json.dumps(
+            {"pid": CLAUDE, "sessionId": "s1", "cwd": ROOT, "procStart": "Mon Oct 1 08:00:00 2026", "name": "mailbox"}))
+        with mock.patch.dict("os.environ", {"ORCH_CLAUDE_HOMES": os.pathsep.join((str(stale), str(fresh)))}), \
+                mock.patch.object(fleet, "ps_table", return_value=procs):
+            self.assertEqual(reboot.own_record(table(), SELF)["name"], "orchestrator")
+
     def test_same_sha_is_ok(self):
         self.record(self.sha)
         self.assertEqual([k for k, _ in self.check()], ["ok"])
@@ -650,6 +742,58 @@ class Reload(unittest.TestCase):
             lines = run(reload_root=self.tmp / "plugin")
         self.assertFalse(does(lines))
         self.assertTrue(any("reload needed" in t for _, t in lines))
+
+
+class Sessions(unittest.TestCase):
+    def setUp(self):
+        self.root = pathlib.Path(tempfile.mkdtemp())
+        now = time.time()
+        for folder, cwd, sid, prompt, age in (
+                ("-work-app", "/work/app", "s-old", "old brief", 3600), ("-work-app", "/work/app", "s-new", "new brief", 60),
+                ("-work-app-2", "/work/app/2", "s-gone", "removed card", 120),
+                ("-work-app-x", "/work/app-x", "s-sibling", "a sibling, not below", 90),
+                ("-work-other", "/work/other", "s-else", "elsewhere", 30)):
+            d = self.root / folder
+            d.mkdir(exist_ok=True)
+            f = d / f"{sid}.jsonl"
+            f.write_text(json.dumps({"type": "mode"}) + "\n"
+                         + json.dumps({"type": "user", "isMeta": True, "cwd": cwd, "message": {"content": "meta"}}) + "\n"
+                         + json.dumps({"type": "user", "cwd": cwd,
+                                       "message": {"content": [{"type": "text", "text": prompt}]}}) + "\n")
+            os.utime(f, (now - age, now - age))
+        (self.root / "-work-app" / "s-new").mkdir()
+        (self.root / "-work-app" / "s-new" / "agent-1.jsonl").write_text("{}\n")  # a subagent's, not a session
+
+    def test_newest_first_with_first_prompt_and_only_this_path(self):
+        rows = reboot.sessions(["/work/app"], root=self.root)
+        self.assertEqual([(sid, prompt) for _, sid, _, prompt in rows], [("s-new", "new brief"), ("s-old", "old brief")])
+
+    def test_under_adds_the_paths_below_but_not_a_sibling(self):
+        rows = reboot.sessions(["/work/app/"], under=True, root=self.root)
+        self.assertEqual([sid for _, sid, _, _ in rows], ["s-new", "s-gone", "s-old"])  # /work/app-x is not below
+
+    def test_an_exact_folder_of_another_path_is_left_out(self):
+        (self.root / "-work-app" / "s-new.jsonl").write_text(json.dumps({"type": "user", "cwd": "/work/app.", "message": {
+            "content": "same folder name, another path"}}) + "\n")
+        self.assertEqual([r[1] for r in reboot.sessions(["/work/app"], root=self.root)], ["s-old"])
+
+    def test_since_and_limit(self):
+        self.assertEqual([r[1] for r in reboot.sessions(["/work/app"], since=time.time() - 600, root=self.root)], ["s-new"])
+        self.assertEqual([r[1] for r in reboot.sessions(["/work/app"], limit=1, root=self.root)], ["s-new"])
+
+    def test_no_limit_lists_every_session(self):
+        for i in range(25):
+            (self.root / "-work-app" / f"s-{i}.jsonl").write_text(json.dumps({"type": "user", "cwd": "/work/app"}) + "\n")
+        self.assertEqual(len(reboot.sessions(["/work/app"], root=self.root)), 27)
+
+    def test_cli_exit_says_whether_any_was_found(self):
+        with mock.patch.dict(os.environ, {"CLAUDE_PROJECTS_DIR": str(self.root)}), mock.patch("sys.stdout"), \
+                mock.patch("sys.stderr"):
+            self.assertEqual(reboot.main(["sessions", "/work/app", "--limit", "1"]), 0)
+            self.assertEqual(reboot.main(["sessions", "/work/none"]), 1)
+            self.assertEqual(reboot.main(["sessions"]), 2)
+            self.assertEqual(reboot.main(["sessions", "/work/app", "--limit", "0"]), 2)
+            self.assertEqual(reboot.main(["sessions", "/work/app", "--since", "yesterday"]), 2)
 
 
 class Cli(unittest.TestCase):

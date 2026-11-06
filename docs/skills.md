@@ -12,7 +12,7 @@
 티켓 하나   write-ticket → deliver-ticket → handoff-ticket → end-session
               (이 세션은 계속 일하면서 다른 저장소·곁가지로 보낼 때는 dispatch-card)
 프로젝트    orchestrate ─ 워커마다 deliver-ticket ─ orch land ─ main 가디언·QA 리드 ─ 대시보드
-              └ 끝나면 measure-delivery
+              └ 끝나면 reflect(성과 측정과 회고를 한 번에)
               └ 재시작·컴팩션 뒤에는 먼저 reboot
 머신 하나   reap-resources(죽은 세션이 남긴 프로세스·Docker·브랜치 정리, resource steward가 주기로)
               secure-fill(브라우저 인증 칸에 비밀값을, 에이전트가 값을 보지 않고)
@@ -51,7 +51,7 @@ PR 을 맡는 스킬과 머지 주체:
   - 의존은 트래커 relation으로 걸고, 1티켓 = 1PR로 나눈다. 서로 의존하는 PR은 GitHub stack으로 계획한다.
   - 묻지 않고 등록한 뒤 URL과 한 줄 요약을 보고한다. 요청이나 NOW 발견이 곧 승인이다. 큰 에픽이나 다른 팀 트래커·프로젝트일 때만 owner-ask gate를 거쳐 먼저 묻고, 사용자 지시가 초안을 먼저 보여 달라고 하면 그대로 한다. 상위 티켓 본문은 `✅ 완료 조건`, `🚫 범위 밖`, `⏸️ 보류`를 갖는다.
 - **동봉:** `references/templates.md`(개발 티켓과 조사 티켓 골격).
-- **관계:** 트래커 조작은 모두 `use-tracker`로 한다. follow-up 형식은 `orchestrate`와 `measure-delivery`가 센다.
+- **관계:** 트래커 조작은 모두 `use-tracker`로 한다. follow-up 형식은 `orchestrate`와 `reflect`의 측정 모드가 센다.
 
 ### deliver-ticket (옛 이름 `ship-pr`)
 - **언제:** 여러 파일을 고치기 전부터 완료까지 쓴다. PR 생성·갱신·머지("pr 작성까지", "머지까지 진행해줘"), 릴리즈, 리뷰 코멘트 대응, 독립 리뷰, "동작확인", "내가 확인할 거 있어?", "이 티켓 끝내줘", stack 작업도 여기에 들어간다.
@@ -153,7 +153,7 @@ PR 을 맡는 스킬과 머지 주체:
   5. **Triage:** predicate가 완료 조건이다. 워커는 발견을 제안 분류와 함께 보고만 하고, 리드가 NOW(predicate를 막거나 재현된 결함, 티켓 등록 후 admitted), LATER(프로그램 노트 `보류`, 티켓 없음), DROP(이유 한 줄)으로 나눈다. NOW 티켓은 parent가 아닌 related로 잇는다. Orca 기본은 parent지만, 그러면 집계와 단계 막대가 원래 티켓의 계획된 일로 센다.
   6. **Land:** 워커가 `orch land`로 직접 착지한다. 일반 PR은 병렬로 머지되고, migration·CI·Dockerfile·compose 같은 공유 파일은 독점 레인에서 base당 하나씩 머지된다.
   7. **main 검증:** red가 되면 가디언이 flake 여부부터 보고 hotfix나 revert를 고르며, 그동안은 main 수정만 착지한다. QA 리드는 티켓 검증, 주기적 E2E, 설계 정합성 감사를 맡는다.
-  8. **Close:** 새 main에서 최종 확인을 하고 `record predicate_verified`로 기록한다. 이어서 역할을 풀고 `measure-delivery`를 돌린 뒤 `reflect`를 프로그램 모드로 돌린다. `worker-list --terminal-state reclaimable`이 빌 때까지는 끝내지 않는다.
+  8. **Close:** 새 main에서 최종 확인을 하고 `record predicate_verified`로 기록한다. 이어서 역할을 풀고 `reflect`를 프로그램 모드로 한 번 돌린다. 성과 측정은 그 안에서 한 번 돈다. `worker-list --terminal-state reclaimable`이 빌 때까지는 끝내지 않는다.
   - human-gate의 "Land #N" Task는 `orch land`가 착지 때 completed로, 보류나 PR 닫힘 때 failed로 닫는다. 보류로 결정된 PR은 `orch land`가 머지하지 않는다.
   - 턴을 끝낸 워커에게는 내용을 `orchestration send --to dispatch:<id>`로 보내고, 터미널에는 "orchestration check를 돌려라" 한 줄만 보낸다. 터미널이 없는 워커는 Orca의 복구 절차를 따른다.
   - 상시 역할의 평상시 보고는 `--type status`로 보낸다. escalation은 리드가 나서야 할 때만 쓴다.
@@ -176,17 +176,7 @@ PR 을 맡는 스킬과 머지 주체:
     - `mailbox_guard.py`: 옛 설치에서 hook으로 넘어가는 전환용 shim.
     - 테스트 파일.
   - `assets/dashboard/`: 대시보드 화면.
-- **관계:** 워커는 `deliver-ticket`을 따른다. `use-tracker`, `use-notes`, `create-verification-skill`, `show-me-your-work`, `swarm`, `measure-delivery`, `reap-resources`, `reflect`, `end-session`을 가져다 쓴다.
-
-### measure-delivery
-- **언제:** "성과 측정", 후속 티켓이 늘었는지 줄었는지, 재작업, 토큰 비용을 물을 때. `orchestrate`의 Close 단계에서도 부른다.
-- **내용:** `scripts/measure.py`가 트래커와 GitHub에서 읽기만 해서 한국어 보고서를 낸다.
-  - 기준선 대비 파생 티켓 증가율과 수렴 여부를 본다.
-  - 머지된 PR 수를 센다.
-  - 재작업(PR을 연 뒤의 커밋과 CI 재실행)을 본다.
-  - 새어 나간 결함 후보(Bug 라벨, main CI 실패, revert)를 찾는다.
-  - PR당 사용 가능한 로컬 transcript의 토큰을 집계한다. 측정하지 못한 세션은 0으로 단정하지 않는다.
-  - Linear에서 정확한 종료 시각이 필요하면 MCP로 뽑은 파일을 쓴다. 요청받은 숫자를 먼저 보여 주고 보고서는 노트에 저장한다.
+- **관계:** 워커는 `deliver-ticket`을 따른다. `use-tracker`, `use-notes`, `create-verification-skill`, `show-me-your-work`, `swarm`, `reap-resources`, `reflect`, `end-session`을 가져다 쓴다.
 
 ### reboot
 - **언제:** 세션·Orca·머신이 재시작됐거나 컴팩션이 일어난 직후, 다른 일보다 먼저. "재시작했어", "Orca 재시작했어", "세션 다시 띄웠어", "복구 점검해줘". 무슨 일을 하던 중이었는지 되짚는 것은 `recall`이다.
@@ -339,7 +329,7 @@ PR 을 맡는 스킬과 머지 주체:
   - 원칙 가운데 역할로 부르기, 아는 사실 유지, 빠뜨린 것 밝히기는 [anti-slop](https://github.com/dmmulroy/anti-slop)(Dillon Mulroy, MIT)의 lint 규칙 설명(`no-shape-in-symbol-names`, `no-known-value-widening`·`no-widen-then-assert`, `no-conditional-empty-object-spread`)을 글에 맞게 옮겼다.
   - 초안을 쓰기 전에 언어별 참조를 읽는다. 다 쓴 뒤에 다듬으면 대부분 놓친다.
 - **동봉:** `references/korean.md`(상투어, 번역투, 얼버무림, 주어 생략, 명사 나열, "~다" 문체, 서식 금지를 고치기 전후 예문으로), `references/english.md`(영어 문장, 코드 주석, 스킬 본문 규칙).
-- **관계:** `write-ticket`, `deliver-ticket`(PR 본문), `use-notes`, `measure-delivery`, `end-session`(최종 보고)이 가리킨다.
+- **관계:** `write-ticket`, `deliver-ticket`(PR 본문), `use-notes`, `reflect`(측정 모드), `end-session`(최종 보고)이 가리킨다.
 
 ### prune-comments
 - **언제:** `/prune-comments`, "주석 정리해줘", "불필요한 주석 지워줘", "주석 너무 많아". `deliver-ticket`이 리뷰 전에 부른다.
@@ -448,9 +438,16 @@ PR 을 맡는 스킬과 머지 주체:
   - 답은 짧은 요약, 스레드마다 상태 태그(`[merged #N]`, `[open PR #N]`, `[in flight <branch>]` 등), 반복된 문제, 다음 할 일 하나다.
 
 ### reflect
-- **언제:** "reflect", "스킬에 반영해줘", "스킬이 왜 안 떴어", "이 세션 돌아보고 스킬 개선해줘", "개선 이력 보여줘". `orchestrate`의 Close에서 프로그램 모드로, `end-session`에서 사람이 일하는 방식을 고쳐 준 세션이면 세션 모드로 자동 호출된다.
+- **언제:** "reflect", "스킬에 반영해줘", "스킬이 왜 안 떴어", "이 세션 돌아보고 스킬 개선해줘", "개선 이력 보여줘". `orchestrate`의 Close에서 프로그램 모드로, `end-session`에서 사람이 일하는 방식을 고쳐 준 세션이면 세션 모드로 자동 호출된다. 측정 모드는 "성과 측정", 후속 티켓이 늘었는지 줄었는지, 재작업, 새어 나간 결함, PR당 토큰을 물을 때다.
 - **내용:**
-  - 세션 모드는 이 세션의 transcript를, 프로그램 모드는 원장의 `signal`·머지 실패·main red·실패 판정과 결정 기록, `measure-delivery` 결과를 묶은 증거 묶음을 읽는다. 리뷰어는 셋(판단, 도구 사용, 다른 관점)이다.
+  - 측정 모드는 재고 보고만 한다. 리뷰어를 부르지 않고 교훈 장부도 건드리지 않는다. `scripts/measure.py`가 트래커와 GitHub에서 읽기만 해서 한국어 보고서를 낸다.
+    - 기준선 대비 파생 티켓 증가율과 수렴 여부를 본다.
+    - 머지된 PR 수를 센다.
+    - 재작업(PR을 연 뒤의 커밋과 CI 재실행)을 본다.
+    - 새어 나간 결함 후보(Bug 라벨, main CI 실패, revert)를 찾는다.
+    - PR당 사용 가능한 로컬 transcript의 토큰을 집계한다. 측정하지 못한 세션은 0으로 단정하지 않는다.
+    - Linear에서 정확한 종료 시각이 필요하면 MCP로 뽑은 파일을 쓴다. 요청받은 숫자를 먼저 보여 주고 보고서는 노트에 저장한다.
+  - 세션 모드는 이 세션의 transcript를, 프로그램 모드는 원장의 `signal`·머지 실패·main red·실패 판정과 결정 기록, 이번 Close에서 측정 모드를 한 번 돌린 결과를 묶은 증거 묶음을 읽는다. 리뷰어는 셋(판단, 도구 사용, 다른 관점)이다.
   - 종합자가 배운 점을 Accepted / Rejected / Backlog로 나눈다. 모두 교훈 장부(노트 저장소의 `reflect.ledger`)에 한 줄씩 남는다. 장부는 교훈마다 신호, 근거 포인터, 발생 횟수, 고친 대상, 변경(PR·커밋), 스크립트가 낸 검증 수치, 이후 재발 여부를 적는다.
   - 스킬을 바꾸는 건 서로 다른 사례가 두 번 이상일 때만이다(재현된 보안·데이터 결함은 예외). 한 번뿐이면 후보로 남겨 두고 다음 발생을 기다린다.
   - 세션 모드는 사용자 승인 뒤 반영한다. 프로그램 모드는 사람이 없으므로 worktree에서 고치고 검증한 뒤 draft PR 하나만 열고, digest에 승인 요청을 남긴다. 머지는 사람이 한다. description 변경은 `claude plugin eval`로 발동을, 본문·스크립트 변경은 바뀐 경로를 도는 테스트나 사례 재현으로 동작을 확인한다. 검증이 없으면 `none`으로 적는다.
@@ -607,6 +604,12 @@ PR 을 맡는 스킬과 머지 주체:
 | `guard.warn.run_download` | warn | `-D`·`--dir` 없는 `gh run download` |
 | `guard.warn.tailscale` | warn | 워커의 `tailscale serve`·`funnel` |
 | `guard.deliver_load` | warn | `hooks/lib/skillload.py`. 워커(Dispatch 또는 CLOSE·KEEP 카드)의 본 대화가 `deliver-ticket`을 로드하기 전에 작업 폴더(hook 입력의 `cwd`) 안 파일을 Edit·Write·MultiEdit·NotebookEdit한다. 로드하기 전까지 대상 편집마다 경고 한 줄이 붙고(상태 파일은 없다), `deny`는 그 편집을 막고 `ask`는 확인을 묻는다. 첫 프롬프트에 `LOAD: none` 행이 있는 읽기 전용 카드, `.git` 아래와 작업 폴더 밖 경로, 서브에이전트, 오케스트레이터·리드·사람이 연 세션은 대상이 아니다. 로드는 오류 없는 `Skill` 결과 또는 `/deliver-ticket` 명령이다. 결과가 아직 없거나 transcript를 시간 안에 읽지 못하면 모른 것으로 보고 통과시킨다 |
+| `worker.edit_tool` | warn | `hooks/lib/discipline.py`. 워커(Dispatch 또는 CLOSE·KEEP 카드)와 그 서브에이전트가 Bash로 파일을 쓴다: `>`·`>>`·`&>`·`tee`·`sed -i`·파일을 쓰기로 여는 `python -c`와 python heredoc. 임시 디렉터리(`TMPDIR`·`/tmp`·scratchpad)·`/dev/null`·`orch-refusal`은 제외한다. worktree 안팎을 가리지 않는다. 정당한 로그 리다이렉트도 걸리므로 warn에 둔다 |
+| `worker.chain` | warn | 같은 카드의 Bash 한 호출에서 `rm`·`mv`·`git commit`·`git push`·`worker_done`이 `&&`·`;`·줄바꿈으로 다른 명령과 묶임. 파이프라인과 `$(…)` 안은 한 명령으로 센다 |
+| `worker.paths` | warn | 카드의 Edit·Write가 자기 worktree·임시 디렉터리·`orch-refusal` 밖이거나 `~/.claude/plugins/cache/` 안 |
+| `worker.main_checkout` | warn | 카드의 Edit·Write 대상이 main checkout(`git rev-parse --absolute-git-dir`과 `--git-common-dir`이 같음)에 있다. 저장소를 판정하지 못하면 통과한다 |
+| `worker.memory` | warn | 카드가 `~/.claude/projects/*/memory/`에 쓴다(Edit 계열, Bash의 리다이렉트·`tee`·`sed -i` 대상) |
+| `worker.pre_push` | warn | 이미 origin에 올린 브랜치의 `git rebase`, 이 세션에 테스트 명령이 없는데 하는 첫 `git push`, 테스트 파일 없이 코드만 스테이지한 `git commit`(테스트를 돌린 적이 없을 때만). transcript를 못 읽으면 통과한다 |
 | `orchestrate.ask_user_question` | deny | 오케스트레이터·리드·워커 본 대화의 AskUserQuestion. 서브에이전트와 일반 세션은 대상이 아니다 |
 | `orchestrate.wait_foreground` | deny | 오케스트레이터·리드가 `orch wait`, `orch inbox --wait`, `orch watch-cards`, `orca orchestration check\|inbox --wait`를 `run_in_background` 없이 실행, 또는 배경 대기를 `\| tail`·`\| head`로 자름. 워커의 `check --wait`는 대상이 아니다 |
 | `orchestrate.send_devnull` | deny | 오케스트레이터·리드·워커가 `orca orchestration send\|reply`의 출력을 `/dev/null`로 보냄. `2>/dev/null`만은 대상이 아니다 |
@@ -618,6 +621,8 @@ PR 을 맡는 스킬과 머지 주체:
 | `orchestrate.stall_idle_min` | 15 | 양의 정수. 턴이 끝난 워커를 STALLED `idle`로 표시하기까지의 분. 짧은 실측에서 줄일 때 쓴다 |
 
 hook 자신의 판정이 예외를 내면 그 호출은 통과시키고, 경고와 함께 `$AGENT_SKILLS_STATE/guard-errors.jsonl`에 시각·hook·예외 종류·위치만 남긴다(명령 원문은 남기지 않는다). 설정 파일을 읽지 못하면 기본값을 쓴다.
+
+`worker.*` 키는 발동할 때마다 점검 이름과 수준을 `$AGENT_SKILLS_STATE/turn-warnings.jsonl`에 한 줄씩 남긴다(턴 끝 점검과 같은 파일). 한 주 동안 이 기록으로 오탐을 센 뒤 `worker.edit_tool`부터 `deny`로 올린다. 판정은 텍스트와 git 상태를 읽는 휴리스틱이고, `bash -c`와 스크립트 파일 안의 명령은 보지 않는다.
 
 거부된 행동을 hook이 기록해 다시 막는 일은 없다. 거부된 세션이 같은 형태로 한 번만 다시 하고 우회하지 않는다는 규칙은 스킬 문장(`orchestrate`의 "Refused acts", `tune-automode`)이 지킨다. 이전 버전이 남긴 `$AGENT_SKILLS_STATE/refusals.jsonl`은 아무것도 읽지 않으며 지우지도 않는다. 필요 없으면 사람이 지운다.
 
@@ -768,7 +773,7 @@ pstack 스킬 58개(원칙 24개와 나머지 34개) 가운데 원칙 24개 전�
 ### pstack에 없는 것
 - **티켓 흐름:** `write-ticket`, `deliver-ticket`, `handoff-ticket`, `dispatch-card`, `end-session`. Orca 카드와 트래커를 전제로 한 티켓 하나의 처음부터 끝까지다.
 - **프로젝트 운영:** `orchestrate`의 `orch` 원장, 착지 게이트와 독점 레인, human-gate, main 가디언, QA 리드, `orch-dash` 대시보드. 모양은 pstack 플레이북을 따랐지만 Orca Run과 GitHub stack 위에서 새로 만들었다.
-- **측정과 어댑터:** `measure-delivery`, `use-tracker`, `use-notes`.
+- **측정과 어댑터:** `reflect`의 측정 모드, `use-tracker`, `use-notes`.
 - **머신 관리:** `reap-resources`, `tune-automode`, `skills-config`, `setup-pc`.
 - **hook:** 권한 결정(`guard.py`), 오케스트레이터·리드 재정렬(`reorient.py`), 미설정 PC의 설정 제안(`onboard.py`), 대시보드에서 답하는 권한 창 기록(`permission.py`), 터미널에서 답한 결정 닫기(`decision.py`), 기록 없는 오너 말 전달 경고(`decision_relay.py`), 완료 주장 검사(`claim_check.py`), 무거운 시작 전 사용량 확인(`pressure_gate.py`), 문체 검사(`prose_check.py`), 의존 PR의 스택 확인(`stack_gate.py`), 프로그램 카드의 PR을 연 채 닫는 일 경고(`self_land_gate.py`).
 

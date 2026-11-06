@@ -173,7 +173,14 @@ Usage: orch <command> <slug> [options]
                                      link the row to it by that id, which a terminal restart does not change.
                                      A row linked to a card takes neither --pr nor another --worktree: Orca
                                      knows them. lead add refuses a lead Orca knows; board set links a row
-  board drop <id> | doing add <title> --owner W --next E [--waiting] [--force --why T] [--order oN] | doing drop <n>
+  board set card:<worktree> [--phase TEXT] [--progress N/M] [--after owner/repo#N] [--owner WHO --next TEXT] | annot-migrate [--apply]
+                                     A card's annotation: what Orca, GitHub and the card's report do not
+                                     know. A new row for a card is refused; `-` clears a field. --owner
+                                     with --next is the owner block (what the owner does); --next alone is
+                                     a step after merge. annot-migrate moves card-linked rows into their
+                                     card's annotation (dry run unless --apply) and lists the rest as
+                                     중복 N건 with a command each.
+  board drop <id> | doing add <title> --owner W --next E [--waiting] [--order oN] | doing drop <n>
         | later add <title> --trigger T [--due D] [--who W] [--at N] [--order oN] | later move <n> --to N | later drop <n>
         | todo add <title> (--due D | --after C) --who W [--order oN] | todo drop <n> | todo from-later <n> [--due D] --who W
           --order oN (on the three adds): the new item carries the owner's order oN (orch order); an unknown or closed
@@ -2404,6 +2411,26 @@ def base_ci_hint(repo, base):
             f" there; start it with gh workflow run <ci workflow file> --repo {repo} --ref {base} and watch that run")
 
 
+def stack_refusal(p, pr, stacks):
+    """The land executor's refusal of a PR in a stack. Only the bottom layer has a way in: once the layer above
+    stands on the base, `pr` is a single PR. Retargeting rewrites that layer's diff, so its verdict is stale; the
+    layers further up stay on it. Any other layer waits for the ones below."""
+    why = f"#{pr} is in a stack: the land executor lands single PRs only"
+    members = next((m for m in stacks.values() if pr in m), [])
+    if not members:
+        return why
+    if members[0] != pr:
+        return f"{why}. Land #{members[0]} first, then the layers above it in order"
+    if len(members) < 2:
+        return why
+    # Read here, not from open_rows (one page of PRs): a guessed base would send the retarget to the wrong branch.
+    base = pr_view(p.cfg["repo"], pr).get("baseRefName")
+    if not base:
+        return f"{why}. #{pr} is the bottom layer; retarget #{members[1]} onto #{pr}'s base (it could not be read), then land again"
+    return (f"{why}. #{pr} is the bottom layer; do: gh pr edit {members[1]} --base {base} --repo {p.cfg['repo']},"
+            f" then orch land {p.slug} --pr {pr} (#{members[1]} needs a new review: its diff changed)")
+
+
 def attempt(p, pr, klass, onto_lower=False, expect=None, verdict_sources=None):
     """One pass: returns (exit_code, message). `expect`: the head the land executor was asked to merge, and
     `verdict_sources` the sources its verdict must come from (merge_unit)."""
@@ -2432,7 +2459,7 @@ def attempt(p, pr, klass, onto_lower=False, expect=None, verdict_sources=None):
     stacked = any(pr in members for members in stacks.values())
     if expect and (stacked or onto_lower):
         # Its checks pin one PR at one sha; the lower layers merge-async would take have no such pin.
-        return 1, f"#{pr} is in a stack: the land executor lands single PRs only"
+        return 1, stack_refusal(p, pr, stacks)
     if expect and unread:
         return 2, "yield: the stack listing did not answer, so the land executor cannot tell a single PR; land again"
     members = next((m for m in stacks.values() if pr in m), [])
@@ -3181,10 +3208,49 @@ PROMPTS = [(re.compile(r"Enter to select"), "a select menu"),
            (re.compile(r"Waiting for API response · will retry"), "an API retry loop")]
 
 
+# A file diff Claude Code drew: a run of line-number gutter lines (a number, then +, - or a context space) with at
+# least one + or -. It quotes code, so an ENOSPC in it is the reviewed text, not the machine. Other output keeps
+# counting: a real "npm ERR! ENOSPC" has no gutter, and "28  No space left" alone has no + or - line beside it.
+GUTTER = re.compile(r"^\s*\d+(?:\s([+\-])|\s\s)")
+
+
+DIFF_HEAD = re.compile(r"\b(?:Update|Edit|Write|MultiEdit)\(|\b(?:Added|Removed) \d+ lines?\b|\bUpdated .* with \d+ (?:addition|removal)")
+
+
+def without_diffs(lines, tail=25):
+    """The last `tail` lines minus the drawn diffs: a gutter run with a + or - line that follows a diff header. Shape
+    alone is not enough: a command can print "27 - step" and "28  No space left". A run with no header is kept, so a
+    real disk error is never dropped. The whole screen is walked so a header is seen even when the tail cut it off,
+    but only lines that were in the tail come back. A diff line too long for the terminal wraps onto a line with no
+    gutter; that line stays, because no rule for it told it apart from command output right after a diff."""
+    out, run, head, in_diff = [], [], False, False
+    first = len(lines) - tail
+    for i, l in enumerate([*lines, None]):
+        m = GUTTER.match(l) if l is not None else None
+        if m:
+            run.append((i, l, bool(m.group(1))))
+            continue
+        if run:
+            in_diff = head and any(marked for _, _, marked in run)
+            if not in_diff:
+                out += [(j, x) for j, x, _ in run]
+            run = []
+        if l is None:
+            continue
+        out.append((i, l))
+        # A wrapped tail has no mark and leaves the header standing for the gutter lines after it.
+        if DIFF_HEAD.search(l):
+            head = True
+        elif l.lstrip().startswith(("⏺", "❯", "⎿", "✻")):
+            head = False
+    return [l for i, l in out if i >= first]
+
+
 def screen_prompt(lines, activity=None):
     tail = lines[-25:]
+    text = "\n".join(without_diffs(lines))
     for rx, kind in PROMPTS:
-        if rx.search("\n".join(tail)):
+        if rx.search(text):
             return kind, next((l.strip() for l in reversed(tail) if l.strip().endswith("?")), "")
     return ("waiting for input", "") if activity == "waiting" else None
 
@@ -4118,7 +4184,16 @@ def cmd_board(argv):
         elif sub == "set" and rid:
             board.set_row(rid, **{f: opt(rest, f"--{f}") for f in
                                   ("kind", "title", "repo", "program", "parent", "status", "progress", "next", "owner", "pr", "worktree",
-                                   "after", "priority")})
+                                   "after", "priority", "phase")})
+        elif sub == "annot-migrate":
+            move, left = board.annot_migrate("--apply" in rest)
+            print(f"{'moved' if '--apply' in rest else 'would move'} {len(move)} row(s) into card annotations"
+                  + ("" if "--apply" in rest else "  (dry run; --apply writes)"))
+            for wt, (row, fields) in move.items():
+                print(f"  row:{row} -> card:{wt}  " + (" ".join(f"{k}={v}" for k, v in fields.items()) or "(no field to carry)"))
+            print(f"중복 {len(left)}건" + (": 옮기지 않았다. 처리 명령을 쓴 뒤 다시 돌린다" if left else ""))
+            for row, why, cmd in left:
+                print(f"  row:{row}  {why}  → {cmd}")
         elif sub == "drop" and rid:
             board.drop(rid)
         elif sub == "priority" and rest[:1] == ["set"] and len(rest) == 3:
@@ -4129,8 +4204,10 @@ def cmd_board(argv):
             for g in sorted(board.read()["groups"].values(), key=lambda g: (g["priority"].split(":", 1)[0].zfill(3), g["match"])):
                 print(f"{g['match']}  {g['priority']}")
         elif sub == "doing" and rest[:1] == ["add"] and len(rest) > 1:
+            if "--force" in rest:
+                sys.exit("board doing add has no --force: reword a title that only shares a name with live work")
             say_linked(opt(rest, "--order"), board.doing_add(rest[1], opt(rest, "--owner"), opt(rest, "--next"), "--waiting" in rest,
-                                                              "--force" in rest, opt(rest, "--why"), opt(rest, "--order")))
+                                                              opt(rest, "--order")))
         elif sub == "doing" and rest[:1] == ["drop"] and len(rest) > 1:
             board.doing_drop(int(rest[1]))
         elif sub == "later" and rest[:1] == ["add"] and len(rest) > 1:
@@ -4196,7 +4273,7 @@ def cmd_board(argv):
         else:
             sys.exit("usage: orch board lead add <name> --handle H --repo R [--program P] [--run RUN] [--stale-min N] [--worktree ID] | "
                      "lead close <name> | set <id> [--kind K] [--title T] [--repo R] [--program P] [--parent ID] [--status S] "
-                     "[--progress N/M] [--next T] [--owner W|-] [--after owner/repo#N|-] [--pr owner/repo#N] [--worktree ID] [--priority RANK:NAME|-] | drop <id> | priority set|drop|list | doing add <title> --owner W --next E [--waiting] [--force --why T] [--order oN] | doing drop <n> | later add <title> --trigger T [--due D] [--order oN] | "
+                     "[--progress N/M] [--next T] [--owner W|-] [--after owner/repo#N|-] [--pr owner/repo#N] [--worktree ID] [--priority RANK:NAME|-] | drop <id> | priority set|drop|list | set card:<worktree> [--phase P] [--progress N/M] [--after PR] [--owner W --next T] | annot-migrate [--apply] | doing add <title> --owner W --next E [--waiting] [--order oN] | doing drop <n> | later add <title> --trigger T [--due D] [--order oN] | "
                      "later drop <n> | todo add <title> (--due D | --after C) --who W [--order oN] | todo drop <n> | todo from-later <n> [--due D] --who W | "
                      "now [LINE]... | show | open [--json] | done <id>... [--why T] [--json] | reopen <id>... [--json] | "
                      "tidy [--dry-run] [--json] | closed")
@@ -4335,6 +4412,8 @@ def cmd_sent(argv):
                 print(json.dumps(rows, ensure_ascii=False, indent=1))
             for r in [] if "--json" in rest else rows:
                 print(f"{r['ts']}  {r.get('from') or '?'} → {r.get('to') or '?'}  [{r['source']}] {(r.get('subject') or r['text'] or '?').splitlines()[0][:100]}")
+                if r.get("warn"):
+                    print(f"    ! {r['warn']}")
         else:
             sys.exit(usage)
     except (ValueError, OSError) as e:

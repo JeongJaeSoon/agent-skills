@@ -109,7 +109,8 @@ def pr_end(key, F):
 
 def card_closure(ident, db):
     """A card with no PR ends only on a done close that was not tidy's "PR closed" (that one is no merge)."""
-    done = db.execute("SELECT state, rule FROM closure WHERE unit=?", (f"card:{ident}",)).fetchone()
+    # a close the card inherits from the row an annotation took the place of (row:<id> is its alias) counts as its own
+    done = db.execute("SELECT state, rule FROM closure WHERE unit=?", (store._alias_closure(db, f"card:{ident}"),)).fetchone()
     if done and done["state"] == "done" and done["rule"] != "pr_closed":
         return "done", {"card": ident, "closure": "done"}
     return "open", f"card {ident} has no PR and no done close"
@@ -129,6 +130,9 @@ def steps_left(ident, F):
         card = F["cards"].get(r.get("worktree")) or tidy.named(f"{rid} {r.get('title') or ''}", F["cards"])
         if card and card["id"] == ident and tidy.POST_MERGE.search(r.get("next") or ""):
             return True
+    # the card's annotation names a step after merge (an owner block's next is the owner's turn, db_turn's)
+    if tidy.POST_MERGE.search(((F["board_now"].get("annots") or {}).get(f"card:{ident}") or {}).get("next") or ""):
+        return True
     return any((c := tidy.doing_card(d, F["cards"])) and c["id"] == ident and tidy.POST_MERGE.search(d.get("next") or "")
                for d in F["board"]["doing"])
 
@@ -150,6 +154,9 @@ def db_turn(real, cards_all, me, decisions, board_now):
         card = cards_all.get(r.get("worktree")) or tidy.named(f"{rid} {r.get('title') or ''}", cards_all)
         if card and card["id"] in cards and (r.get("status") == "owner" or rowstate.is_owner(r.get("owner"), me)):
             return "owner_turn", "an open board row waits on the owner at a linked card"
+    for cid in cards:  # an owner block written on the card's annotation
+        if rowstate.is_owner(((board_now.get("annots") or {}).get(f"card:{cid}") or {}).get("owner"), me):
+            return "owner_turn", "a card annotation waits on the owner at a linked card"
     for lane in ("doing", "todo", "owner_todo"):
         for it in board_now.get(lane) or []:
             text = f"{it.get('title') or ''} {it.get('next') or ''}"
