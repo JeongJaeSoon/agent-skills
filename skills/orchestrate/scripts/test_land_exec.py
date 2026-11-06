@@ -313,16 +313,22 @@ class LandExec(unittest.TestCase):
             os.environ.pop("ORCA_TERMINAL_HANDLE")
         self.settled(row, "merged", 0)
 
-    def test_author_sessions_is_empty_when_orca_cannot_vouch_for_the_list(self):
+    def test_author_sessions_tells_no_card_from_a_lookup_that_cannot_vouch(self):
         real = prog.orca_json
         try:
+            # None: Orca did not give a complete answer, so the author is unknown, not absent.
             for answer in ({"terminals": [{"handle": "term_other"}], "truncated": True}, {"terminals": None}, {}):
                 prog.orca_json = lambda *a, answer=answer: answer
-                self.assertEqual(prog.author_sessions("b"), [], answer)
+                self.assertIsNone(prog.author_sessions("b"), answer)
+            prog.orca_json = lambda *a: (_ for _ in ()).throw(ValueError("not json"))
+            self.assertIsNone(prog.author_sessions("b"))
+            prog.orca_json = lambda *a: (_ for _ in ()).throw(SystemExit("orca terminal list: connection refused"))
+            self.assertIsNone(prog.author_sessions("b"))
+            # []: Orca answered and no worktree holds the branch.
+            prog.orca_json = lambda *a: (_ for _ in ()).throw(SystemExit('orca terminal list: {"code": "selector_not_found"}'))
+            self.assertEqual(prog.author_sessions("b"), [])
             prog.orca_json = lambda *a: {"terminals": [{"handle": "term_b"}, {"handle": "term_a"}, {}]}
             self.assertEqual(prog.author_sessions("b"), ["term_a", "term_b"])
-            prog.orca_json = lambda *a: (_ for _ in ()).throw(ValueError("not json"))
-            self.assertEqual(prog.author_sessions("b"), [])
         finally:
             prog.orca_json = real
 
@@ -331,7 +337,7 @@ class LandExec(unittest.TestCase):
         before = len([e for e in self.p.events() if e["ev"] == "verdict"])
         os.environ["ORCA_TERMINAL_HANDLE"] = handle
         real = prog.author_sessions
-        prog.author_sessions = lambda branch: list(authors)
+        prog.author_sessions = lambda branch: authors if authors is None else list(authors)
         try:
             prog.cmd_verdict([self.slug, "--pr", str(self.n), "--sha", f"h{self.n}", *extra])
         finally:
@@ -389,7 +395,7 @@ class LandExec(unittest.TestCase):
         self.verdict(evidence=None)
         self.assertNotIn("independent review", self.land_check()[1])
 
-    def fake_orca(self, worktrees, terminals, truncated=False):
+    def fake_orca(self, worktrees, terminals, truncated=False, terminals_truncated=False):
         """prog.orca_json over an Orca with `worktrees` rows and `terminals` {path: [handles]}; a branch selector that
         matches no worktree's branch fails the way Orca does (selector_not_found)."""
         def answer(*a):
@@ -399,7 +405,7 @@ class LandExec(unittest.TestCase):
             if sel.startswith("branch:") and sel[7:] not in [w["branch"].replace("refs/heads/", "") for w in worktrees]:
                 raise SystemExit('orca terminal list: {"code": "selector_not_found"}')
             path = sel[5:] if sel.startswith("path:") else next(w["path"] for w in worktrees if w["branch"].endswith(sel[7:]))
-            return {"terminals": [{"handle": h} for h in terminals.get(path, [])], "truncated": False}
+            return {"terminals": [{"handle": h} for h in terminals.get(path, [])], "truncated": terminals_truncated}
         real = prog.orca_json
         prog.orca_json = answer
         self.addCleanup(setattr, prog, "orca_json", real)
@@ -410,22 +416,44 @@ class LandExec(unittest.TestCase):
     def test_author_is_found_when_the_card_branch_differs_from_the_pr_branch(self):
         # The card works on `card-local` and pushes it to the PR branch `feature`: no worktree holds `feature`.
         self.fake_orca([self.CARD, self.MAIN], {"/w/card": ["term_author"], "/w/main": ["term_main"]})
-        self.assertEqual(prog.author_sessions("feature"), [])
-        self.assertEqual(prog.worktree_author_sessions("feature", "abc", 7), ["term_author"])  # by head sha, never the main checkout
-        self.fake_orca([{**self.CARD, "head": "zzz", "linkedPR": {"number": 7}}], {"/w/card": ["term_author"]})
-        self.assertEqual(prog.worktree_author_sessions("feature", "abc", 7), ["term_author"])  # by the linked PR
-        self.fake_orca([{**self.CARD, "head": "zzz", "branch": "refs/heads/feature"}], {"/w/card": ["term_author"]})
-        self.assertEqual(prog.worktree_author_sessions("feature", "abc", 7), ["term_author"])  # by the branch name
-        self.fake_orca([{**self.CARD, "head": "zzz"}], {"/w/card": ["term_other"]})
-        self.assertEqual(prog.worktree_author_sessions("feature", "abc", 7), [])  # nothing matches
+        self.assertEqual(prog.author_sessions("feature"), [])  # Orca answered: no worktree holds the branch
+        self.assertEqual(prog.worktree_author_sessions("abc"), ["term_author"])  # by head sha, never the main checkout
+        # A PR number is not read: the listing spans repositories, so another repository's card linking #7 would
+        # stand in for this PR's author. Neither is the branch name, which the first lookup already used.
+        self.fake_orca([{**self.CARD, "head": "zzz", "linkedPR": {"number": 7}, "branch": "refs/heads/feature"}],
+                       {"/w/card": ["term_author"]})
+        self.assertEqual(prog.worktree_author_sessions("abc"), [])
+        # None is not "no card": a partial or malformed answer cannot show who the author is.
         self.fake_orca([self.CARD], {"/w/card": ["term_author"]}, truncated=True)
-        self.assertEqual(prog.worktree_author_sessions("feature", "abc", 7), [])  # a cut-off list proves nothing
+        self.assertIsNone(prog.worktree_author_sessions("abc"))
+        self.fake_orca([self.CARD], {"/w/card": ["term_author"]}, terminals_truncated=True)
+        self.assertIsNone(prog.worktree_author_sessions("abc"))
+        self.fake_orca([{**self.CARD, "path": 42}], {})
+        self.assertIsNone(prog.worktree_author_sessions("abc"))  # the matching card cannot be read
+        self.fake_orca([self.CARD, "not a row"], {"/w/card": ["term_author"]})
+        self.assertIsNone(prog.worktree_author_sessions("abc"))
+
+    def test_a_lookup_that_cannot_vouch_stores_nothing_even_if_the_card_exists(self):
+        row_head = f"h{self.n}"
+        card = {**self.CARD, "head": row_head}
+        os.environ["ORCA_TERMINAL_HANDLE"] = "term_orchestrator"
+        try:
+            for case in (dict(terminals_truncated=True), dict(truncated=True)):
+                self.fake_orca([card], {"/w/card": ["term_author"]}, **case)
+                before = len([e for e in self.p.events() if e["ev"] == "verdict"])
+                with self.subTest(case=case), self.assertRaises(SystemExit) as ctx:
+                    prog.cmd_verdict([self.slug, "--pr", str(self.n), "--sha", row_head, "--source", "review:codex",
+                                      "--evidence", "e"])
+                self.assertIn("nothing recorded", str(ctx.exception.code))
+                self.assertEqual(len([e for e in self.p.events() if e["ev"] == "verdict"]), before)
+        finally:
+            os.environ.pop("ORCA_TERMINAL_HANDLE")
 
     def record_unverified(self, *extra, handle="term_orchestrator"):
         before = len([e for e in self.p.events() if e["ev"] == "verdict"])
         os.environ["ORCA_TERMINAL_HANDLE"] = handle
         real = prog.author_sessions, prog.worktree_author_sessions
-        prog.author_sessions = prog.worktree_author_sessions = lambda *a, **kw: []
+        prog.author_sessions = prog.worktree_author_sessions = lambda *a, **kw: []  # Orca answered: no card
         try:
             prog.cmd_verdict([self.slug, "--pr", str(self.n), "--sha", f"h{self.n}", *extra])
         finally:
@@ -449,10 +477,18 @@ class LandExec(unittest.TestCase):
                 self.record_unverified(*extra)
             self.assertEqual(self.added, 0)
 
+    def test_an_unreadable_author_lookup_refuses_the_pass(self):
+        with self.assertRaises(SystemExit) as ctx:
+            self.record("--source", "review:codex", "--evidence", "e", authors=None)
+        self.assertIn("nothing recorded", str(ctx.exception.code))
+        self.assertEqual(self.added, 0)
+
     def test_a_stored_row_with_no_author_needs_the_unverified_mark(self):
         for who, ok in (({"author": []}, False), ({"author": [], "author_unverified": True}, True),
                         ({"author": [], "author_unverified": "yes"}, False),
-                        ({"author": [], "author_unverified": True, "recorder": "codex"}, False)):  # recorder is the reviewer
+                        ({"author": [], "author_unverified": True, "recorder": "codex"}, False),  # recorder is the reviewer
+                        # the recorder named only in the source: its own review
+                        ({"author": [], "author_unverified": True, "recorder": "term_x", "source": "review:term_x"}, False)):
             with self.subTest(who=who):
                 self.assertEqual(prog.verdict_identity_problem(
                     {"reviewer": "codex", "evidence": "e", "recorder": "term_orchestrator", **who}) is None, ok)

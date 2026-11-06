@@ -2087,12 +2087,19 @@ def cmd_verdict(argv):
     recorder = os.environ.get("ORCA_TERMINAL_HANDLE")
     reviewer = (opt(argv, "--reviewer") or (what.strip() if kind in ("review", "verifier") else "")).strip()
     evidence = (opt(argv, "--evidence") or "").strip()
-    authors = author_sessions(view.get("headRefName")) or worktree_author_sessions(view.get("headRefName"), head, pr)
-    fields = dict(author=authors, reviewer=reviewer or None, evidence=evidence or None, recorder=recorder, by=recorder)
-    if not authors:  # no card found: the row says so, and verdict_identity_problem decides whether that can stand
-        fields["author_unverified"] = True
-        print("warning: no card holding this PR's branch was found; the author is recorded as unverified", file=sys.stderr)
+    authors = author_sessions(view.get("headRefName"))
+    if authors == []:  # Orca answered: no worktree holds the branch name. Look for the card by the PR's head sha.
+        authors = worktree_author_sessions(head)
     result = opt(argv, "--result", "pass")
+    if authors is None:  # Orca did not give a complete answer: not "no card", so a pass cannot be judged
+        if result == "pass":
+            sys.exit("verdict refused, nothing recorded: Orca's terminal or worktree list could not show who wrote this"
+                     " PR (failed, cut off or unreadable): run it again")
+        authors = []
+    fields = dict(author=authors, reviewer=reviewer or None, evidence=evidence or None, recorder=recorder, by=recorder)
+    if not authors:  # Orca answered and no card was found: the row says so, and verdict_identity_problem decides
+        fields["author_unverified"] = True
+        print("warning: no card holding this PR was found; the author is recorded as unverified", file=sys.stderr)
     # A fail blocks a landing and needs no independence. A pass that cannot stand as an independent review is not
     # stored at all: a stored pass would let the direct `orch land` path, which reads no identity, merge on it.
     if result == "pass" and (bad := verdict_identity_problem({**fields, "source": src})):
@@ -2106,45 +2113,48 @@ SELF_REVIEWERS = {"self", "implementer", "author"}
 
 
 def author_sessions(branch):
-    """Terminal handles of the card whose worktree holds the PR's branch: the sessions that wrote it. Empty when Orca
-    does not answer or no card holds the branch, which leaves the author unverified."""
+    """Terminal handles of the card whose worktree holds the PR's branch: the sessions that wrote it. [] when Orca
+    answered and no worktree holds the branch; None when the answer cannot show who the author is (Orca failed, the
+    list is cut off or malformed). Only the first leaves the author unverified: the second must refuse, since a cut-off
+    list can miss the very card that wrote the PR."""
     if not branch:
         return []
     try:
         out = orca_json("terminal", "list", "--worktree", f"branch:{branch}")
         rows = out["terminals"]
-        # A cut-off list can miss the author, and a reviewer equal to the missing one would pass.
         if out.get("truncated") or not isinstance(rows, list):
-            return []
+            return None
         return sorted({t["handle"] for t in rows if isinstance(t.get("handle"), str) and t["handle"]})
-    except (SystemExit, ValueError, KeyError, TypeError, AttributeError, OSError):
-        return []
+    except SystemExit as e:
+        return [] if "selector_not_found" in str(e.code) else None
+    except (ValueError, KeyError, TypeError, AttributeError, OSError):
+        return None
 
 
-def worktree_author_sessions(branch, head, pr):
-    """Fallback for a card whose local branch is not the PR's branch (it pushed `local:remote`, or main was merged
-    into a renamed branch): the terminals of the non-main worktrees that hold the branch, sit at the PR's head sha, or
-    link the PR. Empty when Orca does not answer, the list is cut off, or nothing matches."""
+def worktree_author_sessions(head):
+    """Fallback for a card whose local branch is not the PR's branch (it pushed `local:remote`, or was renamed): the
+    terminals of the non-main worktrees sitting at the PR's head sha. The PR number is not matched, because the listing
+    spans repositories and another repository's card linking the same number would stand in for the author. [] when
+    Orca answered and no worktree sits there; None when the answer cannot show it (failed, cut off, a matching row
+    that cannot be read), which must refuse, not pass as an unverified author."""
     try:
         out = orca_json("worktree", "list")
         rows = out["worktrees"]
         if out.get("truncated") or not isinstance(rows, list):
-            return []
+            return None
         handles = set()
         for w in rows:
-            linked = w.get("linkedPR")
-            linked = linked.get("number") if isinstance(linked, dict) else linked
-            if w.get("isMainWorktree") or not isinstance(w.get("path"), str) or not (
-                    (branch and (w.get("branch") or "").replace("refs/heads/", "") == branch)
-                    or (head and w.get("head") == head) or (linked is not None and str(linked) == str(pr))):
+            if w.get("isMainWorktree") or not head or w.get("head") != head:
                 continue
+            if not isinstance(w.get("path"), str):
+                return None
             terminals = orca_json("terminal", "list", "--worktree", f"path:{w['path']}")
             if terminals.get("truncated") or not isinstance(terminals["terminals"], list):
-                return []  # a partial author set is no author set
+                return None  # a partial author set is no author set
             handles |= {t["handle"] for t in terminals["terminals"] if isinstance(t.get("handle"), str) and t["handle"]}
         return sorted(handles)
     except (SystemExit, ValueError, KeyError, TypeError, AttributeError, OSError):
-        return []
+        return None
 
 
 def verdict_identity_problem(v):
@@ -2172,8 +2182,9 @@ def verdict_identity_problem(v):
         # reviewer is not the session that recorded it; a row without the mark predates this rule and is refused.
         if v.get("author_unverified") is not True:
             return "the PR's author session could not be identified (no card holds its branch)"
-        if v["reviewer"].strip() == v["recorder"]:
-            return "the author is unverified and the reviewer is the recorder: another session records the review"
+        for role, name in stated_reviewers(v):  # either name, so a review:<recorder> source cannot hide it
+            if name == v["recorder"]:
+                return f"the author is unverified and the {role} is the recorder: another session records the review"
     return None
 
 
@@ -2194,16 +2205,20 @@ def executor_verdict_problem(verdict, head, sources):
     return None
 
 
+def stated_reviewers(v):
+    """(role, name) for every reviewer the row names: --reviewer and the one inside a review:/verifier: source."""
+    kind, _, what = str(v.get("source") or "").partition(":")
+    named = [("reviewer", v.get("reviewer")), ("source reviewer", what if kind in ("review", "verifier") else None)]
+    return [(role, name.strip()) for role, name in named if isinstance(name, str) and name.strip()]
+
+
 def self_review(v):
     """The reason the review is the PR's own author's, else None. Every identity the row states counts: --reviewer, the
     reviewer inside a review:/verifier: source (so `--source review:author --reviewer codex` does not pass), and the
     recorder, since an author who records its own pass wrote the verdict it will be merged on."""
     authors = v.get("author") or []
-    kind, _, what = str(v.get("source") or "").partition(":")
-    named = [("reviewer", v.get("reviewer")), ("source reviewer", what if kind in ("review", "verifier") else None)]
-    for role, name in named:
-        name = name.strip() if isinstance(name, str) else ""
-        if name and (name.casefold() in SELF_REVIEWERS or name in authors):
+    for role, name in stated_reviewers(v):
+        if name.casefold() in SELF_REVIEWERS or name in authors:
             return f"{role} '{name}' is the PR's author session"
     if isinstance(v.get("recorder"), str) and v["recorder"] in authors:
         return f"recorder '{v['recorder']}' is the PR's author session: another session records the review"
