@@ -186,4 +186,47 @@ except store.NotMigrated as e:
     assert "orch db migrate" in str(e)
 assert list(sd.iterdir()) == []
 
+# ---- dropping a parent takes its hidden (finished, past retention) child with it instead of failing on the foreign key
+sd = machine()
+store.state_setup()
+stages.add("p", "Parent")
+stages.add("c", "Child", parent="p")
+stages.finish("c")
+with store.tx() as db:
+    db.execute("UPDATE stage_row SET done_at='2020-01-01T00:00:00Z' WHERE id='c'")
+assert list(stages.read()["rows"]) == ["p"]  # the child is stored, hidden
+stages.finish("p", drop=True)
+with store.read() as db:
+    assert db.execute("SELECT count(*) FROM stage_row").fetchone()[0] == 0
+
+# ---- a pr that is not owner/repo#N is refused: there is no column to keep the text in, so it must not vanish quietly
+sd = machine()
+store.state_setup()
+try:
+    stages.add("x", "Free text pr", pr="42")
+    raise AssertionError("a pr that is not owner/repo#N must be refused")
+except ValueError as e:
+    assert "owner/repo#N" in str(e), e
+assert stages.read()["rows"] == {}
+
+# ---- rollback --rehearsal changes nothing
+sd = old_machine()
+store.state_setup()
+exp = tmp / "export-rehearsal"
+store.state_export(str(exp))
+msg = store.state_rollback(str(exp), rehearsal=True)
+assert msg.startswith("dry-run") and store.state_ready()
+assert all((sd / n).is_dir() for n in store.STATE_FILES)
+
+# ---- tombstones without the step (a rollback cut short): the step refuses instead of importing an empty table
+sd = machine()
+for n in store.STATE_FILES:
+    (sd / n).mkdir()
+try:
+    store.state_setup()
+    raise AssertionError("a tombstone with no step recorded must be refused")
+except store.Refused as e:
+    assert "rollback was cut short" in str(e), e
+assert not store.state_ready()
+
 print("ok")

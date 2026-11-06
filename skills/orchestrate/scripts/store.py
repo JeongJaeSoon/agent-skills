@@ -1380,10 +1380,19 @@ def stage_read(keep_s):
 
 def _stage_save(db, before, after, by):
     """Write what fn changed in `after` (the shape of stage_read). A row in `before` and not in `after` is dropped."""
+    for rid, r in after["rows"].items():
+        if r.get("pr") and not pr_split(r["pr"]):  # nothing else holds the text, so it is refused, not dropped
+            raise ValueError(f"{rid}: pr must look like owner/repo#N, got {r['pr']!r}")
     db.execute("PRAGMA defer_foreign_keys=ON")
-    for gone in before["rows"].keys() - after["rows"].keys():
-        db.execute("DELETE FROM stage_cell WHERE row_id=?", (gone,))
-        db.execute("DELETE FROM stage_row WHERE id=?", (gone,))
+    gone = set(before["rows"].keys() - after["rows"].keys())
+    todo = set(gone)
+    while todo:  # finished rows past retention are stored but hidden, so `before` does not list them: they go with the parent
+        todo = {r[0] for r in db.execute(f"SELECT id FROM stage_row WHERE parent IN ({','.join('?' * len(todo))})",
+                                         tuple(todo))} - gone
+        gone |= todo
+    for rid in gone:
+        db.execute("DELETE FROM stage_cell WHERE row_id=?", (rid,))
+        db.execute("DELETE FROM stage_row WHERE id=?", (rid,))
     order = [k for k in after["order"] if k in after["rows"]] + [k for k in after["rows"] if k not in after["order"]]
     for pos, rid in enumerate(order):
         r = after["rows"][rid]
@@ -1470,6 +1479,10 @@ def _state_import(db, acks_lines, table, by="import"):
 def _state_sources(sd):
     """(ack events, stage table) read from the two files, strictly: a line or file that does not parse stops the step
     before anything is written, so the files stay as they are. A file that is not there is empty."""
+    for name in STATE_FILES:  # a tombstone with no step recorded is what a rollback cut short leaves
+        if (sd / name).is_dir():
+            raise Refused(f"{sd / name} is a tombstone but {STATE_STEP} is not in {DB_NAME}: a rollback was cut short. "
+                          f"Put the file back by hand ({name}.restore beside it, or the export), then run {state_command()}")
     bad, events = [], []
     if (sd / "acks.jsonl").is_file():
         for i, line in enumerate((sd / "acks.jsonl").read_text().splitlines(), 1):
@@ -1509,10 +1522,13 @@ def state_setup(by="orch db state", auto=False):
         if auto:
             return f"skipped: {e}"
         raise
-    acks_lines, table = _state_sources(sd)
+    _state_sources(sd)  # refuses before a lock or a backup exists
     with contextlib.ExitStack() as stack:
         for name in STATE_LOCKS:  # the writers of both files hold these while they write
             fcntl.flock(stack.enter_context((sd / name).open("a")), fcntl.LOCK_EX)
+        if STATE_STEP in migrated_steps():  # a run that held the locks first finished it
+            return _finish(STATE_STEP, _step_row(STATE_STEP))
+        acks_lines, table = _state_sources(sd)  # read again under the locks, so the backup, the hash and the import agree
         ts = dt.datetime.now(dt.timezone.utc)
         backup, sources = _backup_files(sd, STATE_STEP, ts)
         with tx() as db:
@@ -1543,7 +1559,7 @@ def state_export(dest):
     return dest, len(events), len(table["rows"])
 
 
-def state_rollback(src):
+def state_rollback(src, rehearsal=False):
     """Put an export's files back in place of the tombstones and take the step and its tables out of the DB. What was
     written to the tables since the export is lost with them; export again first when that matters."""
     sd, src = fleet.state_dir(), pathlib.Path(src).expanduser()
@@ -1554,6 +1570,8 @@ def state_rollback(src):
             raise Refused(f"{src / name} is missing: run `orch db export --legacy --target state {src}` first")
         if not (sd / name).is_dir() or any((sd / name).iterdir()):
             raise Refused(f"{sd / name} is not an empty tombstone: move what is there aside first")
+    if rehearsal:
+        return f"dry-run: would put {', '.join(STATE_FILES)} back from {src} and drop {STATE_STEP}; nothing was changed"
     staged = {}
     for name in STATE_FILES:  # copied beside the tombstone first, so only a rename is left after the DB changes
         staged[name] = sd / (name + ".restore")
@@ -2695,10 +2713,14 @@ def main(argv):
         elif sub == "state":
             print(state_setup(auto="--auto" in rest))
         elif sub == "export" and "--legacy" in rest and "--target" in rest and rest[rest.index("--target") + 1:][:1] == ["state"]:
-            out, n, rows = state_export([a for a in rest if not a.startswith("--") and a != "state"][-1])
+            i = rest.index("--target")
+            dirs = [a for a in rest[:i] + rest[i + 2:] if not a.startswith("--")]
+            if not dirs:
+                raise Refused("export needs the directory to write to: orch db export --legacy --target state DIR")
+            out, n, rows = state_export(dirs[-1])
             print(f"wrote {out}: {n} ack events, {rows} stage rows")
         elif sub == "rollback" and rest[:1] == ["state"] and [a for a in rest[1:] if not a.startswith("--")]:
-            print(state_rollback([a for a in rest[1:] if not a.startswith("--")][0]))
+            print(state_rollback([a for a in rest[1:] if not a.startswith("--")][0], rehearsal))
         elif sub == "export" and "--legacy" in rest and len([a for a in rest if not a.startswith("--")]) >= 2:
             target = rest[rest.index("--target") + 1] if "--target" in rest else ""
             dest = [a for a in rest if not a.startswith("--") and a != target][-1]
