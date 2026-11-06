@@ -566,10 +566,16 @@ def _put_annots(db, old, new, by):
 
 
 def row_origins():
-    """{row id: the row as the import event kept it}: the original worktree and PR of a row the import cut."""
+    """{row id: the row as the import event kept it}: the original worktree and PR of a row the import cut. A row dropped
+    or added again since is another row under the same id, and has no origin."""
+    out = {}
     with read() as c:
-        return {r["id"]: json.loads(r["before"]) for r in
-                c.execute("SELECT id, before FROM event WHERE entity='board_row' AND ev='import' AND before IS NOT NULL ORDER BY seq")}
+        for r in c.execute("SELECT id, ev, before FROM event WHERE entity='board_row' AND ev IN ('import','add','drop') ORDER BY seq"):
+            if r["ev"] == "import" and r["before"]:
+                out[r["id"]] = json.loads(r["before"])
+            else:
+                out.pop(r["id"], None)
+    return out
 
 
 def _put_leads(db, old, new, by):
@@ -695,6 +701,8 @@ def reopen_unit(db, iid, ts, by, rule="manual", mark=None):
         _event(db, "item", iid, "reopen", by, dict(before), dict(_item_now(db, iid)), ts)
         return
     was = db.execute("SELECT * FROM closure WHERE unit=?", (iid,)).fetchone()
+    if was["state"] == "reopen":  # a card and its alias in one call: the close is already undone, with its evidence kept
+        return
     db.execute("UPDATE closure SET state='reopen', ts=?, by=?, rule=?, evidence=NULL, undone_evidence=?, ext_mark=? WHERE unit=?",
                (ts, by, rule, was["evidence"], mark, iid))
     _event(db, "closure", iid, "reopen", by, dict(was), dict(db.execute("SELECT * FROM closure WHERE unit=?", (iid,)).fetchone()), ts)

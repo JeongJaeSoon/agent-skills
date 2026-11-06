@@ -206,4 +206,18 @@ import tidy  # noqa: E402
 assert tidy.write(["card:wt-card"], undo=True)[0] == ["card:wt-card"]
 assert store.latest()["card:wt-card"]["ev"] == "reopen" and store.latest()["row:P/one"]["ev"] == "reopen", store.latest()
 
+# ---- a card and its alias reopened in one call undo the close once, with its evidence kept
+assert tidy.write(["row:P/one"], can={"row:P/one": "x"})[0] == ["row:P/one"]
+assert store.latest()["card:wt-card"]["ev"] == "done"
+assert sorted(tidy.write(["card:wt-card", "row:P/one"], undo=True)[0]) == ["card:wt-card", "row:P/one"]
+assert store.latest()["row:P/one"]["ev"] == "reopen" and store.latest()["row:P/one"]["evidence"], store.latest()["row:P/one"]
+
+# ---- a row id used again after the import is another row: the import's worktree is no evidence for it
+board.drop("gone")
+board.set_row("gone", repo="acme/app", title="docs work")
+assert "gone" not in [r for r, _, _ in board.annot_plan()[1]] and all(r != "gone" for r, _ in board.annot_plan()[0].values())
+# a 🙋 row with no owner named is blocked on the owner
+assert board.annot_fields({"status": "owner", "next": "승인"}, {}) == {"owner": "오너", "next": "승인"}
+assert board.annot_fields({"status": "moving", "owner": "Alice", "next": "승인"}, {}) == {}
+
 print("test_annot: ok")
