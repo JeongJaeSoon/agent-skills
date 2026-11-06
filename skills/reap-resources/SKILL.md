@@ -32,7 +32,8 @@ never touches it. `apply` takes only the plan file `scan --plan` just wrote: it 
 lists (the main checkout included), is refused whole, with nothing closed. So is a plan with any acting card that has
 changed since the scan (verdict, HEAD, folder, a guard now holding it back, or another cleaner holding its lock):
 `apply` takes every acting card's lock and judges every card again before it closes the first, and the fix is a new
-`scan --plan`. A card that changes after that is skipped alone. From a shell the same two lines work with the checkout's path in place of `${CLAUDE_SKILL_DIR}`.
+`scan --plan`. It runs only in the account's default state directory (`--state` and `$AGENT_SKILLS_STATE` are
+refused), because the locks live there. A card that changes after that is skipped alone. From a shell the same two lines work with the checkout's path in place of `${CLAUDE_SKILL_DIR}`.
 The janitor's `card` kind is this same code, so the scheduled round closes what `scan` would.
 
 ## Run

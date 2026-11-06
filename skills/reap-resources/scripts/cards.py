@@ -548,10 +548,10 @@ def refuse_plan(text, rows):
 
 
 def preflight(items, cfg):
-    """Why the round must not start, or None. Judges every acting row again, read-only and without the card lock, the
-    way act_locked does before its first close: a card that moved, changed or is held back by a guard stops the whole
-    plan, so no card is closed on a plan that is already out of date. A card that changes after this still gets
-    skipped alone, inside act."""
+    """Why the round must not start, or None. Judges every acting row again, read-only, the way act_locked does before
+    its first close; main holds every card's lock around it. A card that moved, changed or is held back by a guard
+    stops the whole plan, so no card is closed on a plan that is already out of date. A card that changes after this
+    still gets skipped alone, inside act."""
     import guard
     for i in items:
         if i["verdict"] not in ACTING:
@@ -609,6 +609,10 @@ def main(argv):
     cmd = argv[1] if len(argv) > 1 else "scan"
     cfg = reap.config()
     if cmd == "apply":
+        # The card locks live under the state directory: another one would not see a card a cleaner holds in the account's.
+        if reap.STATE.resolve() != reap.STATE_HOME.resolve():
+            sys.exit("아무것도 닫지 않았다: apply 는 기본 상태 디렉터리에서만 돈다(--state·AGENT_SKILLS_STATE 로 옮기면 "
+                     "다른 정리가 잡은 카드 잠금이 보이지 않는다)")
         # Bytes, not read_text(): its newline translation would hash a CRLF-edited file as the sealed text.
         text = pathlib.Path(reap.opt("--plan") or sys.exit("apply needs --plan PLAN.json")).read_bytes().decode()
         if why := refuse_plan(text, cards_listing()):

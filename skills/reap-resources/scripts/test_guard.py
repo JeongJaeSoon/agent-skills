@@ -356,6 +356,7 @@ def cards_apply(items):
     cards.SEAL_DIR = tmp / "seals"
     cards.seal_plan(text)  # as scan --plan does
     cards.cards_listing = lambda repo_list=(): [{"path": CARD}]
+    reap.STATE_HOME = reap.STATE  # this test's state directory stands for the account's
     cards.preflight = lambda items, cfg: None  # the preflight is tested in test_cards.py; these cases are the per-card loop
     out, argv = io.StringIO(), sys.argv
     sys.argv = ["cards.py", "apply", "--plan", str(plan)]
