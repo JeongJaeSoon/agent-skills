@@ -178,7 +178,7 @@ def loop_around(text, cmds, pos):
              if at_command_start(text, m.start())]
     # text has quoted words blanked, so a quoted "done" (an ordinary command) does not close the loop.
     marks += [(c.span[1], "close") for c in cmds
-              if c.name == "done" and c.words == ["done"] and text[c.span[1] - 4:c.span[1]] == "done"]
+              if c.name == "done" and c.words == ["done"] and text[c.span[0]:c.span[1]].split()[:1] == ["done"]]
     starts, best = [], None
     for at, kind in sorted(marks):
         if kind == "open":

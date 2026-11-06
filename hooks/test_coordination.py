@@ -224,6 +224,9 @@ for cmd in ("while true; do gh pr view 1; echo done; sleep 60; done",
             "while true; do gh pr view 1; echo then done; sleep 60; done",
             "sleep 300; while true; do gh pr view 1; echo do for; sleep 60; done",
             'while true; do gh pr view 1; "done"; sleep 60; done',
+            "while true; do gh pr view 1; sleep 60; done ; echo ok",
+            "while true; do gh pr view 1; sleep 60; done > /dev/null",
+            "while true; do gh pr view 1; sleep 60; done # keep",
             "while true; do gh pr view 1; sleep 300 & sleep 1 & wait $!; done"):
     assert "pr_watch.py" in monitor(cmd)[1], "must warn: " + cmd
 for cmd in ("gh pr view 1; sleep 60",
