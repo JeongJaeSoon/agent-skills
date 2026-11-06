@@ -1322,6 +1322,11 @@ try:
     assert dash.fleet_run("run_a") is None, "a settled Run may sit in the fleet's 900 s cache: asked of Orca"
     settled.runs["tasks"][0]["status"] = "running"
     assert dash.fleet_run("run_a") is not None, "one moving task keeps the Run on the snapshot"
+    settled.runs["tasks"][0]["status"] = "completed"
+    settled.runs["workers"][0]["dispatchStatus"] = "running"
+    assert dash.fleet_run("run_a") is not None, "one running worker keeps the Run on the snapshot"
+    settled.runs["workers"], settled.runs["tasks"] = [], []
+    assert dash.fleet_run("run_a") is None, "a Run with no worker and no task (gates only, or empty) is asked of Orca"
     dash.FLEET = RunsFleet(now_iso)
     dash.FLEET = RunsFleet(dash.iso(dash.utcnow() - dt_mod.timedelta(seconds=dash.FLEET_RUNS_TTL_S + 5)))
     assert dash.fleet_run("run_a") is None, "a stale runs snapshot must not be reused"
