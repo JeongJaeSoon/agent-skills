@@ -27,7 +27,13 @@ python3 "$C" apply --plan <scratchpad>/cards-plan.json   # after the person has 
 ```
 
 Show the table and stop before `apply`: the person running it confirms. A 사람 결정 row is theirs to settle; `apply`
-never touches it. From a shell the same two lines work with the checkout's path in place of `${CLAUDE_SKILL_DIR}`.
+never touches it. `apply` takes only the plan file `scan --plan` just wrote: it records the plan's digest in
+`~/.local/state/agent-skills/card-plan-seals.json` (the account's home, which `--state` does not move), and a plan written or edited since, or one with an acting row that is not a card Orca
+lists (the main checkout included), is refused whole, with nothing closed. So is a plan with any acting card that has
+changed since the scan (verdict, HEAD, folder, a guard now holding it back, or another cleaner holding its lock):
+`apply` takes every acting card's lock and judges every card again before it closes the first, and the fix is a new
+`scan --plan`. It runs only in the account's default state directory (`--state` and `$AGENT_SKILLS_STATE` are
+refused), because the locks live there. A card that changes after that is skipped alone. From a shell the same two lines work with the checkout's path in place of `${CLAUDE_SKILL_DIR}`.
 The janitor's `card` kind is this same code, so the scheduled round closes what `scan` would.
 
 ## Run
@@ -89,7 +95,7 @@ line adds to it and keeps the owner links. `--pid` is recorded, never checked: t
 | Kind | Target when | Kept when | Action |
 |---|---|---|---|
 | card | [references/cards.md](references/cards.md) 삭제 or 터미널만 닫기 | 남김, 사람 결정 (reported, never acted on) | the listed terminals closed one by one; for 삭제, judged again, ignored files to the trash, `orca worktree rm --worktree path:<p> --run-hooks` |
-| orca-worker | a row of `orca orchestration worker-list --terminal-state reclaimable` | - | `orca orchestration worker-release --dispatch <id>` |
+| orca-worker | a row of `orca orchestration worker-list --terminal-state reclaimable`, unless its `resource.autoReleaseAt` is still ahead (Orca releases that one itself) | - | `orca orchestration worker-release --dispatch <id>` |
 | tmpdir | under a temp dir, its link is done, and no process has its cwd or executable under it | outside a temp dir, an open PR, no link, a process in it; a path already gone is not listed | `lsregister -u` each `.app` under it, then the trash |
 | gui-app | the registered pid with the same start time still runs and its link is done | an open PR, no link | `kill -TERM <pid>` |
 | chrome-window | its link is done and its URL is recorded | an open PR, no link, no URL (Chrome reuses ids after a restart, so without the URL the agent cannot tell it is the same tab) | `reap` prints `에이전트가 처리` and retires the id in the ledger, so it is asked once; the agent closes it with its browser tools only when the URL matches, and leaves it otherwise or when it has no browser tools |
@@ -404,6 +410,10 @@ a subagent does not count; an Orca that gives no `workingMode` or `mainAgent` is
 `Monitor` on `python3 "$P" turns --wait 15`, which exits 0 once under the cap and 3 after the wait (2 when `--wait` has no minute count: it never skips the wait). A count Orca cannot
 give (no answer, a cut-short list) holds like a full one, in the hook and in `turns`/`turns --wait` alike (`turn_hold`):
 the wait polls until the count is readable and exits 3 with "cannot count" if it never is; only `null` turns the cap off.
+`max_sessions` (`reap.pressure`, unset = off) is a second cap on the same start: Orca's listed agent sessions, working or
+idle, the caller's own left out. Idle sessions hold memory the turn count never sees. It holds, waits and exits 3 the same
+way (`session_hold`, shared by the hook, `turns` and `turns --wait`); a count Orca cannot give holds like a full one.
+The default is no cap because the right number depends on the machine.
 The caller's own turn is left out of the count (its pane key comes from `$ORCA_TERMINAL_HANDLE`), so the wait, which runs
 while the caller's turn is over, and the hook, which runs inside it, give one verdict; a caller that cannot be identified
 is counted like any other turn and the output carries a warning line.

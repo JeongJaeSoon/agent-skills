@@ -408,6 +408,17 @@ class Program:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
         return row
 
+    def append_if(self, ev, ok, **fields):
+        """append, unless ok(events) is false; None then. One lock over the read and the write, so a row another
+        process appends in between is seen by ok, not overwritten in effect."""
+        row = {"ts": now(), "ev": ev, **{k: v for k, v in fields.items() if v is not None}}
+        with self.locked():
+            if not ok(self.events()):
+                return None
+            with self.ledger_path.open("a") as f:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        return row
+
     def append_once(self, ev, seen, **fields):
         """append, unless a row already satisfies seen; None then. One lock over both, or two rounds both pass."""
         row = {"ts": now(), "ev": ev, **{k: v for k, v in fields.items() if v is not None}}
@@ -2565,7 +2576,11 @@ def merge_unit(p, pr, unit, klass, events, onto=None, stacked=False, expect=None
             return 3, f"act: #{n} has {threads} unresolved review thread(s): answer and resolve them, then land again"
     if expect:
         # The verdict the executor checked may have been replaced since: merge only on the one standing now.
-        latest = pr_state(p.events()).get(pr, {}).get("verdict") or {}
+        import autoqueue
+        now_events = p.events()
+        if autoqueue.withdrawn(now_events, pr):  # a stop recorded during the checks is read from this same snapshot
+            return 3, f"act: #{pr}'s land was stopped during the checks: record a verdict at the head or land again"
+        latest = pr_state(now_events).get(pr, {}).get("verdict") or {}
         p.land_verdict = latest
         if latest.get("sha") != expect or latest.get("result") != "pass" or \
                 (verdict_sources is not None and (latest.get("source") not in verdict_sources
@@ -2877,7 +2892,9 @@ def land_executor(repo=None):
         # A wait that can never end (NaN, inf) or a typo ("24h") would keep requests queued for ever.
         sys.exit(f"{path}: orchestrate.land_executor.max_wait_hours must be a positive number of hours, "
                  f"not {cfg.get('max_wait_hours')!r}")
-    return {"repos": repos, "verdict_sources": cfg.get("verdict_sources") or ["review:codex"], "max_wait_hours": hours}
+    import autoqueue
+    return {"repos": repos, "verdict_sources": cfg.get("verdict_sources") or ["review:codex"], "max_wait_hours": hours,
+            "auto_queue": autoqueue.config(cfg.get("auto_queue"))}
 
 
 LAND_EXIT = {"merged": 0, "superseded": 2}
@@ -3404,13 +3421,22 @@ SELF_CHECK = ("Self-check: is any work left on this card? If none, run end-sessi
               "If some, say what it is and keep it.")
 
 
-def settle_sweep(workers, worktrees, skip=(), holds=card_holds, asked=None, now=None):
+def auto_release_ahead(w, now):
+    scripts = str(pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    import auto_release
+    return auto_release.ahead(w, now)
+
+
+def settle_sweep(workers, worktrees, skip=(), holds=card_holds, asked=None, now=None, clock=time.time):
     path = {w["id"]: w.get("path") for w in worktrees if not w.get("isMainWorktree")}
     asked = {} if asked is None else asked
     seen, out, kept = {}, [], []
     for w in workers:
         d, res, taken = w.get("dispatchId"), w.get("resource") or {}, taken_over(w)
-        if not d or (not taken and (w.get("terminalState") not in ("reclaimable", "release_unknown") or d in skip)):
+        if not d or (not taken and (w.get("terminalState") not in ("reclaimable", "release_unknown") or d in skip
+                                    or auto_release_ahead(w, clock()))):
             continue
         p = path.get(res.get("worktreeId"))
         if p and p not in seen:

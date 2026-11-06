@@ -13,7 +13,7 @@ which session they reach is roles.applies' matrix, how hard they hold is a key i
   which takes no model. A `worker-start` whose `--model` differs from `orchestrate.models.worker` also warns, and
   one warning says the value was not compared when that key is unset. These never go above warn.
 - orchestrate.pr_poll (warn): a Monitor command that polls `gh pr list|view|checks` in a loop with a sleep under 300 s.
-  The warning points at scripts/pr_watch.py. It never goes above warn.
+  The warning points at the `pr-watch` command (bin/pr-watch). It never goes above warn.
 """
 import re
 
@@ -236,8 +236,9 @@ def check_monitor(cmd, cfg):
         return []
     return finding(cfg, "orchestrate.pr_poll",
                    f"This Monitor polls `gh pr` every {wait:g} s, and each state change wakes the session. Use "
-                   "skills/orchestrate/scripts/pr_watch.py: it checks every 300 s or more and prints only a merge or "
-                   "close, a CI failure, READY, a conflict appearing or clearing, and a new PR.")
+                   "`pr-watch --repo OWNER/REPO` (the plugin's bin/ is on PATH, so it runs from any repo): it checks every "
+                   "300 s or more and prints only a merge or close, a CI failure, READY, a conflict appearing or "
+                   "clearing, and a new PR.")
 
 
 def check_bash(cmd, background, s, cfg):
