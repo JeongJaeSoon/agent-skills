@@ -318,7 +318,7 @@ Reports completed work, current work, decisions and human-only steps with eviden
 - **Bundled:** `references/pruner.md` (the instructions for the pruning subagent).
 
 ### write-skill
-Checks a skill edit for overlapping triggers, unnecessary policy, prompt quality, private names, runnable tests and plugin validity. Edits the authorized source checkout; installed copies and unrelated global settings are not the target.
+Checks a skill edit for overlapping triggers, unnecessary policy, prompt quality, private names, runnable tests and plugin validity. The tests, the pstack sync test and `claude plugin validate` run as one `scripts/check.sh`; a description change runs `claude plugin eval` on the old and new checkout through `scripts/eval_desc.sh`. Edits the authorized source checkout; installed copies and unrelated global settings are not the target.
 
 ## pstack skills (Lauren Tan, MIT)
 
