@@ -702,8 +702,13 @@ def run(argv):
         read_body(args.body_file)
         return adapter.comment(args.id, args.body_file)
     if args.cmd == "attach":
-        parts = urllib.parse.urlsplit(args.url)
-        if parts.scheme not in ("http", "https") or not parts.netloc:
+        try:
+            parts = urllib.parse.urlsplit(args.url)
+            valid = parts.scheme in ("http", "https") and bool(parts.hostname)
+            parts.port  # raises ValueError when out of range
+        except ValueError:
+            valid = False
+        if not valid:
             raise TrackerError(f"attach: --url must be an absolute http(s) URL, got {args.url!r}")
         return adapter.attach(args.id, args.url, args.title)
     return adapter.transition(args.id, args.to)

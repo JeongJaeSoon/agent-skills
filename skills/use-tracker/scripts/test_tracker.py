@@ -412,7 +412,8 @@ class LinearCli(unittest.TestCase):
         self.env.run("attach", "ENG-10", "--url", url, "--title", "PR #1")
         self.assertEqual(self.env.orca_calls()[-1][6], "PR #1")
         before = len(self.env.orca_calls())
-        for bad in ("ftp://example.test/x", "github.com/acme/app/pull/1"):
+        for bad in ("ftp://example.test/x", "github.com/acme/app/pull/1", "https://:443", "https://[bad",
+                    "https://example.test:99999/x"):
             proc, _ = self.env.run("attach", "ENG-10", "--url", bad)
             self.assertEqual(proc.returncode, 1)
             self.assertIn("http(s)", proc.stderr)
