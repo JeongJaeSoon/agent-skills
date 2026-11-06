@@ -272,8 +272,8 @@ PR 을 맡는 스킬과 머지 주체:
 - **언제:** 티켓을 읽기, 찾기, 만들기, 라벨·댓글 달기, 상태 바꾸기 할 때와 스크립트가 티켓 데이터를 쓸 때.
 - **내용:**
   - 트래커는 프로그램 설정 → `~/.claude/agent-skills.json` → 기본값 linear 순서로 정한다.
-  - 세션에서는 MCP(Linear는 `orca linear`)를 우선하고, 스크립트는 항상 `tracker.py`를 쓴다. `tracker.py` 명령은 list, get, children, create, label, comment, transition이다. transition은 현재 상태를 먼저 읽어 이미 그 단계이거나 더 나아간 티켓은 바꾸지 않는다. `--to review`는 설정의 `tracker.<adapter>.review_status`가 있으면 그 이름의 상태로, 없으면 In Review로, 그것도 없으면 이름에 review가 든 유일한 started 상태로 옮긴다.
-  - 쓰기는 모두 담당 에이전트에 맡기고 읽기만 여기서 한다. 담당은 사용자 지시 → 설정의 `tracker.delegate_agent` → 플러그인 agent `agent-skills:task-tracker` 순서로 정하고, `"none"`이면 세션에서 직접 쓴다. `task-tracker`는 트래커 사이트 고유 규칙(프로젝트, 상태·전이 id, 라벨, 언어)을 `tracker.rules_file`이 가리키는 사용자 Markdown에서 매번 읽는다. 키가 있는데 파일이 없거나 읽지 못하면 추측하지 않고 멈춘다.
+  - 세션에서 Linear는 `orca linear`를 먼저 쓰고(기본 텍스트 출력, 결과를 파싱할 때만 `--json`), `orca linear`에 없는 기능(문서, 파일·이미지 업로드, diff 리뷰, release, milestone·cycle 등)만 Linear MCP로 한다. Jira는 연결돼 있으면 MCP를 쓴다. 스크립트는 항상 `tracker.py`를 쓴다. `tracker.py` 명령은 list, get, children, create, label, comment, attach, transition이다. transition은 현재 상태를 먼저 읽어 이미 그 단계이거나 더 나아간 티켓은 바꾸지 않는다. `--to review`는 설정의 `tracker.<adapter>.review_status`가 있으면 그 이름의 상태로, 없으면 In Review로, 그것도 없으면 이름에 review가 든 유일한 started 상태로 옮긴다.
+  - 정해진 milestone(상태 전이, PR 링크, 완료 코멘트)은 `tracker.py` 한 줄(`transition`, `attach`, `comment`)로 세션에서 직접 하고 MCP나 담당 에이전트를 거치지 않는다. 그 밖의 쓰기는 모두 담당 에이전트에 맡기고 읽기만 여기서 한다. 담당은 사용자 지시 → 설정의 `tracker.delegate_agent` → 플러그인 agent `agent-skills:task-tracker` 순서로 정하고, `"none"`이면 세션에서 직접 쓴다. `task-tracker`는 트래커 사이트 고유 규칙(프로젝트, 상태·전이 id, 라벨, 언어)을 `tracker.rules_file`이 가리키는 사용자 Markdown에서 매번 읽는다. 키가 있는데 파일이 없거나 읽지 못하면 추측하지 않고 멈춘다.
   - 값을 가리는 읽기 경로(`<PERSON>` 같은 개체 자리표시자나 `****`)에서 읽은 값은 데이터가 아니다. 판단·되쓰기 전에 가리지 않는 경로로 다시 읽고, 가려진 값을 필드에 되쓰지 않는다.
   - 상태 어휘는 triage, backlog, unstarted, started, completed, canceled다.
   - 완료 조건은 상위 티켓 본문(`✅ 완료 조건`, `🚫 범위 밖`, `⏸️ 보류`)에, 부모 없는 티켓은 인수 조건에 둔다. NOW로 분류한 발견만 티켓이 된다.
