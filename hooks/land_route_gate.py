@@ -287,7 +287,7 @@ def check(event, cmd):
     sources = cfg.get("verdict_sources") or ["review:codex"]
     sources = sources if isinstance(sources, list) else [str(sources)]
     cwd = event.get("cwd")
-    known = []
+    known, notes = [], []  # a note waits for the call's other merges: any one of them may deny
 
     def login():
         if not known:
@@ -311,14 +311,19 @@ def check(event, cmd):
         if land_scope.excluded(scope, repo) or repo.split("/")[0].casefold() not in land_scope.owners(scope):
             continue
         personal = repo.split("/")[0].casefold() == login().casefold()
-        slug, with_repo, policy, recorded = route(repo, pr, first, asked, cwd)
+        try:
+            slug, with_repo, policy, recorded = route(repo, pr, first, asked, cwd)
+        except Refuse as e:  # out of scope, a program lookup that fails denies nothing
+            notes += [f"{MARK} {SOURCE} {repo} is outside orchestrate.land_executor's scope; {e}"] if personal else []
+            continue
         moved = bool(recorded) and recorded.casefold() != repo.casefold() and bool(covers(scope, recorded, login))
         if not personal and not moved:
             continue  # an org's or another user's repo out of scope keeps its own review and approval flow
         if not with_repo and not moved:  # a program's PR: `orch land` merges it directly while the repo is out
-            return (f"{MARK} {SOURCE} {repo} is outside orchestrate.land_executor's scope, and {repo}#{pr or '<N>'} "
-                    f"belongs to program {slug}: `orch land` merges it directly. "
-                    f"{land_lines(repo, pr, head, slug, False, policy, sources)}"), False
+            notes.append(f"{MARK} {SOURCE} {repo} is outside orchestrate.land_executor's scope, and "
+                         f"{repo}#{pr or '<N>'} belongs to program {slug}: `orch land` merges it directly. "
+                         f"{land_lines(repo, pr, head, slug, False, policy, sources)}")
+            continue
         one, owner = scope_spec(cfg, repo)
         if moved:  # prog.executor_for refuses it: covered under the recorded name only
             return (f"{MARK} {SOURCE} program {slug} records {recorded}, which GitHub calls {repo} now, and the scope "
@@ -328,14 +333,14 @@ def check(event, cmd):
                     f"{repo} to orchestrate.land_executor.exclude to merge it directly). Then: "
                     f"{land_lines(repo, pr, head, slug, False, policy, sources)} Never hand a `gh pr merge` line to "
                     "the owner."), True
-        return (f"{MARK} {SOURCE} {repo} is your own repo outside orchestrate.land_executor's scope, so this call "
-                f"passes and merges as it would without the executor. To land its PRs through the executor, put it in "
-                f"scope with skills-config: write the spec {one} to a file (or {owner} for every repo of "
-                f"{repo.split('/')[0]}, including ones made later), run `python3 {EMIT} emit --spec <that file> "
-                "--out <script file>`, and give the owner the run line it prints. Once it is in scope: "
-                f"{land_lines(repo, pr, head, slug, True, policy, sources)} To keep {repo} out on purpose, the owner "
-                "adds it to orchestrate.land_executor.exclude, which silences this note."), False
-    return None
+        notes.append(f"{MARK} {SOURCE} {repo} is your own repo outside orchestrate.land_executor's scope, so this call "
+                     "passes and merges as it would without the executor. To land its PRs through the executor, put it "
+                     f"in scope with skills-config: write the spec {one} to a file (or {owner} for every repo of "
+                     f"{repo.split('/')[0]}, including ones made later), run `python3 {EMIT} emit --spec <that file> "
+                     "--out <script file>`, and give the owner the run line it prints. Once it is in scope: "
+                     f"{land_lines(repo, pr, head, slug, True, policy, sources)} To keep {repo} out on purpose, the "
+                     "owner adds it to orchestrate.land_executor.exclude, which silences this note.")
+    return (" ".join(notes), False) if notes else None
 
 
 def emit(decision, text):

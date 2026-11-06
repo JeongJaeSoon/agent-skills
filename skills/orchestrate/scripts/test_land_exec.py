@@ -954,6 +954,13 @@ class Drift(unittest.TestCase):
         self.assertFalse(any("repo 목록" in l for l in lines), "an org's listing is never asked for")
         self.assertTrue(any("acme/app" in l and "program이 없는" in l for l in lines), "a named org repo stays in")
 
+    def test_an_org_wildcard_never_covers_a_renamed_entry(self):
+        config(repos=["acme/old", "acme/*"])
+        self.write(list_fail=True, repos={"acme/old": {"nameWithOwner": "acme/new"}})
+        lines = land_exec.drift_lines()
+        self.assertTrue(any("acme/old는 GitHub에서 acme/new로 이름이 바뀌어" in l for l in lines), lines)
+        self.assertFalse(any("program이 없는" in l for l in lines), lines)
+
     def test_github_not_answering_is_one_line(self):
         config(repos=["o/*"])
         self.write(user_fail=True)

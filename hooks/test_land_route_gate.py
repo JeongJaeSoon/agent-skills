@@ -21,6 +21,11 @@ if [ "$1" = api ]; then
   [ -s "$FAKE_GH_API" ] || exit 1
   cat "$FAKE_GH_API"; exit 0
 fi
+prev=""
+for a in "$@"; do
+  if [ "$prev" = --repo ] && [ -f "$FAKE_GH_PR.$(echo "$a" | tr / _)" ]; then cat "$FAKE_GH_PR.$(echo "$a" | tr / _)"; exit 0; fi
+  prev="$a"
+done
 cat "$FAKE_GH_PR"
 """
 (BIN / "gh").write_text(FAKE_GH)
@@ -181,6 +186,17 @@ assert run("gh pr merge 3 --repo acme/new", gh=NEW, login="me") == {}, "an org r
 program("newprog", repo="acme/new", prs=(3,))
 assert run("gh pr merge 3 --repo acme/new", gh=NEW, login="me") == {}, "an org program's PR out of scope"
 shutil.rmtree(PROGRAMS / "newprog")
+# ... nor when a program elsewhere records the same PR number and GitHub cannot say where its repo leads.
+program("unrelated", repo="other/repo", prs=(3,))
+assert run("gh pr merge 3 --repo acme/new", gh=NEW, login="me") == {}, "an unanswered lookup never denies an org repo"
+shutil.rmtree(PROGRAMS / "unrelated")
+# A note for one merge never lets a later, covered merge in the same call through.
+config(repos=["acme/app"])
+PER_REPO = pathlib.Path(f"{PR}.acme_app")
+PER_REPO.write_text(APP)  # `--repo acme/app` answers with its own PR, the rest with acme/new's
+out = run("gh pr merge 3 --repo acme/new; gh pr merge 7 --repo acme/app", gh=NEW)
+PER_REPO.unlink()
+assert decision(out) == "deny" and "acme/app is in orchestrate.land_executor's scope" in reason(out), out
 # ... but a program whose recorded name is listed while GitHub's current name is not: orch land refuses it, so the
 # denial gives the spec that lists the new name, never "merges directly".
 config(repos=["acme/old-name"])

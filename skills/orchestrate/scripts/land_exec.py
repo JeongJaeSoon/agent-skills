@@ -348,7 +348,8 @@ def drift_lines(today=None):
         except (SystemExit, KeyError, TypeError, ValueError) as e:
             out.append(f"경고: repos의 {entry}를 GitHub에서 확인하지 못함: {str(getattr(e, 'code', e))[:120]}")
             continue
-        if now_named.casefold() != entry and land_scope.how(scope, now_named):
+        if now_named.casefold() != entry and land_scope.how(scope, now_named) \
+                and not land_scope.owner_refused(scope, now_named, login):
             covered.setdefault(now_named.casefold(), now_named)  # OWNER/* still covers the new name
         elif now_named.casefold() != entry:
             out.append(f"경고: repos의 {entry}는 GitHub에서 {now_named}로 이름이 바뀌어 범위에서 빠졌다"
