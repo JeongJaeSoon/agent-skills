@@ -36,6 +36,7 @@ SEPARATORS = set("();&|\n")
 MARK = "[gate:pressure]"
 # The hook's name after the marker: the model sees only the reason text, not which hook wrote it.
 SOURCE = "(agent-skills hooks/pressure_gate.py)"
+GATE_BUDGET_S = 15  # Orca queries share this; hooks.json gives the hook 20s
 # PostToolUse and PostToolUseFailure: a Bash exit other than 0 is the failure event, with "Exit code N" as its error.
 POST = {"PostToolUse": "done", "PostToolUseFailure": "failed"}
 NEW_CARD = ("orca worktree create", "orca orchestration worker-start")
@@ -514,10 +515,14 @@ def gate(cmd, metrics, state, cfg, now=None, p=None, session="", cwd=""):
             return None
         n, cap = p.active_turns(), p.turn_cap(cfg)
         s, scap, s_hold = p.session_hold(cfg)
-        if not p.turn_hold(n, cap) and not s_hold:
+        w, wcap, w_hold = p.worker_hold(cfg)
+        if not p.turn_hold(n, cap) and not s_hold and not w_hold:
             return None
         py = shlex.join(["python3", str(SCRIPT)])
-        if s_hold:
+        if w_hold:
+            seen = (f"이 Run의 워커가 {w}개로 상한 {wcap}개(`reap.pressure.max_workers_per_run`)에 닿아" if w is not None
+                    else f"이 Run의 워커 수를 셀 수 없어(Orca 응답 없음·목록 잘림, 상한 {wcap}개)")
+        elif s_hold:
             seen = (f"에이전트 세션이 {s}개로 상한 {scap}개(`reap.pressure.max_sessions`)에 닿아" if s is not None
                     else f"에이전트 세션 수를 셀 수 없어(Orca 응답 없음·목록 잘림, 상한 {scap}개)")
         else:
@@ -582,8 +587,12 @@ def main():
             return 0
         cfg = pressure.config()
         state = pressure.load_state()
-        out = gate(cmd, pressure.snapshot(cfg, state, idle_fn=pressure.live(cfg)), state, cfg, p=pressure, session=session,
-                   cwd=str(event.get("cwd") or ""))
+        pressure.DEADLINE = time.time() + GATE_BUDGET_S  # measuring and counting share it: a slow answer must deny, not time out
+        try:
+            out = gate(cmd, pressure.snapshot(cfg, state, idle_fn=pressure.live(cfg)), state, cfg, p=pressure,
+                       session=session, cwd=str(event.get("cwd") or ""))
+        finally:
+            pressure.DEADLINE = None
         if not out:
             pressure.queue_mark(session, cmd, "retrying")
     except Exception:  # a broken measurement must not block work

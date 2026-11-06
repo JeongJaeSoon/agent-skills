@@ -408,6 +408,10 @@ the wait polls until the count is readable and exits 3 with "cannot count" if it
 idle, the caller's own left out. Idle sessions hold memory the turn count never sees. It holds, waits and exits 3 the same
 way (`session_hold`, shared by the hook, `turns` and `turns --wait`); a count Orca cannot give holds like a full one.
 The default is no cap because the right number depends on the machine.
+`max_workers_per_run` (`reap.pressure`, unset = off) caps one lead: when the caller is bound to an orchestration Run
+(`orca orchestration run-current`), a new card waits while that Run has this many active supervised workers
+(`worker-list --run <id> --terminal-state active`). A session bound to no Run is never held by it. Same verdict path
+(`worker_hold`) and exit 3 as the other two caps; an answer Orca cannot give, or a list cut short by its page, holds.
 The caller's own turn is left out of the count (its pane key comes from `$ORCA_TERMINAL_HANDLE`), so the wait, which runs
 while the caller's turn is over, and the hook, which runs inside it, give one verdict; a caller that cannot be identified
 is counted like any other turn and the output carries a warning line.

@@ -45,7 +45,7 @@
 | 소비처 | 읽는 값 | 효과 |
 |---|---|---|
 | `hooks/pressure_gate.py`, `card.py`의 카드 생성 | `judge`가 모든 지표 중 최악 수준 | 전체 테스트·E2E·브라우저 실행이 `orch heavy` 밖이면 수준과 무관하게 거절하고 슬롯으로 감싸라고 한다. 수준 게이트는 `orch heavy`·compose·새 카드의 시작에 걸린다. ok는 통과, warn은 `round` 한 번 뒤 15분(`gate_fresh_minutes`) 동안 통과, danger는 대기열에 넣고 `queue wait`로 기다린다. 디스크만 위험이면 대기하지 않는다 |
-| 같은 hook, 새 카드 | 진행 중인 턴 수 ≥ `active_turns_per_cpu`×CPU, 또는 설정했다면 살아 있는 에이전트 세션 수 ≥ `max_sessions` | 수준과 무관하게 새 카드만 막는다. `max_sessions`는 기본이 꺼짐이다 |
+| 같은 hook, 새 카드 | 진행 중인 턴 수 ≥ `active_turns_per_cpu`×CPU, 또는 설정했다면 살아 있는 에이전트 세션 수 ≥ `max_sessions`, 또는 호출 세션이 Run에 묶여 있고 그 Run의 활성 워커 수 ≥ `max_workers_per_run` | 수준과 무관하게 새 카드만 막는다. `max_sessions`는 기본이 꺼짐이다 |
 | `orch heavy` | 위 hook이 같은 수준으로 먼저 판정하고, 통과하면 슬롯 수(기본 2) | 슬롯은 수준과 무관하다 |
 | `pressure.py round` | 같은 수준 | warn·danger에서 reap 안전 대상을 정리하고, warn·danger로 수준이 바뀔 때(warn↔danger 포함) patrol을 부른다. danger는 알림과 Needs you |
 | `patrol` | 마지막 수준 | danger에서는 정리 스캔을 건너뛴다 |
@@ -88,6 +88,7 @@ CPU 사용률은 직전 회차 사이 CPU tick 차이라 회차 간격(`interval
 - 새 카드는 Orca가 `working`으로 보이는 에이전트 턴이 `active_turns_per_cpu` × 논리 CPU(기본 0.5, 18코어면 9개) 이상이면 기다린다. 18:42에 턴이 진행 중이던 카드 10개만으로 CPU가 포화됐고, 19:24에는 `working` 21개에 load5 104였다. 상한은 포화가 관측된 10개보다 낮게, 코어 수에 비례하게 잡았다. 이미 도는 턴은 끊지 않고 새 카드만 막으므로, 턴이 끝나는 대로 다시 열린다. Orca가 턴 수를 주지 못하면(응답 없음, 목록 잘림) 센 수가 없는 것이지 0이 아니므로 가득 찬 것과 같이 막는다. hook·`turns`·`turns --wait`가 `turn_hold` 하나로 판정하고, `turns --wait`는 셀 수 있을 때까지 기다리다 끝내 못 세면 "셀 수 없음"을 출력하고 3으로 끝난다.
 - 턴이 끝났어도 백그라운드 셸, `orch wait`, orchestration `ask`, 서브에이전트를 기다리는 에이전트는 Orca가 `working`으로 둔다. 이런 에이전트는 `workingMode`가 `monitoring`이거나 `mainAgent.state`가 `working`이 아니며, 턴을 돌리지 않으므로 세지 않는다. 2026-11-03에는 `working` 9개 중 4개가 이 상태였는데도 9개가 상한 9에 닿아 새 카드가 막혔다. 두 필드가 모두 없는 Orca 출력은 예전처럼 `state`만 보고 센다.
 - 턴 수는 쉬고 있는 세션을 보지 못한다. 유휴 세션도 메모리를 쥐므로 `max_sessions`(`reap.pressure`, 기본 없음=꺼짐)를 정하면 Orca가 나열하는 에이전트 세션 수(작업 중이든 유휴든, 호출 세션 제외)가 그 값에 닿았을 때도 새 카드를 막는다. 값은 머신마다 달라 기본값을 두지 않는다. 판정·대기·종료 코드 3은 턴 상한과 같은 경로(`session_hold`)이고, 세션 수를 셀 수 없으면 가득 찬 것과 같이 막는다.
+- 리드 한 명이 워커를 너무 많이 쥐는 것은 전체 세션 수로는 보이지 않는다. `max_workers_per_run`(`reap.pressure`, 기본 없음=꺼짐)을 정하면 호출 세션이 묶인 Run(`orca orchestration run-current`)의 활성 워커(`worker-list --run <id> --terminal-state active`)가 그 값에 닿았을 때 `orca worktree create`와 새 worktree로 가는 `worker-start`(`new-top-level`·`new-child`)를 막는다. Run에 묶이지 않은 세션은 영향이 없다. 판정·대기·종료 코드 3은 다른 두 상한과 같은 경로(`worker_hold`)이고, Orca가 답하지 못하거나 목록이 잘렸으면 가득 찬 것과 같이 막는다. hook은 PC 측정과 Orca 조회 전체에 15초 예산(`GATE_BUDGET_S`)을 두어, 이 시간이 지난 조회는 시작하지 않고 답이 없는 것으로 읽는다(턴·세션·워커 수는 막는 쪽으로 끝난다). 20초 제한 안에 끝난다는 보장은 조회가 예산 안에서 끝나는 한에서다.
 - 판정을 부른 세션 자신의 턴은 세지 않는다. 리드가 `turns --wait`로 쉬는 동안에는 자기 턴이 끝나 8개로 나와 exit 0이 되지만, 깨어나 `worker-start`를 부르면 자기 턴이 돌고 있어 hook이 9개로 세고 거절했다(2026-11-05에 다섯 번 재현). 그러면 대기가 헛돌았다. 이제 `active_turns`가 `ORCA_TERMINAL_HANDLE`로 `orca terminal show`를 불러 얻은 pane key(`tabId:leafId`)와 같은 에이전트를 뺀다. 상한 값과 경계(`n >= 상한`)는 그대로다. 다른 세션의 턴은 그대로 센다. 호출 세션을 알아내지 못하면(핸들 없음, 조회 실패) 예전처럼 자기 턴도 세고, `turns` 출력과 hook 거절 사유에 경고 한 줄을 붙인다.
 
 Docker CPU(`docker_cpu_pct`)는 `docker_mem_pct`와 같은 `docker stats` 한 번에서 읽는다. OrbStack VM의 vCPU는 호스트 스레드라서 Docker의 CPU 사용은 호스트 CPU idle에도 그대로 잡힌다. 그래서 위험 판정은 호스트 CPU가 맡고, Docker CPU는 부하가 Docker 쪽에 있다는 경고와 정리 회차에만 쓴다.

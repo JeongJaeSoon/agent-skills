@@ -13,8 +13,9 @@ Usage:
                      (its session runs the same command again), 3 when it should not run (deadline passed, or gone)
   pressure.py turns [--wait MINUTES]
                      agent turns Orca shows in progress against the new-card cap (active_turns_per_cpu), and agent
-                     sessions listed against max_sessions when that is set; exit 1 at either cap or when a count is
-                     unreadable. --wait polls until under both (0) or MINUTES pass (3)
+                     sessions listed against max_sessions and the caller's Run's active workers against
+                     max_workers_per_run when those are set; exit 1 at any cap or when a count is unreadable.
+                     --wait polls until under all (0) or MINUTES pass (3)
   pressure.py history [--hours H]
                      JSON for the dashboard: the last round's level and metrics, the thresholds, the queue, and one
                      point per round over the last H hours (default 6, at most 24). Reads files only, measures nothing
@@ -89,6 +90,9 @@ DEFAULTS = {
     "active_turns_per_cpu": 0.5,
     # A new card also waits while Orca lists this many agent sessions, working or idle (memory, not CPU). Unset: off.
     "max_sessions": None,
+    # A lead (a session bound to an orchestration Run) also waits while this many supervised workers of that Run are
+    # active, before it starts another card. Unset: off. A session with no Run is never held by it.
+    "max_workers_per_run": None,
     "top": 5,
 }
 # (metric, higher is worse); each is also its threshold's key
@@ -109,7 +113,7 @@ def config(overrides=()):
         default = DEFAULTS[key]
         if key in ("safe_kinds", "always_on"):
             cfg[key] = value.split(",")
-        elif key == "max_sessions":  # default None, so it needs its own parse; "none" turns it back off
+        elif key in ("max_sessions", "max_workers_per_run"):  # default None, so it needs its own parse; "none" turns it off
             cfg[key] = None if value.strip().lower() in ("none", "null", "off") else int(value)
         elif isinstance(default, list):
             cfg[key] = [None if x.strip().lower() in ("inf", "-inf", "none", "null") else float(x)
@@ -119,7 +123,14 @@ def config(overrides=()):
     return cfg
 
 
+DEADLINE = None  # time.time() by which every sh call must have answered; the hook sets it, `turns --wait` leaves it off
+
+
 def sh(cmd, timeout=10):
+    if DEADLINE is not None:
+        timeout = min(timeout, DEADLINE - time.time())
+        if timeout <= 0:
+            return None
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=reap.ENV)
     except (OSError, subprocess.TimeoutExpired):
@@ -280,10 +291,50 @@ def live_sessions(run=sh):
     return None if agents is None else sum(isinstance(a, dict) for a in agents)
 
 
+def count_cap(cfg, key):
+    """A positive whole number under `key`; None (off) for anything else, bool and 2.5 included."""
+    cap = cfg.get(key)
+    return cap if isinstance(cap, int) and not isinstance(cap, bool) and cap > 0 else None
+
+
 def session_cap(cfg):
     """How many live sessions hold a new card; None (the default) when no max_sessions is configured."""
-    cap = cfg.get("max_sessions")
-    return cap if isinstance(cap, int) and not isinstance(cap, bool) and cap > 0 else None
+    return count_cap(cfg, "max_sessions")
+
+
+def run_workers(run=sh):
+    """Active supervised workers of the caller's orchestration Run: 0 when the caller is bound to none, None when
+    Orca cannot say (no answer, a page cut short)."""
+    try:
+        res = json.loads(run(["orca", "orchestration", "run-current", "--json"], timeout=5) or "")["result"]
+        if "runId" not in res and "run" not in res:
+            return None  # neither key is not "unbound", it is an answer we cannot read
+        run_id = res.get("runId") or (res.get("run") or {}).get("id")  # concise view, or the full record (null: unbound)
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return None
+    if not run_id:
+        return 0
+    out = run(["orca", "orchestration", "worker-list", "--run", str(run_id), "--terminal-state", "active",
+               "--limit", "100", "--json"], timeout=10)
+    try:
+        res = json.loads(out or "")["result"]
+        workers, page = res["workers"], res.get("page") or {}
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return None
+    if not isinstance(workers, list) or not isinstance(page, dict):
+        return None
+    if any(x.get("nextCursor") or x.get("hasMore") for x in (res, page)):
+        return None
+    return len(workers)
+
+
+def worker_hold(cfg, workers=None):
+    """(count, cap, hold) for the per-Run worker cap; nothing is counted while no cap is set."""
+    cap = count_cap(cfg, "max_workers_per_run")
+    if cap is None:
+        return None, None, False
+    n = (workers or run_workers)()
+    return n, cap, turn_hold(n, cap)
 
 
 def turn_cap(cfg, cpus=None):
@@ -308,21 +359,26 @@ def session_hold(cfg, sessions=None):
 
 
 def turns_wait(cfg, minutes, poll=30.0, now_fn=time.time, sleep=time.sleep, count=active_turns, out=print,
-               sessions=None):
+               sessions=None, workers=None):
     """0 once neither turn_hold nor the session cap holds, 3 after `minutes` of holding (a count that stays unreadable
     included)."""
     cap, deadline = turn_cap(cfg), now_fn() + 60 * minutes
     while True:
         n = count()
         s, scap, s_hold = session_hold(cfg, sessions)
-        if not turn_hold(n, cap) and not s_hold:
+        w, wcap, w_hold = worker_hold(cfg, workers)
+        if not turn_hold(n, cap) and not s_hold and not w_hold:
             out(f"진행 중인 에이전트 턴 {'?' if n is None else n}개 / 상한 {cap or '없음'}"
-                + (f", 세션 {s}개 / 상한 {scap}" if scap else "") + ": 새 카드를 시작해도 된다")
+                + (f", 세션 {s}개 / 상한 {scap}" if scap else "")
+                + (f", 이 Run의 워커 {w}개 / 상한 {wcap}" if wcap else "") + ": 새 카드를 시작해도 된다")
             if SELF_NOTE:
                 out(f"경고: {SELF_NOTE}")
             return 0
         if now_fn() >= deadline:
-            if s_hold:
+            if w_hold:
+                out("이 Run의 워커를 셀 수 없음(Orca 응답 없음·목록 잘림) — 시작하지 않는다" if w is None else
+                    f"이 Run의 워커 {w}개 ≥ 상한 {wcap}(`reap.pressure.max_workers_per_run`), {minutes:g}분 기다려도 줄지 않음 — 시작하지 않는다")
+            elif s_hold:
                 out(f"에이전트 세션을 셀 수 없음(Orca 응답 없음·목록 잘림) — 시작하지 않는다" if s is None else
                     f"에이전트 세션 {s}개 ≥ 상한 {scap}(`reap.pressure.max_sessions`), {minutes:g}분 기다려도 줄지 않음 — 시작하지 않는다")
             elif n is None:
@@ -1161,11 +1217,13 @@ def main(argv):
             return turns_wait(cfg, minutes)
         n, cap = active_turns(), turn_cap(cfg)
         s, scap, s_hold = session_hold(cfg)
+        w, wcap, w_hold = worker_hold(cfg)
         print(f"진행 중인 에이전트 턴 {'?' if n is None else n}개 / 상한 {cap or '없음'}"
-              + (f", 세션 {'?' if s is None else s}개 / 상한 {scap}" if scap else ""))
+              + (f", 세션 {'?' if s is None else s}개 / 상한 {scap}" if scap else "")
+              + (f", 이 Run의 워커 {'?' if w is None else w}개 / 상한 {wcap}" if wcap else ""))
         if SELF_NOTE:
             print(f"경고: {SELF_NOTE}")
-        return 1 if turn_hold(n, cap) or s_hold else 0
+        return 1 if turn_hold(n, cap) or s_hold or w_hold else 0
     if cmd == "check":
         m = snapshot(cfg, load_state(), idle_fn=live(cfg))
         level, why = judge(m, cfg)

@@ -292,6 +292,78 @@ if real_handle is not None:
 else:
     del os.environ["ORCA_TERMINAL_HANDLE"]
 
+# Per-Run worker cap: the caller's Run (run-current) and its active workers (worker-list --run), unset = off.
+def orca_run(run_id, workers, cursor=None, bad=None):
+    def run(cmd, **k):
+        if bad == "run":
+            return None
+        if cmd[:3] == ["orca", "orchestration", "run-current"]:
+            return json.dumps({"ok": True, "result": {"runId": run_id}})
+        assert cmd[:3] == ["orca", "orchestration", "worker-list"] and cmd[cmd.index("--run") + 1] == run_id, cmd
+        assert "active" in cmd and "--limit" in cmd, cmd
+        return None if bad == "list" else json.dumps({"result": {"workers": [{"dispatchId": f"d{i}"} for i in range(workers)],
+                                                                   "nextCursor": cursor}})
+    return run
+assert pressure.run_workers(run=orca_run("run_a", 3)) == 3
+assert pressure.run_workers(run=orca_run(None, 9)) == 0, "a session bound to no Run is not a lead"
+assert pressure.run_workers(run=orca_run("run_a", 3, bad="run")) is None
+assert pressure.run_workers(run=orca_run("run_a", 3, bad="list")) is None
+assert pressure.run_workers(run=orca_run("run_a", 100, cursor="next")) is None, "a cut-short page is not a count"
+assert pressure.run_workers(run=lambda *a, **k: json.dumps({"result": {}})) is None
+def orca_shapes(current, listing):
+    return lambda cmd, **k: json.dumps({"result": current if cmd[2] == "run-current" else listing})
+two = [{"dispatchId": "d1"}, {"dispatchId": "d2"}]
+assert pressure.run_workers(run=orca_shapes({"run": {"id": "run_a"}}, {"workers": two})) == 2, "full run-current record"
+assert pressure.run_workers(run=orca_shapes({"run": None}, {"workers": two})) == 0, "run: null is unbound"
+assert pressure.run_workers(run=orca_shapes({"runId": "run_a"}, {"workers": two, "page": {"hasMore": True}})) is None
+assert pressure.run_workers(run=orca_shapes({"runId": "run_a"}, {"workers": two, "page": {"nextCursor": "c"}})) is None
+assert pressure.run_workers(run=orca_shapes({"runId": "run_a"}, {"workers": two, "hasMore": True})) is None
+assert pressure.run_workers(run=orca_shapes({"runId": "run_a"}, {"workers": two, "page": {"hasMore": False}})) == 2
+# a spent time budget answers None without starting a process, so the hook denies before its own limit
+pressure.DEADLINE = time.time() - 1
+try:
+    assert pressure.sh(["true"]) is None
+    assert pressure.run_workers() is None
+finally:
+    pressure.DEADLINE = None
+assert pressure.sh(["true"]) == ""
+# a live budget shortens a longer timeout to what is left, and never lengthens a shorter one
+seen_timeouts, real_run = [], pressure.subprocess.run
+pressure.subprocess.run = lambda cmd, **k: seen_timeouts.append(k["timeout"]) or real_run(cmd, **k)
+pressure.DEADLINE = time.time() + 4
+try:
+    pressure.sh(["true"], timeout=10)
+    pressure.sh(["true"], timeout=1)
+finally:
+    pressure.DEADLINE, pressure.subprocess.run = None, real_run
+assert 3 < seen_timeouts[0] <= 4 and seen_timeouts[1] == 1, seen_timeouts
+for bad in (None, 0, -1, True, "4", 2.5):
+    assert pressure.count_cap({"max_workers_per_run": bad}, "max_workers_per_run") is None, bad
+def never_listed():
+    raise AssertionError("no cap configured: workers must not be counted")
+assert pressure.worker_hold(cfg, workers=never_listed) == (None, None, False)
+wcfg = {**cfg, "max_workers_per_run": 4}
+for n, hold in ((3, False), (4, True), (None, True)):
+    assert pressure.worker_hold(wcfg, workers=lambda n=n: n) == (n, 4, hold), n
+assert pressure.config([("max_workers_per_run", "4")])["max_workers_per_run"] == 4
+assert pressure.config([("max_workers_per_run", "none")])["max_workers_per_run"] is None
+real_workers, real_turns2 = pressure.run_workers, pressure.active_turns
+pressure.active_turns = lambda: 0
+pressure.run_workers = lambda run=None: 4
+verdict = g.gate("orca orchestration worker-start --worktree new-child --spec x", OK, {}, wcfg, now=1.0, p=pressure)
+assert verdict[0] == "deny" and "max_workers_per_run" in verdict[1], verdict
+pressure.run_workers = lambda run=None: 3
+assert g.gate("orca orchestration worker-start --worktree new-child --spec x", OK, {}, wcfg, now=1.0, p=pressure) is None
+pressure.run_workers = lambda run=None: 4
+assert g.gate("orca orchestration worker-start --worktree new-child --spec x", OK, {}, cfg, now=1.0, p=pressure) is None  # no cap configured
+ticks = iter([0.0, 0.0, 901.0])
+assert pressure.turns_wait(wcfg, 15, now_fn=lambda: next(ticks), sleep=lambda s: None, count=lambda: 0, sessions=lambda: 0,
+                           workers=lambda: 4, out=said.append) == 3 and "이 Run의 워커 4개 ≥ 상한 4" in said[-1]
+ticks = iter([0.0, 0.0, 0.0])
+assert pressure.turns_wait(wcfg, 15, now_fn=lambda: next(ticks), sleep=lambda s: None, count=lambda: 0, sessions=lambda: 0,
+                           workers=iter([4, 3]).__next__, out=said.append) == 0 and "워커 3개 / 상한 4" in said[-1]
+pressure.run_workers, pressure.active_turns = real_workers, real_turns2
+
 # ok: nothing. warn: denied until a sweep ran in gate_fresh_minutes. danger: denied either way.
 assert gate("docker compose up -d", OK) == "none"
 assert gate("docker compose up -d", WARN) == "deny"
