@@ -182,7 +182,7 @@ def seed(fetch, path, cfg):
 def watch(fetch, cfg, path, sleep=time.sleep, clock=time.monotonic, emit=None):
     """Returns (exit code, output lines). With emit (stream), each poll's lines go to emit and the watch goes on,
     so it returns only (1, []) at its deadline or (2, [error])."""
-    failures, streak, me, seen, last = 0, 0, None, None, None
+    failures, streak, hard, me, seen, last = 0, 0, 0, None, None, None
     deadline = clock() + (min(cfg["max_minutes"], STREAM_MINUTES) if emit else cfg["max_minutes"]) * 60
     wait = lambda s: sleep(max(0, min(s, deadline - clock())))
     while clock() < deadline:
@@ -198,13 +198,15 @@ def watch(fetch, cfg, path, sleep=time.sleep, clock=time.monotonic, emit=None):
             lines, keys = poll(fetch, me, cfg, set(seen))
         except (*LOOKUP_ERRORS, KeyError, OSError) as e:
             streak += 1
-            if not (isinstance(e, subprocess.TimeoutExpired) or TRANSIENT.search(str(e))):
-                failures, last = failures + 1, e
+            if isinstance(e, subprocess.TimeoutExpired) or TRANSIENT.search(str(e)):
+                hard = 0
+            else:
+                failures, hard, last = failures + 1, hard + 1, e
                 if failures >= cfg["max_failures"]:
                     return 2, [f"notify: {failures} failures in a row; last: {e}"]
             wait(min(cfg["backoff_s"] * 2 ** (streak - 1), cfg["max_backoff_s"]))
             continue
-        failures = streak = 0
+        failures = streak = hard = 0
         if keys:
             seen = (seen + keys)[-cfg["keep_seen"]:]
             write_seen(path, seen, cfg["keep_seen"])
@@ -214,9 +216,9 @@ def watch(fetch, cfg, path, sleep=time.sleep, clock=time.monotonic, emit=None):
             emit(lines)
         wait(cfg["interval_s"])
     # Backoff fits only a few tries into one stream and a restart resets the count, so max_failures would never be
-    # reached: a stream that ends still failing that way reports it instead of asking for a restart.
-    if emit and failures >= min(STREAM_FAILURES, cfg["max_failures"]):
-        return 2, [f"notify: {failures} failures in a row; last: {last}"]
+    # reached: a stream whose last STREAM_FAILURES tries all failed that way reports it instead of asking for a restart.
+    if emit and hard >= min(STREAM_FAILURES, cfg["max_failures"]):
+        return 2, [f"notify: {hard} failures in a row; last: {last}"]
     return 1, []
 
 

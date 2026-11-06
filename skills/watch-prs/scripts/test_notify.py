@@ -285,6 +285,15 @@ class NotifyTest(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("HTTP 401", out[0])
 
+    def test_stream_ends_normally_when_a_transient_error_breaks_the_run(self):
+        n.write_seen(self.seen, [], 10)
+        errors = iter(["gh: Bad credentials (HTTP 401)", "HTTP 502"] * 50)
+
+        def flaky(path):
+            raise RuntimeError(next(errors))
+        code, out = n.watch(flaky, CFG, self.seen, sleep=self.clock.sleep, clock=self.clock, emit=lambda ls: None)
+        self.assertEqual((code, out), (1, []))
+
     def test_stream_stops_on_a_persistent_failure(self):
         n.write_seen(self.seen, [], 10)
         code, out = n.watch(Fake([[]], fail=99, error="gh: Bad credentials (HTTP 401)"), {**CFG, "max_failures": 2},
