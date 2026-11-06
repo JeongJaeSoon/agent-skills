@@ -76,6 +76,7 @@ git("init", "-q", cwd=CLEAN)
 (REPOX / "to-real").symlink_to(HOME / ".claude")
 (REPOX / "planted").mkdir()
 (REPOX / "planted" / "settings.json.bak-setup-20260101").symlink_to(TMP / "outside" / "x")
+(REPOX / "alias.json").symlink_to(REPOX / "planted" / "settings.json")
 (REPOX / "unrelated").mkdir()
 (REPOX / "unrelated" / "notes").symlink_to(TMP / "outside" / "y")
 (REPOX / "linked").mkdir()
@@ -203,7 +204,10 @@ CASES = [
       (rehearsal(script="skills/skills-config/scripts/config_emit.py", tail="--spec s.json --apply abc"), REPOX),
       (rehearsal(script="skills/tune-automode/scripts/automode_rule.py", tail="--apply=1"), REPOX),
       (rehearsal(), TMP), (f"cd {TMP} && " + rehearsal(), REPOX), ("cd . && " + rehearsal(), REPOX),
-      (f"cd {TMP}; cd {REPOX}; " + rehearsal(), REPOX),
+      (f"cd {TMP}; cd {REPOX}; " + rehearsal(), REPOX), ("if true; then cd .; fi; " + rehearsal(), REPOX),
+      ("X=1 cd . && " + rehearsal(), REPOX), ("(cd . && " + rehearsal() + ")", REPOX),
+      (rehearsal(CLAUDE_SETTINGS=f"{REPOX}/alias.json"), REPOX),
+      (rehearsal(CLAUDE_CONFIG_DIR=f"{REPOX}/planted"), REPOX),
       # A wrapper after the assignments undoes them as well as one before.
       (rehearsal().replace(" python3 ", " env -i python3 "), REPOX),
       (rehearsal().replace(" python3 ", " command python3 "), REPOX),
