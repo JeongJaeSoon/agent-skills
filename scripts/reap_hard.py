@@ -41,6 +41,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent / "skills" / "reap-resources" / "scripts"))
 import cardguard  # noqa: E402
+import cards  # noqa: E402
 import guard  # noqa: E402
 import preview_watch as pw  # noqa: E402
 import reap  # noqa: E402
@@ -290,10 +291,13 @@ def read_machine(now):
 
 
 def head_in_pr(path, head, pr_head, git=reap.run):
-    """HEAD is an ancestor of the PR head. A failed read, or a PR head this clone never fetched, reads as no."""
+    """HEAD is an ancestor of the PR head. A failed read, or a PR head this clone never fetched, reads as no. A card
+    that never committed (a fresh one that reuses a merged branch's name sits on an old ancestor) proves nothing."""
     if not head or not pr_head:
         return False
-    return git(["git", "-C", path, "merge-base", "--is-ancestor", head, pr_head], check=False) is not None
+    if git(["git", "-C", path, "merge-base", "--is-ancestor", head, pr_head], check=False) is None:
+        return False
+    return head == pr_head or cards.history(path, git)[0] is True
 
 
 def card_verdict(w, m, cfg, protect, now):

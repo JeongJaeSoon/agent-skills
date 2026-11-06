@@ -110,6 +110,11 @@ for name, head, pr_head, dirty in (("same head", h3, h3, False), ("ancestor", h2
     print(f"{name}: ancestor={anc} -> {verdicts[name]}")
 assert [verdicts[k][0] for k in verdicts] == [True, True, False, False], verdicts
 assert "HEAD 가 바뀜" in verdicts["local commit ahead"][1] and "커밋 안 된 변경" in verdicts["uncommitted"][1]
+# A fresh card that reuses a merged branch's name sits on an old ancestor without ever committing: it stays.
+fresh = tmp / "fresh"
+sh("git", "clone", "-q", str(repo), str(fresh), cwd=tmp)
+sh("git", "checkout", "-q", "-b", "reused", h2, cwd=fresh)
+assert rh.head_in_pr(str(fresh), h2, h3) is False and rh.head_in_pr(str(fresh), h3, h3) is True
 assert rh.head_in_pr(str(repo), h2, "0" * 40) is False and rh.head_in_pr(str(repo), "", h3) is False  # unfetched / unread
 
 # Stacks: down only when every working directory is gone; protected projects and ports stay.
