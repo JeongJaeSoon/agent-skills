@@ -106,7 +106,7 @@ When each skill fires, what it does and the files it ships are in the [skill cat
 
 | Group | Skills | What they do |
 |---|---|---|
-| [One ticket](docs/skills.en.md#one-ticket) | `write-ticket`, `deliver-ticket`, `ui-review`, `handoff-ticket`, `dispatch-card`, `end-session` | Write a ticket, deliver it, hand the next one to a fresh card, record progress and close the session |
+| [One ticket](docs/skills.en.md#one-ticket) | `write-ticket`, `deliver-ticket`, `ui-review`, `dispatch-card`, `end-session` | Write a ticket, deliver it, hand the next one to a fresh card, record progress and close the session |
 | [One project](docs/skills.en.md#one-project-several-orca-workers) | `orchestrate`, `reboot` | Land many tickets in parallel on Orca workers, put back what a restart dropped, then measure how it actually went (`reflect`'s measure mode) |
 | [One machine](docs/skills.en.md#one-machine) | `reap-resources`, `secure-fill`, `tune-automode`, `skills-config`, `setup-pc` | Clean up leftovers, fill secrets the agent never sees, draft autoMode rules, change config keys, install and update |
 | [Chat and reviews](docs/skills.en.md#chat-and-reviews) | `watch-mentions`, `watch-prs` | Turn chat and PRs that concern you into work |
@@ -125,6 +125,7 @@ Some skills were merged into another skill as a mode. The old name is gone, so `
 | `/agent-skills:measure-delivery` | `/agent-skills:reflect`, measure mode |
 | `/agent-skills:swarm` | `/agent-skills:fan-out`, sweep mode |
 | `/agent-skills:arena` | `/agent-skills:fan-out`, compete mode |
+| `/agent-skills:handoff-ticket` | `/agent-skills:dispatch-card`, next-ticket mode |
 | `/agent-skills:create-verification-skill` | `/agent-skills:verification-skill`, create mode |
 | `/agent-skills:maintain-verification-skill` | `/agent-skills:verification-skill`, maintain mode |
 

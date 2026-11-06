@@ -280,6 +280,6 @@ the exact command or URL, and say why it is theirs. If nothing is left, say that
 survives this session.
 
 **The completion comment does not end the turn** (outside a program; inside one, `worker_done`
-and `end-session` §7 do, and so they do for any Orca worker). In the same turn, without waiting for a new prompt, go to `handoff-ticket` §0 — what stays here, what becomes its own ticket, and which
+and `end-session` §7 do, and so they do for any Orca worker). In the same turn, without waiting for a new prompt, go to `dispatch-card` next-ticket mode §0 — what stays here, what becomes its own ticket, and which
 card starts next. Closing with "say the word and I'll hand off" or "want me to file that?" is
 stopping short: those are actions §0 already authorises, not questions to put to the user.

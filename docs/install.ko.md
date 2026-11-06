@@ -21,7 +21,7 @@
 | 필수 | `python3` 3.9 이상 | 모든 스크립트. macOS의 `/usr/bin/python3`(3.9.6)로 돈다 |
 | B·C에 필수 | github.com에 로그인한 `gh` | 내 저장소에 관한 권장 규칙, private 개인 설정 저장소 clone |
 | B·C | macOS, Linux | 동기화 작업과 기본 자동화는 Orca automation이라 Orca가 설치돼 있고 열려 있는 동안만 돈다. setup은 LaunchAgent를 만들지 않는다. `preview-watch`와 `share-server`(기본 off)는 macOS에서 여전히 LaunchAgent다 |
-| 선택 | Orca | 여러 세션을 다루는 스킬(`orchestrate`, `dispatch-card`, `handoff-ticket`)과 정기 회차 |
+| 선택 | Orca | 여러 세션을 다루는 스킬(`orchestrate`, `dispatch-card`)과 정기 회차 |
 | 선택 | Linear 또는 Jira | 트래커 스킬. `tracker.adapter`가 없으면 Linear |
 | 선택 | Obsidian 또는 Markdown 폴더 | 노트 스킬. `notes.adapter`를 정하기 전에는 꺼져 있다 |
 | 선택 | tailscale, caddy | `preview-watch`, `share-server`. 둘 다 기본 꺼짐 |

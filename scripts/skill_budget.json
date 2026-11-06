@@ -17,19 +17,19 @@
       "width": 237
     },
     "deliver-ticket": {
-      "skill_md_tokens": 4854,
+      "skill_md_tokens": 4858,
       "tokens": 122,
       "width": 377
     },
     "dispatch-card": {
-      "skill_md_tokens": 4739,
-      "tokens": 71,
-      "width": 262
+      "skill_md_tokens": 4970,
+      "tokens": 102,
+      "width": 335
     },
     "end-session": {
-      "skill_md_tokens": 4920,
-      "tokens": 114,
-      "width": 368
+      "skill_md_tokens": 4922,
+      "tokens": 113,
+      "width": 363
     },
     "fan-out": {
       "skill_md_tokens": 268,
@@ -40,11 +40,6 @@
       "skill_md_tokens": 1000,
       "tokens": 76,
       "width": 272
-    },
-    "handoff-ticket": {
-      "skill_md_tokens": 2279,
-      "tokens": 83,
-      "width": 285
     },
     "how": {
       "skill_md_tokens": 527,
@@ -62,7 +57,7 @@
       "width": 272
     },
     "orchestrate": {
-      "skill_md_tokens": 11859,
+      "skill_md_tokens": 11870,
       "tokens": 101,
       "width": 332
     },
@@ -187,14 +182,14 @@
       "width": 207
     },
     "write-ticket": {
-      "skill_md_tokens": 1998,
+      "skill_md_tokens": 2006,
       "tokens": 62,
       "width": 219
     }
   },
   "totals": {
-    "always_tokens": 3147,
-    "always_width": 11226,
-    "skills_width": 10346
+    "always_tokens": 3094,
+    "always_width": 11009,
+    "skills_width": 10129
   }
 }
