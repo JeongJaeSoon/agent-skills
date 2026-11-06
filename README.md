@@ -113,7 +113,7 @@ When each skill fires, what it does and the files it ships are in the [skill cat
 | [Writing](docs/skills.en.md#writing) | `brief`, `stage`, `todo`, `map-features`, `write-plainly`, `prune-comments`, `write-skill` | Status reports, stage tables, to-do and hold queues, feature maps, plain prose, comment cleanup, skill authoring checks |
 | [pstack](docs/skills.en.md#pstack-skills-lauren-tan-mit) | `architect`, `arena`, `blast-radius`, `create-verification-skill`, `figure-it-out`, `how`, `interrogate`, `maintain-verification-skill`, `principles`, `recall`, `reflect`, `show-me-your-work`, `swarm`, `tdd`, `teach`, `why` | Design, comparison, impact analysis, verification, explanation, retrospectives |
 
-The pstack group comes from Lauren Tan's [pstack](https://github.com/cursor/plugins) (MIT) and keeps the upstream names so it can follow upstream changes. With several sessions, two layers sit above the workers: the orchestrator (one top-level session) and leads (one per project). See the [Roles table in orchestrate](skills/orchestrate/SKILL.md#roles).
+The pstack group comes from Lauren Tan's [pstack](https://github.com/cursor/plugins) (MIT). These skills are now maintained here on their own: `vendor/pstack` keeps the original files as upstream had them, and an optional daily job reports upstream changes, which are ported by hand when worth it. With several sessions, two layers sit above the workers: the orchestrator (one top-level session) and leads (one per project). See the [Roles table in orchestrate](skills/orchestrate/SKILL.md#roles).
 
 ## Configuration
 

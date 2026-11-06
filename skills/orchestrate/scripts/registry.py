@@ -468,8 +468,8 @@ STORES = [
 OUTSIDE = {
     "dash_demo:*": "the demo writes an invented state into its own temporary root",
     "build:<module>": "builds the skill catalog page in the repo",
-    "pstack-sync:merge3": "vendors a pinned upstream into the repo",
-    "pstack-sync:main": "vendors a pinned upstream into the repo",
+    "pstack-sync:refresh": "refreshes the pristine upstream copy in vendor/pstack, by hand",
+    "pstack-sync:main": "refreshes the pristine upstream copy in vendor/pstack, by hand",
     "shots:upload": "a PR screenshot to the path its caller names",
     "measure:main": "a report to the --out path",
     "store:main": "`orch db backup FILE`: a copy of the DB to the path the owner names",
