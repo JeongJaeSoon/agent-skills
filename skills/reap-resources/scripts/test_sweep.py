@@ -734,7 +734,7 @@ assert "전 것" in out["refused"] and json.loads((STATE / "sweep-last.json").re
 assert sweep.set_owner("trash:tmpdir", True)[0] == 2  # not a rule of this stage
 code, msg = sweep.set_owner("serve:dark", True)
 own = json.loads((STATE / "sweep-owner.json").read_text())
-assert code == 0 and own == {"generation": 1, "rules": {"serve:dark": "sweep"}, "interval": 900.0}, (msg, own)
+assert code == 0 and own == {"generation": 1, "rules": {"serve:dark": "sweep"}, "interval": 1800.0}, (msg, own)
 assert "첫 정상 회차" not in msg  # sweep-last.json exists already
 assert sweep.set_owner("serve:dark", True) == (0, "serve:dark: 이미 sweep 소유(세대 1), 바꾼 것 없음")
 assert json.loads((STATE / "sweep-owner.json").read_text())["generation"] == 1

@@ -50,7 +50,7 @@ PLATFORM = sys.platform
 PATROL_WAIT_S = 400  # patrol's own budgets: 120 s for the round, 240 s for the candidate scans
 STEP_TIMEOUT_S = 900
 # How long after a patrol round an old cleaner may take to act on the same target: reap-hard two of its passes and
-# ten minutes (its `interval`, 900 s by default), the janitor 4 hours (every 3 hours, and on load). Never an act
+# ten minutes (its `interval`, 1800 s by default), the janitor 4 hours (every 3 hours, and on load). Never an act
 # that ended before the round: patrol's scans read after it, so what they still saw is not what that act removed
 # (a card made again at the same path and HEAD looks the same).
 JANITOR_LAG_S = 4 * 3600
@@ -178,14 +178,14 @@ def cleaner_of(rule_name):
 
 
 def interval():
-    """Seconds between passes: the `sweep` (else `reap-hard`) setting, 900 by default."""
+    """Seconds between passes: the `sweep` (else `reap-hard`) setting, reap-hard's own default (1800) otherwise."""
     with contextlib.suppress(OSError, ValueError, AttributeError, TypeError):
         data = json.loads(CONFIG.read_text())
         n = (guard.hard_cfg({"reap-hard": data.get("reap-hard") or {}, "sweep": data.get("sweep") or {}}) or {}
-             ).get("interval", 900)
+             ).get("interval", 1800)
         if not isinstance(n, bool) and math.isfinite(float(n)) and float(n) > 0:
             return float(n)
-    return 900.0
+    return 1800.0
 
 
 def lags():
