@@ -318,9 +318,30 @@ def live_work(title):
                  if not a.get("stale") and any(w and w.lower() in low for w in (a.get("agent"), a.get("desc")))), None)
 
 
-def doing_add(title, owner, next_, waiting=False, force=False, why=None):
+def with_order(order, add):
+    """Run add() (it returns the stored item) and, with an order, link the item to it. The order is checked first, so
+    a mistyped oN adds nothing. The link is a second write: if it fails, the item stays and the error names it."""
+    by = os.environ.get("ORCA_TERMINAL_HANDLE")
+    try:
+        if order:
+            store_db.order_get(order, require_open=True)
+        item = add()
+        if order:
+            try:
+                store_db.order_link(order, f"board:{item['id']}", by)
+            except (ValueError, store_db.NotMigrated) as e:
+                raise ValueError(f"{item['id']} was added but not linked to {order} ({e}); link it with "
+                                 f"orch order link {order} --unit board:{item['id']}")
+    except store_db.NotMigrated as e:
+        raise ValueError(f"orders are not available ({e})")
+    return item
+
+
+def doing_add(title, owner, next_, waiting=False, force=False, why=None, order=None):
     """waiting: owner is a person this work waits on (a reply, a review), not the agent moving it. force: add it though
-    Orca shows that work, with why in the item's event."""
+    Orca shows that work, with why in the item's event. order: the owner's order oN this work carries."""
+    if order:
+        return with_order(order, lambda: doing_add(title, owner, next_, waiting, force, why))
     if not all((x or "").strip() for x in (title, owner, next_)):
         raise ValueError("board doing add needs a title, --owner (who moves it) and --next (the next event)")
     if force and not (why or "").strip():
@@ -330,7 +351,10 @@ def doing_add(title, owner, next_, waiting=False, force=False, why=None):
     item = {"title": one_line(title), "owner": one_line(owner), "next": one_line(next_),
             **({"waiting": True, "since": fleet.iso(fleet.utcnow())} if waiting else {}),
             **({"forced": one_line(why)} if force else {})}
-    return change(lambda store: store["doing"].append(item))
+    def go(store):
+        store["doing"].append(item)
+        return item  # the same dict the write gives its id to
+    return change(go)
 
 
 def doing_drop(n):
@@ -378,9 +402,11 @@ def queue_insert(q, item, to):
     q.insert(len(q) if to is None or to > len(shown) else shown[to - 1], item)
 
 
-def later_add(title, trigger, due=None, who=None, at=None):
+def later_add(title, trigger, due=None, who=None, at=None, order=None):
     """Add a held item to the queue at position at (1 first; the end by default), or reword the one it repeats in its
-    place (moved to at when given). The list's order is the queue's: the first is next."""
+    place (moved to at when given). The list's order is the queue's: the first is next. order: the owner's order oN."""
+    if order:
+        return with_order(order, lambda: later_add(title, trigger, due, who, at))
     if not (title or "").strip() or not (trigger or "").strip():
         raise ValueError("board later add needs a title and --trigger (what makes it next)")
     at = queue_pos(at)
@@ -396,6 +422,7 @@ def later_add(title, trigger, due=None, who=None, at=None):
             q.insert(old, item)
         else:
             queue_insert(q, item, at)
+        return item
     return change(go)
 
 
@@ -439,9 +466,11 @@ def check_due(due, now):
     return at
 
 
-def todo_add(title, due=None, after=None, who=None):
+def todo_add(title, due=None, after=None, who=None, order=None):
     """A to-do: work that will be done when its date (--due) or condition (--after) comes, by who. Rewords the one it
-    repeats, as later_add does."""
+    repeats, as later_add does. order: the owner's order oN."""
+    if order:
+        return with_order(order, lambda: todo_add(title, due, after, who))
     if not (title or "").strip() or not ((due or "").strip() or (after or "").strip()) or not (who or "").strip():
         raise ValueError("board todo add needs a title, --due D or --after C (when it starts) and --who W (who does it);"
                          " work with no when is `board doing add` or `board later add`")
@@ -456,8 +485,9 @@ def todo_add(title, due=None, after=None, who=None):
         old = next(same, None)
         if old is None:
             store["todo"].append(item)
-        else:
-            store["todo"][old] = {**item, "id": store["todo"][old]["id"]}
+            return item
+        store["todo"][old] = {**item, "id": store["todo"][old]["id"]}
+        return store["todo"][old]
     return change(go)
 
 
