@@ -590,7 +590,8 @@ rc, out, err, calls = handoff("ABC-2", "--title", "next step", "--note", "stack 
 assert rc == 0, (rc, err)
 make = creates(calls)[0]
 assert make[make.index("--name") + 1] == "abc-2" and make[make.index("--parent-worktree") + 1] == "id:repo1::/wt/lead"
-assert make[make.index("--prompt") + 1] == f"/goal ABC-2. stack on ABC-1.\n{CLOSE}\n{card.LOAD_LINE}", make
+assert make[make.index("--prompt") + 1] == "\n".join(["/goal ABC-2. stack on ABC-1.", CLOSE, card.LOAD_LINE,
+                                                      *card.FIXED_LINES]), make
 assert ["worktree", "set", "--worktree", f"path:{CARD_DIR}", "--display-name", "ABC-2 next step", "--json"] in [c["argv"] for c in calls]
 assert json.loads(out)["card"]["start"].startswith("started"), out
 rc, out, err, calls = handoff("ABC-3", mode="trust")
@@ -690,6 +691,36 @@ assert card.LOAD_LINE not in load_of(LEAD, "lead-load.md"), "a lead's prompt has
 # A LOAD row right after FORBIDDEN is its own row, not part of the ban section.
 adj = load_of(f"/goal x\n{CLOSE}\nFORBIDDEN   {card.BEGIN}\n            a ban.\n            {card.END}\nLOAD: none\n")
 assert adj.index("LOAD: none") < adj.index("a ban.") and adj.count("LOAD: none") == 1 and adj.rstrip().endswith(card.END), adj
+
+# TEARDOWN and DOCS: every prompt carries them once, after LOAD and ahead of FORBIDDEN, a lead's too, whatever the
+# brief says; the rules they hold are the ones a brief writer kept forgetting.
+teardown, docs = card.FIXED_LINES
+assert "down" in teardown and "-v" in teardown and "PID" in teardown and "pkill" in teardown and "killall" in teardown
+assert "Artifact" in docs and ".md" in docs and "경로" in docs
+for p in (load_of(WORKER), load_of(LEAD, "lead-fixed.md"), adj,
+          load_of(f"/goal x\n{CLOSE}\nTEARDOWN: keep my stack\n")):
+    assert all(p.count(line) == 1 for line in card.FIXED_LINES), p
+assert adj.index(teardown) < adj.index(card.BEGIN) and adj.index(docs) > adj.index("LOAD: none"), adj
+assert "keep my stack" not in load_of(f"/goal x\n{CLOSE}\nTEARDOWN: keep my stack\n"), "a brief row does not replace it"
+
+# APPROVED cites the owner's words by their `orch decide` id: an id the store holds as answered passes, an unknown or
+# unanswered one is exit 2 with nothing created, a row with no id only warns. The store is a throwaway decisions.json.
+os.environ["ORCH_FLEET_STATE"] = str(tmp / "fleet")
+(tmp / "fleet").mkdir()
+import fleet  # noqa: E402
+said = fleet.decision_quote(None, "머지까지 진행해", by="term_me", title="merge approval")["id"]
+asked = fleet.change_decisions(lambda s: fleet._new_decision(s, "still open"))["id"]
+cited = lambda ids: WORKER.replace("(owner, 2026-01-01)", f"오너({ids}, 2026-01-01): \"머지까지 진행해\"")  # noqa: E731
+rc, out, err, calls = go(brief(cited(said), "ap1.md"), "--repo", "r", "--name", "ap1")
+assert rc == 0 and "cites no" not in err, (rc, err)
+for ids, want in ((f"{said}, d999", "d999 (no such decision)"), (asked, f"{asked} (open, no recorded answer)")):
+    rc, out, err, calls = go(brief(cited(ids), "ap2.md"), "--repo", "r", "--name", "ap2")
+    assert rc == 2 and want in err and "orch decide answer" in err and not creates(calls), (ids, rc, err)
+rc, out, err, calls = go(brief(WORKER, "ap3.md"), "--repo", "r", "--name", "ap3")
+assert rc == 0 and "APPROVED row cites no `orch decide` id" in err, (rc, err)
+rc, out, err, calls = go(brief(WORKER.replace("APPROVED: push and PR (owner, 2026-01-01)\n", ""), "ap4.md"), "--repo", "r", "--name", "ap4")
+assert rc == 0 and "APPROVED" not in err, (rc, err)
+del os.environ["ORCH_FLEET_STATE"]
 
 
 # The session's model.

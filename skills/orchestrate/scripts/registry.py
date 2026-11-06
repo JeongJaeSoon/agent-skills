@@ -185,7 +185,7 @@ STORES = [
     Store("dbexport", "D/*/export.json", {"board.item": BACKUP, "board.closure": BACKUP}, ("store:_export_board",),
           ("nobody",), rule="what `orch db rollback 4b` checks an export against"),
     Store("decision", "db:decision.status", {"decision.item": CANONICAL},
-          ("store:change_decisions", "store:_insert_decision", "store:restore"), ("fleet", "brief", "reorient"),
+          ("store:change_decisions", "store:_insert_decision", "store:restore"), ("fleet", "brief", "reorient", "sync"),
           rule="`orch decide` and the page's answers; closed ones stay, filtered by status and closed_at"),
     Store("item", "db:item.status", {"board.item": CANONICAL},
           ("store:_insert_item", "store:_put_items", "store:close_unit", "store:reopen_unit", "store:restore"),
