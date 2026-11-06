@@ -105,8 +105,11 @@ def set_cell(rid, col, mark, evidence=None, by=None):
 
     def go(store):
         row = store["rows"].get(rid)
-        made = stage_auto.read()["rows"].get(rid)
-        if col == "merge" and folds_into(rid, row, stage_auto.read()["rows"]):
+        made_rows = stage_auto.read()["rows"]
+        made = made_rows.get(rid)
+        if made and made.get("group"):
+            raise ValueError(f"{rid} is a group row; it has no cells, set them on the rows under it")
+        if col == "merge" and folds_into(rid, store["rows"], made_rows):
             raise ValueError(f"{rid}: the merge column of a generated row is derived from the ledger and GitHub; "
                              "it is not written by hand (dev and prod are)")
         if not row and made and not made.get("group"):
@@ -160,48 +163,57 @@ def merge_cell(pr, prs):
     return {"mark": "fail", "evidence": why, "auto": True}
 
 
-def folds_into(rid, row, made_rows, taken=()):
-    """The generated row a recorded row (or a bare id, row None) sits on: the same id, the same PR, or the predicate
-    item by_item names. None for a group, or when it stands alone (work that ended outside GitHub)."""
-    if (made_rows.get(rid) or {}).get("group") or (row or {}).get("group"):
-        return None
-    if rid in made_rows:
-        return rid
+def fold_map(recorded, made_rows):
+    """Recorded row id -> the generated row it is the same work as, by PR or by predicate item (by_item), in the order
+    the table folds them: an item one row took is not taken by the next. A row of a generated id is not in it."""
     by_pr = {r["pr"]: k for k, r in made_rows.items() if r.get("pr")}
-    return by_pr.get((row or {}).get("pr")) or (by_item(rid, row, made_rows, set(taken)) if row else None)
+    into = {}
+    for k, r in recorded.items():
+        if k not in made_rows and not r.get("group") and (
+                on := by_pr.get(r.get("pr")) or by_item(k, r, made_rows, set(into.values()))):
+            into[k] = on
+    return into
+
+
+def folds_into(rid, recorded, made_rows):
+    """The generated row a recorded row (or a bare id) sits on: the same id, or fold_map's. None for a group, or when
+    it stands alone (work that ended outside GitHub)."""
+    if (made_rows.get(rid) or {}).get("group") or (recorded.get(rid) or {}).get("group"):
+        return None
+    return rid if rid in made_rows else fold_map(recorded, made_rows).get(rid)
 
 
 def merged(store, made):
-    """merged_counted() without the count."""
+    """merged_counted() without the ids."""
     return merged_counted(store, made)[:2]
 
 
 def merged_counted(store, made):
-    """Generated rows with the recorded ones over them, and how many recorded merge cells it dropped: the merge
-    column of a generated row is derived, so a recorded one there is ignored (left in the file). A recorded cell replaces the generated cell of its column, a
+    """Generated rows with the recorded ones over them, and the ids of the generated rows a recorded merge cell was
+    dropped from: the merge column of a generated row is derived, so a recorded one there is ignored (left in the
+    file). A recorded cell replaces the generated cell of its column, a
     recorded row of the same id its fields. A recorded row with a generated row's PR is the same work: it folds into that
     row, its title and cells over the generated ones, and the rows under it move along; so does a PR-less row under a
     program's group whose id names one of its predicate items (by_item). A recorded group left with no row of its own
     goes. An overlay whose generated row is gone has nothing to sit on."""
     rows = dict(made["rows"])
-    by_pr = {r["pr"]: k for k, r in rows.items() if r.get("pr")}
-    into = {}
+    into = fold_map(store["rows"], made["rows"])
     # A recorded title replaces the generated one whole, the dashboard's uncut title_full with it.
     full = lambda r: {"title_full": r["title"]} if r.get("title") else {}  # noqa: E731
-    ignored = 0
+    ignored = []
 
-    def own(r):
-        nonlocal ignored
-        ignored += "merge" in (r.get("cells") or {})
+    def own(r, target):
+        if "merge" in (r.get("cells") or {}):
+            ignored.append(target)
         return {c: v for c, v in (r.get("cells") or {}).items() if c != "merge"}
     for k, r in store["rows"].items():
         if k in rows:
             rows[k] = {**rows[k], **{f: v for f, v in r.items() if v and f not in ("cells", "overlay")}, **full(r),
-                       "cells": {**rows[k].get("cells", {}), **own(r)}}
-        elif (on := not r.get("group") and (by_pr.get(r.get("pr")) or by_item(k, r, made["rows"], set(into.values())))):
-            into[k] = on
+                       "cells": {**rows[k].get("cells", {}), **own(r, k)}}
+        elif k in into:
+            on = into[k]
             rows[on] = {**rows[on], **{f: v for f, v in r.items() if v and f in ("title", "done_at")}, **full(r),
-                        "cells": {**rows[on].get("cells", {}), **own(r)}}
+                        "cells": {**rows[on].get("cells", {}), **own(r, on)}}
         elif not r.get("overlay"):
             rows[k] = r
     for k, r in rows.items():
@@ -257,8 +269,9 @@ def table(state=None):
 
 
 def ignored_note(t):
-    """One line saying how many hand-written merge cells on generated rows the table dropped; "" when none."""
-    n = t.get("ignored_merge") or 0
+    """One line saying how many hand-written merge cells on generated rows the table dropped (`ignored_merge`: the
+    generated row id of each); "" when none."""
+    n = len(t.get("ignored_merge") or ())
     return f"손으로 쓴 머지 칸 {n}건은 생성 행의 계산 값이 있어 무시했다 (stages.json에는 그대로 남음)" if n else ""
 
 
@@ -355,7 +368,8 @@ def counted(t, state, now=None, by_pr=None, now_known=True):
 def of_program(t, slug):
     """The rows of one program: its group row and every row under it."""
     keep = with_descendants({r["id"]: r for r in t["rows"]}, {slug})
-    return {**t, "rows": [r for r in t["rows"] if r["id"] in keep]}
+    return {**t, "rows": [r for r in t["rows"] if r["id"] in keep],
+            "ignored_merge": [k for k in t.get("ignored_merge") or () if k in keep]}
 
 
 def dash_url(page="stages"):

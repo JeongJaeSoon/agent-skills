@@ -114,8 +114,18 @@ t = stages.table({"prs": state["prs"]})
 got = {r["id"]: r for r in t["rows"]}
 assert [r["id"] for r in t["rows"]][-1] == "solo"
 assert got["alpha/A-1"]["cells"]["merge"]["from"] == "ledger landed" and got["alpha/A-1"]["cells"]["dev"]["evidence"] == "v1.4.0 on staging"
-assert t["ignored_merge"] == 1 and "1건" in stages.ignored_note(t), (t["ignored_merge"], stages.ignored_note(t))
-assert stages.ignored_note({"ignored_merge": 0}) == ""
+assert t["ignored_merge"] == ["alpha/A-1"] and "1건" in stages.ignored_note(t), (t["ignored_merge"], stages.ignored_note(t))
+assert stages.ignored_note({"ignored_merge": []}) == ""
+# The count follows the program shown: another program's rows do not add to it.
+assert stages.of_program(t, "alpha")["ignored_merge"] == ["alpha/A-1"] and stages.of_program(t, "beta")["ignored_merge"] == []
+# A generated group's id takes no cell, even when a recorded non-group row has the same id.
+stages.change(lambda s: s["rows"].update(alpha={"id": "alpha", "title": "x", "cells": {}}))
+try:
+    stages.set_cell("alpha", "dev", "ok", "v1")
+    raise AssertionError("a generated group took a cell through a same-id recorded row")
+except ValueError:
+    pass
+stages.change(lambda s: s["rows"].pop("alpha"))
 assert got["alpha/A-1"]["title"] == "A-1: login form — card" and got["alpha/A-1"]["depth"] == 1
 assert got["alpha/A-3"]["cells"] == {} and got["solo"]["cells"]["merge"]["evidence"] == "리뷰 대기"
 assert "alpha/A-1" not in stages.read()["order"], "an overlay is cells only, placed by the generated row"
@@ -268,6 +278,11 @@ except ValueError:
 assert got["delta/P4-K4-ready"]["title"] == "K4 client PRs" and "delta-release" not in got and "delta-k4" not in got, list(got)
 assert got["delta/P4-K4-ready"]["title_full"] == "K4 client PRs", "a recorded title replaces the uncut one too"
 assert "delta-prod" in got and "delta-docs" in got and "delta/D-1-K4" not in got, list(got)
+# A second row naming the same item is not folded (the first took it), so set_cell agrees with the table: it stands alone.
+stages.add("delta-p1-release", "second release note", parent="delta")
+assert stages.fold_map(stages.read()["rows"], stage_auto.read()["rows"]).get("delta-p1-release") is None
+stages.set_cell("delta-p1-release", "merge", "ok", "v1.2.1 by hand")
+stages.finish("delta-p1-release", drop=True)
 
 # A long card title: `title` is cut for the text brief as before, `title_full` carries it whole to the dashboard.
 long = "E-1 " + "word " * 40 + "END"
