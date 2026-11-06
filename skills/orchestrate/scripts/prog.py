@@ -2331,8 +2331,12 @@ def verdict_identity_problem(v):
     # A row is JSON anyone can append: a wrong type must refuse, not raise and leave the request queued forever.
     if not all(v.get(k) is None or isinstance(v.get(k), str) for k in ("reviewer", "evidence", "recorder")) \
             or not (authors is None or isinstance(authors, list) and all(isinstance(a, str) and a for a in authors)) \
-            or not (v.get("author_unverified") is None or isinstance(v.get("author_unverified"), bool)):
-        return "the identity fields are malformed (author is a list of handles, author_unverified a boolean, the rest strings)"
+            or not (v.get("author_unverified") is None or isinstance(v.get("author_unverified"), bool)) \
+            or (v.get("author_unverified") is True and authors != []):
+        # `author_unverified` vouches for a lookup that answered "no card", which is exactly the list []: a missing or
+        # null author says nothing was looked up, and a found author contradicts the mark.
+        return ("the identity fields are malformed (author is a list of handles, author_unverified a boolean that"
+                " needs author == [], the rest strings)")
     if not (v.get("reviewer") or "").strip():
         return "no reviewer named (--reviewer, or a review:<reviewer> or verifier:<reviewer> source)"
     if not (v.get("evidence") or "").strip():
@@ -2344,9 +2348,7 @@ def verdict_identity_problem(v):
     if not v.get("author"):
         # No card was found (its branch can differ from the PR's). The row may stand only when it says so and the
         # reviewer is not the session that recorded it; a row without the mark predates this rule and is refused.
-        # `author_unverified` vouches for a lookup that answered "no card", which is the list []; a missing or null
-        # author says nothing was looked up.
-        if v.get("author_unverified") is not True or v.get("author") != []:
+        if v.get("author_unverified") is not True:
             return "the PR's author session could not be identified (no card holds its branch)"
         for role, name in stated_reviewers(v):  # either name, so a review:<recorder> source cannot hide it
             if name == v["recorder"]:

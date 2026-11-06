@@ -428,7 +428,12 @@ class LandExec(Fixture):
         self.assertIsNone(prog.verdict_identity_problem({**row, "author": []}))
         for author in (None, "missing"):
             v = {**row} if author == "missing" else {**row, "author": author}
-            self.assertIn("could not be identified", prog.verdict_identity_problem(v) or "", v)
+            self.assertTrue(prog.verdict_identity_problem(v), v)
+        # The mark and a found author contradict each other; the author branch would skip the mark and the
+        # reviewer-is-recorder check, so a row carrying both must be refused, not read as an ordinary reviewed row.
+        both = {**row, "author": ["term_author"], "reviewer": "codex", "recorder": "codex", "source": "review:codex"}
+        self.assertIn("malformed", prog.verdict_identity_problem(both) or "", both)
+        self.assertIsNone(prog.verdict_identity_problem({**both, "author_unverified": None, "recorder": "term_x"}))
 
     def test_author_sessions_tells_no_card_from_a_lookup_that_cannot_vouch(self):
         real = prog.orca_json
