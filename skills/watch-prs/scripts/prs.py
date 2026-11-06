@@ -50,6 +50,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3] / "scripts"))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "orchestrate" / "scripts"))
 import card  # noqa: E402  (a release brief carries card.py's CLOSE row)
 import land_scope  # noqa: E402
+import store  # noqa: E402  (the send-log and the review-ask queue live in its DB once `orch db state` moved them)
 
 
 def opt(name, default=None):
@@ -610,6 +611,23 @@ def sendlog_rows(path):
     return rows
 
 
+def load_sendlog(in_db=None):
+    """The send-log decide() reads: the DB once `orch db state` moved this state directory's file in, else the file.
+    in_db: the caller's own sendlog_ready() answer, so one round asks once."""
+    if store.sendlog_ready(STATE.parent) if in_db is None else in_db:
+        return store.send_rows()
+    refuse_tombstone(STATE / "sendlog.jsonl")
+    return sendlog_rows(STATE / "sendlog.jsonl")
+
+
+def refuse_tombstone(path):
+    """The file is the empty directory `orch db state` left, but the DB did not say it holds the log (another fleet state,
+    a locked or unreadable DB): reading it as an empty log would ask every reviewer again."""
+    if path.is_dir():
+        raise SystemExit(f"send-log: {path} was moved into the DB, which cannot be read now (is ORCH_FLEET_STATE the one "
+                         f"`orch db state` ran against?). Nothing was read or written")
+
+
 def owned_elsewhere(cfg, now):
     """Branches checked out in a live Orca worktree (a worker, a lead's card), and PRs a live orchestrate program
     has recorded (program_prs). Someone else is driving those; this round does not merge them.
@@ -944,11 +962,12 @@ def author_action(s, cfg):
 
 def ask_key(pr, who):
     """How decide() matches a send-log row to a PR and a person. GitHub's nameWithOwner, a hand-written row and the
-    DB's lower-cased key differ in case, and logins are case-insensitive, so both sides pass through here."""
-    return pr.lower(), who.lower()
+    DB's lower-cased key differ in case, and logins are case-insensitive, so both sides pass through here. A row written
+    by hand may hold a number for either; str() keeps it from matching anything instead of stopping the round."""
+    return str(pr).lower(), str(who).lower()
 
 
-def decide(states, sendlog, now, cfg, authors=()):
+def decide(states, sendlog, now, cfg, authors=(), queued=()):
     """The actions due now, from PR states, the send-log and the clock; pure, so each reminder rule is a test.
 
     request    pending reviewer with no row for this PR yet. Batched per reviewer: due once they have batch_min
@@ -965,16 +984,23 @@ def decide(states, sendlog, now, cfg, authors=()):
     Business hours, after_hours and assign_reviewers are the PR's repo's (repo_cfg). Outside business hours a Slack
     action carries post_at, the next business morning (schedule-all), is held for a business-hours round
     (schedule-certain-only), or goes now (send-now). A request carries `github`, the reviewer+assignee edit, when
-    assign_reviewers is on."""
+    assign_reviewers is on.
+
+    queued is the owner's review-ask queue, [(pr, reviewer)] not yet sent: each is a request due now for that PR and
+    person, whether or not GitHub lists them as pending, and it skips batching (the owner asked for it by name). Business
+    hours, a refusal and a request already in the send-log still apply."""
     acts, held, bots, by = [], {}, review_bots(cfg), {}
     for r in sendlog:
         by.setdefault(ask_key(r["pr"], r["reviewer"]), []).append(r)
-    scheduled = {r["reviewer"].lower() for r in sendlog
+    scheduled = {str(r["reviewer"]).lower() for r in sendlog
                  if r["action"] == "request" and r["source"] == "scheduled" and (r.get("post_at") or 0) > now}
     for s in states:
         c = repo_cfg(cfg, s["repo"])
         hold, at = slack_timing(now, c)
-        for who in ([] if hold else s["pending"] + s["stale_approvals"]):
+        ask_who = {w.lower(): w for pr, w in queued if pr.lower() == s["pr"].lower()}
+        people = s["pending"] + s["stale_approvals"]
+        have = {p.lower() for p in people}
+        for who in ([] if hold else people + [w for k, w in ask_who.items() if k not in have]):
             mine = by.get(ask_key(s["pr"], who), [])
             if not slack_id(who, cfg) or any(r["source"] == "refused" for r in mine):
                 continue
@@ -986,7 +1012,11 @@ def decide(states, sendlog, now, cfg, authors=()):
                 if "rerequest" not in skip and not any(r["head"] == s["head"] for r in asks):
                     acts.append(wait_action("rerequest", s, who, c, at, thread))
             elif not asks:
-                if "request" not in skip:
+                if "request" in skip:
+                    pass
+                elif who.lower() in ask_who:
+                    acts.append(wait_action("request", s, who, c, at))
+                else:
                     held.setdefault(who, []).append((s, c, at))
             else:
                 last = max(asks, key=lambda r: r["at"])
@@ -1074,7 +1104,9 @@ def collect_review_wait(gh, me, cfg, ledger, now):
             continue
         states[s["pr"]] = (pr, s)
         authors.append({**s, "thread": slack_thread(threads.get(s["pr"].lower(), []))})
-    for a in decide(own, sendlog_rows(STATE / "sendlog.jsonl"), now, cfg, authors):
+    in_db = store.sendlog_ready(STATE.parent)
+    queued = [(a["pr"], a["reviewer"]) for a in store.asks(status="queued")] if in_db else []
+    for a in decide(own, load_sendlog(in_db), now, cfg, authors, queued):
         pr = states[a["pr"]][0]
         items.append({**wait_item(pr, now, f"{key(pr)}/{a['action']}/{a['reviewer']}", [describe(a, cfg)]), **a, "once": False})
     return items, excluded
@@ -1092,8 +1124,13 @@ def log(state, k, source, now, **fields):
            "source": source, "at": fields.get("at") or now, "post_at": fields.get("post_at"),
            "thread": fields.get("thread"), "scheduled": fields.get("scheduled"), "channel": act.get("channel")}
     state.mkdir(parents=True, exist_ok=True)
-    with (state / "sendlog.jsonl").open("a") as f:
-        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    with store.sendlog_lock(state.parent):  # `orch db state` holds it from its backup to the tombstone
+        if store.sendlog_ready(state.parent):
+            store.send_log_add(row)
+            return row
+        refuse_tombstone(state / "sendlog.jsonl")
+        with (state / "sendlog.jsonl").open("a") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
     return row
 
 
