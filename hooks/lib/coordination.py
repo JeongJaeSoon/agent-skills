@@ -159,21 +159,32 @@ def pr_verb(words):
     return rest[i:i + 2]
 
 
-def loop_around(text, pos):
+def at_command_start(text, idx):
+    """True when the word at idx can begin a command: after a separator, or after `do|then|else|elif` that itself
+    begins one. In `echo do for` the `for` is an argument."""
+    before = text[:idx].rstrip(" \t")
+    if not before or before[-1] in ";&|(){\n":
+        return True
+    m = re.search(r"(?<![\w.-])(do|then|else|elif)$", before)
+    return bool(m) and at_command_start(text, m.start())
+
+
+def loop_around(text, cmds, pos):
     """(start, end) of the innermost `until|while|for … done` that holds offset pos in text (quoted words already
-    blanked). The loop's condition counts: `until gh pr view …; do sleep 30; done` polls in it."""
+    blanked). The loop's condition counts: `until gh pr view …; do sleep 30; done` polls in it. The parser hands
+    back each closing `done` as a command of its own, so those are exact; an opening keyword is told from an
+    argument by where it stands."""
+    marks = [(m.start(), "open") for m in re.finditer(r"(?<![\w.-])(until|while|for)(?![\w.-])", text)
+             if at_command_start(text, m.start())]
+    marks += [(c.span[1], "close") for c in cmds if c.name == "done" and c.words == ["done"]]
     starts, best = [], None
-    for m in re.finditer(r"(?<![\w.-])(until|while|for|done)(?![\w.-])", text):
-        # A keyword only counts where a command may start: `echo done` and `grep for` are plain words.
-        before = text[:m.start()].rstrip(" \t")
-        if before and before[-1] not in ";&|(){\n" and not re.search(r"(?<![\w.-])(do|then|else|elif)$", before):
-            continue
-        if m[1] != "done":
-            starts.append(m.start())
+    for at, kind in sorted(marks):
+        if kind == "open":
+            starts.append(at)
         elif starts:
             start = starts.pop()
-            if start <= pos < m.end() and (best is None or start > best[0]):
-                best = (start, m.end())
+            if start <= pos < at and (best is None or start > best[0]):
+                best = (start, at)
     return best
 
 
@@ -184,17 +195,22 @@ def check_monitor(cmd, cfg):
     # The wait that counts is the one inside the loop around a poll (a sleep before the loop is a one-off), and the
     # sleeps there add up (`sleep 150; sleep 150` waits 300 s). A sleep put in the background (`sleep 300 &`) waits
     # for nobody, so it counts as 0. Where the loop branches (if/else/case/`||`) only one sleep may run, so the
-    # shortest one stands for the loop. A sleep whose argument is a variable cannot be judged, so that loop passes
-    # without a warning. Any one short loop warns.
+    # shortest one stands for the loop (a heuristic: it can warn on a loop that branches yet always waits long
+    # enough, which costs a warning, never a block). A `wait` in the loop makes a background sleep a real wait. A
+    # sleep whose argument is a variable cannot be judged, so that loop passes without a warning. A poll outside any
+    # loop runs once and is no watcher. Any one short loop warns.
     for poll in (c for c in cmds if c.name == "gh" and pr_verb(c.words) in PR_POLLS):
-        region = loop_around(text, poll.span[1] - 1)  # a span starts at the blank before the word
-        scope = [c for c in cmds if region is None or region[0] < c.span[1] <= region[1]]
+        region = loop_around(text, cmds, poll.span[1] - 1)  # a span starts at the blank before the word
+        if region is None:
+            continue
+        scope = [c for c in cmds if region[0] < c.span[1] <= region[1]]
         sleeps = [c for c in scope if c.name == "sleep"]
         secs = [sleep_seconds(c) for c in sleeps]
         if not secs or None in secs:
             continue
-        secs = [0 if re.match(r"\s*&(?!&)", text[c.span[1]:]) else s for c, s in zip(sleeps, secs)]
-        span = text[region[0]:region[1]] if region else text
+        if not any(c.name == "wait" for c in scope):
+            secs = [0 if re.match(r"\s*&(?!&)", text[c.span[1]:]) else s for c, s in zip(sleeps, secs)]
+        span = text[region[0]:region[1]]
         branches = re.search(r"(?<![\w.-])(if|case|else|elif)(?![\w.-])|\|\|", span)
         wait = min(secs) if branches else sum(secs)
         if wait < PR_POLL_MIN:

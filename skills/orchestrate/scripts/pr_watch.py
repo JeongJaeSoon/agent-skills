@@ -6,7 +6,7 @@ Usage: pr_watch.py --repo OWNER/REPO [--repo ...] [--branch REGEX] [--land-check
 
 Each round lists the PRs of every --repo whose head branch matches --branch and prints a line only for:
   MERGED or CLOSED, CI turning to failure, `orch land-check` turning READY (with --land-check),
-  a conflict (DIRTY) appearing or clearing, a new PR opening.
+  a conflict (DIRTY) appearing or clearing, a new or reopened PR.
 --land-check SLUG must name a program whose repo is the one watched (read from its program.json).
 BLOCKED, UNKNOWN, CLEAN, UNSTABLE and pending checks come and go without a line. The first round only records
 the current state, in memory: a restarted watcher starts silent again, so give Monitor a long timeout_ms.
@@ -15,8 +15,10 @@ changes nobody can act on. Run it as `Monitor` with `timeout_ms` set; it stops w
 """
 import argparse, json, os, pathlib, re, shutil, subprocess, sys, time
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import prog  # noqa: E402
+
 MIN_INTERVAL = 300
-FAILED = ("FAILURE", "ERROR", "TIMED_OUT")
 ORCH = shutil.which("orch") or str(pathlib.Path(__file__).resolve().parents[3] / "bin" / "orch")
 
 
@@ -56,24 +58,20 @@ def snapshot(repos, branch, land_slug, limit, run=sh):
 
 
 def failing(checks):
-    """True when the latest run of any check failed. A rerun of a check supersedes its earlier runs in the rollup."""
-    latest = {}
-    for c in checks:
-        key = (c.get("workflowName") or "", c.get("name") or c.get("context") or "")
-        # Order by when a run started: an older run can finish after its rerun began. A status context has no
-        # startedAt, and gh prints 0001-01-01 for a time that does not exist yet, so those fall back to completedAt.
-        stamp = next((s for s in (c.get("startedAt"), c.get("completedAt")) if s and not s.startswith("0001")), "")
-        if key not in latest or stamp >= latest[key][0]:
-            latest[key] = (stamp, c)
-    return any((c.get("conclusion") or c.get("state") or "").upper() in FAILED for _, c in latest.values())
+    """True when the latest run of any check ended in something other than a pass. The rollup keeps every run of a
+    head, so which one is latest (a rerun, a cancelled-and-replaced run, one still going) is prog.ci_summary's call,
+    the same one `orch land-check` makes."""
+    return bool(prog.ci_summary(checks)[0])
 
 
 def carry(old, new):
     """None means "could not tell" (mergeability still UNKNOWN, a failed land-check): keep what was last known, so a
-    blip never reads as a change and back. A PR that left the list (older than --limit, or a short read) keeps its
-    last state too, so it neither reopens as "new" nor loses a merge seen after it returns."""
+    blip never reads as a change and back. An open PR that left the list (older than --limit, or a short read) keeps
+    its last state too, so it neither reopens as "new" nor loses a merge seen after it returns. A finished PR is
+    dropped: back in the list it reads as new, and memory stays bounded by the open PRs."""
     for key, o in old.items():
-        new.setdefault(key, o)
+        if o["state"] == "OPEN":
+            new.setdefault(key, o)
     for key, n in new.items():
         for field in ("dirty", "ready"):
             if n[field] is None:
@@ -90,6 +88,8 @@ def events(old, new):
             continue
         if n["state"] != o["state"] and n["state"] in ("MERGED", "CLOSED"):
             yield f"{key} {n['state']}"
+        elif n["state"] == "OPEN" and o["state"] != "OPEN":
+            yield f"{key} reopened"
         if n["state"] != "OPEN":
             continue
         if n["dirty"] != o["dirty"]:

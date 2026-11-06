@@ -90,19 +90,30 @@ assert replay(churn) == [], "an hour of status churn prints nothing"
 flap = [json.dumps([gh_pr(1, m)]) for m in ("DIRTY", "UNKNOWN", "DIRTY", "UNKNOWN", "CLEAN")]
 assert replay(flap) == ["a/b#1 conflict resolved"], "UNKNOWN keeps the last known conflict state"
 # A rerun that passes supersedes its failed run; a later failure of the rerun is a new failure.
-old_fail = {"workflowName": "ci", "name": "tests", "conclusion": "FAILURE", "completedAt": "2026-11-06T01:00:00Z"}
-rerun_ok = {"workflowName": "ci", "name": "tests", "conclusion": "SUCCESS", "completedAt": "2026-11-06T02:00:00Z"}
-rerun_bad = {"workflowName": "ci", "name": "tests", "conclusion": "FAILURE", "completedAt": "2026-11-06T03:00:00Z"}
+def chk(conclusion, started, **kw):
+    return {"workflowName": "ci", "name": "tests", "status": "COMPLETED", "conclusion": conclusion,
+            "startedAt": f"2026-11-06T{started}:00Z", "completedAt": f"2026-11-06T{started}:30Z", **kw}
+
+
+# Which run is the latest is prog.ci_summary's call (the one `orch land-check` uses): a rerun that passes supersedes
+# its failed run, and a later failure of the rerun is a new failure.
+old_fail, rerun_ok, rerun_bad = chk("FAILURE", "01:00"), chk("SUCCESS", "02:00"), chk("FAILURE", "03:00")
 runs = [json.dumps([gh_pr(1, rollup=r)]) for r in ([old_fail], [old_fail, rerun_ok], [old_fail, rerun_ok, rerun_bad])]
 assert replay(runs) == ["a/b#1 CI failed"], "the first listing already failed, so only the last one is a change"
 assert pr_watch.failing([old_fail, rerun_ok]) is False and pr_watch.failing([old_fail, rerun_ok, rerun_bad]) is True
-assert pr_watch.failing([{"context": "lint", "state": "ERROR"}, {"context": "lint", "state": "SUCCESS"}]) is False
-# A rerun still running has completedAt 0001-01-01 in gh's output; it is newer than the failure it replaces.
-running = {"workflowName": "ci", "name": "tests", "status": "IN_PROGRESS", "conclusion": "",
-           "startedAt": "2026-11-06T02:00:00Z", "completedAt": "0001-01-01T00:00:00Z"}
-runs = [json.dumps([gh_pr(1, rollup=r)]) for r in ([rerun_ok], [rerun_ok, running], [rerun_ok, running, rerun_bad])]
+lint = [{"context": "lint", "state": "ERROR", "startedAt": "2026-11-06T01:00:00Z"},
+        {"context": "lint", "state": "SUCCESS", "startedAt": "2026-11-06T02:00:00Z"}]
+assert pr_watch.failing(lint) is False
+# Conclusions beyond FAILURE that still need a person.
+for odd in ("ACTION_REQUIRED", "STARTUP_FAILURE", "CANCELLED", "TIMED_OUT"):
+    assert pr_watch.failing([chk(odd, "01:00")]) is True, odd
+# A rerun still running (gh prints completedAt 0001-01-01 for it) is pending, not a failure; when it ends badly
+# the same entry turns FAILURE, and that is the new failure.
+running = chk("", "03:00", status="IN_PROGRESS", completedAt="0001-01-01T00:00:00Z")
+ended_bad = chk("FAILURE", "03:00")
+runs = [json.dumps([gh_pr(1, rollup=r)]) for r in ([rerun_ok], [rerun_ok, running], [rerun_ok, ended_bad])]
 assert replay(runs) == ["a/b#1 CI failed"], "success, rerun running, rerun failed: one failure line"
-runs = [json.dumps([gh_pr(1, rollup=r)]) for r in ([old_fail], [old_fail, running], [old_fail, running, rerun_bad])]
+runs = [json.dumps([gh_pr(1, rollup=r)]) for r in ([old_fail], [old_fail, running], [old_fail, ended_bad])]
 assert replay(runs) == ["a/b#1 CI failed"], "failed, rerun running, failed again: the rerun's failure is new"
 # land-check says "state unknown" when gh gave it nothing: no verdict, so READY, unknown, READY is one READY.
 verdicts = iter(["HOLD: x\n", "READY: ok\n", "HOLD: PR state unknown (no state from gh); run land-check again\n",
@@ -159,11 +170,16 @@ with tempfile.TemporaryDirectory() as home:
             raise AssertionError(f"must be refused: {bad}")
 
 # A rerun that started later is the latest run even when the older run finished after it began.
-slow_old = {"workflowName": "ci", "name": "tests", "conclusion": "FAILURE",
-            "startedAt": "2026-11-06T01:00:00Z", "completedAt": "2026-11-06T03:00:00Z"}
-fast_new = {"workflowName": "ci", "name": "tests", "conclusion": "SUCCESS",
-            "startedAt": "2026-11-06T02:00:00Z", "completedAt": "2026-11-06T02:30:00Z"}
+slow_old = chk("FAILURE", "01:00", completedAt="2026-11-06T03:00:00Z")
+fast_new = chk("SUCCESS", "02:00")
 assert pr_watch.failing([slow_old, fast_new]) is False and pr_watch.failing([fast_new, slow_old]) is False
+
+# A PR that reopens prints: directly after CLOSED, and after a round where it was missing from the list.
+assert replay([json.dumps([gh_pr(1, state="CLOSED")]), json.dumps([gh_pr(1)])]) == ["a/b#1 reopened"]
+assert replay([json.dumps([gh_pr(1, state="CLOSED")]), json.dumps([]), json.dumps([gh_pr(1)])]) == ["a/b#1 opened"]
+# Memory stays bounded: finished PRs that left the list are not carried.
+kept = pr_watch.carry({"a/b#1": pr("MERGED"), "a/b#2": pr()}, {})
+assert list(kept) == ["a/b#2"], kept
 
 # A PR missing from one listing keeps its last state: it does not reopen, and a merge seen after it returns prints.
 gone = [json.dumps([gh_pr(1)]), json.dumps([]), json.dumps([gh_pr(1)])]

@@ -220,9 +220,13 @@ for cmd in ("while true; do gh pr view 1; echo done; sleep 60; done",
             "while true; do gh pr view 1; echo for; sleep 60; done",
             "while true; do gh pr view 1; if false; then sleep 300; else sleep 60; fi; done",
             "while true; do gh pr view 1; sleep 300 & sleep 60; done",
-            "while true; do gh pr view 1; sleep 300 || sleep 60; done"):
+            "while true; do gh pr view 1; sleep 300 || sleep 60; done",
+            "while true; do gh pr view 1; echo then done; sleep 60; done",
+            "sleep 300; while true; do gh pr view 1; echo do for; sleep 60; done"):
     assert "pr_watch.py" in monitor(cmd)[1], "must warn: " + cmd
-for cmd in ("while true; do gh pr view 1; echo done; sleep 600; done",
+for cmd in ("gh pr view 1; sleep 60",
+            "while true; do gh pr view 1; sleep 300 & wait; done",
+            "while true; do gh pr view 1; echo done; sleep 600; done",
             "while true; do gh pr view 1 && sleep 150 && sleep 150; done",
             "while true; do if gh pr view 1 | grep -q OPEN; then sleep 600; else sleep 900; fi; done"):
     assert monitor(cmd) == ("none", ""), "no warning: " + cmd
