@@ -1,4 +1,4 @@
-<!-- translated-from: aadb64002f2c8e780e23ebffea766fa6d7c1b99d -->
+<!-- translated-from: 942b94e68fb078296a2a81ad1d18d918b6b125e6 -->
 # Skill catalog
 
 This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 16 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
@@ -550,7 +550,7 @@ Program state lives in `~/.claude/programs/<slug>/`: `program.json`, the append-
 Allow is given only to a single command with no shell operators, redirections, substitutions or variables. The one variable allowed is `$ORCA_TERMINAL_HANDLE`. The subcommand must come right after the command name; if a flag comes first, no decision is made. Calls without a decision go through the normal permission flow (the auto mode classifier and the user's own rules).
 
 ### Dangerous commands and role-session rules
-The same `guard.py` first applies the rules in `hooks/lib/danger.py` and `hooks/lib/coordination.py`. Only words bash actually runs count as commands (text in quotes, heredoc bodies and comments is text), and each command's arguments are read by splitting its original text with `shlex`. So `echo pkill`, a commit message or a quoted prompt doesn't trip anything. Commands inside `bash -c`, `eval` or a script file aren't seen: this is a guardrail, not a sandbox. Scripts can call the same checks directly (`danger.check_bash`, `danger.external_review`).
+The same `guard.py` first applies the rules in `hooks/lib/danger.py` and `hooks/lib/coordination.py`. Only words bash actually runs count as commands (text in quotes, heredoc bodies and comments is text), and each command's arguments are read by splitting its original text with `shlex`. So `echo pkill`, a commit message or a quoted prompt doesn't trip anything. Commands inside `bash -c`, `eval` or a script file aren't seen. Neither are brace expansion, a path held in a variable, a body piped through stdin, or a push refspec set in git config. This is a guardrail, not a sandbox. Scripts can call the same checks directly (`danger.check_bash`, `danger.external_review`).
 
 Every rule has a key in `~/.claude/agent-skills.json`. Its value is one of `"deny"`, `"ask"`, `"warn"` or `"off"`; `false` means `"off"` and `true` means the default. Off puts back the behavior from before the rule existed. A warn doesn't block: it shows the human a notice (`systemMessage`) and gives the model the same text as context.
 

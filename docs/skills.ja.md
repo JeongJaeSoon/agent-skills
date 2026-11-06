@@ -1,4 +1,4 @@
-<!-- translated-from: aadb64002f2c8e780e23ebffea766fa6d7c1b99d -->
+<!-- translated-from: 942b94e68fb078296a2a81ad1d18d918b6b125e6 -->
 # スキルカタログ
 
 `agent-skills` プラグインに入っているスキル41個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック16個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
@@ -552,7 +552,7 @@ PR を受け持つスキルとマージする主体:
 許可を出すのは、シェルの演算子、リダイレクト、置換、変数を含まない単一のコマンドだけです。変数は `$ORCA_TERMINAL_HANDLE` だけが例外です。コマンド名のすぐ後にサブコマンドが来る必要があり、フラグが先に来たら判定しません。判定しなかった呼び出しは、ふだんの権限の流れ（auto mode の分類器、ユーザーのルール）に乗ります。
 
 ### 危険なコマンドとロールセッションのルール
-同じ `guard.py` が、先に `hooks/lib/danger.py` と `hooks/lib/coordination.py` のルールを見ます。コマンドとして読むのは bash が実際に実行する語だけで（引用符の中、heredoc の本文、コメントはテキスト）、そのコマンドの引数は元の文字列を `shlex` で分けて読みます。そのため `echo pkill`、コミットメッセージ、引用符の中のプロンプトには反応しません。`bash -c`、`eval`、スクリプトファイルの中のコマンドは見ません。ガードレールであってサンドボックスではありません。スクリプトは同じ判定関数（`danger.check_bash`、`danger.external_review`）を直接呼べます。
+同じ `guard.py` が、先に `hooks/lib/danger.py` と `hooks/lib/coordination.py` のルールを見ます。コマンドとして読むのは bash が実際に実行する語だけで（引用符の中、heredoc の本文、コメントはテキスト）、そのコマンドの引数は元の文字列を `shlex` で分けて読みます。そのため `echo pkill`、コミットメッセージ、引用符の中のプロンプトには反応しません。`bash -c`、`eval`、スクリプトファイルの中のコマンドは見ません。ブレース展開、変数に入れたパス、stdin で渡す本文、git config に書いた push refspec も読めません。ガードレールであってサンドボックスではありません。スクリプトは同じ判定関数（`danger.check_bash`、`danger.external_review`）を直接呼べます。
 
 ルールごとに `~/.claude/agent-skills.json` のキーがあります。値は `"deny"`・`"ask"`・`"warn"`・`"off"` のどれかで、`false` は `"off"`、`true` は既定値です。オフにすると、そのルールができる前の動作に戻ります。warn は止めず、人に見える通知（`systemMessage`）とモデルへの文脈として残ります。
 
