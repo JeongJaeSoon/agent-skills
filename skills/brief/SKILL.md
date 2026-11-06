@@ -9,7 +9,7 @@ A status report has one job: the human reads it in under a minute and knows what
 
 Pick the mode by what the human asked for:
 
-- **Report** (the default): §1 to §3 below.
+- **Report** (the default): §1 to §3 below. A report request that also mentions stages, deploys, to-dos or held work is still the report: it already counts those and points at their lists, so do not open the mode files for it. The other modes are for a request that wants that table or list alone.
 - **Stage table**: "단계표 보여줘", "stage table", the retired `/agent-skills:stage`. Only the per-item merge / dev / prod table, never the full report: read [references/stage.md](references/stage.md) and follow it.
 - **To-do**: "할 일 보여줘", "보류 큐 보여줘", "to-do list", the retired `/agent-skills:todo`. Only the to-dos and the held queue, never the full report: read [references/todo.md](references/todo.md) and follow it.
 
