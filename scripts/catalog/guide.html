@@ -327,7 +327,7 @@ footer { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--line);
       <div class="layer">
         <div class="who"><span data-lang="ko">단독 세션</span><span data-lang="en">Solo session</span><span data-lang="ja">単独セッション</span><small><span data-lang="ko">프로그램 밖</span><span data-lang="en">outside a program</span><span data-lang="ja">プログラムの外</span></small></div>
         <div>
-          <p><span data-lang="ko">write-ticket → deliver-ticket → handoff-ticket 또는 end-session. 곁가지는 dispatch-card로 다른 카드에 넘기고 자기 일을 계속한다.</span><span data-lang="en">write-ticket → deliver-ticket → handoff-ticket or end-session. Side work goes to another card through dispatch-card while the session keeps going.</span><span data-lang="ja">write-ticket → deliver-ticket → handoff-ticket または end-session。脇道の作業は dispatch-card で別のカードに渡し、自分の作業を続けます。</span></p>
+          <p><span data-lang="ko">write-ticket → deliver-ticket → dispatch-card 다음 티켓 모드 또는 end-session. 곁가지는 dispatch-card로 다른 카드에 넘기고 자기 일을 계속한다.</span><span data-lang="en">write-ticket → deliver-ticket → dispatch-card's next-ticket mode or end-session. Side work goes to another card through dispatch-card while the session keeps going.</span><span data-lang="ja">write-ticket → deliver-ticket → dispatch-card の次のチケットモード または end-session。脇道の作業は dispatch-card で別のカードに渡し、自分の作業を続けます。</span></p>
           <div class="runs"><span class="chip"><span data-lang="ko">티켓 루프</span><span data-lang="en">Ticket loop</span><span data-lang="ja">チケットループ</span></span><span class="chip plain"><span data-lang="ko">머지 감시(외부 maintainer)</span><span data-lang="en">Merge watch (external maintainer)</span><span data-lang="ja">マージ監視（外部 maintainer）</span></span></div>
         </div>
       </div>
@@ -537,13 +537,9 @@ const SKILLS = [
     T("여러 파일을 고치기 전, PR 올리기·머지 전, \"이 티켓 끝내줘\"", "Before editing several files, before opening or merging a PR, \"이 티켓 끝내줘\" (\"finish this ticket\")", "複数ファイルを直す前、PR を出す・マージする前、\"이 티켓 끝내줘\"（このチケットを終わらせて）"),
     T("계획 → 구현 → 교차 검토 → 커밋 → PR·stack·E2E → 착지 → 수용 기준 확인. 남이 머지하는 PR은 감시하다 판단. 옛 이름 ship-pr", "Plan → implement → cross-review → commit → PR, stack, E2E → land → check the acceptance criteria. A PR someone else merges gets watched, then judged. Formerly ship-pr", "計画 → 実装 → クロスレビュー → コミット → PR・stack・E2E → ランディング → 受け入れ基準の確認。他人がマージする PR は監視してから判断。旧名 ship-pr"),
     ["scripts/sticky-comment.sh"]],
-  ["ticket", "handoff-ticket",
-    T("\"핸드오프\", \"다음 티켓 진행해줘\", 티켓이 끝난 순간", "\"핸드오프\" (\"handoff\"), \"다음 티켓 진행해줘\" (\"start the next ticket\"), or the moment a ticket is done", "\"핸드오프\"（ハンドオフ）、\"다음 티켓 진행해줘\"（次のチケットを進めて）、チケットが終わった瞬間"),
-    T("완료 확인 → 다음 티켓을 새 Orca worktree 카드로 → 시작 확인 → 이 세션 종료", "Confirm it's done → open the next ticket as a new Orca worktree card → confirm it started → end this session", "完了の確認 → 次のチケットを新しい Orca worktree カードに → 開始を確認 → このセッションを終了"),
-    []],
   ["ticket", "dispatch-card",
-    T("\"~ repo에 지시해줘\", \"곁가지로 띄워줘\" — 이 세션은 계속 일할 때", "\"~ repo에 지시해줘\" (\"send this to the ~ repo\"), \"곁가지로 띄워줘\" (\"spin this off on the side\") — while this session keeps working", "\"~ repo에 지시해줘\"（〜 リポジトリに指示して）、\"곁가지로 띄워줘\"（脇で立ち上げて）— このセッションは作業を続けるとき"),
-    T("대상 저장소 확인 → 브리프 → 카드 생성 → 시작 확인 후 원래 일로 복귀. 옛 이름 dispatch-work", "Confirm the target repo → write the brief → create the card → confirm it started, then return to the original work. Formerly dispatch-work", "対象リポジトリの確認 → ブリーフ → カード作成 → 開始を確認して元の作業に戻る。旧名 dispatch-work"),
+    T("\"~ repo에 지시해줘\", \"곁가지로 띄워줘\" — 이 세션은 계속 일할 때. \"핸드오프\", \"다음 티켓 진행해줘\", 티켓이 끝난 순간", "\"~ repo에 지시해줘\" (\"send this to the ~ repo\"), \"곁가지로 띄워줘\" (\"spin this off on the side\") — while this session keeps working. \"핸드오프\" (\"handoff\"), \"다음 티켓 진행해줘\" (\"start the next ticket\"), or the moment a ticket is done", "\"~ repo에 지시해줘\"（〜 リポジトリに指示して）、\"곁가지로 띄워줘\"（脇で立ち上げて）— このセッションは作業を続けるとき。\"핸드오프\"（ハンドオフ）、\"다음 티켓 진행해줘\"（次のチケットを進めて）、チケットが終わった瞬間"),
+    T("대상 저장소 확인 → 브리프 → 카드 생성 → 시작 확인 후 원래 일로 복귀. 다음 티켓 모드: 완료 확인 → 다음 티켓을 새 Orca worktree 카드로 → 시작 확인 → 이 세션 종료. 옛 이름 dispatch-work, handoff-ticket", "Confirm the target repo → write the brief → create the card → confirm it started, then return to the original work. Next-ticket mode: confirm it's done → open the next ticket as a new Orca worktree card → confirm it started → end this session. Formerly dispatch-work, handoff-ticket", "対象リポジトリの確認 → ブリーフ → カード作成 → 開始を確認して元の作業に戻る。次のチケットモード：完了の確認 → 次のチケットを新しい Orca worktree カードに → 開始を確認 → このセッションを終了。旧名 dispatch-work、handoff-ticket"),
     []],
   ["ticket", "end-session",
     T("\"세션 종료해줘\", \"worktree 정리해줘\"", "\"세션 종료해줘\" (\"end this session\"), \"worktree 정리해줘\" (\"clean up the worktree\")", "\"세션 종료해줘\"（セッションを終了して）、\"worktree 정리해줘\"（worktree を片付けて）"),

@@ -141,6 +141,7 @@ MCP 서버 하나가 끊겼을 때는 재인증이 아니라 `/mcp`에서 그 �
    - 앞서기만 했으면 push 판정으로 간다.
 5. push: 올라갈 커밋마다 서명이 있어야 한다. `git log --format=%G?`가 `N`(서명 없음)이나 `B`(서명이 틀림)인 커밋이 하나라도 있으면 멈춘다. `G`·`U`만 허용하지 않는 이유: `allowedSignersFile`이 없는 새 PC에서는 서명이 있어도 `E`(검증 불가)가 나올 수 있다. 측정한 PC의 최근 커밋은 모두 `U` 또는 `G`였다. 통과하면 `git push origin main`(force 없음).
 6. HEAD가 바뀌었으면 바뀐 경로로 reload 브로드캐스트를 정한다(§4).
+7. 멈추지 않았으면 로드된 체크아웃의 `skills/orchestrate/scripts/store.py state --auto`를 돌린다(시간 제한 120초). 확인·단계표 파일을 DB로 옮기는 단계라서, 이미 옮긴 PC와 DB가 아직 이행 전인 PC에서는 아무것도 바꾸지 않는다. 결과는 `sync.json`의 `state`(`ok`·`failed`)에 남고 `failed`로 바뀔 때만 알린다. 업데이트에 실려 온 이행이 사람이 setup을 돌릴 때까지 기다리지 않게 하는 단계다.
 
 - **main 직접 push:** 이 저장소에는 branch protection과 ruleset이 없다(`gh api …/branches/main/protection` → 404 "Branch not protected", rulesets `[]`). 최근 main 커밋 15개는 모두 서명된 직접 커밋이고 PR은 2개뿐이다. 그래서 동기화는 main에 직접 push한다. 리뷰를 받고 싶은 큰 변경은 지금처럼 PR로 올리고, 동기화는 그 결과를 pull할 뿐이다.
 - **인증 대기로 멈추지 않기:** launchd에는 터미널이 없어서 인증을 물으면 영원히 기다린다. `GIT_TERMINAL_PROMPT=0`으로 돌리고, stdin을 닫고 새 세션으로 띄워 터미널에서 떼어 낸다. HTTPS origin이면 `git config --get-urlmatch credential.helper <url>`이 비어 있을 때 fetch 전에 멈춘다(`gh auth setup-git`이 쓰는 URL 한정 helper도 보인다). SSH origin이고 `core.sshCommand`가 없으면 `ssh -o BatchMode=yes`로 돌려 host key나 passphrase를 묻지 않게 한다. git 명령마다 시간 제한(60초)을 건다.

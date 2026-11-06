@@ -21,7 +21,7 @@
 | 必須 | `python3` 3.9 以上 | すべてのスクリプト。macOS の `/usr/bin/python3`（3.9.6）で動きます |
 | B・C で必須 | github.com にログイン済みの `gh` | 自分のリポジトリに関する推奨ルールと、private な個人設定リポジトリの clone |
 | B・C | macOS、Linux | 同期ジョブと既定の自動化は Orca automation なので、Orca をインストールして開いている間だけ動きます。セットアップは LaunchAgent を作りません。`preview-watch` と `share-server`（既定は off）は macOS で引き続き LaunchAgent です |
-| 任意 | Orca | 複数セッションを扱うスキル（`orchestrate`、`dispatch-card`、`handoff-ticket`）と定期ラウンド |
+| 任意 | Orca | 複数セッションを扱うスキル（`orchestrate`、`dispatch-card`）と定期ラウンド |
 | 任意 | Linear か Jira | トラッカー系スキル。`tracker.adapter` がなければ Linear |
 | 任意 | Obsidian か Markdown フォルダ | ノート系スキル。`notes.adapter` を決めるまでは無効 |
 | 任意 | tailscale、caddy | `preview-watch` と `share-server`。どちらも既定で無効 |

@@ -145,7 +145,10 @@ Usage: orch <command> <slug> [options]
                                      orchestrate.order_auto_close is true. shadow sets those events against what the
                                      sessions closed by hand
   db import [--dry-run | --apply] [--rehearsal] | export --legacy --target 4a|pre-4a DIR | dump [TABLE]
-  db backup FILE | restore FILE [--rehearsal] | rollback 4b DIR [--rehearsal] | cutover-plan 4a|4b
+  db backup FILE | restore FILE [--rehearsal] | rollback 4b|state DIR [--rehearsal] | cutover-plan 4a|4b
+  db state [--auto]                  acks.jsonl and stages.json -> tables, after a backup, with tombstones in their place
+                                     (setup runs it with --auto after an update; a rerun changes nothing);
+                                     export --legacy --target state DIR writes both files back for rollback state DIR
   db migrate [--check] | init        migrate is the whole cutover in one rerunnable command, run by the owner from a
                                      plain terminal (cutover.py); init is for a PC with no state (setup runs it)
                                      no slug: agent-skills.db (store.py). import moves decisions.json,
@@ -2222,49 +2225,71 @@ def cmd_verdict(argv):
 SELF_REVIEWERS = {"self", "implementer", "author"}
 
 
+def worktree_rows():
+    """Orca's worktree list when it can be trusted to be complete, else None: a cut-off list, or a host Orca did not
+    reach, can hide the very worktree that wrote the PR."""
+    listing = orca_json("worktree", "list")
+    rows = listing["worktrees"]
+    if listing.get("truncated") or not isinstance(rows, list) or (listing.get("hostScope") or {}).get("omittedHostIds"):
+        return None
+    return rows
+
+
+def worktree_sessions(w):
+    """Terminal handles of one worktree row, or None when Orca's answer cannot be trusted for it. An answer counts only
+    when it says it covered this worktree's host: an empty or partial answer from a host Orca did not reach says
+    nothing about its sessions. Another host being left out is an ordinary scope limit."""
+    out = orca_json("terminal", "list", "--worktree", f"id:{w['id']}")
+    rows = out["terminals"]
+    if out.get("truncated") or not isinstance(rows, list):
+        return None
+    scope, host = out.get("hostScope") or {}, w.get("hostId")
+    if not host or host not in (scope.get("hostIds") or []) or host in (scope.get("omittedHostIds") or []):
+        return None
+    return {t["handle"] for t in rows if isinstance(t.get("handle"), str) and t["handle"]}
+
+
+def worktree_holders(matches):
+    """Sorted handles of the sessions in every worktree row `matches` picks, [] when it picks none (Orca answered and
+    no card is there), None when the list or any picked row's answer cannot show who is there. A partial union is
+    never returned: the missing worktree may be the one that wrote the PR."""
+    try:
+        rows = worktree_rows()
+        if rows is None:
+            return None
+        handles = set()
+        for w in rows:
+            if not matches(w):
+                continue
+            part = worktree_sessions(w)
+            if part is None:
+                return None
+            handles |= part
+        return sorted(handles)
+    except (SystemExit, ValueError, KeyError, TypeError, AttributeError, OSError):
+        return None
+
+
 def author_sessions(branch):
-    """Terminal handles of the card whose worktree holds the PR's branch: the sessions that wrote it. [] when Orca
-    answered and no worktree holds the branch; None when the answer cannot show who the author is (Orca failed, the
-    list is cut off or malformed). Only the first leaves the author unverified: the second must refuse, since a cut-off
-    list can miss the very card that wrote the PR."""
+    """Terminal handles of every card whose worktree holds the PR's branch: the sessions that wrote it. [] when Orca
+    answered completely and no worktree holds the branch; None when the answer cannot show who the author is (Orca
+    failed, a list or a host is missing or cut off). Only [] leaves the author unverified: None must refuse, since a
+    cut-off list can miss the very card that wrote the PR. A branch selector is rejected as ambiguous once a closed
+    card's worktree and its successor both hold the branch, so the worktrees are listed and each is asked by id."""
     if not branch:
         return []
-    try:
-        out = orca_json("terminal", "list", "--worktree", f"branch:{branch}")
-        rows = out["terminals"]
-        if out.get("truncated") or not isinstance(rows, list):
-            return None
-        return sorted({t["handle"] for t in rows if isinstance(t.get("handle"), str) and t["handle"]})
-    except SystemExit as e:
-        return [] if "selector_not_found" in str(e.code) else None
-    except (ValueError, KeyError, TypeError, AttributeError, OSError):
-        return None
+    return worktree_holders(lambda w: w.get("branch") in (branch, f"refs/heads/{branch}"))
 
 
 def worktree_author_sessions(head):
     """Fallback for a card whose local branch is not the PR's branch (it pushed `local:remote`, or was renamed): the
     terminals of the non-main worktrees sitting at the PR's head sha. The PR number is not matched, because the listing
     spans repositories and another repository's card linking the same number would stand in for the author. [] when
-    Orca answered and no worktree sits there; None when the answer cannot show it (failed, cut off, a matching row
-    that cannot be read), which must refuse, not pass as an unverified author."""
-    try:
-        out = orca_json("worktree", "list")
-        rows = out["worktrees"]
-        if out.get("truncated") or not isinstance(rows, list):
-            return None
-        handles = set()
-        for w in rows:
-            if w.get("isMainWorktree") or not head or w.get("head") != head:
-                continue
-            if not isinstance(w.get("path"), str):
-                return None
-            terminals = orca_json("terminal", "list", "--worktree", f"path:{w['path']}")
-            if terminals.get("truncated") or not isinstance(terminals["terminals"], list):
-                return None  # a partial author set is no author set
-            handles |= {t["handle"] for t in terminals["terminals"] if isinstance(t.get("handle"), str) and t["handle"]}
-        return sorted(handles)
-    except (SystemExit, ValueError, KeyError, TypeError, AttributeError, OSError):
-        return None
+    Orca answered and no worktree sits there; None when the answer cannot show it, which must refuse, not pass as an
+    unverified author. A matching row that cannot be read is None too."""
+    if not head:
+        return []
+    return worktree_holders(lambda w: not w.get("isMainWorktree") and w.get("head") == head)
 
 
 def verdict_identity_problem(v):
