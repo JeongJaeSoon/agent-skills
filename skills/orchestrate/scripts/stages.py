@@ -3,7 +3,8 @@ and prod check, each cell a mark and the evidence behind it.
 
 Most rows are generated: each fleet tick derives a program's rows from its ledger, its Run's cards and GitHub
 (stage_auto.py, stages-auto.json). The orchestrator or lead writes a cell where it verified it (`orch stage set`), a
-generated row's id included, and that manual cell wins over the generated one; it adds a row (`orch stage add`) for
+generated row's id included, and that manual dev or prod cell wins over the generated one (the merge cell of a generated
+row is derived and refused); it adds a row (`orch stage add`) for
 work outside any program. A recorded row with a generated row's PR is folded into that row when the table is read. The next report and the dashboard read the same record instead of each rebuilding it. What
 a person recorded lives in the fleet state directory (stages.json, beside state.json), not a program's ledger: work
 outside any program needs a row too. The merge cell of a recorded row with a PR is never written: it is read from the
@@ -105,6 +106,9 @@ def set_cell(rid, col, mark, evidence=None, by=None):
     def go(store):
         row = store["rows"].get(rid)
         made = stage_auto.read()["rows"].get(rid)
+        if col == "merge" and folds_into(rid, row, stage_auto.read()["rows"]):
+            raise ValueError(f"{rid}: the merge column of a generated row is derived from the ledger and GitHub; "
+                             "it is not written by hand (dev and prod are)")
         if not row and made and not made.get("group"):
             # Cells only, over a generated row: its title, PR and place stay the tick's.
             row = store["rows"][rid] = {"id": rid, "cells": {}, "overlay": True, "created_at": fleet.iso(fleet.utcnow())}
@@ -156,8 +160,25 @@ def merge_cell(pr, prs):
     return {"mark": "fail", "evidence": why, "auto": True}
 
 
+def folds_into(rid, row, made_rows, taken=()):
+    """The generated row a recorded row (or a bare id, row None) sits on: the same id, the same PR, or the predicate
+    item by_item names. None for a group, or when it stands alone (work that ended outside GitHub)."""
+    if (made_rows.get(rid) or {}).get("group") or (row or {}).get("group"):
+        return None
+    if rid in made_rows:
+        return rid
+    by_pr = {r["pr"]: k for k, r in made_rows.items() if r.get("pr")}
+    return by_pr.get((row or {}).get("pr")) or (by_item(rid, row, made_rows, set(taken)) if row else None)
+
+
 def merged(store, made):
-    """Generated rows with the recorded ones over them: a recorded cell replaces the generated cell of its column, a
+    """merged_counted() without the count."""
+    return merged_counted(store, made)[:2]
+
+
+def merged_counted(store, made):
+    """Generated rows with the recorded ones over them, and how many recorded merge cells it dropped: the merge
+    column of a generated row is derived, so a recorded one there is ignored (left in the file). A recorded cell replaces the generated cell of its column, a
     recorded row of the same id its fields. A recorded row with a generated row's PR is the same work: it folds into that
     row, its title and cells over the generated ones, and the rows under it move along; so does a PR-less row under a
     program's group whose id names one of its predicate items (by_item). A recorded group left with no row of its own
@@ -167,14 +188,20 @@ def merged(store, made):
     into = {}
     # A recorded title replaces the generated one whole, the dashboard's uncut title_full with it.
     full = lambda r: {"title_full": r["title"]} if r.get("title") else {}  # noqa: E731
+    ignored = 0
+
+    def own(r):
+        nonlocal ignored
+        ignored += "merge" in (r.get("cells") or {})
+        return {c: v for c, v in (r.get("cells") or {}).items() if c != "merge"}
     for k, r in store["rows"].items():
         if k in rows:
             rows[k] = {**rows[k], **{f: v for f, v in r.items() if v and f not in ("cells", "overlay")}, **full(r),
-                       "cells": {**rows[k].get("cells", {}), **r.get("cells", {})}}
+                       "cells": {**rows[k].get("cells", {}), **own(r)}}
         elif (on := not r.get("group") and (by_pr.get(r.get("pr")) or by_item(k, r, made["rows"], set(into.values())))):
             into[k] = on
             rows[on] = {**rows[on], **{f: v for f, v in r.items() if v and f in ("title", "done_at")}, **full(r),
-                        "cells": {**rows[on].get("cells", {}), **r.get("cells", {})}}
+                        "cells": {**rows[on].get("cells", {}), **own(r)}}
         elif not r.get("overlay"):
             rows[k] = r
     for k, r in rows.items():
@@ -185,7 +212,7 @@ def merged(store, made):
         kids.setdefault(r.get("parent"), set()).add(k)
     gone = {k for k in kids if (store["rows"].get(k) or {}).get("group") and k not in made["rows"] and kids[k] <= set(into)}
     rows = {k: r for k, r in rows.items() if k not in gone}
-    return rows, made["order"] + [k for k in store["order"] if k in rows and k not in made["rows"]]
+    return rows, made["order"] + [k for k in store["order"] if k in rows and k not in made["rows"]], ignored
 
 
 def by_item(rid, row, made, taken):
@@ -207,7 +234,7 @@ def table(state=None):
     store = read()
     state = fleet.read_json(fleet.state_dir() / "state.json", {}) if state is None else state
     prs = {p.get("key"): p for p in (state or {}).get("prs") or []}
-    all_rows, order = merged(store, stage_auto.read())
+    all_rows, order, ignored = merged_counted(store, stage_auto.read())
     rows = []
 
     def walk(parent, depth):
@@ -225,7 +252,14 @@ def table(state=None):
             cells["merge"] = auto
         close = (all_rows.get(r.get("program")) or {}).get("done_at") if r.get("source") == "auto" else None
         out.append({**r, "cells": cells, **finished(r, cells, close)})
-    return {"rows": out, "env": store["env"], "next": store["next"], "refs": ref_urls(out, store["next"], prs)}
+    return {"rows": out, "env": store["env"], "next": store["next"], "refs": ref_urls(out, store["next"], prs),
+            "ignored_merge": ignored}
+
+
+def ignored_note(t):
+    """One line saying how many hand-written merge cells on generated rows the table dropped; "" when none."""
+    n = t.get("ignored_merge") or 0
+    return f"손으로 쓴 머지 칸 {n}건은 생성 행의 계산 값이 있어 무시했다 (stages.json에는 그대로 남음)" if n else ""
 
 
 def finished(row, cells, close=None):
