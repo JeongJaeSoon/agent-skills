@@ -925,6 +925,17 @@ with tempfile.TemporaryDirectory() as tmp:
     last = json.loads((pathlib.Path(tmp) / "janitor-runs.jsonl").read_text().splitlines()[-1])
     assert r.returncode == 2 and "소유권 파일" in last["error"], (r.stdout, last)
 
+# A planning scan that hangs is cut at the hard stop: the row says stage plan, and the exit is 2, not the runner's kill.
+with tempfile.TemporaryDirectory() as tmp:
+    code = ("import sys, time, reap; reap.HARD_STOP_S = 1; reap.scan = lambda *a: time.sleep(30); "
+            "sys.argv = ['reap.py', 'precheck', '--act', '--kinds', 'tmpdir']; reap.cli()")
+    t0 = time.monotonic()
+    r = subprocess.run([sys.executable, "-c", code], cwd=pathlib.Path(__file__).parent, env={**os.environ, "AGENT_SKILLS_STATE": tmp},
+                       capture_output=True, text=True, timeout=20)
+    last = json.loads((pathlib.Path(tmp) / "janitor-runs.jsonl").read_text().splitlines()[-1])
+    assert r.returncode == 2 and time.monotonic() - t0 < 10, (r.returncode, r.stderr)
+    assert last["stage"] == "plan" and last["error"].startswith("RoundCut"), last
+
 # user-folder: top-level entries untouched for `days`, not open, not a download in progress.
 D = 86400
 with tempfile.TemporaryDirectory() as tmp:

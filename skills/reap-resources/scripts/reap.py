@@ -2834,8 +2834,8 @@ def log_run(state_dir, row, keep=RUNS_KEEP):
     write_atomic(path, "".join(r + "\n" for r in rows) + json.dumps(row, ensure_ascii=False) + "\n")
 
 
-def act_round(data, cfg, state_dir, started, inbox=None, send=run, reap_fn=reap_plan, now=None):
-    """Caller holds janitor_lock."""
+def act_round(data, cfg, state_dir, started, inbox=None, send=run, reap_fn=reap_plan, now=None, gate=None):
+    """Caller holds janitor_lock. A gate from the caller (main arms one for the planning scan too) replaces its own."""
     now = now or time.time()
     fails_path = state_dir / "janitor-fails.json"
     fails = read_obj(fails_path)
@@ -2848,7 +2848,7 @@ def act_round(data, cfg, state_dir, started, inbox=None, send=run, reap_fn=reap_
     row = {"t": now, "source": "scan", "targets": sum(1 for i in items if i["target"]), "acted": [], "skipped": [],
            "failed": [], "left": [], "resting": sorted(resting & {i["key"] for i in items}), "human": 0, "error": None}
     res = {}
-    with hard_stop(started) as gate:
+    with (contextlib.nullcontext(gate) if gate else hard_stop(started)) as gate:
         try:
             try:
                 got = reap_fn(plan, cfg, scheduled_only=True, deadline=started + ACT_BUDGET_S, res=res)
@@ -3007,6 +3007,8 @@ def main():
     if act and not held.enter_context(janitor_lock(STATE)):
         print("다른 janitor 회차가 도는 중: 건너뜀")
         sys.exit(skip)
+    # From the first scan on, so a hanging plan command is cut at HARD_STOP_S with a row, not killed by the runner.
+    gate = held.enter_context(hard_stop(started)) if act else None
     if cmd == "precheck" and "--load" in sys.argv:
         due, why = load_due(STATE, cfg)
         if not due:
@@ -3049,7 +3051,7 @@ def main():
             print(f"메모: {n}", file=sys.stderr)
         for m in msgs:
             print(f"경보: {m}", file=sys.stderr)
-        row = act_round(data, cfg, STATE, started, cfg.get("inbox_to"))
+        row = act_round(data, cfg, STATE, started, cfg.get("inbox_to"), gate=gate)
         print(f"janitor 회차: 대상 {row['targets']}개, 정리 {len(row['acted'])} · 건너뜀 {len(row['skipped'])} · "
               f"실패 {len(row['failed'])} · 예산 초과로 남김 {len(row['left'])} · 쉬는 중 {len(row['resting'])} · "
               f"사람이 볼 것 {row['human']}" + (f" · 오류 {row['error']}" if row["error"] else "") +
@@ -3079,12 +3081,18 @@ def main():
         report(data)
 
 
-if __name__ == "__main__":
+def cli():
     try:
         main()
-    except Exception as e:
+    except (Exception, RoundCut) as e:
         if sys.argv[1:2] == ["precheck"] and "--act" in sys.argv:
             with contextlib.suppress(OSError):
                 log_run(STATE, {"t": time.time(), "source": "scan", "error": f"{type(e).__name__}: {str(e)[:200]}",
                                 "stage": "plan"})
+        if isinstance(e, RoundCut):
+            sys.exit(2)
         raise
+
+
+if __name__ == "__main__":
+    cli()
