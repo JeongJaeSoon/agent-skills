@@ -889,19 +889,22 @@ def order_add(text, kind="order", source=None, owner_action=False, by=None, dedu
     """(order, True) for a new one. With dedupe, a row that already has this source comes back as (row, False)."""
     if kind not in ORDER_KINDS:
         raise ValueError(f"kind is one of {', '.join(ORDER_KINDS)}")
-    text = text.strip()
+    text = fleet.mask(text.strip())
+    source = fleet.mask(source) if source else source
     if not text:
         raise ValueError("an order needs its text")
     with _order_tx() as db:
         if dedupe and source:
             old = db.execute("SELECT * FROM order_ WHERE source=?", (source,)).fetchone()
+            if old and old["text"] != text:  # the same key for other words is a clash, not a repeat
+                raise ValueError(f"{old['id']} already holds source {source} with other text; it was not changed")
             if old:
                 return _order_out(db, old), False
         n = _counter(db, "o")
         db.execute("INSERT INTO counter (name, next) VALUES ('o', ?) ON CONFLICT(name) DO UPDATE SET next=excluded.next", (n + 1,))
         oid = f"o{n}"
         db.execute("INSERT INTO order_ (id, kind, status, text, source, owner_action, by, created_at) "
-                   "VALUES (?,?, 'open', ?,?,?,?,?)", (oid, kind, fleet.mask(text), source, int(bool(owner_action)), by, now()))
+                   "VALUES (?,?, 'open', ?,?,?,?,?)", (oid, kind, text, source, int(bool(owner_action)), by, now()))
         row = _order_out(db, db.execute("SELECT * FROM order_ WHERE id=?", (oid,)).fetchone())
         _event(db, "order", oid, "add", by, None, {k: row[k] for k in ("kind", "source", "owner_action", "text")})
         return row, True

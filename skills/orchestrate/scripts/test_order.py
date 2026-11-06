@@ -131,8 +131,25 @@ assert out.endswith("0 added, 2 already there"), out
 out = ok("order", "import", str(src))
 assert out.endswith("1 added, 2 already there"), out
 imported = [r for r in json.loads(ok("order", "list", "--json")) if (r["source"] or "").startswith("import:")]
-assert {r["source"] for r in imported} == {"import:list.md:가#1", "import:list.md:가#2", "import:list.md:나#1"}
+assert {r["source"].split("@")[0] for r in imported} == {"import:list.md"} and len({r["source"] for r in imported}) == 3
 assert all(r["kind"] == "feedback" for r in imported)
+# Another directory's list.md with the same section and number is a different list, not a repeat.
+(tmp / "b").mkdir()
+other = tmp / "b" / "list.md"
+other.write_text("## 가\n1. 다른 파일의 첫째\n")
+assert ok("order", "import", str(other)).endswith("1 added, 0 already there")
+# The same list with a line reworded under its old key is refused, not skipped or overwritten.
+other.write_text("## 가\n1. 고쳐 쓴 첫째\n")
+assert "other text" in fails("order", "import", str(other))
+# A secret in a heading or a line is masked on screen, in the source and in the event.
+leak = tmp / "leak.md"
+leak.write_text("## token=ghp_" + "b" * 36 + "\n1. 평범한 줄\n")
+assert "ghp_" not in ok("order", "import", str(leak), "--dry-run")
+ok("order", "import", str(leak))
+db = sqlite3.connect(str(store.path()))
+assert not db.execute("SELECT 1 FROM order_ WHERE source LIKE '%ghp_%' OR text LIKE '%ghp_%'").fetchone()
+assert not db.execute("SELECT 1 FROM event WHERE entity='order' AND after LIKE '%ghp_%'").fetchone()
+db.close()
 assert any(r["text"] == "나: 다른 곳의 첫째" for r in imported), imported
 empty = tmp / "empty.md"
 empty.write_text("nothing numbered\n")

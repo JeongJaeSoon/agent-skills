@@ -10,9 +10,9 @@ carries yet. A session that accepts an instruction as work writes it here before
   import FILE [--skip REGEX] [--dry-run]   numbered lines of a hand list (`## section` then `1. text`) become
                                        kind=feedback rows, once each: a second run skips what it already took
 """
-import json, os, pathlib, re, sys
+import hashlib, json, os, pathlib, re, sys
 
-import store
+import fleet, store
 
 USAGE = __doc__.split("\n\n", 1)[0] + "\n" + __doc__.split("\n\n", 1)[1]
 
@@ -26,7 +26,8 @@ def _by():
 
 
 def parse_list(text, name):
-    """(source, text) for each numbered line of a hand list; the `## ` heading above it is part of the key and the text."""
+    """(source, text) for each numbered line of a hand list; the `## ` heading above it is part of the key and the text.
+    `name` tells two lists apart, so it carries more than the file's basename."""
     section, out = "", []
     for line in text.splitlines():
         if m := re.match(r"#{1,3}\s+(.+?)\s*$", line):
@@ -41,13 +42,14 @@ def cmd_import(rest):
     if not path:
         sys.exit("usage: orch order import FILE [--skip REGEX] [--dry-run]")
     skip = re.compile(opt(rest, "--skip")) if opt(rest, "--skip") else None
-    items = [(s, t) for s, t in parse_list(pathlib.Path(path).read_text(), pathlib.Path(path).name)
-             if not (skip and skip.search(t))]
+    p = pathlib.Path(path).resolve()
+    name = f"{p.name}@{hashlib.sha1(str(p).encode()).hexdigest()[:8]}"
+    items = [(s, t) for s, t in parse_list(p.read_text(), name) if not (skip and skip.search(t))]
     if not items:
         sys.exit(f"{path}: no numbered lines to import")
     if "--dry-run" in rest:
         for s, t in items:
-            print(f"would add  {s}  {t[:100]}")
+            print(f"would add  {fleet.mask(s)}  {fleet.mask(t)[:100]}")
         return
     added = 0
     for s, t in items:
