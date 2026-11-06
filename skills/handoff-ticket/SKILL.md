@@ -118,7 +118,8 @@ confirmed: look at it, do not create it again.
 - Not `orca terminal create`: that adds a tab to this worktree instead of a new card.
 - The prompt is the whole context the new session gets: put anything not derivable from the
   ticket (decisions, base branch, gotchas) in `--note`, and approvals beyond the ticket's normal
-  flow (a deploy, a restart, a settings change) with the Human only and Model calls lines
+  flow (a deploy, a restart, a settings change) as an `APPROVED:` line of the note (without one the
+  card gets `APPROVED: none`) with the Human only and Model calls lines
   (`dispatch-card` §2). The first prompt is the only place an approval reaches the card; one sent
   later by message is refused as not the human's.
 
