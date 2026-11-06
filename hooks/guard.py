@@ -181,7 +181,7 @@ def expand_path(token, first):
 def helper_card(brief, cwd, cmd, start):
     """(the prompt the helper would send, None) or (None, the deny reason): the helper's own checks on that file.
     `start`: where the brief's argument begins in `cmd`."""
-    if cmd[start - 1:start] not in (" ", "\t"):  # the masked text blanks escapes (`card \x/p`), which would shift the word
+    if not re.search(r"card[ \t]+\Z", cmd[:start]):  # the masked text blanks escapes (`card \x/p`, `card \ /p`), which shift the word
         return None, "Write `skills-sync card <brief>` with the brief as a plain word after one blank; this hook cannot read that spelling."
     try:
         # A later argument can still rebind HOME (`"$((HOME=0))"`), so HOME is read only when none expands.
