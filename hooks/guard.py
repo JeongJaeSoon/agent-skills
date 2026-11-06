@@ -331,6 +331,8 @@ def rules(tool, args, event, who):
             raise TypeError(f"{tool} command is not a string")
         found = (danger.check_bash(cmd, cfg, event.get("cwd"), who())
                  + coordination.check_bash(cmd, background(tool, args), who(), cfg))
+        if tool == "Monitor":
+            found += [f._replace(level="warn") for f in coordination.check_monitor(cmd, cfg)]
         try:  # its own fault never drops the findings above
             found += discipline.check_bash(cmd, event, who(), cfg)
         except Exception as e:

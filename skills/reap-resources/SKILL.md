@@ -404,6 +404,10 @@ a subagent does not count; an Orca that gives no `workingMode` or `mainAgent` is
 `Monitor` on `python3 "$P" turns --wait 15`, which exits 0 once under the cap and 3 after the wait (2 when `--wait` has no minute count: it never skips the wait). A count Orca cannot
 give (no answer, a cut-short list) holds like a full one, in the hook and in `turns`/`turns --wait` alike (`turn_hold`):
 the wait polls until the count is readable and exits 3 with "cannot count" if it never is; only `null` turns the cap off.
+`max_sessions` (`reap.pressure`, unset = off) is a second cap on the same start: Orca's listed agent sessions, working or
+idle, the caller's own left out. Idle sessions hold memory the turn count never sees. It holds, waits and exits 3 the same
+way (`session_hold`, shared by the hook, `turns` and `turns --wait`); a count Orca cannot give holds like a full one.
+The default is no cap because the right number depends on the machine.
 The caller's own turn is left out of the count (its pane key comes from `$ORCA_TERMINAL_HANDLE`), so the wait, which runs
 while the caller's turn is over, and the hook, which runs inside it, give one verdict; a caller that cannot be identified
 is counted like any other turn and the output carries a warning line.
