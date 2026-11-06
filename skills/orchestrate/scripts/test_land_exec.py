@@ -1591,21 +1591,33 @@ class AutoQueue(Fixture):
         self.round()  # a damaged cache and a good setting: the queued request is settled
         self.assertEqual(store.land_get(row["id"])["status"], "merged")
 
-    def test_owner_wildcard_is_expanded_to_the_owners_repos(self):
+    def test_owner_wildcard_covers_the_repo_a_program_records(self):
+        config(repos=["o/*"], auto_queue={"mode": "on"})
+        self.auto()
+        self.assertEqual(len(self.mine()), 1)
+
+    def test_a_renamed_repo_is_still_found_under_the_name_its_program_holds(self):
         config(repos=["o/*"], auto_queue={"mode": "on"})
         st = self.gh()
-        st["owned"] = {"o": ["o/r"]}
+        st["repos"] = {"o/r": {"nameWithOwner": "o/new", "isFork": False, "isArchived": False}}
         self.write(st)
         self.auto()
         self.assertEqual(len(self.mine()), 1)
 
-    def test_an_excluded_repo_is_neither_requested_nor_touched(self):
-        config(repos=["o/*"], exclude=["o/r"], auto_queue={"mode": "on"})
+    def test_a_wildcard_repo_is_left_out_while_its_owner_cannot_be_checked(self):
+        config(repos=["o/*"], auto_queue={"mode": "on"})
         st = self.gh()
-        st["owned"] = {"o": ["o/r"]}
+        st["user_fail"] = True
         self.write(st)
         self.auto()
         self.assertEqual((self.mine(), self.events("ready")), ([], []))
+        self.assertIn("gh api user", self.report())
+
+    def test_an_excluded_repo_is_neither_requested_nor_touched(self):
+        config(repos=["o/*"], exclude=["o/r"], auto_queue={"mode": "on"})
+        self.auto()
+        self.assertEqual((self.mine(), self.events("ready")), ([], []))
+        self.assertIn("exclude", self.report())
         config(repos=["o/r"], exclude=["o/r"], auto_queue={"mode": "on"})  # named and excluded: exclude wins
         self.auto()
         self.assertEqual((self.mine(), self.events("ready")), ([], []))

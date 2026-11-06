@@ -277,51 +277,63 @@ def programs_on(repo):
     return found, unread
 
 
-def auto_repos(ex, say=lambda msg: None):
-    """The concrete repos the auto-queue walks. A repos entry is a name or OWNER/*; a wildcard is expanded the way the
-    drift check lists it (the gh account's own source repos, not archived), and a repo no program here owns is dropped
-    without a GitHub call, since nothing could be queued for it. Each named repo is then judged as the executor judges a
-    request (prog.executor_for: exclude, a rename or transfer; then the wildcard's owner, fork and archived rules), so
-    the auto-queue never writes a `ready` event or a request the executor would only refuse and withdraw."""
-    scope, out, seen, login = ex["scope"], [], set(), None
-    named = [e for e in ex["repos"] if not e.endswith("/*")]
-    wild = [e[:-2] for e in ex["repos"] if e.endswith("/*")]
-    if wild:
-        r = prog.run(["gh", "api", "user", "--jq", ".login"], check=False)
-        login = r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
-        if login is None:
-            say("OWNER/* is not expanded: GitHub did not answer `gh api user`")
-    for owner in wild:
-        if login is None:
-            break
-        if owner.casefold() != login.casefold():
-            say(f"{owner}/*: OWNER/* covers the gh account's own repos ({login}) only: list an org's repo by name")
+def program_repos():
+    """The repo each readable program records, in directory order. An unreadable program adds none: it cannot be walked."""
+    out = []
+    try:
+        dirs = sorted(prog.HOME.iterdir())
+    except OSError:
+        return out
+    for d in dirs:
+        if d.name.startswith((".", "_")):
             continue
         try:
-            listed = prog.gh_json("repo", "list", owner, "--source", "--no-archived", "--limit", "1000",
-                                  "--json", "nameWithOwner")
-        except SystemExit as e:
-            say(f"{owner}/*: the repo listing failed: {str(e.code)[:200]}")
+            repo = json.loads((d / "program.json").read_text()).get("repo")
+        except (OSError, ValueError, AttributeError):
             continue
-        for x in listed:
-            name = x.get("nameWithOwner") or ""
-            programs, unread = programs_on(name) if name else ([], False)
-            if name and land_scope.how(scope, name) and (programs or unread):
-                named.append(name)
-    for repo in named:
+        if isinstance(repo, str) and repo.count("/") == 1:
+            out.append(repo)
+    return out
+
+
+def auto_repos(ex, say=lambda msg: None):
+    """The concrete repos the auto-queue walks: the repos entries by name, plus the repo every program here records when
+    the scope covers it (so OWNER/* needs no GitHub listing, a renamed repo is found under the name its program holds,
+    and the call count follows the programs, not the owner's repo count). Each is judged as the executor judges a
+    request (prog.executor_for: exclude, a rename or transfer; then the wildcard's owner, fork and archived rules), so
+    the auto-queue never writes a `ready` event or a request the executor would only refuse and withdraw. A wildcard
+    repo whose owner cannot be checked (`gh api user` unanswered) is left out."""
+    scope, out, seen, login = ex["scope"], [], set(), False
+    candidates = [e for e in ex["repos"] if not e.endswith("/*")] + program_repos()
+    for repo in candidates:
         if repo.casefold() in seen:
             continue
         seen.add(repo.casefold())
+        if land_scope.excluded(scope, repo):
+            say(f"{repo}: skipped, it is in orchestrate.land_executor.exclude")
+            continue
+        if not land_scope.how(scope, repo):
+            continue  # a program's repo the scope does not name: not this executor's
         try:
             on, meta = prog.executor_for(repo)
         except SystemExit as e:
             say(f"{repo}: skipped, the land executor's scope could not be judged: {str(e.code)[:200]}")
             continue
         if not on:
-            say(f"{repo}: skipped, orchestrate.land_executor does not cover it (excluded, or renamed out of scope)")
+            say(f"{repo}: skipped, orchestrate.land_executor does not cover it now (excluded, or renamed out of scope)")
             continue
         current = meta["nameWithOwner"]
-        why = (login and land_scope.owner_refused(scope, current, login)) or land_scope.wildcard_only(scope, current, meta)
+        if land_scope.how(scope, current) == "owner":
+            if login is False:
+                r = prog.run(["gh", "api", "user", "--jq", ".login"], check=False)
+                login = r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
+            if login is None:
+                say(f"{repo}: skipped, covered only by OWNER/* and GitHub did not answer `gh api user`")
+                continue
+            why = land_scope.owner_refused(scope, current, login)
+        else:
+            why = None
+        why = why or land_scope.wildcard_only(scope, current, meta)
         if why:
             say(f"{repo}: skipped, {why}")
             continue
