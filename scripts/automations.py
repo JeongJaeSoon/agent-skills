@@ -11,7 +11,7 @@ Running any of these again changes nothing that is already as asked. `disable` k
 but off, so `apply` leaves it off. Turning one on writes paths to this checkout into the job, so it refuses a
 worktree (it goes away under the job); --here allows it for a LaunchAgent test, never for the shared janitor job.
 """
-import json, os, pathlib, plistlib, shutil, subprocess, sys
+import json, os, pathlib, plistlib, shlex, shutil, subprocess, sys
 
 HERE = pathlib.Path(__file__).resolve().parent
 REPO = HERE.parent
@@ -141,13 +141,7 @@ class OrcaJob:
         return 0, "끔 (등록은 남겨 두어 apply 가 다시 켜지 않는다)"
 
 
-class Janitor(OrcaJob):
-    name = "janitor"
-    job_name = JANITOR_NAME
-    load = False
-    what = ("3시간마다 정리 라운드(Orca automation, reap-resources). 에이전트가 만든 끝난 리소스만 닫거나 휴지통으로 옮긴다. "
-            "compose 는 down 까지이고 -v·prune·볼륨/이미지 삭제는 하지 않는다")
-
+class ReapJob(OrcaJob):
     def status(self):
         a, err = self.find()
         if a is None:
@@ -195,25 +189,8 @@ class Janitor(OrcaJob):
             return 1, f"orca automations edit 실패: {(p.stderr or p.stdout).strip()[:200]}"
         return 0, "켬" + (f" (reap schedule 에 맞춘 필드: {', '.join(drift)})" if drift else "")
 
-    def disable(self):
-        """The load job runs the same round, so turning the janitor off turns it off too, and on again with it."""
-        code, msg = super().disable()
-        load_code, load_msg = JanitorLoad().disable()
-        return code | load_code, f"{msg} · janitor-load: {load_msg}"
 
-    def enable(self, here):
-        j, _ = self.find()
-        code, msg = self.enable_job(here)
-        load = JanitorLoad()
-        a, _ = load.find()
-        # Only undoes `disable janitor`: a load job turned off alone under a running janitor stays off.
-        if code or not j or j.get("enabled") or not a or a.get("enabled"):
-            return code, msg
-        load_code, load_msg = load.enable_job(here)
-        return load_code, f"{msg} · janitor-load: {load_msg}"
-
-
-class JanitorLoad(Janitor):
+class JanitorLoad(ReapJob):
     name = "janitor-load"
     job_name = reap.LOAD_NAME
     load = True
@@ -233,7 +210,10 @@ class JanitorLoad(Janitor):
         return self.enable_job(here)
 
     def disable(self):
-        return OrcaJob.disable(self)
+        code, msg = OrcaJob.disable(self)
+        if not code:
+            orca_job.forget(self.name)
+        return code, msg
 
 
 # ---------------------------------------------------------------- preview-watch (LaunchAgent)
@@ -327,11 +307,12 @@ class ShellJob(OrcaJob):
     records how it ended and exits 1, so Orca skips the agent every time. A job that needs no model must not start one."""
 
     def __init__(self, name, what, argv, interval, default, ok=(0,), turned_off=None, clear_off=None, gate=None,
-                 prepare=None):
+                 prepare=None, timeout=SHELL_TIMEOUT_S):
         self.name, self.job_name, self.what, self.default = name, f"agent-skills {name}", what, default
         self.argv, self.interval, self.ok, self.turned_off, self.clear_off = argv, interval, ok, turned_off, clear_off
         self.gate = gate  # () -> why this PC must not get the job yet, or None; checked only while it is unregistered
         self.prepare = prepare  # () -> (code, message), run before the job is created or turned on
+        self.timeout = timeout
 
     def stale(self):
         """On, but registered with other paths, trigger or precheck than this checkout's: apply writes them again."""
@@ -356,8 +337,8 @@ class ShellJob(OrcaJob):
 
     def want(self):
         secs = cron_period(self.interval() if callable(self.interval) else self.interval)  # what cron really runs at
-        return {"trigger": cron_every(secs), "prompt": SHELL_PROMPT, "precheck-timeout": SHELL_TIMEOUT_S,
-                "precheck": orca_job.command(self.name, self.argv, secs, SHELL_TIMEOUT_S - 20, self.ok)}
+        return {"trigger": cron_every(secs), "prompt": SHELL_PROMPT, "precheck-timeout": self.timeout,
+                "precheck": orca_job.command(self.name, self.argv, secs, self.timeout - 20, self.ok)}
 
     def drift(self, a):
         pre = a.get("precheck") or {}
@@ -412,6 +393,31 @@ class ShellJob(OrcaJob):
         if p.returncode:
             return 1, f"orca automations edit 실패: {(p.stderr or p.stdout).strip()[:200]}"
         return 0, "켬" + (f" (맞춘 필드: {', '.join(drift)})" if drift else "")
+
+
+class Janitor(ShellJob):
+    def __init__(self):
+        super().__init__("janitor", "30분마다 모델 없는 정리 라운드(Orca automation precheck, reap-resources). 에이전트가 만든 끝난 리소스만 "
+                         "닫거나 휴지통으로 옮긴다. compose 는 down 까지이고 -v·prune·볼륨/이미지 삭제는 하지 않는다",
+                         shlex.split(reap.round_cmd(REAP, reap.STATE, reap.ledger_path(), "precheck", "--act")),
+                         reap.INTERVAL_S, True, timeout=reap.PRECHECK_TIMEOUT)
+        self.job_name = JANITOR_NAME
+
+    def disable(self):
+        code, msg = super().disable()
+        load_code, load_msg = JanitorLoad().disable()
+        return code | load_code, f"{msg} · janitor-load: {load_msg}"
+
+    def enable(self, here):
+        j, _ = self.find()
+        code, msg = self.enable_job(here)
+        load = JanitorLoad()
+        a, _ = load.find()
+        # Only undoes `disable janitor`: a load job turned off alone under a running janitor stays off.
+        if code or not j or j.get("enabled") or not a or a.get("enabled"):
+            return code, msg
+        load_code, load_msg = load.enable_job(here)
+        return load_code, f"{msg} · janitor-load: {load_msg}"
 
 
 def planned(key):
