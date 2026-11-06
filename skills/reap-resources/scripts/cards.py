@@ -59,6 +59,19 @@ def gh_repo(path, run):
     return m and m.group(1)
 
 
+def under_pr_head(path, head, pr_head, run):
+    """HEAD is the PR head or a step on the way to it. `is-ancestor` fails the same way for "no" (exit 1) and for a
+    head commit this clone never had (exit 128: the remote branch was deleted at merge), so only the first is a "no";
+    for the second GitHub is asked. Unreadable counts as no: the card is kept."""
+    if run(["git", "-C", path, "merge-base", "--is-ancestor", head, pr_head]) is not None:
+        return True
+    if run(["git", "-C", path, "cat-file", "-e", pr_head + "^{commit}"]) is not None:
+        return False
+    repo = gh_repo(path, run)
+    out = repo and run(["gh", "api", f"repos/{repo}/compare/{head}...{pr_head}", "--jq", ".status"])
+    return (out or "").strip() in ("ahead", "identical")
+
+
 def landed(path, head, run):
     """(on_base, via): HEAD is on the remote default branch. A failed fetch (an SSO re-authorization, say) leaves
     the local origin/HEAD behind, so a local "no" is asked of GitHub again; a 404 there is a commit never pushed."""
@@ -210,7 +223,7 @@ def gather(w, m, run=None):
         return {**f, "protected": f"복구 전 워커({d})의 카드: 미커밋 변경, 열린 PR 또는 PR 없는 조사 카드"}
     if ref and f["pr_head"] and head != f["pr_head"]:
         # HEAD behind the PR's head is the PR's work; HEAD past it is new work on a reused branch name.
-        f["carried"] = run(["git", "-C", p, "merge-base", "--is-ancestor", head, f["pr_head"]]) is not None
+        f["carried"] = under_pr_head(p, head, f["pr_head"], run)
     else:
         f["carried"] = bool(ref)
     if not ref or not f["carried"]:

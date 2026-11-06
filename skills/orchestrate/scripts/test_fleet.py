@@ -2065,7 +2065,19 @@ lines.append({"type": "continued-in", "timestamp": at(26), "sessionId": "s-old",
 fleet.write_atomic(old_transcript, "".join(json.dumps(l) + "\n" for l in lines))
 mons = fleet.fetch_monitors({**procs, 102: (1, lstart(0), "claude")}, now=now)
 assert "gone" not in {m["id"] for m in mons} and fleet.MONITOR_SCAN[str(old_transcript)]["offset"] == old_transcript.stat().st_size, mons
+# A continued-in whose new session is not alive (the machine restarted, or the new one was never resumed) hands the tasks
+# to nobody: the old transcript is the only record of them, so they show.
+orphan_transcript = home / "projects" / "-work-wt-lead" / "s-orphan.jsonl"
+fleet.write_atomic(home / "sessions" / "103.json", json.dumps({"pid": 103, "sessionId": "s-orphan", "cwd": "/work/wt-lead",
+                                                                "procStart": lstart(0), "name": "lead:orphan"}))
+lines.clear()
+started("orphan", "orch wait orphan", 25)
+lines.append({"type": "continued-in", "timestamp": at(26), "sessionId": "s-orphan", "continuedInSessionId": "s-nowhere"})
+fleet.write_atomic(orphan_transcript, "".join(json.dumps(l) + "\n" for l in lines))
+mons = fleet.fetch_monitors({**procs, 103: (1, lstart(0), "claude")}, now=now)
+assert "orphan" in {m["id"] for m in mons}, mons
 (home / "sessions" / "102.json").unlink()
+(home / "sessions" / "103.json").unlink()
 # Hours later the failures and the lost one drop off; with no live Claude process there is nothing to show.
 assert [m["id"] for m in fleet.fetch_monitors(procs, now=now + dt.timedelta(hours=7))] == ["wait"]
 assert fleet.fetch_monitors({}, now=now) == []

@@ -189,9 +189,9 @@ def mask(text, limit=None):
 
 # ---------------------------------------------------------------- CLI sources
 
-def run_json(cmd, timeout=30):
+def run_json(cmd, timeout=30, env=None):
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL, env=env)
     except FileNotFoundError:
         raise SourceError(f"{cmd[0]} not found")
     except subprocess.TimeoutExpired:
@@ -408,7 +408,9 @@ def scan_line(c, raw):
     if not isinstance(d, dict):
         return
     if d.get("type") == "continued-in":
-        c["continued"] = True  # the session goes on in a new transcript, which repeats what this one started
+        # The session goes on in a new transcript, which repeats what this one started: remember which, so the old one
+        # is skipped only while that one is alive to show them. "" when the record names none.
+        c["continued"] = d.get("continuedInSessionId") or ""
         return
     text = notice_text(d)
     if text:
@@ -540,11 +542,13 @@ def live_transcripts(procs, warn):
 
 def collect_monitors(procs, now, warn):
     out, scanned = [], set()
-    for sid, s, path in live_transcripts(procs, warn):
+    live = live_transcripts(procs, warn)
+    live_ids = {sid for sid, _, _ in live}
+    for sid, s, path in live:
         scanned.add(str(path))
         tasks = scan_transcript(path)
-        if MONITOR_SCAN[str(path)]["continued"]:
-            continue
+        if MONITOR_SCAN[str(path)]["continued"] in live_ids:
+            continue  # a successor that is not live (or not named) shows nothing, so this transcript is the only record
         # Only the session's own shells: a $(…) inside one forks a shell with the same command line.
         free = {}
         for pid, (ppid, start, cmd) in procs.items():
@@ -722,10 +726,14 @@ def orca_messages_sent(messages):
             and isinstance(m.get("created_at"), str) and (m.get("body") or m.get("subject"))]
 
 
-def graphql(query):
+def graphql(query, app=None):
     """(data, errors). gh exits non-zero when any alias errors, even with the rest of the data present, so one
-    inaccessible PR must not blank the others."""
-    out = run_json(["gh", "api", "graphql", "-f", f"query={query}"], timeout=60)
+    inaccessible PR must not blank the others. With `app`, gh runs under that ghtkn app's token (handed to the child
+    only, as GH_TOKEN); without it, under whatever login gh has."""
+    cmd, env = ["gh", "api", "graphql", "-f", f"query={query}"], None
+    if app:
+        cmd, env = ["ghtkn", "exec", "-e", "GH_TOKEN", "--", *cmd], {**os.environ, "GHTKN_APP": app}
+    out = run_json(cmd, timeout=60, env=env)
     data = out.get("data") if isinstance(out, dict) else None
     errors = [mask(e.get("message", "")[:200]) for e in (out.get("errors") or [])] if isinstance(out, dict) else []
     if data is None:
