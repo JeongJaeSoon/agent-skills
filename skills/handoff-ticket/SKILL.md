@@ -7,15 +7,12 @@ description: "Use when handing the next ticket to a fresh Orca worktree card —
 
 Finish here, and start each follow-up ticket that stands on its own in its own worktree card
 (§0 "Who runs it" keeps a small defect in what this session just shipped here).
-`orca worktree create` is the only way work leaves this session. Ticket operations go through
+`skills-sync handoff` (§3) is the only way work leaves this session. Ticket operations go through
 `use-tracker`; the worklog goes through `use-notes`.
 
-A handoff always means an Orca worktree card — no other dispatch mechanism. "병렬로 진행" and "동시에 진행" mean this skill
-only when they name same-repo ticket cards; they can also mean sub-agents or work dispatched
-while this session continues (dispatch-card), so settle which before creating cards.
-
-Not a handoff: the target is another repo, or this session still has its own work to finish
-after spawning. That is `dispatch-card` — it never closes this session.
+Not a handoff: the target is another repo, or this session still has its own work after
+spawning (`dispatch-card`, which never closes this session). "병렬로 진행" and "동시에 진행" mean
+this skill only when they name same-repo ticket cards; settle which before creating cards.
 
 ## 0. At "done", decide what happens next
 
@@ -28,11 +25,9 @@ last criterion, not the merge commit, is the decision point.
 `worker_done` it closes itself or idles per `end-session` §7, and the orchestrator or lead that dispatched it decides what
 runs next. Nothing else makes a session a program worker. The rest of this skill is for sessions without that line.
 
-**Loose ends.** A review comment, or a fix that lands right here, is just work: do it. A thing
-that needs its own investigation, decision or diff is classified against the exit condition
-first (`deliver-ticket` §2 "Findings outside the ticket"): only NOW becomes a ticket
-(`write-ticket`), and then it is the next ticket, not this one. LATER goes on the deferred
-list, DROP gets its reason.
+**Loose ends.** A review comment, or a fix that lands right here, is just work: do it. Anything
+else is classified as `deliver-ticket` §2 "Findings outside the ticket" says; only a NOW finding
+becomes a ticket (`write-ticket`), and then it is the next ticket, not this one.
 
 **Feedback on in-flight work is a new ticket.** When the user says "이거 더 낫게" about a card
 or PR that is already running, file it as its own ticket and hand it off (or queue it). Never
@@ -52,19 +47,22 @@ well-written `--prompt` beats a session that lost its own first half.
 **What is next.** Rank the unstarted tickets in the same tracker project or parent that serve
 an open exit item (the parent's `✅ 완료 조건`) by priority, dependency (blocked tickets wait),
 and file collision with cards already running. When every exit item is met, close the parent
-and report it instead of starting more, even with lines left on `⏸️ 보류`. Spawn it
-yourself when the user said to keep going, or when one candidate is clearly next. Ask when the
-ranking is genuinely contested — then give the ranking, a recommendation, and any
-parallel-safe combination.
+and report it instead of starting more, even with lines left on `⏸️ 보류`. Otherwise start the
+recommended ticket and report the ranking, the recommendation and any parallel-safe combination.
+When the ranking is genuinely hard, settle it with an independent review (Codex when it answers,
+else a fresh-context Claude reviewer), record the verdict and the choice (`orch decide add`, then
+`orch decide done <id> --answer "<choice>: <verdict>"`), start it, and list it in the report for
+the owner to review later.
 
 A standing instruction is that permission, already given: "작업 끝나면 다음 티켓 진행해줘",
 "알아서 다음 작업 진행해줘", "남은 것 진행해줘". Act on it, do not re-ask.
 
-**What may be asked.** The one question this section allows is *which* ticket comes next, and
-only when the ranking is genuinely contested. Whether to file a loose-end ticket, whether to
-spawn a card, and whether to close this session are already decided above — never ask them.
-File the NOW loose-end tickets before asking about the ranking, so the findings survive a stalled
-answer; `write-ticket` skips its approval gate for exactly this case.
+**Nothing here is asked.** Whether to file a loose-end ticket, whether to spawn a card, which
+ticket comes next and whether to close this session are decided above. A question that still
+seems needed goes through the owner-ask gate
+([owner-ask-gate.md](../orchestrate/references/owner-ask-gate.md)) first. File the NOW loose-end
+tickets before the next card starts, so the findings survive; `write-ticket` skips its approval
+gate for exactly this case.
 
 ## 1. Confirm this work is actually done
 
@@ -75,8 +73,10 @@ finish it there first. The exception is work the user asked to hold: the ticket 
 ## 2. Resolve the tickets to hand off
 
 Take the identifiers from the user's message. If none was given, take the next unstarted ticket
-in the same tracker project or parent. Never guess a ticket number; ask with `AskUserQuestion`
-if unsure.
+in the same tracker project or parent. Never guess a ticket number: query the tracker first
+(`use-tracker`: the parent's children, the project's unstarted tickets, a search on the user's
+words), and only when that still names none, go through the owner-ask gate
+([owner-ask-gate.md](../orchestrate/references/owner-ask-gate.md)).
 
 Parallel requests ("병렬로", "동시에") still mean one card per ticket — repeat step 3 per ticket,
 never two tickets in one prompt. Hold back a ticket that would edit the same files as one already
@@ -93,19 +93,14 @@ skills-sync handoff <TICKET-ID> \
   --base-branch "<lower branch whose code this ticket uses, else omit>"
 ```
 
-It runs `orca worktree create` with `--name <ticket-id-lowercase>`, the parent below, `--agent
-claude` and the prompt `/goal <TICKET-ID>. <note>` plus the `CLOSE` line on a line of its own;
-names the card `<TICKET-ID> <short title>` (not Orca's automatic title: the tab title is the
-agent's, a rename does not stick); logs it with `orch sent add`; starts `skills-sync close-setup`
-in the background (the setup terminal stays a shell, so `terminal wait --for exit` never fires);
-and reads the start (§4). It stops with exit 2 when a live card already holds the ticket (or a
-`--reference`) in the same `--role`; `--supersede` replaces it as `dispatch-card` §3 says. Exit 5
-means the card exists but its start, link or name is not confirmed: look at it, do not create it
-again.
+It creates the `/goal <TICKET-ID>. <note>` card with its fixed rows, names it `<TICKET-ID> <short
+title>` (the tab title is the agent's, a rename does not stick), logs it with `orch sent add`, closes
+its setup terminal in the background and reads the start (§4). It stops with exit 2 when a live
+card already holds the ticket (or a `--reference`) in the same `--role`; `--supersede` replaces it
+as `dispatch-card` §3 says. Exit 5 means the card exists but its start, link or name is not
+confirmed: look at it, do not create it again.
 
-- `--reference` is the card's link to its ticket in Orca (`linkedItems`): `orca reference find
-  <TICKET-ID>` then finds the card, and the new session's `orca linear attach --current` works.
-  Linear and GitHub take the full URL; a bare key is read as Jira. Do not add the legacy
+- `--reference` links the ticket as `dispatch-card` §3 says. Do not add the legacy
   `--linear-issue` or `--issue` flags beside it: Orca refuses the mix. If the reference is
   rejected, create the card without it and put the ticket URL in the prompt; the new session
   moves the ticket itself.
@@ -119,13 +114,12 @@ again.
   if Orca adds one).
 - Stacked work: pass the lower ticket's branch as `--base-branch` and say in `--note`
   "stack on <lower ticket> (`gh stack link <lower PR> <this PR> --base main`); rebase only".
-- Do not use `orca terminal create`: that adds a tab to this worktree instead of a new card.
-- The prompt is the whole context the new session gets. It knows nothing from here, so put
-  anything non-derivable from the ticket (decisions, base branch, gotchas) in `--note`.
-  When the user approved acts beyond the ticket's normal flow (a deploy, a restart, a settings
-  change), put them there too, with the Human only and Model calls lines (`dispatch-card` §2).
-  The first prompt is the only place an approval reaches the card; one sent later by message is
-  refused as not the human's.
+- Not `orca terminal create`: that adds a tab to this worktree instead of a new card.
+- The prompt is the whole context the new session gets: put anything not derivable from the
+  ticket (decisions, base branch, gotchas) in `--note`, and approvals beyond the ticket's normal
+  flow (a deploy, a restart, a settings change) with the Human only and Model calls lines
+  (`dispatch-card` §2). The first prompt is the only place an approval reaches the card; one sent
+  later by message is refused as not the human's.
 
 ## 4. Verify it started
 

@@ -13,8 +13,7 @@ confirm it started, come back to your own work.
 The user's phrasing decides it. **"위임하고 너는 X 계속해"** — "~에 위임하고 너는 손 떼",
 "위임해서 진행시키고 너는 원래 작업 진행해줘", "기존 작업 하면서 ~도 진행해줘" — is dispatch:
 this session has its own work after the instruction. **"끝났으니 다음"** — "작업 끝나면 다음
-티켓", "남은 것 진행해줘" — is `handoff-ticket`. "병렬로" alone usually means handoff or a
-sub-agent; it is dispatch only when this session keeps working. "서브에이전트로" is the Agent tool.
+티켓", "남은 것 진행해줘" — is `handoff-ticket`.
 
 | | dispatch-card | handoff-ticket |
 |---|---|---|
@@ -29,15 +28,11 @@ the target is this repo and this session is done, stop here and follow `handoff-
 Target is another repo → always this skill, whatever the phrasing; handoff never crosses
 repos. The reverse does not hold — same repo is still dispatch when this session keeps working.
 
-Where the work goes is a separate question, and only one answer is this skill:
-
-- "서브에이전트로", "sub-agent 로 진행해두고" → the Agent tool, in this session. Not this skill.
-- A new Orca card / worktree, in this repo or another → this skill.
-- Several tickets supervised to a finish line, with this session as the lead that lands
-  their PRs → `orchestrate`. Not this skill.
-
-"병렬로" by itself says nothing about which: most of the time it is same-repo, ticket-based
-parallel work (handoff) or sub-agents. Read the rest of the sentence.
+Where the work goes: "서브에이전트로", "sub-agent 로 진행해두고" → the Agent tool, in this session;
+several tickets supervised to a finish line, with this session as the lead that lands their PRs →
+`orchestrate`; a new Orca card in this repo or another → this skill. "병렬로" by itself names none
+of them (most often same-repo ticket cards, which is handoff, or sub-agents); it is dispatch only
+when this session keeps working. Read the rest of the sentence.
 
 ## 1. Resolve the target repo
 
@@ -65,23 +60,24 @@ session as not the human's, so an approval sent afterwards is refused. The brief
 - **Background** — what happened in repo A and why this work follows from it.
 - **Sources** — links, not summaries: repo, PR, commit, note paths the target session reads itself.
 - **Deliverable and done** — the exact output and what makes it complete.
-- **Do not** — repo A is off limits; anything else the target must leave alone, written in the
-  brief's `FORBIDDEN` row after its marked section. `skills-sync card` (§3) writes `orchestrate`
-  `references/brief.md` FORBIDDEN (through "run it again.", the refused-act paragraph included)
-  into that row between `<!-- FORBIDDEN:begin -->` and `<!-- FORBIDDEN:end -->`, replacing an older
-  copy, so the card never gets a stale one; lines outside the markers stay yours. A card gets these
-  rules from no other place: an inline `--prompt` card with no brief file pastes the paragraph
-  itself, by its first and last words, not by line numbers.
-- **Approved** — an `APPROVED:` row: the acts the human already approved for this work, each with
-  their words and the date (merge, deploy, restarting an app, a settings or language change, an
-  upgrade). Written as a row, it reaches the first prompt (§3); a heading or bullet does not. The
-  card decides inside them with the recommended default and reports what it chose; it does not
-  ask. A card that lands its own PR carries the merge here, in the first prompt, never in a later
-  message: `APPROVED: required checks green + independent review Act-on 0: merge with orch land`
-  plus the human's words and date. A card without it stops at READY.
-- **Human only** — what stays the human's: permission dialogs, logins, payments, document
-  submissions, and any irreversible or outward act not under Approved. The card puts these to
-  the human in one batched message and keeps doing the rest.
+- **Do not** — repo A and anything else the target must leave alone, in the `FORBIDDEN` row
+  after its marked section. `skills-sync card` (§3) writes the current `orchestrate`
+  `references/brief.md` FORBIDDEN (through "run it again.") between `<!-- FORBIDDEN:begin -->` and
+  `<!-- FORBIDDEN:end -->`, replacing an older copy; lines outside the markers stay yours. An inline
+  `--prompt` card with no brief file pastes that paragraph itself, by its first and last words.
+  Teardown and owner-facing docs need no row: `skills-sync card` adds its fixed `TEARDOWN` (stacks
+  down in the same turn, never `-v`; kill only recorded PIDs, never pkill or killall) and `DOCS`
+  (owner-facing documents as an Artifact only, no local `.md` copy or file path) rows to every
+  prompt; an inline card writes them out.
+- **Approved**, **Human only**, **Model calls** — the `APPROVED`, `HUMAN ONLY` and `MODEL CALLS`
+  rows of `orchestrate` `references/brief.md` "Single worker", each written as a row: a heading or
+  bullet does not reach the first prompt. APPROVED cites each owner quote by the `orch decide answer`
+  id that recorded it; `skills-sync card` refuses an id the store does not hold as answered. A card
+  that lands its own PR carries the merge there (`APPROVED: required checks green + independent
+  review Act-on 0: merge with orch land` plus the human's words and date); without it, it stops at
+  READY. Before an item goes into HUMAN ONLY, check for an agent-only path first (a script, an
+  existing allow rule, a card that holds the access); only what still needs the human's own hands
+  goes there.
 - **Questions** — only for a brief that reports to `run:<id>` and goes out as a `/goal` card (§3
   says which): one line telling the card how to ask what Approved leaves open. Orca refuses
   `ask` and `--type escalation` from a session with no Dispatch, so the card sends
@@ -95,10 +91,6 @@ session as not the human's, so an approval sent afterwards is refused. The brief
   To look again, `check --all` and match `thread_id`; never a list you sort or cut yourself (a
   card sorting by a field the rows do not have, `createdAt` for `created_at`, missed two replies).
   A supervised worker needs no such line: its preamble's `ask` does this.
-- **Model calls** — one line: "다른 모델 호출(서브에이전트, API)은 필요할 때만 한다".
-  The session's own model comes from `skills-sync card` (§3), not from
-  the brief. A brief that names another model for the card to call gets it called whether or not
-  the task needs it.
 - **Changes, Pitfalls, Examples** — optional. A card starts with only what the brief says, so
   write down what you already know: the files and functions to change, what has gone wrong there
   before, an input with its expected output. Leave out what you do not know; the card reads the code.
@@ -164,26 +156,22 @@ references/top-level.md "Starting a worker".
   end-session §8` and drop the questions it left waiting (`orchestrate` "Stay answerable").
   Without the summary the new card redoes or undoes finished work; left open, the old card waits
   on a question about work the new card already did.
-- Which card it makes. A brief whose REPORT or PARENT line sends to `run:<id>` is work this session waits
-  on: from a session bound to that Run (`orca orchestration run-current`; bind one as in
-  `orchestrate` references/top-level.md "Your Run"), or itself a dispatched worker on it (a lead started
-  as one; `orch doctor` says which), `skills-sync card` starts it as a supervised
-  worker with `orca orchestration worker-start --worktree new-child` (your worktree becomes its Orca parent; `new-top-level` with `--no-parent`). It is then a Dispatch:
-  its escalation, `ask` and `worker_done` reach your Run, and Orca watches it for a prompt only a
-  human can answer. Its spec is the composed prompt, `/goal` line included (Orca delivers a
-  spec as the task after its own preamble, so the line is not the first thing the session reads and
-  never runs as the slash command; it still states the goal). A `/goal` card's prompt fails the same way:
-  Orca pastes it and Claude Code folds a long paste into `<pasted_content>`. So for every Claude card the
-  card then starts a detached helper that types nothing once the transcript shows `/goal` ran, else polls the
-  session's screen with the reload broadcast's idle checks (an hour
-  at most) until the first turn ends and types that one `/goal` line; past the limit it types nothing and
-  logs the manual command (the `card` object's `goal_input.log`). Everything else is a `/goal` card from `orca
-  worktree create`: a brief with no Run report (fire-and-forget), a lead's brief while Orca's
-  Nested worker depth is below 3 (the lead's workers' helpers would not fit; the helper prints the
-  setting to change), or `--card`. A Run brief from a session bound to no Run, or to another Run
+- Which card it makes. A brief whose REPORT or PARENT line sends to `run:<id>` is work this session
+  waits on. From a session bound to that Run (`orca orchestration run-current`; bind one as in
+  `orchestrate` references/top-level.md "Your Run"), or itself a dispatched worker on it (`orch
+  doctor` says which), `skills-sync card` starts a supervised worker (`orca orchestration
+  worker-start --worktree new-child`, your worktree its Orca parent; `new-top-level` with
+  `--no-parent`): a Dispatch whose escalation, `ask` and `worker_done` reach your Run, and which Orca
+  watches for a prompt only a human can answer. Everything else is a `/goal` card from `orca worktree
+  create`: a brief with no Run report (fire-and-forget), a lead's brief while Orca's Nested worker
+  depth is below 3 (the helper prints the setting to change), or `--card`. On neither path does the
+  prompt's `/goal` line run as the slash command (Orca's preamble comes first; a long paste folds
+  into `<pasted_content>`), so for every Claude card a detached helper types that one line once the
+  first turn ends, unless the transcript shows it ran; after an hour it types nothing and logs the
+  manual command (`card.goal_input`). A Run brief from a session bound to no Run, or to another Run
   than the brief's `run:<id>`, creates nothing (exit 6): bind the brief's Run (`orca orchestration
   run-use --id <id>`), fix the brief's Run, or pass `--card` for a `/goal` card on purpose. The
-  printed output ends in a `card` object: `kind` (worker or card), `path`, `handle`, `run`, `parent`.
+  output ends in a `card` object: `kind` (worker or card), `path`, `handle`, `run`, `parent`.
 - `--agent codex` passes codex to Orca, and the brief checks are the same as for Claude. It starts
   only a supervised worker. A brief with no Run report, `--card` or a lead's brief is refused (exit
   2, nothing created, never switched to claude): a leading `/goal` and the start read from the screen
@@ -198,8 +186,8 @@ references/top-level.md "Starting a worker".
   `/goal` card, by `orca reference add` on the new card right after the start for a worker.
   Linear and GitHub take the full URL; a bare key is read as Jira.
 - `skills-sync card` writes the brief's `/goal` line (plus the brief's path, unless the line
-  names one), PROGRAM, APPROVED, lead and CLOSE or KEEP rows, the FORBIDDEN section whole and every
-  REPORT row into `--prompt` (or the worker's spec) itself, logs a
+  names one), PROGRAM, APPROVED, lead, CLOSE or KEEP and LOAD rows, its fixed TEARDOWN and DOCS rows,
+  the FORBIDDEN section whole and every REPORT row into `--prompt` (or the worker's spec) itself, logs a
   `/goal` card with `orch sent add` (a worker's spec is its Orca Task, which the Sent page reads),
   sets the display name and prints Orca's create output. A row is a line outside
   a ``` fence that starts with its key and a colon (`CLOSE: …`), or the Lead template's wide gap; a
@@ -209,18 +197,13 @@ references/top-level.md "Starting a worker".
   its lead-starts-lead test, since the hook is a guardrail, not a sandbox. The auto-mode
   classifier sees only the command and its path, and the helper is not auto-allowed. Never pass
   `--prompt "$(cat <brief>)"`: the hook reads only the command text, so it refuses that card even
-  when the file holds the lines. A nonzero exit is a failing check, not a refusal: 2 names the
-  missing line (add it to the brief), 3 is the pressure gate's reason (wait as it says, then run
-  the same command), 4 is Orca's create or `worker-start` error, with Orca's whole receipt on
-  stderr (Orca can fail a launch whose outcome it could not confirm: follow the receipt's recovery
-  commands, and for a `worker-start` the `request-show` line the helper prints, before running it
-  again; `completed` or `pending` there means it took or may still take effect, and `absent` is
-  no proof that nothing started, so check `orca worktree ps` and `orca orchestration worker-list`
-  too; a 4 for a refused parent or depth lists the choices instead, and nothing was created), 5
-  means the card exists but its link, log or name failed (do that step by hand; do not create it
-  again), 6 means nothing was created because the Run or the parent did not check out (pick one of
-  the printed choices, never `--no-parent` or `--card` just to get past it). The `term_` refusal is a 2. An inline brief with no file goes
-  straight to `orca worktree create --prompt`, its lines written out.
+  when the file holds the lines. A nonzero exit is a failing check, not a refusal; each code and its
+  next step are in [references/exit-codes.md](references/exit-codes.md). Exit 4 is Orca's create or
+  `worker-start` error: follow its receipt's recovery commands before running it again, and
+  `absent` there is no proof that nothing started (check `orca worktree ps` and `orca
+  orchestration worker-list` too). Exit 5: the card exists, do not create it again. Exit 6: nothing
+  was created; pick one of the printed choices, never `--no-parent` or `--card` just to get past it.
+  An inline brief with no file goes straight to `orca worktree create --prompt`, its lines written out.
 - `--repo` is required. Omitted, Orca infers the current worktree's repo and the card lands in
   the wrong place.
 - `--name` is `<target>-<topic>`, e.g. `blog-launch-post`. A ticket-backed card uses the
