@@ -260,7 +260,7 @@ def check_command(c, masked, cfg, cwd, session, here=None):
         if label_add(w):
             out.append(("guard.deny.self_exempt_label", "The `no-visual-change` label exempts a PR from visual review; "
                                                         "an agent never adds it to its own PR. Ask the human."))
-    if name in ("git", "gh") and force_push_default(c, here):
+    if name in ("git", "gh", "curl") and force_push_default(c, here):
         out.append(("guard.deny.default_force_push", "A force push rewrites the default branch every worker and "
                                                      "reviewer builds on. Push your own PR branch (`git push "
                                                      "--force-with-lease=<branch>:<sha> origin <branch>`); a bad "
@@ -430,9 +430,14 @@ def force_push_default(c, here):
     origin/HEAD names. A push with no refspec, or `HEAD`, is judged by the branch checked out in `here`; when that
     cannot be read, only main and master count."""
     w = c.words
-    if c.name == "gh":
-        method, endpoint, fields = api_call(w) if w[1:2] == ["api"] else ("", "", [])
-        return (method == "PATCH" and re.search(r"/git/refs/heads/(main|master)$", endpoint) is not None
+    if c.name in ("gh", "curl"):
+        if c.name == "gh":
+            method, endpoint, fields = api_call(w) if w[1:2] == ["api"] else ("", "", [])
+            paths = [endpoint]
+        else:
+            (method, paths), fields = curl_call(w), [" ".join(w[1:])]
+        return (method == "PATCH" and any(re.search(r"/git/refs/heads/(main|master)$", p.split("?", 1)[0])
+                                          for p in paths)
                 and any(re.search(r'force"?\s*[=:]\s*true', f) for f in fields))
     sub, rest = verb(w[1:], GIT_OPTS)
     if sub != "push":
@@ -453,11 +458,17 @@ def force_push_default(c, here):
             i += x in PUSH_VALUED
         else:
             pos.append(x)
-    if "--dry-run" in opts or any(re.fullmatch(r"-[a-zA-Z]*n[a-zA-Z]*", o) for o in opts):
+    dry = False  # the last of --dry-run / --no-dry-run wins
+    for o in opts:
+        if o == "--no-dry-run":
+            dry = False
+        elif o == "--dry-run" or re.fullmatch(r"-[a-zA-Z]*n[a-zA-Z]*", o):
+            dry = True
+    if dry:
         return False
     forced = any(o == "--force" or o.startswith("--force-with-lease") or re.fullmatch(r"-[a-zA-Z]*f[a-zA-Z]*", o)
                  for o in opts)
-    if "--mirror" in opts or forced and "--all" in opts:  # --mirror overwrites every remote ref on its own
+    if "--mirror" in opts or forced and ("--all" in opts or "--branches" in opts):  # --mirror overwrites every remote ref on its own
         return True
     named_repo = any(o == "--repo" or o.startswith("--repo=") for o in opts)  # then every positional is a refspec
     remote = "origin" if named_repo or not pos else pos[0]
@@ -500,8 +511,10 @@ def in_trash(path):
 
 
 def find_roots(w):
-    """The start paths of a `find` command that has -delete; [] without it."""
-    if "-delete" not in w:
+    """The start paths of a `find` command that deletes (-delete, or -exec rm); [] without it."""
+    removes = any(x in ("-exec", "-execdir", "-ok", "-okdir") and os.path.basename(y) == "rm"
+                  for x, y in zip(w, w[1:]))
+    if "-delete" not in w and not removes:
         return []
     out = []
     for x in w[1:]:
