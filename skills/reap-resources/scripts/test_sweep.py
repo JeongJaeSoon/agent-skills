@@ -950,7 +950,7 @@ assert not sweep.plist_path().exists() and not orca_log.exists()
 buf = io.StringIO()
 with contextlib.redirect_stdout(buf):
     assert sweep.cmd_install(["--dry-run"]) == 0
-assert "[dry-run]" in buf.getvalue() and "agent-skills sweep" in buf.getvalue() and "*/15 * * * *" in buf.getvalue()
+assert "[dry-run]" in buf.getvalue() and "agent-skills sweep" in buf.getvalue() and "*/30 * * * *" in buf.getvalue()
 assert not sweep.plist_path().exists() and not orca_log.exists() and not stub_log.exists()
 (tmp / "config.json").write_text(json.dumps({"reap-hard": {"protect_file": str(PROTECT), "interval": 600}}))
 buf = io.StringIO()

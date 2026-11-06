@@ -356,7 +356,7 @@ class ShellJobs(Base):
         self.assertEqual(j.job_name, "agent-skills sweep")
         self.assertEqual(j.argv[1:], [str(au.REAP.parent / "sweep.py"), "tick"])
         w = j.want()
-        self.assertEqual((w["trigger"], w["precheck-timeout"], w["prompt"]), ("*/15 * * * *", au.SWEEP_TIMEOUT_S, au.SHELL_PROMPT))
+        self.assertEqual((w["trigger"], w["precheck-timeout"], w["prompt"]), ("*/30 * * * *", au.SWEEP_TIMEOUT_S, au.SHELL_PROMPT))
         self.assertIn("orca_job.py run sweep ", w["precheck"])
         self.assertIn(f"--timeout {au.SWEEP_TIMEOUT_S - 20} ", w["precheck"])
         import sweep
