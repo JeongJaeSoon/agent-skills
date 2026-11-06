@@ -19,9 +19,9 @@ def executable_bit_missing(entries):
 
 
 def tracked_scripts(repo):
-    out = subprocess.run(["git", "-C", str(repo), "ls-files", "-s", "-z", "--", "scripts/*.sh", "skills/*/scripts/*.sh"],
+    out = subprocess.run(["git", "-C", str(repo), "ls-files", "-s", "-z", "--", "*.sh"],
                          capture_output=True, text=True, check=True).stdout
-    return [e for e in out.split("\0") if e]
+    return [e for e in out.split("\0") if e and "scripts" in e.split("\t", 1)[1].split("/")[:-1]]
 
 
 def missing_hook_modules(hooks_json):
