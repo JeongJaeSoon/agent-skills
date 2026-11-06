@@ -53,6 +53,8 @@ if cmd == "issue":
     if os.environ.get("FAKE_ORCA_STATE"):
         name, kind = os.environ["FAKE_ORCA_STATE"].split(":")
         issue["state"] = {"name": name, "type": kind}
+    if os.environ.get("FAKE_ORCA_DESC"):
+        issue["description"] = os.environ["FAKE_ORCA_DESC"]
     if "--attachments" in args and os.environ.get("FAKE_ORCA_ATTACH"):
         issue["attachments"] = [{"title": "PR", "url": os.environ["FAKE_ORCA_ATTACH"]}]
     ok({"issue": issue})
@@ -729,6 +731,38 @@ class Reconcile(unittest.TestCase):
                                  JIRA_API_TOKEN=JIRA_TOKEN, **env)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual([p["number"] for p in out["prs"]], [5])
+
+    def test_linear_reads_only_the_attachments(self):
+        self.repo("acme/app", [pr(5, title="unrelated")])
+        env = dict(FAKE_GH_DIR=self.ghdir, FAKE_GH_LOG=self.gh_log)
+        # A PR linked in the description for background is not an attached PR.
+        proc, out = self.env.run("reconcile", "ENG-12", "--repo", "acme/app",
+                                 FAKE_ORCA_DESC="background: https://github.com/acme/app/pull/5", **env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual((out["prs"], out["attachments_read"]), ([], True))
+        # An ID `orca linear issue` cannot parse is read by search; its attachments are reported unread.
+        proc, out = self.env.run("reconcile", "ENG-7", "--repo", "acme/app", **env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual((out["id"], out["attachments_read"]), ("ENG-7", False))
+
+    def test_attachment_shapes(self):
+        # A non-PR attachment is skipped; a PR that `gh pr view` cannot read is an error, not a silent miss.
+        self.ticket("unstarted", attachments=[{"url": "https://docs.example.test/spec", "title": "spec"}])
+        self.repo("acme/app", [])
+        proc, out = self.run_rc("--repo", "acme/app")
+        self.assertEqual((proc.returncode, out["prs"]), (0, []))
+        self.ticket("unstarted", attachments=[{"url": "https://github.com/acme/gone/pull/3", "title": "PR"}])
+        proc, _ = self.run_rc("--repo", "acme/app")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("gh pr view", proc.stderr)
+
+    def test_next_keeps_the_config_flag(self):
+        self.ticket("unstarted")
+        self.repo("acme/app", [pr(1, title="ENG-12")])
+        cfg = self.env.file("other cfg.json", {"tracker": {"adapter": "linear"}})
+        proc, out = self.run_rc("--repo", "acme/app", pre=("--config", cfg))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(out["next"][0], f"python3 {TRACKER} --config '{cfg}' transition ENG-12 --to started")
 
     def test_next_keeps_the_adapter_flag(self):
         self.ticket("unstarted")

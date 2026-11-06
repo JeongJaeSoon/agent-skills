@@ -21,6 +21,7 @@ import copy
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import urllib.error
@@ -290,7 +291,14 @@ class LinearAdapter:
         """PR URLs among the issue's attachments; None when Orca cannot read this identifier."""
         if not ORCA_IDENTIFIER.match(issue_id):
             return None
-        return pr_urls(self._orca("issue", issue_id, "--attachments"))
+        try:
+            result = self._orca("issue", issue_id, "--attachments")
+        except TrackerError as exc:
+            if "linear_issue_required" not in str(exc):
+                raise
+            return None
+        # Only the attachments: a PR linked in the description for background does not deliver the ticket.
+        return pr_urls(result.get("attachments") or (result.get("issue") or {}).get("attachments"))
 
     def _get_via_search(self, issue_id):
         # `orca linear issue` cannot parse this identifier; search finds it, then list-issues
@@ -682,7 +690,7 @@ def delivers(pr_, issue_id):
                 or re.search(CLOSES + ident, pr_.get("body") or "", re.I))
 
 
-def reconcile(adapter, issue_id, repos, head, adapter_flag=None):
+def reconcile(adapter, issue_id, repos, head, global_args=()):
     """The first row of use-tracker "Reconcile" that GitHub supports. Reads only; `next` holds the milestone lines."""
     issue = adapter.get(issue_id)
     found, truncated = {}, []
@@ -720,7 +728,8 @@ def reconcile(adapter, issue_id, repos, head, adapter_flag=None):
         target, reason = "report", "no PR on a started ticket"
     else:
         target, reason = None, "no PR"
-    me = f"python3 {os.path.abspath(__file__)}" + (f" --adapter {adapter_flag}" if adapter_flag else "")
+    # The lookup's --adapter and --config go on every line, so a write reaches the tracker that was read.
+    me = shlex.join(["python3", os.path.abspath(__file__), *global_args])
     nxt = []
     if target in ("started", "review"):
         nxt = [f"{me} transition {issue_id} --to {target}"] + [
@@ -820,7 +829,9 @@ def run(argv):
             raise TrackerError(f"attach: --url must be an absolute http(s) URL, got {args.url!r}")
         return adapter.attach(args.id, args.url, args.title)
     if args.cmd == "reconcile":
-        return reconcile(adapter, args.id, args.repo, args.head, args.adapter)
+        return reconcile(adapter, args.id, args.repo, args.head,
+                         (["--adapter", args.adapter] if args.adapter else [])
+                         + (["--config", os.path.abspath(args.config)] if args.config else []))
     return adapter.transition(args.id, args.to)
 
 
