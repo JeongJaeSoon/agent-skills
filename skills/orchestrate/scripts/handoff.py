@@ -18,23 +18,27 @@ The model writes only what no store holds: --next (what to do first), --waiting 
 channel), --note. The rest is filled from the stores when the session reads it: the Run the terminal is bound to and
 the open `orch decide` items.
 
-`ready` is what the plugin's clear band (hooks/clear_band.tsx) runs after each turn of a session whose context passed
-`orchestrate.restart_at`: it prints one JSON line saying whether a /clear is safe now (an orchestrator session only;
-leads rely on auto-compact; its inbox empty, its last answer not a question, no subagent running) and, when it is, saves
+`ready` is what the plugin's clear band (hooks/clear_band.tsx) runs after each turn: it prints one JSON line saying
+whether a restart is due (compactions.due: too many auto compactions in the transcript, a compaction that no longer
+shrinks the context, two close together, or the context over `orchestrate.restart_at`; an orchestrator session only,
+leads rely on auto-compact), why (`due`), and whether a /clear is safe now (its inbox empty, its last answer not a
+question, no subagent running). When it is safe, it saves
 a handoff from the stores with no model turn (store.save_auto_handoff), carrying the fields of the newest handoff. A
 handoff another terminal saved for the same key in the last 10 minutes stops the save. The band then tells the human `/clear` is safe; the reorient hook gives
 the next session the handoff.
 
 --restart is the orchestrator's only (the stream reads requests under that key) and asks the terminal's `orch inbox --stream` to type `/clear` once the screen is idle; it is refused when no
 stream runs for this terminal. The stream then prints `SESSION CLEARED`, whose notice starts the new session's first
-turn (agent-skills:reboot). Off unless `orchestrate.auto_clear: true` in ~/.claude/agent-skills.json: by default the
-human types the /clear the band suggests.
+turn (agent-skills:reboot). Off unless `orchestrate.auto_clear: true` (restart on the context ceiling) or
+`orchestrate.compact_restart.auto_clear: true` (restart on the compaction rules) in ~/.claude/agent-skills.json: by
+default the band only suggests and the human types the /clear.
 """
 import json, os, pathlib, re, subprocess, sys
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parents[2] / "hooks"))
+import compactions  # noqa: E402
 import roles  # noqa: E402
 import store  # noqa: E402
 
@@ -46,11 +50,9 @@ AUTO_EVERY_S = 600
 
 
 def auto_clear_on():
-    path = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-skills.json").expanduser()
-    try:
-        return (json.loads(path.read_text()).get("orchestrate") or {}).get("auto_clear") is True
-    except (OSError, ValueError, AttributeError):
-        return False
+    """Whether the stream may type /clear: `orchestrate.auto_clear` (the ceiling) or `compact_restart.auto_clear`."""
+    p = compactions.policy()
+    return p.auto_clear or (p.compact and p.auto_compact)
 
 
 def opt(argv, name):
@@ -156,13 +158,15 @@ def unread(key, handle):
     return [m for m in msgs if m.get("type") != "heartbeat" and not prog.revoked_echo(m)]
 
 
-def ready(session, context, asking, now=None, peek=unread, agents=0):
+def ready(session, context, asking, now=None, peek=unread, agents=0, verdict=compactions.due):
     """The clear band's verdict for this session, as a dict; saves the handoff when a /clear is safe."""
     import inbox_stream
     key = key_for(session, None)[0]
-    threshold = inbox_stream.restart_at()
-    out = {"show": False, "ready": False, "context": context, "threshold": threshold, "key": key, "reason": ""}
-    if key != "orchestrator" or not threshold or context <= threshold:  # leads rely on auto-compact
+    out = {"show": False, "ready": False, "context": context, "due": "", "key": key, "reason": ""}
+    if key != "orchestrator":  # leads rely on auto-compact
+        return out
+    out["due"] = verdict(session, context, compactions.policy())
+    if not out["due"]:
         return out
     out["show"] = True
     if asking:
@@ -226,7 +230,7 @@ def main(argv):
         if restart:
             import inbox_stream
             if not auto_clear_on():
-                sys.exit("restart off (orchestrate.auto_clear is not true): nothing saved. Save without --restart; the "
+                sys.exit("restart off (neither orchestrate.auto_clear nor compact_restart.auto_clear is true): nothing saved. Save without --restart; the "
                          "clear band tells the human when a /clear is safe")
             if not handle or not roles.SESSION.fullmatch(handle):
                 sys.exit("restart needs ORCA_TERMINAL_HANDLE: only a session in an Orca terminal restarts itself")

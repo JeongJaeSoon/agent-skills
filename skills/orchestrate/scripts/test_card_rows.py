@@ -92,7 +92,7 @@ assert cards["two-prs"]["pr"] is None and cards["finished"]["pr"] == "acme/app#3
 # Nothing working is missing from the report, so the headline has no missing count.
 assert not any(f.startswith("보고서에 없는 세션") for f in out["headline_facts"]), out["headline_facts"]
 # A board row that names the card is the card's row, with or without a current PR: no second row for the card.
-board.set_row("ABC-1", title="two-prs 다음 단계", status="moving", next="작업 중", repo="acme/app")
+board.change(lambda s: board.put(s, "ABC-1", dict(title="two-prs 다음 단계", status="moving", next="작업 중", repo="acme/app")))  # from before the ban
 snap = render()["snapshot"]["rows"]
 assert "fleet:two-prs" not in snap and snap["ABC-1"]["pr"] == "", snap
 board.drop("ABC-1")
@@ -107,7 +107,7 @@ facts = render()["headline_facts"]
 # The lead has its own row; its worker's completed dispatch with no PR leaves the table, but it still works.
 assert "보고서에 없는 세션 1 (worker-x)" in facts, facts
 # A doing item naming it would stand for it, but not once that item is closed: the report no longer lists it.
-board.doing_add("worker-x 후속 정리", "card", "확인", force=True, why="a line from before the write ban")
+board.change(lambda s: s["doing"].append({"title": "worker-x 후속 정리", "owner": "card", "next": "확인"}))  # from before the ban
 assert not any(f.startswith("보고서에 없는 세션") for f in render()["headline_facts"])
 iid = board.read()["doing"][0]["id"]
 assert tidy.write([iid], can={iid: "worker-x 후속 정리"})[0] == [iid]

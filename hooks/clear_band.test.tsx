@@ -27,7 +27,17 @@ const turn = (answer: string) => ({
 })
 
 const verdict = (v: object) =>
-  out(JSON.stringify({ show: true, ready: false, context: 150_000, threshold: 130_000, reason: '', ...v }) + '\n')
+  out(
+    JSON.stringify({
+      show: true,
+      ready: false,
+      context: 150_000,
+      due: '3 auto-compactions',
+      key: 'orchestrator',
+      reason: '',
+      ...v,
+    }) + '\n',
+  )
 
 async function bandText($: Parameters<Parameters<typeof test>[1]>[0], isWorking = false): Promise<string> {
   const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, isWorking } })
@@ -36,7 +46,7 @@ async function bandText($: Parameters<Parameters<typeof test>[1]>[0], isWorking 
   return text
 }
 
-test('asks orch only past the floor, says when /clear is safe, rechecks every minute, hides after a /clear', async ($, on) => {
+test('asks orch at any context size, says why and when /clear is safe, rechecks every minute, hides after a /clear', async ($, on) => {
   const clock = mock.clock(on)
   let tokens: number | undefined = 40_000
   let session = 'sess-1'
@@ -63,21 +73,25 @@ test('asks orch only past the floor, says when /clear is safe, rechecks every mi
     return results.shift() ?? verdict({ show: false })
   })
 
+  // Right after a compaction the context is small (40k): there is no floor, orch is asked and its verdict decides.
+  results.unshift(verdict({ show: false }))
   await $.turn.complete(turn('done'))
   await clock.settle()
-  expect(argvs).toHaveLength(0)
+  expect(argvs).toHaveLength(1)
+  expect(argvs[0]?.slice(1, 6)).toEqual(['handoff', 'ready', '--session', 'sess-1', '--context'])
+  expect(argvs[0]?.[6]).toBe('40000')
   expect(await bandText($)).toBe('engine')
 
   tokens = 150_000
   await $.turn.complete(turn('done'))
   await clock.settle()
-  expect(argvs[0]?.[0]).toMatch(/\/bin\/orch$/)
-  expect(argvs[0]?.slice(1)).toEqual(['handoff', 'ready', '--session', 'sess-1', '--context', '150000', '--agents', '1'])
-  expect(await bandText($)).toContain('/clear not yet: 2 message(s) in the inbox')
+  expect(argvs[1]?.[0]).toMatch(/\/bin\/orch$/)
+  expect(argvs[1]?.slice(1)).toEqual(['handoff', 'ready', '--session', 'sess-1', '--context', '150000', '--agents', '1'])
+  expect(await bandText($)).toContain('context 150k · 3 auto-compactions · /clear not yet: 2 message(s) in the inbox')
   agents = []
 
   await clock.advance(60_000)
-  expect(argvs).toHaveLength(2)
+  expect(argvs).toHaveLength(3)
   expect(await bandText($)).toContain('/clear is safe')
   expect(await bandText($)).toContain('engine')
   // While a turn runs, the verdict from before it is not shown as safe.
@@ -85,7 +99,7 @@ test('asks orch only past the floor, says when /clear is safe, rechecks every mi
 
   await $.turn.complete(turn('which one should I land first?'))
   await clock.settle()
-  expect(argvs[2]?.at(-1)).toBe('--asking')
+  expect(argvs[3]?.at(-1)).toBe('--asking')
   expect(await bandText($)).toContain('asks a question')
 
   // A check that throws is shown, not a silent blank, and the minute timer tries again.
@@ -96,7 +110,7 @@ test('asks orch only past the floor, says when /clear is safe, rechecks every mi
   expect(await bandText($)).not.toContain('/clear is safe')
   fail = false
   await clock.advance(60_000)
-  expect(argvs).toHaveLength(4)
+  expect(argvs).toHaveLength(5)
 
   session = 'sess-2'
   expect(await bandText($)).toBe('engine')
@@ -147,7 +161,7 @@ test('drops a verdict begun before a turn, and shows a failure after a hidden st
   expect(await bandText($)).not.toContain('/clear is safe')
   expect(await bandText($)).toContain('asks a question')
 
-  // Below the threshold the band hides; a failure once past it must still show.
+  // When no restart is due the band hides; a failed check afterwards must still show.
   queue.length = 0
   queue.push(verdict({ show: false }), new Error('spawn refused'))
   await $.turn.complete(turn('done'))
@@ -157,4 +171,58 @@ test('drops a verdict begun before a turn, and shows a failure after a hidden st
   await $.turn.complete(turn('done'))
   await clock.settle()
   expect(await bandText($)).toContain('clear check: check failed:')
+})
+
+test('a session that is not an orchestrator is not asked again for ten minutes, a new session at once', async ($, on) => {
+  const clock = mock.clock(on)
+  let session = 'sess-lead'
+  let key: string | null = 'lead:app'
+  const argvs: string[][] = []
+  on('session.usage', () => ({ value: { startedAt: 0, context: { tokens: 80_000, window: 200_000 }, rateLimits: {}, cost: {} } }))
+  on('session.id', () => ({ value: session }))
+  on('agent.list', () => ({ value: [] }))
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  on('turn.complete', (_, e) => ({ text: e.answer }))
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('process.run', (_, e) => {
+    argvs.push([...e.argv])
+    const orchestrator = key === 'orchestrator'
+    return verdict({ show: orchestrator, key, context: 80_000, due: orchestrator ? '3 auto-compactions' : '' })
+  })
+
+  await $.turn.complete(turn('done'))
+  await clock.settle()
+  expect(argvs).toHaveLength(1)
+  // The next turns of the same session do not run orch again.
+  await $.turn.complete(turn('done'))
+  await $.turn.complete(turn('done'))
+  await clock.settle()
+  expect(argvs).toHaveLength(1)
+  expect(await bandText($)).toBe('engine')
+  // A /clear (new session id) is asked at once, here as an orchestrator.
+  key = 'orchestrator'
+  session = 'sess-orch'
+  await $.turn.complete(turn('done'))
+  await clock.settle()
+  expect(argvs).toHaveLength(2)
+  expect(await bandText($)).toContain('context 80k · 3 auto-compactions · /clear not yet')
+
+  // A session with no role yet may declare ROLE: orchestrator in a later turn: it is asked at each turn, not skipped.
+  session = 'sess-late'
+  key = null
+  const turnOf = async (id: string) => {
+    await $.turn.start({ text: '', turnId: id })
+    await $.turn.complete({ ...turn('done'), turnId: id })
+    await clock.settle()
+  }
+  await turnOf('t1')
+  expect(argvs).toHaveLength(3)
+  expect(await bandText($)).toBe('engine')
+  key = 'orchestrator'
+  await turnOf('t2')
+  expect(argvs).toHaveLength(4)
+  expect(await bandText($)).toContain('3 auto-compactions')
 })

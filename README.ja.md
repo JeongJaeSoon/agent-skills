@@ -87,13 +87,14 @@ https://github.com/JeongJaeSoon/agent-skills の Claude Code プラグインを�
 
 - 「ABC-1 を終わらせて」と頼むと、`deliver-ticket` が計画からマージ、チケットのクローズまで進めます。トラッカーが必要です(既定は Linear。変えるには `tracker.adapter`、[設定](#設定)を参照)。
 - 「状況を報告して」と頼むと `brief` が動きます。Claude Code には組み込みの `/brief` があるので、直接呼ぶときは `/agent-skills:brief` です。`/brief-pane` でチャットの横にパネルを開くと、開いている間だけ 30 秒ごとに同じ報告を更新します(110 列以上なら横に固定、それより狭いとプロンプトの上に出ます)。
-- Orca の中で `claude --agent agent-skills:orchestrator --name orchestrator` を実行して最上位セッションを立て、全セッションの管理を頼みます。オーケストレーターはプロジェクトごとにリードのセッションを立て、リードがワーカーを動かします。オーケストレーターのコンテキストが `orchestrate.restart_at`(既定 130k トークン)を超え、待っている用事がなければ、プロンプトの上の帯に「いま `/clear` して大丈夫」と出ます。次のセッションは役割と保存済みの handoff を引き継ぎます。リードは自動コンパクトに任せるので帯は出ません。リードの `orch handoff save` は `lead:<slug>` に保存され、オーケストレーターのキーへの保存は拒否されます。`/clear` を打つのは人です。`orchestrate.auto_clear: true` にするとセッションが自分で打ちます。
+- Orca の中で `claude --agent agent-skills:orchestrator --name orchestrator` を実行して最上位セッションを立て、全セッションの管理を頼みます。オーケストレーターはプロジェクトごとにリードのセッションを立て、リードがワーカーを動かします。オーケストレーターのセッションが自動コンパクトを 3 回経た、コンパクトしてもコンテキストが縮まない、または 2 回が 30 分以内に続いた(`orchestrate.compact_restart`、既定でオン。`restart_at` はトークン上限で、指定したときだけ効く)うえで、待っている用事がなければ、プロンプトの上の帯に「いま `/clear` して大丈夫」と出ます。`restart_at` の既定値 130k はなくなったので、その既定値に頼っていた設定は、今後はコンパクトの履歴で案内されます。次のセッションは役割と保存済みの handoff を引き継ぎます。リードは自動コンパクトに任せるので帯は出ません。リードの `orch handoff save` は `lead:<slug>` に保存され、オーケストレーターのキーへの保存は拒否されます。`/clear` を打つのは人です。`orchestrate.auto_clear: true` は上限を超えたとき、`orchestrate.compact_restart.auto_clear: true` はコンパクトの規則に当たったときに、セッションが自分で打ちます。
 
 ## 人が決定権を持つ地点
 
 - **自分の設定。** `setup-pc`、`tune-automode`、`skills-config` は diff と `!` の行を作るだけで、実行するのは人です。この動作は変えられません。
 - **権限ダイアログと拒否。** 権限ダイアログは人の応答を待ちます。auto mode の分類器が操作を拒否すると、エージェントは報告して止まります。ある種類の操作を以後通すには、`permissions.allow` の項目か、`tune-automode` が下書きする autoMode ルールを人が追加します。
 - **取り消せない操作。** 破壊的なマイグレーション、共有ブランチへの force push、本番デプロイ、外部への送信は、常に止まって聞きます。
+- **カードの作業習慣。** Dispatch で起動したカードが、Bash でファイルを書く(`sed -i`、リダイレクト)、コミットや `rm` を他のコマンドと 1 回の呼び出しにまとめる、worktree の外や main checkout を編集する、auto-memory に書く、テストを実行せずに push する、のいずれかをすると、警告が 1 行出て `turn-warnings.jsonl` に記録されます。止めはしません。`docs/skills.ja.md` の `worker.*` キーで、チェックごとにオフにするか `deny` に上げられます。
 - **マージ。** `orchestrate` のカードは、最初のプロンプトがマージを承認していれば `orch land` で自分の PR をマージし、自分で閉じます。CI のないリポジトリは先に `orchestrate.no_ci_repos` に入れます。プログラムの外の `deliver-ticket` が自分でマージするのは、そのリポジトリでのマージを許す autoMode ルールがあるときだけで、なければ聞きます。`human-gate` ポリシーにするか、先に自分で見ると伝えると、毎回マージの前で止まります。
 - **定期的な片付け。** `janitor` と `pressure-watch` は、終わったエージェントの後始末を定期的に行います。止めるには `skills-sync setup disable <名前>` を使います。`watch-prs` で自分の PR を自動承認、自動マージする機能は、設定するまでオフです。
 

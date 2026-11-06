@@ -47,6 +47,7 @@ MATRIX = {
     "agent_forbidden": ({"main", "subagent"}, {"orchestrator", "lead", "worker"}),
     "decision_relay": ({"main"}, {"orchestrator", "lead"}),
     "deliver_load": ({"main"}, {"worker"}),
+    "worker_discipline": ({"main", "subagent"}, {"worker"}),  # lib/discipline.py (design M4): a card's subagent too
     # turn_check.py (design M3): the end-of-turn checks and who each one reaches
     "turn_wait": ({"main"}, {"orchestrator", "lead"}),
     "turn_decision": ({"main"}, {"orchestrator", "lead"}),
