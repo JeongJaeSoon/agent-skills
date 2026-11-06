@@ -823,7 +823,7 @@ function fleetSkills() {
     ${kpi("Skills used in 30 d", `${all.filter((r) => r.uses_30d).length}<small>/${all.length}</small>`, `${all.reduce((a, r) => a + r.uses_30d, 0)} invocations`)}
     ${kpi("Fire on their own", `${all.filter((r) => r.auto_30d + r.chained_30d).length}`, `${all.filter((r) => r.flags.includes("slash_only")).length} slash only`)}
     ${kpi("Flagged, editable", `${mine.filter((r) => r.flags.length).length}<small>/${mine.length}</small>`, `sources ${[...editable].join(", ")}`)}
-    ${kpi("Improvement signals", `${rep.signals ? rep.signals.added : "—"}`, rep.signals ? "new this collect, one per skill and flag per week" : "signals off")}</div>`;
+    ${kpi("Improvement signals", `${rep.signals ? rep.signals.week : "—"}`, rep.signals ? `this week in the signals ledger, ${rep.signals.rows} in all` : "signals off")}</div>`;
   const groups = {};
   shown.forEach((r) => (groups[r.source] ||= []).push(r));
   return headHtml + kpis + `<div class="toolbar">${chips("fleet_skills", Object.entries(SKILL_FILTERS).map(([id, [fn, label]]) => [id, label, all.filter(fn).length]), f)}

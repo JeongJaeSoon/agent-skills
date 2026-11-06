@@ -350,7 +350,7 @@ orch-dash adopt [--apply] [--undo all|<worktree id>]
 
 ## Skill usage
 
-`scripts/skill_usage.py` (`orch-dash skills`) reads the local Claude Code transcripts (`$CLAUDE_PROJECTS_DIR` or `~/.claude/projects`, subagent transcripts included) and the installed skills: this checkout's `skills/`, each plugin in `~/.claude/plugins/installed_plugins.json`, and `~/.claude/skills`. `serve` runs it when `<fleet state>/skills.json` is missing or 15 minutes old; the page reads `/api/fleet/skills`. `ORCH_SKILLS=off` turns it off.
+`scripts/skill_usage.py` (`orch-dash skills`) reads the local Claude Code transcripts (`$CLAUDE_PROJECTS_DIR` or `~/.claude/projects`, subagent transcripts included) and the installed skills: this checkout's `skills/`, each plugin in `~/.claude/plugins/installed_plugins.json`, and `~/.claude/skills`. `serve` runs it when `<fleet state>/skills.json` is missing or 15 minutes old; the page reads `/api/fleet/skills`. `ORCH_SKILLS=off` turns it off. The signals ledger (`_skill-usage/ledger.jsonl`) holds the signals; `skills.json` stores only what it counts back from that file at collect time (`signals.week` for the ISO week and `signals.rows` in all), never a count of its own.
 
 | Trigger | Counted from |
 |---|---|

@@ -402,7 +402,9 @@ def scan_line(c, raw):
     if not isinstance(d, dict):
         return
     if d.get("type") == "continued-in":
-        c["continued"] = True  # the session goes on in a new transcript, which repeats what this one started
+        # The session goes on in a new transcript, which repeats what this one started: remember which, so the old one
+        # is skipped only while that one is alive to show them. "" when the record names none.
+        c["continued"] = d.get("continuedInSessionId") or ""
         return
     text = notice_text(d)
     if text:
@@ -534,11 +536,13 @@ def live_transcripts(procs, warn):
 
 def collect_monitors(procs, now, warn):
     out, scanned = [], set()
-    for sid, s, path in live_transcripts(procs, warn):
+    live = live_transcripts(procs, warn)
+    live_ids = {sid for sid, _, _ in live}
+    for sid, s, path in live:
         scanned.add(str(path))
         tasks = scan_transcript(path)
-        if MONITOR_SCAN[str(path)]["continued"]:
-            continue
+        if MONITOR_SCAN[str(path)]["continued"] in live_ids:
+            continue  # a successor that is not live (or not named) shows nothing, so this transcript is the only record
         # Only the session's own shells: a $(…) inside one forks a shell with the same command line.
         free = {}
         for pid, (ppid, start, cmd) in procs.items():
