@@ -3191,7 +3191,7 @@ PROMPTS = [(re.compile(r"Enter to select"), "a select menu"),
 # A file diff Claude Code drew: a run of line-number gutter lines (a number, then +, - or a context space) with at
 # least one + or -. It quotes code, so an ENOSPC in it is the reviewed text, not the machine. Other output keeps
 # counting: a real "npm ERR! ENOSPC" has no gutter, and "28  No space left" alone has no + or - line beside it.
-GUTTER = re.compile(r"^[\s⎿]*\d+(?:\s([+\-])|\s\s)")
+GUTTER = re.compile(r"^\s*\d+(?:\s([+\-])|\s\s)")
 
 
 DIFF_HEAD = re.compile(r"\b(?:Update|Edit|Write|MultiEdit)\(|\b(?:Added|Removed) \d+ lines?\b|\bUpdated .* with \d+ (?:addition|removal)")

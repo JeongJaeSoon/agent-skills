@@ -261,6 +261,9 @@ assert scan({})[0] == "STUCK card-a (a full disk): read its screen", "the next t
 screens["h1"] = ["⏺ Update(src/errors.ts)", "  ⎿  Added 2 lines", '     41 +  const m = "a long ordinary message',
                   '       continues here";', '     42 +  const d = "ENOSPC";', "❯ "]
 assert scan({}) == [], "a wrapped tail leaves the diff header standing for the lines after it"
+screens["h1"] = ["⏺ Update(src/errors.ts)", "  ⎿  Added 1 line", "     41 +  x = 1", "  ⎿  1 - writing output",
+                  "     2  No space left on device", "❯ "]
+assert scan({})[0] == "STUCK card-a (a full disk): read its screen", "a new ⎿ result after a diff starts its own block"
 long_build = ["⏺ Bash(build)"] + [f"     {i} - writing output" for i in range(1, 25)] + ["     25  No space left on device", "❯ "]
 screens["h1"] = long_build
 assert scan({})[0] == "STUCK card-a (a full disk): read its screen", "a long numbered log pushes its header out of the tail"
