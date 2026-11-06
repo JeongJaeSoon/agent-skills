@@ -277,11 +277,63 @@ def programs_on(repo):
     return found, unread
 
 
+def auto_repos(ex, say=lambda msg: None):
+    """The concrete repos the auto-queue walks. A repos entry is a name or OWNER/*; a wildcard is expanded the way the
+    drift check lists it (the gh account's own source repos, not archived), and a repo no program here owns is dropped
+    without a GitHub call, since nothing could be queued for it. Each named repo is then judged as the executor judges a
+    request (prog.executor_for: exclude, a rename or transfer; then the wildcard's owner, fork and archived rules), so
+    the auto-queue never writes a `ready` event or a request the executor would only refuse and withdraw."""
+    scope, out, seen, login = ex["scope"], [], set(), None
+    named = [e for e in ex["repos"] if not e.endswith("/*")]
+    wild = [e[:-2] for e in ex["repos"] if e.endswith("/*")]
+    if wild:
+        r = prog.run(["gh", "api", "user", "--jq", ".login"], check=False)
+        login = r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
+        if login is None:
+            say("OWNER/* is not expanded: GitHub did not answer `gh api user`")
+    for owner in wild:
+        if login is None:
+            break
+        if owner.casefold() != login.casefold():
+            say(f"{owner}/*: OWNER/* covers the gh account's own repos ({login}) only: list an org's repo by name")
+            continue
+        try:
+            listed = prog.gh_json("repo", "list", owner, "--source", "--no-archived", "--limit", "1000",
+                                  "--json", "nameWithOwner")
+        except SystemExit as e:
+            say(f"{owner}/*: the repo listing failed: {str(e.code)[:200]}")
+            continue
+        for x in listed:
+            name = x.get("nameWithOwner") or ""
+            programs, unread = programs_on(name) if name else ([], False)
+            if name and land_scope.how(scope, name) and (programs or unread):
+                named.append(name)
+    for repo in named:
+        if repo.casefold() in seen:
+            continue
+        seen.add(repo.casefold())
+        try:
+            on, meta = prog.executor_for(repo)
+        except SystemExit as e:
+            say(f"{repo}: skipped, the land executor's scope could not be judged: {str(e.code)[:200]}")
+            continue
+        if not on:
+            say(f"{repo}: skipped, orchestrate.land_executor does not cover it (excluded, or renamed out of scope)")
+            continue
+        current = meta["nameWithOwner"]
+        why = (login and land_scope.owner_refused(scope, current, login)) or land_scope.wildcard_only(scope, current, meta)
+        if why:
+            say(f"{repo}: skipped, {why}")
+            continue
+        out.append(repo)
+    return out
+
+
 def auto_decisions(ex, say=lambda msg: None):
     """[(repo, row, program or None, queue?, reasons)] for each open PR of the executor's repos, oldest PR first.
     say: where a problem with a whole repo goes (the round's log; `auto` prints it and writes nothing)."""
     out = []
-    for repo in ex["repos"]:
+    for repo in auto_repos(ex, say):
         try:
             rows = prog.open_rows(repo)
         except SystemExit as e:

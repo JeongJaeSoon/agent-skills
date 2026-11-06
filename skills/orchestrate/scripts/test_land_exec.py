@@ -1591,6 +1591,34 @@ class AutoQueue(Fixture):
         self.round()  # a damaged cache and a good setting: the queued request is settled
         self.assertEqual(store.land_get(row["id"])["status"], "merged")
 
+    def test_owner_wildcard_is_expanded_to_the_owners_repos(self):
+        config(repos=["o/*"], auto_queue={"mode": "on"})
+        st = self.gh()
+        st["owned"] = {"o": ["o/r"]}
+        self.write(st)
+        self.auto()
+        self.assertEqual(len(self.mine()), 1)
+
+    def test_an_excluded_repo_is_neither_requested_nor_touched(self):
+        config(repos=["o/*"], exclude=["o/r"], auto_queue={"mode": "on"})
+        st = self.gh()
+        st["owned"] = {"o": ["o/r"]}
+        self.write(st)
+        self.auto()
+        self.assertEqual((self.mine(), self.events("ready")), ([], []))
+        config(repos=["o/r"], exclude=["o/r"], auto_queue={"mode": "on"})  # named and excluded: exclude wins
+        self.auto()
+        self.assertEqual((self.mine(), self.events("ready")), ([], []))
+        self.assertIn("o/r", self.report() + self.log())  # said, not silent
+
+    def test_a_wildcard_for_another_owner_is_not_expanded(self):
+        config(repos=["acme/*"], auto_queue={"mode": "on"})
+        st = self.gh()
+        st["owned"] = {"acme": ["acme/r"]}
+        self.write(st)
+        self.auto()
+        self.assertEqual(self.mine(), [])
+
     def test_the_report_survives_a_listing_it_cannot_parse(self):
         real = prog.open_rows
         prog.open_rows = lambda repo: (_ for _ in ()).throw(ValueError("not json"))
