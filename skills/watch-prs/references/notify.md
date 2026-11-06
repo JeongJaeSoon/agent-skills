@@ -24,7 +24,7 @@ A notification passes when its reason is in `reasons`, its repository is in the 
   URL is the thread itself) always fires. The check sees who acted last, not who mentioned, so a bot
   comment landing after a person's mention within one poll silences that mention.
 
-The first `watch` with no seen file records the current notifications and prints nothing, so the
+The first `watch` or `stream` with no seen file records the current notifications and prints nothing, so the
 backlog does not fire; `notify.py seed` does the same on demand. Seen keys (no titles) go to
 `<state>/prs/notify-seen.txt`, trimmed to the last `keep_seen`.
 
