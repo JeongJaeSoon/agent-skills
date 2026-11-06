@@ -1614,6 +1614,35 @@ finally:
     fleet.orca = real_orca
     fleet.RUN_CACHE.clear()
 
+# The terminals the tick already listed are passed to fetch_runs, which then asks Orca for no list of its own; called
+# alone it still asks.
+term_calls = []
+def term_orca(*args, timeout=30):
+    term_calls.append(args[:2])
+    if args[1] == "run-list":
+        return {"runs": [{"id": "run_x", "coordinator_handle": "term_c"}]}
+    return {}
+
+
+real_orca, fleet.orca = fleet.orca, term_orca
+fleet.RUN_CACHE.clear()
+try:
+    fetch_runs({"term_c"})
+    assert ("terminal", "list") not in term_calls, term_calls
+    fetch_runs()
+    assert ("terminal", "list") in term_calls, term_calls
+finally:
+    fleet.orca = real_orca
+    fleet.RUN_CACHE.clear()
+
+seen_live = []
+tick_fleet = fleet.Fleet(fetch_fast=lambda: {"worktrees": [], "terminals": [{"handle": "term_t"}], "messages": []},
+                         fetch_runs=lambda live=None: (seen_live.append(live), {"runs": [], "workers": [], "tasks": [], "gates": []})[1],
+                         graphql=lambda *a, **k: ({}, []), ps_table=lambda: {}, fetch_automations=lambda: [],
+                         fetch_monitors=lambda **k: [], read_screen=lambda h: [])
+tick_fleet.tick(force=True)
+assert seen_live == [{"term_t"}], seen_live
+
 # The tree's root is the orchestrator even when a lead it dispatched runs a newer Run.
 def tree(run_list, workers, wts, orca_parent=None, declared=(), paths=None):
     fast = {"worktrees": [{"worktreeId": w, "path": (paths or {}).get(w, f"/work/{w}"), "displayName": w, "agents": [],
@@ -1748,7 +1777,11 @@ assert [a["name"] for a in st["automations"]] == ["janitor", "pr-sweeper", "week
 secret_out = "## posted with xoxb-" + "1" * 12 + "-" + "a" * 24 + "\nsecond line"
 
 
+auto_calls = []
+
+
 def fake_orca(*args, timeout=30):
+    auto_calls.append(args)
     if args[1] == "list":
         return {"automations": [{"id": "a1", "name": "watch-mentions", "rrule": "*/20 9-20 * * 1-5", "enabled": True,
                                  "nextRunAt": 1791546000000, "lastRunAt": 1791544909459}]}
@@ -1762,6 +1795,8 @@ try:
 finally:
     fleet.orca = real_orca
 assert [r["status"] for r in autos[0]["recent"]] == ["failed"] + ["completed"] * 5, autos
+# Only the newest page is asked for: without --limit Orca reads an automation's whole history.
+assert ("automations", "runs", "--id", "a1", "--limit", str(fleet.AUTOMATION_RECENT)) in auto_calls, auto_calls
 assert autos[0]["next_run_at"] == "2026-10-09T11:40:00Z" and "xoxb" not in json.dumps(autos), autos
 assert autos[0]["recent"][0]["summary"] == "posted with [masked]", autos[0]["recent"][0]
 # A long first line reaches the page whole: the table wraps it, nothing here cuts it.

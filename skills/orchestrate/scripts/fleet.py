@@ -242,11 +242,14 @@ def settled_run(got):
             and not any(g.get("status") in ("pending", "open") for g in got["gates"]))
 
 
-def fetch_runs():
+def fetch_runs(live=None):
+    """live: the handles of the terminals Orca lists right now. The tick passes the ones it read a moment ago for its
+    own snapshot; without them (a standalone call, or that read failed) this asks Orca for the list."""
     import orca_settings  # here, not at the top: the hooks that import fleet stay off sqlite3
     listed = orca_settings.run_list(orca, error=SourceError)
     runs = [r for r in listed if not r.get("legacy") and r.get("id") != "run_legacy_local"]
-    live = {t.get("handle") for t in orca("terminal", "list").get("terminals", [])}
+    if live is None:
+        live = {t.get("handle") for t in orca("terminal", "list").get("terminals", [])}
     out = {"runs": runs, "workers": [], "tasks": [], "gates": []}
     for r in listed:
         hit = RUN_CACHE.get(r["id"])
@@ -281,7 +284,8 @@ def fetch_automations():
     session's own loop (CronCreate) or a launchd job leaves nothing to collect."""
     out = []
     for a in orca("automations", "list").get("automations", []):
-        runs = sorted(orca("automations", "runs", "--id", a["id"]).get("runs", []),
+        # --limit makes Orca return one page of the newest runs; without it the whole history is read page by page
+        runs = sorted(orca("automations", "runs", "--id", a["id"], "--limit", str(AUTOMATION_RECENT)).get("runs", []),
                       key=lambda r: r.get("runNumber") or 0, reverse=True)[:AUTOMATION_RECENT]
         out.append({"id": a["id"], "name": mask(a.get("name"), 80), "rrule": a.get("rrule"), "timezone": a.get("timezone"),
                     "enabled": bool(a.get("enabled")), "next_run_at": ms_iso(a.get("nextRunAt")),
@@ -1805,11 +1809,13 @@ class Fleet:
             try:
                 self.fast = self.fetch_fast()
                 self.ok("orca")
+                live = {t.get("handle") for t in self.fast["terminals"]}
             except SourceError as e:
                 self.ok("orca", str(e))
+                live = None  # the snapshot above is an older tick's: let fetch_runs ask
             if force or not self.last["runs"] or mono - self.last["runs"] >= RUNS_EVERY:
                 try:
-                    self.runs = self.fetch_runs()
+                    self.runs = self.fetch_runs(live)
                     self.ok("runs")
                 except SourceError as e:
                     self.ok("runs", str(e))
