@@ -96,7 +96,7 @@ configure({"repos": {"acme/app": {"external_llm": False}}})
 OUTSIDE_TMP_RM = [] if str(TMP).startswith(("/tmp/", "/private/tmp/")) else [
     "rm -rf ~/projects", "rm -rf $HOME/.cache/x", "rm -rf ~/x /tmp/y", ("rm -rf ../clean", REPOX),
     ("rm -rf build", CLEAN.parent), ("rm -rf node_modules", HOME), ("rm -rf .", REPOX),
-    ("(cd hooks); rm -rf ../../other", REPOX), ("echo $(cd /usr); rm -rf ../other", REPOX)]
+    ("find -mindepth 1 -delete", HOME), ("(cd hooks); rm -rf ../../other", REPOX), ("echo $(cd /usr); rm -rf ../other", REPOX)]
 (HOME / ".Trash").mkdir()
 (HOME / ".Trash" / "a.txt").write_text("x")
 
@@ -213,6 +213,8 @@ CASES = [
       "find /usr/local -name '*.old' -delete","find /opt -exec rm -rf {} +", "find -L /opt -delete", "find -d /usr/local -exec rm -rf {} +", "find -f /opt -delete",
       ("find -L cache-link -mindepth 1 -type d -exec rm -rf {} +", LINKED),
       ("find -d /usr/local/x -delete", REPOX),
+      "find -- /usr/local -name '*.old' -delete", "find /usr/local -type d -exec sudo rm -rf {} +",
+      ("find -execdir rm -rf /usr/x ;", REPOX),
       ("find -L . -mindepth 1 -exec rm -rf {} +", LINKED),
       ("find . -exec rm -rf /opt/data {} ;", REPOX), ("find build -execdir rm -r /usr/x ;", REPOX),
 "rm -rf /usr/local/lib/x", "rm -r /Users/someone/proj", "rm -Rf /var/lib/x", "rm --recursive --force /opt/x",
@@ -223,6 +225,8 @@ CASES = [
       ("cd build && rm -rf out", REPOX), ("rm -rf cache-link", LINKED), ("find . -name '*.pyc' -delete", REPOX),
       ("find build -delete", REPOX), ("(cd /usr); rm -rf build", REPOX), ("(cd /usr && ls); rm -rf build", REPOX),
       ("find . -exec rm -f {} ;", REPOX),("find cache-link -type l -delete", LINKED),
+      ("find build -type f -execdir rm -rf ../cache ;", REPOX), ("find -H . -name '*.pyc' -delete", LINKED),
+      ("find -name '*.pyc' -delete", REPOX), ("find -- build -name '*.o' -delete", REPOX),
       ("find -L -P cache-link -type l -delete", LINKED), "find /tmp/x -name '*.log' -delete", "find /usr/local -name '*.old'",
       ("find . -name '*.tmp' -exec rm {} ;", REPOX), "find /usr/local -exec ls {} ;", ("rm -rf ./dist", REPOX), (f"rm -rf {REPOX}/build", REPOX),
       "rm /usr/x/file.txt", "rm -f /usr/local/x.log", "echo rm -rf /usr/x", "git rm -r --cached x",
@@ -235,6 +239,8 @@ CASES = [
       "osascript -l JavaScript -e 'Application(\"Finder\").empty()'",
       "osascript -e 'tell application \"Finder\" to empty'",
       "osascript -e 'tell application \"Finder\"' -e 'empty' -e 'end tell'", "find ~/.Trash -mindepth 1 -delete",
+      "osascript -e'tell application \"Finder\"' -e 'empty' -e 'end tell'",
+      ("find -mindepth 1 -delete", HOME / ".Trash"), "find -- ~/.Trash -mindepth 1 -delete",
       "find ~/.Trash -mindepth 1 -exec rm -rf {} +"],
      ["ls ~/.Trash", "echo rm -rf ~/.Trash", "mv x ~/.Trash/", "rm ~/.Trash/a.txt", "trash-list", "echo trash-empty", "gio trash somefile", "gio trash --list",
       "osascript -e 'tell application \"Finder\" to get name'",

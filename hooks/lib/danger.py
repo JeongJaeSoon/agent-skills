@@ -298,7 +298,9 @@ def check_command(c, masked, cfg, cwd, session, here=None):
 def finder_empties(w):
     """Whether an osascript command tells Finder to empty the trash: `to empty`, `empty trash`, or an `empty` line
     (several -e options are lines of one script)."""
-    script = "\n".join(w[i + 1] for i, x in enumerate(w[:-1]) if x == "-e") or " ".join(w)
+    lines = [w[i + 1] if x == "-e" else x[2:] for i, x in enumerate(w) if x == "-e" and i + 1 < len(w)
+             or x.startswith("-e") and len(x) > 2]
+    script = "\n".join(lines) or " ".join(w)
     # The last alternative is JXA: `Application("Finder").empty()`.
     return re.search(r"\bFinder\b.*?(?:\bto\s+empty\b|\bempty\s+(?:the\s+)?trash\b|^\s*empty\s*$|\.empty\s*\()", script,
                      re.I | re.S | re.M) is not None
@@ -392,13 +394,11 @@ def in_trash(path):
 
 def find_roots(w):
     """The start paths of a `find` command that deletes (-delete, or -exec rm); [] without it."""
-    removes = any(x in ("-exec", "-execdir", "-ok", "-okdir") and os.path.basename(y) == "rm"
-                  for x, y in zip(w, w[1:]))
-    if "-delete" not in w and not removes:
+    if "-delete" not in w and not exec_rms(w):
         return []
     out = []
     # -H -L -P, and the BSD/macOS -d -E -X -x -s, come before the paths; BSD `-f <path>` names one.
-    flags = ("-H", "-L", "-P", "-d", "-E", "-X", "-x", "-s")
+    flags = ("-H", "-L", "-P", "-d", "-E", "-X", "-x", "-s", "--")
     take = False
     for x in w[1:]:
         if take:
@@ -410,7 +410,7 @@ def find_roots(w):
             break
         elif x not in flags:
             out.append(x)
-    return out
+    return out or ["."]  # GNU find searches `.` when it is given no path
 
 
 def rm_outside(c, here, cwd):
@@ -419,7 +419,9 @@ def rm_outside(c, here, cwd):
     is not judged."""
     if c.name == "find":
         operands, recursive = find_roots(c.words), True
-        execs = [rm_outside(types.SimpleNamespace(name="rm", words=seg), here, cwd) for seg in exec_rms(c.words)]
+        # -execdir runs in the found file's folder, so a relative operand is not readable from here.
+        execs = [rm_outside(types.SimpleNamespace(name="rm", words=seg), UNKNOWN_DIR if dirwise else here, cwd)
+                 for seg, dirwise in exec_rms(c.words)]
     else:
         execs = []
         opts, operands = rm_targets(c.words)
@@ -432,10 +434,11 @@ def rm_outside(c, here, cwd):
         roots.add(os.path.realpath(top))
     trash, outside = [], []
     # `find -L`/`-H` walk through a symlink they start at (the last of -L/-H/-P wins); rm removes the link itself.
-    walks_links = False
+    # -H follows only the start paths, -L every link below them.
+    walks_links = deep = False
     for y in c.words[1:] if c.name == "find" else []:
         if y in ("-L", "-H", "-P"):
-            walks_links = y != "-P"
+            walks_links, deep = y != "-P", y == "-L"
         else:
             break
     for x in operands:
@@ -453,7 +456,7 @@ def rm_outside(c, here, cwd):
                     trash.append(x)
             elif recursive and not any(p.startswith(r + os.sep) or p == r and c.name == "find" for r in roots):
                 outside.append(x)
-            elif walks_links and link_escapes(p, roots):
+            elif deep and link_escapes(p, roots):
                 outside.append(x)
     for t, o in execs:
         trash += t
@@ -479,16 +482,21 @@ def link_escapes(root, roots, limit=20000):
 
 
 def exec_rms(w):
-    """The words of each `rm` that `find` runs with -exec, -execdir, -ok or -okdir, up to its `;` or `+`."""
+    """[(words, in_dir)] of each `rm` that `find` runs with -exec, -execdir, -ok or -okdir, up to its `;` or `+`,
+    after a wrapper such as `sudo` or `env`. in_dir: it runs in the found file's folder (-execdir, -okdir)."""
     out = []
     for i, x in enumerate(w[:-1]):
-        if x in ("-exec", "-execdir", "-ok", "-okdir") and os.path.basename(w[i + 1]) == "rm":
+        if x in ("-exec", "-execdir", "-ok", "-okdir"):
             seg = []
             for y in w[i + 1:]:
                 if y in (";", "+"):
                     break
                 seg.append(y)
-            out.append(seg)
+            while seg and (os.path.basename(seg[0]) in ("sudo", "doas", "env", "command", "nice", "nohup", "time")
+                           or seg[0].startswith("-") or "=" in seg[0]):
+                seg = seg[1:]
+            if seg and os.path.basename(seg[0]) == "rm":
+                out.append((seg, x in ("-execdir", "-okdir")))
     return out
 
 
