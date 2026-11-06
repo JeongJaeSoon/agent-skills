@@ -17,7 +17,7 @@ level, is also a row in $AGENT_SKILLS_STATE/turn-warnings.jsonl (config.append_w
 key's false-positive rate before it is raised. Text heuristics: a script file's own commands, `bash -c` and an `eval`
 are not read. A fact that cannot be read (no git, no transcript) never fires.
 """
-import datetime, json, os, pathlib, re, subprocess
+import datetime, json, os, pathlib, re, subprocess, time
 
 import roles
 from lib import config, shell
@@ -30,12 +30,15 @@ TEMP_ROOTS = ("/tmp", "/private/tmp", "/var/folders", "/private/var/folders")
 NULLS = ("/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty", "/dev/fd/")
 TEMP_VARS = ("$TMPDIR", "${TMPDIR}")
 WRITE_OPS = {">", ">>", ">|", "&>", "&>>"}
-PYTHON_WRITE = re.compile(
-    r"""\.write_(?:text|bytes)\(|\bopen\([^)]*,\s*(?:mode\s*=\s*)?['"][^'"]*[wax+][^'"]*['"]""")
+MODE = r"""(?:mode\s*=\s*)?['"][rwxabt+]*[wax+][rwxabt+]*['"]"""
+# `open(path, "w")` with a path expression of any shape, and `Path(p).open("w")`.
+PYTHON_WRITE = re.compile(rf"""\.write_(?:text|bytes)\(|\bopen\([^\n]{{0,300}}?,\s*{MODE}|\.open\(\s*{MODE}""")
+# A python command whose stdin is a heredoc: the delimiter, then the rest of its line (`> /dev/null`), then the body.
 PYTHON_HEREDOC = re.compile(
-    r"""(?:^|[;&|(\s])python[\d.]*[ \t]+(?:-[ \t]*)?<<-?[ \t]*(['"]?)(\w+)\1[ \t]*\n(.*?)\n[ \t]*\2(?:[ \t]*(?:$|[;&|)\n]))""",
+    r"""(?:^|[;&|(\s])(?P<py>python[\d.]*)[ \t]+(?:-[ \t]*)?<<-?[ \t]*(['"]?)(\w+)\2[^\n]*\n(.*?)\n[ \t]*\3[ \t]*(?:\n|$)""",
     re.S | re.M)
 SED_INPLACE = re.compile(r"-[A-Za-z]*i|--in-place(?:=.*)?$")
+SED_VALUE_OPTS = {"-e", "-f", "--expression", "--file"}
 MEMORY = re.compile(r"/\.claude/projects/[^/]+/memory(?:/|$)")
 PLUGIN_CACHE = re.compile(r"/\.claude/plugins/cache(?:/|$)")
 MUTATING_GIT = {"commit", "push"}
@@ -105,38 +108,76 @@ def git(cwd, *args):
 def write_targets(cmds, cwd):
     """[(how, target)] of the file writes the commands make, scratch targets left out. target is None when the
     command writes a file this reader cannot name (a python snippet)."""
-    out = []
+    out, after_cd = [], cd_targets(cmds, cwd)
     for c in cmds:
+        cwd = after_cd.get(id(c), cwd)
         for fd, op, target in c.redirects:
             if op == ">&" and (target.isdigit() or target == "-"):
                 continue
             if (op in WRITE_OPS or op == ">&") and not scratch(target, cwd):
-                out.append((f"`{fd}{op}` redirect", target))
+                out.append((f"`{fd}{op}` redirect", resolve(target, cwd)))
         w = c.words
         if c.name == "tee":
-            out += [("`tee`", f) for f in w[1:] if not f.startswith("-") and not scratch(f, cwd)]
-        elif c.name == "sed" and any(SED_INPLACE.match(x) for x in w[1:]) and len(w) > 2 and not scratch(w[-1], cwd):
-            out.append(("`sed -i`", w[-1]))
+            out += [("`tee`", resolve(f, cwd)) for f in w[1:] if not f.startswith("-") and not scratch(f, cwd)]
+        elif c.name == "sed" and any(SED_INPLACE.match(x) for x in w[1:]):
+            files = sed_files(w)
+            if bad := next((f for f in files if not scratch(f, cwd)), None):
+                out.append(("`sed -i`", resolve(bad, cwd)))
         elif PYTHON.fullmatch(c.name) and "-c" in w[1:-1]:
-            code = w[w.index("-c") + 1]
-            if PYTHON_WRITE.search(code) and "tempfile" not in code and not any(r in code for r in TEMP_ROOTS):
+            if python_writes(w[w.index("-c") + 1]):
                 out.append(("`python -c` file write", None))
     return out
 
 
+def sed_files(words):
+    """The file operands of a sed command: its words minus options, option values and the script (the first operand
+    unless -e or -f gave one)."""
+    rest, skip, scripted = [], False, False
+    for x in words[1:]:
+        if skip:
+            skip = False
+        elif x in SED_VALUE_OPTS:
+            skip = scripted = True
+        elif x.startswith(("--expression=", "--file=", "-e")):
+            scripted = True
+        elif not x.startswith("-"):
+            rest.append(x)
+    return rest if scripted else rest[1:]
+
+
+def python_writes(code):
+    """True when the python source opens a file for writing, a temp path (the nearest literal) left out."""
+    for m in PYTHON_WRITE.finditer(code):
+        window = code[max(0, m.start() - 120):m.end() + 120]
+        if not any(f"{q}{r}" in window for r in TEMP_ROOTS for q in "'\""):
+            return True
+    return False
+
+
 def python_heredocs(cmd):
-    """[(how, None)] for each python heredoc body that opens a file for writing."""
+    """[(how, None)] for each python heredoc this command runs whose body opens a file for writing. A `python3 - <<`
+    line that is itself text (inside another command's heredoc body or a quote) is blanked in the masked text."""
+    masked = shell.read(cmd)[0]
     return [("python heredoc file write", None) for m in PYTHON_HEREDOC.finditer(cmd)
-            if PYTHON_WRITE.search(m.group(3)) and "tempfile" not in m.group(3)
-            and not any(r in m.group(3) for r in TEMP_ROOTS)]
+            if masked[m.start("py"):m.end("py")] == m.group("py") and python_writes(m.group(4))]
+
+
+def cd_targets(cmds, cwd):
+    """id(command) -> the directory it runs in, following the `cd <dir>` commands before it in a call."""
+    out, here = {}, cwd
+    for c in sorted(cmds, key=lambda c: c.span[0]):
+        out[id(c)] = here
+        if c.name == "cd" and len(c.words) == 2 and c.words[1] != "-" and not c.words[1].startswith(("$", "-")):
+            here = resolve(c.words[1], here)
+    return out
 
 
 def top_units(cmds):
     """The commands a call runs one after another: those not inside another command's span (a `$(…)` body is part
-    of its outer command), with a pipeline counted once."""
+    of its outer command). Returns (top-level commands, how many of them start a pipeline or stand alone)."""
     tops = [c for c in cmds if not any(o is not c and o.span[0] <= c.span[0] and c.span[1] <= o.span[1]
                                        and o.span != c.span for o in cmds)]
-    return [c for c in tops if not c.piped_from]
+    return tops, sum(1 for c in tops if not c.piped_from)
 
 
 def git_verb(words):
@@ -165,50 +206,113 @@ def mutating(c):
     return None
 
 
-def session_ran(transcript, pattern):
-    """True when a Bash call earlier in the session matches pattern (a regex), False when none does, None when the
-    transcript cannot be read."""
+BUDGET_S = 2.0
+# A command that mentions a test but runs none.
+NOT_A_RUN = {"echo", "printf", "git", "grep", "rg", "cat", "head", "tail", "ls", "sed", "awk", "find", "wc"}
+
+
+def history(transcript, current_id):
+    """The commands of the session's earlier Bash calls, [[Command]] per call, the call being judged left out (by its
+    tool_use id). None when the transcript cannot be read in time."""
+    start, calls = time.monotonic(), []
     try:
         if not transcript or os.path.getsize(transcript) > TRANSCRIPT_MAX:
             return None
         with open(transcript, encoding="utf-8", errors="replace") as f:
             for raw in f:
-                if '"Bash"' not in raw:
+                if '"Bash"' not in raw or not ("push" in raw or TEST_CMD.search(raw)):
                     continue
+                if time.monotonic() - start > BUDGET_S:
+                    return None
                 try:
                     entry = json.loads(raw)
                 except ValueError:
                     continue
                 content = (entry.get("message") or {}).get("content") if isinstance(entry, dict) else None
                 for b in content if isinstance(content, list) else ():
-                    if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "Bash" \
-                            and pattern.search(str((b.get("input") or {}).get("command") or "")):
-                        return True
+                    if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "Bash":
+                        calls.append((b.get("id"), str((b.get("input") or {}).get("command") or "")))
     except OSError:
         return None
-    return False
+    # Claude Code gives a PreToolUse event the call's tool_use_id; without one the transcript is taken as it stands.
+    return [shell.commands(c) for i, c in calls if not current_id or i != current_id]
 
 
-GIT_PUSH = re.compile(r"\bgit\b[^\n;&|]*\bpush\b")
+def ran_test(past):
+    return any(c.name not in NOT_A_RUN and TEST_CMD.search(" ".join(c.words)) for cs in past for c in cs)
 
 
-def pre_push(cmds, event):
+def pushed(past):
+    return any(git_verb(c.words) == "push" for cs in past for c in cs)
+
+
+def git_cwd(words, cwd):
+    """The directory `git -C dir …` works in, else cwd."""
+    for i, w in enumerate(words[:-1]):
+        if w == "-C":
+            return resolve(words[i + 1], cwd)
+    return cwd
+
+
+COMMIT_VALUE_OPTS = {"-m", "-F", "-C", "-c", "-t", "--message", "--file", "--author", "--date", "--template",
+                     "--reuse-message", "--reedit-message", "--cleanup", "--fixup", "--squash", "--trailer"}
+
+
+def commit_names(words, cwd):
+    """The file names a `git commit` will record: `-a` takes the tracked changes, a pathspec only those paths, else
+    the index."""
+    rest, paths, all_tracked, skip = words[words.index("commit") + 1:], [], False, False
+    for i, w in enumerate(rest):
+        if skip:
+            skip = False
+        elif w == "--":
+            paths += rest[i + 1:]
+            break
+        elif w in COMMIT_VALUE_OPTS:
+            skip = True
+        elif w == "--all" or re.fullmatch(r"-[A-Za-z]*a[A-Za-z]*", w):
+            all_tracked = True
+            skip = w[-1] in "mFCct" and not w.startswith("--")
+        elif re.fullmatch(r"-[A-Za-z]+", w):
+            skip = w[-1] in "mFCct"
+        elif not w.startswith("-"):
+            paths.append(w)
+    if paths:
+        out = git(cwd, "diff", "HEAD", "--name-only", "--", *paths)
+    elif all_tracked:
+        out = git(cwd, "diff", "HEAD", "--name-only")
+    else:
+        out = git(cwd, "diff", "--cached", "--name-only")
+    return (out or "").split()
+
+
+def pre_push(cmds, event, after_cd):
     """The reason `git rebase|push|commit` is early, None when it is not."""
-    cwd, transcript = event.get("cwd"), event.get("transcript_path")
+    transcript, past = event.get("transcript_path"), None
     for c in cmds:
-        verb = git_verb(c.words)
-        if verb == "rebase" and not {"--abort", "--continue", "--skip", "--quit"} & set(c.words):
+        verb, w = git_verb(c.words), c.words
+        if verb not in ("rebase", "push", "commit") or "--dry-run" in w or verb == "push" and "-n" in w:
+            continue
+        cwd = git_cwd(w, after_cd.get(id(c), event.get("cwd")))
+        if verb == "rebase":
+            if {"--abort", "--continue", "--skip", "--quit"} & set(w):
+                continue
             branch = (git(cwd, "branch", "--show-current") or "").strip()
             if branch and git(cwd, "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{branch}") is not None:
                 return (f"`git rebase` of `{branch}`, which origin already has: a pushed branch takes a change on "
                         "main by merging main in, because a rebase needs a force-push.")
-        elif verb == "push":
-            if session_ran(transcript, TEST_CMD) is False and session_ran(transcript, GIT_PUSH) is False:
+            continue
+        if past is None:
+            past = history(transcript, event.get("tool_use_id"))
+        if past is None or ran_test(past):
+            continue
+        if verb == "push":
+            if not pushed(past):
                 return "The first `git push` of this session and no test command has run in it: run the tests first."
-        elif verb == "commit":
-            names = (git(cwd, "diff", "--cached", "--name-only") or "").split()
+        else:
+            names = commit_names(w, cwd)
             code = [n for n in names if CODE_FILE.search(n) and not TEST_FILE.search(n)]
-            if code and not any(TEST_FILE.search(n) for n in names) and session_ran(transcript, TEST_CMD) is False:
+            if code and not any(TEST_FILE.search(n) for n in names):
                 return (f"`git commit` of code ({code[0]}) with no test in it and no test command run in this "
                         "session: write the test alongside the change and run it.")
     return None
@@ -225,14 +329,14 @@ def check_bash(cmd, event, s, cfg):
         found += fire(cfg, event, "worker.edit_tool",
                       f"A file is written from Bash ({how}). Edit files with the Edit and Write tools: a Bash-made "
                       "patch can pass tests that re-applying it with Edit shows broken.")
-    units = top_units(cmds)
-    if len(units) > 1 and (verb := next((v for u in units if (v := mutating(u))), None)):
+    tops, units = top_units(cmds)
+    if units > 1 and (verb := next((v for u in tops if (v := mutating(u))), None)):
         found += fire(cfg, event, "worker.chain",
                       f"`{verb}` shares one Bash call with other commands. Give each act that changes something its "
                       "own call, so a refusal names it and does not take the others with it.")
-    if any(t and MEMORY.search(resolve(t, cwd)) for _, t in writes):
+    if any(t and MEMORY.search(t) for _, t in writes):
         found += fire(cfg, event, "worker.memory", MEMORY_REASON)
-    if reason := pre_push(cmds, event):
+    if reason := pre_push(cmds, event, cd_targets(cmds, cwd)):
         found += fire(cfg, event, "worker.pre_push", reason)
     return found
 

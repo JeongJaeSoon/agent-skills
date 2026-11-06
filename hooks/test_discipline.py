@@ -54,9 +54,9 @@ def reset(cfg=None):
     pathlib.Path(os.environ["AGENT_SKILLS_CONFIG"]).write_text(json.dumps(cfg or {}))
 
 
-def bash(cmd, s=WORKER, cwd=TREE, cfg=None, tr=None):
+def bash(cmd, s=WORKER, cwd=TREE, cfg=None, tr=None, tool_use_id=None):
     reset(cfg)
-    event = {"cwd": str(cwd), "session_id": "s", "transcript_path": str(tr or TRANSCRIPT)}
+    event = {"cwd": str(cwd), "session_id": "s", "transcript_path": str(tr or TRANSCRIPT), "tool_use_id": tool_use_id}
     return [f.key for f in discipline.check_bash(cmd, event, s, config.load())]
 
 
@@ -88,6 +88,23 @@ orch_refusal = pathlib.Path(os.environ.get("TMPDIR") or "/tmp") / "orch-refusal"
 assert bash(f"echo x > {orch_refusal}") == []
 # a redirect in a subshell or substitution is still a write
 assert bash("echo $(echo x > a.py)") == EDIT
+# sed -i reads every file operand, not the last one only; -e gives the script, so the first operand is a file
+assert bash("sed -i 's/a/b/' a.py /tmp/last.py") == EDIT
+assert bash("sed -i -e s/a/b/ a.py") == EDIT
+assert bash("sed -i s/a/b/ /tmp/x /tmp/y") == []
+assert bash("sed -i -e s/a/b/ /tmp/x") == []
+# python: any path expression, Path.open, and a temp word elsewhere in the code excuses nothing
+assert bash("python3 -c \"from pathlib import Path; open(Path('a.py'), 'w').write('x')\"") == EDIT
+assert bash("python3 -c \"from pathlib import Path; Path('a.py').open('w').write('x')\"") == EDIT
+assert bash("python3 -c \"import tempfile; open('a.py','w').write('x')\"") == EDIT
+assert bash("python3 -c \"open('/tmp/x.txt', 'w').write('x')\"") == []
+assert bash("python3 -c \"import pathlib; pathlib.Path('/tmp/x').write_text('x')\"") == []
+# a python heredoc is a command only where bash runs it; its stdout going to /dev/null changes nothing
+assert bash("cat <<'EOF'\npython3 - <<'PY'\nopen('a.py','w').write('x')\nPY\nEOF") == []
+assert bash("python3 - <<'PY' > /dev/null\nopen('a.py','w').write('x')\nPY") == EDIT
+# a `cd` moves where a relative target lands
+assert bash("cd /tmp && echo x > a.py") == []
+assert bash(f"cd {TREE} && echo x > a.py", cwd=SCRATCH) == EDIT
 
 # ---- keys: off silences, true/warn/deny act, every firing is a row ---------------------------------------------------
 assert bash("echo x > a.py", cfg={"worker": {"edit_tool": "off"}}) == []
@@ -114,6 +131,7 @@ for cmd in ("git add a && git commit -m x", "rm -f a.txt; ls", "ls && git push o
             "git status\ngit commit -m x", "orca orchestration send --type worker_done --subject s && echo ok",
             "git -C /x commit -m y && ls", "cd sub && rm a"):
     assert "worker.chain" in bash(cmd), cmd  # pre_push may fire beside it
+assert "worker.chain" in bash("echo message | git commit -F - && git status")  # the commit ends a pipeline
 for cmd in ("git commit -m x", "git commit -m \"$(cat <<'EOF'\nmsg\nEOF\n)\"", "rm -f a.txt", "ls && git status",
             "git status && git diff", "git log | head", "echo done; ls", "git push origin HEAD", "echo 'a && rm x'",
             "git diff | git commit -F -"):
@@ -155,6 +173,12 @@ assert bash("git push origin HEAD") == []
 transcript("git push origin HEAD", "ls")
 assert bash("git push origin HEAD") == []  # not the first push
 assert bash("git push origin HEAD", tr=TMP / "missing.jsonl") == []  # unreadable transcript: unknown, silent
+assert bash("git push --dry-run origin HEAD") == [] and bash("git push -n origin HEAD") == []
+# the call being judged is in its own transcript; a mention of a test is not a run
+transcript("git push origin HEAD")
+assert bash("git push origin HEAD", tool_use_id="t0") == PUSH
+transcript("echo pytest", "git diff -- hooks/test_guard.py")
+assert bash("git push origin HEAD") == PUSH
 transcript("ls")
 (TREE / "code.py").write_text("x = 1\n")
 (TREE / "test_code.py").write_text("assert 1\n")
@@ -170,6 +194,16 @@ sh("git", "reset", "-q", cwd=TREE)
 sh("git", "add", "notes.md", cwd=TREE)
 transcript("ls")
 assert bash("git commit -m docs") == []  # no code in it
+assert bash(f"git -C {MAIN} commit -m x") == []  # judged in the repository it names, not the card's
+sh("git", "reset", "-q", cwd=TREE)
+sh("git", "add", "code.py", cwd=TREE)
+sh("git", "commit", "-q", "-m", "code", cwd=TREE)
+(TREE / "code.py").write_text("x = 2\n")
+assert bash("git commit -am fix") == PUSH  # -a takes the tracked change the index does not hold yet
+assert bash("git commit code.py -m fix") == PUSH  # so does a pathspec
+assert bash("git commit --dry-run -am fix") == []
+sh("git", "checkout", "-q", "--", "code.py", cwd=TREE)
+sh("git", "add", "notes.md", cwd=TREE)
 sh("git", "branch", "-q", "--set-upstream-to=main", cwd=TREE)
 sh("git", "update-ref", "refs/remotes/origin/card", "HEAD", cwd=TREE)
 assert bash("git rebase main") == PUSH  # the branch is on origin
