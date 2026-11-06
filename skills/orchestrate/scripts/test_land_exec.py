@@ -7,7 +7,7 @@ BIN = ROOT / "bin"
 os.environ.pop("CLAUDECODE", None)
 os.environ.update(PROGRAMS_HOME=str(ROOT / "programs"), ORCH_FLEET_STATE=str(ROOT / "fleet"),
                   AGENT_SKILLS_STATE=str(ROOT / "state"), AGENT_SKILLS_CONFIG=str(ROOT / "agent-skills.json"),
-                  ORCH_DASH="off", AGENT_SKILLS_LEDGER=str(ROOT / "reap-ledger.jsonl"),
+                  ORCH_DASH="off", AGENT_SKILLS_PATROL="off",AGENT_SKILLS_LEDGER=str(ROOT / "reap-ledger.jsonl"),
                   PATH=f"{BIN}:{os.environ['PATH']}")
 os.environ.pop("ORCA_TERMINAL_HANDLE", None)
 
@@ -35,6 +35,8 @@ a = sys.argv[1:]
 if a[:2] == ["orchestration", "send"]:
     path = os.environ["FAKE_GH_STATE"]; st = json.load(open(path))
     st["sent"] = st.get("sent", []) + [a[a.index("--to") + 1]]; json.dump(st, open(path, "w")); sys.exit()
+if a[:2] == ["terminal", "list"]:  # the card holding the PR's branch: orch verdict records it as the author
+    print(json.dumps({"terminals": [{"handle": "term_author"}]})); sys.exit()
 os.execv(sys.executable, [sys.executable, os.environ["FAKE_ORCA_INNER"], *a])
 '''
 BIN.mkdir(parents=True)
@@ -115,9 +117,12 @@ class LandExec(unittest.TestCase):
         st["prs"][str(self.n)].update(fields)
         self.write(st)
 
-    def verdict(self, sha=None, source="review:codex", result="pass"):
+    def verdict(self, sha=None, source="review:codex", result="pass", **who):
         self.p.append("ready", pr=self.n, ticket=f"T-{self.n}")
-        self.p.append("verdict", pr=self.n, sha=sha or f"h{self.n}", patch_id=pid(self.n), source=source, result=result)
+        ident = {"author": ["term_author"], "reviewer": "codex", "evidence": "https://example.test/review/1",
+                 "recorder": "term_orchestrator", **who}
+        self.p.append("verdict", pr=self.n, sha=sha or f"h{self.n}", patch_id=pid(self.n), source=source, result=result,
+                      **ident)
 
     def request(self, sha=None):
         row, outcome = store.land_put(self.slug, str(prog.HOME), "o/r", self.n, sha or f"h{self.n}", "basesha", "normal",
@@ -222,6 +227,192 @@ class LandExec(unittest.TestCase):
         row = self.request()
         self.round()
         self.settled(row, "refused", 3, "review:claude")
+
+    def test_verdict_naming_the_author_as_reviewer_is_refused(self):
+        self.verdict(reviewer="term_author")
+        row = self.request()
+        self.round()
+        self.settled(row, "refused", 3, "author session")
+        self.assertEqual(self.merges(), [])
+
+    def test_verdict_without_identity_fields_is_refused(self):
+        for gap in ({"author": []}, {"reviewer": None}, {"evidence": None}, {"recorder": None}):
+            with self.subTest(gap=gap):
+                LandExec.seq += 1
+                self.n = self.seq  # a fresh PR per gap, so each round sees one request
+                self.write({"prs": {str(self.n): pr(self.n)}, "stacks": []})
+                self.p = prog.Program(self.slug)
+                self.verdict(**gap)
+                row = self.request()
+                self.round()
+                self.settled(row, "refused", 3, "independent review")
+                self.assertEqual(self.merges(), [])
+
+    def test_an_orchestrator_may_record_a_review_someone_else_ran(self):
+        self.verdict(recorder="term_orchestrator", reviewer="codex")
+        row = self.request()
+        self.round()
+        self.settled(row, "merged", 0)
+
+    def test_cmd_verdict_records_four_roles_and_refuses_self_review(self):
+        os.environ["ORCA_TERMINAL_HANDLE"] = "term_orchestrator"
+        real = prog.author_sessions
+        prog.author_sessions = lambda branch: ["term_author"]
+        base = [self.slug, "--pr", str(self.n), "--sha", f"h{self.n}"]
+        try:
+            for extra in (["--source", "review:term_author", "--evidence", "e"], ["--source", "independent-review",
+                          "--reviewer", "self", "--evidence", "e"]):
+                with self.assertRaises(SystemExit) as ctx:
+                    prog.cmd_verdict([*base, *extra])
+                self.assertIn("author session", str(ctx.exception.code))
+            prog.cmd_verdict([*base, "--source", "review:codex", "--evidence", "https://example.test/r"])
+        finally:
+            prog.author_sessions = real
+            os.environ.pop("ORCA_TERMINAL_HANDLE")
+        v = prog.pr_state(self.p.events())[self.n]["verdict"]
+        self.assertEqual((v["author"], v["reviewer"], v["evidence"], v["recorder"]),
+                         (["term_author"], "codex", "https://example.test/r", "term_orchestrator"))
+        self.assertIsNone(prog.verdict_identity_problem(v))
+
+    def test_malformed_identity_rows_are_refused_not_retried(self):
+        for bad in ({"author": 42}, {"author": "term_author"}, {"reviewer": 42}, {"evidence": ["x"]}, {"author": [42]}):
+            with self.subTest(bad=bad):
+                LandExec.seq += 1
+                self.n = self.seq
+                self.write({"prs": {str(self.n): pr(self.n)}, "stacks": []})
+                self.p = prog.Program(self.slug)
+                self.verdict(**bad)
+                row = self.request()
+                self.round()
+                self.settled(row, "refused", 3, "malformed")
+                self.assertEqual(self.merges(), [])
+
+    def test_verifier_source_names_the_reviewer(self):
+        os.environ["ORCA_TERMINAL_HANDLE"] = "term_orchestrator"
+        real = prog.author_sessions
+        prog.author_sessions = lambda branch: ["term_other"]
+        try:
+            prog.cmd_verdict([self.slug, "--pr", str(self.n), "--sha", f"h{self.n}", "--source", "verifier:codex",
+                              "--evidence", "e"])
+        finally:
+            prog.author_sessions = real
+            os.environ.pop("ORCA_TERMINAL_HANDLE")
+        self.assertEqual(prog.pr_state(self.p.events())[self.n]["verdict"]["reviewer"], "codex")
+
+    def test_a_verdict_recorded_by_cmd_verdict_for_an_orchestrator_merges(self):
+        row = self.request()
+        os.environ["ORCA_TERMINAL_HANDLE"] = "term_orchestrator"
+        real = prog.author_sessions
+        prog.author_sessions = lambda branch: ["term_author"]
+        try:
+            prog.cmd_verdict([self.slug, "--pr", str(self.n), "--sha", f"h{self.n}", "--source", "review:codex",
+                              "--evidence", "https://example.test/r"])
+            self.round()
+        finally:
+            prog.author_sessions = real
+            os.environ.pop("ORCA_TERMINAL_HANDLE")
+        self.settled(row, "merged", 0)
+
+    def test_author_sessions_is_empty_when_orca_cannot_vouch_for_the_list(self):
+        real = prog.orca_json
+        try:
+            for answer in ({"terminals": [{"handle": "term_other"}], "truncated": True}, {"terminals": None}, {}):
+                prog.orca_json = lambda *a, answer=answer: answer
+                self.assertEqual(prog.author_sessions("b"), [], answer)
+            prog.orca_json = lambda *a: {"terminals": [{"handle": "term_b"}, {"handle": "term_a"}, {}]}
+            self.assertEqual(prog.author_sessions("b"), ["term_a", "term_b"])
+            prog.orca_json = lambda *a: (_ for _ in ()).throw(ValueError("not json"))
+            self.assertEqual(prog.author_sessions("b"), [])
+        finally:
+            prog.orca_json = real
+
+    def record(self, *extra, handle="term_orchestrator", authors=("term_author",)):
+        """cmd_verdict as a session with `handle` against a PR whose card is `authors`; returns the verdict rows added."""
+        before = len([e for e in self.p.events() if e["ev"] == "verdict"])
+        os.environ["ORCA_TERMINAL_HANDLE"] = handle
+        real = prog.author_sessions
+        prog.author_sessions = lambda branch: list(authors)
+        try:
+            prog.cmd_verdict([self.slug, "--pr", str(self.n), "--sha", f"h{self.n}", *extra])
+        finally:
+            prog.author_sessions = real
+            os.environ.pop("ORCA_TERMINAL_HANDLE")
+            self.added = len([e for e in self.p.events() if e["ev"] == "verdict"]) - before
+
+    def test_a_pass_without_reviewer_or_evidence_is_refused_and_not_stored(self):
+        for extra, authors in ((["--source", "independent-review", "--evidence", "e"], ("term_author",)),  # no reviewer
+                               (["--source", "review:codex"], ("term_author",)),  # no evidence
+                               (["--source", "review:codex", "--evidence", "e"], ())):  # no author session found
+            with self.subTest(extra=extra, authors=authors), self.assertRaises(SystemExit) as ctx:
+                self.record(*extra, authors=authors)
+            self.assertIn("nothing recorded", str(ctx.exception.code))
+            self.assertEqual(self.added, 0)
+
+    def test_the_source_identity_is_checked_as_well_as_the_reviewer_flag(self):
+        for source in ("review:author", "review:term_author", "verifier:self", "review:Implementer"):
+            with self.subTest(source=source), self.assertRaises(SystemExit):
+                self.record("--source", source, "--reviewer", "codex", "--evidence", "e")
+            self.assertEqual(self.added, 0)
+        config(verdict_sources=["review:term_author"])  # a row stored that way is refused by the executor too
+        self.verdict(source="review:term_author", reviewer="codex")
+        row = self.request()
+        self.round()
+        self.settled(row, "refused", 3, "source reviewer")
+
+    def test_the_pr_author_cannot_record_the_review(self):
+        with self.assertRaises(SystemExit) as ctx:
+            self.record("--source", "review:codex", "--evidence", "e", handle="term_author")
+        self.assertIn("recorder", str(ctx.exception.code))
+        self.assertEqual(self.added, 0)
+        self.record("--source", "review:codex", "--evidence", "e")
+        self.assertEqual(self.added, 1)
+
+    def land_check(self):
+        import contextlib, io
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            try:
+                prog.cmd_land_check([self.slug, "--pr", str(self.n)])
+                code = 0
+            except SystemExit as e:
+                code = e.code
+        return code, out.getvalue()
+
+    def test_land_check_holds_a_verdict_the_executor_would_refuse(self):
+        self.verdict(evidence=None)
+        code, out = self.land_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("no evidence", out)
+        self.verdict()
+        code, out = self.land_check()
+        self.assertNotIn("independent review", out)
+        config(enabled=False)  # executor off: the direct path reads no identity, so land-check does not either
+        self.verdict(evidence=None)
+        self.assertNotIn("independent review", self.land_check()[1])
+
+    def test_land_check_and_the_executor_agree_on_a_verdict_for_another_sha(self):
+        self.verdict(sha="hother")  # same patch-id as the head, a different sha
+        code, out = self.land_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn(f"not a pass at h{self.n}", out)
+        self.assertNotIn("READY", out)
+        row = self.request()
+        self.round()
+        self.settled(row, "refused", 3, f"not a pass at h{self.n}")
+        config(enabled=False)  # executor off: the direct path keeps the patch-id rule, a moved head with the same patch holds
+        self.assertNotIn("not a pass at", self.land_check()[1])
+
+    def test_a_failing_verdict_needs_no_independence(self):
+        os.environ["ORCA_TERMINAL_HANDLE"] = "term_author"
+        real = prog.author_sessions
+        prog.author_sessions = lambda branch: ["term_author"]
+        try:
+            prog.cmd_verdict([self.slug, "--pr", str(self.n), "--sha", f"h{self.n}", "--source", "review:term_author",
+                              "--result", "fail"])
+        finally:
+            prog.author_sessions = real
+            os.environ.pop("ORCA_TERMINAL_HANDLE")
+        self.assertEqual(prog.pr_state(self.p.events())[self.n]["verdict"]["result"], "fail")
 
     def test_latest_verdict_fail_wins_over_an_older_pass(self):
         self.verdict(result="fail")
@@ -568,7 +759,8 @@ class Standalone(unittest.TestCase):
         config()
 
     def orch(self, *args):
-        r = subprocess.run([sys.executable, HERE / "prog.py", *args], capture_output=True, text=True)
+        env = {**os.environ, "ORCA_TERMINAL_HANDLE": "term_orchestrator"}
+        r = subprocess.run([sys.executable, HERE / "prog.py", *args], capture_output=True, text=True, env=env)
         return r.returncode, r.stdout + r.stderr
 
     def test_land_creates_the_program_and_the_next_round_merges(self):
@@ -581,7 +773,7 @@ class Standalone(unittest.TestCase):
         self.assertEqual((cfg["repo"], cfg["merge_policy"]), ("o/r", "autonomous"))
         self.assertEqual(store.land_rows(("queued",))[-1]["pr"], self.n)
         code, out = self.orch("verdict", self.SLUG, "--repo", "o/r", "--pr", str(self.n), "--sha", f"h{self.n}",
-                              "--source", "review:codex")
+                              "--source", "review:codex", "--evidence", "https://example.test/review/1")
         self.assertEqual(code, 0, out)
         self.assertEqual(land_exec.cmd_round([]), 0)
         merged = [a for a in json.loads(self.state.read_text()).get("log", []) if a[:2] == ["pr", "merge"]]
@@ -590,7 +782,7 @@ class Standalone(unittest.TestCase):
 
     def test_an_existing_program_is_left_alone(self):
         self.orch("verdict", self.SLUG, "--repo", "o/r", "--pr", str(self.n), "--sha", f"h{self.n}",
-                  "--source", "review:codex")
+                  "--source", "review:codex", "--evidence", "https://example.test/review/1")
         path = prog.HOME / self.SLUG / "program.json"
         before = path.read_text()
         self.orch("land", self.SLUG, "--repo", "o/r", "--pr", str(self.n))

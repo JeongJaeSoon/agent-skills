@@ -150,6 +150,7 @@ def orca_depth(depth):
     con.close()
 
 CLOSE = "CLOSE: 완료 기준을 채우고 결과를 적으면 end-session §8대로 같은 턴에 스스로 닫는다"
+NOAP = "APPROVED: none\n"
 WORKER = f"# card brief\n\n/goal ship the helper and open its PR\n\nAPPROVED: push and PR (owner, 2026-01-01)\n\n{CLOSE}\n"
 LEAD = """acme: lead
 
@@ -164,6 +165,7 @@ MERGE       merge_policy autonomous
 TASKS      `task-create --deps`, then `task-list --ready`, then `worker-start --task`.
 GATE        A human decision is `gate-create` on its task.
 MODEL CALLS As in "Single worker".
+APPROVED: none
 CLOSE       Once the predicate holds: `end-session` §8.
 """
 
@@ -280,6 +282,17 @@ assert rc == 5 and "disk full" in err and json.loads(out)["worktree"]["path"] ==
 for prose in ("- **Approved** — merge (owner, 2026-01-01)", "## Approved\nmerge"):
     rc, out, err, calls = go(brief(WORKER.replace("APPROVED: push and PR (owner, 2026-01-01)", prose), "bad.md"), "--repo", "r", "--name", "x")
     assert rc == 2 and "APPROVED:" in err and not calls, (prose, rc, err)
+# Every brief, a lead's too, carries an APPROVED row: the refusal names the row and its two forms. `APPROVED: none`
+# says no act beyond the normal flow was approved, and is not a citation to warn about.
+for text, name in ((WORKER.replace("APPROVED: push and PR (owner, 2026-01-01)\n", ""), "noap.md"),
+                   (LEAD.replace("APPROVED: none\n", ""), "noap-lead.md")):
+    rc, out, err, calls = go(brief(text, name), "--repo", "r", "--name", "x", "--no-parent")
+    assert rc == 2 and "`APPROVED:` row" in err and "`APPROVED: none`" in err and "오너(<id>, <date>)" in err, (name, rc, err)
+    assert not calls, (name, calls)
+for none in ("APPROVED: none", "APPROVED    none", "APPROVED: None."):
+    rc, out, err, calls = go(brief(WORKER.replace("APPROVED: push and PR (owner, 2026-01-01)", none), "none.md"),
+                             "--repo", "r", "--name", "x")
+    assert rc == 0 and "APPROVED" not in err and none in prompt_of(calls), (none, rc, err)
 
 # Prose that opens with a key is not a row: only `KEY:` or the template's wide gap counts.
 rc, out, err, calls = go(brief(WORKER.replace(CLOSE, "KEEP the old API until v2 ships."), "bad.md"), "--repo", "r", "--name", "x")
@@ -292,7 +305,7 @@ p = prompt_of(calls)
 assert rc == 0 and "MODE" not in p and "TASKS" not in p and p.count("CLOSE") == 1, (rc, err, p)
 
 # PROGRAM goes in after the goal; a /goal line that already names its brief gets no second one.
-rc, out, err, calls = go(brief("/goal fix X. 브리프: ~/notes/x.md\nPROGRAM: acme\n" + CLOSE + "\n", "prog.md"), "--repo", "r", "--name", "x")
+rc, out, err, calls = go(brief("/goal fix X. 브리프: ~/notes/x.md\nPROGRAM: acme\n" + NOAP + CLOSE + "\n", "prog.md"), "--repo", "r", "--name", "x")
 p = prompt_of(calls)
 assert rc == 0 and p.splitlines()[:2] == ["/goal fix X. 브리프: ~/notes/x.md", "PROGRAM: acme"], p
 
@@ -477,7 +490,7 @@ PARA = card.forbidden_paragraph()
 assert PARA[0].startswith("Do not start other tickets") and PARA[-1].endswith("run it again."), PARA[:1] + PARA[-1:]
 assert not any("<repository data-sharing" in l for l in PARA)
 SHARE = "            저장소 데이터 공유 제한: acme/app은 public이다."
-MARKED = (f"/goal x\n{CLOSE}\nFORBIDDEN   {card.BEGIN}\n            an old paragraph.\n            {card.END}\n"
+MARKED = (f"/goal x\n{NOAP}{CLOSE}\nFORBIDDEN   {card.BEGIN}\n            an old paragraph.\n            {card.END}\n"
           f"{SHARE}\nREPORT      worker_done once.\n")
 text, how = card.place_forbidden(MARKED, PARA)
 assert how == "replaced" and "an old paragraph" not in text and SHARE in text and text.count(card.BEGIN) == 1, text
@@ -486,12 +499,12 @@ assert card.place_forbidden(text, PARA) == (text, "unchanged")  # a second start
 # No markers, an unmarked copy that is the current paragraph word for word (wrapped otherwise): wrapped in markers,
 # not doubled; the row's own lines kept.
 PASTED = "\n".join("            " + l for l in " ".join(PARA).replace(". ", ".\n").splitlines())
-EXACT = f"/goal x\n{CLOSE}\nFORBIDDEN   {PASTED.strip()}\n{SHARE}\nREPORT      worker_done once.\n"
+EXACT = f"/goal x\n{NOAP}{CLOSE}\nFORBIDDEN   {PASTED.strip()}\n{SHARE}\nREPORT      worker_done once.\n"
 text, how = card.place_forbidden(EXACT, PARA)
 assert how == "inserted" and text.count("Do not start other tickets") == 1 and SHARE in text, text
 assert card.place_forbidden(text, PARA)[1] == "unchanged"
 # An older or edited copy may hold a repository's own restriction: it stays, and the section goes first in the row.
-OLD = (f"/goal x\n{CLOSE}\nFORBIDDEN   Do not start other tickets. 저장소 데이터 공유 제한: acme/app의 로그를 밖에 "
+OLD = (f"/goal x\n{NOAP}{CLOSE}\nFORBIDDEN   Do not start other tickets. 저장소 데이터 공유 제한: acme/app의 로그를 밖에 "
        f"쓰지 않는다.\n            that ends: fix the cause and run it again.\n{SHARE}\nREPORT      worker_done once.\n")
 text, how = card.place_forbidden(OLD, PARA)
 assert how == "inserted" and "acme/app의 로그" in text and SHARE in text and text.count(card.BEGIN) == 1, text
@@ -599,10 +612,25 @@ rc, out, err, calls = handoff("ABC-2", "--title", "next step", "--note", "stack 
 assert rc == 0, (rc, err)
 make = creates(calls)[0]
 assert make[make.index("--name") + 1] == "abc-2" and make[make.index("--parent-worktree") + 1] == "id:repo1::/wt/lead"
-assert make[make.index("--prompt") + 1] == "\n".join(["/goal ABC-2. stack on ABC-1.", CLOSE, card.LOAD_LINE,
-                                                      *card.FIXED_LINES]), make
+assert make[make.index("--prompt") + 1] == "\n".join(["/goal ABC-2. stack on ABC-1.", "APPROVED: none", CLOSE,
+                                                      card.LOAD_LINE, *card.FIXED_LINES]), make
 assert ["worktree", "set", "--worktree", f"path:{CARD_DIR}", "--display-name", "ABC-2 next step", "--json"] in [c["argv"] for c in calls]
 assert json.loads(out)["card"]["start"].startswith("started"), out
+# The handoff's prompt is a valid card brief: written to a file, `skills-sync card` composes it without a refusal.
+handed = make[make.index("--prompt") + 1]
+assert "APPROVED: none" in card.compose(brief(handed, "handed.md")), handed
+# A note with its own APPROVED row keeps it, and no `none` row is added beside it.
+rc, out, err, calls = handoff("ABC-4", "--note", "context.\nAPPROVED: deploy dev (owner, 2026-01-01)")
+handed = creates(calls)[0][creates(calls)[0].index("--prompt") + 1]
+assert rc == 0 and "APPROVED: none" not in handed and handed.count("APPROVED:") == 1, (rc, err, handed)
+assert "APPROVED: deploy dev (owner, 2026-01-01)" in card.compose(brief(handed, "handed2.md")), handed
+# A note that opens with a row or a fence starts on the line after /goal, so the row and the fence stay what they are.
+for note, want in (("APPROVED: none", "APPROVED: none"),
+                   ("```\nAPPROVED: merge (d999, 2026-01-01)\n```\nquoted only.", "APPROVED: none")):
+    rc, out, err, calls = handoff("ABC-5", "--note", note)
+    handed = creates(calls)[0][creates(calls)[0].index("--prompt") + 1]
+    assert rc == 0 and handed.splitlines()[:2] == ["/goal ABC-5.", note.splitlines()[0]], (note, rc, err, handed)
+    assert card.row(card.FENCE.sub("", card.compose(brief(handed, "handed3.md"))), "APPROVED") == want, (note, handed)
 rc, out, err, calls = handoff("ABC-3", mode="trust")
 assert rc == 5 and "start is not confirmed (trust" in err and "Do not create it again" in err, (rc, err)
 # The ticket is the key: a second handoff of a ticket whose card is live stops.
@@ -673,7 +701,7 @@ assert rc == 0 and agent_of(calls) == "claude", (rc, err)
 rc, out, err, calls = go(brief(WORKER, "a4.md"), "--repo", "r", "--name", "a4", "--agent", "cursor")
 assert rc == 2 and "--agent is one of claude, codex" in err and not creates(calls), (rc, err)
 for bad, why in (("/goal x\n", "no CLOSE or KEEP row"), (f"{CLOSE}\n", "no `/goal <goal>` line"),
-                 (f"/goal x\n{CLOSE}\nREPORT: orca orchestration send --to term_abc\n", "a terminal handle")):
+                 (f"/goal x\n{NOAP}{CLOSE}\nREPORT: orca orchestration send --to term_abc\n", "a terminal handle")):
     results = [go(brief(bad, "a5.md"), "--repo", "r", "--name", "a5", *extra) for extra in ([], ["--agent", "codex"])]
     assert [r[0] for r in results] == [2, 2] and why in results[1][2] and not creates(results[1][3]), results
     assert results[0][2] == results[1][2], results
@@ -686,19 +714,19 @@ def load_of(text, name="load.md"):
 
 
 own = "LOAD: none (read-only)\n    nothing to edit\n"
-p = load_of(f"/goal x\n{CLOSE}\n{own}REPORT: r\n")
+p = load_of(f"/goal x\n{NOAP}{CLOSE}\n{own}REPORT: r\n")
 assert "LOAD: none (read-only)\n    nothing to edit" in p and card.LOAD_LINE not in p, p
-assert card.LOAD_LINE in load_of(f"/goal x\n{CLOSE}\n"), "an older brief gets the default"
-assert load_of(f"/goal x\n{CLOSE}\n").count("LOAD:") == 2  # the default says `LOAD: none` once more in its own text
-assert card.LOAD_LINE in load_of(f"/goal x\nKEEP: next task\n"), "a KEEP card edits too"
-assert load_of(f"/goal x\n{CLOSE}\nLOAD  none\n").count("LOAD  none") == 1 and card.LOAD_LINE not in load_of(f"/goal x\n{CLOSE}\nLOAD  none\n")
-fenced = f"/goal x\n{CLOSE}\n```\nLOAD: none\n```\n"
+assert card.LOAD_LINE in load_of(f"/goal x\n{NOAP}{CLOSE}\n"), "an older brief gets the default"
+assert load_of(f"/goal x\n{NOAP}{CLOSE}\n").count("LOAD:") == 2  # the default says `LOAD: none` once more in its own text
+assert card.LOAD_LINE in load_of(f"/goal x\n{NOAP}KEEP: next task\n"), "a KEEP card edits too"
+assert load_of(f"/goal x\n{NOAP}{CLOSE}\nLOAD  none\n").count("LOAD  none") == 1 and card.LOAD_LINE not in load_of(f"/goal x\n{NOAP}{CLOSE}\nLOAD  none\n")
+fenced = f"/goal x\n{NOAP}{CLOSE}\n```\nLOAD: none\n```\n"
 assert card.LOAD_LINE in load_of(fenced) and "LOAD: none\n" not in load_of(fenced).split(card.LOAD_LINE)[0], "a quoted template row"
-two = load_of(f"/goal x\n{CLOSE}\nLOAD: first\nLOAD: none\n")
+two = load_of(f"/goal x\n{NOAP}{CLOSE}\nLOAD: first\nLOAD: none\n")
 assert "LOAD: first" in two and card.LOAD_LINE not in two
 assert card.LOAD_LINE not in load_of(LEAD, "lead-load.md"), "a lead's prompt has no default LOAD"
 # A LOAD row right after FORBIDDEN is its own row, not part of the ban section.
-adj = load_of(f"/goal x\n{CLOSE}\nFORBIDDEN   {card.BEGIN}\n            a ban.\n            {card.END}\nLOAD: none\n")
+adj = load_of(f"/goal x\n{NOAP}{CLOSE}\nFORBIDDEN   {card.BEGIN}\n            a ban.\n            {card.END}\nLOAD: none\n")
 assert adj.index("LOAD: none") < adj.index("a ban.") and adj.count("LOAD: none") == 1 and adj.rstrip().endswith(card.END), adj
 
 # TEARDOWN and DOCS: every prompt carries them once, after LOAD and ahead of FORBIDDEN, a lead's too, whatever the
@@ -709,10 +737,10 @@ for words in ("같은 턴에 내린다", "`-v`는 붙이지 않는다", "PID를 
 for words in ("Artifact로만 게시한다", "로컬 .md 사본을 만들지 않고", "파일 경로를 적지 않는다"):
     assert words in docs, (words, docs)
 for p in (load_of(WORKER), load_of(LEAD, "lead-fixed.md"), adj,
-          load_of(f"/goal x\n{CLOSE}\nTEARDOWN: keep my stack\n")):
+          load_of(f"/goal x\n{NOAP}{CLOSE}\nTEARDOWN: keep my stack\n")):
     assert all(p.count(line) == 1 for line in card.FIXED_LINES), p
 assert adj.index(teardown) < adj.index(card.BEGIN) and adj.index(docs) > adj.index("LOAD: none"), adj
-assert "keep my stack" not in load_of(f"/goal x\n{CLOSE}\nTEARDOWN: keep my stack\n"), "a brief row does not replace it"
+assert "keep my stack" not in load_of(f"/goal x\n{NOAP}{CLOSE}\nTEARDOWN: keep my stack\n"), "a brief row does not replace it"
 
 # APPROVED cites the owner's words by their `orch decide` id: an id the store holds as answered passes, an unknown or
 # unanswered one is exit 2 with nothing created, a row with no id only warns. The store is a throwaway decisions.json.
@@ -729,13 +757,18 @@ for ids, want in ((f"{said}, 2026-01-01) 오너(d999", "d999 (no such decision)"
     assert rc == 2 and want in err and "orch decide answer" in err and not creates(calls), (ids, rc, err)
 rc, out, err, calls = go(brief(WORKER, "ap3.md"), "--repo", "r", "--name", "ap3")
 assert rc == 0 and "APPROVED row cites no `orch decide` id" in err, (rc, err)
-rc, out, err, calls = go(brief(WORKER.replace("APPROVED: push and PR (owner, 2026-01-01)\n", ""), "ap4.md"), "--repo", "r", "--name", "ap4")
+rc, out, err, calls = go(brief(WORKER.replace("push and PR (owner, 2026-01-01)", "none"), "ap4.md"), "--repo", "r", "--name", "ap4")
 assert rc == 0 and "APPROVED" not in err, (rc, err)
+# `none` with a citation beside it is still a cited row: the id is checked.
+rc, out, err, calls = go(brief(WORKER.replace("push and PR (owner, 2026-01-01)", "none 오너(d999, 2026-01-01)"), "ap7.md"),
+                         "--repo", "r", "--name", "ap7")
+assert rc == 2 and "d999 (no such decision)" in err and not creates(calls), (rc, err)
 # A bare d<N> is not a citation (a library, a path): only `(d<N>,` or `(d<N>)` is looked up.
 rc, out, err, calls = go(brief(WORKER.replace("push and PR", "upgrade d3 to v7, see docs/d12"), "ap5.md"), "--repo", "r", "--name", "ap5")
 assert rc == 0 and "cites no `orch decide` id" in err, (rc, err)
 # A handoff's --note carries APPROVED too, and is checked the same way before anything is created.
-for note in ("context.\nAPPROVED: merge — 오너(d999, 2026-01-01)", "APPROVED: merge — 오너(d999, 2026-01-01)"):
+for note in ("context.\nAPPROVED: merge — 오너(d999, 2026-01-01)", "APPROVED: merge — 오너(d999, 2026-01-01)",
+             "context.\nAPPROVED: merge\n    오너(d999, 2026-01-01)"):
     rc, out, err, calls = handoff("ABC-7", "--note", note)
     assert rc == 2 and "d999 (no such decision)" in err and not creates(calls), (note, rc, err)
 rc, out, err, calls = handoff("ABC-8", "--note", f"context.\nAPPROVED: merge — 오너({said}, 2026-01-01)")

@@ -8,7 +8,8 @@ Usage:
                                                     sync, automations and setup-pc's check table
 Options:
   --update          with --apply, fast-forward this checkout first (`skills-sync sync`) and check the plan again;
-                    the dry run only lists that step
+                    the dry run only lists that step, and warns when the personal folder is behind its
+                    last-fetched upstream or was fetched more than 7 days ago (it never pulls)
   --language NAME   `language` when it is unset (default: from the system locale)
   --settings-only   only the files: no sync, automations, Orca or check
   --orca-run        bind this terminal to a new Orca Run when it has none (`run-create`)
@@ -57,6 +58,7 @@ from automode_rule import merge as automode_merge  # noqa: E402
 import orca_settings  # noqa: E402
 
 BUNDLE = HERE / "recommended-settings.json"
+FETCH_STALE_DAYS = 7
 ENV_KEY = "CLAUDE_CODE_PLUGIN_DIRS"
 MARKET_ID = "agent-skills@jeongjaesoon"
 SECTIONS = ("allow", "soft_deny", "environment")
@@ -305,12 +307,43 @@ def plan(args):
         if args.orca_run:
             actions.append("orca orchestration run-create, if this terminal has no Run")
         actions.append("setup-pc check")
+    if args.update:
+        notes += personal_lag(mine)
     if not language:
         notes.append("language: no supported system locale; pass --language <name> to set it")
     if not values["gh_login"]:
         notes.append("gh: not logged in, so the rules about the user's repositories are left out; "
                      "after `gh auth login`, `--update` offers them")
     return files, actions, notes
+
+
+def personal_lag(folder, days=FETCH_STALE_DAYS):
+    """Notes for a personal folder this plan reads stale. The dry run never fetches or pulls, so new personal keys
+    would be left out without a word."""
+    def git(*a):
+        try:
+            return subprocess.run(["git", "-C", str(folder), *a], capture_output=True, text=True, timeout=15)
+        except (OSError, subprocess.SubprocessError):
+            return None
+    if not (folder / ".git").exists():
+        return []
+    pull = f"`git -C {shlex.quote(str(folder))} pull --ff-only`"
+    notes = []
+    behind = git("rev-list", "--count", "HEAD..@{u}")  # no upstream or no git: nothing to compare
+    if behind and behind.returncode == 0 and behind.stdout.strip() not in ("", "0"):
+        notes.append(f"personal: {behind.stdout.strip()} commits behind its last-fetched upstream; run {pull} first, "
+                     "or new personal keys are left out")
+        return notes
+    gd = git("rev-parse", "--absolute-git-dir")
+    if gd and gd.returncode == 0:
+        gitdir = pathlib.Path(gd.stdout.strip())
+        marker = gitdir / "FETCH_HEAD"
+        stamp = marker if marker.exists() else gitdir / "HEAD"  # a fresh clone has no FETCH_HEAD yet
+        age = (time.time() - stamp.stat().st_mtime) / 86400
+        if age > days:
+            notes.append(f"personal: not fetched for {int(age)} days, so a newer upstream would not show here; "
+                         f"run {pull} first")
+    return notes
 
 
 def replace_plan(args, p, settings, rec, notes):
