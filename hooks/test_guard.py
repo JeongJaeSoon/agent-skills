@@ -234,9 +234,23 @@ assert bash(HELPER.format("absent.md")) == "deny"
 assert bash(HELPER.format("$BRIEF")) == "deny"
 assert bash(HELPER.format("lead.md")) == "none"
 assert bash(HELPER.format("lead.md"), session="joined") == "deny", "a lead starting a lead through the helper"
-# After a cd the event's cwd is not where a relative path points: only an absolute one is read.
-assert bash("cd /x && " + HELPER.format("worker.md")) == "deny" and "absolute path" in reason("cd /x && " + HELPER.format("worker.md"))
+# After a cd the event's cwd is not where a relative path points: it is read from the cd's literal target,
+# and a cd whose target the hook cannot know still asks for an absolute path.
+assert bash("cd /x && " + HELPER.format("worker.md")) == "deny"  # /x/worker.md does not exist
+assert bash(f"cd {H} && " + HELPER.format("worker.md")) == "none"
+assert bash(f"cd '{H}' && " + HELPER.format("lead.md"), session="joined") == "deny"
 assert bash("cd /x && " + HELPER.format(H / "worker.md")) == "none"
+assert "absolute path" in reason("cd $SOMEWHERE && " + HELPER.format("worker.md"))
+assert "absolute path" in reason("cd - && " + HELPER.format("worker.md"))
+assert bash("pushd /x; " + HELPER.format(H / "lead.md"), agent="agent-skills:lead") == "deny"
+# A set variable or `~` in the brief's path is expanded the way the shell would; anything else still is not.
+assert bash(HELPER.format("$HOME/worker.md")) == "none"
+assert bash(HELPER.format("${HOME}/noclose.md")) == "deny" and "CLOSE or KEEP" in reason(HELPER.format("${HOME}/noclose.md"))
+assert bash(HELPER.format('"$HOME/worker.md"')) == "none"
+assert bash(HELPER.format("$UNSET_BRIEF_VAR")) == "deny" and "cannot expand" in reason(HELPER.format("$UNSET_BRIEF_VAR"))
+assert bash("export HOME=/x; " + HELPER.format("$HOME/worker.md")) == "deny"  # rebound in the same command
+assert bash(HELPER.format("$(echo worker.md)")) == "deny"
+assert bash(HELPER.format("$HOME/../worker.md")) == "deny"  # normalized: the parent of HOME has no worker.md
 assert bash("pushd /x; " + HELPER.format(H / "lead.md"), agent="agent-skills:lead") == "deny"
 # Every call is checked, and only a call whose own argument is --help is skipped.
 assert bash(HELPER.format("--help")) == "none"

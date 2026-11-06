@@ -146,16 +146,50 @@ def lead_session(who):
     return who().role == "lead"
 
 
-def helper_card(brief, cwd, moves):
+CD_TARGET = re.compile(r"(?:^|[;&|(])\s*(?:cd|pushd)\s+(?:--\s+)?(\"[^\"$`]*\"|'[^']*'|[\w./~+:@%,=-]+)\s*(?=[;&|)\n]|$)", re.M)
+SIMPLE_VAR = re.compile(r"\$(?:\{(\w+)\}|(\w+))")
+
+
+def expand_path(text, cmd):
+    """The path as the shell would spell it, or None. Only `~` and `$NAME`/`${NAME}` that this hook's environment sets
+    and the command does not rebind are expanded; anything else (substitution, glob, unset name) stays unread."""
+    if set(text) & set("`*?") or "$(" in text:
+        return None
+    unresolved = []
+
+    def sub(m):
+        name = m[1] or m[2]
+        if name not in os.environ or re.search(rf"(?<![$\w{{]){name}=|\b(?:read|export|declare|typeset|local|printf\s+-v)\b[^;&|\n]*\b{name}\b", cmd):
+            unresolved.append(name)
+            return ""
+        return os.environ[name]
+
+    text = SIMPLE_VAR.sub(sub, text)
+    if unresolved or "$" in text:
+        return None
+    return pathlib.Path(text).expanduser()
+
+
+def helper_card(brief, cwd, cmd, start):
     """(the prompt the helper would send, None) or (None, the deny reason): the helper's own checks on that file.
-    `moves`: the command changes directory first, so a relative path would be read from the wrong place."""
+    A cd before the helper moves the base of a relative path, so the last literal cd target is the base;
+    a cd the hook cannot read (a variable, `-`, a substitution) leaves only an absolute path readable."""
     brief = brief.strip("'\"")
-    if set(brief) & set("$`*?"):
-        return None, "Write the brief's path out in `skills-sync card <brief>`; this hook reads that file and cannot expand it."
-    path = pathlib.Path(brief).expanduser()
+    path = expand_path(brief, cmd)
+    if path is None:
+        return None, "Write the brief's path out in `skills-sync card <brief>` (or `~`/`$HOME` plus a literal path); this hook reads that file and cannot expand it."
+    base = pathlib.Path(cwd or ".")
+    moves = False
+    for chdir in CHDIR.finditer(cmd[:start]):
+        target = CD_TARGET.match(cmd, chdir.start())
+        moved = target and not target[1].lstrip("'\"").startswith("-") and expand_path(target[1].strip("'\""), cmd)
+        if moved:
+            base = moved if moved.is_absolute() else base / moved
+        else:
+            moves = True
     if moves and not path.is_absolute():
         return None, "This command changes directory, so give `skills-sync card` the brief's absolute path."
-    full = path if path.is_absolute() else pathlib.Path(cwd or ".") / path
+    full = pathlib.Path(os.path.normpath(path if path.is_absolute() else base / path))
     if full.is_dir():
         return None, f"`skills-sync card {brief}` names a directory, not a brief file; give it the brief's file path."
     try:
@@ -206,7 +240,7 @@ def bash(cmd, background, who, cwd=None):
         brief = re.compile(r"\S+").match(cmd, helper.start(1))[0]  # the masked text blanks a quoted path
         if brief.startswith("-"):  # `--help` or no brief: the helper prints its usage and creates nothing
             continue
-        prompt, refused = helper_card(brief, cwd, bool(CHDIR.search(cmd)))
+        prompt, refused = helper_card(brief, cwd, cmd, helper.start(1))
         if refused:
             return decide("deny", refused)
         if is_lead(prompt) and lead_session(who):
