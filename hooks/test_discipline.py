@@ -111,6 +111,17 @@ assert __import__("time").monotonic() - slow < 1.5  # no quadratic backtracking 
 # a `cd` in a subshell, a substitution or a pipeline leaves the rest where it was
 assert bash("(cd /tmp); echo x > a.py") == EDIT
 assert bash("echo \"$(cd /tmp)\"; echo x > a.py") == EDIT
+assert bash("(cd /tmp; echo x > a.py)") == []  # the subshell's cd holds inside it
+assert bash("(true; cd /tmp); echo x > a.py") == EDIT  # and ends with it
+assert bash("cd /tmp |& cat; echo x > a.py") == EDIT
+assert "worker.chain" not in bash("git status; git push --dry-run") and "worker.chain" not in bash("ls\ngit commit --dry-run")
+assert bash("python3 -c \"scratch='/tmp/x'; open('a.py','w').write('x=3')\"") == EDIT  # the temp word is not the target
+assert bash("python3 -c \"open('/tmp/x.txt','w').write('x')\"") == []
+assert bash("python3 -c \"print(\\\"open('a.py', 'w')\\\")\"") == []  # text, not a call
+assert bash("python3 -c \"# open('a.py','w')\"") == []
+slow = __import__("time").monotonic()
+assert bash("cat <<'EOF'\n" + "python3 <<PY\n" * 8000 + "EOF\n") == []
+assert __import__("time").monotonic() - slow < 1.5  # candidates are filtered by what bash runs, not searched for
 # a `cd` moves where a relative target lands
 assert bash("cd /tmp && echo x > a.py") == []
 assert bash(f"cd {TREE} && echo x > a.py", cwd=SCRATCH) == EDIT

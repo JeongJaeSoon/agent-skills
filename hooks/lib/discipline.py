@@ -33,13 +33,9 @@ WRITE_OPS = {">", ">>", ">|", "&>", "&>>"}
 # A file mode is at most four characters; the bound keeps a long quoted run from backtracking.
 MODE = r"""(?:mode\s*=\s*)?['"](?=[rwxabt+]{0,3}[wax+])[rwxabt+]{1,4}['"]"""
 PYTHON_MODE = re.compile(rf"""\s*{MODE}""")
-# `.write_text(`, `Path(p).open("w")`; `open(path, "w")` with a path expression of any shape is python_open_writes.
-PYTHON_WRITE = re.compile(rf"""\.write_(?:text|bytes)\(|\.open\(\s*{MODE}""")
+# Calls in python source (strings and comments masked out): `.write_text(`, `Path(p).open("w")`, `open(path, "w")`.
+PYTHON_CALL = re.compile(r"\.write_(?:text|bytes)\(|\.open\(|\bopen\(")
 OPEN_SCAN = 400
-# A python command whose stdin is a heredoc: the delimiter, then the rest of its line (`> /dev/null`), then the body.
-PYTHON_HEREDOC = re.compile(
-    r"""(?:^|[;&|(\s])(?P<py>python[\d.]*)[ \t]+(?:-[ \t]*)?<<-?[ \t]*(['"]?)(\w+)\2[^\n]*\n(.*?)\n[ \t]*\3[ \t]*(?:\n|$)""",
-    re.S | re.M)
 SED_INPLACE = re.compile(r"-[A-Za-z]*i|--in-place(?:=.*)?$")
 SED_VALUE_OPTS = {"-e", "-f", "--expression", "--file"}
 MEMORY = re.compile(r"/\.claude/projects/[^/]+/memory(?:/|$)")
@@ -150,59 +146,124 @@ def sed_files(words):
     return rest if scripted else rest[1:]
 
 
-def python_open_writes(code):
-    """Spans (start, end) of each `open(…, "w")` call: a mode string that is a top-level argument after a comma. The
-    scan of one call is bounded, follows quotes and parentheses, and stops at the call's closing parenthesis."""
-    for m in re.finditer(r"\bopen\(", code):
-        depth, i, quote, end = 1, m.end(), None, min(len(code), m.end() + OPEN_SCAN)
-        while i < end and depth:
-            c = code[i]
-            if quote:
-                quote = None if c == quote else quote
-                i += 2 if c == "\\" else 1
-                continue
-            if c in "'\"":
-                quote = c
-            elif c in "([{":
-                depth += 1
-            elif c in ")]}":
-                depth -= 1
-            elif c == "," and depth == 1 and PYTHON_MODE.match(code, i + 1):
-                yield m.start(), i + 1
-                break
+def code_mask(code):
+    """The python source with each comment and string body blanked to NUL (quotes and length kept), so a call named in
+    a string or a comment is not a call."""
+    out, i, n = [], 0, len(code)
+    while i < n:
+        c = code[i]
+        if c == "#":
+            j = code.find("\n", i)
+            j = n if j < 0 else j
+            out.append("\0" * (j - i))
+        elif c in "'\"":
+            q = code[i:i + 3] if code[i:i + 3] in ("'''", '"""') else c
+            j = i + len(q)
+            while j < n and not code.startswith(q, j):
+                j += 2 if code[j] == "\\" else 1
+            j, closed = (j + len(q), True) if j < n else (n, False)
+            out.append(q + "\0" * max(j - i - len(q) - (len(q) if closed else 0), 0) + (q if closed else ""))
+        else:
+            out.append(c)
             i += 1
+            continue
+        i = j
+    return "".join(out)[:n]
+
+
+def first_arg_end(mask, start):
+    """Index of the first top-level comma (or the closing parenthesis) of the call whose arguments begin at start,
+    scanning at most OPEN_SCAN characters of the masked source; the mode argument follows the comma."""
+    depth, i, end = 1, start, min(len(mask), start + OPEN_SCAN)
+    while i < end:
+        c = mask[i]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+            if not depth:
+                return i, False
+        elif c == "," and depth == 1:
+            return i, True
+        i += 1
+    return None, False
+
+
+def in_temp(text):
+    return any(f"{q}{r}" in text for r in TEMP_ROOTS for q in "'\"")
 
 
 def python_writes(code):
-    """True when the python source opens a file for writing, a temp path (the nearest literal) left out."""
-    spans = [(m.start(), m.end()) for m in PYTHON_WRITE.finditer(code)] + list(python_open_writes(code))
-    for start, stop in spans:
-        window = code[max(0, start - 120):stop + 120]
-        if not any(f"{q}{r}" in window for r in TEMP_ROOTS for q in "'\""):
+    """True when the python source, as code, opens a file for writing. A write whose own path (the first argument of
+    `open(`, the receiver of `.write_text(` or `.open(`) is a temp-directory literal is left out."""
+    mask = code_mask(code)
+    for m in PYTHON_CALL.finditer(mask):
+        text, name = m.group(), m.group().lstrip(".")
+        if name.startswith("write_"):
+            opens = True
+        elif text.startswith("."):  # Path(p).open("w"): the mode is the first argument
+            opens = bool(PYTHON_MODE.match(code, m.end()))
+        else:  # open(path, "w"): the mode follows a top-level comma
+            comma, more = first_arg_end(mask, m.end())
+            opens = more and bool(PYTHON_MODE.match(code, comma + 1))
+        if not opens:
+            continue
+        if text.startswith(".") or name.startswith("write_"):
+            path = re.split(r"[;\n]", code[max(0, m.start() - 200):m.start()])[-1]  # the receiver's statement
+        else:
+            path = code[m.end():comma]
+        if not in_temp(path):
             return True
     return False
 
 
-def python_heredocs(cmd):
-    """[(how, None)] for each python heredoc this command runs whose body opens a file for writing. A `python3 - <<`
-    line that is itself text (inside another command's heredoc body or a quote) is blanked in the masked text."""
-    masked = shell.read(cmd)[0]
-    return [("python heredoc file write", None) for m in PYTHON_HEREDOC.finditer(cmd)
-            if masked[m.start("py"):m.end("py")] == m.group("py") and python_writes(m.group(4))]
+def heredoc_body(cmd, after, delim, strip):
+    """The lines of the heredoc that starts on the line holding offset `after`, up to its delimiter line; None when
+    there is no delimiter line."""
+    start = cmd.find("\n", after)
+    if start < 0:
+        return None
+    lines, body = cmd[start + 1:].split("\n"), []
+    for line in lines:
+        if (line.lstrip("\t") if strip else line) == delim:
+            return "\n".join(body)
+        body.append(line)
+    return None
+
+
+def python_heredocs(cmds, cmd):
+    """[(how, None)] for each python command bash runs with a heredoc on stdin whose body opens a file for writing.
+    Only a parsed command counts: a `python3 <<PY` line inside another command's heredoc body is text."""
+    out = []
+    for c in cmds:
+        if PYTHON.fullmatch(c.name):
+            for _, op, delim in c.redirects:
+                if op in ("<<", "<<-") and (body := heredoc_body(cmd, c.span[1], delim, op == "<<-")) is not None \
+                        and python_writes(body):
+                    out.append(("python heredoc file write", None))
+    return out
 
 
 def cd_targets(cmds, cwd, cmd):
-    """id(command) -> the directory it runs in, following the `cd <dir>` commands before it in a call. Only a `cd` of the
-    call's own shell counts: one in a `( … )` subshell, a `$(…)` or a pipeline leaves the rest where it was."""
-    out, here = {}, cwd
+    """id(command) -> the directory it runs in, following the `cd <dir>` commands before it in a call. A `cd` moves the
+    shell it runs in: inside `( … )` it holds until the closing parenthesis, and one in a `$(…)` or a pipeline moves
+    nothing."""
+    masked = shell.read(cmd)[0]
     nested = {id(c) for c in cmds if any(o is not c and o.span[0] <= c.span[0] and c.span[1] <= o.span[1]
                                          and o.span != c.span for o in cmds)}
+    out, dirs = {}, {0: cwd}
     for c in sorted(cmds, key=lambda c: c.span[0]):
-        out[id(c)] = here
-        before = cmd[:c.span[0]].rstrip()
+        before = masked[:c.span[0]]
+        depth = max(before.count("(") - before.count(")"), 0)
+        for k in [k for k in dirs if k > depth]:
+            del dirs[k]
+        for k in range(1, depth + 1):
+            dirs.setdefault(k, dirs[k - 1])
+        out[id(c)] = dirs[depth]
         if c.name == "cd" and len(c.words) == 2 and c.words[1] != "-" and not c.words[1].startswith(("$", "-")) \
-                and id(c) not in nested and not (c.piped_from or c.piped_to) and not before.endswith("("):
-            here = resolve(c.words[1], here)
+                and id(c) not in nested and not (c.piped_from or c.piped_to) \
+                and not masked[c.span[1]:].lstrip().startswith("|"):
+            dirs[depth] = resolve(c.words[1], dirs[depth])
     return out
 
 
@@ -233,7 +294,7 @@ def mutating(c):
     w = c.words
     if c.name in ("rm", "mv"):
         return c.name
-    if (verb := git_verb(w)) in MUTATING_GIT:
+    if (verb := git_verb(w)) in MUTATING_GIT and not (flag_given(w, "--dry-run") or verb == "push" and flag_given(w, "-n")):
         return f"git {verb}"
     if c.name == "orca" and "worker_done" in w:
         return "worker_done"
@@ -266,7 +327,7 @@ def history(transcript, current_id):
                 for b in content if isinstance(content, list) else ():
                     if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "Bash":
                         calls.append((b.get("id"), str((b.get("input") or {}).get("command") or "")))
-    except OSError:
+    except (OSError, AttributeError, TypeError):  # a record shaped otherwise is a transcript this cannot read
         return None
     # Claude Code gives a PreToolUse event the call's tool_use_id; without one the transcript is taken as it stands.
     return [shell.commands(c) for i, c in calls if not current_id or i != current_id]
@@ -367,7 +428,7 @@ def check_bash(cmd, event, s, cfg):
     cwd, found = event.get("cwd"), []
     cmds = shell.commands(cmd)
     after_cd = cd_targets(cmds, cwd, cmd)
-    writes = write_targets(cmds, cwd, after_cd) + python_heredocs(cmd)
+    writes = write_targets(cmds, cwd, after_cd) + python_heredocs(cmds, cmd)
     if writes:
         how = writes[0][0]
         found += fire(cfg, event, "worker.edit_tool",
