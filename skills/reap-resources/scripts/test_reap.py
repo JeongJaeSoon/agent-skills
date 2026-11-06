@@ -918,7 +918,10 @@ with tempfile.TemporaryDirectory() as tmp:
         res.update({"acted": [], "skipped": [], "failed": [], "left": [], "unchecked": False, "refused": None, "notes": []})
     reap.act_round({"hours": 6, "repos": [], "kinds": list(reap.SCHEDULED), "items": every}, {}, pathlib.Path(tmp),
                    time.monotonic(), None, lambda argv, check: "{}", capture, now=1000)
-    assert sorted(seen) == sorted(set(reap.SCHEDULED) - set(reap.HUMAN_KINDS)), seen
+    # Spelled out on purpose: deriving it from reap.SCHEDULED would pass when a kind is dropped from that list.
+    assert sorted(seen) == sorted(["card", "orca-worker", "tmpdir", "gui-app", "evidence", "remote-branch", "compose-stack",
+                                   "stack-volume", "stopped-container", "labeled-volume", "user-folder", "program",
+                                   "state-file"]), seen
 # A round that fails while planning (before act_round) still leaves its row.
 with tempfile.TemporaryDirectory() as tmp:
     env = {**os.environ, "AGENT_SKILLS_STATE": tmp}
