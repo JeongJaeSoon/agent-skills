@@ -7,6 +7,7 @@
     tracker.py [...] create --project P --title T --body-file F [--label L ...] [--parent ID] [--related ID]
     tracker.py [...] label ID --add L [--add L2]
     tracker.py [...] comment ID --body-file F
+    tracker.py [...] attach ID --url URL [--title T]   (a link such as the PR; title defaults to "PR")
     tracker.py [...] transition ID --to started|review|completed|canceled
 
 stdout is always JSON; errors go to stderr with a non-zero exit.
@@ -160,7 +161,7 @@ class FixtureAdapter:
     def _refuse(self, *_a, **_k):
         raise TrackerError("TRACKER_FIXTURES is set: write operations are disabled")
 
-    create = label = comment = transition = _refuse
+    create = label = comment = attach = transition = _refuse
 
 
 # ---------------------------------------------------------------- linear (orca CLI)
@@ -346,6 +347,11 @@ class LinearAdapter:
         self._check_id(issue_id, "comment")
         self._orca("comment", "add", issue_id, "--body-file", body_file)
         return {"ok": True, "op": "comment", "id": issue_id}
+
+    def attach(self, issue_id, url, title):
+        self._check_id(issue_id, "attach")
+        self._orca("attach", issue_id, "--url", url, "--title", title)
+        return {"ok": True, "op": "attach", "id": issue_id, "url": url}
 
     def transition(self, issue_id, target):
         self._check_id(issue_id, "transition")
@@ -581,6 +587,11 @@ class JiraAdapter:
                       {"body": text_to_adf(read_body(body_file))})
         return {"ok": True, "op": "comment", "id": issue_id}
 
+    def attach(self, issue_id, url, title):
+        self._request("POST", f"/rest/api/3/issue/{urllib.parse.quote(issue_id)}/remotelink",
+                      {"globalId": url, "object": {"url": url, "title": title}})
+        return {"ok": True, "op": "attach", "id": issue_id, "url": url}
+
     def transition(self, issue_id, target):
         path = f"/rest/api/3/issue/{urllib.parse.quote(issue_id)}/transitions"
         transitions = self._request("GET", path).get("transitions") or []
@@ -658,6 +669,10 @@ def build_parser():
     s = sub.add_parser("comment")
     s.add_argument("id")
     s.add_argument("--body-file", required=True)
+    s = sub.add_parser("attach")
+    s.add_argument("id")
+    s.add_argument("--url", required=True)
+    s.add_argument("--title", default="PR")
     s = sub.add_parser("transition")
     s.add_argument("id")
     s.add_argument("--to", required=True, choices=TRANSITION_TARGETS)
@@ -686,6 +701,16 @@ def run(argv):
     if args.cmd == "comment":
         read_body(args.body_file)
         return adapter.comment(args.id, args.body_file)
+    if args.cmd == "attach":
+        try:
+            parts = urllib.parse.urlsplit(args.url)
+            valid = parts.scheme in ("http", "https") and bool(parts.hostname)
+            parts.port  # raises ValueError when out of range
+        except ValueError:
+            valid = False
+        if not valid:
+            raise TrackerError(f"attach: --url must be an absolute http(s) URL, got {args.url!r}")
+        return adapter.attach(args.id, args.url, args.title)
     return adapter.transition(args.id, args.to)
 
 

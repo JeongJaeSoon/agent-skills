@@ -1437,7 +1437,8 @@ def schedule_cmd(script, cfg, workspace, provider="claude", edit=None):
     merging = "ready_to_merge" in cfg["kinds"]
     gate = "ownergate" in cfg["kinds"]
     # Merging comes before the send so the bundle carries each merge's result and its default-branch CI.
-    merge_step = (f"`{run('merges')}` 가 출력하는 머지 대상마다, 주석 줄(PR, CLEAN, 체크, 리뷰, 머지 방식)을 채팅에 그대로 적은 뒤 "
+    merge_step = (f"`{run('merges')}` 를 한 번 실행한다. 출력이 없으면 verify 없이 다음 단계로 간다(land executor 저장소의 "
+                  f"항목에는 머지 명령이 없다). 출력이 있으면 머지 대상마다, 주석 줄(PR, CLEAN, 체크, 리뷰, 머지 방식)을 채팅에 그대로 적은 뒤 "
                   f"그 아래 `gh pr merge` 명령을 단독 명령으로 한 번씩 실행한다(--admin·--auto 를 붙이지 않는다). 거부되거나 실패한 "
                   f"머지는 다시 시도하지 않고 다른 형태로 바꾸지도 않으며, 그 PR 과 거부·실패 내용, 정확한 명령을 본문 끝에 덧붙여 보고한다. "
                   f"그다음 `{run('verify')}` 로 MERGED 와 기본 브랜치 CI 를 확인해 본문을 다시 쓴다. verify 가 실패하면 보내지도 "
@@ -1514,12 +1515,14 @@ def main():
         # Recorded before the round runs them: a refused or failed merge is never retried at that head, even
         # when verify or commit never happens.
         ledger = read_json(STATE / "ledger.json", {})
-        acts = [i for i in read_json(STATE / "plan.json", {}).get("new", [])
-                if i.get("cmd") and not delivered(ledger, i["key"], i["kind"])]
+        cmds = [i for i in read_json(STATE / "plan.json", {}).get("new", []) if i.get("cmd")]
+        acts = [i for i in cmds if not delivered(ledger, i["key"], i["kind"])]
         ledger.update({i["key"]: {"at": now, "kind": i["kind"], "id": i["id"]} for i in acts})
         write_json(STATE / "ledger.json", ledger)
-        for i in acts:
-            print(f"# {i['repo']}#{i['number']} {i['why'][0]}\n{i['cmd']}")
+        for i in cmds:
+            # An earlier run of this plan already tried it: no command, but a line, so the round still runs verify.
+            print(f"# {i['repo']}#{i['number']} {i['why'][0]}\n{i['cmd']}" if i in acts else
+                  f"# {i['repo']}#{i['number']} 이 head 는 이미 시도함: 다시 실행하지 않고 verify 로 결과만 읽는다")
     elif cmd == "verify":
         print(verify(GitHub(), STATE, cfg))
     elif cmd == "actions":

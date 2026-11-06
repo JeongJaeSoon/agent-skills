@@ -4,7 +4,12 @@
 Usage:
   python3 notify.py seed  [--config PATH] [--state DIR]
   python3 notify.py watch [--config PATH] [--state DIR]
+  python3 notify.py stream [--config PATH] [--state DIR]   # under the Monitor tool
 
+stream polls the same way but prints each poll's lines as they arrive and keeps going, so each item is one
+Monitor notification with nothing to restart; after STREAM_MINUTES it prints a STREAM END line and exits 0
+(start it again). It exits 2 with the error where watch would, and also when it ends after STREAM_FAILURES
+or more such errors in a row, since a restart would reset the count.
 watch polls `gh api notifications` until a new relevant notification appears, prints one line per item
 (reason, repo, title, web URL; tab-separated) and exits 0. It exits 1 when max_minutes pass with nothing
 new (restart it) and 2 when it cannot work: no "prs" key in the config, or `gh` failing max_failures
@@ -40,6 +45,9 @@ ONCE_PER_THREAD = ("review_requested", "assign", "state_change")
 ACTIVITY = ("author", "comment")
 TRANSIENT = re.compile(r"HTTP (5\d\d|429)|rate limit|dial tcp|no such host|connection (refused|reset)|timeout|EOF", re.I)
 LOOKUP_ERRORS = (RuntimeError, ValueError, TypeError, subprocess.TimeoutExpired)
+# Monitor stops its command at 30 minutes; the stream ends itself first, between polls.
+STREAM_MINUTES = 29
+STREAM_FAILURES = 3
 
 
 def config(path=CONFIG):
@@ -171,10 +179,12 @@ def seed(fetch, path, cfg):
     return len(keys)
 
 
-def watch(fetch, cfg, path, sleep=time.sleep, clock=time.monotonic):
-    """Returns (exit code, output lines)."""
-    failures, streak, me, seen = 0, 0, None, None
-    deadline = clock() + cfg["max_minutes"] * 60
+def watch(fetch, cfg, path, sleep=time.sleep, clock=time.monotonic, emit=None):
+    """Returns (exit code, output lines). With emit (stream), each poll's lines go to emit and the watch goes on,
+    so it returns only (1, []) at its deadline or (2, [error])."""
+    failures, streak, hard, me, seen, last = 0, 0, 0, None, None, None
+    deadline = clock() + (min(cfg["max_minutes"], STREAM_MINUTES) if emit else cfg["max_minutes"]) * 60
+    wait = lambda s: sleep(max(0, min(s, deadline - clock())))
     while clock() < deadline:
         try:
             if me is None:
@@ -188,19 +198,27 @@ def watch(fetch, cfg, path, sleep=time.sleep, clock=time.monotonic):
             lines, keys = poll(fetch, me, cfg, set(seen))
         except (*LOOKUP_ERRORS, KeyError, OSError) as e:
             streak += 1
-            if not (isinstance(e, subprocess.TimeoutExpired) or TRANSIENT.search(str(e))):
-                failures += 1
+            if isinstance(e, subprocess.TimeoutExpired) or TRANSIENT.search(str(e)):
+                hard = 0
+            else:
+                failures, hard, last = failures + 1, hard + 1, e
                 if failures >= cfg["max_failures"]:
                     return 2, [f"notify: {failures} failures in a row; last: {e}"]
-            sleep(min(cfg["backoff_s"] * 2 ** (streak - 1), cfg["max_backoff_s"]))
+            wait(min(cfg["backoff_s"] * 2 ** (streak - 1), cfg["max_backoff_s"]))
             continue
-        failures = streak = 0
+        failures = streak = hard = 0
         if keys:
             seen = (seen + keys)[-cfg["keep_seen"]:]
             write_seen(path, seen, cfg["keep_seen"])
         if lines:
-            return 0, lines
-        sleep(cfg["interval_s"])
+            if emit is None:
+                return 0, lines
+            emit(lines)
+        wait(cfg["interval_s"])
+    # Backoff fits only a few tries into one stream and a restart resets the count, so max_failures would never be
+    # reached: a stream whose last STREAM_FAILURES tries all failed that way reports it instead of asking for a restart.
+    if emit and hard >= min(STREAM_FAILURES, cfg["max_failures"]):
+        return 2, [f"notify: {hard} failures in a row; last: {last}"]
     return 1, []
 
 
@@ -217,6 +235,13 @@ def main():
         except (RuntimeError, ValueError, subprocess.TimeoutExpired) as e:
             print(f"notify: {e}")
             return 2
+        return 0
+    if cmd == "stream":
+        code, out = watch(gh, cfg, path, emit=lambda lines: print("\n".join(lines), flush=True))
+        if code == 2:
+            print("\n".join(out), flush=True)
+            return 2
+        print("STREAM END: start `notify.py stream` again with the Monitor tool", flush=True)
         return 0
     if cmd != "watch":
         print(__doc__)

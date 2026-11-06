@@ -94,8 +94,17 @@ assert t["alpha/A-2"]["cells"]["merge"]["mark"] == "ok" and not t["alpha/A-2"].g
 # The table: generated rows, then recorded ones. A recorded cell on a generated row's id wins over the generated one;
 # a generated row's merge is evidence or nothing, never the PR's state (A-3's open PR stays empty).
 stages.add("solo", "outside any program", pr="acme/web#4")
-stages.set_cell("alpha/A-1", "merge", "partial", "reverted on main, re-landing", by="lead")
+try:
+    stages.set_cell("alpha/A-1", "merge", "partial", "reverted on main, re-landing", by="lead")
+    raise AssertionError("a generated row took a hand-written merge cell")
+except ValueError as e:
+    assert "derived" in str(e) and "alpha/A-1" in str(e), e
+assert "alpha/A-1" not in stages.read()["rows"], "the refusal wrote nothing"
 stages.set_cell("alpha/A-1", "dev", "ok", "v1.4.0 on staging")
+# A hand merge cell already in stages.json (written before the refusal existed) stays in the file and is not read.
+stages.change(lambda s: s["rows"]["alpha/A-1"]["cells"].update(
+    merge={"mark": "partial", "evidence": "reverted on main", "by": "lead", "at": fleet.iso(now)}))
+assert stages.read()["rows"]["alpha/A-1"]["cells"]["merge"]["mark"] == "partial"
 try:
     stages.set_cell("alpha", "dev", "ok", "v1")
     raise AssertionError("a group row took a cell")
@@ -104,7 +113,19 @@ except ValueError:
 t = stages.table({"prs": state["prs"]})
 got = {r["id"]: r for r in t["rows"]}
 assert [r["id"] for r in t["rows"]][-1] == "solo"
-assert got["alpha/A-1"]["cells"]["merge"]["mark"] == "partial" and got["alpha/A-1"]["cells"]["dev"]["evidence"] == "v1.4.0 on staging"
+assert got["alpha/A-1"]["cells"]["merge"]["from"] == "ledger landed" and got["alpha/A-1"]["cells"]["dev"]["evidence"] == "v1.4.0 on staging"
+assert t["ignored_merge"] == ["alpha/A-1"] and "1건" in stages.ignored_note(t), (t["ignored_merge"], stages.ignored_note(t))
+assert stages.ignored_note({"ignored_merge": []}) == ""
+# The count follows the program shown: another program's rows do not add to it.
+assert stages.of_program(t, "alpha")["ignored_merge"] == ["alpha/A-1"] and stages.of_program(t, "beta")["ignored_merge"] == []
+# A generated group's id takes no cell, even when a recorded non-group row has the same id.
+stages.change(lambda s: s["rows"].update(alpha={"id": "alpha", "title": "x", "cells": {}}))
+try:
+    stages.set_cell("alpha", "dev", "ok", "v1")
+    raise AssertionError("a generated group took a cell through a same-id recorded row")
+except ValueError:
+    pass
+stages.change(lambda s: s["rows"].pop("alpha"))
 assert got["alpha/A-1"]["title"] == "A-1: login form — card" and got["alpha/A-1"]["depth"] == 1
 assert got["alpha/A-3"]["cells"] == {} and got["solo"]["cells"]["merge"]["evidence"] == "리뷰 대기"
 assert "alpha/A-1" not in stages.read()["order"], "an overlay is cells only, placed by the generated row"
@@ -214,8 +235,12 @@ assert o1["cells"]["merge"]["evidence"] == "9999999" and o1["cells"]["dev"]["evi
 assert o1["parent"] == "omega" and got["hand-note"]["parent"] == "omega/O-1" and got["hand-note"]["depth"] == 2
 ids = [r["id"] for r in t["rows"]]
 assert ids.index("hand-note") == ids.index("omega/O-1") + 1, ids
-stages.set_cell("hand-o1", "merge", "partial", "reverted")
-assert {r["id"]: r for r in stages.table({"prs": []})["rows"]}["omega/O-1"]["cells"]["merge"]["mark"] == "partial"
+try:  # the recorded row folds into omega/O-1 by its PR, so its merge cell is the generated one's
+    stages.set_cell("hand-o1", "merge", "partial", "reverted")
+    raise AssertionError("a folded row took a hand-written merge cell")
+except ValueError:
+    pass
+assert {r["id"]: r for r in stages.table({"prs": []})["rows"]}["omega/O-1"]["cells"]["merge"]["evidence"] == "9999999"
 
 # Two cards of one ticket are two rows: the second is keyed by the ledger's `<ticket>-<word>` (else its task id), and
 # each row's PR is the one its own card's session owns, matched by task title, not by the ticket both titles start with.
@@ -240,15 +265,24 @@ assert not made["delta/D-1"]["item"], made["delta/D-1"]
 stage_auto.refresh(two, now)
 stages.add("delta", "delta by hand", group=True)  # a lead records its own heading under the program's id
 stages.add("delta-release", "release with the two fixes", parent="delta")
-stages.set_cell("delta-release", "merge", "ok", "v1.2.0")
 stages.add("delta-k4", "K4 client PRs", parent="delta")
 stages.add("delta-prod", "prod rollout", parent="delta")
 stages.add("delta-docs", "docs page", parent="delta")
 got = {r["id"]: r for r in stages.table(two)["rows"]}
-assert got["delta/P1-release"]["title"] == "release with the two fixes" and got["delta/P1-release"]["cells"]["merge"]["evidence"] == "v1.2.0"
+assert got["delta/P1-release"]["title"] == "release with the two fixes"
+try:  # it folds into delta/P1-release by item, so its merge cell is not hand-written either
+    stages.set_cell("delta-release", "merge", "ok", "v1.2.0")
+    raise AssertionError("an item-folded row took a hand-written merge cell")
+except ValueError:
+    pass
 assert got["delta/P4-K4-ready"]["title"] == "K4 client PRs" and "delta-release" not in got and "delta-k4" not in got, list(got)
 assert got["delta/P4-K4-ready"]["title_full"] == "K4 client PRs", "a recorded title replaces the uncut one too"
 assert "delta-prod" in got and "delta-docs" in got and "delta/D-1-K4" not in got, list(got)
+# A second row naming the same item is not folded (the first took it), so set_cell agrees with the table: it stands alone.
+stages.add("delta-p1-release", "second release note", parent="delta")
+assert stages.fold_map(stages.read()["rows"], stage_auto.read()["rows"]).get("delta-p1-release") is None
+stages.set_cell("delta-p1-release", "merge", "ok", "v1.2.1 by hand")
+stages.finish("delta-p1-release", drop=True)
 
 # A long card title: `title` is cut for the text brief as before, `title_full` carries it whole to the dashboard.
 long = "E-1 " + "word " * 40 + "END"
@@ -308,10 +342,14 @@ assert (made["theta/T-5"]["stopped"], made["theta/T-5"]["done_at"]) == ("card en
 assert not made["theta/T-6"]["done_at"] and not made["theta/T-7"]["done_at"]
 got = {r["id"]: r for r in stages.table(th)["rows"]}
 assert got["theta/T-1"]["done_at"] == ago(18) and got["theta/T-5"]["stopped"] == "card ended"
-# A recorded merge ✅ over a stopped row: not stopped, and ended by its cells at that cell's time.
-stages.set_cell("theta/T-3", "merge", "ok", "abc1234 merged by hand")
+# A hand-written merge ✅ cannot un-stop a generated row: the refusal leaves it parked.
+try:
+    stages.set_cell("theta/T-3", "merge", "ok", "abc1234 merged by hand")
+    raise AssertionError("a generated row took a hand-written merge cell")
+except ValueError:
+    pass
 t3 = {r["id"]: r for r in stages.table(th)["rows"]}["theta/T-3"]
-assert not t3["stopped"] and t3["done_at"] == t3["cells"]["merge"]["at"], t3
+assert t3["stopped"] == "parked", t3
 
 # A stop needs to know the PR is not open: released with an open PR, or one the tick has no state for (a failed
 # GitHub read), stays open; a closed one stops.
@@ -342,7 +380,7 @@ assert not made["kappa/K-1"]["done_at"] and held["kappa"]["cards"]["task_k1"]["e
 made, _, _ = stage_auto.build([kappa], {**blind, "prs": pr_k("CLOSED")}, now + dt.timedelta(hours=2), held)
 assert made["kappa/K-1"]["done_at"] == fleet.iso(now), made["kappa/K-1"]
 md = stages.render_md(stages.of_program(stages.table(th), "theta"))
-assert "- T-5: probe (중단) — dev 해당 없음 · prod 해당 없음" in md.splitlines() and "- T-1 (끝남) — acme/th#31 · 머지 ✅ 3333333 · dev 해당 없음 · prod 해당 없음" in md.splitlines(), md
+assert "| T-5: probe (중단) | – | – | 해당 없음 | 해당 없음 |" in md.splitlines() and "| T-1 (끝남) | acme/th#31 | ✅ 3333333 | 해당 없음 | 해당 없음 |" in md.splitlines(), md
 # stages-auto.json is written only when its content changes: the same tick five minutes on leaves it (and the ended
 # card's time) alone. The collector's stage_auto_at keeps the reorient warning quiet meanwhile.
 written, mtime = stage_auto.read()["generated_at"], stage_auto.path().stat().st_mtime_ns

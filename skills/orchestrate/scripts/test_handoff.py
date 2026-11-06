@@ -25,6 +25,11 @@ def run(*argv):
     return code, out.getvalue()
 
 
+# term_me runs an orchestrator session: its handoff key comes from that role, not from a default.
+roles.roles_dir().mkdir(parents=True, exist_ok=True)
+(roles.roles_dir() / "s1.json").write_text('{"role": "orchestrator"}')
+roles.record_terminal("term_me", "s1", "/w", 1.0)
+
 code, _ = run("save", "--next", "x")
 assert "handoff not stored" in str(code), code
 assert handoff.text("orchestrator") == ""
@@ -48,7 +53,6 @@ assert "restart off" in str(code) and store.last_session_event("orchestrator", "
 
 code, _ = run("save", "--next", "y", "--restart")
 assert "no `orch inbox --stream` runs" in str(code) and store.last_session_event("orchestrator", "handoff") == before, code
-roles.record_terminal("term_me", "s1", "/w", 1.0)
 with inbox_stream.only_stream("term_me"):
     code, out = run("save", "--next", "y", "--restart")
 assert code == 0 and "restart requested" in out, (code, out)
@@ -111,7 +115,104 @@ n = rows()
 assert handoff.ready(S, 152_000, False, peek=empty)["ready"] and rows() == n
 assert handoff.ready(S, 152_000, False, peek=empty, now=4_000_000_000)["ready"] and rows() == n + 1
 store.session_event("orchestrator", "handoff", {"next": "land acme/app#2", "reply": "chat", "session": S})
-handoff.ready(S, 160_000, False, peek=empty)
+# Within the window the own auto row still counts although a manual save came after it: it stays the newest record.
+assert handoff.ready(S, 160_000, False, peek=empty)["ready"]
+assert store.last_session_event("orchestrator", "handoff")[1]["next"] == "land acme/app#2"
+handoff.ready(S, 160_000, False, peek=empty, now=4_000_000_100)
 saved = store.last_session_event("orchestrator", "handoff")[1]
 assert saved["next"] == "land acme/app#2" and saved["reply"] == "chat" and saved["auto"], saved
+
+# A manual save committed while the band was checking (inside peek) is what the auto row carries.
+def peek_then_save(key, handle):
+    store.session_event(key, "handoff", {"next": "raced manual", "waiting": "w1", "session": S})
+    return []
+handoff.ready(S, 161_000, False, peek=peek_then_save, now=4_000_001_000)
+saved = store.last_session_event("orchestrator", "handoff")[1]
+assert saved["next"] == "raced manual" and saved["waiting"] == "w1" and saved["auto"], saved
+
+# Two terminals alternate: the second is refused (conflict) and writes nothing, however its session differs.
+n = rows()
+meta = lambda sess, h: {"auto": True, "session": sess, "handle": h, "context": 1}  # noqa: E731
+K = "lead:iso"  # a key of its own, so the rows above (term_me, real clock) are not in the way
+args = lambda h, sess: (K, meta(sess, h), h, sess, handoff.AUTO_EVERY_S, handoff.FIELDS, "nx")  # noqa: E731
+assert store.save_auto_handoff(*args("term_a", "sa")) == ("saved", None)
+assert store.save_auto_handoff(*args("term_b", "sb")) == ("conflict", "term_a") and rows() == n + 1
+assert store.save_auto_handoff(*args("term_a", "sa")) == ("skipped", None) and rows() == n + 1
+# A manual save from the other terminal in between does not hide the auto row.
+store.session_event(K, "handoff", {"next": "m", "handle": "term_b", "session": "sb"})
+assert store.save_auto_handoff(*args("term_b", "sb"))[0] == "conflict"
+# The same terminal after a /clear (new session, same handle) passes; past the window the other terminal does too.
+assert store.save_auto_handoff(*args("term_a", "sa2")) == ("saved", None)
+# A caller with no handle is another terminal, not an exemption: it cannot hide term_a's save, nor be hidden by it.
+assert store.save_auto_handoff(K, meta("sn", None), None, "sn", handoff.AUTO_EVERY_S, handoff.FIELDS, "nx") == ("conflict", "term_a")
+assert store.save_auto_handoff(*args("term_a", "sa2")) == ("skipped", None)
+assert store.save_auto_handoff(*args("term_b", "sb"), at=4_100_000_000) == ("saved", None)
+# Through ready(): a handoff another terminal just saved for the orchestrator key stops the band's save.
+assert store.save_auto_handoff("orchestrator", meta("sz", "term_z"), "term_z", "sz", handoff.AUTO_EVERY_S, handoff.FIELDS,
+                               "nx", at=4_300_000_000) == ("saved", None)  # the earlier rows are old by this clock
+n = rows()
+got = handoff.ready(S, 150_000, False, peek=empty)
+assert not got["ready"] and got["show"] and "term_z" in got["reason"] and rows() == n, got
+
+# Two processes that read the same previous state: exactly one saves.
+import multiprocessing as mp
+def contend(q, bar, h):
+    bar.wait()
+    q.put(store.save_auto_handoff("lead:race", meta("s" + h, h), h, "s" + h, 600, handoff.FIELDS, "nx")[0])
+ctx = mp.get_context("fork")
+q, bar = ctx.Queue(), ctx.Barrier(2)
+ps = [ctx.Process(target=contend, args=(q, bar, h)) for h in ("t1", "t2")]
+[p.start() for p in ps]
+[p.join(30) for p in ps]
+assert sorted([q.get(timeout=5), q.get(timeout=5)]) == ["conflict", "saved"]
+
+# ready: only an orchestrator session is shown; a lead or a role-less one is not, whatever its context.
+for sid, rec in (("sid-lead", {"role": "lead", "slug": "app", "agent_type": "agent-skills:lead", "title_slug": "app"}),
+                 ("sid-slugless", {"role": "lead", "slug": None, "agent_type": None})):
+    roles.record_resolved(sid, rec)
+    got = handoff.ready(sid, 400_000, False, peek=empty)
+    assert got["show"] is False and got["ready"] is False, (sid, got)
+assert handoff.ready("sid-unknown", 400_000, False, peek=empty)["show"] is False
+
+# key_for and save: a lead session saves under lead:<slug>; the orchestrator key and others' keys are refused.
+roles.record_terminal("term_lead", "sl", "/w", 1.0)
+roles.record_resolved("sl", {"role": "lead", "slug": "app", "agent_type": "agent-skills:lead", "title_slug": "app"})
+assert handoff.key_for("sl", None) == ("lead:app", "")
+assert handoff.key_for("sl", "lead:app") == ("lead:app", "")
+for bad in ("orchestrator", "lead:other", "lead:"):
+    assert handoff.key_for("sl", bad)[1], bad
+assert handoff.key_for("s1", "lead:app")[1] and handoff.key_for("s1", "orchestrator") == ("orchestrator", "")
+assert handoff.key_for("nobody", None)[1], "a session with no role has no key"
+assert handoff.key_for(None, None)[1] and handoff.key_for(None, "orchestrator")[1]
+assert handoff.key_for(None, "lead:app") == ("lead:app", "") and handoff.key_for(None, "lead:a b")[1]
+
+def count():
+    return __import__("sqlite3").connect(store.path()).execute(
+        "select count(*) from event where entity='session' and ev in ('handoff','restart')").fetchone()[0]
+os.environ["ORCA_TERMINAL_HANDLE"] = "term_lead"
+n = count()
+assert run("save", "--next", "lead work") == (0, "handoff saved for lead:app\n")
+assert store.last_session_event("lead:app", "handoff")[1]["next"] == "lead work" and count() == n + 1
+assert "next: lead work" in run("show")[1] and "next: lead work" in run("show", "--key", "lead:app")[1]
+assert "lead:app" in handoff.text("lead:app")
+for argv in (("--key", "orchestrator"), ("--key", "lead:other")):
+    code, _ = run("save", "--next", "bad", *argv)
+    assert "refused" in str(code) and count() == n + 1, (argv, code)
+(tmp / "agent-skills.json").write_text('{"orchestrate": {"auto_clear": true, "restart_at": 100000}}')
+with inbox_stream.only_stream("term_lead"):
+    code, _ = run("save", "--next", "bad", "--restart")
+assert "--restart is for the orchestrator" in str(code) and count() == n + 1, code
+# No known session: only a well-formed lead key passes, and nothing for the orchestrator.
+os.environ["ORCA_TERMINAL_HANDLE"] = "term_unknown"
+for argv in ((), ("--key", "orchestrator"), ("--key", "lead:")):
+    code, _ = run("save", "--next", "bad", *argv)
+    assert "Nothing saved" in str(code) and count() == n + 1, (argv, code)
+assert run("save", "--next", "from outside", "--key", "lead:app")[0] == 0
+# A role-less session (ROLE: none) saves nothing without --key, and nothing with one.
+roles.record_terminal("term_none", "sn", "/w", 1.0)
+os.environ["ORCA_TERMINAL_HANDLE"] = "term_none"
+n = count()
+for argv in ((), ("--key", "orchestrator")):
+    assert "Nothing saved" in str(run("save", "--next", "bad", *argv)[0]) and count() == n
+os.environ["ORCA_TERMINAL_HANDLE"] = "term_me"
 print("test_handoff: ok")

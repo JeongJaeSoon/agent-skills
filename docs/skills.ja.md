@@ -1,4 +1,4 @@
-<!-- translated-from: e4eb31c3820383fe86b04b974d714dbee254fed4 -->
+<!-- translated-from: 5ff86c9b18e859b15054fd5f511f889bb0f4798d -->
 # スキルカタログ
 
 `agent-skills` プラグインに入っているスキル41個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック16個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
@@ -52,7 +52,7 @@ PR を受け持つスキルとマージする主体:
   - 骨組みは設定のトラッカーテンプレート（`tracker.<adapter>.templates`）を優先し、なければ同梱のテンプレートを使います。テンプレートの読み込みに失敗したら止まります。
   - `🛠 구현 힌트`（実装のヒント）には、実際に開いたパスだけを書きます。
   - タイトルは動詞で始め、受け入れ基準には確認方法を添え、`🚫 범위 밖`（範囲外）は必ず書きます。
-  - タイトルと本文の言語は設定の `tracker.<adapter>.language`、なければそのトラッカーについてのユーザーのルール、それもなければユーザーが使っている言語です。
+  - タイトルと本文の言語はサイトルールファイル（`tracker.rules_file`）、次に設定の `tracker.<adapter>.language` が決めます。どちらもなければスキルは言語を決めず、Claude の言語設定に従います。
   - 依存はトラッカーの relation で結び、1チケット = 1PR に分けます。互いに依存する PR は GitHub stack として計画します。
   - 下書き全体を一度見せ、承認を得てから登録します。ユーザーの指示が尋ねずに登録するよう求めるとき、そして混ざった依頼と、セッションが自分で起こす NOW の follow-up は、先に登録して URL を見せます。上位チケットの本文には `✅ 완료 조건`（完了条件）、`🚫 범위 밖`（範囲外）、`⏸️ 보류`（保留）を置きます。
 - **同梱:** `references/templates.md`（開発チケットと調査チケットの骨組み）。
@@ -203,12 +203,12 @@ PR を受け持つスキルとマージする主体:
   - **branch:** PR がすべてマージかクローズ済みで、worktree がなく、tip が PR の head と同じローカルブランチ。復元コマンドも出力します。
   - **worktree:** 一時ディレクトリにあって消えた worktree（Orca のものは除く）と、セッションの transcript が N 時間動いていない Claude scratchpad の、クリーンで push 済みの detached worktree。どちらも `git worktree remove <パス>` でその項目だけを消します。Orca の worktree は resource steward の担当です。
   - **card:** Orca のカードすべて（アプリ・CLI・ワーカーのどれが作ったかを問わず）を `scripts/cards.py scan` がカードごとに、削除・ターミナルだけ閉じる（開いた PR あり）・残す・人の判断、のどれかに判定して表にします。人が表を見て `apply --plan` で実行し、janitor の回も同じコードを使います。規則と落とし穴（古い `origin/HEAD` は GitHub の compare で確かめ直す、rebase 前の写しは patch-id で見分ける、プロンプトで止まったシェル、「終わった」と書いた idle の画面）は `references/cards.md` 一か所にあります。
-  - **janitor:** エージェントが ledger（`~/.local/state/agent-skills/ledger.jsonl`）に登録した一時ディレクトリ・GUI アプリ・ブラウザウィンドウと、Orca オーケストレーションのワーカーが作った worktree・終わったワーカーのターミナルだけを見ます。`reap --plan` が対象を確かめ直してから閉じるかゴミ箱に移します。下のコンテナ・ボリューム種別の `docker` 削除を除き、ツールは完全には削除せず、ゴミ箱も空にしません。OS がゴミ箱を自動で空にする設定なら警報で知らせます。ブラウザウィンドウはエージェントがブラウザツールで閉じます。
+  - **janitor:** エージェントが ledger（`~/.local/state/agent-skills/ledger.jsonl`）に登録した一時ディレクトリ・GUI アプリ・ブラウザウィンドウと、Orca オーケストレーションのワーカーが作った worktree・終わったワーカーのターミナルだけを見ます。`reap --plan` が対象を確かめ直してから閉じるかゴミ箱に移します。下のコンテナ・ボリューム種別の `docker` 削除を除き、ツールは完全には削除せず、ゴミ箱も空にしません。OS がゴミ箱を自動で空にする設定なら警報で知らせます。ブラウザウィンドウは URL の確認が要るので、定期の回では閉じずに人に知らせます。
   - **stopped-container・labeled-volume:** 設定を書いたときだけ有効になり、janitor と reap-hard が同じルールで判定します。`reap.stopped_containers.prefixes` で始まる名前で compose が作っていない、停止中（exited・created）のコンテナと、`<namespace>.origin` ラベルの値が `reap.labeled_volumes.origins` にあり、どのコンテナからも参照されていないボリュームが対象です。ID か名前を指定して1つずつ削除し、記録を残します。ボリュームのルールはどれも、所有カードが閉じたと証明できるときだけ削除します。ledger に所有の記録がない、カードの worktree が残っている、PR が開いている、カード一覧を読めない場合は残します。このラベルは出どころの表示であり、削除の許可でもあります。ラベルのない匿名ボリュームは削除せず、`reap.py inventory --unlabeled-volumes` が読み取り専用で一覧を出すだけです。
   - **user-folder:** `reap.user_folders` に明示したフォルダーだけを整理します。未設定なら無効です。期間・開いているファイル・ダウンロード中の検査とゴミ箱への保管は維持します。
   - **program:** `~/.claude/programs`（`PROGRAMS_HOME`）のうち、閉じたプログラム（最終確認 `predicate_verified` の後に着地・predicate 変更・admitted の後続がないもの）で、記録（ダッシュボードのキャッシュを除く ledger・decisions・reflect など）が 7 日（`reap.program_days`）以上変わっていないものを `_archive/` に移します。削除はしません。名前に `resume` か `handoff` を含む再開ノートがあれば、閉じていても残します。
   - **state-file:** reorient フックのセッションファイル（`<state>/reorient/*.json`）のうち 7 日（`reap.state_days`）を過ぎたものを 1 つのフォルダにまとめてゴミ箱へ、512KB（`reap.log_max_kb`）を超えた `sync.log` は `sync.log.1` にローテーションします（前の `.1` はゴミ箱）。program とあわせて、定期実行では 1 日 1 回だけ見ます。
-  - **定期実行:** `precheck` は対象があれば exit 0 で、前回の `reap` が失敗した対象とまったく同じなら 1 日のあいだ飛ばします。3 時間ごとの Orca automation の precheck に使い、PC の負荷が高ければ `precheck --load` の job がその間にもう一度回ります。`schedule` はその登録コマンドを出力するだけです（[automation.md](automation.md)、韓国語）。
+  - **定期実行:** 30 分ごとの Orca automation が、エージェントなしの定期ジョブ実行器（`orca_job.py`）の中で `precheck --act` を回し、モデルなしで計画と片付けを済ませます。実行器が結果を記録して常に exit 1 で終わるので、エージェントは起動しません。失敗した対象はそれだけが 1 日休み、人が見るもの（사람 결정 のカード、chrome-window）は `reap.inbox_to` に 1 通にまとめて送ります。PC の負荷が高ければ `precheck --load --act` の job がその間にもう一度回ります。`schedule` はその登録コマンドを出力するだけです（[automation.md](automation.md)、韓国語）。
   - **pressure:** `scripts/pressure.py` がモデルなしで3分ごと（LaunchAgent）に load・CPU idle・メモリ圧迫・swap・ディスク・Docker VM の CPU・メモリ使用を測ります（コンテナ数は表示のみ）。警告なら安全な種類（`orphan`、`compose-stack`、`gui-app`、`orca-worker`）だけを `reap --plan` で片付け、片付けたものがあればオーケストレーターに1行送ります。ターミナルが生きているカードの中の対象は残します。危険なのに片付けるものがなければ、上位の消費者（プロセス・compose プロジェクトとそのカード）を知らせて止まります。他人のものは終了させません。閾値と根拠は [pressure.md](pressure.md)（韓国語）にあります。
   - **load:** `reap.py load` は読むだけです。CPU の上位消費者（Claude セッションとその子、残骸のツリー、その他のプロセス）を ours-idle・ours-working・leftover・system に分け、5 分の負荷が上限（既定は CPU 数）以上なら分類ごとの対処を出します。静かなセッションには残りの作業を尋ね、なければ自分で閉じてもらいます。残骸は `reap` で片付け、動いているものは残して新しい dispatch を止め、system は自分たちのものではないと報告だけします。上限を超えて測ったベンチマークは証拠になりません。
   - `pkill`、`docker system prune`、`--force` は使いません。累積の数値（孤児プロセス、dangling volume、片付けるブランチと worktree）が設定の閾値に達すると `경보`（警報）を出します。
@@ -261,8 +261,8 @@ PR を受け持つスキルとマージする主体:
 - **使う場面:** チケットを読む、探す、作る、ラベルやコメントを付ける、状態を変えるとき、そしてスクリプトがチケットのデータを使うとき。
 - **内容:**
   - トラッカーは、プログラムの設定 → `~/.claude/agent-skills.json` → 既定値の linear の順に決めます。
-  - セッションでは MCP（Linear なら `orca linear`）を優先し、スクリプトは常に `tracker.py` を使います。`tracker.py` のコマンドは list、get、children、create、label、comment、transition です。transition はまず現在の状態を読み、すでにその段階かそれより先に進んでいるチケットは変えません。`--to review` は設定の `tracker.<adapter>.review_status` があればその名前の状態へ、なければ In Review へ、それもなければ名前に review を含む唯一の started 状態へ移します。
-  - 書き込みはすべて担当エージェントに任せ、読み取りだけをセッションで行います。担当はユーザーの指示 → 設定の `tracker.delegate_agent` → プラグイン agent `agent-skills:task-tracker` の順に決め、`"none"` ならセッションで直接書きます。`task-tracker` はトラッカーサイト固有の規則（プロジェクト、状態・遷移 id、ラベル、言語）を `tracker.rules_file` が指すユーザーの Markdown から毎回読み、キーがあるのにファイルがない・読めないときは推測せずに止まります。
+  - セッションでは、Linear はまず `orca linear` を使い（既定のテキスト出力。結果をパースするときだけ `--json`）、`orca linear` にない機能（ドキュメント、ファイル・画像のアップロード、diff レビュー、release、milestone・cycle など）だけを Linear MCP で行います。Jira は接続されていれば MCP を使います。スクリプトは常に `tracker.py` を使います。`tracker.py` のコマンドは list、get、children、create、label、comment、attach、transition です。transition はまず現在の状態を読み、すでにその段階かそれより先に進んでいるチケットは変えません。`--to review` は設定の `tracker.<adapter>.review_status` があればその名前の状態へ、なければ In Review へ、それもなければ名前に review を含む唯一の started 状態へ移します。
+  - 決まった milestone（状態の遷移、PR リンク、完了コメント）は `tracker.py` の 1 行（`transition`、`attach`、`comment`）でセッションから直接行い、MCP も担当エージェントも通しません。それ以外の書き込みはすべて担当エージェントに任せ、読み取りだけをセッションで行います。担当はユーザーの指示 → 設定の `tracker.delegate_agent` → プラグイン agent `agent-skills:task-tracker` の順に決め、`"none"` ならセッションで直接書きます。`task-tracker` はトラッカーサイト固有の規則（プロジェクト、状態・遷移 id、ラベル、言語）を `tracker.rules_file` が指すユーザーの Markdown から毎回読み、キーがあるのにファイルがない・読めないときは推測せずに止まります。
   - 値を伏せる読み取り経路（`<PERSON>` のようなエンティティのプレースホルダーや `****`）で読んだ値はデータではありません。判断や書き戻しの前に伏せない経路で読み直し、伏せた値をフィールドに書き戻しません。
   - 状態の語彙は triage、backlog、unstarted、started、completed、canceled です。
   - 完了条件は上位チケットの本文（`✅ 완료 조건`、`🚫 범위 밖`、`⏸️ 보류`）に、親のないチケットは受け入れ条件に置きます。NOW に分類したものだけがチケットになります。
@@ -451,7 +451,7 @@ PR を受け持つスキルとマージする主体:
   - なぜ尋ねているのか（変えたいのか、レビューするのか、初めてなのか）に合わせて持ち帰るべき点をいくつか決め、`how` と `why` を並列に呼んで一つの説明に編み上げます。`why` の確信度の表現はそのまま残します。
   - 一般的な定義から話し、今のコードにつなげます。いちばん小さく完結した答えを先に出し、聞かれたらさらに掘り下げます。
   - 動く部分が3つ以上なら、図を一枚ずつ足しながら描きます（mermaid、ASCII）。
-  - 文章は `write-plainly` に従い、ユーザーの言語で書きます。
+  - 文章は `write-plainly` に従います。
 
 ### tdd
 - **使う場面:** 安いローカルテストの対象があるバグを直すとき、または TDD・失敗するテスト・回帰テストを求められたとき。
@@ -638,6 +638,28 @@ hook 自身の判定が例外を出したら、その呼び出しは通し、警
 - レベル `guard.owner_check`：キーがなければ `warn` です。人に「owner_check: 기록 안 된 오너 항목 N」（記録されていないオーナー項目 N 件）を1行見せ、`$AGENT_SKILLS_STATE/owner-check.jsonl` に行を残します。systemMessage はモデルに届かないので、モデルには何も見えません。誤検知率はこの行から測ります。`deny` はキーでのみ有効になり、claim_check と同じくその停止を一度だけ止めて、モデルに記録させます（`stop_hook_active` なら通過）。`off` と `AGENT_SKILLS_OWNER_CHECK=0` で無効になります。
 - 判定は文言の一致なので、誤検知も見逃しもあります。そのため `warn` から始めます。
 
+### ターン終了時の検査
+
+`hooks/turn_check.py`（Stop・SubagentStop、Telegram 返信ツールの PreToolUse）と、`hooks/claim_check.py` のサブエージェント検査。スキルの文章にしか書かれていなかったターン終了時の習慣を、transcript から確かめます。モデルは呼ばず、どの検査も警告を出すだけでブロックしません。
+
+| キー | 対象 | 警告する場面 |
+|---|---|---|
+| `turn_check.wait_alive` | orchestrator・lead | ターンが終わるのに、動いているバックグラウンドの `orch inbox`・`orch wait`・`orch watch-cards` がない |
+| `turn_check.self_close` | worker、CLOSE カード | 成功の `worker_done` を送った、または CLOSE カードで、`skills-sync end-check` がカードを閉じてよい（`close-terminal`・`remove`）と言っている |
+| `turn_check.review_idle` | worker、サブエージェント | 最後のツール結果がレビュー報告（code-review 系スキル、レビューのサブエージェント、`codex`）か、ターンがバックグラウンド完了通知で始まったのに、次の呼び出しなしで終わる |
+| `turn_check.decision_registered` | orchestrator・lead | 返信が決定を求めているのに、このターンに `orch decide add`・`orch gate`・`orca orchestration gate-create` がない |
+| `turn_check.offer_phrase` | すべてのメインセッション | 返信の最後の3行が「말씀 주시면 …」「want me to file …」のように仕事を相手に返している |
+| `turn_check.stacks_down` | すべてのメインセッション | このセッションが `docker compose -p <project> up` で上げたプロジェクトに、`down` も `reap.py ledger add --kind compose-stack --keep` もない |
+| `turn_check.brief_render` | orchestrator・lead | 返信が状況報告の形（`🙋 지금 오너가 할 일`・`⏳ 다른 사람 대기`・`🧭 우선순위`・`## 보류`・`🔄 진행`・`## 요약` のうち二つ以上）なのに、このターンに `orch brief render` がない |
+| `turn_check.prs_actions` | すべてのメインセッション | `prs.py actions` が行を出したのに、このターンに `prs.py log` がない |
+| `turn_check.telegram_render` | orchestrator・lead | Telegram 返信（送信前に検査）が状況報告の形なのに、このターンに `orch brief render` がない |
+| `claim_check.subagent` | すべてのセッション | サブエージェントの報告だけを根拠に完了を言い、そのサブエージェントを起動した後にこのセッション自身の Bash 呼び出しがない |
+
+- キーがない、または `false`・`"off"` なら何もせず、出力もありません。`true`・`"warn"`（`"ask"`・`"deny"` も warn として読む）なら、人に `turn_check: <内容>` を1行見せ、検査ごとに1行を `$AGENT_SKILLS_STATE/turn-warnings.jsonl` に残します。モデルには届きません。このフックに deny はありません。
+- どの役割に届くかは `hooks/roles.py` の MATRIX（`turn_*`）が決めます。サブエージェントが受けるのは `review_idle` だけです。
+- `wait_alive` と `stacks_down` は transcript 全体を読みます（64MB を超えると読みません）。ほかはこのターンだけを見ます。別の名前で包んだ待機や compose 呼び出しは見逃します。
+- 判定はテキストとツール名の一致なので、誤検知も見逃しもあります。`turn-warnings.jsonl` を一週間見て検査ごとの誤検知を数えてから、キーを有効にします。
+
 ## pstack との違い
 
 ### ひと目で
@@ -653,7 +675,7 @@ hook 自身の判定が例外を出したら、その呼び出しは通し、警
 | プロジェクト運営 | orchestrate、autopilot、shipping のプレイブックと `orch.ts`（bun、TSV の台帳） | `orchestrate` スキル、`orch`（Python、JSONL の台帳）、着地ゲート、専有レーン、main ガーディアン、QA リード、ダッシュボード |
 | チケット・ノート | 前提なし | `use-tracker`（Linear、Jira）、`use-notes`（Obsidian、Markdown） |
 | 権限 | Cursor の設定 | `hooks/guard.py` が代わりに判定 |
-| 言語 | 英語、unslop の文体ルール | スキル本文は英語、文書・チケット・PR は韓国語。文体は `write-plainly`（韓国語・英語） |
+| 言語 | 英語、unslop の文体ルール | スキル本文は英語、文書・チケット・PR の言語は Claude の言語設定に従います。文体は `write-plainly`（韓国語・英語） |
 
 ### 持ってきたもの
 pstack のスキル58個（原則24個と、その他34個）のうち、原則24個すべてと、その他のうち16個を持ってきました。16個のうち benchmark-checklist はスキルではなく `principles` の参照ファイルとして入れました。固定したコミットは `99b609a`（0.15.32）で、ファイルの一覧は `vendor/pstack/manifest.json` にあります。
