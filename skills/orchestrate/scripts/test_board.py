@@ -376,6 +376,7 @@ assert "지난 보고 없음" in ok("brief", "render", "--periodic", "--now", NO
 ok("board", "drop", "notify")
 assert "알림 정리" not in ok("brief", "render", "--periodic", "--now", NOW)
 assert "notify/p51" not in in_state(store.board)["rows"]
+assert in_state(store.board)["leads"]["notify"].get("dropped_at"), "a dropped lead is marked, so it never reads as aged off"
 
 # A scope renders one program's rows only.
 scoped = ok("brief", "render", "--periodic", "--now", NOW, "--scope", "검색 개선")
