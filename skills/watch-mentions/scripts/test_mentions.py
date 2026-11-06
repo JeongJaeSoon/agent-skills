@@ -1,5 +1,5 @@
 """Rules of mentions.py: precheck, inbox check, plan window, ingest filters, bundle, commit. Run: python3 test_mentions.py"""
-import json, os, pathlib, shlex, subprocess, sys, tempfile
+import json, os, pathlib, re, shlex, subprocess, sys, tempfile, time
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import mentions as m
 
@@ -33,6 +33,8 @@ assert m.precheck(cfg, state, NOW, dead)[0] == 2
 # First plan looks back lookback_hours and takes the lock.
 p = m.plan(cfg, state, NOW)
 assert p["oldest"] == NOW - 24 * 3600 and not p["read_private"]
+# The round reads where to send and whether to file from the plan, never from the config file or the skill.
+assert (p["inbox_to"], p["file_tickets"], p["tracker_project"]) == ("run:run_0FAKE", False, None), p
 kinds = [s["kind"] for s in p["searches"]]
 assert kinds == ["mention", "name", "name", "thread"], kinds
 assert p["searches"][0]["keywords"] == [f"<@{ME}>"]
@@ -140,7 +142,7 @@ line = m.schedule_cmd(pathlib.Path("/abs/skills/watch-mentions/scripts/mentions.
 assert line[:3] == ["orca", "automations", "create"] and "--write" not in line
 pre = line[line.index("--precheck") + 1]
 assert pre == "python3 /abs/skills/watch-mentions/scripts/mentions.py precheck", pre
-assert "python3 /abs/skills/watch-mentions/scripts/mentions.py plan " in line[line.index("--prompt") + 1]
+assert "`python3 /abs/skills/watch-mentions/scripts/mentions.py plan`" in line[line.index("--prompt") + 1]
 assert line[line.index("--timezone") + 1] == "Asia/Seoul" and line[line.index("--trigger") + 1] == "*/20 9-20 * * 1-5"
 # A non-default state rides as --state on the precheck and every command of the prompt, never as an env prefix.
 off = m.schedule_cmd(pathlib.Path("/abs/mentions.py"), cfg, "path:/abs", state="/scratch dir")
@@ -153,6 +155,37 @@ assert "--extra-agent-args=--model sonnet" in m.schedule_cmd(pathlib.Path("/abs/
 assert not any(a.startswith("--extra-agent-args") for a in m.schedule_cmd(pathlib.Path("/abs/mentions.py"), {**cfg, "model": "sonnet"}, "path:/abs", "codex"))
 hint = m.runner_hint(pathlib.Path("/abs dir"))
 assert "--repo 'path:/abs dir'" in hint and "--no-parent" in hint and "settings.local.json" in hint, hint
+
+# The prompt alone runs the round: it never sends the session to the skill body, and it carries every rule the round
+# needs (privacy boundary, the empty round, the inbox check, commit only after a successful send, no Slack writes).
+P = "python3 /abs/skills/watch-mentions/scripts/mentions.py"
+full = line[line.index("--prompt") + 1]
+assert "스킬" not in full.split("use-tracker")[0], "the round must not need the watch-mentions skill body"
+for sub in ("plan", "ingest", "bundle", "inbox", "commit"):
+    assert f"`{P} {sub}" in full, sub
+for rule in ("slack_search_public", "slack_search_public_and_private", "read_private", "slack_read_thread", "detailed",
+             "include_context", "max_threads", "kinds", '"kind": "mention|name|thread"', "file_tickets", "tracker_project",
+             "inbox_to", "watch-mentions: <N>건", "데이터", "permalink"):
+    assert rule in full, rule
+for cat in m.CATEGORIES:
+    assert f"`{cat}`" in full, cat
+empty = full.index("`new` 가 비어 있으면")
+assert full.index(f"`{P} commit`", empty) < full.index("`work`"), "the empty round commits without a file and stops"
+assert "보내지도 commit 하지도 않" in full and "전송이 성공했을 때만" in full, "a failed send leaves the items for a retry"
+order = [full.index(s) for s in (f"`{P} inbox`", "orca orchestration send", "전송이 실패하면", f"`{P} commit <scratchpad>/items.json`")]
+assert order == sorted(order), "inbox check, then the send, then its failure branch, and commit last"
+# The owner's own message that opened a thread can be older than oldest; only the replies are cut by it.
+assert "본인 글이 oldest 보다 오래돼도 cursor 를 따라가며" in full and "max_threads 개 모일 때까지" in full
+assert "Slack 에 쓰지 않는다" in full and "다시 시도하지 않" in full
+assert "--state '/scratch dir'" in prompt.split("ingest")[1] and "--state '/scratch dir'" in prompt.split("commit")[-1]
+# --edit keeps an automation's id and rewrites what this script owns; a removed mentions.model clears the stored extras.
+ed = m.schedule_cmd(pathlib.Path("/abs/mentions.py"), cfg, "path:/abs", edit="auto_0FAKE", state=m.STATE_HOME)
+assert ed[:4] == ["orca", "automations", "edit", "auto_0FAKE"] and "--name" not in ed and "--workspace" not in ed, ed
+assert ed[ed.index("--precheck") + 1] == "python3 /abs/mentions.py precheck" and "--extra-agent-args=" in ed
+assert ed[ed.index("--prompt") + 1] == m.schedule_cmd(pathlib.Path("/abs/mentions.py"), cfg, "path:/abs",
+                                                      state=m.STATE_HOME)[-2]
+assert "--extra-agent-args=--model sonnet" in m.schedule_cmd(pathlib.Path("/abs/mentions.py"), {**cfg, "model": "sonnet"},
+                                                             "path:/abs", edit="auto_0FAKE")
 
 # CLI: precheck exit codes and plan refusing a second run. A stub orca on PATH answers for inbox_to.
 fakebin = state.parent / "bin"
@@ -186,4 +219,32 @@ r = subprocess.run([sys.executable, S, "commit", "--state", str(flagged), str(on
 assert r.returncode == 0 and "1 items marked seen" in r.stdout, r
 r = run("ingest", "--state", str(flagged))
 assert r.returncode != 0 and "file argument is required" in r.stderr, r
+r = run("schedule", "--edit", "auto_0FAKE")
+assert r.returncode == 0 and r.stdout.startswith("orca automations edit auto_0FAKE "), r
+
+# One round driven only by the commands its prompt names, in a scratch state: an empty round, then a round whose send
+# fails (items stay unseen and come back), then one that sends and commits.
+roundstate = state.parent / "round"
+rp = m.schedule_cmd(pathlib.Path(S), cfg, "path:/abs", state=roundstate)
+rp = rp[rp.index("--prompt") + 1]
+cmds = {c.split()[2]: [w for w in shlex.split(c) if not w.startswith("<")] for c in re.findall(r"`(python3 [^`]+)`", rp)}
+assert set(cmds) == {"plan", "ingest", "bundle", "inbox", "commit"}, cmds
+sh = lambda sub, *a: subprocess.run([*cmds[sub][:3], *a, *cmds[sub][3:], "--config", str(conf)], env=env,
+                                    capture_output=True, text=True)
+assert sh("plan").returncode == 0 and (roundstate / "mentions" / "lock.json").exists()
+assert sh("commit").returncode == 0 and not (roundstate / "mentions" / "lock.json").exists()
+hit = state.parent / "cands.json"
+hit.write_text(json.dumps([c("C1", f"{time.time() - 60:.6f}")]))
+for attempt in ("fails", "sends"):
+    if attempt == "sends":
+        (roundstate / "mentions" / "lock.json").unlink()  # the failed round's lock, expired
+    assert sh("plan").returncode == 0
+    new = json.loads(sh("ingest", str(hit)).stdout)["new"]
+    assert len(new) == 1, (attempt, new)
+    picked = state.parent / "picked.json"
+    picked.write_text(json.dumps([{**new[0], "category": "question", "summary": "s"}]))
+    assert sh("bundle", str(picked)).stdout.startswith("Slack 새 항목 1건")
+    assert sh("inbox").returncode == 0
+assert sh("commit", str(picked)).returncode == 0
+assert sh("plan").returncode == 0 and json.loads(sh("ingest", str(hit)).stdout)["new"] == [], "a sent item is not resent"
 print("ok")

@@ -30,6 +30,10 @@ report with its §4 record line:
   latest comment already says this, do not repeat it.
 - The project's worklog (`use-notes`) → one line on what this session did, if not already
   written.
+- An orchestrator or lead → `orch handoff save --next "<first step for the next session>"` (a
+  lead adds `--key lead:<slug>`) with every `--waiting`, `--question` and `--reply` that still
+  holds, since each save replaces the last; `agent-skills:reboot` reads it back (`orchestrate`
+  `references/top-level.md`, "Restart with a handoff").
 - No ticket (a local diagnosis, a probe) → the worklog line is enough. Do not file a ticket
   just to close it.
 - The ticket has a parent epic → re-check its exit condition (principle **Work to an Exit
@@ -110,7 +114,7 @@ Telegram), with at most one line before it, never a rewrite of it; `brief` names
 ## 7. An Orca worker closes itself when it settles
 
 A worker is a session Orca dispatched: its prompt carries an Orca preamble with a `worker_done`
-command. Nobody says "종료해줘" to it, and an orchestrator or lead that is not running `orch wait` never
+command. Nobody says "종료해줘" to it, and an orchestrator or lead whose inbox wait has lapsed never
 closes it, so the worker closes itself as the last step of its task. The preamble's "take no
 further actions after worker_done" still holds: only the closing calls follow `worker_done`, in
 the same turn, and nothing runs after them.
