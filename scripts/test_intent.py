@@ -2,10 +2,9 @@
 
 A tracked non-test .py file that calls plistlib.dump/dumps must be a row of the table (status `exception` or
 `migrating`), and an `exception` row must still write one. Run: python3 scripts/test_intent.py"""
-import pathlib, re, subprocess, sys
+import ast, pathlib, re, subprocess, sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-WRITES = re.compile(r"\bplistlib\.dumps?\(")
 ROW = re.compile(r"^\|\s*`([^`]+)`\s*\|[^|]*\|\s*(exception|migrating)\s*\|\s*$")
 
 
@@ -14,10 +13,34 @@ def allowed(text):
     return {m.group(1): m.group(2) for m in map(ROW.match, text.splitlines()) if m}
 
 
+def writes_plist(source):
+    """True when the code calls plistlib.dump/dumps, as `plistlib.dumps(...)`, `import plistlib as p; p.dumps(...)` or
+    `from plistlib import dumps` (comments and strings do not count). An unparsable file is read as writing one."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return True
+    mods, funcs = set(), set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Import):
+            mods |= {a.asname or a.name for a in n.names if a.name == "plistlib"}
+        elif isinstance(n, ast.ImportFrom) and n.module == "plistlib":
+            funcs |= {a.asname or a.name for a in n.names if a.name in ("dump", "dumps")}
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Call):
+            f = n.func
+            if isinstance(f, ast.Attribute) and f.attr in ("dump", "dumps") and isinstance(f.value, ast.Name) \
+                    and f.value.id in mods:
+                return True
+            if isinstance(f, ast.Name) and f.id in funcs:
+                return True
+    return False
+
+
 def writers(files, read):
     """Non-test .py paths whose source writes a plist."""
     return sorted(f for f in files if f.endswith(".py") and not pathlib.PurePath(f).name.startswith("test_")
-                  and WRITES.search(read(f)))
+                  and writes_plist(read(f)))
 
 
 def problems(table, found):
@@ -30,8 +53,15 @@ def problems(table, found):
 # the rule on fixed input: one case allowed, one refused
 SAMPLE = "| `a/ok.py` | reason | exception |\n| `a/old.py` | gone soon | migrating |\n| not a row | x | exception |\n"
 assert allowed(SAMPLE) == {"a/ok.py": "exception", "a/old.py": "migrating"}
-src = {"a/ok.py": "plistlib.dumps(x)", "b/new.py": "p.write_bytes(plistlib.dumps(spec))", "a/test_ok.py": "plistlib.dumps(1)",
-       "c/read.py": "plistlib.loads(b)", "a/old.py": "pass"}
+src = {"a/ok.py": "import plistlib\nplistlib.dumps(x)", "b/new.py": "import plistlib\np.write_bytes(plistlib.dumps(spec))",
+       "a/test_ok.py": "import plistlib\nplistlib.dumps(1)", "c/read.py": "import plistlib\nplistlib.loads(b)", "a/old.py": "pass"}
+# spellings that must still count, and mentions that must not
+for yes in ("import plistlib\nplistlib.dumps (spec)", "from plistlib import dumps\ndumps(spec)",
+            "from plistlib import dump as d\nd(spec, f)", "import plistlib as pl\npl.dump(spec, f)", "def broken(:"):
+    assert writes_plist(yes), yes
+for no in ("import plistlib\n# plistlib.dumps(spec)\nplistlib.loads(b)", "x = 'plistlib.dumps(spec)'", "dumps(spec)",
+           "import json\njson.dumps(spec)"):
+    assert not writes_plist(no), no
 found = writers(src, src.__getitem__)
 assert found == ["a/ok.py", "b/new.py"], found
 assert problems(allowed(SAMPLE), found) == ["b/new.py: writes a LaunchAgent plist but is not a row of intent.md's exception table"]
