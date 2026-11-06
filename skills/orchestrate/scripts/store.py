@@ -1526,7 +1526,7 @@ BOARD_FIELDS = {"doing": ("title", "owner", "next", "waiting", "since"), "later"
 def _legacy_board(p):
     """(board, problems, extra) from a board.json. problems stop the import; extra names fields no column holds, which
     stay in the backup and in each item's import event."""
-    out, bad, extra = {"rows": {}, "order": [], "leads": {}, "groups": {}, **{lane: [] for lane in LANES}}, [], set()
+    out, bad, extra = {"rows": {}, "order": [], "leads": {}, "groups": {}, "annots": {}, **{lane: [] for lane in LANES}}, [], set()
     if p.is_dir():
         return out, [f"{p.name} is a directory but the step that left it is not recorded: put the file back first"], extra
     if not p.is_file():
@@ -1537,7 +1537,8 @@ def _legacy_board(p):
         return out, [f"{p.name}: not JSON ({e})"], extra
     if not isinstance(data, dict):
         return out, [f"{p.name}: not an object"], extra
-    for key, kind in (("rows", dict), ("order", list), ("leads", dict), ("groups", dict), *((lane, list) for lane in LANES)):
+    for key, kind in (("rows", dict), ("order", list), ("leads", dict), ("groups", dict), ("annots", dict),
+                      *((lane, list) for lane in LANES)):
         if isinstance(data.get(key) or kind(), kind):
             out[key] = data.get(key) or kind()
         else:
@@ -1572,6 +1573,9 @@ def _legacy_board(p):
                 or g["priority"].split(":", 1)[0] != str(int(g["priority"].split(":", 1)[0]))):  # and no leading zero
             bad.append(f"priority rule {gid}: not a group with id prio:MATCH, a match of worktree:ID, program:NAME or "
                        "repo:OWNER/NAME, and a priority of RANK:NAME")
+    for aid, a in out["annots"].items():
+        if not isinstance(a, dict) or a.get("id") != aid or a.get("kind") != ANNOT_KIND or not aid.startswith("card:") or len(aid) == 5:
+            bad.append(f"annotation {aid}: not a row of kind {ANNOT_KIND} with the id card:<worktree>")
     return out, bad, extra
 
 
@@ -1636,6 +1640,7 @@ def _plan_board(board_, lines, state, ts, start=1):
             out["rows_cut"] += 1
         out["rows"].append((pos, r, board_["rows"][rid]))
     out["groups"] = sorted((board_.get("groups") or {}).items())
+    out["annots"] = sorted((board_.get("annots") or {}).items())
     out["next"] = n
     return out
 
@@ -1658,6 +1663,9 @@ def _fill_board(db, plan, lines, by="import"):
     for n, (gid, g) in enumerate(plan["groups"]):
         _insert_row(db, g, GROUP_POS + n)
         _event(db, "board_row", gid, "import", by, g)
+    for n, (aid, a) in enumerate(plan["annots"]):
+        _insert_row(db, a, ANNOT_POS + n)
+        _event(db, "board_row", aid, "import", by, a)
     for name, l in plan["leads"]:
         _insert_lead(db, name, l)
         _event(db, "lead", name, "import", by, l)
@@ -2076,7 +2084,9 @@ def _export_board(dest):
     drop = lambda row: {k: v for k, v in row.items() if k != "done_at" or v}  # noqa: E731
     board_json = {"v": 1, "rows": {k: drop(r) for k, r in b["rows"].items()}, "order": b["order"], "leads": b["leads"], **lanes,
                   # the 4a code ignores a key it does not know, and the next import puts the priority rules back
-                  **({"groups": b["groups"]} if b["groups"] else {})}
+                  **({"groups": b["groups"]} if b["groups"] else {}),
+                  # card annotations: 4a ignores the key too, and the next import puts them back
+                  **({"annots": b["annots"]} if b["annots"] else {})}
     fleet.write_atomic(dest / "board.json", json.dumps(board_json, ensure_ascii=False, indent=1) + "\n")
     fleet.write_atomic(dest / "tidy.jsonl", "".join(json.dumps(l, ensure_ascii=False, separators=(",", ":")) + "\n" for l in lines))
     text = (data or b"").decode()

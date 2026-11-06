@@ -305,7 +305,7 @@ def annot_set(rid, **fields):
         if cur.get("next") and not cur.get("owner") and not rowstate.POST_MERGE.search(cur["next"]):
             raise ValueError("--next without --owner is a step after merge (release, deploy, ...); the card's own milestones "
                              "are its report's")
-        if not any(k in cur for k in ANNOT_FIELDS):
+        if not any(k in cur for k in ANNOT_FIELDS) and not cur.get("aliases"):  # aliases carry a close the card inherits
             store["annots"].pop(rid, None)
             return None
         cur["reported_at"] = fleet.iso(fleet.utcnow())
@@ -314,16 +314,17 @@ def annot_set(rid, **fields):
     return change(go)
 
 
-def annot_fields(r, rows):
+def annot_fields(r, rows, me=None):
     """What a card-linked row says that an annotation may hold: its phase (the title of the phase row it hangs under),
-    progress, after, and the owner block or post-merge step of owner/next. A milestone copy in next stays in the event."""
+    progress, after, and the owner block or post-merge step of owner/next (me: the owner's login, as rowstate reads it).
+    A milestone copy in next stays in the event."""
     out = {}
     parent = rows.get(r.get("parent")) or {}
     if parent.get("kind") == "phase" and parent.get("title"):
         out["phase"] = parent["title"]
     out.update({k: r[k] for k in ("progress", "after") if r.get(k)})
     owner, nxt = (r.get("owner") or "").strip(), (r.get("next") or "").strip()
-    if nxt and owner and (r.get("status") == "owner" or owner.lower() in rowstate.OWNER_NAMES):
+    if nxt and owner and (r.get("status") == "owner" or rowstate.is_owner(owner, me)):
         out.update(owner=owner, next=nxt)
     elif nxt and rowstate.POST_MERGE.search(nxt):
         out["next"] = nxt
@@ -363,7 +364,8 @@ def annot_plan(store=None):
         if len(rids) > 1:
             left += [(rid, f"{len(rids)} rows point at card {wt}", f"orch board drop {rid}") for rid in rids]
             del move[wt]
-    return {wt: (rids[0], annot_fields(rows[rids[0]], rows)) for wt, rids in move.items()}, left
+    me = (fleet.read_json(fleet.state_dir() / "prs.json", {}) or {}).get("me")
+    return {wt: (rids[0], annot_fields(rows[rids[0]], rows, me)) for wt, rids in move.items()}, left
 
 
 def annot_migrate(apply=False):

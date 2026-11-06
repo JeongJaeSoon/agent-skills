@@ -32,8 +32,9 @@ def write_state(*cards):
         "sessions": [{**sess("root", "root", "orchestrator"), "parent": None, "terminals": [{"handle": "term_root"}]}, *cards]}))
 
 
-CARDS = [sess("wt-card", "abc-1-login"), sess("wt-other", "other-card"), sess("wt-third", "third-card")]
+CARDS = [sess("wt-card", "abc-1-login"), sess("wt-other", "other-card"), sess("wt-third", "third-card"), sess("wt-mine", "mine-card")]
 write_state(*CARDS)
+fleet.write_atomic(sd / "prs.json", json.dumps({"me": "me-login", "prs": {}}))  # the owner's login, as the collector writes it
 
 
 def row(rid, **kw):
@@ -58,6 +59,8 @@ LEGACY = {"v": 1, "order": [], "leads": {}, "doing": [], "later": [], "todo": []
     "d2": row("d2", title="d2 job", repo="acme/app", worktree="wt-third"),
     # work with no session: not a card's row, stays as it is
     "free": row("free", title="free", repo="acme/app"),
+    # blocked on the owner by login, not by the word 오너
+    "mine": row("mine", title="mine job", repo="acme/app", worktree="wt-mine", owner="me-login", next="Approve the change"),
 }}
 CLOSE = [{"ev": "done", "id": "row:P/one", "ts": "2026-10-02T00:00:00Z", "by": "owner", "rule": "manual", "evidence": "merged",
           "label": "login work"}]
@@ -139,7 +142,8 @@ assert code == 1 and "no --force" in err and board.read()["doing"] == [], err
 # ---- migration: a plan with the evidence of each row; nothing is written without --apply
 board.set_row("card:wt-other", phase="수동")  # a field already written wins over the row's
 move, left = board.annot_migrate()
-assert sorted(move) == ["wt-card", "wt-other"], move
+assert sorted(move) == ["wt-card", "wt-mine", "wt-other"], move
+assert move["wt-mine"] == ("mine", {"owner": "me-login", "next": "Approve the change"}), "the owner's login is an owner block"
 assert move["wt-card"] == ("P/one", {"phase": "Stage 2", "progress": [2, 5], "after": "acme/app#3", "owner": "오너", "next": "직접 머지"}), move
 assert move["wt-other"] == ("P/moved", {"phase": "Stage 2"}), "a milestone copy in next is not carried"
 assert sorted(r for r, _, _ in left) == ["both", "d1", "d2", "gone", "twin"], left
@@ -148,7 +152,7 @@ assert "no card of Orca's" in why["gone"] and "2 cards" in why["both"] and "2 ro
 assert "2 cards" in why["twin"], "two names in the title are evidence for two cards, not none"
 rows_before = json.dumps(board.read()["rows"], sort_keys=True)
 code, out, err = orch("board", "annot-migrate")
-assert code == 0 and out.startswith("would move 2 row(s)") and "중복 5건" in out and "orch board drop gone" in out, (out, err)
+assert code == 0 and out.startswith("would move 3 row(s)") and "중복 5건" in out and "orch board drop gone" in out, (out, err)
 assert json.dumps(board.read()["rows"], sort_keys=True) == rows_before, "a dry run writes nothing"
 # the apply waits for the renderer: a moved row would leave the screen with nothing in its place
 refused(lambda: board.annot_migrate(apply=True), "A-ANNOT-b")
@@ -175,6 +179,20 @@ assert orig["status"] == "owner" and orig["next"] == "직접 머지" and importe
 latest = store.latest()
 assert latest["row:P/one"]["ev"] == "done" and latest["card:wt-card"] == {**latest["row:P/one"], "id": "card:wt-card"}, "the old close reaches the card"
 assert "card:wt-other" not in latest
+
+# ---- clearing every field keeps the alias (the close the card inherits), and an export keeps the annotations
+board.set_row("card:wt-card", owner="-", phase="-", progress="-", after="-")
+kept = board.read()["annots"]["card:wt-card"]
+assert kept["aliases"] == ["row:P/one"] and not {"phase", "progress", "after", "owner", "next"} & set(kept), kept
+assert store.latest()["card:wt-card"]["ev"] == "done"
+saved_annots = board.read()["annots"]
+exported = store._export_board(tmp / "export")[0]
+saved = json.loads((exported / "board.json").read_text())
+assert saved["annots"] == saved_annots and not [k for k in saved["rows"] if k.startswith("card:")], saved
+store.load_board(saved, CLOSE)  # the closes travel in tidy.jsonl
+assert board.read()["annots"] == saved_annots, "annotations come back through the import"
+(exported / "bad.json").write_text(json.dumps({**saved, "annots": {"card:": {"id": "card:", "kind": "annot"}, "x": {"id": "x"}}}))
+assert len([p for p in store._legacy_board(exported / "bad.json")[1] if "annotation" in p]) == 2
 
 # ---- running it again changes nothing
 snap = json.dumps([board.read()["annots"], board.read()["rows"]], sort_keys=True)
