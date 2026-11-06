@@ -63,7 +63,7 @@ elif a[:1] == ["api"] and "/compare/" in a[1]:
     if left == "mb":
         print(json.dumps({"files": [{"filename": f} for f in st.get("base_changed", [])]}))
     else:
-        p = pr(right[1:])
+        p = next((q for q in st["prs"].values() if q.get("headRefOid") == right), None) or pr(right[1:])
         print(json.dumps({"behind_by": p.get("behind", 0), "merge_base_commit": {"sha": "mb"},
                           "files": [{"filename": f} for f in p["files"]]}))
 elif a[:2] == ["run", "list"] and "--branch" in a:

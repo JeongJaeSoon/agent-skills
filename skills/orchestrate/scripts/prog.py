@@ -145,7 +145,10 @@ Usage: orch <command> <slug> [options]
                                      orchestrate.order_auto_close is true. shadow sets those events against what the
                                      sessions closed by hand
   db import [--dry-run | --apply] [--rehearsal] | export --legacy --target 4a|pre-4a DIR | dump [TABLE]
-  db backup FILE | restore FILE [--rehearsal] | rollback 4b DIR [--rehearsal] | cutover-plan 4a|4b
+  db backup FILE | restore FILE [--rehearsal] | rollback 4b|state DIR [--rehearsal] | cutover-plan 4a|4b
+  db state [--auto]                  acks.jsonl and stages.json -> tables, after a backup, with tombstones in their place
+                                     (setup runs it with --auto after an update; a rerun changes nothing);
+                                     export --legacy --target state DIR writes both files back for rollback state DIR
   db migrate [--check] | init        migrate is the whole cutover in one rerunnable command, run by the owner from a
                                      plain terminal (cutover.py); init is for a PC with no state (setup runs it)
                                      no slug: agent-skills.db (store.py). import moves decisions.json,
@@ -409,6 +412,17 @@ class Program:
         row = {"ts": now(), "ev": ev, **{k: v for k, v in fields.items() if v is not None}}
         with self.locked(), self.ledger_path.open("a") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        return row
+
+    def append_if(self, ev, ok, **fields):
+        """append, unless ok(events) is false; None then. One lock over the read and the write, so a row another
+        process appends in between is seen by ok, not overwritten in effect."""
+        row = {"ts": now(), "ev": ev, **{k: v for k, v in fields.items() if v is not None}}
+        with self.locked():
+            if not ok(self.events()):
+                return None
+            with self.ledger_path.open("a") as f:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
         return row
 
     def append_once(self, ev, seen, **fields):
@@ -2244,17 +2258,34 @@ SELF_REVIEWERS = {"self", "implementer", "author"}
 
 
 def author_sessions(branch):
-    """Terminal handles of the card whose worktree holds the PR's branch: the sessions that wrote it. Empty when Orca
-    does not answer or no card holds the branch, which leaves the author unverified."""
+    """Terminal handles of every card whose worktree holds the PR's branch: the sessions that wrote it. Empty when Orca
+    does not answer for any one of them or no card holds the branch, which leaves the author unverified.
+    A branch selector is rejected as ambiguous once a closed card's worktree and its successor both hold the branch,
+    so the worktrees are listed and each is asked by id."""
     if not branch:
         return []
     try:
-        out = orca_json("terminal", "list", "--worktree", f"branch:{branch}")
-        rows = out["terminals"]
+        listing = orca_json("worktree", "list")
+        wts = listing["worktrees"]
         # A cut-off list can miss the author, and a reviewer equal to the missing one would pass.
-        if out.get("truncated") or not isinstance(rows, list):
+        if listing.get("truncated") or not isinstance(wts, list) \
+                or (listing.get("hostScope") or {}).get("omittedHostIds"):
             return []
-        return sorted({t["handle"] for t in rows if isinstance(t.get("handle"), str) and t["handle"]})
+        handles = set()
+        for w in wts:
+            if w.get("branch") not in (branch, f"refs/heads/{branch}"):
+                continue
+            out = orca_json("terminal", "list", "--worktree", f"id:{w['id']}")
+            rows = out["terminals"]
+            if out.get("truncated") or not isinstance(rows, list):
+                return []
+            # An answer is trusted only when it says it covered this worktree's host: an empty or partial answer from
+            # a host Orca did not reach says nothing about its sessions. Another host being omitted does not matter.
+            scope, host = out.get("hostScope") or {}, w.get("hostId")
+            if not host or host not in (scope.get("hostIds") or []) or host in (scope.get("omittedHostIds") or []):
+                return []
+            handles |= {t["handle"] for t in rows if isinstance(t.get("handle"), str) and t["handle"]}
+        return sorted(handles)
     except (SystemExit, ValueError, KeyError, TypeError, AttributeError, OSError):
         return []
 
@@ -2557,7 +2588,11 @@ def merge_unit(p, pr, unit, klass, events, onto=None, stacked=False, expect=None
             return 3, f"act: #{n} has {threads} unresolved review thread(s): answer and resolve them, then land again"
     if expect:
         # The verdict the executor checked may have been replaced since: merge only on the one standing now.
-        latest = pr_state(p.events()).get(pr, {}).get("verdict") or {}
+        import autoqueue
+        now_events = p.events()
+        if autoqueue.withdrawn(now_events, pr):  # a stop recorded during the checks is read from this same snapshot
+            return 3, f"act: #{pr}'s land was stopped during the checks: record a verdict at the head or land again"
+        latest = pr_state(now_events).get(pr, {}).get("verdict") or {}
         p.land_verdict = latest
         if latest.get("sha") != expect or latest.get("result") != "pass" or \
                 (verdict_sources is not None and (latest.get("source") not in verdict_sources
@@ -2877,7 +2912,9 @@ def land_executor(repo=None):
     if not isinstance(sources, list) or not all(isinstance(s, str) and s for s in sources):
         # A bare string would match by substring ("review:codex" in "review:codex-old") and index by letter.
         sys.exit(f"{path}: orchestrate.land_executor.verdict_sources must be a list of sources, not {sources!r}")
-    return {"repos": repos, "scope": scope, "verdict_sources": sources, "max_wait_hours": hours}
+    import autoqueue
+    return {"repos": repos, "scope": scope, "verdict_sources": sources, "max_wait_hours": hours,
+            "auto_queue": autoqueue.config(cfg.get("auto_queue"))}
 
 
 def executor_for(repo):
@@ -3432,13 +3469,22 @@ SELF_CHECK = ("Self-check: is any work left on this card? If none, run end-sessi
               "If some, say what it is and keep it.")
 
 
-def settle_sweep(workers, worktrees, skip=(), holds=card_holds, asked=None, now=None):
+def auto_release_ahead(w, now):
+    scripts = str(pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    import auto_release
+    return auto_release.ahead(w, now)
+
+
+def settle_sweep(workers, worktrees, skip=(), holds=card_holds, asked=None, now=None, clock=time.time):
     path = {w["id"]: w.get("path") for w in worktrees if not w.get("isMainWorktree")}
     asked = {} if asked is None else asked
     seen, out, kept = {}, [], []
     for w in workers:
         d, res, taken = w.get("dispatchId"), w.get("resource") or {}, taken_over(w)
-        if not d or (not taken and (w.get("terminalState") not in ("reclaimable", "release_unknown") or d in skip)):
+        if not d or (not taken and (w.get("terminalState") not in ("reclaimable", "release_unknown") or d in skip
+                                    or auto_release_ahead(w, clock()))):
             continue
         p = path.get(res.get("worktreeId"))
         if p and p not in seen:

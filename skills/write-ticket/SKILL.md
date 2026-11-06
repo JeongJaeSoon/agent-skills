@@ -18,7 +18,7 @@ Every tracker operation here ("file a ticket", "read a template", "search the tr
 - **Improvement feedback on in-flight work** ("이거 더 낫게", "이 부분도 고쳐줘" about a
   running card or PR). It becomes its own ticket. Never append it to the running task's scope,
   brief or PR.
-- **A finding made while working** (review, E2E, `handoff-ticket` §0). Classify it first
+- **A finding made while working** (review, E2E, `dispatch-card` next-ticket mode §0). Classify it first
   (`use-tracker` [references/exit-condition.md](../use-tracker/references/exit-condition.md)):
   only NOW becomes a follow-up ticket (§4).
 
@@ -114,7 +114,7 @@ File without asking first: the request is the approval, and so is a NOW finding.
 each ticket's URL with a one-line summary (title, type, relations) and any assumption or scope
 call you made that the request did not state, so a misread is caught on the ticket; a batch is
 reported together. A NOW follow-up a session files on its own (a finding made while working a ticket,
-`handoff-ticket` §0, a review or E2E run) is the same: its class, and whether two findings share
+`dispatch-card` next-ticket mode §0, a review or E2E run) is the same: its class, and whether two findings share
 one ticket, is the session's call, and "shall I file this?" is not a question to put to the
 user. When the user's own instructions say to show drafts first, show them first.
 
