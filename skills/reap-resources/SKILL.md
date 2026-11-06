@@ -179,50 +179,54 @@ New session files appear every day, so the precheck looks at program and state-f
 ## Scheduled run
 
 ```bash
-python3 "$R" precheck    # janitor kinds + user-folder, program, state-file; writes <state>/janitor-plan.json; exit 0 when there are targets, unless they are exactly what the last reap failed on, less than a day ago, or the same set was planned reap.plan_repeat times with no reap since (retried once a day)
-python3 "$R" precheck --load    # the same, but exit 1 at once unless the 5-minute load is at the limit
+python3 "$R" precheck --act    # the scheduled round: plan, reap that plan in this process; exit 0, or 2 when it could not run
+python3 "$R" precheck --load --act    # the same, but exit 0 at once unless the 5-minute load is at the limit
+python3 "$R" precheck    # plan only: writes <state>/janitor-plan.json, exit 0 when there are targets (see below)
 python3 "$R" schedule [--load]    # prints the `orca automations create` command; nothing is created without --write
 ```
 
-`schedule` builds an existing-workspace automation on `17 */3 * * *` (every 3 hours) whose precheck is
-`python3 <absolute reap.py> precheck` (its cwd is the repo's main checkout, so paths are absolute)
-with `--precheck-timeout 300`: Orca's default 60 seconds is shorter than a precheck that reads `gh` and git for dozens of cards.
-`schedule --load` builds the second job, `agent-skills janitor load`, on `27,57 * * * *` with `precheck --load` and the
-same prompt: a loaded machine is when finished cards cost the most. Its precheck reads only the load average and goes on
-to the full precheck when the 5-minute load is at `reap.load_limit` (default the CPU count), the periodic job is
+The round runs no model. Orca runs a job's precheck itself, outside any Claude session, so the reap there meets no
+permission prompt or auto-mode classifier, and an exit other than 0 starts no agent (the run shows as
+`skipped_precheck`). The job runs `precheck --act` through the shared agentless-job runner, `scripts/orca_job.py run
+janitor -- …`, which records the round's exit in `<state>/jobs/janitor.json` (setup-pc warns on a failed or late one)
+and always exits 1. `precheck --act` itself: under `<state>/janitor.lock` (a second round meanwhile exits at once)
+it scans the janitor kinds (user-folder, program and state-file at most once a day), writes the plan, and runs `reap`'s
+own path on it in the same process: the scheduled kinds only, each target re-scanned and acted on only with the same
+identity, inside its lock, after the guard passes again. A target whose act failed rests a day, on its own
+(`<state>/janitor-fails.json`); a chrome-window is never acted on, since closing it needs a URL check in a browser.
+What a person has to look at (cards judged 사람 결정, chrome windows, resting targets) goes to `reap.inbox_to` as one
+message, sent again only when a key not in the last sent set appears. Each round leaves one row in
+`<state>/janitor-runs.jsonl` (targets, acted, skipped, failed, left past the 480-second budget, error; an act still running at 570 seconds is cut and recorded as failed), the only record
+of a cleanup: Orca's run history shows a skip either way. `inbox_to` and `reap.pressure.notify_to` are Orca addresses.
+Use `run:<id>`: a `term_` handle changes when its terminal restarts, and `orch patrol` raises one Orca no longer lists
+(T).
+
+`skills-sync setup enable janitor` registers it as one of setup's agentless shell jobs: `*/30 * * * *`, precheck
+`orca_job.py run janitor --timeout 580 -- python3 <absolute reap.py> precheck --act` with `--precheck-timeout 600`, and
+the shared prompt that only says the precheck misbehaved. `schedule` prints the same precheck and trigger for a runner
+workspace, with a prompt for Orca's Run now (which skips the precheck): the agent runs `precheck --act` once and reports.
+`schedule --load` builds the second job, `agent-skills janitor load`, on `27,57 * * * *` with `precheck --load --act`
+through the same runner (`orca_job.py run janitor-load`):
+a loaded machine is when finished cards cost the most. Its precheck reads only the load average and goes on
+to the full round when the 5-minute load is at `reap.load_limit` (default the CPU count), the periodic job is
 registered and on (removed, or an unreadable automation list, counts as off), and no precheck of either job ran within
 `reap.load_cooldown_minutes` (default 60). The cooldown holds back only the load job; the periodic one runs on its
-schedule. It needs no pressure-watch LaunchAgent: Orca runs it.
-`skills-sync setup` lists the two as `janitor` and `janitor-load`, `enable` brings a job whose trigger, precheck or
-timeout differs back to these values, and `disable janitor` turns both off (`enable janitor` on a janitor that was off
-turns a registered load job back on too).
+schedule.
+`skills-sync setup` lists the two as `janitor` and `janitor-load`, `enable` brings a job whose trigger, precheck,
+timeout or prompt differs back to these values, and `disable janitor` turns both off (`enable janitor` on a janitor
+that was off turns a registered load job back on too).
 Every command it builds starts with `python3`, with `--state`/`--ledger` after the subcommand when
-those are off the default: a scheduled session can refuse a leading `env` or `VAR=` assignment.
-Its prompt has the agent run `reap --plan <state>/janitor-plan.json` once, close the chrome-window
-targets it can, and report what went, what was skipped and what stayed. To change the prompt of an
-automation that exists, `orca automations edit <id> --prompt "<text>"`.
+those are off the default. To change the prompt of an automation that exists,
+`orca automations edit <id> --prompt "<text>"`.
 Run `schedule` from the checkout that loads the skills, never a card's worktree: the command keeps
-that path. The run's model is whatever Claude Code settings its `--workspace` checkout has; without
-`--workspace`, `schedule` also prints how to make a dedicated runner worktree for that
-([docs/automation.md](../../docs/automation.md)). The janitor never lists the worktree an Orca
-automation runs in (`orca automations list`); when that list is unreadable, scan says so in a note and keeps every Orca worktree that round.
-`orca automations run` skips the precheck, so test it by running it directly, with
-`--state` pointing at a scratch folder: a `reap` records what it failed on, and the next
-scheduled precheck would skip that set for a day. A run marked completed is not a cleanup: judge it
-by the reap output in its report.
+that path. The janitor never lists the worktree an Orca automation runs in (`orca automations list`); when that list
+is unreadable, scan says so in a note and keeps every Orca worktree that round.
+Test a round by running `precheck --act --kinds <kind>` directly with `--state` and `--ledger` pointing at a scratch
+folder: `--state` alone still scans every real card.
 
-- Before turning the automation on, auto mode must allow the `reap --plan` command (draft the rule
-  with `tune-automode`). A scheduled prompt is not the owner's chat instruction, so a rule that
-  needs one does not cover it.
-- A refused `reap` is not worked around with another command. The run sends the refused command,
-  one line, to `reap.inbox_to` and puts it first in its report. `inbox_to` and
-  `reap.pressure.notify_to` are Orca addresses. Use `run:<id>`: a `term_` handle is still accepted
-  but changes when its terminal restarts, and `orch patrol` raises one Orca no longer lists (T).
-  With `inbox_to` unset, only the report line and the precheck's stdout carry it.
-- The precheck counts how often it planned the same set. After `reap.plan_repeat` (default 2)
-  rounds with no `reap`, it stops waking the model for that set, retries it once a day, and sends
-  one message to `reap.inbox_to` with the command to run by hand; a failed send is tried again on
-  the next round. A `reap` or a different set starts the count over.
+`precheck` without `--act` is the round of a job still on the agent: it exits 0 when there are targets, except the set
+the last reap failed on, for a day, and a set already planned `reap.plan_repeat` (default 2) times with no `reap`
+since, retried once a day with one message to `reap.inbox_to` carrying the command to run by hand.
 
 A precheck prints what it could not read (`gh`, `orca`) and the alerts to stderr.
 `worker-list` without `--run` sees only the bound Run from a run-bound terminal,
@@ -234,7 +238,7 @@ are who removes a finished card (`end-session`, "Who cleans up"). Which device f
 
 ## Hard pass: reap-hard
 
-The janitor only sees what was registered and waits on a model and on the card's own session to close.
+The janitor only sees what was registered and waits on its half-hourly round and on the card's own session to close.
 `bin/reap-hard` is the last sweep: fixed rules, no model, every Orca card under
 `~/orca/workspaces` whatever made it, run by a LaunchAgent every 15 minutes.
 
@@ -415,7 +419,7 @@ janitor's `compose-stack` kind.
 
 Never: `pkill`/`killall` by pattern, `docker system prune`, `docker volume prune`, `git worktree prune`, `--force`,
 or anything not in the plan. A kill the auto-mode classifier refuses is not worked around: hand
-the exact `reap --plan` command to the user (a scheduled run: to `reap.inbox_to`, see Scheduled run).
+the exact `reap --plan` command to the user (the scheduled round meets no classifier: it runs in Orca's precheck).
 
 ## Config
 

@@ -51,6 +51,7 @@ const ITEM = {
   selfcheck: ["Dashboard self-check", "bad", "alert"],
   watcher_down: ["Card watch down", "bad", "alert"],
   patrol: ["Patrol finding", "warn", "alert"],
+  owner_todo: ["Your to-do", "accent", "note"],
 };
 const itemMeta = (t) => ITEM[t] || [t, "", "dot"];
 // What a session's kind reads as on screen -> [label, tone, icon]. kind itself stays as fleet.py wrote it (sort, adopt).
@@ -268,7 +269,7 @@ function itemRow(st, it, { showSession = true } = {}) {
     <span class="acts">${it.missed ? tag("missed", "bad", "alert") : ""}<span class="when">${it.at ? relSpan(it.at) : ""}</span>
       <span class="slot">${safeUrl(it.url) ? link(it.url, icon("link"), "icon-btn") : ""}</span>
       <span class="slot">${copy ? `<button class="icon-btn" data-copy="${esc(copy)}" title="Copy">${icon("copy")}</button>` : ""}</span>
-      <span class="slot"><button class="icon-btn" data-dismiss="${esc(it.key)}" title="Dismiss">${icon("x")}</button></span></span></li>`;
+      <span class="slot">${it.type === "owner_todo" ? "" : `<button class="icon-btn" data-dismiss="${esc(it.key)}" title="Dismiss">${icon("x")}</button>`}</span></span></li>`;
 }
 
 // Approve and Deny take a second click (the list re-renders under the pointer every tick); Open does not.
