@@ -70,9 +70,10 @@ session as not the human's, so an approval sent afterwards is refused. The brief
   (owner-facing documents as an Artifact only, no local `.md` copy or file path) rows to every
   prompt; an inline card writes them out.
 - **Approved**, **Human only**, **Model calls** — the `APPROVED`, `HUMAN ONLY` and `MODEL CALLS`
-  rows of `orchestrate` `references/brief.md` "Single worker", each written as a row: a heading or
-  bullet does not reach the first prompt. APPROVED cites each owner quote by the `orch decide answer`
-  id that recorded it; `skills-sync card` refuses an id the store does not hold as answered. A card
+  rows of `orchestrate` `references/brief.md` "Single worker". Only the `APPROVED:` row reaches the
+  first prompt (a heading or bullet does not); the card reads the other two in the brief. APPROVED
+  cites each owner quote by the `orch decide answer` id that recorded it, as `오너(d150, <date>)`;
+  `skills-sync card` refuses an id the store does not hold as answered. A card
   that lands its own PR carries the merge there (`APPROVED: required checks green + independent
   review Act-on 0: merge with orch land` plus the human's words and date); without it, it stops at
   READY. Before an item goes into HUMAN ONLY, check for an agent-only path first (a script, an

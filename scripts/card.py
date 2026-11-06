@@ -70,8 +70,9 @@ A lead's brief (a MODE row, a `ROLE: lead <slug>` row or a `<project>: lead` hea
 references/brief.md "Lead", its MERGE row naming exactly one merge_policy; any brief needs CLOSE or KEEP, and one with an Approved heading or bullet needs its
 `APPROVED:` row. The brief is a local file; a note only the notes store can reach is copied to one first.
 Every prompt, a handoff's too, carries the fixed TEARDOWN and DOCS rows (FIXED_LINES) after LOAD, whatever the brief says.
-An APPROVED row cites the owner's words by the `orch decide` id that recorded them (`d150`): an id the store does not
-hold as answered is exit 2; a row that cites none gets a warning.
+An APPROVED row (a handoff's --note too) cites the owner's words by the `orch decide` id that recorded them, as
+`오너(d150, <date>)`: an id the store does not hold as answered, or a store it cannot read, is exit 2; a row that cites
+none gets a warning.
 
 `--prompt "$(cat brief.md)"` hides those lines from the guard hook, which reads only the command text; this reads
 the file and checks them itself, with the hook's own patterns. The card is created from a subprocess, so no hook
@@ -114,7 +115,8 @@ FIXED_LINES = (
     "`-v`는 붙이지 않는다). 프로세스는 이 카드가 띄우고 PID를 기록한 것만 그 PID로 kill한다. pkill·killall 같은 패턴 kill은 쓰지 않는다",
     "DOCS: 오너가 읽을 문서(리뷰·요약·설계 메모)는 Artifact로만 게시한다. 로컬 .md 사본을 만들지 않고, 보고에 파일 경로를 적지 않는다",
 )
-DECIDE_ID = re.compile(r"\bd\d+\b")
+# Only the cite form `(d150, <date>)` or `(d150)`: a bare `d3` in an APPROVED row can be a library or a path.
+DECIDE_ID = re.compile(r"\((d\d+)\s*[,)]")
 sys.path.insert(0, str(REPO / "hooks"))
 sys.path.insert(0, str(REPO / "skills" / "orchestrate" / "scripts"))
 import guard  # noqa: E402
@@ -264,16 +266,18 @@ def compose(brief_path):
     return prompt
 
 
-def check_approved(brief_path):
-    """The APPROVED row's `orch decide` ids against the store: Refuse(2) for one it does not hold as answered, a warning
-    for a row that cites none (orchestrate references/brief.md "Single worker", APPROVED)."""
-    approved = row(FENCE.sub("", pathlib.Path(brief_path).expanduser().read_text()), "APPROVED")
+def check_approved(text, where, me=ME):
+    """The APPROVED row's `orch decide` citations (`오너(d150, <date>)`) against the store: Refuse(2) for an id it does not
+    hold as answered or cannot be read for, a warning for a row that cites none (orchestrate references/brief.md
+    "Single worker", APPROVED)."""
+    approved = row(FENCE.sub("", text), "APPROVED")
     if not approved:
         return
     ids = list(dict.fromkeys(DECIDE_ID.findall(approved)))
     if not ids:
-        print(f"[{ME}] warning: the APPROVED row cites no `orch decide` id. Record the owner's words with `orch decide "
-              "answer <id> --quote \"<verbatim>\"` and cite the id it prints, so the approval is checkable.", file=sys.stderr)
+        print(f"[{me}] warning: the APPROVED row cites no `orch decide` id. Record the owner's words with `orch decide "
+              "answer <id> --quote \"<verbatim>\"` and cite the id it prints as `오너(<id>, <date>)`, so the approval "
+              "is checkable.", file=sys.stderr)
         return
     import store
     bad = []
@@ -281,14 +285,14 @@ def check_approved(brief_path):
         try:
             d = store.decision_record(did)
         except (store.NotMigrated, OSError, ValueError) as e:
-            print(f"[{ME}] warning: the APPROVED row's {', '.join(ids)} not checked: {e}", file=sys.stderr)
-            return
+            raise Refuse(2, f"[{me}] {where}: the APPROVED row cites {', '.join(ids)}, but the decision store cannot "
+                            f"be read ({e}), so the approval is unchecked and nothing was created.")
         if not d:
             bad.append(f"{did} (no such decision)")
         elif d.get("status") != "done" or not (d.get("answer") or "").strip():
             bad.append(f"{did} ({d.get('status')}, no recorded answer)")
     if bad:
-        raise Refuse(2, f"{brief_path}: the APPROVED row cites {', '.join(bad)}. Cite the id `orch decide answer` "
+        raise Refuse(2, f"[{me}] {where}: the APPROVED row cites {', '.join(bad)}. Cite the id `orch decide answer` "
                         "printed for the owner's words (`orch decide show <id>` reads it back), or record them first.")
 
 
@@ -993,7 +997,7 @@ def create_locked(brief, opts, refs, prompt, kind=None):
         cmd += ["--comment", opts["--comment"]]
     cmd += ["--model", model] if model else []
     cmd.append("--json")
-    check_approved(brief)  # last of the brief checks: its warning goes out only for a card that will be created
+    check_approved(text, brief)  # after the codex and parent refusals, so those stay one-line errors
     reason, mark = pressure_check(shlex.join(["orca", *cmd[1:]]))
     if reason:
         raise Refuse(3, f"[{ME}] not created, the pressure gate refused it (for `queue wait`, run this same "
@@ -1125,6 +1129,7 @@ def handoff(argv):
                             CLOSE_LINE, LOAD_LINE, *FIXED_LINES])
         if not guard.CLOSE_OR_KEEP.search(prompt):
             raise Refuse(2, f"[{HANDOFF}] the prompt does not pass hooks/guard.py's card check")
+        check_approved(prompt, "--note", HANDOFF)
         with card_lock():
             return handoff_locked(ticket, opts, refs, prompt)
     except Refuse as e:

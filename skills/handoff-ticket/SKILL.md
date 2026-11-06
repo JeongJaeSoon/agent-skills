@@ -50,9 +50,10 @@ and file collision with cards already running. When every exit item is met, clos
 and report it instead of starting more, even with lines left on `⏸️ 보류`. Otherwise start the
 recommended ticket and report the ranking, the recommendation and any parallel-safe combination.
 When the ranking is genuinely hard, settle it with an independent review (Codex when it answers,
-else a fresh-context Claude reviewer), record the verdict and the choice (`orch decide add`, then
-`orch decide done <id> --answer "<choice>: <verdict>"`), start it, and list it in the report for
-the owner to review later.
+else a fresh-context Claude reviewer), record the verdict and the choice (`orch decide add …
+--recommend <N> --if-no-answer <that label> --reason hard-after-review`, then at once `orch decide
+done <id> --answer "<choice>: <verdict>"`), start it, and list it in the report for the owner to
+review later.
 
 A standing instruction is that permission, already given: "작업 끝나면 다음 티켓 진행해줘",
 "알아서 다음 작업 진행해줘", "남은 것 진행해줘". Act on it, do not re-ask.

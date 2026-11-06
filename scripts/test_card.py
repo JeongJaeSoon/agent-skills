@@ -695,8 +695,10 @@ assert adj.index("LOAD: none") < adj.index("a ban.") and adj.count("LOAD: none")
 # TEARDOWN and DOCS: every prompt carries them once, after LOAD and ahead of FORBIDDEN, a lead's too, whatever the
 # brief says; the rules they hold are the ones a brief writer kept forgetting.
 teardown, docs = card.FIXED_LINES
-assert "down" in teardown and "-v" in teardown and "PID" in teardown and "pkill" in teardown and "killall" in teardown
-assert "Artifact" in docs and ".md" in docs and "경로" in docs
+for words in ("같은 턴에 내린다", "`-v`는 붙이지 않는다", "PID를 기록한 것만 그 PID로 kill한다", "pkill·killall 같은 패턴 kill은 쓰지 않는다"):
+    assert words in teardown, (words, teardown)
+for words in ("Artifact로만 게시한다", "로컬 .md 사본을 만들지 않고", "파일 경로를 적지 않는다"):
+    assert words in docs, (words, docs)
 for p in (load_of(WORKER), load_of(LEAD, "lead-fixed.md"), adj,
           load_of(f"/goal x\n{CLOSE}\nTEARDOWN: keep my stack\n")):
     assert all(p.count(line) == 1 for line in card.FIXED_LINES), p
@@ -713,13 +715,25 @@ asked = fleet.change_decisions(lambda s: fleet._new_decision(s, "still open"))["
 cited = lambda ids: WORKER.replace("(owner, 2026-01-01)", f"오너({ids}, 2026-01-01): \"머지까지 진행해\"")  # noqa: E731
 rc, out, err, calls = go(brief(cited(said), "ap1.md"), "--repo", "r", "--name", "ap1")
 assert rc == 0 and "cites no" not in err, (rc, err)
-for ids, want in ((f"{said}, d999", "d999 (no such decision)"), (asked, f"{asked} (open, no recorded answer)")):
+for ids, want in ((f"{said}, 2026-01-01) 오너(d999", "d999 (no such decision)"), (asked, f"{asked} (open, no recorded answer)")):
     rc, out, err, calls = go(brief(cited(ids), "ap2.md"), "--repo", "r", "--name", "ap2")
     assert rc == 2 and want in err and "orch decide answer" in err and not creates(calls), (ids, rc, err)
 rc, out, err, calls = go(brief(WORKER, "ap3.md"), "--repo", "r", "--name", "ap3")
 assert rc == 0 and "APPROVED row cites no `orch decide` id" in err, (rc, err)
 rc, out, err, calls = go(brief(WORKER.replace("APPROVED: push and PR (owner, 2026-01-01)\n", ""), "ap4.md"), "--repo", "r", "--name", "ap4")
 assert rc == 0 and "APPROVED" not in err, (rc, err)
+# A bare d<N> is not a citation (a library, a path): only `(d<N>,` or `(d<N>)` is looked up.
+rc, out, err, calls = go(brief(WORKER.replace("push and PR", "upgrade d3 to v7, see docs/d12"), "ap5.md"), "--repo", "r", "--name", "ap5")
+assert rc == 0 and "cites no `orch decide` id" in err, (rc, err)
+# A handoff's --note carries APPROVED too, and is checked the same way before anything is created.
+rc, out, err, calls = handoff("ABC-7", "--note", "context.\nAPPROVED: merge — 오너(d999, 2026-01-01)")
+assert rc == 2 and "d999 (no such decision)" in err and not creates(calls), (rc, err)
+rc, out, err, calls = handoff("ABC-8", "--note", f"context.\nAPPROVED: merge — 오너({said}, 2026-01-01)")
+assert rc == 0 and creates(calls), (rc, err)
+# A store that cannot be read leaves a cited id unchecked: refused, never let through.
+os.environ["ORCH_FLEET_STATE"] = str(tmp / "no-such-state")
+rc, out, err, calls = go(brief(cited(said), "ap6.md"), "--repo", "r", "--name", "ap6")
+assert rc == 2 and "cannot be read" in err and not creates(calls), (rc, err)
 del os.environ["ORCH_FLEET_STATE"]
 
 
