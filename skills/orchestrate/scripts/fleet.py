@@ -2316,8 +2316,7 @@ class Fleet:
                             "text": f"{'reload_delivered' if h in terms else 'reload_dropped'}: {title}"})
         syncs = [i for i in syncs if i["type"] != "reload_pending" or RELOAD_FAILS.get(i["terminal"], 0) >= tries]
         mem["reload_shown"] = {i["terminal"]: i["title"] for i in syncs if i["type"] == "reload_pending"}
-        import tidy
-        items += kept + syncs + watcher_items(sessions, now) + list(self.checks) + owner_todo_items(board_open(), tidy.closed())
+        items += kept + syncs + watcher_items(sessions, now) + list(self.checks)
         for it in sticky.values():
             if it.get("open"):
                 items.append(it)
@@ -2325,6 +2324,8 @@ class Fleet:
         items = [it if it.get("project") else {**it, "project": (sessions.get(it.get("session")) or {}).get("project")}
                  for it in items if it["key"] not in dismissed]
         import tidy
+        # The now-list is not dismissed here: it stays until `orch board done`, as in the Brief.
+        items += owner_todo_items(board_open(), tidy.closed())
         details = {k: e["detail"] for k, e in self.prs.items() if e.get("detail")}
         held = held_prs(board_open(), tidy.closed(), details, now,
                         tidy.cards_of(read_json(state_dir() / "state.json", {}), details), why := {}, me=self.me)
