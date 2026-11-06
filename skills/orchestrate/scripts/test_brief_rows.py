@@ -203,6 +203,18 @@ assert "w-titled" not in {r["session"] for r in rows_.values()}, rows_
 rows_, _ = board.fleet_rows(probe_state, {"계보": {"handle": "term_old", "worktree": "lead1"}}, {"계보": {"id": "계보"}})
 assert not any(r["kind"] == "lead" for r in rows_.values()) and all(r.get("parent") == "계보" for r in rows_.values()), rows_
 
+# A board lead whose rows aged off the board (a finished lead leaves after DONE_KEEP_S) stays hidden while its session
+# is idle with nothing under it, but not while the session is working or has a card to show: the lead and its cards
+# were dropped from the board together with the rows, though work went on (a restored session after a reboot).
+aged = {"계보": {"handle": "term_old", "worktree": "lead1"}}
+rows_, _ = board.fleet_rows(probe_state, aged, {})
+assert {r["session"] for r in rows_.values()} >= {"lead1", "probe-live", "w-titled"}, rows_
+assert rows_["fleet:lead1"]["kind"] == "lead" and rows_["fleet:lead1/w-titled"]["parent"] == "fleet:lead1", rows_
+quiet = {"sessions": [s for s in probe_state["sessions"] if s["id"] not in ("probe-live", "w-titled", "probe-bound")]}
+assert board.fleet_rows(quiet, aged, {})[0] == {}, "idle lead, nothing under it: still dropped"
+working = {"sessions": [{**s, "phase": "working"} if s["id"] == "lead1" else s for s in quiet["sessions"]]}
+assert [r["session"] for r in board.fleet_rows(working, aged, {})[0].values()] == ["lead1"], "a working lead is shown"
+
 # A row whose only change is its session (작업 중 → 멈춤) is a changed row, bold in the next report.
 r = subprocess.run([sys.executable, str(HERE / "prog.py"), "brief", "render", "--periodic", "--commit", "--no-refresh"],
                    capture_output=True, text=True, env=env)

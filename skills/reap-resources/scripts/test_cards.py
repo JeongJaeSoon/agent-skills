@@ -33,8 +33,10 @@ def term(handle, agent, silent_s, screen=None):
 
 
 def fake(branch_prs=(), terminals=(), local_landed=False, compare=None, ahead="", remote_log="", patches=None,
-         status="", calls=None, behind_pr=False, reflog=None):
-    """A runner answering the commands gather() issues. compare: GitHub's ahead_by, or "404". reflog: HEAD's reflog
+         status="", calls=None, behind_pr=False, reflog=None, pr_head_here=True, pr_status=None):
+    """A runner answering the commands gather() issues. compare: GitHub's ahead_by, or "404". pr_head_here: whether the
+    PR's head commit is in the local object store (a deleted remote branch leaves it out); pr_status: GitHub's compare
+    status of HEAD...PR head, "ahead"/"identical"/"diverged", or None when GitHub cannot say. reflog: HEAD's reflog
     (`HEAD@{<unix time>}\\t<subject>` per line, newest first); default is a card with a commit of its own, 3 days old."""
     reflog = f"HEAD@{{{NOW - 3 * 86400:.0f}}}\tcommit: work\n" if reflog is None else reflog
     screens = {t["handle"]: t.pop("_screen") for t in terminals}
@@ -57,9 +59,11 @@ def fake(branch_prs=(), terminals=(), local_landed=False, compare=None, ahead=""
                 return "feature\n"
             if "symbolic-ref" in cmd:
                 return "origin/main\n"
+            if "cat-file" in cmd:
+                return "" if cmd[-1].startswith(PRHEAD) and pr_head_here else None
             if "merge-base" in cmd:
                 if "--is-ancestor" in cmd and cmd[-1] == PRHEAD:
-                    return "" if behind_pr else None
+                    return "" if behind_pr and pr_head_here else None  # exit 128 for a missing object, 1 for "no"
                 return "" if (cmd[-1] == "origin/main" and local_landed) else None
             if "remote" in cmd:
                 return "https://github.com/acme/app.git\n"
@@ -78,6 +82,8 @@ def fake(branch_prs=(), terminals=(), local_landed=False, compare=None, ahead=""
                 return json.dumps(list(branch_prs))
             if "pr" in cmd and "--search" in cmd:
                 return "[]"
+            if "compare" in c and "--jq .status" in c:
+                return None if pr_status is None else f"{pr_status}\n"
             if "compare" in c:
                 if compare == "404":
                     errors is not None and errors.append("gh api: Not Found (HTTP 404)")
@@ -246,6 +252,16 @@ f = cards.gather({"path": CARD}, m, with_carried(ahead="c1\n", remote_log=""))
 assert cards.judge(f, IDLE)[:2] == (cards.KEEP, "원격에 없는 커밋"), cards.judge(f, IDLE)
 # A PR that carried HEAD needs no patch check: a squash merge and a deleted branch leave its commits on no remote.
 assert verdict(machine(prs=MERGED), branch_prs=[PR], ahead="c1\n")[0] == cards.REMOVE
+
+# A merged PR whose remote branch was deleted leaves its head commit out of the local objects, so `git merge-base
+# --is-ancestor` fails with 128 like it does for "no". HEAD under that head is still the PR's work: GitHub says so.
+GONE = dict(branch_prs=[PR], pr_head_here=False, **same)
+v = verdict(machine(prs=CLOSED_OLD), pr_status="ahead", **GONE)
+assert v[0] == cards.REMOVE, v
+assert verdict(machine(prs=CLOSED_OLD), pr_status="identical", **GONE)[0] == cards.REMOVE
+# Not under it (GitHub says diverged), or GitHub unreadable: the old verdict, never a delete on a guess.
+assert verdict(machine(prs=CLOSED_OLD), pr_status="diverged", **GONE)[0] == cards.KEEP
+assert verdict(machine(prs=CLOSED_OLD), pr_status=None, **GONE)[0] == cards.KEEP
 
 # Trap 3: an Orca terminal's shell left at its prompt (a setup shell) is not "a process in the card": it is closed
 # with the card. A shell that ran something recently, or a process a person started from it, keeps the card.

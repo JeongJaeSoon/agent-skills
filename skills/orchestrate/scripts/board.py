@@ -700,8 +700,12 @@ def fleet_rows(state, leads, board_rows, details=None, now=None, stale_s=None, c
             continue
         board_lead = next((held[t.get("handle")] for t in lead.get("terminals") or [] if t.get("handle") in held),
                           lead_wt.get(lead.get("id")))  # a restarted terminal has a new handle, the same worktree
-        if board_lead and board_lead not in board_rows:  # its rows were dropped from the board on purpose
-            continue
+        if board_lead and board_lead not in board_rows:
+            # Its rows aged off the board on purpose (a finished lead leaves after DONE_KEEP_S). That holds while its session
+            # is idle with nothing to show; one that works on, or has a card, is live work and gets a fleet row.
+            if lead.get("phase") not in ("working", "waiting") and not any(shown(s) for s in under.get(lead["id"], [])):
+                continue
+            board_lead = None
         lid = f"fleet:{lead['id']}"
         if not board_lead:
             add(lid, lead, "lead", program=one_line(lead.get("name") or lid))
