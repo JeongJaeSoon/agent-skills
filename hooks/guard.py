@@ -146,50 +146,58 @@ def lead_session(who):
     return who().role == "lead"
 
 
-CD_TARGET = re.compile(r"(?:^|[;&|(])\s*(?:cd|pushd)\s+(?:--\s+)?(\"[^\"$`]*\"|'[^']*'|[\w./~+:@%,=-]+)\s*(?=[;&|)\n]|$)", re.M)
-SIMPLE_VAR = re.compile(r"\$(?:\{(\w+)\}|(\w+))")
+# Only a cd that is the first statement and gates the helper with `&&` is followed; any other cd (a subshell,
+# `;`, `||`, popd after pushd, a cd inside quotes) leaves only an absolute path readable.
+LEADING_CD = re.compile(r"\s*(?:cd|pushd)\s+(?:--\s+)?(\"[^\"$`\\]*\"|'[^']*'|[\w./+:@%,=-]+)\s*&&\s*(?:\S*/)?skills-sync\s+card\s+")
+HOME_REF = re.compile(r"\$HOME\b|\$\{HOME\}")
+SAFE_HOME = re.compile(r"/[\w./+:@%,=-]*")
 
 
-def expand_path(text, cmd):
-    """The path as the shell would spell it, or None. Only `~` and `$NAME`/`${NAME}` that this hook's environment sets
-    and the command does not rebind are expanded; anything else (substitution, glob, unset name) stays unread."""
-    if set(text) & set("`*?") or "$(" in text:
+def expand_path(token, cmd):
+    """The path as the shell would pass it, or None. Beyond a literal path only `~`, `~/…` and `$HOME`/`${HOME}`
+    are expanded, and only when HOME is a plain absolute path here and nothing else in the command mentions HOME
+    (an assignment, `+=`, `unset`, `read` ... could rebind it). Single quotes pass the text through literally."""
+    quote = token[0] if token[:1] in ("'", '"') else ""
+    text = token.strip("'\"")
+    if quote == "'":
+        return pathlib.Path(text)
+    if set(text) & set("`*?\\") or "$(" in text:
         return None
-    unresolved = []
-
-    def sub(m):
-        name = m[1] or m[2]
-        if name not in os.environ or re.search(rf"(?<![$\w{{]){name}=|\b(?:read|export|declare|typeset|local|printf\s+-v)\b[^;&|\n]*\b{name}\b", cmd):
-            unresolved.append(name)
-            return ""
-        return os.environ[name]
-
-    text = SIMPLE_VAR.sub(sub, text)
-    if unresolved or "$" in text:
+    if text == "~" or text.startswith("~/"):
+        if quote:
+            return pathlib.Path(text)
+        text = "$HOME" + text[1:]
+    elif text.startswith("~"):
         return None
-    return pathlib.Path(text).expanduser()
+    if "$" in text:
+        home = os.environ.get("HOME", "")
+        if not SAFE_HOME.fullmatch(home) or re.search(r"\bHOME\b", HOME_REF.sub("", cmd)):
+            return None
+        text = HOME_REF.sub(lambda _: home, text)
+        if "$" in text:
+            return None
+    return pathlib.Path(text)
 
 
 def helper_card(brief, cwd, cmd, start):
     """(the prompt the helper would send, None) or (None, the deny reason): the helper's own checks on that file.
-    A cd before the helper moves the base of a relative path, so the last literal cd target is the base;
-    a cd the hook cannot read (a variable, `-`, a substitution) leaves only an absolute path readable."""
-    brief = brief.strip("'\"")
-    path = expand_path(brief, cmd)
+    `start`: where the brief's argument begins in `cmd`."""
+    try:
+        path = expand_path(brief, cmd)
+        base = pathlib.Path(cwd or ".")
+        moves = bool(CHDIR.search(cmd[:start]))
+        lead = LEADING_CD.fullmatch(cmd[:start]) if moves else None
+        if lead:
+            moved = expand_path(lead[1], cmd) if not lead[1].lstrip("'\"").startswith("-") else None
+            moves = moved is None
+            base = base / moved if moved else base
+    except Exception as e:  # a check that cannot run does not let the card through
+        return None, f"The guard hook could not read the brief path of `skills-sync card` ({type(e).__name__}: {e})."
     if path is None:
         return None, "Write the brief's path out in `skills-sync card <brief>` (or `~`/`$HOME` plus a literal path); this hook reads that file and cannot expand it."
-    base = pathlib.Path(cwd or ".")
-    moves = False
-    for chdir in CHDIR.finditer(cmd[:start]):
-        target = CD_TARGET.match(cmd, chdir.start())
-        moved = target and not target[1].lstrip("'\"").startswith("-") and expand_path(target[1].strip("'\""), cmd)
-        if moved:
-            base = moved if moved.is_absolute() else base / moved
-        else:
-            moves = True
     if moves and not path.is_absolute():
         return None, "This command changes directory, so give `skills-sync card` the brief's absolute path."
-    full = pathlib.Path(os.path.normpath(path if path.is_absolute() else base / path))
+    full = (base / path).resolve()  # physical resolution, as opening the file does: a symlink's `..` is its target's parent
     if full.is_dir():
         return None, f"`skills-sync card {brief}` names a directory, not a brief file; give it the brief's file path."
     try:

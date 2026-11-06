@@ -250,7 +250,30 @@ assert bash(HELPER.format('"$HOME/worker.md"')) == "none"
 assert bash(HELPER.format("$UNSET_BRIEF_VAR")) == "deny" and "cannot expand" in reason(HELPER.format("$UNSET_BRIEF_VAR"))
 assert bash("export HOME=/x; " + HELPER.format("$HOME/worker.md")) == "deny"  # rebound in the same command
 assert bash(HELPER.format("$(echo worker.md)")) == "deny"
-assert bash(HELPER.format("$HOME/../worker.md")) == "deny"  # normalized: the parent of HOME has no worker.md
+assert bash(HELPER.format("$HOME/../worker.md")) == "deny"  # the parent of HOME has no worker.md
+# What the hook cannot prove is the file the shell reads stays denied (independent review of this change).
+(H / "safe").mkdir()
+(H / "brief.md").write_text((H / "lead.md").read_text())
+(H / "safe" / "brief.md").write_text("/goal fix X\nCLOSE: §8\n")
+J = {"session": "joined"}
+assert bash(f"cd safe && " + HELPER.format("brief.md"), **J) == "none"  # a leading `cd X &&` is followed
+assert bash(f"cd safe && " + HELPER.format("brief.md"), session="s0") == "none"
+for pre in ("(cd safe); ", "false && cd safe; ", "pushd safe; popd; ", 'echo "x; cd safe;"; ', "cd safe || true; ", "cd safe; ",
+            "cd ~no_such_guard_user_468 || true; "):
+    assert "absolute path" in reason(pre + HELPER.format("brief.md")), pre
+assert bash(HELPER.format("~no_such_guard_user_468/worker.md")) == "deny"  # `~user` is not read, and does not crash the hook
+for rebind in ("BRIEF=x; ", "unset BRIEF; "):
+    assert bash(rebind + "BRIEF+=.other; " + HELPER.format('"$BRIEF"'), BRIEF=str(H / "worker.md")) == "deny"
+for rebind in ("HOME+=/x; ", "unset HOME; HOME=/x; ", "read HOME; ", "export HOME=/x; "):
+    assert bash(rebind + HELPER.format('"$HOME/worker.md"')) == "deny", rebind
+assert bash(HELPER.format("'$HOME/worker.md'")) == "deny"  # single quotes pass the text through literally
+assert bash(HELPER.format("'~/worker.md'")) == "deny" and bash(HELPER.format('"~/worker.md"')) == "deny"
+assert bash(HELPER.format("~/worker.md")) == "none" and bash(HELPER.format('"${HOME}/worker.md"')) == "none"
+(H / "physical" / "child").mkdir(parents=True)
+(H / "physical" / "brief2.md").write_text((H / "lead.md").read_text())
+(H / "brief2.md").write_text("/goal fix X\nCLOSE: §8\n")
+os.symlink(H / "physical" / "child", H / "link")
+assert bash(HELPER.format("link/../brief2.md"), **J) == "deny"  # `..` after a symlink is its target's parent
 assert bash("pushd /x; " + HELPER.format(H / "lead.md"), agent="agent-skills:lead") == "deny"
 # Every call is checked, and only a call whose own argument is --help is skipped.
 assert bash(HELPER.format("--help")) == "none"
