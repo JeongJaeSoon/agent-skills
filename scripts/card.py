@@ -1129,7 +1129,7 @@ def handoff(argv):
                             CLOSE_LINE, LOAD_LINE, *FIXED_LINES])
         if not guard.CLOSE_OR_KEEP.search(prompt):
             raise Refuse(2, f"[{HANDOFF}] the prompt does not pass hooks/guard.py's card check")
-        check_approved(prompt, "--note", HANDOFF)
+        check_approved(opts.get("--note") or "", "--note", HANDOFF)  # the note itself: its first line joins /goal
         with card_lock():
             return handoff_locked(ticket, opts, refs, prompt)
     except Refuse as e:
