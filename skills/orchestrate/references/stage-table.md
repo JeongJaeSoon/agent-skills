@@ -1,6 +1,6 @@
 # Closing what is over, and the stage table
 
-What the `brief` and `stage` skills point to. Acks and the rest of the dashboard are in [dashboard.md](dashboard.md).
+What the `brief` skill and its stage table mode point to. Acks and the rest of the dashboard are in [dashboard.md](dashboard.md).
 
 ## Closing what is over
 
@@ -35,7 +35,7 @@ The report reads the same file and evidence. A closed item leaves 카드 없는 
 
 ## The stage table
 
-The per-item stage table (merge / dev check / prod check) that the `stage` skill prints with `orch stage show` and the `brief` skill points to in one line is a record, not something rebuilt for each report. Most of it is generated; the rest is written by hand where only a person or agent can check it.
+The per-item stage table (merge / dev check / prod check) that `brief`'s stage table mode prints with `orch stage show` and its report points to in one line is a record, not something rebuilt for each report. Most of it is generated; the rest is written by hand where only a person or agent can check it.
 
 **Generated rows.** After each collect the fleet tick rebuilds the rows of `stages-auto.json` in the state directory (`scripts/stage_auto.py`) from what is already recorded, for every program under `$PROGRAMS_HOME` whose ledger had an event in the last 7 days (`_`-prefixed directories are not programs). It rewrites the file only when its rows, order or summary changed; the collector's `memory.json` `stage_auto_at` says when it last built them:
 

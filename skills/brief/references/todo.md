@@ -1,9 +1,4 @@
----
-name: todo
-description: "Use for \"할 일 보여줘\", \"보류 큐 보여줘\", \"to-do list\", `/agent-skills:todo`: the to-dos and held queue the brief only counts."
----
-
-# To-do
+# To-do mode
 
 ```bash
 orch board todo list [--telegram]
