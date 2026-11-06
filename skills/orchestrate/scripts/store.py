@@ -946,12 +946,23 @@ def order_link(oid, unit, by=None, stand_in=False):
                          (oid, unit, 0 if stand_in else 1, now(), by))
         if cur.rowcount:
             _event(db, "order", oid, "link", by, None, {"unit": unit, "stand_in": bool(stand_in)})
+            if not stand_in:
+                _unmark(db, oid, by)
             return True
         if not stand_in and db.execute("UPDATE order_link SET resolves=1 WHERE order_id=? AND unit=? AND resolves=0",
                                        (oid, unit)).rowcount:
             _event(db, "order", oid, "link", by, {"stand_in": True}, {"unit": unit, "stand_in": False})
+            _unmark(db, oid, by)
             return True
         return False
+
+
+def _unmark(db, oid, by):
+    """A real link added after the receiving session said every unit was linked takes that word back: it has to say it again."""
+    r = db.execute("SELECT links_complete_at FROM order_ WHERE id=?", (oid,)).fetchone()
+    if r and r[0]:
+        db.execute("UPDATE order_ SET links_complete_at=NULL WHERE id=?", (oid,))
+        _event(db, "order", oid, "links_open", by, {"links_complete_at": r[0]}, {"links_complete_at": None, "why": "new link"})
 
 
 def order_close(oid, status, by=None, evidence=None, reason=None, check=None):
@@ -986,18 +997,55 @@ def order_get(oid, require_open=False):
         return _order_out(db, r)
 
 
-def order_reopen(oid, by=None):
+def order_reopen(oid, by=None, snapshot=None):
     """Done or dropped -> open. The receiving session must say again that every unit is linked, so the mark goes with
-    the close. The snapshot of the evidence at close is PR 5c's; reopen_evidence is left as it is."""
+    the close. reopen_evidence keeps the evidence the close stood on, so the automatic close does not shut the order
+    again on the same evidence: the snapshot the close event holds (an automatic close writes one), else `snapshot`
+    (the caller's reading of the units now, for a close by hand). Neither: it is left as it was."""
     with _order_tx() as db:
         r = db.execute("SELECT * FROM order_ WHERE id=?", (oid,)).fetchone()
         if not r:
             raise ValueError(f"no order {oid}")
         if r["status"] != "open":
-            db.execute("UPDATE order_ SET status='open', closed_at=NULL, close_by=NULL, links_complete_at=NULL WHERE id=?", (oid,))
+            closed = db.execute("SELECT after FROM event WHERE entity='order' AND id=? AND ev IN ('done','dropped') "
+                                "ORDER BY seq DESC LIMIT 1", (oid,)).fetchone()
+            kept = (json.loads(closed[0] or "{}").get("evidence") or {}).get("snapshot") if closed else None
+            kept = kept or snapshot or r["reopen_evidence"]
+            db.execute("UPDATE order_ SET status='open', closed_at=NULL, close_by=NULL, links_complete_at=NULL, "
+                       "reopen_evidence=? WHERE id=?", (kept, oid))
             _event(db, "order", oid, "reopen", by, {"status": r["status"], "closed_at": r["closed_at"],
-                                                    "links_complete_at": r["links_complete_at"]}, {"status": "open"})
+                                                    "links_complete_at": r["links_complete_at"]},
+                   {"status": "open", "reopen_evidence": kept})
         return _order_out(db, db.execute("SELECT * FROM order_ WHERE id=?", (oid,)).fetchone())
+
+
+def auto_still(row, links_seen, snapshot):
+    """Raise ValueError unless an open order is still what the judgement read: the same real links, the receiving
+    session's word that they are all there, not the owner's to act on, and evidence other than a reopen kept."""
+    real = sorted(u for u in row["links"] if u not in row["stand_ins"])
+    if (row["status"] != "open" or real != sorted(links_seen) or not row["links_complete_at"] or row["owner_action"]
+            or row["reopen_evidence"] == snapshot):
+        raise ValueError(f"{row['id']} changed while it was judged")
+
+
+def order_shadow(oid, snapshot, units, links_seen, by="auto"):
+    """Shadow of the automatic close: one `would_close` event saying what tidy would have closed on, nothing else
+    changes. True when written; False when the order moved since it was judged, or this evidence is the last one
+    recorded (a tick finds the same candidate every minute)."""
+    with _order_tx() as db:
+        r = db.execute("SELECT * FROM order_ WHERE id=?", (oid,)).fetchone()
+        if not r:
+            return False
+        try:
+            auto_still(_order_out(db, r), links_seen, snapshot)
+        except ValueError:
+            return False
+        last = db.execute("SELECT after FROM event WHERE entity='order' AND id=? AND ev='would_close' "
+                          "ORDER BY seq DESC LIMIT 1", (oid,)).fetchone()
+        if last and json.loads(last[0] or "{}").get("snapshot") == snapshot:
+            return False
+        _event(db, "order", oid, "would_close", by, None, {"rule": "order_units_done", "snapshot": snapshot, "units": units})
+        return True
 
 
 def order_links_complete(oid, by=None, undo=False):
