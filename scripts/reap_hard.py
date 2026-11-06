@@ -32,7 +32,7 @@ compose projects in reap.pressure.always_on and anything a person's shell starte
 Each decision that acts, or would act under --dry-run, and each failure is one JSON line in
 <state>/reap-hard.jsonl; the pass's summary is <state>/reap-hard-last.json.
 After a pass that is not a dry run, `orch patrol --if-due --fallback` starts detached; it runs only when the patrol
-job has not run a round for 40 minutes. A card it judged working within the hour is kept, and nothing it judged becomes
+job has not run a round for 40 minutes, or the machine's pressure level rose. A card it judged working within the hour is kept, and nothing it judged becomes
 a target.
 A pass that is not a dry run also writes <state>/inventory.json, its own judgements; patrol's candidate stage reads
 them for 10 minutes instead of scanning the machine again (read_inventory). One `gh pr list` per repo answers every
@@ -59,6 +59,7 @@ LOG = STATE_DIR / "reap-hard.jsonl"
 LAST = STATE_DIR / "reap-hard-last.json"
 INVENTORY = STATE_DIR / "inventory.json"
 INVENTORY_TTL = 600
+LOCK_BUSY = 3  # exit code of a pass that found another one running; reap.spawn_hard's runner counts it as fine
 OUT = STATE_DIR / "reap-hard.log"
 DEFAULTS = {
     "interval": 1800,
@@ -719,7 +720,8 @@ def locked():
         try:
             fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            sys.exit("reap-hard: 다른 회차가 도는 중")
+            print("reap-hard: 다른 회차가 도는 중", file=sys.stderr)
+            sys.exit(LOCK_BUSY)
         yield
 
 

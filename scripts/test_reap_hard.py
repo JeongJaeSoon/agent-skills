@@ -422,6 +422,15 @@ rh.run_pass(False, cfg_i, NOW)
 assert [i["id"] for i in rh.read_inventory(cfg_i, NOW + 1)["cards"]] == [str(live)]
 rh.scan_cards, rh.scan_rest, rh.read_protect, rh.guard.ownership, rh.write_last, rh.log = saved_rp
 
+# A pass that finds the lock held exits with LOCK_BUSY (reap.spawn_hard's runner takes 0 and 3 as fine).
+rh.STATE_DIR = inv_dir
+with rh.locked():
+    try:
+        with rh.locked():
+            raise AssertionError("second pass got the lock")
+    except SystemExit as e:
+        assert e.code == rh.LOCK_BUSY == 3, e.code
+
 # A listener verdict from an inventory minutes old is judged again before SIGTERM: the process may have moved into a live card.
 killed_l = []
 saved_l = rh.reap.processes, rh.reap.cwds, rh.reap.human_owned, rh.os.kill

@@ -553,6 +553,7 @@ with tempfile.TemporaryDirectory() as td_hard:
     cmd = started[0]
     assert cmd[2] == str(reap.JOB_RUNNER) and cmd[3:5] == ["run", "reap-hard-kick"], cmd
     assert cmd[cmd.index("--timeout") + 1] == str(reap.HARD_TIMEOUT_S) and cmd[-3:] == ["-I", str(reap.HARD), "run"], cmd
+    assert cmd[cmd.index("--ok") + 1] == "0,3", "a kick that finds another pass running is not a failure"
     reap.STATE = saved_hard[0]
     os.environ.pop("AGENT_SKILLS_PATROL", None) if saved_hard[1] is None else os.environ.__setitem__("AGENT_SKILLS_PATROL", saved_hard[1])
 

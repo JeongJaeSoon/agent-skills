@@ -752,8 +752,8 @@ def spawn_hard(reason, min_gap=300, python=None):
             out.flush()
             # Under the shared runner (record <state>/jobs/reap-hard-kick.json): a hung gh, docker or orca call ends with
             # the pass's process group at the timeout instead of holding reap-hard.lock for good.
-            subprocess.Popen([py, "-I", str(JOB_RUNNER), "run", "reap-hard-kick", "--timeout", str(HARD_TIMEOUT_S), "--",
-                              py, "-I", str(HARD), "run"], stdout=out, stderr=out,
+            subprocess.Popen([py, "-I", str(JOB_RUNNER), "run", "reap-hard-kick", "--timeout", str(HARD_TIMEOUT_S),
+                              "--ok", "0,3", "--", py, "-I", str(HARD), "run"], stdout=out, stderr=out,
                              stdin=subprocess.DEVNULL, start_new_session=True)
         return True
     except OSError:
