@@ -18,6 +18,18 @@ os.environ.update(env)
 sys.path.insert(0, str(HERE))
 import board, fleet, order_close, store, tidy  # noqa: E402
 
+
+def _legacy_set_row(rid, **fields):
+    """Rows and doing lines as written before A-ANNOT: set_row refuses a new row for a card and doing add has no --force."""
+    return board.change(lambda s: board.put(s, rid, fields))
+
+
+def _legacy_doing(title, owner, next_):
+    return board.change(lambda s: s["doing"].append({"title": title, "owner": owner, "next": next_}))
+
+
+board.set_row = _legacy_set_row
+
 store.import_apply(checks=False)
 store.order_setup()
 now = fleet.utcnow()
@@ -56,7 +68,7 @@ def write_state(generated=None, sessions=SESSIONS, me="owner-me"):
 
 sd.mkdir(parents=True, exist_ok=True)
 write_state()
-board.doing_add("릴리스 확인", "card", "머지 → 릴리스", force=True, why="fixture")
+_legacy_doing("릴리스 확인", "card", "머지 → 릴리스")
 board.set_row("post", title="post", repo="acme/app", status="moving", next="머지 → 릴리스", worktree="s-post")
 
 # Units: a done board item, an open one, a dropped one; an answered decision, an open one, a withdrawn one; agents.
@@ -254,7 +266,7 @@ board.set_row("s-r7", title="행", repo="acme/app", status="moving", next="머�
 assert why(r_row)["why"] == "partial" and "step after the merge" in why(r_row)["detail"]
 r_doing = make("doing 항목", ["card:s-r8"])
 assert why(r_doing)["close"]
-board.doing_add("s-r8 마무리", "card", "머지 → 릴리스", force=True, why="fixture")
+_legacy_doing("s-r8 마무리", "card", "머지 → 릴리스")
 assert why(r_doing)["why"] == "partial"
 # Something waits on the owner at a linked card that the order does not name as a unit.
 r_dec = make("오너 결정", ["card:s-r9"])
@@ -266,7 +278,7 @@ db.close()
 assert why(r_dec)["why"] == "owner_turn" and "decision" in why(r_dec)["detail"]
 r_own = make("오너의 열린 항목", ["card:s-r10"])
 assert why(r_own)["close"]
-board.doing_add("s-r10 확인", "오너", "확인", force=True, why="fixture")
+_legacy_doing("s-r10 확인", "오너", "확인")
 assert why(r_own)["why"] == "owner_turn" and "open doing item" in why(r_own)["detail"], why(r_own)
 write_state(sessions=MORE, me=None)
 assert why(r_own)["why"] == "owner_unread", "without the owner's login nothing says the owner has no turn"
