@@ -207,7 +207,7 @@ CASES = [
      ["AGENT_SKILLS_PRESSURE_GATE=1 orch heavy p -- npm test", "echo AGENT_SKILLS_PRESSURE_GATE",
       "echo AGENT_SKILLS_PRESSURE_GATE=0"]),
     ("guard.deny.rm_outside", "deny",
-     ["cd /usr || exit 1; rm -rf local/data", "pushd /usr; rm -rf local/data", "cd /usr && pushd /tmp && popd && rm -rf local/data", "pushd /usr >/dev/null && rm -rf local/data",
+     ["cd /usr || exit 1; rm -rf local/data", "cd /usr && cd /tmp && cd - && rm -rf local/data", "pushd /usr; rm -rf local/data", "cd /usr && pushd /tmp && popd && rm -rf local/data", "pushd /usr >/dev/null && rm -rf local/data",
       "cd /usr; cd /tmp & rm -rf local/data", "cd /usr; cd /tmp |& cat; rm -rf local/data",
       "cd /usr; echo `cd /tmp` `rm -rf local/data`", "rm --recurs --force /usr/local/data","rm --r /usr/local/data", ("cd /usr; cd /tmp | cat; rm -rf local", REPOX),
       "find /usr/local -name '*.old' -delete","find /opt -exec rm -rf {} +", "find -L /opt -delete", "find -d /usr/local -exec rm -rf {} +", "find -f /opt -delete",

@@ -97,13 +97,16 @@ def expand(word, cwd, follow=True):
     return (os.path.realpath(word) if follow else keep_name(word)) if word else ""
 
 
-def after_cd(c, here):
-    """The directory a `cd` command leaves the shell in: UNKNOWN_DIR when it cannot be read from the words."""
+def after_cd(c, here, prev=UNKNOWN_DIR):
+    """The directory a `cd` command leaves the shell in: UNKNOWN_DIR when it cannot be read from the words.
+    `prev` is the directory before the last directory change, which `cd -` returns to."""
     args = [x for x in c.words[1:] if not x.startswith("-") or x == "-"]
     target = args[0] if args else "~"
     # `popd`, a bare `pushd` and `pushd +1` take the directory from a stack this reader does not keep.
     if c.name == "popd" or c.name == "pushd" and (not args or args[0][0] in "+-"):
         return UNKNOWN_DIR
+    if target == "-" and c.name == "cd":
+        return prev
     if target == "-" or "$" in target.replace("$HOME", "").replace("${HOME}", ""):
         return UNKNOWN_DIR
     return expand(target, here) or UNKNOWN_DIR
@@ -577,7 +580,7 @@ def check_bash(cmd, cfg, cwd=None, session=None):
     """[Finding] for a Bash command, rules turned off left out."""
     masked = shell.command_text(cmd)
     out, seen = [], set()
-    cmds, here, pushed = shell.commands(cmd), cwd, []
+    cmds, here, pushed, prev = shell.commands(cmd), cwd, [], UNKNOWN_DIR  # prev: where `cd -` goes
     outer, start, ticks = [], 0, False  # the directories to go back to at each `)` or closing backtick
     for i, c in enumerate(cmds):
         for ch in masked[start:c.span[0]]:
@@ -593,7 +596,8 @@ def check_bash(cmd, cfg, cwd=None, session=None):
         if c.name in ("cd", "pushd", "popd") and not (
                 c.piped_from or c.piped_to or re.match(r"\s*(&(?!&)|\|(?!\|))", masked[c.span[1]:])):
             before = here
-            here = after_cd(c, here)
+            here = after_cd(c, here, prev)
+            prev = before
             if c.name == "popd" and pushed:  # the directory the matching `pushd` left
                 here = pushed.pop()
             elif c.name == "pushd" and here is not UNKNOWN_DIR:
