@@ -468,7 +468,7 @@ def curl_calls(w):
         for j, y in enumerate(part):
             if (part[j - 1] if j else "") in CURL_VALUED or y.startswith("-") and not y.startswith("--url="):
                 continue
-            if m := re.match(r"(?:--url=)?https?://api\.github\.com(?::\d+)?(/[^?#]*)?", y, re.I):
+            if m := re.match(r"(?:--url=)?(?:https?://)?api\.github\.com(?::\d+)?(/[^?#]*)?", y, re.I):
                 urls.append(m.group(1) or "/")
         out.append(((method or ("POST" if data and not get else "GET")).upper(), urls, " ".join(part)))
         part = carry
@@ -632,10 +632,19 @@ def find_roots(w):
     if "-delete" not in w and not removes:
         return []
     out = []
+    # -H -L -P, and the BSD/macOS -d -E -X -x -s, come before the paths; BSD `-f <path>` names one.
+    flags = ("-H", "-L", "-P", "-d", "-E", "-X", "-x", "-s")
+    take = False
     for x in w[1:]:
-        if x.startswith(("-", "(", "!")) and x not in ("-H", "-L", "-P"):
+        if take:
+            out.append(x)
+            take = False
+        elif x == "-f":
+            take = True
+        elif x.startswith(("-", "(", "!")) and x not in flags:
             break
-        out += [x] if x not in ("-H", "-L", "-P") else []
+        elif x not in flags:
+            out.append(x)
     return out
 
 
