@@ -138,7 +138,9 @@ VERDICT_OF = {"I": "idle", "X": "exited", "S": "superseded", "O": "pr_open_no_se
 STALE_WHAT = {"hook": ("a hook error blocks its tools", "hook 오류로 도구가 막힘"),
               "restart": ("a Claude Code update waits on /restart", "업데이트가 /restart 를 기다림")}
 REPEAT_WORD = {"error": "에러", "assistant": "답", "user": "입력", "reload": "reload"}
-SHOW_ONCE = {"R"}  # pending_lines shows these once, not every RENOTIFY
+# pending_lines shows these once, not every RENOTIFY. M's id holds the session and both models, so a drift to another
+# model (or back to an earlier one, once its finding closed) is a new id and is shown again.
+SHOW_ONCE = {"R", "M"}
 # A stalled card loses patrol's protection, so reap closes it within days; no session stays open this long.
 REPEATS_KEEP_DAYS = 90
 ACTIVE = ("run", "waiting", "working")  # what a card's activity verdict keeps; reap.PATROL_KEEP reads the same three
@@ -828,7 +830,8 @@ def pending_lines(me, unowned, now=None):
     """Unacked findings routed to terminal `me` (and those routed to nobody, for the orchestrator), each shown again
     every RENOTIFY until acked or cleared; a SHOW_ONCE code only the first time."""
     now = now or fleet.utcnow()
-    mine = [f for f in open_findings().values() if f.get("owner") == me or (unowned and not f.get("owner"))]
+    opened = open_findings()
+    mine = [f for f in opened.values() if f.get("owner") == me or (unowned and not f.get("owner"))]
     shown = fleet.read_json(SHOWN, {}) or {}
     seen = shown.get(me or "-") or {}
     due = [f for f in mine if f["id"] not in seen
@@ -838,10 +841,14 @@ def pending_lines(me, unowned, now=None):
     if all(f.get("code") in HOLD_CODES for f in due):
         due = [f for f in due if f.get("pr_open") is not False or not f.get("detected_at")
                or now - fleet.parse(f["detected_at"]) >= HOLD_ALONE]
-    if due:
-        keep = {f["id"]: seen.get(f["id"]) for f in mine if seen.get(f["id"])}
-        keep.update({f["id"]: fleet.iso(now) for f in due})
-        shown[me or "-"] = keep
+    # Pruned every call, for every terminal, not only when something is due: a finding that closed must be new when it
+    # comes back, whoever polls next. Closed means in no one's open set; one only outside this call's scope (unowned or
+    # not) keeps its record.
+    before = shown
+    shown = {t: {i: at for i, at in rec.items() if i in opened and at} for t, rec in before.items() if isinstance(rec, dict)}
+    shown.setdefault(me or "-", {}).update({f["id"]: fleet.iso(now) for f in due})
+    shown = {t: rec for t, rec in shown.items() if rec}
+    if shown != before:
         with contextlib.suppress(OSError):
             fleet.write_atomic(SHOWN, json.dumps(shown))
     return [line(f) for f in due] + ([f"  after dealing with each: orch patrol ack <id> (all {len(due)}: "

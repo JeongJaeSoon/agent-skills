@@ -748,6 +748,35 @@ patrol.write_round([r], {"cards": {}}, False, NOW + 200)
 assert patrol.pending_lines("hr", False, T)[0].startswith("PATROL R"), "shown to its owner"
 assert patrol.pending_lines("hr", False, T + dt.timedelta(hours=3)) == [], "R is shown once, not every 30 minutes"
 
+# M (a model drift) is shown once per drift; a different model is a new finding, and so is the first drift again once the
+# finding in between closed.
+def drift(have):
+    return {"id": patrol.fid("M", "s9", "sonnet", have), "code": "M", "card": "c", "title": "x", "owner": "hm"}
+patrol.write_round([drift("opus")], {"cards": {}}, False, NOW + 300)
+assert patrol.pending_lines("hm", False, T)[0].startswith("PATROL M"), "the drift is shown to its owner"
+assert patrol.pending_lines("hm", False, T + dt.timedelta(hours=3)) == [], "and not again every 30 minutes"
+patrol.write_round([drift("haiku")], {"cards": {}}, False, NOW + 400)
+assert patrol.pending_lines("hm", False, T + dt.timedelta(hours=4))[0].startswith("PATROL M"), "another model is news"
+patrol.write_round([drift("opus")], {"cards": {}}, False, NOW + 500)
+assert patrol.pending_lines("hm", False, T + dt.timedelta(hours=5))[0].startswith("PATROL M"), "so is the first one again"
+# Polling one terminal with and without the unowned scope does not make an open finding new.
+patrol.write_round([{**drift("opus"), "owner": None}], {"cards": {}}, False, NOW + 550)
+assert patrol.pending_lines("hu", True, T + dt.timedelta(hours=5, minutes=1))[0].startswith("PATROL M")
+assert patrol.pending_lines("hu", False, T + dt.timedelta(hours=5, minutes=2)) == []
+assert patrol.pending_lines("hu", True, T + dt.timedelta(hours=5, minutes=3)) == [], "still the same open drift"
+# A closed drift is forgotten for every terminal, including one nobody polled while it was closed.
+patrol.write_round([{**drift("opus"), "owner": None}], {"cards": {}}, False, NOW + 560)
+assert patrol.pending_lines("ha", True, T + dt.timedelta(hours=5, minutes=4))[0].startswith("PATROL M")
+patrol.write_round([], {"cards": {}}, False, NOW + 570)
+assert patrol.pending_lines("hb", False, T + dt.timedelta(hours=5, minutes=5)) == []
+patrol.write_round([{**drift("opus"), "owner": None}], {"cards": {}}, False, NOW + 580)
+assert patrol.pending_lines("ha", True, T + dt.timedelta(hours=5, minutes=6))[0].startswith("PATROL M"), "new for ha"
+# The same drift back after it closed (opus, back on sonnet, opus), with nothing due in between.
+patrol.write_round([], {"cards": {}}, False, NOW + 600)
+assert patrol.pending_lines("hm", False, T + dt.timedelta(hours=6)) == [], "a closed drift shows nothing"
+patrol.write_round([drift("opus")], {"cards": {}}, False, NOW + 700)
+assert patrol.pending_lines("hm", False, T + dt.timedelta(hours=7))[0].startswith("PATROL M"), "and is new when it returns"
+
 # H: an ended turn whose screen shows a hook error in its last turn or Claude Code's restart notice. Run workers too;
 # a screen without that wording, a turn still running, a prompt waiting on a human or an unread screen is not judged.
 RULE = "─" * 40
