@@ -1516,9 +1516,10 @@ function fleetMonitors(st, sw = "") {
   return headHtml + failed + table;
 }
 
-// Instructions sent out of a session (sent.py via /api/fleet/sent): the `orch sent add` log, lines typed on the
-// dashboard, and what live sessions sent by Agent, SendMessage or orca. Read on every poll while the page is open.
-const SENT_SRC = { log: ["log", "accent"], transcript: ["transcript", ""], dashboard: ["dashboard", "good"] };
+// Instructions sent out of a session (sent.py via /api/fleet/sent): the `orch sent add` log (lines typed on the
+// dashboard are in it) and what Orca keeps. Transcripts are witnesses only: a send found there that the log and Orca
+// lack is counted in `unrecorded`. Read on every poll while the page is open.
+const SENT_SRC = { log: ["log", "accent"], orca: ["orca", ""], transcript: ["transcript", ""] };
 const SENT_DAYS = [["1", "1d"], ["7", "7d"], ["30", "30d"]];
 const SENT_SHOWN = 300;
 const sentDays = () => (SENT_DAYS.some(([d]) => d === S.filters.sent_days) ? S.filters.sent_days : "1");
@@ -1542,7 +1543,7 @@ const sentKey = (r) => `${r.ts}|${r.source}|${r.to}|${(r.text || "").length}`;
 function fleetSent(st) {
   if (!F.sent || F.sentDays !== sentDays()) pollSent();
   const d = F.sent, src = (st && st.sources || {}).sent || {};
-  const headHtml = `<div class="view-head"><div><h2>Sent</h2><p>Instructions sessions sent to other sessions, cards, subagents, inboxes, Slack or the tracker, with the full text. Three sources: the log written with <span class="mono">orch sent add</span> at send time, lines typed into a session from this dashboard, and the Agent, SendMessage, <span class="mono">orca terminal send</span>, <span class="mono">orca worktree create --prompt</span> and <span class="mono">orca orchestration send</span> calls in live Claude Code session transcripts. An instruction in both the log and a transcript shows as one row. What an ended session sent survives only in the log. Tokens and passwords are masked.</p></div>
+  const headHtml = `<div class="view-head"><div><h2>Sent</h2><p>Instructions sessions sent to other sessions, cards, subagents, inboxes, Slack or the tracker, with the full text. Two sources: the log written with <span class="mono">orch sent add</span> at send time (lines typed into a session from this dashboard are written there too), and what Orca keeps itself (messages and Run Task specs). Live session transcripts are only checked against them: a send found there that neither has is not a row but a warning, since its sender skipped <span class="mono">orch sent add</span>. What an ended session sent survives only in the log. Tokens and passwords are masked.</p></div>
     <div class="legend">${Object.values(SENT_SRC).map(([l, tone]) => tag(l, tone)).join(" ")}</div></div>`;
   if (!d) return headHtml + '<div class="loading">Loading…</div>';
   if (d.error) return headHtml + `<div class="card"><div class="empty-chart">${esc(d.error)}</div></div>`;
@@ -1551,7 +1552,8 @@ function fleetSent(st) {
   const bySrc = (r) => f === "all" || r.source === f || (r.also || []).includes(f);
   const hit = (r) => !q || [r.from, r.to, r.kind, r.channel, r.repo, r.subject, r.text].some((v) => (v || "").toLowerCase().includes(q));
   const shown = rows.filter((r) => bySrc(r) && hit(r));
-  const failed = src.ok === false ? `<div class="card"><div class="empty-chart">${tag("collection failed", "warn", "alert")} Could not read transcripts: ${esc(src.error || "")}. Only the log and dashboard sources are shown.</div></div>` : "";
+  const failed = src.ok === false ? `<div class="card"><div class="empty-chart">${tag("collection failed", "warn", "alert")} Could not read transcripts: ${esc(src.error || "")}. Only the log and Orca rows are shown, and sends missing from them cannot be counted.</div></div>` : "";
+  const unrecorded = d.unrecorded > 0 ? `<div class="card"><p class="warn-note">${tag("unrecorded sends", "warn", "alert")} ${d.unrecorded} send${d.unrecorded === 1 ? "" : "s"} in live session transcripts match no log or Orca row: the sender skipped <span class="mono">orch sent add</span>. They are not listed here.</p></div>` : "";
   const body = shown.slice(0, SENT_SHOWN).map((r) => {
     const text = r.text || "", long = text.split("\n").length > 6 || text.length > 480, k = sentKey(r);
     const srcs = [r.source, ...(r.also || [])].map((x) => tag((SENT_SRC[x] || [x])[0], (SENT_SRC[x] || [, ""])[1])).join(" ");
@@ -1571,7 +1573,7 @@ function fleetSent(st) {
   const note = cut || more ? `<p class="muted">${cut}${more}Narrow with search or source.</p>` : "";
   const table = shown.length ? `<div class="card table-wrap" data-src="sent"><table class="sent"><thead><tr><th>When</th><th>From → to</th><th>Text</th><th>Source</th></tr></thead><tbody>${body}</tbody></table></div>`
     : `<div class="card"><div class="empty-chart">${rows.length ? "No matching instructions." : "Nothing sent in this period."}</div></div>`;
-  return headHtml + failed + toolbar + note + table;
+  return headHtml + failed + unrecorded + toolbar + note + table;
 }
 document.addEventListener("input", (e) => { if (e.target.id === "sent-search") { S.filters.sent_q = e.target.value; renderView(); } });
 document.addEventListener("toggle", (e) => {

@@ -142,6 +142,9 @@ denied(JIRA + "searchJiraIssuesUsingJql", {"jql": "project = ENG", "maxResults":
 passed(JIRA + "searchJiraIssuesUsingJql", {"jql": "x", "nextPageToken": "t"}, "pass-unsupported-key")
 denied(JIRA + "addCommentToJiraIssue", {"issueIdOrKey": "ENG-1", "commentBody": "x"}, "orca jira comment add ENG-1 --body-file <file>")
 denied(JIRA + "getTransitionsForJiraIssue", {"issueIdOrKey": "ENG-1"}, "orca jira status list ENG-1")
+denied(JIRA + "listJiraIssueTransitions", {"issueIdOrKey": "ENG-1"}, "orca jira status list ENG-1")
+denied(JIRA + "addOrEditJiraIssueComment", {"issueIdOrKey": "ENG-1", "commentBody": "x"}, "orca jira comment add ENG-1 --body-file <file>")
+passed(JIRA + "addOrEditJiraIssueComment", {"issueIdOrKey": "ENG-1", "commentBody": "x", "commentId": "9"}, "pass-unsupported-key")
 denied(JIRA + "transitionJiraIssue", {"issueIdOrKey": "ENG-1", "transition": {"id": "31"}}, "orca jira status set ENG-1 --to-id 31")
 passed(JIRA + "transitionJiraIssue", {"issueIdOrKey": "ENG-1", "transition": {"id": "31"}, "fields": {"a": 1}},
        "pass-unsupported-key")

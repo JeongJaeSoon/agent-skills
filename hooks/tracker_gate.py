@@ -299,6 +299,8 @@ JIRA = {
     "getjiraissue": jira_get, "searchjiraissuesusingjql": jira_search, "gettransitionsforjiraissue": jira_transitions,
     "transitionjiraissue": jira_transition, "addcommenttojiraissue": jira_comment, "createjiraissue": jira_create,
     "editjiraissue": jira_edit,
+    # Names the Atlassian server uses since its v2 tools; an edit of an existing comment carries a key `only` rejects.
+    "listjiraissuetransitions": jira_transitions, "addoreditjiraissuecomment": jira_comment,
 }
 HANDLERS = {"linear": LINEAR, "jira": JIRA}
 
