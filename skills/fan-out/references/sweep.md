@@ -16,7 +16,7 @@ Spawn all N workers in one message with the `Agent` tool: `subagent_type: "gener
 
 When a worker must start from a non-default pushed branch, name it in the brief and have the worker check it out in its worktree first, or pass `--base-branch` to `orca orchestration worker-start`. `--base-branch` only works with `--worktree new-top-level` or `new-child`, since it names the base of the worktree Orca creates; Orca rejects it for `current` or an existing worktree.
 
-Every brief stands alone. Include the goal, scope, exact slice or race arm, how to verify, and what to report. Reports use `PASS`, `ISSUES`, or `BLOCKED` with evidence. A worker that can prove a defect reports `ISSUES` and lists every issue it can prove, not only the first.
+Every brief stands alone. Include the goal, scope, exact slice or race arm, how to verify, and what to report. Pass the file paths and the question, never a large document in full: each worker pays for its whole context on every turn, and N workers pay N times. Reports use `PASS`, `ISSUES`, or `BLOCKED` with evidence. A worker that can prove a defect reports `ISSUES` and lists every issue it can prove, not only the first.
 
 If a worker drops out, proceed with N-1 and note it.
 
