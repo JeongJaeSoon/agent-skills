@@ -1,6 +1,6 @@
 ---
 name: explain-code
-description: "Use before changing unread code: 이 구조 설명해줘, X는 어떻게 동작해, 이건 어디에 둬야 해, 왜 이렇게 됐어, 이 결정 배경이 뭐야, why did we do X, teach me this, 이거 제대로 이해하고 싶어, 이 변경 이해시켜줘, feature map 만들어줘, 기능 지도 그려줘, 지금 뭐가 구현돼 있는지 정리해줘. Verify maps: create-verification-skill. An orchestrator dispatches it instead."
+description: "Before changing unread code: '이 구조 설명해줘', 'X는 어떻게 동작해', '이건 어디에 둬야 해', '왜 이렇게 됐어', '이 결정 배경이 뭐야', 'teach me this', '이거 제대로 이해하고 싶어', '이 변경 이해시켜줘', 'feature map 만들어줘', '기능 지도 그려줘', '지금 뭐가 구현돼 있는지 정리해줘'. Verify maps: create-verification-skill. An orchestrator dispatches it instead."
 ---
 
 # Explain code

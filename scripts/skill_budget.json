@@ -37,9 +37,9 @@
       "width": 368
     },
     "explain-code": {
-      "skill_md_tokens": 543,
-      "tokens": 126,
-      "width": 388
+      "skill_md_tokens": 549,
+      "tokens": 133,
+      "width": 389
     },
     "fan-out": {
       "skill_md_tokens": 268,
@@ -183,8 +183,8 @@
     }
   },
   "totals": {
-    "always_tokens": 3042,
-    "always_width": 10806,
-    "skills_width": 9926
+    "always_tokens": 3049,
+    "always_width": 10807,
+    "skills_width": 9927
   }
 }
