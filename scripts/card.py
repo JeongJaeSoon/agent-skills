@@ -896,6 +896,23 @@ def brief_kind(brief_path):
     return m.group(1)
 
 
+# `lead`, `lead:<slug>`, `<slug>-lead`: a name that calls the card a lead. `lead-<topic>` is a worker about leads.
+LEAD_NAME = re.compile(r"(?i)^(?:lead(?::.*)?|.*[-:\s]lead)$")
+LEAD_ONLY_ROWS = ("INBOX", "DELEGATE", "PREDICATE", "TASKS", "GATE")
+
+
+def lead_shaped(text, opts):
+    """Why a brief that guard.is_lead() calls a worker looks like a lead's, else None. The model, the hooks and the
+    role record all follow is_lead, so a lead brief missing its ROLE line would run as a worker without a word."""
+    named = [opts[k] for k in ("--name", "--display-name") if LEAD_NAME.match(opts.get(k) or "")]
+    if named:
+        return f"the card is named {named[0]!r} but the brief has no lead rows"
+    have = [k for k in LEAD_ONLY_ROWS if row(text, k)]
+    if have:
+        return f"the brief has {', '.join(have)} but no ROLE row"
+    return None
+
+
 def session_model(opts, lead, name, kind=None):
     """(model, model_from): what picked it, or (None, None) after a warning line. See the module docstring."""
     if opts.get("--model"):
@@ -1041,6 +1058,10 @@ def create_locked(brief, opts, refs, prompt, kind=None, order=None):
                         "repo's main worktree when several Orca workspaces share that path. Pass `id:<worktree id>` "
                         "(`orca worktree show --worktree <it> --json`), or leave it out for this terminal's worktree.")
     lead = guard.is_lead(text)
+    if not lead and (why := lead_shaped(text, opts)):
+        raise Refuse(2, f"[{ME}] {brief}: {why}. Without a `ROLE: lead <slug>` line the card runs on "
+                        "orchestrate.models.worker with a worker's hooks. Write the lead rows (orchestrate "
+                        "references/brief.md \"Lead\"), or rename the card if it is a worker.")
     # Checked before the lead's form is picked: a lead started as a /goal card still reports to this Run.
     checked = supervisor(wanted) if to_run and not opts.get("--card") else None
     if lead and to_run and not opts.get("--card"):

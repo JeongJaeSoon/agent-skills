@@ -895,6 +895,20 @@ def signal_round(facts, findings, verdicts, memo, memo2, notes, dry, rid):
     return "; ".join(parts)
 
 
+def tell_drift(d, name, notes):
+    """Put a model drift in the orchestrator's inbox once. The key holds the session and both models, so a round that
+    sees the same drift again adds nothing, and a session that drifts to another model is news."""
+    key = f"model-drift:{d['session']}:{d['role']}:{d['have']}:{d['want']}"
+    try:
+        if key in fleet.inbox_lines():
+            return
+        fleet.inbox_add("approval", f"모델 어긋남: {name} ({d['role']}) {d['have']}, 설정은 {d['want']}. 실행 중인 "
+                        "세션에 /model을 입력하지 말고 다시 시작할 때 바로잡는다", session=d["session"], key=key,
+                        source="patrol")
+    except OSError as e:
+        notes.append(f"model drift: the inbox notice could not be written: {type(e).__name__}")
+
+
 def model_round(facts, findings, verdicts, notes, run=None, dry=False, switch=None):
     """M: sessions off their role's model (model_drift.py). Needs the rows signal_round read; adds findings, the
     brief's ❔ reasons and notes. A round that could not look (no listing, a transcript unread) marks "models" failed,
@@ -940,6 +954,8 @@ def model_round(facts, findings, verdicts, notes, run=None, dry=False, switch=No
                          "title": f"❔ {d['line']}"})
         if path:
             verdicts["check"][path] = f"모델 불일치: {d['have']} (설정 {d['want']})"
+        if not dry:
+            tell_drift(d, card_name(path) or d["handle"], notes)
     if not dry and model_drift.autoswitch_on():
         switch_round(drifts, rows, notes, path_of, switch or model_drift.autoswitch)
 

@@ -1145,4 +1145,20 @@ assert cmd[1:] == [str(HERE / "card.py"), "goal-after-idle", "term_w", LINE] and
 assert spawned[1][0][1:] == [str(HERE / "card.py"), "goal-after-idle", "term_w", LINE, "/wt/x"], spawned
 assert pathlib.Path(log["log"]).parent.name == "goal-input" and log["pid"] == 4242, log
 
+# A brief that looks like a lead's but has no ROLE line is refused: it would run on the worker model (#535).
+for label, argv, body in (
+        ("lead-named", ("--name", "backlog-lead"), WORKER),
+        ("lead: prefix", ("--name", "x", "--display-name", "lead:backlog"), WORKER),
+        ("lead rows", ("--name", "x1"), WORKER + "DELEGATE    You do not implement yourself.\n"),
+):
+    rc, out, err, calls = go(brief(body, "nr.md"), "--repo", "r", "--no-parent", *argv)
+    assert rc == 2 and not creates(calls) and "ROLE: lead" in err, (label, rc, err)
+# A worker about leads (`lead-<topic>`) and a real lead brief are not affected.
+models.write_text(json.dumps({"orchestrate": {"models": {"lead": "opus", "worker": "sonnet"}}}))
+os.environ["AGENT_SKILLS_CONFIG"] = str(models)
+rc, out, err, calls = go(brief(WORKER, "nw.md"), "--repo", "r", "--no-parent", "--name", "lead-model-role")
+assert rc == 0 and model_of(calls) == "sonnet", (rc, err)
+rc, out, err, calls = go(brief(LEAD, "nl.md"), "--repo", "r", "--no-parent", "--name", "backlog-lead")
+assert rc == 0 and model_of(calls) == "opus", (rc, err)
+
 print("ok")
