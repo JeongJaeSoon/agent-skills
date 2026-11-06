@@ -56,7 +56,7 @@ def stream(batches, **kw):
     prog.check = orca
     out = io.StringIO()
     defaults = dict(debounce=30, ttl_ms=600_000, cards=False, threshold=0, out=out, clock=clock, now=clock,
-                    session=lambda me: "s1", ctx=lambda s: None, store=Store())
+                    session=lambda me: "s1", ctx=lambda s: None, store=Store(), role_key=lambda s: "orchestrator")
     s = ist.Stream(ME, **{**defaults, **kw})
     return s, orca, out, clock
 
@@ -130,6 +130,19 @@ s, orca, out, clock = stream([], threshold=130_000, ctx=lambda sid: 150_000)
 assert s.due() == []
 clock.t += ist.QUIET_S
 assert s.due()[0].startswith("RESTART DUE")
+# Only the orchestrator is asked to restart: a lead, a session with no role, and a role that changed across a /clear
+# are not, however large the context.
+for who in ("lead:app", None):
+    s, orca, out, clock = stream([], threshold=130_000, ctx=lambda sid: 150_000, role_key=lambda sid, who=who: who)
+    assert s.due(force=True) == [], who
+live = {"v": "s1"}
+s, orca, out, clock = stream([], threshold=130_000, ctx=lambda sid: 150_000, session=lambda me: live["v"],
+                             role_key=lambda sid: "orchestrator" if sid == "s1" else "lead:app")
+assert s.due(force=True)[0].startswith("RESTART DUE")
+# Mail can arrive before cleared() has noticed a /clear: the stream still holds s1, the terminal runs a lead now.
+live["v"] = "s2"
+s.announced.clear()
+assert s.session == "s1" and s.due(force=True) == []
 
 never = lambda me, still=None: (_ for _ in ()).throw(AssertionError("typed"))  # noqa: E731
 req = ("2026-01-01T00:00:00Z", {"stage": "requested", "handle": ME, "session": "s1"})
