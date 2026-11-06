@@ -1031,7 +1031,7 @@ def repo_verdicts(repo, home=None):
     best, unknown = {}, []
     try:
         dirs = sorted(home.iterdir())
-    except (FileNotFoundError, NotADirectoryError):
+    except FileNotFoundError:
         return best, unknown
     except OSError:
         return best, ["program ledgers"]

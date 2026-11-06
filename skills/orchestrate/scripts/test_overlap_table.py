@@ -130,6 +130,11 @@ with tempfile.TemporaryDirectory() as tmp:
     found, unknown = prog.repo_verdicts("acme/fresh", home)
     assert found == {} and "program ledger fresh" not in unknown, (found, unknown)
 assert prog.repo_verdicts("acme/app", pathlib.Path("/nonexistent-orch-home")) == ({}, [])
+# A programs path that is a file is not an empty directory: it is named.
+with tempfile.TemporaryDirectory() as tmp:
+    plain = pathlib.Path(tmp) / "programs"
+    plain.write_text("x")
+    assert prog.repo_verdicts("acme/app", plain) == ({}, ["program ledgers"])
 
 # An empty rollup is pending even when the repo declares no CI.
 assert prog.table_facts([dict(listing[2], statusCheckRollup=[])], {})[3]["ci"] == "pending"
