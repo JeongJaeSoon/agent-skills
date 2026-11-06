@@ -41,6 +41,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent / "skills" / "reap-resources" / "scripts"))
 import cardguard  # noqa: E402
+import cards  # noqa: E402
 import guard  # noqa: E402
 import preview_watch as pw  # noqa: E402
 import reap  # noqa: E402
@@ -83,13 +84,14 @@ protected_path = guard.protected_path
 # ---------------------------------------------------------------- judgements (pure)
 
 def judge_card(card, facts, pr, terminals, quiet_s, now, idle_s, protect, people, holders, children=(), coordinator=None,
-               busy=()):
+               busy=(), ancestor=False):
     """(target, why). card: a row of `orca worktree list`; facts: reap.worktree_facts; pr: reap's PR state of
     facts["pr"]; terminals: the card's rows of `orca terminal list`, None when unreadable; quiet_s: seconds since
     its transcripts last changed, None when it has none, a reason when they cannot be read; people: pids in it a person started; holders: pids in it
     that are protected or listen on a protected port; children: the cards it made that still exist (a lead's);
     coordinator: why a live Claude session in it is a lead or the orchestrator, which keeps it whatever else holds;
-    busy: shells a live Claude session in it is still running (a Bash call, a background shell, a Monitor)."""
+    busy: shells a live Claude session in it is still running (a Bash call, a background shell, a Monitor);
+    ancestor: HEAD is an ancestor of the PR's head, so the PR carried everything the card has committed."""
     p = reap.real(card["path"])
     if card.get("isMainWorktree") or card.get("isPinned"):
         return False, "메인 체크아웃 또는 고정된 카드"
@@ -110,8 +112,8 @@ def judge_card(card, facts, pr, terminals, quiet_s, now, idle_s, protect, people
         return False, f"PR {facts['pr']} 상태를 읽지 못함"
     if pr["state"] == "OPEN":
         return False, f"열린 PR {facts['pr']}"
-    if pr.get("headRefOid") != facts.get("head"):
-        # A lead may reuse a merged branch's name; only the PR that carried this HEAD says the work is done.
+    if pr.get("headRefOid") != facts.get("head") and not ancestor:
+        # A lead may reuse a merged branch's name; only the PR that carried this HEAD (or a head built on it) says the work is done.
         return False, f"PR {facts['pr']} {pr['state'].lower()}, 그 뒤 HEAD 가 바뀜"
     if facts.get("unreadable"):
         return False, "git 상태를 읽지 못함"
@@ -288,6 +290,21 @@ def read_machine(now):
                                       / "projects", now)}
 
 
+def head_in_pr(path, head, pr_head, git=reap.run):
+    """HEAD is an ancestor of the PR head. A failed read, or a PR head this clone never fetched, reads as no. A card
+    that never committed (a fresh one that reuses a merged branch's name sits on an old ancestor) proves nothing."""
+    if not head or not pr_head:
+        return False
+    if git(["git", "-C", path, "merge-base", "--is-ancestor", head, pr_head], check=False) is None:
+        return False
+    if head == pr_head:
+        return True
+    try:
+        return cards.history(path, git)[0] is True
+    except (RuntimeError, OSError):  # reap.run raises on a failed git; one unreadable card must not stop the pass
+        return False
+
+
 def card_verdict(w, m, cfg, protect, now):
     """(target, why, facts) for one row of `orca worktree list`, read fresh from the machine state m."""
     p = reap.real(w["path"])
@@ -305,7 +322,8 @@ def card_verdict(w, m, cfg, protect, now):
     projects = pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser() / "projects"
     ok, why = judge_card(w, facts, pr, terminals, m["quiet"](p), now, float(cfg["idle_minutes"]) * 60, protect,
                          people_in(p, m["rows"], cwd_of), holders, children,
-                         reap.coordinator_in(p, m["rows"], cwd_of, projects), cardguard.busy_shells(p, m["rows"], cwd_of))
+                         reap.coordinator_in(p, m["rows"], cwd_of, projects), cardguard.busy_shells(p, m["rows"], cwd_of),
+                         bool(pr) and head_in_pr(p, (facts or {}).get("head"), pr.get("headRefOid")))
     return ok, why, {**(facts or {}), "handles": [t.get("handle") for t in terminals or () if t.get("handle")]}
 
 
