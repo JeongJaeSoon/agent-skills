@@ -54,6 +54,9 @@ CHANGES     Optional, like the next two rows: write what you already know and le
 PITFALLS    What has already gone wrong here: an approach that failed, an order that matters,
             what the tests miss.
 EXAMPLES    An input with its expected output, or a command with what it should print.
+ORDER: oN   Optional, on a line of its own, when an owner order (`orch order add`) started this work. `skills-sync card`
+            links the card to it and puts a copy of the order's words in the prompt: do not copy them into the brief.
+            The next row is another thing, the start order of tickets.
 ORDER       Starts after <TICKET…> (Orca deps) · stacked on <TICKET|#PR> (stack) · lands after
             <TICKET…> (orch dep). Pick by what ties the two:
             - code (this uses the lower one's symbols or schema): `stacked on`, one ticket. The
