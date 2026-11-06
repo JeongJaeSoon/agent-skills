@@ -39,3 +39,16 @@ With the MCP server, a child's epic goes in `additional_fields: {"parent": {"id"
 - `list` uses `/rest/api/3/search/jql` with `nextPageToken`, and falls back to `/rest/api/3/search`
   with `startAt` on sites that lack it. `--since` becomes `created >= "YYYY-MM-DD HH:mm"`, which Jira
   reads in the API user's timezone; results are then re-filtered in UTC.
+
+## Switching to Jira
+
+```json
+{"tracker": {"adapter": "jira",
+             "jira": {"base_url": "https://acme.atlassian.net", "email_env": "JIRA_EMAIL", "token_env": "JIRA_API_TOKEN"}}}
+```
+
+Put that in `~/.claude/agent-skills.json`, export `JIRA_EMAIL` and `JIRA_API_TOKEN` (an Atlassian API
+token), then check it with `python3 <tracker.py> list --project KEY --limit 1`. Optional:
+`"issue_type": "Task"` for `create`, `"review_status": "<status name>"` for `--to review`, and
+`team`, `project`, `templates`, `language` as for Linear ([linear.md](linear.md), "Config").
+Tokens are read from the environment only and never printed.

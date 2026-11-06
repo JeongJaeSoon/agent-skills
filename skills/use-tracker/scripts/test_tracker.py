@@ -638,6 +638,116 @@ class ConfigAndFixtures(unittest.TestCase):
         self.assertEqual(self.env.orca_calls(), [])
 
 
+# A fake `gh pr list`: <FAKE_GH_DIR>/<owner>_<repo>.json holds that repo's PRs; --head filters by branch.
+FAKE_GH = r'''#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+with open(os.environ["FAKE_GH_LOG"], "a") as fh:
+    fh.write(json.dumps(args) + "\n")
+if args[:2] != ["pr", "list"]:
+    sys.exit("fake gh: unhandled " + " ".join(args))
+val = lambda f: args[args.index(f) + 1] if f in args else None
+path = os.path.join(os.environ["FAKE_GH_DIR"], val("--repo").replace("/", "_") + ".json")
+if not os.path.exists(path):
+    sys.exit("GraphQL: Could not resolve to a Repository")
+prs = json.load(open(path))
+if val("--head"):
+    prs = [p for p in prs if p["headRefName"] == val("--head")]
+print(json.dumps(prs))
+'''
+
+
+def pr(number, title="", branch="b", body="", state="OPEN", requests=(), reviews=()):
+    return {"number": number, "url": f"https://github.com/acme/app/pull/{number}", "title": title,
+            "headRefName": branch, "body": body, "state": state,
+            "reviewRequests": [{"login": r} for r in requests],
+            "latestReviews": [{"author": {"login": r}} for r in reviews]}
+
+
+class Reconcile(unittest.TestCase):
+    def setUp(self):
+        self.env = Env()
+        gh = os.path.join(self.env.tmp.name, "bin", "gh")
+        with open(gh, "w") as fh:
+            fh.write(FAKE_GH.replace("#!/usr/bin/env python3", "#!" + sys.executable, 1))
+        os.chmod(gh, 0o755)
+        self.ghdir = os.path.join(self.env.tmp.name, "gh")
+        os.makedirs(self.ghdir)
+        self.fixtures = os.path.join(self.env.tmp.name, "fx")
+        os.makedirs(self.fixtures)
+        self.gh_log = os.path.join(self.env.tmp.name, "gh.log")
+
+    def tearDown(self):
+        self.env.close()
+
+    def ticket(self, state_type):
+        with open(os.path.join(self.fixtures, "issues.json"), "w") as fh:
+            json.dump([dict(tracker.issue_template(), id="ENG-12", state_type=state_type)], fh)
+
+    def repo(self, name, prs):
+        with open(os.path.join(self.ghdir, name.replace("/", "_") + ".json"), "w") as fh:
+            json.dump(prs, fh)
+
+    def run_rc(self, *argv):
+        return self.env.run("reconcile", "ENG-12", *argv, TRACKER_FIXTURES=self.fixtures,
+                            FAKE_GH_DIR=self.ghdir, FAKE_GH_LOG=self.gh_log)
+
+    def test_matching_prs_and_rows(self):
+        self.ticket("unstarted")
+        self.repo("acme/app", [
+            pr(1, title="feat: ENG-12 add x", reviews=["bob"]),
+            pr(2, branch="eng-12-fix", requests=["bob"]),
+            pr(3, body="Closes https://tracker.example.test/issue/ENG-12/slug", state="MERGED"),
+            pr(4, title="follow-up noted", body="see ENG-12"),   # named only in passing
+            pr(5, title="ENG-12 abandoned", state="CLOSED"),       # closed without merging
+            pr(6, title="ENG-123 other")])
+        proc, out = self.run_rc("--repo", "acme/app")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual([p["number"] for p in out["prs"]], [1, 2, 3])
+        self.assertEqual(out["target"], "review")
+        self.assertEqual(out["next"], [
+            f"python3 {TRACKER} transition ENG-12 --to review",
+            f"python3 {TRACKER} attach ENG-12 --url https://github.com/acme/app/pull/1",
+            f"python3 {TRACKER} attach ENG-12 --url https://github.com/acme/app/pull/2"])
+
+    def test_open_pr_without_review_is_started(self):
+        self.ticket("started")
+        self.repo("acme/app", [pr(1, title="ENG-12 a", reviews=["bob"])])
+        self.repo("acme/api", [pr(7, title="ENG-12 b")])
+        proc, out = self.run_rc("--repo", "acme/app", "--repo", "acme/api")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(out["target"], "started")
+        self.assertEqual(len(out["prs"]), 2)
+
+    def test_head_branch_counts_without_the_id(self):
+        self.ticket("unstarted")
+        self.repo("acme/app", [pr(9, branch="my-branch", state="MERGED")])
+        proc, out = self.run_rc("--repo", "acme/app", "--head", "my-branch")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual((out["target"], out["next"]), ("criteria", []))
+        with open(self.gh_log) as fh:
+            self.assertEqual(json.loads(fh.read().splitlines()[-1])[-2:], ["--head", "my-branch"])
+
+    def test_report_rows(self):
+        self.repo("acme/app", [])
+        self.ticket("started")
+        _, out = self.run_rc("--repo", "acme/app")
+        self.assertEqual(out["target"], "report")
+        self.ticket("backlog")
+        _, out = self.run_rc("--repo", "acme/app")
+        self.assertIsNone(out["target"])
+        self.ticket("completed")
+        self.repo("acme/app", [pr(1, title="ENG-12")])
+        _, out = self.run_rc("--repo", "acme/app")
+        self.assertEqual((out["target"], out["next"]), ("report", []))
+
+    def test_gh_failure_is_an_error(self):
+        self.ticket("started")
+        proc, _ = self.run_rc("--repo", "acme/missing")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("gh pr list", proc.stderr)
+
+
 if __name__ == "__main__":
     suite = unittest.defaultTestLoader.loadTestsFromModule(sys.modules[__name__])
     result = unittest.TextTestRunner(verbosity=0, stream=sys.stderr).run(suite)

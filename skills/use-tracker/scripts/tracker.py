@@ -9,6 +9,7 @@
     tracker.py [...] comment ID --body-file F
     tracker.py [...] attach ID --url URL [--title T]   (a link such as the PR; title defaults to "PR")
     tracker.py [...] transition ID --to started|review|completed|canceled
+    tracker.py [...] reconcile ID --repo OWNER/REPO [--repo ...] [--head BRANCH]   (reads only; prints the target)
 
 stdout is always JSON; errors go to stderr with a non-zero exit.
 TRACKER_FIXTURES=<dir> serves list/get from <dir>/issues.json and refuses writes.
@@ -630,6 +631,71 @@ class JiraAdapter:
 
 # ---------------------------------------------------------------- CLI
 
+# ---------------------------------------------------------------- reconcile (use-tracker "Reconcile")
+
+PR_FIELDS = "number,url,title,headRefName,body,state,reviewRequests,latestReviews"
+CLOSES = r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b:?\s+\S*?"
+
+
+def gh_prs(repo, *query):
+    cmd = ["gh", "pr", "list", "--repo", repo, "--state", "all", "--limit", "100", "--json", PR_FIELDS, *query]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except FileNotFoundError:
+        raise TrackerError("`gh` not found on PATH; reconcile reads PRs with the GitHub CLI")
+    except subprocess.TimeoutExpired:
+        raise TrackerError(f"gh pr list --repo {repo}: timed out")
+    try:
+        if proc.returncode:
+            raise ValueError
+        return json.loads(proc.stdout)
+    except ValueError:
+        raise TrackerError(f"gh pr list --repo {repo}: exit {proc.returncode}: {(proc.stderr or proc.stdout).strip()[:500]}")
+
+
+def delivers(pr_, issue_id):
+    """The ID in the title or branch (any case), or after a closing keyword in the body; a mention elsewhere is not."""
+    ident = rf"(?<![A-Za-z0-9]){re.escape(issue_id)}(?![0-9])"
+    return bool(re.search(ident, pr_.get("title") or "", re.I) or re.search(ident, pr_.get("headRefName") or "", re.I)
+                or re.search(CLOSES + ident, pr_.get("body") or "", re.I))
+
+
+def reconcile(adapter, issue_id, repos, head):
+    """The first row of use-tracker "Reconcile" that GitHub supports. Reads only; `next` holds the milestone lines."""
+    issue = adapter.get(issue_id)
+    found = {}
+    for repo in repos:
+        prs = [p for p in gh_prs(repo, "--search", issue_id) if delivers(p, issue_id)]
+        prs += [p for p in gh_prs(repo, "--head", head) if p.get("headRefName") == head] if head else []
+        for p in prs:
+            if p.get("state") in ("OPEN", "MERGED"):
+                found.setdefault(p["url"], {"repo": repo, "number": p["number"], "url": p["url"],
+                                            "state": p["state"].lower(),
+                                            "reviewed": bool(p.get("reviewRequests") or p.get("latestReviews"))})
+    prs = sorted(found.values(), key=lambda p: (repos.index(p["repo"]), p["number"]))
+    open_ = [p for p in prs if p["state"] == "open"]
+    closed = issue.get("state_type") in ("completed", "canceled")
+    if closed:
+        target, reason = ("report", "closed ticket with an open PR: report it, never reopen") if open_ else (None, "closed")
+    elif any(not p["reviewed"] for p in open_):
+        target, reason = "started", "an open PR with no review requested or submitted"
+    elif open_:
+        target, reason = "review", "every open PR has a review requested or submitted"
+    elif prs:
+        target, reason = "criteria", "every PR merged: check each criterion now; completed only when all hold"
+    elif issue.get("state_type") == "started":
+        target, reason = "report", "no PR on a started ticket"
+    else:
+        target, reason = None, "no PR"
+    me = os.path.abspath(__file__)
+    nxt = []
+    if target in ("started", "review"):
+        nxt = [f"python3 {me} transition {issue_id} --to {target}"] + [
+            f"python3 {me} attach {issue_id} --url {p['url']}" for p in open_]
+    return {"id": issue_id, "state_type": issue.get("state_type"), "prs": prs, "target": target,
+            "reason": reason, "next": nxt}
+
+
 def make_adapter(name, config):
     fixtures = os.environ.get("TRACKER_FIXTURES")
     if fixtures:
@@ -676,6 +742,10 @@ def build_parser():
     s = sub.add_parser("transition")
     s.add_argument("id")
     s.add_argument("--to", required=True, choices=TRANSITION_TARGETS)
+    s = sub.add_parser("reconcile")
+    s.add_argument("id")
+    s.add_argument("--repo", action="append", required=True, help="owner/repo; repeat for each repo the work spans")
+    s.add_argument("--head", help="the ticket's branch, when known (the PR search does not match branch names)")
     return p
 
 
@@ -711,6 +781,8 @@ def run(argv):
         if not valid:
             raise TrackerError(f"attach: --url must be an absolute http(s) URL, got {args.url!r}")
         return adapter.attach(args.id, args.url, args.title)
+    if args.cmd == "reconcile":
+        return reconcile(adapter, args.id, args.repo, args.head)
     return adapter.transition(args.id, args.to)
 
 
