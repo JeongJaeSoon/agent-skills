@@ -5,61 +5,61 @@ description: "Use when a browser auth screen needs a secret the agent must not s
 
 # Secure fill
 
-비밀번호 관리자와 같은 방식이다. 에이전트는 채우기를 요청만 하고, 사람은 에이전트가 조작할 수 없는 창(Touch ID / 기기 소유자 인증)에서 매번 승인하고, 값은 도구가 브라우저에 직접 넣는다. 소유자가 허용 목록에서 `"approval": "none"`으로 둔 항목은 승인 창 없이 채운다. 값은 argv, 표준 출력, 로그 어디에도 나오지 않는다.
+It works like a password manager. The agent only requests the fill, a human approves each time in a window the agent cannot operate (Touch ID / device owner authentication), and the tool puts the value into the browser directly. An item the owner marked `"approval": "none"` in the allowlist is filled without the approval window. The value appears nowhere: not in argv, stdout or logs.
 
-## 에이전트가 할 일
+## What the agent does
 
-1. 브라우저에서 인증 화면으로 이동한다.
-2. 값을 넣을 입력칸을 클릭해 포커스를 준다.
-3. 실행한다.
+1. Navigate to the auth screen in the browser.
+2. Click the input field that takes the value, to give it focus.
+3. Run:
 
    ```bash
-   python3 "${CLAUDE_SKILL_DIR}/scripts/secure_fill.py" --item <이름> --origin https://dev.example.test --target chrome   # 또는 --target orca
+   python3 "${CLAUDE_SKILL_DIR}/scripts/secure_fill.py" --item <name> --origin https://dev.example.test --target chrome   # or --target orca
    ```
 
-   `bin/secure-fill`은 같은 일을 하는 래퍼다. 소유자가 `chmod 755 bin/secure-fill`을 해 두면 PATH에서 `secure-fill`로 부를 수 있다.
+   `bin/secure-fill` is a wrapper that does the same. Once the owner has run `chmod 755 bin/secure-fill`, it can be called as `secure-fill` from PATH.
 
-4. 사람에게 "Touch ID 승인 대기 중"이라고 알린다. 승인할 때까지 명령이 끝나지 않는다. `"approval": "none"` 항목은 기다리지 않고 바로 끝난다.
+4. Tell the human "Touch ID 승인 대기 중". The command does not finish until they approve. An item with `"approval": "none"` finishes at once without waiting.
 
-결과는 한 줄로 나오고 종료 코드로도 구분된다. 값은 나오지 않는다.
+The result comes out as one line and is also distinguished by exit code. The value is never printed.
 
-| 종료 코드 | 결과 | 다음 행동 |
+| Exit code | Result | Next action |
 |---|---|---|
-| 0 | `filled` | 폼 제출은 사람이나 에이전트가 한다(`--submit`을 줬을 때만 도구가 제출) |
-| 10 | `denied` | 사람이 거절했다. 다시 시도하기 전에 묻는다 |
-| 11 | `origin-mismatch` | 활성 탭이 `--origin`과 다르다. 이동부터 한다 |
-| 12 | `not-found` | Keychain에도 env에도 값이 없다. 사람에게 등록을 부탁한다 |
-| 13 | `not-allowed` | 허용 목록에 그 item·origin 쌍이 없다. 사람에게 부탁한다 |
-| 14 | `no-field` | 포커스된 입력칸이 없다 |
-| 15 | `fill-failed` | 권한 부족 등. 이유가 괄호 안에 나온다 |
-| 16 | `config-error` | 허용 목록 형식 오류 |
+| 0 | `filled` | A human or the agent submits the form (the tool submits only when given `--submit`) |
+| 10 | `denied` | The human declined. Ask before trying again |
+| 11 | `origin-mismatch` | The active tab differs from `--origin`. Navigate first |
+| 12 | `not-found` | No value in the Keychain or in env. Ask the human to register it |
+| 13 | `not-allowed` | The allowlist has no such item·origin pair. Ask the human |
+| 14 | `no-field` | No input field has focus |
+| 15 | `fill-failed` | Missing permission or similar. The reason appears in parentheses |
+| 16 | `config-error` | Malformed allowlist |
 
-하지 않는 것: 허용 목록(`~/.config/secure-fill/allow.json`) 수정, `security find-generic-password` 직접 실행, 채운 뒤 입력칸 값 읽기(`orca eval`, DevTools), 승인 안 된 채로 재시도 반복.
+Do not: edit the allowlist (`~/.config/secure-fill/allow.json`), run `security find-generic-password` directly, read the field's value after filling (`orca eval`, DevTools), or retry over and over without approval.
 
-## 동작 순서
+## Order of operations
 
-1. `--origin`이 `scheme://host[:port]` 꼴인지 보고, 허용 목록에서 item의 origins에 있는지 본다.
-2. 대상 브라우저의 활성 탭 URL을 읽어 origin이 정확히 같은지 본다. Chrome은 AppleScript `URL of active tab of front window`, Orca는 `orca get --what url`.
-3. Touch ID 창을 띄운다. 이유 문구에 item 이름과 origin이 나온다. 승인이 없으면 값을 읽지 않는다. item이 `"approval": "none"`이면 이 단계를 건너뛴다.
-4. 값을 읽는다. Keychain generic password(service `secure-fill`, account = item 이름)가 먼저, 없으면 item의 `env` 변수.
-5. 채운다.
-   - Chrome, "Allow JavaScript from Apple Events"가 켜져 있으면: 페이지 안에서 `location.origin`을 다시 확인하고 같은 스크립트에서 값을 넣는다(확인과 입력 사이에 탭이 바뀔 틈이 없다). 스크립트는 `osascript`의 stdin으로 간다.
-   - 그 밖에는 클립보드: Swift 헬퍼가 stdin으로 값을 받아 `org.nspasteboard.ConcealedType`·`TransientType` 표시를 붙여 클립보드에 쓰고, 브라우저를 앞으로 가져와 Cmd+V를 보내고, 3초 뒤 그동안 아무도 클립보드를 바꾸지 않았으면 원래 문자열로 되돌린다. 붙여넣기 직전에 origin을 다시 읽는다. Orca는 페이지에 포커스와 입력칸 포커스가 있는지도 확인한다. 그렇지 않으면 Cmd+V가 에이전트 자신의 터미널에 들어갈 수 있다.
-6. `~/.local/state/secure-fill/log.jsonl`(디렉터리 0700, 파일 0600)에 시각·item·origin·대상·승인 방식(`touch-id`·`none`)·결과·방법을 남긴다.
+1. Check that `--origin` has the form `scheme://host[:port]`, and that it is in the item's origins in the allowlist.
+2. Read the active tab URL of the target browser and check that the origin matches exactly. For Chrome it is the AppleScript `URL of active tab of front window`; for Orca, `orca get --what url`.
+3. Show the Touch ID window. Its reason text carries the item name and the origin. Without approval the value is not read. If the item is `"approval": "none"`, skip this step.
+4. Read the value. The Keychain generic password (service `secure-fill`, account = item name) comes first; if absent, the item's `env` variable.
+5. Fill.
+   - Chrome, with "Allow JavaScript from Apple Events" on: check `location.origin` again inside the page and set the value in the same script (so the tab cannot change between the check and the input). The script goes to `osascript` on stdin.
+   - Otherwise the clipboard: a Swift helper takes the value on stdin, writes it to the clipboard with the `org.nspasteboard.ConcealedType` and `TransientType` markers, brings the browser to the front and sends Cmd+V, then after 3 seconds restores the original string if nobody changed the clipboard in the meantime. It reads the origin again just before pasting. For Orca it also checks that the page and the input field have focus. Otherwise Cmd+V could land in the agent's own terminal.
+6. Record time, item, origin, target, approval mode (`touch-id` or `none`), result and method in `~/.local/state/secure-fill/log.jsonl` (directory 0700, file 0600).
 
-## 소유자 설정
+## Owner setup
 
-1. Keychain 항목을 만든다. `-w`를 마지막에 값 없이 두면 값을 대화형으로 묻는다(argv와 셸 히스토리에 남지 않는다).
+1. Create the Keychain entry. Leaving `-w` last with no value makes it ask for the value interactively (so it stays out of argv and shell history).
 
    ```bash
    security add-generic-password -s secure-fill -a dev-token -T "" -w
    ```
 
-   `-T ""`는 신뢰 앱 목록을 비운다. macOS 문서대로라면 이후 어떤 프로세스든 값을 읽을 때 Keychain이 확인 창을 띄운다. 에이전트가 이 도구를 거치지 않고 `security`로 직접 읽으려 해도 걸린다. 대신 채울 때마다 Touch ID와 Keychain 확인을 둘 다 거친다(`"approval": "none"` 항목은 Keychain 확인만). 이 동작은 아직 실측하지 않았으니 첫 사용 때 확인 창이 뜨는지 직접 본다. `-T ""`를 빼면 `security`가 신뢰 앱으로 들어가 같은 사용자의 어떤 프로세스든 묻지 않고 읽을 수 있다.
+   `-T ""` empties the trusted-app list. By the macOS documentation, the Keychain then shows a confirmation window whenever any process reads the value afterwards. That catches an agent that tries to read it directly with `security`, bypassing this tool. The cost is that every fill goes through both Touch ID and the Keychain confirmation (an item with `"approval": "none"` goes through the Keychain confirmation only). This behavior has not been measured yet, so on first use check yourself that the confirmation window appears. Without `-T ""`, `security` becomes a trusted app and any process of the same user can read the value without asking.
 
-   확인 창에서는 **허용(Allow)**만 누른다. **항상 허용(Always Allow)**을 한 번 누르면 `/usr/bin/security`가 그 항목의 신뢰 목록에 영구히 들어가 이 층이 사라진다. 되돌리려면 항목을 지우고 다시 만든다.
+   In the confirmation window press only **Allow**. Pressing **Always Allow** even once puts `/usr/bin/security` into that item's trust list for good and this layer is gone. To undo it, delete the item and create it again.
 
-2. 허용 목록을 만든다. `~/.config/secure-fill/allow.json`:
+2. Create the allowlist, `~/.config/secure-fill/allow.json`:
 
    ```json
    {"items": {
@@ -69,43 +69,43 @@ description: "Use when a browser auth screen needs a secret the agent must not s
    }}
    ```
 
-   Touch ID 없이 채울 항목에는 `"approval": "none"`을 적는다(기본값 `"touch-id"`). 예: `"dev-token": {"origins": ["https://dev.example.test"], "approval": "none"}`. 이 설정은 편의 기능이지 보안 경계가 아니다(아래 "한계").
+   For an item to be filled without Touch ID, write `"approval": "none"` (the default is `"touch-id"`). Example: `"dev-token": {"origins": ["https://dev.example.test"], "approval": "none"}`. This setting is a convenience, not a security boundary (see "Limits" below).
 
-   origin은 경로 없이 `scheme://host[:port]`만 적는다. 기본 포트(443, 80)는 적어도 빠진 것과 같다. `http`와 `https`, 하위 도메인은 서로 다르다.
+   Write an origin as `scheme://host[:port]` only, with no path. The default ports (443, 80) are the same whether written or left out. `http` and `https`, and subdomains, are different from each other.
 
-3. 허용 목록 소유권. 에이전트는 같은 사용자로 돌기 때문에 사용자 소유 파일은 고칠 수 있다. root 소유로 두면 에이전트가 sudo 없이는 바꿀 수 없다. 도구는 파일이 현재 사용자에게 쓰기 가능하면 `allowlist-writable-by-this-user` 경고를 낸다.
+3. Allowlist ownership. The agent runs as the same user, so it can edit a file the user owns. Owned by root, the agent cannot change it without sudo. The tool prints an `allowlist-writable-by-this-user` warning when the file is writable by the current user.
 
    ```bash
    sudo chown root:wheel ~/.config/secure-fill/allow.json && sudo chmod 644 ~/.config/secure-fill/allow.json
    ```
 
-4. macOS 권한. 에이전트를 돌리는 터미널 앱(예: Orca, Terminal, iTerm)에 준다.
-   - 시스템 설정 → 개인정보 보호 및 보안 → **손쉬운 사용(Accessibility)**: 클립보드 붙여넣기(Cmd+V 전송)에 필요하다. 없으면 `fill-failed (the terminal app lacks Accessibility permission)`로 끝나고 값은 어디에도 가지 않는다.
-   - **자동화(Automation)** → Google Chrome: 활성 탭 URL 읽기에 필요하다. 처음 실행할 때 macOS가 묻는다.
-   - (선택) Chrome 메뉴 보기 → 개발자 → **Apple Events의 JavaScript 허용**: 켜면 클립보드를 거치지 않고 DOM에 직접 넣고 `--selector`를 쓸 수 있다. 이 설정은 AppleScript를 쓸 수 있는 모든 프로세스(에이전트 포함)에 페이지 JavaScript 실행을 허용한다는 점을 알고 켠다.
+4. macOS permissions. Grant them to the terminal app that runs the agent (e.g. Orca, Terminal, iTerm).
+   - System Settings → Privacy & Security (개인정보 보호 및 보안) → **Accessibility (손쉬운 사용)**: needed for clipboard pasting (sending Cmd+V). Without it the run ends with `fill-failed (the terminal app lacks Accessibility permission)` and the value goes nowhere.
+   - **Automation (자동화)** → Google Chrome: needed to read the active tab URL. macOS asks on the first run.
+   - (Optional) Chrome menu View → Developer → **Allow JavaScript from Apple Events**: when on, the value goes into the DOM directly without the clipboard and `--selector` can be used. Turn it on knowing that this setting lets every process that can use AppleScript (the agent included) run JavaScript in the page.
 
-5. `xcrun swiftc`(Xcode Command Line Tools)가 필요하다. 첫 실행에서 `scripts/sfhelper.swift`를 `~/.cache/secure-fill/`에 컴파일한다.
+5. `xcrun swiftc` (Xcode Command Line Tools) is required. The first run compiles `scripts/sfhelper.swift` into `~/.cache/secure-fill/`.
 
-## 한계
+## Limits
 
-- 이 도구는 값이 에이전트의 argv·출력·로그를 거치지 않게 한다. 페이지에 들어간 값은 페이지를 조작할 수 있는 에이전트(`orca eval`, DevTools, Apple Events JavaScript)가 `input.value`로 읽을 수 있다. 막는 것은 규칙과 Keychain ACL이다.
-- 도구, 헬퍼, 허용 목록은 모두 에이전트와 같은 사용자 권한 아래에 있다. Touch ID 창은 사람이 무엇을 승인하는지 보여 주지만, 에이전트가 도구를 우회하려 들면 막지 못한다(모듈을 직접 불러 게이트를 빼거나, 캐시의 헬퍼를 바꿔치기할 수 있다). 조작된 도구에 맞서는 층은 Keychain의 `-T ""` ACL과 root 소유 허용 목록이다.
-- `"approval": "none"`은 이 한계 안에서 사람의 클릭을 줄이는 설정이다. 이 설정을 써도 값은 argv·출력·로그에 나오지 않고 origin도 확인한다. Keychain 확인 창까지 없애려고 항목을 `-T ""` 없이 만들면, 같은 사용자의 어떤 프로세스든 `security`로 값을 읽을 수 있어 규칙과 셸 가드만 남는다. 승인 없이 채울 항목은 그 정도 보호로 충분한 개발·테스트용 값으로 둔다.
-- Chrome에서 JavaScript 경로가 꺼져 있으면 도구는 입력칸 포커스를 확인하지 못한다. 주소창에 포커스가 있으면 값이 주소창에 들어간다(제출은 하지 않지만 검색 제안 요청이 나갈 수 있다). 입력칸을 먼저 클릭한다.
-- 클립보드는 문자열만 되돌린다. 이미지 등 다른 형식은 복원하지 않고 비운다.
+- This tool keeps the value from passing through the agent's argv, output and logs. Once the value is in the page, an agent that can drive the page (`orca eval`, DevTools, Apple Events JavaScript) can read it as `input.value`. What stops that is the rules and the Keychain ACL.
+- The tool, the helper and the allowlist all sit under the same user's permissions as the agent. The Touch ID window shows the human what they are approving, but it cannot stop an agent that tries to get around the tool (it can import the module directly and drop the gate, or swap the helper in the cache). The layers against a tampered tool are the Keychain's `-T ""` ACL and a root-owned allowlist.
+- `"approval": "none"` reduces human clicks within these limits. With this setting the value still does not appear in argv, output or logs, and the origin is still checked. If you create the item without `-T ""` to drop even the Keychain confirmation window, any process of the same user can read the value with `security`, and only the rules and the shell guard are left. Keep items to be filled without approval to development and test values for which that much protection is enough.
+- When the JavaScript path is off in Chrome, the tool cannot check input-field focus. If the address bar has focus, the value goes into the address bar (nothing is submitted, but a search-suggestion request may go out). Click the input field first.
+- The clipboard restores strings only. Other formats such as images are not restored; the clipboard is left empty.
 
-## 검토하고 뺀 것
+## Considered and left out
 
-- **Orca `fill`/`type`/`eval`로 값 넣기:** 값이 argv에 실려 `ps`로 같은 사용자의 모든 프로세스가 볼 수 있다. Orca는 URL과 포커스를 읽는 데만 쓴다.
-- **Chrome 원격 디버깅(CDP):** Chrome을 플래그와 함께 다시 띄워야 하고, 켜진 동안 에이전트도 같은 포트로 브라우저를 조종할 수 있다.
-- **osascript 대화상자로 승인:** computer-use를 가진 에이전트가 클릭할 수 있다.
-- **게이트를 건너뛰는 테스트용 플래그·환경 변수:** 에이전트가 쓸 수 있는 구멍이 된다. 테스트는 Python 객체로 가짜 게이트·소스·브라우저를 주입한다.
-- **System Events로 Cmd+V:** Automation(System Events) 권한이 하나 더 필요하다. 헬퍼가 CGEvent로 보내면 Accessibility 하나로 된다.
+- **Putting the value in through Orca `fill`/`type`/`eval`:** the value rides in argv and any process of the same user can see it with `ps`. Orca is used only to read the URL and focus.
+- **Chrome remote debugging (CDP):** Chrome has to be relaunched with a flag, and while it is on, the agent can drive the browser through the same port.
+- **Approval through an osascript dialog:** an agent with computer-use can click it.
+- **A test flag or environment variable that skips the gate:** it becomes a hole the agent can use. Tests inject a fake gate, source and browser as Python objects.
+- **Cmd+V through System Events:** needs one more permission, Automation (System Events). When the helper sends it with CGEvent, Accessibility alone is enough.
 
-## 테스트
+## Tests
 
 ```bash
 python3 skills/secure-fill/scripts/test_secure_fill.py
 ```
 
-origin 정규화(userinfo 거부, 기본 포트, 스킴·포트·하위 도메인 차이), 허용 목록 파싱, 거절·origin 불일치 때 값을 읽지 않는지, 모든 경로에서 값이 argv·출력·로그에 없는지를 본다. 수동 데모 기록은 [references/demo.md](references/demo.md).
+It covers origin normalization (userinfo rejected, default ports, scheme, port and subdomain differences), allowlist parsing, that the value is not read on a denial or an origin mismatch, and that on every path the value is absent from argv, output and logs. The manual demo record is [references/demo.md](references/demo.md).
