@@ -1,4 +1,4 @@
-<!-- translated-from: 44701bcab10ef3dbfe37f3285706101a89b7de74 -->
+<!-- translated-from: e79e0bf09619a79e1619fc27fc2a65f81b4f4f26 -->
 # スキルカタログ
 
 `agent-skills` プラグインに入っているスキル40個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック16個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。

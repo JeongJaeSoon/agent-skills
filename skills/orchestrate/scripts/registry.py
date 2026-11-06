@@ -446,6 +446,9 @@ STORES = [
     Store("landlock", "S/land-exec.lock", {"land.round": LOCK}, ("land_exec:round_lock",)),
     Store("landout", "S/land-exec.log", {"land.output": CANONICAL}, ("land_exec:log",), ("nobody",),
           rule="each settled request, one line"),
+    Store("landauto", "S/land-exec-auto.last", {"land.auto": CANONICAL}, ("land_exec:auto_round",), ("nobody",),
+          feature="orchestrate.land_executor",
+          rule="the auto-queue lines of the last round; only the next round reads them, to log a repeated skip once"),
     Store("reaphard", "S/reap-hard.jsonl", {"reap_hard.pass": CANONICAL}, ("reap_hard:log",), ("brief", "page")),
     Store("reaphardout", "S/reap-hard.log", {"reap_hard.pass": LOG}, ("ext:launchd", "reap:spawn_hard"), ("nobody",),
           rule="launchd stdout, and the output of a pass a landed PR started; the jsonl rows again"),
@@ -479,7 +482,7 @@ STORES = [
           rule="repo, Run, predicate, merge policy; stages (`orch set`, cmd_set through Program.update), which "
                "stage_auto reads in the collector and, for a lead not yet in stages-auto, in the hook"),
     Store("progledger", "P/*/ledger.jsonl", {"program.event": CANONICAL},
-          ("prog:Program.append", "prog:Program.append_once", "prog:write_backfill"),
+          ("prog:Program.append", "prog:Program.append_if", "prog:Program.append_once", "prog:write_backfill"),
           ("programview", "fleet", "reflect", "skillspage"), rule="one ledger per program"),
     Store("progledgerlock", "P/*/ledger.lock", {"program.event": LOCK}, ("prog:Program.locked",)),
     Store("progwait", "P/*/*.json", {"program.wait_memo": CANONICAL},
