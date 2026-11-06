@@ -54,6 +54,8 @@ HOOKS = {
     "delegate_gate.py": REFUSAL_ONLY,
     "pressure_gate.py": REFUSAL_ONLY,
     "self_land_gate.py": "a program card's worker_done or worktree rm over its own open PR: its reason, or one warning line",
+    "land_route_gate.py": "a role session's `gh pr merge` in a repo whose owner the land executor's scope names: its "
+                          "reason with the `orch land` route, or one warning line",
     "permission.py": REFUSAL_ONLY,
     "claim_check.py": REFUSAL_ONLY,
     "subagent_log.py": REFUSAL_ONLY,
