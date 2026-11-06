@@ -9,7 +9,7 @@ import automations as au  # noqa: E402
 NO_CONFIG = pathlib.Path(tempfile.gettempdir()) / "test-automations-no-such-config.json"
 au.CONFIG = au.reap.CONFIG = NO_CONFIG
 
-WANT = au.janitor_want(f"path:{au.REPO}")
+WANT = au.Janitor().want()
 
 
 def janitor(enabled=True, **over):
@@ -24,7 +24,7 @@ LOAD = au.janitor_want(f"path:{au.REPO}", load=True)
 
 
 def load_job(enabled=True, **over):
-    return janitor(enabled, **{"id": "J2", "name": au.reap.LOAD_NAME, "rrule": LOAD["trigger"],
+    return janitor(enabled, **{"id": "J2", "name": au.reap.LOAD_NAME, "rrule": LOAD["trigger"], "prompt": LOAD["prompt"],
                                "precheck": {"command": LOAD["precheck"], "timeoutSeconds": LOAD["precheck-timeout"]}, **over})
 
 
@@ -38,14 +38,18 @@ class FakeOrca:
         if cmd[1:3] == ["automations", "list"]:
             out = json.dumps({"ok": True, "result": {"automations": self.autos}}) if self.autos is not None else ""
             return subprocess.CompletedProcess(cmd, 0 if self.autos is not None else 1, out, "boom")
-        if str(au.REAP) in cmd and self.autos is not None:
+        if self.autos is not None and (str(au.REAP) in cmd or cmd[1:3] == ["automations", "create"]):
             # A created job is listed from then on, as `apply` creating the janitor before janitor-load relies on.
-            self.autos.append({"id": f"new{len(self.autos)}", "enabled": True,
-                               "name": au.reap.LOAD_NAME if "--load" in cmd else au.JANITOR_NAME})
+            name = cmd[cmd.index("--name") + 1] if "--name" in cmd else \
+                au.reap.LOAD_NAME if "--load" in cmd else au.JANITOR_NAME
+            self.autos.append({"id": f"new{len(self.autos)}", "enabled": True, "name": name})
         return subprocess.CompletedProcess(cmd, 0, "created", "")
 
     def edits(self):
         return [c for c in self.calls if c[1:3] == ["automations", "edit"]]
+
+    def creates(self):
+        return [c for c in self.calls if c[1:3] == ["automations", "create"]]
 
     def schedules(self):
         return [c for c in self.calls if str(au.REAP) in c]
@@ -56,7 +60,9 @@ class Base(unittest.TestCase):
         fake = FakeOrca(autos)
         for p in (mock.patch.object(au, "sh", fake), mock.patch.object(au.shutil, "which", return_value="/x/orca"),
                   mock.patch.object(au, "main_checkout", return_value=main),
-                  mock.patch.object(au.Watch, "configured", return_value=configured)):
+                  mock.patch.object(au.Watch, "configured", return_value=configured),
+                  # A disable drops the job's record: never the real one under the user's state directory.
+                  mock.patch.object(au.orca_job, "forget")):
             p.start()
             self.addCleanup(p.stop)
         return fake
@@ -67,9 +73,22 @@ class JanitorLoad(Base):
     j = au.JanitorLoad()
 
     def test_shape(self):
-        self.assertTrue(LOAD["precheck"].endswith("precheck --load"), LOAD["precheck"])
+        """Both run the round through orca_job (a record setup-pc reads, exit 1 for Orca), like every shell job."""
+        self.assertTrue(LOAD["precheck"].endswith("precheck --load --act"), LOAD["precheck"])
+        self.assertIn("orca_job.py run janitor-load ", LOAD["precheck"])
+        self.assertTrue(WANT["precheck"].endswith("precheck --act"), WANT["precheck"])
+        self.assertIn("orca_job.py run janitor ", WANT["precheck"])
         self.assertNotEqual(LOAD["trigger"], WANT["trigger"])
-        self.assertEqual(WANT["trigger"], "17 */3 * * *")
+        self.assertEqual((WANT["trigger"], WANT["precheck-timeout"], WANT["prompt"]), ("*/30 * * * *", 600, au.SHELL_PROMPT))
+        # The janitor's own round stops under the job's timeout, which stops under the precheck's.
+        self.assertIn(f"--timeout {au.reap.PRECHECK_TIMEOUT - 20} ", WANT["precheck"])
+        self.assertLess(au.reap.HARD_STOP_S, au.reap.PRECHECK_TIMEOUT - 20)
+
+    def test_reap_schedule_writes_the_same_precheck(self):
+        argv = au.reap.schedule_cmd(au.REAP, au.reap.STATE, "path:x", ledger=au.reap.ledger_path())
+        self.assertEqual((argv[argv.index("--precheck") + 1], argv[argv.index("--trigger") + 1]),
+                         (WANT["precheck"], WANT["trigger"]))
+        self.assertEqual(au.reap.JOB_RUNNER, pathlib.Path(au.orca_job.__file__).resolve())
 
     def test_status_finds_only_its_own_job(self):
         self.orca([janitor()])
@@ -131,10 +150,12 @@ class Janitor(Base):
         self.assertEqual(code, 1)
         self.assertIn("orca CLI", msg)
 
-    def test_enable_absent_creates_through_reap_schedule(self):
+    def test_enable_absent_creates_one_agentless_job(self):
         fake = self.orca([])
         self.assertEqual(self.j.enable(False)[0], 0)
-        self.assertEqual([c[-2:] for c in fake.schedules()], [["schedule", "--write"]])
+        (c,) = fake.creates()
+        self.assertEqual((c[c.index("--name") + 1], c[c.index("--precheck") + 1]), (au.JANITOR_NAME, WANT["precheck"]))
+        self.assertFalse(any(a.startswith("--extra-agent-args") for a in c), c)
 
     def test_enable_absent_refuses_a_worktree(self):
         fake = self.orca([], main=False)
@@ -142,7 +163,7 @@ class Janitor(Base):
         self.assertEqual(code, 1)
         self.assertIn("worktree", msg)
         self.assertEqual(self.j.enable(True)[0], 1)
-        self.assertEqual(fake.schedules(), [])
+        self.assertEqual(fake.schedules() + fake.creates(), [])
 
     def test_enable_when_on_changes_nothing(self):
         fake = self.orca([janitor()])
@@ -197,8 +218,10 @@ class Janitor(Base):
         self.assertEqual([e[e.index("--id") + 1] for e in fake.edits()], ["J1", "J2"])
         self.assertTrue(all("--disabled" in e for e in fake.edits()))
         fake = self.orca([janitor(), load_job()])
-        self.assertEqual(au.JanitorLoad().disable()[0], 0)
+        with mock.patch.object(au.orca_job, "forget") as forget:
+            self.assertEqual(au.JanitorLoad().disable()[0], 0)
         self.assertEqual([e[e.index("--id") + 1] for e in fake.edits()], ["J2"])
+        forget.assert_called_once_with("janitor-load")
 
     def test_enable_turns_a_disabled_load_job_back_on(self):
         """disable then enable janitor leaves both as they were; apply never turns a disabled job on."""
@@ -545,7 +568,7 @@ class Plan(Base):
         self.orca([janitor(), load_job(), stale])
 
         def status(job):
-            return {"sync": ("on", ""), "pressure-watch": ("absent", ""),
+            return {"janitor": ("on", ""), "sync": ("on", ""), "pressure-watch": ("absent", ""),
                     "reap-hard": ("unconfigured", "no protect file"), "orch-dash": ("absent", ""),
                     "land-executor": ("absent", ""), "pstack-upstream": ("absent", "")}[job.name]
         with mock.patch.object(au.ShellJob, "status", status), \
@@ -599,7 +622,9 @@ class Apply(Base):
             self.assertEqual(au.cmd_apply(False), 0)
         pv.assert_not_called()
         self.assertEqual(sj.call_count, 4)  # sync, pressure-watch, reap-hard (status is stubbed past its gate), orch-dash
-        self.assertEqual(["--load" in c for c in fake.schedules()], [False, True])
+        # The janitor is created as a shell job, then the load job through reap's schedule once it is listed.
+        self.assertEqual([c[c.index("--name") + 1] for c in fake.creates()], [au.JANITOR_NAME])
+        self.assertEqual(["--load" in c for c in fake.schedules()], [True])
 
     def test_leaves_a_disabled_janitor_off(self):
         fake = self.orca([janitor(enabled=False), load_job(enabled=False)])
@@ -693,24 +718,26 @@ class Model(Base):
         return {"id": "W-" + name, "name": f"agent-skills {name}", "enabled": enabled, "rrule": "*/30 * * * *",
                 "agentId": "claude", **over}
 
-    def test_janitor_drift_names_a_model_difference(self):
+    # The janitor itself runs no agent, so only the load job (still `reap.py schedule --load`) carries reap.model.
+    def test_load_drift_names_a_model_difference(self):
         self.with_models(reap="sonnet")
-        self.assertEqual(au.janitor_want(f"path:{au.REPO}")["extra-agent-args"], self.ARGS)
-        self.assertIn("extra-agent-args", au.janitor_drift(janitor()))
-        self.assertIn("extra-agent-args", au.janitor_drift(janitor(extraAgentArgs="--model haiku")))
-        self.assertEqual(au.janitor_drift(janitor(extraAgentArgs=self.ARGS)), {})
+        self.assertEqual(au.janitor_want(f"path:{au.REPO}", load=True)["extra-agent-args"], self.ARGS)
+        self.assertIn("extra-agent-args", au.janitor_drift(load_job(), load=True))
+        self.assertIn("extra-agent-args", au.janitor_drift(load_job(extraAgentArgs="--model haiku"), load=True))
+        self.assertEqual(au.janitor_drift(load_job(extraAgentArgs=self.ARGS), load=True), {})
+        self.assertIsNone(au.Janitor().model())
 
-    def test_janitor_without_the_key_is_not_compared(self):
+    def test_load_without_the_key_is_not_compared(self):
         self.with_models()
-        self.assertNotIn("extra-agent-args", au.janitor_want(f"path:{au.REPO}"))
-        self.assertEqual(au.janitor_drift(janitor(extraAgentArgs="--model haiku")), {})
+        self.assertNotIn("extra-agent-args", au.janitor_want(f"path:{au.REPO}", load=True))
+        self.assertEqual(au.janitor_drift(load_job(extraAgentArgs="--model haiku"), load=True), {})
 
-    def test_janitor_enable_fixes_the_model(self):
+    def test_load_enable_fixes_the_model(self):
         self.with_models(reap="sonnet")
-        fake = self.orca([janitor(extraAgentArgs="--model haiku"), load_job(extraAgentArgs=self.ARGS)])
-        self.assertEqual(au.Janitor().enable(False)[0], 0)
+        fake = self.orca([janitor(extraAgentArgs="--model haiku"), load_job(extraAgentArgs="--model haiku")])
+        self.assertEqual(au.JanitorLoad().enable(False)[0], 0)
         (edit,) = fake.edits()
-        self.assertEqual((edit[edit.index("--id") + 1], self.FLAG in edit), ("J1", True))
+        self.assertEqual((edit[edit.index("--id") + 1], self.FLAG in edit), ("J2", True))
         self.assertNotIn("--prompt", edit)
 
     def test_apply_refreshes_the_model_of_jobs_that_are_on_or_off(self):
@@ -723,7 +750,7 @@ class Model(Base):
                 mock.patch.object(au.ShellJob, "status", return_value=("on", "")):
             self.assertEqual(au.cmd_apply(False), 0)
         self.assertEqual({e[e.index("--id") + 1]: e for e in fake.edits()}.keys(),
-                         {"J1", "J2", "W-watch-prs", "W-watch-mentions"})
+                         {"J2", "W-watch-prs", "W-watch-mentions"})
         for e in fake.edits():
             self.assertIn(self.FLAG, e)
             self.assertTrue({"--enabled", "--disabled", "--prompt", "--trigger"}.isdisjoint(e), e)
@@ -757,18 +784,18 @@ class Model(Base):
         self.assertEqual(w.enable(False), (0, "켬"))
         self.assertEqual(fake.edits()[0][1:], ["automations", "edit", "--id", "W-watch-prs", "--enabled", "--json"])
 
-    def test_janitor_on_another_agent_keeps_its_arguments(self):
+    def test_load_on_another_agent_keeps_its_arguments(self):
         self.with_models(reap="sonnet")
         fake = self.orca([janitor(agentId="codex", extraAgentArgs="--model gpt"), load_job(agentId="codex")])
-        self.assertEqual(au.janitor_drift(janitor(agentId="codex")), {})
-        self.assertEqual(au.Janitor().enable(False), (0, "이미 켜져 있음"))
+        self.assertEqual(au.janitor_drift(load_job(agentId="codex"), load=True), {})
+        self.assertEqual(au.JanitorLoad().enable(False), (0, "이미 켜져 있음"))
         self.assertEqual(fake.edits(), [])
 
-    def test_janitor_enable_from_a_worktree_fixes_only_the_model(self):
+    def test_load_enable_from_a_worktree_fixes_only_the_model(self):
         """A worktree's paths are not the job's, but the model does not depend on the checkout."""
         self.with_models(reap="sonnet")
-        fake = self.orca([janitor(prompt="old", extraAgentArgs="--model haiku"), load_job()], main=False)
-        self.assertEqual(au.Janitor().enable(False)[0], 0)
+        fake = self.orca([janitor(), load_job(prompt="old", extraAgentArgs="--model haiku")], main=False)
+        self.assertEqual(au.JanitorLoad().enable(False)[0], 0)
         (edit,) = fake.edits()
         self.assertEqual((self.FLAG in edit, "--prompt" in edit), (True, False))
 
