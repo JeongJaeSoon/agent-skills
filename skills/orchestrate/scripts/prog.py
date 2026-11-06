@@ -2246,7 +2246,10 @@ def worktree_sessions(w):
     scope, host = out.get("hostScope") or {}, w.get("hostId")
     if not host or host not in (scope.get("hostIds") or []) or host in (scope.get("omittedHostIds") or []):
         return None
-    return {t["handle"] for t in rows if isinstance(t.get("handle"), str) and t["handle"]}
+    # A terminal row with no usable handle could be the author's own: dropping it would read as "no card".
+    if not all(isinstance(t, dict) and isinstance(t.get("handle"), str) and t["handle"] for t in rows):
+        return None
+    return {t["handle"] for t in rows}
 
 
 def worktree_holders(matches):

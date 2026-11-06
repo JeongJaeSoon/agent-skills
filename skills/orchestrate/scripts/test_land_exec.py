@@ -381,8 +381,14 @@ class LandExec(Fixture):
             for answer in ({"terminals": [{"handle": "term_other"}], "truncated": True}, {"terminals": None}, {}):
                 prog.orca_json = fake(held[:1], {"id:w1": answer})
                 self.assertIsNone(prog.author_sessions("b"), answer)
-            prog.orca_json = fake(held[:1], {"id:w1": {"terminals": [{"handle": "term_b"}, {"handle": "term_a"}, {}]}})
+            prog.orca_json = fake(held[:1], {"id:w1": {"terminals": [{"handle": "term_b"}, {"handle": "term_a"}]}})
             self.assertEqual(prog.author_sessions("b"), ["term_a", "term_b"])
+            # A terminal row without a usable handle may be the author's own: dropping it would read as "no card".
+            for row in ({}, {"handle": ""}, {"handle": 7}, {"handle": None}, "term_a", None):
+                prog.orca_json = fake(held[:1], {"id:w1": {"terminals": [{"handle": "term_b"}, row]}})
+                self.assertIsNone(prog.author_sessions("b"), row)
+            prog.orca_json = fake([{**held[0], "head": "abc"}], {"id:w1": {"terminals": [{}]}})
+            self.assertIsNone(prog.worktree_author_sessions("abc"))
             prog.orca_json = fake(held[:1], {"id:w1": ValueError("not json")})
             self.assertIsNone(prog.author_sessions("b"))
             prog.orca_json = fake(held[:1], {"id:w1": SystemExit("orca terminal list: connection refused")})
