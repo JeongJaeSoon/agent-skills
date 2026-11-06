@@ -468,11 +468,24 @@ class LandExec(unittest.TestCase):
         self.round()
         self.settled(row, "refused", 1, "does not cover o/r")
 
-    def test_repo_of_another_owner(self):
+    def test_a_wildcard_of_an_org_or_another_user_is_refused(self):
+        config(repos=["o/*"])
         st = self.gh(); st["login"] = "someone-else"; self.write(st)
         row = self.request()
         self.round()
-        self.settled(row, "refused", 1, "not owned")
+        self.settled(row, "refused", 1, "own repos (someone-else) only")
+        self.assertEqual(self.merges(), [])
+
+    def test_an_org_repo_listed_by_name_lands_and_waits_on_its_required_review(self):
+        st = self.gh(); st["login"] = "someone-else"; self.write(st)  # config lists o/r by name
+        self.edit_pr(mergeStateStatus="BLOCKED")
+        row = self.request()
+        self.round()
+        self.assertIn("required review", self.settled(row, "queued", None)["reason"])
+        self.assertEqual(self.merges(), [], "a required approval is never bypassed")
+        self.edit_pr(mergeStateStatus="CLEAN")  # a person approved
+        self.round()
+        self.settled(row, "merged", 0)
 
     # -- scope by owner, judged on the repo GitHub names now
 
@@ -785,6 +798,14 @@ class Standalone(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertEqual(self.cfg()["repo"], "o/r")
 
+    def test_an_org_wildcard_creates_nothing(self):
+        config(repos=["o/*"])
+        st = json.loads(self.state.read_text()); st["login"] = "someone-else"; self.state.write_text(json.dumps(st))
+        code, out = self.orch("land", self.SLUG, "--repo", "o/r", "--pr", str(self.n))
+        self.assertNotEqual(code, 0, out)
+        self.assertIn("own repos (someone-else) only", out)
+        self.assertFalse((prog.HOME / self.SLUG).exists())
+
     def test_an_excluded_repo_creates_nothing(self):
         config(repos=["o/*"], exclude=["o/r"])
         code, out = self.orch("land", self.SLUG, "--repo", "o/r", "--pr", str(self.n))
@@ -918,6 +939,20 @@ class Drift(unittest.TestCase):
         self.write(repos={"o/old": {"nameWithOwner": "o/renamed"}})
         lines = land_exec.drift_lines()
         self.assertTrue(any("o/old는 GitHub에서 o/renamed로 이름이 바뀌어" in l for l in lines), lines)
+
+    def test_a_rename_the_wildcard_still_covers_is_not_warned(self):
+        config(repos=["o/*", "o/old"])
+        self.program("renamed-standalone", "o/renamed")
+        self.write(repos={"o/old": {"nameWithOwner": "o/renamed"}}, owned={"o": ["o/renamed"]})
+        self.assertEqual(land_exec.drift_lines(), [])
+
+    def test_an_org_wildcard_is_warned_and_not_listed(self):
+        config(repos=["acme/*", "acme/app"])
+        self.write(list_fail=True, repos={"acme/app": {"nameWithOwner": "acme/app"}})
+        lines = land_exec.drift_lines()
+        self.assertTrue(any("acme/*는 gh 계정(o)이 아니어서" in l for l in lines), lines)
+        self.assertFalse(any("repo 목록" in l for l in lines), "an org's listing is never asked for")
+        self.assertTrue(any("acme/app" in l and "program이 없는" in l for l in lines), "a named org repo stays in")
 
     def test_github_not_answering_is_one_line(self):
         config(repos=["o/*"])

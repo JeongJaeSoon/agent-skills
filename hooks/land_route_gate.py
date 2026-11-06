@@ -9,10 +9,13 @@ for an orchestrator, a lead or a worker (main conversation or subagent), or a se
 
 - a covered repo (skills/orchestrate/scripts/land_scope.py): deny, with the `orch land` line for the program that
   holds the PR (else the brief's PROGRAM, else `<name>-standalone --repo OWNER/NAME`), and the `orch verdict` line to
-  run only after an independent review of that head
-- a repo whose owner a scope entry names but the scope leaves out: deny, with the skills-config spec that adds it,
-  or `exclude` to keep it out on purpose (an excluded repo passes)
-- another owner's repo: pass
+  run only after an independent review of that head. OWNER/* covers the gh account's own repos only, as the
+  executor rules: an org's repo is covered when an entry names it
+- a program's PR whose repo GitHub renamed out of the scope (`orch land` refuses it): deny, with the spec that adds
+  the new name
+- the gh account's own repo that the scope leaves out: pass with a note of the skills-config spec that adds it, or
+  `exclude` to keep it out on purpose (an excluded repo passes silently)
+- any other repo (an org's, another user's): pass, so its human review and approval flow is unchanged
 - a call that changes directory before `gh pr merge` names no repo this hook can trust: deny until `--repo` is given
 
 The level is `orchestrate.land_route` in ~/.claude/agent-skills.json: deny by default, warn, or off. Settings that
@@ -262,8 +265,14 @@ def scope_spec(cfg, repo):
     return json.dumps(one), json.dumps(owner)
 
 
+def covers(scope, repo, login):
+    """land_scope.how, with OWNER/* of anyone but the gh account's login covering nothing (land_scope.owner_refused)."""
+    how = land_scope.how(scope, repo)
+    return None if how == "owner" and land_scope.owner_refused(scope, repo, login()) else how
+
+
 def check(event, cmd):
-    """The deny text for this call, or None when it passes."""
+    """(text, deny) for this call, or None when it passes: deny False is a note the call passes with."""
     found = merges(cmd)
     if not found:
         return None
@@ -278,6 +287,13 @@ def check(event, cmd):
     sources = cfg.get("verdict_sources") or ["review:codex"]
     sources = sources if isinstance(sources, list) else [str(sources)]
     cwd = event.get("cwd")
+    known = []
+
+    def login():
+        if not known:
+            known.append(str(gh(["api", "user"], cwd).get("login", "")))
+        return known[0]
+
     for _c, repo_opt, env, pos, moved in found:
         try:
             repo, pr, head = target(repo_opt, env, pos, moved, cwd)
@@ -286,20 +302,23 @@ def check(event, cmd):
             continue
         if asked and land_scope.excluded(scope, asked):  # an exclusion under the old name still holds
             continue
-        if land_scope.how(scope, repo):
+        if covers(scope, repo, login):
             slug, with_repo, policy, _ = route(repo, pr, first, asked, cwd)
             return (f"{MARK} {SOURCE} {repo} is in orchestrate.land_executor's scope: its PRs merge through the land "
                     f"executor, not `gh pr merge`. {land_lines(repo, pr, head, slug, with_repo, policy, sources)} "
                     "Do not hand a `gh pr merge` line to the owner. A fork or an archived repo that only OWNER/* "
-                    "covers is refused by the executor: list it by name.")
+                    "covers is refused by the executor: list it by name."), True
         if land_scope.excluded(scope, repo) or repo.split("/")[0].casefold() not in land_scope.owners(scope):
             continue
+        personal = repo.split("/")[0].casefold() == login().casefold()
         slug, with_repo, policy, recorded = route(repo, pr, first, asked, cwd)
-        moved = bool(recorded) and recorded.casefold() != repo.casefold() and bool(land_scope.how(scope, recorded))
+        moved = bool(recorded) and recorded.casefold() != repo.casefold() and bool(covers(scope, recorded, login))
+        if not personal and not moved:
+            continue  # an org's or another user's repo out of scope keeps its own review and approval flow
         if not with_repo and not moved:  # a program's PR: `orch land` merges it directly while the repo is out
             return (f"{MARK} {SOURCE} {repo} is outside orchestrate.land_executor's scope, and {repo}#{pr or '<N>'} "
                     f"belongs to program {slug}: `orch land` merges it directly. "
-                    f"{land_lines(repo, pr, head, slug, False, policy, sources)}")
+                    f"{land_lines(repo, pr, head, slug, False, policy, sources)}"), False
         one, owner = scope_spec(cfg, repo)
         if moved:  # prog.executor_for refuses it: covered under the recorded name only
             return (f"{MARK} {SOURCE} program {slug} records {recorded}, which GitHub calls {repo} now, and the scope "
@@ -308,13 +327,14 @@ def check(event, cmd):
                     "--out <script file>`, and give the owner the run line it prints (or the owner adds "
                     f"{repo} to orchestrate.land_executor.exclude to merge it directly). Then: "
                     f"{land_lines(repo, pr, head, slug, False, policy, sources)} Never hand a `gh pr merge` line to "
-                    "the owner.")
-        return (f"{MARK} {SOURCE} {repo} is outside orchestrate.land_executor's scope, so this merge has no reviewed "
-                f"route. Put it in scope with skills-config: write the spec {one} to a file (or {owner} for every repo "
-                f"of {repo.split('/')[0]}, including ones made later), run `python3 {EMIT} emit --spec <that file> "
+                    "the owner."), True
+        return (f"{MARK} {SOURCE} {repo} is your own repo outside orchestrate.land_executor's scope, so this call "
+                f"passes and merges as it would without the executor. To land its PRs through the executor, put it in "
+                f"scope with skills-config: write the spec {one} to a file (or {owner} for every repo of "
+                f"{repo.split('/')[0]}, including ones made later), run `python3 {EMIT} emit --spec <that file> "
                 "--out <script file>`, and give the owner the run line it prints. Once it is in scope: "
                 f"{land_lines(repo, pr, head, slug, True, policy, sources)} To keep {repo} out on purpose, the owner "
-                "adds it to orchestrate.land_executor.exclude instead. Never hand a `gh pr merge` line to the owner.")
+                "adds it to orchestrate.land_executor.exclude, which silences this note."), False
     return None
 
 
@@ -341,11 +361,11 @@ def main():
         return 0
     try:
         try:
-            text = check(event, cmd)
+            text, deny = check(event, cmd) or (None, False)
         except Refuse as e:
-            text = f"{MARK} {SOURCE} {e}"
+            text, deny = f"{MARK} {SOURCE} {e}", True
         if text:
-            emit(None if level == "warn" else level, text)
+            emit(level if deny and level != "warn" else None, text)
     except Unread as e:
         emit(None, f"agent-skills hooks/land_route_gate.py passed this call unjudged: {e}.")
     except Exception as e:

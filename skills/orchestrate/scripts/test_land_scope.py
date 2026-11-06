@@ -56,6 +56,13 @@ class Scope(unittest.TestCase):
     def test_owners_lists_every_owner_named(self):
         self.assertEqual(ls.owners(ls.parse({"repos": ["acme/*", "Other/app"]})), {"acme", "other"})
 
+    def test_owner_wildcard_covers_the_gh_login_only_and_a_named_org_repo_stays_in(self):
+        s = ls.parse({"repos": ["me/*", "acme/*", "acme/app"]})
+        self.assertIsNone(ls.owner_refused(s, "Me/tool", "me"))
+        self.assertIn("own repos (me) only", ls.owner_refused(s, "acme/web", "me"))
+        self.assertIsNone(ls.owner_refused(s, "acme/app", "me"), "an org repo listed by name is in")
+        self.assertIsNone(ls.owner_refused(s, "other/x", "me"), "out of scope is not this check's call")
+
     def test_a_fork_or_archive_is_out_only_when_the_wildcard_alone_covers_it(self):
         s = ls.parse({"repos": ["acme/*", "acme/named-fork"]})
         self.assertIn("a fork", ls.wildcard_only(s, "acme/f", {"isFork": True}))

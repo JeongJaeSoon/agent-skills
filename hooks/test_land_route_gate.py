@@ -1,6 +1,7 @@
 """land_route_gate.py from stdin fixtures against a fake gh: a role session's `gh pr merge` in a repo the land executor
-covers is denied with a runnable `orch land` line; a same-owner repo outside the scope is denied with the skills-config
-spec that adds it; an excluded repo, another owner, a general session and the executor off pass.
+covers is denied with a runnable `orch land` line; the gh account's own repo outside the scope passes with the
+skills-config spec that adds it; OWNER/* of an org covers nothing, while an org repo listed by name is covered; an
+excluded repo, another owner, a general session and the executor off pass.
 Run: python3 hooks/test_land_route_gate.py"""
 import json, os, pathlib, shutil, stat, subprocess, sys, tempfile
 
@@ -13,6 +14,9 @@ for d in (BIN, CARD, HOME / ".claude"):
 FAKE_GH = """#!/bin/sh
 echo "$PWD $@" >> "$FAKE_GH_LOG"
 [ -n "$FAKE_GH_FAIL" ] && exit 1
+if [ "$1 $2" = "api user" ]; then
+  echo "{\\"login\\": \\"$FAKE_GH_LOGIN\\"}"; exit 0
+fi
 if [ "$1" = api ]; then
   [ -s "$FAKE_GH_API" ] || exit 1
   cat "$FAKE_GH_API"; exit 0
@@ -54,13 +58,13 @@ def program(slug, repo="acme/app", policy="autonomous", prs=()):
 API = TMP / "api.json"
 
 
-def run(cmd, prompt=CARD_BRIEF, gh=APP, fail=False, api="", **fields):
+def run(cmd, prompt=CARD_BRIEF, gh=APP, fail=False, api="", login="acme", **fields):
     PR.write_text(gh)
     API.write_text(api)
     LOG.write_text("")
     env = {"PATH": f"{BIN}:/usr/bin:/bin", "HOME": str(HOME), "AGENT_SKILLS_CONFIG": str(CONFIG),
            "PROGRAMS_HOME": str(PROGRAMS), "FAKE_GH_PR": str(PR), "FAKE_GH_LOG": str(LOG), "FAKE_GH_API": str(API),
-           "AGENT_SKILLS_STATE": str(TMP / "state")}
+           "AGENT_SKILLS_STATE": str(TMP / "state"), "FAKE_GH_LOGIN": login}
     if fail:
         env["FAKE_GH_FAIL"] = "1"
     payload = {"hook_event_name": "PreToolUse", "session_id": "s1", "tool_name": "Bash", "cwd": str(CARD),
@@ -76,6 +80,12 @@ def decision(out):
 
 def reason(out):
     return out.get("hookSpecificOutput", {}).get("permissionDecisionReason", "")
+
+
+def note(out):
+    """The text a call passes with: no decision, only a message."""
+    assert decision(out) is None, out
+    return out.get("systemMessage", "")
 
 
 config()
@@ -147,20 +157,29 @@ text = reason(run("gh pr merge 7 --repo acme/app", prompt=PROGRAM_BRIEF, api='{"
 assert "`orch land demo --pr 7" in text, "the brief's program under the old name: " + text
 shutil.rmtree(PROGRAMS / "demo")
 
-# Same owner, outside the scope: denied with the spec that adds the one repo (or the owner) and the emit line.
+# Your own repo outside the scope: the merge passes, with the spec that adds the one repo (or the owner).
 config(repos=["acme/app"])
 NEW = json.dumps({"number": 3, "headRefOid": HEAD, "url": "https://github.com/acme/new/pull/3"})
-out = run("gh pr merge 3 --repo acme/new", gh=NEW)
-text = reason(out)
-assert decision(out) == "deny", out
+text = note(run("gh pr merge 3 --repo acme/new", gh=NEW))
+assert text.startswith("[gate:land-route]") and "passes and merges as it would" in text, text
 assert '{"agent_skills": {"set": {"orchestrate.land_executor.repos": ["acme/app", "acme/new"]}}}' in text, text
 assert '"acme/app", "acme/*"' in text and "config_emit.py emit --spec" in text, text
 assert "`orch land new-standalone --repo acme/new --pr 3 --wait-minutes 50`" in text, text
-assert "orchestrate.land_executor.exclude" in text and "Never hand a `gh pr merge` line to the owner" in text, text
-# ... and a program's PR there lands through its program, which merges directly while the repo is out.
+assert "orchestrate.land_executor.exclude" in text, text
+# ... and a program's PR there is pointed at its program, which merges directly while the repo is out.
 program("newprog", repo="acme/new", prs=(3,))
-text = reason(run("gh pr merge 3 --repo acme/new", gh=NEW))
+text = note(run("gh pr merge 3 --repo acme/new", gh=NEW))
 assert "belongs to program newprog" in text and "`orch land newprog --pr 3" in text and "skills-config" not in text, text
+shutil.rmtree(PROGRAMS / "newprog")
+# An org (any owner but the gh login): OWNER/* covers nothing, a repo listed by name is covered, and a repo out of
+# scope keeps its human review and approval flow: no denial, no note.
+config(repos=["acme/*"])
+assert run("gh pr merge 7 --repo acme/app", login="me") == {}, "an org wildcard is refused by the executor too"
+config(repos=["acme/app"])
+assert decision(run("gh pr merge 7 --repo acme/app", login="me")) == "deny", "an org repo listed by name"
+assert run("gh pr merge 3 --repo acme/new", gh=NEW, login="me") == {}, "an org repo out of scope"
+program("newprog", repo="acme/new", prs=(3,))
+assert run("gh pr merge 3 --repo acme/new", gh=NEW, login="me") == {}, "an org program's PR out of scope"
 shutil.rmtree(PROGRAMS / "newprog")
 # ... but a program whose recorded name is listed while GitHub's current name is not: orch land refuses it, so the
 # denial gives the spec that lists the new name, never "merges directly".
@@ -203,7 +222,11 @@ config()
 out = run("gh pr merge 7", fail=True)
 assert decision(out) is None and "passed this call unjudged" in out["systemMessage"], out
 out = run("gh pr merge 7 --repo acme/app", fail=True)
-assert decision(out) == "deny" and "<head sha>" in reason(out), "a named repo is judged without GitHub"
+assert decision(out) is None and "passed this call unjudged" in out["systemMessage"], "OWNER/* needs the login"
+config(repos=["acme/app"])
+out = run("gh pr merge 7 --repo acme/app", fail=True)
+assert decision(out) == "deny" and "<head sha>" in reason(out), "a repo listed by name is judged without GitHub"
+config()
 
 # Levels: warn speaks without blocking, off reads nothing.
 config(level="warn")

@@ -1,7 +1,8 @@
 """Which repos `orchestrate.land_executor` covers. prog.py, watch-prs' prs.py and hooks/land_route_gate.py all read the
 scope through here, so a merge path and the gate that points at it never disagree.
 
-  repos    OWNER/NAME for one repo, OWNER/* for every repo of that owner. GitHub names are case-insensitive.
+  repos    OWNER/NAME for one repo, OWNER/* for every repo of that owner, where OWNER is the gh account's own login
+           (`owner_refused`: an org's repos go in by name only). GitHub names are case-insensitive.
   exclude  OWNER/NAME entries that stay out even when OWNER/* covers them.
 
 Any other wildcard (`*`, `*/*`, `*/NAME`, `OWNER/app-*`) is an error, never a wider match. A repo covered only through
@@ -66,6 +67,15 @@ def excluded(scope, repo):
 def owners(scope):
     """Every owner an entry names, OWNER/NAME entries included."""
     return scope["owners"] | {o for o, _ in scope["names"]}
+
+
+def owner_refused(scope, repo, login):
+    """Why OWNER/* cannot cover `repo`: the wildcard is for the gh account's own login, never an org or another user.
+    An OWNER/NAME entry is not judged here: naming an org repo is how it gets in. None when the repo stays in."""
+    if how(scope, repo) == "owner" and key(repo)[0] != str(login).casefold():
+        return (f"{repo} is covered only by {repo.split('/')[0]}/*, and OWNER/* covers the gh account's own repos"
+                f" ({login}) only: list an org's repo by name")
+    return None
 
 
 def wildcard_only(scope, repo, meta):

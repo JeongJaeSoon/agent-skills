@@ -245,8 +245,10 @@ Then land it. How depends on where you run:
   sha, the CI run ids whose logs it read and the review verdict with its source, stops watching
   CI, and the orchestrator lands it through the repo's `<name>-standalone` program, which
   `orch land --repo` creates when missing (`orchestrate` `references/landing.md`, "Land executor").
-  An owned repo the scope leaves out: `hooks/land_route_gate.py` denies `gh pr merge` with the
-  skills-config spec that adds it; send that to the owner, never a merge line.
+  A repo the scope leaves out is the next bullet's, as if the executor were off; for your own
+  repo `hooks/land_route_gate.py` adds the skills-config spec that would put it in, which goes in
+  the report to the owner. An org's repo is in only when listed by name, and still waits on its
+  required approvals.
 - **Merging it yourself** (a standalone card whose repo has the executor off, or a session the
   user started): merge your own verified PR unless the user set a hold, as
   [references/merge.md](references/merge.md) says (when it is ready, the checks before it, the

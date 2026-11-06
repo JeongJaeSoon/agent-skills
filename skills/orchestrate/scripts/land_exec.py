@@ -131,8 +131,6 @@ class Round:
         login = self.owner_login()
         if login is None:
             return unanswered("GitHub did not answer `gh api user`: the repo's owner is unchecked")
-        if repo.split("/")[0].casefold() != login.casefold():
-            return settle("refused", 1, f"{repo} is not owned by the gh account '{login}'")
         # GitHub follows a rename or a transfer from the recorded name: scope and owner are judged on the repo it is now,
         # by the rule `orch land` used to send the request here (prog.executor_for).
         try:
@@ -148,8 +146,9 @@ class Round:
         if not ex:
             return settle("refused", 1, f"orchestrate.land_executor does not cover {repo}{renamed}: land again"
                                         " (it merges directly)")
-        if current.split("/")[0].casefold() != login.casefold():
-            return settle("refused", 1, f"{repo} is {current} on GitHub now, not owned by the gh account '{login}'")
+        # An org's repo gets in only by name; its branch protection still holds the merge (BLOCKED waits, never bypassed).
+        if why := land_scope.owner_refused(ex["scope"], current, login):
+            return settle("refused", 1, why + renamed)
         if why := land_scope.wildcard_only(ex["scope"], current, meta):
             return settle("refused", 1, why)
         if age_h > ex["max_wait_hours"]:
@@ -349,13 +348,19 @@ def drift_lines(today=None):
         except (SystemExit, KeyError, TypeError, ValueError) as e:
             out.append(f"경고: repos의 {entry}를 GitHub에서 확인하지 못함: {str(getattr(e, 'code', e))[:120]}")
             continue
-        if now_named.casefold() != entry:
+        if now_named.casefold() != entry and land_scope.how(scope, now_named):
+            covered.setdefault(now_named.casefold(), now_named)  # OWNER/* still covers the new name
+        elif now_named.casefold() != entry:
             out.append(f"경고: repos의 {entry}는 GitHub에서 {now_named}로 이름이 바뀌어 범위에서 빠졌다"
                        " (skills-config로 새 이름을 넣는다)")
         else:
             covered.setdefault(entry, now_named)
     # OWNER/* covers every source repo of the owner that is not archived: exactly what this listing returns.
     for owner in sorted(scope["owners"]):
+        if owner != login.casefold():
+            out.append(f"경고: {owner}/*는 gh 계정({login})이 아니어서 executor가 거절한다"
+                       " (org repo는 OWNER/NAME으로 하나씩 넣는다)")
+            continue
         try:
             listed = prog.gh_json("repo", "list", owner, "--source", "--no-archived", "--limit", "1000",
                                   "--json", "nameWithOwner")

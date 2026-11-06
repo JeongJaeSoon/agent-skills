@@ -1457,8 +1457,10 @@ def standalone_program(argv):
         now_named = "" if repo.casefold() == asked.casefold() else f" ({repo} on GitHub now)"
         sys.exit(f"no program '{argv[0]}', and orchestrate.land_executor is off for {asked}{now_named}: a standalone"
                  " card merges its own PR")
-    if why := land_scope.wildcard_only(ex["scope"], repo, meta):
-        sys.exit(f"{why}; nothing created")
+    if land_scope.how(ex["scope"], repo) == "owner":
+        login = run(["gh", "api", "user", "--jq", ".login"]).stdout.strip()
+        if why := land_scope.owner_refused(ex["scope"], repo, login) or land_scope.wildcard_only(ex["scope"], repo, meta):
+            sys.exit(f"{why}; nothing created")
     slug = f"{repo.split('/')[-1]}-standalone"
     if slug.casefold() != argv[0].casefold():
         sys.exit(f"{asked} is {repo} on GitHub now: name its program {slug} (`orch land {slug} --repo {repo} …`)")

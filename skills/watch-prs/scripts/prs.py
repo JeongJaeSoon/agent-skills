@@ -198,9 +198,11 @@ def land_executor_repos():
     return [r for r in ex.get("repos") or [] if isinstance(r, str)], list(ex.get("exclude") or [])
 
 
-def land_executor_covers(cfg, repo):
-    scope = {"repos": cfg.get("land_executor_repos") or [], "exclude": cfg.get("land_executor_exclude") or []}
-    return bool(land_scope.how(land_scope.parse(scope), repo))
+def land_executor_covers(cfg, repo, me):
+    """The executor's rule: OWNER/* covers `me`'s own repos only, an org's repo only when listed by name."""
+    scope = land_scope.parse({"repos": cfg.get("land_executor_repos") or [],
+                              "exclude": cfg.get("land_executor_exclude") or []})
+    return bool(land_scope.how(scope, repo)) and not land_scope.owner_refused(scope, repo, me)
 
 
 def repo_cfg(cfg, repo):
@@ -733,7 +735,7 @@ def collect_ready_to_merge(gh, me, cfg, ledger, now):
                 "size": pr["additions"] + pr["deletions"], "method": method,
                 "why": [f"CLEAN, 체크 green, {review}, {method}"]}
         # The executor merges this repo: no command, so merges and verify skip it and the message hands it on.
-        if land_executor_covers(cfg, repo):
+        if land_executor_covers(cfg, repo, me):
             item["land"] = "executor"
         else:
             item["cmd"] = merge_cmd(pr, method)
