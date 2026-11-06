@@ -87,7 +87,7 @@ https://github.com/JeongJaeSoon/agent-skills の Claude Code プラグインを�
 
 - 「ABC-1 を終わらせて」と頼むと、`deliver-ticket` が計画からマージ、チケットのクローズまで進めます。トラッカーが必要です(既定は Linear。変えるには `tracker.adapter`、[設定](#設定)を参照)。
 - 「状況を報告して」と頼むと `brief` が動きます。Claude Code には組み込みの `/brief` があるので、直接呼ぶときは `/agent-skills:brief` です。`/brief-pane` でチャットの横にパネルを開くと、開いている間だけ 30 秒ごとに同じ報告を更新します(110 列以上なら横に固定、それより狭いとプロンプトの上に出ます)。
-- Orca の中で `claude --agent agent-skills:orchestrator --name orchestrator` を実行して最上位セッションを立て、全セッションの管理を頼みます。オーケストレーターはプロジェクトごとにリードのセッションを立て、リードがワーカーを動かします。オーケストレーターやリードのコンテキストが `orchestrate.restart_at`(既定 130k トークン)を超え、待っている用事がなければ、プロンプトの上の帯に「いま `/clear` して大丈夫」と出ます。次のセッションは役割と保存済みの handoff を引き継ぎます。`/clear` を打つのは人です。`orchestrate.auto_clear: true` にするとセッションが自分で打ちます。
+- Orca の中で `claude --agent agent-skills:orchestrator --name orchestrator` を実行して最上位セッションを立て、全セッションの管理を頼みます。オーケストレーターはプロジェクトごとにリードのセッションを立て、リードがワーカーを動かします。オーケストレーターのコンテキストが `orchestrate.restart_at`(既定 130k トークン)を超え、待っている用事がなければ、プロンプトの上の帯に「いま `/clear` して大丈夫」と出ます。次のセッションは役割と保存済みの handoff を引き継ぎます。リードは自動コンパクトに任せるので帯は出ません。リードの `orch handoff save` は `lead:<slug>` に保存され、オーケストレーターのキーへの保存は拒否されます。`/clear` を打つのは人です。`orchestrate.auto_clear: true` にするとセッションが自分で打ちます。
 
 ## 人が決定権を持つ地点
 

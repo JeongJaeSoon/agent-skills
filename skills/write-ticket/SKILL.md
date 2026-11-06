@@ -18,9 +18,9 @@ Every tracker operation here ("file a ticket", "read a template", "search the tr
 - **Improvement feedback on in-flight work** ("이거 더 낫게", "이 부분도 고쳐줘" about a
   running card or PR). It becomes its own ticket. Never append it to the running task's scope,
   brief or PR.
-- **A finding made while working** (review, E2E, `handoff-ticket` §0). Classify it against
-  the exit condition first (`use-tracker`, "Exit condition"). Only NOW becomes a follow-up
-  ticket (§4); LATER goes on the deferred list, DROP gets a reason, neither gets a ticket.
+- **A finding made while working** (review, E2E, `handoff-ticket` §0). Classify it first
+  (`use-tracker` [references/exit-condition.md](../use-tracker/references/exit-condition.md)):
+  only NOW becomes a follow-up ticket (§4).
 
 ## 1. Classify
 
@@ -101,39 +101,40 @@ The tracker's native fields carry structure; the body does not repeat it.
 - **A parent issue's body has no acceptance criteria and no implementation hints** — those
   belong to the children, and duplicating them guarantees they diverge. Keep
   `🎯 배경 & 목표`, `✅ 완료 조건` (numbered exit items, each checkable), `🚫 범위 밖` and an
-  empty `⏸️ 보류` (`use-tracker`, "Exit condition"). Write the exit items before the first
+  empty `⏸️ 보류` (`use-tracker` `references/exit-condition.md`). Write the exit items before the first
   child is filed; the children serve them.
 - Clear outcome and a foreseeable end date → suggest a project. Until then a parent issue is
   enough. Only offer a project or milestone that already exists; don't create structure ahead
   of need.
 - Search the tracker first so you do not file a duplicate.
 
-## 4. Get approval, then file
+## 4. File, then report
 
-Show the full draft in chat first. Several tickets? Show **all** of them — title, type,
-relationships — and take **one** approval for the batch.
+File without asking first: the request is the approval, and so is a NOW finding. Then report
+each ticket's URL with a one-line summary (title, type, relations) and any assumption or scope
+call you made that the request did not state, so a misread is caught on the ticket; a batch is
+reported together. A NOW follow-up a session files on its own (a finding made while working a ticket,
+`handoff-ticket` §0, a review or E2E run) is the same: its class, and whether two findings share
+one ticket, is the session's call, and "shall I file this?" is not a question to put to the
+user. When the user's own instructions say to show drafts first, show them first.
 
-**Exceptions — file first, then name the ticket and its URL:**
-
-- The user's own instructions say tickets are filed without asking.
-- A ticket request split out of another question (§0). The user already asked for it.
-- A NOW follow-up a session files on its own — from a finding made while working a ticket, at
-  `handoff-ticket` §0, or from a review or E2E run. The user is not necessarily there, and an
-  exit item it blocks would otherwise stall. The class, and whether two findings share one
-  ticket, is the session's call (`deliver-ticket` §2 "Findings outside the ticket"); "shall I
-  file this?" is not a question to put to the user. A LATER finding is kept by the deferred
-  list, not by a ticket.
+Ask first only for a large epic (a parent with its exit items and children planned at once) or
+a ticket in another team's tracker or project. That ask goes through the
+[owner-ask gate](../orchestrate/references/owner-ask-gate.md), whose step 1 often settles it;
+what is left goes with the full draft and a recommendation, and while it waits its "if no
+answer" holds.
 
 A follow-up is marked as one so growth after the initial design can be counted
-(`reflect`'s measure mode, `orchestrate`). Shape it exactly as `use-tracker` "Follow-up (derived)
-tickets" says: label, first body lines, relation and parent; add blocked-by only when it truly
-blocks.
+(`reflect`'s measure mode, `orchestrate`). Shape it exactly as `use-tracker`
+`references/exit-condition.md` "Follow-up (derived) tickets" says: label, first body lines,
+relation and parent; add blocked-by only when it truly blocks.
 
-Then file each ticket through `use-tracker`: assignee me, the type label, the filled body. The
+File each ticket through `use-tracker`: assignee me, the type label, the filled body. The
 team and project come from the program or the originating ticket, else from
-`tracker.<adapter>.team` / `project` in the config; if none is set, ask. File the body only —
+`tracker.<adapter>.team` / `project` in the config; with none set, that is a question for the
+owner-ask gate. File the body only —
 do not also apply the tracker template (on Linear a description replaces the template body, so
 passing both silently discards your work). File parents before children, and the lower layer
 of a dependency before the one it blocks.
 
-Print the ticket URLs. Stop there — branch, implementation, PR and merge belong to `deliver-ticket`.
+Stop at the report — branch, implementation, PR and merge belong to `deliver-ticket`.
