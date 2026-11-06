@@ -189,6 +189,14 @@ for sleep in ("60", "180", "299", "5m", "2m"):
 for cmd in ("while true; do gh pr list --state all --json number; sleep 120; done",
             "until gh pr checks 5 | grep -qv pending; do sleep 30; done"):
     assert "pr_watch.py" in monitor(cmd)[1], cmd
+for cmd in ("while true; do gh pr view 5; sleep .5; done", "while true; do gh pr view 5; sleep 0; done",
+            "while true; do sleep 60; gh pr view 5; done"):
+    assert "pr_watch.py" in monitor(cmd)[1], cmd
+for cmd in ("sleep 60; while true; do gh pr view 5; sleep 300; done",
+            "while true; do gh pr view 5; sleep 150; sleep 150; done",
+            'N=60; while true; do gh pr view 5; sleep "$N"; done',
+            "while true; do gh pr view 5; sleep 3m 2m; done"):
+    assert monitor(cmd) == ("none", ""), "judged by the whole wait, not by one sleep: " + cmd
 for cmd in ("until gh pr view 5 --json state | grep -q MERGED; do sleep 300; done",
             "while true; do gh pr list --json number; sleep 600; done",
             "until gh run view 9 | grep -q completed; do sleep 60; done",

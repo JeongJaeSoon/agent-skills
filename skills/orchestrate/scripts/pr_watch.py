@@ -2,7 +2,7 @@
 """PR watcher for the Monitor tool: one line when a PR needs a turn, nothing otherwise.
 
 Usage: pr_watch.py --repo OWNER/REPO [--repo ...] [--branch REGEX] [--land-check SLUG]
-                   [--interval 300] [--limit 50] [--once]
+                   [--interval 300] [--limit 100] [--once]
 
 Each round lists the PRs of every --repo whose head branch matches --branch and prints a line only for:
   MERGED or CLOSED, CI turning to failure, `orch land-check` turning READY (with --land-check),
@@ -41,15 +41,35 @@ def snapshot(repos, branch, land_slug, limit, run=sh):
         for p in prs:
             if not re.search(branch, p["headRefName"]):
                 continue
-            checks = p.get("statusCheckRollup") or []
-            fail = any((c.get("conclusion") or c.get("state") or "").upper() in FAILED for c in checks)
+            fail = failing(p.get("statusCheckRollup") or [])
+            dirty = None if p["mergeStateStatus"] == "UNKNOWN" else p["mergeStateStatus"] == "DIRTY"
             ready = False
-            if land_slug and p["state"] == "OPEN" and p["mergeStateStatus"] == "CLEAN":
+            if land_slug and p["state"] == "OPEN" and not dirty and not fail:
                 lines = run(["orch", "land-check", land_slug, "--pr", str(p["number"])]).strip().splitlines()
-                ready = bool(lines) and lines[-1].startswith("READY")
-            cur[f"{repo}#{p['number']}"] = {"state": p["state"], "dirty": p["mergeStateStatus"] == "DIRTY",
-                                            "fail": fail, "ready": ready}
+                ready = lines[-1].startswith("READY") if lines else None
+            cur[f"{repo}#{p['number']}"] = {"state": p["state"], "dirty": dirty, "fail": fail, "ready": ready}
     return cur
+
+
+def failing(checks):
+    """True when the latest run of any check failed. A rerun of a check supersedes its earlier runs in the rollup."""
+    latest = {}
+    for c in checks:
+        key = (c.get("workflowName") or "", c.get("name") or c.get("context") or "")
+        stamp = c.get("completedAt") or c.get("startedAt") or ""
+        if key not in latest or stamp >= latest[key][0]:
+            latest[key] = (stamp, c)
+    return any((c.get("conclusion") or c.get("state") or "").upper() in FAILED for _, c in latest.values())
+
+
+def carry(old, new):
+    """None means "could not tell" (mergeability still UNKNOWN, a failed land-check): keep what was last known, so a
+    blip never reads as a change and back."""
+    for key, n in new.items():
+        for field in ("dirty", "ready"):
+            if n[field] is None:
+                n[field] = (old.get(key) or {}).get(field, False)
+    return new
 
 
 def events(old, new):
@@ -76,6 +96,7 @@ def watch(read, interval, emit, sleep, rounds=None, old=None):
     while True:
         new = read()
         if new is not None:
+            new = carry(old or {}, new)
             if old is not None:
                 for line in events(old, new):
                     emit(line)
@@ -92,11 +113,14 @@ def parse(argv):
     ap.add_argument("--branch", default="", help="regex a head branch must match (default: all)")
     ap.add_argument("--land-check", dest="land_check", help="program slug; turns on the READY line")
     ap.add_argument("--interval", type=int, default=MIN_INTERVAL, help=f"seconds between rounds, {MIN_INTERVAL} or more")
-    ap.add_argument("--limit", type=int, default=50, help="PRs read per repo")
+    ap.add_argument("--limit", type=int, default=100,
+                    help="newest PRs read per repo, before --branch filters them: raise it for a quiet branch")
     ap.add_argument("--once", action="store_true", help="one round (nothing prints), then exit")
     args = ap.parse_args(argv)
     if args.interval < MIN_INTERVAL:
         ap.error(f"--interval must be {MIN_INTERVAL} seconds or more")
+    if args.land_check and len(args.repo) != 1:
+        ap.error("--land-check names one program, which belongs to one repo: pass exactly one --repo")
     return args
 
 

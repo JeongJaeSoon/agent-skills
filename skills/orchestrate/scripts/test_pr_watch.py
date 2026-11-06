@@ -71,6 +71,40 @@ def run(args):
     return "READY: gate ok\n" if args[0] == "orch" else GH
 
 
+def gh_pr(n, merge="CLEAN", rollup=None, state="OPEN"):
+    return {"number": n, "state": state, "headRefName": "me/fix", "mergeStateStatus": merge, "statusCheckRollup": rollup}
+
+
+def replay(statuses, land=None):
+    """Run the round loop over a list of per-round gh listings; return what it printed."""
+    out, listings = [], iter(statuses)
+    pr_watch.watch(lambda: pr_watch.snapshot(["a/b"], "", land, 50, lambda a: next(listings) if a[0] == "gh" else
+                                             land[0] if land else ""),
+                   300, out.append, lambda s: None, rounds=len(statuses))
+    return out
+
+
+# The mergeStateStatus churn the ticket saw, and a DIRTY that flickers to UNKNOWN while GitHub recomputes.
+churn = [json.dumps([gh_pr(1, m)]) for m in ("BLOCKED", "UNKNOWN", "CLEAN", "UNSTABLE", "BLOCKED", "UNKNOWN", "CLEAN")]
+assert replay(churn) == [], "an hour of status churn prints nothing"
+flap = [json.dumps([gh_pr(1, m)]) for m in ("DIRTY", "UNKNOWN", "DIRTY", "UNKNOWN", "CLEAN")]
+assert replay(flap) == ["a/b#1 conflict resolved"], "UNKNOWN keeps the last known conflict state"
+# A rerun that passes supersedes its failed run; a later failure of the rerun is a new failure.
+old_fail = {"workflowName": "ci", "name": "tests", "conclusion": "FAILURE", "completedAt": "2026-11-06T01:00:00Z"}
+rerun_ok = {"workflowName": "ci", "name": "tests", "conclusion": "SUCCESS", "completedAt": "2026-11-06T02:00:00Z"}
+rerun_bad = {"workflowName": "ci", "name": "tests", "conclusion": "FAILURE", "completedAt": "2026-11-06T03:00:00Z"}
+runs = [json.dumps([gh_pr(1, rollup=r)]) for r in ([old_fail], [old_fail, rerun_ok], [old_fail, rerun_ok, rerun_bad])]
+assert replay(runs) == ["a/b#1 CI failed"], "the first listing already failed, so only the last one is a change"
+assert pr_watch.failing([old_fail, rerun_ok]) is False and pr_watch.failing([old_fail, rerun_ok, rerun_bad]) is True
+assert pr_watch.failing([{"context": "lint", "state": "ERROR"}, {"context": "lint", "state": "SUCCESS"}]) is False
+# land-check: READY that blips to "no answer" and back is not a new READY; BLOCKED is no reason to skip the check.
+verdicts = iter(["HOLD: x\n", "READY\n", "", "READY\n"])
+out, listings = [], iter([json.dumps([gh_pr(1, "BLOCKED")])] * 4)
+pr_watch.watch(lambda: pr_watch.snapshot(["a/b"], "", "prog", 50,
+                                         lambda a: next(listings) if a[0] == "gh" else next(verdicts)),
+               300, out.append, lambda s: None, rounds=4)
+assert out == ["a/b#1 land-check READY"], out
+
 snap = pr_watch.snapshot(["a/b"], "fix-", None, 50, run)
 assert snap == {"a/b#1": pr(dirty=True, fail=True), "a/b#3": pr()}, snap
 assert all(c[0] == "gh" for c in calls), "no land-check without --land-check"
@@ -83,10 +117,12 @@ assert pr_watch.snapshot(["a/b"], "", None, 50, lambda a: "") is None, "a gh fai
 
 # The interval floor: under 300 s is refused, not clamped silently.
 assert pr_watch.parse(["--repo", "a/b"]).interval == 300
-try:
-    pr_watch.parse(["--repo", "a/b", "--interval", "60"])
-except SystemExit as e:
-    assert e.code == 2
-else:
-    raise AssertionError("an interval under 300 s must be refused")
+for bad in (["--repo", "a/b", "--interval", "60"], ["--repo", "a/b", "--repo", "a/c", "--land-check", "prog"]):
+    try:
+        pr_watch.parse(bad)
+    except SystemExit as e:
+        assert e.code == 2
+    else:
+        raise AssertionError(f"must be refused: {bad}")
+assert pr_watch.parse(["--repo", "a/b", "--land-check", "prog"]).land_check == "prog"
 print("test_pr_watch: ok")

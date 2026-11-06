@@ -144,11 +144,11 @@ def sleep_seconds(c):
         return None
     total = 0.0
     for x in c.words[1:]:
-        m = re.fullmatch(r"(\d+(?:\.\d+)?)([smhd]?)", x)
+        m = re.fullmatch(r"(\d+\.?\d*|\.\d+)([smhd]?)", x)
         if not m:
             return None
         total += float(m[1]) * SLEEP_UNITS[m[2]]
-    return total or None
+    return total
 
 
 def check_monitor(cmd, cfg):
@@ -156,11 +156,14 @@ def check_monitor(cmd, cfg):
     state change, most of them with nothing to do. The shared watcher prints only the changes that need a turn."""
     cmds = shell.commands(cmd)
     polls = any(c.name == "gh" and c.words[1:3] in PR_POLLS for c in cmds)
-    short = [s for c in cmds if (s := sleep_seconds(c)) is not None and s < PR_POLL_MIN]
-    if not (polls and short):
+    # The sleeps of one command add up (`sleep 150; sleep 150` waits 300 s). A sleep whose argument is a variable
+    # cannot be judged, so it counts for nothing and the call passes without a warning.
+    sleeps = [s for c in cmds if (s := sleep_seconds(c)) is not None]
+    wait = sum(sleeps)
+    if not (polls and sleeps and wait < PR_POLL_MIN) or any(c.name == "sleep" and sleep_seconds(c) is None for c in cmds):
         return []
     return finding(cfg, "orchestrate.pr_poll",
-                   f"This Monitor polls `gh pr` every {min(short):g} s, and each state change wakes the session. Use "
+                   f"This Monitor polls `gh pr` every {wait:g} s, and each state change wakes the session. Use "
                    "skills/orchestrate/scripts/pr_watch.py: it checks every 300 s or more and prints only a merge or "
                    "close, a CI failure, READY, a conflict appearing or clearing, and a new PR.")
 
