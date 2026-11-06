@@ -231,5 +231,63 @@ assert lost == ['STUCK card-a (waiting on a prompt (Orca agentWait, prompt-text)
 assert card_watch.scan(terms, seen, unreadable, NOW, 30, 100.0, 15, waits=waited) == [], "reported once while it lasts"
 assert card_watch.scan(terms, {}, unreadable, NOW, 30, 100.0, 15, waits={}) == []
 assert card_watch.scan(terms, {}, unreadable, NOW, 30, 100.0, 15, waits={"h1": None}) == []
+
+# A design doc's diff on screen quotes ENOSPC; the same text from a command is a real full disk.
+terms = card_watch.agent_terminals(listing, "me")
+read = lambda h: screens[h]
+diff = ["⏺ Update(docs/design.md)", "  ⎿  Added 2 lines", "     41 +- ENOSPC (a full disk) is caught by the watcher",
+        "     42      No space left on device is the second spelling", "❯ "]
+screens = {"h1": diff, "h2": idle, "h3": idle, "h4": idle}
+assert scan({}) == [], "ENOSPC inside a drawn diff is not a full disk"
+screens["h1"] = diff + ["npm ERR! ENOSPC: no space left on device, write", "❯ "]
+assert scan({})[0] == "STUCK card-a (a full disk): read its screen", "a real ENOSPC beside a diff still counts"
+screens["h1"] = ["⏺ Bash(make)", "  ⎿  28  No space left on device", "❯ "]
+assert scan({})[0] == "STUCK card-a (a full disk): read its screen", "numbered command output with no +/- line is not a diff"
+screens["h1"] = ["⏺ Bash(build)", "  ⎿  27 - writing output", "     28  No space left on device", "❯ "]
+assert scan({})[0] == "STUCK card-a (a full disk): read its screen", "numbered output beside a '-' line, no diff header"
+screens["h1"] = ["⏺ Update(src/errors.ts)", "  ⎿  Added 1 line", '     41 +  const m = "the filesystem returned',
+                  '       ENOSPC: No space left on device";', "❯ "]
+assert scan({})[0] == "STUCK card-a (a full disk): read its screen", "known limit: a wrapped diff line is read as output"
+for after in ("npm ERR! ENOSPC: no space left on device, write", "     npm ERR! ENOSPC: no space left on device, write"):
+    screens["h1"] = ["⏺ Update(src/main.py)", "  ⎿  Added 1 line", "     41 +  enabled = True", after, "❯ "]
+    assert scan({})[0] == "STUCK card-a (a full disk): read its screen", "output right after a diff is not part of it"
+screens["h1"] = ["⏺ Update(src/main.py)", "     41 +  x = 1", "✻ Waiting for API response · will retry in 3m", "❯ "]
+assert scan({})[0] == "STUCK card-a (an API retry loop): read its screen", "a retry line after a diff still counts"
+screens["h1"] = ["npm ERR! ENOSPC: no space left on device, write", "⏺ Disk space recovered.", "⏺ Update(src/app.ts)",
+                  *[f"     {i} +  line {i}" for i in range(1, 31)], "❯ "]
+assert scan({}) == [], "a message that scrolled past the 25-line tail is not read again after a long diff"
+screens["h1"] = ["⏺ Update(src/errors.ts)", "     41 +  x = 1", "⏺ Bash(make)", "  ⎿  npm ERR! ENOSPC: no space left", "❯ "]
+assert scan({})[0] == "STUCK card-a (a full disk): read its screen", "the next turn after a diff is not part of it"
+screens["h1"] = ["⏺ Update(src/errors.ts)", "  ⎿  Added 2 lines", '     41 +  const m = "a long ordinary message',
+                  '       continues here";', '     42 +  const d = "ENOSPC";', "❯ "]
+assert scan({}) == [], "a wrapped tail leaves the diff header standing for the lines after it"
+screens["h1"] = ["⏺ Update(src/errors.ts)", "  ⎿  Added 1 line", "     41 +  x = 1", "  ⎿  1 - writing output",
+                  "     2  No space left on device", "❯ "]
+assert scan({})[0] == "STUCK card-a (a full disk): read its screen", "a new ⎿ result after a diff starts its own block"
+long_build = ["⏺ Bash(build)"] + [f"     {i} - writing output" for i in range(1, 25)] + ["     25  No space left on device", "❯ "]
+screens["h1"] = long_build
+assert scan({})[0] == "STUCK card-a (a full disk): read its screen", "a long numbered log pushes its header out of the tail"
+screens["h1"] = ["⏺ Update(docs/d.md)"] + [f"     {i} +  line {i}" for i in range(1, 30)] + ["     30 +  ENOSPC quoted", "❯ "]
+assert scan({}) == [], "a diff longer than the tail is still dropped when the screen holds its header"
+
+# A /goal card silent past --idle-min is stuck unless it is busy: a background shell, or claude agents says busy.
+shell = ["⏺ Waiting on the build.", "❯ ", "  ⏵⏵ auto mode on · 1 shell still running", "  ◎ /goal active (2h)"]
+screens = {"h1": idle, "h2": idle, "h3": shell, "h4": idle}
+assert scan({}) == [], "a silent card with a shell running is busy"
+screens["h3"] = shell[:2] + shell[3:]
+assert scan({})[0].startswith("STUCK card-c (a /goal card silent 31 min)"), "the shell line is what suppresses it"
+screens["h3"] = goal
+assert scan({})[0].startswith("STUCK card-c (a /goal card silent 31 min)"), "silent and nothing running is stuck"
+assert card_watch.scan(terms, {}, read, NOW, 30, 100.0, 15, agents={"h3": {"agents": "busy"}}) == [], \
+    "claude agents busy suppresses the silent finding"
+assert card_watch.scan(terms, {}, read, NOW, 30, 100.0, 15, agents={"h3": {"agents": "idle"}})[0].startswith("STUCK card-c")
+
+# --handle keeps the watch on its own cards: a finding on any other card cannot end it.
+screens = {"h1": menu, "h2": idle, "h3": idle, "h4": idle}
+assert [t["handle"] for t in card_watch.agent_terminals(listing, "me", ["h2", "h4"])] == ["h2", "h4"]
+assert [t["handle"] for t in card_watch.agent_terminals(listing, "me", ["me", "sh"])] == [], "self and plain shells stay out"
+mine = card_watch.agent_terminals(listing, "me", ["h2", "h4"])
+assert card_watch.scan(mine, {}, read, NOW, 30, 100.0, 15) == [], "h1's menu is outside the filter"
+assert card_watch.scan(card_watch.agent_terminals(listing, "me", ["h1"]), {}, read, NOW, 30, 100.0, 15)[0].startswith("STUCK card-a")
 print("ok")
 
