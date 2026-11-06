@@ -145,6 +145,83 @@ class LintTest(unittest.TestCase):
         (self.root / "features" / "README.md").unlink()
         self.assertEqual(self.rules(), (1, ["feature-index"]))
 
+    def lint_rules_with(self, rel, text, mode=0o755, skill_extra=""):
+        self.put(rel, text, mode)
+        if skill_extra:
+            self.put("SKILL.md", SKILL + skill_extra)
+        return self.rules()
+
+    def test_cleanup_default_to_shared_state_is_not_a_required_argument(self):
+        text = '#!/usr/bin/env bash\nstate="${1:-}"\nsource "${state:-/tmp/verify/current.state}"\n'
+        self.assertEqual(self.lint_rules_with("scripts/cleanup.sh", text), (1, ["cleanup-arg"]))
+
+    def test_cleanup_guard_in_a_comment_does_not_count(self):
+        text = '#!/usr/bin/env bash\n# state="${1:?needed}"\ntrue\n'
+        self.assertEqual(self.lint_rules_with("scripts/cleanup.sh", text), (1, ["cleanup-arg"]))
+
+    def test_cleanup_optional_python_argument(self):
+        text = "#!/usr/bin/env python3\nimport argparse\np = argparse.ArgumentParser()\np.add_argument('run', nargs='?', default='current')\n"
+        self.assertEqual(self.lint_rules_with("scripts/cleanup.py", text, skill_extra="\n`cleanup.py <run>`\n"), (1, ["cleanup-arg"]))
+
+    def test_cleanup_set_u_with_positional_passes(self):
+        text = "#!/usr/bin/env bash\nset -eu\nstate=$1\ntrue\n"
+        self.assertEqual(self.lint_rules_with("scripts/cleanup.sh", text)[0], 0)
+
+    def test_kill_of_pids_found_on_an_earlier_line(self):
+        text = '#!/usr/bin/env bash\npids=$(pgrep -f demo)\nkill "$pids"\n'
+        self.assertEqual(self.lint_rules_with("scripts/doctor.sh", text), (1, ["pattern-kill"]))
+        text = "#!/usr/bin/env bash\nlsof -ti :3000 | xargs -r kill\n"
+        self.assertEqual(self.lint_rules_with("scripts/doctor.sh", text), (1, ["pattern-kill"]))
+
+    def test_kill_of_a_recorded_pid_passes_and_a_kill_after_any_pgrep_is_flagged(self):
+        text = '#!/usr/bin/env bash\npgrep -f demo >/dev/null\nkill "$(cat "$1/pid")"\n'
+        self.assertEqual(self.lint_rules_with("scripts/doctor.sh", text)[0], 1)  # conservative: the script cannot tell the PID source
+        text = '#!/usr/bin/env bash\nkill "$(cat "$1/pid")"\necho "Do not use pkill"\n'
+        self.assertEqual(self.lint_rules_with("scripts/doctor.sh", text)[0], 0)
+
+    def test_extensionless_helper_is_scanned(self):
+        text = "#!/usr/bin/env bash\npkill -f demo\n"
+        self.assertEqual(self.lint_rules_with("scripts/stop", text, skill_extra="\nRun `scripts/stop`.\n"), (1, ["pattern-kill"]))
+
+    def test_secret_state_name_without_the_word_state_or_with_backticks(self):
+        self.assertEqual(self.lint_rules_with("scripts/launch.sh", '#!/usr/bin/env bash\nRUN_FILE="$RUN_DIR/run-$RUN_ID.env"\n'), (1, ["state-secret"]))
+        self.put("scripts/launch.sh", "#!/usr/bin/env bash\ntrue\n", 0o755)
+        self.assertEqual(self.lint_rules_with("scripts/launch.sh", "#!/usr/bin/env bash\ntrue\n", skill_extra="\nThe state file is `$RUN_DIR/run-$RUN_ID.env`.\n"), (1, ["state-secret"]))
+
+    def test_latest_directory_is_flagged_and_a_prohibition_or_url_is_not(self):
+        self.assertEqual(self.lint_rules_with("scripts/launch.sh", "#!/usr/bin/env bash\nRUN_DIR=/tmp/verify/latest\n"), (1, ["shared-latest"]))
+        self.put("scripts/launch.sh", "#!/usr/bin/env bash\ntrue\n", 0o755)
+        extra = "\nNever use a shared `latest.state` file.\nRun `curl -L https://github.com/acme/app/releases/latest/download/app -o app`.\n"
+        self.assertEqual(self.lint_rules_with("scripts/launch.sh", "#!/usr/bin/env bash\ntrue\n", skill_extra=extra)[0], 0)
+
+    def test_helper_outside_scripts_directory_is_checked(self):
+        self.assertEqual(self.lint_rules_with("helpers/launch2.sh", "#!/usr/bin/env bash\ntrue\n", mode=0o644)[1], ["helper-mode"])
+
+    def test_helper_mentioned_only_in_a_sentence_is_not_documented(self):
+        self.put("scripts/extra.sh", "#!/usr/bin/env bash\ntrue\n", 0o755)
+        self.put("SKILL.md", SKILL + "\nThe extra.sh file is an implementation detail.\n")
+        self.assertEqual(self.rules(), (1, ["helper-mode"]))
+
+    def test_frontmatter_comment_and_empty_description_forms(self):
+        self.put("SKILL.md", SKILL.replace("name: verify-demo", "name: verify-demo # app"))
+        self.assertEqual(self.run_lint()[0], 0)
+        for empty in ("null", ">"):
+            self.put("SKILL.md", SKILL.replace('description: "Drive the demo CLI. Use when verifying demo changes."', f"description: {empty}"))
+            self.assertEqual(self.rules(), (1, ["frontmatter"]), empty)
+
+    def test_headings_inside_a_code_fence_are_not_sections(self):
+        fenced = "---\nname: verify-demo\ndescription: x\n---\n\n```\n## Launch\n## Doctor\n## Drive\n## Evidence\n## Cleanup\n```\n"
+        self.put("SKILL.md", fenced)
+        code, out = self.run_lint()
+        self.assertEqual(code, 1)
+        self.assertEqual(out.count("sections"), 5)
+
+    def test_reference_style_links_in_the_feature_index(self):
+        self.put("features/README.md", "# Map\n\n- [Feat][feat]\n\n[feat]: feat.md\n")
+        self.assertEqual(self.run_lint()[0], 0)
+        self.put("features/README.md", "# Map\n\n- [Feat](./feat.md)\n- [Gone][gone]\n\n[gone]: gone.md\n")
+        self.assertIn("links gone.md", self.run_lint()[1])
+
     def test_shipped_feature_map_example_passes_the_feature_checks(self):
         self.root = self.tmp / "verify-example"
         shutil.copytree(EXAMPLE, self.root / "features")
