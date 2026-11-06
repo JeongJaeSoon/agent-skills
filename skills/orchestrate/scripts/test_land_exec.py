@@ -35,6 +35,9 @@ a = sys.argv[1:]
 if a[:2] == ["orchestration", "send"]:
     path = os.environ["FAKE_GH_STATE"]; st = json.load(open(path))
     st["sent"] = st.get("sent", []) + [a[a.index("--to") + 1]]; json.dump(st, open(path, "w")); sys.exit()
+if a[:2] == ["worktree", "list"]:  # a card holds each PR's branch (b<n>): orch verdict asks its terminals by id
+    st = json.load(open(os.environ["FAKE_GH_STATE"]))
+    print(json.dumps({"worktrees": [{"id": "w" + n, "branch": f"refs/heads/b{n}"} for n in st["prs"]]})); sys.exit()
 if a[:2] == ["terminal", "list"]:  # the card holding the PR's branch: orch verdict records it as the author
     print(json.dumps({"terminals": [{"handle": "term_author"}]})); sys.exit()
 os.execv(sys.executable, [sys.executable, os.environ["FAKE_ORCA_INNER"], *a])
@@ -315,13 +318,41 @@ class LandExec(unittest.TestCase):
 
     def test_author_sessions_is_empty_when_orca_cannot_vouch_for_the_list(self):
         real = prog.orca_json
+
+        def fake(worktrees, terminals, **listing):
+            def orca(*a):
+                if a[:2] == ("worktree", "list"):
+                    return {"worktrees": worktrees, **listing}
+                answer = terminals[a[-1]]
+                if isinstance(answer, Exception):
+                    raise answer
+                return answer
+            return orca
+
+        held = [{"id": "w1", "branch": "refs/heads/b"}, {"id": "w2", "branch": "refs/heads/b"},
+                {"id": "w3", "branch": "refs/heads/other"}]
         try:
             for answer in ({"terminals": [{"handle": "term_other"}], "truncated": True}, {"terminals": None}, {}):
-                prog.orca_json = lambda *a, answer=answer: answer
+                prog.orca_json = fake(held[:1], {"id:w1": answer})
                 self.assertEqual(prog.author_sessions("b"), [], answer)
-            prog.orca_json = lambda *a: {"terminals": [{"handle": "term_b"}, {"handle": "term_a"}, {}]}
+            prog.orca_json = fake(held[:1], {"id:w1": {"terminals": [{"handle": "term_b"}, {"handle": "term_a"}, {}]}})
             self.assertEqual(prog.author_sessions("b"), ["term_a", "term_b"])
-            prog.orca_json = lambda *a: (_ for _ in ()).throw(ValueError("not json"))
+            prog.orca_json = fake(held[:1], {"id:w1": ValueError("not json")})
+            self.assertEqual(prog.author_sessions("b"), [])
+            # Two worktrees hold the branch and only the successor has a terminal: its handle is the author.
+            prog.orca_json = fake(held, {"id:w1": {"terminals": []}, "id:w2": {"terminals": [{"handle": "term_new"}]}})
+            self.assertEqual(prog.author_sessions("b"), ["term_new"])
+            # One of them failing to answer leaves the author unverified, never the other's partial list.
+            prog.orca_json = fake(held, {"id:w1": SystemExit("orca terminal list: selector_ambiguous"),
+                                         "id:w2": {"terminals": [{"handle": "term_new"}]}})
+            self.assertEqual(prog.author_sessions("b"), [])
+            # A truncated worktree list or an unanswered host may hide a holder.
+            ok = {"id:w1": {"terminals": [{"handle": "term_new"}]}}
+            prog.orca_json = fake(held[:1], ok, truncated=True)
+            self.assertEqual(prog.author_sessions("b"), [])
+            prog.orca_json = fake(held[:1], ok, hostScope={"omittedHostIds": ["remote"]})
+            self.assertEqual(prog.author_sessions("b"), [])
+            prog.orca_json = fake(held[2:], ok)
             self.assertEqual(prog.author_sessions("b"), [])
         finally:
             prog.orca_json = real
