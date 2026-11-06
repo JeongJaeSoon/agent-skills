@@ -1128,6 +1128,26 @@ class AutoQueue(Fixture):
         self.vrd()  # a review at the head again brings the PR back, with a request of its own
         self.assertFalse(autoqueue.withdrawn(self.p.events(), self.n))
 
+    def test_a_stop_during_the_checks_keeps_the_executor_from_merging(self):
+        self.auto()
+        [row] = self.mine()
+        real = prog.gh_json
+
+        def stop_then_answer(*args, **kw):
+            if "comments" in args:  # a check made after the executor's own look at the withdrawal
+                prog.stop_land(self.p, self.n, "a person withdrew the call")
+            return real(*args, **kw)
+
+        prog.gh_json = stop_then_answer
+        try:
+            self.round()
+        finally:
+            prog.gh_json = real
+        got = store.land_get(row["id"])
+        self.assertEqual((got["status"], got["code"]), ("refused", 3), got)
+        self.assertIn("stopped during the checks", got["reason"])
+        self.assertEqual(self.merges(), [])
+
     def test_a_request_for_the_head_is_not_inserted_again_after_the_queue_moved_on(self):
         home = str(prog.HOME)
         put = lambda sha, **kw: store.land_put(self.slug, home, "o/r", self.n, sha, "b", "normal", None, **kw)
