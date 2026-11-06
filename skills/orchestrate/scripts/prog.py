@@ -4314,6 +4314,9 @@ def cmd_sent(argv):
             rows = pg["rows"]
             if pg["inbox_since"] and pg["inbox_since"] > fleet.iso(fleet.utcnow() - dt.timedelta(days=days)):
                 print(f"orca messages before {pg['inbox_since']} are past the inbox read and not listed", file=sys.stderr)
+            if pg["unrecorded"]:
+                print(f"{pg['unrecorded']} send(s) in live session transcripts match no log or Orca row: "
+                      "the sender skipped `orch sent add`", file=sys.stderr)
             if "--json" in rest:
                 print(json.dumps(rows, ensure_ascii=False, indent=1))
             for r in [] if "--json" in rest else rows:

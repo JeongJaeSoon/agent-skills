@@ -368,18 +368,22 @@ assert [r["id"] for r in gone] == ["Xabc"], "an acked finding still clears when 
 new, _ = patrol.write_round([x], verd, False, NOW + 300)
 assert [f["id"] for f in new] == ["Xabc"], "after it cleared, the same condition is a new occurrence"
 assert [k["key"].split(":")[2] for k in fleet.external_items()] == ["Xabc"]
-# A found row whose Needs you item never went in (the round cut short) is added by the next sync; one acked in
-# between is resolved.
+# Needs you reads patrol.jsonl itself: a found row the round was cut short after is shown at once, one acked beside a
+# round is gone, and nothing is copied into inbox-external.jsonl.
 y = {**x, "id": "Eyyy", "code": "E"}
 fleet.append_line(patrol.LOG, {"op": "found", **y, "detected_at": ago(0)})
-patrol.sync_needs_you()
 assert sorted(k["key"].split(":")[2] for k in fleet.external_items()) == ["Eyyy", "Xabc"]
 fleet.append_line(patrol.LOG, {"op": "ack", "id": "Eyyy", "at": ago(0)})
 patrol.write_round([x, y], verd, False, NOW + 360)
-assert [k["key"].split(":")[2] for k in fleet.external_items()] == ["Xabc"], "an ack written beside a round is resolved"
-fleet.inbox_resolve(fleet.external_items()[0]["key"][4:])
-patrol.sync_needs_you()
-assert fleet.external_items() == [], "one dismissed on the dashboard is not added again"
+assert [k["key"].split(":")[2] for k in fleet.external_items()] == ["Xabc"], "an ack written beside a round is gone"
+shown = fleet.external_items()[0]
+assert shown["type"] == "patrol" and shown["command"] == "orch patrol ack Xabc" and shown["key"].startswith("ext:patrol:Xabc:"), shown
+assert not (fleet.state_dir() / "inbox-external.jsonl").exists(), "no copy of a finding goes to the inbox file"
+# An old copy of the same key in inbox-external.jsonl (before the move) is not shown twice, and its resolve does not hide the finding.
+fleet.inbox_add("patrol", "old copy", key=shown["key"][4:], source="patrol")
+assert [k["key"] for k in fleet.external_items()] == [shown["key"]] and fleet.external_items()[0]["title"] != "old copy"
+fleet.inbox_resolve(shown["key"][4:])
+assert [k["key"] for k in fleet.external_items()] == [shown["key"]]
 patrol.ack(["--all"])
 patrol.write_round([], verd, False, NOW + 420)
 
@@ -422,11 +426,11 @@ assert "board" in patrol.DEPENDS["O"]
 _, _, m = patrol.judge(facts(failed={"state"}), {"first_seen": {"D:item": 1, "O:/w/a:acme/app#1": 2}})
 assert m["first_seen"] == {"D:item": 1, "O:/w/a:acme/app#1": 2}
 
-# A round cut short by the budget after its log rows: the rows stay and the next sync adds the Needs you item.
-sync0 = patrol.sync_needs_you
+# A round cut short by the budget after its log rows: the rows stay, and Needs you shows them from the log.
+sync0 = patrol.fleet.write_atomic
 def cut(*a, **k):
     raise patrol.Budget()
-patrol.sync_needs_you = cut
+patrol.fleet.write_atomic = cut
 xf = facts(workers=[{"dispatchId": "dq", "agentTerminalHandle": "hq", "resource": {"worktreeId": "x::/w/q"},
                      "projection": {"outcome": "in_progress", "liveness": {"verdict": "exited"}}}])
 try:
@@ -434,11 +438,11 @@ try:
     raise AssertionError("no budget")
 except patrol.Budget:
     pass
-patrol.sync_needs_you = sync0
-assert [r["code"] for r in patrol.open_findings().values()] == ["X"] and fleet.external_items() == []
-patrol.sync_needs_you()
-assert [k["type"] for k in fleet.external_items()] == ["patrol"]
+patrol.fleet.write_atomic = sync0
+assert [r["code"] for r in patrol.open_findings().values()] == ["X"]
+assert [k["type"] for k in fleet.external_items()] == ["patrol"], "shown without any later round"
 patrol.ack(["--all"])
+assert fleet.external_items() == []
 
 # Output marks move only past screens read; a failed terminal list keeps the error runs and marks.
 f = facts(terminals=[term("ha", "/w/a", last=5), term("hb", "/w/b", last=7)], screens={"ha": ["x"]}, fresh={"ha"})
