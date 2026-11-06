@@ -954,6 +954,12 @@ with tempfile.TemporaryDirectory() as tmp:
                        env={**os.environ, "AGENT_SKILLS_STATE": tmp}, capture_output=True, text=True, timeout=20)
     rows = (pathlib.Path(tmp) / "janitor-runs.jsonl").read_text().splitlines()
     assert r.returncode == 2 and len(rows) == 1 and json.loads(rows[0])["stage"] == "plan", (r.returncode, r.stderr, rows)
+    # The state directory is not there yet: the row is still written.
+    fresh = pathlib.Path(tmp) / "not" / "yet"
+    r = subprocess.run([sys.executable, str(pathlib.Path(__file__).parent / "reap.py"), "precheck", "--act", "--kinds", "typo-kind"],
+                       env={**os.environ, "AGENT_SKILLS_STATE": str(fresh)}, capture_output=True, text=True, timeout=20)
+    assert r.returncode == 2, r.stderr
+    assert json.loads((fresh / "janitor-runs.jsonl").read_text().splitlines()[-1])["stage"] == "plan", r.stderr
 # A cut that lands while the final row is written is in the record, not only in the return value.
 with tempfile.TemporaryDirectory() as tmp:
     st = pathlib.Path(tmp)

@@ -3064,7 +3064,7 @@ def main():
               f"사람이 볼 것 {row['human']}" + (f" · 오류 {row['error']}" if row["error"] else "") +
               (f" · 거부 {row['refused']}" if row.get("refused") else "") +
               (" · 검사를 마치지 못한 대상 있음" if row.get("unchecked") else "") + f" ({row['seconds']}초)")
-        sys.exit(2 if row["error"] or row.get("refused") or row.get("unchecked") else 0)  # a check that could not run is no clean round
+        sys.exit(2 if row["error"] or row.get("refused") or row.get("unchecked") or (gate and gate.cut) else 0)  # a check that could not run is no clean round
     if cmd == "precheck":
         (STATE / "janitor-plan.json").write_text(json.dumps(data, ensure_ascii=False, indent=1))
         command = round_cmd(pathlib.Path(__file__).resolve(), STATE, ledger_path(), "reap", "--plan", str(STATE / "janitor-plan.json"))
@@ -3089,14 +3089,19 @@ def main():
         report(data)
 
 
+def log_plan_failure(error):
+    """The row of a round that failed before act_round. The state directory may not exist yet: the lock makes it later."""
+    with contextlib.suppress(OSError):
+        STATE.mkdir(parents=True, exist_ok=True)
+        log_run(STATE, {"t": time.time(), "source": "scan", "error": error, "stage": "plan"})
+
+
 def cli():
     try:
         main()
     except (Exception, RoundCut) as e:
         if sys.argv[1:2] == ["precheck"] and "--act" in sys.argv:
-            with contextlib.suppress(OSError):
-                log_run(STATE, {"t": time.time(), "source": "scan", "error": f"{type(e).__name__}: {str(e)[:200]}",
-                                "stage": "plan"})
+            log_plan_failure(f"{type(e).__name__}: {str(e)[:200]}")
             # Under --act the exit is the round's own: a failure is 2, whatever stopped the plan.
             if isinstance(e, RoundCut):
                 sys.exit(2)
@@ -3106,8 +3111,7 @@ def cli():
     except SystemExit as e:
         # A plan refusing its own arguments (`sys.exit("message")`) is a failed round too: row, message, exit 2.
         if isinstance(e.code, str) and sys.argv[1:2] == ["precheck"] and "--act" in sys.argv:
-            with contextlib.suppress(OSError):
-                log_run(STATE, {"t": time.time(), "source": "scan", "error": e.code[:200], "stage": "plan"})
+            log_plan_failure(e.code[:200])
             print(e.code, file=sys.stderr)
             sys.exit(2)
         raise
