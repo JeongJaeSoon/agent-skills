@@ -8,9 +8,12 @@ real mode acts, only on the rules `sweep own` handed it (reap-hard's four: OWNAB
                                                     set it beside `reap-hard run --dry-run`
   sweep.py run [--round RID]                        act on the owned rules' candidates: sweep.jsonl, sweep-last.json
   sweep.py own RULE | release RULE                  hand a rule to the sweep, or back to reap-hard (sweep-owner.json)
-  sweep.py install [--dry-run] [--here] | uninstall the LaunchAgent that runs `tick` where reap-hard's ran
+  sweep.py install [--dry-run]                      turn on the Orca automation that runs `tick` (= skills-sync setup
+                                                    enable sweep); no LaunchAgent is written
+  sweep.py uninstall                                take down the LaunchAgent an earlier install wrote
   sweep.py config                                   the "sweep" settings key that carries today's reap-hard values
-  sweep.py tick                                     what the LaunchAgent runs: patrol, shadow, reap-hard, real round
+  sweep.py tick                                     what the automation runs: patrol, shadow, reap-hard, real round;
+                                                    one tick at a time (<state>/sweep-tick.lock)
   sweep.py diff [--hours 48] [--json]               the shadow's "would act" against what the old cleaners (and the
                                                     sweep itself) did in the same hours
 
@@ -29,7 +32,7 @@ Each candidate goes through the checks the real mode will use, in order; the fir
   guard     guard.item (a card: cardguard.guard): the shared keep-only checks, read fresh
 The protect file must be there and readable, as for reap-hard; otherwise the round is refused whole.
 """
-import contextlib, datetime as dt, fcntl, json, math, os, pathlib, plistlib, signal, subprocess, sys, time
+import contextlib, datetime as dt, fcntl, json, math, os, pathlib, signal, subprocess, sys, time
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -50,7 +53,7 @@ PLATFORM = sys.platform
 PATROL_WAIT_S = 400  # patrol's own budgets: 120 s for the round, 240 s for the candidate scans
 STEP_TIMEOUT_S = 900
 # How long after a patrol round an old cleaner may take to act on the same target: reap-hard two of its passes and
-# ten minutes (its `interval`, 900 s by default), the janitor 4 hours (every 3 hours, and on load). Never an act
+# ten minutes (its `interval`, 1800 s by default), the janitor 4 hours (every 3 hours, and on load). Never an act
 # that ended before the round: patrol's scans read after it, so what they still saw is not what that act removed
 # (a card made again at the same path and HEAD looks the same).
 JANITOR_LAG_S = 4 * 3600
@@ -178,14 +181,14 @@ def cleaner_of(rule_name):
 
 
 def interval():
-    """Seconds between passes: the `sweep` (else `reap-hard`) setting, 900 by default."""
+    """Seconds between passes: the `sweep` (else `reap-hard`) setting, reap-hard's own default (1800) otherwise."""
     with contextlib.suppress(OSError, ValueError, AttributeError, TypeError):
         data = json.loads(CONFIG.read_text())
         n = (guard.hard_cfg({"reap-hard": data.get("reap-hard") or {}, "sweep": data.get("sweep") or {}}) or {}
-             ).get("interval", 900)
+             ).get("interval", 1800)
         if not isinstance(n, bool) and math.isfinite(float(n)) and float(n) > 0:
             return float(n)
-    return 900.0
+    return 1800.0
 
 
 def lags():
@@ -254,16 +257,20 @@ def decide(v, protect, now, pressure=False, own=None, fails=None, cap=DEFAULT_CA
 
 
 @contextlib.contextmanager
-def run_lock():
-    """<state>/sweep.lock without waiting: True while held, False when another run has it."""
+def file_lock(name):
+    """<state>/NAME without waiting: True while held, False when another process has it."""
     reap.STATE.mkdir(parents=True, exist_ok=True)
-    with open(reap.STATE / "sweep.lock", "w") as f:
+    with open(reap.STATE / name, "w") as f:
         try:
             fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             yield False
             return
         yield True
+
+
+def run_lock():
+    return file_lock("sweep.lock")
 
 
 def run_shadow(rid=None, pressure=False, now=None):
@@ -702,10 +709,6 @@ def set_owner(rule_name, owned):
 
 # ---------------------------------------------------------------- install, config, tick
 
-SWEEP_SCRIPT = pathlib.Path(__file__).resolve()
-LEGACY_LABEL = "io.github.jeongjaesoon.reap-hard"
-
-
 def plist_path():
     return pathlib.Path.home() / "Library" / "LaunchAgents" / f"{LABEL}.plist"
 
@@ -734,53 +737,40 @@ def print_config():
 
 
 def cmd_install(argv):
-    """Write the LaunchAgent that runs `sweep tick` where reap-hard's ran, at the same interval, and load it."""
-    if PLATFORM != "darwin":
-        print("이 OS 에는 launchd 가 없음: cron 으로 `sweep.py tick` 을 돌린다", file=sys.stderr)
-        return 1
-    if not (HERE.parents[2] / ".git").is_dir() and "--here" not in argv:  # a worktree goes away under launchd
-        print(f"{HERE.parents[2]} 은 메인 git 체크아웃이 아님: 세션이 로드하는 체크아웃에서 설치(또는 --here)",
-              file=sys.stderr)
-        return 1
-    try:
-        guard.read_protect(guard.protect_file())  # without it every pass stops: do not replace a working job with that
-    except guard.NoProtect as e:
-        print(f"sweep install 중단: {e}", file=sys.stderr)
-        return 1
+    """Turn on the Orca automation that runs `sweep tick`: the same as `skills-sync setup enable sweep`, whose
+    definition (automations.SWEEP) is the only one. No LaunchAgent is written any more; `--here` no longer applies
+    because the automation points at the checkout's files."""
     sys.path.insert(0, str(HERE.parents[2] / "scripts"))
-    import reap_hard  # noqa: E402
-    plist = reap_hard.spec(interval(), LABEL, SWEEP_SCRIPT, ("tick",), reap.STATE / "sweep.log")
-    path = plist_path()
+    import automations  # noqa: E402
+    job = automations.SWEEP
     if "--dry-run" in argv:
-        print(f"[dry-run] {path} 에 쓸 것(쓰지도 올리지도 않음): {' '.join(plist['ProgramArguments'])} "
-              f"(StartInterval {plist['StartInterval']}초)")
+        w = job.want()
+        print(f"[dry-run] Orca automation {job.job_name!r} 로 등록할 것(만들지도 켜지도 않음): "
+              f"trigger {w['trigger']}, precheck-timeout {w['precheck-timeout']}초")
+        print(f"  precheck: {w['precheck']}")
         print_config()
         return 0
-    reap.STATE.mkdir(parents=True, exist_ok=True)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    launchctl("bootout", agent_target())
-    path.write_bytes(plistlib.dumps(plist))
-    for _ in range(5):  # bootstrap right after bootout can fail with error 5 until the old job is gone
-        p = launchctl("bootstrap", f"gui/{os.getuid()}", str(path))
-        if p.returncode == 0:
-            print(f"{path} 를 쓰고 {agent_target()} 를 올림({plist['StartInterval']}초마다 sweep tick)")
-            print_config()
-            legacy = launchctl("print", agent_target(LEGACY_LABEL)).returncode == 0
-            print("tick 은 순찰 → 그림자 → 소유 규칙 정리 → reap-hard(소유 안 한 규칙) 순으로 한 번씩 돈다. "
-                  "그래서 reap-hard 의 자동화(Orca)와 옛 LaunchAgent 는 끈다: 두 곳이 번갈아 돌면 같은 일을 두 번 시도한다"
-                  "(둘 다 소유권 파일을 따르므로 이중 처리는 아님).")
-            if legacy:
-                print(f"옛 LaunchAgent {LEGACY_LABEL} 가 아직 올라 있음: bin/reap-hard uninstall")
-            return 0
-        time.sleep(1)
-    print(f"launchctl bootstrap 실패: {p.stderr.strip()}", file=sys.stderr)
-    return 1
+    code, msg = job.enable(False)
+    print(f"{job.name}: {msg}", file=sys.stderr if code else sys.stdout)
+    if not code:
+        print_config()
+        print("전환 중에는 옛 LaunchAgent 가 같이 돌 수 있지만 tick 은 한 번에 하나만 돌아(sweep-tick.lock) 안전하다. "
+              "첫 tick 이 `skills-sync setup status` 와 <state>/jobs/sweep.json 에 ok 로 남은 것을 본 뒤 "
+              "`sweep.py uninstall` 로 LaunchAgent 를 내린다.")
+        if PLATFORM == "darwin" and launchctl("print", agent_target()).returncode == 0:
+            print(f"옛 LaunchAgent {agent_target()} 가 아직 올라 있음")
+    return code
 
 
 def cmd_uninstall():
-    launchctl("bootout", agent_target())
+    """Take down the LaunchAgent an earlier `install` wrote. The Orca automation is left as it is."""
+    loaded = PLATFORM == "darwin" and launchctl("print", agent_target()).returncode == 0
+    if loaded:
+        launchctl("bootout", agent_target())
+    existed = plist_path().exists()
     plist_path().unlink(missing_ok=True)
-    print(f"{agent_target()} 를 내리고 plist 를 지움. reap-hard 의 자동화를 다시 켠다.")
+    print(f"{agent_target()} 를 내리고 plist 를 지움. Orca automation sweep 은 그대로 둔다." if loaded or existed
+          else "내릴 LaunchAgent 가 없음. Orca automation sweep 은 그대로 둔다.")
     return 0
 
 
@@ -799,17 +789,66 @@ def budgeted(fn):
 
 
 def tick():
-    """What the LaunchAgent runs each interval, in order, each step on its own so one failing leaves the next:
+    """What the Orca automation (or, during a switch, the old LaunchAgent) runs each interval. One tick at a time
+    (<state>/sweep-tick.lock): a second one, from the other scheduler or a slow earlier tick, leaves at once with 0 and
+    does nothing, so the patrol and the old cleaner are not started twice and no tick waits behind another."""
+    with file_lock("sweep-tick.lock") as got:
+        if not got:
+            print("sweep: 다른 tick 이 도는 중이라 이번 tick 은 건너뜀")
+            return 0
+        return run_tick()
+
+
+def run_patrol(timeout, cmd=None):
+    """`patrol --if-due` in a session of its own, so that it can cut its scans by their group. What the round leaves in
+    that group ends with it, on a timeout too: subprocess.run would stop only the direct child. Its exit code."""
+    proc = subprocess.Popen(cmd or [sys.executable, str(reap.ORCH), "patrol", "--if-due"],
+                            stdin=subprocess.DEVNULL, start_new_session=True)
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(OSError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            proc.wait(timeout=5)
+        raise
+    with contextlib.suppress(OSError):
+        os.killpg(proc.pid, signal.SIGKILL)
+    return proc.returncode
+
+
+PATROL_IDLE_POLL_S = 2
+
+
+def wait_patrol_idle(deadline):
+    """True once no patrol round holds its run lock (<state>/patrol-run.lock, held until the candidate scans end),
+    whoever started the round; False when `deadline` (a time.monotonic() value) passes first."""
+    while True:
+        with file_lock("patrol-run.lock") as free:
+            if free:
+                return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(PATROL_IDLE_POLL_S)
+
+
+def run_tick():
+    """In order, each step on its own so one failing leaves the next:
     patrol (due rounds only), the shadow, reap-hard for the rules the sweep does not own (it leaves an owned one by
     itself), then the sweep's real round. reap-hard goes first so that a rule just handed over, whose first good round
     the sweep has not written yet, is still its old cleaner's in that pass: the real round writes sweep-last.json
     after it. The worst exit code."""
     code = 0
+    started = time.monotonic()
     try:
-        r = subprocess.run([sys.executable, str(reap.ORCH), "patrol", "--if-due"], stdin=subprocess.DEVNULL,
-                           timeout=PATROL_WAIT_S)
-        print(f"patrol 종료 코드 {r.returncode}")
-        code = max(code, 1 if r.returncode else 0)
+        rc = run_patrol(PATROL_WAIT_S)
+        print(f"patrol 종료 코드 {rc}")
+        code = max(code, 1 if rc else 0)
+        # A round the patrol automation already runs makes the call above leave at once with 0; the shadow and the real
+        # round refuse a round that is not complete, so wait for it inside the same budget instead of missing it.
+        if not wait_patrol_idle(started + PATROL_WAIT_S):
+            print("patrol 라운드가 예산 안에 끝나지 않음", file=sys.stderr)
+            code = max(code, 1)
     except (OSError, subprocess.SubprocessError) as e:
         print(f"patrol 을 돌리지 못함: {type(e).__name__}", file=sys.stderr)
         code = max(code, 1)

@@ -250,6 +250,48 @@ ticks = iter([0.0, 0.0, 901.0])
 assert pressure.turns_wait({**cfg, "active_turns_per_cpu": 0.5}, 15, now_fn=lambda: next(ticks), sleep=lambda s: None,
                            count=lambda: 10**6, out=said.append) == 3 and "1000000개" in said[-1]
 
+# Session cap: every listed agent counts, idle ones too, the caller's own does not; unset (the default) is off.
+os.environ["ORCA_TERMINAL_HANDLE"] = "term_me"
+idle_ps = lambda others: lambda cmd, **k: (json.dumps({"result": {"terminal": {"tabId": "tab-me", "leafId": "leaf-me"}}})
+                                           if cmd[:3] == ["orca", "terminal", "show"] else json.dumps({"result": {"worktrees": [
+                                               {"agents": [{"paneKey": f"t{i}:l{i}", "state": "idle"} for i in range(others)]
+                                                + [{"paneKey": ME, "state": "working"}]}]}}))
+assert pressure.live_sessions(run=idle_ps(5)) == 5 and pressure.active_turns(run=idle_ps(5)) == 0
+assert pressure.live_sessions(run=lambda *a, **k: None) is None
+for bad in (None, 0, -1, True, "3", 2.5):
+    assert pressure.session_cap({**cfg, "max_sessions": bad}) is None, bad
+assert pressure.session_cap({**cfg, "max_sessions": 16}) == 16
+assert pressure.session_hold({**cfg, "max_sessions": None}, sessions=lambda: 10**6) == (None, None, False)  # off: never counted
+for n, hold in ((15, False), (16, True), (None, True)):  # unreadable holds like a full one
+    assert pressure.session_hold({**cfg, "max_sessions": 16}, sessions=lambda n=n: n) == (n, 16, hold), n
+assert pressure.config([("max_sessions", "4")])["max_sessions"] == 4  # the CLI form reaches session_cap as an int
+assert pressure.config([("max_sessions", "none")])["max_sessions"] is None
+assert pressure.session_cap(pressure.config([("max_sessions", "4")])) == 4
+def never_counted():
+    raise AssertionError("no cap configured: sessions must not be counted")
+assert pressure.session_hold(cfg, sessions=never_counted) == (None, None, False)
+real_sessions = pressure.live_sessions
+pressure.active_turns = lambda: 0
+scfg = {**cfg, "max_sessions": 4}
+pressure.live_sessions = lambda run=None: 4
+verdict = g.gate("orca worktree create --repo x", OK, {}, scfg, now=1.0, p=pressure)
+assert verdict[0] == "deny" and "max_sessions" in verdict[1], verdict
+pressure.live_sessions = lambda run=None: 3
+assert g.gate("orca worktree create --repo x", OK, {}, scfg, now=1.0, p=pressure) is None
+pressure.live_sessions = lambda run=None: 4
+assert g.gate("orca worktree create --repo x", OK, {}, cfg, now=1.0, p=pressure) is None  # no cap configured
+ticks = iter([0.0, 0.0, 901.0])
+assert pressure.turns_wait(scfg, 15, now_fn=lambda: next(ticks), sleep=lambda s: None, count=lambda: 0,
+                           sessions=lambda: 4, out=said.append) == 3 and "세션 4개 ≥ 상한 4" in said[-1]
+ticks = iter([0.0, 0.0, 0.0])
+assert pressure.turns_wait(scfg, 15, now_fn=lambda: next(ticks), sleep=lambda s: None, count=lambda: 0,
+                           sessions=iter([4, 3]).__next__, out=said.append) == 0 and "세션 3개 / 상한 4" in said[-1]
+pressure.live_sessions, pressure.active_turns = real_sessions, real_turns
+if real_handle is not None:
+    os.environ["ORCA_TERMINAL_HANDLE"] = real_handle
+else:
+    del os.environ["ORCA_TERMINAL_HANDLE"]
+
 # ok: nothing. warn: denied until a sweep ran in gate_fresh_minutes. danger: denied either way.
 assert gate("docker compose up -d", OK) == "none"
 assert gate("docker compose up -d", WARN) == "deny"
@@ -326,7 +368,9 @@ def entry(cmd, session):
 
 
 def dash_rows():
-    return [json.loads(line) for line in (dash / "inbox-external.jsonl").read_text().splitlines()]
+    """The rows a held command put in the dashboard's inbox file: none, since PR 6 (the dashboard reads the queue)."""
+    path = dash / "inbox-external.jsonl"
+    return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
 
 def wait(qid, home):
@@ -341,14 +385,10 @@ assert e and e["state"] == "waiting" and e["cwd"] == "/w" and e["attempts"] == 1
 assert f"queue wait {e['id']}" in held and "Monitor" in held and "같은 명령을 그대로 다시 실행" in held, held
 assert "Bash run_in_background" in held, held
 assert held.startswith("[gate:pressure] "), held
-row = dash_rows()[-1]
-assert row["op"] == "add" and row["key"] == f"pressure:queue:{e['id']}" and e["id"] in row["title"], row
-assert row["command"].endswith("pressure.py queue") and CARD not in json.dumps(row), "the copy button lists, never reruns"
+assert dash_rows() == [], "a held command is not copied to the inbox file: the dashboard reads the queue itself"
 # Denied again before it got through: the same entry, counted, with its first deadline. Another session: its own entry.
-rows = len(dash_rows())
 pre(CARD, "s1", "danger")
 assert entry(CARD, "s1")["attempts"] == 2 and entry(CARD, "s1")["deadline"] == e["deadline"]
-assert len(dash_rows()) == rows, "a repeat deny keeps the one row it has"
 pre(CARD, "s2", "danger")
 assert entry(CARD, "s2")["id"] != e["id"] and len(pressure.queue_read()) >= 2
 # Load down: wait says go, and only the rerun by the session that asked is its retry (danger below, under the deadline).
@@ -359,14 +399,13 @@ assert pre(CARD, "s1", "ok") == "" and entry(CARD, "s1")["state"] == "retrying"
 assert wait(e["id"], "ok").returncode == 3, "a retried entry is never run a second time"
 assert event("PostToolUseFailure", CARD, "s1", error="Exit code 1") == ""
 e = entry(CARD, "s1")
-assert e["state"] == "failed" and e["error"] == "Exit code 1" and "재시도 실패" in dash_rows()[-1]["title"], e
+assert e["state"] == "failed" and e["error"] == "Exit code 1", e
 assert event("PostToolUse", CARD, "s1") == "" and entry(CARD, "s1")["state"] == "failed", "an outcome only of a retry"
-# A retry that went through takes its row off the dashboard.
+# A retry that went through is done, and the dashboard (reading the queue) stops counting it.
 pre(CARD, "s3", "danger")
 pre(CARD, "s3", "ok")
 event("PostToolUse", CARD, "s3")
-assert entry(CARD, "s3")["state"] == "done" and dash_rows()[-1] == {**dash_rows()[-1], "op": "resolve",
-                                                                     "key": f"pressure:queue:{entry(CARD, 's3')['id']}"}
+assert entry(CARD, "s3")["state"] == "done"
 # A plain command never touches the queue, and a failure event of anything else is not a retry's.
 assert event("PostToolUseFailure", "ls", "s2", error="Exit code 1") == "" and entry(CARD, "s2")["state"] == "waiting"
 
@@ -377,7 +416,6 @@ lines = []
 code = pressure.queue_wait(q["id"], {**cfg, "mem_free_pct": [101, 101]}, now_fn=lambda: t0 + 60 * next(ticks),
                            sleep=lambda s: None, measure_fn=lambda: dict(OK), out=lines.append)
 assert code == 3 and "포기" in lines[-1] and entry("docker compose up", "s4")["state"] == "gave_up", lines
-assert "포기" in dash_rows()[-1]["title"]
 pressure.enqueue("s5", "/w", "docker compose up", "docker compose up", ["x"], cfg, now=t0)
 assert [x["session"] for x in pressure.queue_expire(t0 + 16 * 60)] == ["s5"]
 assert pressure.queue_expire(t0 + 16 * 60) == [], "given up once"
@@ -392,15 +430,15 @@ pressure.enqueue("s7", "/w", CARD, "orca worktree create", ["x"], cfg, now=t0)
 assert pressure.queue_mark("s7", CARD, "retrying", now=t0 + 60)["deadline"] == t0 + 60 + 15 * 60
 assert pressure.queue_expire(t0 + 10 * 60) == [] and entry(CARD, "s7")["state"] == "retrying"
 assert [x["state"] for x in pressure.queue_expire(t0 + 17 * 60)] == ["failed"]
-assert entry(CARD, "s7")["error"] == pressure.NO_OUTCOME and "다른 hook" in dash_rows()[-1]["title"]
+assert entry(CARD, "s7")["error"] == pressure.NO_OUTCOME and "다른 hook" in pressure.NO_OUTCOME
 pressure.enqueue("s8", "/w", CARD, "orca worktree create", ["x"], cfg, now=t0)
 pressure.queue_mark("s8", CARD, "retrying", now=t0 + 60)
 again = pressure.enqueue("s8", "/w", CARD, "orca worktree create", ["y"], cfg, now=t0 + 120)
 assert again["state"] == "waiting" and again["deadline"] == t0 + 120 + 15 * 60 and again["attempts"] == 2, again
-# Given up, then the session ran it after all and it went through: the row closes instead of saying "포기" for a week.
+# Given up, then the session ran it after all and it went through: the entry is done instead of "gave_up" for a week.
 assert entry("docker compose up", "s4")["state"] == "gave_up"
 assert pressure.queue_mark("s4", "docker compose up", "retrying") and pressure.queue_mark("s4", "docker compose up", "done")
-assert dash_rows()[-1] == {**dash_rows()[-1], "op": "resolve", "key": f"pressure:queue:{entry('docker compose up', 's4')['id']}"}
+assert entry("docker compose up", "s4")["state"] == "done" and dash_rows() == []
 
 # A queue that cannot be written still holds a danger start, on the old wait; only a failed measurement lets it through.
 lock = open(pressure.reap.STATE / "pressure-queue.lock", "w")

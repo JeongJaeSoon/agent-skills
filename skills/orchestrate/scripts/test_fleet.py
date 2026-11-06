@@ -80,7 +80,7 @@ assert {s["id"]: s["project"] for s in st["sessions"]} == {"wt-coord": "platform
                                                          "wt-docs": "launchpad", "wt-scratch": "tools", "wt-old": "tools",
                                                          "wt-lead": "platform", "wt-invoice": "launchpad", "wt-tax": "launchpad"}
 assert [(i["project"], i["session"]) for i in items(st, "approval") if i["source"] == "orca-gate"] == [("launchpad", "wt-coord")]
-assert [i["project"] for i in items(st, "decision")] == ["platform"] and all(i["project"] for i in items(st))
+assert [i["project"] for i in items(st, "decision")] == ["platform"] and all(i["project"] for i in items(st) if i["type"] != "pc_pressure")  # the machine's wait names no project
 assert {t["id"]: t["project"] for t in st["tasks"]} == {"task_login": "launchpad", "task_export": "launchpad", "task_docs": "launchpad",
                                                        "task_lead": "platform", "task_invoice": "launchpad",
                                                        **{t: None for t, _ in dash_demo.PLUGIN_TASKS}}  # cards with no worktree left
@@ -114,7 +114,8 @@ got = sorted((i["type"], i["session"]) for i in items(st))
 assert got == sorted([("prompt", "wt-docs"), ("question", "wt-export"), ("approval", "wt-coord"), ("login", "wt-scratch"),
                       ("decision", "wt-coord"), ("ready_to_merge", "wt-login"), ("changes_requested", "wt-export"),
                       ("review_comment_received", "wt-export"), ("ci_failed", "wt-export"),
-                      ("watcher_down", "wt-coord")]), got  # the demo orchestrator never ran `orch watch-cards`
+                      ("watcher_down", "wt-coord"),  # the demo orchestrator never ran `orch watch-cards`
+                      ("pc_pressure", None)]), got  # the fixture's pressure-queue.json: one held command, read directly
 
 # A session's badge is the number of Needs you items on it: the badges plus the sessionless items are the inbox.
 def badges_agree(st):
@@ -269,11 +270,13 @@ assert delivered(f.tick(force=True)) == n + 1, "once"
 world.advance()
 clock[0] = now + dt.timedelta(minutes=10)
 st = f.tick(force=True)
-rows = [json.loads(l) for l in (state_dir / "pr-events.jsonl").read_text().splitlines()]
-assert sorted((r["pr"], r["kind"]) for r in rows) == [(41, "approval_stale"), (41, "head_pushed"), (42, "checks_recovered")], rows
-r41 = next(r for r in rows if r["pr"] == 41)
-assert r41["owner"] == "ctx_login" and r41["owner_kind"] == "dispatch" and r41["repo"] == "acme/launchpad", r41
-assert all(len(json.dumps(r)) < 4096 for r in rows)
+assert not (state_dir / "pr-events.jsonl").exists()  # PR 6: the rows live in events.jsonl (the timeline) only
+rows = [e for e in st["timeline"] if e["kind"].startswith("pr_")]
+assert sorted((e["pr"], e["kind"]) for e in rows) == [("acme/launchpad#41", "pr_approval_stale"), ("acme/launchpad#41", "pr_head_pushed"),
+                                                      ("acme/launchpad#42", "pr_checks_recovered")], rows
+r41 = next(e for e in rows if e["pr"] == "acme/launchpad#41" and e["kind"] == "pr_head_pushed")
+assert r41["owner"] == "ctx_login" and r41["owner_kind"] == "dispatch" and r41["repo"] == "acme/launchpad" and r41["id"], r41  # what pr-events.jsonl carried
+assert all(len(json.dumps(e)) < 4096 for e in rows)
 assert [i["session"] for i in items(st, "approval_stale")] == ["wt-login"] and not items(st, "ready_to_merge"), items(st)
 assert {e["kind"] for e in st["timeline"]} >= {"pr_approval_stale", "pr_checks_recovered"}
 
@@ -313,7 +316,10 @@ code, out = fleet.send("wt-export", f"token {secret}")
 fleet.load_sync = real_load
 assert out == {"ok": False, "reason": "safety check unavailable (scripts/sync.py not found)", "fallback": "copy"}, out
 log = (state_dir / "sends.jsonl").read_text()
-assert len(log.splitlines()) == 8 and secret not in log, log
+assert len(log.splitlines()) == 6 and secret not in log, log  # the two typed lines are instructions: they are in the sent log
+typed = [r for p in sorted((state_dir / "sent").glob("*.jsonl")) for r in fleet.read_lines(p)]
+assert [(r["from"], r["to"], r["kind"], r["channel"], r["text"]) for r in typed] == [
+    ("dashboard", "wt-export", "dashboard", "term_export", "use CSV"), ("dashboard", "wt-export", "dashboard", "term_export", "x")], typed
 
 # The brief's Orca button names a session by its worktree id: the handle is the one its agent terminal has now.
 # `orca terminal switch` moves only the desktop on the machine that runs it, so a switch Orca confirms is still the
@@ -475,7 +481,7 @@ fleet.orca, real_orca = (lambda *a, **k: opened.append(a) or {}), fleet.orca
 assert fleet.answer_prompt("wt-docs", "p-bash", "open") == (200, {"ok": True, "reason": None})
 fleet.orca = real_orca
 assert opened == [("terminal", "switch", "--terminal", "term_docs")]
-rows = [json.loads(l) for l in (state_dir / "sends.jsonl").read_text().splitlines()[8:]]
+rows = [json.loads(l) for l in (state_dir / "sends.jsonl").read_text().splitlines()[6:]]
 assert len(rows) == 15 and all(r["text"].startswith("prompt ") and "code" in r for r in rows), rows
 
 # Adoption: a dry run by default, a write only with the config flag, and undo restores the logged previous value.
@@ -694,22 +700,31 @@ process.stdout.write(JSON.stringify({{on, off: briefInline(cell)}}));"""
 {(assets / "fleet.js").read_text()}
 const old = new Date(Date.now() - 3 * 3600e3).toISOString(), soon = new Date(Date.now() + 600e3).toISOString();
 const st = {{sessions: [{{id: "wt-coord", name: "<b>coord</b>", phase: "idle"}}], sources: {{automations: {{ok: true}}}},
-  automations: [{{id: "a1", name: "<script>x</script>", rrule: "17 */3 * * *", enabled: true, next_run_at: soon, last_run_at: old,
+  automations: [{{id: "a1", key: "k1", name: "<script>x</script>", rrule: "17 */3 * * *", enabled: true, next_run_at: soon, last_run_at: old,
                   recent: [{{status: "completed", at: old, summary: "<img src=x> " + "lastsum ".repeat(60) + "END"}}, {{status: "skipped_precheck", at: old}}]}},
-                {{id: "a2", name: "late", rrule: "0 9 * * *", enabled: true, next_run_at: old, recent: []}},
-                {{id: "a3", name: "broken", rrule: "*/20 * * * *", enabled: true, next_run_at: soon, recent: [{{status: "failed", at: old}}]}},
-                {{id: "a4", name: "off", rrule: "x", enabled: false, next_run_at: old, recent: [{{status: "failed", at: old}}]}}],
+                {{id: "a2", key: "k2", name: "late", rrule: "0 9 * * *", enabled: true, next_run_at: old, recent: []}},
+                {{id: "a3", key: "k3", name: "broken", rrule: "*/20 * * * *", enabled: true, next_run_at: soon, recent: [{{status: "failed", at: old}}]}},
+                {{id: "a4", key: "k4", name: "off", rrule: "x", enabled: false, next_run_at: old, recent: [{{status: "failed", at: old}}]}},
+                {{id: "a5", key: "orch-dash", name: "agent-skills orch-dash", rrule: "*/10 * * * *", enabled: true, next_run_at: soon, recent: []}},
+                {{id: "a9", key: null, name: "somebody else's failing job", rrule: "x", enabled: true, next_run_at: soon, recent: [{{status: "failed", at: old}}]}}],
   holds: [{{kind: "resource", resource: "browser", by: "term_coord", session: "wt-coord", note: "<i>login</i>", at: old}},
           {{kind: "lane", resource: "acme/app@main", by: "#7", note: null, at: soon}}]}};
 F.jobsAt = Date.now();  // as /api/fleet/jobs answered it a moment ago
-F.jobs = {{jobs: [{{key: "tidy", name: "Self-clean", cadence: "after each fleet collect", runs_in: "orch-dash",
-                   record: {{at: old, ok: true, n: 0, result: "closed 0", acted_at: old, acted_n: 3, next_at: soon}}}},
-                 {{key: "pr-stats", name: "PR stats", cadence: "every 6h", runs_in: "orch-dash",
-                   record: {{at: old, ok: false, error: "<b>HTTP 502</b> " + "x".repeat(400), failed_at: old, warned_at: old, next_at: null}}}},
-                 {{key: "skill-usage", name: "Skill usage", cadence: "every 15m", runs_in: "orch-dash", record: null}},
-                 {{key: "reap-hard", name: "reap-hard", cadence: null, runs_in: "launchd", record: null, error: "<b>ValueError</b>('bad interval')"}}],
+const entry = (a, extra = {{}}) => ({{key: a.key, job_name: "agent-skills " + a.key, default: true, what: "", registered: true, orca: a, record: null, jobs: [], ...extra}});
+const own = [{{key: "tidy", name: "Self-clean", cadence: "after each fleet collect", runs_in: "orch-dash",
+               record: {{at: old, ok: true, n: 0, result: "closed 0", acted_at: old, acted_n: 3, next_at: soon}}}},
+             {{key: "pr-stats", name: "PR stats", cadence: "every 6h", runs_in: "orch-dash",
+               record: {{at: old, ok: false, error: "<b>HTTP 502</b> " + "x".repeat(400), failed_at: old, warned_at: old, next_at: null}}}},
+             {{key: "skill-usage", name: "Skill usage", cadence: "every 15m", runs_in: "orch-dash", record: null}},
+             {{key: "patrol", name: "Session patrol", cadence: "started by reap-hard", runs_in: "reap-hard", record: null, error: "<b>ValueError</b>('bad file')"}}];
+F.jobs = {{automations: [...st.automations.filter((a) => a.key).map((a) => entry(a, a.key === "orch-dash" ? {{jobs: own}} : {{}})),
+                         entry({{key: "pstack-upstream"}}, {{orca: null, registered: false}}),
+                         {{key: "share-server", job_name: null, default: false, what: "", registered: null, orca: null, record: null, jobs: []}},
+                         entry({{key: "sync"}}, {{orca: null, registered: true, record: {{at: old, ok: false, error: "<b>rebase</b> conflict", n: null, next_at: null}}}})],
           rules: [{{name: "Inbox item expiry", rule: "7 days <i>after</i>", applied: "each fleet collect"}}]}};
-process.stdout.write(JSON.stringify({{autos: fleetAutomations(st), holds: holdsCard(st), troubled: autoTroubled(st).map((a) => a.name)}}));"""
+const out = {{closed: fleetAutomations(st)}};
+F.jobOpen.add("orch-dash"); out.open = fleetAutomations(st); F.jobOpen.delete("orch-dash");
+process.stdout.write(JSON.stringify({{autos: out.closed, open: out.open, holds: holdsCard(st), troubled: autoTroubled(st).map((a) => a.name), nav: listed(st).length}}));"""
     got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
     for raw in ("<script", "<img", "<i>", "<b>coord"):
         assert raw not in got["autos"] + got["holds"], raw
@@ -719,10 +734,18 @@ process.stdout.write(JSON.stringify({{autos: fleetAutomations(st), holds: holdsC
     assert got["autos"].count('class="run tone-good"') == 2 and 'class="run "' in got["autos"], "a completed and a skipped block"
     assert got["holds"].index("browser") < got["holds"].index("acme/app@main") and "landing lane" in got["holds"], got["holds"]
     # A long last result wraps whole in its cell instead of being cut with an ellipsis.
-    autos_html = got["autos"][:got["autos"].index("orch-dash jobs")]
+    autos_html = got["autos"]
     assert "lastsum " * 60 + "END" in autos_html and "ellipsis" not in autos_html, autos_html
-    # orch-dash's own jobs under them: a record as written, a failure whole with its link to the timeline, no record said.
-    jobs_html = got["autos"][got["autos"].index("orch-dash jobs"):]
+    # One list: a row per registry entry, an Orca automation the registry lacks (no key) is not listed or counted.
+    assert "somebody else" not in autos_html and "somebody else" not in got["open"] and got["nav"] == 5, got["nav"]
+    assert autos_html.count("<b title=") == 8, "one row for each of the 8 registry entries, none twice"
+    assert "not registered" in autos_html and "skills-sync setup enable pstack-upstream" in autos_html
+    assert "LaunchAgent" in autos_html and "its state is not read here" in autos_html
+    assert "&lt;b&gt;rebase&lt;/b&gt; conflict" in autos_html and "<b>rebase" not in autos_html, "a job's own file stands in when Orca has no run"
+    assert "closed 0" not in autos_html and "Self-clean" not in autos_html and "▸ 4 jobs" in autos_html, "its jobs stay folded until opened"
+    # The jobs that run inside an automation open under its row: a record as written, a failure whole with its link to the timeline, no record said.
+    jobs_html = got["open"]
+    assert "▾ 4 jobs" in jobs_html and "Session patrol" in jobs_html
     assert "closed 0" in jobs_html and "3 · " in jobs_html, jobs_html
     assert "▲ failed" in jobs_html and "x" * 400 in jobs_html and 'href="#/fleet/timeline"' in jobs_html and "Timeline warning" in jobs_html
     assert "<b>HTTP" not in jobs_html and "<i>after" not in jobs_html, "job text is escaped"
@@ -738,26 +761,35 @@ process.stdout.write(JSON.stringify({{autos: fleetAutomations(st), holds: holdsC
 {take("hhmm")}
 {(assets / "fleet.js").read_text()}
 F.jobsAt = Date.now(); const old = new Date(Date.now() - 3 * 3600e3).toISOString();
-F.jobs = {{jobs: [{{key: "fleet-tick", name: "Fleet tick", every: "10s", cadence: "every 10s while a page is open", runs_in: "orch-dash", group: null, record: {json.dumps(tick)}}},
-                 {{key: "tidy", name: "Self-clean", every: null, cadence: "after each fleet collect", runs_in: "orch-dash", group: "fleet-tick",
-                   record: {{at: old, ok: true, n: 0, result: "closed 0", next_at: null}}}},
-                 {{key: "relay", name: "Relay", every: null, cadence: "after each fleet collect", runs_in: "orch-dash", group: "fleet-tick",
-                   record: {{at: old, ok: true, n: 2, result: "answers relayed 2", next_at: null}}}},
-                 {{key: "brief-rows", name: "Brief rows", every: null, cadence: "after each fleet collect", runs_in: "orch-dash", group: "fleet-tick", record: null}},
-                 {{key: "reap-hard", name: "reap-hard", every: "10m", cadence: "every 10m", runs_in: "launchd", record: null, why: "agent not installed"}}],
-          rules: []}};
-const out = {{closed: internalJobs()}};
-F.jobOpen.add("fleet-tick"); out.open = internalJobs(); F.jobOpen.delete("fleet-tick");
-F.jobs.jobs[2].record.n = 0; out.quiet = internalJobs();
+const st = {{sources: {{automations: {{ok: true}}}}, automations: []}};
+const dash = {{key: "orch-dash", job_name: "agent-skills orch-dash", default: true, what: "", registered: true, orca: null, record: null, jobs: [
+  {{key: "fleet-tick", name: "Fleet tick", every: "10s", cadence: "every 10s while a page is open", runs_in: "orch-dash", group: null, record: {json.dumps(tick)}}},
+  {{key: "tidy", name: "Self-clean", every: null, cadence: "after each fleet collect", runs_in: "orch-dash", group: "fleet-tick",
+    record: {{at: old, ok: true, n: 0, result: "closed 0", next_at: null}}}},
+  {{key: "relay", name: "Relay", every: null, cadence: "after each fleet collect", runs_in: "orch-dash", group: "fleet-tick",
+    record: {{at: old, ok: true, n: 2, result: "answers relayed 2", next_at: null}}}},
+  {{key: "brief-rows", name: "Brief rows", every: null, cadence: "after each fleet collect", runs_in: "orch-dash", group: "fleet-tick", record: null}},
+  {{key: "patrol", name: "Session patrol", every: null, cadence: "started by reap-hard", runs_in: "reap-hard", group: null, record: null, why: "no round yet"}}]}};
+F.jobs = {{automations: [dash], rules: []}};
+const out = {{closed: fleetAutomations(st)}};
+F.jobOpen.add("orch-dash"); out.top = fleetAutomations(st);
+F.jobOpen.add("fleet-tick"); out.open = fleetAutomations(st); F.jobOpen.delete("fleet-tick");
+F.jobs.automations[0].jobs[2].record.n = 0; out.quiet = fleetAutomations(st);
+F.jobOpen.delete("orch-dash"); F.jobs.automations[0].jobs[1].record = {{at: old, ok: false, error: "boom", failed_at: old, next_at: null}};
+out.rider = fleetAutomations(st);
 process.stdout.write(JSON.stringify(out));"""
     got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
-    assert got["closed"].count("<tr") == 4 and "▸ 3 more" in got["closed"] and "Relay: <b>answers relayed 2</b>" in got["closed"], got["closed"]
-    assert ">10s<" in got["closed"] and "Self-clean</b>" not in got["closed"], got["closed"]
+    # Closed, the automation's row says in one line what its jobs did; opened, a line for each job that is not a rider.
+    assert "▸ 5 jobs" in got["closed"] and "Fleet tick" not in got["closed"] and "Self-clean" not in got["closed"], got["closed"]
+    assert "▾ 5 jobs" in got["top"] and ">10s<" in got["top"] and "Session patrol" in got["top"], got["top"]
+    assert "▸ 3 more" in got["top"] and "Relay: <b>answers relayed 2</b>" in got["top"] and "Self-clean</b>" not in got["top"], got["top"]
     # A rider with no record is counted as such, not as no change.
-    assert "Relay: <b>answers relayed 2</b> · <span class=\"muted\">1 no change · 1 no record</span>" in got["closed"], got["closed"]
-    assert "3 more: 2 no change · 1 no record" in got["quiet"], got["quiet"]
-    assert got["open"].count("<tr") == 7 and 'class="jsub"' in got["open"] and "Self-clean</b>" in got["open"], got["open"]
-    assert "no record · agent not installed" in got["closed"] and 'class="is-done"' in got["closed"], got["closed"]
+    assert "Relay: <b>answers relayed 2</b> · <span class=\"muted\">1 no change · 1 no record</span>" in got["top"], got["top"]
+    assert "3 more: 2 no change · 1 no record" in got["quiet"] or "2 no change · 1 no record" in got["quiet"], got["quiet"]
+    assert 'class="jsub"' in got["open"] and "Self-clean</b>" in got["open"], got["open"]
+    # A rider that failed shows on the closed automation row, though the job it rides on ran fine.
+    assert "Self-clean: " in got["rider"] and "▲ failed" in got["rider"] and "▸ 5 jobs" in got["rider"], got["rider"]
+    assert "no record · no round yet" in got["top"] and 'class="is-done"' in got["top"], got["top"]
 
     # A brief row's session shows its model tag like the Sessions table's model cell, in the brief table's 세션 cell and in
     # the session page's brief-rows card: a tag after the word, a warn tag when it ends in `!`, nothing without a model.
@@ -803,8 +835,8 @@ process.stdout.write(JSON.stringify({{html: fleetMonitors(st), troubled: monTrou
     js = f"""{helpers}
 {(assets / "fleet.js").read_text()}
 const el = {{}}, $ = (sel) => (el[sel] = el[sel] || {{}}), S = {{}}, old = new Date(Date.now() - 3600e3).toISOString();
-const ok = {{id: "a1", name: "ok", enabled: true, recent: [{{status: "completed", at: old}}]}}, out = {{}};
-for (const [k, st] of Object.entries({{calm: {{sessions: [], automations: [ok, ok]}}, none: {{sessions: []}},
+const ok = {{id: "a1", key: "sync", name: "ok", enabled: true, recent: [{{status: "completed", at: old}}]}}, out = {{}};
+for (const [k, st] of Object.entries({{calm: {{sessions: [], automations: [ok, ok, {{...ok, key: null, recent: [{{status: "failed", at: old}}]}}]}}, none: {{sessions: []}},
     bad: {{sessions: [], automations: [ok, {{...ok, recent: [{{status: "failed", at: old}}]}}], monitors: [{{status: "lost"}}, {{status: "running"}}]}}}})) {{
   S.state = st; fleetHeader(); out[k] = $("#top-right").innerHTML;
 }}
@@ -1290,9 +1322,9 @@ out.none = leadCard({{sessions: st.sessions.filter((s) => s.kind !== "orchestrat
 process.stdout.write(JSON.stringify(out));"""
     got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
     assert got["labels"] == {"wt-root": "orchestrator", "wt-lead": "lead", "wt-a": "worker", "wt-b": "worker",
-                             "wt-c": "standalone", "wt-d": "worker"}, got["labels"]
+                             "wt-c": "worker", "wt-d": "worker"}, got["labels"]
     assert re.findall(r'class="tag[^"]*">(?:<[^>]*>)*([a-z]+)</span>', got["table"]) == \
-        ["orchestrator", "lead", "worker", "worker", "worker", "standalone"], got["table"]
+        ["orchestrator", "lead", "worker", "worker", "worker", "worker"], got["table"]
     assert "billing lead" in got["card"] and "2 sessions · 1 working · 2 open PRs" in got["card"], got["card"]
     assert "1 session · 0 working · 1 open PR<" in got["one"], got["one"]
     assert got["hidden"] == got["none"] == "", "no card without a lead in view"
@@ -1350,7 +1382,7 @@ process.stdout.write(JSON.stringify(out));"""
     heads = re.findall(r'<summary class="nav-item"[^>]*>(.*?)<span class="sb-text">', tree, re.S)
     assert [re.search(r'class="chev ([^"]*)"', h).group(1).strip() for h in heads] == \
         ["ph-waiting", "ph-working", "ph-idle", "ph-offline"] and not any("dot-s" in h or "pulse" in h for h in heads), heads
-    assert 'title="idle one with a long name that the sidebar cuts · standalone · idle"' in tree, "the full name is the tooltip"
+    assert 'title="idle one with a long name that the sidebar cuts · worker · idle"' in tree, "the full name is the tooltip"
     assert '<span class="count">2</span>' in tree.split('data-fold="idle"')[1].split("</summary>")[0], "the idle fold counts its sessions"
     assert opened(got["current"])["idle"] == "open", "the fold holding the page's session opens"
     assert got["redraw"] is None, "a re-render's own toggle is not stored"
@@ -1809,7 +1841,7 @@ assert fleet.classify("Shall I merge it?") == "approval"
 assert fleet.classify("Refactored the parser.") == "fyi"
 
 # Automations: Orca's list, each with its last six runs newest first, output masked to its first line.
-assert [a["name"] for a in st["automations"]] == ["janitor", "pr-sweeper", "weekly-digest"] and st["sources"]["automations"]["ok"], st["automations"]
+assert [a["name"] for a in st["automations"]] == ["agent-skills janitor", "agent-skills watch-prs", "agent-skills pstack-upstream", "agent-skills orch-dash", "agent-skills reap-hard", "my own nightly note"] and st["sources"]["automations"]["ok"], st["automations"]
 secret_out = "## posted with xoxb-" + "1" * 12 + "-" + "a" * 24 + "\nsecond line"
 
 
@@ -1831,6 +1863,17 @@ try:
 finally:
     fleet.orca = real_orca
 assert [r["status"] for r in autos[0]["recent"]] == ["failed"] + ["completed"] * 5, autos
+# The registry name rides on the row; an Orca name the registry lacks has none (the page lists only the registry's).
+assert autos[0]["key"] is None, "a name that is not 'agent-skills <registry name>' belongs to no registry row"
+_list = fake_orca
+fake_orca = lambda *a, **k: ({"automations": [{"id": "a1", "name": "agent-skills watch-mentions", "rrule": "x", "enabled": True},
+                                               {"id": "a2", "name": "someone else's", "rrule": "x", "enabled": True}]}
+                             if a[1] == "list" else {"runs": []})
+fleet.orca = fake_orca
+try:
+    assert {a["name"]: a["key"] for a in fleet.fetch_automations()} == {"agent-skills watch-mentions": "watch-mentions", "someone else's": None}
+finally:
+    fleet.orca, fake_orca = real_orca, _list
 # Only the newest page is asked for (twice what is shown): without --limit Orca reads an automation's whole history.
 assert ("automations", "runs", "--id", "a1", "--limit", str(2 * fleet.AUTOMATION_RECENT)) in auto_calls, auto_calls
 
@@ -2158,8 +2201,10 @@ far = {**twin, "ts": fleet.iso(now + dt.timedelta(hours=1))}
 other = {**twin, "text": "something else"}
 p = sent.page([twin, far, other], days=1, now=now + dt.timedelta(hours=2))
 srcs = [(r["source"], r.get("also"), r["to"]) for r in p["rows"]]
-assert ("log", ["transcript"], "card-x") in srcs and srcs.count(("transcript", None, "card-x")) == 2, srcs
-assert ("dashboard", None, "wt-export") in srcs and not any(r["to"] == "ABC-1" for r in p["rows"]), "typed dashboard lines in, a 3-day-old log row out"
+assert ("log", ["transcript"], "card-x") in srcs and not any(s[0] == "transcript" for s in srcs), srcs
+assert p["unrecorded"] == 2, "a transcript send the log lacks is a warning (here the one an hour later and the other text), not a row"
+assert ("log", None, "wt-export") in srcs and not any(r["to"] == "ABC-1" for r in p["rows"]), "typed dashboard lines in, a 3-day-old log row out"
+assert next(r for r in p["rows"] if r["to"] == "wt-export")["kind"] == "dashboard"
 assert secret not in json.dumps(p) and p["total"] == len(p["rows"]), p
 assert any(r["to"] == "ABC-1" for r in sent.page([], days=7, now=now)["rows"])
 assert len(sent.page([twin, far, other], days=1, now=now + dt.timedelta(hours=2), limit=2)["rows"]) == 2
@@ -2198,13 +2243,11 @@ os.chmod(log_file, 0o644)
 os.chmod(state_dir / "sent", 0o755)
 sent.add("card-y", "again", now=now)
 assert (stat.S_IMODE(log_file.stat().st_mode), stat.S_IMODE((state_dir / "sent").stat().st_mode)) == (0o600, 0o700)
-# A line of the wrong shape, in the log or the dashboard's sends, is skipped instead of failing the whole page.
+# A line of the wrong shape in the log is skipped instead of failing the whole page.
 with open(log_file, "a") as fh:
     fh.write('{"ts": 5}\n' + json.dumps({"ts": fleet.iso(now), "to": "x", "text": 7}) + "\n[1]\n")
-fleet.append_line(state_dir / "sends.jsonl", {"typed": True, "at": 5, "text": "x"})
-fleet.append_line(state_dir / "sends.jsonl", {"typed": True, "at": fleet.iso(now), "session": "wt-x", "text": None})
 p = sent.page([], days=1, now=now + dt.timedelta(minutes=1))
-assert "card-y" in [r["to"] for r in p["rows"]] and "wt-x" not in [r["to"] for r in p["rows"]], p["rows"]
+assert "card-y" in [r["to"] for r in p["rows"]] and "x" not in [r["to"] for r in p["rows"]], p["rows"]
 # Each poll reads only what was appended since the last one; a day file out of the window leaves the cache.
 size = log_file.stat().st_size
 assert sent.LOG_SCAN[str(log_file)]["offset"] == size
@@ -2221,9 +2264,10 @@ os.environ["CLAUDE_CONFIG_DIR"] = str(home)
 assert len(fleet.fetch_sent(procs, now=now)) == 2
 assert fleet.fetch_sent(procs, now=now + dt.timedelta(days=31)) == [] and fleet.SENT_SCAN[str(transcript)]["rows"] == []
 # orch sent list survives a row with no text to show.
-fleet.append_line(state_dir / "sends.jsonl", {"typed": True, "at": fleet.iso(fleet.utcnow()), "session": "wt-empty", "text": ""})
+with open(log_file, "a") as fh:
+    fh.write(json.dumps({"ts": fleet.iso(fleet.utcnow()), "from": "dashboard", "to": "wt-empty", "kind": "dashboard", "text": ""}) + "\n")
 out = subprocess.run([sys.executable, "prog.py", "sent", "list"], capture_output=True, text=True, cwd=pathlib.Path(__file__).parent)
-assert out.returncode == 0 and "wt-empty  [dashboard] ?" in out.stdout, out.stderr + out.stdout
+assert out.returncode == 0 and "dashboard → wt-empty  [log] ?" in out.stdout, out.stderr + out.stdout
 del os.environ["CLAUDE_CONFIG_DIR"]
 
 # Shared resources: a hold by a terminal handle sits on that terminal's session.
@@ -2369,17 +2413,44 @@ rows = fleet.orca_messages_sent(msgs)
 assert [(r["to"], r["kind"], r["channel"], r["text"], r["message"], r["thread"]) for r in rows] == [
     ("dispatch:ctx_1", "inbox", "orca status", "do (c)", "m1", "m0"), ("run:run_1", "report", "orca worker_done", "done", "m3", None)], rows
 later = now + dt.timedelta(minutes=1)
-# A transcript's copy of a message folds into it only with the same receiver; one with other text or receiver stays.
+# A transcript's copy of a message folds into it only with the same receiver; one with other text or receiver is no row,
+# only a count of sends with no record.
 copy = {"ts": fleet.iso(now), "to": "dispatch:ctx_1", "text": "do (c)", "channel": "orca orchestration send", "source": "transcript"}
 elsewhere = {**copy, "to": "dispatch:ctx_2"}
 unread = {**copy, "text": "$(cat f)"}
 p = sent.page([copy, elsewhere, unread] + rows, days=1, now=later)
 got = [(r["source"], r["to"], r.get("also")) for r in p["rows"] if r["to"] in ("dispatch:ctx_1", "dispatch:ctx_2")]
-assert sorted(got, key=str) == sorted([("orca", "dispatch:ctx_1", ["transcript"]), ("transcript", "dispatch:ctx_2", None),
-                                       ("transcript", "dispatch:ctx_1", None)], key=str), got
+assert got == [("orca", "dispatch:ctx_1", ["transcript"])] and p["unrecorded"] == 2, (got, p["unrecorded"])
 assert p["inbox_since"] is None, p["inbox_since"]
 # The rows given are not changed: a second poll of the same rows gives the same page.
 assert sent.page([copy, elsewhere, unread] + rows, days=1, now=later)["rows"] == p["rows"]
+# A message left under a terminal handle was stored for a terminal bound to no Run: the row says so. Run and Dispatch
+# addresses, and a typed `orca terminal send`, carry no warning.
+tmsgs = fleet.orca_messages_sent([{"id": "t1", "type": "status", "from_handle": "term_a", "to_handle": "term_goal",
+                                   "subject": "s", "body": "hello", "created_at": fleet.iso(now)}])
+tp = sent.page(tmsgs + rows + [{"ts": fleet.iso(now), "to": "term_goal", "text": "typed", "channel": "orca terminal send",
+                               "source": "transcript"}], days=1, now=later)["rows"]
+assert {r["text"]: r.get("warn") for r in tp if r["text"] in ("hello", "do (c)", "typed")} == {
+    "hello": sent.TERMINAL_ONLY, "do (c)": None}, tp  # the transcript copy folds into no record, so it is no row
+assert sent.terminal_only({"to": "term_goal", "channel": "orca terminal send"}) is None
+# A log line with no channel that the message folds into keeps the warning.
+sent.add("term_goal", "folded hello", sender="term_a", now=now)
+fm = fleet.orca_messages_sent([{"id": "t2", "type": "status", "from_handle": "term_a", "to_handle": "term_goal",
+                                "subject": "s", "body": "folded hello", "created_at": fleet.iso(now)}])
+fp = sent.page(fm, days=1, now=later)["rows"]
+assert [(r["source"], r.get("also"), r.get("warn")) for r in fp if r["text"] == "folded hello"] == [
+    ("log", ["orca"], sent.TERMINAL_ONLY)], fp
+# Orca stored a send to a bound terminal under its Run: the transcript's term_ address must not flag it.
+bound = fleet.orca_messages_sent([{"id": "t3", "type": "status", "from_handle": "term_a", "to_handle": "run:run_1",
+                                   "subject": "s", "body": "bound hello", "created_at": fleet.iso(now)}])
+tcopy = {"ts": fleet.iso(now), "to": "term_goal", "text": "bound hello", "channel": "orca orchestration send", "source": "transcript"}
+sent.add("term_goal", "bound logged", "inbox", "orca orchestration send", sender="term_a", now=now)
+bound += fleet.orca_messages_sent([{"id": "t4", "type": "status", "from_handle": "term_a", "to_handle": "run:run_1",
+                                    "subject": "s", "body": "bound logged", "created_at": fleet.iso(now)}])
+bp = sent.page(bound + [tcopy], days=1, now=later)["rows"]
+assert [(r["source"], r["to"], r.get("also"), r.get("warn")) for r in bp if r["text"] == "bound logged"] == [
+    ("log", "term_goal", ["orca"], None)], bp
+assert [(r["to"], r.get("also"), r.get("warn")) for r in bp if r["text"] == "bound hello"] == [("run:run_1", ["transcript"], None)], bp
 # Two Orca messages never fold, even with the same text, receiver and minute (two workers reporting "done").
 twins = fleet.orca_messages_sent([{"id": i, "type": "worker_done", "from_handle": f, "to_handle": "run:run_1", "subject": "done",
                                    "created_at": fleet.iso(now)} for i, f in (("w1", "term_x"), ("w2", "term_y"))])

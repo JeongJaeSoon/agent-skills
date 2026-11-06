@@ -1136,8 +1136,8 @@ def body(plan):
             continue
         if i.get("land") == "executor":
             lines.append(f"{n}. [{LABELS[i['kind']]}] {i['repo']}#{i['number']} {i['title']} — {', '.join(i['why'])} — "
-                         f"land executor 저장소라 이 회차는 머지하지 않음: 저장소의 standing program 에서 orch verdict 뒤 "
-                         f"orch land — {i['url']}")
+                         f"land executor 저장소라 이 회차는 머지하지 않음: orch verdict 뒤 orch land "
+                         f"(<name>-standalone program, --repo {i['repo']} 로 없으면 생성) — {i['url']}")
             continue
         tag = {"new_commits": "새 커밋, 재요청 없음", "slack": "Slack 리뷰 요청"}.get(i["reason"], LABELS[i["kind"]])
         if i["kind"] != "ownergate":
@@ -1328,7 +1328,7 @@ def release_brief(repo, items, cfg, run_id):
     # body above is read from the brief file. So the approval and the bans are rows, and card.py puts the refused-act
     # paragraph at the head of the FORBIDDEN row, keeping these lines after it.
     approval = cfg.get("release_approval")
-    lines += ([f"APPROVED: {approval}"] if approval else []) + ["FORBIDDEN:"] + (
+    lines += [f"APPROVED: {approval or 'none'}", "FORBIDDEN:"] + (
         [] if approval else ["  dev 배포 승인이 없다. 동기화를 기다리는 것 말고 배포가 필요하면 오케스트레이터나 리드에게 묻는다."])
     lines += ["  사람만: 프로덕션 배포, dev 밖의 환경, 되돌릴 수 없는 작업. 하지 않고 오케스트레이터나 리드에게 보고한다.",
               card.CLOSE_LINE,

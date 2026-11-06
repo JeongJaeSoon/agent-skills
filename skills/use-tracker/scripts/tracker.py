@@ -9,7 +9,11 @@
     tracker.py [...] comment ID --body-file F
     tracker.py [...] attach ID --url URL [--title T]   (a link such as the PR; title defaults to "PR")
     tracker.py [...] transition ID --to started|review|completed|canceled
+    tracker.py [...] detect   (which tracker applies and why; nothing is written to the config)
+    tracker.py [...] reconcile ID --repo OWNER/REPO [--repo ...] [--head BRANCH]   (reads only; prints the target)
 
+Adapter order: --adapter, then tracker.adapter in the config, then detect_adapter (Orca connections; with both
+connected, the ticket keys on the current branch and its last commits), then linear.
 stdout is always JSON; errors go to stderr with a non-zero exit.
 TRACKER_FIXTURES=<dir> serves list/get from <dir>/issues.json and refuses writes.
 """
@@ -20,6 +24,7 @@ import copy
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import urllib.error
@@ -29,7 +34,7 @@ from datetime import datetime, timezone
 
 DEFAULT_CONFIG = {
     "tracker": {
-        "adapter": "linear",
+        # No "adapter" here: an unset one is detected (detect_adapter), which needs to know it was never set.
         "linear": {"workspace": None, "review_status": None},
         "jira": {"base_url": None, "email_env": "JIRA_EMAIL", "token_env": "JIRA_API_TOKEN",
                  "issue_type": "Task", "review_status": None},
@@ -158,6 +163,9 @@ class FixtureAdapter:
                 return issue
         raise TrackerError(f"TRACKER_FIXTURES: {issue_id} not in {self.path}")
 
+    def attached_prs(self, issue_id):
+        return pr_urls(self.get(issue_id).get("attachments"))
+
     def _refuse(self, *_a, **_k):
         raise TrackerError("TRACKER_FIXTURES is set: write operations are disabled")
 
@@ -281,6 +289,19 @@ class LinearAdapter:
                 if "linear_issue_required" not in str(exc):
                     raise
         return self._get_via_search(issue_id)
+
+    def attached_prs(self, issue_id):
+        """PR URLs among the issue's attachments; None when Orca cannot read this identifier."""
+        if not ORCA_IDENTIFIER.match(issue_id):
+            return None
+        try:
+            result = self._orca("issue", issue_id, "--attachments")
+        except TrackerError as exc:
+            if "linear_issue_required" not in str(exc):
+                raise
+            return None
+        # Only the attachments: a PR linked in the description for background does not deliver the ticket.
+        return pr_urls(result.get("attachments") or (result.get("issue") or {}).get("attachments"))
 
     def _get_via_search(self, issue_id):
         # `orca linear issue` cannot parse this identifier; search finds it, then list-issues
@@ -556,6 +577,9 @@ class JiraAdapter:
                             params={"fields": ",".join(JIRA_FIELDS)})
         return normalize_jira(raw, self.base_url)
 
+    def attached_prs(self, issue_id):
+        return pr_urls(self._request("GET", f"/rest/api/3/issue/{urllib.parse.quote(issue_id)}/remotelink"))
+
     def create(self, project, title, body_file, labels=(), parent=None, related=None):
         fields = {"project": {"key": project}, "summary": title,
                   "description": text_to_adf(read_body(body_file)),
@@ -628,7 +652,211 @@ class JiraAdapter:
                 "state_type": review_type if target == "review" else target}
 
 
+# ---------------------------------------------------------------- detection
+
+WRITE_COMMANDS = ("create", "label", "comment", "attach", "transition")
+REF = re.compile(r"(?<![A-Za-z0-9_])([A-Za-z][A-Za-z0-9_]*)-\d+(?![A-Za-z0-9_])")
+DETECT_TTL = 600
+
+
+def orca_result(*args):
+    """The `result` of `orca <args> --json`, or None when orca is missing, fails or answers something else."""
+    try:
+        proc = subprocess.run(["orca", *args, "--json"], capture_output=True, text=True, timeout=10)
+        data = json.loads(proc.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    return data.get("result") if isinstance(data, dict) and data.get("ok") else None
+
+
+def key_set(result, field):
+    rows = (result or {}).get(field) if isinstance(result, dict) else None
+    return {str(r["key"]).upper() for r in rows or [] if isinstance(r, dict) and r.get("key")}
+
+
+def git_out(cwd, *args):
+    try:
+        proc = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
+def state_dir():
+    return os.path.expanduser(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills")
+
+
+def detect_adapter(cwd=None):
+    """Which tracker applies when nothing names one: {"adapter", "source", "evidence", "ambiguous"}.
+
+    Orca's connections decide: none -> linear (the old default); one -> that one. With both, a ticket key on the
+    current branch votes for the tracker whose key set holds it (a key in both sets does not vote); commits vote only
+    when the branch does not. No vote or a tie leaves "ambiguous": reads fall back to linear, writes refuse.
+    The answer is cached for DETECT_TTL per (checkout, branch, HEAD) and never written to the config."""
+    cwd = cwd or os.getcwd()
+    top, branch, head = (git_out(cwd, "rev-parse", "--show-toplevel"), git_out(cwd, "rev-parse", "--abbrev-ref", "HEAD"),
+                         git_out(cwd, "rev-parse", "HEAD"))
+    cache_key = "|".join((top, branch, head))
+    cache_path = os.path.join(state_dir(), "tracker-detect.json")
+    try:
+        with open(cache_path, encoding="utf-8") as fh:
+            cache = json.load(fh)
+        row = cache.get(cache_key)
+        if row and datetime.now(timezone.utc).timestamp() - row["at"] < DETECT_TTL:
+            return row["result"]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        cache = {}
+    result = _detect(cwd, branch)
+    if result["source"] == "ambiguous" and "probe failed" in result["evidence"]:
+        return result  # a failure may be gone in a minute; do not keep it for ten
+    try:
+        os.makedirs(state_dir(), exist_ok=True)
+        cache = {k: v for k, v in cache.items() if isinstance(v, dict) and
+                 datetime.now(timezone.utc).timestamp() - v.get("at", 0) < DETECT_TTL}
+        cache[cache_key] = {"at": datetime.now(timezone.utc).timestamp(), "result": result}
+        tmp = f"{cache_path}.{os.getpid()}"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(cache, fh)
+        os.replace(tmp, cache_path)
+    except OSError:
+        pass
+    return result
+
+
+def _detect(cwd, branch):
+    teams = orca_result("linear", "team", "list")
+    linear = key_set(teams, "teams")
+    connection = orca_result("jira", "connection")
+    jira = None
+    jira_failed = connection is None and bool(linear)  # a failed probe is not "Jira is not connected"
+    if isinstance(connection, dict) and connection.get("connected"):
+        projects = orca_result("jira", "project", "list")
+        if projects is None:
+            jira_failed = True
+        else:
+            jira = key_set(projects, "projects")
+
+    def out(adapter, source, evidence, ambiguous=False):
+        return {"adapter": adapter, "source": source, "evidence": evidence, "ambiguous": ambiguous}
+
+    if jira_failed:
+        return out("linear", "ambiguous", "the Jira probe failed, so Jira may be connected", True)
+
+    if not linear and jira is None:
+        return out("linear", "default", "no Orca Linear or Jira connection")
+    if jira is None:
+        return out("linear", "orca-connection", f"only Linear is connected (teams {sorted(linear)})")
+    if not linear:
+        if teams is None:  # a failed Linear probe is not "Linear is not connected": never pick Jira on it
+            return out("linear", "ambiguous", "Jira is connected but the Linear probe failed", True)
+        return out("jira", "orca-connection", "only Jira is connected")
+    both = linear & jira
+    for label, text in (("branch", branch), ("commits", git_out(cwd, "log", "-10", "--format=%s"))):
+        votes = [m.group(0) for m in REF.finditer(text) if m.group(1).upper() not in both]
+        lin = [v for v in votes if v.split("-")[0].upper() in linear]
+        jir = [v for v in votes if v.split("-")[0].upper() in jira]
+        if len(lin) != len(jir):
+            win, refs = ("linear", lin) if len(lin) > len(jir) else ("jira", jir)
+            return out(win, f"ticket keys in {label}", f"{label} names {', '.join(refs)}")
+        if lin or jir:
+            break
+    return out("linear", "ambiguous", "both trackers are connected and no ticket key on the branch or in recent "
+               "commits tells them apart", True)
+
+
+# ---------------------------------------------------------------- reconcile (use-tracker "Reconcile")
+
+PR_FIELDS = "number,url,title,headRefName,body,state,reviewRequests,latestReviews"
+PR_LIMIT = 100
+PR_URL = re.compile(r"https://github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)")
+CLOSES = r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b:?\s+\S*?"
+
+
+def pr_urls(data):
+    """Every distinct GitHub PR URL anywhere in a JSON value, so no attachment schema is assumed."""
+    text = json.dumps(data) if data is not None else ""
+    return list(dict.fromkeys(m.group(0) for m in PR_URL.finditer(text)))
+
+
+def gh_json(*args):
+    label = " ".join(args[:4])
+    try:
+        proc = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=120)
+    except FileNotFoundError:
+        raise TrackerError("`gh` not found on PATH; reconcile reads PRs with the GitHub CLI")
+    except subprocess.TimeoutExpired:
+        raise TrackerError(f"gh {label}: timed out")
+    try:
+        if proc.returncode:
+            raise ValueError
+        return json.loads(proc.stdout)
+    except ValueError:
+        raise TrackerError(f"gh {label}: exit {proc.returncode}: {(proc.stderr or proc.stdout).strip()[:500]}")
+
+
+def gh_prs(repo, *query):
+    return gh_json("pr", "list", "--repo", repo, "--state", "all", "--limit", str(PR_LIMIT), "--json", PR_FIELDS, *query)
+
+
+def delivers(pr_, issue_id):
+    """The ID in the title or branch (any case), or after a closing keyword in the body; a mention elsewhere is not."""
+    ident = rf"(?<![A-Za-z0-9]){re.escape(issue_id)}(?![A-Za-z0-9])"
+    return bool(re.search(ident, pr_.get("title") or "", re.I) or re.search(ident, pr_.get("headRefName") or "", re.I)
+                or re.search(CLOSES + ident, pr_.get("body") or "", re.I))
+
+
+def reconcile(adapter, issue_id, repos, head, global_args=()):
+    """The first row of use-tracker "Reconcile" that GitHub supports. Reads only; `next` holds the milestone lines."""
+    issue = adapter.get(issue_id)
+    found, truncated = {}, []
+
+    def add(repo, p):
+        if p.get("state") in ("OPEN", "MERGED"):
+            found.setdefault(p["url"], {"repo": repo, "number": p["number"], "url": p["url"],
+                                        "state": p["state"].lower(),
+                                        "reviewed": bool(p.get("reviewRequests") or p.get("latestReviews"))})
+
+    for repo in repos:
+        page = gh_prs(repo, "--search", issue_id)
+        if len(page) >= PR_LIMIT:
+            truncated.append(repo)
+        for p in [p for p in page if delivers(p, issue_id)] + (
+                [p for p in gh_prs(repo, "--head", head) if p.get("headRefName") == head] if head else []):
+            add(repo, p)
+    attached = adapter.attached_prs(issue_id)
+    for url in attached or []:
+        if url not in found:
+            add(PR_URL.fullmatch(url).group(1), gh_json("pr", "view", url, "--json", PR_FIELDS))
+    order = {r: i for i, r in enumerate(repos)}
+    prs = sorted(found.values(), key=lambda p: (order.get(p["repo"], len(repos)), p["repo"], p["number"]))
+    open_ = [p for p in prs if p["state"] == "open"]
+    closed = issue.get("state_type") in ("completed", "canceled")
+    if closed:
+        target, reason = ("report", "closed ticket with an open PR: report it, never reopen") if open_ else (None, "closed")
+    elif any(not p["reviewed"] for p in open_):
+        target, reason = "started", "an open PR with no review requested or submitted"
+    elif open_:
+        target, reason = "review", "every open PR has a review requested or submitted"
+    elif prs:
+        target, reason = "criteria", "every PR merged: check each criterion now; completed only when all hold"
+    elif issue.get("state_type") == "started":
+        target, reason = "report", "no PR on a started ticket"
+    else:
+        target, reason = None, "no PR"
+    # The lookup's --adapter and --config go on every line, so a write reaches the tracker that was read.
+    me = shlex.join(["python3", os.path.abspath(__file__), *global_args])
+    nxt = []
+    if target in ("started", "review"):
+        nxt = [f"{me} transition {issue_id} --to {target}"] + [
+            f"{me} attach {issue_id} --url {p['url']}" for p in open_]
+    # attachments_read false: the adapter could not list the ticket's attachments, so an attached PR that the
+    # search does not find is missing; search_truncated: a repo's search filled a page, so a PR may be missing.
+    return {"id": issue_id, "state_type": issue.get("state_type"), "prs": prs, "target": target,
+            "reason": reason, "next": nxt, "attachments_read": attached is not None, "search_truncated": truncated}
+
+
 # ---------------------------------------------------------------- CLI
+
 
 def make_adapter(name, config):
     fixtures = os.environ.get("TRACKER_FIXTURES")
@@ -676,13 +904,27 @@ def build_parser():
     s = sub.add_parser("transition")
     s.add_argument("id")
     s.add_argument("--to", required=True, choices=TRANSITION_TARGETS)
+    sub.add_parser("detect")
+    s = sub.add_parser("reconcile")
+    s.add_argument("id")
+    s.add_argument("--repo", action="append", required=True, help="owner/repo; repeat for each repo the work spans")
+    s.add_argument("--head", help="the ticket's branch, when known (the PR search does not match branch names)")
     return p
 
 
 def run(argv):
     args = build_parser().parse_args(argv)
     config = load_config(args.config)
-    adapter = make_adapter(args.adapter or (config.get("tracker") or {}).get("adapter") or "linear", config)
+    named = args.adapter or (config.get("tracker") or {}).get("adapter")
+    found = None if named or os.environ.get("TRACKER_FIXTURES") else detect_adapter()
+    if args.cmd == "detect":
+        return found or {"adapter": named or "linear", "source": "--adapter" if args.adapter else "config",
+                         "evidence": "named, not detected", "ambiguous": False}
+    if found and found["ambiguous"]:
+        if args.cmd in WRITE_COMMANDS:
+            raise TrackerError(f"{found['evidence']}; pass --adapter linear|jira or set tracker.adapter")
+        print(f"tracker: warning: {found['evidence']}; reading from linear", file=sys.stderr)
+    adapter = make_adapter(named or (found or {}).get("adapter") or "linear", config)
     if args.cmd == "list":
         if args.limit is not None and args.limit < 1:
             raise TrackerError("--limit must be >= 1")
@@ -711,6 +953,10 @@ def run(argv):
         if not valid:
             raise TrackerError(f"attach: --url must be an absolute http(s) URL, got {args.url!r}")
         return adapter.attach(args.id, args.url, args.title)
+    if args.cmd == "reconcile":
+        return reconcile(adapter, args.id, args.repo, args.head,
+                         (["--adapter", args.adapter] if args.adapter else [])
+                         + (["--config", os.path.abspath(os.path.expanduser(args.config))] if args.config else []))
     return adapter.transition(args.id, args.to)
 
 

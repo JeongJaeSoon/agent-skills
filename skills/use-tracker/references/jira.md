@@ -1,20 +1,23 @@
-# Jira: operation → tool
+# Jira: operation → command
 
-In an agent session, use an Atlassian MCP server when one is connected (its tool prefix varies by
-install, e.g. `mcp__atlassian__*` or `mcp__claude_ai_Atlassian__*`; check the tool list). Without
-it, and always from scripts, use `tracker.py --adapter jira` (Jira Cloud REST v3).
+In an agent session, use `orca jira` (`issue`, `search`, `create`, `comment add`, `status list|set`,
+`label add|set|rm`, `assignee set`, `priority set`, `project list|types|fields`; each command's
+`--help` has an example). The Atlassian MCP tools are for what it lacks (issue links, editing
+a summary or description, Confluence); `hooks/tracker_gate.py` holds the call-by-call mapping and
+passes those calls. From scripts, and when Orca has no Jira connection, use `tracker.py --adapter jira`
+(Jira Cloud REST v3).
 
-| Operation | Atlassian MCP (if connected) | `tracker.py` |
+| Operation | `orca jira` | `tracker.py` |
 |---|---|---|
-| List a project | `searchJiraIssuesUsingJql` (`project = P ORDER BY created ASC`) | `list --project P [--since T]` |
-| Read one | `getJiraIssue` | `get ABC-1` |
-| File | `createJiraIssue` | `create --project P --title T --body-file F [--label L] [--parent ID] [--related ID]` |
-| Add labels | `editJiraIssue` (`update.labels: [{add: L}]`) | `label ABC-1 --add L` |
-| Comment | `addCommentToJiraIssue` | `comment ABC-1 --body-file F` |
-| Move | `getTransitionsForJiraIssue`, then `transitionJiraIssue` | `transition ABC-1 --to started\|review\|completed\|canceled` |
-| Relate | issue-link tool if the server has one, else `tracker.py` | `create --related ID` (link type "Relates") |
+| List a project | `search "project = P ORDER BY created ASC"` | `list --project P [--since T]` |
+| Read one | `issue ABC-1` | `get ABC-1` |
+| File | `create --project P --type <issueTypeId> --title T --body-file F` (ids: `project types --project P`) | `create --project P --title T --body-file F [--label L] [--parent ID] [--related ID]` |
+| Add labels | `label add ABC-1 --label L` | `label ABC-1 --add L` |
+| Comment | `comment add ABC-1 --body-file F` | `comment ABC-1 --body-file F` |
+| Move | `status list ABC-1`, then `status set ABC-1 --to "<name>"` | `transition ABC-1 --to started\|review\|completed\|canceled` |
+| Relate | — (MCP issue-link tool) | `create --related ID` (link type "Relates") |
 
-With the MCP server, a child's epic goes in `additional_fields: {"parent": {"id": "<numeric id>"}}`. Its `parent` argument returns 400 and creates nothing.
+Through the Atlassian MCP, a child's epic goes in `additional_fields: {"parent": {"id": "<numeric id>"}}`. Its `parent` argument returns 400 and creates nothing. `getJiraIssue` returns only the comment count; read comment bodies with `listJiraIssueComments`.
 
 ## How tracker.py maps Jira
 
@@ -39,3 +42,16 @@ With the MCP server, a child's epic goes in `additional_fields: {"parent": {"id"
 - `list` uses `/rest/api/3/search/jql` with `nextPageToken`, and falls back to `/rest/api/3/search`
   with `startAt` on sites that lack it. `--since` becomes `created >= "YYYY-MM-DD HH:mm"`, which Jira
   reads in the API user's timezone; results are then re-filtered in UTC.
+
+## Switching to Jira
+
+```json
+{"tracker": {"adapter": "jira",
+             "jira": {"base_url": "https://acme.atlassian.net", "email_env": "JIRA_EMAIL", "token_env": "JIRA_API_TOKEN"}}}
+```
+
+Put that in `~/.claude/agent-skills.json`, export `JIRA_EMAIL` and `JIRA_API_TOKEN` (an Atlassian API
+token), then check it with `python3 <tracker.py> list --project KEY --limit 1`. Optional:
+`"issue_type": "Task"` for `create`, `"review_status": "<status name>"` for `--to review`, and
+`team`, `project`, `templates`, `language` as for Linear ([linear.md](linear.md), "Config").
+Tokens are read from the environment only and never printed.

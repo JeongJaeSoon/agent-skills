@@ -78,12 +78,16 @@ F.view = "graph"; out.graph = fleetPrs(st);
 F.view = "nope"; out.fallback = fleetPrs(st);
 S.filters.fleet_project = "alpha"; F.view = "graph"; out.alpha = fleetPrs(st);
 S.filters.fleet_project = "beta"; out.beta = fleetPrs(st);
+out.roles = ["orchestrator", "orchestration", "task", "standalone"].map((kind) => kindLabel({{sessions: []}}, {{kind, parent: null}})[0]);
 process.stdout.write(JSON.stringify(out));"""
 sandbox = ("const vm = require('vm'); vm.runInNewContext(require('fs').readFileSync(0, 'utf8'), "
            "{document: {addEventListener() {}}, process, setTimeout() {}, location: {hash: '#/fleet/prs', replace() {}}, window: {}, fetch() { throw new Error('no fetch'); }});")
 r = subprocess.run(["node", "-e", sandbox], input=js, capture_output=True, text=True)
 assert r.returncode == 0, r.stderr[-1500:]
 out = json.loads(r.stdout)
+
+# the role column reads orchestrator, lead or worker for every kind fleet.py writes, a Dispatch-less card included
+assert out["roles"] == ["orchestrator", "lead", "worker", "worker"], out["roles"]
 
 # old addresses open the view they moved to; a view the address makes up falls back to the first
 assert out["routes"] == {"graph": ["prs", "graph"], "work": ["stages", None], "plain": ["prs", None],
@@ -176,7 +180,8 @@ const out = {{}};
 out.stats = [await race("#/fleet/prs?view=stats", "#/fleet/prs?view=stats", fleetStats), await race("#/fleet/prs?view=stats", "#/fleet/prs", fleetStats)];
 out.skills = [await race("#/fleet/skills", "#/fleet/skills", fleetSkills), await race("#/fleet/skills", "#/fleet/skills?view=changes", fleetSkills)];
 out.changes = [await race("#/fleet/skills?view=changes", "#/fleet/skills?view=changes", fleetChanges), await race("#/fleet/skills?view=changes", "#/fleet/skills", fleetChanges)];
-out.jobs = [await race("#/fleet/automations", "#/fleet/automations", internalJobs), await race("#/fleet/automations", "#/fleet/automations?view=monitors", internalJobs)];
+const automations = () => fleetAutomations({{}});
+out.jobs = [await race("#/fleet/automations", "#/fleet/automations", automations), await race("#/fleet/automations", "#/fleet/automations?view=monitors", automations)];
 go("#/fleet/prs?view=stats"); renders = 0; redrawCharts(); out.resizeStats = renders;
 go("#/fleet/prs"); renders = 0; redrawCharts(); out.resizeTable = renders;
 process.stdout.write(JSON.stringify(out));"""

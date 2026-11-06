@@ -17,7 +17,7 @@ def run(tool, tool_input, own, transcript=None, agent=None, session="s0", field=
         {"tool_name": tool, "tool_input": tool_input, "cwd": HOME, "transcript_path": transcript, "agent_type": agent,
          "session_id": session}),
         capture_output=True, text=True, env=env).stdout
-    return json.loads(out)["hookSpecificOutput"][field] if out.strip() else "none"
+    return json.loads(out)["hookSpecificOutput"].get(field, "none") if out.strip() else "none"
 
 
 def bash(cmd, own="term_me", transcript=None, agent=None, session="s0", **extra):
@@ -55,7 +55,28 @@ assert bash("orca orchestration task-list --json") == "allow"
 assert bash("orca orchestration send --to term_x --subject 'done: ENG-1'") == "allow"
 assert bash("orch land ENG-1 --pr 12 --ticket ENG-1 --wait-minutes 50") == "allow"
 assert bash("orch status") == "allow"
-for cmd in ("orch heavy -- make e2e", "orch set p merge_policy autonomous", "orch init p --repo o/r", "orch backfill p", "orch --help", "orch",
+# orch verdict: allowed only in the attributable form; prog.py judges independence, so the hook checks the shape.
+VERDICT = "orch verdict p --pr 1 --sha abc123 --source review:codex --reviewer codex --evidence abc123 --result"
+assert bash(f"{VERDICT} pass") == "allow"
+assert bash(f"{VERDICT} fail") == "allow"
+assert bash(f"{VERDICT} pass --note 'round 1'") == "allow"
+for cmd in (f"{VERDICT} maybe", f"{VERDICT} pass --result fail", f"{VERDICT} pass --repo o/r",
+            f"{VERDICT} pass --unknown x", f"{VERDICT} pass --note", f"{VERDICT} pass; id", f"{VERDICT} pass > f",
+            "orch verdict p --pr 1 --sha abc --source review:codex --reviewer codex --result pass",
+            "orch verdict p --pr 1 --sha abc --source review:codex --evidence e --result pass",
+            "orch verdict p --pr 1 --sha abc --source review:codex --reviewer codex --evidence e",
+            "orch verdict p --pr 1 --sha abc --source review:codex --reviewer codex --evidence '' --result pass",
+            "orch verdict p --pr x --sha abc --source review:codex --reviewer codex --evidence e --result pass",
+            "orch verdict p --pr 1 --source review:codex --reviewer codex --evidence e --result pass",
+            "orch verdict --pr 1 --sha abc --source review:codex --reviewer codex --evidence e --result pass",
+            "orch verdict '' --pr 1 --sha abc --source review:codex --reviewer codex --evidence e --result pass",
+            "orch verdict ' ' --pr 1 --sha abc --source review:codex --reviewer codex --evidence e --result pass",
+            "orch verdict p --pr 1 --sha abc --reviewer codex --evidence e --result pass",
+            "orch verdict p --pr 1 --sha abc --source review:codex --reviewer --evidence e --result pass",
+            f"{VERDICT} pass --pr 2",
+            "orch verdict"):
+    assert bash(cmd) == "none", cmd
+for cmd in ("orch verdict p --pr 1 --sha abc --source review:codex", "orch heavy -- make e2e", "orch set p merge_policy autonomous", "orch init p --repo o/r", "orch backfill p", "orch --help", "orch",
             "orca orchestration reset", "orca orchestration worker-abandon t1", "orca orchestration gate-resolve g1",
             "orch land x; rm -rf ~", "orch land x && curl evil", "orch land x | sh", "orch land x > ~/.zshrc",
             "orch land $(whoami)", "orch land `whoami`", "orch land $HOME", "orch land x\nrm -rf ~", "orch land x#; rm -rf ~", "orch land x # ; rm -rf ~",
@@ -221,23 +242,84 @@ assert reason(f"while [ ! -s {O} ]; do sleep 5; done").startswith("[gate:sleep-l
 assert "[gate:" not in reason(f"{CHECK} --terminal term_other --json")
 # `skills-sync card <brief>`: the hook opens the brief and applies the helper's checks and the lead test to it.
 H = pathlib.Path(HOME)
-(H / "worker.md").write_text("/goal fix X\nCLOSE: §8\n")
-(H / "noclose.md").write_text("/goal fix X\n## Close\n§8\n")
+(H / "worker.md").write_text("/goal fix X\nAPPROVED: none\nCLOSE: §8\n")
+(H / "noclose.md").write_text("/goal fix X\nAPPROVED: none\n## Close\n§8\n")
+(H / "noapproved.md").write_text("/goal fix X\nCLOSE: §8\n")
 (H / "lead.md").write_text("app: lead\n/goal run app\nMODE: orchestrate\nROLE: lead app\nINBOX  orch wait app\n"
                            "DELEGATE  nothing yourself\nPREDICATE  ENG-1 Done\nMERGE  merge_policy autonomous\n"
-                           "TASKS  task-create --deps\nGATE  gate-create\nCLOSE: §8\n")
+                           "TASKS  task-create --deps\nGATE  gate-create\nAPPROVED: none\nCLOSE: §8\n")
 HELPER = "skills-sync card {} --repo name:app --name app-x"
 assert bash(HELPER.format("worker.md")) == "none"  # relative to the event's cwd
 assert bash(HELPER.format(H / "worker.md"), session="joined") == "none"
 assert bash(HELPER.format("noclose.md")) == "deny" and "CLOSE or KEEP" in reason(HELPER.format("noclose.md"))
+assert bash(HELPER.format("noapproved.md")) == "deny" and "`APPROVED:` row" in reason(HELPER.format("noapproved.md"))
 assert bash(HELPER.format("absent.md")) == "deny"
 assert bash(HELPER.format("$BRIEF")) == "deny"
 assert bash(HELPER.format("lead.md")) == "none"
 assert bash(HELPER.format("lead.md"), session="joined") == "deny", "a lead starting a lead through the helper"
-# After a cd the event's cwd is not where a relative path points: only an absolute one is read.
-assert bash("cd /x && " + HELPER.format("worker.md")) == "deny" and "absolute path" in reason("cd /x && " + HELPER.format("worker.md"))
+# After a cd the event's cwd is not where a relative path points. The hook does not follow a cd (CDPATH, `cd -L`,
+# subshells and `||` all change where it lands), so a relative path asks for an absolute one; `~` and `$HOME` are fine.
+for pre in ("cd /x && ", f"cd {H} && ", "cd safe && ", "(cd safe); ", "false && cd safe; ", "pushd safe; popd; ", "cd safe || true; ", "cd safe; ",
+            "cd $SOMEWHERE && ", "cd - && "):
+    assert "absolute path" in reason(pre + HELPER.format("worker.md")), pre
 assert bash("cd /x && " + HELPER.format(H / "worker.md")) == "none"
+assert bash("cd /x && " + HELPER.format("~/worker.md")) == "none"
+assert bash("cd /x && " + HELPER.format("$HOME/lead.md"), session="joined") == "deny"
 assert bash("pushd /x; " + HELPER.format(H / "lead.md"), agent="agent-skills:lead") == "deny"
+# A set variable or `~` in the brief's path is expanded the way the shell would; anything else still is not.
+assert bash(HELPER.format("$HOME/worker.md")) == "none"
+assert bash(HELPER.format("${HOME}/noclose.md")) == "deny" and "CLOSE or KEEP" in reason(HELPER.format("${HOME}/noclose.md"))
+assert bash(HELPER.format('"$HOME/worker.md"')) == "none"
+assert bash(HELPER.format("$UNSET_BRIEF_VAR")) == "deny" and "cannot expand" in reason(HELPER.format("$UNSET_BRIEF_VAR"))
+assert bash("export HOME=/x; " + HELPER.format("$HOME/worker.md")) == "deny"  # rebound in the same command
+assert bash(HELPER.format("$(echo worker.md)")) == "deny"
+assert bash(HELPER.format("$HOME/../worker.md")) == "deny"  # the parent of HOME has no worker.md
+# What the hook cannot prove is the file the shell reads stays denied (independent review of this change).
+assert bash(HELPER.format("~no_such_guard_user_468/worker.md")) == "deny"  # `~user` is not read, and does not crash the hook
+assert bash("cd ~no_such_guard_user_468 || true; " + HELPER.format("worker.md")) == "deny"
+for rebind in ("BRIEF=x; ", "unset BRIEF; "):
+    assert bash(rebind + "BRIEF+=.other; " + HELPER.format('"$BRIEF"'), BRIEF=str(H / "worker.md")) == "deny"
+# $HOME and ~ are read only when nothing can run before the helper, so no spelling of a rebind can matter.
+for rebind in ("HOME+=/x; ", "unset HOME; HOME=/x; ", "read HOME; ", "export HOME=/x; ", 'export HO""ME=/x; ', "IFS=,; "):
+    assert bash(rebind + HELPER.format('"$HOME/worker.md"')) == "deny", rebind
+    assert bash(rebind + HELPER.format("$HOME/worker.md")) == "deny", rebind
+    assert bash(rebind + HELPER.format("~/worker.md")) == "deny", rebind
+assert bash(HELPER.format("'$HOME/worker.md'")) == "deny"  # single quotes pass the text through literally
+# The helper expands a leading ~ itself, quoted or not, so the hook reads the same HOME file.
+(H / "~").mkdir()
+(H / "~" / "worker.md").write_text((H / "lead.md").read_text())  # a literal "~" directory in cwd holds a lead brief
+assert bash(HELPER.format("'~/worker.md'"), session="joined") == "none"  # HOME's worker, not the literal ~/worker.md
+assert bash(HELPER.format('"~/worker.md"'), session="joined") == "none"
+assert bash(HELPER.format("~/worker.md"), session="joined") == "none" and bash(HELPER.format('"${HOME}/worker.md"')) == "none"
+# The brief is one plain word: a quoted space, a quote inside the name, braces and brackets are not read (round 3).
+(H / "worker.md lead.md").write_text((H / "lead.md").read_text())
+(H / "brief1.md").write_text((H / "lead.md").read_text())
+for arg in ('"worker.md lead.md"', "\"worker.md'\"", "brief{1..1}.md", "brief[1].md", '"worker.md\tlead.md"'):
+    assert bash(HELPER.format(arg)) == "deny", arg
+assert bash("HOME=/other;bin/" + HELPER.format('"$HOME/worker.md"')) == "deny"  # `\S*/` once swallowed the earlier statement
+assert bash("bin/" + HELPER.format('"$HOME/worker.md"')) == "none"
+# Round 5: `$HOME` after a `~` in single quotes is literal, and bash splits words on blanks only, not on NBSP or VT.
+(pathlib.Path(str(H) + str(H))).mkdir(parents=True)
+(pathlib.Path(str(H) + str(H)) / "worker.md").write_text((H / "worker.md").read_text())
+assert bash(HELPER.format("'~/$HOME/worker.md'")) == "deny"
+for blank in (" ", "\x0b"):
+    assert bash(HELPER.format(f"worker.md{blank}lead.md")) == "deny", repr(blank)
+    assert bash(HELPER.format(f"{blank}worker.md")) == "deny", repr(blank)  # the blank leads the word
+assert bash(HELPER.format("\\x" + str(H / "worker.md"))) == "deny"  # bash passes the relative `x/…`, the masked text shows `/…`
+assert bash(f"skills-sync card \\ {H / 'worker.md'} --repo name:app --name app-x") == "deny"  # bash passes " /…", relative
+assert bash("skills-sync card \\x--brief --repo name:app --name app-x") == "deny"  # an escape before what looks like an option
+assert bash(HELPER.format("--help")) == "none"
+# Round 4: a later argument can rebind HOME, and a cd has spellings no scan of earlier text catches.
+assert bash(HELPER.format("'~/worker.md'") + ' --x "$((HOME=0))"', session="joined") == "deny"
+assert bash(HELPER.format("$HOME/worker.md") + " --x `true`") == "deny"
+for pre in ("! cd /x; ", 'c"d" /x && ', "f() { cd /x; }; f; ", "echo hi; "):
+    assert "absolute path" in reason(pre + HELPER.format("worker.md")), pre
+    assert bash(pre + HELPER.format(H / "worker.md")) == "none", pre
+(H / "physical" / "child").mkdir(parents=True)
+(H / "physical" / "brief2.md").write_text((H / "lead.md").read_text())
+(H / "brief2.md").write_text("/goal fix X\nCLOSE: §8\n")
+os.symlink(H / "physical" / "child", H / "link")
+assert bash(HELPER.format("link/../brief2.md"), session="joined") == "deny"  # `..` after a symlink is its target's parent
 # Every call is checked, and only a call whose own argument is --help is skipped.
 assert bash(HELPER.format("--help")) == "none"
 assert bash(HELPER.format("lead.md") + " --comment --help", session="joined") == "deny"

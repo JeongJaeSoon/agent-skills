@@ -12,8 +12,9 @@ Usage:
                      the heavy starts the hook held at danger; wait exits 0 once the hook would let that one through
                      (its session runs the same command again), 3 when it should not run (deadline passed, or gone)
   pressure.py turns [--wait MINUTES]
-                     agent turns Orca shows in progress against the new-card cap (active_turns_per_cpu); exit 1 at
-                     the cap or when the count is unreadable. --wait polls until under it (0) or MINUTES pass (3)
+                     agent turns Orca shows in progress against the new-card cap (active_turns_per_cpu), and agent
+                     sessions listed against max_sessions when that is set; exit 1 at either cap or when a count is
+                     unreadable. --wait polls until under both (0) or MINUTES pass (3)
   pressure.py history [--hours H]
                      JSON for the dashboard: the last round's level and metrics, the thresholds, the queue, and one
                      point per round over the last H hours (default 6, at most 24). Reads files only, measures nothing
@@ -26,7 +27,7 @@ No model is called. Thresholds live under "reap" → "pressure" in ~/.claude/age
 where they judge, over `idle_window_seconds`. Nothing outside reap's own target list is ever touched: no kill by pattern, no compose down -v,
 no prune, no volume or image removal.
 """
-import contextlib, ctypes, ctypes.util, fcntl, hashlib, json, math, os, pathlib, plistlib, re, shlex, shutil, subprocess, sys, time
+import contextlib, ctypes, ctypes.util, fcntl, hashlib, json, math, os, pathlib, plistlib, re, shutil, subprocess, sys, time
 
 HERE = pathlib.Path(__file__).resolve().parent
 REAP = HERE / "reap.py"
@@ -86,6 +87,8 @@ DEFAULTS = {
     # A new card (`orca worktree create`, a worker in a new worktree) waits while Orca shows this many agent turns
     # per logical CPU in progress (9 on 18 CPUs). null turns the cap off.
     "active_turns_per_cpu": 0.5,
+    # A new card also waits while Orca lists this many agent sessions, working or idle (memory, not CPU). Unset: off.
+    "max_sessions": None,
     "top": 5,
 }
 # (metric, higher is worse); each is also its threshold's key
@@ -106,6 +109,8 @@ def config(overrides=()):
         default = DEFAULTS[key]
         if key in ("safe_kinds", "always_on"):
             cfg[key] = value.split(",")
+        elif key == "max_sessions":  # default None, so it needs its own parse; "none" turns it back off
+            cfg[key] = None if value.strip().lower() in ("none", "null", "off") else int(value)
         elif isinstance(default, list):
             cfg[key] = [None if x.strip().lower() in ("inf", "-inf", "none", "null") else float(x)
                         for x in value.split(",")]
@@ -239,11 +244,11 @@ def own_pane(run=sh):
         return None
 
 
-def active_turns(run=sh):
-    """Agent turns Orca shows in progress (see turning) over every card except the caller's own; None when Orca cannot
-    say, a cut-short list included. The caller asks to start a card, so its running turn is the one that start comes
-    from, not load the start adds. A caller that cannot be identified counts like any other turn and SELF_NOTE says so
-    (`turns --wait` runs while the caller's turn is over, so counting it in the gate alone would never agree)."""
+def other_agents(run=sh):
+    """Every agent Orca lists except the caller's own; None when Orca cannot say, a cut-short list included. The
+    caller asks to start a card, so its own session is the one that start comes from, not load the start adds. A
+    caller that cannot be identified counts like any other agent and SELF_NOTE says so (`turns --wait` runs while the
+    caller's turn is over, so counting it in the gate alone would never agree)."""
     global SELF_NOTE
     SELF_NOTE = ""  # reset first: an early return below must not leave the previous poll's warning
     out = run(["orca", "worktree", "ps", "--limit", "10000", "--json"], timeout=5)  # sh gives None when orca is missing
@@ -256,9 +261,29 @@ def active_turns(run=sh):
     if not isinstance(trees, list) or res.get("truncated"):
         return None
     own = own_pane(run)
-    SELF_NOTE = "" if own else "호출 세션을 식별하지 못해(ORCA_TERMINAL_HANDLE 없음·조회 실패) 자기 턴도 센다"
-    return sum(turning(a) for w in trees if isinstance(w, dict) for a in w.get("agents") or []
-               if not (own and isinstance(a, dict) and a.get("paneKey") == own))
+    SELF_NOTE = "" if own else "호출 세션을 식별하지 못해(ORCA_TERMINAL_HANDLE 없음·조회 실패) 자기 세션도 센다"
+    return [a for w in trees if isinstance(w, dict) for a in w.get("agents") or []
+            if not (own and isinstance(a, dict) and a.get("paneKey") == own)]
+
+
+def active_turns(run=sh):
+    """Agent turns Orca shows in progress (see turning) over every card except the caller's own; None when Orca cannot
+    say."""
+    agents = other_agents(run)
+    return None if agents is None else sum(turning(a) for a in agents)
+
+
+def live_sessions(run=sh):
+    """Agent sessions Orca lists, working or not, except the caller's own; None when Orca cannot say. Idle sessions
+    still hold memory, which the turn count never sees."""
+    agents = other_agents(run)
+    return None if agents is None else sum(isinstance(a, dict) for a in agents)
+
+
+def session_cap(cfg):
+    """How many live sessions hold a new card; None (the default) when no max_sessions is configured."""
+    cap = cfg.get("max_sessions")
+    return cap if isinstance(cap, int) and not isinstance(cap, bool) and cap > 0 else None
 
 
 def turn_cap(cfg, cpus=None):
@@ -273,18 +298,34 @@ def turn_hold(n, cap):
     return cap is not None and (n is None or n >= cap)
 
 
-def turns_wait(cfg, minutes, poll=30.0, now_fn=time.time, sleep=time.sleep, count=active_turns, out=print):
-    """0 once turn_hold says go, 3 after `minutes` of holding (a count that stays unreadable included)."""
+def session_hold(cfg, sessions=None):
+    """(count, cap, hold) for the session cap; nothing is counted while no cap is set."""
+    cap = session_cap(cfg)
+    if cap is None:
+        return None, None, False
+    s = (sessions or live_sessions)()
+    return s, cap, turn_hold(s, cap)
+
+
+def turns_wait(cfg, minutes, poll=30.0, now_fn=time.time, sleep=time.sleep, count=active_turns, out=print,
+               sessions=None):
+    """0 once neither turn_hold nor the session cap holds, 3 after `minutes` of holding (a count that stays unreadable
+    included)."""
     cap, deadline = turn_cap(cfg), now_fn() + 60 * minutes
     while True:
         n = count()
-        if not turn_hold(n, cap):
-            out(f"진행 중인 에이전트 턴 {'?' if n is None else n}개 / 상한 {cap or '없음'}: 새 카드를 시작해도 된다")
+        s, scap, s_hold = session_hold(cfg, sessions)
+        if not turn_hold(n, cap) and not s_hold:
+            out(f"진행 중인 에이전트 턴 {'?' if n is None else n}개 / 상한 {cap or '없음'}"
+                + (f", 세션 {s}개 / 상한 {scap}" if scap else "") + ": 새 카드를 시작해도 된다")
             if SELF_NOTE:
                 out(f"경고: {SELF_NOTE}")
             return 0
         if now_fn() >= deadline:
-            if n is None:
+            if s_hold:
+                out(f"에이전트 세션을 셀 수 없음(Orca 응답 없음·목록 잘림) — 시작하지 않는다" if s is None else
+                    f"에이전트 세션 {s}개 ≥ 상한 {scap}(`reap.pressure.max_sessions`), {minutes:g}분 기다려도 줄지 않음 — 시작하지 않는다")
+            elif n is None:
                 out(f"에이전트 턴 수를 {minutes:g}분 동안 셀 수 없음(Orca 응답 없음·목록 잘림) — 시작하지 않는다")
             else:
                 out(f"진행 중인 에이전트 턴 {n}개 ≥ 상한 {cap}, {minutes:g}분 기다려도 줄지 않음 — 시작하지 않는다")
@@ -678,7 +719,8 @@ def send(to, subject, body, kind, run=reap.run):
                 "--json"], check=False) is not None
 
 
-# orchestrate's dashboard lists rows appended here under "Needs you" (fleet.py inbox_add, the same line format).
+# orchestrate's dashboard lists rows appended here under "Needs you" (fleet.py inbox_add, the same line format). Only
+# the danger and swap-growth notes go this way; the held-command queue is read from its own file.
 DASH_KEY = "pressure:danger"
 
 
@@ -725,7 +767,8 @@ def queue_read():
 
 def queue_change(fn):
     """Run fn(queue) under the queue's lock. fn returns None when it changed nothing, so the file is left alone, or the
-    entries whose dashboard row changes. Raises when the lock is not had within LOCK_WAIT_S."""
+    entries it changed. The dashboard reads the queue file itself (fleet.pressure_items), so no row is written for them.
+    Raises when the lock is not had within LOCK_WAIT_S."""
     reap.STATE.mkdir(parents=True, exist_ok=True)
     with open(reap.STATE / "pressure-queue.lock", "w") as lock:
         until = time.monotonic() + LOCK_WAIT_S
@@ -744,31 +787,11 @@ def queue_change(fn):
             cutoff = time.time() - QUEUE_KEEP_S
             save_state({k: e for k, e in q.items()
                         if e["state"] in ("waiting", "retrying") or e.get("ended", e["added"]) >= cutoff}, QUEUE)
-    for e in changed:
-        queue_note(e)
     return changed
 
 
 def hhmm(t):
     return time.strftime("%H:%M", time.localtime(t))
-
-
-def queue_note(e):
-    """The entry's dashboard row: open while it waits or once it ended badly, resolved once the retry went through."""
-    key = f"pressure:queue:{e['id']}"
-    state = e["state"]
-    if state == "done":
-        return dash_note("resolve", key=key)
-    if state == "waiting":
-        title = f"{e['what']} 대기 중(PC 사용량 위험: {e['why']}) · 기한 {hhmm(e['deadline'])}, 부하가 내려가면 요청한 세션이 같은 명령을 다시 실행"
-    elif state == "retrying":
-        title = f"{e['what']} 재시도 중(대기 {e['attempts']}회)"
-    elif state == "failed":
-        title = f"{e['what']} 재시도 실패: {e.get('error') or '?'}"
-    else:
-        title = f"{e['what']} 포기: 기한 {hhmm(e['deadline'])}까지 PC 사용량 위험이 이어짐({e['why']})"
-    # The copy button gets the list, not the held command: run from anywhere else, it would skip its session's checks.
-    return dash_note("add", f"[{e['id']}] {title}", key=key, command=shlex.join(["python3", str(HERE / "pressure.py"), "queue"]))
 
 
 def enqueue(session, cwd, command, what, why, cfg, now=None):
@@ -1137,10 +1160,12 @@ def main(argv):
                 return 2
             return turns_wait(cfg, minutes)
         n, cap = active_turns(), turn_cap(cfg)
-        print(f"진행 중인 에이전트 턴 {'?' if n is None else n}개 / 상한 {cap or '없음'}")
+        s, scap, s_hold = session_hold(cfg)
+        print(f"진행 중인 에이전트 턴 {'?' if n is None else n}개 / 상한 {cap or '없음'}"
+              + (f", 세션 {'?' if s is None else s}개 / 상한 {scap}" if scap else ""))
         if SELF_NOTE:
             print(f"경고: {SELF_NOTE}")
-        return 1 if turn_hold(n, cap) else 0
+        return 1 if turn_hold(n, cap) or s_hold else 0
     if cmd == "check":
         m = snapshot(cfg, load_state(), idle_fn=live(cfg))
         level, why = judge(m, cfg)

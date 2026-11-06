@@ -1,15 +1,10 @@
----
-name: swarm
-description: "Fan out parallel workers on one question and return one report. Use for /swarm, \"병렬로 훑어줘\", \"나눠서 동시에 확인해줘\". Landing tickets is orchestrate; one merged artifact is arena."
----
+# Sweep
 
-# Swarm
-
-Fan out N parallel workers. They may cover separate slices, race the same brief, or mix both. The parent waits, aggregates, and returns one report. When the goal is one artifact built from the best of competing attempts, run the **arena** skill instead.
+Fan out N parallel workers. They may cover separate slices, race the same brief, or mix both. The parent waits, aggregates, and returns one report. When the goal is one artifact built from the best of competing attempts, use [compete](compete.md) instead.
 
 ## Phase A: Frame
 
-1. State the done predicate and the artifact or report the swarm must return.
+1. State the done predicate and the artifact or report the sweep must return.
 2. Choose the shape. Partition into slices, race N workers on identical briefs, or mix both. For a race or mixed shape, declare `first pass` or `rank all` before spawning.
 3. Set N from the user or derive it from the shape. N is total workers, not the concurrency limit.
 4. Use the host's configured worker defaults, or the user's explicit model choice. For a comparison experiment, record each candidate's configuration before launch.
@@ -21,7 +16,7 @@ Spawn all N workers in one message with the `Agent` tool: `subagent_type: "gener
 
 When a worker must start from a non-default pushed branch, name it in the brief and have the worker check it out in its worktree first, or pass `--base-branch` to `orca orchestration worker-start`. `--base-branch` only works with `--worktree new-top-level` or `new-child`, since it names the base of the worktree Orca creates; Orca rejects it for `current` or an existing worktree.
 
-Every brief stands alone. Include the goal, scope, exact slice or race arm, how to verify, and what to report. Reports use `PASS`, `ISSUES`, or `BLOCKED` with evidence. A worker that can prove a defect reports `ISSUES` and lists every issue it can prove, not only the first.
+Every brief stands alone. Include the goal, scope, exact slice or race arm, how to verify, and what to report. Pass the file paths and the question, never a large document in full: each worker pays for its whole context on every turn, and N workers pay N times. Reports use `PASS`, `ISSUES`, or `BLOCKED` with evidence. A worker that can prove a defect reports `ISSUES` and lists every issue it can prove, not only the first.
 
 If a worker drops out, proceed with N-1 and note it.
 

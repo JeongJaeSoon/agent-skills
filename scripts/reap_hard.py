@@ -31,16 +31,21 @@ Before any rule, the protect file is read; without it nothing runs (exit 2). It 
 compose projects in reap.pressure.always_on and anything a person's shell started are always kept.
 Each decision that acts, or would act under --dry-run, and each failure is one JSON line in
 <state>/reap-hard.jsonl; the pass's summary is <state>/reap-hard-last.json.
-After a pass that is not a dry run, `orch patrol --if-due` starts detached (every other pass, 30 minutes); a card
-it judged working within the hour is kept, and nothing it judged becomes a target.
+After a pass that is not a dry run, `orch patrol --if-due --fallback` starts detached; it runs only when the patrol
+job has not run a round for 25 minutes (so every 30-minute pass when the job is off), or the machine's pressure level rose. A card it judged working within the hour is kept, and nothing it judged becomes
+a target.
+A pass that is not a dry run also writes <state>/inventory.json, its own judgements; patrol's candidate stage reads
+them for 10 minutes instead of scanning the machine again (read_inventory). One `gh pr list` per repo answers every
+card's PR (reap.PrMap). A landed PR starts a pass between beats (reap.spawn_hard, not within 5 minutes of the last).
 Settings: "reap-hard" in ~/.claude/agent-skills.json (DEFAULTS).
 """
-import contextlib, fcntl, functools, json, os, pathlib, plistlib, re, shutil, signal, socket, subprocess, sys, time, uuid
+import contextlib, fcntl, functools, hashlib, json, os, pathlib, plistlib, re, shutil, signal, socket, subprocess, sys, time, uuid
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent / "skills" / "reap-resources" / "scripts"))
 import cardguard  # noqa: E402
+import cards  # noqa: E402
 import guard  # noqa: E402
 import preview_watch as pw  # noqa: E402
 import reap  # noqa: E402
@@ -52,9 +57,12 @@ CONFIG = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG", "~/.claude/agent-ski
 STATE_DIR = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE", "~/.local/state/agent-skills")).expanduser()
 LOG = STATE_DIR / "reap-hard.jsonl"
 LAST = STATE_DIR / "reap-hard-last.json"
+INVENTORY = STATE_DIR / "inventory.json"
+INVENTORY_TTL = 600
+LOCK_BUSY = 3  # exit code of a pass that found another one running; reap.spawn_hard's runner counts it as fine
 OUT = STATE_DIR / "reap-hard.log"
 DEFAULTS = {
-    "interval": 900,
+    "interval": 1800,
     "idle_minutes": 30,
     "workspaces": "~/orca/workspaces",
     "protect_file": "~/.config/agent-skills/reap-protect.txt",
@@ -83,13 +91,14 @@ protected_path = guard.protected_path
 # ---------------------------------------------------------------- judgements (pure)
 
 def judge_card(card, facts, pr, terminals, quiet_s, now, idle_s, protect, people, holders, children=(), coordinator=None,
-               busy=()):
+               busy=(), ancestor=False):
     """(target, why). card: a row of `orca worktree list`; facts: reap.worktree_facts; pr: reap's PR state of
     facts["pr"]; terminals: the card's rows of `orca terminal list`, None when unreadable; quiet_s: seconds since
     its transcripts last changed, None when it has none, a reason when they cannot be read; people: pids in it a person started; holders: pids in it
     that are protected or listen on a protected port; children: the cards it made that still exist (a lead's);
     coordinator: why a live Claude session in it is a lead or the orchestrator, which keeps it whatever else holds;
-    busy: shells a live Claude session in it is still running (a Bash call, a background shell, a Monitor)."""
+    busy: shells a live Claude session in it is still running (a Bash call, a background shell, a Monitor);
+    ancestor: HEAD is an ancestor of the PR's head, so the PR carried everything the card has committed."""
     p = reap.real(card["path"])
     if card.get("isMainWorktree") or card.get("isPinned"):
         return False, "메인 체크아웃 또는 고정된 카드"
@@ -110,8 +119,8 @@ def judge_card(card, facts, pr, terminals, quiet_s, now, idle_s, protect, people
         return False, f"PR {facts['pr']} 상태를 읽지 못함"
     if pr["state"] == "OPEN":
         return False, f"열린 PR {facts['pr']}"
-    if pr.get("headRefOid") != facts.get("head"):
-        # A lead may reuse a merged branch's name; only the PR that carried this HEAD says the work is done.
+    if pr.get("headRefOid") != facts.get("head") and not ancestor:
+        # A lead may reuse a merged branch's name; only the PR that carried this HEAD (or a head built on it) says the work is done.
         return False, f"PR {facts['pr']} {pr['state'].lower()}, 그 뒤 HEAD 가 바뀜"
     if facts.get("unreadable"):
         return False, "git 상태를 읽지 못함"
@@ -283,9 +292,24 @@ def read_machine(now):
     listening = listeners_all()
     return {"rows": reap.processes(), "cwd_pairs": cwd_pairs,
             "cwd_of": None if cwd_pairs is None else {p: c for p, (c, _) in cwd_pairs.items()},
-            "listening": listening, "pr_state": reap.pr_reader(),
+            "listening": listening, "pr_state": reap.pr_reader(), "pr_map": reap.PrMap(),
             "quiet": transcript_quiet(pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser()
                                       / "projects", now)}
+
+
+def head_in_pr(path, head, pr_head, git=reap.run):
+    """HEAD is an ancestor of the PR head. A failed read, or a PR head this clone never fetched, reads as no. A card
+    that never committed (a fresh one that reuses a merged branch's name sits on an old ancestor) proves nothing."""
+    if not head or not pr_head:
+        return False
+    if git(["git", "-C", path, "merge-base", "--is-ancestor", head, pr_head], check=False) is None:
+        return False
+    if head == pr_head:
+        return True
+    try:
+        return cards.history(path, git)[0] is True
+    except (RuntimeError, OSError):  # reap.run raises on a failed git; one unreadable card must not stop the pass
+        return False
 
 
 def card_verdict(w, m, cfg, protect, now):
@@ -294,7 +318,7 @@ def card_verdict(w, m, cfg, protect, now):
     cwd_of = m["cwd_of"]
     if cwd_of is None or m["listening"] is None:
         return False, "프로세스 cwd·리스너를 읽지 못함", None
-    facts = reap.worktree_facts(p, None, None, cwd_of)
+    facts = reap.worktree_facts(p, None, None, cwd_of, pr_map=m.get("pr_map"))
     pr = m["pr_state"](facts["pr"]) if facts and facts.get("pr") else None
     term = orca("terminal", "list", "--worktree", f"path:{p}")
     terminals = None if not isinstance(term, dict) else term.get("terminals") or []
@@ -305,7 +329,8 @@ def card_verdict(w, m, cfg, protect, now):
     projects = pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser() / "projects"
     ok, why = judge_card(w, facts, pr, terminals, m["quiet"](p), now, float(cfg["idle_minutes"]) * 60, protect,
                          people_in(p, m["rows"], cwd_of), holders, children,
-                         reap.coordinator_in(p, m["rows"], cwd_of, projects), cardguard.busy_shells(p, m["rows"], cwd_of))
+                         reap.coordinator_in(p, m["rows"], cwd_of, projects), cardguard.busy_shells(p, m["rows"], cwd_of),
+                         bool(pr) and head_in_pr(p, (facts or {}).get("head"), pr.get("headRefOid")))
     return ok, why, {**(facts or {}), "handles": [t.get("handle") for t in terminals or () if t.get("handle")]}
 
 
@@ -378,9 +403,7 @@ def scan_rest(cfg, protect, dark_before, closed, m, now):
             kind = "container" if i["kind"] == "stopped-container" else "volume"
             items.append({**i, "kind": kind, "id": i.get("cid") or i["name"]})
 
-    alive = {reap.real(os.path.join(root, r, c)) for r in (os.listdir(root) if os.path.isdir(root) else ())
-             if os.path.isdir(os.path.join(root, r)) for c in os.listdir(os.path.join(root, r))
-             if os.path.isdir(os.path.join(root, r, c))} - set(closed)
+    alive = alive_cards(root) - set(closed)
     stopping = set()
     rows, cwd_pairs = m["rows"], m["cwd_pairs"]
     for port, pid in sorted((m["listening"] or {}).items()):
@@ -412,6 +435,12 @@ def scan_rest(cfg, protect, dark_before, closed, m, now):
         items.append({"kind": "serve", "id": f"{e[0]}={e[1]}", "flag": e[0], "port": e[1], "local": e[2],
                       "target": ok, "why": why})
     return items, notes, dark
+
+
+def alive_cards(root):
+    return {reap.real(os.path.join(root, r, c)) for r in (os.listdir(root) if os.path.isdir(root) else ())
+            if os.path.isdir(os.path.join(root, r)) for c in os.listdir(os.path.join(root, r))
+            if os.path.isdir(os.path.join(root, r, c))}
 
 
 def stack_gone(closed):
@@ -484,6 +513,18 @@ def act(item, cfg, protect, done=None):
             return "건너뜀: 사라졌거나 다른 프로세스"
         if reap.human_owned(item["pid"], rows):
             return "건너뜀: 사람이 띄운 셸의 자식"
+        # The verdict may come from an inventory minutes old: judge the process again, as a fresh scan would. An
+        # escaped (lsof \xNN) path is no proof that a card is gone.
+        pairs = reap.cwds(inodes=True)
+        cwd = None if pairs is None else pairs.get(item["pid"])
+        root = reap.real(os.path.expanduser(cfg["workspaces"]))
+        if cwd is None or "\\x" in cwd[0]:
+            return "건너뜀: cwd 를 읽지 못함"
+        ok, why = judge_listener(r, int(item["id"].rpartition(":")[2]), cwd, lambda c: reap.cwd_gone(*c),
+                                 lambda c: card_dir(reap.real(c), root), alive_cards(root),
+                                 float(cfg["idle_minutes"]) * 60, protect, rows)
+        if not ok:
+            return f"건너뜀: 판정 뒤 달라짐: {why}"
         os.kill(item["pid"], signal.SIGTERM)
         return "SIGTERM"
     if k == "serve":
@@ -521,8 +562,53 @@ def read_last():
         return None
 
 
+def fingerprint(cfg):
+    """What an inventory was judged from besides the machine: the settings that decide a verdict, and the protect file.
+    None when the protect file cannot be read, so nothing is written or trusted then."""
+    try:
+        protect = pathlib.Path(os.path.expanduser(cfg["protect_file"])).read_bytes()
+    except OSError:
+        return None
+    knobs = [cfg["idle_minutes"], cfg["workspaces"], cfg["serve_ranges"], (guard.settings() or {}).get("reap")]
+    return hashlib.sha256(json.dumps(knobs, sort_keys=True, default=str).encode() + protect).hexdigest()
+
+
+def write_inventory(items, notes, cfg, now, dark, scanned_fp=...):
+    """<state>/inventory.json: this pass's judgements, for a reader that would scan the same machine again (patrol's
+    candidate stage). Written by a pass that is not a dry run and read everything, never by a reader. What the pass
+    already closed is left out; a pass that could not read a part, or whose settings or protect file changed while it
+    ran (scanned_fp, taken before the scan, differs), removes the file, so no reader takes it for whole or current."""
+    fp = fingerprint(cfg)
+    if notes or fp is None or (scanned_fp is not ... and scanned_fp != fp):
+        INVENTORY.unlink(missing_ok=True)
+        return
+    left = [i for i in items if not (i.get("result") and not i["result"].startswith(("건너뜀", "실패")))]
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = INVENTORY.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"t": now, "fp": fp, "dark": sorted(dark),
+                               "cards": [i for i in left if i["kind"] == "card"],
+                               "rest": [i for i in left if i["kind"] != "card"]}, ensure_ascii=False, default=str))
+    tmp.replace(INVENTORY)
+
+
+def read_inventory(cfg=None, now=None, ttl=INVENTORY_TTL):
+    """The inventory when it is younger than ttl seconds and was judged from the settings and protect file in force;
+    else None, and the reader scans for itself. A card gone since is dropped."""
+    cfg, now = cfg or config(), now or time.time()
+    try:
+        inv = json.loads(INVENTORY.read_text())
+        fresh = 0 <= now - float(inv["t"]) <= ttl and inv["fp"] == fingerprint(cfg)
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if not fresh:
+        return None
+    return {**inv, "cards": [i for i in inv["cards"] if os.path.isdir(i["id"])]}
+
+
 def run_pass(dry, cfg=None, now=None):
+    injected = cfg is not None
     cfg = cfg or config()
+    scanned_fp = fingerprint(cfg)  # before the protect file is read: a change from here on is seen at the end
     now = now or time.time()
     run_id = uuid.uuid4().hex[:8]
     stamp = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(now))
@@ -592,6 +678,7 @@ def run_pass(dry, cfg=None, now=None):
                "kept": sum(1 for i in items if not i["target"]), "notes": notes, "dark": sorted(dark)}
     if not dry:
         write_last(summary)
+        write_inventory(items, notes, cfg if injected else config(), now, dark, scanned_fp)  # the settings now in force
     return {**summary, "items": items}, 1 if summary["failed"] else 0
 
 
@@ -633,7 +720,8 @@ def locked():
         try:
             fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            sys.exit("reap-hard: 다른 회차가 도는 중")
+            print("reap-hard: 다른 회차가 도는 중", file=sys.stderr)
+            sys.exit(LOCK_BUSY)
         yield
 
 
@@ -688,8 +776,7 @@ def main(argv):
         with locked():
             res, code = run_pass("--dry-run" in argv)
         if "--dry-run" not in argv and "--no-patrol" not in argv:
-            # Patrol keeps this beat: it runs itself every other pass (--if-due), apart, so a slow round never holds this one.
-            reap.spawn_patrol("reap-hard")
+            reap.spawn_patrol("reap-hard", fallback=True)
             reap.spawn_sweep_shadow("reap-hard")  # shadow stage: records what the v2 cleaner would do, does nothing
         if "--json" in argv:
             print(json.dumps(res, ensure_ascii=False, indent=1))

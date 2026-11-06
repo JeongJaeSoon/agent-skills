@@ -68,6 +68,62 @@ cases = {
 for want, (ok, why) in cases.items():
     assert ok is False and want in why, (want, why)
 
+# A merged PR whose head moved past the card's HEAD still carried it: the card is done. Every other guard stays.
+behind = {"state": "MERGED", "headRefOid": "later"}
+assert card_says(pr=behind)[0] is False and "HEAD 가 바뀜" in card_says(pr=behind)[1]
+ok, why = rh.judge_card(card, facts, behind, quiet_terms, 40 * M, NOW, 30 * M, P, [], [], ancestor=True)
+assert ok is True and "PR acme/app#1 merged" in why, (ok, why)
+for pr_, f_, want in ((dict(behind, state="OPEN"), facts, "열린 PR"), (behind, {**facts, "dirty": True}, "커밋 안 된 변경")):
+    ok, why = rh.judge_card(card, f_, pr_, quiet_terms, 40 * M, NOW, 30 * M, P, [], [], ancestor=True)
+    assert ok is False and want in why, (want, why)
+
+# The ancestor fact is read from a real repo: same head, ancestor, a local commit the PR lacks, and uncommitted work.
+import subprocess  # noqa: E402
+
+
+def sh(*a, cwd):
+    return subprocess.run(a, cwd=cwd, check=True, capture_output=True, text=True,
+                          env={**os.environ, "HOME": str(tmp), "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_AUTHOR_NAME": "t",
+                                "GIT_AUTHOR_EMAIL": "t@example.test", "GIT_COMMITTER_NAME": "t",
+                                "GIT_COMMITTER_EMAIL": "t@example.test"}).stdout.strip()
+
+
+repo = tmp / "repo"
+repo.mkdir()
+sh("git", "init", "-q", cwd=repo)
+for n in "123":
+    (repo / n).write_text(n)
+    sh("git", "add", n, cwd=repo)
+    sh("git", "commit", "-qm", n, cwd=repo)
+h1, h2, h3 = sh("git", "rev-list", "--reverse", "HEAD", cwd=repo).split()
+sh("git", "checkout", "-q", "-b", "local", h2, cwd=repo)
+(repo / "local").write_text("x")
+sh("git", "add", "local", cwd=repo)
+sh("git", "commit", "-qm", "local only", cwd=repo)
+local = sh("git", "rev-parse", "HEAD", cwd=repo)
+verdicts = {}
+for name, head, pr_head, dirty in (("same head", h3, h3, False), ("ancestor", h2, h3, False),
+                                   ("local commit ahead", local, h3, False), ("uncommitted", h2, h3, True)):
+    anc = rh.head_in_pr(str(repo), head, pr_head)
+    verdicts[name] = rh.judge_card(card, {**facts, "head": head, "dirty": dirty}, {"state": "MERGED", "headRefOid": pr_head},
+                                   quiet_terms, 40 * M, NOW, 30 * M, P, [], [], ancestor=anc)
+    print(f"{name}: ancestor={anc} -> {verdicts[name]}")
+assert [verdicts[k][0] for k in verdicts] == [True, True, False, False], verdicts
+assert "HEAD 가 바뀜" in verdicts["local commit ahead"][1] and "커밋 안 된 변경" in verdicts["uncommitted"][1]
+# A fresh card that reuses a merged branch's name sits on an old ancestor without ever committing: it stays.
+fresh = tmp / "fresh"
+sh("git", "clone", "-q", str(repo), str(fresh), cwd=tmp)
+sh("git", "checkout", "-q", "-b", "reused", h2, cwd=fresh)
+assert rh.head_in_pr(str(fresh), h2, h3) is False and rh.head_in_pr(str(fresh), h3, h3) is True
+def reflog_fails(cmd, **kw):  # ancestor read succeeds, then the reflog read raises as reap.run does with check=True
+    if "reflog" in cmd:
+        raise RuntimeError("reflog read failed")
+    return ""
+
+
+assert rh.head_in_pr(str(repo), h2, h3, git=reflog_fails) is False  # no exception: the card stays, the pass goes on
+assert rh.head_in_pr(str(repo), h2, "0" * 40) is False and rh.head_in_pr(str(repo), "", h3) is False  # unfetched / unread
+
 # Stacks: down only when every working directory is gone; protected projects and ports stay.
 stack = {"ports": {5173}, "dirs": {"/ws/app/done"}}
 assert rh.judge_stack("v1", stack, lambda d: True, P, set()) == (True, "소유 worktree 가 없어짐: /ws/app/done")
@@ -311,6 +367,92 @@ with tempfile.TemporaryDirectory() as td:
     got = {i["id"]: i for i in rh.scan_cards({"workspaces": root}, None, 0)[0]}
     assert not got[cards_["plain"]]["target"] and "거부 기록을 읽지 못함" in got[cards_["plain"]]["why"], got
     rh.orca, rh.card_verdict, rh.read_machine, rh.reap.STATE, rh.reap.patrol_states = saved_sc
+
+# inventory.json: a pass's judgements for a reader that would scan again. What the pass closed, a card gone since, a
+# stale file, other settings or protect file, and a pass that could not read a part are all left out.
+inv_dir = tmp / "inv"
+inv_dir.mkdir()
+rh.INVENTORY, rh.STATE_DIR = inv_dir / "inventory.json", inv_dir
+pf = inv_dir / "protect.txt"
+pf.write_text("# keep\n")
+live = inv_dir / "live"
+live.mkdir()
+cfg_i = {**rh.DEFAULTS, "protect_file": str(pf), "workspaces": str(inv_dir)}
+items_i = [{"kind": "card", "id": str(live), "target": True, "why": "w", "result": "건너뜀: x"},
+           {"kind": "card", "id": str(inv_dir / "gone"), "target": True, "why": "w"},
+           {"kind": "card", "id": str(inv_dir / "closed"), "target": True, "why": "w", "result": "닫음"},
+           {"kind": "stack", "id": "s", "target": False, "why": "w"}]
+rh.write_inventory(items_i, [], cfg_i, NOW, {"d"})
+got = rh.read_inventory(cfg_i, NOW + 60)
+assert [i["id"] for i in got["cards"]] == [str(live)], got
+assert [i["id"] for i in got["rest"]] == ["s"] and got["dark"] == ["d"] and got["t"] == NOW, got
+assert rh.read_inventory(cfg_i, NOW + rh.INVENTORY_TTL + 1) is None, "older than the TTL"
+assert rh.read_inventory(cfg_i, NOW - 1) is None, "from the future"
+assert rh.read_inventory({**cfg_i, "idle_minutes": 5}, NOW + 60) is None, "judged under other settings"
+pf.write_text("# changed\n")
+assert rh.read_inventory(cfg_i, NOW + 60) is None, "judged under another protect file"
+pf.write_text("# keep\n")
+assert rh.read_inventory(cfg_i, NOW + 60) is not None
+rh.write_inventory(items_i, ["docker 를 읽지 못함"], cfg_i, NOW, set())
+assert not rh.INVENTORY.exists(), "a part not read removes the file"
+rh.write_inventory(items_i, [], cfg_i, NOW, set())
+rh.INVENTORY.write_text("{not json")
+assert rh.read_inventory(cfg_i, NOW + 60) is None
+# The pass writes it when it is not a dry run, and only then.
+rh.INVENTORY.unlink()
+saved_rp = rh.scan_cards, rh.scan_rest, rh.read_protect, rh.guard.ownership, rh.write_last, rh.log
+rh.scan_cards = lambda cfg, protect, now: ([{"kind": "card", "id": str(live), "target": False, "why": "w"}], [], {})
+rh.scan_rest = lambda *a: ([], [], set())
+rh.read_protect, rh.guard.ownership, rh.write_last, rh.log = (lambda f: P), (lambda: None), (lambda s: None), (lambda r: None)
+rh.run_pass(True, cfg_i, NOW)
+assert not rh.INVENTORY.exists(), "a dry run writes no inventory"
+# A protect file edited while the pass ran: the verdicts were taken under the old one, so no inventory is kept.
+rh.scan_rest = lambda *a: (pf.write_text("# edited during the scan\n"), ([], [], set()))[1]
+rh.run_pass(False, cfg_i, NOW)
+assert not rh.INVENTORY.exists(), "settings changed during the pass"
+pf.write_text("# keep\n")
+# ... or right after it was read, before the scan began.
+rh.read_protect = lambda f: (pf.write_text("# edited after the read\n"), P)[1]
+rh.run_pass(False, cfg_i, NOW)
+assert not rh.INVENTORY.exists(), "settings changed after the protect file was read"
+pf.write_text("# keep\n")
+rh.read_protect = lambda f: P
+rh.scan_rest = lambda *a: ([], [], set())
+rh.run_pass(False, cfg_i, NOW)
+assert [i["id"] for i in rh.read_inventory(cfg_i, NOW + 1)["cards"]] == [str(live)]
+rh.scan_cards, rh.scan_rest, rh.read_protect, rh.guard.ownership, rh.write_last, rh.log = saved_rp
+
+# A pass that finds the lock held exits with LOCK_BUSY (reap.spawn_hard's runner takes 0 and 3 as fine).
+rh.STATE_DIR = inv_dir
+with rh.locked():
+    try:
+        with rh.locked():
+            raise AssertionError("second pass got the lock")
+    except SystemExit as e:
+        assert e.code == rh.LOCK_BUSY == 3, e.code
+
+# A listener verdict from an inventory minutes old is judged again before SIGTERM: the process may have moved into a live card.
+killed_l = []
+saved_l = rh.reap.processes, rh.reap.cwds, rh.reap.human_owned, rh.os.kill
+live_card = inv_dir / "live-card"
+live_card.mkdir()
+lis = {"kind": "listener", "id": "43:4600", "pid": 43, "start": "S"}
+rh.reap.processes = lambda: {43: {"pid": 43, "ppid": 1, "start": "S", "cmd": "node x", "age": 99999}}
+rh.reap.human_owned = lambda pid, rows: False
+rh.os.kill = lambda pid, sig: killed_l.append(pid)
+lcfg = {**rh.DEFAULTS, "workspaces": str(inv_dir)}
+(live_card / "web").mkdir()
+rh.reap.cwds = lambda inodes=False: {43: (str(live_card / "web"), os.stat(live_card / "web").st_ino)}
+assert rh.act(lis, lcfg, P).startswith("건너뜀") and not killed_l, "its cwd is in a live card now"
+rh.reap.cwds = lambda inodes=False: None
+assert rh.act(lis, lcfg, P).startswith("건너뜀") and not killed_l, "cwd not readable"
+rh.reap.cwds = lambda inodes=False: {43: (str(inv_dir / "app" / "caf\\xc3\\xa9"), 1)}
+assert rh.act(lis, lcfg, P).startswith("건너뜀") and not killed_l, "an escaped path proves nothing"
+rh.reap.cwds = lambda inodes=False: {43: ("/x/lead/gone-dir", 1)}
+assert rh.act(lis, lcfg, P).startswith("건너뜀") and not killed_l, "a protected path stays"
+rh.reap.cwds = lambda inodes=False: {43: ("/nonexistent/gone-dir", 1)}
+assert rh.act(lis, lcfg, P) == "SIGTERM" and killed_l == [43]
+rh.reap.processes, rh.reap.cwds, rh.reap.human_owned, rh.os.kill = saved_l
 
 # Stopped containers and labeled volumes: off without their settings, one exact target each, the shared rules of reap.py.
 saved_lo = rh.reap.leftovers, rh.reap.remove_leftover, rh.reap.compose_stacks, rh.pw.tailscale_cli, rh.guard.settings, rh.always_on

@@ -160,13 +160,18 @@ for args in ({"command": "tail -f /tmp/x.log"}, {"command": "orch heavy - -- mak
              {"ws": {"url": "wss://example.test/s"}}, {"command": "orch inbox --stream", "ws": {"url": "wss://example.test"}}):
     assert run("Monitor", args) == "deny", args
 
-# A ticket milestone without the task-tracker subagent: this plugin's tracker.py, transition or comment, exact shapes.
+# A ticket milestone without the task-tracker subagent: this plugin's tracker.py, transition, comment or attach,
+# exact shapes.
 TRACKER = HERE.parent / "skills" / "use-tracker" / "scripts" / "tracker.py"
 BODY_MD = HOME / ".claude" / "programs" / "app" / "done.md"
+PR_URL = "https://example.test/acme/app/pull/1"
 for cmd in (f"python3 {TRACKER} transition --to review ABC-1", f"python3 {TRACKER} transition ABC-1 --to completed",
             f"python3 {TRACKER} --adapter linear transition --to started ABC-1",
             f"python3 {TRACKER} comment --body-file {BODY_MD} ABC-1",
-            "orca linear attach ABC-1 --url https://example.test/acme/app/pull/1 --title PR"):
+            f"python3 {TRACKER} attach ABC-1 --url {PR_URL}", f"python3 {TRACKER} attach --url {PR_URL} ABC-1",
+            f"python3 {TRACKER} --adapter jira attach ABC-1 --url {PR_URL}",
+            f"python3 {TRACKER} reconcile ABC-1 --repo acme/app",
+            f"python3 {TRACKER} reconcile ABC-1 --repo acme/app --repo acme/api --head feat/abc-1"):
     assert run("Bash", {"command": cmd}) == "none", cmd
 OTHER_TRACKER = TMP / "skills" / "use-tracker" / "scripts" / "tracker.py"
 for cmd in (f"python3 {TRACKER} create --title x", f"python3 {TRACKER} label ABC-1 --add x",
@@ -176,7 +181,15 @@ for cmd in (f"python3 {TRACKER} create --title x", f"python3 {TRACKER} label ABC
             f"python3 {TRACKER} comment --body-file {HOME}/.claude/agent-skills.json ABC-1",
             f"python3 {OTHER_TRACKER} transition --to review ABC-1",
             f"cd {HERE.parent} && python3 skills/use-tracker/scripts/tracker.py transition --to review ABC-1",
-            f"python3 {TRACKER} transition --to review ABC-1; rm -rf x", "orca linear create --title x"):
+            f"python3 {TRACKER} transition --to review ABC-1; rm -rf x", "orca linear create --title x",
+            f"python3 {TRACKER} attach ABC-1 --url {PR_URL} --title PR", f"python3 {TRACKER} attach ABC-1 --url",
+            f"python3 {TRACKER} attach ABC-1 --url ftp://example.test/x", f"python3 {TRACKER} attach --url {PR_URL}",
+            f"python3 {TRACKER} attach ABC-1 --body-file {BODY_MD}",
+            f"orca linear attach ABC-1 --url {PR_URL} --title PR",
+            f"python3 {TRACKER} reconcile ABC-1", f"python3 {TRACKER} reconcile --repo acme/app",
+            f"python3 {TRACKER} reconcile ABC-1 --head b", f"python3 {TRACKER} reconcile ABC-1 --repo acme/app --head a --head b",
+            f"python3 {TRACKER} reconcile ABC-1 --repo acme/app --config {TMP}/other.json",
+            f"python3 {TRACKER} reconcile ABC-1 --repo acme/app --apply x", f"python3 {TRACKER} reconcile ABC-1 --repo -x/y"):
     assert run("Bash", {"command": cmd}) == "deny", cmd
 
 # A delegation with no owner order behind it is warned about, never blocked, and only once `orch order setup` ran.

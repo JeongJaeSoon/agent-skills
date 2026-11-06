@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Session patrol: one round over every agent card, by rules fixed in code, with no model in the loop.
 
-Usage: orch patrol [--once] [--if-due] [--dry-run] [--json]
+Usage: orch patrol [--once] [--if-due [--fallback]] [--dry-run] [--json]
        orch patrol list [--all]
        orch patrol ack <id>... | --all
        orch patrol timing
@@ -53,8 +53,8 @@ Patrol records and shows; it never types into a terminal, closes one, stops a wo
 least of all: it writes the user's default model). Findings
 go to <state>/patrol.jsonl with detected_at, are cleared there when a later round no longer sees them, and are acked
 by whoever dealt with them (`orch patrol ack`). `orch inbox` and `orch wait` show the unacked ones routed to them
-(the card's parent session, else the orchestrator) every 30 minutes. X, E, L and O also go to the dashboard's
-Needs you until cleared or acked. Card verdicts go to <state>/patrol-verdicts.json: `cards` holds each card's activity
+(the card's parent session, else the orchestrator) every 30 minutes. X, E, L and O also show in the dashboard's
+Needs you, read straight from the log (fleet.patrol_items), until cleared or acked. Card verdicts go to <state>/patrol-verdicts.json: `cards` holds each card's activity
 (run, waiting, working, idle, exited, stalled), `hints` what a finding said of it (superseded, pr_open_no_session,
 idle, exited, stalled), `check` the cards H, B and R found, each with the reason the brief shows on its ❔ row, and
 `failed` the sources this round could not read. A finding never overwrites run, waiting or working in
@@ -104,6 +104,11 @@ CONFIG = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-
 REAP_SCRIPTS = pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts"
 
 DUE_S = 25 * 60
+# reap-hard's `--fallback` beat. Under the hour a patrol verdict protects a card for (reap.patrol_working), so a card
+# stays protected while the patrol job is off. Below reap-hard's own period (1800 s), or a pass that comes 30 minutes
+# after the last round would find it not yet due and skip: the fallback would then run every second pass. With the job
+# on, whichever of the two comes first runs the round and the other finds it not due.
+FALLBACK_DUE_S = DUE_S
 BUDGET_S = 120
 CANDIDATE_BUDGET_S = 240
 AGENTS_MARGIN_S = 15  # agent_signal.read's 10 s, and the round's own writes after it
@@ -117,9 +122,11 @@ ORPHAN_CONFLICT_H = 2  # a conflict only grows: a PR with no session waits no da
 NOREF_H = 24
 ERROR_ROUNDS = 3
 WATCH_DOWN_MIN = 60
-RENOTIFY = dt.timedelta(minutes=30)
+RENOTIFY = dt.timedelta(hours=4)
+HOLD_CODES = {"I"}
+HOLD_ALONE = dt.timedelta(minutes=60)
 SCREEN_READS = 30
-NEEDS_YOU = {"X", "E", "L", "O"}
+NEEDS_YOU = fleet.PATROL_NEEDS_YOU
 LABEL = {"I": "idle", "X": "exited", "S": "superseded", "O": "orphan PR", "D": "no ref", "E": "error loop",
          "L": "load", "W": "watcher down", "R": "repeat", "H": "stale", "B": "background wait",
          "T": "dead handle", "M": "model"}
@@ -131,7 +138,9 @@ VERDICT_OF = {"I": "idle", "X": "exited", "S": "superseded", "O": "pr_open_no_se
 STALE_WHAT = {"hook": ("a hook error blocks its tools", "hook 오류로 도구가 막힘"),
               "restart": ("a Claude Code update waits on /restart", "업데이트가 /restart 를 기다림")}
 REPEAT_WORD = {"error": "에러", "assistant": "답", "user": "입력", "reload": "reload"}
-SHOW_ONCE = {"R"}  # pending_lines shows these once, not every RENOTIFY
+# pending_lines shows these once, not every RENOTIFY. M's id holds the session and both models, so a drift to another
+# model (or back to an earlier one, once its finding closed) is a new id and is shown again.
+SHOW_ONCE = {"R", "M"}
 # A stalled card loses patrol's protection, so reap closes it within days; no session stays open this long.
 REPEATS_KEEP_DAYS = 90
 ACTIVE = ("run", "waiting", "working")  # what a card's activity verdict keeps; reap.PATROL_KEEP reads the same three
@@ -150,6 +159,21 @@ def all_workers(deadline):
 
 def card_name(path):
     return (path or "").rstrip("/").rsplit("/", 1)[-1]
+
+
+def pr_open(facts, path):
+    """Orca's linkedPR also takes a PR seen on the card's branch. With no session read for the card (the collector
+    stale or failed), the PR is unknown and counts as open."""
+    sessions = [s for s in facts.get("sessions") or () if s.get("path") == path]
+    for s in sessions:
+        if key := (s.get("linked_pr") or {}).get("key"):
+            state = ((facts.get("prs") or {}).get(key) or {}).get("state")
+            return state is None or str(state).upper() == "OPEN"
+        # The collector also pairs a PR found by the card's branch with the session (prs[].session).
+        owned = [p for p in (facts.get("prs") or {}).values() if s.get("id") and p.get("session") == s["id"]]
+        if owned:
+            return any(p.get("state") is None or str(p["state"]).upper() == "OPEN" for p in owned)
+    return not sessions
 
 
 transcript_tail = cardguard.transcript_tail
@@ -583,6 +607,7 @@ def judge(facts, memo):
             mins = (tnow - prog.parse_ts(motion["since"])).total_seconds() / 60
             if mins >= IDLE_MIN and not background(screen_of(facts, handle)):
                 add("I", path, (motion["since"],), f"turn ended {int(mins)} min ago, nothing armed to wake it", handle)
+                findings[-1]["pr_open"] = pr_open(facts, path)
                 if path in stale_paths:
                     hints[path] = "stalled"
                 else:
@@ -728,37 +753,14 @@ def log_rows():
 
 def standing(rows=None):
     """id -> finding row for each occurrence not yet cleared, acked ones with "acked" set. An ack covers the
-    occurrence: once its condition clears, the same id can be found again."""
-    out = {}
-    for r in rows if rows is not None else log_rows():
-        if r.get("op") == "found":
-            out[r["id"]] = r
-        elif r.get("op") in ("owner", "ack") and r["id"] in out:
-            out[r["id"]] = {**out[r["id"]], **({"owner": r.get("owner")} if r["op"] == "owner" else {"acked": True})}
-        elif r.get("op") == "clear":
-            out.pop(r["id"], None)
-    return out
+    occurrence: once its condition clears, the same id can be found again. The dashboard reads the same log through
+    fleet.patrol_standing."""
+    return fleet.patrol_standing(rows if rows is not None else log_rows())
 
 
 def open_findings(rows=None):
     """id -> finding row, for those neither cleared nor acked."""
     return {i: r for i, r in standing(rows).items() if not r.get("acked")}
-
-
-def sync_needs_you(rows=None):
-    """Bring the dashboard's patrol items in step with the log: one cut short by the budget is added, one acked or
-    cleared elsewhere is resolved. An item once added and dismissed on the dashboard is not added again."""
-    # One key per occurrence, so a recurrence after a clear is a new item.
-    want = {f"patrol:{i}:{f.get('detected_at')}": f for i, f in open_findings(rows).items() if f.get("code") in NEEDS_YOU}
-    added = {r.get("key") for r in fleet.read_lines(fleet.state_dir() / "inbox-external.jsonl")
-             if r.get("op") == "add" and str(r.get("key", "")).startswith("patrol:")}
-    shown = {i["key"][4:] for i in fleet.external_items() if i["key"].startswith("ext:patrol:")}
-    for key, f in want.items():
-        if key not in added:
-            fleet.inbox_add("patrol", f"순찰 {f['code']} {f['card']}: {f['title']}", session=f.get("session"),
-                            command=f"orch patrol ack {f['id']}", key=key, source="patrol")
-    for key in shown - set(want):
-        fleet.inbox_resolve(key)
 
 
 # The sources each rule reads: a finding whose source failed this round is kept, not cleared.
@@ -769,7 +771,7 @@ DEPENDS = {"I": {"terminals", "workers", "waits"}, "X": {"terminals", "workers"}
 
 
 def write_round(findings, verdicts, dry, now, failed=()):
-    """Append what is new, clear what went away, keep Needs you in step, and move a finding to its current owner
+    """Append what is new, clear what went away, and move a finding to its current owner
     (the session that started its card, or nobody once that session is gone). (new, cleared)."""
     rows = log_rows()
     live = standing(rows)
@@ -778,15 +780,17 @@ def write_round(findings, verdicts, dry, now, failed=()):
     new = [f for f in findings if f["id"] not in live]
     gone = [r for i, r in live.items() if i not in ids and not DEPENDS.get(r.get("code"), set()) & set(failed)]
     moved = [f for f in findings if f["id"] in live and live[f["id"]].get("owner") != f.get("owner")]
+    linked = [f for f in findings if "pr_open" in f and f["id"] in live and live[f["id"]].get("pr_open") != f["pr_open"]]
     if dry:
         return new, gone
     for f in moved:
         fleet.append_line(LOG, {"op": "owner", "id": f["id"], "owner": f.get("owner"), "at": at})
+    for f in linked:
+        fleet.append_line(LOG, {"op": "pr", "id": f["id"], "pr_open": f["pr_open"], "at": at})
     for f in new:
         fleet.append_line(LOG, {"op": "found", **f, "title": fleet.mask(f["title"], 300), "detected_at": at})
     for r in gone:
         fleet.append_line(LOG, {"op": "clear", "id": r["id"], "at": at})
-    sync_needs_you()
     fleet.write_atomic(VERDICTS, json.dumps({"at": at, "t": now, **verdicts}, ensure_ascii=False))
     return new, gone
 
@@ -800,7 +804,6 @@ def ack(ids, now=None):
             continue
         fleet.append_line(LOG, {"op": "ack", "id": i, "at": at})
         done.append(i)
-    sync_needs_you()
     return done
 
 
@@ -825,17 +828,27 @@ def line(f):
 
 def pending_lines(me, unowned, now=None):
     """Unacked findings routed to terminal `me` (and those routed to nobody, for the orchestrator), each shown again
-    every 30 minutes until acked or cleared; a SHOW_ONCE code only the first time."""
+    every RENOTIFY until acked or cleared; a SHOW_ONCE code only the first time."""
     now = now or fleet.utcnow()
-    mine = [f for f in open_findings().values() if f.get("owner") == me or (unowned and not f.get("owner"))]
+    opened = open_findings()
+    mine = [f for f in opened.values() if f.get("owner") == me or (unowned and not f.get("owner"))]
     shown = fleet.read_json(SHOWN, {}) or {}
     seen = shown.get(me or "-") or {}
     due = [f for f in mine if f["id"] not in seen
            or f.get("code") not in SHOW_ONCE and now - fleet.parse(seen[f["id"]]) >= RENOTIFY]
-    if due:
-        keep = {f["id"]: seen.get(f["id"]) for f in mine if seen.get(f["id"])}
-        keep.update({f["id"]: fleet.iso(now) for f in due})
-        shown[me or "-"] = keep
+    # A card that ended its turn and waits (I) is often a worker that just reported and waits on the very session
+    # reading this: alone, it wakes nobody until it has stayed open HOLD_ALONE; beside another line it goes with it.
+    if all(f.get("code") in HOLD_CODES for f in due):
+        due = [f for f in due if f.get("pr_open") is not False or not f.get("detected_at")
+               or now - fleet.parse(f["detected_at"]) >= HOLD_ALONE]
+    # Pruned every call, for every terminal, not only when something is due: a finding that closed must be new when it
+    # comes back, whoever polls next. Closed means in no one's open set; one only outside this call's scope (unowned or
+    # not) keeps its record.
+    before = shown
+    shown = {t: {i: at for i, at in rec.items() if i in opened and at} for t, rec in before.items() if isinstance(rec, dict)}
+    shown.setdefault(me or "-", {}).update({f["id"]: fleet.iso(now) for f in due})
+    shown = {t: rec for t, rec in shown.items() if rec}
+    if shown != before:
         with contextlib.suppress(OSError):
             fleet.write_atomic(SHOWN, json.dumps(shown))
     return [line(f) for f in due] + ([f"  after dealing with each: orch patrol ack <id> (all {len(due)}: "
@@ -844,9 +857,21 @@ def pending_lines(me, unowned, now=None):
 
 # ---------------------------------------------------------------- round
 
-def due(memo, level, now):
+def due(memo, level, now, every=DUE_S):
     rose = level in ("warn", "danger") and memo.get("level") != level
-    return rose or now - (memo.get("t") or 0) >= DUE_S
+    return rose or now - (memo.get("t") or 0) >= every
+
+
+@contextlib.contextmanager
+def run_lock():
+    STATE.mkdir(parents=True, exist_ok=True)
+    with open(STATE / "patrol-run.lock", "w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        yield True
 
 
 class Budget(BaseException):
@@ -1009,11 +1034,11 @@ def switch_round(drifts, rows, notes, path_of, switch):
         return  # one session a round: each takes up to a minute
 
 
-def round_once(dry=False, if_due=False, now=None, gather_fn=gather, rid=None):
+def round_once(dry=False, if_due=False, now=None, gather_fn=gather, rid=None, fallback=False):
     now = now or time.time()
     memo = fleet.read_json(MEMO, {}) or {}
     level, _ = pressure_level()
-    if if_due and not due(memo, level, now):
+    if if_due and not due(memo, level, now, FALLBACK_DUE_S if fallback else DUE_S):
         return None
     t0 = time.monotonic()
     facts, notes = gather_fn(now, time.time() + BUDGET_S, memo)
@@ -1175,34 +1200,47 @@ def main(argv):
             rows = {i: f for i, f in rows.items() if not f.get("owner") or f.get("owner") == me}
         print("\n".join(line(f) + f" (since {f.get('detected_at')})" for f in rows.values()) or "no open finding")
         return
-    if set(argv) - {"--once", "--if-due", "--dry-run", "--json"}:
+    if set(argv) - {"--once", "--if-due", "--dry-run", "--json", "--fallback"}:
         sys.exit(__doc__)
+    patrol_round(argv)
+
+
+def patrol_round(argv):
     prog.RUN_TIMEOUT = 60  # one hung orca or gh fails its source, within the round's own budget
-    with round_lock(wait=False) as got:
-        if not got:
+    # The whole round, cleanup scans included: a second round started meanwhile (the Orca job, reap-hard's fallback,
+    # a pressure rise) would overwrite the verdicts file before this one's candidates are written.
+    with run_lock() as running:
+        if not running:
             print("patrol: another round is running")
             return
-        signal.signal(signal.SIGALRM, give_up)
-        signal.alarm(BUDGET_S)
-        rid, t0 = round_id(), time.monotonic()
-        try:
-            res = round_once("--dry-run" in argv, "--if-due" in argv, rid=rid)
-        except Budget:
-            signal.alarm(0)
-            if "--dry-run" not in argv:
-                mark_cut(rid, round(time.monotonic() - t0, 1))
-            print(f"patrol: gave up at {BUDGET_S}s; log rows already written stay, and the next round brings "
-                  "Needs you in step with them")
-            return
-        finally:
-            signal.alarm(0)
-    if res is not None:
-        signal.alarm(CANDIDATE_BUDGET_S)
-        try:
-            candidates_phase(res, "--dry-run" in argv)
-        finally:
-            signal.alarm(0)
+        with round_lock(wait=False) as got:
+            if not got:
+                print("patrol: another round is running")
+                return
+            signal.signal(signal.SIGALRM, give_up)
+            signal.alarm(BUDGET_S)
+            rid, t0 = round_id(), time.monotonic()
+            try:
+                res = round_once("--dry-run" in argv, "--if-due" in argv, rid=rid, fallback="--fallback" in argv)
+            except Budget:
+                signal.alarm(0)
+                if "--dry-run" not in argv:
+                    mark_cut(rid, round(time.monotonic() - t0, 1))
+                print(f"patrol: gave up at {BUDGET_S}s; log rows already written stay, and the dashboard reads "
+                      "them from the log")
+                sys.exit(1)  # a cut round is not a clean one: the job record must say so
+            finally:
+                signal.alarm(0)
+        scanned = None
+        if res is not None:
+            signal.alarm(CANDIDATE_BUDGET_S)
+            try:
+                scanned = candidates_phase(res, "--dry-run" in argv)
+            finally:
+                signal.alarm(0)
     print(json.dumps(res, ensure_ascii=False, indent=1) if "--json" in argv else "\n".join(report(res)))
+    if scanned and scanned["sources"].get("candidates") == "timeout":
+        sys.exit(1)  # the scans were cut: recorded in the round, and no clean exit for the job record
 
 
 if __name__ == "__main__":

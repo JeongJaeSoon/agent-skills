@@ -94,13 +94,18 @@ def check_row_write(rid, row, fields):
     pr, worktree = fields.get("pr"), fields.get("worktree")
     if pr is not None and not fleet.FULL_PR_KEY_RE.fullmatch(pr):
         raise ValueError(f"--pr is OWNER/REPO#N (e.g. acme/app#441), not {pr!r}")
-    if pr is None and worktree is None and not fields.get("title"):
+    new = row is None and fields.get("kind") != "lead"  # a lead row is not a card's
+    if pr is None and worktree is None and not fields.get("title") and not new:
         return
     state = fleet_view()
     if state is None:
         return None if pr is None and worktree is None else no_fleet("--pr/--worktree")
     cards = tidy.cards_of(state)
     card = linked_card(rid, row, fields, cards)
+    if new and (card or worktree in cards):
+        wt = (card or cards[worktree])["id"]
+        raise ValueError(f"row {rid} would be card {wt}'s: Orca shows that card as its own row. What Orca does not know about "
+                         f"it goes on the card: `orch board set card:{wt} --phase P --progress N/M --after owner/repo#N`")
     if pr is not None and (card or worktree in cards):
         raise ValueError(f"row {rid} is linked to card {(card or cards[worktree])['id']}: Orca knows its PR, so --pr is not stored")
     if worktree is not None and card and worktree != card["id"]:
@@ -248,11 +253,211 @@ def set_row(rid, **fields):
     """Add or update one row; only the fields given change. reported_at becomes now: the row was confirmed now."""
     if not rid:
         raise ValueError("board set needs a row id")
+    if rid.startswith(ANNOT_PREFIX):
+        return annot_set(rid, **fields)
 
     def go(store):
         check_row_write(rid, store["rows"].get(rid), fields)
         return put(store, rid, fields)
     return change(go)
+
+
+ANNOT_PREFIX = "card:"
+ANNOT_FIELDS = ("phase", "progress", "after", "owner", "next")  # what Orca, GitHub and a card's report do not know
+# Whether the renderer reads board["annots"] (annot_overlay). A migrated row leaves the screen and its annotation shows on
+# the card's row instead; `annot_migrate(apply=True)` refuses while this is False.
+ANNOT_RENDERED = True
+
+
+def annot_overlay(rows, annots, gone=None):
+    """Lay each card annotation over the rows that stand for its card (a row's session, worktree or linked card is the
+    annotation's). gone: the rows `annot-migrate` dropped, {id: row}. A dropped row stays hidden while another row shows its
+    card (that row takes its program); with none, the dropped row is shown again, so the move never makes a card or its
+    owner block vanish. Returns {worktree: [row ids]} for cards with two or more rows (`중복 N건`). rows change in place."""
+    gone = gone or {}
+
+    def by_card():
+        out = {}
+        for rid, r in rows.items():
+            for wt in {r.get("session"), r.get("worktree"), r.get("linked")} - {None}:
+                out.setdefault(wt, []).append(rid)
+        return out
+    def chain(g):
+        """The dropped row g and the rows above it, nearest first, whether they are dropped or shown."""
+        seen = set()
+        while g in gone or g in rows:
+            if g in seen:
+                return
+            seen.add(g)
+            r = gone.get(g) or rows[g]
+            yield r
+            g = r.get("parent")
+    cards = by_card()
+    for key, a in annots.items():
+        wt = key[len(ANNOT_PREFIX):]
+        back = [g for g in (x[len("row:"):] for x in a.get("aliases") or () if x.startswith("row:")) if g in gone]
+        if cards.get(wt):
+            for g in back:  # the replacement is in the dropped row's program, so a program report keeps the card
+                program = next((p["program"] for p in chain(g) if p.get("program")), None)
+                for rid in cards[wt]:
+                    r = rows[rid]
+                    if program and not r.get("program"):
+                        r["program"] = program
+                        above = [p for p in chain(rid)][1:]
+                        if above and next((p["program"] for p in above if p.get("program")), None) != program:
+                            # the card sits under another program's lead: it moves out, so a report of its program still
+                            # draws it (a child whose parent is out of scope is not drawn)
+                            r["repo"] = r.get("repo") or next((p["repo"] for p in above if p.get("repo")), None)
+                            r["parent"] = None
+        elif back:  # nothing else shows the card: the dropped row does, linked to the card by the annotation
+            was = gone[back[0]].get("was") or "moving"
+            # the annotation owns progress, after, owner and next: a field it cleared stays cleared
+            kept = {k: v for k, v in gone[back[0]].items() if k not in ("progress", "after", "owner", "next")}
+            rows[back[0]] = {**kept, "next": "", "status": "moving" if was == "owner" else was, "worktree": wt}
+    dupes = {}
+    for key, a in annots.items():
+        wt = key[len(ANNOT_PREFIX):]
+        ids = by_card().get(wt, [])
+        for rid in ids:
+            r = rows[rid]
+            for k in ("progress", "after", "owner", "next"):
+                if a.get(k):
+                    r[k] = a[k]
+            if a.get("phase"):
+                r["title"] = f"{r['title']} ({a['phase']})"
+                r["phase_note"] = a["phase"]
+        if len(ids) > 1:
+            dupes[wt] = ids
+    return dupes
+
+
+def annot_set(rid, **fields):
+    """`orch board set card:<worktree>`: write the card's annotation (store.ANNOT_KIND row); a field of the row that is
+    Orca's or GitHub's is refused. `-` clears a field. owner and next are the owner-block pair, or a next that is a step
+    after merge (rowstate.POST_MERGE); a card's own milestones are its report's, not an annotation's."""
+    wt = rid[len(ANNOT_PREFIX):].strip()
+    if not wt:
+        raise ValueError("board set card:<worktree> needs the card's worktree id")
+    wrong = [k for k, v in fields.items() if v is not None and k not in ANNOT_FIELDS]
+    if wrong:
+        raise ValueError(f"{rid} is a card annotation: it takes --{', --'.join(ANNOT_FIELDS)}, not --{wrong[0]} "
+                         "(the card's title, PR and state are Orca's)")
+    given = {k: fields[k] for k in ANNOT_FIELDS if fields.get(k) is not None}
+    if not given:
+        raise ValueError(f"board set {rid} needs one of --{', --'.join(ANNOT_FIELDS)}")
+    state = fleet_view()
+    if state is None:
+        no_fleet("card annotation")
+    elif wt not in tidy.cards_of(state):
+        raise ValueError(f"Orca shows no card {wt}")
+
+    def go(store):
+        cur = dict(store["annots"].get(rid) or {"id": rid, "kind": store_db.ANNOT_KIND})
+        for k, v in given.items():
+            if v.strip() in ("-", "—", ""):
+                cur.pop(k, None)
+            elif k == "after" and not re.fullmatch(r"[\w.-]+/[\w.-]+#\d+", v.strip()):
+                raise ValueError("--after is the PR this card waits to merge first: owner/repo#N")
+            else:
+                cur[k] = progress_of(v) if k == "progress" else one_line(v)
+        if "owner" in given and "owner" not in cur and "next" not in given and not rowstate.POST_MERGE.search(cur.get("next") or ""):
+            cur.pop("next", None)  # the block is lifted: its task goes with it
+        if cur.get("owner") and not cur.get("next"):
+            raise ValueError("--owner needs --next: what the owner does")
+        if cur.get("next") and not cur.get("owner") and not rowstate.POST_MERGE.search(cur["next"]):
+            raise ValueError("--next without --owner is a step after merge (release, deploy, ...); the card's own milestones "
+                             "are its report's")
+        if not any(k in cur for k in ANNOT_FIELDS) and not cur.get("aliases"):  # aliases carry a close the card inherits
+            store["annots"].pop(rid, None)
+            return None
+        cur["reported_at"] = fleet.iso(fleet.utcnow())
+        store["annots"][rid] = cur
+        return cur
+    return change(go)
+
+
+def annot_fields(r, rows, me=None):
+    """What a card-linked row says that an annotation may hold: its phase (the title of the phase row it hangs under),
+    progress, after, and the owner block or post-merge step of owner/next (me: the owner's login, as rowstate reads it).
+    A milestone copy in next stays in the event."""
+    out = {}
+    parent = rows.get(r.get("parent")) or {}
+    if parent.get("kind") == "phase" and parent.get("title"):
+        out["phase"] = parent["title"]
+    out.update({k: r[k] for k in ("progress", "after") if r.get(k)})
+    owner, nxt = (r.get("owner") or "").strip(), (r.get("next") or "").strip()
+    if r.get("status") == "owner" or owner and rowstate.is_owner(owner, me):
+        # 🙋 with no owner named is the owner's; with no next either, the pair still has to say what is asked of them
+        out.update(owner=owner if owner and rowstate.is_owner(owner, me) else "오너", next=nxt or "오너 확인")
+    elif nxt and rowstate.POST_MERGE.search(nxt):
+        out["next"] = nxt
+    return out
+
+
+def annot_plan(store=None):
+    """(move, left): move is {card id: (row id, fields)}; left is [(row id, why, command)], the rows that stay. A row is
+    a card's when the worktree the import event kept or the row holds, or the name in its id and title, is a card Orca
+    shows; the evidence has to be one card. Rows of work with no session claim no card and are not here."""
+    state = fleet_view()
+    if state is None:
+        raise ValueError("annot-migrate needs Orca's view (state.json): without it a row's card cannot be told")
+    cards, origins = tidy.cards_of(state), store_db.row_origins()
+    rows = (store or read())["rows"]
+    parents = {r.get("parent") for r in rows.values()} - {None}
+    move, left = {}, []
+    for rid, r in rows.items():
+        if r.get("kind") == "lead" or r.get("status") in ("dropped", "done"):
+            continue
+        claimed = {w for w in (origins.get(rid, {}).get("worktree"), r.get("worktree")) if w}
+        found = {w for w in claimed if w in cards}
+        # every card the text names: tidy.named gives none when it names two, which would hide that evidence
+        found |= {c["id"] for c in cards.values() if tidy.named(f"{rid} {r.get('title') or ''}", {c["id"]: c})}
+        drop = f"orch board drop {rid}"
+        if not found and not claimed:
+            continue
+        if not found:
+            left.append((rid, f"no card of Orca's holds the worktree {', '.join(sorted(claimed))} it claims", drop))
+        elif len(found) > 1:
+            left.append((rid, f"evidence points at {len(found)} cards ({', '.join(sorted(found))})", drop))
+        elif rid in parents:
+            left.append((rid, "rows hang under it", f"orch board drop {rid}  (after its rows are moved or dropped)"))
+        else:
+            move.setdefault(next(iter(found)), []).append(rid)
+    for wt, rids in list(move.items()):
+        if len(rids) > 1:
+            left += [(rid, f"{len(rids)} rows point at card {wt}", f"orch board drop {rid}") for rid in rids]
+            del move[wt]
+    me = (fleet.read_json(fleet.state_dir() / "prs.json", {}) or {}).get("me")
+    return {wt: (rids[0], annot_fields(rows[rids[0]], rows, me)) for wt, rids in move.items()}, left
+
+
+def annot_migrate(apply=False):
+    """Move each card-linked row that has evidence for exactly one card into that card's annotation and mark the row
+    dropped (its original stays in the event); row:<id> becomes the card's alias, so the old close still holds. Dry run
+    unless apply. Safe to run again: a moved row is dropped and no longer a candidate, an annotation field already
+    written wins over the row's."""
+    if apply and not ANNOT_RENDERED:
+        raise ValueError("annot-migrate --apply waits for the renderer to read card annotations (A-ANNOT-b): a moved row "
+                         "would leave the screen with nothing to show in its place. The dry run is available")
+    move, left = annot_plan()
+    if apply and move:
+        def go(store):
+            now = fleet.iso(fleet.utcnow())
+            for wt, (rid, fields) in move.items():
+                key = f"{ANNOT_PREFIX}{wt}"
+                cur = dict(store["annots"].get(key) or {"id": key, "kind": store_db.ANNOT_KIND})
+                pair_free = "owner" not in cur and "next" not in cur  # the pair moves whole or not at all
+                for k, v in fields.items():
+                    if k in cur or k in ("owner", "next") and not pair_free:
+                        continue
+                    cur[k] = v
+                cur["aliases"] = sorted({*cur.get("aliases", ()), f"row:{rid}"})
+                cur["reported_at"] = now
+                store["annots"][key] = cur
+                store["rows"][rid].update(was=store["rows"][rid].get("status"), status="dropped", reported_at=now,
+                                          source="coordinator")  # was: what the render shows if the card has no row
+        change(go)
+    return move, left
 
 
 MATCH_KINDS = ("worktree", "program", "repo")  # most specific first: the order a rule is looked up in
@@ -339,20 +544,18 @@ def with_order(order, add):
     return item
 
 
-def doing_add(title, owner, next_, waiting=False, force=False, why=None, order=None):
-    """waiting: owner is a person this work waits on (a reply, a review), not the agent moving it. force: add it though
-    Orca shows that work, with why in the item's event. order: the owner's order oN this work carries."""
+def doing_add(title, owner, next_, waiting=False, order=None):
+    """waiting: owner is a person this work waits on (a reply, a review), not the agent moving it. order: the owner's
+    order oN this work carries. No override: a title that names live work is reworded, not forced past the check."""
     if order:
-        return with_order(order, lambda: doing_add(title, owner, next_, waiting, force, why))
+        return with_order(order, lambda: doing_add(title, owner, next_, waiting))
     if not all((x or "").strip() for x in (title, owner, next_)):
         raise ValueError("board doing add needs a title, --owner (who moves it) and --next (the next event)")
-    if force and not (why or "").strip():
-        raise ValueError("board doing add --force needs --why")
-    if not force and (seen := live_work(title)):
-        raise ValueError(f"{seen} already shows this work in its own row; --force --why W adds it anyway")
+    if seen := live_work(title):
+        raise ValueError(f"{seen} already shows this work in its own row. The orchestrator's own next step is `orch board todo add`, "
+                         "a card's is a message to the card; a different job that only shares the name gets a reworded title")
     item = {"title": one_line(title), "owner": one_line(owner), "next": one_line(next_),
-            **({"waiting": True, "since": fleet.iso(fleet.utcnow())} if waiting else {}),
-            **({"forced": one_line(why)} if force else {})}
+            **({"waiting": True, "since": fleet.iso(fleet.utcnow())} if waiting else {})}
     def go(store):
         store["doing"].append(item)
         return item  # the same dict the write gives its id to
@@ -926,9 +1129,11 @@ def refresh(now, limit_min):
     return " · ".join(out) or None
 
 
-def drop_acked(lines, prs, rows, have):
+def drop_acked(lines, prs, rows, have, alias=None):
     """(lines without the rows the owner acked, every ackable row as {id, label, at, acked}, the hidden keys).
-    Ackable is ✅, and for a head row every sub-task row under it too (acks.py): a closed PR's row is held, not done."""
+    Ackable is ✅, and for a head row every sub-task row under it too (acks.py): a closed PR's row is held, not done.
+    alias: {row key: [ack ids of the rows `annot-migrate` moved into this card]}; an ack of one stands for the card's row, and
+    its id is the one shown, so un-acking it works."""
     done, hidden = [], set()
     heads = [i for i, l in enumerate(lines) if l["depth"] == 0] + [len(lines)]
     for a, b in zip(heads, heads[1:]):
@@ -937,6 +1142,8 @@ def drop_acked(lines, prs, rows, have):
             if not all(x["status"] == "done" for x in whole):
                 continue
             aid, p, r = f"board:{l['key']}", prs.get(l["pr"]) or {}, rows.get(l["key"]) or {}
+            if aid not in have:
+                aid = next((a for a in (alias or {}).get(l["key"], ()) if a in have), aid)
             done.append({"id": aid, "label": l["name"], "at": p.get("merged_at") or p.get("closed_at") or r.get("reported_at"),
                          "acked": aid in have})
             if aid in have:
@@ -986,6 +1193,9 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             open_dec = fleet.open_decisions()
         except store_db.NotMigrated:  # a DB that is not imported: unknown, and the headline and the ❔ rows say so
             open_dec = []
+    # A row `annot-migrate` moved into a card annotation is dropped: it neither shows nor hides the card's own row.
+    moved_rows = {k: r for k, r in store["rows"].items() if r.get("status") == "dropped"}
+    store["rows"] = {k: r for k, r in store["rows"].items() if k not in moved_rows}
     prs_file = fleet.read_json(sd / "prs.json", {}) or {}
     me = prs_file.get("me")
     prs = {k: {**v["detail"], "probed_at": v.get("probed_at")} for k, v in (prs_file.get("prs") or {}).items() if v.get("detail")}
@@ -1013,6 +1223,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         extra, extra_order = fleet_rows(state, store["leads"], store["rows"], prs, now,
                                         float(limits["subagent_stale_h"]) * 3600, checks, notes=inputs)
         store["rows"], store["order"] = {**extra, **store["rows"]}, store["order"] + extra_order
+    card_dupes = annot_overlay(store["rows"], store.get("annots") or {}, moved_rows)
     rows = store["rows"]
 
     everyone = rows  # every row, before a --scope report keeps only its program's: a group does not depend on the scope
@@ -1079,6 +1290,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
 
     if scope != "top-level":
         rows = {k: r for k, r in rows.items() if up(r, "program") == scope}
+    card_dupes = {wt: kept for wt, ids in card_dupes.items() if len(kept := [i for i in ids if i in rows]) > 1}
     order = [k for k in store["order"] if k in rows]
     repo_name = rowstate.repo_names(up(r, "repo") for r in rows.values())
 
@@ -1268,7 +1480,13 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             states[h["id"]] = rowstate.roll_up(states[h["id"]], kid_status)
             lines[at]["status"] = states[h["id"]]["status"]
 
-    lines, done, hidden = drop_acked(lines, prs, rows, acks.acked())
+    ack_alias = {}
+    for key, a in (store.get("annots") or {}).items():
+        wt = key[len(ANNOT_PREFIX):]
+        for rid in rows:
+            if wt in {rows[rid].get("session"), rows[rid].get("worktree"), rows[rid].get("linked")}:
+                ack_alias.setdefault(rid, []).extend(f"board:{x[len('row:'):]}" for x in a.get("aliases") or ())
+    lines, done, hidden = drop_acked(lines, prs, rows, acks.acked(), ack_alias)
 
     # Per group: how many rows move, wait on a person or a condition, or are done. Counted from the rows themselves, so
     # a reviewer fold, a bullet and a ✅ row folded away still count once each; a row with rows under it is their
@@ -1365,7 +1583,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     for l in lines:
         name = l["sid"] and one_line(sessions[l["sid"]].get("name") or "")
         if name and l["session"] and on_session[l["sid"]] == 1 and name.lower() not in l["name"].lower():
-            l.update(name=name, orca_name=True)
+            phase = (rows.get(l["key"]) or {}).get("phase_note")
+            l.update(name=f"{name} ({phase})" if phase else name, orca_name=True)
 
     # Bold: a row the last report did not have, or whose status, progress, next, PR state or session changed.
     snap = {}
@@ -1753,6 +1972,10 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     # Only the ⏸️ rows: the held items are a queue the pointer line counts (todo_tables lists it).
     if held := list(dict.fromkeys(held)):
         out += ["", heading("⏸️ 보류"), ""] + [it if tg else f"- {it}" for it in held]
+    if card_dupes:
+        out += ["", heading(f"🔁 카드 중복 {len(card_dupes)}건"), ""] + [
+            (it if tg else f"- {it}") for it in (f"{wt}: {', '.join(ids)} → 하나만 남긴다 (`orch board drop <id>`)"
+                                                for wt, ids in card_dupes.items())]
     if insight:
         out += ["", insight.strip()]
     if periodic and skipped:

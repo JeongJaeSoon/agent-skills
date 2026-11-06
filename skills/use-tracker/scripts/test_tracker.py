@@ -53,6 +53,10 @@ if cmd == "issue":
     if os.environ.get("FAKE_ORCA_STATE"):
         name, kind = os.environ["FAKE_ORCA_STATE"].split(":")
         issue["state"] = {"name": name, "type": kind}
+    if os.environ.get("FAKE_ORCA_DESC"):
+        issue["description"] = os.environ["FAKE_ORCA_DESC"]
+    if "--attachments" in args and os.environ.get("FAKE_ORCA_ATTACH"):
+        issue["attachments"] = [{"title": "PR", "url": os.environ["FAKE_ORCA_ATTACH"]}]
     ok({"issue": issue})
 if cmd == "search":
     if rest[0] == "94S-1":
@@ -102,7 +106,10 @@ class Env:
         self.env = {k: v for k, v in os.environ.items()
                     if k not in ("TRACKER_FIXTURES", "JIRA_EMAIL", "JIRA_API_TOKEN")}
         self.env.update(HOME=self.home, PATH=bindir + os.pathsep + os.environ.get("PATH", ""),
-                        FAKE_ORCA_LOG=self.log, FAKE_ORCA_SAMPLE=LINEAR_SAMPLE)
+                        FAKE_ORCA_LOG=self.log, FAKE_ORCA_SAMPLE=LINEAR_SAMPLE,
+                        AGENT_SKILLS_STATE=os.path.join(self.tmp.name, "state"))
+        # Most tests are about an adapter, not about choosing one: name linear so no probe call is logged.
+        self.config({"tracker": {"adapter": "linear"}})
 
     def file(self, name, content):
         path = os.path.join(self.tmp.name, name)
@@ -220,6 +227,9 @@ class FakeJira:
                     return self._reply(201, {"id": "c1"})
                 if m == "POST" and p.endswith("/remotelink"):
                     return self._reply(201, {"id": 10000})
+                if m == "GET" and p.endswith("/remotelink"):
+                    return self._reply(200, [{"id": 1, "object": {"url": "https://github.com/acme/app/pull/5",
+                                                                  "title": "PR"}}])
                 if p.startswith("/rest/api/3/issue/"):
                     key = p.rsplit("/", 1)[1]
                     if m == "PUT":
@@ -590,10 +600,11 @@ class ConfigAndFixtures(unittest.TestCase):
         self.env.close()
 
     def test_defaults_without_config_file_use_linear(self):
-        # Env's HOME has no agent-skills.json, so this exercises the built-in defaults.
+        # With no agent-skills.json and nothing connected (the fake answers neither probe), the adapter is linear.
+        os.remove(os.path.join(self.env.home, ".claude", "agent-skills.json"))
         proc, out = self.env.run("list", "--project", "demo")
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertTrue(self.env.orca_calls())
+        self.assertIn("list-issues", [c[1] for c in self.env.orca_calls()])
 
     def test_precedence(self):
         self.env.config({"tracker": {"adapter": "jira", "jira": {"base_url": "http://127.0.0.1:9"}}})
@@ -611,7 +622,7 @@ class ConfigAndFixtures(unittest.TestCase):
     def test_merge_keeps_defaults(self):
         path = self.env.file("partial.json", {"tracker": {"jira": {"base_url": "https://x.atlassian.net"}}})
         cfg = tracker.load_config(path)
-        self.assertEqual(cfg["tracker"]["adapter"], "linear")
+        self.assertNotIn("adapter", cfg["tracker"])  # unset stays unset so detection can tell
         self.assertEqual(cfg["tracker"]["jira"]["token_env"], "JIRA_API_TOKEN")
         self.assertEqual(cfg["tracker"]["jira"]["base_url"], "https://x.atlassian.net")
 
@@ -636,6 +647,352 @@ class ConfigAndFixtures(unittest.TestCase):
             self.assertEqual(proc.returncode, 1)
             self.assertIn("write operations are disabled", proc.stderr)
         self.assertEqual(self.env.orca_calls(), [])
+
+
+# The detection fake answers the three probes from MODE: {"linear": [keys], "jira": [keys] | null (not connected)}.
+DETECT_ORCA = r'''#!/usr/bin/env python3
+import json, os, sys
+mode = json.load(open(os.environ["FAKE_ORCA_MODE"]))
+with open(os.environ["FAKE_ORCA_LOG"], "a") as fh:
+    fh.write(json.dumps(sys.argv[1:]) + "\n")
+a = sys.argv[1:]
+def ok(r): print(json.dumps({"ok": True, "result": r})); sys.exit(0)
+if a[:3] == ["linear", "team", "list"] and mode["linear"] is None:
+    sys.exit(1)
+if a[:3] == ["linear", "team", "list"]:
+    ok({"teams": [{"key": k} for k in mode["linear"]]})
+if a[:2] == ["jira", "connection"] and mode.get("jira_fail") == "connection":
+    sys.exit(1)
+if a[:3] == ["jira", "project", "list"] and mode.get("jira_fail") == "projects":
+    sys.exit(1)
+if a[:2] == ["jira", "connection"]:
+    ok({"connected": mode["jira"] is not None, "sites": []})
+if a[:3] == ["jira", "project", "list"]:
+    ok({"projects": [{"key": k} for k in mode["jira"] or []]})
+print(json.dumps({"ok": False, "error": {"code": "unknown"}})); sys.exit(1)
+'''
+
+
+class Detect(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        t = self.tmp.name
+        os.makedirs(os.path.join(t, "bin"))
+        os.makedirs(os.path.join(t, "home", ".claude"))
+        orca = os.path.join(t, "bin", "orca")
+        with open(orca, "w") as fh:
+            fh.write(DETECT_ORCA.replace("#!/usr/bin/env python3", "#!" + sys.executable, 1))
+        os.chmod(orca, 0o755)
+        self.mode, self.log, self.repo = (os.path.join(t, "mode.json"), os.path.join(t, "orca.log"),
+                                          os.path.join(t, "repo"))
+        self.git_env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.test", "GIT_COMMITTER_NAME": "t",
+                        "GIT_COMMITTER_EMAIL": "t@example.test", "GIT_CONFIG_GLOBAL": "/dev/null",
+                        "GIT_CONFIG_SYSTEM": "/dev/null"}
+        self.env = dict(os.environ, HOME=os.path.join(t, "home"), PATH=os.path.join(t, "bin") + os.pathsep + os.environ["PATH"],
+                        FAKE_ORCA_MODE=self.mode, FAKE_ORCA_LOG=self.log, AGENT_SKILLS_STATE=os.path.join(t, "state"),
+                        **self.git_env)
+        os.makedirs(self.repo)
+        self.git("init", "-q", "-b", "main")
+        self.git("commit", "-q", "--allow-empty", "-m", "start")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def git(self, *args):
+        subprocess.run(["git", *args], cwd=self.repo, env=self.env, check=True, capture_output=True)
+
+    def connect(self, linear, jira, jira_fail=None):
+        with open(self.mode, "w") as fh:
+            json.dump({"linear": linear, "jira": jira, "jira_fail": jira_fail}, fh)
+        state = os.path.join(self.tmp.name, "state", "tracker-detect.json")
+        if os.path.exists(state):
+            os.remove(state)
+
+    def detect(self, *argv):
+        proc = subprocess.run([sys.executable, TRACKER, *argv, "detect"], cwd=self.repo, env=self.env,
+                              capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return json.loads(proc.stdout)
+
+    def test_no_connection_is_linear(self):
+        self.connect([], None)
+        r = self.detect()
+        self.assertEqual((r["adapter"], r["source"], r["ambiguous"]), ("linear", "default", False))
+
+    def test_one_connection_decides(self):
+        self.connect(["ABC"], None)
+        self.assertEqual(self.detect()["adapter"], "linear")
+        self.connect([], ["ENG"])
+        r = self.detect()
+        self.assertEqual((r["adapter"], r["source"]), ("jira", "orca-connection"))
+
+    def test_failed_jira_probe_is_ambiguous_not_linear(self):
+        # Both trackers hold ABC and the branch names it: a failed Jira probe must not turn that into a Linear write.
+        self.git("checkout", "-q", "-b", "abc-1-fix")
+        for fail in ("projects", "connection"):
+            self.connect(["ABC"], ["ABC"], jira_fail=fail)
+            r = self.detect()
+            self.assertEqual((r["adapter"], r["source"], r["ambiguous"]), ("linear", "ambiguous", True), fail)
+            self.assertIn("probe failed", r["evidence"])
+        self.connect(["ABC"], None)  # Jira answered "not connected": Linear alone is a real answer
+        self.assertFalse(self.detect()["ambiguous"])
+
+    def test_failed_linear_probe_never_selects_jira(self):
+        self.connect(None, ["ENG"])
+        r = self.detect()
+        self.assertEqual((r["adapter"], r["source"], r["ambiguous"]), ("linear", "ambiguous", True))
+        self.assertIn("probe failed", r["evidence"])
+        self.connect([], ["ENG"])  # the probe answered "no teams": Jira is the one
+        self.assertEqual(self.detect()["adapter"], "jira")
+
+    def test_both_connected_branch_key_decides(self):
+        self.connect(["ABC"], ["ENG"])
+        self.git("checkout", "-q", "-b", "me/eng-42-fix")
+        r = self.detect()
+        self.assertEqual((r["adapter"], r["source"]), ("jira", "ticket keys in branch"))
+        self.assertIn("eng-42", r["evidence"])
+        self.connect(["ABC"], ["ENG"])
+        self.git("checkout", "-q", "-b", "me/abc-7-fix")
+        self.assertEqual(self.detect()["adapter"], "linear")
+
+    def test_both_connected_commits_decide_when_branch_is_silent(self):
+        self.connect(["ABC"], ["ENG"])
+        self.git("commit", "-q", "--allow-empty", "-m", "fix(x): ENG-9 handle null")
+        r = self.detect()
+        self.assertEqual((r["adapter"], r["source"]), ("jira", "ticket keys in commits"))
+
+    def test_shared_key_and_no_key_are_ambiguous_and_writes_refuse(self):
+        self.connect(["ABC"], ["ABC"])
+        self.git("checkout", "-q", "-b", "abc-1-x")
+        r = self.detect()
+        self.assertEqual((r["adapter"], r["source"], r["ambiguous"]), ("linear", "ambiguous", True))
+        body = os.path.join(self.tmp.name, "body.md")
+        with open(body, "w") as fh:
+            fh.write("x")
+        proc = subprocess.run([sys.executable, TRACKER, "comment", "ABC-1", "--body-file", body], cwd=self.repo,
+                              env=self.env, capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("pass --adapter", proc.stderr)
+        with open(self.log) as fh:
+            self.assertNotIn("comment", fh.read())
+
+    def test_named_adapter_skips_detection_and_config_is_not_written(self):
+        self.connect(["ABC"], ["ENG"])
+        r = self.detect("--adapter", "jira")
+        self.assertEqual((r["adapter"], r["source"]), ("jira", "--adapter"))
+        self.assertFalse(os.path.exists(self.log))
+        self.detect()
+        self.assertFalse(os.path.exists(os.path.join(self.tmp.name, "home", ".claude", "agent-skills.json")))
+
+    def test_result_is_cached_per_head(self):
+        self.connect(["ABC"], ["ENG"])
+        self.git("checkout", "-q", "-b", "eng-1-x")
+        self.detect()
+        probes = len(open(self.log).read().splitlines())
+        self.detect()
+        self.assertEqual(len(open(self.log).read().splitlines()), probes)
+        self.git("commit", "-q", "--allow-empty", "-m", "next")  # a new HEAD is a new key
+        self.detect()
+        self.assertGreater(len(open(self.log).read().splitlines()), probes)
+
+
+# A fake `gh pr list`: <FAKE_GH_DIR>/<owner>_<repo>.json holds that repo's PRs; --head filters by branch.
+FAKE_GH = r'''#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+with open(os.environ["FAKE_GH_LOG"], "a") as fh:
+    fh.write(json.dumps(args) + "\n")
+if args[:2] == ["pr", "view"]:
+    owner, repo, _, number = args[2].split("/")[-4:]
+    prs = json.load(open(os.path.join(os.environ["FAKE_GH_DIR"], f"{owner}_{repo}.json")))
+    print(json.dumps([p for p in prs if p["number"] == int(number)][0]))
+    sys.exit(0)
+if args[:2] != ["pr", "list"]:
+    sys.exit("fake gh: unhandled " + " ".join(args))
+val = lambda f: args[args.index(f) + 1] if f in args else None
+path = os.path.join(os.environ["FAKE_GH_DIR"], val("--repo").replace("/", "_") + ".json")
+if not os.path.exists(path):
+    sys.exit("GraphQL: Could not resolve to a Repository")
+prs = json.load(open(path))
+if val("--head"):
+    prs = [p for p in prs if p["headRefName"] == val("--head")]
+print(json.dumps(prs))
+'''
+
+
+def pr(number, title="", branch="b", body="", state="OPEN", requests=(), reviews=(), repo="acme/app"):
+    return {"number": number, "url": f"https://github.com/{repo}/pull/{number}", "title": title,
+            "headRefName": branch, "body": body, "state": state,
+            "reviewRequests": [{"login": r} for r in requests],
+            "latestReviews": [{"author": {"login": r}} for r in reviews]}
+
+
+class Reconcile(unittest.TestCase):
+    def setUp(self):
+        self.env = Env()
+        gh = os.path.join(self.env.tmp.name, "bin", "gh")
+        with open(gh, "w") as fh:
+            fh.write(FAKE_GH.replace("#!/usr/bin/env python3", "#!" + sys.executable, 1))
+        os.chmod(gh, 0o755)
+        self.ghdir = os.path.join(self.env.tmp.name, "gh")
+        os.makedirs(self.ghdir)
+        self.fixtures = os.path.join(self.env.tmp.name, "fx")
+        os.makedirs(self.fixtures)
+        self.gh_log = os.path.join(self.env.tmp.name, "gh.log")
+
+    def tearDown(self):
+        self.env.close()
+
+    def ticket(self, state_type, **extra):
+        with open(os.path.join(self.fixtures, "issues.json"), "w") as fh:
+            json.dump([dict(tracker.issue_template(), id="ENG-12", state_type=state_type, **extra)], fh)
+
+    def repo(self, name, prs):
+        with open(os.path.join(self.ghdir, name.replace("/", "_") + ".json"), "w") as fh:
+            json.dump(prs, fh)
+
+    def run_rc(self, *argv, pre=()):
+        return self.env.run(*pre, "reconcile", "ENG-12", *argv, TRACKER_FIXTURES=self.fixtures,
+                            FAKE_GH_DIR=self.ghdir, FAKE_GH_LOG=self.gh_log)
+
+    def test_attached_pr_counts_without_the_id(self):
+        # A PR attached to the ticket delivers it even when its title, branch and body never name the ID,
+        # and even in a repo the run did not name.
+        self.ticket("unstarted", attachments=[{"url": "https://github.com/acme/api/pull/8", "title": "PR"}])
+        self.repo("acme/app", [])
+        self.repo("acme/api", [pr(8, title="unrelated", repo="acme/api")])
+        proc, out = self.run_rc("--repo", "acme/app")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual([(p["repo"], p["number"]) for p in out["prs"]], [("acme/api", 8)])
+        self.assertEqual(out["target"], "started")
+
+    def test_live_adapters_read_attached_prs(self):
+        self.repo("acme/app", [pr(5, title="unrelated")])
+        self.repo("acme/other", [])
+        env = dict(FAKE_GH_DIR=self.ghdir, FAKE_GH_LOG=self.gh_log)
+        proc, out = self.env.run("reconcile", "ENG-12", "--repo", "acme/other",
+                                 FAKE_ORCA_ATTACH="https://github.com/acme/app/pull/5", **env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual([p["number"] for p in out["prs"]], [5])
+        self.assertIn(["linear", "issue", "ENG-12", "--attachments", "--json"], self.env.orca_calls())
+        jira = FakeJira()
+        self.addCleanup(jira.close)
+        self.env.config({"tracker": {"adapter": "jira", "jira": {"base_url": jira.url}}})
+        proc, out = self.env.run("reconcile", "ABC-2", "--repo", "acme/other", JIRA_EMAIL=JIRA_EMAIL,
+                                 JIRA_API_TOKEN=JIRA_TOKEN, **env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual([p["number"] for p in out["prs"]], [5])
+
+    def test_linear_reads_only_the_attachments(self):
+        self.repo("acme/app", [pr(5, title="unrelated")])
+        env = dict(FAKE_GH_DIR=self.ghdir, FAKE_GH_LOG=self.gh_log)
+        # A PR linked in the description for background is not an attached PR.
+        proc, out = self.env.run("reconcile", "ENG-12", "--repo", "acme/app",
+                                 FAKE_ORCA_DESC="background: https://github.com/acme/app/pull/5", **env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual((out["prs"], out["attachments_read"]), ([], True))
+        # An ID `orca linear issue` cannot parse is read by search; its attachments are reported unread.
+        proc, out = self.env.run("reconcile", "ENG-7", "--repo", "acme/app", **env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual((out["id"], out["attachments_read"]), ("ENG-7", False))
+
+    def test_attachment_shapes(self):
+        # A non-PR attachment is skipped; a PR that `gh pr view` cannot read is an error, not a silent miss.
+        self.ticket("unstarted", attachments=[{"url": "https://docs.example.test/spec", "title": "spec"}])
+        self.repo("acme/app", [])
+        proc, out = self.run_rc("--repo", "acme/app")
+        self.assertEqual((proc.returncode, out["prs"]), (0, []))
+        self.ticket("unstarted", attachments=[{"url": "https://github.com/acme/gone/pull/3", "title": "PR"}])
+        proc, _ = self.run_rc("--repo", "acme/app")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("gh pr view", proc.stderr)
+
+    def test_next_keeps_the_config_flag(self):
+        self.ticket("unstarted")
+        self.repo("acme/app", [pr(1, title="ENG-12")])
+        cfg = self.env.file("other cfg.json", {"tracker": {"adapter": "linear"}})
+        proc, out = self.run_rc("--repo", "acme/app", pre=("--config", cfg))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        me = f"python3 {TRACKER} --config '{cfg}'"
+        self.assertEqual(out["next"], [f"{me} transition ENG-12 --to started",
+                                       f"{me} attach ENG-12 --url https://github.com/acme/app/pull/1"])
+        # A `~` path names the file load_config read, not one under the working directory.
+        home_cfg = os.path.join(self.env.home, ".claude", "agent-skills.json")
+        self.env.config({"tracker": {"adapter": "linear"}})
+        proc, out = self.run_rc("--repo", "acme/app", pre=("--config", "~/.claude/agent-skills.json"))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue(out["next"][0].startswith(f"python3 {TRACKER} --config {home_cfg} "), out["next"][0])
+
+    def test_next_keeps_the_adapter_flag(self):
+        self.ticket("unstarted")
+        self.repo("acme/app", [pr(1, title="ENG-12")])
+        proc, out = self.run_rc("--repo", "acme/app", pre=("--adapter", "jira"))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(out["next"][0], f"python3 {TRACKER} --adapter jira transition ENG-12 --to started")
+
+    def test_id_boundaries_and_a_full_page(self):
+        self.ticket("unstarted")
+        self.repo("acme/app", [pr(1, body="Closes x-ENG-12suffix"), pr(2, branch="feat/eng-12_x")]
+                  + [pr(n, title="noise") for n in range(3, 101)])
+        proc, out = self.run_rc("--repo", "acme/app")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual([p["number"] for p in out["prs"]], [2])
+        self.assertEqual(out["search_truncated"], ["acme/app"])
+
+    def test_matching_prs_and_rows(self):
+        self.ticket("unstarted")
+        self.repo("acme/app", [
+            pr(1, title="feat: ENG-12 add x", reviews=["bob"]),
+            pr(2, branch="eng-12-fix", requests=["bob"]),
+            pr(3, body="Closes https://tracker.example.test/issue/ENG-12/slug", state="MERGED"),
+            pr(4, title="follow-up noted", body="see ENG-12"),   # named only in passing
+            pr(5, title="ENG-12 abandoned", state="CLOSED"),       # closed without merging
+            pr(6, title="ENG-123 other")])
+        proc, out = self.run_rc("--repo", "acme/app")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual([p["number"] for p in out["prs"]], [1, 2, 3])
+        self.assertEqual(out["target"], "review")
+        self.assertEqual(out["next"], [
+            f"python3 {TRACKER} transition ENG-12 --to review",
+            f"python3 {TRACKER} attach ENG-12 --url https://github.com/acme/app/pull/1",
+            f"python3 {TRACKER} attach ENG-12 --url https://github.com/acme/app/pull/2"])
+
+    def test_open_pr_without_review_is_started(self):
+        self.ticket("started")
+        self.repo("acme/app", [pr(1, title="ENG-12 a", reviews=["bob"])])
+        self.repo("acme/api", [pr(7, title="ENG-12 b")])
+        proc, out = self.run_rc("--repo", "acme/app", "--repo", "acme/api")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(out["target"], "started")
+        self.assertEqual(len(out["prs"]), 2)
+
+    def test_head_branch_counts_without_the_id(self):
+        self.ticket("unstarted")
+        self.repo("acme/app", [pr(9, branch="my-branch", state="MERGED")])
+        proc, out = self.run_rc("--repo", "acme/app", "--head", "my-branch")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual((out["target"], out["next"]), ("criteria", []))
+        with open(self.gh_log) as fh:
+            self.assertEqual(json.loads(fh.read().splitlines()[-1])[-2:], ["--head", "my-branch"])
+
+    def test_report_rows(self):
+        self.repo("acme/app", [])
+        self.ticket("started")
+        _, out = self.run_rc("--repo", "acme/app")
+        self.assertEqual(out["target"], "report")
+        self.ticket("backlog")
+        _, out = self.run_rc("--repo", "acme/app")
+        self.assertIsNone(out["target"])
+        self.ticket("completed")
+        self.repo("acme/app", [pr(1, title="ENG-12")])
+        _, out = self.run_rc("--repo", "acme/app")
+        self.assertEqual((out["target"], out["next"]), ("report", []))
+
+    def test_gh_failure_is_an_error(self):
+        self.ticket("started")
+        proc, _ = self.run_rc("--repo", "acme/missing")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("gh pr list", proc.stderr)
 
 
 if __name__ == "__main__":
