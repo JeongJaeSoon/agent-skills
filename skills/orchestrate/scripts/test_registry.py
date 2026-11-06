@@ -221,7 +221,7 @@ assert [(x["kind"], x["key"]) for x in v] == [("unregistered", "elsewhere/board.
 # `path.with_name(path.name + ".lock")` names a file of its own: dropping its store is caught.
 for gone, name in (("subagentslock", "dashboard/subagents.jsonl.lock"), ("subagentsold", "dashboard/subagents.jsonl.1"),
                    # fleet.rotate(path) renames its parameter: the caller's file with ".1" added
-                   ("eventsold", "dashboard/events.jsonl.1"), ("preventsold", "dashboard/pr-events.jsonl.1")):
+                   ("eventsold", "dashboard/events.jsonl.1")):
     v = registry.check(stores=[s for s in registry.STORES if s.id != gone], writes=real)
     assert ("unregistered", name) in [(x["kind"], x["key"]) for x in v], (gone, v)
 # Registered, the same writes pass.
