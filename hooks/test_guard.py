@@ -69,6 +69,11 @@ for cmd in (f"{VERDICT} maybe", f"{VERDICT} pass --result fail", f"{VERDICT} pas
             "orch verdict p --pr x --sha abc --source review:codex --reviewer codex --evidence e --result pass",
             "orch verdict p --pr 1 --source review:codex --reviewer codex --evidence e --result pass",
             "orch verdict --pr 1 --sha abc --source review:codex --reviewer codex --evidence e --result pass",
+            "orch verdict '' --pr 1 --sha abc --source review:codex --reviewer codex --evidence e --result pass",
+            "orch verdict ' ' --pr 1 --sha abc --source review:codex --reviewer codex --evidence e --result pass",
+            "orch verdict p --pr 1 --sha abc --reviewer codex --evidence e --result pass",
+            "orch verdict p --pr 1 --sha abc --source review:codex --reviewer --evidence e --result pass",
+            f"{VERDICT} pass --pr 2",
             "orch verdict"):
     assert bash(cmd) == "none", cmd
 for cmd in ("orch verdict p --pr 1 --sha abc --source review:codex", "orch heavy -- make e2e", "orch set p merge_policy autonomous", "orch init p --repo o/r", "orch backfill p", "orch --help", "orch",

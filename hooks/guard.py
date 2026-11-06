@@ -289,7 +289,7 @@ def verdict_allowed(args):
     each flag once with a value, and --reviewer, --evidence and --result pass|fail all present. Who wrote the PR and
     whether the reviewer is independent are checked by prog.py, not here; a bare or partial call still goes to the
     classifier, as does --repo (it creates a program)."""
-    if not args or args[0].startswith("-"):
+    if not args or args[0].startswith("-") or not args[0].strip():
         return False
     flags = {}
     rest = args[1:]
