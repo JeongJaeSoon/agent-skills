@@ -21,7 +21,7 @@ The outputs shown come from a run in a throwaway environment (temporary `HOME`, 
 | Required | `python3` 3.9 or later | Every script. macOS's `/usr/bin/python3` (3.9.6) works |
 | Required for B and C | `gh`, logged in to github.com | The recommended rules about your own repositories, and cloning a private personal repo |
 | For B and C | macOS, Linux | The sync job and the default automations are Orca automations, so Orca must be installed and open for them to run. Setup creates no LaunchAgent. `preview-watch` and `share-server` (off by default) are still LaunchAgents on macOS |
-| Optional | Orca | The multi-session skills (`orchestrate`, `dispatch-card`, `handoff-ticket`) and the scheduled rounds |
+| Optional | Orca | The multi-session skills (`orchestrate`, `dispatch-card`) and the scheduled rounds |
 | Optional | Linear or Jira | Tracker skills. Linear unless `tracker.adapter` says otherwise |
 | Optional | Obsidian or a Markdown folder | Notes skills. Off until `notes.adapter` is set |
 | Optional | tailscale, caddy | `preview-watch` and `share-server`, both off by default |

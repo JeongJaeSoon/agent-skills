@@ -124,7 +124,8 @@ with world() as (w, sd):
     code, out, err = run()
     assert code == 0 and "stopped:" in out and "orch board show: ok" in out and "put back:" in out, (out, err)
     assert w.plan() == want and not (sd / cutover.RECOVER).exists()
-    assert store.migrated_steps() == {"4a-decisions": "tombstoned", "4b-board": "tombstoned"}, store.migrated_steps()
+    assert store.migrated_steps() == {"4a-decisions": "tombstoned", "4b-board": "tombstoned", "6-state": "tombstoned"}, store.migrated_steps()
+    assert "state step:" in out, out
     assert [d["id"] for d in fleet.open_decisions()] == ["d1"]
     n_calls, before = len(w.calls), fingerprint(sd)
     code, out, err = run()
@@ -165,7 +166,7 @@ with world() as (w, sd):
     steps = store.migrated_steps()
     assert steps.get("4a-decisions") and "4b-board" not in steps, steps
     code, out, err = run()
-    assert code == 0 and store.migrated_steps() == {"4a-decisions": "tombstoned", "4b-board": "tombstoned"}, (out, err)
+    assert code == 0 and store.migrated_steps() == {"4a-decisions": "tombstoned", "4b-board": "tombstoned", "6-state": "tombstoned"}, (out, err)
     assert w.plan() == want
 
 # ---- a good import is not called failed because the immutable read cannot see a -wal a lingering reader holds open
@@ -177,7 +178,7 @@ with world() as (w, sd):
     finally:
         store.peek_steps = real_peek
     assert code == 0 and "orch board show: ok" in out and "the import ended but" not in err, (out, err)
-    assert store.migrated_steps() == {"4a-decisions": "tombstoned", "4b-board": "tombstoned"}
+    assert store.migrated_steps() == {"4a-decisions": "tombstoned", "4b-board": "tombstoned", "6-state": "tombstoned"}
 
 # ---- peek_steps sees a commit that sits in the -wal because a reader holds the DB, and writes nothing to do it
 with world(legacy=False, state_name="walpeek") as (w, sd):

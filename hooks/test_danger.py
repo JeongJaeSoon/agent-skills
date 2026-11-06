@@ -10,15 +10,18 @@ HOME = TMP / "home"
 CONFIG = HOME / ".claude" / "agent-skills.json"
 STATE = TMP / "state"
 BIN = TMP / "bin"
+TMPROOT = TMP / "tmproot"
 (HOME / ".claude").mkdir(parents=True)
 BIN.mkdir()
+TMPROOT.mkdir()
 
 
 def env(**extra):
     base = {k: v for k, v in os.environ.items()
             if not k.startswith(("CLAUDE_", "AGENT_SKILLS_", "XDG_")) and k != "ORCA_TERMINAL_HANDLE"}
+    # TMPDIR is a folder of its own, so TMP's other folders (HOME, the repositories) count as outside it.
     base.update(HOME=str(HOME), AGENT_SKILLS_STATE=str(STATE), AGENT_SKILLS_CONFIG=str(CONFIG),
-                PATH=f"{BIN}:/usr/bin:/bin", ORCA_TERMINAL_HANDLE="term_me")
+                PATH=f"{BIN}:/usr/bin:/bin", ORCA_TERMINAL_HANDLE="term_me", TMPDIR=str(TMPROOT))
     base.update(extra)
     return base
 
@@ -71,6 +74,38 @@ git("-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-qm", "a"
 CLEAN = TMP / "clean"
 CLEAN.mkdir()
 git("init", "-q", cwd=CLEAN)
+# Scratch targets for a rehearsal --apply: a folder inside the checkout, and a link inside it to the real ~/.claude.
+(REPOX / "scratch").mkdir()
+(REPOX / "to-real").symlink_to(HOME / ".claude")
+(REPOX / "planted").mkdir()
+(REPOX / "planted" / "settings.json.bak-setup-20260101").symlink_to(TMP / "outside" / "x")
+(REPOX / "alias.json").symlink_to(REPOX / "planted" / "settings.json")
+# A settings child that is a link to a file inside the tree, with a planted backup link beside the resolved file.
+(REPOX / "data").mkdir()
+(REPOX / "data" / "record.json").write_text("{}")
+(REPOX / "data" / "record.json.bak-setup-20260101").symlink_to(TMP / "outside" / "z")
+(REPOX / "childlink").mkdir()
+(REPOX / "childlink" / "setup-applied.json").symlink_to(REPOX / "data" / "record.json")
+(REPOX / "unrelated").mkdir()
+(REPOX / "unrelated" / "notes").symlink_to(TMP / "outside" / "y")
+(REPOX / "linked").mkdir()
+(REPOX / "linked" / "settings.json").symlink_to(HOME / ".claude" / "settings.json")
+
+
+def rehearsal(script="scripts/setup.py", tail="--apply abc --settings-only", pre="", drop=None, **over):
+    """A setup.py command with every target variable assigned to a folder in the checkout; `over` replaces some,
+    `drop` omits one."""
+    scratch = REPOX / "scratch"
+    names = ("HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_SETTINGS", "AGENT_SKILLS_CONFIG", "AGENT_SKILLS_STATE",
+             "AGENT_SKILLS_CONFIG_DIR")
+    values = {n: over.get(n, str(scratch / n.lower())) for n in names if n != drop}
+    return pre + " ".join(f"{n}={v}" for n, v in values.items()) + f" python3 {REPO}/{script} {tail}"
+
+# A checkout holding a symlink to a folder outside it: `rm -rf` removes the link, not the folder.
+LINKED = TMP / "linked"
+LINKED.mkdir()
+git("init", "-q", cwd=LINKED)
+(LINKED / "cache-link").symlink_to("/usr")
 # A stand-in `orca` that says the current worktree is the main one.
 (BIN / "orca").write_text("#!/bin/sh\necho '{\"result\": {\"worktree\": {\"isMainWorktree\": true}}}'\n")
 (BIN / "orca").chmod(0o755)
@@ -83,6 +118,14 @@ OTHER_SETUP.write_text("print('another project')\n")
 SETTINGS = HOME / ".claude" / "settings.json"
 
 configure({"repos": {"acme/app": {"external_llm": False}}})
+
+# Where the test folder sits decides these: under /tmp (a Linux runner) HOME and the repositories count as inside it.
+OUTSIDE_TMP_RM = [] if str(TMP).startswith(("/tmp/", "/private/tmp/")) else [
+    "rm -rf ~/projects", "rm -rf $HOME/.cache/x", "rm -rf ~/x /tmp/y", ("rm -rf ../clean", REPOX),
+    ("rm -rf build", CLEAN.parent), ("rm -rf node_modules", HOME), ("rm -rf .", REPOX),
+    ("find -mindepth 1 -delete", HOME), ("(cd hooks); rm -rf ../../other", REPOX), ("echo $(cd /usr); rm -rf ../other", REPOX)]
+(HOME / ".Trash").mkdir()
+(HOME / ".Trash" / "a.txt").write_text("x")
 
 # (key, level, [(command, cwd)] it is about, [command] that only looks like one)
 CASES = [
@@ -158,7 +201,44 @@ CASES = [
       f"python3 {REPO}/skills/skills-config/scripts/config_emit.py --spec s.json --apply 12ab",
       f"python3 {EMITTED} --apply 12ab", f"python3 {REPO}/skills/tune-automode/scripts/automode_rule.py --apply=1"],
      [f"python3 {REPO}/scripts/setup.py", f"python3 {EMITTED}", f"python3 {OTHER_SETUP} --apply x",
-      f"python3 {REPO}/scripts/bootstrap.py", "echo --apply"]),
+      f"python3 {REPO}/scripts/bootstrap.py", "echo --apply",
+      # A rehearsal: the plugin's setup.py, exactly --apply HASH --settings-only, every target assigned in the
+      # command to an absolute path inside the checkout.
+      (rehearsal(), REPOX), (rehearsal(tail="--settings-only --apply=abc"), REPOX),
+      # Look-alikes of the refused shapes: `cd` inside a path, and a link beside a target that is no backup.
+      (rehearsal(CLAUDE_CONFIG_DIR=f"{REPOX}/scratch/cd/home"), REPOX),
+      (rehearsal(CLAUDE_CONFIG_DIR=f"{REPOX}/scratch/@cd+home"), REPOX),
+      (rehearsal(CLAUDE_SETTINGS=f"{REPOX}/unrelated/settings.json"), REPOX)]),
+    # Not a rehearsal: a target inherited or outside the checkout, reaching the real settings through a link (also
+    # a file inside the scratch folder), `..`, a quoted word or a variable, a wrapper that can undo an assignment,
+    # an option or script the allowlist does not name, or a full setup that also syncs and schedules.
+    ("guard.deny.plugin_apply", "deny",
+     [(rehearsal(drop="AGENT_SKILLS_STATE"), REPOX), (rehearsal(drop="CLAUDE_SETTINGS"), REPOX),
+      (rehearsal(drop="HOME"), REPOX), (rehearsal(CLAUDE_CONFIG_DIR=f"{HOME}/.claude"), REPOX),
+      (rehearsal(CLAUDE_CONFIG_DIR=f"{REPOX}/to-real"), REPOX),
+      (rehearsal(CLAUDE_CONFIG_DIR=f"{REPOX}/scratch/../../home/.claude"), REPOX),
+      (rehearsal(CLAUDE_CONFIG_DIR=f"{REPOX}/linked"), REPOX),
+      (rehearsal(CLAUDE_CONFIG_DIR="$HOME/.claude"), REPOX), (rehearsal(CLAUDE_CONFIG_DIR='"~/.claude"'), REPOX),
+      (rehearsal(CLAUDE_CONFIG_DIR="scratch"), REPOX), (rehearsal(CLAUDE_CONFIG_DIR=f"{TMP}/outside"), REPOX),
+      (rehearsal(tail=f"--apply abc --settings-only --settings {HOME}/.claude/settings.json"), REPOX),
+      (rehearsal(tail=f"--apply abc --settings-only --setting {HOME}/.claude/settings.json"), REPOX),
+      (rehearsal(tail="--apply abc"), REPOX), (rehearsal(tail="--apply abc --settings-only --update"), REPOX),
+      (rehearsal(pre="env -u CLAUDE_CONFIG_DIR "), REPOX), (rehearsal(pre="env -i "), REPOX),
+      (rehearsal(script="scripts/bootstrap.py", tail="--write"), REPOX),
+      (rehearsal(script="skills/skills-config/scripts/config_emit.py", tail="--spec s.json --apply abc"), REPOX),
+      (rehearsal(script="skills/tune-automode/scripts/automode_rule.py", tail="--apply=1"), REPOX),
+      (rehearsal(), TMP), (f"cd {TMP} && " + rehearsal(), REPOX), ("cd . && " + rehearsal(), REPOX),
+      (f"cd {TMP}; cd {REPOX}; " + rehearsal(), REPOX), ("if true; then cd .; fi; " + rehearsal(), REPOX),
+      ("X=1 cd . && " + rehearsal(), REPOX), ("(cd . && " + rehearsal() + ")", REPOX),
+      (rehearsal(CLAUDE_SETTINGS=f"{REPOX}/alias.json"), REPOX),
+      (rehearsal(CLAUDE_CONFIG_DIR=f"{REPOX}/planted"), REPOX),
+      (rehearsal(AGENT_SKILLS_STATE=f"{REPOX}/childlink"), REPOX),
+      # A wrapper after the assignments undoes them as well as one before.
+      (rehearsal().replace(" python3 ", " env -i python3 "), REPOX),
+      (rehearsal().replace(" python3 ", " command python3 "), REPOX),
+      # A link planted beside a target: the backup setup.py writes next to it would follow it out of the tree.
+      (rehearsal(CLAUDE_SETTINGS=f"{REPOX}/planted/settings.json"), REPOX)],
+     []),
     ("guard.deny.slash_send", "deny",
      ["orca terminal send --terminal t1 --text '/reload-plugins'", 'orca terminal send --terminal t1 --text "/model opus"',
       "orca terminal send --terminal t1 --text /reload"],
@@ -190,6 +270,50 @@ CASES = [
                                           "export AGENT_SKILLS_PRESSURE_GATE=0"],
      ["AGENT_SKILLS_PRESSURE_GATE=1 orch heavy p -- npm test", "echo AGENT_SKILLS_PRESSURE_GATE",
       "echo AGENT_SKILLS_PRESSURE_GATE=0"]),
+    ("guard.deny.rm_outside", "deny",
+     ["cd /usr || exit 1; rm -rf local/data", "cd /usr && cd /tmp && cd - && rm -rf local/data", "pushd /usr; rm -rf local/data", "cd /usr && pushd /tmp && popd && rm -rf local/data", "pushd /usr >/dev/null && rm -rf local/data",
+      "cd /usr; cd /tmp & rm -rf local/data", "cd /usr; cd /tmp |& cat; rm -rf local/data",
+      "cd /usr; echo `cd /tmp` `rm -rf local/data`", "rm --recurs --force /usr/local/data","rm --r /usr/local/data", ("cd /usr; cd /tmp | cat; rm -rf local", REPOX),
+      "find /usr/local -name '*.old' -delete","find /opt -exec rm -rf {} +", "find -L /opt -delete", "find -d /usr/local -exec rm -rf {} +", "find -f /opt -delete",
+      ("find -L cache-link -mindepth 1 -type d -exec rm -rf {} +", LINKED),
+      ("find -d /usr/local/x -delete", REPOX),
+      "find -- /usr/local -name '*.old' -delete", "find /usr/local -type d -exec sudo rm -rf {} +",
+      ("find -execdir rm -rf /usr/x ;", REPOX),
+      ("find -L . -mindepth 1 -exec rm -rf {} +", LINKED),
+      ("find -E -L cache-link -name '*.old' -delete", LINKED), ("find -H cache-* -name '*.old' -delete", LINKED),
+      ("find . -exec rm -rf /opt/data {} ;", REPOX), ("find build -execdir rm -r /usr/x ;", REPOX),
+"rm -rf /usr/local/lib/x", "rm -r /Users/someone/proj", "rm -Rf /var/lib/x", "rm --recursive --force /opt/x",
+      "rm -rf -- /usr/x", "sudo rm -rf /usr/x", "rm -rf /tmp", "rm -rf /", "rm -fr /opt",
+      "rm -rf /tmp/../usr/x", "ls && rm -rf /usr/x", "rm -rf /usr/*", ("cd /usr && rm -rf local", REPOX)] + OUTSIDE_TMP_RM,
+     ["rm -rf /tmp/x", "rm -rf /private/tmp/x", f"rm -rf {TMPROOT}/job",
+      ("rm -rf build", REPOX), ("rm -rf build dist", REPOX), ("rm -rf node_modules/.cache", REPOX),
+      ("cd build && rm -rf out", REPOX), ("rm -rf cache-link", LINKED), ("find . -name '*.pyc' -delete", REPOX),
+      ("find build -delete", REPOX), ("(cd /usr); rm -rf build", REPOX), ("(cd /usr && ls); rm -rf build", REPOX),
+      ("find . -exec rm -f {} ;", REPOX),("find cache-link -type l -delete", LINKED),
+      ("find build -type f -execdir rm -rf ../cache ;", REPOX), ("find -H . -name '*.pyc' -delete", LINKED),
+      ("find -name '*.pyc' -delete", REPOX), ("find -- build -name '*.o' -delete", REPOX),
+      ("find -L -P cache-link -type l -delete", LINKED), "find /tmp/x -name '*.log' -delete", "find /usr/local -name '*.old'",
+      ("find . -name '*.tmp' -exec rm {} ;", REPOX), "find /usr/local -exec ls {} ;", ("rm -rf ./dist", REPOX), (f"rm -rf {REPOX}/build", REPOX),
+      "rm /usr/x/file.txt", "rm -f /usr/local/x.log", "echo rm -rf /usr/x", "git rm -r --cached x",
+      'rm -rf "${DIR:?}/build"', "rm -ri", "rmdir /usr/x"]),
+    ("guard.deny.trash_empty", "deny",
+     ["rm -rf ~/.Trash/*", "rm -rf ~/.Trash", "rm -f ~/.Trash/*", "rm -rf $HOME/.Trash/old", "sudo rm -rf ~/.Trash/*",
+      "rm -r ~/.Trash/a.txt", "rm -f ~/.Tra[s]h/*", "rm -rf ~/.local/share/Trash/files", "rm -rf /Volumes/Disk/.Trashes/501",
+      "osascript -e 'tell application \"Finder\" to empty trash'",
+      "osascript -e 'tell application \"Finder\" to empty the trash'", "trash-empty", "gio trash --empty",
+      "osascript -l JavaScript -e 'Application(\"Finder\").empty()'",
+      "osascript -e 'tell application \"Finder\" to empty'",
+      "osascript -e 'tell application \"Finder\"' -e 'empty' -e 'end tell'", "find ~/.Trash -mindepth 1 -delete",
+      "osascript -e'tell application \"Finder\"' -e 'empty' -e 'end tell'",
+      "osascript -e 'tell application \"Finder\"' -e 'empty (trash)' -e 'end tell'",
+      "osascript -e 'tell application \"Finder\"' -e 'empty -- cleanup' -e 'end tell'",
+      "osascript -e 'tell application \"Finder\"' -e 'empty without security' -e 'end tell'",
+      "osascript -e 'tell application \"Finder\"' -e 'empty (the trash)' -e 'end tell'",
+      ("find -mindepth 1 -delete", HOME / ".Trash"), "find -- ~/.Trash -mindepth 1 -delete",
+      "find ~/.Trash -mindepth 1 -exec rm -rf {} +"],
+     ["ls ~/.Trash", "echo rm -rf ~/.Trash", "mv x ~/.Trash/", "rm ~/.Trash/a.txt", "trash-list", "echo trash-empty", "gio trash somefile", "gio trash --list",
+      "osascript -e 'tell application \"Finder\" to get name'",
+      "osascript -e 'tell application \"Finder\" to get name of every disk whose name is \"empty\"'"]),
     ("guard.warn.rm_expansion", "warn", ["rm -rf $DIR/build", "rm *.log", "rm -f /tmp/x/*"],
      ['rm -rf "${DIR:?}/build"', "rm -rf ${DIR:?}/build", "rm -f /tmp/x/a.log", 'rm "$F"']),
     ("guard.warn.reset_hard", "warn", [("git reset --hard origin/main", REPOX)],

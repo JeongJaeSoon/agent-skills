@@ -185,22 +185,22 @@ for sleep in ("60", "180", "299", "5m", "2m"):
         assert monitor(cmd) == ("none", ""), "300 s exactly is allowed: " + cmd
         continue
     verdict, warning = monitor(cmd)
-    assert verdict == "none" and "pr_watch.py" in warning and "orchestrate.pr_poll" in warning, (cmd, verdict, warning)
+    assert verdict == "none" and "`pr-watch --repo" in warning and "orchestrate.pr_poll" in warning, (cmd, verdict, warning)
 for cmd in ("while true; do gh pr list --state all --json number; sleep 120; done",
             "until gh pr checks 5 | grep -qv pending; do sleep 30; done"):
-    assert "pr_watch.py" in monitor(cmd)[1], cmd
+    assert "`pr-watch --repo" in monitor(cmd)[1], cmd
 for cmd in ("while true; do gh pr view 5; sleep .5; done", "while true; do gh pr view 5; sleep 0; done",
             "while true; do sleep 60; gh pr view 5; done"):
-    assert "pr_watch.py" in monitor(cmd)[1], cmd
+    assert "`pr-watch --repo" in monitor(cmd)[1], cmd
 for cmd in ("while true; do gh --repo a/b pr view 1; sleep 60; done", "while true; do gh -R a/b pr list; sleep 60; done",
             "while true; do gh --repo=a/b pr checks 1; sleep 60; done",
             "while true; do gh pr view 1; sleep 300; done & while true; do gh pr view 2; sleep 60; done; wait"):
-    assert "pr_watch.py" in monitor(cmd)[1], "any short poll warns: " + cmd
+    assert "`pr-watch --repo" in monitor(cmd)[1], "any short poll warns: " + cmd
 assert monitor("while true; do gh -R a/b pr view 1; sleep 300; done") == ("none", "")
 assert monitor("gh -R a/b run list; sleep 60") == ("none", "")
 for cmd in ("sleep 300; while true; do gh pr view 5; sleep 60; done",
             "sleep 300; until gh pr view 5 | grep -q MERGED; do sleep 30; done; echo merged"):
-    assert "pr_watch.py" in monitor(cmd)[1], "a sleep outside the loop is a one-off: " + cmd
+    assert "`pr-watch --repo" in monitor(cmd)[1], "a sleep outside the loop is a one-off: " + cmd
 for cmd in ("sleep 60; while true; do gh pr view 5; sleep 300; done",
             "while true; do for i in 1 2; do echo $i; sleep 1; done; gh pr view 5; sleep 300; done",
             "while true; do gh pr view 5; sleep 150; sleep 150; done",
@@ -212,6 +212,7 @@ for cmd in ("until gh pr view 5 --json state | grep -q MERGED; do sleep 300; don
             "until gh run view 9 | grep -q completed; do sleep 60; done",
             "gh pr view 5 --json state",
             "python3 skills/orchestrate/scripts/pr_watch.py --repo acme/app",
+            "pr-watch --repo acme/app",
             "until gh pr view 5 | grep -q MERGED; do sleep $N; done",
             "echo 'gh pr view 5; sleep 60'"):
     assert monitor(cmd) == ("none", ""), "no warning: " + cmd
@@ -232,7 +233,7 @@ for cmd in ("while true; do gh pr view 1; echo done; sleep 60; done",
             "while true; do gh pr view 1; (sleep 300 &); wait $!; done",
             "! while true; do gh pr view 1; sleep 60; done",
             "!while true; do gh pr view 1; sleep 60; done"):
-    assert "pr_watch.py" in monitor(cmd)[1], "must warn: " + cmd
+    assert "`pr-watch --repo" in monitor(cmd)[1], "must warn: " + cmd
 for cmd in ("gh pr view 1; sleep 60",
             "while true; do gh pr view 1; sleep 300 & wait; done",
             "while true; do gh pr view 1; sleep 300 & wait $!; done",

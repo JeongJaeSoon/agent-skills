@@ -155,9 +155,23 @@ def assess(store, state, prs, me=None, now=None):
     for t in store.get("owner_todo") or []:
         if ev := refs_over(fleet.pr_refs(t["title"]), prs, closed_ok=True):
             put(t["id"], "done", "pr_over", ev, t["title"], item=t)
+    by_lower = {k.lower(): k for k in prs}  # a PR's key keeps the case its source wrote
+    parents = {r.get("parent") for r in (store.get("rows") or {}).values()}
     for rid, r in (store.get("rows") or {}).items():
         at = fleet.parse(r.get("reported_at"))
         card = cards.get(r.get("worktree")) or named(f"{rid} {r.get('title') or ''}", cards)  # `--worktree` first
+        if r.get("status") == "moving" and not r.get("owner") and rid not in parents:  # an owner's or another person's turn, and a row whose children decide, are never closed by the tick
+            linked = cards.get(r.get("worktree"))  # a card found by name may be another task's: only the row's own pr or its `--worktree` card is evidence
+            ev = refs_over([by_lower.get((r.get("pr") or "").lower(), r.get("pr")), linked and (linked["pr"] or linked["newest_pr"])], prs)
+            if ev and card and card["id"] in live:
+                put(f"row:{rid}", "check", "row_pr_merged_card_busy", f"{ev} · 카드 {card['name']} 작업 중", r.get("title") or rid)
+                continue
+            if ev and POST_MERGE.search(r.get("next") or ""):
+                put(f"row:{rid}", "check", "row_pr_merged_steps_left", f"{ev} · 남은 단계: {r['next']}", r.get("title") or rid)
+                continue
+            if ev:
+                put(f"row:{rid}", "done", "row_pr_merged", ev + (f" (카드 {linked['name']})" if linked else ""), r.get("title") or rid, row=r)
+                continue
         if (r.get("status") == "moving" and not r.get("pr") and not (card and (card["pr"] or card["id"] in live))
                 and at and (now - at).total_seconds() > STALE_H * 3600):
             put(f"row:{rid}", "check", "stale", f"{int((now - at).total_seconds() // 3600)}h 갱신 없음 · 근거 PR·작업 중 세션 없음",
@@ -285,7 +299,8 @@ def run(now=None, dry=False):
             cur = have.get(iid) or {}
             row = {"ev": "done", "id": iid, "ts": ts, "by": "auto", "rule": v["rule"], "evidence": v["evidence"], "label": v["label"]}
             if (not stands(cur, iid, v.get("mark"), closures) and not undone(cur, v) and fits(row)
-                    and (not v.get("item") or store.item_same(db, v["item"]))):
+                    and (not v.get("item") or store.item_same(db, v["item"]))
+                    and (not v.get("row") or store.board(db)["rows"].get(iid.removeprefix("row:")) == v["row"])):
                 yield row, v.get("mark")
     if dry:
         with store.read() as db:

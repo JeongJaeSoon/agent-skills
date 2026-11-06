@@ -48,6 +48,7 @@ as written: outside quotes, plain characters only (no operators, redirections, s
 variables other than $ORCA_TERMINAL_HANDLE), so the allowed prefix cannot carry another command or verb. Everything else gets no decision and takes the normal permission flow.
 
 Before all of that, the rules of lib/danger.py (pattern kill, prune, `compose down -v`, forced worktree removal,
+recursive `rm` outside the checkout and temp folders, emptying the trash,
 writes to the user's own settings and the rest of its RULES, on Bash and on Edit, Write and NotebookEdit) and
 lib/coordination.py (AskUserQuestion, foreground waits and a send to /dev/null from a role session, by roles.py's
 matrix). A deny there wins; a warn rides along with whatever else is decided; an ask turns an allow into a dialog.
@@ -269,6 +270,8 @@ def bash(cmd, background, who, cwd=None):
         return decide("allow", f"{PLUGIN}: orca orchestration {words[2]}")
     if words[0] == "orch" and len(words) > 1 and words[1] not in ORCH_ASK and words[1][:1].isalpha():
         return decide("allow", f"{PLUGIN}: orch {words[1]} (the program ledger and landing gate)")
+    if words[:2] == ["orch", "verdict"] and verdict_allowed(words[2:]):
+        return decide("allow", f"{PLUGIN}: orch verdict (names a reviewer and evidence; prog.py checks independence)")
     if words[0] == "skills-sync":
         reason = sync_allowed(words[1:])
         if reason:
@@ -277,6 +280,28 @@ def bash(cmd, background, who, cwd=None):
     if reason:
         return decide("ask", reason)
     return None, None
+
+
+VERDICT_FLAGS = {"--pr", "--sha", "--source", "--reviewer", "--evidence", "--result", "--note"}
+
+
+def verdict_allowed(args):
+    """`orch verdict` is the review gate's record, so only the attributable form skips the classifier: one program,
+    each flag once with a value, and --reviewer, --evidence and --result pass|fail all present. Who wrote the PR and
+    whether the reviewer is independent are checked by prog.py, not here; a bare or partial call still goes to the
+    classifier, as does --repo (it creates a program)."""
+    if not args or args[0].startswith("-") or not args[0].strip():
+        return False
+    flags = {}
+    rest = args[1:]
+    if len(rest) % 2:
+        return False
+    for name, value in zip(rest[::2], rest[1::2]):
+        if name not in VERDICT_FLAGS or name in flags or value.startswith("--") or not value.strip():
+            return False
+        flags[name] = value
+    return (flags.get("--result") in ("pass", "fail") and "--reviewer" in flags and "--evidence" in flags
+            and flags.get("--pr", "").isdigit() and "--sha" in flags and "--source" in flags)
 
 
 def sync_allowed(args):

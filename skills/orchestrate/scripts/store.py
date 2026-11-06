@@ -20,6 +20,9 @@ Commands (prog.py `orch db`):
   dump [TABLE]                                 read-only JSON of the tables
   backup FILE | restore FILE [--rehearsal]     a lossless copy (Connection.backup), and putting one back
   cutover-plan 4a|4b                           the commands the owner runs around an import; runs none of them
+  state                                        acks.jsonl and stages.json -> tables, backup first, tombstones in their place
+  export --legacy --target state DIR           those two files as older code reads them (the way back)
+  rollback state DIR                           put that export back and take the step out of the DB
   migrate [--check]                            the whole cutover in one rerunnable command (cutover.py); owner only
   init                                         a new PC: an empty DB with both steps done, only when no state exists
 """
@@ -817,10 +820,18 @@ def _land_row(r):
     return None if r is None else {**dict(r), "audit": json.loads(r["audit"]) if r["audit"] else None}
 
 
-def land_put(program, home, repo, pr, sha, base_sha, klass, requester, by=None):
+def land_put(program, home, repo, pr, sha, base_sha, klass, requester, by=None, only_new=False):
     """(row, outcome): outcome is "same" when an open request names this sha, "busy" when the executor is running an
-    open request for another sha (nothing changes), else "new", after superseding a queued one for another sha."""
+    open request for another sha (nothing changes), else "new", after superseding a queued one for another sha.
+    only_new: the auto-queue's rule, checked in the same transaction as the insert: when a request of any status
+    already names this sha, nothing changes and the outcome is "seen" (a concurrent `orch land` may have moved the
+    queue from this sha to another and back since the caller looked)."""
     with _land_tx() as db:
+        if only_new:
+            seen = db.execute("SELECT * FROM land_request WHERE home=? AND repo=? AND program=? AND pr=? AND sha=? "
+                              "ORDER BY id DESC LIMIT 1", (home, repo, program, pr, sha)).fetchone()
+            if seen:
+                return _land_row(seen), "seen"
         old = db.execute("SELECT * FROM land_request WHERE home=? AND repo=? AND program=? AND pr=? "
                          "AND status IN ('queued','running')", (home, repo, program, pr)).fetchone()
         if old and old["sha"] == sha:
@@ -842,6 +853,14 @@ def land_put(program, home, repo, pr, sha, base_sha, klass, requester, by=None):
         row = db.execute("SELECT * FROM land_request WHERE id=?", (cur.lastrowid,)).fetchone()
         _event(db, "land_request", str(row["id"]), "queued", by, None, dict(row))
         return _land_row(row), "new"
+
+
+def land_seen(program, home, repo, pr, sha):
+    """Has a request of any status ever named this program's PR at this head? A refused or merged one counts: the
+    auto-queue asks once per head."""
+    with _land_tx() as db:
+        return db.execute("SELECT 1 FROM land_request WHERE home=? AND repo=? AND program=? AND pr=? AND sha=? LIMIT 1",
+                          (home, repo, program, pr, sha)).fetchone() is not None
 
 
 def land_get(rid):
@@ -1205,6 +1224,370 @@ def orders_unlinked(db):
         "ORDER BY created_at, CAST(substr(id,2) AS INTEGER)")]
 
 
+# ---------------------------------------------------------------- acks and the stage table (acks.py, stages.py)
+
+# An optional step like the land queue: NEEDS leaves it out, so every reader keeps working on acks.jsonl and stages.json
+# until `orch db state` moved them in. After it both files are tombstones (a directory in their place, so a legacy
+# writer fails loudly) and these tables are the only copy; the backup directory keeps the files themselves.
+STATE_STEP = "6-state"
+STATE_FILES = ("acks.jsonl", "stages.json")
+STATE_LOCKS = ("acks.lock", "stages.lock")
+ACK_KINDS = ("stage", "board", "req")
+STAGE_COLS = ("merge", "dev", "prod")
+STAGE_MARKS = ("ok", "fail", "partial", "checking", "na")
+PR_KEY = re.compile(r"([\w.-]+/[\w.-]+)#(\d+)")
+SCHEMA_STATE = (
+    # A reference to a GitHub PR, never canonical: the key plus what a screen or a rule decides on. repo is lower-cased
+    # (one key for a repository whose case differs between sources); name is the nameWithOwner as the source wrote it.
+    # Rows made before a collector saw the PR are 'unknown'.
+    """CREATE TABLE pr_ref (
+  repo TEXT NOT NULL, number INTEGER NOT NULL, name TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('unknown','open','merged','closed')),
+  draft INTEGER NOT NULL DEFAULT 0 CHECK (draft IN (0,1)),
+  head_sha TEXT, base_ref TEXT, author TEXT, assignee TEXT, ci TEXT, review_decision TEXT, merge_state TEXT,
+  merged_at TEXT, merge_sha TEXT, closed_at TEXT,
+  last_seen_at TEXT NOT NULL, refreshed_by TEXT NOT NULL,
+  PRIMARY KEY (repo, number),
+  CHECK (state = 'merged' OR merged_at IS NULL)
+) WITHOUT ROWID""",
+    """CREATE TABLE stage_row (
+  id TEXT PRIMARY KEY, parent TEXT REFERENCES stage_row(id),
+  grp INTEGER NOT NULL DEFAULT 0 CHECK (grp IN (0,1)), overlay INTEGER NOT NULL DEFAULT 0 CHECK (overlay IN (0,1)),
+  title TEXT, pr_repo TEXT, pr_number INTEGER, created_at TEXT NOT NULL,
+  done_at TEXT,
+  pos INTEGER NOT NULL,
+  program TEXT GENERATED ALWAYS AS (CASE WHEN instr(id, '/') > 0 THEN substr(id, 1, instr(id, '/') - 1) END) VIRTUAL,
+  FOREIGN KEY (pr_repo, pr_number) REFERENCES pr_ref(repo, number)
+)""",
+    """CREATE TABLE stage_cell (
+  row_id TEXT NOT NULL REFERENCES stage_row(id),
+  col TEXT NOT NULL CHECK (col IN ('merge','dev','prod')),
+  mark TEXT NOT NULL CHECK (mark IN ('ok','fail','partial','checking','na')),
+  evidence TEXT, by TEXT, ts TEXT NOT NULL,
+  PRIMARY KEY (row_id, col)
+) WITHOUT ROWID""",
+    "CREATE TABLE stage_env (env TEXT PRIMARY KEY CHECK (env IN ('dev','prod')), version TEXT NOT NULL, ts TEXT NOT NULL)",
+    "CREATE TABLE stage_next (pos INTEGER PRIMARY KEY, text TEXT NOT NULL)",
+    # The owner saw it. History is the data: the fold of the events is the acked set. key is a stage row id or a brief row
+    # key (a board row id, an alias, fleet:<id>::<path>, agent:<id>); derived rows are not tables, so it is no foreign key.
+    """CREATE TABLE ack_event (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL,
+  ev TEXT NOT NULL CHECK (ev IN ('ack','unack')),
+  kind TEXT NOT NULL CHECK (kind IN ('stage','board','req')),
+  key TEXT NOT NULL
+)""",
+    "CREATE INDEX ack_event_key ON ack_event(kind, key, seq)",
+)
+STATE_TABLES = ("ack_event", "stage_next", "stage_env", "stage_cell", "stage_row", "pr_ref")  # dropped in this order
+
+
+def _legacy(step):
+    return STATE_FILES if step == STATE_STEP else LEGACY.get(step, ())
+
+
+def state_ready():
+    """Whether acks and the stage table live in the DB; False without a DB or before `orch db state`."""
+    return STATE_STEP in migrated_steps()
+
+
+def state_command():
+    return f"{main_checkout()}/bin/orch db state"
+
+
+def pr_split(text):
+    """('owner/repo', number) of an `owner/repo#N` text, else None."""
+    m = PR_KEY.fullmatch((text or "").strip())
+    return (m.group(1), int(m.group(2))) if m else None
+
+
+def _pr_stub(db, repo, number, by):
+    """The reference row a stage row points at, made 'unknown' when no collector has seen the PR yet."""
+    db.execute("INSERT OR IGNORE INTO pr_ref (repo, number, name, state, last_seen_at, refreshed_by) "
+               "VALUES (?,?,?, 'unknown', ?, ?)", (repo.lower(), number, repo, now(), by))
+
+
+def _ack_fold(db):
+    """The fold in SQL: an id is acked when its newest event is an ack."""
+    return {f"{r['kind']}:{r['key']}": r["ts"] for r in db.execute(
+        "SELECT kind, key, ts FROM ack_event e WHERE ev='ack' AND seq="
+        "(SELECT max(seq) FROM ack_event WHERE kind=e.kind AND key=e.key)")}
+
+
+def ack_fold():
+    """id (`stage:<row>`, `board:<key>`) -> when it was acked. Callers check state_ready() first: before it the acks are
+    in acks.jsonl, which acks.py reads."""
+    with read() as db:
+        return _ack_fold(db)
+
+
+def ack_change(fn, ts):
+    """fn(have) -> (events [(ev, id)], result), run in one transaction with the acked set; the events are appended."""
+    with tx() as db:
+        events, out = fn(_ack_fold(db))
+        for ev, aid in events:
+            kind, key = aid.split(":", 1)
+            db.execute("INSERT INTO ack_event (ts, ev, kind, key) VALUES (?,?,?,?)", (ts, ev, kind, key))
+        return out
+
+
+def _stage_hidden(rows, cutoff):
+    """Ids of finished rows older than the cutoff and of the rows under them: stored, not shown."""
+    gone = {k for k, r in rows.items() if r.get("done_at") and r["done_at"] < cutoff}
+    while more := {k for k, r in rows.items() if r.get("parent") in gone} - gone:
+        gone |= more
+    return gone
+
+
+def _stage_load(db):
+    rows = {}
+    for r in db.execute("SELECT s.*, p.name FROM stage_row s LEFT JOIN pr_ref p ON p.repo=s.pr_repo AND p.number=s.pr_number "
+                        "ORDER BY s.pos, s.id"):
+        row = {"id": r["id"], "cells": {}, "created_at": r["created_at"]}
+        for k in ("title", "parent", "done_at"):
+            if r[k] is not None:
+                row[k] = r[k]
+        if r["name"] is not None:
+            row["pr"] = f"{r['name']}#{r['pr_number']}"
+        if r["grp"]:
+            row["group"] = True
+        if r["overlay"]:
+            row["overlay"] = True
+        rows[r["id"]] = row
+    for c in db.execute("SELECT row_id, col, mark, evidence, by, ts FROM stage_cell"):
+        rows[c["row_id"]]["cells"][c["col"]] = {"mark": c["mark"], "evidence": c["evidence"], "by": c["by"], "at": c["ts"]}
+    env = {r["env"]: r["version"] for r in db.execute("SELECT env, version FROM stage_env")}
+    if env:  # the file kept one time for both: the latest
+        env["at"] = db.execute("SELECT max(ts) FROM stage_env").fetchone()[0]
+    return {"rows": rows, "order": list(rows), "env": env,
+            "next": [r["text"] for r in db.execute("SELECT text FROM stage_next ORDER BY pos")]}
+
+
+def stage_read_in(db, keep_s):
+    """The stage table in the shape stages.json had, {rows, order, env, next}, without finished rows older than keep_s
+    (and the rows under them): they stay stored, only hidden."""
+    st = _stage_load(db)
+    hide = _stage_hidden(st["rows"], fleet.iso(fleet.utcnow() - dt.timedelta(seconds=keep_s)))
+    st["rows"] = {k: r for k, r in st["rows"].items() if k not in hide}
+    st["order"] = [k for k in st["order"] if k in st["rows"]]
+    return st
+
+
+def stage_read(keep_s):
+    """stage_read_in on its own snapshot. Callers check state_ready() first: before it stages.py reads stages.json."""
+    with read() as db:
+        return stage_read_in(db, keep_s)
+
+
+def _stage_save(db, before, after, by):
+    """Write what fn changed in `after` (the shape of stage_read). A row in `before` and not in `after` is dropped."""
+    for rid, r in after["rows"].items():
+        if r.get("pr") and not pr_split(r["pr"]):  # nothing else holds the text, so it is refused, not dropped
+            raise ValueError(f"{rid}: pr must look like owner/repo#N, got {r['pr']!r}")
+    db.execute("PRAGMA defer_foreign_keys=ON")
+    gone = set(before["rows"].keys() - after["rows"].keys())
+    todo = set(gone)
+    while todo:  # finished rows past retention are stored but hidden, so `before` does not list them: they go with the parent
+        todo = {r[0] for r in db.execute(f"SELECT id FROM stage_row WHERE parent IN ({','.join('?' * len(todo))})",
+                                         tuple(todo))} - gone
+        gone |= todo
+    for rid in gone:
+        db.execute("DELETE FROM stage_cell WHERE row_id=?", (rid,))
+        db.execute("DELETE FROM stage_row WHERE id=?", (rid,))
+    order = [k for k in after["order"] if k in after["rows"]] + [k for k in after["rows"] if k not in after["order"]]
+    for pos, rid in enumerate(order):
+        r = after["rows"][rid]
+        pr = pr_split(r.get("pr"))
+        if pr:
+            _pr_stub(db, *pr, by)
+        db.execute("INSERT INTO stage_row (id, parent, grp, overlay, title, pr_repo, pr_number, created_at, done_at, pos) "
+                   "VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET parent=excluded.parent, grp=excluded.grp, "
+                   "overlay=excluded.overlay, title=excluded.title, pr_repo=excluded.pr_repo, pr_number=excluded.pr_number, "
+                   "done_at=excluded.done_at, pos=excluded.pos",
+                   (rid, r.get("parent"), int(bool(r.get("group"))), int(bool(r.get("overlay"))), r.get("title"),
+                    pr[0].lower() if pr else None, pr[1] if pr else None, r.get("created_at") or now(), r.get("done_at"), pos))
+        db.execute("DELETE FROM stage_cell WHERE row_id=?", (rid,))
+        for col, c in r["cells"].items():
+            db.execute("INSERT INTO stage_cell (row_id, col, mark, evidence, by, ts) VALUES (?,?,?,?,?,?)",
+                       (rid, col, c["mark"], c.get("evidence"), c.get("by"), c.get("at") or now()))
+    db.execute("DELETE FROM stage_env")
+    for env in ("dev", "prod"):
+        if after["env"].get(env):
+            db.execute("INSERT INTO stage_env (env, version, ts) VALUES (?,?,?)",
+                       (env, after["env"][env], after["env"].get("at") or now()))
+    db.execute("DELETE FROM stage_next")
+    for pos, text in enumerate(after["next"]):
+        db.execute("INSERT INTO stage_next (pos, text) VALUES (?,?)", (pos, text))
+
+
+def stage_change(fn, keep_s, by="orch stage"):
+    """Run fn(table) on the visible stage table in one transaction and store what it changed; returns fn's result.
+    Callers check state_ready() first: before it stages.py writes stages.json itself."""
+    with tx() as db:
+        visible = stage_read_in(db, keep_s)
+        after = copy.deepcopy(visible)
+        out = fn(after)
+        _stage_save(db, visible, after, by)
+        return out
+
+
+def _state_import(db, acks_lines, table, by="import"):
+    """Parse the two legacy files into the tables; returns the counts of what was skipped and why, never row text."""
+    skipped = {"ack_bad": 0, "stage_mark": 0, "stage_pr": 0, "stage_col": 0}
+    n = {"acks": 0, "rows": 0, "cells": 0}
+    for r in acks_lines:
+        aid = r.get("id") if isinstance(r, dict) else None
+        kind, _, key = aid.partition(":") if isinstance(aid, str) else ("", "", "")
+        if not (isinstance(r, dict) and r.get("ev") in ("ack", "unack") and kind in ACK_KINDS and key
+                and isinstance(r.get("ts"), str)):
+            skipped["ack_bad"] += 1  # counted, never aborts the import
+            continue
+        db.execute("INSERT INTO ack_event (ts, ev, kind, key) VALUES (?,?,?,?)", (r["ts"], r["ev"], kind, key))
+        n["acks"] += 1
+    db.execute("PRAGMA defer_foreign_keys=ON")
+    rows = table["rows"]
+    order = [k for k in table["order"] if k in rows] + [k for k in rows if k not in table["order"]]
+    for pos, rid in enumerate(order):
+        r = rows[rid]
+        pr = pr_split(r.get("pr"))
+        if r.get("pr") and not pr:
+            skipped["stage_pr"] += 1
+        if pr:
+            _pr_stub(db, *pr, by)
+        db.execute("INSERT INTO stage_row (id, parent, grp, overlay, title, pr_repo, pr_number, created_at, done_at, pos) "
+                   "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                   (rid, r.get("parent"), int(bool(r.get("group"))), int(bool(r.get("overlay"))), r.get("title"),
+                    pr[0].lower() if pr else None, pr[1] if pr else None, r.get("created_at") or now(), r.get("done_at"), pos))
+        n["rows"] += 1
+        for col, c in (r.get("cells") or {}).items():
+            if col not in STAGE_COLS:
+                skipped["stage_col"] += 1
+            elif not isinstance(c, dict) or c.get("mark") not in STAGE_MARKS:
+                skipped["stage_mark"] += 1
+            else:
+                db.execute("INSERT INTO stage_cell (row_id, col, mark, evidence, by, ts) VALUES (?,?,?,?,?,?)",
+                           (rid, col, c["mark"], c.get("evidence"), c.get("by"), c.get("at") or now()))
+                n["cells"] += 1
+    env = table["env"]
+    for e in ("dev", "prod"):
+        if env.get(e):
+            db.execute("INSERT INTO stage_env (env, version, ts) VALUES (?,?,?)", (e, str(env[e]), env.get("at") or now()))
+    for pos, text in enumerate(table["next"]):
+        db.execute("INSERT INTO stage_next (pos, text) VALUES (?,?)", (pos, str(text)))
+    return n, skipped
+
+
+def _state_sources(sd):
+    """(ack events, stage table) read from the two files, strictly: a line or file that does not parse stops the step
+    before anything is written, so the files stay as they are. A file that is not there is empty."""
+    for name in STATE_FILES:  # a tombstone, or a missing file with its .restore beside it, is what a rollback cut short leaves
+        if (sd / name).is_dir() or (not (sd / name).exists() and (sd / (name + ".restore")).exists()):
+            raise Refused(f"{sd / name} is a tombstone or missing but {STATE_STEP} is not in {DB_NAME}: a rollback was cut short. "
+                          f"Put the file back by hand ({name}.restore beside it, or the export), then run {state_command()}")
+    bad, events = [], []
+    if (sd / "acks.jsonl").is_file():
+        for i, line in enumerate((sd / "acks.jsonl").read_text().splitlines(), 1):
+            if not line.strip():
+                continue
+            try:
+                events.append(json.loads(line))
+            except ValueError:
+                bad.append(f"acks.jsonl line {i}")
+    table = {"rows": {}, "order": [], "env": {}, "next": []}
+    if (sd / "stages.json").is_file():
+        try:
+            st = json.loads((sd / "stages.json").read_text())
+            if not isinstance(st, dict):
+                raise ValueError
+            table = {"rows": st.get("rows") or {}, "order": st.get("order") or [], "env": st.get("env") or {},
+                     "next": st.get("next") or []}
+        except ValueError:
+            bad.append("stages.json")
+    if bad:
+        raise Refused(f"{', '.join(bad)} does not parse; nothing was moved or changed. Fix or move it aside, then run "
+                      f"{state_command()} again")
+    return events, table
+
+
+def state_setup(by="orch db state", auto=False):
+    """Move acks.jsonl and stages.json into the tables: back the files up, import in one transaction, record the step with
+    each file's sha256, tombstone the files. A second run finishes a tombstone a crash left and otherwise changes nothing.
+    auto: the call setup makes after an update; a DB that is not migrated yet is skipped, not an error."""
+    sd = fleet.state_dir()
+    steps = migrated_steps()
+    if STATE_STEP in steps:
+        return _finish(STATE_STEP, _step_row(STATE_STEP))
+    try:
+        open_db().close()  # NotMigrated, with the command, when the DB or a data step is missing
+    except NotMigrated as e:
+        if auto:
+            return f"skipped: {e}"
+        raise
+    _state_sources(sd)  # refuses before a lock or a backup exists
+    with contextlib.ExitStack() as stack:
+        for name in STATE_LOCKS:  # the writers of both files hold these while they write
+            fcntl.flock(stack.enter_context((sd / name).open("a")), fcntl.LOCK_EX)
+        if STATE_STEP in migrated_steps():  # a run that held the locks first finished it
+            return _finish(STATE_STEP, _step_row(STATE_STEP))
+        acks_lines, table = _state_sources(sd)  # read again under the locks, so the backup, the hash and the import agree
+        ts = dt.datetime.now(dt.timezone.utc)
+        backup, sources = _backup_files(sd, STATE_STEP, ts)
+        with tx() as db:
+            for ddl in SCHEMA_STATE:
+                db.execute(ddl)
+            n, skipped = _state_import(db, acks_lines, table)
+            db.execute("INSERT INTO migration (step, ts, backup, sources, stage) VALUES (?,?,?,?, 'imported')",
+                       (STATE_STEP, now(), str(backup), json.dumps(sources)))
+            _event(db, "migration", STATE_STEP, "imported", by, None, {"backup": str(backup), "imported": n, "skipped": skipped})
+    done = _finish(STATE_STEP, _step_row(STATE_STEP))
+    left = ", ".join(f"{k} {v}" for k, v in skipped.items() if v)
+    return f"{done}: {n['acks']} ack events, {n['rows']} stage rows, {n['cells']} cells" + (f"; skipped {left}" if left else "")
+
+
+def state_export(dest):
+    """acks.jsonl and stages.json in the shapes older code reads, into dest. env.at is the latest stage_env time; the stage
+    table is written whole, hidden rows included (retention only hides)."""
+    with read() as db:
+        events = [{"ev": r["ev"], "id": f"{r['kind']}:{r['key']}", "ts": r["ts"]}
+                  for r in db.execute("SELECT ev, kind, key, ts FROM ack_event ORDER BY seq")]
+        table = _stage_load(db)
+    dest = pathlib.Path(dest).expanduser()
+    dest.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fleet.write_atomic(dest / "acks.jsonl", "".join(json.dumps(e, ensure_ascii=False) + "\n" for e in events))
+    fleet.write_atomic(dest / "stages.json", json.dumps(table, ensure_ascii=False, indent=1) + "\n")
+    for name in STATE_FILES:
+        os.chmod(dest / name, 0o600)
+    return dest, len(events), len(table["rows"])
+
+
+def state_rollback(src, rehearsal=False):
+    """Put an export's files back in place of the tombstones and take the step and its tables out of the DB. What was
+    written to the tables since the export is lost with them; export again first when that matters."""
+    sd, src = fleet.state_dir(), pathlib.Path(src).expanduser()
+    if migrated_steps().get(STATE_STEP) is None:
+        raise Refused(f"{STATE_STEP} is not in {DB_NAME}: nothing to roll back")
+    for name in STATE_FILES:
+        if not (src / name).is_file():
+            raise Refused(f"{src / name} is missing: run `orch db export --legacy --target state {src}` first")
+        if not (sd / name).is_dir() or any((sd / name).iterdir()):
+            raise Refused(f"{sd / name} is not an empty tombstone: move what is there aside first")
+    if rehearsal:
+        return f"dry-run: would put {', '.join(STATE_FILES)} back from {src} and drop {STATE_STEP}; nothing was changed"
+    staged = {}
+    for name in STATE_FILES:  # copied beside the tombstone first, so only a rename is left after the DB changes
+        staged[name] = sd / (name + ".restore")
+        shutil.copyfile(src / name, staged[name])
+        os.chmod(staged[name], 0o600)
+    with tx() as db:
+        for t in STATE_TABLES:
+            db.execute(f"DROP TABLE {t}")
+        db.execute("DELETE FROM migration WHERE step=?", (STATE_STEP,))
+        _event(db, "migration", STATE_STEP, "rolled-back", "orch db rollback")
+    for name in STATE_FILES:
+        (sd / name).rmdir()
+        os.replace(staged[name], sd / name)
+    return f"put {', '.join(STATE_FILES)} back from {src}; {STATE_STEP} is out of the DB"
+
+
 # ---------------------------------------------------------------- what older code left
 
 def migrated_steps():
@@ -1266,7 +1649,7 @@ def legacy_traces():
     for step, stage in migrated_steps().items():
         if stage != "tombstoned":
             continue
-        for name in LEGACY.get(step, ()):
+        for name in _legacy(step):
             p = fleet.state_dir() / name
             if not p.is_dir():
                 out.append(f"{name} ({'a file again' if p.exists() else 'tombstone gone'})")
@@ -1889,7 +2272,7 @@ def _backup_files(sd, step, ts):
     backup.mkdir(mode=0o700)
     os.chmod(backup, 0o700)
     sources = {}
-    for name in LEGACY[step]:
+    for name in _legacy(step):
         if (sd / name).is_file():
             shutil.copyfile(sd / name, backup / name)
             os.chmod(backup / name, 0o600)
@@ -2327,6 +2710,17 @@ def main(argv):
                 why = preflight()
                 print("preflight: ok" if not why else "preflight: --apply would refuse\n" + "\n".join(f"  - {w}" for w in why))
             print("dry-run: nothing written. orch db import --apply")
+        elif sub == "state":
+            print(state_setup(auto="--auto" in rest))
+        elif sub == "export" and "--legacy" in rest and "--target" in rest and rest[rest.index("--target") + 1:][:1] == ["state"]:
+            i = rest.index("--target")
+            dirs = [a for a in rest[:i] + rest[i + 2:] if not a.startswith("--")]
+            if not dirs:
+                raise Refused("export needs the directory to write to: orch db export --legacy --target state DIR")
+            out, n, rows = state_export(dirs[-1])
+            print(f"wrote {out}: {n} ack events, {rows} stage rows")
+        elif sub == "rollback" and rest[:1] == ["state"] and [a for a in rest[1:] if not a.startswith("--")]:
+            print(state_rollback([a for a in rest[1:] if not a.startswith("--")][0], rehearsal))
         elif sub == "export" and "--legacy" in rest and len([a for a in rest if not a.startswith("--")]) >= 2:
             target = rest[rest.index("--target") + 1] if "--target" in rest else ""
             dest = [a for a in rest if not a.startswith("--") and a != target][-1]

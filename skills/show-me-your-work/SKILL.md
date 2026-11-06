@@ -34,7 +34,7 @@ ts	phase	decision	why	evidence	result
 
 Write each entry the way you'd tell a teammate what you did: plain words, concrete actions.
 
-Use the helper `bash "${CLAUDE_SKILL_DIR}/scripts/log.sh" <logfile> <phase> <decision> <why> <evidence> <result>`. It stamps `ts`, writes the header on first use, strips stray tabs/newlines, and prefixes any cell starting with `=`, `+`, `-`, or `@` with a single quote. A bare `printf` appending a row works too, but mind those same bytes if cells come from generated or user-supplied text.
+Write every row with `bash "${CLAUDE_SKILL_DIR}/scripts/log.sh" <logfile> <phase> <decision> <why> <evidence> <result>`, and no other way. It stamps `ts`, writes the header on first use, strips stray tabs/newlines, and prefixes any cell starting with `=`, `+`, `-`, or `@` with a single quote, so a PR title or file name in a cell cannot become a spreadsheet formula. A row appended by hand skips all of that.
 
 Log decision points and checkpoints, not every action: a fork chosen, a unit completed with its verification result, a pivot or revert with its trigger, a blocker surfaced, a gate fixed. For loop runs, one row per iteration. Skip the trivial and self-evident.
 

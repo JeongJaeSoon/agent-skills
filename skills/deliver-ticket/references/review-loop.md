@@ -35,8 +35,8 @@ From the open PR to ready: all CI checks green and all review threads resolved.
   old head says nothing about the new one.
 - Wait with one watcher per run or PR, never two: `gh run watch <id> --exit-status --interval 60`
   under `run_in_background` (never the default 3 s interval), or, for PRs, `Monitor` running
-  `python3 skills/orchestrate/scripts/pr_watch.py --repo <owner/repo> [--branch <regex>]`
-  (`--help` has the rest). It checks every 300 s and prints a line only for a merge or close, a CI
+  `pr-watch --repo <owner/repo> [--branch <regex>]` (the plugin's `bin/` is on `PATH`, so it runs from
+  any repo; `--help` has the rest). It checks every 300 s and prints a line only for a merge or close, a CI
   failure, `orch land-check` turning READY (`--land-check <slug>`), a conflict appearing or
   clearing, and a new PR; every other state change wakes nobody. Before starting one, check
   that none of yours already watches that run or PR. Every wait has an upper bound (the Monitor
@@ -56,7 +56,7 @@ From the open PR to ready: all CI checks green and all review threads resolved.
 ## When someone else merges
 
 A fork PR to a repo you can only read, or a maintainer who lands it themselves. Once the PR is
-ready, do not end the turn waiting. Watch it once (the wait rule above): `pr_watch.py` under `Monitor`
+ready, do not end the turn waiting. Watch it once (the wait rule above): `pr-watch` under `Monitor`
 for the merge or close, or `ScheduleWakeup` under `/loop` reading
 `gh pr view <n> --json state,mergedAt,mergeCommit,reviewDecision,latestReviews`, no more often than the wait rule in `orchestrate`'s
 `references/brief.md` LAND allows ("A wait on a human review"). Stop it when the session ends. Wake on a merge or a close, or on a new review read at each `/loop` wake; `CHANGES_REQUESTED` sends you
