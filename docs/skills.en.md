@@ -1,7 +1,7 @@
-<!-- translated-from: c53d63bd45bb7f46c67fe087262ed5aa147cc45e -->
+<!-- translated-from: de248e65b9baa354596acc40a782858bfce31474 -->
 # Skill catalog
 
-This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 16 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
+This page covers the 40 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 16 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
 
 Follow the [configuration migration guide](configuration-migration.md) for changed defaults and preservation of existing data. Notes, ledgers and personal folders require explicit configuration; report time defaults to UTC.
 
@@ -354,14 +354,21 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
   - It returns one deliverable plus a short synthesis note recording the base, what was grafted, what was dropped, and the verification result.
 - **How it differs from swarm:** swarm splits the work up, sweeps it, and returns a report. arena makes candidates compete on the same work and produces one deliverable.
 
-### blast-radius
-- **When:** "이거 바꾸면 뭐가 깨져?" (what breaks if I change this?), and small diffs you don't trust.
-- **What it does:**
-  - Finds the one fact that makes the change safe, and proves it with a script that runs the real code.
+### challenge (formerly `blast-radius`, `interrogate`)
+- **When:** Before a change or a design ships, to attack it. The mode depends on what is being attacked. PRs headed for main are covered by `deliver-ticket`'s independent review instead.
+  - **blast-radius**: 'blast radius of X', "이거 바꾸면 뭐가 깨져?" (what breaks if I change this?), "영향 범위 봐줘" (check the impact), and small diffs you don't trust.
+  - **interrogate**: "interrogate", "적대적 리뷰" (adversarial review), "challenge this", "빈틈 찾아줘" (find the gaps) on a design, plan or decision.
+- **What blast-radius does:**
+  - Finds the one fact that makes the change safe, and proves it with a script that runs the real code. A design objection alone does not finish it; a fact it could not prove is written down as unproven.
   - Looks where grep can't see (library source, wire formats, execution timing).
   - Pulls in the PRs and commits behind the changed code, following `why`'s procedure.
   - Cross-checks big changes with an independent reviewer.
   - Reports what the change does, why it's safe, the risks, what was checked, and what to check before merging.
+- **What interrogate does:**
+  - Reviewers independently assess the same scope and rubric. No particular model or model-family difference is required.
+  - A lead merges the results, rules on each finding as Act on / Consider / Noted / Dismissed, and writes a map of where the reviewers agree.
+  - When the intent is ambiguous it doesn't ask; it marks what it assumed. Fixes are never applied automatically.
+- **Bundled:** `references/blast-radius.md`, `references/interrogate.md`, `reviewer-prompt.md`, `rubric.md`, `code-quality-review.md`, `lead-judgment.md`. `deliver-ticket`'s review triage uses the verdict framework in `lead-judgment.md`.
 
 ### figure-it-out
 - **When:** `/figure-it-out`, "알아서 설계해서 진행해줘" (design it yourself and get going), "큰 마이그레이션" (a big migration), "자리 비운 동안 끝내줘" (finish it while I'm away), and large multi-step work with no procedure that fits. `deliver-ticket`'s planning step calls it. Running several tickets as parallel cards is `orchestrate`'s job.
@@ -392,14 +399,6 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
   - The answer goes What We Found, Reasonably Infer, Competing Hypotheses, What We Don't Know, Sources Consulted. If the question is about changing code, it adds Preserve / Change / Avoid / Risk.
 - **Bundled:** `epistemics.md` (confidence criteria), `investigator-prompt.md`, `synthesizer-prompt.md`, `source-playbook.md`, `sources/` (code-archaeology, linear, notion, google-drive, obsidian, slack, incident-postmortem).
 - **Related:** The counterpart of `how`. Called by `blast-radius` and `architect`. Reads trackers through `use-tracker` and notes through `use-notes`.
-
-### interrogate
-- **When:** "적대적 리뷰" (adversarial review), "빈틈 찾아줘" (find the gaps). PRs headed for main are covered by `deliver-ticket`'s independent review instead.
-- **What it does:**
-  - Reviewers independently assess the same scope and rubric. No particular model or model-family difference is required.
-  - A lead merges the results, rules on each finding as Act on / Consider / Noted / Dismissed, and writes a map of where the reviewers agree.
-  - When the intent is ambiguous it doesn't ask; it marks what it assumed. Fixes are never applied automatically.
-- **Bundled:** `reviewer-prompt.md`, `rubric.md`, `code-quality-review.md`, `lead-judgment.md`. `deliver-ticket`'s review triage uses this verdict framework.
 
 ### principles
 - **When:** A design, refactor, verification or delegation decision needs a named principle.
@@ -686,6 +685,7 @@ Of pstack's 58 skills (24 principles and 34 others), we took all 24 principles a
   - The model can invoke them on its own.
   - Cursor-specific pieces were replaced with their Claude Code equivalents: paths `.cursor/` → `.claude/`, workers `generalPurpose`/cloud → `Agent`/Orca workers, transcripts `agent-transcripts` → `~/.claude/projects`.
   - The model panel uses available independent reviewers.
+  - blast-radius and interrogate were later merged into one skill, `challenge`. Their bodies moved to the same-named modes' `references/blast-radius.md` and `references/interrogate.md`, and interrogate's reference files to `challenge/references/`.
   - Calls to a skill we don't install (`unslop`) now point to `write-plainly`. `why` and `arena` were brought in on 2026-09-25, which restored the original links between skills (architect → arena).
   - `why` picks its sources from the MCP tools available in the session instead of Cursor's MCP discovery, and gained a narrow mode for one-line questions. The source files for Datadog, Sentry and the warehouse, which have no connection here, were dropped, and new source files for Google Drive and Obsidian were written.
 - **Further changes on 2026-09-25:** The prompts were audited and revised again for Opus 5.5 (`6eec9fa`). The per-step to-do lists in architect and swarm are gone, and how now handles simple questions directly. reflect no longer has a minimum reviewer count, and show-me-your-work became an append-only log. Per-file changes are listed in `vendor/pstack/NOTICE.md`.

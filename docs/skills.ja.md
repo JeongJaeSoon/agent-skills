@@ -1,7 +1,7 @@
-<!-- translated-from: c53d63bd45bb7f46c67fe087262ed5aa147cc45e -->
+<!-- translated-from: de248e65b9baa354596acc40a782858bfce31474 -->
 # スキルカタログ
 
-`agent-skills` プラグインに入っているスキル41個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック16個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
+`agent-skills` プラグインに入っているスキル40個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック16個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
 
 既定値の変更と既存データの保持は[設定移行ガイド](configuration-migration.md)を参照してください。ノート・台帳・個人フォルダーには明示的な設定が必要で、レポートの既定タイムゾーンは UTC です。
 
@@ -356,14 +356,21 @@ PR を受け持つスキルとマージする主体:
   - 成果物一つと、ベース案・接ぎ木したもの・捨てたもの・検証結果を書いた短いまとめのノートを返します。
 - **swarm との違い:** swarm は仕事を分けて調べ、レポートを返します。arena は同じ仕事を競わせて、成果物を一つ作ります。
 
-### blast-radius
-- **使う場面:** 「이거 바꾸면 뭐가 깨져?」（これを変えたら何が壊れる?）、小さいけれど信用しにくい diff。
-- **内容:**
-  - 変更が安全だという根拠になる事実を一つ見つけ、実際のコードを動かすスクリプトで証明します。
+### challenge (旧名 `blast-radius`、`interrogate`)
+- **使う場面:** 変更や設計を出す前に攻めてみるとき。何を攻めるかでモードを選びます。main に向かう PR の独立レビューは `deliver-ticket` が担当します。
+  - **blast-radius**: 'blast radius of X'、「이거 바꾸면 뭐가 깨져?」（これを変えたら何が壊れる?）、「영향 범위 봐줘」（影響範囲を見て）、小さいけれど信用しにくい diff。
+  - **interrogate**: 「interrogate」「adversarial review」「challenge this」「find blind spots」で設計・計画・判断のレビューを依頼するとき。
+- **blast-radius の内容:**
+  - 変更が安全だという根拠になる事実を一つ見つけ、実際のコードを動かすスクリプトで証明します。設計への反論だけでは終わらず、証明できなければ unproven と書きます。
   - grep では見えないところ（ライブラリのソース、ワイヤーフォーマット、実行のタイミング）を見ます。
   - 変わるコードの PR とコミットは、`why` の手順で引いてきます。
   - 大きな変更は独立レビューアーで相互に確認します。
   - 結果は、何をするか、安全の根拠、リスク、確認したこと、マージ前に確認すべきこと、にまとめます。
+- **interrogate の内容:**
+  - 同じ範囲と rubric を独立して確認します。特定のモデルや異なる系統は必須ではありません。
+  - リードが結果をまとめて Act on / Consider / Noted / Dismissed で判定し、合意のマップを書きます。
+  - 意図があいまいなら尋ねずに、仮定したことを明記します。修正は自動では適用しません。
+- **同梱:** `references/blast-radius.md`、`references/interrogate.md`、`reviewer-prompt.md`、`rubric.md`、`code-quality-review.md`、`lead-judgment.md`。`deliver-ticket` のレビューの分類が `lead-judgment.md` の判定の枠組みを使います。
 
 ### figure-it-out
 - **使う場面:** `/figure-it-out`、「알아서 설계해서 진행해줘」（自分で設計して進めて）、「큰 마이그레이션」（大きなマイグレーション）、「자리 비운 동안 끝내줘」（席を外している間に終わらせて）、合う手順が別にない、大きく多段階の仕事。`deliver-ticket` の計画の段階が呼びます。複数のチケットを並列のカードで回す仕事は `orchestrate` です。
@@ -394,14 +401,6 @@ PR を受け持つスキルとマージする主体:
   - 答えは What We Found、Reasonably Infer、Competing Hypotheses、What We Don't Know、Sources Consulted の順です。コードを変えようとしている質問なら、Preserve / Change / Avoid / Risk を付けます。
 - **同梱:** `epistemics.md`（確信度の基準）、`investigator-prompt.md`、`synthesizer-prompt.md`、`source-playbook.md`、`sources/`（code-archaeology、linear、notion、google-drive、obsidian、slack、incident-postmortem）。
 - **関連:** `how` と対になるスキルです。`blast-radius` と `architect` が呼びます。トラッカーは `use-tracker`、ノートは `use-notes` で読みます。
-
-### interrogate
-- **使う場面:** 「interrogate」「adversarial review」「challenge this」「find blind spots」で設計・計画・判断のレビューを依頼するとき。main に向かう PR の独立レビューは `deliver-ticket` が担当します。
-- **内容:**
-  - 同じ範囲と rubric を独立して確認します。特定のモデルや異なる系統は必須ではありません。
-  - リードが結果をまとめて Act on / Consider / Noted / Dismissed で判定し、合意のマップを書きます。
-  - 意図があいまいなら尋ねずに、仮定したことを明記します。修正は自動では適用しません。
-- **同梱:** `reviewer-prompt.md`、`rubric.md`、`code-quality-review.md`、`lead-judgment.md`。`deliver-ticket` のレビューの分類がこの判定の枠組みを使います。
 
 ### principles
 - **使う場面:** 設計、リファクタリング、検証、委任の判断に、名前の付いた原則が必要なとき。
@@ -687,6 +686,7 @@ pstack のスキル58個（原則24個と、その他34個）のうち、原則2
   - モデルが自分で呼べるようにしました。
   - Cursor 専用の要素を、Claude Code での対応物に置き換えました。パスは `.cursor/` → `.claude/`、ワーカーは `generalPurpose`/クラウド → `Agent`/Orca ワーカー、transcript は `agent-transcripts` → `~/.claude/projects` です。
   - モデルのパネルを独立レビューアーにしました。
+  - blast-radius と interrogate は後に `challenge` 一つのスキルにまとめました。本文はそれぞれ同じ名前のモードの `references/blast-radius.md`・`references/interrogate.md` に、interrogate の参照ファイルは `challenge/references/` に移しました。
   - インストールしていないスキル（`unslop`）を呼んでいた箇所を `write-plainly` に置き換えました。`why` と `arena` は 2026-09-25 に取り込み、元のつながり（architect → arena）を復活させました。
   - `why` は Cursor の MCP 探索の代わりに、セッションにある MCP ツールで出典を選び、一行の質問用の narrow mode を加えました。接続のない Datadog・Sentry・warehouse の出典ファイルは外し、Google Drive・Obsidian の出典ファイルを新しく書きました。
 - **2026-09-25 の追加修正:** Opus 5.5 に合わせてプロンプトを監査し、さらに直しました（`6eec9fa`）。architect と swarm の段階ごとの ToDo リストをなくし、how は単純な質問を直接処理します。reflect のレビュアー数の下限をなくし、show-me-your-work は追記のみの記録に変えました。ファイルごとの修正内容は `vendor/pstack/NOTICE.md` にあります。
