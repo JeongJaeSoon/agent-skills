@@ -25,13 +25,20 @@ if a[:2] == ["api", "user"]:
     print(st.get("login", "o")); sys.exit()
 if a[:1] == ["api"] and "/commits/" in a[1]:
     print("basesha"); sys.exit()
-if a[:2] == ["repo", "view"]:
+if a[:1] == ["api"] and a[1].startswith("repos/") and a[1].count("/") == 2:
     if st.get("repo_fail"):
         sys.exit("HTTP 502: Bad Gateway")
-    print(json.dumps(st.get("repos", {}).get(a[2].lower(), {"nameWithOwner": a[2], "isFork": False, "isArchived": False})))
+    name = a[1][len("repos/"):]
+    m = st.get("repos", {}).get(name.lower(), {"nameWithOwner": name})
+    print(json.dumps({"full_name": m["nameWithOwner"], "fork": m.get("isFork", False),
+                      "archived": m.get("isArchived", False)}))
     sys.exit()
 if a[:2] == ["search", "prs"]:
     print(json.dumps([{"repository": {"nameWithOwner": r}} for r in st.get("search", [])])); sys.exit()
+if a[:2] == ["repo", "list"]:
+    if st.get("list_fail"):
+        sys.exit("HTTP 502: Bad Gateway")
+    print(json.dumps([{"nameWithOwner": r} for r in st.get("owned", {}).get(a[2], [])])); sys.exit()
 if a[:2] == ["pr", "view"] and a[-1] == "comments":
     print(json.dumps({"comments": [{"body": b} for b in st["prs"][a[2]].get("comments", [])]})); sys.exit()
 os.execv(sys.executable, [sys.executable, os.environ["FAKE_GH_INNER"], *a])
@@ -459,7 +466,7 @@ class LandExec(unittest.TestCase):
         row = self.request()
         config(repos=["o/other"])
         self.round()
-        self.settled(row, "refused", 1, "off for o/r")
+        self.settled(row, "refused", 1, "does not cover o/r")
 
     def test_repo_of_another_owner(self):
         st = self.gh(); st["login"] = "someone-else"; self.write(st)
@@ -483,7 +490,27 @@ class LandExec(unittest.TestCase):
         config(repos=["o/*"], exclude=["o/r"])
         row = self.request()
         self.round()
-        self.settled(row, "refused", 1, "off for o/r")
+        self.settled(row, "refused", 1, "does not cover o/r")
+
+    def test_a_program_under_the_old_name_still_goes_to_the_executor(self):
+        """The program says o/r; GitHub calls it o/renamed now and only that name is listed: never a direct merge."""
+        config(repos=["o/renamed"])
+        self.github_names("o/renamed")
+        land_exec.beat(phase="done")
+        r = subprocess.run([sys.executable, HERE / "prog.py", "land", self.slug, "--pr", str(self.n)],
+                           capture_output=True, text=True)
+        self.assertIn("queued land request", r.stdout + r.stderr)
+        self.assertEqual(self.merges(), [], "orch land itself merges nothing")
+        self.round()
+        self.assertEqual(len(self.merges()), 1)
+
+    def test_an_unanswered_rename_lookup_yields_instead_of_merging_directly(self):
+        st = self.gh(); st["repo_fail"] = True; self.write(st)
+        r = subprocess.run([sys.executable, HERE / "prog.py", "land", self.slug, "--pr", str(self.n)],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("undecided", r.stdout)
+        self.assertEqual(self.merges(), [])
 
     def test_a_rename_inside_the_wildcard_still_merges(self):
         config(repos=["o/*"])
@@ -536,7 +563,7 @@ class LandExec(unittest.TestCase):
         st = self.gh(); st["repo_fail"] = True; self.write(st)
         row = self.request()
         self.round()
-        self.settled(row, "queued", None, "gh repo view")
+        self.settled(row, "queued", None, "gh api repos/o/r")
 
     def test_a_malformed_scope_refuses(self):
         row = self.request()
@@ -757,8 +784,15 @@ class Standalone(unittest.TestCase):
         self.assertIn("o/old is o/r on GitHub now", out)
         self.assertIn(f"orch land {self.SLUG} --repo o/r", out)
         self.assertFalse((prog.HOME / "old-standalone").exists())
-        code, out = self.orch("land", self.SLUG, "--repo", "o/old", "--pr", str(self.n))
+        code, out = self.orch("verdict", self.SLUG, "--repo", "o/old", "--pr", str(self.n), "--sha", f"h{self.n}",
+                              "--source", "review:codex")
         self.assertEqual(self.cfg()["repo"], "o/r", out)
+        self.assertEqual(code, 0, "the old name reaches the program made under the new one: " + out)
+        code, out = self.orch("land", self.SLUG, "--repo", "o/old", "--pr", str(self.n))
+        self.assertIn("queued land request", out)
+        self.github(o__old={"nameWithOwner": "o/elsewhere"})
+        code, out = self.orch("land", self.SLUG, "--repo", "o/old", "--pr", str(self.n))
+        self.assertIn("is for o/r, not o/old", out, "an old name that now leads elsewhere is still refused")
 
     def test_an_explicit_entry_under_the_old_name_does_not_cover_the_new_one(self):
         config(repos=["o/old"])
@@ -835,13 +869,28 @@ class Drift(unittest.TestCase):
         self.assertIn("o/new", lines[0])
         self.assertFalse(any("kept-out" in l or "someone/else" in l for l in lines), lines)
 
-    def test_a_covered_repo_without_its_standalone_program_is_warned(self):
-        config(repos=["o/*"])
+    def test_covered_repos_without_their_standalone_program_are_one_line(self):
+        config(repos=["o/*", "o/listed"], exclude=["o/kept-out"])
         self.program("w-other", "o/w")  # a program on the repo that is not its standalone one
-        self.write(search=["o/w"])
+        self.program("has-standalone", "o/has")
+        # a covered repo with no recent PR counts too: OWNER/* covers the owner's whole listing
+        self.write(search=["o/w"], owned={"o": ["o/w", "o/quiet", "o/kept-out", "o/has"]})
         lines = land_exec.drift_lines()
-        self.assertEqual(lines, ["경고: o/w는 범위 안인데 w-standalone program이 없다"
-                                 " (`orch verdict|land w-standalone --repo o/w`가 처음 부를 때 만든다)"])
+        self.assertEqual(lines, ["경고: 범위 안인데 <name>-standalone program이 없는 repo 3개: o/listed, o/quiet, o/w"
+                                 " (`orch verdict|land <name>-standalone --repo OWNER/NAME`가 처음 부를 때 만든다)"])
+
+    def test_a_standalone_program_on_its_repo_silences_the_warning(self):
+        config(repos=["o/*"])
+        self.program("quiet-standalone", "o/quiet")
+        self.write(owned={"o": ["o/quiet"]})
+        self.assertEqual(land_exec.drift_lines(), [])
+
+    def test_an_unanswered_owner_listing_is_one_line_and_the_rest_still_runs(self):
+        config(repos=["o/*"])
+        self.write(search=["p/x"], list_fail=True, login="o")
+        lines = land_exec.drift_lines()
+        self.assertEqual(len(lines), 1, lines)
+        self.assertIn("o/*의 repo 목록", lines[0])
 
     def test_a_renamed_entry_is_warned(self):
         config(repos=["o/old"])

@@ -101,7 +101,7 @@ class Round:
         def unanswered(what):
             """Wait for GitHub, but not past max_wait_hours: a repo gone or a token revoked never answers."""
             try:
-                limit = (prog.land_executor(repo) or {}).get("max_wait_hours", 24)
+                limit = (prog.land_executor() or {}).get("max_wait_hours", 24)
             except SystemExit:
                 limit = 24
             if age_h > limit:
@@ -123,28 +123,29 @@ class Round:
             return settle("merged", 0, "merged" if same else
                           f"merged at {v['headRefOid'][:8]}, not the requested {sha[:8]}, outside this request", msha)
         try:
-            ex = prog.land_executor(repo)
+            on = prog.land_executor()
         except SystemExit as e:
             return settle("refused", 1, f"the settings cannot be read: {e.code}")
-        if not ex:
-            return settle("refused", 1, f"orchestrate.land_executor is off for {repo}: land again (it merges directly)")
+        if not on:
+            return settle("refused", 1, "orchestrate.land_executor is off: land again (it merges directly)")
         login = self.owner_login()
         if login is None:
             return unanswered("GitHub did not answer `gh api user`: the repo's owner is unchecked")
         if repo.split("/")[0].casefold() != login.casefold():
             return settle("refused", 1, f"{repo} is not owned by the gh account '{login}'")
-        # GitHub follows a rename or a transfer from the recorded name: scope and owner are judged on the repo it is now.
+        # GitHub follows a rename or a transfer from the recorded name: scope and owner are judged on the repo it is now,
+        # by the rule `orch land` used to send the request here (prog.executor_for).
         try:
-            meta = prog.gh_json("repo", "view", repo, "--json", "nameWithOwner,isFork,isArchived")
-        except SystemExit as e:
-            return unanswered(f"GitHub did not answer `gh repo view {repo}`: {str(e.code)[:160]}")
-        current = meta.get("nameWithOwner") or "?"
-        if current.casefold() != repo.casefold():
-            if not land_scope.how(ex["scope"], current) or land_scope.excluded(ex["scope"], repo):
-                return settle("refused", 1, f"{repo} is {current} on GitHub now, which orchestrate.land_executor does"
-                                            " not cover")
-            if current.split("/")[0].casefold() != login.casefold():
-                return settle("refused", 1, f"{repo} is {current} on GitHub now, not owned by the gh account '{login}'")
+            ex, meta = prog.executor_for(repo)
+        except (SystemExit, KeyError, TypeError, ValueError) as e:
+            return unanswered(f"GitHub did not answer `gh api repos/{repo}`: {str(getattr(e, 'code', e))[:160]}")
+        current = meta["nameWithOwner"]
+        renamed = "" if current.casefold() == repo.casefold() else f" ({repo} is {current} on GitHub now)"
+        if not ex:
+            return settle("refused", 1, f"orchestrate.land_executor does not cover {repo}{renamed}: land again"
+                                        " (it merges directly)")
+        if current.split("/")[0].casefold() != login.casefold():
+            return settle("refused", 1, f"{repo} is {current} on GitHub now, not owned by the gh account '{login}'")
         if why := land_scope.wildcard_only(ex["scope"], current, meta):
             return settle("refused", 1, why)
         if age_h > ex["max_wait_hours"]:
@@ -338,8 +339,8 @@ def drift_lines(today=None):
     for owner, name in sorted(scope["names"]):
         entry = f"{owner}/{name}"
         try:
-            now_named = prog.gh_json("repo", "view", entry, "--json", "nameWithOwner")["nameWithOwner"]
-        except (SystemExit, KeyError, TypeError) as e:
+            now_named = prog.repo_meta(entry)["nameWithOwner"]
+        except (SystemExit, KeyError, TypeError, ValueError) as e:
             out.append(f"경고: repos의 {entry}를 GitHub에서 확인하지 못함: {str(getattr(e, 'code', e))[:120]}")
             continue
         if now_named.casefold() != entry:
@@ -347,6 +348,19 @@ def drift_lines(today=None):
                        " (skills-config로 새 이름을 넣는다)")
         else:
             covered.setdefault(entry, now_named)
+    # OWNER/* covers every source repo of the owner that is not archived: exactly what this listing returns.
+    for owner in sorted(scope["owners"]):
+        try:
+            listed = prog.gh_json("repo", "list", owner, "--source", "--no-archived", "--limit", "1000",
+                                  "--json", "nameWithOwner")
+        except SystemExit as e:
+            out.append(f"경고: {owner}/*의 repo 목록을 GitHub에서 받지 못함: {str(e.code)[:120]}")
+            continue
+        for r in listed:
+            name = r.get("nameWithOwner") or ""
+            if name and land_scope.how(scope, name):
+                covered.setdefault(name.casefold(), name)
+    missing = []
     for repo in sorted(covered.values(), key=str.casefold):
         slug = f"{repo.split('/')[-1]}-standalone"
         try:
@@ -354,8 +368,10 @@ def drift_lines(today=None):
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             ok = False
         if not ok:
-            out.append(f"경고: {repo}는 범위 안인데 {slug} program이 없다"
-                       f" (`orch verdict|land {slug} --repo {repo}`가 처음 부를 때 만든다)")
+            missing.append(repo)
+    if missing:
+        out.append(f"경고: 범위 안인데 <name>-standalone program이 없는 repo {len(missing)}개: {', '.join(missing)}"
+                   " (`orch verdict|land <name>-standalone --repo OWNER/NAME`가 처음 부를 때 만든다)")
     return out
 
 

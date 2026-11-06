@@ -1419,6 +1419,13 @@ def skills_version(root):
 STANDALONE_RUN = "standalone"  # a standalone card has no Orca Run; Run lookups on it answer empty
 
 
+def repo_meta(repo):
+    """{"nameWithOwner", "isFork", "isArchived"} of the repo GitHub serves under `repo` now (a rename or a transfer
+    redirects). REST, not `gh repo view`: the executor asks every round, and GraphQL's budget is the one that runs out."""
+    v = gh_json("api", f"repos/{repo}")
+    return {"nameWithOwner": v["full_name"], "isFork": bool(v.get("fork")), "isArchived": bool(v.get("archived"))}
+
+
 def standalone_run():
     """The Run the existing `*-standalone` programs share, else the placeholder. Programs that disagree, or none,
     give the placeholder: guessing one of several Runs would file a repo's PRs under the wrong coordinator."""
@@ -1444,7 +1451,7 @@ def standalone_program(argv):
     ex = land_executor()
     if not ex:
         sys.exit(f"no program '{argv[0]}', and orchestrate.land_executor is off: a standalone card merges its own PR")
-    meta = gh_json("repo", "view", asked, "--json", "nameWithOwner,isFork,isArchived")
+    meta = repo_meta(asked)
     repo = meta["nameWithOwner"]
     if not land_scope.how(ex["scope"], repo) or land_scope.excluded(ex["scope"], asked):
         now_named = "" if repo.casefold() == asked.casefold() else f" ({repo} on GitHub now)"
@@ -1474,8 +1481,11 @@ def standalone_target(argv):
     if "--repo" in argv and not (HOME / argv[0] / "program.json").exists():
         standalone_program(argv)
     p = Program(argv[0])
-    if "--repo" in argv and p.cfg["repo"].casefold() != opt(argv, "--repo").casefold():
-        sys.exit(f"program '{argv[0]}' is for {p.cfg['repo']}, not {opt(argv, '--repo')}")
+    asked = opt(argv, "--repo")
+    # An old name reaches the program GitHub's current name made; only a mismatch costs the lookup.
+    if asked and p.cfg["repo"].casefold() != asked.casefold() \
+            and repo_meta(asked)["nameWithOwner"].casefold() != p.cfg["repo"].casefold():
+        sys.exit(f"program '{argv[0]}' is for {p.cfg['repo']}, not {asked}")
     return p
 
 
@@ -2656,6 +2666,19 @@ def land_executor(repo=None):
     return {"repos": repos, "scope": scope, "verdict_sources": sources, "max_wait_hours": hours}
 
 
+def executor_for(repo):
+    """(land_executor(), repo_meta) when the executor covers the repo GitHub serves under `repo` now, else (None, meta).
+    The recorded name alone cannot choose the direct merge: a program made before a rename still names the old one.
+    An exclusion under either name keeps the repo out. A GitHub that does not answer exits; never a guessed direct merge."""
+    ex = land_executor()
+    if not ex:
+        return None, None
+    meta = repo_meta(repo)
+    if land_scope.excluded(ex["scope"], repo) or not land_scope.how(ex["scope"], meta["nameWithOwner"]):
+        return None, meta
+    return ex, meta
+
+
 LAND_EXIT = {"merged": 0, "superseded": 2}
 
 
@@ -2709,7 +2732,14 @@ def cmd_land(argv):
     pr, klass = int(opt(argv, "--pr")), opt(argv, "--class")
     if klass and klass not in KLASS:
         sys.exit(f"--class is one of {', '.join(KLASS)}")
-    executor = land_executor(p.cfg["repo"])
+    try:
+        executor = executor_for(p.cfg["repo"])[0]
+    except (SystemExit, KeyError, TypeError, ValueError) as e:
+        if isinstance(e, SystemExit) and not TRANSIENT.search(str(e.code)):
+            raise
+        print(f"yield: GitHub did not say which repo {p.cfg['repo']} is now, so executor or direct merge is undecided"
+              f" ({str(getattr(e, 'code', e))[:160]}); land again")
+        sys.exit(2)
     events = p.events()
     st = pr_state(events).get(pr, {})
     if not claimed(events, pr) or (klass and klass != st["ready"].get("klass", "normal")):

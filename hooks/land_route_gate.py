@@ -117,8 +117,25 @@ def gh(args, cwd):
         raise Unread(f"gh {' '.join(args[:2])} answered no JSON")
 
 
+class OtherHost(Exception):
+    """The repo is on a GitHub host other than github.com, which the executor's scope does not name."""
+
+
+def plain(repo):
+    """OWNER/NAME of gh's `[HOST/]OWNER/NAME` (a URL too); OtherHost for a host that is not github.com."""
+    if not repo:
+        return None
+    r = re.sub(r"^https?://", "", repo).rstrip("/").removesuffix(".git")
+    if r.count("/") == 2:
+        host, _, r = r.partition("/")
+        if host.casefold() not in ("github.com", "www.github.com"):
+            raise OtherHost(host)
+    return r
+
+
 def target(repo_opt, env, pos, moved, cwd):
     """(repo, PR number or None, head sha or None) that this `gh pr merge` acts on."""
+    repo_opt, env = plain(repo_opt), plain(env)
     urls = [PR_URL.search(p) for p in pos]
     named = {r.casefold(): r for r in [repo_opt, env, *(u[1] for u in urls if u)] if r}
     if len(named) > 1:
@@ -129,10 +146,11 @@ def target(repo_opt, env, pos, moved, cwd):
     if named:
         repo = next(iter(named.values()))
         try:
-            v = gh(["pr", "view", *([arg] if arg else []), "--repo", repo, "--json", "number,headRefOid"], cwd)
-            return repo, v.get("number") or number, v.get("headRefOid")
+            v = gh(["pr", "view", *([arg] if arg else []), "--repo", repo, "--json", "number,headRefOid,url"], cwd)
         except Unread:
             return repo, number, None
+        m = PR_URL.search(v.get("url") or "")  # the repo's current name, when an old one was given
+        return (m[1] if m else repo), v.get("number") or number, v.get("headRefOid")
     if moved:
         raise Refuse("this call changes directory (or GH_REPO) before `gh pr merge`, so its repo is unknown here: "
                      "name it with `--repo OWNER/NAME`")
@@ -247,7 +265,13 @@ def check(event, cmd):
     sources = sources if isinstance(sources, list) else [str(sources)]
     cwd = event.get("cwd")
     for _c, repo_opt, env, pos, moved in found:
-        repo, pr, head = target(repo_opt, env, pos, moved, cwd)
+        try:
+            repo, pr, head = target(repo_opt, env, pos, moved, cwd)
+            asked = plain(repo_opt) or plain(env)
+        except OtherHost:
+            continue
+        if asked and land_scope.excluded(scope, asked):  # an exclusion under the old name still holds
+            continue
         if land_scope.how(scope, repo):
             slug, with_repo, policy = route(repo, pr, first)
             return (f"{MARK} {SOURCE} {repo} is in orchestrate.land_executor's scope: its PRs merge through the land "

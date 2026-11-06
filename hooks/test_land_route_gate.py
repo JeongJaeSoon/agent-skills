@@ -81,13 +81,18 @@ assert "`orch land app-standalone --repo acme/app --pr 7 --wait-minutes 50`" in 
 assert f"`orch verdict app-standalone --repo acme/app --pr 7 --sha {HEAD} --source <who reviewed>`" in text, text
 assert "only then" in text and "review:codex" in text, "the verdict line is never a ready-made receipt"
 assert "Do not hand a `gh pr merge` line to the owner" in text, text
-assert f"{TMP}/card pr view 7 --repo acme/app --json number,headRefOid" in LOG.read_text(), LOG.read_text()
+assert f"{TMP}/card pr view 7 --repo acme/app --json number,headRefOid,url" in LOG.read_text(), LOG.read_text()
+# An old name: the PR's url gives the current one, which names the program.
+text = reason(run("gh pr merge 7 --repo acme/old-name"))
+assert "`orch land app-standalone --repo acme/app --pr 7" in text, text
 
 # Every way of naming the repo and the PR.
 for cmd in ("gh pr merge https://github.com/acme/app/pull/7 --merge", "gh pr merge 7 -Racme/app",
             "gh pr merge 7 --repo=acme/app", "GH_REPO=acme/app gh pr merge 7", "gh -R acme/app pr merge 7",
             "gh pr merge --squash", "gh pr merge feature-branch", "/opt/homebrew/bin/gh pr merge 7 --auto",
-            "git push && gh pr merge 7 --repo acme/app", "gh pr merge 7 --subject 'x --disable-auto' --repo acme/app"):
+            "git push && gh pr merge 7 --repo acme/app", "gh pr merge 7 --subject 'x --disable-auto' --repo acme/app",
+            "gh pr merge 7 --repo github.com/acme/app", "GH_REPO=github.com/acme/app gh pr merge 7",
+            "gh pr merge 7 --repo https://github.com/acme/app.git", "gh pr merge 7 --repo GitHub.com/Acme/App"):
     assert decision(run(cmd)) == "deny", cmd
 # No repo named: the PR's own url says which, from the session's directory.
 run("gh pr merge")
@@ -139,8 +144,13 @@ shutil.rmtree(PROGRAMS / "newprog")
 
 # Excluded on purpose, another owner, the executor off or absent: pass.
 config(repos=["acme/*"], exclude=["acme/legacy"])
-assert run("gh pr merge 1 --repo acme/legacy") == {}
-assert run("gh pr merge 1 --repo someone/else") == {}
+LEGACY = json.dumps({"number": 1, "headRefOid": HEAD, "url": "https://github.com/acme/legacy/pull/1"})
+assert run("gh pr merge 1 --repo acme/legacy", gh=LEGACY) == {}
+assert run("gh pr merge 1 --repo acme/legacy-old-name", gh=LEGACY) == {}, "renamed into an exclusion"
+assert run("gh pr merge 1 --repo acme/legacy") == {}, "excluded under the name given, whatever it is now"
+ELSE = json.dumps({"number": 1, "headRefOid": HEAD, "url": "https://github.com/someone/else/pull/1"})
+assert run("gh pr merge 1 --repo someone/else", gh=ELSE) == {}
+assert run("gh pr merge 1 --repo ghe.example.test/acme/app") == {}, "another GitHub host is outside this scope"
 config(enabled=False)
 assert run("gh pr merge 7 --repo acme/app") == {}
 CONFIG.unlink()
@@ -151,7 +161,7 @@ config()
 text = reason(run("cd ../other && gh pr merge 7"))
 assert "name it with `--repo OWNER/NAME`" in text, text
 assert decision(run("cd ../other && gh pr merge 7 --repo acme/app")) == "deny"
-assert run("cd ../other && gh pr merge 7 --repo someone/else") == {}
+assert run("cd ../other && gh pr merge 1 --repo someone/else", gh=ELSE) == {}
 assert "more than one repo" in reason(run("gh pr merge https://github.com/acme/app/pull/7 --repo acme/web"))
 
 # Settings that cannot be read deny, as orch land stops on them; a PR GitHub does not answer passes with one line.

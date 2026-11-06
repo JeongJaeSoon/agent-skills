@@ -918,6 +918,21 @@ except p.ConfigError:
 # End to end: a ready plan for an executor repo, under the same config, prints no merge command.
 envconf.write_text(json.dumps({"orchestrate": {"land_executor": {"enabled": True, "repos": ["acme/widgets"]}}}))
 assert p.compute(MergeFake([mpr(1)]), p.config(mconf) | {"kinds": ["ready_to_merge"]}, {}, NOW)["new"][0].get("cmd") is None
+# OWNER/* covers the owner's repos in any case; an excluded one keeps its merge command.
+envconf.write_text(json.dumps({"orchestrate": {"land_executor": {"enabled": True, "repos": ["ACME/*"],
+                                                                 "exclude": ["acme/tools"]}}}))
+wplan = p.compute(MergeFake([mpr(1), mpr(40, repo="acme/tools")]),
+                  p.config(mconf) | {"kinds": ["ready_to_merge"], "merge_repos": ["acme/widgets", "acme/tools"]}, {}, NOW)
+wby = {i["number"]: i for i in wplan["new"]}
+assert wby[1].get("land") == "executor" and "cmd" not in wby[1], wby[1]
+assert wby[40]["cmd"].startswith("gh pr merge 40 -R acme/tools"), wby[40]
+for bad in (["*/*"], ["acme/wid*"]):
+    envconf.write_text(json.dumps({"orchestrate": {"land_executor": {"enabled": True, "repos": bad}}}))
+    try:
+        p.config(mconf)
+        raise AssertionError(f"a wildcard land_scope refuses must stop the config: {bad}")
+    except p.ConfigError:
+        pass
 envconf.unlink()
 assert p.config(xconf)["land_executor_repos"] == [], "no file: the executor is off, as for orch land"
 # Without $AGENT_SKILLS_CONFIG the default file decides, even under another --config.

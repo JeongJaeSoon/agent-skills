@@ -69,7 +69,7 @@ def owners(scope):
 
 
 def wildcard_only(scope, repo, meta):
-    """Why a repo OWNER/* alone covers is out after all, from `gh repo view --json isFork,isArchived`; None when it is in."""
+    """Why a repo OWNER/* alone covers is out after all, from prog.repo_meta's isFork and isArchived; None when it is in."""
     if how(scope, repo) != "owner":
         return None
     for field, what in (("isFork", "a fork"), ("isArchived", "archived")):
