@@ -3,6 +3,7 @@
 
 Usage:
   reboot.py [--slug SLUG | --top] [--run RUN_ID] [--json]
+  reboot.py sessions PATH... [--under] [--since ISO_DATE] [--limit N]
 
   --slug SLUG   this session is the lead of program SLUG: expects one `orch wait SLUG` and a bound Run
   --top         this session is the orchestrator: expects one `orch inbox --wait`, one `orch watch-cards`,
@@ -11,7 +12,11 @@ Usage:
   neither       a worker or a plain session: only the handle, stray waits and the pressure queue are checked
 
 One line per finding: `ok …`, `info …`, or `do …` with the command to run. Nothing is started, stopped or changed.
-Exit 0 when no line says `do`, 1 when one does, 2 when Orca did not answer.
+The first check is `orca status`. Exit 0 when no line says `do`, 1 when one does, 2 when Orca did not answer or is
+not ready (outside an Orca terminal, a not-ready Orca is an `info` line and the rest is checked).
+
+`sessions` lists the Claude Code sessions that ran in each PATH, newest first: last write, session id, transcript, and
+the first prompt. --under also takes the paths below each PATH (removed cards of a worktree root). Exit 1 when none.
 """
 import datetime as dt, json, os, pathlib, re, shlex, subprocess, sys
 
@@ -121,6 +126,22 @@ def worktree_root(cwd):
     return p.stdout.strip() if p.returncode == 0 else cwd
 
 
+def check_status(call, strict=True):
+    """`orca status` first, so an Orca that is down or still starting is named as such (exit 2) instead of surfacing
+    as whichever terminal or Run read happens to fail. strict False (no Orca terminal, so nothing else here reads
+    Orca): an `info` line instead."""
+    try:
+        st = call("status")
+        app, rt = st.get("app") or {}, st.get("runtime") or {}
+        if not (rt.get("reachable") and rt.get("state") == "ready"):
+            raise OrcaError("not_ready", f"app running: {app.get('running')}, runtime state: {rt.get('state')}")
+    except OrcaError as e:
+        if strict:
+            raise
+        return [("info", f"Orca is not ready ({e}); this session is no Orca terminal, so nothing else here needs it")]
+    return [("ok", f"Orca {rt.get('appVersion') or '?'} is ready")]
+
+
 def check_handle(handle, call, root):
     """(lines, terminal dict or None, live handle to speak for this terminal or None)."""
     if not handle:
@@ -218,16 +239,31 @@ def check_run(role, run, handle, call, lead_dispatch=None, slug=None):
                    "to confirm, and run this check again for the workers")], None, None
 
 
-def own_session(table, pid):
-    """This check's own Claude Code session id, found through the process tree and the sessions Claude Code registers;
-    None when it cannot be told."""
+def own_record(table, pid):
+    """This check's own Claude Code session record (id, name, ...), found through the process tree and the sessions
+    Claude Code registers; None when it cannot be told."""
     claude = session_pid(table, pid)
     try:
         import fleet  # beside orca_settings, which imports it anyway
         # fleet's process table also carries each start time, which a live session's registration is checked against.
-        return next((sid for sid, s in fleet.live_sessions(fleet.ps_table()).items() if claude in s["pids"]), None)
+        procs = fleet.ps_table()
+        s = next((s for s in fleet.live_sessions(procs).values() if claude in s["pids"]), None)
+        if not s:
+            return None
+        # A session resumed in a second terminal has two registrations (maybe under two homes); live_sessions keeps the
+        # first one's name, so the caller's own file is read. A file an older process of the same pid left is not it:
+        # the session id and this process's start time must match.
+        started = procs[claude][1]
+        own = next((r for h in fleet.claude_homes() if isinstance(r := fleet.read_json(h / "sessions" / f"{claude}.json", {}), dict)
+                    and r.get("sessionId") == s["sessionId"] and " ".join(str(r.get("procStart")).split()) == started), {})
+        return {**s, **own}
     except Exception:  # the line then says nothing rather than guess
         return None
+
+
+def own_session(table, pid):
+    """The id of own_record's session, None when it cannot be told."""
+    return (own_record(table, pid) or {}).get("sessionId")
 
 
 def check_reload(handle, root=None, session=None):
@@ -252,12 +288,34 @@ def check_reload(handle, root=None, session=None):
     return [("ok", "hooks/hooks.json is the one this session loaded")]
 
 
+STATUS_GLYPHS = "◐◑◒◓·✢✳✶✻✽"  # Claude Code's spinner frames; a braille frame is matched by range
+
+
+def plain_title(title):
+    """A tab title without the status glyph Claude Code puts in front of it (◐ ◑ ✳ or a braille spinner frame)."""
+    t = (title or "").lstrip()
+    while t and (t[0] in STATUS_GLYPHS or "⠀" <= t[0] <= "⣿"):
+        t = t[1:].lstrip("️ \t")
+    return t
+
+
 def check_tab(role, terminal, handle):
     if role != "top" or terminal is None:
         return []
-    if terminal.get("title") == "orchestrator":
+    if plain_title(terminal.get("title")) == "orchestrator":
         return [("ok", "tab titled orchestrator")]
     return [("do", f"`orca terminal rename --terminal {handle} --title orchestrator`")]
+
+
+def check_name(role, record):
+    """The orchestrator is the session named `orchestrator` (how the human tells which session routes). A session
+    resumed without `--name` loses it. No record, or one without a name field, says nothing."""
+    if role != "top" or not record or "name" not in record:
+        return []
+    if (record["name"] or "") == "orchestrator":
+        return [("ok", "session named orchestrator")]
+    return [("do", f"session is named {record['name'] or 'nothing'!r}, not orchestrator: type `/rename orchestrator` "
+                   "(a restart starts it with `claude --continue --name orchestrator`)")]
 
 
 def check_waits(role, slug, table, pid):
@@ -456,7 +514,7 @@ def check_handoff(key, run, call=orca, last=None):
         return [("info", f"no handoff recorded for {key}")]
     ts, data = last
     out = [("info", f"handoff {ts}: " + "; ".join(f"{k}={v}" for k, v in (data or {}).items() if v and k != "handle")
-                    + " (`orch handoff show` adds the open decisions)")]
+                    + f" (`orch handoff show --key {key}` adds the open decisions)")]
     if not run:
         return out
     try:
@@ -474,13 +532,16 @@ def check_handoff(key, run, call=orca, last=None):
 
 def run_checks(role, slug, run, handle, cwd, call=orca, table=None, pid=None, queue=None, reload_root=None):
     root = worktree_root(cwd)
-    lines, terminal, live = check_handle(handle, call, root)
+    lines = check_status(call, strict=bool(handle))
+    handle_lines, terminal, live = check_handle(handle, call, root)
+    lines += handle_lines
     tbl = ps_table() if table is None else table
     lines += check_reload(handle, reload_root, own_session(tbl, os.getpid() if pid is None else pid) if handle else None)
     cfg = program_cfg(slug) if slug else {}
     run_lines, bound, lead_dispatch = check_run(role, run or cfg.get("run"), live, call, cfg.get("lead_dispatch"), slug)
     lines += run_lines
     lines += check_tab(role, terminal, live)
+    lines += check_name(role, own_record(tbl, os.getpid() if pid is None else pid) if role == "top" else None)
     lines += check_waits(role, slug, tbl, os.getpid() if pid is None else pid)
     if live:
         lines += check_workers(bound, call, lead_dispatch, live)
@@ -490,10 +551,88 @@ def run_checks(role, slug, run, handle, cwd, call=orca, table=None, pid=None, qu
     return lines
 
 
+def transcript_cwd(f, lines=200):
+    """The working directory a transcript records, None when its first lines name none."""
+    try:
+        with open(f, encoding="utf-8") as fh:
+            for _, line in zip(range(lines), fh):
+                rec = json.loads(line)
+                if isinstance(rec, dict) and isinstance(rec.get("cwd"), str):
+                    return rec["cwd"]
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def sessions(paths, under=False, since=None, limit=None, root=None):
+    """[(mtime, session id, transcript, first prompt)] of the Claude Code sessions that ran in paths, newest first.
+    Claude Code keeps them in projects/<the path with every character but a letter or digit written as ->/; under also
+    takes the paths below each one, such as cards already removed from a worktree root. The folder name cannot tell
+    /work/app/x from /work/app-x, so each transcript's own cwd decides; one with none counts only in its exact folder."""
+    root = pathlib.Path(root or os.environ.get("CLAUDE_PROJECTS_DIR") or "~/.claude/projects").expanduser()
+    paths = [os.path.abspath(os.path.expanduser(p)) for p in paths]
+    names = {p: re.sub(r"[^A-Za-z0-9]", "-", p) for p in paths}
+
+    def ran_in(f, exact):
+        cwd = transcript_cwd(f)
+        if cwd is None:
+            return exact
+        return any(cwd == p or (under and cwd.startswith(p.rstrip("/") + "/")) for p in paths)
+
+    found = []
+    for d in (root.iterdir() if root.is_dir() else ()):
+        exact = d.name in names.values()
+        if not exact and not (under and any(d.name.startswith(n + "-") for n in names.values())):
+            continue
+        for f in d.glob("*.jsonl"):  # one level only: subagents/ transcripts are not sessions
+            try:
+                m = f.stat().st_mtime
+            except OSError:
+                continue
+            if (since is None or m >= since) and ran_in(f, exact):
+                found.append((m, f))
+    found = sorted(found, key=lambda x: x[0], reverse=True)[:limit]
+    return [(m, f.stem, f, roles.first_prompt(str(f))) for m, f in found]
+
+
+def sessions_main(argv):
+    paths, under, since, limit = [], False, None, None
+    it = iter(argv)
+    try:
+        for a in it:
+            if a == "--under":
+                under = True
+            elif a == "--since":
+                since = dt.datetime.fromisoformat(next(it)).timestamp()
+            elif a == "--limit":
+                limit = int(next(it))
+                if limit < 1:
+                    raise ValueError(f"--limit {limit}: give 1 or more")
+            elif a.startswith("-"):
+                raise ValueError(a)
+            else:
+                paths.append(a)
+    except (StopIteration, ValueError) as e:
+        print(f"bad argument {e}\n\n{__doc__.strip()}", file=sys.stderr)
+        return 2
+    if not paths:
+        print(f"name at least one path\n\n{__doc__.strip()}", file=sys.stderr)
+        return 2
+    rows = sessions(paths, under, since, limit)
+    for m, sid, f, prompt in rows:
+        head = " ".join(prompt.split())[:120] or "(no prompt)"
+        print(f"{dt.datetime.fromtimestamp(m).isoformat(timespec='minutes')}  {sid}  {f}\n    {head}")
+    if not rows:
+        print("no session transcript found for " + ", ".join(paths), file=sys.stderr)
+    return 0 if rows else 1
+
+
 def main(argv):
     if "-h" in argv or "--help" in argv:
         print(__doc__.strip())
         return 0
+    if argv[:1] == ["sessions"]:
+        return sessions_main(argv[1:])
     opts = {"--slug": None, "--run": None}
     flags = set()
     it = iter(argv)

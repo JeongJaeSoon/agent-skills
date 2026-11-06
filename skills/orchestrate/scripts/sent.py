@@ -1,15 +1,17 @@
 """Instructions sent out of a session: to another session or card, a subagent, an inbox, Slack or a tracker. The
 dashboard's Sent page shows them so the human can read what was asked of whom.
 
-Four sources, each row tagged with its own:
+Two sources make rows, each tagged with its own:
 - log: `orch sent add`, written by the sender at the moment it sends. One file a day (UTC) under
   <fleet state>/sent/YYYY-MM-DD.jsonl, one JSON object a line: ts, from, to, kind, channel, repo, subject, text.
   With Orca's own, the only record that outlives the sending session, and the only one for Slack, tracker and
-  other non-shell sends.
-- dashboard: a line typed from the dashboard's session page (sends.jsonl, fleet.send).
-- transcript: what the live Claude Code sessions sent by Agent, SendMessage or an orca send in Bash (fleet.fetch_sent).
+  other non-shell sends. A line typed from the dashboard's session page is written there too (kind=dashboard,
+  fleet.send).
 - orca: what Orca keeps itself — every inbox message but heartbeats (fleet.orca_messages_sent) and each Run Task's
   spec (fleet.orca_sent). An `orchestration send` or `reply` therefore needs no log line.
+The transcripts of live Claude Code sessions (Agent, SendMessage, an orca send in Bash; fleet.fetch_sent) make no
+rows. A send found there that matches a log or Orca row folds into it, naming "transcript" in `also`; one that matches
+neither is counted in `unrecorded`: its sender skipped `orch sent add`.
 A send seen in two sources shows once, as its log row or else its Orca message, naming both sources.
 The log keeps the text as sent, so its files are owner-only (0600 in a 0700 directory); everything shown goes
 through fleet.mask.
@@ -19,7 +21,7 @@ import datetime as dt, fcntl, json, os, re, threading
 import fleet
 
 # supersede: the receiver's work was replaced; `orch patrol` flags its card while an agent is still on it.
-KINDS = ("card", "terminal", "inbox", "subagent", "agent", "slack", "tracker", "supersede", "other")
+KINDS = ("card", "terminal", "inbox", "subagent", "agent", "slack", "tracker", "supersede", "dashboard", "other")
 TEXT_MAX = 20000  # shown in full under a fold; longer is cut
 SAME_SEND = dt.timedelta(minutes=10)  # a logged send and its transcript copy are this close
 DAYS_MAX = fleet.SENT_KEEP.days
@@ -74,18 +76,52 @@ def read_log(since):
     return rows
 
 
-def dashboard_sends(since):
-    rows, path = [], fleet.state_dir() / "sends.jsonl"
-    for line in path.read_text().splitlines() if path.exists() else []:
-        try:
-            r = json.loads(line)
-        except ValueError:
-            continue
-        if (isinstance(r, dict) and r.get("typed") and isinstance(r.get("at"), str) and isinstance(r.get("text"), str)
-                and r["at"] >= fleet.iso(since)):
-            rows.append({"ts": r["at"], "from": "dashboard", "to": r.get("session"), "kind": "terminal",
-                         "channel": "dashboard", "text": r["text"], "source": "dashboard"})
-    return rows
+def import_sends(apply=False):
+    """Move the typed lines of the old sends.jsonl into the log as kind=dashboard rows, then keep the file read-only as
+    sends.archive.jsonl. Safe to run again, and by two runs at once: under a lock, the file is renamed first, so a
+    typed line the page appends meanwhile (when the log was unwritable) lands in a new sends.jsonl, which a later
+    run reads too. A row already in the log (same ts, to, text) is skipped, and an archive already there is never
+    replaced. Returns {"typed", "added", "skipped"}; nothing is written unless apply."""
+    path = fleet.state_dir() / "sends.jsonl"
+    archive = path.with_name("sends.archive.jsonl")
+    out = {"typed": 0, "added": 0, "skipped": 0}
+    if not (path.is_file() or archive.is_file()):
+        return out
+
+    def run():
+        if apply and path.is_file() and not archive.exists():  # the page's other actions start a fresh sends.jsonl
+            os.replace(path, archive)
+            os.chmod(archive, 0o400)
+        have = {(r["ts"], r["to"], r["text"]) for p in sorted(sent_dir().glob("*.jsonl")) for r in fleet.read_lines(p)
+                if isinstance(r, dict) and all(isinstance(r.get(k), str) for k in ("ts", "to", "text"))}
+        seen = set()
+        for p in (archive, path):
+            for r in fleet.read_lines(p) if p.is_file() else ():
+                # A permission-prompt answer (fleet.answer_prompt) is typed too, but carries a `key` and is no instruction.
+                if not (isinstance(r, dict) and r.get("typed") and "key" not in r and isinstance(r.get("at"), str) and isinstance(r.get("text"), str)
+                        and r["text"].strip() and isinstance(r.get("session"), str) and fleet.parse(r["at"])):
+                    continue
+                k = (r["at"], r["session"], r["text"])
+                if k in seen:
+                    continue
+                seen.add(k)
+                out["typed"] += 1
+                if k in have:
+                    out["skipped"] += 1
+                    continue
+                if apply:
+                    add(r["session"], r["text"], kind="dashboard", channel=r.get("handle"), sender="dashboard",
+                        now=fleet.parse(r["at"]))
+                    have.add(k)
+                out["added"] += 1
+
+    if not apply:
+        run()
+        return out
+    with open(path.with_name("sends.lock"), "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        run()
+    return out
 
 
 def key(text):
@@ -105,15 +141,25 @@ def same_to(a, b):
 
 
 MESSAGE_FIELDS = ("message", "thread", "run")
+# Orca keeps a send to a terminal bound to a Run under `run:<id>`; one left under `term_…` was stored for a terminal
+# bound to no Run, which nobody reads, and Orca prints no error for it.
+TERMINAL_ONLY = ("sent to a terminal address, not run:<id> or dispatch:<id>: the receiver gets it only while that "
+                 "terminal is bound to a Run; confirm it arrived or resend to its Run or Dispatch")
+
+
+def terminal_only(row):
+    """The warning for an `orchestration` message addressed to a terminal handle; None for any other row."""
+    return TERMINAL_ONLY if str(row.get("to")).startswith("term_") and str(row.get("channel")).startswith("orca ") \
+        and row.get("channel") not in ("orca terminal send", "orca worktree create") else None
 
 
 def page(rows, days=1, now=None, limit=LIMIT, inbox_since=None):
-    """{"rows", "total", "days", "inbox_since"}: the sent instructions of the last `days` days, newest first, one row
-    per send, masked, at most `limit` of them. `rows` are the transcript and Orca rows (fleet.fetch_sent,
+    """{"rows", "total", "days", "inbox_since", "unrecorded"}: the sent instructions of the last `days` days, newest
+    first, one row per send, masked, at most `limit` of them. `rows` are the transcript and Orca rows (fleet.fetch_sent,
     fleet.orca_messages_sent, fleet.orca_sent); they are not changed. An Orca message is a record of its own, like a
-    log line: a copy from a transcript or the dashboard folds into it, and it folds into a log line, which then
-    carries its ids. Two Orca messages never fold. inbox_since (fleet.inbox_cut): where a full inbox read starts,
-    None when the read held every message."""
+    log line: a copy from a transcript folds into it, and it folds into a log line, which then carries its ids. Two
+    Orca messages never fold. A transcript row that folds into neither is no row: `unrecorded` counts them.
+    inbox_since (fleet.inbox_cut): where a full inbox read starts, None when the read held every message."""
     since = (now or fleet.utcnow()) - dt.timedelta(days=days)
     logged = read_log(since)
     by_key = {}
@@ -121,25 +167,36 @@ def page(rows, days=1, now=None, limit=LIMIT, inbox_since=None):
         by_key.setdefault(key(r.get("text")), []).append(r)
     out = list(logged)
     recent = [dict(r) for r in rows if (r.get("ts") or "9") >= fleet.iso(since)]
-    messages = [r for r in recent if r.get("message")]
-    for r in messages + dashboard_sends(since) + [r for r in recent if not r.get("message")]:
+    holds_orca = set()  # ids of log rows an Orca row folded into: they stand for that Orca record now
+
+    def from_orca(r):  # a message, or a Run Task's spec: Orca's own record
+        return bool(r.get("message") or r.get("source") == "orca" or id(r) in holds_orca)
+    unrecorded = 0
+    for r in [r for r in recent if from_orca(r)] + [r for r in recent if not from_orca(r)]:
         t = fleet.parse(r.get("ts"))
         twin = next((x for x in by_key.get(key(r.get("text")), []) if t and fleet.parse(x.get("ts"))
                      and abs(fleet.parse(x["ts"]) - t) <= SAME_SEND and same_to(x.get("to"), r.get("to"))
-                     and not (x.get("message") and r.get("message"))), None)
+                     and not (from_orca(x) and from_orca(r))), None)
         if twin:
+            if from_orca(r):
+                holds_orca.add(id(twin))
             twin["also"] = [*twin.get("also", []), r["source"]]
             twin.setdefault("claude_session", r.get("claude_session"))
             for k in MESSAGE_FIELDS:
                 if r.get(k) is not None:
                     twin.setdefault(k, r[k])
+            if r.get("message"):  # Orca's address is the stored one: the log line's own `to` may be a card or a handle
+                twin["warn"] = terminal_only(r)
+        elif r.get("source") == "transcript":
+            unrecorded += 1  # the sender skipped `orch sent add`; a transcript is a witness, not a record
         else:
             out.append(r)
-            if r.get("message"):
+            if from_orca(r):
                 by_key.setdefault(key(r.get("text")), []).append(r)
     out.sort(key=lambda r: r.get("ts") or "", reverse=True)
-    shown = [{**r, "text": fleet.mask(r.get("text"), TEXT_MAX),
+    shown = [{**r, **({"warn": w} if (w := r.get("warn") if r.get("message") and r.get("source") == "log"
+                                   else terminal_only(r)) else {}), "text": fleet.mask(r.get("text"), TEXT_MAX),
               **{k: fleet.mask(r.get(k), n) or None for k, n in (("subject", 200), ("to", 120), ("from", 120),
                                                                    ("channel", 120), ("repo", 120), ("cwd", 300))}}
              for r in out[:limit]]
-    return {"rows": shown, "total": len(out), "days": days, "inbox_since": inbox_since}
+    return {"rows": shown, "total": len(out), "days": days, "inbox_since": inbox_since, "unrecorded": unrecorded}

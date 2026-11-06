@@ -234,10 +234,69 @@ assert bash(HELPER.format("absent.md")) == "deny"
 assert bash(HELPER.format("$BRIEF")) == "deny"
 assert bash(HELPER.format("lead.md")) == "none"
 assert bash(HELPER.format("lead.md"), session="joined") == "deny", "a lead starting a lead through the helper"
-# After a cd the event's cwd is not where a relative path points: only an absolute one is read.
-assert bash("cd /x && " + HELPER.format("worker.md")) == "deny" and "absolute path" in reason("cd /x && " + HELPER.format("worker.md"))
+# After a cd the event's cwd is not where a relative path points. The hook does not follow a cd (CDPATH, `cd -L`,
+# subshells and `||` all change where it lands), so a relative path asks for an absolute one; `~` and `$HOME` are fine.
+for pre in ("cd /x && ", f"cd {H} && ", "cd safe && ", "(cd safe); ", "false && cd safe; ", "pushd safe; popd; ", "cd safe || true; ", "cd safe; ",
+            "cd $SOMEWHERE && ", "cd - && "):
+    assert "absolute path" in reason(pre + HELPER.format("worker.md")), pre
 assert bash("cd /x && " + HELPER.format(H / "worker.md")) == "none"
+assert bash("cd /x && " + HELPER.format("~/worker.md")) == "none"
+assert bash("cd /x && " + HELPER.format("$HOME/lead.md"), session="joined") == "deny"
 assert bash("pushd /x; " + HELPER.format(H / "lead.md"), agent="agent-skills:lead") == "deny"
+# A set variable or `~` in the brief's path is expanded the way the shell would; anything else still is not.
+assert bash(HELPER.format("$HOME/worker.md")) == "none"
+assert bash(HELPER.format("${HOME}/noclose.md")) == "deny" and "CLOSE or KEEP" in reason(HELPER.format("${HOME}/noclose.md"))
+assert bash(HELPER.format('"$HOME/worker.md"')) == "none"
+assert bash(HELPER.format("$UNSET_BRIEF_VAR")) == "deny" and "cannot expand" in reason(HELPER.format("$UNSET_BRIEF_VAR"))
+assert bash("export HOME=/x; " + HELPER.format("$HOME/worker.md")) == "deny"  # rebound in the same command
+assert bash(HELPER.format("$(echo worker.md)")) == "deny"
+assert bash(HELPER.format("$HOME/../worker.md")) == "deny"  # the parent of HOME has no worker.md
+# What the hook cannot prove is the file the shell reads stays denied (independent review of this change).
+assert bash(HELPER.format("~no_such_guard_user_468/worker.md")) == "deny"  # `~user` is not read, and does not crash the hook
+assert bash("cd ~no_such_guard_user_468 || true; " + HELPER.format("worker.md")) == "deny"
+for rebind in ("BRIEF=x; ", "unset BRIEF; "):
+    assert bash(rebind + "BRIEF+=.other; " + HELPER.format('"$BRIEF"'), BRIEF=str(H / "worker.md")) == "deny"
+# $HOME and ~ are read only when nothing can run before the helper, so no spelling of a rebind can matter.
+for rebind in ("HOME+=/x; ", "unset HOME; HOME=/x; ", "read HOME; ", "export HOME=/x; ", 'export HO""ME=/x; ', "IFS=,; "):
+    assert bash(rebind + HELPER.format('"$HOME/worker.md"')) == "deny", rebind
+    assert bash(rebind + HELPER.format("$HOME/worker.md")) == "deny", rebind
+    assert bash(rebind + HELPER.format("~/worker.md")) == "deny", rebind
+assert bash(HELPER.format("'$HOME/worker.md'")) == "deny"  # single quotes pass the text through literally
+# The helper expands a leading ~ itself, quoted or not, so the hook reads the same HOME file.
+(H / "~").mkdir()
+(H / "~" / "worker.md").write_text((H / "lead.md").read_text())  # a literal "~" directory in cwd holds a lead brief
+assert bash(HELPER.format("'~/worker.md'"), session="joined") == "none"  # HOME's worker, not the literal ~/worker.md
+assert bash(HELPER.format('"~/worker.md"'), session="joined") == "none"
+assert bash(HELPER.format("~/worker.md"), session="joined") == "none" and bash(HELPER.format('"${HOME}/worker.md"')) == "none"
+# The brief is one plain word: a quoted space, a quote inside the name, braces and brackets are not read (round 3).
+(H / "worker.md lead.md").write_text((H / "lead.md").read_text())
+(H / "brief1.md").write_text((H / "lead.md").read_text())
+for arg in ('"worker.md lead.md"', "\"worker.md'\"", "brief{1..1}.md", "brief[1].md", '"worker.md\tlead.md"'):
+    assert bash(HELPER.format(arg)) == "deny", arg
+assert bash("HOME=/other;bin/" + HELPER.format('"$HOME/worker.md"')) == "deny"  # `\S*/` once swallowed the earlier statement
+assert bash("bin/" + HELPER.format('"$HOME/worker.md"')) == "none"
+# Round 5: `$HOME` after a `~` in single quotes is literal, and bash splits words on blanks only, not on NBSP or VT.
+(pathlib.Path(str(H) + str(H))).mkdir(parents=True)
+(pathlib.Path(str(H) + str(H)) / "worker.md").write_text((H / "worker.md").read_text())
+assert bash(HELPER.format("'~/$HOME/worker.md'")) == "deny"
+for blank in (" ", "\x0b"):
+    assert bash(HELPER.format(f"worker.md{blank}lead.md")) == "deny", repr(blank)
+    assert bash(HELPER.format(f"{blank}worker.md")) == "deny", repr(blank)  # the blank leads the word
+assert bash(HELPER.format("\\x" + str(H / "worker.md"))) == "deny"  # bash passes the relative `x/…`, the masked text shows `/…`
+assert bash(f"skills-sync card \\ {H / 'worker.md'} --repo name:app --name app-x") == "deny"  # bash passes " /…", relative
+assert bash("skills-sync card \\x--brief --repo name:app --name app-x") == "deny"  # an escape before what looks like an option
+assert bash(HELPER.format("--help")) == "none"
+# Round 4: a later argument can rebind HOME, and a cd has spellings no scan of earlier text catches.
+assert bash(HELPER.format("'~/worker.md'") + ' --x "$((HOME=0))"', session="joined") == "deny"
+assert bash(HELPER.format("$HOME/worker.md") + " --x `true`") == "deny"
+for pre in ("! cd /x; ", 'c"d" /x && ', "f() { cd /x; }; f; ", "echo hi; "):
+    assert "absolute path" in reason(pre + HELPER.format("worker.md")), pre
+    assert bash(pre + HELPER.format(H / "worker.md")) == "none", pre
+(H / "physical" / "child").mkdir(parents=True)
+(H / "physical" / "brief2.md").write_text((H / "lead.md").read_text())
+(H / "brief2.md").write_text("/goal fix X\nCLOSE: §8\n")
+os.symlink(H / "physical" / "child", H / "link")
+assert bash(HELPER.format("link/../brief2.md"), session="joined") == "deny"  # `..` after a symlink is its target's parent
 # Every call is checked, and only a call whose own argument is --help is skipped.
 assert bash(HELPER.format("--help")) == "none"
 assert bash(HELPER.format("lead.md") + " --comment --help", session="joined") == "deny"

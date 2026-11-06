@@ -124,14 +124,18 @@ msg = post("gh pr merge 12")["hookSpecificOutput"]["additionalContext"]
 check("notes only: names notes, not tracker", "notes store" in msg and "the tracker" not in msg)
 check("merge: no PR-opened follow-ups", "in-review" not in msg and "PR opened" not in msg)
 
-# A PR open adds deliver-ticket §5's follow-ups: the board column in Orca, the Linear attach, the milestone move.
+# A PR open adds deliver-ticket §5's follow-ups: the board column in Orca, the PR link through tracker.py, the move.
+ATTACH = "/skills/use-tracker/scripts/tracker.py attach <ID> --url <pr>`"
 reset()
 msg = post("gh pr create --title x --body y", tid="o1")["hookSpecificOutput"]["additionalContext"]
 check("create, linear, Orca: in-review, attach and milestone",
-      "record.md" in msg and "--workspace-status in-review" in msg and "orca linear attach" in msg and "`review`" in msg)
+      "record.md" in msg and "--workspace-status in-review" in msg and "`python3 /" in msg and ATTACH in msg
+      and "linkedItems" in msg and "orca linear attach" not in msg and "`review`" in msg)
 reset({"tracker": {"adapter": "jira"}})
 msg = post("gh pr create --title x --body y", tid="o2", orca=False)["hookSpecificOutput"]["additionalContext"]
-check("create, jira, no Orca: milestone only", "in-review" not in msg and "linear" not in msg and "Milestones" in msg)
+check("create, jira, no Orca: the same tracker.py link, nothing Linear or Orca",
+      "in-review" not in msg and "linear" not in msg.lower() and "linkedItems" not in msg and "Milestones" in msg
+      and ATTACH in msg)
 reset({})
 out = post("gh pr create --title x --body y", tid="o3")
 check("create, no config, Orca: in-review only, no obligation",

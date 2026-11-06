@@ -8,10 +8,15 @@ root = pathlib.Path(tempfile.mkdtemp(prefix="test-inbox-stream-"))
 os.environ.update({"AGENT_SKILLS_STATE": str(root), "AGENT_SKILLS_CONFIG": str(root / "none.json"),
                    "ORCH_FLEET_STATE": str(root / "dash")})
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
+import compactions  # noqa: E402
 import inbox_stream as ist  # noqa: E402
 import prog  # noqa: E402
 
 ME = "term_me"
+P = compactions.Policy
+ceiling = lambda n: (lambda: P(compact=False, ceiling=n, auto_clear=True))  # noqa: E731
+C = compactions.Compaction
+hist3 = lambda sid: [C(1.0 + 6000 * i, 343_000, 60_000) for i in range(3)]  # noqa: E731
 
 
 class Clock:
@@ -55,8 +60,9 @@ def stream(batches, **kw):
     orca = Orca(clock, batches)
     prog.check = orca
     out = io.StringIO()
-    defaults = dict(debounce=30, ttl_ms=600_000, cards=False, threshold=0, out=out, clock=clock, now=clock,
-                    session=lambda me: "s1", ctx=lambda s: None, store=Store())
+    defaults = dict(debounce=30, ttl_ms=600_000, cards=False, policy=lambda: P(compact=False), out=out, clock=clock,
+                    now=clock, session=lambda me: "s1", ctx=lambda s: None, store=Store(),
+                    role_key=lambda s: "orchestrator")
     s = ist.Stream(ME, **{**defaults, **kw})
     return s, orca, out, clock
 
@@ -119,17 +125,58 @@ assert "orch watch-cards exited 1 (OSError: boom); started again" in out.getvalu
 
 ctx = {"v": 150_000}
 s, orca, out, clock = stream([{"deliveryId": "d", "messages": [{"id": "q", "type": "question"}]}] * 3,
-                             threshold=130_000, ctx=lambda sid: ctx["v"])
+                             policy=ceiling(130_000), ctx=lambda sid: ctx["v"])
 s.mail(600)
 s.mail(600)
-assert out.getvalue().count("RESTART DUE: context 150k > 130k") == 1, out.getvalue()
-ctx["v"] = 176_000
+assert out.getvalue().count("RESTART DUE: context 150k > ceiling 130k") == 1, out.getvalue()
+ctx["v"] = 176_000  # the same reason holds: announced once, however far the context grows
 s.mail(600)
-assert out.getvalue().count("RESTART DUE") == 2
-s, orca, out, clock = stream([], threshold=130_000, ctx=lambda sid: 150_000)
+assert out.getvalue().count("RESTART DUE") == 1
+s, orca, out, clock = stream([], policy=ceiling(130_000), ctx=lambda sid: 150_000)
 assert s.due() == []
 clock.t += ist.QUIET_S
 assert s.due()[0].startswith("RESTART DUE")
+# No ceiling (restart_at absent) and no compaction rule: nothing is due; auto_clear off: the ceiling is not the stream's.
+s, orca, out, clock = stream([], policy=lambda: P(compact=False), ctx=lambda sid: 900_000)
+assert s.due(force=True) == []
+s, orca, out, clock = stream([], policy=lambda: P(compact=False, ceiling=130_000), ctx=lambda sid: 900_000)
+assert s.due(force=True) == []
+# Compaction rules: a suggestion for the band, but the stream acts only with compact_restart.auto_clear.
+for pol, hist, want in ((P(), hist3, False), (P(auto_clear=True), hist3, False), (P(auto_compact=True), hist3, True),
+                        (P(auto_compact=True, compact=False), hist3, False),
+                        (P(auto_compact=True), lambda sid: hist3(sid)[:2], False)):
+    s, orca, out, clock = stream([], policy=lambda pol=pol: pol, hist=hist)
+    got = s.due(force=True)
+    assert bool(got) is want, (pol, got)
+    if want:
+        assert got[0].startswith("RESTART DUE: 3 auto-compactions"), got
+        assert s.due(force=True) == []  # once per reason
+        s.hist = lambda sid: hist3(sid) + [C(20_000.0, 343_000, 60_000)]
+        assert "4 auto-compactions" in s.due(force=True)[0]  # one more compaction asks again
+# Zero history over the ceiling is announced the first time; a transcript that cannot be read ends only the compaction rules.
+s, orca, out, clock = stream([], policy=lambda: P(auto_clear=True, ceiling=130_000, auto_compact=True),
+                             ctx=lambda sid: 150_000, hist=lambda sid: (_ for _ in ()).throw(compactions.TranscriptUnreadable("x")))
+assert s.due(force=True)[0].startswith("RESTART DUE: context 150k")
+s, orca, out, clock = stream([], policy=lambda: P(auto_compact=True), hist=lambda sid: (_ for _ in ()).throw(ValueError("x")))
+assert s.due(force=True) == []  # a judgment that raises is skipped
+# A due() that raises does not lose the mail already taken: it is printed first.
+s, orca, out, clock = stream([{"deliveryId": "d", "messages": [{"id": "q", "type": "question"}]}],
+                             policy=lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+s.mail(600)
+assert "message(s) to act on" in out.getvalue() and "RESTART DUE" not in out.getvalue()
+# Only the orchestrator is asked to restart: a lead, a session with no role, and a role that changed across a /clear
+# are not, however large the context.
+for who in ("lead:app", None):
+    s, orca, out, clock = stream([], policy=ceiling(130_000), ctx=lambda sid: 150_000, role_key=lambda sid, who=who: who)
+    assert s.due(force=True) == [], who
+live = {"v": "s1"}
+s, orca, out, clock = stream([], policy=ceiling(130_000), ctx=lambda sid: 150_000, session=lambda me: live["v"],
+                             role_key=lambda sid: "orchestrator" if sid == "s1" else "lead:app")
+assert s.due(force=True)[0].startswith("RESTART DUE")
+# Mail can arrive before cleared() has noticed a /clear: the stream still holds s1, the terminal runs a lead now.
+live["v"] = "s2"
+s.announced.clear()
+assert s.session == "s1" and s.due(force=True) == []
 
 never = lambda me, still=None: (_ for _ in ()).throw(AssertionError("typed"))  # noqa: E731
 req = ("2026-01-01T00:00:00Z", {"stage": "requested", "handle": ME, "session": "s1"})

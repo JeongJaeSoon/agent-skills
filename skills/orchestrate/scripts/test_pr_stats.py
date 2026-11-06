@@ -8,6 +8,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import pr_stats as ps
 
 ps.PACE = 0
+real_graphql = ps.fleet.graphql
 os.environ["ORCH_FLEET_STATE"] = tempfile.mkdtemp(prefix="test-pr-stats-")
 
 D = dt.date
@@ -47,6 +48,44 @@ assert sorted((p["url"], p["source"]) for p in got) == [("u1", "Me"), ("u2", "Cl
 assert len(calls) == 4 and all("is:pr archived:false" in q for q in calls), calls  # 2 sources x 2 months
 assert calls[2].startswith('is:pr archived:false in:body "x y" created:'), calls  # quotes survive the GraphQL string
 assert "created:2026-02-01..2026-02-10" in calls[1], calls  # the current month stops at today
+
+# apps: each app's token sees its own slice; the slices are united by URL. A failing app aborts the collect, loudly,
+# with its name, and nothing falls back to gh's own login.
+org, own = pr("o1", D(2026, 2, 3), repo="acme/x"), pr("p1", D(2026, 2, 4), repo="me/y")
+seen = []
+
+
+def per_app(slices, fail=()):
+    def graphql(query, app=None):
+        seen.append(app)
+        if app in fail:
+            raise ps.fleet.SourceError("no valid GitHub App User access token is available")
+        q = json.loads(re.search(r'query: ("(?:[^"\\]|\\.)*")', query).group(1))
+        nodes = [h for h in slices.get(app, []) if "created:2026-02-01" in q]
+        return {"search": {"issueCount": len(nodes), "pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": nodes}}, []
+    ps.fleet.graphql = graphql
+
+
+per_app({"A": [org, own], "B": [own]})
+got = ps.fetch(D(2026, 2, 1), [{"name": "Me", "query": "author:@me"}], D(2026, 2, 10), ("A", "B"))
+assert sorted(p["url"] for p in got) == ["o1", "p1"] and seen == ["A", "B"], (got, seen)  # each app searched once
+per_app({"A": [org]}, fail=("B",))
+try:
+    ps.fetch(D(2026, 2, 1), [{"name": "Me", "query": "author:@me"}], D(2026, 2, 10), ("A", "B"))
+    raise AssertionError("an app without a token must abort the collect")
+except ps.fleet.SourceError as e:
+    assert "ghtkn app B" in str(e) and "locked / app not authorized" in str(e), e
+assert ps.apps({"pr_stats": {"apps": ["X"]}}) == ("X",) and ps.apps({"pr_stats": {"apps": []}}) == (None,)
+assert ps.apps({}) == (None,)  # unset: gh's own login, as before
+
+# graphql hands the token to the child only: ghtkn wraps gh and GHTKN_APP rides in the child's environment.
+ran = []
+ps.fleet.graphql = real_graphql  # the fakes above replaced it
+ps.fleet.run_json = lambda cmd, timeout=30, env=None: ran.append((cmd, env)) or {"data": {}}
+real_graphql("{ x }", app="acme/write")
+real_graphql("{ x }")
+assert ran[0][0][:5] == ["ghtkn", "exec", "-e", "GH_TOKEN", "--"] and ran[0][1]["GHTKN_APP"] == "acme/write", ran
+assert ran[1][0][0] == "gh" and ran[1][1] is None, ran
 
 # search_range: a range at the search cap is split in half until each part fits.
 calls = fake_gh([("q", pr("u4", D(2026, 3, 20)))], cap_ranges={(D(2026, 3, 1), D(2026, 3, 31))})
@@ -100,7 +139,8 @@ try:
     ps.refresh(cfg=cfg, guard=True)
     raise AssertionError("a source falling to 0 must be held back")
 except ps.SuspectDrop as e:
-    assert "Agent A 4 -> 0" in str(e) and "Me" not in str(e), e
+    assert "source Agent A 4 -> 0" in str(e) and "Me" not in str(e), e
+    assert "token's access may not reach an organization" in str(e) and "SSO authorization" not in str(e), e
     ps.record_error(e)
 kept = json.loads(ps.out_path().read_text())
 assert kept["views"]["all"]["by_source"] == {"Me": 8, "Agent A": 4} and kept["error"].startswith("held back") and kept["failed_at"]

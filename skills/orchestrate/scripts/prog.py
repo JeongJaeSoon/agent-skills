@@ -107,7 +107,7 @@ Usage: orch <command> <slug> [options]
                                      one-line proposal per setting to change, and this terminal's Run
                                      (orca_settings.py)
   model lead|worker                  no slug: the role's model from orchestrate.models; prints nothing when unset
-  decide add --title T [--body-file F] --option "label::description"... --recommend N [--link URL]
+  decide add --title T [--body-file F] --option "label::description"... --recommend N [--link URL] [--order oN]
              --if-no-answer <the --recommend label | 진행 못 함> --reason <owner-asked | hard-after-review | owner-hands-only>
                                      the owner-ask gate (references/owner-ask-gate.md): the recommended option
                                      has its reason, and the last two lead the body
@@ -125,7 +125,8 @@ Usage: orch <command> <slug> [options]
                                      prints that line again. Decisions live in agent-skills.db, or in
                                      decisions.json while no DB file exists; a DB not imported yet stops with that
   order setup | add TEXT [--kind order|feedback] [--source S] [--owner-action] | link oN --unit UNIT [--stand-in]
-        | done oN | drop oN | list [--status S] [--json] | import FILE [--skip REGEX] [--dry-run | --check]
+        | done oN | drop oN | reopen oN | links-complete oN [--undo] | shadow | list [--status S] [--json]
+        | import FILE [--skip REGEX] [--dry-run | --check]
                                      no slug: the owner's instructions (order.py). Write one before you delegate or
                                      start it; link it to the card, agent, board item, decision or PR that carries it
                                      (UNIT: card:<worktree> | agent:<id> | board:<bN> | decision:<dN> | pr:<owner/repo#n>).
@@ -133,7 +134,11 @@ Usage: orch <command> <slug> [options]
                                      (10) as 연결 없는 오너 지시. setup runs once per PC; import takes a hand list
                                      once per line (the original is only read; --check lists what is not taken yet).
                                      --stand-in links a unit that only stands for the order, such as the temporary
-                                     to-do an import replaced: it never counts as carrying or resolving the order
+                                     to-do an import replaced: it never counts as carrying or resolving the order.
+                                     links-complete is the receiving session's word that every unit is linked; only
+                                     such an order can be closed by tidy, which records a would_close event until
+                                     orchestrate.order_auto_close is true. shadow sets those events against what the
+                                     sessions closed by hand
   db import [--dry-run | --apply] [--rehearsal] | export --legacy --target 4a|pre-4a DIR | dump [TABLE]
   db backup FILE | restore FILE [--rehearsal] | rollback 4b DIR [--rehearsal] | cutover-plan 4a|4b
   db migrate [--check] | init        migrate is the whole cutover in one rerunnable command, run by the owner from a
@@ -173,9 +178,18 @@ Usage: orch <command> <slug> [options]
                                      link the row to it by that id, which a terminal restart does not change.
                                      A row linked to a card takes neither --pr nor another --worktree: Orca
                                      knows them. lead add refuses a lead Orca knows; board set links a row
-  board drop <id> | doing add <title> --owner W --next E [--waiting] [--force --why T] | doing drop <n>
-        | later add <title> --trigger T [--due D] [--who W] [--at N] | later move <n> --to N | later drop <n>
-        | todo add <title> (--due D | --after C) --who W | todo drop <n> | todo from-later <n> [--due D] --who W
+  board set card:<worktree> [--phase TEXT] [--progress N/M] [--after owner/repo#N] [--owner WHO --next TEXT] | annot-migrate [--apply]
+                                     A card's annotation: what Orca, GitHub and the card's report do not
+                                     know. A new row for a card is refused; `-` clears a field. --owner
+                                     with --next is the owner block (what the owner does); --next alone is
+                                     a step after merge. annot-migrate moves card-linked rows into their
+                                     card's annotation (dry run unless --apply) and lists the rest as
+                                     중복 N건 with a command each.
+  board drop <id> | doing add <title> --owner W --next E [--waiting] [--order oN] | doing drop <n>
+        | later add <title> --trigger T [--due D] [--who W] [--at N] [--order oN] | later move <n> --to N | later drop <n>
+        | todo add <title> (--due D | --after C) --who W [--order oN] | todo drop <n> | todo from-later <n> [--due D] --who W
+          --order oN (on the three adds): the new item carries the owner's order oN (orch order); an unknown or closed
+          oN adds nothing
         | todo list [--telegram] [--json] [--now ISO8601] [--no-refresh] | now [LINE]... | show
   board open [--json] | done <id>... [--why T] [--json] | reopen <id>... [--json] | tidy [--dry-run] [--json] | closed
                                      close what is over (tidy.py): open lists what can be closed now (a row,
@@ -1405,6 +1419,43 @@ def skills_version(root):
     return (git("rev-parse", "--short", base) if base else head) + "+local"
 
 
+STANDALONE_RUN = "standalone"  # a standalone card has no Orca Run; Run lookups on it answer empty
+
+
+def standalone_program(argv):
+    """The `<name>-standalone` program of the repo `orch land --repo OWNER/NAME` names, created when missing.
+
+    Only where the land executor lists the repo: elsewhere a standalone card merges itself and needs no program.
+    """
+    repo = opt(argv, "--repo")
+    slug = f"{repo.split('/')[-1]}-standalone" if repo and "/" in repo else None
+    if slug != argv[0]:
+        sys.exit(f"no program '{argv[0]}'; a standalone PR lands as `orch land <name>-standalone --repo OWNER/NAME`")
+    if not land_executor(repo):
+        sys.exit(f"no program '{slug}', and orchestrate.land_executor is off for {repo}: a standalone card merges its own PR")
+    d = HOME / slug
+    cfg = {"slug": slug, "repo": repo, "run": opt(argv, "--run", STANDALONE_RUN), "tracker": {}, "predicate": [],
+           "merge_policy": "autonomous", "ceiling": 6, "deadline": None, "created_at": now(),
+           "skills_commit": skills_version(pathlib.Path(__file__).resolve().parents[3]), "note": "standalone cards",
+           "final_check": None}
+    try:
+        write_program(d, cfg, cfg["run"], "autonomous")
+        print(f"created standing program {slug} for {repo} (merge_policy autonomous)")
+    except FileExistsError:  # another card created it between the check and here
+        pass
+
+
+def standalone_target(argv):
+    """The Program for argv[0], created first when `--repo` is given and it is missing. A program that exists must
+    belong to that repo: `--repo` is what the executor setting was checked against."""
+    if "--repo" in argv and not (HOME / argv[0] / "program.json").exists():
+        standalone_program(argv)
+    p = Program(argv[0])
+    if "--repo" in argv and p.cfg["repo"] != opt(argv, "--repo"):
+        sys.exit(f"program '{argv[0]}' is for {p.cfg['repo']}, not {opt(argv, '--repo')}")
+    return p
+
+
 def cmd_init(argv):
     slug = argv[0]
     d = HOME / slug
@@ -1428,9 +1479,19 @@ def cmd_init(argv):
         "deadline": opt(argv, "--deadline"), "created_at": now(), "skills_commit": skills_commit,
         "note": opt(argv, "--note"), "final_check": opt(argv, "--final-check"),
     }
+    try:
+        write_program(d, cfg, run_id, policy)
+    except FileExistsError:  # a standalone `orch land` created it after the check above
+        sys.exit(f"{d}/program.json exists; programs are resumed, not re-initialised")
+    print(f"initialised {d}")
+    print("\n".join(dashboard_lines(slug)))
+
+
+def write_program(d, cfg, run_id, policy):
+    """Create program.json for cmd_init and standalone_program; FileExistsError when another caller got there first."""
     me = os.environ.get("ORCA_TERMINAL_HANDLE")
     try:
-        mine = own_worker(all_workers(run_id), me) if me else None
+        mine = own_worker(all_workers(run_id), me) if me and run_id != STANDALONE_RUN else None
     except SystemExit as e:  # guessing "coordinating lead" would scope a worker lead's program to the whole Run
         sys.exit(f"orch init: could not list {run_id}'s workers to tell whether this terminal is a dispatched lead"
                  f" ({e}). Retry when `orca orchestration worker-list --run {run_id}` answers.")
@@ -1445,9 +1506,13 @@ def cmd_init(argv):
         print(f"lead is dispatch {cfg['lead_dispatch']} on {run_id}: `orch wait` reads its own mailbox; start units "
               "with worker-start --spec (Orca refuses a worker's task-create and gate-create on this Run)")
     (d / "briefs").mkdir(parents=True, exist_ok=True)
-    (d / "program.json").write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
-    print(f"initialised {d}")
-    print("\n".join(dashboard_lines(slug)))
+    # A reader must never see a half-written file: write whole, then link it into place (link fails if one exists).
+    tmp = d / f"program.json.{os.getpid()}.tmp"
+    tmp.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
+    try:
+        os.link(tmp, d / "program.json")
+    finally:
+        tmp.unlink()
 
 
 STALL_TEXT = {
@@ -1548,6 +1613,93 @@ def ensure_dash():
         return ((r.stdout or r.stderr).strip().splitlines() or ["dashboard: ensure printed nothing"])[-1]
     except subprocess.TimeoutExpired:
         return "dashboard: `orch-dash ensure` timed out; the lines below may be stale"
+
+
+def note_file(cfg, slug):
+    """(path, why not) of the program note when it sits in a markdown notes root this process may read. An Obsidian
+    vault is read only through its MCP or CLI path (use-notes), so it is never opened from here."""
+    try:
+        user = json.loads(pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-skills.json")
+                          .expanduser().read_text()).get("notes")
+    except (OSError, ValueError, AttributeError):
+        user = None
+    user = user if isinstance(user, dict) else {}
+    mine = cfg.get("notes") if isinstance(cfg.get("notes"), dict) else {}
+    if (mine.get("adapter") or user.get("adapter")) != "markdown":
+        return None, "the notes store is not a markdown root"
+    root = mine.get("root") or (user.get("markdown") or {}).get("root") or "~/notes"
+    if cfg.get("note"):  # `orch init --note`: the note the lead named, or nothing; never another copy
+        named = pathlib.Path(str(cfg["note"])).expanduser()
+        return (named, None) if named.is_file() else (None, f"the note named in program.json is not a file: {cfg['note']}")
+    found = sorted(pathlib.Path(root).expanduser().rglob(f"program-{slug}.md"))
+    if len(found) > 1:
+        return None, f"{len(found)} files named program-{slug}.md under {root}; `orch set {slug} note <path>` names one"
+    return (found[0], None) if found else (None, f"no program-{slug}.md under {root}")
+
+
+def note_values(text):
+    """The values a program note spells in the template's own shape, as {key: value}. A line in another shape, a
+    template placeholder (`<…>`) and a deadline that is no timestamp are left out: only a fixed format is compared."""
+    out = {}
+    head = re.search(r"^- 머지 정책:(.*)$", text, re.M)
+    if head:
+        line = head.group(1)
+        if m := re.match(r"\s*(autonomous|human-gate)\s*(?:·|$)", line):
+            out["merge_policy"] = m.group(1)
+        if m := re.search(r"동시성 천장\s*(\d+)", line):
+            out["ceiling"] = int(m.group(1))
+        if m := re.search(r"마감\s+(\S+)", line):
+            v = m.group(1)
+            if v == "없음":
+                out["deadline"] = None
+            elif not v.startswith("<"):
+                try:
+                    parse_ts(v)
+                    out["deadline"] = v
+                except ValueError:
+                    pass
+    section = re.search(r"^## 완료 조건.*?$(.*?)(?=^## |\Z)", text, re.M | re.S)
+    if section:  # a section with no ticket is a predicate emptied in the note, not a value left out
+        out["predicate"] = re.findall(r"^\s*- \[[ xX]\]\s+([A-Z0-9]*[A-Z][A-Z0-9]*-\d+(?:-[A-Z0-9]+)*)\b",
+                                      section.group(1), re.M)
+    return out
+
+
+def note_lines(p):
+    """Step 5 of `status`: the program note is a copy of program.json's values, so say when a value in it differs.
+    Reads the note, writes nothing; program.json stays the source and `orch set` is the only way to change it."""
+    path, why = note_file(p.cfg, p.slug)
+    if path is None:
+        return [f"note values: not compared ({why})"]
+    try:
+        have = note_values(path.read_text())
+    except OSError as e:
+        return [f"note values: not compared ({path.name} not read: {type(e).__name__})"]
+    if not have:
+        return ["note values: none in the note (values come from `orch status`)"]
+    diffs = []
+    cfg = p.cfg
+    for key in ("merge_policy", "ceiling"):
+        if key in have and have[key] != cfg.get(key):
+            diffs.append(f"{key}: note {have[key]}, program.json {cfg.get(key)}")
+    if "deadline" in have:
+        mine = cfg.get("deadline")
+        same = (have["deadline"] is None and not mine) or (
+            have["deadline"] and mine and parse_ts(have["deadline"]) == parse_ts(mine))
+        if not same:
+            diffs.append(f"deadline: note {have['deadline'] or 'none'}, program.json {mine or 'none'}")
+    if "predicate" in have:
+        note_only = [t for t in have["predicate"] if t not in cfg.get("predicate", [])]
+        json_only = [t for t in cfg.get("predicate", []) if t not in have["predicate"]]
+        if note_only or json_only:
+            diffs.append("predicate: " + ", ".join(
+                x for x in (f"note only {' '.join(note_only)}" if note_only else "",
+                            f"program.json only {' '.join(json_only)}" if json_only else "") if x))
+    if diffs:
+        return ["note values: DIFFER from program.json — " + "; ".join(diffs)
+                + " (program.json is the source; the note is a copy, so correct the note, and `orch set` only if "
+                  "program.json is the stale one)"]
+    return [f"note values: match program.json ({', '.join(have)})"]
 
 
 def dashboard_lines(slug):
@@ -1767,6 +1919,7 @@ def cmd_status(argv):
                           leftover=sum(active is False for _, _, active, _ in leftover))
     budget_note = f" (budget {used:.0%} used)" if used is not None else ""
     lines.append(f"next: {nxt}{budget_note}")
+    lines += note_lines(p)
     print("\n".join(lines + dashboard_lines(p.slug)))
     if not wait_ok:
         sys.exit(1)
@@ -1895,7 +2048,7 @@ def cmd_set(argv):
 
 
 def cmd_verdict(argv):
-    p = Program(argv[0])
+    p = standalone_target(argv)
     pr, sha, src = int(opt(argv, "--pr")), opt(argv, "--sha"), opt(argv, "--source")
     if not src or not sha:
         sys.exit("verdict needs --sha (the head that was reviewed) and --source (who reviewed: independent-review, "
@@ -2314,6 +2467,26 @@ def base_ci_hint(repo, base):
             f" there; start it with gh workflow run <ci workflow file> --repo {repo} --ref {base} and watch that run")
 
 
+def stack_refusal(p, pr, stacks):
+    """The land executor's refusal of a PR in a stack. Only the bottom layer has a way in: once the layer above
+    stands on the base, `pr` is a single PR. Retargeting rewrites that layer's diff, so its verdict is stale; the
+    layers further up stay on it. Any other layer waits for the ones below."""
+    why = f"#{pr} is in a stack: the land executor lands single PRs only"
+    members = next((m for m in stacks.values() if pr in m), [])
+    if not members:
+        return why
+    if members[0] != pr:
+        return f"{why}. Land #{members[0]} first, then the layers above it in order"
+    if len(members) < 2:
+        return why
+    # Read here, not from open_rows (one page of PRs): a guessed base would send the retarget to the wrong branch.
+    base = pr_view(p.cfg["repo"], pr).get("baseRefName")
+    if not base:
+        return f"{why}. #{pr} is the bottom layer; retarget #{members[1]} onto #{pr}'s base (it could not be read), then land again"
+    return (f"{why}. #{pr} is the bottom layer; do: gh pr edit {members[1]} --base {base} --repo {p.cfg['repo']},"
+            f" then orch land {p.slug} --pr {pr} (#{members[1]} needs a new review: its diff changed)")
+
+
 def attempt(p, pr, klass, onto_lower=False, expect=None, verdict_sources=None):
     """One pass: returns (exit_code, message). `expect`: the head the land executor was asked to merge, and
     `verdict_sources` the sources its verdict must come from (merge_unit)."""
@@ -2342,7 +2515,7 @@ def attempt(p, pr, klass, onto_lower=False, expect=None, verdict_sources=None):
     stacked = any(pr in members for members in stacks.values())
     if expect and (stacked or onto_lower):
         # Its checks pin one PR at one sha; the lower layers merge-async would take have no such pin.
-        return 1, f"#{pr} is in a stack: the land executor lands single PRs only"
+        return 1, stack_refusal(p, pr, stacks)
     if expect and unread:
         return 2, "yield: the stack listing did not answer, so the land executor cannot tell a single PR; land again"
     members = next((m for m in stacks.values() if pr in m), [])
@@ -2570,7 +2743,7 @@ def land_request(p, pr, klass, argv):
 
 
 def cmd_land(argv):
-    p = Program(argv[0])
+    p = standalone_target(argv)
     pr, klass = int(opt(argv, "--pr")), opt(argv, "--class")
     if klass and klass not in KLASS:
         sys.exit(f"--class is one of {', '.join(KLASS)}")
@@ -3893,9 +4066,19 @@ def cmd_decide(argv):
             # the report appends it, and a long body loses its end, not them.
             text = (pathlib.Path(body).read_text() if body else "").strip()
             text = board.ask_line(default, reason) + (f"\n\n{text}" if text else "")
+            order = opt(rest, "--order")
+            if order:  # before the decision exists: a mistyped oN adds nothing
+                store.order_get(order, require_open=True)
             d = fleet.decision_add(opt(rest, "--title"), text, options,
                                    int(rec) if rec else None, opt(rest, "--link"), os.environ.get("ORCA_TERMINAL_HANDLE"))
             print(d["id"])
+            if order:
+                try:
+                    store.order_link(order, f"decision:{d['id']}", os.environ.get("ORCA_TERMINAL_HANDLE"))
+                    print(f"{order} linked decision:{d['id']}")
+                except (ValueError, store.NotMigrated) as e:
+                    sys.exit(f"{d['id']} was added but not linked to {order} ({e}); link it with "
+                             f"orch order link {order} --unit decision:{d['id']}")
         elif sub == "list":
             for d in fleet.open_decisions():
                 print(f"{d['id']}  {d['created_at']}  {d['title']}")
@@ -3932,7 +4115,7 @@ def cmd_decide(argv):
             print(f"{d['id']} checked {d['checked_at']}")
         else:
             sys.exit("usage: orch decide add --title T [--body-file F] --option 'label::description'... --recommend N "
-                     "[--link URL] --if-no-answer LABEL|'진행 못 함' --reason TAG | list | show <id> | answer <id>|--title T --quote TEXT|--quote-file F [--by SESSION] | "
+                     "[--link URL] [--order oN] --if-no-answer LABEL|'진행 못 함' --reason TAG | list | show <id> | answer <id>|--title T --quote TEXT|--quote-file F [--by SESSION] | "
                      "done <id> [--answer TEXT] | drop <id> | keep <id>")
     except store.NotMigrated as e:
         sys.exit(f"decisions are not in {store.DB_NAME} yet ({e})")
@@ -3987,7 +4170,7 @@ def cmd_stage(argv):
                 return print(json.dumps(t, ensure_ascii=False, indent=1))
             text = (stages.render_telegram if "--telegram" in rest else stages.render_md)(t)
             fold = f"접음 {gone}행 (끝남 또는 {idle_d}일 그대로) · --all 로 전부" if gone else ""
-            print("\n\n".join(filter(None, (text, fold))) or "기록된 단계 없음")
+            print("\n\n".join(filter(None, (text, fold, stages.ignored_note(t)))) or "기록된 단계 없음")
             if "--telegram" not in rest and any(table_width.table_width(x) > stages.COLS for _, x in table_width.tables(text)):
                 sys.exit("a table is wider than 78 columns")
         else:
@@ -3996,6 +4179,12 @@ def cmd_stage(argv):
                      "next [LINE]... | done <id> | drop <id> | show [--program P] [--all] [--md|--telegram|--json]")
     except (ValueError, OSError) as e:
         sys.exit(str(e))
+
+
+def say_linked(order, item):
+    """The line `--order` adds to a board add: the item now carries the order."""
+    if order and item:
+        print(f"{order} linked board:{item['id']}")
 
 
 def cmd_board(argv):
@@ -4011,7 +4200,16 @@ def cmd_board(argv):
         elif sub == "set" and rid:
             board.set_row(rid, **{f: opt(rest, f"--{f}") for f in
                                   ("kind", "title", "repo", "program", "parent", "status", "progress", "next", "owner", "pr", "worktree",
-                                   "after", "priority")})
+                                   "after", "priority", "phase")})
+        elif sub == "annot-migrate":
+            move, left = board.annot_migrate("--apply" in rest)
+            print(f"{'moved' if '--apply' in rest else 'would move'} {len(move)} row(s) into card annotations"
+                  + ("" if "--apply" in rest else "  (dry run; --apply writes)"))
+            for wt, (row, fields) in move.items():
+                print(f"  row:{row} -> card:{wt}  " + (" ".join(f"{k}={v}" for k, v in fields.items()) or "(no field to carry)"))
+            print(f"중복 {len(left)}건" + (": 옮기지 않았다. 처리 명령을 쓴 뒤 다시 돌린다" if left else ""))
+            for row, why, cmd in left:
+                print(f"  row:{row}  {why}  → {cmd}")
         elif sub == "drop" and rid:
             board.drop(rid)
         elif sub == "priority" and rest[:1] == ["set"] and len(rest) == 3:
@@ -4022,17 +4220,22 @@ def cmd_board(argv):
             for g in sorted(board.read()["groups"].values(), key=lambda g: (g["priority"].split(":", 1)[0].zfill(3), g["match"])):
                 print(f"{g['match']}  {g['priority']}")
         elif sub == "doing" and rest[:1] == ["add"] and len(rest) > 1:
-            board.doing_add(rest[1], opt(rest, "--owner"), opt(rest, "--next"), "--waiting" in rest, "--force" in rest, opt(rest, "--why"))
+            if "--force" in rest:
+                sys.exit("board doing add has no --force: reword a title that only shares a name with live work")
+            say_linked(opt(rest, "--order"), board.doing_add(rest[1], opt(rest, "--owner"), opt(rest, "--next"), "--waiting" in rest,
+                                                              opt(rest, "--order")))
         elif sub == "doing" and rest[:1] == ["drop"] and len(rest) > 1:
             board.doing_drop(int(rest[1]))
         elif sub == "later" and rest[:1] == ["add"] and len(rest) > 1:
-            board.later_add(rest[1], opt(rest, "--trigger"), opt(rest, "--due"), opt(rest, "--who"), opt(rest, "--at"))
+            say_linked(opt(rest, "--order"), board.later_add(rest[1], opt(rest, "--trigger"), opt(rest, "--due"), opt(rest, "--who"),
+                                                              opt(rest, "--at"), opt(rest, "--order")))
         elif sub == "later" and rest[:1] == ["move"] and "".join(rest[1:2]).isdigit():
             board.later_move(int(rest[1]), opt(rest, "--to"))
         elif sub == "later" and rest[:1] == ["drop"] and len(rest) > 1:
             board.later_drop(int(rest[1]))
         elif sub == "todo" and rest[:1] == ["add"] and len(rest) > 1:
-            board.todo_add(rest[1], opt(rest, "--due"), opt(rest, "--after"), opt(rest, "--who"))
+            say_linked(opt(rest, "--order"), board.todo_add(rest[1], opt(rest, "--due"), opt(rest, "--after"), opt(rest, "--who"),
+                                                             opt(rest, "--order")))
         elif sub == "todo" and rest[:1] == ["drop"] and "".join(rest[1:2]).isdigit():
             board.todo_drop(int(rest[1]))
         elif sub == "todo" and rest[:1] == ["from-later"] and "".join(rest[1:2]).isdigit():
@@ -4086,8 +4289,8 @@ def cmd_board(argv):
         else:
             sys.exit("usage: orch board lead add <name> --handle H --repo R [--program P] [--run RUN] [--stale-min N] [--worktree ID] | "
                      "lead close <name> | set <id> [--kind K] [--title T] [--repo R] [--program P] [--parent ID] [--status S] "
-                     "[--progress N/M] [--next T] [--owner W|-] [--after owner/repo#N|-] [--pr owner/repo#N] [--worktree ID] [--priority RANK:NAME|-] | drop <id> | priority set|drop|list | doing add <title> --owner W --next E [--waiting] [--force --why T] | doing drop <n> | later add <title> --trigger T [--due D] | "
-                     "later drop <n> | todo add <title> (--due D | --after C) --who W | todo drop <n> | todo from-later <n> [--due D] --who W | "
+                     "[--progress N/M] [--next T] [--owner W|-] [--after owner/repo#N|-] [--pr owner/repo#N] [--worktree ID] [--priority RANK:NAME|-] | drop <id> | priority set|drop|list | set card:<worktree> [--phase P] [--progress N/M] [--after PR] [--owner W --next T] | annot-migrate [--apply] | doing add <title> --owner W --next E [--waiting] [--order oN] | doing drop <n> | later add <title> --trigger T [--due D] [--order oN] | "
+                     "later drop <n> | todo add <title> (--due D | --after C) --who W [--order oN] | todo drop <n> | todo from-later <n> [--due D] --who W | "
                      "now [LINE]... | show | open [--json] | done <id>... [--why T] [--json] | reopen <id>... [--json] | "
                      "tidy [--dry-run] [--json] | closed")
     except store.NotMigrated as e:
@@ -4218,10 +4421,15 @@ def cmd_sent(argv):
             rows = pg["rows"]
             if pg["inbox_since"] and pg["inbox_since"] > fleet.iso(fleet.utcnow() - dt.timedelta(days=days)):
                 print(f"orca messages before {pg['inbox_since']} are past the inbox read and not listed", file=sys.stderr)
+            if pg["unrecorded"]:
+                print(f"{pg['unrecorded']} send(s) in live session transcripts match no log or Orca row: "
+                      "the sender skipped `orch sent add`", file=sys.stderr)
             if "--json" in rest:
                 print(json.dumps(rows, ensure_ascii=False, indent=1))
             for r in [] if "--json" in rest else rows:
                 print(f"{r['ts']}  {r.get('from') or '?'} → {r.get('to') or '?'}  [{r['source']}] {(r.get('subject') or r['text'] or '?').splitlines()[0][:100]}")
+                if r.get("warn"):
+                    print(f"    ! {r['warn']}")
         else:
             sys.exit(usage)
     except (ValueError, OSError) as e:

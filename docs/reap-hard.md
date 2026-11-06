@@ -4,7 +4,7 @@
 
 ## 왜 따로 두는가
 
-janitor automation(`reap.py precheck`)은 당시 30분마다 돌았지만(지금은 3시간마다, 부하가 높으면 그 사이에도 한 번) 하루 넘게 대상 0개를 냈고, 그동안 머지된 카드가 남았다. 실측으로 확인한 원인은 다음과 같다.
+janitor automation(`reap.py precheck`)은 당시 30분마다 돌았지만(지금도 30분마다, 모델 없이 precheck가 정리까지 한다) 하루 넘게 대상 0개를 냈고, 그동안 머지된 카드가 남았다. 실측으로 확인한 원인은 다음과 같다.
 
 1. **등록된 것만 본다.** janitor는 ledger에 있거나, 오케스트레이션 워커가 만들었거나, lineage가 `cli`인 카드만 본다. Orca 앱이나 다른 경로로 만든 카드(lineage `manual`·없음)는 판정 대상에 오르지 않았다. 측정 시점에 Orca 카드 42개 중 13개가 그랬고, 리드 카드 대부분이 여기에 들었다. dispatch-card의 `ledger add`는 2주 동안 5번 불렸다.
 2. **닫기 요청이 한 번도 나가지 않았다.** 세션이 떠 있는 카드는 `done-card`로 그 세션에게 닫아 달라고 한 번 묻는다. 그런데 이 요청은 PR 머지, 워커 턴 없음, `cli` 카드면 6시간 조용, 그 뒤 2시간 더 조용이라는 조건을 모두 채워야 나간다. ledger의 `done-card` 기록은 0건이었다. 머지 뒤에도 워커 행이 `in_progress`로 남은 카드는 이 조건을 영영 채우지 못한다.
@@ -23,7 +23,7 @@ reap-hard는 이 네 가지를 우회하지 않고 대체한다. 등록 여부�
 
 | 대상 | 닫는 조건 | 동작 |
 |---|---|---|
-| 카드 | 그 브랜치의 자기 PR(포크 제외)이 MERGED/CLOSED이고 PR head가 worktree HEAD와 같다. 열린 PR이 없다. 변경 없음(추적 안 되는 파일 포함). 세션 기록이 `idle_minutes`(30분) 넘게 조용하고, Orca 터미널 출력도 그만큼 없다. 세션 기록이 있는 Claude 터미널은 출력 기준이 5분이다. 사람이 띄운 프로세스가 없다. 카드 안 Claude 세션이 돌리는 셸이 없다 | 카드 잠금(janitor와 공유)을 잡고 다시 판정한 뒤 공용 가드(`cardguard.guard`)를 통과하면, 판정 때 본 터미널만 `orca terminal close --terminal H`로 닫는다. 가드를 한 번 더 통과하면 ignored 파일은 휴지통, `orca worktree rm --run-hooks` |
+| 카드 | 그 브랜치의 자기 PR(포크 제외)이 MERGED/CLOSED이고 worktree HEAD가 PR head와 같거나 그 조상이다(`git merge-base --is-ancestor`). 열린 PR이 없다. 변경 없음(추적 안 되는 파일 포함). 세션 기록이 `idle_minutes`(30분) 넘게 조용하고, Orca 터미널 출력도 그만큼 없다. 세션 기록이 있는 Claude 터미널은 출력 기준이 5분이다. 사람이 띄운 프로세스가 없다. 카드 안 Claude 세션이 돌리는 셸이 없다 | 카드 잠금(janitor와 공유)을 잡고 다시 판정한 뒤 공용 가드(`cardguard.guard`)를 통과하면, 판정 때 본 터미널만 `orca terminal close --terminal H`로 닫는다. 가드를 한 번 더 통과하면 ignored 파일은 휴지통, `orca worktree rm --run-hooks` |
 | 스택 | compose가 만든 컨테이너의 작업 폴더(`com.docker.compose.project.working_dir`)가 모두 없거나 이번 회차에 닫은 카드다 | `docker compose -p P down`. `-v`·prune·볼륨·이미지 삭제는 하지 않는다 |
 | 리스너 | ppid 1인 node·bun·deno·vite가 TCP LISTEN 중이고, `idle_minutes`보다 오래됐고, cwd가 지워졌거나 cwd의 카드가 없다 | 그 pid에만 SIGTERM. pid와 시작 시각을 다시 확인한다 |
 | serve | `tailscale serve` 항목의 로컬 포트가 미리보기 범위(`serve_ranges`, 기본 4500–4599·32768–60999)에 있고 두 회차 연속 리스너가 없다 | `tailscale serve --https=<port> off`(또는 `--tcp`) |
@@ -32,7 +32,7 @@ reap-hard는 이 네 가지를 우회하지 않고 대체한다. 등록 여부�
 
 컨테이너와 볼륨 규칙은 설정 키가 없으면 꺼진다. 판정은 janitor의 `stopped-container`·`labeled-volume`과 같은 코드(`reap.leftovers`)이고, 상세와 라벨 규약은 `reap-resources` 스킬에 있다. 볼륨은 소유 스택의 ledger 기록이 있고, 기록에 나온 worktree가 디스크와 `orca worktree list`에서 모두 사라지고, 연결된 PR이 열려 있거나 읽지 못하는 상태가 아닐 때만 지운다. 카드 목록을 읽지 못하거나 기록이 없으면 지우지 않고 이유와 함께 남긴다. reap-hard는 회차마다(dry-run 제외) 스택 컨테이너의 작업 폴더가 속한 카드를 ledger에 `stack-seen` 줄로 적는다. 이미 기록된 이름을 다른 카드가 회차 사이에 띄웠다가 내리면 기록이 남지 않아, 첫 카드가 닫혔을 때 볼륨이 지워질 수 있다. 처리 직전에 모든 컨테이너를 다시 읽어 나이를 뺀 규칙을 다시 돌리고, 대상을 하나씩 전체 ID나 이름으로 지운다. prune, `down -v`, 필터·라벨·패턴 단위 삭제는 없다. 라벨 없는 볼륨은 어떤 규칙의 대상도 아니다.
 
-PR head와 HEAD가 같아야 한다는 조건은 리드가 머지된 브랜치 이름을 다시 쓰는 경우를 거른다. PR이 없는 카드는 닫지 않는다. 리드, 조사 카드, 막 만든 카드도 PR이 없기 때문이다. 카드 안에 살아 있는 Claude 세션이 리드나 오케스트레이터면, 얼마나 조용했든 닫지 않는다. 리드는 inbox를 기다리며 몇 시간씩 조용한 것이 정상이기 때문이다. 판별 근거는 둘 중 하나다. `--agent agent-skills:lead|orchestrator`(또는 `--name lead:<slug>`)로 시작했거나, 그 프로세스가 시작된 뒤 이 카드의 세션 기록을 쓴 세션이 `ROLE: lead|orchestrator`를 선언했다(reorient hook의 `roles/<session>.json`). 판별에 필요한 것을 못 읽어도 남긴다. 예를 들어 카드 안 프로세스의 행이 없거나, role 기록이 손상됐거나, role 기록이나 세션 기록 폴더에 권한이 없는 경우다. role 기록 파일이 아예 없는 경우만 "역할 없음"으로 본다. Orca에 하위 카드가 남아 있는 카드(리드)도 닫지 않는다.
+HEAD가 PR head와 같거나 그 조상이어야 한다는 조건은 리드가 머지된 브랜치 이름을 다시 쓰는 경우, 그리고 PR head에 없는 로컬 커밋이 있는 경우를 거른다. PR head를 이 clone이 받지 못했거나, 카드가 자기 커밋을 한 번도 만들지 않았으면(reflog) 조상으로 보지 않아 카드가 남는다. 머지된 브랜치 이름을 재사용한 새 카드가 오래된 조상 위에 있는 경우다. PR이 없는 카드는 닫지 않는다. 리드, 조사 카드, 막 만든 카드도 PR이 없기 때문이다. 카드 안에 살아 있는 Claude 세션이 리드나 오케스트레이터면, 얼마나 조용했든 닫지 않는다. 리드는 inbox를 기다리며 몇 시간씩 조용한 것이 정상이기 때문이다. 판별 근거는 둘 중 하나다. `--agent agent-skills:lead|orchestrator`(또는 `--name lead:<slug>`)로 시작했거나, 그 프로세스가 시작된 뒤 이 카드의 세션 기록을 쓴 세션이 `ROLE: lead|orchestrator`를 선언했다(reorient hook의 `roles/<session>.json`). 판별에 필요한 것을 못 읽어도 남긴다. 예를 들어 카드 안 프로세스의 행이 없거나, role 기록이 손상됐거나, role 기록이나 세션 기록 폴더에 권한이 없는 경우다. role 기록 파일이 아예 없는 경우만 "역할 없음"으로 본다. Orca에 하위 카드가 남아 있는 카드(리드)도 닫지 않는다.
 
 idle 상태의 Claude 화면은 새 내용이 없어도 약 30분마다 터미널에 출력한다. 그래서 Claude 터미널은 세션 기록으로 조용한지를 보고, 터미널 출력은 일하는 중인지만 가린다. 일하는 Claude는 스피너 때문에 초 단위로 출력하므로 5분 창으로 충분하다. 세션 기록을 모르거나 Claude가 아닌 터미널은 출력 30분 기준을 그대로 쓴다. idle 세션은 시각 없는 줄도 세션 기록에 덧붙여 파일 수정 시각을 바꾼다. 그래서 세션 기록이 조용한지는 끝부분 256KB에서 가장 최근의 `timestamp`로 본다. 시각이 있는 줄이 없으면 수정 시각을 쓴다. 세션 기록이나 그 폴더를 못 읽거나 가장 최근 `timestamp`를 해석하지 못하면 남긴다. 권한이 없어 목록을 못 읽는 폴더도 "세션 기록 없음"이 아니라 못 읽음으로 본다. 더 오래된 줄로 내려가면 실제보다 조용하게 읽히기 때문이다.
 
@@ -52,7 +52,7 @@ reap-hard, janitor의 `reap.py reap --plan`, `cards.py apply`, preview-watch의 
 
 ## sweep 그림자 실행
 
-정리 v2의 정리 주체 `skills/reap-resources/scripts/sweep.py`는 지금 그림자 단계다. reap-hard가 dry-run이 아닌 회차를 마칠 때마다 `sweep.py run --shadow`를 따로 띄운다. 한 번에 하나만 돌고(`<state>/sweep.lock`), 10분 안에 못 끝나면 그만둔다.
+정리 v2의 정리 주체 `skills/reap-resources/scripts/sweep.py`는 그림자와 실제 모드(다음 절)를 가진다. 그림자는 reap-hard가 dry-run이 아닌 회차를 마칠 때마다 `sweep.py run --shadow`로 따로 뜬다(`sweep tick`이 reap-hard를 부르면 tick이 대신 돌린다). 한 번에 하나만 돌고(`<state>/sweep.lock`), 10분 안에 못 끝나면 그만둔다.
 
 sweep은 순찰 판정 파일의 가장 최근 회차만 읽는다. 그 회차가 끝났고(`complete`), 한 시간 안의 것이고, 아직 판정하지 않았을 때만이다. 거부한 회차는 판정한 것으로 치지 않으므로 다음 실행이 다시 본다. 그 회차의 `candidates`는 다음 순서로 거른다.
 
@@ -67,7 +67,7 @@ sweep은 순찰 판정 파일의 가장 최근 회차만 읽는다. 그 회차�
 - 대상 잠금은 실제 모드에서만 잡는다. 그림자는 잠금을 잡지 않으므로 옛 주체가 그 때문에 대상을 건너뛰는 일이 없다.
 - 그림자는 모든 규칙을 자기가 가진 것처럼 판정하고, 지금 누가 가졌는지를 함께 적는다.
 - 보호 목록 파일이 없거나 못 읽으면 reap-hard처럼 회차 전체를 거부한다.
-- `run`에 `--shadow`가 없으면 거부한다.
+- `run --shadow`는 어떤 규칙도 소유권이 있는 것처럼 판정한다. 실제 처리는 아래 실제 모드가 소유한 규칙에서만 한다.
 
 `python3 skills/reap-resources/scripts/sweep.py diff --hours 48`은 그림자가 회차마다 처리하겠다고 한 대상을 옛 주체의 실제 처리와 맞춘다.
 
@@ -81,6 +81,26 @@ sweep은 순찰 판정 파일의 가장 최근 회차만 읽는다. 그 회차�
 - 한계: 카드가 아닌 경로 대상(tmpdir, 증거 폴더 같은 것)은 identity가 경로뿐이다. 그래서 한 스캔이 도는 몇 초 사이에 다른 주체가 같은 경로를 지우고 다시 만들면, 옛 것을 지운 처리가 새 것의 계획과 일치할 수 있다. 이 비교는 보고일 뿐이라 정리 동작에는 영향이 없다. 이 경우는 실제 모드 전환(PR D)에서 처리 직전 재판정이 막는다.
 
 판정한 회차가 없거나, 판정한 회차 없이 2시간 넘게 빈 구간이 있으면 `아직 판정 못 함`(exit 3)이다. 넘침이 있으면 exit 1, 통과면 exit 0이다. 전환(PR D) 전에는 48시간 넘게 넘침이 0이어야 한다.
+
+## sweep 실제 모드와 규칙 이관 (PR D)
+
+reap-hard의 네 규칙(`card:strict`, `stack:gone`, `proc:listener`, `serve:dark`)을 sweep으로 하나씩 넘긴다. 컨테이너·볼륨 규칙과 janitor·pressure 규칙은 이 단계에서 넘기지 않는다(`own`이 거부한다). 설치와 `own`은 사람이 실행하고, 코드는 둘 다 스스로 하지 않는다.
+
+```bash
+python3 skills/reap-resources/scripts/sweep.py run --dry-run [--rule R] [--json]   # 모든 규칙을 소유한 것처럼 판정만. 아무것도 쓰지 않는다
+python3 skills/reap-resources/scripts/sweep.py install [--dry-run] [--here]        # LaunchAgent를 쓰고 올린다. --dry-run은 쓸 내용만 보인다
+python3 skills/reap-resources/scripts/sweep.py own <rule>                          # 이 규칙을 sweep이 처리한다
+python3 skills/reap-resources/scripts/sweep.py release <rule>                      # 옛 주체(reap-hard)에게 돌려준다
+python3 skills/reap-resources/scripts/sweep.py config                              # 기존 reap-hard 설정을 "sweep" 키로 이어 적은 출력
+python3 skills/reap-resources/scripts/sweep.py uninstall                           # LaunchAgent를 내린다
+```
+
+- **`install`**: `io.github.jeongjaesoon.sweep` LaunchAgent가 reap-hard 자리에서 같은 주기(`interval`, 기본 900초)로 `sweep tick`을 돌린다. `tick`은 순찰(`orch patrol --if-due`) → 그림자 → `reap-hard run --no-patrol` → 실제 회차 순서이고, 한 단계가 실패하거나 예외를 던져도 다음을 돌리며 가장 큰 종료 코드를 돌려준다. reap-hard는 sweep이 소유한 규칙을 스스로 건너뛰므로, 소유하지 않은 규칙은 지금처럼 reap-hard가 처리한다. reap-hard를 실제 회차보다 먼저 두는 것은, 방금 `own`한 규칙의 sweep 첫 정상 회차(`sweep-last.json`)가 아직 없을 때 그 pass에서는 reap-hard가 계속 처리하게 하려는 것이다. 메인 git 체크아웃에서만 설치하고(워크트리는 launchd 아래서 사라진다, `--here`로 넘길 수 있다), 보호 목록 파일을 읽지 못하면 설치하지 않는다(일하던 job을 아무것도 못 하는 job으로 바꾸지 않으려는 것이다). reap-hard의 Orca 자동화와 옛 LaunchAgent는 사람이 끈다. 끄지 않으면 두 곳이 번갈아 돌지만, 둘 다 소유권 파일을 따르므로 같은 대상을 두 번 처리하지는 않는다.
+- **설정 이어 적기**: `config`(와 `install`의 끝)는 `{"sweep": {interval, idle_minutes, workspaces, protect_file, serve_ranges, max_per_round}}`를 지금의 실제 값(기본값 포함)으로 출력한다. 설정 파일은 고치지 않는다. 사람이 `~/.claude/agent-skills.json`에 붙인다. 두 키가 모두 있으면 `sweep` 쪽이 이기고, 옛 `reap-hard` 키만 있어도 지금처럼 읽는다.
+- **`own <rule>`**: `sweep-owner.json`에 `{"<rule>": "sweep"}`을 적고 세대를 올린다. 다른 규칙의 줄은 그대로 둔다. 읽지 못하는 소유권 파일은 덮어쓰지 않는다. 같은 값이면 세대도 그대로다. `interval`은 설정의 `interval`을 따라가서, sweep 회차가 멈췄을 때 옛 주체가 되돌려받는 시점(세 주기)이 LaunchAgent 주기와 맞는다. sweep의 첫 정상 회차(`sweep-last.json`)가 생기기 전에는 옛 주체가 그 규칙을 계속 처리하므로 `own`과 첫 회차 사이에 빈틈이 없다.
+- **실제 회차(`run`)**: 순찰 판정 파일의 가장 최근 회차가 끝났고(`complete`), 한 시간 안이고, 이미 처리하지 않았을 때만 돈다. 후보 중 sweep이 소유한 규칙의 것만 `needs`, 연속 실패 휴식, `sweep.max_per_round`를 거친 뒤 한 대상씩 처리한다. 대상 잠금을 잡고, 잠금 안에서 소유권 파일을 다시 읽어 아직 sweep 소유인지 확인하고, 공용 검사(`guard.item`)를 거친 뒤 `reap_hard.act`를 부른다. `reap_hard.act`가 카드·스택·리스너·serve를 직접 다시 판정하고 판정 때 본 것만 닫는다. 처리 한 건마다 `sweep.jsonl`에 한 줄(`reap-actions.jsonl`과 같은 모양)을 남기고, 회차가 끝나면 `sweep-last.json`을 쓴다. 소유한 규칙이 없거나 처리할 후보가 없어도 쓴다. 옛 주체가 sweep 회차를 기다리는 "마지막 정상 회차"가 이것이다. 소유한 규칙의 후보가 있는데 sweep의 첫 정상 회차가 아직 없어 옛 주체가 쥐고 있던 회차는 처리한 것으로 적지 않는다. 그 회차가 `sweep-last.json`을 쓰고 나면 reap-hard가 그 규칙을 놓으므로, 다음 pass가 같은 회차를 한 시간 안에서 다시 보고 처리한다. 이미 처리한 회차를 한 번 더 보면 처리하지 않고, 회차가 한 시간 안이면 `sweep-last.json`의 시각만 갱신한다. 예산(10분)이 끝나면 처리 중이던 대상의 줄을 남기고 `sweep-last.json`은 쓰지 않는다.
+- **`run --dry-run`**: 같은 판정을 하되 실행 잠금(`sweep.lock`)도 대상 잠금도 기록도 처리도 없다(상태 폴더를 만들지도 않는다). 모든 규칙을 소유한 것처럼 판정하고 `소유`에 지금 누가 가졌는지를 적는다. `own` 전에 `reap-hard run --dry-run`과 같은 시각에 돌려 규칙마다 처리할 대상이 같은지 본다. 순찰 회차가 끝나지 않았거나 한 시간이 지났으면 거부하고 exit 1이다.
+- **이관 순서(규칙 하나씩)**: (1) `install` 뒤 그림자가 48시간 건강하고 `sweep diff`가 통과, (2) 그 규칙의 dry-run 두 개가 같음, (3) `own <rule>`, (4) 다음 회차들에서 `sweep.jsonl`과 `sweep-last.json`의 `failed`가 0, (5) 문제가 생기면 `release <rule>`로 다음 회차부터 reap-hard가 처리. 처리 주체가 바뀌어도 `sweep diff`는 `sweep.jsonl`의 처리를 옛 주체의 처리와 같게 세므로, 소유한 규칙의 그림자 행이 넘침으로 읽히지 않는다.
 
 ## 보호
 
@@ -122,6 +142,8 @@ bin/reap-hard install         # 메인 체크아웃에서. status, uninstall
                "protect_file": "~/.config/agent-skills/reap-protect.txt",
                "serve_ranges": [[4500, 4599], [32768, 60999]]}}
 ```
+
+같은 이름의 값은 `"sweep"` 키에도 둘 수 있고, 둘 다 있으면 `"sweep"`이 이긴다(`sweep.py config`가 출력하는 모양). `sweep.max_per_round`(기본 50)는 `"sweep"` 키에만 있다.
 
 ## 세션 순찰과의 연결
 
