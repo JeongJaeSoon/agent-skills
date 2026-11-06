@@ -283,14 +283,15 @@ def recent_runs(automation_id):
     """The newest runs of one automation, from the first pages only: without --limit Orca reads the whole history. Orca
     orders a page by createdAt then id, not by runNumber, so two runs sharing a createdAt can swap at the page edge, and
     it halves a page whose reply is too large and returns a cursor: ask for twice what is shown and follow the cursor
-    until that many rows are in (or the history ends), then the caller sorts by runNumber."""
+    until that many rows are in (or the history ends) and the last row no longer shares its createdAt with the row at the
+    cut (a tie group can run past the page), then the caller sorts by runNumber."""
     want, rows, cursor = 2 * AUTOMATION_RECENT, [], None
-    for _ in range(want):  # each page holds at least one row, so this bounds the loop
-        page = orca("automations", "runs", "--id", automation_id, "--limit", str(want - len(rows)),
+    for _ in range(4 * want):  # a page holds at least one row; this bounds a cursor that never ends
+        page = orca("automations", "runs", "--id", automation_id, "--limit", str(max(want - len(rows), AUTOMATION_RECENT)),
                     *(("--cursor", str(cursor)) if cursor else ()))
         rows += page.get("runs") or []
         cursor = page.get("nextCursor")
-        if not cursor or len(rows) >= want:
+        if not cursor or (len(rows) >= want and rows[-1].get("createdAt") != rows[want - 1].get("createdAt")):
             return rows
     return rows
 

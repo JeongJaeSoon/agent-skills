@@ -1817,6 +1817,26 @@ finally:
     fleet.orca = real_orca
 assert page_calls == [(12, None), (9, "c1"), (6, "c2")], page_calls
 assert sorted((r["runNumber"] for r in got_rows), reverse=True)[:fleet.AUTOMATION_RECENT] == [8, 7, 6, 5, 4, 3], got_rows
+
+# A tie on createdAt that runs past the cut keeps being read, or the highest runNumber could stay on a later page; with
+# distinct createdAt the read stops at twice the shown count.
+def run_rows(numbers, tie):
+    return [{"runNumber": n, "createdAt": 100 if tie else 1000 - n} for n in numbers]
+
+
+for tie, expect_calls, expect_rows in ((True, 4, 15), (False, 3, 13)):
+    pages = {None: (run_rows(range(1, 6), tie), "p1"), "p1": (run_rows(range(6, 11), tie), "p2"),
+             "p2": (run_rows(range(11, 14), tie), "p3"), "p3": (run_rows(range(14, 16), tie), None)}
+    page_calls = []
+    fleet.orca = paged_orca
+    try:
+        got_rows = fleet.recent_runs("a1")
+    finally:
+        fleet.orca = real_orca
+    assert len(page_calls) == expect_calls, (tie, page_calls)
+    assert len(got_rows) == expect_rows, (tie, len(got_rows))
+    if tie:
+        assert max(r["runNumber"] for r in got_rows) == 15, got_rows
 assert autos[0]["next_run_at"] == "2026-10-09T11:40:00Z" and "xoxb" not in json.dumps(autos), autos
 assert autos[0]["recent"][0]["summary"] == "posted with [masked]", autos[0]["recent"][0]
 # A long first line reaches the page whole: the table wraps it, nothing here cuts it.
