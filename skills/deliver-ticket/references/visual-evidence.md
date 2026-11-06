@@ -40,8 +40,7 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/shots.py" capture --url http://127.0.0.1:51
   you read for it (`pgrep -f -- '--user-data-dir=<dir>'`, then `kill <pid>`), never with a
   `pkill` pattern.
 - Put the evidence directory outside the worktree (a scratchpad or temporary directory), never in
-  the repo, and register it once it is on the PR: `reap.py ledger add --kind evidence --path <dir>
-  --pr owner/repo#N` (`reap-resources` "Janitor").
+  the repo; `upload` refuses a directory inside a git worktree.
 
 ## Uploading them
 
@@ -51,7 +50,7 @@ box and never submits the comment:
 
 ```bash
 python3 "${CLAUDE_SKILL_DIR}/scripts/shots.py" upload --repo owner/repo --pr N \
-  --out <evidence dir>/urls.json <evidence dir>/*.png
+  --out <scratch dir>/urls.json <evidence dir>/*.png
 ```
 
 - It needs the PR to exist and `ego-browser` signed in to GitHub as someone who can comment. No
@@ -59,6 +58,10 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/shots.py" upload --repo owner/repo --pr N \
 - It checks each file first: an image type, at most 10 MB, a name in the form above. It exits 1 when any
   file came back without a URL, when GitHub marked an upload failed, or when the comment box could
   not be cleared; the last case leaves a draft on the page, so clear it before going on.
+- It registers the image directory in the reap ledger (`--kind evidence`, with the PR), so the
+  janitor removes it after the PR closes (`reap-resources` "Janitor"); a failed registration exits 1.
+  The janitor leaves a directory that holds a non-image file, so `urls.json` goes in a different
+  directory (`<scratch dir>`, the evidence directory's parent) and `upload` refuses it inside.
 - On a private repo the images are visible only to people with access, same as the PR.
 - When the upload cannot run (no `ego-browser`, no sign-in), report the screenshots as NOT VERIFIED
   with the local paths. Do not commit images to the repo to get around it.
@@ -66,14 +69,23 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/shots.py" upload --repo owner/repo --pr N \
 ## Putting them in the sticky comment
 
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/scripts/shots.py" table <evidence dir>/urls.json > <shots.md>
+python3 "${CLAUDE_SKILL_DIR}/scripts/shots.py" table <scratch dir>/urls.json > <shots.md>
 ```
 
 It prints a `### 스크린샷` section: one table per subject, widths as rows (widest first), light and
 dark as columns, and any file outside the naming form as its own image. Append it to the body file
 below the E2E results, add the verdict line, and post the whole body with `sticky-comment.sh` as
-§5 says. An uploaded URL answers 404 until a posted comment references it, so check the images
-load after the sticky is up, not before. The comment then reads:
+§5 says. An uploaded URL answers 404 until a posted comment references it, so check after the
+sticky is up, not before:
+
+```bash
+python3 "${CLAUDE_SKILL_DIR}/scripts/shots.py" check <scratch dir>/urls.json --repo owner/repo --pr N
+```
+
+It reports each image as VERIFIED (a PR comment references the URL and a HEAD request returns an
+image type), NOT VERIFIED, or INCONCLUSIVE. Exit 0 is all verified, 1 any NOT VERIFIED, 2 only
+INCONCLUSIVE: on a private repo the URL answers 404 without a signed-in session, so look at the
+images in the signed-in browser and say so in the verdict line. The comment then reads:
 
 ```markdown
 ### 화면 판정 (head `abc1234`, 판정: lead)

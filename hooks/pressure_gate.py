@@ -513,11 +513,16 @@ def gate(cmd, metrics, state, cfg, now=None, p=None, session="", cwd=""):
         if not what:
             return None
         n, cap = p.active_turns(), p.turn_cap(cfg)
-        if not p.turn_hold(n, cap):
+        s, scap, s_hold = p.session_hold(cfg)
+        if not p.turn_hold(n, cap) and not s_hold:
             return None
         py = shlex.join(["python3", str(SCRIPT)])
-        seen = (f"진행 중인 에이전트 턴이 {n}개로 상한 {cap}개(`reap.pressure.active_turns_per_cpu`)에 닿아" if n is not None
-                else f"에이전트 턴 수를 셀 수 없어(Orca 응답 없음·목록 잘림, 상한 {cap}개)")
+        if s_hold:
+            seen = (f"에이전트 세션이 {s}개로 상한 {scap}개(`reap.pressure.max_sessions`)에 닿아" if s is not None
+                    else f"에이전트 세션 수를 셀 수 없어(Orca 응답 없음·목록 잘림, 상한 {scap}개)")
+        else:
+            seen = (f"진행 중인 에이전트 턴이 {n}개로 상한 {cap}개(`reap.pressure.active_turns_per_cpu`)에 닿아" if n is not None
+                    else f"에이전트 턴 수를 셀 수 없어(Orca 응답 없음·목록 잘림, 상한 {cap}개)")
         if note := getattr(p, "SELF_NOTE", ""):
             seen += f" (경고: {note})"
         return ("deny", f"{MARK} {SOURCE} {seen} `{what}` 로 새 카드를 시작하지 않는다. 카드마다 테스트·hook·브라우저가 같이 돌아 CPU 가 포화된다. "

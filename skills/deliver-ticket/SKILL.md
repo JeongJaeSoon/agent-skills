@@ -30,7 +30,7 @@ Pick the procedure by the shape of the work:
   away → run `figure-it-out` first. It designs the phases, the baseline harness and the decision
   trail; each unit it produces still goes through §2–§6.
 - A one-way-door design decision (a public contract, a schema, a module boundary others will
-  build on) → `architect`, which runs `arena` and publishes its plan page without waiting for
+  build on) → `architect`, which runs `fan-out` compete and publishes its plan page without waiting for
   answers.
 - An unfamiliar subsystem → `how` before the first edit. Code whose reason you do not know →
   `why` before you change it. When either ran, the constraints it found (what to preserve,
@@ -153,7 +153,7 @@ Before pushing, run **both**:
 
 Use the repository's existing verification skill or harness when it fits the affected
 surface. If none exists, run the appropriate direct checks and retain their evidence.
-Create or maintain a reusable verification skill only when requested or useful within the
+Create or maintain a reusable verification skill (`verification-skill`) only when requested or useful within the
 agreed scope; its absence does not block otherwise adequate verification. This changes the
 packaging of verification, never its required coverage or evidence. An existing verification
 skill or harness that cannot drive the changed feature or describes it incorrectly must be
@@ -245,6 +245,10 @@ Then land it. How depends on where you run:
   sha, the CI run ids whose logs it read and the review verdict with its source, stops watching
   CI, and the orchestrator lands it through the repo's `<name>-standalone` program, which
   `orch land --repo` creates when missing (`orchestrate` `references/landing.md`, "Land executor").
+  A repo the scope leaves out is the next bullet's, as if the executor were off; for your own
+  repo `hooks/land_route_gate.py` adds the skills-config spec that would put it in, which goes in
+  the report to the owner. An org's repo is in only when listed by name, and still waits on its
+  required approvals.
 - **Merging it yourself** (a standalone card whose repo has the executor off, or a session the
   user started): merge your own verified PR unless the user set a hold, as
   [references/merge.md](references/merge.md) says (when it is ready, the checks before it, the
@@ -280,6 +284,6 @@ the exact command or URL, and say why it is theirs. If nothing is left, say that
 survives this session.
 
 **The completion comment does not end the turn** (outside a program; inside one, `worker_done`
-and `end-session` §7 do, and so they do for any Orca worker). In the same turn, without waiting for a new prompt, go to `handoff-ticket` §0 — what stays here, what becomes its own ticket, and which
+and `end-session` §7 do, and so they do for any Orca worker). In the same turn, without waiting for a new prompt, go to `dispatch-card` next-ticket mode §0 — what stays here, what becomes its own ticket, and which
 card starts next. Closing with "say the word and I'll hand off" or "want me to file that?" is
 stopping short: those are actions §0 already authorises, not questions to put to the user.

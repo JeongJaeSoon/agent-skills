@@ -83,6 +83,30 @@ class RunTest(unittest.TestCase):
             time.sleep(0.1)
         self.fail(f"child {pid} outlived the timeout")
 
+    def test_what_a_job_leaves_in_its_group_ends_with_it(self):
+        """A late spawn of a job that exits normally (patrol's cut scan thread); one in a session of its own stays."""
+        left, own = oj.STATE / "left.pid", oj.STATE / "own.pid"
+        code = ("import subprocess; d = dict(stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); "
+                f"a = subprocess.Popen(['sleep', '60'], **d); open({str(left)!r}, 'w').write(str(a.pid)); "
+                f"b = subprocess.Popen(['sleep', '61'], start_new_session=True, **d); open({str(own)!r}, 'w').write(str(b.pid))")
+        self.run_job(["run", "j", "--", sys.executable, "-c", code])
+        self.assertTrue(oj.read("j")["ok"])
+        own_pid = int(own.read_text())
+        def stop():
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(own_pid, 9)
+        self.addCleanup(stop)
+        pid, deadline = int(left.read_text()), time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.1)
+        else:
+            self.fail(f"{pid} outlived its job")
+        os.kill(own_pid, 0)
+
     def test_a_failure_with_only_stdout_still_names_its_cause(self):
         self.run_job(["run", "j", "--", sys.executable, "-c", "print('docker is not running'); raise SystemExit(2)"])
         self.assertEqual(oj.read("j")["message"], "exit 2: docker is not running")
@@ -105,8 +129,10 @@ class RunTest(unittest.TestCase):
 
     def test_the_command_gets_a_usable_path(self):
         with mock.patch.dict(os.environ, {"PATH": "/nowhere"}):
-            self.run_job(["run", "j", "--", sys.executable, "-c", "import os; print(os.environ['PATH'])"])
-        self.assertIn("/usr/bin", oj.read("j")["message"])
+            # The stored message keeps 200 characters: print the answer, not the whole PATH (a long PATH pushes /usr/bin past it).
+            self.run_job(["run", "j", "--", sys.executable, "-c",
+                          "import os; print('/usr/bin' in os.environ['PATH'].split(':'))"])
+        self.assertEqual(oj.read("j")["message"], "ok: True")
 
     def test_bad_usage_never_exits_0_and_runs_nothing(self):
         """Exit 0 would let Orca start the agent."""

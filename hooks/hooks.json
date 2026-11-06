@@ -18,12 +18,20 @@
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/self_land_gate.py\"", "timeout": 10 }]
       },
       {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/land_route_gate.py\"", "timeout": 20 }]
+      },
+      {
         "matcher": "Bash|Agent|Task",
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/lifecycle.py\"", "timeout": 5 }]
       },
       {
         "matcher": "Bash|mcp__.*([Ll]inear|[Jj]ira|atlassian).*",
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/prose_check.py\"", "timeout": 5 }]
+      },
+      {
+        "matcher": "mcp__.*([Ll]inear|[Jj]ira|[Aa]tlassian).*",
+        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/tracker_gate.py\"", "timeout": 5 }]
       },
       {
         "matcher": "Bash",

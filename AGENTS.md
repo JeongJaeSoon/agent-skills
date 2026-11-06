@@ -15,6 +15,10 @@
 - 고유값은 실행 시 주입한다. 구조화된 값은 `~/.claude/agent-skills.json`의 스킬별 키, 목록과 비밀은 `~/.config/agent-skills/`, 판단 규칙은 비공개 사용자 스킬·메모리(`~/.claude`)에 둔다. 스킬은 설정 키와 기본 동작을 문서화하고, 설정이 없으면 그 기능을 끄거나 멈추고 묻는다.
 - 예시는 자리표시자만 쓴다: `acme/app#1`, `ABC-1`, `example.test`, `U0FAKE…`.
 
+## 무엇을 먼저 쓰는가
+
+새 주기 작업·상주 프로세스·훅·보조 스크립트를 넣기 전에 [intent.md](intent.md)를 읽는다. 순서는 Orca 기능, Claude Code 기본 기능, 자체 스크립트 순이다. LaunchAgent·cron·자체 daemon은 intent.md의 예외 표에 사유와 함께 올린 것만 쓴다. plist를 쓰는 코드가 표에 없으면 CI(`scripts/test_intent.py`)가 실패한다.
+
 ## 작업 방식
 
 - 코드·주석과 SKILL.md 본문은 영어, 커밋 메시지·PR 제목·본문은 한국어.

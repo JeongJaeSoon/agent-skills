@@ -20,7 +20,13 @@ Usage: orch <command> <slug> [options]
                                      question the brief should have answered, a stall the process
                                      caused, a skill or script defect. PTR points at the proof (message
                                      id, PR comment URL, transcript path:line); nothing is copied in
-  verdict <slug> --pr N --sha REVIEWED_HEAD --source WHO [--result pass|fail] [--note TEXT]
+  verdict <slug> --pr N --sha REVIEWED_HEAD --source WHO [--reviewer NAME] [--evidence LINK_OR_SHA]
+                 [--result pass|fail] [--note TEXT]
+                                     the row keeps the PR's author sessions, the reviewer, the evidence and the
+                                     recorder. A pass is stored only when all four are named and neither the
+                                     reviewer, the --source reviewer nor the recorder is the author; otherwise it
+                                     is refused and nothing is written. An orchestrator records a review someone
+                                     else ran with --reviewer <who ran it>.
   gate <slug> --pr N [--parent TASK_ID]
                                      human-gate: open an Orca decision gate "land PR N?" on a
                                      lead-owned landing Task; the user resolves it in Orca
@@ -29,6 +35,10 @@ Usage: orch <command> <slug> [options]
                                      B's branch), or one found after dispatch. Start-after edges are
                                      Orca task deps (task-create --deps), read from the Run
   queue <slug> [--json]              the land order and why each PR is not moving
+  overlap <slug> --table [--max-open N]
+                                     the files two or more open PRs of the repo change (any program), the PRs
+                                     in the order to land them (ready first, then by number; advice only), and an
+                                     OVER line for a file with more than N open PRs
   overlap <slug> [--paths P,P]       open program PRs with no land-after relation that change one file
                                      (or one exclusive_paths glob): stack the later on the earlier. With
                                      --paths, the open PRs a unit not started yet would collide with.
@@ -65,7 +75,8 @@ Usage: orch <command> <slug> [options]
                                      to the first of them. Rerun to add CI results that came in since
   heavy <slug|-> [--wait-minutes 60] [--pr owner/repo#N] -- <command…>
                                      run a heavy local command (compose stack, image build, local
-                                     E2E) holding one of heavy_slots (2) machine-wide slots; `-`
+                                     E2E) holding one of heavy_slots machine-wide slots (a
+                                     quarter of the CPUs, at least 2); `-`
                                      outside a program. A compose project it leaves behind, with a
                                      config file in this worktree, goes to the reap ledger
                                      (compose-stack) so the janitor downs it once the card is done
@@ -134,7 +145,12 @@ Usage: orch <command> <slug> [options]
                                      orchestrate.order_auto_close is true. shadow sets those events against what the
                                      sessions closed by hand
   db import [--dry-run | --apply] [--rehearsal] | export --legacy --target 4a|pre-4a DIR | dump [TABLE]
-  db backup FILE | restore FILE [--rehearsal] | rollback 4b DIR [--rehearsal] | cutover-plan 4a|4b
+  db backup FILE | restore FILE [--rehearsal] | rollback 4b|state DIR [--rehearsal] | cutover-plan 4a|4b
+  db state [--auto]                  acks.jsonl and stages.json, then watch-prs's prs/sendlog.jsonl -> tables, after a backup,
+                                     with tombstones in their place (setup runs it with --auto after an update; a rerun
+                                     changes nothing); export --legacy --target state|sendlog DIR writes the files back
+                                     for rollback state|sendlog DIR
+  ask add OWNER/REPO#N REVIEWER | list [--status S] [--json] | cancel ID   the review-ask queue watch-prs sends from
   db migrate [--check] | init        migrate is the whole cutover in one rerunnable command, run by the owner from a
                                      plain terminal (cutover.py); init is for a PC with no state (setup runs it)
                                      no slug: agent-skills.db (store.py). import moves decisions.json,
@@ -267,6 +283,9 @@ Tickets come from the tracker adapter (use-tracker/scripts/tracker.py), never fr
 """
 import contextlib, datetime as dt, fcntl, fnmatch, hashlib, heapq, json, math, os, pathlib, re, shlex, subprocess, sys, tempfile, time
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))  # loaded by path or run with -I, this dir is not on it
+import land_scope  # noqa: E402
+
 TRACKER = pathlib.Path(__file__).resolve().parents[2] / "use-tracker" / "scripts" / "tracker.py"
 HOME = pathlib.Path(os.environ.get("PROGRAMS_HOME", "~/.claude/programs")).expanduser()
 GIT_CACHE = pathlib.Path(os.environ.get("XDG_CACHE_HOME", "~/.cache")).expanduser() / "agent-skills" / "orchestrate" / "git"
@@ -397,6 +416,17 @@ class Program:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
         return row
 
+    def append_if(self, ev, ok, **fields):
+        """append, unless ok(events) is false; None then. One lock over the read and the write, so a row another
+        process appends in between is seen by ok, not overwritten in effect."""
+        row = {"ts": now(), "ev": ev, **{k: v for k, v in fields.items() if v is not None}}
+        with self.locked():
+            if not ok(self.events()):
+                return None
+            with self.ledger_path.open("a") as f:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        return row
+
     def append_once(self, ev, seen, **fields):
         """append, unless a row already satisfies seen; None then. One lock over both, or two rounds both pass."""
         row = {"ts": now(), "ev": ev, **{k: v for k, v in fields.items() if v is not None}}
@@ -502,7 +532,7 @@ def stopped(events):
 
 KLASS = {"main-fix": 0, "gate": 1, "urgent": 2, "normal": 3}
 LANDING = {"aging_hours": 2.0, "stale_hours": 3.0, "max_backlog_hours": 2.0, "land_interval_minutes": 25,
-           "exclusive_stale_minutes": 90, "heavy_slots": 2,
+           "exclusive_stale_minutes": 90,
            # Changes that can break a merge they do not textually touch land one at a time, on the latest base.
            "exclusive_paths": ["*migrations/*", ".github/*", "*Dockerfile*", "*compose*.yml", "*compose*.yaml"],
            # A PR touching these changes what a person sees; fnmatch's * also crosses "/".
@@ -511,6 +541,25 @@ LANDING = {"aging_hours": 2.0, "stale_hours": 3.0, "max_backlog_hours": 2.0, "la
 
 def knob(cfg, key):
     return (cfg.get("landing") or {}).get(key, LANDING[key])
+
+
+def slot_count(value):
+    """A usable slot count (a positive int, not a bool) or None, so a typo in a config falls through to the next layer."""
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def heavy_slots(cfg):
+    """program.json `landing.heavy_slots`, else `orchestrate.heavy_slots` of agent-skills.json, else a quarter of the
+    CPUs (at least 2). `orch heavy -` passes no program, so the user file is what a bare card tunes."""
+    landing = cfg.get("landing")
+    n = slot_count(landing.get("heavy_slots")) if isinstance(landing, dict) else None
+    if n is None:
+        path = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-skills.json").expanduser()
+        try:
+            n = slot_count((json.loads(path.read_text()).get("orchestrate") or {}).get("heavy_slots"))
+        except (OSError, ValueError, AttributeError):
+            n = None
+    return n or max(2, (os.cpu_count() or 1) // 4)
 
 
 def pr_ticket(events):
@@ -838,6 +887,9 @@ def is_exclusive(cfg, files):
     return sorted(f for f in files if any(fnmatch.fnmatch(f, g) for g in pats))
 
 
+REST_FILES_CAP = 3000
+
+
 def rest_files(repo, pr):
     # pr view stops at 100 files; the REST listing pages up to 3000.
     out = run(["gh", "api", f"repos/{repo}/pulls/{pr}/files", "--paginate", "--jq", ".[].filename"], check=False)
@@ -1016,8 +1068,100 @@ def cross_overlaps(files, theirs, rows, stacks=None, paths=None, unread=()):
     return out
 
 
+def repo_verdicts(repo, home=None):
+    """({PR: its latest verdict event across every program on `repo`}, ["program ledger X" for each unreadable one]).
+    A PR can be in several programs' ledgers; the newest verdict is the one that counts, and at the same second a
+    failing one wins over a passing one, so the table never reads ready on a coin flip."""
+    home = home or HOME
+    best, unknown = {}, []
+    try:
+        dirs = sorted(home.iterdir())
+    except FileNotFoundError:
+        return best, unknown
+    except OSError:
+        return best, ["program ledgers"]
+    for d in dirs:
+        if d.name.startswith((".", "_")):
+            continue
+        try:
+            cfg = (d / "program.json").read_text()
+        except (FileNotFoundError, NotADirectoryError):
+            continue  # not a program directory
+        except (OSError, ValueError):
+            unknown.append(f"program ledger {d.name}")
+            continue
+        try:
+            if json.loads(cfg)["repo"].lower() != repo.lower():
+                continue
+            led = d / "ledger.jsonl"
+            try:
+                text = led.read_text()
+            except FileNotFoundError:
+                text = ""  # a program that has not recorded anything yet
+            events = [json.loads(l) for l in text.splitlines() if l.strip()]
+            mine = dict(best)  # merged into `best` only when this whole ledger read, so a bad one adds nothing
+            for e in events:
+                if e.get("ev") == "verdict" and type(e.get("pr")) is int:
+                    ts = parse_ts(e["ts"])
+                    if ts.tzinfo is None:
+                        raise ValueError("timestamp without a zone")
+                    old = mine.get(e["pr"])
+                    if old is None or ts > old[0] or (ts == old[0] and e.get("result") != "pass"):
+                        mine[e["pr"]] = (ts, e)
+            best = mine
+        except (OSError, ValueError, AttributeError, TypeError, KeyError):  # UnicodeDecodeError is a ValueError
+            unknown.append(f"program ledger {d.name}")
+    return {n: e for n, (_, e) in best.items()}, unknown
+
+
+def table_facts(rows, verdicts):
+    """{PR: what overlap_table orders by} from the open PR listing and repo_verdicts."""
+    out = {}
+    for r in rows:
+        failed, pending, _ = ci_summary(r.get("statusCheckRollup"))  # no checks reads pending, even on a no-CI repo
+        v = verdicts.get(r["number"])
+        state = ("none" if not v else "fail" if v.get("result") != "pass"
+                 else "current" if v.get("sha") == r.get("headRefOid") else "stale")
+        out[r["number"]] = {"verdict": state, "ci": "failed" if failed else "pending" if pending else "ok",
+                            "merge_state": r.get("mergeStateStatus"), "draft": bool(r.get("isDraft")),
+                            "base": r.get("baseRefName") or "main"}
+    return out
+
+
+def cmd_overlap_table(p, argv):
+    """The hot files of every open PR on the repo, whichever program owns it, and the order to land them in."""
+    import overlap_table
+    repo = p.cfg["repo"]
+    limit = opt(argv, "--max-open")
+    if limit is not None and not (limit.isdigit() and int(limit) > 0):
+        sys.exit("--max-open takes a positive integer")
+    verdicts, unknown = repo_verdicts(repo)
+    try:
+        rows = open_rows(repo)
+    except (SystemExit, Exception):
+        rows = []
+        unknown.append("open PR listing")
+    if len(rows) >= OPEN_LIMIT:
+        unknown.append(f"open PR listing (stops at {OPEN_LIMIT})")
+    files, unread = {}, []
+    for r in rows:
+        try:
+            changed = rest_files(repo, r["number"])
+        except (OSError, ValueError):
+            changed = None
+        # A listing that stops at the REST cap may have dropped files, so it counts as unread.
+        if changed is None or len(changed) >= REST_FILES_CAP:
+            unread.append(r["number"])
+        else:
+            files[r["number"]] = changed
+    print("\n".join(overlap_table.hot_table(files, table_facts(rows, verdicts),
+                                            int(limit) if limit else None, unread, unknown)))
+
+
 def cmd_overlap(argv):
     p = Program(argv[0])
+    if "--table" in argv:
+        return cmd_overlap_table(p, argv)
     rows, tasks = open_rows(p.cfg["repo"]), run_tasks(p.cfg["run"])
     events = p.events()
     prs, files, theirs, unread = cross_inputs(p.slug, p.cfg["repo"], events, rows,
@@ -1416,25 +1560,60 @@ def skills_version(root):
 STANDALONE_RUN = "standalone"  # a standalone card has no Orca Run; Run lookups on it answer empty
 
 
+def repo_meta(repo):
+    """{"nameWithOwner", "isFork", "isArchived"} of the repo GitHub serves under `repo` now (a rename or a transfer
+    redirects). REST, not `gh repo view`: the executor asks every round, and GraphQL's budget is the one that runs out."""
+    v = gh_json("api", f"repos/{repo}")
+    return {"nameWithOwner": v["full_name"], "isFork": bool(v.get("fork")), "isArchived": bool(v.get("archived"))}
+
+
+def standalone_run():
+    """The Run the existing `*-standalone` programs share, else the placeholder. Programs that disagree, or none,
+    give the placeholder: guessing one of several Runs would file a repo's PRs under the wrong coordinator."""
+    runs = set()
+    for f in HOME.glob("*-standalone/program.json"):
+        try:
+            runs.add(json.loads(f.read_text()).get("run"))
+        except (OSError, ValueError, AttributeError):
+            return STANDALONE_RUN
+    runs.discard(STANDALONE_RUN)
+    return runs.pop() if len(runs) == 1 and all(isinstance(r, str) and r for r in runs) else STANDALONE_RUN
+
+
 def standalone_program(argv):
     """The `<name>-standalone` program of the repo `orch land --repo OWNER/NAME` names, created when missing.
 
-    Only where the land executor lists the repo: elsewhere a standalone card merges itself and needs no program.
+    Only where the land executor covers the repo under the name GitHub gives it now (a renamed repo answers with its
+    new name): elsewhere a standalone card merges itself and needs no program.
     """
-    repo = opt(argv, "--repo")
-    slug = f"{repo.split('/')[-1]}-standalone" if repo and "/" in repo else None
-    if slug != argv[0]:
+    asked = opt(argv, "--repo")
+    if not asked or asked.count("/") != 1 or not argv[0].endswith("-standalone"):
         sys.exit(f"no program '{argv[0]}'; a standalone PR lands as `orch land <name>-standalone --repo OWNER/NAME`")
-    if not land_executor(repo):
-        sys.exit(f"no program '{slug}', and orchestrate.land_executor is off for {repo}: a standalone card merges its own PR")
+    ex = land_executor()
+    if not ex:
+        sys.exit(f"no program '{argv[0]}', and orchestrate.land_executor is off: a standalone card merges its own PR")
+    meta = repo_meta(asked)
+    repo = meta["nameWithOwner"]
+    if not land_scope.how(ex["scope"], repo) or land_scope.excluded(ex["scope"], asked):
+        now_named = "" if repo.casefold() == asked.casefold() else f" ({repo} on GitHub now)"
+        sys.exit(f"no program '{argv[0]}', and orchestrate.land_executor is off for {asked}{now_named}: a standalone"
+                 " card merges its own PR")
+    if land_scope.how(ex["scope"], repo) == "owner":
+        login = run(["gh", "api", "user", "--jq", ".login"]).stdout.strip()
+        if why := land_scope.owner_refused(ex["scope"], repo, login) or land_scope.wildcard_only(ex["scope"], repo, meta):
+            sys.exit(f"{why}; nothing created")
+    slug = f"{repo.split('/')[-1]}-standalone"
+    if slug.casefold() != argv[0].casefold():
+        sys.exit(f"{asked} is {repo} on GitHub now: name its program {slug} (`orch land {slug} --repo {repo} …`)")
+    slug = argv[0]
     d = HOME / slug
-    cfg = {"slug": slug, "repo": repo, "run": opt(argv, "--run", STANDALONE_RUN), "tracker": {}, "predicate": [],
+    cfg = {"slug": slug, "repo": repo, "run": opt(argv, "--run") or standalone_run(), "tracker": {}, "predicate": [],
            "merge_policy": "autonomous", "ceiling": 6, "deadline": None, "created_at": now(),
            "skills_commit": skills_version(pathlib.Path(__file__).resolve().parents[3]), "note": "standalone cards",
            "final_check": None}
     try:
-        write_program(d, cfg, cfg["run"], "autonomous")
-        print(f"created standing program {slug} for {repo} (merge_policy autonomous)")
+        write_program(d, cfg, cfg["run"], "autonomous", lead=False)
+        print(f"created standing program {slug} for {repo} (merge_policy autonomous, Run {cfg['run']})")
     except FileExistsError:  # another card created it between the check and here
         pass
 
@@ -1445,8 +1624,11 @@ def standalone_target(argv):
     if "--repo" in argv and not (HOME / argv[0] / "program.json").exists():
         standalone_program(argv)
     p = Program(argv[0])
-    if "--repo" in argv and p.cfg["repo"] != opt(argv, "--repo"):
-        sys.exit(f"program '{argv[0]}' is for {p.cfg['repo']}, not {opt(argv, '--repo')}")
+    asked = opt(argv, "--repo")
+    # An old name reaches the program GitHub's current name made; only a mismatch costs the lookup.
+    if asked and p.cfg["repo"].casefold() != asked.casefold() \
+            and repo_meta(asked)["nameWithOwner"].casefold() != p.cfg["repo"].casefold():
+        sys.exit(f"program '{argv[0]}' is for {p.cfg['repo']}, not {asked}")
     return p
 
 
@@ -1481,11 +1663,12 @@ def cmd_init(argv):
     print("\n".join(dashboard_lines(slug)))
 
 
-def write_program(d, cfg, run_id, policy):
-    """Create program.json for cmd_init and standalone_program; FileExistsError when another caller got there first."""
+def write_program(d, cfg, run_id, policy, lead=True):
+    """Create program.json for cmd_init and standalone_program; FileExistsError when another caller got there first.
+    lead=False skips the dispatched-lead lookup: a standalone program belongs to no lead, whichever card creates it."""
     me = os.environ.get("ORCA_TERMINAL_HANDLE")
     try:
-        mine = own_worker(all_workers(run_id), me) if me and run_id != STANDALONE_RUN else None
+        mine = own_worker(all_workers(run_id), me) if lead and me and run_id != STANDALONE_RUN else None
     except SystemExit as e:  # guessing "coordinating lead" would scope a worker lead's program to the whole Run
         sys.exit(f"orch init: could not list {run_id}'s workers to tell whether this terminal is a dispatched lead"
                  f" ({e}). Retry when `orca orchestration worker-list --run {run_id}` answers.")
@@ -2054,13 +2237,204 @@ def cmd_verdict(argv):
              what.strip().casefold() not in ("self", "implementer"))):
         sys.exit("--source is independent-review, subagent-review, review:<reviewer>, "
                  "verifier:<reviewer> or live:<feature>; never the implementer")
-    head = pr_view(p.cfg["repo"], pr)["headRefOid"]
+    view = pr_view(p.cfg["repo"], pr)
+    head = view["headRefOid"]
     if not head.startswith(sha):
         sys.exit(f"head is {head[:8]}, not the reviewed {sha[:8]}: the new head has not been reviewed")
+    recorder = os.environ.get("ORCA_TERMINAL_HANDLE")
+    reviewer = (opt(argv, "--reviewer") or (what.strip() if kind in ("review", "verifier") else "")).strip()
+    evidence = (opt(argv, "--evidence") or "").strip()
+    authors = author_sessions(view.get("headRefName"))
+    if authors == []:  # Orca answered: no worktree holds the branch name. Look for the card by the PR's head sha.
+        authors = worktree_author_sessions(head)
+    result = opt(argv, "--result", "pass")
+    if authors is None:  # Orca did not give a complete answer: not "no card", so a pass cannot be judged
+        if result == "pass":
+            sys.exit("verdict refused, nothing recorded: Orca's terminal or worktree list could not show who wrote this"
+                     " PR (failed, cut off or unreadable): run it again")
+        authors = []
+    fields = dict(author=authors, reviewer=reviewer or None, evidence=evidence or None, recorder=recorder, by=recorder)
+    if not authors:  # Orca answered and no card was found: the row says so, and verdict_identity_problem decides
+        fields["author_unverified"] = True
+        print("warning: no card holding this PR was found; the author is recorded as unverified", file=sys.stderr)
+    # A fail blocks a landing and needs no independence. A pass that cannot stand as an independent review is not
+    # stored at all: a stored pass would let the direct `orch land` path, which reads no identity, merge on it.
+    if result == "pass" and (bad := verdict_identity_problem({**fields, "source": src})):
+        sys.exit(f"verdict refused, nothing recorded: {bad}")
     row = p.append("verdict", pr=pr, sha=head, patch_id=patch_id(p.cfg["repo"], pr),
-                   source=src, result=opt(argv, "--result", "pass"), note=opt(argv, "--note"),
-                   by=os.environ.get("ORCA_TERMINAL_HANDLE"))
+                   source=src, result=result, note=opt(argv, "--note"), **fields)
     print(json.dumps(row, ensure_ascii=False))
+
+
+SELF_REVIEWERS = {"self", "implementer", "author"}
+
+
+def complete_answer(out, key):
+    """(rows, hostIds, omittedHostIds) of an Orca list answer that says it is complete, else None. Each of the three
+    must be present and well typed: a missing or mistyped `truncated` or host list was read as its empty default, so
+    a partial answer passed for a complete one ("no card")."""
+    if not isinstance(out, dict) or not isinstance(out.get(key), list) or out.get("truncated") is not False:
+        return None
+    scope = out.get("hostScope")
+    if not isinstance(scope, dict):
+        return None
+    hosts = []
+    for field in ("hostIds", "omittedHostIds"):
+        ids = scope.get(field)
+        if not isinstance(ids, list) or not all(isinstance(h, str) and h for h in ids):
+            return None
+        hosts.append(ids)
+    return out[key], hosts[0], hosts[1]
+
+
+def worktree_rows():
+    """Orca's worktree list when it can be trusted to be complete and every row is readable, else None: a cut-off
+    list, a host Orca did not reach, or a row that cannot say which worktree it is, where, or what it holds can hide
+    the very worktree that wrote the PR, and skipping it as "no match" would turn a partial answer into "no card".
+    An empty branch or head is a real state (detached HEAD, no commit yet): only a missing or mistyped field fails."""
+    answer = complete_answer(orca_json("worktree", "list"), "worktrees")
+    if answer is None:
+        return None
+    rows, hosts, omitted = answer
+    if omitted:
+        return None
+    for w in rows:
+        if not (isinstance(w, dict) and all(isinstance(w.get(k), str) for k in ("id", "hostId", "branch", "head"))
+                and w["id"] and w["hostId"] in hosts and isinstance(w.get("isMainWorktree"), bool)):
+            return None
+    return rows
+
+
+def worktree_sessions(w):
+    """Terminal handles of one worktree row, or None when Orca's answer cannot be trusted for it. An answer counts only
+    when it says it covered this worktree's host: an empty or partial answer from a host Orca did not reach says
+    nothing about its sessions. Another host being left out is an ordinary scope limit."""
+    answer = complete_answer(orca_json("terminal", "list", "--worktree", f"id:{w['id']}"), "terminals")
+    if answer is None:
+        return None
+    rows, hosts, omitted = answer
+    if w["hostId"] not in hosts or w["hostId"] in omitted:
+        return None
+    # A terminal row with no usable handle could be the author's own: dropping it would read as "no card".
+    if not all(isinstance(t, dict) and isinstance(t.get("handle"), str) and t["handle"] for t in rows):
+        return None
+    return {t["handle"] for t in rows}
+
+
+def worktree_holders(matches):
+    """Sorted handles of the sessions in every worktree row `matches` picks, [] when it picks none (Orca answered and
+    no card is there), None when the list or any picked row's answer cannot show who is there. A partial union is
+    never returned: the missing worktree may be the one that wrote the PR."""
+    try:
+        rows = worktree_rows()
+        if rows is None:
+            return None
+        handles = set()
+        for w in rows:
+            if not matches(w):
+                continue
+            part = worktree_sessions(w)
+            if part is None:
+                return None
+            handles |= part
+        return sorted(handles)
+    except (SystemExit, ValueError, KeyError, TypeError, AttributeError, OSError):
+        return None
+
+
+def author_sessions(branch):
+    """Terminal handles of every card whose worktree holds the PR's branch: the sessions that wrote it. [] when Orca
+    answered completely and no worktree holds the branch; None when the answer cannot show who the author is (Orca
+    failed, a list or a host is missing or cut off). Only [] leaves the author unverified: None must refuse, since a
+    cut-off list can miss the very card that wrote the PR. A branch selector is rejected as ambiguous once a closed
+    card's worktree and its successor both hold the branch, so the worktrees are listed and each is asked by id.
+    A PR with no branch name to look for is None too: nothing was looked up, which is not "no worktree holds it"."""
+    if not isinstance(branch, str) or not branch:
+        return None
+    return worktree_holders(lambda w: w.get("branch") in (branch, f"refs/heads/{branch}"))
+
+
+def worktree_author_sessions(head):
+    """Fallback for a card whose local branch is not the PR's branch (it pushed `local:remote`, or was renamed): the
+    terminals of the non-main worktrees sitting at the PR's head sha. The PR number is not matched, because the listing
+    spans repositories and another repository's card linking the same number would stand in for the author. [] when
+    Orca answered and no worktree sits there; None when the answer cannot show it, which must refuse, not pass as an
+    unverified author. A matching row that cannot be read is None too, and so is a head that is not a sha to look for."""
+    if not isinstance(head, str) or not head:
+        return None
+    return worktree_holders(lambda w: not w["isMainWorktree"] and w["head"] == head)
+
+
+def verdict_identity_problem(v):
+    """Why this verdict record cannot stand as an independent review, else None. `author` is the PR's sessions as
+    seen when it was recorded, `reviewer` who reviewed, `evidence` a link or sha of the review, `recorder` the
+    terminal that wrote the row (an orchestrator may record a review someone else ran). The recorder's handle is an
+    environment value, so this proves nothing against a forged one: it stops the honest mistake and the plain
+    self-review, and leaves the rest to the review evidence."""
+    authors = v.get("author")
+    # A row is JSON anyone can append: a wrong type must refuse, not raise and leave the request queued forever.
+    if not all(v.get(k) is None or isinstance(v.get(k), str) for k in ("reviewer", "evidence", "recorder")) \
+            or not (authors is None or isinstance(authors, list) and all(isinstance(a, str) and a for a in authors)) \
+            or not (v.get("author_unverified") is None or isinstance(v.get("author_unverified"), bool)) \
+            or (v.get("author_unverified") is True and authors != []):
+        # `author_unverified` vouches for a lookup that answered "no card", which is exactly the list []: a missing or
+        # null author says nothing was looked up, and a found author contradicts the mark.
+        return ("the identity fields are malformed (author is a list of handles, author_unverified a boolean that"
+                " needs author == [], the rest strings)")
+    if not (v.get("reviewer") or "").strip():
+        return "no reviewer named (--reviewer, or a review:<reviewer> or verifier:<reviewer> source)"
+    if not (v.get("evidence") or "").strip():
+        return "no evidence (--evidence: a link to the review or the reviewed sha)"
+    if not v.get("recorder"):
+        return "no recorder (ORCA_TERMINAL_HANDLE is unset)"
+    if self_review(v):
+        return self_review(v)
+    if not v.get("author"):
+        # No card was found (its branch can differ from the PR's). The row may stand only when it says so and the
+        # reviewer is not the session that recorded it; a row without the mark predates this rule and is refused.
+        if v.get("author_unverified") is not True:
+            return "the PR's author session could not be identified (no card holds its branch)"
+        for role, name in stated_reviewers(v):  # either name, so a review:<recorder> source cannot hide it
+            if name == v["recorder"]:
+                return f"the author is unverified and the {role} is the recorder: another session records the review"
+    return None
+
+
+def executor_verdict_problem(verdict, head, sources):
+    """Why the land executor would refuse this verdict at `head`, else None. The executor and `land-check` both call
+    it, so READY and a refusal never disagree: the verdict must be a pass for exactly this head (a matching patch-id
+    is not enough, the executor merges the sha it was asked about), from an allowed source, and attributable."""
+    if not verdict or verdict.get("sha") != head or verdict.get("result") != "pass" \
+            or verdict.get("source") not in sources:
+        got = (f"{verdict.get('result')} from {verdict.get('source')} at {(verdict.get('sha') or '')[:8]}"
+               if verdict else "none")
+        return (f"the latest verdict ({got}) is not a pass at {head[:8]} from {', '.join(sources)}:"
+                " review this head, orch verdict, land again")
+    bad = verdict_identity_problem(verdict)
+    if bad:  # the executor merges on a review it can attribute: who wrote, who reviewed, the proof, who recorded
+        return (f"the verdict cannot stand as an independent review: {bad}."
+                " Record it again with orch verdict --reviewer <who> --evidence <link or sha>")
+    return None
+
+
+def stated_reviewers(v):
+    """(role, name) for every reviewer the row names: --reviewer and the one inside a review:/verifier: source."""
+    kind, _, what = str(v.get("source") or "").partition(":")
+    named = [("reviewer", v.get("reviewer")), ("source reviewer", what if kind in ("review", "verifier") else None)]
+    return [(role, name.strip()) for role, name in named if isinstance(name, str) and name.strip()]
+
+
+def self_review(v):
+    """The reason the review is the PR's own author's, else None. Every identity the row states counts: --reviewer, the
+    reviewer inside a review:/verifier: source (so `--source review:author --reviewer codex` does not pass), and the
+    recorder, since an author who records its own pass wrote the verdict it will be merged on."""
+    authors = v.get("author") or []
+    for role, name in stated_reviewers(v):
+        if name.casefold() in SELF_REVIEWERS or name in authors:
+            return f"{role} '{name}' is the PR's author session"
+    if isinstance(v.get("recorder"), str) and v["recorder"] in authors:
+        return f"recorder '{v['recorder']}' is the PR's author session: another session records the review"
+    return None
 
 
 def cmd_dep(argv):
@@ -2304,10 +2678,15 @@ def merge_unit(p, pr, unit, klass, events, onto=None, stacked=False, expect=None
             return 3, f"act: #{n} has {threads} unresolved review thread(s): answer and resolve them, then land again"
     if expect:
         # The verdict the executor checked may have been replaced since: merge only on the one standing now.
-        latest = pr_state(p.events()).get(pr, {}).get("verdict") or {}
+        import autoqueue
+        now_events = p.events()
+        if autoqueue.withdrawn(now_events, pr):  # a stop recorded during the checks is read from this same snapshot
+            return 3, f"act: #{pr}'s land was stopped during the checks: record a verdict at the head or land again"
+        latest = pr_state(now_events).get(pr, {}).get("verdict") or {}
         p.land_verdict = latest
         if latest.get("sha") != expect or latest.get("result") != "pass" or \
-                (verdict_sources is not None and latest.get("source") not in verdict_sources):
+                (verdict_sources is not None and (latest.get("source") not in verdict_sources
+                                                  or verdict_identity_problem(latest))):
             return 3, (f"act: #{pr}'s verdict changed during the checks ({latest.get('result')} from"
                        f" {latest.get('source')} at {(latest.get('sha') or '')[:8]}): review this head, orch verdict, land again")
     head = expect or v["headRefOid"]
@@ -2603,9 +2982,13 @@ def land_executor(repo=None):
         return None
     if not isinstance(cfg, dict) or cfg.get("enabled") is not True:
         return None
-    repos = [r for r in cfg.get("repos") or [] if isinstance(r, str)]
-    if repo is not None and repo not in repos:
+    try:
+        scope = land_scope.parse(cfg)
+    except land_scope.ScopeError as e:
+        sys.exit(f"{path}: {e}; land stops rather than guess the executor's repos")
+    if repo is not None and not land_scope.how(scope, repo):
         return None
+    repos = [r for r in cfg.get("repos") or [] if isinstance(r, str)]
     hours = cfg.get("max_wait_hours")
     try:
         hours = 24.0 if hours is None else float(hours)
@@ -2615,7 +2998,34 @@ def land_executor(repo=None):
         # A wait that can never end (NaN, inf) or a typo ("24h") would keep requests queued for ever.
         sys.exit(f"{path}: orchestrate.land_executor.max_wait_hours must be a positive number of hours, "
                  f"not {cfg.get('max_wait_hours')!r}")
-    return {"repos": repos, "verdict_sources": cfg.get("verdict_sources") or ["review:codex"], "max_wait_hours": hours}
+    sources = cfg.get("verdict_sources") or ["review:codex"]
+    if not isinstance(sources, list) or not all(isinstance(s, str) and s for s in sources):
+        # A bare string would match by substring ("review:codex" in "review:codex-old") and index by letter.
+        sys.exit(f"{path}: orchestrate.land_executor.verdict_sources must be a list of sources, not {sources!r}")
+    import autoqueue
+    return {"repos": repos, "scope": scope, "verdict_sources": sources, "max_wait_hours": hours,
+            "auto_queue": autoqueue.config(cfg.get("auto_queue"))}
+
+
+def executor_for(repo):
+    """(land_executor(), repo_meta) when the executor covers the repo GitHub serves under `repo` now, else (None, meta).
+    The recorded name alone cannot choose the direct merge: a program made before a rename still names the old one.
+    An exclusion under either name keeps the repo out. A GitHub that does not answer exits; never a guessed direct merge."""
+    ex = land_executor()
+    if not ex:
+        return None, None
+    meta = repo_meta(repo)
+    now_named = meta["nameWithOwner"]
+    if land_scope.excluded(ex["scope"], repo) or land_scope.excluded(ex["scope"], now_named):
+        return None, meta
+    if not land_scope.how(ex["scope"], now_named):
+        if land_scope.how(ex["scope"], repo):
+            # Covered under the recorded name, not under GitHub's: a rename or transfer moved it out. Merging it directly
+            # would route around the executor exactly when the repo's owner or name changed.
+            sys.exit(f"refused: {repo} is {now_named} on GitHub now, which orchestrate.land_executor does not cover;"
+                     " list the new name (skills-config) or exclude it, then land again")
+        return None, meta
+    return ex, meta
 
 
 LAND_EXIT = {"merged": 0, "superseded": 2}
@@ -2671,7 +3081,14 @@ def cmd_land(argv):
     pr, klass = int(opt(argv, "--pr")), opt(argv, "--class")
     if klass and klass not in KLASS:
         sys.exit(f"--class is one of {', '.join(KLASS)}")
-    executor = land_executor(p.cfg["repo"])
+    try:
+        executor = executor_for(p.cfg["repo"])[0]
+    except (SystemExit, KeyError, TypeError, ValueError) as e:
+        if isinstance(e, SystemExit) and not TRANSIENT.search(str(e.code)):
+            raise
+        print(f"yield: GitHub did not say which repo {p.cfg['repo']} is now, so executor or direct merge is undecided"
+              f" ({str(getattr(e, 'code', e))[:160]}); land again")
+        sys.exit(2)
     events = p.events()
     st = pr_state(events).get(pr, {})
     if not claimed(events, pr) or (klass and klass != st["ready"].get("klass", "normal")):
@@ -2706,30 +3123,47 @@ def cmd_land_check(argv):
         print(f"warning: gh returned no {','.join(unread)} for #{pr}: {json.dumps(v)[:400]}", file=sys.stderr)
         print(f"HOLD: PR state unknown (no {','.join(unread)} from gh); run land-check again")
         sys.exit(1)
+    import landjudge
     problems = []
     main = main_state(events)
-    if main == "red" and "--main-fix" not in argv:
-        problems.append("safety stop: main is red (only the repairing PR lands, with land --class main-fix)")
-    if stopped(events):
-        problems.append("STOP line active")
-    if on_hold(events, pr):
-        problems.append(f"on hold (record parked); `orch record {p.slug} admitted --pr {pr}` releases it")
-    if main == "pending":
-        print("note: main CI for the last landing has not reported yet")
-    if v["state"] != "OPEN" or v["isDraft"]:
-        problems.append(f"PR is {v['state']}{' draft' if v['isDraft'] else ''}")
     no_ci = no_ci_repo(repo)
     verdict = st.get("verdict")
-    if not verdict or verdict.get("result") != "pass":
+    passing = bool(verdict) and verdict.get("result") == "pass"
+    if main == "pending":
+        print("note: main CI for the last landing has not reported yet")
+    cur = patch_id(repo, pr) if passing else None  # only a passing verdict is compared with the patch
+    facts = {
+        "state": v["state"], "draft": v["isDraft"], "merge_state": v["mergeStateStatus"], "head": v["headRefOid"],
+        "stopped": stopped(events), "held": on_hold(events, pr), "no_ci": no_ci,
+        "verdict": {"pass": passing, "sha": (verdict or {}).get("sha") or ""} if verdict else None,
+        "patch_match": cur == verdict.get("patch_id") if passing else landjudge.NOT_COMPUTED}
+    why = landjudge.judge(facts, "check").why
+    if main == "red" and "--main-fix" not in argv:
+        problems.append("safety stop: main is red (only the repairing PR lands, with land --class main-fix)")
+    if "stopped" in why:
+        problems.append("STOP line active")
+    if "held" in why:
+        problems.append(f"on hold (record parked); `orch record {p.slug} admitted --pr {pr}` releases it")
+    if "not_open" in why:
+        problems.append(f"PR is {v['state']}{' draft' if v['isDraft'] else ''}")
+    if "no_verdict" in why:
         problems.append("no passing verdict recorded (orch verdict)")
-    else:
-        cur = patch_id(repo, pr)
-        if cur != verdict.get("patch_id"):
-            problems.append(f"patch changed since verdict ({verdict.get('patch_id', '')[:10]} -> {cur[:10]}): re-review")
-        elif no_ci and v["headRefOid"] != verdict.get("sha"):
-            problems.append(f"no-CI lane: verdict is for {verdict['sha'][:8]}, not the head {v['headRefOid'][:8]}: re-review")
-        elif v["headRefOid"] != verdict.get("sha"):
-            print(f"note: head moved {verdict['sha'][:8]} -> {v['headRefOid'][:8]} with the same patch-id; verdict holds, CI must pass at the new head")
+    if "patch_changed" in why:
+        problems.append(f"patch changed since verdict ({verdict.get('patch_id', '')[:10]} -> {cur[:10]}): re-review")
+    if "no_ci_sha" in why:
+        problems.append(f"no-CI lane: verdict is for {verdict['sha'][:8]}, not the head {v['headRefOid'][:8]}: re-review")
+    if "head_moved" in why:
+        print(f"note: head moved {verdict['sha'][:8]} -> {v['headRefOid'][:8]} with the same patch-id; verdict holds, CI must pass at the new head")
+    if passing:
+        # The same decision `orch land` makes, on the repo GitHub serves now: the recorded name alone reads a renamed
+        # repo as one the executor does not cover, and passes a verdict the executor then refuses.
+        try:
+            ex = executor_for(repo)[0]
+        except SystemExit as e:  # a repo renamed out of the executor's scope, or GitHub not answering: orch land stops too
+            problems.append(str(e.code)[:300])
+            ex = None
+        if ex and (executor_why := executor_verdict_problem(verdict, v["headRefOid"], ex["verdict_sources"])):
+            problems.append(executor_why)  # the executor would refuse it: say so now
     if p.cfg["merge_policy"] == "human-gate" and (hold := gate_hold(p, events, pr)):
         problems.append(hold)
     try:
@@ -2749,17 +3183,19 @@ def cmd_land_check(argv):
     elif gaps and level != "off":
         print(f"warning: {gap_text(repo, gaps, v.get('baseRefName') or 'main')}")
     mss = v["mergeStateStatus"]
-    if mss == "DIRTY":
+    if "dirty" in why:
         problems.append("conflicts with base: fix task in the PR's worktree")
-    elif mss == "BEHIND":
+    elif "behind" in why:
         unit = members[:members.index(pr) + 1] if members else [pr]
         problems.append(f"behind base: {update_advice(unit, repo, bool(members))}, then wait for CI")
+    # CI is read here, after the stack lookups, as it always was: a run that finishes meanwhile is seen as finished.
     failed, pending, runs = ci_summary(v.get("statusCheckRollup"), no_ci)
     if not failed and not pending:
         pending = runs_unfinished(repo, v["headRefOid"], no_ci)
-    if failed:
+    why = landjudge.judge({**facts, "ci_failed": failed, "ci_pending": pending}, "check").why
+    if "ci_failed" in why:
         problems.append("CI failed: " + ", ".join(failed))
-    if pending:
+    if "ci_pending" in why:
         problems.append("CI pending: " + ", ".join(pending[:5]))
     if no_ci and compare(repo, v.get("baseRefName") or "main", v["headRefOid"]).get("behind_by") != 0:
         problems.append("no-CI lane: the head does not contain its base")
@@ -3130,13 +3566,22 @@ SELF_CHECK = ("Self-check: is any work left on this card? If none, run end-sessi
               "If some, say what it is and keep it.")
 
 
-def settle_sweep(workers, worktrees, skip=(), holds=card_holds, asked=None, now=None):
+def auto_release_ahead(w, now):
+    scripts = str(pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    import auto_release
+    return auto_release.ahead(w, now)
+
+
+def settle_sweep(workers, worktrees, skip=(), holds=card_holds, asked=None, now=None, clock=time.time):
     path = {w["id"]: w.get("path") for w in worktrees if not w.get("isMainWorktree")}
     asked = {} if asked is None else asked
     seen, out, kept = {}, [], []
     for w in workers:
         d, res, taken = w.get("dispatchId"), w.get("resource") or {}, taken_over(w)
-        if not d or (not taken and (w.get("terminalState") not in ("reclaimable", "release_unknown") or d in skip)):
+        if not d or (not taken and (w.get("terminalState") not in ("reclaimable", "release_unknown") or d in skip
+                                    or auto_release_ahead(w, clock()))):
             continue
         p = path.get(res.get("worktreeId"))
         if p and p not in seen:
@@ -3188,10 +3633,49 @@ PROMPTS = [(re.compile(r"Enter to select"), "a select menu"),
            (re.compile(r"Waiting for API response · will retry"), "an API retry loop")]
 
 
+# A file diff Claude Code drew: a run of line-number gutter lines (a number, then +, - or a context space) with at
+# least one + or -. It quotes code, so an ENOSPC in it is the reviewed text, not the machine. Other output keeps
+# counting: a real "npm ERR! ENOSPC" has no gutter, and "28  No space left" alone has no + or - line beside it.
+GUTTER = re.compile(r"^\s*\d+(?:\s([+\-])|\s\s)")
+
+
+DIFF_HEAD = re.compile(r"\b(?:Update|Edit|Write|MultiEdit)\(|\b(?:Added|Removed) \d+ lines?\b|\bUpdated .* with \d+ (?:addition|removal)")
+
+
+def without_diffs(lines, tail=25):
+    """The last `tail` lines minus the drawn diffs: a gutter run with a + or - line that follows a diff header. Shape
+    alone is not enough: a command can print "27 - step" and "28  No space left". A run with no header is kept, so a
+    real disk error is never dropped. The whole screen is walked so a header is seen even when the tail cut it off,
+    but only lines that were in the tail come back. A diff line too long for the terminal wraps onto a line with no
+    gutter; that line stays, because no rule for it told it apart from command output right after a diff."""
+    out, run, head, in_diff = [], [], False, False
+    first = len(lines) - tail
+    for i, l in enumerate([*lines, None]):
+        m = GUTTER.match(l) if l is not None else None
+        if m:
+            run.append((i, l, bool(m.group(1))))
+            continue
+        if run:
+            in_diff = head and any(marked for _, _, marked in run)
+            if not in_diff:
+                out += [(j, x) for j, x, _ in run]
+            run = []
+        if l is None:
+            continue
+        out.append((i, l))
+        # A wrapped tail has no mark and leaves the header standing for the gutter lines after it.
+        if DIFF_HEAD.search(l):
+            head = True
+        elif l.lstrip().startswith(("⏺", "❯", "⎿", "✻")):
+            head = False
+    return [l for i, l in out if i >= first]
+
+
 def screen_prompt(lines, activity=None):
     tail = lines[-25:]
+    text = "\n".join(without_diffs(lines))
     for rx, kind in PROMPTS:
-        if rx.search("\n".join(tail)):
+        if rx.search(text):
             return kind, next((l.strip() for l in reversed(tail) if l.strip().endswith("?")), "")
     return ("waiting for input", "") if activity == "waiting" else None
 
@@ -3919,7 +4403,10 @@ def cmd_heavy(argv):
     deadline = time.monotonic() + 60 * float(opt(argv[:cut], "--wait-minutes", "60"))
     waited = False
     while True:
-        for i in range(int(knob(cfg, "heavy_slots"))):
+        # Read each pass so a raised or lowered limit reaches a waiting caller. Slot files past a lowered limit are
+        # left alone: their holders run to the end, and only new runs follow the smaller count.
+        limit = heavy_slots(cfg)
+        for i in range(limit):
             path = slots / f"slot-{i}"
             try:
                 held = json.loads(path.read_text() or "{}")
@@ -3954,7 +4441,7 @@ def cmd_heavy(argv):
         if time.monotonic() >= deadline:
             sys.exit(f"heavy: every slot busy after waiting: {json.dumps(holders, ensure_ascii=False)}")
         if not waited:
-            print(f"heavy: 슬롯 {len(holders)}개가 모두 사용 중이라 빌 때까지 기다린다(최대 {opt(argv[:cut], '--wait-minutes', '60')}분): "
+            print(f"heavy: 슬롯 {limit}개가 모두 사용 중이라 빌 때까지 기다린다(최대 {opt(argv[:cut], '--wait-minutes', '60')}분): "
                   + "; ".join(f"pid {h.get('pid')} {h.get('cmd', '')[:80]}" for h in holders), file=sys.stderr, flush=True)
             waited = True
         time.sleep(15)
@@ -4365,6 +4852,7 @@ COMMANDS = {"init": cmd_init, "set": cmd_set, "status": cmd_status, "record": cm
             "stage": cmd_stage, "board": cmd_board, "brief": cmd_brief, "hold": cmd_hold, "sent": cmd_sent, "release": lambda argv: cmd_hold(argv, release=True),
             "land-exec": lambda argv: __import__("land_exec").main(argv),
             "order": lambda argv: __import__("order").main(argv),
+            "ask": lambda argv: __import__("ask").main(argv),
             "watch-cards": lambda argv: __import__("card_watch").main(argv),
             "handoff": lambda argv: __import__("handoff").main(argv),
             "patrol": lambda argv: __import__("patrol").main(argv),

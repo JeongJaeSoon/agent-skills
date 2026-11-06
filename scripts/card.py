@@ -67,12 +67,13 @@ its PROGRAM, APPROVED, lead, CLOSE/KEEP and FORBIDDEN rows (the FORBIDDEN sectio
 a blank line included) and every REPORT row, so both paths carry the bans and the report address. A row is a line outside a ``` fence that starts with the key and a
 colon (`CLOSE: …`, `` `CLOSE`: … ``) or the template's wide gap (`DELEGATE    …`), plus the indented lines under it.
 A lead's brief (a MODE row, a `ROLE: lead <slug>` row or a `<project>: lead` head) needs every row of orchestrate
-references/brief.md "Lead", its MERGE row naming exactly one merge_policy; any brief needs CLOSE or KEEP, and one with an Approved heading or bullet needs its
-`APPROVED:` row. The brief is a local file; a note only the notes store can reach is copied to one first.
+references/brief.md "Lead", its MERGE row naming exactly one merge_policy; any brief needs CLOSE or KEEP and an
+`APPROVED:` row (`APPROVED: none` when no act beyond the normal flow is approved). The brief is a local file; a note
+only the notes store can reach is copied to one first.
 Every prompt, a handoff's too, carries the fixed TEARDOWN and DOCS rows (FIXED_LINES) after LOAD, whatever the brief says.
 An APPROVED row (a handoff's --note too) cites the owner's words by the `orch decide` id that recorded them, as
 `오너(d150, <date>)`: an id the store does not hold as answered, or a store it cannot read, is exit 2; a row that cites
-none gets a warning.
+none, other than `APPROVED: none`, gets a warning. A handoff whose --note has no APPROVED row gets `APPROVED: none`.
 
 --order oN, or a brief row `ORDER: oN` (not the template's `ORDER  Starts after …` row), ties the card to the owner's
 order (`orch order`): the order must be open, its text is appended to the prompt as a copy of what it said at the start,
@@ -140,6 +141,7 @@ ROWS = ("PROGRAM", "APPROVED", *LEAD_ROWS, "CLOSE", "KEEP", "LOAD", "FORBIDDEN",
 FENCE = re.compile(r"(?ms)^[ \t]*```.*?^[ \t]*```[^\n]*$")
 # An Approved heading or bullet: the prose form of the approval, which carries nothing into the prompt without an APPROVED row
 APPROVED_PROSE = re.compile(r"(?im)^[ \t]*(?:#{1,6}[ \t]*|[-*][ \t]+\*\*)approved\b")
+APPROVED_NONE = re.compile(r"(?i)^`?APPROVED`?(?:[ \t]*:|[ \t]{2,})[ \t]*none\.?[ \t]*$")
 ME = "skills-sync card"
 
 
@@ -236,8 +238,10 @@ def compose(brief_path):
     missing = [] if goal else ["`/goal <goal>` line"]
     if not (rows["CLOSE"] or rows["KEEP"]):
         missing.append("CLOSE or KEEP row")
-    if APPROVED_PROSE.search(text) and not rows["APPROVED"]:
-        missing.append("`APPROVED:` row (an Approved heading or bullet is not copied into the prompt)")
+    if not rows["APPROVED"]:
+        missing.append("`APPROVED:` row: the acts the owner approved, cited as `오너(<id>, <date>)`, or "
+                       "`APPROVED: none`" + (" (an Approved heading or bullet is not copied into the prompt)"
+                                             if APPROVED_PROSE.search(text) else ""))
     if lead:
         missing += [f"{k} row" for k in LEAD_ROWS if not rows[k]]
         if rows["ROLE"] and not guard.LEAD_ROLE.search(rows["ROLE"]):
@@ -274,12 +278,14 @@ def compose(brief_path):
 
 def check_approved(text, where, me=ME):
     """The APPROVED row's `orch decide` citations (`오너(d150, <date>)`) against the store: Refuse(2) for an id it does not
-    hold as answered or cannot be read for, a warning for a row that cites none (orchestrate references/brief.md
-    "Single worker", APPROVED)."""
+    hold as answered or cannot be read for, a warning for a row that cites none other than `APPROVED: none`
+    (orchestrate references/brief.md "Single worker", APPROVED)."""
     approved = row(FENCE.sub("", text), "APPROVED")
     if not approved:
         return
     ids = list(dict.fromkeys(DECIDE_ID.findall(approved)))
+    if not ids and APPROVED_NONE.match(approved):
+        return
     if not ids:
         print(f"[{me}] warning: the APPROVED row cites no `orch decide` id. Record the owner's words with `orch decide "
               "answer <id> --quote \"<verbatim>\"` and cite the id it prints as `오너(<id>, <date>)`, so the approval "
@@ -896,6 +902,23 @@ def brief_kind(brief_path):
     return m.group(1)
 
 
+# `lead`, `lead:<slug>`, `<slug>-lead`: a name that calls the card a lead. `lead-<topic>` is a worker about leads.
+LEAD_NAME = re.compile(r"(?i)^(?:lead(?::.*)?|.*[-:\s]lead)$")
+# TASKS, INBOX and GATE are words a worker brief uses too; only a brief with both of these is a program's.
+LEAD_ONLY_ROWS = ("DELEGATE", "PREDICATE")
+
+
+def lead_shaped(text, opts):
+    """Why a brief that guard.is_lead() calls a worker looks like a lead's, else None. The model, the hooks and the
+    role record all follow is_lead, so a lead brief missing its ROLE line would run as a worker without a word."""
+    named = [opts[k] for k in ("--name", "--display-name") if LEAD_NAME.match(opts.get(k) or "")]
+    if named:
+        return f"the card is named {named[0]!r} but the brief has no lead rows"
+    if all(row(text, k) for k in LEAD_ONLY_ROWS):
+        return f"the brief has {' and '.join(LEAD_ONLY_ROWS)} rows but no ROLE row"
+    return None
+
+
 def session_model(opts, lead, name, kind=None):
     """(model, model_from): what picked it, or (None, None) after a warning line. See the module docstring."""
     if opts.get("--model"):
@@ -1041,6 +1064,10 @@ def create_locked(brief, opts, refs, prompt, kind=None, order=None):
                         "repo's main worktree when several Orca workspaces share that path. Pass `id:<worktree id>` "
                         "(`orca worktree show --worktree <it> --json`), or leave it out for this terminal's worktree.")
     lead = guard.is_lead(text)
+    if not lead and (why := lead_shaped(text, opts)):
+        raise Refuse(2, f"[{ME}] {brief}: {why}. Without a `ROLE: lead <slug>` line the card runs on "
+                        "orchestrate.models.worker with a worker's hooks. Write the lead rows (orchestrate "
+                        "references/brief.md \"Lead\"), or rename the card if it is a worker.")
     # Checked before the lead's form is picked: a lead started as a /goal card still reports to this Run.
     checked = supervisor(wanted) if to_run and not opts.get("--card") else None
     if lead and to_run and not opts.get("--card"):
@@ -1175,7 +1202,7 @@ HANDOFF = "skills-sync handoff"
 
 
 def handoff_parent():
-    """`id:<…>` of this card's parent worktree, else of this card itself (handoff-ticket §3), or Refuse(6)."""
+    """`id:<…>` of this card's parent worktree, else of this card itself (dispatch-card next-ticket §3), or Refuse(6)."""
     mine = caller_worktree()
     res = orca_result("worktree", "show", "--worktree", mine)
     parent = ((res or {}).get("worktree") or {}).get("parentWorktreeId") if isinstance((res or {}).get("worktree"), dict) else None
@@ -1186,7 +1213,7 @@ def handoff_parent():
 
 
 def confirm_start(handle):
-    """(started, detail): wait for the new agent to settle, then read its screen (handoff-ticket §4)."""
+    """(started, detail): wait for the new agent to settle, then read its screen (dispatch-card next-ticket §4)."""
     import sync
     run([ORCA, "terminal", "wait", "--terminal", handle, "--for", "tui-idle", "--timeout-ms", "60000", "--json"],
         timeout=90)
@@ -1201,7 +1228,7 @@ def handoff(argv):
     """skills-sync handoff <TICKET> [--title <short title>] [--note <text>] [--base-branch <b>] [--reference <url>]...
     [--role impl|verify|review] [--supersede] [--no-parent]
 
-    The next ticket's /goal card, as handoff-ticket §3 makes it: named after the ticket, under this card's parent (or
+    The next ticket's /goal card, as dispatch-card next-ticket §3 makes it: named after the ticket, under this card's parent (or
     this card), its prompt `/goal <TICKET>. <note> CLOSE: …`, linked to --reference, displayed as `<TICKET> <title>`,
     its setup closed in the background. The duplicate-card key uses the ticket and every --reference. Then its start is
     read from its screen: exit 0 only once it shows the prompt taken; 5 when the card exists but the start, the link
@@ -1213,12 +1240,18 @@ def handoff(argv):
         opts, refs = parse_args(argv[1:])
         if opts["--agent"] == "codex":
             raise Refuse(2, f"[{HANDOFF}] {CODEX_GOAL_CARD}")
+        # The note's first line joins /goal only when it is prose: a row or a fence there must stay one.
+        note = opts.get("--note") or ""
+        first = note.splitlines()[0] if note else ""
+        sep = "\n" if any(starts_row(first, k) for k in ROWS) or first.lstrip().startswith("```") else " "
+        head = f"/goal {ticket}." + (sep + note if note else "")
+        # A note without its own APPROVED row hands over no approved act, and says so as the row a brief needs.
+        approved = [] if row(FENCE.sub("", head), "APPROVED") else ["APPROVED: none"]
         # CLOSE on a line of its own: roles.py reads a CLOSE card by its row
-        prompt = "\n".join([f"/goal {ticket}." + (f" {opts['--note']}" if opts.get("--note") else ""),
-                            CLOSE_LINE, LOAD_LINE, *FIXED_LINES])
+        prompt = "\n".join([head, *approved, CLOSE_LINE, LOAD_LINE, *FIXED_LINES])
         if not guard.CLOSE_OR_KEEP.search(prompt):
             raise Refuse(2, f"[{HANDOFF}] the prompt does not pass hooks/guard.py's card check")
-        check_approved(opts.get("--note") or "", "--note", HANDOFF)  # the note itself: its first line joins /goal
+        check_approved(prompt, "--note", HANDOFF)  # the prompt as the card reads it, not the note alone
         with card_lock():
             return handoff_locked(ticket, opts, refs, prompt)
     except Refuse as e:

@@ -327,7 +327,7 @@ footer { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--line);
       <div class="layer">
         <div class="who"><span data-lang="ko">단독 세션</span><span data-lang="en">Solo session</span><span data-lang="ja">単独セッション</span><small><span data-lang="ko">프로그램 밖</span><span data-lang="en">outside a program</span><span data-lang="ja">プログラムの外</span></small></div>
         <div>
-          <p><span data-lang="ko">write-ticket → deliver-ticket → handoff-ticket 또는 end-session. 곁가지는 dispatch-card로 다른 카드에 넘기고 자기 일을 계속한다.</span><span data-lang="en">write-ticket → deliver-ticket → handoff-ticket or end-session. Side work goes to another card through dispatch-card while the session keeps going.</span><span data-lang="ja">write-ticket → deliver-ticket → handoff-ticket または end-session。脇道の作業は dispatch-card で別のカードに渡し、自分の作業を続けます。</span></p>
+          <p><span data-lang="ko">write-ticket → deliver-ticket → dispatch-card 다음 티켓 모드 또는 end-session. 곁가지는 dispatch-card로 다른 카드에 넘기고 자기 일을 계속한다.</span><span data-lang="en">write-ticket → deliver-ticket → dispatch-card's next-ticket mode or end-session. Side work goes to another card through dispatch-card while the session keeps going.</span><span data-lang="ja">write-ticket → deliver-ticket → dispatch-card の次のチケットモード または end-session。脇道の作業は dispatch-card で別のカードに渡し、自分の作業を続けます。</span></p>
           <div class="runs"><span class="chip"><span data-lang="ko">티켓 루프</span><span data-lang="en">Ticket loop</span><span data-lang="ja">チケットループ</span></span><span class="chip plain"><span data-lang="ko">머지 감시(외부 maintainer)</span><span data-lang="en">Merge watch (external maintainer)</span><span data-lang="ja">マージ監視（外部 maintainer）</span></span></div>
         </div>
       </div>
@@ -353,7 +353,7 @@ footer { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--line);
       <div class="loop">
         <ol class="rail">
           <li><span class="dot">1</span><div class="body"><b>Frame</b><span data-lang="ko">티켓 전수 독해, 완료 조건(티켓 ID + 실제 산출물 최종 검증) 도출, 사람의 목표를 상시 지시로 원문 그대로, 의존을 start-after(Orca dep)와 land-after(GitHub stack + <code>orch dep</code>)로 나눔, <code>orch init</code>, <code>orch-dash serve</code></span><span data-lang="en">Read every ticket; derive the done condition (ticket IDs + a final check against the real output); keep the human's goal word for word as a standing order; split dependencies into start-after (Orca dep) and land-after (GitHub stack + <code>orch dep</code>); <code>orch init</code>, <code>orch-dash serve</code></span><span data-lang="ja">チケットをすべて読む。完了条件（チケット ID + 実際の成果物での最終検証）を導く。人の目標を原文のまま常時指示にする。依存を start-after（Orca dep）と land-after（GitHub stack + <code>orch dep</code>）に分ける。<code>orch init</code>、<code>orch-dash serve</code></span></div></li>
-          <li><span class="dot">2</span><div class="body"><b><span data-lang="ko">검증 먼저</span><span data-lang="en">Verify first</span><span data-lang="ja">まず検証</span></b><span data-lang="ko">대상 저장소에 <code>verify-&lt;app&gt;</code> 스킬이 없으면 첫 과제가 create-verification-skill</span><span data-lang="en">If the target repo has no <code>verify-&lt;app&gt;</code> skill, the first task is create-verification-skill</span><span data-lang="ja">対象リポジトリに <code>verify-&lt;app&gt;</code> スキルがなければ、最初のタスクは create-verification-skill</span></div></li>
+          <li><span class="dot">2</span><div class="body"><b><span data-lang="ko">검증 먼저</span><span data-lang="en">Verify first</span><span data-lang="ja">まず検証</span></b><span data-lang="ko">대상 저장소에 <code>verify-&lt;app&gt;</code> 스킬이 없으면 첫 과제가 verification-skill의 create 모드</span><span data-lang="en">If the target repo has no <code>verify-&lt;app&gt;</code> skill, the first task is verification-skill in create mode</span><span data-lang="ja">対象リポジトリに <code>verify-&lt;app&gt;</code> スキルがなければ、最初のタスクは verification-skill の create モード</span></div></li>
           <li><span class="dot">3</span><div class="body"><b>Pilot</b><span data-lang="ko">워커 하나로 브리프 → PR → verdict → <code>orch land</code> → main green을 한 바퀴. 브리프와 단위 크기를 여기서 고친다</span><span data-lang="en">One worker makes one full lap: brief → PR → verdict → <code>orch land</code> → main green. This is where the brief and the unit size get fixed</span><span data-lang="ja">ワーカー 1 つでブリーフ → PR → verdict → <code>orch land</code> → main green を 1 周。ブリーフと作業単位の大きさはここで直す</span></div></li>
           <li><span class="dot">4</span><div class="body"><b>Scale</b><span data-lang="ko">가디언·QA 리드를 띄우고, <code>orch status</code>가 알려 주는 상한까지 티켓 워커를 띄운다</span><span data-lang="en">Start the guardian and the QA lead, then spawn ticket workers up to the cap <code>orch status</code> reports</span><span data-lang="ja">ガーディアンと QA リードを起動し、<code>orch status</code> が示す上限までチケットワーカーを起動する</span></div></li>
           <li class="cycle-label" aria-hidden="true">↻ <span data-lang="ko">반복</span><span data-lang="en">repeat</span><span data-lang="ja">繰り返し</span></li>
@@ -362,7 +362,7 @@ footer { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--line);
           <li class="cycle"><span class="dot">6</span><div class="body"><b>Triage</b><span data-lang="ko">새로 생긴 티켓은 기본 보류(<code>follow-up</code> 라벨, <code>record parked</code>). 완료 조건 항목을 막거나, 이 프로그램이 머지한 코드의 재현된 결함일 때만 편입</span><span data-lang="en">New tickets are parked by default (<code>follow-up</code> label, <code>record parked</code>). One is pulled in only if it blocks a done-condition item or is a reproduced defect in code this program merged</span><span data-lang="ja">新しく生まれたチケットは既定で保留（<code>follow-up</code> ラベル、<code>record parked</code>）。完了条件の項目を妨げるか、このプログラムがマージしたコードで再現した欠陥のときだけ取り込む</span></div></li>
           <li class="cycle"><span class="dot">7</span><div class="body"><b><span data-lang="ko">Land 감독</span><span data-lang="en">Land oversight</span><span data-lang="ja">Land の監督</span></b><span data-lang="ko">착지는 워커가 한다. 리드는 의존·stack·우선순위를 바로잡고 멈춘 PR을 푼다</span><span data-lang="en">Workers do the landing. The lead straightens out dependencies, stacks and priorities, and unsticks stalled PRs</span><span data-lang="ja">ランディングはワーカーが行う。リードは依存・stack・優先度を正し、止まった PR をほどく</span></div></li>
           <li class="cycle"><span class="dot">▸</span><div class="body"><b><code>orch status</code> → <span data-lang="ko">next 한 줄</span><span data-lang="en">the next line</span><span data-lang="ja">次の 1 行</span></b><span data-lang="ko">모든 drain의 끝. 아래 규칙표 중 처음 맞는 한 줄이 다음 행동이고, 다시 <code>orch wait</code>로</span><span data-lang="en">The end of every drain. The first matching row in the table below is the next action; then back to <code>orch wait</code></span><span data-lang="ja">すべての drain の最後。下の規則表で最初に当てはまる 1 行が次の行動で、その後また <code>orch wait</code> へ</span></div></li>
-          <li><span class="dot ok">✓</span><div class="body"><b>Close</b><span data-lang="ko">완료 조건 충족 + 최종 검증 기록(<code>predicate_verified</code>) → 워커 정리, measure-delivery 보고, 교훈 반영</span><span data-lang="en">Done condition met + final check recorded (<code>predicate_verified</code>) → clean up workers, report with measure-delivery, fold in the lessons</span><span data-lang="ja">完了条件を満たし最終検証を記録（<code>predicate_verified</code>）→ ワーカーの片付け、measure-delivery で報告、教訓を反映</span></div></li>
+          <li><span class="dot ok">✓</span><div class="body"><b>Close</b><span data-lang="ko">완료 조건 충족 + 최종 검증 기록(<code>predicate_verified</code>) → 워커 정리, reflect 한 번으로 성과 측정과 교훈 반영</span><span data-lang="en">Done condition met + final check recorded (<code>predicate_verified</code>) → clean up workers, one reflect run that measures delivery and folds in the lessons</span><span data-lang="ja">完了条件を満たし最終検証を記録（<code>predicate_verified</code>）→ ワーカーの片付け、reflect 1 回で成果測定と教訓の反映</span></div></li>
         </ol>
         <aside class="edges">
           <h3><span data-lang="ko">상한(cap)은 이렇게 움직인다</span><span data-lang="en">How the cap moves</span><span data-lang="ja">上限（cap）の動き方</span></h3>
@@ -537,13 +537,9 @@ const SKILLS = [
     T("여러 파일을 고치기 전, PR 올리기·머지 전, \"이 티켓 끝내줘\"", "Before editing several files, before opening or merging a PR, \"이 티켓 끝내줘\" (\"finish this ticket\")", "複数ファイルを直す前、PR を出す・マージする前、\"이 티켓 끝내줘\"（このチケットを終わらせて）"),
     T("계획 → 구현 → 교차 검토 → 커밋 → PR·stack·E2E → 착지 → 수용 기준 확인. 남이 머지하는 PR은 감시하다 판단. 옛 이름 ship-pr", "Plan → implement → cross-review → commit → PR, stack, E2E → land → check the acceptance criteria. A PR someone else merges gets watched, then judged. Formerly ship-pr", "計画 → 実装 → クロスレビュー → コミット → PR・stack・E2E → ランディング → 受け入れ基準の確認。他人がマージする PR は監視してから判断。旧名 ship-pr"),
     ["scripts/sticky-comment.sh"]],
-  ["ticket", "handoff-ticket",
-    T("\"핸드오프\", \"다음 티켓 진행해줘\", 티켓이 끝난 순간", "\"핸드오프\" (\"handoff\"), \"다음 티켓 진행해줘\" (\"start the next ticket\"), or the moment a ticket is done", "\"핸드오프\"（ハンドオフ）、\"다음 티켓 진행해줘\"（次のチケットを進めて）、チケットが終わった瞬間"),
-    T("완료 확인 → 다음 티켓을 새 Orca worktree 카드로 → 시작 확인 → 이 세션 종료", "Confirm it's done → open the next ticket as a new Orca worktree card → confirm it started → end this session", "完了の確認 → 次のチケットを新しい Orca worktree カードに → 開始を確認 → このセッションを終了"),
-    []],
   ["ticket", "dispatch-card",
-    T("\"~ repo에 지시해줘\", \"곁가지로 띄워줘\" — 이 세션은 계속 일할 때", "\"~ repo에 지시해줘\" (\"send this to the ~ repo\"), \"곁가지로 띄워줘\" (\"spin this off on the side\") — while this session keeps working", "\"~ repo에 지시해줘\"（〜 リポジトリに指示して）、\"곁가지로 띄워줘\"（脇で立ち上げて）— このセッションは作業を続けるとき"),
-    T("대상 저장소 확인 → 브리프 → 카드 생성 → 시작 확인 후 원래 일로 복귀. 옛 이름 dispatch-work", "Confirm the target repo → write the brief → create the card → confirm it started, then return to the original work. Formerly dispatch-work", "対象リポジトリの確認 → ブリーフ → カード作成 → 開始を確認して元の作業に戻る。旧名 dispatch-work"),
+    T("\"~ repo에 지시해줘\", \"곁가지로 띄워줘\" — 이 세션은 계속 일할 때. \"핸드오프\", \"다음 티켓 진행해줘\", 티켓이 끝난 순간", "\"~ repo에 지시해줘\" (\"send this to the ~ repo\"), \"곁가지로 띄워줘\" (\"spin this off on the side\") — while this session keeps working. \"핸드오프\" (\"handoff\"), \"다음 티켓 진행해줘\" (\"start the next ticket\"), or the moment a ticket is done", "\"~ repo에 지시해줘\"（〜 リポジトリに指示して）、\"곁가지로 띄워줘\"（脇で立ち上げて）— このセッションは作業を続けるとき。\"핸드오프\"（ハンドオフ）、\"다음 티켓 진행해줘\"（次のチケットを進めて）、チケットが終わった瞬間"),
+    T("대상 저장소 확인 → 브리프 → 카드 생성 → 시작 확인 후 원래 일로 복귀. 다음 티켓 모드: 완료 확인 → 다음 티켓을 새 Orca worktree 카드로 → 시작 확인 → 이 세션 종료. 옛 이름 dispatch-work, handoff-ticket", "Confirm the target repo → write the brief → create the card → confirm it started, then return to the original work. Next-ticket mode: confirm it's done → open the next ticket as a new Orca worktree card → confirm it started → end this session. Formerly dispatch-work, handoff-ticket", "対象リポジトリの確認 → ブリーフ → カード作成 → 開始を確認して元の作業に戻る。次のチケットモード：完了の確認 → 次のチケットを新しい Orca worktree カードに → 開始を確認 → このセッションを終了。旧名 dispatch-work、handoff-ticket"),
     []],
   ["ticket", "end-session",
     T("\"세션 종료해줘\", \"worktree 정리해줘\"", "\"세션 종료해줘\" (\"end this session\"), \"worktree 정리해줘\" (\"clean up the worktree\")", "\"세션 종료해줘\"（セッションを終了して）、\"worktree 정리해줘\"（worktree を片付けて）"),
@@ -553,10 +549,6 @@ const SKILLS = [
     T("한 세션이 여러 워커로 마일스톤을 끝낼 때, 남의 프로그램을 이어받을 때, PR이 왜 안 움직이는지 물을 때", "When one session drives a milestone to done with several workers, takes over someone else's program, or asks why PRs aren't moving", "1 つのセッションが複数のワーカーでマイルストーンを終えるとき、他人のプログラムを引き継ぐとき、PR がなぜ動かないのかを尋ねるとき"),
     T("완료 조건·상시 지시·원장·브리프 관리, 동시 실행 상한, 착지 순서와 독점 레인, 가디언·QA 리드, 대시보드", "Manages the done condition, standing orders, ledger and briefs; the concurrency cap; landing order and exclusive lanes; the guardian and QA lead; the dashboard", "完了条件・常時指示・台帳・ブリーフの管理、同時実行の上限、ランディング順と専有レーン、ガーディアン・QA リード、ダッシュボード"),
     ["orch", "orch-dash", "references/brief.md", "landing.md", "roles.md", "program-note.md", "dashboard.md"]],
-  ["program", "measure-delivery",
-    T("\"성과 측정\", 후속 티켓이 늘었는지, 재작업·토큰 비용, 프로그램 종료 시", "\"성과 측정\" (\"measure delivery\"), whether follow-up tickets are piling up, rework and token cost, or at the close of a program", "\"성과 측정\"（成果測定）、後続チケットが増えたか、手戻り・トークンコスト、プログラム終了時"),
-    T("트래커 이슈로 후속 티켓 증가·수렴·재작업·PR당 토큰을 계산해 보고", "Computes follow-up ticket growth, convergence, rework and tokens per PR from tracker issues, and reports them", "トラッカーの issue から後続チケットの増加・収束・手戻り・PR あたりのトークンを計算して報告"),
-    ["scripts/measure.py"]],
   ["machine", "reap-resources",
     T("\"방치 리소스 정리해줘\", 고아 프로세스가 쌓였을 때, resource steward의 주기 점검", "\"방치 리소스 정리해줘\" (\"clean up leftover resources\"), when orphaned processes pile up, or the resource steward's periodic round", "\"방치 리소스 정리해줘\"（放置リソースを片付けて）、孤児のプロセスがたまったとき、resource steward の定期点検"),
     T("죽은 세션이 남긴 고아 테스트 프로세스·Docker 잔여물·머지된 브랜치·scratchpad worktree를 점검하고, 목록에 올린 것만 정리. 누적치가 임계를 넘으면 경보", "Inventories orphaned test processes, Docker leftovers, merged branches and scratchpad worktrees that dead sessions left, and removes only what it listed. Raises an alert when a running total crosses its limit", "終わったセッションが残した 孤児のテストプロセス・Docker の残り・マージ済みブランチ・scratchpad の worktree を点検し、一覧に載せたものだけを片付ける。累積が閾値を超えると警報"),
@@ -586,24 +578,20 @@ const SKILLS = [
     T("25개 원칙(근본 원인 수정, 동작을 테스트, 빼고 나서 더하기 등) 중 맞는 것을 인용", "Cites the right one of 25 principles (fix the root cause, test the behavior, subtract before you add, and more)", "25 の原則（根本原因を直す、振る舞いをテストする、足す前に引く など）から合うものを引用"),
     ["references/principle-*.md (25)", "benchmark-checklist.md"]],
   ["pstack", "reflect",
-    T("\"reflect\"", "\"reflect\"", "\"reflect\""),
-    T("세션 transcript나 프로그램 원장의 증거 묶음을 리뷰어 셋이 읽고 교훈 장부에 기록. 두 번 발생한 것만 스킬 수정으로(세션은 승인 뒤 적용, 프로그램은 draft PR). Backlog는 트래커로", "Three reviewers read a session transcript or an evidence bundle from a program ledger and record lessons in a lessons ledger. Only lessons seen twice become skill edits (applied after approval for a session, as a draft PR for a program). Backlog goes to the tracker", "セッションの transcript やプログラム台帳の証拠をレビュアー 3 人が読み、教訓台帳に記録。2 回起きたものだけをスキルの修正に（セッションは承認後に適用、プログラムは draft PR）。Backlog はトラッカーへ"),
-    ["references/*-reviewer.md", "synthesizer.md"]],
+    T("\"reflect\", \"성과 측정\"", "\"reflect\", \"성과 측정\" (\"measure delivery\")", "\"reflect\"、\"성과 측정\"（成果測定）"),
+    T("세션 transcript나 프로그램 원장의 증거 묶음을 리뷰어 셋이 읽고 교훈 장부에 기록. 두 번 발생한 것만 스킬 수정으로(세션은 승인 뒤 적용, 프로그램은 draft PR). Backlog는 트래커로. 측정 모드는 후속 티켓 증가·수렴·재작업·PR당 토큰을 계산해 보고만 함", "Three reviewers read a session transcript or an evidence bundle from a program ledger and record lessons in a lessons ledger. Only lessons seen twice become skill edits (applied after approval for a session, as a draft PR for a program). Backlog goes to the tracker. Measure mode only computes and reports follow-up ticket growth, convergence, rework and tokens per PR", "セッションの transcript やプログラム台帳の証拠をレビュアー 3 人が読み、教訓台帳に記録。2 回起きたものだけをスキルの修正に（セッションは承認後に適用、プログラムは draft PR）。Backlog はトラッカーへ。測定モードは後続チケットの増加・収束・手戻り・PR あたりのトークンを計算して報告するだけ"),
+    ["references/*-reviewer.md", "synthesizer.md", "measure.md", "scripts/measure.py"]],
   ["pstack", "show-me-your-work",
     T("오래 걸리거나 사람이 자리를 비운 작업", "Long-running work, or work that runs while nobody is watching", "長くかかる作業、または人が席を外している間の作業"),
     T("결정마다 무엇·왜·증거·결과를 TSV 한 줄로 남기고 끝에 감사", "Logs each decision as one TSV row — what, why, evidence, result — and audits the log at the end", "決定ごとに何を・なぜ・証拠・結果を TSV 1 行で残し、最後に監査"),
     ["scripts/log.sh"]],
-  ["pstack", "swarm",
-    T("\"병렬로 훑어줘\", 경쟁 조건·탐색을 넓게", "\"병렬로 훑어줘\" (\"sweep this in parallel\"), or wide coverage of races and exploration", "\"병렬로 훑어줘\"（並列でざっと見て）、競合状態や探索を広く"),
-    T("워커 N개로 나눠 훑거나 경주(먼저 통과 또는 전체 순위)시켜 보고서 하나로. 결과물 하나로 합치는 경쟁은 arena", "Fans out N workers to split a sweep or run a race (first to pass, or rank all), and returns one report. Competing to merge into one deliverable is arena", "ワーカー N 個で分担して調べるか競争（先に通過、または全体順位）させ、レポート 1 つに。成果物一つにまとめる競争は arena"),
-    []],
+  ["pstack", "fan-out",
+    T("sweep: \"병렬로 훑어줘\", 경쟁 조건·탐색을 넓게. compete: \"경쟁시켜줘\", \"여러 안 뽑아서 제일 나은 걸로\", 한 번의 시도로는 모양이 굳어 버릴 결과물", "sweep: \"병렬로 훑어줘\" (\"sweep this in parallel\"), or wide coverage of races and exploration. compete: \"경쟁시켜줘\" (\"make them compete\"), \"여러 안 뽑아서 제일 나은 걸로\" (\"draft several and go with the best\"), or a deliverable a single attempt would lock into one shape", "sweep: \"병렬로 훑어줘\"（並列でざっと見て）、競合状態や探索を広く。compete: \"경쟁시켜줘\"（競わせて）、\"여러 안 뽑아서 제일 나은 걸로\"（いくつか案を出して一番良いものに）、一度の試みでは形が固まってしまう成果物"),
+    T("sweep(옛 swarm)은 워커 N개로 나눠 훑거나 경주(먼저 통과 또는 전체 순위)시켜 보고서 하나로. compete(옛 arena)는 채점 기준을 먼저 정하고 후보 N개에게 같은 일을 시킨 뒤, 독립 심판과 함께 골라 합쳐 결과물 하나로. architect가 compete를 부름", "sweep (formerly swarm) fans out N workers to split a sweep or run a race (first to pass, or rank all), and returns one report. compete (formerly arena) sets scoring criteria first, gives the same task to N candidates, then picks and merges with an independent judge into one deliverable. architect calls compete", "sweep（旧 swarm）はワーカー N 個で分担して調べるか競争（先に通過、または全体順位）させ、レポート 1 つに。compete（旧 arena）は採点基準を先に決め、候補 N 個に同じ仕事をさせ、独立の審判とともに選んでまとめ、成果物 1 つに。architect が compete を呼ぶ"),
+    ["references/sweep.md", "compete.md"]],
   ["pstack", "tdd",
     T("TDD·실패 테스트를 명시적으로 요청했거나, 싼 로컬 테스트 대상이 뻔한 버그", "TDD or a failing test was asked for explicitly, or a bug with an obvious cheap local test target", "TDD や失敗するテストを明示的に頼まれたとき、または安いローカルのテスト対象が明らかなバグ"),
     T("실패 테스트 → 수정 → 통과", "Failing test → fix → pass", "失敗するテスト → 修正 → 通過"),
-    []],
-  ["pstack", "arena",
-    T("\"경쟁시켜줘\", \"여러 안 뽑아서 제일 나은 걸로\", 한 번의 시도로는 모양이 굳어 버릴 결과물", "\"경쟁시켜줘\" (\"make them compete\"), \"여러 안 뽑아서 제일 나은 걸로\" (\"draft several and go with the best\"), or a deliverable a single attempt would lock into one shape", "\"경쟁시켜줘\"（競わせて）、\"여러 안 뽑아서 제일 나은 걸로\"（いくつか案を出して一番良いものに）、一度の試みでは形が固まってしまう成果物"),
-    T("채점 기준을 먼저 정하고 후보 N개에게 같은 일을 시킨 뒤, 독립 검토자 심판이 골라 합침. architect가 부름", "Sets scoring criteria first, gives the same task to N candidates , then a judge from anindependent reviewer picks and merges. Called by architect", "採点基準を先に決め、候補 N 個に同じ仕事をさせ、独立の審判が選んでまとめる。architect が呼ぶ"),
     []],
   ["pstack", "figure-it-out",
     T("\"알아서 설계해서 진행해줘\", \"큰 마이그레이션\", \"자리 비운 동안 끝내줘\"", "\"알아서 설계해서 진행해줘\" (\"design it yourself and get going\"), \"큰 마이그레이션\" (\"a big migration\"), \"자리 비운 동안 끝내줘\" (\"finish it while I'm away\")", "\"알아서 설계해서 진행해줘\"（自分で設計して進めて）、\"큰 마이그레이션\"（大きなマイグレーション）、\"자리 비운 동안 끝내줘\"（席を外している間に終わらせて）"),
@@ -633,14 +621,10 @@ const SKILLS = [
     T("\"현황 보고해줘\", \"브리핑해줘\", \"/brief\" 한 줄, 여러 항목을 담은 보고로 턴을 끝낼 때", "\"현황 보고해줘\" (\"give me a status report\"), \"브리핑해줘\" (\"brief me\"), a bare \"/brief\", or a turn that ends with a report spanning several items", "\"현황 보고해줘\"（状況を報告して）、\"브리핑해줘\"（ブリーフィングして）、\"/brief\" の一行、複数の項目をまとめた報告でターンを終えるとき"),
     T("완료·진행 중·결정 필요·사람만으로 묶고, Telegram이면 markdown 없는 짧은 줄, 터미널이면 markdown 표로 냄", "Groups it into done, in progress, decisions needed and only-you; plain short lines with no markdown on Telegram, markdown tables in the terminal", "完了・進行中・要決定・本人のみにまとめ、Telegram なら markdown なしの短い行、ターミナルなら markdown の表で出す"),
     []],
-  ["pstack", "create-verification-skill",
-    T("저장소에 앱을 사용자처럼 돌려 보는 스크립트가 없을 때", "The repo has no script that runs the app the way a user would", "リポジトリに、ユーザーのようにアプリを動かしてみるスクリプトがないとき"),
-    T("저장소 전용 verify-<app> 스킬과 기능 지도를 만들고 실제로 돌려 확인", "Builds a repo-specific verify-<app> skill and a feature map, then runs them for real to confirm they work", "リポジトリ専用の verify-<app> スキルと機能マップを作り、実際に動かして確認"),
-    ["references/feature-map-example/"]],
-  ["pstack", "maintain-verification-skill",
-    T("\"verify 스킬 점검해줘\"", "\"verify 스킬 점검해줘\" (\"check the verify skill\")", "\"verify 스킬 점검해줘\"（verify スキルを点検して）"),
-    T("기능 지도를 소스와 실제 실행으로 대조해 증명된 수정만 PR 하나로", "Checks the feature map against the source and real runs, and ships only the proven fixes in a single PR", "機能マップをソースと実際の実行で照合し、証明できた修正だけを PR 1 つで"),
-    []],
+  ["pstack", "verification-skill",
+    T("create: 저장소에 앱을 사용자처럼 돌려 보는 스크립트가 없을 때. maintain: \"verify 스킬 점검해줘\"", "create: the repo has no script that runs the app the way a user would. maintain: \"verify 스킬 점검해줘\" (\"check the verify skill\")", "create: リポジトリに、ユーザーのようにアプリを動かしてみるスクリプトがないとき。maintain: \"verify 스킬 점검해줘\"（verify スキルを点検して）"),
+    T("create(옛 create-verification-skill)는 저장소 전용 verify-<app> 스킬과 기능 지도를 만들고 실제로 돌려 확인. maintain(옛 maintain-verification-skill)은 기능 지도를 소스와 실제 실행으로 대조해 증명된 수정만 PR 하나로", "create (formerly create-verification-skill) builds a repo-specific verify-<app> skill and a feature map, then runs them for real to confirm they work. maintain (formerly maintain-verification-skill) checks the feature map against the source and real runs, and ships only the proven fixes in a single PR", "create（旧 create-verification-skill）はリポジトリ専用の verify-<app> スキルと機能マップを作り、実際に動かして確認。maintain（旧 maintain-verification-skill）は機能マップをソースと実際の実行で照合し、証明できた修正だけを PR 1 つで"),
+    ["references/create.md", "maintain.md", "feature-map-example/"]],
 ];
 const GROUP_LABEL = { ticket: T("티켓 하나", "One ticket", "チケット 1 件"), program: T("프로젝트", "Project", "プロジェクト"), machine: T("머신", "Machine", "マシン"), adapter: T("어댑터", "Adapter", "アダプター"), pstack: T("pstack", "pstack", "pstack") };
 const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));

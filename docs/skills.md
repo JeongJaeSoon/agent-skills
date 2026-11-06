@@ -1,6 +1,6 @@
 # 스킬 카탈로그
 
-`agent-skills` 플러그인이 싣는 스킬 40개(`skills/*/SKILL.md`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 16개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
+`agent-skills` 플러그인이 싣는 스킬 36개(`skills/*/SKILL.md`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 16개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
 
 설정 기본값 변경과 기존 데이터 보존 방법은 [설정 전환 안내](configuration-migration.md)를 따른다. 노트·원장·개인 폴더는 명시 설정이 필요하고, 성과 보고 기본 시간대는 UTC다.
 
@@ -9,10 +9,10 @@
 ## 흐름
 
 ```text
-티켓 하나   write-ticket → deliver-ticket → handoff-ticket → end-session
+티켓 하나   write-ticket → deliver-ticket → dispatch-card 다음 티켓 모드 → end-session
               (이 세션은 계속 일하면서 다른 저장소·곁가지로 보낼 때는 dispatch-card)
 프로젝트    orchestrate ─ 워커마다 deliver-ticket ─ orch land ─ main 가디언·QA 리드 ─ 대시보드
-              └ 끝나면 measure-delivery
+              └ 끝나면 reflect(성과 측정과 회고를 한 번에)
               └ 재시작·컴팩션 뒤에는 먼저 reboot
 머신 하나   reap-resources(죽은 세션이 남긴 프로세스·Docker·브랜치 정리, resource steward가 주기로)
               secure-fill(브라우저 인증 칸에 비밀값을, 에이전트가 값을 보지 않고)
@@ -30,12 +30,12 @@ PR 을 맡는 스킬과 머지 주체:
 | deliver-ticket | 이 세션이 작업 중인 내 PR: 작성, 리뷰 대응, 머지, 릴리스 | 세션이 §5 대로 (`gh pr merge`, 스택은 `gh stack merge`) |
 | watch-prs | 정기 회차가 모은 대기 PR: 나를 지명한 리뷰 요청, 리뷰를 기다리는 내 PR(의뢰·리마인드), 머지 준비가 된 내 PR | `merge_repos` 게이트를 모두 통과한 내 PR 만 |
 | orchestrate | 프로그램 워커의 PR | `orch land`, 또는 사람이 승인한 plain merge |
-| handoff-ticket | PR 을 만들지 않는다. 다음 카드를 정한다 | 하지 않는다 |
+| dispatch-card 다음 티켓 모드 | PR 을 만들지 않는다. 다음 카드를 정한다 | 하지 않는다 |
 
 - deliver-ticket ↔ watch-prs: 살아 있는 worktree 에 브랜치가 체크아웃된 PR 은 그 세션이 머지한다. watch-prs 는 그 PR 을 건너뛴다.
 - orchestrate ↔ watch-prs: 프로그램 원장에 있는 PR 은 `orch land` 가 머지한다. watch-prs 는 멈춘 프로그램의 PR 도 머지하지 않고 리마인드만 보낸다. 원장에 `stale_days` 동안 기록이 없는 프로그램은 버려진 것으로 보고, 그 PR 은 다시 watch-prs 의 리마인드·머지 대상이 된다.
 - orchestrate ↔ deliver-ticket: 워커는 deliver-ticket 으로 일하지만 머지는 §5 대신 `orch land` 로 한다.
-- handoff-ticket 의 "머지하고 다음 진행해줘": 머지는 deliver-ticket 이 하고, handoff-ticket 은 그 뒤 다음 카드만 연다.
+- 다음 티켓 모드의 "머지하고 다음 진행해줘": 머지는 deliver-ticket 이 하고, dispatch-card 는 그 뒤 다음 카드만 연다.
 
 ## 티켓 하나
 
@@ -51,12 +51,12 @@ PR 을 맡는 스킬과 머지 주체:
   - 의존은 트래커 relation으로 걸고, 1티켓 = 1PR로 나눈다. 서로 의존하는 PR은 GitHub stack으로 계획한다.
   - 묻지 않고 등록한 뒤 URL과 한 줄 요약을 보고한다. 요청이나 NOW 발견이 곧 승인이다. 큰 에픽이나 다른 팀 트래커·프로젝트일 때만 owner-ask gate를 거쳐 먼저 묻고, 사용자 지시가 초안을 먼저 보여 달라고 하면 그대로 한다. 상위 티켓 본문은 `✅ 완료 조건`, `🚫 범위 밖`, `⏸️ 보류`를 갖는다.
 - **동봉:** `references/templates.md`(개발 티켓과 조사 티켓 골격).
-- **관계:** 트래커 조작은 모두 `use-tracker`로 한다. follow-up 형식은 `orchestrate`와 `measure-delivery`가 센다.
+- **관계:** 트래커 조작은 모두 `use-tracker`로 한다. follow-up 형식은 `orchestrate`와 `reflect`의 측정 모드가 센다.
 
 ### deliver-ticket (옛 이름 `ship-pr`)
 - **언제:** 여러 파일을 고치기 전부터 완료까지 쓴다. PR 생성·갱신·머지("pr 작성까지", "머지까지 진행해줘"), 릴리즈, 리뷰 코멘트 대응, 독립 리뷰, "동작확인", "내가 확인할 거 있어?", "이 티켓 끝내줘", stack 작업도 여기에 들어간다.
 - **내용:**
-  - **계획:** plan mode에 들어가지 않고 승인도 기다리지 않는다. 티켓에는 계획 댓글 하나만 남기고(바뀌면 고친다), 진행은 worklog에, 결과는 완료 댓글에 적는다. 일의 모양에 따라 스킬을 부른다. 큰 마이그레이션이나 여러 단계짜리 변경은 `figure-it-out`, 되돌리기 어려운 설계 결정은 `architect`(→ `arena`), 낯선 코드는 `how`, 이유를 모르는 코드는 `why`.
+  - **계획:** plan mode에 들어가지 않고 승인도 기다리지 않는다. 티켓에는 계획 댓글 하나만 남기고(바뀌면 고친다), 진행은 worklog에, 결과는 완료 댓글에 적는다. 일의 모양에 따라 스킬을 부른다. 큰 마이그레이션이나 여러 단계짜리 변경은 `figure-it-out`, 되돌리기 어려운 설계 결정은 `architect`(→ `fan-out` compete), 낯선 코드는 `how`, 이유를 모르는 코드는 `why`.
   - **구현:** worktree 브랜치에서만 한다. 사소하지 않은 로직은 실행 가능한 테스트 없이 커밋하지 않는다. 버그는 실패하는 재현 테스트부터 쓴다. 범위 밖에서 발견한 것은 이 diff에서 고치거나, 완료 조건에 대어 NOW(follow-up 티켓)·LATER(`⏸️ 보류` 한 줄)·DROP(이유 한 줄)으로 나눈다. 프로그램 안에서는 티켓을 만들지 않고 worker_done에 제안 분류를 적는다.
   - **증거 규칙:**
     - 배포하는 줄마다 런타임 증거가 있어야 하고, 반박된 가설이 낳은 변경은 되돌린다.
@@ -79,9 +79,9 @@ PR 을 맡는 스킬과 머지 주체:
   - **완료:** 수용 기준을 모두 채운 상태를 완료로 본다.
     - 프로그램 안: 첫 프롬프트가 머지를 승인한 카드는 `orch land`로 자기 PR을 머지하고 닫는다. 사람이나 다른 PR을 기다릴 때만 `READY-WAIT:` 줄과 함께 READY에서 멈추고, human-gate도 READY에서 멈춘다.
     - 단독 카드: land executor가 켜진 repo에서는 머지하지 않고 head sha, CI run, 리뷰 판정과 함께 READY를 보고하며, 오케스트레이터가 머지한다. 실행기가 꺼진 repo나 사용자가 직접 연 세션은 사용자가 보류하지 않았으면 스스로 squash 머지한다.
-    - 완료 댓글을 남긴 뒤 같은 턴에 `handoff-ticket`으로 넘어간다.
+    - 완료 댓글을 남긴 뒤 같은 턴에 `dispatch-card`의 다음 티켓 모드로 넘어간다.
 - **동봉:** `scripts/sticky-comment.sh`(PR 테스트 결과 댓글을 하나로 유지, `--check`는 그 댓글이 지금 head sha를 담았는지 확인), `scripts/review_pick.py`(독립 리뷰어 선택). 본문에는 무엇을 배포할지 가르는 규칙만 두고, 절차는 references로 나눴다. `evidence.md`(버그·리팩터링·기존 수정 절차), `independent-review.md`(독립 리뷰 근거와 실패 처리), `pull-request.md`(PR 본문 절과 stack), `review-loop.md`(PR을 연 뒤 ready까지의 루프, 남이 머지할 때 지켜보기), `review-bot-triage.md`(리뷰 스레드를 fix / dismiss / ask로 나누는 기준. 독립 리뷰어, CodeRabbit, Copilot, 사람 리뷰에 쓴다).
-- **관계:** `figure-it-out`, `architect`, `how`, `why`, `tdd`, `prune-comments`, `interrogate`의 판정 틀, `write-plainly`, `blast-radius`, `write-ticket`, `use-tracker`, `use-notes`, `orchestrate`(`orch land`, `orch heavy`), `handoff-ticket`.
+- **관계:** `figure-it-out`, `architect`, `how`, `why`, `tdd`, `prune-comments`, `challenge`(interrogate 모드의 판정 틀, blast-radius 모드), `write-plainly`, `write-ticket`, `use-tracker`, `use-notes`, `orchestrate`(`orch land`, `orch heavy`), `dispatch-card`(다음 티켓 모드).
 
 ### ui-review
 - **언제:** 시안이나 화면, 화면을 바꾸는 PR을 사람에게 보이기 전. "UI 리뷰해줘", "시안 점검해줘", "화면 밸런스 봐줘". 사람이 UI 문제를 지적했을 때는 고친 뒤 규칙을 더한다. 스크린샷을 찍어 올리는 일은 `deliver-ticket`의 visual-evidence다.
@@ -93,16 +93,8 @@ PR 을 맡는 스킬과 머지 주체:
   - 규칙과 근거는 `references/rules.md`. 새 지적은 일반 규칙이면 이 스킬에, 한 제품의 규칙이면 그 저장소나 `~/.config/agent-skills/ui-review/rules.md`에 더한다.
 - **관계:** `deliver-ticket` §3 리뷰와 visual-evidence 판정, `orchestrate` 리드가 시안·화면을 사람에게 보내기 전.
 
-### handoff-ticket
-- **언제:** "핸드오프", "다음 작업으로 넘어가자", "남은 작업 있어?", "머지하고 다음 진행해줘", 그리고 티켓이 끝난 순간. "병렬로 진행"은 같은 저장소의 티켓 카드일 때만 해당하고, 서브에이전트나 곁가지 카드일 수 있으면 먼저 가린다. 이 세션이 계속 일해야 하면 `dispatch-card`를 쓴다.
-- **내용:**
-  - 다음 할 일을 스스로 고른다. 자투리는 여기서 처리하고 독립된 일은 티켓으로 만든다. 다음 티켓은 우선순위, 의존, 파일 충돌로 순위를 매긴다. 물어도 되는 것은 "어느 티켓이 다음인가"뿐이다.
-  - 프로그램 워커(브리프에 `PROGRAM:` 줄이 있는 경우)는 worker_done을 보낸 뒤 리드의 결정을 기다린다.
-  - 완료를 확인한 뒤 `orca worktree create --prompt "/goal <ID>. CLOSE: …"`로 새 카드를 띄운다. 병렬 요청이어도 카드는 티켓당 하나다.
-  - `orca terminal wait`와 `read`로 시작을 확인하고 `end-session`으로 이 세션을 닫는다.
-- **관계:** `deliver-ticket` 다음 단계다. 끝은 반드시 `end-session`으로 맺는다.
-
-### dispatch-card (옛 이름 `dispatch-work`)
+### dispatch-card (옛 이름 `dispatch-work`, `handoff-ticket`)
+새 Orca 카드를 띄우는 일 둘을 한 스킬에 담았다. 이 세션이 계속 일하면 dispatch(§0–§4), 이 티켓이 끝나 이 세션이 닫히면 다음 티켓 모드(§5, 본문은 `references/next-ticket.md`)다.
 - **언제:** "별도의 세션을 만들어서 ~ 해줘", "~ repo에 작업 지시해줘"처럼 다른 저장소나 곁가지로 일을 보내면서 이 세션은 계속 일할 때.
 - **내용:**
   - 대상 저장소를 `orca repo list`로 확인한다.
@@ -110,10 +102,16 @@ PR 을 맡는 스킬과 머지 주체:
   - 중복 카드를 확인한 뒤 카드를 만든다.
   - 브리프에 `CLOSE` 줄을 넣어, 카드가 완료 기준을 채우면 `end-session` §8로 스스로 닫게 한다.
   - 시작을 한 번만 확인하고 원래 일로 돌아간다. 결과를 기다리지 않고, `end-session`도 부르지 않는다.
-- **관계:** `use-notes`, `write-ticket`. 이 세션을 닫고 넘기는 경우는 `handoff-ticket`이 맡는다.
+- **다음 티켓 모드:**
+  - **언제:** "핸드오프", "다음 작업으로 넘어가자", "남은 작업 있어?", "머지하고 다음 진행해줘", 그리고 티켓이 끝난 순간. "병렬로 진행"은 같은 저장소의 티켓 카드일 때만 해당하고, 서브에이전트나 곁가지 카드일 수 있으면 먼저 가린다. 이 세션이 계속 일해야 하면 dispatch다.
+  - 다음 할 일을 스스로 고른다. 자투리는 여기서 처리하고 독립된 일은 티켓으로 만든다. 다음 티켓은 우선순위, 의존, 파일 충돌로 순위를 매긴다. 물어도 되는 것은 "어느 티켓이 다음인가"뿐이다.
+  - 프로그램 워커(브리프에 `PROGRAM:` 줄이 있는 경우)는 worker_done을 보낸 뒤 리드의 결정을 기다린다.
+  - 완료를 확인한 뒤 `orca worktree create --prompt "/goal <ID>. CLOSE: …"`로 새 카드를 띄운다. 병렬 요청이어도 카드는 티켓당 하나다.
+  - `orca terminal wait`와 `read`로 시작을 확인하고 `end-session`으로 이 세션을 닫는다.
+- **관계:** `use-notes`, `write-ticket`. 다음 티켓 모드는 `deliver-ticket` 다음 단계이고, 끝은 반드시 `end-session`으로 맺는다.
 
 ### end-session
-- **언제:** "세션 종료해줘", "현재 세션 정리해줘", "아카이브해줘", "머지하고 종료하자", `handoff-ticket`의 마지막 단계, 그리고 Orca 워커가 `worker_done`을 보내는 순간(사용자 말 없이). 대상 없이 "정리해줘"만 하면 기록만 남기고 대화를 이어 간다.
+- **언제:** "세션 종료해줘", "현재 세션 정리해줘", "아카이브해줘", "머지하고 종료하자", `dispatch-card` 다음 티켓 모드의 마지막 단계, 그리고 Orca 워커가 `worker_done`을 보내는 순간(사용자 말 없이). 대상 없이 "정리해줘"만 하면 기록만 남기고 대화를 이어 간다.
 - **내용:**
   - 먼저 티켓 최종 상태, 완료 댓글, worklog, 메모리를 남긴다.
   - `orca worktree current --json`의 결과로 닫는 방법을 고른다.
@@ -153,7 +151,7 @@ PR 을 맡는 스킬과 머지 주체:
   5. **Triage:** predicate가 완료 조건이다. 워커는 발견을 제안 분류와 함께 보고만 하고, 리드가 NOW(predicate를 막거나 재현된 결함, 티켓 등록 후 admitted), LATER(프로그램 노트 `보류`, 티켓 없음), DROP(이유 한 줄)으로 나눈다. NOW 티켓은 parent가 아닌 related로 잇는다. Orca 기본은 parent지만, 그러면 집계와 단계 막대가 원래 티켓의 계획된 일로 센다.
   6. **Land:** 워커가 `orch land`로 직접 착지한다. 일반 PR은 병렬로 머지되고, migration·CI·Dockerfile·compose 같은 공유 파일은 독점 레인에서 base당 하나씩 머지된다.
   7. **main 검증:** red가 되면 가디언이 flake 여부부터 보고 hotfix나 revert를 고르며, 그동안은 main 수정만 착지한다. QA 리드는 티켓 검증, 주기적 E2E, 설계 정합성 감사를 맡는다.
-  8. **Close:** 새 main에서 최종 확인을 하고 `record predicate_verified`로 기록한다. 이어서 역할을 풀고 `measure-delivery`를 돌린 뒤 `reflect`를 프로그램 모드로 돌린다. `worker-list --terminal-state reclaimable`이 빌 때까지는 끝내지 않는다.
+  8. **Close:** 새 main에서 최종 확인을 하고 `record predicate_verified`로 기록한다. 이어서 역할을 풀고 `reflect`를 프로그램 모드로 한 번 돌린다. 성과 측정은 그 안에서 한 번 돈다. `worker-list --terminal-state reclaimable`이 빌 때까지는 끝내지 않는다.
   - human-gate의 "Land #N" Task는 `orch land`가 착지 때 completed로, 보류나 PR 닫힘 때 failed로 닫는다. 보류로 결정된 PR은 `orch land`가 머지하지 않는다.
   - 턴을 끝낸 워커에게는 내용을 `orchestration send --to dispatch:<id>`로 보내고, 터미널에는 "orchestration check를 돌려라" 한 줄만 보낸다. 터미널이 없는 워커는 Orca의 복구 절차를 따른다.
   - 상시 역할의 평상시 보고는 `--type status`로 보낸다. escalation은 리드가 나서야 할 때만 쓴다.
@@ -176,17 +174,7 @@ PR 을 맡는 스킬과 머지 주체:
     - `mailbox_guard.py`: 옛 설치에서 hook으로 넘어가는 전환용 shim.
     - 테스트 파일.
   - `assets/dashboard/`: 대시보드 화면.
-- **관계:** 워커는 `deliver-ticket`을 따른다. `use-tracker`, `use-notes`, `create-verification-skill`, `show-me-your-work`, `swarm`, `measure-delivery`, `reap-resources`, `reflect`, `end-session`을 가져다 쓴다.
-
-### measure-delivery
-- **언제:** "성과 측정", 후속 티켓이 늘었는지 줄었는지, 재작업, 토큰 비용을 물을 때. `orchestrate`의 Close 단계에서도 부른다.
-- **내용:** `scripts/measure.py`가 트래커와 GitHub에서 읽기만 해서 한국어 보고서를 낸다.
-  - 기준선 대비 파생 티켓 증가율과 수렴 여부를 본다.
-  - 머지된 PR 수를 센다.
-  - 재작업(PR을 연 뒤의 커밋과 CI 재실행)을 본다.
-  - 새어 나간 결함 후보(Bug 라벨, main CI 실패, revert)를 찾는다.
-  - PR당 사용 가능한 로컬 transcript의 토큰을 집계한다. 측정하지 못한 세션은 0으로 단정하지 않는다.
-  - Linear에서 정확한 종료 시각이 필요하면 MCP로 뽑은 파일을 쓴다. 요청받은 숫자를 먼저 보여 주고 보고서는 노트에 저장한다.
+- **관계:** 워커는 `deliver-ticket`을 따른다. `use-tracker`, `use-notes`, `verification-skill`, `show-me-your-work`, `fan-out`, `reap-resources`, `reflect`, `end-session`을 가져다 쓴다.
 
 ### reboot
 - **언제:** 세션·Orca·머신이 재시작됐거나 컴팩션이 일어난 직후, 다른 일보다 먼저. "재시작했어", "Orca 재시작했어", "세션 다시 띄웠어", "복구 점검해줘". 무슨 일을 하던 중이었는지 되짚는 것은 `recall`이다.
@@ -234,9 +222,9 @@ PR 을 맡는 스킬과 머지 주체:
 
 ### tune-automode
 - **언제:** auto mode 분류기가 행동을 거부했고 사용자가 그런 행동을 앞으로 허용하고 싶을 때, 또는 auto mode가 에이전트에게 허용하는 범위를 바꾸려 할 때. "auto mode 가 막았어", "이거 허용되게 규칙 추가해줘".
-- **내용:** 거부 카테고리와 거부된 행동에서 그 행동 부류만 덮는 가장 작은 allow·soft_deny·environment 규칙을 만든다. 규칙에는 행동 부류, 안전한 조건, `Not covered:`가 들어간다. 검토 체크리스트(포괄 허용 금지, 사용자가 말하지 않은 프로덕션 파괴 동사 금지, 사용자 본인 채팅만 권한)를 통과시킨 뒤 `scripts/automode_rule.py emit`이 diff를 보여 주고 spec을 박은 독립 스크립트를 홈 아래에 쓴다. 사용자가 `! python3 -I <경로> --apply <spec 해시>`로 적용한다. 해시는 사용자가 본 diff의 spec과 맞아야 한다. 스크립트는 타임스탬프 백업, 멱등 병합, JSON 검증을 하고 되돌리는 명령을 출력한다. 에이전트는 settings.json을 고치지 않고, 그 스크립트를 실행하지 않고, 기다리는 동안 거부를 우회하지 않는다.
+- **내용:** 거부 카테고리와 거부된 행동에서 그 행동 부류만 덮는 가장 작은 allow·soft_deny·environment 규칙을 만든다. 규칙에는 행동 부류, 안전한 조건, `Not covered:`가 들어간다. 검토 체크리스트(포괄 허용 금지, 사용자가 말하지 않은 프로덕션 파괴 동사 금지, 사용자 본인 채팅만 권한)를 통과시킨 뒤 `scripts/automode_rule.py emit`이 spec을 점검하고(spec의 `refusal_category`가 없거나 `no-verdict`면, `Not covered:` 없는 allow 규칙이면 거절한다. 포괄 표현, 티켓·PR 번호, 토큰 같은 문자열, 기존 규칙과 거의 같은 규칙은 경고한다) diff를 보여 주고 spec을 박은 독립 스크립트를 홈 아래에 쓴다. 사용자가 `! python3 -I <경로> --apply <spec 해시>`로 적용한다. 해시는 사용자가 본 diff의 spec과 맞아야 한다. 스크립트는 타임스탬프 백업, 멱등 병합, JSON 검증을 하고 되돌리는 명령을 출력한다. 에이전트는 settings.json을 고치지 않고, 그 스크립트를 실행하지 않고, 기다리는 동안 거부를 우회하지 않는다.
 - **동봉:** `scripts/automode_rule.py`, 테스트 파일, `references/example-settings.json`.
-- **관계:** 사용자 설정의 `permissions.allow`와 `agent-skills.json` 키는 `skills-config`(autoMode 규칙을 함께 넣을 때 이 스킬의 엔진을 공유), 프로젝트 설정과 hooks는 내장 `update-config`, 프로젝트 전체 초안은 내장 `/auto-mode-setup`이 맡는다. `orchestrate`의 Frame과 Refused acts가 저장소 머지·배포의 지속 승인 규칙("프로젝트 지속 승인")을 이 스킬로 만든다.
+- **관계:** 사용자 설정의 `permissions.allow`와 `agent-skills.json` 키는 `skills-config`(autoMode 규칙을 함께 넣을 때 이 스킬의 엔진을 공유), 프로젝트 설정과 hooks는 내장 `update-config`, 프로젝트 전체 초안은 내장 `/auto-mode-setup`이 맡는다. `orchestrate`의 Frame과 Refused acts가 저장소 머지·배포의 지속 승인 규칙("Standing project approval")을 이 스킬로 만든다.
 
 ### skills-config
 - **언제:** `~/.claude/agent-skills.json`의 값을 바꾸거나, 사용자 `settings.json`의 `permissions.allow`에 규칙을 넣고 빼려 할 때. "agent-skills 설정 바꿔줘", "allow 규칙 추가해줘".
@@ -247,7 +235,7 @@ PR 을 맡는 스킬과 머지 주체:
 ### setup-pc
 - **언제:** agent-skills를 다른 PC에 들일 때, 설치된 PC를 최신으로 맞출 때. "새 PC 세팅해줘", "다른 PC 에서도 똑같이 쓰게 해줘", "agent-skills 업데이트해줘", "플러그인 최신화", "set up agent-skills on a new PC", "update agent-skills".
 - **새 PC:** 사람은 세션 안에서 `/plugin install`(설치 창이 언어·체크아웃 경로·개인 설정 저장소를 묻는다)과 새 세션만 한다. 플러그인의 SessionStart hook(`hooks/onboard.py`)이 설정되지 않은 PC임을 알아채고 이 스킬을 제안하고, 스킬이 체크아웃과 개인 설정 저장소를 clone한 뒤 아래 dry run과 한 줄로 간다. 설정 파일을 쓰지 않는 단계(동기화 작업, janitor·pressure-watch·watch-prs·watch-mentions 자동화, 점검 표)는 스킬이 `setup.py --actions-only`로 돌리고 guard hook이 권한 창을 띄운다. 설계는 [zero-command-setup.md](zero-command-setup.md).
-- **내용:** 입구는 체크아웃의 `scripts/setup.py`다. 스킬이 언어와 Orca Run 바인딩 여부를 묻고 dry run을 돌려 설정 파일별 diff를 보인 뒤, 사람이 칠 `! python3 -I … --apply <해시>` 한 줄을 건넨다. 그 한 줄이 백업, 없는 값만 더하는 멱등 병합(이미 있는 값은 덮지 않음, 켜져 있는 마켓플레이스 사본을 끄는 것만 예외), 원자적 교체, 다시 읽어 확인, 파일별 되돌리는 줄 출력을 하고, 이어서 launchd 동기화 작업·동기화·기본 on 정기 자동화를 켜고 `scripts/setup_check.py check` 표를 낸다. 넣는 값은 저장소의 권장 기본값(`scripts/recommended-settings.json`: 체크아웃 로드, `language`·`outputStyle`·기본 permission mode, 일반화한 autoMode 묶음, 조회·대시보드 서버만 담은 `permissions.allow` 묶음, `agent-skills.json` 최소 키)과 개인 설정 저장소의 `agent-skills.json`·트래커 사이트 규칙뿐이다. 사내 이름 목록·개인 지침·에이전트·autoMode 규칙은 옮기지 않는다. 한 번 제안한 항목은 기록해 두어, 사람이 지운 규칙은 다시 제안하지 않는다. update 모드는 `--update`(dry run은 fetch도 하지 않고 새로 생긴 권장값만 보이고, `--apply` 줄이 fast-forward한 뒤 계획을 다시 맞춰 본다). 권장 규칙과 라벨(첫 콜론 앞)은 같고 본문이 옛것인 autoMode 규칙은 옆에 하나 더 넣지 않고 `drifted`로 알리며, `--replace-drifted [라벨 …]`이 그 교체만 계획한다. 출력 첫 줄이 대상 settings.json이고 `--settings`로 다른 파일을 고른다. 원래 PC에서 `export`로 뽑은 기준 파일과 비교하는 `check --baseline`은 선택이다. 설정 파일은 어떤 도구로도 쓰지 않고 `--apply`도 실행하지 않는다.
+- **내용:** 입구는 체크아웃의 `scripts/setup.py`다. 스킬이 언어와 Orca Run 바인딩 여부를 묻고 dry run을 돌려 설정 파일별 diff를 보인 뒤, 사람이 칠 `! python3 -I … --apply <해시>` 한 줄을 건넨다. 그 한 줄이 백업, 없는 값만 더하는 멱등 병합(이미 있는 값은 덮지 않음, 켜져 있는 마켓플레이스 사본을 끄는 것만 예외), 원자적 교체, 다시 읽어 확인, 파일별 되돌리는 줄 출력을 하고, 이어서 launchd 동기화 작업·동기화·기본 on 정기 자동화를 켜고 `scripts/setup_check.py check` 표를 낸다. 넣는 값은 저장소의 권장 기본값(`scripts/recommended-settings.json`: 체크아웃 로드, `language`·`outputStyle`·기본 permission mode, 일반화한 autoMode 묶음, 조회·대시보드 서버만 담은 `permissions.allow` 묶음, `agent-skills.json` 최소 키)과 개인 설정 저장소의 `agent-skills.json`·트래커 사이트 규칙뿐이다. 사내 이름 목록·개인 지침·에이전트·autoMode 규칙은 옮기지 않는다. 한 번 제안한 항목은 기록해 두어, 사람이 지운 규칙은 다시 제안하지 않는다. 옛 권장 규칙 여럿을 합친 규칙은 그 옛 규칙을 제안받은 적 있는 PC에는 넣지 않고 `skipped` 줄로만 알린다. 지운 규칙이 합친 규칙 안에서 되살아나지 않게 하려는 것이다. update 모드는 `--update`(dry run은 fetch도 하지 않고 새로 생긴 권장값만 보이고, `--apply` 줄이 fast-forward한 뒤 계획을 다시 맞춰 본다). 권장 규칙과 라벨(첫 콜론 앞)은 같고 본문이 옛것인 autoMode 규칙은 옆에 하나 더 넣지 않고 `drifted`로 알리며, `--replace-drifted [라벨 …]`이 그 교체만 계획한다. 출력 첫 줄이 대상 settings.json이고 `--settings`로 다른 파일을 고른다. 원래 PC에서 `export`로 뽑은 기준 파일과 비교하는 `check --baseline`은 선택이다. 설정 파일은 어떤 도구로도 쓰지 않고 `--apply`도 실행하지 않는다.
 - **동봉:** `scripts/setup_check.py`, 테스트 파일. 저장소의 `scripts/setup.py`, `scripts/recommended-settings.json`, `scripts/test_setup.py`.
 - **관계:** 적용 뒤 막힌 행동 하나는 `tune-automode`, 묶음 밖의 사용자 `permissions.allow`·`agent-skills.json` 키는 `skills-config`, hooks는 `update-config`, 정기 자동화가 하는 일은 `reap-resources`, 떠 있는 세션 reload는 `skills-sync broadcast`가 맡는다. 체크아웃 로드만 하는 `bootstrap.py`는 그대로 있고 `setup.py`가 그 launchd 작업을 다시 쓴다.
 
@@ -271,14 +259,14 @@ PR 을 맡는 스킬과 머지 주체:
 ### use-tracker
 - **언제:** 티켓을 읽기, 찾기, 만들기, 라벨·댓글 달기, 상태 바꾸기 할 때와 스크립트가 티켓 데이터를 쓸 때.
 - **내용:**
-  - 트래커는 프로그램 설정 → `~/.claude/agent-skills.json` → 기본값 linear 순서로 정한다.
-  - 세션에서 Linear는 `orca linear`를 먼저 쓰고(기본 텍스트 출력, 결과를 파싱할 때만 `--json`), `orca linear`에 없는 기능(문서, 파일·이미지 업로드, diff 리뷰, release, milestone·cycle 등)만 Linear MCP로 한다. Jira는 연결돼 있으면 MCP를 쓴다. 스크립트는 항상 `tracker.py`를 쓴다. `tracker.py` 명령은 list, get, children, create, label, comment, attach, transition, reconcile이다. reconcile은 티켓과 그 티켓을 배달하는 PR(티켓에 첨부된 PR, 제목·브랜치의 ID, 본문의 closing keyword)을 읽어 어느 상태가 맞는지(`started`, `review`, 기준 확인, 보고)와 실행할 milestone 줄을 출력만 하고 쓰지 않는다. transition은 현재 상태를 먼저 읽어 이미 그 단계이거나 더 나아간 티켓은 바꾸지 않는다. `--to review`는 설정의 `tracker.<adapter>.review_status`가 있으면 그 이름의 상태로, 없으면 In Review로, 그것도 없으면 이름에 review가 든 유일한 started 상태로 옮긴다.
+  - 트래커는 프로그램 설정 → `~/.claude/agent-skills.json` → Orca 연결 자동 판별 순서로 정한다. 연결이 하나면 그것, 둘이면 현재 브랜치와 최근 커밋의 티켓 키 모양으로 가르고, 연결이 없으면 linear다. 판별 결과는 설정에 쓰지 않고 `tracker.py detect`로 근거를 본다.
+  - 세션에서 티켓 조회·관리는 `orca linear` / `orca jira`로 한다(기본 텍스트 출력, 결과를 파싱할 때만 `--json`). Orca에 없는 기능(문서, 업로드, diff 리뷰, release, milestone·cycle 등)만 MCP로 한다. Orca가 그대로 실행할 수 있는 MCP 호출은 `tracker_gate` hook이 거부하고 대응 명령을 알려 준다. 스크립트는 항상 `tracker.py`를 쓴다. `tracker.py` 명령은 list, get, children, create, label, comment, attach, transition, reconcile이다. reconcile은 티켓과 그 티켓을 배달하는 PR(티켓에 첨부된 PR, 제목·브랜치의 ID, 본문의 closing keyword)을 읽어 어느 상태가 맞는지(`started`, `review`, 기준 확인, 보고)와 실행할 milestone 줄을 출력만 하고 쓰지 않는다. transition은 현재 상태를 먼저 읽어 이미 그 단계이거나 더 나아간 티켓은 바꾸지 않는다. `--to review`는 설정의 `tracker.<adapter>.review_status`가 있으면 그 이름의 상태로, 없으면 In Review로, 그것도 없으면 이름에 review가 든 유일한 started 상태로 옮긴다.
   - 정해진 milestone(상태 전이, PR 링크, 완료 코멘트)은 `tracker.py` 한 줄(`transition`, `attach`, `comment`)로 세션에서 직접 하고 MCP나 담당 에이전트를 거치지 않는다. 그 밖의 쓰기는 모두 담당 에이전트에 맡기고 읽기만 여기서 한다. 담당은 사용자 지시 → 설정의 `tracker.delegate_agent` → 플러그인 agent `agent-skills:task-tracker` 순서로 정하고, `"none"`이면 세션에서 직접 쓴다. `task-tracker`는 트래커 사이트 고유 규칙(프로젝트, 상태·전이 id, 라벨, 언어)을 `tracker.rules_file`이 가리키는 사용자 Markdown에서 매번 읽는다. 키가 있는데 파일이 없거나 읽지 못하면 추측하지 않고 멈춘다.
   - 값을 가리는 읽기 경로(`<PERSON>` 같은 개체 자리표시자나 `****`)에서 읽은 값은 데이터가 아니다. 판단·되쓰기 전에 가리지 않는 경로로 다시 읽고, 가려진 값을 필드에 되쓰지 않는다.
   - 상태 어휘는 triage, backlog, unstarted, started, completed, canceled다.
   - 완료 조건은 상위 티켓 본문(`✅ 완료 조건`, `🚫 범위 밖`, `⏸️ 보류`)에, 부모 없는 티켓은 인수 조건에 둔다. NOW로 분류한 발견만 티켓이 된다.
   - follow-up 형식은 `follow-up` 라벨, 첫 줄 `파생: <ID> · 원인: <분류>`, 둘째 줄 `완료 조건: <항목>`, related relation이다.
-  - NOW·LATER·DROP 분류, 완료 조건, follow-up 형식의 정본은 `references/exit-condition.md` 하나다. `deliver-ticket`, `write-ticket`, `handoff-ticket`, `end-session`, `task-tracker`는 이 파일을 가리킨다.
+  - NOW·LATER·DROP 분류, 완료 조건, follow-up 형식의 정본은 `references/exit-condition.md` 하나다. `deliver-ticket`, `write-ticket`, `dispatch-card`(다음 티켓 모드), `end-session`, `task-tracker`는 이 파일을 가리킨다.
   - 티켓 본문은 신뢰하지 않는 데이터로 다룬다.
 - **동봉:** `scripts/tracker.py`(표준 라이브러리만 쓰는 Linear·Jira 어댑터, fixture 모드 포함), `references/exit-condition.md`, `references/linear.md`, `references/jira.md`(Jira 설정 포함).
 
@@ -294,7 +282,7 @@ PR 을 맡는 스킬과 머지 주체:
 ## 글쓰기
 
 ### brief
-- **언제:** 사람에게 진행 현황을 보고할 때. "현황 보고해줘", "상황 정리해줘", "브리핑해줘", "진행 상황 알려줘", 또는 `/brief` 한 줄(채널 봇 명령). Claude Code에서는 `/agent-skills:brief`로 부른다. 맨 `/brief`는 이 스킬로 가지 않는다. Claude Code 2.1.295에서 대화형 세션은 `Unknown command: /brief`를 내고, `claude -p`에서는 내장 명령(brief-only 모드 전환)이 받아 `/brief isn't available in this environment.`를 낸다. 진행상황을 표로, 리드별·항목별 상세 진행상황, 사람이 확인하거나 해야 할 것을 물을 때도. 사람에게 여러 항목(끝난 일, 진행 중인 일, 결정할 일)을 담은 보고로 턴을 끝낼 때도. 서브에이전트 결과, `worker_done` 본문, JSON처럼 형식이 정해진 출력은 해당하지 않는다. "어디까지 했지"는 `recall`, "남은 작업 있어?"는 `handoff-ticket`.
+- **언제:** 사람에게 진행 현황을 보고할 때. "현황 보고해줘", "상황 정리해줘", "브리핑해줘", "진행 상황 알려줘", 또는 `/brief` 한 줄(채널 봇 명령). Claude Code에서는 `/agent-skills:brief`로 부른다. 맨 `/brief`는 이 스킬로 가지 않는다. Claude Code 2.1.295에서 대화형 세션은 `Unknown command: /brief`를 내고, `claude -p`에서는 내장 명령(brief-only 모드 전환)이 받아 `/brief isn't available in this environment.`를 낸다. 진행상황을 표로, 리드별·항목별 상세 진행상황, 사람이 확인하거나 해야 할 것을 물을 때도. 사람에게 여러 항목(끝난 일, 진행 중인 일, 결정할 일)을 담은 보고로 턴을 끝낼 때도. 서브에이전트 결과, `worker_done` 본문, JSON처럼 형식이 정해진 출력은 해당하지 않는다. "어디까지 했지"는 `recall`, "남은 작업 있어?"는 `dispatch-card`의 다음 티켓 모드.
 - **내용:**
   - 보고는 렌더러 하나가 고정 형식으로 낸다. 요청형은 `orch brief render --commit`, 정기형(heartbeat, cron·`/loop` 회차, 사람이 정한 주기)은 `orch brief render --periodic --commit`, Telegram이면 `--telegram`을 붙이고 출력을 그대로 보낸다. 출력을 고치지 않는다. 틀린 행은 기록(`orch board set`, `orch stage set`)을 고친 뒤 다시 렌더한다. 규칙의 정본은 렌더러(`board.py`)와 `test_board.py`다.
   - 렌더러가 만드는 것: 시스템 시계의 시각(세션의 시간대), 포인터 줄, 범례, 지금 오너가 할 일(비어도 `없음`), 결정 필요, 저장소마다 표 하나(상태·리드/Phase·PR·8칸 막대 N/M·다음·세션. 막대는 `orch board set --progress`로만 채워지므로 막대가 있는 행이 없는 표에서는 그 열을 뺀다. 열린 행은 상태와 상관없이 표에 한 번만 나온다. 다음 칸은 그 행의 다음 단계이고, 오너·다른 사람·조건을 기다리는 행은 `↑ 오너`·`↓ 대기`·`↓ 보류`로 그 목록을 가리킨다. 세션 칸은 그 행을 맡은 세션이 `작업 중`·`멈춤`·`세션 없음` 중 어디인지를, 터미널 핸들이 아니라 Orca worktree 로 이어서 보인다. 행 이름에 없으면 worktree 이름을 함께 쓰고, 터미널 보고의 행에는 URL을 쓰지 않고(터미널이 링크를 긴 URL로 펼쳐 줄을 덮는다) PR은 `owner/repo#N` 평문으로 쓴다. 대시보드 화면에서는 상태 글자가 그 세션 페이지로 가는 링크다. `작업 중 O`·`멈춤 S!`처럼 상태 글자 뒤에 그 세션의 마지막 assistant 줄 모델을 O(opus)·S(sonnet)·H(haiku) 한 글자로 붙이고, 역할의 `orchestrate.models`와 다르면 `!`을 더한다. 세션이 없는 행에는 붙이지 않는다. 세션 하나를 혼자 맡은 행의 이름은 Orca worktree 표시 이름 그대로라서, 표의 이름으로 Orca Cmd+J 에서 찾을 수 있다. 셀은 자르지 않는다. 표가 78열을 넘는 저장소는 표 대신 행마다 `- 상태 이름 — PR · 다음 · 세션` 한 줄로 내고, 대시보드용 `full`은 표 그대로다), 카드 없는 일(행이 없는 작업만. 세션이 돌리지 않는 doing 항목은 🔄 가 아니라 ❔ `세션 없음` 이다), 다른 사람 대기, 보류(⏸️ 행의 조건만. 할 일이 PR 을 적어 넘겨받은 행은 표에서 📅 이고 보류에 넣지 않는다. 포인터 줄이 그 할 일을 센다). 링크와 기호 설명을 맨 위에, 그다음 오너가 할 일을 둔다. 터미널 형식은 머리 줄만 `#` 없이 굵게 두고, 포인터 줄과 범례는 `>` 인용 한 덩어리로 묶고, 큰 구역(지금 오너가 할 일·결정 필요·저장소별 묶음·카드 없는 일·다른 사람 대기·보류)은 `##` 제목으로 연다. 구역 사이에 `---`는 넣지 않는다. Telegram 평문은 이 표시 없이 그대로다. 프로그램이 달라도, owner/name 의 대소문자가 달라도 저장소가 같으면 표 하나다. 표는 🙋·❔·🔴 행이 있는 저장소 먼저, 그다음 🔄 행이 많은 순, 그다음 이름순이다. 표 안의 행은 🙋 → 🔴 → ❔ → 🔄 → ⏳ → ⏸️ → ✅ 이고 같은 상태는 기존 순서를 지킨다. 헤드 행과 └ 행은 한 덩어리로 움직이며, 그중 가장 앞선 상태의 자리에 놓인다. 단계표도 같은 순위로 놓는다. 사람을 기다리는 행은 오너가 풀 것(🙋, 지금 오너가 할 일)과 다른 사람의 리뷰·답변 대기(⏳, 다른 사람 대기)로 나뉘고, PR 의 리뷰 요청 대상이나 board 의 `--owner` 로 판정한다. 행 상태는 규칙을 ✅ → 🙋 → ⏸️(선행 PR·보류 항목·기계 자원 대기) → ⏳ → 🔴 → ❔ → 🔄 순서로 보고 처음 맞는 것으로 정하며, 한 모듈(`rowstate.py`)이 판정과 배치를 맡아 보고서·대시보드·단계표가 같은 결과를 읽는다. 근거가 없으면 ❔ 로 두고 다음 칸에 `에이전트 조치 필요: <빠진 것>`을 적는다. 기다리는 사람과 선행 PR 은 `orch board set <id> --owner 오너|<누구>|- --after owner/repo#N|-` 로 기록한다. `~/.claude/agent-skills.json`의 `"brief": {"sendlog": "<경로>"}`가 `watch-prs` 형식의 송신 로그를 가리키면, ⏳ 줄마다 그 PR·사람에게 마지막으로 나간 리뷰 의뢰·리마인드(누구·언제·채널)를 붙인다. 기본값은 없고, 키나 파일이 없으면 그 부분만 빠진다. 범례 위의 한 줄(`단계표 N행 (접음 M) · <대시보드 Stages 주소, 서버가 없으면 orch stage show>`, Telegram 은 대시보드가 127.0.0.1 에만 열려 있어 늘 `orch stage show --telegram`)이 `stage` 스킬의 표를 가리킨다. 그 아래 한 줄(`📅 할 일 N건 · ⏸️ 보류 큐 K건 · <대시보드 To-do 주소, 서버가 없으면 orch board todo list --telegram>`, Telegram 은 늘 명령)이 아직 때가 안 된 할 일과 보류 큐의 수만 센다. 할 일은 날짜·조건이 걸린 약속(그때가 오면 반드시 한다)이고, 보류는 날짜 없이 차례만 있는 작업 큐(저장 순서가 차례, 맨 앞이 다음)다. 둘의 목록은 `todo` 스킬과 대시보드 To-do 페이지에 있고, 둘 다 0이면 줄이 없다. 정기형은 이번 회차에 하지 않은 정기 행동을 더한다. ✅ 행과 머지 sha가 완료 항목이라 완료 목록은 따로 없다. 직전 보고에서 바뀐 행은 이름을 굵게(Telegram은 `(바뀜)`) 쓴다.
@@ -320,7 +308,7 @@ PR 을 맡는 스킬과 머지 주체:
 - **관계:** `brief`의 할 일·보류 큐 줄이 가리키는 곳. 대시보드에서는 To-do 페이지.
 
 ### map-features
-- **언제:** 제품이 지금 무엇을 하는지 사람이 읽을 지도가 필요할 때. PRD, 로드맵, 온보딩, 현황 문서. "feature map 만들어줘", "기능 지도 그려줘", "지금 뭐가 구현돼 있는지 정리해줘". verify 스킬이 기능을 구동하는 지도는 `create-verification-skill`, 한 하위 시스템의 동작은 `how`.
+- **언제:** 제품이 지금 무엇을 하는지 사람이 읽을 지도가 필요할 때. PRD, 로드맵, 온보딩, 현황 문서. "feature map 만들어줘", "기능 지도 그려줘", "지금 뭐가 구현돼 있는지 정리해줘". verify 스킬이 기능을 구동하는 지도는 `verification-skill`의 create 모드, 한 하위 시스템의 동작은 `how`.
 - **내용:**
   - 첫 줄에 기준(저장소, ref, 짧은 sha, 커밋 날짜)을 적고 모든 행을 그 커밋 기준으로 쓴다.
   - 배포 단위(앱)를 빌드·배포 설정에서 찾아 표로, 기대되지만 없는 앱은 대신 있는 것과 함께 목록으로 적는다.
@@ -339,7 +327,7 @@ PR 을 맡는 스킬과 머지 주체:
   - 원칙 가운데 역할로 부르기, 아는 사실 유지, 빠뜨린 것 밝히기는 [anti-slop](https://github.com/dmmulroy/anti-slop)(Dillon Mulroy, MIT)의 lint 규칙 설명(`no-shape-in-symbol-names`, `no-known-value-widening`·`no-widen-then-assert`, `no-conditional-empty-object-spread`)을 글에 맞게 옮겼다.
   - 초안을 쓰기 전에 언어별 참조를 읽는다. 다 쓴 뒤에 다듬으면 대부분 놓친다.
 - **동봉:** `references/korean.md`(상투어, 번역투, 얼버무림, 주어 생략, 명사 나열, "~다" 문체, 서식 금지를 고치기 전후 예문으로), `references/english.md`(영어 문장, 코드 주석, 스킬 본문 규칙).
-- **관계:** `write-ticket`, `deliver-ticket`(PR 본문), `use-notes`, `measure-delivery`, `end-session`(최종 보고)이 가리킨다.
+- **관계:** `write-ticket`, `deliver-ticket`(PR 본문), `use-notes`, `reflect`(측정 모드), `end-session`(최종 보고)이 가리킨다.
 
 ### prune-comments
 - **언제:** `/prune-comments`, "주석 정리해줘", "불필요한 주석 지워줘", "주석 너무 많아". `deliver-ticket`이 리뷰 전에 부른다.
@@ -356,7 +344,7 @@ PR 을 맡는 스킬과 머지 주체:
 - **내용:**
   - 대상부터 고른다. 공개 저장소는 worktree 브랜치에서 고치고 사내 이름을 넣지 않는다. 개인 파일은 git이 없으므로 `~/.claude` 밖에 백업한 뒤 그 자리에서 고치고, 사내 이름을 써도 된다.
   - 새 스킬이나 열 줄이 넘는 절을 더하기 전에 기존 스킬을 목록과 grep으로 훑어 들어갈 집을 찾는다. 집이 없고 되풀이되는 필요일 때만 새 스킬을 만든다.
-  - 고친 뒤에는 순서대로: `claude-api`의 `prompt-audit`을 바뀐 파일에 돌려 반영, 로컬 목록으로 사내 이름 grep 0건(공개 저장소), README 테스트와 `claude plugin validate`, 카탈로그와 `translated-from`, description을 바꿨으면 `claude plugin eval`, 서명 커밋, 메인 체크아웃 fast-forward와 push.
+  - 고친 뒤에는 순서대로: `claude-api`의 `prompt-audit`을 바뀐 파일에 돌려 반영, 로컬 목록으로 사내 이름 grep 0건(공개 저장소), `scripts/check.sh`(시험 전부, pstack 동기화 시험, `claude plugin validate`), 카탈로그와 `translated-from`, description을 바꿨으면 `scripts/eval_desc.sh`(`claude plugin eval`을 옛·새 체크아웃에), 서명 커밋, 메인 체크아웃 fast-forward와 push.
   - 재사용하는 스킬에는 회사·팀·채널·사람·티켓 키·사내 저장소나 서비스 이름, 한 프로젝트에만 맞는 사실을 넣지 않는다. 변경은 끝낼 때 바로 커밋·push한다(다른 PC는 `skills-sync sync`로 받는다).
   - 로드되는 체크아웃에 들어간 뒤 `skills-sync broadcast --skills`(SKILL.md·참조 파일) 또는 `--plugins`(hook·manifest)를 돌린다. 빈 입력칸에서 쉬는 세션에만 `orca terminal send`로 리로드를 보내고, 작업 중인 세션은 쉴 때까지 대기로 남긴다. `orca terminal send`로 직접 보내지 않는다(권한 창이 Enter를 답으로 받는다). 세션은 자기 입력칸에 칠 수 없으므로 보고 끝에서 사용자에게 이 세션의 리로드를 청한다.
 - **관계:** `reflect`, `orchestrate`의 flow improver 브리프가 가리킨다. 새 스킬 초안과 description 조정은 `skill-creator`에 맡기고, 그 뒤 단계는 이 스킬이 맡는다.
@@ -369,21 +357,29 @@ PR 을 맡는 스킬과 머지 주체:
 - **언제:** `/architect`, "상세 설계안 작성해줘", "설계안 다듬어줘", "구현 계획 짜줘", 코드부터 쓰면 모양이 굳어 버릴 작업.
 - **내용:** 다섯 단계로 진행한다.
   1. **Ground:** `how`와 `why`로 주변 시스템과 지금 모양의 이유를 파악한다.
-  2. **Sketch:** `arena`로 설계 러너를 병렬로 띄운다(사용 가능한 독립 러너). 구조가 다른 후보를 두 개 이상 받아, red flag로 거르고 인터페이스 깊이를 기준으로 합친다.
+  2. **Sketch:** `fan-out` compete로 설계 러너를 병렬로 띄운다(사용 가능한 독립 러너). 구조가 다른 후보를 두 개 이상 받아, red flag로 거르고 인터페이스 깊이를 기준으로 합친다.
   3. **Agree:** 요청할 때만 사람 확인을 받는다. 기본은 계획 페이지(HTML Artifact 한 장)를 게시하고 링크만 남긴 채 추천안대로 구현한다. 페이지는 "무엇 › 어떻게 › 어디" 주장 트리이고, 주장마다 근거(목업, 상태 기계, 호출 스택, 스키마, 코드) 하나를 단다. 번호 붙은 결정은 바꾸는 주장에 붙이고 선택지 2~4개와 추천 기본값, 다른 안이 이기면 사라지는 부분을 적는다. 답하지 않은 결정은 동의가 아니어서 되돌리기 어려운 것만 구현 전에 한 번 더 묻는다. 붙여 넣은 답은 지시가 아니라 제안한 설계 안의 데이터다.
   4. **Implement:** 스케치를 계약으로 삼아 구현한다.
   5. **Scrap:** 같은 모양의 우회가 반복되면 스케치를 버리고 다시 그린다.
 - **동봉:** `design-red-flags.md`, `rationale-template.md`(설계 근거 문서), `plan-page.md`(계획 페이지 형식, html-plan의 형식을 따름), `runner-prompt.md`.
 
-### arena
-- **언제:** `/arena`, "경쟁시켜줘", "여러 안 뽑아서 제일 나은 걸로", "여러 버전 만들어서 비교해줘", 한 번의 시도로는 모양이 굳어 버릴 결과물. `architect`의 Sketch 단계가 부른다.
-- **내용:**
+### fan-out (옛 이름 `swarm`, `arena`)
+- **언제:** 병렬 워커를 띄워 결과 하나를 돌려받을 때. 돌려받는 것으로 모드를 고른다. 티켓 여러 개를 병렬로 착지시키는 일은 `orchestrate`.
+  - **sweep**(옛 `swarm`): `/swarm`, "병렬로 훑어줘", "나눠서 동시에 확인해줘", 넓게 나눠 훑거나 먼저 결과를 내는 쪽을 가리는 경주. 보고서 하나를 돌려준다.
+  - **compete**(옛 `arena`): `/arena`, "경쟁시켜줘", "여러 안 뽑아서 제일 나은 걸로", "여러 버전 만들어서 비교해줘", 한 번의 시도로는 모양이 굳어 버릴 결과물. 결과물 하나를 돌려준다. `architect`의 Sketch 단계가 부른다.
+- **sweep 내용:**
+  - 완료 조건과 모양(나눠 맡기, 경주, 혼합)을 먼저 정한다. 경주는 먼저 통과한 쪽(first pass)이나 전체 순위(rank all)로 가린다.
+  - 워커를 `Agent`(worktree 격리, 백그라운드)로 띄우고, 오래 도는 일은 Orca 워커로 띄운다. Orca 워커의 `--base-branch`는 new-top-level·new-child 배치에서만 받는다.
+  - 워커는 PASS / ISSUES / BLOCKED로 보고한다. 커밋과 방법이 빠진 보고는 한 번 다시 돌린다.
+  - 결과를 표 하나로 모은다.
+- **compete 내용:**
   - 같은 일을 후보 N개(기본 사용 가능한 독립 러너)에게 동시에 시키기 전에, 채점 기준 3~6개를 먼저 정한다. 후보는 과제만 보고 기준은 모른다.
   - 후보를 만들지 않은 독립 심판이 기준별로 채점하고 기반안을 추천한다.
   - 모든 후보를 끝까지 읽고 기준별로 채점해 기반안을 고른다. 나머지 후보에서 나은 한두 가지를 손으로 접붙인다.
   - 후보들이 같은 모양으로 모이면 그대로 쓰고, 크게 갈리면 과제 정의부터 다시 한다.
   - 결과물 하나와, 기반안·접붙인 것·버린 것·검증 결과를 적은 짧은 종합 노트를 돌려준다.
-- **swarm과의 차이:** swarm은 일을 나눠 훑고 보고서를 돌려준다. arena는 같은 일을 경쟁시켜 결과물 하나를 만든다.
+- **두 모드의 차이:** sweep은 일을 나눠 훑고 보고서를 돌려준다. compete는 같은 일을 경쟁시켜 결과물 하나를 만든다. compete 과제를 sweep처럼 나누면 다른 일이 된다.
+- **동봉:** `references/sweep.md`, `references/compete.md`.
 
 ### challenge (옛 이름 `blast-radius`, `interrogate`)
 - **언제:** 변경이나 설계를 내보내기 전에 공격해 볼 때. 무엇을 공격하는지로 모드를 고른다. main으로 가는 PR의 교차 검증은 `deliver-ticket`의 독립 리뷰가 맡는다.
@@ -405,7 +401,7 @@ PR 을 맡는 스킬과 머지 주체:
 - **언제:** `/figure-it-out`, "알아서 설계해서 진행해줘", "큰 마이그레이션", "자리 비운 동안 끝내줘", 맞는 절차가 따로 없는 크고 여러 단계인 일. `deliver-ticket`의 계획 단계가 부른다. 티켓 여러 개를 병렬 카드로 돌릴 일은 `orchestrate`.
 - **내용:** 코드보다 먼저 일하는 순서를 설계한다.
   1. **Frame:** 완료 조건을 반증 가능한 문장으로 쓰고, 범위를 수로 적고, 위험에 맞춰 엄격함을 정한다. 틀은 티켓 계획 댓글이나 worklog에 쓰고, 되돌릴 수 있는 일은 기다리지 않는다. 되돌릴 수 없는 단계만 그 자리에서 한 번 승인을 받는다.
-  2. **Design:** 따로 착지할 수 있는 단위로 쪼개고, 가장 모르는 것부터 한다. 바뀌기 전 값을 잡아 두는 검증 장치를 먼저 만든다. 되돌리기 어려운 설계는 `architect`(→ `arena`)로 정한다. 병렬은 경계가 나뉘는 곳에서만, 워커마다 worktree를 준다.
+  2. **Design:** 따로 착지할 수 있는 단위로 쪼개고, 가장 모르는 것부터 한다. 바뀌기 전 값을 잡아 두는 검증 장치를 먼저 만든다. 되돌리기 어려운 설계는 `architect`(→ `fan-out` compete)로 정한다. 병렬은 경계가 나뉘는 곳에서만, 워커마다 worktree를 준다.
   3. **Loop:** 단위마다 가설, 가장 작은 변경, 실제 결과물에서 측정, 유지 또는 되돌리기. 위임한 일은 결과물을 직접 읽거나 독립 리뷰어가 판정한다. 판정은 VERIFIED / NOT VERIFIED / INCONCLUSIVE.
   4. **Trail:** `show-me-your-work`로 결정 기록을 남기고, 보통은 커밋해 PR에서 읽게 한다.
   5. **Verify:** 전체를 Frame의 완료 조건으로 실제 제품에서 확인하고, 되풀이된 교정은 검사나 스크립트로 굳힌다.
@@ -429,7 +425,7 @@ PR 을 맡는 스킬과 머지 주체:
   - 종합은 Direct / Supported / Inferred / Speculative / Unknown 다섯 단계로 나누고 인용을 단다. 코드를 그 코드의 의도에 대한 근거로 쓰지 않고, 질문에 섞인 가설은 후보로만 다룬다.
   - 답은 What We Found, Reasonably Infer, Competing Hypotheses, What We Don't Know, Sources Consulted 순서다. 코드를 바꾸려는 질문이면 Preserve / Change / Avoid / Risk를 붙인다.
 - **동봉:** `epistemics.md`(확신도 기준), `investigator-prompt.md`, `synthesizer-prompt.md`, `source-playbook.md`, `sources/`(code-archaeology, linear, notion, google-drive, obsidian, slack, incident-postmortem).
-- **관계:** `how`의 짝이다. `blast-radius`와 `architect`가 부른다. 트래커는 `use-tracker`, 노트는 `use-notes`로 읽는다.
+- **관계:** `how`의 짝이다. `challenge`의 blast-radius 모드와 `architect`가 부른다. 트래커는 `use-tracker`, 노트는 `use-notes`로 읽는다.
 
 ### principles
 - **언제:** 설계, 리팩터, 검증, 위임 판단에 이름 붙은 원칙이 필요할 때.
@@ -447,9 +443,16 @@ PR 을 맡는 스킬과 머지 주체:
   - 답은 짧은 요약, 스레드마다 상태 태그(`[merged #N]`, `[open PR #N]`, `[in flight <branch>]` 등), 반복된 문제, 다음 할 일 하나다.
 
 ### reflect
-- **언제:** "reflect", "스킬에 반영해줘", "스킬이 왜 안 떴어", "이 세션 돌아보고 스킬 개선해줘", "개선 이력 보여줘". `orchestrate`의 Close에서 프로그램 모드로, `end-session`에서 사람이 일하는 방식을 고쳐 준 세션이면 세션 모드로 자동 호출된다.
+- **언제:** "reflect", "스킬에 반영해줘", "스킬이 왜 안 떴어", "이 세션 돌아보고 스킬 개선해줘", "개선 이력 보여줘". `orchestrate`의 Close에서 프로그램 모드로, `end-session`에서 사람이 일하는 방식을 고쳐 준 세션이면 세션 모드로 자동 호출된다. 측정 모드는 "성과 측정", 후속 티켓이 늘었는지 줄었는지, 재작업, 새어 나간 결함, PR당 토큰을 물을 때다.
 - **내용:**
-  - 세션 모드는 이 세션의 transcript를, 프로그램 모드는 원장의 `signal`·머지 실패·main red·실패 판정과 결정 기록, `measure-delivery` 결과를 묶은 증거 묶음을 읽는다. 리뷰어는 셋(판단, 도구 사용, 다른 관점)이다.
+  - 측정 모드는 재고 보고만 한다. 리뷰어를 부르지 않고 교훈 장부도 건드리지 않는다. `scripts/measure.py`가 트래커와 GitHub에서 읽기만 해서 한국어 보고서를 낸다.
+    - 기준선 대비 파생 티켓 증가율과 수렴 여부를 본다.
+    - 머지된 PR 수를 센다.
+    - 재작업(PR을 연 뒤의 커밋과 CI 재실행)을 본다.
+    - 새어 나간 결함 후보(Bug 라벨, main CI 실패, revert)를 찾는다.
+    - PR당 사용 가능한 로컬 transcript의 토큰을 집계한다. 측정하지 못한 세션은 0으로 단정하지 않는다.
+    - Linear에서 정확한 종료 시각이 필요하면 MCP로 뽑은 파일을 쓴다. 요청받은 숫자를 먼저 보여 주고 보고서는 노트에 저장한다.
+  - 세션 모드는 이 세션의 transcript를, 프로그램 모드는 원장의 `signal`·머지 실패·main red·실패 판정과 결정 기록, 이번 Close에서 측정 모드를 한 번 돌린 결과를 묶은 증거 묶음을 읽는다. 리뷰어는 셋(판단, 도구 사용, 다른 관점)이다.
   - 종합자가 배운 점을 Accepted / Rejected / Backlog로 나눈다. 모두 교훈 장부(노트 저장소의 `reflect.ledger`)에 한 줄씩 남는다. 장부는 교훈마다 신호, 근거 포인터, 발생 횟수, 고친 대상, 변경(PR·커밋), 스크립트가 낸 검증 수치, 이후 재발 여부를 적는다.
   - 스킬을 바꾸는 건 서로 다른 사례가 두 번 이상일 때만이다(재현된 보안·데이터 결함은 예외). 한 번뿐이면 후보로 남겨 두고 다음 발생을 기다린다.
   - 세션 모드는 사용자 승인 뒤 반영한다. 프로그램 모드는 사람이 없으므로 worktree에서 고치고 검증한 뒤 draft PR 하나만 열고, digest에 승인 요청을 남긴다. 머지는 사람이 한다. description 변경은 `claude plugin eval`로 발동을, 본문·스크립트 변경은 바뀐 경로를 도는 테스트나 사례 재현으로 동작을 확인한다. 검증이 없으면 `none`으로 적는다.
@@ -466,14 +469,6 @@ PR 을 맡는 스킬과 머지 주체:
   - 독립 리뷰어가 교차 검토하고, 응답 끝에 누가 검토했는지 적는다.
 - **동봉:** `scripts/log.sh`(행 추가), `references/decision-log-template.tsv`.
 
-### swarm
-- **언제:** `/swarm`, "병렬로 훑어줘", "나눠서 동시에 확인해줘", 넓게 나눠 훑거나 먼저 결과를 내는 쪽을 가리는 경주. 경쟁시켜 결과물 하나로 합치는 일은 `arena`, 티켓 여러 개를 병렬로 착지시키는 일은 `orchestrate`.
-- **내용:**
-  - 완료 조건과 모양(나눠 맡기, 경주, 혼합)을 먼저 정한다. 경주는 먼저 통과한 쪽(first pass)이나 전체 순위(rank all)로 가린다.
-  - 워커를 `Agent`(worktree 격리, 백그라운드)로 띄우고, 오래 도는 일은 Orca 워커로 띄운다. Orca 워커의 `--base-branch`는 new-top-level·new-child 배치에서만 받는다.
-  - 워커는 PASS / ISSUES / BLOCKED로 보고한다. 커밋과 방법이 빠진 보고는 한 번 다시 돌린다.
-  - 결과를 표 하나로 모은다.
-
 ### teach
 - **언제:** 'teach me this', "이거 제대로 이해하고 싶어", "이 변경 이해시켜줘", "처음 보는데 이 구조 설명해줘". 한 가지 동작 질문은 `how`, 이유 질문은 `why`.
 - **내용:**
@@ -488,20 +483,20 @@ PR 을 맡는 스킬과 머지 주체:
   - 실패 테스트를 먼저 돌려 실패 이유를 확인하고, 최소한으로 고친 뒤 통과를 확인한다.
   - 테스트가 비현실적이면 이유를 밝히고 가장 가까운 실행 가능한 검사를 쓴다. 기존 assertion은 약하게 만들지 않는다.
 
-### create-verification-skill
-- **내용:**
+### verification-skill
+- **언제:** 재사용할 verify 스킬을 새로 만들 때("verify 스킬 만들어줘", `/agent-skills:verification-skill create`, 옛 `/create-verification-skill`)는 create 모드, 있는 verify 스킬을 점검·보수할 때("verify 스킬 점검해줘", 주 1회 점검, 기능을 구동하지 못한 verify 스킬)는 maintain 모드. 변경 하나가 동작하는지 확인하는 것은 `deliver-ticket`이다.
+- **create 모드:**
   - 저장소를 조사해 앱을 사용자처럼 띄우고 조작하고 관찰하는 저장소 전용 스킬 `.claude/skills/verify-<app>/`을 만든다. Launch, Doctor, Drive, Evidence, Cleanup 단계를 둔다.
   - 주요 기능 3~5개의 기능 지도를 함께 만든다.
   - 직접 끝까지 한 번 돌려 증명한다.
   - `deliver-ticket`과 `orchestrate`는 범위 내에서 재사용할 검증 도구가 유용할 때 호출할 수 있다. 같은 수용 기준을 입증하는 직접 검사도 유효하다. upstream은 사용자 호출 전용이며 이 fork는 모델 호출도 허용한다.
-- **동봉:** `references/feature-map-example/`(예시 앱의 기능 지도).
-
-### maintain-verification-skill
-- **내용:**
+- **maintain 모드:**
   - 기능마다 소스를 읽고, 모든 기능을 실제로 구동해 기능 지도와 대조한다.
   - 문제는 문서 drift, 하니스 결함, 제품 결함으로 나눈다. 제품 결함은 보고만 한다.
   - 결과는 clean, changed(증명된 수정만 PR 하나), blocked 중 하나다.
   - flow improver가 일주일에 한 번 돌리고, verify 스킬이 기능을 못 다루거나 잘못 설명했다는 보고(`deliver-ticket`, QA lead)가 오면 리드가 워커에 맡긴다.
+  - 점검할 verify 스킬이 없으면 멈추고 create 모드를 안내한다.
+- **동봉:** `references/create.md`, `references/maintain.md`, `references/feature-map-example/`(예시 앱의 기능 지도), `scripts/verify_skill_lint.py`(생성한 스킬을 파일만 읽어 점검한다. frontmatter·섹션, 상태 파일 이름, 공용 `latest` 링크, cleanup 인자 필수, 패턴 종료, helper 실행 권한·문서화, 기능 지도 색인. 두 모드가 같은 스크립트를 쓴다).
 
 ## 명령
 
@@ -522,7 +517,7 @@ PR 을 맡는 스킬과 머지 주체:
 | `land-check` | 머지 없이 준비 상태만 진단 |
 | `landed` | 밖에서 한 머지를 기록 |
 | `backfill` | 등록 전에 머지된 PR과 main CI를 원장에 넣는다 |
-| `heavy` | 무거운 명령(compose, 이미지 빌드)을 머신 전체 2슬롯으로 제한해 실행 |
+| `heavy` | 무거운 명령(compose, 이미지 빌드)을 머신 전체 슬롯으로 제한해 실행. 슬롯 수는 `landing.heavy_slots`, `agent-skills.json`의 `orchestrate.heavy_slots`, CPU 수의 4분의 1(최소 2) 순으로 정한다 |
 | `wait` | 리드 전용. 처리할 메시지가 올 때까지 기다리고 `CLOSE OUT` 줄을 낸다 |
 | `decide` | 오케스트레이터나 리드가 사용자 결정을 기다리는 일을 등록(`add`)·조회(`list`)·닫기(`done`, `drop`). 대시보드 Needs you에 선택지 버튼과 함께 뜨고, 버튼은 답을 기록해 결정을 닫은 뒤 `decision <id>: <답>` 한 줄을 오케스트레이터나 리드 터미널에 보낸다. 오케스트레이터나 리드가 바쁘면 한가해질 때 보낸다 |
 
@@ -581,7 +576,7 @@ PR 을 맡는 스킬과 머지 주체:
 허용은 셸 연산자, 리다이렉션, 치환, 변수가 없는 단일 명령에만 준다. 변수는 `$ORCA_TERMINAL_HANDLE` 하나만 예외다. 명령 이름 바로 뒤에 하위 명령이 와야 하고, 플래그가 먼저 오면 판정하지 않는다. 판정하지 않은 호출은 평소 권한 흐름(auto mode 분류기, 사용자의 규칙)을 탄다.
 
 ### 위험 명령과 역할 세션 규칙
-같은 `guard.py`가 `hooks/lib/danger.py`와 `hooks/lib/coordination.py`의 규칙을 먼저 본다. 명령은 bash가 실제로 실행하는 단어만 명령으로 읽고(따옴표 안, heredoc 본문, 주석은 글), 그 명령의 인자는 원문을 `shlex`로 나눠 읽는다. 그래서 `echo pkill`, 커밋 메시지, 따옴표 안의 프롬프트는 걸리지 않는다. `bash -c`, `eval`, 스크립트 파일 안의 명령은 보지 않는다. 가드레일이지 샌드박스가 아니다. 스크립트는 같은 판정 함수(`danger.check_bash`, `danger.external_review`)를 직접 부를 수 있다.
+같은 `guard.py`가 `hooks/lib/danger.py`와 `hooks/lib/coordination.py`의 규칙을 먼저 본다. 명령은 bash가 실제로 실행하는 단어만 명령으로 읽고(따옴표 안, heredoc 본문, 주석은 글), 그 명령의 인자는 원문을 `shlex`로 나눠 읽는다. 그래서 `echo pkill`, 커밋 메시지, 따옴표 안의 프롬프트는 걸리지 않는다. `bash -c`, `eval`, 스크립트 파일 안의 명령은 보지 않는다. 중괄호 확장, 변수에 담긴 경로, stdin으로 넘기는 본문도 읽지 못한다. 가드레일이지 샌드박스가 아니다. 스크립트는 같은 판정 함수(`danger.check_bash`, `danger.external_review`)를 직접 부를 수 있다.
 
 규칙마다 `~/.claude/agent-skills.json`에 키가 있다. 값은 `"deny"`·`"ask"`·`"warn"`·`"off"` 가운데 하나이고, `false`는 `"off"`, `true`는 기본값이다. 끄면 그 규칙이 생기기 전 동작으로 돌아간다. warn은 막지 않고 사람에게 보이는 알림(`systemMessage`)과 모델에 주는 맥락으로 남는다.
 
@@ -594,29 +589,41 @@ PR 을 맡는 스킬과 머지 주체:
 | `guard.deny.keychain` | deny | `security find-*-password`의 `-w`·`-g`, `security dump-keychain` |
 | `guard.deny.url_credentials` | deny | 인자에 `scheme://user:secret@`가 든 URL |
 | `guard.deny.user_settings` | deny | 사용자 설정 쓰기: `~/.claude/settings.json`·`settings.local.json`(`$CLAUDE_CONFIG_DIR`도), `~/.claude/agent-skills.json`, secure-fill의 `allow.json`. Edit·Write·MultiEdit·NotebookEdit와 Bash의 리다이렉션·`tee`·`cp`·`mv`·`sed -i`·`rm` 등. 프로젝트의 `.claude/settings.json`은 대상이 아니다 |
-| `guard.deny.plugin_apply` | deny | 이 플러그인의 `setup.py`·`config_emit.py`·`automode_rule.py`와 그 사본의 `--apply`, `bootstrap.py --write`. 사본은 "runs --apply, never the agent" 문장으로 알아본다. 다른 저장소의 `setup.py`는 대상이 아니다 |
+| `guard.deny.plugin_apply` | deny | 이 플러그인의 `setup.py`·`config_emit.py`·`automode_rule.py`와 그 사본의 `--apply`, `bootstrap.py --write`. 사본은 "runs --apply, never the agent" 문장으로 알아본다. 다른 저장소의 `setup.py`는 대상이 아니다. 검증용 적용만 좁게 통과시킨다. 이 플러그인의 `scripts/setup.py --apply <해시> --settings-only`를 `env` 같은 래퍼 없이 실행하고, `HOME`·`CLAUDE_CONFIG_DIR`·`CLAUDE_SETTINGS`·`AGENT_SKILLS_CONFIG`·`AGENT_SKILLS_STATE`·`AGENT_SKILLS_CONFIG_DIR`를 그 명령에 절대 경로로 직접 적고, 모두 현재 worktree 아래(링크·`..`를 푼 실제 경로)이며 실제 사용자 설정이 아닐 때다. 하나라도 빠지거나 상속되거나 다른 옵션·스크립트면 거부한다 |
 | `guard.deny.slash_send` | deny | `orca terminal send`로 `/reload…`·`/model` 입력 |
 | `guard.deny.prompt_substitution` | deny | `orca worktree create --prompt`의 명령 치환(`$(…)`, 백틱) |
 | `guard.deny.self_exempt_label` | deny | `gh`로 `no-visual-change` 라벨 붙이기(`pr create --label`, `pr edit --add-label`, `issue edit`, `gh api …/labels`) |
 | `guard.deny.owner_only` | deny | `orch exempt`. 사람이 자기 채팅에서 `!`로 친다. 키를 끄면 다른 `orch` 명령처럼 허용된다 |
 | `guard.deny.external_review` | deny | `codex` 호출인데 작업 폴더(또는 `-C`)의 origin 저장소가 `repos.<owner/repo>.external_llm: false`. 그 키가 없으면 판정하지 않는다 |
+| `guard.deny.rm_outside` | deny | 현재 체크아웃(git toplevel)과 `/tmp`·`$TMPDIR` 밖을 가리키는 재귀 `rm`(`-r`·`-R`·`--recursive`). 체크아웃 루트 자신과 `/tmp` 자신도 대상이다. 풀리지 않는 `$` 변수가 든 경로는 판정하지 않고 `rm_expansion` 경고에 맡긴다 |
+| `guard.deny.trash_empty` | deny | `~/.Trash`·`~/.local/share/Trash`·`.Trashes`를 재귀나 glob으로 지우는 `rm`, `trash-empty`, `gio trash --empty`, Finder의 `empty trash` AppleScript. 파일 하나를 지정한 `rm`은 대상이 아니다 |
 | `guard.ask.pressure_bypass` | ask | 명령 앞이나 `env`·`export`의 `AGENT_SKILLS_PRESSURE_GATE=0` 대입. 그 글자를 출력하는 `echo`는 대상이 아니다 |
 | `guard.warn.rm_expansion` | warn | 따옴표 없는 glob이나 변수로 만든 `rm` 경로. `${VAR:?}`는 제외 |
 | `guard.warn.reset_hard` | warn | 커밋하지 않은 변경이 있는 저장소의 `git reset --hard` |
 | `guard.warn.run_download` | warn | `-D`·`--dir` 없는 `gh run download` |
 | `guard.warn.tailscale` | warn | 워커의 `tailscale serve`·`funnel` |
 | `guard.deliver_load` | warn | `hooks/lib/skillload.py`. 워커(Dispatch 또는 CLOSE·KEEP 카드)의 본 대화가 `deliver-ticket`을 로드하기 전에 작업 폴더(hook 입력의 `cwd`) 안 파일을 Edit·Write·MultiEdit·NotebookEdit한다. 로드하기 전까지 대상 편집마다 경고 한 줄이 붙고(상태 파일은 없다), `deny`는 그 편집을 막고 `ask`는 확인을 묻는다. 첫 프롬프트에 `LOAD: none` 행이 있는 읽기 전용 카드, `.git` 아래와 작업 폴더 밖 경로, 서브에이전트, 오케스트레이터·리드·사람이 연 세션은 대상이 아니다. 로드는 오류 없는 `Skill` 결과 또는 `/deliver-ticket` 명령이다. 결과가 아직 없거나 transcript를 시간 안에 읽지 못하면 모른 것으로 보고 통과시킨다 |
+| `worker.edit_tool` | warn | `hooks/lib/discipline.py`. 워커(Dispatch 또는 CLOSE·KEEP 카드)와 그 서브에이전트가 Bash로 파일을 쓴다: `>`·`>>`·`&>`·`tee`·`sed -i`·파일을 쓰기로 여는 `python -c`와 python heredoc. 임시 디렉터리(`TMPDIR`·`/tmp`·scratchpad)·`/dev/null`·`orch-refusal`은 제외한다. worktree 안팎을 가리지 않는다. 정당한 로그 리다이렉트도 걸리므로 warn에 둔다 |
+| `worker.chain` | warn | 같은 카드의 Bash 한 호출에서 `rm`·`mv`·`git commit`·`git push`·`worker_done`이 `&&`·`;`·줄바꿈으로 다른 명령과 묶임. 파이프라인과 `$(…)` 안은 한 명령으로 센다 |
+| `worker.paths` | warn | 카드의 Edit·Write가 자기 worktree·임시 디렉터리·`orch-refusal` 밖이거나 `~/.claude/plugins/cache/` 안 |
+| `worker.main_checkout` | warn | 카드의 Edit·Write 대상이 main checkout(`git rev-parse --absolute-git-dir`과 `--git-common-dir`이 같음)에 있다. 저장소를 판정하지 못하면 통과한다 |
+| `worker.memory` | warn | 카드가 `~/.claude/projects/*/memory/`에 쓴다(Edit 계열, Bash의 리다이렉트·`tee`·`sed -i` 대상) |
+| `worker.pre_push` | warn | 이미 origin에 올린 브랜치의 `git rebase`, 이 세션에 테스트 명령이 없는데 하는 첫 `git push`, 테스트 파일 없이 코드만 스테이지한 `git commit`(테스트를 돌린 적이 없을 때만). transcript를 못 읽으면 통과한다 |
 | `orchestrate.ask_user_question` | deny | 오케스트레이터·리드·워커 본 대화의 AskUserQuestion. 서브에이전트와 일반 세션은 대상이 아니다 |
 | `orchestrate.wait_foreground` | deny | 오케스트레이터·리드가 `orch wait`, `orch inbox --wait`, `orch watch-cards`, `orca orchestration check\|inbox --wait`를 `run_in_background` 없이 실행, 또는 배경 대기를 `\| tail`·`\| head`로 자름. 워커의 `check --wait`는 대상이 아니다 |
 | `orchestrate.send_devnull` | deny | 오케스트레이터·리드·워커가 `orca orchestration send\|reply`의 출력을 `/dev/null`로 보냄. `2>/dev/null`만은 대상이 아니다 |
 | `orchestrate.model_flag` | warn | `orchestrate.models`가 설정돼 있는데 `orca orchestration worker-start`·`orca worktree create`·`orca agent launch`가 `--model` 없이 Claude를 띄움. `--terminal`은 대상이 아니다 |
+| `orchestrate.pr_poll` | warn | Monitor 명령이 `gh pr list\|view\|checks`를 300초보다 짧은 sleep으로 돌림. 경고는 `pr-watch` 명령(`bin/pr-watch`)을 가리킨다. 거부로 올라가지 않는다 |
 | `orchestrate.self_land` | warn | `hooks/self_land_gate.py`. 첫 프롬프트에 `PROGRAM`과 `orch land`를 적은 `APPROVED`가 있는 카드가 자기 PR이 열린 채 `worker_done`이나 `orca worktree rm`을 부름. `READY-WAIT:` 줄, `--outcome failed`, human-gate 프로그램은 통과한다. `deny`로 올리면 막는다 |
+| `orchestrate.land_route` | deny | `hooks/land_route_gate.py`. 오케스트레이터·리드·워커(서브에이전트 포함)나 `PROGRAM` 브리프 세션이 land executor 범위 안 repo에 `gh pr merge`를 부름. 거부 문구에 그 PR의 `orch land` 줄과, 그 head를 독립 리뷰한 뒤에만 쓰는 `orch verdict` 줄을 넣는다. `OWNER/*`는 `gh` 계정 본인 소유만 덮고, org repo는 이름으로 넣은 것만 범위다. 범위 밖인 본인 repo는 막지 않고, 범위에 넣는 skills-config spec을 함께 알린다. `exclude`의 repo, org나 다른 사람의 범위 밖 repo, executor가 꺼진 상태는 그냥 통과한다 |
 | `orchestrate.stack_dependent` | warn | 의존 PR이 스택이 아니다. `hooks/stack_gate.py`가 `gh pr create`에서 브리프의 `Lands after`와 브랜치 이력을 보고, `orch land`·`land-check`가 land-after 간선과 실제 스택을 비교한다. `deny`로 올리면 둘 다 막는다. 못 읽으면 통과 + 경고 한 줄 |
 | `orchestrate.auto_wake_min` | 없음(꺼짐). setup 권장 묶음: 10 | 양의 정수 N. `orch wait`가 idle로 처음 표시한 워커를 N분 뒤 한 번 깨운다(`skills/orchestrate/references/waking.md`, "Automatic wake"). 키가 없으면 표시만 하고 꺼져 있다는 경고를 한 줄 낸다. 같은 dispatch를 두 번 깨우지 않고, 두 번째 멈춤은 Needs you로 올린다 |
 | `orchestrate.model_autoswitch` | 없음(꺼짐) | `true`일 때만 켜진다. patrol의 M 발견(역할 설정과 다른 모델)에서 idle worker를 `/exit` 뒤 같은 터미널의 `claude --resume <id> --model <alias>`로 한 번 전환한다. lead·orchestrator, 진행 중인 턴, 열린 질문, 화면의 background 작업이 있는 세션은 건너뛰고, 실패하면 재시도 없이 Needs you로 올린다(`docs/automation.md`, 발견 M) |
 | `orchestrate.stall_idle_min` | 15 | 양의 정수. 턴이 끝난 워커를 STALLED `idle`로 표시하기까지의 분. 짧은 실측에서 줄일 때 쓴다 |
 
 hook 자신의 판정이 예외를 내면 그 호출은 통과시키고, 경고와 함께 `$AGENT_SKILLS_STATE/guard-errors.jsonl`에 시각·hook·예외 종류·위치만 남긴다(명령 원문은 남기지 않는다). 설정 파일을 읽지 못하면 기본값을 쓴다.
+
+`worker.*` 키는 발동할 때마다 점검 이름과 수준을 `$AGENT_SKILLS_STATE/turn-warnings.jsonl`에 한 줄씩 남긴다(턴 끝 점검과 같은 파일). 한 주 동안 이 기록으로 오탐을 센 뒤 `worker.edit_tool`부터 `deny`로 올린다. 판정은 텍스트와 git 상태를 읽는 휴리스틱이고, `bash -c`와 스크립트 파일 안의 명령은 보지 않는다.
 
 거부된 행동을 hook이 기록해 다시 막는 일은 없다. 거부된 세션이 같은 형태로 한 번만 다시 하고 우회하지 않는다는 규칙은 스킬 문장(`orchestrate`의 "Refused acts", `tune-automode`)이 지킨다. 이전 버전이 남긴 `$AGENT_SKILLS_STATE/refusals.jsonl`은 아무것도 읽지 않으며 지우지도 않는다. 필요 없으면 사람이 지운다.
 
@@ -746,6 +753,7 @@ pstack 스킬 58개(원칙 24개와 나머지 34개) 가운데 원칙 24개 전�
   - blast-radius와 interrogate는 나중에 `challenge` 한 스킬로 합쳤다. 본문은 같은 이름 모드의 `references/blast-radius.md`·`references/interrogate.md`로, interrogate의 참조 파일은 `challenge/references/`로 옮겼다.
   - 설치하지 않은 스킬(`unslop`)을 부르던 곳을 `write-plainly`로 바꿨다. `why`와 `arena`는 2026-09-25에 들여와 원래 연결을 되살렸다(architect → arena).
   - `why`는 Cursor MCP 탐색 대신 세션에 있는 MCP 도구로 출처를 고르고, 한 줄 질문용 narrow mode를 더했다. 연결 없는 Datadog·Sentry·warehouse 출처 파일은 빼고 Google Drive·Obsidian 출처를 새로 썼다.
+  - swarm과 arena는 나중에 `fan-out` 한 스킬로 합쳤다. 본문은 각각 sweep·compete 모드의 `references/sweep.md`·`references/compete.md`로 옮겼다.
 - **2026-09-25 추가 수정:** Opus 5.5에 맞춰 프롬프트를 감사하고 더 고쳤다(`6eec9fa`). architect와 swarm의 단계별 할 일 목록을 없앴고, how의 단순 질문은 직접 처리한다. reflect 리뷰어의 개수 하한을 없앴고, show-me-your-work는 추가만 하는 기록으로 바꿨다. 파일별 수정 내역은 `vendor/pstack/NOTICE.md`에 있다.
 - **옮겨 쓴 것(derived):** 파일을 통째로 가져오지 않고 규칙만 옮겨 새로 쓴 부분이다. `manifest.json`에 없어 동기화하지 않고, upstream이 바뀌면 사람이 읽고 반영한다.
   - `write-plainly`: unslop, technical-writing, poteto-mode의 답변 규칙을 합치고 한국어 규칙을 새로 썼다.
@@ -766,11 +774,11 @@ pstack 스킬 58개(원칙 24개와 나머지 34개) 가운데 원칙 24개 전�
 | statechart, create-formal-verification-skill, maintain-formal-verification-skill | TLA+ 모델과 상태 차트, 형식 검증 스킬 생성과 유지 | 파일이 많고 TLA+ 도구가 필요하다. 쓸 프로젝트가 생기면 다시 본다 |
 
 ### pstack에 없는 것
-- **티켓 흐름:** `write-ticket`, `deliver-ticket`, `handoff-ticket`, `dispatch-card`, `end-session`. Orca 카드와 트래커를 전제로 한 티켓 하나의 처음부터 끝까지다.
+- **티켓 흐름:** `write-ticket`, `deliver-ticket`, `dispatch-card`, `end-session`. Orca 카드와 트래커를 전제로 한 티켓 하나의 처음부터 끝까지다.
 - **프로젝트 운영:** `orchestrate`의 `orch` 원장, 착지 게이트와 독점 레인, human-gate, main 가디언, QA 리드, `orch-dash` 대시보드. 모양은 pstack 플레이북을 따랐지만 Orca Run과 GitHub stack 위에서 새로 만들었다.
-- **측정과 어댑터:** `measure-delivery`, `use-tracker`, `use-notes`.
+- **측정과 어댑터:** `reflect`의 측정 모드, `use-tracker`, `use-notes`.
 - **머신 관리:** `reap-resources`, `tune-automode`, `skills-config`, `setup-pc`.
-- **hook:** 권한 결정(`guard.py`), 오케스트레이터·리드 재정렬(`reorient.py`), 미설정 PC의 설정 제안(`onboard.py`), 대시보드에서 답하는 권한 창 기록(`permission.py`), 터미널에서 답한 결정 닫기(`decision.py`), 기록 없는 오너 말 전달 경고(`decision_relay.py`), 완료 주장 검사(`claim_check.py`), 무거운 시작 전 사용량 확인(`pressure_gate.py`), 문체 검사(`prose_check.py`), 의존 PR의 스택 확인(`stack_gate.py`), 프로그램 카드의 PR을 연 채 닫는 일 경고(`self_land_gate.py`).
+- **hook:** 권한 결정(`guard.py`), 오케스트레이터·리드 재정렬(`reorient.py`), 미설정 PC의 설정 제안(`onboard.py`), 대시보드에서 답하는 권한 창 기록(`permission.py`), 터미널에서 답한 결정 닫기(`decision.py`), 기록 없는 오너 말 전달 경고(`decision_relay.py`), 완료 주장 검사(`claim_check.py`), 무거운 시작 전 사용량 확인(`pressure_gate.py`), 문체 검사(`prose_check.py`), 의존 PR의 스택 확인(`stack_gate.py`), 프로그램 카드의 PR을 연 채 닫는 일 경고(`self_land_gate.py`), land executor 범위 repo의 `gh pr merge`를 `orch land`로 돌리기(`land_route_gate.py`).
 
 ### upstream 동기화 상태
 - **마지막 동기화:** 2026-10-26, `b42effe`(0.15.3)에서 `99b609a`(0.15.32)로. 그 사이 upstream은 pstack에 커밋 74개를 쌓았다.
