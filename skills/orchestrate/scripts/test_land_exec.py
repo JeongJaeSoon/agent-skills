@@ -550,6 +550,14 @@ class Standalone(unittest.TestCase):
         self.assertEqual(path.read_text(), first)
         self.assertEqual(list(path.parent.glob("program.json.*")), [], "no temporary file is left")
 
+    def test_init_that_loses_the_race_does_not_overwrite(self):
+        prog.standalone_program([self.SLUG, "--repo", "o/r"])
+        path = prog.HOME / self.SLUG / "program.json"
+        first = path.read_text()
+        with self.assertRaises(FileExistsError):  # init passed its exists() check before the card created it
+            prog.write_program(path.parent, {"repo": "other/r"}, "run_x", "human-gate")
+        self.assertEqual(path.read_text(), first)
+
     def test_executor_off_creates_nothing(self):
         config(enabled=False)
         code, out = self.orch("land", self.SLUG, "--repo", "o/r", "--pr", str(self.n))

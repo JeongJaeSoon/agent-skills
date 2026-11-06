@@ -1409,7 +1409,7 @@ def standalone_program(argv):
            "skills_commit": skills_version(pathlib.Path(__file__).resolve().parents[3]), "note": "standalone cards",
            "final_check": None}
     try:
-        write_program(d, cfg, cfg["run"], "autonomous", exclusive=True)
+        write_program(d, cfg, cfg["run"], "autonomous")
         print(f"created standing program {slug} for {repo} (merge_policy autonomous)")
     except FileExistsError:  # another card created it between the check and here
         pass
@@ -1449,13 +1449,16 @@ def cmd_init(argv):
         "deadline": opt(argv, "--deadline"), "created_at": now(), "skills_commit": skills_commit,
         "note": opt(argv, "--note"), "final_check": opt(argv, "--final-check"),
     }
-    write_program(d, cfg, run_id, policy)
+    try:
+        write_program(d, cfg, run_id, policy)
+    except FileExistsError:  # a standalone `orch land` created it after the check above
+        sys.exit(f"{d}/program.json exists; programs are resumed, not re-initialised")
     print(f"initialised {d}")
     print("\n".join(dashboard_lines(slug)))
 
 
-def write_program(d, cfg, run_id, policy, exclusive=False):
-    """Write program.json for cmd_init. exclusive: fail with FileExistsError when another caller got there first."""
+def write_program(d, cfg, run_id, policy):
+    """Create program.json for cmd_init and standalone_program; FileExistsError when another caller got there first."""
     me = os.environ.get("ORCA_TERMINAL_HANDLE")
     try:
         mine = own_worker(all_workers(run_id), me) if me and run_id != STANDALONE_RUN else None
@@ -1473,13 +1476,9 @@ def write_program(d, cfg, run_id, policy, exclusive=False):
         print(f"lead is dispatch {cfg['lead_dispatch']} on {run_id}: `orch wait` reads its own mailbox; start units "
               "with worker-start --spec (Orca refuses a worker's task-create and gate-create on this Run)")
     (d / "briefs").mkdir(parents=True, exist_ok=True)
-    text = json.dumps(cfg, indent=2, ensure_ascii=False) + "\n"
-    if not exclusive:
-        (d / "program.json").write_text(text)
-        return
     # A reader must never see a half-written file: write whole, then link it into place (link fails if one exists).
     tmp = d / f"program.json.{os.getpid()}.tmp"
-    tmp.write_text(text)
+    tmp.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
     try:
         os.link(tmp, d / "program.json")
     finally:
