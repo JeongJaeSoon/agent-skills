@@ -2136,6 +2136,8 @@ def cmd_record(argv):
     row = p.append(ev, ticket=opt(argv, "--ticket"), pr=int(pr) if pr else None, sha=sha, klass=klass,
                    role=opt(argv, "--role"), note=opt(argv, "--note"), kind=kind, evidence=evidence)
     print(json.dumps(row, ensure_ascii=False))
+    if ev == "parked" and pr:
+        release_own_lanes(p, int(pr))  # a held PR is passed over by exclusive_turn but would keep its lock until stale
 
 
 def set_run(p, run_id):

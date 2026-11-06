@@ -625,6 +625,35 @@ class LandExec(Fixture):
         self.round()
         self.assertIsNone(prog.ExclusiveLock(self.p, "main").holder())
 
+    def test_a_verdict_refusal_releases_the_lane_the_request_held(self):
+        """A lane taken in an earlier round must not outlive a refusal the requester will not retry on its own."""
+        lane = prog.ExclusiveLock(self.p, "main")
+        self.addCleanup(lane.release, self.n + 1000)
+        self.assertTrue(lane.take(self.n))
+        self.verdict(sha="hother")  # the latest verdict is for another head
+        row = self.request()
+        self.round()
+        self.settled(row, "refused", 3, "latest verdict")
+        self.assertIsNone(lane.holder())
+        self.assertTrue(prog.ExclusiveLock(self.p, "main").take(self.n + 1000), "the next PR proceeds without a yield")
+
+    def test_parking_a_pr_releases_the_lane_it_held(self):
+        lane = prog.ExclusiveLock(self.p, "main")
+        self.addCleanup(lane.release, self.n + 1000)
+        self.assertTrue(lane.take(self.n))
+        with contextlib.redirect_stdout(io.StringIO()):
+            prog.cmd_record([self.slug, "parked", "--pr", str(self.n), "--note", "waits on a person"])
+        self.assertIsNone(lane.holder())
+        self.assertTrue(prog.ExclusiveLock(self.p, "main").take(self.n + 1000), "the next PR proceeds without a yield")
+
+    def test_parking_leaves_another_prs_lane_alone(self):
+        lane = prog.ExclusiveLock(self.p, "main")
+        self.addCleanup(lane.release, self.n + 1000)
+        self.assertTrue(lane.take(self.n + 1000))
+        with contextlib.redirect_stdout(io.StringIO()):
+            prog.cmd_record([self.slug, "parked", "--pr", str(self.n)])
+        self.assertEqual(lane.holder()["pr"], self.n + 1000)
+
     def test_a_github_that_never_answers_expires_the_request(self):
         config(max_wait_hours=1e-9)
         st = self.gh(); st["user_fail"] = True; self.write(st)
