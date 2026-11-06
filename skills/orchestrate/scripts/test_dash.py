@@ -2,9 +2,10 @@
 
 Run: python3 test_dash.py
 """
-import http.server, json, os, pathlib, re, sys, tempfile, threading, urllib.request, urllib.error
+import datetime as dt_mod, http.server, json, os, pathlib, re, sys, tempfile, threading, urllib.request, urllib.error
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
+import time as dash_time
 import dash, dash_demo
 
 root = pathlib.Path(tempfile.mkdtemp(prefix="test-dash-"))
@@ -187,6 +188,7 @@ assert dash.landing_of({}, [], []) == {}
 
 # Atomic write: a crash while replacing leaves the old state.json intact and no temp file behind.
 before = (store / A / "dashboard" / "state.json").read_text()
+dash.STATE_WROTE.clear()  # an unchanged state is not rewritten at all (below); forget the last write to reach the replace
 real_replace = os.replace
 os.replace = lambda *a: (_ for _ in ()).throw(OSError("disk full"))
 try:
@@ -288,6 +290,72 @@ assert status("/api/health", {"Host": f"localhost:{port}"}) == 200
 assert status("/api/health", {"Origin": f"http://127.0.0.1:{port}"}) == 200
 assert status("/", {"Host": f"evil.example:{port}"}) == 200
 assert status("/no-such-page", {"Host": f"evil.example:{port}"}) == 404
+# Only a page saying ?viewed=1 counts as a view of the fleet; a bare read does not keep the fast poll alive.
+dash.FLEET_VIEWED[0] = 0.0
+status("/api/fleet/state", {})
+assert dash.FLEET_VIEWED[0] == 0.0, "a read without ?viewed=1 was counted as a view"
+for q in ("?viewed=1.0", "?viewed=10", "?viewed=1-no", "?x=?viewed=1", "?viewed=0", "?viewed=1&viewed=2", "?viewed=1&viewed=", "?viewed=&viewed=1"):
+    status("/api/fleet/state" + q, {})
+    assert dash.FLEET_VIEWED[0] == 0.0, f"{q} was counted as a view"
+dash.FLEET_FORCE[0] = False
+dash.FLEET_WAKE.clear()
+# monotonic() starts near zero on a freshly booted runner, so 0.0 would not read as idle there.
+dash.FLEET_VIEWED[0] = dash_time.monotonic() - 10 * dash.FLEET_VIEW_S
+status("/api/fleet/state?viewed=1", {})
+assert dash.FLEET_VIEWED[0] > 0.0, "?viewed=1 was not counted as a view"
+assert dash.FLEET_FORCE[0] and dash.FLEET_WAKE.is_set(), "a page opening after idle must collect at once"
+status("/api/fleet/state?a=1&viewed=1", {})
+dash.FLEET_VIEWED[0], dash.FLEET_FORCE[0] = 0.0, False
+dash.FLEET_WAKE.clear()
+# pressure's own config is an input of its answer.
+cfg_file = root / "agent-skills.json"
+real_cfg = os.environ.get("AGENT_SKILLS_CONFIG")
+os.environ["AGENT_SKILLS_CONFIG"] = str(cfg_file)
+cfg_a = dash.pressure_signature()
+cfg_file.write_text('{"reap": {"pressure": {"interval": 60}}}')
+assert dash.pressure_signature() != cfg_a, "a changed agent-skills.json did not move the pressure signature"
+# pressure.py reads ~/.claude/agent-skills.json whatever AGENT_SKILLS_CONFIG says: the default file counts too.
+fake_home = root / "home-for-pressure"
+(fake_home / ".claude").mkdir(parents=True, exist_ok=True)
+real_home = os.environ.get("HOME")
+os.environ["HOME"] = str(fake_home)
+try:
+    before_home = dash.pressure_signature()
+    (fake_home / ".claude" / "agent-skills.json").write_text('{"reap": {"pressure": {"interval": 30}}}')
+    assert dash.pressure_signature() != before_home, "the default agent-skills.json is not in the pressure signature"
+finally:
+    os.environ["HOME"] = real_home
+if real_cfg is None:
+    del os.environ["AGENT_SKILLS_CONFIG"]
+else:
+    os.environ["AGENT_SKILLS_CONFIG"] = real_cfg
+# The pressure and sent answers are built once per change of their inputs, not once per poll.
+builds = {"pressure": 0, "sent": 0}
+real_pressure_render, real_sent_render = dash.pressure_render, dash.sent_render
+dash.pressure_render = lambda h: (builds.__setitem__("pressure", builds["pressure"] + 1), real_pressure_render(h))[1]
+dash.sent_render = lambda d: (builds.__setitem__("sent", builds["sent"] + 1), real_sent_render(d))[1]
+try:
+    for _ in range(3):
+        urllib.request.urlopen(f"{base}/api/fleet/pressure?hours=12").read()
+        urllib.request.urlopen(f"{base}/api/fleet/sent?days=2").read()
+    assert builds == {"pressure": 1, "sent": 1}, builds
+    hist = dash.state_root() / "pressure-history.jsonl"
+    hist.parent.mkdir(parents=True, exist_ok=True)
+    with hist.open("a") as f:
+        f.write("\n")
+    urllib.request.urlopen(f"{base}/api/fleet/pressure?hours=12").read()
+    assert builds["pressure"] == 2, "a changed pressure file was not read again"
+    dash.sent.sent_dir().mkdir(parents=True, exist_ok=True)
+    (dash.sent.sent_dir() / "2099-01-01.jsonl").write_text("")
+    urllib.request.urlopen(f"{base}/api/fleet/sent?days=2").read()
+    assert builds["sent"] == 2, "a changed sent log was not read again"
+    (dash.sent.sent_dir() / "2099-01-01.jsonl").unlink()
+finally:
+    dash.pressure_render, dash.sent_render = real_pressure_render, real_sent_render
+# /api/programs revalidates: the same body answers If-None-Match with a 304 and no body.
+etag = urllib.request.urlopen(f"{base}/api/programs").headers["ETag"]
+assert etag, "/api/programs sends an ETag"
+assert status("/api/programs", {"If-None-Match": etag}) == 304, "an unchanged /api/programs was sent again"
 # Data flow and skill changes: served from the demo's own state, cached in the process between polls.
 fl = json.loads(urllib.request.urlopen(f"{base}/api/fleet/flow").read())
 assert next(s for s in fl["stores"] if s["id"] == "skillsj")["exists"] and "error" not in fl, fl.get("error")
@@ -328,10 +396,13 @@ assert next(x for x in wk["rows"] if x["id"] == "docs")["cells"]["dev"]["mark"] 
 sent_api = lambda q: json.loads(urllib.request.urlopen(f"{base}/api/fleet/sent{q}").read())
 assert [sent_api(q)["days"] for q in ("", "?days=99", "?days=0", "?days=7")] == [1, 30, 1, 7]
 real_page, dash.sent.page = dash.sent.page, lambda *a, **k: {}["boom"]
+dash.SENT_CACHES.clear()  # a good answer is kept while the inputs stand; this one has to be built again
 try:
     assert sent_api("?days=1") == {"error": "sent: KeyError: 'boom'"}
+    assert sent_api("?days=1") == {"error": "sent: KeyError: 'boom'"}  # a failure is not kept
 finally:
     dash.sent.page = real_page
+assert "error" not in sent_api("?days=1"), "the failure was served after the page recovered"
 srv.shutdown()
 
 # A ledger backfilled with landings from before the series began rebuilds the series once.
@@ -1077,11 +1148,295 @@ assert "worktree rm" not in app_js
 poll_src = app_js.split("async function pollPrograms()", 1)[1].split("\n}\n", 1)[0]
 assert poll_src.lstrip().startswith("{\n  if (document.hidden || programsBusy) return;"), poll_src[:80]
 assert "if (!document.hidden) { pollState(); pollPrograms(); }" in app_js
+assert 'conditionalFetch("/api/fleet/state", S.fleet, "?viewed=1")' in app_js and 'slug === "fleet" ? "?viewed=1"' in app_js, \
+    "both visible-tab polls of the fleet state must say ?viewed=1"
 assert '"If-None-Match": etag' in app_js and 'r.status === 304' in app_js
 assert "if (changed) renderSidebar();" in poll_src
 assert "POLL_BODY[url] === have" in app_js  # an ETag is sent only for the object it came with
 assert "programsBusy" in poll_src and "finally { programsBusy = false; }" in poll_src
 read_src = app_js.split("async function readConditional", 1)[1].split("\n}\n", 1)[0]
 assert read_src.index("await r.json()") < read_src.index("POLL_ETAG[url] = etag")  # parse before the ETag is kept
+
+# state.json: an unchanged collect leaves the file alone, a change or the beat rewrites it.
+sp = store / B / "dashboard" / "state.json"
+dash.collect(B, sources=())
+ino, m0 = sp.stat().st_ino, sp.stat().st_mtime_ns
+dash.collect(B, sources=())
+assert (sp.stat().st_ino, sp.stat().st_mtime_ns) == (ino, m0), "an unchanged state.json was written again"
+append(B, ev="note", note="a new ledger row")
+dash.collect(B, sources=())
+assert sp.stat().st_mtime_ns != m0, "a changed state was not written"
+m1 = sp.stat().st_mtime_ns
+dash.STATE_WROTE[sp] = (dash.STATE_WROTE[sp][0], dash.STATE_WROTE[sp][1] - dash.STATE_BEAT_S - 1)
+dash.collect(B, sources=())
+assert sp.stat().st_mtime_ns != m1, "the heartbeat did not rewrite an unchanged state.json"
+sp.unlink()
+dash.collect(B, sources=())
+assert sp.exists(), "a deleted state.json must come back even when nothing changed"
+
+# gh pr list: programs on one repo share a round's lists, a renamed repo counts once, and a failure is asked once.
+calls = []
+real_sh = dash.sh
+
+
+def fake_sh(cmd, timeout=45):
+    calls.append(cmd)
+    if cmd[:2] == ["gh", "api"]:
+        return {"n": "Acme/New-Name"}
+    if "--state" in cmd and cmd[cmd.index("--state") + 1] == "open":
+        return [{"number": 1, "state": "OPEN", "createdAt": "2026-10-01T00:00:00Z"}]
+    return [{"number": n, "state": "MERGED", "createdAt": d} for n, d in ((2, "2026-10-20T00:00:00Z"), (3, "2026-10-02T00:00:00Z"))]
+
+
+dash.sh = fake_sh
+try:
+    old = {"repo": "Acme/Old-Name", "created_at": "2026-10-10T00:00:00Z"}
+    new = {"repo": "acme/new-name", "created_at": "2026-10-10T00:00:00Z"}
+    wide = {"repo": "acme/new-name", "created_at": "2026-10-01T00:00:00Z"}
+    dash.ROUND_PRS[0] = {}
+    got = [[p["number"] for p in dash.fetch_prs(c)] for c in (wide, old, new)]
+    lists = [c for c in calls if c[:3] == ["gh", "pr", "list"]]
+    assert len(lists) == 2 and all(c[c.index("--repo") + 1] == "acme/new-name" for c in lists), lists
+    assert got == [[1, 2, 3], [1, 2], [1, 2]], got  # the narrower windows are cut from the wide one by createdAt
+    got_open = dash.fetch_prs(old)
+    got_open[0]["state"] = "mutated"
+    assert dash.fetch_prs(new)[0]["state"] == "OPEN", "a caller changed the round's shared rows"
+    dash.ROUND_PRS[0] = None
+    calls.clear()
+    dash.fetch_prs(new), dash.fetch_prs(new)
+    assert len([c for c in calls if c[:3] == ["gh", "pr", "list"]]) == 4, "outside a round every collect asks"
+    calls.clear()
+
+    def down(cmd, timeout=45):
+        calls.append(cmd)
+        if cmd[:2] == ["gh", "api"]:
+            return {"n": "acme/new-name"}
+        raise dash.SourceError("HTTP 502")
+    dash.sh, dash.ROUND_PRS[0] = down, {}
+    for _ in range(3):
+        try:
+            dash.fetch_prs(new)
+            raise AssertionError("a failing gh list returned rows")
+        except dash.SourceError:
+            pass
+    assert len([c for c in calls if c[:3] == ["gh", "pr", "list"]]) == 1, calls
+finally:
+    dash.sh, dash.ROUND_PRS[0] = real_sh, None
+
+# The brief render cache: rendered again only when its inputs' signature or the age limit says so.
+n, sig = [0], [("a",)]
+rc = dash.RenderCache(lambda v: "text" in v)
+real_sig = dash.render_signature
+dash.render_signature = lambda: sig[0]
+try:
+    def build():
+        n[0] += 1
+        return {"text": str(n[0])} if n[0] != 2 else {"message": "timed out"}
+    assert rc.get(build)["text"] == "1" and rc.get(build)["text"] == "1" and n[0] == 1
+    sig[0] = ("b",)
+    assert rc.get(build) == {"message": "timed out"} and n[0] == 2
+    assert rc.get(build)["text"] == "3", "a failed render must not be kept"
+    assert rc.get(build)["text"] == "3" and n[0] == 3
+    rc.at -= dash.RENDER_MAX_AGE_S + 1
+    assert rc.get(build)["text"] == "4"
+finally:
+    dash.render_signature = real_sig
+
+# The fleet's own files: clocks alone do not rewrite state.json or memory.json; data or the beat does.
+fl_dir = pathlib.Path(tempfile.mkdtemp(prefix="fleet-quiet-"))
+os.environ["ORCH_FLEET_STATE"] = str(fl_dir)
+
+
+class Stub:
+    saved = {}
+
+
+def state_text(gen, upd, items):
+    return json.dumps({"generated_at": gen, "sources": {"orca": {"ok": True, "updated_at": upd}}, "items": items})
+
+
+stub = Stub()
+dash.quiet_save(stub, **{"state.json": state_text("t1", "u1", [1]), "memory.json": json.dumps({"stage_auto_at": "a1", "k": 1})})
+m_state = (fl_dir / "state.json").stat().st_mtime_ns
+dash.quiet_save(stub, **{"state.json": state_text("t2", "u2", [1]), "memory.json": json.dumps({"stage_auto_at": "a2", "k": 1})})
+assert json.loads((fl_dir / "state.json").read_text())["generated_at"] == "t1", "only clocks moved: no write"
+assert json.loads((fl_dir / "memory.json").read_text())["stage_auto_at"] == "a1"
+dash.quiet_save(stub, **{"state.json": state_text("t3", "u3", [1, 2])})
+assert json.loads((fl_dir / "state.json").read_text())["items"] == [1, 2], "a data change is written"
+stub.wrote["state.json"] = (stub.wrote["state.json"][0], stub.wrote["state.json"][1] - dash.FLEET_BEAT_S["state.json"] - 1)
+dash.quiet_save(stub, **{"state.json": state_text("t4", "u4", [1, 2])})
+assert json.loads((fl_dir / "state.json").read_text())["generated_at"] == "t4", "the beat writes an unchanged state"
+dash.quiet_save(stub, **{"prs.json": "{}"})
+dash.quiet_save(stub, **{"prs.json": "{}"})
+assert (fl_dir / "prs.json").read_text() == "{}"
+
+# fetch_orca reads the fleet tick's worktrees while that tick is fresh, in `worktree list`'s shape; else it asks Orca.
+class FakeFleet:
+    def __init__(self, at):
+        self.fast = {"worktrees": [{"worktreeId": "wt1", "path": "/x/wt1", "isMainWorktree": False}]}
+        self.sources = {"orca": {"updated_at": at}}
+
+
+real_fleet, real_orca_result = dash.FLEET, dash.orca_result
+try:
+    dash.FLEET = None
+    assert dash.fleet_worktrees() is None
+    dash.FLEET = FakeFleet(dash.iso(dash.utcnow()))
+    assert dash.fleet_worktrees() == [{"worktreeId": "wt1", "path": "/x/wt1", "isMainWorktree": False, "id": "wt1"}]
+    dash.FLEET = FakeFleet(dash.iso(dash.utcnow() - dt_mod.timedelta(seconds=dash.FLEET_SNAPSHOT_TTL_S + 5)))
+    assert dash.fleet_worktrees() is None, "a stale fleet snapshot must not be reused"
+    dash.FLEET = FakeFleet(None)
+    assert dash.fleet_worktrees() is None
+
+    # fetch_orca asks Orca for no worktree list while the snapshot is fresh, and does when it is not.
+    asked = []
+    real_sh2 = dash.sh
+    dash.sh = lambda cmd, timeout=45: (asked.append(cmd[:3]), real_sh2(cmd, timeout))[1]
+    cfg_a = json.loads((dash.program_dir(A) / "program.json").read_text())
+    dash.FLEET = FakeFleet(dash.iso(dash.utcnow()))
+    dash.fetch_orca(cfg_a)
+    assert ["orca", "worktree", "list"] not in asked, asked
+    dash.FLEET = None
+    dash.fetch_orca(cfg_a)
+    assert ["orca", "worktree", "list"] in asked, asked
+    dash.sh = real_sh2
+
+    # The Run, its workers and its tasks come from the fleet tick's runs snapshot while it is fresh.
+    class RunsFleet(FakeFleet):
+        def __init__(self, at, err=None, objective=True):
+            super().__init__(dash.iso(dash.utcnow()))
+            run = {"id": "run_a", **({"objective": "ship A"} if objective else {})}
+            self.sources["runs"] = {"updated_at": at, "error": err}
+            self.runs = {"runs": [run], "workers": [{"runId": "run_a", "dispatchId": "d1"}, {"runId": "run_b", "dispatchId": "d2"}],
+                         "tasks": [{"id": "t1", "run_id": "run_a"}, {"id": "t2", "run_id": "run_b"}]}
+
+    now_iso = dash.iso(dash.utcnow())
+    dash.FLEET = RunsFleet(now_iso)
+    assert dash.fleet_run("run_a") == ({"id": "run_a", "objective": "ship A"}, [{"runId": "run_a", "dispatchId": "d1"}],
+                                       [{"id": "t1", "run_id": "run_a"}])
+    assert dash.fleet_run("run_zzz") is None, "a Run the snapshot does not list is asked of Orca"
+    settled = RunsFleet(now_iso)
+    settled.runs["workers"][0]["dispatchStatus"] = "completed"
+    settled.runs["tasks"][0]["status"] = "completed"
+    dash.FLEET = settled
+    assert dash.fleet_run("run_a") is None, "a settled Run may sit in the fleet's 900 s cache: asked of Orca"
+    settled.runs["tasks"][0]["status"] = "running"
+    assert dash.fleet_run("run_a") is not None, "one moving task keeps the Run on the snapshot"
+    settled.runs["tasks"][0]["status"] = "completed"
+    settled.runs["workers"][0]["dispatchStatus"] = "running"
+    assert dash.fleet_run("run_a") is not None, "one running worker keeps the Run on the snapshot"
+    settled.runs["workers"], settled.runs["tasks"] = [], []
+    assert dash.fleet_run("run_a") is None, "a Run with no worker and no task (gates only, or empty) is asked of Orca"
+    dash.FLEET = RunsFleet(now_iso)
+    dash.FLEET = RunsFleet(dash.iso(dash.utcnow() - dt_mod.timedelta(seconds=dash.FLEET_RUNS_TTL_S + 5)))
+    assert dash.fleet_run("run_a") is None, "a stale runs snapshot must not be reused"
+    dash.FLEET = RunsFleet(now_iso, err="boom")
+    assert dash.fleet_run("run_a") is None, "a failed runs read must not be reused"
+    dash.FLEET = RunsFleet(now_iso, objective=False)
+    assert dash.fleet_run("run_a") is None, "a Run row without an objective (Orca before --full) is asked of Orca"
+    dash.FLEET = None
+    assert dash.fleet_run("run_a") is None
+
+    # fetch_orca makes no worker-list, task-list or run-show call while the snapshot is fresh, and does when it is not.
+    asked = []
+    dash.sh = lambda cmd, timeout=45: (asked.append(cmd[:3]), real_sh2(cmd, timeout))[1]
+    real_result = dash.orca_result
+    dash.orca_result = lambda *a: (asked.append(["orca_result", *a[:1]]), real_result(*a))[1]
+    cfg_run = {**cfg_a, "run": "run_a", "lead_dispatch": None}
+    dash.FLEET = RunsFleet(now_iso)
+    got = dash.fetch_orca(cfg_run)
+    assert not [a for a in asked if a[0] == "orca_result"], asked
+    assert got["run"]["objective"] == "ship A" and [w["dispatchId"] for w in got["workers"]] == ["d1"] and [t["id"] for t in got["tasks"]] == ["t1"]
+    dash.FLEET = None
+    try:
+        dash.fetch_orca(cfg_run)
+    except Exception:
+        pass  # no Orca in the test: what matters is that it asked
+    assert [a for a in asked if a[0] == "orca_result"], "without a snapshot fetch_orca must ask Orca"
+    dash.sh, dash.orca_result = real_sh2, real_result
+finally:
+    dash.FLEET = real_fleet
+    dash.sh = real_sh
+    dash.orca_result = real_orca_result
+
+# A write skipped for an unchanged state still keeps the sources' new success times for the next collect.
+import time as time_mod
+sp = store / A / "dashboard" / "state.json"
+dash.collect(A, sources=("github",))
+time_mod.sleep(1.1)
+dash.collect(A, sources=("github",))  # the same data again: its updated_at moves, the write is skipped
+t_ok = dash.collect(A, sources=())["sources"]["github"]["updated_at"]
+assert json.loads(sp.read_text())["sources"]["github"]["updated_at"] < t_ok, "the skipped write reached the disk"
+dash.STATE_WROTE[sp] = (dash.STATE_WROTE[sp][0], dash.STATE_WROTE[sp][1] - dash.STATE_BEAT_S - 1)
+dash.collect(A, sources=())
+assert json.loads(sp.read_text())["sources"]["github"]["updated_at"] == t_ok, "the heartbeat write lost a source's success time"
+
+# The render signature sees the files the renders read outside the store.
+state_root = pathlib.Path(tempfile.mkdtemp(prefix="agent-skills-state-"))
+os.environ["AGENT_SKILLS_STATE"] = str(state_root)
+sig0 = dash.render_signature()
+(state_root / "janitor-plan.json").write_text('{"at": "x", "items": []}')
+sig1 = dash.render_signature()
+assert sig0 != sig1, "a janitor-plan.json change did not move the render signature"
+append(B, ev="note", note="signature probe")
+assert dash.render_signature() != sig1, "a program ledger change did not move the render signature"
+del os.environ["AGENT_SKILLS_STATE"]
+
+# A file another process wrote after the skipped write wins over the remembered sources.
+dash.collect(A, sources=("github",))
+dash.collect(A, sources=("github",))  # skipped, remembered
+other = json.loads(sp.read_text())
+other["sources"]["github"] = {"updated_at": "2099-01-01T00:00:00Z", "ok": False, "error": "from an external collect"}
+sp.write_text(json.dumps(other))
+assert dash.collect(A, sources=())["sources"]["github"]["error"] == "from an external collect", "an external collect was overwritten"
+
+# An external write between this collect's read and its skipped write is not overwritten by the next one either.
+dash.collect(A, sources=())
+sig_state = dash.STATE_WROTE[sp]
+race_key = dash.file_key(sp)
+time_mod.sleep(0.01)
+ext = json.loads(sp.read_text())
+ext["sources"]["github"] = {"updated_at": "2099-01-01T00:00:00Z", "ok": False, "error": "raced"}
+sp.write_text(json.dumps(ext))  # lands after the (stale) read_key was taken
+st_race = json.loads(sp.read_text())
+st_race["sources"] = {"github": {"updated_at": "old", "ok": True}}
+dash.STATE_WROTE[sp] = (dash.settled(st_race), time_mod.monotonic())
+dash.write_state(sp, st_race, race_key)
+assert sp not in dash.STATE_SOURCES, "sources were remembered for a file this state was not built from"
+assert dash.collect(A, sources=())["sources"]["github"].get("error") == "raced"
+
+# The store's mark moves on a commit to the DB or to its -wal, and no connection is opened to read it.
+fake_db = root / "fake.db"
+real_path = dash.store_db.path
+dash.store_db.path = lambda: fake_db
+try:
+    m0 = dash.db_version()
+    fake_db.write_text("x")
+    m1 = dash.db_version()
+    pathlib.Path(f"{fake_db}-wal").write_text("w")
+    m2 = dash.db_version()
+    assert m0 != m1 != m2 and m0 != m2, (m0, m1, m2)
+finally:
+    dash.store_db.path = real_path
+
+# The signature follows the patrol file beside a custom fleet dir, and prs.json gets a beat of its own.
+custom = pathlib.Path(tempfile.mkdtemp(prefix="custom-root-"))
+(custom / "dashboard").mkdir()
+real_fs = os.environ.get("ORCH_FLEET_STATE")
+os.environ["ORCH_FLEET_STATE"] = str(custom / "dashboard")
+try:
+    s0 = dash.render_signature()
+    (custom / "patrol-verdicts.json").write_text("{}")
+    assert dash.render_signature() != s0, "patrol-verdicts.json beside a custom fleet dir is not in the signature"
+finally:
+    os.environ["ORCH_FLEET_STATE"] = real_fs if real_fs is not None else str(fl_dir)
+assert dash.FLEET_BEAT_S["prs.json"] < 1800 and dash.FLEET_BEAT_S["memory.json"] < 300
+beat = type("S", (), {"saved": {}})()
+dash.quiet_save(beat, **{"prs.json": '{"prs": {}}'})
+beat.wrote["prs.json"] = (beat.wrote["prs.json"][0], beat.wrote["prs.json"][1] - dash.FLEET_BEAT_S["prs.json"] - 1)
+before_beat = (fl_dir / "prs.json").stat().st_mtime_ns
+time_mod.sleep(0.01)
+dash.quiet_save(beat, **{"prs.json": '{"prs": {}}'})
+assert (fl_dir / "prs.json").stat().st_mtime_ns != before_beat, "an unchanged prs.json never gets a beat"
 
 print("dash.py collect/serve: all pass")

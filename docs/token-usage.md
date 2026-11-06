@@ -220,7 +220,7 @@ brief: 주기 보고(`orch brief render --periodic`)에만, `tokens.json`에 경
 
 - `write-skill` §5에 "`static --base origin/main`의 항상 로드 증가분을 보고에 적는다" 한 줄은 후속으로 뺐다(2026-10-27 결정). 스킬 수정이라 write-skill 전 절차가 붙는다.
 - `reflect`는 바꾸지 않는다. 경고가 생기면 대시보드와 brief에서 사람이 보고 reflect를 부른다.
-- CI 예산 경고는 제안만 한다: `test_skill_tokens.py`에 "스킬 목록 표시 폭 합계 ≤ N"을 하나 두면 description이 늘 때 테스트가 실패한다. N은 오너가 정하면 넣는다.
+- `test_skill_tokens.py`는 description 하나의 표시 폭을 360 이하로 묶는다(줄인 뒤 가장 넓은 것이 346). reboot, reap-resources, watch-prs, skills-config는 각자 줄이는 PR 전까지 예외다. 목록 전체 폭 합계의 상한은 두지 않았다.
 
 ## 5. 구현 범위
 

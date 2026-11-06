@@ -81,7 +81,17 @@ for handle in ("term_old", "term_new", ""):
     assert hook(session="r1", handle=handle).startswith("ROLE: orchestrator.")
 for source in ("startup", "resume", "compact"):
     assert "top-level orchestrator" in hook(**START, source=source, session="r1", handle="term_new")
-assert hook(**START, source="clear", session="r1") is None
+assert "just cleared" in hook(**START, source="clear", session="r1") and "reboot --top" in hook(**START, source="clear", session="r1")
+hook(**START, session="c1", handle="term_c", entrypoint="cli")
+hook(session="c1", handle="term_c", prompt="ROLE: orchestrator")
+cleared = hook(**START, source="clear", session="c2", handle="term_c", entrypoint="cli")
+assert "just cleared" in cleared and "These core rules" in cleared, cleared
+assert json.loads((TMP / "state/roles/c2.json").read_text()) == {"role": "orchestrator"}
+assert json.loads((TMP / "state/terminals/term_c.json").read_text())["session_id"] == "c2"
+hook(**START, session="n1", handle="term_n", entrypoint="cli")
+hook(agent=ORCH, session="n1", handle="term_n", prompt="ROLE: none")
+assert hook(**START, source="clear", agent=ORCH, session="n2", handle="term_n", entrypoint="cli") is None, "ROLE: none carries"
+assert hook(**START, source="clear", session="u2", handle="term_u", entrypoint="cli") is None, "nothing to carry"
 lead = hook(session="r3", prompt="/goal ship p\nMODE orchestrate\nROLE        lead p\nCLOSE: §8")
 assert "coordinate the program p" in lead and "orch status p" in lead and "Project/p/note.md" in lead, lead
 assert "just compacted" in hook(**START, source="compact", session="r3")

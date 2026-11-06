@@ -1,6 +1,6 @@
 ---
 name: principles
-description: "Use when a design, refactor, verification or delegation call needs a named engineering principle: how big a diff, where validation goes, whether work is proven, whether a follow-up becomes a ticket, how to split work across agents, or the same instruction written twice."
+description: "Use when a design, refactor, verification or delegation call needs a named principle: diff size, where validation goes, proof, follow-up tickets, splitting work across agents."
 ---
 
 # Engineering principles

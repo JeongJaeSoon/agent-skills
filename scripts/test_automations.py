@@ -332,8 +332,8 @@ class ShellJobs(Base):
 
     def test_defaults(self):
         self.assertEqual({n: j.default for n, j in self.jobs.items()},
-                         {"sync": True, "pressure-watch": True, "reap-hard": True, "orch-dash": True, "patrol": False,
-                          "land-executor": False})
+                         {"pstack-upstream": False, "sync": True, "pressure-watch": True, "reap-hard": True,
+                          "orch-dash": True, "patrol": False, "land-executor": False})
 
     def test_patrol_round_fits_the_runner(self):
         """The round's two budgets, plus the wait for a cut scan's last command, end before the runner kills the job,
@@ -585,7 +585,8 @@ class Plan(Base):
         def status(job):
             return {"janitor": ("on", ""), "sync": ("on", ""), "pressure-watch": ("absent", ""),
                     "reap-hard": ("unconfigured", "no protect file"), "orch-dash": ("absent", ""),
-                    "patrol": ("absent", ""), "land-executor": ("absent", "")}[job.name]
+                    "patrol": ("absent", ""), "land-executor": ("absent", ""),
+                    "pstack-upstream": ("absent", "")}[job.name]
         with mock.patch.object(au.ShellJob, "status", status), \
                 mock.patch.object(au.PreviewWatch, "status", return_value=("absent", "")), \
                 mock.patch.object(au.ShareServer, "status", return_value=("absent", "")):

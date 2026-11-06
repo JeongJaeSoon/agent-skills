@@ -79,7 +79,7 @@ def hook(command, level=None, prompt=None, path=None, env=None, cwd=None):
     return spec.get("permissionDecision"), spec.get("permissionDecisionReason", "") + out.get("systemMessage", "")
 
 
-BRIEF = "TASK\nORDER       Starts after: none. Lands after: ABC-7(a note on it) and PROJ-1. Then the rest XYZ-9.\n"
+BRIEF = "TASK\nORDER       Starts after: none. Stacked on: ABC-7(a note on it) and PROJ-1. Then the rest XYZ-9.\n"
 
 # A branch holding another open PR's head, based on main: a warning by default, a deny once promoted.
 rows(row(5, "lower", LOWER))
@@ -150,10 +150,16 @@ assert decision is None and "gh stack link" in text and "could not read" not in 
 git("update-ref", "-d", "refs/remotes/origin/y")
 # #N works too, and a template's placeholder or `none` names nothing.
 rows(row(7, "x", "0" * 40))
-assert hook("gh pr create --base main", "deny", "ORDER  Lands after: #7.\n")[0] == "deny"
-for line in ("ORDER  Starts after <TICKET…> · lands after <TICKET…> (stack / orch dep).", "ORDER  Lands after: none.",
-             "ORDER  Lands after: 없음.", "Nothing about order here, lands after ABC-7"):
+assert hook("gh pr create --base main", "deny", "ORDER  Stacked on: #7.\n")[0] == "deny"
+# The value ends at the next ORDER part: `· lands after` is a deploy order (base main, orch dep), never a stack.
+assert hook("gh pr create --base main", "deny", "ORDER  Starts after: none · stacked on: #7 · lands after: ABC-9\n")[0] == "deny"
+for line in ("ORDER  Starts after <TICKET…> (Orca deps) · stacked on <TICKET|#PR> (stack) · lands after",
+             "ORDER  Stacked on: none.", "ORDER  Stacked on: 없음.", "Nothing about order here, stacked on ABC-7",
+             "ORDER  Starts after: #7 · stacked on: none · lands after: ABC-7."):
     assert hook("gh pr create --base main", "deny", line) == (None, ""), line
+# A brief from before `stacked on` existed meant a stack by `lands after`: never a deny now, one line naming the choice.
+decision, text = hook("gh pr create --base main", "deny", "ORDER  Lands after: #7.\n")
+assert decision is None and "#7" in text and "stacked on" in text and text.count("\n") == 0, text
 # A named PR that no open PR answers to may have landed since dispatch: one warning line, never a deny.
 rows(row(99, "z", "2" * 40))
 decision, text = hook("gh pr create --base main", "deny", BRIEF)

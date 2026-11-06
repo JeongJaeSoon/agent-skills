@@ -889,7 +889,7 @@ class FakeFleetWorld:
     def fetch_fast(self):
         return {"worktrees": self.worktrees, "terminals": self.terminals, "messages": self.messages}
 
-    def fetch_runs(self):
+    def fetch_runs(self, live=None):
         return self.runs
 
     def read_screen(self, handle):

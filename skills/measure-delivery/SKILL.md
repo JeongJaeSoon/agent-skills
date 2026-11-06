@@ -1,12 +1,13 @@
 ---
 name: measure-delivery
-description: Use when asked how a project or autonomous run actually went — "성과 측정", follow-up/derived ticket growth after the initial design, whether the backlog is converging, accepted changes, rework, escaped defects, or token cost per merged PR — and at the Close of an `orchestrate` program.
+description: Use when asked how a project or autonomous run went — "성과 측정", derived-ticket growth, backlog convergence, rework, escaped defects, tokens per merged PR — and at an orchestrate program's Close. An orchestrator dispatches it instead.
 ---
 
 # Measure delivery
 
 Numbers for one repo and one tracker project over a window, computed from the tracker, GitHub
-and this machine's transcripts. The script only reads.
+and this machine's transcripts. The script only reads. Run it in a subagent that returns only
+the report, so the issue lists and script output stay out of the caller's context.
 
 ## Get the issues
 
@@ -41,7 +42,8 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/measure.py" \
 - `--usage-match` picks the configured project directories to count tokens for
   (default: the repo name).
 
-It prints a Korean markdown report. Put it in the project's note (`use-notes`), not only in chat.
+It prints a Korean markdown report. Put it in the project's note (`use-notes`), not only in chat;
+a result for the owner is shown as an Artifact only (`use-notes`).
 
 ## What each number means
 
@@ -55,10 +57,8 @@ It prints a Korean markdown report. Put it in the project's note (`use-notes`), 
 | escaped | Bug-labeled issues created, main push CI failures, revert PRs | Candidates only: read each Bug to confirm it came from merged code |
 | 비용 | Tokens from this machine's available transcripts in the window, per merged PR | No prices applied; other machines are missing |
 
-Checked against a hand analysis of a real three-day program: the ratio and the 6h blocks
-matched. Counts differ by ±1–3 at window edges and because this script counts every issue, not
-only leaves. GitHub caps one run query at 1000 results; the script splits the window until each
-query fits, so on a busy repo it makes several calls.
+Counts differ by ±1–3 from a hand count at window edges, and because the script counts every
+issue, not only leaves.
 
 ## Report shape
 

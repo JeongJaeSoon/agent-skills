@@ -461,6 +461,10 @@ def pressure_interval():
 
 
 SHELL_JOBS = (
+    ShellJob("pstack-upstream", "하루 한 번 cursor/plugins 의 pstack 이 vendor/pstack 사본에서 얼마나 바뀌었는지 모델 없이 비교해 "
+             "알리는 Orca automation(pstack-sync.py --notify). skills/ 와 사본은 건드리지 않는다. 이 repo 를 "
+             "고치는 PC 에서만 켠다",
+             ["python3", str(HERE / "pstack-sync.py"), "--notify"], 86400, False),
     ShellJob("sync", "15분마다 체크아웃을 origin 에 맞추는 Orca automation(모델 없음, skills-sync sync). 세션이 읽는 스킬을 최신으로 둔다",
              ["python3", str(HERE / "sync.py"), "sync"], sync.INTERVAL_S, True),
     ShellJob("pressure-watch", "PC 사용량(load·메모리 압박·swap·디스크·컨테이너)을 모델 없이 재고, 높으면 reap 이 올린 안전한 대상만 "

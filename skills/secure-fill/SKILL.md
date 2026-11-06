@@ -1,6 +1,6 @@
 ---
 name: secure-fill
-description: "Use when a browser auth screen needs a secret (dev token, test password) the agent must not see — \"토큰 입력해줘\", \"비밀번호 칸 채워줘\", \"secure-fill\". The value goes from the Keychain to the page after the owner's Touch ID. Never read, echo or paste the secret, and never edit the allowlist."
+description: "Use when a browser auth screen needs a secret the agent must not see — \"토큰 입력해줘\", \"비밀번호 칸 채워줘\", \"secure-fill\". The value goes from the Keychain to the page after the owner's Touch ID. Never read, echo or paste the secret, and never edit the allowlist."
 ---
 
 # Secure fill

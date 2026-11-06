@@ -1,8 +1,11 @@
 """Rules of the review_wait collector: PR states, the reminder decisions, the send-log and the night window.
 Run: python3 test_review_wait.py"""
-import datetime as dt, json, pathlib, sys, tempfile, zoneinfo
+import datetime as dt, json, os, pathlib, sys, tempfile, zoneinfo
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import prs as p
+
+# prs.config() also reads orchestrate.land_executor from $AGENT_SKILLS_CONFIG; keep the real ~/.claude file out.
+os.environ["AGENT_SKILLS_CONFIG"] = str(pathlib.Path(tempfile.mkdtemp()) / "absent.json")
 
 ME, TZ = "owner", zoneinfo.ZoneInfo("Asia/Tokyo")
 H = 3600
