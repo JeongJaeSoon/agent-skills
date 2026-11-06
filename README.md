@@ -115,9 +115,9 @@ When each skill fires, what it does and the files it ships are in the [skill cat
 
 The pstack group comes from Lauren Tan's [pstack](https://github.com/cursor/plugins) (MIT). These skills are now maintained here on their own: `vendor/pstack` keeps the original files as upstream had them, and an optional daily job reports upstream changes, which are ported by hand when worth it. With several sessions, two layers sit above the workers: the orchestrator (one top-level session) and leads (one per project). See the [Roles table in orchestrate](skills/orchestrate/SKILL.md#roles).
 
-### Renamed skills
+## Renamed skills
 
-Breaking change: these names were merged into another skill and no longer exist, so `/agent-skills:<old name>` no longer runs anything. Use the new command, and say the mode when you want one; the old trigger phrases still fire the new skill.
+Some skills were merged into another skill as a mode. The old name is gone, so `/agent-skills:<old name>` no longer runs anything: use the new command.
 
 | Old command | New command / mode |
 |---|---|

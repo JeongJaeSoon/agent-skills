@@ -115,11 +115,11 @@ https://github.com/JeongJaeSoon/agent-skills の Claude Code プラグインを�
 
 pstack グループは Lauren Tan の [pstack](https://github.com/cursor/plugins)(MIT)から取り込んだもので、いまはこのリポジトリで独自に手入れしています。元のファイルは upstream のまま `vendor/pstack` に残し、upstream の変更は任意で有効にする日次ジョブが知らせるので、必要なものだけ手で取り込みます。複数のセッションで働くとき、ワーカーの上にはオーケストレーター(最上位のセッション1つ)とリード(プロジェクトごとに1つ)の2層があります。詳しくは [orchestrate の Roles 表](skills/orchestrate/SKILL.md#roles)(英語)を見てください。
 
-### 名前が変わったスキル
+## 名前が変わったスキル
 
-互換性のない変更です。次の名前は別のスキルにまとめられてもう存在しないため、`/agent-skills:<旧名>` を打っても何も動きません。新しいコマンドを使い、モードを選びたいときはそのモードを伝えてください。旧トリガーの言い回しは、そのまま新しいスキルを呼びます。
+いくつかのスキルは別のスキルのモードにまとめました。古い名前はもうないので、`/agent-skills:<古い名前>` は何も実行しません。新しいコマンドを使ってください。
 
-| 旧コマンド | 新コマンド / モード |
+| 古いコマンド | 新しいコマンド / モード |
 |---|---|
 | `/agent-skills:swarm` | `/agent-skills:fan-out`、sweep モード |
 | `/agent-skills:arena` | `/agent-skills:fan-out`、compete モード |
