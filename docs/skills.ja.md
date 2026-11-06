@@ -1,7 +1,7 @@
-<!-- translated-from: 3c65b98e51625aa4e64d47eb9c2807d1115cf83b -->
+<!-- translated-from: fd1096d10df49d0078efdb00338b234e62a5902e -->
 # スキルカタログ
 
-`agent-skills` プラグインに入っているスキル38個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック16個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
+`agent-skills` プラグインに入っているスキル37個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック16個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
 
 既定値の変更と既存データの保持は[設定移行ガイド](configuration-migration.md)を参照してください。ノート・台帳・個人フォルダーには明示的な設定が必要で、レポートの既定タイムゾーンは UTC です。
 
@@ -165,7 +165,7 @@ PR を受け持つスキルとマージする主体:
     - `mailbox_guard.py`: 古いインストールから hook へ移行するための shim。
     - テストファイル。
   - `assets/dashboard/`: ダッシュボードの画面。
-- **関連:** ワーカーは `deliver-ticket` に従います。`use-tracker`、`use-notes`、`create-verification-skill`、`show-me-your-work`、`fan-out`、`reap-resources`、`reflect`、`end-session` を利用します。
+- **関連:** ワーカーは `deliver-ticket` に従います。`use-tracker`、`use-notes`、`verification-skill`、`show-me-your-work`、`fan-out`、`reap-resources`、`reflect`、`end-session` を利用します。
 
 ### reboot
 - **使う場面:** セッション・Orca・マシンが再起動した直後、またはコンパクションのあと、ほかの作業より先に。「재시작했어」（再起動した）、「Orca 재시작했어」（Orca を再起動した）、「세션 다시 띄웠어」（セッションを立ち上げ直した）、「복구 점검해줘」（復旧を点検して）。何の作業をしていたかを振り返るのは `recall` です。
@@ -288,7 +288,7 @@ PR を受け持つスキルとマージする主体:
 - **関係:** `brief` の予定・保留キューの行が指す先です。ダッシュボードでは To-do ページです。
 
 ### map-features
-- **いつ:** 製品がいま何をするかを人が読む地図が必要なとき。PRD、ロードマップ、オンボーディング、現況ドキュメント。「feature map 만들어줘」（feature map を作って）、「기능 지도 그려줘」（機能地図を描いて）、「지금 뭐가 구현돼 있는지 정리해줘」（いま何が実装されているか整理して）。verify スキルが機能を動かすための地図は `create-verification-skill`、1つのサブシステムの動きは `how` です。
+- **いつ:** 製品がいま何をするかを人が読む地図が必要なとき。PRD、ロードマップ、オンボーディング、現況ドキュメント。「feature map 만들어줘」（feature map を作って）、「기능 지도 그려줘」（機能地図を描いて）、「지금 뭐가 구현돼 있는지 정리해줘」（いま何が実装されているか整理して）。verify スキルが機能を動かすための地図は `verification-skill` の create モード、1つのサブシステムの動きは `how` です。
 - **内容:**
   - 最初の行に基準（リポジトリ、ref、短い sha、コミット日）を書き、すべての行をそのコミット時点で書きます。
   - デプロイ単位（アプリ）をビルド・デプロイ設定から探して表にします。期待されるのに存在しないアプリは、代わりにあるものと一緒にリストにします。
@@ -455,20 +455,20 @@ PR を受け持つスキルとマージする主体:
   - まず失敗するテストを回して失敗の理由を確かめ、最小限に直してから通ることを確かめます。
   - テストが非現実的なら理由を明らかにし、いちばん近い実行可能なチェックを使います。既存の assertion は弱めません。
 
-### create-verification-skill
-- **内容:**
+### verification-skill
+- **使う場面:** 再利用する verify スキルを新しく作るとき（「verify 스킬 만들어줘」（verify スキルを作って）、`/agent-skills:verification-skill create`、旧 `/create-verification-skill`）は create モード、既存の verify スキルを点検・修理するとき（「verify 스킬 점검해줘」（verify スキルを点検して）、週1回の点検、機能を動かせなかった verify スキル）は maintain モードです。変更一つが動くかの確認は `deliver-ticket` です。
+- **create モード:**
   - リポジトリを調べ、アプリをユーザーのように起動し、操作し、観察するリポジトリ専用のスキル `.claude/skills/verify-<app>/` を作ります。Launch、Doctor、Drive、Evidence、Cleanup の段階を置きます。
   - 主な機能3〜5個の機能マップも一緒に作ります。
   - 自分で最後まで一度回して証明します。
   - `deliver-ticket` と `orchestrate` は、範囲内で再利用する検証が役立つ場合に呼び出せます。同じ受け入れ基準を実証する直接チェックも有効です。upstream はユーザー呼び出し専用で、この fork はモデルからも呼び出せます。
-- **同梱:** `references/feature-map-example/`（サンプルアプリの機能マップ）、`scripts/verify_skill_lint.py`（生成したスキルをファイルだけ読んで点検する。frontmatter とセクション、状態ファイル名、共有の `latest` リンク、cleanup の必須引数、パターン kill、helper の実行権限と記載、機能マップの索引。`maintain-verification-skill` も同じスクリプトを使う）。
-
-### maintain-verification-skill
-- **内容:**
+- **maintain モード:**
   - 機能ごとにソースを読み、すべての機能を実際に動かして機能マップと照らし合わせます。
   - 問題を、文書のずれ、ハーネスの欠陥、製品の欠陥に分けます。製品の欠陥は報告するだけです。
   - 結果は clean、changed（証明された修正だけの PR 一つ）、blocked のいずれかです。
   - flow improver が週に一度回します。verify スキルが機能を扱えなかった、または誤って説明していたと `deliver-ticket` や QA lead が報告すると、リードがワーカーに任せます。
+  - 点検する verify スキルがなければ止まり、create モードを案内します。
+- **同梱:** `references/create.md`、`references/maintain.md`、`references/feature-map-example/`（サンプルアプリの機能マップ）、`scripts/verify_skill_lint.py`（生成したスキルをファイルだけ読んで点検する。frontmatter とセクション、状態ファイル名、共有の `latest` リンク、cleanup の必須引数、パターン kill、helper の実行権限と記載、機能マップの索引。二つのモードが同じスクリプトを使う）。
 
 ## コマンド
 

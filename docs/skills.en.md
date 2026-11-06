@@ -1,7 +1,7 @@
-<!-- translated-from: 3c65b98e51625aa4e64d47eb9c2807d1115cf83b -->
+<!-- translated-from: fd1096d10df49d0078efdb00338b234e62a5902e -->
 # Skill catalog
 
-This page covers the 38 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 16 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
+This page covers the 37 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 16 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
 
 Follow the [configuration migration guide](configuration-migration.md) for changed defaults and preservation of existing data. Notes, ledgers and personal folders require explicit configuration; report time defaults to UTC.
 
@@ -165,7 +165,7 @@ One skill for both ways of starting a new Orca card. If this session keeps worki
     - `mailbox_guard.py`: a transition shim that moves old installs over to the hook.
     - Test files.
   - `assets/dashboard/`: the dashboard UI.
-- **Related:** Workers follow `deliver-ticket`. It draws on `use-tracker`, `use-notes`, `create-verification-skill`, `show-me-your-work`, `fan-out`, `reap-resources`, `reflect`, and `end-session`.
+- **Related:** Workers follow `deliver-ticket`. It draws on `use-tracker`, `use-notes`, `verification-skill`, `show-me-your-work`, `fan-out`, `reap-resources`, `reflect`, and `end-session`.
 
 ### reboot
 - **When:** Right after the session, Orca or the machine restarted, or after a compaction, before any other work: "재시작했어" (I restarted), "Orca 재시작했어" (Orca restarted), "세션 다시 띄웠어" (I brought the session back up), "복구 점검해줘" (check the recovery). Recalling what the work was is `recall`.
@@ -286,7 +286,7 @@ Reports completed work, current work, decisions and human-only steps with eviden
 - **Related:** Where `brief`'s to-do and on-hold line points. On the dashboard it is the To-do page.
 
 ### map-features
-- **When:** People need a map of what a product does today: a PRD, a roadmap, onboarding, a status doc. "feature map 만들어줘" (make a feature map), "기능 지도 그려줘" (draw a feature map), "지금 뭐가 구현돼 있는지 정리해줘" (list what is built now). A map that a verify skill uses to drive features is `create-verification-skill`; how one subsystem works is `how`.
+- **When:** People need a map of what a product does today: a PRD, a roadmap, onboarding, a status doc. "feature map 만들어줘" (make a feature map), "기능 지도 그려줘" (draw a feature map), "지금 뭐가 구현돼 있는지 정리해줘" (list what is built now). A map that a verify skill uses to drive features is `verification-skill`'s create mode; how one subsystem works is `how`.
 - **What it does:**
   - The first line names the baseline (repo, ref, short sha, commit date), and every row is true as of that commit.
   - It finds the deployable units (apps) from build and deploy config and puts them in a table; apps a reader would expect but which don't exist go in a list with what exists in their place.
@@ -453,20 +453,20 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
   - Runs the failing test first to confirm why it fails, makes the smallest fix, and confirms it passes.
   - If a test would be unrealistic, it says why and uses the closest runnable check. It never weakens existing assertions.
 
-### create-verification-skill
-- **What it does:**
+### verification-skill
+- **When:** Create mode builds a reusable verify skill ("verify 스킬 만들어줘" (make a verify skill), `/agent-skills:verification-skill create`, the old `/create-verification-skill`); maintain mode checks and repairs an existing one ("verify 스킬 점검해줘" (check the verify skill), the weekly round, a verify skill that failed to drive a feature). Checking that one change works is `deliver-ticket`.
+- **Create mode:**
   - Surveys the repo and builds a repo-specific skill, `.claude/skills/verify-<app>/`, that launches, drives and observes the app the way a user would. It has Launch, Doctor, Drive, Evidence and Cleanup steps.
   - Also builds a feature map of the 3–5 main features.
   - Proves the skill by running it end to end once itself.
   - `deliver-ticket` and `orchestrate` may use it when a reusable harness is useful within scope; direct checks remain sufficient when they prove the same acceptance criteria. Upstream keeps it user-invoked; this fork allows model invocation.
-- **Bundled:** `references/feature-map-example/` (the feature map of an example app), and `scripts/verify_skill_lint.py`, which lints a generated skill by reading files only: frontmatter and sections, state-file names, a shared `latest` link, a required cleanup argument, pattern kills, helper modes and documentation, and the feature-map index. `maintain-verification-skill` runs the same script.
-
-### maintain-verification-skill
-- **What it does:**
+- **Maintain mode:**
   - Reads the source for each feature, actually drives every feature, and compares the results with the feature map.
   - Sorts problems into doc drift, harness defects and product defects. Product defects are only reported.
   - The result is one of clean, changed (a single PR with only proven fixes), or blocked.
   - The flow improver runs it once a week, and the lead hands it to a worker when `deliver-ticket` or the QA lead reports that the verify skill couldn't drive a feature or described it wrongly.
+  - With no verify skill to check, it stops and points at create mode.
+- **Bundled:** `references/create.md`, `references/maintain.md`, `references/feature-map-example/` (the feature map of an example app), and `scripts/verify_skill_lint.py`, which lints a generated skill by reading files only: frontmatter and sections, state-file names, a shared `latest` link, a required cleanup argument, pattern kills, helper modes and documentation, and the feature-map index. Both modes run the same script.
 
 ## Commands
 

@@ -153,7 +153,7 @@ Before pushing, run **both**:
 
 Use the repository's existing verification skill or harness when it fits the affected
 surface. If none exists, run the appropriate direct checks and retain their evidence.
-Create or maintain a reusable verification skill only when requested or useful within the
+Create or maintain a reusable verification skill (`verification-skill`) only when requested or useful within the
 agreed scope; its absence does not block otherwise adequate verification. This changes the
 packaging of verification, never its required coverage or evidence. An existing verification
 skill or harness that cannot drive the changed feature or describes it incorrectly must be

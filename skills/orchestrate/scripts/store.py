@@ -20,9 +20,12 @@ Commands (prog.py `orch db`):
   dump [TABLE]                                 read-only JSON of the tables
   backup FILE | restore FILE [--rehearsal]     a lossless copy (Connection.backup), and putting one back
   cutover-plan 4a|4b                           the commands the owner runs around an import; runs none of them
-  state                                        acks.jsonl and stages.json -> tables, backup first, tombstones in their place
+  state                                        acks.jsonl and stages.json -> tables, then prs/sendlog.jsonl -> send_log (the
+                                               review-ask queue's tables come with it); backup first, tombstones in place
   export --legacy --target state DIR           those two files as older code reads them (the way back)
   rollback state DIR                           put that export back and take the step out of the DB
+  export --legacy --target sendlog DIR         sendlog.jsonl as older code reads it
+  rollback sendlog DIR                         put that export back; refused while review asks are open
   migrate [--check]                            the whole cutover in one rerunnable command (cutover.py); owner only
   init                                         a new PC: an empty DB with both steps done, only when no state exists
 """
@@ -1282,6 +1285,9 @@ STATE_TABLES = ("ack_event", "stage_next", "stage_env", "stage_cell", "stage_row
 
 
 def _legacy(step):
+    if step == SENDLOG_STEP:  # once recorded, the path the step moved, not the one this environment would pick
+        row = _step_row(step)
+        return tuple(json.loads(row["sources"])) if row else (str(sendlog_file()),)
     return STATE_FILES if step == STATE_STEP else LEGACY.get(step, ())
 
 
@@ -1567,6 +1573,9 @@ def state_rollback(src, rehearsal=False):
     sd, src = fleet.state_dir(), pathlib.Path(src).expanduser()
     if migrated_steps().get(STATE_STEP) is None:
         raise Refused(f"{STATE_STEP} is not in {DB_NAME}: nothing to roll back")
+    if SENDLOG_STEP in migrated_steps():  # send_log points at pr_ref, which this drops
+        raise Refused(f"{SENDLOG_STEP} is in {DB_NAME} and points at the PR references: roll it back first "
+                      f"(orch db rollback sendlog DIR)")
     for name in STATE_FILES:
         if not (src / name).is_file():
             raise Refused(f"{src / name} is missing: run `orch db export --legacy --target state {src}` first")
@@ -1588,6 +1597,323 @@ def state_rollback(src, rehearsal=False):
         (sd / name).rmdir()
         os.replace(staged[name], sd / name)
     return f"put {', '.join(STATE_FILES)} back from {src}; {STATE_STEP} is out of the DB"
+
+
+# ---------------------------------------------------------------- watch-prs send-log and the review-ask queue
+
+# Needs the 6-state step (the PR reference table). prs/sendlog.jsonl lives under the shared state, not the fleet state, so
+# the step names it by absolute path: the backup, the sha256 and the tombstone all go by that path.
+SENDLOG_STEP = "7-sendlog"
+SEND_ACTIONS = ("request", "rerequest", "remind", "retrigger", "remind_author")
+# found: someone already asked in the channel; no_thread: nothing was posted. Both are in the legacy log and decide()
+# counts them as asked, so they stay: dropping them would ask those reviewers again.
+SEND_SOURCES = ("sent", "scheduled", "found", "refused", "no_thread", "skipped")
+SENT_SOURCES = ("sent", "scheduled", "found")  # the message went out, or was already there
+ASK_CLOSED = ("reviewed", "merged", "withdrawn")
+SCHEMA_SENDLOG = (
+    # One row per outcome of a watch-prs action. head '' is a row written by hand with no head: NULL would make the
+    # UNIQUE key useless for it. at, post_at are epoch seconds, as the file held them.
+    """CREATE TABLE send_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  pr_repo TEXT NOT NULL, pr_number INTEGER NOT NULL, reviewer TEXT NOT NULL, head TEXT NOT NULL DEFAULT '',
+  action TEXT NOT NULL CHECK (action IN ('request','rerequest','remind','retrigger','remind_author')),
+  source TEXT NOT NULL CHECK (source IN ('sent','scheduled','found','refused','no_thread','skipped')),
+  at REAL NOT NULL, post_at REAL, thread TEXT, scheduled_id TEXT, channel TEXT,
+  FOREIGN KEY (pr_repo, pr_number) REFERENCES pr_ref(repo, number),
+  UNIQUE (pr_repo, pr_number, reviewer, head, action, source, at)
+)""",
+    # The owner's queue of "ask this person to review this PR". Its state is derived, never stored: queued while it points
+    # at no send_log row, scheduled while that row is a scheduled post still ahead, sent after; closed_why only when it
+    # ended without a send or after it.
+    """CREATE TABLE review_ask (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  pr_repo TEXT NOT NULL, pr_number INTEGER NOT NULL, reviewer TEXT NOT NULL,
+  created_at TEXT NOT NULL, by TEXT NOT NULL,
+  send_log_id INTEGER REFERENCES send_log(id),
+  closed_at TEXT, closed_why TEXT CHECK (closed_why IN ('reviewed','merged','withdrawn')),
+  FOREIGN KEY (pr_repo, pr_number) REFERENCES pr_ref(repo, number),
+  CHECK ((closed_at IS NULL) = (closed_why IS NULL))
+)""",
+    "CREATE INDEX review_ask_open ON review_ask(pr_repo, pr_number) WHERE closed_at IS NULL",
+)
+SENDLOG_TABLES = ("review_ask", "send_log")  # dropped in this order
+
+
+def sendlog_file(state=None):
+    """prs/sendlog.jsonl under the shared state: `state` (what prs.py gets from --state), else $AGENT_SKILLS_STATE."""
+    base = state or os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills"
+    return (pathlib.Path(base).expanduser() / "prs" / "sendlog.jsonl").resolve()
+
+
+def _sendlog_config():
+    """The send-log agent-skills.json → brief → sendlog names, resolved; None when it names none."""
+    p = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-skills.json").expanduser()
+    try:
+        v = json.loads(p.read_text())["brief"]["sendlog"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return pathlib.Path(v).expanduser().resolve() if isinstance(v, str) and v else None
+
+
+def sendlog_split():
+    """Why the two places a send-log is configured disagree, or None: prs.py writes one file and the brief reads the other,
+    so after the move one of them would be reading a tombstone."""
+    cfg = _sendlog_config()
+    if cfg and cfg != sendlog_file():
+        return f"the brief's sendlog ({cfg}) is not the file watch-prs writes ({sendlog_file()}): make them one path"
+    return None
+
+
+@contextlib.contextmanager
+def sendlog_lock(state=None):
+    """The lock a writer of the send-log file holds while it checks sendlog_ready() and appends, and the step holds from
+    its backup to the tombstone: a row can then not land in the file between the copy and the move."""
+    lock = sendlog_file(state).parent / ".sendlog.lock"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    with lock.open("a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        yield
+
+
+def sendlog_ready(state=None):
+    """Whether the send-log lives in the DB for this state directory; False without a DB or before `orch db state`."""
+    if SENDLOG_STEP not in migrated_steps():
+        return False
+    return str(sendlog_file(state)) in json.loads(_step_row(SENDLOG_STEP)["sources"])
+
+
+def _send_row(r):
+    """A row as the file held it: the keys decide() and the brief read."""
+    return {"pr": f"{r['name']}#{r['pr_number']}", "reviewer": r["reviewer"], "head": r["head"] or None,
+            "action": r["action"], "source": r["source"], "at": r["at"], "post_at": r["post_at"], "thread": r["thread"],
+            "scheduled": r["scheduled_id"], "channel": r["channel"]}
+
+
+def send_rows(db=None):
+    """Every send-log row, oldest first. Callers check sendlog_ready() first: before it the rows are in the file."""
+    sql = ("SELECT s.*, p.name FROM send_log s JOIN pr_ref p ON p.repo=s.pr_repo AND p.number=s.pr_number ORDER BY s.id")
+    if db is not None:
+        return [_send_row(r) for r in db.execute(sql)]
+    with read() as d:
+        return [_send_row(r) for r in d.execute(sql)]
+
+
+def _send_insert(db, row, by):
+    """Insert one row (the file's shape); (id of the row now there, whether it was added). A row the UNIQUE key already
+    holds is not added twice. A request that went out settles the queued asks for that PR and person."""
+    repo, number = pr_split(row["pr"]) or (None, None)
+    if repo is None:
+        raise ValueError(f"send-log: pr must look like owner/repo#N, got {row['pr']!r}")
+    _pr_stub(db, repo, number, by)
+    vals = (repo.lower(), number, row["reviewer"], row.get("head") or "", row["action"], row["source"], float(row["at"]),
+            row.get("post_at"), row.get("thread"), row.get("scheduled"), row.get("channel"))
+    cur = db.execute("INSERT INTO send_log (pr_repo, pr_number, reviewer, head, action, source, at, post_at, thread, "
+                     "scheduled_id, channel) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING", vals)
+    if not cur.rowcount:
+        return db.execute("SELECT id FROM send_log WHERE pr_repo=? AND pr_number=? AND reviewer=? AND head=? AND action=? "
+                          "AND source=? AND at=?", vals[:7]).fetchone()[0], False
+    if row["action"] == "request" and row["source"] in SENT_SOURCES:
+        db.execute("UPDATE review_ask SET send_log_id=? WHERE pr_repo=? AND pr_number=? AND lower(reviewer)=? "
+                   "AND send_log_id IS NULL AND closed_at IS NULL", (cur.lastrowid, repo.lower(), number, row["reviewer"].lower()))
+    return cur.lastrowid, True
+
+
+def send_log_add(row, by="orch watch-prs"):
+    """Record one outcome (pr, reviewer, head, action, source, at, post_at, thread, scheduled, channel); the row's id."""
+    if row["action"] not in SEND_ACTIONS or row["source"] not in SEND_SOURCES:
+        raise ValueError(f"send-log: action is one of {', '.join(SEND_ACTIONS)}, source one of {', '.join(SEND_SOURCES)}")
+    with tx() as db:
+        return _send_insert(db, row, by)[0]
+
+
+def ask_add(pr, reviewer, by="orch ask add"):
+    """Queue an ask: (id, True), or (id, False) when the same PR and person are already queued or asked and not closed."""
+    split, who = pr_split(pr), (reviewer or "").strip()
+    if not split or not who:
+        raise ValueError("an ask needs a PR (owner/repo#N) and a reviewer")
+    with tx() as db:
+        old = db.execute("SELECT id FROM review_ask WHERE pr_repo=? AND pr_number=? AND lower(reviewer)=? AND closed_at IS NULL",
+                         (split[0].lower(), split[1], who.lower())).fetchone()
+        if old:
+            return old["id"], False
+        _pr_stub(db, *split, by)
+        last = db.execute("SELECT id FROM send_log WHERE pr_repo=? AND pr_number=? AND lower(reviewer)=? AND action='request' "
+                          f"AND source IN ({','.join('?' * len(SENT_SOURCES))}) ORDER BY id DESC LIMIT 1",
+                          (split[0].lower(), split[1], who.lower(), *SENT_SOURCES)).fetchone()  # already asked: nothing to queue
+        aid = db.execute("INSERT INTO review_ask (pr_repo, pr_number, reviewer, created_at, by, send_log_id) VALUES (?,?,?,?,?,?)",
+                         (split[0].lower(), split[1], who, now(), by, last and last["id"])).lastrowid
+        _event(db, "review_ask", str(aid), "added", by, None, {"pr": pr, "reviewer": who})
+        return aid, True
+
+
+def ask_close(aid, why="withdrawn", by="orch ask cancel"):
+    """Close an open ask; False when there is none by that id."""
+    if why not in ASK_CLOSED:
+        raise ValueError(f"an ask closes as one of {', '.join(ASK_CLOSED)}")
+    with tx() as db:
+        n = db.execute("UPDATE review_ask SET closed_at=?, closed_why=? WHERE id=? AND closed_at IS NULL",
+                       (now(), why, aid)).rowcount
+        if n:
+            _event(db, "review_ask", str(aid), why, by)
+        return bool(n)
+
+
+def asks(now_ts=None, status=None):
+    """The asks, oldest first, each with its derived `status`: queued (no send yet), scheduled (a post still ahead),
+    sent, or the way it closed. status filters. Callers check sendlog_ready() first."""
+    t = time.time() if now_ts is None else now_ts
+    out = []
+    with read() as db:
+        for r in db.execute("SELECT a.*, p.name, s.source, s.post_at FROM review_ask a JOIN pr_ref p ON p.repo=a.pr_repo "
+                            "AND p.number=a.pr_number LEFT JOIN send_log s ON s.id=a.send_log_id ORDER BY a.id"):
+            st = (r["closed_why"] or ("queued" if r["send_log_id"] is None else
+                                      "scheduled" if r["source"] == "scheduled" and (r["post_at"] or 0) > t else "sent"))
+            if status is None or st in ((status,) if isinstance(status, str) else status):
+                out.append({"id": r["id"], "pr": f"{r['name']}#{r['pr_number']}", "reviewer": r["reviewer"],
+                            "created_at": r["created_at"], "by": r["by"], "send_log_id": r["send_log_id"], "status": st})
+    return out
+
+
+def _send_legacy(r, skipped):
+    """One legacy line as a send_log row, or None with the reason counted. A row without `action` was appended by hand
+    for a request someone sent outside the round: a sent request, timed by `at`, `date` or `slack_ts`."""
+    if not isinstance(r, dict) or not (r.get("pr") and r.get("reviewer")):
+        skipped["no_pr_or_reviewer"] += 1
+        return None
+    if isinstance(r["pr"], int):
+        skipped["int_pr"] += 1
+        return None
+    if not isinstance(r["pr"], str) or not pr_split(r["pr"]) or not isinstance(r["reviewer"], str):
+        skipped["pr_text"] += 1
+        return None
+    if "action" not in r:
+        try:
+            at = r.get("at") or (dt.datetime.fromisoformat(r["date"].replace("Z", "+00:00")).timestamp() if r.get("date")
+                                 else float(r["slack_ts"]))
+        except (KeyError, TypeError, ValueError, AttributeError):
+            skipped["no_time"] += 1
+            return None
+        return {"pr": r["pr"], "reviewer": r["reviewer"], "head": r.get("head"), "action": "request", "source": "sent",
+                "at": at}
+    src = r.get("source", "sent")
+    if src == "coordinator":  # the name an older round gave a send it made itself
+        skipped["coordinator_to_sent"] += 1
+        r = {**r, "source": "sent"}
+    elif src not in SEND_SOURCES:  # decide() treated any source but refused and skipped as an ask that went out
+        skipped["other_source_to_sent"] += 1
+        r = {**r, "source": "sent"}
+    return r
+
+
+def _sendlog_import(db, lines, by="import"):
+    """The legacy lines into send_log; returns (rows added, counts of what was mapped or skipped, never row text).
+    A row the table's CHECK or UNIQUE refuses is counted and skipped: it never stops the import."""
+    skipped = dict.fromkeys(("bad_line", "no_pr_or_reviewer", "int_pr", "pr_text", "no_time", "coordinator_to_sent",
+                             "other_source_to_sent", "bad_value", "duplicate"), 0)
+    n = 0
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            raw = json.loads(line)
+        except ValueError:
+            skipped["bad_line"] += 1
+            continue
+        row = _send_legacy(raw, skipped)
+        if row is None:
+            continue
+        try:
+            if _send_insert(db, row, by)[1]:
+                n += 1
+            else:
+                skipped["duplicate"] += 1
+        except Exception:  # noqa: BLE001  a CHECK, a number SQLite cannot bind, a missing key: this row only
+            skipped["bad_value"] += 1
+    return n, skipped
+
+
+def sendlog_setup(by="orch db state", auto=False):
+    """Move prs/sendlog.jsonl into send_log: back the file up, import from the copy (so the hash and the rows agree),
+    record the step with the file's absolute path and sha256, tombstone it. A second run finishes a tombstone a crash left
+    and otherwise changes nothing. auto: the call setup and the sync tick make; a DB not ready for it is skipped."""
+    steps = migrated_steps()
+    if SENDLOG_STEP in steps:
+        return _finish(SENDLOG_STEP, _step_row(SENDLOG_STEP))
+    f = sendlog_file()
+    try:
+        open_db().close()
+        if STATE_STEP not in steps:
+            raise NotMigrated(f"{STATE_STEP} is not in {DB_NAME}: run {state_command()} first")
+    except NotMigrated as e:
+        if auto:
+            return f"skipped: {e}"
+        raise
+    if why := sendlog_split():
+        if auto:
+            return f"skipped: {why}"
+        raise Refused(why)
+    if f.is_dir() or (not f.exists() and f.with_name(f.name + ".restore").exists()):
+        raise Refused(f"{f} is a tombstone or missing but {SENDLOG_STEP} is not in {DB_NAME}: a rollback was cut short. "
+                      f"Put the file back by hand ({f.name}.restore beside it, or the export), then run {state_command()}")
+    ts = dt.datetime.now(dt.timezone.utc)
+    with sendlog_lock():  # prs.log appends under it, so the copy, its sha256 and the tombstone see the same file
+        backup, sources = _backup_files(fleet.state_dir(), SENDLOG_STEP, ts)
+        copy_ = backup / f.name
+        lines = copy_.read_text(errors="replace").splitlines() if copy_.is_file() else []  # a bad byte spoils its line only
+        with tx() as db:
+            for ddl in SCHEMA_SENDLOG:
+                db.execute(ddl)
+            n, skipped = _sendlog_import(db, lines)
+            db.execute("INSERT INTO migration (step, ts, backup, sources, stage) VALUES (?,?,?,?, 'imported')",
+                       (SENDLOG_STEP, now(), str(backup), json.dumps(sources)))
+            _event(db, "migration", SENDLOG_STEP, "imported", by, None, {"backup": str(backup), "imported": n, "skipped": skipped})
+        done = _finish(SENDLOG_STEP, _step_row(SENDLOG_STEP))
+    left = ", ".join(f"{k} {v}" for k, v in skipped.items() if v)
+    return f"{done}: {n} send-log rows from {f}" + (f"; {left}" if left else "") + f"; backup {backup}"
+
+
+def sendlog_export(dest):
+    """sendlog.jsonl in the shape older code reads, into dest. The review-ask queue has no legacy file."""
+    rows = send_rows()
+    dest = pathlib.Path(dest).expanduser()
+    dest.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fleet.write_atomic(dest / "sendlog.jsonl", "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
+    os.chmod(dest / "sendlog.jsonl", 0o600)
+    return dest, len(rows)
+
+
+def sendlog_rollback(src, rehearsal=False):
+    """Put an export's file back where the step found it and take the step and its tables out of the DB. What was written
+    since the export is lost with the tables; export again first when that matters. Open asks have no file to go back
+    to, so they stop it: cancel them first."""
+    src = pathlib.Path(src).expanduser()
+    row = _step_row(SENDLOG_STEP) if SENDLOG_STEP in migrated_steps() else None
+    if row is None:
+        raise Refused(f"{SENDLOG_STEP} is not in {DB_NAME}: nothing to roll back")
+    target = pathlib.Path(next(iter(json.loads(row["sources"]))))
+    if not (src / "sendlog.jsonl").is_file():
+        raise Refused(f"{src / 'sendlog.jsonl'} is missing: run `orch db export --legacy --target sendlog {src}` first")
+    if not target.is_dir() or any(target.iterdir()):
+        raise Refused(f"{target} is not an empty tombstone: move what is there aside first")
+    if live := asks(status=("queued", "scheduled")):
+        raise Refused(f"{len(live)} open review asks have no file to go back to: `orch ask cancel <id>` them first")
+    exported = len((src / "sendlog.jsonl").read_text().splitlines())
+    if exported != len(send_rows()):
+        raise Refused(f"the export holds {exported} rows and the DB {len(send_rows())}: rows were written after it, and the "
+                      f"rollback would drop them. Run `orch db export --legacy --target sendlog {src}` again")
+    if rehearsal:
+        return f"dry-run: would put {target} back from {src} and drop {SENDLOG_STEP}; nothing was changed"
+    staged = target.with_name(target.name + ".restore")
+    shutil.copyfile(src / "sendlog.jsonl", staged)
+    os.chmod(staged, 0o600)
+    with tx() as db:
+        for t in SENDLOG_TABLES:
+            db.execute(f"DROP TABLE {t}")
+        db.execute("DELETE FROM migration WHERE step=?", (SENDLOG_STEP,))
+        _event(db, "migration", SENDLOG_STEP, "rolled-back", "orch db rollback")
+    target.rmdir()
+    os.replace(staged, target)
+    return f"put {target} back from {src}; {SENDLOG_STEP} is out of the DB"
 
 
 # ---------------------------------------------------------------- what older code left
@@ -1872,7 +2198,7 @@ def preflight():
     if os.getpid() not in procs:  # ps failed with no output: an empty table would pass every check below
         return out + ["ps did not list this process: cannot tell which writers run"]
     return (out + check_processes(procs, since) + check_plugin_dirs(procs) + check_plugin_source(fleet.claude_homes())
-            + check_sessions(procs, since) + check_launchers())
+            + check_sessions(procs, since) + check_launchers() + ([why] if (why := sendlog_split()) else []))
 
 
 def _rehearsal_ok():
@@ -2232,7 +2558,7 @@ def _tombstone(sd, names):
         p = sd / name
         if p.is_file():
             p.unlink()
-        p.mkdir(mode=0o700, exist_ok=True)
+        p.mkdir(mode=0o700, parents=True, exist_ok=True)
 
 
 def _set_stage(step, stage):
@@ -2274,10 +2600,11 @@ def _backup_files(sd, step, ts):
     backup.mkdir(mode=0o700)
     os.chmod(backup, 0o700)
     sources = {}
-    for name in _legacy(step):
+    for name in _legacy(step):  # a name is relative to sd, or an absolute path (`sd / name` is then that path)
         if (sd / name).is_file():
-            shutil.copyfile(sd / name, backup / name)
-            os.chmod(backup / name, 0o600)
+            keep = backup / pathlib.Path(name).name  # never `backup / name`: an absolute name would be the original
+            shutil.copyfile(sd / name, keep)
+            os.chmod(keep, 0o600)
             sources[name] = sha256(sd / name)
         else:
             sources[name] = None
@@ -2714,6 +3041,15 @@ def main(argv):
             print("dry-run: nothing written. orch db import --apply")
         elif sub == "state":
             print(state_setup(auto="--auto" in rest))
+            print(sendlog_setup(auto="--auto" in rest))  # the send-log needs the PR references the line above made
+        elif sub == "export" and "--legacy" in rest and "--target" in rest and rest[rest.index("--target") + 1:][:1] == ["sendlog"]:
+            dirs = [a for a in rest[:rest.index("--target")] + rest[rest.index("--target") + 2:] if not a.startswith("--")]
+            if not dirs:
+                raise Refused("export needs the directory to write to: orch db export --legacy --target sendlog DIR")
+            out, n = sendlog_export(dirs[-1])
+            print(f"wrote {out}: {n} send-log rows")
+        elif sub == "rollback" and rest[:1] == ["sendlog"] and [a for a in rest[1:] if not a.startswith("--")]:
+            print(sendlog_rollback([a for a in rest[1:] if not a.startswith("--")][0], rehearsal))
         elif sub == "export" and "--legacy" in rest and "--target" in rest and rest[rest.index("--target") + 1:][:1] == ["state"]:
             i = rest.index("--target")
             dirs = [a for a in rest[:i] + rest[i + 2:] if not a.startswith("--")]

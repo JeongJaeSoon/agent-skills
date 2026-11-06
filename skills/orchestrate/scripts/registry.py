@@ -222,7 +222,8 @@ STORES = [
           rule="which card, agent, board item, decision or PR carries an order; it outlives the unit"),
     Store("migration", "db:migration.stage", {"db.migration": CANONICAL},
           ("store:_fill_decisions", "store:_import_board", "store:_set_stage", "store:rollback_board", "store:restore",
-           "store:land_setup", "store:order_setup", "store:state_setup", "store:state_rollback"),
+           "store:land_setup", "store:order_setup", "store:state_setup", "store:state_rollback",
+           "store:sendlog_setup", "store:sendlog_rollback"),
           ("fleet", "brief"),
           rule="data steps imported (4a-decisions, 4b-board) with the legacy files' sha256; the access gate reads it"),
     Store("landrequest", "db:land_request.status", {"land.request": CANONICAL},
@@ -297,6 +298,19 @@ STORES = [
     Store("prref", "db:pr_ref.state", {"pr.state": CACHE},
           ("store:_pr_stub", "store:_state_import", "store:state_rollback"), ("brief",),
           rule="a reference to a GitHub PR: key, state and the fields rules decide on; GitHub stays canonical"),
+    # -- step 7-sendlog: what watch-prs sent and the owner's queue of asks (needs 6-state for the PR references)
+    Store("sendlogfile", "S/prs/sendlog.jsonl", {"send.log": REMOVED},
+          ("prs:log", "store:_tombstone", "store:sendlog_export", "store:sendlog_rollback"), ("watchprs", "brief"),
+          rule="the send-log before `orch db state`; the step leaves an empty directory here (the backup keeps the file) "
+               "and `orch db export --legacy --target sendlog` writes one for a rollback"),
+    Store("sendloglock", "S/prs/.sendlog.lock", {"send.log": LOCK}, ("store:sendlog_lock",)),
+    Store("sendlog", "db:send_log.source", {"send.log": CANONICAL},
+          ("store:_send_insert", "store:sendlog_rollback"), ("watchprs", "brief"),
+          rule="one row per outcome of a watch-prs action: PR, reviewer, head, action, source, when, post_at, thread, channel"),
+    Store("reviewask", "db:review_ask.closed_why", {"review.ask": CANONICAL},
+          ("store:ask_add", "store:ask_close", "store:_send_insert", "store:sendlog_rollback"), ("watchprs", "brief"),
+          rule="the owner's queue of asks; it points at the send_log row once sent, and `queued`, `scheduled`, `sent` "
+               "are derived from that row"),
     Store("stagesauto", "D/stages-auto.json", {"program.event": DERIVED, "run.dispatch": DERIVED},
           ("stage_auto:refresh",), ("brief", "reorient", "fleet"),
           rule="stage rows per program from its ledger, Run cards and PRs, built each tick and written when they "

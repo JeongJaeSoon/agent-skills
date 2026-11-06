@@ -112,7 +112,7 @@ https://github.com/JeongJaeSoon/agent-skills の Claude Code プラグインを�
 | [チャットとレビュー](docs/skills.ja.md#チャットとレビュー) | `watch-mentions`, `watch-prs` | 自分に関係するチャットと PR を作業として集める |
 | [アダプター](docs/skills.ja.md#アダプター) | `use-tracker`, `use-notes` | Linear と Jira のチケット、Obsidian と Markdown のノート |
 | [文章](docs/skills.ja.md#文章) | `brief`, `stage`, `todo`, `map-features`, `write-plainly`, `prune-comments`, `write-skill` | 状況報告、段階表、やること・保留のキュー、機能マップ、文体、コメント整理、スキル作成のチェック |
-| [pstack](docs/skills.ja.md#pstack-スキルlauren-tanmit) | `architect`, `blast-radius`, `create-verification-skill`, `fan-out`, `figure-it-out`, `how`, `interrogate`, `maintain-verification-skill`, `principles`, `recall`, `reflect`, `show-me-your-work`, `tdd`, `teach`, `why` | 設計、比較、影響範囲、検証、説明、振り返り |
+| [pstack](docs/skills.ja.md#pstack-スキルlauren-tanmit) | `architect`, `blast-radius`, `fan-out`, `figure-it-out`, `how`, `interrogate`, `principles`, `recall`, `reflect`, `show-me-your-work`, `tdd`, `teach`, `verification-skill`, `why` | 設計、比較、影響範囲、検証、説明、振り返り |
 
 pstack グループは Lauren Tan の [pstack](https://github.com/cursor/plugins)(MIT)から取り込んだもので、いまはこのリポジトリで独自に手入れしています。元のファイルは upstream のまま `vendor/pstack` に残し、upstream の変更は任意で有効にする日次ジョブが知らせるので、必要なものだけ手で取り込みます。複数のセッションで働くとき、ワーカーの上にはオーケストレーター(最上位のセッション1つ)とリード(プロジェクトごとに1つ)の2層があります。詳しくは [orchestrate の Roles 表](skills/orchestrate/SKILL.md#roles)(英語)を見てください。
 
@@ -126,6 +126,8 @@ pstack グループは Lauren Tan の [pstack](https://github.com/cursor/plugins
 | `/agent-skills:swarm` | `/agent-skills:fan-out`、sweep モード |
 | `/agent-skills:arena` | `/agent-skills:fan-out`、compete モード |
 | `/agent-skills:handoff-ticket` | `/agent-skills:dispatch-card` の次のチケットモード |
+| `/agent-skills:create-verification-skill` | `/agent-skills:verification-skill` の create モード |
+| `/agent-skills:maintain-verification-skill` | `/agent-skills:verification-skill` の maintain モード |
 
 ## 設定
 
