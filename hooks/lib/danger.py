@@ -134,6 +134,15 @@ def after_switch(c, switched, here):
     sub, args = verb(c.words[1:], {"-C", "-c", "--git-dir", "--work-tree", "--namespace"})
     if sub not in ("switch", "checkout") or "--" in args:  # `checkout -- <file>` restores files
         return switched
+    # `git -C <dir> switch` moves HEAD in <dir>; it counts only when that is the folder a later push runs in.
+    opts, where = c.words[1:len(c.words) - len(args) - 1], here
+    for i, x in enumerate(opts):
+        if x == "-C" and i + 1 < len(opts):
+            where = expand(opts[i + 1], where) or where
+        elif x.startswith(("--git-dir", "--work-tree")):
+            return switched
+    if os.path.realpath(where or ".") != os.path.realpath(here or "."):
+        return switched
     if args == ["-"]:
         return ""
     names = [x for x in args if not x.startswith("-")]
