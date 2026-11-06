@@ -1553,6 +1553,93 @@ def ensure_dash():
         return "dashboard: `orch-dash ensure` timed out; the lines below may be stale"
 
 
+def note_file(cfg, slug):
+    """(path, why not) of the program note when it sits in a markdown notes root this process may read. An Obsidian
+    vault is read only through its MCP or CLI path (use-notes), so it is never opened from here."""
+    try:
+        user = json.loads(pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-skills.json")
+                          .expanduser().read_text()).get("notes")
+    except (OSError, ValueError, AttributeError):
+        user = None
+    user = user if isinstance(user, dict) else {}
+    mine = cfg.get("notes") if isinstance(cfg.get("notes"), dict) else {}
+    if (mine.get("adapter") or user.get("adapter")) != "markdown":
+        return None, "the notes store is not a markdown root"
+    root = mine.get("root") or (user.get("markdown") or {}).get("root") or "~/notes"
+    if cfg.get("note"):  # `orch init --note`: the note the lead named, or nothing; never another copy
+        named = pathlib.Path(str(cfg["note"])).expanduser()
+        return (named, None) if named.is_file() else (None, f"the note named in program.json is not a file: {cfg['note']}")
+    found = sorted(pathlib.Path(root).expanduser().rglob(f"program-{slug}.md"))
+    if len(found) > 1:
+        return None, f"{len(found)} files named program-{slug}.md under {root}; `orch set {slug} note <path>` names one"
+    return (found[0], None) if found else (None, f"no program-{slug}.md under {root}")
+
+
+def note_values(text):
+    """The values a program note spells in the template's own shape, as {key: value}. A line in another shape, a
+    template placeholder (`<…>`) and a deadline that is no timestamp are left out: only a fixed format is compared."""
+    out = {}
+    head = re.search(r"^- 머지 정책:(.*)$", text, re.M)
+    if head:
+        line = head.group(1)
+        if m := re.match(r"\s*(autonomous|human-gate)\s*(?:·|$)", line):
+            out["merge_policy"] = m.group(1)
+        if m := re.search(r"동시성 천장\s*(\d+)", line):
+            out["ceiling"] = int(m.group(1))
+        if m := re.search(r"마감\s+(\S+)", line):
+            v = m.group(1)
+            if v == "없음":
+                out["deadline"] = None
+            elif not v.startswith("<"):
+                try:
+                    parse_ts(v)
+                    out["deadline"] = v
+                except ValueError:
+                    pass
+    section = re.search(r"^## 완료 조건.*?$(.*?)(?=^## |\Z)", text, re.M | re.S)
+    if section:  # a section with no ticket is a predicate emptied in the note, not a value left out
+        out["predicate"] = re.findall(r"^\s*- \[[ xX]\]\s+([A-Z0-9]*[A-Z][A-Z0-9]*-\d+(?:-[A-Z0-9]+)*)\b",
+                                      section.group(1), re.M)
+    return out
+
+
+def note_lines(p):
+    """Step 5 of `status`: the program note is a copy of program.json's values, so say when a value in it differs.
+    Reads the note, writes nothing; program.json stays the source and `orch set` is the only way to change it."""
+    path, why = note_file(p.cfg, p.slug)
+    if path is None:
+        return [f"note values: not compared ({why})"]
+    try:
+        have = note_values(path.read_text())
+    except OSError as e:
+        return [f"note values: not compared ({path.name} not read: {type(e).__name__})"]
+    if not have:
+        return ["note values: none in the note (values come from `orch status`)"]
+    diffs = []
+    cfg = p.cfg
+    for key in ("merge_policy", "ceiling"):
+        if key in have and have[key] != cfg.get(key):
+            diffs.append(f"{key}: note {have[key]}, program.json {cfg.get(key)}")
+    if "deadline" in have:
+        mine = cfg.get("deadline")
+        same = (have["deadline"] is None and not mine) or (
+            have["deadline"] and mine and parse_ts(have["deadline"]) == parse_ts(mine))
+        if not same:
+            diffs.append(f"deadline: note {have['deadline'] or 'none'}, program.json {mine or 'none'}")
+    if "predicate" in have:
+        note_only = [t for t in have["predicate"] if t not in cfg.get("predicate", [])]
+        json_only = [t for t in cfg.get("predicate", []) if t not in have["predicate"]]
+        if note_only or json_only:
+            diffs.append("predicate: " + ", ".join(
+                x for x in (f"note only {' '.join(note_only)}" if note_only else "",
+                            f"program.json only {' '.join(json_only)}" if json_only else "") if x))
+    if diffs:
+        return ["note values: DIFFER from program.json — " + "; ".join(diffs)
+                + " (program.json is the source; the note is a copy, so correct the note, and `orch set` only if "
+                  "program.json is the stale one)"]
+    return [f"note values: match program.json ({', '.join(have)})"]
+
+
 def dashboard_lines(slug):
     """Keep the dashboard server up (`orch-dash ensure`), and bring back what only its collector sees:
     whether each worker's session is moving, free capacity and ledger gaps. Stale data prints nothing.
@@ -1770,6 +1857,7 @@ def cmd_status(argv):
                           leftover=sum(active is False for _, _, active, _ in leftover))
     budget_note = f" (budget {used:.0%} used)" if used is not None else ""
     lines.append(f"next: {nxt}{budget_note}")
+    lines += note_lines(p)
     print("\n".join(lines + dashboard_lines(p.slug)))
     if not wait_ok:
         sys.exit(1)
