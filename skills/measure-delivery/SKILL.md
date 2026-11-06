@@ -1,6 +1,6 @@
 ---
 name: measure-delivery
-description: Use when asked how a project or autonomous run actually went — "성과 측정", follow-up/derived ticket growth after the initial design, whether the backlog is converging, accepted changes, rework, escaped defects, or token cost per merged PR — and at the Close of an `orchestrate` program.
+description: Use when asked how a project or autonomous run went — "성과 측정", derived-ticket growth, backlog convergence, rework, escaped defects, tokens per merged PR — and at an orchestrate program's Close. An orchestrator dispatches it instead.
 ---
 
 # Measure delivery

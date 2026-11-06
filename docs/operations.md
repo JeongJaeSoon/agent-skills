@@ -156,9 +156,10 @@ claude plugin eval <체크아웃> --case recall --runs 1 --ablation none --no-pu
 
 명령은 `bin/`에 있다: `orch`(프로그램 원장과 착지 게이트), `orch-dash`(대시보드), `skills-sync`(동기화와 reload 브로드캐스트), `secure-fill`, 그리고 LaunchAgent 도구 `preview-watch`(열린 링크는 `preview-links`)·`share-server`·`reap-hard`(문서: [preview-watch](preview-watch.md), [share-server](share-server.md), [reap-hard](reap-hard.md)). 대시보드 페이지 구성은 `skills/orchestrate/references/dashboard.md`.
 
-pstack upstream은 이렇게 따라간다. 출처와 수정 내용은 `vendor/pstack/NOTICE.md`, 고정 커밋은 `vendor/pstack/manifest.json`.
+pstack에서 가져온 스킬은 이 저장소가 따로 관리하고, upstream 원본은 `vendor/pstack`에 pin 시점 그대로 둔다. 출처와 처음 가져올 때의 수정은 `vendor/pstack/NOTICE.md`, 고정 커밋과 파일 목록은 `vendor/pstack/manifest.json`. upstream 변경은 알림만 받고, 옮길 것은 diff를 읽고 `skills/`에 손으로 고친다.
 
 ```bash
-python3 scripts/pstack-sync.py            # upstream 변경 확인 (쓰지 않음)
-python3 scripts/pstack-sync.py --write    # 충돌이 없을 때만 반영하고 pin 갱신
+python3 scripts/pstack-sync.py            # 사본과 upstream 비교: changed·deleted·new·drift 한 줄씩 (쓰지 않음)
+python3 scripts/pstack-sync.py --write    # 사본을 upstream으로 새로 쓰고 pin 갱신 (skills/는 안 건드림)
+skills-sync setup enable pstack-upstream  # 하루 한 번 비교해 차이가 있으면 알림 (docs/automation.md)
 ```

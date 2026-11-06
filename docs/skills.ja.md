@@ -1,4 +1,4 @@
-<!-- translated-from: 46d192e21714ff902c2cfd868cda34e41c299f78 -->
+<!-- translated-from: c37d56fce8a4fb31b1198617603cf36259a6d1e3 -->
 # スキルカタログ
 
 `agent-skills` プラグインに入っているスキル41個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック16個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
@@ -697,4 +697,4 @@ pstack のスキル58個（原則24個と、その他34個）のうち、原則2
 - **取り込んだもの:** ほとんどは指示を減らすコミット（#538、#571、#634）です。そのまま持ってきたファイルは upstream と同じにしました。直して持ってきたファイルには、3-way マージで短くなった文と新しいルールを取り込みました。新しいルールは、show-me-your-work の run ごとの `start` 行、create-verification-skill の「準備完了は使える状態」と代わりの環境で確かめたときの限界、architect の「次の貢献者はエージェント」という基準、arena の候補が退けた案を書くルールなどです。新しい原則 Explain the Number とその測定チェックリストを `principles` に加えました。
 - **大きく短くなった原則5つ:** encode-lessons-in-structure、laziness-protocol、guard-the-context-window、exhaust-the-design-space、migrate-callers-then-delete-legacy-apis は、upstream が文がなくてもエージェントが守る節を消したため（#571、#634）数行だけになりました。そのまま（verbatim）持ってくるファイルは upstream にバイト単位で合わせるのが同期の方針なので、手を加えずに取り込みました。いつ適用するかは同じファイルの frontmatter の description が今も示していて、ファイルと一緒に読まれます。reflect の圧縮を取り込まなかったのは、直して持ってきた（adapted）ファイルで、マージ結果がこのリポジトリの節の構成を上書きしたからです。
 - **取り込まなかったもの:** Cursor のモデルルールの行（`pstack-models.mdc`、モデルの slug、`generalPurpose`、`readonly`）、サブエージェントの effort を poteto-mode に合わせる行（#613）、reflect 本文の組み直し。reflect はこのリポジトリのモード構成のままです。移して書いた（derived）ファイルの元になった upstream の変更（opening-a-pr の PR 本文の節、shipping の着地順）は反映していません。
-- **次の同期:** `python3 scripts/pstack-sync.py`（dry-run）から始めます。直して持ってきたファイルはほとんど衝突するので手でマージします。衝突なくマージされた部分にも Cursor の行が混ざるので、denylist の結果と diff 全体を読みます。
+- **2026-11-06 から:** マージで upstream に追随するのはやめました。取り込んだスキルはこのリポジトリで独自に手入れし、upstream の原本は pin 時点のまま `vendor/pstack` に置きます。`python3 scripts/pstack-sync.py` が原本と upstream の違いをファイルごとに1行で示し、`pstack-upstream` 自動化（既定は off）が1日1回同じ比較を回して、違いがあれば通知します。取り込むものは diff を読んで `skills/` に手で反映します。

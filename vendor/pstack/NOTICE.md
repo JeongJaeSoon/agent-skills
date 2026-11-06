@@ -2,10 +2,10 @@
 
 이 저장소의 일부 파일은 [cursor/plugins](https://github.com/cursor/plugins)의 `pstack`(Lauren Tan, MIT)에서 가져왔다. 라이선스 전문은 같은 폴더의 `LICENSE`에 있다. 고정 커밋(`pin`), pstack 버전(`upstream_version`), 파일 목록은 `manifest.json`이 정본이다.
 
+- 이 폴더의 `skills/`는 `manifest.json`의 각 파일을 `pin` 시점 upstream 그대로(바이트 단위) 둔 원본 사본이다. 손으로 고치지 않는다. 플러그인은 루트의 `skills/`만 읽으므로 이 사본은 스킬로 실리지 않는다.
+- 루트 `skills/`의 스킬은 이 저장소가 따로 관리한다. 아래 표의 방식은 처음 가져올 때의 모습이다. `verbatim`은 그대로, `adapted`는 표의 수정만 해서 가져왔고, `derived`는 upstream 여러 파일을 합치거나 번역해 새로 썼다(`manifest.json`에 없다). 그 뒤의 수정은 이 저장소의 커밋 기록이 맡는다.
 - 스킬 파일 자체에는 출처 줄을 두지 않는다. 출처와 라이선스 고지는 이 문서, `LICENSE`, `manifest.json`, README가 맡는다. 이 폴더는 플러그인에 함께 실린다.
-- `verbatim`은 upstream과 바이트 단위로 같다. `adapted`는 아래 표의 수정만 했다. `derived`는 upstream 여러 파일을 합치거나 번역해 새로 쓴 파일이다. 3-way 병합이 맞지 않아 `manifest.json`에 넣지 않으므로 동기화 스크립트가 다루지 않고, upstream이 바뀌면 사람이 읽고 손으로 반영한다.
-- 동기화: `python3 scripts/pstack-sync.py`(기본 dry-run, `--write`는 충돌 0일 때만 쓰고 pin을 올린다). 스크립트 자체 검사는 `bash scripts/pstack-sync-test.sh`.
-- 3-way 병합은 텍스트 충돌만 잡는다. 동기화 PR에서는 새로 들어온 문장이 사용자 규칙(`~/.claude/CLAUDE.md`)과 부딪히지 않는지, 설치되지 않은 스킬을 부르지 않는지 사람이 읽고 확인한다.
+- upstream 변경 확인: `python3 scripts/pstack-sync.py`가 사본과 upstream을 비교해 바뀐(changed)·지워진(deleted)·새(new)·사본이 어긋난(drift) 파일을 한 줄씩 보여 준다. 아무것도 쓰지 않는다. `--write`는 사본을 upstream으로 새로 쓰고 pin을 올린다. 루트 `skills/`에 무엇을 옮길지는 사람이 diff를 읽고 정해 손으로 고친다. 그때 새 문장이 사용자 규칙(`~/.claude/CLAUDE.md`)과 부딪히지 않는지, 설치되지 않은 스킬을 부르지 않는지 확인한다. 스크립트 자체 검사는 `bash scripts/pstack-sync-test.sh`.
 
 ## 파일별 수정
 
@@ -27,9 +27,9 @@
 | `skills/architect/references/runner-prompt.md` | 같은 경로 | adapted | encode-lessons-in-structure 참조를 `principles` → Encode Lessons in Structure로. 0.15.32 동기화에서 "Short call chains" 줄의 laziness-protocol 인용을 뺌(upstream #571이 3파일 규칙을 지움). 3파일 기준은 이 저장소가 유지하는 경험칙이고 minimize-reader-load는 계층을 줄이는 근거만 댄다 |
 | `skills/tdd/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용(`disable-model-invocation` 삭제). 중복된 "signal이 약하면 테스트를 더하지 않는다" 줄 삭제(upstream #419도 같은 줄을 지움) |
 | `skills/swarm/SKILL.md` | 같은 경로 | adapted | Agent 또는 Orca worker 어댑터, worktree 격리, base-branch 유지. 고정 모델·별도 모델 플러그인 의존 제거. |
-| `skills/reflect/SKILL.md` | 같은 경로 | adapted | session·program·standing 모드, 증거 묶음, 두 번 발생 규칙, 교훈 ID와 이력 보존, draft PR 절차 유지. 독립 리뷰어를 사용하고 기록 경로·원본 저장소는 명시적 설정으로 선택. Backlog 외부 등록은 사용자 범위에 한정. 0.15.32 동기화에서 upstream의 압축(모델 규칙 줄, 절 번호 바꾸기)은 받지 않았다. upstream `7054003`(플러그인 캐시를 고치지 않는다)은 이미 같은 규칙이 있다 |
-| `skills/reflect/references/{judgment,tooling,divergent}-reviewer.md` | 같은 경로 | adapted | 스킬 사용 판정 경로를 `.claude/skills`·`~/.claude/skills`·`~/.claude/plugins`로, `Task` → `Agent`, `Skill` 도구 호출을 판정 근거에 추가. judgment·divergent의 "3-5개"를 "미래 행동을 바꾸는 것만, 빈 목록도 가능"으로 |
-| `skills/reflect/references/synthesizer.md` | 같은 경로 | adapted | `create-skill` → `skill-creator`. Backlog 를 "devex / backlog tracker" 가 아니라 팀의 트래커로(부모가 `use-tracker` 로 등록) |
+| `skills/reflect/SKILL.md` | 같은 경로 | adapted | session·program·standing 모드, 증거 묶음, 두 번 발생 규칙, 교훈 ID와 이력 보존, draft PR 절차 유지. 독립 리뷰어를 사용하고 기록 경로·원본 저장소는 명시적 설정으로 선택. Backlog 외부 등록은 사용자 범위에 한정. 0.15.32 동기화에서 upstream의 압축(모델 규칙 줄, 절 번호 바꾸기)은 받지 않았다. upstream `7054003`(플러그인 캐시를 고치지 않는다)은 이미 같은 규칙이 있다. standing 모드의 잠금·cursor·waiting 절차는 로컬 `scripts/reflect_round.py`로, program 증거 묶음과 usage 행 라우팅은 로컬 references로 옮겼다. 스킬 편집 라우팅은 `write-skill`, draft PR에는 독립 리뷰와 보드 행을 더했다 |
+| `skills/reflect/references/{judgment,tooling,divergent}-reviewer.md` | 같은 경로 | adapted | 스킬 사용 판정 경로를 `.claude/skills`·`~/.claude/skills`·`~/.claude/plugins`로, `Task` → `Agent`, `Skill` 도구 호출을 판정 근거에 추가. judgment·divergent의 "3-5개"를 "미래 행동을 바꾸는 것만, 빈 목록도 가능"으로. 세 템플릿이 함께 쓰는 문장(편집 금지, transcript 불신, 사용한 스킬로 범위 한정, drift 제외)은 로컬 `reviewer-common.md`로 모으고, 템플릿에는 넘길 때 그 전문으로 바꾸는 `<REVIEWER_COMMON>` 표지를 둔다 |
+| `skills/reflect/references/synthesizer.md` | 같은 경로 | adapted | `create-skill` → `write-skill`. Backlog 를 "devex / backlog tracker" 가 아니라 팀의 트래커로(부모가 `use-tracker` 로 등록) |
 | `skills/how/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용. explorer는 내장 `Explore`, 단순 질문은 lead가 직접 탐색·설명, 종합은 general-purpose(opus) 한 번. `Task`·`generalPurpose`·`readonly`·grok 기본값 제거. description의 `why` 안내에 "왜 그렇게 결정됐는지"를 더함 |
 | `skills/how/references/explorer-prompt.md`, `explainer-prompt.md` | 같은 경로 | verbatim | — |
 | `skills/why/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용, description에 한국어 트리거. Cursor `mcps/` 탐색 대신 세션 도구 목록의 MCP로 출처를 고르고, 출처→playbook 표(git·`gh`, Linear/Jira는 `use-tracker`, Notion, Google Drive, Obsidian은 `use-notes`, Slack)를 둠. Datadog·Sentry·warehouse는 연결이 없어 조사자를 띄우지 않고 Sources Consulted에 "접근 없음"으로 남김. Calendar는 날짜 범위 좁히기에만. 좁은 질문은 git·`gh`만으로 답하는 narrow mode(Step 3) 추가. 조사자는 general-purpose Agent이고 쓰기·댓글·메시지 금지를 프롬프트로 전달, 종합은 lead가 직접 하거나 opus Agent 하나. `generalPurpose`·`readonly`·`pstack-models.mdc`·모델 slug 제거. 7개 카테고리 roster를 이 환경에 있는 4개로 줄임. "Default to the full parallel investigation"과 일곱 카테고리 모두 확인 후에만 inline 답을 허용하던 문장 삭제 |
@@ -57,7 +57,7 @@
 | `skills/write-plainly/references/korean.md` | `pstack/skills/unslop/SKILL.md` | derived | unslop의 서식 금지(긴 대시, 문장 중간 콜론, 굵은 글씨+콜론 목록, 장식 이모지)와 챗봇 문구 규칙을 한국어로 옮겼다. 상투어, 번역투, 얼버무림, 주어 생략, 명사 나열, 문체 규칙과 예문은 여기서 새로 썼다 |
 | `skills/brief/SKILL.md` §1 결정 항목·이름 규칙 두 문장 | `pstack/skills/ketchup/SKILL.md`(pin 이후 upstream `978ca6e`에 추가) | derived | 결정 항목에 "답하지 않으면 어떻게 되는지"를, PR·브랜치·워커는 사람이 아는 이름으로 부른다는 규칙을 옮겼다. "마지막 메시지 이후" 범위와 `/ketchup` 명령은 `recall`·`brief`와 겹쳐 가져오지 않았다 |
 
-위 표의 adapted `SKILL.md`는 모두 description을 이 환경의 스킬 목록 예산에 맞춰 줄였다. 트리거 문구와 다른 스킬과의 구분만 남기고 동작 설명은 본문에 맡긴다. upstream의 description 변경은 3-way 병합에서 충돌로 잡히니 이 원칙대로 손으로 합친다.
+위 표의 adapted `SKILL.md`는 모두 description을 이 환경의 스킬 목록 예산에 맞춰 줄였다. 트리거 문구와 다른 스킬과의 구분만 남기고 동작 설명은 본문에 맡긴다. upstream의 description 변경을 옮길 때도 이 원칙대로 손으로 줄인다.
 
 `skills/principles/SKILL.md`는 vendoring 대상이 아니다. poteto-mode의 `## Principles` 절을 참고해 여기서 새로 쓴 인덱스이며, 본문에 출처를 적었다.
 

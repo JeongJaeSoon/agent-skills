@@ -22,7 +22,7 @@ Each candidate goes through the checks the real mode will use, in order; the fir
   guard     guard.item (a card: cardguard.guard): the shared keep-only checks, read fresh
 The protect file must be there and readable, as for reap-hard; otherwise the round is refused whole.
 """
-import contextlib, datetime as dt, fcntl, json, math, os, pathlib, signal, sys, time
+import contextlib, datetime as dt, fcntl, json, math, os, pathlib, signal, subprocess, sys, time
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -362,6 +362,26 @@ def gone_card(key):
     return False
 
 
+def volume_inspect(name):
+    """(returncode, stderr) of `docker volume inspect`; (124, "") when it could not run."""
+    try:
+        r = subprocess.run(["docker", "volume", "inspect", name], capture_output=True, text=True, env=reap.ENV,
+                           timeout=CMD_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError):
+        return 124, ""
+    return r.returncode, r.stderr
+
+
+def gone_volume(key):
+    """A stack volume docker says no longer exists. Only that answer counts: a daemon that is down or slow, or a volume
+    that is still there, leaves the target as it was. A stack's owner removes its own volumes (a teardown, a purge) in
+    the hours between a round and the janitor, and leaves no record in the cleaners' logs."""
+    if not str(key).startswith("stack-volume:"):
+        return False
+    rc, err = volume_inspect(str(key).partition(":")[2])
+    return rc != 0 and "no such volume" in err.lower()
+
+
 def diff(hours=48.0, now=None):
     """Every round's "act" row, matched to an old cleaner's act of the same effect on the same target that ended
     between the scan that saw the target (the row's seen_t, else the round's candidates_t, else the round's start) and
@@ -375,6 +395,7 @@ def diff(hours=48.0, now=None):
         r["round_t"] = r["round_t"] if isinstance(r.get("round_t"), (int, float)) else r["t"]
     acted = old_actions(min([since] + [r["round_t"] for r in rounds]))
     keys, rank = {}, {"matched": 0, "external": 1, "pending": 2, "excess": 3}
+    gone = {}  # one docker question per target, however many rounds named it
     for r in rounds:
         rt = r["round_t"]
         st = r["seen_t"] if isinstance(r.get("seen_t"), (int, float)) else rt  # the window opens at the scans
@@ -386,8 +407,11 @@ def diff(hours=48.0, now=None):
             opens = max(rt, row["seen_t"]) if finite(row.get("seen_t")) else st
             hit = answers(row, [a for a in acted.get(norm_key(row.get("key")), ()) if opens <= a["t"] <= rt + lag])
             state = "matched" if hit else "pending" if now < rt + lag else "excess"
-            if state == "excess" and gone_card(row["key"]) and not acted.get(norm_key(row["key"])):
-                state = "external"  # nobody the cleaners know of acted on it, and it is gone: cleaned from outside
+            if state == "excess" and not acted.get(norm_key(row["key"])):
+                if row["key"] not in gone:
+                    gone[row["key"]] = gone_card(row["key"]) or gone_volume(row["key"])
+                if gone[row["key"]]:
+                    state = "external"  # nobody the cleaners know of acted on it, and it is gone: cleaned from outside
             k = keys.setdefault(row["key"], {"key": row["key"], "rule": row.get("rule"), "state": state,
                                              "rounds": 0, "first": rt})
             k["rounds"] += 1
@@ -424,7 +448,7 @@ def print_diff(d):
     for r in d["excess"]:
         print(f"  넘침 {r['key']} ({r['rule']})")
     for r in d.get("external") or ():
-        print(f"  외부 정리 {r['key']} ({r['rule']}): 정리기 기록에 없고 이미 사라짐(워커 end-session, lead 의 worktree rm 등)")
+        print(f"  외부 정리 {r['key']} ({r['rule']}): 정리기 기록에 없고 이미 사라짐(워커 end-session, lead 의 worktree rm, 스택 소유자의 teardown 등)")
     v = verdict(d)
     pending = sum(c["pending"] for c in d["by_rule"].values())
     # Pending plans are inside their lag: the window ending a lag ago is the one they prove.

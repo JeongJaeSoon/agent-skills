@@ -33,6 +33,7 @@ skills-sync setup disable <이름>         # 끄기
 | `janitor-load` | on | Orca automation `agent-skills janitor load` | `janitor`와 같고, 만들 때는 `reap.py schedule --load --write`. `janitor`가 꺼져 있거나 없으면 만들지 않는다 | 이 job만 끈다 |
 | `preview-watch` | off | LaunchAgent `io.github.jeongjaesoon.preview-watch` | tailscale CLI가 없으면 거부한다. 있으면 `preview_watch.py install` | `preview_watch.py uninstall`(watcher가 연 serve 항목도 닫는다) |
 | `sync` | on | Orca automation `agent-skills sync`(에이전트 없음, [아래](#에이전트-없이-도는-주기-작업)) | 없으면 만든다(15분마다 `sync.py sync`). 있으면 trigger·precheck·timeout·prompt 중 다른 것만 맞추고 켠다 | `orca automations edit --disabled`. 등록은 남겨 `apply`가 다시 켜지 않는다 |
+| `pstack-upstream` | off | Orca automation `agent-skills pstack-upstream`(에이전트 없음) | `sync`와 같다. 하루 한 번 `pstack-sync.py --notify`로 cursor/plugins의 pstack을 `vendor/pstack` 사본과 비교해 차이를 알린다(upstream 커밋마다 한 번). `skills/`와 사본은 건드리지 않는다. 이 저장소를 고치는 PC에서만 켠다 | `sync`와 같다 |
 | `pressure-watch` | on | Orca automation `agent-skills pressure-watch`(에이전트 없음) | `sync`와 같다. 3분마다 `pressure.py round`. `round`가 경고·위험으로 끝나는 exit 1·2는 실패가 아닌 결과로 기록한다 | `sync`와 같다 |
 | `reap-hard` | on(보호 목록 파일이 있을 때) | Orca automation `agent-skills reap-hard`(에이전트 없음) | `sync`와 같다. 15분마다 `reap_hard.py run`. 파일이 없으면 `apply`가 건너뛴다(`enable`은 받는다) | `sync`와 같다 |
 | `orch-dash` | on | Orca automation `agent-skills orch-dash`(에이전트 없음) | `sync`와 같다. 10분마다 `dash.py ensure`로 이 스토어의 대시보드 서버를 확인해 내려갔으면 올린다 | `sync`와 같다 |

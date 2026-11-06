@@ -32,6 +32,27 @@ def items(st, t=None):
 st = f.tick(force=True)
 ss = {s["id"]: s for s in st["sessions"]}
 assert st["root"] == "wt-coord", st["root"]
+
+# Test stacks (stacks.py): off without `dashboard.stacks`; with it, one row per stack, read at most once a minute.
+assert st["stacks"] == [], "no key, no stacks, no network"
+_cfg = pathlib.Path(os.environ["AGENT_SKILLS_CONFIG"])
+_cfg.write_text(json.dumps({"dashboard": {"stacks": [{"name": "stg", "url": "https://stack.example.test", "repo": "acme/app"}]}}))
+_asked = []
+f.fetch_stacks = lambda at, entries: _asked.append(at) or [{"name": e["name"], "ready": True} for e in entries]
+st = f.tick(force=True)
+assert st["stacks"] == [{"name": "stg", "ready": True}] and len(_asked) == 1, st["stacks"]
+f.tick()
+assert len(_asked) == 1, "within STACKS_EVERY the rows are kept, not read again"
+_cfg.write_text(json.dumps({"dashboard": {"stacks": [{"name": "other", "url": "https://other.example.test", "repo": "acme/app"}]}}))
+assert f.tick()["stacks"] == [{"name": "other", "ready": True}] and len(_asked) == 2, "a changed entry is read at once"
+_cfg.unlink()
+assert f.tick(force=True)["stacks"] == [] and len(_asked) == 2, "removing the key turns it off"
+_cfg.write_text(json.dumps({"dashboard": {"stacks": [{"name": "other", "url": "https://other.example.test", "repo": "acme/app"}]}}))
+assert f.tick()["stacks"] == [{"name": "other", "ready": True}] and len(_asked) == 3, "and setting it again reads at once"
+f.fetch_stacks = lambda at, entries: 1 / 0
+assert f.tick(force=True)["stacks"][0]["error"] == "collect: ZeroDivisionError", "a broken fetcher does not stop the tick"
+_cfg.unlink()
+f.tick(force=True)
 assert ss["wt-coord"]["kind"] == "orchestrator" and ss["wt-coord"]["parent"] is None
 assert all(ss[w]["kind"] == "task" and ss[w]["parent"] == "wt-coord" for w in ("wt-login", "wt-export", "wt-docs"))
 assert ss["wt-scratch"]["kind"] == "standalone" and ss["wt-scratch"]["parent"] == "wt-coord"
@@ -1387,6 +1408,15 @@ world.prs[8] = dict(world.prs[7], number=8, state="CLOSED", url="https://github.
 store.load_board({"rows": {"x": {"id": "x", "pr": "acme/tools#8"}}, "later": [{"title": "t", "trigger": "acme/tools#7 머지"}]})
 assert fleet.board_prs() == {"acme/tools#8", "acme/tools#7"}, fleet.board_prs()
 assert next(p for p in pr_tick(viewed=True)["prs"] if p["number"] == 8)["state"] == "CLOSED"
+# A row whose --pr is a bare number (a coordinator report wrote "441") names no repository to probe. It used to reach
+# pr_query's `repo, n = k.split("#")`, raise out of every tick and freeze state.json's generated_at.
+store.load_board({"rows": {"x": {"id": "x", "pr": "acme/tools#8"}, "bare": {"id": "bare", "pr": "441"}},
+                  "later": [{"title": "t", "trigger": "acme/tools#7 머지"}]})
+assert fleet.board_prs() == {"acme/tools#8", "acme/tools#7"}, fleet.board_prs()
+before = f.state["generated_at"]
+clock[0] += dt.timedelta(seconds=30)
+assert pr_tick(viewed=True)["generated_at"] != before, "a tick with a bare-number row still saves a fresh state"
+store.load_board({"rows": {"x": {"id": "x", "pr": "acme/tools#8"}}, "later": [{"title": "t", "trigger": "acme/tools#7 머지"}]})
 # A closed board item no longer holds its PR: prs.json drops it on the next PR tick.
 import tidy  # noqa: E402
 held = {"row:x": "x", store.board()["later"][0]["id"]: "t"}
@@ -1593,6 +1623,35 @@ finally:
     fleet.orca = real_orca
     fleet.RUN_CACHE.clear()
 
+# The terminals the tick already listed are passed to fetch_runs, which then asks Orca for no list of its own; called
+# alone it still asks.
+term_calls = []
+def term_orca(*args, timeout=30):
+    term_calls.append(args[:2])
+    if args[1] == "run-list":
+        return {"runs": [{"id": "run_x", "coordinator_handle": "term_c"}]}
+    return {}
+
+
+real_orca, fleet.orca = fleet.orca, term_orca
+fleet.RUN_CACHE.clear()
+try:
+    fetch_runs({"term_c"})
+    assert ("terminal", "list") not in term_calls, term_calls
+    fetch_runs()
+    assert ("terminal", "list") in term_calls, term_calls
+finally:
+    fleet.orca = real_orca
+    fleet.RUN_CACHE.clear()
+
+seen_live = []
+tick_fleet = fleet.Fleet(fetch_fast=lambda: {"worktrees": [], "terminals": [{"handle": "term_t"}], "messages": []},
+                         fetch_runs=lambda live=None: (seen_live.append(live), {"runs": [], "workers": [], "tasks": [], "gates": []})[1],
+                         graphql=lambda *a, **k: ({}, []), ps_table=lambda: {}, fetch_automations=lambda: [],
+                         fetch_monitors=lambda **k: [], read_screen=lambda h: [])
+tick_fleet.tick(force=True)
+assert seen_live == [{"term_t"}], seen_live
+
 # The tree's root is the orchestrator even when a lead it dispatched runs a newer Run.
 def tree(run_list, workers, wts, orca_parent=None, declared=(), paths=None):
     fast = {"worktrees": [{"worktreeId": w, "path": (paths or {}).get(w, f"/work/{w}"), "displayName": w, "agents": [],
@@ -1727,7 +1786,11 @@ assert [a["name"] for a in st["automations"]] == ["janitor", "pr-sweeper", "week
 secret_out = "## posted with xoxb-" + "1" * 12 + "-" + "a" * 24 + "\nsecond line"
 
 
+auto_calls = []
+
+
 def fake_orca(*args, timeout=30):
+    auto_calls.append(args)
     if args[1] == "list":
         return {"automations": [{"id": "a1", "name": "watch-mentions", "rrule": "*/20 9-20 * * 1-5", "enabled": True,
                                  "nextRunAt": 1791546000000, "lastRunAt": 1791544909459}]}
@@ -1741,6 +1804,69 @@ try:
 finally:
     fleet.orca = real_orca
 assert [r["status"] for r in autos[0]["recent"]] == ["failed"] + ["completed"] * 5, autos
+# Only the newest page is asked for (twice what is shown): without --limit Orca reads an automation's whole history.
+assert ("automations", "runs", "--id", "a1", "--limit", str(2 * fleet.AUTOMATION_RECENT)) in auto_calls, auto_calls
+
+# Pages are ordered by createdAt, not runNumber, and Orca halves a page whose reply is too large and hands back a cursor:
+# the cursor is followed until twice the shown count is in, then the newest runNumbers are kept.
+pages = {None: ([{"runNumber": n} for n in (7, 5, 6)], "c1"), "c1": ([{"runNumber": n} for n in (4, 3, 8)], "c2"),
+         "c2": ([{"runNumber": n} for n in (2, 1)], None)}
+page_calls = []
+def paged_orca(*args, timeout=30):
+    cursor = args[args.index("--cursor") + 1] if "--cursor" in args else None
+    page_calls.append((int(args[args.index("--limit") + 1]), cursor))
+    rows, nxt = pages[cursor]
+    return {"runs": rows, "nextCursor": nxt}
+
+
+real_orca, fleet.orca = fleet.orca, paged_orca
+try:
+    got_rows = fleet.recent_runs("a1")
+finally:
+    fleet.orca = real_orca
+assert page_calls == [(12, None), (9, "c1"), (6, "c2")], page_calls
+assert sorted((r["runNumber"] for r in got_rows), reverse=True)[:fleet.AUTOMATION_RECENT] == [8, 7, 6, 5, 4, 3], got_rows
+
+# A tie on createdAt that runs past the cut keeps being read, or the highest runNumber could stay on a later page; with
+# distinct createdAt the read stops at twice the shown count.
+def run_rows(numbers, tie):
+    return [{"runNumber": n, "createdAt": 100 if tie else 1000 - n} for n in numbers]
+
+
+for tie, expect_calls, expect_rows in ((True, 4, 15), (False, 3, 13)):
+    pages = {None: (run_rows(range(1, 6), tie), "p1"), "p1": (run_rows(range(6, 11), tie), "p2"),
+             "p2": (run_rows(range(11, 14), tie), "p3"), "p3": (run_rows(range(14, 16), tie), None)}
+    page_calls = []
+    fleet.orca = paged_orca
+    try:
+        got_rows = fleet.recent_runs("a1")
+    finally:
+        fleet.orca = real_orca
+    assert len(page_calls) == expect_calls, (tie, page_calls)
+    assert len(got_rows) == expect_rows, (tie, len(got_rows))
+    if tie:
+        assert max(r["runNumber"] for r in got_rows) == 15, got_rows
+
+# A history that cannot be read to the end of a tie, and a cursor that does not advance, are errors, not a wrong row.
+endless = iter(range(1, 1000))
+def tied_forever(*args, timeout=30):
+    n = next(endless)
+    return {"runs": [{"runNumber": n, "createdAt": 100}], "nextCursor": f"c{n}"}
+
+
+def stuck_cursor(*args, timeout=30):
+    return {"runs": [{"runNumber": 1}], "nextCursor": "undefined:r1"}
+
+
+for name, fake in (("tied_forever", tied_forever), ("stuck_cursor", stuck_cursor)):
+    fleet.orca = fake
+    try:
+        fleet.recent_runs("a1")
+        raise AssertionError(f"{name}: expected a SourceError")
+    except fleet.SourceError:
+        pass
+    finally:
+        fleet.orca = real_orca
 assert autos[0]["next_run_at"] == "2026-10-09T11:40:00Z" and "xoxb" not in json.dumps(autos), autos
 assert autos[0]["recent"][0]["summary"] == "posted with [masked]", autos[0]["recent"][0]
 # A long first line reaches the page whole: the table wraps it, nothing here cuts it.

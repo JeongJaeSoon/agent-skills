@@ -1,6 +1,6 @@
 ---
 name: write-skill
-description: "Use before writing or changing a skill, agent definition or CLAUDE.md-style instruction file, in this repo or the user's ~/.claude, and before committing it — \"스킬 만들어줘\", \"스킬 고쳐줘\", \"write a skill\", reflect's Apply step, the flow improver's commit."
+description: "Use before writing or changing a skill, agent definition or CLAUDE.md-style file, and before committing it — \"스킬 만들어줘\", \"스킬 고쳐줘\", \"write a skill\", reflect's Apply step."
 ---
 
 # Write or update a skill
@@ -25,7 +25,7 @@ Before a new skill, or a new section longer than about ten lines, look for its h
 2. Grep the topic's key terms across those directories' `SKILL.md` and agent files.
 3. A skill that already owns the moment (its description names the trigger) gets the change. A new skill only when no existing one is a real home and the need recurs.
 
-Say in the report which skills you checked and why the change went where it did. Drafting a new skill from scratch, or tuning a description that fails to fire, goes through the `skill-creator:skill-creator` skill's loop; this skill's steps 3 to 7 still follow it.
+Say in the report which skills you checked and why the change went where it did. Drafting a new skill from scratch, or tuning a description that fails to fire, goes through a skill-creator skill's draft and test loop when this session lists one (its plugin prefix varies); without one, draft here and use the §5 eval as the test loop. This skill's steps 3 to 7 follow either way.
 
 ## 2. Edit
 
