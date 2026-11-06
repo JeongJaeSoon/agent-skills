@@ -102,7 +102,10 @@ class Env:
         self.env = {k: v for k, v in os.environ.items()
                     if k not in ("TRACKER_FIXTURES", "JIRA_EMAIL", "JIRA_API_TOKEN")}
         self.env.update(HOME=self.home, PATH=bindir + os.pathsep + os.environ.get("PATH", ""),
-                        FAKE_ORCA_LOG=self.log, FAKE_ORCA_SAMPLE=LINEAR_SAMPLE)
+                        FAKE_ORCA_LOG=self.log, FAKE_ORCA_SAMPLE=LINEAR_SAMPLE,
+                        AGENT_SKILLS_STATE=os.path.join(self.tmp.name, "state"))
+        # Most tests are about an adapter, not about choosing one: name linear so no probe call is logged.
+        self.config({"tracker": {"adapter": "linear"}})
 
     def file(self, name, content):
         path = os.path.join(self.tmp.name, name)
@@ -590,10 +593,11 @@ class ConfigAndFixtures(unittest.TestCase):
         self.env.close()
 
     def test_defaults_without_config_file_use_linear(self):
-        # Env's HOME has no agent-skills.json, so this exercises the built-in defaults.
+        # With no agent-skills.json and nothing connected (the fake answers neither probe), the adapter is linear.
+        os.remove(os.path.join(self.env.home, ".claude", "agent-skills.json"))
         proc, out = self.env.run("list", "--project", "demo")
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertTrue(self.env.orca_calls())
+        self.assertIn("list-issues", [c[1] for c in self.env.orca_calls()])
 
     def test_precedence(self):
         self.env.config({"tracker": {"adapter": "jira", "jira": {"base_url": "http://127.0.0.1:9"}}})
@@ -611,7 +615,7 @@ class ConfigAndFixtures(unittest.TestCase):
     def test_merge_keeps_defaults(self):
         path = self.env.file("partial.json", {"tracker": {"jira": {"base_url": "https://x.atlassian.net"}}})
         cfg = tracker.load_config(path)
-        self.assertEqual(cfg["tracker"]["adapter"], "linear")
+        self.assertNotIn("adapter", cfg["tracker"])  # unset stays unset so detection can tell
         self.assertEqual(cfg["tracker"]["jira"]["token_env"], "JIRA_API_TOKEN")
         self.assertEqual(cfg["tracker"]["jira"]["base_url"], "https://x.atlassian.net")
 
@@ -636,6 +640,128 @@ class ConfigAndFixtures(unittest.TestCase):
             self.assertEqual(proc.returncode, 1)
             self.assertIn("write operations are disabled", proc.stderr)
         self.assertEqual(self.env.orca_calls(), [])
+
+
+# The detection fake answers the three probes from MODE: {"linear": [keys], "jira": [keys] | null (not connected)}.
+DETECT_ORCA = r'''#!/usr/bin/env python3
+import json, os, sys
+mode = json.load(open(os.environ["FAKE_ORCA_MODE"]))
+with open(os.environ["FAKE_ORCA_LOG"], "a") as fh:
+    fh.write(json.dumps(sys.argv[1:]) + "\n")
+a = sys.argv[1:]
+def ok(r): print(json.dumps({"ok": True, "result": r})); sys.exit(0)
+if a[:3] == ["linear", "team", "list"]:
+    ok({"teams": [{"key": k} for k in mode["linear"]]})
+if a[:2] == ["jira", "connection"]:
+    ok({"connected": mode["jira"] is not None, "sites": []})
+if a[:3] == ["jira", "project", "list"]:
+    ok({"projects": [{"key": k} for k in mode["jira"] or []]})
+print(json.dumps({"ok": False, "error": {"code": "unknown"}})); sys.exit(1)
+'''
+
+
+class Detect(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        t = self.tmp.name
+        os.makedirs(os.path.join(t, "bin"))
+        os.makedirs(os.path.join(t, "home", ".claude"))
+        orca = os.path.join(t, "bin", "orca")
+        with open(orca, "w") as fh:
+            fh.write(DETECT_ORCA.replace("#!/usr/bin/env python3", "#!" + sys.executable, 1))
+        os.chmod(orca, 0o755)
+        self.mode, self.log, self.repo = (os.path.join(t, "mode.json"), os.path.join(t, "orca.log"),
+                                          os.path.join(t, "repo"))
+        self.git_env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.test", "GIT_COMMITTER_NAME": "t",
+                        "GIT_COMMITTER_EMAIL": "t@example.test", "GIT_CONFIG_GLOBAL": "/dev/null",
+                        "GIT_CONFIG_SYSTEM": "/dev/null"}
+        self.env = dict(os.environ, HOME=os.path.join(t, "home"), PATH=os.path.join(t, "bin") + os.pathsep + os.environ["PATH"],
+                        FAKE_ORCA_MODE=self.mode, FAKE_ORCA_LOG=self.log, AGENT_SKILLS_STATE=os.path.join(t, "state"),
+                        **self.git_env)
+        os.makedirs(self.repo)
+        self.git("init", "-q", "-b", "main")
+        self.git("commit", "-q", "--allow-empty", "-m", "start")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def git(self, *args):
+        subprocess.run(["git", *args], cwd=self.repo, env=self.env, check=True, capture_output=True)
+
+    def connect(self, linear, jira):
+        with open(self.mode, "w") as fh:
+            json.dump({"linear": linear, "jira": jira}, fh)
+        state = os.path.join(self.tmp.name, "state", "tracker-detect.json")
+        if os.path.exists(state):
+            os.remove(state)
+
+    def detect(self, *argv):
+        proc = subprocess.run([sys.executable, TRACKER, *argv, "detect"], cwd=self.repo, env=self.env,
+                              capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return json.loads(proc.stdout)
+
+    def test_no_connection_is_linear(self):
+        self.connect([], None)
+        r = self.detect()
+        self.assertEqual((r["adapter"], r["source"], r["ambiguous"]), ("linear", "default", False))
+
+    def test_one_connection_decides(self):
+        self.connect(["ABC"], None)
+        self.assertEqual(self.detect()["adapter"], "linear")
+        self.connect([], ["ENG"])
+        r = self.detect()
+        self.assertEqual((r["adapter"], r["source"]), ("jira", "orca-connection"))
+
+    def test_both_connected_branch_key_decides(self):
+        self.connect(["ABC"], ["ENG"])
+        self.git("checkout", "-q", "-b", "me/eng-42-fix")
+        r = self.detect()
+        self.assertEqual((r["adapter"], r["source"]), ("jira", "ticket keys in branch"))
+        self.assertIn("eng-42", r["evidence"])
+        self.connect(["ABC"], ["ENG"])
+        self.git("checkout", "-q", "-b", "me/abc-7-fix")
+        self.assertEqual(self.detect()["adapter"], "linear")
+
+    def test_both_connected_commits_decide_when_branch_is_silent(self):
+        self.connect(["ABC"], ["ENG"])
+        self.git("commit", "-q", "--allow-empty", "-m", "fix(x): ENG-9 handle null")
+        r = self.detect()
+        self.assertEqual((r["adapter"], r["source"]), ("jira", "ticket keys in commits"))
+
+    def test_shared_key_and_no_key_are_ambiguous_and_writes_refuse(self):
+        self.connect(["ABC"], ["ABC"])
+        self.git("checkout", "-q", "-b", "abc-1-x")
+        r = self.detect()
+        self.assertEqual((r["adapter"], r["source"], r["ambiguous"]), ("linear", "ambiguous", True))
+        body = os.path.join(self.tmp.name, "body.md")
+        with open(body, "w") as fh:
+            fh.write("x")
+        proc = subprocess.run([sys.executable, TRACKER, "comment", "ABC-1", "--body-file", body], cwd=self.repo,
+                              env=self.env, capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("pass --adapter", proc.stderr)
+        with open(self.log) as fh:
+            self.assertNotIn("comment", fh.read())
+
+    def test_named_adapter_skips_detection_and_config_is_not_written(self):
+        self.connect(["ABC"], ["ENG"])
+        r = self.detect("--adapter", "jira")
+        self.assertEqual((r["adapter"], r["source"]), ("jira", "--adapter"))
+        self.assertFalse(os.path.exists(self.log))
+        self.detect()
+        self.assertFalse(os.path.exists(os.path.join(self.tmp.name, "home", ".claude", "agent-skills.json")))
+
+    def test_result_is_cached_per_head(self):
+        self.connect(["ABC"], ["ENG"])
+        self.git("checkout", "-q", "-b", "eng-1-x")
+        self.detect()
+        probes = len(open(self.log).read().splitlines())
+        self.detect()
+        self.assertEqual(len(open(self.log).read().splitlines()), probes)
+        self.git("commit", "-q", "--allow-empty", "-m", "next")  # a new HEAD is a new key
+        self.detect()
+        self.assertGreater(len(open(self.log).read().splitlines()), probes)
 
 
 if __name__ == "__main__":
