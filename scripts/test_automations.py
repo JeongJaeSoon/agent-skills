@@ -333,7 +333,7 @@ class ShellJobs(Base):
     def test_defaults(self):
         self.assertEqual({n: j.default for n, j in self.jobs.items()},
                          {"pstack-upstream": False, "sync": True, "pressure-watch": True, "reap-hard": True,
-                          "orch-dash": True, "patrol": False, "land-executor": False})
+                          "orch-dash": True, "patrol": False, "land-executor": False, "sweep": False})
 
     def test_patrol_round_fits_the_runner(self):
         """The round's two budgets, plus the wait for a cut scan's last command, end before the runner kills the job,
@@ -349,6 +349,41 @@ class ShellJobs(Base):
         self.assertEqual(au.reap.SPAWN_TIMEOUT_S, 400, "reap-hard's spawned patrol gets the job's runner limit")
         self.assertLess(patrol.BUDGET_S + patrol.CANDIDATE_BUDGET_S + candidates.CUT_WAIT_S, 400)
         self.assertGreater(patrol.FALLBACK_DUE_S, 1800, "reap-hard's fallback never fires while the job keeps its beat")
+
+    def test_sweep_is_the_tick_with_room_for_its_steps_and_is_off_by_default(self):
+        j = self.jobs["sweep"]
+        self.assertIs(au.SWEEP, j)
+        self.assertEqual(j.job_name, "agent-skills sweep")
+        self.assertEqual(j.argv[1:], [str(au.REAP.parent / "sweep.py"), "tick"])
+        w = j.want()
+        self.assertEqual((w["trigger"], w["precheck-timeout"], w["prompt"]), ("*/15 * * * *", au.SWEEP_TIMEOUT_S, au.SHELL_PROMPT))
+        self.assertIn("orca_job.py run sweep ", w["precheck"])
+        self.assertIn(f"--timeout {au.SWEEP_TIMEOUT_S - 20} ", w["precheck"])
+        import sweep
+        steps = sweep.PATROL_WAIT_S + sweep.RUN_BUDGET_S + sweep.STEP_TIMEOUT_S + sweep.RUN_BUDGET_S
+        self.assertLess(steps, au.SWEEP_TIMEOUT_S - 20)  # a tick that uses every budget still ends before its precheck is killed
+        self.orca([])
+        self.assertEqual(au.decide(j)[0], "skip")  # apply never turns it on
+
+    def test_sweep_needs_the_protect_list_like_reap_hard(self):
+        j = self.jobs["sweep"]
+        fake = self.orca([])
+        with mock.patch.object(au, "sweep_protect_problem", return_value="no protect file"):
+            self.assertEqual(j.status(), ("unconfigured", "no protect file"))
+            code, msg = j.enable(False)
+        self.assertEqual(code, 1)
+        self.assertIn("no protect file", msg)
+        self.assertEqual(self.creates(fake), [])
+        with mock.patch.object(au, "sweep_protect_problem", return_value=None):
+            self.assertEqual(j.enable(False)[0], 0)
+        self.assertEqual(self.creates(fake)[0][self.creates(fake)[0].index("--name") + 1], "agent-skills sweep")
+
+    def test_disable_keeps_the_registration_and_drops_the_record(self):
+        j = self.jobs["sweep"]
+        fake = self.orca([self.stored(j)])
+        self.assertEqual(j.disable()[0], 0)
+        self.assertIn("--disabled", fake.edits()[0])
+        au.orca_job.forget.assert_called_with("sweep")
 
     def test_reap_hard_waits_for_the_protect_list_and_orch_dash_does_not(self):
         # With the patrol job off, reap-hard's pass starts patrol, so this gate is also patrol's fallback gate.
@@ -586,7 +621,7 @@ class Plan(Base):
             return {"janitor": ("on", ""), "sync": ("on", ""), "pressure-watch": ("absent", ""),
                     "reap-hard": ("unconfigured", "no protect file"), "orch-dash": ("absent", ""),
                     "patrol": ("absent", ""), "land-executor": ("absent", ""),
-                    "pstack-upstream": ("absent", "")}[job.name]
+                    "pstack-upstream": ("absent", ""), "sweep": ("absent", "")}[job.name]
         with mock.patch.object(au.ShellJob, "status", status), \
                 mock.patch.object(au.PreviewWatch, "status", return_value=("absent", "")), \
                 mock.patch.object(au.ShareServer, "status", return_value=("absent", "")):

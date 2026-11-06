@@ -460,6 +460,29 @@ def pressure_interval():
     return (planned("reap").get("pressure") or {}).get("interval") or pressure.config()["interval"]
 
 
+SWEEP_TIMEOUT_S = 2700  # sweep.py tick's own step budgets add up to 2500 s (patrol 400, shadow 600, reap-hard 900, round 600)
+
+
+def sweep_interval():
+    import sweep  # not at import: it pulls in the whole guard stack
+    return sweep.interval()
+
+
+def sweep_protect_problem():
+    """Why a tick would stop at once, or None: without the protect list every pass of the old cleaners refuses too."""
+    import guard
+    try:
+        guard.read_protect(guard.protect_file())
+    except guard.NoProtect as e:
+        return str(e)
+    return None
+
+
+def sweep_prepare():
+    why = sweep_protect_problem()
+    return (1, f"sweep 을 켜지 않는다: {why}") if why else (0, "")
+
+
 SHELL_JOBS = (
     ShellJob("pstack-upstream", "하루 한 번 cursor/plugins 의 pstack 이 vendor/pstack 사본에서 얼마나 바뀌었는지 모델 없이 비교해 "
              "알리는 Orca automation(pstack-sync.py --notify). skills/ 와 사본은 건드리지 않는다. 이 repo 를 "
@@ -484,7 +507,13 @@ SHELL_JOBS = (
     ShellJob("land-executor", "orchestrate.land_executor 가 켜진 repo 에서 `orch land` 가 남긴 머지 요청을 1분마다 모델 없이 다시 "
              "검사해 머지하는 Orca automation(skills/orchestrate/references/landing.md). 설정 키를 켜는 것은 skills-config 로 따로 한다",
              ["python3", str(LAND_EXEC), "round"], 60, False, prepare=land_setup),
+    ShellJob("sweep", "정리기 v2 한 회차를 주기마다 모델 없이 돌리는 Orca automation(sweep.py tick: 순찰 → 그림자 → reap-hard → 소유 규칙 정리). "
+             "`reap-hard` 자동화 자리를 이어받고, 한 번에 하나만 돈다(sweep-tick.lock). 규칙을 넘기는 것은 `sweep.py own` 으로 따로 한다. "
+             "보호 목록 파일이 있는 PC에서만 켠다",
+             ["python3", str(REAP.parent / "sweep.py"), "tick"], sweep_interval, False, gate=lambda: sweep_protect_problem(),
+             prepare=sweep_prepare, timeout=SWEEP_TIMEOUT_S),
 )
+SWEEP = next(j for j in SHELL_JOBS if j.name == "sweep")
 
 
 # ---------------------------------------------------------------- share-server (LaunchAgent)
