@@ -54,10 +54,9 @@ def change(fn):
         store = read()
         out = fn(store)
         cutoff = fleet.iso(fleet.utcnow() - dt.timedelta(seconds=DONE_KEEP_S))
-        # An overlay that closes a predicate item stays while that item's row does: dropped, the row would open again.
-        made = stage_auto.read()["rows"]
-        gone = {k for k, r in store["rows"].items()
-                if (r.get("done_at") or "9") < cutoff and not (r.get("overlay") and (made.get(k) or {}).get("item"))}
+        # An overlay is never aged out here (nor hidden in the DB): dropped, the generated row it closes would open
+        # again. merged_counted alone decides whether an old one still applies.
+        gone = {k for k, r in store["rows"].items() if (r.get("done_at") or "9") < cutoff and not r.get("overlay")}
         store["rows"] = {k: r for k, r in store["rows"].items() if k not in with_descendants(store["rows"], gone)}
         store["order"] = [k for k in store["order"] if k in store["rows"]]
         fleet.write_atomic(path(), json.dumps(store, ensure_ascii=False, indent=1) + "\n")
@@ -229,8 +228,11 @@ def merged_counted(store, made):
     for k, r in store["rows"].items():
         if k in rows:
             # A closing overlay outlives the week only on a predicate item, which is the same work whenever it shows
-            # again; a card row's id comes back for a later card of the ticket, which the old close must not end.
-            stale = r.get("overlay") and (r.get("done_at") or "9") < cutoff and not rows[k].get("item")
+            # again, and not while that item has a PR in flight; a card row's id comes back for a later card of the
+            # ticket, which the old close must not end.
+            g = rows[k]
+            stale = r.get("overlay") and (r.get("done_at") or "9") < cutoff and not (
+                g.get("item") and not (g.get("pr") and "merge" not in (g.get("cells") or {})))
             rows[k] = {**rows[k], **{f: v for f, v in r.items() if v and f not in ("cells", "overlay") + (("done_at",) if stale else ())}, **full(r),
                        "cells": {**rows[k].get("cells", {}), **own(r, k)}}
         elif k in into:

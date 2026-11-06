@@ -194,7 +194,7 @@ def build(programs, state, now, held=None):
         # Last resort: the ledger may never tie a predicate item to its PR (`landed` names the PR, `config` the
         # tickets). A title that leads with an item does, but only for an item with no PR yet, and never for a PR
         # that the ledger, a session or a branch already gave to a row.
-        explicit, claimed = set(named), {x for keys in named.values() for x in keys}
+        explicit, claimed = {k for k, keys in named.items() if keys}, {x for keys in named.values() for x in keys}
         for p in mine:
             lead = ticket_of(p.get("title"))
             if lead in items and lead not in explicit and p["key"] not in claimed:

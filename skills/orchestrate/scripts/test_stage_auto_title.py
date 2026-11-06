@@ -37,24 +37,28 @@ for slug, run, evs in (("lambda", "run_l", [{"ts": ago(9), "ev": "ready", "pr": 
                                             {"ts": ago(8), "ev": "landed", "pr": 31, "sha": "e" * 40}]),
                        ("mu", "run_m", [{"ts": ago(9), "ev": "config"}]),
                        ("nu", "run_n", [{"ts": ago(9), "ev": "ready", "pr": 41, "ticket": "N-1"}]),
-                       ("xi", "run_x", [{"ts": ago(9), "ev": "config"}])):
+                       ("xi", "run_x", [{"ts": ago(9), "ev": "config"}]),
+                       ("omicron", "run_o", [{"ts": ago(9), "ev": "config"}])):
     p = tmp / "programs" / slug
     p.mkdir()
     (p / "program.json").write_text(json.dumps({"slug": slug, "repo": "acme/app", "run": run, "created_at": ago(48),
                                                 "predicate": [f"{slug[0].upper()}-1", f"{slug[0].upper()}-2"]}))
     (p / "ledger.jsonl").write_text("".join(json.dumps(e) + "\n" for e in evs))
 state["tasks"] = [{"id": "task_m", "run": "run_m", "title": "M-2: the work", "status": "dispatched"},
-                  {"id": "task_x", "run": "run_x", "title": "Y-9: a card", "status": "dispatched"}]
-state["sessions"] = [{"id": "s-m", "run": "run_m", "task": "task_m"}]
+                  {"id": "task_x", "run": "run_x", "title": "Y-9: a card", "status": "dispatched"},
+                  {"id": "task_o", "run": "run_o", "title": "O-1: the work", "status": "dispatched"}]
+state["sessions"] = [{"id": "s-m", "run": "run_m", "task": "task_m"}, {"id": "s-o", "run": "run_o", "task": "task_o"}]
 state["prs"] += [pr(31, "MERGED", "L-1: umbrella title", merged_at=ago(8), merge_sha="e" * 40),
                  pr(32, "MERGED", "M-1: umbrella title", session="s-m", merged_at=ago(8), merge_sha="f" * 40),
                  pr(41, "MERGED", "misc", merged_at=ago(8), merge_sha="9" * 40),
-                 pr(42, "OPEN", "N-1: a newer PR the ledger never named")]
+                 pr(42, "OPEN", "N-1: a newer PR the ledger never named"),
+                 pr(51, "MERGED", "O-1: the work", merged_at=ago(8), merge_sha="8" * 40)]
 rows = stage_auto.refresh(state, now)
 assert rows["lambda/L-2"]["pr"] == "acme/app#31" and rows["lambda/L-1"]["pr"] is None, rows["lambda/L-1"]
 assert rows["mu/M-2"]["pr"] == "acme/app#32" and rows["mu/M-1"]["pr"] is None, rows["mu/M-1"]
 assert rows["nu/N-1"]["pr"] == "acme/app#41", "a title never replaces the PR the ledger gave the row"
 assert rows["xi/Y-9"]["item"] is False
+assert rows["omicron/O-1"]["pr"] == "acme/app#51", "a session that owns no PR does not stop the title from finding one"
 
 assert rows["kappa/K-1"]["pr"] == "acme/app#21", rows["kappa/K-1"]
 assert rows["kappa/K-1"]["cells"]["merge"]["mark"] == "ok"
@@ -90,23 +94,27 @@ assert table["kappa/K-2"]["done_at"] == stored["done_at"] and table["kappa/K-2"]
 
 # The week a finished row is kept does not reopen a generated row that is still there: its closing overlay stays while
 # the generated row does, in the file and in the DB's hiding of old rows.
-def aged(path):
+def aged(path, *ids):
     store = json.loads(path.read_text())
-    store["rows"]["kappa/K-2"]["done_at"] = fleet.iso(now - dt.timedelta(days=8))
+    for i in ids:
+        store["rows"][i]["done_at"] = fleet.iso(now - dt.timedelta(days=8))
     path.write_text(json.dumps(store))
 
 
-aged(stages.path())
+stages.finish("kappa/K-4", evidence="tracker Done, PR outside the collector's list")
+aged(stages.path(), "kappa/K-2", "kappa/K-4")
 stages.set_next(["unrelated write"])
-assert "kappa/K-2" in stages.read()["rows"], "the write pruned a closing overlay whose generated row is alive"
-assert {r["id"]: r for r in stages.table(state)["rows"]}["kappa/K-2"]["done_at"]
+assert {"kappa/K-2", "kappa/K-4"} <= set(stages.read()["rows"]), "a write pruned a closing overlay"
+table = {r["id"]: r for r in stages.table(state)["rows"]}
+assert table["kappa/K-4"]["done_at"], "a week-old close of an item with no PR in flight holds"
+assert not table["kappa/K-2"].get("done_at"), "a week-old close does not hide an item whose PR is open again"
 # A card row's id comes back for a later card of the ticket, so an old close of it ends nothing.
 stages.finish("xi/Y-9", evidence="card done")
 store = json.loads(stages.path().read_text())
 store["rows"]["xi/Y-9"]["done_at"] = fleet.iso(now - dt.timedelta(days=8))
 stages.path().write_text(json.dumps(store))
 table = {r["id"]: r for r in stages.table(state)["rows"]}
-assert not table["xi/Y-9"].get("done_at") and table["kappa/K-2"]["done_at"], "week-old close: card row open, item row closed"
+assert not table["xi/Y-9"].get("done_at") and table["kappa/K-4"]["done_at"], "week-old close: card row open, item row closed"
 import store as db_store  # noqa: E402
 cut = fleet.iso(now - dt.timedelta(days=7))
 assert db_store._stage_hidden({"o": {"overlay": True, "done_at": "2020-01-01T00:00:00Z"},
