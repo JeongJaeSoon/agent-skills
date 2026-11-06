@@ -97,6 +97,21 @@ runs = [json.dumps([gh_pr(1, rollup=r)]) for r in ([old_fail], [old_fail, rerun_
 assert replay(runs) == ["a/b#1 CI failed"], "the first listing already failed, so only the last one is a change"
 assert pr_watch.failing([old_fail, rerun_ok]) is False and pr_watch.failing([old_fail, rerun_ok, rerun_bad]) is True
 assert pr_watch.failing([{"context": "lint", "state": "ERROR"}, {"context": "lint", "state": "SUCCESS"}]) is False
+# A rerun still running has completedAt 0001-01-01 in gh's output; it is newer than the failure it replaces.
+running = {"workflowName": "ci", "name": "tests", "status": "IN_PROGRESS", "conclusion": "",
+           "startedAt": "2026-11-06T02:00:00Z", "completedAt": "0001-01-01T00:00:00Z"}
+runs = [json.dumps([gh_pr(1, rollup=r)]) for r in ([rerun_ok], [rerun_ok, running], [rerun_ok, running, rerun_bad])]
+assert replay(runs) == ["a/b#1 CI failed"], "success, rerun running, rerun failed: one failure line"
+runs = [json.dumps([gh_pr(1, rollup=r)]) for r in ([old_fail], [old_fail, running], [old_fail, running, rerun_bad])]
+assert replay(runs) == ["a/b#1 CI failed"], "failed, rerun running, failed again: the rerun's failure is new"
+# land-check says "state unknown" when gh gave it nothing: no verdict, so READY, unknown, READY is one READY.
+verdicts = iter(["HOLD: x\n", "READY: ok\n", "HOLD: PR state unknown (no state from gh); run land-check again\n",
+                 "READY: ok\n"])
+out, listings = [], iter([json.dumps([gh_pr(1, "BLOCKED")])] * 4)
+pr_watch.watch(lambda: pr_watch.snapshot(["a/b"], "", "prog", 50,
+                                         lambda a: next(listings) if a[0] == "gh" else next(verdicts)),
+               300, out.append, lambda s: None, rounds=4)
+assert out == ["a/b#1 land-check READY"], out
 # land-check: READY that blips to "no answer" and back is not a new READY; BLOCKED is no reason to skip the check.
 verdicts = iter(["HOLD: x\n", "READY\n", "", "READY\n"])
 out, listings = [], iter([json.dumps([gh_pr(1, "BLOCKED")])] * 4)

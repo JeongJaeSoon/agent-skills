@@ -151,16 +151,35 @@ def sleep_seconds(c):
     return total
 
 
+def loop_around(text, pos):
+    """(start, end) of the innermost `until|while|for … done` that holds offset pos in text (quoted words already
+    blanked). The loop's condition counts: `until gh pr view …; do sleep 30; done` polls in it."""
+    starts, best = [], None
+    for m in re.finditer(r"(?<![\w.-])(until|while|for|done)(?![\w.-])", text):
+        if m[1] != "done":
+            starts.append(m.start())
+        elif starts:
+            start = starts.pop()
+            if start <= pos < m.end() and (best is None or start > best[0]):
+                best = (start, m.end())
+    return best
+
+
 def check_monitor(cmd, cfg):
     """A Monitor loop that polls `gh pr list|view|checks` with a sleep under 300 s wakes the session on every
     state change, most of them with nothing to do. The shared watcher prints only the changes that need a turn."""
     cmds = shell.commands(cmd)
-    polls = any(c.name == "gh" and c.words[1:3] in PR_POLLS for c in cmds)
-    # The sleeps of one command add up (`sleep 150; sleep 150` waits 300 s). A sleep whose argument is a variable
-    # cannot be judged, so it counts for nothing and the call passes without a warning.
-    sleeps = [s for c in cmds if (s := sleep_seconds(c)) is not None]
-    wait = sum(sleeps)
-    if not (polls and sleeps and wait < PR_POLL_MIN) or any(c.name == "sleep" and sleep_seconds(c) is None for c in cmds):
+    poll = next((c for c in cmds if c.name == "gh" and c.words[1:3] in PR_POLLS), None)
+    if poll is None:
+        return []
+    # The wait that counts is the one inside the loop around the poll (a sleep before the loop is a one-off), and the
+    # sleeps there add up (`sleep 150; sleep 150` waits 300 s). A sleep whose argument is a variable cannot be
+    # judged, so the call passes without a warning.
+    region = loop_around(shell.command_text(cmd), poll.span[1] - 1)  # a span starts at the blank before the word
+    scope = [c for c in cmds if region is None or region[0] < c.span[1] <= region[1]]
+    sleeps = [sleep_seconds(c) for c in scope if c.name == "sleep"]
+    wait = sum(s for s in sleeps if s is not None)
+    if not sleeps or None in sleeps or wait >= PR_POLL_MIN:
         return []
     return finding(cfg, "orchestrate.pr_poll",
                    f"This Monitor polls `gh pr` every {wait:g} s, and each state change wakes the session. Use "

@@ -46,7 +46,8 @@ def snapshot(repos, branch, land_slug, limit, run=sh):
             ready = False
             if land_slug and p["state"] == "OPEN" and not dirty and not fail:
                 lines = run(["orch", "land-check", land_slug, "--pr", str(p["number"])]).strip().splitlines()
-                ready = lines[-1].startswith("READY") if lines else None
+                # land-check prints "HOLD: PR state unknown …" when gh gave it nothing: that is no verdict.
+                ready = None if not lines or "state unknown" in lines[-1] else lines[-1].startswith("READY")
             cur[f"{repo}#{p['number']}"] = {"state": p["state"], "dirty": dirty, "fail": fail, "ready": ready}
     return cur
 
@@ -56,7 +57,8 @@ def failing(checks):
     latest = {}
     for c in checks:
         key = (c.get("workflowName") or "", c.get("name") or c.get("context") or "")
-        stamp = c.get("completedAt") or c.get("startedAt") or ""
+        # gh prints a run that has not finished with completedAt 0001-01-01: that is no time, so startedAt orders it.
+        stamp = next((s for s in (c.get("completedAt"), c.get("startedAt")) if s and not s.startswith("0001")), "")
         if key not in latest or stamp >= latest[key][0]:
             latest[key] = (stamp, c)
     return any((c.get("conclusion") or c.get("state") or "").upper() in FAILED for _, c in latest.values())
