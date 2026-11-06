@@ -561,7 +561,7 @@ PR を受け持つスキルとマージする主体:
 | `guard.deny.keychain` | deny | `security find-*-password` の `-w`・`-g`、`security dump-keychain` |
 | `guard.deny.url_credentials` | deny | 引数に `scheme://user:secret@` を含む URL |
 | `guard.deny.user_settings` | deny | ユーザー自身の設定への書き込み：`~/.claude/settings.json`・`settings.local.json`（`$CLAUDE_CONFIG_DIR` も）、`~/.claude/agent-skills.json`、secure-fill の `allow.json`。Edit・Write・MultiEdit・NotebookEdit と、Bash のリダイレクト・`tee`・`cp`・`mv`・`sed -i`・`rm` など。プロジェクトの `.claude/settings.json` は対象外です |
-| `guard.deny.plugin_apply` | deny | このプラグインの `setup.py`・`config_emit.py`・`automode_rule.py` とその書き出しコピーの `--apply`、`bootstrap.py --write`。コピーは「runs --apply, never the agent」の一文で見分けます。他のリポジトリの `setup.py` は対象外です |
+| `guard.deny.plugin_apply` | deny | このプラグインの `setup.py`・`config_emit.py`・`automode_rule.py` とその書き出しコピーの `--apply`、`bootstrap.py --write`。コピーは「runs --apply, never the agent」の一文で見分けます。他のリポジトリの `setup.py` は対象外です。通すのは狭いリハーサルだけです。このプラグインの `scripts/setup.py --apply <ハッシュ> --settings-only` を `env` などのラッパーなしで実行し、`HOME`・`CLAUDE_CONFIG_DIR`・`CLAUDE_SETTINGS`・`AGENT_SKILLS_CONFIG`・`AGENT_SKILLS_STATE`・`AGENT_SKILLS_CONFIG_DIR` をそのコマンドに絶対パスで書き、すべてリンクや `..` を解いた実パスが現在の worktree の下にあり、実際のユーザー設定ではない場合です。欠けた変数、継承された変数、他のオプション、他のスクリプトは拒否します |
 | `guard.deny.slash_send` | deny | `orca terminal send` での `/reload…`・`/model` の入力 |
 | `guard.deny.prompt_substitution` | deny | `orca worktree create --prompt` のコマンド置換（`$(…)`、バッククォート） |
 | `guard.deny.self_exempt_label` | deny | `gh` で `no-visual-change` ラベルを付けること（`pr create --label`、`pr edit --add-label`、`issue edit`、`gh api …/labels`） |

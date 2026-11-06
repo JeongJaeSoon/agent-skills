@@ -252,7 +252,7 @@ def check_command(c, masked, cfg, cwd, session, here=None):
                                                   "an authenticated CLI (`gh`) instead."))
     if PYTHON.fullmatch(name) or name.endswith(".py"):
         script = name_script(w)
-        if script and plugin_apply(script, w, here):
+        if script and plugin_apply(script, w, here) and not scratch_apply(script, c, cwd, here, masked):
             out.append(("guard.deny.plugin_apply", f"`{os.path.basename(script)}` with --apply/--write changes the "
                                                    "user's settings or scheduled jobs; the user runs that line, never "
                                                    "the agent. Hand them the exact command."))
@@ -342,6 +342,73 @@ def plugin_apply(script, w, cwd):
             return bool(APPLY_MARK.search(f.read(4096)))
     except OSError:
         return False
+
+
+SCRATCH_VARS = {"HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_SETTINGS", "AGENT_SKILLS_CONFIG", "AGENT_SKILLS_STATE",
+                "AGENT_SKILLS_CONFIG_DIR"}
+SETTINGS_CHILDREN = ("settings.json", "settings.local.json", "agent-skills.json", "setup-applied.json")
+HASH = re.compile(r"[0-9a-f]+")
+ASSIGN_WORD = re.compile(r"[A-Za-z_]\w*=")
+ABS_WORD = re.compile(r"/[\w./@+-]+")
+
+
+def scratch_apply(script, c, cwd, here, masked):
+    """True only for one narrow shape, an allowlist: the plugin's own `scripts/setup.py --apply HASH --settings-only`,
+    run with no wrapper, with every variable that picks where it writes assigned in the command itself to an absolute
+    path that resolves (symlinks and `..` followed, also for the files it creates inside) under this checkout's
+    worktree and away from the user's real settings. Anything else, an inherited or unset target included, stays
+    denied: the other apply scripts take targets from a spec or options this reader does not model."""
+    w = c.words
+    if not cwd or cwd is UNKNOWN_DIR or here != cwd or not os.path.isdir(cwd):  # a `cd` earlier on the line
+        return False
+    if expand(script, cwd) != str(ROOT.resolve() / "scripts" / "setup.py") or w[1:2] != [script]:
+        return False
+    rest = w[2:]
+    if "--settings-only" not in rest:  # a full setup also syncs, schedules automations and talks to Orca
+        return False
+    rest.remove("--settings-only")
+    if not (len(rest) == 2 and rest[0] == "--apply" and HASH.fullmatch(rest[1])
+            or len(rest) == 1 and re.fullmatch(r"--apply=[0-9a-f]+", rest[0])):
+        return False
+    # `env -i …`, `command …` and the like, before or after the assignments, can undo them: the words must be six
+    # assignments, then the interpreter.
+    toks = c.raw.split()
+    if len(toks) < 7 or not all(ASSIGN_WORD.match(t) for t in toks[:6]) or toks[6] != w[0]:
+        return False
+    if re.search(r"(?<![\w./@+-])(?:cd|pushd|popd)(?![\w./@+-])", masked):  # `cd . && …` also leaves `here` equal to `cwd`
+        return False
+    given = dict(a.split("=", 1) for a in c.assigns)
+    if set(given) != SCRATCH_VARS or len(c.assigns) != len(given):
+        return False
+    top = run(["git", "rev-parse", "--show-toplevel"], cwd).stdout.strip()
+    if not top:
+        return False
+    root = pathlib.Path(os.path.realpath(top))
+    real = [pathlib.Path(p) for p in user_files()]
+
+    def inside(value):
+        if not ABS_WORD.fullmatch(value):  # quotes, `$`, `~`, globs and relative paths are not read here
+            return False
+        for p in (pathlib.Path(value), *(pathlib.Path(value, n) for n in SETTINGS_CHILDREN)):
+            r = pathlib.Path(os.path.realpath(p))
+            if not r.is_relative_to(root) or any(f.is_relative_to(r) or r.is_relative_to(f.parent) for f in real):
+                return False
+        return True
+
+    def plain(value):  # setup.py backs a file up next to it; a link planted there would be followed out of the tree
+        # setup.py backs up beside the resolved file, not beside the link to it: check the value and each settings
+        # file inside it, as given and as resolved.
+        for p in (value, *(os.path.join(value, n) for n in SETTINGS_CHILDREN)):
+            real = os.path.realpath(p)
+            for d in {p, os.path.dirname(p), real, os.path.dirname(real)}:
+                try:
+                    if any(e.is_symlink() and ".bak" in e.name for e in os.scandir(d)):
+                        return False
+                except OSError:
+                    pass
+        return True
+
+    return all(inside(v) and plain(v) for v in given.values())
 
 
 def label_add(w):
