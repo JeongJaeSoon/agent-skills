@@ -122,6 +122,14 @@ assert bash("python3 -c \"# open('a.py','w')\"") == []
 slow = __import__("time").monotonic()
 assert bash("cat <<'EOF'\n" + "python3 <<PY\n" * 8000 + "EOF\n") == []
 assert __import__("time").monotonic() - slow < 1.5  # candidates are filtered by what bash runs, not searched for
+assert bash("python3 -c 'print(1)' <<'PY'\nopen('a.py','w').write('x')\nPY") == []  # stdin is not the program
+assert bash("python3 - 3<<'PY'\nopen('a.py','w').write('x')\nPY") == []
+assert bash("python3 <<'PY'\nopen('a.py','w').write('x')\nPY") == EDIT
+assert bash("(cd /tmp); (echo x > code.py)") == EDIT  # the first subshell's cd ended with it
+assert bash("python3 -c 'from pathlib import Path; print(\"/tmp/x\", Path(\"a.py\").write_text(\"x\"))'") == EDIT
+assert bash("python3 -c 'from pathlib import Path; Path(\"/tmp/x\").write_text(\"x\")'") == []
+assert bash("echo x > ~a_user_that_does_not_exist_999/file") == EDIT  # an unknown home is left as written
+assert "worker.chain" in bash("git status; git commit -am --dry-run")  # the message of -am, no flag
 # a `cd` moves where a relative target lands
 assert bash("cd /tmp && echo x > a.py") == []
 assert bash(f"cd {TREE} && echo x > a.py", cwd=SCRATCH) == EDIT

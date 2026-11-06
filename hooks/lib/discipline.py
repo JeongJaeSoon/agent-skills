@@ -74,7 +74,10 @@ def temp_roots():
 
 
 def resolve(path, cwd):
-    p = pathlib.Path(path).expanduser()
+    try:
+        p = pathlib.Path(path).expanduser()
+    except (RuntimeError, KeyError):  # `~nobody-by-that-name/…`: left as written
+        p = pathlib.Path(path)
     return os.path.realpath(p if p.is_absolute() else os.path.join(cwd or ".", p))
 
 
@@ -189,6 +192,26 @@ def first_arg_end(mask, start):
     return None, False
 
 
+def receiver_start(mask, pos):
+    """Where the expression ending at pos begins: a dotted name, optionally with call or index brackets
+    (`Path('x')`, `a.b[0]`), found backwards over the masked source."""
+    i, depth = pos, 0
+    while i > 0:
+        c = mask[i - 1]
+        if c in ")]":
+            depth += 1
+        elif c in "([":
+            if not depth:
+                break
+            depth -= 1
+        elif not depth and not (c.isalnum() or c in "_."):
+            break
+        i -= 1
+        if i < pos - 300:
+            break
+    return i
+
+
 def in_temp(text):
     return any(f"{q}{r}" in text for r in TEMP_ROOTS for q in "'\"")
 
@@ -209,7 +232,7 @@ def python_writes(code):
         if not opens:
             continue
         if text.startswith(".") or name.startswith("write_"):
-            path = re.split(r"[;\n]", code[max(0, m.start() - 200):m.start()])[-1]  # the receiver's statement
+            path = code[receiver_start(mask, m.start()):m.start()]
         else:
             path = code[m.end():comma]
         if not in_temp(path):
@@ -236,9 +259,11 @@ def python_heredocs(cmds, cmd):
     Only a parsed command counts: a `python3 <<PY` line inside another command's heredoc body is text."""
     out = []
     for c in cmds:
-        if PYTHON.fullmatch(c.name):
-            for _, op, delim in c.redirects:
-                if op in ("<<", "<<-") and (body := heredoc_body(cmd, c.span[1], delim, op == "<<-")) is not None \
+        # Stdin is the program only without `-c`/`-m` and a script operand (`python3 -` or bare).
+        reads_stdin = not {"-c", "-m"} & set(c.words[1:]) and [w for w in c.words[1:] if not w.startswith("-") or w == "-"] in ([], ["-"])
+        if PYTHON.fullmatch(c.name) and reads_stdin:
+            for fd, op, delim in c.redirects:
+                if fd in ("", "0") and op in ("<<", "<<-") and (body := heredoc_body(cmd, c.span[1], delim, op == "<<-")) is not None \
                         and python_writes(body):
                     out.append(("python heredoc file write", None))
     return out
@@ -251,19 +276,19 @@ def cd_targets(cmds, cwd, cmd):
     masked = shell.read(cmd)[0]
     nested = {id(c) for c in cmds if any(o is not c and o.span[0] <= c.span[0] and c.span[1] <= o.span[1]
                                          and o.span != c.span for o in cmds)}
-    out, dirs = {}, {0: cwd}
+    out, stack, pos = {}, [cwd], 0  # one directory per open parenthesis: a `(` copies, a `)` drops
     for c in sorted(cmds, key=lambda c: c.span[0]):
-        before = masked[:c.span[0]]
-        depth = max(before.count("(") - before.count(")"), 0)
-        for k in [k for k in dirs if k > depth]:
-            del dirs[k]
-        for k in range(1, depth + 1):
-            dirs.setdefault(k, dirs[k - 1])
-        out[id(c)] = dirs[depth]
+        for ch in masked[pos:c.span[0]]:
+            if ch == "(":
+                stack.append(stack[-1])
+            elif ch == ")" and len(stack) > 1:
+                stack.pop()
+        pos = c.span[0]
+        out[id(c)] = stack[-1]
         if c.name == "cd" and len(c.words) == 2 and c.words[1] != "-" and not c.words[1].startswith(("$", "-")) \
                 and id(c) not in nested and not (c.piped_from or c.piped_to) \
                 and not masked[c.span[1]:].lstrip().startswith("|"):
-            dirs[depth] = resolve(c.words[1], dirs[depth])
+            stack[-1] = resolve(c.words[1], stack[-1])
     return out
 
 
@@ -354,7 +379,11 @@ def git_cwd(words, cwd):
 
 def flag_given(words, flag):
     """The word is an option of its own, not the value of `-m` and the like."""
-    return any(w == flag and (i == 0 or words[i - 1] not in COMMIT_VALUE_OPTS) for i, w in enumerate(words))
+    def value_of_previous(i):
+        prev = words[i - 1] if i else ""
+        return prev in COMMIT_VALUE_OPTS or re.fullmatch(r"-[A-Za-z]*[mFCct]", prev) is not None
+
+    return any(w == flag and not value_of_previous(i) for i, w in enumerate(words))
 
 
 COMMIT_VALUE_OPTS = {"-m", "-F", "-C", "-c", "-t", "--message", "--file", "--author", "--date", "--template",
