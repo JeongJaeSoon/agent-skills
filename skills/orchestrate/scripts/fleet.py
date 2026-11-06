@@ -242,11 +242,14 @@ def settled_run(got):
             and not any(g.get("status") in ("pending", "open") for g in got["gates"]))
 
 
-def fetch_runs():
+def fetch_runs(live=None):
+    """live: the handles of the terminals Orca lists right now. The tick passes the ones it read a moment ago for its
+    own snapshot; without them (a standalone call, or that read failed) this asks Orca for the list."""
     import orca_settings  # here, not at the top: the hooks that import fleet stay off sqlite3
     listed = orca_settings.run_list(orca, error=SourceError)
     runs = [r for r in listed if not r.get("legacy") and r.get("id") != "run_legacy_local"]
-    live = {t.get("handle") for t in orca("terminal", "list").get("terminals", [])}
+    if live is None:
+        live = {t.get("handle") for t in orca("terminal", "list").get("terminals", [])}
     out = {"runs": runs, "workers": [], "tasks": [], "gates": []}
     for r in listed:
         hit = RUN_CACHE.get(r["id"])
@@ -276,13 +279,33 @@ def fetch_run(r, full):
 AUTOMATION_RECENT = 6  # runs kept per automation: the dashboard's Automations page draws them as a row of blocks
 
 
+def recent_runs(automation_id):
+    """The newest runs of one automation, from the first pages only: without --limit Orca reads the whole history. Orca
+    orders a page by createdAt then id, not by runNumber, so two runs sharing a createdAt can swap at the page edge, and
+    it halves a page whose reply is too large and returns a cursor: ask for twice what is shown and follow the cursor
+    until that many rows are in (or the history ends) and the last row no longer shares its createdAt with the row at the
+    cut (a tie group can run past the page), then the caller sorts by runNumber."""
+    want, rows, cursor = 2 * AUTOMATION_RECENT, [], None
+    for _ in range(4 * want):  # a page holds at least one row; this bounds a cursor that never ends
+        page = orca("automations", "runs", "--id", automation_id, "--limit", str(max(want - len(rows), AUTOMATION_RECENT)),
+                    *(("--cursor", str(cursor)) if cursor else ()))
+        rows += page.get("runs") or []
+        after = page.get("nextCursor")
+        if not after or (len(rows) >= want and rows[-1].get("createdAt") != rows[want - 1].get("createdAt")):
+            return rows
+        if after == cursor:  # a row without createdAt makes Orca's cursor unreadable, and it serves the first page again
+            raise SourceError(f"automation {automation_id}: runs cursor did not advance")
+        cursor = after
+    # Cut short inside a tie group: the newest runNumber may be on a page not read, so say so instead of showing a wrong row.
+    raise SourceError(f"automation {automation_id}: runs history not read to the end of a createdAt tie in {4 * want} calls")
+
+
 def fetch_automations():
     """Orca's scheduled automations, each with its last runs newest first. Only Orca's scheduler is visible here: a
     session's own loop (CronCreate) or a launchd job leaves nothing to collect."""
     out = []
     for a in orca("automations", "list").get("automations", []):
-        runs = sorted(orca("automations", "runs", "--id", a["id"]).get("runs", []),
-                      key=lambda r: r.get("runNumber") or 0, reverse=True)[:AUTOMATION_RECENT]
+        runs = sorted(recent_runs(a["id"]), key=lambda r: r.get("runNumber") or 0, reverse=True)[:AUTOMATION_RECENT]
         out.append({"id": a["id"], "name": mask(a.get("name"), 80), "rrule": a.get("rrule"), "timezone": a.get("timezone"),
                     "enabled": bool(a.get("enabled")), "next_run_at": ms_iso(a.get("nextRunAt")),
                     "last_run_at": ms_iso(a.get("lastRunAt")),
@@ -1805,11 +1828,13 @@ class Fleet:
             try:
                 self.fast = self.fetch_fast()
                 self.ok("orca")
+                live = {t.get("handle") for t in self.fast["terminals"]}
             except SourceError as e:
                 self.ok("orca", str(e))
+                live = None  # the snapshot above is an older tick's: let fetch_runs ask
             if force or not self.last["runs"] or mono - self.last["runs"] >= RUNS_EVERY:
                 try:
-                    self.runs = self.fetch_runs()
+                    self.runs = self.fetch_runs(live)
                     self.ok("runs")
                 except SourceError as e:
                     self.ok("runs", str(e))
