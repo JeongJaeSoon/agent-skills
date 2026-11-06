@@ -97,6 +97,9 @@ assert orch("board", "set", "search", "--status", "maybe")[2].startswith("--stat
 assert board.status_of("⏸️") == board.status_of("⏸") == "held"
 assert orch("board", "set", "search", "--progress", "9/8")[2] == "--progress N/M needs 0 <= N <= M and M > 0"
 assert orch("board", "set", "search", "--progress", "half")[2].startswith("--progress is N/M")
+for bad_pr in ("441", "#441", "tools#441", "https://example.test/x"):
+    code, _, err = orch("board", "set", "search", "--pr", bad_pr)
+    assert code == 1 and err.startswith("--pr is OWNER/REPO#N"), (bad_pr, code, err)
 assert orch("board", "later", "add", "캐시 TTL")[2].startswith("board later add needs")
 assert orch("board", "doing", "add", "다른 팀 답변", "--owner", "사람")[2].startswith("board doing add needs")
 

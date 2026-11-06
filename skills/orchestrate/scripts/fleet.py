@@ -1534,8 +1534,12 @@ def board_prs():
 def program_prs(now):
     """The PR keys named in the ledgers of the programs the stage table shows (stage_auto.py)."""
     import stage_auto  # beside this file; it imports this module
-    return {pr_key(cfg["repo"], e["pr"]) for cfg, events in stage_auto.load_programs()
+    keys = {pr_key(cfg["repo"], e["pr"]) for cfg, events in stage_auto.load_programs()
             if cfg.get("repo") and stage_auto.recent(cfg, events, now) for e in events if e.get("pr") is not None}
+    # A ledger's repo or pr is free text too: "tools#441" reached pr_query and stopped every tick before it saved.
+    for k in sorted(k for k in keys if not FULL_PR_KEY_RE.fullmatch(k)):
+        print(f"fleet: skipped ledger PR {k!r}: not owner/repo#N", file=sys.stderr)
+    return {k for k in keys if FULL_PR_KEY_RE.fullmatch(k)}
 
 
 def pr_query(keys, body):
@@ -2032,6 +2036,9 @@ class Fleet:
         # mine (a hundred or more, 5 s per 25) keep their tier, which is there for CI moves that leave updatedAt alone.
         due = []
         for k in list(owner_of) + [k for k in swept if k not in owner_of] + sorted(named):
+            if not FULL_PR_KEY_RE.fullmatch(k):  # whatever source slipped one in, it costs that key, not the tick
+                errors.append(f"skipped PR key {k!r}")
+                continue
             sid, entry = owner_of.get(k), self.prs.get(k)
             det = (entry or {}).get("detail")
             # A detail read before "base" or "branch" was collected is read again now, so a merged PR does not wait a

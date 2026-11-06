@@ -34,6 +34,10 @@ Allow, so workers never stall on a prompt hours after they loaded a skill:
   set and init, which can change a program's merge policy, backfill, which rewrites the ledger, and land-exec,
   the land executor, whose round merges and belongs to its LaunchAgent
 
+- `skills-sync status`, `skills-sync broadcast` (only its reload flags) and `skills-sync end-check` without `--apply`
+  or `--trash-caches`. `card` is denied or left to the classifier by its brief check; sync, setup, nudge and the rest
+  get no decision, so the classifier judges them.
+
 Ask: `python3 <checkout>/scripts/setup.py --actions-only`, the setup steps that write no Claude settings (setup-pc).
 The dialog says what they do only when <checkout> is this plugin's root or the install dialog's `checkout`;
 another clone's setup.py still gets `ask`, with a sentence that promises nothing. `ask` shows the human a permission dialog even in auto mode, so these persistent jobs start only on a click.
@@ -91,6 +95,7 @@ SLEEP_SOURCE = "(agent-skills hooks/guard.py)"
 SLEEP_LOOP = re.compile(r"(?:^|[;&|(\s])(?:until|while|for)\b[\s\S]*?\bdo\b[\s\S]*?\bsleep\s+(\$|\d+)")
 ORCA_ASK = {"reset", "worker-abandon", "gate-resolve"}
 ORCH_ASK = {"heavy", "set", "init", "backfill", "land-exec"}
+BROADCAST_FLAGS = {"--plugins", "--skills", "--dry-run", "--retry"}
 SETUP_ASK = (f"{PLUGIN} setup: install the 15-minute sync job, turn on the default-on automations (janitor, pressure-watch, "
              "and watch-prs/watch-mentions when their keys are set) and print the check table. It writes no Claude settings.")
 
@@ -221,10 +226,40 @@ def bash(cmd, background, who, cwd=None):
         return decide("allow", f"{PLUGIN}: orca orchestration {words[2]}")
     if words[0] == "orch" and len(words) > 1 and words[1] not in ORCH_ASK and words[1][:1].isalpha():
         return decide("allow", f"{PLUGIN}: orch {words[1]} (the program ledger and landing gate)")
+    if words[0] == "skills-sync":
+        reason = sync_allowed(words[1:])
+        if reason:
+            return decide("allow", f"{PLUGIN}: skills-sync {reason}")
     reason = setup_actions(words)
     if reason:
         return decide("ask", reason)
     return None, None
+
+
+def sync_allowed(args):
+    """What `skills-sync <args>` is allowed as, else None (the auto mode classifier decides).
+    Only the subcommands that change nothing beyond the reload text or a printed verdict pass; card (brief checked
+    above), sync, setup, nudge and `--supersede` are the classifier's."""
+    if args == ["status"]:
+        return "status (read-only)"
+    if args[:1] == ["end-check"]:
+        # --apply closes terminals and removes the worktree; --trash-caches moves files; neither is a verdict read.
+        if set(args) & {"--apply", "--trash-caches"} or any(a.startswith("-") and not a.startswith("--") for a in args):
+            return None
+        return "end-check (verdict only)"
+    if args[:1] == ["broadcast"]:
+        # No argument becomes text: broadcast types only RELOAD and STALE_COMMAND values (sync.py), the latter
+        # (/restart, /reload-plugins) only into an idle session that shows the update notice. test_guard pins that set.
+        rest, i = args[1:], 0
+        while i < len(rest):
+            if rest[i] == "--terminal" and i + 1 < len(rest) and not rest[i + 1].startswith("-"):
+                i += 2
+            elif rest[i] in BROADCAST_FLAGS:
+                i += 1
+            else:
+                return None
+        return "broadcast (fixed reload text)"
+    return None
 
 
 def setup_actions(words):
