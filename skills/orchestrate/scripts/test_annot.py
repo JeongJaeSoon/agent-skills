@@ -51,6 +51,8 @@ LEGACY = {"v": 1, "order": [], "leads": {}, "doing": [], "later": [], "todo": []
     "gone": row("gone", title="old thing", repo="acme/app", worktree="wt-gone"),
     # two cards: its worktree is one, its title names another
     "both": row("both", title="other-card sync", repo="acme/app", worktree="wt-card"),
+    # its title names two cards, whatever its worktree says
+    "twin": row("twin", title="abc-1-login and other-card sync", repo="acme/app", worktree="wt-card"),
     # two rows for one card
     "d1": row("d1", title="d1 job", repo="acme/app", worktree="wt-third"),
     "d2": row("d2", title="d2 job", repo="acme/app", worktree="wt-third"),
@@ -140,12 +142,13 @@ move, left = board.annot_migrate()
 assert sorted(move) == ["wt-card", "wt-other"], move
 assert move["wt-card"] == ("P/one", {"phase": "Stage 2", "progress": [2, 5], "after": "acme/app#3", "owner": "오너", "next": "직접 머지"}), move
 assert move["wt-other"] == ("P/moved", {"phase": "Stage 2"}), "a milestone copy in next is not carried"
-assert sorted(r for r, _, _ in left) == ["both", "d1", "d2", "gone"], left
+assert sorted(r for r, _, _ in left) == ["both", "d1", "d2", "gone", "twin"], left
 why = {r: w for r, w, _ in left}
 assert "no card of Orca's" in why["gone"] and "2 cards" in why["both"] and "2 rows point at card wt-third" in why["d1"], why
+assert "2 cards" in why["twin"], "two names in the title are evidence for two cards, not none"
 rows_before = json.dumps(board.read()["rows"], sort_keys=True)
 code, out, err = orch("board", "annot-migrate")
-assert code == 0 and out.startswith("would move 2 row(s)") and "중복 4건" in out and "orch board drop gone" in out, (out, err)
+assert code == 0 and out.startswith("would move 2 row(s)") and "중복 5건" in out and "orch board drop gone" in out, (out, err)
 assert json.dumps(board.read()["rows"], sort_keys=True) == rows_before, "a dry run writes nothing"
 # the apply waits for the renderer: a moved row would leave the screen with nothing in its place
 refused(lambda: board.annot_migrate(apply=True), "A-ANNOT-b")
@@ -156,7 +159,8 @@ assert code == 1 and "A-ANNOT-b" in err and json.dumps(board.read()["rows"], sor
 board.ANNOT_RENDERED = True
 assert board.annot_migrate(apply=True)[0] == move
 annots = board.read()["annots"]
-assert annots["card:wt-card"]["aliases"] == ["row:P/one"] and annots["card:wt-card"]["owner"] == "오너", annots
+assert annots["card:wt-card"]["aliases"] == ["row:P/one"] and annots["card:wt-card"]["owner"] == "오너" \
+    and annots["card:wt-card"]["next"] == "직접 머지", annots  # the owner block moves as a pair
 assert annots["card:wt-other"]["phase"] == "수동", "the written field won"
 rows = board.read()["rows"]
 assert rows["P/one"]["status"] == "dropped" and rows["P/moved"]["status"] == "dropped" and rows["free"]["status"] == "moving", rows
@@ -177,6 +181,11 @@ snap = json.dumps([board.read()["annots"], board.read()["rows"]], sort_keys=True
 again, left2 = board.annot_migrate(apply=True)
 assert again == {} and left2 == left and json.dumps([board.read()["annots"], board.read()["rows"]], sort_keys=True) == snap, again
 code, out, _ = orch("board", "annot-migrate")
-assert code == 0 and out.startswith("would move 0 row(s)") and "중복 4건" in out, out
+assert code == 0 and out.startswith("would move 0 row(s)") and "중복 5건" in out, out
+# a close the card inherits can be undone: the reopen lands on the row's close, which the alias reads through
+import tidy  # noqa: E402
+
+assert tidy.write(["card:wt-card"], undo=True)[0] == ["card:wt-card"]
+assert store.latest()["card:wt-card"]["ev"] == "reopen" and store.latest()["row:P/one"]["ev"] == "reopen", store.latest()
 
 print("test_annot: ok")

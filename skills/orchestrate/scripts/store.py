@@ -674,9 +674,20 @@ def close_unit(db, line, mark=None):
            dict(db.execute("SELECT * FROM closure WHERE unit=?", (iid,)).fetchone()), line["ts"])
 
 
+def _alias_closure(db, iid):
+    """The unit that holds the close a card inherits (latest()): the row:<id> an annotation took the place of, when
+    card:<worktree> has no close of its own. Any other id as it is."""
+    if not iid.startswith("card:") or db.execute("SELECT 1 FROM closure WHERE unit=?", (iid,)).fetchone():
+        return iid
+    r = db.execute("SELECT data FROM board_row WHERE id=?", (iid,)).fetchone()
+    return next((a for a in json.loads(r["data"]).get("aliases") or ()
+                 if db.execute("SELECT 1 FROM closure WHERE unit=?", (a,)).fetchone()), iid) if r else iid
+
+
 def reopen_unit(db, iid, ts, by, rule="manual", mark=None):
     """Undo a close in one transaction: status back to what the lane has open, or the closure row marked reopen, with the
     evidence it undid (tidy does not close again on it) and, for ext:, a new ext_mark."""
+    iid = _alias_closure(db, iid)
     before = _item_now(db, iid)
     if before:
         db.execute("UPDATE item SET status=?, closed_at=NULL, close_by=?, close_rule=?, close_evidence=NULL, reopen_evidence=?, "

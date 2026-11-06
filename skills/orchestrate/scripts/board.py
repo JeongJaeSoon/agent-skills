@@ -346,8 +346,8 @@ def annot_plan(store=None):
             continue
         claimed = {w for w in (origins.get(rid, {}).get("worktree"), r.get("worktree")) if w}
         found = {w for w in claimed if w in cards}
-        if named := tidy.named(f"{rid} {r.get('title') or ''}", cards):
-            found.add(named["id"])
+        # every card the text names: tidy.named gives none when it names two, which would hide that evidence
+        found |= {c["id"] for c in cards.values() if tidy.named(f"{rid} {r.get('title') or ''}", {c["id"]: c})}
         drop = f"orch board drop {rid}"
         if not found and not claimed:
             continue
@@ -381,9 +381,9 @@ def annot_migrate(apply=False):
             for wt, (rid, fields) in move.items():
                 key = f"{ANNOT_PREFIX}{wt}"
                 cur = dict(store["annots"].get(key) or {"id": key, "kind": store_db.ANNOT_KIND})
-                pair = ("owner", "next")
+                pair_free = "owner" not in cur and "next" not in cur  # the pair moves whole or not at all
                 for k, v in fields.items():
-                    if k in pair and any(p in cur for p in pair) or k in cur:
+                    if k in cur or k in ("owner", "next") and not pair_free:
                         continue
                     cur[k] = v
                 cur["aliases"] = sorted({*cur.get("aliases", ()), f"row:{rid}"})
