@@ -66,7 +66,7 @@ CURL_VALUED = {"-d", "--data", "--data-raw", "--data-binary", "--data-urlencode"
                "--output", "-b", "--cookie", "-X", "--request"}
 # git accepts any unique prefix of a long option, so `--force-wi` is --force-with-lease.
 PUSH_LONG = ["--all", "--atomic", "--branches", "--delete", "--dry-run", "--exec", "--follow-tags", "--force",
-             "--force-if-includes", "--force-with-lease", "--mirror", "--no-dry-run", "--no-verify", "--porcelain",
+             "--force-if-includes", "--force-with-lease", "--mirror", "--no-dry-run", "--no-force", "--no-force-with-lease", "--no-verify", "--porcelain",
              "--progress", "--prune", "--push-option", "--quiet", "--receive-pack", "--recurse-submodules", "--repo",
              "--set-upstream", "--signed", "--tags", "--thin", "--verbose"]
 # Options whose next word is their value; a method option cannot be that word. (-X and --request are not here.)
@@ -139,6 +139,8 @@ def after_switch(c, switched, here):
     for i, x in enumerate(opts):
         if x == "-C" and i + 1 < len(opts):
             where = expand(opts[i + 1], where) or where
+        elif x.startswith("-C") and len(x) > 2:  # `-C/path`
+            where = expand(x[2:], where) or where
         elif x.startswith(("--git-dir", "--work-tree")):
             return switched
     if os.path.realpath(where or ".") != os.path.realpath(here or "."):
@@ -350,7 +352,8 @@ def finder_empties(w):
     """Whether an osascript command tells Finder to empty the trash: `to empty`, `empty trash`, or an `empty` line
     (several -e options are lines of one script)."""
     script = "\n".join(w[i + 1] for i, x in enumerate(w[:-1]) if x == "-e") or " ".join(w)
-    return re.search(r"\bFinder\b.*?(?:\bto\s+empty\b|\bempty\s+(?:the\s+)?trash\b|^\s*empty\s*$)", script,
+    # The last alternative is JXA: `Application("Finder").empty()`.
+    return re.search(r"\bFinder\b.*?(?:\bto\s+empty\b|\bempty\s+(?:the\s+)?trash\b|^\s*empty\s*$|\.empty\s*\()", script,
                      re.I | re.S | re.M) is not None
 
 
@@ -566,7 +569,18 @@ def force_push_default(c, here, switched=None):
             dry = True
     if dry:
         return False
-    forced = any(o == "--force" or o.startswith("--force-with-lease") or "f" in short(o) for o in opts)
+    # --force and --force-with-lease are separate switches, each cancelled by its own --no-… form, last one wins.
+    force = lease = False
+    for o in opts:
+        if o == "--force" or "f" in short(o):
+            force = True
+        elif o == "--no-force":
+            force = False
+        elif o.startswith("--force-with-lease"):
+            lease = True
+        elif o == "--no-force-with-lease":
+            lease = False
+    forced = force or lease
     # --mirror overwrites every remote ref without --force.
     if "--mirror" in opts or forced and ("--all" in opts or "--branches" in opts):
         return True
