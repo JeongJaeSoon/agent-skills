@@ -26,7 +26,7 @@ No model is called. Thresholds live under "reap" → "pressure" in ~/.claude/age
 where they judge, over `idle_window_seconds`. Nothing outside reap's own target list is ever touched: no kill by pattern, no compose down -v,
 no prune, no volume or image removal.
 """
-import contextlib, ctypes, ctypes.util, fcntl, hashlib, json, math, os, pathlib, plistlib, re, shlex, shutil, subprocess, sys, time
+import contextlib, ctypes, ctypes.util, fcntl, hashlib, json, math, os, pathlib, plistlib, re, shutil, subprocess, sys, time
 
 HERE = pathlib.Path(__file__).resolve().parent
 REAP = HERE / "reap.py"
@@ -678,7 +678,8 @@ def send(to, subject, body, kind, run=reap.run):
                 "--json"], check=False) is not None
 
 
-# orchestrate's dashboard lists rows appended here under "Needs you" (fleet.py inbox_add, the same line format).
+# orchestrate's dashboard lists rows appended here under "Needs you" (fleet.py inbox_add, the same line format). Only
+# the danger and swap-growth notes go this way; the held-command queue is read from its own file.
 DASH_KEY = "pressure:danger"
 
 
@@ -725,7 +726,8 @@ def queue_read():
 
 def queue_change(fn):
     """Run fn(queue) under the queue's lock. fn returns None when it changed nothing, so the file is left alone, or the
-    entries whose dashboard row changes. Raises when the lock is not had within LOCK_WAIT_S."""
+    entries it changed. The dashboard reads the queue file itself (fleet.pressure_items), so no row is written for them.
+    Raises when the lock is not had within LOCK_WAIT_S."""
     reap.STATE.mkdir(parents=True, exist_ok=True)
     with open(reap.STATE / "pressure-queue.lock", "w") as lock:
         until = time.monotonic() + LOCK_WAIT_S
@@ -744,31 +746,11 @@ def queue_change(fn):
             cutoff = time.time() - QUEUE_KEEP_S
             save_state({k: e for k, e in q.items()
                         if e["state"] in ("waiting", "retrying") or e.get("ended", e["added"]) >= cutoff}, QUEUE)
-    for e in changed:
-        queue_note(e)
     return changed
 
 
 def hhmm(t):
     return time.strftime("%H:%M", time.localtime(t))
-
-
-def queue_note(e):
-    """The entry's dashboard row: open while it waits or once it ended badly, resolved once the retry went through."""
-    key = f"pressure:queue:{e['id']}"
-    state = e["state"]
-    if state == "done":
-        return dash_note("resolve", key=key)
-    if state == "waiting":
-        title = f"{e['what']} 대기 중(PC 사용량 위험: {e['why']}) · 기한 {hhmm(e['deadline'])}, 부하가 내려가면 요청한 세션이 같은 명령을 다시 실행"
-    elif state == "retrying":
-        title = f"{e['what']} 재시도 중(대기 {e['attempts']}회)"
-    elif state == "failed":
-        title = f"{e['what']} 재시도 실패: {e.get('error') or '?'}"
-    else:
-        title = f"{e['what']} 포기: 기한 {hhmm(e['deadline'])}까지 PC 사용량 위험이 이어짐({e['why']})"
-    # The copy button gets the list, not the held command: run from anywhere else, it would skip its session's checks.
-    return dash_note("add", f"[{e['id']}] {title}", key=key, command=shlex.join(["python3", str(HERE / "pressure.py"), "queue"]))
 
 
 def enqueue(session, cwd, command, what, why, cfg, now=None):

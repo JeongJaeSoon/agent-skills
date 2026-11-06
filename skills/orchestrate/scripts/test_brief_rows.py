@@ -14,6 +14,15 @@ os.environ.update(env)
 sys.path.insert(0, str(HERE))
 import board, fleet, store, table_width, tidy  # noqa: E402
 
+
+def _legacy_set_row(rid, **fields):
+    """The rows below link to cards by --worktree or by name, as rows written before A-ANNOT do. set_row refuses a new
+    one now, so this file writes them as the old code did, with no check."""
+    return board.change(lambda s: board.put(s, rid, fields))
+
+
+board.set_row = _legacy_set_row
+
 now = fleet.utcnow()
 sd = fleet.state_dir()
 ago = lambda h: fleet.iso(now - dt.timedelta(hours=h))  # noqa: E731
