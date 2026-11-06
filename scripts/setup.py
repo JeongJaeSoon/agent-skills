@@ -24,7 +24,8 @@ Options:
 HASH is printed with the diff and covers every planned write and action, so anything that changed since the
 review no longer matches. Merging adds only what is missing and never overwrites a value, except that an enabled
 marketplace copy of agent-skills is turned off; a recommended item applied once and later removed by the user is
-not offered again (the record is in the agent-skills state dir).
+not offered again (the record is in the agent-skills state dir), nor is an autoMode rule whose label was offered
+before when a release rewrites its text.
 
 An autoMode rule is drifted when it starts with the same label as a recommended rule (the text before the first
 colon, e.g. "Scheduled janitor round:") but its text differs, as when a release rewrote the recommended one.
@@ -240,7 +241,10 @@ def merge_settings(current, rec, skip, notes):
     add = {}
     for name in SECTIONS:
         rules = (rec.get("autoMode") or {}).get(name) or []
-        add[name] = [r for r in rules if f"autoMode.{name}\t{r}" not in skip and (name, r) not in labelled]
+        # A release that rewrites a rule's text changes its id, so a rule the user removed would return; the label holds.
+        seen = {label(i.partition("\t")[2]) for i in skip if i.startswith(f"autoMode.{name}\t")} - {None}
+        add[name] = [r for r in rules if f"autoMode.{name}\t{r}" not in skip and label(r) not in seen
+                     and (name, r) not in labelled]
         offered |= {f"autoMode.{name}\t{r}" for r in rules}
     if any(add.values()):
         new["autoMode"], _ = automode_merge(automode, {"add": add})

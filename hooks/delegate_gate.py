@@ -252,13 +252,11 @@ def is_orchestrator(event):
 
 
 def reason(tool):
-    return (f"{MARK} {SOURCE} This session is the top-level orchestrator, and {tool} here is task work. Hand it one "
-            "layer down now, with the facts you already have: a background subagent (Agent, run_in_background) for a "
-            "lookup, a read or a review; `skills-sync card <brief>` or `orca orchestration worker-start` for a change "
-            "or an investigation in one repo; `orca orchestration send` to the lead or session that owns the topic. "
-            "Your own turn keeps coordination only (orchestrate references/top-level.md, \"Routing\"). An act only the "
-            "human's session may take (a production release, an approved guard change) is not delegated: ask the "
-            "human to run that exact command as a `!` line in this chat.")
+    return (f"{MARK} {SOURCE} Orchestrator: {tool} is task work. Hand it down now with the facts you have: a change "
+            "or investigation goes as a card, `skills-sync card <brief>` (dispatch-card), or `skills-sync handoff` "
+            "for this repo's next ticket; a lookup, read or review to a background Agent; a topic its lead owns via "
+            "`orca orchestration send` (orchestrate references/top-level.md, \"Routing\"). A human-only act (a production release, an approved guard change): ask the human to run "
+            "that exact command as a `!` line here.")
 
 
 def main():
