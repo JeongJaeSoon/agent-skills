@@ -917,7 +917,7 @@ with tempfile.TemporaryDirectory() as tmp:
     r = subprocess.run([sys.executable, str(pathlib.Path(__file__).parent / "reap.py"), "precheck", "--act", "--kinds", "tmpdir",
                         "--hours", "soon"], env=env, capture_output=True, text=True)
     last = json.loads((pathlib.Path(tmp) / "janitor-runs.jsonl").read_text().splitlines()[-1])
-    assert r.returncode == 1 and last["stage"] == "plan" and last["error"].startswith("ValueError"), (r.stderr, last)
+    assert r.returncode == 2 and last["stage"] == "plan" and last["error"].startswith("ValueError"), (r.stderr, last)
     # An ownership file that cannot be read stops the round before its plan, and says so in the log too.
     (pathlib.Path(tmp) / "sweep-owner.json").write_text("{not json")
     r = subprocess.run([sys.executable, str(pathlib.Path(__file__).parent / "reap.py"), "precheck", "--act", "--kinds", "tmpdir"],
@@ -935,6 +935,15 @@ with tempfile.TemporaryDirectory() as tmp:
     last = json.loads((pathlib.Path(tmp) / "janitor-runs.jsonl").read_text().splitlines()[-1])
     assert r.returncode == 2 and time.monotonic() - t0 < 10, (r.returncode, r.stderr)
     assert last["stage"] == "plan" and last["error"].startswith("RoundCut"), last
+
+# The timer ends with the record: a summary that outlasts the hard stop is not cut into a second row.
+with tempfile.TemporaryDirectory() as tmp:
+    code = ("import sys, time, reap; reap.HARD_STOP_S = 1; reap.scan = lambda *a: ([], []); reap.print = lambda *a, **k: a[0].startswith('janitor') and time.sleep(2.5); "
+            "sys.argv = ['reap.py', 'precheck', '--act', '--kinds', 'tmpdir']; reap.cli()")
+    r = subprocess.run([sys.executable, "-c", code], cwd=pathlib.Path(__file__).parent, env={**os.environ, "AGENT_SKILLS_STATE": tmp},
+                       capture_output=True, text=True, timeout=20)
+    rows = (pathlib.Path(tmp) / "janitor-runs.jsonl").read_text().splitlines()
+    assert r.returncode == 0 and len(rows) == 1 and json.loads(rows[0])["error"] is None, (r.returncode, r.stderr, rows)
 
 # user-folder: top-level entries untouched for `days`, not open, not a download in progress.
 D = 86400
