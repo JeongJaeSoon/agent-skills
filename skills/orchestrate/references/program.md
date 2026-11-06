@@ -129,7 +129,7 @@ The lead's rows of SKILL.md "Traps seen in real runs".
 | A handoff prompt that retypes the rules | The note is the handoff; the prompt is only the lines in "Resume (handoff)" |
 | Follow-ups spawned the moment they are filed | Park them; `status` shows derived tickets per predicate item |
 | Parallel CI jobs named `1/3 2/3 3/3` | Name jobs by what they check (typecheck, lint, unit, db, api…) |
-| Several cards running docker compose stacks and image builds at once; the machine and the Orca UI crawled | Heavy local runs go through `orch heavy`, 2 machine-wide slots (`landing.heavy_slots`) |
+| Several cards running docker compose stacks and image builds at once; the machine and the Orca UI crawled | Heavy local runs go through `orch heavy`, machine-wide slots: a quarter of the CPUs, at least 2 (`landing.heavy_slots` or `orchestrate.heavy_slots`) |
 | Finished setup terminals and landed cards left open (50 terminals; 8 cards after one compaction dropped the step) | `skills-sync close-setup` on every new card; act on the `CLOSE OUT` lines in the turn a worker reports done, and on the `SETTLED` and `TAKEN OVER` lines every wake prints |
 | A worker that finished but had no capability token to send `worker_done` stays `active`, and no sweep line names it | Ask it the `TAKEN OVER` self-check; its answer is its REPORT, and you close it out |
 | A shared state file overwritten in place and left empty | Append-only ledger; anything else is written to a temp file and renamed |
