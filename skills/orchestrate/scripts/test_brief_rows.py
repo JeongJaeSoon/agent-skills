@@ -209,6 +209,8 @@ assert not any(r["kind"] == "lead" for r in rows_.values()) and all(r.get("paren
 aged = {"계보": {"handle": "term_old", "worktree": "lead1", "closed_at": "2026-10-01T00:00:00Z"}}
 dropped = {"계보": {"handle": "term_old", "worktree": "lead1"}}  # `board drop`: hidden on purpose, whatever its session does
 assert board.fleet_rows(probe_state, dropped, {})[0] == {}, "a lead the owner dropped stays dropped"
+old_dropped = {"계보": {**aged["계보"], "dropped_at": "2026-10-20T00:00:00Z"}}  # closed long ago, then dropped by the owner
+assert board.fleet_rows(probe_state, old_dropped, {})[0] == {}, "closed long ago, then dropped: stays dropped"
 closed_now = {"계보": {**dropped["계보"], "closed_at": fleet.iso(fleet.utcnow())}}
 assert board.fleet_rows(probe_state, closed_now, {})[0] == {}, "closed, then dropped: not aged off, stays dropped"
 rows_, _ = board.fleet_rows(probe_state, aged, {})
