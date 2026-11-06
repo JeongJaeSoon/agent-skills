@@ -268,7 +268,7 @@ def check_command(c, masked, cfg, cwd, session, here=None):
                                                      "reviewer builds on. Push your own PR branch (`git push "
                                                      "--force-with-lease=<branch>:<sha> origin <branch>`); a bad "
                                                      "commit on main is undone with a revert PR."))
-    if name in ("gh", "curl") and protection_write(c):
+    if name in ("gh", "curl") and protection_write(c, here):
         out.append(("guard.deny.protection_write", "This writes branch protection or a ruleset, the rules that "
                                                    "gate merges. The repository owner changes them, not an agent."))
     if name in ("rm", "find"):
@@ -355,7 +355,7 @@ def label_add(w):
             and has(f.split("=", 1)[-1] for f in fields))
 
 
-def api_call(w):
+def api_call(w, here=None):
     """(METHOD, endpoint, [field]) of a `gh api` command. A field or --input without --method means POST."""
     method = last_method(w, "--method")
     fields = [w[i + 1] for i, x in enumerate(w[:-1]) if x in ("-f", "-F", "--field", "--raw-field")]
@@ -365,7 +365,7 @@ def api_call(w):
     bodies = [w[i + 1] for i, x in enumerate(w[:-1]) if x == "--input"] + [x[8:] for x in w if x.startswith("--input=")]
     for body in bodies + [f.split("=@", 1)[1] for f in fields if "=@" in f and not f.endswith("=@-")]:
         try:
-            with open(body, encoding="utf-8", errors="replace") as f:
+            with open(expand(body, here), encoding="utf-8", errors="replace") as f:  # relative to the command's cwd
                 fields.append(f.read(65536))
         except OSError:
             pass
@@ -408,7 +408,7 @@ def curl_calls(w):
     return out
 
 
-def protection_write(c):
+def protection_write(c, here=None):
     """A `gh api` or curl call that writes branch protection or a ruleset; GETs read them and pass."""
     w = c.words
 
@@ -423,7 +423,7 @@ def protection_write(c):
                    for method, paths, text in curl_calls(w))
     if c.name != "gh" or w[1:2] != ["api"]:
         return False
-    method, endpoint, fields = api_call(w)
+    method, endpoint, fields = api_call(w, here)
     if endpoint.strip("/") == "graphql":
         return any(re.search(mutation, f, re.S) for f in fields)
     return writes(method, endpoint)
@@ -456,8 +456,8 @@ def force_push_default(c, here):
             where = expand(x[2:], where) or where
     if c.name in ("gh", "curl"):
         if c.name == "gh":
-            method, endpoint, fields = api_call(w) if w[1:2] == ["api"] else ("", "", [])
-            calls = [(method, [endpoint], " ".join(fields))]
+            method, endpoint, fields = api_call(w, where) if w[1:2] == ["api"] else ("", "", [])
+            calls =[(method, [endpoint], " ".join(fields))]
         else:
             calls = curl_calls(w)
         names = default_names(where, "origin")
