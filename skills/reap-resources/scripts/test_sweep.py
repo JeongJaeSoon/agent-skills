@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """sweep.py's shadow stage on fixed patrol verdict files: what refuses a round or a candidate, and the diff against
 the old cleaners' logs. Nothing here closes, kills or deletes; the shadow has no way to."""
-import contextlib, io, json, os, pathlib, signal, subprocess, sys, tempfile, time
+import contextlib, io, json, os, pathlib, plistlib, signal, subprocess, sys, tempfile, time
 
 tmp = pathlib.Path(tempfile.mkdtemp())
 os.environ["AGENT_SKILLS_STATE"] = str(tmp / "state")
@@ -262,11 +262,6 @@ with contextlib.redirect_stderr(err):
 sweep.run_shadow = saved_rs
 assert signal.alarm(0) == 0  # no alarm left armed
 
-# Only --shadow runs.
-out = io.StringIO()
-with contextlib.redirect_stderr(out):
-    assert sweep.main(["sweep.py", "run"]) == 2
-assert "실제 모드는 아직 없다" in out.getvalue()
 
 # The log keeps its last KEEP_LINES rounds.
 sweep.shadow_log().unlink()
@@ -663,4 +658,369 @@ out = io.StringIO()
 with contextlib.redirect_stdout(out):
     assert sweep.main(["sweep.py", "diff", "--hours", "48"]) == 0
 assert "통과(넘침 0, 지연 안이라 아직 대기 0건)" in out.getvalue(), out.getvalue()
+# ================================================================ the real mode (PR D)
+# Nothing below runs a real act, launchctl or tailscale: acts are a fake, launchctl is a script that records its arguments,
+# HOME is a folder of the test's own.
+
+for f in ("sweep-owner.json", "sweep-last.json", "sweep-fails.json", "sweep.jsonl", "reap-actions.jsonl",
+          "reap-hard.jsonl"):
+    (STATE / f).unlink(missing_ok=True)
+sweep.shadow_log().unlink(missing_ok=True)
+sys.path.insert(0, str(HERE.parents[2] / "scripts"))
+import reap_hard  # noqa: E402
+
+SERVE = cand("serve:dark", "serve:--https=8443", "serve", ["reap_hard_rest", "protect"],
+             {"kind": "serve", "id": "--https=8443", "flag": "--https", "port": 8443, "local": 4501, "target": True})
+STACK = cand("stack:gone", "stack:free", "stack", ["reap_hard_rest", "protect"],
+             {"kind": "stack", "id": "free", "target": True})
+CARD = cand("card:strict", "card:/ws/y", "card", ["reap_hard_cards", "protect", "terminals", "waits", "workers"],
+            {"kind": "card", "id": "/ws/y", "head": "h", "handles": ["t2"], "target": True})
+JANITOR = cand("trash:tmpdir", "tmpdir:/t/a", "tmpdir", ["reap_scan", "reap_scan:tmpdir"],
+               {"kind": "tmpdir", "key": "tmpdir:/t/a", "name": str(tmp / "a")})
+calls = []
+
+
+def fake_act(c, protect_, res):
+    calls.append(c["key"])
+    res["result"] = "tailscale serve off" if c["rule"] == "serve:dark" else "docker compose down(볼륨·이미지 유지)"
+
+
+def round_(rid, t=None, cands=(SERVE, STACK, CARD, JANITOR)):
+    return verdicts(round=rid, t=t or NOW, candidates=[dict(c) for c in cands])
+
+
+def no_state_files():
+    return not any((STATE / f).exists() for f in ("sweep-last.json", "sweep-fails.json", "sweep.jsonl",
+                                                   "sweep-owner.json"))
+
+
+# dry-run: every rule decided as if owned, printed, and nothing written, locked or acted on
+saved_keep = sweep.shadow_keep
+sweep.shadow_keep = lambda item, protect_, cleaner: None
+round_("d1")
+out = sweep.run_round(dry=True, now=NOW, acter=fake_act)
+assert out["mode"] == "dry-run" and out["acts"] == 4 and all(r["owner"] == "old" for r in out["rows"]), out
+assert calls == [] and no_state_files()
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    assert sweep.main(["sweep.py", "run", "--dry-run"]) == 0
+text = buf.getvalue()
+assert "- serve:dark serve:--https=8443: 처리" in text and "규칙 serve:dark: 처리 1 · 남김 0" in text, text
+assert "trash:tmpdir" not in text and "소유 old" in text  # only reap-hard's rules are shown; the owner is named
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    sweep.main(["sweep.py", "run", "--dry-run", "--rule", "stack:gone"])
+assert "stack:gone" in buf.getvalue() and "serve:dark" not in buf.getvalue()
+assert no_state_files()  # a dry-run twice on the same round: still nothing decided, nothing recorded
+# It takes no run lock: no lock file is made, and a round holding the lock does not stop it.
+(STATE / "sweep.lock").unlink(missing_ok=True)
+assert sweep.run_round(dry=True, now=NOW)["acts"] == 4 and not (STATE / "sweep.lock").exists()
+with sweep.run_lock() as held_by_other:
+    assert held_by_other and sweep.run_round(dry=True, now=NOW)["acts"] == 4
+sweep.shadow_keep = saved_keep
+
+# real, nothing owned: no act, and sweep-last.json is still written (the "last good round" an owner waits on)
+out = sweep.run_round(now=NOW, acter=fake_act)
+last = json.loads((STATE / "sweep-last.json").read_text())
+assert calls == [] and out["acted"] == 0 and last["round"] == "d1" and last["owned"] == [] and last["t"] == NOW, (out, last)
+# the same round again refreshes the heartbeat while it is fresh, and never acts twice on it
+out = sweep.run_round(now=NOW + 60, acter=fake_act)
+assert out["refused"].endswith("이미 판정함") and calls == []
+assert json.loads((STATE / "sweep-last.json").read_text())["t"] == NOW + 60
+out = sweep.run_round(now=NOW + 7200, acter=fake_act)  # an hour-old round proves nothing: no heartbeat
+assert "전 것" in out["refused"] and json.loads((STATE / "sweep-last.json").read_text())["t"] == NOW + 60
+
+# own / release
+assert sweep.set_owner("trash:tmpdir", True)[0] == 2  # not a rule of this stage
+code, msg = sweep.set_owner("serve:dark", True)
+own = json.loads((STATE / "sweep-owner.json").read_text())
+assert code == 0 and own == {"generation": 1, "rules": {"serve:dark": "sweep"}, "interval": 900.0}, (msg, own)
+assert "첫 정상 회차" not in msg  # sweep-last.json exists already
+assert sweep.set_owner("serve:dark", True) == (0, "serve:dark: 이미 sweep 소유(세대 1), 바꾼 것 없음")
+assert json.loads((STATE / "sweep-owner.json").read_text())["generation"] == 1
+(STATE / "sweep-owner.json").write_text(json.dumps({**own, "rules": {**own["rules"], "trash:tmpdir": "sweep"}}))
+assert sweep.set_owner("stack:gone", True)[0] == 0
+own = json.loads((STATE / "sweep-owner.json").read_text())
+assert own["generation"] == 2 and own["rules"] == {"serve:dark": "sweep", "trash:tmpdir": "sweep", "stack:gone": "sweep"}
+assert sweep.set_owner("stack:gone", False)[0] == 0
+own = json.loads((STATE / "sweep-owner.json").read_text())
+assert own["generation"] == 3 and own["rules"] == {"serve:dark": "sweep", "trash:tmpdir": "sweep"}  # others kept
+assert "이미 옛 주체" in sweep.set_owner("card:strict", False)[1]
+(STATE / "sweep-owner.json").write_text("{")  # a file that cannot be read is not overwritten
+code, msg = sweep.set_owner("serve:dark", True)
+assert code == 1 and (STATE / "sweep-owner.json").read_text() == "{" and "읽지 못해" in msg
+(STATE / "sweep-owner.json").write_text(json.dumps(own))
+(STATE / "sweep-last.json").rename(STATE / "x")  # no good round of its own yet: the message says who still acts
+assert "첫 정상 회차" in sweep.set_owner("card:strict", True)[1]
+(STATE / "x").rename(STATE / "sweep-last.json")
+assert sweep.set_owner("card:strict", False)[0] == 0
+
+# real, serve:dark owned: only its candidate is acted on; the janitor's, and the rules still reap-hard's, are not
+round_("r3", t=NOW + 100)
+out = sweep.run_round(now=NOW + 120, acter=fake_act)
+assert calls == ["serve:--https=8443"], calls
+logged = sweep.read_jsonl(sweep.real_log())
+assert len(logged) == 1 and logged[0]["ok"] is True and logged[0]["effect"] == "serve:dark", logged
+assert logged[0]["rule"] == "serve:dark" and logged[0]["identity"] == {"flag": "--https", "port": 8443, "local": 4501}
+last = json.loads((STATE / "sweep-last.json").read_text())
+assert last["round"] == "r3" and last["acted"] == 1 and last["owned"] == ["serve:dark"], last
+# a second hand-over cannot be acted on until the sweep has a good round of its own: stale last → the old cleaner has it
+calls.clear()
+(STATE / "sweep-last.json").write_text(json.dumps({"t": NOW - 10 * 3600}))
+round_("r4", t=NOW + 200)
+out = sweep.run_round(now=NOW + 220, acter=fake_act)
+assert out["acted"] == 0 and calls == [] and out["deferred"] is True
+# ...but that pass wrote the sweep's first good round, so reap-hard leaves the rule now, and the same round is not
+# recorded as done: the next pass acts on it instead of leaving it to nobody until the next patrol round.
+assert guard.old_acts("serve:dark", guard.ownership(), NOW + 230)[0] is False
+assert json.loads((STATE / "sweep-last.json").read_text())["round"] != "r4"
+out = sweep.run_round(now=NOW + 240, acter=fake_act)
+assert calls == ["serve:--https=8443"] and out["acted"] == 1 and out["deferred"] is False, out
+assert json.loads((STATE / "sweep-last.json").read_text())["round"] == "r4"
+calls.clear()
+
+# the diff counts the sweep's own acts, so an owned rule's shadow rows do not read as excess
+sweep.shadow_log().unlink(missing_ok=True)
+shadow_round(T0, [("serve:dark", "serve:--https=9", {"flag": "--https", "port": 9, "local": 4502})])
+sweep.append_keep(sweep.real_log(), {"t": T0 + 300, "key": "serve:--https=9", "kind": "serve", "rule": "serve:dark",
+                                     "ok": True, "effect": "serve:dark",
+                                     "identity": {"flag": "--https", "port": 9, "local": 4502}})
+assert sweep.diff(48, now=NOW + 1)["rows"][0]["state"] == "matched"
+sweep.shadow_log().unlink()
+
+# failures: a target that errors twice in a row rests, and the run goes on
+for f in ("sweep-last.json", "sweep.jsonl"):
+    (STATE / f).unlink(missing_ok=True)
+(STATE / "sweep-last.json").write_text(json.dumps({"t": NOW}))
+(STATE / "sweep-fails.json").unlink(missing_ok=True)
+calls.clear()
+
+
+def failing_act(c, protect_, res):
+    calls.append(c["key"])
+    res["error"] = "tailscale: boom"
+
+
+for n in (5, 6):
+    round_(f"r{n}", t=NOW + n * 10)
+    out = sweep.run_round(now=NOW + n * 10 + 5, acter=failing_act)
+    assert out["failed"] == 1 and out["acted"] == 0, out
+assert out["rested"] == ["serve:--https=8443"] and len(calls) == 2
+round_("r7", t=NOW + 70)
+out = sweep.run_round(now=NOW + 75, acter=failing_act)
+assert len(calls) == 2 and out["rows"][0]["why"].startswith("연속 2회 실패"), out
+(STATE / "sweep-fails.json").unlink()
+
+# the cap, counted over the owned candidates only
+(tmp / "config.json").write_text(json.dumps({"reap-hard": {"protect_file": str(PROTECT)}, "sweep": {"max_per_round": 1}}))
+sweep.set_owner("stack:gone", True)
+calls.clear()
+round_("r8", t=NOW + 80)
+out = sweep.run_round(now=NOW + 85, acter=fake_act)
+assert calls == ["serve:--https=8443"] and out["rows"][1]["why"] == "회차 상한 1건", (calls, out["rows"])
+(tmp / "config.json").write_text(json.dumps({"reap-hard": {"protect_file": str(PROTECT)}}))
+sweep.set_owner("stack:gone", False)
+
+# the run's budget ends a round mid-act: the act's line is written, sweep-last.json is not
+before = (STATE / "sweep-last.json").read_text()
+
+
+def budget_act(c, protect_, res):
+    res["error"] = "Budget: "
+    raise sweep.Budget()
+
+
+round_("r9", t=NOW + 90)
+try:
+    sweep.run_round(now=NOW + 95, acter=budget_act)
+    raise AssertionError("the budget was swallowed")
+except sweep.Budget:
+    pass
+assert sweep.read_jsonl(sweep.real_log())[-1]["ok"] is False and (STATE / "sweep-last.json").read_text() == before
+with sweep.run_lock() as got:
+    assert got  # and the run lock was let go
+
+# act_item: the lock, the owner read again inside it, the shared guards, then reap-hard's act
+fake = []
+saved_act = reap_hard.act
+reap_hard.act = lambda item, cfg, protect_, done: (fake.append(item["id"]), done.update(identity={"port": 8443}),
+                                                   "tailscale serve off")[2]
+open_protect = {"port": set(), "pid": set(), "path": [], "project": set()}
+(STATE / "sweep-owner.json").write_text(json.dumps({"generation": 5, "rules": {"serve:dark": "sweep"}}))
+(STATE / "sweep-last.json").write_text(json.dumps({"t": time.time()}))
+res = {}
+sweep.act_item(SERVE, open_protect, res)
+assert res == {"result": "tailscale serve off", "identity": {"port": 8443}} and fake == ["--https=8443"], res
+res = {}
+sweep.act_item(SERVE, {**open_protect, "port": {8443}}, res)
+assert res["result"] == "건너뜀: 보호 포트" and len(fake) == 1, res
+(STATE / "sweep-owner.json").write_text(json.dumps({"generation": 6, "rules": {}}))  # released after the round was read
+res = {}
+sweep.act_item(SERVE, open_protect, res)
+assert res["result"].startswith("건너뜀") and "옛 주체" in res["result"] and len(fake) == 1, res
+(STATE / "sweep-owner.json").write_text("{")
+res = {}
+sweep.act_item(SERVE, open_protect, res)
+assert res["result"].startswith("건너뜀: 소유권 파일을 읽지 못함") and len(fake) == 1, res
+(STATE / "sweep-owner.json").write_text(json.dumps({"generation": 7, "rules": {"serve:dark": "sweep"}}))
+saved_hold = guard.hold
+guard.hold = contextlib.contextmanager(lambda targets: (yield False))
+res = {}
+sweep.act_item(SERVE, open_protect, res)
+guard.hold = saved_hold
+assert res["result"] == "건너뜀: " + guard.LOCK_BUSY and len(fake) == 1, res
+reap_hard.act = lambda item, cfg, protect_, done: (_ for _ in ()).throw(RuntimeError("tailscale: boom"))
+res = {}
+sweep.act_item(SERVE, open_protect, res)
+assert res == {"error": "tailscale: boom"}, res
+
+
+def closes_then_budget(item, cfg, protect_, done):
+    done["closed"] = ["t2"]
+    raise sweep.Budget()
+
+
+reap_hard.act = closes_then_budget
+(STATE / "sweep-owner.json").write_text(json.dumps({"generation": 8, "rules": {"card:strict": "sweep"}}))
+res = {}
+try:
+    sweep.act_item(CARD, open_protect, res)
+    raise AssertionError("the budget was swallowed")
+except sweep.Budget:
+    pass
+assert res["handles"] == ["t2"] and res["error"].startswith("Budget"), res
+reap_hard.act = saved_act
+(STATE / "sweep-owner.json").unlink()
+
+# settings: the `sweep` key lies over `reap-hard`, in the cleaners and in the printed carry-over
+(tmp / "config.json").write_text(json.dumps({"reap-hard": {"idle_minutes": 45, "serve_ranges": [[1, 2]],
+                                                           "protect_file": str(PROTECT)}}))
+block = sweep.carried_config()["sweep"]
+assert block["idle_minutes"] == 45 and block["serve_ranges"] == [[1, 2]] and block["interval"] == 900, block
+assert block["workspaces"] == "~/orca/workspaces" and block["max_per_round"] == 50 and block["protect_file"] == str(PROTECT)
+other = tmp / "other-protect.txt"
+other.write_text("port 1\n")
+(tmp / "config.json").write_text(json.dumps({"reap-hard": {"idle_minutes": 45, "protect_file": str(PROTECT)},
+                                             "sweep": {"idle_minutes": 10, "interval": 600, "protect_file": str(other)}}))
+assert reap_hard.config()["idle_minutes"] == 10 and sweep.interval() == 600 and guard.protect_file() == str(other)
+assert sweep.lags()["hard"] == 1800
+(tmp / "config.json").write_text(json.dumps({"reap-hard": {"protect_file": str(PROTECT)}, "sweep": []}))
+assert reap_hard.config()["idle_minutes"] == 30  # a `sweep` of the wrong shape is none for reap-hard's own reads
+try:
+    guard.protect_file()
+    raise AssertionError("a `sweep` of the wrong shape was read as a protect file")
+except guard.NoProtect:
+    pass
+(tmp / "config.json").write_text(json.dumps({"reap-hard": {"protect_file": str(PROTECT)}}))
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    assert sweep.main(["sweep.py", "config"]) == 0
+assert '"sweep": {' in buf.getvalue() and "고치지 않는다" in buf.getvalue()
+
+# install: a fake HOME and a launchctl that only records what it was asked
+home = tmp / "home"
+home.mkdir()
+saved_home = os.environ.get("HOME")
+os.environ["HOME"] = str(home)
+stub_log = tmp / "launchctl.log"
+stub = tmp / "launchctl-stub"
+stub.write_text(f'#!/bin/sh\necho "$@" >> {stub_log}\n[ "$1" = bootstrap ] && [ -n "$STUB_FAIL" ] && exit 5\nexit 0\n')
+stub.chmod(0o755)
+saved_plat, saved_lc, saved_sleep = sweep.PLATFORM, sweep.LAUNCHCTL, time.sleep
+sweep.LAUNCHCTL = str(stub)
+err = io.StringIO()
+with contextlib.redirect_stderr(err):
+    sweep.PLATFORM = "linux"
+    assert sweep.cmd_install(["--here"]) == 1 and "launchd" in err.getvalue()
+    sweep.PLATFORM = "darwin"
+    real_here = sweep.HERE
+    sweep.HERE = tmp / "no-checkout" / "skills" / "reap-resources" / "scripts"  # no .git beside it
+    assert sweep.cmd_install([]) == 1 and "메인 git 체크아웃이 아님" in err.getvalue()
+    sweep.HERE = real_here
+    saved_pf = PROTECT.read_text()
+    PROTECT.rename(tmp / "protect.gone")  # without the protect file every pass stops: nothing is installed over reap-hard
+    assert sweep.cmd_install(["--here"]) == 1 and "install 중단" in err.getvalue()
+    (tmp / "protect.gone").rename(PROTECT)
+assert not sweep.plist_path().exists() and not stub_log.exists()
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    assert sweep.cmd_install(["--here", "--dry-run"]) == 0
+assert "[dry-run]" in buf.getvalue() and not sweep.plist_path().exists() and not stub_log.exists()
+(tmp / "config.json").write_text(json.dumps({"reap-hard": {"protect_file": str(PROTECT), "interval": 600}}))
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    assert sweep.cmd_install(["--here"]) == 0
+plist = plistlib.loads(sweep.plist_path().read_bytes())
+assert plist["Label"] == sweep.LABEL and plist["StartInterval"] == 600 and plist["ProgramArguments"][-1] == "tick"
+assert plist["ProgramArguments"][-2].endswith("sweep.py") and plist["EnvironmentVariables"]["HOME"] == str(home)
+assert plist["StandardOutPath"] == str(STATE / "sweep.log") and plist["RunAtLoad"] is True
+asked = stub_log.read_text().splitlines()
+assert asked[0].startswith("bootout gui/") and asked[1].startswith("bootstrap gui/") and asked[1].endswith("plist"), asked
+assert '"sweep": {' in buf.getvalue() and "reap-hard.json" not in buf.getvalue()
+assert str(home) in str(sweep.plist_path())  # nothing went to the real LaunchAgents folder
+os.environ["STUB_FAIL"] = "1"
+time.sleep = lambda s: None
+err = io.StringIO()
+with contextlib.redirect_stderr(err):
+    assert sweep.cmd_install(["--here"]) == 1 and "bootstrap 실패" in err.getvalue()
+del os.environ["STUB_FAIL"]
+time.sleep = saved_sleep
+assert sweep.cmd_uninstall() == 0 and not sweep.plist_path().exists()
+assert stub_log.read_text().splitlines()[-1].startswith("bootout gui/")
+sweep.PLATFORM, sweep.LAUNCHCTL = saved_plat, saved_lc
+if saved_home is None:
+    del os.environ["HOME"]
+else:
+    os.environ["HOME"] = saved_home
+(tmp / "config.json").write_text(json.dumps({"reap-hard": {"protect_file": str(PROTECT)}}))
+
+# tick: patrol, shadow, real round, then reap-hard without its own patrol; a step that fails leaves the next
+steps, saved = [], (subprocess.run, sweep.run_shadow, sweep.run_round)
+
+
+def fake_run(cmd, **kw):
+    steps.append(cmd[1:] if cmd[0] == sys.executable else cmd)
+    if "patrol" in cmd:
+        raise subprocess.TimeoutExpired(cmd, 1)  # a patrol that hangs is given up on, and the rest still runs
+    return subprocess.CompletedProcess(cmd, 0)
+
+
+def run_tick(shadow=lambda *a, **k: steps.append("shadow") or {"round": "r"},
+             real=lambda *a, **k: steps.append("real") or {"round": "r"}, run=fake_run):
+    steps.clear()
+    subprocess.run, sweep.run_shadow, sweep.run_round = run, shadow, real
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            return sweep.tick()
+    finally:
+        subprocess.run, sweep.run_shadow, sweep.run_round = saved
+
+
+# reap-hard goes before the real round, so a rule just handed over is still reap-hard's in that pass
+code = run_tick()
+assert code == 1, code  # the patrol that timed out shows in the exit code
+assert len(steps) == 4 and steps[0][-2:] == ["patrol", "--if-due"] and steps[1] == "shadow" and steps[3] == "real", steps
+assert steps[2][-2:] == ["run", "--no-patrol"] and steps[2][0].endswith("reap_hard.py"), steps
+# a step that raises, or fails, leaves the others
+code = run_tick(shadow=lambda *a, **k: (_ for _ in ()).throw(PermissionError("log")),
+                run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0))
+assert code == 1 and "real" in steps, (code, steps)
+code = run_tick(real=lambda *a, **k: steps.append("real") or {"round": "r", "failed": 1},
+                run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0))
+assert code == 1 and steps == ["shadow", "real"], steps
+code = run_tick(run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0))
+assert code == 0 and steps == ["shadow", "real"], (code, steps)
+code = run_tick(run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 2 if "reap_hard.py" in cmd[1] else 0))
+assert code == 2 and "real" in steps, (code, steps)
+signal.alarm(0)
+
+# the CLI: own and release go through main, an unknown rule is refused with the list
+for f in ("sweep-owner.json",):
+    (STATE / f).unlink(missing_ok=True)
+buf, err = io.StringIO(), io.StringIO()
+with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(err):
+    assert sweep.main(["sweep.py", "own", "serve:dark"]) == 0
+    assert sweep.main(["sweep.py", "release", "serve:dark"]) == 0
+    assert sweep.main(["sweep.py", "own", "nope"]) == 2
+assert "가능: card:strict" in err.getvalue() and "세대 2" in buf.getvalue(), (buf.getvalue(), err.getvalue())
 print("ok")
