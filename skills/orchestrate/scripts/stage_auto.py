@@ -12,7 +12,7 @@ A card keeps the row it got first: each tick stores which card holds which row (
 that leaves the Run (archived) keeps its row, and a later card of its ticket never takes that row's id, ack or PR.
 A row's PR is the one the ledger names for its ticket (`ready`, `landed`, … with `ticket`), else one the fleet
 collector saw the worker session of that card own (matched by task id, else by a task title no other card shares), else one whose branch is named after
-the ticket, else (a predicate item only) one whose title leads with it (`ABC-1: …`). With several, an
+the ticket, else (a predicate item with no PR yet) one whose title leads with it (`ABC-1: …`). With several, an
 open one is shown before a merged one. Cards and sessions are archived once the work lands, so a landed row's
 evidence is the ledger and GitHub: the collector keeps every PR a program's ledger names (fleet.program_prs), with
 its branch, after the search stops finding it.
@@ -184,20 +184,21 @@ def build(programs, state, now, held=None):
                     by_title.get(s.get("task_title")) or ticket_of(s.get("task_title")))):
                 named.setdefault(k, []).extend(p["key"] for p in prs.values() if p.get("session") == s["id"])
         # A card's branch is named after its ticket (`<user>/role-terms`); its PR outlives the card's session.
-        claimed = {x for keys in named.values() for x in keys}
-        for p in sorted(prs.values(), key=lambda p: p.get("created") or ""):
-            if p.get("repo") != repo or (fleet.parse(p.get("created")) or last) < fleet.parse(created):
-                continue
+        mine = [p for p in sorted(prs.values(), key=lambda p: p.get("created") or "")
+                if p.get("repo") == repo and (fleet.parse(p.get("created")) or last) >= fleet.parse(created)]
+        for p in mine:
             k = (p.get("branch") or "").rsplit("/", 1)[-1]
             k = alias.get(k, k)
             if k in tickets:
                 named.setdefault(k, []).append(p["key"])
-            else:
-                # The ledger may never tie a predicate item to its PR (`landed` names the PR, `config` the tickets):
-                # a title that leads with an item does, unless the ledger or a session already gave the PR to a row.
-                lead = ticket_of(p.get("title"))
-                if lead in items and p["key"] not in claimed:
-                    named.setdefault(lead, []).append(p["key"])
+        # Last resort: the ledger may never tie a predicate item to its PR (`landed` names the PR, `config` the
+        # tickets). A title that leads with an item does, but only for an item with no PR yet, and never for a PR
+        # that the ledger, a session or a branch already gave to a row.
+        explicit, claimed = set(named), {x for keys in named.values() for x in keys}
+        for p in mine:
+            lead = ticket_of(p.get("title"))
+            if lead in items and lead not in explicit and p["key"] not in claimed:
+                named.setdefault(lead, []).append(p["key"])
         landed = {fleet.pr_key(repo, e["pr"]): e for e in events
                   if e.get("ev") == "landed" and e.get("pr") is not None and e.get("sha") and not e.get("onto") and repo}
         rows[slug] = {"id": slug, "title": slug, "group": True, "cells": {}, "source": "auto", "program": slug,

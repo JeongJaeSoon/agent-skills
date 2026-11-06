@@ -54,9 +54,10 @@ def change(fn):
         store = read()
         out = fn(store)
         cutoff = fleet.iso(fleet.utcnow() - dt.timedelta(seconds=DONE_KEEP_S))
-        # An overlay that closes a generated row stays while that row does: dropped, the row would open again.
+        # An overlay that closes a predicate item stays while that item's row does: dropped, the row would open again.
         made = stage_auto.read()["rows"]
-        gone = {k for k, r in store["rows"].items() if (r.get("done_at") or "9") < cutoff and not (r.get("overlay") and k in made)}
+        gone = {k for k, r in store["rows"].items()
+                if (r.get("done_at") or "9") < cutoff and not (r.get("overlay") and (made.get(k) or {}).get("item"))}
         store["rows"] = {k: r for k, r in store["rows"].items() if k not in with_descendants(store["rows"], gone)}
         store["order"] = [k for k in store["order"] if k in store["rows"]]
         fleet.write_atomic(path(), json.dumps(store, ensure_ascii=False, indent=1) + "\n")
@@ -224,9 +225,13 @@ def merged_counted(store, made):
         if "merge" in (r.get("cells") or {}):
             ignored.append(target)
         return {c: v for c, v in (r.get("cells") or {}).items() if c != "merge"}
+    cutoff = fleet.iso(fleet.utcnow() - dt.timedelta(seconds=DONE_KEEP_S))
     for k, r in store["rows"].items():
         if k in rows:
-            rows[k] = {**rows[k], **{f: v for f, v in r.items() if v and f not in ("cells", "overlay")}, **full(r),
+            # A closing overlay outlives the week only on a predicate item, which is the same work whenever it shows
+            # again; a card row's id comes back for a later card of the ticket, which the old close must not end.
+            stale = r.get("overlay") and (r.get("done_at") or "9") < cutoff and not rows[k].get("item")
+            rows[k] = {**rows[k], **{f: v for f, v in r.items() if v and f not in ("cells", "overlay") + (("done_at",) if stale else ())}, **full(r),
                        "cells": {**rows[k].get("cells", {}), **own(r, k)}}
         elif k in into:
             on = into[k]
