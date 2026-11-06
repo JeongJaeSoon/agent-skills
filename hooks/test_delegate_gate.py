@@ -36,6 +36,7 @@ def role(session, name):
 
 # Coordination passes: the gate stays silent and the normal permission flow decides.
 for cmd in ("orch status p", "orch inbox --wait", "skills-sync card /x/brief.md --repo r --name n",
+            "skills-sync handoff ABC-1 --brief /x/brief.md",
             "/opt/x/bin/skills-sync broadcast", "orca orchestration send --to run:r --text 'a > b; $(not run)'",
             'orca orchestration check --terminal "$ORCA_TERMINAL_HANDLE" --json',
             "orca orchestration check --terminal=$ORCA_TERMINAL_HANDLE --wait",
@@ -74,8 +75,11 @@ for cmd in ("ls", "cat README.md", "docker compose up -d", "grep -r x .", "orch 
             'orca orchestration send --body "$(cat ~/.local/state/msg-1.md)"',
             f'orca orchestration send --body "$(cat\n{HOME}/.local/state/msg-1.md)"'):
     assert bash(cmd) == "deny", cmd
-assert "[gate:delegate]" in bash("ls", field="permissionDecisionReason")
-assert "skills-sync card" in bash("ls", field="permissionDecisionReason")
+REASON = bash("ls", field="permissionDecisionReason")
+for part in ("[gate:delegate]", "`skills-sync card <brief>` (dispatch-card)", "`skills-sync handoff`", "background Agent",
+             "`orca orchestration send`", "\"Routing\"", "`!`"):
+    assert part in REASON, part
+assert len(REASON) <= 560, len(REASON)  # printed on every refusal
 
 # Delegation tools pass; investigation tools and other MCP calls do not.
 for tool in ("Agent", "SendMessage", "TaskStop", "Skill", "ToolSearch", "CronCreate",

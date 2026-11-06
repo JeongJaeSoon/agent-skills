@@ -260,6 +260,47 @@ class NotifyTest(unittest.TestCase):
         n.watch(Fake([[note(17)]], fail=8), CFG, self.seen, sleep=sleeps.append, clock=self.clock)
         self.assertEqual(sleeps, [60, 120, 240, 480, 900, 900, 900, 900])
 
+    def test_stream_emits_each_poll_and_keeps_going_until_its_cap(self):
+        fake = Fake([[note(1)], [note(1), note(2, title="A")], [note(1), note(2, title="A")],
+                     [note(1), note(2, title="A"), note(3, title="B")]])
+        got = []
+        code, out = n.watch(fake, CFG, self.seen, sleep=self.clock.sleep, clock=self.clock, emit=got.append)
+        self.assertEqual((code, out), (1, []))
+        self.assertEqual([[l.split("\t")[2] for l in ls] for ls in got], [["A"], ["B"]])
+        # Monitor stops a command at 30 minutes, so the stream ends first whatever max_minutes says.
+        self.assertLessEqual(self.clock.t, n.STREAM_MINUTES * 60 + CFG["interval_s"])
+        self.assertEqual(n.read_seen(self.seen)[-2:], ["2@2026-01-01T00:00:00Z", "3@2026-01-01T00:00:00Z"])
+
+    def test_stream_backoff_never_outlasts_its_cap(self):
+        n.write_seen(self.seen, [], 10)
+        code, out = n.watch(Fake([[]], fail=999), CFG, self.seen, sleep=self.clock.sleep, clock=self.clock, emit=lambda ls: None)
+        self.assertEqual((code, out), (1, []))
+        self.assertLessEqual(self.clock.t, n.STREAM_MINUTES * 60)
+
+    def test_stream_reports_an_error_a_retry_cannot_fix_before_max_failures(self):
+        # Backoff allows only a few tries in one stream, and a restart would reset the count: report it, do not restart.
+        n.write_seen(self.seen, [], 10)
+        code, out = n.watch(Fake([[]], fail=999, error="gh: Bad credentials (HTTP 401)"), CFG, self.seen,
+                            sleep=self.clock.sleep, clock=self.clock, emit=lambda ls: None)
+        self.assertEqual(code, 2)
+        self.assertIn("HTTP 401", out[0])
+
+    def test_stream_ends_normally_when_a_transient_error_breaks_the_run(self):
+        n.write_seen(self.seen, [], 10)
+        errors = iter(["gh: Bad credentials (HTTP 401)", "HTTP 502"] * 50)
+
+        def flaky(path):
+            raise RuntimeError(next(errors))
+        code, out = n.watch(flaky, CFG, self.seen, sleep=self.clock.sleep, clock=self.clock, emit=lambda ls: None)
+        self.assertEqual((code, out), (1, []))
+
+    def test_stream_stops_on_a_persistent_failure(self):
+        n.write_seen(self.seen, [], 10)
+        code, out = n.watch(Fake([[]], fail=99, error="gh: Bad credentials (HTTP 401)"), {**CFG, "max_failures": 2},
+                            self.seen, sleep=self.clock.sleep, clock=self.clock, emit=lambda ls: None)
+        self.assertEqual(code, 2)
+        self.assertIn("HTTP 401", out[0])
+
     def test_persistent_config_failure_exits_2_with_the_error(self):
         n.write_seen(self.seen, [], 10)
         code, out = self.run_watch(Fake([[]], fail=99, error="gh: Bad credentials (HTTP 401)"), max_failures=3)
