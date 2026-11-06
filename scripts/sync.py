@@ -192,6 +192,23 @@ def locked(wait_s=0.0):
         yield True
 
 
+def state_step():
+    """Run the loaded checkout's `store.py state --auto` after a good sync, so a PC moves its acks and stage table into
+    the DB on the update that ships it, not when someone next runs setup. Idempotent; a PC whose DB is not migrated
+    yet is skipped by the step itself. Returns "ok", "failed", or None when the checkout has no such script."""
+    store_py = REPO / "skills" / "orchestrate" / "scripts" / "store.py"
+    if not store_py.is_file():
+        return None
+    try:
+        p = subprocess.run([sys.executable, str(store_py), "state", "--auto"], capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        print("state step: timed out")
+        return "failed"
+    if p.stdout.strip() or p.returncode:
+        print((p.stdout + p.stderr).strip())
+    return "ok" if p.returncode == 0 else "failed"
+
+
 def sync(broadcast_after=True):
     with locked() as got:
         if not got:
@@ -207,11 +224,14 @@ def sync(broadcast_after=True):
             head = git("rev-parse", "--short", "HEAD")
         except (Stop, subprocess.TimeoutExpired):
             head = None
+        state = state_step() if ok else None
         write_json(STATE / "sync.json", {"ok": ok, "message": msg, "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-                                         "head": head, "interval": INTERVAL_S})
+                                         "head": head, "interval": INTERVAL_S, **({"state": state} if state else {})})
         print(("ok: " if ok else "stopped: ") + msg)
         if not ok and (prev.get("ok", True) or prev.get("message") != msg):
             notify(f"stopped: {msg}")  # only on a change of state, so a lasting stop does not repeat
+        if state == "failed" and prev.get("state") != "failed":
+            notify("the DB state step failed: run `orch db state` and read its output")
         kind = reload_kind(paths)
         if kind:
             queue_reload(kind)

@@ -118,6 +118,7 @@ board.change(lambda s: board.put(s, "linked-row", dict(title="로그인 개편 �
 board.change(lambda s: board.put(s, "case-row", dict(title="대소문자 행", repo="acme/app", status="moving", next="머지", pr="ACME/App#7")))
 board.change(lambda s: board.put(s, "owner-row", dict(title="오너 지정 행", repo="acme/app", status="moving", next="안내", owner="오너", pr="acme/app#7")))
 board.change(lambda s: board.put(s, "parent-row", dict(title="자식 있는 행", repo="acme/app", status="moving", next="안내", pr="acme/app#7")))
+board.change(lambda s: board.put(s, "fuzzy-row", dict(title="card-done 후속 정리", repo="acme/app", status="moving", next="안내")))  # names a card whose PR merged; no pr, no --worktree
 board.change(lambda s: board.put(s, "parent-row/child", dict(title="자식 행", repo="acme/app", parent="parent-row", status="moving", next="진행")))
 # Inbox items.
 fleet.inbox_add("review", "acme/app#7 리뷰 요청", key="k-merged")
@@ -152,7 +153,7 @@ assert got == want, {k: got.get(k) for k in set(got) | set(want) if got.get(k) !
 # Never: two cards named (no single one), a bare #N, a doing item waiting on a person or the owner's, an open PR,
 # a date trigger, a fresh row, a command item, a to-do line with no PR.
 for k in (doing[3], doing[4], doing[5], doing[6], doing[7], doing[8], later[2], later[3], later[4], todo[1], todo[2],
-          "row:fresh-row", "row:open-row", "row:owner-row", "row:parent-row", "ext:k-open", "ext:k-cmd", "ext:k-rule", "ext:k-after", "ext:k-decide", "ext:k-ask"):
+          "row:fresh-row", "row:open-row", "row:owner-row", "row:parent-row", "row:fuzzy-row", "ext:k-open", "ext:k-cmd", "ext:k-rule", "ext:k-after", "ext:k-decide", "ext:k-ask"):
     assert k not in v, (k, v.get(k))
 
 # The brief before the tick: a check is ❔ 에이전트 조치 필요, in its row's 다음 cell or, for an item with no row, in

@@ -177,6 +177,23 @@ def test_sync():
     pending = json.loads((state / "reload-pending.json").read_text())
     check("a SKILL.md change queues /reload-skills", pending["kind"] == "skills", pending)
 
+    # After a successful sync the loaded checkout's own `store.py state --auto` runs (a PC moves its acks and stage
+    # table into the DB without anyone running setup); a stopped sync does not run it.
+    store_py = live / "skills" / "orchestrate" / "scripts" / "store.py"
+    store_py.parent.mkdir(parents=True, exist_ok=True)
+    with (live / ".git" / "info" / "exclude").open("a") as f:
+        f.write("skills/orchestrate/\n")  # like scripts/: present in the loaded checkout, not part of this fixture's history
+    store_py.write_text("import pathlib, sys\n"
+                        f"pathlib.Path({str(tmp / 'state-step.log')!r}).open('a').write(' '.join(sys.argv[1:]) + '\\n')\n"
+                        "print('tombstoned acks.jsonl, stages.json')\n")
+    commit(other, "docs/y.md", "y\n"); git(other, "push", "-q", "origin", "main")
+    code, out = run_sync(live, env, "sync", "--no-broadcast")
+    log = tmp / "state-step.log"
+    check("a successful sync runs `store.py state --auto`", code == 0 and log.exists() and log.read_text() == "state --auto\n", (out, log.exists()))
+    check("the state step's output is shown", "tombstoned acks.jsonl, stages.json" in out, out)
+    check("the state step is recorded", json.loads((state / "sync.json").read_text()).get("state") == "ok",
+          (state / "sync.json").read_text())
+
     commit(other, "hooks/hooks.json", "{}\n"); git(other, "push", "-q", "origin", "main")
     run_sync(live, env, "sync", "--no-broadcast")
     check("a hooks change raises the queue to /reload-plugins",

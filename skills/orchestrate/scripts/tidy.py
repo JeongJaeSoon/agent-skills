@@ -161,7 +161,8 @@ def assess(store, state, prs, me=None, now=None):
         at = fleet.parse(r.get("reported_at"))
         card = cards.get(r.get("worktree")) or named(f"{rid} {r.get('title') or ''}", cards)  # `--worktree` first
         if r.get("status") == "moving" and not r.get("owner") and rid not in parents:  # an owner's or another person's turn, and a row whose children decide, are never closed by the tick
-            ev = refs_over([by_lower.get((r.get("pr") or "").lower(), r.get("pr")), card and (card["pr"] or card["newest_pr"])], prs)
+            linked = cards.get(r.get("worktree"))  # a card found by name may be another task's: only the row's own pr or its `--worktree` card is evidence
+            ev = refs_over([by_lower.get((r.get("pr") or "").lower(), r.get("pr")), linked and (linked["pr"] or linked["newest_pr"])], prs)
             if ev and card and card["id"] in live:
                 put(f"row:{rid}", "check", "row_pr_merged_card_busy", f"{ev} · 카드 {card['name']} 작업 중", r.get("title") or rid)
                 continue
@@ -169,7 +170,7 @@ def assess(store, state, prs, me=None, now=None):
                 put(f"row:{rid}", "check", "row_pr_merged_steps_left", f"{ev} · 남은 단계: {r['next']}", r.get("title") or rid)
                 continue
             if ev:
-                put(f"row:{rid}", "done", "row_pr_merged", ev + (f" (카드 {card['name']})" if card else ""), r.get("title") or rid, row=r)
+                put(f"row:{rid}", "done", "row_pr_merged", ev + (f" (카드 {linked['name']})" if linked else ""), r.get("title") or rid, row=r)
                 continue
         if (r.get("status") == "moving" and not r.get("pr") and not (card and (card["pr"] or card["id"] in live))
                 and at and (now - at).total_seconds() > STALE_H * 3600):
