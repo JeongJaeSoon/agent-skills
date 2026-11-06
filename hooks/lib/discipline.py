@@ -36,8 +36,6 @@ PYTHON_MODE = re.compile(rf"""\s*{MODE}""")
 # Calls in python source (strings and comments masked out): `.write_text(`, `Path(p).open("w")`, `open(path, "w")`.
 PYTHON_CALL = re.compile(r"\.write_(?:text|bytes)\(|\.open\(|\bopen\(")
 OPEN_SCAN = 400
-# Modules whose `.open(path, mode)` is not `Path.open(mode)`: their first argument is the path.
-OPEN_MODULES = {"io", "os", "codecs", "gzip", "bz2", "lzma", "tarfile", "zipfile", "shelve", "dbm", "webbrowser"}
 SED_INPLACE = re.compile(r"-[A-Za-z]*i|--in-place(?:=.*)?$")
 SED_VALUE_OPTS = {"-e", "-f", "--expression", "--file"}
 MEMORY = re.compile(r"/\.claude/projects/[^/]+/memory(?:/|$)")
@@ -228,7 +226,10 @@ def python_writes(code):
             opens = True
         elif text.startswith("."):  # Path(p).open("w"): the mode is the first argument, the receiver a call
             receiver = code[receiver_start(mask, m.start()):m.start()]
-            opens = receiver not in OPEN_MODULES and bool(PYTHON_MODE.match(code, m.end()))
+            # A call (`Path(p).open`) or a name the code bound to a Path; `io.open(path, mode)` and its kin are not it.
+            is_path = receiver[-1:] in (")", "]") or re.search(
+                rf"\b{re.escape(receiver)}\s*=\s*(?:\w+\.)*Path\(", code) is not None if receiver.isidentifier() or receiver[-1:] in (")", "]") else False
+            opens = is_path and bool(PYTHON_MODE.match(code, m.end()))
         else:  # open(path, "w"): the mode follows a top-level comma
             comma, more = first_arg_end(mask, m.end())
             opens = more and bool(PYTHON_MODE.match(code, comma + 1))
@@ -243,18 +244,24 @@ def python_writes(code):
     return False
 
 
-def heredoc_body(cmd, after, delim, strip):
-    """The lines of the heredoc that starts on the line holding offset `after`, up to its delimiter line; None when
-    there is no delimiter line."""
+def heredoc_bodies(cmd, after, heredocs):
+    """The bodies, in order, of the heredocs `[(op, delimiter)]` opened on the line holding offset `after`: each starts
+    where the one before ended. A body with no delimiter line is None, and so are the ones after it."""
     start = cmd.find("\n", after)
     if start < 0:
-        return None
-    lines, body = cmd[start + 1:].split("\n"), []
-    for line in lines:
-        if (line.lstrip("\t") if strip else line) == delim:
-            return "\n".join(body)
-        body.append(line)
-    return None
+        return [None] * len(heredocs)
+    lines, at, out = cmd[start + 1:].split("\n"), 0, []
+    for op, delim in heredocs:
+        body = None
+        for i in range(at, len(lines)):
+            if (lines[i].lstrip("\t") if op == "<<-" else lines[i]) == delim:
+                body, at = "\n".join(lines[at:i]), i + 1
+                break
+        out.append(body)
+        if body is None:
+            out += [None] * (len(heredocs) - len(out))
+            break
+    return out
 
 
 def python_heredocs(cmds, cmd):
@@ -265,10 +272,13 @@ def python_heredocs(cmds, cmd):
         # Stdin is the program only without `-c`/`-m` and a script operand (`python3 -` or bare).
         reads_stdin = not {"-c", "-m"} & set(c.words[1:]) and [w for w in c.words[1:] if not w.startswith("-") or w == "-"] in ([], ["-"])
         if PYTHON.fullmatch(c.name) and reads_stdin:
-            stdin = [r for r in c.redirects if r[0] in ("", "0") and r[1] in ("<", "<<", "<<-", "<>")]
-            for fd, op, delim in stdin[-1:]:  # the last stdin redirect is the one the program reads
-                if op in ("<<", "<<-") and (body := heredoc_body(cmd, c.span[1], delim, op == "<<-")) is not None \
-                        and python_writes(body):
+            rs = c.redirects
+            stdin = [i for i, (fd, op, _) in enumerate(rs) if fd in ("", "0") and op in ("<", "<<", "<<-", "<>")]
+            here = [(op, delim) for _, op, delim in rs if op in ("<<", "<<-")]  # every heredoc, any fd
+            # The last stdin redirect is the one the program reads; its body is the one at its place among the heredocs.
+            if stdin and rs[stdin[-1]][1] in ("<<", "<<-"):
+                nth = sum(1 for _, op, _ in rs[:stdin[-1]] if op in ("<<", "<<-"))
+                if (body := heredoc_bodies(cmd, c.span[1], here)[nth]) is not None and python_writes(body):
                     out.append(("python heredoc file write", None))
     return out
 
