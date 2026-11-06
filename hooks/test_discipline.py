@@ -7,6 +7,9 @@ HERE = pathlib.Path(__file__).resolve().parent
 # The fixtures must not lie under a temp directory, or every path in them would be scratch: they live beside the tests.
 TMP = pathlib.Path(os.path.realpath(tempfile.mkdtemp(prefix=".t-discipline-", dir=HERE.parent)))
 atexit.register(shutil.rmtree, TMP, True)
+# The checkout holding these fixtures may itself be a main checkout (CI's is): git must not look above them, or a path
+# in "elsewhere" would be judged by that checkout.
+os.environ["GIT_CEILING_DIRECTORIES"] = str(TMP.parent)
 SCRATCH = pathlib.Path(os.path.realpath(tempfile.mkdtemp()))
 atexit.register(shutil.rmtree, SCRATCH, True)
 STATE = TMP / "state"
