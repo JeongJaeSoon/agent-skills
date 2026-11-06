@@ -30,7 +30,7 @@ agent-skills가 컨텍스트에 넣는 토큰이 얼마인지, 실제 세션에�
 | 항상: 스킬 목록 | 각 `skills/*/SKILL.md` frontmatter | 목록 한 줄 그대로: `- agent-skills:<name>: <description>`. `disable-model-invocation: true`이면 description 없이 이름만 |
 | 항상: 에이전트 목록 | `agents/*.md` frontmatter | `- agent-skills:<name>: <description> (Tools: …)`, tools가 없으면 `All tools` |
 | 조건부: 훅 주입 | `hooks/hooks.json`의 각 명령 | §1.3 |
-| 호출 시 | `SKILL.md` 전체(frontmatter 포함) + 본문이 이름을 대는 reference | 본문의 `[…](references/x.md)` 링크와 백틱 `references/x.md`를 1단계만 따라간다. 다른 스킬의 reference(`interrogate`의 `references/lead-judgment.md`)는 그 이름을 댄 스킬 쪽에 넣고 `cross`로 센다. reference는 한 절만 읽거나 아예 안 읽는 경우가 많아서, 본문과 섞지 않고 "다 읽으면"의 상한으로 따로 낸다 |
+| 호출 시 | `SKILL.md` 전체(frontmatter 포함) + 본문이 이름을 대는 reference | 본문의 `[…](references/x.md)` 링크와 백틱 `references/x.md`를 1단계만 따라간다. 다른 스킬의 reference(`challenge`의 `references/lead-judgment.md`)는 그 이름을 댄 스킬 쪽에 넣고 `cross`로 센다. reference는 한 절만 읽거나 아예 안 읽는 경우가 많아서, 본문과 섞지 않고 "다 읽으면"의 상한으로 따로 낸다 |
 | 저장소 안에서만 | `CLAUDE.md`, `AGENTS.md` | 이 저장소에서 작업하는 세션만 읽는다. 플러그인 사용자에게는 0이라 따로 적는다 |
 
 ### 1.2 토큰 근사

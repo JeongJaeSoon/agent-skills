@@ -1,8 +1,3 @@
----
-name: interrogate
-description: "Use for \"interrogate\", \"adversarial review\", \"challenge this\", \"find blind spots\" on a design, plan or decision. A PR headed to main is deliver-ticket's review."
----
-
 # Interrogate
 
 Have independent reviewers challenge the design or changes against the same prompt and rubric. Evidence and distinct reasoning matter more than model identity.

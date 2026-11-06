@@ -83,7 +83,7 @@ Then review by scope, not by vendor:
 - `/code-review` — the working diff, before a PR exists
 - `/review` — once a PR exists
 - `/security-review` — the diff touches auth, crypto, or untrusted input
-- `blast-radius` (or `interrogate` for an adversarial pass) — the diff touches auth, migrations,
+- `challenge` blast-radius (or interrogate for an adversarial pass) — the diff touches auth, migrations,
   concurrency or a public contract; run it before final review
 - `ui-review` — the diff changes what people see
 
@@ -104,7 +104,7 @@ program, and the PR body).
 Follow [references/independent-review.md](references/independent-review.md) for the pick, the evidence
 contract and unavailable-review handling.
 
-Sort every finding the way `interrogate`'s `references/lead-judgment.md` does — Act on,
+Sort every finding the way `challenge`'s `references/lead-judgment.md` does — Act on,
 Consider, Noted, Dismissed — and re-run until a pass comes back with no Act-on finding. That
 verdict, not your own reading of the diff, is what closes the review. **Five rounds is the cap**
 unless the ticket or the program's standing orders set another. The cap bounds rounds, never

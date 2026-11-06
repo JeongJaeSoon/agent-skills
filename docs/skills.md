@@ -1,6 +1,6 @@
 # 스킬 카탈로그
 
-`agent-skills` 플러그인이 싣는 스킬 41개(`skills/*/SKILL.md`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 16개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
+`agent-skills` 플러그인이 싣는 스킬 40개(`skills/*/SKILL.md`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 16개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
 
 설정 기본값 변경과 기존 데이터 보존 방법은 [설정 전환 안내](configuration-migration.md)를 따른다. 노트·원장·개인 폴더는 명시 설정이 필요하고, 성과 보고 기본 시간대는 UTC다.
 
@@ -385,14 +385,21 @@ PR 을 맡는 스킬과 머지 주체:
   - 결과물 하나와, 기반안·접붙인 것·버린 것·검증 결과를 적은 짧은 종합 노트를 돌려준다.
 - **swarm과의 차이:** swarm은 일을 나눠 훑고 보고서를 돌려준다. arena는 같은 일을 경쟁시켜 결과물 하나를 만든다.
 
-### blast-radius
-- **언제:** "이거 바꾸면 뭐가 깨져?", 작지만 믿기 어려운 diff.
-- **내용:**
-  - 변경이 안전하다는 근거가 되는 사실 하나를 찾고, 실제 코드를 돌리는 스크립트로 증명한다.
+### challenge (옛 이름 `blast-radius`, `interrogate`)
+- **언제:** 변경이나 설계를 내보내기 전에 공격해 볼 때. 무엇을 공격하는지로 모드를 고른다. main으로 가는 PR의 교차 검증은 `deliver-ticket`의 독립 리뷰가 맡는다.
+  - **blast-radius**: 'blast radius of X', "이거 바꾸면 뭐가 깨져?", "영향 범위 봐줘", 작지만 믿기 어려운 diff.
+  - **interrogate**: 설계안·계획·결정을 "interrogate", "적대적 리뷰", "challenge this", "빈틈 찾아줘".
+- **blast-radius 내용:**
+  - 변경이 안전하다는 근거가 되는 사실 하나를 찾고, 실제 코드를 돌리는 스크립트로 증명한다. 설계 반론만으로는 끝나지 않고, 증명하지 못하면 unproven으로 적는다.
   - grep이 못 보는 곳(라이브러리 소스, 와이어 포맷, 실행 타이밍)을 본다.
   - 바뀌는 코드의 PR과 커밋은 `why`의 절차로 끌어온다.
   - 큰 변경은 독립 리뷰어로 교차 확인한다.
   - 결과는 하는 일, 안전의 근거, 위험, 확인한 것, 머지 전 확인할 것으로 정리한다.
+- **interrogate 내용:**
+  - 같은 범위와 rubric으로 독립 리뷰한다. 특정 모델이나 계열 차이는 요구하지 않는다.
+  - 리드가 결과를 합쳐 Act on / Consider / Noted / Dismissed로 판정하고 합의 지도를 쓴다.
+  - 의도가 모호하면 묻지 않고 가정했다고 표시한다. 수정은 하지 않는다. `deliver-ticket`이 부르면 Act on 판정은 그쪽이 반영한다.
+- **동봉:** `references/blast-radius.md`, `references/interrogate.md`, `reviewer-prompt.md`, `rubric.md`, `code-quality-review.md`, `lead-judgment.md`. `deliver-ticket`의 리뷰 분류가 `lead-judgment.md`의 판정 틀을 쓴다.
 
 ### figure-it-out
 - **언제:** `/figure-it-out`, "알아서 설계해서 진행해줘", "큰 마이그레이션", "자리 비운 동안 끝내줘", 맞는 절차가 따로 없는 크고 여러 단계인 일. `deliver-ticket`의 계획 단계가 부른다. 티켓 여러 개를 병렬 카드로 돌릴 일은 `orchestrate`.
@@ -423,14 +430,6 @@ PR 을 맡는 스킬과 머지 주체:
   - 답은 What We Found, Reasonably Infer, Competing Hypotheses, What We Don't Know, Sources Consulted 순서다. 코드를 바꾸려는 질문이면 Preserve / Change / Avoid / Risk를 붙인다.
 - **동봉:** `epistemics.md`(확신도 기준), `investigator-prompt.md`, `synthesizer-prompt.md`, `source-playbook.md`, `sources/`(code-archaeology, linear, notion, google-drive, obsidian, slack, incident-postmortem).
 - **관계:** `how`의 짝이다. `blast-radius`와 `architect`가 부른다. 트래커는 `use-tracker`, 노트는 `use-notes`로 읽는다.
-
-### interrogate
-- **언제:** 설계안·계획·결정을 "적대적 리뷰", "빈틈 찾아줘". main으로 가는 PR의 교차 검증은 `deliver-ticket`의 독립 리뷰가 맡는다.
-- **내용:**
-  - 같은 범위와 rubric으로 독립 리뷰한다. 특정 모델이나 계열 차이는 요구하지 않는다.
-  - 리드가 결과를 합쳐 Act on / Consider / Noted / Dismissed로 판정하고 합의 지도를 쓴다.
-  - 의도가 모호하면 묻지 않고 가정했다고 표시한다. 수정은 하지 않는다. `deliver-ticket`이 부르면 Act on 판정은 그쪽이 반영한다.
-- **동봉:** `reviewer-prompt.md`, `rubric.md`, `code-quality-review.md`, `lead-judgment.md`. `deliver-ticket`의 리뷰 분류가 이 판정 틀을 쓴다.
 
 ### principles
 - **언제:** 설계, 리팩터, 검증, 위임 판단에 이름 붙은 원칙이 필요할 때.
@@ -744,6 +743,7 @@ pstack 스킬 58개(원칙 24개와 나머지 34개) 가운데 원칙 24개 전�
   - 모델이 스스로 부를 수 있게 했다.
   - Cursor 전용 요소를 Claude Code 대응물로 바꿨다. 경로는 `.cursor/` → `.claude/`, 워커는 `generalPurpose`/클라우드 → `Agent`/Orca 워커, transcript는 `agent-transcripts` → `~/.claude/projects`.
   - 모델 패널을 독립 리뷰어로 바꿨다.
+  - blast-radius와 interrogate는 나중에 `challenge` 한 스킬로 합쳤다. 본문은 같은 이름 모드의 `references/blast-radius.md`·`references/interrogate.md`로, interrogate의 참조 파일은 `challenge/references/`로 옮겼다.
   - 설치하지 않은 스킬(`unslop`)을 부르던 곳을 `write-plainly`로 바꿨다. `why`와 `arena`는 2026-09-25에 들여와 원래 연결을 되살렸다(architect → arena).
   - `why`는 Cursor MCP 탐색 대신 세션에 있는 MCP 도구로 출처를 고르고, 한 줄 질문용 narrow mode를 더했다. 연결 없는 Datadog·Sentry·warehouse 출처 파일은 빼고 Google Drive·Obsidian 출처를 새로 썼다.
 - **2026-09-25 추가 수정:** Opus 5.5에 맞춰 프롬프트를 감사하고 더 고쳤다(`6eec9fa`). architect와 swarm의 단계별 할 일 목록을 없앴고, how의 단순 질문은 직접 처리한다. reflect 리뷰어의 개수 하한을 없앴고, show-me-your-work는 추가만 하는 기록으로 바꿨다. 파일별 수정 내역은 `vendor/pstack/NOTICE.md`에 있다.
