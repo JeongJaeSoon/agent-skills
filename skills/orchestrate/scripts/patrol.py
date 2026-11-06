@@ -804,13 +804,15 @@ def pending_lines(me, unowned, now=None):
     """Unacked findings routed to terminal `me` (and those routed to nobody, for the orchestrator), each shown again
     every 30 minutes until acked or cleared; a SHOW_ONCE code only the first time."""
     now = now or fleet.utcnow()
-    mine = [f for f in open_findings().values() if f.get("owner") == me or (unowned and not f.get("owner"))]
+    opened = open_findings()
+    mine = [f for f in opened.values() if f.get("owner") == me or (unowned and not f.get("owner"))]
     shown = fleet.read_json(SHOWN, {}) or {}
     seen = shown.get(me or "-") or {}
     due = [f for f in mine if f["id"] not in seen
            or f.get("code") not in SHOW_ONCE and now - fleet.parse(seen[f["id"]]) >= RENOTIFY]
-    # Pruned every call, not only when something is due: a finding that closed must be new when it comes back.
-    keep = {f["id"]: seen.get(f["id"]) for f in mine if seen.get(f["id"])}
+    # Pruned every call, not only when something is due: a finding that closed must be new when it comes back. Closed
+    # means in no one's open set; one only outside this call's scope (unowned or not) keeps its record.
+    keep = {i: t for i, t in seen.items() if i in opened and t}
     keep.update({f["id"]: fleet.iso(now) for f in due})
     if keep != seen:
         shown[me or "-"] = keep

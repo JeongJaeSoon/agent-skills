@@ -715,6 +715,11 @@ patrol.write_round([drift("haiku")], {"cards": {}}, False, NOW + 400)
 assert patrol.pending_lines("hm", False, T + dt.timedelta(hours=4))[0].startswith("PATROL M"), "another model is news"
 patrol.write_round([drift("opus")], {"cards": {}}, False, NOW + 500)
 assert patrol.pending_lines("hm", False, T + dt.timedelta(hours=5))[0].startswith("PATROL M"), "so is the first one again"
+# Polling one terminal with and without the unowned scope does not make an open finding new.
+patrol.write_round([{**drift("opus"), "owner": None}], {"cards": {}}, False, NOW + 550)
+assert patrol.pending_lines("hu", True, T + dt.timedelta(hours=5, minutes=1))[0].startswith("PATROL M")
+assert patrol.pending_lines("hu", False, T + dt.timedelta(hours=5, minutes=2)) == []
+assert patrol.pending_lines("hu", True, T + dt.timedelta(hours=5, minutes=3)) == [], "still the same open drift"
 # The same drift back after it closed (opus, back on sonnet, opus), with nothing due in between.
 patrol.write_round([], {"cards": {}}, False, NOW + 600)
 assert patrol.pending_lines("hm", False, T + dt.timedelta(hours=6)) == [], "a closed drift shows nothing"
