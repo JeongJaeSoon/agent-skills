@@ -525,12 +525,12 @@ def manual_goal_command(handle, line):
     return shlex.join([ORCA, "terminal", "send", "--terminal", handle, "--text", line, "--enter"])
 
 
-def type_when_idle(handle, line, deadline=None):
+def type_when_idle(handle, line, deadline=None, still=None):
     """None once `line` was typed into an idle Claude session and the screen shows it was taken, else the reason it
     was not (sync.UNCONFIRMED when it may have been typed). This is `sync.send_to` with the tab title left out of the
     judgement: a worker's title is the session's topic (`GOAL-DEMO-OK …`), never the `✳` that `sync.classify` wants,
     so the title would read every worker as busy. The screen checks (spinner, dialog, empty prompt box, two equal
-    reads) stay."""
+    reads) stay. `still`, when given, runs under the lock just before the send: a reason it returns stops the send."""
     import sync
 
     def look():
@@ -561,6 +561,8 @@ def type_when_idle(handle, line, deadline=None):
             return str(e)
         if deadline is not None and time.monotonic() >= deadline:
             return "time limit reached while waiting"
+        if still is not None and (why := still()):
+            return why
         try:
             sync.orca("terminal", "send", "--terminal", handle, "--text", line, "--enter")
         except sync.Stop:  # Orca may have taken the input and lost the answer: typing it again could set the goal twice

@@ -1,6 +1,6 @@
 ---
 name: arena
-description: "Run several candidates at one task, pick a base, graft in the best of the rest, and return one artifact. Use for /arena, \"경쟁시켜줘\", \"여러 버전 만들어서 비교해줘\", or a design where one attempt would lock in the wrong shape. Split-up work ending in a report is swarm."
+description: "Run several candidates at one task, pick a base, graft in the best of the rest. Use for /arena, \"경쟁시켜줘\", \"여러 버전 만들어서 비교해줘\". A report from split work is swarm."
 ---
 
 # Arena

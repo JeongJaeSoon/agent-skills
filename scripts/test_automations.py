@@ -309,8 +309,8 @@ class ShellJobs(Base):
 
     def test_defaults(self):
         self.assertEqual({n: j.default for n, j in self.jobs.items()},
-                         {"sync": True, "pressure-watch": True, "reap-hard": True, "orch-dash": True,
-                          "land-executor": False})
+                         {"pstack-upstream": False, "sync": True, "pressure-watch": True, "reap-hard": True,
+                          "orch-dash": True, "land-executor": False})
 
     def test_reap_hard_waits_for_the_protect_list_and_orch_dash_does_not(self):
         # patrol has no job of its own; each reap-hard pass starts it, so this gate is also patrol's.
@@ -547,7 +547,7 @@ class Plan(Base):
         def status(job):
             return {"sync": ("on", ""), "pressure-watch": ("absent", ""),
                     "reap-hard": ("unconfigured", "no protect file"), "orch-dash": ("absent", ""),
-                    "land-executor": ("absent", "")}[job.name]
+                    "land-executor": ("absent", ""), "pstack-upstream": ("absent", "")}[job.name]
         with mock.patch.object(au.ShellJob, "status", status), \
                 mock.patch.object(au.PreviewWatch, "status", return_value=("absent", "")), \
                 mock.patch.object(au.ShareServer, "status", return_value=("absent", "")):

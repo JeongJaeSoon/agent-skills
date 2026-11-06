@@ -1,6 +1,6 @@
 ---
 name: ui-review
-description: "Use before a mockup, a screen or a UI PR is shown to a person, and after a person points out a UI problem — the gate that measures layout and consistency (row heights, column widths, alignment, spacing, links, color, the existing screens) and walks the flow (system steps, duplicated options, grouping). \"UI 리뷰해줘\", \"시안 점검해줘\", \"화면 밸런스 봐줘\", \"보여주기 전에 UI 확인해줘\". Taking and posting screenshots is deliver-ticket's visual-evidence."
+description: "Use before a mockup, screen or UI PR is shown to a person, and after one points out a UI problem: measures layout and consistency and walks the flow — \"UI 리뷰해줘\", \"시안 점검해줘\", \"화면 밸런스 봐줘\", \"보여주기 전에 UI 확인해줘\". Screenshots for a PR are deliver-ticket's."
 ---
 
 # UI review
