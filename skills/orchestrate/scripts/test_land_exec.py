@@ -37,9 +37,11 @@ if a[:2] == ["orchestration", "send"]:
     st["sent"] = st.get("sent", []) + [a[a.index("--to") + 1]]; json.dump(st, open(path, "w")); sys.exit()
 if a[:2] == ["worktree", "list"]:  # a card holds each PR's branch (b<n>): orch verdict asks its terminals by id
     st = json.load(open(os.environ["FAKE_GH_STATE"]))
-    print(json.dumps({"worktrees": [{"id": "w" + n, "hostId": "local", "branch": f"refs/heads/b{n}", "head": ""} for n in st["prs"]]})); sys.exit()
+    print(json.dumps({"worktrees": [{"id": "w" + n, "hostId": "local", "branch": f"refs/heads/b{n}", "head": "",
+                                     "isMainWorktree": False} for n in st["prs"]],
+                      "hostScope": {"hostIds": ["local"], "omittedHostIds": []}, "truncated": False})); sys.exit()
 if a[:2] == ["terminal", "list"]:  # the card holding the PR's branch: orch verdict records it as the author
-    print(json.dumps({"terminals": [{"handle": "term_author"}],
+    print(json.dumps({"terminals": [{"handle": "term_author"}], "truncated": False,
                       "hostScope": {"hostIds": ["local"], "omittedHostIds": []}})); sys.exit()
 os.execv(sys.executable, [sys.executable, os.environ["FAKE_ORCA_INNER"], *a])
 '''
@@ -329,10 +331,12 @@ class LandExec(Fixture):
         answered and no card holds the PR" and opened the unverified-author path."""
         real = prog.orca_json
         good = {"id": "w1", "hostId": "local", "branch": "refs/heads/b", "head": "abc", "isMainWorktree": False}
-        terminals = {"terminals": [{"handle": "term_b"}], "hostScope": {"hostIds": ["local"], "omittedHostIds": []}}
+        scope = {"hostIds": ["local"], "omittedHostIds": []}
+        terminals = {"terminals": [{"handle": "term_b"}], "hostScope": scope, "truncated": False}
 
         def orca(rows):
-            return lambda *a: {"worktrees": rows} if a[:2] == ("worktree", "list") else terminals
+            return lambda *a: ({"worktrees": rows, "hostScope": scope, "truncated": False}
+                               if a[:2] == ("worktree", "list") else terminals)
 
         try:
             for broken in ({}, {"id": "w9"}, {**good, "head": None}, {**good, "branch": None}, {**good, "id": 7},
@@ -359,6 +363,73 @@ class LandExec(Fixture):
         finally:
             prog.orca_json = real
 
+    def test_an_answer_that_does_not_vouch_for_itself_is_not_a_missing_card(self):
+        """The envelope fields that say "this answer is complete" count only when present and well typed. A missing or
+        mistyped one was read as the empty default, so a partial answer became [] and opened the unverified path."""
+        real = prog.orca_json
+        scope = {"hostIds": ["local"], "omittedHostIds": []}
+        row = {"id": "w1", "hostId": "local", "branch": "refs/heads/b", "head": "abc", "isMainWorktree": False}
+        wt = {"worktrees": [row], "hostScope": scope, "truncated": False}
+        tm = {"terminals": [{"handle": "term_b"}], "hostScope": scope, "truncated": False}
+
+        def orca(w, t):
+            return lambda *a: w if a[:2] == ("worktree", "list") else t
+
+        def without(d, key):
+            return {k: v for k, v in d.items() if k != key}
+
+        def check(w, t, label):
+            prog.orca_json = orca(w, t)
+            self.assertIsNone(prog.author_sessions("b"), label)
+            self.assertIsNone(prog.worktree_author_sessions("abc"), label)
+
+        try:
+            prog.orca_json = orca(wt, tm)
+            self.assertEqual(prog.author_sessions("b"), ["term_b"])
+            self.assertEqual(prog.worktree_author_sessions("abc"), ["term_b"])
+            for key in ("truncated", "hostScope"):  # a missing field is not a complete answer
+                check(without(wt, key), tm, f"worktree list without {key}")
+                check(wt, without(tm, key), f"terminal list without {key}")
+            for bad in (None, 0, "", [], {}, "false"):
+                check({**wt, "truncated": bad}, tm, f"worktree truncated={bad!r}")
+                check(wt, {**tm, "truncated": bad}, f"terminal truncated={bad!r}")
+            bad_scopes = (None, False, [], {}, {"hostIds": "local", "omittedHostIds": []},
+                          {"hostIds": [], "omittedHostIds": []}, {"hostIds": ["other"], "omittedHostIds": []},
+                          {"hostIds": ["local", None], "omittedHostIds": []},
+                          {"hostIds": ["local", 7], "omittedHostIds": []},
+                          {"hostIds": {"local": 1}, "omittedHostIds": []},
+                          {"hostIds": ["local"]}, {"hostIds": ["local"], "omittedHostIds": None},
+                          {"hostIds": ["local"], "omittedHostIds": False},
+                          {"hostIds": ["local"], "omittedHostIds": ""},
+                          {"hostIds": ["local"], "omittedHostIds": {}},
+                          {"hostIds": ["local"], "omittedHostIds": [None]},
+                          {"hostIds": ["local"], "omittedHostIds": [7]})
+            for bad in bad_scopes:
+                check({**wt, "hostScope": bad}, tm, f"worktree hostScope={bad!r}")
+                check(wt, {**tm, "hostScope": bad}, f"terminal hostScope={bad!r}")
+            # "local-other" contains "local" as a substring: membership must be of a list, not of a string.
+            check(wt, {**tm, "hostScope": {"hostIds": "local-other", "omittedHostIds": []}}, "substring host")
+            # The main-worktree flag decides which rows may stand in for the author: it must be a real boolean.
+            for bad in ("false", "true", 1, 0, None, [], {}):
+                check({**wt, "worktrees": [{**row, "isMainWorktree": bad}]}, tm, f"isMainWorktree={bad!r}")
+            check({**wt, "worktrees": [without(row, "isMainWorktree")]}, tm, "isMainWorktree missing")
+            # No branch or head to look for is "cannot tell", not "nothing holds it".
+            for bad in (None, "", 7, [], {}):
+                prog.orca_json = orca(wt, tm)
+                self.assertIsNone(prog.author_sessions(bad), bad)
+                self.assertIsNone(prog.worktree_author_sessions(bad), bad)
+        finally:
+            prog.orca_json = real
+
+    def test_an_unverified_row_must_carry_an_explicit_empty_author(self):
+        """author_unverified vouches for "Orca answered and found no card", which is the list []; a row with no
+        author field at all, or null, says nothing was looked up."""
+        row = {"reviewer": "codex", "evidence": "https://example.test/r", "recorder": "term_x", "author_unverified": True}
+        self.assertIsNone(prog.verdict_identity_problem({**row, "author": []}))
+        for author in (None, "missing"):
+            v = {**row} if author == "missing" else {**row, "author": author}
+            self.assertIn("could not be identified", prog.verdict_identity_problem(v) or "", v)
+
     def test_author_sessions_tells_no_card_from_a_lookup_that_cannot_vouch(self):
         real = prog.orca_json
 
@@ -367,11 +438,14 @@ class LandExec(Fixture):
             covered that host, unless the case sets its own."""
             def orca(*a):
                 if a[:2] == ("worktree", "list"):
-                    return {"worktrees": [{"hostId": "local", "branch": "", "head": "", **w} for w in worktrees], **listing}
+                    rows = [{"hostId": "local", "branch": "", "head": "", "isMainWorktree": False, **w} for w in worktrees]
+                    hosts = sorted({r["hostId"] for r in rows if isinstance(r["hostId"], str)})
+                    return {"worktrees": rows, "hostScope": {"hostIds": hosts, "omittedHostIds": []}, "truncated": False,
+                            **listing}
                 answer = terminals[a[-1]]
                 if isinstance(answer, BaseException):
                     raise answer
-                return {"hostScope": {"hostIds": ["local"], "omittedHostIds": []}, **answer}
+                return {"hostScope": {"hostIds": ["local"], "omittedHostIds": []}, "truncated": False, **answer}
             return orca
 
         held = [{"id": "w1", "branch": "refs/heads/b"}, {"id": "w2", "branch": "refs/heads/b"},
@@ -504,7 +578,8 @@ class LandExec(Fixture):
         answer says it covered the host, as Orca's does."""
         def answer(*a):
             if a[:2] == ("worktree", "list"):
-                return {"worktrees": worktrees, "truncated": truncated}
+                return {"worktrees": worktrees, "truncated": truncated,
+                        "hostScope": {"hostIds": ["local"], "omittedHostIds": []}}
             sel = a[a.index("--worktree") + 1]
             return {"terminals": [{"handle": h} for h in terminals.get(sel[3:], [])], "truncated": terminals_truncated,
                     "hostScope": {"hostIds": ["local"], "omittedHostIds": []}}

@@ -2225,13 +2225,39 @@ def cmd_verdict(argv):
 SELF_REVIEWERS = {"self", "implementer", "author"}
 
 
-def worktree_rows():
-    """Orca's worktree list when it can be trusted to be complete, else None: a cut-off list, or a host Orca did not
-    reach, can hide the very worktree that wrote the PR."""
-    listing = orca_json("worktree", "list")
-    rows = listing["worktrees"]
-    if listing.get("truncated") or not isinstance(rows, list) or (listing.get("hostScope") or {}).get("omittedHostIds"):
+def complete_answer(out, key):
+    """(rows, hostIds, omittedHostIds) of an Orca list answer that says it is complete, else None. Each of the three
+    must be present and well typed: a missing or mistyped `truncated` or host list was read as its empty default, so
+    a partial answer passed for a complete one ("no card")."""
+    if not isinstance(out, dict) or not isinstance(out.get(key), list) or out.get("truncated") is not False:
         return None
+    scope = out.get("hostScope")
+    if not isinstance(scope, dict):
+        return None
+    hosts = []
+    for field in ("hostIds", "omittedHostIds"):
+        ids = scope.get(field)
+        if not isinstance(ids, list) or not all(isinstance(h, str) and h for h in ids):
+            return None
+        hosts.append(ids)
+    return out[key], hosts[0], hosts[1]
+
+
+def worktree_rows():
+    """Orca's worktree list when it can be trusted to be complete and every row is readable, else None: a cut-off
+    list, a host Orca did not reach, or a row that cannot say which worktree it is, where, or what it holds can hide
+    the very worktree that wrote the PR, and skipping it as "no match" would turn a partial answer into "no card".
+    An empty branch or head is a real state (detached HEAD, no commit yet): only a missing or mistyped field fails."""
+    answer = complete_answer(orca_json("worktree", "list"), "worktrees")
+    if answer is None:
+        return None
+    rows, hosts, omitted = answer
+    if omitted:
+        return None
+    for w in rows:
+        if not (isinstance(w, dict) and all(isinstance(w.get(k), str) for k in ("id", "hostId", "branch", "head"))
+                and w["id"] and w["hostId"] in hosts and isinstance(w.get("isMainWorktree"), bool)):
+            return None
     return rows
 
 
@@ -2239,12 +2265,11 @@ def worktree_sessions(w):
     """Terminal handles of one worktree row, or None when Orca's answer cannot be trusted for it. An answer counts only
     when it says it covered this worktree's host: an empty or partial answer from a host Orca did not reach says
     nothing about its sessions. Another host being left out is an ordinary scope limit."""
-    out = orca_json("terminal", "list", "--worktree", f"id:{w['id']}")
-    rows = out["terminals"]
-    if out.get("truncated") or not isinstance(rows, list):
+    answer = complete_answer(orca_json("terminal", "list", "--worktree", f"id:{w['id']}"), "terminals")
+    if answer is None:
         return None
-    scope, host = out.get("hostScope") or {}, w.get("hostId")
-    if not host or host not in (scope.get("hostIds") or []) or host in (scope.get("omittedHostIds") or []):
+    rows, hosts, omitted = answer
+    if w["hostId"] not in hosts or w["hostId"] in omitted:
         return None
     # A terminal row with no usable handle could be the author's own: dropping it would read as "no card".
     if not all(isinstance(t, dict) and isinstance(t.get("handle"), str) and t["handle"] for t in rows):
@@ -2259,12 +2284,6 @@ def worktree_holders(matches):
     try:
         rows = worktree_rows()
         if rows is None:
-            return None
-        # A row that cannot say which worktree it is, where, or what it holds could be the one that wrote the PR:
-        # skipping it as "no match" would turn a partial answer into "no card". An empty branch or head is a real
-        # state (detached HEAD, no commit yet), so only a missing or non-string field marks a row unreadable.
-        if not all(isinstance(w, dict) and all(isinstance(w.get(k), str) for k in ("id", "hostId", "branch", "head"))
-                   and w["id"] and w["hostId"] for w in rows):
             return None
         handles = set()
         for w in rows:
@@ -2284,9 +2303,10 @@ def author_sessions(branch):
     answered completely and no worktree holds the branch; None when the answer cannot show who the author is (Orca
     failed, a list or a host is missing or cut off). Only [] leaves the author unverified: None must refuse, since a
     cut-off list can miss the very card that wrote the PR. A branch selector is rejected as ambiguous once a closed
-    card's worktree and its successor both hold the branch, so the worktrees are listed and each is asked by id."""
-    if not branch:
-        return []
+    card's worktree and its successor both hold the branch, so the worktrees are listed and each is asked by id.
+    A PR with no branch name to look for is None too: nothing was looked up, which is not "no worktree holds it"."""
+    if not isinstance(branch, str) or not branch:
+        return None
     return worktree_holders(lambda w: w.get("branch") in (branch, f"refs/heads/{branch}"))
 
 
@@ -2295,10 +2315,10 @@ def worktree_author_sessions(head):
     terminals of the non-main worktrees sitting at the PR's head sha. The PR number is not matched, because the listing
     spans repositories and another repository's card linking the same number would stand in for the author. [] when
     Orca answered and no worktree sits there; None when the answer cannot show it, which must refuse, not pass as an
-    unverified author. A matching row that cannot be read is None too."""
-    if not head:
-        return []
-    return worktree_holders(lambda w: not w.get("isMainWorktree") and w.get("head") == head)
+    unverified author. A matching row that cannot be read is None too, and so is a head that is not a sha to look for."""
+    if not isinstance(head, str) or not head:
+        return None
+    return worktree_holders(lambda w: not w["isMainWorktree"] and w["head"] == head)
 
 
 def verdict_identity_problem(v):
@@ -2324,7 +2344,9 @@ def verdict_identity_problem(v):
     if not v.get("author"):
         # No card was found (its branch can differ from the PR's). The row may stand only when it says so and the
         # reviewer is not the session that recorded it; a row without the mark predates this rule and is refused.
-        if v.get("author_unverified") is not True:
+        # `author_unverified` vouches for a lookup that answered "no card", which is the list []; a missing or null
+        # author says nothing was looked up.
+        if v.get("author_unverified") is not True or v.get("author") != []:
             return "the PR's author session could not be identified (no card holds its branch)"
         for role, name in stated_reviewers(v):  # either name, so a review:<recorder> source cannot hide it
             if name == v["recorder"]:
