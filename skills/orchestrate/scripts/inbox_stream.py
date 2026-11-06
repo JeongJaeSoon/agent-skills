@@ -231,13 +231,15 @@ class Stream:
         or alone once the inbox was quiet QUIET_S."""
         if not self.threshold or not (force or self.clock() - self.last_mail >= QUIET_S):
             return []
-        # The live session's role, since a /clear can start another one: only the orchestrator is asked to restart.
-        if not self.session or self.role_key(self.session) != "orchestrator":
+        # The live session, not the one seen last (mail can arrive before cleared() notices a /clear): only the
+        # orchestrator is asked to restart.
+        session = self.session_of(self.me)
+        if not session or self.role_key(session) != "orchestrator":
             return []
-        ctx = self.ctx(self.session)
-        if not ctx or ctx <= self.threshold or ctx < self.announced.get(self.session, 0) + RESTART_STEP:
+        ctx = self.ctx(session)
+        if not ctx or ctx <= self.threshold or ctx < self.announced.get(session, 0) + RESTART_STEP:
             return []
-        self.announced[self.session] = ctx
+        self.announced[session] = ctx
         return [f"RESTART DUE: context {ctx // 1000}k > {self.threshold // 1000}k. Once nothing waits on you in this "
                 "turn (a question, a subagent, a reply), end it with `orch handoff save --next \"<what to do first>\" "
                 "--restart` (orchestrate references/top-level.md, \"Restart\")"]

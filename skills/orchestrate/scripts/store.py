@@ -387,8 +387,8 @@ def save_auto_handoff(key, meta, handle, session, within_s, fields, default_next
             except (AttributeError, ValueError):
                 age = None
             if age is not None and age < within_s:
-                if prev.get("handle") and handle and prev["handle"] != handle:
-                    return "conflict", prev["handle"]
+                if prev.get("handle") != handle:  # a row or a caller with no handle is another terminal too
+                    return "conflict", prev.get("handle") or "an unknown terminal"
                 if prev.get("session") == session:
                     return "skipped", None
         newest = last_session_event(key, "handoff", db)

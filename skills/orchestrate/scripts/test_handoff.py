@@ -143,6 +143,9 @@ store.session_event(K, "handoff", {"next": "m", "handle": "term_b", "session": "
 assert store.save_auto_handoff(*args("term_b", "sb"))[0] == "conflict"
 # The same terminal after a /clear (new session, same handle) passes; past the window the other terminal does too.
 assert store.save_auto_handoff(*args("term_a", "sa2")) == ("saved", None)
+# A caller with no handle is another terminal, not an exemption: it cannot hide term_a's save, nor be hidden by it.
+assert store.save_auto_handoff(K, meta("sn", None), None, "sn", handoff.AUTO_EVERY_S, handoff.FIELDS, "nx") == ("conflict", "term_a")
+assert store.save_auto_handoff(*args("term_a", "sa2")) == ("skipped", None)
 assert store.save_auto_handoff(*args("term_b", "sb"), at=4_100_000_000) == ("saved", None)
 # Through ready(): a handoff another terminal just saved for the orchestrator key stops the band's save.
 assert store.save_auto_handoff("orchestrator", meta("sz", "term_z"), "term_z", "sz", handoff.AUTO_EVERY_S, handoff.FIELDS,
