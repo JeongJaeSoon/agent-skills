@@ -165,6 +165,8 @@ def at_command_start(text, idx):
     before = text[:idx].rstrip(" \t")
     if not before or before[-1] in ";&|(){\n":
         return True
+    if before[-1] == "!" and not re.search(r"[^\s!]!$", before):  # `! while …` negates the loop's status
+        return at_command_start(text, len(before) - 1)
     m = re.search(r"(?<![\w.-])(do|then|else|elif)$", before)
     return bool(m) and at_command_start(text, m.start())
 
@@ -198,7 +200,8 @@ def check_monitor(cmd, cfg):
     # sleeps there add up (`sleep 150; sleep 150` waits 300 s). A sleep put in the background (`sleep 300 &`) waits
     # for nobody, so it counts as 0. Where the loop branches (if/else/case/`||`) only one sleep may run, so the
     # shortest one stands for the loop (a heuristic: it can warn on a loop that branches yet always waits long
-    # enough, which costs a warning, never a block). A `wait` in the loop makes a background sleep a real wait. A
+    # enough, which costs a warning, never a block). A `wait` (or `wait $!` on the latest job) makes a background
+    # sleep a real wait. A
     # sleep whose argument is a variable cannot be judged, so that loop passes without a warning. A poll outside any
     # loop runs once and is no watcher. Any one short loop warns.
     for poll in (c for c in cmds if c.name == "gh" and pr_verb(c.words) in PR_POLLS):
@@ -210,8 +213,18 @@ def check_monitor(cmd, cfg):
         secs = [sleep_seconds(c) for c in sleeps]
         if not secs or None in secs:
             continue
-        if not any(c.words == ["wait"] for c in scope):  # `wait $!` waits for one job, not for the sleep
-            secs = [0 if re.match(r"\s*&(?!&)", text[c.span[1]:]) else s for c, s in zip(sleeps, secs)]
+        backgrounded = lambda c: bool(re.match(r"\s*&(?!&)", text[c.span[1]:]))
+        # A bare `wait` waits for every background job; `wait $!` for the latest one started before it.
+        waited, everything = set(), False
+        for w in (c for c in scope if c.name == "wait"):
+            if w.words == ["wait"]:
+                everything = True
+            elif w.words == ["wait", "$!"]:
+                prior = [c for c in scope if backgrounded(c) and c.span[1] < w.span[0]]
+                if prior:
+                    waited.add(id(prior[-1]))
+        if not everything:
+            secs = [0 if backgrounded(c) and id(c) not in waited else s for c, s in zip(sleeps, secs)]
         span = text[region[0]:region[1]]
         branches = re.search(r"(?<![\w.-])(if|case|else|elif)(?![\w.-])|\|\|", span)
         wait = min(secs) if branches else sum(secs)
