@@ -380,7 +380,7 @@ logged = [json.loads(l) for l in (STATE / "reap-actions.jsonl").read_text().spli
 assert (logged[-1]["key"], logged[-1]["ok"]) == (f"card:{CARD}", True), logged[-1]
 with other_process_holds("card", CARD):
     out, code = cards_apply([ROW])
-assert "대상 잠금" in out and done_paths == [CARD], out
+assert "대상 잠금" in str(code) and code != 0 and done_paths == [CARD], (out, code)  # a held card stops the round before any act
 OWN.write_text(json.dumps({"generation": 3, "rules": {"card:close-idle": "sweep"}}))
 LAST.write_text(json.dumps({"t": time.time()}))
 out, code = cards_apply([ROW])

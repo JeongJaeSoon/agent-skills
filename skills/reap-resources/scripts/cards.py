@@ -558,7 +558,7 @@ def preflight(items, cfg):
             continue
         try:
             got = reread(i["path"], cfg)
-        except (RuntimeError, OSError) as e:
+        except (RuntimeError, OSError, ValueError) as e:
             return f"{i['name']}: 다시 판정하지 못함({type(e).__name__}: {str(e)[:120]})"
         if got is None:
             return f"{i['name']}: orca worktree list 에서 다시 찾지 못함"
@@ -576,6 +576,35 @@ def preflight(items, cfg):
     return None
 
 
+def apply_rows(acting, cfg):
+    """Act on each acting row of a plan that passed refuse_plan and preflight, inside the card locks main holds.
+    Returns how many rows failed or could not be checked."""
+    import guard
+    failed = 0
+    for item in acting:
+        with guard.hold(guard.targets({"kind": "card", "path": item["path"]})) as got:
+            if why := guard.keep({"kind": "card", "verdict": item["verdict"]}, None) if got else guard.LOCK_BUSY:
+                print(f"- 건너뜀 {item['name']}: {why}")
+                if guard.check_error(why):  # left, not decided: the others run, then the round ends non-zero
+                    failed += 1
+                continue
+            done = {}
+            logged = {"key": f"card:{item['path']}", "kind": "card", "head": item.get("head"), "ino": item.get("ino")}
+            rule = guard.rule({"kind": "card", "verdict": item["verdict"]})
+            try:
+                got = act(item, cfg, done=done)
+            except BaseException as e:  # logged whatever it was: terminals closed before it are still closed
+                reap.log_action({**logged, **(done.get("identity") or {})}, e, False, rule, done.get("closed"))
+                if not isinstance(e, (RuntimeError, OSError)):
+                    raise
+                failed += 1
+                print(f"- 실패 {item['name']}: {e}")
+            else:
+                reap.log_action({**logged, **(done.get("identity") or {})}, got, True, rule, done.get("closed"))
+                print(f"- {item['name']}: {got}")
+    return failed
+
+
 def main(argv):
     cmd = argv[1] if len(argv) > 1 else "scan"
     cfg = reap.config()
@@ -590,32 +619,15 @@ def main(argv):
             guard.ownership()
         except guard.Unreadable as e:
             sys.exit(f"아무것도 하지 않았다: {e}")
-        if why := preflight(plan["items"], cfg):
-            sys.exit(f"아무것도 닫지 않았다: {why}")
-        failed = 0
-        for item in plan["items"]:
-            if item["verdict"] not in ACTING:
-                continue
-            with guard.hold(guard.targets({"kind": "card", "path": item["path"]})) as got:
-                if why := guard.keep({"kind": "card", "verdict": item["verdict"]}, None) if got else guard.LOCK_BUSY:
-                    print(f"- 건너뜀 {item['name']}: {why}")
-                    if guard.check_error(why):  # left, not decided: the others run, then the round ends non-zero
-                        failed += 1
-                    continue
-                done = {}
-                logged = {"key": f"card:{item['path']}", "kind": "card", "head": item.get("head"), "ino": item.get("ino")}
-                rule = guard.rule({"kind": "card", "verdict": item["verdict"]})
-                try:
-                    got = act(item, cfg, done=done)
-                except BaseException as e:  # logged whatever it was: terminals closed before it are still closed
-                    reap.log_action({**logged, **(done.get("identity") or {})}, e, False, rule, done.get("closed"))
-                    if not isinstance(e, (RuntimeError, OSError)):
-                        raise
-                    failed += 1
-                    print(f"- 실패 {item['name']}: {e}")
-                else:
-                    reap.log_action({**logged, **(done.get("identity") or {})}, got, True, rule, done.get("closed"))
-                    print(f"- {item['name']}: {got}")
+        # Every acting card's lock is taken before the first close and kept until the round ends, so a card another
+        # cleaner holds stops the plan here instead of after the cards before it were closed.
+        acting = [i for i in plan["items"] if i["verdict"] in ACTING]
+        with guard.hold([t for i in acting for t in guard.targets({"kind": "card", "path": i["path"]})]) as held:
+            if not held:
+                sys.exit(f"아무것도 닫지 않았다: {guard.LOCK_BUSY}")
+            if why := preflight(plan["items"], cfg):
+                sys.exit(f"아무것도 닫지 않았다: {why}")
+            failed = apply_rows(acting, cfg)
         sys.exit(1 if failed else 0)
     if cmd != "scan":
         sys.exit(__doc__)

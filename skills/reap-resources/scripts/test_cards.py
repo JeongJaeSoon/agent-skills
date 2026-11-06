@@ -680,11 +680,26 @@ assert "다시 찾지 못함" in preflight_refuses(TWO, **{OTHER["path"]: None})
 cards.cardguard.guard = lambda path, *a, **k: (path != OTHER["path"], "터미널에서 작업 중")
 assert "터미널에서 작업 중" in preflight_refuses(TWO)                                          # a guard on row 2
 cards.cardguard.guard = lambda *a, **k: (True, "")
-guard.keep = lambda *a, **k: "검사를 마치지 못함(PermissionError: x)"
-assert "검사를 마치지 못함" in preflight_refuses(TWO)
+keep_calls = []
+guard.keep = lambda *a, **k: keep_calls.append(1) or ("검사를 마치지 못함(PermissionError: x)" if len(keep_calls) == 2 else None)
+assert "검사를 마치지 못함" in preflight_refuses(TWO) and len(keep_calls) == 2               # only row 2 fails
 guard.keep = lambda *a, **k: None
-reap.dir_ino = lambda p: 8
-assert "다시 만들어짐" in preflight_refuses([{**PLAN_ITEM, "ino": 7}, {**TWO[1], "ino": 7}])
+reap.dir_ino = lambda p: 7 if p == CARD else 8
+assert "다시 만들어짐" in preflight_refuses([{**PLAN_ITEM, "ino": 7}, {**TWO[1], "ino": 7}])  # only row 2's folder moved
+reap.dir_ino = lambda p: 7
+reread_fails = lambda path, cfg: (_ for _ in ()).throw(ValueError("bad json")) if path == OTHER["path"] else rereads[path]
+cards.reread = reread_fails
+assert "다시 판정하지 못함" in refuses(TWO, listing=BOTH, seal=True)                           # a parse error is a refusal, not a traceback
+cards.reread = lambda path, cfg: rereads.get(path)
+
+# A card another cleaner holds stops the plan before the cards ahead of it are closed.
+import fcntl  # noqa: E402
+lockfile = guard.lock_file("card", reap.real(OTHER["path"]))
+lockfile.parent.mkdir(parents=True, exist_ok=True)
+with open(lockfile, "w") as other_cleaner:
+    fcntl.flock(other_cleaner, fcntl.LOCK_EX)
+    assert guard.LOCK_BUSY in refuses(TWO, listing=BOTH, seal=True)
+assert refused_apply(TWO, listing=BOTH, seal=True) == 0 and acted == ["c1", "c2"]            # released: runs
 cards.reread, cards.cardguard.guard, reap.dir_ino = saved_reread, saved_cg, saved_ino
 
 cards.cards_listing = saved_listing
