@@ -189,9 +189,9 @@ def mask(text, limit=None):
 
 # ---------------------------------------------------------------- CLI sources
 
-def run_json(cmd, timeout=30):
+def run_json(cmd, timeout=30, env=None):
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL, env=env)
     except FileNotFoundError:
         raise SourceError(f"{cmd[0]} not found")
     except subprocess.TimeoutExpired:
@@ -303,10 +303,16 @@ def recent_runs(automation_id):
 def fetch_automations():
     """Orca's scheduled automations, each with its last runs newest first. Only Orca's scheduler is visible here: a
     session's own loop (CronCreate) or a launchd job leaves nothing to collect."""
+    import jobs  # here: jobs imports this module
+    try:
+        keys = {r["job_name"]: r["key"] for r in jobs.registry() if r["job_name"]}
+    except ImportError:  # an install without the repository's scripts/: no automation is the registry's
+        keys = {}
     out = []
     for a in orca("automations", "list").get("automations", []):
         runs = sorted(recent_runs(a["id"]), key=lambda r: r.get("runNumber") or 0, reverse=True)[:AUTOMATION_RECENT]
-        out.append({"id": a["id"], "name": mask(a.get("name"), 80), "rrule": a.get("rrule"), "timezone": a.get("timezone"),
+        # key: the registry name (scripts/automations.py), None for an Orca automation the registry does not list
+        out.append({"id": a["id"], "key": keys.get(a.get("name")), "name": mask(a.get("name"), 80), "rrule": a.get("rrule"), "timezone": a.get("timezone"),
                     "enabled": bool(a.get("enabled")), "next_run_at": ms_iso(a.get("nextRunAt")),
                     "last_run_at": ms_iso(a.get("lastRunAt")),
                     # The output can name people and channels: masked, first line only, never cut short.
@@ -720,10 +726,14 @@ def orca_messages_sent(messages):
             and isinstance(m.get("created_at"), str) and (m.get("body") or m.get("subject"))]
 
 
-def graphql(query):
+def graphql(query, app=None):
     """(data, errors). gh exits non-zero when any alias errors, even with the rest of the data present, so one
-    inaccessible PR must not blank the others."""
-    out = run_json(["gh", "api", "graphql", "-f", f"query={query}"], timeout=60)
+    inaccessible PR must not blank the others. With `app`, gh runs under that ghtkn app's token (handed to the child
+    only, as GH_TOKEN); without it, under whatever login gh has."""
+    cmd, env = ["gh", "api", "graphql", "-f", f"query={query}"], None
+    if app:
+        cmd, env = ["ghtkn", "exec", "-e", "GH_TOKEN", "--", *cmd], {**os.environ, "GHTKN_APP": app}
+    out = run_json(cmd, timeout=60, env=env)
     data = out.get("data") if isinstance(out, dict) else None
     errors = [mask(e.get("message", "")[:200]) for e in (out.get("errors") or [])] if isinstance(out, dict) else []
     if data is None:
