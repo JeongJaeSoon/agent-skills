@@ -1,9 +1,7 @@
----
-name: handoff-ticket
-description: "Use to hand the next ticket to a fresh Orca card — \"핸드오프\", \"다음 티켓 진행해줘\", \"남은 작업 있어?\", \"머지하고 다음 진행해줘\" — and when this ticket is done, to pick what runs next. Another repo is dispatch-card. An orchestrator dispatches it instead."
----
+# Next ticket (handoff)
 
-# Orca handoff
+The next-ticket mode of `dispatch-card` (formerly the `handoff-ticket` skill). Section numbers
+below are this file's own; "dispatch-card §N" means the skill's SKILL.md.
 
 Finish here, and start each follow-up ticket that stands on its own in its own worktree card
 (§0 "Who runs it" keeps a small defect in what this session just shipped here).
@@ -11,8 +9,9 @@ Finish here, and start each follow-up ticket that stands on its own in its own w
 `use-tracker`; the worklog goes through `use-notes`.
 
 Not a handoff: the target is another repo, or this session still has its own work after
-spawning (`dispatch-card`, which never closes this session). "병렬로 진행" and "동시에 진행" mean
-this skill only when they name same-repo ticket cards; settle which before creating cards.
+spawning (dispatch, dispatch-card §0–§4, which never closes this session). "병렬로 진행" and
+"동시에 진행" mean this mode only when they name same-repo ticket cards; settle which before
+creating cards.
 
 ## 0. At "done", decide what happens next
 
@@ -23,11 +22,11 @@ last criterion, not the merge commit, is the decision point.
 **Inside a program.** If this session's brief or prompt has a `PROGRAM: <slug>` line
 (`orchestrate` `references/brief.md`), it does not pick or spawn the next ticket: after
 `worker_done` it closes itself or idles per `end-session` §7, and the orchestrator or lead that dispatched it decides what
-runs next. Nothing else makes a session a program worker. The rest of this skill is for sessions without that line.
+runs next. Nothing else makes a session a program worker. The rest of this file is for sessions without that line.
 
 **Loose ends.** A review comment, or a fix that lands right here, is just work: do it. Anything
 else is classified NOW / LATER / DROP (`use-tracker`
-[references/exit-condition.md](../use-tracker/references/exit-condition.md)); only a NOW finding
+[references/exit-condition.md](../../use-tracker/references/exit-condition.md)); only a NOW finding
 becomes a ticket (`write-ticket`), and then it is the next ticket, not this one.
 
 **Feedback on in-flight work is a new ticket.** When the user says "이거 더 낫게" about a card
@@ -37,7 +36,7 @@ append it to the running card's prompt or scope.
 **Dependent tickets.** When ticket B can only start after A, record it in the tracker (A
 blocks B). Only when B uses A's code is it a stack: B's card starts from A's branch (§3
 `--base-branch`). Same files → B starts after A lands, unless they share only a hotspot (a
-`translated-from` line, a generated file); a deploy order alone → both on the default branch (`deliver-ticket` [pull-request.md](../deliver-ticket/references/pull-request.md) "Stacks").
+`translated-from` line, a generated file); a deploy order alone → both on the default branch (`deliver-ticket` [pull-request.md](../../deliver-ticket/references/pull-request.md) "Stacks").
 
 **Who runs it.** A small defect in the code this session just shipped stays here, on its own
 branch and its own PR. A session can ship N PRs this way — one ticket each, one at a time — so
@@ -62,7 +61,7 @@ A standing instruction is that permission, already given: "작업 끝나면 다�
 **Nothing here is asked.** Whether to file a loose-end ticket, whether to spawn a card, which
 ticket comes next and whether to close this session are decided above. A question that still
 seems needed goes through the owner-ask gate
-([owner-ask-gate.md](../orchestrate/references/owner-ask-gate.md)) first. File the NOW loose-end
+([owner-ask-gate.md](../../orchestrate/references/owner-ask-gate.md)) first. File the NOW loose-end
 tickets before the next card starts, so the findings survive.
 
 ## 1. Confirm this work is actually done
@@ -77,7 +76,7 @@ Take the identifiers from the user's message. If none was given, take the next u
 in the same tracker project or parent. Never guess a ticket number: query the tracker first
 (`use-tracker`: the parent's children, the project's unstarted tickets, a search on the user's
 words), and only when that still names none, go through the owner-ask gate
-([owner-ask-gate.md](../orchestrate/references/owner-ask-gate.md)).
+([owner-ask-gate.md](../../orchestrate/references/owner-ask-gate.md)).
 
 Parallel requests ("병렬로", "동시에") still mean one card per ticket — repeat step 3 per ticket,
 never two tickets in one prompt. Hold back a ticket that would edit the same files as one already
@@ -119,7 +118,7 @@ confirmed: look at it, do not create it again.
 - The prompt is the whole context the new session gets: put anything not derivable from the
   ticket (decisions, base branch, gotchas) in `--note`, and approvals beyond the ticket's normal
   flow (a deploy, a restart, a settings change) as an `APPROVED:` line of the note (without one the
-  card gets `APPROVED: none`) with the Human only and Model calls lines
+  card gets `APPROVED: none`, so an approval written only in the note's prose does not reach it) with the Human only and Model calls lines
   (`dispatch-card` §2). The first prompt is the only place an approval reaches the card; one sent
   later by message is refused as not the human's.
 

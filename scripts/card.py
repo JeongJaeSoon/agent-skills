@@ -902,6 +902,23 @@ def brief_kind(brief_path):
     return m.group(1)
 
 
+# `lead`, `lead:<slug>`, `<slug>-lead`: a name that calls the card a lead. `lead-<topic>` is a worker about leads.
+LEAD_NAME = re.compile(r"(?i)^(?:lead(?::.*)?|.*[-:\s]lead)$")
+# TASKS, INBOX and GATE are words a worker brief uses too; only a brief with both of these is a program's.
+LEAD_ONLY_ROWS = ("DELEGATE", "PREDICATE")
+
+
+def lead_shaped(text, opts):
+    """Why a brief that guard.is_lead() calls a worker looks like a lead's, else None. The model, the hooks and the
+    role record all follow is_lead, so a lead brief missing its ROLE line would run as a worker without a word."""
+    named = [opts[k] for k in ("--name", "--display-name") if LEAD_NAME.match(opts.get(k) or "")]
+    if named:
+        return f"the card is named {named[0]!r} but the brief has no lead rows"
+    if all(row(text, k) for k in LEAD_ONLY_ROWS):
+        return f"the brief has {' and '.join(LEAD_ONLY_ROWS)} rows but no ROLE row"
+    return None
+
+
 def session_model(opts, lead, name, kind=None):
     """(model, model_from): what picked it, or (None, None) after a warning line. See the module docstring."""
     if opts.get("--model"):
@@ -1047,6 +1064,10 @@ def create_locked(brief, opts, refs, prompt, kind=None, order=None):
                         "repo's main worktree when several Orca workspaces share that path. Pass `id:<worktree id>` "
                         "(`orca worktree show --worktree <it> --json`), or leave it out for this terminal's worktree.")
     lead = guard.is_lead(text)
+    if not lead and (why := lead_shaped(text, opts)):
+        raise Refuse(2, f"[{ME}] {brief}: {why}. Without a `ROLE: lead <slug>` line the card runs on "
+                        "orchestrate.models.worker with a worker's hooks. Write the lead rows (orchestrate "
+                        "references/brief.md \"Lead\"), or rename the card if it is a worker.")
     # Checked before the lead's form is picked: a lead started as a /goal card still reports to this Run.
     checked = supervisor(wanted) if to_run and not opts.get("--card") else None
     if lead and to_run and not opts.get("--card"):
@@ -1181,7 +1202,7 @@ HANDOFF = "skills-sync handoff"
 
 
 def handoff_parent():
-    """`id:<…>` of this card's parent worktree, else of this card itself (handoff-ticket §3), or Refuse(6)."""
+    """`id:<…>` of this card's parent worktree, else of this card itself (dispatch-card next-ticket §3), or Refuse(6)."""
     mine = caller_worktree()
     res = orca_result("worktree", "show", "--worktree", mine)
     parent = ((res or {}).get("worktree") or {}).get("parentWorktreeId") if isinstance((res or {}).get("worktree"), dict) else None
@@ -1192,7 +1213,7 @@ def handoff_parent():
 
 
 def confirm_start(handle):
-    """(started, detail): wait for the new agent to settle, then read its screen (handoff-ticket §4)."""
+    """(started, detail): wait for the new agent to settle, then read its screen (dispatch-card next-ticket §4)."""
     import sync
     run([ORCA, "terminal", "wait", "--terminal", handle, "--for", "tui-idle", "--timeout-ms", "60000", "--json"],
         timeout=90)
@@ -1207,7 +1228,7 @@ def handoff(argv):
     """skills-sync handoff <TICKET> [--title <short title>] [--note <text>] [--base-branch <b>] [--reference <url>]...
     [--role impl|verify|review] [--supersede] [--no-parent]
 
-    The next ticket's /goal card, as handoff-ticket §3 makes it: named after the ticket, under this card's parent (or
+    The next ticket's /goal card, as dispatch-card next-ticket §3 makes it: named after the ticket, under this card's parent (or
     this card), its prompt `/goal <TICKET>. <note> CLOSE: …`, linked to --reference, displayed as `<TICKET> <title>`,
     its setup closed in the background. The duplicate-card key uses the ticket and every --reference. Then its start is
     read from its screen: exit 0 only once it shows the prompt taken; 5 when the card exists but the start, the link

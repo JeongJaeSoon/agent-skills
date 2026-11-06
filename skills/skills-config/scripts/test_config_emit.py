@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -590,6 +591,62 @@ class HashAndOutTest(Base):
             r = self.run_script("emit", "--spec", self.spec, "--out", target)
             self.assertIn("--out must be outside", r.stderr)
             self.assertFalse(target.exists())
+
+    def test_default_out_is_state_dir_and_run_line_points_there(self):
+        self.write_spec(self.SPEC)
+        r = self.run_script("emit", "--spec", self.spec)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = self.home / ".local/state/agent-skills/config-scripts" / f"spec-{time.strftime('%Y%m%d')}.py"
+        self.assertTrue(out.is_file())
+        self.assertEqual(out.stat().st_mode & 0o777, 0o600)
+        self.assertIn(f"python3 -I {out}", r.stdout.strip().splitlines()[-1])
+        self.assertFalse((self.home / "agent-skills-config").exists())
+
+    def test_second_default_emit_same_day_keeps_the_first_script(self):
+        self.write_spec(self.SPEC)
+        first = self.run_script("emit", "--spec", self.spec)
+        digest_before = first.stdout.strip().splitlines()[-1]
+        self.write_spec({"permissions": {"add": ["mcp__srv__other"]}})
+        second = self.run_script("emit", "--spec", self.spec)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        base = self.home / ".local/state/agent-skills/config-scripts"
+        stem = f"spec-{time.strftime('%Y%m%d')}"
+        self.assertIn("mcp__srv__tool", (base / f"{stem}.py").read_text())
+        self.assertIn("mcp__srv__other", (base / f"{stem}-2.py").read_text())
+        self.assertIn(f"python3 -I {base / (stem + '-2.py')}", second.stdout.strip().splitlines()[-1])
+        self.assertNotEqual(digest_before, second.stdout.strip().splitlines()[-1])
+
+    def test_parallel_default_emits_each_keep_their_own_script(self):
+        specs = []
+        for i in range(8):
+            spec = self.home / f"p{i}" / "spec.json"
+            spec.parent.mkdir()
+            spec.write_text(json.dumps({"permissions": {"add": [f"mcp__srv__tool{i}"]}}))
+            specs.append(spec)
+        procs = [subprocess.Popen([sys.executable, "-I", str(SCRIPT), "emit", "--spec", str(s)],
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=self.env)
+                 for s in specs]
+        results = [p.communicate() + (p.returncode,) for p in procs]
+        self.assertEqual([r[2] for r in results], [0] * 8, [r[1] for r in results])
+        files = list((self.home / ".local/state/agent-skills/config-scripts").glob("*.py"))
+        self.assertEqual(len(files), 8)
+        for i in range(8):
+            self.assertEqual(sum(f"mcp__srv__tool{i}'" in f.read_text() for f in files), 1)
+        self.assertTrue(all("replaced" not in r[0] for r in results))
+
+    def test_explicit_out_replaces_an_existing_file_and_says_so(self):
+        r, out = self.emit(self.SPEC)
+        self.assertNotIn("replaced", r.stdout)
+        r, _ = self.emit({"permissions": {"add": ["mcp__srv__other"]}})
+        self.assertIn(f"wrote {out} (replaced an existing file)", r.stdout)
+        self.assertIn("mcp__srv__other", out.read_text())
+
+    def test_default_out_refused_when_home_state_is_inside_a_config_dir(self):
+        self.write_spec(self.SPEC)
+        env = {**self.env, "HOME": str(self.profile)}
+        r = subprocess.run([sys.executable, "-I", str(SCRIPT), "emit", "--spec", str(self.spec)],
+                           capture_output=True, text=True, env={**env, "CLAUDE_CONFIG_DIR": str(self.profile)})
+        self.assertIn("--out must be outside", r.stderr)
 
     def test_dry_run_of_emitted_copy_writes_nothing(self):
         r, out = self.emit(self.SPEC)

@@ -1,6 +1,6 @@
 ---
 name: dispatch-card
-description: "Use to send work to another repo, or a side branch here, as a new Orca card while this session goes on — \"별도 세션으로 진행해줘\", \"~ repo 에 작업 지시해줘\" — and for an orchestrator's change work. The next ticket is handoff-ticket."
+description: "Use to start a new Orca card: work for another repo or a side branch while this session goes on — \"별도 세션으로 진행해줘\", \"~ repo 에 작업 지시해줘\" — an orchestrator's change work, and the next ticket once this one is done — \"핸드오프\", \"다음 티켓 진행해줘\", \"남은 작업 있어?\", \"머지하고 다음 진행해줘\"."
 ---
 
 # Orca dispatch
@@ -8,22 +8,23 @@ description: "Use to send work to another repo, or a side branch here, as a new 
 Pack what the new session needs to know into a brief, create the card in the target repo,
 confirm it started, come back to your own work.
 
-## 0. Dispatch or handoff — and is it even this skill
+## 0. Dispatch or next ticket — and is it even this skill
 
 The user's phrasing decides it. **"위임하고 너는 X 계속해"** — "~에 위임하고 너는 손 떼",
 "위임해서 진행시키고 너는 원래 작업 진행해줘", "기존 작업 하면서 ~도 진행해줘" — is dispatch:
 this session has its own work after the instruction. **"끝났으니 다음"** — "작업 끝나면 다음
-티켓", "남은 것 진행해줘" — is `handoff-ticket`.
+티켓", "남은 것 진행해줘" — is the next-ticket mode (§5).
 
-| | dispatch-card | handoff-ticket |
+| | dispatch (§1–§4) | next ticket (§5) |
 |---|---|---|
 | This session | keeps going | finishes and closes |
 | Target repo | another repo, or a side branch of this one | this repo |
 | Input | a brief you write (§2) | a ticket, `/goal <TICKET>` |
 | Relationship | parent → child card, both alive | successor card, this one gone |
 
-This skill never calls `end-session` — dispatching is the reason this session stays alive. If
-the target is this repo and this session is done, stop here and follow `handoff-ticket` instead.
+Dispatch never calls `end-session` — dispatching is the reason this session stays alive. If
+the target is this repo and this session is done, stop here and follow the next-ticket mode (§5)
+instead.
 
 Target is another repo → always this skill, whatever the phrasing; handoff never crosses
 repos. The reverse does not hold — same repo is still dispatch when this session keeps working.
@@ -109,7 +110,9 @@ A card that will run a project for this session through cards of its own (a lead
 `orchestrate` `references/brief.md` "Lead" instead of the list above, and its `--prompt` also
 carries the `MODE`, `ROLE: lead <slug>`, `INBOX`, `DELEGATE`, `PREDICATE`, `MERGE`, `TASKS` and `GATE` lines; the hook refuses a lead's prompt (a `MODE`
 line or a `<project>: lead` head) that lacks `MODE`, `ROLE`, `DELEGATE` or `PREDICATE`. The `ROLE` line binds the
-lead role to the card's session, so the reorient hook reminds it of its program on every prompt. It stands
+lead role to the card's session, so the reorient hook reminds it of its program on every prompt. It is also what makes
+`skills-sync card` start the card on `orchestrate.models.lead`: a brief without it is a worker's, so the helper refuses
+a brief that has both `DELEGATE` and `PREDICATE` rows, or a card named `lead`, `lead:<slug>` or `<slug>-lead`, and no `ROLE` line. It stands
 in for `claude --agent agent-skills:lead`: `orca worktree create --agent` takes an Orca agent id, not CLI flags. Without these lines a lead reports done and waits for an order that never comes.
 
 Exceptions. A task that fits in three or four lines goes inline in `--prompt` after `/goal`, no
@@ -123,7 +126,8 @@ not send the approval by message, and do not do the act yourself.
 
 ## 3. Create the card
 
-Same command and conventions as `handoff-ticket` §3. What differs:
+Same command and conventions as the next-ticket mode's §3
+([references/next-ticket.md](references/next-ticket.md)). What differs:
 
 ```bash
 orca worktree ps                     # a card already on this task? the first rule below
@@ -248,3 +252,13 @@ card again when it ends (`end-session` §3); a `--no-parent` card goes in the wo
 
 Only when the user says "결과 받아와": tell the target session in the brief to append its result
 to the brief note, and read the note when this session actually needs it.
+
+## 5. Next ticket
+
+When this ticket is done (`deliver-ticket` §6) and the next one in this repo goes to a fresh card,
+or the user asks "핸드오프", "다음 티켓 진행해줘", "남은 작업 있어?", "머지하고 다음 진행해줘".
+Unlike dispatch, this session finishes and closes once the successor card has started. Read and
+follow [references/next-ticket.md](references/next-ticket.md): §0 decides what happens next (a
+program worker picks nothing, loose ends are NOW / LATER / DROP, nothing is asked), §1–§2 confirm
+done and resolve the tickets, §3 `skills-sync handoff`, §4 verify the start, §5 close by
+`end-session`.

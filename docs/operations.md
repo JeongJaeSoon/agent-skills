@@ -15,7 +15,7 @@
 - Claude Code와 GitHub(`gh` 로그인).
 - 티켓 트래커: Linear 또는 Jira 어댑터(`use-tracker`). `tracker.adapter`가 없으면 Linear다.
 - 노트: Obsidian vault 또는 일반 Markdown 폴더(`use-notes`). 설정하지 않으면 노트를 쓰지 않고 멈추거나 묻는다([설정 전환 안내](configuration-migration.md)).
-- Orca: `orchestrate`, `handoff-ticket`, `dispatch-card`, Orca automation(`janitor`, `watch-prs`·`watch-mentions` 회차)이 쓴다. `deliver-ticket`은 Orca 카드 밖에서도 돈다. 스킬마다 Orca를 어디에 쓰는지는 [스킬 카탈로그](skills.md)의 그 스킬 절에 있다.
+- Orca: `orchestrate`, `dispatch-card`, Orca automation(`janitor`, `watch-prs`·`watch-mentions` 회차)이 쓴다. `deliver-ticket`은 Orca 카드 밖에서도 돈다. 스킬마다 Orca를 어디에 쓰는지는 [스킬 카탈로그](skills.md)의 그 스킬 절에 있다.
 - 동기화 작업과 `pressure-watch`·`reap-hard`·`orch-dash`·`land-executor`는 Orca automation으로 돌므로 Orca 앱이 켜져 있는 동안만 돈다. macOS에서 `preview-watch`·`share-server`만 launchd를 쓴다. 예전 setup이 만든 LaunchAgent가 남아 있으면 `setup-pc` 점검이 알리고, 제거는 오너가 직접 한다([automation.md](automation.md#처음-설치할-때)).
 - 독립 리뷰와 브라우저 검증은 사용 가능한 리뷰어와 브라우저 자동화 도구로 한다. 특정 모델이나 별도 모델 플러그인은 필요하지 않다.
 

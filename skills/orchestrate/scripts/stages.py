@@ -14,6 +14,7 @@ the rows under it, a feature or an epic: it has no PR and no cells.
 import datetime as dt, fcntl, json, os, pathlib, re, sys
 
 import fleet, stage_auto
+import store as db_store  # `store` is the name of the table a stage function receives
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "brief" / "scripts"))
 import table_width  # noqa: E402
@@ -33,13 +34,20 @@ def path():
 
 
 def read():
+    """The recorded rows: from the DB once `orch db state` moved stages.json in (finished rows older than DONE_KEEP_S are
+    hidden there, not deleted), else from the file."""
+    if db_store.state_ready():
+        return db_store.stage_read(DONE_KEEP_S)
     store = fleet.read_json(path(), {}) or {}
     return {"rows": store.get("rows") or {}, "order": store.get("order") or [], "env": store.get("env") or {},
             "next": store.get("next") or []}
 
 
 def change(fn):
-    """Run fn(store) on stages.json under a lock and replace the file whole; returns what fn returns."""
+    """Run fn(store) on the recorded rows and keep what it changed; returns what fn returns. The file case replaces
+    stages.json whole under a lock and drops finished rows older than DONE_KEEP_S."""
+    if db_store.state_ready():
+        return db_store.stage_change(fn, DONE_KEEP_S)
     path().parent.mkdir(parents=True, exist_ok=True)
     with (fleet.state_dir() / "stages.lock").open("a") as f:
         fcntl.flock(f, fcntl.LOCK_EX)

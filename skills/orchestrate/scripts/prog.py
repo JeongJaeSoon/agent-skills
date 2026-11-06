@@ -35,6 +35,10 @@ Usage: orch <command> <slug> [options]
                                      B's branch), or one found after dispatch. Start-after edges are
                                      Orca task deps (task-create --deps), read from the Run
   queue <slug> [--json]              the land order and why each PR is not moving
+  overlap <slug> --table [--max-open N]
+                                     the files two or more open PRs of the repo change (any program), the PRs
+                                     in the order to land them (ready first, then by number; advice only), and an
+                                     OVER line for a file with more than N open PRs
   overlap <slug> [--paths P,P]       open program PRs with no land-after relation that change one file
                                      (or one exclusive_paths glob): stack the later on the earlier. With
                                      --paths, the open PRs a unit not started yet would collide with.
@@ -141,7 +145,10 @@ Usage: orch <command> <slug> [options]
                                      orchestrate.order_auto_close is true. shadow sets those events against what the
                                      sessions closed by hand
   db import [--dry-run | --apply] [--rehearsal] | export --legacy --target 4a|pre-4a DIR | dump [TABLE]
-  db backup FILE | restore FILE [--rehearsal] | rollback 4b DIR [--rehearsal] | cutover-plan 4a|4b
+  db backup FILE | restore FILE [--rehearsal] | rollback 4b|state DIR [--rehearsal] | cutover-plan 4a|4b
+  db state [--auto]                  acks.jsonl and stages.json -> tables, after a backup, with tombstones in their place
+                                     (setup runs it with --auto after an update; a rerun changes nothing);
+                                     export --legacy --target state DIR writes both files back for rollback state DIR
   db migrate [--check] | init        migrate is the whole cutover in one rerunnable command, run by the owner from a
                                      plain terminal (cutover.py); init is for a PC with no state (setup runs it)
                                      no slug: agent-skills.db (store.py). import moves decisions.json,
@@ -402,6 +409,17 @@ class Program:
         row = {"ts": now(), "ev": ev, **{k: v for k, v in fields.items() if v is not None}}
         with self.locked(), self.ledger_path.open("a") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        return row
+
+    def append_if(self, ev, ok, **fields):
+        """append, unless ok(events) is false; None then. One lock over the read and the write, so a row another
+        process appends in between is seen by ok, not overwritten in effect."""
+        row = {"ts": now(), "ev": ev, **{k: v for k, v in fields.items() if v is not None}}
+        with self.locked():
+            if not ok(self.events()):
+                return None
+            with self.ledger_path.open("a") as f:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
         return row
 
     def append_once(self, ev, seen, **fields):
@@ -864,6 +882,9 @@ def is_exclusive(cfg, files):
     return sorted(f for f in files if any(fnmatch.fnmatch(f, g) for g in pats))
 
 
+REST_FILES_CAP = 3000
+
+
 def rest_files(repo, pr):
     # pr view stops at 100 files; the REST listing pages up to 3000.
     out = run(["gh", "api", f"repos/{repo}/pulls/{pr}/files", "--paginate", "--jq", ".[].filename"], check=False)
@@ -1042,8 +1063,100 @@ def cross_overlaps(files, theirs, rows, stacks=None, paths=None, unread=()):
     return out
 
 
+def repo_verdicts(repo, home=None):
+    """({PR: its latest verdict event across every program on `repo`}, ["program ledger X" for each unreadable one]).
+    A PR can be in several programs' ledgers; the newest verdict is the one that counts, and at the same second a
+    failing one wins over a passing one, so the table never reads ready on a coin flip."""
+    home = home or HOME
+    best, unknown = {}, []
+    try:
+        dirs = sorted(home.iterdir())
+    except FileNotFoundError:
+        return best, unknown
+    except OSError:
+        return best, ["program ledgers"]
+    for d in dirs:
+        if d.name.startswith((".", "_")):
+            continue
+        try:
+            cfg = (d / "program.json").read_text()
+        except (FileNotFoundError, NotADirectoryError):
+            continue  # not a program directory
+        except (OSError, ValueError):
+            unknown.append(f"program ledger {d.name}")
+            continue
+        try:
+            if json.loads(cfg)["repo"].lower() != repo.lower():
+                continue
+            led = d / "ledger.jsonl"
+            try:
+                text = led.read_text()
+            except FileNotFoundError:
+                text = ""  # a program that has not recorded anything yet
+            events = [json.loads(l) for l in text.splitlines() if l.strip()]
+            mine = dict(best)  # merged into `best` only when this whole ledger read, so a bad one adds nothing
+            for e in events:
+                if e.get("ev") == "verdict" and type(e.get("pr")) is int:
+                    ts = parse_ts(e["ts"])
+                    if ts.tzinfo is None:
+                        raise ValueError("timestamp without a zone")
+                    old = mine.get(e["pr"])
+                    if old is None or ts > old[0] or (ts == old[0] and e.get("result") != "pass"):
+                        mine[e["pr"]] = (ts, e)
+            best = mine
+        except (OSError, ValueError, AttributeError, TypeError, KeyError):  # UnicodeDecodeError is a ValueError
+            unknown.append(f"program ledger {d.name}")
+    return {n: e for n, (_, e) in best.items()}, unknown
+
+
+def table_facts(rows, verdicts):
+    """{PR: what overlap_table orders by} from the open PR listing and repo_verdicts."""
+    out = {}
+    for r in rows:
+        failed, pending, _ = ci_summary(r.get("statusCheckRollup"))  # no checks reads pending, even on a no-CI repo
+        v = verdicts.get(r["number"])
+        state = ("none" if not v else "fail" if v.get("result") != "pass"
+                 else "current" if v.get("sha") == r.get("headRefOid") else "stale")
+        out[r["number"]] = {"verdict": state, "ci": "failed" if failed else "pending" if pending else "ok",
+                            "merge_state": r.get("mergeStateStatus"), "draft": bool(r.get("isDraft")),
+                            "base": r.get("baseRefName") or "main"}
+    return out
+
+
+def cmd_overlap_table(p, argv):
+    """The hot files of every open PR on the repo, whichever program owns it, and the order to land them in."""
+    import overlap_table
+    repo = p.cfg["repo"]
+    limit = opt(argv, "--max-open")
+    if limit is not None and not (limit.isdigit() and int(limit) > 0):
+        sys.exit("--max-open takes a positive integer")
+    verdicts, unknown = repo_verdicts(repo)
+    try:
+        rows = open_rows(repo)
+    except (SystemExit, Exception):
+        rows = []
+        unknown.append("open PR listing")
+    if len(rows) >= OPEN_LIMIT:
+        unknown.append(f"open PR listing (stops at {OPEN_LIMIT})")
+    files, unread = {}, []
+    for r in rows:
+        try:
+            changed = rest_files(repo, r["number"])
+        except (OSError, ValueError):
+            changed = None
+        # A listing that stops at the REST cap may have dropped files, so it counts as unread.
+        if changed is None or len(changed) >= REST_FILES_CAP:
+            unread.append(r["number"])
+        else:
+            files[r["number"]] = changed
+    print("\n".join(overlap_table.hot_table(files, table_facts(rows, verdicts),
+                                            int(limit) if limit else None, unread, unknown)))
+
+
 def cmd_overlap(argv):
     p = Program(argv[0])
+    if "--table" in argv:
+        return cmd_overlap_table(p, argv)
     rows, tasks = open_rows(p.cfg["repo"]), run_tasks(p.cfg["run"])
     events = p.events()
     prs, files, theirs, unread = cross_inputs(p.slug, p.cfg["repo"], events, rows,
@@ -2103,17 +2216,34 @@ SELF_REVIEWERS = {"self", "implementer", "author"}
 
 
 def author_sessions(branch):
-    """Terminal handles of the card whose worktree holds the PR's branch: the sessions that wrote it. Empty when Orca
-    does not answer or no card holds the branch, which leaves the author unverified."""
+    """Terminal handles of every card whose worktree holds the PR's branch: the sessions that wrote it. Empty when Orca
+    does not answer for any one of them or no card holds the branch, which leaves the author unverified.
+    A branch selector is rejected as ambiguous once a closed card's worktree and its successor both hold the branch,
+    so the worktrees are listed and each is asked by id."""
     if not branch:
         return []
     try:
-        out = orca_json("terminal", "list", "--worktree", f"branch:{branch}")
-        rows = out["terminals"]
+        listing = orca_json("worktree", "list")
+        wts = listing["worktrees"]
         # A cut-off list can miss the author, and a reviewer equal to the missing one would pass.
-        if out.get("truncated") or not isinstance(rows, list):
+        if listing.get("truncated") or not isinstance(wts, list) \
+                or (listing.get("hostScope") or {}).get("omittedHostIds"):
             return []
-        return sorted({t["handle"] for t in rows if isinstance(t.get("handle"), str) and t["handle"]})
+        handles = set()
+        for w in wts:
+            if w.get("branch") not in (branch, f"refs/heads/{branch}"):
+                continue
+            out = orca_json("terminal", "list", "--worktree", f"id:{w['id']}")
+            rows = out["terminals"]
+            if out.get("truncated") or not isinstance(rows, list):
+                return []
+            # An answer is trusted only when it says it covered this worktree's host: an empty or partial answer from
+            # a host Orca did not reach says nothing about its sessions. Another host being omitted does not matter.
+            scope, host = out.get("hostScope") or {}, w.get("hostId")
+            if not host or host not in (scope.get("hostIds") or []) or host in (scope.get("omittedHostIds") or []):
+                return []
+            handles |= {t["handle"] for t in rows if isinstance(t.get("handle"), str) and t["handle"]}
+        return sorted(handles)
     except (SystemExit, ValueError, KeyError, TypeError, AttributeError, OSError):
         return []
 
@@ -2416,7 +2546,11 @@ def merge_unit(p, pr, unit, klass, events, onto=None, stacked=False, expect=None
             return 3, f"act: #{n} has {threads} unresolved review thread(s): answer and resolve them, then land again"
     if expect:
         # The verdict the executor checked may have been replaced since: merge only on the one standing now.
-        latest = pr_state(p.events()).get(pr, {}).get("verdict") or {}
+        import autoqueue
+        now_events = p.events()
+        if autoqueue.withdrawn(now_events, pr):  # a stop recorded during the checks is read from this same snapshot
+            return 3, f"act: #{pr}'s land was stopped during the checks: record a verdict at the head or land again"
+        latest = pr_state(now_events).get(pr, {}).get("verdict") or {}
         p.land_verdict = latest
         if latest.get("sha") != expect or latest.get("result") != "pass" or \
                 (verdict_sources is not None and (latest.get("source") not in verdict_sources
@@ -2728,7 +2862,9 @@ def land_executor(repo=None):
         # A wait that can never end (NaN, inf) or a typo ("24h") would keep requests queued for ever.
         sys.exit(f"{path}: orchestrate.land_executor.max_wait_hours must be a positive number of hours, "
                  f"not {cfg.get('max_wait_hours')!r}")
-    return {"repos": repos, "verdict_sources": cfg.get("verdict_sources") or ["review:codex"], "max_wait_hours": hours}
+    import autoqueue
+    return {"repos": repos, "verdict_sources": cfg.get("verdict_sources") or ["review:codex"], "max_wait_hours": hours,
+            "auto_queue": autoqueue.config(cfg.get("auto_queue"))}
 
 
 LAND_EXIT = {"merged": 0, "superseded": 2}
@@ -3255,13 +3391,22 @@ SELF_CHECK = ("Self-check: is any work left on this card? If none, run end-sessi
               "If some, say what it is and keep it.")
 
 
-def settle_sweep(workers, worktrees, skip=(), holds=card_holds, asked=None, now=None):
+def auto_release_ahead(w, now):
+    scripts = str(pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    import auto_release
+    return auto_release.ahead(w, now)
+
+
+def settle_sweep(workers, worktrees, skip=(), holds=card_holds, asked=None, now=None, clock=time.time):
     path = {w["id"]: w.get("path") for w in worktrees if not w.get("isMainWorktree")}
     asked = {} if asked is None else asked
     seen, out, kept = {}, [], []
     for w in workers:
         d, res, taken = w.get("dispatchId"), w.get("resource") or {}, taken_over(w)
-        if not d or (not taken and (w.get("terminalState") not in ("reclaimable", "release_unknown") or d in skip)):
+        if not d or (not taken and (w.get("terminalState") not in ("reclaimable", "release_unknown") or d in skip
+                                    or auto_release_ahead(w, clock()))):
             continue
         p = path.get(res.get("worktreeId"))
         if p and p not in seen:
