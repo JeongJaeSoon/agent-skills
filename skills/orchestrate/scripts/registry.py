@@ -480,7 +480,7 @@ STORES = [
           rule="repo, Run, predicate, merge policy; stages (`orch set`, cmd_set through Program.update), which "
                "stage_auto reads in the collector and, for a lead not yet in stages-auto, in the hook"),
     Store("progledger", "P/*/ledger.jsonl", {"program.event": CANONICAL},
-          ("prog:Program.append", "prog:Program.append_once", "prog:write_backfill"),
+          ("prog:Program.append", "prog:Program.append_if", "prog:Program.append_once", "prog:write_backfill"),
           ("programview", "fleet", "reflect", "skillspage"), rule="one ledger per program"),
     Store("progledgerlock", "P/*/ledger.lock", {"program.event": LOCK}, ("prog:Program.locked",)),
     Store("progwait", "P/*/*.json", {"program.wait_memo": CANONICAL},
