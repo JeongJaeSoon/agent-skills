@@ -204,7 +204,10 @@ def no_reopen(iid):
         return "the owner-request ledger was removed"
     if iid.startswith(store.ORPHAN):
         return "its board item left the board before stable ids"
-    if iid.startswith("ext:") and not last_add(iid[4:]):
+    if iid.startswith("ext:") and iid[4:].startswith(fleet.READ_FROM_SOURCE):
+        if not fleet.source_item_alive(iid[4:]):
+            return "its patrol finding or queue entry is gone"
+    elif iid.startswith("ext:") and not last_add(iid[4:]):
         return "its inbox line is gone"
     return None
 

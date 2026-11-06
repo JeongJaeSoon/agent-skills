@@ -110,6 +110,9 @@ class AgentSkillsKeysTest(Base):
         # prs.model is in no DEFAULTS; only watch-prs references/config.md documents it.
         r, _ = self.emit({"agent_skills": {"set": {"prs.model": "sonnet"}}})
         self.assertEqual(r.returncode, 0, r.stderr)
+        # tracker.jira.* lives only in use-tracker references/jira.md "Switching to Jira".
+        r, _ = self.emit({"agent_skills": {"set": {"tracker.jira.base_url": "https://acme.example.test"}}})
+        self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_file_extension_is_not_a_documented_key(self):
         for key in ("prs.py", "prs.json", "brief.md"):

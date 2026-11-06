@@ -928,12 +928,13 @@ class FakeFleetWorld:
         return data, []
 
     def seed_sent(self):
-        """The `orch sent add` log and the dashboard's typed line, written once into the state directory."""
+        """The `orch sent add` log, with the dashboard's typed line in it, written once into the state directory."""
         import fleet, sent
         if not sent.read_log(fleet.utcnow() - dt.timedelta(days=30)):
             for row in self.sent_log:
                 sent.add(**{**row, "now": fleet.parse(row["now"])})
-            fleet.append_line(fleet.state_dir() / "sends.jsonl", self.dash_send)
+            d = self.dash_send  # a line typed from the page is a log row since SSOT PR 6
+            sent.add(d["session"], d["text"], kind="dashboard", channel=d["handle"], sender="dashboard", now=fleet.parse(d["at"]))
 
     def seed_timeline(self):
         """A few days of invented timeline events, in the shape Fleet.event() writes, so the demo's timeline has one

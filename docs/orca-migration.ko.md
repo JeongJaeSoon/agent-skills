@@ -128,3 +128,23 @@
 4. 이전 릴리스로 되돌리고 fast-forward한 뒤 writer를 다시 올린다.
 
 나중에 import하면 파일을 다시 가져온다. 테이블은 교체되고 번호는 이어진다. 롤백 전의 `b<N>`은 다시 쓰이지 않는다. 결정 단계까지 되돌리려면 이 절을 끝낸 뒤 "되돌리기 (결정)"을 따른다.
+
+# Needs you와 Sent가 원본을 직접 읽는다 (2026-11-06)
+
+## 무엇이 바뀌나
+
+- Needs you가 `pressure-queue.json`과 `patrol.jsonl`을 직접 읽는다. 대기하거나 재시도 중인 보류 명령은 "기계 대기 N건" 한 항목이고, 포기·실패한 것과 열린 순찰 발견은 각각 항목이다. 둘 다 더는 `inbox-external.jsonl`에 쓰지 않는다. 억제와 닫기는 전처럼 queue id와 발견(`patrol:<id>:<detected_at>`) 단위다.
+- 대시보드에서 친 줄은 `orch sent` 로그의 행(`kind: dashboard`)이다. Sent는 로그와 Orca가 가진 기록을 보인다. 살아 있는 세션의 transcript에서만 찾은 전송은 행이 아니고 경고("로그·Orca 어느 쪽과도 맞지 않는 전송 N건")로 센다.
+- PR 이벤트는 `events.jsonl`에만 쓴다(`kind: pr_*`, `pr-events.jsonl`이 담던 owner·checks·head 포함).
+
+## 전환 순서
+
+1. 로드되는 체크아웃을 fast-forward한다. 대시보드는 스스로 다시 뜨고, 새 코드는 상태를 바꾸지 않아도 시작한다.
+2. `orch-dash migrate-inputs`는 할 일을 보이기만 하고 쓰지 않는다. 건수를 확인한다.
+3. `orch-dash migrate-inputs --apply`가 `inbox-external.jsonl`의 열린 순찰·pressure 대기열 줄마다 `resolve` 줄(사유 `migrated`)을 붙이고, `sends.jsonl`의 친 줄을 sent 로그로 옮긴 뒤 그 파일을 읽기 전용 `sends.archive.jsonl`로 보관하며, `pr-events.jsonl`을 읽기 전용으로 만든다. 지우는 것은 없고, 다시 실행하면 할 일이 남아 있지 않다.
+
+3단계 전에도 옛 줄은 이미 보이지 않고, 옮기기 전에 친 줄만 sent 로그에 아직 없다.
+
+## 되돌리기
+
+이전 릴리스로 되돌려 fast-forward한다. 옛 코드가 다음 회차에 pressure·순찰 줄을 스스로 다시 적는다. 보관한 파일을 다시 읽으려면 쓰기 권한을 돌려주고(`chmod u+w`) `sends.archive.jsonl`을 `sends.jsonl`로 되돌린다.

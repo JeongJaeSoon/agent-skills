@@ -128,3 +128,23 @@
 4. 前のリリースに戻して fast-forward し、書き手をもう一度起動します。
 
 あとで import すれば、ファイルをもう一度取り込みます。テーブルは置き換わり、番号は続きから振られるので、ロールバック前の `b<N>` が再び使われることはありません。決定の段階まで戻すときは、この節を終えてから「元に戻す（決定）」に従います。
+
+# Needs you と Sent が元のデータを直接読む（2026-11-06）
+
+## 何が変わるか
+
+- Needs you が `pressure-queue.json` と `patrol.jsonl` を直接読みます。待機中・再試行中の保留コマンドは「기계 대기 N건」（機械の待機 N 件）の 1 項目、諦めたものと失敗したもの、開いている巡回の発見はそれぞれ別の項目です。どちらも `inbox-external.jsonl` には書かなくなります。非表示と閉じるは、これまでどおり queue id と発見（`patrol:<id>:<detected_at>`）の単位です。
+- ダッシュボードから打った行は `orch sent` ログの行（`kind: dashboard`）です。Sent にはログと Orca 自身の記録が出ます。生きているセッションの transcript にしか見つからない送信は行にならず、警告（「ログにも Orca にも合わない送信 N 件」）として数えます。
+- PR イベントは `events.jsonl` だけに書きます（`kind: pr_*`。`pr-events.jsonl` が持っていた owner・checks・head を含みます）。
+
+## 切り替えの順序
+
+1. 読み込まれるチェックアウトを fast-forward します。ダッシュボードは自分で再起動し、新しいコードは状態を変えなくても動き出します。
+2. `orch-dash migrate-inputs` は行うことを表示するだけで、何も書きません。件数を確認します。
+3. `orch-dash migrate-inputs --apply` は、`inbox-external.jsonl` の開いている巡回・pressure 待機列の行ごとに `resolve` 行（理由 `migrated`）を足し、`sends.jsonl` の打った行を sent ログへ移して、そのファイルを読み取り専用の `sends.archive.jsonl` として残し、`pr-events.jsonl` を読み取り専用にします。消すものはなく、もう一度実行しても残りはありません。
+
+手順 3 の前でも古い行はすでに表示されず、移す前に打った行だけが sent ログにまだありません。
+
+## 元に戻す
+
+前のリリースに戻して fast-forward します。古いコードが次の回で pressure と巡回の行を自分で書き直します。保管したファイルをまた読むときは書き込み権限を戻し（`chmod u+w`）、`sends.archive.jsonl` を `sends.jsonl` に戻します。
