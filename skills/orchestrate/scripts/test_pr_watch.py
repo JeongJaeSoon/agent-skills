@@ -205,4 +205,9 @@ with tempfile.TemporaryDirectory() as elsewhere:
     assert helped.returncode == 0 and "--repo" in helped.stdout and "pr-watch" in helped.stdout, helped
     refused = subprocess.run([str(WRAPPER), "--repo", "a/b", "--interval", "60"], cwd=elsewhere, capture_output=True, text=True)
     assert refused.returncode == 2 and "300 seconds or more" in refused.stderr, refused
+    # A symlink to the wrapper (a user's ~/bin entry) must still find the script through the link's target, not the link's dir.
+    link = pathlib.Path(elsewhere) / "pr-watch"
+    link.symlink_to(WRAPPER)
+    linked = subprocess.run([str(link), "--help"], cwd=elsewhere, capture_output=True, text=True)
+    assert linked.returncode == 0 and "--repo" in linked.stdout, linked
 print("test_pr_watch: ok")

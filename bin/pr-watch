@@ -1,3 +1,4 @@
 #!/bin/sh
 # The PR watcher for Monitor: one line when a PR needs a turn, nothing otherwise (skills/orchestrate/scripts/pr_watch.py).
-exec python3 "$(dirname "$0")/../skills/orchestrate/scripts/pr_watch.py" "$@"
+here=$(dirname "$(readlink -f "$0")")
+exec python3 "$here/../skills/orchestrate/scripts/pr_watch.py" "$@"
