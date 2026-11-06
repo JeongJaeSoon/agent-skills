@@ -234,7 +234,7 @@ def check_command(c, masked, cfg, cwd, session, here=None):
                                                   "an authenticated CLI (`gh`) instead."))
     if PYTHON.fullmatch(name) or name.endswith(".py"):
         script = name_script(w)
-        if script and plugin_apply(script, w, here) and not scratch_apply(script, c, here):
+        if script and plugin_apply(script, w, here) and not scratch_apply(script, c, cwd, here):
             out.append(("guard.deny.plugin_apply", f"`{os.path.basename(script)}` with --apply/--write changes the "
                                                    "user's settings or scheduled jobs; the user runs that line, never "
                                                    "the agent. Hand them the exact command."))
@@ -301,33 +301,53 @@ def plugin_apply(script, w, cwd):
         return False
 
 
-def scratch_apply(script, c, cwd):
-    """True when an --apply is a rehearsal: every place it writes (the Claude profile and agent-skills.json, named
-    in this command itself, not inherited) resolves, symlinks and `..` followed, under this checkout's worktree and
-    away from the user's real settings. An unset target means the default, the real one, so it is not a rehearsal."""
-    if cwd is UNKNOWN_DIR or cwd is None:
+SCRATCH_VARS = {"HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_SETTINGS", "AGENT_SKILLS_CONFIG", "AGENT_SKILLS_STATE",
+                "AGENT_SKILLS_CONFIG_DIR"}
+SETTINGS_CHILDREN = ("settings.json", "settings.local.json", "agent-skills.json", "setup-applied.json")
+HASH = re.compile(r"[0-9a-f]+")
+ASSIGN_WORD = re.compile(r"[A-Za-z_]\w*=")
+ABS_WORD = re.compile(r"/[\w./@+-]+")
+
+
+def scratch_apply(script, c, cwd, here):
+    """True only for one narrow shape, an allowlist: the plugin's own `scripts/setup.py --apply HASH --settings-only`,
+    run with no wrapper, with every variable that picks where it writes assigned in the command itself to an absolute
+    path that resolves (symlinks and `..` followed, also for the files it creates inside) under this checkout's
+    worktree and away from the user's real settings. Anything else, an inherited or unset target included, stays
+    denied: the other apply scripts take targets from a spec or options this reader does not model."""
+    w = c.words
+    if not cwd or cwd is UNKNOWN_DIR or here != cwd or not os.path.isdir(cwd):  # a `cd` earlier on the line
         return False
-    top = run(["git", "rev-parse", "--show-toplevel"], cwd).stdout.strip() if os.path.isdir(cwd) else ""
+    if expand(script, cwd) != str(ROOT.resolve() / "scripts" / "setup.py") or w[1:2] != [script]:
+        return False
+    rest = w[2:]
+    if "--settings-only" not in rest:  # a full setup also syncs, schedules automations and talks to Orca
+        return False
+    rest.remove("--settings-only")
+    if not (len(rest) == 2 and rest[0] == "--apply" and HASH.fullmatch(rest[1])
+            or len(rest) == 1 and re.fullmatch(r"--apply=[0-9a-f]+", rest[0])):
+        return False
+    if not ASSIGN_WORD.match(c.raw.lstrip()):  # `env -u X …`, `command …` and the like can undo an assignment
+        return False
+    given = dict(a.split("=", 1) for a in c.assigns)
+    if set(given) != SCRATCH_VARS or len(c.assigns) != len(given):
+        return False
+    top = run(["git", "rev-parse", "--show-toplevel"], cwd).stdout.strip()
     if not top:
         return False
     root = pathlib.Path(os.path.realpath(top))
-    real = {pathlib.Path(p) for p in user_files()}
+    real = [pathlib.Path(p) for p in user_files()]
 
     def inside(value):
-        if not value or re.search(r"[$`~]", value):  # a word this reader cannot expand is not known to be scratch
+        if not ABS_WORD.fullmatch(value):  # quotes, `$`, `~`, globs and relative paths are not read here
             return False
-        p = pathlib.Path(os.path.realpath(os.path.join(cwd, value)))
-        return p.is_relative_to(root) and not any(f.is_relative_to(p) or p.is_relative_to(f.parent) for f in real)
+        for p in (pathlib.Path(value), *(pathlib.Path(value, n) for n in SETTINGS_CHILDREN)):
+            r = pathlib.Path(os.path.realpath(p))
+            if not r.is_relative_to(root) or any(f.is_relative_to(r) or r.is_relative_to(f.parent) for f in real):
+                return False
+        return True
 
-    given = dict(a.split("=", 1) for a in c.assigns)
-    targets = [given.get("CLAUDE_CONFIG_DIR"), given.get("AGENT_SKILLS_CONFIG")]
-    targets += [given[k] for k in ("CLAUDE_SETTINGS", "AGENT_SKILLS_CONFIG_DIR", "XDG_CONFIG_HOME", "HOME") if k in given]
-    w = c.words
-    targets += [w[i + 1] if i + 1 < len(w) else "" for i, x in enumerate(w) if x == "--settings"]
-    targets += [x.split("=", 1)[1] for x in w if x.startswith("--settings=")]
-    if os.path.basename(script) == "setup.py" and not {"--settings-only", "--here"} & set(w):
-        return False  # a full setup also syncs, schedules automations and talks to Orca: not files in a scratch dir
-    return all(inside(t) for t in targets)
+    return all(inside(v) for v in given.values())
 
 
 def label_add(w):

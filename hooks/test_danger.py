@@ -74,6 +74,18 @@ git("init", "-q", cwd=CLEAN)
 # Scratch targets for a rehearsal --apply: a folder inside the checkout, and a link inside it to the real ~/.claude.
 (REPOX / "scratch").mkdir()
 (REPOX / "to-real").symlink_to(HOME / ".claude")
+(REPOX / "linked").mkdir()
+(REPOX / "linked" / "settings.json").symlink_to(HOME / ".claude" / "settings.json")
+
+
+def rehearsal(script="scripts/setup.py", tail="--apply abc --settings-only", pre="", drop=None, **over):
+    """A setup.py command with every target variable assigned to a folder in the checkout; `over` replaces some,
+    `drop` omits one."""
+    scratch = REPOX / "scratch"
+    names = ("HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_SETTINGS", "AGENT_SKILLS_CONFIG", "AGENT_SKILLS_STATE",
+             "AGENT_SKILLS_CONFIG_DIR")
+    values = {n: over.get(n, str(scratch / n.lower())) for n in names if n != drop}
+    return pre + " ".join(f"{n}={v}" for n, v in values.items()) + f" python3 {REPO}/{script} {tail}"
 # A stand-in `orca` that says the current worktree is the main one.
 (BIN / "orca").write_text("#!/bin/sh\necho '{\"result\": {\"worktree\": {\"isMainWorktree\": true}}}'\n")
 (BIN / "orca").chmod(0o755)
@@ -162,33 +174,28 @@ CASES = [
       f"python3 {EMITTED} --apply 12ab", f"python3 {REPO}/skills/tune-automode/scripts/automode_rule.py --apply=1"],
      [f"python3 {REPO}/scripts/setup.py", f"python3 {EMITTED}", f"python3 {OTHER_SETUP} --apply x",
       f"python3 {REPO}/scripts/bootstrap.py", "echo --apply",
-      # A rehearsal: both targets named in the command, inside the checkout, away from the real settings.
-      (f"CLAUDE_CONFIG_DIR={REPOX}/scratch AGENT_SKILLS_CONFIG={REPOX}/scratch/a.json "
-       f"python3 {REPO}/scripts/setup.py --apply abc --settings-only", REPOX),
-      (f"CLAUDE_CONFIG_DIR=scratch AGENT_SKILLS_CONFIG=scratch/a.json "
-       f"python3 {REPO}/skills/skills-config/scripts/config_emit.py --spec s.json --apply 12ab", REPOX),
-      (f"env CLAUDE_CONFIG_DIR=scratch AGENT_SKILLS_CONFIG=scratch/a.json "
-       f"python3 {REPO}/skills/tune-automode/scripts/automode_rule.py --apply=1", REPOX)]),
-    # Not a rehearsal: a target left to its default, outside the checkout, reaching the real settings through a
-    # link, `..`, a variable or --settings, or a full setup that also syncs and schedules.
+      # A rehearsal: the plugin's setup.py, exactly --apply HASH --settings-only, every target assigned in the
+      # command to an absolute path inside the checkout.
+      (rehearsal(), REPOX), (rehearsal(tail="--settings-only --apply=abc"), REPOX)]),
+    # Not a rehearsal: a target inherited or outside the checkout, reaching the real settings through a link (also
+    # a file inside the scratch folder), `..`, a quoted word or a variable, a wrapper that can undo an assignment,
+    # an option or script the allowlist does not name, or a full setup that also syncs and schedules.
     ("guard.deny.plugin_apply", "deny",
-     [(f"python3 {REPO}/scripts/setup.py --apply abc --settings-only", REPOX),
-      (f"CLAUDE_CONFIG_DIR=scratch python3 {REPO}/scripts/setup.py --apply abc --settings-only", REPOX),
-      (f"AGENT_SKILLS_CONFIG=scratch/a.json python3 {REPO}/scripts/setup.py --apply abc --settings-only", REPOX),
-      (f"CLAUDE_CONFIG_DIR={HOME}/.claude AGENT_SKILLS_CONFIG=scratch/a.json "
-       f"python3 {REPO}/scripts/setup.py --apply abc --settings-only", REPOX),
-      (f"CLAUDE_CONFIG_DIR=to-real AGENT_SKILLS_CONFIG=scratch/a.json "
-       f"python3 {REPO}/scripts/setup.py --apply abc --settings-only", REPOX),
-      (f"CLAUDE_CONFIG_DIR=scratch/../../home/.claude AGENT_SKILLS_CONFIG=scratch/a.json "
-       f"python3 {REPO}/scripts/setup.py --apply abc --settings-only", REPOX),
-      (f"CLAUDE_CONFIG_DIR=$HOME/.claude AGENT_SKILLS_CONFIG=scratch/a.json "
-       f"python3 {REPO}/scripts/setup.py --apply abc --settings-only", REPOX),
-      (f"CLAUDE_CONFIG_DIR=scratch AGENT_SKILLS_CONFIG=scratch/a.json "
-       f"python3 {REPO}/scripts/setup.py --apply abc --settings-only --settings {HOME}/.claude/settings.json", REPOX),
-      (f"CLAUDE_CONFIG_DIR=scratch AGENT_SKILLS_CONFIG=scratch/a.json "
-       f"python3 {REPO}/scripts/setup.py --apply abc", REPOX),
-      (f"CLAUDE_CONFIG_DIR={TMP}/outside AGENT_SKILLS_CONFIG=scratch/a.json "
-       f"python3 {REPO}/scripts/setup.py --apply abc --settings-only", REPOX)],
+     [(rehearsal(drop="AGENT_SKILLS_STATE"), REPOX), (rehearsal(drop="CLAUDE_SETTINGS"), REPOX),
+      (rehearsal(drop="HOME"), REPOX), (rehearsal(CLAUDE_CONFIG_DIR=f"{HOME}/.claude"), REPOX),
+      (rehearsal(CLAUDE_CONFIG_DIR=f"{REPOX}/to-real"), REPOX),
+      (rehearsal(CLAUDE_CONFIG_DIR=f"{REPOX}/scratch/../../home/.claude"), REPOX),
+      (rehearsal(CLAUDE_CONFIG_DIR=f"{REPOX}/linked"), REPOX),
+      (rehearsal(CLAUDE_CONFIG_DIR="$HOME/.claude"), REPOX), (rehearsal(CLAUDE_CONFIG_DIR='"~/.claude"'), REPOX),
+      (rehearsal(CLAUDE_CONFIG_DIR="scratch"), REPOX), (rehearsal(CLAUDE_CONFIG_DIR=f"{TMP}/outside"), REPOX),
+      (rehearsal(tail=f"--apply abc --settings-only --settings {HOME}/.claude/settings.json"), REPOX),
+      (rehearsal(tail=f"--apply abc --settings-only --setting {HOME}/.claude/settings.json"), REPOX),
+      (rehearsal(tail="--apply abc"), REPOX), (rehearsal(tail="--apply abc --settings-only --update"), REPOX),
+      (rehearsal(pre="env -u CLAUDE_CONFIG_DIR "), REPOX), (rehearsal(pre="env -i "), REPOX),
+      (rehearsal(script="scripts/bootstrap.py", tail="--write"), REPOX),
+      (rehearsal(script="skills/skills-config/scripts/config_emit.py", tail="--spec s.json --apply abc"), REPOX),
+      (rehearsal(script="skills/tune-automode/scripts/automode_rule.py", tail="--apply=1"), REPOX),
+      (rehearsal(), TMP), (f"cd {TMP} && " + rehearsal(), REPOX)],
      []),
     ("guard.deny.slash_send", "deny",
      ["orca terminal send --terminal t1 --text '/reload-plugins'", 'orca terminal send --terminal t1 --text "/model opus"',
