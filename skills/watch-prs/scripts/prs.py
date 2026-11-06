@@ -1136,8 +1136,8 @@ def body(plan):
             continue
         if i.get("land") == "executor":
             lines.append(f"{n}. [{LABELS[i['kind']]}] {i['repo']}#{i['number']} {i['title']} — {', '.join(i['why'])} — "
-                         f"land executor 저장소라 이 회차는 머지하지 않음: 저장소의 standing program 에서 orch verdict 뒤 "
-                         f"orch land — {i['url']}")
+                         f"land executor 저장소라 이 회차는 머지하지 않음: orch verdict 뒤 orch land "
+                         f"(<name>-standalone program, --repo {i['repo']} 로 없으면 생성) — {i['url']}")
             continue
         tag = {"new_commits": "새 커밋, 재요청 없음", "slack": "Slack 리뷰 요청"}.get(i["reason"], LABELS[i["kind"]])
         if i["kind"] != "ownergate":
