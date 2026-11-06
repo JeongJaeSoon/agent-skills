@@ -700,6 +700,27 @@ Bash의 `sed`나 heredoc으로 고친 파일은 수정으로 세지 않는다. �
 - 수준 `guard.owner_check`: 키가 없으면 `warn`. 사람에게 "owner_check: 기록 안 된 오너 항목 N" 한 줄을 보이고 `$AGENT_SKILLS_STATE/owner-check.jsonl`에 행을 남긴다. 모델에는 닿지 않는다(systemMessage는 모델에 가지 않는다). 오탐률은 이 행으로 잰다. `deny`는 설정 키로만 켜고, claim_check처럼 그 정지를 한 번 막아 모델이 기록하게 한다(`stop_hook_active`면 통과). `off`와 `AGENT_SKILLS_OWNER_CHECK=0`은 끈다.
 - 판정은 문구 매칭이라 오탐과 미탐이 있다. 그래서 warn으로 시작한다.
 
+### 턴 끝 점검
+`hooks/turn_check.py`(Stop, SubagentStop, Telegram 답장 도구의 PreToolUse)와 `hooks/claim_check.py`의 서브에이전트 점검. 스킬 문장에만 걸려 있던 턴 끝 습관을 transcript로 본다. 모델을 부르지 않는다. 모든 점검은 알림만 내고 막지 않는다.
+
+| 키 | 대상 | 알리는 때 |
+|---|---|---|
+| `turn_check.wait_alive` | orchestrator·lead | 턴이 끝나는데 살아 있는 백그라운드 `orch inbox`·`orch wait`·`orch watch-cards`가 없다 |
+| `turn_check.self_close` | worker, CLOSE 카드 | `worker_done`(성공)을 보냈거나 CLOSE 카드인데 `skills-sync end-check`가 카드를 닫아도 된다(`close-terminal`·`remove`)고 한다 |
+| `turn_check.review_idle` | worker, 서브에이전트 | 마지막 도구 결과가 리뷰 보고(code-review 계열 스킬, 리뷰 서브에이전트, `codex`)이거나 턴이 백그라운드 완료 알림으로 열렸는데 다음 호출 없이 끝난다 |
+| `turn_check.decision_registered` | orchestrator·lead | 답에 결정 질문이 있는데 이번 턴에 `orch decide add`·`orch gate`·`orca orchestration gate-create`가 없다 |
+| `turn_check.offer_phrase` | 모든 주 세션 | 답의 마지막 세 줄이 "말씀 주시면 …"·"want me to file …" 같은 떠넘기기다 |
+| `turn_check.stacks_down` | 모든 주 세션 | 이 세션이 `docker compose -p <project> up`으로 띄운 프로젝트에 `down`이나 `reap.py ledger add --kind compose-stack --keep`이 없다 |
+| `turn_check.brief_render` | orchestrator·lead | 답이 현황 보고 모양(`🙋 지금 오너가 할 일`·`⏳ 다른 사람 대기`·`🧭 우선순위`·`## 보류`·`🔄 진행`·`## 요약` 중 둘 이상)인데 이번 턴에 `orch brief render`가 없다 |
+| `turn_check.prs_actions` | 모든 주 세션 | `prs.py actions`가 줄을 냈는데 이번 턴에 `prs.py log`가 없다 |
+| `turn_check.telegram_render` | orchestrator·lead | Telegram 답장(발송 전)이 현황 보고 모양인데 이번 턴에 `orch brief render`가 없다 |
+| `claim_check.subagent` | 모든 세션 | 서브에이전트 보고만 근거로 완료를 말하고, 그 서브에이전트를 띄운 뒤 이 세션의 Bash 호출이 없다 |
+
+- 키가 없거나 `false`·`"off"`면 아무것도 하지 않고 출력도 없다. `true`·`"warn"`(`"ask"`·`"deny"`도 warn으로 읽는다)이면 사람에게 `turn_check: <내용>` 한 줄을 보이고 `$AGENT_SKILLS_STATE/turn-warnings.jsonl`에 점검별 행을 남긴다. 모델에는 닿지 않는다. deny로 올리는 것은 이 hook에 없다.
+- 어느 역할에 닿는지는 `hooks/roles.py` MATRIX(`turn_*`)가 정한다. 서브에이전트는 `review_idle`만 본다.
+- `wait_alive`와 `stacks_down`은 transcript 전체를 읽는다(64MB를 넘으면 읽지 않는다). 나머지는 이번 턴만 본다. 대기·compose 호출이 다른 이름으로 감싸이면 놓친다.
+- 판정은 텍스트와 도구 이름 매칭이라 오탐과 미탐이 있다. 한 주 동안 `turn-warnings.jsonl`을 보고 점검별 오탐을 센 뒤에 키를 켠다.
+
 ## pstack과의 차이
 
 ### 한눈에
