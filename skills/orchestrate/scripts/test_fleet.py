@@ -2,7 +2,7 @@
 
 Run: python3 test_fleet.py
 """
-import contextlib, datetime as dt, json, os, pathlib, re, shutil, subprocess, sys, tempfile
+import contextlib, datetime as dt, io, json, os, pathlib, re, shutil, subprocess, sys, tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import dash_demo
@@ -1432,6 +1432,19 @@ prog_dir.mkdir(parents=True)
 (prog_dir / "ledger.jsonl").write_text(json.dumps({"ts": fleet.iso(clock[0]), "ev": "landed", "pr": 8, "sha": "8" * 40}) + "\n")
 assert fleet.program_prs(clock[0]) == {"acme/tools#8"}
 assert next(p for p in pr_tick(viewed=True)["prs"] if p["number"] == 8)["state"] == "CLOSED"
+shutil.rmtree(prog_dir)
+# A ledger pr or program repo that is not a full owner/repo#N (a bare repo "tools") is skipped with one warning line;
+# the other entries still count and the tick still saves.
+prog_dir.mkdir(parents=True)
+(prog_dir / "program.json").write_text(json.dumps({"repo": "tools", "created_at": fleet.iso(clock[0])}))
+(prog_dir / "ledger.jsonl").write_text(json.dumps({"ts": fleet.iso(clock[0]), "ev": "landed", "pr": 441, "sha": "8" * 40}) + "\n")
+warned = io.StringIO()
+with contextlib.redirect_stderr(warned):
+    assert fleet.program_prs(clock[0]) == set()
+assert "tools#441" in warned.getvalue(), warned.getvalue()
+before = f.state["generated_at"]
+clock[0] += dt.timedelta(seconds=30)
+assert pr_tick(viewed=True)["generated_at"] != before, "a ledger with a bare repo still saves a fresh state"
 shutil.rmtree(prog_dir)
 # A program file it cannot read (a ledger ts without a zone, a program.json that is not an object) costs the stage
 # table its rows, not the tick: prs.json is still written and the error is kept once.
