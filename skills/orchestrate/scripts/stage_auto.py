@@ -184,6 +184,7 @@ def build(programs, state, now, held=None):
                     by_title.get(s.get("task_title")) or ticket_of(s.get("task_title")))):
                 named.setdefault(k, []).extend(p["key"] for p in prs.values() if p.get("session") == s["id"])
         # A card's branch is named after its ticket (`<user>/role-terms`); its PR outlives the card's session.
+        claimed = {x for keys in named.values() for x in keys}
         for p in sorted(prs.values(), key=lambda p: p.get("created") or ""):
             if p.get("repo") != repo or (fleet.parse(p.get("created")) or last) < fleet.parse(created):
                 continue
@@ -193,9 +194,9 @@ def build(programs, state, now, held=None):
                 named.setdefault(k, []).append(p["key"])
             else:
                 # The ledger may never tie a predicate item to its PR (`landed` names the PR, `config` the tickets):
-                # a title that leads with exactly one ticket does.
+                # a title that leads with an item does, unless the ledger or a session already gave the PR to a row.
                 lead = ticket_of(p.get("title"))
-                if lead in items:
+                if lead in items and p["key"] not in claimed:
                     named.setdefault(lead, []).append(p["key"])
         landed = {fleet.pr_key(repo, e["pr"]): e for e in events
                   if e.get("ev") == "landed" and e.get("pr") is not None and e.get("sha") and not e.get("onto") and repo}

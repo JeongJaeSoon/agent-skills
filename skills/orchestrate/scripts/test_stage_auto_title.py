@@ -32,7 +32,22 @@ state = {"tasks": [], "sessions": [], "prs": [
     pr(23, "OPEN", "K-2: second half"),
     pr(24, "MERGED", "K-30: another ticket whose key starts with K-3", merged_at=ago(5), merge_sha="c" * 40),
     pr(25, "MERGED", "K-4: older than the program", created=500, merged_at=ago(400), merge_sha="d" * 40)]}
+# A PR the ledger (lambda) or a session (mu) already gave to one row is not also given to the item its title leads with.
+for slug, run, evs in (("lambda", "run_l", [{"ts": ago(9), "ev": "ready", "pr": 31, "ticket": "L-2"},
+                                            {"ts": ago(8), "ev": "landed", "pr": 31, "sha": "e" * 40}]),
+                       ("mu", "run_m", [{"ts": ago(9), "ev": "config"}])):
+    p = tmp / "programs" / slug
+    p.mkdir()
+    (p / "program.json").write_text(json.dumps({"slug": slug, "repo": "acme/app", "run": run, "created_at": ago(48),
+                                                "predicate": [f"{slug[0].upper()}-1", f"{slug[0].upper()}-2"]}))
+    (p / "ledger.jsonl").write_text("".join(json.dumps(e) + "\n" for e in evs))
+state["tasks"] = [{"id": "task_m", "run": "run_m", "title": "M-2: the work", "status": "dispatched"}]
+state["sessions"] = [{"id": "s-m", "run": "run_m", "task": "task_m"}]
+state["prs"] += [pr(31, "MERGED", "L-1: umbrella title", merged_at=ago(8), merge_sha="e" * 40),
+                 pr(32, "MERGED", "M-1: umbrella title", session="s-m", merged_at=ago(8), merge_sha="f" * 40)]
 rows = stage_auto.refresh(state, now)
+assert rows["lambda/L-2"]["pr"] == "acme/app#31" and rows["lambda/L-1"]["pr"] is None, rows["lambda/L-1"]
+assert rows["mu/M-2"]["pr"] == "acme/app#32" and rows["mu/M-1"]["pr"] is None, rows["mu/M-1"]
 
 assert rows["kappa/K-1"]["pr"] == "acme/app#21", rows["kappa/K-1"]
 assert rows["kappa/K-1"]["cells"]["merge"]["mark"] == "ok"
