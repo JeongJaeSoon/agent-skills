@@ -121,6 +121,9 @@ assert fired(flat(prompt("go"), bg, stop_wait, say("ok")), "wait_alive", event=L
 # A notice that names only the task id (no tool-use id of ours) ends the wait it belongs to.
 assert fired(flat(prompt("go"), bg, notice("other", task="bk1"), say("ok")), "wait_alive", event=LEAD)[1] == ["wait_alive"]
 assert fired(flat(prompt("go"), bg, notice("other", task="bk2"), say("ok")), "wait_alive", event=LEAD)[0] is None
+mon, _ = call("Monitor", {"command": "orch inbox --stream"}, result="Task ID: bk7")
+assert fired(flat(prompt("go"), mon, notice("other", task="bk7"), say("ok")), "wait_alive", event=ORCH)[1] == ["wait_alive"]
+assert fired(flat(prompt("go"), mon, say("ok")), "wait_alive", event=ORCH)[0] is None
 fg, _ = call("Bash", {"command": "orch wait prog"})  # a foreground wait is no standing wait
 assert fired(flat(prompt("go"), fg, say("ok")), "wait_alive", event=LEAD)[1] == ["wait_alive"]
 assert fired(flat(prompt("go"), say("ok")), "wait_alive", first=PREAMBLE)[0] is None  # a worker keeps no wait
@@ -139,6 +142,11 @@ assert fired(flat(prompt("go"), up, bash("docker compose -p demo down", error="E
              "stacks_down")[1] == ["stacks_down"]  # a failed down took nothing down
 assert fired(flat(prompt("go"), bash("echo compose -p demo up"), say("ok")), "stacks_down")[0] is None  # text, not a command
 assert fired(flat(prompt("go"), up, bash("echo docker compose -p demo down"), say("ok")), "stacks_down")[1] == ["stacks_down"]
+for fake_down in ("orch heavy - -- echo docker compose -p demo down", "docker run --rm alpine echo docker compose -p demo down",
+                  "orch heavy - -- bash -c 'docker compose -p demo down'"):
+    assert fired(flat(prompt("go"), up, bash(fake_down), say("ok")), "stacks_down")[1] == ["stacks_down"], fake_down
+assert fired(flat(prompt("go"), up, bash("orch heavy agent-skills-ssot -- docker compose -p demo down"), say("ok")),
+             "stacks_down")[0] is None
 assert fired(flat(prompt("go"), bash("docker compose ps"), say("ok")), "stacks_down")[0] is None
 assert fired(flat(prompt("go"), bash("docker compose -p demo up -d", error="Permission for this Bash was denied"),
                   say("ok")), "stacks_down")[0] is None

@@ -38,7 +38,7 @@ WAIT = re.compile(r"\borch(?:\.py)?\s+(?:inbox|wait|watch-cards)\b")
 TASK_END = re.compile(r"<status>\s*(?:completed|failed|killed|stopped|cancelled)\b")
 TASK_ID = re.compile(r"<tool-use-id>([^<\s]+)</tool-use-id>")
 NOTICE_TASK = re.compile(r"<task-id>([^<\s]+)</task-id>")
-BG_ID = re.compile(r"(?:background with ID:|[Tt]ask(?: ID)?[: ])\s*([\w-]+)")
+BG_ID = re.compile(r"(?:background with ID:|Task ID:|Monitor started \(task)\s*([\w-]+)")
 REVIEW_SKILLS = {"code-review", "review", "security-review", "interrogate", "blast-radius", "ui-review", "simplify"}
 REVIEW_TEXT = re.compile(r"review|리뷰|audit|interrogate|adversarial", re.I)
 CODEX = re.compile(r"\bcodex(?:-companion)?\b.*\b(?:review|adversarial)\b", re.S)
@@ -160,7 +160,7 @@ def results(entries):
 
 def check_wait_alive(path):
     got = whole(path, ("inbox", "orch wait", "orch.py wait", "watch-cards", "task-notification", "TaskStop",
-                       "background with ID"))
+                       "background with ID", "Task ID:", "Monitor started"))
     if got is None:
         return None
     started, ended, ended_tasks, task_of, stopped = {}, set(), set(), {}, set()
@@ -292,13 +292,21 @@ def compose_action(words):
     if "reap.py" in base and "ledger" in words and "add" in words and option(words, "--kind") == "compose-stack" \
             and option(words, "--keep"):
         return "keep", option(words, "--id")
-    # The command itself is docker compose, bare or under `orch heavy`: `echo compose up` is text.
-    runs = base[0] in ("docker", "docker-compose") or base[0] in ("orch", "orch.py") and "heavy" in words[1:3]
-    i = next((k for k, w in enumerate(words) if os.path.basename(w) == "docker-compose"
-              or w == "compose" and k and os.path.basename(words[k - 1]) == "docker"), None)
-    if i is None or not runs or not (project := project_of(words)):
+    # The command that runs is docker compose, bare or after the `--` of `orch heavy`: `echo docker compose up` is text.
+    start = 0
+    if base[0] in ("orch", "orch.py") and "heavy" in words[1:3]:
+        if "--" not in words:
+            return None
+        start = words.index("--") + 1
+    head = [os.path.basename(w) for w in words[start:start + 2]] + ["", ""]
+    if head[0] == "docker-compose":
+        rest = words[start + 1:]
+    elif head[:2] == ["docker", "compose"]:
+        rest = words[start + 2:]
+    else:
         return None
-    rest = words[i + 1:]
+    if not (project := project_of(words)):
+        return None
     if "up" in rest:
         return "up", project
     if STACK_DOWN & set(rest):
