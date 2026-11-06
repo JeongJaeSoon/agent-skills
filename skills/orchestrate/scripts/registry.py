@@ -332,6 +332,9 @@ STORES = [
     Store("ownercheck", "S/owner-check.jsonl", {"owner.unrecorded_warn": CANONICAL}, ("owner_check:append",), ("nobody",),
           rule="one row per final reply that named owner items and recorded none: the observation guard.owner_check "
                "reads before it goes to deny"),
+    Store("turnwarnings", "S/turn-warnings.jsonl", {"turn.warning": CANONICAL}, ("config:append_warning",), ("nobody",),
+          feature="turn_check", rule="one row per end-of-turn check that fired as a warning (turn_check.py, "
+                                     "claim_check.subagent): the false-positive count read before any key is raised"),
     Store("artifactbackup", "S/artifact-backup/*", {"artifact.backup": CANONICAL},
           ("artifact_archive:log_error", "artifact_archive:append_row", "artifact_archive:migrate_served_files",
            "artifact_archive:exclusion_reason", "artifact_archive:render_index",

@@ -14,8 +14,14 @@ Passes without a decision:
   - no past-tense completion claim in the final reply or in a Telegram reply sent this turn, counting neither
     fenced or inline code nor quoted lines, and none at all when the reply itself says the work is not verified.
 Any error exits 0 silently.
+
+Separately, `claim_check.subagent` in ~/.claude/agent-skills.json (off until set; `true` or `warn` turns it on, and
+nothing stronger exists) warns, without blocking, when the reply claims completion on a subagent's report and the turn
+ran no Bash call of its own after the subagent started.
 """
-import json, os, re, sys
+import datetime, json, os, re, sys
+
+from lib import config
 
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 PROSE_EXT = (".md", ".markdown", ".mdx", ".txt", ".rst")
@@ -124,6 +130,33 @@ def judge(entries, last_message=None):
             f"(AGENT_SKILLS_CLAIM_CHECK=0 turns this check off.)")
 
 
+def subagent_claim(entries, last_message=None):
+    """The warning line when the reply claims completion on a subagent's report alone: the turn started a subagent and
+    ran no Bash call of its own after the last one was started. None otherwise."""
+    skip = refused(entries)
+    started, ran_after, final = False, False, []
+    for entry in entries:
+        if entry.get("type") == "user":
+            final = []
+        if entry.get("type") != "assistant":
+            continue
+        for b in blocks(entry):
+            if b.get("type") == "text":
+                final.append(b.get("text") or "")
+            elif b.get("type") == "tool_use" and b.get("id") not in skip:
+                if b.get("name") in ("Agent", "Task"):
+                    started, ran_after = True, False
+                elif b.get("name") == "Bash" and started:
+                    ran_after = True
+    if not started or ran_after:
+        return None
+    text = strip(last_message if isinstance(last_message, str) else "\n".join(final))
+    m = CLAIM.search(text)
+    if not m or UNVERIFIED.search(text):
+        return None
+    return f"claim_check: \"{m.group(0).strip()}\" rests on a subagent's report; no command of this session's own ran after it"
+
+
 def main():
     if os.environ.get("AGENT_SKILLS_CLAIM_CHECK", "1") == "0":
         return
@@ -133,9 +166,17 @@ def main():
     path = event.get("agent_transcript_path") or event.get("transcript_path")
     if not path or not os.path.isfile(path):
         return
-    reason = judge(turn(path), event.get("last_assistant_message"))
+    entries = turn(path)
+    reason = judge(entries, event.get("last_assistant_message"))
     if reason:
         print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
+    elif config.level(config.load(), "claim_check.subagent", "off") != "off":
+        # A warning only (`claim_check.subagent`, off until set): a line for the human and a turn-warnings row.
+        if warning := subagent_claim(entries, event.get("last_assistant_message")):
+            now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+            config.append_warning({"at": now, "event": event.get("hook_event_name"), "session": event.get("session_id"),
+                                   "agent": event.get("agent_id") or "", "check": "claim_subagent", "level": "warn"})
+            print(json.dumps({"systemMessage": warning}, ensure_ascii=False))
 
 
 if __name__ == "__main__":
