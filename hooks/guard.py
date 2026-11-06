@@ -34,6 +34,10 @@ Allow, so workers never stall on a prompt hours after they loaded a skill:
   set and init, which can change a program's merge policy, backfill, which rewrites the ledger, and land-exec,
   the land executor, whose round merges and belongs to its LaunchAgent
 
+- `skills-sync status`, `skills-sync broadcast` (only its reload flags) and `skills-sync end-check` without `--apply`
+  or `--trash-caches`. `card` is denied or left to the classifier by its brief check; sync, setup, nudge and the rest
+  get no decision, so the classifier judges them.
+
 Ask: `python3 <checkout>/scripts/setup.py --actions-only`, the setup steps that write no Claude settings (setup-pc).
 The dialog says what they do only when <checkout> is this plugin's root or the install dialog's `checkout`;
 another clone's setup.py still gets `ask`, with a sentence that promises nothing. `ask` shows the human a permission dialog even in auto mode, so these persistent jobs start only on a click.
@@ -73,8 +77,7 @@ REBINDS = re.compile(r"(?<![$\w{])ORCA_TERMINAL_HANDLE=(?!=)|\$\{ORCA_TERMINAL_H
 # In command position only: a grep or echo that quotes the words is not a card being made.
 CARD = re.compile(r"(?:^|[;&|(])\s*orca\s+worktree\s+create\b", re.M)
 # The helper reads its brief from a file this hook can open, so the card checks run on that file (dispatch-card §3).
-CARD_HELPER = re.compile(r"(?:^|[;&|(`])\s*(?:\S*/)?skills-sync\s+card\s+(\S+)", re.M)
-CHDIR = re.compile(r"(?:^|[;&|(])\s*(?:cd|pushd)\b", re.M)
+CARD_HELPER = re.compile(r"(?:^|[;&|(`])\s*(?:\S*/)?skills-sync\s+card[ \t]+([^ \t\n]+)", re.M)
 LEAD_FROM_LEAD = ("This session is a lead, and a lead does not start another lead. Give the card a "
                   "worker brief (the one at the top of orchestrate references/brief.md, or its \"Single worker\") "
                   "without the Lead's MODE or ROLE line or `<project>: lead` head; only the human or the "
@@ -89,6 +92,7 @@ SLEEP_SOURCE = "(agent-skills hooks/guard.py)"
 SLEEP_LOOP = re.compile(r"(?:^|[;&|(\s])(?:until|while|for)\b[\s\S]*?\bdo\b[\s\S]*?\bsleep\s+(\$|\d+)")
 ORCA_ASK = {"reset", "worker-abandon", "gate-resolve"}
 ORCH_ASK = {"heavy", "set", "init", "backfill", "land-exec"}
+BROADCAST_FLAGS = {"--plugins", "--skills", "--dry-run", "--retry"}
 SETUP_ASK = (f"{PLUGIN} setup: install the 15-minute sync job, turn on the default-on automations (janitor, pressure-watch, "
              "and watch-prs/watch-mentions when their keys are set) and print the check table. It writes no Claude settings.")
 
@@ -146,16 +150,57 @@ def lead_session(who):
     return who().role == "lead"
 
 
-def helper_card(brief, cwd, moves):
+HOME_REF = re.compile(r"\$HOME\b|\$\{HOME\}")
+SAFE_HOME = re.compile(r"/[\w./+-]*")
+# A literal `cd X &&` may come first: cd changes PWD, never HOME.
+FIRST_STATEMENT = re.compile(r"\s*(?:(?:cd|pushd)\s+(?:--\s+)?[\w./+-]+\s*&&\s*)?(?:[\w./~+-]*/)?skills-sync\s+card\s+")
+ALONE = re.compile(r"\s*(?:[\w./~+-]*/)?skills-sync\s+card\s+")
+BRIEF_TOKEN = re.compile(r"'([^']*)'|\"([^\"]*)\"|([^'\"]+)")
+PLAIN_PATH = re.compile(r"[\w./+:@%=,-]*", re.ASCII)
+BASH_WORD = re.compile(r"[^ \t\n]+")  # bash splits on these only: NBSP or a vertical tab stays inside the word
+
+
+def expand_path(token, first):
+    """The path the helper will open, or None when the hook cannot be sure. The token is one quoted or plain word
+    and the result must be plain characters: spaces, quotes, braces, brackets, globs and escapes are not read.
+    `~` and `~/…` are expanded even in quotes, as the helper does itself. `$HOME`/`${HOME}` is expanded only when
+    the helper is the command's first statement (`first`): nothing can have rebound HOME before it, which no scan
+    of earlier text could prove (quotes, `+=`, `IFS`) -- and only when HOME is a plain absolute path."""
+    m = BRIEF_TOKEN.fullmatch(token)
+    if not m:
+        return None
+    text = next(g for g in m.groups() if g is not None)
+    home = os.environ.get("HOME", "")
+    tilde = text == "~" or text.startswith("~/")
+    if text.startswith("~") and not tilde:
+        return None
+    if (tilde or ("$" in text and m[1] is None)) and (not first or not SAFE_HOME.fullmatch(home)):
+        return None
+    if tilde:  # only the leading `~`: a `$HOME` after it is literal text when the word is single-quoted
+        text = home + text[1:]
+    if "$" in text and m[1] is None:  # single quotes pass `$` through literally, and a literal `$` is refused below
+        text = HOME_REF.sub(lambda _: home, text)
+    return pathlib.Path(text) if PLAIN_PATH.fullmatch(text) else None
+
+
+def helper_card(brief, cwd, cmd, start):
     """(the prompt the helper would send, None) or (None, the deny reason): the helper's own checks on that file.
-    `moves`: the command changes directory first, so a relative path would be read from the wrong place."""
-    brief = brief.strip("'\"")
-    if set(brief) & set("$`*?"):
-        return None, "Write the brief's path out in `skills-sync card <brief>`; this hook reads that file and cannot expand it."
-    path = pathlib.Path(brief).expanduser()
-    if moves and not path.is_absolute():
-        return None, "This command changes directory, so give `skills-sync card` the brief's absolute path."
-    full = path if path.is_absolute() else pathlib.Path(cwd or ".") / path
+    `start`: where the brief's argument begins in `cmd`."""
+    try:
+        # A later argument can still rebind HOME (`"$((HOME=0))"`), so HOME is read only when none expands.
+        first = bool(FIRST_STATEMENT.fullmatch(cmd[:start])) and not re.search(r"[$`]", cmd[start + len(brief):])
+        path = expand_path(brief, first)
+        base = pathlib.Path(cwd or ".")
+        # A relative path means the event's cwd only when nothing runs before the helper: a cd can be spelled
+        # `! cd`, `c"d"` or inside a function, so no scan of earlier text proves there is none.
+        alone = bool(ALONE.fullmatch(cmd[:start]))
+    except Exception as e:  # a check that cannot run does not let the card through
+        return None, f"The guard hook could not read the brief path of `skills-sync card` ({type(e).__name__}: {e})."
+    if path is None:
+        return None, "Write the brief's path out in `skills-sync card <brief>` (or `~`/`$HOME` plus a literal path); this hook reads that file and cannot expand it."
+    if not alone and not path.is_absolute():
+        return None, "Something runs before `skills-sync card` (a cd could move it), so give the brief's absolute path."
+    full = (base / path).resolve()  # physical resolution, as opening the file does: a symlink's `..` is its target's parent
     if full.is_dir():
         return None, f"`skills-sync card {brief}` names a directory, not a brief file; give it the brief's file path."
     try:
@@ -203,10 +248,12 @@ def bash(cmd, background, who, cwd=None):
         if lead and lead_session(who):
             return decide("deny", LEAD_FROM_LEAD)
     for helper in CARD_HELPER.finditer(command_text(cmd)):
-        brief = re.compile(r"\S+").match(cmd, helper.start(1))[0]  # the masked text blanks a quoted path
+        if not re.search(r"card[ \t]+\Z", cmd[:helper.start(1)]):  # the masked text blanks escapes (`card \x/p`, `card \ /p`), which shift the word
+            return decide("deny", "Write `skills-sync card <brief>` with the brief as a plain word after one blank; this hook cannot read that spelling.")
+        brief = BASH_WORD.match(cmd, helper.start(1))[0]  # the masked text blanks a quoted path
         if brief.startswith("-"):  # `--help` or no brief: the helper prints its usage and creates nothing
             continue
-        prompt, refused = helper_card(brief, cwd, bool(CHDIR.search(cmd)))
+        prompt, refused = helper_card(brief, cwd, cmd, helper.start(1))
         if refused:
             return decide("deny", refused)
         if is_lead(prompt) and lead_session(who):
@@ -219,10 +266,40 @@ def bash(cmd, background, who, cwd=None):
         return decide("allow", f"{PLUGIN}: orca orchestration {words[2]}")
     if words[0] == "orch" and len(words) > 1 and words[1] not in ORCH_ASK and words[1][:1].isalpha():
         return decide("allow", f"{PLUGIN}: orch {words[1]} (the program ledger and landing gate)")
+    if words[0] == "skills-sync":
+        reason = sync_allowed(words[1:])
+        if reason:
+            return decide("allow", f"{PLUGIN}: skills-sync {reason}")
     reason = setup_actions(words)
     if reason:
         return decide("ask", reason)
     return None, None
+
+
+def sync_allowed(args):
+    """What `skills-sync <args>` is allowed as, else None (the auto mode classifier decides).
+    Only the subcommands that change nothing beyond the reload text or a printed verdict pass; card (brief checked
+    above), sync, setup, nudge and `--supersede` are the classifier's."""
+    if args == ["status"]:
+        return "status (read-only)"
+    if args[:1] == ["end-check"]:
+        # --apply closes terminals and removes the worktree; --trash-caches moves files; neither is a verdict read.
+        if set(args) & {"--apply", "--trash-caches"} or any(a.startswith("-") and not a.startswith("--") for a in args):
+            return None
+        return "end-check (verdict only)"
+    if args[:1] == ["broadcast"]:
+        # No argument becomes text: broadcast types only RELOAD and STALE_COMMAND values (sync.py), the latter
+        # (/restart, /reload-plugins) only into an idle session that shows the update notice. test_guard pins that set.
+        rest, i = args[1:], 0
+        while i < len(rest):
+            if rest[i] == "--terminal" and i + 1 < len(rest) and not rest[i + 1].startswith("-"):
+                i += 2
+            elif rest[i] in BROADCAST_FLAGS:
+                i += 1
+            else:
+                return None
+        return "broadcast (fixed reload text)"
+    return None
 
 
 def setup_actions(words):

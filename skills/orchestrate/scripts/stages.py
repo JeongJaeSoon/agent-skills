@@ -3,7 +3,8 @@ and prod check, each cell a mark and the evidence behind it.
 
 Most rows are generated: each fleet tick derives a program's rows from its ledger, its Run's cards and GitHub
 (stage_auto.py, stages-auto.json). The orchestrator or lead writes a cell where it verified it (`orch stage set`), a
-generated row's id included, and that manual cell wins over the generated one; it adds a row (`orch stage add`) for
+generated row's id included, and that manual dev or prod cell wins over the generated one (the merge cell of a generated
+row is derived and refused); it adds a row (`orch stage add`) for
 work outside any program. A recorded row with a generated row's PR is folded into that row when the table is read. The next report and the dashboard read the same record instead of each rebuilding it. What
 a person recorded lives in the fleet state directory (stages.json, beside state.json), not a program's ledger: work
 outside any program needs a row too. The merge cell of a recorded row with a PR is never written: it is read from the
@@ -104,7 +105,13 @@ def set_cell(rid, col, mark, evidence=None, by=None):
 
     def go(store):
         row = store["rows"].get(rid)
-        made = stage_auto.read()["rows"].get(rid)
+        made_rows = stage_auto.read()["rows"]
+        made = made_rows.get(rid)
+        if made and made.get("group"):
+            raise ValueError(f"{rid} is a group row; it has no cells, set them on the rows under it")
+        if col == "merge" and folds_into(rid, store["rows"], made_rows):
+            raise ValueError(f"{rid}: the merge column of a generated row is derived from the ledger and GitHub; "
+                             "it is not written by hand (dev and prod are)")
         if not row and made and not made.get("group"):
             # Cells only, over a generated row: its title, PR and place stay the tick's.
             row = store["rows"][rid] = {"id": rid, "cells": {}, "overlay": True, "created_at": fleet.iso(fleet.utcnow())}
@@ -156,25 +163,57 @@ def merge_cell(pr, prs):
     return {"mark": "fail", "evidence": why, "auto": True}
 
 
+def fold_map(recorded, made_rows):
+    """Recorded row id -> the generated row it is the same work as, by PR or by predicate item (by_item), in the order
+    the table folds them: an item one row took is not taken by the next. A row of a generated id is not in it."""
+    by_pr = {r["pr"]: k for k, r in made_rows.items() if r.get("pr")}
+    into = {}
+    for k, r in recorded.items():
+        if k not in made_rows and not r.get("group") and (
+                on := by_pr.get(r.get("pr")) or by_item(k, r, made_rows, set(into.values()))):
+            into[k] = on
+    return into
+
+
+def folds_into(rid, recorded, made_rows):
+    """The generated row a recorded row (or a bare id) sits on: the same id, or fold_map's. None for a group, or when
+    it stands alone (work that ended outside GitHub)."""
+    if (made_rows.get(rid) or {}).get("group") or (recorded.get(rid) or {}).get("group"):
+        return None
+    return rid if rid in made_rows else fold_map(recorded, made_rows).get(rid)
+
+
 def merged(store, made):
-    """Generated rows with the recorded ones over them: a recorded cell replaces the generated cell of its column, a
+    """merged_counted() without the ids."""
+    return merged_counted(store, made)[:2]
+
+
+def merged_counted(store, made):
+    """Generated rows with the recorded ones over them, and the ids of the generated rows a recorded merge cell was
+    dropped from: the merge column of a generated row is derived, so a recorded one there is ignored (left in the
+    file). A recorded cell replaces the generated cell of its column, a
     recorded row of the same id its fields. A recorded row with a generated row's PR is the same work: it folds into that
     row, its title and cells over the generated ones, and the rows under it move along; so does a PR-less row under a
     program's group whose id names one of its predicate items (by_item). A recorded group left with no row of its own
     goes. An overlay whose generated row is gone has nothing to sit on."""
     rows = dict(made["rows"])
-    by_pr = {r["pr"]: k for k, r in rows.items() if r.get("pr")}
-    into = {}
+    into = fold_map(store["rows"], made["rows"])
     # A recorded title replaces the generated one whole, the dashboard's uncut title_full with it.
     full = lambda r: {"title_full": r["title"]} if r.get("title") else {}  # noqa: E731
+    ignored = []
+
+    def own(r, target):
+        if "merge" in (r.get("cells") or {}):
+            ignored.append(target)
+        return {c: v for c, v in (r.get("cells") or {}).items() if c != "merge"}
     for k, r in store["rows"].items():
         if k in rows:
             rows[k] = {**rows[k], **{f: v for f, v in r.items() if v and f not in ("cells", "overlay")}, **full(r),
-                       "cells": {**rows[k].get("cells", {}), **r.get("cells", {})}}
-        elif (on := not r.get("group") and (by_pr.get(r.get("pr")) or by_item(k, r, made["rows"], set(into.values())))):
-            into[k] = on
+                       "cells": {**rows[k].get("cells", {}), **own(r, k)}}
+        elif k in into:
+            on = into[k]
             rows[on] = {**rows[on], **{f: v for f, v in r.items() if v and f in ("title", "done_at")}, **full(r),
-                        "cells": {**rows[on].get("cells", {}), **r.get("cells", {})}}
+                        "cells": {**rows[on].get("cells", {}), **own(r, on)}}
         elif not r.get("overlay"):
             rows[k] = r
     for k, r in rows.items():
@@ -185,7 +224,7 @@ def merged(store, made):
         kids.setdefault(r.get("parent"), set()).add(k)
     gone = {k for k in kids if (store["rows"].get(k) or {}).get("group") and k not in made["rows"] and kids[k] <= set(into)}
     rows = {k: r for k, r in rows.items() if k not in gone}
-    return rows, made["order"] + [k for k in store["order"] if k in rows and k not in made["rows"]]
+    return rows, made["order"] + [k for k in store["order"] if k in rows and k not in made["rows"]], ignored
 
 
 def by_item(rid, row, made, taken):
@@ -207,7 +246,7 @@ def table(state=None):
     store = read()
     state = fleet.read_json(fleet.state_dir() / "state.json", {}) if state is None else state
     prs = {p.get("key"): p for p in (state or {}).get("prs") or []}
-    all_rows, order = merged(store, stage_auto.read())
+    all_rows, order, ignored = merged_counted(store, stage_auto.read())
     rows = []
 
     def walk(parent, depth):
@@ -225,11 +264,19 @@ def table(state=None):
             cells["merge"] = auto
         close = (all_rows.get(r.get("program")) or {}).get("done_at") if r.get("source") == "auto" else None
         out.append({**r, "cells": cells, **finished(r, cells, close)})
-    return {"rows": out, "env": store["env"], "next": store["next"], "refs": ref_urls(out, store["next"], prs)}
+    return {"rows": out, "env": store["env"], "next": store["next"], "refs": ref_urls(out, store["next"], prs),
+            "ignored_merge": ignored}
+
+
+def ignored_note(t):
+    """One line saying how many hand-written merge cells on generated rows the table dropped (`ignored_merge`: the
+    generated row id of each); "" when none."""
+    n = len(t.get("ignored_merge") or ())
+    return f"손으로 쓴 머지 칸 {n}건은 생성 행의 계산 값이 있어 무시했다 (stages.json에는 그대로 남음)" if n else ""
 
 
 def finished(row, cells, close=None):
-    """The row's end as the table reads it. A stopped row a recorded merge ✅ now covers is not stopped: its end falls
+    """The row's end as the table reads it. A stopped row whose merge ✅ has since appeared is not stopped: its end falls
     back to its program's Close (close). A work row every column of which is ✅ or 해당 없음 ends at its latest cell's
     time, or the earlier end the row already has (`orch stage done`, a program's Close). {} when nothing changes."""
     base = {"stopped": None, "done_at": close} if row.get("stopped") and (cells.get("merge") or {}).get("mark") == "ok" else {}
@@ -321,7 +368,8 @@ def counted(t, state, now=None, by_pr=None, now_known=True):
 def of_program(t, slug):
     """The rows of one program: its group row and every row under it."""
     keep = with_descendants({r["id"]: r for r in t["rows"]}, {slug})
-    return {**t, "rows": [r for r in t["rows"] if r["id"] in keep]}
+    return {**t, "rows": [r for r in t["rows"] if r["id"] in keep],
+            "ignored_merge": [k for k in t.get("ignored_merge") or () if k in keep]}
 
 
 def dash_url(page="stages"):

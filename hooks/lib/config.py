@@ -44,6 +44,18 @@ def level(cfg, key, default):
     return value if value in LEVELS else default
 
 
+def append_warning(row):
+    """One row in $AGENT_SKILLS_STATE/turn-warnings.jsonl: a turn-end check that fired as a warning, kept so a week of
+    them shows each check's false-positive rate before any key goes stronger than warn. Never raises; a write that
+    fails goes to guard-errors.jsonl."""
+    try:
+        state().mkdir(parents=True, exist_ok=True)
+        with open(state() / "turn-warnings.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except Exception as exc:
+        log_error("append_warning", exc)
+
+
 def log_error(hook, exc):
     """One line in $AGENT_SKILLS_STATE/guard-errors.jsonl: the time, the hook, the exception type and where it was
     raised. No message: it can quote the tool input, and that can hold a secret. Never raises."""

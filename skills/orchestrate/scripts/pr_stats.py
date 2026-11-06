@@ -17,6 +17,8 @@ Config, under "pr_stats" in the fleet config (fleet.config_path()), all optional
   sources  agents that open PRs for me, each {"name", "query", "author"?}: `query` is GitHub search syntax added to
            `is:pr archived:false`, `author` keeps only hits whose PR author has that login. PRs I authored are always
            the first source, "Me". A PR several sources find counts once, for the first.
+  apps     ghtkn apps whose tokens run every search, united by URL (default: none, one search under gh's own login).
+           An app that gets no token fails the whole collect.
 """
 import datetime as dt, json, pathlib, sys, time
 from collections import Counter
@@ -29,7 +31,7 @@ BATCH_MIN = 10
 STATES = ("merged", "open", "closed")
 SEARCH_CAP = 1000  # GitHub search returns at most this many hits for one query
 DROP_MAX = 0.25  # share of one source's PRs that may vanish between two collects before the result is held back
-PACE = 2.0  # seconds between searches: back-to-back searches trip GitHub's secondary rate limit
+PACE = 2.0 # seconds between searches: back-to-back searches trip GitHub's secondary rate limit
 NODE = "... on PullRequest { url title createdAt state author { login } repository { nameWithOwner } }"
 
 
@@ -48,14 +50,28 @@ def next_month(d):
     return dt.date(d.year + d.month // 12, d.month % 12 + 1, 1)
 
 
-def search(q):
+def apps(cfg=None):
+    """ghtkn apps to search with, in order; (None,) means one search under gh's own login. Search shows only what the
+    token can reach, and a SAML-blocked token drops an organization without an error, so list every app whose slice
+    you need: each sees a different one and the results are united by URL."""
+    c = ((fleet.config() if cfg is None else cfg).get("pr_stats") or {})
+    return tuple(c.get("apps") or ()) or (None,)
+
+
+def search(q, app=None):
     """Every hit for one query, or None when the query alone matches SEARCH_CAP or more."""
     out, after = [], None
     while True:
         time.sleep(PACE)
         page = f", after: {fleet.gql_str(after)}" if after else ""
-        data, _ = fleet.graphql(f"{{ search(query: {fleet.gql_str(q)}, type: ISSUE, first: 100{page}) "
-                                f"{{ issueCount pageInfo {{ hasNextPage endCursor }} nodes {{ {NODE} }} }} }}")
+        query = (f"{{ search(query: {fleet.gql_str(q)}, type: ISSUE, first: 100{page}) "
+                 f"{{ issueCount pageInfo {{ hasNextPage endCursor }} nodes {{ {NODE} }} }} }}")
+        try:
+            data, _ = fleet.graphql(query, app=app) if app else fleet.graphql(query)
+        except fleet.SourceError as e:
+            if app:  # never retry under gh's own login: that is the silent drop this guards against
+                raise fleet.SourceError(f"ghtkn app {app} failed (ghtkn agent locked / app not authorized?): {e}")
+            raise
         s = data["search"]
         if s["issueCount"] >= SEARCH_CAP:
             return None
@@ -65,28 +81,29 @@ def search(q):
         after = s["pageInfo"]["endCursor"]
 
 
-def search_range(base, first, last):
-    hits = search(f"{base} created:{first}..{last}")
+def search_range(base, first, last, app=None):
+    hits = search(f"{base} created:{first}..{last}", app)
     if hits is not None:
         return hits
     if first == last:
         raise fleet.SourceError(f"over {SEARCH_CAP} PRs created on {first} for: {base}")
     mid = first + (last - first) // 2
-    return search_range(base, first, mid) + search_range(base, mid + dt.timedelta(days=1), last)
+    return search_range(base, first, mid, app) + search_range(base, mid + dt.timedelta(days=1), last, app)
 
 
-def fetch(since, sources, today):
-    """PRs keyed by URL, each tagged with the first source that found it."""
+def fetch(since, sources, today, apps=(None,)):
+    """PRs keyed by URL, each tagged with the first source that found it, united over every app's search."""
     prs = {}
     for src in sources:
         first = since
         # ponytail: refetches every month each collect; cache closed months if the search budget ever matters.
         while first <= today:
             nxt = next_month(first)
-            for n in search_range(f"is:pr archived:false {src['query']}", first, min(nxt - dt.timedelta(days=1), today)):
-                if src.get("author") and (n.get("author") or {}).get("login") != src["author"]:
-                    continue
-                prs.setdefault(n["url"], {**n, "source": src["name"]})
+            for app in apps:
+                for n in search_range(f"is:pr archived:false {src['query']}", first, min(nxt - dt.timedelta(days=1), today), app):
+                    if src.get("author") and (n.get("author") or {}).get("login") != src["author"]:
+                        continue
+                    prs.setdefault(n["url"], {**n, "source": src["name"]})
             first = nxt
     return list(prs.values())
 
@@ -178,14 +195,15 @@ def drop_check(prev, rep):
     old, new = prev["views"]["all"]["by_source"], rep["views"]["all"]["by_source"]
     lost = [f"{s} {old[s]} -> {new.get(s, 0)}" for s in rep["sources"] if new.get(s, 0) < old.get(s, 0) * (1 - DROP_MAX)]
     if lost:
-        raise SuspectDrop(f"held back as suspicious, {', '.join(lost)}; an organization's SSO authorization may have "
-                          f"lapsed. Run `orch-dash prstats` to accept the new counts")
+        raise SuspectDrop(f"held back as suspicious, source {', '.join(lost)}; the token's access may not reach an "
+                          f"organization (a SAML-blocked token, or a GitHub App installed on fewer repositories). "
+                          f"Run `orch-dash prstats` to accept the new counts")
 
 
 def refresh(out=None, cfg=None, guard=False):
     since, sources = settings(cfg)
     today = dt.datetime.now().astimezone().date()
-    rep = report(fetch(since, sources, today), since, sources, today)
+    rep = report(fetch(since, sources, today, apps(cfg)), since, sources, today)
     f = pathlib.Path(out) if out else out_path()
     if guard:
         drop_check(fleet.read_json(f, {}), rep)

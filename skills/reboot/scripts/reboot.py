@@ -477,7 +477,7 @@ def check_handoff(key, run, call=orca, last=None):
         return [("info", f"no handoff recorded for {key}")]
     ts, data = last
     out = [("info", f"handoff {ts}: " + "; ".join(f"{k}={v}" for k, v in (data or {}).items() if v and k != "handle")
-                    + " (`orch handoff show` adds the open decisions)")]
+                    + f" (`orch handoff show --key {key}` adds the open decisions)")]
     if not run:
         return out
     try:

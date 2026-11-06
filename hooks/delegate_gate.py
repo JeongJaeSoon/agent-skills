@@ -23,7 +23,8 @@ Allowed (orchestrate references/top-level.md, "Routing", and SKILL.md "Stay answ
   a pipe, and the pressure gate's wait (`python3 <this plugin>/skills/reap-resources/scripts/pressure.py queue wait
   q-<id>` or `turns --wait <n>`) with run_in_background, which pressure_gate.py's block names. A ticket
   milestone without the task-tracker subagent: this plugin's `python3 <path>/tracker.py transition --to <state> <id>`
-  or `comment --body-file <writable file> <id>`, and `orca linear attach` for the PR link. Monitor, when
+  or `comment --body-file <writable file> <id>`, `attach <id> --url <http(s) url>` for the PR link, and the read-only
+  `reconcile <id> --repo <owner/repo>… [--head <branch>]`. Monitor, when
   its command passes the same check (the inbox stream, `orch inbox --stream`), and never with a ws source. The only expansions are $ORCA_TERMINAL_HANDLE as an option's whole value and top-level.md's
   `--body "$(cat <absolute path>)"` of a file this hook lets the session write; no other substitution, variable, glob, backtick, `$'…'`, line continuation, or
   redirection other than `2>&1` and to /dev/null. guard.py still denies a send or reply to /dev/null
@@ -36,6 +37,10 @@ Allowed (orchestrate references/top-level.md, "Routing", and SKILL.md "Stay answ
 Everything else, other MCP tools included, is denied.
 
 A guardrail against the orchestrator's habit, not a sandbox: an allowed command's arguments are not checked.
+
+One thing is checked on an allowed call, and only warned about: a delegation with no owner order behind it. A
+`skills-sync card` with neither `--order` nor an `ORDER: oN` row in its brief, or an Agent call whose prompt has no
+`ORDER: oN` line, gets a note in the model's context once `orch order setup` has run. Nothing is blocked.
 """
 import json, os, pathlib, re, shlex, sys
 
@@ -167,10 +172,20 @@ def pressure_wait(words, background):
 
 
 # A ticket milestone (use-tracker "Milestones") is a fixed move, not task work: a state, a completion comment, a PR
-# link. This plugin's tracker.py by real path, those two verbs in their exact shapes, and no --config (another file
-# could name another tracker); the comment body is a file this hook lets the session write.
+# link, and the read-only `reconcile` that says which of them a ticket skipped. This plugin's tracker.py by real path,
+# those verbs in their exact shapes, and no --config (another file could name another tracker); the comment body is
+# a file this hook lets the session write.
 TRACKER = pathlib.Path(__file__).resolve().parents[1] / "skills" / "use-tracker" / "scripts" / "tracker.py"
 STATES = {"started", "review", "completed", "canceled"}
+RECONCILE_OPT = {"--repo": re.compile(r"[\w.-]+/[\w.-]+"), "--head": re.compile(r"[\w./-]+")}
+
+
+def reconcile_ok(rest):
+    if len(rest) < 4 or len(rest) % 2 or rest[1].startswith("-"):
+        return False
+    pairs = list(zip(rest[2::2], rest[3::2]))
+    return (all(f in RECONCILE_OPT and RECONCILE_OPT[f].fullmatch(v) and not v.startswith("-") for f, v in pairs)
+            and any(f == "--repo" for f, _ in pairs) and [f for f, _ in pairs].count("--head") <= 1)
 
 
 def milestone(words):
@@ -179,7 +194,9 @@ def milestone(words):
     rest = words[2:]
     if rest[:1] == ["--adapter"] and rest[1:2] in (["linear"], ["jira"]):
         rest = rest[2:]
-    if len(rest) != 4 or rest[0] not in ("transition", "comment"):
+    if rest[:1] == ["reconcile"]:
+        return reconcile_ok(rest)
+    if len(rest) != 4 or rest[0] not in ("transition", "comment", "attach"):
         return False
     verb, a, b, c = rest
     flag, value, ticket = (a, b, c) if a.startswith("--") else (b, c, a)
@@ -187,6 +204,8 @@ def milestone(words):
         return False
     if verb == "transition":
         return flag == "--to" and value in STATES
+    if verb == "attach":
+        return flag == "--url" and bool(re.fullmatch(r"https?://\S+", value))
     return flag == "--body-file" and os.path.isabs(value) and writable(real(value))
 
 
@@ -208,7 +227,7 @@ def coordination(words, piped, background=False):
     if name == "skills-sync":
         return True
     if name == "orca":
-        return bool(args) and (args[0] in ORCA or args[:2] in (["skills", "get"], ["skills", "list"], ["linear", "attach"]))
+        return bool(args) and (args[0] in ORCA or args[:2] in (["skills", "get"], ["skills", "list"]))
     if name == "gh":
         if args[:2] in (["pr", "merge"], ["pr", "ready"]):
             return True
@@ -252,13 +271,68 @@ def is_orchestrator(event):
 
 
 def reason(tool):
-    return (f"{MARK} {SOURCE} This session is the top-level orchestrator, and {tool} here is task work. Hand it one "
-            "layer down now, with the facts you already have: a background subagent (Agent, run_in_background) for a "
-            "lookup, a read or a review; `skills-sync card <brief>` or `orca orchestration worker-start` for a change "
-            "or an investigation in one repo; `orca orchestration send` to the lead or session that owns the topic. "
-            "Your own turn keeps coordination only (orchestrate references/top-level.md, \"Routing\"). An act only the "
-            "human's session may take (a production release, an approved guard change) is not delegated: ask the "
-            "human to run that exact command as a `!` line in this chat.")
+    return (f"{MARK} {SOURCE} Orchestrator: {tool} is task work. Hand it down now with the facts you have: a change "
+            "or investigation goes as a card, `skills-sync card <brief>` (dispatch-card), or `skills-sync handoff` "
+            "for this repo's next ticket; a lookup, read or review to a background Agent; a topic its lead owns via "
+            "`orca orchestration send` (orchestrate references/top-level.md, \"Routing\"). A human-only act (a production release, an approved guard change): ask the human to run "
+            "that exact command as a `!` line here.")
+
+
+# A line of its own: `ORDER: o12` in a subagent prompt or a brief. The brief template's `ORDER  Starts after …` row has no
+# order id after the colon, so it does not count.
+ORDER_LINE = re.compile(r"(?im)^[ \t]*`?ORDER`?[ \t]*:[ \t]*o\d+[ \t]*$")
+FENCE = re.compile(r"(?ms)^[ \t]*```.*?^[ \t]*```[^\n]*$")
+
+
+def delegations(tool, args):
+    """What this allowed call hands to another session, as ("subagent", prompt) or ("card", brief path, has --order):
+    one entry per delegation in it."""
+    if tool in ("Agent", "Task"):
+        return [("subagent", str(args.get("prompt") or ""), False)]
+    if tool != "Bash":
+        return []
+    out = []
+    for _, words in segments(str(args.get("command") or "")) or []:
+        if os.path.basename(words[0]) == "skills-sync" and words[1:2] == ["card"]:
+            rest = words[2:]
+            brief = next((w for w in rest if not w.startswith("-")), "")
+            out.append(("card", brief, "--order" in rest))
+    return out
+
+
+def unlinked(delegation):
+    kind, text, flagged = delegation
+    if kind == "subagent":
+        return not ORDER_LINE.search(FENCE.sub("", text))
+    if flagged:
+        return False
+    try:  # a quoted template in a ``` fence is not the brief's own row, as skills-sync card reads it
+        return not ORDER_LINE.search(FENCE.sub("", pathlib.Path(text).expanduser().read_text()))
+    except OSError:
+        return True
+
+
+def orders_set_up():
+    """Whether `orch order setup` ran: without the tables there is nothing to link to, so nothing to warn about."""
+    try:
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "skills" / "orchestrate" / "scripts"))
+        import store
+        return store.ORDER_STEP in store.migrated_steps()
+    except Exception:
+        return False
+
+
+def should_warn(tool, args):
+    try:  # a warning never costs the call
+        return any(unlinked(d) for d in delegations(tool, args)) and orders_set_up()
+    except Exception:
+        return False
+
+
+NOTE = ("[gate:delegate] (agent-skills hooks/delegate_gate.py) This delegation carries no owner order, so nothing ties "
+        "it to the instruction that started it. If it carries one, record it with `orch order add` and name it: "
+        "`skills-sync card --order oN` or an `ORDER: oN` row in the brief, an `ORDER: oN` line in a subagent prompt. "
+        "A warning, not a block: work with no order behind it needs nothing.")
 
 
 def main():
@@ -272,6 +346,9 @@ def main():
     if not isinstance(args, dict) or not allowed(tool, args):
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                                  "permissionDecisionReason": reason(tool)}}))
+    elif should_warn(tool, args):
+        # No permissionDecision: the call goes on to the same permission check it would without this hook.
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": NOTE}}))
     return 0
 
 

@@ -33,8 +33,11 @@ def term(handle, agent, silent_s, screen=None):
 
 
 def fake(branch_prs=(), terminals=(), local_landed=False, compare=None, ahead="", remote_log="", patches=None,
-         status="", calls=None, behind_pr=False, reflog=None):
-    """A runner answering the commands gather() issues. compare: GitHub's ahead_by, or "404". reflog: HEAD's reflog
+         status="", calls=None, behind_pr=False, reflog=None, pr_head_here=True, pr_status=None):
+    """A runner answering the commands gather() issues. compare: GitHub's ahead_by, "404", or "fail" (unreadable).
+    pr_head_here: whether the PR's head commit is in the local object store (a deleted remote branch leaves it out);
+    pr_status: GitHub's compare status of HEAD...PR head, "ahead"/"identical"/"diverged", or None when GitHub cannot
+    say. reflog: HEAD's reflog
     (`HEAD@{<unix time>}\\t<subject>` per line, newest first); default is a card with a commit of its own, 3 days old."""
     reflog = f"HEAD@{{{NOW - 3 * 86400:.0f}}}\tcommit: work\n" if reflog is None else reflog
     screens = {t["handle"]: t.pop("_screen") for t in terminals}
@@ -57,9 +60,11 @@ def fake(branch_prs=(), terminals=(), local_landed=False, compare=None, ahead=""
                 return "feature\n"
             if "symbolic-ref" in cmd:
                 return "origin/main\n"
+            if "cat-file" in cmd:
+                return "" if cmd[-1].startswith(PRHEAD) and pr_head_here else None
             if "merge-base" in cmd:
                 if "--is-ancestor" in cmd and cmd[-1] == PRHEAD:
-                    return "" if behind_pr else None
+                    return "" if behind_pr and pr_head_here else None  # exit 128 for a missing object, 1 for "no"
                 return "" if (cmd[-1] == "origin/main" and local_landed) else None
             if "remote" in cmd:
                 return "https://github.com/acme/app.git\n"
@@ -78,9 +83,13 @@ def fake(branch_prs=(), terminals=(), local_landed=False, compare=None, ahead=""
                 return json.dumps(list(branch_prs))
             if "pr" in cmd and "--search" in cmd:
                 return "[]"
+            if "compare" in c and "--jq .status" in c:
+                return None if pr_status is None else f"{pr_status}\n"
             if "compare" in c:
                 if compare == "404":
                     errors is not None and errors.append("gh api: Not Found (HTTP 404)")
+                    return None
+                if compare == "fail":
                     return None
                 return f"{compare}\n"
         if cmd[:3] == ["orca", "terminal", "list"]:
@@ -246,6 +255,16 @@ f = cards.gather({"path": CARD}, m, with_carried(ahead="c1\n", remote_log=""))
 assert cards.judge(f, IDLE)[:2] == (cards.KEEP, "원격에 없는 커밋"), cards.judge(f, IDLE)
 # A PR that carried HEAD needs no patch check: a squash merge and a deleted branch leave its commits on no remote.
 assert verdict(machine(prs=MERGED), branch_prs=[PR], ahead="c1\n")[0] == cards.REMOVE
+
+# A merged PR whose remote branch was deleted leaves its head commit out of the local objects, so `git merge-base
+# --is-ancestor` fails with 128 like it does for "no". HEAD under that head is still the PR's work: GitHub says so.
+GONE = dict(branch_prs=[PR], pr_head_here=False, **same)
+v = verdict(machine(prs=CLOSED_OLD), pr_status="ahead", **GONE)
+assert v[0] == cards.REMOVE, v
+assert verdict(machine(prs=CLOSED_OLD), pr_status="identical", **GONE)[0] == cards.REMOVE
+# Not under it (GitHub says diverged), or GitHub unreadable: the old verdict, never a delete on a guess.
+assert verdict(machine(prs=CLOSED_OLD), pr_status="diverged", **GONE)[0] == cards.KEEP
+assert verdict(machine(prs=CLOSED_OLD), pr_status=None, **GONE)[0] == cards.KEEP
 
 # Trap 3: an Orca terminal's shell left at its prompt (a setup shell) is not "a process in the card": it is closed
 # with the card. A shell that ran something recently, or a process a person started from it, keeps the card.
@@ -581,8 +600,9 @@ assert v[0] == cards.CLOSE, v
 
 # janitor integration: card is the scheduled kind, the old card kinds are not.
 assert "card" in reap.SCHEDULED and "orca-worktree" not in reap.SCHEDULED and "done-card" not in reap.SCHEDULED
+# Run now's prompt runs the agentless round once and reports what a person has to look at (사람 결정 cards among it).
 prompt = reap.schedule_prompt(pathlib.Path("/x/reap.py"), pathlib.Path("/s"))
-assert "사람 결정" in prompt, prompt
+assert "precheck --act" in prompt and "사람이 볼 것" in prompt, prompt
 
 # The plan row carries the card's uncommitted-changes fact for readers that are not the janitor (rowstate.inputs):
 # True or False once git status was read, None when gather() stopped before it.
@@ -597,5 +617,57 @@ cards.gather = lambda w, m: saved[2](w, m, fake(branch_prs=[{**PR, "state": "OPE
 planned, _ = cards.scan({})
 assert [(i["verdict"], i["dirty"]) for i in planned] == [(cards.KEEP, None)], planned
 cards.read_machine, cards.cards_listing, cards.gather, reap.run = saved
+
+ST = cards.settings({})
+assert (ST["stale_s"], ST["close_s"]) == (24 * 3600, 2 * 3600), ST
+H = 3600
+
+
+def idle8b(quiet, silent, **kw):
+    f = cards.gather({"path": CARD}, machine(quiet=quiet), fake(terminals=[term("a1", True, silent)], **kw))
+    return cards.judge(f, IDLE, ST["stale_s"], ST["close_s"])
+
+
+v = idle8b(2 * H, 2 * H, local_landed=True)
+assert v[0] == cards.CLOSE and v[2] == ["a1"] and "claude --resume" in v[1] and "projects" in v[1], v
+assert idle8b(2 * H - 60, 2 * H, local_landed=True)[0] == cards.KEEP, "the transcript not quiet long enough"
+assert idle8b(2 * H, 2 * H - 60, local_landed=True)[0] == cards.KEEP, "a terminal printed within the threshold"
+for kw in ({"local_landed": True, "status": " M a.py\n"}, {"ahead": "c1\n", "remote_log": ""}, {}):
+    assert idle8b(23 * H, 23 * H, **kw)[0] == cards.KEEP, ("work keeps it under a day", kw)
+    v = idle8b(24 * H, 24 * H, **kw)
+    assert v[0] == cards.CLOSE and "worktree 와 변경은 두고" in v[1] and v[2] == ["a1"], (kw, v)
+off = cards.settings({"cards": {"stale_hours": 0, "idle_close_hours": "soon"}})
+assert (off["stale_s"], off["close_s"]) == (None, None), off
+f = cards.gather({"path": CARD}, machine(quiet=30 * H), fake(local_landed=True, terminals=[term("a1", True, 30 * H)]))
+assert cards.judge(f, IDLE, off["stale_s"], off["close_s"])[0] == cards.KEEP
+assert idle8b("세션 기록을 읽지 못함", 30 * H, local_landed=True)[0] == cards.KEEP
+# Git state that could not be read is not timed out either, whichever keep settled() names first: a live session's
+# LIVE_UNDONE comes before the reflog check, and a merged PR the card moved past needs GitHub's compare.
+assert idle8b(3 * H, 3 * H, local_landed=True)[0] == cards.CLOSE
+assert idle8b(3 * H, 3 * H, local_landed=True, reflog="UNREADABLE")[0] == cards.KEEP
+f = cards.gather({"path": CARD}, machine(quiet=30 * H, prs=CLOSED_OLD), fake(branch_prs=[PR], compare="fail", terminals=[term("a1", True, 30 * H)]))
+assert f["pr"] and not f["carried"] and f["landed"] is None, f
+assert cards.judge(f, IDLE, ST["stale_s"], ST["close_s"])[0] == cards.KEEP
+m = machine(rows=rows3, cwd_of={30: CARD}, quiet=30 * H)
+v = cards.judge(cards.gather({"path": CARD}, m, fake(local_landed=True)), IDLE, ST["stale_s"], ST["close_s"])
+assert v[0] == cards.KEEP, ("a headless session has no terminal to close", v)
+f = cards.gather({"path": CARD}, machine(quiet=30 * H), fake(local_landed=True, terminals=[term("a1", True, 30 * H, ["다음 단계로 갈까?", "Enter to select · Esc to cancel"])]))
+assert cards.judge(f, IDLE, ST["stale_s"], ST["close_s"])[0] == cards.ASK
+f = cards.gather({"path": CARD}, machine(quiet=30 * H, patrol={CARD: "run"}), fake(local_landed=True, terminals=[term("a1", True, 30 * H)]))
+assert cards.judge(f, IDLE, ST["stale_s"], ST["close_s"])[0] == cards.KEEP, "a protected card stays whatever its quiet"
+f = cards.gather({"path": CARD}, machine(quiet=30 * H), fake(ahead="c1\n", remote_log="r1\0fix: thing\n",
+                                                             patches={"c1": "P", "r1": "Q"}, terminals=[term("a1", True, 30 * H)]))
+assert cards.judge(f, IDLE, ST["stale_s"], ST["close_s"])[0] == cards.ASK, "a question for a person is not a keep"
+blind = {**term("a1", True, 0), "lastOutputAt": None}
+f = cards.gather({"path": CARD}, machine(quiet=30 * H), fake(local_landed=True, terminals=[blind]))
+assert cards.judge(f, IDLE, ST["stale_s"], ST["close_s"])[0] == cards.KEEP, "no output time, no close"
+for unread in ({"unpushed": None}, {"landed": None, "landed_via": "기본 브랜치를 모름"}):
+    f = {**cards.gather({"path": CARD}, machine(quiet=30 * H), fake(terminals=[term("a1", True, 30 * H)])), **unread}
+    v = cards.judge(f, IDLE, ST["stale_s"], ST["close_s"])
+    assert v[0] == cards.KEEP, (unread, v)
+reap.log_action({"kind": "card", "path": "/w/idle", "why": "유휴 2.0시간: … claude --resume (/p/-w-idle)"}, "닫음 a1", True,
+                "card:close-idle", ["a1"])
+row = json.loads((reap.STATE / "reap-actions.jsonl").read_text().splitlines()[-1])
+assert "claude --resume (/p/-w-idle)" in row["why"] and row["handles"] == ["a1"], row
 
 print("ok")

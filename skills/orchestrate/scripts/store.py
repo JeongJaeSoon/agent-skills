@@ -23,7 +23,7 @@ Commands (prog.py `orch db`):
   migrate [--check]                            the whole cutover in one rerunnable command (cutover.py); owner only
   init                                         a new PC: an empty DB with both steps done, only when no state exists
 """
-import contextlib, copy, datetime as dt, fcntl, functools, hashlib, json, os, pathlib, plistlib, re, shutil, sqlite3, subprocess, sys, tempfile
+import contextlib, copy, datetime as dt, fcntl, functools, hashlib, json, os, pathlib, plistlib, re, shutil, sqlite3, subprocess, sys, tempfile, time
 
 import fleet
 
@@ -369,6 +369,36 @@ def session_event(key, ev, data, by=None):
         _event(db, "session", key, ev, by=by, after=data)
 
 
+def save_auto_handoff(key, meta, handle, session, within_s, fields, default_next, at=None):
+    """The clear band's save, decided and written in one transaction so two terminals cannot both pass the check.
+    The newest handoff row of `key` that is auto (a manual save between does not hide it): from another handle within
+    within_s -> ("conflict", that handle), nothing written; from this session within within_s -> ("skipped", None);
+    else the judgment fields of the newest handoff row, manual or auto, are copied into a new auto row with `meta`
+    -> ("saved", None). `at` is the clock, epoch seconds."""
+    at = time.time() if at is None else at
+    with tx() as db:
+        last = db.execute("SELECT ts, after FROM event WHERE entity='session' AND id=? AND ev='handoff' "
+                          "AND json_extract(after, '$.auto') = 1 ORDER BY seq DESC LIMIT 1", (key,)).fetchone()
+        if last:
+            prev = json.loads(last["after"] or "null")
+            prev = prev if isinstance(prev, dict) else {}
+            try:
+                age = at - dt.datetime.fromisoformat(last["ts"].replace("Z", "+00:00")).timestamp()
+            except (AttributeError, ValueError):
+                age = None
+            if age is not None and age < within_s:
+                if prev.get("handle") != handle:  # a row or a caller with no handle is another terminal too
+                    return "conflict", prev.get("handle") or "an unknown terminal"
+                if prev.get("session") == session:
+                    return "skipped", None
+        newest = last_session_event(key, "handoff", db)
+        base = newest[1] if newest and isinstance(newest[1], dict) else {}
+        carried = {f: base.get(f) for f in fields if base.get(f)}
+        carried.setdefault("next", default_next)
+        _event(db, "session", key, "handoff", by="orch handoff ready", after={**carried, **meta})
+    return "saved", None
+
+
 def last_session_event(key, ev, db=None):
     """(ts, data) of the newest `ev` row for key, or None."""
     def newest(db):
@@ -677,7 +707,8 @@ def closing_events(keep=200):
 def view():
     """The board, every close and the open decisions from one read snapshot: what one render reads."""
     with read() as db:
-        return {"board": _board(db), "latest": latest(db), "decisions": decisions("open", db)}
+        return {"board": _board(db), "latest": latest(db), "decisions": decisions("open", db),
+                "orders_unlinked": orders_unlinked(db)}
 
 
 # ---------------------------------------------------------------- land requests (land_exec.py)
@@ -818,6 +849,308 @@ def land_told(rid):
     """Mark a refusal as put in the dashboard inbox."""
     with _land_tx() as db:
         db.execute("UPDATE land_request SET told_at=? WHERE id=? AND told_at IS NULL", (now(), rid))
+
+
+# ---------------------------------------------------------------- owner orders (order.py)
+
+# An optional step like the land queue: NEEDS leaves it out, and the brief skips its line until `orch order setup` ran.
+# The table is order_ because ORDER is an SQL keyword.
+ORDER_STEP = "5a-order"
+ORDER_KINDS = ("order", "feedback")
+SCHEMA_ORDER = (
+    """CREATE TABLE order_ (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('order','feedback')),
+  status TEXT NOT NULL CHECK (status IN ('open','done','dropped')),
+  text TEXT NOT NULL,
+  source TEXT,
+  owner_action INTEGER NOT NULL DEFAULT 0 CHECK (owner_action IN (0,1)),
+  by TEXT,
+  created_at TEXT NOT NULL,
+  closed_at TEXT, close_by TEXT,
+  links_complete_at TEXT,
+  reopen_evidence TEXT,
+  CHECK ((status = 'open') = (closed_at IS NULL))
+)""",
+    # links_complete_at (the receiving session said every unit is linked) and reopen_evidence (the snapshot a Reopen
+    # keeps) are the places PR 5c's automatic close reads; nothing writes them yet.
+    # The link outlives its unit: nothing here points at a row of item, decision or the fleet.
+    # resolves 0 marks a stand-in (the temporary to-do an import replaced): it shows where the order came from and is
+    # never evidence that the order was carried out.
+    """CREATE TABLE order_link (
+  order_id TEXT NOT NULL REFERENCES order_(id),
+  unit TEXT NOT NULL,
+  resolves INTEGER NOT NULL DEFAULT 1 CHECK (resolves IN (0,1)),
+  ts TEXT NOT NULL, by TEXT,
+  PRIMARY KEY (order_id, unit)
+)""",
+)
+# Columns the first 5a-order DBs lacked, as setup adds them to a DB that already has the step.
+ORDER_COLUMNS = (("order_", "links_complete_at", "TEXT"), ("order_", "reopen_evidence", "TEXT"),
+                 ("order_link", "resolves", "INTEGER NOT NULL DEFAULT 1 CHECK (resolves IN (0,1))"))
+UNIT = re.compile(r"(?:card|agent):\S+|board:b\d+|decision:d\d+|pr:[\w.-]+/[\w.-]+#\d+")
+
+
+def order_setup_command():
+    return f"{main_checkout()}/bin/orch order setup"
+
+
+def order_ready(db):
+    return db.execute("SELECT 1 FROM migration WHERE step=?", (ORDER_STEP,)).fetchone() is not None
+
+
+def order_setup(by="order setup"):
+    """Add the order tables as a recorded step; a second run changes nothing. Returns what it did."""
+    with tx() as db:
+        if order_ready(db):
+            # A DB set up before these columns existed gets them; the links it already has stay real.
+            added = []
+            for t, c, ddl in ORDER_COLUMNS:
+                if c not in {r[1] for r in db.execute(f"PRAGMA table_info({t})")}:
+                    db.execute(f"ALTER TABLE {t} ADD COLUMN {c} {ddl}")
+                    added.append(f"{t}.{c}")
+            if added:
+                _event(db, "migration", ORDER_STEP, "upgraded", by, None, {"columns": added})
+            return f"added {', '.join(added)}" if added else "already set up"
+        for s in SCHEMA_ORDER:
+            db.execute(s)
+        db.execute("INSERT INTO migration (step, ts, backup, sources, stage) VALUES (?,?,?,?, 'imported')",
+                   (ORDER_STEP, now(), "", "[]"))
+        _event(db, "migration", ORDER_STEP, "imported", by, None, {"tables": ["order_", "order_link"]})
+        return "created order_, order_link"
+
+
+@contextlib.contextmanager
+def _order_tx():
+    with tx() as db:
+        if not order_ready(db):
+            raise NotMigrated(f"{path()}: orders are not set up: run {order_setup_command()}")
+        yield db
+
+
+def _order_out(db, r):
+    links = db.execute("SELECT unit, resolves FROM order_link WHERE order_id=? ORDER BY ts, unit", (r["id"],)).fetchall()
+    return {**dict(r), "owner_action": bool(r["owner_action"]),
+            "links": [x[0] for x in links], "stand_ins": [x[0] for x in links if not x[1]]}
+
+
+def order_add(text, kind="order", source=None, owner_action=False, by=None, dedupe=False):
+    """(order, True) for a new one. With dedupe, a row that already has this source comes back as (row, False)."""
+    if kind not in ORDER_KINDS:
+        raise ValueError(f"kind is one of {', '.join(ORDER_KINDS)}")
+    text = fleet.mask(text.strip())
+    source = fleet.mask(source) if source else source
+    if not text:
+        raise ValueError("an order needs its text")
+    with _order_tx() as db:
+        if dedupe and source:
+            old = db.execute("SELECT * FROM order_ WHERE source=?", (source,)).fetchone()
+            if old and old["text"] != text:  # the same key for other words is a clash, not a repeat
+                raise ValueError(f"{old['id']} already holds source {source} with other text; it was not changed")
+            if old:
+                return _order_out(db, old), False
+        n = _counter(db, "o")
+        db.execute("INSERT INTO counter (name, next) VALUES ('o', ?) ON CONFLICT(name) DO UPDATE SET next=excluded.next", (n + 1,))
+        oid = f"o{n}"
+        db.execute("INSERT INTO order_ (id, kind, status, text, source, owner_action, by, created_at) "
+                   "VALUES (?,?, 'open', ?,?,?,?,?)", (oid, kind, text, source, int(bool(owner_action)), by, now()))
+        row = _order_out(db, db.execute("SELECT * FROM order_ WHERE id=?", (oid,)).fetchone())
+        _event(db, "order", oid, "add", by, None, {k: row[k] for k in ("kind", "source", "owner_action", "text")})
+        return row, True
+
+
+def order_link(oid, unit, by=None, stand_in=False):
+    """True when the link is new. The unit is checked for form, and a board item or decision for existing. A stand-in
+    link does not count as carrying the order; linking the same unit again as real turns it real."""
+    if not UNIT.fullmatch(unit):
+        raise ValueError("unit is card:<worktree> | agent:<id> | board:<bN> | decision:<dN> | pr:<owner/repo#number>")
+    with _order_tx() as db:
+        if not db.execute("SELECT 1 FROM order_ WHERE id=?", (oid,)).fetchone():
+            raise ValueError(f"no order {oid}")
+        kind, _, ident = unit.partition(":")
+        if kind == "board" and not db.execute("SELECT 1 FROM item WHERE id=?", (ident,)).fetchone():
+            raise ValueError(f"no board item {ident}")
+        if kind == "decision" and not db.execute("SELECT 1 FROM decision WHERE id=?", (ident,)).fetchone():
+            raise ValueError(f"no decision {ident}")
+        cur = db.execute("INSERT OR IGNORE INTO order_link (order_id, unit, resolves, ts, by) VALUES (?,?,?,?,?)",
+                         (oid, unit, 0 if stand_in else 1, now(), by))
+        if cur.rowcount:
+            _event(db, "order", oid, "link", by, None, {"unit": unit, "stand_in": bool(stand_in)})
+            if not stand_in:
+                _unmark(db, oid, by)
+            return True
+        if not stand_in and db.execute("UPDATE order_link SET resolves=1 WHERE order_id=? AND unit=? AND resolves=0",
+                                       (oid, unit)).rowcount:
+            _event(db, "order", oid, "link", by, {"stand_in": True}, {"unit": unit, "stand_in": False})
+            _unmark(db, oid, by)
+            return True
+        return False
+
+
+def _unmark(db, oid, by):
+    """A real link added after the receiving session said every unit was linked takes that word back: it has to say it again."""
+    r = db.execute("SELECT links_complete_at FROM order_ WHERE id=?", (oid,)).fetchone()
+    if r and r[0]:
+        db.execute("UPDATE order_ SET links_complete_at=NULL WHERE id=?", (oid,))
+        _event(db, "order", oid, "links_open", by, {"links_complete_at": r[0]}, {"links_complete_at": None, "why": "new link"})
+
+
+def order_close(oid, status, by=None, evidence=None, reason=None, check=None, snapshot=None):
+    """Open -> done or dropped. Returns the row; a closed order keeps its first close. evidence and reason go into the
+    close event, and so does snapshot, the normalized evidence of the units a Reopen keeps (order_close.py). check(row)
+    runs inside the write transaction on an open order and raises ValueError to refuse the close, and may return the
+    evidence to record: the close is judged on the links as they are when it is written."""
+    if status not in ("done", "dropped"):
+        raise ValueError(status)
+    with _order_tx() as db:
+        r = db.execute("SELECT * FROM order_ WHERE id=?", (oid,)).fetchone()
+        if not r:
+            raise ValueError(f"no order {oid}")
+        if r["status"] == "open":
+            if check:
+                evidence = check(_order_out(db, r)) or evidence
+            db.execute("UPDATE order_ SET status=?, closed_at=?, close_by=? WHERE id=?", (status, now(), by, oid))
+            _event(db, "order", oid, status, by, {"status": "open"},
+                   {"status": status, **({"evidence": evidence} if evidence else {}),
+                    **({"snapshot": snapshot} if snapshot else {}), **({"reason": fleet.mask(reason)} if reason else {})})
+        return _order_out(db, db.execute("SELECT * FROM order_ WHERE id=?", (oid,)).fetchone())
+
+
+def order_get(oid, require_open=False):
+    """The order with its links. require_open: a closed one is a ValueError, so a unit is never started for an order
+    that no longer asks for work."""
+    with _order_tx() as db:
+        r = db.execute("SELECT * FROM order_ WHERE id=?", (oid,)).fetchone()
+        if not r:
+            raise ValueError(f"no order {oid}")
+        if require_open and r["status"] != "open":
+            raise ValueError(f"{oid} is {r['status']}: reopen it (orch order reopen {oid}) before linking new work to it")
+        return _order_out(db, r)
+
+
+def order_reopen(oid, by=None, snapshot=None):
+    """Done or dropped -> open. The receiving session must say again that every unit is linked, so the mark goes with
+    the close. reopen_evidence keeps the evidence the close stood on, so the automatic close does not shut the order
+    again on the same evidence: the snapshot the close event holds (every close by `orch order` writes one it could
+    read), else `snapshot` (the caller's reading of the units now). Neither: EVIDENCE_UNKNOWN, and the next pass that
+    can read the units makes what it reads the baseline instead of closing (order_baseline)."""
+    with _order_tx() as db:
+        r = db.execute("SELECT * FROM order_ WHERE id=?", (oid,)).fetchone()
+        if not r:
+            raise ValueError(f"no order {oid}")
+        if r["status"] != "open":
+            closed = db.execute("SELECT after FROM event WHERE entity='order' AND id=? AND ev IN ('done','dropped') "
+                                "ORDER BY seq DESC LIMIT 1", (oid,)).fetchone()
+            kept = (json.loads(closed[0] or "{}").get("snapshot") if closed else None) or snapshot or EVIDENCE_UNKNOWN
+            db.execute("UPDATE order_ SET status='open', closed_at=NULL, close_by=NULL, links_complete_at=NULL, "
+                       "reopen_evidence=? WHERE id=?", (kept, oid))
+            _event(db, "order", oid, "reopen", by, {"status": r["status"], "closed_at": r["closed_at"],
+                                                    "links_complete_at": r["links_complete_at"]},
+                   {"status": "open", "reopen_evidence": kept})
+        return _order_out(db, db.execute("SELECT * FROM order_ WHERE id=?", (oid,)).fetchone())
+
+
+def auto_still(row, links_seen, snapshot):
+    """Raise ValueError unless an open order is still what the judgement read: the same real links, the receiving
+    session's word that they are all there, not the owner's to act on, and evidence other than a reopen kept."""
+    real = sorted(u for u in row["links"] if u not in row["stand_ins"])
+    if (row["status"] != "open" or real != sorted(links_seen) or not row["links_complete_at"] or row["owner_action"]
+            or row["reopen_evidence"] in (snapshot, EVIDENCE_UNKNOWN)):
+        raise ValueError(f"{row['id']} changed while it was judged")
+
+
+EVIDENCE_UNKNOWN = "unknown"  # reopen_evidence of an order reopened while its units could not be read
+
+
+def order_auto(oid, snapshot, units, links_seen, close=False, recheck=None, by="auto"):
+    """The automatic close of an order, or with close=False its shadow: one `would_close` event saying what tidy would
+    have closed on, nothing else changes. Everything is read again inside the write transaction: the order (links,
+    the receiving session's word, owner action, kept evidence) by auto_still, and recheck(db) the units that live in
+    this DB. True when written; False when something moved since the order was judged, or (shadow) this evidence was
+    recorded before, since a tick finds the same candidate every minute."""
+    with _order_tx() as db:
+        r = db.execute("SELECT * FROM order_ WHERE id=?", (oid,)).fetchone()
+        if not r:
+            return False
+        try:
+            auto_still(_order_out(db, r), links_seen, snapshot)
+            if recheck:
+                recheck(db)
+        except ValueError:
+            return False
+        if close:
+            db.execute("UPDATE order_ SET status='done', closed_at=?, close_by=? WHERE id=?", (now(), by, oid))
+            _event(db, "order", oid, "done", by, {"status": "open"},
+                   {"status": "done", "evidence": {"rule": "order_units_done", "units": units}, "snapshot": snapshot})
+            return True
+        if any(json.loads(a[0] or "{}").get("snapshot") == snapshot for a in db.execute(
+                "SELECT after FROM event WHERE entity='order' AND id=? AND ev='would_close'", (oid,))):
+            return False
+        _event(db, "order", oid, "would_close", by, None, {"rule": "order_units_done", "snapshot": snapshot, "units": units})
+        return True
+
+
+def order_baseline(oid, snapshot, links_seen):
+    """An order reopened with its units unread has no evidence to compare: the first readable pass records what it
+    reads as reopen_evidence, and the order closes only when that changes. True when recorded."""
+    with _order_tx() as db:
+        r = db.execute("SELECT * FROM order_ WHERE id=?", (oid,)).fetchone()
+        if not r or r["status"] != "open" or r["reopen_evidence"] != EVIDENCE_UNKNOWN:
+            return False
+        db.execute("UPDATE order_ SET reopen_evidence=? WHERE id=?", (snapshot, oid))
+        _event(db, "order", oid, "baseline", "auto", {"reopen_evidence": EVIDENCE_UNKNOWN}, {"reopen_evidence": snapshot})
+        return True
+
+
+def order_links_complete(oid, by=None, undo=False):
+    """The receiving session says every unit the order needs is linked; PR 5c reads the mark before it may close the
+    order. Needs an open order with a real link: a stand-in carries nothing. undo clears the mark."""
+    with _order_tx() as db:
+        r = db.execute("SELECT * FROM order_ WHERE id=?", (oid,)).fetchone()
+        if not r:
+            raise ValueError(f"no order {oid}")
+        if r["status"] != "open":
+            raise ValueError(f"{oid} is {r['status']}")
+        if not undo and not db.execute("SELECT 1 FROM order_link WHERE order_id=? AND resolves=1", (oid,)).fetchone():
+            raise ValueError(f"{oid} has no unit linked yet: link the card, board item, decision or PR first")
+        if bool(r["links_complete_at"]) != (not undo):
+            at = None if undo else now()
+            db.execute("UPDATE order_ SET links_complete_at=? WHERE id=?", (at, oid))
+            _event(db, "order", oid, "links_open" if undo else "links_complete", by, {"links_complete_at": r["links_complete_at"]},
+                   {"links_complete_at": at})
+        return _order_out(db, db.execute("SELECT * FROM order_ WHERE id=?", (oid,)).fetchone())
+
+
+def orders(status=None, db=None):
+    """Orders oldest first with their links; None while the tables are not set up."""
+    if db is None:
+        with read() as db:
+            return orders(status, db)
+    if not order_ready(db):
+        return None
+    q, args = ("WHERE status=?", (status,)) if status else ("", ())
+    return [_order_out(db, r) for r in db.execute(f"SELECT * FROM order_ {q} ORDER BY created_at, CAST(substr(id,2) AS INTEGER)", args)]
+
+
+def order_sources(sources):
+    """{source: stored text} for those of `sources` an order already carries: what an import took, so what is left is
+    not migrated."""
+    with read() as db:
+        if not order_ready(db):
+            raise NotMigrated(f"{path()}: orders are not set up: run {order_setup_command()}")
+        want = {fleet.mask(s) for s in sources}  # stored masked, as order_add stores them
+        return {s: t for s, t in db.execute("SELECT source, text FROM order_ WHERE source IS NOT NULL") if s in want}
+
+
+def orders_unlinked(db):
+    """Open orders no real unit carries (no link, or only stand-ins), oldest first; None while the tables are not set
+    up. The brief ages them."""
+    if not order_ready(db):
+        return None
+    return [dict(r) for r in db.execute(
+        "SELECT id, kind, created_at, text FROM order_ WHERE status='open' "
+        "AND NOT EXISTS (SELECT 1 FROM order_link WHERE order_id=order_.id AND resolves=1) "
+        "ORDER BY created_at, CAST(substr(id,2) AS INTEGER)")]
 
 
 # ---------------------------------------------------------------- what older code left

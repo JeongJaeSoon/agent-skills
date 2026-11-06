@@ -33,7 +33,7 @@ ALIASES = {v: k for k, v in ICON.items() if k != "check"} | {"⏸": "held"}  # V
 OWNER_NAMES = ("오너", "owner")
 COLS = 78
 LIMITS = {"row_min": 90, "pr_warn_min": 30, "pr_stale_min": 120, "state_min": 5, "done_fold_h": 24, "stage_idle_d": 7,
-          "decision_stale_h": 12, "subagent_stale_h": fleet.SUBAGENT_STALE_H}  # overridden by the dashboard config's "board" key
+          "decision_stale_h": 12, "order_unlinked_min": 10, "subagent_stale_h": fleet.SUBAGENT_STALE_H}  # overridden by the dashboard config's "board" key
 FILLED = ("fleet:", "agent:")  # the ids of rows derived from the fleet (--fill), not written to the board
 DONE_KEEP_S = 7 * 86400  # a finished lead stays this long with its rows, then leaves the board
 HEADER = ["", "리드/Phase", "PR", "진행", "다음", "세션"]
@@ -302,6 +302,8 @@ def drop(rid):
             raise ValueError(f"no row {rid}")
         gone = with_descendants(store["rows"], {rid})
         store["rows"] = {k: r for k, r in store["rows"].items() if k not in gone}
+        if rid in store["leads"]:  # tells an owner's drop from an aged-off lead (fleet_rows), whenever the lead was closed
+            store["leads"][rid]["dropped_at"] = fleet.iso(fleet.utcnow())
     return change(go)
 
 
@@ -318,9 +320,30 @@ def live_work(title):
                  if not a.get("stale") and any(w and w.lower() in low for w in (a.get("agent"), a.get("desc")))), None)
 
 
-def doing_add(title, owner, next_, waiting=False, force=False, why=None):
+def with_order(order, add):
+    """Run add() (it returns the stored item) and, with an order, link the item to it. The order is checked first, so
+    a mistyped oN adds nothing. The link is a second write: if it fails, the item stays and the error names it."""
+    by = os.environ.get("ORCA_TERMINAL_HANDLE")
+    try:
+        if order:
+            store_db.order_get(order, require_open=True)
+        item = add()
+        if order:
+            try:
+                store_db.order_link(order, f"board:{item['id']}", by)
+            except (ValueError, store_db.NotMigrated) as e:
+                raise ValueError(f"{item['id']} was added but not linked to {order} ({e}); link it with "
+                                 f"orch order link {order} --unit board:{item['id']}")
+    except store_db.NotMigrated as e:
+        raise ValueError(f"orders are not available ({e})")
+    return item
+
+
+def doing_add(title, owner, next_, waiting=False, force=False, why=None, order=None):
     """waiting: owner is a person this work waits on (a reply, a review), not the agent moving it. force: add it though
-    Orca shows that work, with why in the item's event."""
+    Orca shows that work, with why in the item's event. order: the owner's order oN this work carries."""
+    if order:
+        return with_order(order, lambda: doing_add(title, owner, next_, waiting, force, why))
     if not all((x or "").strip() for x in (title, owner, next_)):
         raise ValueError("board doing add needs a title, --owner (who moves it) and --next (the next event)")
     if force and not (why or "").strip():
@@ -330,7 +353,10 @@ def doing_add(title, owner, next_, waiting=False, force=False, why=None):
     item = {"title": one_line(title), "owner": one_line(owner), "next": one_line(next_),
             **({"waiting": True, "since": fleet.iso(fleet.utcnow())} if waiting else {}),
             **({"forced": one_line(why)} if force else {})}
-    return change(lambda store: store["doing"].append(item))
+    def go(store):
+        store["doing"].append(item)
+        return item  # the same dict the write gives its id to
+    return change(go)
 
 
 def doing_drop(n):
@@ -378,9 +404,11 @@ def queue_insert(q, item, to):
     q.insert(len(q) if to is None or to > len(shown) else shown[to - 1], item)
 
 
-def later_add(title, trigger, due=None, who=None, at=None):
+def later_add(title, trigger, due=None, who=None, at=None, order=None):
     """Add a held item to the queue at position at (1 first; the end by default), or reword the one it repeats in its
-    place (moved to at when given). The list's order is the queue's: the first is next."""
+    place (moved to at when given). The list's order is the queue's: the first is next. order: the owner's order oN."""
+    if order:
+        return with_order(order, lambda: later_add(title, trigger, due, who, at))
     if not (title or "").strip() or not (trigger or "").strip():
         raise ValueError("board later add needs a title and --trigger (what makes it next)")
     at = queue_pos(at)
@@ -396,6 +424,7 @@ def later_add(title, trigger, due=None, who=None, at=None):
             q.insert(old, item)
         else:
             queue_insert(q, item, at)
+        return item
     return change(go)
 
 
@@ -439,9 +468,11 @@ def check_due(due, now):
     return at
 
 
-def todo_add(title, due=None, after=None, who=None):
+def todo_add(title, due=None, after=None, who=None, order=None):
     """A to-do: work that will be done when its date (--due) or condition (--after) comes, by who. Rewords the one it
-    repeats, as later_add does."""
+    repeats, as later_add does. order: the owner's order oN."""
+    if order:
+        return with_order(order, lambda: todo_add(title, due, after, who))
     if not (title or "").strip() or not ((due or "").strip() or (after or "").strip()) or not (who or "").strip():
         raise ValueError("board todo add needs a title, --due D or --after C (when it starts) and --who W (who does it);"
                          " work with no when is `board doing add` or `board later add`")
@@ -456,8 +487,9 @@ def todo_add(title, due=None, after=None, who=None):
         old = next(same, None)
         if old is None:
             store["todo"].append(item)
-        else:
-            store["todo"][old] = {**item, "id": store["todo"][old]["id"]}
+            return item
+        store["todo"][old] = {**item, "id": store["todo"][old]["id"]}
+        return store["todo"][old]
     return change(go)
 
 
@@ -700,8 +732,17 @@ def fleet_rows(state, leads, board_rows, details=None, now=None, stale_s=None, c
             continue
         board_lead = next((held[t.get("handle")] for t in lead.get("terminals") or [] if t.get("handle") in held),
                           lead_wt.get(lead.get("id")))  # a restarted terminal has a new handle, the same worktree
-        if board_lead and board_lead not in board_rows:  # its rows were dropped from the board on purpose
-            continue
+        if board_lead and board_lead not in board_rows:
+            # `board drop` removed its rows on purpose: that stays hidden, also after a `lead close`. A lead closed longer
+            # ago than DONE_KEEP_S aged off the board by itself (change()); it is hidden while its session is idle with
+            # nothing to show, but one that works on, or has a card, is live work and gets a fleet row.
+            closed_at = fleet.parse((leads.get(board_lead) or {}).get("closed_at"))
+            aged_off = bool(closed_at and not (leads.get(board_lead) or {}).get("dropped_at")
+                            and ((now or fleet.utcnow()) - closed_at).total_seconds() > DONE_KEEP_S)
+            if not aged_off or (lead.get("phase") not in ("working", "waiting")
+                              and not any(shown(s) for s in under.get(lead["id"], []))):
+                continue
+            board_lead = None
         lid = f"fleet:{lead['id']}"
         if not board_lead:
             add(lid, lead, "lead", program=one_line(lead.get("name") or lid))
@@ -936,9 +977,11 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     try:  # one snapshot, so a close and the open list cannot disagree within a report
         seen = store_db.view()
         store, open_dec, db_known = seen["board"], seen["decisions"], True
+        order_open = seen["orders_unlinked"] or []  # None until `orch order setup`: no line
         shut = {k: r for k, r in seen["latest"].items() if r["ev"] == "done"}
     except store_db.NotMigrated:
         store, db_known, shut = {"rows": {}, "order": [], "leads": {}, **{l: [] for l in store_db.LANES}}, False, {}
+        order_open = []
         try:  # decisions are in decisions.json until the import, and `--decision` has registered there: list them
             open_dec = fleet.open_decisions()
         except store_db.NotMigrated:  # a DB that is not imported: unknown, and the headline and the ❔ rows say so
@@ -1372,6 +1415,13 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
            and (now - at).total_seconds() > limits["decision_stale_h"] * 3600]
     if old:
         facts.append(f"오래된 결정 {len(old)} ({', '.join(d['id'] for d in old)} · `orch decide keep|drop`)")
+    # An order is only a lead until a card, PR or decision carries it: one still unlinked after the grace is work nobody has.
+    loose = [o for o in order_open if (at := fleet.parse(o["created_at"]))
+             and (now - at).total_seconds() > limits["order_unlinked_min"] * 60]
+    if loose:
+        first = loose[0]  # oldest first
+        facts.append(f"연결 없는 오너 지시 {len(loose)} (가장 오래된 {first['id']} "
+                     f"{ago((now - fleet.parse(first['created_at'])).total_seconds())} · `orch order link`)")
     # Judged as the relay judges it: the registering terminal, else the root's writable agent terminal, else nowhere.
     # A decision added outside Orca has no handle and always goes to the root, so only a missing root terminal counts.
     # The relay types into the target as it is; a terminal whose agent exited refuses the line, so that is no route.

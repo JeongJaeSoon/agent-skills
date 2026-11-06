@@ -65,18 +65,10 @@ bug, a missing validation, a contract inconsistency. Decide yourself, at the mom
 it, and never end a turn on "말씀 주시면 티켓으로 만들겠습니다":
 
 - Fixable in this diff and inside the ticket's scope → fix it here.
-- Otherwise classify it against the exit condition: the parent epic's `✅ 완료 조건`, or this
-  ticket's acceptance criteria when it has no parent (`use-tracker`, "Exit condition";
-  principle **Work to an Exit Condition**).
-  - NOW (an exit item needs it, or a reproduced correctness, security or data defect in what
-    this work shipped) → file it with `write-ticket` as a follow-up (its approval gate does
-    not apply, its follow-up format does); search the tracker first so you do not duplicate
-    one. One ticket per independent diff; findings that must land together share one.
-  - LATER → one line on the deferred list with its revisit trigger. No ticket.
-  - DROP (speculative, not reproduced, already covered, out of scope) → one line with the
-    reason in the worklog. No ticket.
-- Inside a program (the brief has a `PROGRAM:` line), file nothing: put each finding with
-  your proposed class in the `worker_done` body, and the lead classifies and files.
+- Otherwise classify it NOW / LATER / DROP against the parent epic's `✅ 완료 조건`, or this
+  ticket's acceptance criteria when it has no parent, as `use-tracker`
+  [references/exit-condition.md](../use-tracker/references/exit-condition.md) says: only NOW
+  becomes a follow-up ticket (`write-ticket`), and inside a program you file nothing.
 
 Report "N/M 완료 조건 충족" for the parent when there is one, name every ticket you filed with
 the exit item it serves, and list the LATER and DROP lines. The user's review happens on the
@@ -129,7 +121,7 @@ belongs in the commit you just made; make a new one when it is separable. Never
 `git reset --hard` while uncommitted work exists — commit it or copy it aside first.
 
 Under auto mode a force-push is refused as destructive unless an approval or allow rule names it,
-so a pushed PR branch takes a change on main by merging main in (§6, "merge main in"), never by a rebase.
+so a pushed PR branch takes a change on main by merging main in ([references/merge.md](references/merge.md)), never by a rebase.
 A force-push to a PR branch (after a rebase or an amend), when one is permitted, keeps the old
 head recoverable: record the remote sha, create a local `backup/<branch>-<sha8>` at it (this session
 deletes it with `git branch -D` once the PR merges), push with
@@ -251,32 +243,15 @@ Then land it. How depends on where you run:
 - **A standalone card** (no `PROGRAM:` line) in a repo with the land executor on
   (`orchestrate.land_executor`) does not merge: it sends READY to its REPORT line with the head
   sha, the CI run ids whose logs it read and the review verdict with its source, stops watching
-  CI, and the orchestrator lands it (`orchestrate` `references/landing.md`, "Land executor").
+  CI, and the orchestrator lands it through the repo's `<name>-standalone` program, which
+  `orch land --repo` creates when missing (`orchestrate` `references/landing.md`, "Land executor").
 - **Merging it yourself** (a standalone card whose repo has the executor off, or a session the
-  user started): merge your own verified PR unless the user set a hold. Under auto
-  mode that merge runs unasked only when the user's `autoMode.allow` has a rule for this
+  user started): merge your own verified PR unless the user set a hold, as
+  [references/merge.md](references/merge.md) says (when it is ready, the checks before it, the
+  commands). Under auto mode that merge runs unasked only when the user's `autoMode.allow` has a rule for this
   repository's merges (`orchestrate` `references/program.md` Frame, "Check the permission chain"); without one the
   classifier asks or refuses, and a refused act is not run again, except once, in the same form, by the refused session (a restart that loads a new rule counts as that session), and only when the human allowed it in that session's own chat or added a rule for it, or when a classifier or hook refusal stated a reason and you added evidence that answers it, never for a human's refusal or a production sync. Report that retry as `재시도 1회: <what you added>`. A second refusal stops the act and you report it. Reaching the same result through another session, script, tool, wrapper or target stays forbidden.
-  The full rule is `orchestrate` `references/brief.md` FORBIDDEN. When the
-  ticket, the brief or the project's standing orders name a merge procedure (a merge queue,
-  a landing order, an exclusive lane), follow that procedure instead of merging at will.
-  Otherwise merge when the PR is ready at its current head — CI green (read the log), review
-  done, no conflict — whether or not it is behind. Spend one minute first on
-  `git diff --name-only <CI base>..origin/main`: if it touches a contract or test premise this
-  PR relies on, merge main in and let CI rerun. Do not rebase only because the branch is behind.
-  Checks green but `mergeStateStatus` BLOCKED: before concluding a review is missing, look for a
-  required check whose run at the current head was cancelled (`gh run list --commit <head sha>`;
-  concurrent events cancel one another) and rerun it with `gh run rerun <id>`. Only in a
-  repository whose branch protection or ruleset requires a review may an approved PR still
-  waiting on checks get `gh pr merge <n> --auto --match-head-commit <approved sha>`; before
-  pushing a new head to it, run `gh pr merge <n> --disable-auto` so that head does not land
-  unreviewed. Once it has merged that way, read its CI logs all the same (§5, "A green check is not evidence"). Elsewhere merge by
-  hand once it is ready.
-
-```bash
-gh pr merge <n> --squash --delete-branch      # the merge method the repo allows; not for a stack, which lands with `gh stack merge` (§5)
-gh pr view <n> --json state,mergeCommit       # confirm MERGED and record the commit
-```
+  The full rule is `orchestrate` `references/brief.md` FORBIDDEN.
 
 Where merging is yours to do, no need to ask. Ask first only when the user said to hold, when they
 said they wanted to look at this one themselves, or when the state is off-script — a check that

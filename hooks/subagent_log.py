@@ -9,6 +9,8 @@ nothing is written.
 Hooks of one event run in parallel, so this one cannot see whether claim_check.py blocked the same stop. It asks
 claim_check's own judge instead and writes no stop for a stop claim_check blocks: the subagent goes on working.
 
+A subagent whose first prompt has an `ORDER: oN` line is also linked to that owner order (`agent:<id>`, orch order).
+
 It prints nothing, so the subagent runs exactly as it would without it. Any error exits 0 silently, and so does a run
 past BUDGET_S (a stdin left open, a slow disk), well inside the 5 s timeout hooks.json gives it.
 """
@@ -58,6 +60,37 @@ def main():
         return
     import fleet
     fleet.subagent_log(event, handle)
+    link_order(event, handle)
+
+
+# A line of its own, so a prompt that only mentions an order id in prose links nothing.
+ORDER_LINE = re.compile(r"(?im)^[ \t]*`?ORDER`?[ \t]*:[ \t]*(o\d+)[ \t]*$")
+FENCE = re.compile(r"(?ms)^[ \t]*```.*?^[ \t]*```[^\n]*$")
+
+
+def link_order(event, handle):
+    """A subagent whose first prompt has an `ORDER: oN` line carries that owner order: link `agent:<id>` to it. Start
+    and stop both try, because the transcript may not exist yet at the start; the link is idempotent. A table that is
+    not set up, a closed or unknown order, or a prompt that cannot be read links nothing, silently."""
+    aid = event.get("agent_id")
+    if not isinstance(aid, str):
+        return
+    import roles
+    paths = [event.get("agent_transcript_path")]
+    if isinstance(event.get("transcript_path"), str):
+        paths.append(str(pathlib.Path(event["transcript_path"]).with_suffix("") / "subagents" / f"agent-{aid}.jsonl"))
+    for path in paths:
+        if m := ORDER_LINE.search(FENCE.sub("", roles.first_prompt(path))):  # an example in a fence is not the order
+            break
+    else:
+        return
+    import store
+    try:
+        # An order that closed while the subagent ran still gets the link at its stop: the work started under it.
+        store.order_get(m.group(1), require_open=event.get("hook_event_name") != "SubagentStop")
+        store.order_link(m.group(1), f"agent:{aid}", handle)
+    except (ValueError, store.NotMigrated):
+        pass
 
 
 if __name__ == "__main__":
