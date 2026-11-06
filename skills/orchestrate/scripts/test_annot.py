@@ -178,6 +178,7 @@ assert annots["card:wt-card"]["aliases"] == ["row:P/one"] and annots["card:wt-ca
 assert annots["card:wt-other"]["phase"] == "수동", "the written field won"
 rows = board.read()["rows"]
 assert rows["P/one"]["status"] == "dropped" and rows["P/moved"]["status"] == "dropped" and rows["free"]["status"] == "moving", rows
+assert rows["P/one"]["was"] == "owner" and rows["P/moved"]["was"] == "moving", "the dropped row keeps the status it had (store round trip)"
 db = store.open_db()
 try:
     orig = json.loads(db.execute("SELECT before FROM event WHERE entity='board_row' AND id='P/one' AND ev='update' ORDER BY seq DESC"
@@ -264,5 +265,20 @@ assert rows_now["fleet:wt-x"]["program"] == "ProgA" and "old" not in rows_now an
 rows_now = {"a": {"id": "a", "title": "a", "worktree": "wt-x", "program": "ProgA"}, "b": {"id": "b", "title": "b", "worktree": "wt-x", "program": "ProgB"}}
 assert board.annot_overlay(rows_now, ann) == {"wt-x": ["a", "b"]}
 assert rows_now["a"]["owner"] == rows_now["b"]["owner"] == "오너", "each row of a duplicated card shows the annotation"
+
+# the restored row is linked to the card by the annotation and keeps the status it had; a program above the dropped row counts
+held = {**old, "was": "held"}
+rows_now = {}
+board.annot_overlay(rows_now, {"card:wt-x": {"id": "card:wt-x", "kind": "annot", "owner": "오너", "next": "Approve", "aliases": ["row:old"]}},
+                    {"old": {**held, "worktree": None}})
+assert rows_now["old"]["status"] == "held" and rows_now["old"]["worktree"] == "wt-x" and rows_now["old"]["owner"] == "오너", rows_now
+under_phase = {"P": {"id": "P", "kind": "phase", "program": "ProgA", "title": "P"}}
+rows_now = {"P": under_phase["P"], "fleet:lead/wt-x": {"id": "fleet:lead/wt-x", "title": "c", "session": "wt-x", "parent": "lead"}}
+board.annot_overlay(rows_now, ann, {"old": {**old, "program": None, "parent": "P"}})
+assert rows_now["fleet:lead/wt-x"]["program"] == "ProgA", "the program above the dropped row is the replacement's"
+# an ack of the moved row stands for the card's row, under the id that can be un-acked
+line = {"key": "fleet:lead/wt-x", "pr": None, "status": "done", "depth": 0, "name": "c"}
+_, done, hidden = board.drop_acked([line], {}, {"fleet:lead/wt-x": {}}, {"board:old": "t"}, {"fleet:lead/wt-x": ["board:old"]})
+assert done[0]["id"] == "board:old" and done[0]["acked"] and hidden == {"fleet:lead/wt-x"}, done
 
 print("test_annot: ok")

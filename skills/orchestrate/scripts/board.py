@@ -282,17 +282,28 @@ def annot_overlay(rows, annots, gone=None):
             for wt in {r.get("session"), r.get("worktree"), r.get("linked")} - {None}:
                 out.setdefault(wt, []).append(rid)
         return out
+    def chain(g):
+        """The dropped row g and the rows above it, nearest first, whether they are dropped or shown."""
+        seen = set()
+        while g in gone or g in rows:
+            if g in seen:
+                return
+            seen.add(g)
+            r = gone.get(g) or rows[g]
+            yield r
+            g = r.get("parent")
     cards = by_card()
     for key, a in annots.items():
         wt = key[len(ANNOT_PREFIX):]
         back = [g for g in (x[len("row:"):] for x in a.get("aliases") or () if x.startswith("row:")) if g in gone]
         if cards.get(wt):
             for g in back:  # the replacement is in the dropped row's program, so a program report keeps the card
+                program = next((p["program"] for p in chain(g) if p.get("program")), None)
                 for rid in cards[wt]:
-                    if gone[g].get("program") and not rows[rid].get("program") and not rows[rid].get("parent"):
-                        rows[rid]["program"] = gone[g]["program"]
-        elif back:
-            rows[back[0]] = {**gone[back[0]], "status": "moving"}  # the annotation's owner block, if any, is laid on below
+                    if program and not rows[rid].get("program"):
+                        rows[rid]["program"] = program
+        elif back:  # nothing else shows the card: the dropped row does, as it was, linked to the card by the annotation
+            rows[back[0]] = {**gone[back[0]], "status": gone[back[0]].get("was") or "moving", "worktree": wt}
     dupes = {}
     for key, a in annots.items():
         wt = key[len(ANNOT_PREFIX):]
@@ -433,7 +444,8 @@ def annot_migrate(apply=False):
                 cur["aliases"] = sorted({*cur.get("aliases", ()), f"row:{rid}"})
                 cur["reported_at"] = now
                 store["annots"][key] = cur
-                store["rows"][rid].update(status="dropped", reported_at=now, source="coordinator")
+                store["rows"][rid].update(was=store["rows"][rid].get("status"), status="dropped", reported_at=now,
+                                          source="coordinator")  # was: what the render shows if the card has no row
         change(go)
     return move, left
 
@@ -1107,9 +1119,11 @@ def refresh(now, limit_min):
     return " · ".join(out) or None
 
 
-def drop_acked(lines, prs, rows, have):
+def drop_acked(lines, prs, rows, have, alias=None):
     """(lines without the rows the owner acked, every ackable row as {id, label, at, acked}, the hidden keys).
-    Ackable is ✅, and for a head row every sub-task row under it too (acks.py): a closed PR's row is held, not done."""
+    Ackable is ✅, and for a head row every sub-task row under it too (acks.py): a closed PR's row is held, not done.
+    alias: {row key: [ack ids of the rows `annot-migrate` moved into this card]}; an ack of one stands for the card's row, and
+    its id is the one shown, so un-acking it works."""
     done, hidden = [], set()
     heads = [i for i, l in enumerate(lines) if l["depth"] == 0] + [len(lines)]
     for a, b in zip(heads, heads[1:]):
@@ -1118,6 +1132,8 @@ def drop_acked(lines, prs, rows, have):
             if not all(x["status"] == "done" for x in whole):
                 continue
             aid, p, r = f"board:{l['key']}", prs.get(l["pr"]) or {}, rows.get(l["key"]) or {}
+            if aid not in have:
+                aid = next((a for a in (alias or {}).get(l["key"], ()) if a in have), aid)
             done.append({"id": aid, "label": l["name"], "at": p.get("merged_at") or p.get("closed_at") or r.get("reported_at"),
                          "acked": aid in have})
             if aid in have:
@@ -1454,12 +1470,13 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             states[h["id"]] = rowstate.roll_up(states[h["id"]], kid_status)
             lines[at]["status"] = states[h["id"]]["status"]
 
-    have = acks.acked()
-    for key, a in (store.get("annots") or {}).items():  # an ack of a moved row stands for the card's row
-        for alias in a.get("aliases") or ():
-            if f"board:{alias[len('row:'):]}" in have:
-                have[f"board:fleet:{key[len(ANNOT_PREFIX):]}"] = have[f"board:{alias[len('row:'):]}"]
-    lines, done, hidden = drop_acked(lines, prs, rows, have)
+    ack_alias = {}
+    for key, a in (store.get("annots") or {}).items():
+        wt = key[len(ANNOT_PREFIX):]
+        for rid in rows:
+            if wt in {rows[rid].get("session"), rows[rid].get("worktree"), rows[rid].get("linked")}:
+                ack_alias.setdefault(rid, []).extend(f"board:{x[len('row:'):]}" for x in a.get("aliases") or ())
+    lines, done, hidden = drop_acked(lines, prs, rows, acks.acked(), ack_alias)
 
     # Per group: how many rows move, wait on a person or a condition, or are done. Counted from the rows themselves, so
     # a reviewer fold, a bullet and a ✅ row folded away still count once each; a row with rows under it is their
