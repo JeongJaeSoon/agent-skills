@@ -112,7 +112,7 @@ passed(LIN + "save_comment", {"issueId": "ABC-1", "body": "x", "parentId": "c1"}
 passed(LIN + "save_comment", {"projectId": "p", "body": "x"}, "pass-unsupported-key")
 passed(LIN + "get_issue", {"id": "11111111-2222-3333-4444-555555555555"}, "pass-operand")
 passed(LIN + "get_issue", {"id": "9X-1"}, "pass-operand")
-passed(LIN + "get_issue", {"id": "OTHER-1"}, "pass-operand")
+passed(LIN + "get_issue", {"id": "XYZ-1"}, "pass-operand")
 passed(LIN + "save_issue", {"id": "ABC-1", "parentId": "9X-1"}, "pass-operand")
 for tool in ("save_document", "get_document", "list_cycles", "list_milestones", "create_attachment_from_upload",
              "list_diffs", "save_project", "list_releases", "extract_images", "whoami", "no_such_tool"):

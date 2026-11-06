@@ -329,6 +329,14 @@ STORES = [
     Store("recordcheck", "S/record-check.jsonl", {"record.obligation": CANONICAL}, ("record_check:append",),
           ("nobody",), rule="merges, lands and PR opens that still owe a record line, their closes, and the warn "
                             "rows a week of observation reads before guard.record_check goes to deny"),
+    Store("trackergate", "S/tracker-gate.jsonl", {"tracker_gate.decision": CANONICAL}, ("tracker_gate:log",), ("nobody",),
+          rule="one row per MCP ticket call the gate looked at: pass or deny with a code, so a fallback and a hook "
+               "fault can be told apart"),
+    Store("trackergatecache", "S/tracker-gate-cache.json", {"tracker_gate.connection": CANONICAL},
+          ("tracker_gate:write_cache",), ("nobody",), rule="Orca's Linear/Jira connection per tracker, 10 minutes"),
+    Store("trackerdetect", "S/tracker-detect.json", {"tracker.detected_adapter": CANONICAL},
+          ("tracker:detect_adapter",), ("nobody",),
+          rule="tracker.py's auto-detected adapter per checkout, branch and HEAD, 10 minutes; never the config"),
     Store("ownercheck", "S/owner-check.jsonl", {"owner.unrecorded_warn": CANONICAL}, ("owner_check:append",), ("nobody",),
           rule="one row per final reply that named owner items and recorded none: the observation guard.owner_check "
                "reads before it goes to deny"),

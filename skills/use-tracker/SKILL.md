@@ -19,7 +19,8 @@ says how. They name Linear only for things outside the adapter (a `--linear-issu
 ## How to do an operation
 
 - **Agent in a session:** ticket reads and writes go through `orca linear` / `orca jira` (plain
-  text output; `--json` only when you parse it); MCP only for what Orca lacks. `hooks/tracker_gate.py`
+  text output; `--json` only when you parse it); MCP (`mcp__linear__*` or the connector's
+  `mcp__claude_ai_Linear__*`, an Atlassian server) only for what Orca lacks. `hooks/tracker_gate.py`
   denies an MCP call Orca can run as written and prints the command; it lists what passes.
 - **Scripts:** always `tracker.py`, never an MCP tool, a tracker CLI, or a tracker API.
 - **A milestone** (a state move, the PR link or a comment line from "Milestones") is the one

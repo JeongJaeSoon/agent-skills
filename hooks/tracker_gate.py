@@ -19,7 +19,7 @@ Level `tracker.orca_first` in ~/.claude/agent-skills.json: deny (default), ask, 
 turns it off. Every decision adds a row to $AGENT_SKILLS_STATE/tracker-gate.jsonl with a code, so a fallback and a
 hook fault can be told apart. Any error passes silently.
 """
-import datetime, json, os, re, shlex, subprocess, sys, tempfile, time
+import datetime, json, os, re, shlex, subprocess, sys, time
 
 from lib import config, shell
 
@@ -305,13 +305,9 @@ HANDLERS = {"linear": LINEAR, "jira": JIRA}
 
 # ---- state: probes and cache, each failure contained
 
-def state_file(name):
-    return config.state() / name
-
-
 def read_cache():
     try:
-        data = json.loads(state_file("tracker-gate-cache.json").read_text())
+        data = json.loads((config.state() / "tracker-gate-cache.json").read_text())
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
         return {}
@@ -320,10 +316,10 @@ def read_cache():
 def write_cache(data):
     try:
         config.state().mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=config.state(), prefix=".tracker-gate-cache.")
-        with os.fdopen(fd, "w") as f:
-            json.dump(data, f)
-        os.replace(tmp, state_file("tracker-gate-cache.json"))
+        target = config.state() / "tracker-gate-cache.json"
+        tmp = target.with_name(f"{target.name}.{os.getpid()}")
+        tmp.write_text(json.dumps(data))
+        os.replace(tmp, target)
     except Exception:
         pass
 
@@ -436,7 +432,7 @@ def log(provider, tool, decision, code):
     try:
         config.state().mkdir(parents=True, exist_ok=True)
         row = {"ts": int(time.time()), "provider": provider, "tool": tool, "decision": decision, "code": code}
-        with open(state_file("tracker-gate.jsonl"), "a", encoding="utf-8") as f:
+        with open(config.state() / "tracker-gate.jsonl", "a", encoding="utf-8") as f:
             f.write(json.dumps(row) + "\n")
     except Exception:
         pass
