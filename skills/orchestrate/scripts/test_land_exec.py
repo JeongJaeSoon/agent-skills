@@ -507,16 +507,17 @@ class Standalone(unittest.TestCase):
         return r.returncode, r.stdout + r.stderr
 
     def test_land_creates_the_program_and_the_next_round_merges(self):
-        code, out = self.orch("verdict", self.SLUG, "--repo", "o/r", "--pr", str(self.n), "--sha", f"h{self.n}",
-                              "--source", "review:codex")
-        self.assertEqual(code, 0, out)
         land_exec.beat(phase="done")
-        code, out = self.orch("land", self.SLUG, "--repo", "o/r", "--pr", str(self.n))
+        self.assertFalse((prog.HOME / self.SLUG).exists())
+        code, out = self.orch("land", self.SLUG, "--repo", "o/r", "--pr", str(self.n))  # no program, no verdict yet
         self.assertEqual(code, 2, out)
         self.assertIn("queued land request", out)
         cfg = json.loads((prog.HOME / self.SLUG / "program.json").read_text())
         self.assertEqual((cfg["repo"], cfg["merge_policy"]), ("o/r", "autonomous"))
         self.assertEqual(store.land_rows(("queued",))[-1]["pr"], self.n)
+        code, out = self.orch("verdict", self.SLUG, "--repo", "o/r", "--pr", str(self.n), "--sha", f"h{self.n}",
+                              "--source", "review:codex")
+        self.assertEqual(code, 0, out)
         self.assertEqual(land_exec.cmd_round([]), 0)
         merged = [a for a in json.loads(self.state.read_text()).get("log", []) if a[:2] == ["pr", "merge"]]
         self.assertEqual(len(merged), 1)
@@ -529,6 +530,25 @@ class Standalone(unittest.TestCase):
         before = path.read_text()
         self.orch("land", self.SLUG, "--repo", "o/r", "--pr", str(self.n))
         self.assertEqual(path.read_text(), before)
+
+    def test_an_existing_program_of_another_repo_is_refused(self):
+        subprocess.run([sys.executable, HERE / "prog.py", "init", self.SLUG, "--repo", "other/r", "--run", "run_x"],
+                       check=True, capture_output=True)
+        for cmd in ("land", "verdict"):
+            code, out = self.orch(cmd, self.SLUG, "--repo", "o/r", "--pr", str(self.n), "--sha", f"h{self.n}",
+                                  "--source", "review:codex")
+            self.assertNotEqual(code, 0, out)
+            self.assertIn("is for other/r, not o/r", out)
+        self.assertNotIn(self.n, [r["pr"] for r in store.land_rows(("queued",))])
+
+    def test_a_second_creation_loses_without_touching_the_first(self):
+        args = [self.SLUG, "--repo", "o/r"]
+        prog.standalone_program(args)
+        path = prog.HOME / self.SLUG / "program.json"
+        first = path.read_text()
+        prog.standalone_program(args)
+        self.assertEqual(path.read_text(), first)
+        self.assertEqual(list(path.parent.glob("program.json.*")), [], "no temporary file is left")
 
     def test_executor_off_creates_nothing(self):
         config(enabled=False)

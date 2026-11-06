@@ -1415,6 +1415,17 @@ def standalone_program(argv):
         pass
 
 
+def standalone_target(argv):
+    """The Program for argv[0], created first when `--repo` is given and it is missing. A program that exists must
+    belong to that repo: `--repo` is what the executor setting was checked against."""
+    if "--repo" in argv and not (HOME / argv[0] / "program.json").exists():
+        standalone_program(argv)
+    p = Program(argv[0])
+    if "--repo" in argv and p.cfg["repo"] != opt(argv, "--repo"):
+        sys.exit(f"program '{argv[0]}' is for {p.cfg['repo']}, not {opt(argv, '--repo')}")
+    return p
+
+
 def cmd_init(argv):
     slug = argv[0]
     d = HOME / slug
@@ -1462,8 +1473,17 @@ def write_program(d, cfg, run_id, policy, exclusive=False):
         print(f"lead is dispatch {cfg['lead_dispatch']} on {run_id}: `orch wait` reads its own mailbox; start units "
               "with worker-start --spec (Orca refuses a worker's task-create and gate-create on this Run)")
     (d / "briefs").mkdir(parents=True, exist_ok=True)
-    with (d / "program.json").open("x" if exclusive else "w") as f:
-        f.write(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
+    text = json.dumps(cfg, indent=2, ensure_ascii=False) + "\n"
+    if not exclusive:
+        (d / "program.json").write_text(text)
+        return
+    # A reader must never see a half-written file: write whole, then link it into place (link fails if one exists).
+    tmp = d / f"program.json.{os.getpid()}.tmp"
+    tmp.write_text(text)
+    try:
+        os.link(tmp, d / "program.json")
+    finally:
+        tmp.unlink()
 
 
 STALL_TEXT = {
@@ -1911,9 +1931,7 @@ def cmd_set(argv):
 
 
 def cmd_verdict(argv):
-    if not (HOME / argv[0] / "program.json").exists() and "--repo" in argv:
-        standalone_program(argv)
-    p = Program(argv[0])
+    p = standalone_target(argv)
     pr, sha, src = int(opt(argv, "--pr")), opt(argv, "--sha"), opt(argv, "--source")
     if not src or not sha:
         sys.exit("verdict needs --sha (the head that was reviewed) and --source (who reviewed: independent-review, "
@@ -2518,9 +2536,7 @@ def land_request(p, pr, klass, argv):
 
 
 def cmd_land(argv):
-    if not (HOME / argv[0] / "program.json").exists() and "--repo" in argv:
-        standalone_program(argv)
-    p = Program(argv[0])
+    p = standalone_target(argv)
     pr, klass = int(opt(argv, "--pr")), opt(argv, "--class")
     if klass and klass not in KLASS:
         sys.exit(f"--class is one of {', '.join(KLASS)}")
