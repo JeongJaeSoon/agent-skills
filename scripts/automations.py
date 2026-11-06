@@ -494,14 +494,14 @@ SHELL_JOBS = (
              "정리해 알리는 Orca automation(docs/pressure.md). 아무것도 종료하지 않고, 정리할 것이 없으면 상위 소비자만 알린다",
              ["python3", str(REAP.parent / "pressure.py"), "round"], pressure_interval, True, ok=(0, 1, 2),
              turned_off=pressure.disabled, clear_off=lambda: pressure.DISABLED.unlink(missing_ok=True)),
-    ShellJob("reap-hard", "15분마다 끝난 세션이 남긴 프로세스·창을 강하게 정리하는 Orca automation(모델 없음, reap_hard.py run). "
+    ShellJob("reap-hard", "30분마다 끝난 세션이 남긴 프로세스·창을 강하게 정리하는 Orca automation(모델 없음, reap_hard.py run). "
              "patrol job 이 꺼져 있으면 세션 순찰(`orch patrol`)도 이 회차가 띄운다. 묻지 않고 카드를 지우므로 보호 목록 파일이 있는 PC에서만 켠다",
              ["python3", str(HERE / "reap_hard.py"), "run"], reap_hard_interval, True, gate=reap_hard_gate),
     ShellJob("orch-dash", "10분마다 오케스트레이터 대시보드 서버를 확인해 내려갔으면 올리는 Orca automation(모델 없음, orch-dash ensure). "
              "읽기 위주이고 아무것도 지우지 않는다",
              ["python3", str(REPO / "skills" / "orchestrate" / "scripts" / "dash.py"), "ensure"], 600, True),
     ShellJob("patrol", "30분마다 모든 에이전트 카드를 모델 없이 순찰하는 Orca automation(orch patrol --if-due). 발견은 카드를 띄운 세션의 "
-             "inbox 대기에 나타나고, 정리 후보는 기록만 한다. 꺼져 있으면 reap-hard 가 40분마다 대신 돈다",
+             "inbox 대기에 나타나고, 정리 후보는 기록만 한다. 꺼져 있으면 reap-hard 가 30분 회차마다 대신 돈다",
              ["python3", str(REPO / "skills" / "orchestrate" / "scripts" / "prog.py"), "patrol", "--if-due"], 1800, False,
              timeout=420),
     ShellJob("land-executor", "orchestrate.land_executor 가 켜진 repo 에서 `orch land` 가 남긴 머지 요청을 1분마다 모델 없이 다시 "

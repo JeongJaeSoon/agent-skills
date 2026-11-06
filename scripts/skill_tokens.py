@@ -48,6 +48,7 @@ HOOKS = {
     "decision_relay.py": "an orchestrator or lead relaying the owner's quoted words with no decision record behind them",
     "prose_check.py": "a commit, PR or tracker write whose text breaks write-plainly",
     "stack_gate.py": "a `gh pr create` with an open PR it depends on, or what that needs left unread",
+    "tracker_gate.py": "its reason when it denies a Linear or Jira MCP call that Orca runs as written (the command to run); one context line under `tracker.orca_first: warn`",
     "guard.py": "its reason when it denies; one line per warn rule (guard.warn.*, worker.*) that matched the call",
     "lifecycle.py": "a card's worktree rm before its worker_done or end-check came back (the warning or the denial)"
                     "; a role session's Agent prompt without the refused-act paragraph (the paragraph, appended)",
