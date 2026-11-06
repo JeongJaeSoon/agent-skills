@@ -16,7 +16,7 @@ session has; with both, use the local server. The tables below name tools withou
 | `project` | `write-ticket` | Default project for a new ticket, same fallback rule |
 | `templates` | `write-ticket` | Issue template names: `{"dev": "개발 티켓", "spike": "조사 티켓"}`. Absent → `write-ticket` uses its bundled skeletons |
 | `review_status` | `tracker.py` | State name `--to review` moves to, whatever its type. Absent → "In Review", else the one started state whose name contains "review" |
-| `language` | `write-ticket` | Language of a new ticket's title and body. Absent → the user's own rule for this tracker, else the language the user writes in |
+| `language` | `write-ticket` | Language of a new ticket's title and body, after the site rules file (`use-tracker`, "Site rules"). Neither sets one → Claude's language setting governs |
 
 ```json
 {"tracker": {"adapter": "linear",

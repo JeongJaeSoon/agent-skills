@@ -9,8 +9,8 @@ Write for a tired engineer who reads the text once. That reader may be the user,
 
 Read the reference for the language before you draft. A cleanup pass over a finished draft misses most of these patterns.
 
-- Korean prose (tickets, PR bodies, commit messages, notes, reports to the user): `references/korean.md`.
-- English prose, code comments, and skill text: `references/english.md`.
+- Korean prose: `references/korean.md`.
+- English prose, code comments included: `references/english.md`.
 
 Identifiers, commands, logs, and error text stay verbatim in either language.
 

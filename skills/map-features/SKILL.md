@@ -41,7 +41,7 @@ Open the code behind a row before marking it works; a route or file name alone i
 
 ## 5. Write the map
 
-Write the text per `write-plainly`, in the user's language. Sections in this order:
+Write the text per `write-plainly`. Sections in this order:
 
 1. **Baseline line** (§1).
 2. **In plain words** (쉽게 말하면): five to eight bullets for a reader who does not code. A metaphor is fine when it maps one-to-one onto the real parts. End with what does not exist yet.
