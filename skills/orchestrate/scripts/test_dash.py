@@ -1277,7 +1277,7 @@ class FakeFleet:
         self.sources = {"orca": {"updated_at": at}}
 
 
-real_fleet = dash.FLEET
+real_fleet, real_orca_result = dash.FLEET, dash.orca_result
 try:
     dash.FLEET = None
     assert dash.fleet_worktrees() is None
@@ -1300,9 +1300,64 @@ try:
     dash.fetch_orca(cfg_a)
     assert ["orca", "worktree", "list"] in asked, asked
     dash.sh = real_sh2
+
+    # The Run, its workers and its tasks come from the fleet tick's runs snapshot while it is fresh.
+    class RunsFleet(FakeFleet):
+        def __init__(self, at, err=None, objective=True):
+            super().__init__(dash.iso(dash.utcnow()))
+            run = {"id": "run_a", **({"objective": "ship A"} if objective else {})}
+            self.sources["runs"] = {"updated_at": at, "error": err}
+            self.runs = {"runs": [run], "workers": [{"runId": "run_a", "dispatchId": "d1"}, {"runId": "run_b", "dispatchId": "d2"}],
+                         "tasks": [{"id": "t1", "run_id": "run_a"}, {"id": "t2", "run_id": "run_b"}]}
+
+    now_iso = dash.iso(dash.utcnow())
+    dash.FLEET = RunsFleet(now_iso)
+    assert dash.fleet_run("run_a") == ({"id": "run_a", "objective": "ship A"}, [{"runId": "run_a", "dispatchId": "d1"}],
+                                       [{"id": "t1", "run_id": "run_a"}])
+    assert dash.fleet_run("run_zzz") is None, "a Run the snapshot does not list is asked of Orca"
+    settled = RunsFleet(now_iso)
+    settled.runs["workers"][0]["dispatchStatus"] = "completed"
+    settled.runs["tasks"][0]["status"] = "completed"
+    dash.FLEET = settled
+    assert dash.fleet_run("run_a") is None, "a settled Run may sit in the fleet's 900 s cache: asked of Orca"
+    settled.runs["tasks"][0]["status"] = "running"
+    assert dash.fleet_run("run_a") is not None, "one moving task keeps the Run on the snapshot"
+    settled.runs["tasks"][0]["status"] = "completed"
+    settled.runs["workers"][0]["dispatchStatus"] = "running"
+    assert dash.fleet_run("run_a") is not None, "one running worker keeps the Run on the snapshot"
+    settled.runs["workers"], settled.runs["tasks"] = [], []
+    assert dash.fleet_run("run_a") is None, "a Run with no worker and no task (gates only, or empty) is asked of Orca"
+    dash.FLEET = RunsFleet(now_iso)
+    dash.FLEET = RunsFleet(dash.iso(dash.utcnow() - dt_mod.timedelta(seconds=dash.FLEET_RUNS_TTL_S + 5)))
+    assert dash.fleet_run("run_a") is None, "a stale runs snapshot must not be reused"
+    dash.FLEET = RunsFleet(now_iso, err="boom")
+    assert dash.fleet_run("run_a") is None, "a failed runs read must not be reused"
+    dash.FLEET = RunsFleet(now_iso, objective=False)
+    assert dash.fleet_run("run_a") is None, "a Run row without an objective (Orca before --full) is asked of Orca"
+    dash.FLEET = None
+    assert dash.fleet_run("run_a") is None
+
+    # fetch_orca makes no worker-list, task-list or run-show call while the snapshot is fresh, and does when it is not.
+    asked = []
+    dash.sh = lambda cmd, timeout=45: (asked.append(cmd[:3]), real_sh2(cmd, timeout))[1]
+    real_result = dash.orca_result
+    dash.orca_result = lambda *a: (asked.append(["orca_result", *a[:1]]), real_result(*a))[1]
+    cfg_run = {**cfg_a, "run": "run_a", "lead_dispatch": None}
+    dash.FLEET = RunsFleet(now_iso)
+    got = dash.fetch_orca(cfg_run)
+    assert not [a for a in asked if a[0] == "orca_result"], asked
+    assert got["run"]["objective"] == "ship A" and [w["dispatchId"] for w in got["workers"]] == ["d1"] and [t["id"] for t in got["tasks"]] == ["t1"]
+    dash.FLEET = None
+    try:
+        dash.fetch_orca(cfg_run)
+    except Exception:
+        pass  # no Orca in the test: what matters is that it asked
+    assert [a for a in asked if a[0] == "orca_result"], "without a snapshot fetch_orca must ask Orca"
+    dash.sh, dash.orca_result = real_sh2, real_result
 finally:
     dash.FLEET = real_fleet
     dash.sh = real_sh
+    dash.orca_result = real_orca_result
 
 # A write skipped for an unchanged state still keeps the sources' new success times for the next collect.
 import time as time_mod
