@@ -35,7 +35,7 @@ skills-sync setup disable <이름>         # 끄기
 | `sync` | on | Orca automation `agent-skills sync`(에이전트 없음, [아래](#에이전트-없이-도는-주기-작업)) | 없으면 만든다(15분마다 `sync.py sync`). 있으면 trigger·precheck·timeout·prompt 중 다른 것만 맞추고 켠다 | `orca automations edit --disabled`. 등록은 남겨 `apply`가 다시 켜지 않는다 |
 | `pstack-upstream` | off | Orca automation `agent-skills pstack-upstream`(에이전트 없음) | `sync`와 같다. 하루 한 번 `pstack-sync.py --notify`로 cursor/plugins의 pstack을 `vendor/pstack` 사본과 비교해 차이를 알린다(upstream 커밋마다 한 번). `skills/`와 사본은 건드리지 않는다. 이 저장소를 고치는 PC에서만 켠다 | `sync`와 같다 |
 | `pressure-watch` | on | Orca automation `agent-skills pressure-watch`(에이전트 없음) | `sync`와 같다. 3분마다 `pressure.py round`. `round`가 경고·위험으로 끝나는 exit 1·2는 실패가 아닌 결과로 기록한다 | `sync`와 같다 |
-| `reap-hard` | on(보호 목록 파일이 있을 때) | Orca automation `agent-skills reap-hard`(에이전트 없음) | `sync`와 같다. 15분마다 `reap_hard.py run`. 파일이 없으면 `apply`가 건너뛴다(`enable`은 받는다) | `sync`와 같다 |
+| `reap-hard` | on(보호 목록 파일이 있을 때) | Orca automation `agent-skills reap-hard`(에이전트 없음) | `sync`와 같다. 30분마다(`reap-hard.interval` 기본 1800초), PR 머지 직후에도 한 번 `reap_hard.py run`. 파일이 없으면 `apply`가 건너뛴다(`enable`은 받는다) | `sync`와 같다 |
 | `orch-dash` | on | Orca automation `agent-skills orch-dash`(에이전트 없음) | `sync`와 같다. 10분마다 `dash.py ensure`로 이 스토어의 대시보드 서버를 확인해 내려갔으면 올린다 | `sync`와 같다 |
 | `share-server` | off | LaunchAgent(라벨은 설정 `share-server.label`, 기본 `io.github.jeongjaesoon.share-server`) | `share_server.py install`(KeepAlive로 `serve`, 그 안에서 sandbox-exec 아래 caddy. caddy가 없으면 `brew install caddy`부터. 같은 라벨의 다른 plist는 백업 후 교체) | `share_server.py uninstall` |
 | `land-executor` | off | Orca automation `agent-skills land-executor`(에이전트 없음) | `sync`와 같다. 1분마다 `land_exec.py round`. 켤 때 agent-skills.db에 `5-land-queue` 단계(`land_exec.py setup`)를 기록한다. 머지 요청은 `orchestrate.land_executor`가 켜진 repo에서만 생긴다. 그 키는 `skills-config`로 따로 켠다 | `sync`와 같다. 남은 요청은 큐에 그대로 둔다 |
@@ -170,7 +170,7 @@ orca automations edit <id> --prompt "<schedule 이 출력한 --prompt 값>"   # 
 
 ## 세션 순찰 (`orch patrol`)
 
-모델 없이 도는 한 라운드다. reap-hard LaunchAgent가 회차를 마칠 때마다 `orch patrol --if-due`를 별도 프로세스로 띄우고, 순찰은 마지막 라운드가 25분 넘게 지났을 때만 돈다(그래서 15분 박자에서 두 번에 한 번, 30분). pressure 회차가 경고나 위험으로 바뀌면 그 회차도 같은 명령을 띄워 바로 한 번 더 돈다. 한 라운드는 120초가 지나면 그 자리에서 멈춘다. 그때까지 쓴 발견 기록은 남고, 대시보드 Needs you 항목은 다음 라운드가 기록에 맞춘다. 새로 등록할 LaunchAgent는 없다. reap-hard와 pressure가 메인 체크아웃의 코드를 그대로 읽기 때문이다.
+모델 없이 도는 한 라운드다. reap-hard LaunchAgent가 회차를 마칠 때마다 `orch patrol --if-due`를 별도 프로세스로 띄우고, 순찰은 마지막 라운드가 25분 넘게 지났을 때만 돈다(그래서 30분 박자의 회차마다 한 번). pressure 회차가 경고나 위험으로 바뀌면 그 회차도 같은 명령을 띄워 바로 한 번 더 돈다. 한 라운드는 120초가 지나면 그 자리에서 멈춘다. 그때까지 쓴 발견 기록은 남고, 대시보드 Needs you 항목은 다음 라운드가 기록에 맞춘다. 새로 등록할 LaunchAgent는 없다. reap-hard와 pressure가 메인 체크아웃의 코드를 그대로 읽기 때문이다.
 
 읽는 순서는 Orca 명령이 먼저다(`orca terminal list`, `orca worktree ps --agent-wait`, 모든 Run의 `orca orchestration worker-list`). 그다음 collector의 `state.json`(카드의 부모, 연결 PR, 보드), 카드별 세션 기록 끝부분, `orch sent` 기록, 직전 pressure 회차를 읽는다. PR은 collector가 모은 것을 쓰고 `gh`를 새로 부르지 않는다. 화면은 직전 라운드 뒤로 출력이 생긴 에이전트 터미널만 읽는다.
 

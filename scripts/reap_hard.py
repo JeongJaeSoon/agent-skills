@@ -31,11 +31,14 @@ Before any rule, the protect file is read; without it nothing runs (exit 2). It 
 compose projects in reap.pressure.always_on and anything a person's shell started are always kept.
 Each decision that acts, or would act under --dry-run, and each failure is one JSON line in
 <state>/reap-hard.jsonl; the pass's summary is <state>/reap-hard-last.json.
-After a pass that is not a dry run, `orch patrol --if-due` starts detached (every other pass, 30 minutes); a card
-it judged working within the hour is kept, and nothing it judged becomes a target.
+After a pass that is not a dry run, `orch patrol --if-due` starts detached (a round is due 25 minutes after the last,
+so one per 30-minute pass); a card it judged working within the hour is kept, and nothing it judged becomes a target.
+A pass that is not a dry run also writes <state>/inventory.json, its own judgements; patrol's candidate stage reads
+them for 10 minutes instead of scanning the machine again (read_inventory). One `gh pr list` per repo answers every
+card's PR (reap.PrMap). A landed PR starts a pass between beats (reap.spawn_hard, not within 5 minutes of the last).
 Settings: "reap-hard" in ~/.claude/agent-skills.json (DEFAULTS).
 """
-import contextlib, fcntl, functools, json, os, pathlib, plistlib, re, shutil, signal, socket, subprocess, sys, time, uuid
+import contextlib, fcntl, functools, hashlib, json, os, pathlib, plistlib, re, shutil, signal, socket, subprocess, sys, time, uuid
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -52,9 +55,11 @@ CONFIG = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG", "~/.claude/agent-ski
 STATE_DIR = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE", "~/.local/state/agent-skills")).expanduser()
 LOG = STATE_DIR / "reap-hard.jsonl"
 LAST = STATE_DIR / "reap-hard-last.json"
+INVENTORY = STATE_DIR / "inventory.json"
+INVENTORY_TTL = 600
 OUT = STATE_DIR / "reap-hard.log"
 DEFAULTS = {
-    "interval": 900,
+    "interval": 1800,
     "idle_minutes": 30,
     "workspaces": "~/orca/workspaces",
     "protect_file": "~/.config/agent-skills/reap-protect.txt",
@@ -283,7 +288,7 @@ def read_machine(now):
     listening = listeners_all()
     return {"rows": reap.processes(), "cwd_pairs": cwd_pairs,
             "cwd_of": None if cwd_pairs is None else {p: c for p, (c, _) in cwd_pairs.items()},
-            "listening": listening, "pr_state": reap.pr_reader(),
+            "listening": listening, "pr_state": reap.pr_reader(), "pr_map": reap.PrMap(),
             "quiet": transcript_quiet(pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser()
                                       / "projects", now)}
 
@@ -294,7 +299,7 @@ def card_verdict(w, m, cfg, protect, now):
     cwd_of = m["cwd_of"]
     if cwd_of is None or m["listening"] is None:
         return False, "프로세스 cwd·리스너를 읽지 못함", None
-    facts = reap.worktree_facts(p, None, None, cwd_of)
+    facts = reap.worktree_facts(p, None, None, cwd_of, pr_map=m.get("pr_map"))
     pr = m["pr_state"](facts["pr"]) if facts and facts.get("pr") else None
     term = orca("terminal", "list", "--worktree", f"path:{p}")
     terminals = None if not isinstance(term, dict) else term.get("terminals") or []
@@ -521,6 +526,48 @@ def read_last():
         return None
 
 
+def fingerprint(cfg):
+    """What an inventory was judged from besides the machine: the settings that decide a verdict, and the protect file.
+    None when the protect file cannot be read, so nothing is written or trusted then."""
+    try:
+        protect = pathlib.Path(os.path.expanduser(cfg["protect_file"])).read_bytes()
+    except OSError:
+        return None
+    knobs = [cfg["idle_minutes"], cfg["workspaces"], cfg["serve_ranges"], (guard.settings() or {}).get("reap")]
+    return hashlib.sha256(json.dumps(knobs, sort_keys=True, default=str).encode() + protect).hexdigest()
+
+
+def write_inventory(items, notes, cfg, now, dark):
+    """<state>/inventory.json: this pass's judgements, for a reader that would scan the same machine again (patrol's
+    candidate stage). Written by a pass that is not a dry run and read everything, never by a reader. What the pass
+    already closed is left out; a pass that could not read a part removes the file, so no reader takes it for whole."""
+    fp = fingerprint(cfg)
+    if notes or fp is None:
+        INVENTORY.unlink(missing_ok=True)
+        return
+    left = [i for i in items if not (i.get("result") and not i["result"].startswith(("건너뜀", "실패")))]
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = INVENTORY.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"t": now, "fp": fp, "dark": sorted(dark),
+                               "cards": [i for i in left if i["kind"] == "card"],
+                               "rest": [i for i in left if i["kind"] != "card"]}, ensure_ascii=False, default=str))
+    tmp.replace(INVENTORY)
+
+
+def read_inventory(cfg=None, now=None, ttl=INVENTORY_TTL):
+    """The inventory when it is younger than ttl seconds and was judged from the settings and protect file in force;
+    else None, and the reader scans for itself. A card gone since is dropped."""
+    cfg, now = cfg or config(), now or time.time()
+    try:
+        inv = json.loads(INVENTORY.read_text())
+        fresh = 0 <= now - float(inv["t"]) <= ttl and inv["fp"] == fingerprint(cfg)
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if not fresh:
+        return None
+    return {**inv, "cards": [i for i in inv["cards"] if os.path.isdir(i["id"])]}
+
+
 def run_pass(dry, cfg=None, now=None):
     cfg = cfg or config()
     now = now or time.time()
@@ -592,6 +639,7 @@ def run_pass(dry, cfg=None, now=None):
                "kept": sum(1 for i in items if not i["target"]), "notes": notes, "dark": sorted(dark)}
     if not dry:
         write_last(summary)
+        write_inventory(items, notes, cfg, now, dark)
     return {**summary, "items": items}, 1 if summary["failed"] else 0
 
 

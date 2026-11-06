@@ -268,6 +268,30 @@ hard_cands = {c["key"] for c in got["candidates"]}
 assert hard_cands == hard_targets - {"stack:s-c1"}, (hard_cands, hard_targets)
 assert {c["rule"] for c in got["candidates"]} == set(candidates.HARD_RULE.values())
 
+# A young inventory.json from reap-hard's own pass stands in for the scans: the same candidates, no scan, and each
+# one "seen" when the pass that judged it began.
+fresh = time.time()
+reap_hard.INVENTORY = tmp / "inventory.json"
+reap_hard.write_inventory([{k: v for k, v in i.items() if k != "result"} for i in dry["items"]], [], reap_hard.config(),
+                          fresh - 30, set())
+saved_scans = reap_hard.scan_cards, reap_hard.scan_rest
+
+
+def scanned(*a, **k):
+    raise AssertionError("scanned the machine again")
+
+
+reap_hard.scan_cards = reap_hard.scan_rest = scanned
+via_inventory = candidates.collect(OK, pressure_kinds=[], state_dir=tmp, reap_scan=lambda kinds: ([], []))
+reap_hard.scan_cards, reap_hard.scan_rest = saved_scans
+assert {c["key"] for c in via_inventory["candidates"]} == hard_targets, via_inventory["candidates"]
+assert {c["seen"] for c in via_inventory["candidates"] if c["key"] in hard_targets} == {fresh - 30}
+assert via_inventory["sources"]["reap_hard_cards"] == via_inventory["sources"]["reap_hard_rest"] == "ok"
+# Past the TTL the file is not trusted: the scans run again.
+reap_hard.write_inventory([], [], reap_hard.config(), fresh - reap_hard.INVENTORY_TTL - 5, set())
+assert reap_hard.read_inventory() is None
+reap_hard.INVENTORY.unlink()
+
 # reap.run's timeout is off unless a caller sets it; set, a hung command is a failure, not a hang.
 assert reap.RUN_TIMEOUT is None
 reap.RUN_TIMEOUT = 0.2

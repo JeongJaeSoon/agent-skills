@@ -896,7 +896,7 @@ reap_hard.act = saved_act
 (tmp / "config.json").write_text(json.dumps({"reap-hard": {"idle_minutes": 45, "serve_ranges": [[1, 2]],
                                                            "protect_file": str(PROTECT)}}))
 block = sweep.carried_config()["sweep"]
-assert block["idle_minutes"] == 45 and block["serve_ranges"] == [[1, 2]] and block["interval"] == 900, block
+assert block["idle_minutes"] == 45 and block["serve_ranges"] == [[1, 2]] and block["interval"] == 1800, block
 assert block["workspaces"] == "~/orca/workspaces" and block["max_per_round"] == 50 and block["protect_file"] == str(PROTECT)
 other = tmp / "other-protect.txt"
 other.write_text("port 1\n")

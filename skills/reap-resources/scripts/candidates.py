@@ -201,8 +201,9 @@ def default_live(targets, notes):
 
 
 def default_hard(timings):
-    """reap-hard's scans as its --dry-run would run them, with no card counted as closed in this pass. A scan that
-    noted an unreadable part fails its source."""
+    """reap-hard's scans as its --dry-run would run them, with no card counted as closed in this pass; or, when its last
+    pass left a young inventory.json (reap_hard.read_inventory), that pass's judgements. A scan that noted an
+    unreadable part fails its source."""
     import reap_hard
     cfg = reap_hard.config()
     out = {"notes": []}
@@ -213,6 +214,14 @@ def default_hard(timings):
         return out
     out["protect"] = "ok"
     now = time.time()
+    inv = reap_hard.read_inventory(cfg, now)
+    if inv:
+        # reap-hard's own judgements, young enough: read, not scanned again. They count as scanned when that scan began.
+        for name, part in (("reap_hard_cards", "cards"), ("reap_hard_rest", "rest")):
+            timed(timings, name, lambda: None)
+            getattr(timings, "started", {})[name] = inv["t"]
+            out.update({name: "ok", name + "_items": inv[part]})
+        return out
     try:
         items, notes, m = timed(timings, "reap_hard_cards", lambda: reap_hard.scan_cards(cfg, protect, now))
         out.update(reap_hard_cards="failed" if notes else "ok", reap_hard_cards_items=items)

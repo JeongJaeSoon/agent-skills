@@ -370,7 +370,7 @@ class ShellJobs(Base):
         j = self.jobs["reap-hard"]
         self.orca([self.stored(j)])
         self.assertFalse(j.stale())
-        with mock.patch.object(au, "PLANNED_CONFIG", {"reap-hard": {"interval": 1800}}):
+        with mock.patch.object(au, "PLANNED_CONFIG", {"reap-hard": {"interval": 3600}}):
             self.assertTrue(j.stale())
         p = self.jobs["pressure-watch"]
         self.orca([self.stored(p)])

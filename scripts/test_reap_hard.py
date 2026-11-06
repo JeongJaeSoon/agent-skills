@@ -312,6 +312,48 @@ with tempfile.TemporaryDirectory() as td:
     assert not got[cards_["plain"]]["target"] and "거부 기록을 읽지 못함" in got[cards_["plain"]]["why"], got
     rh.orca, rh.card_verdict, rh.read_machine, rh.reap.STATE, rh.reap.patrol_states = saved_sc
 
+# inventory.json: a pass's judgements for a reader that would scan again. What the pass closed, a card gone since, a
+# stale file, other settings or protect file, and a pass that could not read a part are all left out.
+inv_dir = tmp / "inv"
+inv_dir.mkdir()
+rh.INVENTORY, rh.STATE_DIR = inv_dir / "inventory.json", inv_dir
+pf = inv_dir / "protect.txt"
+pf.write_text("# keep\n")
+live = inv_dir / "live"
+live.mkdir()
+cfg_i = {**rh.DEFAULTS, "protect_file": str(pf), "workspaces": str(inv_dir)}
+items_i = [{"kind": "card", "id": str(live), "target": True, "why": "w", "result": "건너뜀: x"},
+           {"kind": "card", "id": str(inv_dir / "gone"), "target": True, "why": "w"},
+           {"kind": "card", "id": str(inv_dir / "closed"), "target": True, "why": "w", "result": "닫음"},
+           {"kind": "stack", "id": "s", "target": False, "why": "w"}]
+rh.write_inventory(items_i, [], cfg_i, NOW, {"d"})
+got = rh.read_inventory(cfg_i, NOW + 60)
+assert [i["id"] for i in got["cards"]] == [str(live)], got
+assert [i["id"] for i in got["rest"]] == ["s"] and got["dark"] == ["d"] and got["t"] == NOW, got
+assert rh.read_inventory(cfg_i, NOW + rh.INVENTORY_TTL + 1) is None, "older than the TTL"
+assert rh.read_inventory(cfg_i, NOW - 1) is None, "from the future"
+assert rh.read_inventory({**cfg_i, "idle_minutes": 5}, NOW + 60) is None, "judged under other settings"
+pf.write_text("# changed\n")
+assert rh.read_inventory(cfg_i, NOW + 60) is None, "judged under another protect file"
+pf.write_text("# keep\n")
+assert rh.read_inventory(cfg_i, NOW + 60) is not None
+rh.write_inventory(items_i, ["docker 를 읽지 못함"], cfg_i, NOW, set())
+assert not rh.INVENTORY.exists(), "a part not read removes the file"
+rh.write_inventory(items_i, [], cfg_i, NOW, set())
+rh.INVENTORY.write_text("{not json")
+assert rh.read_inventory(cfg_i, NOW + 60) is None
+# The pass writes it when it is not a dry run, and only then.
+rh.INVENTORY.unlink()
+saved_rp = rh.scan_cards, rh.scan_rest, rh.read_protect, rh.guard.ownership, rh.write_last, rh.log
+rh.scan_cards = lambda cfg, protect, now: ([{"kind": "card", "id": str(live), "target": False, "why": "w"}], [], {})
+rh.scan_rest = lambda *a: ([], [], set())
+rh.read_protect, rh.guard.ownership, rh.write_last, rh.log = (lambda f: P), (lambda: None), (lambda s: None), (lambda r: None)
+rh.run_pass(True, cfg_i, NOW)
+assert not rh.INVENTORY.exists(), "a dry run writes no inventory"
+rh.run_pass(False, cfg_i, NOW)
+assert [i["id"] for i in rh.read_inventory(cfg_i, NOW + 1)["cards"]] == [str(live)]
+rh.scan_cards, rh.scan_rest, rh.read_protect, rh.guard.ownership, rh.write_last, rh.log = saved_rp
+
 # Stopped containers and labeled volumes: off without their settings, one exact target each, the shared rules of reap.py.
 saved_lo = rh.reap.leftovers, rh.reap.remove_leftover, rh.reap.compose_stacks, rh.pw.tailscale_cli, rh.guard.settings, rh.always_on
 rh.reap.compose_stacks, rh.pw.tailscale_cli = lambda: {}, lambda c: None

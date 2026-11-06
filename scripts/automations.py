@@ -471,7 +471,7 @@ SHELL_JOBS = (
              "정리해 알리는 Orca automation(docs/pressure.md). 아무것도 종료하지 않고, 정리할 것이 없으면 상위 소비자만 알린다",
              ["python3", str(REAP.parent / "pressure.py"), "round"], pressure_interval, True, ok=(0, 1, 2),
              turned_off=pressure.disabled, clear_off=lambda: pressure.DISABLED.unlink(missing_ok=True)),
-    ShellJob("reap-hard", "15분마다 끝난 세션이 남긴 프로세스·창을 강하게 정리하는 Orca automation(모델 없음, reap_hard.py run). "
+    ShellJob("reap-hard", "30분마다 끝난 세션이 남긴 프로세스·창을 강하게 정리하는 Orca automation(모델 없음, reap_hard.py run). "
              "세션 순찰(`orch patrol`)도 이 회차가 띄운다. 묻지 않고 카드를 지우므로 보호 목록 파일이 있는 PC에서만 켠다",
              ["python3", str(HERE / "reap_hard.py"), "run"], reap_hard_interval, True, gate=reap_hard_gate),
     ShellJob("orch-dash", "10분마다 오케스트레이터 대시보드 서버를 확인해 내려갔으면 올리는 Orca automation(모델 없음, orch-dash ensure). "
