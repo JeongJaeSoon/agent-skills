@@ -351,7 +351,10 @@ import cards  # noqa: E402
 
 def cards_apply(items):
     plan = tmp / "cards.json"
-    plan.write_text(json.dumps({"items": items}))
+    text = json.dumps({"items": items})
+    plan.write_text(text)
+    cards.seal_plan(text)  # as scan --plan does
+    cards.cards_listing = lambda repo_list=(): [{"path": CARD}]
     out, argv = io.StringIO(), sys.argv
     sys.argv = ["cards.py", "apply", "--plan", str(plan)]
     try:
