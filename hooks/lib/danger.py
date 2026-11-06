@@ -332,7 +332,7 @@ def scratch_apply(script, c, cwd, here, masked):
     toks = c.raw.split()
     if len(toks) < 7 or not all(ASSIGN_WORD.match(t) for t in toks[:6]) or toks[6] != w[0]:
         return False
-    if re.search(r"(?<![\w-])(cd|pushd|popd)(?![\w-])", masked):  # `cd . && …` also leaves `here` equal to `cwd`
+    if re.search(r"(?:^|[;&|(\n])\s*(?:cd|pushd|popd)(?![\w./-])", masked):  # `cd . && …` also leaves `here` equal to `cwd`
         return False
     given = dict(a.split("=", 1) for a in c.assigns)
     if set(given) != SCRATCH_VARS or len(c.assigns) != len(given):
@@ -355,7 +355,7 @@ def scratch_apply(script, c, cwd, here, masked):
     def plain(value):  # setup.py backs a file up next to it; a link planted there would be followed out of the tree
         for d in {value, os.path.dirname(value)}:
             try:
-                if any(e.is_symlink() for e in os.scandir(d)):
+                if any(e.is_symlink() and ".bak" in e.name for e in os.scandir(d)):
                     return False
             except OSError:
                 pass

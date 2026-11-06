@@ -76,6 +76,8 @@ git("init", "-q", cwd=CLEAN)
 (REPOX / "to-real").symlink_to(HOME / ".claude")
 (REPOX / "planted").mkdir()
 (REPOX / "planted" / "settings.json.bak-setup-20260101").symlink_to(TMP / "outside" / "x")
+(REPOX / "unrelated").mkdir()
+(REPOX / "unrelated" / "notes").symlink_to(TMP / "outside" / "y")
 (REPOX / "linked").mkdir()
 (REPOX / "linked" / "settings.json").symlink_to(HOME / ".claude" / "settings.json")
 
@@ -178,7 +180,10 @@ CASES = [
       f"python3 {REPO}/scripts/bootstrap.py", "echo --apply",
       # A rehearsal: the plugin's setup.py, exactly --apply HASH --settings-only, every target assigned in the
       # command to an absolute path inside the checkout.
-      (rehearsal(), REPOX), (rehearsal(tail="--settings-only --apply=abc"), REPOX)]),
+      (rehearsal(), REPOX), (rehearsal(tail="--settings-only --apply=abc"), REPOX),
+      # Look-alikes of the refused shapes: `cd` inside a path, and a link beside a target that is no backup.
+      (rehearsal(CLAUDE_CONFIG_DIR=f"{REPOX}/scratch/cd/home"), REPOX),
+      (rehearsal(CLAUDE_SETTINGS=f"{REPOX}/unrelated/settings.json"), REPOX)]),
     # Not a rehearsal: a target inherited or outside the checkout, reaching the real settings through a link (also
     # a file inside the scratch folder), `..`, a quoted word or a variable, a wrapper that can undo an assignment,
     # an option or script the allowlist does not name, or a full setup that also syncs and schedules.
