@@ -2862,10 +2862,16 @@ def act_round(data, cfg, state_dir, started, inbox=None, send=run, reap_fn=reap_
         finally:
             with gate.recording():
                 row["seconds"] = round(time.monotonic() - started, 1)
+                cut_before = bool(gate.cut)
+                if cut_before and not row["error"]:
+                    row["error"] = f"RoundCut: {gate.cut}"
                 with contextlib.suppress(OSError):
                     log_run(state_dir, row)
-            if gate.cut and not row["error"]:
-                row["error"] = f"RoundCut: {gate.cut}"
+                # A cut that landed while the row was being written is marked, not raised: the record says so too.
+                if gate.cut and not cut_before and not row["error"]:
+                    row["error"] = f"RoundCut: {gate.cut}"
+                    with contextlib.suppress(OSError):
+                        log_run(state_dir, row)
     return row
 
 
@@ -3080,6 +3086,14 @@ def cli():
             if isinstance(e, RoundCut):
                 sys.exit(2)
             traceback.print_exc()
+            sys.exit(2)
+        raise
+    except SystemExit as e:
+        # A plan refusing its own arguments (`sys.exit("message")`) is a failed round too: row, message, exit 2.
+        if isinstance(e.code, str) and sys.argv[1:2] == ["precheck"] and "--act" in sys.argv:
+            with contextlib.suppress(OSError):
+                log_run(STATE, {"t": time.time(), "source": "scan", "error": e.code[:200], "stage": "plan"})
+            print(e.code, file=sys.stderr)
             sys.exit(2)
         raise
 
