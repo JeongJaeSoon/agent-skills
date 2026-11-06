@@ -64,7 +64,7 @@ listing = [
     {"number": 4, "headRefOid": H, "isDraft": False, "mergeStateStatus": "CLEAN", "baseRefName": "main", "statusCheckRollup": passing},
 ]
 verdicts = {1: {"result": "pass", "sha": H}, 2: {"result": "pass", "sha": "b" * 40}, 4: {"result": "fail", "sha": H}}
-got = prog.table_facts(listing, verdicts, no_ci=False)
+got = prog.table_facts(listing, verdicts)
 assert got[1] == pr("current"), got[1]
 assert got[2] == pr("stale", ci="failed", ms="DIRTY", draft=True, base="b"), got[2]
 assert got[3] == pr("none", ci="pending"), got[3]  # no check reported yet is not green
@@ -91,4 +91,48 @@ with tempfile.TemporaryDirectory() as tmp:
     assert found[1]["result"] == "pass" and found[2]["result"] == "fail", found
     assert 9 not in found, "another repo's program is not read"
     assert unknown == ["program ledger broken"], unknown
+
+    # The same second: the failing verdict wins whichever program comes first; a bad timestamp makes the ledger unknown.
+    T = "2026-11-05T00:00:00+00:00"
+    program("tie-a", "acme/tie", [verdict(5, H, "fail", T)])
+    program("tie-b", "acme/tie", [verdict(5, H, "pass", T)])
+    found, unknown = prog.repo_verdicts("acme/tie", home)
+    assert found[5]["result"] == "fail" and unknown == [], (found, unknown)
+    program("badts", "acme/ts", [verdict(6, H, "pass", "bad timestamp")])
+    found, unknown = prog.repo_verdicts("acme/ts", home)
+    assert 6 not in found and unknown == ["program ledger badts"], (found, unknown)
+
+# An empty rollup is pending even when the repo declares no CI.
+assert prog.table_facts([dict(listing[2], statusCheckRollup=[])], {})[3]["ci"] == "pending"
+
+# The command: a listing that fails, a file list that fails or hits the cap, each named, never a crash.
+import io, contextlib
+class P:
+    cfg = {"repo": "acme/app"}
+def run_table(rows_fn, files_fn, argv=("x", "--table")):
+    saved = (prog.open_rows, prog.rest_files, prog.repo_verdicts)
+    prog.open_rows, prog.rest_files, prog.repo_verdicts = rows_fn, files_fn, lambda repo: ({}, [])
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            prog.cmd_overlap_table(P, list(argv))
+    finally:
+        prog.open_rows, prog.rest_files, prog.repo_verdicts = saved
+    return buf.getvalue()
+def boom(*a):
+    raise SystemExit("gh failed")
+assert "UNKNOWN open PR listing: could not be read" in run_table(boom, lambda r, n: [])
+assert "UNKNOWN #1: its file list could not be read" in run_table(lambda r: listing[:2], lambda r, n: None)
+def oserr(r, n):
+    raise OSError("no gh")
+assert "UNKNOWN #1:" in run_table(lambda r: listing[:2], oserr)
+cap = ["f%d" % i for i in range(prog.REST_FILES_CAP)]
+out = run_table(lambda r: listing[:2], lambda r, n: cap if n == 1 else ["f1"])
+assert "UNKNOWN #1:" in out, out
+assert "HOT f" in run_table(lambda r: listing[:2], lambda r, n: ["f"])
+try:
+    run_table(lambda r: listing[:2], lambda r, n: ["f"], ("x", "--table", "--max-open", "0"))
+    raise AssertionError("max-open 0 must be refused")
+except SystemExit:
+    pass
 print("ok")

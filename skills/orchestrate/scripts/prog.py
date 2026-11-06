@@ -842,6 +842,9 @@ def is_exclusive(cfg, files):
     return sorted(f for f in files if any(fnmatch.fnmatch(f, g) for g in pats))
 
 
+REST_FILES_CAP = 3000
+
+
 def rest_files(repo, pr):
     # pr view stops at 100 files; the REST listing pages up to 3000.
     out = run(["gh", "api", f"repos/{repo}/pulls/{pr}/files", "--paginate", "--jq", ".[].filename"], check=False)
@@ -1022,10 +1025,15 @@ def cross_overlaps(files, theirs, rows, stacks=None, paths=None, unread=()):
 
 def repo_verdicts(repo, home=None):
     """({PR: its latest verdict event across every program on `repo`}, ["program ledger X" for each unreadable one]).
-    A PR can be in several programs' ledgers; the newest verdict is the one that counts."""
+    A PR can be in several programs' ledgers; the newest verdict is the one that counts, and at the same second a
+    failing one wins over a passing one, so the table never reads ready on a coin flip."""
     home = home or HOME
     best, unknown = {}, []
-    for d in sorted(home.iterdir()) if home.is_dir() else []:
+    try:
+        dirs = sorted(home.iterdir()) if home.is_dir() else []
+    except OSError:
+        return best, ["program ledgers"]
+    for d in dirs:
         if d.name.startswith((".", "_")) or not (d / "program.json").is_file():
             continue
         try:
@@ -1033,20 +1041,25 @@ def repo_verdicts(repo, home=None):
                 continue
             led = d / "ledger.jsonl"
             events = [json.loads(l) for l in led.read_text().splitlines() if l.strip()] if led.exists() else []
+            found = {}
             for e in events:
                 if e.get("ev") == "verdict" and type(e.get("pr")) is int:
-                    if e["pr"] not in best or parse_ts(e["ts"]) >= parse_ts(best[e["pr"]]["ts"]):
-                        best[e["pr"]] = e
+                    found.setdefault(e["pr"], []).append((parse_ts(e["ts"]), e))
+            for n, cands in found.items():
+                for ts, e in cands:
+                    old = best.get(n)
+                    if old is None or ts > old[0] or (ts == old[0] and e.get("result") != "pass"):
+                        best[n] = (ts, e)
         except (OSError, ValueError, AttributeError, TypeError, KeyError):
             unknown.append(f"program ledger {d.name}")
-    return best, unknown
+    return {n: e for n, (_, e) in best.items()}, unknown
 
 
-def table_facts(rows, verdicts, no_ci):
+def table_facts(rows, verdicts):
     """{PR: what overlap_table orders by} from the open PR listing and repo_verdicts."""
     out = {}
     for r in rows:
-        failed, pending, _ = ci_summary(r.get("statusCheckRollup"), no_ci)
+        failed, pending, _ = ci_summary(r.get("statusCheckRollup"))  # no checks reads pending, even on a no-CI repo
         v = verdicts.get(r["number"])
         state = ("none" if not v else "fail" if v.get("result") != "pass"
                  else "current" if v.get("sha") == r.get("headRefOid") else "stale")
@@ -1063,18 +1076,26 @@ def cmd_overlap_table(p, argv):
     limit = opt(argv, "--max-open")
     if limit is not None and not (limit.isdigit() and int(limit) > 0):
         sys.exit("--max-open takes a positive integer")
-    rows = open_rows(repo)
+    verdicts, unknown = repo_verdicts(repo)
+    try:
+        rows = open_rows(repo)
+    except (SystemExit, Exception):
+        rows = []
+        unknown.append("open PR listing")
+    if len(rows) >= OPEN_LIMIT:
+        unknown.append(f"open PR listing (stops at {OPEN_LIMIT})")
     files, unread = {}, []
     for r in rows:
-        changed = rest_files(repo, r["number"])
-        if changed is None:
+        try:
+            changed = rest_files(repo, r["number"])
+        except OSError:
+            changed = None
+        # A listing that stops at the REST cap may have dropped files, so it counts as unread.
+        if changed is None or len(changed) >= REST_FILES_CAP:
             unread.append(r["number"])
         else:
             files[r["number"]] = changed
-    verdicts, unknown = repo_verdicts(repo)
-    if len(rows) >= OPEN_LIMIT:
-        unknown.append(f"open PR listing (stops at {OPEN_LIMIT})")
-    print("\n".join(overlap_table.hot_table(files, table_facts(rows, verdicts, no_ci_repo(repo)),
+    print("\n".join(overlap_table.hot_table(files, table_facts(rows, verdicts),
                                             int(limit) if limit else None, unread, unknown)))
 
 
