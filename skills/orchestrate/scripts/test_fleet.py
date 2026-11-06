@@ -1837,6 +1837,27 @@ for tie, expect_calls, expect_rows in ((True, 4, 15), (False, 3, 13)):
     assert len(got_rows) == expect_rows, (tie, len(got_rows))
     if tie:
         assert max(r["runNumber"] for r in got_rows) == 15, got_rows
+
+# A history that cannot be read to the end of a tie, and a cursor that does not advance, are errors, not a wrong row.
+endless = iter(range(1, 1000))
+def tied_forever(*args, timeout=30):
+    n = next(endless)
+    return {"runs": [{"runNumber": n, "createdAt": 100}], "nextCursor": f"c{n}"}
+
+
+def stuck_cursor(*args, timeout=30):
+    return {"runs": [{"runNumber": 1}], "nextCursor": "undefined:r1"}
+
+
+for name, fake in (("tied_forever", tied_forever), ("stuck_cursor", stuck_cursor)):
+    fleet.orca = fake
+    try:
+        fleet.recent_runs("a1")
+        raise AssertionError(f"{name}: expected a SourceError")
+    except fleet.SourceError:
+        pass
+    finally:
+        fleet.orca = real_orca
 assert autos[0]["next_run_at"] == "2026-10-09T11:40:00Z" and "xoxb" not in json.dumps(autos), autos
 assert autos[0]["recent"][0]["summary"] == "posted with [masked]", autos[0]["recent"][0]
 # A long first line reaches the page whole: the table wraps it, nothing here cuts it.

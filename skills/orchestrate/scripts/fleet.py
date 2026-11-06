@@ -290,10 +290,14 @@ def recent_runs(automation_id):
         page = orca("automations", "runs", "--id", automation_id, "--limit", str(max(want - len(rows), AUTOMATION_RECENT)),
                     *(("--cursor", str(cursor)) if cursor else ()))
         rows += page.get("runs") or []
-        cursor = page.get("nextCursor")
-        if not cursor or (len(rows) >= want and rows[-1].get("createdAt") != rows[want - 1].get("createdAt")):
+        after = page.get("nextCursor")
+        if not after or (len(rows) >= want and rows[-1].get("createdAt") != rows[want - 1].get("createdAt")):
             return rows
-    return rows
+        if after == cursor:  # a row without createdAt makes Orca's cursor unreadable, and it serves the first page again
+            raise SourceError(f"automation {automation_id}: runs cursor did not advance")
+        cursor = after
+    # Cut short inside a tie group: the newest runNumber may be on a page not read, so say so instead of showing a wrong row.
+    raise SourceError(f"automation {automation_id}: runs history not read to the end of a createdAt tie in {4 * want} calls")
 
 
 def fetch_automations():
