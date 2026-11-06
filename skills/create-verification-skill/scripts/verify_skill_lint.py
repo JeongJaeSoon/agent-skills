@@ -29,7 +29,7 @@ SECRET_NAMES = (".env*", "*.env", "*secret*", "*credential*", "*token*", "*passw
 SCRIPT_SUFFIXES = (".sh", ".py")
 INTERPRETED_SUFFIXES = (".js", ".mjs", ".cjs", ".ts")  # run as `node x.mjs`, so no executable bit is required
 CLEANUP_WORDS = ("cleanup", "clean-up", "clean_up", "teardown")
-SHELL_ARG_GUARD = re.compile(r"\$\{1:\?|\$#\"?\s*-(?:lt|eq|ne|le)\b|-[zn]\s+\"?\$\{?1\b|\bset\s+-[a-z]*u[a-z]*\b[\s\S]*\$(?:1\b|\{1\})")
+SHELL_ARG_GUARD = re.compile(r"\$\{1:?\?|\$#\"?\s*-(?:lt|eq|ne|le)\b|-[zn]\s+\"?\$\{?1\b|\bset\s+-[a-z]*u[a-z]*\b[\s\S]*\$(?:1\b|\{1\})")
 SHELL_ARG_COPY = re.compile(r"\b(\w+)=\"?\$\{?1\b")
 PY_ADD_ARGUMENT = re.compile(r"add_argument\(([^)]*)\)")
 ARGV_USE = {"py": re.compile(r"sys\.argv\[1\]"), "js": re.compile(r"process\.argv\[2\]")}

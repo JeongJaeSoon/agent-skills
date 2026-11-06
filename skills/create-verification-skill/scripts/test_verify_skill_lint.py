@@ -228,6 +228,10 @@ class LintTest(unittest.TestCase):
         for text in (quoted, split):
             self.assertEqual(self.lint_rules_with("scripts/doctor.sh", text), (1, ["pattern-kill"]), text)
 
+    def test_unset_check_without_colon_is_a_required_argument(self):
+        text = '#!/usr/bin/env bash\nset -eu\nstate="${1?state file required}"\nsource "$state"\n'
+        self.assertEqual(self.lint_rules_with("scripts/cleanup.sh", text)[0], 0)
+
     def test_set_u_does_not_make_a_defaulted_argument_required(self):
         text = '#!/usr/bin/env bash\nset -euo pipefail\nstate="${1:-/tmp/verify/current.state}"\nsource "$state"\n'
         self.assertEqual(self.lint_rules_with("scripts/cleanup.sh", text), (1, ["cleanup-arg"]))
