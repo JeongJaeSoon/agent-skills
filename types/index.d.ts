@@ -11,7 +11,7 @@ export type BriefPaneView = {
 
 // The verdict of `orch handoff ready` (skills/orchestrate/scripts/handoff.py).
 export type ClearBandView = {
-  // An orchestrator or lead session past orchestrate.restart_at.
+  // An orchestrator session past orchestrate.restart_at; leads and role-less sessions never show it.
   show: boolean
   // Safe to /clear now: inbox empty, no question asked, no subagent running, handoff saved.
   ready: boolean
