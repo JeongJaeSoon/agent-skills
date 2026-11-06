@@ -102,6 +102,15 @@ assert bash("python3 -c \"import pathlib; pathlib.Path('/tmp/x').write_text('x')
 # a python heredoc is a command only where bash runs it; its stdout going to /dev/null changes nothing
 assert bash("cat <<'EOF'\npython3 - <<'PY'\nopen('a.py','w').write('x')\nPY\nEOF") == []
 assert bash("python3 - <<'PY' > /dev/null\nopen('a.py','w').write('x')\nPY") == EDIT
+assert bash("python3 -c \"open('a.py').read(); print('x', 'w')\"") == []  # a read; the 'w' belongs to print
+assert bash("python3 -c \"import os; open(os.path.join('d', 'a.py'), 'w').write('x')\"") == EDIT
+assert bash("sed -i '' 's/x/y/' /tmp/x") == [] and bash("sed -i '' s/x/y/ a.py") == EDIT  # BSD empty suffix
+slow = __import__("time").monotonic()
+assert bash("python3 -c " + __import__("shlex").quote("# open('a.py', '" + "w" * 100000 + "z')")) == []
+assert __import__("time").monotonic() - slow < 1.5  # no quadratic backtracking on a long literal
+# a `cd` in a subshell, a substitution or a pipeline leaves the rest where it was
+assert bash("(cd /tmp); echo x > a.py") == EDIT
+assert bash("echo \"$(cd /tmp)\"; echo x > a.py") == EDIT
 # a `cd` moves where a relative target lands
 assert bash("cd /tmp && echo x > a.py") == []
 assert bash(f"cd {TREE} && echo x > a.py", cwd=SCRATCH) == EDIT
@@ -202,6 +211,11 @@ sh("git", "commit", "-q", "-m", "code", cwd=TREE)
 assert bash("git commit -am fix") == PUSH  # -a takes the tracked change the index does not hold yet
 assert bash("git commit code.py -m fix") == PUSH  # so does a pathspec
 assert bash("git commit --dry-run -am fix") == []
+assert bash("git commit -m --dry-run -a") == PUSH  # `--dry-run` as a message is no flag
+assert bash("git commit -C HEAD -a") == PUSH  # `-C <commit>` after the verb is no directory
+transcript("find . -name test_x.py -exec python3 {} \\;")
+assert bash("git commit -am fix") == []  # a test did run
+transcript("ls")
 sh("git", "checkout", "-q", "--", "code.py", cwd=TREE)
 sh("git", "add", "notes.md", cwd=TREE)
 sh("git", "branch", "-q", "--set-upstream-to=main", cwd=TREE)

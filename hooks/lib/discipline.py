@@ -30,9 +30,12 @@ TEMP_ROOTS = ("/tmp", "/private/tmp", "/var/folders", "/private/var/folders")
 NULLS = ("/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty", "/dev/fd/")
 TEMP_VARS = ("$TMPDIR", "${TMPDIR}")
 WRITE_OPS = {">", ">>", ">|", "&>", "&>>"}
-MODE = r"""(?:mode\s*=\s*)?['"][rwxabt+]*[wax+][rwxabt+]*['"]"""
-# `open(path, "w")` with a path expression of any shape, and `Path(p).open("w")`.
-PYTHON_WRITE = re.compile(rf"""\.write_(?:text|bytes)\(|\bopen\([^\n]{{0,300}}?,\s*{MODE}|\.open\(\s*{MODE}""")
+# A file mode is at most four characters; the bound keeps a long quoted run from backtracking.
+MODE = r"""(?:mode\s*=\s*)?['"](?=[rwxabt+]{0,3}[wax+])[rwxabt+]{1,4}['"]"""
+PYTHON_MODE = re.compile(rf"""\s*{MODE}""")
+# `.write_text(`, `Path(p).open("w")`; `open(path, "w")` with a path expression of any shape is python_open_writes.
+PYTHON_WRITE = re.compile(rf"""\.write_(?:text|bytes)\(|\.open\(\s*{MODE}""")
+OPEN_SCAN = 400
 # A python command whose stdin is a heredoc: the delimiter, then the rest of its line (`> /dev/null`), then the body.
 PYTHON_HEREDOC = re.compile(
     r"""(?:^|[;&|(\s])(?P<py>python[\d.]*)[ \t]+(?:-[ \t]*)?<<-?[ \t]*(['"]?)(\w+)\2[^\n]*\n(.*?)\n[ \t]*\3[ \t]*(?:\n|$)""",
@@ -105,10 +108,10 @@ def git(cwd, *args):
 
 # ---- Bash ---------------------------------------------------------------------------------------------------------
 
-def write_targets(cmds, cwd):
+def write_targets(cmds, cwd, after_cd):
     """[(how, target)] of the file writes the commands make, scratch targets left out. target is None when the
     command writes a file this reader cannot name (a python snippet)."""
-    out, after_cd = [], cd_targets(cmds, cwd)
+    out = []
     for c in cmds:
         cwd = after_cd.get(id(c), cwd)
         for fd, op, target in c.redirects:
@@ -136,6 +139,8 @@ def sed_files(words):
     for x in words[1:]:
         if skip:
             skip = False
+        elif x == "":  # BSD `sed -i '' script file`: the empty backup suffix is no operand
+            continue
         elif x in SED_VALUE_OPTS:
             skip = scripted = True
         elif x.startswith(("--expression=", "--file=", "-e")):
@@ -145,10 +150,34 @@ def sed_files(words):
     return rest if scripted else rest[1:]
 
 
+def python_open_writes(code):
+    """Spans (start, end) of each `open(…, "w")` call: a mode string that is a top-level argument after a comma. The
+    scan of one call is bounded, follows quotes and parentheses, and stops at the call's closing parenthesis."""
+    for m in re.finditer(r"\bopen\(", code):
+        depth, i, quote, end = 1, m.end(), None, min(len(code), m.end() + OPEN_SCAN)
+        while i < end and depth:
+            c = code[i]
+            if quote:
+                quote = None if c == quote else quote
+                i += 2 if c == "\\" else 1
+                continue
+            if c in "'\"":
+                quote = c
+            elif c in "([{":
+                depth += 1
+            elif c in ")]}":
+                depth -= 1
+            elif c == "," and depth == 1 and PYTHON_MODE.match(code, i + 1):
+                yield m.start(), i + 1
+                break
+            i += 1
+
+
 def python_writes(code):
     """True when the python source opens a file for writing, a temp path (the nearest literal) left out."""
-    for m in PYTHON_WRITE.finditer(code):
-        window = code[max(0, m.start() - 120):m.end() + 120]
+    spans = [(m.start(), m.end()) for m in PYTHON_WRITE.finditer(code)] + list(python_open_writes(code))
+    for start, stop in spans:
+        window = code[max(0, start - 120):stop + 120]
         if not any(f"{q}{r}" in window for r in TEMP_ROOTS for q in "'\""):
             return True
     return False
@@ -162,12 +191,17 @@ def python_heredocs(cmd):
             if masked[m.start("py"):m.end("py")] == m.group("py") and python_writes(m.group(4))]
 
 
-def cd_targets(cmds, cwd):
-    """id(command) -> the directory it runs in, following the `cd <dir>` commands before it in a call."""
+def cd_targets(cmds, cwd, cmd):
+    """id(command) -> the directory it runs in, following the `cd <dir>` commands before it in a call. Only a `cd` of the
+    call's own shell counts: one in a `( … )` subshell, a `$(…)` or a pipeline leaves the rest where it was."""
     out, here = {}, cwd
+    nested = {id(c) for c in cmds if any(o is not c and o.span[0] <= c.span[0] and c.span[1] <= o.span[1]
+                                         and o.span != c.span for o in cmds)}
     for c in sorted(cmds, key=lambda c: c.span[0]):
         out[id(c)] = here
-        if c.name == "cd" and len(c.words) == 2 and c.words[1] != "-" and not c.words[1].startswith(("$", "-")):
+        before = cmd[:c.span[0]].rstrip()
+        if c.name == "cd" and len(c.words) == 2 and c.words[1] != "-" and not c.words[1].startswith(("$", "-")) \
+                and id(c) not in nested and not (c.piped_from or c.piped_to) and not before.endswith("("):
             here = resolve(c.words[1], here)
     return out
 
@@ -208,7 +242,7 @@ def mutating(c):
 
 BUDGET_S = 2.0
 # A command that mentions a test but runs none.
-NOT_A_RUN = {"echo", "printf", "git", "grep", "rg", "cat", "head", "tail", "ls", "sed", "awk", "find", "wc"}
+NOT_A_RUN = {"echo", "printf", "git", "grep", "rg", "cat", "head", "tail", "ls", "sed", "awk", "wc"}
 
 
 def history(transcript, current_id):
@@ -247,11 +281,19 @@ def pushed(past):
 
 
 def git_cwd(words, cwd):
-    """The directory `git -C dir …` works in, else cwd."""
-    for i, w in enumerate(words[:-1]):
-        if w == "-C":
-            return resolve(words[i + 1], cwd)
+    """The directory `git -C dir verb …` works in, else cwd: a `-C` after the verb (`commit -C <commit>`) is the
+    verb's own."""
+    i = 1
+    while i < len(words) and (words[i] in GIT_OPTS or words[i].startswith("-")):
+        if words[i] == "-C" and i + 1 < len(words):
+            cwd = resolve(words[i + 1], cwd)
+        i += 2 if words[i] in GIT_OPTS else 1
     return cwd
+
+
+def flag_given(words, flag):
+    """The word is an option of its own, not the value of `-m` and the like."""
+    return any(w == flag and (i == 0 or words[i - 1] not in COMMIT_VALUE_OPTS) for i, w in enumerate(words))
 
 
 COMMIT_VALUE_OPTS = {"-m", "-F", "-C", "-c", "-t", "--message", "--file", "--author", "--date", "--template",
@@ -291,7 +333,8 @@ def pre_push(cmds, event, after_cd):
     transcript, past = event.get("transcript_path"), None
     for c in cmds:
         verb, w = git_verb(c.words), c.words
-        if verb not in ("rebase", "push", "commit") or "--dry-run" in w or verb == "push" and "-n" in w:
+        if verb not in ("rebase", "push", "commit") or flag_given(w, "--dry-run") \
+                or verb == "push" and flag_given(w, "-n"):
             continue
         cwd = git_cwd(w, after_cd.get(id(c), event.get("cwd")))
         if verb == "rebase":
@@ -323,7 +366,8 @@ def check_bash(cmd, event, s, cfg):
         return []
     cwd, found = event.get("cwd"), []
     cmds = shell.commands(cmd)
-    writes = write_targets(cmds, cwd) + python_heredocs(cmd)
+    after_cd = cd_targets(cmds, cwd, cmd)
+    writes = write_targets(cmds, cwd, after_cd) + python_heredocs(cmd)
     if writes:
         how = writes[0][0]
         found += fire(cfg, event, "worker.edit_tool",
@@ -336,7 +380,7 @@ def check_bash(cmd, event, s, cfg):
                       "own call, so a refusal names it and does not take the others with it.")
     if any(t and MEMORY.search(t) for _, t in writes):
         found += fire(cfg, event, "worker.memory", MEMORY_REASON)
-    if reason := pre_push(cmds, event, cd_targets(cmds, cwd)):
+    if reason := pre_push(cmds, event, after_cd):
         found += fire(cfg, event, "worker.pre_push", reason)
     return found
 
