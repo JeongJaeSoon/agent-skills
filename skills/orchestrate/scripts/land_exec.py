@@ -364,11 +364,13 @@ def auto_decisions(ex, say=lambda msg: None):
             known = {slug: (p, ev) for slug, p, ev in programs if pr in prog.pr_state(ev)}
             slug = next(iter(known)) if len(known) == 1 else None
             p, events = known[slug] if slug else (None, [])
+            # The request names the repo as the owning program records it: the executor compares that spelling exactly.
+            rrepo = p.cfg["repo"] if p else repo
             st = prog.pr_state(events).get(pr, {})
             verdict = st.get("verdict")
             c = {"owners": list(known), "programs_unread": unread,
                  "owner_autonomous": bool(p and p.cfg.get("merge_policy") == "autonomous"),
-                 "requested": bool(p) and store.land_seen(slug, str(p.dir.parent.resolve()), repo, pr, head),
+                 "requested": bool(p) and store.land_seen(slug, str(p.dir.parent.resolve()), rrepo, pr, head),
                  "withdrawn": autoqueue.withdrawn(events, pr), "main_red": bool(p) and prog.main_state(events) == "red",
                  "verdict_problem": prog.executor_verdict_problem(verdict, head, ex["verdict_sources"]),
                  "facts": {"state": "OPEN", "draft": bool(r.get("isDraft")), "merge_state": r.get("mergeStateStatus"),
@@ -389,7 +391,7 @@ def auto_decisions(ex, say=lambda msg: None):
                 ok, why = autoqueue.decide(c, late)
             except SystemExit as e:
                 ok, why = False, [f"GitHub did not answer: {str(e.code)[:120]}"]
-            out.append((repo, r, (slug, p) if slug else None, ok, why))
+            out.append((rrepo, r, (slug, p) if slug else None, ok, why))
     return out
 
 

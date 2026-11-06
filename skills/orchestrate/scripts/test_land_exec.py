@@ -1620,6 +1620,15 @@ class AutoQueue(Fixture):
         found = {s for s, _, _ in land_exec.programs_on("o/r")[0]}
         self.assertLessEqual({self.slug, other}, found)
 
+    def test_the_request_carries_the_owning_programs_spelling(self):
+        # The program that sorts first records O/R and owns no PR; the owner of the PR records o/r.
+        other = f"0-{self.slug}"
+        subprocess.run([sys.executable, HERE / "prog.py", "init", other, "--repo", "O/R", "--run", "run_y"],
+                       check=True, capture_output=True)
+        self.addCleanup(shutil.rmtree, prog.HOME / other, True)
+        self.auto()
+        self.assertEqual([r["repo"] for r in self.mine()], ["o/r"])
+
     def test_the_programs_spelling_wins_over_a_differently_cased_entry(self):
         config(repos=["O/R", "o/*"], auto_queue={"mode": "on"})
         self.auto()
