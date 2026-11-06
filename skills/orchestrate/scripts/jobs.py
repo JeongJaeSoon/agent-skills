@@ -83,11 +83,11 @@ def short(seconds):
 
 
 def sync_job():
-    """skills-sync (scripts/sync.py under launchd) writes sync.json each pass."""
+    """skills-sync (scripts/sync.py) writes sync.json each pass. The page uses it only when Orca has no run to show."""
     s = fleet.read_json(fleet.state_dir().parent / "sync.json")
     every = (s or {}).get("interval") or 900
-    job = {"key": "skills-sync", "name": "Skills sync", "every": short(every), "cadence": f"every {every // 60}m",
-           "runs_in": "launchd", "record": None}
+    job = {"key": "sync", "name": "Skills sync", "every": short(every), "cadence": f"every {every // 60}m",
+           "runs_in": "orca", "record": None}
     if isinstance(s, dict) and (at := fleet.parse(s.get("at"))) and at.tzinfo:
         at = at.astimezone(dt.timezone.utc)  # sync.py writes local time with its offset
         ok, msg = s.get("ok") is not False, fleet.mask(s.get("message"))
@@ -97,8 +97,9 @@ def sync_job():
 
 
 def reap_hard_job():
-    """reap-hard (scripts/reap_hard.py under launchd) writes its last pass; read through it, as board.reap_line does."""
-    job = {"key": "reap-hard", "name": "reap-hard", "every": None, "cadence": None, "runs_in": "launchd", "record": None,
+    """reap-hard (scripts/reap_hard.py) writes its last pass; read through it, as board.reap_line does. The page uses it
+    only when Orca has no run to show."""
+    job = {"key": "reap-hard", "name": "reap-hard", "every": None, "cadence": None, "runs_in": "orca", "record": None,
            "why": "No reap_hard.py beside this install (it ships with the repository's scripts/)."}
     try:
         if (scripts := str(pathlib.Path(__file__).resolve().parents[3] / "scripts")) not in sys.path:  # each poll
@@ -108,7 +109,7 @@ def reap_hard_job():
         return job
     every = reap_hard.config()["interval"]
     job.update(every=short(every), cadence=f"every {every // 60}m",
-               why="No pass recorded in this store: its launchd agent is not installed here, or has not finished a pass yet.")
+               why="No pass recorded in this store: the job is not set up here, or has not finished a pass yet.")
     s = reap_hard.read_last()
     if isinstance(s, dict) and isinstance(s.get("t"), (int, float)):
         at = dt.datetime.fromtimestamp(s["t"], dt.timezone.utc)
@@ -135,16 +136,70 @@ def rules():
     ]
 
 
-def snapshot(registry):
-    """The Automations page's jobs and rules. registry: (key, name, every, cadence, group) for each of orch-dash's own
-    jobs, group the key of the job whose run this one rides on (dash.JOBS)."""
+def registry():
+    """The automations the page lists: scripts/automations.py AUTOMATIONS, the one list `skills-sync setup` installs
+    from. Only its attributes are read; status() would call Orca. job_name is the Orca automation's name, None for a
+    LaunchAgent. Raises ImportError where the repository's scripts/ does not sit beside this install."""
+    if (scripts := str(pathlib.Path(__file__).resolve().parents[3] / "scripts")) not in sys.path:
+        sys.path.insert(0, scripts)
+    import automations
+    return [{"key": a.name, "job_name": getattr(a, "job_name", None) or None, "default": a.default, "what": a.what}
+            for a in automations.AUTOMATIONS]
+
+
+def patrol_job():
+    """`orch patrol` has no schedule of its own: a reap-hard pass starts it, and it leaves patrol-verdicts.json."""
+    job = {"key": "patrol", "name": "Session patrol", "every": None, "cadence": "started by reap-hard, every other pass",
+           "group": None, "runs_in": "reap-hard", "record": None, "why": "No round recorded in this store yet."}
+    v = fleet.read_json(fleet.state_dir().parent / "patrol-verdicts.json")
+    if isinstance(v, dict) and isinstance(v.get("t"), (int, float)):
+        at = dt.datetime.fromtimestamp(v["t"], dt.timezone.utc)
+        src = v.get("sources") if isinstance(v.get("sources"), dict) else {}
+        bad = sorted(f"{k}: {s}" for k, s in src.items() if s in ("timeout", "failed"))  # a source or phase that gave up
+        count = lambda k: len(v[k]) if isinstance(v.get(k), list) else 0
+        job["record"] = {"at": fleet.iso(at), "ok": not bad, "n": None, "next_at": None,
+                         "result": None if bad else f"{count('alerts')} alerts · {count('reports')} reports",
+                         "error": fleet.mask(f"the round was cut short ({', '.join(bad)})") if bad else None}
+    return job
+
+
+def own_jobs(reg):
     recs = records()
-    jobs = [{"key": k, "name": name, "every": every, "cadence": cadence, "group": group, "runs_in": "orch-dash",
-             "record": recs.get(k)} for k, name, every, cadence, group in registry]
-    for key, read in (("skills-sync", sync_job), ("reap-hard", reap_hard_job)):
-        try:
-            jobs.append(read())
-        except Exception as e:  # one unreadable record is that row's error, not the page's
-            jobs.append({"key": key, "name": key, "every": None, "cadence": None, "runs_in": "launchd", "record": None,
-                         "error": fleet.mask(repr(e))})
-    return {"jobs": jobs, "rules": rules()}  # no timestamp: the page's ETag holds while nothing ran
+    return [{"key": k, "name": name, "every": every, "cadence": cadence, "group": group, "runs_in": "orch-dash",
+             "record": recs.get(k)} for k, name, every, cadence, group in reg]
+
+
+def automation_list(reg, orca, own, stand_in=None):
+    """One row per registry name, in registry order, and no other: what Orca says about the automation (None when
+    it is not registered there, or when Orca could not be read: `registered` is then None), the jobs that run inside
+    it, and `record`, a stand-in from the job's own file for when Orca has no run to show. A name Orca lists that the
+    registry lacks is not here."""
+    by_name = {a.get("name"): a for a in orca or []}
+    stand_in = stand_in or {}
+    rows = []
+    for r in reg:
+        a = by_name.get(r["job_name"]) if r["job_name"] else None
+        kids = {"orch-dash": own, "reap-hard": [patrol_job()]}.get(r["key"], [])
+        registered = None if not r["job_name"] or orca is None else a is not None
+        rows.append({**r, "orca": a, "registered": registered, "record": stand_in.get(r["key"]), "jobs": kids})
+    return rows
+
+
+def snapshot(reg, orca=None):
+    """The Automations page. reg: (key, name, every, cadence, group) for each of orch-dash's own jobs, group the key
+    of the job whose run this one rides on (dash.JOBS). orca: the Orca automations of the last good collect, or None
+    when it could not be read."""
+    own = own_jobs(reg)
+    out = {"rules": rules()}  # no timestamp: the page's ETag holds while nothing ran
+    try:
+        stand_in = {}
+        for key, read in (("sync", sync_job), ("reap-hard", reap_hard_job)):
+            try:
+                j = read()
+                stand_in[key] = j["record"]
+            except Exception as e:  # one unreadable file is that row's error, not the page's
+                stand_in[key] = {"at": None, "ok": False, "n": None, "result": None, "next_at": None, "error": fleet.mask(repr(e))}
+        out["automations"] = automation_list(registry(), orca, own, stand_in)
+    except ImportError as e:
+        out["automations"], out["error"] = None, fleet.mask(f"scripts/automations.py not readable: {e}")
+    return out

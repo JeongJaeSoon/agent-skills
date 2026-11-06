@@ -1401,6 +1401,43 @@ def skills_version(root):
     return (git("rev-parse", "--short", base) if base else head) + "+local"
 
 
+STANDALONE_RUN = "standalone"  # a standalone card has no Orca Run; Run lookups on it answer empty
+
+
+def standalone_program(argv):
+    """The `<name>-standalone` program of the repo `orch land --repo OWNER/NAME` names, created when missing.
+
+    Only where the land executor lists the repo: elsewhere a standalone card merges itself and needs no program.
+    """
+    repo = opt(argv, "--repo")
+    slug = f"{repo.split('/')[-1]}-standalone" if repo and "/" in repo else None
+    if slug != argv[0]:
+        sys.exit(f"no program '{argv[0]}'; a standalone PR lands as `orch land <name>-standalone --repo OWNER/NAME`")
+    if not land_executor(repo):
+        sys.exit(f"no program '{slug}', and orchestrate.land_executor is off for {repo}: a standalone card merges its own PR")
+    d = HOME / slug
+    cfg = {"slug": slug, "repo": repo, "run": opt(argv, "--run", STANDALONE_RUN), "tracker": {}, "predicate": [],
+           "merge_policy": "autonomous", "ceiling": 6, "deadline": None, "created_at": now(),
+           "skills_commit": skills_version(pathlib.Path(__file__).resolve().parents[3]), "note": "standalone cards",
+           "final_check": None}
+    try:
+        write_program(d, cfg, cfg["run"], "autonomous")
+        print(f"created standing program {slug} for {repo} (merge_policy autonomous)")
+    except FileExistsError:  # another card created it between the check and here
+        pass
+
+
+def standalone_target(argv):
+    """The Program for argv[0], created first when `--repo` is given and it is missing. A program that exists must
+    belong to that repo: `--repo` is what the executor setting was checked against."""
+    if "--repo" in argv and not (HOME / argv[0] / "program.json").exists():
+        standalone_program(argv)
+    p = Program(argv[0])
+    if "--repo" in argv and p.cfg["repo"] != opt(argv, "--repo"):
+        sys.exit(f"program '{argv[0]}' is for {p.cfg['repo']}, not {opt(argv, '--repo')}")
+    return p
+
+
 def cmd_init(argv):
     slug = argv[0]
     d = HOME / slug
@@ -1424,9 +1461,19 @@ def cmd_init(argv):
         "deadline": opt(argv, "--deadline"), "created_at": now(), "skills_commit": skills_commit,
         "note": opt(argv, "--note"), "final_check": opt(argv, "--final-check"),
     }
+    try:
+        write_program(d, cfg, run_id, policy)
+    except FileExistsError:  # a standalone `orch land` created it after the check above
+        sys.exit(f"{d}/program.json exists; programs are resumed, not re-initialised")
+    print(f"initialised {d}")
+    print("\n".join(dashboard_lines(slug)))
+
+
+def write_program(d, cfg, run_id, policy):
+    """Create program.json for cmd_init and standalone_program; FileExistsError when another caller got there first."""
     me = os.environ.get("ORCA_TERMINAL_HANDLE")
     try:
-        mine = own_worker(all_workers(run_id), me) if me else None
+        mine = own_worker(all_workers(run_id), me) if me and run_id != STANDALONE_RUN else None
     except SystemExit as e:  # guessing "coordinating lead" would scope a worker lead's program to the whole Run
         sys.exit(f"orch init: could not list {run_id}'s workers to tell whether this terminal is a dispatched lead"
                  f" ({e}). Retry when `orca orchestration worker-list --run {run_id}` answers.")
@@ -1441,9 +1488,13 @@ def cmd_init(argv):
         print(f"lead is dispatch {cfg['lead_dispatch']} on {run_id}: `orch wait` reads its own mailbox; start units "
               "with worker-start --spec (Orca refuses a worker's task-create and gate-create on this Run)")
     (d / "briefs").mkdir(parents=True, exist_ok=True)
-    (d / "program.json").write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
-    print(f"initialised {d}")
-    print("\n".join(dashboard_lines(slug)))
+    # A reader must never see a half-written file: write whole, then link it into place (link fails if one exists).
+    tmp = d / f"program.json.{os.getpid()}.tmp"
+    tmp.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
+    try:
+        os.link(tmp, d / "program.json")
+    finally:
+        tmp.unlink()
 
 
 STALL_TEXT = {
@@ -1979,7 +2030,7 @@ def cmd_set(argv):
 
 
 def cmd_verdict(argv):
-    p = Program(argv[0])
+    p = standalone_target(argv)
     pr, sha, src = int(opt(argv, "--pr")), opt(argv, "--sha"), opt(argv, "--source")
     if not src or not sha:
         sys.exit("verdict needs --sha (the head that was reviewed) and --source (who reviewed: independent-review, "
@@ -2584,7 +2635,7 @@ def land_request(p, pr, klass, argv):
 
 
 def cmd_land(argv):
-    p = Program(argv[0])
+    p = standalone_target(argv)
     pr, klass = int(opt(argv, "--pr")), opt(argv, "--class")
     if klass and klass not in KLASS:
         sys.exit(f"--class is one of {', '.join(KLASS)}")

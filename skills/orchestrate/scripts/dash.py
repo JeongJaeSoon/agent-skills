@@ -1922,7 +1922,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send_cached(f.read_bytes())
         if path == "/api/fleet/jobs":
             # Read on every poll, not folded into state.json: a tick that fails never rewrites state.json.
-            return self.send_cached(json.dumps(jobs.snapshot(JOBS), ensure_ascii=False).encode())
+            # The Orca list is the last good collect's: a failed collect keeps the previous one, which the page dates.
+            ok = FLEET.sources.get("automations", {}).get("updated_at") is not None
+            return self.send_cached(json.dumps(jobs.snapshot(JOBS, FLEET.automations if ok else None), ensure_ascii=False).encode())
         if path == "/api/fleet/pressure":
             hours = re.search(r"[?&]hours=(\d{1,2})\b", self.path)
             return self.send_cached(json.dumps(pressure_report(int(hours.group(1)) if hours else 6), ensure_ascii=False).encode())
@@ -2172,7 +2174,7 @@ def code_files():
     # Every module the server may import, lazily too, from beside it and the two other places board.py and fleet.py
     # reach: one left out would not restart it.
     near = [*HERE.glob("*.py"), HERE.parents[1] / "brief" / "scripts" / "table_width.py",
-            *(HERE.parents[2] / "scripts" / n for n in ("sync.py", "reap_hard.py", "skill_tokens.py"))]
+            *(HERE.parents[2] / "scripts" / n for n in ("sync.py", "reap_hard.py", "skill_tokens.py", "automations.py"))]
     return (*sorted(f for f in near if f.exists() and not f.name.startswith("test_")), *sorted(ASSETS.glob("*")))
 
 
