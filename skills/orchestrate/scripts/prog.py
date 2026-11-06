@@ -101,7 +101,7 @@ Usage: orch <command> <slug> [options]
                                      one-line proposal per setting to change, and this terminal's Run
                                      (orca_settings.py)
   model lead|worker                  no slug: the role's model from orchestrate.models; prints nothing when unset
-  decide add --title T [--body-file F] --option "label::description"... --recommend N [--link URL]
+  decide add --title T [--body-file F] --option "label::description"... --recommend N [--link URL] [--order oN]
              --if-no-answer <the --recommend label | 진행 못 함> --reason <owner-asked | hard-after-review | owner-hands-only>
                                      the owner-ask gate (references/owner-ask-gate.md): the recommended option
                                      has its reason, and the last two lead the body
@@ -167,9 +167,11 @@ Usage: orch <command> <slug> [options]
                                      link the row to it by that id, which a terminal restart does not change.
                                      A row linked to a card takes neither --pr nor another --worktree: Orca
                                      knows them. lead add refuses a lead Orca knows; board set links a row
-  board drop <id> | doing add <title> --owner W --next E [--waiting] [--force --why T] | doing drop <n>
-        | later add <title> --trigger T [--due D] [--who W] [--at N] | later move <n> --to N | later drop <n>
-        | todo add <title> (--due D | --after C) --who W | todo drop <n> | todo from-later <n> [--due D] --who W
+  board drop <id> | doing add <title> --owner W --next E [--waiting] [--force --why T] [--order oN] | doing drop <n>
+        | later add <title> --trigger T [--due D] [--who W] [--at N] [--order oN] | later move <n> --to N | later drop <n>
+        | todo add <title> (--due D | --after C) --who W [--order oN] | todo drop <n> | todo from-later <n> [--due D] --who W
+          --order oN (on the three adds): the new item carries the owner's order oN (orch order); an unknown or closed
+          oN adds nothing
         | todo list [--telegram] [--json] [--now ISO8601] [--no-refresh] | now [LINE]... | show
   board open [--json] | done <id>... [--why T] [--json] | reopen <id>... [--json] | tidy [--dry-run] [--json] | closed
                                      close what is over (tidy.py): open lists what can be closed now (a row,
@@ -3824,9 +3826,19 @@ def cmd_decide(argv):
             # the report appends it, and a long body loses its end, not them.
             text = (pathlib.Path(body).read_text() if body else "").strip()
             text = board.ask_line(default, reason) + (f"\n\n{text}" if text else "")
+            order = opt(rest, "--order")
+            if order:  # before the decision exists: a mistyped oN adds nothing
+                store.order_get(order, require_open=True)
             d = fleet.decision_add(opt(rest, "--title"), text, options,
                                    int(rec) if rec else None, opt(rest, "--link"), os.environ.get("ORCA_TERMINAL_HANDLE"))
             print(d["id"])
+            if order:
+                try:
+                    store.order_link(order, f"decision:{d['id']}", os.environ.get("ORCA_TERMINAL_HANDLE"))
+                    print(f"{order} linked decision:{d['id']}")
+                except (ValueError, store.NotMigrated) as e:
+                    sys.exit(f"{d['id']} was added but not linked to {order} ({e}); link it with "
+                             f"orch order link {order} --unit decision:{d['id']}")
         elif sub == "list":
             for d in fleet.open_decisions():
                 print(f"{d['id']}  {d['created_at']}  {d['title']}")
@@ -3863,7 +3875,7 @@ def cmd_decide(argv):
             print(f"{d['id']} checked {d['checked_at']}")
         else:
             sys.exit("usage: orch decide add --title T [--body-file F] --option 'label::description'... --recommend N "
-                     "[--link URL] --if-no-answer LABEL|'진행 못 함' --reason TAG | list | show <id> | answer <id>|--title T --quote TEXT|--quote-file F [--by SESSION] | "
+                     "[--link URL] [--order oN] --if-no-answer LABEL|'진행 못 함' --reason TAG | list | show <id> | answer <id>|--title T --quote TEXT|--quote-file F [--by SESSION] | "
                      "done <id> [--answer TEXT] | drop <id> | keep <id>")
     except store.NotMigrated as e:
         sys.exit(f"decisions are not in {store.DB_NAME} yet ({e})")
@@ -3929,6 +3941,12 @@ def cmd_stage(argv):
         sys.exit(str(e))
 
 
+def say_linked(order, item):
+    """The line `--order` adds to a board add: the item now carries the order."""
+    if order and item:
+        print(f"{order} linked board:{item['id']}")
+
+
 def cmd_board(argv):
     import board, store, tidy
     sub, rest = argv[0], argv[1:]
@@ -3953,17 +3971,20 @@ def cmd_board(argv):
             for g in sorted(board.read()["groups"].values(), key=lambda g: (g["priority"].split(":", 1)[0].zfill(3), g["match"])):
                 print(f"{g['match']}  {g['priority']}")
         elif sub == "doing" and rest[:1] == ["add"] and len(rest) > 1:
-            board.doing_add(rest[1], opt(rest, "--owner"), opt(rest, "--next"), "--waiting" in rest, "--force" in rest, opt(rest, "--why"))
+            say_linked(opt(rest, "--order"), board.doing_add(rest[1], opt(rest, "--owner"), opt(rest, "--next"), "--waiting" in rest,
+                                                              "--force" in rest, opt(rest, "--why"), opt(rest, "--order")))
         elif sub == "doing" and rest[:1] == ["drop"] and len(rest) > 1:
             board.doing_drop(int(rest[1]))
         elif sub == "later" and rest[:1] == ["add"] and len(rest) > 1:
-            board.later_add(rest[1], opt(rest, "--trigger"), opt(rest, "--due"), opt(rest, "--who"), opt(rest, "--at"))
+            say_linked(opt(rest, "--order"), board.later_add(rest[1], opt(rest, "--trigger"), opt(rest, "--due"), opt(rest, "--who"),
+                                                              opt(rest, "--at"), opt(rest, "--order")))
         elif sub == "later" and rest[:1] == ["move"] and "".join(rest[1:2]).isdigit():
             board.later_move(int(rest[1]), opt(rest, "--to"))
         elif sub == "later" and rest[:1] == ["drop"] and len(rest) > 1:
             board.later_drop(int(rest[1]))
         elif sub == "todo" and rest[:1] == ["add"] and len(rest) > 1:
-            board.todo_add(rest[1], opt(rest, "--due"), opt(rest, "--after"), opt(rest, "--who"))
+            say_linked(opt(rest, "--order"), board.todo_add(rest[1], opt(rest, "--due"), opt(rest, "--after"), opt(rest, "--who"),
+                                                             opt(rest, "--order")))
         elif sub == "todo" and rest[:1] == ["drop"] and "".join(rest[1:2]).isdigit():
             board.todo_drop(int(rest[1]))
         elif sub == "todo" and rest[:1] == ["from-later"] and "".join(rest[1:2]).isdigit():
@@ -4017,8 +4038,8 @@ def cmd_board(argv):
         else:
             sys.exit("usage: orch board lead add <name> --handle H --repo R [--program P] [--run RUN] [--stale-min N] [--worktree ID] | "
                      "lead close <name> | set <id> [--kind K] [--title T] [--repo R] [--program P] [--parent ID] [--status S] "
-                     "[--progress N/M] [--next T] [--owner W|-] [--after owner/repo#N|-] [--pr owner/repo#N] [--worktree ID] [--priority RANK:NAME|-] | drop <id> | priority set|drop|list | doing add <title> --owner W --next E [--waiting] [--force --why T] | doing drop <n> | later add <title> --trigger T [--due D] | "
-                     "later drop <n> | todo add <title> (--due D | --after C) --who W | todo drop <n> | todo from-later <n> [--due D] --who W | "
+                     "[--progress N/M] [--next T] [--owner W|-] [--after owner/repo#N|-] [--pr owner/repo#N] [--worktree ID] [--priority RANK:NAME|-] | drop <id> | priority set|drop|list | doing add <title> --owner W --next E [--waiting] [--force --why T] [--order oN] | doing drop <n> | later add <title> --trigger T [--due D] [--order oN] | "
+                     "later drop <n> | todo add <title> (--due D | --after C) --who W [--order oN] | todo drop <n> | todo from-later <n> [--due D] --who W | "
                      "now [LINE]... | show | open [--json] | done <id>... [--why T] [--json] | reopen <id>... [--json] | "
                      "tidy [--dry-run] [--json] | closed")
     except store.NotMigrated as e:

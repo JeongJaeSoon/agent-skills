@@ -208,7 +208,7 @@ STORES = [
           ("store:change_decisions", "store:_fill_decisions", "store:_next_b", "store:_fill_board", "store:restore",
            "store:order_add"), ("fleet",),
           rule="the next d<N>, b<N> and o<N>; never reused"),
-    Store("order", "db:order_.status", {"order.item": CANONICAL}, ("store:order_add", "store:order_close"),
+    Store("order", "db:order_.status", {"order.item": CANONICAL}, ("store:order_add", "store:order_close", "store:order_reopen", "store:order_links_complete"),
           ("brief",), rule="the owner's instructions and feedback (`orch order`, step 5a-order); closed ones stay"),
     Store("orderlink", "db:order_link.unit", {"order.link": CANONICAL}, ("store:order_link",), ("brief",),
           rule="which card, agent, board item, decision or PR carries an order; it outlives the unit"),
