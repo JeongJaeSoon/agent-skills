@@ -119,7 +119,8 @@ Usage: orch <command> <slug> [options]
                                      prints that line again. Decisions live in agent-skills.db, or in
                                      decisions.json while no DB file exists; a DB not imported yet stops with that
   order setup | add TEXT [--kind order|feedback] [--source S] [--owner-action] | link oN --unit UNIT [--stand-in]
-        | done oN | drop oN | list [--status S] [--json] | import FILE [--skip REGEX] [--dry-run | --check]
+        | done oN | drop oN | reopen oN | links-complete oN [--undo] | shadow | list [--status S] [--json]
+        | import FILE [--skip REGEX] [--dry-run | --check]
                                      no slug: the owner's instructions (order.py). Write one before you delegate or
                                      start it; link it to the card, agent, board item, decision or PR that carries it
                                      (UNIT: card:<worktree> | agent:<id> | board:<bN> | decision:<dN> | pr:<owner/repo#n>).
@@ -127,7 +128,11 @@ Usage: orch <command> <slug> [options]
                                      (10) as 연결 없는 오너 지시. setup runs once per PC; import takes a hand list
                                      once per line (the original is only read; --check lists what is not taken yet).
                                      --stand-in links a unit that only stands for the order, such as the temporary
-                                     to-do an import replaced: it never counts as carrying or resolving the order
+                                     to-do an import replaced: it never counts as carrying or resolving the order.
+                                     links-complete is the receiving session's word that every unit is linked; only
+                                     such an order can be closed by tidy, which records a would_close event until
+                                     orchestrate.order_auto_close is true. shadow sets those events against what the
+                                     sessions closed by hand
   db import [--dry-run | --apply] [--rehearsal] | export --legacy --target 4a|pre-4a DIR | dump [TABLE]
   db backup FILE | restore FILE [--rehearsal] | rollback 4b DIR [--rehearsal] | cutover-plan 4a|4b
   db migrate [--check] | init        migrate is the whole cutover in one rerunnable command, run by the owner from a
