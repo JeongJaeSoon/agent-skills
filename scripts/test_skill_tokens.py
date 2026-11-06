@@ -168,6 +168,16 @@ with contextlib.redirect_stdout(out):
     assert st.main(["budget", "--root", str(root)]) == 1
 assert "other: listing width" in out.getvalue(), out.getvalue()
 assert "rerun `budget --write`" in st.budget_over(st.budget_snapshot(st.measure(root)), {**saved_budget, "approx": "x"})[0]
+shutil.rmtree(root / "skills/gamma")
+write(root, "skills/other/SKILL.md", "---\nname: other\ndescription: Other\n---\nb\n")
+shutil.rmtree(root / "skills/beta")  # a skill merged away, and the rest back to their size: nothing to report
+assert st.budget_over(st.budget_snapshot(st.measure(root)), saved_budget) == []
+st.budget_file(root).unlink()
+try:
+    st.main(["budget", "--root", str(root)])
+    raise AssertionError("budget ran without a baseline")
+except SystemExit as e:
+    assert "`budget --write` creates it" in str(e), e
 
 # --exact needs a key and never falls back to the approximation.
 saved = os.environ.pop("ANTHROPIC_API_KEY", None)
