@@ -942,6 +942,12 @@ def author_action(s, cfg):
             "channel": thread.split(":")[0] if thread else None}
 
 
+def ask_key(pr, who):
+    """How decide() matches a send-log row to a PR and a person. GitHub's nameWithOwner, a hand-written row and the
+    DB's lower-cased key differ in case, and logins are case-insensitive, so both sides pass through here."""
+    return pr.lower(), who.lower()
+
+
 def decide(states, sendlog, now, cfg, authors=()):
     """The actions due now, from PR states, the send-log and the clock; pure, so each reminder rule is a test.
 
@@ -962,14 +968,14 @@ def decide(states, sendlog, now, cfg, authors=()):
     assign_reviewers is on."""
     acts, held, bots, by = [], {}, review_bots(cfg), {}
     for r in sendlog:
-        by.setdefault((r["pr"], r["reviewer"]), []).append(r)
-    scheduled = {r["reviewer"] for r in sendlog
+        by.setdefault(ask_key(r["pr"], r["reviewer"]), []).append(r)
+    scheduled = {r["reviewer"].lower() for r in sendlog
                  if r["action"] == "request" and r["source"] == "scheduled" and (r.get("post_at") or 0) > now}
     for s in states:
         c = repo_cfg(cfg, s["repo"])
         hold, at = slack_timing(now, c)
         for who in ([] if hold else s["pending"] + s["stale_approvals"]):
-            mine = by.get((s["pr"], who), [])
+            mine = by.get(ask_key(s["pr"], who), [])
             if not slack_id(who, cfg) or any(r["source"] == "refused" for r in mine):
                 continue
             skip = {r["action"] for r in mine if r["source"] == "skipped" and r["head"] == s["head"]}
@@ -990,16 +996,16 @@ def decide(states, sendlog, now, cfg, authors=()):
                     acts.append(wait_action("remind", s, who, c, at, thread))
         for bot in s["bot_stale"]:
             comment = bots.get(bot_name(bot))
-            if comment and not any(r["head"] == s["head"] or r["source"] == "refused" for r in by.get((s["pr"], bot), [])):
+            if comment and not any(r["head"] == s["head"] or r["source"] == "refused" for r in by.get(ask_key(s["pr"], bot), [])):
                 acts.append(wait_action("retrigger", s, bot, c, None, comment=comment))
     for s in authors:
         c = repo_cfg(cfg, s["repo"])
-        rows = by.get((s["pr"], s["author"]), [])
+        rows = by.get(ask_key(s["pr"], s["author"]), [])
         if slack_timing(now, c)[1] is None and now >= one_business_day_after(s["since"], c) and not any(
                 r["source"] == "refused" or (r["action"] == "remind_author" and r["head"] == s["head"]) for r in rows):
             acts.append(author_action(s, c))
     for who, waiting in held.items():
-        if who in scheduled:
+        if who.lower() in scheduled:
             continue
         oldest = min(s["asked"][who] for s, _, _ in waiting)
         if (len(waiting) >= cfg["batch_min"] or now - oldest >= cfg["batch_wait_hours"] * 3600
