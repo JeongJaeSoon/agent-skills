@@ -15,7 +15,7 @@ settle prints the newest PR whose branch starts `reflect/standing-`: `merged <ur
 
 end does nothing and exits 2 unless --round names the round round.json holds (a round that outlived its lock must not
 finish the one that replaced it). Then it writes or deletes waiting.json, moves the cursor (--advance: each ledger to
-the ts begin read, never back), removes the round files and releases the lock. Without --advance the next round reads
+the ts begin read, never back, and a key whose program left $PROGRAMS_HOME is dropped), removes the round files and releases the lock. Without --advance the next round reads
 the same rows again.
 """
 import contextlib, datetime as dt, fcntl, json, os, pathlib, secrets, subprocess, sys
@@ -153,8 +153,13 @@ def end(round_id, advance=False, waiting=None, clear_waiting=False):
                 old = skill_usage.parse_ts(cursor.get(name))
                 if old is None or (skill_usage.parse_ts(ts) and skill_usage.parse_ts(ts) > old):
                     cursor[name] = ts
+            # A program archived at Close takes its directory out of $PROGRAMS_HOME; its key would stay for good.
+            gone = [name for name in cursor if not (skill_usage.programs_home() / name / "ledger.jsonl").exists()]
+            for name in gone:
+                del cursor[name]
             skill_usage.write_atomic(base / "cursor.json", json.dumps(cursor, ensure_ascii=False, indent=1))
-            print(f"cursor: {len(snap.get('newest') or {})} ledgers moved to what begin read")
+            print(f"cursor: {len(snap.get('newest') or {})} ledgers moved to what begin read"
+                  + (f", dropped {len(gone)} archived" if gone else ""))
         for f in (round_path, base / "round-rows.jsonl"):
             f.unlink(missing_ok=True)
         if lock.is_dir():

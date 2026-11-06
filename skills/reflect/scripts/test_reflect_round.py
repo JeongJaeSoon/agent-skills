@@ -84,6 +84,20 @@ code, out = run("end", "--round", r2, "--advance", "--clear-waiting")
 assert code == 0 and "waiting: cleared" in out and not (HOME / "waiting.json").exists(), out
 assert json.loads((HOME / "cursor.json").read_text())["acme"] == "2026-10-01T00:00:00+00:00"
 
+# A program archived since the last round (its directory left $PROGRAMS_HOME) loses its cursor key when the cursor
+# advances; a ledger that is still there keeps its key, even one with no rows. Without --advance nothing is dropped.
+(TMP / "programs" / "empty").mkdir()
+(TMP / "programs" / "empty" / "ledger.jsonl").write_text("")
+(HOME / "cursor.json").write_text(json.dumps({"acme": "2026-10-01T00:00:00+00:00", "gone": "2026-09-01T00:00:00Z",
+                                              "empty": "2026-09-02T00:00:00Z"}))
+_, r5 = begin()
+assert run("end", "--round", r5)[0] == 0
+assert set(json.loads((HOME / "cursor.json").read_text())) == {"acme", "gone", "empty"}
+_, r6 = begin()
+code, out = run("end", "--round", r6, "--advance")
+assert code == 0 and "dropped 1 archived" in out, out
+assert set(json.loads((HOME / "cursor.json").read_text())) == {"acme", "empty", "_skill-usage"}  # + what begin read
+
 # A round that outlived its lock cannot finish the round that replaced it.
 _, r3 = begin()
 old = time.time() - (su.LOCK_STALE_HOURS + 1) * 3600

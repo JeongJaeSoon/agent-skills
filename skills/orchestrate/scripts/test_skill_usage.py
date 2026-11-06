@@ -276,7 +276,23 @@ os.environ["CLAUDE_PROJECTS_DIR"], os.environ["ORCH_FLEET_STATE"] = str(projects
 real_inventory, su.inventory = su.inventory, lambda: inv
 rep7 = su.refresh(out=root / "state2" / "skills.json", signals=ledger)
 su.inventory = real_inventory
-assert str(root) not in (root / "state2" / "skills.json").read_text() and set(rep7["signals"]) == {"added"}, rep7["signals"]
+saved7 = json.loads((root / "state2" / "skills.json").read_text())
+assert str(root) not in (root / "state2" / "skills.json").read_text()
+# skills.json carries no count of its own: `signals` is read back from the ledger (the source), so a second record
+# of "how many" cannot drift from the rows. Only the returned report says what this collect added.
+week7 = f"@{rep7['generated_at'][:4]}-W{su.parse_ts(rep7['generated_at']).isocalendar()[1]:02d}"
+in_ledger = [json.loads(l) for l in ledger.read_text().splitlines() if l.startswith("{")]
+want7 = {"week": sum(r.get("kind") == "skill_usage" and r["evidence"].endswith(week7) for r in in_ledger),
+         "rows": sum(r.get("kind") == "skill_usage" for r in in_ledger)}
+assert saved7["signals"] == want7 and want7["rows"] >= want7["week"] >= 0, (saved7["signals"], want7)
+assert rep7["signals"] == {**want7, "added": rep7["signals"]["added"]} and "added" not in saved7["signals"], rep7["signals"]
+# derive_signals() is the whole derivation: rows of other kinds and unreadable lines do not count.
+junk = root / "junk.jsonl"
+junk.write_text('{"ev":"signal","kind":"skill_usage","evidence":"skill-usage:a:misses@2026-W39"}\n'
+                '{"ev":"signal","kind":"skill_usage","evidence":"skill-usage:a:misses@2026-W38"}\n'
+                '{"ev":"signal","kind":"lesson","evidence":"x@2026-W39"}\nnot json\n[]\n')
+assert su.derive_signals(junk, "2026-W39") == {"week": 1, "rows": 2}
+assert su.derive_signals(root / "absent.jsonl", "2026-W39") == {"week": 0, "rows": 0}
 
 # The collector remembers first sight and the last use across collects, so a transcript Claude Code deleted
 # does not make a skill look unused for longer than it is.
