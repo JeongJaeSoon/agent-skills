@@ -1479,9 +1479,9 @@ def _state_import(db, acks_lines, table, by="import"):
 def _state_sources(sd):
     """(ack events, stage table) read from the two files, strictly: a line or file that does not parse stops the step
     before anything is written, so the files stay as they are. A file that is not there is empty."""
-    for name in STATE_FILES:  # a tombstone with no step recorded is what a rollback cut short leaves
-        if (sd / name).is_dir():
-            raise Refused(f"{sd / name} is a tombstone but {STATE_STEP} is not in {DB_NAME}: a rollback was cut short. "
+    for name in STATE_FILES:  # a tombstone, or a missing file with its .restore beside it, is what a rollback cut short leaves
+        if (sd / name).is_dir() or (not (sd / name).exists() and (sd / (name + ".restore")).exists()):
+            raise Refused(f"{sd / name} is a tombstone or missing but {STATE_STEP} is not in {DB_NAME}: a rollback was cut short. "
                           f"Put the file back by hand ({name}.restore beside it, or the export), then run {state_command()}")
     bad, events = [], []
     if (sd / "acks.jsonl").is_file():

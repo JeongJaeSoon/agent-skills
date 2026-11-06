@@ -229,4 +229,14 @@ except store.Refused as e:
     assert "rollback was cut short" in str(e), e
 assert not store.state_ready()
 
+# ---- the same cut-short rollback caught between the rmdir and the rename: the file is gone, its .restore is beside it
+sd = machine()
+(sd / "stages.json.restore").write_text("{}")
+try:
+    store.state_setup()
+    raise AssertionError("a missing file with a .restore beside it must be refused")
+except store.Refused as e:
+    assert "rollback was cut short" in str(e), e
+assert not store.state_ready()
+
 print("ok")
