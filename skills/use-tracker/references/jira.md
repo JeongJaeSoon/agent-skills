@@ -10,9 +10,11 @@ it, and always from scripts, use `tracker.py --adapter jira` (Jira Cloud REST v3
 | Read one | `getJiraIssue` | `get ABC-1` |
 | File | `createJiraIssue` | `create --project P --title T --body-file F [--label L] [--parent ID] [--related ID]` |
 | Add labels | `editJiraIssue` (`update.labels: [{add: L}]`) | `label ABC-1 --add L` |
-| Comment | `addCommentToJiraIssue` | `comment ABC-1 --body-file F` |
-| Move | `getTransitionsForJiraIssue`, then `transitionJiraIssue` | `transition ABC-1 --to started\|review\|completed\|canceled` |
+| Comment | `addOrEditJiraIssueComment` | `comment ABC-1 --body-file F` |
+| Move | `listJiraIssueTransitions`, then `transitionJiraIssue` | `transition ABC-1 --to started\|review\|completed\|canceled` |
 | Relate | issue-link tool if the server has one, else `tracker.py` | `create --related ID` (link type "Relates") |
+
+`getJiraIssue` returns only the comment count; read comment bodies with `listJiraIssueComments`.
 
 With the MCP server, a child's epic goes in `additional_fields: {"parent": {"id": "<numeric id>"}}`. Its `parent` argument returns 400 and creates nothing.
 
