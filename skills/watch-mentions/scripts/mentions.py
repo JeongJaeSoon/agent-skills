@@ -8,6 +8,7 @@ Usage:
   python3 mentions.py ingest CANDIDATES.json
   python3 mentions.py bundle ITEMS.json
   python3 mentions.py commit [ITEMS.json]
+  python3 mentions.py send ITEMS.json [--from WORKER_HANDLE]
   python3 mentions.py annotate ITEMS.json
   python3 mentions.py schedule [--workspace SELECTOR] [--provider claude] [--edit AUTOMATION_ID] [--write]
 
@@ -17,6 +18,8 @@ plan takes the run lock and prints the searches to run. ingest drops what must n
 (the owner's own messages, bots, non-public channels, excluded channels, anything seen before or older
 than the window). bundle renders the one inbox_to message. commit marks the items seen,
 moves the cursor to the run's start and releases the lock; with no file it only does the last two.
+send is inbox + bundle + `orca orchestration send` + commit in one call: any failure exits non-zero with nothing
+committed, so the items come back next round. --from (an Orca worker) skips the inbox check and sends to its bound Run.
 annotate sets `pr` on rows already in the ledger (a backfill); it refuses while a run holds the lock
 and moves no cursor.
 schedule prints the `orca automations create` command (`edit <id>` with --edit) whose prompt carries the whole round;
@@ -32,7 +35,7 @@ def opt(name, default=None):
     return a[a.index(name) + 1] if name in a else default
 
 
-VALUED = ("--state", "--config", "--now", "--workspace", "--provider", "--edit")
+VALUED = ("--state", "--config", "--now", "--workspace", "--provider", "--edit", "--from")
 
 
 def positional(required=True):
@@ -230,6 +233,37 @@ def commit(items, cfg, state, now):
     return len(items)
 
 
+def sent_ok(r):
+    """An `orca ... --json` call counts as sent only on exit 0 and no {"ok": false} answer."""
+    if r.returncode:
+        return False
+    try:
+        return json.loads(r.stdout or "{}").get("ok", True) is not False
+    except ValueError:
+        return True
+
+
+def send(items, cfg, state, now, sender=None, orca=orca_json, run=subprocess.run):
+    """inbox check, bundle, send, commit as one step: (0, note) after the commit, else (1 or 2, why) with nothing
+    committed. `sender` (an Orca worker's handle) omits --to and the inbox check: the message goes to its bound Run."""
+    if not read_json(state / "lock.json", None):
+        return 1, "send: no run in progress; run plan first"
+    if items:
+        if not sender:
+            code, why = inbox_check(cfg, orca)
+            if code:
+                return code, why
+        cmd = ["orca", "orchestration", "send", *(["--from", sender] if sender else ["--to", cfg["inbox_to"]]),
+               "--type", "status", "--subject", f"watch-mentions: {len(items)}건", "--body", bundle(items, cfg), "--json"]
+        try:
+            r = run(cmd, capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return 1, f"send failed, nothing committed: {e}"
+        if not sent_ok(r):
+            return 1, f"send failed, nothing committed: {(r.stderr or r.stdout).strip()[:300] or r.returncode}"
+    return 0, f"sent {len(items)} items; commit: {commit(items, cfg, state, now)} items marked seen"
+
+
 def annotate(items, cfg, state, now):
     if lock_held(state, cfg, now):
         raise SystemExit("annotate: a run holds the lock; its commit would race this write")
@@ -279,13 +313,9 @@ ROUND = (
     '{{"title", "requester", "duplicates": [ids]}} 를 넣는다. file_tickets 가 true 이고 중복이 없을 때만 요약·요청자·permalink '
     "를 본문으로 기표한다. tracker_project 가 없으면 찾지도 기표하지도 않고 draft 만 넣는다. "
     "6. category·summary 와 있으면 pr·draft 를 넣은 new 항목들을 <scratchpad>/items.json 에 쓰고 "
-    "`{bundle} <scratchpad>/items.json` 로 본문을 만든다. 보내기 직전에 `{inbox}` 를 실행한다. 0 이 아니면 보내지도 commit "
-    "하지도 않고 그 경보 줄을 회차 결과로 남기고 끝낸다. 0 이면 `orca orchestration send --to <plan 의 inbox_to> --type status "
-    "--subject \"watch-mentions: <N>건\" --body \"<bundle 출력>\" --json` 로 한 통만 보낸다(N 은 항목 수). 전송이 실패하면"
-    "(0 이 아니거나 JSON 의 ok 가 true 가 아니면) 다른 경로로 다시 보내지 않고 오류를 회차 결과로 남기고 끝낸다: 항목은 "
-    "보고된 것으로 표시되지 않아 잠금이 풀린 뒤의 회차가 다시 보낸다. "
-    "7. inbox_to 전송이 성공했을 때만 `{commit} <scratchpad>/items.json` 를 실행한다. 항목을 보고된 것으로 표시하고 cursor 를 "
-    "이 회차 시작으로 옮기고 잠금을 푼다. 표시된 항목은 다시 보고되지 않는다. "
+    "`{send} <scratchpad>/items.json` 를 실행한다. 이 한 번이 inbox_to 확인, 본문 만들기, 한 통 전송, commit 이다: 항목을 보고된 "
+    "것으로 표시하고 cursor 를 이 회차 시작으로 옮기고 잠금을 푼다. 0 이 아니면(경보 줄이거나 전송 실패) 다른 경로로 다시 "
+    "보내지 않고 그 출력을 회차 결과로 남기고 끝낸다: 아무것도 commit 되지 않아 잠금이 풀린 뒤의 회차가 다시 보낸다. "
     "이 회차는 Slack 에 쓰지 않는다: 메시지·답글·리액션·초안 어느 것도. 권한 프롬프트·auto mode 분류기·hook·사람이 거부한 "
     "행동은 어떤 형태로도(재실행, 스크립트·다른 도구, 다른 세션) 다시 시도하지 않고, 무엇을 하려던 것인지와 거부 종류, 정확한 "
     "명령을 회차 결과로 남긴다.")
@@ -298,7 +328,7 @@ def schedule_cmd(script, cfg, workspace, provider="claude", state=None, edit=Non
     state = STATE.parent if state is None else pathlib.Path(state)
     flags = [] if state == STATE_HOME else ["--state", str(state)]
     run = lambda sub: shlex.join(["python3", str(script), sub, *flags])
-    prompt = ROUND.format(**{s: run(s) for s in ("plan", "ingest", "bundle", "inbox", "commit")})
+    prompt = ROUND.format(**{s: run(s) for s in ("plan", "ingest", "send", "commit")})
     model = [f"--extra-agent-args=--model {cfg['model']}"] if provider == "claude" and cfg.get("model") else []
     if edit:
         # Orca keeps stored extras unless told otherwise, so a removed mentions.model has to clear them.
@@ -340,6 +370,10 @@ def main():
         path = positional(required=False)
         items = read_json(path, []) if path else []
         print(f"commit: {commit(items, cfg, STATE, now)} items marked seen")
+    elif cmd == "send":
+        code, why = send(read_json(positional(), None) or [], cfg, STATE, now, sender=opt("--from"))
+        print(why, file=sys.stderr if code else sys.stdout)
+        sys.exit(code)
     elif cmd == "annotate":
         print(f"annotate: {annotate(read_json(positional(), None) or [], cfg, STATE, now)} rows given a PR")
     elif cmd == "schedule":

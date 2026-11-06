@@ -483,8 +483,17 @@ case "$body" in *"query{{viewer"*) echo '{{"data":{{"viewer":{{"login":"{ME}"}}}
 """)
 fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IEXEC)
 conf = tmp / "agent-skills.json"
-conf.write_text(json.dumps({"prs": {"self_bots": ["owner-bot"], "ignore_bots": ["noisy"], "exclude_repos": ["acme/legacy"]}}))
-env = {**os.environ, "AGENT_SKILLS_GH": str(fake_gh), "AGENT_SKILLS_STATE": str(tmp / "state"), "AGENT_SKILLS_ORCH_DASH": p.ORCH_DASH}
+conf.write_text(json.dumps({"prs": {"self_bots": ["owner-bot"], "ignore_bots": ["noisy"], "exclude_repos": ["acme/legacy"],
+                                    "inbox_to": "run:run_0FAKE"}}))
+# A stub orca logs each call and refuses `orchestration send` while the FAIL file exists.
+obin, olog, ofail = tmp / "obin", tmp / "orca.log", tmp / "orca.fail"
+obin.mkdir()
+(obin / "orca").write_text('#!/bin/sh\necho "$@" >> "$ORCA_LOG"\n'
+                           'if [ "$2" = send ] && [ -e "$ORCA_FAIL" ]; then echo \'{"ok": false}\'; exit 1; fi\n'
+                           'echo \'{"ok": true}\'\n')
+(obin / "orca").chmod(0o755)
+env = {**os.environ, "PATH": f"{obin}:{os.environ['PATH']}", "ORCA_LOG": str(olog), "ORCA_FAIL": str(ofail),
+       "AGENT_SKILLS_GH": str(fake_gh), "AGENT_SKILLS_STATE": str(tmp / "state"), "AGENT_SKILLS_ORCH_DASH": p.ORCH_DASH}
 # By default the Slack side is read from watch-mentions' state next to this one.
 p.write_json(tmp / "state" / "mentions" / "seen.json", {"C0FAKE/1": row("acme/widgets#2", 1)})
 script = str(pathlib.Path(p.__file__))
@@ -496,7 +505,20 @@ assert not (tmp / "state" / "prs" / "plan.json").exists(), "the diagnostic plan 
 out = run("plan", "--body")
 assert out.returncode == 0 and out.stdout.startswith("PR 5건이 나를 기다린다"), out
 assert "acme/widgets#2 Change 2" in out.stdout and f"· Slack {link(1)}" in out.stdout, out.stdout
-assert run("commit").returncode == 0
+# commit follows a completed send: without one nothing is recorded, and --no-send says the message went out by hand.
+r = run("commit")
+assert r.returncode == 2 and "send" in r.stderr and (tmp / "state" / "prs" / "plan.json").exists(), r
+ofail.write_text("")
+r = run("send")
+assert r.returncode == 1 and "nothing committed" in r.stderr, r
+assert run("commit").returncode == 2, "a failed send leaves the plan uncommitted"
+ofail.unlink()
+r = run("send")
+assert r.returncode == 0, r
+sent = [c for c in olog.read_text().splitlines() if c.startswith("orchestration send")]
+assert len(sent) == 2 and "--to run:run_0FAKE" in sent[-1] and "--subject watch-prs: 5건" in sent[-1], sent
+assert "PR 5건이 나를 기다린다" in sent[-1] and olog.read_text().rstrip().endswith("--json"), olog.read_text()
+assert run("commit").returncode == 0 and not (tmp / "state" / "prs" / "sent.json").exists(), "commit clears the marker"
 r = run("precheck")
 assert r.returncode == 1 and "새 항목 없음" in r.stderr, r
 assert run("plan", "--body").stdout.strip() == ""
@@ -548,9 +570,10 @@ assert line[line.index("--precheck") + 1] == "python3 /repo/skills/watch-prs/scr
 assert line[line.index("--precheck-timeout") + 1] == "180", "Orca's default 60 s cuts a precheck with a retried 5xx off"
 prompt = line[line.index("--prompt") + 1]
 # The round commands are exactly precheck, plan --body and commit: an owner's allow rule names those forms.
-assert "`python3 /repo/skills/watch-prs/scripts/prs.py plan --body`" in prompt and "--to term_x" in prompt
-assert "전송이 성공했을 때만 마지막에 `python3 /repo/skills/watch-prs/scripts/prs.py commit`" in prompt
-assert "dispatch" not in prompt and "--kinds" not in prompt, "review_request alone has no step after the message"
+assert "`python3 /repo/skills/watch-prs/scripts/prs.py plan --body`" in prompt and "inbox_to(term_x)" in prompt
+assert "`python3 /repo/skills/watch-prs/scripts/prs.py send`" in prompt and "orca orchestration send" not in prompt, "the round sends through `send`"
+assert "send 가 0 으로 끝났을 때만 마지막에 `python3 /repo/skills/watch-prs/scripts/prs.py commit`" in prompt
+assert "prs.py dispatch" not in prompt and "--kinds" not in prompt, "review_request alone has no step after the message"
 # A scheduled session may refuse a command that starts with `env` or a `VAR=` assignment, so neither appears.
 no_env = lambda argv: "env " not in " ".join(argv) and not re.search(r"(^|[\s`])[A-Z_]{2,}=", " ".join(argv))
 assert no_env(line), line
@@ -558,17 +581,15 @@ assert no_env(line), line
 line = p.schedule_cmd(pathlib.Path("/r/prs.py"), {**rcfg, "inbox_to": "term_x"}, "path:/r")
 prompt = line[line.index("--prompt") + 1]
 assert no_env(line), line
-assert re.search(r"보내기가 성공했을 때만 `python3 /r/prs.py dispatch` 를 실행한다", prompt), "a failed send must not dispatch"
-# A scheduled round cannot start a worker (consumer_fenced): it forwards the lines and the orchestrator or lead starts them.
-assert "출력된 줄은 실행하지 않는다" in prompt and "릴리스 워커 <줄 수>건 시작 요청" in prompt
-assert re.search(r'--body "\$\(cat \S*dispatch\.txt\)"', prompt), "lines go as a file so $(cat …) stays literal"
-assert prompt.index("dispatch") < prompt.index("prs.py commit` 을")
+# A scheduled round cannot start a worker (consumer_fenced): `send` forwards the lines as a second message and runs none.
+assert "prs.py dispatch" not in prompt and "줄은 실행하지 않는다" in prompt and "두 번째 통" in prompt, prompt
+assert prompt.index("prs.py send") < prompt.index("prs.py commit` 을")
 assert "리뷰·코멘트·재요청·배포를 직접 하지 않는다" in prompt, "without review_wait the round writes nothing to GitHub"
 # ownergate's round/result run and are recorded before the send, and start with python3 like the rest.
 gated_line = p.schedule_cmd(pathlib.Path("/r/prs.py"), {**rcfg, "inbox_to": "term_x", "kinds": ["review_request", "unreleased", "ownergate"]}, "path:/r")
 prompt = gated_line[gated_line.index("--prompt") + 1]
 assert no_env(gated_line), gated_line
-assert prompt.index("`python3 /r/prs.py round`") < prompt.index("orca orchestration send") and "`python3 /r/prs.py result <키> failed" in prompt, prompt
+assert prompt.index("`python3 /r/prs.py round`") < prompt.index("prs.py send") and "`python3 /r/prs.py result <키> failed" in prompt, prompt
 assert "(예외는 `round` 가 낸 단계뿐이다)" in prompt
 # The prompt follows cfg["kinds"]: a kind not listed adds none of its steps.
 only_review = p.schedule_cmd(pathlib.Path("/r/prs.py"), {**cfg, "inbox_to": "term_x"}, "path:/r")
@@ -577,14 +598,13 @@ assert " round`" not in plain and " dispatch`" not in plain and "(예외는" not
 assert "다시 시도하지 않고" in plain, "every prompt forbids retrying a refused act"
 four = p.schedule_cmd(pathlib.Path("/r/prs.py"), {**rcfg, "kinds": ["review_request", "review_wait", "unreleased", "ownergate"]}, "path:/r")
 full = four[four.index("--prompt") + 1]
-assert full.index(" round`") < full.index("orca orchestration send") < full.index(" actions`") < full.index(" dispatch`") \
-    < full.index(" commit`"), full
+assert full.index(" round`") < full.index(" send`") < full.index(" actions`") < full.index(" commit`"), full
 assert "retrigger·remind_author 코멘트, request 의 github 명령(리뷰어·assignee 지정)과 `round` 가 낸 승인뿐이다." in full and ". GitHub 쓰기는 retrigger 코멘트뿐이다" not in full, \
     "the round's write list names its approvals; only review_wait's own step is scoped to the comment"
 # With ready_to_merge too: merges and verify (which rewrites body.txt) come first, then round/result, then the send.
 five = p.schedule_cmd(pathlib.Path("/r/prs.py"), {**rcfg, "kinds": list(p.KINDS)}, "path:/r")
 every = five[five.index("--prompt") + 1]
-assert every.index(" merges`") < every.index(" verify`") < every.index(" round`") < every.index("orca orchestration send"), every
+assert every.index(" merges`") < every.index(" verify`") < every.index(" round`") < every.index(" send`"), every
 assert "머지 단계와 `round` 가 낸 승인 밖에서" in every and "다시 시도하지 않고, 무엇을" in every, every
 # review_wait's actions and log lines start with python3 too, with the state flag right after the subcommand.
 saved_state, p.STATE = p.STATE, pathlib.Path("/s/prs")
@@ -825,7 +845,7 @@ assert mprompt.index("출력이 없으면 verify 없이") < mprompt.index(" veri
 # With review_wait too, merging still precedes the send and the actions step follows it.
 both = p.schedule_cmd(pathlib.Path("/x/prs.py"), {**mcfg, "kinds": ["ready_to_merge", "review_wait"], "inbox_to": "t"}, "path:/x")
 both = both[both.index("--prompt") + 1]
-assert both.index(" merges`") < both.index("orca orchestration send") < both.index(" actions`") < both.index(" commit`"), both
+assert both.index(" merges`") < both.index(" send`") < both.index(" actions`") < both.index(" commit`"), both
 
 # owned_elsewhere: branches of live Orca worktrees, and PRs in the ledger of a live program (program_prs).
 otmp = pathlib.Path(tempfile.mkdtemp())
@@ -1019,5 +1039,81 @@ assert {e["pr"]: e["why"] for e in back["excluded"]} == {"acme/widgets#86": "팀
 # With no request left at all, new commits after the owner's review still come back once, as before.
 gone = [pr(86, reqs=[], head="h86b", reviewed="h86")]
 assert [i["reason"] for i in p.compute(Fake([], gone), cfg, reviewed, NOW)["new"]] == ["new_commits"]
+
+# send: body then dispatch lines as a second message; a half send is resumed without resending the body; unverified
+# merge items and a missing destination stop before any message; --from (a worker) omits --to.
+sst = pathlib.Path(tempfile.mkdtemp()) / "prs"
+sst.mkdir()
+scfg = {**cfg, "inbox_to": "run:run_0FAKE"}
+sent_calls, fail_at = [], set()
+def fake_run(cmd, **kw):
+    sent_calls.append(cmd)
+    bad = len(sent_calls) in fail_at
+    return subprocess.CompletedProcess(cmd, 1 if bad else 0, '{"ok": true}', "boom" if bad else "")
+def stage(items):
+    p.write_json(sst / "plan.json", {"run": NOW, "new": items})
+    (sst / "body.txt").write_text("PR 1건\n- x")
+    (sst / "sent.json").unlink(missing_ok=True)
+    sent_calls.clear()
+stage([{"repo": "acme/widgets", "number": 1, "kind": "ready_to_merge", "cmd": "gh pr merge 1"}])
+code, why = p.send(sst, scfg, run=fake_run)
+assert code == 2 and "verify" in why and not sent_calls, (code, why)
+assert p.unverified(p.read_json(sst / "plan.json", {})) == ["acme/widgets#1"]
+stage([{"repo": "acme/widgets", "number": 1, "kind": "ready_to_merge", "cmd": "gh pr merge 1", "result": "merged"}])
+assert p.send(sst, scfg, run=fake_run)[0] == 0 and len(sent_calls) == 1
+assert p.sent_marker(sst, p.read_json(sst / "plan.json", {})).get("done")
+stage([])
+assert p.send(sst, {**cfg, "inbox_to": None}, run=fake_run)[0] == 2 and not sent_calls, "no destination, no send"
+code, _ = p.send(sst, {**cfg, "inbox_to": None}, sender="term_0FAKE", run=fake_run)
+assert code == 0 and "--from" in sent_calls[0] and "--to" not in sent_calls[0], sent_calls
+(sst / "body.txt").write_text("  ")
+assert p.send(sst, scfg, run=fake_run)[0] == 1, "an empty body is never sent"
+real_dispatch = p.dispatch_cmds
+p.dispatch_cmds = lambda plan, c: [("brief", ["skills-sync", "card", p.BRIEF_ARG, "--x", "a b"])]
+try:
+    stage([])
+    fail_at.add(2)  # the dispatch message fails after the body went out
+    code, why = p.send(sst, scfg, run=fake_run)
+    assert code == 1 and "rerun" in why and not p.sent_marker(sst, p.read_json(sst / "plan.json", {})).get("done"), why
+    fail_at.clear()
+    code, _ = p.send(sst, scfg, run=fake_run)
+    assert code == 0 and len(sent_calls) == 3, "the rerun resends only the dispatch message"
+    first, second = sent_calls[0], sent_calls[2]
+    assert second[second.index("--subject") + 1] == "watch-prs: dev 확인 시작", second
+    body_lines = second[second.index("--body") + 1].splitlines()
+    assert len(body_lines) == 1 and body_lines[0].startswith("skills-sync card ") and "'a b'" in body_lines[0], body_lines
+    assert (sst / "dispatch.txt").read_text() == body_lines[0] and (sst / "brief-1800000000-0.txt").read_text() == "brief\n"
+    # no Run for the workers: nothing is sent, not even the body
+    p.dispatch_cmds = lambda plan, c: (_ for _ in ()).throw(ValueError("dispatch: no Run"))
+    stage([])
+    code, why = p.send(sst, scfg, run=fake_run)
+    assert code == 2 and "no Run" in why and not sent_calls, (code, why)
+finally:
+    p.dispatch_cmds = real_dispatch
+# A message the stub reports as refused ({"ok": false}) or that cannot start is a failed send.
+refuse = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, '{"ok": false}', "")
+stage([])
+assert p.send(sst, scfg, run=refuse)[0] == 1 and not (sst / "sent.json").exists()
+def gone(cmd, **kw):
+    raise FileNotFoundError("orca")
+assert p.send(sst, scfg, run=gone)[0] == 1 and not (sst / "sent.json").exists()
+
+# assign: edit, then read back; exit 0 only when the login is both a requested reviewer and an assignee.
+def gh_stub(view, edit_rc=0):
+    seen = []
+    def run(cmd, **kw):
+        seen.append(cmd[1:3])
+        if cmd[1:3] == ["pr", "edit"]:
+            return subprocess.CompletedProcess(cmd, edit_rc, "", "denied" if edit_rc else "")
+        return subprocess.CompletedProcess(cmd, 0, view, "")
+    return run, seen
+both = json.dumps({"reviewRequests": [{"login": "bob"}], "assignees": [{"login": "bob"}]})
+run_, seen = gh_stub(both)
+assert p.assign("https://github.com/acme/widgets/pull/1", "bob", run_)[0] == 0 and seen == [["pr", "edit"], ["pr", "view"]]
+code, why = p.assign("u", "bob", gh_stub(json.dumps({"reviewRequests": [], "assignees": [{"login": "bob"}]}))[0])
+assert code == 1 and "reviewer" in why and "assignee" not in why.split("(")[0], why
+assert p.assign("u", "bob", gh_stub(json.dumps({"reviewRequests": [{"login": "bob"}], "assignees": []}))[0])[0] == 1
+assert p.assign("u", "bob", gh_stub(both, edit_rc=1)[0])[0] == 1, "a refused edit is not read back as success"
+assert p.assign("u", "bob", gh_stub("not json")[0])[0] == 1
 
 print("test_prs: ok")

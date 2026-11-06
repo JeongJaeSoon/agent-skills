@@ -56,8 +56,8 @@ Slack actions follow the user's Slack-posting rules (read that skill first): a r
 message per reviewer in the channel, unless the channel already has a request for that PR
 (`found`); a reminder or re-request is a thread reply only, never broadcast; with no thread known,
 search the channel for one, and with none found post nothing (`no_thread`). With `post_at`, schedule
-for that time. A `request` with `github` runs that command on its own before the Slack send, then
-checks `gh pr view <url> --json reviewRequests,assignees`; a refused or empty result is reported,
+for that time. A `request` with `github` is run as `python3 "$P" assign <url> <reviewer>` on its own before the Slack send (it
+edits, then reads `reviewRequests,assignees` back); a non-zero exit is reported,
 not retried, and the Slack request still goes. `retrigger` is `gh pr comment <url> --body <comment>`. `remind_author` with a
 `thread` is a reply there mentioning `slack_user`; without one it is `gh pr comment <url>` whose body
 starts with `prefix` when set, logged `sent` (it never searches for a thread or logs `no_thread`). An action already moot (approved
@@ -72,10 +72,9 @@ PR's repository from `prs.py policy <owner/name>`:
 - Bundle per reviewer, by the same `batch_*` and business-hours rules, and list only the PRs the
   people it mentions are asked to review. A PR that is not theirs goes in your report, not in the
   message.
-- Request the reviewer on GitHub when you ask (`gh pr edit <n> --add-reviewer <login>`, plus
-  `--add-assignee <login>` with `assign_reviewers` on), then confirm with
-  `gh pr view <n> --json reviewRequests,assignees` that each is there: `--add-reviewer` can exit 0
-  and add no one.
+- Request the reviewer on GitHub when you ask (with `assign_reviewers` on: `python3 "$P" assign <url> <login>`,
+  which adds reviewer and assignee and reads `reviewRequests,assignees` back, because
+  `--add-reviewer` can exit 0 and add no one).
 - A request posted as a reply in an existing thread, first or later, is not broadcast to the
   channel.
 - When the human tells you to send now, send now, even after hours and whatever `after_hours` says. Leave out each PR whose request

@@ -161,23 +161,23 @@ assert "--repo 'path:/abs dir'" in hint and "--no-parent" in hint and "settings.
 P = "python3 /abs/skills/watch-mentions/scripts/mentions.py"
 full = line[line.index("--prompt") + 1]
 assert "스킬" not in full.split("use-tracker")[0], "the round must not need the watch-mentions skill body"
-for sub in ("plan", "ingest", "bundle", "inbox", "commit"):
+for sub in ("plan", "ingest", "send", "commit"):
     assert f"`{P} {sub}" in full, sub
+assert "orca orchestration send" not in full, "the round sends through `send`, never by hand"
 for rule in ("slack_search_public", "slack_search_public_and_private", "read_private", "slack_read_thread", "detailed",
              "include_context", "max_threads", "kinds", '"kind": "mention|name|thread"', "file_tickets", "tracker_project",
-             "inbox_to", "watch-mentions: <N>건", "데이터", "permalink"):
+             "inbox_to", "데이터", "permalink"):
     assert rule in full, rule
 for cat in m.CATEGORIES:
     assert f"`{cat}`" in full, cat
 empty = full.index("`new` 가 비어 있으면")
 assert full.index(f"`{P} commit`", empty) < full.index("`work`"), "the empty round commits without a file and stops"
-assert "보내지도 commit 하지도 않" in full and "전송이 성공했을 때만" in full, "a failed send leaves the items for a retry"
-order = [full.index(s) for s in (f"`{P} inbox`", "orca orchestration send", "전송이 실패하면", f"`{P} commit <scratchpad>/items.json`")]
-assert order == sorted(order), "inbox check, then the send, then its failure branch, and commit last"
+assert "0 이 아니면" in full and "commit 되지 않아" in full, "a failed send leaves the items for a retry"
+assert f"`{P} commit <scratchpad>/items.json`" not in full, "send commits; the round never commits a sent file by hand"
 # The owner's own message that opened a thread can be older than oldest; only the replies are cut by it.
 assert "본인 글이 oldest 보다 오래돼도 cursor 를 따라가며" in full and "max_threads 개 모일 때까지" in full
 assert "Slack 에 쓰지 않는다" in full and "다시 시도하지 않" in full
-assert "--state '/scratch dir'" in prompt.split("ingest")[1] and "--state '/scratch dir'" in prompt.split("commit")[-1]
+assert "--state '/scratch dir'" in prompt.split("ingest")[1] and "--state '/scratch dir'" in prompt.split("mentions.py send")[-1]
 # --edit keeps an automation's id and rewrites what this script owns; a removed mentions.model clears the stored extras.
 ed = m.schedule_cmd(pathlib.Path("/abs/mentions.py"), cfg, "path:/abs", edit="auto_0FAKE", state=m.STATE_HOME)
 assert ed[:4] == ["orca", "automations", "edit", "auto_0FAKE"] and "--name" not in ed and "--workspace" not in ed, ed
@@ -228,7 +228,16 @@ roundstate = state.parent / "round"
 rp = m.schedule_cmd(pathlib.Path(S), cfg, "path:/abs", state=roundstate)
 rp = rp[rp.index("--prompt") + 1]
 cmds = {c.split()[2]: [w for w in shlex.split(c) if not w.startswith("<")] for c in re.findall(r"`(python3 [^`]+)`", rp)}
-assert set(cmds) == {"plan", "ingest", "bundle", "inbox", "commit"}, cmds
+assert set(cmds) == {"plan", "ingest", "send", "commit"}, cmds
+# This stub logs every call and refuses `orchestration send` while the FAIL file exists.
+sendbin = state.parent / "sendbin"
+sendbin.mkdir()
+(sendbin / "orca").write_text('#!/bin/sh\necho "$@" >> "$ORCA_LOG"\n'
+                              'if [ "$2" = send ] && [ -e "$ORCA_FAIL" ]; then echo \'{"ok": false}\'; exit 1; fi\n'
+                              'echo \'{"ok": true}\'\n')
+(sendbin / "orca").chmod(0o755)
+olog, ofail = state.parent / "orca.log", state.parent / "orca.fail"
+env = {**env, "PATH": f"{sendbin}:{os.environ['PATH']}", "ORCA_LOG": str(olog), "ORCA_FAIL": str(ofail)}
 sh = lambda sub, *a: subprocess.run([*cmds[sub][:3], *a, *cmds[sub][3:], "--config", str(conf)], env=env,
                                     capture_output=True, text=True)
 assert sh("plan").returncode == 0 and (roundstate / "mentions" / "lock.json").exists()
@@ -243,8 +252,44 @@ for attempt in ("fails", "sends"):
     assert len(new) == 1, (attempt, new)
     picked = state.parent / "picked.json"
     picked.write_text(json.dumps([{**new[0], "category": "question", "summary": "s"}]))
-    assert sh("bundle", str(picked)).stdout.startswith("Slack 새 항목 1건")
-    assert sh("inbox").returncode == 0
-assert sh("commit", str(picked)).returncode == 0
+    if attempt == "fails":
+        ofail.write_text("")
+        r = sh("send", str(picked))
+        assert r.returncode == 1 and "nothing committed" in r.stderr, r
+        assert (roundstate / "mentions" / "lock.json").exists(), "a failed send commits nothing"
+        ofail.unlink()
+    else:
+        olog.write_text("")
+        r = sh("send", str(picked))
+        assert r.returncode == 0 and "1 items marked seen" in r.stdout, r
+        calls = olog.read_text().splitlines()
+        sent = [c for c in calls if c.startswith("orchestration send")]
+        assert len(sent) == 1 and "--to run:run_0FAKE" in sent[0] and "--subject watch-mentions: 1건" in sent[0], calls
+        assert "Slack 새 항목 1건" in sent[0] and calls.index(sent[0]) > 0 and calls[0].startswith("orchestration run-show"), calls
+assert not (roundstate / "mentions" / "lock.json").exists()
 assert sh("plan").returncode == 0 and json.loads(sh("ingest", str(hit)).stdout)["new"] == [], "a sent item is not resent"
+
+# send edge cases: a dead inbox sends nothing (exit 2); a worker (--from) skips the check and omits --to; no run, no send.
+sstate = pathlib.Path(tempfile.mkdtemp()) / "mentions"
+sstate.mkdir()
+sitem = [{**items[0], "category": "work", "summary": "s"}]
+calls = []
+rec = lambda cmd, **kw: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, '{"ok": true}', "")
+assert m.send(sitem, cfg, sstate, NOW, run=rec)[0] == 1 and not calls, "no lock means no run in progress"
+(sstate / "lock.json").write_text(json.dumps({"run": NOW}))
+assert m.send(sitem, cfg, sstate, NOW, orca=dead, run=rec)[0] == 2 and not calls and (sstate / "lock.json").exists()
+code, _ = m.send(sitem, cfg, sstate, NOW, sender="term_0FAKE", orca=dead, run=rec)
+assert code == 0 and "--from" in calls[0] and "--to" not in calls[0] and not (sstate / "lock.json").exists(), calls
+(sstate / "lock.json").write_text(json.dumps({"run": NOW}))
+calls.clear()
+assert m.send([], cfg, sstate, NOW, run=rec)[0] == 0 and not calls and not (sstate / "lock.json").exists(), "an empty round commits only"
+(sstate / "lock.json").write_text(json.dumps({"run": NOW}))
+boom = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, "not json at all", "")
+assert m.send(sitem, cfg, sstate, NOW, orca=live, run=boom)[0] == 0, "exit 0 with unparsable output still counts as sent"
+(sstate / "lock.json").write_text(json.dumps({"run": NOW}))
+nope = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, '{"ok": false}', "")
+assert m.send(sitem, cfg, sstate, NOW, orca=live, run=nope)[0] == 1 and (sstate / "lock.json").exists(), "ok:false is a failure"
+def gone(cmd, **kw):
+    raise FileNotFoundError("orca")
+assert m.send(sitem, cfg, sstate, NOW, orca=live, run=gone)[0] == 1 and (sstate / "lock.json").exists()
 print("ok")

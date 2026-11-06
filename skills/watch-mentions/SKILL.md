@@ -85,23 +85,16 @@ python3 "$M" plan > <scratchpad>/plan.json     # takes the run lock; prints olde
    the summary, the requester and the permalink. File only when `file_tickets` is
    `true` and no duplicate was found; otherwise the draft goes in the message and the orchestrator or lead
    decides.
-5. **Send one message.** Write the items with `category`, `summary` and the optional `pr` and
-   `draft` to `<scratchpad>/items.json`, render the body with `python3 "$M" bundle
-   <scratchpad>/items.json`, and send it:
-
-   ```bash
-   orca orchestration send --to "<inbox_to>" --type status --subject "watch-mentions: <N>건" --body "<bundle output>" --json
-   ```
-
-   Run `python3 "$M" inbox` right before the send: it checks that `inbox_to` still answers (the Run
-   exists, or the terminal is alive). On a non-zero exit, send nothing and do not commit; print its
-   alarm line as the round's result. The items stay unseen and come back once the address is fixed.
-   From an Orca worker, omit `--to` and the inbox check, and add the worker's `--from` and capability:
-   the message goes to the orchestrator or lead bound to its Run. Keep the message id from the JSON.
-6. **Commit.** `python3 "$M" commit <scratchpad>/items.json` marks the items seen, moves the cursor
-   to this run's start and releases the lock. Commit only after the send succeeded: an
-   uncommitted run is retried, a committed one is never reported again. A run that dies leaves the
-   lock, which expires after `lock_minutes`.
+5. **Send and commit.** Write the items with `category`, `summary` and the optional `pr` and
+   `draft` to `<scratchpad>/items.json`, then run `python3 "$M" send <scratchpad>/items.json`. It checks
+   that `inbox_to` still answers (the Run exists, or the terminal is alive), renders the body as
+   `bundle` does, sends one `orca orchestration send` message and only then commits: the items are
+   marked seen, the cursor moves to this run's start and the lock is released. Any failure exits
+   non-zero with nothing committed (exit 2 prints the inbox alarm line); report that line as the
+   round's result. The items stay unseen and come back once the address is fixed or the lock
+   expires after `lock_minutes`. From an Orca worker add `--from <worker handle>`: it skips the inbox
+   check, omits `--to`, and the message goes to the orchestrator or lead bound to its Run.
+   `bundle` and `commit` stay for a dry look at the body and for the empty round.
 
 The next run starts `overlap_minutes` before the cursor because search indexing lags; the seen
 ledger drops the overlap.

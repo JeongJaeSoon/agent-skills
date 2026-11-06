@@ -206,23 +206,20 @@ python3 "$P" plan --body    # prints the message, or nothing; keeps it in <state
    once, on its own, then `python3 "$P" result <key> ok` or `result <key> failed "<why>"` (which
    hands it to the owner with a `!` line and an inbox item). Both append to `body.txt`. Never run a
    `!` line.
-4. Send it as one message:
-
-   ```bash
-   orca orchestration send --to "<inbox_to>" --type status --subject "watch-prs: <N>건" --body "$(cat <state>/body.txt)" --json
-   ```
-
-   From an Orca worker, omit `--to` and add the worker's `--from` and capability: the message goes
-   to the orchestrator or lead bound to its Run.
+4. `python3 "$P" send` sends `<state>/body.txt` to `inbox_to` as one message (from an Orca worker add
+   `--from <worker handle>`: no `--to`, the message goes to the orchestrator or lead bound to its
+   Run). With unreleased items it then sends the `skills-sync card` lines of `<state>/dispatch.txt`
+   as a second message and runs none of them; the orchestrator or lead starts each worker from its
+   bound terminal. It refuses while a merge outcome is unread (run `verify`), exits non-zero when
+   any send fails, and a rerun skips what already went out. Non-zero: stop, do not commit.
+   (`python3 "$P" dispatch` only prints those lines.)
 5. `review_wait`: handle and log each line of `python3 "$P" actions` as
    [references/review-wait.md](references/review-wait.md) "Handling the round's actions" says.
-6. Only after the send succeeded, `python3 "$P" dispatch` prints one command per repo with
-   unreleased items and keeps them in `<state>/dispatch.txt`. Do not run them: send that file as one
-   message (`--body "$(cat <state>/dispatch.txt)"`, so `$(cat …)` in the lines is not expanded), and
-   the orchestrator or lead starts each worker from its bound terminal.
-7. `python3 "$P" commit` records what `plan.json` held and removes it; run it only after every send succeeded. An uncommitted run is retried once its
-   `plan.json` is older than `lock_minutes`; a committed one is never sent again. To retry a failed
-   send sooner, send `<state>/body.txt` again and then commit.
+6. `python3 "$P" commit` records what `plan.json` held and removes it. It exits 2 while `send` has
+   not completed for this plan (`--no-send` when the message went out another way) or a merge
+   outcome is unread. An uncommitted run is retried once its `plan.json` is older than
+   `lock_minutes`; a committed one is never sent again. To retry a failed send sooner, run `send`
+   again and then commit.
 
 A merge, approval, Slack or GitHub action that a permission prompt, the classifier, a hook or a
 person refused is reported in the message (or logged `refused`) and never retried, in any form.

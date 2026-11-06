@@ -298,7 +298,8 @@ plain = p.schedule_cmd(script, {**c, "kinds": ["review_request"]}, "path:/repo")
 assert "actions" not in plain[plain.index("--prompt") + 1] and "직접 하지 않는다" in plain[plain.index("--prompt") + 1]
 both = p.schedule_cmd(script, {**c, "kinds": ["unreleased", "review_wait"]}, "path:/repo")
 both = both[both.index("--prompt") + 1]
-assert both.index("prs.py actions") < both.index("prs.py dispatch"), "the unreleased step gates commit, so it runs last whatever the config order"
+assert both.index("prs.py send") < both.index("prs.py actions") < both.index("prs.py commit"), "commit runs last, after send and the actions, whatever the config order"
+assert "prs.py dispatch" not in both and "prs.py assign" in both, "send forwards the dispatch lines; request's github command goes through assign"
 edit = p.schedule_cmd(script, c, "path:/repo", edit="auto-1")
 assert edit[:4] == ["orca", "automations", "edit", "auto-1"] and edit[edit.index("--trigger") + 1] == c["cron"]
 assert edit[edit.index("--timezone") + 1] == "Asia/Tokyo" and "--precheck" in edit

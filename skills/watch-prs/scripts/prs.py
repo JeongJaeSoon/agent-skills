@@ -10,7 +10,9 @@ Usage:
   python3 prs.py verify [--config PATH]
   python3 prs.py actions [--config PATH]
   python3 prs.py log --key KEY --source SOURCE [--thread CHANNEL:TS] [--scheduled ID] [--post-at EPOCH] [--at EPOCH]
-  python3 prs.py commit [--config PATH]
+  python3 prs.py assign PR_URL LOGIN
+  python3 prs.py send [--from WORKER_HANDLE] [--config PATH]
+  python3 prs.py commit [--no-send] [--config PATH]
   python3 prs.py dispatch [--config PATH]
   python3 prs.py policy OWNER/REPO [--config PATH]
   python3 prs.py schedule [--workspace SELECTOR] [--provider claude] [--edit AUTOMATION_ID] [--write]
@@ -1250,7 +1252,104 @@ def commit(state, cfg, now):
     ledger = {k: v for k, v in ledger.items() if v["at"] >= horizon}
     write_json(state / "ledger.json", ledger)
     (state / "plan.json").unlink()
+    (state / "sent.json").unlink(missing_ok=True)
     return len(once)
+
+
+def unverified(plan):
+    """Merge items whose outcome `verify` has not read back: sending or committing now would report them as done."""
+    return [f"{i['repo']}#{i['number']}" for i in plan["new"] if i.get("cmd") and "result" not in i]
+
+
+def sent_marker(state, plan):
+    m = read_json(state / "sent.json", None)
+    return m if m and m.get("run") == plan["run"] else {}
+
+
+def orca_send(subject, text, to, sender, run=subprocess.run):
+    """One `orca orchestration send`; None when it went through, else why not. MCP-free on purpose."""
+    cmd = ["orca", "orchestration", "send", *(["--from", sender] if sender else ["--to", to]),
+           "--type", "status", "--subject", subject, "--body", text, "--json"]
+    try:
+        r = run(cmd, capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return str(e)
+    if r.returncode:
+        return (r.stderr or r.stdout).strip()[:300] or f"exit {r.returncode}"
+    try:
+        if json.loads(r.stdout or "{}").get("ok") is False:
+            return r.stdout.strip()[:300]
+    except ValueError:
+        pass
+    return None
+
+
+def write_dispatch(state, plan, cfg):
+    """The `skills-sync card` lines of this plan, also kept in dispatch.txt. Raises ValueError when no Run is set."""
+    lines = []
+    for n, (text, line) in enumerate(dispatch_cmds(plan, cfg)):
+        # Named by run: the orchestrator or lead may start the line after the next round has written its own briefs.
+        brief = state / f"brief-{int(plan['run'])}-{n}.txt"
+        brief.write_text(text + "\n")
+        lines.append(shlex.join([str(brief) if a == BRIEF_ARG else a for a in line]))
+    # The round forwards these as a message body; a file keeps `$(cat …)` from expanding in the round's shell.
+    (state / "dispatch.txt").write_text("\n".join(lines))
+    return lines
+
+
+def send(state, cfg, sender=None, run=subprocess.run):
+    """body.txt to inbox_to, then the dispatch lines as a second message; (0, note) or (code, why). Records sent.json
+    so `commit` can tell a plan whose message went out. A rerun after a half send skips the part already delivered.
+    sender (an Orca worker's handle) omits --to: the message goes to the Run the worker is bound to."""
+    plan = read_json(state / "plan.json", None)
+    if not plan:
+        return 1, "send: no plan.json; run plan --body first"
+    if bad := unverified(plan):
+        return 2, f"send: run `verify` first; merge outcome not read for {', '.join(bad)}"
+    if not sender and not cfg.get("inbox_to"):
+        return 2, 'send: set prs.inbox_to (or pass --from <worker handle>)'
+    text = (state / "body.txt").read_text() if (state / "body.txt").exists() else ""
+    if not text.strip():
+        return 1, "send: body.txt is empty; run plan --body first"
+    try:
+        lines = write_dispatch(state, plan, cfg)  # before any send: a missing Run must not follow a delivered body
+    except ValueError as e:
+        return 2, str(e)
+    done = sent_marker(state, plan)
+    if not done.get("body"):
+        if err := orca_send(f"watch-prs: {len(plan['new'])}건", text, cfg.get("inbox_to"), sender, run):
+            return 1, f"send failed, nothing committed: {err}"
+        write_json(state / "sent.json", {"run": plan["run"], "body": True})
+    if lines:
+        # Sent as data, never run here: the orchestrator or lead starts each line from its bound terminal.
+        if err := orca_send("watch-prs: dev 확인 시작", "\n".join(lines), cfg.get("inbox_to"), sender, run):
+            return 1, f"dispatch send failed after the body went out; rerun send, nothing committed: {err}"
+    write_json(state / "sent.json", {"run": plan["run"], "body": True, "done": True})
+    return 0, f"sent: body{' + ' + str(len(lines)) + ' dispatch lines' if lines else ''}"
+
+
+def assign(url, who, run=subprocess.run):
+    """Request `who` as reviewer and assignee, then read the PR back: `--add-reviewer` can exit 0 and add nobody.
+    (0, note) only when both show; else (1, why)."""
+    def gh(*a):
+        try:
+            return run([GH, *a], capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return subprocess.CompletedProcess(a, 1, "", str(e))
+    r = gh("pr", "edit", url, "--add-reviewer", who, "--add-assignee", who)
+    if r.returncode:
+        return 1, f"assign: gh pr edit failed: {(r.stderr or r.stdout).strip()[:300] or r.returncode}"
+    r = gh("pr", "view", url, "--json", "reviewRequests,assignees")
+    try:
+        got = json.loads(r.stdout)
+    except ValueError:
+        return 1, f"assign: could not read {url} back: {(r.stderr or r.stdout).strip()[:200]}"
+    reviewers = {x.get("login") for x in got.get("reviewRequests") or []}
+    assignees = {x.get("login") for x in got.get("assignees") or []}
+    missing = [n for n, s in (("reviewer", reviewers), ("assignee", assignees)) if who not in s]
+    if missing:
+        return 1, f"assign: {who} is not on {url} as {' or '.join(missing)} (reviewRequests={sorted(map(str, reviewers))}, assignees={sorted(map(str, assignees))})"
+    return 0, f"assigned {who} on {url}"
 
 
 def inbox_add(i):
@@ -1395,15 +1494,11 @@ PROMPT_STEPS = {
         "prefix 가 있으면 본문을 그 문자열로 시작한다(그 봇은 그렇게 시작하는 코멘트에만 답한다). 보내기 직전에 이미 필요 없어진 행동(그사이 승인됨·머지됨, 리뷰어의 slack id 없음 등)은 "
         "보내지 않고 `--source skipped` 로 기록한다. 어느 행동이든 권한·분류기·훅에 거부되면 다른 방법으로 다시 시도하지 않는다: "
         "`--source refused` 로 기록하고 거부 범주와 명령을 오케스트레이터나 리드에게 보낸다. request 에 github 명령이 있으면 Slack 으로 보내거나 "
-        "예약하기 전에 그 명령을 단독으로 한 번 실행하고 `gh pr view <url> --json reviewRequests,assignees` 로 reviewer 와 assignee 가 "
-        "붙었는지 확인한다(`--add-reviewer` 는 아무도 추가하지 않고 0 으로 끝날 수 있다). 거부되거나 붙지 않았으면 다시 시도하지 않고 "
-        "그 PR 과 명령을 오케스트레이터나 리드에게 보고하되, Slack 의뢰는 그대로 처리한다. "
+        "예약하기 전에 그 명령 대신 `{run[assign]} <url> <reviewer>` 를 단독으로 한 번 실행한다(지정하고 reviewer 와 assignee 가 "
+        "붙었는지 다시 읽는다. `--add-reviewer` 는 아무도 추가하지 않고 0 으로 끝날 수 있다). 0 이 아니면 다시 시도하지 않고 "
+        "그 PR 과 출력을 오케스트레이터나 리드에게 보고하되, Slack 의뢰는 그대로 처리한다. "
         "이 단계의 GitHub 쓰기는 retrigger·remind_author 코멘트와 request 의 github 명령뿐이다."),
-    "unreleased": (
-        "보내기가 성공했을 때만 `{run[dispatch]}` 를 실행한다. 출력된 줄은 실행하지 않는다: 그 `skills-sync card` 는 Run 에 묶인 "
-        "오케스트레이터나 리드의 터미널에서 실행해야 워커가 그 세션 아래에 붙는다. 줄이 있으면 같은 줄이 담긴 {dispatch_file} 을 `--body \"$(cat {dispatch_file})\"` 로, 제목 "
-        "\"watch-prs: 릴리스 워커 <줄 수>건 시작 요청\" 으로 오케스트레이터나 리드에게 한 통 보낸다(줄이 없으면 건너뛴다). 그 전송이 성공했을 때만 commit 으로 간다. "
-        "이 회차는 워커를 띄우지도 배포하지도 않는다."),
+    "unreleased": None,   # `send` forwards the dispatch lines as a second message after the body
 }
 # The ownergate step runs before the send: its results are appended to the message.
 PRE_SEND_STEP = (
@@ -1433,7 +1528,6 @@ def schedule_cmd(script, cfg, workspace, provider="claude", edit=None):
     state = [] if STATE.parent == STATE_HOME else ["--state", str(STATE.parent)]
     run = lambda sub: shlex.join(["python3", str(script), *sub.split(), *state])
     to = cfg.get("inbox_to") or "<prs.inbox_to>"
-    body_file = STATE / "body.txt"
     merging = "ready_to_merge" in cfg["kinds"]
     gate = "ownergate" in cfg["kinds"]
     # Merging comes before the send so the bundle carries each merge's result and its default-branch CI.
@@ -1443,10 +1537,10 @@ def schedule_cmd(script, cfg, workspace, provider="claude", edit=None):
                   f"머지는 다시 시도하지 않고 다른 형태로 바꾸지도 않으며, 그 PR 과 거부·실패 내용, 정확한 명령을 본문 끝에 덧붙여 보고한다. "
                   f"그다음 `{run('verify')}` 로 MERGED 와 기본 브랜치 CI 를 확인해 본문을 다시 쓴다. verify 가 실패하면 보내지도 "
                   f"commit 하지도 않고 그 오류를 남긴 채 끝낸다. 성공하면 ") if merging else ""
-    subs = {s: run(s) for s in ("actions", "log", "dispatch", "round", "result")}
+    subs = {s: run(s) for s in ("actions", "log", "round", "result", "assign")}
     # After verify, which rewrites body.txt: the round's results are appended to the message it sends.
     first = PRE_SEND_STEP.format(run=subs) + " 그다음 " if gate else ""
-    steps = " ".join(step.format(run=subs, dispatch_file=shlex.quote(str(STATE / "dispatch.txt")))
+    steps = " ".join(step.format(run=subs)
                      for k, step in PROMPT_STEPS.items() if k in cfg["kinds"] and step)
     if merging:
         reads = (" 이 회차는 머지 단계" + ("와 `round` 가 낸 승인" if gate else "") + " 밖에서 승인·리뷰·배포를 직접 하지 않는다."
@@ -1460,10 +1554,11 @@ def schedule_cmd(script, cfg, workspace, provider="claude", edit=None):
     reads += (" 권한 프롬프트·auto mode 분류기·hook·사람이 거부한 행동은 어떤 형태로도(재실행, 스크립트·다른 도구, 다른 세션) "
               "다시 시도하지 않고, 무엇을 하려던 것인지와 거부 종류, 정확한 명령을 보고한다.")
     prompt = (f"watch-prs 회차다. `{run('plan --body')}` 를 한 번 실행한다. 출력이 비어 있으면 아무것도 보내지 않고 끝낸다. "
-              f"아니면 {merge_step}{first}`orca orchestration send --to {shlex.quote(to)} --type status --subject \"watch-prs: <N>건\" "
-              f"--body \"$(cat {shlex.quote(str(body_file))})\" --json` 로 한 통만 보낸다(N 은 본문 첫 줄의 건수). "
+              f"아니면 {merge_step}{first}`{run('send')}` 를 한 번 실행한다. 본문을 inbox_to({to})로 한 통 보내고, 릴리스 대기 항목이 "
+              "있으면 dispatch 줄이 든 파일을 두 번째 통으로 보낸다(줄은 실행하지 않는다). 0 이 아니면 commit 하지 않고 그 출력을 "
+              "남긴 채 끝낸다. "
               + (steps + " " if steps else "")
-              + f"inbox_to 전송이 성공했을 때만 마지막에 `{run('commit')}` 을 실행한다." + reads)
+              + f"send 가 0 으로 끝났을 때만 마지막에 `{run('commit')}` 을 실행한다." + reads)
     model = [f"--extra-agent-args=--model {cfg['model']}"] if provider == "claude" and cfg.get("model") else []
     if edit:
         # Orca keeps stored extras unless told otherwise, so a removed prs.model has to clear them.
@@ -1549,16 +1644,24 @@ def main():
             cmds = dispatch_cmds(plan, cfg)
         except ValueError as e:
             sys.exit(str(e))
-        lines = []
-        for n, (text, line) in enumerate(cmds):
-            # Named by run: the orchestrator or lead may start the line after the next round has written its own briefs.
-            brief = STATE / f"brief-{int(plan['run'])}-{n}.txt"
-            brief.write_text(text + "\n")
-            lines.append(shlex.join([str(brief) if a == BRIEF_ARG else a for a in line]))
-        # The round forwards these as a message body; a file keeps `$(cat …)` from expanding in the round's shell.
-        (STATE / "dispatch.txt").write_text("\n".join(lines))
+        lines = write_dispatch(STATE, plan, cfg)
         print("\n".join(lines))
+    elif cmd == "assign" and len(args) == 2:
+        code, why = assign(*args)
+        print(why, file=sys.stderr if code else sys.stdout)
+        sys.exit(code)
+    elif cmd == "send":
+        code, why = send(STATE, cfg, sender=opt("--from"))
+        print(why, file=sys.stderr if code else sys.stdout)
+        sys.exit(code)
     elif cmd == "commit":
+        plan = read_json(STATE / "plan.json", None)
+        if plan and (bad := unverified(plan)):
+            sys.exit(f"commit: run `verify` first; merge outcome not read for {', '.join(bad)}")
+        if plan and "--no-send" not in sys.argv and not sent_marker(STATE, plan).get("done"):
+            print("commit: no completed `send` for this plan; items would be recorded as reported. "
+                  "Run send, or pass --no-send when the message went out another way", file=sys.stderr)
+            sys.exit(EXIT_ERROR)
         print(f"commit: {commit(STATE, cfg, now)} items recorded")
     elif cmd == "schedule":
         script = pathlib.Path(__file__).resolve()
