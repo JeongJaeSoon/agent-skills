@@ -1,4 +1,4 @@
-<!-- translated-from: c37d56fce8a4fb31b1198617603cf36259a6d1e3 -->
+<!-- translated-from: aadb64002f2c8e780e23ebffea766fa6d7c1b99d -->
 # Skill catalog
 
 This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 16 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
@@ -569,6 +569,10 @@ Every rule has a key in `~/.claude/agent-skills.json`. Its value is one of `"den
 | `guard.deny.self_exempt_label` | deny | Adding the `no-visual-change` label with `gh` (`pr create --label`, `pr edit --add-label`, `issue edit`, `gh api …/labels`) |
 | `guard.deny.owner_only` | deny | `orch exempt`. The human types it as a `!` line in their own chat. With the key off, it is allowed like any other `orch` command |
 | `guard.deny.external_review` | deny | A `codex` call whose working folder (or `-C`) has an origin repository set to `repos.<owner/repo>.external_llm: false`. Without that key, no decision |
+| `guard.deny.default_force_push` | deny | A `git push` to the default branch (`main`, `master`, or the branch origin/HEAD names) with `--force`, `-f`, `--force-with-lease`, `--force-if-includes` or a `+refspec`; a force combined with `--all` or `--mirror`; `gh api -X PATCH …/git/refs/heads/main -F force=true`. With no refspec, or `HEAD`, the checked-out branch decides. `--force-with-lease` on your own PR branch passes |
+| `guard.deny.protection_write` | deny | A `gh api` call that writes branch protection (`…/branches/<b>/protection`) or a ruleset (`…/rulesets`): anything but GET, and a field means POST; also a GraphQL mutation that changes them. Reads pass |
+| `guard.deny.rm_outside` | deny | A recursive `rm` (`-r`, `-R`, `--recursive`) aimed outside the current checkout (git toplevel) and `/tmp` or `$TMPDIR`. The checkout root itself and `/tmp` itself count as outside. A path with an unresolved `$` variable is not judged; the `rm_expansion` warning covers it |
+| `guard.deny.trash_empty` | deny | `rm` with `-r` or a glob on `~/.Trash`, `~/.local/share/Trash` or `.Trashes`, `trash-empty`, and the Finder `empty trash` AppleScript. An `rm` of one named file there is not covered |
 | `guard.ask.pressure_bypass` | ask | An `AGENT_SKILLS_PRESSURE_GATE=0` assignment before the command or through `env` or `export`. An `echo` that prints the text is not covered |
 | `guard.warn.rm_expansion` | warn | An `rm` path built from an unquoted glob or variable. `${VAR:?}` is fine |
 | `guard.warn.reset_hard` | warn | `git reset --hard` in a repository with uncommitted changes |
