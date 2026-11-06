@@ -151,7 +151,8 @@ SAFE_HOME = re.compile(r"/[\w./+-]*")
 FIRST_STATEMENT = re.compile(r"\s*(?:(?:cd|pushd)\s+(?:--\s+)?[\w./+-]+\s*&&\s*)?(?:[\w./~+-]*/)?skills-sync\s+card\s+")
 ALONE = re.compile(r"\s*(?:[\w./~+-]*/)?skills-sync\s+card\s+")
 BRIEF_TOKEN = re.compile(r"'([^']*)'|\"([^\"]*)\"|([^'\"]+)")
-PLAIN_PATH = re.compile(r"[\w./+:@%=,-]*")
+PLAIN_PATH = re.compile(r"[\w./+:@%=,-]*", re.ASCII)
+BASH_WORD = re.compile(r"[^ \t\n]+")  # bash splits on these only: NBSP or a vertical tab stays inside the word
 
 
 def expand_path(token, first):
@@ -166,13 +167,13 @@ def expand_path(token, first):
     text = next(g for g in m.groups() if g is not None)
     home = os.environ.get("HOME", "")
     tilde = text == "~" or text.startswith("~/")
-    if tilde:
-        text = "$HOME" + text[1:]
-    elif text.startswith("~"):
+    if text.startswith("~") and not tilde:
         return None
-    if "$" in text and (tilde or m[1] is None):  # single quotes pass `$` through literally, and a literal `$` is refused below
-        if not first or not SAFE_HOME.fullmatch(home):
-            return None
+    if (tilde or ("$" in text and m[1] is None)) and (not first or not SAFE_HOME.fullmatch(home)):
+        return None
+    if tilde:  # only the leading `~`: a `$HOME` after it is literal text when the word is single-quoted
+        text = home + text[1:]
+    if "$" in text and m[1] is None:  # single quotes pass `$` through literally, and a literal `$` is refused below
         text = HOME_REF.sub(lambda _: home, text)
     return pathlib.Path(text) if PLAIN_PATH.fullmatch(text) else None
 
@@ -242,7 +243,7 @@ def bash(cmd, background, who, cwd=None):
         if lead and lead_session(who):
             return decide("deny", LEAD_FROM_LEAD)
     for helper in CARD_HELPER.finditer(command_text(cmd)):
-        brief = re.compile(r"\S+").match(cmd, helper.start(1))[0]  # the masked text blanks a quoted path
+        brief = BASH_WORD.match(cmd, helper.start(1))[0]  # the masked text blanks a quoted path
         if brief.startswith("-"):  # `--help` or no brief: the helper prints its usage and creates nothing
             continue
         prompt, refused = helper_card(brief, cwd, cmd, helper.start(1))

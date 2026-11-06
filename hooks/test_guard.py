@@ -275,6 +275,12 @@ for arg in ('"worker.md lead.md"', "\"worker.md'\"", "brief{1..1}.md", "brief[1]
     assert bash(HELPER.format(arg)) == "deny", arg
 assert bash("HOME=/other;bin/" + HELPER.format('"$HOME/worker.md"')) == "deny"  # `\S*/` once swallowed the earlier statement
 assert bash("bin/" + HELPER.format('"$HOME/worker.md"')) == "none"
+# Round 5: `$HOME` after a `~` in single quotes is literal, and bash splits words on blanks only, not on NBSP or VT.
+(pathlib.Path(str(H) + str(H))).mkdir(parents=True)
+(pathlib.Path(str(H) + str(H)) / "worker.md").write_text((H / "worker.md").read_text())
+assert bash(HELPER.format("'~/$HOME/worker.md'")) == "deny"
+for blank in (" ", "\x0b"):
+    assert bash(HELPER.format(f"worker.md{blank}lead.md")) == "deny", repr(blank)
 # Round 4: a later argument can rebind HOME, and a cd has spellings no scan of earlier text catches.
 assert bash(HELPER.format("'~/worker.md'") + ' --x "$((HOME=0))"', session="joined") == "deny"
 assert bash(HELPER.format("$HOME/worker.md") + " --x `true`") == "deny"
