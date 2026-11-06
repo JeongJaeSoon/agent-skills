@@ -390,6 +390,18 @@ class LandExec(unittest.TestCase):
         self.verdict(evidence=None)
         self.assertNotIn("independent review", self.land_check()[1])
 
+    def test_land_check_and_the_executor_agree_on_a_verdict_for_another_sha(self):
+        self.verdict(sha="hother")  # same patch-id as the head, a different sha
+        code, out = self.land_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn(f"not a pass at h{self.n}", out)
+        self.assertNotIn("READY", out)
+        row = self.request()
+        self.round()
+        self.settled(row, "refused", 3, f"not a pass at h{self.n}")
+        config(enabled=False)  # executor off: the direct path keeps the patch-id rule, a moved head with the same patch holds
+        self.assertNotIn("not a pass at", self.land_check()[1])
+
     def test_a_failing_verdict_needs_no_independence(self):
         os.environ["ORCA_TERMINAL_HANDLE"] = "term_author"
         real = prog.author_sessions

@@ -2122,6 +2122,23 @@ def verdict_identity_problem(v):
     return None
 
 
+def executor_verdict_problem(verdict, head, sources):
+    """Why the land executor would refuse this verdict at `head`, else None. The executor and `land-check` both call
+    it, so READY and a refusal never disagree: the verdict must be a pass for exactly this head (a matching patch-id
+    is not enough, the executor merges the sha it was asked about), from an allowed source, and attributable."""
+    if not verdict or verdict.get("sha") != head or verdict.get("result") != "pass" \
+            or verdict.get("source") not in sources:
+        got = (f"{verdict.get('result')} from {verdict.get('source')} at {(verdict.get('sha') or '')[:8]}"
+               if verdict else "none")
+        return (f"the latest verdict ({got}) is not a pass at {head[:8]} from {', '.join(sources)}:"
+                " review this head, orch verdict, land again")
+    bad = verdict_identity_problem(verdict)
+    if bad:  # the executor merges on a review it can attribute: who wrote, who reviewed, the proof, who recorded
+        return (f"the verdict cannot stand as an independent review: {bad}."
+                " Record it again with orch verdict --reviewer <who> --evidence <link or sha>")
+    return None
+
+
 def self_review(v):
     """The reason the review is the PR's own author's, else None. Every identity the row states counts: --reviewer, the
     reviewer inside a review:/verifier: source (so `--source review:author --reviewer codex` does not pass), and the
@@ -2806,8 +2823,8 @@ def cmd_land_check(argv):
             problems.append(f"no-CI lane: verdict is for {verdict['sha'][:8]}, not the head {v['headRefOid'][:8]}: re-review")
         elif v["headRefOid"] != verdict.get("sha"):
             print(f"note: head moved {verdict['sha'][:8]} -> {v['headRefOid'][:8]} with the same patch-id; verdict holds, CI must pass at the new head")
-        if land_executor(repo) and (bad := verdict_identity_problem(verdict)):  # the executor would refuse it: say so now
-            problems.append(f"verdict cannot stand as an independent review: {bad} (orch verdict --reviewer --evidence)")
+        if (ex := land_executor(repo)) and (why := executor_verdict_problem(verdict, v["headRefOid"], ex["verdict_sources"])):
+            problems.append(why)  # the executor would refuse it: say so now
     if p.cfg["merge_policy"] == "human-gate" and (hold := gate_hold(p, events, pr)):
         problems.append(hold)
     try:
