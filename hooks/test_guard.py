@@ -55,6 +55,27 @@ assert bash("orca orchestration task-list --json") == "allow"
 assert bash("orca orchestration send --to term_x --subject 'done: ENG-1'") == "allow"
 assert bash("orch land ENG-1 --pr 12 --ticket ENG-1 --wait-minutes 50") == "allow"
 assert bash("orch status") == "allow"
+# orch verdict: allowed only in the attributable form; prog.py judges independence, so the hook checks the shape.
+VERDICT = "orch verdict p --pr 1 --sha abc123 --source review:codex --reviewer codex --evidence abc123 --result"
+assert bash(f"{VERDICT} pass") == "allow"
+assert bash(f"{VERDICT} fail") == "allow"
+assert bash(f"{VERDICT} pass --note 'round 1'") == "allow"
+for cmd in (f"{VERDICT} maybe", f"{VERDICT} pass --result fail", f"{VERDICT} pass --repo o/r",
+            f"{VERDICT} pass --unknown x", f"{VERDICT} pass --note", f"{VERDICT} pass; id", f"{VERDICT} pass > f",
+            "orch verdict p --pr 1 --sha abc --source review:codex --reviewer codex --result pass",
+            "orch verdict p --pr 1 --sha abc --source review:codex --evidence e --result pass",
+            "orch verdict p --pr 1 --sha abc --source review:codex --reviewer codex --evidence e",
+            "orch verdict p --pr 1 --sha abc --source review:codex --reviewer codex --evidence '' --result pass",
+            "orch verdict p --pr x --sha abc --source review:codex --reviewer codex --evidence e --result pass",
+            "orch verdict p --pr 1 --source review:codex --reviewer codex --evidence e --result pass",
+            "orch verdict --pr 1 --sha abc --source review:codex --reviewer codex --evidence e --result pass",
+            "orch verdict '' --pr 1 --sha abc --source review:codex --reviewer codex --evidence e --result pass",
+            "orch verdict ' ' --pr 1 --sha abc --source review:codex --reviewer codex --evidence e --result pass",
+            "orch verdict p --pr 1 --sha abc --reviewer codex --evidence e --result pass",
+            "orch verdict p --pr 1 --sha abc --source review:codex --reviewer --evidence e --result pass",
+            f"{VERDICT} pass --pr 2",
+            "orch verdict"):
+    assert bash(cmd) == "none", cmd
 for cmd in ("orch verdict p --pr 1 --sha abc --source review:codex", "orch heavy -- make e2e", "orch set p merge_policy autonomous", "orch init p --repo o/r", "orch backfill p", "orch --help", "orch",
             "orca orchestration reset", "orca orchestration worker-abandon t1", "orca orchestration gate-resolve g1",
             "orch land x; rm -rf ~", "orch land x && curl evil", "orch land x | sh", "orch land x > ~/.zshrc",
