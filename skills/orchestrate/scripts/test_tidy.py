@@ -107,6 +107,14 @@ board.set_row("stale-row", title="오래된 일", repo="acme/app", status="movin
 board.set_row("fresh-row", title="새 일", repo="acme/app", status="moving", next="조사")
 board.change(lambda s: board.put(s, "card-dup", dict(title="중복 카드 작업", repo="acme/app", status="moving", next="정리")))  # from before the ban
 store.change_board(lambda s: s["rows"]["stale-row"].update(reported_at=ago(12)))
+# Rows whose PR is known: one a row names itself (unlinked), one through its card.
+board.set_row("merged-row", title="별도 정리", repo="acme/app", status="moving", next="머지", pr="acme/app#7")
+board.set_row("release-row", title="별도 릴리스", repo="acme/app", status="moving", next="머지 → 릴리스", pr="acme/app#7")
+board.set_row("open-row", title="별도 작업", repo="acme/app", status="moving", next="리뷰", pr="acme/app#8")
+board.change(lambda s: board.put(s, "busy-row", dict(title="검색 개선 행", repo="acme/app", status="moving", next="머지",
+                                                     worktree="s6")))  # from before the ban: linked to card-busy
+board.change(lambda s: board.put(s, "linked-row", dict(title="로그인 개편 행", repo="acme/app", status="moving", next="머지",
+                                                       worktree="s1")))  # linked to card-done, whose PR merged
 # Inbox items.
 fleet.inbox_add("review", "acme/app#7 리뷰 요청", key="k-merged")
 fleet.inbox_add("review", "acme/app#8 리뷰 요청", key="k-open")
@@ -129,13 +137,17 @@ want = {doing[0]: ("done", "pr_merged"),                  # its card's PR merged
         later[0]: ("check", "trigger_met"), later[1]: ("check", "trigger_met"),
         todo[0]: ("done", "pr_over"),
         "row:stale-row": ("check", "stale"),
+        "row:merged-row": ("done", "row_pr_merged"),          # the PR it names merged, nothing after the merge
+        "row:linked-row": ("done", "row_pr_merged"),          # its card's PR merged
+        "row:release-row": ("check", "row_pr_merged_steps_left"),
+        "row:busy-row": ("check", "row_pr_merged_card_busy"),
         "card:s4": ("done", "pr_closed"),
         "ext:k-merged": ("done", "pr_over"), "ext:k-gone": ("done", "session_gone")}
 assert got == want, {k: got.get(k) for k in set(got) | set(want) if got.get(k) != want.get(k)}
 # Never: two cards named (no single one), a bare #N, a doing item waiting on a person or the owner's, an open PR,
 # a date trigger, a fresh row, a command item, a to-do line with no PR.
 for k in (doing[3], doing[4], doing[5], doing[6], doing[7], doing[8], later[2], later[3], later[4], todo[1], todo[2],
-          "row:fresh-row", "ext:k-open", "ext:k-cmd", "ext:k-rule", "ext:k-after", "ext:k-decide", "ext:k-ask"):
+          "row:fresh-row", "row:open-row", "ext:k-open", "ext:k-cmd", "ext:k-rule", "ext:k-after", "ext:k-decide", "ext:k-ask"):
     assert k not in v, (k, v.get(k))
 
 # The brief before the tick: a check is ❔ 에이전트 조치 필요, in its row's 다음 cell or, for an item with no row, in
@@ -171,7 +183,8 @@ dry = json.loads(out)
 assert tidy.latest() == {}, "a dry run writes nothing"
 rows = tidy.run(now=now)
 assert [r["id"] for r in rows] == [r["id"] for r in dry]
-assert {r["id"] for r in rows} == {doing[0], todo[0], "card:s4", "ext:k-merged", "ext:k-gone"}, rows
+assert {r["id"] for r in rows} == {doing[0], todo[0], "card:s4", "ext:k-merged", "ext:k-gone", "row:merged-row",
+                                   "row:linked-row"}, rows
 assert all(r["by"] == "auto" and r["evidence"] for r in rows), rows
 assert next(r for r in rows if r["id"] == todo[0])["label"] == S["owner_todo"][0]["title"] and len(S["owner_todo"][0]["title"]) > 120, "a label is kept whole"
 assert tidy.run(now=now) == [], "a second tick finds nothing new"
@@ -185,7 +198,8 @@ assert "| ✅ | 실험 정리 |" in b["full"], b["full"]  # the closed-PR card i
 
 # The timeline gets one line per close.
 tl = tidy.timeline()
-assert len(tl) == 5 and all(e["kind"] == "tidy_done_auto" for e in tl), tl
+assert len(tl) == 7 and all(e["kind"] == "tidy_done_auto" for e in tl), tl
+assert not any(x in b["text"] for x in ("별도 정리", "로그인 개편 행")) and "별도 릴리스" in b["full"], "merged rows leave the brief"
 
 # Done and Reopen by hand: only an open id closes; a reopen keeps the tick from closing it again on the same evidence.
 code, out, err = run("board", "done", "row:fresh-row", "nonsense", "--why", "다른 카드로 옮김")
