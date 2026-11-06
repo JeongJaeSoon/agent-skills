@@ -981,6 +981,7 @@ steps, saved = [], (subprocess.run, sweep.run_shadow, sweep.run_round)
 def fake_run(cmd, **kw):
     steps.append(cmd[1:] if cmd[0] == sys.executable else cmd)
     if "patrol" in cmd:
+        assert kw.get("start_new_session") is True, kw  # candidates.kill_group acts only on a session leader
         raise subprocess.TimeoutExpired(cmd, 1)  # a patrol that hangs is given up on, and the rest still runs
     return subprocess.CompletedProcess(cmd, 0)
 
