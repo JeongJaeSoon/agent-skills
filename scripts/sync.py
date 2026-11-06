@@ -192,6 +192,9 @@ def locked(wait_s=0.0):
         yield True
 
 
+NO_CHANGE = "already imported and tombstoned"  # what store.py state prints when there is nothing left to move
+
+
 def state_step():
     """Run the loaded checkout's `store.py state --auto` after a good sync, so a PC moves its acks and stage table into
     the DB on the update that ships it, not when someone next runs setup. Idempotent; a PC whose DB is not migrated
@@ -204,7 +207,7 @@ def state_step():
     except subprocess.TimeoutExpired:
         print("state step: timed out")
         return "failed"
-    if p.returncode or (p.stdout.strip() and "already imported" not in p.stdout):  # a no-op tick says nothing
+    if p.returncode or p.stderr.strip() or p.stdout.strip() not in ("", NO_CHANGE):  # a no-op tick says nothing
         print((p.stdout + p.stderr).strip())
     return "ok" if p.returncode == 0 else "failed"
 

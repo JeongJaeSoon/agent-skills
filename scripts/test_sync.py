@@ -167,6 +167,17 @@ def test_sync():
     state = tmp / "state"
     env = dict(os.environ, AGENT_SKILLS_STATE=str(state), SKILLS_SYNC_NO_NOTIFY="1", SKILLS_SYNC_ORCA="false")
     live, other = setup(tmp)
+    # On macOS a notification is an `osascript` call: a fake one on PATH logs the text so the de-dup can be counted.
+    mac, notes = sys.platform == "darwin", tmp / "notes.log"
+    if mac:
+        (tmp / "bin").mkdir()
+        (tmp / "bin" / "osascript").write_text(f'#!/bin/sh\nprintf "%s\\n" "$2" >> {notes}\n')
+        os.chmod(tmp / "bin" / "osascript", 0o755)
+        env["PATH"] = f"{tmp / 'bin'}:{env['PATH']}"
+        del env["SKILLS_SYNC_NO_NOTIFY"]
+
+    def told():
+        return notes.read_text().count("DB state step") if notes.exists() else 0
 
     code, out = run_sync(live, env, "sync", "--no-broadcast")
     check("up to date", code == 0 and "up to date" in out, out)
@@ -204,6 +215,10 @@ def test_sync():
     code, out = run_sync(live, env, "sync", "--no-broadcast")
     check("a failing step is recorded and does not fail the sync",
           code == 0 and json.loads((state / "sync.json").read_text()).get("state") == "failed", out)
+    if mac:
+        check("a first failure is told once", told() == 1, notes.read_text() if notes.exists() else "no notes")
+        run_sync(live, env, "sync", "--no-broadcast")
+        check("a repeat failure is not told again", told() == 1, notes.read_text())
 
     commit(other, "hooks/hooks.json", "{}\n"); git(other, "push", "-q", "origin", "main")
     run_sync(live, env, "sync", "--no-broadcast")
@@ -220,8 +235,20 @@ def test_sync():
     check("the stop is recorded", st["ok"] is False and "uncommitted" in st["message"], st)
     check("a stopped sync does not run the state step", log.read_text().count("\n") == steps_before, log.read_text())
     check("a stopped sync keeps the last state, so a repeat failure is not told again", st.get("state") == "failed", st)
-    (tmp / "state-step.rc").unlink()
+    if mac:
+        check("a stopped sync after a failure does not tell it again", told() == 1, notes.read_text())
     git(live, "checkout", "-q", "--", ".")
+    run_sync(live, env, "sync", "--no-broadcast")  # the step still fails after the stop
+    if mac:
+        check("a failure after a stopped sync is not told again", told() == 1, notes.read_text())
+    (tmp / "state-step.rc").unlink()
+    if mac:  # ok, then failing again, is news again
+        run_sync(live, env, "sync", "--no-broadcast")
+        check("a recovered step is recorded ok", json.loads((state / "sync.json").read_text()).get("state") == "ok")
+        (tmp / "state-step.rc").write_text("1")
+        run_sync(live, env, "sync", "--no-broadcast")
+        check("failing again after a recovery is told again", told() == 2, notes.read_text())
+        (tmp / "state-step.rc").unlink()
 
     commit(live, "skills/b/SKILL.md", "local\n")
     code, out = run_sync(live, env, "sync", "--no-broadcast")
