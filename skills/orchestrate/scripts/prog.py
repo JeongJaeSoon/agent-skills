@@ -3197,14 +3197,12 @@ GUTTER = re.compile(r"^[\s⎿]*\d+(?:\s([+\-])|\s\s)")
 DIFF_HEAD = re.compile(r"\b(?:Update|Edit|Write|MultiEdit)\(|\b(?:Added|Removed) \d+ lines?\b|\bUpdated .* with \d+ (?:addition|removal)")
 
 
-WRAPPED = re.compile(r"^ {5,}\S")  # Claude Code indents a wrapped diff line under its gutter; command output sits under ⎿ or at the margin
-
-
 def without_diffs(lines, tail=25):
     """The last `tail` lines minus the drawn diffs: a gutter run with a + or - line that follows a diff header. Shape
     alone is not enough: a command can print "27 - step" and "28  No space left". A run with no header is kept, so a
     real disk error is never dropped. The whole screen is walked so a header is seen even when the tail cut it off,
-    but only lines that were in the tail come back."""
+    but only lines that were in the tail come back. A diff line too long for the terminal wraps onto a line with no
+    gutter; that line stays, because no rule for it told it apart from command output right after a diff."""
     out, run, head, in_diff = [], [], False, False
     first = len(lines) - tail
     for i, l in enumerate([*lines, None]):
@@ -3217,10 +3215,8 @@ def without_diffs(lines, tail=25):
             if not in_diff:
                 out += [(j, x) for j, x, _ in run]
             run = []
-        # A long diff line wraps onto indented lines with no gutter; they belong to the diff.
-        if l is None or (in_diff and WRAPPED.match(l) and not l.lstrip().startswith(("⏺", "❯", "⎿", "✻"))):
+        if l is None:
             continue
-        in_diff = False
         out.append((i, l))
         head = bool(DIFF_HEAD.search(l))
     return [l for i, l in out if i >= first]
