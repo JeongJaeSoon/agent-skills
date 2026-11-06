@@ -74,10 +74,17 @@ terms = [term(h) for h in ("h1", "h2", "h3", "h4", "h5", "h9")] + [term("cx", "c
 reads, warned = a.readings(terms, rows, None)
 assert (reads["h1"]["agents"], reads["h2"]["agents"], reads["h3"]["agents"]) == ("busy", "idle", "blocked")
 
-# unknown value: raw passes through, no state settled, one warning.
-assert reads["h4"] == {"agents": None, "raw": "waiting", "why": "unknown state waiting", "applies": True}, reads["h4"]
-assert warned == ["claude agents: a state outside busy, idle, blocked; passed through"], warned
-assert a.evidence(reads["h4"]) == "신호 없음 (unknown state waiting)"
+# Claude Code's `waiting` (a dialog is open, `waitingFor` says on what) is a session parked for a person: blocked.
+assert reads["h4"] == {"agents": "blocked", "raw": "waiting", "why": None, "applies": True}, reads["h4"]
+assert warned == [], warned
+assert a.evidence(reads["h4"]) == "blocked"
+assert a.compare(reads["h4"], "blocked")["differs"] == []
+
+# A state nobody has classified: raw passes through, no state settled, one warning, and the reading is "no signal".
+reads_u, warned_u = a.readings([term("h4")], [row("s4", status="hibernating")], None)
+assert reads_u["h4"] == {"agents": None, "raw": "hibernating", "why": "unknown state hibernating", "applies": True}, reads_u
+assert warned_u == ["claude agents: a state outside busy, idle, blocked; passed through"], warned_u
+assert a.evidence(reads_u["h4"]) == "신호 없음 (unknown state hibernating)"
 assert a.evidence(reads["h9"]) == "신호 없음 (no session record)"
 assert a.evidence(reads["h5"]) == "신호 없음 (not listed)"
 
@@ -102,7 +109,7 @@ assert warned3 == ["claude agents: not JSON; screen only this round"]
 # Codex: screen only, and no gap.
 assert reads["cx"]["applies"] is False and a.evidence(reads["cx"]) == "" and "cx" not in a.gaps(reads)
 assert a.compare(reads["cx"], "idle")["differs"] == []
-assert set(a.gaps(reads)) == {"h4", "h5", "h9"}
+assert set(a.gaps(reads)) == {"h5", "h9"}, "a classified waiting is a signal, not a gap"
 
 # compare: names the sides that disagree; unknown compares with nothing.
 busy = {"agents": "busy", "raw": "busy", "why": None}

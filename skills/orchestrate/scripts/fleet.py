@@ -1350,7 +1350,8 @@ def first_line(text, limit=160):
 QUESTION_RE = re.compile(r"Do you want to .+\?")
 OPTION_RE = re.compile(r"(?:❯\s*)?(\d)\.\s+(.+)")
 RULE_RE = re.compile(r"─{10,}")
-PROMPT_KEEP_S = 86400
+PROMPT_KEEP_S = 7200
+PROMPT_GRACE_S = 300
 
 
 def parse_dialog(lines):
@@ -1416,14 +1417,20 @@ def option_for(dialog, action):
     return next((d for d, label in dialog["options"] if want(label)), None)
 
 
-def prompt_records():
-    """{terminal handle: record} from prompts/, dropping records older than a day."""
-    out, cutoff = {}, iso(utcnow() - dt.timedelta(seconds=PROMPT_KEEP_S))
+def prompt_records(live=None):
+    """{terminal handle: record} from prompts/. A file older than PROMPT_KEEP_S is deleted. When live (every handle
+    `orca terminal list` gave, not the sessions' filtered view) is given and not empty, a record of a terminal not
+    in it is left out of the result but its file stays: the hook writes it once, so a list read too early or cut
+    short must not cost the page its buttons for good; the age limit clears it. A record younger than
+    PROMPT_GRACE_S is returned regardless, as the list may predate that terminal."""
+    now = utcnow()
+    out, cutoff = {}, iso(now - dt.timedelta(seconds=PROMPT_KEEP_S))
+    grace = iso(now - dt.timedelta(seconds=PROMPT_GRACE_S))
     for path in (state_dir() / "prompts").glob("*.json"):
         rec = read_json(path)
         if not isinstance(rec, dict) or (rec.get("at") or "") < cutoff:
             path.unlink(missing_ok=True)
-        elif rec.get("handle") == path.stem:
+        elif rec.get("handle") == path.stem and not (live and path.stem not in live and (rec.get("at") or "") < grace):
             out[path.stem] = rec
     return out
 
@@ -2120,7 +2127,7 @@ class Fleet:
         now, mem = self.now(), self.mem
         prompts, phases = mem.setdefault("prompts", {}), mem.setdefault("phases", {})
         sticky = mem.setdefault("sticky", {})
-        items, records = [], prompt_records()
+        items, records = [], prompt_records({t.get("handle") for t in self.fast["terminals"]} - {None})
         # Prompts and finished turns, per agent pane.
         for s in sessions.values():
             last_prompt = None
