@@ -115,6 +115,13 @@ fresh = tmp / "fresh"
 sh("git", "clone", "-q", str(repo), str(fresh), cwd=tmp)
 sh("git", "checkout", "-q", "-b", "reused", h2, cwd=fresh)
 assert rh.head_in_pr(str(fresh), h2, h3) is False and rh.head_in_pr(str(fresh), h3, h3) is True
+def reflog_fails(cmd, **kw):  # ancestor read succeeds, then the reflog read raises as reap.run does with check=True
+    if "reflog" in cmd:
+        raise RuntimeError("reflog read failed")
+    return ""
+
+
+assert rh.head_in_pr(str(repo), h2, h3, git=reflog_fails) is False  # no exception: the card stays, the pass goes on
 assert rh.head_in_pr(str(repo), h2, "0" * 40) is False and rh.head_in_pr(str(repo), "", h3) is False  # unfetched / unread
 
 # Stacks: down only when every working directory is gone; protected projects and ports stay.

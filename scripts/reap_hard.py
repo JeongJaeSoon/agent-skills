@@ -297,7 +297,12 @@ def head_in_pr(path, head, pr_head, git=reap.run):
         return False
     if git(["git", "-C", path, "merge-base", "--is-ancestor", head, pr_head], check=False) is None:
         return False
-    return head == pr_head or cards.history(path, git)[0] is True
+    if head == pr_head:
+        return True
+    try:
+        return cards.history(path, git)[0] is True
+    except (RuntimeError, OSError):  # reap.run raises on a failed git; one unreadable card must not stop the pass
+        return False
 
 
 def card_verdict(w, m, cfg, protect, now):
