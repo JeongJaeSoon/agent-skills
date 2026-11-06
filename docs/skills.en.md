@@ -1,4 +1,4 @@
-<!-- translated-from: 12181ab3515b0196c7ab78caa1a0cc048e51308a -->
+<!-- translated-from: b598dd4d2900e4d3929eae691028844dbfb17a4f -->
 # Skill catalog
 
 This page covers the 37 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 16 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
