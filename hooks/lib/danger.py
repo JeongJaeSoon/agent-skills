@@ -128,16 +128,19 @@ def after_cd(c, here):
     return expand(target, here) or UNKNOWN_DIR
 
 
-def after_switch(c, switched):
-    """The branch a `git switch <b>`, `git checkout <b>` or `-c/-b <b>` on the same command line leaves checked out
-    (None before any; "" when it cannot be read)."""
-    sub, args = (c.words[1], c.words[2:]) if len(c.words) > 1 else ("", [])
+def after_switch(c, switched, here):
+    """The branch a `git switch <b>`, `git checkout <b>` or `-c/-b <b> [<start>]` on the same command line leaves
+    checked out (None before any; "" when it cannot be read)."""
+    sub, args = verb(c.words[1:], {"-C", "-c", "--git-dir", "--work-tree", "--namespace"})
     if sub not in ("switch", "checkout") or "--" in args:  # `checkout -- <file>` restores files
         return switched
     if args == ["-"]:
         return ""
     names = [x for x in args if not x.startswith("-")]
-    return names[0] if len(names) == 1 else switched
+    # `git checkout README.md` restores a file; a branch name is not a path that exists here.
+    if not names or sub == "checkout" and os.path.exists(os.path.join(here or ".", names[0])):
+        return switched
+    return names[0]
 
 
 def verb(args, valued):
@@ -768,7 +771,7 @@ def check_bash(cmd, cfg, cwd=None, session=None):
     """[Finding] for a Bash command, rules turned off left out."""
     masked = shell.command_text(cmd)
     out, seen = [], set()
-    cmds, here, switched = shell.commands(cmd), cwd, None
+    cmds, here, switched, pushed = shell.commands(cmd), cwd, None, []
     outer, start, ticks = [], 0, False  # the directories to go back to at each `)` or closing backtick
     for i, c in enumerate(cmds):
         for ch in masked[start:c.span[0]]:
@@ -783,9 +786,15 @@ def check_bash(cmd, cfg, cwd=None, session=None):
         # A `cd` in a pipeline or sent to the background (`cd x &`) runs in a subshell; `||` and `&&` do not.
         if c.name in ("cd", "pushd", "popd") and not (
                 c.piped_from or c.piped_to or re.match(r"\s*(&(?!&)|\|(?!\|))", masked[c.span[1]:])):
+            before = here
             here = after_cd(c, here)
+            if c.name == "popd" and pushed:  # the directory the matching `pushd` left
+                here = pushed.pop()
+            elif c.name == "pushd" and here is not UNKNOWN_DIR:
+                pushed.append(before)
+            switched = None  # another folder may be another repository
         if c.name == "git":
-            switched = after_switch(c, switched)
+            switched = after_switch(c, switched, here)
         # `kill $(pgrep …)`: a pgrep inside this kill command's own substitution.
         if c.name == "kill" and any(d.name == "pgrep" and c.span[0] < d.span[0] and d.span[1] <= c.span[1]
                                     for d in cmds):
