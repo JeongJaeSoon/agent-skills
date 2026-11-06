@@ -92,6 +92,9 @@ LANES = {"todo": ("todo", "do"), "later": ("held", "later"), "doing": ("doing", 
 OPEN = ("todo", "doing", "held")
 OPEN_SQL = "('todo','doing','held')"
 GROUP_KIND, GROUP_POS = "group", 1_000_000  # a priority rule is a board_row of this kind, listed after every row
+# A card annotation (board.annot_set) is a board_row of this kind with the id card:<worktree>. Like a rule it is kept out of
+# board["rows"], so no report, tidy or count sees it until the renderer reads board["annots"].
+ANNOT_KIND, ANNOT_POS = "annot", 2_000_000
 GROUP_MATCH = re.compile(r"(?:worktree|program):\S.*|repo:[\w.-]+/[\w.-]+")  # what board.match_of() lets in
 GROUP_PRIORITY = re.compile(r"\d{1,3}:(?!.* — )\S.*")  # RANK:NAME, as board.priority_of() writes it
 ITEM_COLS = ("who", "title", "next", "waiting", "waiting_since", "trig", "due", "after_ref")
@@ -483,13 +486,16 @@ def _insert_lead(db, name, lead):
 
 def _board(db):
     """The open board in the shape board.json had: rows, order, leads and the four lanes, each item with its id."""
-    out = {"v": 1, "rows": {}, "order": [], "leads": {}, "groups": {}, **{lane: [] for lane in LANES}}
+    out = {"v": 1, "rows": {}, "order": [], "leads": {}, "groups": {}, "annots": {}, **{lane: [] for lane in LANES}}
     for r in db.execute(f"SELECT * FROM item WHERE status IN {OPEN_SQL} ORDER BY lane, pos, CAST(substr(id, 2) AS INTEGER)"):
         out[r["lane"]].append(_item(r))
     for r in db.execute("SELECT * FROM board_row ORDER BY pos, id"):
         row = _row_out(r)
         if row.get("kind") == GROUP_KIND:  # a priority rule (board.priority_set), not a row: no report, tidy or count sees it
             out["groups"][r["id"]] = row
+            continue
+        if row.get("kind") == ANNOT_KIND:  # a card annotation (board.annot_set): the same
+            out["annots"][r["id"]] = row
             continue
         out["rows"][r["id"]] = row
         out["order"].append(r["id"])
@@ -512,7 +518,6 @@ def _put_items(db, old, new, by, ts):
     for lane in LANES:
         kept = []
         for pos, d in enumerate(new[lane]):
-            forced = d.pop("forced", None)
             iid = d.get("id")
             if iid in seen or iid and iid not in known:
                 raise ValueError(f"{iid} is listed twice or is not an open item")
@@ -520,7 +525,7 @@ def _put_items(db, old, new, by, ts):
                 iid = d["id"] = _next_b(db)
                 cols = _item_cols(lane, d)
                 _insert_item(db, iid, lane, LANES[lane][0], pos, cols, d.get("added") or ts, ts)
-                _event(db, "item", iid, "add", by, None, {**d, "lane": lane, **({"forced": forced} if forced else {})})
+                _event(db, "item", iid, "add", by, None, {**d, "lane": lane})
                 continue
             seen.add(iid)
             kept.append(iid)
@@ -575,6 +580,34 @@ def _put_groups(db, old, new, by):
         _event(db, "board_row", rid, "drop", by, old["groups"][rid])
 
 
+def _put_annots(db, old, new, by):
+    """The card annotations: board_row rows of kind annot, positioned after the rules. An annotation with no field left
+    is deleted with its last value in the event."""
+    for n, (rid, row) in enumerate(sorted(new["annots"].items())):
+        if rid not in old["annots"]:
+            _insert_row(db, row, ANNOT_POS + n)
+            _event(db, "board_row", rid, "add", by, None, row)
+        elif row != old["annots"][rid]:
+            db.execute("UPDATE board_row SET data=? WHERE id=?", (_row_data(row), rid))
+            _event(db, "board_row", rid, "update", by, old["annots"][rid], row)
+    for rid in set(old["annots"]) - set(new["annots"]):
+        db.execute("DELETE FROM board_row WHERE id=?", (rid,))
+        _event(db, "board_row", rid, "drop", by, old["annots"][rid])
+
+
+def row_origins():
+    """{row id: the row as the import event kept it}: the original worktree and PR of a row the import cut. A row dropped
+    or added again since is another row under the same id, and has no origin."""
+    out = {}
+    with read() as c:
+        for r in c.execute("SELECT id, ev, before FROM event WHERE entity='board_row' AND ev IN ('import','add','drop') ORDER BY seq"):
+            if r["ev"] == "import" and r["before"]:
+                out[r["id"]] = json.loads(r["before"])
+            else:
+                out.pop(r["id"], None)
+    return out
+
+
 def _put_leads(db, old, new, by):
     for name, lead in new["leads"].items():
         if name not in old["leads"]:
@@ -597,6 +630,7 @@ def change_board(fn, by=None):
         _put_items(db, old, new, by, ts)
         _put_rows(db, old, new, by)
         _put_groups(db, old, new, by)
+        _put_annots(db, old, new, by)
         _put_leads(db, old, new, by)
         return out
 
@@ -623,6 +657,11 @@ def latest(db=None):
             done = r["state"] == "done"
             out[r["unit"]] = {"ev": r["state"], "id": r["unit"], "ts": r["ts"], "by": r["by"], "rule": r["rule"],
                               "label": r["label"], "evidence": r["evidence"] if done else r["undone_evidence"]}
+        # row:<id> is an alias of the card an annotation took the row's place in: a close of the old row is the card's.
+        for r in c.execute("SELECT id, data FROM board_row WHERE id LIKE 'card:%'"):
+            for old in json.loads(r["data"]).get("aliases") or ():
+                if old in out and r["id"] not in out:
+                    out[r["id"]] = {**out[old], "id": r["id"]}
         return out
     if db is not None:
         return run(db)
@@ -671,9 +710,20 @@ def close_unit(db, line, mark=None):
            dict(db.execute("SELECT * FROM closure WHERE unit=?", (iid,)).fetchone()), line["ts"])
 
 
+def _alias_closure(db, iid):
+    """The unit that holds the close a card inherits (latest()): the row:<id> an annotation took the place of, when
+    card:<worktree> has no close of its own. Any other id as it is."""
+    if not iid.startswith("card:") or db.execute("SELECT 1 FROM closure WHERE unit=?", (iid,)).fetchone():
+        return iid
+    r = db.execute("SELECT data FROM board_row WHERE id=?", (iid,)).fetchone()
+    return next((a for a in json.loads(r["data"]).get("aliases") or ()
+                 if db.execute("SELECT 1 FROM closure WHERE unit=?", (a,)).fetchone()), iid) if r else iid
+
+
 def reopen_unit(db, iid, ts, by, rule="manual", mark=None):
     """Undo a close in one transaction: status back to what the lane has open, or the closure row marked reopen, with the
     evidence it undid (tidy does not close again on it) and, for ext:, a new ext_mark."""
+    iid = _alias_closure(db, iid)
     before = _item_now(db, iid)
     if before:
         db.execute("UPDATE item SET status=?, closed_at=NULL, close_by=?, close_rule=?, close_evidence=NULL, reopen_evidence=?, "
@@ -681,6 +731,8 @@ def reopen_unit(db, iid, ts, by, rule="manual", mark=None):
         _event(db, "item", iid, "reopen", by, dict(before), dict(_item_now(db, iid)), ts)
         return
     was = db.execute("SELECT * FROM closure WHERE unit=?", (iid,)).fetchone()
+    if was["state"] == "reopen":  # a card and its alias in one call: the close is already undone, with its evidence kept
+        return
     db.execute("UPDATE closure SET state='reopen', ts=?, by=?, rule=?, evidence=NULL, undone_evidence=?, ext_mark=? WHERE unit=?",
                (ts, by, rule, was["evidence"], mark, iid))
     _event(db, "closure", iid, "reopen", by, dict(was), dict(db.execute("SELECT * FROM closure WHERE unit=?", (iid,)).fetchone()), ts)
@@ -976,18 +1028,30 @@ def order_link(oid, unit, by=None, stand_in=False):
                          (oid, unit, 0 if stand_in else 1, now(), by))
         if cur.rowcount:
             _event(db, "order", oid, "link", by, None, {"unit": unit, "stand_in": bool(stand_in)})
+            if not stand_in:
+                _unmark(db, oid, by)
             return True
         if not stand_in and db.execute("UPDATE order_link SET resolves=1 WHERE order_id=? AND unit=? AND resolves=0",
                                        (oid, unit)).rowcount:
             _event(db, "order", oid, "link", by, {"stand_in": True}, {"unit": unit, "stand_in": False})
+            _unmark(db, oid, by)
             return True
         return False
 
 
-def order_close(oid, status, by=None, evidence=None, reason=None, check=None):
+def _unmark(db, oid, by):
+    """A real link added after the receiving session said every unit was linked takes that word back: it has to say it again."""
+    r = db.execute("SELECT links_complete_at FROM order_ WHERE id=?", (oid,)).fetchone()
+    if r and r[0]:
+        db.execute("UPDATE order_ SET links_complete_at=NULL WHERE id=?", (oid,))
+        _event(db, "order", oid, "links_open", by, {"links_complete_at": r[0]}, {"links_complete_at": None, "why": "new link"})
+
+
+def order_close(oid, status, by=None, evidence=None, reason=None, check=None, snapshot=None):
     """Open -> done or dropped. Returns the row; a closed order keeps its first close. evidence and reason go into the
-    close event. check(row) runs inside the write transaction on an open order and raises ValueError to refuse the
-    close, and may return the evidence to record: the close is judged on the links as they are when it is written."""
+    close event, and so does snapshot, the normalized evidence of the units a Reopen keeps (order_close.py). check(row)
+    runs inside the write transaction on an open order and raises ValueError to refuse the close, and may return the
+    evidence to record: the close is judged on the links as they are when it is written."""
     if status not in ("done", "dropped"):
         raise ValueError(status)
     with _order_tx() as db:
@@ -1000,7 +1064,7 @@ def order_close(oid, status, by=None, evidence=None, reason=None, check=None):
             db.execute("UPDATE order_ SET status=?, closed_at=?, close_by=? WHERE id=?", (status, now(), by, oid))
             _event(db, "order", oid, status, by, {"status": "open"},
                    {"status": status, **({"evidence": evidence} if evidence else {}),
-                    **({"reason": fleet.mask(reason)} if reason else {})})
+                    **({"snapshot": snapshot} if snapshot else {}), **({"reason": fleet.mask(reason)} if reason else {})})
         return _order_out(db, db.execute("SELECT * FROM order_ WHERE id=?", (oid,)).fetchone())
 
 
@@ -1016,18 +1080,78 @@ def order_get(oid, require_open=False):
         return _order_out(db, r)
 
 
-def order_reopen(oid, by=None):
+def order_reopen(oid, by=None, snapshot=None):
     """Done or dropped -> open. The receiving session must say again that every unit is linked, so the mark goes with
-    the close. The snapshot of the evidence at close is PR 5c's; reopen_evidence is left as it is."""
+    the close. reopen_evidence keeps the evidence the close stood on, so the automatic close does not shut the order
+    again on the same evidence: the snapshot the close event holds (every close by `orch order` writes one it could
+    read), else `snapshot` (the caller's reading of the units now). Neither: EVIDENCE_UNKNOWN, and the next pass that
+    can read the units makes what it reads the baseline instead of closing (order_baseline)."""
     with _order_tx() as db:
         r = db.execute("SELECT * FROM order_ WHERE id=?", (oid,)).fetchone()
         if not r:
             raise ValueError(f"no order {oid}")
         if r["status"] != "open":
-            db.execute("UPDATE order_ SET status='open', closed_at=NULL, close_by=NULL, links_complete_at=NULL WHERE id=?", (oid,))
+            closed = db.execute("SELECT after FROM event WHERE entity='order' AND id=? AND ev IN ('done','dropped') "
+                                "ORDER BY seq DESC LIMIT 1", (oid,)).fetchone()
+            kept = (json.loads(closed[0] or "{}").get("snapshot") if closed else None) or snapshot or EVIDENCE_UNKNOWN
+            db.execute("UPDATE order_ SET status='open', closed_at=NULL, close_by=NULL, links_complete_at=NULL, "
+                       "reopen_evidence=? WHERE id=?", (kept, oid))
             _event(db, "order", oid, "reopen", by, {"status": r["status"], "closed_at": r["closed_at"],
-                                                    "links_complete_at": r["links_complete_at"]}, {"status": "open"})
+                                                    "links_complete_at": r["links_complete_at"]},
+                   {"status": "open", "reopen_evidence": kept})
         return _order_out(db, db.execute("SELECT * FROM order_ WHERE id=?", (oid,)).fetchone())
+
+
+def auto_still(row, links_seen, snapshot):
+    """Raise ValueError unless an open order is still what the judgement read: the same real links, the receiving
+    session's word that they are all there, not the owner's to act on, and evidence other than a reopen kept."""
+    real = sorted(u for u in row["links"] if u not in row["stand_ins"])
+    if (row["status"] != "open" or real != sorted(links_seen) or not row["links_complete_at"] or row["owner_action"]
+            or row["reopen_evidence"] in (snapshot, EVIDENCE_UNKNOWN)):
+        raise ValueError(f"{row['id']} changed while it was judged")
+
+
+EVIDENCE_UNKNOWN = "unknown"  # reopen_evidence of an order reopened while its units could not be read
+
+
+def order_auto(oid, snapshot, units, links_seen, close=False, recheck=None, by="auto"):
+    """The automatic close of an order, or with close=False its shadow: one `would_close` event saying what tidy would
+    have closed on, nothing else changes. Everything is read again inside the write transaction: the order (links,
+    the receiving session's word, owner action, kept evidence) by auto_still, and recheck(db) the units that live in
+    this DB. True when written; False when something moved since the order was judged, or (shadow) this evidence was
+    recorded before, since a tick finds the same candidate every minute."""
+    with _order_tx() as db:
+        r = db.execute("SELECT * FROM order_ WHERE id=?", (oid,)).fetchone()
+        if not r:
+            return False
+        try:
+            auto_still(_order_out(db, r), links_seen, snapshot)
+            if recheck:
+                recheck(db)
+        except ValueError:
+            return False
+        if close:
+            db.execute("UPDATE order_ SET status='done', closed_at=?, close_by=? WHERE id=?", (now(), by, oid))
+            _event(db, "order", oid, "done", by, {"status": "open"},
+                   {"status": "done", "evidence": {"rule": "order_units_done", "units": units}, "snapshot": snapshot})
+            return True
+        if any(json.loads(a[0] or "{}").get("snapshot") == snapshot for a in db.execute(
+                "SELECT after FROM event WHERE entity='order' AND id=? AND ev='would_close'", (oid,))):
+            return False
+        _event(db, "order", oid, "would_close", by, None, {"rule": "order_units_done", "snapshot": snapshot, "units": units})
+        return True
+
+
+def order_baseline(oid, snapshot, links_seen):
+    """An order reopened with its units unread has no evidence to compare: the first readable pass records what it
+    reads as reopen_evidence, and the order closes only when that changes. True when recorded."""
+    with _order_tx() as db:
+        r = db.execute("SELECT * FROM order_ WHERE id=?", (oid,)).fetchone()
+        if not r or r["status"] != "open" or r["reopen_evidence"] != EVIDENCE_UNKNOWN:
+            return False
+        db.execute("UPDATE order_ SET reopen_evidence=? WHERE id=?", (snapshot, oid))
+        _event(db, "order", oid, "baseline", "auto", {"reopen_evidence": EVIDENCE_UNKNOWN}, {"reopen_evidence": snapshot})
+        return True
 
 
 def order_links_complete(oid, by=None, undo=False):
@@ -1512,7 +1636,7 @@ BOARD_FIELDS = {"doing": ("title", "owner", "next", "waiting", "since"), "later"
 def _legacy_board(p):
     """(board, problems, extra) from a board.json. problems stop the import; extra names fields no column holds, which
     stay in the backup and in each item's import event."""
-    out, bad, extra = {"rows": {}, "order": [], "leads": {}, "groups": {}, **{lane: [] for lane in LANES}}, [], set()
+    out, bad, extra = {"rows": {}, "order": [], "leads": {}, "groups": {}, "annots": {}, **{lane: [] for lane in LANES}}, [], set()
     if p.is_dir():
         return out, [f"{p.name} is a directory but the step that left it is not recorded: put the file back first"], extra
     if not p.is_file():
@@ -1523,7 +1647,8 @@ def _legacy_board(p):
         return out, [f"{p.name}: not JSON ({e})"], extra
     if not isinstance(data, dict):
         return out, [f"{p.name}: not an object"], extra
-    for key, kind in (("rows", dict), ("order", list), ("leads", dict), ("groups", dict), *((lane, list) for lane in LANES)):
+    for key, kind in (("rows", dict), ("order", list), ("leads", dict), ("groups", dict), ("annots", dict),
+                      *((lane, list) for lane in LANES)):
         if isinstance(data.get(key) or kind(), kind):
             out[key] = data.get(key) or kind()
         else:
@@ -1558,6 +1683,9 @@ def _legacy_board(p):
                 or g["priority"].split(":", 1)[0] != str(int(g["priority"].split(":", 1)[0]))):  # and no leading zero
             bad.append(f"priority rule {gid}: not a group with id prio:MATCH, a match of worktree:ID, program:NAME or "
                        "repo:OWNER/NAME, and a priority of RANK:NAME")
+    for aid, a in out["annots"].items():
+        if not isinstance(a, dict) or a.get("id") != aid or a.get("kind") != ANNOT_KIND or not aid.startswith("card:") or len(aid) == 5:
+            bad.append(f"annotation {aid}: not a row of kind {ANNOT_KIND} with the id card:<worktree>")
     return out, bad, extra
 
 
@@ -1622,6 +1750,7 @@ def _plan_board(board_, lines, state, ts, start=1):
             out["rows_cut"] += 1
         out["rows"].append((pos, r, board_["rows"][rid]))
     out["groups"] = sorted((board_.get("groups") or {}).items())
+    out["annots"] = sorted((board_.get("annots") or {}).items())
     out["next"] = n
     return out
 
@@ -1644,6 +1773,9 @@ def _fill_board(db, plan, lines, by="import"):
     for n, (gid, g) in enumerate(plan["groups"]):
         _insert_row(db, g, GROUP_POS + n)
         _event(db, "board_row", gid, "import", by, g)
+    for n, (aid, a) in enumerate(plan["annots"]):
+        _insert_row(db, a, ANNOT_POS + n)
+        _event(db, "board_row", aid, "import", by, a)
     for name, l in plan["leads"]:
         _insert_lead(db, name, l)
         _event(db, "lead", name, "import", by, l)
@@ -2062,7 +2194,9 @@ def _export_board(dest):
     drop = lambda row: {k: v for k, v in row.items() if k != "done_at" or v}  # noqa: E731
     board_json = {"v": 1, "rows": {k: drop(r) for k, r in b["rows"].items()}, "order": b["order"], "leads": b["leads"], **lanes,
                   # the 4a code ignores a key it does not know, and the next import puts the priority rules back
-                  **({"groups": b["groups"]} if b["groups"] else {})}
+                  **({"groups": b["groups"]} if b["groups"] else {}),
+                  # card annotations: 4a ignores the key too, and the next import puts them back
+                  **({"annots": b["annots"]} if b["annots"] else {})}
     fleet.write_atomic(dest / "board.json", json.dumps(board_json, ensure_ascii=False, indent=1) + "\n")
     fleet.write_atomic(dest / "tidy.jsonl", "".join(json.dumps(l, ensure_ascii=False, separators=(",", ":")) + "\n" for l in lines))
     text = (data or b"").decode()

@@ -132,7 +132,7 @@ assert "보고서에 없는 세션 1 (worker-z)" in render()["headline_facts"]
 # A top-level card's subagent stays in the report of the program the card's board row is in.
 import board  # noqa: E402
 write_state([sess("top-card", "standalone", "working", orca_parent="root", subagents=[agent("t1", "Check the docs", 0.1)])])
-board.set_row("ABC-2", title="top-card 문서", status="moving", next="작업 중", repo="acme/app", program="prog-a")
+board.change(lambda s: board.put(s, "ABC-2", dict(title="top-card 문서", status="moving", next="작업 중", repo="acme/app", program="prog-a")))  # as before A-ANNOT
 scoped = render("--scope", "prog-a")["snapshot"]["rows"]
 assert "agent:t1" in scoped and "agent:r1" not in scoped, scoped
 board.drop("ABC-2")
