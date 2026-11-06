@@ -86,8 +86,10 @@ From this release the board, the to-do and held lists, leads and every close liv
 - Every doing, held, to-do and now-list item has a stable id `b<N>`. It stays through rewording and moves, and no other work ever gets it. Old `doing:`, `later:`, `do:` and `todo:` ids keep reaching the item they named at the import.
 - Removing an item from a list keeps its row as `dropped`, with its last value in `event`.
 - `board.prev.json` and `tidy.jsonl.1` are gone; each change's before and after is in `event`. The import moves the two files into its backup.
-- `orch board doing add` is refused for a title that names a live card or subagent, since those have their own rows; `--force --why <reason>` adds it anyway and keeps the reason in the event.
-- `orch board set --pr` is refused on a row linked to a card, as is `--worktree` to another card. The row keeps its link and shows Orca's PR. An unlinked row may link once with `--worktree`.
+- `orch board doing add` is refused for a title that names a live card or subagent, since those have their own rows. There is no override: the orchestrator's own next step is `orch board todo add`, a card's is a message to the card, and a different job that only shares the name gets a reworded title.
+- `orch board set --pr` is refused on a row linked to a card, as is `--worktree` to another card. The row keeps its link and shows Orca's PR.
+- A new row linked to a card (by `--worktree` or by the name in its id and title) is refused. What Orca does not know about a card goes on the card's annotation: `orch board set card:<worktree> [--phase P] [--progress N/M] [--after owner/repo#N] [--owner W --next T]`. Other fields are refused. `--owner` with `--next` records an owner block; `--next` alone is a step after merge (release, deploy); `-` clears a field. An annotation is a `board_row` row with the id `card:<worktree>` and no title, PR or worktree. The brief does not show it yet.
+- `orch board annot-migrate` moves the existing card-linked rows into annotations (dry run unless `--apply`). A row moves when the worktree the import kept, the one the row holds, or the name in its id and title point at exactly one card Orca shows; the row becomes `dropped` (its original stays in `event`) and `row:<id>` becomes an alias of `card:<worktree>`, so the old close still holds. A row with no such card, with evidence for two cards, or sharing a card with another row stays and is listed as `중복 N건` with a command. Running it again is safe. `--apply` is refused until the brief reads annotations.
 - `orch board lead add` is refused for a lead Orca lists. `orch board set <lead> --kind lead --repo <repo> --worktree <worktree>` links a row to it. `lead add` stays for a lead Orca cannot see.
 - Closing an inbox item no longer writes `inbox-external.jsonl`. The closure records which line it saw, so a new line of that key decides afterwards, and a reopen needs no new line. If the file was rewritten and the line is gone, the last line decides and the brief's headline says `인박스 기록 어긋남`.
 - Until `orch db import` has run, board commands stop with a pointer to `orch db migrate` (the main checkout's absolute path), `orch board open` prints the same line on stderr, and the brief's headline shows `이행 대기: 보드·결정 DB` with every row at ❔.
@@ -126,3 +128,23 @@ Running `--apply` again is safe, as it is for decisions: the tombstone is laid o
 4. Revert to the previous release, fast-forward, and start the writers again.
 
 A later import takes the files back in. The tables are replaced, and numbering carries on from where it was: a `b<N>` from before the rollback is never reused. To go back past the decisions step as well, finish this first, then follow "Undoing it" for decisions.
+
+# Needs you and Sent read their sources (2026-11-06)
+
+## What changes
+
+- Needs you reads `pressure-queue.json` and `patrol.jsonl` itself. The held commands that wait or retry are one item ("기계 대기 N건"); one that gave up or failed, and each open patrol finding, is an item of its own. Neither writes to `inbox-external.jsonl` any more. Dismissing and closing work per queue id and per finding (`patrol:<id>:<detected_at>`), as before.
+- A line typed from the dashboard is a row of the `orch sent` log (`kind: dashboard`). Sent shows the log and Orca's own records. A send found only in a live session's transcript is not a row: a warning counts it ("N sends match no log or Orca row").
+- PR events are written to `events.jsonl` only (`kind: pr_*`, with the owner, checks and head `pr-events.jsonl` carried).
+
+## Switch-over order
+
+1. Fast-forward the loaded checkout. The dashboard restarts itself; new code needs no state change to start.
+2. `orch-dash migrate-inputs` prints what it would do and writes nothing. Check the counts.
+3. `orch-dash migrate-inputs --apply` appends a `resolve` line (reason `migrated`) after each open patrol and pressure-queue line in `inbox-external.jsonl`, copies the typed lines of `sends.jsonl` into the sent log and keeps that file read-only as `sends.archive.jsonl`, and makes `pr-events.jsonl` read-only. It deletes nothing, and running it again finds nothing left.
+
+Until step 3 the old lines are already hidden, and the sent log lacks the lines typed before the move.
+
+## Undoing it
+
+Revert to the previous release and fast-forward. The old code adds its own pressure and patrol lines again on its next round. To read the archived files again, make them writable (`chmod u+w`) and move `sends.archive.jsonl` back to `sends.jsonl`.
