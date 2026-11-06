@@ -155,12 +155,8 @@ class Round:
                                          " review the new head, orch verdict, land again")
         verdict = prog.pr_state(p.events()).get(pr, {}).get("verdict")
         audit["verdict"] = verdict
-        if not verdict or verdict.get("sha") != sha or verdict.get("result") != "pass" \
-                or verdict.get("source") not in ex["verdict_sources"]:
-            got = (f"{verdict.get('result')} from {verdict.get('source')} at {(verdict.get('sha') or '')[:8]}"
-                   if verdict else "none")
-            return settle("refused", 3, f"the latest verdict ({got}) is not a pass at {sha[:8]} from"
-                                         f" {', '.join(ex['verdict_sources'])}: review this head, orch verdict, land again")
+        if why := prog.executor_verdict_problem(verdict, sha, ex["verdict_sources"]):
+            return settle("refused", 3, why)
         try:
             comments = prog.gh_json("pr", "view", str(pr), "--repo", repo, "--json", "comments").get("comments") or []
         except SystemExit as e:

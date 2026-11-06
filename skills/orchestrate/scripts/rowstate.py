@@ -265,26 +265,23 @@ def program_of(key, f):
     return progs[-1]
 
 
+NEXT = {"draft": "초안 → ready", "conflict": "충돌 해소", "changes": "리뷰 지적 반영", "ci": "체크",
+        "program_unknown": "리뷰·머지", "review": "리뷰", "fix": "리뷰 지적 반영", "ready": "머지"}
+
+
 def merge_next(key, p, f):
     """The agent's next step on a PR it merges, from the evidence: never 머지 without a passing review of the head."""
-    if p.get("draft"):
-        return "초안 → ready"
-    if p.get("merge_state") == "DIRTY":
-        return "충돌 해소"
-    if p.get("decision") == "CHANGES_REQUESTED":
-        return "리뷰 지적 반영"
-    if p.get("ci") in ("failure", "pending"):
-        return "체크"
+    import landjudge
     prog = program_of(key, f)
-    if not prog:
-        return "리뷰·머지"
-    v = prog.get("verdict")
-    head = p.get("head") or ""
-    if not v or not head or not v["sha"] or not (head.startswith(v["sha"]) or v["sha"].startswith(head)):
-        return "리뷰"
-    if not v["pass"]:
-        return "리뷰 지적 반영"
-    return "머지" if p.get("ci") == "success" and p.get("merge_state") in ("CLEAN", "HAS_HOOKS") else "체크"
+    v = (prog or {}).get("verdict")
+    ci = p.get("ci")
+    state = landjudge.judge({
+        "draft": p.get("draft"), "merge_state": p.get("merge_state"), "head": p.get("head") or "",
+        "changes_requested": p.get("decision") == "CHANGES_REQUESTED",
+        "ci_failed": ["ci"] if ci == "failure" else [], "ci_pending": ["ci"] if ci == "pending" else [],
+        "ci_unknown": ci != "success", "program": bool(prog),
+        "verdict": v}, "row").state
+    return NEXT[state]
 
 
 def patrol_reason(r, stalled, sid):
