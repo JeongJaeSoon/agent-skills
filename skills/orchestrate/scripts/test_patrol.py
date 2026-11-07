@@ -520,9 +520,9 @@ assert patrol.due({"t": NOW - 26 * 60, "level": "danger"}, "danger", NOW)
 assert patrol.due({"t": NOW - 16 * 60, "level": "danger"}, "danger", NOW, floor="warn"), "danger again after a fall to warn"
 assert not patrol.due({"t": NOW - 16 * 60, "level": "danger"}, "danger", NOW, floor="danger")
 # trigger_level reads pressure's floor only for the round it tracked.
-patrol.PRESSURE.write_text(json.dumps({"level": "warn", "trigger_level": "danger", "trigger_obs": [[60, "warn"], [70, "danger"]]}))
+patrol.PRESSURE.write_text(json.dumps({"level": "warn", "trigger_level": "danger", "trigger_obs": [[60, "warn"], [470, "danger"]]}))
 assert patrol.trigger_level({"t": 50, "level": "danger"}) == ("danger", "warn")
-assert patrol.trigger_level({"t": 65, "level": "danger"}) == ("danger", "danger"), "a fall before the round began is not below its level"
+assert patrol.trigger_level({"t": 400, "level": "danger"}) == ("danger", "danger"), "a fall before the round began is not below its level"
 assert patrol.trigger_level({}) == ("danger", "ok")
 # pressure's history is timestamped, so what patrol commits cannot erase a fall: one seen while the round gathered, or
 # between its last read and its commit, is still below the round's level once the memo carries the round's start time.

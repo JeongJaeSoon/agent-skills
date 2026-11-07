@@ -403,8 +403,18 @@ obs = p.trigger_obs_add(None, "warn", 10.0)
 assert obs == [[10.0, "warn"]] and p.trigger_obs_add(obs, "warn", 20.0) == obs, "only changes are kept"
 assert p.trigger_obs_add(obs, "danger", 30.0) == [[10.0, "warn"], [30.0, "danger"]]
 assert len(p.trigger_obs_add([[i, "ok" if i % 2 else "warn"] for i in range(100)], "danger", 200.0)) == p.TRIGGER_OBS_KEEP
+# Past the cap the lowest level that falls off stays, so a start patrol never took still sees the fall to ok.
+long = [[1000.0, "ok"]] + [[1001.0 + i, "danger" if i % 2 else "warn"] for i in range(40)]
+kept = p.trigger_obs_add(long, "danger", 2000.0, since=1000.0)
+assert len(kept) == p.TRIGGER_OBS_KEEP and kept[0] == [1000.0, "ok"] and p.floor_since(kept, {"t": 1000.0, "level": "warn"}) == "ok"
+# A clock set back leaves future entries behind: they are dropped. Entries patrol's last round has seen are dropped too.
+assert p.trigger_obs_add([[10000.0, "warn"]], "danger", 1200.0) == [[1200.0, "danger"]]
+assert p.trigger_obs_add([[10.0, "warn"], [900.0, "danger"]], "danger", 1000.0, since=800.0) == [[900.0, "danger"]]
+# A pressure round stamps its entry when it starts: one stamped just before patrol's round began still counts.
+assert p.floor_since([[990.0, "warn"], [1020.0, "danger"]], {"t": 1000.0, "level": "danger"}) == "warn"
+assert p.floor_since([[800.0, "warn"], [1020.0, "danger"]], {"t": 1000.0, "level": "danger"}) == "danger"
 assert p.floor_since([[10.0, "warn"], [30.0, "danger"]], {"t": 5, "level": "danger"}) == "warn", "a fall since the round began"
-assert p.floor_since([[10.0, "warn"], [30.0, "danger"]], {"t": 20, "level": "danger"}) == "danger", "an older fall is not below it"
+assert p.floor_since([[10.0, "warn"], [500.0, "danger"]], {"t": 400, "level": "danger"}) == "danger", "an older fall is not below it"
 assert p.floor_since([], {"t": 5, "level": "warn"}) == "warn" and p.floor_since([], {}) == "ok"
 assert p.rise_due("ok", 100.0, "warn", 1000.0) and not p.rise_due("warn", 100.0, "warn", 1000.0)
 assert not p.rise_due("ok", 500.0, "warn", 1000.0), "inside the 15-minute gap"

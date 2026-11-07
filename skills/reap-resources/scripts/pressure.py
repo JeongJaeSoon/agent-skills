@@ -130,22 +130,28 @@ def read_patrol_memo():
 
 
 TRIGGER_OBS_KEEP = 24
+TRIGGER_SKEW_S = 120  # a pressure round stamps its entry when it starts and saves it after measuring: it can land just before patrol's start
 
 
-def trigger_obs_add(obs, tlevel, now):
+def trigger_obs_add(obs, tlevel, now, since=0):
     """The trigger level's changes, [time, level], newest last: the history `floor_since` reads. It is kept by the
-    pressure round alone and timestamped, so it does not depend on when patrol commits its memo."""
-    obs = [o for o in obs or [] if isinstance(o, list) and len(o) == 2]
+    pressure round alone and timestamped, so it does not depend on when patrol commits its memo. Entries from the
+    future (the clock was set back) and those patrol's last round has already seen are dropped; past the cap the
+    lowest of what falls off stays, since a start patrol never took still needs the lowest level seen."""
+    obs = [o for o in obs or [] if isinstance(o, list) and len(o) == 2 and o[0] <= now and o[0] >= since - TRIGGER_SKEW_S]
     if not obs or obs[-1][1] != tlevel:
         obs.append([now, tlevel])
-    return obs[-TRIGGER_OBS_KEEP:]
+    if len(obs) > TRIGGER_OBS_KEEP:
+        cut = len(obs) - TRIGGER_OBS_KEEP + 1
+        obs = [min(obs[:cut], key=lambda o: LEVELS.index(o[1])), *obs[cut:]]
+    return obs
 
 
 def floor_since(obs, memo):
     """The lowest trigger level since patrol's last round began (memo.t is when it began, memo.level the level it saw
     then). A fall starts no round, so only this floor lets a climb back to the old level read as a rise, including a
     fall that happened while that round was still gathering."""
-    since = memo.get("t") or 0
+    since = (memo.get("t") or 0) - TRIGGER_SKEW_S
     return min([memo.get("level") or "ok", *(o[1] for o in obs or [] if o[0] >= since)], key=LEVELS.index)
 
 
@@ -1021,7 +1027,7 @@ def round_once(cfg, dry_run, out=print, now=None, measure_fn=measure, sample_fn=
     load_danger = any(metric == "load_per_cpu" and lvl == 2 for metric, lvl, _ in hits(m, cfg))
     tlevel, held = trigger_level(st.get("trigger_level") or "ok", st.get("trigger_held"), level, m, load_danger)
     memo = read_patrol_memo()
-    obs = trigger_obs_add(st.get("trigger_obs"), tlevel, now)
+    obs = trigger_obs_add(st.get("trigger_obs"), tlevel, now, memo.get("t") or 0)
     # A start patrol refused or never ran is asked again, but not every round.
     fire = rise_due(floor_since(obs, memo), memo.get("t") or 0, tlevel, now) and now - st.get("spawn_t", 0) >= TRIGGER_RETRY_S
     record.update(trigger_level=tlevel, trigger_held=held, trigger_obs=obs)
