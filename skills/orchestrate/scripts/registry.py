@@ -223,7 +223,7 @@ STORES = [
     Store("migration", "db:migration.stage", {"db.migration": CANONICAL},
           ("store:_fill_decisions", "store:_import_board", "store:_set_stage", "store:rollback_board", "store:restore",
            "store:land_setup", "store:order_setup", "store:state_setup", "store:state_rollback",
-           "store:sendlog_setup", "store:sendlog_rollback"),
+           "store:sendlog_setup", "store:sendlog_rollback", "store:refs_setup", "store:refs_rollback"),
           ("fleet", "brief"),
           rule="data steps imported (4a-decisions, 4b-board) with the legacy files' sha256; the access gate reads it"),
     Store("landrequest", "db:land_request.status", {"land.request": CANONICAL},
@@ -296,8 +296,9 @@ STORES = [
           ("store:_stage_save", "store:_state_import", "store:state_rollback"), ("brief",),
           rule="the next-steps lines under the stage table"),
     Store("prref", "db:pr_ref.state", {"pr.state": CACHE},
-          ("store:_pr_stub", "store:_state_import", "store:state_rollback"), ("brief",),
-          rule="a reference to a GitHub PR: key, state and the fields rules decide on; GitHub stays canonical"),
+          ("store:_pr_stub", "store:_state_import", "store:state_rollback", "store:pr_refresh", "store:retention"), ("brief",),
+          rule="a reference to a GitHub PR: key, state and the fields rules decide on; GitHub stays canonical. The collector "
+               "refreshes it every tick (step 8-refs), and retention drops a merged or closed PR nothing points at"),
     # -- step 7-sendlog: what watch-prs sent and the owner's queue of asks (needs 6-state for the PR references)
     Store("sendlogfile", "S/prs/sendlog.jsonl", {"send.log": REMOVED},
           ("prs:log", "store:_tombstone", "store:sendlog_export", "store:sendlog_rollback"), ("watchprs", "brief"),
@@ -308,9 +309,18 @@ STORES = [
           ("store:_send_insert", "store:sendlog_rollback"), ("watchprs", "brief"),
           rule="one row per outcome of a watch-prs action: PR, reviewer, head, action, source, when, post_at, thread, channel"),
     Store("reviewask", "db:review_ask.closed_why", {"review.ask": CANONICAL},
-          ("store:ask_add", "store:ask_close", "store:_send_insert", "store:sendlog_rollback"), ("watchprs", "brief"),
+          ("store:ask_add", "store:ask_close", "store:_send_insert", "store:sendlog_rollback", "store:_ask_settle"),
+          ("watchprs", "brief"),
           rule="the owner's queue of asks; it points at the send_log row once sent, and `queued`, `scheduled`, `sent` "
-               "are derived from that row"),
+               "are derived from that row; the collector's PR refresh closes it as merged, withdrawn or reviewed"),
+    # -- step 8-refs: what the collector knows of reviewers and cards, and the view that finds what to reap
+    Store("prreviewer", "db:pr_reviewer.state", {"pr.review": CACHE},
+          ("store:pr_refresh", "store:refs_rollback"), ("brief",),
+          rule="who is requested or has reviewed a PR, replaced whole on each collector read"),
+    Store("cardref", "db:card_ref.gone_at", {"card.linked_pr": CACHE},
+          ("store:card_refresh", "store:retention", "store:refs_rollback"), ("brief",),
+          rule="an Orca worktree the collector saw and its PR; a worktree that left keeps its row with gone_at until retention "
+               "drops it; the reap_card view reads it"),
     Store("stagesauto", "D/stages-auto.json", {"program.event": DERIVED, "run.dispatch": DERIVED},
           ("stage_auto:refresh",), ("brief", "reorient", "fleet"),
           rule="stage rows per program from its ledger, Run cards and PRs, built each tick and written when they "
