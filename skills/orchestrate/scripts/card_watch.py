@@ -137,7 +137,7 @@ def setup_failure(name):
         return "close-setup", (lines[-2] if len(lines) > 1 else "see its log"), ""
     # The helper's own prefix decides, never the goal text it quotes after it.
     verdicts = [l for l in last_lines("goal-input") if GOAL_VERDICT.match(l)]
-    if verdicts and GOAL_NOT_TYPED in verdicts[-1].split(" into ", 1)[0]:
+    if verdicts and re.match(r"^\[[^\]]*\] warning: " + re.escape(GOAL_NOT_TYPED) + r" into ", verdicts[-1]):
         text = verdicts[-1].split("warning: ", 1)[-1]
         reason, _, manual = text.partition(". Once ")  # the helper prints the manual command after "run: "
         return "goal-input", reason, manual.partition("run: ")[2]

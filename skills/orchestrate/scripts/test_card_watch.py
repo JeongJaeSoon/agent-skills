@@ -323,6 +323,9 @@ assert card_watch.setup_failure("card-b") is None, "a quoted goal text is not a 
 helper_log("goal-input", "card-b", "[skills-sync card] warning: the /goal line was not typed into h2 (waited up to 900s).",
            "[skills-sync card] warning: the /goal line may have reached h2, but its screen does not show it. Read the screen first: x")
 assert card_watch.setup_failure("card-b") is None, "the newest verdict says it may have been typed"
+helper_log("goal-input", "card-b", "[skills-sync card] warning: the /goal line may have reached h2, but its screen does not show it. Read the screen "
+           "before typing it again: orca terminal send --terminal h2 --text '/goal why the /goal line was not typed into x' --enter")
+assert card_watch.setup_failure("card-b") is None, "a goal text quoted in the manual command is not a verdict"
 
 # An unreadable pane neither hides a failure nor makes it come back after the pane reads again.
 helper_log("close-setup", "card-a", "term_x  agent needs input: a folder trust dialog", "result: failed")
