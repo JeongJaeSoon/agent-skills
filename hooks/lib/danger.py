@@ -57,17 +57,19 @@ DOCKER_OPTS = {"-H", "--host", "-c", "--context", "--config", "-l", "--log-level
 COMPOSE_OPTS = {"-f", "--file", "-p", "--project-name", "--profile", "--env-file", "--project-directory", "--ansi",
                 "--progress", "--parallel"}
 GIT_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"}
-# Any curl short flag but the ones that take a value (and so swallow the rest of the cluster): in `-sG` or `-qX` the
-# letter is a flag, in `-AGitHub` it is part of the User-Agent.
-NO_VALUE = r"[^-\sAbcCdDeEFHKmoPQrtTuUwxXyYz:]"
-CURL_VALUED = {"-d", "--data", "--data-raw", "--data-binary", "--data-urlencode", "--json", "-H", "--header", "-F",
-               "--form", "-A", "--user-agent", "-e", "--referer", "-u", "--user", "-T", "--upload-file", "-o",
-               "--output", "-b", "--cookie", "-X", "--request"}
-# Options whose next word is their value; a method option cannot be that word. (-X and --request are not here.)
-# They differ by tool: gh's `-f` takes a field, curl's `-f` is a flag.
-CURL_OTHER_VALUED = CURL_VALUED - {"-X", "--request"}
-GH_OTHER_VALUED = {"-f", "-F", "-H", "--header", "--field", "--raw-field", "--input", "-q", "--jq", "-t",
-                   "--template", "--hostname", "--cache", "-p", "--preview"}
+# Options that take a value, per tool: the short letters (the rest of a cluster, or the next word, is the value, so
+# in `-sG` the letters are flags and in `-AGitHub` the rest is the User-Agent) and the long names. They differ: gh's
+# `-f` takes a field, curl's `-f` is a flag.
+GH_SHORT = "XFfHqtp"
+GH_LONG = {"--method", "--field", "--raw-field", "--header", "--input", "--jq", "--template", "--hostname", "--cache",
+           "--preview"}
+CURL_SHORT = "AbcCdDeEFHKmoPQrtTuUwxXyYz"
+CURL_LONG = {"--data", "--data-raw", "--data-binary", "--data-urlencode", "--json", "--header", "--form",
+             "--user-agent", "--referer", "--user", "--upload-file", "--output", "--cookie", "--request", "--url",
+             "--proto-default", "--max-time", "--connect-timeout", "--retry", "--proxy", "--cert", "--key",
+             "--cacert", "--resolve", "--write-out", "--config"}
+CURL_DATA = {"-d", "--data", "--data-raw", "--data-binary", "--data-urlencode", "--json", "-F", "--form", "-T",
+             "--upload-file"}
 
 
 def level(cfg, key):
@@ -444,76 +446,86 @@ def label_add(w):
 
 def api_call(w, here=None):
     """(METHOD, endpoint, [field]) of a `gh api` command. A field or --input without --method means POST."""
-    method = last_method(w, "--method", GH_OTHER_VALUED)
-    fields = [w[i + 1] for i, x in enumerate(w[:-1]) if x in ("-f", "-F", "--field", "--raw-field")]
-    fields += [x.split("=", 1)[1] for x in w if x.startswith(("--field=", "--raw-field="))]
-    fields += [x[2:] for x in w if x[:2] in ("-f", "-F") and len(x) > 2]  # `-fquery=…`
+    opts = parse_options(w[2:], GH_SHORT, GH_LONG)
+    operands = [v for k, v in opts if k is None]
+    method = next((v for k, v in reversed(opts) if k in ("-X", "--method")), None)
+    fields = [v for k, v in opts if k in ("-f", "-F", "--field", "--raw-field")]
+    inputs = [v for k, v in opts if k == "--input"]
     # A body file's text counts as a field: a GraphQL mutation can arrive that way (`--input f`, `-F query=@f`).
-    bodies = [w[i + 1] for i, x in enumerate(w[:-1]) if x == "--input"] + [x[8:] for x in w if x.startswith("--input=")]
-    for body in bodies + [f.split("=@", 1)[1] for f in fields if "=@" in f and not f.endswith("=@-")]:
-        try:
-            with open(expand(body, here), encoding="utf-8", errors="replace") as f:  # relative to the command's cwd
-                fields.append(f.read(65536))
-        except OSError:
-            pass
-    method = (method or ("POST" if fields or bodies else "GET")).upper()
-    endpoint = verb(w[2:], {"-X", "--method", "-f", "-F", "--field", "--raw-field", "-H", "--header", "--input",
-                            "-q", "--jq", "-t", "--template", "--hostname", "--cache", "-p", "--preview"})[0] or ""
+    fields += [read_body(b, here) for b in inputs + [f.split("=@", 1)[1] for f in fields if "=@" in f]]
+    method = (method or ("POST" if fields or inputs else "GET")).upper()
+    endpoint = operands[0] if operands else ""
     return method, re.sub(r"^https?://[^/]+", "", endpoint, flags=re.I), fields  # gh takes a full URL too
 
 
-def last_method(w, long_opt, valued):
-    """The method of the last `-X`, `long_opt` or `long_opt=` in w, which wins as in curl and gh. A cluster such as
-    `-sX DELETE` or `-sXDELETE` counts."""
-    method, skip = None, False
-    for i, x in enumerate(w):
-        if skip:  # the value of another option, `-H -XGET` for one
-            skip = False
-        elif x in valued:
-            skip = True
-        elif x == long_opt and i + 1 < len(w):
-            method = w[i + 1]
-        elif x.startswith(long_opt + "="):
-            method = x.split("=", 1)[1]
-        elif m := re.fullmatch(rf"-{NO_VALUE}*X(\w*)", x):
-            method = m.group(1) or (w[i + 1] if i + 1 < len(w) else method)
-    return method
+def parse_options(words, short, long):
+    """[(option, value)] of words in order, read as getopt does; an operand is (None, word). A short letter in
+    `short` or a long option in `long` takes a value, attached or the next word, even one that looks like an option
+    (`-H -XGET`); the letters before it in a cluster are flags (value None). `--` ends the options. curl's `-:` is
+    `--next`."""
+    opts, i = [], 0
+    while i < len(words):
+        x = words[i]
+        i += 1
+        if x == "--":
+            opts += [(None, y) for y in words[i:]]
+            break
+        if x.startswith("--"):
+            name, eq, val = x.partition("=")
+            if name in long and not eq and i < len(words):
+                val, i = words[i], i + 1
+            opts.append((name, val if eq or name in long else None))
+        elif x.startswith("-") and len(x) > 1:
+            for k, ch in enumerate(x[1:], 1):
+                if ch in short:
+                    val = x[k + 1:]
+                    if not val and i < len(words):
+                        val, i = words[i], i + 1
+                    opts.append(("-" + ch, val))
+                    break
+                opts.append(("--next" if ch == ":" else "-" + ch, None))
+        else:
+            opts.append((None, x))
+    return opts
 
 
-def curl_calls(w):
-    """[(METHOD, [path], text)] for each transfer of a curl command, split at `--next` as curl does: the path of
-    each api.github.com URL it names (`--url=` ones too) and the transfer's words as text."""
-    out, part = [], []
-    for x in w[1:] + ["--next"]:
-        if x != "--next" and not x.startswith("-:"):  # `-:` and clusters such as `-:XGET` start the next transfer
-            part.append(x)
+def read_body(path, here):
+    """The text of a request body file named by `@file`, `--input`, or "" when it is stdin or cannot be read."""
+    path = path.removeprefix("@")
+    try:
+        with open(expand(path, here), encoding="utf-8", errors="replace") as f:  # relative to the command's cwd
+            return f.read(65536)
+    except OSError:
+        return ""
+
+
+def curl_calls(w, here=None):
+    """[(METHOD, [path], [body])] for each transfer of a curl command, split at `--next` as curl does: the path of
+    each api.github.com URL it names (`--url` too) and the request bodies (a `@file` read)."""
+    out, cur = [], []
+    for item in parse_options(w[1:], CURL_SHORT, CURL_LONG) + [("--next", None)]:
+        if item[0] != "--next":
+            cur.append(item)
             continue
-        carry = ["-" + x[2:]] if x.startswith("-:") and len(x) > 2 else []  # `-:XDELETE`: -XDELETE is the next's
-        method = last_method(part, "--request", CURL_OTHER_VALUED)
-        data = any(re.match(rf"-{NO_VALUE}*[dFT]", y) or y.startswith(("--data", "--form", "--json", "--upload-file"))
-                   for y in part)
+        method = next((v for k, v in reversed(cur) if k in ("-X", "--request")), None)
+        data = [v for k, v in cur if k in CURL_DATA]
         get = False  # -G puts -d in the URL; a later --no-get takes it back
-        for y in part:
-            if y == "--get" or re.fullmatch(rf"-{NO_VALUE}*G{NO_VALUE}*", y):
+        for k, _ in cur:
+            if k in ("-G", "--get"):
                 get = True
-            elif y == "--no-get":
+            elif k == "--no-get":
                 get = False
-        # A URL is an operand or `--url=`, not the value of an option (a body may quote one).
-        urls = []
-        for j, y in enumerate(part):
-            if (part[j - 1] if j else "") in CURL_VALUED or y.startswith("-") and not y.startswith("--url="):
-                continue
-            if m := re.match(r"(?:--url=)?(?:https?://)?api\.github\.com(?::\d+)?(/[^?#]*)?", y, re.I):
-                urls.append(m.group(1) or "/")
-        out.append(((method or ("POST" if data and not get else "GET")).upper(), urls, " ".join(part)))
-        part = carry
+        urls = [m.group(1) or "/" for k, v in cur if k in (None, "--url")
+                if (m := re.match(r"(?:https?://)?api\.github\.com(?::\d+)?(/[^?#]*)?", v, re.I))]
+        bodies = data + [read_body(d, here) for d in data if d.startswith("@") and d != "@-"]
+        out.append(((method or ("POST" if data and not get else "GET")).upper(), urls, bodies))
+        cur = []
     return out
 
 
 def protection_write(c, here=None):
     """A `gh api` or curl call that writes branch protection or a ruleset; GETs read them and pass."""
     w = c.words
-    mutation = r"mutation[^{]*\{.*(create|update|delete)\w*(ProtectionRule|Ruleset)"
 
     def writes(method, endpoint):
         endpoint = endpoint.split("?", 1)[0]
@@ -521,14 +533,27 @@ def protection_write(c, here=None):
         return method not in ("GET", "HEAD", "OPTIONS") and target
     if c.name == "curl":
         return any(any(writes(method, p) for p in paths)
-                   or any(p.strip("/") == "graphql" for p in paths) and re.search(mutation, text, re.S) is not None
-                   for method, paths, text in curl_calls(w))
+                   or any(p.strip("/") == "graphql" for p in paths) and any(protection_mutation(b) for b in bodies)
+                   for method, paths, bodies in curl_calls(w, here))
     if c.name != "gh" or w[1:2] != ["api"]:
         return False
     method, endpoint, fields = api_call(w, here)
     if endpoint.strip("/") == "graphql":
-        return any(re.search(mutation, f, re.S) for f in fields)
+        return any(protection_mutation(f) for f in fields)
     return writes(method, endpoint)
+
+
+def protection_mutation(text):
+    """Whether a request body, a GraphQL document or JSON holding one under "query", creates, updates or deletes a
+    branch protection rule or a ruleset."""
+    try:
+        body = json.loads(text)
+        text = body["query"] if isinstance(body, dict) and isinstance(body.get("query"), str) else text
+    except ValueError:
+        pass
+    text = re.sub(r'"(?:[^"\\]|\\.)*"', '""', text)  # a string value is data: a title that names a mutation is not one
+    return (re.search(r"\bmutation\b", text) is not None
+            and re.search(r"\b(?:create|update|delete)\w*(?:ProtectionRule|Ruleset)\b", text) is not None)
 
 
 def git_out(args, where):
