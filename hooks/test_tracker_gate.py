@@ -110,11 +110,21 @@ for field in ("milestone", "template", "delegate", "addReleases", "setReleases",
 passed(LIN + "save_issue", {"team": "ABC", "title": "T", "relatedTo": ["ABC-1"]}, "pass-unsupported-key")
 passed(LIN + "save_issue", {"id": "ABC-1", "assignee": None}, "pass-unsupported-key")
 passed(LIN + "list_issues", {"creator": "me"}, "pass-unsupported-key")
-passed(LIN + "list_issues", {"fields": ["completedAt"]}, "pass-unsupported-key")
+passed(LIN + "list_issues", {"fields": {"a": 1}}, "pass-unsupported-key")
+passed(LIN + "get_issue", {"id": "ABC-1", "fields": [1]}, "pass-unsupported-key")
+# `fields` only picks result fields, so the call is still covered; the flag is not carried over.
+denied(LIN + "list_issues", {"fields": ["completedAt"], "state": "Todo"}, "orca linear list-issues --state Todo\n")
+denied(LIN + "get_issue", {"id": "ABC-1", "fields": ["title", "state"]}, "orca linear issue ABC-1")
 passed(LIN + "save_comment", {"issueId": "ABC-1", "body": "x", "parentId": "c1"}, "pass-unsupported-key")
 passed(LIN + "save_comment", {"projectId": "p", "body": "x"}, "pass-unsupported-key")
 passed(LIN + "get_issue", {"id": "11111111-2222-3333-4444-555555555555"}, "pass-operand")
-passed(LIN + "get_issue", {"id": "9X-1"}, "pass-operand")
+passed(LIN + "get_issue", {"id": "9X-1"}, "pass-operand")  # digit-leading key of a team Orca has not connected
+passed(LIN + "get_issue", {"id": "https://linear.app/acme/issue/9X-1/slug"}, "pass-operand")
+connect(linear=("ABC", "94S"))
+denied(LIN + "get_issue", {"id": "94S-12", "fields": ["title"]}, "orca linear issue 94S-12")
+denied(LIN + "get_issue", {"id": "https://linear.app/acme/issue/94S-12/slug"}, "orca linear issue 94S-12")
+denied(LIN + "save_issue", {"id": "94S-12", "addLabels": ["bug"]}, "orca linear label add 94S-12 --label bug")
+connect()
 passed(LIN + "get_issue", {"id": "XYZ-1"}, "pass-operand")
 passed(LIN + "save_issue", {"id": "ABC-1", "parentId": "9X-1"}, "pass-operand")
 for tool in ("save_document", "get_document", "list_cycles", "list_milestones", "create_attachment_from_upload",
@@ -135,6 +145,7 @@ denied(LIN + "get_issue", {"id": "ABC-1"})  # served from the cache
 # Jira.
 connect()
 JIRA = "mcp__atlassian__"
+passed(JIRA + "getJiraIssue", {"issueIdOrKey": "94S-12"}, "pass-operand")  # Jira keys never start with a digit
 denied(JIRA + "getJiraIssue", {"issueIdOrKey": "ENG-1"}, "orca jira issue ENG-1")
 denied("mcp__claude_ai_Atlassian__getJiraIssue", {"issueIdOrKey": "ENG-1", "cloudId": "cloud-1"},
        "orca jira issue ENG-1 --site site-1")
