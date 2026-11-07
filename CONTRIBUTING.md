@@ -38,7 +38,7 @@ bash scripts/pstack-sync-test.sh || fail=1
 
 The test files are listed one by one because only some of them use `unittest`, so there is no single discovery command. When you add a test file, add it to this loop.
 
-The last line exits non-zero when any test failed, and each failing file is named above it. In a git worktree (not the main checkout), `scripts/test_share_server.py` fails `test_install_backs_up_a_different_plist`, because `share_server.py install` refuses to install from a worktree. That one failure is expected there.
+The last line exits non-zero when any test failed, and each failing file is named above it.
 
 Also run:
 
