@@ -49,7 +49,7 @@ variables other than $ORCA_TERMINAL_HANDLE), so the allowed prefix cannot carry 
 
 Before all of that, the rules of lib/danger.py (pattern kill, prune, `compose down -v`, forced worktree removal,
 recursive `rm` outside the checkout and temp folders, emptying the trash,
-writes to the user's own settings and the rest of its RULES, on Bash and on Edit, Write and NotebookEdit) and
+writes to branch protection or a ruleset, writes to the user's own settings and the rest of its RULES, on Bash and on Edit, Write and NotebookEdit) and
 lib/coordination.py (AskUserQuestion, foreground waits and a send to /dev/null from a role session, by roles.py's
 matrix). A deny there wins; a warn rides along with whatever else is decided; an ask turns an allow into a dialog.
 Each rule has a key in ~/.claude/agent-skills.json, and `false` puts back the behavior from before it.
