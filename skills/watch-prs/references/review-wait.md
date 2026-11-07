@@ -56,6 +56,7 @@ makes `decide()` return a `request` for that PR and person at the next round, wh
 waiting for a batch; `after_hours` still decides the hour it goes out, and a refusal, a missing Slack id or a request already in the log still
 stop it (an ask stopped by an earlier refused or `no_thread` row stays queued until `orch ask cancel`). The ask then points at the log row:
 it is queued until that row exists, scheduled while its `post_at` is ahead, and sent after. `orch ask list|cancel` shows and withdraws asks.
+With the orchestrate collector's `8-refs` step in place an open ask closes by itself: `merged` when its PR merged, `withdrawn` when the PR closed unmerged, `reviewed` when the reviewer's review is dated after the send. Until then it shows in the orchestrator's brief as waiting on that reviewer; nothing needs `orch ask cancel` for a PR that is over.
 
 ## Handling the round's actions
 

@@ -747,13 +747,19 @@ def last_asks():
     keys. Read from the send-log agent-skills.json → "brief" → "sendlog" names (watch-prs writes one); {} without the
     key or the file. A row written by hand has no action, and a `date` or `slack_ts` for its time: a request."""
     try:
-        file = pathlib.Path(json.loads(SKILLS_CONFIG.read_text())["brief"]["sendlog"]).expanduser()
-        # Once `orch db state` moved that file in, the rows are in the DB and the file is a tombstone.
-        if file.resolve() == store_db.sendlog_file() and store_db.sendlog_ready():
+        try:
+            file = pathlib.Path(json.loads(SKILLS_CONFIG.read_text())["brief"]["sendlog"]).expanduser()
+        except (OSError, ValueError, KeyError, TypeError):
+            file = None
+        # Once `orch db state` moved the file in, the rows are in the DB whether or not the key names it (a file named
+        # elsewhere is still read as a file).
+        if store_db.sendlog_ready() and (file is None or file.resolve() == store_db.sendlog_file()):
             lines = store_db.send_rows()
-        else:
+        elif file:
             lines = file.read_text().splitlines()
-    except (OSError, ValueError, KeyError, TypeError, store_db.NotMigrated):
+        else:
+            return {}
+    except (OSError, ValueError, TypeError, store_db.NotMigrated):
         return {}
     out = {}
     for line in lines:
@@ -773,6 +779,19 @@ def last_asks():
 
 
 is_owner = rowstate.is_owner
+
+
+ASK_STATE = {"queued": "대기열", "scheduled": "예약됨", "sent": "의뢰함"}
+
+
+def open_asks():
+    """The owner's review asks not yet answered: queued, scheduled or sent, each {pr, reviewer, status, created_at}. They
+    close themselves when the collector sees the PR merged, closed or the reviewer's review (store.pr_refresh), so a brief
+    row for one needs nobody to remove it. [] before 7-sendlog."""
+    try:
+        return store_db.asks(status=tuple(ASK_STATE)) if store_db.sendlog_ready() else []
+    except (OSError, ValueError, store_db.NotMigrated):
+        return []
 
 
 def pr_state(p):
@@ -1150,7 +1169,7 @@ def drop_acked(lines, prs, rows, have, alias=None):
             if aid not in have:
                 aid = next((a for a in (alias or {}).get(l["key"], ()) if a in have), aid)
             done.append({"id": aid, "label": l["name"], "at": p.get("merged_at") or p.get("closed_at") or r.get("reported_at"),
-                         "acked": aid in have})
+                         "acked": aid in have, "pr": l["pr"]})
             if aid in have:
                 hidden |= {x["key"] for x in whole}
     return [l for l in lines if l["key"] not in hidden], done, hidden
@@ -1842,6 +1861,11 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         if (js := rowstate.judge_item("later", l, facts_in, iid))["status"] == "check":
             listed("moving", moving, iid, l["title"], f"{ICON['check']} {l['title']} — {js['next']}")
             place(iid, "list:check")
+    covered = {(l["pr"] or "").lower() for l in lines}
+    for a in open_asks():  # a PR no row names: the ask is the row, until it is reviewed or the PR is over
+        if a["pr"].lower() not in covered:
+            theirs.append(theirs_item(a["reviewer"], f"리뷰 {a['pr']} {ASK_STATE[a['status']]}", a["created_at"], a["pr"], "",
+                                      [a["pr"]]))
     due_mine = []
     for iid, t, when in arrived:
         js = rowstate.judge_item("do", t, facts_in, iid)

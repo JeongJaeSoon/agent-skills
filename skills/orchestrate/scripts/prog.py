@@ -145,11 +145,15 @@ Usage: orch <command> <slug> [options]
                                      orchestrate.order_auto_close is true. shadow sets those events against what the
                                      sessions closed by hand
   db import [--dry-run | --apply] [--rehearsal] | export --legacy --target 4a|pre-4a DIR | dump [TABLE]
-  db backup FILE | restore FILE [--rehearsal] | rollback 4b|state DIR [--rehearsal] | cutover-plan 4a|4b
+  db backup FILE | restore FILE [--rehearsal] | rollback 4b|state|sendlog DIR | rollback refs [--rehearsal] | retention [--dry-run] | cutover-plan 4a|4b
   db state [--auto]                  acks.jsonl and stages.json, then watch-prs's prs/sendlog.jsonl -> tables, after a backup,
                                      with tombstones in their place (setup runs it with --auto after an update; a rerun
                                      changes nothing); export --legacy --target state|sendlog DIR writes the files back
-                                     for rollback state|sendlog DIR
+                                     for rollback state|sendlog DIR.
+                                     The same run adds the 8-refs step: pr_reviewer, card_ref, the reap_card view and
+                                     the pr/program/kind columns (no file moves). rollback refs takes them out again,
+                                     and goes first, before sendlog and state. retention drops cards gone 30 days and
+                                     merged or closed PRs nothing points at after 90 (the collector runs it hourly)
   ask add OWNER/REPO#N REVIEWER | list [--status S] [--json] | cancel ID   the review-ask queue watch-prs sends from
   db migrate [--check] | init        migrate is the whole cutover in one rerunnable command, run by the owner from a
                                      plain terminal (cutover.py); init is for a PC with no state (setup runs it)
