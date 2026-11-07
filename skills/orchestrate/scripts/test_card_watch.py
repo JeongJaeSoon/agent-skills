@@ -1,5 +1,5 @@
 """card_watch.py: which screens wake the orchestrator or lead, and which do not twice. Run: python3 test_card_watch.py"""
-import contextlib, io, os, pathlib, sys, tempfile
+import contextlib, io, json, os, pathlib, sys, tempfile
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import agent_signal, card_watch, prog
 
@@ -123,6 +123,55 @@ scan(seen)
 assert seen["goals"] == ["h3"], "a card that left the listing is forgotten"
 terms = card_watch.agent_terminals([term("h1", "/w/card-a", last=NOW - 16 * 60000)], "me")
 assert scan({"h1": "x"}) == [], "a state file from before goals were kept loads as none"
+
+# A goal that was met is parked on purpose, not lost: the transcript's last goal_status decides, never lastOutputAt.
+terms = card_watch.agent_terminals([term("h1", "/w/card-a", last=NOW - 16 * 60000), term("h2", "/w/card-b", last=NOW - 16 * 60000)], "me")
+screens = {"h1": goal, "h2": goal}
+seen = {}
+scan(seen)
+screens = {"h1": lost, "h2": lost}
+verdict = {"h1": True, "h2": None}
+real_goal_met = getattr(card_watch, "goal_met", None)
+card_watch.goal_met = lambda h: verdict[h]
+found = scan(seen)
+assert found == ["STUCK card-b (goal lost, idle 16 min): read its screen", "  orca terminal read --terminal h2 --screen"], \
+    f"a met goal stays quiet; no goal_status keeps 'goal lost': {found}"
+for later in (NOW + 60000, NOW + 600000):
+    terms = card_watch.agent_terminals([term("h1", "/w/card-a", last=later - 16 * 60000), term("h2", "/w/card-b", last=later - 16 * 60000)], "me")
+    assert not any("card-a" in l for l in card_watch.scan(terms, seen, read, later, 30, 100.0, 15)), \
+        "output from the parked lead (new lastOutputAt) does not wake anyone again"
+verdict["h1"] = False
+terms = card_watch.agent_terminals([term("h1", "/w/card-a", last=NOW - 16 * 60000)], "me")
+assert any("card-a (goal lost" in l for l in scan({"goals": ["h1"]})), "a goal_status that is not met is still lost"
+screens["h1"] = menu
+verdict["h1"] = True
+assert any("a select menu" in l for l in scan({"goals": ["h1"]})), "a prompt is reported whatever the goal says"
+card_watch.goal_met = real_goal_met
+
+# goal_met reads the last goal_status of the session this terminal recorded.
+with tempfile.TemporaryDirectory() as tmp:
+    tmp = pathlib.Path(tmp)
+    (tmp / "terminals").mkdir()
+    (tmp / "projects" / "-w").mkdir(parents=True)
+    old = dict(os.environ)
+    os.environ.update(AGENT_SKILLS_STATE=str(tmp), CLAUDE_PROJECTS_DIR=str(tmp / "projects"))
+    try:
+        sid = "6e6f0d37-0403-4f92-95a8-7810e1d3e87a"
+        (tmp / "terminals" / "term_aaaaaaaa-0000-4000-8000-000000000000.json").write_text(f'{{"session_id": "{sid}", "at": 1}}')
+        status = lambda met: json.dumps({"attachment": {"type": "goal_status", "met": met}}) + "\n"
+        path = tmp / "projects" / "-w" / f"{sid}.jsonl"
+        h = "term_aaaaaaaa-0000-4000-8000-000000000000"
+        assert card_watch.goal_met(h) is None, "no transcript yet"
+        path.write_text('{"type": "user"}\n')
+        assert card_watch.goal_met(h) is None, "no goal_status in the transcript"
+        path.write_text(status(False) + '{"type": "user"}\n' + status(True) + '{"type": "user"}\n')
+        assert card_watch.goal_met(h) is True
+        path.write_text(status(True) + status(False))
+        assert card_watch.goal_met(h) is False, "the last goal_status wins"
+        assert card_watch.goal_met("term_bbbbbbbb-0000-4000-8000-000000000000") is None, "a terminal with no session record"
+    finally:
+        os.environ.clear()
+        os.environ.update(old)
 
 # --card judges a new card's start at the end of the window.
 class Clock:
