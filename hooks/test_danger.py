@@ -125,6 +125,13 @@ for repo, branch in ((ON_MAIN, "main"), (ON_FEAT, "feat/x"), (ON_DEV, "dev")):
 git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop", cwd=ON_DEV)
 git("checkout", "-q", "-b", "develop", cwd=ON_DEV)
 git("symbolic-ref", "refs/remotes/upstream/HEAD", "refs/remotes/upstream/develop", cwd=ON_DEV)
+# A PR branch checked out in a repository that also has a local `main` branch and a folder named `main`.
+DIR_MAIN = TMP / "dir-main"
+DIR_MAIN.mkdir()
+git("init", "-q", "-b", "feat/x", cwd=DIR_MAIN)
+git("-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-q", "--allow-empty", "-m", "a", cwd=DIR_MAIN)
+git("branch", "main", cwd=DIR_MAIN)
+(DIR_MAIN / "main").mkdir()
 NEST = TMP / "nest"
 (NEST / "child").mkdir(parents=True)
 git("init", "-q", "-b", "main", cwd=NEST / "child")
@@ -319,6 +326,12 @@ CASES = [
       ("git switch -cmain other && git push -f origin HEAD", ON_FEAT),
       ("git switch --create=main && git push -f origin HEAD", ON_FEAT),
       ("git switch -- main && git push -f origin HEAD", ON_FEAT),
+      ("git switch main && git switch feat && git switch - && git push -f origin HEAD", ON_FEAT),
+      ("git switch --track origin/main && git push -f origin HEAD", ON_FEAT),
+      ("git switch --detach main && git push -f origin HEAD:main", ON_FEAT),
+      ("git checkout main && git push -f origin HEAD", DIR_MAIN),
+      ("git checkout main -- && git push -f origin HEAD", ON_FEAT),
+      ("git push -f https://github.com/acme/app.git develop", ON_DEV),
       "gh api -X PATCH repos/a/b/git/refs/heads/main -F force=true",
       "gh api --method PATCH repos/a/b/git/refs/heads/master -f force=true -f sha=abc",
       "git push --mirror origin", "git push --repo=origin --force main", "git push --repo origin -f main",
@@ -351,6 +364,8 @@ CASES = [
       ("git switch -c feat/review main && git push --force-with-lease origin HEAD", ON_MAIN),
       ("git switch -cfeat/review main && git push -f origin HEAD", ON_MAIN),
       ("git switch -- feat/y && git push -f origin HEAD", ON_MAIN),
+      ("git checkout main -- README.md && git push --force-with-lease origin HEAD", ON_FEAT),
+      ("git push -f https://github.com/acme/app.git feat/x", ON_DEV),
       (f"git switch main && cd {ON_FEAT} && git push -f origin HEAD", TMP),
       (f"git -C {ON_MAIN} switch main && git push -f origin HEAD", ON_FEAT),
       "git push --force-with-lease --no-force-with-lease origin main",

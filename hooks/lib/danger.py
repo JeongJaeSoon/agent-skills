@@ -135,24 +135,27 @@ def after_cd(c, here, prev=UNKNOWN_DIR):
     return expand(target, here) or UNKNOWN_DIR
 
 
+# Options of switch and checkout that do not change which branch they name.
+SWITCH_PLAIN = {"-q", "--quiet", "-f", "--force", "-m", "--merge", "--discard-changes", "--guess", "--no-guess",
+                "--progress", "--no-progress", "--ignore-other-worktrees"}
+# A switch whose branch cannot be read: a later forced push of HEAD is treated as aimed at the default branch.
+SWITCH_UNKNOWN = "\0unknown-branch"
+
+
 def after_switch(c, switched, here):
     """{repository: branch} after a `git switch <b>`, `git checkout <b>` or `-c/-b <b> [<start>]` on the same command
-    line: the branch it leaves checked out in the repository it ran in ("" when that cannot be read). `switched` is
-    the map before this command; it is returned unchanged for any other."""
+    line: the branch it leaves checked out in the repository it ran in (SWITCH_UNKNOWN when that cannot be read).
+    `switched` is the map before this command; it is returned unchanged for any other."""
     sub, args = verb(c.words[1:], {"-C", "-c", "--git-dir", "--work-tree", "--namespace"})
     if sub not in ("switch", "checkout"):
         return switched
-    after_sub = len(args)  # the words after the subcommand, before `--` is cut off
-    # `checkout -- <file>` restores files; `switch -- <b>` names a branch that looks like an option.
-    if "--" in args:
-        if sub == "checkout":
-            return switched
-        args = args[args.index("--") + 1:]
-        creates = []
-    else:
-        creates = args
+    # `checkout <b> -- <paths>` restores files and keeps HEAD; `checkout <b> --` and `switch -- <b>` switch.
+    head, sep, tail = (args[:args.index("--")], True, args[args.index("--") + 1:]) if "--" in args else (args, False, [])
+    if sep and sub == "checkout" and tail:
+        return switched
+    words = head + (tail if sub == "switch" else [])
     # `git -C <dir> switch` moves HEAD in <dir>, the repository this entry is kept for.
-    opts, where = c.words[1:len(c.words) - after_sub - 1], here
+    opts, where = c.words[1:len(c.words) - len(args) - 1], here
     for i, x in enumerate(opts):
         if x == "-C" and i + 1 < len(opts):
             where = expand(opts[i + 1], where) or where
@@ -161,19 +164,24 @@ def after_switch(c, switched, here):
         elif x.startswith(("--git-dir", "--work-tree")):
             return switched
     key = repo_key(where)
-    if args == ["-"]:
-        return {**switched, key: ""}
     # -c/-C (switch) and -b/-B (checkout) name the branch to create, attached or as the next word.
-    for i, x in enumerate(creates):
-        if x in ("-c", "-C", "-b", "-B", "--create", "--force-create") and i + 1 < len(creates):
-            return {**switched, key: creates[i + 1]}
+    for i, x in enumerate(words):
+        if x in ("-c", "-C", "-b", "-B", "--create", "--force-create") and i + 1 < len(words):
+            return {**switched, key: words[i + 1]}
         if re.match(r"-[cCbB]", x) and len(x) > 2:
             return {**switched, key: x[2:]}
         if x.startswith(("--create=", "--force-create=")):
             return {**switched, key: x.split("=", 1)[1]}
-    names = [x for x in args if not x.startswith("-")]
-    # `git checkout README.md` restores a file; a branch name is not a path that exists here.
-    if not names or sub == "checkout" and os.path.exists(os.path.join(where or ".", names[0])):
+    names = [x for x in words if not x.startswith("-") or x == "-"]
+    # Any other option (--track, --detach, --orphan…) can name a branch this reader does not work out.
+    odd = [x for x in words if x.startswith("-") and x != "-" and x not in SWITCH_PLAIN]
+    if not names and not odd:
+        return switched
+    if odd or names[0] == "-" or names[0].startswith("@{"):
+        return {**switched, key: SWITCH_UNKNOWN}
+    # `git checkout README.md` restores a file; a local branch of that name wins over a path.
+    if sub == "checkout" and os.path.exists(os.path.join(where or ".", names[0])) \
+            and not git_out(["rev-parse", "--verify", "--quiet", "refs/heads/" + names[0]], where):
         return switched
     return {**switched, key: names[0]}
 
@@ -634,8 +642,11 @@ def git_out(args, where):
 
 def default_names(where, remote, gitdir=()):
     """main, master and the branch the remote's HEAD names in the checkout at `where` (or in `gitdir`)."""
-    head = git_out(list(gitdir) + ["symbolic-ref", "--short", f"refs/remotes/{remote}/HEAD"], where)
-    return {"main", "master"} | ({head.split("/", 1)[1]} if "/" in head else set())
+    gitdir = list(gitdir)
+    # A URL or path given in place of a remote name has no HEAD of its own: it is usually origin's address.
+    remotes = [remote] if remote in git_out(gitdir + ["remote"], where).split() else [remote, "origin"]
+    heads = (git_out(gitdir + ["symbolic-ref", "--short", f"refs/remotes/{r}/HEAD"], where) for r in remotes)
+    return {"main", "master"} | {h.split("/", 1)[1] for h in heads if "/" in h}
 
 
 def force_push_default(c, here, switched=None):
@@ -725,6 +736,8 @@ def force_push_default(c, here, switched=None):
             # A `git switch` earlier on the line moved HEAD; the repository on disk still shows the old branch.
             moved = (switched or {}).get(repo_key(where)) if not gitdir else None
             dst = moved if moved is not None else git_out(gitdir + ["symbolic-ref", "--short", "HEAD"], where)
+            if dst == SWITCH_UNKNOWN:
+                dst = "*"
         # A pattern such as `refs/heads/*` reaches the default branch too.
         if (forced or spec.startswith("+")) and any(fnmatch.fnmatchcase(b, dst) for n in names
                                                     for b in (n, "refs/heads/" + n)):
