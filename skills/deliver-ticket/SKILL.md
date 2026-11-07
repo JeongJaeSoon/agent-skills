@@ -32,8 +32,8 @@ Pick the procedure by the shape of the work:
 - A one-way-door design decision (a public contract, a schema, a module boundary others will
   build on) → `architect`, which runs `fan-out` compete and publishes its plan page without waiting for
   answers.
-- An unfamiliar subsystem → `how` before the first edit. Code whose reason you do not know →
-  `why` before you change it. When either ran, the constraints it found (what to preserve,
+- An unfamiliar subsystem → `explain-code` how before the first edit. Code whose reason you do
+  not know → `explain-code` why before you change it. When either ran, the constraints it found (what to preserve,
   change, avoid) go in the plan comment.
 
 ## 2. Implement

@@ -411,7 +411,7 @@ def skills_report(now):
         ("agent-skills:orchestrate", "agent-skills", 2, 7, 5, 2, 0, 0, 20),
         ("agent-skills:reflect", "agent-skills", 0, 3, 0, 3, 0, 1, 200),
         ("agent-skills:end-session", "agent-skills", 1, 4, 1, 0, 3, 6, 30),
-        ("agent-skills:teach", "agent-skills", 0, 0, 0, 0, 0, 0, None),
+        ("agent-skills:explain-code", "agent-skills", 0, 0, 0, 0, 0, 0, None),
         ("agent-skills:swarm", "agent-skills", 0, 0, 0, 0, 0, 1, 900),
         ("lint-kit:lint", "lint-kit", 3, 12, 12, 0, 0, 0, 5),
         ("lint-kit:format", "lint-kit", 0, 0, 0, 0, 0, 0, None),

@@ -21,7 +21,7 @@ Everything else goes: narration of what the next line does, section banners, com
 - **RESHAPE `<symbol>` (suppression):** a lint or type suppression (`eslint-disable`, `@ts-ignore`, `# type: ignore`, `# noqa`, `//nolint`) whose rule guards correctness or safety. Look the rule up first. Leave the suppression in place, since removing it changes the build, and name the fix that would make it unnecessary.
 - **CONSTRAINT `<symbol>`:** a comment claiming a rule about our own code, such as "do not remove", "keep this order", "talk to X before changing". Leave the comment in place and name the cheapest encoding: a test, a type, a runtime assertion, or a lint rule.
 
-Words like "IMPORTANT", "do not remove" or "too risky" are a reason to look, not proof. Read the nearby code. If the claim is not obvious there, run the **how** skill or the **why** skill on the named symbol. The comment stays as a keep only when the claim is about something this repo cannot change and it holds today. Otherwise it is a RESHAPE or a CONSTRAINT.
+Words like "IMPORTANT", "do not remove" or "too risky" are a reason to look, not proof. Read the nearby code. If the claim is not obvious there, run the **explain-code** skill's how or why mode on the named symbol. The comment stays as a keep only when the claim is about something this repo cannot change and it holds today. Otherwise it is a RESHAPE or a CONSTRAINT.
 
 ## Report
 

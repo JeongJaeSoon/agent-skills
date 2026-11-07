@@ -1,9 +1,4 @@
----
-name: map-features
-description: "Use for a map of what a product does today, read from its code at one commit — \"feature map 만들어줘\", \"기능 지도 그려줘\", \"지금 뭐가 구현돼 있는지 정리해줘\". A map for verification is verification-skill. An orchestrator dispatches it instead."
----
-
-# Map features
+# Map mode
 
 A product feature map answers one question for a reader who will plan, write or decide: what can a user do with this product today, and how do we know. Every row is read from the code at one commit, and every status carries evidence a reader can open.
 

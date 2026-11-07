@@ -1,9 +1,4 @@
----
-name: how
-description: "Use before editing a subsystem no one here has read, and for how code works: runtime flow, architecture, where something belongs — \"how does X work\", \"X 는 어떻게 동작해\", \"이 구조 설명해줘\", \"이건 어디에 둬야 해\". Why it is so is why."
----
-
-# How
+# How mode
 
 Explore the codebase to answer "how does X work?" questions. Produce architectural explanations at the level of a senior engineer onboarding onto a subsystem, enough to build a working mental model, not so much that it reads like annotated source code.
 

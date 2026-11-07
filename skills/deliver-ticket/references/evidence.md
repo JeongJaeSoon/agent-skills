@@ -8,8 +8,8 @@ The rules in §2 decide what ships. This file holds the procedures behind them, 
    the CLI or `curl` for a backend. Ask the user only for access you cannot get, after driving
    the surface as far as it goes. If it will not reproduce directly, synthesize the trigger,
    tighten the conditions, or add logging until it fires.
-2. Binary-search the cause. List the candidate hypotheses, seeded with `how` over the affected
-   subsystem and `why` for the regression history. Each pass, take the split that rules out the
+2. Binary-search the cause. List the candidate hypotheses, seeded with `explain-code` how over the
+   affected subsystem and `explain-code` why for the regression history. Each pass, take the split that rules out the
    most, get runtime evidence, and eliminate. When program state is unclear, add logging and
    read it as the code runs; do not guess. Confirm the surviving mechanism with runtime evidence
    before planning the fix.
@@ -31,7 +31,7 @@ The structure changes; the behavior does not. A cleanup that turns up a real bug
 feature splits: ship the structural change first against the pinned behavior, then the fix or
 feature as its own change.
 
-1. Pin the behavior before any structure moves. Learn the contract with `how`, then write a
+1. Pin the behavior before any structure moves. Learn the contract with `explain-code` how, then write a
    characterization test, a snapshot, or an old-vs-new output diff. Type check and lint are not
    a pin.
 2. Name the target shape: the module layout, types and call graph you would build today. If it

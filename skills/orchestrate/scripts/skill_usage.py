@@ -238,7 +238,7 @@ def shell_words(command):
 
 
 def git_history_cmds(command):
-    """Git commands in one shell command line that dig history by hand where `why` could have run: blame, and log
+    """Git commands in one shell command line that dig history by hand where `explain-code` why could have run: blame, and log
     with a pickaxe (-S/-G) or line-history (-L) option. Text that only mentions git (an echoed string) is not one."""
     words = shell_words(command)
     if words is None:  # an unbalanced quote: the line cannot be read reliably, so it is not counted
@@ -449,7 +449,7 @@ def collect(projects_dir=None, inv=None, cache_path=None, now=None, miss_thresho
 
 
 def denominators(events, probes, now):
-    """Moments where how, why or fan-out compete could have run, per window: the base their use counts are read against."""
+    """Moments where explain-code (how, why) or fan-out compete could have run, per window: the base their use counts are read against."""
     def within(ts, days):
         t = parse_ts(ts)
         return bool(t) and (now - t).days < days

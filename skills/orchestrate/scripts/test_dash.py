@@ -269,7 +269,7 @@ assert "error" in dash.pressure_report(), dash.pressure_report()
 dash.PRESSURE = real_pressure
 sk = json.loads(urllib.request.urlopen(f"{base}/api/fleet/skills").read())
 assert {"agent-skills", "user", "other"} <= {x["source"] for x in sk["sources"]}, sk["sources"]
-assert next(r for r in sk["skills"] if r["name"] == "agent-skills:teach")["flags"] == ["unused_30d"]
+assert next(r for r in sk["skills"] if r["name"] == "agent-skills:explain-code")["flags"] == ["unused_30d"]
 try:
     urllib.request.urlopen(urllib.request.Request(f"{base}/api/fleet/skills", headers={"Host": f"evil.example:{srv.server_address[1]}"}))
     raise AssertionError("a rebinding name read skill usage")

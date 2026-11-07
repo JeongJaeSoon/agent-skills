@@ -1,6 +1,6 @@
 # 스킬 카탈로그
 
-`agent-skills` 플러그인이 싣는 스킬 34개(`skills/*/SKILL.md`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 16개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
+`agent-skills` 플러그인이 싣는 스킬 31개(`skills/*/SKILL.md`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 16개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
 
 설정 기본값 변경과 기존 데이터 보존 방법은 [설정 전환 안내](configuration-migration.md)를 따른다. 노트·원장·개인 폴더는 명시 설정이 필요하고, 성과 보고 기본 시간대는 UTC다.
 
@@ -56,7 +56,7 @@ PR 을 맡는 스킬과 머지 주체:
 ### deliver-ticket (옛 이름 `ship-pr`)
 - **언제:** 여러 파일을 고치기 전부터 완료까지 쓴다. PR 생성·갱신·머지("pr 작성까지", "머지까지 진행해줘"), 릴리즈, 리뷰 코멘트 대응, 독립 리뷰, "동작확인", "내가 확인할 거 있어?", "이 티켓 끝내줘", stack 작업도 여기에 들어간다.
 - **내용:**
-  - **계획:** plan mode에 들어가지 않고 승인도 기다리지 않는다. 티켓에는 계획 댓글 하나만 남기고(바뀌면 고친다), 진행은 worklog에, 결과는 완료 댓글에 적는다. 일의 모양에 따라 스킬을 부른다. 큰 마이그레이션이나 여러 단계짜리 변경은 `figure-it-out`, 되돌리기 어려운 설계 결정은 `architect`(→ `fan-out` compete), 낯선 코드는 `how`, 이유를 모르는 코드는 `why`.
+  - **계획:** plan mode에 들어가지 않고 승인도 기다리지 않는다. 티켓에는 계획 댓글 하나만 남기고(바뀌면 고친다), 진행은 worklog에, 결과는 완료 댓글에 적는다. 일의 모양에 따라 스킬을 부른다. 큰 마이그레이션이나 여러 단계짜리 변경은 `figure-it-out`, 되돌리기 어려운 설계 결정은 `architect`(→ `fan-out` compete), 낯선 코드는 `explain-code`의 how, 이유를 모르는 코드는 why 모드.
   - **구현:** worktree 브랜치에서만 한다. 사소하지 않은 로직은 실행 가능한 테스트 없이 커밋하지 않는다. 버그는 실패하는 재현 테스트부터 쓴다. 범위 밖에서 발견한 것은 이 diff에서 고치거나, 완료 조건에 대어 NOW(follow-up 티켓)·LATER(`⏸️ 보류` 한 줄)·DROP(이유 한 줄)으로 나눈다. 프로그램 안에서는 티켓을 만들지 않고 worker_done에 제안 분류를 적는다.
   - **증거 규칙:**
     - 배포하는 줄마다 런타임 증거가 있어야 하고, 반박된 가설이 낳은 변경은 되돌린다.
@@ -81,7 +81,7 @@ PR 을 맡는 스킬과 머지 주체:
     - 단독 카드: land executor가 켜진 repo에서는 머지하지 않고 head sha, CI run, 리뷰 판정과 함께 READY를 보고하며, 오케스트레이터가 머지한다. 실행기가 꺼진 repo나 사용자가 직접 연 세션은 사용자가 보류하지 않았으면 스스로 squash 머지한다.
     - 완료 댓글을 남긴 뒤 같은 턴에 `dispatch-card`의 다음 티켓 모드로 넘어간다.
 - **동봉:** `scripts/sticky-comment.sh`(PR 테스트 결과 댓글을 하나로 유지, `--check`는 그 댓글이 지금 head sha를 담았는지 확인), `scripts/review_pick.py`(독립 리뷰어 선택). 본문에는 무엇을 배포할지 가르는 규칙만 두고, 절차는 references로 나눴다. `evidence.md`(버그·리팩터링·기존 수정 절차), `independent-review.md`(독립 리뷰 근거와 실패 처리), `pull-request.md`(PR 본문 절과 stack), `review-loop.md`(PR을 연 뒤 ready까지의 루프, 남이 머지할 때 지켜보기), `review-bot-triage.md`(리뷰 스레드를 fix / dismiss / ask로 나누는 기준. 독립 리뷰어, CodeRabbit, Copilot, 사람 리뷰에 쓴다).
-- **관계:** `figure-it-out`, `architect`, `how`, `why`, `tdd`, `prune-comments`, `challenge`(interrogate 모드의 판정 틀, blast-radius 모드), `write-plainly`, `write-ticket`, `use-tracker`, `use-notes`, `orchestrate`(`orch land`, `orch heavy`), `dispatch-card`(다음 티켓 모드).
+- **관계:** `figure-it-out`, `architect`, `explain-code`, `tdd`, `prune-comments`, `challenge`(interrogate 모드의 판정 틀, blast-radius 모드), `write-plainly`, `write-ticket`, `use-tracker`, `use-notes`, `orchestrate`(`orch land`, `orch heavy`), `dispatch-card`(다음 티켓 모드).
 
 ### ui-review
 - **언제:** 시안이나 화면, 화면을 바꾸는 PR을 사람에게 보이기 전. "UI 리뷰해줘", "시안 점검해줘", "화면 밸런스 봐줘". 사람이 UI 문제를 지적했을 때는 고친 뒤 규칙을 더한다. 스크린샷을 찍어 올리는 일은 `deliver-ticket`의 visual-evidence다.
@@ -307,16 +307,6 @@ PR 을 맡는 스킬과 머지 주체:
   - 추가·완료: 할 일은 `orch board todo add <작업> (--due D | --after C) --who W`, 닫기는 `orch board done <id>`, 보류 항목을 할 일로 바꾸려면 `todo from-later <n> --who W`. 보류는 `orch board later add <작업> --trigger <다음 차례 조건> [--who W] [--at N]`, 차례 이동은 `later move <n> --to N`.
 - **관계:** `brief`의 할 일·보류 큐 줄이 가리키는 곳. 대시보드에서는 To-do 페이지.
 
-### map-features
-- **언제:** 제품이 지금 무엇을 하는지 사람이 읽을 지도가 필요할 때. PRD, 로드맵, 온보딩, 현황 문서. "feature map 만들어줘", "기능 지도 그려줘", "지금 뭐가 구현돼 있는지 정리해줘". verify 스킬이 기능을 구동하는 지도는 `verification-skill`의 create 모드, 한 하위 시스템의 동작은 `how`.
-- **내용:**
-  - 첫 줄에 기준(저장소, ref, 짧은 sha, 커밋 날짜)을 적고 모든 행을 그 커밋 기준으로 쓴다.
-  - 배포 단위(앱)를 빌드·배포 설정에서 찾아 표로, 기대되지만 없는 앱은 대신 있는 것과 함께 목록으로 적는다.
-  - 공개 표면(라우트·OpenAPI, CLI, UI 메뉴, 설정 플래그)에서 사용자가 할 수 있는 일을 영역별 한 행씩 적는다. 계획·문서에만 있는 기능도 행으로 넣는다.
-  - 상태는 동작·일부·문서만·없음·확인 못 함 다섯 개로 고정하고, 행마다 열어 볼 수 있는 근거(경로, 엔드포인트, 플래그, `owner/repo#N`)를 붙인다. 근거 없는 행은 동작이 아니다.
-  - 문서는 기준 줄, 쉽게 말하면, 앱 표, 기능 지도, 알아 둘 제한 순서. 저장 위치는 `use-notes`나 사용자가 정한 경로이고 제품 저장소에는 요청이 있을 때만 넣는다.
-- **관계:** verify 스킬의 `features/`가 있으면 기능 목록의 출처로 읽기만 한다. 문장은 `write-plainly`.
-
 ### write-plainly
 - **언제:** 티켓, PR 본문, 커밋 메시지, 설계 문서, 노트, worklog, 따로 내는 보고서, 스킬 본문을 쓰거나 고칠 때. 코드 주석은 고쳐 달라고 할 때만. 턴마다 하는 답변은 해당하지 않는다. "문서 다듬어줘", "읽기 쉽게 고쳐줘", "AI 티 안 나게", "번역투 고쳐줘", "unslop".
 - **내용:**
@@ -335,7 +325,7 @@ PR 을 맡는 스킬과 머지 주체:
   - 범위는 호출자가 준 파일이나 diff, 없으면 현재 브랜치의 diff다. diff 안에서도 추가·변경된 줄의 주석과 이 diff 때문에 틀려진 주변 주석만 본다.
   - 주석을 쓴 쪽은 판단이 무르므로 서브에이전트 하나가 정리한다. 남는 주석은 라이선스, 우리가 못 바꾸는 외부 제약(의존성·플랫폼·벤더·프로토콜), 스타일 전용 lint 지시문, 공개 API 계약이나 저장소 규칙이 요구하는 doc 주석, 코드로 못 적는 제약을 설명하는 이슈·RFC 링크, 컴파일러가 확인하지 않는 단언(cast, non-null `!`, `unwrap`) 옆에서 그 단언이 안전한 불변식과 그 불변식을 세우는 곳을 적은 주석뿐이다(anti-slop `require-safety-comment-for-type-assertion`에서 착안).
   - 우리 코드의 놀라운 동작을 설명하던 주석은 지우고 RESHAPE로 표시한다(이름 바꾸기, 함수 추출, 타입). "지우지 마" 같은 제약 주석은 CONSTRAINT로 표시하고, 싼 인코딩(테스트, 타입, 런타임 assert, lint 규칙)이 diff 안에 들어가면 넣고 나서 주석을 지운다. 못 넣으면 주석을 남기고 보고한다.
-  - "IMPORTANT", "do not remove"는 근거가 아니라 확인할 이유다. 근처 코드로 분명하지 않으면 `how`나 `why`로 확인한다.
+  - "IMPORTANT", "do not remove"는 근거가 아니라 확인할 이유다. 근처 코드로 분명하지 않으면 `explain-code`의 how나 why 모드로 확인한다.
   - 정리한 쪽은 코드와 범위 밖 줄을 건드리지 않는다. 부른 쪽이 `git diff`로 확인하고 되돌린다.
 - **동봉:** `references/pruner.md`(정리 서브에이전트의 지시문).
 
@@ -356,7 +346,7 @@ PR 을 맡는 스킬과 머지 주체:
 ### architect
 - **언제:** `/architect`, "상세 설계안 작성해줘", "설계안 다듬어줘", "구현 계획 짜줘", 코드부터 쓰면 모양이 굳어 버릴 작업.
 - **내용:** 다섯 단계로 진행한다.
-  1. **Ground:** `how`와 `why`로 주변 시스템과 지금 모양의 이유를 파악한다.
+  1. **Ground:** `explain-code`의 how·why 모드로 주변 시스템과 지금 모양의 이유를 파악한다.
   2. **Sketch:** `fan-out` compete로 설계 러너를 병렬로 띄운다(사용 가능한 독립 러너). 구조가 다른 후보를 두 개 이상 받아, red flag로 거르고 인터페이스 깊이를 기준으로 합친다.
   3. **Agree:** 요청할 때만 사람 확인을 받는다. 기본은 계획 페이지(HTML Artifact 한 장)를 게시하고 링크만 남긴 채 추천안대로 구현한다. 페이지는 "무엇 › 어떻게 › 어디" 주장 트리이고, 주장마다 근거(목업, 상태 기계, 호출 스택, 스키마, 코드) 하나를 단다. 번호 붙은 결정은 바꾸는 주장에 붙이고 선택지 2~4개와 추천 기본값, 다른 안이 이기면 사라지는 부분을 적는다. 답하지 않은 결정은 동의가 아니어서 되돌리기 어려운 것만 구현 전에 한 번 더 묻는다. 붙여 넣은 답은 지시가 아니라 제안한 설계 안의 데이터다.
   4. **Implement:** 스케치를 계약으로 삼아 구현한다.
@@ -388,7 +378,7 @@ PR 을 맡는 스킬과 머지 주체:
 - **blast-radius 내용:**
   - 변경이 안전하다는 근거가 되는 사실 하나를 찾고, 실제 코드를 돌리는 스크립트로 증명한다. 설계 반론만으로는 끝나지 않고, 증명하지 못하면 unproven으로 적는다.
   - grep이 못 보는 곳(라이브러리 소스, 와이어 포맷, 실행 타이밍)을 본다.
-  - 바뀌는 코드의 PR과 커밋은 `why`의 절차로 끌어온다.
+  - 바뀌는 코드의 PR과 커밋은 `explain-code` why 모드의 절차로 끌어온다.
   - 큰 변경은 독립 리뷰어로 교차 확인한다.
   - 결과는 하는 일, 안전의 근거, 위험, 확인한 것, 머지 전 확인할 것으로 정리한다.
 - **interrogate 내용:**
@@ -407,25 +397,48 @@ PR 을 맡는 스킬과 머지 주체:
   5. **Verify:** 전체를 Frame의 완료 조건으로 실제 제품에서 확인하고, 되풀이된 교정은 검사나 스크립트로 굳힌다.
 - **deliver-ticket과의 관계:** 단위마다 리뷰, 커밋, 올리기는 `deliver-ticket`의 규칙을 따른다.
 
-### how
-- **언제:** "X는 어떻게 동작해?", "이건 어디에 둬야 해?", 나도 상위 보고도 읽지 않은 하위 시스템을 고치기 전.
+### explain-code (옛 이름 `how`, `why`, `teach`, `map-features`)
+코드를 읽고 설명하는 모드 넷을 한 스킬에 담았다. 코드는 고치지 않는다. 부르는 쪽이 Skill 인자로 모드를 정하고(`how: <질문>`), 없으면 질문에서 고른다. 모드마다 본문은 `references/<모드>.md`에 있다.
+
+#### how 모드
+- **언제:** "X는 어떻게 동작해?", "이 구조 설명해줘", "이건 어디에 둬야 해?", 나도 상위 보고도 읽지 않은 하위 시스템을 고치기 전.
 - **내용:**
   - 단순한 질문은 세션이 직접 탐색하고 설명한다.
   - 복잡한 질문은 `Explore` 탐색기 2~4개를 병렬로 띄운 뒤 opus 하나로 종합한다.
   - 설명은 Overview, Key Concepts, How It Works, Where Things Live, Gotchas 순서로 쓴다.
-- **동봉:** `explorer-prompt.md`, `explainer-prompt.md`.
-- **관계:** 동기와 역사("왜 이렇게 됐어")는 `why`로 넘긴다.
+- **동봉:** `references/how.md`, `explorer-prompt.md`, `explainer-prompt.md`.
 
-### why
-- **언제:** "왜 이렇게 됐어", "이거 왜 이렇게 짰어", "이 결정 배경이 뭐야", "이유가 뭐야", "이 값은 어디서 나왔어", 이유가 주석·테스트·브리프에 없는 코드를 지우거나 뒤집거나 느슨하게 하기 전, 회귀를 들인 변경을 찾을 때. 어떻게 동작하는지는 `how`가 맡는다.
+#### why 모드
+- **언제:** "왜 이렇게 됐어", "이거 왜 이렇게 짰어", "이 결정 배경이 뭐야", "why did we do X", "이유가 뭐야", "이 값은 어디서 나왔어", 이유가 주석·테스트·브리프에 없는 코드를 지우거나 뒤집거나 느슨하게 하기 전, 회귀를 들인 변경을 찾을 때. 코드가 무엇을 하는지 설명하는 것으로는 답이 되지 않는다.
 - **내용:**
   - 한 줄이나 한 커밋에 대한 질문은 git blame → 커밋 → PR만으로 답하는 narrow mode로 끝내고, 찾지 않은 출처를 밝힌다.
   - 그 밖에는 출처마다 조사자를 하나씩 병렬로 띄운다(git·`gh`, Linear/Jira, Notion, Google Drive, Obsidian, Slack). 조사자는 자기 출처만 파고 다른 출처의 단서는 적어만 둔다. 빈 결과도 발견으로 남긴다.
   - Datadog, Sentry, warehouse처럼 세션에 연결이 없는 출처는 "접근 없음"으로 기록한다. Calendar는 날짜 범위를 좁힐 때만 쓴다.
   - 종합은 Direct / Supported / Inferred / Speculative / Unknown 다섯 단계로 나누고 인용을 단다. 코드를 그 코드의 의도에 대한 근거로 쓰지 않고, 질문에 섞인 가설은 후보로만 다룬다.
   - 답은 What We Found, Reasonably Infer, Competing Hypotheses, What We Don't Know, Sources Consulted 순서다. 코드를 바꾸려는 질문이면 Preserve / Change / Avoid / Risk를 붙인다.
-- **동봉:** `epistemics.md`(확신도 기준), `investigator-prompt.md`, `synthesizer-prompt.md`, `source-playbook.md`, `sources/`(code-archaeology, linear, notion, google-drive, obsidian, slack, incident-postmortem).
-- **관계:** `how`의 짝이다. `challenge`의 blast-radius 모드와 `architect`가 부른다. 트래커는 `use-tracker`, 노트는 `use-notes`로 읽는다.
+- **동봉:** `references/why.md`, `epistemics.md`(확신도 기준), `investigator-prompt.md`, `synthesizer-prompt.md`, `source-playbook.md`, `sources/`(code-archaeology, linear, notion, google-drive, obsidian, slack, incident-postmortem).
+
+#### teach 모드
+- **언제:** 'teach me this', "이거 제대로 이해하고 싶어", "이 변경 이해시켜줘", "처음 보는데 이 구조 설명해줘". 한 가지 동작 질문은 how, 이유 질문은 why 모드.
+- **내용:**
+  - 왜 묻는지(바꾸려는지, 리뷰하는지, 처음인지)에 맞춰 가져갈 것 몇 가지를 정하고, how와 why 모드를 병렬로 돌려 하나의 설명으로 엮는다. why의 확신도 표현은 그대로 둔다.
+  - 일반적인 정의부터 말하고 지금 코드에 잇는다. 가장 작은 완결된 답을 먼저 주고, 물으면 더 들어간다.
+  - 움직이는 부분이 셋 이상이면 그림을 한 장씩 늘려 가며 그린다(mermaid, ASCII).
+  - 글은 `write-plainly`로 쓴다.
+- **동봉:** `references/teach.md`.
+
+#### map 모드
+- **언제:** 제품이 지금 무엇을 하는지 사람이 읽을 지도가 필요할 때. PRD, 로드맵, 온보딩, 현황 문서. "feature map 만들어줘", "기능 지도 그려줘", "지금 뭐가 구현돼 있는지 정리해줘". verify 스킬이 기능을 구동하는 지도는 `verification-skill`의 create 모드, 한 하위 시스템의 동작은 how 모드. 오케스트레이터는 직접 하지 않고 넘긴다.
+- **내용:**
+  - 첫 줄에 기준(저장소, ref, 짧은 sha, 커밋 날짜)을 적고 모든 행을 그 커밋 기준으로 쓴다.
+  - 배포 단위(앱)를 빌드·배포 설정에서 찾아 표로, 기대되지만 없는 앱은 대신 있는 것과 함께 목록으로 적는다.
+  - 공개 표면(라우트·OpenAPI, CLI, UI 메뉴, 설정 플래그)에서 사용자가 할 수 있는 일을 영역별 한 행씩 적는다. 계획·문서에만 있는 기능도 행으로 넣는다.
+  - 상태는 동작·일부·문서만·없음·확인 못 함 다섯 개로 고정하고, 행마다 열어 볼 수 있는 근거(경로, 엔드포인트, 플래그, `owner/repo#N`)를 붙인다. 근거 없는 행은 동작이 아니다.
+  - 문서는 기준 줄, 쉽게 말하면, 앱 표, 기능 지도, 알아 둘 제한 순서. 저장 위치는 `use-notes`나 사용자가 정한 경로이고 제품 저장소에는 요청이 있을 때만 넣는다.
+- **동봉:** `references/map.md`.
+- **관계:** verify 스킬의 `features/`가 있으면 기능 목록의 출처로 읽기만 한다. 문장은 `write-plainly`.
+
+`explain-code`는 `challenge`의 blast-radius 모드, `architect`, `deliver-ticket`이 부른다. 트래커는 `use-tracker`, 노트는 `use-notes`로 읽는다.
 
 ### principles
 - **언제:** 설계, 리팩터, 검증, 위임 판단에 이름 붙은 원칙이 필요할 때.
@@ -438,7 +451,7 @@ PR 을 맡는 스킬과 머지 주체:
   - 범위(기간 기본 7일, 주제, 저장소)를 먼저 정해 말한다. 다른 저장소의 세션은 묻지 않고 읽지 않는다.
   - 지난 세션은 `~/.claude/projects/<인코딩한 경로>/`에서 찾는다. Orca 카드는 worktree마다 경로가 달라서 main 체크아웃, `git worktree list`, 이미 지운 카드(같은 상위 폴더)를 모두 본다. `orca search` 색인이 켜져 있으면 그것을 먼저 쓴다. 색인은 Orca 앱 Settings → Agent Session Search → Search inside sessions의 이 컴퓨터 스위치로만 켠다(CLI 없음). 꺼져 있으면 grep으로 찾고 답 끝에 이 설정을 한 줄로 알린다.
   - 세션이 많으면 haiku 서브에이전트가 나눠 읽고 세션마다 목표, 결정, 남은 일, 막힌 곳, 산출물을 돌려준다. 원문은 서브에이전트 안에 둔다.
-  - 주제가 기능·파일·버그를 가리키면 `why`의 출처 조사, worklog(`use-notes`), 티켓(`use-tracker`)도 함께 본다. 되돌린 수정과 계속 보고되는 증상이 여기서 나온다.
+  - 주제가 기능·파일·버그를 가리키면 `explain-code` why 모드의 출처 조사, worklog(`use-notes`), 티켓(`use-tracker`)도 함께 본다. 되돌린 수정과 계속 보고되는 증상이 여기서 나온다.
   - PR·브랜치·티켓·카드는 `git`, `gh`, 트래커, `orca worktree list`로 지금 상태를 확인한다.
   - 답은 짧은 요약, 스레드마다 상태 태그(`[merged #N]`, `[open PR #N]`, `[in flight <branch>]` 등), 반복된 문제, 다음 할 일 하나다.
 
@@ -469,13 +482,6 @@ PR 을 맡는 스킬과 머지 주체:
   - 독립 리뷰어가 교차 검토하고, 응답 끝에 누가 검토했는지 적는다.
 - **동봉:** `scripts/log.sh`(행 추가), `references/decision-log-template.tsv`.
 
-### teach
-- **언제:** 'teach me this', "이거 제대로 이해하고 싶어", "이 변경 이해시켜줘", "처음 보는데 이 구조 설명해줘". 한 가지 동작 질문은 `how`, 이유 질문은 `why`.
-- **내용:**
-  - 왜 묻는지(바꾸려는지, 리뷰하는지, 처음인지)에 맞춰 가져갈 것 몇 가지를 정하고, `how`와 `why`를 병렬로 불러 하나의 설명으로 엮는다. `why`의 확신도 표현은 그대로 둔다.
-  - 일반적인 정의부터 말하고 지금 코드에 잇는다. 가장 작은 완결된 답을 먼저 주고, 물으면 더 들어간다.
-  - 움직이는 부분이 셋 이상이면 그림을 한 장씩 늘려 가며 그린다(mermaid, ASCII).
-  - 글은 `write-plainly`로 쓴다.
 
 ### tdd
 - **언제:** 싼 로컬 테스트 대상이 있는 버그를 고칠 때, 또는 TDD·실패 테스트·회귀 테스트를 요청받았을 때.
@@ -746,7 +752,7 @@ pstack 스킬 58개(원칙 24개와 나머지 34개) 가운데 원칙 24개 전�
 
 - **거의 그대로 가져온 것:** 원칙 24개, 리뷰·탐색 프롬프트, 설계 red flag, 기능 지도 예시.
   - 원칙은 pstack에서 스킬 24개로 나뉘어 있던 것을 `principles` 스킬 하나의 참조 파일로 묶었다. 인덱스(`principles/SKILL.md`)는 여기서 새로 썼다.
-- **고쳐서 가져온 것:** architect, arena, blast-radius, figure-it-out, how, why, interrogate, recall, reflect, show-me-your-work, swarm, tdd, teach, create-verification-skill, maintain-verification-skill. 공통으로 한 일은 네 가지다.
+- **고쳐서 가져온 것:** architect, arena, blast-radius, figure-it-out, how, why, interrogate, recall, reflect, show-me-your-work, swarm, tdd, teach, create-verification-skill, maintain-verification-skill(how, why, teach는 지금 `explain-code`의 모드). 공통으로 한 일은 네 가지다.
   - 모델이 스스로 부를 수 있게 했다.
   - Cursor 전용 요소를 Claude Code 대응물로 바꿨다. 경로는 `.cursor/` → `.claude/`, 워커는 `generalPurpose`/클라우드 → `Agent`/Orca 워커, transcript는 `agent-transcripts` → `~/.claude/projects`.
   - 모델 패널을 독립 리뷰어로 바꿨다.

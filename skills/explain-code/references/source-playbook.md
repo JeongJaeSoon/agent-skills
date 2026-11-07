@@ -1,6 +1,6 @@
 # Source playbooks
 
-The why skill spawns one investigator per available source, each reading a single source-specific playbook below. Adapt a playbook for a different tool in the same category.
+The why mode spawns one investigator per available source, each reading a single source-specific playbook below. Adapt a playbook for a different tool in the same category.
 
 | Category | Playbook | Source it documents |
 |---|---|---|
