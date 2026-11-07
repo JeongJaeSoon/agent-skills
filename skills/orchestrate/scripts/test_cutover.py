@@ -253,6 +253,14 @@ with world() as (w, sd):
     code, out, err = run()
     assert code == 0 and w.jobs["agent-skills janitor-load"] is False and w.jobs["agent-skills janitor"] is True, w.jobs
 
+# ---- a job no definition owns any more (janitor load, until `setup reconcile` removes it) is paused and put back too
+with world() as (w, sd):
+    w.jobs["agent-skills janitor load"] = True
+    code, out, err = run()
+    assert code == 0 and w.jobs["agent-skills janitor load"] is True, (out, err, w.jobs)
+    edits = [c for c in w.calls if c[1:3] == ["automations", "edit"] and c[4] == "id-agent-skills janitor load"]
+    assert [("--disabled" in c, "--enabled" in c) for c in edits] == [(True, False), (False, True)], edits
+
 # ---- the lock: a second migrate refuses, and the dashboard server does not start while it is held
 with world() as (w, sd):
     assert store.cutover_running() is False

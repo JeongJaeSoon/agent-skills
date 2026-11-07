@@ -23,7 +23,7 @@ ENV_KEYS = ("PROGRAMS_HOME", "ORCH_DASH_LABEL", "ORCH_FLEET", "ORCH_FLEET_STATE"
             "ORCH_CLAUDE_HOMES")
 RECOVER = "cutover-recover.json"
 # The automations whose rounds write while the cutover runs; sync and orch-dash are what the LaunchAgents became.
-JOBS = ("janitor", "janitor-load", "watch-prs", "sync", "orch-dash")
+JOBS = ("janitor", "watch-prs", "sync", "orch-dash")
 
 
 def sh(cmd):
@@ -115,6 +115,14 @@ def _jobs():
                 raise store.Refused(f"cannot read the {a.name} automation ({err}): nothing was changed")
             if found:
                 out[a.name] = (automations, found)
+    # A job no definition owns any more (janitor load) keeps running until a person runs `setup reconcile`, so it is
+    # paused and put back like the rest, found by the name it was registered under.
+    registered, err = automations.orca_automations()
+    if registered is None:
+        raise store.Refused(f"cannot read the Orca automations ({err}): nothing was changed")
+    for name in automations.RETIRED:
+        if found := next((x for x in registered if x.get("name") == name), None):
+            out[name] = (automations, found)
     return out
 
 

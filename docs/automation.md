@@ -25,12 +25,13 @@ skills-sync setup [--json]               # 목록과 상태
 skills-sync setup apply                  # 기본값 적용
 skills-sync setup enable <이름>          # 켜기
 skills-sync setup disable <이름>         # 끄기
+skills-sync setup drift [--json]          # 등록된 job이 정의와 다르거나 정의가 없는 것(다르면 exit 1)
+skills-sync setup reconcile               # 그것을 제자리에서 맞추고(켜짐·꺼짐은 그대로) 정의가 없는 job은 지운다. 사람이 직접 돌릴 때만 실행된다(sync는 `drift`로 알리기만 한다)
 ```
 
 | 이름 | 기본 | 장치 | 켜기 | 끄기 |
 |---|---|---|---|---|
-| `janitor` | on | Orca automation `agent-skills janitor`(에이전트 없는 주기 작업) | 아래 "에이전트 없이 도는 주기 작업"의 다른 작업과 같이 만든다. 있으면 trigger·precheck·precheck timeout·prompt 중 다른 것만 `orca automations edit`로 맞추고 켠다. workspace는 건드리지 않는다(runner worktree로 옮긴 것은 그대로). janitor가 꺼져 있었으면 꺼 둔 `janitor-load`도 같이 켠다(켜진 janitor 옆에 따로 끈 것은 그대로). 새로 만들 때는 `janitor-load`를 만들지 않는다. `enable janitor-load`나 `apply`가 만든다 | `orca automations edit --disabled`로 `janitor-load`까지 끈다. 등록은 남겨 `apply`가 다시 켜지 않는다 |
-| `janitor-load` | on | Orca automation `agent-skills janitor load` | `janitor`와 같고, 만들 때는 `reap.py schedule --load --write`. `janitor`가 꺼져 있거나 없으면 만들지 않는다 | 이 job만 끈다 |
+| `janitor` | on | Orca automation `agent-skills janitor`(에이전트 없는 주기 작업) | 아래 "에이전트 없이 도는 주기 작업"의 다른 작업과 같이 만든다. 있으면 trigger·precheck·precheck timeout·prompt 중 다른 것, 그리고 에이전트 시절에 남은 `--model` 인자만 `orca automations edit`로 맞추고 켠다. workspace는 건드리지 않는다(runner worktree로 옮긴 것은 그대로). 예전의 `janitor-load`는 따로 있지 않다: 같은 라운드를 부하 조건으로 한 번 더 도는 job이었는데 janitor가 30분마다 도는 동안 그 조건(1시간 안에 돈 회차가 없음)이 열리지 않아 janitor에 합쳤다. 등록이 남은 PC에서는 `skills-sync setup drift`가 "더는 정의가 없는 job"으로 보고하고 `reconcile`이 지운다 | `orca automations edit --disabled`. 등록은 남겨 `apply`가 다시 켜지 않는다 |
 | `preview-watch` | off | LaunchAgent `io.github.jeongjaesoon.preview-watch` | tailscale CLI가 없으면 거부한다. 있으면 `preview_watch.py install` | `preview_watch.py uninstall`(watcher가 연 serve 항목도 닫는다) |
 | `sync` | on | Orca automation `agent-skills sync`(에이전트 없음, [아래](#에이전트-없이-도는-주기-작업)) | 없으면 만든다(15분마다 `sync.py sync`). 있으면 trigger·precheck·timeout·prompt 중 다른 것만 맞추고 켠다 | `orca automations edit --disabled`. 등록은 남겨 `apply`가 다시 켜지 않는다 |
 | `pstack-upstream` | off | Orca automation `agent-skills pstack-upstream`(에이전트 없음) | `sync`와 같다. 하루 한 번 `pstack-sync.py --notify`로 cursor/plugins의 pstack을 `vendor/pstack` 사본과 비교해 차이를 알린다(upstream 커밋마다 한 번). `skills/`와 사본은 건드리지 않는다. 이 저장소를 고치는 PC에서만 켠다 | `sync`와 같다 |
@@ -63,7 +64,7 @@ skills-sync setup disable <이름>         # 끄기
 ## 에이전트 없이 도는 주기 작업
 
 Orca automation은 항상 에이전트 프롬프트를 갖지만, 실행 전에 `--precheck` 명령을 먼저 돌리고 exit가 0이 아니면
-에이전트를 띄우지 않고 `skipped_precheck`로 끝낸다. `janitor`·`janitor-load`·`sync`·`pressure-watch`·`reap-hard`·`orch-dash`는 이를 이용해
+에이전트를 띄우지 않고 `skipped_precheck`로 끝낸다. `janitor`·`sync`·`pressure-watch`·`reap-hard`·`orch-dash`는 이를 이용해
 precheck 안에서 작업을 직접 하고 항상 exit 1로 끝나므로(`scripts/orca_job.py run`) 회차마다 모델 비용이 0이다.
 이것은 precheck의 원래 용도(돌릴지 말지의 판단)를 벗어난 쓰임이다. Orca가 precheck의 부작용을 막거나 시간 제한을
 바꾸면 이 방식이 깨진다. 작업은 새 세션(자기 프로세스 그룹)에서 돌고, 끝나거나 시간을 넘기면 그 그룹에 남은
@@ -118,7 +119,7 @@ precheck 안에서 작업을 직접 하고 항상 exit 1로 끝나므로(`script
 - `--workspace-mode existing`을 쓴다. `new-per-run`은 회차마다 worktree를 만들어 치울 것을 늘린다.
 - 모델은 `--workspace` 체크아웃의 Claude Code 설정을 따른다. `reap.model`, `reflect.model`, `prs.model`,
   `mentions.model`을 넣으면 `schedule`이 `--extra-agent-args=--model <값>`을 붙인다. 이 인자는 새 세션 회차에만 붙는다.
-  이미 등록된 job(janitor, janitor-load, watch-prs, watch-mentions, reflect standing)은 `skills-sync setup apply`가 그 인자만
+  이미 등록된 job(watch-prs, watch-mentions, reflect standing)은 `skills-sync setup apply`가 그 인자만
   키 값에 맞춰 `orca automations edit`로 고친다(켜짐·꺼짐은 그대로). `enable`은 janitor의 다른 차이를 맞출 때와 꺼진 watch를 켤 때 같이 맞춘다.
   키를 지운 경우에는 저장된 인자를 비우지 않는다(`prs.py schedule --edit`만 비운다). `claude`가 아닌 에이전트의 job은 건드리지 않는다.
   기준은 판단이 거의 없는 읽기 전용 회차만 haiku,

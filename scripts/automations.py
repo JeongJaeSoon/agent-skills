@@ -6,6 +6,9 @@ Usage:
   skills-sync setup apply               turn on each default-on automation that was never set up
   skills-sync setup enable NAME [--here]
   skills-sync setup disable NAME
+  skills-sync setup drift [--json]      registered jobs that differ from this checkout's definitions (exit 1), or that
+                                        no definition owns any more
+  skills-sync setup reconcile           edit those in place (on/off stays) and remove the retired ones; only a person runs it
 
 Running any of these again changes nothing that is already as asked. `disable` keeps the janitor registered
 but off, so `apply` leaves it off. Turning one on writes paths to this checkout into the job, so it refuses a
@@ -68,32 +71,8 @@ def orca_automations():
         return None, f"orca automations list 실패: {(p.stderr or p.stdout).strip()[:200]}"
 
 
-def janitor_want(workspace, load=False):
-    """{field: value} reap's schedule would create, in the shape `orca automations list` reports. The workspace
-    is not compared: a janitor moved to a runner worktree stays there."""
-    argv = reap.schedule_cmd(REAP, reap.STATE, workspace, "claude", reap.ledger_path(), reap.config().get("inbox_to"),
-                             load=load)
-    arg = dict(zip(argv, argv[1:]))
-    want = {"trigger": arg["--trigger"], "precheck": arg["--precheck"],
-            "precheck-timeout": int(arg["--precheck-timeout"]), "prompt": arg["--prompt"]}
-    # Only present with reap.model: without the key the stored arguments are left as they are.
-    extra = next((x.partition("=")[2] for x in argv if x.startswith("--extra-agent-args=")), None)
-    return {**want, **({"extra-agent-args": extra} if extra else {})}
-
-
-def janitor_drift(a, load=False):
-    pre = a.get("precheck") or {}
-    have = {"trigger": a.get("rrule"), "precheck": pre.get("command"),
-            "precheck-timeout": pre.get("timeoutSeconds"), "prompt": a.get("prompt"),
-            "extra-agent-args": a.get("extraAgentArgs")}
-    want = janitor_want(f"path:{REPO}", load)
-    if a.get("agentId", "claude") != "claude":  # --model is a claude argument; another agent keeps its own
-        want.pop("extra-agent-args", None)
-    return {k: v for k, v in want.items() if have[k] != v}
-
-
 def edit_flag(k, v):
-    """argv words for one janitor_want field; a value that starts with `--` only parses after `=`."""
+    """argv words for one field of a job's `want()`; a value that starts with `--` only parses after `=`."""
     return [f"--{k}={v}"] if k == "extra-agent-args" else [f"--{k}", str(v)]
 
 
@@ -141,79 +120,10 @@ class OrcaJob:
         return 0, "끔 (등록은 남겨 두어 apply 가 다시 켜지 않는다)"
 
 
-class ReapJob(OrcaJob):
-    def status(self):
-        a, err = self.find()
-        if a is None:
-            return "unknown", err
-        if not a:
-            return "absent", "등록 안 됨"
-        # From a worktree every path differs from the job's; that is not drift.
-        drift = janitor_drift(a, self.load) if main_checkout() else {}
-        detail = f"{a.get('rrule')} · {(a.get('workspaceId') or '').partition('::')[2]}"
-        if drift:
-            detail += f" · reap schedule 과 다름: {', '.join(drift)} (enable 로 맞춤)"
-        return ("on" if a.get("enabled") else "off"), detail
-
-    def model(self):
-        return reap.config().get("model")
-
-    def create_args(self):
-        return [], None
-
-    def enable_job(self, here):
-        a, err = self.find()
-        if a is None:
-            return 1, err
-        # --here never applies: the janitor is one shared Orca job, and a worktree's paths die with it.
-        if not a:
-            refusal = worktree_refusal()
-            if refusal:
-                return 1, refusal
-            args, skip = self.create_args()
-            if skip:
-                return 0, skip
-            p = sh([sys.executable, str(REAP), "schedule", *args, "--write"])
-            return p.returncode, (p.stdout + p.stderr).strip()
-        drift = janitor_drift(a, self.load)
-        if not main_checkout():  # a worktree's paths differ from the job's; the model does not depend on the checkout
-            drift = {k: v for k, v in drift.items() if k == "extra-agent-args"}
-        if not drift and a.get("enabled"):
-            return 0, "이미 켜져 있음"
-        # orca rejects --precheck-timeout without --precheck.
-        fields = {"precheck": janitor_want(f"path:{REPO}", self.load)["precheck"], **drift} \
-            if "precheck-timeout" in drift else drift
-        edit = [x for k, v in fields.items() for x in edit_flag(k, v)]
-        p = sh([ORCA, "automations", "edit", "--id", a["id"], *edit, "--enabled", "--json"])
-        if p.returncode:
-            return 1, f"orca automations edit 실패: {(p.stderr or p.stdout).strip()[:200]}"
-        return 0, "켬" + (f" (reap schedule 에 맞춘 필드: {', '.join(drift)})" if drift else "")
-
-
-class JanitorLoad(ReapJob):
-    name = "janitor-load"
-    job_name = reap.LOAD_NAME
-    load = True
-    what = ("부하 정리 라운드(Orca automation, 30분마다 load 만 확인). 5분 load 가 reap.load_limit(기본 CPU 수) 이상이고 "
-            "1시간 안에 정리 라운드가 없었을 때만 janitor 와 같은 라운드를 한 번 돈다. janitor 가 꺼져 있거나 없으면 돌지 않는다")
-
-    def create_args(self):
-        """Follow the janitor: none while the user has it off or removed (apply would turn reaping back on), and in
-        the workspace it was moved to."""
-        j, _ = Janitor().find()
-        if not j or not j.get("enabled"):
-            return [], "janitor 가 꺼져 있거나 없어 만들지 않음"
-        ws = ((j or {}).get("workspaceId") or "").partition("::")[2]
-        return ["--load", *(["--workspace", f"path:{ws}"] if ws else [])], None
-
-    def enable(self, here):
-        return self.enable_job(here)
-
-    def disable(self):
-        code, msg = OrcaJob.disable(self)
-        if not code:
-            orca_job.forget(self.name)
-        return code, msg
+# Orca automations an earlier version registered that no definition here owns any more. `reconcile` removes them.
+# janitor load: the same round as the janitor (same command, lock and plan), gated on load >= reap.load_limit and no
+# round within an hour. The janitor stamps a round every 30 minutes, so that gate was never open while it ran: a subset.
+RETIRED = {reap.LOAD_NAME: "janitor 에 합침: 같은 라운드이고 부하 조건은 janitor 가 30분마다 도는 동안 열리지 않았다"}
 
 
 # ---------------------------------------------------------------- preview-watch (LaunchAgent)
@@ -344,7 +254,10 @@ class ShellJob(OrcaJob):
         pre = a.get("precheck") or {}
         have = {"trigger": a.get("rrule"), "prompt": a.get("prompt"), "precheck": pre.get("command"),
                 "precheck-timeout": pre.get("timeoutSeconds")}
-        return {k: v for k, v in self.want().items() if have[k] != v}
+        drift = {k: v for k, v in self.want().items() if have[k] != v}
+        if a.get("extraAgentArgs"):  # registered once as an agent job (`--model sonnet`): this job starts no agent
+            drift["extra-agent-args"] = ""
+        return drift
 
     def status(self):
         a, err = self.find()
@@ -387,12 +300,29 @@ class ShellJob(OrcaJob):
         drift = self.drift(a) if main_checkout() else {}
         if not drift and a.get("enabled"):
             return 0, "이미 켜져 있음"
-        fields = {"precheck": self.want()["precheck"], **drift} if "precheck-timeout" in drift else drift
-        p = sh([ORCA, "automations", "edit", "--id", a["id"], *[x for k, v in fields.items() for x in edit_flag(k, v)],
-                "--enabled", "--json"])
+        p = sh([ORCA, "automations", "edit", "--id", a["id"], *self.edit_words(drift), "--enabled", "--json"])
         if p.returncode:
             return 1, f"orca automations edit 실패: {(p.stderr or p.stdout).strip()[:200]}"
         return 0, "켬" + (f" (맞춘 필드: {', '.join(drift)})" if drift else "")
+
+    def edit_words(self, drift):
+        """`orca automations edit` words for the drifted fields; orca rejects --precheck-timeout without --precheck."""
+        fields = {"precheck": self.want()["precheck"], **drift} if "precheck-timeout" in drift else drift
+        return [x for k, v in fields.items() for x in edit_flag(k, v)]
+
+    def realign(self):
+        """Edit the registered job to this checkout's definition and leave it on or off as it is (`enable` would turn
+        it on). (code, message); nothing to do is (0, None)."""
+        a, err = self.find()
+        if a is None:
+            return 1, err
+        drift = self.drift(a) if a else {}
+        if not drift:
+            return 0, None
+        p = sh([ORCA, "automations", "edit", "--id", a["id"], *self.edit_words(drift), "--json"])
+        if p.returncode:
+            return 1, f"orca automations edit 실패: {(p.stderr or p.stdout).strip()[:200]}"
+        return 0, f"맞춘 필드: {', '.join(drift)}"
 
 
 class Janitor(ShellJob):
@@ -402,22 +332,6 @@ class Janitor(ShellJob):
                          shlex.split(reap.round_cmd(REAP, reap.STATE, reap.ledger_path(), "precheck", "--act")),
                          reap.INTERVAL_S, True, timeout=reap.PRECHECK_TIMEOUT)
         self.job_name = JANITOR_NAME
-
-    def disable(self):
-        code, msg = super().disable()
-        load_code, load_msg = JanitorLoad().disable()
-        return code | load_code, f"{msg} · janitor-load: {load_msg}"
-
-    def enable(self, here):
-        j, _ = self.find()
-        code, msg = self.enable_job(here)
-        load = JanitorLoad()
-        a, _ = load.find()
-        # Only undoes `disable janitor`: a load job turned off alone under a running janitor stays off.
-        if code or not j or j.get("enabled") or not a or a.get("enabled"):
-            return code, msg
-        load_code, load_msg = load.enable_job(here)
-        return load_code, f"{msg} · janitor-load: {load_msg}"
 
 
 def planned(key):
@@ -621,7 +535,7 @@ class ReflectStanding(OrcaJob):
 
 REFLECT = ReflectStanding()
 
-AUTOMATIONS = (Janitor(), JanitorLoad(), PreviewWatch(), *SHELL_JOBS, ShareServer(),
+AUTOMATIONS = (Janitor(), PreviewWatch(), *SHELL_JOBS, ShareServer(),
                Watch("watch-prs", "나를 지명한 리뷰 요청과 내 PR 의 리뷰 대기를 오케스트레이터나 리드에게 모아 보내는 Orca automation"),
                Watch("watch-mentions", "공개 채널의 멘션·참여 스레드 답글을 오케스트레이터나 리드에게 모아 보내는 Orca automation"))
 LABEL = {"on": "켜짐", "off": "꺼짐", "absent": "꺼짐(미설정)", "unknown": "확인 불가", "unsupported": "미지원",
@@ -646,6 +560,10 @@ def cmd_status(as_json):
         print(f"{r['name']}: {LABEL[r['state']]} (기본 {r['default']}) · {r['detail']}\n  {r['what']}")
     for line in land_drift():
         print(line)
+    drifted, _ = drift_rows()
+    if drifted:
+        print(f"경고: 등록된 automation {len(drifted)}개가 정의와 다름: {', '.join(r['name'] for r in drifted)} "
+              "(skills-sync setup drift 로 보고, reconcile 로 맞춤)")
     print("\n켜기: skills-sync setup enable <이름>   끄기: skills-sync setup disable <이름>")
     return 0
 
@@ -659,6 +577,65 @@ def land_drift():
     if p.returncode:
         return [f"경고: land executor 범위 점검 실패: {(p.stderr or p.stdout).strip()[:200]}"]
     return p.stdout.splitlines()
+
+
+def drift_rows():
+    """The registered automations that differ from this checkout's definitions, and the ones no definition owns any more:
+    [{name, kind: "drift", fields} | {name, kind: "retired", why}]. Read-only, one `orca automations list`. A worktree
+    reports nothing: every path differs there. (None, why) when Orca cannot be read."""
+    if not main_checkout():
+        return [], None
+    autos, err = orca_automations()
+    if autos is None:
+        return None, err
+    out = []
+    for j in AUTOMATIONS:
+        if isinstance(j, ShellJob) and (a := next((x for x in autos if x.get("name") == j.job_name), None)):
+            if fields := j.drift(a):
+                out.append({"name": j.name, "kind": "drift", "fields": sorted(fields)})
+    out += [{"name": n, "kind": "retired", "why": why} for n, why in RETIRED.items() if any(x.get("name") == n for x in autos)]
+    return out, None
+
+
+def cmd_drift(as_json):
+    """Exit 1 when a registered automation drifted or is retired, 2 when Orca cannot be read: a job registered in an
+    older shape keeps running in it until something says so (janitor ran as a model session after it became a shell job)."""
+    rows_, err = drift_rows()
+    if rows_ is None:
+        print(err, file=sys.stderr)
+        return 2
+    if as_json:
+        print(json.dumps(rows_, ensure_ascii=False, indent=2))
+    for r in ([] if as_json else rows_):
+        print(f"{r['name']}: " + (f"등록된 내용이 정의와 다름: {', '.join(r['fields'])}" if r["kind"] == "drift"
+                                  else f"더는 정의가 없는 job: {r['why']}"))
+    return 1 if rows_ else 0
+
+
+def cmd_reconcile():
+    """Bring the registered jobs back to this checkout's definitions: edit each drifted shell job in place (its on/off
+    stays) and remove a retired one. Creates and enables nothing: that stays `enable` / `apply`."""
+    if not main_checkout():
+        print(worktree_refusal(), file=sys.stderr)
+        return 1
+    rows_, err = drift_rows()
+    if rows_ is None:
+        print(err, file=sys.stderr)
+        return 2
+    code = 0
+    for r in rows_:
+        if r["kind"] == "drift":
+            c, msg = next(j for j in AUTOMATIONS if j.name == r["name"]).realign()
+        else:
+            a = next((x for x in orca_automations()[0] or [] if x.get("name") == r["name"]), None)
+            p = sh([ORCA, "automations", "remove", "--id", a["id"], "--json"]) if a else None
+            c, msg = (p.returncode, "등록을 지움: " + r["why"]) if p else (0, None)
+            if p and p.returncode:
+                msg = f"orca automations remove 실패: {(p.stderr or p.stdout).strip()[:200]}"
+        if msg:
+            print(f"{r['name']}: {msg}", file=sys.stderr if c else sys.stdout)
+        code |= c
+    return code
 
 
 def report(a, code, msg):
@@ -724,6 +701,10 @@ def main(argv):
         return cmd_status("--json" in argv)
     if cmd == "apply":
         return cmd_apply(here)
+    if cmd == "drift":
+        return cmd_drift("--json" in argv)
+    if cmd == "reconcile":
+        return cmd_reconcile()
     if cmd in ("enable", "disable") and len(argv) > 1:
         a = next((a for a in AUTOMATIONS if a.name == argv[1]), None)
         if a is None:
