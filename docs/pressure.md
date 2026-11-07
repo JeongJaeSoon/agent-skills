@@ -47,7 +47,7 @@
 | `hooks/pressure_gate.py`, `card.py`의 카드 생성 | `judge`가 모든 지표 중 최악 수준 | 전체 테스트·E2E·브라우저 실행이 `orch heavy` 밖이면 수준과 무관하게 거절하고 슬롯으로 감싸라고 한다. 수준 게이트는 `orch heavy`·compose·새 카드의 시작에 걸린다. ok는 통과, warn은 `round` 한 번 뒤 15분(`gate_fresh_minutes`) 동안 통과, danger는 대기열에 넣고 `queue wait`로 기다린다. 디스크만 위험이면 대기하지 않는다 |
 | 같은 hook, 새 카드 | 진행 중인 턴 수 ≥ `active_turns_per_cpu`×CPU, 또는 설정했다면 살아 있는 에이전트 세션 수 ≥ `max_sessions` | 수준과 무관하게 새 카드만 막는다. `max_sessions`는 기본이 꺼짐이다 |
 | `orch heavy` | 위 hook이 같은 수준으로 먼저 판정하고, 통과하면 슬롯 수(기본 2) | 슬롯은 수준과 무관하다 |
-| `pressure.py round` | 같은 수준 | warn·danger에서 reap 안전 대상을 정리하고, warn·danger로 수준이 바뀔 때(warn↔danger 포함) patrol을 부른다. danger는 알림과 Needs you |
+| `pressure.py round` | 같은 수준 | warn·danger에서 reap 안전 대상을 정리하고, warn·danger로 수준이 오를 때만 patrol을 부른다(내려갈 때는 부르지 않는다. 부하 때문에 든 danger는 부하가 1.7 아래로 내려가야 풀리고, 시작은 직전 시작에서 15분 이상 떨어진다. 이 해제 지연은 patrol 트리거에만 걸고 게이트가 읽는 수준은 그대로다). danger는 알림과 Needs you |
 | `patrol` | 마지막 수준 | danger에서는 정리 스캔을 건너뛴다 |
 | `swap_growth_gb_h`, `swap_gb`, `docker_cpu_pct` | 위험이 없는 지표 | danger와 대기열을 만들지 않는다. 경고 수준이 되면 최근 스캔이 없는 동안 hook이 `round` 한 번을 요구한다 |
 | janitor, 대시보드 | 수준을 읽지 않는다 | janitor는 일정으로 돌고, 대시보드는 기록만 그린다 |

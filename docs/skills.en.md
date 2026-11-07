@@ -1,4 +1,4 @@
-<!-- translated-from: 4a2e54fd1782fb6f01f924e9aaa0e9cd3cafe390 -->
+<!-- translated-from: 69e910480094b5a68ee3e2dbc4a37f3de46810ab -->
 # Skill catalog
 
 This page covers the 31 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 16 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
@@ -572,6 +572,7 @@ Every rule has a key in `~/.claude/agent-skills.json`. Its value is one of `"den
 | `guard.deny.external_review` | deny | A `codex` call whose working folder (or `-C`) has an origin repository set to `repos.<owner/repo>.external_llm: false`. Without that key, no decision |
 | `guard.deny.rm_outside` | deny | A recursive `rm` (`-r`, `-R`, `--recursive`) aimed outside the current checkout (git toplevel) and `/tmp` or `$TMPDIR`. The checkout root itself and `/tmp` itself count as outside. A path with an unresolved `$` variable is not judged; the `rm_expansion` warning covers it |
 | `guard.deny.trash_empty` | deny | `rm` with `-r` or a glob on `~/.Trash`, `~/.local/share/Trash` or `.Trashes`, `trash-empty`, `gio trash --empty`, and the Finder `empty trash` AppleScript. An `rm` of one named file there is not covered |
+| `guard.deny.protection_write` | deny | A `gh api` or `curl` call that writes branch protection or a ruleset: any method but GET, HEAD or OPTIONS on `…/branches/<b>/protection` or `…/rulesets`, and a GraphQL `create/update/delete…ProtectionRule` or `…Ruleset` mutation (a body from `--input` or `-F query=@file` is read too). A read-only GET is not covered. A path held in a variable, a stdin body, curl URL globbing (`{a,b}`), `--request-target` and a curl to a host other than `api.github.com` (Enterprise) are not read; `gh api` is judged whatever the host |
 | `guard.ask.pressure_bypass` | ask | An `AGENT_SKILLS_PRESSURE_GATE=0` assignment before the command or through `env` or `export`. An `echo` that prints the text is not covered |
 | `guard.warn.rm_expansion` | warn | An `rm` path built from an unquoted glob or variable. `${VAR:?}` is fine |
 | `guard.warn.reset_hard` | warn | `git reset --hard` in a repository with uncommitted changes |

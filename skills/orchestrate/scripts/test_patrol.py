@@ -506,12 +506,100 @@ hist = {"ha": [["Error: x"], ["Error: x"]]}
 _, _, m = patrol.judge(facts(failed={"terminals"}), {"errors": hist, "last_output": {"ha": 5}})
 assert m["errors"] == hist and m["last_output"] == {"ha": 5}
 
-# --if-due: 25 minutes, or pressure rising to warn or danger.
+# --if-due: 25 minutes, or the trigger level rising over its floor since the last round, and a rise only 15 minutes after
+# the last round. A fall never starts one; a climb back to the old level after a fall is a rise (the floor remembers it).
 assert patrol.due({}, "ok", NOW)
 assert not patrol.due({"t": NOW - 600, "level": "ok"}, "ok", NOW)
-assert patrol.due({"t": NOW - 600, "level": "ok"}, "warn", NOW)
+assert not patrol.due({"t": NOW - 600, "level": "ok"}, "warn", NOW), "a rise inside the 15-minute gap waits"
+assert patrol.due({"t": NOW - 16 * 60, "level": "ok"}, "warn", NOW)
+assert patrol.due({"t": NOW - 16 * 60, "level": "warn"}, "danger", NOW)
+assert not patrol.due({"t": NOW - 16 * 60, "level": "danger"}, "warn", NOW), "danger to warn is a fall"
+assert not patrol.due({"t": NOW - 16 * 60, "level": "warn"}, "warn", NOW)
 assert not patrol.due({"t": NOW - 600, "level": "danger"}, "danger", NOW)
 assert patrol.due({"t": NOW - 26 * 60, "level": "danger"}, "danger", NOW)
+assert patrol.due({"t": NOW - 16 * 60, "level": "danger"}, "danger", NOW, floor="warn"), "danger again after a fall to warn"
+assert not patrol.due({"t": NOW - 16 * 60, "level": "danger"}, "danger", NOW, floor="danger")
+# trigger_level reads pressure's floor only for the round it tracked.
+patrol.PRESSURE.write_text(json.dumps({"level": "warn", "trigger_level": "danger", "trigger_obs": [[60, "warn"], [470, "danger"]]}))
+assert patrol.trigger_level({"t": 50, "level": "danger"}) == ("danger", "warn")
+assert patrol.trigger_level({"t": 400, "level": "danger"}) == ("danger", "danger"), "a fall before the round began is not below its level"
+assert patrol.trigger_level({}) == ("danger", "ok")
+# pressure's history is timestamped, so what patrol commits cannot erase a fall: one seen while the round gathered, or
+# between its last read and its commit, is still below the round's level once the memo carries the round's start time.
+def pressure_falls(*obs):
+    def gather(now, deadline, memo):
+        patrol.PRESSURE.write_text(json.dumps({"level": "danger", "trigger_level": "danger", "trigger_obs": [list(o) for o in obs]}))
+        return facts(now=now), []
+    return gather
+patrol.PRESSURE.write_text(json.dumps({"level": "danger", "trigger_level": "danger", "trigger_obs": []}))
+patrol.MEMO.write_text(json.dumps({"t": 5, "level": "danger"}))
+patrol.round_once(now=1000.0, gather_fn=pressure_falls((900.0, "danger"), (1010.0, "warn"), (1020.0, "danger")))
+memo = json.loads(patrol.MEMO.read_text())
+assert memo["t"] == 1000.0 and memo["level"] == "danger"
+assert patrol.trigger_level(memo) == ("danger", "warn"), "the fall during the round survives the commit"
+patrol.MEMO.write_text(json.dumps({"t": 5, "level": "danger"}))
+patrol.round_once(now=2000.0, gather_fn=pressure_falls((1500.0, "warn"), (1600.0, "danger")))
+assert patrol.trigger_level(json.loads(patrol.MEMO.read_text())) == ("danger", "danger"), "a fall before the round began is not its own"
+patrol.PRESSURE.unlink()
+patrol.MEMO.unlink()
+
+# The workers read: the live terminal states every round, the released ones (the bulk, settled) only every
+# SETTLED_EVERY, plus the newest released page every round for a worker created since. A worker that left the live
+# states joins the cached ones when settled; an unsettled one, or a page of new ones, forces a full read.
+def wk(i, status="completed", ts="released"):
+    return {"dispatchId": i, "dispatchStatus": status, "terminalState": ts}
+calls, PAGE = [], 2
+LIVE = {"retained": [wk("a", "completed", "retained"), wk("b", "active", "retained")], "released": [wk("r2"), wk("r1")]}  # newest first
+def fake_pages(state=None, deadline=None, first_only=False):
+    calls.append((state, first_only))
+    return list(LIVE.get(state, []))[:PAGE if first_only else None]
+def ids(rows):
+    return sorted(w["dispatchId"] for w in rows)
+full = lambda: [c for c in calls if c == ("released", False)]
+patrol.WORKERS_CURSOR.unlink(missing_ok=True)
+assert ids(patrol.all_workers(0, NOW, fake_pages)) == ["a", "b", "r1", "r2"] and len(full()) == 1, calls
+calls.clear()
+patrol.all_workers(0, NOW + 60, fake_pages)
+assert not full() and ("released", True) in calls, "inside the cursor: the newest page only"
+LIVE["retained"] = [wk("b", "active", "retained")]  # a settled worker left the live states: it is released now
+LIVE["released"] = [wk("a")] + LIVE["released"]
+calls.clear()
+assert ids(patrol.all_workers(0, NOW + 120, fake_pages)) == ["a", "b", "r1", "r2"] and not full()
+LIVE["released"] = [wk("r3")] + LIVE["released"]  # created and released since the cursor
+calls.clear()
+assert ids(patrol.all_workers(0, NOW + 130, fake_pages)) == ["a", "b", "r1", "r2", "r3"] and not full(), "a new settled worker is seen"
+LIVE["released"] = [wk("r4", "active")] + LIVE["released"]  # released while its Dispatch still moves
+calls.clear()
+assert "r4" in ids(patrol.all_workers(0, NOW + 140, fake_pages)) and len(full()) == 1, "a moving worker forces a full read"
+LIVE["released"][0] = wk("r4")
+calls.clear()
+patrol.all_workers(0, NOW + 150, fake_pages)  # the moving one made the cursor unusable: full again, and now it is settled
+assert len(full()) == 1
+LIVE["released"] = [wk("r6"), wk("r5")] + LIVE["released"]  # a whole page of new workers
+calls.clear()
+assert ids(patrol.all_workers(0, NOW + 160, fake_pages)) == ["a", "b", "r1", "r2", "r3", "r4", "r5", "r6"] and len(full()) == 1
+LIVE["retained"] = []  # an unsettled worker left the live states
+calls.clear()
+patrol.all_workers(0, NOW + 170, fake_pages)
+assert len(full()) == 1
+calls.clear()
+patrol.all_workers(0, NOW + 170 + fleet.SETTLED_EVERY + 1, fake_pages)
+assert len(full()) == 1, "past SETTLED_EVERY"
+# A dry round reads the cursor but never writes it.
+patrol.WORKERS_CURSOR.unlink(missing_ok=True)
+patrol.CURRENT["dry"] = True
+patrol.all_workers(0, NOW + 2000, fake_pages)
+assert not patrol.WORKERS_CURSOR.exists(), "dry round wrote the workers cursor"
+patrol.CURRENT["dry"] = False
+patrol.all_workers(0, NOW + 2000, fake_pages)
+assert patrol.WORKERS_CURSOR.exists()
+# An empty cursor with more than a page of new released workers, the moving one past the first page: read in full.
+LIVE["retained"], LIVE["released"] = [], []
+patrol.all_workers(0, NOW + 3000, fake_pages)
+LIVE["released"] = [wk("s1"), wk("s2"), wk("s3", "active")]
+calls.clear()
+assert ids(patrol.all_workers(0, NOW + 3010, fake_pages)) == ["s1", "s2", "s3"] and len(full()) == 1
+patrol.WORKERS_CURSOR.unlink(missing_ok=True)
 
 # A dry round writes nothing.
 before = patrol.LOG.read_text()
@@ -1012,7 +1100,7 @@ assert fid_t in three["cleared"] and fid_t not in patrol.standing()
 # each starts only when the last is due. A rise in pressure still starts one at once.
 assert patrol.due({"t": NOW - 26 * 60}, "ok", NOW) and not patrol.due({"t": NOW - 24 * 60}, "ok", NOW, patrol.FALLBACK_DUE_S)
 assert patrol.due({"t": NOW - 26 * 60}, "ok", NOW, patrol.FALLBACK_DUE_S)
-assert patrol.due({"t": NOW - 60, "level": "ok"}, "warn", NOW, patrol.FALLBACK_DUE_S)
+assert patrol.due({"t": NOW - 16 * 60, "level": "ok"}, "warn", NOW, patrol.FALLBACK_DUE_S)
 assert patrol.FALLBACK_DUE_S < 1800, "reap-hard's default period"
 last, rounds_at = NOW - 3600, []
 for k in range(1, 7):  # six passes, 30 minutes apart, no patrol job and no pressure change
