@@ -147,7 +147,7 @@ def after_switch(c, switched, here):
     """{repository: branch} after a `git switch <b>`, `git checkout <b>` or `-c/-b <b> [<start>]` on the same command
     line: the branch it leaves checked out in the repository it ran in (SWITCH_UNKNOWN when that cannot be read).
     `switched` is the map before this command; it is returned unchanged for any other."""
-    sub, args = verb(c.words[1:], {"-C", "-c", "--git-dir", "--work-tree", "--namespace"})
+    sub, args = verb(c.words[1:], GIT_OPTS)
     if sub not in ("switch", "checkout"):
         return switched
     # `checkout <b> -- <paths>` restores files and keeps HEAD; `checkout <b> --` and `switch -- <b>` switch.
@@ -162,7 +162,12 @@ def after_switch(c, switched, here):
             where = expand(opts[i + 1], where) or where
         elif x.startswith("-C") and len(x) > 2:  # `-C/path`
             where = expand(x[2:], where) or where
-        elif x.startswith(("--git-dir", "--work-tree")):  # the repository it moves is not readable from the words
+        elif x == "--git-dir" or x.startswith("--git-dir="):
+            git_dir = expand(opts[i + 1] if x == "--git-dir" and i + 1 < len(opts) else x.partition("=")[2], where)
+            if os.path.basename(git_dir) != ".git":  # a git dir that is not <repo>/.git: any repository
+                return {**switched, ANY_REPO: SWITCH_UNKNOWN}
+            where = os.path.dirname(git_dir)
+        elif x.startswith("--work-tree"):  # the repository it moves is not readable from the words
             return {**switched, ANY_REPO: SWITCH_UNKNOWN}
     key = repo_key(where)
     # -c/-C (switch) and -b/-B (checkout) name the branch to create, attached or as the next word.
@@ -733,7 +738,7 @@ def force_push_default(c, here, switched=None):
         dst = dst if ":" in spec else src
         if spec.lstrip("+") == ":":  # the matching refspec: every branch the remote has
             dst = "*"
-        if dst == "HEAD":
+        if dst in ("HEAD", "@"):  # `@` is git's alias for HEAD
             # A `git switch` earlier on the line moved HEAD; the repository on disk still shows the old branch.
             seen = switched or {}
             # `--git-dir=<repo>/.git` acts on <repo>; any other git dir is not tied to a folder this reader knows.
