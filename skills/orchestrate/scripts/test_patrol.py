@@ -506,7 +506,8 @@ hist = {"ha": [["Error: x"], ["Error: x"]]}
 _, _, m = patrol.judge(facts(failed={"terminals"}), {"errors": hist, "last_output": {"ha": 5}})
 assert m["errors"] == hist and m["last_output"] == {"ha": 5}
 
-# --if-due: 25 minutes, or the trigger level rising, and a rise only 15 minutes after the last round. A fall never starts one.
+# --if-due: 25 minutes, or the trigger level rising over its floor since the last round, and a rise only 15 minutes after
+# the last round. A fall never starts one; a climb back to the old level after a fall is a rise (the floor remembers it).
 assert patrol.due({}, "ok", NOW)
 assert not patrol.due({"t": NOW - 600, "level": "ok"}, "ok", NOW)
 assert not patrol.due({"t": NOW - 600, "level": "ok"}, "warn", NOW), "a rise inside the 15-minute gap waits"
@@ -516,43 +517,55 @@ assert not patrol.due({"t": NOW - 16 * 60, "level": "danger"}, "warn", NOW), "da
 assert not patrol.due({"t": NOW - 16 * 60, "level": "warn"}, "warn", NOW)
 assert not patrol.due({"t": NOW - 600, "level": "danger"}, "danger", NOW)
 assert patrol.due({"t": NOW - 26 * 60, "level": "danger"}, "danger", NOW)
-
-sys.path.insert(0, str(patrol.REAP_SCRIPTS))
-import pressure  # noqa: E402
-assert patrol.TRIGGER_GAP_S == pressure.TRIGGER_MIN_GAP_S, "the two sides of the patrol trigger share one gap"
-assert patrol.LEVEL_RANK == {l: i for i, l in enumerate(pressure.LEVELS)}
+assert patrol.due({"t": NOW - 16 * 60, "level": "danger"}, "danger", NOW, floor="warn"), "danger again after a fall to warn"
+assert not patrol.due({"t": NOW - 16 * 60, "level": "danger"}, "danger", NOW, floor="danger")
+# trigger_level reads pressure's floor only for the round it tracked.
+patrol.PRESSURE.write_text(json.dumps({"level": "warn", "trigger_level": "danger", "trigger_floor": "ok", "floor_for": 5}))
+assert patrol.trigger_level({"t": 5}) == ("danger", "ok") and patrol.trigger_level({"t": 6}) == ("danger", None)
+patrol.PRESSURE.unlink()
 
 # The workers read: the live terminal states every round, the released ones (the bulk, settled) only every
-# SETTLED_EVERY. A worker that left the live states joins the cached released ones when settled; an unsettled one
-# forces a fresh read. A released worker still moving is never cached.
+# SETTLED_EVERY, plus the newest released page every round for a worker created since. A worker that left the live
+# states joins the cached ones when settled; an unsettled one, or a page of new ones, forces a full read.
 def wk(i, status="completed", ts="released"):
     return {"dispatchId": i, "dispatchStatus": status, "terminalState": ts}
-calls = []
-LIVE = {"retained": [wk("a", "completed", "retained"), wk("b", "active", "retained")], "released": [wk("r1"), wk("r2")]}
-def fake_pages(state=None, deadline=None):
-    calls.append(state)
-    return list(LIVE.get(state, []))
+calls, PAGE = [], 2
+LIVE = {"retained": [wk("a", "completed", "retained"), wk("b", "active", "retained")], "released": [wk("r2"), wk("r1")]}  # newest first
+def fake_pages(state=None, deadline=None, first_only=False):
+    calls.append((state, first_only))
+    return list(LIVE.get(state, []))[:PAGE if first_only else None]
+def ids(rows):
+    return sorted(w["dispatchId"] for w in rows)
+full = lambda: [c for c in calls if c == ("released", False)]
 patrol.WORKERS_CURSOR.unlink(missing_ok=True)
-rows = patrol.all_workers(0, NOW, fake_pages)
-assert sorted(w["dispatchId"] for w in rows) == ["a", "b", "r1", "r2"] and calls.count("released") == 1, calls
+assert ids(patrol.all_workers(0, NOW, fake_pages)) == ["a", "b", "r1", "r2"] and len(full()) == 1, calls
 calls.clear()
 patrol.all_workers(0, NOW + 60, fake_pages)
-assert "released" not in calls and len(calls) == len(patrol.LIVE_TERMINAL_STATES), "inside the cursor: live states only"
+assert not full() and ("released", True) in calls, "inside the cursor: the newest page only"
 LIVE["retained"] = [wk("b", "active", "retained")]  # a settled worker left the live states: it is released now
-rows = patrol.all_workers(0, NOW + 120, fake_pages)
-assert sorted(w["dispatchId"] for w in rows) == ["a", "b", "r1", "r2"] and "released" not in calls[len(patrol.LIVE_TERMINAL_STATES):]
-LIVE["retained"] = []  # an unsettled worker left: read released again
+LIVE["released"] = [wk("a")] + LIVE["released"]
 calls.clear()
-rows = patrol.all_workers(0, NOW + 180, fake_pages)
-assert "released" in calls
+assert ids(patrol.all_workers(0, NOW + 120, fake_pages)) == ["a", "b", "r1", "r2"] and not full()
+LIVE["released"] = [wk("r3")] + LIVE["released"]  # created and released since the cursor
 calls.clear()
-patrol.all_workers(0, NOW + 180 + fleet.SETTLED_EVERY + 1, fake_pages)
-assert "released" in calls, "past SETTLED_EVERY"
-LIVE["released"] = [wk("r1"), wk("r3", "active")]  # a released worker still moving: no cursor
-patrol.all_workers(0, NOW + 5000, fake_pages)
+assert ids(patrol.all_workers(0, NOW + 130, fake_pages)) == ["a", "b", "r1", "r2", "r3"] and not full(), "a new settled worker is seen"
+LIVE["released"] = [wk("r4", "active")] + LIVE["released"]  # released while its Dispatch still moves
 calls.clear()
-patrol.all_workers(0, NOW + 5001, fake_pages)
-assert "released" in calls
+assert "r4" in ids(patrol.all_workers(0, NOW + 140, fake_pages)) and len(full()) == 1, "a moving worker forces a full read"
+LIVE["released"][0] = wk("r4")
+calls.clear()
+patrol.all_workers(0, NOW + 150, fake_pages)  # the moving one made the cursor unusable: full again, and now it is settled
+assert len(full()) == 1
+LIVE["released"] = [wk("r6"), wk("r5")] + LIVE["released"]  # a whole page of new workers
+calls.clear()
+assert ids(patrol.all_workers(0, NOW + 160, fake_pages)) == ["a", "b", "r1", "r2", "r3", "r4", "r5", "r6"] and len(full()) == 1
+LIVE["retained"] = []  # an unsettled worker left the live states
+calls.clear()
+patrol.all_workers(0, NOW + 170, fake_pages)
+assert len(full()) == 1
+calls.clear()
+patrol.all_workers(0, NOW + 170 + fleet.SETTLED_EVERY + 1, fake_pages)
+assert len(full()) == 1, "past SETTLED_EVERY"
 patrol.WORKERS_CURSOR.unlink(missing_ok=True)
 
 # A dry round writes nothing.

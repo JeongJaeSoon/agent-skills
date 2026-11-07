@@ -114,9 +114,29 @@ def trigger_level(prev, level, m):
     return level
 
 
-def trigger_due(st, tlevel, now):
-    rose = LEVELS.index(tlevel) > LEVELS.index(st.get("trigger_level") or "ok")
-    return rose and now - st.get("patrol_t", 0) >= TRIGGER_MIN_GAP_S
+PATROL_MEMO = reap.STATE / "patrol-state.json"  # patrol's own record of its last round: t, and the trigger level it ran at
+
+
+def read_patrol_memo():
+    try:
+        memo = json.loads(PATROL_MEMO.read_text())
+        return memo if isinstance(memo, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def trigger_floor(st, memo, tlevel):
+    """The lowest trigger level since patrol's last round (its memo level when that round was this round's predecessor).
+    A fall starts no round, so only this floor lets a climb back to the old level read as a rise."""
+    base = st.get("trigger_floor") if st.get("floor_for") == memo.get("t") and st.get("trigger_floor") else memo.get("level") or "ok"
+    return min(base, tlevel, key=LEVELS.index)
+
+
+def rise_due(floor, last_round_t, tlevel, now):
+    """The one rule for starting a patrol round on pressure: the trigger level is above the floor, and the last round is
+    at least TRIGGER_MIN_GAP_S old. The pressure round and `orch patrol --if-due` both ask it, against patrol's memo, so
+    a start that patrol refused or never ran is asked again next round."""
+    return LEVELS.index(tlevel) > LEVELS.index(floor) and now - last_round_t >= TRIGGER_MIN_GAP_S
 
 
 def config(overrides=()):
@@ -982,12 +1002,10 @@ def round_once(cfg, dry_run, out=print, now=None, measure_fn=measure, sample_fn=
         out(f"- 임계값 초과: {', '.join(why)}")
     record = {"t": now, "level": level, "metrics": m, "why": why}
     tlevel = trigger_level(st.get("trigger_level") or "ok", level, m)
-    fire = trigger_due(st, tlevel, now)
-    # A rise held back by the gap stays pending (the stored level does not move up) and fires once the gap is over.
-    record["trigger_level"] = tlevel if fire or LEVELS.index(tlevel) < LEVELS.index(st.get("trigger_level") or "ok") \
-        else st.get("trigger_level") or "ok"
-    if fire:
-        record["patrol_t"] = now
+    memo = read_patrol_memo()
+    floor = trigger_floor(st, memo, tlevel)
+    fire = rise_due(floor, memo.get("t") or 0, tlevel, now)
+    record.update(trigger_level=tlevel, trigger_floor=floor, floor_for=memo.get("t"))
     if level != "danger" and st.get("dash_t") and not dry_run:
         dash_note("resolve")
         st.pop("dash_t")

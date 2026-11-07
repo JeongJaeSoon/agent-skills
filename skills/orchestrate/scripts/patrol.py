@@ -115,8 +115,6 @@ DUE_S = 25 * 60
 # after the last round would find it not yet due and skip: the fallback would then run every second pass. With the job
 # on, whichever of the two comes first runs the round and the other finds it not due.
 FALLBACK_DUE_S = DUE_S
-TRIGGER_GAP_S = 15 * 60
-LEVEL_RANK = {"ok": 0, "warn": 1, "danger": 2}
 BUDGET_S = 120
 CANDIDATE_BUDGET_S = 240
 AGENTS_MARGIN_S = 15  # agent_signal.read's 10 s, and the round's own writes after it
@@ -194,13 +192,20 @@ def all_workers(deadline, now=None, pages=None):
     cur = fleet.read_json(WORKERS_CURSOR, {}) or {}
     cached = {w.get("dispatchId"): w for w in cur.get("released") or []}
     gone = [w for i, w in (cur.get("live") or {}).items() if i not in live and i not in cached]
-    fresh = (0 <= now - (cur.get("t") or 0) < fleet.SETTLED_EVERY and all(w.get("dispatchStatus") in fleet.SETTLED for w in gone))
-    if fresh:
-        released = list(cached.values()) + [{**w, "terminalState": "released"} for w in gone]
-        stamp = cur["t"]
-    else:
+    settled = lambda ws: all(w.get("dispatchStatus") in fleet.SETTLED for w in ws)
+    released = None
+    if 0 <= now - (cur.get("t") or 0) < fleet.SETTLED_EVERY and settled(gone):
+        # Newest first: a worker created since the cursor sits on the first page. That page must overlap the cursor (or
+        # the cursor be empty), else more than a page of workers is new and the whole list is read.
+        newest = pages(state="released", deadline=deadline, first_only=True)
+        known = {*cached, *live, *(w.get("dispatchId") for w in gone)}
+        new = [w for w in newest if w.get("dispatchId") not in known]
+        if settled(new) and (not cached or len(new) < len(newest)):
+            released = list(cached.values()) + [{**w, "terminalState": "released"} for w in gone] + new
+            stamp = cur["t"]
+    if released is None:
         released, stamp = pages(state="released", deadline=deadline), now
-        if not all(w.get("dispatchStatus") in fleet.SETTLED for w in released):
+        if not settled(released):
             stamp = 0  # a released worker still moving: no cursor, read it every round
     rows = list(live.values()) + [w for w in released if w.get("dispatchId") not in live]
     with contextlib.suppress(OSError):
@@ -324,10 +329,12 @@ def pressure_level():
     return st.get("level") or "ok", st.get("t") or 0
 
 
-def trigger_level():
-    """The level `due` compares: pressure's hysteresis-held one, which only the patrol trigger reads."""
+def trigger_level(memo):
+    """(level, floor) `due` compares: pressure's hysteresis-held level, which only the patrol trigger reads, and the
+    lowest it was since the round in `memo` (None when pressure has not tracked that round)."""
     st = fleet.read_json(PRESSURE, {}) or {}
-    return st.get("trigger_level") or st.get("level") or "ok"
+    floor = st.get("trigger_floor") if st.get("floor_for") == memo.get("t") else None
+    return st.get("trigger_level") or st.get("level") or "ok", floor
 
 
 def consumers():
@@ -924,12 +931,13 @@ def pending_lines(me, unowned, now=None):
 
 # ---------------------------------------------------------------- round
 
-def due(memo, level, now, every=DUE_S):
-    """level: the trigger level (pressure's hysteresis applied), not the raw one. A rise starts a round only 15 minutes
-    after the last one; a fall never does."""
+def due(memo, level, now, every=DUE_S, floor=None):
+    """level: the trigger level (pressure's hysteresis applied), not the raw one; floor: the lowest it was since the last
+    round (pressure's, else the memo's level). A rise over the floor starts a round only 15 minutes after the last one;
+    a fall never does."""
+    import pressure  # here, not at the top: the hooks that import patrol stay off pressure's imports
     last = memo.get("t") or 0
-    rose = LEVEL_RANK.get(level, 0) > LEVEL_RANK.get(memo.get("level"), 0)
-    return (rose and now - last >= TRIGGER_GAP_S) or now - last >= every
+    return pressure.rise_due(floor or memo.get("level") or "ok", last, level, now) or now - last >= every
 
 
 @contextlib.contextmanager
@@ -1107,8 +1115,8 @@ def switch_round(drifts, rows, notes, path_of, switch):
 def round_once(dry=False, if_due=False, now=None, gather_fn=gather, rid=None, fallback=False):
     now = now or time.time()
     memo = fleet.read_json(MEMO, {}) or {}
-    tlevel = trigger_level()
-    if if_due and not due(memo, tlevel, now, FALLBACK_DUE_S if fallback else DUE_S):
+    tlevel, floor = trigger_level(memo)
+    if if_due and not due(memo, tlevel, now, FALLBACK_DUE_S if fallback else DUE_S, floor):
         return None
     t0 = time.monotonic()
     facts, notes = gather_fn(now, time.time() + BUDGET_S, memo)
