@@ -289,5 +289,64 @@ assert [t["handle"] for t in card_watch.agent_terminals(listing, "me", ["me", "s
 mine = card_watch.agent_terminals(listing, "me", ["h2", "h4"])
 assert card_watch.scan(mine, {}, read, NOW, 30, 100.0, 15) == [], "h1's menu is outside the filter"
 assert card_watch.scan(card_watch.agent_terminals(listing, "me", ["h1"]), {}, read, NOW, 30, 100.0, 15)[0].startswith("STUCK card-a")
+
+# A card whose start helper failed (close-setup, the /goal input) is SETUP FAILED while its screen looks idle.
+SETUP = tempfile.TemporaryDirectory()
+card_watch.SETUP_STATE = pathlib.Path(SETUP.name)
+def helper_log(helper, card, *lines):
+    path = pathlib.Path(SETUP.name) / helper / f"{card}.log"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(l + "\n" for l in lines))
+terms = card_watch.agent_terminals([term(h, f"/w/card-{c}", last=NOW - 60000) for h, c in zip(("h1", "h2", "h3", "h4"), "abcd")], "me")
+screens = {"h1": idle, "h2": idle, "h3": idle, "h4": idle}
+helper_log("close-setup", "card-a", "term_x  agent needs input: a folder trust dialog", "result: failed")
+helper_log("goal-input", "card-b", "[skills-sync card] warning: the /goal line was not typed into h2 (waited up to 900s). Once the session is idle, run: orca terminal send --terminal h2 --text '/goal x' --enter")
+helper_log("close-setup", "card-c", "term_y  closed", "result: ok")
+helper_log("goal-input", "card-c", "[skills-sync card] typed the /goal line into h3: /goal x")
+seen = {}
+found = scan(seen)
+assert found[0] == "SETUP FAILED card-a: close-setup (term_x  agent needs input: a folder trust dialog)", found
+assert found[1] == "  skills-sync close-setup /w/card-a --agent h1   # then: orca terminal read --terminal h1 --screen", found
+assert found[2].startswith("SETUP FAILED card-b: goal-input (the /goal line was not typed into h2"), found
+assert "orca terminal send --terminal h2 --text" in found[3], found
+assert len(found) == 4, "a result: ok log and a typed /goal line are not failures; no log is none"
+assert scan(seen) == [], "a failure still logged is not reported again"
+helper_log("goal-input", "card-b", "[skills-sync card] warning: the /goal line was not typed into h2 (waited up to 900s).",
+           "[skills-sync card] typed the /goal line into h2: /goal x")
+screens["h1"] = menu
+again = scan(seen)
+assert again[0].startswith("STUCK card-a (a select menu)") and not any("card-b" in l for l in again), again
+
+# The helper's verdict prefix decides, not the goal text it quotes; an unconfirmed send ends the "not typed" report.
+helper_log("goal-input", "card-b", "[skills-sync card] typed the /goal line into h2: /goal why the /goal line was not typed")
+assert card_watch.setup_failure("card-b") is None, "a quoted goal text is not a verdict"
+helper_log("goal-input", "card-b", "[skills-sync card] warning: the /goal line was not typed into h2 (waited up to 900s).",
+           "[skills-sync card] warning: the /goal line may have reached h2, but its screen does not show it. Read the screen first: x")
+assert card_watch.setup_failure("card-b") is None, "the newest verdict says it may have been typed"
+helper_log("goal-input", "card-b", "[skills-sync card] warning: the /goal line may have reached h2, but its screen does not show it. Read the screen "
+           "before typing it again: orca terminal send --terminal h2 --text '/goal why the /goal line was not typed into x' --enter")
+assert card_watch.setup_failure("card-b") is None, "a goal text quoted in the manual command is not a verdict"
+
+# An unreadable pane neither hides a failure nor makes it come back after the pane reads again.
+helper_log("close-setup", "card-a", "term_x  agent needs input: a folder trust dialog", "result: failed")
+def flaky(h):
+    if flaky.mode == "bad":
+        raise SystemExit(1)
+    return idle
+terms = card_watch.agent_terminals([term("h1", "/w/card-a", last=NOW - 60000)], "me")
+seen = {}
+flaky.mode = "bad"
+assert card_watch.scan(terms, seen, flaky, NOW, 30, 100.0, 15)[0].startswith("SETUP FAILED card-a"), "reported with no screen"
+flaky.mode = "ok"
+assert card_watch.scan(terms, seen, flaky, NOW, 30, 100.0, 15) == [], "the same failure after the pane reads again"
+flaky.mode = "bad"
+assert card_watch.scan(terms, seen, flaky, NOW, 30, 100.0, 15) == [], "and again when it stops reading"
+two = card_watch.agent_terminals([term("h1", "/w/card-a", last=NOW - 60000), term("h9", "/w/card-a", last=NOW - 60000)], "me")
+flaky.mode = "ok"
+assert [l for l in card_watch.scan(two, {}, flaky, NOW, 30, 100.0, 15) if l.startswith("SETUP")] == \
+    ["SETUP FAILED card-a: close-setup (term_x  agent needs input: a folder trust dialog)"], "one card, two terminals, one line"
+seen = {}
+card_watch.scan(terms, seen, flaky, NOW, 30, 100.0, 15)
+assert card_watch.scan(two, seen, flaky, NOW, 30, 100.0, 15) == [], "a second terminal on a reported card is not new"
 print("ok")
 

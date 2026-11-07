@@ -1030,6 +1030,23 @@ assert "T" not in patrol.NEEDS_YOU and patrol.LABEL["T"]  # warn: shown to the o
 
 # A live handle, a run: address and an empty config find nothing.
 assert patrol.dead_handles({"prs": {"inbox_to": ALIVE}}, listed) == ([], None)
+
+# F: a card whose start helper logged a failure, however idle its screen looks. Ok logs and no logs find nothing.
+for helper, card, *lines in (("close-setup", "sf-a", "term_x  agent needs input: a folder trust dialog", "result: failed"),
+                             ("goal-input", "sf-b", "[skills-sync card] warning: the /goal line was not typed into h2 (waited up to 900s)."),
+                             ("close-setup", "sf-c", "term_y  closed", "result: ok")):
+    log = tmp / helper / f"{card}.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("".join(l + "\n" for l in lines))
+f = facts(terminals=[term("h1", "/w/sf-a"), term("h2", "/w/sf-b"), term("h3", "/w/sf-c"), term("h4", "/w/sf-d")])
+fs, _, _ = patrol.judge(f, {})
+assert codes([x for x in fs if x["code"] == "F"]) == [("F", "sf-a"), ("F", "sf-b")], fs
+fa = next(x for x in fs if x["code"] == "F" and x["card"] == "sf-a")
+assert "close-setup" in fa["title"] and "folder trust dialog" in fa["title"], fa
+assert patrol.judge(f, {})[0] == fs and patrol.DEPENDS["F"] == {"terminals"} and patrol.LABEL["F"], "the same log, the same ids"
+assert "F" in patrol.SHOW_ONCE, "the same failure is shown once, not every RENOTIFY"
+f2 = facts(terminals=[term("h1", "/w/sf-a"), term("h9", "/w/sf-a")])
+assert codes([x for x in patrol.judge(f2, {})[0] if x["code"] == "F"]) == [("F", "sf-a")], "two terminals, one card, one finding"
 assert patrol.dead_handles({"prs": {"inbox_to": "run:run_0FAKE"}}, []) == ([], None)
 assert patrol.dead_handles(None, listed) == ([], None)
 

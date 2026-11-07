@@ -45,6 +45,9 @@ tail of each card's session transcript, the `orch sent` log and the last pressur
                owes no armed background call or Monitor a result (not parked) and Claude Code's status line shows no
                shell, monitor, agent or task running. A screen without that wording is not judged (shown as ❔)
   L  load      at pressure warn or danger, a top consumer whose card is judged I, X, S or O
+  F  setup failed  an agent card whose `skills-sync card` start helper logged a failure: close-setup ending on
+               `result: failed`, or the /goal input's newest line saying it was not typed (card_watch.setup_failure;
+               `orch watch-cards` prints the same card as SETUP FAILED with the command to run)
   W  watcher   an orchestrator whose `orch watch-cards` has not finished a round in an hour (reported here; the
                collector raises it on the dashboard)
   T  dead handle  a term_ value in ~/.claude/agent-skills.json that `orca terminal list` does not show, so what is
@@ -135,7 +138,7 @@ SCREEN_READS = 30
 NEEDS_YOU = fleet.PATROL_NEEDS_YOU
 LABEL = {"I": "idle", "X": "exited", "S": "superseded", "O": "orphan PR", "D": "no ref", "E": "error loop",
          "L": "load", "W": "watcher down", "R": "repeat", "H": "stale", "B": "background wait",
-         "T": "dead handle", "M": "model"}
+         "T": "dead handle", "M": "model", "F": "setup failed"}
 BGWAIT_WHY = "백그라운드 작업을 기다리지만 깨울 작업이 없음"  # B's reason on the brief's ❔ row
 LEAD_WAIT_WHY = "워커 없이 대기 · 대상 기록 없음"  # P's
 PARKED_LEAD_H = 2
@@ -157,7 +160,7 @@ STALE_WHAT = {"hook": ("a hook error blocks its tools", "hook 오류로 도구�
 REPEAT_WORD = {"error": "에러", "assistant": "답", "user": "입력", "reload": "reload"}
 # pending_lines shows these once, not every RENOTIFY. M's id holds the session and both models, so a drift to another
 # model (or back to an earlier one, once its finding closed) is a new id and is shown again.
-SHOW_ONCE = {"R", "M", "Q"}
+SHOW_ONCE = {"R", "M", "Q", "F"}
 PER_OCCURRENCE = {"Q"}  # shown once per detection, polled while closed or not (a new code: no older record keyed by id)
 
 
@@ -786,6 +789,12 @@ def judge(facts, memo):
         new_memo["errors"][h] = [sorted(x) for x in runs]
         for k in sorted(set.intersection(*runs) if len(runs) >= ERROR_ROUNDS else ()):
             add("E", t.get("worktreePath"), (k,), f"❔ the same error in {ERROR_ROUNDS} rounds: {k[:120]}", h)
+    # F: a start helper of `skills-sync card` (close-setup, the /goal input) logged a failure; the card may look idle.
+    for t in {t.get("worktreePath"): t for t in agents}.values():  # one finding per card, whatever its terminal count
+        if failed_start := card_watch.setup_failure(card_name(t.get("worktreePath"))):
+            helper, reason, _ = failed_start
+            add("F", t.get("worktreePath"), (helper, reason), f"start failed in {helper}: {reason[:120]} · read its screen "
+                f"and start the step by hand (`orch watch-cards` prints the command)", t.get("handle"))
     # L: at warn or danger, a top consumer held by a card that is not working.
     load = []
     for c in facts["consumers"]:
@@ -842,7 +851,7 @@ DEPENDS = {"I": {"terminals", "workers", "waits"}, "X": {"terminals", "workers"}
            "O": {"state", "terminals", "board"}, "D": {"state", "board"}, "E": {"terminals"}, "L": {"consumers", "terminals", "workers", "waits"},
            "W": {"state"}, "R": {"terminals", "workers", "waits"}, "H": {"terminals", "waits"}, "B": {"terminals", "waits"},
            "T": {"terminals", "handles"}, "M": {"terminals", "models"}, "P": {"terminals", "workers", "board", "waits"},
-           "Q": {"terminals", "workers", "state"}}  # state: the sessions that name the lead, and the transcript paths
+           "F": {"terminals"}, "Q": {"terminals", "workers", "state"}}  # state: the sessions that name the lead, and the transcript paths
 
 
 def write_round(findings, verdicts, dry, now, failed=()):
