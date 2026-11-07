@@ -737,6 +737,42 @@ class LandExec(Fixture):
         config(enabled=False)  # executor off: the direct path keeps the patch-id rule, a moved head with the same patch holds
         self.assertNotIn("not a pass at", self.land_check()[1])
 
+    def refusal_after_update_advice(self, **pr_fields):
+        self.edit_pr(**pr_fields)
+        row = self.request()
+        self.round()
+        return self.settled(row, "refused", 3)["reason"]
+
+    def assert_update_advice_matches_the_executor(self, reason):
+        # The executor wants a pass at exactly the new head, so a clean update must not be said to keep the verdict.
+        self.assertIn("update-branch", reason)
+        self.assertNotIn("keeps the verdict", reason)
+        self.assertIn("review the new head", reason)
+
+    def test_an_update_advice_under_the_executor_does_not_promise_a_carried_verdict(self):
+        self.assert_update_advice_matches_the_executor(self.refusal_after_update_advice(mergeStateStatus="BEHIND"))
+
+    def test_the_exclusive_lane_behind_refusal_matches_the_executor(self):
+        self.assert_update_advice_matches_the_executor(
+            self.refusal_after_update_advice(files=["compose.yaml"], behind=1))
+
+    def test_the_base_overlap_refusal_matches_the_executor(self):
+        st = self.gh()
+        st["base_changed"] = ["src/shared.py"]
+        self.write(st)
+        self.assert_update_advice_matches_the_executor(
+            self.refusal_after_update_advice(files=["src/shared.py"], behind=1))
+
+    def test_land_check_does_not_say_the_verdict_holds_when_the_executor_wants_the_head(self):
+        self.verdict(sha="hother")
+        self.edit_pr(mergeStateStatus="BEHIND")
+        code, out = self.land_check()
+        self.assertEqual(code, 1, out)
+        self.assertNotIn("verdict holds", out)
+        self.assertIn("review the new head", out.split("behind base:")[1])
+        config(enabled=False)  # executor off: the direct path does carry it
+        self.assertIn("verdict holds", self.land_check()[1])
+
     def test_a_failing_verdict_needs_no_independence(self):
         os.environ["ORCA_TERMINAL_HANDLE"] = "term_author"
         real = prog.author_sessions

@@ -348,6 +348,17 @@ st["branch_runs"] = {"b79": [{"databaseId": 7900, "name": "CI", "conclusion": "f
 code, out = prog(env, "land", "t", "--pr", "79")
 assert code == 3 and "failed CI runs" in out and "7900" in out and not merged(d), out
 
+# Every failed run the comment does not account for is named in one refusal, not the first five.
+p_ = pr(60)
+d, env = setup({"60": p_})
+verdict(d, 60, "T-60")
+st = json.loads((d / "state.json").read_text())
+ids = [6000 + i for i in range(8)]
+st["branch_runs"] = {"b60": [{"databaseId": i, "name": "CI", "conclusion": "failure", "headSha": "h60"} for i in ids]}
+(d / "state.json").write_text(json.dumps(st))
+code, out = prog(env, "land", "t", "--pr", "60")
+assert code == 3 and all(str(i) in out for i in ids) and not merged(d), out
+
 # A stack lands in this lane when every layer meets it; any one layer short of it holds the whole unit.
 def no_ci_stack(**lower):
     d, env = no_ci_setup(dict(pr(75, stacked=True), **lower), pr(76, base="b75", stacked=True))

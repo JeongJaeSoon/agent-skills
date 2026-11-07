@@ -786,7 +786,8 @@ def row_state(row, verdict, no_ci=False):
     if catching:
         return "catching_up", catching
     note = [] if verdict.get("sha") == row.get("headRefOid") else [
-        f"verdict is for {verdict['sha'][:8]}; land re-checks the patch-id at {row['headRefOid'][:8]}"]
+        f"verdict is for {verdict['sha'][:8]}, not the head {row['headRefOid'][:8]}: the direct path re-checks the"
+        " patch-id; the land executor and the no-CI lane need a verdict at exactly the head"]
     return "ready", note
 
 
@@ -1229,7 +1230,7 @@ def evidence_problems(cfg, repo, pr):
                    and not explained(body, str(r["databaseId"]))]
     if unexplained:
         problems.append(f"#{pr} has failed CI runs its {TEST_RESULTS} comment does not account for:"
-                        f" {', '.join(unexplained[:5])}; add a line per run with its id and what resolved it")
+                        f" {', '.join(unexplained)}; add a line per run with its id and what resolved it")
     return problems, notes
 
 
@@ -2587,6 +2588,13 @@ def note_attempt(p, events, pr, outcome, reasons):
 
 KEEP = " A clean update keeps the verdict (same patch-id); re-review only if you resolved conflicts."
 NO_CI_KEEP = " The no-CI lane needs a verdict at the exact head: review the updated head and record it."
+EXECUTOR_KEEP = (" The land executor needs a pass verdict at exactly the head it merges, so an update changes the head:"
+                 " after it, review the new head, orch verdict, land again.")
+
+
+def keep_note(no_ci, executor):
+    """What the update advice may say about the verdict. Only the direct CI path carries one across a clean update."""
+    return NO_CI_KEEP if no_ci else EXECUTOR_KEEP if executor else KEEP
 
 ADVICE = {
     "conflicts with base": "rebase onto the base, resolve, re-run the review on the resolution, record a new verdict",
@@ -2739,7 +2747,8 @@ def merge_unit(p, pr, unit, klass, events, onto=None, stacked=False, expect=None
         if "needs to be rebased" in why:
             return 3, f"act: {why} {update_advice(unit, repo, True)}, then land again"
         if "not up to date" in why or "behind" in why.lower():
-            return 3, f"act: the base requires up-to-date branches: {update_advice(unit, repo, stacked)}, then land again"
+            return 3, (f"act: the base requires up-to-date branches: {update_advice(unit, repo, stacked)}, then land again."
+                       + keep_note(no_ci, bool(expect)))
         return 1, f"merge refused: {why}"
     sha = (merged[pr].get("mergeCommit") or {}).get("oid")
     if no_ci:
@@ -2909,7 +2918,7 @@ def attempt(p, pr, klass, onto_lower=False, expect=None, verdict_sources=None):
         release_own_lanes(p, pr)  # a wait for a person must not hold a lane, also one taken in an earlier round
         return 2, f"yield: GitHub blocks #{pr}: a required review or check is missing; it lands once GitHub allows it"
     no_ci = no_ci_repo(repo)
-    keep = NO_CI_KEEP if no_ci else KEEP
+    keep = keep_note(no_ci, bool(expect))  # the executor passes `expect`; the direct path never does
     touched = is_exclusive(cfg, [f for n in unit for f in pr_files(repo, n)])
     if (bool(touched) or no_ci) != bool((st.get("lane") or {}).get("exclusive")):
         p.append("lane", pr=pr, exclusive=bool(touched) or no_ci, note=", ".join(touched[:5]) or ("no-CI repo" if no_ci else None))
@@ -2951,15 +2960,15 @@ def attempt(p, pr, klass, onto_lower=False, expect=None, verdict_sources=None):
     if me["state"] == "catching_up":
         note_attempt(p, events, pr, "catching_up", me["reasons"])
         if "behind base" in me["reasons"]:
-            return 3, f"act: {update_advice(unit, repo, stacked)}, then land again"
-        return 2, f"not yet: {'; '.join(me['reasons'])}"
+            return 3, f"act: {update_advice(unit, repo, stacked)}, then land again." + keep
+        return 2, f"not yet:{'; '.join(me['reasons'])}"
     base = me["base"] or "main"
     overlap = base_overlap(repo, base, compare(repo, base, pr_view(repo, pr)["headRefOid"]))
     if overlap:
         note_attempt(p, events, pr, "act", [f"base changed {', '.join(overlap[:5])}"])
         return 3, (f"act: since your branch point the base changed files you also change ({', '.join(overlap[:5])}):"
                    f" {update_advice(unit, repo, stacked)}, check your contract and test assumptions still hold,"
-                   " let CI run, land again." + KEEP)
+                   " let CI run, land again." + keep)
     return merge_unit(p, pr, unit, klass, events, onto, stacked, expect, verdict_sources)
 
 
@@ -3156,8 +3165,7 @@ def cmd_land_check(argv):
         problems.append(f"patch changed since verdict ({verdict.get('patch_id', '')[:10]} -> {cur[:10]}): re-review")
     if "no_ci_sha" in why:
         problems.append(f"no-CI lane: verdict is for {verdict['sha'][:8]}, not the head {v['headRefOid'][:8]}: re-review")
-    if "head_moved" in why:
-        print(f"note: head moved {verdict['sha'][:8]} -> {v['headRefOid'][:8]} with the same patch-id; verdict holds, CI must pass at the new head")
+    ex, ex_unknown = None, False
     if passing:
         # The same decision `orch land` makes, on the repo GitHub serves now: the recorded name alone reads a renamed
         # repo as one the executor does not cover, and passes a verdict the executor then refuses.
@@ -3165,9 +3173,11 @@ def cmd_land_check(argv):
             ex = executor_for(repo)[0]
         except SystemExit as e:  # a repo renamed out of the executor's scope, or GitHub not answering: orch land stops too
             problems.append(str(e.code)[:300])
-            ex = None
+            ex_unknown = True
         if ex and (executor_why := executor_verdict_problem(verdict, v["headRefOid"], ex["verdict_sources"])):
             problems.append(executor_why)  # the executor would refuse it: say so now
+    if "head_moved" in why and not ex and not ex_unknown:  # the executor, or not knowing it, never promises the carry
+        print(f"note: head moved {verdict['sha'][:8]} -> {v['headRefOid'][:8]} with the same patch-id; verdict holds, CI must pass at the new head")
     if p.cfg["merge_policy"] == "human-gate" and (hold := gate_hold(p, events, pr)):
         problems.append(hold)
     try:
@@ -3191,7 +3201,8 @@ def cmd_land_check(argv):
         problems.append("conflicts with base: fix task in the PR's worktree")
     elif "behind" in why:
         unit = members[:members.index(pr) + 1] if members else [pr]
-        problems.append(f"behind base: {update_advice(unit, repo, bool(members))}, then wait for CI")
+        problems.append(f"behind base: {update_advice(unit, repo, bool(members))}, then wait for CI."
+                        + (EXECUTOR_KEEP if ex or ex_unknown else keep_note(no_ci, False)))
     # CI is read here, after the stack lookups, as it always was: a run that finishes meanwhile is seen as finished.
     failed, pending, runs = ci_summary(v.get("statusCheckRollup"), no_ci)
     if not failed and not pending:
