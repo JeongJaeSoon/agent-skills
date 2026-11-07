@@ -30,6 +30,7 @@ RULES = {
     "guard.deny.external_review": "deny",
     "guard.deny.rm_outside": "deny",
     "guard.deny.trash_empty": "deny",
+    "guard.deny.protection_write": "deny",
     "guard.ask.pressure_bypass": "ask",
     "guard.warn.rm_expansion": "warn",
     "guard.warn.reset_hard": "warn",
@@ -56,6 +57,20 @@ DOCKER_OPTS = {"-H", "--host", "-c", "--context", "--config", "-l", "--log-level
 COMPOSE_OPTS = {"-f", "--file", "-p", "--project-name", "--profile", "--env-file", "--project-directory", "--ansi",
                 "--progress", "--parallel"}
 GIT_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"}
+# Options that take a value, per tool: the short letters (the rest of a cluster, or the next word, is the value, so
+# in `-sG` the letters are flags and in `-AGitHub` the rest is the User-Agent) and the long names. They differ: gh's
+# `-f` takes a field, curl's `-f` is a flag.
+GH_SHORT = "XFfHqtp"
+GH_LONG = {"--method", "--field", "--raw-field", "--header", "--input", "--jq", "--template", "--hostname", "--cache",
+           "--preview"}
+CURL_SHORT = "AbcCdDeEFHKmoPQrtTuUwxXyYz"
+CURL_DATA = {"-d", "--data", "--data-ascii", "--data-raw", "--data-binary", "--data-urlencode", "--json", "-F",
+             "--form", "--form-string", "-T", "--upload-file"}
+CURL_LONG = CURL_DATA - set("-d -F -T".split()) | {
+    "--header", "--proxy-header", "--user-agent", "--referer", "--user", "--output", "--cookie", "--cookie-jar",
+    "--request", "--request-target", "--url", "--proto-default", "--max-time", "--connect-timeout", "--retry",
+    "--proxy", "--cert", "--key", "--cacert", "--resolve", "--write-out", "--config", "--dump-header",
+    "--oauth2-bearer", "--limit-rate", "--interface"}
 
 
 def level(cfg, key):
@@ -263,6 +278,9 @@ def check_command(c, masked, cfg, cwd, session, here=None):
         if label_add(w):
             out.append(("guard.deny.self_exempt_label", "The `no-visual-change` label exempts a PR from visual review; "
                                                         "an agent never adds it to its own PR. Ask the human."))
+    if name in ("gh", "curl") and protection_write(c, here):
+        out.append(("guard.deny.protection_write", "This writes branch protection or a ruleset, the rules that "
+                                                   "gate merges. The repository owner changes them, not an agent."))
     if name in ("rm", "find"):
         trash, outside = rm_outside(c, here, cwd)
         if trash:
@@ -422,15 +440,126 @@ def label_add(w):
         return False
     # Only a request that adds labels: POST/PUT/PATCH (a field without --method means POST) to …/labels, with the
     # label in a field. A GET that filters on it or a DELETE of it is not one.
-    method = next((w[i + 1] for i, x in enumerate(w[:-1]) if x in ("-X", "--method")), None)
-    method = next((x.split("=", 1)[1] for x in w if x.startswith("--method=")), method)
-    fields = [w[i + 1] for i, x in enumerate(w[:-1]) if x in ("-f", "-F", "--field", "--raw-field")]
-    fields += [x.split("=", 1)[1] for x in w if x.startswith(("--field=", "--raw-field="))]
-    method = (method or ("POST" if fields or "--input" in w else "GET")).upper()
-    endpoint = verb(w[2:], {"-X", "--method", "-f", "-F", "--field", "--raw-field", "-H", "--header", "--input",
-                            "-q", "--jq", "-t", "--template", "--hostname", "--cache", "-p", "--preview"})[0] or ""
+    method, endpoint, fields = api_call(w)
     return (method in ("POST", "PUT", "PATCH") and re.search(r"/labels/?$", endpoint) is not None
             and has(f.split("=", 1)[-1] for f in fields))
+
+
+def api_call(w, here=None):
+    """(METHOD, endpoint, [field]) of a `gh api` command. A field or --input without --method means POST."""
+    opts = parse_options(w[2:], GH_SHORT, GH_LONG)
+    operands = [v for k, v in opts if k is None]
+    method = next((v for k, v in reversed(opts) if k in ("-X", "--method")), None)
+    fields = [v for k, v in opts if k in ("-f", "-F", "--field", "--raw-field")]
+    inputs = [v for k, v in opts if k == "--input"]
+    # A body file's text counts as a field: a GraphQL mutation can arrive that way (`--input f`, `-F query=@f`; a
+    # raw `-f` field sends `@f` as text).
+    typed = [v for k, v in opts if k in ("-F", "--field")]
+    fields += [read_body(b, here) for b in inputs + [f.split("=@", 1)[1] for f in typed if "=@" in f]]
+    method = (method or ("POST" if fields or inputs else "GET")).upper()
+    endpoint = operands[0] if operands else ""
+    return method, re.sub(r"^https?://[^/]+", "", endpoint, flags=re.I), fields  # gh takes a full URL too
+
+
+def parse_options(words, short, long):
+    """[(option, value)] of words in order, read as getopt does; an operand is (None, word). A short letter in
+    `short` or a long option in `long` takes a value, attached or the next word, even one that looks like an option
+    (`-H -XGET`); the letters before it in a cluster are flags (value None). `--` ends the options. curl's `-:` is
+    `--next`."""
+    opts, i = [], 0
+    while i < len(words):
+        x = words[i]
+        i += 1
+        if x == "--":
+            opts += [(None, y) for y in words[i:]]
+            break
+        if x.startswith("--"):
+            name, eq, val = x.partition("=")
+            if name in long and not eq and i < len(words):
+                val, i = words[i], i + 1
+            opts.append((name, val if eq or name in long else None))
+        elif x.startswith("-") and len(x) > 1:
+            for k, ch in enumerate(x[1:], 1):
+                if ch in short:
+                    val = x[k + 1:]
+                    if not val and i < len(words):
+                        val, i = words[i], i + 1
+                    opts.append(("-" + ch, val))
+                    break
+                opts.append(("--next" if ch == ":" else "-" + ch, None))
+        else:
+            opts.append((None, x))
+    return opts
+
+
+def read_body(path, here):
+    """The text of a request body file named by `@file`, `--input`, or "" when it is stdin or cannot be read."""
+    path = path.removeprefix("@")
+    try:
+        with open(expand(path, here), encoding="utf-8", errors="replace") as f:  # relative to the command's cwd
+            return f.read(65536)
+    except OSError:
+        return ""
+
+
+def curl_calls(w, here=None):
+    """[(METHOD, [path], [body])] for each transfer of a curl command, split at `--next` as curl does: the path of
+    each api.github.com URL it names (`--url` too) and the request bodies (a `@file` read)."""
+    out, cur = [], []
+    for item in parse_options(w[1:], CURL_SHORT, CURL_LONG) + [("--next", None)]:
+        if item[0] != "--next":
+            cur.append(item)
+            continue
+        method = next((v for k, v in reversed(cur) if k in ("-X", "--request")), None)
+        data = [v for k, v in cur if k in CURL_DATA]
+        get = False  # -G puts -d in the URL; a later --no-get takes it back
+        for k, _ in cur:
+            if k in ("-G", "--get"):
+                get = True
+            elif k == "--no-get":
+                get = False
+        urls = [m.group(1) or "/" for k, v in cur if k in (None, "--url")
+                if (m := re.match(r"(?:https?://)?api\.github\.com(?::\d+)?(/[^?#]*)?", v, re.I))]
+        bodies = data + [read_body(d, here) for d in data if d.startswith("@") and d != "@-"]
+        out.append(((method or ("POST" if data and not get else "GET")).upper(), urls, bodies))
+        cur = []
+    return out
+
+
+def protection_write(c, here=None):
+    """A `gh api` or curl call that writes branch protection or a ruleset; GETs read them and pass."""
+    w = c.words
+
+    def writes(method, endpoint):
+        endpoint = re.split(r"[?#]", endpoint, 1)[0]
+        # Anchored under a repository or an organization: `contents/.github/rulesets/x.json` is a file, not a ruleset.
+        target = re.match(r"/?(?:api/v3/)?(?:repos/[^/]+/[^/]+/branches/.+/protection|(?:repos/[^/]+/[^/]+|orgs/[^/]+)"
+                          r"/rulesets)(?:/|$)", endpoint) is not None
+        return method not in ("GET", "HEAD", "OPTIONS") and target
+    if c.name == "curl":
+        return any(any(writes(method, p) for p in paths)
+                   or any(p.strip("/") == "graphql" for p in paths) and any(protection_mutation(b) for b in bodies)
+                   for method, paths, bodies in curl_calls(w, here))
+    if c.name != "gh" or w[1:2] != ["api"]:
+        return False
+    method, endpoint, fields = api_call(w, here)
+    if endpoint.strip("/") == "graphql":
+        return any(protection_mutation(f) for f in fields)
+    return writes(method, endpoint)
+
+
+def protection_mutation(text):
+    """Whether a request body, a GraphQL document or JSON holding one under "query", creates, updates or deletes a
+    branch protection rule or a ruleset."""
+    try:
+        body = json.loads(text)
+        text = body["query"] if isinstance(body, dict) and isinstance(body.get("query"), str) else text
+    except ValueError:
+        pass
+    # A string value or a `#` comment is not a field: a title that names a mutation is not one.
+    text = re.sub(r"#[^\n]*", "", re.sub(r'"(?:[^"\\]|\\.)*"', '""', text))
+    return (re.search(r"\bmutation\b", text) is not None
+            and re.search(r"\b(?:create|update|delete)\w*(?:ProtectionRule|Ruleset)\b", text) is not None)
 
 
 def git_out(args, where):
