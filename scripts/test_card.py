@@ -217,10 +217,48 @@ assert create[create.index("--surface") + 1] == "terminal" and create.index("--s
 LONG = WORKER.replace("ship the helper and open its PR", "x" * (card.GOAL_MAX + 1))
 rc, out, err, calls = go(brief(LONG, "long-goal.md"), "--repo", "name:acme", "--name", "acme-long")
 assert rc == 2 and not creates(calls) and "`/goal` line is" in err and "4000" in err, (rc, err)
-# A long brief below the /goal line is the prompt's body, not the goal: it passes.
-BIG = WORKER + "\n" + "background line.\n" * 2000
+# A long brief below the /goal line is the prompt's body, not the goal: it passes. The long part is a row compose
+# carries into the prompt (REPORT), so the prompt really is over the limit while its first line is not.
+BIG = WORKER + "\nREPORT      " + "r" * (card.GOAL_MAX + 1000) + "\n"
 rc, out, err, calls = go(brief(BIG, "big-body.md"), "--repo", "name:acme", "--name", "acme-big")
 assert rc == 0 and prompt_of(calls).splitlines()[0].startswith("/goal ship the helper"), (rc, err)
+assert len(prompt_of(calls)) > 4000 and "r" * (card.GOAL_MAX + 1000) in prompt_of(calls), len(prompt_of(calls))
+
+
+def goal_brief(name, n, suffix=""):
+    """A worker brief whose /goal line is `n` characters once the brief path is appended (or, with `suffix`, as written)."""
+    p = tmp / name
+    appended = "" if suffix else f" 브리프: {p.resolve()}"
+    p.write_text(WORKER.replace("/goal ship the helper and open its PR",
+                                "/goal " + "g" * (n - len("/goal ") - len(appended) - len(suffix)) + suffix))
+    return str(p)
+
+
+STATE_FILES = lambda: sorted((str(f.relative_to(card.STATE)), f.read_bytes()) for f in card.STATE.rglob("*") if f.is_file())
+# The limit applies to the line the worker is typed, i.e. after the brief path is appended: 3500 passes, 3501 is refused,
+# although the line as written (without the path) is under the limit in both cases.
+for n, want in ((card.GOAL_MAX, 0), (card.GOAL_MAX + 1, 2)):
+    p = goal_brief(f"edge-{n}.md", n)
+    assert len(card.GOAL.search(pathlib.Path(p).read_text()).group(0)) < card.GOAL_MAX, n
+    rc, out, err, calls = go(p, "--repo", "name:acme", "--name", f"acme-edge{n}")
+    assert rc == want, (n, rc, err)
+    if want:
+        assert str(n) in err and not calls, (n, err, calls)  # the message counts the line with its path
+    else:
+        assert len(prompt_of(calls).splitlines()[0]) == card.GOAL_MAX, len(prompt_of(calls).splitlines()[0])
+# A line that already names `브리프:` gets no path appended, so the limit is on the line as written.
+for n, want in ((card.GOAL_MAX, 0), (card.GOAL_MAX + 1, 2)):
+    p = goal_brief(f"named-{n}.md", n, suffix=" 브리프: /somewhere/brief.md")
+    rc, out, err, calls = go(p, "--repo", "name:acme", "--name", f"acme-named{n}")
+    assert rc == want, (n, rc, err)
+    assert want or len(prompt_of(calls).splitlines()[0]) == card.GOAL_MAX, n
+# A refusal changes nothing: no Orca or orch call, no helper started, the brief file and the state directory as they were
+# (refresh_forbidden would otherwise have rewritten a brief that has no FORBIDDEN section).
+p = goal_brief("refuse-clean.md", card.GOAL_MAX + 1)
+before = (pathlib.Path(p).read_bytes(), STATE_FILES(), list(GOALS), list(SETUPS))
+rc, out, err, calls = go(p, "--repo", "name:acme", "--name", "acme-clean")
+assert rc == 2 and not calls, (rc, calls)
+assert (pathlib.Path(p).read_bytes(), STATE_FILES(), GOALS, SETUPS) == before, "a refused card left a trace"
 # A lookup that fails, or no handle at all, creates nothing and prints the choices.
 rc, out, err, calls = go(path, "--repo", "r", "--name", "x", mode="stale-terminal")
 assert rc == 6 and not creates(calls) and "terminal_handle_stale" in err and "--no-parent" in err and "  1. " in err, (rc, err)
@@ -628,6 +666,19 @@ assert make[make.index("--prompt") + 1] == "\n".join(["/goal ABC-2. stack on ABC
 assert make[make.index("--surface") + 1] == "terminal", make  # the handoff's /goal is typed into a terminal too
 rc2, _, err2, calls2 = handoff("ABC-8", "--note", "n" * (card.GOAL_MAX + 1))
 assert rc2 == 2 and not creates(calls2) and "joins the `/goal` line" in err2, (rc2, err2)
+# The limit is on the whole first line, `/goal ABC-8. ` included: 3500 passes, 3501 is refused.
+PREFIX = len("/goal ABC-8. ")
+rc3, _, err3, calls3 = handoff("ABC-8", "--note", "n" * (card.GOAL_MAX - PREFIX))
+assert rc3 == 0 and len(creates(calls3)[0][creates(calls3)[0].index("--prompt") + 1].splitlines()[0]) == card.GOAL_MAX, (rc3, err3)
+rc3, _, err3, calls3 = handoff("ABC-8", "--note", "n" * (card.GOAL_MAX - PREFIX + 1))
+assert rc3 == 2 and not calls3 and "joins the `/goal` line" in err3, (rc3, err3)
+# Only the first line counts: a short first line before a long body, or a note that opens with a long row or fence
+# (which starts on the line after /goal), is not a long goal.
+LONG_PART = "y" * (card.GOAL_MAX + 500)
+for note in ("short.\n" + LONG_PART, "REPORT: " + LONG_PART, "```\n" + LONG_PART + "\n```"):
+    rc3, _, err3, calls3 = handoff("ABC-8", "--note", note)
+    sent = creates(calls3)[0][creates(calls3)[0].index("--prompt") + 1] if rc3 == 0 else ""
+    assert rc3 == 0 and len(sent.splitlines()[0]) < card.GOAL_MAX and LONG_PART in sent, (note[:12], rc3, err3)
 assert ["worktree", "set", "--worktree", f"path:{CARD_DIR}", "--display-name", "ABC-2 next step", "--json"] in [c["argv"] for c in calls]
 assert json.loads(out)["card"]["start"].startswith("started"), out
 # The handoff's prompt is a valid card brief: written to a file, `skills-sync card` composes it without a refusal.
