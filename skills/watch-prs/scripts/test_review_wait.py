@@ -113,6 +113,31 @@ assert acts([one, two], [row(W + "10", "bob", "request", NOW - 2 * H)]) == [], "
 assert acts([two], [row(W + "11", "bob", "request", NOW - 2 * H, head="older")], now=NOW) == [], \
     "a new push on a waiting PR is not a reason to request again within the day"
 
+# Repository and reviewer case differ between sources (GitHub's nameWithOwner, a hand-written row, the DB's lower-cased
+# key): the same PR and person are never asked twice.
+mixed = state(14, repo="Acme/Widgets", reqs=[u("bob")], events=[asked("bob", NOW - 5 * H)])
+assert acts([mixed]) == [("request", "Acme/Widgets#14", "bob")], "nothing logged: ask"
+for logged_pr, logged_who in (("acme/widgets#14", "bob"), ("ACME/WIDGETS#14", "BOB"), ("Acme/Widgets#14", "Bob")):
+    assert acts([mixed], [row(logged_pr, logged_who, "request", NOW - 2 * H, head="h14")]) == [], (logged_pr, logged_who)
+assert acts([mixed], [row("acme/widgets#14", "bob", "request", NOW - 2 * H, head="h14", source="refused")]) == [], \
+    "a refusal logged under another case still stops the PR"
+
+# A row written by hand may name its PR as a number: it matches no PR and breaks nothing.
+assert acts([mixed], [row(14, "bob", "request", NOW - 2 * H, head="h14"), row("acme/widgets#14", 7, "request", NOW - 2 * H)]) == \
+    [("request", "Acme/Widgets#14", "bob")], "a number is not the PR, and not the person"
+
+# The owner's review-ask queue: a queued ask is a request due now, batching skipped, and never a second one.
+lone = state(15, reqs=[], decision=None)
+assert acts([lone]) == [] and [(a["action"], a["pr"], a["reviewer"]) for a in p.decide([lone], [], NOW, cfg, (), [("ACME/WIDGETS#15", "bob")])] \
+    == [("request", W + "15", "bob")], "not pending on GitHub, not batched, asked by name (and by any case)"
+queued = [(W + "10", "bob")]
+assert [a["action"] for a in p.decide([one], [], NOW, cfg, (), queued)] == ["request"], "one waiting for 1h: held without it, due with it"
+assert p.decide([one], [row(W + "10", "bob", "request", NOW - H)], NOW, cfg, (), queued) == [], "already asked: no second ask"
+assert p.decide([one], [row(W + "10", "bob", "request", NOW - H, source="refused")], NOW, cfg, (), queued) == [], "a refusal stops it"
+assert p.decide([one], [], NOW, cfg, (), [(W + "10", "dave")]) == [], "a person with no Slack id gets nothing"
+assert p.decide([one], [], at(14, 22), {**cfg, "after_hours": "schedule-certain-only"}, (), queued) == [], \
+    "outside business hours it waits for the morning round, like any request"
+
 # remind: one business day after the request, once, in its thread.
 req = [row(W + "10", "bob", "request", at(13, 15))]
 assert acts([one], req, now=at(14, 14, 59)) == []

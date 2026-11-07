@@ -1,7 +1,7 @@
 <!-- translated-from: e8667adc004d703367ed4de16e620afd07be921c -->
 # Skill catalog
 
-This page covers the 36 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 16 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
+This page covers the 31 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 16 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
 
 Follow the [configuration migration guide](configuration-migration.md) for changed defaults and preservation of existing data. Notes, ledgers and personal folders require explicit configuration; report time defaults to UTC.
 
@@ -10,7 +10,7 @@ Even small changes need a reviewer other than the author. Trivial means about 20
 ## Flow
 
 ```text
-One ticket  write-ticket → deliver-ticket → handoff-ticket → end-session
+One ticket  write-ticket → deliver-ticket → dispatch-card next-ticket mode → end-session
               (dispatch-card: send work elsewhere while this session keeps working)
 Project     orchestrate ─ deliver-ticket in each worker ─ orch land
               ─ main guardian · QA lead ─ dashboard
@@ -35,12 +35,12 @@ Which skill owns a PR, and who merges it:
 | deliver-ticket | My PR this session is working: writing, review replies, merge, release | The session, per §5 (`gh pr merge`; a stack lands with `gh stack merge`) |
 | watch-prs | Waiting PRs a scheduled round collects: review requests naming me, my PRs waiting on review (requests, reminders), my PRs ready to merge | Only my PRs that pass every `merge_repos` gate |
 | orchestrate | A program worker's PRs | `orch land`, or a plain merge the human approved |
-| handoff-ticket | Opens no PR: picks the next card | Never |
+| dispatch-card next-ticket mode | Opens no PR: picks the next card | Never |
 
 - deliver-ticket ↔ watch-prs: a PR whose branch is checked out in a live worktree is merged by that session; watch-prs skips it.
 - orchestrate ↔ watch-prs: a PR in a program ledger is merged by `orch land`; watch-prs does not merge it even after the program stops, and only sends its reminders. A program whose ledger has no event within `stale_days` counts as abandoned, and its PRs go back to watch-prs for reminders and merges.
 - orchestrate ↔ deliver-ticket: workers run deliver-ticket but merge with `orch land` instead of §5.
-- handoff-ticket's "머지하고 다음 진행해줘" (merge, then go on): deliver-ticket merges; handoff-ticket only opens the next card after.
+- The next-ticket mode's "머지하고 다음 진행해줘" (merge, then go on): deliver-ticket merges; dispatch-card only opens the next card after.
 
 ## One ticket
 
@@ -83,25 +83,17 @@ Which skill owns a PR, and who merges it:
   - **Done:** Done means every acceptance criterion is met.
     - Inside a program: a card whose first prompt approves the merge lands its own PR with `orch land` and closes. It stops at READY, with a `READY-WAIT:` line, only for a wait on a person or another PR, and under human-gate.
     - Standalone card: in a repo with the land executor on, it does not merge. It reports READY with the head sha, the CI run and the review verdict, and the orchestrator merges. In a repo with the executor off, or in a session the user opened, it squash-merges on its own unless the user put it on hold.
-    - After leaving the completion comment, it moves on to `handoff-ticket` in the same turn.
+    - After leaving the completion comment, it moves on to `dispatch-card`'s next-ticket mode in the same turn.
 - **Bundled:** `scripts/sticky-comment.sh` (keeps PR test results in a single comment; `--check` confirms that comment names the current head sha), `scripts/review_pick.py` (picks the independent reviewer). The skill body keeps only the rules that decide what ships; procedures are split into references: `evidence.md` (bug, refactor and existing-fix procedures), `independent-review.md` (independent review procedures), `pull-request.md` (PR body sections and stacks), `review-loop.md` (the loop from opening the PR to ready, and watching when someone else merges), `review-bot-triage.md` (how to sort review threads into fix / dismiss / ask; used for CodeRabbit, Copilot and human reviews).
-- **Related:** `figure-it-out`, `architect`, `explain-code`, `tdd`, `prune-comments`, the verdict framework from `interrogate`, `write-plainly`, `blast-radius`, `write-ticket`, `use-tracker`, `use-notes`, `orchestrate` (`orch land`, `orch heavy`), `handoff-ticket`.
+- **Related:** `figure-it-out`, `architect`, `explain-code`, `tdd`, `prune-comments`, `challenge` (the verdict framework from its interrogate mode, and its blast-radius mode), `write-plainly`, `write-ticket`, `use-tracker`, `use-notes`, `orchestrate` (`orch land`, `orch heavy`), `dispatch-card` (next-ticket mode).
 
 ### ui-review
 - **When:** before a mockup, a screen or a UI PR is shown to a person ("UI 리뷰해줘", "시안 점검해줘"), and after a person points out a UI problem, to add the rule.
 - **What:** measures the page in headless Chrome at 1280 and 390 (row heights, button widths in a column, edge alignment, vertical centers, 4px grid, overflow, link underlines, component consistency against an existing screen) with `scripts/ui_measure.py`, and walks the user's scenario for system steps, duplicated options and grouping (`references/walkthrough.md`). The product's design system comes first. A FAIL left without a stated exception means the mockup is not sent. Rules and evidence: `references/rules.md`.
 - **Related:** `deliver-ticket` §3 and visual-evidence, `orchestrate` leads before a mockup goes to the human.
 
-### handoff-ticket
-- **When:** "핸드오프" (handoff), "다음 작업으로 넘어가자" (let's move on to the next task), "남은 작업 있어?" (is there work left?), "머지하고 다음 진행해줘" (merge and go on to the next one), and the moment a ticket is done. "병렬로 진행" (run in parallel) belongs here only when it means ticket cards in the same repo; if it could mean subagents or side-branch cards, that is settled first. If this session has to keep working, use `dispatch-card`.
-- **What it does:**
-  - Picks what to do next on its own. Loose ends are handled here, and independent work becomes a ticket. Next tickets are ranked by priority, dependencies and file conflicts. The only thing it may ask is "which ticket is next".
-  - A program worker (one whose brief has a `PROGRAM:` line) sends worker_done and then waits for the lead's decision.
-  - After confirming the ticket is done, it opens a new card with `orca worktree create --prompt "/goal <ID>. CLOSE: …"`. Even for a parallel request, it's one card per ticket.
-  - It confirms the new card started with `orca terminal wait` and `read`, then closes this session with `end-session`.
-- **Related:** The step after `deliver-ticket`. It always ends with `end-session`.
-
-### dispatch-card (formerly `dispatch-work`)
+### dispatch-card (formerly `dispatch-work`, `handoff-ticket`)
+One skill for both ways of starting a new Orca card. If this session keeps working, it's dispatch (§0–§4); if this ticket is done and this session closes, it's the next-ticket mode (§5, body in `references/next-ticket.md`).
 - **When:** "별도의 세션을 만들어서 ~ 해줘" (spin up a separate session and do ~), "~ repo에 작업 지시해줘" (give the ~ repo a task): sending work to another repo or a side branch while this session keeps working.
 - **What it does:**
   - Confirms the target repo with `orca repo list`.
@@ -109,10 +101,16 @@ Which skill owns a PR, and who merges it:
   - Checks for duplicate cards, then creates the card.
   - Puts a `CLOSE` line in the brief, so the card closes itself through `end-session` §8 once its done criteria are met.
   - Confirms the start just once and goes back to its own work. It doesn't wait for the result and doesn't call `end-session`.
-- **Related:** `use-notes`, `write-ticket`. Closing this session and handing over is `handoff-ticket`'s job.
+- **Next-ticket mode:**
+  - **When:** "핸드오프" (handoff), "다음 작업으로 넘어가자" (let's move on to the next task), "남은 작업 있어?" (is there work left?), "머지하고 다음 진행해줘" (merge and go on to the next one), and the moment a ticket is done. "병렬로 진행" (run in parallel) belongs here only when it means ticket cards in the same repo; if it could mean subagents or side-branch cards, that is settled first. If this session has to keep working, it's dispatch.
+  - Picks what to do next on its own. Loose ends are handled here, and independent work becomes a ticket. Next tickets are ranked by priority, dependencies and file conflicts. The only thing it may ask is "which ticket is next".
+  - A program worker (one whose brief has a `PROGRAM:` line) sends worker_done and then waits for the lead's decision.
+  - After confirming the ticket is done, it opens a new card with `orca worktree create --prompt "/goal <ID>. CLOSE: …"`. Even for a parallel request, it's one card per ticket.
+  - It confirms the new card started with `orca terminal wait` and `read`, then closes this session with `end-session`.
+- **Related:** `use-notes`, `write-ticket`. The next-ticket mode is the step after `deliver-ticket`, and it always ends with `end-session`.
 
 ### end-session
-- **When:** "세션 종료해줘" (end the session), "현재 세션 정리해줘" (wrap up this session), "아카이브해줘" (archive it), "머지하고 종료하자" (merge and let's finish), the last step of `handoff-ticket`, and an Orca worker about to send `worker_done` (no user phrase needed). A bare "정리해줘" (tidy up) with no object only records the state and keeps the conversation going.
+- **When:** "세션 종료해줘" (end the session), "현재 세션 정리해줘" (wrap up this session), "아카이브해줘" (archive it), "머지하고 종료하자" (merge and let's finish), the last step of `dispatch-card`'s next-ticket mode, and an Orca worker about to send `worker_done` (no user phrase needed). A bare "정리해줘" (tidy up) with no object only records the state and keeps the conversation going.
 - **What it does:**
   - First records the ticket's final state, the completion comment, the worklog and memory.
   - Picks how to close based on the output of `orca worktree current --json`.
@@ -167,7 +165,7 @@ Which skill owns a PR, and who merges it:
     - `mailbox_guard.py`: a transition shim that moves old installs over to the hook.
     - Test files.
   - `assets/dashboard/`: the dashboard UI.
-- **Related:** Workers follow `deliver-ticket`. It draws on `use-tracker`, `use-notes`, `create-verification-skill`, `show-me-your-work`, `fan-out`, `reap-resources`, `reflect`, and `end-session`.
+- **Related:** Workers follow `deliver-ticket`. It draws on `use-tracker`, `use-notes`, `verification-skill`, `show-me-your-work`, `fan-out`, `reap-resources`, `reflect`, and `end-session`.
 
 ### reboot
 - **When:** Right after the session, Orca or the machine restarted, or after a compaction, before any other work: "재시작했어" (I restarted), "Orca 재시작했어" (Orca restarted), "세션 다시 띄웠어" (I brought the session back up), "복구 점검해줘" (check the recovery). Recalling what the work was is `recall`.
@@ -217,7 +215,7 @@ Which skill owns a PR, and who merges it:
 - **When:** the auto-mode classifier denied an action and the user wants that kind of action allowed from now on, or the user wants to change what auto mode lets the agent do. "auto mode 가 막았어" ("auto mode blocked it"), "이거 허용되게 규칙 추가해줘" ("add a rule so this is allowed").
 - **What it does:** From the denial category and the denied action, it drafts the smallest allow, soft_deny or environment rule that covers that action class. A rule carries the action class, the conditions that make it safe, and `Not covered:`. After a review checklist (no blanket allows, no production-destructive verbs the user did not name, only the user's own chat counts as authorization), `scripts/automode_rule.py emit` lints the spec (it refuses a spec whose `refusal_category` is missing or `no-verdict`, and an allow rule without `Not covered:`; it warns on blanket wording, ticket or PR numbers, token-like strings and a rule that nearly repeats an existing one), shows the diff and writes a standalone script with the spec embedded under the home directory. The user applies it with `! python3 -I <path> --apply <spec hash>`; the hash must match the spec whose diff the user saw. The script takes a timestamped backup, merges idempotently, validates the JSON and prints the rollback command. The agent never edits settings.json, never runs that script, and never works around the denial while waiting.
 - **Ships with:** `scripts/automode_rule.py`, its tests, `references/example-settings.json`.
-- **Related:** `permissions.allow` in the user settings and `agent-skills.json` keys belong to `skills-config` (which shares this skill's engine when it carries autoMode rules too); project settings and hooks belong to the built-in `update-config`; a first draft for a whole project belongs to the built-in `/auto-mode-setup`. `orchestrate`'s Frame and Refused acts use this skill for a repo's standing merge and deploy rules ("프로젝트 지속 승인" (standing project approval)).
+- **Related:** `permissions.allow` in the user settings and `agent-skills.json` keys belong to `skills-config` (which shares this skill's engine when it carries autoMode rules too); project settings and hooks belong to the built-in `update-config`; a first draft for a whole project belongs to the built-in `/auto-mode-setup`. `orchestrate`'s Frame and Refused acts use this skill for a repo's standing merge and deploy rules ("Standing project approval").
 
 ### skills-config
 - **When:** changing a value in `~/.claude/agent-skills.json`, or adding or removing a rule in `permissions.allow` of the user's `settings.json`. "agent-skills 설정 바꿔줘" (change the agent-skills settings), "allow 규칙 추가해줘" (add an allow rule).
@@ -254,7 +252,7 @@ Monitors configured public channels for mentions and replies when requested. Use
   - Inside a session, ticket reads and writes go through `orca linear` / `orca jira` (plain text output, `--json` only when parsing the result), and through MCP only for what Orca lacks (documents, uploads, diff review, releases, milestones and cycles, and a few more). The `tracker_gate` hook denies an MCP call Orca can run as written and prints the matching command. Scripts always use `tracker.py`. The `tracker.py` commands are list, get, children, create, label, comment, attach, transition, reconcile. reconcile reads a ticket and the PRs that deliver it (a PR attached to the ticket, the ID in a title or branch, or after a closing keyword in the body) and only prints which state fits (`started`, `review`, check the criteria, report) and the milestone lines to run; it writes nothing. transition reads the current state first and leaves a ticket alone if it's already at that stage or further along. `--to review` moves a ticket to the state named by `tracker.<adapter>.review_status` when the config sets it, else to In Review, or, if that state doesn't exist, to the one started state whose name contains review.
   - The state vocabulary is triage, backlog, unstarted, started, completed, canceled.
   - The follow-up format is a `follow-up` label, a first line of `파생: <ID> · 원인: <분류>` (derived from: <ID> · cause: <category>), and a related relation.
-  - The one source for NOW, LATER and DROP, the exit condition and the follow-up format is `references/exit-condition.md`. `deliver-ticket`, `write-ticket`, `handoff-ticket`, `end-session` and `task-tracker` point to it.
+  - The one source for NOW, LATER and DROP, the exit condition and the follow-up format is `references/exit-condition.md`. `deliver-ticket`, `write-ticket`, `dispatch-card` (next-ticket mode), `end-session` and `task-tracker` point to it.
   - Ticket bodies are treated as untrusted data.
   - A fixed milestone (a state move, the PR link, the completion comment) is one `tracker.py` line (`transition`, `attach`, `comment`) run in the session, with no MCP call and no delegate. Every other write goes to a delegate agent; reads stay in the session. The delegate is the user's instructions, else `tracker.delegate_agent` in the config, else the plugin agent `agent-skills:task-tracker`; `"none"` writes in the session. `task-tracker` reads the site's own rules (project, status and transition ids, labels, language) on every run from the Markdown file `tracker.rules_file` names, and stops instead of guessing when the key is set but the file is missing or unreadable.
 - **Bundled:** `scripts/tracker.py` (a stdlib-only adapter for Linear and Jira, with a fixture mode), `references/exit-condition.md`, `references/linear.md`, `references/jira.md` (with the Jira setup).
@@ -271,17 +269,17 @@ Monitors configured public channels for mentions and replies when requested. Use
 ## Writing
 
 ### brief
-Reports completed work, current work, decisions and human-only steps with evidence. Every report, on request or periodic (`--periodic`), is `orch brief render`'s output sent as printed (`--telegram` for Telegram); the model passes only the headline sentence, decisions and an insight block. A decision is asked only through the [owner-ask gate](../skills/orchestrate/references/owner-ask-gate.md): `→ 추천: X — reason · 답이 없으면 <X | 진행 못 함> · 근거: <owner-asked | hard-after-review | owner-hands-only>`, and the render refuses an item that lacks a part, naming it (`orch decide add` takes the same as `--if-no-answer` and `--reason`). A wrong row is fixed in the record (`orch board set`, `orch stage set`) and rendered again, never edited in the output. Rows are rebuilt on every render from live Orca cards, leads and Runs, the report files that cards' REPORT lines point to, and GitHub PR state. Each row's session column says whether the session running it is working (`작업 중`), stopped (`멈춤`) or gone (`세션 없음`), linked by its Orca worktree rather than a terminal handle; it adds the worktree's name when the row's name lacks it, and a terminal report puts no URL in a row (the terminal would spread a link into a whole URL and bury the line; a PR is plain `owner/repo#N`), while on the dashboard page the state word links to the session's page.  After the state word comes the model of the session's last assistant row as one letter, O (opus), S (sonnet) or H (haiku), with a `!` when it differs from the role's `orchestrate.models`, as in `작업 중 O` or `멈춤 S!`; a row with no session has none. A row with a session of its own is named as Orca names the worktree, so the table's name finds it in Orca's Cmd+J palette, Cells are never cut: a repository whose table is wider than 78 columns goes out as one `- status name — PR · next · session` line per row instead, and the dashboard's `full` copy keeps the table. The progress column appears only in a table where a row has a bar, since only `orch board set --progress` fills it. Rows waiting on a human split into what the owner must clear and what waits on someone else's review or answer. A report opens with the pointer lines and the legend, then what the owner must do and the decisions. On the terminal the headline stays one bold line with no `#`, the pointer lines and the legend are one `>` quote block, and each big section (the owner's list, decisions, each repository, work with no card, waiting on others, held) opens with a `##` title, with no `---` between sections; Telegram's plain text has none of these marks. One repository is one table, whatever programs run in it and however the case of its owner/name is spelled. Tables with a 🙋, ❔ or 🔴 row come first, then those with the most 🔄 rows, then by name. Rows go 🙋 → 🔴 → ❔ → 🔄 → ⏳ → ⏸️ → ✅, the same status keeping its order, with a head row and its └ rows moving as one block at the rank of its best row; the stage table sorts by the same ranks. Every open row appears once in its table, whatever its status; its next-step column either names the next step or points (`↑ 오너`, `↓ 대기`, `↓ 보류`) to the list that says what it waits on, and only work with no row goes in the `카드 없는 일` list, where a doing item no live session runs reads ❔ `세션 없음` rather than 🔄. One module (`rowstate.py`) judges each row's status, rules in the order ✅ → 🙋 → ⏸️ → ⏳ → 🔴 → ❔ → 🔄 with the first match deciding, and places it, so the report, the dashboard and the stage table read the same result. A missing fact stops at ❔ with what the agent must record; who a row waits on and the PR it must wait for are recorded with `orch board set <id> --owner … --after owner/repo#N`. The stage table and the to-do and on-hold queue appear only as pointer lines to the `stage` and `todo` skills. Reports are written by hand only when the renderer fails, or for one session's own report (`end-session`); that format is in `references/hand-format.md`.
+Reports completed work, current work, decisions and human-only steps with evidence. Every report, on request or periodic (`--periodic`), is `orch brief render`'s output sent as printed (`--telegram` for Telegram); the model passes only the headline sentence, decisions and an insight block. A decision is asked only through the [owner-ask gate](../skills/orchestrate/references/owner-ask-gate.md): `→ 추천: X — reason · 답이 없으면 <X | 진행 못 함> · 근거: <owner-asked | hard-after-review | owner-hands-only>`, and the render refuses an item that lacks a part, naming it (`orch decide add` takes the same as `--if-no-answer` and `--reason`). A wrong row is fixed in the record (`orch board set`, `orch stage set`) and rendered again, never edited in the output. Rows are rebuilt on every render from live Orca cards, leads and Runs, the report files that cards' REPORT lines point to, and GitHub PR state. Each row's session column says whether the session running it is working (`작업 중`), stopped (`멈춤`) or gone (`세션 없음`), linked by its Orca worktree rather than a terminal handle; it adds the worktree's name when the row's name lacks it, and a terminal report puts no URL in a row (the terminal would spread a link into a whole URL and bury the line; a PR is plain `owner/repo#N`), while on the dashboard page the state word links to the session's page.  After the state word comes the model of the session's last assistant row as one letter, O (opus), S (sonnet) or H (haiku), with a `!` when it differs from the role's `orchestrate.models`, as in `작업 중 O` or `멈춤 S!`; a row with no session has none. A row with a session of its own is named as Orca names the worktree, so the table's name finds it in Orca's Cmd+J palette, Cells are never cut: a repository whose table is wider than 78 columns goes out as one `- status name — PR · next · session` line per row instead, and the dashboard's `full` copy keeps the table. The progress column appears only in a table where a row has a bar, since only `orch board set --progress` fills it. Rows waiting on a human split into what the owner must clear and what waits on someone else's review or answer. A report opens with the pointer lines and the legend, then what the owner must do and the decisions. On the terminal the headline stays one bold line with no `#`, the pointer lines and the legend are one `>` quote block, and each big section (the owner's list, decisions, each repository, work with no card, waiting on others, held) opens with a `##` title, with no `---` between sections; Telegram's plain text has none of these marks. One repository is one table, whatever programs run in it and however the case of its owner/name is spelled. Tables with a 🙋, ❔ or 🔴 row come first, then those with the most 🔄 rows, then by name. Rows go 🙋 → 🔴 → ❔ → 🔄 → ⏳ → ⏸️ → ✅, the same status keeping its order, with a head row and its └ rows moving as one block at the rank of its best row; the stage table sorts by the same ranks. Every open row appears once in its table, whatever its status; its next-step column either names the next step or points (`↑ 오너`, `↓ 대기`, `↓ 보류`) to the list that says what it waits on, and only work with no row goes in the `카드 없는 일` list, where a doing item no live session runs reads ❔ `세션 없음` rather than 🔄. One module (`rowstate.py`) judges each row's status, rules in the order ✅ → 🙋 → ⏸️ → ⏳ → 🔴 → ❔ → 🔄 with the first match deciding, and places it, so the report, the dashboard and the stage table read the same result. A missing fact stops at ❔ with what the agent must record; who a row waits on and the PR it must wait for are recorded with `orch board set <id> --owner … --after owner/repo#N`. The stage table and the to-do and on-hold queue appear only as pointer lines to the stage table and to-do modes; asked for the table or the lists alone, `brief` goes to that mode (the two entries below) and sends no full report. Reports are written by hand only when the renderer fails, or for one session's own report (`end-session`); that format is in `references/hand-format.md`.
 
-### stage
-- **When:** "단계표 보여줘" (show the stage table), `/agent-skills:stage`. `brief` shows the stage table only as a one-line link, so call this when the table itself is needed.
+### brief stage table mode (formerly `stage`)
+- **When:** "단계표 보여줘" (show the stage table), "stage table", the retired `/agent-skills:stage`. The full report shows the stage table only as a one-line link, so this mode is for when the table itself is needed. Its body is `brief`'s `references/stage.md`.
 - **What it does:**
   - Sends the output of `orch stage show [--program P] [--telegram] [--all]` as printed. Rows that are all done, or unchanged for 7 days (`stage_idle_d`), are folded into a count; `--all` shows everything. When a row's PR is also on a board row, a `지금` column shows the status the report gives that row, so the two never disagree. It never cuts a cell (and has no numbered footnotes); a table wider than 78 columns goes out as one whole line per row (`- name — PR · 머지 ✅ · dev ❌ …`, empty cells left out and each kept cell named) instead.
   - The dashboard's fleet tick builds the stage table (task / PR merged / dev check / prod check) every minute: for each program whose ledger moved in the last 7 days, one row per predicate item and per worker card in the Run. The merge cell is filled only when there is a merge sha, and the dev and prod cells stay empty. A cell a human or an agent checked is written over with `orch stage set <program>/<item>`, and that value wins over the generated one. On the dashboard it is the Stages screen. When an active program has no rows, or none updated for `board.stage_warn_h` hours (default 6), the reorient hook warns in one line on every prompt.
 - **Related:** Where `brief`'s stage-table line points. The recording rules are in `orchestrate`'s `references/stage-table.md`, "The stage table".
 
-### todo
-- **When:** "할 일 보여줘" (show the to-dos), "보류 큐 보여줘" (show the on-hold queue), `/agent-skills:todo`. `brief` only counts to-dos and the on-hold queue in one line, so call this when the list is needed.
+### brief to-do mode (formerly `todo`)
+- **When:** "할 일 보여줘" (show the to-dos), "보류 큐 보여줘" (show the on-hold queue), "to-do list", the retired `/agent-skills:todo`. The full report only counts to-dos and the on-hold queue in one line, so this mode is for when the list is needed. Its body is `brief`'s `references/todo.md`.
 - **What it does:**
   - Sends the output of `orch board todo list [--telegram]` as printed. Two tables. The to-do table (status ⏰ due / 📅 waiting · when · task · owner) puts due items first, then by date, then undated items in the order they were added. The on-hold queue table (# · task · condition for its turn · owner) is in order, with ▶ (next) on the first row. Numbers count from 1 without closed items, and match the numbers `later move`, `later drop` and `todo from-later` take. The counts in the table header use the same basis as brief's pointer line (due to-dos and on-hold items whose trigger is met, shown as ❔ needs checking, are counted apart). When `--after` repeats the date of `--due`, the when cell shows it once. It never cuts a cell; a table wider than 78 columns goes out as one whole line per row instead. Telegram gets lines, not tables.
   - Adding and closing: a to-do is `orch board todo add <task> (--due D | --after C) --who W`, closed with `orch board done <id>`; an on-hold item becomes a to-do with `todo from-later <n> --who W`. An on-hold item is `orch board later add <task> --trigger <condition for its turn> [--who W] [--at N]`, and `later move <n> --to N` changes its turn.
@@ -308,7 +306,7 @@ Reports completed work, current work, decisions and human-only steps with eviden
 - **Bundled:** `references/pruner.md` (the instructions for the pruning subagent).
 
 ### write-skill
-Checks a skill edit for overlapping triggers, unnecessary policy, prompt quality, private names, runnable tests and plugin validity. Edits the authorized source checkout; installed copies and unrelated global settings are not the target.
+Checks a skill edit for overlapping triggers, unnecessary policy, prompt quality, private names, runnable tests and plugin validity. The tests, the pstack sync test and `claude plugin validate` run as one `scripts/check.sh`; a description change runs `claude plugin eval` on the old and new checkout through `scripts/eval_desc.sh`. Edits the authorized source checkout; installed copies and unrelated global settings are not the target.
 
 ## pstack skills (Lauren Tan, MIT)
 
@@ -342,14 +340,21 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
 - **How the modes differ:** sweep splits the work up, sweeps it, and returns a report. compete makes candidates compete on the same work and produces one deliverable. Splitting a compete task the sweep way turns it into a different job.
 - **Bundled:** `references/sweep.md`, `references/compete.md`.
 
-### blast-radius
-- **When:** "이거 바꾸면 뭐가 깨져?" (what breaks if I change this?), and small diffs you don't trust.
-- **What it does:**
-  - Finds the one fact that makes the change safe, and proves it with a script that runs the real code.
+### challenge (formerly `blast-radius`, `interrogate`)
+- **When:** Before a change or a design ships, to attack it. The mode depends on what is being attacked. PRs headed for main are covered by `deliver-ticket`'s independent review instead.
+  - **blast-radius**: 'blast radius of X', "이거 바꾸면 뭐가 깨져?" (what breaks if I change this?), "영향 범위 봐줘" (check the impact), and small diffs you don't trust.
+  - **interrogate**: "interrogate", "적대적 리뷰" (adversarial review), "challenge this", "빈틈 찾아줘" (find the gaps) on a design, plan or decision.
+- **What blast-radius does:**
+  - Finds the one fact that makes the change safe, and proves it with a script that runs the real code. A design objection alone does not finish it; a fact it could not prove is written down as unproven.
   - Looks where grep can't see (library source, wire formats, execution timing).
   - Pulls in the PRs and commits behind the changed code, following the procedure of `explain-code`'s why mode.
   - Cross-checks big changes with an independent reviewer.
   - Reports what the change does, why it's safe, the risks, what was checked, and what to check before merging.
+- **What interrogate does:**
+  - Reviewers independently assess the same scope and rubric. No particular model or model-family difference is required.
+  - A lead merges the results, rules on each finding as Act on / Consider / Noted / Dismissed, and writes a map of where the reviewers agree.
+  - When the intent is ambiguous it doesn't ask; it marks what it assumed. Fixes are never applied automatically.
+- **Bundled:** `references/blast-radius.md`, `references/interrogate.md`, `reviewer-prompt.md`, `rubric.md`, `code-quality-review.md`, `lead-judgment.md`. `deliver-ticket`'s review triage uses the verdict framework in `lead-judgment.md`.
 
 ### figure-it-out
 - **When:** `/figure-it-out`, "알아서 설계해서 진행해줘" (design it yourself and get going), "큰 마이그레이션" (a big migration), "자리 비운 동안 끝내줘" (finish it while I'm away), and large multi-step work with no procedure that fits. `deliver-ticket`'s planning step calls it. Running several tickets as parallel cards is `orchestrate`'s job.
@@ -392,7 +397,7 @@ One skill with four modes that read code and explain it. None of them edits code
 - **Bundled:** `references/teach.md`.
 
 #### map mode
-- **When:** People need a map of what a product does today: a PRD, a roadmap, onboarding, a status doc. "feature map 만들어줘" (make a feature map), "기능 지도 그려줘" (draw a feature map), "지금 뭐가 구현돼 있는지 정리해줘" (list what is built now). A map that a verify skill uses to drive features is `create-verification-skill`; how one subsystem works is the how mode. An orchestrator hands it off instead of running it.
+- **When:** People need a map of what a product does today: a PRD, a roadmap, onboarding, a status doc. "feature map 만들어줘" (make a feature map), "기능 지도 그려줘" (draw a feature map), "지금 뭐가 구현돼 있는지 정리해줘" (list what is built now). A map that a verify skill uses to drive features is `verification-skill`'s create mode; how one subsystem works is the how mode. An orchestrator hands it off instead of running it.
 - **What it does:**
   - The first line names the baseline (repo, ref, short sha, commit date), and every row is true as of that commit.
   - It finds the deployable units (apps) from build and deploy config and puts them in a table; apps a reader would expect but which don't exist go in a list with what exists in their place.
@@ -402,15 +407,7 @@ One skill with four modes that read code and explain it. None of them edits code
 - **Bundled:** `references/map.md`.
 - **Related:** When a verify skill's `features/` exists, it reads it as a source for the feature list and doesn't edit it. Prose follows `write-plainly`.
 
-`explain-code` is called by `blast-radius`, `architect` and `deliver-ticket`. It reads trackers through `use-tracker` and notes through `use-notes`.
-
-### interrogate
-- **When:** "적대적 리뷰" (adversarial review), "빈틈 찾아줘" (find the gaps). PRs headed for main are covered by `deliver-ticket`'s independent review instead.
-- **What it does:**
-  - Reviewers independently assess the same scope and rubric. No particular model or model-family difference is required.
-  - A lead merges the results, rules on each finding as Act on / Consider / Noted / Dismissed, and writes a map of where the reviewers agree.
-  - When the intent is ambiguous it doesn't ask; it marks what it assumed. Fixes are never applied automatically.
-- **Bundled:** `reviewer-prompt.md`, `rubric.md`, `code-quality-review.md`, `lead-judgment.md`. `deliver-ticket`'s review triage uses this verdict framework.
+`explain-code` is called by `challenge`'s blast-radius mode, `architect` and `deliver-ticket`. It reads trackers through `use-tracker` and notes through `use-notes`.
 
 ### principles
 - **When:** A design, refactor, verification or delegation decision needs a named principle.
@@ -461,20 +458,20 @@ One skill with four modes that read code and explain it. None of them edits code
   - Runs the failing test first to confirm why it fails, makes the smallest fix, and confirms it passes.
   - If a test would be unrealistic, it says why and uses the closest runnable check. It never weakens existing assertions.
 
-### create-verification-skill
-- **What it does:**
+### verification-skill
+- **When:** Create mode builds a reusable verify skill ("verify 스킬 만들어줘" (make a verify skill), `/agent-skills:verification-skill create`, the old `/create-verification-skill`); maintain mode checks and repairs an existing one ("verify 스킬 점검해줘" (check the verify skill), the weekly round, a verify skill that failed to drive a feature). Checking that one change works is `deliver-ticket`.
+- **Create mode:**
   - Surveys the repo and builds a repo-specific skill, `.claude/skills/verify-<app>/`, that launches, drives and observes the app the way a user would. It has Launch, Doctor, Drive, Evidence and Cleanup steps.
   - Also builds a feature map of the 3–5 main features.
   - Proves the skill by running it end to end once itself.
   - `deliver-ticket` and `orchestrate` may use it when a reusable harness is useful within scope; direct checks remain sufficient when they prove the same acceptance criteria. Upstream keeps it user-invoked; this fork allows model invocation.
-- **Bundled:** `references/feature-map-example/` (the feature map of an example app), and `scripts/verify_skill_lint.py`, which lints a generated skill by reading files only: frontmatter and sections, state-file names, a shared `latest` link, a required cleanup argument, pattern kills, helper modes and documentation, and the feature-map index. `maintain-verification-skill` runs the same script.
-
-### maintain-verification-skill
-- **What it does:**
+- **Maintain mode:**
   - Reads the source for each feature, actually drives every feature, and compares the results with the feature map.
   - Sorts problems into doc drift, harness defects and product defects. Product defects are only reported.
   - The result is one of clean, changed (a single PR with only proven fixes), or blocked.
   - The flow improver runs it once a week, and the lead hands it to a worker when `deliver-ticket` or the QA lead reports that the verify skill couldn't drive a feature or described it wrongly.
+  - With no verify skill to check, it stops and points at create mode.
+- **Bundled:** `references/create.md`, `references/maintain.md`, `references/feature-map-example/` (the feature map of an example app), and `scripts/verify_skill_lint.py`, which lints a generated skill by reading files only: frontmatter and sections, state-file names, a shared `latest` link, a required cleanup argument, pattern kills, helper modes and documentation, and the feature-map index. Both modes run the same script.
 
 ## Commands
 
@@ -554,7 +551,7 @@ Program state lives in `~/.claude/programs/<slug>/`: `program.json`, the append-
 Allow is given only to a single command with no shell operators, redirections, substitutions or variables. The one variable allowed is `$ORCA_TERMINAL_HANDLE`. The subcommand must come right after the command name; if a flag comes first, no decision is made. Calls without a decision go through the normal permission flow (the auto mode classifier and the user's own rules).
 
 ### Dangerous commands and role-session rules
-The same `guard.py` first applies the rules in `hooks/lib/danger.py` and `hooks/lib/coordination.py`. Only words bash actually runs count as commands (text in quotes, heredoc bodies and comments is text), and each command's arguments are read by splitting its original text with `shlex`. So `echo pkill`, a commit message or a quoted prompt doesn't trip anything. Commands inside `bash -c`, `eval` or a script file aren't seen: this is a guardrail, not a sandbox. Scripts can call the same checks directly (`danger.check_bash`, `danger.external_review`).
+The same `guard.py` first applies the rules in `hooks/lib/danger.py` and `hooks/lib/coordination.py`. Only words bash actually runs count as commands (text in quotes, heredoc bodies and comments is text), and each command's arguments are read by splitting its original text with `shlex`. So `echo pkill`, a commit message or a quoted prompt doesn't trip anything. Commands inside `bash -c`, `eval` or a script file aren't seen. Neither are brace expansion, a path held in a variable, or a body piped through stdin. This is a guardrail, not a sandbox. Scripts can call the same checks directly (`danger.check_bash`, `danger.external_review`).
 
 Every rule has a key in `~/.claude/agent-skills.json`. Its value is one of `"deny"`, `"ask"`, `"warn"` or `"off"`; `false` means `"off"` and `true` means the default. Off puts back the behavior from before the rule existed. A warn doesn't block: it shows the human a notice (`systemMessage`) and gives the model the same text as context.
 
@@ -567,12 +564,14 @@ Every rule has a key in `~/.claude/agent-skills.json`. Its value is one of `"den
 | `guard.deny.keychain` | deny | `security find-*-password` with `-w` or `-g`; `security dump-keychain` |
 | `guard.deny.url_credentials` | deny | A URL with `scheme://user:secret@` in an argument |
 | `guard.deny.user_settings` | deny | Writes to the user's own settings: `~/.claude/settings.json` and `settings.local.json` (also under `$CLAUDE_CONFIG_DIR`), `~/.claude/agent-skills.json`, and secure-fill's `allow.json`. Covers Edit, Write, MultiEdit and NotebookEdit, and Bash redirections, `tee`, `cp`, `mv`, `sed -i`, `rm` and the like. A project's `.claude/settings.json` is not covered |
-| `guard.deny.plugin_apply` | deny | `--apply` of this plugin's `setup.py`, `config_emit.py`, `automode_rule.py` and their emitted copies, and `bootstrap.py --write`. A copy is recognized by the line "runs --apply, never the agent". Another repository's `setup.py` is not covered |
+| `guard.deny.plugin_apply` | deny | `--apply` of this plugin's `setup.py`, `config_emit.py`, `automode_rule.py` and their emitted copies, and `bootstrap.py --write`. A copy is recognized by the line "runs --apply, never the agent". Another repository's `setup.py` is not covered. Only a narrow rehearsal passes: this plugin's `scripts/setup.py --apply <hash> --settings-only`, run with no wrapper such as `env`, with `HOME`, `CLAUDE_CONFIG_DIR`, `CLAUDE_SETTINGS`, `AGENT_SKILLS_CONFIG`, `AGENT_SKILLS_STATE` and `AGENT_SKILLS_CONFIG_DIR` all given in that command as absolute paths, each resolving (links and `..` followed) under the current worktree and away from the user's real settings. A missing or inherited variable, another option or another script is denied |
 | `guard.deny.slash_send` | deny | Typing `/reload…` or `/model` with `orca terminal send` |
 | `guard.deny.prompt_substitution` | deny | A command substitution (`$(…)`, backticks) in `orca worktree create --prompt` |
 | `guard.deny.self_exempt_label` | deny | Adding the `no-visual-change` label with `gh` (`pr create --label`, `pr edit --add-label`, `issue edit`, `gh api …/labels`) |
 | `guard.deny.owner_only` | deny | `orch exempt`. The human types it as a `!` line in their own chat. With the key off, it is allowed like any other `orch` command |
 | `guard.deny.external_review` | deny | A `codex` call whose working folder (or `-C`) has an origin repository set to `repos.<owner/repo>.external_llm: false`. Without that key, no decision |
+| `guard.deny.rm_outside` | deny | A recursive `rm` (`-r`, `-R`, `--recursive`) aimed outside the current checkout (git toplevel) and `/tmp` or `$TMPDIR`. The checkout root itself and `/tmp` itself count as outside. A path with an unresolved `$` variable is not judged; the `rm_expansion` warning covers it |
+| `guard.deny.trash_empty` | deny | `rm` with `-r` or a glob on `~/.Trash`, `~/.local/share/Trash` or `.Trashes`, `trash-empty`, `gio trash --empty`, and the Finder `empty trash` AppleScript. An `rm` of one named file there is not covered |
 | `guard.ask.pressure_bypass` | ask | An `AGENT_SKILLS_PRESSURE_GATE=0` assignment before the command or through `env` or `export`. An `echo` that prints the text is not covered |
 | `guard.warn.rm_expansion` | warn | An `rm` path built from an unquoted glob or variable. `${VAR:?}` is fine |
 | `guard.warn.reset_hard` | warn | `git reset --hard` in a repository with uncommitted changes |
@@ -589,8 +588,9 @@ Every rule has a key in `~/.claude/agent-skills.json`. Its value is one of `"den
 | `orchestrate.wait_foreground` | deny | An orchestrator or lead running `orch wait`, `orch inbox --wait`, `orch watch-cards` or `orca orchestration check\|inbox --wait` without `run_in_background`, or cutting a background wait with `\| tail` or `\| head`. A worker's `check --wait` is not covered |
 | `orchestrate.send_devnull` | deny | An orchestrator, lead or worker sending the output of `orca orchestration send\|reply` to `/dev/null`. `2>/dev/null` alone is not covered |
 | `orchestrate.model_flag` | warn | With `orchestrate.models` set, `orca orchestration worker-start`, `orca worktree create` or `orca agent launch` starting Claude with no `--model`. `--terminal` is out of scope |
-| `orchestrate.pr_poll` | warn | A Monitor command polling `gh pr list\|view\|checks` with a sleep under 300 s. The warning points at `skills/orchestrate/scripts/pr_watch.py`. It never goes up to deny |
+| `orchestrate.pr_poll` | warn | A Monitor command polling `gh pr list\|view\|checks` with a sleep under 300 s. The warning points at the `pr-watch` command (`bin/pr-watch`). It never goes up to deny |
 | `orchestrate.self_land` | warn | `hooks/self_land_gate.py`. A card whose first prompt has `PROGRAM` and an `APPROVED` line naming `orch land` calling `worker_done` or `orca worktree rm` over its own open PR. A `READY-WAIT:` line, `--outcome failed` and a human-gate program pass. `deny` blocks it |
+| `orchestrate.land_route` | deny | `hooks/land_route_gate.py`. An orchestrator, lead or worker (subagents included), or a session with a `PROGRAM` brief, runs `gh pr merge` in a repo the land executor covers. The denial gives that PR's `orch land` line, and an `orch verdict` line to run only after an independent review of that head. `OWNER/*` covers only the `gh` account's own repos; an org's repo is in scope only when listed by name. Your own repo outside the scope is not blocked: the call passes with the skills-config spec that adds it. A repo in `exclude`, an org's or another user's repo outside the scope, and an executor that is off pass silently |
 | `orchestrate.stack_dependent` | warn | A dependent PR that is not a stack. `hooks/stack_gate.py` reads the brief's `Lands after` and the branch's history at `gh pr create`; `orch land` and `land-check` compare land-after edges with the real stacks. `deny` makes both block. What cannot be read passes with one warning line |
 | `orchestrate.auto_wake_min` | none (off); setup bundle: 10 | A positive integer N. `orch wait` wakes a worker once, N minutes after it first marked it idle (`skills/orchestrate/references/waking.md`, "Automatic wake"). With no key it only marks the worker and prints one line saying auto-wake is off. One dispatch is never woken twice; a second stop goes to Needs you |
 | `orchestrate.model_autoswitch` | none (off) | On only when `true`. For patrol's M finding (a model other than the role's setting), an idle worker is switched once by `/exit` and then `claude --resume <id> --model <alias>` in the same terminal. A lead, an orchestrator, a running turn, an open question or background work on the screen is skipped; a failure goes to Needs you with no retry (`docs/automation.md`, finding M) |
@@ -698,6 +698,7 @@ Of pstack's 58 skills (24 principles and 34 others), we took all 24 principles a
   - The model can invoke them on its own.
   - Cursor-specific pieces were replaced with their Claude Code equivalents: paths `.cursor/` → `.claude/`, workers `generalPurpose`/cloud → `Agent`/Orca workers, transcripts `agent-transcripts` → `~/.claude/projects`.
   - The model panel uses available independent reviewers.
+  - blast-radius and interrogate were later merged into one skill, `challenge`. Their bodies moved to the same-named modes' `references/blast-radius.md` and `references/interrogate.md`, and interrogate's reference files to `challenge/references/`.
   - Calls to a skill we don't install (`unslop`) now point to `write-plainly`. `why` and `arena` were brought in on 2026-09-25, which restored the original links between skills (architect → arena).
   - `why` picks its sources from the MCP tools available in the session instead of Cursor's MCP discovery, and gained a narrow mode for one-line questions. The source files for Datadog, Sentry and the warehouse, which have no connection here, were dropped, and new source files for Google Drive and Obsidian were written.
   - swarm and arena were later merged into one skill, `fan-out`. Their bodies moved to `references/sweep.md` and `references/compete.md`, the sweep and compete modes.
@@ -721,11 +722,11 @@ Of pstack's 58 skills (24 principles and 34 others), we took all 24 principles a
 | statechart, create-formal-verification-skill, maintain-formal-verification-skill | TLA+ models drawn as state charts, and creating and maintaining formal verification skills | Many files and a TLA+ toolchain. Revisit when a project needs it |
 
 ### Not in pstack
-- **Ticket flow:** `write-ticket`, `deliver-ticket`, `handoff-ticket`, `dispatch-card`, `end-session`. One ticket from start to finish, built around Orca cards and a tracker.
+- **Ticket flow:** `write-ticket`, `deliver-ticket`, `dispatch-card`, `end-session`. One ticket from start to finish, built around Orca cards and a tracker.
 - **Running projects:** `orchestrate`'s `orch` ledger, the landing gate and exclusive lane, human-gate, the main guardian, the QA lead, and the `orch-dash` dashboard. The shape follows pstack's playbooks, but it was built fresh on top of Orca Runs and GitHub stacks.
 - **Measurement and adapters:** `reflect`'s measure mode, `use-tracker`, `use-notes`.
 - **Machine upkeep:** `reap-resources`, `tune-automode`, `skills-config`, `setup-pc`.
-- **Hooks:** permission decisions (`guard.py`), re-orienting the orchestrator and leads (`reorient.py`), offering setup on a PC that was never set up (`onboard.py`), recording permission prompts for the dashboard to answer (`permission.py`), closing decisions answered in the terminal (`decision.py`), a warning on relaying the owner's words with no record (`decision_relay.py`), completion claim checks (`claim_check.py`), a load check before a heavy start (`pressure_gate.py`), prose checks (`prose_check.py`), the stack check on dependent PRs (`stack_gate.py`), and a warning when a program card closes over its own open PR (`self_land_gate.py`).
+- **Hooks:** permission decisions (`guard.py`), re-orienting the orchestrator and leads (`reorient.py`), offering setup on a PC that was never set up (`onboard.py`), recording permission prompts for the dashboard to answer (`permission.py`), closing decisions answered in the terminal (`decision.py`), a warning on relaying the owner's words with no record (`decision_relay.py`), completion claim checks (`claim_check.py`), a load check before a heavy start (`pressure_gate.py`), prose checks (`prose_check.py`), the stack check on dependent PRs (`stack_gate.py`), a warning when a program card closes over its own open PR (`self_land_gate.py`), and routing a `gh pr merge` in a repo the land executor covers to `orch land` (`land_route_gate.py`).
 
 ### Upstream sync status
 - **Last sync:** 2026-10-26, from `b42effe` (0.15.3) to `99b609a` (0.15.32). Upstream added 74 commits to pstack in between.

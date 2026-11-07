@@ -47,6 +47,16 @@ channel; `--at` is that message's time), `no_thread` (no thread to reply in, so 
 `skipped` (moot by the time of sending: that action at that head is not offered again) or `refused`.
 A `refused` row stops every later action for that PR and reviewer. A row appended by hand for a request sent outside the round
 (`pr`, `reviewer`, `head` and an ISO `date` or a `slack_ts`, no `action`) counts as a sent `request`.
+Repository and reviewer names match without regard to case, so a row written as `Owner/Repo#1` and a PR GitHub
+calls `owner/repo#1` are one PR.
+
+`orch db state` moves the file into the `send_log` table of `agent-skills.db`, keeping the file's backup and leaving an empty directory at its
+path; from then on `log` writes the table and `decide()` reads it, in the same row shape. An `orch ask add owner/repo#N reviewer` queue entry
+makes `decide()` return a `request` for that PR and person at the next round, whether or not GitHub lists them as pending and without
+waiting for a batch; `after_hours` still decides the hour it goes out, and a refusal, a missing Slack id or a request already in the log still
+stop it (an ask stopped by an earlier refused or `no_thread` row stays queued until `orch ask cancel`). The ask then points at the log row:
+it is queued until that row exists, scheduled while its `post_at` is ahead, and sent after. `orch ask list|cancel` shows and withdraws asks.
+With the orchestrate collector's `8-refs` step in place an open ask closes by itself: `merged` when its PR merged, `withdrawn` when the PR closed unmerged, `reviewed` when the reviewer's review is dated after the send. Until then it shows in the orchestrator's brief as waiting on that reviewer; nothing needs `orch ask cancel` for a PR that is over.
 
 ## Handling the round's actions
 

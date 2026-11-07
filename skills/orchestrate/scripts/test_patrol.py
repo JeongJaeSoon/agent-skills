@@ -86,6 +86,55 @@ assert v["cards"]["/w/w"] == "run" and v["cards"]["/w/x"] == "exited" and "/w/y"
 assert v["hints"] == {"/w/w": "exited", "/w/x": "exited"}, v["hints"]
 assert "API Error: 500 overloaded" in next(x for x in found if x["card"] == "x")["title"]
 
+# Q: an in-progress Run worker Orca cannot verify and has not observed for 2h+, its transcript not working.
+def quiet_worker(hours, verdict="unverifiable", observed=True, **extra):
+    live = {"verdict": verdict}
+    if observed is True:
+        live["observedAt"] = int((NOW - hours * 3600) * 1000)
+    elif observed is not None:
+        live["observedAt"] = observed
+    return {"dispatchId": "dq", "agentTerminalHandle": "hq", "resource": {"worktreeId": "x::/w/q"},
+            "projection": {"outcome": "in_progress", "liveness": live, **extra}}
+LEAD = [{"id": "sq", "path": "/w/q", "parent": "sp"}, {"id": "sp", "path": "/w/p", "terminals": [{"handle": "hp", "agent": True}]}]
+QT = {"/w/q": (idle(90), {"type": "assistant", "timestamp": ago(90)})}
+def quiet_found(w, sessions=LEAD, tails=QT):
+    return patrol.judge(facts(workers=[w], sessions=sessions, tails=tails), {})
+found, v, _ = quiet_found(quiet_worker(3))
+assert codes(found) == [("Q", "q")] and v["cards"]["/w/q"] == "run", found  # the card stays a Run worker's
+assert found[0]["owner"] == "hp", found[0]  # its lead's agent terminal, not the orchestrator
+assert found[0]["title"].startswith("❔") and "3h" in found[0]["title"], found[0]["title"]
+assert patrol.DEPENDS["Q"] == {"terminals", "workers", "state"} and "Q" in patrol.SHOW_ONCE
+for why, w in (("observed 1h ago", quiet_worker(1)), ("liveness verified", quiet_worker(3, verdict="live")),
+               ("no observedAt", quiet_worker(3, observed=None)), ("bool observedAt", quiet_worker(3, observed=False)),
+               ("string observedAt", quiet_worker(3, observed="soon")), ("negative observedAt", quiet_worker(3, observed=-5)),
+               ("exited is X's", quiet_worker(3, verdict="exited"))):
+    assert ("Q", "q") not in codes(quiet_found(w)[0]), why
+assert [c for c, _ in codes(quiet_found(quiet_worker(3, verdict="exited"))[0])] == ["X"]
+for why, kw in (("no sessions: the lead is unknown, nothing goes to the orchestrator", {"sessions": []}),
+                ("session without a parent", {"sessions": [{"id": "sq", "path": "/w/q"}]}),
+                ("parent without an agent terminal", {"sessions": [LEAD[0], {"id": "sp", "path": "/w/p", "terminals": []}]}),
+                ("transcript unread", {"tails": {}}),
+                ("transcript working", {"tails": {"/w/q": ({"state": "working", "since": ago(1)}, None)}})):
+    assert ("Q", "q") not in codes(quiet_found(quiet_worker(3), **kw)[0]), why
+# Delivery: to the lead only, once; a quiet that ends and comes back is a new one.
+saved_paths = patrol.LOG, patrol.SHOWN
+assert patrol.PER_OCCURRENCE == {"Q"} and patrol.key({"id": "Xa", "code": "R", "detected_at": "t"}) == "Xa"  # R, M keep the id
+assert patrol.key({"id": "Qa", "code": "Q", "detected_at": "t"}) == "Qa@t" and patrol.key({"id": "Qa", "code": "Q"}) == "Qa"
+with tempfile.TemporaryDirectory() as d:
+    patrol.LOG, patrol.SHOWN = pathlib.Path(d) / "patrol.jsonl", pathlib.Path(d) / "shown.json"
+    patrol.write_round(found, {}, False, NOW)
+    assert patrol.pending_lines("hp", False, T)[0].startswith("PATROL Q "), "routed to the lead"
+    assert patrol.pending_lines(None, True, T) == [], "the orchestrator is not asked"
+    assert patrol.pending_lines("hp", False, T + dt.timedelta(hours=9)) == [], "shown once, not every RENOTIFY"
+    patrol.write_round([], {}, False, NOW + 60)
+    patrol.write_round(found, {}, False, NOW + 120)  # closed and back with no poll in between
+    assert patrol.pending_lines("hp", False, T + dt.timedelta(hours=10))[0].startswith("PATROL Q "), "new after it closed"
+    assert patrol.pending_lines("hp", False, T + dt.timedelta(hours=20)) == [], "and shown once again, not every RENOTIFY"
+patrol.LOG, patrol.SHOWN = saved_paths
+assert patrol.quiet_hours({"liveness": {"verdict": "unverifiable", "observedAt": 0}}, 1e9) == 0.0
+assert patrol.quiet_hours({"liveness": {"verdict": "unverifiable", "observedAt": 10**13}}, 1000) == 0.0  # in the future
+assert abs(patrol.quiet_hours({"liveness": {"verdict": "unverifiable", "observedAt": 1_000_000}}, 1000 + 7200) - 2.0) < 1e-9
+
 # S: a logged supersede 30+ min old whose card still has an agent; by handle or by card name.
 f = facts(terminals=[term("h1", "/w/a"), term("h2", "/w/b")],
           supersedes=[{"ts": ago(45), "to": "h1", "kind": "supersede"}, {"ts": ago(40), "to": "b", "kind": "supersede"},

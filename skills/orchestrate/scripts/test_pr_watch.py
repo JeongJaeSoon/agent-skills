@@ -194,4 +194,20 @@ pr_watch.watch(lambda: pr_watch.snapshot(["a/b"], "", "prog", 50,
                                          lambda a: next(listings) if a[0] == "gh" else next(verdicts)),
                300, out.append, lambda s: None, rounds=4)
 assert out == ["a/b#1 land-check READY"], out
+
+# The command the docs and the hook warning name runs from any repo, not only from this checkout: bin/pr-watch finds the
+# script by its own location. Run it from a directory that holds nothing of this plugin.
+import subprocess
+WRAPPER = pathlib.Path(__file__).resolve().parents[3] / "bin" / "pr-watch"
+assert os.access(WRAPPER, os.X_OK), "bin/pr-watch must be executable"
+with tempfile.TemporaryDirectory() as elsewhere:
+    helped = subprocess.run([str(WRAPPER), "--help"], cwd=elsewhere, capture_output=True, text=True)
+    assert helped.returncode == 0 and "--repo" in helped.stdout and "pr-watch" in helped.stdout, helped
+    refused = subprocess.run([str(WRAPPER), "--repo", "a/b", "--interval", "60"], cwd=elsewhere, capture_output=True, text=True)
+    assert refused.returncode == 2 and "300 seconds or more" in refused.stderr, refused
+    # A symlink to the wrapper (a user's ~/bin entry) must still find the script through the link's target, not the link's dir.
+    link = pathlib.Path(elsewhere) / "pr-watch"
+    link.symlink_to(WRAPPER)
+    linked = subprocess.run([str(link), "--help"], cwd=elsewhere, capture_output=True, text=True)
+    assert linked.returncode == 0 and "--repo" in linked.stdout, linked
 print("test_pr_watch: ok")

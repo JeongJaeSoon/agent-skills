@@ -5,14 +5,14 @@ An ack is the owner's view, not the work's state: an acked stage row is still in
 can be acked (a stage row with `done_at`, a brief row that is ✅, and every one of its sub-task rows too); a row in
 progress, waiting on someone or held (a closed PR's row too) is refused, so acking never hides what still needs someone.
 
-One append-only file, <fleet state>/acks.jsonl (0600), one JSON object a line:
-  {"ev": "ack" | "unack", "id": "stage:<row id>" | "board:<brief row key>", "ts"}
-Older files also hold "req:r7" ids from the removed owner-request ledger; they can only be un-acked.
-The set of acked ids is the fold of its lines.
+Events are append-only: {"ev": "ack" | "unack", "id": "stage:<row id>" | "board:<brief row key>", "ts"}. Older state also
+holds "req:r7" ids from the removed owner-request ledger; they can only be un-acked. The set of acked ids is the fold of
+the events. They live in the DB's ack_event table once `orch db state` ran (store.py), else in <fleet state>/acks.jsonl (0600), one
+JSON object a line.
 """
 import datetime as dt, fcntl, re
 
-import fleet
+import fleet, store
 
 KINDS = ("stage", "board")
 
@@ -22,7 +22,11 @@ def path():
 
 
 def acked():
-    """id -> when it was acked."""
+    """id -> when it was acked: from the DB once `orch db state` moved the file in, else from acks.jsonl."""
+    return store.ack_fold() if store.state_ready() else _file_acked()
+
+
+def _file_acked():
     out = {}
     for r in fleet.read_lines(path()):
         if not isinstance(r, dict) or not isinstance(r.get("id"), str):
@@ -79,6 +83,22 @@ def ackable(now=None, kinds=KINDS):
     return out
 
 
+def verified(now=None):
+    """(ids of finished brief rows whose PR the PR table shows merged and that are not acked yet, ackable()): the rows the
+    owner can ack as checked. Asked for by name (`orch-dash ack --verified`); nothing acks them on its own."""
+    import board
+    try:
+        done = board.render(now=now, fill=True)["done"]
+    except (OSError, ValueError):
+        return [], {}
+    try:
+        merged = {k.lower() for k, w in store.pr_words().items() if w == "MERGED"}
+    except store.NotMigrated:  # no PR table yet: nothing is verified
+        return [], {}
+    can = {d["id"]: {"label": d["label"], "at": d["at"]} for d in done}
+    return [d["id"] for d in done if not d["acked"] and (d.get("pr") or "").lower() in merged], can
+
+
 def why_not(aid):
     if kind(aid) not in KINDS or ":" not in aid:
         return f"an id is stage:<row> or board:<row> (got {aid})"
@@ -93,20 +113,26 @@ def write(ids, undo=False, now=None, can=None):
     ts = fleet.iso(now or fleet.utcnow())
     if not undo and can is None:
         can = ackable(now, {kind(i) for i in ids})
-    path().parent.mkdir(parents=True, exist_ok=True)
-    written, refused = [], []
-    with (fleet.state_dir() / "acks.lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        have = acked()
+    def decide(have):
+        events, refused = [], []
         for aid in ids:
             if undo and aid not in have:
                 refused.append((aid, "not acked"))
             elif not undo and aid not in can:
                 refused.append((aid, why_not(aid)))
             elif undo or aid not in have:
-                fleet.append_line(path(), {"ev": "unack" if undo else "ack", "id": aid, "ts": ts})
-                written.append(aid)
-    return written, refused
+                events.append(("unack" if undo else "ack", aid))
+        return events, ([aid for _, aid in events], refused)
+
+    if store.state_ready():
+        return store.ack_change(decide, ts)
+    path().parent.mkdir(parents=True, exist_ok=True)
+    with (fleet.state_dir() / "acks.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        events, out = decide(_file_acked())
+        for ev, aid in events:
+            fleet.append_line(path(), {"ev": ev, "id": aid, "ts": ts})
+    return out
 
 
 def older_than(age, kinds=KINDS, now=None):

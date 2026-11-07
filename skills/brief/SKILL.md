@@ -1,11 +1,17 @@
 ---
 name: brief
-description: "Use when the human asks where work stands — \"현황 보고해줘\", \"상태 보고해줘\", \"브리핑해줘\", \"진행 상황 알려줘\", \"진행상황 표로\", `/brief` — or a turn ends with a report over several items. \"어디까지 했지\" is recall."
+description: "Status report: \"현황 보고해줘\", \"상태 보고해줘\", \"브리핑해줘\", \"진행 상황 알려줘\", \"진행상황 표로\", `/brief`, a turn ending in a report on several items. Stage table only: \"단계표 보여줘\", \"stage table\", `/agent-skills:stage`. To-dos and held queue only: \"할 일 보여줘\", \"보류 큐 보여줘\", \"to-do list\", `/agent-skills:todo`. \"어디까지 했지\" is recall."
 ---
 
 # Brief
 
 A status report has one job: the human reads it in under a minute and knows what is done, what is moving, and what is waiting on them. Its shape is fixed in code, not in memory: one renderer prints every report, and you add only judgment.
+
+Pick the mode by what the human asked for:
+
+- **Report** (the default): §1 to §3 below. A report request that also asks to include stages, deploys, to-dos or held work ("할 일이랑 배포 상황도 넣어서 현황 보고해줘") is still the report alone: it already counts those and points at their lists, so do not open the mode files and do not add `orch stage show` or `orch board todo list` to it.
+- **Stage table**: "단계표 보여줘", "stage table", the retired `/agent-skills:stage`, when the request asks for no report. Only the per-item merge / dev / prod table, never the full report: read [references/stage.md](references/stage.md) and follow it.
+- **To-do**: "할 일 보여줘", "보류 큐 보여줘", "to-do list", the retired `/agent-skills:todo`, when the request asks for no report. Only the to-dos and the held queue, never the full report: read [references/todo.md](references/todo.md) and follow it.
 
 ## 1. The report is the renderer's output
 
@@ -18,7 +24,7 @@ Send what it prints, whole and unchanged. Add `--telegram` when §2 says Telegra
 
 Priority groups are the owner's order for the work, and once any row has one, the report opens with a `## 🧭 우선순위` section, one line per group. `orch board set <row> --priority RANK:NAME` puts a row, and the rows under it, in a group (`-` clears it); a lead or card only the fleet derives gets one with `orch board priority set <worktree:ID|program:NAME|repo:OWNER/NAME> RANK:NAME` (`priority list` and `priority drop` show and remove rules). Names and ranks are data the owner gives; a rule or example in this repository never carries a real one. When a card changes, the lead that owns that work sets its `--priority` on the board, so the group follows the work and not the card.
 
-The renderer (`board.py`, `rowstate.py`) owns the layout, the order, each row's status and what folds; it builds the rows each time from the live Orca cards, leads, Runs, report files and GitHub PR state, and the board adds only what those cannot give. The stage table and the to-do and held lists appear only as counted pointer lines (the `stage` and `todo` skills print them). What is over but never turns ✅ by itself the collector closes on evidence, or marks ❔ 확인 필요 with the reason; close the rest with `orch board done <id>` (`orch board open` lists the ids; orchestrate's `references/stage-table.md`, "Closing what is over").
+The renderer (`board.py`, `rowstate.py`) owns the layout, the order, each row's status and what folds; it builds the rows each time from the live Orca cards, leads, Runs, report files and GitHub PR state, and the board adds only what those cannot give. The stage table and the to-do and held lists appear only as counted pointer lines (the stage table and to-do modes print them). What is over but never turns ✅ by itself the collector closes on evidence, or marks ❔ 확인 필요 with the reason; close the rest with `orch board done <id>` (`orch board open` lists the ids; orchestrate's `references/stage-table.md`, "Closing what is over").
 
 You give it four things:
 
@@ -36,9 +42,9 @@ What goes where:
 
 - **Decision needed** is only a choice outside the scope the human approved that passes the [owner-ask gate](../orchestrate/references/owner-ask-gate.md) (`orchestrate` "What reaches the human"). Inside that scope, take the recommended default, act, and let the row show it.
 - **Only you** (🙋 지금 오너가 할 일) is what only the owner can unblock, once the same gate's first step found no agent route: a permission dialog, a login, a payment, an approval or merge a ruleset gives to them, a review they were asked for, an answer only they have. One item per line: what, where, `→` the work it unblocks. Record what no row carries with `orch board now "<what> · <where> → <work>"...`, which replaces the whole list. One topic goes under Decision needed or Only you, not both.
-- **Waiting on others** (⏳ 다른 사람 대기) is work stopped on another person's review, approval or reply. One item per line: who, what, since when, `→` the work, and the next step (when to remind). With a send-log configured, the renderer adds the last request or reminder that went out for that PR and person: `· 마지막 리마인드 rev-a 3h 전 (<channel> 스레드)`. The log is the one `"brief": {"sendlog": "<path>"}` in `~/.claude/agent-skills.json` names, in `watch-prs`'s send-log format; there is no default, and without the key or the file the item has no such part.
+- **Waiting on others** (⏳ 다른 사람 대기) is work stopped on another person's review, approval or reply. One item per line: who, what, since when, `→` the work, and the next step (when to remind). With a send-log configured, the renderer adds the last request or reminder that went out for that PR and person: `· 마지막 리마인드 rev-a 3h 전 (<channel> 스레드)`. The log is the one `"brief": {"sendlog": "<path>"}` in `~/.claude/agent-skills.json` names, in `watch-prs`'s send-log format; there is no default, and without the key or the file the item has no such part. Once `orch db state` moved the log into the database, the same path still names it and the rows are read from there.
 - Which status a row is, the renderer decides from evidence (`rowstate.py`) and you only record it. A ❔ row's 다음 cell says `에이전트 조치 필요: <what is missing>`: record that fact. A ready PR the agent merges (its program's merge policy, else a repository pattern in `board.agent_merges` of `~/.claude/agent-skills.json`, else a repository the owner owns) is 🔄 with the merge as its next step. Record what evidence cannot give: `orch board set <id> --owner 오너|<who>|-` for who a row waits on, `--after owner/repo#N|-` for a PR it must wait for (`-` clears either). Set them rather than guess.
-- **To-do** (a promise kept on a date or a condition, by someone named) and **Held** (work set aside with no date, in turn) are recorded and listed with the `todo` skill; the report only counts them, and moves a to-do whose time came into Only you or 카드 없는 일 until `orch board done` closes it.
+- **To-do** (a promise kept on a date or a condition, by someone named) and **Held** (work set aside with no date, in turn) are recorded and listed in the to-do mode; the report only counts them, and moves a to-do whose time came into Only you or 카드 없는 일 until `orch board done` closes it.
 - **Doing** is work with no row of its own: `orch board doing add <title> --owner W --next E`, or `--owner <who> --next <remind when> --waiting` when it waits on another person's reply (`--owner 오너` for the owner's). Work a session runs (a card, a worker or a subagent) is never a doing item: the report already shows it as that session's row.
 
 A wrong or missing row is fixed in the record, then rendered again: `orch board set` for a phase split, progress or a correction (`--progress N/M` is stages passed out of the item's stages, or the epic's exit items; no basis, no number). Never edit the output: the next render would undo the edit. `--commit` saves what you sent as the last report, so the next one bolds what changed; render with it only for the copy you send. A table wider than 78 columns comes out as one line per row: send that as printed too.

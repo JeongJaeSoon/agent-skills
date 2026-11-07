@@ -15,7 +15,7 @@
 - Claude Code와 GitHub(`gh` 로그인).
 - 티켓 트래커: Linear 또는 Jira 어댑터(`use-tracker`). `tracker.adapter`가 없으면 Linear다.
 - 노트: Obsidian vault 또는 일반 Markdown 폴더(`use-notes`). 설정하지 않으면 노트를 쓰지 않고 멈추거나 묻는다([설정 전환 안내](configuration-migration.md)).
-- Orca: `orchestrate`, `handoff-ticket`, `dispatch-card`, Orca automation(`janitor`, `watch-prs`·`watch-mentions` 회차)이 쓴다. `deliver-ticket`은 Orca 카드 밖에서도 돈다. 스킬마다 Orca를 어디에 쓰는지는 [스킬 카탈로그](skills.md)의 그 스킬 절에 있다.
+- Orca: `orchestrate`, `dispatch-card`, Orca automation(`janitor`, `watch-prs`·`watch-mentions` 회차)이 쓴다. `deliver-ticket`은 Orca 카드 밖에서도 돈다. 스킬마다 Orca를 어디에 쓰는지는 [스킬 카탈로그](skills.md)의 그 스킬 절에 있다.
 - 동기화 작업과 `pressure-watch`·`reap-hard`·`orch-dash`·`land-executor`는 Orca automation으로 돌므로 Orca 앱이 켜져 있는 동안만 돈다. macOS에서 `preview-watch`·`share-server`만 launchd를 쓴다. 예전 setup이 만든 LaunchAgent가 남아 있으면 `setup-pc` 점검이 알리고, 제거는 오너가 직접 한다([automation.md](automation.md#처음-설치할-때)).
 - 독립 리뷰와 브라우저 검증은 사용 가능한 리뷰어와 브라우저 자동화 도구로 한다. 특정 모델이나 별도 모델 플러그인은 필요하지 않다.
 
@@ -115,6 +115,7 @@ skills-sync setup disable janitor        # 하나 끄기. 어느 것이든 apply
 | `delegate_gate.py` | 모든 도구 호출 전 | 오케스트레이터 세션(`--agent agent-skills:orchestrator` 또는 `ROLE: orchestrator`)의 본 대화가 조정 밖의 도구를 부르면 `[gate:delegate]` 사유로 거부하고 서브에이전트·카드·`orca orchestration send`로 넘기라고 알린다. 허용: `orch`(`heavy` 제외)·`skills-sync`·`orca` 조정 명령, `gh pr merge`·`ready`, `gh … --json` 읽기, Agent·SendMessage·TaskStop, 상태·출력 Read, 브리프·메모리 Write. 서브에이전트 호출(`agent_id` 있음)과 다른 세션은 그대로 둔다. `~/.claude/agent-skills.json`의 `orchestrate.delegate_gate`를 `false`로 하면 끈다 |
 | `pressure_gate.py` | Bash 호출 전·후 | `orch heavy`·`docker compose up`·`orca worktree create`를 PC 사용량이 위험이거나, 경고인데 최근 15분 안에 정리 회차가 없으면 거부하고 정리·대기 방법을 알린다. 위험으로 거부한 명령은 대기열과 대시보드에 남기고, 같은 세션의 재시도 결과를 기록한다. 전체 테스트·E2E·headless Chrome은 `orch heavy` 밖이면 감싼 명령을 알려 주며 거부하고, 새 카드는 진행 중 에이전트 턴이 상한(`reap.pressure.active_turns_per_cpu`)에 닿으면 거부한다. `AGENT_SKILLS_PRESSURE_GATE=0`으로 끈다 |
 | `self_land_gate.py` | Bash 호출 전 | 머지를 맡은 프로그램 카드가 자기 PR이 열린 채 `worker_done`이나 `orca worktree rm`을 부르면 알린다. `orchestrate.self_land`를 `deny`로 올리면 막는다. 읽지 못한 것은 통과시키고 한 줄로 알린다 |
+| `land_route_gate.py` | Bash 호출 전 | 오케스트레이터·리드·워커나 `PROGRAM` 브리프 세션이 land executor 범위 안 repo에 `gh pr merge`를 부르면 막고 `orch land` 줄을 알린다. `OWNER/*`는 `gh` 계정 본인 소유만 덮는다. 범위 밖인 본인 repo는 통과시키면서 skills-config로 범위에 넣는 spec을 알리고, org나 다른 사람의 범위 밖 repo는 그냥 통과시킨다. `orchestrate.land_route`(기본 `deny`)를 `warn`이나 `off`로 바꾼다. 읽지 못한 설정은 막고, GitHub가 답하지 않은 PR은 통과시키고 한 줄로 알린다 |
 | `prose_check.py` | PR·커밋·Linear·Jira 저장 전 | 본문의 write-plainly 금지 패턴을 알린다. 막지 않는다 |
 | `stack_gate.py` | `gh pr create` 전 | 브리프의 `Lands after`나 브랜치 이력으로 의존하는 열린 PR이 있는데 base가 그 위가 아니면 알린다. `orchestrate.stack_dependent: deny`면 막는다 |
 | `claim_check.py` | 멈출 때(Stop, SubagentStop) | 코드를 고치고 아무것도 돌리지 않은 채 "고쳤다"고 하면 한 번 막는다. `AGENT_SKILLS_CLAIM_CHECK=0`으로 끈다 |

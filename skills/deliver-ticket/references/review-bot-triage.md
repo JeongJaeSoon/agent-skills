@@ -1,7 +1,7 @@
 # Review-thread triage
 
 For threads on an open PR — CodeRabbit, Copilot, or a person. Findings from the reviews
-you run yourself before the PR exists (§3) are sorted with `interrogate`'s lead-judgment instead.
+you run yourself before the PR exists (§3) are sorted with `challenge`'s lead-judgment instead.
 The aim is not to ignore bots by default; it is to stop treating every comment as a required
 code change.
 

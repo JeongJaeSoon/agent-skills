@@ -169,6 +169,8 @@ assert fired(flat(prompt("go"), review, say("리뷰 결과입니다.")), "review
 assert fired(flat(prompt("go"), agent, say("보고 받음")), "review_idle", first=PREAMBLE)[1] == ["review_idle"]
 assert fired(flat(prompt("go"), review, bash("git commit -m x"), say("fixed")), "review_idle", first=PREAMBLE)[0] is None
 assert fired(flat(prompt("go"), other, say("ok")), "review_idle", first=PREAMBLE)[0] is None
+challenge, _ = call("Skill", {"skill": "agent-skills:challenge"}, result="Act on: 1")
+assert fired(flat(prompt("go"), challenge, say("판정입니다.")), "review_idle", first=PREAMBLE)[1] == ["review_idle"]
 assert fired(flat(prompt("go"), review, say("x")), "review_idle")[0] is None  # a general main session
 assert fired(flat(prompt("go"), review, say("x")), "review_idle", event={"agent_id": "a"})[1] == ["review_idle"]
 codex = bash("codex exec review --base main", result="Act-on 0")

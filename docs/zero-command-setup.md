@@ -17,7 +17,7 @@ Claude Code 2.1.310과 공식 문서(code.claude.com/docs, 2026-10-26 확인)에
 | 플러그인 SessionStart hook은 그 플러그인을 로드한 세션부터 돈다. 설치한 바로 그 세션에서는 첫 SessionStart가 이미 지나갔다 | hooks.md |
 | 사용자 설정에 쓰는 공식 동의 창은 `/permissions`의 Auto mode 탭, `/auto-mode-setup`(초안 통째로 수락), 권한 창의 "다시 묻지 않기"(저장소의 `.claude/settings.local.json`)뿐이다. 설치할 때 env·`permissions.allow`·`language`를 사용자 설정에 쓰는 창은 없다 | permissions.md, auto-mode-config.md |
 | 디렉터리 소스 마켓플레이스로 체크아웃을 설치해도 cache에는 커밋 단위 복사본(일반 파일)이 생긴다. 실시간 반영은 여전히 `CLAUDE_CODE_PLUGIN_DIRS`가 있어야 한다 | 임시 `CLAUDE_CONFIG_DIR`에서 실측, [platform.md](platform.md) §1과 같다 |
-| 에이전트가 사용자 설정을 쓰면 auto mode 분류기가 자기수정으로 거부한다 | tune-automode "에이전트가 하지 않는 것" |
+| 에이전트가 사용자 설정을 쓰면 auto mode 분류기가 자기수정으로 거부한다 | tune-automode "What the agent does not do" |
 
 ## 결론
 

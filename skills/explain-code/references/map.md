@@ -2,7 +2,7 @@
 
 A product feature map answers one question for a reader who will plan, write or decide: what can a user do with this product today, and how do we know. Every row is read from the code at one commit, and every status carries evidence a reader can open.
 
-This is not the verification map that `create-verification-skill` writes under `.claude/skills/verify-<app>/features/`. That one is for an agent driving the app. When it exists, read it as a source for the feature list, and do not edit it from here.
+This is not the verification map that `verification-skill` (create mode) writes under `.claude/skills/verify-<app>/features/`. That one is for an agent driving the app. When it exists, read it as a source for the feature list, and do not edit it from here.
 
 ## 1. Pin the baseline
 
