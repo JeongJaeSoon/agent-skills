@@ -160,7 +160,7 @@ STALE_WHAT = {"hook": ("a hook error blocks its tools", "hook 오류로 도구�
 REPEAT_WORD = {"error": "에러", "assistant": "답", "user": "입력", "reload": "reload"}
 # pending_lines shows these once, not every RENOTIFY. M's id holds the session and both models, so a drift to another
 # model (or back to an earlier one, once its finding closed) is a new id and is shown again.
-SHOW_ONCE = {"R", "M", "Q"}
+SHOW_ONCE = {"R", "M", "Q", "F"}
 PER_OCCURRENCE = {"Q"}  # shown once per detection, polled while closed or not (a new code: no older record keyed by id)
 
 
@@ -790,7 +790,7 @@ def judge(facts, memo):
         for k in sorted(set.intersection(*runs) if len(runs) >= ERROR_ROUNDS else ()):
             add("E", t.get("worktreePath"), (k,), f"❔ the same error in {ERROR_ROUNDS} rounds: {k[:120]}", h)
     # F: a start helper of `skills-sync card` (close-setup, the /goal input) logged a failure; the card may look idle.
-    for t in agents:
+    for t in {t.get("worktreePath"): t for t in agents}.values():  # one finding per card, whatever its terminal count
         if failed_start := card_watch.setup_failure(card_name(t.get("worktreePath"))):
             helper, reason, _ = failed_start
             add("F", t.get("worktreePath"), (helper, reason), f"start failed in {helper}: {reason[:120]} · read its screen "

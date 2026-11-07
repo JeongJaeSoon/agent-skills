@@ -1044,6 +1044,9 @@ assert codes([x for x in fs if x["code"] == "F"]) == [("F", "sf-a"), ("F", "sf-b
 fa = next(x for x in fs if x["code"] == "F" and x["card"] == "sf-a")
 assert "close-setup" in fa["title"] and "folder trust dialog" in fa["title"], fa
 assert patrol.judge(f, {})[0] == fs and patrol.DEPENDS["F"] == {"terminals"} and patrol.LABEL["F"], "the same log, the same ids"
+assert "F" in patrol.SHOW_ONCE, "the same failure is shown once, not every RENOTIFY"
+f2 = facts(terminals=[term("h1", "/w/sf-a"), term("h9", "/w/sf-a")])
+assert codes([x for x in patrol.judge(f2, {})[0] if x["code"] == "F"]) == [("F", "sf-a")], "two terminals, one card, one finding"
 assert patrol.dead_handles({"prs": {"inbox_to": "run:run_0FAKE"}}, []) == ([], None)
 assert patrol.dead_handles(None, listed) == ([], None)
 

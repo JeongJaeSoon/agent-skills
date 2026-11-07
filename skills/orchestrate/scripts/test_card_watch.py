@@ -338,5 +338,12 @@ flaky.mode = "ok"
 assert card_watch.scan(terms, seen, flaky, NOW, 30, 100.0, 15) == [], "the same failure after the pane reads again"
 flaky.mode = "bad"
 assert card_watch.scan(terms, seen, flaky, NOW, 30, 100.0, 15) == [], "and again when it stops reading"
+two = card_watch.agent_terminals([term("h1", "/w/card-a", last=NOW - 60000), term("h9", "/w/card-a", last=NOW - 60000)], "me")
+flaky.mode = "ok"
+assert [l for l in card_watch.scan(two, {}, flaky, NOW, 30, 100.0, 15) if l.startswith("SETUP")] == \
+    ["SETUP FAILED card-a: close-setup (term_x  agent needs input: a folder trust dialog)"], "one card, two terminals, one line"
+seen = {}
+card_watch.scan(terms, seen, flaky, NOW, 30, 100.0, 15)
+assert card_watch.scan(two, seen, flaky, NOW, 30, 100.0, 15) == [], "a second terminal on a reported card is not new"
 print("ok")
 

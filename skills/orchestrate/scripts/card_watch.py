@@ -170,8 +170,10 @@ def scan(terms, seen, read, now_ms, idle_min, free_gb, min_free_gb, goal_lost_mi
         if failed:
             helper, reason, manual = failed
             skey = f"setup:{helper}:{hashlib.sha1(reason.encode()).hexdigest()[:12]}"
-            now[h + ":setup"] = skey
-            if seen.get(h + ":setup") != skey:
+            slot = "setup:" + card_name(t)  # per card: a second agent terminal in the same worktree says it again
+            fresh = slot not in now and seen.get(slot) != skey
+            now[slot] = skey
+            if fresh:
                 manual = manual or f"skills-sync close-setup {t.get('worktreePath')} --agent {h}   # then: orca terminal read --terminal {h} --screen"
                 out += [f"SETUP FAILED {card_name(t)}: {helper} ({reason})", f"  {manual}"]
         try:
