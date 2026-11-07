@@ -106,13 +106,13 @@ https://github.com/JeongJaeSoon/agent-skills の Claude Code プラグインを�
 
 | グループ | スキル | 役割 |
 |---|---|---|
-| [チケット1件](docs/skills.ja.md#チケット1件) | `write-ticket`, `deliver-ticket`, `ui-review`, `handoff-ticket`, `dispatch-card`, `end-session` | チケットを書き、届け、次のチケットを新しいカードに渡し、進捗を記録してセッションを閉じる |
+| [チケット1件](docs/skills.ja.md#チケット1件) | `write-ticket`, `deliver-ticket`, `ui-review`, `dispatch-card`, `end-session` | チケットを書き、届け、次のチケットを新しいカードに渡し、進捗を記録してセッションを閉じる |
 | [プロジェクト1件](docs/skills.ja.md#プロジェクト1件orca-ワーカー複数) | `orchestrate`, `reboot` | 複数のチケットを Orca のワーカーで並行してマージし、再起動で落ちた待機やバインドを戻し、終わったあと実際どうだったかを測る(`reflect` の測定モード) |
 | [マシン1台](docs/skills.ja.md#マシン1台) | `reap-resources`, `secure-fill`, `tune-automode`, `skills-config`, `setup-pc` | 残り物の片付け、エージェントが見ない秘密値の入力、autoMode ルールの下書き、設定キーの変更、インストールと更新 |
 | [チャットとレビュー](docs/skills.ja.md#チャットとレビュー) | `watch-mentions`, `watch-prs` | 自分に関係するチャットと PR を作業として集める |
 | [アダプター](docs/skills.ja.md#アダプター) | `use-tracker`, `use-notes` | Linear と Jira のチケット、Obsidian と Markdown のノート |
 | [文章](docs/skills.ja.md#文章) | `brief`, `map-features`, `write-plainly`, `prune-comments`, `write-skill` | 状況報告、段階表、やること・保留のキュー(`brief` のモード)、機能マップ、文体、コメント整理、スキル作成のチェック |
-| [pstack](docs/skills.ja.md#pstack-スキルlauren-tanmit) | `architect`, `blast-radius`, `create-verification-skill`, `fan-out`, `figure-it-out`, `how`, `interrogate`, `maintain-verification-skill`, `principles`, `recall`, `reflect`, `show-me-your-work`, `tdd`, `teach`, `why` | 設計、比較、影響範囲、検証、説明、振り返り |
+| [pstack](docs/skills.ja.md#pstack-スキルlauren-tanmit) | `architect`, `challenge`, `fan-out`, `figure-it-out`, `how`, `principles`, `recall`, `reflect`, `show-me-your-work`, `tdd`, `teach`, `verification-skill`, `why` | 設計、比較、影響範囲、検証、説明、振り返り |
 
 pstack グループは Lauren Tan の [pstack](https://github.com/cursor/plugins)(MIT)から取り込んだもので、いまはこのリポジトリで独自に手入れしています。元のファイルは upstream のまま `vendor/pstack` に残し、upstream の変更は任意で有効にする日次ジョブが知らせるので、必要なものだけ手で取り込みます。複数のセッションで働くとき、ワーカーの上にはオーケストレーター(最上位のセッション1つ)とリード(プロジェクトごとに1つ)の2層があります。詳しくは [orchestrate の Roles 表](skills/orchestrate/SKILL.md#roles)(英語)を見てください。
 
@@ -125,6 +125,11 @@ pstack グループは Lauren Tan の [pstack](https://github.com/cursor/plugins
 | `/agent-skills:measure-delivery` | `/agent-skills:reflect` の測定モード |
 | `/agent-skills:swarm` | `/agent-skills:fan-out`、sweep モード |
 | `/agent-skills:arena` | `/agent-skills:fan-out`、compete モード |
+| `/agent-skills:handoff-ticket` | `/agent-skills:dispatch-card` の次のチケットモード |
+| `/agent-skills:create-verification-skill` | `/agent-skills:verification-skill` の create モード |
+| `/agent-skills:maintain-verification-skill` | `/agent-skills:verification-skill` の maintain モード |
+| `/agent-skills:blast-radius` | `/agent-skills:challenge` の blast-radius モード |
+| `/agent-skills:interrogate` | `/agent-skills:challenge` の interrogate モード |
 | `/agent-skills:stage` | `/agent-skills:brief` の段階表モード(`/agent-skills:brief 단계표 보여줘`) |
 | `/agent-skills:todo` | `/agent-skills:brief` のやることモード(`/agent-skills:brief 할 일 보여줘`) |
 

@@ -644,8 +644,21 @@ def cmd_status(as_json):
         return 0
     for r in rs:
         print(f"{r['name']}: {LABEL[r['state']]} (기본 {r['default']}) · {r['detail']}\n  {r['what']}")
+    for line in land_drift():
+        print(line)
     print("\n켜기: skills-sync setup enable <이름>   끄기: skills-sync setup disable <이름>")
     return 0
+
+
+def land_drift():
+    """land_exec.py drift's warning lines (nothing with the executor off); one line when it cannot finish."""
+    try:
+        p = subprocess.run([sys.executable, "-I", str(LAND_EXEC), "drift"], capture_output=True, text=True, timeout=90)
+    except subprocess.TimeoutExpired:
+        return ["경고: land executor 범위 점검이 90초 안에 끝나지 않음 (orch land-exec drift)"]
+    if p.returncode:
+        return [f"경고: land executor 범위 점검 실패: {(p.stderr or p.stdout).strip()[:200]}"]
+    return p.stdout.splitlines()
 
 
 def report(a, code, msg):

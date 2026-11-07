@@ -489,6 +489,10 @@ def run_actions(args):
     if subprocess.run([sys.executable, str(store_py), "init"]).returncode:
         failed.append("orch db init")
     sys.stdout.flush()
+    # Acks and the stage table move into the DB on every PC after an update; a PC whose DB is not migrated yet is skipped.
+    if subprocess.run([sys.executable, str(store_py), "state", "--auto"]).returncode:
+        failed.append("orch db state")
+    sys.stdout.flush()
     steps = [] if args.update else [("skills-sync sync", "sync.py", "sync", "--no-broadcast")]
     for name, script, *rest in steps + [("skills-sync setup apply", "automations.py", "apply")]:
         sys.stdout.flush()

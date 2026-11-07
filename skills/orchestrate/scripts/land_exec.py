@@ -18,6 +18,7 @@ Usage: land_exec.py <command>   (also `orch land-exec <command>`)
   queue [--json]           requests, newest last: status, sha, reason, merge sha
   setup                    add the land_request table to agent-skills.db (a recorded step; enabling the automation runs it)
   status                   the last round and the queue counts
+  drift                    one warning line per gap between the scope and the repos in use (`skills-sync setup status`)
   auto                     read-only: what auto_queue would queue and why not for the rest, whatever its mode says
 
 With `land_executor.auto_queue` = {"mode": "shadow" | "on", "max_new_per_round": 1}, each round first looks at every open
@@ -30,6 +31,7 @@ import contextlib, datetime as dt, fcntl, json, os, pathlib, subprocess, sys, ti
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))  # run with -I, this file's directory is not on sys.path
 import autoqueue  # noqa: E402
+import land_scope  # noqa: E402
 import prog  # noqa: E402
 import store  # noqa: E402
 
@@ -118,7 +120,7 @@ class Round:
         def unanswered(what):
             """Wait for GitHub, but not past max_wait_hours: a repo gone or a token revoked never answers."""
             try:
-                limit = (prog.land_executor(repo) or {}).get("max_wait_hours", 24)
+                limit = (prog.land_executor() or {}).get("max_wait_hours", 24)
             except SystemExit:
                 limit = 24
             if age_h > limit:
@@ -140,16 +142,34 @@ class Round:
             return settle("merged", 0, "merged" if same else
                           f"merged at {v['headRefOid'][:8]}, not the requested {sha[:8]}, outside this request", msha)
         try:
-            ex = prog.land_executor(repo)
+            on = prog.land_executor()
         except SystemExit as e:
             return settle("refused", 1, f"the settings cannot be read: {e.code}")
-        if not ex:
-            return settle("refused", 1, f"orchestrate.land_executor is off for {repo}: land again (it merges directly)")
+        if not on:
+            return settle("refused", 1, "orchestrate.land_executor is off: land again (it merges directly)")
         login = self.owner_login()
         if login is None:
             return unanswered("GitHub did not answer `gh api user`: the repo's owner is unchecked")
-        if repo.split("/")[0].casefold() != login.casefold():
-            return settle("refused", 1, f"{repo} is not owned by the gh account '{login}'")
+        # GitHub follows a rename or a transfer from the recorded name: scope and owner are judged on the repo it is now,
+        # by the rule `orch land` used to send the request here (prog.executor_for).
+        try:
+            ex, meta = prog.executor_for(repo)
+        except SystemExit as e:
+            if str(e.code).startswith("refused: "):
+                return settle("refused", 1, str(e.code)[len("refused: "):])
+            return unanswered(f"GitHub did not answer `gh api repos/{repo}`: {str(e.code)[:160]}")
+        except (KeyError, TypeError, ValueError) as e:
+            return unanswered(f"GitHub did not answer `gh api repos/{repo}`: {e}"[:200])
+        current = meta["nameWithOwner"]
+        renamed = "" if current.casefold() == repo.casefold() else f" ({repo} is {current} on GitHub now)"
+        if not ex:
+            return settle("refused", 1, f"orchestrate.land_executor does not cover {repo}{renamed}: land again"
+                                        " (it merges directly)")
+        # An org's repo gets in only by name; its branch protection still holds the merge (BLOCKED waits, never bypassed).
+        if why := land_scope.owner_refused(ex["scope"], current, login):
+            return settle("refused", 1, why + renamed)
+        if why := land_scope.wildcard_only(ex["scope"], current, meta):
+            return settle("refused", 1, why)
         if age_h > ex["max_wait_hours"]:
             return settle("refused", 1, f"expired: queued {age_h:.0f} h, over max_wait_hours {ex['max_wait_hours']:g}")
         if p.cfg.get("merge_policy") != "autonomous":
@@ -170,6 +190,7 @@ class Round:
         verdict = prog.pr_state(p.events()).get(pr, {}).get("verdict")
         audit["verdict"] = verdict
         if why := prog.executor_verdict_problem(verdict, sha, ex["verdict_sources"]):
+            prog.release_own_lanes(p, pr)  # this refusal precedes attempt, so a lane taken in an earlier round would idle
             return settle("refused", 3, why)
         try:
             comments = prog.gh_json("pr", "view", str(pr), "--repo", repo, "--json", "comments").get("comments") or []
@@ -248,7 +269,7 @@ def programs_on(repo):
             continue
         if not isinstance(cfg, dict):
             unread = True
-        elif cfg.get("repo") == repo:
+        elif isinstance(cfg.get("repo"), str) and cfg["repo"].casefold() == repo.casefold():  # GitHub names ignore case
             try:
                 p = prog.Program(d.name)
                 found.append((d.name, p, p.events()))
@@ -257,11 +278,79 @@ def programs_on(repo):
     return found, unread
 
 
+def program_repos():
+    """The repo each readable program records, in directory order. An unreadable program adds none: it cannot be walked."""
+    out = []
+    try:
+        dirs = sorted(prog.HOME.iterdir())
+    except OSError:
+        return out
+    for d in dirs:
+        if d.name.startswith((".", "_")):
+            continue
+        try:
+            repo = json.loads((d / "program.json").read_text()).get("repo")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(repo, str) and repo.count("/") == 1:
+            out.append(repo)
+    return out
+
+
+def auto_repos(ex, say=lambda msg: None):
+    """The concrete repos the auto-queue walks: the repos entries by name, plus the repo every program here records when
+    the scope covers it (so OWNER/* needs no GitHub listing, a renamed repo is found under the name its program holds,
+    and the call count follows the programs, not the owner's repo count). Each is judged as the executor judges a
+    request (prog.executor_for: exclude, a rename or transfer; then the wildcard's owner, fork and archived rules), so
+    the auto-queue never writes a `ready` event or a request the executor would only refuse and withdraw. A wildcard
+    repo whose owner cannot be checked (`gh api user` unanswered) is left out."""
+    scope, out, seen, login = ex["scope"], [], set(), False
+    # A program's recorded spelling comes first: programs_on matches it exactly, so a differently cased entry must not win.
+    candidates = program_repos() + [e for e in ex["repos"] if not e.endswith("/*")]
+    for repo in candidates:
+        if repo.casefold() in seen:
+            continue
+        seen.add(repo.casefold())
+        if land_scope.excluded(scope, repo):
+            say(f"{repo}: skipped, it is in orchestrate.land_executor.exclude")
+            continue
+        # A program's repo the scope does not name may still be covered under the name GitHub gives it now, as the
+        # executor judges it; when it is not, it is another executor's or none, and the round says nothing about it.
+        named = bool(land_scope.how(scope, repo))
+        try:
+            on, meta = prog.executor_for(repo)
+        except SystemExit as e:
+            if named:
+                say(f"{repo}: skipped, the land executor's scope could not be judged: {str(e.code)[:200]}")
+            continue
+        if not on:
+            if named:
+                say(f"{repo}: skipped, orchestrate.land_executor does not cover it now (excluded, or renamed out of scope)")
+            continue
+        current = meta["nameWithOwner"]
+        if land_scope.how(scope, current) == "owner":
+            if login is False:
+                r = prog.run(["gh", "api", "user", "--jq", ".login"], check=False)
+                login = r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
+            if login is None:
+                say(f"{repo}: skipped, covered only by OWNER/* and GitHub did not answer `gh api user`")
+                continue
+            why = land_scope.owner_refused(scope, current, login)
+        else:
+            why = None
+        why = why or land_scope.wildcard_only(scope, current, meta)
+        if why:
+            say(f"{repo}: skipped, {why}")
+            continue
+        out.append(repo)
+    return out
+
+
 def auto_decisions(ex, say=lambda msg: None):
     """[(repo, row, program or None, queue?, reasons)] for each open PR of the executor's repos, oldest PR first.
     say: where a problem with a whole repo goes (the round's log; `auto` prints it and writes nothing)."""
     out = []
-    for repo in ex["repos"]:
+    for repo in auto_repos(ex, say):
         try:
             rows = prog.open_rows(repo)
         except SystemExit as e:
@@ -276,11 +365,13 @@ def auto_decisions(ex, say=lambda msg: None):
             known = {slug: (p, ev) for slug, p, ev in programs if pr in prog.pr_state(ev)}
             slug = next(iter(known)) if len(known) == 1 else None
             p, events = known[slug] if slug else (None, [])
+            # The request names the repo as the owning program records it: the executor compares that spelling exactly.
+            rrepo = p.cfg["repo"] if p else repo
             st = prog.pr_state(events).get(pr, {})
             verdict = st.get("verdict")
             c = {"owners": list(known), "programs_unread": unread,
                  "owner_autonomous": bool(p and p.cfg.get("merge_policy") == "autonomous"),
-                 "requested": bool(p) and store.land_seen(slug, str(p.dir.parent.resolve()), repo, pr, head),
+                 "requested": bool(p) and store.land_seen(slug, str(p.dir.parent.resolve()), rrepo, pr, head),
                  "withdrawn": autoqueue.withdrawn(events, pr), "main_red": bool(p) and prog.main_state(events) == "red",
                  "verdict_problem": prog.executor_verdict_problem(verdict, head, ex["verdict_sources"]),
                  "facts": {"state": "OPEN", "draft": bool(r.get("isDraft")), "merge_state": r.get("mergeStateStatus"),
@@ -301,7 +392,7 @@ def auto_decisions(ex, say=lambda msg: None):
                 ok, why = autoqueue.decide(c, late)
             except SystemExit as e:
                 ok, why = False, [f"GitHub did not answer: {str(e.code)[:120]}"]
-            out.append((repo, r, (slug, p) if slug else None, ok, why))
+            out.append((rrepo, r, (slug, p) if slug else None, ok, why))
     return out
 
 
@@ -481,7 +572,95 @@ def cmd_status(argv):
     return 0
 
 
-COMMANDS = {"round": cmd_round, "queue": cmd_queue, "setup": cmd_setup, "status": cmd_status, "auto": cmd_auto}
+DRIFT_DAYS = 7
+
+
+def drift_lines(today=None):
+    """One warning line per gap between the executor's scope and the repos in use: an owned repo with a PR of yours from
+    the last DRIFT_DAYS days that the scope leaves out, a repos entry GitHub now names differently, and a covered repo
+    with no `<name>-standalone` program. [] with the executor off; one line when GitHub or the settings do not answer."""
+    try:
+        ex = prog.land_executor()
+    except SystemExit as e:
+        return [f"경고: land executor 설정을 읽지 못해 범위를 점검하지 못함: {e.code}"]
+    if not ex:
+        return []
+    since = (today or dt.date.today()) - dt.timedelta(days=DRIFT_DAYS)
+    try:
+        login = prog.run(["gh", "api", "user", "--jq", ".login"]).stdout.strip()
+        found = prog.gh_json("search", "prs", "--author", "@me", "--created", f">={since.isoformat()}", "--limit", "1000",
+                             "--json", "repository")
+    except SystemExit as e:
+        return [f"경고: GitHub가 답하지 않아 land executor 범위를 점검하지 못함: {str(e.code)[:160]}"]
+    scope, out, covered, seen = ex["scope"], [], {}, {}
+    for p in found:
+        name = (p.get("repository") or {}).get("nameWithOwner")
+        if name:
+            seen.setdefault(name.casefold(), name)
+    for repo in sorted(seen.values(), key=str.casefold):
+        if repo.split("/")[0].casefold() != login.casefold() or land_scope.excluded(scope, repo):
+            continue
+        if land_scope.how(scope, repo):
+            covered.setdefault(repo.casefold(), repo)
+        else:
+            out.append(f"경고: {repo}는 최근 {DRIFT_DAYS}일 PR이 있는 소유 repo인데 land executor 범위 밖이다"
+                       " (skills-config로 orchestrate.land_executor.repos에 넣는다)")
+    for owner, name in sorted(scope["names"]):
+        entry = f"{owner}/{name}"
+        if land_scope.excluded(scope, entry):
+            continue
+        try:
+            now_named = prog.repo_meta(entry)["nameWithOwner"]
+        except (SystemExit, KeyError, TypeError, ValueError) as e:
+            out.append(f"경고: repos의 {entry}를 GitHub에서 확인하지 못함: {str(getattr(e, 'code', e))[:120]}")
+            continue
+        if now_named.casefold() != entry and land_scope.how(scope, now_named) \
+                and not land_scope.owner_refused(scope, now_named, login):
+            covered.setdefault(now_named.casefold(), now_named)  # OWNER/* still covers the new name
+        elif now_named.casefold() != entry:
+            out.append(f"경고: repos의 {entry}는 GitHub에서 {now_named}로 이름이 바뀌어 범위에서 빠졌다"
+                       " (skills-config로 새 이름을 넣는다)")
+        else:
+            covered.setdefault(entry, now_named)
+    # OWNER/* covers every source repo of the owner that is not archived: exactly what this listing returns.
+    for owner in sorted(scope["owners"]):
+        if owner != login.casefold():
+            out.append(f"경고: {owner}/*는 gh 계정({login})이 아니어서 executor가 거절한다"
+                       " (org repo는 OWNER/NAME으로 하나씩 넣는다)")
+            continue
+        try:
+            listed = prog.gh_json("repo", "list", owner, "--source", "--no-archived", "--limit", "1000",
+                                  "--json", "nameWithOwner")
+        except SystemExit as e:
+            out.append(f"경고: {owner}/*의 repo 목록을 GitHub에서 받지 못함: {str(e.code)[:120]}")
+            continue
+        for r in listed:
+            name = r.get("nameWithOwner") or ""
+            if name and land_scope.how(scope, name):
+                covered.setdefault(name.casefold(), name)
+    missing = []
+    for repo in sorted(covered.values(), key=str.casefold):
+        slug = f"{repo.split('/')[-1]}-standalone"
+        try:
+            ok = json.loads((prog.HOME / slug / "program.json").read_text())["repo"].casefold() == repo.casefold()
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            ok = False
+        if not ok:
+            missing.append(repo)
+    if missing:
+        out.append(f"경고: 범위 안인데 <name>-standalone program이 없는 repo {len(missing)}개: {', '.join(missing)}"
+                   " (`orch verdict|land <name>-standalone --repo OWNER/NAME`가 처음 부를 때 만든다)")
+    return out
+
+
+def cmd_drift(argv):
+    for line in drift_lines():
+        print(line)
+    return 0
+
+
+COMMANDS = {"round": cmd_round, "queue": cmd_queue, "setup": cmd_setup, "status": cmd_status, "drift": cmd_drift,
+            "auto": cmd_auto}
 
 
 def main(argv):

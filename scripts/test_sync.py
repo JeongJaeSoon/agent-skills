@@ -167,6 +167,17 @@ def test_sync():
     state = tmp / "state"
     env = dict(os.environ, AGENT_SKILLS_STATE=str(state), SKILLS_SYNC_NO_NOTIFY="1", SKILLS_SYNC_ORCA="false")
     live, other = setup(tmp)
+    # On macOS a notification is an `osascript` call: a fake one on PATH logs the text so the de-dup can be counted.
+    mac, notes = sys.platform == "darwin", tmp / "notes.log"
+    if mac:
+        (tmp / "bin").mkdir()
+        (tmp / "bin" / "osascript").write_text(f'#!/bin/sh\nprintf "%s\\n" "$2" >> {notes}\n')
+        os.chmod(tmp / "bin" / "osascript", 0o755)
+        env["PATH"] = f"{tmp / 'bin'}:{env['PATH']}"
+        del env["SKILLS_SYNC_NO_NOTIFY"]
+
+    def told():
+        return notes.read_text().count("DB state step") if notes.exists() else 0
 
     code, out = run_sync(live, env, "sync", "--no-broadcast")
     check("up to date", code == 0 and "up to date" in out, out)
@@ -177,6 +188,38 @@ def test_sync():
     pending = json.loads((state / "reload-pending.json").read_text())
     check("a SKILL.md change queues /reload-skills", pending["kind"] == "skills", pending)
 
+    # After a successful sync the loaded checkout's own `store.py state --auto` runs (a PC moves its acks and stage
+    # table into the DB without anyone running setup); a stopped sync does not run it.
+    store_py = live / "skills" / "orchestrate" / "scripts" / "store.py"
+    store_py.parent.mkdir(parents=True, exist_ok=True)
+    with (live / ".git" / "info" / "exclude").open("a") as f:
+        f.write("skills/orchestrate/\n")  # like scripts/: present in the loaded checkout, not part of this fixture's history
+    store_py.write_text("import pathlib, sys\n"
+                        f"pathlib.Path({str(tmp / 'state-step.log')!r}).open('a').write(' '.join(sys.argv[1:]) + '\\n')\n"
+                        f"out = pathlib.Path({str(tmp / 'state-step.out')!r})\n"
+                        "print(out.read_text() if out.exists() else 'tombstoned acks.jsonl, stages.json')\n"
+                        f"rc = pathlib.Path({str(tmp / 'state-step.rc')!r})\n"
+                        "sys.exit(int(rc.read_text()) if rc.exists() else 0)\n")
+    commit(other, "docs/y.md", "y\n"); git(other, "push", "-q", "origin", "main")
+    code, out = run_sync(live, env, "sync", "--no-broadcast")
+    log = tmp / "state-step.log"
+    check("a successful sync runs `store.py state --auto`", code == 0 and log.exists() and log.read_text() == "state --auto\n", (out, log.exists()))
+    check("the state step's output is shown", "tombstoned acks.jsonl, stages.json" in out, out)
+    check("the state step is recorded", json.loads((state / "sync.json").read_text()).get("state") == "ok",
+          (state / "sync.json").read_text())
+    (tmp / "state-step.out").write_text("already imported and tombstoned")
+    code, out = run_sync(live, env, "sync", "--no-broadcast")
+    check("a no-op step stays out of the log", "already imported" not in out and "up to date" in out, out)
+    (tmp / "state-step.out").unlink()
+    (tmp / "state-step.rc").write_text("1")
+    code, out = run_sync(live, env, "sync", "--no-broadcast")
+    check("a failing step is recorded and does not fail the sync",
+          code == 0 and json.loads((state / "sync.json").read_text()).get("state") == "failed", out)
+    if mac:
+        check("a first failure is told once", told() == 1, notes.read_text() if notes.exists() else "no notes")
+        run_sync(live, env, "sync", "--no-broadcast")
+        check("a repeat failure is not told again", told() == 1, notes.read_text())
+
     commit(other, "hooks/hooks.json", "{}\n"); git(other, "push", "-q", "origin", "main")
     run_sync(live, env, "sync", "--no-broadcast")
     check("a hooks change raises the queue to /reload-plugins",
@@ -185,12 +228,29 @@ def test_sync():
     (live / "skills/a/SKILL.md").write_text("local edit\n")
     commit(other, "docs/x.md", "x\n"); git(other, "push", "-q", "origin", "main")
     head = git(live, "rev-parse", "HEAD")
+    steps_before = log.read_text().count("\n")
     code, out = run_sync(live, env, "sync", "--no-broadcast")
     check("stops on uncommitted changes", code == 1 and "uncommitted" in out and git(live, "rev-parse", "HEAD") == head, out)
     st = json.loads((state / "sync.json").read_text())
     check("the stop is recorded", st["ok"] is False and "uncommitted" in st["message"], st)
+    check("a stopped sync does not run the state step", log.read_text().count("\n") == steps_before, log.read_text())
+    check("a stopped sync keeps the last state, so a repeat failure is not told again", st.get("state") == "failed", st)
+    if mac:
+        check("a stopped sync after a failure does not tell it again", told() == 1, notes.read_text())
     git(live, "checkout", "-q", "--", ".")
+    run_sync(live, env, "sync", "--no-broadcast")  # the step still fails after the stop
+    if mac:
+        check("a failure after a stopped sync is not told again", told() == 1, notes.read_text())
+    (tmp / "state-step.rc").unlink()
+    if mac:  # ok, then failing again, is news again
+        run_sync(live, env, "sync", "--no-broadcast")
+        check("a recovered step is recorded ok", json.loads((state / "sync.json").read_text()).get("state") == "ok")
+        (tmp / "state-step.rc").write_text("1")
+        run_sync(live, env, "sync", "--no-broadcast")
+        check("failing again after a recovery is told again", told() == 2, notes.read_text())
+        (tmp / "state-step.rc").unlink()
 
+    commit(other, "docs/z.md", "z\n"); git(other, "push", "-q", "origin", "main")  # the syncs above caught live up; diverge it again
     commit(live, "skills/b/SKILL.md", "local\n")
     code, out = run_sync(live, env, "sync", "--no-broadcast")
     check("stops when diverged, without rebasing", code == 1 and "diverged" in out, out)
