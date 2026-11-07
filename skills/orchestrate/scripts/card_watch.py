@@ -117,6 +117,30 @@ def card_name(t):
     return (t.get("worktreePath") or "").rstrip("/").rsplit("/", 1)[-1] or t.get("handle")
 
 
+SETUP_STATE = STATE_DIR.parent  # card.py's start helpers log under <state>/close-setup and <state>/goal-input
+GOAL_NOT_TYPED = "the /goal line was not typed"
+
+
+def setup_failure(name):
+    """(helper, reason, manual command or "") when a start helper's log for card `name` ends in a failure, else None. A log with no verdict
+    (still running, missing, unreadable) is none: close-setup ends on `result: ok|failed`, and the /goal input's
+    newest line says whether it typed. The log is appended to, so only its last verdict counts."""
+    def last_lines(helper):
+        try:
+            return [l.strip() for l in (SETUP_STATE / helper / f"{name}.log").read_text(errors="replace").splitlines() if l.strip()]
+        except OSError:
+            return []
+    lines = last_lines("close-setup")
+    if lines and lines[-1] == "result: failed":
+        return "close-setup", (lines[-2] if len(lines) > 1 else "see its log"), ""
+    verdicts = [l for l in last_lines("goal-input") if GOAL_NOT_TYPED in l or "typed the /goal line" in l or "already ran /goal" in l]
+    if verdicts and GOAL_NOT_TYPED in verdicts[-1]:
+        text = verdicts[-1].split("warning: ", 1)[-1]
+        reason, _, manual = text.partition(". Once ")  # the helper prints the manual command after "run: "
+        return "goal-input", reason, manual.partition("run: ")[2]
+    return None
+
+
 def scan(terms, seen, read, now_ms, idle_min, free_gb, min_free_gb, goal_lost_min=15, waits=None, agents=None, states=None):
     """Lines for findings not in seen; seen becomes this round's findings, so a cleared one can come back.
 
@@ -156,6 +180,15 @@ def scan(terms, seen, read, now_ms, idle_min, free_gb, min_free_gb, goal_lost_mi
         goal = under_goal(t, tail)
         if goal:
             goals.add(h)
+        # A card that never started looks idle, so this is judged apart from the screen findings, once per failure.
+        failed = setup_failure(name)
+        if failed:
+            helper, reason, manual = failed
+            skey = f"setup:{helper}:{hashlib.sha1(reason.encode()).hexdigest()[:12]}"
+            now[h + ":setup"] = skey
+            if seen.get(h + ":setup") != skey:
+                manual = manual or f"skills-sync close-setup {t.get('worktreePath')} --agent {h}   # then: orca terminal read --terminal {h} --screen"
+                out += [f"SETUP FAILED {name}: {helper} ({reason})", f"  {manual}"]
         if auth:
             kind, question, key = "auth", auth, "auth:" + hashlib.sha1(auth.encode()).hexdigest()[:12]
         elif hit:
