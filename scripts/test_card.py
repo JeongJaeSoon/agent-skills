@@ -234,7 +234,7 @@ def goal_brief(name, n, suffix=""):
     return str(p)
 
 
-STATE_FILES = lambda: sorted((str(f.relative_to(card.STATE)), f.read_bytes()) for f in card.STATE.rglob("*") if f.is_file())
+STATE_FILES = lambda: sorted((str(f.relative_to(card.STATE)), f.read_bytes() if f.is_file() else None) for f in card.STATE.rglob("*"))
 # The limit applies to the line the worker is typed, i.e. after the brief path is appended: 3500 passes, 3501 is refused,
 # although the line as written (without the path) is under the limit in both cases.
 for n, want in ((card.GOAL_MAX, 0), (card.GOAL_MAX + 1, 2)):
@@ -259,6 +259,15 @@ before = (pathlib.Path(p).read_bytes(), STATE_FILES(), list(GOALS), list(SETUPS)
 rc, out, err, calls = go(p, "--repo", "name:acme", "--name", "acme-clean")
 assert rc == 2 and not calls, (rc, calls)
 assert (pathlib.Path(p).read_bytes(), STATE_FILES(), GOALS, SETUPS) == before, "a refused card left a trace"
+# Earlier cards already made the lock file, so also refuse against a state directory that does not exist yet: taking
+# the lock (or any state write) before the check would create it.
+REAL_STATE = card.STATE
+card.STATE = tmp / "never-created-state"
+try:
+    rc, out, err, calls = go(p, "--repo", "name:acme", "--name", "acme-clean2")
+    assert rc == 2 and not calls and not card.STATE.exists(), (rc, calls, card.STATE.exists())
+finally:
+    card.STATE = REAL_STATE
 # A lookup that fails, or no handle at all, creates nothing and prints the choices.
 rc, out, err, calls = go(path, "--repo", "r", "--name", "x", mode="stale-terminal")
 assert rc == 6 and not creates(calls) and "terminal_handle_stale" in err and "--no-parent" in err and "  1. " in err, (rc, err)
