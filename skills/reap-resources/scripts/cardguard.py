@@ -77,10 +77,11 @@ def _orca_as_seen(*args):
     return _orca(args)
 
 
-def worker_pages(state=None, every_run=True, deadline=None):
+def worker_pages(state=None, every_run=True, deadline=None, first_only=False):
     """Every page of `orca orchestration worker-list`. Raises when a page fails, the budget runs out (deadline; with
     none, the page cap), or (every_run) the list is scoped to one Run: a list cut short is a failure, not a smaller
-    fleet. every_run=False reads as the caller's terminal sees it, unchecked."""
+    fleet. every_run=False reads as the caller's terminal sees it, unchecked. first_only: the newest page alone, for a
+    caller that asked for it."""
     if deadline and time.time() > deadline - 30:
         raise TimeoutError("worker-list pages left unread")
     rows, call = [], (lambda *a: _orca_every_run(a)) if every_run else _orca_as_seen
@@ -91,7 +92,7 @@ def worker_pages(state=None, every_run=True, deadline=None):
         if every_run and (res.get("scope") or {}).get("source", "all") != "all":
             raise RuntimeError(f"worker-list scoped to {res['scope']}, not every Run")
         rows += page
-        if not more:
+        if not more or first_only:
             return rows
         if deadline and time.time() > deadline - 30:
             raise TimeoutError("worker-list pages left unread")

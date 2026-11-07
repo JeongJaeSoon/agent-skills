@@ -99,6 +99,75 @@ CHECKS = (("load_per_cpu", True), ("mem_free_pct", False), ("vm_pressure", True)
 SAMPLED = ("swapout_pps", "cpu_idle_pct", "docker_mem_pct", "docker_cpu_pct", "swap_growth_gb_h")
 LEVELS = ("ok", "warn", "danger")
 LEVEL_KO = {"ok": "정상", "warn": "경고", "danger": "위험"}
+# Only the patrol trigger reads these: `level`, gate_open and the hook keep judging the raw metrics, so a release
+# held here never keeps heavy starts or new cards blocked.
+TRIGGER_RELEASE_LOAD = 1.7  # a load-driven danger leaves the trigger level only below this (entry is the danger threshold)
+TRIGGER_MIN_GAP_S = 15 * 60
+TRIGGER_RETRY_S = 5 * 60  # a start patrol did not take is asked again after this
+
+
+def trigger_level(prev, held, level, m, load_danger):
+    """(trigger level, held): the raw level, except that a danger the load drove (load_danger: judge counted the load
+    as danger, its idle cap included) is kept while the load stays at or above the release line, so a load hovering
+    around the entry threshold does not read as a fresh rise every few minutes. `held` is whether the trigger's danger
+    is load-driven; a danger another metric drove leaves with that metric."""
+    load = m.get("load_per_cpu")
+    kept = prev == "danger" and held and load is not None and load >= TRIGGER_RELEASE_LOAD
+    if level == "danger":
+        return level, bool(load_danger or kept)
+    return ("danger", True) if kept else (level, False)
+
+
+PATROL_MEMO = reap.STATE / "patrol-state.json"  # patrol's own record of its last round: t, and the trigger level it ran at
+
+
+def read_patrol_memo():
+    try:
+        memo = json.loads(PATROL_MEMO.read_text())
+        return memo if isinstance(memo, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+TRIGGER_OBS_KEEP = 24
+
+
+def valid_obs(obs):
+    """The entries of a stored history that are [time, level]: pressure.json is read back by two programs and can hold
+    anything, and a round must not stop on it."""
+    return [o for o in obs if isinstance(o, list) and len(o) == 2 and isinstance(o[0], (int, float))
+            and not isinstance(o[0], bool) and o[1] in LEVELS] if isinstance(obs, list) else []
+
+
+def trigger_obs_add(obs, tlevel, now, since=0):
+    """The trigger level's changes, [time, level], newest last: the history `floor_since` reads. It is kept by the
+    pressure round alone and timestamped, so it does not depend on when patrol commits its memo. Entries from the
+    future (the clock was set back) and those patrol's last round has already seen are dropped; past the cap the
+    lowest of what falls off stays, since a start patrol never took still needs the lowest level seen. `now` is the
+    time the entry is saved, not the round's start: patrol's round that began meanwhile has then read it or not."""
+    obs = [o for o in valid_obs(obs) if since <= o[0] <= now]
+    if not obs or obs[-1][1] != tlevel:
+        obs.append([now, tlevel])
+    if len(obs) > TRIGGER_OBS_KEEP:
+        cut = len(obs) - TRIGGER_OBS_KEEP + 1
+        obs = [min(obs[:cut], key=lambda o: LEVELS.index(o[1])), *obs[cut:]]
+    return obs
+
+
+def floor_since(obs, memo):
+    """The lowest trigger level since patrol's last round began (memo.t is when it began, memo.level the level it saw
+    then). A fall starts no round, so only this floor lets a climb back to the old level read as a rise, including a
+    fall that happened while that round was still gathering."""
+    since = memo.get("t") or 0
+    return min([memo.get("level") if memo.get("level") in LEVELS else "ok",
+                *(o[1] for o in valid_obs(obs) if o[0] >= since)], key=LEVELS.index)
+
+
+def rise_due(floor, last_round_t, tlevel, now):
+    """The one rule for starting a patrol round on pressure: the trigger level is above the floor, and the last round is
+    at least TRIGGER_MIN_GAP_S old. The pressure round and `orch patrol --if-due` both ask it, against patrol's memo, so
+    a start that patrol refused or never ran is asked again next round."""
+    return LEVELS.index(tlevel) > LEVELS.index(floor) and now - last_round_t >= TRIGGER_MIN_GAP_S
 
 
 def config(overrides=()):
@@ -952,6 +1021,7 @@ def leak_notice(cfg, m, st, record, now, dry_run, out, send_fn):
 def round_once(cfg, dry_run, out=print, now=None, measure_fn=measure, sample_fn=None, plan_fn=plan_targets,
                reap_fn=reap_plan, consumers_fn=consumers, send_fn=send, idle_fn=None):
     now = now or time.time()
+    started = time.monotonic()
     st = load_state()  # a dry run reads the last counters too, and saves nothing
     st.update((sample_fn or (lambda s, t: take_sample(s, t, cfg)))(st, now))
     m = snapshot(cfg, st, now, measure_fn)
@@ -963,6 +1033,16 @@ def round_once(cfg, dry_run, out=print, now=None, measure_fn=measure, sample_fn=
     if why:
         out(f"- 임계값 초과: {', '.join(why)}")
     record = {"t": now, "level": level, "metrics": m, "why": why}
+    load_danger = any(metric == "load_per_cpu" and lvl == 2 for metric, lvl, _ in hits(m, cfg))
+    tlevel, held = trigger_level(st.get("trigger_level") or "ok", st.get("trigger_held"), level, m, load_danger)
+    memo = read_patrol_memo()
+    saved_at = now + (time.monotonic() - started)
+    obs = trigger_obs_add(st.get("trigger_obs"), tlevel, saved_at, memo.get("t") or 0)
+    # A start patrol refused or never ran is asked again, but not every round.
+    fire = rise_due(floor_since(obs, memo), memo.get("t") or 0, tlevel, now) and saved_at - st.get("spawn_t", 0) >= TRIGGER_RETRY_S
+    record.update(trigger_level=tlevel, trigger_held=held, trigger_obs=obs)
+    if fire:
+        record["spawn_t"] = saved_at
     if level != "danger" and st.get("dash_t") and not dry_run:
         dash_note("resolve")
         st.pop("dash_t")
@@ -971,9 +1051,16 @@ def round_once(cfg, dry_run, out=print, now=None, measure_fn=measure, sample_fn=
         for e in queue_expire(now):
             out(f"- 대기열 {e['id']} 포기(기한 지남): {e['what']}")
     if not dry_run:  # before the sweep, which can take minutes: the hook and check judge this sample meanwhile
+        written_at = now + (time.monotonic() - started)  # the notices above took time: stamp when it is written
+        if obs and obs[-1][0] == saved_at:
+            obs[-1][0] = written_at
+        if fire:
+            record["spawn_t"] = written_at
         save_state({**st, **record})
         with contextlib.suppress(OSError):  # the chart's point is not worth failing the round over
             history_add(record, queued_count())
+        if fire:  # before the warn early return below: a rise the gap held back fires here once it is over
+            reap.spawn_patrol(f"pressure {level}")
     if level == "ok":
         if not dry_run:
             if st.get("level") not in (None, "ok"):
@@ -986,8 +1073,6 @@ def round_once(cfg, dry_run, out=print, now=None, measure_fn=measure, sample_fn=
             save_state({**st, **record})
         return 1
     kinds = safe_kinds(cfg)
-    if not dry_run and st.get("level") != level:
-        reap.spawn_patrol(f"pressure {level}")  # patrol ties this load to the state of each card behind it (its L rule)
     plan_path = PLAN.with_name("pressure-plan.dry-run.json") if dry_run else PLAN
     # Set even when the scan failed: the warn deny asked for one round, and a failure every round must not hold
     # every heavy start at warn.

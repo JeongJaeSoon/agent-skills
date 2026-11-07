@@ -72,8 +72,9 @@ A finding's title ends in what the signal said. A screen is compared only where 
 goes beside it as its own field. "OK nothing found" means the round missed nothing: every source and screen read,
 every Claude card with a signal. Otherwise the line opens PARTIAL and names what is missing ("신호 없음" for the signal).
 
---if-due runs only when the last round is 25+ minutes old or the pressure level rose to warn or danger since it
-(reap-hard calls this every pass, the pressure round when its level changes). The round gives up at 120 seconds.
+--if-due runs only when the last round is 25+ minutes old, or the pressure trigger level rose to warn or danger since it
+and the round is 15+ minutes old (reap-hard calls this every pass, the pressure round when the level rises). The trigger
+level is pressure's own hysteresis: a load-driven danger holds until the load is under 1.7. A fall never starts a round. The round gives up at 120 seconds.
 
 The same file also carries the cleanup v2 fields, which nothing reads yet: schema, round, complete, sources, activity
 (parked, unknown; parked only for a card that still has an agent terminal, since a card without one wakes nobody), timings, and candidates_t (when the scans started) with candidates/reports/alerts from ../../reap-resources/scripts/candidates.py. That phase
@@ -174,9 +175,43 @@ VOLATILE = re.compile(r"\d{4}-\d\d-\d\dT[\d:.]+Z?|\b\d{1,2}:\d\d(?::\d\d)?\b|\b\
 
 # ---------------------------------------------------------------- reading
 
-def all_workers(deadline):
-    """Every page of worker-list over every Run; a list cut short by the budget is a failure, not a smaller fleet."""
-    return cardguard.worker_pages(deadline=deadline)
+LIVE_TERMINAL_STATES = ("active", "reclaimable", "retained", "release_pending", "release_unknown")
+WORKERS_CURSOR = STATE / "patrol-workers.json"
+
+
+def all_workers(deadline, now=None, pages=None):
+    """Every worker over every Run; a list cut short by the budget is a failure, not a smaller fleet. The workers whose
+    terminal is released are the bulk of the list and a settled Dispatch cannot move, so they are read again only every
+    fleet.SETTLED_EVERY seconds (the cursor in WORKERS_CURSOR); the rest of the states are read every round. The five
+    live states and `released` partition the list."""
+    now, pages = now or time.time(), pages or cardguard.worker_pages
+    live = {}
+    for state in LIVE_TERMINAL_STATES:
+        for w in pages(state=state, deadline=deadline):
+            live[w.get("dispatchId")] = w
+    cur = fleet.read_json(WORKERS_CURSOR, {}) or {}
+    cached = {w.get("dispatchId"): w for w in cur.get("released") or []}
+    gone = [w for i, w in (cur.get("live") or {}).items() if i not in live and i not in cached]
+    settled = lambda ws: all(w.get("dispatchStatus") in fleet.SETTLED for w in ws)
+    released = None
+    if 0 <= now - (cur.get("t") or 0) < fleet.SETTLED_EVERY and settled(gone):
+        # Newest first: a worker created since the cursor sits on the first page. That page must hold a row the cursor
+        # knows (or be empty), else a page or more of workers is new and the whole list is read.
+        newest = pages(state="released", deadline=deadline, first_only=True)
+        known = {*cached, *live, *(w.get("dispatchId") for w in gone)}
+        new = [w for w in newest if w.get("dispatchId") not in known]
+        if settled(new) and (not newest or len(new) < len(newest)):
+            released = list(cached.values()) + [{**w, "terminalState": "released"} for w in gone] + new
+            stamp = cur["t"]
+    if released is None:
+        released, stamp = pages(state="released", deadline=deadline), now
+        if not settled(released):
+            stamp = 0  # a released worker still moving: no cursor, read it every round
+    rows = list(live.values()) + [w for w in released if w.get("dispatchId") not in live]
+    if not CURRENT.get("dry"):  # a dry round writes nothing
+        with contextlib.suppress(OSError):
+            fleet.write_atomic(WORKERS_CURSOR, json.dumps({"t": stamp, "released": released, "live": live}))
+    return rows
 
 
 def card_name(path):
@@ -293,6 +328,15 @@ def sent_supersedes(now, days=3):
 def pressure_level():
     st = fleet.read_json(PRESSURE, {}) or {}
     return st.get("level") or "ok", st.get("t") or 0
+
+
+def trigger_level(memo):
+    """(level, floor) `due` compares: pressure's hysteresis-held level, which only the patrol trigger reads, and the
+    lowest it was since the round in `memo` began."""
+    import pressure  # here, not at the top: the hooks that import patrol stay off pressure's imports
+    st = fleet.read_json(PRESSURE, {}) or {}
+    level = next((v for v in (st.get("trigger_level"), st.get("level")) if v in pressure.LEVELS), "ok")
+    return level, pressure.floor_since(st.get("trigger_obs"), memo)
 
 
 def consumers():
@@ -889,9 +933,13 @@ def pending_lines(me, unowned, now=None):
 
 # ---------------------------------------------------------------- round
 
-def due(memo, level, now, every=DUE_S):
-    rose = level in ("warn", "danger") and memo.get("level") != level
-    return rose or now - (memo.get("t") or 0) >= every
+def due(memo, level, now, every=DUE_S, floor=None):
+    """level: the trigger level (pressure's hysteresis applied), not the raw one; floor: the lowest it was since the last
+    round (pressure's, else the memo's level). A rise over the floor starts a round only 15 minutes after the last one;
+    a fall never does."""
+    import pressure  # here, not at the top: the hooks that import patrol stay off pressure's imports
+    last = memo.get("t") or 0
+    return pressure.rise_due(floor or memo.get("level") or "ok", last, level, now) or now - last >= every
 
 
 @contextlib.contextmanager
@@ -1069,12 +1117,14 @@ def switch_round(drifts, rows, notes, path_of, switch):
 def round_once(dry=False, if_due=False, now=None, gather_fn=gather, rid=None, fallback=False):
     now = now or time.time()
     memo = fleet.read_json(MEMO, {}) or {}
-    level, _ = pressure_level()
-    if if_due and not due(memo, level, now, FALLBACK_DUE_S if fallback else DUE_S):
+    tlevel, floor = trigger_level(memo)
+    if if_due and not due(memo, tlevel, now, FALLBACK_DUE_S if fallback else DUE_S, floor):
         return None
     t0 = time.monotonic()
+    CURRENT["dry"] = dry
     facts, notes = gather_fn(now, time.time() + BUDGET_S, memo)
     findings, verdicts, memo2 = judge(facts, memo)
+    memo2["level"] = tlevel  # what the next `due` compares a rise against; the raw level stays in facts
     rid = rid or round_id(now)
     partial = signal_round(facts, findings, verdicts, memo, memo2, notes, dry, rid) if facts.get("agents_fn") else ""
     verdicts.update(schema=2, round=rid, complete=False,
