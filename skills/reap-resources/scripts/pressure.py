@@ -106,17 +106,16 @@ TRIGGER_MIN_GAP_S = 15 * 60
 TRIGGER_RETRY_S = 5 * 60  # a start patrol did not take is asked again after this
 
 
-def trigger_level(prev, held, level, m, enter=2.0):
-    """(trigger level, held): the raw level, except that a danger the load drove (the load reached `enter`) is kept while
-    the load stays at or above the release line, so a load hovering around the entry threshold does not read as a
-    fresh rise every few minutes. `held` is whether the trigger's danger is load-driven; a danger another metric
-    drove leaves with that metric."""
+def trigger_level(prev, held, level, m, load_danger):
+    """(trigger level, held): the raw level, except that a danger the load drove (load_danger: judge counted the load
+    as danger, its idle cap included) is kept while the load stays at or above the release line, so a load hovering
+    around the entry threshold does not read as a fresh rise every few minutes. `held` is whether the trigger's danger
+    is load-driven; a danger another metric drove leaves with that metric."""
     load = m.get("load_per_cpu")
+    kept = prev == "danger" and held and load is not None and load >= TRIGGER_RELEASE_LOAD
     if level == "danger":
-        return level, load is not None and enter is not None and load >= enter
-    if prev == "danger" and held and load is not None and load >= TRIGGER_RELEASE_LOAD:
-        return "danger", True
-    return level, False
+        return level, bool(load_danger or kept)
+    return ("danger", True) if kept else (level, False)
 
 
 PATROL_MEMO = reap.STATE / "patrol-state.json"  # patrol's own record of its last round: t, and the trigger level it ran at
@@ -1006,9 +1005,13 @@ def round_once(cfg, dry_run, out=print, now=None, measure_fn=measure, sample_fn=
     if why:
         out(f"- 임계값 초과: {', '.join(why)}")
     record = {"t": now, "level": level, "metrics": m, "why": why}
-    tlevel, held = trigger_level(st.get("trigger_level") or "ok", st.get("trigger_held"), level, m, cfg["load_per_cpu"][1])
+    load_danger = any(metric == "load_per_cpu" and lvl == 2 for metric, lvl, _ in hits(m, cfg))
+    tlevel, held = trigger_level(st.get("trigger_level") or "ok", st.get("trigger_held"), level, m, load_danger)
     memo = read_patrol_memo()
     floor = trigger_floor(st, memo, tlevel)
+    # floor_t: when the floor last fell, so patrol can tell a fall during its round (which its memo must keep) from one before it.
+    tracked = st.get("trigger_floor") if st.get("floor_for") == memo.get("t") else None
+    record["floor_t"] = now if floor != (tracked or memo.get("level") or "ok") else st.get("floor_t", 0) if tracked else 0
     # A start patrol refused or never ran is asked again, but not every round.
     fire = rise_due(floor, memo.get("t") or 0, tlevel, now) and now - st.get("spawn_t", 0) >= TRIGGER_RETRY_S
     record.update(trigger_level=tlevel, trigger_held=held, trigger_floor=floor, floor_for=memo.get("t"))

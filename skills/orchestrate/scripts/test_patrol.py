@@ -520,9 +520,25 @@ assert patrol.due({"t": NOW - 26 * 60, "level": "danger"}, "danger", NOW)
 assert patrol.due({"t": NOW - 16 * 60, "level": "danger"}, "danger", NOW, floor="warn"), "danger again after a fall to warn"
 assert not patrol.due({"t": NOW - 16 * 60, "level": "danger"}, "danger", NOW, floor="danger")
 # trigger_level reads pressure's floor only for the round it tracked.
-patrol.PRESSURE.write_text(json.dumps({"level": "warn", "trigger_level": "danger", "trigger_floor": "ok", "floor_for": 5}))
-assert patrol.trigger_level({"t": 5}) == ("danger", "ok") and patrol.trigger_level({"t": 6}) == ("danger", None)
+patrol.PRESSURE.write_text(json.dumps({"level": "warn", "trigger_level": "danger", "trigger_floor": "ok", "floor_for": 5, "floor_t": 77}))
+assert patrol.trigger_level({"t": 5}) == ("danger", "ok", 77) and patrol.trigger_level({"t": 6}) == ("danger", None, 0)
+# A fall pressure saw while the round gathered (its floor is written against the memo the round replaces) stays in the
+# memo the round commits; one it saw before the round started does not.
+patrol.MEMO.write_text(json.dumps({"t": 5, "level": "danger"}))
+def pressure_falls(at):
+    def gather(now, deadline, memo):
+        patrol.PRESSURE.write_text(json.dumps({"level": "danger", "trigger_level": "danger", "trigger_floor": "warn",
+                                               "floor_for": 5, "floor_t": at}))
+        return facts(now=now), []
+    return gather
+patrol.PRESSURE.write_text(json.dumps({"level": "danger", "trigger_level": "danger", "trigger_floor": "danger", "floor_for": 5}))
+patrol.round_once(now=1000.0, gather_fn=pressure_falls(1010.0))
+assert json.loads(patrol.MEMO.read_text())["level"] == "warn" and json.loads(patrol.MEMO.read_text())["t"] == 1000.0
+patrol.MEMO.write_text(json.dumps({"t": 5, "level": "danger"}))
+patrol.round_once(now=2000.0, gather_fn=pressure_falls(1500.0))
+assert json.loads(patrol.MEMO.read_text())["level"] == "danger", "a fall before the round started is not this round's"
 patrol.PRESSURE.unlink()
+patrol.MEMO.unlink()
 
 # The workers read: the live terminal states every round, the released ones (the bulk, settled) only every
 # SETTLED_EVERY, plus the newest released page every round for a worker created since. A worker that left the live

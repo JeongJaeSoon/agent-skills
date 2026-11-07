@@ -385,15 +385,20 @@ for bad in (["turns", "--wait"], ["turns", "--wait", "soon"], ["turns", "--wait"
 
 # The patrol trigger: a rise only, held by hysteresis (a load-driven danger leaves at 1.7, not 2.0) and 15 minutes apart.
 # `level`, which the gate and the hook read, still follows the raw metrics.
-assert p.trigger_level("danger", True, "warn", {"load_per_cpu": 1.8}) == ("danger", True)
-assert p.trigger_level("danger", True, "warn", {"load_per_cpu": 1.69}) == ("warn", False)
-assert p.trigger_level("danger", True, "warn", {"load_per_cpu": None}) == ("warn", False)
-assert p.trigger_level("warn", False, "warn", {"load_per_cpu": 1.8}) == ("warn", False)
-assert p.trigger_level("ok", False, "danger", {"load_per_cpu": 2.1}) == ("danger", True)
+assert p.trigger_level("danger", True, "warn", {"load_per_cpu": 1.8}, False) == ("danger", True)
+assert p.trigger_level("danger", True, "warn", {"load_per_cpu": 1.69}, False) == ("warn", False)
+assert p.trigger_level("danger", True, "warn", {"load_per_cpu": None}, False) == ("warn", False)
+assert p.trigger_level("warn", False, "warn", {"load_per_cpu": 1.8}, False) == ("warn", False)
+assert p.trigger_level("ok", False, "danger", {"load_per_cpu": 2.1}, True) == ("danger", True)
 # A danger another metric drove (memory) is not held by the load: it leaves with that metric.
-assert p.trigger_level("ok", False, "danger", {"load_per_cpu": 1.8}) == ("danger", False)
-assert p.trigger_level("danger", False, "warn", {"load_per_cpu": 1.8}) == ("warn", False)
-assert p.trigger_level("danger", True, "danger", {"load_per_cpu": 1.8}, enter=None) == ("danger", False)
+assert p.trigger_level("ok", False, "danger", {"load_per_cpu": 1.8}, False) == ("danger", False)
+assert p.trigger_level("danger", False, "warn", {"load_per_cpu": 1.8}, False) == ("warn", False)
+# A held load danger survives a memory danger on top of it, and leaves only when the load does.
+assert p.trigger_level("danger", True, "danger", {"load_per_cpu": 1.8}, False) == ("danger", True)
+assert p.trigger_level("danger", True, "warn", {"load_per_cpu": 1.8}, False) == ("danger", True)
+# judge caps the load at warn while the CPU idles: the load did not drive that danger.
+idle_cap = {**OK, "load_per_cpu": 2.1, "cpu_idle_pct": 30, "mem_free_pct": 9}
+assert p.judge(idle_cap, cfg)[0] == "danger" and not any(mt == "load_per_cpu" and lv == 2 for mt, lv, _ in p.hits(idle_cap, cfg))
 assert p.trigger_floor({}, {"level": "danger", "t": 5}, "warn") == "warn", "a fall lowers the floor below the memo's level"
 assert p.trigger_floor({"trigger_floor": "ok", "floor_for": 5}, {"level": "danger", "t": 5}, "warn") == "ok"
 assert p.trigger_floor({"trigger_floor": "ok", "floor_for": 4}, {"level": "warn", "t": 5}, "danger") == "warn", "a new round resets it"
@@ -424,6 +429,8 @@ for step, (load, at, want, patrol_runs) in enumerate([
     run_round(LOAD(load), [], consumers=([], []), now=at, rescan_minutes=0)
     assert len(spawned) == want, (step, load, spawned)
     assert p.load_state()["level"] == p.judge(LOAD(load), cfg)[0], "the raw level is not held"
+    if at == T + 1000:  # the floor fell below patrol's danger: when is recorded for patrol's commit
+        assert p.load_state()["trigger_floor"] == "warn" and p.load_state()["floor_t"] == at
     if spawned and patrol_runs:
         p.PATROL_MEMO.write_text(json.dumps({"t": at, "level": p.load_state()["trigger_level"]}))
 p.reap.spawn_patrol = spawn0
