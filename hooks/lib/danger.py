@@ -140,6 +140,7 @@ SWITCH_PLAIN = {"-q", "--quiet", "-f", "--force", "-m", "--merge", "--discard-ch
                 "--progress", "--no-progress", "--ignore-other-worktrees"}
 # A switch whose branch cannot be read: a later forced push of HEAD is treated as aimed at the default branch.
 SWITCH_UNKNOWN = "\0unknown-branch"
+ANY_REPO = "\0any-repository"  # the key of a switch that ran under --git-dir or --work-tree: it may be any repository
 
 
 def after_switch(c, switched, here):
@@ -161,8 +162,8 @@ def after_switch(c, switched, here):
             where = expand(opts[i + 1], where) or where
         elif x.startswith("-C") and len(x) > 2:  # `-C/path`
             where = expand(x[2:], where) or where
-        elif x.startswith(("--git-dir", "--work-tree")):
-            return switched
+        elif x.startswith(("--git-dir", "--work-tree")):  # the repository it moves is not readable from the words
+            return {**switched, ANY_REPO: SWITCH_UNKNOWN}
     key = repo_key(where)
     # -c/-C (switch) and -b/-B (checkout) name the branch to create, attached or as the next word.
     for i, x in enumerate(words):
@@ -643,9 +644,9 @@ def git_out(args, where):
 def default_names(where, remote, gitdir=()):
     """main, master and the branch the remote's HEAD names in the checkout at `where` (or in `gitdir`)."""
     gitdir = list(gitdir)
-    # A URL or path given in place of a remote name has no HEAD of its own: it is usually origin's address.
-    remotes = [remote] if remote in git_out(gitdir + ["remote"], where).split() else [remote, "origin"]
-    heads = (git_out(gitdir + ["symbolic-ref", "--short", f"refs/remotes/{r}/HEAD"], where) for r in remotes)
+    # A remote added by hand, or a URL given in place of one, often has no HEAD of its own and points at origin's
+    # address: origin's default branch counts too.
+    heads = (git_out(gitdir + ["symbolic-ref", "--short", f"refs/remotes/{r}/HEAD"], where) for r in {remote, "origin"})
     return {"main", "master"} | {h.split("/", 1)[1] for h in heads if "/" in h}
 
 
@@ -734,7 +735,11 @@ def force_push_default(c, here, switched=None):
             dst = "*"
         if dst == "HEAD":
             # A `git switch` earlier on the line moved HEAD; the repository on disk still shows the old branch.
-            moved = (switched or {}).get(repo_key(where)) if not gitdir else None
+            seen = switched or {}
+            # `--git-dir=<repo>/.git` acts on <repo>; any other git dir is not tied to a folder this reader knows.
+            repo = os.path.dirname(gitdir[1]) if gitdir and os.path.basename(gitdir[1]) == ".git" else \
+                None if gitdir else repo_key(where)
+            moved = seen.get(ANY_REPO) or (seen.get(os.path.realpath(repo)) if repo else None)
             dst = moved if moved is not None else git_out(gitdir + ["symbolic-ref", "--short", "HEAD"], where)
             if dst == SWITCH_UNKNOWN:
                 dst = "*"
