@@ -7,7 +7,7 @@ Commands are read with lib.shell: only a word bash runs as a command counts, so 
 quoted prompt that names one is not one. A guardrail, not a sandbox: `bash -c`, `eval` and a script file's own
 commands are not read.
 """
-import collections, glob, json, os, pathlib, re, subprocess, types
+import collections, fnmatch, glob, json, os, pathlib, re, subprocess, types
 
 from lib import config, shell
 
@@ -31,6 +31,7 @@ RULES = {
     "guard.deny.rm_outside": "deny",
     "guard.deny.trash_empty": "deny",
     "guard.deny.protection_write": "deny",
+    "guard.deny.default_force_push": "deny",
     "guard.ask.pressure_bypass": "ask",
     "guard.warn.rm_expansion": "warn",
     "guard.warn.reset_hard": "warn",
@@ -57,6 +58,13 @@ DOCKER_OPTS = {"-H", "--host", "-c", "--context", "--config", "-l", "--log-level
 COMPOSE_OPTS = {"-f", "--file", "-p", "--project-name", "--profile", "--env-file", "--project-directory", "--ansi",
                 "--progress", "--parallel"}
 GIT_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"}
+# git accepts any unique prefix of a long option, so `--force-wi` is --force-with-lease.
+PUSH_LONG = ["--all", "--atomic", "--branches", "--delete", "--dry-run", "--exec", "--follow-tags", "--force",
+             "--force-if-includes", "--force-with-lease", "--mirror", "--no-dry-run", "--no-force",
+             "--no-force-with-lease", "--no-verify", "--porcelain", "--progress", "--prune", "--push-option", "--quiet",
+             "--receive-pack", "--recurse-submodules", "--repo", "--set-upstream", "--signed", "--tags", "--thin",
+             "--verbose"]
+PUSH_VALUED = {"--push-option", "--repo", "--receive-pack", "--exec", "--recurse-submodules"}
 # Options that take a value, per tool: the short letters (the rest of a cluster, or the next word, is the value, so
 # in `-sG` the letters are flags and in `-AGitHub` the rest is the User-Agent) and the long names. They differ: gh's
 # `-f` takes a field, curl's `-f` is a flag.
@@ -125,6 +133,70 @@ def after_cd(c, here, prev=UNKNOWN_DIR):
     if target == "-" or "$" in target.replace("$HOME", "").replace("${HOME}", ""):
         return UNKNOWN_DIR
     return expand(target, here) or UNKNOWN_DIR
+
+
+# Options of switch and checkout that do not change which branch they name.
+SWITCH_PLAIN = {"-q", "--quiet", "-f", "--force", "-m", "--merge", "--discard-changes", "--guess", "--no-guess",
+                "--progress", "--no-progress", "--ignore-other-worktrees"}
+# A switch whose branch cannot be read: a later forced push of HEAD is treated as aimed at the default branch.
+SWITCH_UNKNOWN = "\0unknown-branch"
+ANY_REPO = "\0any-repository"  # the key of a switch that ran under --git-dir or --work-tree: it may be any repository
+
+
+def after_switch(c, switched, here):
+    """{repository: branch} after a `git switch <b>`, `git checkout <b>` or `-c/-b <b> [<start>]` on the same command
+    line: the branch it leaves checked out in the repository it ran in (SWITCH_UNKNOWN when that cannot be read).
+    `switched` is the map before this command; it is returned unchanged for any other."""
+    sub, args = verb(c.words[1:], GIT_OPTS)
+    if sub not in ("switch", "checkout"):
+        return switched
+    # `checkout <b> -- <paths>` restores files and keeps HEAD; `checkout <b> --` and `switch -- <b>` switch.
+    head, sep, tail = (args[:args.index("--")], True, args[args.index("--") + 1:]) if "--" in args else (args, False, [])
+    if sep and sub == "checkout" and tail:
+        return switched
+    words = head + (tail if sub == "switch" else [])
+    # `git -C <dir> switch` moves HEAD in <dir>, the repository this entry is kept for.
+    opts, where = c.words[1:len(c.words) - len(args) - 1], here
+    for i, x in enumerate(opts):
+        if x == "-C" and i + 1 < len(opts):
+            where = expand(opts[i + 1], where) or where
+        elif x.startswith("-C") and len(x) > 2:  # `-C/path`
+            where = expand(x[2:], where) or where
+        elif x == "--git-dir" or x.startswith("--git-dir="):
+            git_dir = expand(opts[i + 1] if x == "--git-dir" and i + 1 < len(opts) else x.partition("=")[2], where)
+            if os.path.basename(git_dir) != ".git":  # a git dir that is not <repo>/.git: any repository
+                return {**switched, ANY_REPO: SWITCH_UNKNOWN}
+            where = os.path.dirname(git_dir)
+        elif x.startswith("--work-tree"):  # the repository it moves is not readable from the words
+            return {**switched, ANY_REPO: SWITCH_UNKNOWN}
+    key = repo_key(where)
+    # -c/-C (switch) and -b/-B (checkout) name the branch to create, attached or as the next word.
+    for i, x in enumerate(words):
+        if x in ("-c", "-C", "-b", "-B", "--create", "--force-create") and i + 1 < len(words):
+            return {**switched, key: words[i + 1]}
+        if re.match(r"-[cCbB]", x) and len(x) > 2:
+            return {**switched, key: x[2:]}
+        if x.startswith(("--create=", "--force-create=")):
+            return {**switched, key: x.split("=", 1)[1]}
+    names = [x for x in words if not x.startswith("-") or x == "-"]
+    # Any other option (--track, --detach, --orphan…) can name a branch this reader does not work out.
+    odd = [x for x in words if x.startswith("-") and x != "-" and x not in SWITCH_PLAIN]
+    if not names and not odd:
+        return switched
+    if odd or names[0] == "-" or names[0].startswith("@{"):
+        return {**switched, key: SWITCH_UNKNOWN}
+    if sub == "checkout" and len(names) > 1:  # `checkout <tree-ish> <paths>` restores files and keeps HEAD
+        return switched
+    # `git checkout README.md` restores a file; a local branch of that name wins over a path.
+    if sub == "checkout" and os.path.exists(os.path.join(where or ".", names[0])) \
+            and not git_out(["rev-parse", "--verify", "--quiet", "refs/heads/" + names[0]], where):
+        return switched
+    return {**switched, key: names[0]}
+
+
+def repo_key(where):
+    """The repository a command in `where` acts on, as a real path: its top-level folder, else `where` itself."""
+    return os.path.realpath(git_out(["rev-parse", "--show-toplevel"], where) or where or ".")
 
 
 def verb(args, valued):
@@ -211,9 +283,10 @@ def write_targets(c):
     return out
 
 
-def check_command(c, masked, cfg, cwd, session, here=None):
+def check_command(c, masked, cfg, cwd, session, here=None, switched=None):
     """[(key, reason)] for one command. `here` is the directory its relative paths resolve against (cwd after the
-    line's earlier `cd`s), `cwd` the hook's own."""
+    line's earlier `cd`s), `cwd` the hook's own; `switched` maps a repository to the branch an earlier `git switch` on
+    the line checked out in it."""
     here = cwd if here is None else here
     out, w, name = [], c.words, c.name
     # Before the argv check: a bare `> file` truncates it with no command at all.
@@ -278,6 +351,11 @@ def check_command(c, masked, cfg, cwd, session, here=None):
         if label_add(w):
             out.append(("guard.deny.self_exempt_label", "The `no-visual-change` label exempts a PR from visual review; "
                                                         "an agent never adds it to its own PR. Ask the human."))
+    if name in ("git", "gh", "curl") and force_push_default(c, here, switched):
+        out.append(("guard.deny.default_force_push", "A force push rewrites the default branch every worker and "
+                                                     "reviewer builds on. Push your own PR branch (`git push "
+                                                     "--force-with-lease=<branch>:<sha> origin <branch>`); a bad "
+                                                     "commit on main is undone with a revert PR."))
     if name in ("gh", "curl") and protection_write(c, here):
         out.append(("guard.deny.protection_write", "This writes branch protection or a ruleset, the rules that "
                                                    "gate merges. The repository owner changes them, not an agent."))
@@ -570,6 +648,118 @@ def git_out(args, where):
         return ""
 
 
+def default_names(where, remote, gitdir=()):
+    """main, master and the branch the remote's HEAD names in the checkout at `where` (or in `gitdir`)."""
+    gitdir = list(gitdir)
+    # A remote added by hand, or a URL given in place of one, often has no HEAD of its own and points at origin's
+    # address: origin's default branch counts too.
+    heads = (git_out(gitdir + ["symbolic-ref", "--short", f"refs/remotes/{r}/HEAD"], where) for r in {remote, "origin"})
+    return {"main", "master"} | {h.split("/", 1)[1] for h in heads if "/" in h}
+
+
+def force_push_default(c, here, switched=None):
+    """Whether this `git push`, `gh api` or `curl` command force-updates a default branch: main, master or the
+    branch origin/HEAD names. A push with no refspec, or `HEAD`, is judged by the branch checked out in `here`; when
+    that cannot be read, only main and master count."""
+    w = c.words
+    where = here
+    for i, x in enumerate(w):  # each -C is relative to the one before it
+        if x == "-C" and i + 1 < len(w):
+            where = expand(w[i + 1], where) or where
+        elif x.startswith("-C") and c.name == "git":  # `-C/path`
+            where = expand(x[2:], where) or where
+    # `git --git-dir=<dir> push …` acts on that repository, whatever the folder is.
+    gitdir = next((["--git-dir", expand(w[i + 1], where) if x == "--git-dir" else expand(x[10:], where)]
+                   for i, x in enumerate(w[:-1] + [""]) if x == "--git-dir" or x.startswith("--git-dir=")), [])
+    if c.name in ("gh", "curl"):
+        if c.name == "gh":
+            method, endpoint, fields = api_call(w, where) if w[1:2] == ["api"] else ("", "", [])
+            calls = [(method, [endpoint], fields)]
+        else:
+            calls = curl_calls(w, where)
+        names = default_names(where, "origin")
+        return any(method == "PATCH" and re.search(r'force"?\s*[=:]\s*true', " ".join(bodies))
+                   and any(p.split("?", 1)[0].rsplit("/git/refs/heads/", 1)[-1] in names
+                           for p in paths if "/git/refs/heads/" in p) for method, paths, bodies in calls)
+    sub, rest = verb(w[1:], GIT_OPTS)
+    if sub != "push":
+        return False
+    opts, pos, i, repo = [], [], 0, None
+    while i < len(rest):
+        x = rest[i]
+        i += 1
+        if x == "--":
+            pos += rest[i:]
+            break
+        if x.startswith("--"):  # spell out an abbreviated long option
+            name, eq, val = x.partition("=")
+            hits = [n for n in PUSH_LONG if n.startswith(name)]
+            x = (name if name in PUSH_LONG else hits[0] if len(hits) == 1 else name) + eq + val
+        if x.startswith("-") and len(x) > 1:
+            opts.append(x)
+            if x == "--repo" and i < len(rest):
+                repo = rest[i]
+            elif x.startswith("--repo="):
+                repo = x[7:]
+            # A value-taking option reads the next word unless its value is attached: `--repo=x`, `-ofoo`; in a
+            # cluster only a closing `o` (`-fo ci.skip`) does.
+            i += x in PUSH_VALUED or not x.startswith("--") and "o" in x and x.partition("o")[2] == ""
+        else:
+            pos.append(x)
+
+    def short(o):  # the flags of a `-4fn` cluster: a `-o` ends it, the rest is that option's value
+        return set(o[1:].split("o", 1)[0]) if not o.startswith("--") else set()
+    dry = False  # the last of --dry-run / --no-dry-run wins
+    for o in opts:
+        if o == "--no-dry-run":
+            dry = False
+        elif o == "--dry-run" or "n" in short(o):
+            dry = True
+    if dry:
+        return False
+    # --force and --force-with-lease are separate switches, each cancelled by its own --no-… form, last one wins.
+    # `--no-force-with-lease` starts with `--no-force`, so it is matched before any prefix test.
+    force = lease = False
+    for o in opts:
+        if o == "--force" or "f" in short(o):
+            force = True
+        elif o == "--no-force":
+            force = False
+        elif o == "--no-force-with-lease":
+            lease = False
+        elif o.startswith("--force-with-lease"):
+            lease = True
+    forced = force or lease
+    # --mirror overwrites every remote ref without --force.
+    if "--mirror" in opts or forced and ("--all" in opts or "--branches" in opts):
+        return True
+    named_repo = any(o == "--repo" or o.startswith("--repo=") for o in opts)  # then every positional is a refspec
+    remote = (repo or "origin") if named_repo else pos[0] if pos else "origin"
+    names = default_names(where, remote, gitdir)
+    # --tags alone sends tags only, not the checked-out branch.
+    for spec in (pos if named_repo else pos[1:]) or ([] if "--tags" in opts else ["HEAD"]):
+        src, _, dst = spec.lstrip("+").partition(":")
+        dst = dst if ":" in spec else src
+        if spec.lstrip("+") == ":":  # the matching refspec: every branch the remote has
+            dst = "*"
+        if dst in ("HEAD", "@"):  # `@` is git's alias for HEAD
+            # A `git switch` earlier on the line moved HEAD; the repository on disk still shows the old branch.
+            seen = switched or {}
+            # `--git-dir=<repo>/.git` acts on <repo>; any other git dir is not tied to a folder this reader knows.
+            repo = os.path.dirname(gitdir[1]) if gitdir and os.path.basename(gitdir[1]) == ".git" else \
+                None if gitdir else repo_key(where)
+            moved = seen.get(ANY_REPO) or (seen.get(os.path.realpath(repo)) if repo else None)
+            dst = moved if moved is not None else git_out(gitdir + ["symbolic-ref", "--short", "HEAD"], where)
+            if dst == SWITCH_UNKNOWN:
+                dst = "*"
+        # A pattern such as `refs/heads/*` reaches the default branch too.
+        # `heads/main` is `refs/heads/main` for git.
+        if (forced or spec.startswith("+")) and any(fnmatch.fnmatchcase(b, dst) for n in names
+                                                    for b in (n, "heads/" + n, "refs/heads/" + n)):
+            return True
+    return False
+
+
 def rm_targets(w):
     """(options, operands) of an `rm` command."""
     opts, operands, end = [], [], False
@@ -777,6 +967,7 @@ def check_bash(cmd, cfg, cwd=None, session=None):
     masked = shell.command_text(cmd)
     out, seen = [], set()
     cmds, here, pushed, prev = shell.commands(cmd), cwd, [], UNKNOWN_DIR  # prev: where `cd -` goes
+    switched = {}  # {repository: the branch an earlier `git switch` on the line checked out}
     outer, start, ticks = [], 0, False  # the directories to go back to at each `)` or closing backtick
     for i, c in enumerate(cmds):
         for ch in masked[start:c.span[0]]:
@@ -787,7 +978,7 @@ def check_bash(cmd, cfg, cwd=None, session=None):
                 here = outer.pop()
                 ticks = ticks and ch != "`"
         start = c.span[0]
-        found = check_command(c, masked, cfg, cwd, session, here)
+        found = check_command(c, masked, cfg, cwd, session, here, switched)
         # A `cd` in a pipeline or sent to the background (`cd x &`) runs in a subshell; `||` and `&&` do not.
         if c.name in ("cd", "pushd", "popd") and not (
                 c.piped_from or c.piped_to or re.match(r"\s*(&(?!&)|\|(?!\|))", masked[c.span[1]:])):
@@ -798,6 +989,8 @@ def check_bash(cmd, cfg, cwd=None, session=None):
                 here = pushed.pop()
             elif c.name == "pushd" and here is not UNKNOWN_DIR:
                 pushed.append(before)
+        if c.name == "git":
+            switched = after_switch(c, switched, here)
         # `kill $(pgrep …)`: a pgrep inside this kill command's own substitution.
         if c.name == "kill" and any(d.name == "pgrep" and c.span[0] < d.span[0] and d.span[1] <= c.span[1]
                                     for d in cmds):

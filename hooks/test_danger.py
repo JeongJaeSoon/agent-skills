@@ -115,8 +115,26 @@ GQL.write_text("mutation { deleteBranchProtectionRule(input: {}) { clientMutatio
 # The same mutation with a JSON escape in its name, which only a decoded body shows.
 ESCAPED = TMP / "escaped.json"
 ESCAPED.write_text('{"query": "mutation { \\u0064eleteBranchProtectionRule(input: {}) { clientMutationId } }"}')
+FORCE_BODY = TMP / "force.json"
+FORCE_BODY.write_text('{"sha": "abc", "force": true}')
+# Repositories on a named branch: the default branch, a PR branch, and one whose default branch is origin/HEAD's.
+ON_MAIN, ON_FEAT, ON_DEV = TMP / "on-main", TMP / "on-feat", TMP / "on-dev"
+for repo, branch in ((ON_MAIN, "main"), (ON_FEAT, "feat/x"), (ON_DEV, "dev")):
+    repo.mkdir()
+    git("init", "-q", "-b", branch, cwd=repo)
+git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop", cwd=ON_DEV)
+git("checkout", "-q", "-b", "develop", cwd=ON_DEV)
+git("symbolic-ref", "refs/remotes/upstream/HEAD", "refs/remotes/upstream/develop", cwd=ON_DEV)
+# A PR branch checked out in a repository that also has a local `main` branch and a folder named `main`.
+DIR_MAIN = TMP / "dir-main"
+DIR_MAIN.mkdir()
+git("init", "-q", "-b", "feat/x", cwd=DIR_MAIN)
+git("-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-q", "--allow-empty", "-m", "a", cwd=DIR_MAIN)
+git("branch", "main", cwd=DIR_MAIN)
+(DIR_MAIN / "main").mkdir()
 NEST = TMP / "nest"
-NEST.mkdir()
+(NEST / "child").mkdir(parents=True)
+git("init", "-q", "-b", "main", cwd=NEST / "child")
 # A stand-in `orca` that says the current worktree is the main one.
 (BIN / "orca").write_text("#!/bin/sh\necho '{\"result\": {\"worktree\": {\"isMainWorktree\": true}}}'\n")
 (BIN / "orca").chmod(0o755)
@@ -283,6 +301,110 @@ CASES = [
                                           "export AGENT_SKILLS_PRESSURE_GATE=0"],
      ["AGENT_SKILLS_PRESSURE_GATE=1 orch heavy p -- npm test", "echo AGENT_SKILLS_PRESSURE_GATE",
       "echo AGENT_SKILLS_PRESSURE_GATE=0"]),
+    ("guard.deny.default_force_push", "deny",
+     ["git push --force origin main", "git push -f origin main", "git push --force-with-lease origin main",
+      "git push --force-with-lease=main:abc123 origin main", "git push origin +main", "git push origin +HEAD:main",
+      "git push -f origin HEAD:refs/heads/master", "git push --force origin feat:main", "git push -fu origin main",
+      "git push origin --force main", "git push -o ci.skip -f origin main", "git -C /x push -f origin main",
+      "git -C/x push -f origin main", "git -C /x -c core.x=1 push --force-with-lease origin main",
+      "git push --all --force origin", "git push --force-if-includes --force-with-lease origin main",
+      "git push --force origin main:main", "cd /x && git push -f origin master",
+      ("git push -f", ON_MAIN), ("git push -f origin HEAD", ON_MAIN), ("git push -f origin", ON_MAIN),
+      ("git push -f origin HEAD", ON_DEV),
+      ("git switch main && git push --force origin HEAD", ON_FEAT),
+      ("git checkout main && git push -f origin HEAD", ON_FEAT),
+      (f"git switch feat/x && cd {ON_MAIN} && git push --force origin HEAD", ON_FEAT),
+      ("git -C . switch main && git push --force origin HEAD", ON_FEAT),
+      (f"git -C {ON_FEAT} switch feat/x && git push --force origin HEAD", ON_MAIN),
+      (f"git -C{ON_FEAT} switch feat/x && git push --force origin HEAD", ON_MAIN),
+      "git push --force --no-force-with-lease origin main",
+      "git push --no-force-with-lease --force-with-lease origin main",
+      ("git switch -C main main && git push --force origin HEAD", ON_FEAT),
+      ("git checkout -B main origin/main && git push -f origin HEAD", ON_FEAT),
+      ("git switch main && cd . && git push -f origin HEAD", ON_FEAT),
+      (f"git -C {ON_FEAT} switch main && git -C {ON_FEAT} push -f origin HEAD", TMP),
+      ("git switch -cmain other && git push -f origin HEAD", ON_FEAT),
+      ("git switch --create=main && git push -f origin HEAD", ON_FEAT),
+      ("git switch -- main && git push -f origin HEAD", ON_FEAT),
+      ("git switch main && git switch feat && git switch - && git push -f origin HEAD", ON_FEAT),
+      ("git switch --track origin/main && git push -f origin HEAD", ON_FEAT),
+      ("git push --force origin @", ON_MAIN), ("git push origin +@:main", ON_FEAT),
+      ("git push --recurse-submodules on-demand -f origin", ON_MAIN), ("git push -fo ci.skip origin", ON_MAIN),
+      ("git push -4fo ci.skip origin HEAD", ON_MAIN),
+      ("git push -f -oci.variable=DEPLOY_ENV=demo origin main", ON_FEAT), ("git push -f origin heads/main", ON_FEAT),
+      ("git push -f origin +heads/master", ON_FEAT),
+      ("git checkout --conflict merge main && git push -f origin HEAD", ON_FEAT),
+      ("git --config-env core.editor=EDITOR switch main && git push -f origin HEAD", ON_FEAT),
+      ("git switch --detach main && git push -f origin HEAD:main", ON_FEAT),
+      ("git checkout main && git push -f origin HEAD", DIR_MAIN),
+      ("git checkout main -- && git push -f origin HEAD", ON_FEAT),
+      ("git push -f https://github.com/acme/app.git develop", ON_DEV),
+      ("git push --force-with-lease mirror develop", ON_DEV),
+      ("git switch main && git --git-dir=.git push --force-with-lease origin HEAD", ON_FEAT),
+      ("git --git-dir=.git switch main && git push --force-with-lease origin HEAD", ON_FEAT),
+      "gh api -X PATCH repos/a/b/git/refs/heads/main -F force=true",
+      "gh api --method PATCH repos/a/b/git/refs/heads/master -f force=true -f sha=abc",
+      "git push --mirror origin", "git push --repo=origin --force main", "git push --repo origin -f main",
+      "git push origin '+refs/heads/*:refs/heads/*'", "git push -f origin 'refs/heads/*:refs/heads/*'",
+      "git push -f origin :", "git push origin +:", ("git push --force upstream develop", ON_DEV),
+      "gh api -X PATCH repos/a/b/git/refs/heads/main --input force.json -F force=true",
+      f"gh api -X PATCH repos/a/b/git/refs/heads/main --input {FORCE_BODY}",
+      ("gh api -X PATCH repos/a/b/git/refs/heads/main --input force.json", TMP),
+      (f"git --git-dir={ON_MAIN}/.git push --force origin HEAD", ON_FEAT),
+      (f"git --git-dir {ON_MAIN}/.git push -f origin HEAD", ON_FEAT), "git push -4f origin main",
+      "git push --force -onoci origin main", "git push --force-wi origin main", "git push --force-w origin main",
+      "git push --mir origin",
+      ("git push --force --repo=upstream develop", ON_DEV), ("git push --force --repo upstream develop", ON_DEV),
+      ("git push --force --branches origin", ON_FEAT), (f"git -C{NEST} -Cchild push --force origin HEAD", ON_FEAT),
+      (f"git -C{ON_MAIN} push --force origin HEAD", ON_FEAT),
+      ("gh api -X PATCH repos/a/b/git/refs/heads/develop -F force=true -f sha=abc", ON_DEV),
+      "git push --dry-run --no-dry-run --force origin main",
+      "gh api -X PATCH 'repos/acme/app/git/refs/heads/main?x=y' -F force=true",
+      """curl -X PATCH https://api.github.com/repos/acme/app/git/refs/heads/main -d '{"sha":"abc","force":true}'""",
+      f"curl -X PATCH https://api.github.com/repos/acme/app/git/refs/heads/main -d @{FORCE_BODY}"],
+     ["git push origin main", "git push --force-with-lease origin feat/x",
+      "git push --force-with-lease=feat:abc origin feat",
+      "git push origin +feat/x", "git push -f origin feat:main-fix", "git push origin :old-branch",
+      "git push --force origin refs/heads/maintenance", "git push -o main -f origin feat",
+      "git -C /x push -f origin feat", "git -C/x push -f origin feat",
+      "echo git push -f origin main", "git fetch -f origin main:main", "git log --force main",
+      ("git push -f origin HEAD", ON_FEAT), ("git push -f", ON_FEAT),
+      ("git switch feat/y && git push --force-with-lease origin HEAD", ON_MAIN),
+      ("git checkout -b feat/y && git push -f origin HEAD", ON_MAIN),
+      ("git switch -c feat/review main && git push --force-with-lease origin HEAD", ON_MAIN),
+      ("git switch -cfeat/review main && git push -f origin HEAD", ON_MAIN),
+      ("git switch -- feat/y && git push -f origin HEAD", ON_MAIN),
+      ("git checkout main -- README.md && git push --force-with-lease origin HEAD", ON_FEAT),
+      ("git --git-dir=.git switch feat/y && git push --force-with-lease origin HEAD", ON_MAIN),
+      ("git --config-env core.editor=EDITOR switch feat/y && git push --force-with-lease origin HEAD", ON_MAIN),
+      ("git push --force-with-lease origin @", ON_FEAT),
+      ("git push --recurse-submodules on-demand -f origin", ON_FEAT), ("git push -fo ci.skip origin", ON_FEAT),
+      ("git checkout main README.md && git push --force-with-lease origin HEAD", ON_FEAT),
+      ("git push -f origin heads/feat/x", ON_FEAT),
+      ("git push -f https://github.com/acme/app.git feat/x", ON_DEV),
+      (f"git switch main && cd {ON_FEAT} && git push -f origin HEAD", TMP),
+      (f"git -C {ON_MAIN} switch main && git push -f origin HEAD", ON_FEAT),
+      "git push --force-with-lease --no-force-with-lease origin main",
+      "git push --no-force-with-lease origin main", "git push --no-force-with-lease origin feat/x",
+      "git push --force --no-force origin main",
+      (f"git -C{ON_MAIN} switch main && git push --force-with-lease origin HEAD", ON_FEAT),
+      (f"git -C {ON_FEAT} switch feat/x && git push --force-with-lease origin HEAD", ON_FEAT),
+      (f"git -C {ON_MAIN} switch main && git push --force-with-lease origin HEAD", ON_FEAT),
+      ("git checkout -- README.md && git push -f origin HEAD", ON_FEAT), ("git push --force-with-lease", ON_FEAT),
+      ("git push -f origin HEAD", ON_DEV.parent), "git push --tags origin",
+      "gh api repos/a/b/git/refs/heads/main", "gh api -X PATCH repos/a/b/git/refs/heads/feat -F force=true",
+      "gh api -X PATCH repos/a/b/git/refs/heads/main -f sha=abc", "git push --dry-run --force origin main",
+      "git push -n -f origin main", "git push -fn origin main", "git push --force-if-includes origin main",
+      "git push --repo=origin -f feat",
+      "git push --mirror --dry-run origin", (f"git --git-dir={ON_FEAT}/.git push -f origin HEAD", ON_MAIN),
+      ("git push --force --tags origin", ON_MAIN), "git push -4 origin main",
+      "git push -n4 -f origin main", "git push --force-wi origin feat", "git push --dry origin --force-w main",
+      ("git push --force --repo=upstream develop", ON_FEAT), (f"git -C{ON_FEAT} push --force origin HEAD", ON_MAIN),
+      ("gh api -X PATCH repos/a/b/git/refs/heads/develop -F force=true -f sha=abc", ON_FEAT),
+      "git push --no-dry-run --dry-run --force origin main",
+      """curl -X PATCH https://api.github.com/repos/acme/app/git/refs/heads/feat -d '{"sha":"abc","force":true}'""",
+      """curl https://api.github.com/repos/acme/app/git/refs/heads/main""",
+      ("git push --force upstream develop", ON_FEAT)]),
     ("guard.deny.protection_write", "deny",
      ["gh api -X PUT repos/a/b/branches/main/protection -f enforce_admins=true",
       "gh api --method=DELETE repos/a/b/branches/main/protection", "gh api repos/a/b/rulesets -f name=x",

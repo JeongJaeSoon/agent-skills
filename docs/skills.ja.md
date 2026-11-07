@@ -1,4 +1,4 @@
-<!-- translated-from: 69e910480094b5a68ee3e2dbc4a37f3de46810ab -->
+<!-- translated-from: 02ab74d119bbdc34e2b1f1aaa14b41206a860e51 -->
 # スキルカタログ
 
 `agent-skills` プラグインに入っているスキル31個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック16個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
@@ -575,6 +575,7 @@ PR を受け持つスキルとマージする主体:
 | `guard.deny.rm_outside` | deny | 現在のチェックアウト（git toplevel）と `/tmp`・`$TMPDIR` の外を指す再帰的な `rm`（`-r`・`-R`・`--recursive`）。チェックアウトのルート自身と `/tmp` 自身も対象です。解決できない `$` 変数を含むパスは判定せず、`rm_expansion` の警告に任せます |
 | `guard.deny.trash_empty` | deny | `~/.Trash`・`~/.local/share/Trash`・`.Trashes` を再帰または glob で消す `rm`、`trash-empty`、`gio trash --empty`、Finder の `empty trash` AppleScript。ファイルを 1 つ指定した `rm` は対象外です |
 | `guard.deny.protection_write` | deny | ブランチ保護や ruleset を書き換える `gh api`・`curl`。`…/branches/<b>/protection` と `…/rulesets` に対する GET・HEAD・OPTIONS 以外のメソッド、GraphQL の `create/update/delete…ProtectionRule`・`…Ruleset` mutation（`--input` や `-F query=@ファイル` の本文も読みます）。読み取りの GET は対象外です。変数に入れたパス、stdin の本文、curl の URL globbing（`{a,b}`）・`--request-target`、`api.github.com` 以外のホスト（Enterprise）へ送る curl は読めません。`gh api` はホストに関係なく判定します |
+| `guard.deny.default_force_push` | deny | デフォルトブランチ（`main`・`master`・origin/HEAD が指すブランチ）を force で更新する `git push`（`--force`・`-f`・`--force-with-lease`・`+refspec`・`--mirror`）と、`refs/heads/<default>` に `force=true` で PATCH する `gh api`・`curl`。同じ行の `git switch`・`cd`・`-C`・`--git-dir` を追い、refspec のない push はチェックアウト中のブランチで判定します。切り替え先を読めない `git switch`（`--track`・`-`・`@{-1}` など）の後の force push は、デフォルトブランチ宛てとみなします。自分の PR ブランチへの `--force-with-lease` と、`--no-force-with-lease` だけを付けた push は対象外です。変数に入れたブランチ名と、`git config` で変えた push の既定値は読めません |
 | `guard.ask.pressure_bypass` | ask | コマンドの前、または `env`・`export` での `AGENT_SKILLS_PRESSURE_GATE=0` の代入。その文字列を出力するだけの `echo` は対象外です |
 | `guard.warn.rm_expansion` | warn | 引用符のない glob や変数で作った `rm` のパス。`${VAR:?}` は除きます |
 | `guard.warn.reset_hard` | warn | コミットしていない変更があるリポジトリでの `git reset --hard` |
