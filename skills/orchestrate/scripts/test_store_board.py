@@ -581,4 +581,33 @@ with state("plan", None, None, None) as sd:
     code, out, _ = orch("db", "cutover-plan", "4b")
     assert code == 0 and out == text and list(sd.iterdir()) == [], out
 
+# ---- a held item's note: stored on the item, kept across a reword, added to a DB made before the column
+with state("note") as sd:
+    store.import_apply(checks=False)
+    item = board.later_add("write the export", "export lands", note="  line one\nline two  ")
+    assert item["note"] == "line one\nline two", item
+    got = next(l for l in store.board()["later"] if l["id"] == item["id"])
+    assert got["note"] == "line one\nline two", got
+    assert not any("note" in l for l in store.board()["later"] if l["id"] != item["id"]), "an item with no note shows none"
+    board.later_add("write the export!", "export lands")  # the repeat has no note: the old one stays
+    assert next(l for l in store.board()["later"] if l["id"] == item["id"])["note"] == "line one\nline two"
+    board.later_add("write the export!", "export lands", note="new")
+    assert next(l for l in store.board()["later"] if l["id"] == item["id"])["note"] == "new"
+    code, out, err = orch("board", "later", "add", "from the cli", "--trigger", "t9", "--note", "why: because")
+    assert code == 0, err
+    assert any(l.get("note") == "why: because" for l in store.board()["later"])
+    assert raw(sd).execute("SELECT 1 FROM event WHERE entity='item' AND after LIKE '%why: because%'").fetchone(), "the audit row has it"
+# A DB an older writer made has no note column: a reader copes, and the first writer adds it.
+with state("note-old") as sd:
+    store.import_apply(checks=False)
+    c = raw(sd)
+    c.execute("ALTER TABLE item DROP COLUMN note")
+    c.commit()
+    c.close()
+    assert all("note" not in l for l in store.board()["later"]), "a read of the old shape works"
+    board.later_add("after the drop", "t", note="kept")
+    assert any(l.get("note") == "kept" for l in store.board()["later"])
+    cols = [r[1] for r in raw(sd).execute("PRAGMA table_info(item)")]
+    assert cols.count("note") == 1, cols
+
 print("test_store_board: ok")

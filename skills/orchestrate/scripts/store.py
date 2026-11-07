@@ -75,6 +75,7 @@ SCHEMA_V2 = (
   trig TEXT,
   due TEXT, after_ref TEXT,
   program TEXT,
+  note TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   closed_at TEXT, close_by TEXT, close_rule TEXT, close_evidence TEXT,
@@ -103,7 +104,7 @@ GROUP_KIND, GROUP_POS = "group", 1_000_000  # a priority rule is a board_row of 
 ANNOT_KIND, ANNOT_POS = "annot", 2_000_000
 GROUP_MATCH = re.compile(r"(?:worktree|program):\S.*|repo:[\w.-]+/[\w.-]+")  # what board.match_of() lets in
 GROUP_PRIORITY = re.compile(r"\d{1,3}:(?!.* — )\S.*")  # RANK:NAME, as board.priority_of() writes it
-ITEM_COLS = ("who", "title", "next", "waiting", "waiting_since", "trig", "due", "after_ref")
+ITEM_COLS = ("who", "title", "next", "waiting", "waiting_since", "trig", "due", "after_ref", "note")
 ORPHAN = tuple(f"{prefix}:" for _, prefix in LANES.values())  # a tidy id from before stable ids whose item left the board
 DECISION_COLS = ("id", "status", "title", "body", "options", "recommend", "link", "handle", "created_at", "checked_at",
                  "answer", "closed_at", "delivered", "delivered_at")
@@ -192,6 +193,13 @@ def read(timeout_ms=BUSY_MS):
         db.close()
 
 
+def _add_note_column(db):
+    """item.note came after the schema was versioned. Adding it is no step and no version bump: readers and older code
+    ignore a column they do not name, so the first writer that opens the DB adds it, inside its own transaction."""
+    if not any(r["name"] == "note" for r in db.execute("PRAGMA table_info(item)")):
+        db.execute("ALTER TABLE item ADD COLUMN note TEXT")
+
+
 @contextlib.contextmanager
 def tx(timeout_ms=BUSY_MS):
     """The only way to write: BEGIN IMMEDIATE takes the write lock up front, so a read never upgrades into BUSY."""
@@ -201,6 +209,7 @@ def tx(timeout_ms=BUSY_MS):
         try:
             if why := _missing(db):  # a rollback may have taken the step out while this waited for the lock
                 raise NotMigrated(f"{path()}: {why}: run {migrate_command()}")
+            _add_note_column(db)
             yield db
         except BaseException:
             db.execute("ROLLBACK")
@@ -434,6 +443,7 @@ def _item(r):
     """An item row as the dict its lane held in board.json, with its id; owner_todo items are {id, title}."""
     d, lane = {"id": r["id"], "title": r["title"], "updated_at": r["updated_at"]}, r["lane"]
     opt = lambda **kw: d.update({k: v for k, v in kw.items() if v})  # noqa: E731
+    opt(note=r["note"] if "note" in r.keys() else None)  # a DB no writer has opened since the note column came has none yet
     if lane == "doing":
         d.update(owner=r["who"], next=r["next"] or "")
         opt(waiting=bool(r["waiting"]), since=r["waiting_since"])
@@ -450,7 +460,7 @@ def _item(r):
 def _item_cols(lane, d):
     """ITEM_COLS' values for a dict as _item gives it."""
     return (d.get("owner") if lane == "doing" else "owner" if lane == "owner_todo" else d.get("who"), d["title"], d.get("next"),
-            int(bool(d.get("waiting"))), d.get("since"), d.get("trigger"), d.get("due"), d.get("after"))
+            int(bool(d.get("waiting"))), d.get("since"), d.get("trigger"), d.get("due"), d.get("after"), d.get("note"))
 
 
 def _insert_item(db, iid, lane, status, pos, cols, created, updated, close=(None, None, None, None), reopen=None):

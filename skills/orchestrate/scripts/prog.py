@@ -200,7 +200,7 @@ Usage: orch <command> <slug> [options]
                                      card's annotation (dry run unless --apply) and lists the rest as
                                      중복 N건 with a command each.
   board drop <id> | doing add <title> --owner W --next E [--waiting] [--order oN] | doing drop <n>
-        | later add <title> --trigger T [--due D] [--who W] [--at N] [--order oN] | later move <n> --to N | later drop <n>
+        | later add <title> --trigger T [--due D] [--who W] [--note TEXT] [--at N] [--order oN] | later move <n> --to N | later drop <n>
         | todo add <title> (--due D | --after C) --who W [--order oN] | todo drop <n> | todo from-later <n> [--due D] --who W
           --order oN (on the three adds): the new item carries the owner's order oN (orch order); an unknown or closed
           oN adds nothing
@@ -4644,7 +4644,7 @@ def cmd_board(argv):
             board.doing_drop(int(rest[1]))
         elif sub == "later" and rest[:1] == ["add"] and len(rest) > 1:
             say_linked(opt(rest, "--order"), board.later_add(rest[1], opt(rest, "--trigger"), opt(rest, "--due"), opt(rest, "--who"),
-                                                              opt(rest, "--at"), opt(rest, "--order")))
+                                                              opt(rest, "--at"), opt(rest, "--order"), opt(rest, "--note")))
         elif sub == "later" and rest[:1] == ["move"] and "".join(rest[1:2]).isdigit():
             board.later_move(int(rest[1]), opt(rest, "--to"))
         elif sub == "later" and rest[:1] == ["drop"] and len(rest) > 1:

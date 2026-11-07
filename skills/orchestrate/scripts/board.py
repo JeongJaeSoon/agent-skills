@@ -607,22 +607,26 @@ def queue_insert(q, item, to):
     q.insert(len(q) if to is None or to > len(shown) else shown[to - 1], item)
 
 
-def later_add(title, trigger, due=None, who=None, at=None, order=None):
+def later_add(title, trigger, due=None, who=None, at=None, order=None, note=None):
     """Add a held item to the queue at position at (1 first; the end by default), or reword the one it repeats in its
-    place (moved to at when given). The list's order is the queue's: the first is next. order: the owner's order oN."""
+    place (moved to at when given). The list's order is the queue's: the first is next. order: the owner's order oN.
+    note: the item's context, free text kept as written (newlines stay); a repeat without one keeps the note it had."""
     if order:
-        return with_order(order, lambda: later_add(title, trigger, due, who, at))
+        return with_order(order, lambda: later_add(title, trigger, due, who, at, note=note))
     if not (title or "").strip() or not (trigger or "").strip():
         raise ValueError("board later add needs a title and --trigger (what makes it next)")
     at = queue_pos(at)
     item = {"title": one_line(title), "trigger": one_line(trigger), **({"due": due} if due else {}),
-            **({"who": one_line(who)} if (who or "").strip() else {})}
+            **({"who": one_line(who)} if (who or "").strip() else {}), **({"note": note.strip()} if (note or "").strip() else {})}
 
     def go(store):
         q = store["later"]
         old = next((i for i, l in enumerate(q) if same_later(l, item)), None)
         if old is not None:
-            item["id"] = q.pop(old)["id"]
+            was = q.pop(old)
+            item["id"] = was["id"]
+            if "note" not in item and was.get("note"):
+                item["note"] = was["note"]
         if at is None and old is not None:
             q.insert(old, item)
         else:
@@ -2019,7 +2023,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     opened += [{"id": i, "kind": "doing", "label": d["title"], "status": js["status"], "row": item_of(rows[l["key"]])}
                for i, d, js, l in merged_doing if l["key"] in rows]
     opened += [{"id": l["id"], "kind": "later", "label": f"{l['trigger']} → {l['title']}", "status": "held",
-                "title": l["title"], "trigger": l["trigger"], "who": l.get("who"), "n": n}
+                "title": l["title"], "trigger": l["trigger"], "who": l.get("who"), "note": l.get("note"), "n": n}
                for n, l in enumerate(later, 1)]
     opened += [{"id": i, "kind": "do", "label": f"{when} → {t['title']} · {t['who']}", "due": (i, t, when) in arrived,
                 "status": rowstate.judge_item("do", t, facts_in, i)["status"] if (i, t, when) in arrived else "planned",
