@@ -4558,7 +4558,10 @@ def cmd_stage(argv):
         elif sub == "next":
             stages.set_next(rest)
         elif sub in ("done", "drop") and rid:
-            stages.finish(rid, drop=sub == "drop")
+            stages.finish(rid, drop=sub == "drop", evidence=opt(rest, "--evidence"))
+            if sub == "done" and opt(rest, "--evidence"):
+                import fleet
+                print(f"{rid}: done — {fleet.mask(' '.join(opt(rest, '--evidence').split()))}")
         elif sub == "show":
             import board, fleet, table_width
             state = fleet.read_json(fleet.state_dir() / "state.json", {})

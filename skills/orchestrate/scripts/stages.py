@@ -54,7 +54,9 @@ def change(fn):
         store = read()
         out = fn(store)
         cutoff = fleet.iso(fleet.utcnow() - dt.timedelta(seconds=DONE_KEEP_S))
-        gone = {k for k, r in store["rows"].items() if (r.get("done_at") or "9") < cutoff}
+        # An overlay is never aged out here (nor hidden in the DB): dropped, the generated row it closes would open
+        # again. merged_counted alone decides whether an old one still applies.
+        gone = {k for k, r in store["rows"].items() if (r.get("done_at") or "9") < cutoff and not r.get("overlay")}
         store["rows"] = {k: r for k, r in store["rows"].items() if k not in with_descendants(store["rows"], gone)}
         store["order"] = [k for k in store["order"] if k in store["rows"]]
         fleet.write_atomic(path(), json.dumps(store, ensure_ascii=False, indent=1) + "\n")
@@ -144,10 +146,18 @@ def set_next(lines):
     return change(lambda store: store.update(next=[fleet.mask(" ".join(l.split())) for l in lines if l.strip()]))
 
 
-def finish(rid, drop=False):
+def finish(rid, drop=False, evidence=None):
+    """Mark a row finished, or drop it. A generated work row has no recorded row to mark, so `done` writes the overlay
+    row `set_cell` writes over one (same keys), carrying done_at; its evidence is required and returned for the caller's
+    own record, since the row has no field for it."""
     def go(store):
         if rid not in store["rows"]:
-            raise ValueError(f"no row {rid}")
+            made = stage_auto.read()["rows"].get(rid)
+            if drop or not made or made.get("group"):
+                raise ValueError(f"no row {rid}")
+            if not (evidence or "").strip():
+                raise ValueError(f"{rid} is a generated row; `stage done` needs --evidence, one line on why it is done")
+            store["rows"][rid] = {"id": rid, "cells": {}, "overlay": True, "created_at": fleet.iso(fleet.utcnow())}
         if drop:
             gone = with_descendants(store["rows"], {rid})
             store["rows"] = {k: r for k, r in store["rows"].items() if k not in gone}
@@ -214,9 +224,16 @@ def merged_counted(store, made):
         if "merge" in (r.get("cells") or {}):
             ignored.append(target)
         return {c: v for c, v in (r.get("cells") or {}).items() if c != "merge"}
+    cutoff = fleet.iso(fleet.utcnow() - dt.timedelta(seconds=DONE_KEEP_S))
     for k, r in store["rows"].items():
         if k in rows:
-            rows[k] = {**rows[k], **{f: v for f, v in r.items() if v and f not in ("cells", "overlay")}, **full(r),
+            # A closing overlay outlives the week only on a predicate item, which is the same work whenever it shows
+            # again, and not while that item has a PR in flight; a card row's id comes back for a later card of the
+            # ticket, which the old close must not end.
+            g = rows[k]
+            stale = r.get("overlay") and (r.get("done_at") or "9") < cutoff and not (
+                g.get("item") and not (g.get("pr") and "merge" not in (g.get("cells") or {})))
+            rows[k] = {**rows[k], **{f: v for f, v in r.items() if v and f not in ("cells", "overlay") + (("done_at",) if stale else ())}, **full(r),
                        "cells": {**rows[k].get("cells", {}), **own(r, k)}}
         elif k in into:
             on = into[k]
