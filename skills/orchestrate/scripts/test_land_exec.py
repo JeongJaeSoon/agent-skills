@@ -773,6 +773,22 @@ class LandExec(Fixture):
         config(enabled=False)  # executor off: the direct path does carry it
         self.assertIn("verdict holds", self.land_check()[1])
 
+    def test_land_check_behind_advice_does_not_depend_on_a_verdict_being_recorded(self):
+        self.verdict(result="fail")  # the latest verdict is a failure: nothing passes, the path is still the executor's
+        self.edit_pr(mergeStateStatus="BEHIND")
+        out = self.land_check()[1]
+        self.assertNotIn("keeps the verdict", out)
+        self.assertIn("review the new head", out)
+
+    def test_a_failing_ci_behind_a_stale_branch_is_told_to_review_the_new_head(self):
+        self.edit_pr(mergeStateStatus="BEHIND", conclusion="FAILURE",
+                     statusCheckRollup=[{"name": "check", "status": "COMPLETED", "conclusion": "FAILURE",
+                                         "detailsUrl": f"https://github.com/o/r/actions/runs/{self.n}00/job/1"}])
+        msg = prog.attempt(self.p, self.n, "normal", expect=f"h{self.n}", verdict_sources=["review:codex"])[1]
+        self.assertIn("update-branch", msg)
+        self.assertNotIn("keeps the verdict", msg)
+        self.assertIn("review the new head", msg)
+
     def test_a_failing_verdict_needs_no_independence(self):
         os.environ["ORCA_TERMINAL_HANDLE"] = "term_author"
         real = prog.author_sessions

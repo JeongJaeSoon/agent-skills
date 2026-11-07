@@ -2745,7 +2745,7 @@ def merge_unit(p, pr, unit, klass, events, onto=None, stacked=False, expect=None
             return 2, f"yield: GitHub did not answer the merge ({why[:160]}); land again"
         p.append("land_failed", pr=pr, note=why)
         if "needs to be rebased" in why:
-            return 3, f"act: {why} {update_advice(unit, repo, True)}, then land again"
+            return 3, f"act: {why} {update_advice(unit, repo, True)}, then land again." + keep_note(no_ci, bool(expect))
         if "not up to date" in why or "behind" in why.lower():
             return 3, (f"act: the base requires up-to-date branches: {update_advice(unit, repo, stacked)}, then land again."
                        + keep_note(no_ci, bool(expect)))
@@ -2891,6 +2891,8 @@ def attempt(p, pr, klass, onto_lower=False, expect=None, verdict_sources=None):
     if me["state"] == "blocked" and not github_block:
         note_attempt(p, events, pr, "blocked", me["reasons"])
         todo = [ADVICE.get(r, r).format(pr=pr, repo=repo) for r in me["reasons"]]
+        if "behind base" in me["reasons"]:
+            todo.append(keep_note(no_ci_repo(repo), bool(expect)).strip())
         return 3, "act: " + " | ".join(todo)
     unit = (me["stack"] or [pr])[: (me["stack"] or [pr]).index(pr) + 1]
     if cfg["merge_policy"] == "human-gate":
@@ -3166,16 +3168,17 @@ def cmd_land_check(argv):
     if "no_ci_sha" in why:
         problems.append(f"no-CI lane: verdict is for {verdict['sha'][:8]}, not the head {v['headRefOid'][:8]}: re-review")
     ex, ex_unknown = None, False
-    if passing:
-        # The same decision `orch land` makes, on the repo GitHub serves now: the recorded name alone reads a renamed
-        # repo as one the executor does not cover, and passes a verdict the executor then refuses.
-        try:
-            ex = executor_for(repo)[0]
-        except SystemExit as e:  # a repo renamed out of the executor's scope, or GitHub not answering: orch land stops too
+    # The same decision `orch land` makes, on the repo GitHub serves now: the recorded name alone reads a renamed
+    # repo as one the executor does not cover, and passes a verdict the executor then refuses. It is read also with no
+    # passing verdict, since the update advice below depends on the path, not on the verdict.
+    try:
+        ex = executor_for(repo)[0]
+    except SystemExit as e:  # a repo renamed out of the executor's scope, or GitHub not answering: orch land stops too
+        ex_unknown = True
+        if passing:
             problems.append(str(e.code)[:300])
-            ex_unknown = True
-        if ex and (executor_why := executor_verdict_problem(verdict, v["headRefOid"], ex["verdict_sources"])):
-            problems.append(executor_why)  # the executor would refuse it: say so now
+    if passing and ex and (executor_why := executor_verdict_problem(verdict, v["headRefOid"], ex["verdict_sources"])):
+        problems.append(executor_why)  # the executor would refuse it: say so now
     if "head_moved" in why and not ex and not ex_unknown:  # the executor, or not knowing it, never promises the carry
         print(f"note: head moved {verdict['sha'][:8]} -> {v['headRefOid'][:8]} with the same patch-id; verdict holds, CI must pass at the new head")
     if p.cfg["merge_policy"] == "human-gate" and (hold := gate_hold(p, events, pr)):
