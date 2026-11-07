@@ -183,6 +183,8 @@ def after_switch(c, switched, here):
     odd = [x for x in words if x.startswith("-") and x != "-" and x not in SWITCH_PLAIN]
     if not names and not odd:
         return switched
+    if sub == "checkout" and len(names) > 1:  # `checkout <tree-ish> <paths>` restores files and keeps HEAD
+        return switched
     if odd or names[0] == "-" or names[0].startswith("@{"):
         return {**switched, key: SWITCH_UNKNOWN}
     # `git checkout README.md` restores a file; a local branch of that name wins over a path.
@@ -701,7 +703,7 @@ def force_push_default(c, here, switched=None):
                 repo = x[7:]
             # A value-taking option reads the next word unless its value is attached: `--repo=x`, `-ofoo`; in a
             # cluster only a closing `o` (`-fo ci.skip`) does.
-            i += x in PUSH_VALUED or not x.startswith("--") and x.endswith("o")
+            i += x in PUSH_VALUED or not x.startswith("--") and "o" in x and x.partition("o")[2] == ""
         else:
             pos.append(x)
 
@@ -751,8 +753,9 @@ def force_push_default(c, here, switched=None):
             if dst == SWITCH_UNKNOWN:
                 dst = "*"
         # A pattern such as `refs/heads/*` reaches the default branch too.
+        # `heads/main` is `refs/heads/main` for git.
         if (forced or spec.startswith("+")) and any(fnmatch.fnmatchcase(b, dst) for n in names
-                                                    for b in (n, "refs/heads/" + n)):
+                                                    for b in (n, "heads/" + n, "refs/heads/" + n)):
             return True
     return False
 
