@@ -64,12 +64,13 @@ GH_SHORT = "XFfHqtp"
 GH_LONG = {"--method", "--field", "--raw-field", "--header", "--input", "--jq", "--template", "--hostname", "--cache",
            "--preview"}
 CURL_SHORT = "AbcCdDeEFHKmoPQrtTuUwxXyYz"
-CURL_LONG = {"--data", "--data-raw", "--data-binary", "--data-urlencode", "--json", "--header", "--form",
-             "--user-agent", "--referer", "--user", "--upload-file", "--output", "--cookie", "--request", "--url",
-             "--proto-default", "--max-time", "--connect-timeout", "--retry", "--proxy", "--cert", "--key",
-             "--cacert", "--resolve", "--write-out", "--config"}
-CURL_DATA = {"-d", "--data", "--data-raw", "--data-binary", "--data-urlencode", "--json", "-F", "--form", "-T",
-             "--upload-file"}
+CURL_DATA = {"-d", "--data", "--data-ascii", "--data-raw", "--data-binary", "--data-urlencode", "--json", "-F",
+             "--form", "--form-string", "-T", "--upload-file"}
+CURL_LONG = CURL_DATA - set("-d -F -T".split()) | {
+    "--header", "--proxy-header", "--user-agent", "--referer", "--user", "--output", "--cookie", "--cookie-jar",
+    "--request", "--request-target", "--url", "--proto-default", "--max-time", "--connect-timeout", "--retry",
+    "--proxy", "--cert", "--key", "--cacert", "--resolve", "--write-out", "--config", "--dump-header",
+    "--oauth2-bearer", "--limit-rate", "--interface"}
 
 
 def level(cfg, key):
@@ -451,8 +452,10 @@ def api_call(w, here=None):
     method = next((v for k, v in reversed(opts) if k in ("-X", "--method")), None)
     fields = [v for k, v in opts if k in ("-f", "-F", "--field", "--raw-field")]
     inputs = [v for k, v in opts if k == "--input"]
-    # A body file's text counts as a field: a GraphQL mutation can arrive that way (`--input f`, `-F query=@f`).
-    fields += [read_body(b, here) for b in inputs + [f.split("=@", 1)[1] for f in fields if "=@" in f]]
+    # A body file's text counts as a field: a GraphQL mutation can arrive that way (`--input f`, `-F query=@f`; a
+    # raw `-f` field sends `@f` as text).
+    typed = [v for k, v in opts if k in ("-F", "--field")]
+    fields += [read_body(b, here) for b in inputs + [f.split("=@", 1)[1] for f in typed if "=@" in f]]
     method = (method or ("POST" if fields or inputs else "GET")).upper()
     endpoint = operands[0] if operands else ""
     return method, re.sub(r"^https?://[^/]+", "", endpoint, flags=re.I), fields  # gh takes a full URL too
@@ -551,7 +554,8 @@ def protection_mutation(text):
         text = body["query"] if isinstance(body, dict) and isinstance(body.get("query"), str) else text
     except ValueError:
         pass
-    text = re.sub(r'"(?:[^"\\]|\\.)*"', '""', text)  # a string value is data: a title that names a mutation is not one
+    # A string value or a `#` comment is not a field: a title that names a mutation is not one.
+    text = re.sub(r"#[^\n]*", "", re.sub(r'"(?:[^"\\]|\\.)*"', '""', text))
     return (re.search(r"\bmutation\b", text) is not None
             and re.search(r"\b(?:create|update|delete)\w*(?:ProtectionRule|Ruleset)\b", text) is not None)
 

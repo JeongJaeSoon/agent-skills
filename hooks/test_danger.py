@@ -111,6 +111,7 @@ MUTATION = TMP / "mutation.json"
 MUTATION.write_text('{"query": "mutation { deleteBranchProtectionRule(input: {}) { clientMutationId } }"}')
 GQL = TMP / "mutation.graphql"
 GQL.write_text("mutation { deleteBranchProtectionRule(input: {}) { clientMutationId } }")
+(TMP / "label.txt").write_text("no-visual-change")
 # The same mutation with a JSON escape in its name, which only a decoded body shows.
 ESCAPED = TMP / "escaped.json"
 ESCAPED.write_text('{"query": "mutation { \\u0064eleteBranchProtectionRule(input: {}) { clientMutationId } }"}')
@@ -268,7 +269,8 @@ CASES = [
       "gh api --method DELETE repos/acme/app/issues/12/labels/no-visual-change",
       'gh api repos/acme/app/issues/12/labels --jq ".[] | select(.name == \\"no-visual-change\\")"',
       "gh api repos/acme/app/issues/1/labels -f 'labels[]=no-visual-change-needed'",
-      "gh api repos/acme/app/issues/1/labels --template '-fno-visual-change'"]),
+      "gh api repos/acme/app/issues/1/labels --template '-fno-visual-change'",
+      ("gh api repos/acme/app/issues/1/labels -f 'labels[]=@label.txt'", TMP)]),
     ("guard.deny.owner_only", "deny", ["orch exempt visual 12"], ["orch status p", "echo orch exempt"]),
     ("guard.deny.external_review", "deny",
      [(f"codex exec --sandbox read-only - < p.md", REPOX), f"codex exec -C {REPOX} --sandbox read-only -",
@@ -325,6 +327,8 @@ CASES = [
       "curl -X DELETE -sH -XGET https://api.github.com/repos/acme/app/rulesets/1",
       "curl -H -G -d x https://api.github.com/repos/acme/app/rulesets",
       "curl -X DELETE -H --next https://api.github.com/repos/acme/app/rulesets/1",
+      """curl --data-ascii '{"name":"x"}' https://api.github.com/repos/acme/app/rulesets""",
+      "curl -X DELETE --proxy-header -XGET https://api.github.com/repos/acme/app/rulesets/1",
       f"curl https://api.github.com/graphql --data-binary @{MUTATION}",
       ("curl https://api.github.com/graphql -d @mutation.json", TMP),
       "gh api graphql --input=escaped.json".replace("escaped.json", str(ESCAPED)),
@@ -337,6 +341,7 @@ CASES = [
       "gh api repos/acme/app/branches/main/protection --template '-fexample'",
       "gh api graphql -f 'query=mutation { createIssue(input: {title: \"deleteRepositoryRuleset\"}) { x } }'",
       ("curl https://api.github.com/graphql -d @mutation.json", REPOX),
+      "gh api graphql -f 'query=query { viewer { login } } # mutation deleteBranchProtectionRule'",
       "echo gh api -X PUT repos/a/b/branches/main/protection", "gh pr view 3", "gh api -X HEAD repos/acme/app/rulesets",
       "curl https://api.github.com/repos/a/b/branches/main/protection",
       "curl -X POST -d x https://api.github.com/repos/a/b/issues",
