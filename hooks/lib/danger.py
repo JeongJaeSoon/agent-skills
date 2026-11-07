@@ -183,10 +183,10 @@ def after_switch(c, switched, here):
     odd = [x for x in words if x.startswith("-") and x != "-" and x not in SWITCH_PLAIN]
     if not names and not odd:
         return switched
-    if sub == "checkout" and len(names) > 1:  # `checkout <tree-ish> <paths>` restores files and keeps HEAD
-        return switched
     if odd or names[0] == "-" or names[0].startswith("@{"):
         return {**switched, key: SWITCH_UNKNOWN}
+    if sub == "checkout" and len(names) > 1:  # `checkout <tree-ish> <paths>` restores files and keeps HEAD
+        return switched
     # `git checkout README.md` restores a file; a local branch of that name wins over a path.
     if sub == "checkout" and os.path.exists(os.path.join(where or ".", names[0])) \
             and not git_out(["rev-parse", "--verify", "--quiet", "refs/heads/" + names[0]], where):

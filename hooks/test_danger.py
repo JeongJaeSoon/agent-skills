@@ -333,6 +333,7 @@ CASES = [
       ("git push -4fo ci.skip origin HEAD", ON_MAIN),
       ("git push -f -oci.variable=DEPLOY_ENV=demo origin main", ON_FEAT), ("git push -f origin heads/main", ON_FEAT),
       ("git push -f origin +heads/master", ON_FEAT),
+      ("git checkout --conflict merge main && git push -f origin HEAD", ON_FEAT),
       ("git --config-env core.editor=EDITOR switch main && git push -f origin HEAD", ON_FEAT),
       ("git switch --detach main && git push -f origin HEAD:main", ON_FEAT),
       ("git checkout main && git push -f origin HEAD", DIR_MAIN),
