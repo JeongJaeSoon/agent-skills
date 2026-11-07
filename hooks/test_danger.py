@@ -106,6 +106,13 @@ LINKED = TMP / "linked"
 LINKED.mkdir()
 git("init", "-q", cwd=LINKED)
 (LINKED / "cache-link").symlink_to("/usr")
+# GraphQL bodies that delete a branch protection rule, and a folder under TMP so `../mutation.json` finds one.
+MUTATION = TMP / "mutation.json"
+MUTATION.write_text('{"query": "mutation { deleteBranchProtectionRule(input: {}) { clientMutationId } }"}')
+GQL = TMP / "mutation.graphql"
+GQL.write_text("mutation { deleteBranchProtectionRule(input: {}) { clientMutationId } }")
+NEST = TMP / "nest"
+NEST.mkdir()
 # A stand-in `orca` that says the current worktree is the main one.
 (BIN / "orca").write_text("#!/bin/sh\necho '{\"result\": {\"worktree\": {\"isMainWorktree\": true}}}'\n")
 (BIN / "orca").chmod(0o755)
@@ -270,6 +277,63 @@ CASES = [
                                           "export AGENT_SKILLS_PRESSURE_GATE=0"],
      ["AGENT_SKILLS_PRESSURE_GATE=1 orch heavy p -- npm test", "echo AGENT_SKILLS_PRESSURE_GATE",
       "echo AGENT_SKILLS_PRESSURE_GATE=0"]),
+    ("guard.deny.protection_write", "deny",
+     ["gh api -X PUT repos/a/b/branches/main/protection -f enforce_admins=true",
+      "gh api --method=DELETE repos/a/b/branches/main/protection", "gh api repos/a/b/rulesets -f name=x",
+      "gh api -X PUT repos/a/b/rulesets/12 --input r.json", "gh api orgs/a/rulesets -X POST",
+      "gh api -X PATCH repos/a/b/branches/feat%2Fx/protection/required_status_checks -f strict=true",
+      "gh api -X DELETE repos/a/b/branches/main/protection/enforce_admins",
+      "gh api graphql -f query='mutation { createBranchProtectionRule(input: {}) { clientMutationId } }'",
+      "gh api graphql -f query='mutation { deleteRepositoryRuleset(input: {}) { clientMutationId } }'",
+      "gh api -XDELETE repos/acme/app/branches/main/protection", "gh api repos/acme/app/rulesets --input=rules.json",
+      "gh api graphql -fquery='mutation { deleteBranchProtectionRule(input: {}) { clientMutationId } }'",
+      f"gh api graphql --input {MUTATION}", ("gh api graphql --input mutation.json", TMP),
+      (f"cd {NEST} && gh api graphql --input ../mutation.json", REPOX),
+      "gh api -X DELETE 'repos/acme/app/branches/main/protection?x=y'", f"gh api graphql -F query=@{GQL}",
+      "gh api -X GET -X DELETE repos/acme/app/branches/main/protection",
+      "gh api -X DELETE https://api.github.com/repos/acme/app/rulesets/1",
+      "gh api -X DELETE repos/acme/app/rulesets/1 -H -XGET",
+      "gh api https://api.github.com/graphql -f query='mutation { deleteBranchProtectionRule(input: {}) { x } }'",
+      'curl -X DELETE -H "Authorization: Bearer x" https://api.github.com/repos/acme/app/branches/main/protection',
+      "curl -XPUT https://api.github.com/repos/a/b/rulesets/1 -d @r.json",
+      "curl --request POST -d x https://api.github.com/repos/a/b/rulesets",
+      "curl -X DELETE --url=https://api.github.com/repos/acme/app/rulesets/1",
+      "curl -X DELETE https://api.github.com/ https://api.github.com/repos/acme/app/rulesets/1",
+      "curl --proto-default https -X DELETE api.github.com/repos/acme/app/branches/main/protection",
+      "curl -X PUT api.github.com/repos/acme/app/branches/main/protection -d '{}'",
+      """curl -X POST https://api.github.com/graphql -d '{"query":"mutation { deleteBranchProtectionRule(input: {}) { x } }"}'""",
+      "curl -sX DELETE https://api.github.com/repos/acme/app/branches/main/protection",
+      "curl -qXDELETE https://api.github.com/repos/acme/app/rulesets/1", "curl -ZXDELETE https://api.github.com/repos/acme/app/rulesets/1",
+      "curl -X DELETE https://api.github.com/repos/acme/app/rulesets/1 --next -X GET https://api.github.com/user",
+      "curl -X DELETE https://api.github.com/repos/acme/app/rulesets/1 -: -X GET https://api.github.com/user",
+      "curl -X DELETE https://api.github.com/repos/acme/app/rulesets/1 -:XGET https://api.github.com/user",
+      "curl -X GET https://api.github.com/user -:XDELETE https://api.github.com/repos/acme/app/rulesets/2",
+      "curl -X DELETE https://API.GITHUB.COM/repos/acme/app/rulesets/1",
+      "curl -X DELETE https://api.github.com:443/repos/acme/app/branches/main/protection",
+      "curl -f -X DELETE https://api.github.com/repos/acme/app/branches/main/protection",
+      "curl -q -X DELETE https://api.github.com/repos/acme/app/rulesets/1",
+      "curl -X GET -X DELETE https://api.github.com/repos/acme/app/branches/main/protection",
+      "curl -X DELETE https://api.github.com/repos/a/b/rulesets/1 -H -XGET",
+      """curl --get --no-get --json '{"name":"x"}' https://api.github.com/repos/acme/app/rulesets""",
+      """curl -sd '{"name":"x"}' -H 'Content-Type: application/json' https://api.github.com/repos/acme/app/rulesets""",
+      """curl -AGitHubCLI --json'{"name":"x"}' https://api.github.com/repos/acme/app/rulesets"""],
+     [("gh api graphql --input mutation.json", REPOX), "gh api repos/a/b/branches/main/protection",
+      "gh api repos/a/b/rulesets", "gh api -X GET repos/a/b/rulesets/12", "gh api repos/a/b/rules/branches/main",
+      "gh api repos/a/b/branches/main/protection --jq .enforce_admins",
+      "gh api graphql -f query='query { viewer { login } }'", "gh api -X POST repos/a/b/issues -f title=x",
+      "echo gh api -X PUT repos/a/b/branches/main/protection", "gh pr view 3", "gh api -X HEAD repos/acme/app/rulesets",
+      "curl https://api.github.com/repos/a/b/branches/main/protection",
+      "curl -X POST -d x https://api.github.com/repos/a/b/issues",
+      "curl -X DELETE https://example.test/repos/a/b/rulesets/1",
+      "curl -X DELETE -X GET https://api.github.com/repos/a/b/rulesets/1",
+      "curl -G https://api.github.com/repos/acme/app/rulesets -d per_page=100",
+      "curl -qG -d per_page=100 https://api.github.com/repos/acme/app/rulesets",
+      "curl -NG -d per_page=100 https://api.github.com/repos/acme/app/rulesets",
+      "curl -ZG -d per_page=100 https://api.github.com/repos/acme/app/rulesets",
+      "curl -I -X HEAD https://api.github.com/repos/a/b/rulesets/1",
+      """curl -X POST https://api.github.com/repos/acme/app/issues -d '{"body":"https://api.github.com/repos/acme/app/rulesets/1"}'""",
+      "curl -X POST -H 'Referer: https://api.github.com/repos/a/b/rulesets/1' https://example.test/x",
+      "curl -X GET https://api.github.com/user --next -X GET https://api.github.com/repos/a/b/rulesets/1"]),
     ("guard.deny.rm_outside", "deny",
      ["cd /usr || exit 1; rm -rf local/data", "cd /usr && cd /tmp && cd - && rm -rf local/data", "pushd /usr; rm -rf local/data", "cd /usr && pushd /tmp && popd && rm -rf local/data", "pushd /usr >/dev/null && rm -rf local/data",
       "cd /usr; cd /tmp & rm -rf local/data", "cd /usr; cd /tmp |& cat; rm -rf local/data",
