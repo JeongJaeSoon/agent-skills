@@ -8,7 +8,7 @@ Usage:
   skills-sync setup disable NAME
   skills-sync setup drift [--json]      registered jobs that differ from this checkout's definitions (exit 1), or that
                                         no definition owns any more
-  skills-sync setup reconcile           edit those in place (on/off stays) and remove the retired ones; `sync` runs it
+  skills-sync setup reconcile           edit those in place (on/off stays) and remove the retired ones; only a person runs it
 
 Running any of these again changes nothing that is already as asked. `disable` keeps the janitor registered
 but off, so `apply` leaves it off. Turning one on writes paths to this checkout into the job, so it refuses a

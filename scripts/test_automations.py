@@ -187,7 +187,10 @@ class Janitor(Base):
         fake = self.orca([old])
         self.assertEqual(self.j.enable(False)[0], 0)
         (edit,) = fake.edits()
+        # `orca automations edit --help` says "--extra-agent-args=<args> ... empty clears" and its example is the bare
+        # `--extra-agent-args=` form; a separate empty argv word would be taken as a missing value
         self.assertIn("--extra-agent-args=", edit)
+        self.assertNotIn("--extra-agent-args", edit)
         self.assertEqual(edit[edit.index("--prompt") + 1], WANT["prompt"])
         self.assertEqual(self.j.drift(janitor()), {})
 

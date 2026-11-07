@@ -212,21 +212,21 @@ def state_step():
     return "ok" if p.returncode == 0 else "failed"
 
 
-def reconcile_step():
-    """Run the loaded checkout's `automations.py reconcile` after a good sync, so a job registered in an older shape
-    (a model session where the repo now defines a shell job, a changed interval) is edited to the new definition on the
-    update that ships it. Returns "ok", "failed", or None when the checkout has no such script or Orca is not there."""
+def drift_step():
+    """Run the loaded checkout's `automations.py drift` after a good sync, only to report: a job registered in an older
+    shape is edited by a person (`skills-sync setup reconcile`), never by the sync. Returns "ok", "drift" (some job differs,
+    or Orca cannot be read), or None when the checkout has no such script or Orca is not there."""
     script = REPO / "scripts" / "automations.py"
     if not script.is_file() or not shutil.which("orca") or not (REPO / ".git").is_dir():  # a worktree is never registered
         return None
     try:
-        p = subprocess.run([sys.executable, str(script), "reconcile"], capture_output=True, text=True, timeout=120)
+        p = subprocess.run([sys.executable, str(script), "drift"], capture_output=True, text=True, timeout=120)
     except subprocess.TimeoutExpired:
-        print("reconcile step: timed out")
-        return "failed"
+        print("drift step: timed out")
+        return "drift"
     if p.stdout.strip() or p.stderr.strip():  # a no-op tick says nothing
         print((p.stdout + p.stderr).strip())
-    return "ok" if p.returncode == 0 else "failed"
+    return "ok" if p.returncode == 0 else "drift"
 
 
 def sync(broadcast_after=True):
@@ -246,12 +246,12 @@ def sync(broadcast_after=True):
             head = None
         ran = state_step() if ok else None
         state = ran or prev.get("state")  # a stopped sync keeps the last result, so a repeat failure is not told again
-        recon = (reconcile_step() if ok else None) or prev.get("reconcile")
+        recon = (drift_step() if ok else None) or prev.get("drift")
         write_json(STATE / "sync.json", {"ok": ok, "message": msg, "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                                          "head": head, "interval": INTERVAL_S, **({"state": state} if state else {}),
-                                         **({"reconcile": recon} if recon else {})})
-        if recon == "failed" and prev.get("reconcile") != "failed":
-            notify("automation reconcile failed: run `skills-sync setup drift` and read its output")
+                                         **({"drift": recon} if recon else {})})
+        if recon == "drift" and prev.get("drift") != "drift":
+            notify("a registered automation differs from its definition: run `skills-sync setup drift`, then `skills-sync setup reconcile` if the change is wanted")
         print(("ok: " if ok else "stopped: ") + msg)
         if not ok and (prev.get("ok", True) or prev.get("message") != msg):
             notify(f"stopped: {msg}")  # only on a change of state, so a lasting stop does not repeat

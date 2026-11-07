@@ -26,7 +26,7 @@ skills-sync setup apply                  # 기본값 적용
 skills-sync setup enable <이름>          # 켜기
 skills-sync setup disable <이름>         # 끄기
 skills-sync setup drift [--json]          # 등록된 job이 정의와 다르거나 정의가 없는 것(다르면 exit 1)
-skills-sync setup reconcile               # 그것을 제자리에서 맞추고(켜짐·꺼짐은 그대로) 정의가 없는 job은 지운다. sync가 업데이트 뒤에 돌린다
+skills-sync setup reconcile               # 그것을 제자리에서 맞추고(켜짐·꺼짐은 그대로) 정의가 없는 job은 지운다. 사람이 직접 돌릴 때만 실행된다(sync는 `drift`로 알리기만 한다)
 ```
 
 | 이름 | 기본 | 장치 | 켜기 | 끄기 |

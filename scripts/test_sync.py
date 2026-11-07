@@ -868,8 +868,9 @@ def test_restart_holds_reload():
     shutil.rmtree(tmp)
 
 
-def test_reconcile_step():
-    """After a good sync the loaded checkout's `automations.py reconcile` runs; a worktree, no orca or no script skips it."""
+def test_drift_step():
+    """After a good sync the loaded checkout's `automations.py drift` runs and only reports; `reconcile`, which edits the
+    registered automations, is never run by a sync. A worktree, no orca or no script skips the step."""
     real = (sync.REPO, sync.subprocess.run, sync.shutil.which)
     ran = []
     sync.subprocess.run = lambda cmd, **k: ran.append(cmd) or subprocess.CompletedProcess(cmd, k.get("rc", 0), "", "")
@@ -878,21 +879,22 @@ def test_reconcile_step():
         with tempfile.TemporaryDirectory() as d:
             repo = pathlib.Path(d)
             sync.REPO = repo
-            check("no script: skipped", sync.reconcile_step() is None and ran == [])
+            check("no script: skipped", sync.drift_step() is None and ran == [])
             (repo / "scripts").mkdir()
             (repo / "scripts" / "automations.py").write_text("")
             check("a worktree (.git is a file): skipped", (repo / ".git").write_text("gitdir: x") is not None
-                  and sync.reconcile_step() is None and ran == [])
+                  and sync.drift_step() is None and ran == [])
             (repo / ".git").unlink()
             (repo / ".git").mkdir()
-            check("the main checkout runs reconcile", sync.reconcile_step() == "ok"
-                  and ran[-1][-2:] == [str(repo / "scripts" / "automations.py"), "reconcile"], ran)
+            check("the main checkout runs drift", sync.drift_step() == "ok"
+                  and ran[-1][-2:] == [str(repo / "scripts" / "automations.py"), "drift"], ran)
+            check("a sync never edits a registration", not any("reconcile" in c for cmd in ran for c in cmd), ran)
             sync.shutil.which = lambda name: None
             ran.clear()
-            check("no orca: skipped", sync.reconcile_step() is None and ran == [])
+            check("no orca: skipped", sync.drift_step() is None and ran == [])
             sync.shutil.which = lambda name: "/x/orca"
-            sync.subprocess.run = lambda cmd, **k: subprocess.CompletedProcess(cmd, 1, "", "boom")
-            check("a failing reconcile is reported as failed", sync.reconcile_step() == "failed")
+            sync.subprocess.run = lambda cmd, **k: subprocess.CompletedProcess(cmd, 1, "", "janitor differs")
+            check("a drifted job is reported as drift", sync.drift_step() == "drift")
     finally:
         sync.REPO, sync.subprocess.run, sync.shutil.which = real
 
@@ -1240,7 +1242,7 @@ if __name__ == "__main__":
     test_session_for()
     test_close_setup_agent()
     test_main_help()
-    test_reconcile_step()
+    test_drift_step()
     test_reload_kind()
     test_classify()
     test_confirm()
