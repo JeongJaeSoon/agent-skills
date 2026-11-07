@@ -531,7 +531,7 @@ def protection_write(c, here=None):
     w = c.words
 
     def writes(method, endpoint):
-        endpoint = endpoint.split("?", 1)[0]
+        endpoint = re.split(r"[?#]", endpoint, 1)[0]
         # Anchored under a repository or an organization: `contents/.github/rulesets/x.json` is a file, not a ruleset.
         target = re.match(r"/?(?:api/v3/)?(?:repos/[^/]+/[^/]+/branches/.+/protection|(?:repos/[^/]+/[^/]+|orgs/[^/]+)"
                           r"/rulesets)(?:/|$)", endpoint) is not None
