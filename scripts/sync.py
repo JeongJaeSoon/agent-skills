@@ -39,7 +39,7 @@ The checkout is loaded live through CLAUDE_CODE_PLUGIN_DIRS (docs/platform.md), 
 every session reads. It never rebases, merges, forces or commits: anything but a fast-forward or a push of
 signed commits stops it, and the reason goes to the state file and a desktop notification.
 """
-import contextlib, datetime, fcntl, glob, json, os, pathlib, platform, re, secrets, subprocess, sys, time
+import contextlib, datetime, fcntl, glob, json, os, pathlib, platform, re, secrets, shutil, subprocess, sys, time
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE", "~/.local/state/agent-skills")).expanduser()
@@ -212,6 +212,23 @@ def state_step():
     return "ok" if p.returncode == 0 else "failed"
 
 
+def reconcile_step():
+    """Run the loaded checkout's `automations.py reconcile` after a good sync, so a job registered in an older shape
+    (a model session where the repo now defines a shell job, a changed interval) is edited to the new definition on the
+    update that ships it. Returns "ok", "failed", or None when the checkout has no such script or Orca is not there."""
+    script = REPO / "scripts" / "automations.py"
+    if not script.is_file() or not shutil.which("orca") or not (REPO / ".git").is_dir():  # a worktree is never registered
+        return None
+    try:
+        p = subprocess.run([sys.executable, str(script), "reconcile"], capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        print("reconcile step: timed out")
+        return "failed"
+    if p.stdout.strip() or p.stderr.strip():  # a no-op tick says nothing
+        print((p.stdout + p.stderr).strip())
+    return "ok" if p.returncode == 0 else "failed"
+
+
 def sync(broadcast_after=True):
     with locked() as got:
         if not got:
@@ -229,8 +246,12 @@ def sync(broadcast_after=True):
             head = None
         ran = state_step() if ok else None
         state = ran or prev.get("state")  # a stopped sync keeps the last result, so a repeat failure is not told again
+        recon = (reconcile_step() if ok else None) or prev.get("reconcile")
         write_json(STATE / "sync.json", {"ok": ok, "message": msg, "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-                                         "head": head, "interval": INTERVAL_S, **({"state": state} if state else {})})
+                                         "head": head, "interval": INTERVAL_S, **({"state": state} if state else {}),
+                                         **({"reconcile": recon} if recon else {})})
+        if recon == "failed" and prev.get("reconcile") != "failed":
+            notify("automation reconcile failed: run `skills-sync setup drift` and read its output")
         print(("ok: " if ok else "stopped: ") + msg)
         if not ok and (prev.get("ok", True) or prev.get("message") != msg):
             notify(f"stopped: {msg}")  # only on a change of state, so a lasting stop does not repeat

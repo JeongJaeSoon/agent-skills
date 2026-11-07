@@ -23,7 +23,7 @@ ENV_KEYS = ("PROGRAMS_HOME", "ORCH_DASH_LABEL", "ORCH_FLEET", "ORCH_FLEET_STATE"
             "ORCH_CLAUDE_HOMES")
 RECOVER = "cutover-recover.json"
 # The automations whose rounds write while the cutover runs; sync and orch-dash are what the LaunchAgents became.
-JOBS = ("janitor", "janitor-load", "watch-prs", "sync", "orch-dash")
+JOBS = ("janitor", "watch-prs", "sync", "orch-dash")
 
 
 def sh(cmd):
