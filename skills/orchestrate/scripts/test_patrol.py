@@ -520,23 +520,26 @@ assert patrol.due({"t": NOW - 26 * 60, "level": "danger"}, "danger", NOW)
 assert patrol.due({"t": NOW - 16 * 60, "level": "danger"}, "danger", NOW, floor="warn"), "danger again after a fall to warn"
 assert not patrol.due({"t": NOW - 16 * 60, "level": "danger"}, "danger", NOW, floor="danger")
 # trigger_level reads pressure's floor only for the round it tracked.
-patrol.PRESSURE.write_text(json.dumps({"level": "warn", "trigger_level": "danger", "trigger_floor": "ok", "floor_for": 5, "floor_t": 77}))
-assert patrol.trigger_level({"t": 5}) == ("danger", "ok", 77) and patrol.trigger_level({"t": 6}) == ("danger", None, 0)
-# A fall pressure saw while the round gathered (its floor is written against the memo the round replaces) stays in the
-# memo the round commits; one it saw before the round started does not.
-patrol.MEMO.write_text(json.dumps({"t": 5, "level": "danger"}))
-def pressure_falls(at):
+patrol.PRESSURE.write_text(json.dumps({"level": "warn", "trigger_level": "danger", "trigger_obs": [[60, "warn"], [70, "danger"]]}))
+assert patrol.trigger_level({"t": 50, "level": "danger"}) == ("danger", "warn")
+assert patrol.trigger_level({"t": 65, "level": "danger"}) == ("danger", "danger"), "a fall before the round began is not below its level"
+assert patrol.trigger_level({}) == ("danger", "ok")
+# pressure's history is timestamped, so what patrol commits cannot erase a fall: one seen while the round gathered, or
+# between its last read and its commit, is still below the round's level once the memo carries the round's start time.
+def pressure_falls(*obs):
     def gather(now, deadline, memo):
-        patrol.PRESSURE.write_text(json.dumps({"level": "danger", "trigger_level": "danger", "trigger_floor": "warn",
-                                               "floor_for": 5, "floor_t": at}))
+        patrol.PRESSURE.write_text(json.dumps({"level": "danger", "trigger_level": "danger", "trigger_obs": [list(o) for o in obs]}))
         return facts(now=now), []
     return gather
-patrol.PRESSURE.write_text(json.dumps({"level": "danger", "trigger_level": "danger", "trigger_floor": "danger", "floor_for": 5}))
-patrol.round_once(now=1000.0, gather_fn=pressure_falls(1010.0))
-assert json.loads(patrol.MEMO.read_text())["level"] == "warn" and json.loads(patrol.MEMO.read_text())["t"] == 1000.0
+patrol.PRESSURE.write_text(json.dumps({"level": "danger", "trigger_level": "danger", "trigger_obs": []}))
 patrol.MEMO.write_text(json.dumps({"t": 5, "level": "danger"}))
-patrol.round_once(now=2000.0, gather_fn=pressure_falls(1500.0))
-assert json.loads(patrol.MEMO.read_text())["level"] == "danger", "a fall before the round started is not this round's"
+patrol.round_once(now=1000.0, gather_fn=pressure_falls((900.0, "danger"), (1010.0, "warn"), (1020.0, "danger")))
+memo = json.loads(patrol.MEMO.read_text())
+assert memo["t"] == 1000.0 and memo["level"] == "danger"
+assert patrol.trigger_level(memo) == ("danger", "warn"), "the fall during the round survives the commit"
+patrol.MEMO.write_text(json.dumps({"t": 5, "level": "danger"}))
+patrol.round_once(now=2000.0, gather_fn=pressure_falls((1500.0, "warn"), (1600.0, "danger")))
+assert patrol.trigger_level(json.loads(patrol.MEMO.read_text())) == ("danger", "danger"), "a fall before the round began is not its own"
 patrol.PRESSURE.unlink()
 patrol.MEMO.unlink()
 

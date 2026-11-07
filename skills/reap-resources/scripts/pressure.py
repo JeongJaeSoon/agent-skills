@@ -129,11 +129,24 @@ def read_patrol_memo():
         return {}
 
 
-def trigger_floor(st, memo, tlevel):
-    """The lowest trigger level since patrol's last round (its memo level when that round was this round's predecessor).
-    A fall starts no round, so only this floor lets a climb back to the old level read as a rise."""
-    base = st.get("trigger_floor") if st.get("floor_for") == memo.get("t") and st.get("trigger_floor") else memo.get("level") or "ok"
-    return min(base, tlevel, key=LEVELS.index)
+TRIGGER_OBS_KEEP = 24
+
+
+def trigger_obs_add(obs, tlevel, now):
+    """The trigger level's changes, [time, level], newest last: the history `floor_since` reads. It is kept by the
+    pressure round alone and timestamped, so it does not depend on when patrol commits its memo."""
+    obs = [o for o in obs or [] if isinstance(o, list) and len(o) == 2]
+    if not obs or obs[-1][1] != tlevel:
+        obs.append([now, tlevel])
+    return obs[-TRIGGER_OBS_KEEP:]
+
+
+def floor_since(obs, memo):
+    """The lowest trigger level since patrol's last round began (memo.t is when it began, memo.level the level it saw
+    then). A fall starts no round, so only this floor lets a climb back to the old level read as a rise, including a
+    fall that happened while that round was still gathering."""
+    since = memo.get("t") or 0
+    return min([memo.get("level") or "ok", *(o[1] for o in obs or [] if o[0] >= since)], key=LEVELS.index)
 
 
 def rise_due(floor, last_round_t, tlevel, now):
@@ -1008,13 +1021,10 @@ def round_once(cfg, dry_run, out=print, now=None, measure_fn=measure, sample_fn=
     load_danger = any(metric == "load_per_cpu" and lvl == 2 for metric, lvl, _ in hits(m, cfg))
     tlevel, held = trigger_level(st.get("trigger_level") or "ok", st.get("trigger_held"), level, m, load_danger)
     memo = read_patrol_memo()
-    floor = trigger_floor(st, memo, tlevel)
-    # floor_t: when the floor last fell, so patrol can tell a fall during its round (which its memo must keep) from one before it.
-    tracked = st.get("trigger_floor") if st.get("floor_for") == memo.get("t") else None
-    record["floor_t"] = now if floor != (tracked or memo.get("level") or "ok") else st.get("floor_t", 0) if tracked else 0
+    obs = trigger_obs_add(st.get("trigger_obs"), tlevel, now)
     # A start patrol refused or never ran is asked again, but not every round.
-    fire = rise_due(floor, memo.get("t") or 0, tlevel, now) and now - st.get("spawn_t", 0) >= TRIGGER_RETRY_S
-    record.update(trigger_level=tlevel, trigger_held=held, trigger_floor=floor, floor_for=memo.get("t"))
+    fire = rise_due(floor_since(obs, memo), memo.get("t") or 0, tlevel, now) and now - st.get("spawn_t", 0) >= TRIGGER_RETRY_S
+    record.update(trigger_level=tlevel, trigger_held=held, trigger_obs=obs)
     if fire:
         record["spawn_t"] = now
     if level != "danger" and st.get("dash_t") and not dry_run:

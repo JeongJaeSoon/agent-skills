@@ -330,12 +330,11 @@ def pressure_level():
 
 
 def trigger_level(memo):
-    """(level, floor, floor_t) `due` compares: pressure's hysteresis-held level, which only the patrol trigger reads, the
-    lowest it was since the round in `memo` and when it last fell there (None, 0 when pressure has not tracked that round)."""
+    """(level, floor) `due` compares: pressure's hysteresis-held level, which only the patrol trigger reads, and the
+    lowest it was since the round in `memo` began."""
+    import pressure  # here, not at the top: the hooks that import patrol stay off pressure's imports
     st = fleet.read_json(PRESSURE, {}) or {}
-    tracked = st.get("floor_for") == memo.get("t")
-    return (st.get("trigger_level") or st.get("level") or "ok", st.get("trigger_floor") if tracked else None,
-            st.get("floor_t", 0) if tracked else 0)
+    return st.get("trigger_level") or st.get("level") or "ok", pressure.floor_since(st.get("trigger_obs"), memo)
 
 
 def consumers():
@@ -1116,17 +1115,13 @@ def switch_round(drifts, rows, notes, path_of, switch):
 def round_once(dry=False, if_due=False, now=None, gather_fn=gather, rid=None, fallback=False):
     now = now or time.time()
     memo = fleet.read_json(MEMO, {}) or {}
-    tlevel, floor, _ = trigger_level(memo)
+    tlevel, floor = trigger_level(memo)
     if if_due and not due(memo, tlevel, now, FALLBACK_DUE_S if fallback else DUE_S, floor):
         return None
     t0 = time.monotonic()
     facts, notes = gather_fn(now, time.time() + BUDGET_S, memo)
     findings, verdicts, memo2 = judge(facts, memo)
-    # What the next `due` compares a rise against; the raw level stays in facts. A fall pressure saw while this round
-    # gathered (its floor, written against the memo this commit replaces) stays in it, or the memo would forget the fall.
-    _, floor_now, floor_t = trigger_level(memo)
-    import pressure  # here, not at the top: the hooks that import patrol stay off pressure's imports
-    memo2["level"] = min(tlevel, floor_now, key=pressure.LEVELS.index) if floor_now and floor_t >= now else tlevel
+    memo2["level"] = tlevel  # what the next `due` compares a rise against; the raw level stays in facts
     rid = rid or round_id(now)
     partial = signal_round(facts, findings, verdicts, memo, memo2, notes, dry, rid) if facts.get("agents_fn") else ""
     verdicts.update(schema=2, round=rid, complete=False,

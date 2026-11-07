@@ -399,9 +399,13 @@ assert p.trigger_level("danger", True, "warn", {"load_per_cpu": 1.8}, False) == 
 # judge caps the load at warn while the CPU idles: the load did not drive that danger.
 idle_cap = {**OK, "load_per_cpu": 2.1, "cpu_idle_pct": 30, "mem_free_pct": 9}
 assert p.judge(idle_cap, cfg)[0] == "danger" and not any(mt == "load_per_cpu" and lv == 2 for mt, lv, _ in p.hits(idle_cap, cfg))
-assert p.trigger_floor({}, {"level": "danger", "t": 5}, "warn") == "warn", "a fall lowers the floor below the memo's level"
-assert p.trigger_floor({"trigger_floor": "ok", "floor_for": 5}, {"level": "danger", "t": 5}, "warn") == "ok"
-assert p.trigger_floor({"trigger_floor": "ok", "floor_for": 4}, {"level": "warn", "t": 5}, "danger") == "warn", "a new round resets it"
+obs = p.trigger_obs_add(None, "warn", 10.0)
+assert obs == [[10.0, "warn"]] and p.trigger_obs_add(obs, "warn", 20.0) == obs, "only changes are kept"
+assert p.trigger_obs_add(obs, "danger", 30.0) == [[10.0, "warn"], [30.0, "danger"]]
+assert len(p.trigger_obs_add([[i, "ok" if i % 2 else "warn"] for i in range(100)], "danger", 200.0)) == p.TRIGGER_OBS_KEEP
+assert p.floor_since([[10.0, "warn"], [30.0, "danger"]], {"t": 5, "level": "danger"}) == "warn", "a fall since the round began"
+assert p.floor_since([[10.0, "warn"], [30.0, "danger"]], {"t": 20, "level": "danger"}) == "danger", "an older fall is not below it"
+assert p.floor_since([], {"t": 5, "level": "warn"}) == "warn" and p.floor_since([], {}) == "ok"
 assert p.rise_due("ok", 100.0, "warn", 1000.0) and not p.rise_due("warn", 100.0, "warn", 1000.0)
 assert not p.rise_due("ok", 500.0, "warn", 1000.0), "inside the 15-minute gap"
 # Rounds against a patrol memo. The memo is what patrol wrote on its last round; a start patrol refused or never ran
@@ -429,8 +433,8 @@ for step, (load, at, want, patrol_runs) in enumerate([
     run_round(LOAD(load), [], consumers=([], []), now=at, rescan_minutes=0)
     assert len(spawned) == want, (step, load, spawned)
     assert p.load_state()["level"] == p.judge(LOAD(load), cfg)[0], "the raw level is not held"
-    if at == T + 1000:  # the floor fell below patrol's danger: when is recorded for patrol's commit
-        assert p.load_state()["trigger_floor"] == "warn" and p.load_state()["floor_t"] == at
+    if at == T + 1000:  # the fall below patrol's danger is in the history patrol's commit cannot touch
+        assert p.load_state()["trigger_obs"][-1] == [at, "warn"]
     if spawned and patrol_runs:
         p.PATROL_MEMO.write_text(json.dumps({"t": at, "level": p.load_state()["trigger_level"]}))
 p.reap.spawn_patrol = spawn0
