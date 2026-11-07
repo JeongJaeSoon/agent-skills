@@ -465,6 +465,16 @@ run_round(LOAD(1.4), [], consumers=([], []), now=500.0, rescan_minutes=0)
 p.time.monotonic = mono0
 stamp = p.load_state()["trigger_obs"][-1]
 assert stamp[1] == "warn" and stamp[0] >= 500.0 + 20, stamp
+# The retry interval counts from when the start was written, not from when the round began: a slow measurement (each
+# clock reading here is 60 s after the last) must not shorten it.
+p.save_state({"level": "ok", "trigger_level": "ok", "t": 1.0})
+p.PATROL_MEMO.write_text(json.dumps({"t": 1.0, "level": "ok"}))
+p.time.monotonic = itertools.count(0, 60).__next__
+for now, want in ((1000.0, 1), (1300.0, 0), (1400.0, 1)):
+    spawned.clear()
+    run_round(LOAD(1.4), [], consumers=([], []), now=now, rescan_minutes=0)
+    assert len(spawned) == want, (now, spawned, p.load_state().get("spawn_t"))
+p.time.monotonic = mono0
 p.reap.spawn_patrol = spawn0
 
 print("ok")

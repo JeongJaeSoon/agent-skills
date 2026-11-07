@@ -1039,10 +1039,10 @@ def round_once(cfg, dry_run, out=print, now=None, measure_fn=measure, sample_fn=
     saved_at = now + (time.monotonic() - started)
     obs = trigger_obs_add(st.get("trigger_obs"), tlevel, saved_at, memo.get("t") or 0)
     # A start patrol refused or never ran is asked again, but not every round.
-    fire = rise_due(floor_since(obs, memo), memo.get("t") or 0, tlevel, now) and now - st.get("spawn_t", 0) >= TRIGGER_RETRY_S
+    fire = rise_due(floor_since(obs, memo), memo.get("t") or 0, tlevel, now) and saved_at - st.get("spawn_t", 0) >= TRIGGER_RETRY_S
     record.update(trigger_level=tlevel, trigger_held=held, trigger_obs=obs)
     if fire:
-        record["spawn_t"] = now
+        record["spawn_t"] = saved_at
     if level != "danger" and st.get("dash_t") and not dry_run:
         dash_note("resolve")
         st.pop("dash_t")
@@ -1051,8 +1051,11 @@ def round_once(cfg, dry_run, out=print, now=None, measure_fn=measure, sample_fn=
         for e in queue_expire(now):
             out(f"- 대기열 {e['id']} 포기(기한 지남): {e['what']}")
     if not dry_run:  # before the sweep, which can take minutes: the hook and check judge this sample meanwhile
-        if obs and obs[-1][0] == saved_at:  # the notices above took time: stamp the entry when it is written
-            obs[-1][0] = now + (time.monotonic() - started)
+        written_at = now + (time.monotonic() - started)  # the notices above took time: stamp when it is written
+        if obs and obs[-1][0] == saved_at:
+            obs[-1][0] = written_at
+        if fire:
+            record["spawn_t"] = written_at
         save_state({**st, **record})
         with contextlib.suppress(OSError):  # the chart's point is not worth failing the round over
             history_add(record, queued_count())
