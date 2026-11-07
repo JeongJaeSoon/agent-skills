@@ -383,4 +383,98 @@ for bad in (["turns", "--wait"], ["turns", "--wait", "soon"], ["turns", "--wait"
         code = p.main(bad)
     assert code == 2 and "--wait needs" in err.getvalue(), (bad, code, err.getvalue())
 
+# The patrol trigger: a rise only, held by hysteresis (a load-driven danger leaves at 1.7, not 2.0) and 15 minutes apart.
+# `level`, which the gate and the hook read, still follows the raw metrics.
+assert p.trigger_level("danger", True, "warn", {"load_per_cpu": 1.8}, False) == ("danger", True)
+assert p.trigger_level("danger", True, "warn", {"load_per_cpu": 1.69}, False) == ("warn", False)
+assert p.trigger_level("danger", True, "warn", {"load_per_cpu": None}, False) == ("warn", False)
+assert p.trigger_level("warn", False, "warn", {"load_per_cpu": 1.8}, False) == ("warn", False)
+assert p.trigger_level("ok", False, "danger", {"load_per_cpu": 2.1}, True) == ("danger", True)
+# A danger another metric drove (memory) is not held by the load: it leaves with that metric.
+assert p.trigger_level("ok", False, "danger", {"load_per_cpu": 1.8}, False) == ("danger", False)
+assert p.trigger_level("danger", False, "warn", {"load_per_cpu": 1.8}, False) == ("warn", False)
+# A held load danger survives a memory danger on top of it, and leaves only when the load does.
+assert p.trigger_level("danger", True, "danger", {"load_per_cpu": 1.8}, False) == ("danger", True)
+assert p.trigger_level("danger", True, "warn", {"load_per_cpu": 1.8}, False) == ("danger", True)
+# judge caps the load at warn while the CPU idles: the load did not drive that danger.
+idle_cap = {**OK, "load_per_cpu": 2.1, "cpu_idle_pct": 30, "mem_free_pct": 9}
+assert p.judge(idle_cap, cfg)[0] == "danger" and not any(mt == "load_per_cpu" and lv == 2 for mt, lv, _ in p.hits(idle_cap, cfg))
+obs = p.trigger_obs_add(None, "warn", 10.0)
+assert obs == [[10.0, "warn"]] and p.trigger_obs_add(obs, "warn", 20.0) == obs, "only changes are kept"
+assert p.trigger_obs_add(obs, "danger", 30.0) == [[10.0, "warn"], [30.0, "danger"]]
+assert len(p.trigger_obs_add([[i, "ok" if i % 2 else "warn"] for i in range(100)], "danger", 200.0)) == p.TRIGGER_OBS_KEEP
+# Past the cap the lowest level that falls off stays, so a start patrol never took still sees the fall to ok.
+long = [[1000.0, "ok"]] + [[1001.0 + i, "danger" if i % 2 else "warn"] for i in range(40)]
+kept = p.trigger_obs_add(long, "danger", 2000.0, since=1000.0)
+assert len(kept) == p.TRIGGER_OBS_KEEP and kept[0] == [1000.0, "ok"] and p.floor_since(kept, {"t": 1000.0, "level": "warn"}) == "ok"
+# A clock set back leaves future entries behind: they are dropped. Entries patrol's last round has seen are dropped too.
+assert p.trigger_obs_add([[10000.0, "warn"]], "danger", 1200.0) == [[1200.0, "danger"]]
+assert p.trigger_obs_add([[10.0, "warn"], [900.0, "danger"]], "danger", 1000.0, since=800.0) == [[900.0, "danger"]]
+# What patrol saw before its round began is not a fall since: no tolerance window brings it back.
+assert p.floor_since([[900.0, "warn"], [950.0, "danger"]], {"t": 1000.0, "level": "danger"}) == "danger"
+assert p.floor_since([[1000.0, "warn"], [1020.0, "danger"]], {"t": 1000.0, "level": "danger"}) == "warn"
+# A stored history that is not [time, level] pairs never stops a round.
+for junk in (42, "x", {"a": 1}, [["1000", "warn"]], [[1000, "legacy"]], [[True, "warn"]], [[1]], [None], [[1000, ["warn"]]]):
+    assert p.valid_obs(junk) == [], junk
+    assert p.trigger_obs_add(junk, "warn", 50.0) == [[50.0, "warn"]]
+    assert p.floor_since(junk, {"t": 5, "level": "danger"}) == "danger"
+assert p.floor_since([[10.0, "warn"]], {"t": 5, "level": "legacy"}) == "ok", "an unknown memo level reads as ok"
+p.save_state({"level": "ok", "trigger_level": "ok", "trigger_obs": 42, "t": 1.0})
+run_round(OK, [], now=300.0)  # the real round, over a stored history that is junk
+assert p.load_state()["trigger_obs"][-1][1] == "ok"
+assert p.floor_since([[10.0, "warn"], [30.0, "danger"]], {"t": 5, "level": "danger"}) == "warn", "a fall since the round began"
+assert p.floor_since([[10.0, "warn"], [500.0, "danger"]], {"t": 400, "level": "danger"}) == "danger", "an older fall is not below it"
+assert p.floor_since([], {"t": 5, "level": "warn"}) == "warn" and p.floor_since([], {}) == "ok"
+assert p.rise_due("ok", 100.0, "warn", 1000.0) and not p.rise_due("warn", 100.0, "warn", 1000.0)
+assert not p.rise_due("ok", 500.0, "warn", 1000.0), "inside the 15-minute gap"
+# Rounds against a patrol memo. The memo is what patrol wrote on its last round; a start patrol refused or never ran
+# leaves it, so the next pressure round asks again.
+spawned = []
+spawn0, p.reap.spawn_patrol = p.reap.spawn_patrol, lambda reason, **k: spawned.append(reason) or True
+T = 100000.0
+p.save_state({"level": "ok", "trigger_level": "ok", "t": T - 1})
+p.PATROL_MEMO.write_text(json.dumps({"t": T - 3600, "level": "ok"}))
+LOAD = lambda v: {**OK, "load_per_cpu": v}
+for step, (load, at, want, patrol_runs) in enumerate([
+        (1.4, T, 1, True),            # ok -> warn: a rise
+        (2.1, T + 300, 0, False),     # warn -> danger inside the gap: pending
+        (1.9, T + 400, 0, False),     # raw warn, but the pending danger is held at 1.9: still pending
+        (1.9, T + 960, 1, True),      # the gap is over: the held rise fires, patrol runs at danger
+        (1.5, T + 1000, 0, False),    # released below 1.7: a fall starts nothing
+        (2.1, T + 1100, 0, False),    # danger again, 140 s after the last round: pending
+        (2.1, T + 1900, 1, True),     # a climb back to danger after a fall is a rise
+        (0.5, T + 2000, 0, False),    # ok
+        (1.4, T + 2900, 1, False),    # a rise whose patrol never ran (refused, lock held)...
+        (1.4, T + 2950, 0, False),    # ...is not asked again within the retry interval...
+        (1.4, T + 3100, 0, False),    # asked again too soon (retry interval): not every round
+        (1.4, T + 3250, 1, True)]):   # ...and this time runs
+    spawned.clear()
+    run_round(LOAD(load), [], consumers=([], []), now=at, rescan_minutes=0)
+    assert len(spawned) == want, (step, load, spawned)
+    assert p.load_state()["level"] == p.judge(LOAD(load), cfg)[0], "the raw level is not held"
+    if at == T + 1000:  # the fall below patrol's danger is in the history patrol's commit cannot touch
+        last = p.load_state()["trigger_obs"][-1]
+        assert last[1] == "warn" and at <= last[0] < at + 5, last  # stamped when saved, a moment after the round began
+    if spawned and patrol_runs:
+        p.PATROL_MEMO.write_text(json.dumps({"t": at, "level": p.load_state()["trigger_level"]}))
+# The entry is stamped when written, not when the round began: notices and queue work run in between.
+import itertools
+mono0, p.time.monotonic = p.time.monotonic, itertools.count(0, 10).__next__  # each reading is 10 s after the last
+p.save_state({"level": "ok", "trigger_level": "ok", "t": 1.0})
+run_round(LOAD(1.4), [], consumers=([], []), now=500.0, rescan_minutes=0)
+p.time.monotonic = mono0
+stamp = p.load_state()["trigger_obs"][-1]
+assert stamp[1] == "warn" and stamp[0] >= 500.0 + 20, stamp
+# The retry interval counts from when the start was written, not from when the round began: a slow measurement (each
+# clock reading here is 60 s after the last) must not shorten it.
+p.save_state({"level": "ok", "trigger_level": "ok", "t": 1.0})
+p.PATROL_MEMO.write_text(json.dumps({"t": 1.0, "level": "ok"}))
+p.time.monotonic = itertools.count(0, 60).__next__
+for now, want in ((1000.0, 1), (1300.0, 0), (1400.0, 1)):
+    spawned.clear()
+    run_round(LOAD(1.4), [], consumers=([], []), now=now, rescan_minutes=0)
+    assert len(spawned) == want, (now, spawned, p.load_state().get("spawn_t"))
+p.time.monotonic = mono0
+p.reap.spawn_patrol = spawn0
+
 print("ok")
