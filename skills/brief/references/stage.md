@@ -1,9 +1,4 @@
----
-name: stage
-description: "Use for \"단계표 보여줘\", \"stage table\", `/agent-skills:stage`: the per-item merge / dev / prod table the brief only links to."
----
-
-# Stage
+# Stage table mode
 
 ```bash
 orch stage show [--program P] [--telegram] [--all]

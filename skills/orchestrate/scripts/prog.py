@@ -166,7 +166,7 @@ Usage: orch <command> <slug> [options]
   stage add <id> --title T [--pr owner/repo#N] [--parent ID] [--group]
   stage set <id> --col merge|dev|prod --mark ok|fail|partial|checking|na [--evidence TEXT] [--by WHO]
   stage env [--prod V] [--dev V] | next [LINE]... | done <id> | drop <id> | show [--program P] [--all] [--md|--telegram|--json]
-                                     no slug: the stage table (the stage skill), one row per work item. show
+                                     no slug: the stage table (brief's stage table mode), one row per work item. show
                                      leaves out a row finished or 7 days unchanged ("stage_idle_d") unless --all,
                                      --program keeps one program's rows, and exits 1 past 78 columns.
                                      Write a cell where you verified it; ok needs --evidence. The merge
