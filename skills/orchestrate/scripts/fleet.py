@@ -1483,7 +1483,7 @@ def read_screen(handle):
 # that change without moving updatedAt (merge state after a base push, CodeRabbit's status).
 PROBE = ("number state isDraft updatedAt createdAt mergedAt headRefOid url title mergeStateStatus reviewDecision"
          " baseRefName headRefName mergeCommit{oid}"
-         " author{login} commits(last:1){nodes{commit{statusCheckRollup{state}"
+         " author{login} assignees(first:1){nodes{login}} commits(last:1){nodes{commit{statusCheckRollup{state}"
          ' status{context(name:"CodeRabbit"){state description}}}}}')
 DETAIL = PROBE + (
     " reviewRequests(first:20){nodes{requestedReviewer{__typename ... on User{login avatarUrl} ... on Team{slug}"
@@ -1667,7 +1667,9 @@ def shape_pr(repo, pr, me):
             "created": pr.get("createdAt"), "merged_at": pr.get("mergedAt"), "merge_state": pr.get("mergeStateStatus"),
             "base": pr.get("baseRefName"), "merge_sha": (pr.get("mergeCommit") or {}).get("oid"), "branch": pr.get("headRefName"),
             "coderabbit": coderabbit(pr),
-            "author": (pr.get("author") or {}).get("login"), "reviewers": sorted(reviewers.values(), key=lambda r: r["login"]),
+            "author": (pr.get("author") or {}).get("login"),
+            "assignee": (((pr.get("assignees") or {}).get("nodes") or [{}])[0] or {}).get("login"),
+            "reviewers": sorted(reviewers.values(), key=lambda r: r["login"]),
             "threads": threads, "reviews": [{"id": n.get("id"), "state": n.get("state"), "at": n.get("submittedAt"),
                                              "by": (n.get("author") or {}).get("login"),
                                              "bot": is_bot(n.get("author"))}
@@ -1817,6 +1819,7 @@ class Fleet:
         self.sources = {k: {"ok": None, "updated_at": None, "error": None, "warning": None} for k in ("orca", "runs", "github", "automations", "monitors", "sent")}
         self.repos = {}
         saved = read_json(d / "prs.json", {}) or {}
+        self.read_now = set()                     # the PRs probed this tick: what db_refs may stamp as seen now
         self.prs = saved.get("prs", {})           # key -> {"probe": sig, "detail": shaped, "probed_at": iso}
         self.branch_pr = saved.get("branch_pr", {})  # "repo@branch" -> {"key": key|None, "at": iso}
         self.me = saved.get("me")
@@ -1928,6 +1931,7 @@ class Fleet:
             self.refresh_stacks(mono, force)
             self.state = self.compose(sessions, root, cfg)
             self.stage_rows()
+            self.db_refs(sessions)
             self.save(**{"state.json": json.dumps(self.state, ensure_ascii=False),
                          "prs.json": json.dumps({"prs": self.prs, "branch_pr": self.branch_pr, "me": self.me}),
                          "memory.json": json.dumps(self.mem, ensure_ascii=False)})
@@ -1949,6 +1953,43 @@ class Fleet:
                 self.stacks = [stacks.failed(x, at, f"collect: {type(e).__name__}") for x in entries]
             self.last["stacks"], self.stacks_key = mono, key
 
+    def open_ask_keys(self):
+        """The PRs an open review ask names: read each tick like a board row's PR, so the ask closes when the PR does."""
+        try:
+            import store  # beside this file; it imports this module
+            return set(store.open_ask_prs()) if store.refs_ready() else set()
+        except Exception:  # a DB that cannot be read costs the asks their PR reads, not the tick
+            return set()
+
+    def db_refs(self, sessions):
+        """What this tick read into the DB (step 8-refs): every PR's state and reviewers, every worktree with its PR, and the
+        retention sweep once an hour. prs.json stays the page's live detail; a DB that cannot be written costs the tables a
+        tick, never the page."""
+        try:
+            import store
+            if not store.refs_ready():
+                return
+            # Only what this tick read: a failed GitHub read must not stamp the cached detail as seen now.
+            store.pr_refresh([self.prs[k]["detail"] for k in self.read_now if (self.prs.get(k) or {}).get("detail")])
+            pr_of = {}
+            for k, sid in self.owner_of.items():  # the PR of the session's current branch wins over another it also names
+                s = sessions.get(sid) or {}
+                if k == (self.branch_pr.get(f"{s.get('gh_repo')}@{s.get('branch')}") or {}).get("key"):
+                    pr_of[sid] = k
+            for k, sid in self.owner_of.items():
+                pr_of.setdefault(sid, k)
+            if sessions:  # a tick that saw no worktree at all is a failed read, not every worktree leaving
+                store.card_refresh([{"id": s["id"], "repo": s.get("gh_repo"), "branch": s.get("branch"), "pr": pr_of.get(s["id"])}
+                                    for s in sessions.values()])
+            if not self.mem.get("retention_at") or (self.now() - parse(self.mem["retention_at"])).total_seconds() > 3600:
+                store.retention()
+                self.mem["retention_at"] = iso(self.now())
+            self.mem.pop("db_refs_error", None)
+        except Exception as e:
+            if self.mem.get("db_refs_error") != (err := mask(repr(e), 200)):
+                self.mem["db_refs_error"] = err
+                self.event({"at": iso(utcnow()), "kind": "db_refs_error", "text": err})
+
     def stage_rows(self):
         """The stage table's generated rows, from this state and the program ledgers (stage_auto.py). Runs before
         save so memory.json carries `stage_auto_at`, the freshness stage_auto.warning() reads."""
@@ -1968,6 +2009,7 @@ class Fleet:
 
     def refresh_prs(self, sessions, cfg, force=False, viewed=False, now_due=()):
         now = self.now()
+        self.read_now = set()
         if not self.me:
             try:
                 self.me = run_json(["gh", "api", "user"]).get("login")
@@ -2050,7 +2092,7 @@ class Fleet:
         except Exception as e:
             ledger_prs = set()
             self.stage_auto_failed(e)
-        named = (board_prs() | ledger_prs) - set(owner_of) - set(swept)
+        named = (board_prs() | ledger_prs | self.open_ask_keys()) - set(owner_of) - set(swept)
         self.prs = {k: v for k, v in self.prs.items() if k in owner_of or k in swept or k in named or not searched}
         self.branch_pr = {k: v for k, v in self.branch_pr.items() if k in live}
         # 3. Probe every PR whose tier says it is due, or that the search saw updated; 4. detail for the ones that
@@ -2092,6 +2134,7 @@ class Fleet:
                     changed.append(k)
                     new_sig[k] = sig  # kept only once the full read lands: a failed read is retried next probe
                 entry["probed_at"] = iso(now)
+                self.read_now.add(k)
         for i in range(0, len(changed), 25):
             chunk = changed[i:i + 25]
             try:

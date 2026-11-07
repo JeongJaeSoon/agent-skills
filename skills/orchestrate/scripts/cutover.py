@@ -380,6 +380,7 @@ def run():
     print(f"orch board show: ok ({len(r.stdout.splitlines())} lines)")
     print("state step: " + store.state_setup(auto=True))  # acks and the stage table, so a fresh migration ends in one place
     print("sendlog step: " + store.sendlog_setup(auto=True))
+    print("refs step: " + store.refs_setup(auto=True))
     return 0
 
 

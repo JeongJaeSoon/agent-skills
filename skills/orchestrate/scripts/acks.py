@@ -83,6 +83,22 @@ def ackable(now=None, kinds=KINDS):
     return out
 
 
+def verified(now=None):
+    """(ids of finished brief rows whose PR the PR table shows merged and that are not acked yet, ackable()): the rows the
+    owner can ack as checked. Asked for by name (`orch-dash ack --verified`); nothing acks them on its own."""
+    import board
+    try:
+        done = board.render(now=now, fill=True)["done"]
+    except (OSError, ValueError):
+        return [], {}
+    try:
+        merged = {k.lower() for k, w in store.pr_words().items() if w == "MERGED"}
+    except store.NotMigrated:  # no PR table yet: nothing is verified
+        return [], {}
+    can = {d["id"]: {"label": d["label"], "at": d["at"]} for d in done}
+    return [d["id"] for d in done if not d["acked"] and (d.get("pr") or "").lower() in merged], can
+
+
 def why_not(aid):
     if kind(aid) not in KINDS or ":" not in aid:
         return f"an id is stage:<row> or board:<row> (got {aid})"

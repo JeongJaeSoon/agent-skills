@@ -29,7 +29,7 @@ Usage: orch-dash <command> [options]
                                      make pr-events.jsonl read-only); a dry run without --apply, safe to run again
   inbox add --type T --title TEXT [--session ID] [--url URL] [--command CMD] [--key KEY]
   inbox resolve --key KEY            put an item in (or take it out of) the fleet inbox
-  ack <id>... | ack --done-before AGE [--kind stage|board]... | unack <id>... | acks [--all] [--json]
+  ack <id>... | ack --done-before AGE [--kind stage|board]... | ack --verified | unack <id>... | acks [--all] [--json]
                                      mark finished stage rows (stage:<row>) and finished brief rows (board:<row>)
                                      as checked, so the dashboard and the brief leave them out; a row in progress,
                                      waiting or held is refused. AGE: 90m, 24h, 7d (see acks.py)
@@ -2834,8 +2834,12 @@ def cmd_ack(argv, undo=False):
             old, found = acks.older_than(age, kinds)
             can = None if ids else found  # ids named as well may be of another kind: write() looks them up
             ids += old
+        elif not undo and "--verified" in argv:
+            old, found = acks.verified()  # finished rows whose PR the PR table shows merged; only when asked for
+            can = None if ids else found
+            ids += old
         elif not ids:
-            sys.exit("usage: orch-dash ack <id>... | ack --done-before AGE [--kind stage|board]... | unack <id>...")
+            sys.exit("usage: orch-dash ack <id>... | ack --done-before AGE [--kind stage|board]... | ack --verified | unack <id>...")
         written, refused = acks.write(ids, undo=undo, can=can)
     except (ValueError, OSError) as e:
         sys.exit(str(e))

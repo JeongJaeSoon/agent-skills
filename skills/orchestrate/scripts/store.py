@@ -1573,6 +1573,8 @@ def state_rollback(src, rehearsal=False):
     sd, src = fleet.state_dir(), pathlib.Path(src).expanduser()
     if migrated_steps().get(STATE_STEP) is None:
         raise Refused(f"{STATE_STEP} is not in {DB_NAME}: nothing to roll back")
+    if REFS_STEP in migrated_steps():  # pr_reviewer and card_ref point at pr_ref too
+        raise Refused(f"{REFS_STEP} is in {DB_NAME} and points at the PR references: roll it back first (orch db rollback refs)")
     if SENDLOG_STEP in migrated_steps():  # send_log points at pr_ref, which this drops
         raise Refused(f"{SENDLOG_STEP} is in {DB_NAME} and points at the PR references: roll it back first "
                       f"(orch db rollback sendlog DIR)")
@@ -1914,6 +1916,240 @@ def sendlog_rollback(src, rehearsal=False):
     target.rmdir()
     os.replace(staged, target)
     return f"put {target} back from {src}; {SENDLOG_STEP} is out of the DB"
+
+
+# ---------------------------------------------------------------- step 8-refs: what the collector knows, kept in the DB
+
+REFS_STEP = "8-refs"
+PR_STATES = {"OPEN": "open", "MERGED": "merged", "CLOSED": "closed"}  # prs.json's words -> pr_ref.state
+PR_WORDS = {v: k for k, v in PR_STATES.items()}  # and back, for readers that compare "MERGED"
+RETAIN_CARD_DAYS, RETAIN_PR_DAYS = 30, 90  # a gone card, and a merged or closed PR nothing points at, are dropped after
+SCHEMA_REFS = (
+    # Who is on a PR's review, as the collector last read it; a cache like pr_ref, replaced whole on each read.
+    """CREATE TABLE pr_reviewer (
+  pr_repo TEXT NOT NULL, pr_number INTEGER NOT NULL, login TEXT NOT NULL,
+  requested INTEGER NOT NULL CHECK (requested IN (0,1)), team INTEGER NOT NULL DEFAULT 0, bot INTEGER NOT NULL DEFAULT 0,
+  state TEXT, at TEXT, stale INTEGER NOT NULL DEFAULT 0, last_seen_at TEXT NOT NULL,
+  PRIMARY KEY (pr_repo, pr_number, login),
+  FOREIGN KEY (pr_repo, pr_number) REFERENCES pr_ref(repo, number) ON DELETE CASCADE
+) WITHOUT ROWID""",
+    # An Orca worktree the collector has seen. A worktree that is no longer there keeps its row with gone_at (a tombstone)
+    # until the retention window passes, so a card's PR can still be looked up after the worktree was removed.
+    """CREATE TABLE card_ref (
+  orca_worktree_id TEXT PRIMARY KEY, repo TEXT, branch TEXT, pr_repo TEXT, pr_number INTEGER,
+  first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, gone_at TEXT
+)""",
+    # What is left to reap, derived on read: nothing is written for it.
+    """CREATE VIEW reap_card AS
+SELECT c.orca_worktree_id, c.repo, c.branch, c.pr_repo, c.pr_number, c.gone_at, p.state AS pr_state, p.merged_at,
+       CASE WHEN c.gone_at IS NOT NULL THEN 'worktree_gone' WHEN p.state = 'merged' THEN 'pr_merged'
+            WHEN p.state = 'closed' THEN 'pr_closed' END AS reason
+FROM card_ref c LEFT JOIN pr_ref p ON p.repo = c.pr_repo AND p.number = c.pr_number
+WHERE c.gone_at IS NOT NULL OR p.state IN ('merged', 'closed')""",
+)
+# VIRTUAL generated columns over the JSON the old readers still parse: pr, program and kind can be filtered and joined on,
+# and nothing that reads the table as it was changes.
+# pr is the lower-cased 'owner/repo#N', the key pr_ref's repo and number join on.
+GENERATED = {
+    "board_row": (("pr", "lower(json_extract(data, '$.pr'))"), ("program", "json_extract(data, '$.program')"),
+                  ("kind", "json_extract(data, '$.kind')")),
+    "lead": (("pr", "lower(json_extract(data, '$.pr'))"), ("program", "name"), ("kind", "'lead'")),
+    "decision": (("pr", "CASE WHEN link LIKE 'https://github.com/%/pull/%' THEN lower(substr(link, 20, instr(substr(link, 20), "
+                        "'/pull/') - 1)) || '#' || CAST(substr(link, instr(link, '/pull/') + 6) AS INTEGER) END"),
+                 ("program", "NULL"), ("kind", "'decision'")),
+}
+
+
+def refs_ready():
+    """Whether the collector's tables exist; False without a DB or before `orch db state`."""
+    return REFS_STEP in migrated_steps()
+
+
+def _add_generated(db, tables=None):
+    for table, cols in GENERATED.items():
+        if tables and table not in tables:
+            continue
+        have = {r["name"] for r in db.execute(f"PRAGMA table_xinfo({table})")}
+        for name, expr in cols:
+            if name not in have:
+                db.execute(f"ALTER TABLE {table} ADD COLUMN {name} TEXT GENERATED ALWAYS AS ({expr}) VIRTUAL")
+
+
+def refs_setup(by="orch db state", auto=False):
+    """Create pr_reviewer, card_ref, the reap_card view and the generated columns; nothing is imported and no file moves, so
+    there is no backup. A second run changes nothing. auto: a DB not ready for it is skipped."""
+    steps = migrated_steps()
+    if REFS_STEP in steps:
+        return "already created"
+    try:
+        open_db().close()
+        if STATE_STEP not in steps:
+            raise NotMigrated(f"{STATE_STEP} is not in {DB_NAME}: run {state_command()} first")
+    except NotMigrated as e:
+        if auto:
+            return f"skipped: {e}"
+        raise
+    with tx() as db:
+        for ddl in SCHEMA_REFS:
+            db.execute(ddl)
+        _add_generated(db)
+        db.execute("INSERT INTO migration (step, ts, backup, sources, stage) VALUES (?,?,?,?, 'tombstoned')",
+                   (REFS_STEP, now(), "", "{}"))
+        _event(db, "migration", REFS_STEP, "created", by)
+    return "created pr_reviewer, card_ref, reap_card and the generated columns pr, program, kind"
+
+
+def refs_rollback():
+    """Take the step out: the tables, the view and the generated columns go. The data is a cache the collector fills again."""
+    if REFS_STEP not in migrated_steps():
+        raise Refused(f"{REFS_STEP} is not in {DB_NAME}: nothing to roll back")
+    with tx() as db:
+        db.execute("DROP VIEW reap_card")
+        db.execute("DROP TABLE pr_reviewer")
+        db.execute("DROP TABLE card_ref")
+        for table, cols in GENERATED.items():
+            have = {r["name"] for r in db.execute(f"PRAGMA table_xinfo({table})")}  # a reload of the board may have dropped them
+            for name, _ in cols:
+                if name in have:
+                    db.execute(f"ALTER TABLE {table} DROP COLUMN {name}")
+        db.execute("DELETE FROM migration WHERE step=?", (REFS_STEP,))
+        _event(db, "migration", REFS_STEP, "rolled-back", "orch db rollback")
+    return f"{REFS_STEP} is out of the DB"
+
+
+def pr_word(state):
+    """pr_ref.state as the collector's prs.json spells it (OPEN, MERGED, CLOSED); None for 'unknown'."""
+    return PR_WORDS.get(state)
+
+
+def pr_words():
+    """{'owner/repo#N': 'MERGED' | 'OPEN' | 'CLOSED'} for every PR the DB has seen, so a reader that compares prs.json's words
+    works on the table too. The key is spelled as the source wrote the repository."""
+    with read() as db:
+        return {f"{r['name']}#{r['number']}": PR_WORDS[r["state"]]
+                for r in db.execute("SELECT name, number, state FROM pr_ref WHERE state != 'unknown'")}
+
+
+def pr_refresh(details, by="collector"):
+    """The collector's PR details (fleet.shape_pr dicts) into pr_ref and pr_reviewer, then the asks they settle: an ask
+    whose PR merged closes as merged, one whose PR closed unmerged as withdrawn, a sent one whose reviewer has since
+    reviewed as reviewed. Returns {'prs': n, 'closed': {why: n}}."""
+    at, n = now(), 0
+    with tx() as db:
+        for d in details:
+            state, repo, num = PR_STATES.get(d.get("state")), d.get("repo"), d.get("number")
+            if not state or not repo or not isinstance(num, int):
+                continue
+            db.execute(
+                "INSERT INTO pr_ref (repo, number, name, state, draft, head_sha, base_ref, author, assignee, ci, review_decision, "
+                "merge_state, merged_at, merge_sha, closed_at, last_seen_at, refreshed_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(repo, number) DO UPDATE SET name=excluded.name, state=excluded.state, draft=excluded.draft, "
+                "head_sha=excluded.head_sha, base_ref=excluded.base_ref, author=excluded.author, assignee=excluded.assignee, "
+                "ci=excluded.ci, review_decision=excluded.review_decision, merge_state=excluded.merge_state, "
+                "merged_at=excluded.merged_at, merge_sha=excluded.merge_sha, last_seen_at=excluded.last_seen_at, "
+                "refreshed_by=excluded.refreshed_by, closed_at=CASE WHEN excluded.state='closed' "
+                "THEN COALESCE(pr_ref.closed_at, excluded.closed_at) END",
+                (repo.lower(), num, repo, state, int(bool(d.get("draft"))), d.get("head"), d.get("base"), d.get("author"),
+                 d.get("assignee"), d.get("ci"), d.get("decision"), d.get("merge_state"),
+                 d.get("merged_at") if state == "merged" else None, d.get("merge_sha"), at if state == "closed" else None,
+                 at, by))
+            db.execute("DELETE FROM pr_reviewer WHERE pr_repo=? AND pr_number=?", (repo.lower(), num))
+            for r in d.get("reviewers") or []:
+                if r.get("login"):
+                    db.execute("INSERT OR REPLACE INTO pr_reviewer (pr_repo, pr_number, login, requested, team, bot, state, at, "
+                               "stale, last_seen_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                               (repo.lower(), num, r["login"], int(bool(r.get("requested"))), int(bool(r.get("team"))),
+                                int(bool(r.get("bot"))), r.get("state"), r.get("at"), int(bool(r.get("stale"))), at))
+            n += 1
+        closed = {}
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name='review_ask'").fetchone():
+            closed = _ask_settle(db, at, by)
+    return {"prs": n, "closed": closed}
+
+
+def _ask_settle(db, at, by):
+    """Close the open asks the PR table now answers; each close is an event. Merged outranks closed outranks reviewed."""
+    out = {}
+    for why, cond in (
+            ("merged", "p.state = 'merged'"),
+            ("withdrawn", "p.state = 'closed'"),
+            ("reviewed", "a.send_log_id IS NOT NULL AND EXISTS (SELECT 1 FROM pr_reviewer r WHERE r.pr_repo = a.pr_repo "
+                         "AND r.pr_number = a.pr_number AND lower(r.login) = lower(a.reviewer) AND r.state IN ('APPROVED', 'CHANGES_REQUESTED', 'COMMENTED') "
+                         "AND CAST(strftime('%s', r.at) AS INTEGER) >= CAST((SELECT at FROM send_log WHERE id = a.send_log_id) "
+                         "AS INTEGER))")):
+        ids = [r[0] for r in db.execute(
+            "SELECT a.id FROM review_ask a JOIN pr_ref p ON p.repo = a.pr_repo AND p.number = a.pr_number "
+            f"WHERE a.closed_at IS NULL AND {cond}")]
+        for aid in ids:
+            db.execute("UPDATE review_ask SET closed_at=?, closed_why=? WHERE id=?", (at, why, aid))
+            _event(db, "review_ask", str(aid), why, by)
+        if ids:
+            out[why] = len(ids)
+    return out
+
+
+def open_ask_prs():
+    """'owner/repo#N' of every PR with an open ask, spelled as the source wrote it: the collector reads them even when no
+    session or search names them, so the ask can close when the PR does. [] before 7-sendlog."""
+    try:
+        with read() as db:
+            return [f"{r['name']}#{r['pr_number']}" for r in db.execute(
+                "SELECT DISTINCT p.name, a.pr_number FROM review_ask a JOIN pr_ref p ON p.repo=a.pr_repo AND p.number=a.pr_number "
+                "WHERE a.closed_at IS NULL")]
+    except sqlite3.Error:
+        return []
+
+
+def card_refresh(cards, by="collector"):
+    """Every Orca worktree the collector saw this tick: [{'id', 'repo', 'branch', 'pr': 'owner/repo#N' | None}]. A worktree
+    in the list is (re)marked present; one that was present and is not is tombstoned with gone_at, never deleted here."""
+    at = now()
+    with tx() as db:
+        for c in cards:
+            pr = pr_split(c["pr"]) if c.get("pr") else None
+            db.execute(
+                "INSERT INTO card_ref (orca_worktree_id, repo, branch, pr_repo, pr_number, first_seen_at, last_seen_at) "
+                "VALUES (?,?,?,?,?,?,?) ON CONFLICT(orca_worktree_id) DO UPDATE SET repo=excluded.repo, branch=excluded.branch, "
+                "pr_repo=CASE WHEN excluded.branch IS card_ref.branch THEN COALESCE(excluded.pr_repo, card_ref.pr_repo) ELSE excluded.pr_repo END, "
+                "pr_number=CASE WHEN excluded.branch IS card_ref.branch THEN COALESCE(excluded.pr_number, card_ref.pr_number) ELSE excluded.pr_number END, "
+                "last_seen_at=excluded.last_seen_at, gone_at=NULL",
+                (c["id"], c.get("repo"), c.get("branch"), pr and pr[0].lower(), pr and pr[1], at, at))
+        return db.execute("UPDATE card_ref SET gone_at=? WHERE gone_at IS NULL AND orca_worktree_id NOT IN "
+                          "(SELECT value FROM json_each(?))", (at, json.dumps([c["id"] for c in cards]))).rowcount
+
+
+def retention(now_ts=None, dry_run=False):
+    """The policy for what the collector's tables keep: a card gone for RETAIN_CARD_DAYS goes; a merged or closed PR that
+    no card, stage row, send-log row or ask points at, and that no collector has seen for RETAIN_PR_DAYS, goes with its
+    reviewers. {'card_ref': n, 'pr_ref': n}; dry_run counts and deletes nothing."""
+    if not refs_ready():
+        raise Refused(f"{REFS_STEP} is not in {DB_NAME}: run `orch db state` first")
+    t = time.time() if now_ts is None else now_ts
+    cut = lambda days: dt.datetime.fromtimestamp(t - days * 86400, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    cards = "FROM card_ref WHERE gone_at IS NOT NULL AND gone_at < :card_cut"
+    with tx() as db:
+        # A card this same run deletes no longer points, so a dry run counts what a real one removes.
+        pointers = {"card_ref": "AND (x.gone_at IS NULL OR x.gone_at >= :card_cut)", "stage_row": ""}
+        pointers |= {t: "" for t in ("send_log", "review_ask") if db.execute(  # 7-sendlog may not be in
+            "SELECT 1 FROM sqlite_master WHERE name=?", (t,)).fetchone()}
+        unused = ("FROM pr_ref WHERE state IN ('merged','closed') AND last_seen_at < :pr_cut " + " ".join(
+            f"AND NOT EXISTS (SELECT 1 FROM {t} x WHERE x.pr_repo = pr_ref.repo AND x.pr_number = pr_ref.number {extra})"
+            for t, extra in pointers.items()))
+        args = {"card_cut": cut(RETAIN_CARD_DAYS), "pr_cut": cut(RETAIN_PR_DAYS)}
+        out = {"card_ref": db.execute(f"SELECT count(*) {cards}", args).fetchone()[0],
+               "pr_ref": db.execute(f"SELECT count(*) {unused}", args).fetchone()[0]}
+        if not dry_run:
+            db.execute(f"DELETE {unused}", args)
+            db.execute(f"DELETE {cards}", args)
+    return out
+
+
+def reap_view():
+    """The worktrees to reap, derived by the reap_card view: [{'id', 'repo', 'branch', 'pr', 'reason'}]."""
+    with read() as db:
+        return [{"id": r["orca_worktree_id"], "repo": r["repo"], "branch": r["branch"],
+                 "pr": r["pr_repo"] and f"{r['pr_repo']}#{r['pr_number']}", "reason": r["reason"]}
+                for r in db.execute("SELECT * FROM reap_card ORDER BY orca_worktree_id")]
 
 
 # ---------------------------------------------------------------- what older code left
@@ -2503,6 +2739,9 @@ def _reset_v2(db):
         db.execute(f"DROP TABLE IF EXISTS {t}")
     for s in SCHEMA_V2:
         db.execute(s)
+    if db.execute("SELECT 1 FROM sqlite_master WHERE name='migration'").fetchone() and db.execute(
+            "SELECT 1 FROM migration WHERE step=?", (REFS_STEP,)).fetchone():  # the recreated tables keep the step's columns
+        _add_generated(db, TABLES_V2)
 
 
 def load_board(board_=None, lines=(), state=None):
@@ -3042,6 +3281,11 @@ def main(argv):
         elif sub == "state":
             print(state_setup(auto="--auto" in rest))
             print(sendlog_setup(auto="--auto" in rest))  # the send-log needs the PR references the line above made
+            print(refs_setup(auto="--auto" in rest))  # and so do the reviewers, cards and the reap view
+        elif sub == "rollback" and rest[:1] == ["refs"]:
+            print(refs_rollback())
+        elif sub == "retention":
+            print(json.dumps(retention(dry_run="--dry-run" in rest)))
         elif sub == "export" and "--legacy" in rest and "--target" in rest and rest[rest.index("--target") + 1:][:1] == ["sendlog"]:
             dirs = [a for a in rest[:rest.index("--target")] + rest[rest.index("--target") + 2:] if not a.startswith("--")]
             if not dirs:
