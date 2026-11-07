@@ -383,4 +383,36 @@ for bad in (["turns", "--wait"], ["turns", "--wait", "soon"], ["turns", "--wait"
         code = p.main(bad)
     assert code == 2 and "--wait needs" in err.getvalue(), (bad, code, err.getvalue())
 
+# The patrol trigger: a rise only, held by hysteresis (a load-driven danger leaves at 1.7, not 2.0) and 15 minutes apart.
+# `level`, which the gate and the hook read, still follows the raw metrics.
+assert p.trigger_level("danger", "warn", {"load_per_cpu": 1.8}) == "danger"
+assert p.trigger_level("danger", "warn", {"load_per_cpu": 1.69}) == "warn"
+assert p.trigger_level("danger", "warn", {"load_per_cpu": None}) == "warn"
+assert p.trigger_level("warn", "warn", {"load_per_cpu": 1.8}) == "warn"
+assert p.trigger_level("ok", "danger", {"load_per_cpu": 2.1}) == "danger"
+assert p.trigger_due({"trigger_level": "ok"}, "warn", 1000.0)
+assert not p.trigger_due({"trigger_level": "warn"}, "warn", 1000.0) and not p.trigger_due({"trigger_level": "danger"}, "warn", 1000.0)
+assert not p.trigger_due({"trigger_level": "ok", "patrol_t": 500.0}, "warn", 1000.0)
+assert p.trigger_due({"trigger_level": "ok", "patrol_t": 100.0}, "warn", 1000.0)
+spawned = []
+spawn0, p.reap.spawn_patrol = p.reap.spawn_patrol, lambda reason, **k: spawned.append(reason) or True
+p.save_state({"level": "ok", "trigger_level": "ok", "t": 99999.0})
+T = 100000.0
+LOAD = lambda v: {**OK, "load_per_cpu": v}
+for step, (load, at, want) in enumerate([
+        (1.4, T, 1),                # ok -> warn: a rise
+        (2.1, T + 300, 0),          # warn -> danger inside the gap: held back, pending
+        (2.1, T + 960, 1),          # the gap is over: the held rise fires
+        (1.9, T + 1020, 0),         # danger -> warn at load 1.9: held danger, no new rise
+        (2.1, T + 1080, 0),         # back to danger: not a rise
+        (1.5, T + 1140, 0),         # released below 1.7 (warn)
+        (2.1, T + 1200, 0),         # danger again 4 minutes after the last start: held back
+        (2.1, T + 1900, 1),         # past 15 minutes since the T+960 start
+        (0.5, T + 2000, 0)]):       # ok: nothing
+    spawned.clear()
+    run_round(LOAD(load), [], consumers=([], []), now=at, rescan_minutes=0)
+    assert len(spawned) == want, (step, load, spawned)
+    assert p.load_state()["level"] == p.judge(LOAD(load), cfg)[0], "the raw level is not held"
+p.reap.spawn_patrol = spawn0
+
 print("ok")

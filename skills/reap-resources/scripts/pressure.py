@@ -99,6 +99,24 @@ CHECKS = (("load_per_cpu", True), ("mem_free_pct", False), ("vm_pressure", True)
 SAMPLED = ("swapout_pps", "cpu_idle_pct", "docker_mem_pct", "docker_cpu_pct", "swap_growth_gb_h")
 LEVELS = ("ok", "warn", "danger")
 LEVEL_KO = {"ok": "정상", "warn": "경고", "danger": "위험"}
+# Only the patrol trigger reads these: `level`, gate_open and the hook keep judging the raw metrics, so a release
+# held here never keeps heavy starts or new cards blocked.
+TRIGGER_RELEASE_LOAD = 1.7  # a load-driven danger leaves the trigger level only below this (entry is the danger threshold)
+TRIGGER_MIN_GAP_S = 15 * 60
+
+
+def trigger_level(prev, level, m):
+    """The level the patrol trigger sees: the raw level, except that danger is held while the load stays at or above the
+    release line, so a load hovering around the entry threshold does not read as a fresh rise every few minutes."""
+    load = m.get("load_per_cpu")
+    if prev == "danger" and level != "danger" and load is not None and load >= TRIGGER_RELEASE_LOAD:
+        return "danger"
+    return level
+
+
+def trigger_due(st, tlevel, now):
+    rose = LEVELS.index(tlevel) > LEVELS.index(st.get("trigger_level") or "ok")
+    return rose and now - st.get("patrol_t", 0) >= TRIGGER_MIN_GAP_S
 
 
 def config(overrides=()):
@@ -963,6 +981,13 @@ def round_once(cfg, dry_run, out=print, now=None, measure_fn=measure, sample_fn=
     if why:
         out(f"- 임계값 초과: {', '.join(why)}")
     record = {"t": now, "level": level, "metrics": m, "why": why}
+    tlevel = trigger_level(st.get("trigger_level") or "ok", level, m)
+    fire = trigger_due(st, tlevel, now)
+    # A rise held back by the gap stays pending (the stored level does not move up) and fires once the gap is over.
+    record["trigger_level"] = tlevel if fire or LEVELS.index(tlevel) < LEVELS.index(st.get("trigger_level") or "ok") \
+        else st.get("trigger_level") or "ok"
+    if fire:
+        record["patrol_t"] = now
     if level != "danger" and st.get("dash_t") and not dry_run:
         dash_note("resolve")
         st.pop("dash_t")
@@ -974,6 +999,8 @@ def round_once(cfg, dry_run, out=print, now=None, measure_fn=measure, sample_fn=
         save_state({**st, **record})
         with contextlib.suppress(OSError):  # the chart's point is not worth failing the round over
             history_add(record, queued_count())
+        if fire:  # before the warn early return below: a rise the gap held back fires here once it is over
+            reap.spawn_patrol(f"pressure {level}")
     if level == "ok":
         if not dry_run:
             if st.get("level") not in (None, "ok"):
@@ -986,8 +1013,6 @@ def round_once(cfg, dry_run, out=print, now=None, measure_fn=measure, sample_fn=
             save_state({**st, **record})
         return 1
     kinds = safe_kinds(cfg)
-    if not dry_run and st.get("level") != level:
-        reap.spawn_patrol(f"pressure {level}")  # patrol ties this load to the state of each card behind it (its L rule)
     plan_path = PLAN.with_name("pressure-plan.dry-run.json") if dry_run else PLAN
     # Set even when the scan failed: the warn deny asked for one round, and a failure every round must not hold
     # every heavy start at warn.

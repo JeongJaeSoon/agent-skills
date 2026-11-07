@@ -506,12 +506,54 @@ hist = {"ha": [["Error: x"], ["Error: x"]]}
 _, _, m = patrol.judge(facts(failed={"terminals"}), {"errors": hist, "last_output": {"ha": 5}})
 assert m["errors"] == hist and m["last_output"] == {"ha": 5}
 
-# --if-due: 25 minutes, or pressure rising to warn or danger.
+# --if-due: 25 minutes, or the trigger level rising, and a rise only 15 minutes after the last round. A fall never starts one.
 assert patrol.due({}, "ok", NOW)
 assert not patrol.due({"t": NOW - 600, "level": "ok"}, "ok", NOW)
-assert patrol.due({"t": NOW - 600, "level": "ok"}, "warn", NOW)
+assert not patrol.due({"t": NOW - 600, "level": "ok"}, "warn", NOW), "a rise inside the 15-minute gap waits"
+assert patrol.due({"t": NOW - 16 * 60, "level": "ok"}, "warn", NOW)
+assert patrol.due({"t": NOW - 16 * 60, "level": "warn"}, "danger", NOW)
+assert not patrol.due({"t": NOW - 16 * 60, "level": "danger"}, "warn", NOW), "danger to warn is a fall"
+assert not patrol.due({"t": NOW - 16 * 60, "level": "warn"}, "warn", NOW)
 assert not patrol.due({"t": NOW - 600, "level": "danger"}, "danger", NOW)
 assert patrol.due({"t": NOW - 26 * 60, "level": "danger"}, "danger", NOW)
+
+sys.path.insert(0, str(patrol.REAP_SCRIPTS))
+import pressure  # noqa: E402
+assert patrol.TRIGGER_GAP_S == pressure.TRIGGER_MIN_GAP_S, "the two sides of the patrol trigger share one gap"
+assert patrol.LEVEL_RANK == {l: i for i, l in enumerate(pressure.LEVELS)}
+
+# The workers read: the live terminal states every round, the released ones (the bulk, settled) only every
+# SETTLED_EVERY. A worker that left the live states joins the cached released ones when settled; an unsettled one
+# forces a fresh read. A released worker still moving is never cached.
+def wk(i, status="completed", ts="released"):
+    return {"dispatchId": i, "dispatchStatus": status, "terminalState": ts}
+calls = []
+LIVE = {"retained": [wk("a", "completed", "retained"), wk("b", "active", "retained")], "released": [wk("r1"), wk("r2")]}
+def fake_pages(state=None, deadline=None):
+    calls.append(state)
+    return list(LIVE.get(state, []))
+patrol.WORKERS_CURSOR.unlink(missing_ok=True)
+rows = patrol.all_workers(0, NOW, fake_pages)
+assert sorted(w["dispatchId"] for w in rows) == ["a", "b", "r1", "r2"] and calls.count("released") == 1, calls
+calls.clear()
+patrol.all_workers(0, NOW + 60, fake_pages)
+assert "released" not in calls and len(calls) == len(patrol.LIVE_TERMINAL_STATES), "inside the cursor: live states only"
+LIVE["retained"] = [wk("b", "active", "retained")]  # a settled worker left the live states: it is released now
+rows = patrol.all_workers(0, NOW + 120, fake_pages)
+assert sorted(w["dispatchId"] for w in rows) == ["a", "b", "r1", "r2"] and "released" not in calls[len(patrol.LIVE_TERMINAL_STATES):]
+LIVE["retained"] = []  # an unsettled worker left: read released again
+calls.clear()
+rows = patrol.all_workers(0, NOW + 180, fake_pages)
+assert "released" in calls
+calls.clear()
+patrol.all_workers(0, NOW + 180 + fleet.SETTLED_EVERY + 1, fake_pages)
+assert "released" in calls, "past SETTLED_EVERY"
+LIVE["released"] = [wk("r1"), wk("r3", "active")]  # a released worker still moving: no cursor
+patrol.all_workers(0, NOW + 5000, fake_pages)
+calls.clear()
+patrol.all_workers(0, NOW + 5001, fake_pages)
+assert "released" in calls
+patrol.WORKERS_CURSOR.unlink(missing_ok=True)
 
 # A dry round writes nothing.
 before = patrol.LOG.read_text()
@@ -1012,7 +1054,7 @@ assert fid_t in three["cleared"] and fid_t not in patrol.standing()
 # each starts only when the last is due. A rise in pressure still starts one at once.
 assert patrol.due({"t": NOW - 26 * 60}, "ok", NOW) and not patrol.due({"t": NOW - 24 * 60}, "ok", NOW, patrol.FALLBACK_DUE_S)
 assert patrol.due({"t": NOW - 26 * 60}, "ok", NOW, patrol.FALLBACK_DUE_S)
-assert patrol.due({"t": NOW - 60, "level": "ok"}, "warn", NOW, patrol.FALLBACK_DUE_S)
+assert patrol.due({"t": NOW - 16 * 60, "level": "ok"}, "warn", NOW, patrol.FALLBACK_DUE_S)
 assert patrol.FALLBACK_DUE_S < 1800, "reap-hard's default period"
 last, rounds_at = NOW - 3600, []
 for k in range(1, 7):  # six passes, 30 minutes apart, no patrol job and no pressure change
