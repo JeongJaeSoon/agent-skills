@@ -136,13 +136,23 @@ def after_cd(c, here, prev=UNKNOWN_DIR):
 
 
 def after_switch(c, switched, here):
-    """The branch a `git switch <b>`, `git checkout <b>` or `-c/-b <b> [<start>]` on the same command line leaves
-    checked out (None before any; "" when it cannot be read)."""
+    """{repository: branch} after a `git switch <b>`, `git checkout <b>` or `-c/-b <b> [<start>]` on the same command
+    line: the branch it leaves checked out in the repository it ran in ("" when that cannot be read). `switched` is
+    the map before this command; it is returned unchanged for any other."""
     sub, args = verb(c.words[1:], {"-C", "-c", "--git-dir", "--work-tree", "--namespace"})
-    if sub not in ("switch", "checkout") or "--" in args:  # `checkout -- <file>` restores files
+    if sub not in ("switch", "checkout"):
         return switched
-    # `git -C <dir> switch` moves HEAD in <dir>; it counts only when that is the folder a later push runs in.
-    opts, where = c.words[1:len(c.words) - len(args) - 1], here
+    after_sub = len(args)  # the words after the subcommand, before `--` is cut off
+    # `checkout -- <file>` restores files; `switch -- <b>` names a branch that looks like an option.
+    if "--" in args:
+        if sub == "checkout":
+            return switched
+        args = args[args.index("--") + 1:]
+        creates = []
+    else:
+        creates = args
+    # `git -C <dir> switch` moves HEAD in <dir>, the repository this entry is kept for.
+    opts, where = c.words[1:len(c.words) - after_sub - 1], here
     for i, x in enumerate(opts):
         if x == "-C" and i + 1 < len(opts):
             where = expand(opts[i + 1], where) or where
@@ -150,15 +160,27 @@ def after_switch(c, switched, here):
             where = expand(x[2:], where) or where
         elif x.startswith(("--git-dir", "--work-tree")):
             return switched
-    if os.path.realpath(where or ".") != os.path.realpath(here or "."):
-        return switched
+    key = repo_key(where)
     if args == ["-"]:
-        return ""
+        return {**switched, key: ""}
+    # -c/-C (switch) and -b/-B (checkout) name the branch to create, attached or as the next word.
+    for i, x in enumerate(creates):
+        if x in ("-c", "-C", "-b", "-B", "--create", "--force-create") and i + 1 < len(creates):
+            return {**switched, key: creates[i + 1]}
+        if re.match(r"-[cCbB]", x) and len(x) > 2:
+            return {**switched, key: x[2:]}
+        if x.startswith(("--create=", "--force-create=")):
+            return {**switched, key: x.split("=", 1)[1]}
     names = [x for x in args if not x.startswith("-")]
     # `git checkout README.md` restores a file; a branch name is not a path that exists here.
-    if not names or sub == "checkout" and os.path.exists(os.path.join(here or ".", names[0])):
+    if not names or sub == "checkout" and os.path.exists(os.path.join(where or ".", names[0])):
         return switched
-    return names[0]
+    return {**switched, key: names[0]}
+
+
+def repo_key(where):
+    """The repository a command in `where` acts on, as a real path: its top-level folder, else `where` itself."""
+    return os.path.realpath(git_out(["rev-parse", "--show-toplevel"], where) or where or ".")
 
 
 def verb(args, valued):
@@ -247,8 +269,8 @@ def write_targets(c):
 
 def check_command(c, masked, cfg, cwd, session, here=None, switched=None):
     """[(key, reason)] for one command. `here` is the directory its relative paths resolve against (cwd after the
-    line's earlier `cd`s), `cwd` the hook's own; `switched` the branch an earlier `git switch` on the line checked
-    out (None before any)."""
+    line's earlier `cd`s), `cwd` the hook's own; `switched` maps a repository to the branch an earlier `git switch` on
+    the line checked out in it."""
     here = cwd if here is None else here
     out, w, name = [], c.words, c.name
     # Before the argv check: a bare `> file` truncates it with no command at all.
@@ -701,7 +723,8 @@ def force_push_default(c, here, switched=None):
             dst = "*"
         if dst == "HEAD":
             # A `git switch` earlier on the line moved HEAD; the repository on disk still shows the old branch.
-            dst = switched if switched is not None else git_out(gitdir + ["symbolic-ref", "--short", "HEAD"], where)
+            moved = (switched or {}).get(repo_key(where)) if not gitdir else None
+            dst = moved if moved is not None else git_out(gitdir + ["symbolic-ref", "--short", "HEAD"], where)
         # A pattern such as `refs/heads/*` reaches the default branch too.
         if (forced or spec.startswith("+")) and any(fnmatch.fnmatchcase(b, dst) for n in names
                                                     for b in (n, "refs/heads/" + n)):
@@ -916,7 +939,7 @@ def check_bash(cmd, cfg, cwd=None, session=None):
     masked = shell.command_text(cmd)
     out, seen = [], set()
     cmds, here, pushed, prev = shell.commands(cmd), cwd, [], UNKNOWN_DIR  # prev: where `cd -` goes
-    switched = None  # the branch an earlier `git switch` on the line checked out
+    switched = {}  # {repository: the branch an earlier `git switch` on the line checked out}
     outer, start, ticks = [], 0, False  # the directories to go back to at each `)` or closing backtick
     for i, c in enumerate(cmds):
         for ch in masked[start:c.span[0]]:
@@ -938,7 +961,6 @@ def check_bash(cmd, cfg, cwd=None, session=None):
                 here = pushed.pop()
             elif c.name == "pushd" and here is not UNKNOWN_DIR:
                 pushed.append(before)
-            switched = None  # another folder may be another repository
         if c.name == "git":
             switched = after_switch(c, switched, here)
         # `kill $(pgrep …)`: a pgrep inside this kill command's own substitution.
