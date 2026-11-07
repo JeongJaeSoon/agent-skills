@@ -103,15 +103,20 @@ LEVEL_KO = {"ok": "정상", "warn": "경고", "danger": "위험"}
 # held here never keeps heavy starts or new cards blocked.
 TRIGGER_RELEASE_LOAD = 1.7  # a load-driven danger leaves the trigger level only below this (entry is the danger threshold)
 TRIGGER_MIN_GAP_S = 15 * 60
+TRIGGER_RETRY_S = 5 * 60  # a start patrol did not take is asked again after this
 
 
-def trigger_level(prev, level, m):
-    """The level the patrol trigger sees: the raw level, except that danger is held while the load stays at or above the
-    release line, so a load hovering around the entry threshold does not read as a fresh rise every few minutes."""
+def trigger_level(prev, held, level, m, enter=2.0):
+    """(trigger level, held): the raw level, except that a danger the load drove (the load reached `enter`) is kept while
+    the load stays at or above the release line, so a load hovering around the entry threshold does not read as a
+    fresh rise every few minutes. `held` is whether the trigger's danger is load-driven; a danger another metric
+    drove leaves with that metric."""
     load = m.get("load_per_cpu")
-    if prev == "danger" and level != "danger" and load is not None and load >= TRIGGER_RELEASE_LOAD:
-        return "danger"
-    return level
+    if level == "danger":
+        return level, load is not None and enter is not None and load >= enter
+    if prev == "danger" and held and load is not None and load >= TRIGGER_RELEASE_LOAD:
+        return "danger", True
+    return level, False
 
 
 PATROL_MEMO = reap.STATE / "patrol-state.json"  # patrol's own record of its last round: t, and the trigger level it ran at
@@ -1001,11 +1006,14 @@ def round_once(cfg, dry_run, out=print, now=None, measure_fn=measure, sample_fn=
     if why:
         out(f"- 임계값 초과: {', '.join(why)}")
     record = {"t": now, "level": level, "metrics": m, "why": why}
-    tlevel = trigger_level(st.get("trigger_level") or "ok", level, m)
+    tlevel, held = trigger_level(st.get("trigger_level") or "ok", st.get("trigger_held"), level, m, cfg["load_per_cpu"][1])
     memo = read_patrol_memo()
     floor = trigger_floor(st, memo, tlevel)
-    fire = rise_due(floor, memo.get("t") or 0, tlevel, now)
-    record.update(trigger_level=tlevel, trigger_floor=floor, floor_for=memo.get("t"))
+    # A start patrol refused or never ran is asked again, but not every round.
+    fire = rise_due(floor, memo.get("t") or 0, tlevel, now) and now - st.get("spawn_t", 0) >= TRIGGER_RETRY_S
+    record.update(trigger_level=tlevel, trigger_held=held, trigger_floor=floor, floor_for=memo.get("t"))
+    if fire:
+        record["spawn_t"] = now
     if level != "danger" and st.get("dash_t") and not dry_run:
         dash_note("resolve")
         st.pop("dash_t")

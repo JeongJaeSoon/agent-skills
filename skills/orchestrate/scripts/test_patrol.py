@@ -566,6 +566,12 @@ assert len(full()) == 1
 calls.clear()
 patrol.all_workers(0, NOW + 170 + fleet.SETTLED_EVERY + 1, fake_pages)
 assert len(full()) == 1, "past SETTLED_EVERY"
+# An empty cursor with more than a page of new released workers, the moving one past the first page: read in full.
+LIVE["retained"], LIVE["released"] = [], []
+patrol.all_workers(0, NOW + 3000, fake_pages)
+LIVE["released"] = [wk("s1"), wk("s2"), wk("s3", "active")]
+calls.clear()
+assert ids(patrol.all_workers(0, NOW + 3010, fake_pages)) == ["s1", "s2", "s3"] and len(full()) == 1
 patrol.WORKERS_CURSOR.unlink(missing_ok=True)
 
 # A dry round writes nothing.

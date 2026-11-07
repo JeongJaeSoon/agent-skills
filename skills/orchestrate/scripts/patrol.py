@@ -195,12 +195,12 @@ def all_workers(deadline, now=None, pages=None):
     settled = lambda ws: all(w.get("dispatchStatus") in fleet.SETTLED for w in ws)
     released = None
     if 0 <= now - (cur.get("t") or 0) < fleet.SETTLED_EVERY and settled(gone):
-        # Newest first: a worker created since the cursor sits on the first page. That page must overlap the cursor (or
-        # the cursor be empty), else more than a page of workers is new and the whole list is read.
+        # Newest first: a worker created since the cursor sits on the first page. That page must hold a row the cursor
+        # knows (or be empty), else a page or more of workers is new and the whole list is read.
         newest = pages(state="released", deadline=deadline, first_only=True)
         known = {*cached, *live, *(w.get("dispatchId") for w in gone)}
         new = [w for w in newest if w.get("dispatchId") not in known]
-        if settled(new) and (not cached or len(new) < len(newest)):
+        if settled(new) and (not newest or len(new) < len(newest)):
             released = list(cached.values()) + [{**w, "terminalState": "released"} for w in gone] + new
             stamp = cur["t"]
     if released is None:

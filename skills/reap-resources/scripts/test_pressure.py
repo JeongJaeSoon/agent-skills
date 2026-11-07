@@ -385,11 +385,15 @@ for bad in (["turns", "--wait"], ["turns", "--wait", "soon"], ["turns", "--wait"
 
 # The patrol trigger: a rise only, held by hysteresis (a load-driven danger leaves at 1.7, not 2.0) and 15 minutes apart.
 # `level`, which the gate and the hook read, still follows the raw metrics.
-assert p.trigger_level("danger", "warn", {"load_per_cpu": 1.8}) == "danger"
-assert p.trigger_level("danger", "warn", {"load_per_cpu": 1.69}) == "warn"
-assert p.trigger_level("danger", "warn", {"load_per_cpu": None}) == "warn"
-assert p.trigger_level("warn", "warn", {"load_per_cpu": 1.8}) == "warn"
-assert p.trigger_level("ok", "danger", {"load_per_cpu": 2.1}) == "danger"
+assert p.trigger_level("danger", True, "warn", {"load_per_cpu": 1.8}) == ("danger", True)
+assert p.trigger_level("danger", True, "warn", {"load_per_cpu": 1.69}) == ("warn", False)
+assert p.trigger_level("danger", True, "warn", {"load_per_cpu": None}) == ("warn", False)
+assert p.trigger_level("warn", False, "warn", {"load_per_cpu": 1.8}) == ("warn", False)
+assert p.trigger_level("ok", False, "danger", {"load_per_cpu": 2.1}) == ("danger", True)
+# A danger another metric drove (memory) is not held by the load: it leaves with that metric.
+assert p.trigger_level("ok", False, "danger", {"load_per_cpu": 1.8}) == ("danger", False)
+assert p.trigger_level("danger", False, "warn", {"load_per_cpu": 1.8}) == ("warn", False)
+assert p.trigger_level("danger", True, "danger", {"load_per_cpu": 1.8}, enter=None) == ("danger", False)
 assert p.trigger_floor({}, {"level": "danger", "t": 5}, "warn") == "warn", "a fall lowers the floor below the memo's level"
 assert p.trigger_floor({"trigger_floor": "ok", "floor_for": 5}, {"level": "danger", "t": 5}, "warn") == "ok"
 assert p.trigger_floor({"trigger_floor": "ok", "floor_for": 4}, {"level": "warn", "t": 5}, "danger") == "warn", "a new round resets it"
@@ -413,7 +417,9 @@ for step, (load, at, want, patrol_runs) in enumerate([
         (2.1, T + 1900, 1, True),     # a climb back to danger after a fall is a rise
         (0.5, T + 2000, 0, False),    # ok
         (1.4, T + 2900, 1, False),    # a rise whose patrol never ran (refused, lock held)...
-        (1.4, T + 3000, 1, True)]):   # ...is asked again, and this time runs
+        (1.4, T + 2950, 0, False),    # ...is not asked again within the retry interval...
+        (1.4, T + 3100, 0, False),    # asked again too soon (retry interval): not every round
+        (1.4, T + 3250, 1, True)]):   # ...and this time runs
     spawned.clear()
     run_round(LOAD(load), [], consumers=([], []), now=at, rescan_minutes=0)
     assert len(spawned) == want, (step, load, spawned)
