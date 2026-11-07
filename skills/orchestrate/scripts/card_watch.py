@@ -119,6 +119,8 @@ def card_name(t):
 
 SETUP_STATE = STATE_DIR.parent  # card.py's start helpers log under <state>/close-setup and <state>/goal-input
 GOAL_NOT_TYPED = "the /goal line was not typed"
+# card.py's goal_after_idle ends with one of: typed, already ran, not typed, or may have reached (typed, screen unconfirmed).
+GOAL_VERDICT = re.compile(r"^\[[^\]]*\] (?:warning: the /goal line (?:was not typed|may have reached)|typed the /goal line|\S+ already ran /goal)")
 
 
 def setup_failure(name):
@@ -133,8 +135,9 @@ def setup_failure(name):
     lines = last_lines("close-setup")
     if lines and lines[-1] == "result: failed":
         return "close-setup", (lines[-2] if len(lines) > 1 else "see its log"), ""
-    verdicts = [l for l in last_lines("goal-input") if GOAL_NOT_TYPED in l or "typed the /goal line" in l or "already ran /goal" in l]
-    if verdicts and GOAL_NOT_TYPED in verdicts[-1]:
+    # The helper's own prefix decides, never the goal text it quotes after it.
+    verdicts = [l for l in last_lines("goal-input") if GOAL_VERDICT.match(l)]
+    if verdicts and GOAL_NOT_TYPED in verdicts[-1].split(" into ", 1)[0]:
         text = verdicts[-1].split("warning: ", 1)[-1]
         reason, _, manual = text.partition(". Once ")  # the helper prints the manual command after "run: "
         return "goal-input", reason, manual.partition("run: ")[2]
@@ -161,6 +164,16 @@ def scan(terms, seen, read, now_ms, idle_min, free_gb, min_free_gb, goal_lost_mi
     for t in terms:
         h = t["handle"]
         waited = waits.get(h, prog.NOT_LOOKED)
+        # A card that never started looks idle, so its helper logs are judged apart from the screen, and before the
+        # screen read: an unreadable pane must not hide the failure or forget that it was reported.
+        failed = setup_failure(card_name(t))
+        if failed:
+            helper, reason, manual = failed
+            skey = f"setup:{helper}:{hashlib.sha1(reason.encode()).hexdigest()[:12]}"
+            now[h + ":setup"] = skey
+            if seen.get(h + ":setup") != skey:
+                manual = manual or f"skills-sync close-setup {t.get('worktreePath')} --agent {h}   # then: orca terminal read --terminal {h} --screen"
+                out += [f"SETUP FAILED {card_name(t)}: {helper} ({reason})", f"  {manual}"]
         try:
             lines = read(h)
         except (SystemExit, Exception):
@@ -180,15 +193,6 @@ def scan(terms, seen, read, now_ms, idle_min, free_gb, min_free_gb, goal_lost_mi
         goal = under_goal(t, tail)
         if goal:
             goals.add(h)
-        # A card that never started looks idle, so this is judged apart from the screen findings, once per failure.
-        failed = setup_failure(name)
-        if failed:
-            helper, reason, manual = failed
-            skey = f"setup:{helper}:{hashlib.sha1(reason.encode()).hexdigest()[:12]}"
-            now[h + ":setup"] = skey
-            if seen.get(h + ":setup") != skey:
-                manual = manual or f"skills-sync close-setup {t.get('worktreePath')} --agent {h}   # then: orca terminal read --terminal {h} --screen"
-                out += [f"SETUP FAILED {name}: {helper} ({reason})", f"  {manual}"]
         if auth:
             kind, question, key = "auth", auth, "auth:" + hashlib.sha1(auth.encode()).hexdigest()[:12]
         elif hit:

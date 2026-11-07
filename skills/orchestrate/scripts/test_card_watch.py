@@ -316,5 +316,27 @@ helper_log("goal-input", "card-b", "[skills-sync card] warning: the /goal line w
 screens["h1"] = menu
 again = scan(seen)
 assert again[0].startswith("STUCK card-a (a select menu)") and not any("card-b" in l for l in again), again
+
+# The helper's verdict prefix decides, not the goal text it quotes; an unconfirmed send ends the "not typed" report.
+helper_log("goal-input", "card-b", "[skills-sync card] typed the /goal line into h2: /goal why the /goal line was not typed")
+assert card_watch.setup_failure("card-b") is None, "a quoted goal text is not a verdict"
+helper_log("goal-input", "card-b", "[skills-sync card] warning: the /goal line was not typed into h2 (waited up to 900s).",
+           "[skills-sync card] warning: the /goal line may have reached h2, but its screen does not show it. Read the screen first: x")
+assert card_watch.setup_failure("card-b") is None, "the newest verdict says it may have been typed"
+
+# An unreadable pane neither hides a failure nor makes it come back after the pane reads again.
+helper_log("close-setup", "card-a", "term_x  agent needs input: a folder trust dialog", "result: failed")
+def flaky(h):
+    if flaky.mode == "bad":
+        raise SystemExit(1)
+    return idle
+terms = card_watch.agent_terminals([term("h1", "/w/card-a", last=NOW - 60000)], "me")
+seen = {}
+flaky.mode = "bad"
+assert card_watch.scan(terms, seen, flaky, NOW, 30, 100.0, 15)[0].startswith("SETUP FAILED card-a"), "reported with no screen"
+flaky.mode = "ok"
+assert card_watch.scan(terms, seen, flaky, NOW, 30, 100.0, 15) == [], "the same failure after the pane reads again"
+flaky.mode = "bad"
+assert card_watch.scan(terms, seen, flaky, NOW, 30, 100.0, 15) == [], "and again when it stops reading"
 print("ok")
 
