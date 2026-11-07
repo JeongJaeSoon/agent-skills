@@ -585,6 +585,14 @@ assert len(full()) == 1
 calls.clear()
 patrol.all_workers(0, NOW + 170 + fleet.SETTLED_EVERY + 1, fake_pages)
 assert len(full()) == 1, "past SETTLED_EVERY"
+# A dry round reads the cursor but never writes it.
+patrol.WORKERS_CURSOR.unlink(missing_ok=True)
+patrol.CURRENT["dry"] = True
+patrol.all_workers(0, NOW + 2000, fake_pages)
+assert not patrol.WORKERS_CURSOR.exists(), "dry round wrote the workers cursor"
+patrol.CURRENT["dry"] = False
+patrol.all_workers(0, NOW + 2000, fake_pages)
+assert patrol.WORKERS_CURSOR.exists()
 # An empty cursor with more than a page of new released workers, the moving one past the first page: read in full.
 LIVE["retained"], LIVE["released"] = [], []
 patrol.all_workers(0, NOW + 3000, fake_pages)

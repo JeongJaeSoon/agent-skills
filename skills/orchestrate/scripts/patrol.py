@@ -208,8 +208,9 @@ def all_workers(deadline, now=None, pages=None):
         if not settled(released):
             stamp = 0  # a released worker still moving: no cursor, read it every round
     rows = list(live.values()) + [w for w in released if w.get("dispatchId") not in live]
-    with contextlib.suppress(OSError):
-        fleet.write_atomic(WORKERS_CURSOR, json.dumps({"t": stamp, "released": released, "live": live}))
+    if not CURRENT.get("dry"):  # a dry round writes nothing
+        with contextlib.suppress(OSError):
+            fleet.write_atomic(WORKERS_CURSOR, json.dumps({"t": stamp, "released": released, "live": live}))
     return rows
 
 
@@ -1120,6 +1121,7 @@ def round_once(dry=False, if_due=False, now=None, gather_fn=gather, rid=None, fa
     if if_due and not due(memo, tlevel, now, FALLBACK_DUE_S if fallback else DUE_S, floor):
         return None
     t0 = time.monotonic()
+    CURRENT["dry"] = dry
     facts, notes = gather_fn(now, time.time() + BUDGET_S, memo)
     findings, verdicts, memo2 = judge(facts, memo)
     memo2["level"] = tlevel  # what the next `due` compares a rise against; the raw level stays in facts
