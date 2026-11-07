@@ -468,8 +468,10 @@ STORES = [
           rule="the detached sweep run's stdout"),
     Store("patrollog", "S/patrol.jsonl", {"patrol.finding": CANONICAL}, ("patrol:write_round", "patrol:ack"),
           ("patrol", "programview", "fleet"), rule="findings and their acks; the Inbox reads the open ones from here"),
-    Store("patrolstate", "S/patrol-*.json", {"patrol.memo": CANONICAL}, ("patrol:round_once", "patrol:pending_lines"),
-          ("patrol",), rule="round memo and re-notice guard"),
+    Store("patrolstate", "S/patrol-*.json", {"patrol.memo": CANONICAL},
+          ("patrol:round_once", "patrol:pending_lines", "patrol:all_workers"),
+          ("patrol", "pressure"), rule="round memo and re-notice guard; patrol-workers.json, the settled-workers cursor; "
+          "pressure reads the memo's time and level to decide whether a rise may start a round"),
     Store("modelswitch", "S/model-switch/*.json", {"patrol.model_switch": CANONICAL}, ("model_drift:autoswitch", "model_drift:mark_reported"),
           ("patrol",), feature="model_autoswitch", rule="one claim per session, made before the first keystroke: "
           "a session is switched at most once"),
