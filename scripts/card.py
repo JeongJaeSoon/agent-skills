@@ -56,7 +56,8 @@ when several Orca workspaces share its path. No terminal handle, or no worktree 
 A lead's brief starts that way too when Orca's Nested worker depth is 3 or more (`orch doctor`, orca_settings.py),
 so the lead's workers' helpers still fit; below that it is a `/goal` card, with the one-line settings proposal as a
 warning. A lead's brief whose MERGE row says `merge_policy human-gate` stays a `/goal` card at any depth: its landings wait on
-Orca gates, and Orca lets no dispatched worker create a Task or gate on the Run it works for. Anything else (a handoff, or --card) is a `/goal` card from `orca worktree create`. A brief that sends anything to a `term_…`
+Orca gates, and Orca lets no dispatched worker create a Task or gate on the Run it works for. Anything else (a handoff, or --card) is a `/goal` card from `orca worktree create --surface terminal` (a chat surface would take the whole prompt as the
+goal condition, over Claude Code's 4000-character limit; the `/goal` line itself is refused above GOAL_MAX). A brief that sends anything to a `term_…`
 handle (`orchestration send --to term_…`, in any line) is refused: a handle dies with its terminal, so the mail is
 lost on a restart (`terminal_not_found`), and while it lives the mail is only stored.
 --reference links the ticket in Orca (linkedItems): on create for a card, by `orca reference add` right after the
@@ -132,6 +133,7 @@ import orca_settings  # noqa: E402
 ORCA = os.environ.get("SKILLS_SYNC_ORCA", "orca")
 ORCH = os.environ.get("SKILLS_SYNC_ORCH", str(REPO / "bin" / "orch"))
 GOAL = re.compile(r"(?m)^/goal[ \t]+\S.*$")
+GOAL_MAX = 3500  # Claude Code refuses a /goal condition over 4000 characters; the line is typed alone, so keep it well under
 GOAL_IDLE_S = 3600  # how long the detached helper waits for a worker's first turn to end
 GOAL_POLL_S = 10
 GOAL_FATAL = ("orca ", "not a connected", "no rendered screen")  # try_send reasons that waiting will not change
@@ -264,6 +266,9 @@ def compose(brief_path):
     head = goal.group(0).rstrip()
     if not any(s in head for s in ("브리프:", str(path), brief_path)):
         head += f" 브리프: {path}"
+    if len(head) > GOAL_MAX:
+        raise Refuse(2, f"{path}: the `/goal` line is {len(head)} characters; Claude Code refuses a goal over 4000. "
+                        "Keep the line to the goal in a sentence or two: the rest of the brief is the prompt below it.")
     # FORBIDDEN (markers included) and every REPORT row go in whole: the worker gets its bans and where to report from
     # no other place than this first prompt, and a path to the brief file is not a substitute for them.
     def lines(k):  # the fixed rows follow LOAD, ahead of the long FORBIDDEN section
@@ -1103,7 +1108,9 @@ def create_locked(brief, opts, refs, prompt, kind=None, order=None):
     else:
         cmd = [ORCA, "worktree", "create", "--repo", opts["--repo"], "--name", opts["--name"]]
         cmd += ["--parent-worktree", parent] if parent else ["--no-parent"]
-        cmd += ["--agent", opts["--agent"], "--prompt", prompt]
+        # A chat surface takes a prompt that starts with /goal whole as the goal condition (the whole brief, over the
+        # limit); a terminal pastes it and goal-after-idle types only the first line.
+        cmd += ["--agent", opts["--agent"], "--surface", "terminal", "--prompt", prompt]
         for r in refs:
             cmd += ["--reference", r]
     # A comment of the caller's is left alone; without one the card's comment says where its brief is.
@@ -1245,6 +1252,9 @@ def handoff(argv):
         first = note.splitlines()[0] if note else ""
         sep = "\n" if any(starts_row(first, k) for k in ROWS) or first.lstrip().startswith("```") else " "
         head = f"/goal {ticket}." + (sep + note if note else "")
+        if len(head.splitlines()[0]) > GOAL_MAX:
+            raise Refuse(2, f"[{HANDOFF}] the --note joins the `/goal` line, which is over {GOAL_MAX} characters; "
+                            "Claude Code refuses a goal over 4000. Start the note with a row (e.g. `APPROVED: none`) or shorten it.")
         # A note without its own APPROVED row hands over no approved act, and says so as the row a brief needs.
         approved = [] if row(FENCE.sub("", head), "APPROVED") else ["APPROVED: none"]
         # CLOSE on a line of its own: roles.py reads a CLOSE card by its row
@@ -1267,7 +1277,7 @@ def handoff_locked(ticket, opts, refs, prompt):
     cmd = [ORCA, "worktree", "create", "--name", name]
     cmd += ["--base-branch", opts["--base-branch"]] if opts.get("--base-branch") else []
     cmd += ["--parent-worktree", parent] if parent else ["--no-parent"]
-    cmd += ["--agent", "claude", "--prompt", prompt]
+    cmd += ["--agent", "claude", "--surface", "terminal", "--prompt", prompt]  # as in create_locked: a /goal card is a terminal
     model, model_from = session_model(opts, False, HANDOFF)
     cmd += ["--model", model] if model else []
     for r in refs:

@@ -210,6 +210,17 @@ assert calls[2]["bin"] == "orch" and calls[2]["argv"][:4] == ["sent", "add", "--
 assert calls[2]["argv"][calls[2]["argv"].index("--repo") + 1] == "acme/app", calls[2]
 assert calls[3]["argv"][:4] == ["worktree", "set", "--worktree", f"path:{CARD_DIR}"], calls[3]
 assert json.loads(out)["agentTerminalHandle"] == "term_new" and json.loads(out)["card"]["parent"] == "id:repo1::/wt/me"
+# A /goal card starts in a terminal whatever the user's default surface is: a chat surface takes the whole prompt as
+# the goal condition, which the 4000-character limit refuses for a real brief.
+assert create[create.index("--surface") + 1] == "terminal" and create.index("--surface") < create.index("--prompt"), create
+# The /goal line alone stays short; an over-long one is refused before any card exists.
+LONG = WORKER.replace("ship the helper and open its PR", "x" * (card.GOAL_MAX + 1))
+rc, out, err, calls = go(brief(LONG, "long-goal.md"), "--repo", "name:acme", "--name", "acme-long")
+assert rc == 2 and not creates(calls) and "`/goal` line is" in err and "4000" in err, (rc, err)
+# A long brief below the /goal line is the prompt's body, not the goal: it passes.
+BIG = WORKER + "\n" + "background line.\n" * 2000
+rc, out, err, calls = go(brief(BIG, "big-body.md"), "--repo", "name:acme", "--name", "acme-big")
+assert rc == 0 and prompt_of(calls).splitlines()[0].startswith("/goal ship the helper"), (rc, err)
 # A lookup that fails, or no handle at all, creates nothing and prints the choices.
 rc, out, err, calls = go(path, "--repo", "r", "--name", "x", mode="stale-terminal")
 assert rc == 6 and not creates(calls) and "terminal_handle_stale" in err and "--no-parent" in err and "  1. " in err, (rc, err)
@@ -614,6 +625,9 @@ make = creates(calls)[0]
 assert make[make.index("--name") + 1] == "abc-2" and make[make.index("--parent-worktree") + 1] == "id:repo1::/wt/lead"
 assert make[make.index("--prompt") + 1] == "\n".join(["/goal ABC-2. stack on ABC-1.", "APPROVED: none", CLOSE,
                                                       card.LOAD_LINE, *card.FIXED_LINES]), make
+assert make[make.index("--surface") + 1] == "terminal", make  # the handoff's /goal is typed into a terminal too
+rc2, _, err2, calls2 = handoff("ABC-8", "--note", "n" * (card.GOAL_MAX + 1))
+assert rc2 == 2 and not creates(calls2) and "joins the `/goal` line" in err2, (rc2, err2)
 assert ["worktree", "set", "--worktree", f"path:{CARD_DIR}", "--display-name", "ABC-2 next step", "--json"] in [c["argv"] for c in calls]
 assert json.loads(out)["card"]["start"].startswith("started"), out
 # The handoff's prompt is a valid card brief: written to a file, `skills-sync card` composes it without a refusal.
