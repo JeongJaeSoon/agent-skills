@@ -457,6 +457,14 @@ for step, (load, at, want, patrol_runs) in enumerate([
         assert last[1] == "warn" and at <= last[0] < at + 5, last  # stamped when saved, a moment after the round began
     if spawned and patrol_runs:
         p.PATROL_MEMO.write_text(json.dumps({"t": at, "level": p.load_state()["trigger_level"]}))
+# The entry is stamped when written, not when the round began: notices and queue work run in between.
+import itertools
+mono0, p.time.monotonic = p.time.monotonic, itertools.count(0, 10).__next__  # each reading is 10 s after the last
+p.save_state({"level": "ok", "trigger_level": "ok", "t": 1.0})
+run_round(LOAD(1.4), [], consumers=([], []), now=500.0, rescan_minutes=0)
+p.time.monotonic = mono0
+stamp = p.load_state()["trigger_obs"][-1]
+assert stamp[1] == "warn" and stamp[0] >= 500.0 + 20, stamp
 p.reap.spawn_patrol = spawn0
 
 print("ok")

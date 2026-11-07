@@ -1051,6 +1051,8 @@ def round_once(cfg, dry_run, out=print, now=None, measure_fn=measure, sample_fn=
         for e in queue_expire(now):
             out(f"- 대기열 {e['id']} 포기(기한 지남): {e['what']}")
     if not dry_run:  # before the sweep, which can take minutes: the hook and check judge this sample meanwhile
+        if obs and obs[-1][0] == saved_at:  # the notices above took time: stamp the entry when it is written
+            obs[-1][0] = now + (time.monotonic() - started)
         save_state({**st, **record})
         with contextlib.suppress(OSError):  # the chart's point is not worth failing the round over
             history_add(record, queued_count())
