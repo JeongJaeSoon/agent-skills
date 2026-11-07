@@ -1,5 +1,5 @@
 """What orch-dash does on its own, on a clock, for the dashboard's Automations page: its periodic jobs with their last
-run, two jobs outside it that keep their own record, and the rules it applies whenever it reads (no run to record).
+run, three jobs outside it that keep their own record, and the rules it applies whenever it reads (no run to record).
 
 Each job records its run when it runs (record()); nothing else writes the file, and a job with no record shows as
 none, never an estimated time. One file, <fleet state>/jobs.json (0600, replaced whole under jobs.lock):
