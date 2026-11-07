@@ -9,9 +9,9 @@ A status report has one job: the human reads it in under a minute and knows what
 
 Pick the mode by what the human asked for:
 
-- **Report** (the default): §1 to §3 below. A report request that also mentions stages, deploys, to-dos or held work is still the report: it already counts those and points at their lists, so do not open the mode files for it. The other modes are for a request that wants that table or list alone.
-- **Stage table**: "단계표 보여줘", "stage table", the retired `/agent-skills:stage`. Only the per-item merge / dev / prod table, never the full report: read [references/stage.md](references/stage.md) and follow it.
-- **To-do**: "할 일 보여줘", "보류 큐 보여줘", "to-do list", the retired `/agent-skills:todo`. Only the to-dos and the held queue, never the full report: read [references/todo.md](references/todo.md) and follow it.
+- **Report** (the default): §1 to §3 below. A report request that also asks to include stages, deploys, to-dos or held work ("할 일이랑 배포 상황도 넣어서 현황 보고해줘") is still the report alone: it already counts those and points at their lists, so do not open the mode files and do not add `orch stage show` or `orch board todo list` to it.
+- **Stage table**: "단계표 보여줘", "stage table", the retired `/agent-skills:stage`, when the request asks for no report. Only the per-item merge / dev / prod table, never the full report: read [references/stage.md](references/stage.md) and follow it.
+- **To-do**: "할 일 보여줘", "보류 큐 보여줘", "to-do list", the retired `/agent-skills:todo`, when the request asks for no report. Only the to-dos and the held queue, never the full report: read [references/todo.md](references/todo.md) and follow it.
 
 ## 1. The report is the renderer's output
 
