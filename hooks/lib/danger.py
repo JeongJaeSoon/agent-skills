@@ -64,7 +64,7 @@ PUSH_LONG = ["--all", "--atomic", "--branches", "--delete", "--dry-run", "--exec
              "--no-force-with-lease", "--no-verify", "--porcelain", "--progress", "--prune", "--push-option", "--quiet",
              "--receive-pack", "--recurse-submodules", "--repo", "--set-upstream", "--signed", "--tags", "--thin",
              "--verbose"]
-PUSH_VALUED = {"-o", "--push-option", "--repo", "--receive-pack", "--exec"}
+PUSH_VALUED = {"--push-option", "--repo", "--receive-pack", "--exec", "--recurse-submodules"}
 # Options that take a value, per tool: the short letters (the rest of a cluster, or the next word, is the value, so
 # in `-sG` the letters are flags and in `-AGitHub` the rest is the User-Agent) and the long names. They differ: gh's
 # `-f` takes a field, curl's `-f` is a flag.
@@ -699,7 +699,9 @@ def force_push_default(c, here, switched=None):
                 repo = rest[i]
             elif x.startswith("--repo="):
                 repo = x[7:]
-            i += x in PUSH_VALUED
+            # A value-taking option reads the next word unless its value is attached: `--repo=x`, `-ofoo`; in a
+            # cluster only a closing `o` (`-fo ci.skip`) does.
+            i += x in PUSH_VALUED or not x.startswith("--") and x.endswith("o")
         else:
             pos.append(x)
 
