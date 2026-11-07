@@ -341,6 +341,8 @@ CASES = [
       "gh api repos/acme/app/branches/main/protection --template '-fexample'",
       "gh api graphql -f 'query=mutation { createIssue(input: {title: \"deleteRepositoryRuleset\"}) { x } }'",
       ("curl https://api.github.com/graphql -d @mutation.json", REPOX),
+      "gh api -X PUT repos/acme/app/contents/.github/rulesets/main.json -f message=Update -f content=e30=",
+      "gh api -X POST repos/acme/rulesets/issues -f title=x",
       "gh api graphql -f 'query=query { viewer { login } } # mutation deleteBranchProtectionRule'",
       "echo gh api -X PUT repos/a/b/branches/main/protection", "gh pr view 3", "gh api -X HEAD repos/acme/app/rulesets",
       "curl https://api.github.com/repos/a/b/branches/main/protection",

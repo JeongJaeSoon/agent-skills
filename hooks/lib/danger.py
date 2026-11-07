@@ -532,7 +532,9 @@ def protection_write(c, here=None):
 
     def writes(method, endpoint):
         endpoint = endpoint.split("?", 1)[0]
-        target = re.search(r"/branches/.+/protection(/|$)|(^|/)rulesets(/|$)", endpoint) is not None
+        # Anchored under a repository or an organization: `contents/.github/rulesets/x.json` is a file, not a ruleset.
+        target = re.match(r"/?(?:api/v3/)?(?:repos/[^/]+/[^/]+/branches/.+/protection|(?:repos/[^/]+/[^/]+|orgs/[^/]+)"
+                          r"/rulesets)(?:/|$)", endpoint) is not None
         return method not in ("GET", "HEAD", "OPTIONS") and target
     if c.name == "curl":
         return any(any(writes(method, p) for p in paths)
