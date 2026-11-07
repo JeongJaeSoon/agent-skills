@@ -3862,7 +3862,7 @@ def review_sweep(events, view, active, unresolved, slug, gate=None, unknown=froz
             ("on hold", on_hold(events, n) or any(HOLD.search(l.get("name") or "") for l in r.get("labels") or [])),
             # A declared no-CI repo reviews through the ledger verdict: no GitHub decision is not a wait there.
             ((decision or "no review").lower().replace("_", " "), decision != "APPROVED" and not (no_ci and not decision)),
-            (f"merge state {mss}" + {"DIRTY": ", dispatch a fix", "BEHIND": f", gh pr update-branch {n}"}.get(mss, ""), mss != "CLEAN"),
+            (f"merge state {mss}" + {"DIRTY": ", dispatch a fix", "BEHIND": f", gh pr update-branch {n} (the land executor and a no-CI repo then need a verdict at the new head)"}.get(mss, ""), mss != "CLEAN"),
             ("CI failed, dispatch a fix", failed), ("CI pending", pending)) if bad]
         threads = 0 if why else unresolved(n)
         if threads:
