@@ -1417,7 +1417,7 @@ function fleetAutomations(st) {
   const src = (st.sources || {}).automations || {};
   const legend = [AUTO_RUN.completed, AUTO_RUN.failed, AUTO_RUN.running, AUTO_RUN.skipped]
     .map(([g, tone, l]) => `<span><span class="run ${tone ? "tone-" + tone : ""}">${g}</span>${l}</span>`).join("");
-  const headHtml = `<div class="view-head"><div><h2>Automations</h2><p>One row for each automation agent-skills sets up (scripts/automations.py, <code>skills-sync setup</code>), and no other: its cadence, next and last run, and its last 6 results (oldest on the left). A last run that failed, or a run 10 minutes past its time, gets a ▲. One that is not set up on this PC says so. orch-dash's own jobs and the session patrol open under the automation that runs them, and the rules it applies as it reads are below. An Orca automation outside that list, CronCreate jobs inside sessions and the state of a LaunchAgent are not collected.</p></div>
+  const headHtml = `<div class="view-head"><div><h2>Automations</h2><p>One row for each automation agent-skills sets up (scripts/automations.py, <code>skills-sync setup</code>), and no other: its cadence, next and last run, and its last 6 results (oldest on the left). A last run that failed, or a run 10 minutes past its time, gets a ▲. One that is not set up on this PC says so. orch-dash's own jobs open under it, the session patrol is a row of its own, and the rules it applies as it reads are below. An Orca automation outside that list, CronCreate jobs inside sessions and the state of a LaunchAgent are not collected.</p></div>
     <div class="legend">${legend}</div></div>${sw}`;
   const failed = src.ok === false ? `<div class="card"><div class="empty-chart">${tag("collection failed", "warn", "alert")} Could not read the Orca automation list: ${esc(src.error || "")}. Below is from ${rel(src.updated_at)}.</div></div>` : "";
   // One list: /api/fleet/jobs (jobs.py) has a row for each name in scripts/automations.py and no other, with what Orca says
@@ -1451,7 +1451,7 @@ function recordResult(j, r) {
   return res + (r.acted_at ? `<div class="muted">last acted: ${esc(String(r.acted_n))} · ${relSpan(r.acted_at)}</div>` : "");
 }
 
-// A job that runs inside an automation (orch-dash's own, the patrol round) in the list's columns. A job whose `group`
+// A job that runs inside an automation (orch-dash's own) in the list's columns. A job whose `group`
 // names another runs inside that job's tick: it folds into that row, which opens to one line each.
 function jobLine(j, all, sub) {
   const r = j.record, kids = sub ? [] : all.filter((k) => k.group === j.key), open = F.jobOpen.has(j.key);
@@ -1471,14 +1471,16 @@ function automationRow(e) {
   const a = e.orca, rec = e.record, issue = a ? autoIssue(a) : "", last = a && (a.recent || [])[0];
   const kids = e.jobs || [], open = F.jobOpen.has(e.key), on = !a || a.enabled;
   const toggle = kids.length ? ` <button class="chip mini" type="button" data-job-open="${esc(e.key)}" aria-expanded="${open}">${open ? "▾" : "▸"} ${kids.length} jobs</button>` : "";
-  const state = !e.job_name ? tag("LaunchAgent") : e.registered === false ? tag("not registered", "warn", "") : a && !a.enabled ? tag("off") : "";
   const standIn = !last && rec && (rec.at || rec.error);
+  // Rounds on record mean the job runs, only not as an Orca automation: say so without the warning tone or the dimmed row.
+  const ranElsewhere = e.registered === false && standIn;
+  const state = !e.job_name ? tag("LaunchAgent") : ranElsewhere ? tag("not in Orca") : e.registered === false ? tag("not registered", "warn", "") : a && !a.enabled ? tag("off") : "";
   const result = last ? esc(last.summary || last.status || "")
     : standIn ? recordResult(e, { ok: rec.ok !== false, ...rec })
     : `<span class="muted">${!e.job_name ? "its state is not read here" : e.registered === false ? "not set up on this PC · skills-sync setup enable " + esc(e.key) : "no runs yet"}</span>`;
   const lastAt = a && a.last_run_at ? a.last_run_at : standIn && rec.at;
   const sub = kids.length && !open ? jobsSummary(kids) : "";  // every job, riders too: a failure must show while closed
-  const head = `<tr class="${on && e.registered !== false ? "" : "is-done"}"><td><b title="${esc(e.what || "")}">${esc(e.key)}</b> ${state}${issue ? ` ${tag(`▲ ${issue}`, "bad", "")}` : ""}${toggle}</td>
+  const head = `<tr class="${on && (e.registered !== false || ranElsewhere) ? "" : "is-done"}"><td><b title="${esc(e.what || "")}">${esc(e.key)}</b> ${state}${issue ? ` ${tag(`▲ ${issue}`, "bad", "")}` : ""}${toggle}</td>
       <td class="nowrap">${a ? esc(cadence(a.rrule)) : '<span class="muted">–</span>'}</td><td class="nowrap ${issue === AUTO_OVERDUE ? "toned tone-bad" : ""}">${a && a.enabled ? relSpan(a.next_run_at) : '<span class="muted">–</span>'}</td>
       <td class="nowrap muted">${lastAt ? relSpan(lastAt) : "–"}</td><td class="runs nowrap">${[...((a || {}).recent || [])].reverse().map(runBlock).join("")}</td>
       <td class="dim"><span class="full">${result}</span>${sub}</td></tr>`;

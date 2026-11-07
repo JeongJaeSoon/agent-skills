@@ -1,5 +1,5 @@
 """What orch-dash does on its own, on a clock, for the dashboard's Automations page: its periodic jobs with their last
-run, two jobs outside it that keep their own record, and the rules it applies whenever it reads (no run to record).
+run, three jobs outside it that keep their own record, and the rules it applies whenever it reads (no run to record).
 
 Each job records its run when it runs (record()); nothing else writes the file, and a job with no record shows as
 none, never an estimated time. One file, <fleet state>/jobs.json (0600, replaced whole under jobs.lock):
@@ -148,9 +148,10 @@ def registry():
 
 
 def patrol_job():
-    """`orch patrol` has no schedule of its own: a reap-hard pass starts it, and it leaves patrol-verdicts.json."""
-    job = {"key": "patrol", "name": "Session patrol", "every": None, "cadence": "started by reap-hard, every other pass",
-           "group": None, "runs_in": "reap-hard", "record": None, "why": "No round recorded in this store yet."}
+    """The patrol row's own record: every round, whoever started it (the patrol automation, or a reap-hard or sweep
+    pass while that is off), leaves patrol-verdicts.json. Read as the row's stand-in when Orca has no run to show."""
+    job = {"key": "patrol", "name": "Session patrol", "every": None, "cadence": None,
+           "group": None, "runs_in": "orca", "record": None, "why": "No round recorded in this store yet."}
     v = fleet.read_json(fleet.state_dir().parent / "patrol-verdicts.json")
     if isinstance(v, dict) and isinstance(v.get("t"), (int, float)):
         at = dt.datetime.fromtimestamp(v["t"], dt.timezone.utc)
@@ -179,7 +180,7 @@ def automation_list(reg, orca, own, stand_in=None):
     rows = []
     for r in reg:
         a = by_name.get(r["job_name"]) if r["job_name"] else None
-        kids = {"orch-dash": own, "reap-hard": [patrol_job()]}.get(r["key"], [])
+        kids = own if r["key"] == "orch-dash" else []
         registered = None if not r["job_name"] or orca is None else a is not None
         rows.append({**r, "orca": a, "registered": registered, "record": stand_in.get(r["key"]), "jobs": kids})
     return rows
@@ -193,7 +194,7 @@ def snapshot(reg, orca=None):
     out = {"rules": rules()}  # no timestamp: the page's ETag holds while nothing ran
     try:
         stand_in = {}
-        for key, read in (("sync", sync_job), ("reap-hard", reap_hard_job)):
+        for key, read in (("sync", sync_job), ("reap-hard", reap_hard_job), ("patrol", patrol_job)):
             try:
                 j = read()
                 stand_in[key] = j["record"]

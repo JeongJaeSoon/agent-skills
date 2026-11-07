@@ -73,9 +73,9 @@ assert rows["sync"]["registered"] is True and rows["sync"]["orca"]["id"] == "o1"
 assert rows["janitor"]["registered"] is False and rows["janitor"]["orca"] is None, "the registry lists it, Orca does not"
 assert rows["share-server"]["registered"] is None and rows["share-server"]["job_name"] is None, "a LaunchAgent has no Orca row"
 assert all(r["registered"] is None for r in jobs.snapshot(reg, None)["automations"]), "an Orca list not read says nothing is unregistered"
-# orch-dash's own jobs open under the automation that runs them, the patrol round under reap-hard; nowhere else.
-assert {k for k, r in rows.items() if r["jobs"]} == {"reap-hard", "orch-dash"}
-assert [j["key"] for j in rows["reap-hard"]["jobs"]] == ["patrol"] and [j["key"] for j in rows["orch-dash"]["jobs"]] == [k for k, *_ in reg]
+# orch-dash's own jobs open under the automation that runs them; patrol is its own top-level row (#419), nowhere below another.
+assert {k for k, r in rows.items() if r["jobs"]} == {"orch-dash"}
+assert [j["key"] for j in rows["orch-dash"]["jobs"]] == [k for k, *_ in reg]
 # Without scripts/automations.py beside this install there is no list to show, and the page is told why.
 real_registry = jobs.registry
 jobs.registry = lambda: (_ for _ in ()).throw(ImportError("No module named 'automations'"))
@@ -83,21 +83,24 @@ gone = jobs.snapshot(reg, orca)
 jobs.registry = real_registry
 assert gone["automations"] is None and "automations.py" in gone["error"] and gone["rules"], gone
 
-# patrol: a reap-hard pass starts it, and its verdicts file keeps when the last round ran and whether it was cut short.
+# patrol: the top-level patrol row shows the rounds in its verdicts file (when the last ran, whether it was cut short),
+# even when Orca has no patrol automation; no row under reap-hard carries it, and no row says "started by reap-hard".
 def patrol_row():
-    return {j["key"]: j for j in jobs.snapshot(reg)["automations"] if j["key"] == "reap-hard"}["reap-hard"]["jobs"][0]
-assert patrol_row()["record"] is None and "No round" in patrol_row()["why"]
+    return {r["key"]: r for r in jobs.snapshot(reg)["automations"]}["patrol"]["record"]
+assert "started by" not in json.dumps(jobs.snapshot(reg)["automations"]) and jobs.patrol_job()["runs_in"] == "orca"
+assert patrol_row() is None
 (root / "patrol-verdicts.json").write_text(json.dumps({"t": 1793948481, "alerts": [1], "reports": [], "sources": {"round": "ok"}}))
-rec = patrol_row()["record"]
+assert jobs.snapshot(reg)["automations"][[r["key"] for r in jobs.snapshot(reg)["automations"]].index("reap-hard")]["jobs"] == []
+rec = patrol_row()
 assert rec["ok"] and rec["result"] == "1 alerts · 0 reports" and rec["at"] == "2026-11-06T07:01:21Z", rec
 (root / "patrol-verdicts.json").write_text(json.dumps({"t": 1793948481, "sources": {"round": "timeout"}}))
-assert not patrol_row()["record"]["ok"] and "cut short" in patrol_row()["record"]["error"]
+assert not patrol_row()["ok"] and "cut short" in patrol_row()["error"]
 # The candidate phase giving up is a failure too, not an empty result; a file in the wrong shape is that row's no-news, not the page's error.
 (root / "patrol-verdicts.json").write_text(json.dumps({"t": 1793948481, "complete": False, "sources": {"round": "ok", "candidates": "timeout"}}))
-rec = patrol_row()["record"]
+rec = patrol_row()
 assert not rec["ok"] and "candidates: timeout" in rec["error"] and rec["result"] is None, rec
 (root / "patrol-verdicts.json").write_text(json.dumps({"t": 1793948481, "sources": ["bad"], "alerts": "x"}))
-assert patrol_row()["record"]["ok"] and patrol_row()["record"]["result"] == "0 alerts · 0 reports"
+assert patrol_row()["ok"] and patrol_row()["result"] == "0 alerts · 0 reports"
 (root / "patrol-verdicts.json").unlink()
 
 # sync: Orca's runs are the record; its own file (the demo's sync.json: ok, 900 s) stands in only when Orca has none.
