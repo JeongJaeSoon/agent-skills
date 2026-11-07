@@ -130,15 +130,22 @@ def read_patrol_memo():
 
 
 TRIGGER_OBS_KEEP = 24
-TRIGGER_SKEW_S = 120  # a pressure round stamps its entry when it starts and saves it after measuring: it can land just before patrol's start
+
+
+def valid_obs(obs):
+    """The entries of a stored history that are [time, level]: pressure.json is read back by two programs and can hold
+    anything, and a round must not stop on it."""
+    return [o for o in obs if isinstance(o, list) and len(o) == 2 and isinstance(o[0], (int, float))
+            and not isinstance(o[0], bool) and o[1] in LEVELS] if isinstance(obs, list) else []
 
 
 def trigger_obs_add(obs, tlevel, now, since=0):
     """The trigger level's changes, [time, level], newest last: the history `floor_since` reads. It is kept by the
     pressure round alone and timestamped, so it does not depend on when patrol commits its memo. Entries from the
     future (the clock was set back) and those patrol's last round has already seen are dropped; past the cap the
-    lowest of what falls off stays, since a start patrol never took still needs the lowest level seen."""
-    obs = [o for o in obs or [] if isinstance(o, list) and len(o) == 2 and o[0] <= now and o[0] >= since - TRIGGER_SKEW_S]
+    lowest of what falls off stays, since a start patrol never took still needs the lowest level seen. `now` is the
+    time the entry is saved, not the round's start: patrol's round that began meanwhile has then read it or not."""
+    obs = [o for o in valid_obs(obs) if since <= o[0] <= now]
     if not obs or obs[-1][1] != tlevel:
         obs.append([now, tlevel])
     if len(obs) > TRIGGER_OBS_KEEP:
@@ -151,8 +158,9 @@ def floor_since(obs, memo):
     """The lowest trigger level since patrol's last round began (memo.t is when it began, memo.level the level it saw
     then). A fall starts no round, so only this floor lets a climb back to the old level read as a rise, including a
     fall that happened while that round was still gathering."""
-    since = (memo.get("t") or 0) - TRIGGER_SKEW_S
-    return min([memo.get("level") or "ok", *(o[1] for o in obs or [] if o[0] >= since)], key=LEVELS.index)
+    since = memo.get("t") or 0
+    return min([memo.get("level") if memo.get("level") in LEVELS else "ok",
+                *(o[1] for o in valid_obs(obs) if o[0] >= since)], key=LEVELS.index)
 
 
 def rise_due(floor, last_round_t, tlevel, now):
@@ -1013,6 +1021,7 @@ def leak_notice(cfg, m, st, record, now, dry_run, out, send_fn):
 def round_once(cfg, dry_run, out=print, now=None, measure_fn=measure, sample_fn=None, plan_fn=plan_targets,
                reap_fn=reap_plan, consumers_fn=consumers, send_fn=send, idle_fn=None):
     now = now or time.time()
+    started = time.monotonic()
     st = load_state()  # a dry run reads the last counters too, and saves nothing
     st.update((sample_fn or (lambda s, t: take_sample(s, t, cfg)))(st, now))
     m = snapshot(cfg, st, now, measure_fn)
@@ -1027,7 +1036,8 @@ def round_once(cfg, dry_run, out=print, now=None, measure_fn=measure, sample_fn=
     load_danger = any(metric == "load_per_cpu" and lvl == 2 for metric, lvl, _ in hits(m, cfg))
     tlevel, held = trigger_level(st.get("trigger_level") or "ok", st.get("trigger_held"), level, m, load_danger)
     memo = read_patrol_memo()
-    obs = trigger_obs_add(st.get("trigger_obs"), tlevel, now, memo.get("t") or 0)
+    saved_at = now + (time.monotonic() - started)
+    obs = trigger_obs_add(st.get("trigger_obs"), tlevel, saved_at, memo.get("t") or 0)
     # A start patrol refused or never ran is asked again, but not every round.
     fire = rise_due(floor_since(obs, memo), memo.get("t") or 0, tlevel, now) and now - st.get("spawn_t", 0) >= TRIGGER_RETRY_S
     record.update(trigger_level=tlevel, trigger_held=held, trigger_obs=obs)

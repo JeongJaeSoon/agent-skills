@@ -410,9 +410,18 @@ assert len(kept) == p.TRIGGER_OBS_KEEP and kept[0] == [1000.0, "ok"] and p.floor
 # A clock set back leaves future entries behind: they are dropped. Entries patrol's last round has seen are dropped too.
 assert p.trigger_obs_add([[10000.0, "warn"]], "danger", 1200.0) == [[1200.0, "danger"]]
 assert p.trigger_obs_add([[10.0, "warn"], [900.0, "danger"]], "danger", 1000.0, since=800.0) == [[900.0, "danger"]]
-# A pressure round stamps its entry when it starts: one stamped just before patrol's round began still counts.
-assert p.floor_since([[990.0, "warn"], [1020.0, "danger"]], {"t": 1000.0, "level": "danger"}) == "warn"
-assert p.floor_since([[800.0, "warn"], [1020.0, "danger"]], {"t": 1000.0, "level": "danger"}) == "danger"
+# What patrol saw before its round began is not a fall since: no tolerance window brings it back.
+assert p.floor_since([[900.0, "warn"], [950.0, "danger"]], {"t": 1000.0, "level": "danger"}) == "danger"
+assert p.floor_since([[1000.0, "warn"], [1020.0, "danger"]], {"t": 1000.0, "level": "danger"}) == "warn"
+# A stored history that is not [time, level] pairs never stops a round.
+for junk in (42, "x", {"a": 1}, [["1000", "warn"]], [[1000, "legacy"]], [[True, "warn"]], [[1]], [None], [[1000, ["warn"]]]):
+    assert p.valid_obs(junk) == [], junk
+    assert p.trigger_obs_add(junk, "warn", 50.0) == [[50.0, "warn"]]
+    assert p.floor_since(junk, {"t": 5, "level": "danger"}) == "danger"
+assert p.floor_since([[10.0, "warn"]], {"t": 5, "level": "legacy"}) == "ok", "an unknown memo level reads as ok"
+p.save_state({"level": "ok", "trigger_level": "ok", "trigger_obs": 42, "t": 1.0})
+run_round(OK, [], now=300.0)  # the real round, over a stored history that is junk
+assert p.load_state()["trigger_obs"][-1][1] == "ok"
 assert p.floor_since([[10.0, "warn"], [30.0, "danger"]], {"t": 5, "level": "danger"}) == "warn", "a fall since the round began"
 assert p.floor_since([[10.0, "warn"], [500.0, "danger"]], {"t": 400, "level": "danger"}) == "danger", "an older fall is not below it"
 assert p.floor_since([], {"t": 5, "level": "warn"}) == "warn" and p.floor_since([], {}) == "ok"
@@ -444,7 +453,8 @@ for step, (load, at, want, patrol_runs) in enumerate([
     assert len(spawned) == want, (step, load, spawned)
     assert p.load_state()["level"] == p.judge(LOAD(load), cfg)[0], "the raw level is not held"
     if at == T + 1000:  # the fall below patrol's danger is in the history patrol's commit cannot touch
-        assert p.load_state()["trigger_obs"][-1] == [at, "warn"]
+        last = p.load_state()["trigger_obs"][-1]
+        assert last[1] == "warn" and at <= last[0] < at + 5, last  # stamped when saved, a moment after the round began
     if spawned and patrol_runs:
         p.PATROL_MEMO.write_text(json.dumps({"t": at, "level": p.load_state()["trigger_level"]}))
 p.reap.spawn_patrol = spawn0

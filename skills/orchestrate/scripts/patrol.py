@@ -334,7 +334,8 @@ def trigger_level(memo):
     lowest it was since the round in `memo` began."""
     import pressure  # here, not at the top: the hooks that import patrol stay off pressure's imports
     st = fleet.read_json(PRESSURE, {}) or {}
-    return st.get("trigger_level") or st.get("level") or "ok", pressure.floor_since(st.get("trigger_obs"), memo)
+    level = next((v for v in (st.get("trigger_level"), st.get("level")) if v in pressure.LEVELS), "ok")
+    return level, pressure.floor_since(st.get("trigger_obs"), memo)
 
 
 def consumers():
