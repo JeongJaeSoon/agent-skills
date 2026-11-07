@@ -716,7 +716,7 @@ const own = [{{key: "tidy", name: "Self-clean", cadence: "after each fleet colle
              {{key: "pr-stats", name: "PR stats", cadence: "every 6h", runs_in: "orch-dash",
                record: {{at: old, ok: false, error: "<b>HTTP 502</b> " + "x".repeat(400), failed_at: old, warned_at: old, next_at: null}}}},
              {{key: "skill-usage", name: "Skill usage", cadence: "every 15m", runs_in: "orch-dash", record: null}},
-             {{key: "patrol", name: "Session patrol", cadence: "started by reap-hard", runs_in: "reap-hard", record: null, error: "<b>ValueError</b>('bad file')"}}];
+             {{key: "skill-index", name: "Skill index", cadence: "every 1h", runs_in: "orch-dash", record: null, error: "<b>ValueError</b>('bad file')"}}];
 F.jobs = {{automations: [...st.automations.filter((a) => a.key).map((a) => entry(a, a.key === "orch-dash" ? {{jobs: own}} : {{}})),
                          entry({{key: "pstack-upstream"}}, {{orca: null, registered: false}}),
                          {{key: "share-server", job_name: null, default: false, what: "", registered: null, orca: null, record: null, jobs: []}},
@@ -749,7 +749,7 @@ process.stdout.write(JSON.stringify({{ranElsewhere: out.ranElsewhere, autos: out
     assert "closed 0" not in autos_html and "Self-clean" not in autos_html and "▸ 4 jobs" in autos_html, "its jobs stay folded until opened"
     # The jobs that run inside an automation open under its row: a record as written, a failure whole with its link to the timeline, no record said.
     jobs_html = got["open"]
-    assert "▾ 4 jobs" in jobs_html and "Session patrol" in jobs_html
+    assert "▾ 4 jobs" in jobs_html and "Skill index" in jobs_html
     assert "closed 0" in jobs_html and "3 · " in jobs_html, jobs_html
     assert "▲ failed" in jobs_html and "x" * 400 in jobs_html and 'href="#/fleet/timeline"' in jobs_html and "Timeline warning" in jobs_html
     assert "<b>HTTP" not in jobs_html and "<i>after" not in jobs_html, "job text is escaped"
@@ -773,7 +773,7 @@ const dash = {{key: "orch-dash", job_name: "agent-skills orch-dash", default: tr
   {{key: "relay", name: "Relay", every: null, cadence: "after each fleet collect", runs_in: "orch-dash", group: "fleet-tick",
     record: {{at: old, ok: true, n: 2, result: "answers relayed 2", next_at: null}}}},
   {{key: "brief-rows", name: "Brief rows", every: null, cadence: "after each fleet collect", runs_in: "orch-dash", group: "fleet-tick", record: null}},
-  {{key: "patrol", name: "Session patrol", every: null, cadence: "started by reap-hard", runs_in: "reap-hard", group: null, record: null, why: "no round yet"}}]}};
+  {{key: "skill-index", name: "Skill index", every: null, cadence: "every 1h", runs_in: "orch-dash", group: null, record: null, why: "no run yet"}}]}};
 F.jobs = {{automations: [dash], rules: []}};
 const out = {{closed: fleetAutomations(st)}};
 F.jobOpen.add("orch-dash"); out.top = fleetAutomations(st);
@@ -785,7 +785,7 @@ process.stdout.write(JSON.stringify(out));"""
     got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
     # Closed, the automation's row says in one line what its jobs did; opened, a line for each job that is not a rider.
     assert "▸ 5 jobs" in got["closed"] and "Fleet tick" not in got["closed"] and "Self-clean" not in got["closed"], got["closed"]
-    assert "▾ 5 jobs" in got["top"] and ">10s<" in got["top"] and "Session patrol" in got["top"], got["top"]
+    assert "▾ 5 jobs" in got["top"] and ">10s<" in got["top"] and "Skill index" in got["top"], got["top"]
     assert "▸ 3 more" in got["top"] and "Relay: <b>answers relayed 2</b>" in got["top"] and "Self-clean</b>" not in got["top"], got["top"]
     # A rider with no record is counted as such, not as no change.
     assert "Relay: <b>answers relayed 2</b> · <span class=\"muted\">1 no change · 1 no record</span>" in got["top"], got["top"]
@@ -793,7 +793,7 @@ process.stdout.write(JSON.stringify(out));"""
     assert 'class="jsub"' in got["open"] and "Self-clean</b>" in got["open"], got["open"]
     # A rider that failed shows on the closed automation row, though the job it rides on ran fine.
     assert "Self-clean: " in got["rider"] and "▲ failed" in got["rider"] and "▸ 5 jobs" in got["rider"], got["rider"]
-    assert "no record · no round yet" in got["top"] and 'class="is-done"' in got["top"], got["top"]
+    assert "no record · no run yet" in got["top"] and 'class="is-done"' in got["top"], got["top"]
 
     # A brief row's session shows its model tag like the Sessions table's model cell, in the brief table's 세션 cell and in
     # the session page's brief-rows card: a tag after the word, a warn tag when it ends in `!`, nothing without a model.

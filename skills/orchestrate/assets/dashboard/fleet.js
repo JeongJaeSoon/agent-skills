@@ -1451,7 +1451,7 @@ function recordResult(j, r) {
   return res + (r.acted_at ? `<div class="muted">last acted: ${esc(String(r.acted_n))} · ${relSpan(r.acted_at)}</div>` : "");
 }
 
-// A job that runs inside an automation (orch-dash's own, the patrol round) in the list's columns. A job whose `group`
+// A job that runs inside an automation (orch-dash's own) in the list's columns. A job whose `group`
 // names another runs inside that job's tick: it folds into that row, which opens to one line each.
 function jobLine(j, all, sub) {
   const r = j.record, kids = sub ? [] : all.filter((k) => k.group === j.key), open = F.jobOpen.has(j.key);
