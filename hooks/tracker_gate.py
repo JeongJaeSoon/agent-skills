@@ -25,7 +25,9 @@ from lib import config, shell
 
 KEY = "tracker.orca_first"
 ISSUE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*-\d+$")
-LINEAR_URL = re.compile(r"^https://linear\.app/[^/]+/issue/([A-Za-z][A-Za-z0-9_]*-\d+)(?:/[^?#]*)?(?:[?#].*)?$")
+# Linear team keys may start with a digit (`94S`); Jira project keys may not, so Jira keeps ISSUE.
+LINEAR_ISSUE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_]*-\d+$")
+LINEAR_URL = re.compile(r"^https://linear\.app/[^/]+/issue/([A-Za-z0-9][A-Za-z0-9_]*-\d+)(?:/[^?#]*)?(?:[?#].*)?$")
 PROBE_SECONDS, EVIDENCE_WINDOW, TAIL_BYTES = 2, 30 * 60, 512 * 1024
 CACHE_TTL, UNKNOWN_TTL = 600, 30
 PRIORITY = {"0": "none", "1": "urgent", "2": "high", "3": "medium", "4": "low"}
@@ -67,7 +69,7 @@ def only(args, allowed):
 def issue_key(v):
     """The key Orca accepts for a ticket operand, or Pass."""
     if isinstance(v, str):
-        if ISSUE.match(v):
+        if LINEAR_ISSUE.match(v):
             return v
         m = LINEAR_URL.match(v)
         if m:
@@ -90,7 +92,7 @@ def operands(args):
               "removeBlocks", "removeBlockedBy"):
         v = args.get(k)
         for x in ([v] if isinstance(v, str) else v if isinstance(v, list) else []):
-            if isinstance(x, str) and (ISSUE.match(x) or LINEAR_URL.match(x)):
+            if isinstance(x, str) and (LINEAR_ISSUE.match(x) or LINEAR_URL.match(x)):
                 out.append(issue_key(x))
     return out
 
@@ -103,15 +105,26 @@ LIST_FLAGS = {"team": "--team", "project": "--project", "state": "--state", "ass
               "updatedAt": "--updated-at", "cycle": "--cycle", "release": "--release"}
 
 
+def result_fields(a):
+    """`fields` only picks which fields the MCP returns; `orca linear` returns them all, so nothing is lost."""
+    v = a.get("fields")
+    if "fields" in a and not (isinstance(v, str) or isinstance(v, list) and all(isinstance(x, str) for x in v)):
+        raise Pass("pass-unsupported-key")
+
+
 def lin_get_issue(a):
-    only(a, {"id"})
+    only(a, {"id", "fields"})
+    result_fields(a)
     return [f"orca linear issue {q(issue_key(a['id']))}  # add --comments --attachments --relations --children"]
 
 
 def lin_list_issues(a):
-    only(a, set(LIST_FLAGS) | {"parentId", "includeArchived"})
+    only(a, set(LIST_FLAGS) | {"parentId", "includeArchived", "fields"})
+    result_fields(a)
     parts = []
     for k, v in a.items():
+        if k == "fields":
+            continue
         if k == "parentId":
             parts.append(f"--parent-id {q(issue_key(v) if v != 'null' else v)}")
         elif k == "includeArchived":
