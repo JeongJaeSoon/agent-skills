@@ -724,7 +724,8 @@ F.jobs = {{automations: [...st.automations.filter((a) => a.key).map((a) => entry
           rules: [{{name: "Inbox item expiry", rule: "7 days <i>after</i>", applied: "each fleet collect"}}]}};
 const out = {{closed: fleetAutomations(st)}};
 F.jobOpen.add("orch-dash"); out.open = fleetAutomations(st); F.jobOpen.delete("orch-dash");
-process.stdout.write(JSON.stringify({{autos: out.closed, open: out.open, holds: holdsCard(st), troubled: autoTroubled(st).map((a) => a.name), nav: listed(st).length}}));"""
+out.ranElsewhere = automationRow(entry({{key: "patrol"}}, {{orca: null, registered: false, record: {{at: old, ok: true, n: null, result: "1 alerts · 0 reports", next_at: null}}}}));
+process.stdout.write(JSON.stringify({{ranElsewhere: out.ranElsewhere, autos: out.closed, open: out.open, holds: holdsCard(st), troubled: autoTroubled(st).map((a) => a.name), nav: listed(st).length}}));"""
     got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
     for raw in ("<script", "<img", "<i>", "<b>coord"):
         assert raw not in got["autos"] + got["holds"], raw
@@ -741,6 +742,9 @@ process.stdout.write(JSON.stringify({{autos: out.closed, open: out.open, holds: 
     assert autos_html.count("<b title=") == 8, "one row for each of the 8 registry entries, none twice"
     assert "not registered" in autos_html and "skills-sync setup enable pstack-upstream" in autos_html
     assert "LaunchAgent" in autos_html and "its state is not read here" in autos_html
+    # A row with rounds on record but no Orca automation (patrol, run by another job) is not a dead row.
+    ran = got["ranElsewhere"]
+    assert "1 alerts · 0 reports" in ran and "not in Orca" in ran and "not registered" not in ran and "is-done" not in ran, ran
     assert "&lt;b&gt;rebase&lt;/b&gt; conflict" in autos_html and "<b>rebase" not in autos_html, "a job's own file stands in when Orca has no run"
     assert "closed 0" not in autos_html and "Self-clean" not in autos_html and "▸ 4 jobs" in autos_html, "its jobs stay folded until opened"
     # The jobs that run inside an automation open under its row: a record as written, a failure whole with its link to the timeline, no record said.
