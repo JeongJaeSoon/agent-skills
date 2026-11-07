@@ -1,7 +1,7 @@
-<!-- translated-from: fd1096d10df49d0078efdb00338b234e62a5902e -->
+<!-- translated-from: 078010a55ef2e342c1986e2a536c9eaaa572048b -->
 # スキルカタログ
 
-`agent-skills` プラグインに入っているスキル37個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック16個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
+`agent-skills` プラグインに入っているスキル36個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック16個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
 
 既定値の変更と既存データの保持は[設定移行ガイド](configuration-migration.md)を参照してください。ノート・台帳・個人フォルダーには明示的な設定が必要で、レポートの既定タイムゾーンは UTC です。
 
@@ -85,7 +85,7 @@ PR を受け持つスキルとマージする主体:
     - 単独のカード: land executor が有効な repo ではマージせず、head sha・CI run・レビュー判定を添えて READY を報告し、オーケストレーターがマージします。executor が無効な repo やユーザーが自分で開いたセッションでは、ユーザーが保留にしていなければ自分で squash マージします。
     - 完了コメントを残したら、同じターンのうちに `dispatch-card` の次のチケットモードへ移ります。
 - **同梱:** `scripts/sticky-comment.sh`（PR のテスト結果コメントを一つに保つ。`--check` はそのコメントが今の head sha を書いているか確かめる）、`scripts/review_pick.py`（独立レビュアーを選ぶ）。本文には何をデプロイするかを決めるルールだけを置き、手順は references に分けました。`evidence.md`（バグ・リファクタリング・既存の修正の手順）、`independent-review.md`（独立レビューの手順）、`pull-request.md`（PR 本文の節と stack）、`review-loop.md`（PR を開いてから ready までのループ、他の人がマージするときの見守り）、`review-bot-triage.md`（レビュースレッドを fix / dismiss / ask に分ける基準。CodeRabbit、Copilot、人のレビューに使います）。
-- **関連:** `figure-it-out`、`architect`、`how`、`why`、`tdd`、`prune-comments`、`interrogate` の判定の枠組み、`write-plainly`、`blast-radius`、`write-ticket`、`use-tracker`、`use-notes`、`orchestrate`（`orch land`、`orch heavy`）、`dispatch-card`（次のチケットモード）。
+- **関連:** `figure-it-out`、`architect`、`how`、`why`、`tdd`、`prune-comments`、`challenge`（interrogate モードの判定の枠組みと blast-radius モード）、`write-plainly`、`write-ticket`、`use-tracker`、`use-notes`、`orchestrate`（`orch land`、`orch heavy`）、`dispatch-card`（次のチケットモード）。
 
 ### ui-review
 - **いつ:** 試作・画面・UI を変える PR を人に見せる前（「UI 리뷰해줘」（UI をレビューして）、「시안 점검해줘」（試作を点検して）、「화면 밸런스 봐줘」（画面のバランスを見て））。人が UI の問題を指摘したあとは、直してから規則を足します。スクリーンショットを撮って載せるのは `deliver-ticket` の visual-evidence です。
@@ -352,14 +352,21 @@ PR を受け持つスキルとマージする主体:
 - **二つのモードの違い:** sweep は仕事を分けて調べ、レポートを返します。compete は同じ仕事を競わせて、成果物を一つ作ります。compete の課題を sweep のように分けると、別の仕事になります。
 - **同梱:** `references/sweep.md`、`references/compete.md`。
 
-### blast-radius
-- **使う場面:** 「이거 바꾸면 뭐가 깨져?」（これを変えたら何が壊れる?）、小さいけれど信用しにくい diff。
-- **内容:**
-  - 変更が安全だという根拠になる事実を一つ見つけ、実際のコードを動かすスクリプトで証明します。
+### challenge (旧名 `blast-radius`、`interrogate`)
+- **使う場面:** 変更や設計を出す前に攻めてみるとき。何を攻めるかでモードを選びます。main に向かう PR の独立レビューは `deliver-ticket` が担当します。
+  - **blast-radius**: 'blast radius of X'、「이거 바꾸면 뭐가 깨져?」（これを変えたら何が壊れる?）、「영향 범위 봐줘」（影響範囲を見て）、小さいけれど信用しにくい diff。
+  - **interrogate**: 「interrogate」「adversarial review」「challenge this」「find blind spots」で設計・計画・判断のレビューを依頼するとき。
+- **blast-radius の内容:**
+  - 変更が安全だという根拠になる事実を一つ見つけ、実際のコードを動かすスクリプトで証明します。設計への反論だけでは終わらず、証明できなければ unproven と書きます。
   - grep では見えないところ（ライブラリのソース、ワイヤーフォーマット、実行のタイミング）を見ます。
   - 変わるコードの PR とコミットは、`why` の手順で引いてきます。
   - 大きな変更は独立レビューアーで相互に確認します。
   - 結果は、何をするか、安全の根拠、リスク、確認したこと、マージ前に確認すべきこと、にまとめます。
+- **interrogate の内容:**
+  - 同じ範囲と rubric を独立して確認します。特定のモデルや異なる系統は必須ではありません。
+  - リードが結果をまとめて Act on / Consider / Noted / Dismissed で判定し、合意のマップを書きます。
+  - 意図があいまいなら尋ねずに、仮定したことを明記します。修正は自動では適用しません。
+- **同梱:** `references/blast-radius.md`、`references/interrogate.md`、`reviewer-prompt.md`、`rubric.md`、`code-quality-review.md`、`lead-judgment.md`。`deliver-ticket` のレビューの分類が `lead-judgment.md` の判定の枠組みを使います。
 
 ### figure-it-out
 - **使う場面:** `/figure-it-out`、「알아서 설계해서 진행해줘」（自分で設計して進めて）、「큰 마이그레이션」（大きなマイグレーション）、「자리 비운 동안 끝내줘」（席を外している間に終わらせて）、合う手順が別にない、大きく多段階の仕事。`deliver-ticket` の計画の段階が呼びます。複数のチケットを並列のカードで回す仕事は `orchestrate` です。
@@ -389,15 +396,7 @@ PR を受け持つスキルとマージする主体:
   - まとめは Direct / Supported / Inferred / Speculative / Unknown の5段階に分け、引用を付けます。コードをそのコード自身の意図の根拠にはせず、質問に混ざった仮説は候補としてだけ扱います。
   - 答えは What We Found、Reasonably Infer、Competing Hypotheses、What We Don't Know、Sources Consulted の順です。コードを変えようとしている質問なら、Preserve / Change / Avoid / Risk を付けます。
 - **同梱:** `epistemics.md`（確信度の基準）、`investigator-prompt.md`、`synthesizer-prompt.md`、`source-playbook.md`、`sources/`（code-archaeology、linear、notion、google-drive、obsidian、slack、incident-postmortem）。
-- **関連:** `how` と対になるスキルです。`blast-radius` と `architect` が呼びます。トラッカーは `use-tracker`、ノートは `use-notes` で読みます。
-
-### interrogate
-- **使う場面:** 「interrogate」「adversarial review」「challenge this」「find blind spots」で設計・計画・判断のレビューを依頼するとき。main に向かう PR の独立レビューは `deliver-ticket` が担当します。
-- **内容:**
-  - 同じ範囲と rubric を独立して確認します。特定のモデルや異なる系統は必須ではありません。
-  - リードが結果をまとめて Act on / Consider / Noted / Dismissed で判定し、合意のマップを書きます。
-  - 意図があいまいなら尋ねずに、仮定したことを明記します。修正は自動では適用しません。
-- **同梱:** `reviewer-prompt.md`、`rubric.md`、`code-quality-review.md`、`lead-judgment.md`。`deliver-ticket` のレビューの分類がこの判定の枠組みを使います。
+- **関連:** `how` と対になるスキルです。`challenge` の blast-radius モードと `architect` が呼びます。トラッカーは `use-tracker`、ノートは `use-notes` で読みます。
 
 ### principles
 - **使う場面:** 設計、リファクタリング、検証、委任の判断に、名前の付いた原則が必要なとき。
@@ -694,6 +693,7 @@ pstack のスキル58個（原則24個と、その他34個）のうち、原則2
   - モデルが自分で呼べるようにしました。
   - Cursor 専用の要素を、Claude Code での対応物に置き換えました。パスは `.cursor/` → `.claude/`、ワーカーは `generalPurpose`/クラウド → `Agent`/Orca ワーカー、transcript は `agent-transcripts` → `~/.claude/projects` です。
   - モデルのパネルを独立レビューアーにしました。
+  - blast-radius と interrogate は後に `challenge` 一つのスキルにまとめました。本文はそれぞれ同じ名前のモードの `references/blast-radius.md`・`references/interrogate.md` に、interrogate の参照ファイルは `challenge/references/` に移しました。
   - インストールしていないスキル（`unslop`）を呼んでいた箇所を `write-plainly` に置き換えました。`why` と `arena` は 2026-09-25 に取り込み、元のつながり（architect → arena）を復活させました。
   - `why` は Cursor の MCP 探索の代わりに、セッションにある MCP ツールで出典を選び、一行の質問用の narrow mode を加えました。接続のない Datadog・Sentry・warehouse の出典ファイルは外し、Google Drive・Obsidian の出典ファイルを新しく書きました。
   - swarm と arena は、のちに一つのスキル `fan-out` にまとめました。本文はそれぞれ sweep・compete モードの `references/sweep.md`・`references/compete.md` に移しました。

@@ -399,7 +399,7 @@ footer { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--line);
         <ol class="rail">
           <li><span class="dot">1</span><div class="body"><b>Plan</b><span data-lang="ko">티켓과 worklog를 읽고 계획. 티켓(또는 카드를 연 /goal)이 곧 승인이다</span><span data-lang="en">Read the ticket and the worklog, then plan. The ticket (or the /goal that opened the card) is the approval</span><span data-lang="ja">チケットと worklog を読んで計画。チケット（またはカードを開いた /goal）がそのまま承認になる</span></div></li>
           <li><span class="dot">2</span><div class="body"><b>Implement</b><span data-lang="ko">worktree 브랜치에서. 싼 테스트 대상이 뻔하면 tdd</span><span data-lang="en">On a worktree branch. Use tdd when there's an obvious cheap test target</span><span data-lang="ja">worktree ブランチで。安いテスト対象が明らかなら tdd</span></div></li>
-          <li><span class="dot">3</span><div class="body"><b>Review</b><span data-lang="ko">구현하지 않은 쪽이 검토: 독립 검토, 넓은 영향이면 blast-radius·interrogate. 라운드 상한 5 — 상한은 라운드만 막고 수정은 막지 않음</span><span data-lang="en">Reviewed by someone who didn't write it: an independent review, plus blast-radius or interrogate for wide-reaching changes. At most 5 rounds — the cap stops new rounds, not fixes</span><span data-lang="ja">実装していない側がレビュー: 独立レビュー、影響が広ければ blast-radius・interrogate。ラウンド上限は 5 — 上限が止めるのはラウンドで、修正は止めない</span></div></li>
+          <li><span class="dot">3</span><div class="body"><b>Review</b><span data-lang="ko">구현하지 않은 쪽이 검토: 독립 검토, 넓은 영향이면 challenge(blast-radius·interrogate). 라운드 상한 5 — 상한은 라운드만 막고 수정은 막지 않음</span><span data-lang="en">Reviewed by someone who didn't write it: an independent review, plus challenge (blast-radius or interrogate) for wide-reaching changes. At most 5 rounds — the cap stops new rounds, not fixes</span><span data-lang="ja">実装していない側がレビュー: 独立レビュー、影響が広ければ challenge（blast-radius・interrogate）。ラウンド上限は 5 — 上限が止めるのはラウンドで、修正は止めない</span></div></li>
           <li><span class="dot">4</span><div class="body"><b>Commit</b><span data-lang="ko">작고 설명 가능한 커밋</span><span data-lang="en">Small commits you can explain</span><span data-lang="ja">小さく説明できるコミット</span></div></li>
           <li><span class="dot">5</span><div class="body"><b>Ship</b><span data-lang="ko">PR, 필요하면 GitHub stack, E2E. 결과 댓글은 하나로 유지(<code>sticky-comment.sh</code>). CI는 체크 표시가 아니라 로그로 확인</span><span data-lang="en">PR, a GitHub stack if needed, E2E. Results stay in a single comment (<code>sticky-comment.sh</code>). Confirm CI from the logs, not the check mark</span><span data-lang="ja">PR、必要なら GitHub stack、E2E。結果のコメントは 1 つに保つ（<code>sticky-comment.sh</code>）。CI はチェックマークではなくログで確認</span></div></li>
           <li class="cycle-label" aria-hidden="true">↻ <span data-lang="ko">초록이 될 때까지</span><span data-lang="en">until green</span><span data-lang="ja">green になるまで</span></li>
@@ -565,18 +565,14 @@ const SKILLS = [
     T("\"설계해줘\", 바로 코드부터 쓰면 모양이 굳어버릴 작업", "\"설계해줘\" (\"design this\"), or work where jumping straight to code would lock in the wrong shape", "\"설계해줘\"（設計して）、いきなりコードから書くと形が固まってしまう作業"),
     T("타입·시그니처·모듈 구조를 먼저 그리고 구현 중에도 스케치와 대조. 틀렸으면 버림", "Sketches types, signatures and module structure first, and keeps checking the implementation against the sketch. Throws it out if it was wrong", "型・シグネチャ・モジュール構成を先に描き、実装中もスケッチと照らし合わせる。間違っていたら捨てる"),
     ["references/runner-prompt.md", "design-red-flags.md"]],
-  ["pstack", "blast-radius",
-    T("\"이거 바꾸면 뭐가 깨져?\", 믿기 어려운 작은 diff", "\"이거 바꾸면 뭐가 깨져?\" (\"what breaks if I change this?\"), or a small diff you don't trust", "\"이거 바꾸면 뭐가 깨져?\"（これを変えたら何が壊れる？）、信用しきれない小さな diff"),
-    T("diff 밖의 영향을 찾고, 안전하다는 근거 하나를 실제 실행으로 증명", "Finds effects outside the diff, and proves the one fact that makes it safe by actually running code", "diff の外への影響を探し、安全だと言える根拠を 1 つ、実際に動かして証明"),
-    []],
+  ["pstack", "challenge",
+    T("blast-radius: \"이거 바꾸면 뭐가 깨져?\", 믿기 어려운 작은 diff. interrogate: \"적대적 리뷰\", \"빈틈 찾아줘\", 설계안·계획·결정", "blast-radius: \"이거 바꾸면 뭐가 깨져?\" (\"what breaks if I change this?\"), or a small diff you don't trust. interrogate: \"적대적 리뷰\" (\"adversarial review\"), \"빈틈 찾아줘\" (\"find the gaps\") on a design, plan or decision", "blast-radius: \"이거 바꾸면 뭐가 깨져?\"（これを変えたら何が壊れる？）、信用しきれない小さな diff。interrogate: \"적대적 리뷰\"（敵対的レビュー）、\"빈틈 찾아줘\"（穴を探して）、設計・計画・判断"),
+    T("모드 둘(옛 스킬 이름 그대로). blast-radius는 diff 밖의 영향을 찾고, 안전하다는 근거 하나를 실제 실행으로 증명. interrogate는 서로 다른 관점의 리뷰어 여럿이 공격하고, 리드가 채택할 것만 고름. main으로 가는 PR 리뷰는 deliver-ticket", "Two modes, named after the old skills. blast-radius finds effects outside the diff, and proves the one fact that makes it safe by actually running code. interrogate has several reviewers from different angles attack it, and a lead keeps only what's worth adopting. Review of a PR headed to main is deliver-ticket", "モード 2 つ（旧スキル名のまま）。blast-radius は diff の外への影響を探し、安全だと言える根拠を 1 つ、実際に動かして証明。interrogate は観点の異なる複数のレビュアーが攻め、リードが採用するものだけを選ぶ。main に向かう PR のレビューは deliver-ticket"),
+    ["references/blast-radius.md", "interrogate.md", "rubric.md", "lead-judgment.md"]],
   ["pstack", "how",
     T("\"X는 어떻게 동작해?\", \"이건 어디에 둬야 해?\"", "\"X는 어떻게 동작해?\" (\"how does X work?\"), \"이건 어디에 둬야 해?\" (\"where should this live?\")", "\"X는 어떻게 동작해?\"（X はどう動く？）、\"이건 어디에 둬야 해?\"（これはどこに置くべき？）"),
     T("구조·실행 흐름·계층 설명. 복잡하면 탐색 에이전트를 먼저 보냄", "Explains structure, runtime flow and layering. For complex cases, sends an explorer agent in first", "構造・実行の流れ・レイヤーを説明。複雑なら先に探索エージェントを送る"),
     ["references/explorer-prompt.md", "explainer-prompt.md"]],
-  ["pstack", "interrogate",
-    T("\"적대적 리뷰\", \"다른 모델로 검토\", \"빈틈 찾아줘\"", "\"적대적 리뷰\" (\"adversarial review\"), \"다른 모델로 검토\" (\"review with another model\"), \"빈틈 찾아줘\" (\"find the gaps\")", "\"적대적 리뷰\"（敵対的レビュー）、\"다른 모델로 검토\"（別のモデルでレビュー）、\"빈틈 찾아줘\"（穴を探して）"),
-    T("서로 다른 관점의 리뷰어 여럿이 공격하고, 리드가 채택할 것만 고름", "Several reviewers from different angles  attack it, and a lead keeps only what's worth adopting", "観点の異なる複数のレビュアーが攻め、リードが採用するものだけを選ぶ"),
-    ["references/rubric.md", "lead-judgment.md"]],
   ["pstack", "principles",
     T("설계·리팩터·검증·위임 판단에 근거가 필요할 때", "When a design, refactor, verification or delegation call needs grounding", "設計・リファクタ・検証・委任の判断に根拠が必要なとき"),
     T("25개 원칙(근본 원인 수정, 동작을 테스트, 빼고 나서 더하기 등) 중 맞는 것을 인용", "Cites the right one of 25 principles (fix the root cause, test the behavior, subtract before you add, and more)", "25 の原則（根本原因を直す、振る舞いをテストする、足す前に引く など）から合うものを引用"),

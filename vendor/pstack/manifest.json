@@ -32,27 +32,27 @@
     },
     {
       "upstream": "skills/interrogate/SKILL.md",
-      "local": "skills/interrogate/SKILL.md",
+      "local": "skills/challenge/references/interrogate.md",
       "mode": "adapted"
     },
     {
       "upstream": "skills/interrogate/references/reviewer-prompt.md",
-      "local": "skills/interrogate/references/reviewer-prompt.md",
+      "local": "skills/challenge/references/reviewer-prompt.md",
       "mode": "verbatim"
     },
     {
       "upstream": "skills/interrogate/references/rubric.md",
-      "local": "skills/interrogate/references/rubric.md",
+      "local": "skills/challenge/references/rubric.md",
       "mode": "verbatim"
     },
     {
       "upstream": "skills/interrogate/references/code-quality-review.md",
-      "local": "skills/interrogate/references/code-quality-review.md",
+      "local": "skills/challenge/references/code-quality-review.md",
       "mode": "verbatim"
     },
     {
       "upstream": "skills/interrogate/references/lead-judgment.md",
-      "local": "skills/interrogate/references/lead-judgment.md",
+      "local": "skills/challenge/references/lead-judgment.md",
       "mode": "verbatim"
     },
     {
@@ -72,7 +72,7 @@
     },
     {
       "upstream": "skills/blast-radius/SKILL.md",
-      "local": "skills/blast-radius/SKILL.md",
+      "local": "skills/challenge/references/blast-radius.md",
       "mode": "adapted"
     },
     {

@@ -1,7 +1,7 @@
-<!-- translated-from: fd1096d10df49d0078efdb00338b234e62a5902e -->
+<!-- translated-from: 078010a55ef2e342c1986e2a536c9eaaa572048b -->
 # Skill catalog
 
-This page covers the 37 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 16 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
+This page covers the 36 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 16 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
 
 Follow the [configuration migration guide](configuration-migration.md) for changed defaults and preservation of existing data. Notes, ledgers and personal folders require explicit configuration; report time defaults to UTC.
 
@@ -85,7 +85,7 @@ Which skill owns a PR, and who merges it:
     - Standalone card: in a repo with the land executor on, it does not merge. It reports READY with the head sha, the CI run and the review verdict, and the orchestrator merges. In a repo with the executor off, or in a session the user opened, it squash-merges on its own unless the user put it on hold.
     - After leaving the completion comment, it moves on to `dispatch-card`'s next-ticket mode in the same turn.
 - **Bundled:** `scripts/sticky-comment.sh` (keeps PR test results in a single comment; `--check` confirms that comment names the current head sha), `scripts/review_pick.py` (picks the independent reviewer). The skill body keeps only the rules that decide what ships; procedures are split into references: `evidence.md` (bug, refactor and existing-fix procedures), `independent-review.md` (independent review procedures), `pull-request.md` (PR body sections and stacks), `review-loop.md` (the loop from opening the PR to ready, and watching when someone else merges), `review-bot-triage.md` (how to sort review threads into fix / dismiss / ask; used for CodeRabbit, Copilot and human reviews).
-- **Related:** `figure-it-out`, `architect`, `how`, `why`, `tdd`, `prune-comments`, the verdict framework from `interrogate`, `write-plainly`, `blast-radius`, `write-ticket`, `use-tracker`, `use-notes`, `orchestrate` (`orch land`, `orch heavy`), `dispatch-card` (next-ticket mode).
+- **Related:** `figure-it-out`, `architect`, `how`, `why`, `tdd`, `prune-comments`, `challenge` (the verdict framework from its interrogate mode, and its blast-radius mode), `write-plainly`, `write-ticket`, `use-tracker`, `use-notes`, `orchestrate` (`orch land`, `orch heavy`), `dispatch-card` (next-ticket mode).
 
 ### ui-review
 - **When:** before a mockup, a screen or a UI PR is shown to a person ("UI 리뷰해줘", "시안 점검해줘"), and after a person points out a UI problem, to add the rule.
@@ -350,14 +350,21 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
 - **How the modes differ:** sweep splits the work up, sweeps it, and returns a report. compete makes candidates compete on the same work and produces one deliverable. Splitting a compete task the sweep way turns it into a different job.
 - **Bundled:** `references/sweep.md`, `references/compete.md`.
 
-### blast-radius
-- **When:** "이거 바꾸면 뭐가 깨져?" (what breaks if I change this?), and small diffs you don't trust.
-- **What it does:**
-  - Finds the one fact that makes the change safe, and proves it with a script that runs the real code.
+### challenge (formerly `blast-radius`, `interrogate`)
+- **When:** Before a change or a design ships, to attack it. The mode depends on what is being attacked. PRs headed for main are covered by `deliver-ticket`'s independent review instead.
+  - **blast-radius**: 'blast radius of X', "이거 바꾸면 뭐가 깨져?" (what breaks if I change this?), "영향 범위 봐줘" (check the impact), and small diffs you don't trust.
+  - **interrogate**: "interrogate", "적대적 리뷰" (adversarial review), "challenge this", "빈틈 찾아줘" (find the gaps) on a design, plan or decision.
+- **What blast-radius does:**
+  - Finds the one fact that makes the change safe, and proves it with a script that runs the real code. A design objection alone does not finish it; a fact it could not prove is written down as unproven.
   - Looks where grep can't see (library source, wire formats, execution timing).
   - Pulls in the PRs and commits behind the changed code, following `why`'s procedure.
   - Cross-checks big changes with an independent reviewer.
   - Reports what the change does, why it's safe, the risks, what was checked, and what to check before merging.
+- **What interrogate does:**
+  - Reviewers independently assess the same scope and rubric. No particular model or model-family difference is required.
+  - A lead merges the results, rules on each finding as Act on / Consider / Noted / Dismissed, and writes a map of where the reviewers agree.
+  - When the intent is ambiguous it doesn't ask; it marks what it assumed. Fixes are never applied automatically.
+- **Bundled:** `references/blast-radius.md`, `references/interrogate.md`, `reviewer-prompt.md`, `rubric.md`, `code-quality-review.md`, `lead-judgment.md`. `deliver-ticket`'s review triage uses the verdict framework in `lead-judgment.md`.
 
 ### figure-it-out
 - **When:** `/figure-it-out`, "알아서 설계해서 진행해줘" (design it yourself and get going), "큰 마이그레이션" (a big migration), "자리 비운 동안 끝내줘" (finish it while I'm away), and large multi-step work with no procedure that fits. `deliver-ticket`'s planning step calls it. Running several tickets as parallel cards is `orchestrate`'s job.
@@ -387,15 +394,7 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
   - The synthesis sorts findings into five levels, Direct / Supported / Inferred / Speculative / Unknown, with citations. Code is never taken as evidence of its own intent, and hypotheses built into the question are treated only as candidates.
   - The answer goes What We Found, Reasonably Infer, Competing Hypotheses, What We Don't Know, Sources Consulted. If the question is about changing code, it adds Preserve / Change / Avoid / Risk.
 - **Bundled:** `epistemics.md` (confidence criteria), `investigator-prompt.md`, `synthesizer-prompt.md`, `source-playbook.md`, `sources/` (code-archaeology, linear, notion, google-drive, obsidian, slack, incident-postmortem).
-- **Related:** The counterpart of `how`. Called by `blast-radius` and `architect`. Reads trackers through `use-tracker` and notes through `use-notes`.
-
-### interrogate
-- **When:** "적대적 리뷰" (adversarial review), "빈틈 찾아줘" (find the gaps). PRs headed for main are covered by `deliver-ticket`'s independent review instead.
-- **What it does:**
-  - Reviewers independently assess the same scope and rubric. No particular model or model-family difference is required.
-  - A lead merges the results, rules on each finding as Act on / Consider / Noted / Dismissed, and writes a map of where the reviewers agree.
-  - When the intent is ambiguous it doesn't ask; it marks what it assumed. Fixes are never applied automatically.
-- **Bundled:** `reviewer-prompt.md`, `rubric.md`, `code-quality-review.md`, `lead-judgment.md`. `deliver-ticket`'s review triage uses this verdict framework.
+- **Related:** The counterpart of `how`. Called by `challenge`'s blast-radius mode and `architect`. Reads trackers through `use-tracker` and notes through `use-notes`.
 
 ### principles
 - **When:** A design, refactor, verification or delegation decision needs a named principle.
@@ -693,6 +692,7 @@ Of pstack's 58 skills (24 principles and 34 others), we took all 24 principles a
   - The model can invoke them on its own.
   - Cursor-specific pieces were replaced with their Claude Code equivalents: paths `.cursor/` → `.claude/`, workers `generalPurpose`/cloud → `Agent`/Orca workers, transcripts `agent-transcripts` → `~/.claude/projects`.
   - The model panel uses available independent reviewers.
+  - blast-radius and interrogate were later merged into one skill, `challenge`. Their bodies moved to the same-named modes' `references/blast-radius.md` and `references/interrogate.md`, and interrogate's reference files to `challenge/references/`.
   - Calls to a skill we don't install (`unslop`) now point to `write-plainly`. `why` and `arena` were brought in on 2026-09-25, which restored the original links between skills (architect → arena).
   - `why` picks its sources from the MCP tools available in the session instead of Cursor's MCP discovery, and gained a narrow mode for one-line questions. The source files for Datadog, Sentry and the warehouse, which have no connection here, were dropped, and new source files for Google Drive and Obsidian were written.
   - swarm and arena were later merged into one skill, `fan-out`. Their bodies moved to `references/sweep.md` and `references/compete.md`, the sweep and compete modes.

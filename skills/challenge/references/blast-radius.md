@@ -1,8 +1,3 @@
----
-name: blast-radius
-description: "Find what a change could break beyond its diff, and prove the fact it is safe by running code. Use for 'blast radius of X', \"이거 바꾸면 뭐가 깨져\", \"영향 범위 봐줘\", or a small diff you don't trust."
----
-
 # Blast radius
 
 Find what a change breaks somewhere else, before it ships. Use for "blast radius of X", "what could this break", or reviewing a small diff you don't trust yet.
