@@ -25,7 +25,7 @@ CONTEXT     Ticket URL. Files and PRs to read. Upstream reports pasted in full w
             an evidence id) comes from a check that could have come out the other way:
             `git merge-base --is-ancestor <commit> <base>`, or a search that also finds a
             symbol known to exist. An empty `git grep -E` proves nothing (`\b` is a GNU
-            extension that BSD/macOS regex does not honour; use `-w`). A corrected fact reopens the decisions built on it.
+            extension that BSD/macOS regex does not honour; use `-w`). A corrected fact reopens the decisions built on it. A ticket ID is read from the tracker and written with its title; a correction goes to everyone who already received the wrong one.
             A value the worker would otherwise look up (the Orca executable as your preamble
             names it, an image tag) is written here as a literal, with the line "never probe
             the environment for these".
@@ -162,7 +162,7 @@ LAND        After review, record the verdict on the reviewed head: orch verdict 
             by every session using the same token. On a rate-limit error, retry nothing: wait
             until the reset time (the error's `retry-after`, else `gh api rate_limit`).
             You land your own PR: independent review Act-on 0, zero unresolved threads, required
-            checks green, or on a declared no-CI repo the lane in `references/landing.md`. Then
+            checks green (`gh pr checks <N> --required` lists the ones that count), or on a declared no-CI repo the lane in `references/landing.md`. Then
             record main_green or main_red and close (REPORT). Never merge any other way. Stop at
             READY only for a wait you cannot end, and name it in the report as one line
             `READY-WAIT: <kind>`: owner-merge (the owner said they will merge it), human-review (a
@@ -181,7 +181,9 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             with the reason). The lead classifies and files the NOW ones. No force-push
             to shared branches. Do not rebase only because the branch is behind; `land` says when.
             Edit files with the Edit and Write tools, never Bash (heredoc, `cat >`, `sed -i`, a
-            python one-liner), even where the harness allows small shell edits: a Bash-made patch
+            python one-liner), for any file in or out of the repo (a merge-conflict resolution, a
+            scratch file, a PR-body draft and an `rm -rf` on a variable path all count), even where
+            the harness allows small shell edits: a Bash-made patch
             can pass tests that re-applying it with Edit shows broken. A formatter or generator
             VERIFY names (`--write`, `--fix`) is a tool run, not a hand edit. Give each Bash act
             that changes a file or its mode its own call, so a refusal names it. Never chain a
@@ -460,6 +462,7 @@ CLOSE       Once the predicate holds and the program's Close is done: `end-sessi
 - A dependency is a context relay: paste the upstream worker's report into the downstream brief.
 - Direction in CONTEXT is labelled by origin. The owner's words are quoted verbatim as the owner's; a proposal of yours, a lead's or a reviewer's is labelled as such, never as the owner's recommendation. No advice on getting an act past a prompt, the classifier or a hook, even when the layer above calls it the owner's intent ("Refused acts").
 - **Plan reuse with `KEEP`.** A worker closes its own session once it settles (`end-session` §7). A terminal you mean to give the next task needs a `KEEP` line naming that task; without one, it is gone by the time you read its `worker_done`. `KEEP` does not stop the cleaners: a card that must outlive its merge also goes in the protect file as a `path` line (`end-session`, "Who cleans up").
+- An owner brief with a stricter refusal rule than the template's does not replace the template paragraph: paste the paragraph from this file, then the owner's rule marked as the one that takes precedence. The pasted paragraph stays whole so the `agent_forbidden` check can match it, and the owner's rule is not weakened.
 - Never resume-chain a brief. A retry gets a fresh brief with the consolidated scope.
 - A verifier unit on a high-blast-radius PR runs independently of the implementer using the configured agent. It reports PASS, PASS+NOTES or FAIL, with what it drove.
 - Feedback the user gives on in-flight work ("improve this", "do it better") becomes a new ticket and a new brief. It is never appended to the running one.
