@@ -14,7 +14,7 @@ stopped goal (auth), a select menu, a permission prompt or an interrupted turn (
 it waits on a human; the screen only where Orca has no verdict), a full disk, an API retry loop,
 a `/goal` card with no output for --idle-min minutes (not while it is busy: a running shell or `claude agents` busy),
 a card once seen under `/goal` that sits on an empty
-prompt without it for --goal-lost-min minutes, or free disk under --min-free-gb. A finding still on screen is
+prompt without it for --goal-lost-min minutes (not when its transcript's last goal_status is met: that lead is parked), or free disk under --min-free-gb. A finding still on screen is
 not reported again, also across restarts (--state); once it clears, the next one is new. Each round stamps
 `last_scan_at` in --state, which `orch inbox`, `orch wait`, `orch patrol` and the dashboard read to tell a watcher
 that ended (a finding, QUIET, a killed session) from one still running. It never types into a
@@ -33,7 +33,8 @@ when `/goal` was on and is off now, CLOSED when its terminal went away after it 
 import argparse, contextlib, hashlib, json, os, pathlib, re, shutil, sys, tempfile, time
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
-import agent_signal, prog
+import agent_signal, compactions, prog
+roles = compactions.roles
 
 STATE_DIR = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser() / "card-watch"
 # Claude Code's own messages for a lost login and a goal it stopped. They must open the line (after the ⏺/⎿/⚠
@@ -78,6 +79,22 @@ def auth_line(tail):
 
 def under_goal(t, tail):
     return any("/goal active" in l for l in tail) or "/goal active" in (t.get("preview") or "")
+
+
+def goal_met(handle):
+    """True/False from the last `goal_status` in the transcript of the session this terminal recorded; None when the
+    terminal, the transcript or any goal_status cannot be found, which keeps 'goal lost'."""
+    try:
+        path = compactions.transcript(json.loads(roles.terminal_file(handle).read_text())["session_id"])
+        met = None
+        for line in path.read_text(errors="replace").splitlines():
+            if '"goal_status"' in line:
+                att = json.loads(line).get("attachment")
+                if isinstance(att, dict) and att.get("type") == "goal_status" and isinstance(att.get("met"), bool):
+                    met = att["met"]
+        return met
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
 
 
 def screen_state(tail, quiet_min, finding=""):
@@ -202,7 +219,8 @@ def scan(terms, seen, read, now_ms, idle_min, free_gb, min_free_gb, goal_lost_mi
             key = kind + ":" + hashlib.sha1("\n".join(prog.prompt_block(tail)).encode()).hexdigest()[:12]
         elif goal and idle > idle_min and not busy_now(h, state, agents):
             kind, question, key = f"a /goal card silent {int(idle)} min", "", f"idle:{t.get('lastOutputAt')}"
-        elif not goal and h in goals and idle > goal_lost_min and any(l.strip() == "❯" for l in tail):
+        elif (not goal and h in goals and idle > goal_lost_min and any(l.strip() == "❯" for l in tail)
+              and not goal_met(h)):  # a met goal parked on purpose is not lost
             kind, question, key = f"goal lost, idle {int(idle)} min", "", f"lost:{t.get('lastOutputAt')}"
         else:
             continue
