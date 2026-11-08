@@ -154,7 +154,7 @@ claude plugin eval <체크아웃> --case recall --runs 1 --ablation none --no-pu
 
 `--no-publish`를 빼면 claude.ai 계정에서는 보고서가 artifact로 게시된다. `--trust-plugin`은 터미널 없이 돌 때 첫 실행의 신뢰 확인을 대신한다. 결과는 `evals/results/`(git 제외)에 남는다.
 
-카탈로그 페이지는 `python3 scripts/catalog/build.py <out.html>`이 `docs/skills.md`와 번역본 `docs/skills.{en,ja}.md`로 만든다. 번역본 첫 줄의 `translated-from` 커밋 뒤에 `docs/skills.md`가 바뀌었으면 경고하고, 그 언어 하단에 원문보다 오래됐다고 표시한다. 안내서는 손으로 쓴 한 장짜리 `scripts/catalog/guide.html`이라, 스킬이 늘거나 흐름이 바뀌면 세 언어를 함께 고친다.
+카탈로그 페이지는 `python3 scripts/catalog/build.py <out.html>`이 `docs/skills.md`와 번역본 `docs/skills.{en,ja}.md`로 만든다. 번역본에는 기준 커밋을 적는 줄이 없다. 번역본 파일의 마지막 커밋 뒤에 `docs/skills.md`가 바뀌었거나 커밋 안 한 원문 변경이 있으면 경고하고, 그 언어 하단에 원문보다 오래됐다고 표시한다. 줄을 손으로 올리지 않으니 `docs/skills.md`를 고치는 PR끼리 그 줄에서 충돌하지 않는다. 대신 이력에서 추정하는 판정이라, 밀린 원문 변경을 번역하지 않고 번역본의 오타만 고쳐도 최신으로 보인다. 얕은 clone에서는 마지막 커밋을 알 수 없어 `build.py`가 멈춘다. 안내서는 손으로 쓴 한 장짜리 `scripts/catalog/guide.html`이라, 스킬이 늘거나 흐름이 바뀌면 세 언어를 함께 고친다.
 
 명령은 `bin/`에 있다: `orch`(프로그램 원장과 착지 게이트), `orch-dash`(대시보드), `skills-sync`(동기화와 reload 브로드캐스트), `secure-fill`, 그리고 LaunchAgent 도구 `preview-watch`(열린 링크는 `preview-links`)·`share-server`·`reap-hard`(문서: [preview-watch](preview-watch.md), [share-server](share-server.md), [reap-hard](reap-hard.md)). 대시보드 페이지 구성은 `skills/orchestrate/references/dashboard.md`.
 

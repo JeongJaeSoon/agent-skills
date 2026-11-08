@@ -20,31 +20,26 @@ def git(*args):
 src_ko = (REPO / SRC_PATH).read_text()
 pstack = json.loads((REPO / "vendor/pstack/manifest.json").read_text())
 hooks = len(set(re.findall(r"/hooks/(\w+)\.py", (REPO / "hooks/hooks.json").read_text())))
+if git("rev-parse", "--is-shallow-repository") == "true":
+    # A shallow clone shows HEAD as every file's last commit, which would report any translation as current.
+    sys.exit("shallow clone: the translation's last commit is unknown; fetch the full history")
 sha = git("log", "-1", "--format=%h", "--", SRC_PATH)
 dirty = bool(git("status", "--porcelain", "--", SRC_PATH))
 
 
 def load_translation(lang):
-    text = (REPO / "docs" / f"skills.{lang}.md").read_text()
-    m = re.match(r"<!-- translated-from: (\w+) -->\n", text)
-    if not m:
-        sys.exit(f"skills.{lang}.md must start with <!-- translated-from: <sha> -->")
     path = f"docs/skills.{lang}.md"
-    base = m.group(1)
-    reachable = subprocess.run(["git", "-C", str(REPO), "merge-base", "--is-ancestor", base, "HEAD"],
-                               capture_output=True).returncode == 0
-    if not reachable:
-        # A squash merge leaves translated-from off main's history; the squash commit carries both files,
-        # so the translation's own last commit is the nearest point known to match the Korean source.
-        base = git("log", "-1", "--format=%h", "--", path)
-        print(f"note: translated-from {m.group(1)[:7]} is not in this history (squash merge?); "
-              f"{path} is checked from its last commit {base}", file=sys.stderr)
+    text = (REPO / path).read_text()
+    # The translation carries no hand-written marker, so PRs that edit docs/skills.md never collide on one.
+    # Its last commit stands in for "translated up to here". A translation-only edit (a typo fix) therefore
+    # also counts as current: the warning is a history-based estimate, not proof the text was translated.
+    base = git("log", "-1", "--format=%h", "--", path)
     newer = git("log", "--format=%h %s", f"{base}..HEAD", "--", SRC_PATH) if base else ""
-    stale = bool(newer) or dirty and not git("status", "--porcelain", "--", path)
+    stale = bool(newer) or dirty
     if stale:
         print(f"WARNING: {SRC_PATH} changed after {base[:7]}; {path} is stale:", file=sys.stderr)
         print(newer or "  (uncommitted changes)", file=sys.stderr)
-    return text[m.end():], base, stale
+    return text, base, stale
 
 
 TAGS = {"사용자 호출 전용": "user-only", "user-invoked only": "user-only", "ユーザー呼び出し専用": "user-only"}
@@ -184,15 +179,15 @@ UI = {
     "ko": {"h1": "agent-skills 스킬 카탈로그", "nav": "목차", "eyebrow": "",
            "facts": ("스킬", "별칭", "명령", "hook"),
            "footer": "정본은 저장소의 docs/skills.md다. 이 페이지는 {sha} 시점의 보기용 사본이다.", "stale": ""},
-    "en": {"h1": "agent-skills skill catalog", "nav": "Contents", "eyebrow": " · translated from {base}",
+    "en": {"h1": "agent-skills skill catalog", "nav": "Contents", "eyebrow": " · translation last edited at {base}",
            "facts": ("skills", "aliases", "commands", "hooks"),
            "footer": "The source of truth is docs/skills.md in the repo, written in Korean. This page is a "
-                     "read-only copy as of {sha}; the English text was translated from {base}.",
+                     "read-only copy as of {sha}; the English text was last edited at {base}.",
            "stale": " docs/skills.md has changed since then, so the English text may lag behind the Korean."},
-    "ja": {"h1": "agent-skills スキルカタログ", "nav": "目次", "eyebrow": " · {base} から翻訳",
+    "ja": {"h1": "agent-skills スキルカタログ", "nav": "目次", "eyebrow": " · 翻訳の最終更新 {base}",
            "facts": ("スキル", "エイリアス", "コマンド", "フック"),
            "footer": "正本はリポジトリの docs/skills.md（韓国語）です。このページは {sha} 時点の閲覧用コピーで、"
-                     "日本語は {base} から翻訳しました。",
+                     "日本語は {base} で最後に更新されました。",
            "stale": " その後 docs/skills.md が更新されているため、日本語が韓国語より古い可能性があります。"},
 }
 

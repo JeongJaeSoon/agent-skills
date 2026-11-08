@@ -52,7 +52,7 @@ Also run:
 ## Changing a skill
 
 - Edit `skills/<name>/SKILL.md` and its `references/` and `scripts/`. The `description` in the frontmatter decides when the model picks the skill, so keep the trigger phrases in it.
-- Update the skill's entry in the catalogs (`docs/skills.md`, then `docs/skills.en.md` and `docs/skills.ja.md`, whose first line records the commit they were translated from).
+- Update the skill's entry in the catalogs (`docs/skills.md`, then `docs/skills.en.md` and `docs/skills.ja.md`, edited in the same PR; `scripts/catalog/build.py` warns when a translation's last commit is older than the Korean source).
 - `allowed-tools` skips the auto-mode classifier, and only in the turn that invoked the skill: the next user message clears it, so it never replaces a session-wide permission. A pattern cannot exclude a flag, because `*` takes whatever follows. Grant only an exact command or one that is safe with any arguments, never deletion, an outward write, a merge or a bare interpreter. Every pattern is pinned in `scripts/test_allowed_tools.py` and must match its skill's body text exactly, quotes included.
 - If you changed when a skill fires, check it with `claude plugin eval . --ablation none --no-publish --trust-plugin --case <skill>`. The cases live under `evals/<skill>/`.
 
