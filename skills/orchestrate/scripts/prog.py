@@ -176,6 +176,7 @@ Usage: orch <command> <slug> [options]
                                      the next-steps list (no lines clears it); done rows leave after 7
                                      days; drop removes a row and its children. --group makes a heading
                                      row (a feature or an epic) with no PR and no cells; --parent rows to it
+  (board subcommands always take `board`: `orch later add …` fails with a hint to type `orch board later add …`)
   board lead add <name> --handle H --repo OWNER/NAME [--program P] [--run RUN] [--stale-min N] [--worktree ID] | lead close <name>
   board set <id> [--kind lead|phase|task] [--title T] [--repo OWNER/NAME] [--program P] [--parent ID]
                  [--status moving|owner|waiting|held|blocked|done] [--progress N/M|-] [--next TEXT] [--owner WHO] [--pr owner/repo#N]
@@ -4970,7 +4971,14 @@ COMMANDS = {"init": cmd_init, "set": cmd_set, "status": cmd_status, "record": cm
             "migrate": lambda argv: __import__("orca_migrate").main(argv),
             "doctor": lambda argv: __import__("orca_settings").main(argv)}
 
+# The branches of cmd_board; test_prog.py fails when this drifts from them.
+BOARD_SUBS = ("lead", "set", "annot-migrate", "drop", "priority", "doing", "later", "todo", "now", "show", "done", "reopen", "open",
+              "tidy", "closed")
+
 if __name__ == "__main__":
-    if len(sys.argv) < 3 - (sys.argv[1:2] in (["watch-cards"], ["patrol"], ["inbox"], ["migrate"], ["doctor"])) or sys.argv[1] not in COMMANDS or sys.argv[1] not in ("watch-cards", "patrol") and {"-h", "--help"} & set(sys.argv[2:(sys.argv + ["--"]).index("--")]):
+    if len(sys.argv) > 1 and sys.argv[1] not in COMMANDS and sys.argv[1] not in ("-h", "--help"):
+        hint = f"; did you mean `orch board {shlex.join(sys.argv[1:])}`?" if sys.argv[1] in BOARD_SUBS else ""
+        sys.exit(f"unknown command '{sys.argv[1]}'{hint}\nRun `orch --help` for the command list.")
+    if len(sys.argv) < 3 -(sys.argv[1:2] in (["watch-cards"], ["patrol"], ["inbox"], ["migrate"], ["doctor"])) or sys.argv[1] not in COMMANDS or sys.argv[1] not in ("watch-cards", "patrol") and {"-h", "--help"} & set(sys.argv[2:(sys.argv + ["--"]).index("--")]):
         sys.exit(__doc__)
     COMMANDS[sys.argv[1]](sys.argv[2:])

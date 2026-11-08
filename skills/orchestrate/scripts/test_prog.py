@@ -1638,3 +1638,44 @@ try:
 finally:
     os.environ.pop("AGENT_SKILLS_STATE") if old_state is None else os.environ.__setitem__("AGENT_SKILLS_STATE", old_state)
 print("prog.py wake lines: all pass")
+
+# An unknown `orch` command says so in one short error; a board subcommand typed without `board` shows the right form.
+import re, tempfile
+_home = pathlib.Path(tempfile.mkdtemp(prefix="test-unknown-cmd-"))
+_env = {**os.environ, "HOME": str(_home), "PROGRAMS_HOME": str(_home / "programs"), "AGENT_SKILLS_STATE": str(_home / "state")}
+
+
+def _orch(*argv):
+    return subprocess.run([sys.executable, str(pathlib.Path(prog.__file__)), *argv], capture_output=True, text=True, env=_env)
+
+
+def _tree():
+    return {str(p.relative_to(_home)): p.read_bytes() for p in sorted(_home.rglob("*")) if p.is_file()}
+
+
+_before = _tree()
+_r = _orch("later", "add", "x", "--trigger", "y")
+assert _r.returncode != 0 and _r.stdout == "", _r
+assert _r.stderr.startswith("unknown command 'later'"), _r.stderr
+assert "orch board later add" in _r.stderr, _r.stderr
+assert len(_r.stderr.splitlines()) <= 3, _r.stderr
+assert _tree() == _before, "an unknown command wrote a file"
+_r = _orch("later", "add", "fix auth", "--trigger", "when ready")
+assert "orch board later add 'fix auth' --trigger 'when ready'" in _r.stderr, _r.stderr  # the hint must paste back as typed
+for _sub in ("todo", "doing", "lead", "priority", "drop"):
+    assert f"orch board {_sub}" in _orch(_sub, "x", "y").stderr, _sub
+# A typo is not a board subcommand: no hint. `set` is a top-level command, so it is never hinted.
+_r = _orch("lter", "add", "x")
+assert _r.returncode != 0 and _r.stderr.startswith("unknown command 'lter'") and "board" not in _r.stderr, _r.stderr
+_r = _orch("set", "x")
+assert "unknown command" not in _r.stderr and "did you mean" not in _r.stderr and "Traceback" not in _r.stderr, _r.stderr
+# No argument, -h and --help keep printing the whole usage.
+for _argv in ((), ("-h",), ("--help",)):
+    _r = _orch(*_argv)
+    assert "unknown command" not in _r.stderr and len(_r.stderr.splitlines()) > 50, (_argv, _r.stderr[:200])
+# The hint list must track cmd_board's own branches.
+_src = pathlib.Path(prog.__file__).read_text()
+_body = _src[_src.index("def cmd_board"):_src.index("def register_decisions")]
+_seen = set(re.findall(r'sub == "([a-z-]+)"', _body)) | {s for g in re.findall(r'sub in \(([^)]*)\)', _body) for s in re.findall(r'"([a-z-]+)"', g)}
+assert _seen == set(prog.BOARD_SUBS), (_seen ^ set(prog.BOARD_SUBS))
+print("prog.py unknown command: all pass")
