@@ -61,6 +61,14 @@ assert m == {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalC
 m = dispatch.merge("PostToolUseFailure", [("a", {"hookSpecificOutput": {"hookEventName": "PostToolUseFailure", "additionalContext": "x"}})])
 assert m["hookSpecificOutput"]["hookEventName"] == "PostToolUseFailure"
 
+# ---- merge: one module's malformed output (wrong types, not an object) loses only that module's part
+m = dispatch.merge("PreToolUse", [("a", pre("deny", "keep")), ("b", {"hookSpecificOutput": {"permissionDecision": []}}),
+                                  ("c", ["not", "an", "object"]), ("d", {"systemMessage": 5, "hookSpecificOutput": "x"}),
+                                  ("e", pre(system="fine"))])
+assert m["hookSpecificOutput"]["permissionDecision"] == "deny" and m["systemMessage"] == "fine", m
+m = dispatch.merge("Stop", [("a", {"decision": "block", "reason": "stay"}), ("b", {"decision": ["block"], "reason": 3})])
+assert m == {"decision": "block", "reason": "stay"}, m
+
 # ---- merge: a key the table does not know is dropped and logged, never passed on
 m = dispatch.merge("Stop", [("odd", {"decision": "block", "reason": "r", "continue": False})])
 assert m == {"decision": "block", "reason": "r"}, m
@@ -237,6 +245,23 @@ try:
 finally:
     dispatch.HERE = real_here
 assert got["fake_slowchild"] == {"systemMessage": "slow"} and got["fake_alarmchild"] == {"decision": "block", "reason": "quick"}, got
+
+# a big event and a first child that does not read stdin for a while must not hold the second child back
+fake("fake_lateread", """
+    import json, sys, time
+    time.sleep(1.5)
+    sys.stdin.read()
+    print(json.dumps({"systemMessage": "late"}))
+""")
+dispatch.HERE = FAKES
+try:
+    t0 = time.monotonic()
+    got = list(dispatch.legacy({"pad": "a" * 1_000_000}, [("fake_lateread", 0.3), ("fake_alarmchild", 5)]))
+    spent = time.monotonic() - t0
+finally:
+    dispatch.HERE = real_here
+assert isinstance(got[0][1], dispatch.Skipped) and got[1][1] == {"decision": "block", "reason": "quick"}, got
+assert spent < 1.2, spent
 
 # ---- a hung module (signals blocked) still lets the finished deny out before the process ends
 fake("fake_hang", """

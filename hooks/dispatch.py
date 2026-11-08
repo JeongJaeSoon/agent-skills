@@ -10,7 +10,7 @@ process of its own. artifact_archive stays apart too: it leaves a recovery marke
 `hooks.dispatch: false` in ~/.claude/agent-skills.json runs every module as its own process instead (the old shape)
 and merges the same way; a session that loaded this file before a rollback keeps working through it.
 """
-import contextlib, importlib, io, json, os, pathlib, re, signal, subprocess, sys, threading, time
+import contextlib, importlib, io, json, os, pathlib, re, signal, subprocess, sys, tempfile, threading, time
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -143,31 +143,45 @@ def fit(parts):
     return "\n".join(kept)
 
 
+def take(module, out, part):
+    """One module's output sorted into `part`; raises on a value of the wrong type."""
+    for key, value in out.items():
+        if key == "systemMessage":
+            add(part["systems"], value)
+        elif key == "decision" and value == "block":
+            add(part["blocks"], out.get("reason") or "")
+        elif key == "reason" and out.get("decision") == "block":
+            pass
+        elif key == "hookSpecificOutput" and isinstance(value, dict):
+            for k, v in value.items():
+                if k == "permissionDecision" and v in RANK:
+                    text = value.get("permissionDecisionReason")
+                    part["reasons"][v].append(text if isinstance(text, str) and text else None)
+                elif k == "additionalContext":
+                    add(part["contexts"], v)
+                elif k not in SPEC_KEYS:
+                    config.log_error(module, KeyError(k))
+        else:
+            config.log_error(module, KeyError(key))
+
+
 def merge(name, results):
     """results: [(module, dict)] in module order. Pre: deny > ask > allow with the reasons of the deny and ask modules
     joined; Stop: a block from any module blocks with every reason; systemMessage and additionalContext joined."""
     systems, contexts, blocks = [], [], []
     reasons = {"deny": [], "ask": [], "allow": []}
     for module, out in results:
-        for key, value in (out or {}).items():
-            if key == "systemMessage":
-                add(systems, value)
-            elif key == "decision" and value == "block":
-                add(blocks, out.get("reason") or "")
-            elif key == "reason" and out.get("decision") == "block":
-                pass
-            elif key == "hookSpecificOutput" and isinstance(value, dict):
-                for k, v in value.items():
-                    if k == "permissionDecision" and v in RANK:
-                        add(reasons[v], value.get("permissionDecisionReason") or "")
-                        if not value.get("permissionDecisionReason"):
-                            reasons[v].append(None)
-                    elif k == "additionalContext":
-                        add(contexts, v)
-                    elif k not in SPEC_KEYS:
-                        config.log_error(module, KeyError(k))
-            else:
-                config.log_error(module, KeyError(key))
+        part = {"systems": [], "contexts": [], "blocks": [], "reasons": {"deny": [], "ask": [], "allow": []}}
+        try:  # a module whose output is malformed loses only its own part of the merge
+            take(module, out or {}, part)
+        except Exception as e:
+            config.log_error(module, e)
+            continue
+        systems += [s for s in part["systems"] if s not in systems]
+        contexts += [c for c in part["contexts"] if c not in contexts]
+        blocks += [b for b in part["blocks"] if b not in blocks]
+        for level, items in part["reasons"].items():
+            reasons[level] += [r for r in items if r is None or r not in reasons[level]]
     spec = {}
     decided = [d for d in RANK if reasons[d]]
     if decided:
@@ -191,30 +205,33 @@ def merge(name, results):
 
 def legacy(event, chosen):
     """Every module as its own process, started together: the shape before this file, for `hooks.dispatch: false`."""
-    data, procs = json.dumps(event), []
-    for module, timeout in chosen:
-        p = subprocess.Popen([sys.executable, str(HERE / f"{module}.py")], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                             stderr=subprocess.DEVNULL, text=True)
-        try:  # every child gets its input now: some start a limit of their own the moment they run
-            p.stdin.write(data)
-            p.stdin.close()
-        except OSError:
-            pass
-        p.stdin = None  # closed here, so communicate() below only reads
-        procs.append((module, time.monotonic() + timeout, timeout, p))
-    for module, deadline, timeout, p in procs:
-        try:
-            stdout, _ = p.communicate(timeout=max(0.01, deadline - time.monotonic()))
-        except subprocess.TimeoutExpired:
-            p.kill()
-            p.communicate()
-            yield module, Skipped(note(f"{module} ran past its {timeout:g}s limit"))
-            continue
-        try:
-            yield module, (json.loads(stdout) if stdout.strip() else None)
-        except ValueError as e:
-            config.log_error(module, e)
-            yield module, None
+    procs = []
+    # The input is a file, not a pipe: no child waits on another to be fed, and a child that reads late blocks no writer.
+    with tempfile.NamedTemporaryFile("w+") as data, contextlib.ExitStack() as opened:
+        data.write(json.dumps(event))
+        data.flush()
+        for module, timeout in chosen:  # one open file each: the children must not share a read offset
+            own = opened.enter_context(open(data.name))
+            p = subprocess.Popen([sys.executable, str(HERE / f"{module}.py")], stdin=own, stdout=subprocess.PIPE,
+                                 stderr=subprocess.DEVNULL, text=True)
+            procs.append((module, time.monotonic() + timeout, timeout, p))
+        for module, deadline, timeout, p in procs:
+            try:
+                stdout, _ = p.communicate(timeout=max(0.01, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                p.kill()
+                p.communicate()
+                yield module, Skipped(note(f"{module} ran past its {timeout:g}s limit"))
+                continue
+            try:
+                out = json.loads(stdout) if stdout.strip() else None
+            except ValueError as e:
+                config.log_error(module, e)
+                out = None
+            if out is not None and not isinstance(out, dict):
+                config.log_error(module, TypeError("output is not an object"))
+                out = None
+            yield module, out
 
 
 def dispatch(event, entries=None, results=None):

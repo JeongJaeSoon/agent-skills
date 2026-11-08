@@ -27,7 +27,7 @@ Token counts are an offline approximation by character class (APPROX_PER_CHAR) u
 count_tokens API with ANTHROPIC_API_KEY (never printed or stored) and fails without it. calibrate fits new coefficients
 from that API on this checkout's files and prints them; it changes nothing. No other path calls any model.
 """
-import importlib.util, json, os, pathlib, re, subprocess, sys, tarfile, tempfile, unicodedata, urllib.error, urllib.request
+import ast, json, os, pathlib, re, subprocess, sys, tarfile, tempfile, unicodedata, urllib.error, urllib.request
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 APPROX_VERSION = "chars-v1"
@@ -214,13 +214,22 @@ def hook_scripts(root):
                 if m:
                     found.setdefault(m.group(1), []).append(event)
     if "dispatch.py" in found:  # its modules are hooks too: hooks.json no longer names them
-        spec = importlib.util.spec_from_file_location("hook_dispatch", root / "hooks" / "dispatch.py")
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        for event, entries in mod.ENTRIES.items():
-            for name, _, _ in entries:
+        for event, names in dispatch_modules(root).items():
+            for name in names:
                 found.setdefault(f"{name}.py", []).append(event)
     return found
+
+
+def dispatch_modules(root):
+    """{event: [module]} from the ENTRIES table of hooks/dispatch.py, read as syntax: the file is never run, because
+    `--base` points it at a revision nobody has reviewed."""
+    try:
+        tree = ast.parse((root / "hooks" / "dispatch.py").read_text(encoding="utf-8"))
+        table = next(n.value for n in tree.body if isinstance(n, ast.Assign) and
+                     any(isinstance(t, ast.Name) and t.id == "ENTRIES" for t in n.targets))
+        return {k.value: [e.elts[0].value for e in v.elts] for k, v in zip(table.keys, table.values)}
+    except (OSError, SyntaxError, StopIteration, AttributeError):
+        return {}
 
 
 def sentences(body):
