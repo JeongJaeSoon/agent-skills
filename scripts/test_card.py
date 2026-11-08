@@ -1272,4 +1272,14 @@ assert rc == 0 and model_of(calls) == "sonnet", (rc, err)
 rc, out, err, calls = go(brief(LEAD, "nl.md"), "--repo", "r", "--no-parent", "--name", "backlog-lead")
 assert rc == 0 and model_of(calls) == "opus", (rc, err)
 
+# handle_of: a structured session's handle is no terminal (`orca terminal read` refuses it), so a terminal handle wins.
+sys.path.insert(0, str(HERE))
+import card as card_module  # noqa: E402
+structured = {"launch": {"outcome": {"handle": "structured-agent-session-claude_x"}}}
+with_terminal = {**structured, "effects": [{"kind": "terminal", "role": "agent", "id": "term_a"}]}
+assert card_module.handle_of(with_terminal) == "term_a", card_module.handle_of(with_terminal)
+assert card_module.handle_of({**structured, "worker": {"terminal": "term_b"}}) == "term_b"
+assert card_module.handle_of(structured) == "structured-agent-session-claude_x", "no terminal named: the structured handle stays"
+assert card_module.handle_of({"launch": {"outcome": {"handle": "term_c"}}, "effects": [{"kind": "terminal", "role": "agent", "id": "term_a"}]}) == "term_c"
+
 print("ok")

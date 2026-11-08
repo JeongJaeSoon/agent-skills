@@ -88,6 +88,9 @@ path = os.environ["FAKE_ORCA_STATE"]
 st = json.load(open(path))
 a = sys.argv[1:]
 def arg(k): return a[a.index(k) + 1]
+if "--terminal" in a and arg("--terminal").startswith("structured-"):  # a structured session is no terminal
+    print(json.dumps({"ok": False, "error": {"code": "terminal_handle_stale", "message": "no terminal\nwith this handle"}}, indent=1))
+    sys.exit(1)
 if a[:2] == ["terminal", "list"]:
     out = {"terminals": [dict(t, handle=h) for h, t in st["terms"].items()]}
 elif a[:2] == ["terminal", "show"]:
@@ -809,6 +812,14 @@ def test_close_setup_agent():
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             code = sync.close_setup("/w/card", timeout_s=0.5, grace_s=0.2, agent="trust")
+        # A structured session's handle is no terminal: the worktree's one Claude terminal stands for it.
+        sid = "structured-agent-session-claude_x"
+        st.write_text(json.dumps({"terms": {"took": terms["took"], "plain": {"agentIdentity": None, "title": "zsh", "screens": [IDLE]}},
+                                  "sent": []}))
+        structured = sync.watch_start(sync.agent_terminal(sid, "/w/card"), 0.2)[0]
+        raw = sync.watch_start(sid, 0.2)
+        st.write_text(json.dumps({"terms": terms, "sent": []}))
+        ambiguous = sync.agent_terminal(sid, "/w/card")
     finally:
         for k, v in old.items():
             os.environ.pop(k) if v is None else os.environ.__setitem__(k, v)
@@ -818,6 +829,14 @@ def test_close_setup_agent():
                                                           "busytitle": "unconfirmed"}, states)
     check("a trust dialog fails close-setup and says so", code == 1 and "agent trust" in out.getvalue()
           and out.getvalue().rstrip().endswith("result: failed"), out.getvalue())
+    check("a structured session is confirmed through the worktree's Claude terminal", structured == "started", structured)
+    check("without that lookup it reads as unconfirmed, with its refusal on one line",
+          raw[0] == "unconfirmed" and "terminal_handle_stale: no terminal with this handle" in raw[1] and "\n" not in raw[1], raw)
+    check("several Claude terminals in the worktree leave the handle as given", ambiguous == sid, ambiguous)
+    check("orca's refusal is one line, whatever its shape",
+          sync.error_text('{"ok": false, "error": {"code": "c", "message": "a\\nb"}}', "") == "c: a b"
+          and sync.error_text("", "line one\nline two") == "line one line two"
+          and len(sync.error_text("x" * 900, "")) == 300)
     shutil.rmtree(tmp)
 
 

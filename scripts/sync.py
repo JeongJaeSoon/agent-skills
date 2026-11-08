@@ -443,13 +443,24 @@ def reloaded(before, after, command):
             and any(l.strip().startswith("⎿") and "Reloaded" in l for l in lines[i + 1:]))
 
 
+def error_text(stdout, stderr, limit=300):
+    """One line for a failed orca call: `code: message` from its JSON error when it prints one, else the text with its
+    newlines folded. A line cut mid-JSON, or one that spans lines, leaves a fragment in the logs that read it."""
+    try:
+        err = json.loads(stdout)["error"]
+        text = f"{err['code']}: {err['message']}" if isinstance(err, dict) and err.get("code") else json.dumps(err)
+    except (ValueError, KeyError, TypeError):
+        text = stderr.strip() or stdout.strip()
+    return " ".join(text.split())[:limit]
+
+
 def orca(*args):
     try:
         p = subprocess.run([ORCA, *args, "--json"], capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired) as e:
         raise Stop(f"orca {' '.join(args[:2])} failed: {e}")
     if p.returncode:
-        raise Stop(f"orca {' '.join(args[:2])} failed: {(p.stderr or p.stdout).strip()[:200]}")
+        raise Stop(f"orca {' '.join(args[:2])} failed: {error_text(p.stdout, p.stderr)}")
     try:
         return json.loads(p.stdout)["result"]
     except (ValueError, KeyError) as e:
@@ -824,6 +835,20 @@ def watch_start(handle, grace_s):
         time.sleep(SETUP_POLL_S)
 
 
+def agent_terminal(handle, worktree):
+    """The terminal to read for a card's agent. A start that launched a structured session names `structured-agent-session-…`,
+    which `orca terminal read` refuses (terminal_handle_stale) however alive the agent is; the worktree's one connected
+    Claude terminal stands for it. Any other handle, or no single match, is returned as given."""
+    if not handle.startswith("structured-"):
+        return handle
+    try:
+        terms = orca("terminal", "list", "--worktree", f"path:{worktree}")["terminals"]
+        claude = [t["handle"] for t in terms if t.get("agentIdentity") == "claude" and t.get("connected", True) and t.get("handle")]
+    except (Stop, KeyError, TypeError):
+        return handle
+    return claude[0] if len(claude) == 1 else handle
+
+
 def close_setup(worktree, timeout_s=1800, grace_s=120, agent=None):
     """Close each of the card's terminals without an agent once the setup script it ran has finished.
     The setup terminal is a shell that outlives its script, so `orca terminal wait --for exit` never fires.
@@ -834,6 +859,7 @@ def close_setup(worktree, timeout_s=1800, grace_s=120, agent=None):
     start = time.monotonic()
     rc = 0
     if agent:
+        agent = agent_terminal(agent, worktree)
         state, detail = watch_start(agent, grace_s)
         print(f"{agent}  agent {state}: {detail}")
         if state != "started":

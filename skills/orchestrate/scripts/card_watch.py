@@ -15,7 +15,8 @@ it waits on a human; the screen only where Orca has no verdict), a full disk (an
 free disk is under --min-free-gb), an API retry loop,
 a `/goal` card with no output for --idle-min minutes (not while it is busy: a running shell or `claude agents` busy),
 a card once seen under `/goal` that sits on an empty
-prompt without it for --goal-lost-min minutes (not when its transcript's last goal_status is met: that lead is parked), or free disk under --min-free-gb. A finding still on screen is
+prompt without it for --goal-lost-min minutes (not when its transcript's last goal_status is met, or while it is busy, a live
+background `orch wait` included: that lead is parked), or free disk under --min-free-gb. A finding still on screen is
 not reported again, also across restarts (--state); once it clears, the next one is new. Each round stamps
 `last_scan_at` in --state, which `orch inbox`, `orch wait`, `orch patrol` and the dashboard read to tell a watcher
 that ended (a finding, QUIET, a killed session) from one still running. It never types into a
@@ -170,10 +171,25 @@ GOAL_NOT_TYPED = "the /goal line was not typed"
 GOAL_VERDICT = re.compile(r"^\[[^\]]*\] (?:warning: the /goal line (?:was not typed|may have reached)|typed the /goal line|\S+ already ran /goal)")
 
 
-def setup_failure(name):
+SETUP_FRESH_S = 2 * 3600  # a failure is reported within a round or two; a log older than this is history
+# The lines close-setup prints itself; anything else above `result:` can be a fragment of a multi-line error.
+SETUP_REASON = re.compile(r"^(?:\S+\s+(?:agent \w+|left open)\b|cannot list |warning: )")
+
+
+def card_started_at(handle):
+    """When the session in this terminal started (the SessionStart record), or None when there is no record."""
+    try:
+        return float(json.loads(roles.terminal_file(handle).read_text())["at"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def setup_failure(name, handle=None, now=None):
     """(helper, reason, manual command or "") when a start helper's log for card `name` ends in a failure, else None. A log with no verdict
     (still running, missing, unreadable) is none: close-setup ends on `result: ok|failed`, and the /goal input's
-    newest line says whether it typed. The log is appended to, so only its last verdict counts."""
+    newest line says whether it typed. The log is appended to, so only its last verdict counts.
+    A close-setup log older than the session in `handle` started, or older than SETUP_FRESH_S, is stale: the same
+    card name is reused, and a watcher that lost its state would report last week's failure as new."""
     def last_lines(helper):
         try:
             return [l.strip() for l in (SETUP_STATE / helper / f"{name}.log").read_text(errors="replace").splitlines() if l.strip()]
@@ -181,7 +197,15 @@ def setup_failure(name):
             return []
     lines = last_lines("close-setup")
     if lines and lines[-1] == "result: failed":
-        return "close-setup", (lines[-2] if len(lines) > 1 else "see its log"), ""
+        try:
+            written = (SETUP_STATE / "close-setup" / f"{name}.log").stat().st_mtime
+        except OSError:
+            written = None
+        started = card_started_at(handle) if handle else None
+        stale = written is not None and ((now or time.time()) - written > SETUP_FRESH_S or started is not None and written < started)
+        if not stale:
+            reason = next((l for l in reversed(lines[:-1]) if SETUP_REASON.match(l)), "see its log")
+            return "close-setup", reason, ""
     # The helper's own prefix decides, never the goal text it quotes after it.
     verdicts = [l for l in last_lines("goal-input") if GOAL_VERDICT.match(l)]
     if verdicts and re.match(r"^\[[^\]]*\] warning: " + re.escape(GOAL_NOT_TYPED) + r" into ", verdicts[-1]):
@@ -214,7 +238,7 @@ def scan(terms, seen, read, now_ms, idle_min, free_gb, min_free_gb, goal_lost_mi
         waited = waits.get(h, prog.NOT_LOOKED)
         # A card that never started looks idle, so its helper logs are judged apart from the screen, and before the
         # screen read: an unreadable pane must not hide the failure or forget that it was reported.
-        failed = setup_failure(card_name(t))
+        failed = setup_failure(card_name(t), h)
         if failed:
             helper, reason, manual = failed
             skey = f"setup:{helper}:{hashlib.sha1(reason.encode()).hexdigest()[:12]}"
@@ -236,11 +260,14 @@ def scan(terms, seen, read, now_ms, idle_min, free_gb, min_free_gb, goal_lost_mi
         tail = (lines or [])[-25:]
         idle = (now_ms - (t.get("lastOutputAt") or now_ms)) / 60000
         auth = auth_line(tail) if idle >= AUTH_QUIET_MIN else None
-        hit = prog.judge_wait(waited, lines, low_disk=free_gb < min_free_gb if low_disk is prog.NOT_LOOKED else low_disk)
+        goal = under_goal(t, tail)
+        # A "Goal paused" line left on screen is old once /goal is active again or claude agents says busy.
+        if auth and auth.startswith("Goal paused") and (goal or (agents or {}).get(h, {}).get("agents") == "busy"):
+            auth = None
+        hit =prog.judge_wait(waited, lines, low_disk=free_gb < min_free_gb if low_disk is prog.NOT_LOOKED else low_disk)
         finding = "auth" if auth else hit[0] if hit else ""
         state, basis = screen_state(tail, idle, finding)
         states[h] = (state, "unreadable" if lines is None else basis, finding)  # a wait Orca found stands without the pane
-        goal = under_goal(t, tail)
         if goal:
             goals.add(h)
         if auth:
@@ -251,7 +278,8 @@ def scan(terms, seen, read, now_ms, idle_min, free_gb, min_free_gb, goal_lost_mi
         elif goal and idle > idle_min and not busy_now(h, state, agents):
             kind, question, key = f"a /goal card silent {int(idle)} min", "", f"idle:{t.get('lastOutputAt')}"
         elif (not goal and h in goals and idle > goal_lost_min and any(l.strip() == "❯" for l in tail)
-              and not goal_met(h)):  # a met goal parked on purpose is not lost
+              and not busy_now(h, state, agents) and not goal_met(h)):
+            # A met goal, or a live background wait (`orch wait`: a shell on the status bar, claude agents busy), is parked on purpose.
             kind, question, key = f"goal lost, idle {int(idle)} min", "", f"lost:{t.get('lastOutputAt')}"
         else:
             continue

@@ -860,11 +860,15 @@ def worktree_path(res):
 
 
 def handle_of(res):
-    """The new agent's handle: launch.outcome.handle (a chat or a terminal), else the older worker terminal fields."""
-    return ((((res.get("launch") or {}).get("outcome") or {}).get("handle")) or orca_settings.worker_terminal(res)
+    """The new agent's handle: launch.outcome.handle (a chat or a terminal), else the older worker terminal fields.
+    A `structured-agent-session-…` handle is no terminal and `orca terminal read` refuses it, so a terminal handle
+    from any other field wins, and the structured one is only the last resort."""
+    launched = ((res.get("launch") or {}).get("outcome") or {}).get("handle")
+    structured = launched if isinstance(launched, str) and launched.startswith("structured-") else None
+    return ((None if structured else launched) or orca_settings.worker_terminal(res)
             or orca_settings.worker_terminal(res.get("worker")) or ((res.get("dispatch") or {}).get("assigneeHandle"))
             or next((e.get("id") for e in res.get("effects") or [] if isinstance(e, dict)
-                     and e.get("kind") == "terminal" and e.get("role") == "agent"), None))
+                     and e.get("kind") == "terminal" and e.get("role") == "agent"), None) or structured)
 
 
 def parse_args(rest):

@@ -133,6 +133,29 @@ found = scan(seen)
 assert found == ["STUCK card-a (goal lost, idle 16 min): read its screen", "  orca terminal read --terminal h1 --screen"], \
     "a session never under /goal, and a goal card idle 5 min, are fine"
 assert scan(seen) == [] and seen["goals"] == ["h1", "h3"], "reported once; the card stays known"
+# A lead with no goal on purpose that waits on its inbox (a live background `orch wait`) is parked, not lost; the same
+# screen with nothing running, or claude agents idle, still is.
+waiting = ["⏺ Queue done; waiting on the inbox.", "❯ ", "  ⏵⏵ auto mode on · 1 shell still running"]
+screens = {"h1": waiting, "h2": idle, "h3": lost}
+assert not any("goal lost" in l for l in card_watch.scan(terms, {"goals": ["h1", "h3"]}, read, NOW, 30, 100.0, 15)), \
+    "a background shell on the status bar means it waits on purpose"
+screens = {"h1": lost, "h2": idle, "h3": lost}
+assert not any("card-a (goal lost" in l for l in card_watch.scan(terms, {"goals": ["h1", "h3"]}, read, NOW, 30, 100.0, 15,
+                                                                 agents={"h1": {"agents": "busy"}})), "claude agents busy is waiting too"
+assert any("card-a (goal lost" in l for l in card_watch.scan(terms, {"goals": ["h1", "h3"]}, read, NOW, 30, 100.0, 15,
+                                                              agents={"h1": {"agents": "idle"}})), "idle with nothing running is still lost"
+
+# A "Goal paused" line left above a card that went on is old: /goal is active again, or claude agents says busy.
+resumed = ["Goal paused · usage limit reached · send a message after it resets", "  ⎿  Read 3 files", "❯ ", "  ◎ /goal active (1h)"]
+screens = {"h1": resumed, "h2": resumed, "h3": paused}
+quiet_terms = card_watch.agent_terminals([term(h, f"/w/card-{c}", last=NOW - 3 * 60000) for h, c in zip(("h1", "h2", "h3"), "abc")], "me")
+got = card_watch.scan(quiet_terms, {}, read, NOW, 30, 100.0, 15, agents={"h2": {"agents": "busy"}, "h3": {"agents": "idle"}})
+assert [l.split(" ")[1] for l in got if l.startswith("STUCK")] == ["card-c"], f"only the card still paused is stuck: {got}"
+assert card_watch.scan(quiet_terms[:1], {}, lambda h: ["Goal paused · usage limit reached", "  ⎿  Read 3 files", "❯ "], NOW, 30, 100.0, 15,
+                       agents={"h1": {"agents": "busy"}}) == [], "busy now: the paused line is old"
+assert card_watch.scan(quiet_terms[:1], {}, lambda h: ["  ⎿  Please run /login · API Error: 403 Forbidden", "❯ "], NOW, 30, 100.0, 15,
+                       agents={"h1": {"agents": "busy"}})[0].startswith("STUCK card-a (auth)"), "a lost login stays auth"
+screens = {"h1": lost, "h2": idle, "h3": lost}  # the section below goes on from this state
 screens["h1"] = ["⏺ Working", "❯ draft text", ""]
 assert scan(seen) == [], "text in the input box is not an empty prompt"
 terms = terms[1:]
@@ -434,6 +457,36 @@ assert [l for l in card_watch.scan(two, {}, flaky, NOW, 30, 100.0, 15) if l.star
 seen = {}
 card_watch.scan(terms, seen, flaky, NOW, 30, 100.0, 15)
 assert card_watch.scan(two, seen, flaky, NOW, 30, 100.0, 15) == [], "a second terminal on a reported card is not new"
+
+# A setup log older than the card's current start, or hours old, is history: a fresh failure still reports.
+with tempfile.TemporaryDirectory() as tmp:
+    tmp = pathlib.Path(tmp)
+    (tmp / "terminals").mkdir()
+    old_state = os.environ.get("AGENT_SKILLS_STATE")
+    os.environ["AGENT_SKILLS_STATE"] = str(tmp)
+    try:
+        import time as _time
+        h = "term_cccccccc-0000-4000-8000-000000000000"
+        log = pathlib.Path(SETUP.name) / "close-setup" / "card-a.log"
+        record = lambda at: (tmp / "terminals" / f"{h}.json").write_text(json.dumps({"session_id": "s", "at": at}))
+        failed_log = lambda age_s: (helper_log("close-setup", "card-a", "term_x  agent unconfirmed: idle at an empty prompt",
+                                               '"T', "result: failed"),
+                                    os.utime(log, (_time.time() - age_s,) * 2))
+        failed_log(60)
+        found = card_watch.setup_failure("card-a", h)
+        assert found and found[1] == "term_x  agent unconfirmed: idle at an empty prompt", \
+            f"the reason is the helper's own line, never a JSON fragment: {found}"
+        record(_time.time() - 3600)
+        assert card_watch.setup_failure("card-a", h), "a failure after the card's start is reported"
+        record(_time.time() - 30)
+        assert card_watch.setup_failure("card-a", h) is None, "a log written before the card's current start is stale"
+        (tmp / "terminals" / f"{h}.json").unlink()
+        failed_log(3 * 3600)
+        assert card_watch.setup_failure("card-a", h) is None, "no start record: an hours-old log is stale by age"
+        failed_log(60)
+        assert card_watch.setup_failure("card-a", h), "no start record: a fresh log still reports"
+    finally:
+        os.environ.pop("AGENT_SKILLS_STATE") if old_state is None else os.environ.__setitem__("AGENT_SKILLS_STATE", old_state)
 
 # A round asks Orca for the terminal list once, and reads each screen whole: prog.without_diffs needs a diff header that
 # can sit above the last 25 rows, so a long diff ending in "Enter to select" must not turn into a select menu.
