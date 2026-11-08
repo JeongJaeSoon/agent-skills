@@ -55,6 +55,9 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/shots.py" upload --repo owner/repo --pr N \
 
 - It needs the PR to exist and `ego-browser` signed in to GitHub as someone who can comment. No
   token or cookie goes on the command line or into the output.
+- It drives either comment UI: the old hidden file input, or the "click to add files" button and its
+  file chooser (one file per chooser). URLs are keyed by file name, so the `Image` alt GitHub
+  writes into the box does not matter; the table writes the alt from the name.
 - It checks each file first: an image type, at most 10 MB, a name in the form above. It exits 1 when any
   file came back without a URL, when GitHub marked an upload failed, or when the comment box could
   not be cleared; the last case leaves a draft on the page, so clear it before going on.
