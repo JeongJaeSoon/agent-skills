@@ -195,6 +195,7 @@ SHELL_PROMPT = ("이 자동화는 precheck 가 주기 작업을 직접 실행하
                 "이 프롬프트가 실행됐다면 precheck 가 건너뛰지 않은 것이다: 아무것도 하지 않고 '정기 작업 precheck 이상' 이라고만 "
                 "보고한다.")
 SHELL_TIMEOUT_S = 300
+ORCA_PRECHECK_MAX_S = 600  # `orca automations create|edit` rejects a --precheck-timeout above this
 
 
 def cron_period(seconds):
@@ -217,7 +218,8 @@ class ShellJob(OrcaJob):
     records how it ended and exits 1, so Orca skips the agent every time. A job that needs no model must not start one."""
 
     def __init__(self, name, what, argv, interval, default, ok=(0,), turned_off=None, clear_off=None, gate=None,
-                 prepare=None, timeout=SHELL_TIMEOUT_S):
+                 prepare=None, timeout=SHELL_TIMEOUT_S, skip=()):
+        self.skip = skip  # exits that mean "another run holds the job" (orca_job.py --skip)
         self.name, self.job_name, self.what, self.default = name, f"agent-skills {name}", what, default
         self.argv, self.interval, self.ok, self.turned_off, self.clear_off = argv, interval, ok, turned_off, clear_off
         self.gate = gate  # () -> why this PC must not get the job yet, or None; checked only while it is unregistered
@@ -236,6 +238,8 @@ class ShellJob(OrcaJob):
         return code, msg
 
     def enable(self, here):
+        if why := self.limit_problem():
+            return 1, why
         if self.prepare:
             code, msg = self.prepare()
             if code:
@@ -248,7 +252,13 @@ class ShellJob(OrcaJob):
     def want(self):
         secs = cron_period(self.interval() if callable(self.interval) else self.interval)  # what cron really runs at
         return {"trigger": cron_every(secs), "prompt": SHELL_PROMPT, "precheck-timeout": self.timeout,
-                "precheck": orca_job.command(self.name, self.argv, secs, self.timeout - 20, self.ok)}
+                "precheck": orca_job.command(self.name, self.argv, secs, self.timeout - 20, self.ok, self.skip)}
+
+    def limit_problem(self):
+        """Why Orca would refuse this definition, or None. Checked before create or edit so that nothing is half made."""
+        if self.timeout > ORCA_PRECHECK_MAX_S:
+            return f"{self.name}: precheck timeout {self.timeout}초가 Orca 한도 {ORCA_PRECHECK_MAX_S}초를 넘는다. 등록하지 않음"
+        return None
 
     def drift(self, a):
         pre = a.get("precheck") or {}
@@ -313,6 +323,8 @@ class ShellJob(OrcaJob):
     def realign(self):
         """Edit the registered job to this checkout's definition and leave it on or off as it is (`enable` would turn
         it on). (code, message); nothing to do is (0, None)."""
+        if why := self.limit_problem():
+            return 1, why
         a, err = self.find()
         if a is None:
             return 1, err
@@ -374,12 +386,12 @@ def pressure_interval():
     return (planned("reap").get("pressure") or {}).get("interval") or pressure.config()["interval"]
 
 
-SWEEP_TIMEOUT_S = 2700  # sweep.py tick's own step budgets add up to 2500 s (patrol 400, shadow 600, reap-hard 900, round 600)
+SWEEP_TIMEOUT_S = ORCA_PRECHECK_MAX_S  # one `sweep.py tick --step` per precheck; its budget (sweep.STEP_BUDGET_S) is 550 s
 
 
 def sweep_interval():
     import sweep  # not at import: it pulls in the whole guard stack
-    return sweep.interval()
+    return sweep.STEP_PERIOD_S  # a step every 10 minutes: a full cycle of the four steps is 40
 
 
 def sweep_protect_problem():
@@ -421,11 +433,12 @@ SHELL_JOBS = (
     ShellJob("land-executor", "orchestrate.land_executor 가 켜진 repo 에서 `orch land` 가 남긴 머지 요청을 1분마다 모델 없이 다시 "
              "검사해 머지하는 Orca automation(skills/orchestrate/references/landing.md). 설정 키를 켜는 것은 skills-config 로 따로 한다",
              ["python3", str(LAND_EXEC), "round"], 60, False, prepare=land_setup),
-    ShellJob("sweep", "정리기 v2 한 회차를 주기마다 모델 없이 돌리는 Orca automation(sweep.py tick: 순찰 → 그림자 → reap-hard → 소유 규칙 정리). "
+    ShellJob("sweep", "정리기 v2 한 회차를 모델 없이 돌리는 Orca automation(sweep.py tick --step: 10분마다 순찰 → 그림자 → reap-hard → "
+             "소유 규칙 정리 중 한 단계, 4단계가 한 사이클 40분). precheck 600초 한도 때문에 한 번에 한 단계만 돈다. "
              "`reap-hard` 자동화 자리를 이어받고, 한 번에 하나만 돈다(sweep-tick.lock). 규칙을 넘기는 것은 `sweep.py own` 으로 따로 한다. "
              "보호 목록 파일이 있는 PC에서만 켠다",
-             ["python3", str(REAP.parent / "sweep.py"), "tick"], sweep_interval, False, gate=lambda: sweep_protect_problem(),
-             prepare=sweep_prepare, timeout=SWEEP_TIMEOUT_S),
+             ["python3", str(REAP.parent / "sweep.py"), "tick", "--step"], sweep_interval, False,
+             gate=lambda: sweep_protect_problem(), prepare=sweep_prepare, timeout=SWEEP_TIMEOUT_S, skip=(3,)),
 )
 SWEEP = next(j for j in SHELL_JOBS if j.name == "sweep")
 

@@ -41,7 +41,7 @@ skills-sync setup reconcile               # 그것을 제자리에서 맞추고(
 | `patrol` | off | Orca automation `agent-skills patrol`(에이전트 없음) | `sync`와 같다. 30분마다 `orch patrol --if-due`(아래 "세션 순찰"). 꺼져 있으면 reap-hard가 25분 넘게 빈 뒤에(자기 회차마다) 대신 돈다 | `sync`와 같다 |
 | `share-server` | off | LaunchAgent(라벨은 설정 `share-server.label`, 기본 `io.github.jeongjaesoon.share-server`) | `share_server.py install`(KeepAlive로 `serve`, 그 안에서 sandbox-exec 아래 caddy. caddy가 없으면 `brew install caddy`부터. 같은 라벨의 다른 plist는 백업 후 교체) | `share_server.py uninstall` |
 | `land-executor` | off | Orca automation `agent-skills land-executor`(에이전트 없음) | `sync`와 같다. 1분마다 `land_exec.py round`. 켤 때 agent-skills.db에 `5-land-queue` 단계(`land_exec.py setup`)를 기록한다. 머지 요청은 `orchestrate.land_executor`가 켜진 repo에서만 생긴다. 그 키는 `skills-config`로 따로 켠다 | `sync`와 같다. 남은 요청은 큐에 그대로 둔다 |
-| `sweep` | off | Orca automation `agent-skills sweep`(에이전트 없음) | `sync`와 같다. 주기(`sweep.interval`, 기본 30분)마다 `sweep.py tick`(순찰 → 그림자 → reap-hard → 소유 규칙 정리). tick은 한 번에 하나만 돈다(`sweep-tick.lock`). 보호 목록 파일이 없으면 거부한다. precheck timeout은 2700초다. `apply`는 켜지 않는다([reap-hard.md](reap-hard.md)의 전환 절차) | `sync`와 같다 |
+| `sweep` | off | Orca automation `agent-skills sweep`(에이전트 없음) | `sync`와 같다. 10분마다 `sweep.py tick --step`이 순찰 → 그림자 → reap-hard → 소유 규칙 정리 중 **한 단계**만 돌린다(4단계가 한 사이클, 40분. Orca가 precheck를 600초에서 끊어 tick 전체를 한 번에 돌릴 수 없다). 위치는 `<state>/sweep-cycle.json`이고, 단계 예산은 550초 이하다. 같은 단계가 연속 3번 실패하면 넘어가고, 그 사실을 이후 단계의 마지막 줄에 하루 동안 적는다. 다른 tick(옛 LaunchAgent)이 잠금을 쥐고 있으면 성공이 아니라 건너뜀(exit 3)으로 `<state>/jobs/sweep.skip`에 남는다. tick은 한 번에 하나만 돈다(`sweep-tick.lock`). 보호 목록 파일이 없으면 거부한다. precheck timeout은 Orca 한도인 600초다(`automations.py`의 `ORCA_PRECHECK_MAX_S`, 넘으면 등록 전에 거부한다). `apply`는 켜지 않는다([reap-hard.md](reap-hard.md)의 전환 절차) | `sync`와 같다 |
 | `watch-prs` | on(설정 키가 있을 때) | Orca automation `agent-skills watch-prs` | `agent-skills.json`에 `prs` 키가 없으면 상태는 "꺼짐(설정 키 없음)"이고 `apply`가 건너뛴다. 있으면 `prs.py schedule --write`로 만든다. 이미 등록돼 있으면 키와 상관없이 켜기만 한다. worktree에서는 거부한다 | `orca automations edit --disabled`. 등록은 남긴다 |
 | `watch-mentions` | on(설정 키가 있을 때) | Orca automation `agent-skills watch-mentions` | `watch-prs`와 같다. 키는 `mentions`, 만드는 명령은 `mentions.py schedule --write` | `orca automations edit --disabled`. 등록은 남긴다 |
 
@@ -76,7 +76,7 @@ precheck 안에서 작업을 직접 하고 항상 exit 1로 끝나므로(`script
   마지막 실행이 실패했거나 주기의 3배를 넘게 안 돈 작업을 warn 행으로 보인다.
 - **run history:** Orca는 자동화마다 최근 100회차만 남긴다(실측: runNumber 108~207이 한 번에 읽힘). 3분 주기라도
   쌓이지 않는다. 그만큼 Orca 쪽 기록은 최근 5시간뿐이라 길게 볼 때는 위의 `jobs/*.json`을 쓴다.
-- **시간 제한:** 기본은 precheck 300초, 작업 280초에서 먼저 끊어 `timed out`으로 기록한다. 라운드가 긴 작업은 따로 정한다(`patrol`은 420/400초, `sweep`은 2700/2680초).
+- **시간 제한:** 기본은 precheck 300초, 작업 280초에서 먼저 끊어 `timed out`으로 기록한다. 라운드가 긴 작업은 따로 정한다(`patrol`은 420/400초). Orca가 받는 precheck 시간 제한은 600초까지다. 더 긴 일은 `sweep`처럼 단계로 나눠 한 회차에 한 단계만 돌린다(580/600초, 단계 예산 550초).
 
 ## 장치별 성질
 

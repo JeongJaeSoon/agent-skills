@@ -734,7 +734,7 @@ assert "전 것" in out["refused"] and json.loads((STATE / "sweep-last.json").re
 assert sweep.set_owner("trash:tmpdir", True)[0] == 2  # not a rule of this stage
 code, msg = sweep.set_owner("serve:dark", True)
 own = json.loads((STATE / "sweep-owner.json").read_text())
-assert code == 0 and own == {"generation": 1, "rules": {"serve:dark": "sweep"}, "interval": 1800.0}, (msg, own)
+assert code == 0 and own == {"generation": 1, "rules": {"serve:dark": "sweep"}, "interval": 2400.0}, (msg, own)  # one 40-minute cycle is the floor
 assert "첫 정상 회차" not in msg  # sweep-last.json exists already
 assert sweep.set_owner("serve:dark", True) == (0, "serve:dark: 이미 sweep 소유(세대 1), 바꾼 것 없음")
 assert json.loads((STATE / "sweep-owner.json").read_text())["generation"] == 1
@@ -950,7 +950,8 @@ assert not sweep.plist_path().exists() and not orca_log.exists()
 buf = io.StringIO()
 with contextlib.redirect_stdout(buf):
     assert sweep.cmd_install(["--dry-run"]) == 0
-assert "[dry-run]" in buf.getvalue() and "agent-skills sweep" in buf.getvalue() and "*/30 * * * *" in buf.getvalue()
+assert "[dry-run]" in buf.getvalue() and "agent-skills sweep" in buf.getvalue() and "*/10 * * * *" in buf.getvalue()
+assert "precheck-timeout 600" in buf.getvalue() and "tick --step" in buf.getvalue(), buf.getvalue()
 assert not sweep.plist_path().exists() and not orca_log.exists() and not stub_log.exists()
 (tmp / "config.json").write_text(json.dumps({"reap-hard": {"protect_file": str(PROTECT), "interval": 600}}))
 buf = io.StringIO()
@@ -1113,6 +1114,150 @@ finally:
 with sweep.file_lock("sweep-tick.lock") as free_again:
     assert free_again
 signal.alarm(0)
+
+# `tick --step` (what the Orca automation runs): ONE step per call, so each call fits Orca's 600 s precheck limit. The
+# position lives in <state>/sweep-cycle.json; the full tick above (the old LaunchAgent) is unchanged.
+CYCLE = STATE / "sweep-cycle.json"
+fail_steps = set()
+
+
+def step_fns():
+    def mk(name, ret):
+        def fn(*a, **k):
+            steps.append(name)
+            return {"round": "r", "failed": 1} if name in fail_steps else ret
+        return fn
+    return mk("shadow", {"round": "r"}), mk("real", {"round": "r"})
+
+
+def run_step(hard_rc=None):
+    """One `tick --step`; (exit code, stdout+stderr). patrol and reap-hard go through fake processes."""
+    steps.clear()
+    shadow, real = step_fns()
+
+    def fake(cmd, **kw):
+        name = "patrol" if "patrol" in cmd else "reap-hard"
+        steps.append(name)
+        return subprocess.CompletedProcess(cmd, 1 if name in fail_steps else 0)
+
+    saved_p = sweep.run_patrol, sweep.wait_patrol_idle, subprocess.run, sweep.run_shadow, sweep.run_round
+    sweep.run_patrol = lambda timeout: fake([sys.executable, "patrol"], timeout=timeout).returncode
+    sweep.wait_patrol_idle = lambda deadline: True
+    subprocess.run, sweep.run_shadow, sweep.run_round = fake, shadow, real
+    out = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            return sweep.tick(step=True), out.getvalue()
+    finally:
+        sweep.run_patrol, sweep.wait_patrol_idle, subprocess.run, sweep.run_shadow, sweep.run_round = saved_p
+
+
+CYCLE.unlink(missing_ok=True)
+order = []
+for _ in range(5):
+    code, _out = run_step()
+    assert code == 0, (code, _out)
+    order.append(steps[:])
+assert order == [["patrol"], ["shadow"], ["reap-hard"], ["real"], ["patrol"]], order  # one step per call, then around
+assert json.loads(CYCLE.read_text())["next"] == 1
+
+# a failing step stays current and is tried again; the third failure in a row moves on and says so
+CYCLE.unlink(missing_ok=True)
+run_step()  # patrol ok, next = shadow
+fail_steps.add("shadow")
+for n in (1, 2):
+    code, _out = run_step()
+    assert code == 1 and steps == ["shadow"], (n, code, steps)
+code, _out = run_step()
+assert code == 1 and steps == ["shadow"] and "shadow" in _out and "3" in _out, (code, _out)
+fail_steps.clear()
+code, _out = run_step()
+assert code == 0 and steps == ["reap-hard"], steps  # not stuck on shadow
+assert "shadow" in _out.strip().splitlines()[-1], _out  # the given-up step still shows after later successes
+for _ in range(2):  # real, patrol
+    run_step()
+code, _out = run_step()  # next cycle: shadow runs again from a clean count
+assert steps == ["shadow"] and code == 0, (steps, code)
+
+# a step killed before it could record its end (the runner's kill) counts as an attempt: the attempt is written first
+CYCLE.write_text(json.dumps({"next": 1, "fails": 2}))
+fail_steps.add("shadow")
+run_step()
+assert json.loads(CYCLE.read_text())["next"] == 2, CYCLE.read_text()
+fail_steps.clear()
+seen = []
+saved_shadow = sweep.run_shadow
+CYCLE.write_text(json.dumps({"next": 1, "fails": 0}))
+
+
+def peek(*a, **k):
+    seen.append(json.loads(CYCLE.read_text()))
+    return {"round": "r"}
+
+
+steps.clear()
+sweep.run_shadow = peek
+try:
+    with contextlib.redirect_stdout(io.StringIO()):
+        sweep.tick(step=True)
+finally:
+    sweep.run_shadow = saved_shadow
+assert seen and seen[0]["fails"] == 1 and seen[0]["next"] == 1, seen  # recorded before the step ran
+
+# a missing, broken or out-of-range state starts the cycle over and says so; it never raises
+for bad in ("not json", json.dumps({"next": 9, "fails": 0}), json.dumps({"next": 1, "fails": "x"}),
+            json.dumps({"next": True, "fails": 0}), json.dumps([1, 2]), json.dumps({"next": 1, "fails": -4})):
+    CYCLE.write_text(bad)
+    code, _out = run_step()
+    assert steps == ["patrol"] and code == 0 and "처음부터" in _out, (bad, steps, code, _out)
+
+# a state that cannot be written stops the step (it would run the same step for ever), and says why
+CYCLE.unlink()
+CYCLE.mkdir()
+code, _out = run_step()
+assert code == 1 and steps == [] and "sweep-cycle.json" in _out, (code, steps, _out)
+CYCLE.rmdir()
+
+# another tick holds the lock (the old LaunchAgent): a skip with its own exit code, never a success, state untouched
+CYCLE.write_text(json.dumps({"next": 2, "fails": 0}))
+assert sweep.SKIP_RC not in (0, 1, 2, 4)
+holder = subprocess.Popen([sys.executable, "-c",
+                           "import sys; sys.path.insert(0, sys.argv[1]); import sweep\n"
+                           "with sweep.file_lock('sweep-tick.lock') as got:\n"
+                           "    print('held' if got else 'busy', flush=True); sys.stdin.readline()", str(HERE)],
+                          stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=os.environ)
+assert holder.stdout.readline().strip() == "held"
+code, _out = run_step()
+assert code == sweep.SKIP_RC and steps == [] and "건너뜀" in _out, (code, steps, _out)
+assert json.loads(CYCLE.read_text()) == {"next": 2, "fails": 0}
+holder.communicate("\n")
+
+# a step that runs past its budget is ended and fails (exit 4); the next call retries it
+saved_budget = sweep.RUN_BUDGET_S
+sweep.RUN_BUDGET_S = 1
+CYCLE.write_text(json.dumps({"next": 1, "fails": 0}))
+saved_shadow = sweep.run_shadow
+sweep.run_shadow = lambda *a, **k: time.sleep(5)
+try:
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        code = sweep.tick(step=True)
+finally:
+    sweep.run_shadow, sweep.RUN_BUDGET_S = saved_shadow, saved_budget
+signal.alarm(0)
+assert code == 4, code
+assert json.loads(CYCLE.read_text())["next"] == 1 and json.loads(CYCLE.read_text())["fails"] == 1
+
+# the numbers: every step fits under one budget, the budget under Orca's 600 s precheck with the runner's 20 s margin,
+# and the cycle works with the patrol rules (a round is due after 25 min; shadow and real want one under an hour old)
+import patrol as _patrol  # noqa: E402  (skills/orchestrate/scripts, on the path through reap)
+assert sweep.STEP_BUDGET_S <= 550
+assert max(sweep.PATROL_WAIT_S, sweep.RUN_BUDGET_S, sweep.STEP_TIMEOUT_S) <= sweep.STEP_BUDGET_S
+assert sweep.STEP_BUDGET_S + 20 <= 600
+assert sweep.CYCLE_S == len(sweep.STEPS) * sweep.STEP_PERIOD_S == 2400
+assert _patrol.DUE_S < sweep.CYCLE_S, "patrol runs once per cycle, so a round is always due then"
+assert (len(sweep.STEPS) - 1) * sweep.STEP_PERIOD_S < sweep.FRESH_S, "real runs inside the hour a round stays usable"
+# the owner file's interval (the old cleaner takes a rule back after three of them) is never shorter than a cycle
+assert sweep.owner_interval() == max(sweep.interval(), sweep.CYCLE_S)
 
 # the CLI: own and release go through main, an unknown rule is refused with the list
 for f in ("sweep-owner.json",):
