@@ -319,6 +319,24 @@ r = subprocess.run([sys.executable, str(driver)], capture_output=True, text=True
 assert r.returncode == 0 and "BUFFERED" not in r.stdout and "buffered one" not in r.stdout, r
 assert json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny", r
 
+# a writer the module keeps for itself (its own buffer on descriptor 1) flushes at exit into nothing, not after the deny
+fake("fake_ownwriter", """
+    import io
+    _w = io.open(1, "w", closefd=False)
+    def run(event):
+        _w.write("OWN BUFFER NOISE")
+        return {"systemMessage": "from the own-writer one"}
+""")
+driver.write_text(textwrap.dedent(f"""
+    import sys
+    sys.path[:0] = [{str(HERE)!r}, {str(FAKES)!r}]
+    import dispatch
+    dispatch.run_event({EV!r}, [("fake_deny", None, 1), ("fake_ownwriter", None, 1)], grace=1)
+"""))
+r = subprocess.run([sys.executable, str(driver)], capture_output=True, text=True, timeout=30)
+assert r.returncode == 0 and "NOISE" not in r.stdout and r.stdout.count("\n") == 1, r
+assert json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny", r
+
 # ---- a legacy child whose descendant keeps the pipe open neither holds the wait nor hides the next child's deny
 fake("fake_heir", """
     import subprocess, sys, time

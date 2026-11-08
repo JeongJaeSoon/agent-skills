@@ -283,6 +283,11 @@ def run_event(event, entries=None, grace=3):
         return
     # A module runs with descriptor 1 pointed elsewhere, so the output goes through a copy of the real one.
     results, lock, printed, real = [], threading.Lock(), [], os.dup(1)
+    # Descriptor 1 stays on /dev/null for the rest of the process: a buffer a module kept for itself, or one of C stdio,
+    # flushes at exit into nothing instead of after the answer.
+    null = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(null, 1)
+    os.close(null)
 
     def emit(final):
         with lock:
