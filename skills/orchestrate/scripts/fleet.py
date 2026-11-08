@@ -3089,7 +3089,18 @@ def inbox_add(kind, title, session=None, url=None, command=None, key=None, sourc
 
 
 def inbox_resolve(key):
-    row = {"v": 1, "op": "resolve", "key": key, "at": iso(utcnow())}
+    """Close an inbox item. A key read from the source (patrol finding, queue entry) has no inbox line to resolve: it is
+    closed the way the page closes it, by a done closure that patrol_items and pressure_items already honour."""
+    at = iso(utcnow())
+    if str(key).startswith(READ_FROM_SOURCE):
+        import store as db_store
+        if not source_item_alive(key):
+            raise ValueError(f"{key}: the source holds no such item, so nothing was closed")
+        with db_store.tx() as db:
+            db_store.close_unit(db, {"id": f"ext:{key}", "ts": at, "by": "owner", "rule": "manual",
+                                     "evidence": "orch-dash inbox resolve", "label": key})
+        return {"v": 1, "op": "resolve", "key": key, "at": at, "closed": "source"}
+    row = {"v": 1, "op": "resolve", "key": key, "at": at}
     append_line(state_dir() / "inbox-external.jsonl", row)
     return row
 

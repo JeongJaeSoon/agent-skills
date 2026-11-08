@@ -2814,11 +2814,18 @@ def cmd_inbox(argv):
         row = fleet.inbox_add(kind, title, prog.opt(argv, "--session"), prog.opt(argv, "--url"),
                               prog.opt(argv, "--command"), prog.opt(argv, "--key"))
     elif argv[:1] == ["resolve"] and prog.opt(argv, "--key"):
-        row = fleet.inbox_resolve(prog.opt(argv, "--key"))
+        try:
+            row = fleet.inbox_resolve(prog.opt(argv, "--key"))
+        except ValueError as e:
+            sys.exit(str(e))
     elif argv[:1] == ["list"]:
         import store as db_store
         # The machine-wait items are not external_items(): the dashboard builds them from the queue, as here.
-        for i in fleet.external_items() + fleet.pressure_items(db_store.ext_closures(), {}):  # a scratch memory: listing dismisses nothing
+        # A copy of the page's memory, so what it dismissed stays hidden here and listing dismisses nothing.
+        mem = copy.deepcopy(fleet.read_json(fleet.state_dir() / "memory.json", {}) or {})
+        for i in fleet.external_items() + fleet.pressure_items(db_store.ext_closures(), mem):
+            if i["key"] in mem["dismissed"]:
+                continue
             print(f"{i['at']}  {i['type']}  {i['key'][4:]}  {i['title']}")
         return
     else:
