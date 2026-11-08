@@ -70,34 +70,67 @@ UPLOAD_JS = r"""
 const task = await taskSpace(INPUT.space);
 const page = task.page("p1");
 await page.goto(INPUT.prUrl);
-await page.waitForSelector("#fc-new_comment_field", { state: "attached", timeout: 30000 });
-// GitHub restores an unsent draft into this box; never overwrite or clear someone's text.
-const draft = await page.evaluate(() => document.querySelector("#new_comment_field")?.value ?? "");
+// Two comment UIs exist. The old one has a hidden file input (#fc-new_comment_field); the new one has
+// only a "click to add files" button that opens a file chooser, and a textarea with a generated id.
+const OLD = { box: "#new_comment_field", input: "#fc-new_comment_field" };
+const NEW = { box: 'textarea[aria-label="Markdown value"]', button: 'button:has-text("click to add files")' };
+const present = (sel) => page.evaluate((s) => !!document.querySelector(s), sel);
+let ui = null;
+for (let i = 0; i < 30 && !ui; i++) {
+  if (await present(OLD.input)) ui = "old";
+  else if ((await present(NEW.box)) && (await page.evaluate(() => [...document.querySelectorAll("button")].some((b) => /click to add files/.test(b.textContent))))) ui = "new";
+  if (!ui) await page.waitForTimeout(1000);
+}
+const box = ui === "old" ? OLD.box : NEW.box;
+const read = () => page.evaluate((s) => document.querySelector(s)?.value ?? "", box);
+// The new UI writes ![Image](url) whatever the file is called, so shots are keyed by upload order, not alt.
+const assetUrls = (text) => [...text.matchAll(/https:\/\/github\.com\/user-attachments\/assets\/[^"')\s>]+/g)].map((m) => m[0]);
+const draft = ui ? await read() : "";
 let value = "", failed = 0;
-if (draft !== "") {
+const urls = {};
+if (!ui || draft !== "") {
   await task.finish({ keep: [] });
-  console.log("SHOTS_RESULT " + JSON.stringify({ draft: true }));
+  console.log("SHOTS_RESULT " + JSON.stringify(ui ? { draft: true } : { noBox: true }));
 } else {
   try {
     // Attaching to the new-comment box uploads each file and writes its markdown into the box.
     // The comment itself is never submitted; only the asset URLs are kept.
-    await page.setInputFiles("#fc-new_comment_field", INPUT.files);
-    for (let i = 0; i < INPUT.polls; i++) {
-      await page.waitForTimeout(2000);
-      ({ value, failed } = await page.evaluate(() => ({
-        value: document.querySelector("#new_comment_field")?.value ?? "",
-        failed: document.querySelectorAll(".js-upload-markdown-image.is-failed").length,
-      })));
-      const done = (value.match(/user-attachments\/assets\//g) || []).length;
-      if (failed > 0 || (done >= INPUT.files.length && !/Uploading/.test(value))) break;
+    if (ui === "old") {
+      await page.setInputFiles(OLD.input, INPUT.files);
+      for (let i = 0; i < INPUT.polls; i++) {
+        await page.waitForTimeout(2000);
+        ({ value, failed } = await page.evaluate(() => ({
+          value: document.querySelector("#new_comment_field")?.value ?? "",
+          failed: document.querySelectorAll(".js-upload-markdown-image.is-failed").length,
+        })));
+        const done = assetUrls(value).length;
+        if (failed > 0 || (done >= INPUT.files.length && !/Uploading/.test(value))) break;
+      }
+      for (const m of value.matchAll(/<img[^>]*alt="([^"]+)"[^>]*src="(https:\/\/github\.com\/user-attachments\/assets\/[^"]+)"/g)) urls[m[1].replace(/\.(png|jpe?g|gif|webp)$/i, "")] = m[2];
+      for (const m of value.matchAll(/!\[([^\]]*)\]\((https:\/\/github\.com\/user-attachments\/assets\/[^)\s]+)\)/g)) urls[m[1].replace(/\.(png|jpe?g|gif|webp)$/i, "")] = m[2];
+    } else {
+      // One file per chooser, so the URL that appears belongs to that file.
+      for (let n = 0; n < INPUT.files.length; n++) {
+        let got = false;
+        const seen = new Set(assetUrls(await read()));
+        const chooserPromise = page.waitForFileChooser({ timeout: 15000 });
+        await page.click(NEW.button);
+        const chooser = await chooserPromise;
+        await chooser.setFiles(INPUT.files[n]);
+        for (let i = 0; i < INPUT.polls; i++) {
+          await page.waitForTimeout(2000);
+          value = await read();
+          const fresh = assetUrls(value).find((u) => !seen.has(u));
+          if (fresh && !/Uploading/.test(value)) { urls[INPUT.stems[n]] = fresh; got = true; break; }
+        }
+        // A late URL from this file would be taken for the next one's, so stop here.
+        if (!got) break;
+      }
     }
   } finally {
-    await page.fill("#new_comment_field", "");
+    await page.fill(box, "");
   }
-  const urls = {};
-  for (const m of value.matchAll(/<img[^>]*alt="([^"]+)"[^>]*src="(https:\/\/github\.com\/user-attachments\/assets\/[^"]+)"/g)) urls[m[1].replace(/\.(png|jpe?g|gif|webp)$/i, "")] = m[2];
-  for (const m of value.matchAll(/!\[([^\]]*)\]\((https:\/\/github\.com\/user-attachments\/assets\/[^)\s]+)\)/g)) urls[m[1].replace(/\.(png|jpe?g|gif|webp)$/i, "")] = m[2];
-  const cleared = (await page.evaluate(() => document.querySelector("#new_comment_field")?.value ?? "")) === "";
+  const cleared = (await read()) === "";
   await task.finish({ keep: [] });
   console.log("SHOTS_RESULT " + JSON.stringify({ urls, failed, cleared }));
 }
@@ -167,8 +200,10 @@ def upload(a):
     res = run_browser(UPLOAD_JS, {
         "space": f"visual-evidence upload {a.repo} {a.pr}",
         "prUrl": f"https://github.com/{a.repo}/pull/{a.pr}",
-        "files": [str(f) for f in files], "polls": a.polls,
+        "files": [str(f) for f in files], "stems": stems, "polls": a.polls,
     })
+    if res.get("noBox"):
+        sys.exit("no comment box on the PR page: not signed in to GitHub, or its comment UI changed again")
     if res.get("draft"):
         sys.exit("the PR's comment box holds an unsent draft: post or clear it in the browser, then rerun")
     urls = {s: res["urls"].get(s) for s in stems}
@@ -206,17 +241,11 @@ def register(directory, repo, pr):
     return proc.returncode == 0
 
 
-def gh(*args):
-    proc = subprocess.run(["gh", *args], capture_output=True, text=True)
-    if proc.returncode:
-        sys.exit(f"gh {' '.join(args[:2])} failed: {proc.stderr.strip()[:200]}")
-    return proc.stdout
-
-
 def head_status(url):
     """Return (HTTP status, content type); status 0 means the request itself failed."""
+    # GET, not HEAD: GitHub redirects to a storage URL signed for GET, which answers a HEAD with 403.
     try:
-        with urllib.request.urlopen(urllib.request.Request(url, method="HEAD"), timeout=15) as r:
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"Range": "bytes=0-0"}), timeout=15) as r:
             return r.status, r.headers.get("Content-Type", "")
     except urllib.error.HTTPError as e:
         return e.code, ""
@@ -228,21 +257,30 @@ def check(a):
     if not re.fullmatch(r"[\w.-]+/[\w.-]+", a.repo):
         sys.exit(f"--repo must be owner/repo: {a.repo!r}")
     urls = json.loads(pathlib.Path(a.urls).read_text())
-    bodies = gh("api", "--paginate", f"repos/{a.repo}/issues/{a.pr}/comments", "--jq", ".[].body")
-    private = gh("api", f"repos/{a.repo}", "--jq", ".private").strip() == "true"
+    proc = subprocess.run(["gh", "api", "--paginate", f"repos/{a.repo}/issues/{a.pr}/comments", "--jq", ".[].body"],
+                          capture_output=True, text=True)
+    # Unreadable comments (a token without access) cannot show whether the image was posted.
+    bodies = proc.stdout if proc.returncode == 0 else None
+    # A token without access to a private repo gets 403/404 here too; that is "unknown", not a crash.
+    proc = subprocess.run(["gh", "api", f"repos/{a.repo}", "--jq", ".private"], capture_output=True, text=True)
+    private = proc.stdout.strip() == "true" if proc.returncode == 0 else None
     verdicts = set()
     for name, url in urls.items():
         if not url:
             verdict, why = "NOT VERIFIED", "no URL; upload it first"
+        elif bodies is None:
+            verdict, why = "INCONCLUSIVE", "cannot read the PR comments with this gh login"
         elif not re.search(r"(?<![\w/%~=&?#:.-])" + re.escape(url) + r"(?![\w/%~-]|\.[\w/%~-])", bodies):
             # A bare substring test would count .../abc as posted when only .../abcdef is.
             verdict, why = "NOT VERIFIED", "no PR comment references it, so GitHub answers 404"
         else:
             status, ctype = head_status(url)
-            if status == 200 and ctype.startswith("image/"):
+            if status in (200, 206) and ctype.startswith("image/"):
                 verdict, why = "VERIFIED", ctype
             elif private and status in (0, 401, 403, 404):
                 verdict, why = "INCONCLUSIVE", f"private repo: HTTP {status} without a signed-in session"
+            elif private is None and status in (401, 403):
+                verdict, why = "INCONCLUSIVE", f"visibility unknown: HTTP {status}, gh cannot read the repo"
             else:
                 verdict, why = "NOT VERIFIED", f"HTTP {status} {ctype}".strip()
         print(f"{verdict}  {name}: {why}")

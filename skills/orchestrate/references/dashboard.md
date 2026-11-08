@@ -350,8 +350,8 @@ Everything collected passes through one masking step before it is written or sho
 ```sh
 orch-dash fleet                          # one collect, prints a summary
 orch-dash inbox add --type login --title "Log in to the registry" [--session <worktree id>] [--url URL] [--command CMD] [--key KEY]
-orch-dash inbox resolve --key KEY
-orch-dash inbox list                     # added items not resolved, oldest first
+orch-dash inbox resolve --key KEY        # a patrol:/pressure:queue: key is closed like the page's done button; a key the source no longer holds is refused
+orch-dash inbox list                     # open items, oldest first; what the page dismissed or closed is not listed
 orch-dash adopt [--apply] [--undo all|<worktree id>]
 ```
 

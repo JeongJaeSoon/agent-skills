@@ -157,19 +157,31 @@ const box = { value: process.env.FAKE_DRAFT || "" };
 globalThis.window = { innerWidth: 0 };
 globalThis.document = {
   documentElement: { scrollWidth: 390, scrollHeight: 2400 },
-  querySelector: () => box,
-  querySelectorAll: () => [],
+  // FAKE_UI picks the comment UI: "old" (hidden file input), "new" (button + file chooser) or "none".
+  querySelector: (sel) => {
+    const ui = process.env.FAKE_UI || "old";
+    if (ui === "old" && (sel === "#fc-new_comment_field" || sel === "#new_comment_field")) return box;
+    if (ui === "new" && sel === 'textarea[aria-label="Markdown value"]') return box;
+    return null;
+  },
+  querySelectorAll: (sel) => (sel === "button" && process.env.FAKE_UI === "new" ? [{ textContent: "Paste, drop, or click to add files" }] : []),
 };
 const page = {
   goto: async (u) => log(["goto", u]),
   waitForSelector: async () => {},
   waitForTimeout: async () => {},
-  evaluate: async (fn) => fn(),
+  evaluate: async (fn, arg) => fn(arg),
   fill: async (s, v) => { log(["fill", v]); box.value = v; },
   setInputFiles: async (s, files) => {
     log(["setInputFiles", files.length]);
     box.value = files.map((f) => { const n = f.split("/").pop().replace(/\.png$/, ""); return `<img width="1" alt="${n}" src="https://github.com/user-attachments/assets/${n}">`; }).join("\n");
   },
+  click: async (s) => log(["click", s]),
+  waitForFileChooser: async () => ({
+    // The new UI writes alt "Image" for every file, whatever it is called.
+    // FAKE_SLOW: the first upload has not finished when the poll ends and lands with the next one.
+    setFiles: async (f) => { log(["setFiles", f]); if (process.env.FAKE_SLOW && !box.late) { box.late = true; return; } box.value += `![Image](https://github.com/user-attachments/assets/${f.split("/").pop().replace(/\.png$/, "")})\n`; },
+  }),
   cdp: async (m, p) => {
     log(["cdp", m, p]);
     if (m === "Emulation.setDeviceMetricsOverride") window.innerWidth = p.width;
@@ -206,6 +218,30 @@ r = run("upload", "--repo", "acme/app", "--pr", "1", "--out", str(tmp / "u.json"
 assert r.returncode == 0 and "uploaded 2 of 2" in r.stdout and "draft cleared True" in r.stdout, (r.stdout, r.stderr)
 assert ["setInputFiles", 2] in calls()
 
+# New comment UI: no file input, a button opens a file chooser, one file per chooser, keyed by stem.
+env["FAKE_UI"] = "new"
+r = run("upload", "--repo", "acme/app", "--pr", "1", "--out", str(tmp / "u.json"), str(img), str(other))
+assert r.returncode == 0 and "uploaded 2 of 2" in r.stdout and "draft cleared True" in r.stdout, (r.stdout, r.stderr)
+assert json.loads((tmp / "u.json").read_text()) == {"card-1440-light": U + "card-1440-light", "card-390-dark": U + "card-390-dark"}
+c = calls()
+assert [x[0] for x in c if x[0] in ("click", "setFiles", "setInputFiles")] == ["click", "setFiles", "click", "setFiles"], c
+assert ["fill", ""] in c
+env["FAKE_SLOW"] = "1"
+r = run("upload", "--repo", "acme/app", "--pr", "1", "--out", str(tmp / "u.json"), "--polls", "1", str(img), str(other))
+c = calls()
+assert [x[0] for x in c if x[0] in ("click", "setFiles")] == ["click", "setFiles"], c
+assert r.returncode == 1 and "missing: card-1440-light" in r.stderr and "missing: card-390-dark" in r.stderr, (r.stdout, r.stderr)
+del env["FAKE_SLOW"]
+env["FAKE_UI"] = "none"
+r = run("upload", "--repo", "acme/app", "--pr", "1", "--out", str(tmp / "u.json"), str(img))
+assert r.returncode != 0 and "no comment box" in r.stderr, r.stderr
+assert not any(x[0] in ("fill", "click") for x in calls())
+env["FAKE_UI"] = "new"
+env["FAKE_DRAFT"] = "half-written review"
+r = run("upload", "--repo", "acme/app", "--pr", "1", "--out", str(tmp / "u.json"), str(img))
+assert r.returncode != 0 and "unsent draft" in r.stderr, r.stderr
+assert not any(x[0] in ("fill", "click") for x in calls())
+del env["FAKE_UI"]
 env["FAKE_DRAFT"] = "half-written review"
 r = run("upload", "--repo", "acme/app", "--pr", "1", "--out", str(tmp / "u.json"), str(img))
 assert r.returncode != 0 and "unsent draft" in r.stderr, r.stderr
@@ -248,11 +284,30 @@ import http.server, threading
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
-    def do_HEAD(self):
-        status, ctype = {"/ok": (200, "image/png"), "/page": (200, "text/html")}.get(self.path, (404, "text/plain"))
+    def reply(self):
+        status, ctype = {"/ok": (200, "image/png"), "/page": (200, "text/html"),
+                         "/forbidden": (403, "text/plain")}.get(self.path, (404, "text/plain"))
+        if self.path == "/redirect":
+            # GitHub redirects to a URL pre-signed for GET only: S3 answers 403 to a HEAD.
+            self.send_response(302)
+            self.send_header("Location", "/signed")
+            self.end_headers()
+            return False
+        if self.path == "/signed":
+            status, ctype = (200, "image/png") if self.command == "GET" else (403, "application/xml")
+        if status == 200 and self.headers.get("Range"):
+            status = 206
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.end_headers()
+        return True
+
+    def do_HEAD(self):
+        self.reply()
+
+    def do_GET(self):
+        if self.reply():
+            self.wfile.write(b"x")
 
     def log_message(self, *args):
         pass
@@ -266,8 +321,8 @@ bindir.mkdir()
 gh = bindir / "gh"
 gh.write_text("""#!/bin/sh
 case "$*" in
-  *issues/*/comments*) cat "$FAKE_GH_BODIES" ;;
-  *"--jq .private"*) echo "$FAKE_GH_PRIVATE" ;;
+  *issues/*/comments*) [ "$FAKE_GH_COMMENTS" = ERR ] && { echo "gh: HTTP 404" >&2; exit 1; }; cat "$FAKE_GH_BODIES" ;;
+  *"--jq .private"*) [ "$FAKE_GH_PRIVATE" = ERR ] && { echo "gh: HTTP 403" >&2; exit 1; }; echo "$FAKE_GH_PRIVATE" ;;
   *) echo "unexpected: $*" >&2; exit 1 ;;
 esac
 """)
@@ -287,7 +342,7 @@ good, html, gone = base + "/ok", base + "/page", base + "/gone"
 r = check_run({"a-390-dark": good}, [f'<img src="{good}">'], private=False)
 assert r.returncode == 0 and "VERIFIED  a-390-dark: image/png" in r.stdout, (r.stdout, r.stderr)
 r = check_run({"a": html}, [html], private=False)
-assert r.returncode == 1 and "NOT VERIFIED  a: HTTP 200 text/html" in r.stdout, r.stdout
+assert r.returncode == 1 and "NOT VERIFIED  a: HTTP 206 text/html" in r.stdout, r.stdout
 # A URL that is only the start of a longer posted one is not posted.
 r = check_run({"a": good}, [f'<img src="{good}def">'], private=False)
 assert r.returncode == 1 and "no PR comment references it" in r.stdout, r.stdout
@@ -309,6 +364,29 @@ r = check_run({"a": gone}, [gone], private=True)
 assert r.returncode == 2 and r.stdout.startswith("INCONCLUSIVE  a: private repo"), (r.returncode, r.stdout)
 r = check_run({"a": gone, "b": good}, [gone], private=True)
 assert r.returncode == 1 and "INCONCLUSIVE  a" in r.stdout and "NOT VERIFIED  b" in r.stdout, r.stdout
+redirect = base + "/redirect"
+r = check_run({"a": redirect}, [redirect], private=False)
+assert r.returncode == 0 and "VERIFIED  a: image/png" in r.stdout, (r.returncode, r.stdout)
+forbidden = base + "/forbidden"
+r = check_run({"a": forbidden}, [forbidden], private=True)
+assert r.returncode == 2 and r.stdout.startswith("INCONCLUSIVE  a: private repo: HTTP 403"), (r.returncode, r.stdout)
+# The same 403 on a public repo is a real failure.
+r = check_run({"a": forbidden}, [forbidden], private=False)
+assert r.returncode == 1 and "NOT VERIFIED  a: HTTP 403" in r.stdout, r.stdout
+# When gh cannot read the repo's visibility (a token without access answers 403/404), a 401/403 image
+# is still INCONCLUSIVE rather than a verdict on the image.
+env["FAKE_GH_PRIVATE"] = "ERR"
+(tmp / "c.json").write_text(json.dumps({"a": forbidden}))
+(tmp / "bodies.txt").write_text(forbidden + "\n")
+r = run("check", str(tmp / "c.json"), "--repo", "acme/app", "--pr", "1")
+assert r.returncode == 2 and "INCONCLUSIVE  a: visibility unknown: HTTP 403" in r.stdout, (r.returncode, r.stdout, r.stderr)
+# A token that cannot read a private repo's comments gets 404 there too: inconclusive, not a crash.
+env["FAKE_GH_COMMENTS"] = "ERR"
+r = check_run({"a": good, "b": None}, [], private=True)
+assert r.returncode == 1 and "INCONCLUSIVE  a: cannot read the PR comments" in r.stdout and "NOT VERIFIED  b" in r.stdout, (r.returncode, r.stdout, r.stderr)
+r = check_run({"a": good}, [], private=True)
+assert r.returncode == 2 and "INCONCLUSIVE  a: cannot read" in r.stdout, (r.returncode, r.stdout, r.stderr)
+del env["FAKE_GH_COMMENTS"]
 server.shutdown()
 
 print("test_shots: ok")
