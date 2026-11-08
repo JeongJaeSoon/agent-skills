@@ -207,7 +207,7 @@ def open_if_spans(text, region):
             continue
         if m[1] == "if":
             stack.append([at, False])
-        elif m[1] in ("elif", "else") and stack:
+        elif m[1] == "else" and stack:  # an `elif` chain without a final else can still run no branch
             stack[-1][1] = True
         elif m[1] == "fi" and stack:
             start, has_else = stack.pop()

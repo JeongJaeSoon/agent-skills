@@ -200,6 +200,8 @@ def run(args):
     try:
         check_store(target)
         while True:
+            if time.monotonic() >= deadline:  # a subscriber resumed late gets no result either
+                raise TimeoutError
             st = read_state(target)  # one read: the verdict and the report must describe the same result
             rc = verdict(st, args.head)
             if rc is not None:

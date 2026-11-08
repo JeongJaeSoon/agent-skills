@@ -203,6 +203,15 @@ class Units(unittest.TestCase):
             with self.assertRaises(TimeoutError):
                 ci_wait.gh(["run", "view", "1"], 1.0)  # the call returned at t=5 s, past the deadline at t=1 s
 
+    def test_late_subscriber_gets_no_result(self):
+        import ci_wait
+        from unittest import mock
+        args = ci_wait.argparse.Namespace(target=TARGET, repo=None, deadline_min=1 / 60, interval=0, head=None)
+        fresh = {"state": "done", "result": "success", "head": "a" * 40, "polled_at": time.time(), "summary": "x"}
+        with mock.patch.object(ci_wait, "check_store"), mock.patch.object(ci_wait, "read_state", return_value=fresh), \
+                mock.patch.object(ci_wait.time, "monotonic", side_effect=[0.0, 5.0]):
+            self.assertEqual(ci_wait.run(args), 3)  # resumed at t=5 s with a 1 s deadline: success is not returned
+
     def test_lock_file_is_guards(self):
         import ci_wait, guard
         self.assertEqual(ci_wait.lock_path("run:99"), guard.lock_file("other", "ci-wait:run:99"))

@@ -315,7 +315,8 @@ for cmd in ("until gh run view 1 | grep -q completed; do :; done",
             "while true; do gh run view 1; if true; then sleep 1; else sleep 100; fi; done"):
     assert ci_warns(cmd), cmd
 for cmd in ("while true; do gh run view 1; if false; then sleep 60; fi; done",
-            "for ((;;)); do gh run view 1; done"):
+            "for ((;;)); do gh run view 1; done",
+            "while true; do gh run view 1; if false; then sleep 60; elif false; then sleep 60; fi; done"):
     assert ci_warns(cmd), cmd
 for cmd in ("for i in 1 2; do gh run view $i; done", "while true; do gh run view 1; sleep 60; done",
             "while true; do if gh run view 1 | grep -q x; then break; fi; sleep 60; done",
