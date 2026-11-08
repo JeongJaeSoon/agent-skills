@@ -4977,7 +4977,7 @@ BOARD_SUBS = ("lead", "set", "annot-migrate", "drop", "priority", "doing", "late
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] not in COMMANDS and sys.argv[1] not in ("-h", "--help"):
-        hint = f"; did you mean `orch board {' '.join(sys.argv[1:])}`?" if sys.argv[1] in BOARD_SUBS else ""
+        hint = f"; did you mean `orch board {shlex.join(sys.argv[1:])}`?" if sys.argv[1] in BOARD_SUBS else ""
         sys.exit(f"unknown command '{sys.argv[1]}'{hint}\nRun `orch --help` for the command list.")
     if len(sys.argv) < 3 -(sys.argv[1:2] in (["watch-cards"], ["patrol"], ["inbox"], ["migrate"], ["doctor"])) or sys.argv[1] not in COMMANDS or sys.argv[1] not in ("watch-cards", "patrol") and {"-h", "--help"} & set(sys.argv[2:(sys.argv + ["--"]).index("--")]):
         sys.exit(__doc__)

@@ -1660,12 +1660,15 @@ assert _r.stderr.startswith("unknown command 'later'"), _r.stderr
 assert "orch board later add" in _r.stderr, _r.stderr
 assert len(_r.stderr.splitlines()) <= 3, _r.stderr
 assert _tree() == _before, "an unknown command wrote a file"
+_r = _orch("later", "add", "fix auth", "--trigger", "when ready")
+assert "orch board later add 'fix auth' --trigger 'when ready'" in _r.stderr, _r.stderr  # the hint must paste back as typed
 for _sub in ("todo", "doing", "lead", "priority", "drop"):
     assert f"orch board {_sub}" in _orch(_sub, "x", "y").stderr, _sub
 # A typo is not a board subcommand: no hint. `set` is a top-level command, so it is never hinted.
 _r = _orch("lter", "add", "x")
 assert _r.returncode != 0 and _r.stderr.startswith("unknown command 'lter'") and "board" not in _r.stderr, _r.stderr
-assert "unknown command" not in _orch("set", "x").stderr
+_r = _orch("set", "x")
+assert "unknown command" not in _r.stderr and "did you mean" not in _r.stderr and "Traceback" not in _r.stderr, _r.stderr
 # No argument, -h and --help keep printing the whole usage.
 for _argv in ((), ("-h",), ("--help",)):
     _r = _orch(*_argv)
