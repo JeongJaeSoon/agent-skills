@@ -358,6 +358,11 @@ try:
     assert size <= 600 + 200 and ts[-1] == base + 7 * 86400 + 10 * 180 and ts[0] > base, (size, ts)
 finally:
     p.HISTORY_MAX_BYTES = orig_max
+# A non-numeric metric is stored as null, so one corrupt value cannot outgrow the cap.
+hist.unlink(missing_ok=True)
+p.history_add({"t": base, "level": "ok", "metrics": {"load_per_cpu": "x" * 5_000_000, "swap_gb": 1.5}}, 0)
+row = p.history_read()[0]
+assert row["load_per_cpu"] is None and row["swap_gb"] == 1.5 and hist.stat().st_size < 1000
 assert rep["load_idle_pct"] == cfg["load_idle_pct"] and rep["thresholds"]["disk_free_gb"] == [50, 20]
 
 # Turns in progress, from the shape `orca worktree ps --json` gives (names and paths replaced). Orca keeps an agent at

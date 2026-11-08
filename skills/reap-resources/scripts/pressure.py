@@ -591,7 +591,8 @@ def history_add(record, queued, path=None):
     """Append this round's point. Only a round writes, under pressure.lock, so the rewrite races no other writer."""
     path = path or HISTORY
     row = {"t": record["t"], "level": record["level"], "queued": queued,
-           **{k: record["metrics"].get(k) for k in HISTORY_FIELDS}}
+           # Only numbers are charted; anything else (a corrupt metric) must not let one row outgrow the byte cap.
+           **{k: v if isinstance(v := record["metrics"].get(k), (int, float)) else None for k in HISTORY_FIELDS}}
     reap.STATE.mkdir(parents=True, exist_ok=True)
     with path.open("a") as f:
         f.write(json.dumps(row) + "\n")
