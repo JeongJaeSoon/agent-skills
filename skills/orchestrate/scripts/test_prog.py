@@ -1424,6 +1424,13 @@ prog.compare = fake_compare({**good, (S40, "main"): "diverged"})
 refused(S40, "not on main")
 prog.compare = fake_compare({(R1, S40): "ahead"})
 refused(S40, "could not be checked")
+def no_default(repo):
+    sys.exit("gh api … failed (1): HTTP 403")
+
+
+prog.default_branch = no_default
+prog.compare = fake_compare(good)
+refused(S40, "could not be checked")  # the base branch cannot be read: refuse with the reason, never a traceback
 prog.default_branch = lambda repo: "trunk"
 prog.compare = fake_compare(good)
 refused(S40, "could not be checked")  # `main` is not the repo's base; the commit is checked against the real one

@@ -2227,7 +2227,7 @@ def record_external_green(p, sha):
     except (SystemExit, ValueError, KeyError, TypeError, AttributeError) as e:
         if isinstance(e, SystemExit) and str(e.code).startswith(sha[:8]):
             raise
-        sys.exit(f"{sha[:8]} could not be checked against {base} ({e}); main_green stays refused")
+        sys.exit(f"{sha[:8]} could not be checked against the base branch ({e}); main_green stays refused")
     row = p.append_if("main_green", lambda evs: open_reds(evs) == reds, sha=sha, via="descendant", clears=reds,
                       note="descendant of the red landing; no landing of this program")
     if row is None:
