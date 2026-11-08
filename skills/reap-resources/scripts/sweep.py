@@ -831,7 +831,8 @@ def read_cycle():
         return 0, 0, None, None
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return 0, 0, None, f"sweep: {cycle_path().name} 을 읽지 못해 사이클을 처음부터 시작함"
-    if type(pos) is not int or type(fails) is not int or not 0 <= pos < len(STEPS) or not 0 <= fails < MAX_STEP_FAILS:
+    # fails == MAX_STEP_FAILS: the last allowed attempt was written and never finished (killed)
+    if type(pos) is not int or type(fails) is not int or not 0 <= pos < len(STEPS) or not 0 <= fails <= MAX_STEP_FAILS:
         return 0, 0, None, f"sweep: {cycle_path().name} 의 값이 맞지 않아 사이클을 처음부터 시작함"
     if not (isinstance(gave, dict) and gave.get("step") in STEPS and finite(gave.get("at"))
             and time.time() - gave["at"] < 86400):
@@ -847,6 +848,10 @@ def run_cycle_step():
     pos, fails, gave, note = read_cycle()
     if note:
         print(note, file=sys.stderr)
+    if fails >= MAX_STEP_FAILS:  # the step's last allowed attempt died before it could be recorded: give up on it now
+        gave = {"step": STEPS[pos], "at": time.time()}
+        print(f"sweep: {STEPS[pos]} 단계의 마지막 시도가 끝까지 기록되지 못해 다음 단계로 넘어감", file=sys.stderr)
+        pos, fails = (pos + 1) % len(STEPS), 0
     name, fails = STEPS[pos], fails + 1
     try:
         save_json(cycle_path(), {"next": pos, "fails": fails, "gave_up": gave})
@@ -924,7 +929,8 @@ def run_one(name):
     if res is None:
         return 4
     print(name, json.dumps({k: res.get(k) for k in ("round", "refused", "acts", "acted", "failed")}, ensure_ascii=False))
-    return res.get("code") or (1 if res.get("failed") else 0)
+    code = res.get("code") or (1 if res.get("failed") else 0)
+    return 1 if code == SKIP_RC else code  # a child's own exit 3 (reap-hard's lock) is a failure, not "tick lock held"
 
 
 def hard_pass():

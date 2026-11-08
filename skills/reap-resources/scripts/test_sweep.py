@@ -1204,6 +1204,32 @@ finally:
     sweep.run_shadow = saved_shadow
 assert seen and seen[0]["fails"] == 1 and seen[0]["next"] == 1, seen  # recorded before the step ran
 
+# the third attempt itself was killed (state says fails == MAX): the cycle gives up on that step and goes on, not over
+CYCLE.write_text(json.dumps({"next": 2, "fails": sweep.MAX_STEP_FAILS}))
+code, _out = run_step()
+assert steps == ["real"] and code == 0, (steps, code, _out)  # reap-hard (next=2) was skipped, the step after it ran
+assert "reap-hard" in _out and "건너뜀" not in _out and "처음부터" not in _out, _out
+
+# a child step that exits 3 (reap-hard's own lock) is a failure of the step, never the tick lock's skip code
+fail_steps.clear()
+assert sweep.run_one.__name__ == "run_one"
+saved_hard = sweep.hard_pass
+sweep.hard_pass = lambda: {"code": sweep.SKIP_RC}
+try:
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        assert sweep.run_one("reap-hard") == 1
+finally:
+    sweep.hard_pass = saved_hard
+
+# an ownership file written before the cycle existed (interval 600): the old cleaner still waits three CYCLES, not three
+# of its own intervals (30 min would be less than the 40 minutes between two real rounds)
+(STATE / "sweep-last.json").write_text(json.dumps({"t": time.time() - 45 * 60}))
+own_old = {"generation": 1, "rules": {"serve:dark": "sweep"}, "interval": 600}
+assert guard.old_acts("serve:dark", own_old)[0] is False, "a 45-minute-old good round is still the sweep's"
+(STATE / "sweep-last.json").write_text(json.dumps({"t": time.time() - 3 * sweep.CYCLE_S - 60}))
+assert guard.old_acts("serve:dark", own_old)[0] is True
+assert guard.SWEEP_CYCLE_S == sweep.CYCLE_S
+
 # a missing, broken or out-of-range state starts the cycle over and says so; it never raises
 for bad in ("not json", json.dumps({"next": 9, "fails": 0}), json.dumps({"next": 1, "fails": "x"}),
             json.dumps({"next": True, "fails": 0}), json.dumps([1, 2]), json.dumps({"next": 1, "fails": -4})):

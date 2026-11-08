@@ -43,6 +43,7 @@ HARD_RULE = {"card": "card:strict", "stack": "stack:gone", "listener": "proc:lis
              "container": "container:stopped", "volume": "volume:labeled"}
 FALLBACK_INTERVALS = 3
 DEFAULT_INTERVAL = 1800
+SWEEP_CYCLE_S = 2400  # one cycle of `sweep.py tick --step` (sweep.CYCLE_S, tested equal)
 
 
 def state():
@@ -157,7 +158,9 @@ def old_acts(rule_name, own=None, now=None):
     falls back to the old cleaner, with a note, while the sweep's last good round is too old."""
     if rule_name is None or own is None or (own.get("rules") or {}).get(rule_name) != "sweep":
         return True, None
-    interval = float(own.get("interval", DEFAULT_INTERVAL))
+    # The Orca automation runs the real round once per cycle, so a file written for a shorter interval (reap-hard's
+    # own 600 s setting) must not make the old cleaner take the rule back between two real rounds.
+    interval = max(float(own.get("interval", DEFAULT_INTERVAL)), SWEEP_CYCLE_S)
     path = state() / "sweep-last.json"
     try:
         last = json.loads(path.read_text())["t"]
