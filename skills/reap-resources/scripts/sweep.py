@@ -845,6 +845,16 @@ def read_cycle():
     return pos, fails, gave, None
 
 
+def reset_cycle():
+    """Forget the cycle position (the job was turned back on after a pause: the next step is patrol, not an old shadow
+    or real round). Under the tick lock so a step in progress does not write the file back; False when it is held."""
+    with file_lock("sweep-tick.lock") as got:
+        if got:
+            with contextlib.suppress(OSError):
+                cycle_path().unlink(missing_ok=True)
+        return got
+
+
 def save_cycle(pos, fails, gave):
     save_json(cycle_path(), {"next": pos, "fails": fails, "gave_up": gave, "at": time.time()})
 

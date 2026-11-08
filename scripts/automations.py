@@ -218,8 +218,10 @@ class ShellJob(OrcaJob):
     records how it ended and exits 1, so Orca skips the agent every time. A job that needs no model must not start one."""
 
     def __init__(self, name, what, argv, interval, default, ok=(0,), turned_off=None, clear_off=None, gate=None,
-                 prepare=None, timeout=SHELL_TIMEOUT_S, skip=()):
+                 prepare=None, timeout=SHELL_TIMEOUT_S, skip=(), reset=None):
         self.skip = skip  # exits that mean "another run holds the job" (orca_job.py --skip)
+        self.reset = reset  # () -> None, run when the job is turned on after being off
+        self.was_on = True
         self.name, self.job_name, self.what, self.default = name, f"agent-skills {name}", what, default
         self.argv, self.interval, self.ok, self.turned_off, self.clear_off = argv, interval, ok, turned_off, clear_off
         self.gate = gate  # () -> why this PC must not get the job yet, or None; checked only while it is unregistered
@@ -247,6 +249,8 @@ class ShellJob(OrcaJob):
         code, msg = self.enable_job(here)
         if not code and self.clear_off:
             self.clear_off()
+        if not code and self.reset and not self.was_on:
+            self.reset()  # turned back on after a pause (or registered now): its saved position is stale
         return code, msg
 
     def want(self):
@@ -295,6 +299,7 @@ class ShellJob(OrcaJob):
         a, err = self.find()
         if a is None:
             return 1, err
+        self.was_on = bool(a) and bool(a.get("enabled"))  # for `reset`: a job that was running keeps its position
         if not a:
             refusal = worktree_refusal()  # --here never applies: the job points at this checkout's files
             if refusal:
@@ -394,6 +399,11 @@ def sweep_interval():
     return sweep.STEP_PERIOD_S  # a step every 10 minutes: a full cycle of the four steps is 40
 
 
+def sweep_reset_cycle():
+    import sweep
+    sweep.reset_cycle()
+
+
 def sweep_protect_problem():
     """Why a tick would stop at once, or None: without the protect list every pass of the old cleaners refuses too."""
     import guard
@@ -438,7 +448,8 @@ SHELL_JOBS = (
              "`reap-hard` 자동화 자리를 이어받고, 한 번에 하나만 돈다(sweep-tick.lock). 규칙을 넘기는 것은 `sweep.py own` 으로 따로 한다. "
              "보호 목록 파일이 있는 PC에서만 켠다",
              ["python3", str(REAP.parent / "sweep.py"), "tick", "--step"], sweep_interval, False,
-             gate=lambda: sweep_protect_problem(), prepare=sweep_prepare, timeout=SWEEP_TIMEOUT_S, skip=(3,)),
+             gate=lambda: sweep_protect_problem(), prepare=sweep_prepare, timeout=SWEEP_TIMEOUT_S, skip=(3,),
+             reset=sweep_reset_cycle),
 )
 SWEEP = next(j for j in SHELL_JOBS if j.name == "sweep")
 

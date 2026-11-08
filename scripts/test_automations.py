@@ -398,6 +398,29 @@ class ShellJobs(Base):
         self.orca([])
         self.assertEqual(au.decide(j)[0], "skip")  # apply never turns it on
 
+    def test_turning_sweep_back_on_restarts_its_cycle_but_staying_on_does_not(self):
+        """After a pause the old position would hand shadow and real an old round with no fresh patrol first."""
+        j = self.jobs["sweep"]
+        reset = mock.Mock()
+        with mock.patch.object(j, "reset", reset), mock.patch.object(au, "sweep_protect_problem", return_value=None):
+            self.orca([self.stored(j, enabled=True)])
+            self.assertEqual(j.enable(False)[0], 0)
+            reset.assert_not_called()  # already on: nothing was paused
+            self.orca([self.stored(j, enabled=False)])
+            self.assertEqual(j.enable(False)[0], 0)
+            reset.assert_called_once()
+            reset.reset_mock()
+            self.orca([])
+            self.assertEqual(j.enable(False)[0], 0)  # first registration
+            reset.assert_called_once()
+            reset.reset_mock()
+            self.orca([self.stored(j, enabled=True)])
+            self.assertEqual(j.disable()[0], 0)
+            reset.assert_not_called()  # a step may be running: the file is not touched on disable
+        for name, other in self.jobs.items():
+            if name != "sweep":
+                self.assertIsNone(other.reset, name)
+
     def test_other_jobs_precheck_strings_are_unchanged_by_the_skip_option(self):
         """A new option that changes every stored string would show every registered job as drifted."""
         for name, j in self.jobs.items():

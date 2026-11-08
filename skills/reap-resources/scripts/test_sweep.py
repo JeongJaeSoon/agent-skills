@@ -1239,6 +1239,15 @@ CYCLE.write_text(json.dumps({"next": 2, "fails": 0, "at": time.time() - 600}))
 run_step()
 assert steps == ["reap-hard"], steps  # a normal gap resumes
 
+# turning the job back on restarts the cycle, under the tick lock: a step that is running keeps its own state
+CYCLE.write_text(json.dumps({"next": 3, "fails": 1, "at": time.time()}))
+assert sweep.reset_cycle() is True and not CYCLE.exists()
+assert sweep.reset_cycle() is True  # nothing to remove is fine
+CYCLE.write_text(json.dumps({"next": 3, "fails": 1, "at": time.time()}))
+with sweep.file_lock("sweep-tick.lock") as held:
+    assert held and sweep.reset_cycle() is False and CYCLE.exists()
+CYCLE.unlink()
+
 # a timestamp that is valid JSON but out of range must not stop the automation (OverflowError in math.isfinite)
 for at in (10 ** 400, -10 ** 400, 1e308, True, "x"):
     CYCLE.write_text(json.dumps({"next": 1, "fails": 0, "gave_up": {"step": "shadow", "at": at}, "at": at}))
