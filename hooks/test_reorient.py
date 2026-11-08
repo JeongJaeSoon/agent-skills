@@ -212,15 +212,20 @@ hook(session="t1", handle="term_t", source="startup", **START)
 assert not term.exists(), "no entrypoint is unknown, not interactive"
 hook(session="t1", handle="term_t", source="startup", entrypoint="cli", **START)
 record = json.loads(term.read_text())
-assert set(record) == {"handle", "session_id", "cwd", "at", "plugin_version", "hooks_sha"}, record
+assert set(record) == {"handle", "session_id", "cwd", "at", "started_at", "plugin_version", "hooks_sha"}, record
 assert (record["handle"], record["session_id"], record["cwd"]) == ("term_t", "t1", "/work"), record
 sys.path.insert(0, str(HERE))
 import roles  # noqa: E402
 assert record["hooks_sha"] == roles.hooks_sha(HERE.parent), "the sha of the plugin root's hooks.json"
 # A compaction reloads nothing: the same session keeps what it recorded, a different session's record is not borrowed.
-term.write_text(json.dumps({**record, "hooks_sha": "old"}))
+term.write_text(json.dumps({**record, "hooks_sha": "old", "at": 1.0, "started_at": 1.0}))
 hook(session="t1", handle="term_t", source="compact", entrypoint="cli", **START)
 assert json.loads(term.read_text())["hooks_sha"] == "old", "compact keeps the loaded sha"
+after_compact = json.loads(term.read_text())
+assert after_compact["at"] > 1.0 and after_compact["started_at"] == 1.0, "compact moves `at` but not the session's start"
+hook(session="t1", handle="term_t", source="clear", entrypoint="cli", **START)
+assert json.loads(term.read_text())["started_at"] == 1.0, "a /clear is not a start either"
+term.write_text(json.dumps({**record, "hooks_sha": "old"}))
 hook(session="t5", handle="term_t", source="compact", entrypoint="cli", **START)
 assert "hooks_sha" not in json.loads(term.read_text()), "another session's sha is not inherited"
 hook(session="t1", handle="term_t", source="resume", entrypoint="cli", **START)

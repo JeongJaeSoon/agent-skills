@@ -84,7 +84,7 @@ def terminal_file(handle):
     return state() / "terminals" / f"{handle}.json"
 
 
-def record_terminal(handle, session, cwd, now, loaded=None, same_process=False):
+def record_terminal(handle, session, cwd, now, loaded=None, same_process=False, began=True):
     """Ties an Orca terminal to the session that just started in it and returns the record it replaced. Orca's own
     data has no session id, and a cwd match can name another session in the same worktree. `loaded` (loaded_fields)
     is what that session's process read of the plugin when it started; None keeps what the same session recorded
@@ -94,11 +94,14 @@ def record_terminal(handle, session, cwd, now, loaded=None, same_process=False):
         return None
     path = terminal_file(handle)
     path.parent.mkdir(parents=True, exist_ok=True)
-    entry = {"handle": handle, "session_id": session, "cwd": cwd, "at": now}
     try:
         old = read_terminal(handle)
     except (OSError, ValueError):
         old = None
+    # `at` moves on every SessionStart; `started_at` only when the session began (startup, resume), so a compaction or a
+    # /clear does not make a card look newly started. A record from before the field has none until the next start.
+    started = now if began or old is None else old.get("started_at")
+    entry = {"handle": handle, "session_id": session, "cwd": cwd, "at": now, **({} if started is None else {"started_at": started})}
     if loaded is None:
         keep = old and (same_process or old.get("session_id") == session)
         loaded = {k: old[k] for k in LOADED_KEYS if k in old} if keep else {}
