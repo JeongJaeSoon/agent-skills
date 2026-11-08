@@ -10,7 +10,7 @@ process of its own. artifact_archive stays apart too: it leaves a recovery marke
 `hooks.dispatch: false` in ~/.claude/agent-skills.json runs every module as its own process instead (the old shape)
 and merges the same way; a session that loaded this file before a rollback keeps working through it.
 """
-import contextlib, importlib, io, json, os, pathlib, re, signal, subprocess, sys, tempfile, threading, time
+import concurrent.futures, contextlib, importlib, io, json, os, pathlib, re, signal, subprocess, sys, tempfile, threading, time
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -92,6 +92,10 @@ def call(module, event, timeout):
             raise _Timeout()
 
     old = signal.signal(signal.SIGALRM, alarm)
+    # File descriptor 1 goes to a scratch file while the module runs: a raw os.write or a child it starts cannot
+    # reach the real output. The real one is kept by run_event.
+    sink, saved = tempfile.TemporaryFile(), os.dup(1)
+    os.dup2(sink.fileno(), 1)
     signal.setitimer(signal.ITIMER_REAL, timeout)
     buf, out, loading = io.StringIO(), None, True
     try:
@@ -113,7 +117,11 @@ def call(module, event, timeout):
         armed[0] = False
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, old)
-    if buf.getvalue():  # a module that wrote to stdout is not trusted for its return value either
+        os.dup2(saved, 1)
+        os.close(saved)
+        raw = sink.seek(0, os.SEEK_END)
+        sink.close()
+    if buf.getvalue() or raw:  # a module that wrote to stdout is not trusted for its return value either
         config.log_error(module, RuntimeError("wrote to stdout"))
         return None
     if out is not None and not isinstance(out, dict):
@@ -205,33 +213,37 @@ def merge(name, results):
 
 def legacy(event, chosen):
     """Every module as its own process, started together: the shape before this file, for `hooks.dispatch: false`."""
-    procs = []
+    def collect(module, timeout, p):
+        try:
+            stdout, _ = p.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.communicate()
+            return Skipped(note(f"{module} ran past its {timeout:g}s limit"))
+        try:  # bytes, decoded here: one child's bad bytes cost only that child
+            out = json.loads(stdout.decode("utf-8")) if stdout.strip() else None
+        except ValueError as e:
+            config.log_error(module, e)
+            return None
+        if out is not None and not isinstance(out, dict):
+            config.log_error(module, TypeError("output is not an object"))
+            return None
+        return out
+
     # The input is a file, not a pipe: no child waits on another to be fed, and a child that reads late blocks no writer.
-    with tempfile.NamedTemporaryFile("w+") as data, contextlib.ExitStack() as opened:
+    with tempfile.NamedTemporaryFile("w+") as data, contextlib.ExitStack() as opened, \
+            concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(chosen))) as pool:
         data.write(json.dumps(event))
         data.flush()
+        waits = []
         for module, timeout in chosen:  # one open file each: the children must not share a read offset
             own = opened.enter_context(open(data.name))
             p = subprocess.Popen([sys.executable, str(HERE / f"{module}.py")], stdin=own, stdout=subprocess.PIPE,
-                                 stderr=subprocess.DEVNULL, text=True)
-            procs.append((module, time.monotonic() + timeout, timeout, p))
-        for module, deadline, timeout, p in procs:
-            try:
-                stdout, _ = p.communicate(timeout=max(0.01, deadline - time.monotonic()))
-            except subprocess.TimeoutExpired:
-                p.kill()
-                p.communicate()
-                yield module, Skipped(note(f"{module} ran past its {timeout:g}s limit"))
-                continue
-            try:
-                out = json.loads(stdout) if stdout.strip() else None
-            except ValueError as e:
-                config.log_error(module, e)
-                out = None
-            if out is not None and not isinstance(out, dict):
-                config.log_error(module, TypeError("output is not an object"))
-                out = None
-            yield module, out
+                                 stderr=subprocess.DEVNULL)
+            # Each child is watched from its own start, so a late one is stopped on time whoever is waited on first.
+            waits.append((module, pool.submit(collect, module, timeout, p)))
+        for module, future in waits:
+            yield module, future.result()
 
 
 def dispatch(event, entries=None, results=None):
@@ -262,7 +274,8 @@ def run_event(event, entries=None, grace=3):
     chosen = ENTRIES.get(name, []) if entries is None else entries
     if not chosen:
         return
-    results, lock, printed, stream = [], threading.Lock(), [], sys.stdout  # a module runs with stdout redirected
+    # A module runs with descriptor 1 pointed elsewhere, so the output goes through a copy of the real one.
+    results, lock, printed, real = [], threading.Lock(), [], os.dup(1)
 
     def emit(final):
         with lock:
@@ -271,8 +284,8 @@ def run_event(event, entries=None, grace=3):
             printed.append(1)
             out = merge(name, list(results))
             if out:
-                stream.write(json.dumps(out, ensure_ascii=False) + "\n")
-            stream.flush()
+                with open(real, "w", encoding="utf-8", closefd=False) as stream:
+                    stream.write(json.dumps(out, ensure_ascii=False) + "\n")
             if final:
                 os._exit(0)
 

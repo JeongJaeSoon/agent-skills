@@ -263,6 +263,45 @@ finally:
 assert isinstance(got[0][1], dispatch.Skipped) and got[1][1] == {"decision": "block", "reason": "quick"}, got
 assert spent < 1.2, spent
 
+# each legacy child is held to its own deadline from its start, and one child's bad bytes cost only that child
+fake("fake_sleepy", """
+    import json, time
+    time.sleep(0.6)
+    print(json.dumps({"systemMessage": "sleepy"}))
+""")
+fake("fake_late", """
+    import json, time
+    time.sleep(0.4)
+    print(json.dumps({"systemMessage": "late"}))
+""")
+fake("fake_badbytes", "import sys\nsys.stdout.buffer.write(b'\\xff\\xfe')\n")
+dispatch.HERE = FAKES
+try:
+    got = dict(dispatch.legacy({"x": 1}, [("fake_sleepy", 5), ("fake_late", 0.15), ("fake_alarmchild", 5), ("fake_badbytes", 5)]))
+finally:
+    dispatch.HERE = real_here
+assert got["fake_sleepy"] == {"systemMessage": "sleepy"}, got
+assert isinstance(got["fake_late"], dispatch.Skipped), got  # finished after its deadline, though before it was waited on
+assert got["fake_alarmchild"] == {"decision": "block", "reason": "quick"} and got["fake_badbytes"] is None, got
+
+# ---- a module that writes to file descriptor 1 directly loses its output and spoils nothing
+driver = TMP / "driver.py"
+fake("fake_fdnoise", """
+    import os
+    def run(event):
+        os.write(1, b"raw noise\\n")
+        return {"systemMessage": "from the noisy one"}
+""")
+driver.write_text(textwrap.dedent(f"""
+    import sys
+    sys.path[:0] = [{str(HERE)!r}, {str(FAKES)!r}]
+    import dispatch
+    dispatch.run_event({EV!r}, [("fake_deny", None, 1), ("fake_fdnoise", None, 1)], grace=1)
+"""))
+r = subprocess.run([sys.executable, str(driver)], capture_output=True, text=True, timeout=30)
+assert r.returncode == 0 and r.stdout.count("\n") == 1 and "noise" not in r.stdout, r
+assert json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny" and "noisy" not in r.stdout, r
+
 # ---- a hung module (signals blocked) still lets the finished deny out before the process ends
 fake("fake_hang", """
     import signal, time
