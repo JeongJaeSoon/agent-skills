@@ -198,7 +198,25 @@ def loop_around(text, cmds, pos):
     return best
 
 
-def loop_wait(text, cmds, region):
+def open_if_spans(text, region):
+    """(start, end) of each `if … fi` in region that has no else or elif: a sleep inside one may be skipped."""
+    stack, spans = [], []
+    for m in re.finditer(r"(?<![\w.-])(if|elif|else|fi)(?![\w.-])", text[region[0]:region[1]]):
+        at = region[0] + m.start()
+        if not at_command_start(text, at):
+            continue
+        if m[1] == "if":
+            stack.append([at, False])
+        elif m[1] in ("elif", "else") and stack:
+            stack[-1][1] = True
+        elif m[1] == "fi" and stack:
+            start, has_else = stack.pop()
+            if not has_else:
+                spans.append((start, at))
+    return spans
+
+
+def loop_wait(text, cmds, region, skippable=False):
     """(seconds one pass of the loop in region waits, number of sleeps in it); the seconds are None when a sleep's
     argument cannot be judged. The wait that counts is the one inside the loop around a poll (a sleep before the loop
     is a one-off), and the sleeps there add up (`sleep 150; sleep 150` waits 300 s). A sleep put in the background
@@ -225,6 +243,9 @@ def loop_wait(text, cmds, region):
                 waited.add(id(prior[-1]))
     if not everything:
         secs = [0 if backgrounded(c) and id(c) not in waited else s for c, s in zip(sleeps, secs)]
+    if skippable:  # a sleep in an `if` with no else may not run on a pass
+        spans = open_if_spans(text, region)
+        secs = [0 if any(a < c.span[0] and c.span[1] <= b + 2 for a, b in spans) else s for c, s in zip(sleeps, secs)]
     branches = re.search(r"(?<![\w.-])(if|case|else|elif)(?![\w.-])|\|\|", text[region[0]:region[1]])
     return (min(secs) if branches else sum(secs)), len(secs)
 
@@ -307,9 +328,9 @@ def check_ci_watch(cmd, cfg):
                 why.append(f"a `orch ci-wait` already holds {key}: run it too and it subscribes to that poller")
         region = loop_around(text, cmds, c.span[1] - 1)
         if region is not None:
-            wait, sleeps = loop_wait(text, cmds, region)
-            # A `for` loop with no sleep is a batch over a list, not a poll; until/while with none spins.
-            spins = not sleeps and re.match(r"(until|while)\b", text[region[0]:region[1]]) is not None
+            wait, sleeps = loop_wait(text, cmds, region, skippable=True)
+            # A `for` loop with no sleep is a batch over a list, not a poll; until/while and `for ((;;))` with none spin.
+            spins = not sleeps and re.match(r"(until|while)\b|for\s*\(\(\s*;\s*;\s*\)\)", text[region[0]:region[1]]) is not None
             if wait is not None and wait < CI_SLEEP_MIN and (sleeps or spins):
                 why.append(f"its loop waits under {CI_SLEEP_MIN} s between calls")
     if not why:

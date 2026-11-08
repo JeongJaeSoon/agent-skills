@@ -28,6 +28,7 @@ import guard  # noqa: E402
 MIN_INTERVAL_S = 60
 SUB_POLL_S = 2  # how often a subscriber reads the state file; no gh call
 GH_TIMEOUT_S = 30
+MAX_DEADLINE_MIN = 7 * 24 * 60
 OK = ("SUCCESS", "SKIPPED", "NEUTRAL")
 
 
@@ -95,6 +96,8 @@ def gh(args, deadline):
         raise Err(f"gh {' '.join(args[:2])} timed out")
     except OSError as e:
         raise Err(f"gh: {e}")
+    if time.monotonic() >= deadline:  # an answer that arrives after the deadline is no result
+        raise TimeoutError
     if p.returncode:
         raise Err(f"gh {' '.join(args[:2])} failed: {p.stderr.strip()[:300]}")
     try:
@@ -209,7 +212,10 @@ def run(args):
                 raise TimeoutError
             time.sleep(min(SUB_POLL_S, left))
     except TimeoutError:
-        last = read_state(target)
+        try:
+            last = read_state(target)
+        except Err:
+            last = {}
         print(f"ci-wait: deadline of {args.deadline_min:g} min passed for {target}; last seen: "
               f"{last.get('summary', 'nothing')}", file=sys.stderr)
         return 3
@@ -226,8 +232,8 @@ def main(argv):
     ap.add_argument("--interval", type=int, default=0, help=f"seconds between polls; below {MIN_INTERVAL_S} (or unset) it is {MIN_INTERVAL_S}")
     ap.add_argument("--head", help="accept only a result for this head SHA")
     args = ap.parse_args(argv)
-    if not 0 < args.deadline_min < float("inf"):  # also false for nan
-        ap.error("--deadline-min must be a positive, finite number of minutes")
+    if not 0 < args.deadline_min <= MAX_DEADLINE_MIN:  # also false for nan
+        ap.error(f"--deadline-min must be more than 0 and at most {MAX_DEADLINE_MIN} (7 days)")
     try:
         parse_target(args)
     except ValueError as e:

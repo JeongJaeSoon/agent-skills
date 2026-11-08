@@ -314,7 +314,12 @@ for cmd in ("until gh run view 1 | grep -q completed; do :; done",
             "while true; do gh run view 1; sleep 60 & done",
             "while true; do gh run view 1; if true; then sleep 1; else sleep 100; fi; done"):
     assert ci_warns(cmd), cmd
-for cmd in ("for i in 1 2; do gh run view $i; done", "while true; do gh run view 1; sleep 60; done"):
+for cmd in ("while true; do gh run view 1; if false; then sleep 60; fi; done",
+            "for ((;;)); do gh run view 1; done"):
+    assert ci_warns(cmd), cmd
+for cmd in ("for i in 1 2; do gh run view $i; done", "while true; do gh run view 1; sleep 60; done",
+            "while true; do if gh run view 1 | grep -q x; then break; fi; sleep 60; done",
+            "while true; do gh run view 1; if x; then sleep 60; else sleep 100; fi; done"):
     assert ci(cmd) == ("none", ""), cmd
 CONFIG.write_text(json.dumps({"orchestrate": {"ci_watch": "deny"}}))
 assert ci("gh run watch 123")[0] == "none" and "orch ci-wait" in LAST["warning"], "a warning never blocks, whatever the level"

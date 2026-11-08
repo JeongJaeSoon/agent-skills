@@ -155,7 +155,8 @@ class CiWait(unittest.TestCase):
 
     def test_bad_target_and_deadline_are_usage_errors(self):
         for args in (("not-a-target", "--deadline-min", "1"), (TARGET, "--deadline-min", "inf"),
-                     (TARGET, "--deadline-min", "nan"), (TARGET, "--deadline-min", "0")):
+                     (TARGET, "--deadline-min", "nan"), (TARGET, "--deadline-min", "0"),
+                     (TARGET, "--deadline-min", "1e308"), (TARGET, "--deadline-min", "10081")):
             p = self.spawn(*args)
             p.communicate(timeout=30)
             self.assertEqual(p.returncode, 2, args)
@@ -192,6 +193,15 @@ class Units(unittest.TestCase):
         self.assertEqual(ci_wait.MIN_INTERVAL_S, 60)
         for asked, got in ((1, 60), (5, 60), (59, 60), (60, 60), (90, 90)):
             self.assertEqual(ci_wait.effective_interval(asked), got)
+
+    def test_answer_after_the_deadline_is_no_result(self):
+        import ci_wait
+        from unittest import mock
+        done = subprocess.CompletedProcess([], 0, stdout="{}", stderr="")
+        with mock.patch.object(ci_wait.subprocess, "run", return_value=done), \
+                mock.patch.object(ci_wait.time, "monotonic", side_effect=[0.0, 5.0]):
+            with self.assertRaises(TimeoutError):
+                ci_wait.gh(["run", "view", "1"], 1.0)  # the call returned at t=5 s, past the deadline at t=1 s
 
     def test_lock_file_is_guards(self):
         import ci_wait, guard
