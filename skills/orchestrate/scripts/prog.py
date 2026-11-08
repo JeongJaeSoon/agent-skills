@@ -14,7 +14,9 @@ Usage: orch <command> <slug> [options]
                                      `record spawned --role guardian --note <dispatchId>` for a standing
                                      role; roles do not count against the cap
                                      `record reprioritized --pr N --class urgent` moves a PR in the land order
-                                     main_green / main_red need --sha of a landed merge commit
+                                     main_green / main_red need --sha of a landed merge commit; main_green also takes
+                                     a full sha another program landed, while main is red, if it is on the base
+                                     branch and descends from every red landing (no landing is counted)
   record <slug> signal --kind human_correction|brief_gap|stall|tooling --evidence PTR [--ticket T] [--note TEXT]
                                      a lesson candidate for reflect at Close: a human correction, a
                                      question the brief should have answered, a stall the process
@@ -460,6 +462,8 @@ def cap_from(events, ceiling):
     # halve the first time one goes red, and on every failed landing.
     landed, seen, cap = landed_shas(events), set(), 1
     for e in events:
+        if e.get("via"):
+            continue  # another program's commit proved main green; it is no landing of this one
         if e["ev"] in ("main_green", "main_red"):
             key = (e["ev"], e.get("sha"))
             if e.get("sha") not in landed or key in seen:
@@ -480,20 +484,42 @@ def main_state(events):
     A result without --sha (ledgers from before it was required) belongs to the last landing
     before it.
     """
-    order, result, last, lower = [], {}, None, stack_lower(events)
-    for e in events:
-        if e["ev"] == "landed" and e.get("sha") and e["sha"] not in lower:
-            order.append(e["sha"]); last = e["sha"]
-        elif e["ev"] in ("main_green", "main_red"):
-            sha = e.get("sha") or last
-            if sha in order:
-                result[sha] = e["ev"]
+    order, result = landing_results(events)
     if not order:
         return "green"
     decided = [s for s in order if s in result]
     if decided and result[decided[-1]] == "main_red":
         return "red"
     return "green" if order[-1] in result else "pending"
+
+
+def landing_results(events):
+    """(landing order, {landed sha: main_green|main_red}). A green with `via` is another program's commit: it
+    clears only the reds it lists in `clears` (pinned when it was recorded), so a red recorded later stays."""
+    order, result, last, lower = [], {}, None, stack_lower(events)
+    for e in events:
+        if e["ev"] == "landed" and e.get("sha") and e["sha"] not in lower:
+            order.append(e["sha"]); last = e["sha"]
+        elif e["ev"] == "main_green" and e.get("via"):
+            for sha in e.get("clears") or []:
+                if result.get(sha) == "main_red":
+                    result[sha] = "main_green"
+        elif e["ev"] in ("main_green", "main_red"):
+            sha = e.get("sha") or last
+            if sha in order:
+                result[sha] = e["ev"]
+    return order, result
+
+
+def open_reds(events):
+    """The red landings main_state is stopped on: the unbroken run of reds at the end of the decided landings."""
+    order, result = landing_results(events)
+    reds = []
+    for sha in reversed([s for s in order if s in result]):
+        if result[sha] != "main_red":
+            break
+        reds.append(sha)
+    return reds[::-1]
 
 
 def final_check_at(events):
@@ -2175,12 +2201,48 @@ OWNED = {"approved": "land, gate", "gate_opened": "gate", "landed": "land, lande
 SIGNAL_KINDS = ("human_correction", "brief_gap", "stall", "tooling")
 
 
+def default_branch(repo):
+    # REST like repo_meta: the executor and record run often, and GraphQL's budget is the one that runs out.
+    return gh_json("api", f"repos/{repo}")["default_branch"]
+
+
+def record_external_green(p, sha):
+    """main_green for a commit another program landed: allowed only to clear a red, and only for a full sha that
+    descends from every red landing the stop rests on and sits on the base branch. Anything GitHub cannot confirm
+    refuses. The row names the reds it clears, so the state it frees is the state that was checked."""
+    reds = open_reds(p.events())
+    if main_state(p.events()) != "red" or not reds:
+        sys.exit("main_green needs --sha of a merge commit recorded by `landed`; a commit another program landed "
+                 "counts only while this program's main is red (main is not red)")
+    if not re.fullmatch(r"[0-9a-f]{40}", sha or ""):
+        sys.exit("main_green for a commit this program did not land needs its full 40-char sha (a branch or a short sha can move)")
+    repo = p.cfg["repo"]
+    try:
+        base = p.cfg.get("base") or default_branch(repo)
+        for r in reds:
+            if compare(repo, r, sha).get("status") != "ahead":
+                sys.exit(f"{sha[:8]} is not a descendant of the red landing {r[:8]}: it cannot show that red is fixed")
+        if compare(repo, sha, base).get("status") not in ("ahead", "identical"):
+            sys.exit(f"{sha[:8]} is not on {base}: record the green for a commit {base} contains")
+    except (SystemExit, ValueError, KeyError, TypeError, AttributeError) as e:
+        if isinstance(e, SystemExit) and str(e.code).startswith(sha[:8]):
+            raise
+        sys.exit(f"{sha[:8]} could not be checked against the base branch ({e}); main_green stays refused")
+    row = p.append_if("main_green", lambda evs: open_reds(evs) == reds, sha=sha, via="descendant", clears=reds,
+                      note="descendant of the red landing; no landing of this program")
+    if row is None:
+        sys.exit("the ledger changed while the commit was checked (a new landing or result); run the record again")
+    print(json.dumps(row, ensure_ascii=False))
+
+
 def cmd_record(argv):
     p = Program(argv[0])
     ev = argv[1]
     pr, sha = opt(argv, "--pr"), opt(argv, "--sha")
     if ev in ("main_green", "main_red") and sha not in landed_shas(p.events()):
         top = stack_lower(p.events()).get(sha)
+        if ev == "main_green" and not top:
+            return record_external_green(p, sha)
         sys.exit(f"{sha[:8]} is a lower stack layer: main CI ran once, on the merge commit of its top #{top}; record it there" if top
                  else f"{ev} needs --sha of a merge commit recorded by `landed` (the commit that CI run tested)")
     if ev == "verdict":

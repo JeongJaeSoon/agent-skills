@@ -58,9 +58,13 @@ elif a[:2] == ["api", "graphql"]:
     print(json.dumps({"data": {"repository": {"pullRequest": {"reviewThreads": {
         "nodes": [{"isResolved": r} for r in pages[i]],
         "pageInfo": {"hasNextPage": i + 1 < len(pages), "endCursor": str(i + 1)}}}}}}))
+elif a[:1] == ["api"] and a[1] == "repos/o/r":
+    print(json.dumps({"default_branch": st.get("default_branch", "main")}))
 elif a[:1] == ["api"] and "/compare/" in a[1]:
     left, right = a[1].split("/compare/")[1].split("...")
-    if left == "mb":
+    if f"{left}...{right}" in st.get("ancestry", {}):
+        print(json.dumps({"status": st["ancestry"][f"{left}...{right}"]}))
+    elif left == "mb":
         print(json.dumps({"files": [{"filename": f} for f in st.get("base_changed", [])]}))
     else:
         p = next((q for q in st["prs"].values() if q.get("headRefOid") == right), None) or pr(right[1:])
@@ -411,6 +415,41 @@ st = json.loads((d / "state.json").read_text()); st["threads_fail"] = True
 code, out = prog(env, "land", "t", "--pr", "78")
 assert code == 2 and "unreadable" in out and not merged(d), out
 assert prog(env, "land-check", "t", "--pr", "78")[0] == 1
+
+# 1e2. Another program's green commit after this program's red lifts the stop without counting as a landing (#595).
+RED40, GREEN40, SIDE40 = "a" * 40, "b" * 40, "c" * 40
+d, env = setup({"85": pr(85), "86": pr(86)})
+verdict(d, 85, "T-85")
+verdict(d, 86, "T-86")
+st = json.loads((d / "state.json").read_text())
+st["ancestry"] = {f"{RED40}...{GREEN40}": "ahead", f"{GREEN40}...main": "ahead", f"{RED40}...{SIDE40}": "diverged",
+                  f"{SIDE40}...main": "ahead"}
+(d / "state.json").write_text(json.dumps(st))
+with (d / "programs" / "t" / "ledger.jsonl").open("a") as f:
+    f.write(json.dumps({"ts": "2026-09-24T00:00:00+00:00", "ev": "landed", "pr": 80, "sha": RED40}) + "\n")
+    f.write(json.dumps({"ts": "2026-09-24T00:00:00+00:00", "ev": "main_red", "sha": RED40}) + "\n")
+code, out = prog(env, "land-check", "t", "--pr", "85")
+assert code == 1 and "main is red" in out, out
+code, out = prog(env, "status", "t")
+assert "SAFETY STOP" in out, out
+before = len([e for e in ledger(d) if e["ev"] == "landed"])
+code, out = prog(env, "record", "t", "main_green", "--sha", SIDE40)
+assert code != 0 and "not a descendant" in out, out
+st = json.loads((d / "state.json").read_text())
+st["default_branch"] = "trunk"  # a stray `main` branch holds the commit, the repo's real base does not
+st["ancestry"][f"{GREEN40}...trunk"] = "diverged"
+(d / "state.json").write_text(json.dumps(st))
+code, out = prog(env, "record", "t", "main_green", "--sha", GREEN40)
+assert code != 0 and "not on trunk" in out, out
+st["default_branch"] = "main"
+(d / "state.json").write_text(json.dumps(st))
+code, out = prog(env, "record", "t", "main_green", "--sha", GREEN40)
+assert code == 0 and '"via": "descendant"' in out, out
+assert len([e for e in ledger(d) if e["ev"] == "landed"]) == before, "the green is no landing of this program"
+code, out = prog(env, "land-check", "t", "--pr", "85")
+assert code == 0 and "READY" in out and "main is red" not in out, out
+code, out = prog(env, "status", "t")
+assert "SAFETY STOP" not in out and "main red" not in out, out
 
 # 1f. Any exit 1 frees the PR's own lock: main went red after the PR took the lane, and another PR's lock stays.
 d, env = setup({"79": pr(79, files=["compose.yaml"], behind=1), "80": pr(80)})
