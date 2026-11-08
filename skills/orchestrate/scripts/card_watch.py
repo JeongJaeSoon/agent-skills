@@ -254,7 +254,8 @@ def scan(terms, seen, read, now_ms, idle_min, free_gb, min_free_gb, goal_lost_mi
     return out
 
 
-def check_start(handle, read, listing, within, interval, clock=time.time, sleep=time.sleep, low_disk=prog.low_disk):
+def check_start(handle, read, listing, within, interval, clock=time.time, sleep=time.sleep, low_disk=prog.low_disk,
+                min_free_gb=prog.MIN_FREE_GB):
     """One card just created: STUCK on the first finding, else at the deadline STARTED, ENDED, CLOSED or STUCK.
 
     `/goal active` shows the moment `/goal` is typed, and cards have lost their login a few turns later, so it
@@ -272,7 +273,7 @@ def check_start(handle, read, listing, within, interval, clock=time.time, sleep=
             seen = t
             was_goal = was_goal or under_goal(t, tail_of(handle))
             # min_free_gb 0 keeps the disk line out of a start check; the screen's ENOSPC still needs the measurement.
-            out = scan([t], {}, read, clock() * 1000, 10**9, 1.0, 0, low_disk=low_disk())
+            out = scan([t], {}, read, clock() * 1000, 10**9, 1.0, 0, low_disk=low_disk(min_free_gb))
             if out:
                 return out
         if clock() + interval > deadline:
@@ -394,7 +395,8 @@ def main(argv):
     a = ap.parse_args(argv)
     listing = lambda: agent_terminals(prog.orca_json("terminal", "list").get("terminals", []), a.self_handle, a.handle)
     if a.card:
-        print("\n".join(check_start(a.card, prog.read_screen, listing, a.within, min(a.interval, 30))), flush=True)
+        print("\n".join(check_start(a.card, prog.read_screen, listing, a.within, min(a.interval, 30),
+                               min_free_gb=a.min_free_gb)), flush=True)
         return
     state = a.state or STATE_DIR / f"{a.self_handle or 'default'}.json"
     seen, deadline = load(state), time.time() + a.timeout_ms / 1000

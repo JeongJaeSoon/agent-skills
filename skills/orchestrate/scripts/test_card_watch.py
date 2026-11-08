@@ -195,7 +195,7 @@ class Clock:
     t = NOW / 1000
     def __call__(self): return self.t
     def sleep(self, s): self.t += s
-def start(screen, out_at, seen_term=True, low=lambda: False):
+def start(screen, out_at, seen_term=True, low=lambda m: False):
     """screen and seen_term may be functions of the seconds since the check began: the card changes in the window."""
     clock = Clock()
     t0, t = clock.t, term("hn", "/w/card-n", last=out_at(clock))
@@ -204,10 +204,13 @@ def start(screen, out_at, seen_term=True, low=lambda: False):
 later = lambda c: (c.t + 200) * 1000
 assert start(goal, later) == ["STARTED card-n: /goal active, output since the check began"]
 enospc = goal + ["npm ERR! ENOSPC: no space left"]
-assert start(enospc, later, low=lambda: True)[0].startswith("STUCK card-n (a full disk)"), "start check: measured low confirms"
-assert start(enospc, later, low=lambda: None)[0].startswith("STUCK card-n (a full disk)"), "start check: unmeasured keeps the screen"
-assert start(enospc, later, low=lambda: False) == ["STARTED card-n: /goal active, output since the check began"], \
+assert start(enospc, later, low=lambda m: True)[0].startswith("STUCK card-n (a full disk)"), "start check: measured low confirms"
+assert start(enospc, later, low=lambda m: None)[0].startswith("STUCK card-n (a full disk)"), "start check: unmeasured keeps the screen"
+assert start(enospc, later, low=lambda m: False) == ["STARTED card-n: /goal active, output since the check began"], \
     "start check: a quoted ENOSPC with the disk measured fine is not a full disk"
+asked = []
+start(enospc, later, low=lambda m: asked.append(m))
+assert asked and set(asked) == {prog.MIN_FREE_GB}, "start check: the default threshold is watch-cards' own"
 assert start(goal, lambda c: c.t * 1000 - 1)[0].startswith("STUCK card-n (not started)"), "/goal active but silent since create"
 shell = ["Last login: Thu", "user@host card-n % /goal ship it"]
 assert start(shell, later)[0] == 'STUCK card-n (not started): no /goal active with new output; last line "user@host card-n % /goal ship it"'
@@ -262,6 +265,16 @@ with tempfile.TemporaryDirectory() as d:
         assert out.getvalue().startswith("QUIET nothing new; start the watch again"), (status, out.getvalue())
         assert ("a state outside busy, idle, blocked" in out.getvalue()) == warn, (status, out.getvalue())
     agent_signal.read = real_read
+
+    # --card judges with --min-free-gb, the threshold the watch itself uses.
+    real_check, got_kw = card_watch.check_start, {}
+    card_watch.check_start = lambda *a, **k: (got_kw.update(k), ["STARTED x"])[1]
+    with contextlib.redirect_stdout(io.StringIO()):
+        card_watch.main(["--card", "hn", "--min-free-gb", "5"])
+        assert got_kw == {"min_free_gb": 5.0}, got_kw
+        card_watch.main(["--card", "hn"])
+        assert got_kw == {"min_free_gb": prog.MIN_FREE_GB}, got_kw
+    card_watch.check_start = real_check
 
     # Without --self the watch skips the terminal named by ORCA_TERMINAL_HANDLE, so it never reports its own session.
     screens = {"me": menu, "h1": idle, "h2": idle, "h3": idle, "h4": idle}
