@@ -463,8 +463,10 @@ class ShellJobs(Base):
     def test_a_registered_job_is_never_gated(self):
         j = self.jobs["reap-hard"]
         self.orca([self.stored(j)])
-        with mock.patch.object(au, "reap_hard_gate", return_value="no file"):
+        # The job holds its own reference to the gate, so patching the module attribute would not reach it.
+        with mock.patch.object(j, "gate", return_value="no file") as gate:
             self.assertEqual(j.status()[0], "on")
+        gate.assert_not_called()
 
     def test_stale_only_when_on_with_a_different_registration(self):
         j = self.jobs["orch-dash"]
