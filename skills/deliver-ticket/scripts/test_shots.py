@@ -157,19 +157,30 @@ const box = { value: process.env.FAKE_DRAFT || "" };
 globalThis.window = { innerWidth: 0 };
 globalThis.document = {
   documentElement: { scrollWidth: 390, scrollHeight: 2400 },
-  querySelector: () => box,
-  querySelectorAll: () => [],
+  // FAKE_UI picks the comment UI: "old" (hidden file input), "new" (button + file chooser) or "none".
+  querySelector: (sel) => {
+    const ui = process.env.FAKE_UI || "old";
+    if (ui === "old" && (sel === "#fc-new_comment_field" || sel === "#new_comment_field")) return box;
+    if (ui === "new" && sel === 'textarea[aria-label="Markdown value"]') return box;
+    return null;
+  },
+  querySelectorAll: (sel) => (sel === "button" && process.env.FAKE_UI === "new" ? [{ textContent: "Paste, drop, or click to add files" }] : []),
 };
 const page = {
   goto: async (u) => log(["goto", u]),
   waitForSelector: async () => {},
   waitForTimeout: async () => {},
-  evaluate: async (fn) => fn(),
+  evaluate: async (fn, arg) => fn(arg),
   fill: async (s, v) => { log(["fill", v]); box.value = v; },
   setInputFiles: async (s, files) => {
     log(["setInputFiles", files.length]);
     box.value = files.map((f) => { const n = f.split("/").pop().replace(/\.png$/, ""); return `<img width="1" alt="${n}" src="https://github.com/user-attachments/assets/${n}">`; }).join("\n");
   },
+  click: async (s) => log(["click", s]),
+  waitForFileChooser: async () => ({
+    // The new UI writes alt "Image" for every file, whatever it is called.
+    setFiles: async (f) => { log(["setFiles", f]); box.value += `![Image](https://github.com/user-attachments/assets/${f.split("/").pop().replace(/\.png$/, "")})\n`; },
+  }),
   cdp: async (m, p) => {
     log(["cdp", m, p]);
     if (m === "Emulation.setDeviceMetricsOverride") window.innerWidth = p.width;
@@ -206,6 +217,24 @@ r = run("upload", "--repo", "acme/app", "--pr", "1", "--out", str(tmp / "u.json"
 assert r.returncode == 0 and "uploaded 2 of 2" in r.stdout and "draft cleared True" in r.stdout, (r.stdout, r.stderr)
 assert ["setInputFiles", 2] in calls()
 
+# New comment UI: no file input, a button opens a file chooser, one file per chooser, keyed by stem.
+env["FAKE_UI"] = "new"
+r = run("upload", "--repo", "acme/app", "--pr", "1", "--out", str(tmp / "u.json"), str(img), str(other))
+assert r.returncode == 0 and "uploaded 2 of 2" in r.stdout and "draft cleared True" in r.stdout, (r.stdout, r.stderr)
+assert json.loads((tmp / "u.json").read_text()) == {"card-1440-light": U + "card-1440-light", "card-390-dark": U + "card-390-dark"}
+c = calls()
+assert [x[0] for x in c if x[0] in ("click", "setFiles", "setInputFiles")] == ["click", "setFiles", "click", "setFiles"], c
+assert ["fill", ""] in c
+env["FAKE_UI"] = "none"
+r = run("upload", "--repo", "acme/app", "--pr", "1", "--out", str(tmp / "u.json"), str(img))
+assert r.returncode != 0 and "no comment box" in r.stderr, r.stderr
+assert not any(x[0] in ("fill", "click") for x in calls())
+env["FAKE_UI"] = "new"
+env["FAKE_DRAFT"] = "half-written review"
+r = run("upload", "--repo", "acme/app", "--pr", "1", "--out", str(tmp / "u.json"), str(img))
+assert r.returncode != 0 and "unsent draft" in r.stderr, r.stderr
+assert not any(x[0] in ("fill", "click") for x in calls())
+del env["FAKE_UI"]
 env["FAKE_DRAFT"] = "half-written review"
 r = run("upload", "--repo", "acme/app", "--pr", "1", "--out", str(tmp / "u.json"), str(img))
 assert r.returncode != 0 and "unsent draft" in r.stderr, r.stderr
@@ -249,7 +278,8 @@ import http.server, threading
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_HEAD(self):
-        status, ctype = {"/ok": (200, "image/png"), "/page": (200, "text/html")}.get(self.path, (404, "text/plain"))
+        status, ctype = {"/ok": (200, "image/png"), "/page": (200, "text/html"),
+                         "/forbidden": (403, "text/plain")}.get(self.path, (404, "text/plain"))
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.end_headers()
@@ -267,7 +297,7 @@ gh = bindir / "gh"
 gh.write_text("""#!/bin/sh
 case "$*" in
   *issues/*/comments*) cat "$FAKE_GH_BODIES" ;;
-  *"--jq .private"*) echo "$FAKE_GH_PRIVATE" ;;
+  *"--jq .private"*) [ "$FAKE_GH_PRIVATE" = ERR ] && { echo "gh: HTTP 403" >&2; exit 1; }; echo "$FAKE_GH_PRIVATE" ;;
   *) echo "unexpected: $*" >&2; exit 1 ;;
 esac
 """)
@@ -309,6 +339,19 @@ r = check_run({"a": gone}, [gone], private=True)
 assert r.returncode == 2 and r.stdout.startswith("INCONCLUSIVE  a: private repo"), (r.returncode, r.stdout)
 r = check_run({"a": gone, "b": good}, [gone], private=True)
 assert r.returncode == 1 and "INCONCLUSIVE  a" in r.stdout and "NOT VERIFIED  b" in r.stdout, r.stdout
+forbidden = base + "/forbidden"
+r = check_run({"a": forbidden}, [forbidden], private=True)
+assert r.returncode == 2 and r.stdout.startswith("INCONCLUSIVE  a: private repo: HTTP 403"), (r.returncode, r.stdout)
+# The same 403 on a public repo is a real failure.
+r = check_run({"a": forbidden}, [forbidden], private=False)
+assert r.returncode == 1 and "NOT VERIFIED  a: HTTP 403" in r.stdout, r.stdout
+# When gh cannot read the repo's visibility (a token without access answers 403/404), a 401/403 image
+# is still INCONCLUSIVE rather than a verdict on the image.
+env["FAKE_GH_PRIVATE"] = "ERR"
+(tmp / "c.json").write_text(json.dumps({"a": forbidden}))
+(tmp / "bodies.txt").write_text(forbidden + "\n")
+r = run("check", str(tmp / "c.json"), "--repo", "acme/app", "--pr", "1")
+assert r.returncode == 2 and "INCONCLUSIVE  a: visibility unknown: HTTP 403" in r.stdout, (r.returncode, r.stdout, r.stderr)
 server.shutdown()
 
 print("test_shots: ok")
