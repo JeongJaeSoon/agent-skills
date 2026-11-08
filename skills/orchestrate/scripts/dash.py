@@ -2824,6 +2824,8 @@ def cmd_inbox(argv):
         # A copy of the page's memory, so what it dismissed stays hidden here and listing dismisses nothing.
         mem = copy.deepcopy(fleet.read_json(fleet.state_dir() / "memory.json", {}) or {})
         for i in fleet.external_items() + fleet.pressure_items(db_store.ext_closures(), mem):
+            if i["key"] in mem["dismissed"]:
+                continue
             print(f"{i['at']}  {i['type']}  {i['key'][4:]}  {i['title']}")
         return
     else:

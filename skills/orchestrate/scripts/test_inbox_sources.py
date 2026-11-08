@@ -195,6 +195,8 @@ assert not [i for i in fleet.pressure_items(store.ext_closures(), {}) if "q-0fak
 assert dash("resolve", "--key", "pressure:queue:q-0fake001")[0] == 0
 fleet.write_atomic(D / "memory.json", json.dumps({"dismissed": {"ext:pressure:queue:q-0fake002": fleet.iso(NOW)}}))
 assert "q-0fake002" not in dash("list")[1]
+fleet.write_atomic(D / "memory.json", json.dumps({"dismissed": {"ext:k-run": fleet.iso(NOW)}}))
+assert "k-run" not in dash("list")[1] and "q-0fake002" in dash("list")[1], "the page's dismissal applies to every item kind"
 # Nothing in the source by that key: refused, so a typo closes nothing.
 code, out, err = dash("resolve", "--key", "pressure:queue:q-nosuch")
 assert code != 0 and "q-nosuch" in err, (out, err)
