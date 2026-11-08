@@ -162,7 +162,8 @@ def setup_failure(name):
     return None
 
 
-def scan(terms, seen, read, now_ms, idle_min, free_gb, min_free_gb, goal_lost_min=15, waits=None, agents=None, states=None):
+def scan(terms, seen, read, now_ms, idle_min, free_gb, min_free_gb, goal_lost_min=15, waits=None, agents=None, states=None,
+         low_disk=prog.NOT_LOOKED):
     """Lines for findings not in seen; seen becomes this round's findings, so a cleared one can come back.
 
     seen["goals"] lists the handles once seen under `/goal`: a `/goal` card's goal has no other record, and only
@@ -206,7 +207,7 @@ def scan(terms, seen, read, now_ms, idle_min, free_gb, min_free_gb, goal_lost_mi
         tail = (lines or [])[-25:]
         idle = (now_ms - (t.get("lastOutputAt") or now_ms)) / 60000
         auth = auth_line(tail) if idle >= AUTH_QUIET_MIN else None
-        hit = prog.judge_wait(waited, lines, low_disk=free_gb < min_free_gb)
+        hit = prog.judge_wait(waited, lines, low_disk=free_gb < min_free_gb if low_disk is prog.NOT_LOOKED else low_disk)
         finding = "auth" if auth else hit[0] if hit else ""
         state, basis = screen_state(tail, idle, finding)
         states[h] = (state, "unreadable" if lines is None else basis, finding)  # a wait Orca found stands without the pane
@@ -253,7 +254,7 @@ def scan(terms, seen, read, now_ms, idle_min, free_gb, min_free_gb, goal_lost_mi
     return out
 
 
-def check_start(handle, read, listing, within, interval, clock=time.time, sleep=time.sleep):
+def check_start(handle, read, listing, within, interval, clock=time.time, sleep=time.sleep, low_disk=prog.low_disk):
     """One card just created: STUCK on the first finding, else at the deadline STARTED, ENDED, CLOSED or STUCK.
 
     `/goal active` shows the moment `/goal` is typed, and cards have lost their login a few turns later, so it
@@ -270,7 +271,8 @@ def check_start(handle, read, listing, within, interval, clock=time.time, sleep=
         if t:
             seen = t
             was_goal = was_goal or under_goal(t, tail_of(handle))
-            out = scan([t], {}, read, clock() * 1000, 10**9, 1.0, 0)
+            # min_free_gb 0 keeps the disk line out of a start check; the screen's ENOSPC still needs the measurement.
+            out = scan([t], {}, read, clock() * 1000, 10**9, 1.0, 0, low_disk=low_disk())
             if out:
                 return out
         if clock() + interval > deadline:

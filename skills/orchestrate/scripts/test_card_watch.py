@@ -195,14 +195,19 @@ class Clock:
     t = NOW / 1000
     def __call__(self): return self.t
     def sleep(self, s): self.t += s
-def start(screen, out_at, seen_term=True):
+def start(screen, out_at, seen_term=True, low=lambda: False):
     """screen and seen_term may be functions of the seconds since the check began: the card changes in the window."""
     clock = Clock()
     t0, t = clock.t, term("hn", "/w/card-n", last=out_at(clock))
     at = lambda v: v(clock.t - t0) if callable(v) else v
-    return card_watch.check_start("hn", lambda h: at(screen), lambda: [t] if at(seen_term) else [], 240, 30, clock, clock.sleep)
+    return card_watch.check_start("hn", lambda h: at(screen), lambda: [t] if at(seen_term) else [], 240, 30, clock, clock.sleep, low)
 later = lambda c: (c.t + 200) * 1000
 assert start(goal, later) == ["STARTED card-n: /goal active, output since the check began"]
+enospc = goal + ["npm ERR! ENOSPC: no space left"]
+assert start(enospc, later, low=lambda: True)[0].startswith("STUCK card-n (a full disk)"), "start check: measured low confirms"
+assert start(enospc, later, low=lambda: None)[0].startswith("STUCK card-n (a full disk)"), "start check: unmeasured keeps the screen"
+assert start(enospc, later, low=lambda: False) == ["STARTED card-n: /goal active, output since the check began"], \
+    "start check: a quoted ENOSPC with the disk measured fine is not a full disk"
 assert start(goal, lambda c: c.t * 1000 - 1)[0].startswith("STUCK card-n (not started)"), "/goal active but silent since create"
 shell = ["Last login: Thu", "user@host card-n % /goal ship it"]
 assert start(shell, later)[0] == 'STUCK card-n (not started): no /goal active with new output; last line "user@host card-n % /goal ship it"'
@@ -304,7 +309,8 @@ read = lambda h: screens[h]
 diff = ["⏺ Update(docs/design.md)", "  ⎿  Added 2 lines", "     41 +- ENOSPC (a full disk) is caught by the watcher",
         "     42      No space left on device is the second spelling", "❯ "]
 screens = {"h1": diff, "h2": idle, "h3": idle, "h4": idle}
-assert scan({}) == [], "ENOSPC inside a drawn diff is not a full disk"
+fd = lambda: [l for l in scan({}, 1.0) if "full disk" in l]  # 1 GiB free: the diff filter is what is under test
+assert fd() == [], "ENOSPC inside a drawn diff is not a full disk"
 screens["h1"] = diff + ["npm ERR! ENOSPC: no space left on device, write", "❯ "]
 assert scan({}, 1.0)[0] == "STUCK card-a (a full disk): read its screen", "a real ENOSPC beside a diff still counts"
 screens["h1"] = ["⏺ Bash(make)", "  ⎿  28  No space left on device", "❯ "]
@@ -321,12 +327,12 @@ screens["h1"] = ["⏺ Update(src/main.py)", "     41 +  x = 1", "✻ Waiting for
 assert scan({})[0] == "STUCK card-a (an API retry loop): read its screen", "a retry line after a diff still counts"
 screens["h1"] = ["npm ERR! ENOSPC: no space left on device, write", "⏺ Disk space recovered.", "⏺ Update(src/app.ts)",
                   *[f"     {i} +  line {i}" for i in range(1, 31)], "❯ "]
-assert scan({}) == [], "a message that scrolled past the 25-line tail is not read again after a long diff"
+assert fd() == [], "a message that scrolled past the 25-line tail is not read again after a long diff"
 screens["h1"] = ["⏺ Update(src/errors.ts)", "     41 +  x = 1", "⏺ Bash(make)", "  ⎿  npm ERR! ENOSPC: no space left", "❯ "]
 assert scan({}, 1.0)[0] == "STUCK card-a (a full disk): read its screen", "the next turn after a diff is not part of it"
 screens["h1"] = ["⏺ Update(src/errors.ts)", "  ⎿  Added 2 lines", '     41 +  const m = "a long ordinary message',
                   '       continues here";', '     42 +  const d = "ENOSPC";', "❯ "]
-assert scan({}) == [], "a wrapped tail leaves the diff header standing for the lines after it"
+assert fd() == [], "a wrapped tail leaves the diff header standing for the lines after it"
 screens["h1"] = ["⏺ Update(src/errors.ts)", "  ⎿  Added 1 line", "     41 +  x = 1", "  ⎿  1 - writing output",
                   "     2  No space left on device", "❯ "]
 assert scan({}, 1.0)[0] == "STUCK card-a (a full disk): read its screen", "a new ⎿ result after a diff starts its own block"
@@ -334,7 +340,7 @@ long_build = ["⏺ Bash(build)"] + [f"     {i} - writing output" for i in range(
 screens["h1"] = long_build
 assert scan({}, 1.0)[0] == "STUCK card-a (a full disk): read its screen", "a long numbered log pushes its header out of the tail"
 screens["h1"] = ["⏺ Update(docs/d.md)"] + [f"     {i} +  line {i}" for i in range(1, 30)] + ["     30 +  ENOSPC quoted", "❯ "]
-assert scan({}) == [], "a diff longer than the tail is still dropped when the screen holds its header"
+assert fd() == [], "a diff longer than the tail is still dropped when the screen holds its header"
 
 # A /goal card silent past --idle-min is stuck unless it is busy: a background shell, or claude agents says busy.
 shell = ["⏺ Waiting on the build.", "❯ ", "  ⏵⏵ auto mode on · 1 shell still running", "  ◎ /goal active (2h)"]

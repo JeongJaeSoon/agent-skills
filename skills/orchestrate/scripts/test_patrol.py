@@ -1174,4 +1174,16 @@ try:
 finally:
     patrol.round_once, patrol.candidates_phase = saved_round_once, saved_phase
 
+# patrol's screen reading takes the same disk measurement as watch-cards: an ENOSPC on screen is a full disk only
+# while free space is under the threshold (or could not be measured).
+facts = {"waits": {"h1": None}, "screens": {"h1": ["npm ERR! ENOSPC: no space left", "❯ "]}, "now": NOW, "tails": {}}
+saved_low = prog.low_disk
+try:
+    for measured, finding in ((False, ""), (True, "a full disk"), (None, "a full disk")):
+        prog.low_disk = lambda *a, m=measured, **k: m
+        got = patrol.signal_card(term("h1", "/w/card-a"), facts, {})
+        assert got["finding"] == finding, (measured, got)
+finally:
+    prog.low_disk = saved_low
+
 print("test_patrol: ok")
