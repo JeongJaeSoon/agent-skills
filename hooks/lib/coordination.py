@@ -14,7 +14,12 @@ which session they reach is roles.applies' matrix, how hard they hold is a key i
   one warning says the value was not compared when that key is unset. These never go above warn.
 - orchestrate.pr_poll (warn): a Monitor command that polls `gh pr list|view|checks` in a loop with a sleep under 300 s.
   The warning points at the `pr-watch` command (bin/pr-watch). It never goes above warn.
+- orchestrate.ci_watch (warn): a `gh run watch` or `--watch` without --interval, a loop around `gh` that sleeps under
+  30 s, or a watch whose `orch ci-wait` lock is held. It points at `orch ci-wait`, never calls ps, and never goes
+  above warn.
 """
+import fcntl
+import hashlib
 import re
 
 import roles
@@ -22,7 +27,8 @@ from lib import config, shell
 from lib.danger import Finding
 
 RULES = {"orchestrate.ask_user_question": "deny", "orchestrate.wait_foreground": "deny",
-         "orchestrate.send_devnull": "deny", "orchestrate.model_flag": "warn", "orchestrate.pr_poll": "warn"}
+         "orchestrate.send_devnull": "deny", "orchestrate.model_flag": "warn", "orchestrate.pr_poll": "warn",
+         "orchestrate.ci_watch": "warn"}
 LAUNCHES = (["orchestration", "worker-start"], ["worktree", "create"], ["agent", "launch"])
 SOURCE = "(agent-skills hooks/guard.py, {key})"
 
@@ -241,9 +247,69 @@ def check_monitor(cmd, cfg):
                    "clearing, and a new PR.")
 
 
+CI_SLEEP_MIN = 30
+
+
+def ci_lock_held(key):
+    """True only when another process holds the ci-wait flock for `key` (skills/orchestrate/scripts/ci_wait.py). It opens
+    the lock file with its own descriptor, never creates or removes it, and reads any other failure as not held. A
+    probe that lands the instant a holder starts makes that holder a subscriber for one 2 s round."""
+    digest = hashlib.sha1(f"ci-wait:{key}".encode()).hexdigest()[:16]
+    try:
+        with open(config.state() / "locks" / f"other-{digest}.lock") as f:
+            try:
+                fcntl.flock(f, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+    except OSError:
+        pass
+    return False
+
+
+def ci_key(c):
+    """The ci-wait target of a `gh run watch ID` or `gh pr checks N --watch` with -R given, else None."""
+    w = c.words
+    verb = pr_verb(w)
+    ident = next((x for x in w[1:] if x.isdigit()), None)
+    if verb == ["run", "watch"] and ident:
+        return f"run:{ident}"
+    repo = flag(w, "--repo") or flag(w, "-R")
+    if verb == ["pr", "checks"] and ident and repo:
+        return f"pr:{repo}#{ident}"
+    return None
+
+
+def check_ci_watch(cmd, cfg):
+    """A CI watcher that polls too often or duplicates another: `gh run watch` / `--watch` without --interval, a loop
+    around `gh` that sleeps under 30 s, or a command whose ci-wait lock is held. Warn only, whatever the setting."""
+    cmds, text = shell.commands(cmd), shell.command_text(cmd)
+    why = []
+    for c in (c for c in cmds if c.name == "gh"):
+        w = c.words
+        if pr_verb(w) == ["run", "watch"] or "--watch" in w:
+            if flag(w, "--interval") is None and "-i" not in w:
+                why.append("it has no --interval, so gh polls every 3 s")
+            key = ci_key(c)
+            if key and ci_lock_held(key):
+                why.append(f"a `orch ci-wait` already holds {key}: run it too and it subscribes to that poller")
+        region = loop_around(text, cmds, c.span[1] - 1)
+        if region is not None:
+            secs = [sleep_seconds(s) for s in cmds if s.name == "sleep" and region[0] < s.span[1] <= region[1]]
+            if secs and None not in secs and sum(secs) < CI_SLEEP_MIN:  # the sleeps of one pass add up, as in check_monitor
+                why.append(f"its loop sleeps under {CI_SLEEP_MIN} s")
+    if not why:
+        return []
+    return [f._replace(level="warn") for f in finding(
+        cfg, "orchestrate.ci_watch",
+        "Several sessions watching one run or PR multiply GitHub's rate use (" + "; ".join(dict.fromkeys(why)) + "). "
+        "Use `orch ci-wait <owner/repo#N|run-id> --deadline-min M`: one poller per target, at least 60 s apart, "
+        "and every other caller reads its result.")]
+
+
 def check_bash(cmd, background, s, cfg):
     out, cmds = [], shell.commands(cmd)
     out += check_model_flag(cmds, cfg)
+    out += check_ci_watch(cmd, cfg)
     if roles.applies("wait_foreground", s):
         wait = next((c for c in cmds if waits(c)), None)
         if wait and not background:

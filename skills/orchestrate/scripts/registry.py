@@ -496,6 +496,8 @@ STORES = [
     Store("pressureout", "S/pressure.log", {"pressure.output": CANONICAL}, ("pressure:log",), ("nobody",)),
     Store("landbeat", "S/land-exec.json", {"land.round": CANONICAL}, ("land_exec:beat",), ("programview",), 600,
           feature="orchestrate.land_executor", rule="the land executor's last round; `orch land` reads it to say the executor is not running"),
+    Store("ciwait", "S/ci-wait/*.json", {"ci.wait_result": CANONICAL}, ("ci_wait:write_state",), ("nobody",),
+          rule="the last poll of one CI target by `orch ci-wait`; a second caller reads it instead of calling gh"),
     Store("landlock", "S/land-exec.lock", {"land.round": LOCK}, ("land_exec:round_lock",)),
     Store("landout", "S/land-exec.log", {"land.output": CANONICAL}, ("land_exec:log",), ("nobody",),
           rule="each settled request, one line"),

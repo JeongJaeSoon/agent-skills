@@ -250,4 +250,59 @@ assert monitor("until gh pr view 5 | grep -q MERGED; do sleep 60; done") == ("no
 CONFIG.write_text(json.dumps({"orchestrate": {"pr_poll": "deny"}}))
 assert monitor("until gh pr view 5 | grep -q MERGED; do sleep 60; done")[0] == "none", "a warning never blocks, whatever the level"
 CONFIG.write_text("{}")
+
+# orchestrate.ci_watch: a CI watcher with a short interval, no --interval, or a ci-wait already holding its target
+# warns and points at `orch ci-wait`; it never blocks, and an unrelated command that only mentions gh stays quiet.
+import fcntl, hashlib
+
+
+def ci(cmd, tool="Bash"):
+    verdict = hook(tool, {"command": cmd, "description": "x", "timeout_ms": 1800000} if tool == "Monitor"
+                   else {"command": cmd, "run_in_background": True}, "general")  # a foreground sleep loop is denied elsewhere
+    return verdict, LAST["warning"]
+
+
+def ci_warns(cmd, tool="Bash"):
+    verdict, warning = ci(cmd, tool)
+    return verdict == "none" and "orch ci-wait" in warning and "orchestrate.ci_watch" in warning
+
+
+for cmd in ("gh run watch 123", "gh run watch 123 --exit-status", "gh -R a/b run watch 123 --exit-status",
+            "gh pr checks 5 --watch", "gh pr checks 5 --watch --fail-fast",
+            "until gh run view 1 --json status | grep -q completed; do sleep 10; done",
+            "while true; do gh pr checks 5; sleep 29; done"):
+    for tool in ("Bash", "Monitor"):
+        assert ci_warns(cmd, tool), (tool, cmd)
+for cmd in ("gh run watch 123 --interval 60", "gh run watch 123 -i 60 --exit-status",
+            "gh pr checks 5 --watch --interval 60",
+            "until gh run view 1 --json status | grep -q completed; do sleep 60; done",
+            "echo 'gh run watch 123'", "gh run list; sleep 5", "sleep 1; gh pr view 5",
+            "while true; do echo hi; sleep 1; done", "gh pr checks 5",
+            "orch ci-wait acme/app#5 --deadline-min 30"):
+    assert ci(cmd) == ("none", ""), "no warning: " + cmd
+
+
+def lock_of(key):
+    return STATE / "locks" / f"other-{hashlib.sha1(key.encode()).hexdigest()[:16]}.lock"
+
+
+lock_of("x").parent.mkdir(parents=True, exist_ok=True)
+held = open(lock_of("ci-wait:run:123"), "w")
+fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+assert ci_warns("gh run watch 123 --interval 60"), "a ci-wait holds run 123"
+assert "ci-wait" in LAST["warning"] and "already" in LAST["warning"]
+assert ci("gh run watch 124 --interval 60") == ("none", ""), "another run is free"
+held2 = open(lock_of("ci-wait:pr:a/b#5"), "w")
+fcntl.flock(held2, fcntl.LOCK_EX | fcntl.LOCK_NB)
+assert ci_warns("gh pr checks 5 -R a/b --watch --interval 60")
+assert ci("gh pr checks 5 --watch --interval 60") == ("none", ""), "no repo given: no key to look up"
+held.close()
+assert ci("gh run watch 123 --interval 60") == ("none", ""), "a released lock file is not a holder"
+assert lock_of("ci-wait:run:123").exists(), "the probe never removes the file"
+held2.close()
+CONFIG.write_text(json.dumps({"orchestrate": {"ci_watch": "deny"}}))
+assert ci("gh run watch 123")[0] == "none" and "orch ci-wait" in LAST["warning"], "a warning never blocks, whatever the level"
+CONFIG.write_text(json.dumps({"orchestrate": {"ci_watch": False}}))
+assert ci("gh run watch 123") == ("none", "")
+CONFIG.write_text("{}")
 print("coordination: all pass")
