@@ -452,7 +452,8 @@ assert prog.review_sweep([{"ev": "verdict", "pr": 20, "result": "pass"}], lambda
 assert prog.review_sweep(rev[:1], lambda n: ok, set(), {}.get, "s") == ["WAITING ON REVIEW #11 (R-11): no passing verdict"]
 assert prog.final_check_current([{"ev": "predicate_verified"}, {"ev": "admitted", "pr": 11}]), "a hold release is not a new follow-up"
 assert prog.review_sweep(one, lambda n: dict(ok, mergeStateStatus="BEHIND"), set(), {}.get, "s") == [
-    "WAITING ON REVIEW #11 (R-11): merge state BEHIND, gh pr update-branch 11"]
+    "WAITING ON REVIEW #11 (R-11): merge state BEHIND, gh pr update-branch 11"
+    " (the land executor and a no-CI repo then need a verdict at the new head)"]
 assert prog.review_sweep(one, lambda n: dict(ok, mergeStateStatus="DIRTY"), set(), {}.get, "s") == [
     "WAITING ON REVIEW #11 (R-11): merge state DIRTY, dispatch a fix"]
 import subprocess, tempfile

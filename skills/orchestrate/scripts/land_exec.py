@@ -204,7 +204,7 @@ class Round:
             return settle("refused", 3, f"#{pr} conflicts with its base: resolve, re-review, land again")
         if mss == "BEHIND":
             return settle("refused", 3, f"#{pr} is behind a base that requires up-to-date branches:"
-                                         f" {prog.update_advice([pr], repo)}, then land again")
+                                         f" {prog.update_advice([pr], repo)}, then land again." + prog.EXECUTOR_KEEP)
         try:
             code, msg = prog.attempt(p, pr, row["klass"], expect=sha, verdict_sources=ex["verdict_sources"])
         except SystemExit as e:
