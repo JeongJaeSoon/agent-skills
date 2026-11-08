@@ -36,7 +36,9 @@ hang: patch with an edit tool rather than rewriting the note whole.
 Read the vault's instructions before a write. Inspect the current note before editing,
 check that a create path is unused, and preserve unrelated content. With the vault tools,
 `vault_read`, `vault_search`, `vault_edit` (dry run first), `vault_write` and `vault_append`
-are common operations; discover the actual tools available in this environment.
+are common operations; discover the actual tools available in this environment. Archiving a
+note ("Removing a note" in SKILL.md) uses `vault_move`; never `vault_delete`. Check that the
+destination path is unused first.
 
 A downloaded copy is a snapshot, not permission to overwrite a newer note. Re-read before
 writing after a pause or conflicting edit. Show the note through its normal link or the

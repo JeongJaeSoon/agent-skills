@@ -276,6 +276,7 @@ PR 을 맡는 스킬과 머지 주체:
   - `notes` 설정이나 사용자가 지정한 저장소의 obsidian 또는 markdown 어댑터를 쓴다. 개인 vault 기본값은 없다.
   - 쓰기는 모두 담당 에이전트에 맡긴다. 담당은 사용자 지시 → 설정의 `notes.delegate_agent` → 플러그인 agent `agent-skills:notes-writer` 순서로 정하고, `"none"`이면 세션에서 직접 쓴다. `notes-writer`는 저장소의 규칙 파일을 매번 읽고(읽다 실패하면 멈춘다), 지금은 Obsidian vault와 Markdown 폴더만 다룬다. Confluence·GitHub wiki 어댑터는 나중 일이다(LATER).
   - 경로와 파일 이름은 선택한 저장소의 규칙이나 사용자의 지정을 따른다.
+  - 노트는 지우지 않는다. 없애야 할 노트(대체됨·중복·끝남)는 저장소 자신의 규칙 파일이 적은 아카이브 위치로 옮기고, 그 위치는 실행 시 규칙 파일에서 읽는다. 규칙 파일에 아카이브 위치가 없으면 옮기지 않고 멈춰서 묻는다. 목적지에 같은 이름이 있으면 덮어쓰지 않고, 멈춰서 보고하거나 날짜 접미사를 붙여 옮긴 뒤 어느 쪽인지 보고에 적는다.
   - Obsidian vault는 사용자 지시가 정한 경로, 없으면 `notes.obsidian.access`(`mcp`·`cli`·`filesystem`)가 정한 한 가지 경로로만 읽고 쓴다. `mcp`면 연결된 Obsidian MCP의 vault 도구만 쓰고, vault 폴더에 셸 명령·파일 도구·Obsidian CLI를 쓰지 않는다. 동기화 서비스가 디스크 사본을 늦게 맞추는 vault를 위한 모드다. 둘 다 없으면 파일시스템으로 넘어가지 않고 멈추고 묻는다. 표시를 위한 별도 페이지 발행은 필수가 아니다.
 - **동봉:** `references/obsidian.md`, `references/markdown.md`.
 

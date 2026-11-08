@@ -56,8 +56,16 @@ goes stale.
 ## Conventions every adapter keeps
 
 - Paths follow the configured store or the user's requested destination. Worklogs (`worklog-<ticket-or-topic>`) are
-  updated as each piece lands and pruned when the project wraps. Program notes are
+  updated as each piece lands; when the project wraps, edit out expired status inside the
+  note, and archive the note itself only under "Removing a note" below. Program notes are
   `program-<slug>` (`orchestrate`).
+- **Removing a note.** A note is never deleted (no delete tool, no `rm`, no empty overwrite).
+  One that is superseded, duplicated or finished moves to the archive location the store's
+  own rules file names; read that location from the rules file on every run, and never
+  assume a folder name. When the rules file names none, do not move the note: stop and ask
+  the user. Never overwrite at the destination: when a note of that name is already there,
+  stop and report it, or add a date suffix to the moved note's name; write which one you did
+  in the report. Move with the adapter's move operation, then read the destination back.
 - A note is the source of truth; anything shown to the user (an Artifact page, a chat summary)
   is a view re-read from the store at that moment, never from an older copy.
 - A document written for the owner to read (a review, a summary, a design note) is published

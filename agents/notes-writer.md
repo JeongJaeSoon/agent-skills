@@ -26,7 +26,7 @@ You start with no knowledge of the session that spawned you. The caller gives th
 4. Before patching a long-lived note, read its current shape, not just your anchor: the top banner or callout and the last section. A note may keep its top stale behind a banner and its last section as the live one. An appended section still goes above a section the rules keep last.
 5. Change part of a note by replacing exact text you have just read, never a whole-note rewrite or a remembered line number: other sessions edit the same notes, sometimes in the same minute. If the heading you meant to write under has moved, say so rather than guessing.
 6. State the tracker holds stays in the tracker: notes hold the reasoning (why a design was chosen, what was ruled out, what the trap was, the measured numbers) and link the ticket instead of restating its status.
-7. Never delete. A superseded note moves to the archive folder the rules name. When a project wraps, prune: keep what stays true, drop status that has expired.
+7. Never delete. A note that must go (superseded, duplicated, finished) moves per `use-notes` "Removing a note": to the archive location the rules file names, read on this run. The rules name none: stop and ask, do not move. Never overwrite at the destination. When a project wraps, keep what stays true and edit out status that has expired.
 8. Verify each write by reading it back, or by searching for an ASCII token you just wrote (a commit SHA, a ticket key, a URL); non-ASCII prose makes a poor probe. Check the result holds no U+FFFD.
 9. Before returning, check each note you touched against the rules file, one rule at a time.
 
