@@ -1393,7 +1393,8 @@ pe = prog.Program("ext")
 with contextlib.redirect_stdout(io.StringIO()):
     for e in base_events:
         pe.append(e["ev"], **{k: v for k, v in e.items() if k not in ("ts", "ev")})
-real_compare, calls = prog.compare, []
+real_compare, real_default, calls = prog.compare, prog.default_branch, []
+prog.default_branch = lambda repo: "main"
 
 
 def fake_compare(table):
@@ -1423,6 +1424,20 @@ prog.compare = fake_compare({**good, (S40, "main"): "diverged"})
 refused(S40, "not on main")
 prog.compare = fake_compare({(R1, S40): "ahead"})
 refused(S40, "could not be checked")
+prog.default_branch = lambda repo: "trunk"
+prog.compare = fake_compare(good)
+refused(S40, "could not be checked")  # `main` is not the repo's base; the commit is checked against the real one
+prog.default_branch = lambda repo: "main"
+# Two open reds: a commit that descends from only one of them cannot show the other fixed.
+R2 = "d" * 40
+two = [row("landed", pr=1, sha=R1), row("main_red", pr=1, sha=R1), row("landed", pr=2, sha=R2), row("main_red", pr=2, sha=R2)]
+assert prog.open_reds(two) == [R1, R2]
+assert prog.open_reds(two + [row("landed", pr=3, sha="g"), row("main_green", pr=3, sha="g")]) == [], "a newer own green supersedes both"
+prog.compare = fake_compare({**good, (R2, S40): "diverged"})
+pe_events = pe.events()
+(d4 / "ledger.jsonl").write_text("".join(json.dumps(e) + "\n" for e in two))
+refused(S40, "not a descendant of the red landing dddddddd")
+(d4 / "ledger.jsonl").write_text("".join(json.dumps(e) + "\n" for e in pe_events))
 prog.compare = fake_compare(good)
 refused("main", "full 40-char")
 refused(S40[:12], "full 40-char")
@@ -1456,7 +1471,7 @@ try:
     raise AssertionError("main_red accepted an external sha")
 except SystemExit as e:
     assert "recorded by `landed`" in str(e), e
-prog.compare = real_compare
+prog.compare, prog.default_branch = real_compare, real_default
 
 print("prog.py external green: all pass")
 

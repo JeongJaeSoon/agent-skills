@@ -58,6 +58,8 @@ elif a[:2] == ["api", "graphql"]:
     print(json.dumps({"data": {"repository": {"pullRequest": {"reviewThreads": {
         "nodes": [{"isResolved": r} for r in pages[i]],
         "pageInfo": {"hasNextPage": i + 1 < len(pages), "endCursor": str(i + 1)}}}}}}))
+elif a[:1] == ["api"] and a[1] == "repos/o/r":
+    print(json.dumps({"default_branch": st.get("default_branch", "main")}))
 elif a[:1] == ["api"] and "/compare/" in a[1]:
     left, right = a[1].split("/compare/")[1].split("...")
     if f"{left}...{right}" in st.get("ancestry", {}):
@@ -433,6 +435,14 @@ assert "SAFETY STOP" in out, out
 before = len([e for e in ledger(d) if e["ev"] == "landed"])
 code, out = prog(env, "record", "t", "main_green", "--sha", SIDE40)
 assert code != 0 and "not a descendant" in out, out
+st = json.loads((d / "state.json").read_text())
+st["default_branch"] = "trunk"  # a stray `main` branch holds the commit, the repo's real base does not
+st["ancestry"][f"{GREEN40}...trunk"] = "diverged"
+(d / "state.json").write_text(json.dumps(st))
+code, out = prog(env, "record", "t", "main_green", "--sha", GREEN40)
+assert code != 0 and "not on trunk" in out, out
+st["default_branch"] = "main"
+(d / "state.json").write_text(json.dumps(st))
 code, out = prog(env, "record", "t", "main_green", "--sha", GREEN40)
 assert code == 0 and '"via": "descendant"' in out, out
 assert len([e for e in ledger(d) if e["ev"] == "landed"]) == before, "the green is no landing of this program"

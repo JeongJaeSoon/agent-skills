@@ -2201,6 +2201,11 @@ OWNED = {"approved": "land, gate", "gate_opened": "gate", "landed": "land, lande
 SIGNAL_KINDS = ("human_correction", "brief_gap", "stall", "tooling")
 
 
+def default_branch(repo):
+    # REST like repo_meta: the executor and record run often, and GraphQL's budget is the one that runs out.
+    return gh_json("api", f"repos/{repo}")["default_branch"]
+
+
 def record_external_green(p, sha):
     """main_green for a commit another program landed: allowed only to clear a red, and only for a full sha that
     descends from every red landing the stop rests on and sits on the base branch. Anything GitHub cannot confirm
@@ -2211,8 +2216,9 @@ def record_external_green(p, sha):
                  "counts only while this program's main is red (main is not red)")
     if not re.fullmatch(r"[0-9a-f]{40}", sha or ""):
         sys.exit("main_green for a commit this program did not land needs its full 40-char sha (a branch or a short sha can move)")
-    repo, base = p.cfg["repo"], p.cfg.get("base") or "main"
+    repo = p.cfg["repo"]
     try:
+        base = p.cfg.get("base") or default_branch(repo)
         for r in reds:
             if compare(repo, r, sha).get("status") != "ahead":
                 sys.exit(f"{sha[:8]} is not a descendant of the red landing {r[:8]}: it cannot show that red is fixed")
