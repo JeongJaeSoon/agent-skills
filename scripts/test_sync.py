@@ -388,6 +388,16 @@ def test_suggestion_confirm():
         check("a draft shown on screen is typed text and no confirmation sends past it", code == 1 and sent == [],
               (code, out, sent))
         kept.unlink()
+        with sync.locked() as got:
+            code, out, sent = run("--terminal", "ghost", "--confirm-suggestion", "ghost=summarize the diff")
+        check("a confirmation is recorded only under the broadcast lock", got and code == 1 and sent == []
+              and confirmed() is None, (code, out, confirmed()))
+        sync.confirm_suggestions([("ghost", "summarize the diff")])
+        reason = sync.send_to("ghost", "/reload-skills", lambda *a: False)
+        check("a send whose result cannot be confirmed still uses up the confirmation",
+              reason == sync.UNCONFIRMED and confirmed() == {}, (reason, confirmed()))
+        st.write_text(json.dumps(dict(json.loads(st.read_text()), sent=[])))
+        kept.unlink()
         code, out, sent = run("--terminal", "ghost", "--dry-run", "--confirm-suggestion", "ghost=summarize the diff")
         check("--dry-run records no confirmation", sent == [] and confirmed() is None, confirmed())
         for bad in (["--confirm-suggestion"], ["--confirm-suggestion", "no-equals"], ["--confirm-suggestion", "ghost="]):

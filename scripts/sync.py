@@ -526,6 +526,9 @@ def send_to(handle, text, confirmed, still=None):
     reason = still and still(second)
     if reason:
         return reason
+    left = read_json(CONFIRMED, {})
+    if left.pop(handle, None) is not None:  # one typing per confirmation, even if the screen read after it fails
+        write_json(CONFIRMED, left)
     orca("terminal", "send", "--terminal", handle, "--text", text, "--enter")
     time.sleep(CONFIRM_S)
     try:
@@ -534,9 +537,6 @@ def send_to(handle, text, confirmed, still=None):
         return UNCONFIRMED
     if not confirmed(second, after, text):
         return UNCONFIRMED
-    left = read_json(CONFIRMED, {})
-    if left.pop(handle, None) is not None:  # one send per confirmation
-        write_json(CONFIRMED, left)
     return None
 
 
@@ -952,13 +952,15 @@ def close_setup_terminals(handles, start, timeout_s, grace_s):
     return rc
 
 
-def broadcast(kind, dry_run, only=None):
+def broadcast(kind, dry_run, only=None, confirms=()):
     if dry_run:
         return broadcast_locked(kind, dry_run=True, only=only)
     with locked() as got:
         if not got:
             print("another sync or broadcast is running; the reload stays pending")
             return 1
+        if confirms:  # under the lock, as the send that consumes it
+            confirm_suggestions(confirms)
         return broadcast_locked(kind, only=only)
 
 
@@ -1199,10 +1201,8 @@ def main(argv):
             print(__doc__)
             return 2
         STATE.mkdir(parents=True, exist_ok=True)
-        if confirms and "--dry-run" not in args:
-            confirm_suggestions(confirms)
         kind = "plugins" if "--plugins" in args else "skills" if "--skills" in args else None
-        return broadcast(kind, dry_run="--dry-run" in argv, only=only)
+        return broadcast(kind, dry_run="--dry-run" in argv, only=only, **({"confirms": confirms} if confirms else {}))
     if cmd == "nudge" and len(argv) == 3:
         return nudge(argv[1], argv[2])
     if cmd == "wake-target" and len(argv) == 2:
