@@ -36,7 +36,7 @@ append it to the running card's prompt or scope.
 **Dependent tickets.** When ticket B can only start after A, record it in the tracker (A
 blocks B). Only when B uses A's code is it a stack: B's card starts from A's branch (§3
 `--base-branch`). Same files → B starts after A lands, unless they share only a hotspot (a
-`translated-from` line, a generated file); a deploy order alone → both on the default branch (`deliver-ticket` [pull-request.md](../../deliver-ticket/references/pull-request.md) "Stacks").
+generated file); a deploy order alone → both on the default branch (`deliver-ticket` [pull-request.md](../../deliver-ticket/references/pull-request.md) "Stacks").
 
 **Who runs it.** A small defect in the code this session just shipped stays here, on its own
 branch and its own PR. A session can ship N PRs this way — one ticket each, one at a time — so

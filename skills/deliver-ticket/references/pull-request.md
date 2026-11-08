@@ -37,7 +37,7 @@ and decide whether this change belongs on top of one:
   as two independent PRs.
 - It only touches the same files as an open PR and needs nothing from it: do not stack. The work
   itself waits: start it (not just the PR) after that PR lands, unless the overlap is only a
-  hotspot (a `translated-from` line, a generated file), which stays parallel.
+  hotspot (a generated file), which stays parallel.
 - It only has to deploy or run after an open PR: base it on the default branch; the order is an
   `orch dep` edge in a program, else a line in the body, never a stack.
 - None of these: base it on the default branch.

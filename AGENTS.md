@@ -23,7 +23,7 @@
 
 - 코드·주석과 SKILL.md 본문은 영어, 커밋 메시지·PR 제목·본문은 한국어.
 - README는 `README.md`(영어)가 정본이고, 고칠 때 `README.ja.md`·`README.ko.md`도 같은 PR에서 고친다. 직역하지 않고 각 언어로 읽히게 쓴다.
-- docs/에 새로 쓰는 문서는 `name.md`(영어), `name.ja.md`, `name.ko.md` 세 개를 함께 둔다. 루트의 `CONTRIBUTING.md`·`SECURITY.md` 같은 OSS 파일은 영어 하나다. 이미 있는 문서(`docs/skills.md` 같은 한국어 파일)는 이름과 언어를 그대로 두고, 그 파일의 언어를 따른다. 번역본이 있는 문서(`docs/skills.en.md`·`docs/skills.ja.md`)는 한국어 정본을 먼저 고치고, 번역본을 맞춘 뒤 첫 줄의 `translated-from`을 올린다.
+- docs/에 새로 쓰는 문서는 `name.md`(영어), `name.ja.md`, `name.ko.md` 세 개를 함께 둔다. 루트의 `CONTRIBUTING.md`·`SECURITY.md` 같은 OSS 파일은 영어 하나다. 이미 있는 문서(`docs/skills.md` 같은 한국어 파일)는 이름과 언어를 그대로 두고, 그 파일의 언어를 따른다. 번역본이 있는 문서(`docs/skills.en.md`·`docs/skills.ja.md`)는 한국어 정본을 먼저 고치고, 번역본을 같은 PR에서 맞춘다. 번역본에는 기준 커밋을 적는 줄이 없다. `scripts/catalog/build.py`가 번역본의 마지막 커밋 뒤에 원문이 바뀌었는지로 오래됨을 판단하므로, 원문만 고치고 번역본을 안 고치면 경고가 난다. 번역본의 오타만 고쳐도 최신으로 보이니, 원문 변경을 번역하지 않고 오타 수정만 하지 않는다.
 - 커밋은 서명한다.
 - 편집은 worktree 브랜치에서 하고, 로드되는 메인 체크아웃에는 fast-forward로만 들어간다. 운영 방식은 [docs/platform.md](docs/platform.md).
 - 테스트는 [CONTRIBUTING.md](CONTRIBUTING.md)의 "Tests" 절 명령으로 돌린다.
