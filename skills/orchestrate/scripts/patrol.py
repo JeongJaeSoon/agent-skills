@@ -991,7 +991,7 @@ def signal_card(t, facts, reading):
         else "none" if h in waits else "not looked"
     lines = facts["screens"].get(h)
     if lines is not None or isinstance(waited, dict):
-        screen, basis, finding = card_watch.screen_view(t, lines, waited, facts["now"] * 1000)
+        screen, basis, finding = card_watch.screen_view(t, lines, waited, facts["now"] * 1000, prog.low_disk())
     else:
         screen, basis, finding = "unknown", "unreadable" if h in (facts.get("unread") or ()) else "not read", ""
     motion = (facts["tails"].get(t.get("worktreePath")) or (None, None))[0] if agent_signal.is_claude(t) else None

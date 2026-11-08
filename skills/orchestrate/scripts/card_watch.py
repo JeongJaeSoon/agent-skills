@@ -11,7 +11,8 @@ Usage: orch watch-cards [--interval 180] [--idle-min 30] [--goal-lost-min 15] [-
 
 Each round reads every agent terminal but this session's own and exits on a new finding: a lost login or a
 stopped goal (auth), a select menu, a permission prompt or an interrupted turn (Orca's agentWait decides whether
-it waits on a human; the screen only where Orca has no verdict), a full disk, an API retry loop,
+it waits on a human; the screen only where Orca has no verdict), a full disk (an ENOSPC on screen counts only while
+free disk is under --min-free-gb), an API retry loop,
 a `/goal` card with no output for --idle-min minutes (not while it is busy: a running shell or `claude agents` busy),
 a card once seen under `/goal` that sits on an empty
 prompt without it for --goal-lost-min minutes (not when its transcript's last goal_status is met: that lead is parked), or free disk under --min-free-gb. A finding still on screen is
@@ -115,11 +116,11 @@ def screen_state(tail, quiet_min, finding=""):
     return "unknown", "no evidence"
 
 
-def screen_view(t, lines, waited, now_ms):
+def screen_view(t, lines, waited, now_ms, low_disk=None):
     """(state, basis, finding) of a screen read elsewhere (patrol), by the rules scan applies to its own."""
     tail = (lines or [])[-25:]
     quiet = (now_ms - (t.get("lastOutputAt") or now_ms)) / 60000
-    hit = prog.judge_wait(waited, lines)
+    hit = prog.judge_wait(waited, lines, low_disk=low_disk)
     finding = "auth" if quiet >= AUTH_QUIET_MIN and auth_line(tail) else hit[0] if hit else ""
     return (*screen_state(tail, quiet, finding), finding)
 
@@ -161,7 +162,8 @@ def setup_failure(name):
     return None
 
 
-def scan(terms, seen, read, now_ms, idle_min, free_gb, min_free_gb, goal_lost_min=15, waits=None, agents=None, states=None):
+def scan(terms, seen, read, now_ms, idle_min, free_gb, min_free_gb, goal_lost_min=15, waits=None, agents=None, states=None,
+         low_disk=prog.NOT_LOOKED):
     """Lines for findings not in seen; seen becomes this round's findings, so a cleared one can come back.
 
     seen["goals"] lists the handles once seen under `/goal`: a `/goal` card's goal has no other record, and only
@@ -205,7 +207,7 @@ def scan(terms, seen, read, now_ms, idle_min, free_gb, min_free_gb, goal_lost_mi
         tail = (lines or [])[-25:]
         idle = (now_ms - (t.get("lastOutputAt") or now_ms)) / 60000
         auth = auth_line(tail) if idle >= AUTH_QUIET_MIN else None
-        hit = prog.judge_wait(waited, lines)
+        hit = prog.judge_wait(waited, lines, low_disk=free_gb < min_free_gb if low_disk is prog.NOT_LOOKED else low_disk)
         finding = "auth" if auth else hit[0] if hit else ""
         state, basis = screen_state(tail, idle, finding)
         states[h] = (state, "unreadable" if lines is None else basis, finding)  # a wait Orca found stands without the pane
@@ -252,7 +254,8 @@ def scan(terms, seen, read, now_ms, idle_min, free_gb, min_free_gb, goal_lost_mi
     return out
 
 
-def check_start(handle, read, listing, within, interval, clock=time.time, sleep=time.sleep):
+def check_start(handle, read, listing, within, interval, clock=time.time, sleep=time.sleep, low_disk=prog.low_disk,
+                min_free_gb=prog.MIN_FREE_GB):
     """One card just created: STUCK on the first finding, else at the deadline STARTED, ENDED, CLOSED or STUCK.
 
     `/goal active` shows the moment `/goal` is typed, and cards have lost their login a few turns later, so it
@@ -269,7 +272,8 @@ def check_start(handle, read, listing, within, interval, clock=time.time, sleep=
         if t:
             seen = t
             was_goal = was_goal or under_goal(t, tail_of(handle))
-            out = scan([t], {}, read, clock() * 1000, 10**9, 1.0, 0)
+            # min_free_gb 0 keeps the disk line out of a start check; the screen's ENOSPC still needs the measurement.
+            out = scan([t], {}, read, clock() * 1000, 10**9, 1.0, 0, low_disk=low_disk(min_free_gb))
             if out:
                 return out
         if clock() + interval > deadline:
@@ -379,7 +383,7 @@ def main(argv):
     ap.add_argument("--interval", type=int, default=180, help="seconds between rounds")
     ap.add_argument("--idle-min", type=int, default=30)
     ap.add_argument("--goal-lost-min", type=int, default=15)
-    ap.add_argument("--min-free-gb", type=float, default=15)
+    ap.add_argument("--min-free-gb", type=float, default=prog.MIN_FREE_GB)
     ap.add_argument("--timeout-ms", type=int, default=3300000)
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--self", dest="self_handle", default=os.environ.get("ORCA_TERMINAL_HANDLE"))
@@ -391,7 +395,8 @@ def main(argv):
     a = ap.parse_args(argv)
     listing = lambda: agent_terminals(prog.orca_json("terminal", "list").get("terminals", []), a.self_handle, a.handle)
     if a.card:
-        print("\n".join(check_start(a.card, prog.read_screen, listing, a.within, min(a.interval, 30))), flush=True)
+        print("\n".join(check_start(a.card, prog.read_screen, listing, a.within, min(a.interval, 30),
+                               min_free_gb=a.min_free_gb)), flush=True)
         return
     state = a.state or STATE_DIR / f"{a.self_handle or 'default'}.json"
     seen, deadline = load(state), time.time() + a.timeout_ms / 1000

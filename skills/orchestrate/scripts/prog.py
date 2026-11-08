@@ -285,7 +285,7 @@ admitted, parked, approved, gate_opened, stop, resume, predicate_verified, confi
 land_check, yield, lane, lock_acquired, lock_released, reprioritized, signal.
 Tickets come from the tracker adapter (use-tracker/scripts/tracker.py), never from a tracker directly.
 """
-import contextlib, datetime as dt, fcntl, fnmatch, hashlib, heapq, json, math, os, pathlib, re, shlex, subprocess, sys, tempfile, time
+import contextlib, datetime as dt, fcntl, fnmatch, hashlib, heapq, json, math, os, pathlib, re, shlex, shutil, subprocess, sys, tempfile, time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))  # loaded by path or run with -I, this dir is not on it
 import land_scope  # noqa: E402
@@ -3701,10 +3701,25 @@ def without_diffs(lines, tail=25):
     return [l for i, l in out if i >= first]
 
 
-def screen_prompt(lines, activity=None):
+MIN_FREE_GB = 15  # watch-cards' --min-free-gb default: under it the disk is full enough to stop work
+
+
+def low_disk(min_free_gb=MIN_FREE_GB, free=lambda: shutil.disk_usage(pathlib.Path.home()).free):
+    """True under min_free_gb, False at or over it, None when the disk could not be measured."""
+    try:
+        return free() / 2**30 < min_free_gb
+    except Exception:
+        return None
+
+
+def screen_prompt(lines, activity=None, low_disk=None):
+    """low_disk False (measured fine) drops the full-disk reading: the screen only hints at it, and a quoted ENOSPC
+    (code, grep output, prose) looks the same as a real one. True or None (unmeasured) keeps the screen's word."""
     tail = lines[-25:]
     text = "\n".join(without_diffs(lines))
     for rx, kind in PROMPTS:
+        if kind == "a full disk" and low_disk is False:
+            continue
         if rx.search(text):
             return kind, next((l.strip() for l in reversed(tail) if l.strip().endswith("?")), "")
     return ("waiting for input", "") if activity == "waiting" else None
@@ -3748,7 +3763,7 @@ def agent_waits(strict=False):
         return {}
 
 
-def judge_wait(waited, lines, activity=None):
+def judge_wait(waited, lines, activity=None, low_disk=None):
     """(kind, question) for a Dispatch's terminal, or None. Orca's agentWait first: a wait it found stands even on a
     screen the regexes miss; when it looked and found none, only what it does not judge (disk, API retries) is read
     from the screen; when it never looked, the screen decides as for a card."""
@@ -3760,7 +3775,7 @@ def judge_wait(waited, lines, activity=None):
                 str(waited.get("prompt") or waited.get("question") or waited.get("text") or "")[:200])
     if lines is None:
         return None
-    hit = screen_prompt(lines, None if waited is None else activity)
+    hit = screen_prompt(lines, None if waited is None else activity, low_disk)
     return None if hit and waited is None and hit[0] not in NOT_A_WAIT else hit
 
 
@@ -3772,7 +3787,7 @@ def sweeps_screen(w):
     return state == "active" or (state == "retained" and w.get("workerState") not in ("succeeded", "failed"))
 
 
-def stuck_sweep(workers, slug, seen, read=read_screen, only_new=False, waits=None):
+def stuck_sweep(workers, slug, seen, read=read_screen, only_new=False, waits=None, low_disk=None):
     """A worker's terminal has no human watching it: a menu or permission prompt there blocked a program for hours.
     Orca's agentWait decides first; the screen is read for what it does not cover (disk, API retries), and for every
     kind when Orca never looked."""
@@ -3790,7 +3805,7 @@ def stuck_sweep(workers, slug, seen, read=read_screen, only_new=False, waits=Non
                 lines = read(h)
             except (SystemExit, Exception):
                 lines = None
-        hit = judge_wait(waited, lines, ((w.get("projection") or {}).get("stage") or {}).get("activity"))
+        hit = judge_wait(waited, lines, ((w.get("projection") or {}).get("stage") or {}).get("activity"), low_disk)
         if not hit:
             continue
         kind, question = hit
@@ -3815,7 +3830,8 @@ def print_stuck(p, run_id, only_new=False):
         seen = {}
     seen = seen if isinstance(seen, dict) else {}
     try:
-        lines = stuck_sweep(run_workers(run_id), p.slug, seen, read=read_screen, only_new=only_new)
+        lines = stuck_sweep(run_workers(run_id), p.slug, seen, read=read_screen, only_new=only_new,
+                            low_disk=low_disk())
     except (SystemExit, Exception) as e:  # the batch and its ack line matter more than the sweep
         lines, seen = ([] if only_new else [f"STUCK: screen sweep failed ({type(e).__name__}: {e})"]), None
     if seen is not None:
