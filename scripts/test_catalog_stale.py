@@ -39,15 +39,21 @@ class Stale(unittest.TestCase):
         return run(sys.executable, "scripts/catalog/build.py", str(self.tmp / "out.html"), cwd=cwd or self.repo,
                    check=False)
 
+    def built(self):
+        # A failed build prints no warning either, so every "not stale" case must also see the build succeed.
+        r = self.build()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stderr
+
     def test_current_translation_is_not_stale(self):
-        self.assertNotIn("is stale", self.build().stderr)
+        self.assertNotIn("is stale", self.built())
 
     def test_source_only_commit_is_stale(self):
         self.touch("skills.md")
         self.commit("source only")
-        r = self.build()
-        self.assertIn("docs/skills.en.md is stale", r.stderr)
-        self.assertIn("docs/skills.ja.md is stale", r.stderr)
+        err = self.built()
+        self.assertIn("docs/skills.en.md is stale", err)
+        self.assertIn("docs/skills.ja.md is stale", err)
 
     def test_catch_up_commit_clears_the_warning(self):
         self.touch("skills.md")
@@ -55,12 +61,14 @@ class Stale(unittest.TestCase):
         self.touch("skills.en.md")
         self.touch("skills.ja.md")
         self.commit("catch up")
-        self.assertNotIn("is stale", self.build().stderr)
+        self.assertNotIn("is stale", self.built())
 
     def test_uncommitted_source_change_is_stale_even_if_translation_is_dirty(self):
         self.touch("skills.md")
         self.touch("skills.en.md")
-        self.assertIn("is stale", self.build().stderr)
+        err = self.built()
+        self.assertIn("docs/skills.en.md is stale", err)
+        self.assertIn("docs/skills.ja.md is stale", err)
 
     def test_shallow_clone_is_refused(self):
         self.touch("skills.md")
