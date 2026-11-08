@@ -854,7 +854,16 @@ assert "h1" in read_of and "h2" in read_of, read_of
 screens["h2"] = menu
 assert not any(l.startswith("STUCK a2") for l in prog.stuck_sweep(live, "s", {}, read=read, waits=waits))
 screens["h2"] = ["npm ERR! ENOSPC: no space left", "❯ "]
-assert any(l.startswith("STUCK a2 (a full disk)") for l in prog.stuck_sweep(live, "s", {}, read=read, waits=waits))
+assert any(l.startswith("STUCK a2 (a full disk)") for l in prog.stuck_sweep(live, "s", {}, read=read, waits=waits, low_disk=True))
+assert any(l.startswith("STUCK a2 (a full disk)") for l in prog.stuck_sweep(live, "s", {}, read=read, waits=waits)), "unmeasured keeps the screen's word"
+assert not any(l.startswith("STUCK a2") for l in prog.stuck_sweep(live, "s", {}, read=read, waits=waits, low_disk=False)), \
+    "the disk measured fine: an ENOSPC on the screen is a quote, not a full disk"
+assert not any(l.startswith("STUCK a2") for l in prog.stuck_sweep(live, "s", {}, read=read, waits={}, low_disk=False))
+assert prog.judge_wait(None, ["npm ERR! ENOSPC", "❯ "], low_disk=False) is None
+assert prog.judge_wait(None, ["npm ERR! ENOSPC", "❯ "], low_disk=True)[0] == "a full disk"
+assert prog.screen_prompt(["npm ERR! ENOSPC", "❯ "], low_disk=False) is None
+assert prog.low_disk(15, free=lambda: 100 * 2**30) is False and prog.low_disk(15, free=lambda: 1 * 2**30) is True
+assert prog.low_disk(15, free=lambda: 1 / 0) is None, "a failed measurement is not a verdict"
 screens["h2"] = menu
 assert any(l.startswith("STUCK a2 (a select menu)") for l in prog.stuck_sweep(live, "s", {}, read=read, waits={}))
 screens["h2"] = idle

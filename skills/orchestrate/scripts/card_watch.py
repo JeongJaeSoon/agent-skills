@@ -11,7 +11,8 @@ Usage: orch watch-cards [--interval 180] [--idle-min 30] [--goal-lost-min 15] [-
 
 Each round reads every agent terminal but this session's own and exits on a new finding: a lost login or a
 stopped goal (auth), a select menu, a permission prompt or an interrupted turn (Orca's agentWait decides whether
-it waits on a human; the screen only where Orca has no verdict), a full disk, an API retry loop,
+it waits on a human; the screen only where Orca has no verdict), a full disk (an ENOSPC on screen counts only while
+free disk is under --min-free-gb), an API retry loop,
 a `/goal` card with no output for --idle-min minutes (not while it is busy: a running shell or `claude agents` busy),
 a card once seen under `/goal` that sits on an empty
 prompt without it for --goal-lost-min minutes (not when its transcript's last goal_status is met: that lead is parked), or free disk under --min-free-gb. A finding still on screen is
@@ -115,11 +116,11 @@ def screen_state(tail, quiet_min, finding=""):
     return "unknown", "no evidence"
 
 
-def screen_view(t, lines, waited, now_ms):
+def screen_view(t, lines, waited, now_ms, low_disk=None):
     """(state, basis, finding) of a screen read elsewhere (patrol), by the rules scan applies to its own."""
     tail = (lines or [])[-25:]
     quiet = (now_ms - (t.get("lastOutputAt") or now_ms)) / 60000
-    hit = prog.judge_wait(waited, lines)
+    hit = prog.judge_wait(waited, lines, low_disk=low_disk)
     finding = "auth" if quiet >= AUTH_QUIET_MIN and auth_line(tail) else hit[0] if hit else ""
     return (*screen_state(tail, quiet, finding), finding)
 
@@ -205,7 +206,7 @@ def scan(terms, seen, read, now_ms, idle_min, free_gb, min_free_gb, goal_lost_mi
         tail = (lines or [])[-25:]
         idle = (now_ms - (t.get("lastOutputAt") or now_ms)) / 60000
         auth = auth_line(tail) if idle >= AUTH_QUIET_MIN else None
-        hit = prog.judge_wait(waited, lines)
+        hit = prog.judge_wait(waited, lines, low_disk=free_gb < min_free_gb)
         finding = "auth" if auth else hit[0] if hit else ""
         state, basis = screen_state(tail, idle, finding)
         states[h] = (state, "unreadable" if lines is None else basis, finding)  # a wait Orca found stands without the pane
@@ -379,7 +380,7 @@ def main(argv):
     ap.add_argument("--interval", type=int, default=180, help="seconds between rounds")
     ap.add_argument("--idle-min", type=int, default=30)
     ap.add_argument("--goal-lost-min", type=int, default=15)
-    ap.add_argument("--min-free-gb", type=float, default=15)
+    ap.add_argument("--min-free-gb", type=float, default=prog.MIN_FREE_GB)
     ap.add_argument("--timeout-ms", type=int, default=3300000)
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--self", dest="self_handle", default=os.environ.get("ORCA_TERMINAL_HANDLE"))

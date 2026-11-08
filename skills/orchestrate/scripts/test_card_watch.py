@@ -56,7 +56,24 @@ grouped = scan({})
 assert len(grouped) == 1 and grouped[0].startswith("STUCK 3 cards in an API retry loop at once"), grouped
 
 screens = {"h1": ["npm ERR! ENOSPC: no space left", "❯ "], "h2": idle, "h3": idle, "h4": idle}
-assert scan({})[0] == "STUCK card-a (a full disk): read its screen"
+assert scan({}, 1.0)[0] == "STUCK card-a (a full disk): read its screen", "ENOSPC on screen and 1 GiB free: confirmed"
+assert scan({}) == [], "ENOSPC on screen but 100 GiB free: the screen is a clue, the measurement says no"
+assert scan({}, 15.0) == [], "free equal to --min-free-gb is not under it"
+assert [l for l in scan({}, 14.9) if "full disk" in l], "just under --min-free-gb confirms"
+# A quoted ENOSPC must not hide another finding on the same screen.
+screens["h1"] = ["npm ERR! ENOSPC: no space left", "✻ Waiting for API response · will retry in 3m", "❯ "]
+assert scan({}) == ["STUCK card-a (an API retry loop): read its screen", "  orca terminal read --terminal h1 --screen"]
+# Orca found no wait, and the disk is fine: the NOT_A_WAIT bypass needs the measurement to confirm.
+assert card_watch.scan(terms, {}, read, NOW, 30, 100.0, 15, waits={"h1": None}) == [
+    "STUCK card-a (an API retry loop): read its screen", "  orca terminal read --terminal h1 --screen"]
+screens["h1"] = ["npm ERR! ENOSPC: no space left", "❯ "]
+assert card_watch.scan(terms, {}, read, NOW, 30, 100.0, 15, waits={"h1": None}) == []
+assert card_watch.scan(terms, {}, read, NOW, 30, 1.0, 15, waits={"h1": None})[0] == "STUCK card-a (a full disk): read its screen"
+# patrol reads the same rule through screen_view.
+t1 = terms[0]
+assert card_watch.screen_view(t1, screens["h1"], None, NOW, low_disk=False)[2] == ""
+assert card_watch.screen_view(t1, screens["h1"], None, NOW, low_disk=True)[2] == "a full disk"
+assert card_watch.screen_view(t1, screens["h1"], None, NOW, low_disk=None)[2] == "a full disk", "unmeasured keeps the old reading"
 
 seen = {}
 low = scan(seen, free=9.5)
@@ -289,33 +306,33 @@ diff = ["⏺ Update(docs/design.md)", "  ⎿  Added 2 lines", "     41 +- ENOSPC
 screens = {"h1": diff, "h2": idle, "h3": idle, "h4": idle}
 assert scan({}) == [], "ENOSPC inside a drawn diff is not a full disk"
 screens["h1"] = diff + ["npm ERR! ENOSPC: no space left on device, write", "❯ "]
-assert scan({})[0] == "STUCK card-a (a full disk): read its screen", "a real ENOSPC beside a diff still counts"
+assert scan({}, 1.0)[0] == "STUCK card-a (a full disk): read its screen", "a real ENOSPC beside a diff still counts"
 screens["h1"] = ["⏺ Bash(make)", "  ⎿  28  No space left on device", "❯ "]
-assert scan({})[0] == "STUCK card-a (a full disk): read its screen", "numbered command output with no +/- line is not a diff"
+assert scan({}, 1.0)[0] == "STUCK card-a (a full disk): read its screen", "numbered command output with no +/- line is not a diff"
 screens["h1"] = ["⏺ Bash(build)", "  ⎿  27 - writing output", "     28  No space left on device", "❯ "]
-assert scan({})[0] == "STUCK card-a (a full disk): read its screen", "numbered output beside a '-' line, no diff header"
+assert scan({}, 1.0)[0] == "STUCK card-a (a full disk): read its screen", "numbered output beside a '-' line, no diff header"
 screens["h1"] = ["⏺ Update(src/errors.ts)", "  ⎿  Added 1 line", '     41 +  const m = "the filesystem returned',
                   '       ENOSPC: No space left on device";', "❯ "]
-assert scan({})[0] == "STUCK card-a (a full disk): read its screen", "known limit: a wrapped diff line is read as output"
+assert scan({}, 1.0)[0] == "STUCK card-a (a full disk): read its screen", "known limit: a wrapped diff line is read as output"
 for after in ("npm ERR! ENOSPC: no space left on device, write", "     npm ERR! ENOSPC: no space left on device, write"):
     screens["h1"] = ["⏺ Update(src/main.py)", "  ⎿  Added 1 line", "     41 +  enabled = True", after, "❯ "]
-    assert scan({})[0] == "STUCK card-a (a full disk): read its screen", "output right after a diff is not part of it"
+    assert scan({}, 1.0)[0] == "STUCK card-a (a full disk): read its screen", "output right after a diff is not part of it"
 screens["h1"] = ["⏺ Update(src/main.py)", "     41 +  x = 1", "✻ Waiting for API response · will retry in 3m", "❯ "]
 assert scan({})[0] == "STUCK card-a (an API retry loop): read its screen", "a retry line after a diff still counts"
 screens["h1"] = ["npm ERR! ENOSPC: no space left on device, write", "⏺ Disk space recovered.", "⏺ Update(src/app.ts)",
                   *[f"     {i} +  line {i}" for i in range(1, 31)], "❯ "]
 assert scan({}) == [], "a message that scrolled past the 25-line tail is not read again after a long diff"
 screens["h1"] = ["⏺ Update(src/errors.ts)", "     41 +  x = 1", "⏺ Bash(make)", "  ⎿  npm ERR! ENOSPC: no space left", "❯ "]
-assert scan({})[0] == "STUCK card-a (a full disk): read its screen", "the next turn after a diff is not part of it"
+assert scan({}, 1.0)[0] == "STUCK card-a (a full disk): read its screen", "the next turn after a diff is not part of it"
 screens["h1"] = ["⏺ Update(src/errors.ts)", "  ⎿  Added 2 lines", '     41 +  const m = "a long ordinary message',
                   '       continues here";', '     42 +  const d = "ENOSPC";', "❯ "]
 assert scan({}) == [], "a wrapped tail leaves the diff header standing for the lines after it"
 screens["h1"] = ["⏺ Update(src/errors.ts)", "  ⎿  Added 1 line", "     41 +  x = 1", "  ⎿  1 - writing output",
                   "     2  No space left on device", "❯ "]
-assert scan({})[0] == "STUCK card-a (a full disk): read its screen", "a new ⎿ result after a diff starts its own block"
+assert scan({}, 1.0)[0] == "STUCK card-a (a full disk): read its screen", "a new ⎿ result after a diff starts its own block"
 long_build = ["⏺ Bash(build)"] + [f"     {i} - writing output" for i in range(1, 25)] + ["     25  No space left on device", "❯ "]
 screens["h1"] = long_build
-assert scan({})[0] == "STUCK card-a (a full disk): read its screen", "a long numbered log pushes its header out of the tail"
+assert scan({}, 1.0)[0] == "STUCK card-a (a full disk): read its screen", "a long numbered log pushes its header out of the tail"
 screens["h1"] = ["⏺ Update(docs/d.md)"] + [f"     {i} +  line {i}" for i in range(1, 30)] + ["     30 +  ENOSPC quoted", "❯ "]
 assert scan({}) == [], "a diff longer than the tail is still dropped when the screen holds its header"
 
