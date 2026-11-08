@@ -58,13 +58,7 @@ except ImportError:  # an install without the repo's scripts/
     AGENT_PANEL, BACKGROUND = FALLBACK_AGENT_PANEL, FALLBACK_BACKGROUND
 
 
-SCREEN_LIMIT = 25  # every judgement here looks at the last 25 rows; a whole screen read is ~20x the bytes
 SCREEN_TTL_S = 600  # a cached screen is read again after this long even when lastOutputAt has not moved
-
-
-def read_card_screen(handle):
-    return prog.orca_json("terminal", "read", "--terminal", handle, "--screen",
-                          "--limit", str(SCREEN_LIMIT)).get("terminal", {}).get("tail", [])
 
 
 class ScreenCache:
@@ -73,7 +67,9 @@ class ScreenCache:
     A missing lastOutputAt, a different one, an entry older than ttl or a failed read means a read."""
 
     def __init__(self, fetch=None, ttl=SCREEN_TTL_S, clock=time.time):
-        self.fetch, self.ttl, self.clock, self.rows = fetch or (lambda h: read_card_screen(h)), ttl, clock, {}
+        # The whole screen, not `--limit 25`: prog.without_diffs needs a diff header that may sit above the last 25 rows,
+        # and a cut screen turns the bottom of a long diff into a false select menu.
+        self.fetch, self.ttl, self.clock, self.rows = fetch or (lambda h: prog.read_screen(h)), ttl, clock, {}
 
     def reader(self, terms):
         stamps = {t["handle"]: t.get("lastOutputAt") for t in terms}
@@ -428,7 +424,7 @@ def main(argv):
     a = ap.parse_args(argv)
     listed = lambda: prog.orca_json("terminal", "list").get("terminals", [])
     if a.card:
-        print("\n".join(check_start(a.card, read_card_screen, lambda: agent_terminals(listed(), a.self_handle, a.handle),
+        print("\n".join(check_start(a.card, prog.read_screen, lambda: agent_terminals(listed(), a.self_handle, a.handle),
                                     a.within, min(a.interval, 30), min_free_gb=a.min_free_gb)), flush=True)
         return
     state = a.state or STATE_DIR / f"{a.self_handle or 'default'}.json"

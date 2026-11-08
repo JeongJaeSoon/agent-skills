@@ -232,8 +232,8 @@ def read_or_gone(h):
         raise SystemExit("terminal gone")
     return screens[h]
 prog.orca_json = lambda *a: {"terminals": listing}
-real_read_card_screen = card_watch.read_card_screen
-card_watch.read_card_screen = read_or_gone
+real_read_screen = prog.read_screen
+prog.read_screen = read_or_gone
 with tempfile.TemporaryDirectory() as d:
     state = pathlib.Path(d) / "s.json"
     out = io.StringIO()
@@ -258,7 +258,7 @@ with tempfile.TemporaryDirectory() as d:
             [{"sessionId": f"s-{h}", "kind": "interactive", "status": status, "waitingFor": "dialog open"}
              for h in ("h1", "h2", "h3", "h4")], None, "")
         screens = {"h1": idle, "h2": idle, "h3": idle, "h4": idle}
-        card_watch.read_card_screen = lambda h: screens[h]
+        prog.read_screen = lambda h: screens[h]
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             card_watch.main(["--self", "me", "--min-free-gb", "0", "--state", str(pathlib.Path(d) / f"w-{status}.json"),
@@ -279,7 +279,7 @@ with tempfile.TemporaryDirectory() as d:
 
     # Without --self the watch skips the terminal named by ORCA_TERMINAL_HANDLE, so it never reports its own session.
     screens = {"me": menu, "h1": idle, "h2": idle, "h3": idle, "h4": idle}
-    card_watch.read_card_screen = lambda h: screens[h]
+    prog.read_screen = lambda h: screens[h]
     for own, want in (("me", "OK 4 agent terminals"), ("", "STUCK me (a select menu)")):
         os.environ["ORCA_TERMINAL_HANDLE"] = own
         out = io.StringIO()
@@ -435,23 +435,24 @@ seen = {}
 card_watch.scan(terms, seen, flaky, NOW, 30, 100.0, 15)
 assert card_watch.scan(two, seen, flaky, NOW, 30, 100.0, 15) == [], "a second terminal on a reported card is not new"
 
-# A round asks Orca for the terminal list once, and card_watch reads each screen with --limit 25.
-real_orca_json, asked = prog.orca_json, []
+# A round asks Orca for the terminal list once, and reads each screen whole: prog.without_diffs needs a diff header that
+# can sit above the last 25 rows, so a long diff ending in "Enter to select" must not turn into a select menu.
+long_diff = ["⏺ Update(a.py)"] + [f"  {i} + code {i}" for i in range(1, 31)] + ["  31 + # Enter to select · Esc to cancel", "❯ "]
+diff_card = card_watch.agent_terminals([term("h3", "/w/card-c", last=NOW - 60000)], "me")  # card-c has no setup failure
+assert card_watch.scan(diff_card, {}, lambda h: long_diff, NOW, 30, 100.0, 15) == [], "the whole screen: the diff is not a menu"
+assert card_watch.scan(diff_card, {}, lambda h: long_diff[-25:], NOW, 30, 100.0, 15), \
+    "the same screen cut to 25 rows reads as a menu, which is why card_watch does not pass --limit"
+real_orca_json, asked = prog.orca_json, []  # real_read_screen: prog's own, saved before the stubs above
 def answer(*a):
     asked.append(a)
-    return {"worktrees": [], "terminals": listing} if a[:2] != ("terminal", "read") else {"terminal": {"tail": idle}}
-prog.orca_json = answer
-card_watch.read_card_screen = real_read_card_screen
-with tempfile.TemporaryDirectory() as d, contextlib.redirect_stdout(io.StringIO()):
+    return {"worktrees": [], "terminals": listing} if a[:2] != ("terminal", "read") else {"terminal": {"tail": long_diff}}
+prog.orca_json, prog.read_screen = answer, real_read_screen
+with tempfile.TemporaryDirectory() as d, contextlib.redirect_stdout(io.StringIO()) as shown:
     card_watch.main(["--self", "me", "--min-free-gb", "0", "--state", str(pathlib.Path(d) / "calls.json"), "--once"])
 assert [a for a in asked if a[:2] == ("terminal", "list")] == [("terminal", "list")], f"one terminal list per round: {asked}"
 reads = [a for a in asked if a[:2] == ("terminal", "read")]
-assert reads and all(a[-2:] == ("--limit", "25") and "--screen" in a for a in reads), f"card_watch reads 25 screen rows: {reads}"
-asked.clear()
-assert card_watch.read_card_screen("h1") == idle
-assert asked == [("terminal", "read", "--terminal", "h1", "--screen", "--limit", "25")], asked
-asked.clear()
-assert prog.read_screen("h1") == idle and "--limit" not in asked[0], "the shared read_screen keeps reading the whole screen"
+assert reads and all("--screen" in a and "--limit" not in a for a in reads), f"card_watch reads the whole screen: {reads}"
+assert "select menu" not in shown.getvalue(), shown.getvalue()
 prog.orca_json = real_orca_json
 
 # agent_waits takes a terminal list the caller already has, so it asks for none.
