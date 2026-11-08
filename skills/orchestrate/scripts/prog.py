@@ -101,6 +101,10 @@ Usage: orch <command> <slug> [options]
   handoff save --next T [--waiting T] [--question T] [--reply T] [--note T] [--key K] [--restart] | handoff show
                                      no slug: what the session after a /clear does first, in
                                      agent-skills.db; --restart has the stream type /clear (handoff.py)
+  ci-wait <owner/repo#N|run-id> [-R owner/repo] --deadline-min M [--interval 60] [--head SHA]
+                                     no slug: wait for one PR's checks or one run with a single gh poller per
+                                     target; a second caller reads the first one's result. Polls are 60 s
+                                     apart at least; exit 0 passed, 1 failed, 3 deadline, 4 error (ci_wait.py)
   watch-cards [--interval 180] [--idle-min 30] [--goal-lost-min 15] [--min-free-gb 15] [--timeout-ms 3300000] [--once]
                                      no slug: exit on a new stuck screen in any agent terminal but this
                                      one (cards no Run lists), a lost login or goal, or low disk; never types
@@ -2831,7 +2835,7 @@ def merge_unit(p, pr, unit, klass, events, onto=None, stacked=False, expect=None
                    f" commands at {sha}, then orch record {p.slug} main_green|main_red --pr {pr} --sha {sha}")
     return 0, (f"landed {' '.join('#' + str(n) for n in unit)} (merge commit {sha[:8]}; CI runs {' '.join(runs) or '-'}; read their logs in the report). "
                f"Watch main: gh run list --repo {repo} --commit {sha} --json databaseId,workflowName,status, "
-               f"then gh run watch <id> --repo {repo} --exit-status --interval 60 (one watcher per run) and orch record {p.slug} main_green|main_red --pr {pr} --sha {sha}"
+               f"then orch ci-wait <id> -R {repo} --deadline-min 30 (one poller per run) and orch record {p.slug} main_green|main_red --pr {pr} --sha {sha}"
                + base_ci_hint(repo, merged[pr].get("baseRefName")))
 
 
@@ -3324,7 +3328,7 @@ def cmd_landed(argv):
     close_gate_task(p, pr, "completed")
     print(f"landed #{pr} as {sha[:8]}. Watch main CI in the background, then record main_green or main_red:")
     print(f"  gh run list --repo {repo} --commit {sha} --json databaseId,workflowName,status")
-    print(f"  gh run watch <databaseId> --repo {repo} --exit-status --interval 60   # one watcher per run")
+    print(f"  orch ci-wait <databaseId> -R {repo} --deadline-min 30   # one poller per run")
     if hint := base_ci_hint(repo, v.get("baseRefName")):
         print(" " + hint.lstrip(". "))
 
@@ -4206,7 +4210,7 @@ def cmd_wait(argv):
     elif me and own_worker(all_workers(run_id), me):
         sys.exit("orch wait reads and acks the lead's inbox, and this terminal is one of the Run's other"
                  " workers. Wake on your own mailbox (check --terminal $ORCA_TERMINAL_HANDLE --wait) or a"
-                 " background command such as `gh run watch <id>`.")
+                 " background command such as `orch ci-wait <id> -R <owner/repo> --deadline-min M`.")
     else:
         box = ["--run", run_id]
     # STALLED comes from the collector; a lead that only loops `wait` would otherwise keep an old server.
@@ -4964,6 +4968,7 @@ COMMANDS = {"init": cmd_init, "set": cmd_set, "status": cmd_status, "record": cm
             "db": cmd_db, "model": cmd_model,
             "stage": cmd_stage, "board": cmd_board, "brief": cmd_brief, "hold": cmd_hold, "sent": cmd_sent, "release": lambda argv: cmd_hold(argv, release=True),
             "land-exec": lambda argv: __import__("land_exec").main(argv),
+            "ci-wait": lambda argv: sys.exit(__import__("ci_wait").main(argv)),
             "order": lambda argv: __import__("order").main(argv),
             "ask": lambda argv: __import__("ask").main(argv),
             "watch-cards": lambda argv: __import__("card_watch").main(argv),

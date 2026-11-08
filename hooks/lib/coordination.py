@@ -14,7 +14,12 @@ which session they reach is roles.applies' matrix, how hard they hold is a key i
   one warning says the value was not compared when that key is unset. These never go above warn.
 - orchestrate.pr_poll (warn): a Monitor command that polls `gh pr list|view|checks` in a loop with a sleep under 300 s.
   The warning points at the `pr-watch` command (bin/pr-watch). It never goes above warn.
+- orchestrate.ci_watch (warn): a `gh run watch` or `--watch` without --interval, a loop around `gh` that sleeps under
+  30 s, or a watch whose `orch ci-wait` lock is held. It points at `orch ci-wait`, never calls ps, and never goes
+  above warn.
 """
+import fcntl
+import hashlib
 import re
 
 import roles
@@ -22,7 +27,8 @@ from lib import config, shell
 from lib.danger import Finding
 
 RULES = {"orchestrate.ask_user_question": "deny", "orchestrate.wait_foreground": "deny",
-         "orchestrate.send_devnull": "deny", "orchestrate.model_flag": "warn", "orchestrate.pr_poll": "warn"}
+         "orchestrate.send_devnull": "deny", "orchestrate.model_flag": "warn", "orchestrate.pr_poll": "warn",
+         "orchestrate.ci_watch": "warn"}
 LAUNCHES = (["orchestration", "worker-start"], ["worktree", "create"], ["agent", "launch"])
 SOURCE = "(agent-skills hooks/guard.py, {key})"
 
@@ -192,44 +198,69 @@ def loop_around(text, cmds, pos):
     return best
 
 
+def open_if_spans(text, region):
+    """(start, end) of each `if … fi` in region that has no else or elif: a sleep inside one may be skipped."""
+    stack, spans = [], []
+    for m in re.finditer(r"(?<![\w.-])(if|elif|else|fi)(?![\w.-])", text[region[0]:region[1]]):
+        at = region[0] + m.start()
+        if not at_command_start(text, at):
+            continue
+        if m[1] == "if":
+            stack.append([at, False])
+        elif m[1] == "else" and stack:  # an `elif` chain without a final else can still run no branch
+            stack[-1][1] = True
+        elif m[1] == "fi" and stack:
+            start, has_else = stack.pop()
+            if not has_else:
+                spans.append((start, at))
+    return spans
+
+
+def loop_wait(text, cmds, region, skippable=False):
+    """(seconds one pass of the loop in region waits, number of sleeps in it); the seconds are None when a sleep's
+    argument cannot be judged. The wait that counts is the one inside the loop around a poll (a sleep before the loop
+    is a one-off), and the sleeps there add up (`sleep 150; sleep 150` waits 300 s). A sleep put in the background
+    (`sleep 300 &`) waits for nobody, so it counts as 0. Where the loop branches (if/else/case/`||`) only one sleep
+    may run, so the shortest one stands for the loop (a heuristic: it can warn on a loop that branches yet always waits
+    long enough, which costs a warning, never a block). A `wait` (or `wait $!` on the latest job) makes a background
+    sleep a real wait. A sleep whose argument is a variable cannot be judged."""
+    scope = [c for c in cmds if region[0] < c.span[1] <= region[1]]
+    sleeps = [c for c in scope if c.name == "sleep"]
+    secs = [sleep_seconds(c) for c in sleeps]
+    if not secs or None in secs:
+        return (0 if not secs else None), len(secs)
+    backgrounded = lambda c: bool(re.match(r"\s*&(?!&)", text[c.span[1]:]))
+    # A bare `wait` waits for every background job; `wait $!` for the latest one started before it.
+    waited, everything = set(), False
+    for w in (c for c in scope if c.name == "wait"):
+        if w.words == ["wait"]:
+            everything = True
+        elif w.words == ["wait", "$!"]:
+            prior = [c for c in scope if backgrounded(c) and c.span[1] < w.span[0]]
+            # Only a job started right before the wait is surely `$!`: an assignment or a subshell in between
+            # (`sleep 300 & x=1 & wait $!`, `(sleep 300 &); wait $!`) points `$!` somewhere else.
+            if prior and re.fullmatch(r"\s*&\s*;?\s*", text[prior[-1].span[1]:w.span[0]]):
+                waited.add(id(prior[-1]))
+    if not everything:
+        secs = [0 if backgrounded(c) and id(c) not in waited else s for c, s in zip(sleeps, secs)]
+    if skippable:  # a sleep in an `if` with no else may not run on a pass
+        spans = open_if_spans(text, region)
+        secs = [0 if any(a < c.span[0] and c.span[1] <= b + 2 for a, b in spans) else s for c, s in zip(sleeps, secs)]
+    branches = re.search(r"(?<![\w.-])(if|case|else|elif)(?![\w.-])|\|\|", text[region[0]:region[1]])
+    return (min(secs) if branches else sum(secs)), len(secs)
+
+
 def check_monitor(cmd, cfg):
     """A Monitor loop that polls `gh pr list|view|checks` with a sleep under 300 s wakes the session on every
     state change, most of them with nothing to do. The shared watcher prints only the changes that need a turn."""
     cmds, text = shell.commands(cmd), shell.command_text(cmd)
-    # The wait that counts is the one inside the loop around a poll (a sleep before the loop is a one-off), and the
-    # sleeps there add up (`sleep 150; sleep 150` waits 300 s). A sleep put in the background (`sleep 300 &`) waits
-    # for nobody, so it counts as 0. Where the loop branches (if/else/case/`||`) only one sleep may run, so the
-    # shortest one stands for the loop (a heuristic: it can warn on a loop that branches yet always waits long
-    # enough, which costs a warning, never a block). A `wait` (or `wait $!` on the latest job) makes a background
-    # sleep a real wait. A
-    # sleep whose argument is a variable cannot be judged, so that loop passes without a warning. A poll outside any
-    # loop runs once and is no watcher. Any one short loop warns.
     for poll in (c for c in cmds if c.name == "gh" and pr_verb(c.words) in PR_POLLS):
         region = loop_around(text, cmds, poll.span[1] - 1)  # a span starts at the blank before the word
         if region is None:
             continue
-        scope = [c for c in cmds if region[0] < c.span[1] <= region[1]]
-        sleeps = [c for c in scope if c.name == "sleep"]
-        secs = [sleep_seconds(c) for c in sleeps]
-        if not secs or None in secs:
+        wait, sleeps = loop_wait(text, cmds, region)
+        if not sleeps or wait is None:
             continue
-        backgrounded = lambda c: bool(re.match(r"\s*&(?!&)", text[c.span[1]:]))
-        # A bare `wait` waits for every background job; `wait $!` for the latest one started before it.
-        waited, everything = set(), False
-        for w in (c for c in scope if c.name == "wait"):
-            if w.words == ["wait"]:
-                everything = True
-            elif w.words == ["wait", "$!"]:
-                prior = [c for c in scope if backgrounded(c) and c.span[1] < w.span[0]]
-                # Only a job started right before the wait is surely `$!`: an assignment or a subshell in between
-                # (`sleep 300 & x=1 & wait $!`, `(sleep 300 &); wait $!`) points `$!` somewhere else.
-                if prior and re.fullmatch(r"\s*&\s*;?\s*", text[prior[-1].span[1]:w.span[0]]):
-                    waited.add(id(prior[-1]))
-        if not everything:
-            secs = [0 if backgrounded(c) and id(c) not in waited else s for c, s in zip(sleeps, secs)]
-        span = text[region[0]:region[1]]
-        branches = re.search(r"(?<![\w.-])(if|case|else|elif)(?![\w.-])|\|\|", span)
-        wait = min(secs) if branches else sum(secs)
         if wait < PR_POLL_MIN:
             break
     else:
@@ -241,9 +272,80 @@ def check_monitor(cmd, cfg):
                    "clearing, and a new PR.")
 
 
+CI_SLEEP_MIN = 30
+GH_VALUE_FLAGS = ("--interval", "-i", "--repo", "-R", "--json", "--jq", "-q", "--template", "-t", "--branch", "-b")
+
+
+def ci_lock_held(key):
+    """True only when another process holds the ci-wait flock for `key` (skills/orchestrate/scripts/ci_wait.py). It opens
+    the lock file with its own descriptor, never creates or removes it, and reads any other failure as not held. A
+    probe that lands the instant a holder starts makes that holder a subscriber for one 2 s round."""
+    digest = hashlib.sha1(f"ci-wait:{key}".encode()).hexdigest()[:16]
+    try:
+        with open(config.state() / "locks" / f"other-{digest}.lock") as f:
+            try:
+                fcntl.flock(f, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+    except OSError:
+        pass
+    return False
+
+
+def ci_key(c):
+    """The ci-wait target of a `gh run watch ID` or `gh pr checks N --watch` with -R given, else None."""
+    w = c.words
+    verb = pr_verb(w)
+    ident, skip = None, False
+    for x in w[1:]:  # the first number that is not a flag's value (`--interval 60 123` watches run 123)
+        if skip:
+            skip = False
+        elif x in GH_VALUE_FLAGS:
+            skip = True
+        elif x.isdigit():
+            ident = x
+            break
+    if verb == ["run", "watch"] and ident:
+        return f"run:{ident}"
+    repo = flag(w, "--repo") or flag(w, "-R")
+    if verb == ["pr", "checks"] and ident and repo:
+        return f"pr:{repo}#{ident}"
+    return None
+
+
+def check_ci_watch(cmd, cfg):
+    """A CI watcher that polls too often or duplicates another: `gh run watch` / `--watch` without --interval, a loop
+    around `gh` that sleeps under 30 s, or a command whose ci-wait lock is held. Warn only, whatever the setting."""
+    cmds, text = shell.commands(cmd), shell.command_text(cmd)
+    why = []
+    for c in (c for c in cmds if c.name == "gh"):
+        w = c.words
+        if pr_verb(w) == ["run", "watch"] or "--watch" in w:
+            if flag(w, "--interval") is None and not any(x == "-i" or re.fullmatch(r"-i\d+", x) for x in w):
+                why.append("it has no --interval, so gh polls every 3 s")
+            key = ci_key(c)
+            if key and ci_lock_held(key):
+                why.append(f"a `orch ci-wait` already holds {key}: run it too and it subscribes to that poller")
+        region = loop_around(text, cmds, c.span[1] - 1)
+        if region is not None:
+            wait, sleeps = loop_wait(text, cmds, region, skippable=True)
+            # A `for` loop with no sleep is a batch over a list, not a poll; until/while and `for ((;;))` with none spin.
+            spins = not sleeps and re.match(r"(until|while)\b|for\s*\(\(\s*;\s*;\s*\)\)", text[region[0]:region[1]]) is not None
+            if wait is not None and wait < CI_SLEEP_MIN and (sleeps or spins):
+                why.append(f"its loop waits under {CI_SLEEP_MIN} s between calls")
+    if not why:
+        return []
+    return [f._replace(level="warn") for f in finding(
+        cfg, "orchestrate.ci_watch",
+        "Several sessions watching one run or PR multiply GitHub's rate use (" + "; ".join(dict.fromkeys(why)) + "). "
+        "Use `orch ci-wait <owner/repo#N|run-id> --deadline-min M`: one poller per target, at least 60 s apart, "
+        "and every other caller reads its result.")]
+
+
 def check_bash(cmd, background, s, cfg):
     out, cmds = [], shell.commands(cmd)
     out += check_model_flag(cmds, cfg)
+    out += check_ci_watch(cmd, cfg)
     if roles.applies("wait_foreground", s):
         wait = next((c for c in cmds if waits(c)), None)
         if wait and not background:

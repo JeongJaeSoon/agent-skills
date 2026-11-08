@@ -33,14 +33,19 @@ From the open PR to ready: all CI checks green and all review threads resolved.
 - A verdict describes one head. After merging main in or rebasing, re-run the suite and the E2E
   check at the new head before landing, and update the sticky comment; a green check from the
   old head says nothing about the new one.
-- Wait with one watcher per run or PR, never two: `gh run watch <id> --exit-status --interval 60`
-  under `run_in_background` (never the default 3 s interval), or, for PRs, `Monitor` running
+- Wait with one watcher per run or PR, never two: `orch ci-wait <owner/repo#N|run-id> [-R owner/repo] --deadline-min M`
+  under `run_in_background`. The first caller for a target polls GitHub (at least 60 s apart); every other
+  caller, in this session or another, reads that poller's result, so asking twice costs no extra API calls. It exits
+  0 when the checks passed, 1 when one failed, 3 at the deadline, 4 on an error; use the same form (PR or run id)
+  each time. A card in a repo with the land executor on stops watching at READY, so this is for the wait before
+  READY, a main-CI check, and repos where the executor is off. Never `gh run watch` without `--interval` (3 s).
+  For PRs, `Monitor` running
   `pr-watch --repo <owner/repo> [--branch <regex>]` (the plugin's `bin/` is on `PATH`, so it runs from
   any repo; `--help` has the rest). It checks every 300 s and prints a line only for a merge or close, a CI
   failure, `orch land-check` turning READY (`--land-check <slug>`), a conflict appearing or
   clearing, and a new PR; every other state change wakes nobody. Before starting one, check
   that none of yours already watches that run or PR. Every wait has an upper bound (the Monitor
-  timeout; for `gh run watch`, about twice the run's usual length): past it, stop the watcher,
+  timeout; for `orch ci-wait`, its `--deadline-min`, about twice the run's usual length): past it, stop the watcher,
   read the state once and report; never start a second one. No hand-written watcher script (the hook
   warns on a `gh pr` poll that sleeps under 300 s), no foreground sleep loop.
 

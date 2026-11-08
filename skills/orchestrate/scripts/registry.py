@@ -368,7 +368,7 @@ STORES = [
           ("agent_signal:append", "agent_signal:log_round"), ("nobody",),
           rule="both signals per card, `claude agents` beside the screen, to compare misses; one rotated generation kept"),
     Store("agentsignallock", "S/agent-signal.lock", {"card.agent_signal": LOCK}, ("agent_signal:append",)),
-    Store("reaplocks", "S/locks/*-*.lock", {"work.unit": LOCK, "machine.resource": LOCK}, ("reap-resources/guard:hold",),
+    Store("reaplocks", "S/locks/*-*.lock", {"work.unit": LOCK, "machine.resource": LOCK}, ("reap-resources/guard:hold", "ci_wait:check_store"),
           rule="one lock per card, project, volume, process or port a cleaner acts on; cardguard takes the card one "
                "through guard.hold"),
     Store("sync", "S/sync.json", {"sync.result": CANONICAL}, ("sync:sync",), ("fleet",), 3600,
@@ -496,6 +496,8 @@ STORES = [
     Store("pressureout", "S/pressure.log", {"pressure.output": CANONICAL}, ("pressure:log",), ("nobody",)),
     Store("landbeat", "S/land-exec.json", {"land.round": CANONICAL}, ("land_exec:beat",), ("programview",), 600,
           feature="orchestrate.land_executor", rule="the land executor's last round; `orch land` reads it to say the executor is not running"),
+    Store("ciwait", "S/ci-wait/*.json", {"ci.wait_result": CANONICAL}, ("ci_wait:write_state",), ("nobody",),
+          rule="the last poll of one CI target by `orch ci-wait`; a second caller reads it instead of calling gh"),
     Store("landlock", "S/land-exec.lock", {"land.round": LOCK}, ("land_exec:round_lock",)),
     Store("landout", "S/land-exec.log", {"land.output": CANONICAL}, ("land_exec:log",), ("nobody",),
           rule="each settled request, one line"),
