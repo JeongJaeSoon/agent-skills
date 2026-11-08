@@ -127,16 +127,17 @@ def processes():
     return rows
 
 
-def cwds(inodes=False):
+def cwds(inodes=False, readlink=os.readlink):
     """pid → cwd for this user's processes; None unless every one of them was read.
-    inodes: pid → (cwd, inode of the directory the process is in, or None when unknown)."""
+    inodes: pid → (cwd, inode of the directory the process is in, or None when unknown).
+    readlink: how /proc/<pid>/cwd is read, so a test can pass a fake instead of depending on the runner's processes."""
     if os.path.isdir("/proc/self"):
         out = {}
         for d in os.listdir("/proc"):
             try:
                 if d.isdigit() and os.stat(f"/proc/{d}").st_uid == os.getuid():
                     # A process left in a removed directory reads as "<path> (deleted)".
-                    c = os.readlink(f"/proc/{d}/cwd").removesuffix(" (deleted)")
+                    c = readlink(f"/proc/{d}/cwd").removesuffix(" (deleted)")
                     out[int(d)] = (c, None) if inodes else c
             except FileNotFoundError:
                 pass

@@ -16,7 +16,6 @@ EXCLUDED = {
     "hooks/test_pressure_gate.py": "macOS only: the memory reading comes from kern.memorystatus_level",
     "scripts/pstack-sync-test.sh": "a bash script, not test_*.py: CONTRIBUTING.md's loop runs it",
     "scripts/test_share_server.py": "macOS only: sandbox-exec and launchd",
-    "skills/reap-resources/scripts/test_reap.py": "hosted runner: a process of this user has an unreadable /proc cwd",
 }
 
 

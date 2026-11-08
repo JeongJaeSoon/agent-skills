@@ -1313,18 +1313,36 @@ with tempfile.TemporaryDirectory() as tmp:
     assert got == {1: (True, "ppid 1, cwd /nowhere/gone-card 가 사라짐"), 3: (True, f"ppid 1, cwd {live} 가 사라짐"),
                    4: (False, "6시간 미만")}, got
 
+# cwds() on Linux reads /proc through the injected readlink: one unreadable process makes the whole answer None.
+if os.path.isdir("/proc/self"):
+    def denied(path):
+        raise PermissionError(path)
+    assert reap.cwds(readlink=denied) is None
+    assert reap.cwds(readlink=lambda p: "/x (deleted)")[os.getpid()] == "/x"
+    assert reap.cwds(inodes=True, readlink=lambda p: "/x")[os.getpid()] == ("/x", None)
+
 # A real orphan left in a removed directory is found from lsof and reaped by pid and start time.
 with tempfile.TemporaryDirectory() as tmp:
     gone = pathlib.Path(os.path.realpath(tmp)) / "card"
     gone.mkdir()
     subprocess.run(["sh", "-c", f"cd '{gone}' && '{sys.executable}' -c 'import time; time.sleep(60)' &"], check=True)
     time.sleep(1)
+
+    def readable(path):
+        # A hosted runner holds other processes of this user whose cwd cannot be read, and cwds() then answers None for
+        # all of them. This test only needs its own child, so an unreadable one reads as gone.
+        try:
+            return os.readlink(path)
+        except PermissionError:
+            raise FileNotFoundError(path)
+
     rows = reap.processes()
     mine = [r for r in rows.values() if r["ppid"] == 1 and "time.sleep(60)" in r["cmd"]
-            and (reap.cwds() or {}).get(r["pid"]) == str(gone)]
+            and (reap.cwds(readlink=readable) or {}).get(r["pid"]) == str(gone)]
     assert len(mine) == 1, mine
     gone.rmdir()
-    got = [i for i in reap.judge_orphans(rows, [], 0, reap.cwds(inodes=True)) if i["pid"] == mine[0]["pid"]]
+    got = [i for i in reap.judge_orphans(rows, [], 0, reap.cwds(inodes=True, readlink=readable))
+           if i["pid"] == mine[0]["pid"]]
     assert len(got) == 1 and got[0]["target"] and "사라짐" in got[0]["why"], got
     assert reap.kill_tree(got[0], []) == "종료" and mine[0]["pid"] not in reap.processes()
 
