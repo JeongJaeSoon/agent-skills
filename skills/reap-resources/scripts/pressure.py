@@ -39,9 +39,12 @@ PLIST = pathlib.Path(f"~/Library/LaunchAgents/{LABEL}.plist").expanduser()
 STATE_FILE = reap.STATE / "pressure.json"
 PLAN = reap.STATE / "pressure-plan.json"
 LOG = reap.STATE / "pressure.log"
-# One line per round, rewritten down to HISTORY_KEEP_S once its oldest line is an hour past it.
+# One line per round, rewritten down to HISTORY_KEEP_S once its oldest line is an hour past it. 8 days, so a 7-day
+# review window is whole. HISTORY_MAX_BYTES bounds the file whatever `interval` is (a 1-minute interval writes
+# ~3.5 MB in 8 days); past it the rewrite drops the oldest lines down to 3/4 of it, so it is not redone every round.
 HISTORY = reap.STATE / "pressure-history.jsonl"
-HISTORY_KEEP_S = 24 * 3600
+HISTORY_KEEP_S = 8 * 24 * 3600
+HISTORY_MAX_BYTES = 4 * 1024 * 1024
 HISTORY_FIELDS = ("load_per_cpu", "cpu_idle_pct", "mem_free_pct", "swap_gb", "swapout_pps", "containers",
                   "docker_mem_pct", "docker_cpu_pct", "disk_free_gb", "mem_active_wired_gb", "mem_anon_wired_gb")
 # Left by uninstall so `skills-sync setup apply` keeps a job the user turned off off; install removes it.
@@ -596,10 +599,15 @@ def history_add(record, queued, path=None):
     with path.open() as f, contextlib.suppress(ValueError, TypeError, KeyError):
         first = float(json.loads(f.readline())["t"])
     # A first line that does not parse is rewritten away as well.
-    if first is None or first < record["t"] - HISTORY_KEEP_S - 3600:
-        kept = history_read(record["t"] - HISTORY_KEEP_S, path)
+    if first is None or first < record["t"] - HISTORY_KEEP_S - 3600 or path.stat().st_size > HISTORY_MAX_BYTES:
+        kept = [json.dumps(r) + "\n" for r in history_read(record["t"] - HISTORY_KEEP_S, path)]
+        size = sum(len(s) for s in kept)
+        drop = 0
+        while size > HISTORY_MAX_BYTES * 3 // 4 and drop < len(kept) - 1:
+            size -= len(kept[drop])
+            drop += 1
         tmp = path.with_suffix(".tmp")
-        tmp.write_text("".join(json.dumps(r) + "\n" for r in kept))
+        tmp.write_text("".join(kept[drop:]))
         tmp.replace(path)
 
 

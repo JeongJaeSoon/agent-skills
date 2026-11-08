@@ -380,7 +380,7 @@ when it has no rate (first round, or one run late).
   lead that is still working (reap's own rules keep those).
 
 Every round that saves also appends one point (level, the charted metrics, the held-queue count) to
-`<state>/pressure-history.jsonl`, which keeps the last 24 hours. `pressure.py history [--hours H]` prints those points
+`<state>/pressure-history.jsonl`, which keeps the last 8 days (capped at 4 MB, oldest lines dropped first). `pressure.py history [--hours H]` prints those points
 with the last round, the thresholds and the queue as JSON, reading files only; the orchestrate dashboard's Overview
 draws its PC load panel from it.
 

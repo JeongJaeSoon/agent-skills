@@ -338,7 +338,26 @@ assert [r["t"] for r in rep["series"]] == [200000.0 + p.HISTORY_KEEP_S + 3700], 
 assert rep["thresholds"]["load_per_cpu"] == [1.3, 2.0] and rep["thresholds"]["swapout_pps"] == [300, None]
 assert rep["higher_worse"]["mem_free_pct"] is False and rep["last"]["level"] == "ok" and rep["queue"] == []
 json.dumps(rep, allow_nan=False)
-assert p.history_report(cfg, hours=999)["hours"] == 24
+assert p.history_report(cfg, hours=999)["hours"] == p.HISTORY_KEEP_S // 3600 == 192
+
+# Retention is 8 days (a 7-day window stays whole) and the file is bounded in bytes: past HISTORY_MAX_BYTES the
+# oldest lines go until 3/4 of it is left, and the newest line always stays.
+assert p.HISTORY_KEEP_S >= 7 * 86400
+hist.unlink(missing_ok=True)
+base = 300000.0
+run_round(OK, [], now=base)
+run_round(OK, [], now=base + 7 * 86400)  # 7 days old: kept
+assert [r["t"] for r in p.history_read()] == [base, base + 7 * 86400]
+orig_max = p.HISTORY_MAX_BYTES
+try:
+    p.HISTORY_MAX_BYTES = 600
+    for i in range(1, 11):
+        run_round(OK, [], now=base + 7 * 86400 + i * 180)
+    size = hist.stat().st_size
+    ts = [r["t"] for r in p.history_read()]
+    assert size <= 600 + 200 and ts[-1] == base + 7 * 86400 + 10 * 180 and ts[0] > base, (size, ts)
+finally:
+    p.HISTORY_MAX_BYTES = orig_max
 assert rep["load_idle_pct"] == cfg["load_idle_pct"] and rep["thresholds"]["disk_free_gb"] == [50, 20]
 
 # Turns in progress, from the shape `orca worktree ps --json` gives (names and paths replaced). Orca keeps an agent at
