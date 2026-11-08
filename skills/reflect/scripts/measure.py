@@ -18,7 +18,7 @@ and the report says so). A top-level list, {"issues": [...]}, or {"result": {"is
 --program: an orchestrate program slug. Its ledger adds the `main_flake` events in the window to the report and
 the tickets of its `spawned` cards to the usage match, so a card whose worktree name lacks the repo name is counted.
 """
-import collections, datetime as dt, glob, json, os, pathlib, statistics, subprocess, sys
+import collections, datetime as dt, glob, json, os, pathlib, re, statistics, subprocess, sys
 
 TRACKER = pathlib.Path(__file__).resolve().parents[2] / "use-tracker" / "scripts" / "tracker.py"
 
@@ -117,7 +117,7 @@ def rerun_greens(repo, runs):
     attempt, so a rerun that went green hides the red; the first attempt is read one run at a time."""
     out = []
     for r in runs:
-        if r["event"] != "push" or r["headBranch"] not in ("main", "master") or r["conclusion"] == "failure" or (r.get("attempt") or 1) < 2:
+        if r["event"] != "push" or r["headBranch"] not in ("main", "master") or r["conclusion"] != "success" or (r.get("attempt") or 1) < 2:
             continue
         first = gh("api", f"repos/{repo}/actions/runs/{r['databaseId']}/attempts/1")
         if first.get("conclusion") == "failure":
@@ -143,7 +143,10 @@ def usage(match, since, until):
     c, seen = collections.Counter(), set()
     dirs = []
     for m in [match] if isinstance(match, str) else match:
-        dirs += [d for d in glob.glob(f"{home}/projects/*{m}*") if d not in dirs]
+        # A fragment ending in a digit is a ticket number: abc-12 must not take the directory of abc-123.
+        edge = re.compile(re.escape(m) + r"(?!\d)") if m[-1:].isdigit() else None
+        dirs += [d for d in glob.glob(f"{home}/projects/*{m}*")
+                 if d not in dirs and (not edge or edge.search(os.path.basename(d)))]
     for proj in dirs:
         for f in glob.glob(proj + "/**/*.jsonl", recursive=True):
             for line in open(f, errors="replace"):

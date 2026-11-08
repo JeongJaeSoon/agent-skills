@@ -56,6 +56,15 @@ with tempfile.TemporaryDirectory() as tmp:
         flaked = measure.rerun_greens("acme/app", runs)
         assert [r["databaseId"] for r in flaked] == [2], flaked  # runs 1, 4 and 5 need no attempt lookup
         assert len(asked) == 2, asked
+        # Review of #609: only a green latest attempt is a rerun green, and ticket ABC-12 is not ABC-123.
+        runs = [{"databaseId": 2, "event": "push", "headBranch": "main", "conclusion": c, "attempt": 2}
+                for c in ("cancelled", "timed_out", "", None)]
+        assert measure.rerun_greens("acme/app", runs) == []
+        other = root / "projects" / "-example-worktrees-abc-123-fix"
+        other.mkdir(parents=True)
+        (other / "s.jsonl").write_text(json.dumps({**row, "requestId": "r3", "message": {"id": "m3", "usage": {"output_tokens": 99}}}) + "\n")
+        assert measure.usage(["app", "abc-12"], a, b)["claude_output"] == 12
+        assert measure.usage(["abc-123"], a, b)["claude_output"] == 99
         measure.gh = lambda *args: []
         assert not measure.usage("app", b, measure.ts("2026-01-03T00:00:00Z"))
         issues = root / "issues.json"

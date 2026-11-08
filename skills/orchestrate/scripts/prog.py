@@ -2229,19 +2229,20 @@ DECISION_GAP_EVENTS = ("landed", "main_green", "main_red", "predicate_verified")
 def decision_gap(events, tsv):
     """Delivery events written after the last row of decisions.tsv (tsv None: the file is missing), or None when
     there are none. The trail is the owner's way to audit a program, and a gap in it is silent otherwise."""
+    aware = lambda s: (lambda t: t if t.tzinfo else t.replace(tzinfo=dt.timezone.utc))(parse_ts(s))
     last = None
     for line in (tsv or "").splitlines():
-        cell = line.split("\t", 1)[0].strip()
+        cells = [c.strip() for c in line.split("\t")]
+        # log.sh writes ts, phase, decision, why, evidence, result; a row is valid with the first three filled.
+        if len(cells) < 3 or not cells[1] or not cells[2]:
+            continue
         try:
-            t = parse_ts(cell)
+            last = (aware(cells[0]), cells[0])  # the last valid row, not the largest stamp
         except ValueError:
-            continue  # the header row, a blank line, a broken stamp
-        t = t if t.tzinfo else t.replace(tzinfo=dt.timezone.utc)
-        if last is None or t > last[0]:
-            last = (t, cell)
+            continue  # the header row, a broken stamp
     kinds = {}
     for e in events:
-        if e["ev"] in DECISION_GAP_EVENTS and (last is None or parse_ts(e["ts"]) > last[0]):
+        if e["ev"] in DECISION_GAP_EVENTS and (last is None or aware(e["ts"]) > last[0]):
             kinds[e["ev"]] = kinds.get(e["ev"], 0) + 1
     if not kinds:
         return None

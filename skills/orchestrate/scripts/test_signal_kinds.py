@@ -65,6 +65,14 @@ assert prog.decision_gap_line(events, "2026-11-02T00:00:00Z\tx\ty\tz\te\tr\n") i
 # A header row, blank lines and a row with a broken timestamp do not become the "last decision".
 messy = "ts\tphase\tdecision\twhy\tevidence\tresult\n" + tsv + "\nnot-a-time\tx\ty\tz\te\tr\n"
 assert prog.decision_gap(events, messy)["since"] == "2026-11-01T01:16:00Z"
+# Review of #609: a bare timestamp is not a decision row (it needs ts, phase and decision cells)...
+assert prog.decision_gap_line(events, "2099-01-01T00:00:00Z\n").startswith("WARN decisions: no decision row")
+# ...the last row decides, not the largest stamp...
+out_of_order = "2026-11-02T00:00:00Z\ta\tb\tc\td\te\n2026-11-01T01:00:00Z\ta\tb\tc\td\te\n"
+assert prog.decision_gap(events, out_of_order)["since"] == "2026-11-01T01:00:00Z"
+# ...and an event stamp without an offset does not crash the comparison.
+naive = [ev("2026-11-01T02:00:00", "landed", pr=n, sha=str(n)) for n in range(3)]
+assert prog.decision_gap(naive, tsv)["count"] == 3
 # No trail at all: every delivery event is unrecorded, and the warning says the file is missing.
 none_line = prog.decision_gap_line(events, None)
 assert none_line and "no decisions.tsv" in none_line and "5 event(s)" in none_line, none_line
