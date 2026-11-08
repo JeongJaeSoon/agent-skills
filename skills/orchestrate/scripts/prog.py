@@ -1202,6 +1202,11 @@ def explained(body, run_id):
     return False
 
 
+def results_comment(comments):
+    """The first marker comment's body, the one sticky-comment.sh keeps updating; "" when there is none."""
+    return next((c.get("body") or "" for c in comments or [] if TEST_RESULTS in (c.get("body") or "")), "")
+
+
 def no_results_problem(pr):
     return (f"no {TEST_RESULTS} comment on #{pr}: post the test results"
             " (deliver-ticket sticky-comment.sh), then land again")
@@ -1213,8 +1218,7 @@ def evidence_problems(cfg, repo, pr, need_comment=False):
     the PR no-visual-change, and each failed CI run of the branch named with what resolved it. need_comment: the
     land executor also refuses a PR with no such comment, so its land-check asks for it too."""
     v = gh_json("pr", "view", str(pr), "--repo", repo, "--json", "headRefName,labels,comments")
-    # The first marker comment, the one sticky-comment.sh keeps updating.
-    body = next((c.get("body") or "" for c in v.get("comments") or [] if TEST_RESULTS in (c.get("body") or "")), "")
+    body = results_comment(v.get("comments"))
     problems, notes = [], []
     if need_comment and not body:
         problems.append(no_results_problem(pr))

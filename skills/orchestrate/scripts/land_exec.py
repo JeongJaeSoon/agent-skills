@@ -196,7 +196,7 @@ class Round:
             comments = prog.gh_json("pr", "view", str(pr), "--repo", repo, "--json", "comments").get("comments") or []
         except SystemExit as e:
             return settle("queued", None, f"GitHub did not answer: {str(e.code)[:200]}")
-        if not any(prog.TEST_RESULTS in (c.get("body") or "") for c in comments):
+        if not prog.results_comment(comments):
             return settle("refused", 3, prog.no_results_problem(pr))
         mss = v.get("mergeStateStatus")
         if mss == "DIRTY":

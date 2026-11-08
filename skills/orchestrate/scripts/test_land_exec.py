@@ -628,16 +628,20 @@ class LandExec(Fixture):
         row = self.request()
         self.round()
         reason = self.settled(row, "refused", 3)["reason"]
-        self.assertIn(reason.split(":")[0], out)  # the executor's reason, word for word
+        self.assertEqual(reason, f"no <!-- test-results --> comment on #{self.n}: post the test results"
+                                 " (deliver-ticket sticky-comment.sh), then land again")
+        self.assertIn(reason, out)  # land-check says the executor's reason, word for word
         # With the comment both pass this check.
         self.edit_pr(comments=[RESULTS])
         code, out = self.land_check()
-        self.assertNotIn("test-results", out)
+        self.assertEqual(code, 0, out)
+        self.assertIn("READY", out)
         # Executor off: the direct path never required the comment, so land-check does not either.
         self.edit_pr(comments=[])
         config(enabled=False)
         code, out = self.land_check()
-        self.assertNotIn("test-results", out)
+        self.assertEqual(code, 0, out)
+        self.assertIn("READY", out)
 
     def test_land_check_and_the_executor_agree_on_screen_and_failed_run_evidence(self):
         self.verdict()
@@ -655,6 +659,9 @@ class LandExec(Fixture):
         code, out = self.land_check()
         self.assertEqual(code, 1, out)
         self.assertIn("555 (CI failure)", out)
+        row = self.request()
+        self.round()
+        self.settled(row, "refused", 3, "555 (CI failure)")
 
     def test_land_check_asks_github_only_when_the_executor_is_on(self):
         """executor_for asks GitHub for the repo's name; a repo the executor is off for must not pay (or fail) for it."""
