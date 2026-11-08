@@ -148,6 +148,34 @@ class RunTest(unittest.TestCase):
         self.assertIsNone(oj.stale({"at": 0, "interval": None}, now=10 ** 9))
         self.assertIsNone(oj.stale(None))
 
+    def test_a_skip_exit_is_not_a_success_and_leaves_the_last_real_record_alone(self):
+        """sweep's tick leaves with a skip code when another tick holds the lock: that must not turn an earlier
+        failure into 'ok', nor a success into a failure."""
+        self.run_job(["run", "j", "--", sys.executable, "-c", "raise SystemExit(9)"])
+        before = oj.read("j")
+        self.assertFalse(before["ok"])
+        code, err = self.run_job(["run", "j", "--skip", "3", "--", sys.executable, "-c",
+                                  "print('busy'); raise SystemExit(3)"])
+        self.assertEqual(code, 1)
+        self.assertEqual(oj.read("j"), before)
+        self.assertEqual(err, "")  # a skip is not reported as a failure
+        skip = json.loads(oj.skip_path("j").read_text())
+        self.assertEqual(skip["message"], "busy")
+        # without the option the same exit is an ordinary failure
+        self.run_job(["run", "k", "--", sys.executable, "-c", "raise SystemExit(3)"])
+        self.assertFalse(oj.read("k")["ok"])
+        self.assertFalse(oj.skip_path("k").exists())
+
+    def test_the_skip_file_is_not_a_job_record(self):
+        self.run_job(["run", "j", "--skip", "3", "--", sys.executable, "-c", "raise SystemExit(3)"])
+        self.assertIsNone(oj.read("j"))  # nothing ran, so there is no run to report
+        self.assertEqual(oj.records(), [])
+        self.assertTrue(oj.skip_path("j").exists())
+
+    def test_command_adds_skip_only_when_asked(self):
+        self.assertNotIn("--skip", oj.command("j", ["x"], 180, 280))
+        self.assertIn("--skip 3", oj.command("j", ["x"], 180, 280, skip=(3,)))
+
     def test_command_round_trips_through_main(self):
         import shlex
         cmd = oj.command("j", ["python3", "/x/a b.py", "run"], 180, 280, ok=(0, 1, 2))

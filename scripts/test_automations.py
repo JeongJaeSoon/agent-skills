@@ -355,20 +355,77 @@ class ShellJobs(Base):
         self.assertLess(patrol.FALLBACK_DUE_S, reap_hard.DEFAULTS["interval"],
                         "reap-hard's fallback is due at every pass of its own period")
 
-    def test_sweep_is_the_tick_with_room_for_its_steps_and_is_off_by_default(self):
+    def test_every_job_fits_orcas_precheck_limit(self):
+        """`orca automations create` rejects --precheck-timeout above 600 s; sweep registered 2700 and failed to register."""
+        for name, j in self.jobs.items():
+            self.assertLessEqual(j.want()["precheck-timeout"], 600, name)
+        self.assertEqual(au.ORCA_PRECHECK_MAX_S, 600)
+
+    def test_a_timeout_over_the_limit_stops_before_orca_is_asked(self):
+        """A definition over the limit must fail here, before create or edit, and leave nothing half made."""
+        for secs, refused in ((au.ORCA_PRECHECK_MAX_S, False), (au.ORCA_PRECHECK_MAX_S + 1, True)):
+            j = au.ShellJob("probe", "probe", ["true"], 900, True, timeout=secs)
+            fake = self.orca([])
+            code, msg = j.enable(False)
+            self.assertEqual((code != 0), refused, (secs, msg))
+            self.assertEqual(len(self.creates(fake)), 0 if refused else 1, secs)
+            if refused:
+                self.assertIn(str(secs), msg)
+            # a registered copy that differs only in its timeout: enable and realign must not call edit
+            a = {"id": "P1", "name": j.job_name, "enabled": False, "rrule": j.want()["trigger"],
+                 "prompt": j.want()["prompt"], "precheck": {"command": j.want()["precheck"], "timeoutSeconds": 60}}
+            fake = self.orca([a])
+            self.assertEqual((j.enable(False)[0] != 0), refused, secs)
+            self.assertEqual((j.realign()[0] != 0), refused, secs)
+            self.assertEqual(len(fake.edits()) > 0, not refused, secs)
+
+    def test_sweep_runs_one_tick_step_per_precheck_and_is_off_by_default(self):
         j = self.jobs["sweep"]
         self.assertIs(au.SWEEP, j)
         self.assertEqual(j.job_name, "agent-skills sweep")
-        self.assertEqual(j.argv[1:], [str(au.REAP.parent / "sweep.py"), "tick"])
+        self.assertEqual(j.argv[1:], [str(au.REAP.parent / "sweep.py"), "tick", "--step"])
         w = j.want()
-        self.assertEqual((w["trigger"], w["precheck-timeout"], w["prompt"]), ("*/30 * * * *", au.SWEEP_TIMEOUT_S, au.SHELL_PROMPT))
+        self.assertEqual((w["trigger"], w["precheck-timeout"], w["prompt"]), ("*/10 * * * *", 600, au.SHELL_PROMPT))
         self.assertIn("orca_job.py run sweep ", w["precheck"])
-        self.assertIn(f"--timeout {au.SWEEP_TIMEOUT_S - 20} ", w["precheck"])
+        self.assertIn("--timeout 580 ", w["precheck"])
+        self.assertIn("--skip 3 ", w["precheck"])  # a tick that found the lock held is a skip, not a success
         import sweep
-        steps = sweep.PATROL_WAIT_S + sweep.RUN_BUDGET_S + sweep.STEP_TIMEOUT_S + sweep.RUN_BUDGET_S
-        self.assertLess(steps, au.SWEEP_TIMEOUT_S - 20)  # a tick that uses every budget still ends before its precheck is killed
+        self.assertEqual(sweep.SKIP_RC, 3)
+        # one step ends before the runner kills the job, which ends before Orca kills the precheck
+        self.assertLessEqual(sweep.STEP_BUDGET_S, 550)
+        self.assertLess(sweep.STEP_BUDGET_S, au.SWEEP_TIMEOUT_S - 20)
+        self.assertEqual(sweep.STEP_PERIOD_S, 600)
         self.orca([])
         self.assertEqual(au.decide(j)[0], "skip")  # apply never turns it on
+
+    def test_turning_sweep_back_on_restarts_its_cycle_but_staying_on_does_not(self):
+        """After a pause the old position would hand shadow and real an old round with no fresh patrol first."""
+        j = self.jobs["sweep"]
+        reset = mock.Mock()
+        with mock.patch.object(j, "reset", reset), mock.patch.object(au, "sweep_protect_problem", return_value=None):
+            self.orca([self.stored(j, enabled=True)])
+            self.assertEqual(j.enable(False)[0], 0)
+            reset.assert_not_called()  # already on: nothing was paused
+            self.orca([self.stored(j, enabled=False)])
+            self.assertEqual(j.enable(False)[0], 0)
+            reset.assert_called_once()
+            reset.reset_mock()
+            self.orca([])
+            self.assertEqual(j.enable(False)[0], 0)  # first registration
+            reset.assert_called_once()
+            reset.reset_mock()
+            self.orca([self.stored(j, enabled=True)])
+            self.assertEqual(j.disable()[0], 0)
+            reset.assert_not_called()  # a step may be running: the file is not touched on disable
+        for name, other in self.jobs.items():
+            if name != "sweep":
+                self.assertIsNone(other.reset, name)
+
+    def test_other_jobs_precheck_strings_are_unchanged_by_the_skip_option(self):
+        """A new option that changes every stored string would show every registered job as drifted."""
+        for name, j in self.jobs.items():
+            if name != "sweep":
+                self.assertNotIn("--skip", j.want()["precheck"], name)
 
     def test_sweep_needs_the_protect_list_like_reap_hard(self):
         j = self.jobs["sweep"]

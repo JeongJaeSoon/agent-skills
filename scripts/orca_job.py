@@ -61,9 +61,15 @@ def last_line(text):
     return lines[-1][:200] if lines else ""
 
 
-def run(name, cmd, interval=None, timeout=None, ok_codes=(0,)):
+def skip_path(name):
+    return JOBS / f"{name}.skip"  # not *.json: `records` and the 'late' check read only runs
+
+
+def run(name, cmd, interval=None, timeout=None, ok_codes=(0,), skip_codes=()):
     """Run cmd to its end (or timeout), write the record, and return SKIPPED whatever happened. ok_codes: exits that
-    are a result, not a failure (pressure.py round exits 1 and 2 for warn and danger)."""
+    are a result, not a failure (pressure.py round exits 1 and 2 for warn and danger). skip_codes: exits that mean the
+    command did nothing because another run holds it; they go to <name>.skip and leave the last real record alone, so
+    a skip neither hides a failure nor passes for a success."""
     started = time.time()
     env = {**os.environ, "PATH": job_path()}
     if cmd and cmd[0] == "python3":  # the interpreter running this wrapper, not whatever the app's PATH finds first
@@ -90,6 +96,10 @@ def run(name, cmd, interval=None, timeout=None, ok_codes=(0,)):
         rc, message = -signal.SIGKILL, f"timed out after {timeout:g}s"
     except OSError as e:
         rc, message = 127, f"could not start: {e}"
+    if rc in skip_codes:
+        JOBS.mkdir(parents=True, exist_ok=True)
+        skip_path(name).write_text(json.dumps({"at": time.time(), "message": message.split(": ", 1)[-1]}, ensure_ascii=False))
+        return SKIPPED
     write(name, {"name": name, "at": time.time(), "took": round(time.time() - started, 1), "rc": rc,
                  "ok": rc in ok_codes, "interval": interval, "message": message})
     if rc not in ok_codes:
@@ -122,12 +132,13 @@ def forget(name):
     record_path(name).unlink(missing_ok=True)
 
 
-def command(name, argv, interval, timeout, ok=(0,)):
-    """The precheck string an automation stores for a job."""
+def command(name, argv, interval, timeout, ok=(0,), skip=()):
+    """The precheck string an automation stores for a job. `--skip` is added only for a job that has skip codes, so
+    the stored strings of the other jobs stay as they were."""
     import shlex
     return shlex.join(["python3", "-I", str(pathlib.Path(__file__).resolve()), "run", name,
                        "--interval", str(interval), "--timeout", str(timeout), "--ok", ",".join(map(str, ok)),
-                       "--", *argv])
+                       *(["--skip", ",".join(map(str, skip))] if skip else []), "--", *argv])
 
 
 def main(argv):
@@ -140,7 +151,8 @@ def main(argv):
             return SKIPPED
         num = lambda k: float(opts[k]) if k in opts else None  # noqa: E731
         ok = tuple(int(x) for x in opts.get("--ok", "0").split(","))
-        return run(head[0], cmd, num("--interval"), num("--timeout"), ok)
+        skip = tuple(int(x) for x in opts["--skip"].split(",")) if opts.get("--skip") else ()
+        return run(head[0], cmd, num("--interval"), num("--timeout"), ok, skip)
     if argv[:1] == ["status"]:
         recs = records()
         if "--json" in argv:
@@ -149,6 +161,9 @@ def main(argv):
             late = stale(r)
             print(f"{r['name']}: {'ok' if r['ok'] else 'FAILED'} · {r['message']} · "
                   f"{int((time.time() - r['at']) // 60)}분 전" + (" · 주기를 넘김" if late else ""))
+            with contextlib.suppress(OSError, ValueError, KeyError):
+                sk = json.loads(skip_path(r["name"]).read_text())
+                print(f"  마지막 건너뜀 {int((time.time() - sk['at']) // 60)}분 전: {sk['message']}")
         return 0
     print(__doc__, file=sys.stderr)
     return 2

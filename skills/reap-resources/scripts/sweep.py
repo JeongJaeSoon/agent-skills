@@ -12,7 +12,10 @@ real mode acts, only on the rules `sweep own` handed it (reap-hard's four: OWNAB
                                                     enable sweep); no LaunchAgent is written
   sweep.py uninstall                                take down the LaunchAgent an earlier install wrote
   sweep.py config                                   the "sweep" settings key that carries today's reap-hard values
-  sweep.py tick                                     what the automation runs: patrol, shadow, reap-hard, real round;
+  sweep.py tick --step                              what the Orca automation runs every 10 minutes: ONE of patrol, shadow,
+                                                    reap-hard, real round (Orca ends a precheck at 600 s); the position
+                                                    is <state>/sweep-cycle.json, exit 3 = another tick holds the lock
+  sweep.py tick                                     all four steps in one process (the old LaunchAgent);
                                                     one tick at a time (<state>/sweep-tick.lock)
   sweep.py diff [--hours 48] [--json]               the shadow's "would act" against what the old cleaners (and the
                                                     sweep itself) did in the same hours
@@ -42,7 +45,15 @@ FRESH_S = 3600
 KEEP_LINES = 500  # five days of 15-minute rounds
 REPEAT_FAILS, REST_S = 2, 86400
 DEFAULT_CAP = 50
-RUN_BUDGET_S, CMD_TIMEOUT_S = 600, 60
+# Orca ends a precheck at 600 s, and the automation runs one step of `tick --step` per precheck: no step may use more
+# than STEP_BUDGET_S (the job runner stops at 580 s, Orca at 600 s). Every per-step budget below stays under it.
+STEP_BUDGET_S = 550
+RUN_BUDGET_S, CMD_TIMEOUT_S = 540, 60
+STEPS = ("patrol", "shadow", "reap-hard", "real")
+STEP_PERIOD_S = 600  # the automation's cadence; STEP_PERIOD_S * len(STEPS) is one full cycle
+CYCLE_S = STEP_PERIOD_S * len(STEPS)
+MAX_STEP_FAILS = 3  # failures of one step in a row before the cycle goes on without it
+SKIP_RC = 3  # `tick --step` found another tick holding the lock and did nothing
 HARD_RULES = set(guard.HARD_RULE.values())
 # The rules `sweep own` may hand over in this stage: reap-hard's four patrol-fed rules. The janitor's and the pressure
 # round's come with the stage after.
@@ -51,7 +62,7 @@ LABEL = "io.github.jeongjaesoon.sweep"
 LAUNCHCTL = "launchctl"
 PLATFORM = sys.platform
 PATROL_WAIT_S = 400  # patrol's own budgets: 120 s for the round, 240 s for the candidate scans
-STEP_TIMEOUT_S = 900
+STEP_TIMEOUT_S = RUN_BUDGET_S  # the reap-hard child
 # How long after a patrol round an old cleaner may take to act on the same target: reap-hard two of its passes and
 # ten minutes (its `interval`, 1800 s by default), the janitor 4 hours (every 3 hours, and on load). Never an act
 # that ended before the round: patrol's scans read after it, so what they still saw is not what that act removed
@@ -191,8 +202,14 @@ def interval():
     return 1800.0
 
 
+def owner_interval():
+    """The interval written to sweep-owner.json (the old cleaner takes a rule back after three of them): never shorter
+    than one cycle of the automation, whose four steps cannot run the real round more often."""
+    return max(interval(), float(CYCLE_S))
+
+
 def lags():
-    return {"hard": 2 * interval() + 600, "reap": JANITOR_LAG_S}
+    return {"hard": 2 * owner_interval() + 600, "reap": JANITOR_LAG_S}
 
 
 def shadow_keep(item, protect, cleaner):
@@ -699,7 +716,7 @@ def set_owner(rule_name, owned):
         else:
             rules.pop(rule_name)
         gen = own.get("generation", 0) + 1
-        save_json(reap.STATE / "sweep-owner.json", {**own, "generation": gen, "rules": rules, "interval": interval()})
+        save_json(reap.STATE / "sweep-owner.json", {**own, "generation": gen, "rules": rules, "interval": owner_interval()})
     if owned:
         note = "" if read_last().get("t") else (
             " sweep 의 첫 정상 회차(sweep-last.json)가 생길 때까지는 옛 주체가 이 규칙을 계속 처리한다.")
@@ -788,15 +805,92 @@ def budgeted(fn):
         signal.alarm(0)
 
 
-def tick():
-    """What the Orca automation (or, during a switch, the old LaunchAgent) runs each interval. One tick at a time
-    (<state>/sweep-tick.lock): a second one, from the other scheduler or a slow earlier tick, leaves at once with 0 and
-    does nothing, so the patrol and the old cleaner are not started twice and no tick waits behind another."""
+def tick(step=False):
+    """What the Orca automation (`--step`: one step of the cycle) or, during a switch, the old LaunchAgent (all four
+    steps) runs. One tick at a time (<state>/sweep-tick.lock): a second one leaves at once and does nothing, so the
+    patrol and the old cleaner are not started twice and no tick waits behind another. The full tick then exits 0; a
+    `--step` tick exits SKIP_RC, which the job runner records as a skip, not as a success."""
     with file_lock("sweep-tick.lock") as got:
         if not got:
             print("sweep: 다른 tick 이 도는 중이라 이번 tick 은 건너뜀")
-            return 0
-        return run_tick()
+            return SKIP_RC if step else 0
+        return run_cycle_step() if step else run_tick()
+
+
+def cycle_path():
+    return reap.STATE / "sweep-cycle.json"
+
+
+def read_cycle():
+    """(position, failures of that step so far, last given-up step or None, note or None) from sweep-cycle.json. A file
+    that is missing starts the cycle quietly; one that cannot be read or holds anything else starts it over and says so."""
+    try:
+        d = json.loads(cycle_path().read_text())
+        pos, fails, gave = d["next"], d["fails"], d.get("gave_up")
+    except FileNotFoundError:
+        return 0, 0, None, None
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return 0, 0, None, f"sweep: {cycle_path().name} 을 읽지 못해 사이클을 처음부터 시작함"
+    # fails == MAX_STEP_FAILS: the last allowed attempt was written and never finished (killed)
+    if type(pos) is not int or type(fails) is not int or not 0 <= pos < len(STEPS) or not 0 <= fails <= MAX_STEP_FAILS:
+        return 0, 0, None, f"sweep: {cycle_path().name} 의 값이 맞지 않아 사이클을 처음부터 시작함"
+    now = time.time()
+    stamp_ok = lambda t: type(t) in (int, float) and 0 < t < 1e11  # noqa: E731  (a huge int would overflow the float math)
+    if not (isinstance(gave, dict) and gave.get("step") in STEPS and stamp_ok(gave.get("at"))
+            and 0 < now - gave["at"] < 86400):
+        gave = None
+    at = d.get("at")  # when the last step started; older than two cycles means the automation was off
+    if stamp_ok(at) and now - at > 2 * CYCLE_S:
+        return 0, 0, gave, f"sweep: {cycle_path().name} 의 마지막 단계가 {int((now - at) // 60)}분 전이라 사이클을 처음부터 시작함"
+    return pos, fails, gave, None
+
+
+def reset_cycle():
+    """Forget the cycle position (the job was turned back on after a pause: the next step is patrol, not an old shadow
+    or real round). Under the tick lock so a step in progress does not write the file back; False when it is held."""
+    with file_lock("sweep-tick.lock") as got:
+        if got:
+            with contextlib.suppress(OSError):
+                cycle_path().unlink(missing_ok=True)
+        return got
+
+
+def save_cycle(pos, fails, gave):
+    save_json(cycle_path(), {"next": pos, "fails": fails, "gave_up": gave, "at": time.time()})
+
+
+def run_cycle_step():
+    """The one step the cycle is on, under the tick lock. The attempt is written BEFORE the step runs, so a step the job
+    runner kills (or that dies) still counts: after MAX_STEP_FAILS in a row the cycle goes on without it, says so, and
+    keeps saying so on the later steps for a day. A state that cannot be written stops the call: with no position the
+    same step would run for ever."""
+    pos, fails, gave, note = read_cycle()
+    if note:
+        print(note, file=sys.stderr)
+    if fails >= MAX_STEP_FAILS:  # the step's last allowed attempt died before it could be recorded: give up on it now
+        gave = {"step": STEPS[pos], "at": time.time()}
+        print(f"sweep: {STEPS[pos]} 단계의 마지막 시도가 끝까지 기록되지 못해 다음 단계로 넘어감", file=sys.stderr)
+        pos, fails = (pos + 1) % len(STEPS), 0
+    name, fails = STEPS[pos], fails + 1
+    try:
+        save_cycle(pos, fails, gave)
+    except OSError as e:
+        print(f"sweep: {cycle_path().name} 을 쓰지 못해 {name} 단계를 돌리지 않음: {type(e).__name__}", file=sys.stderr)
+        return 1
+    code = run_one(name)
+    if code and fails < MAX_STEP_FAILS:
+        return code  # stays on this step; the next call tries it again
+    if code:
+        gave = {"step": name, "at": time.time()}
+        print(f"sweep: {name} 단계가 연속 {fails}회 실패해 다음 단계로 넘어감", file=sys.stderr)
+    try:
+        save_cycle((pos + 1) % len(STEPS), 0, gave)
+    except OSError as e:
+        print(f"sweep: {cycle_path().name} 을 쓰지 못함: {type(e).__name__}", file=sys.stderr)
+        return code or 1
+    if gave and not code:
+        print(f"최근 포기한 단계: {gave['step']} ({int((time.time() - gave['at']) // 60)}분 전)")
+    return code
 
 
 def run_patrol(timeout, cmd=None):
@@ -837,7 +931,34 @@ def run_tick():
     patrol (due rounds only), the shadow, reap-hard for the rules the sweep does not own (it leaves an owned one by
     itself), then the sweep's real round. reap-hard goes first so that a rule just handed over, whose first good round
     the sweep has not written yet, is still its old cleaner's in that pass: the real round writes sweep-last.json
-    after it. The worst exit code."""
+    after it. The worst exit code. The same four steps, one per call, are what `tick --step` runs (run_cycle_step)."""
+    return max(run_one(name) for name in STEPS)
+
+
+def run_one(name):
+    """One step of STEPS and its exit code (0 ok, 1 failed, 4 over its budget, or the step's own code)."""
+    if name == "patrol":
+        return step_patrol()
+    fn = {"shadow": run_shadow, "reap-hard": hard_pass, "real": run_round}[name]
+    try:
+        res = budgeted(fn)
+    except Exception as e:  # one step's failure (a log that cannot be written, a hung child) leaves the others
+        print(f"{name}: {type(e).__name__}: {str(e)[:200]}", file=sys.stderr)
+        return 1
+    if res is None:
+        return 4
+    print(name, json.dumps({k: res.get(k) for k in ("round", "refused", "acts", "acted", "failed")}, ensure_ascii=False))
+    code = res.get("code") or (1 if res.get("failed") else 0)
+    return 1 if code == SKIP_RC else code  # a child's own exit 3 (reap-hard's lock) is a failure, not "tick lock held"
+
+
+def hard_pass():
+    r = subprocess.run([sys.executable, str(HERE.parents[2] / "scripts" / "reap_hard.py"), "run", "--no-patrol"],
+                       stdin=subprocess.DEVNULL, timeout=STEP_TIMEOUT_S)
+    return {"code": r.returncode}
+
+
+def step_patrol():
     code = 0
     started = time.monotonic()
     try:
@@ -852,24 +973,6 @@ def run_tick():
     except (OSError, subprocess.SubprocessError) as e:
         print(f"patrol 을 돌리지 못함: {type(e).__name__}", file=sys.stderr)
         code = max(code, 1)
-
-    def hard():
-        r = subprocess.run([sys.executable, str(HERE.parents[2] / "scripts" / "reap_hard.py"), "run", "--no-patrol"],
-                           stdin=subprocess.DEVNULL, timeout=STEP_TIMEOUT_S)
-        return {"code": r.returncode}
-
-    for name, fn in (("shadow", run_shadow), ("reap-hard", hard), ("real", run_round)):
-        try:
-            res = budgeted(fn)
-        except Exception as e:  # one step's failure (a log that cannot be written, a hung child) leaves the others
-            print(f"{name}: {type(e).__name__}: {str(e)[:200]}", file=sys.stderr)
-            code = max(code, 1)
-            continue
-        if res is None:
-            code = max(code, 4)
-            continue
-        print(name, json.dumps({k: res.get(k) for k in ("round", "refused", "acts", "acted", "failed")}, ensure_ascii=False))
-        code = max(code, res.get("code") or (1 if res.get("failed") else 0))
     return code
 
 
@@ -914,7 +1017,7 @@ def main(argv):
     if cmd == "uninstall":
         return cmd_uninstall()
     if cmd == "tick":
-        return tick()
+        return tick("--step" in argv)
     if cmd == "diff":
         d = diff(float(reap.opt("--hours") or 48))
         if "--json" in argv:

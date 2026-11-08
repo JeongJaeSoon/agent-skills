@@ -131,7 +131,9 @@ OWN.write_text(json.dumps({"generation": 2, "rules": {"card:landed": "sweep"}, "
 LAST.write_text(json.dumps({"t": NOW - 60}))
 assert guard.check_owner("card:close-idle") is None  # a rule the sweep does not own stays the old cleaner's
 assert "sweep 소유(세대 2)" in guard.check_owner("card:landed")
-LAST.write_text(json.dumps({"t": NOW - 3 * 600 - 60}))  # the sweep missed three rounds: the old cleaner takes over
+LAST.write_text(json.dumps({"t": NOW - 3 * 600 - 60}))  # three of ITS intervals: under the 40-minute cycle floor, still the sweep's
+assert "sweep 소유(세대 2)" in guard.check_owner("card:landed")
+LAST.write_text(json.dumps({"t": NOW - 3 * guard.SWEEP_CYCLE_S - 60}))  # the sweep missed three rounds: the old cleaner takes over
 notes = []
 assert guard.check_owner("card:landed", notes) is None and "옛 주체" in notes[0], notes
 LAST.unlink()

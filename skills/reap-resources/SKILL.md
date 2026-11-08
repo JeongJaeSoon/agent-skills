@@ -287,8 +287,9 @@ bin/reap-hard install            # from the main checkout; `status`, `uninstall`
   `serve:dark`). Nothing changes until a person runs `sweep.py own <rule>`; `release <rule>` hands it back at the next
   pass. `run --dry-run [--rule R]` decides every rule as if owned and writes nothing, so it can be set beside
   `reap-hard run --dry-run` before `own`. A real `run` acts only on owned rules' candidates, inside each target's lock
-  with the owner read again, and reap-hard's own act judges the target once more. `install` writes the LaunchAgent that
-  runs `tick` (patrol, shadow, reap-hard for the rules not owned, then the real round) at reap-hard's interval; `config`
+  with the owner read again, and reap-hard's own act judges the target once more. `install` turns on the Orca automation that
+  runs `tick --step` every 10 minutes: one of patrol, shadow, reap-hard (for the rules not owned) and the real round per
+  call, because Orca ends a precheck at 600 s (`tick` alone runs all four); `config`
   prints the `sweep` settings key that carries today's `reap-hard` values (the `sweep` key wins where both are set).
   Neither edits the settings file or a rule's owner by itself. Details and the hand-over order:
   [docs/reap-hard.md](../../docs/reap-hard.md).
