@@ -193,24 +193,31 @@ def stateless(data):
     return {'decision': 'block', 'reason': al.reason(links)}
 
 
+def run(data):
+    try:
+        # Subagents hand links back in their report; only the main session's reply is checked.
+        if data.get('hook_event_name') not in (None, 'Stop') or data.get('agent_id'):
+            return None
+        session_id = data.get('session_id')
+        out = None
+        path = state_path(session_id) if session_id else None
+        if path and os.path.exists(path):
+            with locked(path):
+                out = check(data, path)
+        return out or stateless(data)
+    except Exception as e:  # a broken check must never trap the session
+        config.log_error('artifact_links_stop', e)
+        return {'systemMessage': f'artifact_links_stop.py failed: {type(e).__name__}'}
+
+
 def main():
-    data = json.load(sys.stdin)
-    # Subagents hand links back in their report; only the main session's reply is checked.
-    if data.get('hook_event_name') not in (None, 'Stop') or data.get('agent_id'):
-        return None
-    session_id = data.get('session_id')
-    out = None
-    path = state_path(session_id) if session_id else None
-    if path and os.path.exists(path):
-        with locked(path):
-            out = check(data, path)
-    return out or stateless(data)
+    return run(json.load(sys.stdin))
 
 
 if __name__ == '__main__':
     try:
         out = main()
-    except Exception as e:  # a broken check must never trap the session
+    except Exception as e:
         config.log_error('artifact_links_stop', e)
         out = {'systemMessage': f'artifact_links_stop.py failed: {type(e).__name__}'}
     if out:

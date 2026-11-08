@@ -108,6 +108,12 @@ skills-sync setup disable janitor        # 하나 끄기. 어느 것이든 apply
 
 ### hook
 
+Bash 한 번에 hook 프로세스가 13개(호출 전 11, 후 2) 뜨던 것을 3개로 줄였다. `hooks.json`은 이벤트마다 `hooks/dispatch.py` 하나만 부르고(PreToolUse·PostToolUse·PostToolUseFailure·Stop·SubagentStop), dispatch가 그 이벤트와 도구에 해당하는 모듈의 `run(event)`를 한 프로세스에서 차례로 돌려 출력을 합친다. 호출 전의 `pressure_gate.py`와 Artifact 게시 뒤의 `artifact_archive.py`는 따로 둔다. 아래 표의 모듈은 이 안에서 돈다(단독 실행도 되고, 출력은 같다).
+
+- **합치기.** 호출 전은 deny > ask > allow이고 deny·ask 사유는 모두 이어 붙인다. Stop·SubagentStop은 block이 하나라도 있으면 block이고 사유를 모두 남긴다. systemMessage·additionalContext는 중복 없이 이어 붙인다(9,500자를 넘으면 뒤쪽 항목을 통째로 줄이고 개수를 적는다). 모든 모듈을 끝까지 돌리므로 deny 뒤에도 `record_check`의 기록은 남는다.
+- **timeout.** 모듈마다 예전 `hooks.json` 값(`dispatch.py`의 `ENTRIES`)을 쓴다. 넘으면 그 모듈만 "점검 없이 지나갔다"고 알리고 다음으로 간다. 모듈의 예외·`sys.exit`·불러오기 실패도 그 모듈만 잃는다.
+- **되돌리기.** `agent-skills.json`의 `hooks.dispatch: false`로 두면 dispatch가 모듈마다 프로세스를 따로 띄우던 옛 방식으로 돌고 출력은 같다(기본은 켜짐). 이미 dispatch를 읽어 둔 세션도 다음 호출부터 옛 방식이 된다. `hooks.json`만 옛 모양으로 되돌린 뒤에도 `dispatch.py`는 reload하지 않은 세션이 부르므로, `roles.py`가 기록하는 hooks.json 해시로 그런 세션이 없어진 뒤에 지운다.
+
 | hook | 언제 | 하는 일 |
 |---|---|---|
 | `guard.py` | Bash·Skill·Edit·Write·MultiEdit·NotebookEdit·AskUserQuestion 호출 전 | 이 플러그인 스킬과 `orch`(`heavy`·`set`·`init`·`backfill` 제외)·`orca orchestration`(reset·worker-abandon·gate-resolve 제외) 명령을 허용하고, 다른 터미널의 Orca 메일함 읽기와 foreground sleep 폴링 루프를 거부한다. `setup.py --actions-only`는 권한 창. 그보다 먼저 패턴 kill·prune·`down -v`·강제 worktree 삭제·사용자 설정 쓰기 같은 위험 명령과, 역할 세션의 AskUserQuestion·foreground 대기·`/dev/null` 전송을 거부한다. 카드(워커)의 작업 규율 여섯 가지(`worker.*`: Bash 파일 쓰기, 명령 묶기, worktree 밖 편집, main checkout 편집, auto-memory 쓰기, 테스트 전 push)는 막지 않고 경고하며 `turn-warnings.jsonl`에 남긴다. 규칙마다 `agent-skills.json` 키로 끄거나 warn으로 낮춘다. 나머지는 평소 권한 흐름을 탄다([권한 결정](skills.md#권한-결정), [위험 명령과 역할 세션 규칙](skills.md#위험-명령과-역할-세션-규칙)) |

@@ -3,55 +3,11 @@
   "hooks": {
     "PreToolUse": [
       {
-        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/delegate_gate.py\"", "timeout": 5 }]
-      },
-      {
-        "matcher": "Bash|Monitor|Skill|Edit|Write|MultiEdit|NotebookEdit|AskUserQuestion",
-        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/guard.py\"", "timeout": 5 }]
+        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/dispatch.py\"", "timeout": 90 }]
       },
       {
         "matcher": "Bash",
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/pressure_gate.py\"", "timeout": 20 }]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/self_land_gate.py\"", "timeout": 10 }]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/land_route_gate.py\"", "timeout": 20 }]
-      },
-      {
-        "matcher": "Bash|Agent|Task",
-        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/lifecycle.py\"", "timeout": 5 }]
-      },
-      {
-        "matcher": "Bash|mcp__.*([Ll]inear|[Jj]ira|atlassian).*",
-        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/prose_check.py\"", "timeout": 5 }]
-      },
-      {
-        "matcher": "mcp__.*([Ll]inear|[Jj]ira|[Aa]tlassian).*",
-        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/tracker_gate.py\"", "timeout": 5 }]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/stack_gate.py\"", "timeout": 10 }]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/record_check.py\"", "timeout": 5 }]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/decision_relay.py\"", "timeout": 5 }]
-      },
-      {
-        "matcher": "Bash|mcp__.*[Tt]elegram.*",
-        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/artifact_send_check.py\"", "timeout": 5 }]
-      },
-      {
-        "matcher": "mcp__.*[Tt]elegram.*",
-        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/turn_check.py\"", "timeout": 5 }]
       }
     ],
     "PostToolUse": [
@@ -61,21 +17,13 @@
       },
       {
         "matcher": "Bash",
-        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/pressure_gate.py\"", "timeout": 5 }]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/record_check.py\"", "timeout": 5 }]
+        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/dispatch.py\"", "timeout": 15 }]
       }
     ],
     "PostToolUseFailure": [
       {
         "matcher": "Bash",
-        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/pressure_gate.py\"", "timeout": 5 }]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/record_check.py\"", "timeout": 5 }]
+        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/dispatch.py\"", "timeout": 15 }]
       }
     ],
     "PermissionRequest": [
@@ -102,19 +50,7 @@
       }
     ],
     "Stop": [
-      { "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/record_check.py\"", "timeout": 5 }] },
-      {
-        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/claim_check.py\"", "timeout": 5 }]
-      },
-      {
-        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/owner_check.py\"", "timeout": 5 }]
-      },
-      {
-        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/artifact_links_stop.py\"", "timeout": 5 }]
-      },
-      {
-        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/turn_check.py\"", "timeout": 30 }]
-      }
+      { "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/dispatch.py\"", "timeout": 55 }] }
     ],
     "SubagentStart": [
       {
@@ -122,19 +58,7 @@
       }
     ],
     "SubagentStop": [
-      {
-        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/record_check.py\"", "timeout": 5 }]
-      },
-      {
-        "hooks": [
-          { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/claim_check.py\"", "timeout": 5 },
-          { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/owner_check.py\"", "timeout": 5 },
-          { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/subagent_log.py\"", "timeout": 5 }
-        ]
-      },
-      {
-        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/turn_check.py\"", "timeout": 30 }]
-      }
+      { "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/dispatch.py\"", "timeout": 53 }] }
     ]
   }
 }

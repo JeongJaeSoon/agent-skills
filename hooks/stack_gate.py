@@ -35,7 +35,7 @@ class Unread(Exception):
     """What the verdict needs could not be read; the message says what."""
 
 
-def run(args, cwd):
+def sh(args, cwd):
     """The command's stripped stdout, None when it failed."""
     try:
         r = subprocess.run(args, cwd=cwd, capture_output=True, text=True, timeout=6)
@@ -106,23 +106,23 @@ def verdict(args, here, prompt):
     """(gaps as {PR: why}, the PRs already below the base, warnings). Raises Unread."""
     if option(args, "--repo", "-R") is not None:
         raise Unread("`--repo` names a repository this checkout may not hold")
-    head = option(args, "--head", "-H") or run(["git", "branch", "--show-current"], here)
+    head = option(args, "--head", "-H") or sh(["git", "branch", "--show-current"], here)
     if not head or ":" in head or "$" in head:
         raise Unread("the head branch is not a local branch name")
     base = option(args, "--base", "-B")
     if base is None:
-        base = run(["git", "config", f"branch.{head}.gh-merge-base"], here) or ""
+        base = sh(["git", "config", f"branch.{head}.gh-merge-base"], here) or ""
     if "$" in base:
         raise Unread("the base is in a variable")
     # Not narrowed to the author: a dependency on someone else's open PR is one all the same.
-    listed = run(["gh", "pr", "list", "--state", "open", "--limit", str(OPEN_LIMIT),
+    listed = sh(["gh", "pr", "list", "--state", "open", "--limit", str(OPEN_LIMIT),
                   "--json", "number,title,headRefName,baseRefName,headRefOid"], here)
     try:
         rows = [r for r in json.loads(listed) if r["headRefName"] != head]
     except (TypeError, ValueError, KeyError):
         raise Unread("`gh pr list` did not answer")
     upstream = f"origin/{base}" if base else "origin/HEAD"
-    mine = run(["git", "rev-list", head, "--not", upstream, "--"], here)
+    mine = sh(["git", "rev-list", head, "--not", upstream, "--"], here)
     if mine is None:
         raise Unread(f"`git rev-list {head} --not {upstream}` failed")
     keys, numbers = named_deps(prompt)
@@ -132,7 +132,7 @@ def verdict(args, here, prompt):
         if r["headRefOid"] in commits:
             deps.setdefault(r["number"], f"this branch contains its head {r['headRefName']}")
     # A default branch that is itself the head of an open PR (main into a release branch) is a trunk, not a lower layer.
-    trunk = upstream == run(["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], here)
+    trunk = upstream == sh(["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], here)
     chain = [] if trunk else below(base, rows)
     warnings = []
     if len(rows) >= OPEN_LIMIT - 1:
@@ -171,19 +171,17 @@ def emit(deny, warnings):
     if warnings:
         out["systemMessage"] = "\n".join(warnings)
         out["hookSpecificOutput"]["additionalContext"] = "\n".join(warnings)
-    if deny or warnings:
-        print(json.dumps(out, ensure_ascii=False))
+    return out if deny or warnings else None
 
 
-def main():
-    event = json.load(sys.stdin)
+def run(event):
     command = (event.get("tool_input") or {}).get("command")
     if event.get("tool_name") != "Bash" or not isinstance(command, str):
-        return
+        return None
     call = create_call(command, event.get("cwd"))
     level = config.level(config.load(), KEY, "warn") if call else "off"
     if level == "off":
-        return
+        return None
     args, here = call
     try:
         if transcript_unread(event):
@@ -196,7 +194,12 @@ def main():
     base = option(args, "--base", "-B") or ""
     if gaps and level == "deny":
         return emit(message(gaps, base), warnings)
-    emit(None, warnings + ([message(gaps, base)] if gaps else []))
+    return emit(None, warnings + ([message(gaps, base)] if gaps else []))
+
+
+def main():
+    if out := run(json.load(sys.stdin)):
+        print(json.dumps(out, ensure_ascii=False))
 
 
 if __name__ == "__main__":

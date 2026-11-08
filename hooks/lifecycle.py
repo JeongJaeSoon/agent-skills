@@ -245,13 +245,9 @@ def lacks_paragraph(event, cfg):
     return bool(text) and text not in " ".join(args["prompt"].split())
 
 
-def main():
-    try:
-        event = json.load(sys.stdin)
-    except ValueError:
-        return 0
+def run(event):
     if not isinstance(event, dict) or event.get("hook_event_name", "PreToolUse") != "PreToolUse":
-        return 0
+        return None
     out = {"hookSpecificOutput": {"hookEventName": "PreToolUse"}}
     tool = event.get("tool_name")
     cmd = (event.get("tool_input") or {}).get("command") if isinstance(event.get("tool_input"), dict) else None
@@ -259,7 +255,7 @@ def main():
     try:
         cfg = config.load()
         if tool == "Bash" and not (isinstance(cmd, str) and "worktree" in cmd and removes(cmd)):
-            return 0  # the role is read from the transcript only for an rm
+            return None  # the role is read from the transcript only for an rm
         lvl = config.level(cfg, "guard.exit_order", "warn")
         s = roles.session(event)
         # Unread, the transcript cannot say whether this is a card that must report first: it does not pass as one
@@ -274,30 +270,39 @@ def main():
                                 + SOURCE.format(key="guard.exit_order")) if blind else \
                 exit_order(event, s, lvl) if lvl != "off" else (None, None)
             if not decision:
-                return 0
+                return None
             hold(out, decision, reason)
         elif tool in ("Agent", "Task") and roles.applies("agent_forbidden", s):
             if not lacks_paragraph(event, cfg):
-                return 0
+                return None
             # No permissionDecision: the call goes to the same permission check it would without this hook.
             out["systemMessage"] = out["hookSpecificOutput"]["additionalContext"] = (
                 "This subagent prompt lacks the refused-act paragraph of orchestrate references/brief.md FORBIDDEN; "
                 "paste it into every subagent prompt. " + SOURCE.format(key="orchestrate.agent_forbidden"))
         else:
-            return 0
+            return None
     except Exception as e:
         config.log_error("lifecycle", e)
         # A failure while judging an rm of this very card does not let the rm through.
         try:
             if not (tool == "Bash" and lvl != "off" and not event.get("agent_id") and isinstance(cmd, str)
                     and removes_own(cmd, event.get("cwd"))):
-                return 0
+                return None
         except Exception:
             pass
         hold(out, lvl, f"`orca worktree rm` of this card while this hook could not judge it ({type(e).__name__}), "
                        "so whether its worker_done or end-check came back first is unknown (end-session §7, §8). "
                        + SOURCE.format(key="guard.exit_order"))
-    print(json.dumps(out, ensure_ascii=False))
+    return out
+
+
+def main():
+    try:
+        event = json.load(sys.stdin)
+    except ValueError:
+        return 0
+    if out := run(event):
+        print(json.dumps(out, ensure_ascii=False))
     return 0
 
 

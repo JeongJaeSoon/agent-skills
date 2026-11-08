@@ -187,8 +187,9 @@ for cmd in ("sleep 5; cat /tmp/x", "for i in 1 2 3; do curl -fs x && break; slee
 # ({command, description}), which the sleep-loop gate refuses; naming Monitor in the matcher keeps its own input.
 said = reason(f"until [ -s {O} ]; do sleep 5; done")
 assert "run_in_background: true" in said and "Monitor tool" in said, said
-wired = json.loads((HERE / "hooks.json").read_text())["hooks"]["PreToolUse"]
-matcher = next(e["matcher"] for e in wired if any("guard.py" in h["command"] for h in e["hooks"]))
+sys.path.insert(0, str(HERE))
+import dispatch  # noqa: E402
+matcher = next(m for mod, m, _ in dispatch.ENTRIES["PreToolUse"] if mod == "guard")
 assert "Monitor" in matcher.split("|"), matcher
 for cmd in (f"until [ -s {O} ]; do sleep 5; done", f"while true; do grep -q done {O} && break; sleep 30; done",
             "until ! gh pr checks 304 | grep -q pending; do\n  sleep 30\ndone"):

@@ -227,6 +227,8 @@ assert note("Agent", AGENT, agent=None) == "none" and note("Agent", AGENT, agent
 assert bash("rm -rf x") == "deny", "a denied call stays denied"
 
 # The hook is wired for every tool.
-wired = json.loads((HERE / "hooks.json").read_text())["hooks"]["PreToolUse"]
-assert any("delegate_gate.py" in h["command"] and "matcher" not in entry for entry in wired for h in entry["hooks"])
+sys.path.insert(0, str(HERE))
+import dispatch  # noqa: E402
+assert dispatch.ENTRIES["PreToolUse"][0][:2] == ("delegate_gate", None), dispatch.ENTRIES["PreToolUse"][0]
+assert dispatch.HOOK_MATCHER["PreToolUse"] is None, "the dispatch entry has no matcher, so it meets every tool"
 print("ok")

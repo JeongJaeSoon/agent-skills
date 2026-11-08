@@ -414,7 +414,7 @@ STORES = [
            "artifact_archive:record_pending", "artifact_archive:store", "artifact_archive:start_marker",
            "artifact_archive:index_lock", "artifact_archive:key_lock", "artifact_archive:move_into", "artifact_archive:touch_last",
            "artifact_archive:make_private", "artifact_archive:save_version", "artifact_archive:write_marker", "artifact_archive:snapshot", "artifact_archive:recover_killed",
-           "artifact_links_stop:locked", "artifact_links_stop:save", "artifact_links_stop:main", "artifact_hooks_cutover:save",
+           "artifact_links_stop:locked", "artifact_links_stop:save", "artifact_links_stop:run","artifact_hooks_cutover:save",
            "artifact_hooks_cutover:main"), ("nobody",),
           rule="Artifact backup hooks: the public index and error log, the links still owed per session, in-flight "
                "markers; copies go to artifact-backup.public_dir and private_dir, which the config names"),
@@ -603,6 +603,7 @@ OUTSIDE = {
     "reap_hard:cmd_install": "a launch agent plist",
     "sweep:cmd_install": "turns on the sweep Orca automation (no plist is written any more)",
     "share_server:cmd_install": "a launch agent plist and its backup",
+    "dispatch:run_event": "the hook answer on a copy of stdout, after descriptor 1 is pointed at /dev/null",
     "config_emit:backup": "a backup of the settings file it changes",
     "automode_rule:backup": "a backup of the settings file it changes",
 }

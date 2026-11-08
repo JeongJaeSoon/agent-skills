@@ -68,6 +68,16 @@ assert dup[0]["save"] == dup[0]["tokens"]
 hooks = {h["name"]: h for h in rep["hooks"]}
 assert hooks["onboard.py"]["events"] == ["SessionStart"] and hooks["onboard.py"]["when"] == st.HOOKS["onboard.py"]
 assert hooks["new_hook.py"]["when"].startswith("unknown"), hooks
+
+# The modules a dispatch.py runs are listed as hooks, read from its table as syntax: its code is never executed.
+droot = tmp / "dispatching"
+write(droot, "hooks/hooks.json", json.dumps({"hooks": {"PreToolUse": [
+    {"hooks": [{"type": "command", "command": 'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/dispatch.py"'}]}]}}))
+write(droot, "hooks/dispatch.py", 'raise RuntimeError("executed")\nBASH = "Bash"\n'
+      'ENTRIES = {"PreToolUse": [("guard", BASH, 5), ("record_check", None, 5)], "Stop": [("claim_check", None, 5)]}\n')
+listed = st.hook_scripts(droot)
+assert listed == {"dispatch.py": ["PreToolUse"], "guard.py": ["PreToolUse"], "record_check.py": ["PreToolUse"],
+                  "claim_check.py": ["Stop"]}, listed
 assert rep["repo"] == [{"path": "CLAUDE.md", "tokens": st.approx_tokens("@AGENTS.md\n")}]
 assert rep["totals"]["always_width"] == sum(x["width"] for x in rep["skills"] + rep["agents"])
 

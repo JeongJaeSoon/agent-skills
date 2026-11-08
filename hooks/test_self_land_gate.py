@@ -137,9 +137,10 @@ assert run(DONE) == {} and LOG.read_text() == ""
 CONFIG.write_text("{}")
 assert decision(run(DONE)) is None and run(DONE)["systemMessage"]
 
-spec = json.loads((HERE / "hooks.json").read_text())["hooks"]["PreToolUse"]
-wired = [h for g in spec if g.get("matcher") == "Bash" for h in g["hooks"] if "self_land_gate.py" in h["command"]]
-assert wired and wired[0]["timeout"] >= 10, "registered with room for the gh read"
+sys.path.insert(0, str(HERE))
+import dispatch  # noqa: E402
+wired = [(m, t) for mod, m, t in dispatch.ENTRIES["PreToolUse"] if mod == "self_land_gate"]
+assert wired == [("Bash", 10)], "registered for Bash with room for the gh read"
 assert "[gate:self-land]" in (HERE.parent / "skills/orchestrate/references/brief.md").read_text()
 shutil.rmtree(TMP)
 print("self_land_gate: all pass")

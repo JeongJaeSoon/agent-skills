@@ -481,8 +481,7 @@ def message(commands, level):
             f"{KEY} in ~/.claude/agent-skills.json: deny, ask, warn or off.)")
 
 
-def main():
-    event = json.load(sys.stdin)
+def judge(event):
     cfg = config.load()
     level = config.level(cfg, KEY, "deny")
     if os.environ.get("AGENT_SKILLS_TRACKER_GATE") == "0":
@@ -490,7 +489,7 @@ def main():
     name = event.get("tool_name") or ""
     provider = provider_of(name)
     if not name.startswith("mcp__") or not provider:
-        return
+        return None
     if level == "off":
         return log(provider, tool_of(name), "pass", "pass-off")
     try:
@@ -498,7 +497,7 @@ def main():
     except Pass as p:
         if str(p) and str(p) != "pass-unmapped":
             log(provider, tool_of(name), "pass", str(p))
-        return
+        return None
     log(provider, tool, level, "deny")
     text = message(commands, level)
     out = {"hookSpecificOutput": {"hookEventName": "PreToolUse"}}
@@ -506,13 +505,27 @@ def main():
         out["hookSpecificOutput"].update(permissionDecision=level, permissionDecisionReason=f"[gate:tracker] {text}")
     else:
         out["hookSpecificOutput"]["additionalContext"] = text
-    print(json.dumps(out, ensure_ascii=False))
+    return out
+
+
+def run(event):
+    try:
+        return judge(event)
+    except Exception as e:
+        config.log_error("tracker_gate", e)
+        log("", "", "pass", "pass-error")
+        return None
+
+
+def main():
+    if out := run(json.load(sys.stdin)):
+        print(json.dumps(out, ensure_ascii=False))
 
 
 if __name__ == "__main__":
     try:
         main()
-    except Exception as e:
+    except Exception as e:  # a stdin that is not JSON
         config.log_error("tracker_gate", e)
         log("", "", "pass", "pass-error")
     sys.exit(0)

@@ -113,33 +113,36 @@ def append(row):
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
-def main():
+def run(event):
     if os.environ.get("AGENT_SKILLS_OWNER_CHECK", "1") == "0":
-        return
+        return None
     lvl = config.level(config.load(), KEY, "warn")
     if lvl == "off":
-        return
-    event = json.load(sys.stdin)
+        return None
     if event.get("stop_hook_active"):
-        return
+        return None
     path = event.get("agent_transcript_path") or event.get("transcript_path")
     if not path or not os.path.isfile(path):
-        return
+        return None
     items, recorded = judge(claim_check.turn(path), event.get("last_assistant_message"))
     if not items or recorded:
-        return
+        return None
     msg = f"기록 안 된 오너 항목 {len(items)}"
     if lvl == "deny":
-        print(json.dumps({"decision": "block", "reason": (
+        return {"decision": "block", "reason": (
             f"owner_check: {msg}. The reply names {len(items)} thing(s) only the owner can do or decide, and this turn "
             f"ran no `orch decide add`, `orch board now`, `orch board set --owner`, `orch gate` or `orch-dash inbox "
             f"add`. Record each item where the owner reads it, then say so; or reword a line that is not an owner "
-            f"item. ({KEY}: deny; AGENT_SKILLS_OWNER_CHECK=0 turns this check off.)")}, ensure_ascii=False))
-        return
+            f"item. ({KEY}: deny; AGENT_SKILLS_OWNER_CHECK=0 turns this check off.)")}
     now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
     append({"at": now, "event": event.get("hook_event_name"), "session": event.get("session_id"),
             "agent": event.get("agent_id") or "", "items": len(items), "level": lvl})
-    print(json.dumps({"systemMessage": f"owner_check: {msg}"}, ensure_ascii=False))
+    return {"systemMessage": f"owner_check: {msg}"}
+
+
+def main():
+    if out := run(json.load(sys.stdin)):
+        print(json.dumps(out, ensure_ascii=False))
 
 
 if __name__ == "__main__":

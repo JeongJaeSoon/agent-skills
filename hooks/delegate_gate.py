@@ -335,20 +335,26 @@ NOTE = ("[gate:delegate] (agent-skills hooks/delegate_gate.py) This delegation c
         "A warning, not a block: work with no order behind it needs nothing.")
 
 
+def run(event):
+    if not isinstance(event, dict) or not is_orchestrator(event) or not gate_on():
+        return None
+    tool, args = str(event.get("tool_name") or ""), event.get("tool_input") or {}
+    if not isinstance(args, dict) or not allowed(tool, args):
+        return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                       "permissionDecisionReason": reason(tool)}}
+    if should_warn(tool, args):
+        # No permissionDecision: the call goes on to the same permission check it would without this hook.
+        return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": NOTE}}
+    return None
+
+
 def main():
     try:
         event = json.load(sys.stdin)
     except ValueError:
         return 0
-    if not isinstance(event, dict) or not is_orchestrator(event) or not gate_on():
-        return 0
-    tool, args = str(event.get("tool_name") or ""), event.get("tool_input") or {}
-    if not isinstance(args, dict) or not allowed(tool, args):
-        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
-                                                 "permissionDecisionReason": reason(tool)}}))
-    elif should_warn(tool, args):
-        # No permissionDecision: the call goes on to the same permission check it would without this hook.
-        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": NOTE}}))
+    if out := run(event):
+        print(json.dumps(out))
     return 0
 
 

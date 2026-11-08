@@ -118,8 +118,7 @@ def emit(decision, reason, warnings):
     if warnings:
         out["systemMessage"] = "\n".join(warnings)
         out["hookSpecificOutput"]["additionalContext"] = "\n".join(warnings)
-    if decision or warnings:
-        print(json.dumps(out))
+    return out if decision or warnings else None
 
 
 def simple_words(cmd):
@@ -397,13 +396,9 @@ def failed(e, warnings):
                     "through without them; see guard-errors.jsonl in the agent-skills state directory.")
 
 
-def main():
-    try:
-        event = json.load(sys.stdin)
-    except ValueError:
-        return 0
+def run(event):
     if not isinstance(event, dict):
-        return 0
+        return None
     tool, args = event.get("tool_name"), event.get("tool_input") or {}
     args = args if isinstance(args, dict) else {}
     who = functools.cache(lambda: roles.session(event))
@@ -424,7 +419,16 @@ def main():
     asks = [f.reason for f in found if f.level == "ask"]
     if asks and verdict != "deny":
         verdict, reason = "ask", "\n".join(asks)
-    emit(verdict, reason, warnings)
+    return emit(verdict, reason, warnings)
+
+
+def main():
+    try:
+        event = json.load(sys.stdin)
+    except ValueError:
+        return 0
+    if out := run(event):
+        print(json.dumps(out))
     return 0
 
 

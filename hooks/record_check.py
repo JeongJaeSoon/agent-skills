@@ -340,12 +340,11 @@ def stop(event, cfg, lvl):
     return {"systemMessage": msg}
 
 
-def main():
-    event = json.load(sys.stdin)
+def run(event):
     cfg = config.load()
     lvl = config.level(cfg, KEY, "warn")
     if lvl == "off":
-        return
+        return None
     name = event.get("hook_event_name")
     if not (isinstance(cfg.get("tracker"), dict) or isinstance(cfg.get("notes"), dict)):
         # Nothing to record, but an Orca card still moves its board column when its PR opens.
@@ -356,9 +355,8 @@ def main():
         ran = name == "PostToolUse" or (name == "PostToolUseFailure" and (
             len(cmds) > 1 or NEGATION.search(shell.command_text(raw))))
         if ran and event.get("tool_name") == "Bash" and opened and any(target(c.words) == "create" for c in cmds):
-            print(json.dumps({"hookSpecificOutput": {"hookEventName": name, "additionalContext":
-                                                     f"record_check: {opened}"}}, ensure_ascii=False))
-        return
+            return {"hookSpecificOutput": {"hookEventName": name, "additionalContext": f"record_check: {opened}"}}
+        return None
     if name in ("PostToolUse", "PostToolUseFailure") and event.get("tool_name") == "Bash":
         out = post_tool(event, cfg, name == "PostToolUseFailure")
     elif name == "PreToolUse" and event.get("tool_name") == "Bash":
@@ -367,7 +365,11 @@ def main():
         out = stop(event, cfg, lvl)
     else:
         out = None
-    if out:
+    return out
+
+
+def main():
+    if out := run(json.load(sys.stdin)):
         print(json.dumps(out, ensure_ascii=False))
 
 

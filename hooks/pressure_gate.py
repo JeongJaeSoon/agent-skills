@@ -557,29 +557,24 @@ def gate(cmd, metrics, state, cfg, now=None, p=None, session="", cwd=""):
                     "다시 실행하지 말고 그 출력(이유·측정값)을 보고한다. " + tail)
 
 
-def main():
+def run(event):
     if os.environ.get("AGENT_SKILLS_PRESSURE_GATE") == "0":
-        return 0
-    try:
-        event = json.load(sys.stdin)
-    except ValueError:
-        return 0
+        return None
     cmd = (event.get("tool_input") or {}).get("command") or ""
     if event.get("tool_name") != "Bash":
-        return 0
+        return None
     session, kind = str(event.get("session_id") or ""), event.get("hook_event_name") or "PreToolUse"
     if kind == "PreToolUse" and (tests := unwrapped_tests(cmd)):
-        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
-                                                 "permissionDecisionReason": wrap_reason(cmd, tests)}}, ensure_ascii=False))
-        return 0
+        return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                       "permissionDecisionReason": wrap_reason(cmd, tests)}}
     if not heavy(cmd):
-        return 0
+        return None
     try:
         sys.path.insert(0, str(SCRIPT.parent))
         import pressure
         if outcome := POST.get(kind):  # the outcome of a retry the queue let through; nothing to measure
             pressure.queue_mark(session, cmd, outcome, event.get("error"))
-            return 0
+            return None
         cfg = pressure.config()
         state = pressure.load_state()
         out = gate(cmd, pressure.snapshot(cfg, state, idle_fn=pressure.live(cfg)), state, cfg, p=pressure, session=session,
@@ -587,10 +582,20 @@ def main():
         if not out:
             pressure.queue_mark(session, cmd, "retrying")
     except Exception:  # a broken measurement must not block work
-        return 0
+        return None
     if out:
-        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": out[0],
-                                                 "permissionDecisionReason": out[1]}}, ensure_ascii=False))
+        return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": out[0],
+                                       "permissionDecisionReason": out[1]}}
+    return None
+
+
+def main():
+    try:
+        event = json.load(sys.stdin)
+    except ValueError:
+        return 0
+    if out := run(event):
+        print(json.dumps(out, ensure_ascii=False))
     return 0
 
 

@@ -157,31 +157,36 @@ def subagent_claim(entries, last_message=None):
     return f"claim_check: \"{m.group(0).strip()}\" rests on a subagent's report; no command of this session's own ran after it"
 
 
-def main():
+def run(event):
     if os.environ.get("AGENT_SKILLS_CLAIM_CHECK", "1") == "0":
-        return
-    event = json.load(sys.stdin)
+        return None
     if event.get("stop_hook_active"):
-        return
+        return None
     path = event.get("agent_transcript_path") or event.get("transcript_path")
     if not path or not os.path.isfile(path):
-        return
+        return None
     entries = turn(path)
     reason = judge(entries, event.get("last_assistant_message"))
     if reason:
-        print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
-    elif config.level(config.load(), "claim_check.subagent", "off") != "off":
+        return {"decision": "block", "reason": reason}
+    if config.level(config.load(), "claim_check.subagent", "off") != "off":
         # A warning only (`claim_check.subagent`, off until set): a line for the human and a turn-warnings row.
         try:
             warning = subagent_claim(entries, event.get("last_assistant_message"))
         except Exception as exc:
             config.log_error("claim_check.subagent", exc)
-            return
+            return None
         if warning:
             now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
             config.append_warning({"at": now, "event": event.get("hook_event_name"), "session": event.get("session_id"),
                                    "agent": event.get("agent_id") or "", "check": "claim_subagent", "level": "warn"})
-            print(json.dumps({"systemMessage": warning}, ensure_ascii=False))
+            return {"systemMessage": warning}
+    return None
+
+
+def main():
+    if out := run(json.load(sys.stdin)):
+        print(json.dumps(out, ensure_ascii=False))
 
 
 if __name__ == "__main__":

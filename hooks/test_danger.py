@@ -608,8 +608,9 @@ assert bash("pkill x") == "deny"
 configure({})
 
 # The hook is wired for the tools these rules read.
-wired = json.loads((HERE / "hooks.json").read_text())["hooks"]["PreToolUse"]
-matcher = next(e["matcher"] for e in wired for h in e["hooks"] if "guard.py" in h["command"])
+sys.path.insert(0, str(HERE))
+import dispatch  # noqa: E402
+matcher = next(m for mod, m, _ in dispatch.ENTRIES["PreToolUse"] if mod == "guard")
 for tool in ("Bash", "Skill", "Edit", "Write", "MultiEdit", "NotebookEdit", "AskUserQuestion"):
     assert tool in matcher.split("|"), tool
 print("danger: all pass")

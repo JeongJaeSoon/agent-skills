@@ -178,6 +178,10 @@ assert fleet.subagents(LOG)["a9"]["stopped_at"] == "2026-11-03T00:00:00Z"
 reg = json.loads((HERE / "hooks.json").read_text())["hooks"]
 cmd = lambda ev: [h["command"] for m in reg[ev] for h in m["hooks"]]  # noqa: E731
 assert any("subagent_log.py" in c for c in cmd("SubagentStart")), cmd("SubagentStart")
-assert any("subagent_log.py" in c for c in cmd("SubagentStop")) and any("claim_check.py" in c for c in cmd("SubagentStop"))
+sys.path.insert(0, str(HERE))
+import dispatch  # noqa: E402
+stop = [m for m, _, _ in dispatch.ENTRIES["SubagentStop"]]
+assert "subagent_log" in stop and "claim_check" in stop and stop.index("claim_check") < stop.index("subagent_log"), stop
+assert [t for m, _, t in dispatch.ENTRIES["SubagentStop"] if m == "subagent_log"] == [3], "its own 3 s budget"
 
 print("test_subagent_log: ok")
