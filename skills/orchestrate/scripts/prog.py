@@ -3805,14 +3805,15 @@ NOT_LOOKED = object()
 NOT_A_WAIT = {"a full disk", "an API retry loop"}
 
 
-def agent_waits(strict=False):
+def agent_waits(strict=False, terminals=None):
     """{terminal handle: Orca's agentWait} for every agent terminal, a Run's worker or not, from one
     `worktree ps --agent-wait`: a dict naming the human-only prompt and its evidence, None when Orca looked and found
     no wait. A handle left out (an older host, a row past the page, an unreadable pane) was not looked at. An
-    unreadable listing is {}, or raises with strict (a listing without its list counts as unreadable then)."""
+    unreadable listing is {}, or raises with strict (a listing without its list counts as unreadable then).
+    `terminals` is a `terminal list` the caller already holds; without it this asks for one."""
     try:
         ps = orca_json("worktree", "ps", "--agent-wait", "--limit", "500").get("worktrees")
-        terms = orca_json("terminal", "list").get("terminals")
+        terms = orca_json("terminal", "list").get("terminals") if terminals is None else terminals
         if strict and not (isinstance(ps, list) and isinstance(terms, list)):
             raise ValueError("worktree ps or terminal list answered without its list")
         panes = {a["paneKey"]: a["agentWait"]

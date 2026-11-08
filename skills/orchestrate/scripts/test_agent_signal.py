@@ -208,8 +208,8 @@ menu = ["Which base branch should the PR target?", "❯ 1. main", "  2. develop"
 idle = ["done.", "❯ "]
 screens = {"h1": idle, "h2": idle, "h3": idle, "cx": idle}
 prog.orca_json = lambda *x: {"terminals": listing}
-prog.read_screen = lambda h: screens[h]
-prog.agent_waits = lambda: {}
+card_watch.read_card_screen = lambda h: screens[h]
+prog.agent_waits = lambda **k: {}
 
 
 def watch(rows, problem=None, state=None):
@@ -252,12 +252,12 @@ listing[:] = [term("h1")]
 listing[0]["lastOutputAt"] = NOW
 def unreadable(h):
     raise SystemExit("gone")
-prog.read_screen = unreadable
-prog.agent_waits = lambda: {"h1": {"prompt": "go?"}}
+card_watch.read_card_screen = unreadable
+prog.agent_waits = lambda **k: {"h1": {"prompt": "go?"}}
 assert watch([row("s1", status="busy")], state=d / "w7.json")[0].startswith("STUCK h1 (waiting on a prompt")
 assert watch([row("s1", status="busy")], state=d / "w7.json")[0].startswith("PARTIAL 1 agent terminals, nothing new; 화면 판정 없음 1: h1 (unreadable)")
-prog.read_screen = lambda h: screens[h]
-prog.agent_waits = lambda: {}
+card_watch.read_card_screen = lambda h: screens[h]
+prog.agent_waits = lambda **k: {}
 
 # A STUCK card is the same with and without a signal.
 plain = card_watch.scan([term("h1")], {}, lambda h: menu, NOW, 30, 100.0, 15)
