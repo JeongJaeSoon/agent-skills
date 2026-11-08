@@ -197,8 +197,7 @@ class Round:
         except SystemExit as e:
             return settle("queued", None, f"GitHub did not answer: {str(e.code)[:200]}")
         if not any(prog.TEST_RESULTS in (c.get("body") or "") for c in comments):
-            return settle("refused", 3, f"no {prog.TEST_RESULTS} comment on #{pr}: post the test results"
-                                         " (deliver-ticket sticky-comment.sh), then land again")
+            return settle("refused", 3, prog.no_results_problem(pr))
         mss = v.get("mergeStateStatus")
         if mss == "DIRTY":
             return settle("refused", 3, f"#{pr} conflicts with its base: resolve, re-review, land again")
