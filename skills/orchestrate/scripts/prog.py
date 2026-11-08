@@ -17,11 +17,18 @@ Usage: orch <command> <slug> [options]
                                      main_green / main_red need --sha of a landed merge commit; main_green also takes
                                      a full sha another program landed, while main is red, if it is on the base
                                      branch and descends from every red landing (no landing is counted)
-  record <slug> signal --kind human_correction|brief_gap|stall|tooling --evidence PTR [--ticket T] [--note TEXT]
+  record <slug> main_flake --run ID --attempt N [--sha S] [--note TEXT]
+                                     a main CI run that failed and went green on rerun attempt N (>= 2); it
+                                     does not change main's state, and measure.py counts it
+  record <slug> signal --kind human_correction|brief_gap|stall|tooling|loss|wait|orchestrator_correction
+                 --evidence PTR [--ticket T] [--note TEXT]
                                      a lesson candidate for reflect at Close: a human correction, a
                                      question the brief should have answered, a stall the process
-                                     caused, a skill or script defect. PTR points at the proof (message
-                                     id, PR comment URL, transcript path:line); nothing is copied in
+                                     caused, a skill or script defect, work or evidence lost (loss), time
+                                     spent blocked on a person or gate (wait), a correction that came from
+                                     the orchestrator or another agent, not the owner. PTR points at the
+                                     proof (message id, PR comment URL, transcript path:line); nothing is
+                                     copied in
   verdict <slug> --pr N --sha REVIEWED_HEAD --source WHO [--reviewer NAME] [--evidence LINK_OR_SHA]
                  [--result pass|fail] [--note TEXT]
                                      the row keeps the PR's author sessions, the reviewer, the evidence and the
@@ -289,7 +296,7 @@ Usage: orch <command> <slug> [options]
 Store: ~/.claude/programs/<slug>/ (program.json holds identifiers only; ledger.jsonl is
 append-only). Events: spawned, ready, verdict, landed, main_green, main_red, land_failed,
 admitted, parked, approved, gate_opened, stop, resume, predicate_verified, config, dep,
-land_check, yield, lane, lock_acquired, lock_released, reprioritized, signal.
+land_check, yield, lane, lock_acquired, lock_released, reprioritized, signal, main_flake.
 Tickets come from the tracker adapter (use-tracker/scripts/tracker.py), never from a tracker directly.
 """
 import contextlib, datetime as dt, fcntl, fnmatch, hashlib, heapq, json, math, os, pathlib, re, shlex, shutil, subprocess, sys, tempfile, time
@@ -2144,6 +2151,13 @@ def cmd_status(argv):
                           leftover=sum(active is False for _, _, active, _ in leftover))
     budget_note = f" (budget {used:.0%} used)" if used is not None else ""
     lines.append(f"next: {nxt}{budget_note}")
+    decisions = p.dir / "decisions.tsv"
+    try:
+        tsv = decisions.read_text(errors="replace") if decisions.exists() else None
+    except OSError:
+        tsv = ""  # unreadable is not missing; the gap is then reported against an empty trail
+    if gap_line := decision_gap_line(events, tsv):
+        lines.append(gap_line)
     lines += note_lines(p)
     print("\n".join(lines + dashboard_lines(p.slug)))
     if not wait_ok:
@@ -2203,7 +2217,48 @@ OWNED = {"approved": "land, gate", "gate_opened": "gate", "landed": "land, lande
 
 
 # land_failed, main_red and failed verdicts are already in the ledger; a signal records what only the lead sees.
-SIGNAL_KINDS = ("human_correction", "brief_gap", "stall", "tooling")
+# loss: work or evidence destroyed (a restart, a deleted volume). wait: time spent blocked on a person or a gate.
+# orchestrator_correction: the orchestrator or another agent corrected how the work ran; human_correction stays
+# for the owner's own words, so a PARENT's instruction is not counted as the human's.
+SIGNAL_KINDS = ("human_correction", "brief_gap", "stall", "tooling", "loss", "wait", "orchestrator_correction")
+
+DECISION_GAP_MIN = 3
+DECISION_GAP_EVENTS = ("landed", "main_green", "main_red", "predicate_verified")
+
+
+def decision_gap(events, tsv):
+    """Delivery events written after the last row of decisions.tsv (tsv None: the file is missing), or None when
+    there are none. The trail is the owner's way to audit a program, and a gap in it is silent otherwise."""
+    last = None
+    for line in (tsv or "").splitlines():
+        cell = line.split("\t", 1)[0].strip()
+        try:
+            t = parse_ts(cell)
+        except ValueError:
+            continue  # the header row, a blank line, a broken stamp
+        t = t if t.tzinfo else t.replace(tzinfo=dt.timezone.utc)
+        if last is None or t > last[0]:
+            last = (t, cell)
+    kinds = {}
+    for e in events:
+        if e["ev"] in DECISION_GAP_EVENTS and (last is None or parse_ts(e["ts"]) > last[0]):
+            kinds[e["ev"]] = kinds.get(e["ev"], 0) + 1
+    if not kinds:
+        return None
+    return {"count": sum(kinds.values()), "since": last[1] if last else None, "kinds": kinds}
+
+
+def decision_gap_line(events, tsv):
+    gap = decision_gap(events, tsv)
+    if not gap or gap["count"] < DECISION_GAP_MIN:
+        return None
+    kinds = ", ".join(f"{k} {n}" for k, n in sorted(gap["kinds"].items()))
+    if gap["since"] is None:
+        why = "no decisions.tsv" if tsv is None else "no decision row in decisions.tsv"
+        where = f"{why}, so {gap['count']} event(s) are unrecorded"
+    else:
+        where = f"{gap['count']} event(s) since the last decision row ({gap['since']})"
+    return f"WARN decisions: {where}: {kinds}; append the missing decisions (show-me-your-work log.sh) before Close"
 
 
 def default_branch(repo):
@@ -2261,8 +2316,14 @@ def cmd_record(argv):
     kind, evidence = opt(argv, "--kind"), opt(argv, "--evidence")
     if ev == "signal" and (kind not in SIGNAL_KINDS or not evidence):
         sys.exit(f"signal needs --kind ({', '.join(SIGNAL_KINDS)}) and --evidence pointing at the proof")
+    run, attempt = opt(argv, "--run"), opt(argv, "--attempt")
+    if ev == "main_flake":
+        # A main CI run that failed and went green on a rerun: the red the rerun hid. It never touches main_state.
+        if not run or not (attempt or "").isdigit() or int(attempt) < 2:
+            sys.exit("main_flake needs --run ID and --attempt N (N >= 2: the attempt that went green; attempt 1 is the failure)")
     row = p.append(ev, ticket=opt(argv, "--ticket"), pr=int(pr) if pr else None, sha=sha, klass=klass,
-                   role=opt(argv, "--role"), note=opt(argv, "--note"), kind=kind, evidence=evidence)
+                   role=opt(argv, "--role"), note=opt(argv, "--note"), kind=kind, evidence=evidence,
+                   run=run if ev == "main_flake" else None, attempt=int(attempt) if ev == "main_flake" else None)
     print(json.dumps(row, ensure_ascii=False))
 
 

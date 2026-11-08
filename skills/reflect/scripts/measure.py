@@ -4,7 +4,7 @@
 Usage:
   python3 measure.py --repo OWNER/NAME (--project TRACKER_PROJECT | --issues ISSUES.json) --since ISO8601 [--until ISO8601]
                      [--baseline-until ISO8601] [--tz +09:00] [--bug-label Bug]
-                     [--usage-match TEXT] [--json OUT.json]
+                     [--usage-match TEXT] [--program SLUG] [--json OUT.json]
 
 --project: read issues through the tracker adapter (use-tracker/scripts/tracker.py; Linear or Jira
 per ~/.claude/agent-skills.json).
@@ -15,6 +15,8 @@ and the report says so). A top-level list, {"issues": [...]}, or {"result": {"is
 --baseline-until: end of the initial design batch. Default: the first gap of 6h+ in creation times.
 --usage-match: substring of configured project directories to count tokens for
 (default: the repo name). No prices are applied.
+--program: an orchestrate program slug. Its ledger adds the `main_flake` events in the window to the report and
+the tickets of its `spawned` cards to the usage match, so a card whose worktree name lacks the repo name is counted.
 """
 import collections, datetime as dt, glob, json, os, pathlib, statistics, subprocess, sys
 
@@ -92,7 +94,7 @@ def utc_q(t):
 def runs_between(repo, a, b):
     # The runs API returns at most 1000 results per query, so split any window that hits it.
     got = gh("run", "list", "--repo", repo, "--limit", "1000", "--created", f"{utc_q(a)}..{utc_q(b)}",
-             "--json", "databaseId,headBranch,event,conclusion,createdAt,workflowName")
+             "--json", "databaseId,headBranch,event,conclusion,createdAt,workflowName,attempt")
     if len(got) < 1000:
         return got
     if b - a <= dt.timedelta(minutes=10):
@@ -110,10 +112,39 @@ def blocks(start, end, step):
         t += step
 
 
+def rerun_greens(repo, runs):
+    """Main push runs whose latest attempt is green but whose attempt 1 failed. `gh run list` shows only the latest
+    attempt, so a rerun that went green hides the red; the first attempt is read one run at a time."""
+    out = []
+    for r in runs:
+        if r["event"] != "push" or r["headBranch"] not in ("main", "master") or r["conclusion"] == "failure" or (r.get("attempt") or 1) < 2:
+            continue
+        first = gh("api", f"repos/{repo}/actions/runs/{r['databaseId']}/attempts/1")
+        if first.get("conclusion") == "failure":
+            out.append(r)
+    return out
+
+
+def program_info(slug, since, until):
+    """From a program's ledger: the main_flake events inside the window, and the tickets of its cards (lowercase, as
+    worktree names carry them) so usage can be matched by card instead of by the repository name alone."""
+    path = pathlib.Path(os.environ.get("PROGRAMS_HOME", "~/.claude/programs")).expanduser() / slug / "ledger.jsonl"
+    if not path.exists():
+        sys.exit(f"no ledger at {path}")
+    rows = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+    tickets = sorted({r["ticket"].lower() for r in rows if r["ev"] == "spawned" and r.get("ticket")})
+    flakes = [{"run": r.get("run"), "attempt": r.get("attempt")} for r in rows
+              if r["ev"] == "main_flake" and since <= ts(r["ts"]) < until]
+    return {"tickets": tickets, "flakes": flakes}
+
+
 def usage(match, since, until):
     home = os.path.expanduser(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude"))
     c, seen = collections.Counter(), set()
-    for proj in glob.glob(f"{home}/projects/*{match}*"):
+    dirs = []
+    for m in [match] if isinstance(match, str) else match:
+        dirs += [d for d in glob.glob(f"{home}/projects/*{m}*") if d not in dirs]
+    for proj in dirs:
         for f in glob.glob(proj + "/**/*.jsonl", recursive=True):
             for line in open(f, errors="replace"):
                 if '"usage"' not in line:
@@ -208,13 +239,22 @@ def main():
     w(f"- `{bug}` 라벨 이슈 생성: {len(bugs)}건 (PR당 {len(bugs) / max(len(prs), 1):.2f}) — 머지된 코드에서 나온 것인지는 본문으로 확인할 것")
     w(f"- main push CI 실패: {len(main_red)}/{len(main_all)}" + "".join(f"\n  - {local(ts(r['createdAt']))} {r['workflowName']} run {r['databaseId']}" for r in main_red[:10]))
     w(f"- revert PR: {len(reverts)}")
+    reruns = rerun_greens(repo, runs)
+    w(f"- main push CI 첫 시도 실패, 재실행으로 초록: {len(reruns)}" + "".join(
+        f"\n  - {local(ts(r['createdAt']))} {r['workflowName']} run {r['databaseId']} (attempt {r['attempt']}에서 초록)" for r in reruns[:10]))
+    prog = program_info(opt("--program"), since, until) if opt("--program") else None
+    if prog:
+        w(f"- ledger main_flake 이벤트: {len(prog['flakes'])}" + "".join(
+            f"\n  - run {f['run']} (attempt {f['attempt']})" for f in prog["flakes"][:10]))
 
     match = opt("--usage-match", repo.split("/")[-1])
-    u = usage(match, since, until)
+    # With --program the cards' tickets join the match, so a worktree named after the ticket is not missed.
+    matches = [match] + (prog["tickets"] if prog else [])
+    u = usage(matches, since, until)
     n = max(len(prs), 1)
     w("\n## 비용 (토큰, 금액 아님)\n")
     usage_root = pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser() / "projects"
-    w(f"- 대상: `{usage_root}/*{match}*`")
+    w("- 대상: " + ", ".join(f"`{usage_root}/*{m}*`" for m in matches))
     if not u["claude_calls"]:
         w("- 미측정: 구간에 맞는 사용량 기록이 없다. 0으로 해석하지 않는다")
     else:
@@ -225,7 +265,8 @@ def main():
     print("\n".join(out))
     if opt("--json"):
         json.dump({"prs": len(prs), "derived": len(derived), "baseline": len(base), "done": done,
-                   "late_commits": sum(late), "main_red": len(main_red), "bugs": len(bugs),
+                   "late_commits": sum(late), "main_red": len(main_red), "main_rerun_green": len(reruns),
+                   "main_flake": len(prog["flakes"]) if prog else None, "bugs": len(bugs),
                    "usage": dict(u), "usage_measured": bool(u["claude_calls"])},
                   open(opt("--json"), "w"), indent=2)
 

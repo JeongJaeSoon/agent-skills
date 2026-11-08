@@ -27,7 +27,7 @@ saved to a file also works as `--issues`.
 python3 "${CLAUDE_SKILL_DIR}/scripts/measure.py" \
   --repo OWNER/NAME (--project P | --issues issues.json) --since 2026-09-21T00:00:00+09:00 [--until …] \
   [--baseline-until <end of the initial design batch>] [--tz +09:00] [--bug-label Bug] \
-  [--usage-match <dir fragment>] [--json out.json]
+  [--usage-match <dir fragment>] [--program <slug>] [--json out.json]
 ```
 
 - `--issues` accepts a top-level list, `{"issues": [...]}` or `{"result": {"issues": [...]}}`.
@@ -36,6 +36,9 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/measure.py" \
 - `CLAUDE_CONFIG_DIR` selects the transcript adapter root (default `~/.claude`). No matching usage is unmeasured, not zero.
 - `--usage-match` picks the configured project directories to count tokens for
   (default: the repo name).
+- `--program` names an orchestrate program. The tickets of its `spawned` ledger rows join the usage match, so a
+  card whose worktree name lacks the repo name is still counted, and its `main_flake` events in the window are
+  listed. Pass it whenever the window is a program's Close.
 
 It prints a Korean markdown report. Put it in the project's note (`use-notes`), not only in chat;
 a result for the owner is shown as an Artifact only (`use-notes`).
@@ -50,6 +53,7 @@ a result for the owner is shown as an Artifact only (`use-notes`).
 | 머지 PR | PRs merged in the window | Accepted changes |
 | 재작업 | Commits with an author date after the PR opened (survives rebase); PR-event CI runs on the PR's branch between its open and merge | How much work happened after "ready" |
 | escaped | Bug-labeled issues created, main push CI failures, revert PRs | Candidates only: read each Bug to confirm it came from merged code |
+| 재실행 초록 | Main push runs whose attempt 1 failed and whose latest attempt is green (read per run from the attempts API), and the ledger's `main_flake` events | A red a rerun hid. `gh run list` shows only the last attempt, so the failure count above misses these; record each with `orch record <slug> main_flake --run ID --attempt N` |
 | 비용 | Tokens from this machine's available transcripts in the window, per merged PR | No prices applied; other machines are missing |
 
 Counts differ by ±1–3 from a hand count at window edges, and because the script counts every
