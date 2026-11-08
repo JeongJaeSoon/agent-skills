@@ -300,6 +300,22 @@ held.close()
 assert ci("gh run watch 123 --interval 60") == ("none", ""), "a released lock file is not a holder"
 assert lock_of("ci-wait:run:123").exists(), "the probe never removes the file"
 held2.close()
+# A flag's value is not the run id; a loop that never waits, or waits in the background, still polls fast.
+held3 = open(lock_of("ci-wait:run:123"), "w")
+fcntl.flock(held3, fcntl.LOCK_EX | fcntl.LOCK_NB)
+assert ci_warns("gh run watch --interval 60 123"), "run 123 is held, not run 60"
+held3.close()
+held4 = open(lock_of("ci-wait:run:60"), "w")
+fcntl.flock(held4, fcntl.LOCK_EX | fcntl.LOCK_NB)
+assert ci("gh run watch --interval 60 123") == ("none", ""), "run 60 is not what this watches"
+held4.close()
+assert ci("gh run watch 123 -i60") == ("none", "")
+for cmd in ("until gh run view 1 | grep -q completed; do :; done",
+            "while true; do gh run view 1; sleep 60 & done",
+            "while true; do gh run view 1; if true; then sleep 1; else sleep 100; fi; done"):
+    assert ci_warns(cmd), cmd
+for cmd in ("for i in 1 2; do gh run view $i; done", "while true; do gh run view 1; sleep 60; done"):
+    assert ci(cmd) == ("none", ""), cmd
 CONFIG.write_text(json.dumps({"orchestrate": {"ci_watch": "deny"}}))
 assert ci("gh run watch 123")[0] == "none" and "orch ci-wait" in LAST["warning"], "a warning never blocks, whatever the level"
 CONFIG.write_text(json.dumps({"orchestrate": {"ci_watch": False}}))

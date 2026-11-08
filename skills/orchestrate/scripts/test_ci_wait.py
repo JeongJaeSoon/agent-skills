@@ -153,6 +153,35 @@ class CiWait(unittest.TestCase):
         self.assertTrue(calls(), "an hour-old result answered without asking GitHub")
 
 
+    def test_bad_target_and_deadline_are_usage_errors(self):
+        for args in (("not-a-target", "--deadline-min", "1"), (TARGET, "--deadline-min", "inf"),
+                     (TARGET, "--deadline-min", "nan"), (TARGET, "--deadline-min", "0")):
+            p = self.spawn(*args)
+            p.communicate(timeout=30)
+            self.assertEqual(p.returncode, 2, args)
+        self.assertEqual(calls(), [])
+
+    def test_state_directory_failure_exits_4(self):
+        blocker = TMP / "not-a-dir"
+        blocker.write_text("")
+        p = start(TARGET, "--deadline-min", "1", AGENT_SKILLS_STATE=str(blocker))
+        self.procs.append(p)
+        out, err = p.communicate(timeout=30)
+        self.assertEqual(p.returncode, 4, (out, err))
+
+    def test_new_holder_keeps_the_last_call_spacing(self):
+        sys.path.insert(0, str(HERE))
+        import ci_wait
+        path = ci_wait.state_path("pr:" + TARGET)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # the previous holder stamped its call, then was killed before the answer came back
+        path.write_text(json.dumps({"gen": "dead", "state": "polling", "polled_at": time.time()}))
+        p = self.spawn(TARGET, "--deadline-min", "0.01", FAKE_GH_DONE_AFTER="1")  # 0.6 s, under the 1 s spacing
+        p.communicate(timeout=30)
+        self.assertEqual(p.returncode, 3)
+        self.assertEqual(calls(), [], "a takeover called gh before the interval since the last call passed")
+
+
 class Units(unittest.TestCase):
     def setUp(self):
         sys.path.insert(0, str(HERE))

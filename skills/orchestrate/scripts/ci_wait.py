@@ -55,16 +55,32 @@ def read_state(target):
     try:
         data = json.loads(state_path(target).read_text())
         return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
+    except (FileNotFoundError, ValueError):  # no file yet, or a torn one the next write replaces
         return {}
+    except OSError as e:
+        raise Err(f"state file: {e}")
 
 
 def write_state(target, data):
     path = state_path(target)
-    path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(data))
-    os.replace(tmp, path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(data))
+        os.replace(tmp, path)
+    except OSError as e:
+        raise Err(f"state file: {e}")
+
+
+def check_store(target):
+    """The lock and state directories must be usable: guard.hold reports a lock it cannot make as 'held elsewhere',
+    which would otherwise wait out the deadline."""
+    try:
+        for p in (lock_path(target), state_path(target)):
+            p.parent.mkdir(parents=True, exist_ok=True)
+        lock_path(target).open("a").close()
+    except OSError as e:
+        raise Err(f"state directory: {e}")
 
 
 def gh(args, deadline):
@@ -72,7 +88,7 @@ def gh(args, deadline):
     if left <= 0:
         raise TimeoutError
     try:
-        p = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=max(1, min(GH_TIMEOUT_S, left)))
+        p = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=min(GH_TIMEOUT_S, left))
     except subprocess.TimeoutExpired:
         if time.monotonic() >= deadline:
             raise TimeoutError
@@ -143,6 +159,9 @@ def lead(target, kind, repo, ident, args, interval, deadline):
             time.sleep(wait)
         if time.monotonic() >= deadline:
             raise TimeoutError
+        # Stamped before the query: a holder killed mid-call still leaves the time of its call for the next one.
+        write_state(target, {"gen": gen, "target": target, "state": "polling", "polled_at": time.time(),
+                             "summary": "polling"})
         snap = snapshot(kind, repo, ident, deadline)
         now = time.time()
         st = {"gen": gen, "target": target, "head": snap["head"], "checks_sig": snap["sig"], "polled_at": now,
@@ -158,26 +177,30 @@ def lead(target, kind, repo, ident, args, interval, deadline):
         due = now + interval
 
 
-def run(args):
+def parse_target(args):
+    """(kind, repo, ident, target key); ValueError for anything but owner/repo#N or a run id."""
     m = re.fullmatch(r"([\w.-]+/[\w.-]+)#(\d+)", args.target)
     if m:
-        kind, repo, ident = "pr", m[1], m[2]
-        target = f"pr:{repo}#{ident}"
-    elif args.target.isdigit():
-        kind, repo, ident = "run", args.repo, args.target
-        target = f"run:{ident}"
-    else:
-        raise SystemExit(f"ci-wait: target must be owner/repo#N or a run id, not {args.target!r}")
+        return "pr", m[1], m[2], f"pr:{m[1]}#{m[2]}"
+    if args.target.isdigit():
+        return "run", args.repo, args.target, f"run:{args.target}"
+    raise ValueError(f"target must be owner/repo#N or a run id, not {args.target!r}")
+
+
+def run(args):
+    kind, repo, ident, target = parse_target(args)
     interval = effective_interval(args.interval)
     if 0 < args.interval < interval:
         print(f"ci-wait: --interval {args.interval} raised to {interval} (minimum {MIN_INTERVAL_S})", file=sys.stderr)
     deadline = time.monotonic() + args.deadline_min * 60
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))  # exiting releases the flock
     try:
+        check_store(target)
         while True:
-            rc = verdict(read_state(target), args.head)
+            st = read_state(target)  # one read: the verdict and the report must describe the same result
+            rc = verdict(st, args.head)
             if rc is not None:
-                return report(target, read_state(target), rc, " [from the holder]")
+                return report(target, st, rc, " [from the holder]")
             with guard.hold([("other", lock_key(target))]) as got:
                 if got:
                     return lead(target, kind, repo, ident, args, interval, deadline)
@@ -203,8 +226,12 @@ def main(argv):
     ap.add_argument("--interval", type=int, default=0, help=f"seconds between polls; below {MIN_INTERVAL_S} (or unset) it is {MIN_INTERVAL_S}")
     ap.add_argument("--head", help="accept only a result for this head SHA")
     args = ap.parse_args(argv)
-    if args.deadline_min <= 0:
-        ap.error("--deadline-min must be positive")
+    if not 0 < args.deadline_min < float("inf"):  # also false for nan
+        ap.error("--deadline-min must be a positive, finite number of minutes")
+    try:
+        parse_target(args)
+    except ValueError as e:
+        ap.error(str(e))
     return run(args)
 
 

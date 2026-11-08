@@ -198,44 +198,48 @@ def loop_around(text, cmds, pos):
     return best
 
 
+def loop_wait(text, cmds, region):
+    """(seconds one pass of the loop in region waits, number of sleeps in it); the seconds are None when a sleep's
+    argument cannot be judged. The wait that counts is the one inside the loop around a poll (a sleep before the loop
+    is a one-off), and the sleeps there add up (`sleep 150; sleep 150` waits 300 s). A sleep put in the background
+    (`sleep 300 &`) waits for nobody, so it counts as 0. Where the loop branches (if/else/case/`||`) only one sleep
+    may run, so the shortest one stands for the loop (a heuristic: it can warn on a loop that branches yet always waits
+    long enough, which costs a warning, never a block). A `wait` (or `wait $!` on the latest job) makes a background
+    sleep a real wait. A sleep whose argument is a variable cannot be judged."""
+    scope = [c for c in cmds if region[0] < c.span[1] <= region[1]]
+    sleeps = [c for c in scope if c.name == "sleep"]
+    secs = [sleep_seconds(c) for c in sleeps]
+    if not secs or None in secs:
+        return (0 if not secs else None), len(secs)
+    backgrounded = lambda c: bool(re.match(r"\s*&(?!&)", text[c.span[1]:]))
+    # A bare `wait` waits for every background job; `wait $!` for the latest one started before it.
+    waited, everything = set(), False
+    for w in (c for c in scope if c.name == "wait"):
+        if w.words == ["wait"]:
+            everything = True
+        elif w.words == ["wait", "$!"]:
+            prior = [c for c in scope if backgrounded(c) and c.span[1] < w.span[0]]
+            # Only a job started right before the wait is surely `$!`: an assignment or a subshell in between
+            # (`sleep 300 & x=1 & wait $!`, `(sleep 300 &); wait $!`) points `$!` somewhere else.
+            if prior and re.fullmatch(r"\s*&\s*;?\s*", text[prior[-1].span[1]:w.span[0]]):
+                waited.add(id(prior[-1]))
+    if not everything:
+        secs = [0 if backgrounded(c) and id(c) not in waited else s for c, s in zip(sleeps, secs)]
+    branches = re.search(r"(?<![\w.-])(if|case|else|elif)(?![\w.-])|\|\|", text[region[0]:region[1]])
+    return (min(secs) if branches else sum(secs)), len(secs)
+
+
 def check_monitor(cmd, cfg):
     """A Monitor loop that polls `gh pr list|view|checks` with a sleep under 300 s wakes the session on every
     state change, most of them with nothing to do. The shared watcher prints only the changes that need a turn."""
     cmds, text = shell.commands(cmd), shell.command_text(cmd)
-    # The wait that counts is the one inside the loop around a poll (a sleep before the loop is a one-off), and the
-    # sleeps there add up (`sleep 150; sleep 150` waits 300 s). A sleep put in the background (`sleep 300 &`) waits
-    # for nobody, so it counts as 0. Where the loop branches (if/else/case/`||`) only one sleep may run, so the
-    # shortest one stands for the loop (a heuristic: it can warn on a loop that branches yet always waits long
-    # enough, which costs a warning, never a block). A `wait` (or `wait $!` on the latest job) makes a background
-    # sleep a real wait. A
-    # sleep whose argument is a variable cannot be judged, so that loop passes without a warning. A poll outside any
-    # loop runs once and is no watcher. Any one short loop warns.
     for poll in (c for c in cmds if c.name == "gh" and pr_verb(c.words) in PR_POLLS):
         region = loop_around(text, cmds, poll.span[1] - 1)  # a span starts at the blank before the word
         if region is None:
             continue
-        scope = [c for c in cmds if region[0] < c.span[1] <= region[1]]
-        sleeps = [c for c in scope if c.name == "sleep"]
-        secs = [sleep_seconds(c) for c in sleeps]
-        if not secs or None in secs:
+        wait, sleeps = loop_wait(text, cmds, region)
+        if not sleeps or wait is None:
             continue
-        backgrounded = lambda c: bool(re.match(r"\s*&(?!&)", text[c.span[1]:]))
-        # A bare `wait` waits for every background job; `wait $!` for the latest one started before it.
-        waited, everything = set(), False
-        for w in (c for c in scope if c.name == "wait"):
-            if w.words == ["wait"]:
-                everything = True
-            elif w.words == ["wait", "$!"]:
-                prior = [c for c in scope if backgrounded(c) and c.span[1] < w.span[0]]
-                # Only a job started right before the wait is surely `$!`: an assignment or a subshell in between
-                # (`sleep 300 & x=1 & wait $!`, `(sleep 300 &); wait $!`) points `$!` somewhere else.
-                if prior and re.fullmatch(r"\s*&\s*;?\s*", text[prior[-1].span[1]:w.span[0]]):
-                    waited.add(id(prior[-1]))
-        if not everything:
-            secs = [0 if backgrounded(c) and id(c) not in waited else s for c, s in zip(sleeps, secs)]
-        span = text[region[0]:region[1]]
-        branches = re.search(r"(?<![\w.-])(if|case|else|elif)(?![\w.-])|\|\|", span)
-        wait = min(secs) if branches else sum(secs)
         if wait < PR_POLL_MIN:
             break
     else:
@@ -248,6 +252,7 @@ def check_monitor(cmd, cfg):
 
 
 CI_SLEEP_MIN = 30
+GH_VALUE_FLAGS = ("--interval", "-i", "--repo", "-R", "--json", "--jq", "-q", "--template", "-t", "--branch", "-b")
 
 
 def ci_lock_held(key):
@@ -270,7 +275,15 @@ def ci_key(c):
     """The ci-wait target of a `gh run watch ID` or `gh pr checks N --watch` with -R given, else None."""
     w = c.words
     verb = pr_verb(w)
-    ident = next((x for x in w[1:] if x.isdigit()), None)
+    ident, skip = None, False
+    for x in w[1:]:  # the first number that is not a flag's value (`--interval 60 123` watches run 123)
+        if skip:
+            skip = False
+        elif x in GH_VALUE_FLAGS:
+            skip = True
+        elif x.isdigit():
+            ident = x
+            break
     if verb == ["run", "watch"] and ident:
         return f"run:{ident}"
     repo = flag(w, "--repo") or flag(w, "-R")
@@ -287,16 +300,18 @@ def check_ci_watch(cmd, cfg):
     for c in (c for c in cmds if c.name == "gh"):
         w = c.words
         if pr_verb(w) == ["run", "watch"] or "--watch" in w:
-            if flag(w, "--interval") is None and "-i" not in w:
+            if flag(w, "--interval") is None and not any(x == "-i" or re.fullmatch(r"-i\d+", x) for x in w):
                 why.append("it has no --interval, so gh polls every 3 s")
             key = ci_key(c)
             if key and ci_lock_held(key):
                 why.append(f"a `orch ci-wait` already holds {key}: run it too and it subscribes to that poller")
         region = loop_around(text, cmds, c.span[1] - 1)
         if region is not None:
-            secs = [sleep_seconds(s) for s in cmds if s.name == "sleep" and region[0] < s.span[1] <= region[1]]
-            if secs and None not in secs and sum(secs) < CI_SLEEP_MIN:  # the sleeps of one pass add up, as in check_monitor
-                why.append(f"its loop sleeps under {CI_SLEEP_MIN} s")
+            wait, sleeps = loop_wait(text, cmds, region)
+            # A `for` loop with no sleep is a batch over a list, not a poll; until/while with none spins.
+            spins = not sleeps and re.match(r"(until|while)\b", text[region[0]:region[1]]) is not None
+            if wait is not None and wait < CI_SLEEP_MIN and (sleeps or spins):
+                why.append(f"its loop waits under {CI_SLEEP_MIN} s between calls")
     if not why:
         return []
     return [f._replace(level="warn") for f in finding(

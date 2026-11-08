@@ -368,7 +368,7 @@ STORES = [
           ("agent_signal:append", "agent_signal:log_round"), ("nobody",),
           rule="both signals per card, `claude agents` beside the screen, to compare misses; one rotated generation kept"),
     Store("agentsignallock", "S/agent-signal.lock", {"card.agent_signal": LOCK}, ("agent_signal:append",)),
-    Store("reaplocks", "S/locks/*-*.lock", {"work.unit": LOCK, "machine.resource": LOCK}, ("reap-resources/guard:hold",),
+    Store("reaplocks", "S/locks/*-*.lock", {"work.unit": LOCK, "machine.resource": LOCK}, ("reap-resources/guard:hold", "ci_wait:check_store"),
           rule="one lock per card, project, volume, process or port a cleaner acts on; cardguard takes the card one "
                "through guard.hold"),
     Store("sync", "S/sync.json", {"sync.result": CANONICAL}, ("sync:sync",), ("fleet",), 3600,
