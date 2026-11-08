@@ -1202,14 +1202,26 @@ def explained(body, run_id):
     return False
 
 
-def evidence_problems(cfg, repo, pr):
+def results_comment(comments):
+    """The first marker comment's body, the one sticky-comment.sh keeps updating; "" when there is none."""
+    return next((c.get("body") or "" for c in comments or [] if TEST_RESULTS in (c.get("body") or "")), "")
+
+
+def no_results_problem(pr):
+    return (f"no {TEST_RESULTS} comment on #{pr}: post the test results"
+            " (deliver-ticket sticky-comment.sh), then land again")
+
+
+def evidence_problems(cfg, repo, pr, need_comment=False):
     """(problems, notes) from the PR's sticky test-results comment. The brief's rule alone once let a screen
     change land with no screenshot, so land checks it: an image for a visual change unless a person labelled
-    the PR no-visual-change, and each failed CI run of the branch named with what resolved it."""
+    the PR no-visual-change, and each failed CI run of the branch named with what resolved it. need_comment: the
+    land executor also refuses a PR with no such comment, so its land-check asks for it too."""
     v = gh_json("pr", "view", str(pr), "--repo", repo, "--json", "headRefName,labels,comments")
-    # The first marker comment, the one sticky-comment.sh keeps updating.
-    body = next((c.get("body") or "" for c in v.get("comments") or [] if TEST_RESULTS in (c.get("body") or "")), "")
+    body = results_comment(v.get("comments"))
     problems, notes = [], []
+    if need_comment and not body:
+        problems.append(no_results_problem(pr))
     pats = knob(cfg, "visual_paths")
     # pr view stops at 100 files; the REST listing pages up to 3000.
     files = run(["gh", "api", f"repos/{repo}/pulls/{pr}/files", "--paginate", "--jq", ".[].filename"]).stdout.split("\n")
@@ -3222,7 +3234,7 @@ def cmd_land_check(argv):
             problems.append(f"{threads} unresolved review thread(s)")
     except (SystemExit, Exception) as e:
         problems.append(f"review threads unreadable ({type(e).__name__})")
-    missing, notes = evidence_problems(p.cfg, repo, pr)
+    missing, notes = evidence_problems(p.cfg, repo, pr, need_comment=bool(ex))
     problems += missing
     for line in notes:
         print(f"note: {line}")
