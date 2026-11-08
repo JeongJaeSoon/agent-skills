@@ -37,8 +37,10 @@ Read the vault's instructions before a write. Inspect the current note before ed
 check that a create path is unused, and preserve unrelated content. With the vault tools,
 `vault_read`, `vault_search`, `vault_edit` (dry run first), `vault_write` and `vault_append`
 are common operations; discover the actual tools available in this environment. Archiving a
-note ("Removing a note" in SKILL.md) uses `vault_move`; never `vault_delete`. Check that the
-destination path is unused first.
+note ("Removing a note" in SKILL.md) is a move through the access mode's own path: `vault_move`
+under `mcp`, the Obsidian CLI's move under `cli`, `mv -n` under `filesystem`. Never a delete
+(`vault_delete`, `rm`). Check that the destination path is unused first; when the mode has no
+move operation, stop and report instead of copying and deleting.
 
 A downloaded copy is a snapshot, not permission to overwrite a newer note. Re-read before
 writing after a pause or conflicting edit. Show the note through its normal link or the

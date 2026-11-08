@@ -12,7 +12,7 @@ from `~/.claude/agent-skills.json`:
 {"notes": {"adapter": "obsidian", "obsidian": {"vault": "<vault>", "access": "mcp"}, "markdown": {"root": "~/notes"}}}
 ```
 
-Never move existing notes or replace unrelated configuration keys ([configuration migration guide](../../docs/configuration-migration.md)).
+A configuration migration never moves existing notes or replaces unrelated configuration keys ([configuration migration guide](../../docs/configuration-migration.md)).
 
 No `notes` configuration: use an explicit destination supplied by the user; otherwise keep
 the result in the current task and ask for a destination before any external write. A program may override it in its `program.json`
@@ -36,7 +36,8 @@ editing or appending. A new note follows all of it: folder, file name, tags, fir
 level, links, section order, the marker for finished work. A note you edit or append to follows
 its content rules in the part you write; a name or folder that breaks the rules is reported,
 and moved or renamed only with the user's approval. Where the rules file and this skill
-differ, it wins. The names below are defaults for a store without rules; a renamed note still
+differ, it wins, except on "Removing a note" below: a rules file never lifts the ban on
+deleting a note or overwriting one at the destination. The names below are defaults for a store without rules; a renamed note still
 names its ticket.
 
 What it most often catches, because skill text reads like plain Markdown:

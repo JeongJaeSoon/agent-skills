@@ -7,7 +7,7 @@ in the repo (set the root to e.g. `<repo>/docs/notes` in the program's config ov
 | Operation | Tool |
 |---|---|
 | read | `Read` |
-| create or replace | `Write` |
+| create (unused path only) | `Write`; an existing note is never replaced whole, change it with `Edit` |
 | edit in place | `Edit` |
 | append a log line | `Edit` at the end of the section, or `printf >> file` |
 | search | `grep -rn` under the root |
